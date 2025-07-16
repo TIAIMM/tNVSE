@@ -1,0 +1,28 @@
+name ternary;
+
+fn () {
+	string testName = "Ternary Operations";
+	print(("Started running xNVSE " + testName + " unit tests."));
+	
+	int condition = false;
+	int iTest = condition ? 1 : 2;
+	assert(iTest == 2);
+	
+	condition = true;
+	iTest = condition ? 1 : 2;
+	assert(iTest == 1);
+	
+	// Make sure that ternary conditions / args do not get cached
+	for (int i = 0; i < 2; i++) {
+		condition = i % 2 == 0;
+		if (i == 0) {
+			assert(condition == true);
+		} else {
+			assert(condition == false);
+		}
+
+		assert((condition ? 0 : 1) == i);
+	}
+	
+	print(("Finished running xNVSE " + testName + " unit tests."));
+}
