@@ -1,12 +1,11 @@
 #pragma once
 
 #include "Utilities.h"
-#include "GameData.h"
-#include "Hooks_Gameplay.h"
+#include "NiNodes.h"
 
 class NiMultiTargetTransformController;
 
-//From JGNVSE
+//From JIP & JGNVSE
 
 // 0C
 class NiExtraData : public NiObject {

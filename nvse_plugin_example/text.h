@@ -2,7 +2,7 @@
 
 #include "internal/netimmerse.h"
 
-//From JGNVSE
+//From JIP & JGNVSE
 
 struct FontHeightData
 {
@@ -13,31 +13,53 @@ struct FontHeightData
 // 54
 struct FontInfo
 {
+	// 38
+	struct CharDimensions
+	{
+		float			flt00[9];
+		float			width;		// 24
+		float			height;		// 28
+		float			flt2C;		// 2C
+		float			widthMod;	// 30
+		float			flt34;		// 34
+		//	totalWidth = width + widthMod
+	};
+
+	// 24
+	struct TexFileName
+	{
+		UInt32			unk00;
+		char			fileName[0x20];
+	};
+
+	// 3928
 	struct BufferData
 	{
-		float lineHeight; // 0000
-		UInt32 unk0004[73]; // 0004
-		UInt32 unk0128[458]; // 0128
-		float baseHeight; // 0850
-		float flt0854; // 0854
-		float flt0858; // 0858
+		float			lineHeight;				// 0000
+		UInt32			numTextures;			// 0004
+		TexFileName		textures[8];			// 0008
+		CharDimensions	charDimensions[256];	// 0128
 	};
 
 	struct ButtonIcon;
 
-	UInt8 isLoaded; // 00
-	UInt8 pad01[3]; // 01
-	char* filePath; // 04
-	UInt8 fontID; // 08
-	UInt8 pad09[3]; // 09
-	NiTexturingProperty* texProp; // 0C
-	UInt32 unk10[7]; // 10
-	float flt2C; // 2C
-	float flt30; // 30
-	UInt32 unk34; // 34
-	BufferData* bufferData; // 38
-	UInt32 unk3C[2]; // 3C
-	BSSimpleArray<ButtonIcon> arr44; // 44
+	UInt8						isLoaded;	// 00
+	UInt8						pad01[3];	// 01
+	char* filePath;	// 04
+	UInt32						fontID;		// 08
+	NiTexturingProperty* texProp;	// 0C
+	UInt32						unk10[7];	// 10
+	float						flt2C;		// 2C
+	float						flt30;		// 30
+	UInt32						unk34;		// 34
+	BufferData* bufferData;// 38
+	UInt32						unk3C[2];	// 3C
+	BSSimpleArray<ButtonIcon>	arr44;		// 44
+
+	__forceinline FontInfo* Init(UInt32 fontID, const char* filePath, bool arg3)
+	{
+		return ThisStdCall<FontInfo*>(0xA12020, this, fontID, filePath, arg3);
+	}
 };
 
 STATIC_ASSERT(sizeof(FontInfo) == 0x54);
@@ -57,6 +79,8 @@ public:
 	//	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
 	NiVector3* GetStringDimensions(NiVector3* outDims, const char* srcString, UInt32 fontID, UInt32 maxFlt = 0x7F7FFFFF,
 		UInt32 startIdx = 0);
+
+	__forceinline static FontManager* GetSingleton() { return *(FontManager**)0x11F33F8; }
 };
 
 __declspec(naked) NiVector3* FontManager::GetStringDimensions(NiVector3* outDims, const char* srcString, UInt32 fontID,
