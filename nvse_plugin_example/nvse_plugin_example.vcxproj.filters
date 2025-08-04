@@ -10,6 +10,9 @@
     <Filter Include="internal">
       <UniqueIdentifier>{5b76b33e-09bf-4299-bec1-322dbbc26d7c}</UniqueIdentifier>
     </Filter>
+    <Filter Include="internal\Bethesda">
+      <UniqueIdentifier>{b1eb73a5-f0cb-41ac-a355-d13647436f8d}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\nvse\nvse\GameAPI.cpp">
@@ -151,11 +154,23 @@
     <ClInclude Include="internal\netimmerse.h">
       <Filter>internal</Filter>
     </ClInclude>
-    <ClInclude Include="text.h">
+    <ClInclude Include="internal\text.h">
       <Filter>internal</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Bethesda\BSMemory.hpp">
+      <Filter>internal\Bethesda</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Bethesda\BSMemObject.hpp">
+      <Filter>internal\Bethesda</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\Bethesda\BSString.hpp">
+      <Filter>internal\Bethesda</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="exports.def" />
+    <None Include="internal\Bethesda\BSString.inl">
+      <Filter>internal\Bethesda</Filter>
+    </None>
   </ItemGroup>
 </Project>

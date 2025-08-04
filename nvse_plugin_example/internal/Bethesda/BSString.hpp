@@ -1,3 +1,5 @@
+//From Modern Minimap
+
 #pragma once
 
 #ifndef BSSTRINGT_H

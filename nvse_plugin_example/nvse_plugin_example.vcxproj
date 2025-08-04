@@ -369,11 +369,15 @@
     <ClInclude Include="..\nvse\nvse\utility.h" />
     <ClInclude Include="fn_intro_to_script_functions.h" />
     <ClInclude Include="fn_typed_functions.h" />
+    <ClInclude Include="internal\Bethesda\BSMemObject.hpp" />
+    <ClInclude Include="internal\Bethesda\BSMemory.hpp" />
+    <ClInclude Include="internal\Bethesda\BSString.hpp" />
     <ClInclude Include="internal\netimmerse.h" />
-    <ClInclude Include="text.h" />
+    <ClInclude Include="internal\text.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="exports.def" />
+    <None Include="internal\Bethesda\BSString.inl" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\common\common_vc9.vcxproj">
