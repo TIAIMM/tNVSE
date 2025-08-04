@@ -5,7 +5,9 @@
 
 class NiMultiTargetTransformController;
 
-//From JIP & JGNVSE
+//From JIP, JGNVSE, Wall & Confused
+
+//From JG
 
 // 0C
 class NiExtraData : public NiObject {

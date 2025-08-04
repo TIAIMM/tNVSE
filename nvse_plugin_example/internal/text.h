@@ -2,14 +2,16 @@
 
 #include "internal/netimmerse.h"
 
-//From JIP & JGNVSE
+//From JIP, JGNVSE, Wall & Confused
 
+// From JIP
 struct FontHeightData
 {
 	float heightBase;
 	float heightwGap;
 } s_fontHeightDatas[90];
 
+// From JIP
 // 54
 struct FontInfo
 {
@@ -64,6 +66,7 @@ struct FontInfo
 
 STATIC_ASSERT(sizeof(FontInfo) == 0x54);
 
+// From JG
 // 164 (24)
 class FontManager
 {
@@ -81,6 +84,11 @@ public:
 		UInt32 startIdx = 0);
 
 	__forceinline static FontManager* GetSingleton() { return *(FontManager**)0x11F33F8; }
+
+	// From Modern Minimap
+	static FontManager* GetSingleton() {
+		return CdeclCall<FontManager*>(0x5BD5B0, true);
+	}
 };
 
 __declspec(naked) NiVector3* FontManager::GetStringDimensions(NiVector3* outDims, const char* srcString, UInt32 fontID,
