@@ -369,6 +369,8 @@
     <ClInclude Include="..\nvse\nvse\utility.h" />
     <ClInclude Include="fn_intro_to_script_functions.h" />
     <ClInclude Include="fn_typed_functions.h" />
+    <ClInclude Include="internal\netimmerse.h" />
+    <ClInclude Include="text.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="exports.def" />

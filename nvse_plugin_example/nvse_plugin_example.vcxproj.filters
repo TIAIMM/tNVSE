@@ -7,6 +7,9 @@
     <Filter Include="functions">
       <UniqueIdentifier>{010e4101-a209-4fed-af9f-5ffa21a85c34}</UniqueIdentifier>
     </Filter>
+    <Filter Include="internal">
+      <UniqueIdentifier>{5b76b33e-09bf-4299-bec1-322dbbc26d7c}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\nvse\nvse\GameAPI.cpp">
@@ -144,6 +147,12 @@
     </ClInclude>
     <ClInclude Include="..\nvse\nvse\GameUI.h">
       <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\netimmerse.h">
+      <Filter>internal</Filter>
+    </ClInclude>
+    <ClInclude Include="text.h">
+      <Filter>internal</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
