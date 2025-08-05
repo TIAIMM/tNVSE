@@ -2,7 +2,7 @@
 
 #include "internal/netimmerse.h"
 
-//From JIP, JGNVSE, Wall & Confused
+//From JIP, JGNVSE, Stewie, Wall & Confused
 
 // From JIP
 struct FontHeightData
@@ -83,12 +83,7 @@ public:
 	NiVector3* GetStringDimensions(NiVector3* outDims, const char* srcString, UInt32 fontID, UInt32 maxFlt = 0x7F7FFFFF,
 		UInt32 startIdx = 0);
 
-	__forceinline static FontManager* GetSingleton() { return *(FontManager**)0x11F33F8; }
-
-	// From Modern Minimap
-	static FontManager* GetSingleton() {
-		return CdeclCall<FontManager*>(0x5BD5B0, true);
-	}
+	__forceinline static FontManager* GetSingleton();
 };
 
 __declspec(naked) NiVector3* FontManager::GetStringDimensions(NiVector3* outDims, const char* srcString, UInt32 fontID,
@@ -97,3 +92,42 @@ __declspec(naked) NiVector3* FontManager::GetStringDimensions(NiVector3* outDims
 	static const UInt32 procAddr = 0xA1B020;
 	__asm jmp procAddr
 }
+
+//From Stewie Tweaks
+struct __declspec(align(4)) FontTextReplaced
+{
+	String str;
+	UInt32 wrapWidth;
+	UInt32 wrapLimit;
+	UInt32 initdToZero;
+	UInt32 wrapLines;
+	UInt32 length;
+	UInt8 newLineCharacter;
+	UInt8 gap1D[3];
+	tList<void> lineWidths;
+
+	FontTextReplaced()
+	{
+		str.m_bufLen = 0;
+		str.m_data = 0;
+		str.m_dataLen = 0;
+		wrapWidth = 0;
+		wrapLimit = 0;
+		initdToZero = 0;
+		wrapLines = 0;
+		length = 0;
+		newLineCharacter = 0;
+		lineWidths.Init();
+	};
+
+	~FontTextReplaced()
+	{
+		str.Set(NULL);
+		lineWidths.RemoveAll();
+	}
+
+	void GetVariableEscapedText(const char* input);
+};
+
+STATIC_ASSERT(sizeof(FontTextReplaced) == 0x28);
+static void(__thiscall* Font__CheckForVariablesInText)(FontInfo*, const char* input, FontTextReplaced* a3) = (void(__thiscall*)(FontInfo*, const char*, FontTextReplaced*))0xA12FB0;
