@@ -5,10 +5,10 @@
 #include "nvse/GameObjects.h"
 #include <string>
 
-#include "tNVSE/tnvse.h"
+#include "tnvse/tnvse.h"
 //NoGore is unsupported in xNVSE
 
-IDebugLog		gLog("nvse_plugin_example.log");
+IDebugLog		gLog("tnvse.log");
 PluginHandle	g_pluginHandle = kPluginHandle_Invalid;
 
 NVSEMessagingInterface* g_messagingInterface{};
@@ -120,8 +120,8 @@ bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 
 	// fill out the info structure
 	info->infoVersion = PluginInfo::kInfoVersion;
-	info->name = "MyFirstPlugin";
-	info->version = 2;
+	info->name = "tNVSE";
+	info->version = 1;
 
 	// version checks
 	if (nvse->nvseVersion < PACKED_NVSE_VERSION)
