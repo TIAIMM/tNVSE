@@ -13,6 +13,9 @@
     <Filter Include="internal\Bethesda">
       <UniqueIdentifier>{b1eb73a5-f0cb-41ac-a355-d13647436f8d}</UniqueIdentifier>
     </Filter>
+    <Filter Include="tnvse">
+      <UniqueIdentifier>{974c4eb6-e08c-4975-9226-a3c785ac78fe}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\nvse\nvse\GameAPI.cpp">
@@ -79,6 +82,9 @@
     </ClCompile>
     <ClCompile Include="internal\text.cpp">
       <Filter>internal</Filter>
+    </ClCompile>
+    <ClCompile Include="tNVSE\tnvse.cpp">
+      <Filter>tnvse</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -168,6 +174,9 @@
     </ClInclude>
     <ClInclude Include="internal\Bethesda\BSString.hpp">
       <Filter>internal\Bethesda</Filter>
+    </ClInclude>
+    <ClInclude Include="tNVSE\tnvse.h">
+      <Filter>tnvse</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

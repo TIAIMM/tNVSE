@@ -4,6 +4,8 @@
 #include "nvse/ParamInfos.h"
 #include "nvse/GameObjects.h"
 #include <string>
+
+#include "tNVSE/tnvse.h"
 //NoGore is unsupported in xNVSE
 
 IDebugLog		gLog("nvse_plugin_example.log");
@@ -171,6 +173,7 @@ bool NVSEPlugin_Load(NVSEInterface* nvse)
 
 	if (!nvse->isEditor)
 	{
+		tNVSE::InitVertSpacingHook();
 #if RUNTIME
 		// script and function-related interfaces
 		g_script = static_cast<NVSEScriptInterface*>(nvse->QueryInterface(kInterface_Script));

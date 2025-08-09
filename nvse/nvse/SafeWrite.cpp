@@ -1,90 +1,99 @@
+//From BetterTransitions
+
 #include "SafeWrite.h"
 
-void SafeWrite8(UInt32 addr, UInt32 data)
-{
-	UInt32	oldProtect;
+#include <memoryapi.h>
 
-	VirtualProtect((void *)addr, 4, PAGE_EXECUTE_READWRITE, &oldProtect);
-	*((UInt8 *)addr) = data;
-	VirtualProtect((void *)addr, 4, oldProtect, &oldProtect);
+#pragma optimize("y", on)
+
+class MemoryUnlock {
+public:
+	MemoryUnlock(SIZE_T _addr, SIZE_T _size = sizeof(SIZE_T)) : addr(_addr), size(_size) {
+		VirtualProtect((void*)addr, size, PAGE_EXECUTE_READWRITE, &oldProtect);
+	}
+	~MemoryUnlock() {
+		VirtualProtect((void*)addr, size, oldProtect, &oldProtect);
+	}
+
+private:
+	const SIZE_T addr;
+	const SIZE_T size;
+	SIZE_T oldProtect;
+};
+
+void __fastcall SafeWrite8(SIZE_T addr, SIZE_T data)
+{
+	MemoryUnlock unlock(addr);
+	*((uint8_t*)addr) = data;
 }
 
-void SafeWrite16(UInt32 addr, UInt32 data)
+void __fastcall SafeWrite16(SIZE_T addr, SIZE_T data)
 {
-	UInt32	oldProtect;
-
-	VirtualProtect((void *)addr, 4, PAGE_EXECUTE_READWRITE, &oldProtect);
-	*((UInt16 *)addr) = data;
-	VirtualProtect((void *)addr, 4, oldProtect, &oldProtect);
+	MemoryUnlock unlock(addr);
+	*((uint16_t*)addr) = data;
 }
 
-void SafeWrite32(UInt32 addr, UInt32 data)
+void __fastcall SafeWrite32(SIZE_T addr, SIZE_T data)
 {
-	UInt32	oldProtect;
-
-	VirtualProtect((void *)addr, 4, PAGE_EXECUTE_READWRITE, &oldProtect);
-	*((UInt32 *)addr) = data;
-	VirtualProtect((void *)addr, 4, oldProtect, &oldProtect);
+	MemoryUnlock unlock(addr);
+	*((uint32_t*)addr) = data;
 }
 
-void SafeWriteBuf(UInt32 addr, void * data, UInt32 len)
+void __fastcall SafeWriteBuf(SIZE_T addr, const void* data, SIZE_T len)
 {
-	UInt32	oldProtect;
-
-	VirtualProtect((void *)addr, len, PAGE_EXECUTE_READWRITE, &oldProtect);
-	memcpy((void *)addr, data, len);
-	VirtualProtect((void *)addr, len, oldProtect, &oldProtect);
+	MemoryUnlock unlock(addr, len);
+	memcpy((void*)addr, data, len);
 }
 
-void WriteRelJump(UInt32 jumpSrc, UInt32 jumpTgt)
+void __fastcall WriteRelJump(SIZE_T jumpSrc, SIZE_T jumpTgt)
 {
-	// jmp rel32
-	SafeWrite8(jumpSrc, 0xE9);
+	MemoryUnlock unlock(jumpSrc, 5);
+	*((uint8_t*)jumpSrc) = 0xE9;
+	*((uint32_t*)(jumpSrc + 1)) = jumpTgt - jumpSrc - 1 - 4;
+}
+
+void __fastcall WriteRelCall(SIZE_T jumpSrc, SIZE_T jumpTgt)
+{
+	MemoryUnlock unlock(jumpSrc, 5);
+	*((uint8_t*)jumpSrc) = 0xE8;
+	*((uint32_t*)(jumpSrc + 1)) = jumpTgt - jumpSrc - 1 - 4;
+}
+
+void __fastcall ReplaceCall(SIZE_T jumpSrc, SIZE_T jumpTgt)
+{
 	SafeWrite32(jumpSrc + 1, jumpTgt - jumpSrc - 1 - 4);
 }
 
-void WriteRelCall(UInt32 jumpSrc, UInt32 jumpTgt)
-{
-	// call rel32
-	SafeWrite8(jumpSrc, 0xE8);
-	SafeWrite32(jumpSrc + 1, jumpTgt - jumpSrc - 1 - 4);
+void __fastcall ReplaceVirtualFunc(SIZE_T jumpSrc, void* jumpTgt) {
+	SafeWrite32(jumpSrc, (SIZE_T)jumpTgt);
 }
 
-void WriteRelJnz(UInt32 jumpSrc, UInt32 jumpTgt)
+void __fastcall WriteRelJnz(SIZE_T jumpSrc, SIZE_T jumpTgt)
 {
 	// jnz rel32
 	SafeWrite16(jumpSrc, 0x850F);
 	SafeWrite32(jumpSrc + 2, jumpTgt - jumpSrc - 2 - 4);
 }
 
-void WriteRelJle(UInt32 jumpSrc, UInt32 jumpTgt)
+void __fastcall WriteRelJle(SIZE_T jumpSrc, SIZE_T jumpTgt)
 {
 	// jle rel32
 	SafeWrite16(jumpSrc, 0x8E0F);
 	SafeWrite32(jumpSrc + 2, jumpTgt - jumpSrc - 2 - 4);
 }
 
-void PatchMemoryNop(ULONG_PTR Address, SIZE_T Size)
+void __fastcall PatchMemoryNop(ULONG_PTR Address, SIZE_T Size)
 {
-	DWORD d = 0;
-	VirtualProtect((LPVOID)Address, Size, PAGE_EXECUTE_READWRITE, &d);
-
-	for (SIZE_T i = 0; i < Size; i++)
-		*(volatile BYTE*)(Address + i) = 0x90; //0x90 == opcode for NOP
-
-	VirtualProtect((LPVOID)Address, Size, d, &d);
-
+	{
+		MemoryUnlock unlock(Address, Size);
+		for (SIZE_T i = 0; i < Size; i++)
+			*(volatile BYTE*)(Address + i) = 0x90; //0x90 == opcode for NOP
+	}
 	FlushInstructionCache(GetCurrentProcess(), (LPVOID)Address, Size);
 }
 
-UInt32 GetRelJumpAddr(UInt32 jumpSrc)
-{
-	return *(UInt32*)(jumpSrc + 1) + jumpSrc + 5;
+void __fastcall PatchMemoryNopRange(ULONG_PTR StartAddress, ULONG_PTR EndAddress) {
+	PatchMemoryNop(StartAddress, EndAddress - StartAddress);
 }
 
-[[nodiscard]] __declspec(noinline) UInt32 __stdcall DetourVtable(UInt32 addr, UInt32 dst)
-{
-	UInt32 originalFunction = *(UInt32*)addr;
-	SafeWrite32(addr, dst);
-	return originalFunction;
-}
+#pragma optimize("y", off)

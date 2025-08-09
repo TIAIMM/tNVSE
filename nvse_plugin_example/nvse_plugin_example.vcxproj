@@ -344,6 +344,7 @@
     </ClCompile>
     <ClCompile Include="internal\text.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="tNVSE\tnvse.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\nvse\nvse\CommandTable.h" />
@@ -375,6 +376,7 @@
     <ClInclude Include="internal\Bethesda\BSString.hpp" />
     <ClInclude Include="internal\netimmerse.h" />
     <ClInclude Include="internal\text.h" />
+    <ClInclude Include="tNVSE\tnvse.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="exports.def" />
