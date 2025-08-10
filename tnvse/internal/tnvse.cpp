@@ -5,7 +5,7 @@
 
 namespace tNVSE {
 
-	static double __stdcall VertSpacingAdjust(int32_t fontID) {
+	static Float32 __stdcall VertSpacingAdjust(UInt32 fontID) {
 		return 0;
 	}
 
