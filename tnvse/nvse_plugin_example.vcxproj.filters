@@ -10,11 +10,11 @@
     <Filter Include="internal">
       <UniqueIdentifier>{5b76b33e-09bf-4299-bec1-322dbbc26d7c}</UniqueIdentifier>
     </Filter>
-    <Filter Include="internal\Bethesda">
-      <UniqueIdentifier>{b1eb73a5-f0cb-41ac-a355-d13647436f8d}</UniqueIdentifier>
+    <Filter Include="internal\Game">
+      <UniqueIdentifier>{3b8569b9-02e6-4bdd-831d-0c73d4fa2def}</UniqueIdentifier>
     </Filter>
-    <Filter Include="tnvse">
-      <UniqueIdentifier>{974c4eb6-e08c-4975-9226-a3c785ac78fe}</UniqueIdentifier>
+    <Filter Include="internal\Game\Bethesda">
+      <UniqueIdentifier>{9033d10e-1212-4bc2-a1ed-8e8ed14c6302}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -80,11 +80,8 @@
     <ClCompile Include="..\nvse\nvse\NiTypes.cpp">
       <Filter>nvse</Filter>
     </ClCompile>
-    <ClCompile Include="internal\text.cpp">
+    <ClCompile Include="internal\tnvse.cpp">
       <Filter>internal</Filter>
-    </ClCompile>
-    <ClCompile Include="tNVSE\tnvse.cpp">
-      <Filter>tnvse</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -160,29 +157,26 @@
     <ClInclude Include="..\nvse\nvse\GameUI.h">
       <Filter>nvse</Filter>
     </ClInclude>
-    <ClInclude Include="internal\netimmerse.h">
+    <ClInclude Include="internal\tnvse.h">
       <Filter>internal</Filter>
     </ClInclude>
-    <ClInclude Include="internal\text.h">
-      <Filter>internal</Filter>
+    <ClInclude Include="internal\Game\netimmerse.h">
+      <Filter>internal\Game</Filter>
     </ClInclude>
-    <ClInclude Include="internal\Bethesda\BSMemory.hpp">
-      <Filter>internal\Bethesda</Filter>
+    <ClInclude Include="internal\Game\Bethesda\BSMemObject.hpp">
+      <Filter>internal\Game\Bethesda</Filter>
     </ClInclude>
-    <ClInclude Include="internal\Bethesda\BSMemObject.hpp">
-      <Filter>internal\Bethesda</Filter>
+    <ClInclude Include="internal\Game\Bethesda\BSMemory.hpp">
+      <Filter>internal\Game\Bethesda</Filter>
     </ClInclude>
-    <ClInclude Include="internal\Bethesda\BSString.hpp">
-      <Filter>internal\Bethesda</Filter>
-    </ClInclude>
-    <ClInclude Include="tNVSE\tnvse.h">
-      <Filter>tnvse</Filter>
+    <ClInclude Include="internal\Game\Bethesda\BSString.hpp">
+      <Filter>internal\Game\Bethesda</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="exports.def" />
-    <None Include="internal\Bethesda\BSString.inl">
-      <Filter>internal\Bethesda</Filter>
+    <None Include="internal\Game\Bethesda\BSString.inl">
+      <Filter>internal\Game\Bethesda</Filter>
     </None>
   </ItemGroup>
 </Project>

@@ -5,7 +5,7 @@
 #include "nvse/GameObjects.h"
 #include <string>
 
-#include "tnvse/tnvse.h"
+#include "internal/tnvse.h"
 //NoGore is unsupported in xNVSE
 
 IDebugLog		gLog("tnvse.log");
