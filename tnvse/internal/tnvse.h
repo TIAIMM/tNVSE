@@ -2,4 +2,5 @@
 
 namespace tNVSE {
 	void InitVertSpacingHook();
+	void InitFontHook();
 }

@@ -174,6 +174,7 @@ bool NVSEPlugin_Load(NVSEInterface* nvse)
 	if (!nvse->isEditor)
 	{
 		tNVSE::InitVertSpacingHook();
+		tNVSE::InitFontHook();
 #if RUNTIME
 		// script and function-related interfaces
 		g_script = static_cast<NVSEScriptInterface*>(nvse->QueryInterface(kInterface_Script));

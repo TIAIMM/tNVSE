@@ -374,7 +374,7 @@
     <ClInclude Include="internal\Game\Bethesda\BSMemObject.hpp" />
     <ClInclude Include="internal\Game\Bethesda\BSMemory.hpp" />
     <ClInclude Include="internal\Game\Bethesda\BSString.hpp" />
-    <ClInclude Include="internal\Game\netimmerse.h" />
+    <ClInclude Include="internal\Game\uidecode.h" />
     <ClInclude Include="internal\tnvse.h" />
   </ItemGroup>
   <ItemGroup>

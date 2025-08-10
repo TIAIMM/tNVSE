@@ -160,7 +160,7 @@
     <ClInclude Include="internal\tnvse.h">
       <Filter>internal</Filter>
     </ClInclude>
-    <ClInclude Include="internal\Game\netimmerse.h">
+    <ClInclude Include="internal\Game\uidecode.h">
       <Filter>internal\Game</Filter>
     </ClInclude>
     <ClInclude Include="internal\Game\Bethesda\BSMemObject.hpp">

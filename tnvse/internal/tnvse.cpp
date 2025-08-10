@@ -1,7 +1,7 @@
 #pragma once
 #include <cstring>
 #include "SafeWrite.h"
-#include "Game/netimmerse.h"
+#include "Game/uidecode.h"
 #include "tnvse.h"
 
 namespace tNVSE {
@@ -24,6 +24,12 @@ namespace tNVSE {
 
     inline NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
 
+    class FontInfoEx : public FontInfo {
+    public:
+        void __thiscall ProcessTextLayoutEx(char* a2, FontTextReplaced* textParams) {
+        }
+    };
+
 	class FontManagerEx : public FontManager {
 	public:
         inline float GetHanziWidth(uint16_t gbChar, FontInfo::CharDimensions* fontCharMetrics) {
@@ -40,6 +46,7 @@ namespace tNVSE {
                 + fontCharMetrics[' '].widthMod);
         }
 
+        //	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
 		NiVector3* __thiscall GetStringDimensionsEx(NiVector3* outDimensions, const char* srcString, uint32_t fontID, float maxWrapWidth, uint32_t startCharIndex) {
             double tabStopWidth; // st7
             float finalMaxLineWidth; // [esp+10h] [ebp-4Ch]
@@ -147,8 +154,11 @@ namespace tNVSE {
                 else
                     finalMaxLineWidth = StringDimensions.x;
                 StringDimensions.z = totalLines;
+                // width (pxl)
                 outDimensions->x = finalMaxLineWidth;
+                // height (pxl)
                 outDimensions->y = StringDimensions.y;
+                // numLines
                 outDimensions->z = StringDimensions.z;
                 return outDimensions;
             }
@@ -161,11 +171,10 @@ namespace tNVSE {
 	};
 
 	void InitVertSpacingHook() {
-		ReplaceCall(0xA128E2, VertSpacingAdjust);
-		ReplaceCall(0xA13028, VertSpacingAdjust);
-		ReplaceCall(0xA1B0AF, VertSpacingAdjust);
-
-        // Text input menu
-        WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
+        WriteRelJump(0xA1B3A0, &VertSpacingAdjust);
 	}
+
+    void InitFontHook() {
+        WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
+    }
 }
