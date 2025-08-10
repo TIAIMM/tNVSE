@@ -86,6 +86,46 @@ public:
 	UInt32				unk18[6];	// 18
 };
 
+// From OBSE
+struct FNTFile { // sizeof == 0x3928
+	struct GlyphInfo { // sizeof == 0x38
+		struct UV {
+			union { // x or u: percentage of width
+				float x;
+				float u;
+			};
+			union { // y or v: percentage of height
+				float y;
+				float v;
+			};
+		};
+		//
+		float unk00;       // 00
+		UV    topLeft;     // 04
+		UV    topRight;    // 0C
+		UV    bottomLeft;  // 14
+		UV    bottomRight; // 1C
+		float width;       // 24 // px
+		float height;      // 28 // px
+		float kerningLeft; // 2C // px // negative values pull adjacent letters closer
+		float kerningRight;// 30 // px // negative values pull adjacent letters closer
+		float ascent;      // 34 // px
+	};
+	//
+	float     fontSize;
+	SInt32    unk04;       // 0004 // Number of font textures. No more than 8 are allowed. See 00574892.
+	UInt32    unk08;
+	char      name[284];   // 000C // One texture filename (sans path) every 0x24 bytes, e.g. name[0], name[0x24], name[0x48], ...
+	GlyphInfo glyphs[256]; // 0128
+	//
+	// Question: what would multiple texture files accomplish? How would they even work? It seems 
+	// like the FontInfo struct only supports one texture file at a time in the first place.
+	//
+	// If you ensure that there is only one font texture, then you can have the name as long as 
+	// you like. TEX names aren't capped to 0x24 bytes; the game just starts reading at multiples 
+	// of 0x24 within the name string.
+};
+
 // From JIP
 struct FontHeightData
 {
@@ -98,14 +138,29 @@ struct FontHeightData
 struct FontInfo
 {
 	// 38
-	struct CharDimensions
+	struct GlyphInfo
 	{
-		float			flt00[9];
-		float			width;		// 24
-		float			height;		// 28
-		float			flt2C;		// 2C
-		float			widthMod;	// 30
-		float			flt34;		// 34
+		struct UV {
+			union { // x or u: percentage of width
+				float x;
+				float u;
+			};
+			union { // y or v: percentage of height
+				float y;
+				float v;
+			};
+		};
+		//
+		float unk00;       // 00
+		UV    topLeft;     // 04
+		UV    topRight;    // 0C
+		UV    bottomLeft;  // 14
+		UV    bottomRight; // 1C
+		float width;
+		float height;
+		float kerningLeft;
+		float kerningRight;
+		float ascent;
 		//	totalWidth = width + widthMod
 	};
 
@@ -122,16 +177,16 @@ struct FontInfo
 		float			lineHeight;				// 0000
 		UInt32			numTextures;			// 0004
 		TexFileName		textures[8];			// 0008
-		CharDimensions	glyphs[256];	// 0128
+		GlyphInfo		glyphs[256];	// 0128
 	};
 
 	struct ButtonIcon;
 
 	UInt8						isLoaded;	// 00
 	UInt8						pad01[3];	// 01
-	char* filePath;	// 04
+	char*						filePath;	// 04
 	UInt32						fontID;		// 08
-	NiTexturingProperty* fontTexProp;	// 0C
+	NiTexturingProperty*		fontTexProp;	// 0C
 	UInt32						renderState[7];	// 10
 	float						maxCharHeight;		// 2C
 	float						maxWidthMod;		// 30
@@ -311,43 +366,3 @@ public:
 	}
 };
 STATIC_ASSERT(sizeof(DebugText) == 0x229C);
-
-// From OBSE
-struct FNTFile { // sizeof == 0x3928
-	struct GlyphInfo { // sizeof == 0x38
-		struct UV {
-			union { // x or u: percentage of width
-				float x;
-				float u;
-			};
-			union { // y or v: percentage of height
-				float y;
-				float v;
-			};
-		};
-		//
-		float unk00;       // 00
-		UV    topLeft;     // 04
-		UV    topRight;    // 0C
-		UV    bottomLeft;  // 14
-		UV    bottomRight; // 1C
-		float width;       // 24 // px
-		float height;      // 28 // px
-		float kerningLeft; // 2C // px // negative values pull adjacent letters closer
-		float kerningRight;// 30 // px // negative values pull adjacent letters closer
-		float ascent;      // 34 // px
-	};
-	//
-	float     fontSize;
-	SInt32    unk04;       // 0004 // Number of font textures. No more than 8 are allowed. See 00574892.
-	UInt32    unk08;
-	char      name[284];   // 000C // One texture filename (sans path) every 0x24 bytes, e.g. name[0], name[0x24], name[0x48], ...
-	GlyphInfo glyphs[256]; // 0128
-	//
-	// Question: what would multiple texture files accomplish? How would they even work? It seems 
-	// like the FontInfo struct only supports one texture file at a time in the first place.
-	//
-	// If you ensure that there is only one font texture, then you can have the name as long as 
-	// you like. TEX names aren't capped to 0x24 bytes; the game just starts reading at multiples 
-	// of 0x24 within the name string.
-};

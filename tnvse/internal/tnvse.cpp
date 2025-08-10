@@ -32,18 +32,18 @@ namespace tNVSE {
 
 	class FontManagerEx : public FontManager {
 	public:
-        inline float GetHanziWidth(uint16_t gbChar, FontInfo::CharDimensions* fontCharMetrics) {
+        inline float GetHanziWidth(uint16_t gbChar, FontInfo::GlyphInfo* fontCharMetrics) {
 			// Check if the character is a valid GB2312 character
             if (fontCharMetrics[gbChar].width > 0) {
-                return fontCharMetrics[gbChar].flt2C
+                return fontCharMetrics[gbChar].kerningLeft
                     + fontCharMetrics[gbChar].width
-                    + fontCharMetrics[gbChar].widthMod;
+                    + fontCharMetrics[gbChar].kerningRight;
             }
 
 			// default space character width if the character is not found
-            return (fontCharMetrics[' '].flt2C
+            return (fontCharMetrics[' '].kerningLeft
                 + fontCharMetrics[' '].width
-                + fontCharMetrics[' '].widthMod);
+                + fontCharMetrics[' '].kerningRight);
         }
 
         //	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
@@ -62,7 +62,7 @@ namespace tNVSE {
             float lastValidWrapPosition; // [esp+48h] [ebp-14h]
             float currentLineWidth; // [esp+4Ch] [ebp-10h]
             int sourceStringLength; // [esp+50h] [ebp-Ch]
-            FontInfo::CharDimensions* fontCharMetrics; // [esp+54h] [ebp-8h]
+            FontInfo::GlyphInfo* fontCharMetrics; // [esp+54h] [ebp-8h]
             float fontVerticalSpacingAdjust; // [esp+58h] [ebp-4h]
 
             if (fontID >= 1 && fontID <= 8 && srcString)
@@ -82,9 +82,9 @@ namespace tNVSE {
                     currentChar = srcString[currentCharIndex];
                     currentCharTotalWidth = 0.0;
                     ConvertToAsciiQuotes(&currentChar);
-                    currentCharTotalWidth = fontCharMetrics[currentChar].flt2C
+                    currentCharTotalWidth = fontCharMetrics[currentChar].kerningLeft
                         + fontCharMetrics[currentChar].width
-                        + fontCharMetrics[currentChar].widthMod;
+                        + fontCharMetrics[currentChar].kerningRight;
                     switch (currentChar)
                     {
                     case '\t':
@@ -100,9 +100,9 @@ namespace tNVSE {
                         break;
                     case '~':
                         lastValidWrapPosition = currentLineWidth
-                            + fontCharMetrics['-'].flt2C
+                            + fontCharMetrics['-'].kerningLeft
                             + fontCharMetrics['-'].width
-                            + fontCharMetrics['-'].widthMod;
+                            + fontCharMetrics['-'].kerningRight;
                         hasHyphenationPoint = 1;
                         break;
                     default:
@@ -117,9 +117,9 @@ namespace tNVSE {
                             lastValidWrapPosition = currentLineWidth
                                 - currentCharTotalWidth
                                 - previousCharTotalWidth
-                                + fontCharMetrics['-'].flt2C
+                                + fontCharMetrics['-'].kerningLeft
                                 + fontCharMetrics['-'].width
-                                + fontCharMetrics['-'].widthMod;
+                                + fontCharMetrics['-'].kerningRight;
                             currentLineWidth = currentCharTotalWidth + previousCharTotalWidth;
                         }
                         else
@@ -131,9 +131,9 @@ namespace tNVSE {
                                     currentLineWidth = 0.0;
                                 else
                                     currentLineWidth = currentLineWidth
-                                    - (fontCharMetrics[' '].flt2C
+                                    - (fontCharMetrics[' '].kerningLeft
                                         + fontCharMetrics[' '].width
-                                        + fontCharMetrics[' '].widthMod);
+                                        + fontCharMetrics[' '].kerningRight);
                             }
                         }
                         if (lastValidWrapPosition >= StringDimensions.x)
