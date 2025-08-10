@@ -112,7 +112,7 @@ struct FontInfo
 	// 24
 	struct TexFileName
 	{
-		UInt32			unk00;
+		UInt32			textureID;
 		char			fileName[0x20];
 	};
 
@@ -122,7 +122,7 @@ struct FontInfo
 		float			lineHeight;				// 0000
 		UInt32			numTextures;			// 0004
 		TexFileName		textures[8];			// 0008
-		CharDimensions	charDimensions[256];	// 0128
+		CharDimensions	glyphs[256];	// 0128
 	};
 
 	struct ButtonIcon;
@@ -131,12 +131,12 @@ struct FontInfo
 	UInt8						pad01[3];	// 01
 	char* filePath;	// 04
 	UInt32						fontID;		// 08
-	NiTexturingProperty* texProp;	// 0C
-	UInt32						unk10[7];	// 10
-	float						flt2C;		// 2C
-	float						flt30;		// 30
+	NiTexturingProperty* fontTexProp;	// 0C
+	UInt32						renderState[7];	// 10
+	float						maxCharHeight;		// 2C
+	float						maxWidthMod;		// 30
 	UInt32						unk34;		// 34
-	BufferData* bufferData;// 38
+	BufferData* fontData;// 38
 	UInt32						unk3C[2];	// 3C
 	BSSimpleArray<ButtonIcon>	arr44;		// 44
 

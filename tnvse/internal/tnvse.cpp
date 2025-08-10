@@ -69,7 +69,7 @@ namespace tNVSE {
             {
                 StringDimensions = StringDefaulDimensions;
                 sourceStringLength = strlen(srcString);
-                fontCharMetrics = this->fontInfos[fontID - 1]->bufferData->charDimensions;
+                fontCharMetrics = this->fontInfos[fontID - 1]->fontData->glyphs;
                 lastValidWrapPosition = 0.0;
                 currentLineWidth = 0.0;
                 fontVerticalSpacingAdjust = VertSpacingAdjust(fontID);
@@ -142,7 +142,7 @@ namespace tNVSE {
                             adjustedWrapWidth = StringDimensions.x;
                         StringDimensions.x = adjustedWrapWidth;
                         StringDimensions.y = fontVerticalSpacingAdjust
-                            + this->fontInfos[fontID - 1]->bufferData->lineHeight
+                            + this->fontInfos[fontID - 1]->fontData->lineHeight
                             + StringDimensions.y;
                         lastValidWrapPosition = 0.0;
                         ++totalLines;
@@ -154,11 +154,8 @@ namespace tNVSE {
                 else
                     finalMaxLineWidth = StringDimensions.x;
                 StringDimensions.z = totalLines;
-                // width (pxl)
                 outDimensions->x = finalMaxLineWidth;
-                // height (pxl)
                 outDimensions->y = StringDimensions.y;
-                // numLines
                 outDimensions->z = StringDimensions.z;
                 return outDimensions;
             }
