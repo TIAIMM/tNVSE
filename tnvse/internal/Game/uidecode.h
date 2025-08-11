@@ -180,7 +180,16 @@ struct FontInfo
 		GlyphInfo		glyphs[256];	// 0128
 	};
 
-	struct ButtonIcon;
+	struct ButtonIcon {
+		float unk01;
+		float unk02;
+		float unk03;
+		float unk04;
+		float unk05;
+		float unk06;
+		float unk07;
+		float unk08;
+	};
 
 	UInt8						isLoaded;	// 00
 	UInt8						pad01[3];	// 01
@@ -193,11 +202,15 @@ struct FontInfo
 	UInt32						unk34;		// 34
 	BufferData* fontData;// 38
 	UInt32						unk3C[2];	// 3C
-	BSSimpleArray<ButtonIcon>	arr44;		// 44
+	BSSimpleArray<ButtonIcon>	buttonIconArray;		// 44
 
 	__forceinline FontInfo* Init(UInt32 fontID, const char* filePath, bool arg3)
 	{
 		return ThisStdCall<FontInfo*>(0xA12020, this, fontID, filePath, arg3);
+	}
+	__forceinline FontInfo* LoadFontIcon(const char* iconPath)
+	{
+		return ThisStdCall<FontInfo*>(0xA1AEE0, this, iconPath);
 	}
 };
 
