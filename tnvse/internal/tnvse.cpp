@@ -33,10 +33,6 @@ namespace tNVSE {
         return CdeclCall<SInt32>(0xEC9130);
     }
 
-    static UInt32 __cdecl ConditionalFloatToUInt(double a1) {
-        return CdeclCall<UInt32>(0xEC62C0);
-    }
-
     static UInt32 __cdecl OptimizedMemCopy(UInt32 destAddress, UInt8* srcData, UInt32 byteCount) {
         return CdeclCall<UInt32>(0xEC62C0);
     }
@@ -63,6 +59,15 @@ namespace tNVSE {
 
     static void* __cdecl AppendToListTail(void* ListNode, void * ListNode2) {
         return ThisStdCall<void*>(0xAF25DD, ListNode, ListNode2);
+    }
+
+    static __declspec(naked) UInt32 __cdecl
+        ConditionalFloatToUInt(double a1)
+    {
+        __asm {
+            fld qword ptr[esp + 4]
+            jmp dword ptr ds : 0EC62C0h
+        }
     }
 
     __declspec(naked) void __cdecl FastStringCopyAligned(char* dest, const char* src)
@@ -605,5 +610,6 @@ namespace tNVSE {
 
     void InitFontHook() {
         WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
+        //WriteRelJumpEx(0xA12FB0, &FontInfoEx::ProcessTextLayoutEx);
     }
 }
