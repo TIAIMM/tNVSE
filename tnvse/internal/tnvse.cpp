@@ -117,10 +117,7 @@ namespace tNVSE {
             size_t bufferCopyIndex; // [esp+B4h] [ebp-72Ch]
             char textureNameBuffer[268]; // [esp+B8h] [ebp-728h] BYREF
             int charScanIndex; // [esp+1C4h] [ebp-61Ch]
-            float unusedFloatVars1; // [esp+1D8h] [ebp-608h]
-            float unusedFloatVars2; // [esp+1DCh] [ebp-604h]
-            float unusedFloatVars3; // [esp+1E0h] [ebp-600h]
-            float unusedFloatVars4; // [esp+1E4h] [ebp-5FCh]
+            float unkarray[4]; // [esp+1D8h] [ebp-608h]
             char substrBuffer[264]; // [esp+1E8h] [ebp-5F8h] BYREF
             signed int escapeSeqSizeDiff; // [esp+2F0h] [ebp-4F0h]
             size_t postEscapeTextLen; // [esp+2F4h] [ebp-4ECh]
@@ -217,15 +214,16 @@ namespace tNVSE {
                         escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
                         if (parsedTextBuffer[postEscapeTextLen - 1] == '\\')
                         {
-                            unusedFloatVars1 = 0.0;
-                            unusedFloatVars2 = 0.0;
-                            unusedFloatVars3 = 0.0;
-                            unusedFloatVars4 = 0.0;
+                            unkarray[0] = 0.0;
+                            unkarray[1] = 0.0;
+                            unkarray[2] = 0.0;
+                            unkarray[3] = 0.0;
                             for (charScanIndex = 0; parsedTextBuffer[charScanIndex] != '\\'; ++charScanIndex)
                                 ;
                             substrBuffer[0] = 0;
                             FastStringCopyAligned(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
-                            strlen(substrBuffer)[&unusedFloatVars4 + 3] = 0;
+                            size_t strLen = strlen(substrBuffer);
+                            *((char*)unkarray + strLen + 15) = 0;
                             if (this->fontID == 7)
                             {
                                 SafeStringCopy(textureNameBuffer, 260, substrBuffer);
@@ -610,6 +608,6 @@ namespace tNVSE {
 
     void InitFontHook() {
         WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
-        //WriteRelJumpEx(0xA12FB0, &FontInfoEx::ProcessTextLayoutEx);
+        WriteRelJumpEx(0xA12FB0, &FontInfoEx::ProcessTextLayoutEx);
     }
 }
