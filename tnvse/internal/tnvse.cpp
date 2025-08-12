@@ -80,7 +80,7 @@ namespace tNVSE {
 
     class FontInfoEx : public FontInfo {
     public:
-        void __thiscall ProcessTextLayoutEx(char* textSrc, FontTextReplaced* textParams) {
+        void __thiscall CalculateTextLayoutEx(char* textSrc, FontTextReplaced* textParams) {
             unsigned int charWidthWithKerning; // eax
             unsigned int spaceCharWidth; // eax
             unsigned int tildeCharWidth; // eax
@@ -596,7 +596,7 @@ namespace tNVSE {
 
     void InitFontHook() {
         WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
-        ReplaceCallEx(0x759281, &FontInfoEx::ProcessTextLayoutEx);
-        //ReplaceCallEx(0xA1292E, &FontInfoEx::ProcessTextLayoutEx);
+        ReplaceCallEx(0x759281, &FontInfoEx::CalculateTextLayoutEx);
+        //ReplaceCallEx(0xA1292E, &FontInfoEx::CalculateTextLayoutEx);
     }
 }
