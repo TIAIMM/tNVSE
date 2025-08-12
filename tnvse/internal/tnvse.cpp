@@ -41,10 +41,6 @@ namespace tNVSE {
         return CdeclCall<void*>(0xEC61C0);
     }
 
-    static bool __cdecl StringBuffer_Manage(void* StringBuffer, const char* srcString, size_t minRequiredSize) {
-        return ThisStdCall<bool>(0x4037F0, StringBuffer, srcString, minRequiredSize);
-    }
-
     static void* __cdecl AllocateMemAligned(void* pMemoryManager, unsigned int size) {
         return ThisStdCall<void*>(0xAA3E40, pMemoryManager, size);
     }
@@ -229,7 +225,7 @@ namespace tNVSE {
                                 SafeStringCopy(textureNameBuffer, 260, substrBuffer);
                                 SafeFormat(substrBuffer, 260, "glow_%s", textureNameBuffer);
                             }
-                            FontInfo::LoadFontIcon(substrBuffer);
+                            this->LoadFontIcon(substrBuffer);
                             parsedTextBuffer[charScanIndex] = 1;
                             parsedTextBuffer[charScanIndex + 1] = 0;
                             postEscapeTextLen = strlen(parsedTextBuffer);
@@ -454,7 +450,7 @@ namespace tNVSE {
                 finalMaxLineWidth = maxLineWidth;
             maxLineWidth = finalMaxLineWidth;
             dynamicTextBuffer[processedTextLen] = 0;
-            StringBuffer_Manage(textParams, dynamicTextBuffer, 0);
+            textParams->ManageStringBuffer(dynamicTextBuffer, 0);
             textParams->wrapWidth = maxLineWidth;
             textParams->wrapLimit = totalTextHeight;
             textParams->initdToZero = 0;

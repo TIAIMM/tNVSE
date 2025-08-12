@@ -281,6 +281,10 @@ struct __declspec(align(4)) FontTextReplaced
 	}
 
 	void GetVariableEscapedText(const char* input);
+	__forceinline FontTextReplaced* ManageStringBuffer(const char* srcString, size_t minRequiredSize)
+	{
+		return ThisStdCall<FontTextReplaced*>(0x4037F0, this, srcString, minRequiredSize);
+	}
 };
 
 STATIC_ASSERT(sizeof(FontTextReplaced) == 0x28);
