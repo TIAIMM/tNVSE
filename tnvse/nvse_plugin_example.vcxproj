@@ -343,6 +343,7 @@
       <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Release GECK|Win32'">
       </ForcedIncludeFiles>
     </ClCompile>
+    <ClCompile Include="internal\Game\Bethesda\MemoryManager.cpp" />
     <ClCompile Include="internal\tnvse.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
@@ -371,9 +372,13 @@
     <ClInclude Include="..\nvse\nvse\utility.h" />
     <ClInclude Include="fn_intro_to_script_functions.h" />
     <ClInclude Include="fn_typed_functions.h" />
+    <ClInclude Include="internal\Game\Bethesda\BSMap.hpp" />
+    <ClInclude Include="internal\Game\Bethesda\BSMapBase.hpp" />
     <ClInclude Include="internal\Game\Bethesda\BSMemObject.hpp" />
     <ClInclude Include="internal\Game\Bethesda\BSMemory.hpp" />
     <ClInclude Include="internal\Game\Bethesda\BSString.hpp" />
+    <ClInclude Include="internal\Game\Bethesda\MemoryContexts.hpp" />
+    <ClInclude Include="internal\Game\Bethesda\MemoryManager.hpp" />
     <ClInclude Include="internal\Game\uidecode.h" />
     <ClInclude Include="internal\tnvse.h" />
   </ItemGroup>

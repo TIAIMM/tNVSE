@@ -2,9 +2,11 @@
 #include <cstring>
 #include "SafeWrite.h"
 #include "Game/uidecode.h"
+#include "Game/Bethesda/MemoryManager.hpp"
 #include "tnvse.h"
 
 namespace tNVSE {
+
     static void __cdecl ConvertToAsciiQuotes(UInt8* currentChar) {
         return CdeclCall<void>(0xA122B0);
     }
@@ -34,27 +36,15 @@ namespace tNVSE {
     }
 
     static UInt32 __cdecl OptimizedMemCopy(UInt32 destAddress, UInt8* srcData, UInt32 byteCount) {
-        return CdeclCall<UInt32>(0xEC62C0);
+        return CdeclCall<UInt32>(0xEC7230);
     }
 
     static void* __cdecl OptimizedMemSet(void* buf_1, int a2, size_t n0x100) {
         return CdeclCall<void*>(0xEC61C0);
     }
 
-    static void* __cdecl AllocateMemAligned(void* pMemoryManager, unsigned int size) {
-        return ThisStdCall<void*>(0xAA3E40, pMemoryManager, size);
-    }
-
-    static void* __cdecl ReallocateMem(void* pMemoryManager, void* pOldBlock, SIZE_T nNewSize) {
-        return ThisStdCall<void*>(0xAA4150, pMemoryManager, pOldBlock, nNewSize);
-    }
-
-    static void* __cdecl DeallocMem(void* pMemoryManager, void* pMemoryBlock) {
-        return ThisStdCall<void*>(0xAA4060, pMemoryManager, pMemoryBlock);
-    }
-
     static void* __cdecl AppendToListTail(void* ListNode, void * ListNode2) {
-        return ThisStdCall<void*>(0xAF25DD, ListNode, ListNode2);
+        return ThisStdCall<void*>(0xAF25B0, ListNode, ListNode2);
     }
 
     static __declspec(naked) UInt32 __cdecl
@@ -84,7 +74,9 @@ namespace tNVSE {
         return (c >= 0xA1 && c <= 0xF7);
     }
 
-    inline NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
+    inline static NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
+
+    inline static MemoryManager* TextMemoryManagerInstance = reinterpret_cast<MemoryManager*>(0x11F6238);
 
     class FontInfoEx : public FontInfo {
     public:
@@ -161,10 +153,10 @@ namespace tNVSE {
             currentLineCount = 1;
             sourceTextLen = strlen(textSrc);
             maxAllowedLines = textParams->wrapLines;
-            originalTextBuffer = static_cast<char*>(AllocateMemAligned(reinterpret_cast<void*>(0x11F6238), sourceTextLen + 4));
+            originalTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Allocate(sourceTextLen + 4));
             OptimizedMemSet(originalTextBuffer, 0, sourceTextLen + 4);
             processedOriginalText = originalTextBuffer;
-            processedTextBuffer = static_cast<char*>(AllocateMemAligned(reinterpret_cast<void*>(0x11F6238), sourceTextLen + 4));
+            processedTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Allocate(sourceTextLen + 4));
             OptimizedMemSet(processedTextBuffer, 0, sourceTextLen + 4);
             dynamicTextBuffer = processedTextBuffer;
             SafeFormatString(originalTextBuffer, "%s", textSrc);
@@ -234,7 +226,7 @@ namespace tNVSE {
                         if (escapeSeqSizeDiff > 0)
                         {
                             textBufferSize += escapeSeqSizeDiff;
-                            dynamicTextBuffer = static_cast<char*>(ReallocateMem(reinterpret_cast<void*>(0x11F6238), dynamicTextBuffer, textBufferSize));
+                            dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, textBufferSize));
                         }
                         for (bufferCopyIndex = 0; bufferCopyIndex < postEscapeTextLen; ++bufferCopyIndex)
                             dynamicTextBuffer[processedTextLen++] = parsedTextBuffer[bufferCopyIndex];
@@ -255,7 +247,7 @@ namespace tNVSE {
             if (hasEscapeSequence)
             {
                 sourceTextLen = processedTextLen;
-                processedOriginalText = static_cast<char*>(ReallocateMem(reinterpret_cast<void*>(0x11F6238), processedOriginalText, processedTextLen + 4));
+                processedOriginalText = static_cast<char*>(TextMemoryManagerInstance->Reallocate(processedOriginalText, processedTextLen + 4));
                 FastStringCopyAligned(processedOriginalText, dynamicTextBuffer);
             }
             *dynamicTextBuffer = 0;
@@ -268,7 +260,7 @@ namespace tNVSE {
                     dynamicTextBuffer[processedTextLen] = textParams->newLineCharacter;
                     if (++processedTextLen >= textBufferSize)
                     {
-                        dynamicTextBuffer = static_cast<char*>(ReallocateMem(reinterpret_cast<void*>(0x11F6238), dynamicTextBuffer, processedTextLen + 4));
+                        dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
                         textBufferSize = processedTextLen + 4;
                     }
                     totalTextHeight = this->fontData->lineHeight + lineSpacingAdjust + totalTextHeight;
@@ -328,7 +320,7 @@ namespace tNVSE {
                             {
                                 isTildeChar = 0;
                                 textBufferSize += 4;
-                                dynamicTextBuffer = static_cast<char*>(ReallocateMem(reinterpret_cast<void*>(0x11F6238), dynamicTextBuffer, textBufferSize));
+                                dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, textBufferSize));
                                 OptimizedMemCopy(
                                     reinterpret_cast<unsigned int>(&dynamicTextBuffer[lastWrapPosition + 2]),
                                     reinterpret_cast<unsigned __int8*>(&dynamicTextBuffer[lastWrapPosition]),
@@ -377,7 +369,7 @@ namespace tNVSE {
                         {
                             if (processedTextLen + 3 >= textBufferSize)
                             {
-                                dynamicTextBuffer = static_cast<char*>(ReallocateMem(reinterpret_cast<void*>(0x11F6238), dynamicTextBuffer, processedTextLen + 6));
+                                dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, processedTextLen + 6));
                                 textBufferSize = processedTextLen + 6;
                             }
                             dynamicTextBuffer[processedTextLen + 2] = dynamicTextBuffer[processedTextLen];
@@ -385,7 +377,7 @@ namespace tNVSE {
                             memcpy(&dynamicTextBuffer[processedTextLen - 1], "-\n", 2);
                             processedTextLen += 2;
                             hyphenInsertCount += 2;
-                            pCurrentGlyph = &this->fontData->glyphs[45];
+                            pCurrentGlyph = &this->fontData->glyphs['-'];
                             totalTextHeight = this->fontData->lineHeight + lineSpacingAdjust + totalTextHeight;
                             hyphenInsertWidth = ConditionalFloatToUInt(pCurrentGlyph->width + pCurrentGlyph->kerningRight);
                             currentLineWidth -= hyphenInsertWidth;
@@ -408,7 +400,7 @@ namespace tNVSE {
                         dynamicTextBuffer[processedTextLen++] = currentChar;
                     if (processedTextLen >= textBufferSize)
                     {
-                        dynamicTextBuffer = static_cast<char*>(ReallocateMem(reinterpret_cast<void*>(0x11F6238), dynamicTextBuffer, processedTextLen + 4));
+                        dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
                         textBufferSize = processedTextLen + 4;
                     }
                 }
@@ -456,8 +448,8 @@ namespace tNVSE {
             textParams->initdToZero = 0;
             textParams->wrapLines = currentLineCount;
             textParams->length = processedTextLen;
-            DeallocMem(reinterpret_cast<void*>(0x11F6238), processedOriginalText);
-            DeallocMem(reinterpret_cast<void*>(0x11F6238), dynamicTextBuffer);
+            TextMemoryManagerInstance->Deallocate(processedOriginalText);
+            TextMemoryManagerInstance->Deallocate(dynamicTextBuffer);
         }
     };
 
@@ -604,6 +596,7 @@ namespace tNVSE {
 
     void InitFontHook() {
         WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
-        WriteRelJumpEx(0xA12FB0, &FontInfoEx::ProcessTextLayoutEx);
+        ReplaceCallEx(0x759281, &FontInfoEx::ProcessTextLayoutEx);
+        //ReplaceCallEx(0xA1292E, &FontInfoEx::ProcessTextLayoutEx);
     }
 }

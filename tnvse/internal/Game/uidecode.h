@@ -233,7 +233,7 @@ public:
 	NiVector3* GetStringDimensions(NiVector3* outDims, const char* srcString, UInt32 fontID, UInt32 maxFlt = 0x7F7FFFFF,
 		UInt32 startIdx = 0);
 
-	__forceinline static FontManager* GetSingleton();
+	__forceinline static FontManager* GetSingleton() { return *(FontManager**)0x11F33F8; }
 };
 
 // From JG
