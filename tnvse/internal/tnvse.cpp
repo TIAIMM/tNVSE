@@ -9,12 +9,11 @@
 #include "tnvse.h"
 
 namespace tNVSE {
-
     void __cdecl ConvertToAsciiQuotes(UInt8* currentChar) {
         CdeclCall(0xA122B0, currentChar);
     }
 
-    bool __cdecl ReplaceVariableInString(const char* varName, char* outBuffer, size_t bufferSize, bool isPositiveEscape) {
+    bool __cdecl ReplaceVariableInString(const char* varName, char* outBuffer, UInt32 bufferSize, bool isPositiveEscape) {
         return CdeclCall<bool>(0x7070C0, varName, outBuffer, bufferSize, isPositiveEscape);
     }
 
@@ -22,22 +21,8 @@ namespace tNVSE {
         return CdeclCall<bool>(0x7073D0, p_varNameBuffer, p_parsedTextBuffer);
     }
 
-    SInt32 __cdecl SafeStringCopy(char* pDest, size_t nDestSize, const char* pSrc) {
-        return CdeclCall<SInt32>(0xEC65A6, pDest, nDestSize, pSrc);
-    }
-
-    template <typename... Args>
-    SInt32 __cdecl SafeFormat(char* pDest, size_t nDestSize, const char* pFormat, Args... args)
-    {
-        return CdeclCall<SInt32>(0x406D00, pDest, nDestSize, pFormat, args...);
-    }
-
     SInt32 __cdecl AlignLineWidthToTab(double a1, double a2) {
         return CdeclCall<SInt32>(0xEC9130, a1, a2);
-    }
-
-    UInt32 __cdecl OptimizedMemCopy(UInt32 destAddress, UInt8* srcData, UInt32 byteCount) {
-        return CdeclCall<UInt32>(0xEC7230, destAddress, srcData, byteCount);
     }
 
     void* __cdecl AppendToListTail(void* ListNode, void * ListNode2) {
@@ -78,18 +63,10 @@ namespace tNVSE {
             return SafeDoubleToUInt32(a1);
     }
 
-    // 0xEC6370
-    __declspec(naked) void __cdecl FastStringCopyAligned(char* dest, const char* src)
-    {
-        __asm {
-            push    edi
-            mov     edi, [esp + 8]
-            mov     eax, 0xEC63E5
-            jmp     eax
-        }
+    Float32 __stdcall GetFontVerticalSpacingAdjustment(UInt32 fontID) {
+        return StdCall<Float32>(0xA1B3A0, fontID);
     }
 
-    // 0xA1B3A0
     Float32 __stdcall VertSpacingAdjust(UInt32 fontID) {
         return 0;
     }
@@ -125,17 +102,17 @@ namespace tNVSE {
             unsigned int truncatedTextLen; // [esp+A4h] [ebp-73Ch]
             unsigned __int8 currentChar; // [esp+ABh] [ebp-735h] BYREF
             FontInfo::GlyphInfo* pCurrentGlyph; // [esp+ACh] [ebp-734h]
-            size_t charIndex; // [esp+B0h] [ebp-730h]
-            size_t bufferCopyIndex; // [esp+B4h] [ebp-72Ch]
+            UInt32 charIndex; // [esp+B0h] [ebp-730h]
+            UInt32 bufferCopyIndex; // [esp+B4h] [ebp-72Ch]
             char textureNameBuffer[268]; // [esp+B8h] [ebp-728h] BYREF
             int charScanIndex; // [esp+1C4h] [ebp-61Ch]
             float unkarray[4]; // [esp+1D8h] [ebp-608h]
             char substrBuffer[264]; // [esp+1E8h] [ebp-5F8h] BYREF
             signed int escapeSeqSizeDiff; // [esp+2F0h] [ebp-4F0h]
-            size_t postEscapeTextLen; // [esp+2F4h] [ebp-4ECh]
+            UInt32 postEscapeTextLen; // [esp+2F4h] [ebp-4ECh]
             bool isPositiveEscape; // [esp+2FBh] [ebp-4E5h]
             int escapeSeqPrefixLen; // [esp+2FCh] [ebp-4E4h]
-            size_t totalEscapeSeqLen; // [esp+300h] [ebp-4E0h]
+            UInt32 totalEscapeSeqLen; // [esp+300h] [ebp-4E0h]
             int varNameLen; // [esp+304h] [ebp-4DCh]
             char varNameBuffer[33]; // [esp+308h] [ebp-4D8h] BYREF
             unsigned int srcTextIndex; // [esp+38Ch] [ebp-454h]
@@ -173,7 +150,7 @@ namespace tNVSE {
             if (textParams->wrapLines <= 0)
                 textParams->wrapLines = 0x7FFFFFFF;
 
-            lineSpacingAdjust = VertSpacingAdjust(this->fontID);
+            lineSpacingAdjust = GetFontVerticalSpacingAdjustment(this->fontID);
             lastWrapPosition = 0;
             preSpaceWidth = 0;
             postSpaceWidth = 0;
@@ -195,6 +172,7 @@ namespace tNVSE {
             }
 
             //gLog.Message("MemSet originalTextBuffer");
+            // 0xEC61C0
             memset(originalTextBuffer, 0, sourceTextLen + 4);
 
             //gLog.Message("Init processedOriginalText");
@@ -211,12 +189,14 @@ namespace tNVSE {
             }
 
             //gLog.Message("MemSet processedTextBuffer");
+            // 0xEC61C0
             memset(processedTextBuffer, 0, sourceTextLen + 4);
 
             //gLog.Message("Init dynamicTextBuffer");
             dynamicTextBuffer = processedTextBuffer;
 
             //gLog.Message("SafeFormatString originalTextBuffer");
+            // 0xEC623A
             snprintf(originalTextBuffer, sourceTextLen + 1, "%s", textSrc);
             //gLog.Message("Buffer Init Finish");
 
@@ -274,16 +254,19 @@ namespace tNVSE {
                             for (charScanIndex = 0; parsedTextBuffer[charScanIndex] != '\\'; ++charScanIndex)
                                 ;
                             substrBuffer[0] = 0;
+                            // 0xEC6370
                             //gLog.Message("FastStringCopyAligned 1");
-                            FastStringCopyAligned(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
+                            strcpy(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
                             //gLog.Message("FastStringCopyAligned 1 End");
                             // 0xEC6130
-                            size_t strLen = strlen(substrBuffer);
+                            UInt32 strLen = strlen(substrBuffer);
                             *((char*)unkarray + strLen + 15) = 0;
                             if (this->fontID == 7)
                             {
-                                SafeStringCopy(textureNameBuffer, 260, substrBuffer);
-                                SafeFormat(substrBuffer, 260, "glow_%s", textureNameBuffer);
+                                // 0x0xEC65A6
+                                strncpy_s(textureNameBuffer, sizeof(textureNameBuffer), substrBuffer, _TRUNCATE);
+                                // 0x406D00
+                                vsnprintf(substrBuffer, sizeof(substrBuffer), "glow_%s", textureNameBuffer);
                             }
                             this->LoadFontIcon(substrBuffer);
                             parsedTextBuffer[charScanIndex] = 1;
@@ -321,8 +304,9 @@ namespace tNVSE {
                 sourceTextLen = processedTextLen;
                 //gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
                 processedOriginalText = static_cast<char*>(TextMemoryManagerInstance->Reallocate(processedOriginalText, processedTextLen + 4));
+                // 0xEC6370
                 //gLog.Message("FastStringCopyAligned");
-                FastStringCopyAligned(processedOriginalText, dynamicTextBuffer);
+                strcpy(processedOriginalText, dynamicTextBuffer);
             }
             *dynamicTextBuffer = 0;
             processedTextLen = 0;
@@ -404,9 +388,10 @@ namespace tNVSE {
                                 isTildeChar = 0;
                                 textBufferSize += 4;
                                 dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, textBufferSize));
-                                OptimizedMemCopy(
-                                    reinterpret_cast<unsigned int>(&dynamicTextBuffer[lastWrapPosition + 2]),
-                                    reinterpret_cast<unsigned __int8*>(&dynamicTextBuffer[lastWrapPosition]),
+                                // 0xEC7230
+                                memmove(
+                                    &dynamicTextBuffer[lastWrapPosition + 2],
+                                    &dynamicTextBuffer[lastWrapPosition],
                                     processedTextLen - lastWrapPosition);
                                 dynamicTextBuffer[lastWrapPosition + 1] = '\n';
                                 dynamicTextBuffer[lastWrapPosition] = '-';
@@ -457,6 +442,7 @@ namespace tNVSE {
                             }
                             dynamicTextBuffer[processedTextLen + 2] = dynamicTextBuffer[processedTextLen];
                             dynamicTextBuffer[processedTextLen + 1] = dynamicTextBuffer[processedTextLen - 1];
+                            //qmemcpy
                             memcpy(&dynamicTextBuffer[processedTextLen - 1], "-\n", 2);
                             processedTextLen += 2;
                             hyphenInsertCount += 2;
@@ -513,6 +499,7 @@ namespace tNVSE {
             }
             if (!*dynamicTextBuffer)
             {
+                //strcpy
                 strcpy_s(dynamicTextBuffer, textBufferSize, " ");
                 processedTextLen = 1;
                 currentLineCount = 1;
@@ -586,7 +573,7 @@ namespace tNVSE {
                 lastValidWrapPosition = 0.0;
                 currentLineWidth = 0.0;
                 //gLog.Message("Call VertSpacingAdjust");
-                fontVerticalSpacingAdjust = VertSpacingAdjust(fontID);
+                fontVerticalSpacingAdjust = GetFontVerticalSpacingAdjustment(fontID);
                 //gLog.FormattedMessage("fontVerticalSpacingAdjust: %u", fontVerticalSpacingAdjust);
                 previousCharTotalWidth = 0.0;
                 hasHyphenationPoint = 0;
