@@ -263,7 +263,7 @@ namespace tNVSE {
                             *((char*)unkarray + strLen + 15) = 0;
                             if (this->fontID == 7)
                             {
-                                // 0x0xEC65A6
+                                // 0xEC65A6
                                 strncpy_s(textureNameBuffer, sizeof(textureNameBuffer), substrBuffer, _TRUNCATE);
                                 // 0x406D00
                                 vsnprintf(substrBuffer, sizeof(substrBuffer), "glow_%s", textureNameBuffer);
@@ -513,7 +513,7 @@ namespace tNVSE {
                 finalMaxLineWidth = maxLineWidth;
             maxLineWidth = finalMaxLineWidth;
             dynamicTextBuffer[processedTextLen] = 0;
-            textParams->ManageStringBuffer(dynamicTextBuffer, 0);
+            textParams->str.Set(dynamicTextBuffer, 0);
             textParams->wrapWidth = maxLineWidth;
             textParams->wrapLimit = totalTextHeight;
             textParams->initdToZero = 0;

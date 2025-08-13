@@ -2,6 +2,7 @@
 
 #include "Utilities.h"
 #include "NiNodes.h"
+#include "Game/Bethesda/BSString.hpp"
 
 class NiMultiTargetTransformController;
 
@@ -248,9 +249,10 @@ __declspec(naked) NiVector3* FontManager::GetStringDimensions(NiVector3* outDims
 }
 
 //From Stewie Tweaks
+// actually BSStringT
 struct __declspec(align(4)) FontTextReplaced
 {
-	String str;
+	BSString str;
 	UInt32 wrapWidth;
 	UInt32 wrapLimit;
 	UInt32 initdToZero;
@@ -262,9 +264,6 @@ struct __declspec(align(4)) FontTextReplaced
 
 	FontTextReplaced()
 	{
-		str.m_bufLen = 0;
-		str.m_data = 0;
-		str.m_dataLen = 0;
 		wrapWidth = 0;
 		wrapLimit = 0;
 		initdToZero = 0;
@@ -276,14 +275,7 @@ struct __declspec(align(4)) FontTextReplaced
 
 	~FontTextReplaced()
 	{
-		str.Set(NULL);
 		lineWidths.RemoveAll();
-	}
-
-	void GetVariableEscapedText(const char* input);
-	__forceinline FontTextReplaced* ManageStringBuffer(const char* srcString, size_t minRequiredSize)
-	{
-		return ThisStdCall<FontTextReplaced*>(0x4037F0, this, srcString, minRequiredSize);
 	}
 };
 

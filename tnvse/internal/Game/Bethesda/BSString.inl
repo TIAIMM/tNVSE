@@ -15,7 +15,7 @@ inline bool BSStringT<T>::Set(const T* apText, UInt32 auiLength) {
 		uiLength = strlen(apText);
 	}
 
-	UInt32 uiAllocLength = std::max(uiLength, auiLength);
+	UInt32 uiAllocLength = std::max<UInt32>(uiLength, auiLength);
 	if (uiAllocLength > GetMaxLength()) {
 		T* pOrgStr = pString;
 		pString = BSNew<T>(uiAllocLength + sizeof(T));

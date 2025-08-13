@@ -343,6 +343,7 @@
       <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Release GECK|Win32'">
       </ForcedIncludeFiles>
     </ClCompile>
+    <ClCompile Include="internal\Game\Bethesda\BSMemory.cpp" />
     <ClCompile Include="internal\Game\Bethesda\MemoryManager.cpp" />
     <ClCompile Include="internal\tnvse.cpp" />
     <ClCompile Include="main.cpp" />
