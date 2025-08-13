@@ -10,40 +10,42 @@
 
 namespace tNVSE {
 
-    static void __cdecl ConvertToAsciiQuotes(UInt8* currentChar) {
-        return CdeclCall<void>(0xA122B0);
+    void __cdecl ConvertToAsciiQuotes(UInt8* currentChar) {
+        CdeclCall(0xA122B0, currentChar);
     }
 
-    static bool __cdecl ReplaceVariableInString(const char* varName, char* outBuffer, size_t bufferSize, bool isPositiveEscape) {
-        return CdeclCall<bool>(0x7070C0);
+    bool __cdecl ReplaceVariableInString(const char* varName, char* outBuffer, size_t bufferSize, bool isPositiveEscape) {
+        return CdeclCall<bool>(0x7070C0, varName, outBuffer, bufferSize, isPositiveEscape);
     }
 
-    static bool __cdecl ParseAndFormatVariableInString(const char* p_varNameBuffer, void* p_parsedTextBuffer) {
-        return CdeclCall<bool>(0x7073D0);
+    bool __cdecl ParseAndFormatVariableInString(const char* p_varNameBuffer, void* p_parsedTextBuffer) {
+        return CdeclCall<bool>(0x7073D0, p_varNameBuffer, p_parsedTextBuffer);
     }
 
-    static SInt32 __cdecl SafeStringCopy(char* pDest, size_t nDestSize, const char* pSrc) {
-        return CdeclCall<SInt32>(0xEC65A6);
+    SInt32 __cdecl SafeStringCopy(char* pDest, size_t nDestSize, const char* pSrc) {
+        return CdeclCall<SInt32>(0xEC65A6, pDest, nDestSize, pSrc);
     }
 
-    static SInt32 __cdecl SafeFormat(char* pDest, size_t nDestSize, const char* pFormat, ...) {
-        return CdeclCall<SInt32>(0x406D00);
+    template <typename... Args>
+    SInt32 __cdecl SafeFormat(char* pDest, size_t nDestSize, const char* pFormat, Args... args)
+    {
+        return CdeclCall<SInt32>(0x406D00, pDest, nDestSize, pFormat, args...);
     }
 
-    static SInt32 __cdecl AlignLineWidthToTab(double a1, double a2) {
-        return CdeclCall<SInt32>(0xEC9130);
+    SInt32 __cdecl AlignLineWidthToTab(double a1, double a2) {
+        return CdeclCall<SInt32>(0xEC9130, a1, a2);
     }
 
-    static UInt32 __cdecl OptimizedMemCopy(UInt32 destAddress, UInt8* srcData, UInt32 byteCount) {
-        return CdeclCall<UInt32>(0xEC7230);
+    UInt32 __cdecl OptimizedMemCopy(UInt32 destAddress, UInt8* srcData, UInt32 byteCount) {
+        return CdeclCall<UInt32>(0xEC7230, destAddress, srcData, byteCount);
     }
 
-    static void* __cdecl AppendToListTail(void* ListNode, void * ListNode2) {
+    void* __cdecl AppendToListTail(void* ListNode, void * ListNode2) {
         return ThisStdCall<void*>(0xAF25B0, ListNode, ListNode2);
     }
 
     // 0xEC62F6
-    static uint32_t SafeDoubleToUInt32(double a1)
+    uint32_t SafeDoubleToUInt32(double a1)
     {
         uint64_t bits;
         std::memcpy(&bits, &a1, sizeof(bits));
@@ -68,7 +70,7 @@ namespace tNVSE {
     }
 
     // 0xEC62C0
-    static uint32_t ConditionalFloatToUInt(double a1)
+    uint32_t ConditionalFloatToUInt(double a1)
     {
         if (*(volatile uint32_t*)0x01270A6C)
             return static_cast<uint32_t>(a1);
@@ -87,17 +89,18 @@ namespace tNVSE {
         }
     }
 
-    static Float32 __stdcall VertSpacingAdjust(UInt32 fontID) {
+    // 0xA1B3A0
+    Float32 __stdcall VertSpacingAdjust(UInt32 fontID) {
         return 0;
     }
 
-    static inline bool IsGB2312LeadByte(unsigned char c) {
+    bool IsGB2312LeadByte(unsigned char c) {
         return (c >= 0xA1 && c <= 0xF7);
     }
 
-    inline static NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
+    NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
 
-    inline static MemoryManager* TextMemoryManagerInstance = reinterpret_cast<MemoryManager*>(0x11F6238);
+    MemoryManager* TextMemoryManagerInstance = reinterpret_cast<MemoryManager*>(0x11F6238);
 
     class FontInfoEx : public FontInfo {
     public:
@@ -169,6 +172,7 @@ namespace tNVSE {
                 textParams->wrapLimit = 0x7FFFFFFF;
             if (textParams->wrapLines <= 0)
                 textParams->wrapLines = 0x7FFFFFFF;
+
             lineSpacingAdjust = VertSpacingAdjust(this->fontID);
             lastWrapPosition = 0;
             preSpaceWidth = 0;
@@ -177,6 +181,7 @@ namespace tNVSE {
             maxLineWidth = 0;
             totalTextHeight = this->fontData->glyphs[' '].height;
             currentLineCount = 1;
+            // 0xEC6130
             sourceTextLen = strlen(textSrc);
             //gLog.FormattedMessage("sourceTextLen = %u", sourceTextLen);
             maxAllowedLines = textParams->wrapLines;
@@ -249,6 +254,7 @@ namespace tNVSE {
                     else
                         escapeSeqEffectiveLen = 0;
                     varNameBuffer[escapeSeqEffectiveLen] = 0;
+                    // 0xEC6130
                     totalEscapeSeqLen = (strlen(varNameBuffer) + 1);
                     if (processedOriginalText[varNameLen + srcTextIndex] == ';')
                         totalEscapeSeqLen += escapeSeqPrefixLen;
@@ -256,6 +262,7 @@ namespace tNVSE {
                     if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
                         || ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
                     {
+                        // 0xEC6130
                         postEscapeTextLen = strlen(parsedTextBuffer);
                         escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
                         if (parsedTextBuffer[postEscapeTextLen - 1] == '\\')
@@ -270,6 +277,7 @@ namespace tNVSE {
                             //gLog.Message("FastStringCopyAligned 1");
                             FastStringCopyAligned(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
                             //gLog.Message("FastStringCopyAligned 1 End");
+                            // 0xEC6130
                             size_t strLen = strlen(substrBuffer);
                             *((char*)unkarray + strLen + 15) = 0;
                             if (this->fontID == 7)
@@ -280,6 +288,7 @@ namespace tNVSE {
                             this->LoadFontIcon(substrBuffer);
                             parsedTextBuffer[charScanIndex] = 1;
                             parsedTextBuffer[charScanIndex + 1] = 0;
+                            // 0xEC6130
                             postEscapeTextLen = strlen(parsedTextBuffer);
                             escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
                         }
@@ -353,6 +362,7 @@ namespace tNVSE {
                     currentChar = processedOriginalText[charIndex];
                     //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
                     ConvertToAsciiQuotes(&currentChar);
+                    //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c' end", currentChar);
                     pCurrentGlyph = &this->fontData->glyphs[currentChar];
                     if (currentChar == 1)
                     {
@@ -563,14 +573,21 @@ namespace tNVSE {
             FontInfo::GlyphInfo* fontCharMetrics; // [esp+54h] [ebp-8h]
             float fontVerticalSpacingAdjust; // [esp+58h] [ebp-4h]
 
+            //gLog.Message("Call GetStringDimensionsEx");
+
             if (fontID >= 1 && fontID <= 8 && srcString)
             {
                 StringDimensions = StringDefaulDimensions;
+                // 0xEC6130
+                //gLog.Message("Call strlen");
                 sourceStringLength = strlen(srcString);
+                //gLog.FormattedMessage("sourceStringLength: %u", sourceStringLength);
                 fontCharMetrics = this->fontInfos[fontID - 1]->fontData->glyphs;
                 lastValidWrapPosition = 0.0;
                 currentLineWidth = 0.0;
+                //gLog.Message("Call VertSpacingAdjust");
                 fontVerticalSpacingAdjust = VertSpacingAdjust(fontID);
+                //gLog.FormattedMessage("fontVerticalSpacingAdjust: %u", fontVerticalSpacingAdjust);
                 previousCharTotalWidth = 0.0;
                 hasHyphenationPoint = 0;
                 totalLines = 1;
@@ -579,7 +596,9 @@ namespace tNVSE {
                 {
                     currentChar = srcString[currentCharIndex];
                     currentCharTotalWidth = 0.0;
+                    //gLog.Message("Call ConvertToAsciiQuotes");
                     ConvertToAsciiQuotes(&currentChar);
+                    //gLog.Message("Call ConvertToAsciiQuotes end");
                     currentCharTotalWidth = fontCharMetrics[currentChar].kerningLeft
                         + fontCharMetrics[currentChar].width
                         + fontCharMetrics[currentChar].kerningRight;
