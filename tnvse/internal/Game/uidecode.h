@@ -249,7 +249,7 @@ __declspec(naked) NiVector3* FontManager::GetStringDimensions(NiVector3* outDims
 }
 
 //From Stewie Tweaks
-// actually BSStringT
+// actually with BSString not string
 struct __declspec(align(4)) FontTextReplaced
 {
 	BSString str;
@@ -277,10 +277,14 @@ struct __declspec(align(4)) FontTextReplaced
 	{
 		lineWidths.RemoveAll();
 	}
+
+	//BSStringT<T>::Set			0x4037F0 FontTextReplaced::StringSet
+	//BSStringT<T>::operator+=	0x404820 FontTextReplaced::StringAppend
+	//BSStringT<T>::Format		0x406F60
+	//BSStringT<T>::ApplyFormat 0x406F90
 };
 
 STATIC_ASSERT(sizeof(FontTextReplaced) == 0x28);
-static void(__thiscall* Font__CheckForVariablesInText)(FontInfo*, const char* input, FontTextReplaced* a3) = (void(__thiscall*)(FontInfo*, const char*, FontTextReplaced*))0xA12FB0;
 
 //From Stewie Tweaks
 class DebugText
