@@ -1,5 +1,8 @@
 #pragma once
 #include <cstring>
+#include <cstdint>
+#include <cstring>
+#include <limits>
 #include "SafeWrite.h"
 #include "Game/uidecode.h"
 #include "Game/Bethesda/MemoryManager.hpp"
@@ -19,10 +22,6 @@ namespace tNVSE {
         return CdeclCall<bool>(0x7073D0);
     }
 
-    static SInt32 __cdecl SafeFormatString(char* buffer, const char* format, ...) {
-        return CdeclCall<SInt32>(0xEC623A);
-    }
-
     static SInt32 __cdecl SafeStringCopy(char* pDest, size_t nDestSize, const char* pSrc) {
         return CdeclCall<SInt32>(0xEC65A6);
     }
@@ -39,21 +38,42 @@ namespace tNVSE {
         return CdeclCall<UInt32>(0xEC7230);
     }
 
-    static void* __cdecl OptimizedMemSet(void* buf_1, int a2, size_t n0x100) {
-        return CdeclCall<void*>(0xEC61C0);
-    }
-
     static void* __cdecl AppendToListTail(void* ListNode, void * ListNode2) {
         return ThisStdCall<void*>(0xAF25B0, ListNode, ListNode2);
     }
 
-    static __declspec(naked) UInt32 __cdecl
-        ConditionalFloatToUInt(double a1)
+    // 0xEC62F6
+    static uint32_t SafeDoubleToUInt32(double a1)
     {
-        __asm {
-            fld qword ptr[esp + 4]
-            jmp dword ptr ds : 0EC62C0h
+        uint64_t bits;
+        std::memcpy(&bits, &a1, sizeof(bits));
+
+        uint32_t low = static_cast<uint32_t>(bits);
+        uint32_t high = static_cast<uint32_t>(bits >> 32);
+
+        if (low == 0 && (high & 0x7FFFFFFF) == 0)
+            return 0;
+
+        bool sign = (high & 0x80000000u) != 0;
+
+        if (!sign)
+        {
+            return low;
         }
+        else
+        {
+            uint64_t pair64 = (static_cast<uint64_t>(0) << 32) | low;
+            return static_cast<uint32_t>((pair64 + 0x7FFFFFFF) >> 32);
+        }
+    }
+
+    // 0xEC62C0
+    static uint32_t ConditionalFloatToUInt(double a1)
+    {
+        if (*(volatile uint32_t*)0x01270A6C)
+            return static_cast<uint32_t>(a1);
+        else
+            return SafeDoubleToUInt32(a1);
     }
 
     __declspec(naked) void __cdecl FastStringCopyAligned(char* dest, const char* src)
@@ -80,7 +100,7 @@ namespace tNVSE {
 
     class FontInfoEx : public FontInfo {
     public:
-        void __thiscall CalculateTextLayoutEx(char* textSrc, FontTextReplaced* textParams) {
+        void __thiscall CalculateTextLayoutEx(const char* textSrc, FontTextReplaced* textParams) {
             unsigned int charWidthWithKerning; // eax
             unsigned int spaceCharWidth; // eax
             unsigned int tildeCharWidth; // eax
@@ -127,16 +147,21 @@ namespace tNVSE {
             bool isTildeChar; // [esp+3B7h] [ebp-429h]
             char* processedOriginalText; // [esp+3B8h] [ebp-428h]
             int currentLineCount; // [esp+3BCh] [ebp-424h]
-            size_t textBufferSize; // [esp+3C0h] [ebp-420h]
+            UInt32 textBufferSize; // [esp+3C0h] [ebp-420h]
             int hyphenInsertCount; // [esp+3C4h] [ebp-41Ch]
             char parsedTextBuffer[1028]; // [esp+3C8h] [ebp-418h] BYREF
             float lineSpacingAdjust; // [esp+7D0h] [ebp-10h]
             float totalTextHeight; // [esp+7D4h] [ebp-Ch]
-            size_t sourceTextLen; // [esp+7D8h] [ebp-8h]
+            UInt32 sourceTextLen; // [esp+7D8h] [ebp-8h]
             int maxAllowedLines; // [esp+7DCh] [ebp-4h]
+
+            gLog.Message("Call CalculateTextLayoutEx");
 
             if (!textSrc)
                 return;
+
+            gLog.FormattedMessage("textSrc = '%s'", textSrc);
+
             if (textParams->wrapWidth <= 0)
                 textParams->wrapWidth = 0x7FFFFFFF;
             if (textParams->wrapLimit <= 0)
@@ -152,22 +177,53 @@ namespace tNVSE {
             totalTextHeight = this->fontData->glyphs[' '].height;
             currentLineCount = 1;
             sourceTextLen = strlen(textSrc);
+            gLog.FormattedMessage("sourceTextLen = %u", sourceTextLen);
             maxAllowedLines = textParams->wrapLines;
+
+            gLog.Message("Init originalTextBuffer");
+            gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
             originalTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Allocate(sourceTextLen + 4));
-            OptimizedMemSet(originalTextBuffer, 0, sourceTextLen + 4);
+            if (!originalTextBuffer) {
+                gLog.Message("Memory allocation failed for originalTextBuffer");
+                return;
+            }
+
+            gLog.Message("MemSet originalTextBuffer");
+            memset(originalTextBuffer, 0, sourceTextLen + 4);
+
+            gLog.Message("Init processedOriginalText");
             processedOriginalText = originalTextBuffer;
+
+
+            gLog.Message("Init processedTextBuffer");
+            gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
             processedTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Allocate(sourceTextLen + 4));
-            OptimizedMemSet(processedTextBuffer, 0, sourceTextLen + 4);
+            if (!processedTextBuffer) {
+                gLog.Message("Memory allocation failed for processedTextBuffer");
+                TextMemoryManagerInstance->Deallocate(originalTextBuffer);
+                return;
+            }
+
+            gLog.Message("MemSet processedTextBuffer");
+            memset(processedTextBuffer, 0, sourceTextLen + 4);
+
+            gLog.Message("Init dynamicTextBuffer");
             dynamicTextBuffer = processedTextBuffer;
-            SafeFormatString(originalTextBuffer, "%s", textSrc);
+
+            gLog.Message("SafeFormatString originalTextBuffer");
+            snprintf(originalTextBuffer, sourceTextLen + 1, "%s", textSrc);
+            gLog.Message("Buffer Init Finish");
+
             processedTextLen = 0;
             textBufferSize = sourceTextLen + 4;
             hyphenInsertCount = 0;
             isTildeChar = 0;
             parsedTextBuffer[0] = 0;
             hasEscapeSequence = 0;
+            gLog.Message("processedOriginalText Read Start");
             for (srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
             {
+                gLog.FormattedMessage("process index %u", srcTextIndex);
                 if (processedOriginalText[srcTextIndex] == '&')
                 {
                     varNameLen = 0;
@@ -195,6 +251,7 @@ namespace tNVSE {
                     totalEscapeSeqLen = (strlen(varNameBuffer) + 1);
                     if (processedOriginalText[varNameLen + srcTextIndex] == ';')
                         totalEscapeSeqLen += escapeSeqPrefixLen;
+                    gLog.Message("ReplaceVariableInString & ParseAndFormatVariableInString");
                     if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
                         || ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
                     {
@@ -209,7 +266,9 @@ namespace tNVSE {
                             for (charScanIndex = 0; parsedTextBuffer[charScanIndex] != '\\'; ++charScanIndex)
                                 ;
                             substrBuffer[0] = 0;
+                            gLog.Message("FastStringCopyAligned 1");
                             FastStringCopyAligned(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
+                            gLog.Message("FastStringCopyAligned 1 End");
                             size_t strLen = strlen(substrBuffer);
                             *((char*)unkarray + strLen + 15) = 0;
                             if (this->fontID == 7)
@@ -240,19 +299,26 @@ namespace tNVSE {
                 }
                 else
                 {
+                    gLog.FormattedMessage("dynamicTextBuffer [%u] = processedOriginalText[%u]", processedTextLen + 1 , srcTextIndex);
                     dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
+                    gLog.Message("Copy Finished");
                 }
             }
+            gLog.Message("processedOriginalText Read Finish");
             dynamicTextBuffer[processedTextLen] = 0;
             if (hasEscapeSequence)
             {
                 sourceTextLen = processedTextLen;
+                gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
                 processedOriginalText = static_cast<char*>(TextMemoryManagerInstance->Reallocate(processedOriginalText, processedTextLen + 4));
+                gLog.Message("FastStringCopyAligned");
                 FastStringCopyAligned(processedOriginalText, dynamicTextBuffer);
             }
             *dynamicTextBuffer = 0;
             processedTextLen = 0;
             buttonIconIndex = 0;
+
+            gLog.Message("processedOriginalText Read 2 Start");
             for (charIndex = 0; charIndex < sourceTextLen && processedOriginalText[charIndex]; ++charIndex)
             {
                 if (processedOriginalText[charIndex] == textParams->newLineCharacter)
@@ -260,10 +326,12 @@ namespace tNVSE {
                     dynamicTextBuffer[processedTextLen] = textParams->newLineCharacter;
                     if (++processedTextLen >= textBufferSize)
                     {
+                        gLog.FormattedMessage("Relocating dynamicTextBuffer: size=%u", processedTextLen + 4);
                         dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
                         textBufferSize = processedTextLen + 4;
                     }
                     totalTextHeight = this->fontData->lineHeight + lineSpacingAdjust + totalTextHeight;
+                    gLog.FormattedMessage("AppendToListTail: %d", currentLineWidth);
                     AppendToListTail(&textParams->lineWidths.m_listHead.data, &currentLineWidth);
                     if (maxLineWidth <= currentLineWidth)
                         tempLineWidthComp4 = currentLineWidth;
@@ -282,6 +350,7 @@ namespace tNVSE {
                         continue;
                     }
                     currentChar = processedOriginalText[charIndex];
+                    gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
                     ConvertToAsciiQuotes(&currentChar);
                     pCurrentGlyph = &this->fontData->glyphs[currentChar];
                     if (currentChar == 1)
@@ -293,7 +362,9 @@ namespace tNVSE {
                         }
                         ++buttonIconIndex;
                     }
+                    gLog.FormattedMessage("ConditionalFloatToUInt: %d", pCurrentGlyph->width + pCurrentGlyph->kerningRight);
                     charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->width + pCurrentGlyph->kerningRight);
+                    gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
                     currentLineWidth += charWidthWithKerning;
                     if (currentChar == ' ')
                     {
@@ -312,6 +383,7 @@ namespace tNVSE {
                         tildeCharWidth = ConditionalFloatToUInt(pCurrentGlyph->width + pCurrentGlyph->kerningRight);
                         currentLineWidth -= tildeCharWidth;
                     }
+                    gLog.FormattedMessage("currentChar '%c' process end", currentChar);
                     if (currentLineWidth > textParams->wrapWidth)
                     {
                         if (lastWrapPosition)
@@ -413,6 +485,7 @@ namespace tNVSE {
                     break;
                 }
             }
+            gLog.Message("processedOriginalText Read 2 End");
             if (*dynamicTextBuffer && textParams->initdToZero)
             {
                 truncatedTextLen = 0;
@@ -429,7 +502,7 @@ namespace tNVSE {
             }
             if (!*dynamicTextBuffer)
             {
-                strcpy(dynamicTextBuffer, " ");
+                strcpy_s(dynamicTextBuffer, textBufferSize, " ");
                 processedTextLen = 1;
                 currentLineCount = 1;
                 totalTextHeight = this->fontData->glyphs[32].height;
@@ -450,6 +523,7 @@ namespace tNVSE {
             textParams->length = processedTextLen;
             TextMemoryManagerInstance->Deallocate(processedOriginalText);
             TextMemoryManagerInstance->Deallocate(dynamicTextBuffer);
+            gLog.Message("CalculateTextLayoutEx End");
         }
     };
 
@@ -597,6 +671,6 @@ namespace tNVSE {
     void InitFontHook() {
         WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
         ReplaceCallEx(0x759281, &FontInfoEx::CalculateTextLayoutEx);
-        //ReplaceCallEx(0xA1292E, &FontInfoEx::CalculateTextLayoutEx);
+        ReplaceCallEx(0xA1292E, &FontInfoEx::CalculateTextLayoutEx);
     }
 }
