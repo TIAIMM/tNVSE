@@ -76,6 +76,7 @@ namespace tNVSE {
             return SafeDoubleToUInt32(a1);
     }
 
+    // 0xEC6370
     __declspec(naked) void __cdecl FastStringCopyAligned(char* dest, const char* src)
     {
         __asm {
@@ -155,12 +156,12 @@ namespace tNVSE {
             UInt32 sourceTextLen; // [esp+7D8h] [ebp-8h]
             int maxAllowedLines; // [esp+7DCh] [ebp-4h]
 
-            gLog.Message("Call CalculateTextLayoutEx");
+            //gLog.Message("Call CalculateTextLayoutEx");
 
             if (!textSrc)
                 return;
 
-            gLog.FormattedMessage("textSrc = '%s'", textSrc);
+            //gLog.FormattedMessage("textSrc = '%s'", textSrc);
 
             if (textParams->wrapWidth <= 0)
                 textParams->wrapWidth = 0x7FFFFFFF;
@@ -177,42 +178,42 @@ namespace tNVSE {
             totalTextHeight = this->fontData->glyphs[' '].height;
             currentLineCount = 1;
             sourceTextLen = strlen(textSrc);
-            gLog.FormattedMessage("sourceTextLen = %u", sourceTextLen);
+            //gLog.FormattedMessage("sourceTextLen = %u", sourceTextLen);
             maxAllowedLines = textParams->wrapLines;
 
-            gLog.Message("Init originalTextBuffer");
-            gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
+            //gLog.Message("Init originalTextBuffer");
+            //gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
             originalTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Allocate(sourceTextLen + 4));
             if (!originalTextBuffer) {
-                gLog.Message("Memory allocation failed for originalTextBuffer");
+                //gLog.Message("Memory allocation failed for originalTextBuffer");
                 return;
             }
 
-            gLog.Message("MemSet originalTextBuffer");
+            //gLog.Message("MemSet originalTextBuffer");
             memset(originalTextBuffer, 0, sourceTextLen + 4);
 
-            gLog.Message("Init processedOriginalText");
+            //gLog.Message("Init processedOriginalText");
             processedOriginalText = originalTextBuffer;
 
 
-            gLog.Message("Init processedTextBuffer");
-            gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
+            //gLog.Message("Init processedTextBuffer");
+            //gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
             processedTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Allocate(sourceTextLen + 4));
             if (!processedTextBuffer) {
-                gLog.Message("Memory allocation failed for processedTextBuffer");
+                //gLog.Message("Memory allocation failed for processedTextBuffer");
                 TextMemoryManagerInstance->Deallocate(originalTextBuffer);
                 return;
             }
 
-            gLog.Message("MemSet processedTextBuffer");
+            //gLog.Message("MemSet processedTextBuffer");
             memset(processedTextBuffer, 0, sourceTextLen + 4);
 
-            gLog.Message("Init dynamicTextBuffer");
+            //gLog.Message("Init dynamicTextBuffer");
             dynamicTextBuffer = processedTextBuffer;
 
-            gLog.Message("SafeFormatString originalTextBuffer");
+            //gLog.Message("SafeFormatString originalTextBuffer");
             snprintf(originalTextBuffer, sourceTextLen + 1, "%s", textSrc);
-            gLog.Message("Buffer Init Finish");
+            //gLog.Message("Buffer Init Finish");
 
             processedTextLen = 0;
             textBufferSize = sourceTextLen + 4;
@@ -220,10 +221,10 @@ namespace tNVSE {
             isTildeChar = 0;
             parsedTextBuffer[0] = 0;
             hasEscapeSequence = 0;
-            gLog.Message("processedOriginalText Read Start");
+            //gLog.Message("processedOriginalText Read Start");
             for (srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
             {
-                gLog.FormattedMessage("process index %u", srcTextIndex);
+                //gLog.FormattedMessage("process index %u", srcTextIndex);
                 if (processedOriginalText[srcTextIndex] == '&')
                 {
                     varNameLen = 0;
@@ -251,7 +252,7 @@ namespace tNVSE {
                     totalEscapeSeqLen = (strlen(varNameBuffer) + 1);
                     if (processedOriginalText[varNameLen + srcTextIndex] == ';')
                         totalEscapeSeqLen += escapeSeqPrefixLen;
-                    gLog.Message("ReplaceVariableInString & ParseAndFormatVariableInString");
+                    //gLog.Message("ReplaceVariableInString & ParseAndFormatVariableInString");
                     if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
                         || ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
                     {
@@ -266,9 +267,9 @@ namespace tNVSE {
                             for (charScanIndex = 0; parsedTextBuffer[charScanIndex] != '\\'; ++charScanIndex)
                                 ;
                             substrBuffer[0] = 0;
-                            gLog.Message("FastStringCopyAligned 1");
+                            //gLog.Message("FastStringCopyAligned 1");
                             FastStringCopyAligned(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
-                            gLog.Message("FastStringCopyAligned 1 End");
+                            //gLog.Message("FastStringCopyAligned 1 End");
                             size_t strLen = strlen(substrBuffer);
                             *((char*)unkarray + strLen + 15) = 0;
                             if (this->fontID == 7)
@@ -299,26 +300,26 @@ namespace tNVSE {
                 }
                 else
                 {
-                    gLog.FormattedMessage("dynamicTextBuffer [%u] = processedOriginalText[%u]", processedTextLen + 1 , srcTextIndex);
+                    //gLog.FormattedMessage("dynamicTextBuffer [%u] = processedOriginalText[%u]", processedTextLen + 1 , srcTextIndex);
                     dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
-                    gLog.Message("Copy Finished");
+                    //gLog.Message("Copy Finished");
                 }
             }
-            gLog.Message("processedOriginalText Read Finish");
+            //gLog.Message("processedOriginalText Read Finish");
             dynamicTextBuffer[processedTextLen] = 0;
             if (hasEscapeSequence)
             {
                 sourceTextLen = processedTextLen;
-                gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
+                //gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
                 processedOriginalText = static_cast<char*>(TextMemoryManagerInstance->Reallocate(processedOriginalText, processedTextLen + 4));
-                gLog.Message("FastStringCopyAligned");
+                //gLog.Message("FastStringCopyAligned");
                 FastStringCopyAligned(processedOriginalText, dynamicTextBuffer);
             }
             *dynamicTextBuffer = 0;
             processedTextLen = 0;
             buttonIconIndex = 0;
 
-            gLog.Message("processedOriginalText Read 2 Start");
+            //gLog.Message("processedOriginalText Read 2 Start");
             for (charIndex = 0; charIndex < sourceTextLen && processedOriginalText[charIndex]; ++charIndex)
             {
                 if (processedOriginalText[charIndex] == textParams->newLineCharacter)
@@ -326,12 +327,12 @@ namespace tNVSE {
                     dynamicTextBuffer[processedTextLen] = textParams->newLineCharacter;
                     if (++processedTextLen >= textBufferSize)
                     {
-                        gLog.FormattedMessage("Relocating dynamicTextBuffer: size=%u", processedTextLen + 4);
+                        //gLog.FormattedMessage("Relocating dynamicTextBuffer: size=%u", processedTextLen + 4);
                         dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
                         textBufferSize = processedTextLen + 4;
                     }
                     totalTextHeight = this->fontData->lineHeight + lineSpacingAdjust + totalTextHeight;
-                    gLog.FormattedMessage("AppendToListTail: %d", currentLineWidth);
+                    //gLog.FormattedMessage("AppendToListTail: %d", currentLineWidth);
                     AppendToListTail(&textParams->lineWidths.m_listHead.data, &currentLineWidth);
                     if (maxLineWidth <= currentLineWidth)
                         tempLineWidthComp4 = currentLineWidth;
@@ -350,7 +351,7 @@ namespace tNVSE {
                         continue;
                     }
                     currentChar = processedOriginalText[charIndex];
-                    gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
+                    //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
                     ConvertToAsciiQuotes(&currentChar);
                     pCurrentGlyph = &this->fontData->glyphs[currentChar];
                     if (currentChar == 1)
@@ -362,9 +363,9 @@ namespace tNVSE {
                         }
                         ++buttonIconIndex;
                     }
-                    gLog.FormattedMessage("ConditionalFloatToUInt: %d", pCurrentGlyph->width + pCurrentGlyph->kerningRight);
+                    //gLog.FormattedMessage("ConditionalFloatToUInt: %d", pCurrentGlyph->width + pCurrentGlyph->kerningRight);
                     charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->width + pCurrentGlyph->kerningRight);
-                    gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
+                    //gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
                     currentLineWidth += charWidthWithKerning;
                     if (currentChar == ' ')
                     {
@@ -383,7 +384,7 @@ namespace tNVSE {
                         tildeCharWidth = ConditionalFloatToUInt(pCurrentGlyph->width + pCurrentGlyph->kerningRight);
                         currentLineWidth -= tildeCharWidth;
                     }
-                    gLog.FormattedMessage("currentChar '%c' process end", currentChar);
+                    //gLog.FormattedMessage("currentChar '%c' process end", currentChar);
                     if (currentLineWidth > textParams->wrapWidth)
                     {
                         if (lastWrapPosition)
@@ -485,7 +486,7 @@ namespace tNVSE {
                     break;
                 }
             }
-            gLog.Message("processedOriginalText Read 2 End");
+            //gLog.Message("processedOriginalText Read 2 End");
             if (*dynamicTextBuffer && textParams->initdToZero)
             {
                 truncatedTextLen = 0;
@@ -523,7 +524,7 @@ namespace tNVSE {
             textParams->length = processedTextLen;
             TextMemoryManagerInstance->Deallocate(processedOriginalText);
             TextMemoryManagerInstance->Deallocate(dynamicTextBuffer);
-            gLog.Message("CalculateTextLayoutEx End");
+            //gLog.Message("CalculateTextLayoutEx End");
         }
     };
 
@@ -670,7 +671,6 @@ namespace tNVSE {
 
     void InitFontHook() {
         WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
-        ReplaceCallEx(0x759281, &FontInfoEx::CalculateTextLayoutEx);
-        ReplaceCallEx(0xA1292E, &FontInfoEx::CalculateTextLayoutEx);
+        WriteRelJumpEx(0xA12FB0, &FontInfoEx::CalculateTextLayoutEx);
     }
 }
