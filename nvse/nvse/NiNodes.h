@@ -1258,15 +1258,27 @@ class BSFile: NiFile
 {
 public:
 	BSFile();
-	~BSFile();
+	virtual ~BSFile();
 
-	virtual void	Reset(void);	// 20
-	virtual void	Unk_09(void);	// 24
-	virtual void	Unk_0A(void);	// 28
-	virtual void	Unk_0B(void);	// 2C
-	virtual void	Unk_0C(void);	// 30
-	virtual void	Read(void);		// 34
-	virtual void	Write(void);	// 38
+	virtual void Destructor(bool destroy);               // [0x00]
+	virtual void Unk_01();                               // [0x04]
+	virtual void SeekCur(int offset);                    // [0x08]
+	virtual void GetBufferSize();                        // [0x0C]
+	virtual void InitReadWriteProcs(bool flag);          // [0x10]
+	virtual UInt32 SetOffset(UInt32 offset, UInt32 mode); // [0x14]
+	virtual UInt32 GetFilename();                        // [0x18]
+	virtual UInt32 GetSize();                            // [0x1C]
+	virtual bool Reset(bool unk1, bool unk2);            // [0x20]
+	virtual bool Unk_09(UInt32 arg);                     // [0x24]
+	virtual UInt32 Unk_0A();                             // [0x28]
+	virtual UInt32 Unk_0B(String* str, UInt32 size);     // [0x2C]
+	virtual UInt32 Unk_0C(void* buffer, UInt32 size);    // [0x30]
+	virtual UInt32 ReadBufDelim(void* buffer, UInt32 size, __int16 delim); // [0x34]
+	virtual UInt32 Unk_0E(void* buffer, UInt8 arg);      // [0x38]
+	virtual UInt32 Unk_0F(void* buffer, UInt8 arg);      // [0x3C]
+	virtual bool IsReadable();                           // [0x40]
+	virtual UInt32 ReadBuf(void* buffer, UInt32 size);    // [0x44]
+	virtual UInt32 WriteBuf(void* buffer, UInt32 size);  // [0x48]
 
 	UInt32		m_modeReadWriteAppend;	// 028
 	UInt8		m_good;					// 02C

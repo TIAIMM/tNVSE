@@ -25,6 +25,10 @@ namespace tNVSE {
         return CdeclCall<SInt32>(0xEC9130, a1, a2);
     }
 
+    BSFile* __cdecl LoadFile(const char* filePath, SInt32 loadMode, UInt32 allocFlags, SInt32 openMode) {
+        return CdeclCall<BSFile*>(0xAFDF20, filePath, loadMode, allocFlags, openMode);
+    }
+
     void* __cdecl AppendToListTail(void* ListNode, void * ListNode2) {
         return ThisStdCall<void*>(0xAF25B0, ListNode, ListNode2);
     }
@@ -256,7 +260,10 @@ namespace tNVSE {
                             substrBuffer[0] = 0;
                             // 0xEC6370
                             //gLog.Message("FastStringCopyAligned 1");
-                            strcpy(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
+                            //strcpy(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
+                            strcpy_s(&parsedTextBuffer[charScanIndex + 1],
+                                sizeof(parsedTextBuffer) - (charScanIndex + 1),
+                                substrBuffer);
                             //gLog.Message("FastStringCopyAligned 1 End");
                             // 0xEC6130
                             UInt32 strLen = strlen(substrBuffer);
@@ -306,7 +313,8 @@ namespace tNVSE {
                 processedOriginalText = static_cast<char*>(TextMemoryManagerInstance->Reallocate(processedOriginalText, processedTextLen + 4));
                 // 0xEC6370
                 //gLog.Message("FastStringCopyAligned");
-                strcpy(processedOriginalText, dynamicTextBuffer);
+                //strcpy(processedOriginalText, dynamicTextBuffer);
+                strcpy_s(processedOriginalText, processedTextLen + 4, dynamicTextBuffer);
             }
             *dynamicTextBuffer = 0;
             processedTextLen = 0;
@@ -523,6 +531,323 @@ namespace tNVSE {
             TextMemoryManagerInstance->Deallocate(dynamicTextBuffer);
             //gLog.Message("CalculateTextLayoutEx End");
         }
+
+        void LoadFontDataEx() {
+            NiTexture* resourceHandleTemp2; // [esp+10h] [ebp-23Ch]
+            NiTexturingProperty* texturingPropertyTemp2; // [esp+18h] [ebp-234h]
+            float newMaxWidthMod; // [esp+20h] [ebp-22Ch]
+            float newMaxGlyphHeight; // [esp+24h] [ebp-228h]
+            float newMaxHeight; // [esp+28h] [ebp-224h]
+            char* fontFilePathTemp; // [esp+58h] [ebp-1F4h]
+            void* textureDataSize; // [esp+60h] [ebp-1ECh]
+            UInt32 bytesRead3; // [esp+64h] [ebp-1E8h]
+            UInt32 readFlag; // [esp+6Ch] [ebp-1E0h] BYREF
+            UInt32 bytesRead1Temp; // [esp+70h] [ebp-1DCh]
+            UInt32 bytesRead1; // [esp+74h] [ebp-1D8h]
+            UInt32 readParams1[2]; // [esp+78h] [ebp-1D4h] BYREF
+            bool isTexValid; // [esp+83h] [ebp-1C9h]
+            UInt32 savedTlsValueTemp; // [esp+84h] [ebp-1C8h]
+            const char* fontFilePath; // [esp+88h] [ebp-1C4h]
+            float currentMaxWidthMod; // [esp+8Ch] [ebp-1C0h]
+            float currentWidthMod; // [esp+90h] [ebp-1BCh]
+            float currentGlyphHeight; // [esp+94h] [ebp-1B8h]
+            float currentMaxHeight; // [esp+98h] [ebp-1B4h]
+            UInt32 fileSize; // [esp+9Ch] [ebp-1B0h]
+            FontInfo::BufferData* fontBuffer; // [esp+A0h] [ebp-1ACh]
+            UInt32 bytesRead2Temp; // [esp+A4h] [ebp-1A8h]
+            UInt32 bytesRead2; // [esp+A8h] [ebp-1A4h]
+            UInt32 readParams2[2]; // [esp+ACh] [ebp-1A0h] BYREF
+            char* fontFilePathError; // [esp+B4h] [ebp-198h]
+            __int16 isLoadedFlag; // [esp+BAh] [ebp-192h]
+            UInt32 oldTlsValue; // [esp+BCh] [ebp-190h]
+            int stringRefFlag; // [esp+C0h] [ebp-18Ch]
+            NiTexture* texFileHandleTemp; // [esp+C4h] [ebp-188h]
+            NiTexture* texFileVTable; // [esp+C8h] [ebp-184h]
+            String* fontPathCopy; // [esp+CCh] [ebp-180h] BYREF
+            NiObject* isResourceAvailable; // [esp+D0h] [ebp-17Ch]
+            NiTexture* resourceHandleTemp; // [esp+D4h] [ebp-178h]
+            NiSourceTexture* fontTextureObject; // [esp+D8h] [ebp-174h]
+            NiTexturingProperty* fontTexturingPropertyTemp; // [esp+DCh] [ebp-170h]
+            NiTexture* texFileHandleTemp2; // [esp+E0h] [ebp-16Ch]
+            NiTexture* texFileHandleVTable; // [esp+E4h] [ebp-168h]
+            void* File_1; // [esp+E8h] [ebp-164h]
+            BSFile* FileVTable2; // [esp+ECh] [ebp-160h]
+            FontInfo::BufferData* bufferData; // [esp+F0h] [ebp-15Ch]
+            BSFile* File_3; // [esp+F4h] [ebp-158h]
+            BSFile* FileVTable1; // [esp+F8h] [ebp-154h]
+            UInt32 texWidth; // [esp+FCh] [ebp-150h] BYREF
+            UInt32 texHeight; // [esp+100h] [ebp-14Ch]
+            UInt32 textureCreateArgs[3]; // [esp+104h] [ebp-148h] BYREF
+            NiTexture* texFileHandle; // [esp+110h] [ebp-13Ch]
+            NiTexture* resourceHandle; // [esp+114h] [ebp-138h]
+            NiTexturingProperty* texturingProperty; // [esp+118h] [ebp-134h]
+            SInt32 texIndex; // [esp+11Ch] [ebp-130h]
+            float glyphTotalHeight; // [esp+120h] [ebp-12Ch]
+            UInt32 glyphIndex; // [esp+124h] [ebp-128h]
+            wchar_t fontTexPath[130]; // [esp+128h] [ebp-124h] BYREF
+            float tempWidth; // [esp+230h] [ebp-1Ch]
+            BSFile* fntFileHandle; // [esp+234h] [ebp-18h]
+            float maxGlyphHeight; // [esp+238h] [ebp-14h]
+            UInt32 savedTlsValue; // [esp+23Ch] [ebp-10h]
+            int stackCookie; // [esp+248h] [ebp-4h]
+
+            DWORD tebAddress;
+            DWORD tlsPointer;
+            DWORD tlsSlotAddress;
+            DWORD targetAddress;
+            DWORD* pTlsIndex = (DWORD*)0x0126FD98;
+
+            __asm {
+                mov eax, fs: [0x18]
+                mov tebAddress, eax
+            }
+
+            tlsPointer = *(DWORD*)(tebAddress + 0x2C);
+
+            tlsSlotAddress = *(DWORD*)(tlsPointer + (*pTlsIndex) * 4);
+            targetAddress = tlsSlotAddress + 692;
+
+            stringRefFlag = 0;
+
+            oldTlsValue = *(DWORD*)targetAddress;
+            savedTlsValue = oldTlsValue;
+            *(DWORD*)targetAddress = 12;
+
+            stackCookie = 0;
+            isLoadedFlag = *&this->isLoaded;
+            if (isLoadedFlag || !this->filePath)
+            {
+            LABEL_46:
+                ++*&this->isLoaded;
+                stackCookie = -1;
+                *(DWORD*)targetAddress = savedTlsValue;
+                return;
+            }
+            fntFileHandle = LoadFile(this->filePath, 0, 0x4000u, 2);
+            if (fntFileHandle)
+            {
+                if (fntFileHandle->m_good)
+                {
+                    bufferData = static_cast<FontInfo::BufferData*>(TextMemoryManagerInstance->Allocate(0x3928u));
+                    this->fontData = bufferData;
+                    fileSize = fntFileHandle->Unk_0A();
+                    fontBuffer = this->fontData;
+                    readParams2[0] = 1;
+
+                    //m_readProc
+                    typedef UInt32(__cdecl* ReadProcType)(
+                        BSFile* fileHandle,
+                        void* buffer,
+                        UInt32 size,
+                        UInt32* readParams,
+                        bool flag
+                        );
+                    ReadProcType pReadProc = *(ReadProcType*)((uintptr_t)fntFileHandle + 8);
+
+                    bytesRead2Temp = pReadProc(
+                        fntFileHandle,
+                        fontBuffer,
+                        fileSize,
+                        readParams2,
+                        true
+                    );
+
+                    //m_offset
+                    UInt32* pOffset = reinterpret_cast<UInt32*>(
+                        reinterpret_cast<uintptr_t>(fntFileHandle) + 4
+                        );
+                    *pOffset += bytesRead2Temp;
+
+                    bytesRead2 = bytesRead2Temp;
+                    File_1 = fntFileHandle;
+                    FileVTable2 = fntFileHandle;
+                    if (fntFileHandle)
+                        FileVTable2->Destructor(1);
+                    fntFileHandle = 0;
+                    this->maxCharHeight = 0.0;
+                    maxGlyphHeight = 0.0;
+                    this->maxWidthMod = 0.0;
+                    for (glyphIndex = 0; glyphIndex < 256; ++glyphIndex)
+                    {
+                        glyphTotalHeight = this->fontData->lineHeight - this->fontData->glyphs[glyphIndex].ascent;
+                        glyphTotalHeight = glyphTotalHeight + this->fontData->glyphs[glyphIndex].height;
+                        currentMaxHeight = this->maxCharHeight;
+                        if (glyphTotalHeight >= currentMaxHeight)
+                            newMaxHeight = glyphTotalHeight;
+                        else
+                            newMaxHeight = currentMaxHeight;
+                        this->maxCharHeight = newMaxHeight;
+                        currentGlyphHeight = this->fontData->glyphs[glyphIndex].height;
+                        if (currentGlyphHeight >= maxGlyphHeight)
+                            newMaxGlyphHeight = currentGlyphHeight;
+                        else
+                            newMaxGlyphHeight = maxGlyphHeight;
+                        maxGlyphHeight = newMaxGlyphHeight;
+                        currentMaxWidthMod = this->maxWidthMod;
+                        currentWidthMod = this->fontData->glyphs[glyphIndex].ascent - this->fontData->glyphs[glyphIndex].height;
+                        if (currentWidthMod <= currentMaxWidthMod)
+                            newMaxWidthMod = currentWidthMod;
+                        else
+                            newMaxWidthMod = currentMaxWidthMod;
+                        this->maxWidthMod = newMaxWidthMod;
+                    }
+                    tempWidth = this->fontData->glyphs[' '].width;
+                    this->fontData->glyphs[' '].width = this->fontData->glyphs[' '].kerningRight;
+                    this->fontData->glyphs[' '].kerningRight = tempWidth;
+                    this->fontData->glyphs[' '].height = maxGlyphHeight;
+                    this->fontData->glyphs[' '].ascent = this->maxWidthMod + maxGlyphHeight;
+                    this->fontData->glyphs[160].width = this->fontData->glyphs[' '].width;
+                    this->fontData->glyphs[160].kerningRight = this->fontData->glyphs[' '].kerningRight;
+                    this->fontData->glyphs[160].height = this->fontData->glyphs[' '].height;
+                    this->fontData->glyphs[160].ascent = this->fontData->glyphs[' '].ascent;
+                    this->fontData->glyphs[127].width = this->fontData->glyphs['|'].width;
+                    this->fontData->glyphs[127].kerningLeft = this->fontData->glyphs['|'].kerningLeft;
+                    this->fontData->glyphs[127].kerningRight = this->fontData->glyphs['|'].kerningRight;
+                    this->fontData->glyphs[127].height = this->fontData->glyphs['|'].height;
+                    this->fontData->glyphs[127].ascent = this->fontData->glyphs['|'].ascent;
+                    this->fontData->glyphs['\0'].width = 0.0;
+                    this->fontData->glyphs['\0'].kerningRight = 0.0;
+                    this->fontData->glyphs['\0'].height = maxGlyphHeight;
+                    this->fontData->glyphs['\0'].ascent = this->maxWidthMod + maxGlyphHeight;
+                    this->fontData->glyphs['\0'].topLeft.x = 0.0;
+                    this->fontData->glyphs['\0'].topRight.x = 0.0;
+                    this->fontData->glyphs['\0'].bottomLeft.x = 0.0;
+                    this->fontData->glyphs['\0'].bottomRight.x = 0.0;
+                    this->fontData->glyphs['\0'].topLeft.y = 0.0;
+                    this->fontData->glyphs['\0'].topRight.y = 0.0;
+                    this->fontData->glyphs['\0'].bottomLeft.y = 0.0;
+                    this->fontData->glyphs['\0'].bottomRight.y = 0.0;
+                    if (this->fontData->numTextures > 8)
+                    {
+                        fontFilePath = this->filePath;
+                        // 0x5B5E40 Return 0
+                        stackCookie = -1;
+                        savedTlsValueTemp = savedTlsValue;
+                        *(DWORD*)targetAddress = savedTlsValue;
+                        return;
+                    }
+                    for (texIndex = 0; texIndex < this->fontData->numTextures; ++texIndex)
+                    {
+                        // 0x406D00
+                        _vsnwprintf_s(
+                            fontTexPath,
+                            _countof(fontTexPath),
+                            _TRUNCATE,
+                            L"TEXTURES\\FONTS\\%s.TEX",
+                            this->fontData->textures[texIndex].fileName);
+
+                        char narrowPath[MAX_PATH * 4];
+                        WideCharToMultiByte(
+                            CP_UTF8,
+                            0,
+                            fontTexPath,
+                            -1,
+                            narrowPath,
+                            sizeof(narrowPath),
+                            NULL,
+                            NULL
+                        );
+
+                        BSFile* textureFile = LoadFile(narrowPath, 0, 0x4000u, 2);
+                        texFileHandle = reinterpret_cast<NiTexture*>(textureFile);
+                        if (!texFileHandle || !(isTexValid = texFileHandle->nextTex))
+                        {
+                            // 0x5B5E40 Return 0
+                            if (texFileHandle)
+                            {
+                                texFileHandleTemp2 = texFileHandle;
+                                texFileHandleVTable = texFileHandle;
+                                texFileHandleVTable->Destructor(1);
+                            }
+                            stackCookie = -1;
+                            readParams1[1] = savedTlsValue;
+                            *(DWORD*)targetAddress = savedTlsValue;
+                            return;
+                        }
+                        readParams1[0] = 1;
+
+                        // m_blockName.str
+                        typedef UInt32(*ReadFuncType)(void* obj, void* buffer, UInt32 size, UInt32* params, UInt32 flag);
+                        ReadFuncType readFunc = *reinterpret_cast<ReadFuncType*>(
+                            reinterpret_cast<char*>(texFileHandle) + 8
+                            );
+                        bytesRead1Temp = readFunc(texFileHandle, &texWidth, 8, readParams1, 1);
+
+                        texFileHandle->m_uiRefCount += bytesRead1Temp;
+                        bytesRead1 = bytesRead1Temp;
+                        textureCreateArgs[0] = 6;
+                        textureCreateArgs[1] = 3;
+                        textureCreateArgs[2] = 2;
+                        fontTextureObject = sub_AA13E0(116);
+                        stackCookie = (stackCookie & 0xFFFFFF00) | 1;
+                        if (fontTextureObject)
+                            texturingPropertyTemp2 = sub_A7C190(texWidth, texHeight, &unk_11AA2A0, 1, 1);
+                        else
+                            texturingPropertyTemp2 = 0;
+                        fontTexturingPropertyTemp = texturingPropertyTemp2;
+                        stackCookie = (stackCookie & 0xFFFFFF00) | 0;
+                        texturingProperty = texturingPropertyTemp2;
+                        textureDataSize = texturingPropertyTemp2[1].textures.data + *texturingPropertyTemp2[1].shaderTextures;
+                        readFlag = 1;
+                        bytesRead3 = readFunc(
+                            texFileHandle,
+                            textureDataSize,
+                            4 * texHeight * texWidth,
+                            &readFlag,
+                            1);
+                        texFileHandle->m_uiRefCount += bytesRead3;
+                        BYTE* extraDataByte = reinterpret_cast<BYTE*>(&texturingProperty[2].m_extraDataList);
+                        extraDataByte[0] = 1;
+                        isResourceAvailable = sub_AA13E0(48);
+                        stackCookie = (stackCookie & 0xFFFFFF00) | 2;
+                        if (isResourceAvailable)
+                        {
+                            fontFilePathTemp = this->filePath;
+                            if (fontFilePathTemp)
+                                fontPathCopy = sub_A5B690(fontFilePathTemp);
+                            else
+                                fontPathCopy = 0;
+                            stackCookie = (stackCookie & 0xFFFFFF00) | 3;
+                            stringRefFlag |= 1u;
+                            resourceHandleTemp2 = sub_A6ABB0(texturingProperty, &fontPathCopy, textureCreateArgs);
+                        }
+                        else
+                        {
+                            resourceHandleTemp2 = 0;
+                        }
+                        resourceHandleTemp = resourceHandleTemp2;
+                        resourceHandle = resourceHandleTemp2;
+                        stackCookie = 0;
+                        if ((stringRefFlag & 1) != 0)
+                        {
+                            stringRefFlag &= ~1u;
+                            if (fontPathCopy)
+                                InterlockedDecrement(&fontPathCopy[-1]);
+                        }
+                        texFileHandleTemp = texFileHandle;
+                        texFileVTable = texFileHandle;
+                        if (texFileHandle)
+                            texFileVTable->Destructor(1);
+                        texFileHandle = 0;
+                        sub_60AEB0(1);
+                        sub_66B0D0(&this->fontTexProp + texIndex, resourceHandle);
+                    }
+                    goto LABEL_46;
+                }
+            }
+            fontFilePathError = this->filePath;
+            // 0x5B5E40 Return 0
+            if (fntFileHandle)
+            {
+                File_3 = fntFileHandle;
+                FileVTable1 = fntFileHandle;
+                FileVTable1->Destructor(1);
+            }
+            stackCookie = -1;
+            readParams2[1] = savedTlsValue;
+            *(DWORD*)targetAddress = savedTlsValue;
+            return;
+        }
     };
 
 	class FontManagerEx : public FontManager {
@@ -676,7 +1001,9 @@ namespace tNVSE {
 	}
 
     void InitFontHook() {
+        //FontManager::GetStringDimensions
         WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
+        //FontInfo::CalculateTextLayout
         WriteRelJumpEx(0xA12FB0, &FontInfoEx::CalculateTextLayoutEx);
     }
 }

@@ -201,7 +201,7 @@ struct FontInfo
 	float						maxCharHeight;		// 2C
 	float						maxWidthMod;		// 30
 	UInt32						unk34;		// 34
-	BufferData* fontData;// 38
+	FontInfo::BufferData* fontData;// 38
 	UInt32						unk3C[2];	// 3C
 	BSSimpleArray<ButtonIcon>	buttonIconArray;		// 44
 
@@ -280,7 +280,7 @@ struct __declspec(align(4)) FontTextReplaced
 
 	//BSStringT<T>::Set			0x4037F0 FontTextReplaced::StringSet
 	//BSStringT<T>::operator+=	0x404820 FontTextReplaced::StringAppend
-	//BSStringT<T>::Format		0x406F60
+	//BSStringT<T>::Format		0x406F60 FontTextReplaced::StringFormat
 	//BSStringT<T>::ApplyFormat 0x406F90
 };
 
