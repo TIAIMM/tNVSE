@@ -816,8 +816,30 @@ struct TextureFormat
 	void InitFromD3DFMT(UInt32 fmt);
 };
 
+struct NiComponentSpec
+{
+	int m_eComponent;
+	int m_eRepresentation;
+	unsigned __int8 m_ucBitsPerComponent;
+	bool m_bSigned;
+	unsigned __int8 pad0A[2];
+};
+
+
+struct NiPixelFormat // sizeof=0x44
+	{
+		unsigned __int8 m_ucBitsPerPixel;
+		bool m_bSRGBSpace;
+		unsigned __int8 pad02[2];
+		int m_eFormat;
+		int m_eTiling;
+		unsigned int m_uiRendererHint;
+		unsigned int m_uiExtraData;
+		NiComponentSpec m_akComponents[4];
+	};
+
 // 070
-class NiPixelData : public NiObject
+class __declspec(align(4)) NiPixelData : public NiObject
 {
 public:
 	NiPixelData();
@@ -826,16 +848,17 @@ public:
 	// face size = unk05C[mipmapLevels]
 	// total size = face size * numFaces
 
-	TextureFormat	format;		// 008
-	NiRefObject		* unk04C;	// 04C
-	UInt32	unk050;			// 050
-	UInt32	* width;		// 054 - array for mipmaps?
-	UInt32	* height;		// 058
-	UInt32	* unk05C;		// 05C - sizes?
-	UInt32	mipmapLevels;	// 060
-	UInt32	unk064;			// 064
-	UInt32	unk068;			// 068
-	UInt32	numFaces;		// 06C
+	NiPixelFormat m_kPixelFormat;
+	void* m_spPalette;
+	unsigned __int8* m_pucPixels;
+	unsigned int* m_puiWidth;
+	unsigned int* m_puiHeight;
+	unsigned int* m_puiOffsetInBytes;
+	unsigned int m_uiMipmapLevels;
+	unsigned int m_uiPixelStride;
+	unsigned int m_uiRevID;
+	unsigned int m_uiFaces;
+	unsigned int unk70;
 };
 
 // 068

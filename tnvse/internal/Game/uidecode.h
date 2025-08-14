@@ -78,13 +78,20 @@ public:
 	};
 };
 
+//From Modern Minimap
 // 30
 class NiTexturingProperty : public NiProperty {
 public:
 	NiTexturingProperty();
 	~NiTexturingProperty();
 
-	UInt32				unk18[6];	// 18
+	uint32_t flags;           // 0x18
+	uint32_t* textures_data;  // 0x1C
+	uint16_t textures_capacity; // 0x20
+	uint16_t textures_firstFree; // 0x22
+	uint16_t textures_numObjs;  // 0x24
+	uint16_t textures_growSize; // 0x26
+	uint32_t** shaderTextures; // 0x28
 };
 
 // From OBSE

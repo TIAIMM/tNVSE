@@ -534,7 +534,7 @@ namespace tNVSE {
 
         void LoadFontDataEx() {
             NiTexture* resourceHandleTemp2; // [esp+10h] [ebp-23Ch]
-            NiTexturingProperty* texturingPropertyTemp2; // [esp+18h] [ebp-234h]
+            NiPixelData* texturingPropertyTemp2; // [esp+18h] [ebp-234h]
             float newMaxWidthMod; // [esp+20h] [ebp-22Ch]
             float newMaxGlyphHeight; // [esp+24h] [ebp-228h]
             float newMaxHeight; // [esp+28h] [ebp-224h]
@@ -566,8 +566,8 @@ namespace tNVSE {
             String* fontPathCopy; // [esp+CCh] [ebp-180h] BYREF
             NiObject* isResourceAvailable; // [esp+D0h] [ebp-17Ch]
             NiTexture* resourceHandleTemp; // [esp+D4h] [ebp-178h]
-            NiSourceTexture* fontTextureObject; // [esp+D8h] [ebp-174h]
-            NiTexturingProperty* fontTexturingPropertyTemp; // [esp+DCh] [ebp-170h]
+            NiPixelData* fontTextureObject; // [esp+D8h] [ebp-174h]
+            NiPixelData* fontTexturingPropertyTemp; // [esp+DCh] [ebp-170h]
             NiTexture* texFileHandleTemp2; // [esp+E0h] [ebp-16Ch]
             NiTexture* texFileHandleVTable; // [esp+E4h] [ebp-168h]
             void* File_1; // [esp+E8h] [ebp-164h]
@@ -580,7 +580,7 @@ namespace tNVSE {
             UInt32 textureCreateArgs[3]; // [esp+104h] [ebp-148h] BYREF
             NiTexture* texFileHandle; // [esp+110h] [ebp-13Ch]
             NiTexture* resourceHandle; // [esp+114h] [ebp-138h]
-            NiTexturingProperty* texturingProperty; // [esp+118h] [ebp-134h]
+            NiPixelData* texturingProperty; // [esp+118h] [ebp-134h]
             SInt32 texIndex; // [esp+11Ch] [ebp-130h]
             float glyphTotalHeight; // [esp+120h] [ebp-12Ch]
             UInt32 glyphIndex; // [esp+124h] [ebp-128h]
@@ -597,10 +597,14 @@ namespace tNVSE {
             DWORD targetAddress;
             DWORD* pTlsIndex = (DWORD*)0x0126FD98;
 
+            gLog.Message("Call LoadFontDataEx");
+
             __asm {
                 mov eax, fs: [0x18]
                 mov tebAddress, eax
             }
+
+            gLog.Message("Get tebAddress");
 
             tlsPointer = *(DWORD*)(tebAddress + 0x2C);
 
@@ -613,17 +617,23 @@ namespace tNVSE {
             savedTlsValue = oldTlsValue;
             *(DWORD*)targetAddress = 12;
 
+            gLog.Message("TLS Init");
+
             stackCookie = 0;
             isLoadedFlag = *&this->isLoaded;
             if (isLoadedFlag || !this->filePath)
             {
             LABEL_46:
+                gLog.Message("LABEL_46");
                 ++*&this->isLoaded;
                 stackCookie = -1;
                 *(DWORD*)targetAddress = savedTlsValue;
+                gLog.Message("Call LoadFontData End");
                 return;
             }
+            gLog.Message("Load File 1");
             fntFileHandle = LoadFile(this->filePath, 0, 0x4000u, 2);
+            gLog.Message("Load File 1 end");
             if (fntFileHandle)
             {
                 if (fntFileHandle->m_good)
@@ -691,6 +701,7 @@ namespace tNVSE {
                             newMaxWidthMod = currentMaxWidthMod;
                         this->maxWidthMod = newMaxWidthMod;
                     }
+                    gLog.Message("Fnt Head Read Finished");
                     tempWidth = this->fontData->glyphs[' '].width;
                     this->fontData->glyphs[' '].width = this->fontData->glyphs[' '].kerningRight;
                     this->fontData->glyphs[' '].kerningRight = tempWidth;
@@ -717,6 +728,7 @@ namespace tNVSE {
                     this->fontData->glyphs['\0'].topRight.y = 0.0;
                     this->fontData->glyphs['\0'].bottomLeft.y = 0.0;
                     this->fontData->glyphs['\0'].bottomRight.y = 0.0;
+                    gLog.Message("Special Char process end");
                     if (this->fontData->numTextures > 8)
                     {
                         fontFilePath = this->filePath;
@@ -726,8 +738,10 @@ namespace tNVSE {
                         *(DWORD*)targetAddress = savedTlsValue;
                         return;
                     }
+                    gLog.Message("numTextures normal");
                     for (texIndex = 0; texIndex < this->fontData->numTextures; ++texIndex)
                     {
+                        gLog.Message("Load Tex");
                         // 0x406D00
                         _vsnwprintf_s(
                             fontTexPath,
@@ -767,7 +781,7 @@ namespace tNVSE {
                         readParams1[0] = 1;
 
                         // m_blockName.str
-                        typedef UInt32(*ReadFuncType)(void* obj, void* buffer, UInt32 size, UInt32* params, UInt32 flag);
+                        typedef UInt32(*ReadFuncType)(void* a1, void* a2, UInt32 a3, UInt32* a4, UInt32 a5);
                         ReadFuncType readFunc = *reinterpret_cast<ReadFuncType*>(
                             reinterpret_cast<char*>(texFileHandle) + 8
                             );
@@ -778,16 +792,27 @@ namespace tNVSE {
                         textureCreateArgs[0] = 6;
                         textureCreateArgs[1] = 3;
                         textureCreateArgs[2] = 2;
-                        fontTextureObject = sub_AA13E0(116);
+
+                        fontTextureObject = CdeclCall<NiPixelData*>(0xAA13E0, 116);
+
                         stackCookie = (stackCookie & 0xFFFFFF00) | 1;
                         if (fontTextureObject)
-                            texturingPropertyTemp2 = sub_A7C190(texWidth, texHeight, &unk_11AA2A0, 1, 1);
+                            // NiPixelData::Init
+                            texturingPropertyTemp2 = ThisStdCall<NiPixelData*>(
+                                0xA7C190,
+                                fontTextureObject,
+                                texWidth,
+                                texHeight,
+                                reinterpret_cast<const void*>(0x11AA2A0),
+                                1,
+                                1
+                            );
                         else
                             texturingPropertyTemp2 = 0;
                         fontTexturingPropertyTemp = texturingPropertyTemp2;
                         stackCookie = (stackCookie & 0xFFFFFF00) | 0;
                         texturingProperty = texturingPropertyTemp2;
-                        textureDataSize = texturingPropertyTemp2[1].textures.data + *texturingPropertyTemp2[1].shaderTextures;
+                        textureDataSize = &texturingPropertyTemp2->m_pucPixels[*texturingPropertyTemp2->m_puiOffsetInBytes];
                         readFlag = 1;
                         bytesRead3 = readFunc(
                             texFileHandle,
@@ -796,20 +821,21 @@ namespace tNVSE {
                             &readFlag,
                             1);
                         texFileHandle->m_uiRefCount += bytesRead3;
-                        BYTE* extraDataByte = reinterpret_cast<BYTE*>(&texturingProperty[2].m_extraDataList);
-                        extraDataByte[0] = 1;
-                        isResourceAvailable = sub_AA13E0(48);
+                        texturingProperty->unk70 = (texturingProperty->unk70 & 0xFF00) | 0x0001;
+
+                        isResourceAvailable = CdeclCall<NiObject*>(0xAA13E0, 48);
+
                         stackCookie = (stackCookie & 0xFFFFFF00) | 2;
                         if (isResourceAvailable)
                         {
                             fontFilePathTemp = this->filePath;
                             if (fontFilePathTemp)
-                                fontPathCopy = sub_A5B690(fontFilePathTemp);
+                                fontPathCopy = CdeclCall<String*>(0xA5B690, fontFilePathTemp);
                             else
                                 fontPathCopy = 0;
                             stackCookie = (stackCookie & 0xFFFFFF00) | 3;
                             stringRefFlag |= 1u;
-                            resourceHandleTemp2 = sub_A6ABB0(texturingProperty, &fontPathCopy, textureCreateArgs);
+                            resourceHandleTemp2 = ThisStdCall<NiTexture*>(0xA6ABB0, texturingProperty, &fontPathCopy, textureCreateArgs);
                         }
                         else
                         {
@@ -821,16 +847,18 @@ namespace tNVSE {
                         if ((stringRefFlag & 1) != 0)
                         {
                             stringRefFlag &= ~1u;
-                            if (fontPathCopy)
-                                InterlockedDecrement(&fontPathCopy[-1]);
+                            if (fontPathCopy) {
+                                volatile LONG* refCount = reinterpret_cast<volatile LONG*>(&fontPathCopy[-1]);
+                                InterlockedDecrement(refCount);
+                            }
                         }
                         texFileHandleTemp = texFileHandle;
                         texFileVTable = texFileHandle;
                         if (texFileHandle)
                             texFileVTable->Destructor(1);
                         texFileHandle = 0;
-                        sub_60AEB0(1);
-                        sub_66B0D0(&this->fontTexProp + texIndex, resourceHandle);
+                        ThisStdCall(0x60AEB0, resourceHandle, 1);
+                        ThisStdCall(0x66B0D0, &this->fontTexProp + texIndex, resourceHandle);
                     }
                     goto LABEL_46;
                 }
@@ -846,7 +874,6 @@ namespace tNVSE {
             stackCookie = -1;
             readParams2[1] = savedTlsValue;
             *(DWORD*)targetAddress = savedTlsValue;
-            return;
         }
     };
 
@@ -1001,9 +1028,11 @@ namespace tNVSE {
 	}
 
     void InitFontHook() {
-        //FontManager::GetStringDimensions
+        // FontManager::GetStringDimensions
         WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
-        //FontInfo::CalculateTextLayout
+        // FontInfo::CalculateTextLayout
         WriteRelJumpEx(0xA12FB0, &FontInfoEx::CalculateTextLayoutEx);
+        // FontInfo::LoadFontData
+        WriteRelJumpEx(0xA15320, &FontInfoEx::LoadFontDataEx);
     }
 }
