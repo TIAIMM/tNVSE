@@ -79,6 +79,14 @@ namespace tNVSE {
         return (c >= 0xA1 && c <= 0xF7);
     }
 
+    typedef uint32_t(__thiscall* GetFileSizeFunc)(void* pThis);
+
+    uint32_t GetFileSize(void* fntFileHandle) {
+        void** vtable = *(void***)fntFileHandle;
+        GetFileSizeFunc func = (GetFileSizeFunc)vtable[10];
+        return func(fntFileHandle);
+    }
+
     NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
 
     MemoryManager* TextMemoryManagerInstance = reinterpret_cast<MemoryManager*>(0x11F6238);
@@ -533,7 +541,7 @@ namespace tNVSE {
         }
 
         void LoadFontDataEx() {
-            NiTexture* resourceHandleTemp2; // [esp+10h] [ebp-23Ch]
+            NiTexturingProperty* resourceHandleTemp2; // [esp+10h] [ebp-23Ch]
             NiPixelData* texturingPropertyTemp2; // [esp+18h] [ebp-234h]
             float newMaxWidthMod; // [esp+20h] [ebp-22Ch]
             float newMaxGlyphHeight; // [esp+24h] [ebp-228h]
@@ -561,15 +569,15 @@ namespace tNVSE {
             __int16 isLoadedFlag; // [esp+BAh] [ebp-192h]
             UInt32 oldTlsValue; // [esp+BCh] [ebp-190h]
             int stringRefFlag; // [esp+C0h] [ebp-18Ch]
-            NiTexture* texFileHandleTemp; // [esp+C4h] [ebp-188h]
-            NiTexture* texFileVTable; // [esp+C8h] [ebp-184h]
+            BSFile* texFileHandleTemp; // [esp+C4h] [ebp-188h]
+            BSFile* texFileVTable; // [esp+C8h] [ebp-184h]
             String* fontPathCopy; // [esp+CCh] [ebp-180h] BYREF
-            NiObject* isResourceAvailable; // [esp+D0h] [ebp-17Ch]
-            NiTexture* resourceHandleTemp; // [esp+D4h] [ebp-178h]
+            NiTexturingProperty* resourceTemp; // [esp+D0h] [ebp-17Ch]
+            NiTexturingProperty* resourceHandleTemp; // [esp+D4h] [ebp-178h]
             NiPixelData* fontTextureObject; // [esp+D8h] [ebp-174h]
             NiPixelData* fontTexturingPropertyTemp; // [esp+DCh] [ebp-170h]
-            NiTexture* texFileHandleTemp2; // [esp+E0h] [ebp-16Ch]
-            NiTexture* texFileHandleVTable; // [esp+E4h] [ebp-168h]
+            BSFile* texFileHandleTemp2; // [esp+E0h] [ebp-16Ch]
+            BSFile* texFileHandleVTable; // [esp+E4h] [ebp-168h]
             void* File_1; // [esp+E8h] [ebp-164h]
             BSFile* FileVTable2; // [esp+ECh] [ebp-160h]
             FontInfo::BufferData* bufferData; // [esp+F0h] [ebp-15Ch]
@@ -578,13 +586,13 @@ namespace tNVSE {
             UInt32 texWidth; // [esp+FCh] [ebp-150h] BYREF
             UInt32 texHeight; // [esp+100h] [ebp-14Ch]
             UInt32 textureCreateArgs[3]; // [esp+104h] [ebp-148h] BYREF
-            NiTexture* texFileHandle; // [esp+110h] [ebp-13Ch]
-            NiTexture* resourceHandle; // [esp+114h] [ebp-138h]
+            BSFile* texFileHandle; // [esp+110h] [ebp-13Ch]
+            NiTexturingProperty* resourceHandle; // [esp+114h] [ebp-138h]
             NiPixelData* texturingProperty; // [esp+118h] [ebp-134h]
             SInt32 texIndex; // [esp+11Ch] [ebp-130h]
             float glyphTotalHeight; // [esp+120h] [ebp-12Ch]
             UInt32 glyphIndex; // [esp+124h] [ebp-128h]
-            wchar_t fontTexPath[130]; // [esp+128h] [ebp-124h] BYREF
+            char fontTexPath[260];; // [esp+128h] [ebp-124h] BYREF
             float tempWidth; // [esp+230h] [ebp-1Ch]
             BSFile* fntFileHandle; // [esp+234h] [ebp-18h]
             float maxGlyphHeight; // [esp+238h] [ebp-14h]
@@ -636,14 +644,20 @@ namespace tNVSE {
             gLog.Message("Load File 1 end");
             if (fntFileHandle)
             {
+                gLog.Message("fnt file valid");
                 if (fntFileHandle->m_good)
                 {
+                    gLog.Message("Allocate font buffer data");
                     bufferData = static_cast<FontInfo::BufferData*>(TextMemoryManagerInstance->Allocate(0x3928u));
                     this->fontData = bufferData;
-                    fileSize = fntFileHandle->Unk_0A();
+                    gLog.Message("Unk_0A");
+                    // fileSize = fntFileHandle->Unk_0A(fntFileHandle);
+                    fileSize = GetFileSize(fntFileHandle);
+                    gLog.Message("Unk_0A finish");
                     fontBuffer = this->fontData;
                     readParams2[0] = 1;
 
+                    gLog.Message("m_readProc");
                     //m_readProc
                     typedef UInt32(__cdecl* ReadProcType)(
                         BSFile* fileHandle,
@@ -743,29 +757,22 @@ namespace tNVSE {
                     {
                         gLog.Message("Load Tex");
                         // 0x406D00
-                        _vsnwprintf_s(
+                        _snprintf_s(
                             fontTexPath,
-                            _countof(fontTexPath),
+                            0x100u,
                             _TRUNCATE,
-                            L"TEXTURES\\FONTS\\%s.TEX",
-                            this->fontData->textures[texIndex].fileName);
-
-                        char narrowPath[MAX_PATH * 4];
-                        WideCharToMultiByte(
-                            CP_UTF8,
-                            0,
-                            fontTexPath,
-                            -1,
-                            narrowPath,
-                            sizeof(narrowPath),
-                            NULL,
-                            NULL
+                            "TEXTURES\\FONTS\\%s.TEX",
+                            this->fontData->textures[texIndex].fileName
                         );
+                        
 
-                        BSFile* textureFile = LoadFile(narrowPath, 0, 0x4000u, 2);
-                        texFileHandle = reinterpret_cast<NiTexture*>(textureFile);
-                        if (!texFileHandle || !(isTexValid = texFileHandle->nextTex))
+                        gLog.Message("LoadFile 2 start");
+                        texFileHandle = LoadFile(fontTexPath, 0, 0x4000u, 2);
+                        gLog.Message("LoadFile 2 end");
+
+                        if (!texFileHandle || !(isTexValid = texFileHandle->m_good))
                         {
+                            gLog.Message("Tex not valid");
                             // 0x5B5E40 Return 0
                             if (texFileHandle)
                             {
@@ -787,7 +794,14 @@ namespace tNVSE {
                             );
                         bytesRead1Temp = readFunc(texFileHandle, &texWidth, 8, readParams1, 1);
 
-                        texFileHandle->m_uiRefCount += bytesRead1Temp;
+                        gLog.Message("m_offset 2");
+                        // m_offset
+                        UInt32* pOffset2 = reinterpret_cast<UInt32*>(
+                            reinterpret_cast<uintptr_t>(texFileHandle) + 4
+                            );
+                        *pOffset2 += bytesRead1Temp;
+                        gLog.Message("m_offset 2 end");
+
                         bytesRead1 = bytesRead1Temp;
                         textureCreateArgs[0] = 6;
                         textureCreateArgs[1] = 3;
@@ -820,14 +834,24 @@ namespace tNVSE {
                             4 * texHeight * texWidth,
                             &readFlag,
                             1);
-                        texFileHandle->m_uiRefCount += bytesRead3;
+
+                        gLog.Message("m_offset 3");
+                        // m_offset
+                        pOffset2 = reinterpret_cast<UInt32*>(
+                            reinterpret_cast<uintptr_t>(texFileHandle) + 4
+                            );
+                        *pOffset2 += bytesRead3;
+                        gLog.Message("m_offset 3 end");
+
                         texturingProperty->unk70 = (texturingProperty->unk70 & 0xFF00) | 0x0001;
 
-                        isResourceAvailable = CdeclCall<NiObject*>(0xAA13E0, 48);
+                        resourceTemp = CdeclCall<NiTexturingProperty*>(0xAA13E0, 48);
 
                         stackCookie = (stackCookie & 0xFFFFFF00) | 2;
-                        if (isResourceAvailable)
+                        gLog.Message("Check resources");
+                        if (resourceTemp)
                         {
+                            gLog.Message("ResourceAvailable");
                             fontFilePathTemp = this->filePath;
                             if (fontFilePathTemp)
                                 fontPathCopy = CdeclCall<String*>(0xA5B690, fontFilePathTemp);
@@ -835,12 +859,13 @@ namespace tNVSE {
                                 fontPathCopy = 0;
                             stackCookie = (stackCookie & 0xFFFFFF00) | 3;
                             stringRefFlag |= 1u;
-                            resourceHandleTemp2 = ThisStdCall<NiTexture*>(0xA6ABB0, texturingProperty, &fontPathCopy, textureCreateArgs);
+                            resourceHandleTemp2 = ThisStdCall<NiTexturingProperty*>(0xA6ABB0, resourceTemp, texturingProperty, &fontPathCopy, textureCreateArgs);
                         }
                         else
                         {
                             resourceHandleTemp2 = 0;
                         }
+                        gLog.Message("Resources load end");
                         resourceHandleTemp = resourceHandleTemp2;
                         resourceHandle = resourceHandleTemp2;
                         stackCookie = 0;
@@ -859,6 +884,7 @@ namespace tNVSE {
                         texFileHandle = 0;
                         ThisStdCall(0x60AEB0, resourceHandle, 1);
                         ThisStdCall(0x66B0D0, &this->fontTexProp + texIndex, resourceHandle);
+                        gLog.Message("finish load");
                     }
                     goto LABEL_46;
                 }

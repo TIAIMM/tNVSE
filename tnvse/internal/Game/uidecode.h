@@ -221,8 +221,9 @@ struct FontInfo
 		return ThisStdCall<FontInfo*>(0xA1AEE0, this, iconPath);
 	}
 };
-
 STATIC_ASSERT(sizeof(FontInfo) == 0x54);
+
+//TempObject<UnorderedMap<const char*, FontInfo*>> s_fontInfosMap;
 
 // From JG
 // 164 (24)
