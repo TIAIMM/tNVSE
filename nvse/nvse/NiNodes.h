@@ -838,7 +838,7 @@ struct NiPixelFormat // sizeof=0x44
 		NiComponentSpec m_akComponents[4];
 	};
 
-// 070
+// 074
 class __declspec(align(4)) NiPixelData : public NiObject
 {
 public:
