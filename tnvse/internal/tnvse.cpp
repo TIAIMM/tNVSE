@@ -777,10 +777,7 @@ namespace tNVSE {
                         stackCookie = (stackCookie & 0xFFFFFF00) | 1;
                         if (fontTextureObject) {
                             gLog.FormattedMessage("fontTextureObject Init");
-                            // NiPixelData::Init
-                            texturingPropertyTemp2 = ThisStdCall<NiPixelData*>(
-                                0xA7C190,
-                                fontTextureObject,
+                            texturingPropertyTemp2 = fontTextureObject->InitializePixelData(
                                 texWidth,
                                 texHeight,
                                 reinterpret_cast<const void*>(0x11AA2A0),
@@ -788,8 +785,13 @@ namespace tNVSE {
                                 1
                             );
                         }
-                        else
+                        else {
                             texturingPropertyTemp2 = 0;
+                            stackCookie = -1;
+                            savedTlsValueTemp = savedTlsValue;
+                            *(DWORD*)targetAddress = savedTlsValue;
+                            return;
+                        }
                         fontTexturingPropertyTemp = texturingPropertyTemp2;
                         stackCookie = (stackCookie & 0xFFFFFF00) | 0;
                         texturingProperty = texturingPropertyTemp2;
@@ -817,8 +819,9 @@ namespace tNVSE {
                                 fontPathCopy = 0;
                             stackCookie = (stackCookie & 0xFFFFFF00) | 3;
                             stringRefFlag |= 1u;
+                            gLog.FormattedMessage("fontPathCopy: %s", fontPathCopy);
                             gLog.FormattedMessage("CreateFontTexture start");
-                            resourceHandleTemp2 = ThisStdCall<NiTexturingProperty*>(0xA6ABB0, resourceTemp, texturingProperty, &fontPathCopy, textureCreateArgs);
+                            resourceHandleTemp2 = resourceTemp->CreateFontTexture(texturingProperty, &fontPathCopy, textureCreateArgs);
                             gLog.FormattedMessage("CreateFontTexture end");
                         }
                         else

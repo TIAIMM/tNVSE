@@ -859,6 +859,16 @@ public:
 	unsigned int m_uiRevID;
 	unsigned int m_uiFaces;
 	unsigned int unk70;
+
+	__forceinline NiPixelData* InitializePixelData(
+		UInt32 width,
+		UInt32 height,
+		const void* srcData,
+		SInt32 m_uiMipmapLevels,
+		SInt32 m_uiFaces)
+	{
+		return ThisStdCall<NiPixelData*>(0xA7C190, this, width, height, srcData, m_uiMipmapLevels, m_uiFaces);
+	}
 };
 
 // 068

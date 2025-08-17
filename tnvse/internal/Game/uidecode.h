@@ -92,6 +92,14 @@ public:
 	uint16_t textures_numObjs;  // 0x24
 	uint16_t textures_growSize; // 0x26
 	uint32_t** shaderTextures; // 0x28
+
+	__forceinline NiTexturingProperty* CreateFontTexture(
+		NiPixelData* pixelData,
+        const char** fontPathPtr,
+        UInt32* textureCreateArgs)
+	{
+		return ThisStdCall<NiTexturingProperty*>(0xA6ABB0, this, pixelData, fontPathPtr, textureCreateArgs);
+	}
 };
 
 // From OBSE
