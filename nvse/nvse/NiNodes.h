@@ -1240,6 +1240,10 @@ extern std::span<TESAnimGroup::AnimGroupInfo> g_animGroups;
 
 void DumpAnimGroups(void);
 
+class NiBinaryStream;
+typedef UInt32(__cdecl* NIBINARYSTREAM_READFN)(NiBinaryStream* apThis, void* apvBuffer, UInt32 auiBytes, UInt32* apuiComponentSizes, UInt32 auiNumComponents);
+typedef UInt32(__cdecl* NIBINARYSTREAM_WRITEFN)(NiBinaryStream* apThis, const void* apvBuffer, UInt32 auiBytes, UInt32* apuiComponentSizes, UInt32 auiNumComponents);
+
 class NiBinaryStream
 {
 public:
@@ -1254,8 +1258,8 @@ public:
 
 //	void	** m_vtbl;		// 000
 	UInt32	m_offset;		// 004
-	void	* m_readProc;	// 008 - function pointer
-	void	* m_writeProc;	// 00C - function pointer
+	NIBINARYSTREAM_READFN m_readProc;	// 008 - function pointer
+	NIBINARYSTREAM_WRITEFN m_writeProc;	// 00C - function pointer
 };
 
 class NiFile: public NiBinaryStream
@@ -1277,7 +1281,7 @@ public:
 };
 
 // 158
-class BSFile: NiFile
+class BSFile: public NiFile
 {
 public:
 	BSFile();
