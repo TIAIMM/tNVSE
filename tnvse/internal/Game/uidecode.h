@@ -201,7 +201,7 @@ struct FontInfo
 
 	UInt8						isLoaded;	// 00
 	UInt8						pad01[3];	// 01
-	char*						filePath;	// 04
+	const char*						filePath;	// 04
 	UInt32						fontID;		// 08
 	NiTexturingProperty*		fontTexProp;	// 0C
 	UInt32						renderState[7];	// 10

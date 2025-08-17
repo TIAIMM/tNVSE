@@ -546,7 +546,7 @@ namespace tNVSE {
             float newMaxWidthMod; // [esp+20h] [ebp-22Ch]
             float newMaxGlyphHeight; // [esp+24h] [ebp-228h]
             float newMaxHeight; // [esp+28h] [ebp-224h]
-            char* fontFilePathTemp; // [esp+58h] [ebp-1F4h]
+            const char* fontFilePathTemp; // [esp+58h] [ebp-1F4h]
             void* textureDataSize; // [esp+60h] [ebp-1ECh]
             UInt32 bytesRead3; // [esp+64h] [ebp-1E8h]
             UInt32 readFlag; // [esp+6Ch] [ebp-1E0h] BYREF
@@ -565,13 +565,13 @@ namespace tNVSE {
             UInt32 bytesRead2Temp; // [esp+A4h] [ebp-1A8h]
             UInt32 bytesRead2; // [esp+A8h] [ebp-1A4h]
             UInt32 readParams2[2]; // [esp+ACh] [ebp-1A0h] BYREF
-            char* fontFilePathError; // [esp+B4h] [ebp-198h]
+            const char* fontFilePathError; // [esp+B4h] [ebp-198h]
             __int16 isLoadedFlag; // [esp+BAh] [ebp-192h]
             UInt32 oldTlsValue; // [esp+BCh] [ebp-190h]
             int stringRefFlag; // [esp+C0h] [ebp-18Ch]
             BSFile* texFileHandleTemp; // [esp+C4h] [ebp-188h]
             BSFile* texFileVTable; // [esp+C8h] [ebp-184h]
-            char* fontPathCopy; // [esp+CCh] [ebp-180h] BYREF
+            const char* fontPathCopy; // [esp+CCh] [ebp-180h] BYREF
             NiTexturingProperty* resourceTemp; // [esp+D0h] [ebp-17Ch]
             NiTexturingProperty* resourceHandleTemp; // [esp+D4h] [ebp-178h]
             NiPixelData* fontTextureObject; // [esp+D8h] [ebp-174h]
@@ -592,7 +592,7 @@ namespace tNVSE {
             SInt32 texIndex; // [esp+11Ch] [ebp-130h]
             float glyphTotalHeight; // [esp+120h] [ebp-12Ch]
             UInt32 glyphIndex; // [esp+124h] [ebp-128h]
-            char fontTexPath[260];; // [esp+128h] [ebp-124h] BYREF
+            char fontTexPath[260]; // [esp+128h] [ebp-124h] BYREF
             float tempWidth; // [esp+230h] [ebp-1Ch]
             BSFile* fntFileHandle; // [esp+234h] [ebp-18h]
             float maxGlyphHeight; // [esp+238h] [ebp-14h]
@@ -857,9 +857,10 @@ namespace tNVSE {
                             //gLog.FormattedMessage("Resource Init");
                             //gLog.Message("ResourceAvailable");
                             fontFilePathTemp = this->filePath;
+                            gLog.FormattedMessage("filePath: %s", filePath);
                             if (fontFilePathTemp){
                                 //gLog.FormattedMessage("Cdeclcall A5B690 start");
-                                fontPathCopy = CdeclCall<char*>(0xA5B690, fontFilePathTemp);
+                                fontPathCopy = CdeclCall<const char*>(0xA5B690, fontFilePathTemp);
                                 //gLog.FormattedMessage("Cdeclcall A5B690 end");
                             }
                             else
@@ -882,7 +883,8 @@ namespace tNVSE {
                         {
                             stringRefFlag &= ~1u;
                             if (fontPathCopy) {
-                                volatile LONG* refCount = reinterpret_cast<volatile LONG*>(fontPathCopy - 2);
+                                char* mutablePtr = const_cast<char*>(fontPathCopy);
+                                volatile LONG* refCount = reinterpret_cast<volatile LONG*>(mutablePtr - 2);
                                 InterlockedDecrement(refCount);
                             }
                         }
