@@ -1,7 +1,6 @@
 #pragma once
 #include <cstring>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include "SafeWrite.h"
 #include "Game/uidecode.h"
@@ -555,7 +554,7 @@ namespace tNVSE {
             UInt32 readParams1[2]; // [esp+78h] [ebp-1D4h] BYREF
             bool isTexValid; // [esp+83h] [ebp-1C9h]
             UInt32 savedTlsValueTemp; // [esp+84h] [ebp-1C8h]
-            const char* fontFilePath; // [esp+88h] [ebp-1C4h]
+            //const char* fontFilePath; // [esp+88h] [ebp-1C4h]
             float currentMaxWidthMod; // [esp+8Ch] [ebp-1C0h]
             float currentWidthMod; // [esp+90h] [ebp-1BCh]
             float currentGlyphHeight; // [esp+94h] [ebp-1B8h]
@@ -565,7 +564,7 @@ namespace tNVSE {
             UInt32 bytesRead2Temp; // [esp+A4h] [ebp-1A8h]
             UInt32 bytesRead2; // [esp+A8h] [ebp-1A4h]
             UInt32 readParams2[2]; // [esp+ACh] [ebp-1A0h] BYREF
-            const char* fontFilePathError; // [esp+B4h] [ebp-198h]
+            //const char* fontFilePathError; // [esp+B4h] [ebp-198h]
             __int16 isLoadedFlag; // [esp+BAh] [ebp-192h]
             UInt32 oldTlsValue; // [esp+BCh] [ebp-190h]
             int stringRefFlag; // [esp+C0h] [ebp-18Ch]
@@ -603,7 +602,7 @@ namespace tNVSE {
             DWORD tlsPointer;
             DWORD tlsSlotAddress;
             DWORD targetAddress;
-            DWORD* pTlsIndex = (DWORD*)0x0126FD98;
+            DWORD* pTlsIndex = (DWORD*)0x126FD98;
 
             //gLog.Message("Call LoadFontDataEx");
 
@@ -721,7 +720,7 @@ namespace tNVSE {
                     //gLog.Message("Special Char process end");
                     if (this->fontData->numTextures > 8)
                     {
-                        fontFilePath = this->filePath;
+                        //fontFilePath = this->filePath;
                         // 0x5B5E40 Return 0
                         stackCookie = -1;
                         savedTlsValueTemp = savedTlsValue;
@@ -830,6 +829,7 @@ namespace tNVSE {
                         {
                             resourceHandleTemp2 = 0;
                         }
+
                         //gLog.Message("Resources load end");
                         resourceHandleTemp = resourceHandleTemp2;
                         resourceHandle = resourceHandleTemp2;
@@ -855,7 +855,7 @@ namespace tNVSE {
                     goto LABEL_46;
                 }
             }
-            fontFilePathError = this->filePath;
+            //fontFilePathError = this->filePath;
             // 0x5B5E40 Return 0
             if (fntFileHandle)
             {
@@ -1025,6 +1025,6 @@ namespace tNVSE {
         // FontInfo::CalculateTextLayout
         WriteRelJumpEx(0xA12FB0, &FontInfoEx::CalculateTextLayoutEx);
         // FontInfo::LoadFontData
-        //WriteRelJumpEx(0xA15320, &FontInfoEx::LoadFontDataEx);
+        WriteRelJumpEx(0xA15320, &FontInfoEx::LoadFontDataEx);
     }
 }
