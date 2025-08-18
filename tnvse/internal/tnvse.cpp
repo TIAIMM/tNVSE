@@ -90,7 +90,7 @@ namespace tNVSE {
     NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
 
     MemoryManager* TextMemoryManagerInstance = reinterpret_cast<MemoryManager*>(0x11F6238);
-
+    
     class FontInfoEx : public FontInfo {
     public:
         void __thiscall CalculateTextLayoutEx(const char* textSrc, FontTextReplaced* textParams) {
@@ -650,10 +650,10 @@ namespace tNVSE {
                     //gLog.Message("Allocate font buffer data");
                     bufferData = static_cast<FontInfo::BufferData*>(TextMemoryManagerInstance->Allocate(0x3928u));
                     this->fontData = bufferData;
-                    gLog.Message("Unk_0A");
+                    //gLog.Message("Unk_0A");
                     // fileSize = fntFileHandle->Unk_0A(fntFileHandle);
                     fileSize = GetFileSize(fntFileHandle);
-                    gLog.Message("Unk_0A finish");
+                    //gLog.Message("Unk_0A finish");
                     fontBuffer = this->fontData;
                     readParams2[0] = 1;
                     bytesRead2Temp = (fntFileHandle->m_readProc)(fntFileHandle, fontBuffer, fileSize, readParams2, 1);
@@ -691,7 +691,7 @@ namespace tNVSE {
                             newMaxWidthMod = currentMaxWidthMod;
                         this->maxWidthMod = newMaxWidthMod;
                     }
-                    gLog.Message("Fnt Head Read Finished");
+                    //gLog.Message("Fnt Head Read Finished");
                     tempWidth = this->fontData->glyphs[' '].width;
                     this->fontData->glyphs[' '].width = this->fontData->glyphs[' '].kerningRight;
                     this->fontData->glyphs[' '].kerningRight = tempWidth;
@@ -718,7 +718,7 @@ namespace tNVSE {
                     this->fontData->glyphs['\0'].topRight.y = 0.0;
                     this->fontData->glyphs['\0'].bottomLeft.y = 0.0;
                     this->fontData->glyphs['\0'].bottomRight.y = 0.0;
-                    gLog.Message("Special Char process end");
+                    //gLog.Message("Special Char process end");
                     if (this->fontData->numTextures > 8)
                     {
                         fontFilePath = this->filePath;
@@ -728,7 +728,7 @@ namespace tNVSE {
                         *(DWORD*)targetAddress = savedTlsValue;
                         return;
                     }
-                    gLog.Message("numTextures normal");
+                    //gLog.Message("numTextures normal");
                     for (texIndex = 0; texIndex < this->fontData->numTextures; ++texIndex)
                     {
                         //gLog.Message("Load Tex");
@@ -741,13 +741,13 @@ namespace tNVSE {
                             this->fontData->textures[texIndex].fileName
                         );
 
-                        gLog.Message("LoadFile 2 start");
+                        //gLog.Message("LoadFile 2 start");
                         texFileHandle = LoadFile(fontTexPath, 0, 0x4000u, 2);
-                        gLog.Message("LoadFile 2 end");
+                        //gLog.Message("LoadFile 2 end");
 
                         if (!texFileHandle || !(isTexValid = texFileHandle->m_good))
                         {
-                            gLog.Message("Tex not valid");
+                            //gLog.Message("Tex not valid");
                             // 0x5B5E40 Return 0
                             if (texFileHandle)
                             {
@@ -762,7 +762,7 @@ namespace tNVSE {
                         }
                         readParams1[0] = 1;
 
-                        gLog.FormattedMessage("tex file valid");
+                        //gLog.FormattedMessage("tex file valid");
 
                         bytesRead1Temp = (texFileHandle->m_readProc)(texFileHandle, &texWidth, 8, readParams1, 1);
                         texFileHandle->m_offset += bytesRead1Temp;
@@ -776,7 +776,7 @@ namespace tNVSE {
 
                         stackCookie = (stackCookie & 0xFFFFFF00) | 1;
                         if (fontTextureObject) {
-                            gLog.FormattedMessage("fontTextureObject Init");
+                            //gLog.FormattedMessage("fontTextureObject Init");
                             texturingPropertyTemp2 = fontTextureObject->InitializePixelData(
                                 texWidth,
                                 texHeight,
@@ -805,21 +805,23 @@ namespace tNVSE {
                         resourceTemp = CdeclCall<NiTexturingProperty*>(0xAA13E0, 0x30);
 
                         stackCookie = (stackCookie & 0xFFFFFF00) | 2;
-                        gLog.Message("Check resources");
+                        //gLog.Message("Check resources");
                         if (resourceTemp)
                         {
-                            gLog.FormattedMessage("Resource Init");
+                            //gLog.FormattedMessage("Resource Init");
                             fontFilePathTemp = this->filePath;
                             if (fontFilePathTemp){
-                                gLog.FormattedMessage("Cdeclcall A5B690 start");
+                                //gLog.FormattedMessage("Cdeclcall A5B690 start");
                                 fontPathCopy = CdeclCall<const char*>(0xA5B690, fontFilePathTemp);
-                                gLog.FormattedMessage("Cdeclcall A5B690 end");
+                                //gLog.FormattedMessage("Cdeclcall A5B690 end");
                             }
                             else
                                 fontPathCopy = 0;
                             stackCookie = (stackCookie & 0xFFFFFF00) | 3;
                             stringRefFlag |= 1u;
+                            gLog.FormattedMessage("texturingProperty: %p", texturingProperty);
                             gLog.FormattedMessage("fontPathCopy: %s", fontPathCopy);
+                            gLog.FormattedMessage("textureCreateArgs: %p", textureCreateArgs);
                             gLog.FormattedMessage("CreateFontTexture start");
                             resourceHandleTemp2 = resourceTemp->CreateFontTexture(texturingProperty, &fontPathCopy, textureCreateArgs);
                             gLog.FormattedMessage("CreateFontTexture end");
@@ -828,7 +830,7 @@ namespace tNVSE {
                         {
                             resourceHandleTemp2 = 0;
                         }
-                        gLog.Message("Resources load end");
+                        //gLog.Message("Resources load end");
                         resourceHandleTemp = resourceHandleTemp2;
                         resourceHandle = resourceHandleTemp2;
                         stackCookie = 0;
@@ -1023,6 +1025,6 @@ namespace tNVSE {
         // FontInfo::CalculateTextLayout
         WriteRelJumpEx(0xA12FB0, &FontInfoEx::CalculateTextLayoutEx);
         // FontInfo::LoadFontData
-        WriteRelJumpEx(0xA15320, &FontInfoEx::LoadFontDataEx);
+        //WriteRelJumpEx(0xA15320, &FontInfoEx::LoadFontDataEx);
     }
 }
