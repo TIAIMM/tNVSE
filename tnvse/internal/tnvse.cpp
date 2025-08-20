@@ -88,7 +88,7 @@ namespace tNVSE {
 
     NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
 
-    MemoryManager* TextMemoryManagerInstance = reinterpret_cast<MemoryManager*>(0x11F6238);
+    MemoryManager* MemoryManagerSingleton = reinterpret_cast<MemoryManager*>(0x11F6238);
     
     class FontInfoEx : public FontInfo {
     public:
@@ -176,7 +176,7 @@ namespace tNVSE {
 
             //gLog.Message("Init originalTextBuffer");
             //gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
-            originalTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Allocate(sourceTextLen + 4));
+            originalTextBuffer = static_cast<char*>(MemoryManagerSingleton->Allocate(sourceTextLen + 4));
             if (!originalTextBuffer) {
                 //gLog.Message("Memory allocation failed for originalTextBuffer");
                 return;
@@ -192,10 +192,10 @@ namespace tNVSE {
 
             //gLog.Message("Init processedTextBuffer");
             //gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
-            processedTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Allocate(sourceTextLen + 4));
+            processedTextBuffer = static_cast<char*>(MemoryManagerSingleton->Allocate(sourceTextLen + 4));
             if (!processedTextBuffer) {
                 //gLog.Message("Memory allocation failed for processedTextBuffer");
-                TextMemoryManagerInstance->Deallocate(originalTextBuffer);
+                MemoryManagerSingleton->Deallocate(originalTextBuffer);
                 return;
             }
 
@@ -292,7 +292,7 @@ namespace tNVSE {
                         if (escapeSeqSizeDiff > 0)
                         {
                             textBufferSize += escapeSeqSizeDiff;
-                            dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, textBufferSize));
+                            dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, textBufferSize));
                         }
                         for (bufferCopyIndex = 0; bufferCopyIndex < postEscapeTextLen; ++bufferCopyIndex)
                             dynamicTextBuffer[processedTextLen++] = parsedTextBuffer[bufferCopyIndex];
@@ -317,7 +317,7 @@ namespace tNVSE {
             {
                 sourceTextLen = processedTextLen;
                 //gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
-                processedOriginalText = static_cast<char*>(TextMemoryManagerInstance->Reallocate(processedOriginalText, processedTextLen + 4));
+                processedOriginalText = static_cast<char*>(MemoryManagerSingleton->Reallocate(processedOriginalText, processedTextLen + 4));
                 // 0xEC6370
                 //gLog.Message("FastStringCopyAligned");
                 //strcpy(processedOriginalText, dynamicTextBuffer);
@@ -336,7 +336,7 @@ namespace tNVSE {
                     if (++processedTextLen >= textBufferSize)
                     {
                         //gLog.FormattedMessage("Relocating dynamicTextBuffer: size=%u", processedTextLen + 4);
-                        dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
+                        dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 4));
                         textBufferSize = processedTextLen + 4;
                     }
                     totalTextHeight = this->fontData->lineHeight + lineSpacingAdjust + totalTextHeight;
@@ -402,7 +402,7 @@ namespace tNVSE {
                             {
                                 isTildeChar = 0;
                                 textBufferSize += 4;
-                                dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, textBufferSize));
+                                dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, textBufferSize));
                                 // 0xEC7230
                                 memmove(
                                     &dynamicTextBuffer[lastWrapPosition + 2],
@@ -452,7 +452,7 @@ namespace tNVSE {
                         {
                             if (processedTextLen + 3 >= textBufferSize)
                             {
-                                dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, processedTextLen + 6));
+                                dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 6));
                                 textBufferSize = processedTextLen + 6;
                             }
                             dynamicTextBuffer[processedTextLen + 2] = dynamicTextBuffer[processedTextLen];
@@ -484,7 +484,7 @@ namespace tNVSE {
                         dynamicTextBuffer[processedTextLen++] = currentChar;
                     if (processedTextLen >= textBufferSize)
                     {
-                        dynamicTextBuffer = static_cast<char*>(TextMemoryManagerInstance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
+                        dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 4));
                         textBufferSize = processedTextLen + 4;
                     }
                 }
@@ -534,8 +534,8 @@ namespace tNVSE {
             textParams->initdToZero = 0;
             textParams->wrapLines = currentLineCount;
             textParams->length = processedTextLen;
-            TextMemoryManagerInstance->Deallocate(processedOriginalText);
-            TextMemoryManagerInstance->Deallocate(dynamicTextBuffer);
+            MemoryManagerSingleton->Deallocate(processedOriginalText);
+            MemoryManagerSingleton->Deallocate(dynamicTextBuffer);
             //gLog.Message("CalculateTextLayoutEx End");
         }
 
@@ -647,7 +647,7 @@ namespace tNVSE {
                 {
                     //gLog.Message("fnt file valid");
                     //gLog.Message("Allocate font buffer data");
-                    bufferData = static_cast<FontInfo::BufferData*>(TextMemoryManagerInstance->Allocate(0x3928u));
+                    bufferData = static_cast<FontInfo::BufferData*>(MemoryManagerSingleton->Allocate(0x3928u));
                     this->fontData = bufferData;
                     //gLog.Message("Unk_0A");
                     // fileSize = fntFileHandle->Unk_0A(fntFileHandle);
@@ -773,6 +773,8 @@ namespace tNVSE {
 
                         fontTextureObject = CdeclCall<NiPixelData*>(0xAA13E0, 0x74);
 
+                        gLog.FormattedMessage("fontTextureObject: %p", fontTextureObject);
+
                         stackCookie = (stackCookie & 0xFFFFFF00) | 1;
                         if (fontTextureObject) {
                             //gLog.FormattedMessage("fontTextureObject Init");
@@ -850,7 +852,7 @@ namespace tNVSE {
                         texFileHandle = 0;
                         ThisStdCall(0x60AEB0, resourceHandle, 1);
                         ThisStdCall(0x66B0D0, &this->fontTexProp + texIndex, resourceHandle);
-                        gLog.Message("finish load");
+                        //gLog.Message("finish load");
                     }
                     goto LABEL_46;
                 }
