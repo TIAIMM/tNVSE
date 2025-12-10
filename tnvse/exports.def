@@ -1,4 +1,4 @@
-LIBRARY	"nvse_plugin_example"
+LIBRARY	"ModernMinimap"
 EXPORTS
 NVSEPlugin_Query
 NVSEPlugin_Load

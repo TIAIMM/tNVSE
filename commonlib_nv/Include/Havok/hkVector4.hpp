@@ -1,0 +1,37 @@
+#pragma once
+
+#include "NiPoint3.hpp"
+
+class hkTransform;
+class hkQsTransform;
+class hkQuaternion;
+
+class hkVector4 {
+public:
+	hkVector4() : m_quad(_mm_set1_ps(0.0f)) {}
+
+	hkVector4(const float& a_x) : m_quad(_mm_set1_ps(a_x)) {}
+
+	hkVector4(const float& a_x, const float& a_y, const float& a_z, const float& a_w) :
+		m_quad(_mm_setr_ps(a_x, a_y, a_z, a_w))
+	{}
+
+	hkVector4(const hkVector4& a_rhs) : m_quad(a_rhs.m_quad) {}
+
+	hkVector4(const NiPoint3& a_point) :
+		m_quad(_mm_setr_ps(a_point.x, a_point.y, a_point.z, 0.0f))
+	{}
+
+	__m128 m_quad;
+
+	void setTransformedPos(const hkTransform& arTransform, const hkVector4& arVector);
+	void setTransformedInversePos(const hkQsTransform& a, const hkVector4& b);
+	void setRotatedInverseDir(const hkQuaternion& a, const hkQuaternion& b);
+
+	operator __m128() const {
+		return m_quad;
+	}
+
+	static const hkVector4 zero;
+};
+ASSERT_SIZE(hkVector4, 0x10);

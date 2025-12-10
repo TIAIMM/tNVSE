@@ -1,0 +1,891 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Include\Bethesda\Actor.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorHitData.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorMover.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorPackage.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorPathingMessage.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorPathingMessageQueue.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorProcessManager.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorsScriptTaskData.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorUpdateTaskData.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorValue.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorValueInfo.hpp" />
+    <ClInclude Include="Include\Bethesda\ActorValueOwner.hpp" />
+    <ClInclude Include="Include\Bethesda\AILinearTaskThread.hpp" />
+    <ClInclude Include="Include\Bethesda\AITaskThread.hpp" />
+    <ClInclude Include="Include\Bethesda\AITimer.hpp" />
+    <ClInclude Include="Include\Bethesda\Animation.hpp" />
+    <ClInclude Include="Include\Bethesda\AnimationTaskData.hpp" />
+    <ClInclude Include="Include\Bethesda\Archive.hpp" />
+    <ClInclude Include="Include\Bethesda\ArchiveFile.hpp" />
+    <ClInclude Include="Include\Bethesda\Atmosphere.hpp" />
+    <ClInclude Include="Include\Bethesda\AttachDistant3DTask.hpp" />
+    <ClInclude Include="Include\Bethesda\AutoMemContext.hpp" />
+    <ClInclude Include="Include\Bethesda\BackgroundCloneThread.hpp" />
+    <ClInclude Include="Include\Bethesda\BaseFormComponent.hpp" />
+    <ClInclude Include="Include\Bethesda\BaseProcess.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSAddonNode.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSAmmoForm.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSBipedModelList.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSBodyPart.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSBodyPartData.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSClipRoundsForm (1).hpp" />
+    <ClInclude Include="Include\Bethesda\BGSClipRoundsForm.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSDestructibleObjectForm.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSDistantTreeBlock.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSEquipType.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSImpactData.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSListForm.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSLoadFormBuffer.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSLoadGameBuffer.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSLoadGameSubBuffer.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSMenuPacker.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSMessageIcon.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSNote.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSNumericIDIndex.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSPerk.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSPerkEntry.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSPickupPutdownSounds.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSPreloadable.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSProjectile.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSQuestObjective.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSRepairItemList.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveFormBuffer.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveGameBuffer.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveLoadBuffer.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveLoadChangesMap.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveLoadFormHeader.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveLoadFormIDMap.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveLoadFormInfo.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveLoadGame.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveLoadHistory.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveLoadManager.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSSaveLoadReferencesMap.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSTerrainManager.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSTerrainNode.hpp" />
+    <ClInclude Include="Include\Bethesda\BGSTouchSpellForm.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkAction.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkBlendCollisionObject.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkBlendCollisionObjectAddRotation.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkBlendController.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkCachingShapePhantom.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkCharacterController.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkCharacterListener.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkCharacterPointCollector.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkCharacterProxy.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkCharacterState.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkCharacterStateOnGround.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkCollisionObject.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkConstraint.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkConstraintChain.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkEntity.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkForceController.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkLiquidActionCInfo.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkMoppBvTreeShape.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkNiCollisionObject.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkNiTriStripsShape.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkOrientHingedBodyAction.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkPackedNiTriStripsShape.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkPhantom.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkPickData.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkPoseArray.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkpRigidBodyCinfo.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkRagdollController.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkRagdollPenetrationUtil.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkRagdollShareData.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkRagdollTemplateData.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkRefObject.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkRigidBody.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkRigidBodyT.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkSerializable.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkShape.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkShapeCollection.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkShapePhantom.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkUnaryAction.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkUtilFunctions.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkWorld.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkWorldM.hpp" />
+    <ClInclude Include="Include\Bethesda\bhkWorldObject.hpp" />
+    <ClInclude Include="Include\Bethesda\BipedAnim.hpp" />
+    <ClInclude Include="Include\Bethesda\BSAnimGroupSequence.hpp" />
+    <ClInclude Include="Include\Bethesda\BSAnimNote.hpp" />
+    <ClInclude Include="Include\Bethesda\BSAnimNoteListener.hpp" />
+    <ClInclude Include="Include\Bethesda\BSAnimNoteReceiver.hpp" />
+    <ClInclude Include="Include\Bethesda\BSArchive.hpp" />
+    <ClInclude Include="Include\Bethesda\BSBatchRenderer.hpp" />
+    <ClInclude Include="Include\Bethesda\BSCompoundFrustum.hpp" />
+    <ClInclude Include="Include\Bethesda\BSCubeMapCamera.hpp" />
+    <ClInclude Include="Include\Bethesda\BSCullingProcess.hpp" />
+    <ClInclude Include="Include\Bethesda\BSDirectoryEntry.hpp" />
+    <ClInclude Include="Include\Bethesda\BSDistantTreeShaderProperty.hpp" />
+    <ClInclude Include="Include\Bethesda\BSExtraData.hpp" />
+    <ClInclude Include="Include\Bethesda\BSFadeNode.hpp" />
+    <ClInclude Include="Include\Bethesda\BSFile.hpp" />
+    <ClInclude Include="Include\Bethesda\BSFileEntry.hpp" />
+    <ClInclude Include="Include\Bethesda\BSFogProperty.hpp" />
+    <ClInclude Include="Include\Bethesda\BSGraphics.hpp" />
+    <ClInclude Include="Include\Bethesda\BSHash.hpp" />
+    <ClInclude Include="Include\Bethesda\BSHavokThreadData.hpp" />
+    <ClInclude Include="Include\Bethesda\BSInputManager.hpp" />
+    <ClInclude Include="Include\Bethesda\BSLinearTaskThread.hpp" />
+    <ClInclude Include="Include\Bethesda\BSMap.hpp" />
+    <ClInclude Include="Include\Bethesda\BSMapBase.hpp" />
+    <ClInclude Include="Include\Bethesda\BSMasterParticleSystem.h" />
+    <ClInclude Include="Include\Bethesda\BSMemObject.hpp" />
+    <ClInclude Include="Include\Bethesda\BSMemory.hpp" />
+    <ClInclude Include="Include\Bethesda\BSMultiBound.hpp" />
+    <ClInclude Include="Include\Bethesda\BSMultiBoundNode.hpp" />
+    <ClInclude Include="Include\Bethesda\BSMultiBoundRoom.hpp" />
+    <ClInclude Include="Include\Bethesda\BSMultiBoundShape.hpp" />
+    <ClInclude Include="Include\Bethesda\BSNiNode.hpp" />
+    <ClInclude Include="Include\Bethesda\BSNodeReferences.hpp" />
+    <ClInclude Include="Include\Bethesda\BSOcclusionPlane.hpp" />
+    <ClInclude Include="Include\Bethesda\BSPackedTask.hpp" />
+    <ClInclude Include="Include\Bethesda\BSPackedTaskQueue.hpp" />
+    <ClInclude Include="Include\Bethesda\BSParticleSystemManager.h" />
+    <ClInclude Include="Include\Bethesda\BSPointer.hpp" />
+    <ClInclude Include="Include\Bethesda\BSPortalGraph.hpp" />
+    <ClInclude Include="Include\Bethesda\BSPSysMultiTargetEmitterCtlr.hpp" />
+    <ClInclude Include="Include\Bethesda\BSPSysSimpleColorModifier.hpp" />
+    <ClInclude Include="Include\Bethesda\BSRenderedTexture.hpp" />
+    <ClInclude Include="Include\Bethesda\BSRenderer.hpp" />
+    <ClInclude Include="Include\Bethesda\BSRenderState.hpp" />
+    <ClInclude Include="Include\Bethesda\BSResizableTriShape.hpp" />
+    <ClInclude Include="Include\Bethesda\BSSceneGraph.hpp" />
+    <ClInclude Include="Include\Bethesda\BSScrapHeapQueueElem.hpp" />
+    <ClInclude Include="Include\Bethesda\BSSegmentedTriShape.hpp" />
+    <ClInclude Include="Include\Bethesda\BSSemaphore.hpp" />
+    <ClInclude Include="Include\Bethesda\BSShader.hpp" />
+    <ClInclude Include="Include\Bethesda\BSShaderAccumulator.hpp" />
+    <ClInclude Include="Include\Bethesda\BSShaderManager.hpp" />
+    <ClInclude Include="Include\Bethesda\BSShaderNoLighting.hpp" />
+    <ClInclude Include="Include\Bethesda\BSShaderNoLightingProperty.hpp" />
+    <ClInclude Include="Include\Bethesda\BSShaderProperty.hpp" />
+    <ClInclude Include="Include\Bethesda\BSShaderUtil.hpp" />
+    <ClInclude Include="Include\Bethesda\BSSimpleArray.hpp" />
+    <ClInclude Include="Include\Bethesda\BSSimpleArrayRefCounted.hpp" />
+    <ClInclude Include="Include\Bethesda\BSSimpleList.hpp" />
+    <ClInclude Include="Include\Bethesda\BSSoundHandle.hpp" />
+    <ClInclude Include="Include\Bethesda\BSSpinLock.hpp" />
+    <ClInclude Include="Include\Bethesda\BSStream.hpp" />
+    <ClInclude Include="Include\Bethesda\BSString.hpp" />
+    <ClInclude Include="Include\Bethesda\BSString.inl" />
+    <ClInclude Include="Include\Bethesda\BSTask.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTaskletData.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTaskletGroupData.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTaskManager.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTaskManagerThread.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTaskThread.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTCaseInsensitiveStringMap.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTCommonLLMessageQueue.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTCommonMessageQueue.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTCommonScrapHeapMessageQueue.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTempEffect.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTextureManager.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTFreeList.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTimer.hpp" />
+    <ClInclude Include="Include\Bethesda\BSTMessageQueue.hpp" />
+    <ClInclude Include="Include\Bethesda\BSValueNode.hpp" />
+    <ClInclude Include="Include\Bethesda\BSWin32TaskletData.hpp" />
+    <ClInclude Include="Include\Bethesda\BSWin32TaskletGroupData.hpp" />
+    <ClInclude Include="Include\Bethesda\CachedValuesOwner.hpp" />
+    <ClInclude Include="Include\Bethesda\Calendar.hpp" />
+    <ClInclude Include="Include\Bethesda\CFilter.hpp" />
+    <ClInclude Include="Include\Bethesda\Character.hpp" />
+    <ClInclude Include="Include\Bethesda\Clouds.hpp" />
+    <ClInclude Include="Include\Bethesda\ContainerItemExtra.hpp" />
+    <ClInclude Include="Include\Bethesda\ContainerObject.hpp" />
+    <ClInclude Include="Include\Bethesda\DetectionTaskData.hpp" />
+    <ClInclude Include="Include\Bethesda\EffectItem.hpp" />
+    <ClInclude Include="Include\Bethesda\EffectItemList.hpp" />
+    <ClInclude Include="Include\Bethesda\Explosion.hpp" />
+    <ClInclude Include="Include\Bethesda\ExtraAmmo.hpp" />
+    <ClInclude Include="Include\Bethesda\ExtraContainerChanges.hpp" />
+    <ClInclude Include="Include\Bethesda\ExtraCount.hpp" />
+    <ClInclude Include="Include\Bethesda\ExtraDataList.hpp" />
+    <ClInclude Include="Include\Bethesda\ExtraDroppedItemList.hpp" />
+    <ClInclude Include="Include\Bethesda\ExtraHealth.hpp" />
+    <ClInclude Include="Include\Bethesda\ExtraWeaponModFlags.hpp" />
+    <ClInclude Include="Include\Bethesda\FastModifierCollection.hpp" />
+    <ClInclude Include="Include\Bethesda\FOPipboyManager.hpp" />
+    <ClInclude Include="Include\Bethesda\FORenderedMenu.hpp" />
+    <ClInclude Include="Include\Bethesda\FurnitureMark.hpp" />
+    <ClInclude Include="Include\Bethesda\GridArray.hpp" />
+    <ClInclude Include="Include\Bethesda\GridCell.hpp" />
+    <ClInclude Include="Include\Bethesda\GridCellArray.hpp" />
+    <ClInclude Include="Include\Bethesda\IBSAnimNoteReceiver.hpp" />
+    <ClInclude Include="Include\Bethesda\ImageSpaceBaseData.hpp" />
+    <ClInclude Include="Include\Bethesda\ImageSpaceEffectDepthOfField.hpp" />
+    <ClInclude Include="Include\Bethesda\ImageSpaceManager.hpp" />
+    <ClInclude Include="Include\Bethesda\InterfacedClass.hpp" />
+    <ClInclude Include="Include\Bethesda\InterfaceManager.hpp" />
+    <ClInclude Include="Include\Bethesda\InventoryChanges.hpp" />
+    <ClInclude Include="Include\Bethesda\IOManager.hpp" />
+    <ClInclude Include="Include\Bethesda\IOTask.hpp" />
+    <ClInclude Include="Include\Bethesda\ItemChange.hpp" />
+    <ClInclude Include="Include\Bethesda\KFModel.hpp" />
+    <ClInclude Include="Include\Bethesda\LipTask.hpp" />
+    <ClInclude Include="Include\Bethesda\ListBox.hpp" />
+    <ClInclude Include="Include\Bethesda\LoadedFile.hpp" />
+    <ClInclude Include="Include\Bethesda\LockFreeMap.hpp" />
+    <ClInclude Include="Include\Bethesda\LockFreePriorityQueue.hpp" />
+    <ClInclude Include="Include\Bethesda\LockFreeQueue.hpp" />
+    <ClInclude Include="Include\Bethesda\MagicCaster.hpp" />
+    <ClInclude Include="Include\Bethesda\MagicHitEffect.hpp" />
+    <ClInclude Include="Include\Bethesda\MagicItem.hpp" />
+    <ClInclude Include="Include\Bethesda\MagicItemForm.hpp" />
+    <ClInclude Include="Include\Bethesda\MagicSystem.hpp" />
+    <ClInclude Include="Include\Bethesda\MagicTarget.hpp" />
+    <ClInclude Include="Include\Bethesda\MapMenu.hpp" />
+    <ClInclude Include="Include\Bethesda\MemoryContexts.hpp" />
+    <ClInclude Include="Include\Bethesda\MemoryManager.hpp" />
+    <ClInclude Include="Include\Bethesda\Menu.hpp" />
+    <ClInclude Include="Include\Bethesda\MenuConsole.hpp" />
+    <ClInclude Include="Include\Bethesda\MobileObject.hpp" />
+    <ClInclude Include="Include\Bethesda\MobileObjectMessage.hpp" />
+    <ClInclude Include="Include\Bethesda\MobileObjectTaskletData.hpp" />
+    <ClInclude Include="Include\Bethesda\Model.hpp" />
+    <ClInclude Include="Include\Bethesda\ModelLoader.hpp" />
+    <ClInclude Include="Include\Bethesda\Modifier.hpp" />
+    <ClInclude Include="Include\Bethesda\ModifierList.hpp" />
+    <ClInclude Include="Include\Bethesda\Moon.hpp" />
+    <ClInclude Include="Include\Bethesda\MovementTaskData.hpp" />
+    <ClInclude Include="Include\Bethesda\PackageList.hpp" />
+    <ClInclude Include="Include\Bethesda\PathingAvoidNode.hpp" />
+    <ClInclude Include="Include\Bethesda\PathingAvoidNodeArray.hpp" />
+    <ClInclude Include="Include\Bethesda\PathingLocation.hpp" />
+    <ClInclude Include="Include\Bethesda\PathingNode.hpp" />
+    <ClInclude Include="Include\Bethesda\PathingRequest.hpp" />
+    <ClInclude Include="Include\Bethesda\PathingSolution.hpp" />
+    <ClInclude Include="Include\Bethesda\PersistentPassList.hpp" />
+    <ClInclude Include="Include\Bethesda\Precipitation.hpp" />
+    <ClInclude Include="Include\Bethesda\Projectile.hpp" />
+    <ClInclude Include="Include\Bethesda\QueuedAnimIdle.hpp" />
+    <ClInclude Include="Include\Bethesda\QueuedFile.hpp" />
+    <ClInclude Include="Include\Bethesda\QueuedFileEntry.hpp" />
+    <ClInclude Include="Include\Bethesda\QueuedHelmet.hpp" />
+    <ClInclude Include="Include\Bethesda\QueuedKF.hpp" />
+    <ClInclude Include="Include\Bethesda\QueuedReference.hpp" />
+    <ClInclude Include="Include\Bethesda\QueuedReplacementKFList.hpp" />
+    <ClInclude Include="Include\Bethesda\QueuedTexture.hpp" />
+    <ClInclude Include="Include\Bethesda\ScrapHeap.hpp" />
+    <ClInclude Include="Include\Bethesda\Script.hpp" />
+    <ClInclude Include="Include\Bethesda\ShadowSceneLight.hpp" />
+    <ClInclude Include="Include\Bethesda\Sky.hpp" />
+    <ClInclude Include="Include\Bethesda\SkyObject.hpp" />
+    <ClInclude Include="Include\Bethesda\SkyShaderProperty.hpp" />
+    <ClInclude Include="Include\Bethesda\SpellItem.hpp" />
+    <ClInclude Include="Include\Bethesda\Stars.hpp" />
+    <ClInclude Include="Include\Bethesda\Sun.hpp" />
+    <ClInclude Include="Include\Bethesda\TaskQueueInterface.hpp" />
+    <ClInclude Include="Include\Bethesda\TeleportPath.hpp" />
+    <ClInclude Include="Include\Bethesda\TES.hpp" />
+    <ClInclude Include="Include\Bethesda\TESActorBase.hpp" />
+    <ClInclude Include="Include\Bethesda\TESActorBaseData.hpp" />
+    <ClInclude Include="Include\Bethesda\TESAIForm.hpp" />
+    <ClInclude Include="Include\Bethesda\TESAnimation.hpp" />
+    <ClInclude Include="Include\Bethesda\TESAttributes.hpp" />
+    <ClInclude Include="Include\Bethesda\TESContainer.hpp" />
+    <ClInclude Include="Include\Bethesda\TESDataHandler.hpp" />
+    <ClInclude Include="Include\Bethesda\TESGlobal.hpp" />
+    <ClInclude Include="Include\Bethesda\TESLevCharacter.hpp" />
+    <ClInclude Include="Include\Bethesda\TESLevCreature.hpp" />
+    <ClInclude Include="Include\Bethesda\TESLeveledList.hpp" />
+    <ClInclude Include="Include\Bethesda\TESLevItem.hpp" />
+    <ClInclude Include="Include\Bethesda\TESLevSpell.hpp" />
+    <ClInclude Include="Include\Bethesda\TESModel.hpp" />
+    <ClInclude Include="Include\Bethesda\TESModelTextureSwap.hpp" />
+    <ClInclude Include="Include\Bethesda\TESPackage.hpp" />
+    <ClInclude Include="Include\Bethesda\TESPackageData.hpp" />
+    <ClInclude Include="Include\Bethesda\TESQuest.hpp" />
+    <ClInclude Include="Include\Bethesda\TESRegion.hpp" />
+    <ClInclude Include="Include\Bethesda\TESRegionData.hpp" />
+    <ClInclude Include="Include\Bethesda\TESRegionList.hpp" />
+    <ClInclude Include="Include\Bethesda\TESRegionSound.hpp" />
+    <ClInclude Include="Include\Bethesda\TESRenderer.hpp" />
+    <ClInclude Include="Include\Bethesda\TESSpellList.hpp" />
+    <ClInclude Include="Include\Bethesda\TESTopic.hpp" />
+    <ClInclude Include="Include\Bethesda\TESTopicInfo.hpp" />
+    <ClInclude Include="Include\Bethesda\TESValueForm.hpp" />
+    <ClInclude Include="Include\Bethesda\TESWaterSystem.hpp" />
+    <ClInclude Include="Include\Bethesda\TESWeightForm.hpp" />
+    <ClInclude Include="Include\Bethesda\TileMenu.hpp" />
+    <ClInclude Include="Include\Bethesda\TileShader.hpp" />
+    <ClInclude Include="Include\Bethesda\TimeGlobal.hpp" />
+    <ClInclude Include="Include\Bethesda\VirtualPathingNode.hpp" />
+    <ClInclude Include="Include\Gamebryo\ImageSpaceEffectDepthOfField.hpp" />
+    <ClInclude Include="Include\Gamebryo\ImageSpaceManager.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiAlphaAccumulator.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiAnimationKey.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiAVObjectPalette.hpp" />
+    <ClInclude Include="Include\Bethesda\NiD3DShaderLibraryVersion.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiBackToFrontAccumulator.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDefaultAVObjectPalette.hpp" />
+    <ClInclude Include="Include\Bethesda\PackageUpdateTaskData.hpp" />
+    <ClInclude Include="Include\Bethesda\PlayerCharacter.hpp" />
+    <ClInclude Include="Include\Bethesda\ProcessLists.hpp" />
+    <ClInclude Include="Include\Bethesda\ShadowSceneNode.hpp" />
+    <ClInclude Include="Include\Bethesda\TESAnimGroup.hpp" />
+    <ClInclude Include="Include\Bethesda\TESAttackDamageForm.hpp" />
+    <ClInclude Include="Include\Bethesda\TESBoundAnimObject.hpp" />
+    <ClInclude Include="Include\Bethesda\TESBoundObject.hpp" />
+    <ClInclude Include="Include\Bethesda\TESChallenge.hpp" />
+    <ClInclude Include="Include\Bethesda\TESChildCell.hpp" />
+    <ClInclude Include="Include\Bethesda\TESCondition.hpp" />
+    <ClInclude Include="Include\Bethesda\TESDataHandler.h" />
+    <ClInclude Include="Include\Bethesda\TESDescription.hpp" />
+    <ClInclude Include="Include\Bethesda\TESEnchantableForm.hpp" />
+    <ClInclude Include="Include\Bethesda\TESFile.hpp" />
+    <ClInclude Include="Include\Bethesda\TESForm.hpp" />
+    <ClInclude Include="Include\Bethesda\TESFullName.hpp" />
+    <ClInclude Include="Include\Bethesda\TESHealthForm.hpp" />
+    <ClInclude Include="Include\Bethesda\TESIcon.hpp" />
+    <ClInclude Include="Include\Bethesda\TESMain.hpp" />
+    <ClInclude Include="Include\Bethesda\TESObject.hpp" />
+    <ClInclude Include="Include\Bethesda\TESObjectCELL.hpp" />
+    <ClInclude Include="Include\Bethesda\TESObjectREFR.hpp" />
+    <ClInclude Include="Include\Bethesda\TESObjectWEAP.hpp" />
+    <ClInclude Include="Include\Bethesda\TESScriptableForm.hpp" />
+    <ClInclude Include="Include\Bethesda\TESSound.hpp" />
+    <ClInclude Include="Include\Bethesda\TESSoundFile.hpp" />
+    <ClInclude Include="Include\Bethesda\TESTexture.hpp" />
+    <ClInclude Include="Include\Bethesda\TESWorldSpace.hpp" />
+    <ClInclude Include="Include\Bethesda\ThreadSafeStructures.hpp" />
+    <ClInclude Include="Include\Bethesda\ThreadSpecificInterfaceManager.hpp" />
+    <ClInclude Include="Include\Bethesda\Tile.hpp" />
+    <ClInclude Include="Include\Bethesda\TileImage.hpp" />
+    <ClInclude Include="Include\Bethesda\TileRect.hpp" />
+    <ClInclude Include="Include\Bethesda\TileText.hpp" />
+    <ClInclude Include="Include\Gamebryo\ImageSpaceEffect.hpp" />
+    <ClInclude Include="Include\Gamebryo\ImageSpaceEffectParam.hpp" />
+    <ClInclude Include="Include\Gamebryo\ImageSpaceShaderParam.hpp" />
+    <ClInclude Include="Include\Gamebryo\ImageSpaceTexture.hpp" />
+    <ClInclude Include="Include\Gamebryo\Ni2DBuffer.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiAccumulator.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiAdditionalGeometryData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiAllocator.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiAlphaProperty.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiAVObject.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiBillboardNode.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiBinaryStream.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiBound.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiCamera.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiCloningProcess.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiCollisionObject.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiColor.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiControllerManager.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiControllerSequence.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiCriticalSection.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiCullingProcess.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiCullingProperty.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DDefaultShader.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DPass.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DPixelShader.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DRenderState.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DRenderStateGroup.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DRSEntry.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DShader.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DShaderConstantMap.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DShaderDeclaration.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DShaderInterface.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DShaderLibraryVersion.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DShaderProgram.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DTextureStage.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DTextureStageGroup.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiD3DVertexShader.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDepthStencilBuffer.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDirectionalLight.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDX9MaterialManager.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDX9Renderer.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDX9RenderState.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDX9ShaderDeclaration.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDX9TextureData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDynamicEffect (1).hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDynamicEffect.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiDynamicEffectState.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiEulerRotKey.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiExtraData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiFile.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiFixedString.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiFloatKey.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiFogProperty.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiFrustum.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiFrustumPlanes.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiGeometry.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiGeometryBufferData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiGeometryData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiGeomMorpherController.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiGlobalStringTable.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiGPUProgram.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiInterpController.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiInterpolator.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiKeyBasedInterpolator.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiLight.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiMaterialProperty.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiMatrix3.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiMemManager.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiMemObject.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiMemory.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiMorphData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiNode.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiObject.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiObjectGroup.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiObjectNET.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPalette.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiParticleInfo.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiParticles.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiParticleSystem.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPersistentSrcTextureRendererData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPixelData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPixelFormat.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPlane.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPoint2.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPoint3.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPoint4.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPointLight.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPosKey.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiProperty.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPropertyState.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPSysEmitter.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPSysEmitterCtlr.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPSysModifier.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPSysModifierCtlr.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiPSysUpdateCtlr.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiQuaternion.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiQuatTransform.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiRect.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiRefObject.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiRenderedCubeMap.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiRenderedTexture.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiRenderer.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiRenderTargetGroup.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiRotKey.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiRTTI.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiScreenElements.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiSearchPath.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiShadeProperty.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiShader.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiShaderAttributeDesc.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiShaderConstantMap.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiShaderConstantMapEntry.hpp" />
+    <ClInclude Include="Include\Gamebryo\NIShaderDeclaration.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiShaderDescBase.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiSingleInterpController.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiSkinData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiSkinInstance.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiSkinPartition.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiSmartPointer.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiSourceTexture.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiStencilProperty.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiStream.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTAbstractPoolAllocator.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTArray.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTDefaultAllocator.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTexture.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTexturePalette.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTextureTransform.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTexturingProperty.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTFixedStringMap.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiThread.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiThreadProcedure.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTimeController.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTLargeArray.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTList.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTListBase.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTMallocInterface.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTMap.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTMapBase.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTNewInterface.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTPointerAllocator.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTPointerList.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTPointerListBase.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTPointerMap.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTransform (1).hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTransform.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTransformData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTransformInterpolator.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTriBasedGeom.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTriBasedGeomData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTriShape.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTriShapeData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTriStrips.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTriStripsData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTSet.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiTStringMap.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiUpdateData.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiVBBlock.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiVBChip.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiVBDynamicSet.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiVBSet.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiViewport.hpp" />
+    <ClInclude Include="Include\Gamebryo\NiVisibleArray.hpp" />
+    <ClInclude Include="Include\Gamebryo\SceneGraph.hpp" />
+    <ClInclude Include="Include\Havok\hkAabb.hpp" />
+    <ClInclude Include="Include\Havok\hkaBone.hpp" />
+    <ClInclude Include="Include\Havok\hkActionCinfo.hpp" />
+    <ClInclude Include="Include\Havok\hkaDetectRagdollPenetration.hpp" />
+    <ClInclude Include="Include\Havok\hkaPose.hpp" />
+    <ClInclude Include="Include\Havok\hkaRagdollRaycastInterface.hpp" />
+    <ClInclude Include="Include\Havok\hkaRaycastInterface.hpp" />
+    <ClInclude Include="Include\Havok\hkArray.hpp" />
+    <ClInclude Include="Include\Havok\hkaSkeleton.hpp" />
+    <ClInclude Include="Include\Havok\hkaSkeletonMapper.hpp" />
+    <ClInclude Include="Include\Havok\hkaSkeletonMapperData.hpp" />
+    <ClInclude Include="Include\Havok\hkaTwoJointsIkSolver.hpp" />
+    <ClInclude Include="Include\Havok\hkBaseObject.hpp" />
+    <ClInclude Include="Include\Havok\hkBaseSystem.hpp" />
+    <ClInclude Include="Include\Havok\hkConstraintCinfo.hpp" />
+    <ClInclude Include="Include\Havok\hkContactPoint.hpp" />
+    <ClInclude Include="Include\Havok\hkDiagonal.hpp" />
+    <ClInclude Include="Include\Havok\hkFreeList.hpp" />
+    <ClInclude Include="Include\Havok\hkFreeListAllocator.hpp" />
+    <ClInclude Include="Include\Havok\hkFreeListAllocatorServer.hpp" />
+    <ClInclude Include="Include\Havok\hkFreeListMemorySystem.hpp" />
+    <ClInclude Include="Include\Havok\hkInplaceArray.hpp" />
+    <ClInclude Include="Include\Havok\hkLargeBlockAllocator.hpp" />
+    <ClInclude Include="Include\Havok\hkMatrix3.hpp" />
+    <ClInclude Include="Include\Havok\hkMemoryAllocator.hpp" />
+    <ClInclude Include="Include\Havok\hkMemoryRouter.hpp" />
+    <ClInclude Include="Include\Havok\hkMemorySystem.hpp" />
+    <ClInclude Include="Include\Havok\hkMotionState.hpp" />
+    <ClInclude Include="Include\Havok\hkMultiThreadCheck.hpp" />
+    <ClInclude Include="Include\Havok\hkOrientHingedBodyActionCinfo.hpp" />
+    <ClInclude Include="Include\Havok\hkpAction.hpp" />
+    <ClInclude Include="Include\Havok\hkpAllCdPointCollector.hpp" />
+    <ClInclude Include="Include\Havok\hkpAllRayHitCollector.hpp" />
+    <ClInclude Include="Include\Havok\hkpBinaryAction.hpp" />
+    <ClInclude Include="Include\Havok\hkpBroadPhaseHandle.hpp" />
+    <ClInclude Include="Include\Havok\hkpCachingShapePhantom.hpp" />
+    <ClInclude Include="Include\Havok\hkpCdBody.hpp" />
+    <ClInclude Include="Include\Havok\hkpCdPoint.hpp" />
+    <ClInclude Include="Include\Havok\hkpCdPointCollector.hpp" />
+    <ClInclude Include="Include\Havok\hkpCharacterContext.hpp" />
+    <ClInclude Include="Include\Havok\hkpCharacterProxy.hpp" />
+    <ClInclude Include="Include\Havok\hkpCharacterProxyListener.hpp" />
+    <ClInclude Include="Include\Havok\hkpCharacterState.hpp" />
+    <ClInclude Include="Include\Havok\hkpClosestRayHitCollector.hpp" />
+    <ClInclude Include="Include\Havok\hkpCollidable.hpp" />
+    <ClInclude Include="Include\Havok\hkpCollisionAgent.hpp" />
+    <ClInclude Include="Include\Havok\hkpConstraintData.hpp" />
+    <ClInclude Include="Include\Havok\hkpConstraintInfo.hpp" />
+    <ClInclude Include="Include\Havok\hkpConstraintInstance.hpp" />
+    <ClInclude Include="Include\Havok\hkpContactMgr.hpp" />
+    <ClInclude Include="Include\Havok\hkpEntity.hpp" />
+    <ClInclude Include="Include\Havok\hkpEntityListener.hpp" />
+    <ClInclude Include="Include\Havok\hkpFixedBufferCdPointCollector.hpp" />
+    <ClInclude Include="Include\Havok\hkpKeyframedRigidMotion.hpp" />
+    <ClInclude Include="Include\Havok\hkpLinkedCollidable.hpp" />
+    <ClInclude Include="Include\Havok\hkpMaterial.hpp" />
+    <ClInclude Include="Include\Havok\hkpMaxSizeMotion.hpp" />
+    <ClInclude Include="Include\Havok\hkpMoppCode.hpp" />
+    <ClInclude Include="Include\Havok\hkpMotion.hpp" />
+    <ClInclude Include="Include\Havok\hkpPhantom.hpp" />
+    <ClInclude Include="Include\Havok\hkpPhantomListener.hpp" />
+    <ClInclude Include="Include\Havok\hkpRayHitCollector.hpp" />
+    <ClInclude Include="Include\Havok\hkpRigidBody.hpp" />
+    <ClInclude Include="Include\Havok\hkpRigidBodyCinfo.hpp" />
+    <ClInclude Include="Include\Havok\hkpRootCdPoint.hpp" />
+    <ClInclude Include="Include\Havok\hkpShape.hpp" />
+    <ClInclude Include="Include\Havok\hkpShapePhantom.hpp" />
+    <ClInclude Include="Include\Havok\hkpShapeRayCastCollectorOutput.hpp" />
+    <ClInclude Include="Include\Havok\hkpShapeRayCastOutput.hpp" />
+    <ClInclude Include="Include\Havok\hkpSimulation.hpp" />
+    <ClInclude Include="Include\Havok\hkpSurfaceInfo.hpp" />
+    <ClInclude Include="Include\Havok\hkpTypedBroadPhaseHandle.hpp" />
+    <ClInclude Include="Include\Havok\hkpUnaryAction.hpp" />
+    <ClInclude Include="Include\Havok\hkpWorldObject.hpp" />
+    <ClInclude Include="Include\Havok\hkpWorldRayCastInput.hpp" />
+    <ClInclude Include="Include\Havok\hkpWorldRayCastOutput.hpp" />
+    <ClInclude Include="Include\Havok\hkQsTransform.hpp" />
+    <ClInclude Include="Include\Havok\hkQuaternion.hpp" />
+    <ClInclude Include="Include\Havok\hkReferencedObject.hpp" />
+    <ClInclude Include="Include\Havok\hkRotation.hpp" />
+    <ClInclude Include="Include\Havok\hkSerializableCinfo.hpp" />
+    <ClInclude Include="Include\Havok\hkSimpleProperty.hpp" />
+    <ClInclude Include="Include\Havok\hkSimplePropertyValue.hpp" />
+    <ClInclude Include="Include\Havok\hkSmallArray.hpp" />
+    <ClInclude Include="Include\Havok\hkStackMemory.hpp" />
+    <ClInclude Include="Include\Havok\hkStepInfo.hpp" />
+    <ClInclude Include="Include\Havok\hkStringPtr.hpp" />
+    <ClInclude Include="Include\Havok\hkSweptTransform.hpp" />
+    <ClInclude Include="Include\Havok\hkTransform.hpp" />
+    <ClInclude Include="Include\Havok\hkUnaryActionCinfo.hpp" />
+    <ClInclude Include="Include\Havok\hkVector4.hpp" />
+    <ClInclude Include="Include\Prefix.h" />
+    <ClInclude Include="Include\Utils\Defines.h" />
+    <ClInclude Include="Include\Utils\GameRTTI.h" />
+    <ClInclude Include="Include\Utils\IConsole.h" />
+    <ClInclude Include="Include\Utils\IDebugLog.h" />
+    <ClInclude Include="Include\Utils\IErrors.h" />
+    <ClInclude Include="Include\Utils\ITypes.h" />
+    <ClInclude Include="Include\Utils\Memory.h" />
+    <ClInclude Include="Include\Utils\SafeWrite.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Include\Bethesda\AITimer.cpp" />
+    <ClCompile Include="Include\Bethesda\AutoMemContext.cpp" />
+    <ClCompile Include="Include\Bethesda\BGSLoadGameBuffer.cpp" />
+    <ClCompile Include="Include\Bethesda\BGSNumericIDIndex.cpp" />
+    <ClCompile Include="Include\Bethesda\BGSSaveGameBuffer.cpp" />
+    <ClCompile Include="Include\Bethesda\BGSSaveLoadBuffer.cpp" />
+    <ClCompile Include="Include\Bethesda\BGSSaveLoadFormIDMap.cpp" />
+    <ClCompile Include="Include\Bethesda\BGSSaveLoadFormInfo.cpp" />
+    <ClCompile Include="Include\Bethesda\BGSSaveLoadGame.cpp" />
+    <ClCompile Include="Include\Bethesda\bhkPickData.cpp" />
+    <ClCompile Include="Include\Bethesda\bhkUtilFunctions.cpp" />
+    <ClCompile Include="Include\Bethesda\BSCompoundFrustum.cpp" />
+    <ClCompile Include="Include\Bethesda\BSCullingProcess.cpp" />
+    <ClCompile Include="Include\Bethesda\BSGraphics.cpp" />
+    <ClCompile Include="Include\Bethesda\BSInputManager.cpp" />
+    <ClCompile Include="Include\Bethesda\BSMemory.cpp" />
+    <ClCompile Include="Include\Bethesda\BSPackedTask.cpp" />
+    <ClCompile Include="Include\Bethesda\BSPackedTaskQueue.cpp" />
+    <ClCompile Include="Include\Bethesda\BSRenderedTexture.cpp" />
+    <ClCompile Include="Include\Bethesda\BSRenderState.cpp" />
+    <ClCompile Include="Include\Bethesda\BSSemaphore.cpp" />
+    <ClCompile Include="Include\Bethesda\BSShaderUtil.cpp" />
+    <ClCompile Include="Include\Bethesda\BSSpinLock.cpp" />
+    <ClCompile Include="Include\Bethesda\BSStream.cpp" />
+    <ClCompile Include="Include\Bethesda\BSTask.cpp" />
+    <ClCompile Include="Include\Bethesda\Calendar.cpp" />
+    <ClCompile Include="Include\Bethesda\ContainerItemExtra.cpp" />
+    <ClCompile Include="Include\Bethesda\InterfaceManager.cpp" />
+    <ClCompile Include="Include\Bethesda\InventoryChanges.cpp" />
+    <ClCompile Include="Include\Bethesda\IOTask.cpp" />
+    <ClCompile Include="Include\Bethesda\ItemChange.cpp" />
+    <ClCompile Include="Include\Bethesda\MemoryManager.cpp" />
+    <ClCompile Include="Include\Bethesda\MenuConsole.cpp" />
+    <ClCompile Include="Include\Bethesda\MobileObject.cpp" />
+    <ClCompile Include="Include\Bethesda\ModelLoader.cpp" />
+    <ClCompile Include="Include\Bethesda\PlayerCharacter.cpp" />
+    <ClCompile Include="Include\Bethesda\TaskQueueInterface.cpp" />
+    <ClCompile Include="Include\Bethesda\TES.cpp" />
+    <ClCompile Include="Include\Bethesda\TESContainer.cpp" />
+    <ClCompile Include="Include\Bethesda\TESLeveledList.cpp" />
+    <ClCompile Include="Include\Bethesda\TESObjectREFR.cpp" />
+    <ClCompile Include="Include\Bethesda\Tile.cpp" />
+    <ClCompile Include="Include\Gamebryo\ImageSpaceEffectParam.cpp" />
+    <ClCompile Include="Include\Gamebryo\ImageSpaceManager.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiAVObject.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiBillboardNode.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiBinaryStream.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiCamera.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiCloningProcess.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiControllerManager.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiControllerSequence.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiCullingProcess.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiDX9Renderer.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiFixedString.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiGlobalStringTable.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiKeyBasedInterpolator.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiLight.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiMatrix3.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiMemManager.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiMemObject.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiMemory.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiNode.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiObject.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiObjectNET.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiPoint3.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiPoint4.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiPropertyState.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiRenderer.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiStream.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiTimeController.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiTransform.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiTransformData.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiTransformInterpolator.cpp" />
+    <ClCompile Include="Include\Gamebryo\NiUpdateData.cpp" />
+    <ClCompile Include="Include\Havok\hkpPhantom.cpp" />
+    <ClCompile Include="Include\Havok\hkpRigidBody.cpp" />
+    <ClCompile Include="Include\Havok\hkVector4.cpp" />
+    <ClCompile Include="Include\Utils\IDebugLog.cpp" />
+    <ClCompile Include="Include\Utils\SafeWrite.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include=".editorconfig" />
+    <None Include="packages.config" />
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>15.0</VCProjectVersion>
+    <ProjectGuid>{FDFF5558-96EF-47ED-932D-ECCEEC5A58DE}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>commonlib_nv</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <LinkIncremental>true</LinkIncremental>
+    <IncludePath>$(ProjectDir)Include\Bethesda;$(ProjectDir)Include\Gamebryo;$(ProjectDir)Include;$(ProjectDir)Include\Havok;$(ProjectDir)Include\Utils;$(DXSDK_DIR)Include;$(IncludePath)</IncludePath>
+    <OutDir>$(ProjectDir)$(Configuration)\</OutDir>
+    <TargetName>$(ProjectName)</TargetName>
+    <LibraryPath>$(DXSDK_DIR)Lib\x86</LibraryPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LinkIncremental>true</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <LinkIncremental>false</LinkIncremental>
+    <IncludePath>$(ProjectDir)Include\Bethesda;$(ProjectDir)Include\Gamebryo;$(ProjectDir)Include;$(ProjectDir)Include\Havok;$(ProjectDir)Include\Utils;$(DXSDK_DIR)Include;$(IncludePath)</IncludePath>
+    <OutDir>$(ProjectDir)$(Configuration)\</OutDir>
+    <TargetName>$(ProjectName)</TargetName>
+    <LibraryPath>$(DXSDK_DIR)Lib\x86</LibraryPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NOMINMAX; WIN32;_WINDOWS;_DEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ForcedIncludeFiles>ITypes.h;Memory.h;IErrors.h;Prefix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DisableSpecificWarnings>4244;</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NOMINMAX; WIN32;NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ForcedIncludeFiles>ITypes.h;Memory.h;IErrors.h;Prefix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <DisableSpecificWarnings>4244;</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="..\tnvse\packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets" Condition="Exists('..\tnvse\packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets')" />
+  </ImportGroup>
+  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
+    <PropertyGroup>
+      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
+    </PropertyGroup>
+    <Error Condition="!Exists('..\tnvse\packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\tnvse\packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets'))" />
+  </Target>
+</Project>

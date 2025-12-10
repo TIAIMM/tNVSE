@@ -1,0 +1,221 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="nvse">
+      <UniqueIdentifier>{92a4f350-f2ec-4fca-bdd3-927732d91b34}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="functions">
+      <UniqueIdentifier>{010e4101-a209-4fed-af9f-5ffa21a85c34}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="lua">
+      <UniqueIdentifier>{06bac0db-4e84-4961-87ef-b698798376fd}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="lua\events">
+      <UniqueIdentifier>{bb53cdb1-59ec-46fa-8907-b05827198f13}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="lua\lib">
+      <UniqueIdentifier>{369b0fac-11af-4011-b354-3c0b7e224e8c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="lua\types">
+      <UniqueIdentifier>{3d0579cc-80dc-4927-a055-dfb0dc0c229b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="lua\interfaces">
+      <UniqueIdentifier>{cc81bb08-81a9-475c-80e9-828416c5ca71}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="lua\types\util">
+      <UniqueIdentifier>{e3eff00a-5d03-479b-9f2c-a031fdcf144f}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\nvse\nvse\GameAPI.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameBSExtraData.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameData.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameExtraData.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameForms.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameObjects.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameOSDepend.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameRTTI.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameScript.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameSettings.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameTasks.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameTiles.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameTypes.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\SafeWrite.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\Utilities.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="dllmain.c" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="..\nvse\nvse\containers.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\utility.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\printf.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\GameProcess.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="..\nvse\nvse\NiTypes.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
+    <ClCompile Include="NVLuaLib.cpp">
+      <Filter>lua\lib</Filter>
+    </ClCompile>
+    <ClCompile Include="NVLuaEventManager.cpp">
+      <Filter>lua\events</Filter>
+    </ClCompile>
+    <ClCompile Include="LuaPlayer.cpp">
+      <Filter>lua\types</Filter>
+    </ClCompile>
+    <ClCompile Include="LuaActor.cpp">
+      <Filter>lua\types</Filter>
+    </ClCompile>
+    <ClCompile Include="Game.cpp">
+      <Filter>lua\interfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="Input.cpp">
+      <Filter>lua\interfaces</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\nvse\nvse\GameAPI.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameBSExtraData.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameData.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameEffects.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameExtraData.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameForms.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameObjects.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameOSDepend.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameRTTI.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameSettings.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameTasks.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameTiles.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameTypes.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\SafeWrite.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\Utilities.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\containers.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\utility.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\CommandTable.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="fn_intro_to_script_functions.h">
+      <Filter>functions</Filter>
+    </ClInclude>
+    <ClInclude Include="fn_typed_functions.h">
+      <Filter>functions</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameScript.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameProcess.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\PluginAPI.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="..\nvse\nvse\GameUI.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="NVLuaLib.h">
+      <Filter>lua\lib</Filter>
+    </ClInclude>
+    <ClInclude Include="NVLua.h">
+      <Filter>lua</Filter>
+    </ClInclude>
+    <ClInclude Include="mainLoop.h">
+      <Filter>lua\events</Filter>
+    </ClInclude>
+    <ClInclude Include="NVLuaEventManager.h">
+      <Filter>lua\events</Filter>
+    </ClInclude>
+    <ClInclude Include="LuaPlayer.h">
+      <Filter>lua\types</Filter>
+    </ClInclude>
+    <ClInclude Include="LuaTypes.h">
+      <Filter>lua\types</Filter>
+    </ClInclude>
+    <ClInclude Include="LuaActor.h">
+      <Filter>lua\types</Filter>
+    </ClInclude>
+    <ClInclude Include="LuaInterfaces.h">
+      <Filter>lua\interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="Game.h">
+      <Filter>lua\interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="Input.h">
+      <Filter>lua\interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="Vec3.h">
+      <Filter>lua\types\util</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="exports.def" />
+  </ItemGroup>
+</Project>

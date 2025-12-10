@@ -1,0 +1,76 @@
+#pragma once
+
+struct BSPackedTask {
+	enum QueuedTaskID {
+		TASK_EXAMPLE_PRINT_FLOAT			= 0,
+		TASK_EXAMPLE_PRINT_INT				= 1,
+		TASK_SKY_EMITTANCE_UPDATE			= 2,
+		TASK_UNK_3							= 3,
+		TASK_CELL_TRANSFORMS_UPDATE			= 4,
+		TASK_UNK_5							= 5,
+		TASK_GEOMORPH_UPDATE				= 6,
+		TASK_ATTACH_NODE					= 7,
+		TASK_DETACH_NODE					= 8,
+		TASK_CLEAR_LIGHTS					= 9,
+		TASK_UPDATE_3D						= 10,
+		TASK_ACTOR_CREATEBLOOD				= 11,
+		TASK_DAMAGE_OBJECT					= 12,
+		TASK_UPDATE_DESTRUCTIBLEOBJECT		= 13,
+		TASK_KILL_ACTOR						= 14,
+		TASK_ACTOR_MELEEATTACK				= 15,
+		TASK_ACTOR_PUSHAWAY					= 16,
+		TASK_ACTOR_HITME					= 17,
+		TASK_MHE_INSTANTIATE_HIT_EFFECTS	= 18,
+		TASK_3D_HAVOKADD					= 19,
+		TASK_3D_HAVOKREMOVE					= 20,
+		TASK_ATTACH_WEAPON					= 21,
+		TASK_REMOVE_WEAPON					= 22,
+		TASK_SET_3D_NULL					= 23,
+		TASK_ACTOR_DISMEMBER				= 24,
+		TASK_WATER_25						= 25,
+		TASK_WATER_26						= 26,
+		TASK_ADD_OBSTACLE_DOOR_OPEN			= 27,
+		TASK_ADD_OBSTACLE_DOOR_CLOSE		= 28,
+		TASK_ACTOR_UPDATE_APPEARANCE		= 29,
+		TASK_TOGGLE_DOOR					= 30,
+		TASK_MOVE_TO_MARKER					= 31,
+		TASK_HANDLE_FIRED_WEAPON			= 32,
+		TASK_ACTOR_SETPOSITION				= 33,
+		TASK_HAVOK_SET_MOTION				= 34,
+		TASK_UNK_35							= 35,
+		TASK_WATER_SPLASH_EFFECTS			= 36,
+		TASK_WATER_ADD_RIPPLE				= 37,
+		TASK_ACTOR_TRIGGERPAIN				= 38,
+		TASK_ACTOR_APPLYCRITSTAGE			= 39,
+		TASK_UNK_40							= 40,
+		TASK_UNK_41							= 41,
+		TASK_UNLOAD_3D						= 42,
+		TASK_UNK_43							= 43,
+		TASK_HAVOK_UPDATEPOS				= 44,
+		TASK_HAVOKINIT						= 45,
+		TASK_DESTROY_EFFECT					= 46,
+		TASK_REMOVE_NODE					= 47,
+		TASK_REMOVE_PICKEDUP_OBJECT			= 48,
+		TASK_UNK_49							= 49,
+	};
+
+	union Data {
+		bool	bData;
+		char	cDataA[4];
+		UInt16	usDataA[2];
+		SInt32	iData;
+		float	fData;
+		void*	pData;
+		UInt32	uiData;
+	};
+
+	BSPackedTask();
+	~BSPackedTask();
+
+	Data Data[8];
+
+	const char* GetTaskName() const;
+	void SetTaskThreadName(HANDLE apThread) const;
+};
+
+ASSERT_SIZE(BSPackedTask, 0x20);
