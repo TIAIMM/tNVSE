@@ -2,6 +2,7 @@
 #include <cstring>
 #include <cstdint>
 #include <limits>
+#include <unordered_map>
 #include "BSFile.hpp"
 #include "MemoryManager.hpp"
 #include "uidecode.h"
@@ -24,7 +25,7 @@ namespace fonthook {
         return CdeclCall<SInt32>(0xEC9130, a1, a2);
     }
 
-    void* __cdecl AppendToListTail(void* ListNode, void * ListNode2) {
+    void* __cdecl AppendToListTail(void* ListNode, void* ListNode2) {
         return ThisStdCall<void*>(0xAF25B0, ListNode, ListNode2);
     }
 
@@ -216,8 +217,16 @@ namespace fonthook {
     NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
 
     MemoryManager* MemoryManagerSingleton = reinterpret_cast<MemoryManager*>(0x11F6238);
-    
+
     MemoryManager* MemoryManager_s_Instance = reinterpret_cast<MemoryManager*>(0x11F6238);
+
+    static std::unordered_map<const char*, std::unordered_map<UInt32, FontLetter>> gExtraFontLetters;
+
+    static HMODULE hJIP = 0;
+
+    static size_t __fastcall GetJIPAddress(size_t aiAddress) {
+        return reinterpret_cast<size_t>(hJIP) + aiAddress - 0x10000000;
+    }
 
     class FontInfoEx : public FontInfo {
     public:
@@ -785,7 +794,7 @@ namespace fonthook {
     };
 
     NiPixelData* NiPixelDataBuild2(
-		NiPixelData* source,
+        NiPixelData* source,
         unsigned int uiWidth,
         unsigned int uiHeight,
         const NiPixelFormat* kFormat,
@@ -826,6 +835,21 @@ namespace fonthook {
 
     class FontEx : public Font {
     public:
+        Font* FontCreate(int iFontNum, char* apFilename, bool abLoad) {
+            gLog.FormattedMessage("\nCall Font::Font");
+            gLog.FormattedMessage("iFontNum: %u", iFontNum);
+            gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
+            Font* ret = ThisStdCall<Font*>(
+                0xA12020,
+                this,
+                iFontNum,
+                apFilename,
+                abLoad);
+            gLog.FormattedMessage("Font::Font End\n");
+            //gLog.FormattedMessage("ret: %s", ret);
+            return ret;
+        }
+
         void Load()
         {
             NiTexturingProperty* NiTexturingProperty_4; // [esp+10h] [ebp-23Ch]
@@ -943,6 +967,30 @@ namespace fonthook {
                     v23 = BSFile_1->m_pfnRead(BSFile_1, pFontData_1, v21, v25, 1u);
                     BSFile_1->m_uiAbsoluteCurrentPos += v23;
                     v24 = v23;
+
+                    unsigned int uiActualSize = BSFile_1->GetSize();
+                    if (uiActualSize > 0x3928) {
+                        const char* fontKey = this->pFontFile ? this->pFontFile : "";
+                        auto& extraMap = gExtraFontLetters[fontKey];
+                        unsigned int hh, ll, code;
+                        for (hh = 0x81; hh <= 0xFE; ++hh) {
+                            for (ll = 0x40; ll <= 0xFE; ++ll) {
+                                code = (hh << 8) | ll;
+                                FontLetter letter{};
+                                UInt32 r2 = BSFile_1->m_pfnRead(BSFile_1, &letter, sizeof(letter), v25, 1u);
+                                BSFile_1->m_uiAbsoluteCurrentPos += r2;
+                                if (r2 != sizeof(letter)) break;
+                                extraMap[code] = letter;
+                            }
+                        }
+
+                        if (!extraMap.empty()) {
+                            gLog.FormattedMessage("Loaded %u extra FontLetter records for %s",
+                                (unsigned)extraMap.size(),
+                                fontKey);
+                        }
+                    }
+
                     NiFile_1 = BSFile_1;
                     //BSFile_2 = BSFile_1;
                     gLog.FormattedMessage("Delete BSFile_2");
@@ -1057,7 +1105,7 @@ namespace fonthook {
                         arPrefs_.m_eMipMapped = static_cast<NiTexture::FormatPrefs::MipFlag>(0x2);
                         v36 = (NiPixelData*)NiMemObject::operator new(0x74);
                         stackCookie = (stackCookie & 0xFFFFFF00) | 1;
-                        if (v36){
+                        if (v36) {
                             gLog.FormattedMessage("Instancing NiPixelData");
                             NiPixelData_1 = NiPixelDataBuild2(
                                 v36,
@@ -1150,17 +1198,17 @@ namespace fonthook {
         }
     };
 
-	class FontManagerEx : public FontManager {
-	public:
+    class FontManagerEx : public FontManager {
+    public:
         inline float GetHanziWidth(uint16_t gbChar, FontInfo::GlyphInfo* fontCharMetrics) {
-			// Check if the character is a valid GB2312 character
+            // Check if the character is a valid GB2312 character
             if (fontCharMetrics[gbChar].width > 0) {
                 return fontCharMetrics[gbChar].kerningLeft
                     + fontCharMetrics[gbChar].width
                     + fontCharMetrics[gbChar].kerningRight;
             }
 
-			// default space character width if the character is not found
+            // default space character width if the character is not found
             return (fontCharMetrics[' '].kerningLeft
                 + fontCharMetrics[' '].width
                 + fontCharMetrics[' '].kerningRight);
@@ -1173,7 +1221,7 @@ namespace fonthook {
         }
 
         //	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
-		NiVector3* __thiscall GetStringDimensionsEx(NiVector3* outDimensions, const char* srcString, uint32_t fontID, float maxWrapWidth, uint32_t startCharIndex) {
+        NiVector3* __thiscall GetStringDimensionsEx(NiVector3* outDimensions, const char* srcString, uint32_t fontID, float maxWrapWidth, uint32_t startCharIndex) {
             double tabStopWidth; // st7
             float finalMaxLineWidth; // [esp+10h] [ebp-4Ch]
             float adjustedWrapWidth; // [esp+14h] [ebp-48h]
@@ -1299,8 +1347,8 @@ namespace fonthook {
                 *outDimensions = StringDefaulDimensions;
                 return outDimensions;
             }
-		}
-	};
+        }
+    };
 
     class FontTextReplacedEx : public FontTextReplaced {
     public:
@@ -1311,9 +1359,9 @@ namespace fonthook {
         }
     };
 
-	void InitVertSpacingHook() {
+    void InitVertSpacingHook() {
         WriteRelJump(0xA1B3A0, &VertSpacingAdjust);
-	}
+    }
 
     void InitFontHook() {
         // FontManager::GetStringDimensions
@@ -1322,21 +1370,39 @@ namespace fonthook {
         // FontInfo::CalculateTextLayout
         //WriteRelJumpEx(0xA12FB0, &FontInfoEx::CalculateTextLayoutEx);
         // 
+        // Font::Font
+        //1
+        //WriteRelCallEx(0xA1695A, &FontEx::FontCreate);
+        //2
+        //WriteRelCallEx(0xA169C7, &FontEx::FontCreate);
+        //3
+        //WriteRelCallEx(0xA16A35, &FontEx::FontCreate);
+        //4
+        //WriteRelCallEx(0xA16AA3, &FontEx::FontCreate);
+        //5
+        //WriteRelCallEx(0xA16B11, &FontEx::FontCreate);
+        //6
+        //WriteRelCallEx(0xA16B7F, &FontEx::FontCreate);
+        //7
+        //WriteRelCallEx(0xA16BED, &FontEx::FontCreate);
+        //8
+        //WriteRelCallEx(0xA16C5B, &FontEx::FontCreate);
+        // 
         // Font::Load
         //WriteRelCallEx(0xA1219D, &FontInfoEx::LoadFontDataEx);
         WriteRelCallEx(0xA1219D, &FontEx::Load);
         // 
         // FileFinder::GetFile
-        WriteRelCall(0xA15A86, &FileFinder_GetFile);
+        //WriteRelCall(0xA15A86, &FileFinder_GetFile);
         // 
         // NiSourceTexture::Create
-        WriteRelCall(0xA6AC12, &NiSourceTextureCreate);
+        //WriteRelCall(0xA6AC12, &NiSourceTextureCreate);
         // 
         // NiGlobalStringTable::AddString
-        WriteRelCall(0xA5FF86, &NiGlobalStringTableAddString);
+        //WriteRelCall(0xA5FF86, &NiGlobalStringTableAddString);
         // 
         // NiSourceTexture::SetFilename
-        WriteRelCallEx(0xA5FF9B, &NiSourceTextureEx::SetFilename);
+        //WriteRelCallEx(0xA5FF9B, &NiSourceTextureEx::SetFilename);
         // 
         // FontInfo::GenerateTextGeometry
         //WriteRelCallEx(0xA22211, &FontInfoEx::GenerateTextGeometryEx);
@@ -1357,5 +1423,46 @@ namespace fonthook {
 
         //NiPixelData::NiPixelData
         //WriteRelCallEx(0xA15C03, &NiPixelDataEx::NiPixelDataBuild);
+    }
+
+    void* __fastcall FontCreateForJIP(void* apThis, void*, int iFontNum, char* apFilename, bool abLoad) {
+        gLog.FormattedMessage("\nCall Font::Font");
+        gLog.FormattedMessage("iFontNum: %u", iFontNum);
+        gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
+            
+        return ThisStdCall<void*>(
+            0xA12020,
+            apThis,
+            iFontNum,
+            apFilename,
+            abLoad);
+    }
+
+    void InitJIPHooks() {
+        hJIP = GetModuleHandle("jip_nvse.dll");
+        if (!hJIP) {
+            gLog.FormattedMessage("JIP not find");
+            //1
+            WriteRelCallEx(0xA1695A, &FontEx::FontCreate);
+            //2
+            WriteRelCallEx(0xA169C7, &FontEx::FontCreate);
+            //3
+            WriteRelCallEx(0xA16A35, &FontEx::FontCreate);
+            //4
+            WriteRelCallEx(0xA16AA3, &FontEx::FontCreate);
+            //5
+            WriteRelCallEx(0xA16B11, &FontEx::FontCreate);
+            //6
+            WriteRelCallEx(0xA16B7F, &FontEx::FontCreate);
+            //7
+            WriteRelCallEx(0xA16BED, &FontEx::FontCreate);
+            //8
+            WriteRelCallEx(0xA16C5B, &FontEx::FontCreate);
+            return;
+        }
+        gLog.FormattedMessage("hook JIP Font::Font");
+        SafeWrite32(GetJIPAddress(0x10011A3E + 1), uint32_t(FontCreateForJIP));
+        SafeWrite32(GetJIPAddress(0x10011AA9 + 1), uint32_t(FontCreateForJIP));
+        SafeWrite32(GetJIPAddress(0x1003943F + 1), uint32_t(FontCreateForJIP));
     }
 }
