@@ -24,14 +24,6 @@ namespace fonthook {
         return CdeclCall<SInt32>(0xEC9130, a1, a2);
     }
 
-    BSFile* __cdecl LoadFile(const char* filePath, SInt32 loadMode, UInt32 allocFlags, SInt32 openMode) {
-        return CdeclCall<BSFile*>(0xAFDF20, filePath, loadMode, allocFlags, openMode);
-    }
-
-    BSFile* __cdecl FileFinder_GetFile(const char* apName, SInt32 aeMode, UInt32 aiSize, SInt32 aiArchiveType) {
-        return CdeclCall<BSFile*>(0xAFDF20, apName, aeMode, aiSize, aiArchiveType);
-    }
-
     void* __cdecl AppendToListTail(void* ListNode, void * ListNode2) {
         return ThisStdCall<void*>(0xAF25B0, ListNode, ListNode2);
     }
@@ -88,6 +80,137 @@ namespace fonthook {
         void** vtable = *(void***)fntFileHandle;
         GetFileSizeFunc func = (GetFileSizeFunc)vtable[10];
         return func(fntFileHandle);
+    }
+
+    NiSourceTexture* NiSourceTextureCreate(
+        NiPixelData* pkPixelData,
+        const char* apName,
+        NiTexture::FormatPrefs* kPrefs
+    ) {
+        gLog.FormattedMessage("\nCall NiSourceTexture::Create");
+        gLog.FormattedMessage("apName: %s", apName);
+        NiSourceTexture* ret = CdeclCall<NiSourceTexture*>(
+            0xA5FF10,
+            pkPixelData,
+            apName,
+            kPrefs);
+        gLog.FormattedMessage("NiSourceTexture::Create End\n");
+        return ret;
+    }
+
+    char* NiGlobalStringTableAddString(const char* pcString) {
+        gLog.FormattedMessage("\nCall NiGlobalStringTable::AddString");
+        gLog.FormattedMessage("pcString: %s", pcString);
+        char* ret = CdeclCall<char*>(
+            0xA5B690,
+            pcString);
+        gLog.FormattedMessage("NiGlobalStringTable::AddString End\n");
+        return ret;
+    }
+
+    BSFile* __cdecl LoadFile(const char* filePath, SInt32 loadMode, UInt32 allocFlags, SInt32 openMode) {
+        return CdeclCall<BSFile*>(0xAFDF20, filePath, loadMode, allocFlags, openMode);
+    }
+
+    BSFile* FileFinder_GetFile(
+        const char* apName,
+        NiFile::OpenMode aeMode,
+        unsigned int aiSize,
+        unsigned int aiArchiveType
+    ) {
+        gLog.FormattedMessage("\nCall FileFinder::GetFile");
+        gLog.FormattedMessage("apName: %s", apName);
+        gLog.FormattedMessage("aiSize: %u", aiSize);
+        BSFile* ret = CdeclCall<BSFile*>(0xAFDF20, apName, aeMode, aiSize, aiArchiveType);
+        gLog.FormattedMessage("FileFinder::GetFile End\n");
+        return ret;
+    }
+
+    FontInfo::GlyphInfo* RenderCharacterGlyphEx1(
+        FontInfo::GlyphInfo* glyphInfo,
+        UInt32 aiVert,
+        NiTriShape* apShape,
+        float* axPos,
+        const NiColorA* apColor
+    ) {
+        gLog.FormattedMessage("From location 1");
+        gLog.FormattedMessage("iTextureIndex = %f", glyphInfo->unk00);
+        gLog.FormattedMessage("UV topLeft = %f", glyphInfo->topLeft);
+        gLog.FormattedMessage("UV topRight = %f", glyphInfo->topRight);
+        gLog.FormattedMessage("UV bottomLeft = %f", glyphInfo->bottomLeft);
+        gLog.FormattedMessage("UV bottomRightt = %f", glyphInfo->bottomRight);
+        gLog.FormattedMessage("fWidth = %f", glyphInfo->width);
+        gLog.FormattedMessage("fHeight = %f", glyphInfo->height);
+        gLog.FormattedMessage("fLeadingEdge = %f", glyphInfo->kerningLeft);
+        gLog.FormattedMessage("fSpacing = %f", glyphInfo->kerningRight);
+        gLog.FormattedMessage("fTopEdge = %f", glyphInfo->ascent);
+
+        FontInfo::GlyphInfo* ret = StdCall<FontInfo::GlyphInfo*>(
+            0xA142D0,
+            glyphInfo,
+            aiVert,
+            apShape,
+            axPos,
+            apColor);
+        return ret;
+    }
+
+    FontInfo::GlyphInfo* RenderCharacterGlyphEx2(
+        FontInfo::GlyphInfo* glyphInfo,
+        UInt32 aiVert,
+        NiTriShape* apShape,
+        float* axPos,
+        const NiColorA* apColor
+    ) {
+        gLog.FormattedMessage("From location 2");
+        gLog.FormattedMessage("iTextureIndex = %f", glyphInfo->unk00);
+        gLog.FormattedMessage("UV topLeft = %f", glyphInfo->topLeft);
+        gLog.FormattedMessage("UV topRight = %f", glyphInfo->topRight);
+        gLog.FormattedMessage("UV bottomLeft = %f", glyphInfo->bottomLeft);
+        gLog.FormattedMessage("UV bottomRightt = %f", glyphInfo->bottomRight);
+        gLog.FormattedMessage("fWidth = %f", glyphInfo->width);
+        gLog.FormattedMessage("fHeight = %f", glyphInfo->height);
+        gLog.FormattedMessage("fLeadingEdge = %f", glyphInfo->kerningLeft);
+        gLog.FormattedMessage("fSpacing = %f", glyphInfo->kerningRight);
+        gLog.FormattedMessage("fTopEdge = %f", glyphInfo->ascent);
+
+        FontInfo::GlyphInfo* ret = StdCall<FontInfo::GlyphInfo*>(
+            0xA142D0,
+            glyphInfo,
+            aiVert,
+            apShape,
+            axPos,
+            apColor);
+        return ret;
+    }
+
+    FontInfo::GlyphInfo* RenderCharacterGlyphEx3(
+        FontInfo::GlyphInfo* glyphInfo,
+        UInt32 aiVert,
+        NiTriShape* apShape,
+        float* axPos,
+        const NiColorA* apColor
+    ) {
+        gLog.FormattedMessage("From location 3");
+        gLog.FormattedMessage("iTextureIndex = %f", glyphInfo->unk00);
+        gLog.FormattedMessage("UV topLeft = %f", glyphInfo->topLeft);
+        gLog.FormattedMessage("UV topRight = %f", glyphInfo->topRight);
+        gLog.FormattedMessage("UV bottomLeft = %f", glyphInfo->bottomLeft);
+        gLog.FormattedMessage("UV bottomRightt = %f", glyphInfo->bottomRight);
+        gLog.FormattedMessage("fWidth = %f", glyphInfo->width);
+        gLog.FormattedMessage("fHeight = %f", glyphInfo->height);
+        gLog.FormattedMessage("fLeadingEdge = %f", glyphInfo->kerningLeft);
+        gLog.FormattedMessage("fSpacing = %f", glyphInfo->kerningRight);
+        gLog.FormattedMessage("fTopEdge = %f", glyphInfo->ascent);
+
+        FontInfo::GlyphInfo* ret = StdCall<FontInfo::GlyphInfo*>(
+            0xA142D0,
+            glyphInfo,
+            aiVert,
+            apShape,
+            axPos,
+            apColor);
+        return ret;
     }
 
     NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
@@ -578,352 +701,6 @@ namespace fonthook {
             MemoryManagerSingleton->Deallocate(dynamicTextBuffer);
             //gLog.Message("CalculateTextLayoutEx End");
         }
-
-        void __thiscall LoadFontDataEx() {
-            NiTexturingProperty* resourceHandleTemp2; // [esp+10h] [ebp-23Ch]
-            NiPixelData* texturingPropertyTemp2; // [esp+18h] [ebp-234h]
-            float newMaxWidthMod; // [esp+20h] [ebp-22Ch]
-            float newMaxGlyphHeight; // [esp+24h] [ebp-228h]
-            float newMaxHeight; // [esp+28h] [ebp-224h]
-            const char* fontFilePathTemp; // [esp+58h] [ebp-1F4h]
-            void* textureDataSize; // [esp+60h] [ebp-1ECh]
-            UInt32 bytesRead3; // [esp+64h] [ebp-1E8h]
-            UInt32 readFlag; // [esp+6Ch] [ebp-1E0h] BYREF
-            UInt32 bytesRead1Temp; // [esp+70h] [ebp-1DCh]
-            UInt32 bytesRead1; // [esp+74h] [ebp-1D8h]
-            UInt32 readParams1[2]; // [esp+78h] [ebp-1D4h] BYREF
-            bool isTexValid; // [esp+83h] [ebp-1C9h]
-            UInt32 savedTlsValueTemp; // [esp+84h] [ebp-1C8h]
-            //const char* fontFilePath; // [esp+88h] [ebp-1C4h]
-            float currentMaxWidthMod; // [esp+8Ch] [ebp-1C0h]
-            float currentWidthMod; // [esp+90h] [ebp-1BCh]
-            float currentGlyphHeight; // [esp+94h] [ebp-1B8h]
-            float currentMaxHeight; // [esp+98h] [ebp-1B4h]
-            UInt32 fileSize; // [esp+9Ch] [ebp-1B0h]
-            FontInfo::BufferData* fontBuffer; // [esp+A0h] [ebp-1ACh]
-            UInt32 bytesRead2Temp; // [esp+A4h] [ebp-1A8h]
-            UInt32 bytesRead2; // [esp+A8h] [ebp-1A4h]
-            UInt32 readParams2[2]; // [esp+ACh] [ebp-1A0h] BYREF
-            //const char* fontFilePathError; // [esp+B4h] [ebp-198h]
-            __int16 isLoadedFlag; // [esp+BAh] [ebp-192h]
-            UInt32 oldTlsValue; // [esp+BCh] [ebp-190h]
-            int stringRefFlag; // [esp+C0h] [ebp-18Ch]
-            BSFile* texFileHandleTemp; // [esp+C4h] [ebp-188h]
-            BSFile* texFileVTable; // [esp+C8h] [ebp-184h]
-            const char* fontPathCopy; // [esp+CCh] [ebp-180h] BYREF
-            NiTexturingProperty* resourceTemp; // [esp+D0h] [ebp-17Ch]
-            NiTexturingProperty* resourceHandleTemp; // [esp+D4h] [ebp-178h]
-            NiPixelData* fontTextureObject; // [esp+D8h] [ebp-174h]
-            NiPixelData* fontTexturingPropertyTemp; // [esp+DCh] [ebp-170h]
-            BSFile* texFileHandleTemp2; // [esp+E0h] [ebp-16Ch]
-            BSFile* texFileHandleVTable; // [esp+E4h] [ebp-168h]
-            void* File_1; // [esp+E8h] [ebp-164h]
-            BSFile* FileVTable2; // [esp+ECh] [ebp-160h]
-            FontInfo::BufferData* bufferData; // [esp+F0h] [ebp-15Ch]
-            BSFile* File_3; // [esp+F4h] [ebp-158h]
-            BSFile* FileVTable1; // [esp+F8h] [ebp-154h]
-            UInt32 texWidth; // [esp+FCh] [ebp-150h] BYREF
-            UInt32 texHeight; // [esp+100h] [ebp-14Ch]
-            UInt32 textureCreateArgs[3]; // [esp+104h] [ebp-148h] BYREF
-            BSFile* texFileHandle; // [esp+110h] [ebp-13Ch]
-            NiTexturingProperty* resourceHandle; // [esp+114h] [ebp-138h]
-            NiPixelData* texturingProperty; // [esp+118h] [ebp-134h]
-            UInt32 texIndex; // [esp+11Ch] [ebp-130h]
-            float glyphTotalHeight; // [esp+120h] [ebp-12Ch]
-            UInt32 glyphIndex; // [esp+124h] [ebp-128h]
-            char fontTexPath[260]; // [esp+128h] [ebp-124h] BYREF
-            float tempWidth; // [esp+230h] [ebp-1Ch]
-            BSFile* fntFileHandle; // [esp+234h] [ebp-18h]
-            float maxGlyphHeight; // [esp+238h] [ebp-14h]
-            UInt32 savedTlsValue; // [esp+23Ch] [ebp-10h]
-            int stackCookie; // [esp+248h] [ebp-4h]
-
-            DWORD tebAddress;
-            DWORD tlsPointer;
-            DWORD tlsSlotAddress;
-            DWORD targetAddress;
-            DWORD* pTlsIndex = (DWORD*)0x126FD98;
-
-            gLog.Message("Call LoadFontDataEx");
-
-            __asm {
-                mov eax, fs: [0x18]
-                mov tebAddress, eax
-            }
-
-            gLog.Message("Get tebAddress");
-
-            tlsPointer = *(DWORD*)(tebAddress + 0x2C);
-
-            tlsSlotAddress = *(DWORD*)(tlsPointer + (*pTlsIndex) * 4);
-            targetAddress = tlsSlotAddress + 692;
-
-            stringRefFlag = 0;
-
-            oldTlsValue = *(DWORD*)targetAddress;
-            savedTlsValue = oldTlsValue;
-            *(DWORD*)targetAddress = 12;
-
-            gLog.Message("TLS Init");
-
-            stackCookie = 0;
-            isLoadedFlag = *&this->isLoaded;
-            if (isLoadedFlag || !this->filePath)
-            {
-            LABEL_46:
-                gLog.Message("LABEL_46");
-                ++*&this->isLoaded;
-                stackCookie = -1;
-                *(DWORD*)targetAddress = savedTlsValue;
-                gLog.Message("Call LoadFontData End\n");
-                return;
-            }
-            gLog.Message("Load File 1");
-            fntFileHandle = LoadFile(this->filePath, 0, 0x4000u, 2);
-            gLog.Message("Load File 1 end");
-            if (fntFileHandle)
-            {
-                if (fntFileHandle->m_bGood)
-                {
-                    gLog.Message("fnt file valid");
-                    gLog.Message("Allocate font buffer data");
-                    bufferData = static_cast<FontInfo::BufferData*>(MemoryManagerSingleton->Allocate(0x3928u));
-                    this->fontData = bufferData;
-                    gLog.Message("operator bool");
-                    // fileSize = fntFileHandle->Unk_0A(fntFileHandle);
-                    //fileSize = GetFileSize(fntFileHandle);
-                    fileSize = fntFileHandle->operator bool();
-                    gLog.Message("operator bool finish");
-                    fontBuffer = this->fontData;
-                    readParams2[0] = 1;
-                    bytesRead2Temp = fntFileHandle->m_pfnRead(fntFileHandle, fontBuffer, fileSize, readParams2, 1u);
-                    fntFileHandle->m_uiAbsoluteCurrentPos += bytesRead2Temp;
-                    bytesRead2 = bytesRead2Temp;
-                    File_1 = fntFileHandle;
-                    FileVTable2 = fntFileHandle;
-                    if (fntFileHandle)
-                        FileVTable2->~BSFile();
-                    fntFileHandle = 0;
-                    this->maxCharHeight = 0.0;
-                    maxGlyphHeight = 0.0;
-                    this->maxWidthMod = 0.0;
-                    for (glyphIndex = 0; glyphIndex < 256; ++glyphIndex)
-                    {
-                        glyphTotalHeight = this->fontData->lineHeight - this->fontData->glyphs[glyphIndex].ascent;
-                        glyphTotalHeight = glyphTotalHeight + this->fontData->glyphs[glyphIndex].height;
-                        currentMaxHeight = this->maxCharHeight;
-                        if (glyphTotalHeight >= currentMaxHeight)
-                            newMaxHeight = glyphTotalHeight;
-                        else
-                            newMaxHeight = currentMaxHeight;
-                        this->maxCharHeight = newMaxHeight;
-                        currentGlyphHeight = this->fontData->glyphs[glyphIndex].height;
-                        if (currentGlyphHeight >= maxGlyphHeight)
-                            newMaxGlyphHeight = currentGlyphHeight;
-                        else
-                            newMaxGlyphHeight = maxGlyphHeight;
-                        maxGlyphHeight = newMaxGlyphHeight;
-                        currentMaxWidthMod = this->maxWidthMod;
-                        currentWidthMod = this->fontData->glyphs[glyphIndex].ascent - this->fontData->glyphs[glyphIndex].height;
-                        if (currentWidthMod <= currentMaxWidthMod)
-                            newMaxWidthMod = currentWidthMod;
-                        else
-                            newMaxWidthMod = currentMaxWidthMod;
-                        this->maxWidthMod = newMaxWidthMod;
-                    }
-                    gLog.Message("Fnt Head Read Finished");
-                    tempWidth = this->fontData->glyphs[' '].width;
-                    this->fontData->glyphs[' '].width = this->fontData->glyphs[' '].kerningRight;
-                    this->fontData->glyphs[' '].kerningRight = tempWidth;
-                    this->fontData->glyphs[' '].height = maxGlyphHeight;
-                    this->fontData->glyphs[' '].ascent = this->maxWidthMod + maxGlyphHeight;
-                    this->fontData->glyphs[160].width = this->fontData->glyphs[' '].width;
-                    this->fontData->glyphs[160].kerningRight = this->fontData->glyphs[' '].kerningRight;
-                    this->fontData->glyphs[160].height = this->fontData->glyphs[' '].height;
-                    this->fontData->glyphs[160].ascent = this->fontData->glyphs[' '].ascent;
-                    this->fontData->glyphs[127].width = this->fontData->glyphs['|'].width;
-                    this->fontData->glyphs[127].kerningLeft = this->fontData->glyphs['|'].kerningLeft;
-                    this->fontData->glyphs[127].kerningRight = this->fontData->glyphs['|'].kerningRight;
-                    this->fontData->glyphs[127].height = this->fontData->glyphs['|'].height;
-                    this->fontData->glyphs[127].ascent = this->fontData->glyphs['|'].ascent;
-                    this->fontData->glyphs['\0'].width = 0.0;
-                    this->fontData->glyphs['\0'].kerningRight = 0.0;
-                    this->fontData->glyphs['\0'].height = maxGlyphHeight;
-                    this->fontData->glyphs['\0'].ascent = this->maxWidthMod + maxGlyphHeight;
-                    this->fontData->glyphs['\0'].topLeft.x = 0.0;
-                    this->fontData->glyphs['\0'].topRight.x = 0.0;
-                    this->fontData->glyphs['\0'].bottomLeft.x = 0.0;
-                    this->fontData->glyphs['\0'].bottomRight.x = 0.0;
-                    this->fontData->glyphs['\0'].topLeft.y = 0.0;
-                    this->fontData->glyphs['\0'].topRight.y = 0.0;
-                    this->fontData->glyphs['\0'].bottomLeft.y = 0.0;
-                    this->fontData->glyphs['\0'].bottomRight.y = 0.0;
-                    gLog.Message("Special Char process end");
-                    gLog.FormattedMessage("numTextures: %u", this->fontData->numTextures);
-                    if (this->fontData->numTextures > 8)
-                    {
-                        //fontFilePath = this->filePath;
-                        // 0x5B5E40 Return 0
-                        stackCookie = -1;
-                        savedTlsValueTemp = savedTlsValue;
-                        *(DWORD*)targetAddress = savedTlsValue;
-                        return;
-                    }
-                    gLog.Message("numTextures normal");
-                    for (texIndex = 0; texIndex < this->fontData->numTextures; ++texIndex)
-                    {
-                        gLog.Message("Load Tex");
-                        // 0x406D00
-                        _snprintf_s(
-                            fontTexPath,
-                            0x100u,
-                            _TRUNCATE,
-                            "TEXTURES\\FONTS\\%s.TEX",
-                            this->fontData->textures[texIndex].fileName
-                        );
-
-                        gLog.Message("LoadFile 2 start");
-                        texFileHandle = LoadFile(fontTexPath, 0, 0x4000u, 2);
-                        gLog.Message("LoadFile 2 end");
-
-                        if (!texFileHandle || !(isTexValid = texFileHandle->m_bGood))
-                        {
-                            gLog.Message("Tex not valid");
-                            // 0x5B5E40 Return 0
-                            if (texFileHandle)
-                            {
-                                texFileHandleTemp2 = texFileHandle;
-                                texFileHandleVTable = texFileHandle;
-                                texFileHandleVTable->~BSFile();
-                            }
-                            stackCookie = -1;
-                            readParams1[1] = savedTlsValue;
-                            *(DWORD*)targetAddress = savedTlsValue;
-                            return;
-                        }
-                        readParams1[0] = 1;
-
-                        gLog.FormattedMessage("tex file valid");
-
-                        bytesRead1Temp = texFileHandle->m_pfnRead(texFileHandle, &texWidth, 8u, readParams1, 1u);
-                        texFileHandle->m_uiAbsoluteCurrentPos += bytesRead1Temp;
-
-                        bytesRead1 = bytesRead1Temp;
-                        textureCreateArgs[0] = 6;
-                        textureCreateArgs[1] = 3;
-                        textureCreateArgs[2] = 2;
-
-                        fontTextureObject = CdeclCall<NiPixelData*>(0xAA13E0, 0x74);
-
-                        gLog.FormattedMessage("fontTextureObject: %p", fontTextureObject);
-
-                        stackCookie = (stackCookie & 0xFFFFFF00) | 1;
-                        if (fontTextureObject) {
-                            gLog.FormattedMessage("NiPixelData::InitializePixelData");
-                            texturingPropertyTemp2 = ThisStdCall<NiPixelData*>(
-                                0xA7C190,
-                                fontTextureObject,
-                                texWidth,
-                                texHeight,
-                                reinterpret_cast<const void*>(0x11AA2A0),
-                                1,
-                                1
-                            );
-                        }
-                        else {
-                            texturingPropertyTemp2 = 0;
-                            stackCookie = -1;
-                            savedTlsValueTemp = savedTlsValue;
-                            *(DWORD*)targetAddress = savedTlsValue;
-                            return;
-                        }
-                        fontTexturingPropertyTemp = texturingPropertyTemp2;
-                        stackCookie = (stackCookie & 0xFFFFFF00) | 0;
-                        texturingProperty = texturingPropertyTemp2;
-                        textureDataSize = &texturingPropertyTemp2->m_pucPixels[*texturingPropertyTemp2->m_puiOffsetInBytes];
-                        readFlag = 1;
-                        bytesRead3 = texFileHandle->m_pfnRead(texFileHandle, textureDataSize, 4 * texHeight * texWidth, &readFlag, 1u);
-                        texFileHandle->m_uiAbsoluteCurrentPos += bytesRead3;
-
-                        texturingProperty->bNoConvert = 1;
-
-                        resourceTemp = CdeclCall<NiTexturingProperty*>(0xAA13E0, 0x30);
-
-                        gLog.FormattedMessage("resourceTemp: %p", resourceTemp);
-
-                        stackCookie = (stackCookie & 0xFFFFFF00) | 2;
-                        gLog.Message("Check resources");
-                        if (resourceTemp)
-                        {
-                            gLog.FormattedMessage("Resource Init");
-                            fontFilePathTemp = this->filePath;
-                            if (fontFilePathTemp){
-                                gLog.FormattedMessage("Cdeclcall A5B690 start");
-                                fontPathCopy = CdeclCall<const char*>(0xA5B690, fontFilePathTemp);
-                                gLog.FormattedMessage("Cdeclcall A5B690 end");
-                            }
-                            else
-                                fontPathCopy = 0;
-                            stackCookie = (stackCookie & 0xFFFFFF00) | 3;
-                            stringRefFlag |= 1u;
-                            gLog.FormattedMessage("texturingProperty: %p", texturingProperty);
-                            gLog.FormattedMessage("fontPathCopy: %s", fontPathCopy);
-                            gLog.FormattedMessage("textureCreateArgs: %p", textureCreateArgs);
-                            gLog.FormattedMessage("CreateFontTexture start");
-                            // NiTexturingProperty::CreateFontTexture
-                            resourceHandleTemp2 = ThisStdCall<NiTexturingProperty*>(
-                                0xA6ABB0,
-                                resourceTemp,
-                                texturingProperty,
-                                &fontPathCopy,
-                                textureCreateArgs);
-                            gLog.FormattedMessage("CreateFontTexture end");
-                        }
-                        else
-                        {
-                            resourceHandleTemp2 = 0;
-                        }
-
-                        gLog.Message("Resources load end");
-                        resourceHandleTemp = resourceHandleTemp2;
-                        resourceHandle = resourceHandleTemp2;
-                        stackCookie = 0;
-                        if ((stringRefFlag & 1) != 0)
-                        {
-                            stringRefFlag &= ~1u;
-                            if (fontPathCopy) {
-                                char* mutablePtr = const_cast<char*>(fontPathCopy);
-                                volatile LONG* refCount = reinterpret_cast<volatile LONG*>(mutablePtr - 2);
-                                InterlockedDecrement(refCount);
-                            }
-                        }
-                        texFileHandleTemp = texFileHandle;
-                        texFileVTable = texFileHandle;
-                        if (texFileHandle)
-                            texFileVTable->~BSFile();
-                        texFileHandle = 0;
-                        if (resourceHandle) {
-                            gLog.FormattedMessage("resourceHandle: %p", resourceHandle);
-                        }
-                        ThisStdCall(0x60AEB0, resourceHandle, 1);
-                        ThisStdCall(0x66B0D0, &this->fontTexProp + texIndex, resourceHandle);
-                        gLog.Message("finish load");
-                    }
-                    goto LABEL_46;
-                }
-            }
-            //fontFilePathError = this->filePath;
-            // 0x5B5E40 Return 0
-            if (fntFileHandle)
-            {
-                File_3 = fntFileHandle;
-                FileVTable1 = fntFileHandle;
-                FileVTable1->~BSFile();
-            }
-            stackCookie = -1;
-            readParams2[1] = savedTlsValue;
-            *(DWORD*)targetAddress = savedTlsValue;
-        }
     };
 
     class NiTexturingPropertyEx : public NiTexturingProperty {
@@ -1032,6 +809,21 @@ namespace fonthook {
         return ret;
     }
 
+    class NiSourceTextureEx : public NiSourceTexture {
+    public:
+        char* SetFilename(const NiFixedString* kFilename) {
+            gLog.FormattedMessage("\nCall NiSourceTexture::SetFilename");
+            gLog.FormattedMessage("kFilename: %p", kFilename);
+            char* ret = ThisStdCall<char*>(
+                0xA5FBA0,
+                this,
+                kFilename);
+            gLog.FormattedMessage("NiSourceTexture::SetFilename End\n");
+            //gLog.FormattedMessage("ret: %s", ret);
+            return ret;
+        }
+    };
+
     class FontEx : public Font {
     public:
         void Load()
@@ -1132,9 +924,9 @@ namespace fonthook {
                 gLog.FormattedMessage("Font::Load End\n");
                 return;
             }
-            gLog.FormattedMessage("Load %s", (const char*)this->pFontFile);
-            BSFile_1 = FileFinder_GetFile(this->pFontFile, 0, 0x155CC0u, 2u);
-            gLog.FormattedMessage("Load %s End", (const char*)this->pFontFile);
+            //gLog.FormattedMessage("Load %s", (const char*)this->pFontFile);
+            BSFile_1 = FileFinder_GetFile(this->pFontFile, (NiFile::OpenMode)0, 0x4000000u, 2u);
+            //gLog.FormattedMessage("Load %s End", (const char*)this->pFontFile);
             if (BSFile_1)
             {
                 if (LOBYTE(BSFile_1->m_pFile))
@@ -1143,7 +935,9 @@ namespace fonthook {
                     pFontData = (FontData*)MemoryManager_s_Instance->Allocate(0x3928u);
                     gLog.FormattedMessage("Allocate pFontData End");
                     this->pFontData = pFontData;
-                    v21 = BSFile_1->GetSize();
+                    gLog.FormattedMessage("Moved Font Data");
+                    //v21 = BSFile_1->GetSize();
+                    v21 = 0x3928u;
                     pFontData_1 = this->pFontData;
                     v25[0] = 1;
                     v23 = BSFile_1->m_pfnRead(BSFile_1, pFontData_1, v21, v25, 1u);
@@ -1228,11 +1022,11 @@ namespace fonthook {
                             this->pFontData->pTextureFiles[iTextureCount].pFilename
                         );
 
-                        gLog.FormattedMessage("Load %s", (const char*)apName_);
+                        //gLog.FormattedMessage("Load %s", (const char*)apName_);
 
-                        NiBinaryStream_0 = FileFinder_GetFile((const char*)apName_, 0, 0x3E803E8u, 2u);
+                        NiBinaryStream_0 = FileFinder_GetFile((const char*)apName_, (NiFile::OpenMode)0, 0x4000000u, 2u);
 
-                        gLog.FormattedMessage("Load %s End", (const char*)apName_);
+                        //gLog.FormattedMessage("Load %s End", (const char*)apName_);
 
                         if (!NiBinaryStream_0 || !(m_pfnWrite = (bool)NiBinaryStream_0->m_pFile))
                         {
@@ -1251,8 +1045,11 @@ namespace fonthook {
                         }
 
                         v13[0] = 1;
+                        gLog.FormattedMessage("Read Texture Size");
                         v11 = NiBinaryStream_0->m_pfnRead(NiBinaryStream_0, &a2, 4u, v13, 1u);
+                        gLog.FormattedMessage("Length: %u", a2);
                         v11 += NiBinaryStream_0->m_pfnRead(NiBinaryStream_0, &a3, 4u, v13, 1u);
+                        gLog.FormattedMessage("Width: %u", a3);
                         NiBinaryStream_0->m_uiAbsoluteCurrentPos += v11;
                         v12 = v11;
                         arPrefs_.m_ePixelLayout = static_cast<NiTexture::FormatPrefs::PixelLayout>(0x6);
@@ -1352,93 +1149,6 @@ namespace fonthook {
             *(DWORD*)targetAddress = savedTlsValue;
         }
     };
-
-    FontInfo::GlyphInfo* RenderCharacterGlyphEx1(
-        FontInfo::GlyphInfo* glyphInfo,
-        UInt32 aiVert,
-        NiTriShape* apShape,
-        float* axPos,
-        const NiColorA* apColor
-    ) {
-        gLog.FormattedMessage("From location 1");
-        gLog.FormattedMessage("iTextureIndex = %f", glyphInfo->unk00);
-        gLog.FormattedMessage("UV topLeft = %f", glyphInfo->topLeft);
-        gLog.FormattedMessage("UV topRight = %f", glyphInfo->topRight);
-        gLog.FormattedMessage("UV bottomLeft = %f", glyphInfo->bottomLeft);
-        gLog.FormattedMessage("UV bottomRightt = %f", glyphInfo->bottomRight);
-        gLog.FormattedMessage("fWidth = %f", glyphInfo->width);
-        gLog.FormattedMessage("fHeight = %f", glyphInfo->height);
-        gLog.FormattedMessage("fLeadingEdge = %f", glyphInfo->kerningLeft);
-        gLog.FormattedMessage("fSpacing = %f", glyphInfo->kerningRight);
-        gLog.FormattedMessage("fTopEdge = %f", glyphInfo->ascent);
-
-        FontInfo::GlyphInfo* ret = StdCall<FontInfo::GlyphInfo*>(
-            0xA142D0,
-            glyphInfo,
-            aiVert,
-            apShape,
-            axPos,
-            apColor);
-        return ret;
-    }
-
-    FontInfo::GlyphInfo* RenderCharacterGlyphEx2(
-        FontInfo::GlyphInfo* glyphInfo,
-        UInt32 aiVert,
-        NiTriShape* apShape,
-        float* axPos,
-        const NiColorA* apColor
-    ) {
-        gLog.FormattedMessage("From location 2");
-        gLog.FormattedMessage("iTextureIndex = %f", glyphInfo->unk00);
-        gLog.FormattedMessage("UV topLeft = %f", glyphInfo->topLeft);
-        gLog.FormattedMessage("UV topRight = %f", glyphInfo->topRight);
-        gLog.FormattedMessage("UV bottomLeft = %f", glyphInfo->bottomLeft);
-        gLog.FormattedMessage("UV bottomRightt = %f", glyphInfo->bottomRight);
-        gLog.FormattedMessage("fWidth = %f", glyphInfo->width);
-        gLog.FormattedMessage("fHeight = %f", glyphInfo->height);
-        gLog.FormattedMessage("fLeadingEdge = %f", glyphInfo->kerningLeft);
-        gLog.FormattedMessage("fSpacing = %f", glyphInfo->kerningRight);
-        gLog.FormattedMessage("fTopEdge = %f", glyphInfo->ascent);
-
-        FontInfo::GlyphInfo* ret = StdCall<FontInfo::GlyphInfo*>(
-            0xA142D0,
-            glyphInfo,
-            aiVert,
-            apShape,
-            axPos,
-            apColor);
-        return ret;
-    }
-
-    FontInfo::GlyphInfo* RenderCharacterGlyphEx3(
-        FontInfo::GlyphInfo* glyphInfo,
-        UInt32 aiVert,
-        NiTriShape* apShape,
-        float* axPos,
-        const NiColorA* apColor
-    ) {
-        gLog.FormattedMessage("From location 3");
-        gLog.FormattedMessage("iTextureIndex = %f", glyphInfo->unk00);
-        gLog.FormattedMessage("UV topLeft = %f", glyphInfo->topLeft);
-        gLog.FormattedMessage("UV topRight = %f", glyphInfo->topRight);
-        gLog.FormattedMessage("UV bottomLeft = %f", glyphInfo->bottomLeft);
-        gLog.FormattedMessage("UV bottomRightt = %f", glyphInfo->bottomRight);
-        gLog.FormattedMessage("fWidth = %f", glyphInfo->width);
-        gLog.FormattedMessage("fHeight = %f", glyphInfo->height);
-        gLog.FormattedMessage("fLeadingEdge = %f", glyphInfo->kerningLeft);
-        gLog.FormattedMessage("fSpacing = %f", glyphInfo->kerningRight);
-        gLog.FormattedMessage("fTopEdge = %f", glyphInfo->ascent);
-
-        FontInfo::GlyphInfo* ret = StdCall<FontInfo::GlyphInfo*>(
-            0xA142D0,
-            glyphInfo,
-            aiVert,
-            apShape,
-            axPos,
-            apColor);
-        return ret;
-    }
 
 	class FontManagerEx : public FontManager {
 	public:
@@ -1615,6 +1325,18 @@ namespace fonthook {
         // Font::Load
         //WriteRelCallEx(0xA1219D, &FontInfoEx::LoadFontDataEx);
         WriteRelCallEx(0xA1219D, &FontEx::Load);
+        // 
+        // FileFinder::GetFile
+        WriteRelCall(0xA15A86, &FileFinder_GetFile);
+        // 
+        // NiSourceTexture::Create
+        WriteRelCall(0xA6AC12, &NiSourceTextureCreate);
+        // 
+        // NiGlobalStringTable::AddString
+        WriteRelCall(0xA5FF86, &NiGlobalStringTableAddString);
+        // 
+        // NiSourceTexture::SetFilename
+        WriteRelCallEx(0xA5FF9B, &NiSourceTextureEx::SetFilename);
         // 
         // FontInfo::GenerateTextGeometry
         //WriteRelCallEx(0xA22211, &FontInfoEx::GenerateTextGeometryEx);
