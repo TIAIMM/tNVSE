@@ -222,6 +222,10 @@ namespace fonthook {
 
     static std::unordered_map<const char*, std::unordered_map<UInt32, FontLetter>> gExtraFontLetters;
 
+    static std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
+
+    static const char* fontNameKey;
+
     static HMODULE hJIP = 0;
 
     static size_t __fastcall GetJIPAddress(size_t aiAddress) {
@@ -970,8 +974,8 @@ namespace fonthook {
 
                     unsigned int uiActualSize = BSFile_1->GetSize();
                     if (uiActualSize > 0x3928) {
-                        const char* fontKey = this->pFontFile ? this->pFontFile : "";
-                        auto& extraMap = gExtraFontLetters[fontKey];
+                        fontNameKey = this->pFontFile ? this->pFontFile : "";
+                        auto& extraMap = gExtraFontLetters[fontNameKey];
                         unsigned int hh, ll, code;
                         for (hh = 0x81; hh <= 0xFE; ++hh) {
                             for (ll = 0x40; ll <= 0xFE; ++ll) {
@@ -987,7 +991,7 @@ namespace fonthook {
                         if (!extraMap.empty()) {
                             gLog.FormattedMessage("Loaded %u extra FontLetter records for %s",
                                 (unsigned)extraMap.size(),
-                                fontKey);
+                                fontNameKey);
                         }
                     }
 
@@ -1425,17 +1429,31 @@ namespace fonthook {
         //WriteRelCallEx(0xA15C03, &NiPixelDataEx::NiPixelDataBuild);
     }
 
-    void* __fastcall FontCreateForJIP(void* apThis, void*, int iFontNum, char* apFilename, bool abLoad) {
+    Font* __fastcall FontCreateForJIP(Font* apThis, void*, int iFontNum, char* apFilename, bool abLoad) {
         gLog.FormattedMessage("\nCall Font::Font");
         gLog.FormattedMessage("iFontNum: %u", iFontNum);
         gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
-            
-        return ThisStdCall<void*>(
+
+        Font* ret = ThisStdCall<Font*>(
             0xA12020,
             apThis,
             iFontNum,
             apFilename,
             abLoad);
+
+        if (!gExtraFontLetters[fontNameKey].empty()) {
+            gLog.FormattedMessage("From gExtraFontLetters to gNumberedExtraLetters");
+			gNumberedExtraLetters[iFontNum] = gExtraFontLetters[fontNameKey];
+            UInt32 numRemoved = gExtraFontLetters.erase(fontNameKey);
+            if (!gNumberedExtraLetters[iFontNum].empty())
+                gLog.FormattedMessage("gNumberedExtraLetters[%d] is filled", iFontNum);
+            fontNameKey = "";
+        }
+        else {
+			gLog.FormattedMessage("gExtraFontLetters for %s is empty", fontNameKey);
+            fontNameKey = "";
+        }
+        return ret;
     }
 
     void InitJIPHooks() {
