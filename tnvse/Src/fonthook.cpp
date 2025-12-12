@@ -74,8 +74,21 @@ namespace fonthook {
         return 0;
     }
 
-    static bool IsGB2312LeadByte(unsigned char c) {
-        return (c >= 0xA1 && c <= 0xFE);
+    static bool IsGBKLeadByte(unsigned char c) {
+        return (c >= 0x81 && c <= 0xFE);
+    }
+
+    static bool IsGBKTrailByte(unsigned char c) {
+        return (c >= 0x40 && c <= 0xFE && c != 0x7F);
+    }
+
+    static bool TryDecodeGBK(const char* p, UInt32& outCode) {
+        unsigned char lead = (unsigned char)p[0];
+        unsigned char trail = (unsigned char)p[1];
+        if (!IsGBKLeadByte(lead) || !IsGBKTrailByte(trail))
+            return false;
+        outCode = (UInt32(lead) << 8) | UInt32(trail);
+        return true;
     }
 
     typedef uint32_t(__thiscall* GetFileSizeFunc)(void* pThis);
@@ -1254,7 +1267,7 @@ namespace fonthook {
                 }
                 else
                 {
-                    if (extraGlyphs && IsGB2312LeadByte(cCurrentChar)) {
+                    if (extraGlyphs && IsGBKLeadByte(cCurrentChar)) {
                         gLog.FormattedMessage("Find GB2312LeadByte");
                         cMSB = cCurrentChar;
                         cLSB = axData.xNewText.pString[++axData2.iCharCount];
