@@ -1172,6 +1172,7 @@ namespace fonthook {
             int j_1; // [esp+148h] [ebp-30h]
             Font::TextData axData2; // [esp+14Ch] [ebp-2Ch]
             int v37; // [esp+174h] [ebp-4h]
+            bool bHanzi, rendered;
             unsigned char cMSB, cLSB;
             UInt32 uiGBKcode;
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
@@ -1275,7 +1276,21 @@ namespace fonthook {
                     axPos_.x = 75.0 - axPos__4 + axPos_.x;
                 }
                 cCurrentChar = axData.xNewText.pString[axData.xNewText.pString != 0 ? axData2.iCharCount : 0];
-                ConvertToAsciiQuotes(&cCurrentChar);
+
+                cLSB = (unsigned char)axData.xNewText.pString[axData2.iCharCount + 1];
+                if (cLSB != 0) {
+                    bHanzi = TryDecodeGBK((const char*)&axData.xNewText.pString[axData2.iCharCount], uiGBKcode);
+                }
+                else {
+                    bHanzi = false;
+                }
+
+                if (!bHanzi) {
+                    ConvertToAsciiQuotes(&cCurrentChar);
+                }
+
+                rendered = false;
+
                 cCurrentChar_1 = cCurrentChar;
                 if (cCurrentChar == 1)
                 {
@@ -1284,34 +1299,33 @@ namespace fonthook {
                 }
                 else
                 {
-                    if (extraGlyphs && IsGBKLeadByte(cCurrentChar)) {
-                        gLog.FormattedMessage("Find GB2312LeadByte");
-                        cMSB = cCurrentChar;
-                        cLSB = axData.xNewText.pString[++axData2.iCharCount];
-						uiGBKcode = (static_cast<UInt32>(cMSB) << 8) | static_cast<UInt32>(cLSB);
-
-                        auto glyphIt = extraGlyphs->find(uiGBKcode);
-                        if (glyphIt != extraGlyphs->end())
-                        {
-                            gLog.FormattedMessage("Render GB2312LeadByte");
-                            FontAddChar(
-                                &glyphIt->second,
+                    if (extraGlyphs) {
+                        gLog.FormattedMessage("Found extraGlyphs");
+                        if (bHanzi) {
+                            gLog.FormattedMessage("Find GBKByte");
+                            auto glyphIt = extraGlyphs->find(uiGBKcode);
+                            if (glyphIt != extraGlyphs->end()) {
+                                FontAddChar(&glyphIt->second,
+                                    axData2.iLineEnd++,
+                                    (NiTriShape*)*apTextShape,
+                                    &axPos_.x,
+                                    axFontColor);
+                                axData2.iCharCount += 1;
+                                rendered = true;
+                            }
+                            /*FontAddChar(
+                                &this->pFontData->pFontLetters[cCurrentChar],
                                 axData2.iLineEnd++,
                                 (NiTriShape*)*apTextShape,
                                 &axPos_.x,
-                                axFontColor);
+                                axFontColor);*/
                         }
-
-                        FontAddChar(
-                            &this->pFontData->pFontLetters[cCurrentChar],
-                            axData2.iLineEnd++,
-                            (NiTriShape*)*apTextShape,
-                            &axPos_.x,
-                            axFontColor);
                     }
                     else {
-                        FontAddChar(
-                            &this->pFontData->pFontLetters[cCurrentChar],
+                        gLog.FormattedMessage("extraGlyphs Not Found");
+                    }
+                    if (!rendered) {
+                        FontAddChar(&this->pFontData->pFontLetters[cCurrentChar],
                             axData2.iLineEnd++,
                             (NiTriShape*)*apTextShape,
                             &axPos_.x,
