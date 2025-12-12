@@ -16,6 +16,48 @@ struct NiVector3
 	float	x, y, z;
 };
 
+struct NiPersistentSrcTextureRendererData : NiTexture::RendererData
+{
+	enum PlatformID : __int32
+	{
+		NI_ANY = 0x0,
+		NI_XENON = 0x1,
+		NI_PS3 = 0x2,
+		NI_DX9 = 0x3,
+		NI_NUM_PLATFORM_IDS = 0x4,
+	};
+
+
+	unsigned __int8* m_pucPixels;
+	unsigned int* m_puiWidth;
+	unsigned int* m_puiHeight;
+	unsigned int* m_puiOffsetInBytes;
+	unsigned int m_uiPadOffsetInBytes;
+	unsigned int m_uiMipmapLevels;
+	unsigned int m_uiPixelStride;
+	unsigned int m_uiFaces;
+	PlatformID m_eTargetPlatform;
+	unsigned __int8* m_pucPristinePixels;
+	unsigned int m_uiPristineMaxOffsetInBytes;
+	unsigned int m_uiPristinePadOffsetInBytes;
+	NiPointer<NiPalette> m_spPalette;
+};
+STATIC_ASSERT(sizeof(NiPersistentSrcTextureRendererData) == 0x94);
+
+struct NiSourceTexture : NiTexture
+{
+	NiFixedString m_kFilename;
+	NiFixedString m_kPlatformFilename;
+	NiPointer<NiPersistentSrcTextureRendererData> m_spPersistentSrcRendererData;
+	NiPointer<NiPixelData> m_spSrcPixelData;
+	bool m_bStatic;
+	bool m_bLoadDirectToRendererHint;
+	bool m_bSrcRendererDataIsPersistent;
+	char cLooked;
+	NiFile* m_pFile;
+};
+STATIC_ASSERT(sizeof(NiSourceTexture) == 0x48);
+
 // From OBSE
 struct FNTFile { // sizeof == 0x3928
 	struct GlyphInfo { // sizeof == 0x38
@@ -63,91 +105,189 @@ struct FontHeightData
 	float heightwGap;
 } s_fontHeightDatas[90];
 
-// From JIP
-// 54
-struct FontInfo
+//// From JIP
+//// 54
+//struct FontInfo
+//{
+//	// 38
+//	struct GlyphInfo
+//	{
+//		struct UV {
+//			union { // x or u: percentage of width
+//				float x;
+//				float u;
+//			};
+//			union { // y or v: percentage of height
+//				float y;
+//				float v;
+//			};
+//		};
+//		//
+//		float unk00;       // 00
+//		UV    topLeft;     // 04
+//		UV    topRight;    // 0C
+//		UV    bottomLeft;  // 14
+//		UV    bottomRight; // 1C
+//		float width;
+//		float height;
+//		float kerningLeft;
+//		float kerningRight;
+//		float ascent;
+//		//	totalWidth = width + widthMod
+//	};
+//
+//	// 24
+//	struct TexFileName
+//	{
+//		UInt32			textureID;
+//		char			fileName[0x20];
+//	};
+//
+//	// 3928
+//	struct BufferData
+//	{
+//		float			lineHeight;				// 0000
+//		UInt32			numTextures;			// 0004
+//		TexFileName		textures[8];			// 0008
+//		GlyphInfo		glyphs[256];	// 0128
+//	};
+//
+//	struct ButtonIcon {
+//		float unk01;
+//		float unk02;
+//		float unk03;
+//		float unk04;
+//		float unk05;
+//		float unk06;
+//		float unk07;
+//		float unk08;
+//	};
+//
+//	UInt8						isLoaded;	// 00
+//	UInt8						pad01[3];	// 01
+//	const char*						filePath;	// 04
+//	UInt32						fontID;		// 08
+//	NiTexturingProperty*		fontTexProp;	// 0C
+//	UInt32						renderState[7];	// 10
+//	float						maxCharHeight;		// 2C
+//	float						maxWidthMod;		// 30
+//	UInt32						unk34;		// 34
+//	FontInfo::BufferData* fontData;// 38
+//	UInt32						unk3C[2];	// 3C
+//	BSSimpleArray<ButtonIcon>	buttonIconArray;		// 44
+//
+//	__forceinline FontInfo* Init(UInt32 fontID, const char* filePath, bool arg3)
+//	{
+//		return ThisStdCall<FontInfo*>(0xA12020, this, fontID, filePath, arg3);
+//	}
+//	__forceinline FontInfo* LoadFontIcon(const char* iconPath)
+//	{
+//		return ThisStdCall<FontInfo*>(0xA1AEE0, this, iconPath);
+//	}
+//};
+//STATIC_ASSERT(sizeof(FontInfo) == 0x54);
+//
+////TempObject<UnorderedMap<const char*, FontInfo*>> s_fontInfosMap;
+
+// From Aug 22, 2010 Fallout_Release_Beta.pdb
+struct UVMap
 {
-	// 38
-	struct GlyphInfo
-	{
-		struct UV {
-			union { // x or u: percentage of width
-				float x;
-				float u;
-			};
-			union { // y or v: percentage of height
-				float y;
-				float v;
-			};
-		};
-		//
-		float unk00;       // 00
-		UV    topLeft;     // 04
-		UV    topRight;    // 0C
-		UV    bottomLeft;  // 14
-		UV    bottomRight; // 1C
-		float width;
-		float height;
-		float kerningLeft;
-		float kerningRight;
-		float ascent;
-		//	totalWidth = width + widthMod
-	};
-
-	// 24
-	struct TexFileName
-	{
-		UInt32			textureID;
-		char			fileName[0x20];
-	};
-
-	// 3928
-	struct BufferData
-	{
-		float			lineHeight;				// 0000
-		UInt32			numTextures;			// 0004
-		TexFileName		textures[8];			// 0008
-		GlyphInfo		glyphs[256];	// 0128
-	};
-
-	struct ButtonIcon {
-		float unk01;
-		float unk02;
-		float unk03;
-		float unk04;
-		float unk05;
-		float unk06;
-		float unk07;
-		float unk08;
-	};
-
-	UInt8						isLoaded;	// 00
-	UInt8						pad01[3];	// 01
-	const char*						filePath;	// 04
-	UInt32						fontID;		// 08
-	NiTexturingProperty*		fontTexProp;	// 0C
-	UInt32						renderState[7];	// 10
-	float						maxCharHeight;		// 2C
-	float						maxWidthMod;		// 30
-	UInt32						unk34;		// 34
-	FontInfo::BufferData* fontData;// 38
-	UInt32						unk3C[2];	// 3C
-	BSSimpleArray<ButtonIcon>	buttonIconArray;		// 44
-
-	__forceinline FontInfo* Init(UInt32 fontID, const char* filePath, bool arg3)
-	{
-		return ThisStdCall<FontInfo*>(0xA12020, this, fontID, filePath, arg3);
-	}
-	__forceinline FontInfo* LoadFontIcon(const char* iconPath)
-	{
-		return ThisStdCall<FontInfo*>(0xA1AEE0, this, iconPath);
-	}
+	float fU;
+	float fV;
 };
-STATIC_ASSERT(sizeof(FontInfo) == 0x54);
 
-//TempObject<UnorderedMap<const char*, FontInfo*>> s_fontInfosMap;
+STATIC_ASSERT(sizeof(UVMap) == 0x8);
 
-// From JG
+struct FontLetter
+{
+	int iTextureIndex;
+	UVMap pMapping[4];
+	float fWidth;
+	float fHeight;
+	float fLeadingEdge;
+	float fSpacing;
+	float fTopEdge;
+};
+
+STATIC_ASSERT(sizeof(FontLetter) == 0x38);
+
+struct TextureFile
+{
+	int iType;
+	char pFilename[32];
+};
+STATIC_ASSERT(sizeof(TextureFile) == 0x24);
+
+struct FontData
+{
+	float fBaseLine;
+	int iTextureCount;
+	TextureFile pTextureFiles[8];
+	FontLetter pFontLetters[256];
+};
+STATIC_ASSERT(sizeof(FontData) == 0x3928);
+
+struct  Font
+{
+	struct NiRect_float
+	{
+		float m_left;
+		float m_right;
+		float m_top;
+		float m_bottom;
+	};
+	STATIC_ASSERT(sizeof(NiRect_float) == 0x10);
+
+	struct ButtonIcon
+	{
+		float fWidth;
+		float fXOffset;
+		float fZOffset;
+		float fSpacing;
+		NiRect_float UVCoords;
+	};
+	STATIC_ASSERT(sizeof(ButtonIcon) == 0x20);
+
+	unsigned __int16 iRefCount;
+	char* pFontFile;
+	int iFontNum;
+	NiPointer<NiTexturingProperty> pTextureData[8];
+	float fFontHeight;
+	float fMaxDrop;
+	int iLineOverlap;
+	FontData* pFontData;
+	BSStringT<char> IconAtlasTextureName;
+	BSSimpleArray<ButtonIcon> ButtonIcons;
+
+	struct TextData
+	{
+		struct BSSimpleList_int
+		{
+			int m_item;
+			BSSimpleList_int* m_pkNext;
+		};
+
+
+		BSStringT<char> xNewText;
+		int iWidth;
+		int iHeight;
+		int iLineStart;
+		int iLineEnd;
+		int iCharCount;
+		char cLineSep;
+		BSSimpleList_int xLineWidths;
+	};
+
+	__forceinline Font* AddTextIcon(const char* astrIcon)
+	{
+		return ThisStdCall<Font*>(0xA1AEE0, this, astrIcon);
+	}
+
+};
+STATIC_ASSERT(sizeof(Font) == 0x54);
+STATIC_ASSERT(sizeof(Font::TextData) == 0x28);
+
+// From JG and tweaked with pdb
 // 164 (24)
 class FontManager
 {
@@ -155,13 +295,13 @@ public:
 	FontManager();
 	~FontManager();
 
-	FontInfo* fontInfos[8]; // 00
-	UInt8 byte20; // 20
+	Font* pFont[8]; // 00
+	bool bUseNewFonts; // 20
 	UInt8 pad21[3]; // 21
-	FontInfo* extraFonts[80]; // 24
+	Font* extraFonts[80]; // 24
 
 	//	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
-	NiVector3* GetStringDimensions(NiVector3* outDims, const char* srcString, UInt32 fontID, UInt32 maxFlt = 0x7F7FFFFF,
+	NiPoint3* GetStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID, UInt32 maxFlt = 0x7F7FFFFF,
 		UInt32 startIdx = 0);
 
 	__forceinline static FontManager* GetSingleton() { return *(FontManager**)0x11F33F8; }
@@ -171,7 +311,7 @@ public:
 //0x11F33F8
 // From Modern Minimap
 //0x5BD5B0
-__declspec(naked) NiVector3* FontManager::GetStringDimensions(NiVector3* outDims, const char* srcString, UInt32 fontID,
+__declspec(naked) NiPoint3* FontManager::GetStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID,
 	UInt32 maxFlt, UInt32 startIdx)
 {
 	static const UInt32 procAddr = 0xA1B020;
@@ -306,143 +446,3 @@ public:
 	}
 };
 STATIC_ASSERT(sizeof(DebugText) == 0x229C);
-
-// From Aug 22, 2010 Fallout_Release_Beta.pdb
-struct UVMap
-{
-	float fU;
-	float fV;
-};
-
-STATIC_ASSERT(sizeof(UVMap) == 0x8);
-
-struct FontLetter
-{
-	int iTextureIndex;
-	UVMap pMapping[4];
-	float fWidth;
-	float fHeight;
-	float fLeadingEdge;
-	float fSpacing;
-	float fTopEdge;
-};
-
-STATIC_ASSERT(sizeof(FontLetter) == 0x38);
-
-struct TextureFile
-{
-	int iType;
-	char pFilename[32];
-};
-STATIC_ASSERT(sizeof(TextureFile) == 0x24);
-
-struct FontData
-{
-	float fBaseLine;
-	int iTextureCount;
-	TextureFile pTextureFiles[8];
-	FontLetter pFontLetters[256];
-};
-STATIC_ASSERT(sizeof(FontData) == 0x3928);
-
-struct  Font
-{
-	struct NiRect_float
-	{
-		float m_left;
-		float m_right;
-		float m_top;
-		float m_bottom;
-	};
-	STATIC_ASSERT(sizeof(NiRect_float) == 0x10);
-
-	struct ButtonIcon
-	{
-		float fWidth;
-		float fXOffset;
-		float fZOffset;
-		float fSpacing;
-		NiRect_float UVCoords;
-	};
-	STATIC_ASSERT(sizeof(ButtonIcon) == 0x20);
-
-	unsigned __int16 iRefCount;
-	char* pFontFile;
-	int iFontNum;
-	NiPointer<NiTexturingProperty> pTextureData[8];
-	float fFontHeight;
-	float fMaxDrop;
-	int iLineOverlap;
-	FontData* pFontData;
-	BSStringT<char> IconAtlasTextureName;
-	BSSimpleArray<ButtonIcon> ButtonIcons;
-
-	struct TextData
-	{
-		struct BSSimpleList_int
-		{
-			int m_item;
-			BSSimpleList_int* m_pkNext;
-		};
-
-
-		BSStringT<char> xNewText;
-		int iWidth;
-		int iHeight;
-		int iLineStart;
-		int iLineEnd;
-		int iCharCount;
-		char cLineSep;
-		BSSimpleList_int xLineWidths;
-	};
-
-	__forceinline Font* AddTextIcon(const char* astrIcon)
-	{
-		return ThisStdCall<Font*>(0xA1AEE0, this, astrIcon);
-	}
-
-};
-STATIC_ASSERT(sizeof(Font) == 0x54);
-STATIC_ASSERT(sizeof(Font::TextData) == 0x28);
-
-struct NiPersistentSrcTextureRendererData : NiTexture::RendererData
-{
-	enum PlatformID : __int32
-	{
-		NI_ANY = 0x0,
-		NI_XENON = 0x1,
-		NI_PS3 = 0x2,
-		NI_DX9 = 0x3,
-		NI_NUM_PLATFORM_IDS = 0x4,
-	};
-
-
-	unsigned __int8* m_pucPixels;
-	unsigned int* m_puiWidth;
-	unsigned int* m_puiHeight;
-	unsigned int* m_puiOffsetInBytes;
-	unsigned int m_uiPadOffsetInBytes;
-	unsigned int m_uiMipmapLevels;
-	unsigned int m_uiPixelStride;
-	unsigned int m_uiFaces;
-	PlatformID m_eTargetPlatform;
-	unsigned __int8* m_pucPristinePixels;
-	unsigned int m_uiPristineMaxOffsetInBytes;
-	unsigned int m_uiPristinePadOffsetInBytes;
-	NiPointer<NiPalette> m_spPalette;
-};
-STATIC_ASSERT(sizeof(NiPersistentSrcTextureRendererData) == 0x94);
-
-struct NiSourceTexture : NiTexture
-{
-	NiFixedString m_kFilename;
-	NiFixedString m_kPlatformFilename;
-	NiPointer<NiPersistentSrcTextureRendererData> m_spPersistentSrcRendererData;
-	NiPointer<NiPixelData> m_spSrcPixelData;
-	bool m_bStatic;
-	bool m_bLoadDirectToRendererHint;
-	bool m_bSrcRendererDataIsPersistent;
-	char cLooked;
-	NiFile* m_pFile;
-};
-STATIC_ASSERT(sizeof(NiSourceTexture) == 0x48);

@@ -4,8 +4,9 @@
 #include <limits>
 #include <unordered_map>
 #include "BSFile.hpp"
-#include "MemoryManager.hpp"
 #include "BSSimpleList.hpp"
+#include "NiPoint3.hpp"
+#include "MemoryManager.hpp"
 #include "uidecode.h"
 #include "fonthook.h"
 
@@ -128,7 +129,7 @@ namespace fonthook {
         return ret;
     }
 
-    static NiVector3& StringDefaulDimensions = *reinterpret_cast<NiVector3*>(0x11F426C);
+    static NiPoint3& StringDefaulDimensions = *reinterpret_cast<NiPoint3*>(0x11F426C);
 
     static MemoryManager* MemoryManagerSingleton = reinterpret_cast<MemoryManager*>(0x11F6238);
 
@@ -145,11 +146,6 @@ namespace fonthook {
     static size_t __fastcall GetJIPAddress(size_t aiAddress) {
         return reinterpret_cast<size_t>(hJIP) + aiAddress - 0x10000000;
     }
-
-    class FontInfoEx : public FontInfo {
-    public:
-        
-    };
 
     class NiTexturingPropertyEx : public NiTexturingProperty {
     public:
@@ -340,19 +336,19 @@ namespace fonthook {
             int oldTlsValue; // [esp+BCh] [ebp-190h]
             int stringRefFlag; // [esp+C0h] [ebp-18Ch]
             BSFile* NiBinaryStream_3; // [esp+C4h] [ebp-188h]
-            BSFile* NiBinaryStream_4; // [esp+C8h] [ebp-184h]
+            //BSFile* NiBinaryStream_4; // [esp+C8h] [ebp-184h]
             NiFixedString kName_; // [esp+CCh] [ebp-180h] BYREF
             NiTexturingProperty* NiTexturingProperty_3; // [esp+D0h] [ebp-17Ch]
             NiTexturingProperty* NiTexturingProperty_1; // [esp+D4h] [ebp-178h]
             NiPixelData* v36; // [esp+D8h] [ebp-174h]
             NiPixelData* NiPixelData_2; // [esp+DCh] [ebp-170h]
             BSFile* NiBinaryStream_1; // [esp+E0h] [ebp-16Ch]
-            BSFile* NiBinaryStream_2; // [esp+E4h] [ebp-168h]
+            //BSFile* NiBinaryStream_2; // [esp+E4h] [ebp-168h]
             BSFile* NiFile_1; // [esp+E8h] [ebp-164h]
-            BSFile* BSFile_2; // [esp+ECh] [ebp-160h]
+            //BSFile* BSFile_2; // [esp+ECh] [ebp-160h]
             FontData* pFontData; // [esp+F0h] [ebp-15Ch]
             BSFile* BSFile_3; // [esp+F4h] [ebp-158h]
-            BSFile* BSFile_4; // [esp+F8h] [ebp-154h]
+            //BSFile* BSFile_4; // [esp+F8h] [ebp-154h]
             unsigned int a2; // [esp+FCh] [ebp-150h] BYREF
             unsigned int a3; // [esp+100h] [ebp-14Ch]
             NiTexture::FormatPrefs arPrefs_; // [esp+104h] [ebp-148h] BYREF
@@ -850,7 +846,7 @@ namespace fonthook {
             char* processedTextBuffer; // [esp+8Ch] [ebp-754h]
             char* originalTextBuffer; // [esp+94h] [ebp-74Ch]
             unsigned int truncateCharCounter; // [esp+9Ch] [ebp-744h]
-            UInt32 lineCounter; // [esp+A0h] [ebp-740h]
+            SInt32 lineCounter; // [esp+A0h] [ebp-740h]
             unsigned int truncatedTextLen; // [esp+A4h] [ebp-73Ch]
             unsigned __int8 currentChar; // [esp+ABh] [ebp-735h] BYREF
             FontLetter* pCurrentGlyph; // [esp+ACh] [ebp-734h]
@@ -868,13 +864,13 @@ namespace fonthook {
             int varNameLen; // [esp+304h] [ebp-4DCh]
             char varNameBuffer[33]; // [esp+308h] [ebp-4D8h] BYREF
             unsigned int srcTextIndex; // [esp+38Ch] [ebp-454h]
-            UInt32 currentLineWidth; // [esp+390h] [ebp-450h] BYREF
+            SInt32 currentLineWidth; // [esp+390h] [ebp-450h] BYREF
             unsigned int processedTextLen; // [esp+394h] [ebp-44Ch]
             unsigned int lastWrapPosition; // [esp+398h] [ebp-448h]
-            UInt32 maxLineWidth; // [esp+39Ch] [ebp-444h]
+            SInt32 maxLineWidth; // [esp+39Ch] [ebp-444h]
             char* dynamicTextBuffer; // [esp+3A0h] [ebp-440h]
             UInt32 buttonIconIndex; // [esp+3A4h] [ebp-43Ch]
-            UInt32 preSpaceWidth; // [esp+3A8h] [ebp-438h] BYREF
+            SInt32 preSpaceWidth; // [esp+3A8h] [ebp-438h] BYREF
             bool hasEscapeSequence; // [esp+3AFh] [ebp-431h]
             signed int postSpaceWidth; // [esp+3B0h] [ebp-430h]
             bool isTildeChar; // [esp+3B7h] [ebp-429h]
@@ -1283,22 +1279,22 @@ namespace fonthook {
 
     class FontManagerEx : public FontManager {
     public:
-        inline float GetHanziWidth(uint16_t gbChar, FontInfo::GlyphInfo* fontCharMetrics) {
+        inline float GetHanziWidth(uint16_t gbChar, FontLetter* fontCharMetrics) {
             // Check if the character is a valid GB2312 character
-            if (fontCharMetrics[gbChar].width > 0) {
-                return fontCharMetrics[gbChar].kerningLeft
-                    + fontCharMetrics[gbChar].width
-                    + fontCharMetrics[gbChar].kerningRight;
+            if (fontCharMetrics[gbChar].fWidth > 0) {
+                return fontCharMetrics[gbChar].fLeadingEdge
+                    + fontCharMetrics[gbChar].fWidth
+                    + fontCharMetrics[gbChar].fSpacing;
             }
 
             // default space character width if the character is not found
-            return (fontCharMetrics[' '].kerningLeft
-                + fontCharMetrics[' '].width
-                + fontCharMetrics[' '].kerningRight);
+            return (fontCharMetrics[' '].fLeadingEdge
+                + fontCharMetrics[' '].fWidth
+                + fontCharMetrics[' '].fSpacing);
         }
 
         //	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
-        NiVector3* __thiscall GetStringDimensionsEx(NiVector3* outDimensions, const char* srcString, uint32_t fontID, float maxWrapWidth, uint32_t startCharIndex) {
+        NiPoint3* __thiscall CalculateStringDimensions(NiPoint3* outDimensions, const char* srcString, uint32_t fontID, float maxWrapWidth, uint32_t startCharIndex) {
             double tabStopWidth; // st7
             float finalMaxLineWidth; // [esp+10h] [ebp-4Ch]
             float adjustedWrapWidth; // [esp+14h] [ebp-48h]
@@ -1309,11 +1305,11 @@ namespace fonthook {
             float previousCharTotalWidth; // [esp+30h] [ebp-2Ch]
             int totalLines; // [esp+34h] [ebp-28h]
             char hasHyphenationPoint; // [esp+3Bh] [ebp-21h]
-            NiVector3 StringDimensions; // [esp+3Ch] [ebp-20h]
+            NiPoint3 StringDimensions; // [esp+3Ch] [ebp-20h]
             float lastValidWrapPosition; // [esp+48h] [ebp-14h]
             float currentLineWidth; // [esp+4Ch] [ebp-10h]
             int sourceStringLength; // [esp+50h] [ebp-Ch]
-            FontInfo::GlyphInfo* fontCharMetrics; // [esp+54h] [ebp-8h]
+            FontLetter* fontCharMetrics; // [esp+54h] [ebp-8h]
             float fontVerticalSpacingAdjust; // [esp+58h] [ebp-4h]
 
             //gLog.Message("Call GetStringDimensionsEx");
@@ -1325,7 +1321,7 @@ namespace fonthook {
                 //gLog.Message("Call strlen");
                 sourceStringLength = strlen(srcString);
                 //gLog.FormattedMessage("sourceStringLength: %u", sourceStringLength);
-                fontCharMetrics = this->fontInfos[fontID - 1]->fontData->glyphs;
+                fontCharMetrics = this->pFont[fontID - 1]->pFontData->pFontLetters;
                 lastValidWrapPosition = 0.0;
                 currentLineWidth = 0.0;
                 //gLog.Message("Call VertSpacingAdjust");
@@ -1334,7 +1330,7 @@ namespace fonthook {
                 previousCharTotalWidth = 0.0;
                 hasHyphenationPoint = 0;
                 totalLines = 1;
-                StringDimensions.y = fontCharMetrics[' '].height;
+                StringDimensions.y = fontCharMetrics[' '].fHeight;
                 for (currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
                 {
                     currentChar = srcString[currentCharIndex];
@@ -1342,9 +1338,9 @@ namespace fonthook {
                     //gLog.Message("Call ConvertToAsciiQuotes");
                     ConvertToAsciiQuotes(&currentChar);
                     //gLog.Message("Call ConvertToAsciiQuotes end");
-                    currentCharTotalWidth = fontCharMetrics[currentChar].kerningLeft
-                        + fontCharMetrics[currentChar].width
-                        + fontCharMetrics[currentChar].kerningRight;
+                    currentCharTotalWidth = fontCharMetrics[currentChar].fLeadingEdge
+                        + fontCharMetrics[currentChar].fWidth
+                        + fontCharMetrics[currentChar].fSpacing;
                     switch (currentChar)
                     {
                     case '\t':
@@ -1360,9 +1356,9 @@ namespace fonthook {
                         break;
                     case '~':
                         lastValidWrapPosition = currentLineWidth
-                            + fontCharMetrics['-'].kerningLeft
-                            + fontCharMetrics['-'].width
-                            + fontCharMetrics['-'].kerningRight;
+                            + fontCharMetrics['-'].fLeadingEdge
+                            + fontCharMetrics['-'].fWidth
+                            + fontCharMetrics['-'].fSpacing;
                         hasHyphenationPoint = 1;
                         break;
                     default:
@@ -1377,9 +1373,9 @@ namespace fonthook {
                             lastValidWrapPosition = currentLineWidth
                                 - currentCharTotalWidth
                                 - previousCharTotalWidth
-                                + fontCharMetrics['-'].kerningLeft
-                                + fontCharMetrics['-'].width
-                                + fontCharMetrics['-'].kerningRight;
+                                + fontCharMetrics['-'].fLeadingEdge
+                                + fontCharMetrics['-'].fWidth
+                                + fontCharMetrics['-'].fSpacing;
                             currentLineWidth = currentCharTotalWidth + previousCharTotalWidth;
                         }
                         else
@@ -1391,9 +1387,9 @@ namespace fonthook {
                                     currentLineWidth = 0.0;
                                 else
                                     currentLineWidth = currentLineWidth
-                                    - (fontCharMetrics[' '].kerningLeft
-                                        + fontCharMetrics[' '].width
-                                        + fontCharMetrics[' '].kerningRight);
+                                    - (fontCharMetrics[' '].fLeadingEdge
+                                        + fontCharMetrics[' '].fWidth
+                                        + fontCharMetrics[' '].fSpacing);
                             }
                         }
                         if (lastValidWrapPosition >= StringDimensions.x)
@@ -1402,7 +1398,7 @@ namespace fonthook {
                             adjustedWrapWidth = StringDimensions.x;
                         StringDimensions.x = adjustedWrapWidth;
                         StringDimensions.y = fontVerticalSpacingAdjust
-                            + this->fontInfos[fontID - 1]->fontData->lineHeight
+                            + this->pFont[fontID - 1]->pFontData->fBaseLine
                             + StringDimensions.y;
                         lastValidWrapPosition = 0.0;
                         ++totalLines;
@@ -1432,8 +1428,8 @@ namespace fonthook {
     }
 
     void InitFontHook() {
-        // FontManager::GetStringDimensions
-        //WriteRelJumpEx(0xA1B020, &FontManagerEx::GetStringDimensionsEx);
+        // Font::Load
+        WriteRelCallEx(0xA1219D, &FontEx::Load);
         // 
         // Font::PrepText
         WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
@@ -1443,11 +1439,11 @@ namespace fonthook {
         //WriteRelCall(0xA12E1B, &FontAddChar);
         //WriteRelCall(0xA19622, &FontAddChar);
         // 
-        // Font::Load
-        WriteRelCallEx(0xA1219D, &FontEx::Load);
-        // 
         // Font::CreateText
         //WriteRelCallEx(0xA22211, &FontEx::CreateText);
+        // 
+        // FontManager::CalculateStringDimensions
+        WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
         // 
         // FileFinder::GetFile
         //WriteRelCall(0xA15A86, &FileFinder_GetFile);
