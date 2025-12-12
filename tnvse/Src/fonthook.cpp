@@ -961,11 +961,11 @@ namespace fonthook {
                     else if (currentChar == '~')
                     {
                         lastWrapPosition = processedTextLen;
-                        preSpaceWidth = currentLineWidth;
-                        postSpaceWidth = currentLineWidth;
                         isTildeChar = 1;
                         tildeCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
                         currentLineWidth -= tildeCharWidth;
+                        preSpaceWidth = currentLineWidth;
+                        postSpaceWidth = currentLineWidth;
                     }
                     gLog.FormattedMessage("currentChar '%c' process end", currentChar);
                     if (currentLineWidth > axData->iWidth)
@@ -977,8 +977,9 @@ namespace fonthook {
                                 isTildeChar = 0;
                                 textBufferSize += 4;
                                 dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, textBufferSize));
+
                                 // 0xEC7230
-                                memmove(
+                                /*memmove(
                                     &dynamicTextBuffer[lastWrapPosition + 2],
                                     &dynamicTextBuffer[lastWrapPosition],
                                     processedTextLen - lastWrapPosition);
@@ -989,7 +990,15 @@ namespace fonthook {
                                 pCurrentGlyph = &this->pFontData->pFontLetters['-'];
                                 totalTextHeight = this->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
                                 hyphenCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
-                                currentLineWidth -= hyphenCharWidth;
+                                currentLineWidth -= hyphenCharWidth;*/
+
+                                memmove(
+                                    &dynamicTextBuffer[lastWrapPosition + 1],
+                                    &dynamicTextBuffer[lastWrapPosition],
+                                    processedTextLen - lastWrapPosition);
+                                dynamicTextBuffer[lastWrapPosition] = axData->cLineSep;
+                                processedTextLen += 1;
+
                                 AppendToListTail(&axData->xLineWidths, &currentLineWidth);
                                 if (maxLineWidth <= currentLineWidth)
                                     tempLineWidthComp3 = currentLineWidth;
@@ -1031,14 +1040,22 @@ namespace fonthook {
                             }
                             dynamicTextBuffer[processedTextLen + 2] = dynamicTextBuffer[processedTextLen];
                             dynamicTextBuffer[processedTextLen + 1] = dynamicTextBuffer[processedTextLen - 1];
+
                             //qmemcpy
-                            memcpy(&dynamicTextBuffer[processedTextLen - 1], "-\n", 2);
+                            /*memcpy(&dynamicTextBuffer[processedTextLen - 1], "-\n", 2);
                             processedTextLen += 2;
                             hyphenInsertCount += 2;
                             pCurrentGlyph = &this->pFontData->pFontLetters['-'];
                             totalTextHeight = this->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
                             hyphenInsertWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
-                            currentLineWidth -= hyphenInsertWidth;
+                            currentLineWidth -= hyphenInsertWidth;*/
+
+                            memmove(&dynamicTextBuffer[processedTextLen],
+                                &dynamicTextBuffer[processedTextLen - 1],
+                                2);
+                            dynamicTextBuffer[processedTextLen - 1] = axData->cLineSep;
+                            processedTextLen += 1;
+
                             AppendToListTail(&axData->xLineWidths, &currentLineWidth);
                             if (maxLineWidth <= currentLineWidth)
                                 tempLineWidthComp1 = currentLineWidth;
