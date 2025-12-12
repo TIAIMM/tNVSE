@@ -396,6 +396,11 @@ struct  Font
 		BSSimpleList_int xLineWidths;
 	};
 
+	__forceinline Font* AddTextIcon(const char* astrIcon)
+	{
+		return ThisStdCall<Font*>(0xA1AEE0, this, astrIcon);
+	}
+
 };
 STATIC_ASSERT(sizeof(Font) == 0x54);
 STATIC_ASSERT(sizeof(Font::TextData) == 0x28);
