@@ -75,7 +75,7 @@ namespace fonthook {
     }
 
     static bool IsGB2312LeadByte(unsigned char c) {
-        return (c >= 0xA1 && c <= 0xF7);
+        return (c >= 0xA1 && c <= 0xFE);
     }
 
     typedef uint32_t(__thiscall* GetFileSizeFunc)(void* pThis);
@@ -1142,6 +1142,10 @@ namespace fonthook {
             int j_1; // [esp+148h] [ebp-30h]
             Font::TextData axData2; // [esp+14Ch] [ebp-2Ch]
             int v37; // [esp+174h] [ebp-4h]
+            unsigned char cMSB, cLSB;
+            UInt32 uiGBKcode;
+            auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
+            auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
             gLog.FormattedMessage("\nCall Font::CreateText");
             if (!*aiHeight)
@@ -1250,12 +1254,39 @@ namespace fonthook {
                 }
                 else
                 {
-                    FontAddChar(
-                        &this->pFontData->pFontLetters[cCurrentChar],
-                        axData2.iLineEnd++,
-                        (NiTriShape*)*apTextShape,
-                        &axPos_.x,
-                        axFontColor);
+                    if (extraGlyphs && IsGB2312LeadByte(cCurrentChar)) {
+                        gLog.FormattedMessage("Find GB2312LeadByte");
+                        cMSB = cCurrentChar;
+                        cLSB = axData.xNewText.pString[++axData2.iCharCount];
+						uiGBKcode = (static_cast<UInt32>(cMSB) << 8) | static_cast<UInt32>(cLSB);
+
+                        auto glyphIt = extraGlyphs->find(uiGBKcode);
+                        if (glyphIt != extraGlyphs->end())
+                        {
+                            gLog.FormattedMessage("Render GB2312LeadByte");
+                            FontAddChar(
+                                &glyphIt->second,
+                                axData2.iLineEnd++,
+                                (NiTriShape*)*apTextShape,
+                                &axPos_.x,
+                                axFontColor);
+                        }
+
+                        FontAddChar(
+                            &this->pFontData->pFontLetters[cCurrentChar],
+                            axData2.iLineEnd++,
+                            (NiTriShape*)*apTextShape,
+                            &axPos_.x,
+                            axFontColor);
+                    }
+                    else {
+                        FontAddChar(
+                            &this->pFontData->pFontLetters[cCurrentChar],
+                            axData2.iLineEnd++,
+                            (NiTriShape*)*apTextShape,
+                            &axPos_.x,
+                            axFontColor);
+                    }
                 }
                 v19 = *aiWidth;
                 v20 = ConditionalFloatToUInt(axPos_.x - axPos__2);
