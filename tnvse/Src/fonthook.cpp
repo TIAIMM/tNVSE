@@ -1523,7 +1523,7 @@ namespace fonthook {
 
     void InitFontHook() {
         // Font::Load
-        WriteRelCallEx(0xA1219D, &FontEx::Load);
+        WriteRelJumpEx(0xA15320, &FontEx::Load);
         // 
         // Font::PrepText
         WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
@@ -1534,7 +1534,7 @@ namespace fonthook {
         //WriteRelCall(0xA19622, &FontAddChar);
         // 
         // Font::CreateText
-        WriteRelCallEx(0xA22211, &FontEx::CreateText);
+        WriteRelJumpEx(0xA12880, &FontEx::CreateText);
         // 
         // FontManager::CalculateStringDimensions
         WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
