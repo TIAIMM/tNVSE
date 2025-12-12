@@ -6,6 +6,7 @@
 #include "BSFile.hpp"
 #include "BSSimpleList.hpp"
 #include "NiPoint3.hpp"
+#include "NiTriShape.hpp"
 #include "MemoryManager.hpp"
 #include "uidecode.h"
 #include "fonthook.h"
@@ -652,183 +653,6 @@ namespace fonthook {
             *(DWORD*)targetAddress = savedTlsValue;
         }
 
-        //UInt32 CreateText(
-        //    BSStringT<char>* axTextString,
-        //    int* aiWidth,
-        //    int* aiHeight,
-        //    int aiLineStart,
-        //    int aiLineEnd,
-        //    int aiFlags,
-        //    char aiLineBreakChar,
-        //    const NiColorA* axFontColor,
-        //    NiTriShape** apTextShape,
-        //    NiTriShape** apIconShape
-        //) {
-        //    gLog.FormattedMessage("\nCall Font::CreateText");
-        //    gLog.FormattedMessage("axTextString: '%s'", (const char*)axTextString->pString);
-
-        //    double v11; // st7
-        //    float* v12; // ecx
-        //    float* v13; // ecx
-        //    int v15; // [esp+14h] [ebp-164h]
-        //    float v16; // [esp+1Ch] [ebp-15Ch]
-        //    int v18; // [esp+90h] [ebp-E8h]
-        //    int v19; // [esp+94h] [ebp-E4h]
-        //    int m_item_2; // [esp+A4h] [ebp-D4h]
-        //    BSSimpleList<int>* m_pkNext_0; // [esp+A8h] [ebp-D0h]
-        //    int _1_1; // [esp+ACh] [ebp-CCh]
-        //    int m_item_3; // [esp+B0h] [ebp-C8h]
-        //    BSSimpleList<int>* m_pkNext_1; // [esp+B4h] [ebp-C4h]
-        //    int _1; // [esp+B8h] [ebp-C0h]
-        //    int m_item_1; // [esp+D0h] [ebp-A8h]
-        //    int m_item; // [esp+DCh] [ebp-9Ch]
-        //    unsigned __int8 cCurrentChar; // [esp+107h] [ebp-71h] BYREF
-        //    int cCurrentChar_1; // [esp+108h] [ebp-70h]
-        //    int axPos__1; // [esp+10Ch] [ebp-6Ch]
-        //    float axPos_; // [esp+110h] [ebp-68h] BYREF
-        //    float v32; // [esp+114h] [ebp-64h]
-        //    float v33; // [esp+118h] [ebp-60h]
-        //    float axPos__2; // [esp+11Ch] [ebp-5Ch]
-        //    int v35[8]; // [esp+120h] [ebp-58h] BYREF
-        //    BSSimpleList<int> v36; // [esp+140h] [ebp-38h] BYREF
-        //    int j_1; // [esp+148h] [ebp-30h]
-        //    int v38; // [esp+14Ch] [ebp-2Ch]
-        //    float v39; // [esp+150h] [ebp-28h]
-        //    float v40; // [esp+154h] [ebp-24h]
-        //    float v41; // [esp+158h] [ebp-20h]
-        //    float LinePadding; // [esp+15Ch] [ebp-1Ch]
-        //    int aiVert; // [esp+160h] [ebp-18h]
-        //    int i; // [esp+164h] [ebp-14h]
-        //    float* v45; // [esp+168h] [ebp-10h]
-        //    int v46; // [esp+174h] [ebp-4h]
-
-        //    if (!*aiHeight)
-        //        *aiHeight = 0x7FFFFFFF;
-        //    if (!aiLineEnd)
-        //        aiLineEnd = 0x7FFFFFFF;
-        //    LinePadding = FontManager::GetLinePadding(this->iFontNum);
-        //    sub_759330((int)v35, *aiWidth, *aiHeight, aiLineStart, aiLineEnd, aiLineBreakChar);
-        //    v46 = 0;
-        //    Font::PrepText((int*)this, axTextString->pString, (int)v35);
-        //    *aiWidth = v35[2];
-        //    *aiHeight = v35[3];
-        //    j_1 = 0;
-        //    axPos__1 = 0;
-        //    if (aiFlags == 4)
-        //    {
-        //        if (&v36)
-        //            m_item = v36.m_item;
-        //        else
-        //            m_item = -1;
-        //        axPos__1 = -m_item;
-        //    }
-        //    else if (aiFlags == 2)
-        //    {
-        //        if (&v36)
-        //            m_item_1 = v36.m_item;
-        //        else
-        //            m_item_1 = -1;
-        //        axPos__1 = m_item_1 / -2;
-        //    }
-        //    axPos_ = (float)axPos__1;
-        //    v11 = this->pFontData->fBaseLine - this->fFontHeight;
-        //    v33 = v11 + v11;
-        //    v32 = 0.0;
-        //    *apTextShape = Font::MakeTriShape((NiTriShape*)this, v35[6], axFontColor, 1);
-        //    v39 = 0.0;
-        //    v40 = v32;
-        //    v41 = v33;
-        //    v12 = &(*apTextShape)->m_kLocal.m_Rotate.m_pEntry[1].m_vfPt.vector4_f32[2];
-        //    *v12 = 0.0;
-        //    v12[1] = v40;
-        //    v12[2] = v41;
-        //    if (this->ButtonIcons.iSize)
-        //    {
-        //        *apIconShape = (NiTriShape*)Font::MakeIconsTriShape(this);
-        //        v13 = &(*apIconShape)->m_kLocal.m_Rotate.m_pEntry[1].m_vfPt.vector4_f32[2];
-        //        *v13 = v39;
-        //        v13[1] = v40;
-        //        v13[2] = v41;
-        //        sub_A67050(0x4000);
-        //    }
-        //    axPos__2 = axPos_;
-        //    aiVert = 0;
-        //    v38 = 0;
-        //    for (i = 0; *(_BYTE*)(v35[0] + (v35[0] != 0 ? i : 0)); ++i)
-        //    {
-        //        if (*(char*)(v35[0] + (v35[0] != 0 ? i : 0)) == aiLineBreakChar)
-        //        {
-        //            ++j_1;
-        //            axPos_ = 0.0;
-        //            if (aiFlags == 4)
-        //            {
-        //                m_pkNext_1 = &v36;
-        //                for (_1 = 0; _1 < j_1 && m_pkNext_1; ++_1)
-        //                    m_pkNext_1 = m_pkNext_1->m_pkNext;
-        //                if (m_pkNext_1)
-        //                    m_item_3 = m_pkNext_1->m_item;
-        //                else
-        //                    m_item_3 = -1;
-        //                axPos_ = (float)-m_item_3;
-        //            }
-        //            else if (aiFlags == 2)
-        //            {
-        //                m_pkNext_0 = &v36;
-        //                for (_1_1 = 0; _1_1 < j_1 && m_pkNext_0; ++_1_1)
-        //                    m_pkNext_0 = m_pkNext_0->m_pkNext;
-        //                if (m_pkNext_0)
-        //                    m_item_2 = m_pkNext_0->m_item;
-        //                else
-        //                    m_item_2 = -1;
-        //                axPos_ = (float)(m_item_2 / -2);
-        //            }
-        //            v33 = v33 - (this->pFontData->fBaseLine + LinePadding);
-        //        }
-        //        else if (*(_BYTE*)(v35[0] + (v35[0] != 0 ? i : 0)) == 9)
-        //        {
-        //            v16 = sub_EC9130(
-        //                COERCE_UNSIGNED_INT64(axPos_),
-        //                HIDWORD(COERCE_UNSIGNED_INT64(axPos_)),
-        //                COERCE_UNSIGNED_INT64(75.0),
-        //                HIDWORD(COERCE_UNSIGNED_INT64(75.0)));
-        //            axPos_ = 75.0 - v16 + axPos_;
-        //        }
-        //        cCurrentChar = *(_BYTE*)(v35[0] + (v35[0] != 0 ? i : 0));
-        //        sub_A122B0(&cCurrentChar);
-        //        cCurrentChar_1 = cCurrentChar;
-        //        if (cCurrentChar == 1)
-        //        {
-        //            if (this->ButtonIcons.iSize)
-        //                Font::AddIcon(this, v38++, (int)*apIconShape, &axPos_);
-        //        }
-        //        else
-        //        {
-        //            Font::AddChar(&this->pFontData->pFontLetters[cCurrentChar], aiVert++, *apTextShape, &axPos_, axFontColor);
-        //        }
-        //        v18 = *aiWidth;
-        //        v19 = sub_EC62C0(axPos_ - axPos__2);
-        //        if (v19 <= v18)
-        //            v15 = v18;
-        //        else
-        //            v15 = v19;
-        //        *aiWidth = v15;
-        //    }
-        //    v45 = *(float**)(LODWORD((*apTextShape)->m_kWorld.m_Translate.z) + 32);
-        //    NiBound::ComputeFromData(
-        //        (float*)(LODWORD((*apTextShape)->m_kWorld.m_Translate.z) + 16),
-        //        *(unsigned __int16*)(LODWORD((*apTextShape)->m_kWorld.m_Translate.z) + 8),
-        //        v45);
-        //    if (*apIconShape)
-        //        NiBound::ComputeFromData(
-        //            (float*)(LODWORD((*apIconShape)->m_kWorld.m_Translate.z) + 16),
-        //            *(unsigned __int16*)(LODWORD((*apIconShape)->m_kWorld.m_Translate.z) + 8),
-        //            *(float**)(LODWORD((*apIconShape)->m_kWorld.m_Translate.z) + 32));
-        //    BSSimpleArray_ButtonIcon_1024::Clear(&this->ButtonIcons.__vftable, 1);
-        //    v46 = -1;
-        //    gLog.FormattedMessage("Font::CreateText End\n");
-        //    return sub_7593E0(v35);
-        //}
-
         void __thiscall PrepText(const char* apOrigString, Font::TextData* axData) {
             unsigned int charWidthWithKerning; // eax
             unsigned int spaceCharWidth; // eax
@@ -1274,6 +1098,10 @@ namespace fonthook {
             MemoryManagerSingleton->Deallocate(processedOriginalText);
             MemoryManagerSingleton->Deallocate(dynamicTextBuffer);
             //gLog.Message("CalculateTextLayoutEx End");
+        }
+
+        UInt32 CreateText() {
+
         }
     };
 

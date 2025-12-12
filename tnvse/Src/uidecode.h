@@ -11,10 +11,10 @@
 #include "tList.h"
 
 // C
-struct NiVector3
-{
-	float	x, y, z;
-};
+//struct NiVector3
+//{
+//	float	x, y, z;
+//};
 
 struct NiPersistentSrcTextureRendererData : NiTexture::RendererData
 {
@@ -59,51 +59,51 @@ struct NiSourceTexture : NiTexture
 STATIC_ASSERT(sizeof(NiSourceTexture) == 0x48);
 
 // From OBSE
-struct FNTFile { // sizeof == 0x3928
-	struct GlyphInfo { // sizeof == 0x38
-		struct UV {
-			union { // x or u: percentage of width
-				float x;
-				float u;
-			};
-			union { // y or v: percentage of height
-				float y;
-				float v;
-			};
-		};
-		//
-		float unk00;       // 00
-		UV    topLeft;     // 04
-		UV    topRight;    // 0C
-		UV    bottomLeft;  // 14
-		UV    bottomRight; // 1C
-		float width;       // 24 // px
-		float height;      // 28 // px
-		float kerningLeft; // 2C // px // negative values pull adjacent letters closer
-		float kerningRight;// 30 // px // negative values pull adjacent letters closer
-		float ascent;      // 34 // px
-	};
-	//
-	float     fontSize;
-	SInt32    unk04;       // 0004 // Number of font textures. No more than 8 are allowed. See 00574892.
-	UInt32    unk08;
-	char      name[284];   // 000C // One texture filename (sans path) every 0x24 bytes, e.g. name[0], name[0x24], name[0x48], ...
-	GlyphInfo glyphs[256]; // 0128
-	//
-	// Question: what would multiple texture files accomplish? How would they even work? It seems 
-	// like the FontInfo struct only supports one texture file at a time in the first place.
-	//
-	// If you ensure that there is only one font texture, then you can have the name as long as 
-	// you like. TEX names aren't capped to 0x24 bytes; the game just starts reading at multiples 
-	// of 0x24 within the name string.
-};
+//struct FNTFile { // sizeof == 0x3928
+//	struct GlyphInfo { // sizeof == 0x38
+//		struct UV {
+//			union { // x or u: percentage of width
+//				float x;
+//				float u;
+//			};
+//			union { // y or v: percentage of height
+//				float y;
+//				float v;
+//			};
+//		};
+//		//
+//		float unk00;       // 00
+//		UV    topLeft;     // 04
+//		UV    topRight;    // 0C
+//		UV    bottomLeft;  // 14
+//		UV    bottomRight; // 1C
+//		float width;       // 24 // px
+//		float height;      // 28 // px
+//		float kerningLeft; // 2C // px // negative values pull adjacent letters closer
+//		float kerningRight;// 30 // px // negative values pull adjacent letters closer
+//		float ascent;      // 34 // px
+//	};
+//	//
+//	float     fontSize;
+//	SInt32    unk04;       // 0004 // Number of font textures. No more than 8 are allowed. See 00574892.
+//	UInt32    unk08;
+//	char      name[284];   // 000C // One texture filename (sans path) every 0x24 bytes, e.g. name[0], name[0x24], name[0x48], ...
+//	GlyphInfo glyphs[256]; // 0128
+//	//
+//	// Question: what would multiple texture files accomplish? How would they even work? It seems 
+//	// like the FontInfo struct only supports one texture file at a time in the first place.
+//	//
+//	// If you ensure that there is only one font texture, then you can have the name as long as 
+//	// you like. TEX names aren't capped to 0x24 bytes; the game just starts reading at multiples 
+//	// of 0x24 within the name string.
+//};
 
 // From JIP
-struct FontHeightData
-{
-	float heightBase;
-	float heightwGap;
-} s_fontHeightDatas[90];
+//struct FontHeightData
+//{
+//	float heightBase;
+//	float heightwGap;
+//} s_fontHeightDatas[90];
 
 //// From JIP
 //// 54
@@ -283,6 +283,16 @@ struct  Font
 		return ThisStdCall<Font*>(0xA1AEE0, this, astrIcon);
 	}
 
+	__forceinline NiTriShape* MakeTriShape(int aiChars, const NiColorA* axColor, bool abPrepareObject)
+	{
+		return ThisStdCall<NiTriShape*>(0xA14A20, this, aiChars, axColor, abPrepareObject);
+	}
+
+	__forceinline NiTriShape* MakeIconsTriShape()
+	{
+		return ThisStdCall<NiTriShape*>(0xA14DA0, this);
+	}
+
 };
 STATIC_ASSERT(sizeof(Font) == 0x54);
 STATIC_ASSERT(sizeof(Font::TextData) == 0x28);
@@ -301,8 +311,8 @@ public:
 	Font* extraFonts[80]; // 24
 
 	//	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
-	NiPoint3* GetStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID, UInt32 maxFlt = 0x7F7FFFFF,
-		UInt32 startIdx = 0);
+	/*NiPoint3* GetStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID, UInt32 maxFlt = 0x7F7FFFFF,
+		UInt32 startIdx = 0);*/
 
 	__forceinline static FontManager* GetSingleton() { return *(FontManager**)0x11F33F8; }
 };
@@ -311,47 +321,47 @@ public:
 //0x11F33F8
 // From Modern Minimap
 //0x5BD5B0
-__declspec(naked) NiPoint3* FontManager::GetStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID,
-	UInt32 maxFlt, UInt32 startIdx)
-{
-	static const UInt32 procAddr = 0xA1B020;
-	__asm jmp procAddr
-}
+//__declspec(naked) NiPoint3* FontManager::GetStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID,
+//	UInt32 maxFlt, UInt32 startIdx)
+//{
+//	static const UInt32 procAddr = 0xA1B020;
+//	__asm jmp procAddr
+//}
 
 //From Stewie Tweaks
-struct __declspec(align(4)) FontTextReplaced
-{
-	BSString str;
-	UInt32 wrapWidth;
-	UInt32 wrapLimit;
-	UInt32 initdToZero;
-	UInt32 wrapLines;
-	UInt32 length;
-	UInt8 newLineCharacter;
-	UInt8 gap1D[3];
-	tList<void> lineWidths;
+//struct __declspec(align(4)) FontTextReplaced
+//{
+//	BSString str;
+//	UInt32 wrapWidth;
+//	UInt32 wrapLimit;
+//	UInt32 initdToZero;
+//	UInt32 wrapLines;
+//	UInt32 length;
+//	UInt8 newLineCharacter;
+//	UInt8 gap1D[3];
+//	tList<void> lineWidths;
+//
+//	FontTextReplaced()
+//		initdToZero = 0;
+//	{
+//		wrapLines = 0;
+//		length = 0;
+//		newLineCharacter = 0;
+//		lineWidths.Init();
+//	};
+//
+//	~FontTextReplaced()
+//	{
+//		lineWidths.RemoveAll();
+//	}
+//
+//	//BSStringT<T>::Set			0x4037F0 FontTextReplaced::StringSet
+//	//BSStringT<T>::operator+=	0x404820 FontTextReplaced::StringAppend
+//	//BSStringT<T>::Format		0x406F60 FontTextReplaced::StringFormat
+//	//BSStringT<T>::ApplyFormat 0x406F90
+//};
 
-	FontTextReplaced()
-	{
-		initdToZero = 0;
-		wrapLines = 0;
-		length = 0;
-		newLineCharacter = 0;
-		lineWidths.Init();
-	};
-
-	~FontTextReplaced()
-	{
-		lineWidths.RemoveAll();
-	}
-
-	//BSStringT<T>::Set			0x4037F0 FontTextReplaced::StringSet
-	//BSStringT<T>::operator+=	0x404820 FontTextReplaced::StringAppend
-	//BSStringT<T>::Format		0x406F60 FontTextReplaced::StringFormat
-	//BSStringT<T>::ApplyFormat 0x406F90
-};
-
-STATIC_ASSERT(sizeof(FontTextReplaced) == 0x28);
+//STATIC_ASSERT(sizeof(FontTextReplaced) == 0x28);
 
 // From Stewie Tweaks
 class DebugText
