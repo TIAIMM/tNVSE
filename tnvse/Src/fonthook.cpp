@@ -708,12 +708,12 @@ namespace fonthook {
             UInt32 sourceTextLen; // [esp+7D8h] [ebp-8h]
             int maxAllowedLines; // [esp+7DCh] [ebp-4h]
 
-            //gLog.Message("Call CalculateTextLayoutEx");
+            gLog.FormattedMessage("Call PrepText");
 
             if (!apOrigString)
                 return;
 
-            //gLog.FormattedMessage("textSrc = '%s'", textSrc);
+            gLog.FormattedMessage("apOrigString = '%s'", apOrigString);
 
             if (axData->iWidth <= 0)
                 axData->iWidth = 0x7FFFFFFF;
@@ -732,45 +732,45 @@ namespace fonthook {
             currentLineCount = 1;
             // 0xEC6130
             sourceTextLen = strlen(apOrigString);
-            //gLog.FormattedMessage("sourceTextLen = %u", sourceTextLen);
+            gLog.FormattedMessage("sourceTextLen = %u", sourceTextLen);
             maxAllowedLines = axData->iLineEnd;
 
-            //gLog.Message("Init originalTextBuffer");
-            //gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
+            //gLog.FormattedMessage("Init originalTextBuffer");
+            gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
             originalTextBuffer = static_cast<char*>(MemoryManagerSingleton->Allocate(sourceTextLen + 4));
             if (!originalTextBuffer) {
-                //gLog.Message("Memory allocation failed for originalTextBuffer");
+                gLog.FormattedMessage("Memory allocation failed for originalTextBuffer");
                 return;
             }
 
-            //gLog.Message("MemSet originalTextBuffer");
+            gLog.FormattedMessage("MemSet originalTextBuffer");
             // 0xEC61C0
             memset(originalTextBuffer, 0, sourceTextLen + 4);
 
-            //gLog.Message("Init processedOriginalText");
+            gLog.FormattedMessage("Init processedOriginalText");
             processedOriginalText = originalTextBuffer;
 
 
-            //gLog.Message("Init processedTextBuffer");
-            //gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
+            //gLog.FormattedMessage("Init processedTextBuffer");
+            gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
             processedTextBuffer = static_cast<char*>(MemoryManagerSingleton->Allocate(sourceTextLen + 4));
             if (!processedTextBuffer) {
-                //gLog.Message("Memory allocation failed for processedTextBuffer");
+                //gLog.FormattedMessage("Memory allocation failed for processedTextBuffer");
                 MemoryManagerSingleton->Deallocate(originalTextBuffer);
                 return;
             }
 
-            //gLog.Message("MemSet processedTextBuffer");
+            gLog.FormattedMessage("MemSet processedTextBuffer");
             // 0xEC61C0
             memset(processedTextBuffer, 0, sourceTextLen + 4);
 
-            //gLog.Message("Init dynamicTextBuffer");
+            gLog.FormattedMessage("Init dynamicTextBuffer");
             dynamicTextBuffer = processedTextBuffer;
 
-            //gLog.Message("SafeFormatString originalTextBuffer");
+            gLog.FormattedMessage("SafeFormatString originalTextBuffer");
             // 0xEC623A
             snprintf(originalTextBuffer, sourceTextLen + 1, "%s", apOrigString);
-            //gLog.Message("Buffer Init Finish");
+            gLog.FormattedMessage("Buffer Init Finish");
 
             processedTextLen = 0;
             textBufferSize = sourceTextLen + 4;
@@ -778,10 +778,10 @@ namespace fonthook {
             isTildeChar = 0;
             parsedTextBuffer[0] = 0;
             hasEscapeSequence = 0;
-            //gLog.Message("processedOriginalText Read Start");
+            gLog.FormattedMessage("processedOriginalText Read Start");
             for (srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
             {
-                //gLog.FormattedMessage("process index %u", srcTextIndex);
+                gLog.FormattedMessage("process index %u", srcTextIndex);
                 if (processedOriginalText[srcTextIndex] == '&')
                 {
                     varNameLen = 0;
@@ -810,7 +810,7 @@ namespace fonthook {
                     totalEscapeSeqLen = (strlen(varNameBuffer) + 1);
                     if (processedOriginalText[varNameLen + srcTextIndex] == ';')
                         totalEscapeSeqLen += escapeSeqPrefixLen;
-                    //gLog.Message("ReplaceVariableInString & ParseAndFormatVariableInString");
+                    gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString");
                     if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
                         || ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
                     {
@@ -827,12 +827,12 @@ namespace fonthook {
                                 ;
                             substrBuffer[0] = 0;
                             // 0xEC6370
-                            //gLog.Message("FastStringCopyAligned 1");
+                            gLog.FormattedMessage("FastStringCopyAligned 1");
                             //strcpy(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
                             strcpy_s(&parsedTextBuffer[charScanIndex + 1],
                                 sizeof(parsedTextBuffer) - (charScanIndex + 1),
                                 substrBuffer);
-                            //gLog.Message("FastStringCopyAligned 1 End");
+                            gLog.FormattedMessage("FastStringCopyAligned 1 End");
                             // 0xEC6130
                             UInt32 strLen = strlen(substrBuffer);
                             *((char*)unkarray + strLen + 15) = 0;
@@ -867,20 +867,20 @@ namespace fonthook {
                 }
                 else
                 {
-                    //gLog.FormattedMessage("dynamicTextBuffer [%u] = processedOriginalText[%u]", processedTextLen + 1 , srcTextIndex);
+                    gLog.FormattedMessage("dynamicTextBuffer [%u] = processedOriginalText[%u]", processedTextLen + 1 , srcTextIndex);
                     dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
-                    //gLog.Message("Copy Finished");
+                    gLog.FormattedMessage("Copy Finished");
                 }
             }
-            //gLog.Message("processedOriginalText Read Finish");
+            gLog.FormattedMessage("processedOriginalText Read Finish");
             dynamicTextBuffer[processedTextLen] = 0;
             if (hasEscapeSequence)
             {
                 sourceTextLen = processedTextLen;
-                //gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
+                gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
                 processedOriginalText = static_cast<char*>(MemoryManagerSingleton->Reallocate(processedOriginalText, processedTextLen + 4));
                 // 0xEC6370
-                //gLog.Message("FastStringCopyAligned");
+                gLog.FormattedMessage("FastStringCopyAligned");
                 //strcpy(processedOriginalText, dynamicTextBuffer);
                 strcpy_s(processedOriginalText, processedTextLen + 4, dynamicTextBuffer);
             }
@@ -888,7 +888,7 @@ namespace fonthook {
             processedTextLen = 0;
             buttonIconIndex = 0;
 
-            //gLog.Message("processedOriginalText Read 2 Start");
+            gLog.FormattedMessage("processedOriginalText Read 2 Start");
             for (charIndex = 0; charIndex < sourceTextLen && processedOriginalText[charIndex]; ++charIndex)
             {
                 if (processedOriginalText[charIndex] == axData->cLineSep)
@@ -896,12 +896,12 @@ namespace fonthook {
                     dynamicTextBuffer[processedTextLen] = axData->cLineSep;
                     if (++processedTextLen >= textBufferSize)
                     {
-                        //gLog.FormattedMessage("Relocating dynamicTextBuffer: size=%u", processedTextLen + 4);
+                        gLog.FormattedMessage("Relocating dynamicTextBuffer: size=%u", processedTextLen + 4);
                         dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 4));
                         textBufferSize = processedTextLen + 4;
                     }
                     totalTextHeight = this->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
-                    //gLog.FormattedMessage("AppendToListTail: %d", currentLineWidth);
+                    gLog.FormattedMessage("AppendToListTail: %d", currentLineWidth);
                     AppendToListTail(&axData->xLineWidths, &currentLineWidth);
                     if (maxLineWidth <= currentLineWidth)
                         tempLineWidthComp4 = currentLineWidth;
@@ -920,9 +920,9 @@ namespace fonthook {
                         continue;
                     }
                     currentChar = processedOriginalText[charIndex];
-                    //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
+                    gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
                     ConvertToAsciiQuotes(&currentChar);
-                    //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c' end", currentChar);
+                    gLog.FormattedMessage("ConvertToAsciiQuotes: '%c' end", currentChar);
                     pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
                     if (currentChar == 1)
                     {
@@ -935,7 +935,7 @@ namespace fonthook {
                     }
                     //gLog.FormattedMessage("ConditionalFloatToUInt: %d", pCurrentGlyph->width + pCurrentGlyph->kerningRight);
                     charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
-                    //gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
+                    gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
                     currentLineWidth += charWidthWithKerning;
                     if (currentChar == ' ')
                     {
@@ -954,7 +954,7 @@ namespace fonthook {
                         tildeCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
                         currentLineWidth -= tildeCharWidth;
                     }
-                    //gLog.FormattedMessage("currentChar '%c' process end", currentChar);
+                    gLog.FormattedMessage("currentChar '%c' process end", currentChar);
                     if (currentLineWidth > axData->iWidth)
                     {
                         if (lastWrapPosition)
@@ -1058,7 +1058,7 @@ namespace fonthook {
                     break;
                 }
             }
-            //gLog.Message("processedOriginalText Read 2 End");
+            gLog.FormattedMessage("processedOriginalText Read 2 End");
             if (*dynamicTextBuffer && axData->iLineStart)
             {
                 truncatedTextLen = 0;
@@ -1082,26 +1082,205 @@ namespace fonthook {
                 totalTextHeight = this->pFontData->pFontLetters[' '].fHeight;
                 currentLineWidth = ConditionalFloatToUInt(this->pFontData->pFontLetters[' '].fWidth);
             }
+            gLog.FormattedMessage("AppendToListTail");
             AppendToListTail(&axData->xLineWidths, &currentLineWidth);
+            gLog.FormattedMessage("AppendToListTail End");
             if (maxLineWidth <= currentLineWidth)
                 finalMaxLineWidth = currentLineWidth;
             else
                 finalMaxLineWidth = maxLineWidth;
             maxLineWidth = finalMaxLineWidth;
             dynamicTextBuffer[processedTextLen] = 0;
+            gLog.FormattedMessage("Write axData");
             axData->xNewText.Set(dynamicTextBuffer, 0);
+            gLog.FormattedMessage("Write Finish");
             axData->iWidth = maxLineWidth;
             axData->iHeight = totalTextHeight;
             axData->iLineStart = 0;
             axData->iLineEnd = currentLineCount;
             axData->iCharCount = processedTextLen;
+            gLog.FormattedMessage("Deallocate");
             MemoryManagerSingleton->Deallocate(processedOriginalText);
             MemoryManagerSingleton->Deallocate(dynamicTextBuffer);
-            //gLog.Message("CalculateTextLayoutEx End");
+            gLog.FormattedMessage("PrepText End");
         }
 
-        UInt32 CreateText() {
+        UInt32 CreateText(
+            BSStringT<char>* axTextString,
+            int* aiWidth,
+            int* aiHeight,
+            int aiLineStart,
+            int aiLineEnd,
+            int aiFlags,
+            char aiLineBreakChar,
+            const NiColorA* axFontColor,
+            UINT32** apTextShape,
+            UINT32** apIconShape
+        ) {
+            double v11; // st7
+            UINT32* v12; // ecx
+            UINT32* v13; // ecx
+            double axPos__3; // st7
+            int v16; // [esp+14h] [ebp-164h]
+            float axPos__4; // [esp+1Ch] [ebp-15Ch]
+            int v19; // [esp+90h] [ebp-E8h]
+            signed int v20; // [esp+94h] [ebp-E4h]
+            int m_item_2; // [esp+A4h] [ebp-D4h]
+            BSSimpleList<int>* m_pkNext_0; // [esp+A8h] [ebp-D0h]
+            int _1_1; // [esp+ACh] [ebp-CCh]
+            int m_item_3; // [esp+B0h] [ebp-C8h]
+            BSSimpleList<int>* m_pkNext_1; // [esp+B4h] [ebp-C4h]
+            int _1; // [esp+B8h] [ebp-C0h]
+            int m_item_1; // [esp+D0h] [ebp-A8h]
+            int m_item; // [esp+DCh] [ebp-9Ch]
+            unsigned __int8 cCurrentChar; // [esp+107h] [ebp-71h] BYREF
+            int cCurrentChar_1; // [esp+108h] [ebp-70h]
+            int axPos__1; // [esp+10Ch] [ebp-6Ch]
+            NiPoint3 axPos_; // [esp+110h] [ebp-68h] BYREF
+            float axPos__2; // [esp+11Ch] [ebp-5Ch]
+            Font::TextData axData; // [esp+120h] [ebp-58h] BYREF
+            int j_1; // [esp+148h] [ebp-30h]
+            Font::TextData axData2; // [esp+14Ch] [ebp-2Ch]
+            int v37; // [esp+174h] [ebp-4h]
 
+            gLog.FormattedMessage("\nCall Font::CreateText");
+            if (!*aiHeight)
+                *aiHeight = 0x7FFFFFFF;
+            if (!aiLineEnd)
+                aiLineEnd = 0x7FFFFFFF;
+            *(float*)&axData2.iLineStart = FontManagerGetLinePadding(this->iFontNum);
+            ThisStdCall(0x759330, &axData, *aiWidth, *aiHeight, aiLineStart, aiLineEnd, aiLineBreakChar);
+            v37 = 0;
+
+            gLog.FormattedMessage("axTextString->pString: '%s'", (const char*)axTextString->pString);
+            gLog.FormattedMessage("Call Font::PrepText");
+            ThisStdCall(0xA12FB0, this, axTextString->pString, &axData);
+            gLog.FormattedMessage("Font::PrepText End");
+
+            *aiWidth = axData.iWidth;
+            *aiHeight = axData.iHeight;
+            j_1 = 0;
+            axPos__1 = 0;
+            if (aiFlags == 4)
+            {
+                if (&axData == (Font::TextData*)-32)
+                    m_item = -1;
+                else
+                    m_item = axData.xLineWidths.m_item;
+                axPos__1 = -m_item;
+            }
+            else if (aiFlags == 2)
+            {
+                if (&axData == (Font::TextData*)-32)
+                    m_item_1 = -1;
+                else
+                    m_item_1 = axData.xLineWidths.m_item;
+                axPos__1 = m_item_1 / -2;
+            }
+            axPos_.x = (float)axPos__1;
+            v11 = this->pFontData->fBaseLine - this->fFontHeight;
+            axPos_.z = v11 + v11;
+            axPos_.y = 0.0;
+            *apTextShape = (UINT32*)Font::MakeTriShape(axData.iCharCount, axFontColor, 1);
+            *(float*)&axData2.xNewText.sLen = 0.0;
+            *(float*)&axData2.iWidth = axPos_.y;
+            *(float*)&axData2.iHeight = axPos_.z;
+            v12 = *apTextShape + 22;
+            *(float*)v12 = 0.0;
+            v12[1] = axData2.iWidth;
+            v12[2] = axData2.iHeight;
+            if (this->ButtonIcons.uiSize)
+            {
+                *apIconShape = (UINT32*)Font::MakeIconsTriShape();
+                v13 = *apIconShape + 22;
+                *v13 = *(DWORD*)&axData2.xNewText.sLen;
+                v13[1] = axData2.iWidth;
+                v13[2] = axData2.iHeight;
+                ThisStdCall(0xA67050, (NiGeometryData*)(*apIconShape)[46], 0x4000);
+            }
+            axPos__2 = axPos_.x;
+            axData2.iLineEnd = 0;
+            axData2.xNewText.pString = 0;
+            for (axData2.iCharCount = 0;
+                axData.xNewText.pString[axData.xNewText.pString != 0 ? axData2.iCharCount : 0];
+                ++axData2.iCharCount)
+            {
+                if (axData.xNewText.pString[axData.xNewText.pString != 0 ? axData2.iCharCount : 0] == aiLineBreakChar)
+                {
+                    ++j_1;
+                    axPos_.x = 0.0;
+                    if (aiFlags == 4)
+                    {
+                        m_pkNext_1 = &axData.xLineWidths;
+                        for (_1 = 0; _1 < j_1 && m_pkNext_1; ++_1)
+                            m_pkNext_1 = m_pkNext_1->m_pkNext;
+                        if (m_pkNext_1)
+                            m_item_3 = m_pkNext_1->m_item;
+                        else
+                            m_item_3 = -1;
+                        axPos_.x = (float)-m_item_3;
+                    }
+                    else if (aiFlags == 2)
+                    {
+                        m_pkNext_0 = &axData.xLineWidths;
+                        for (_1_1 = 0; _1_1 < j_1 && m_pkNext_0; ++_1_1)
+                            m_pkNext_0 = m_pkNext_0->m_pkNext;
+                        if (m_pkNext_0)
+                            m_item_2 = m_pkNext_0->m_item;
+                        else
+                            m_item_2 = -1;
+                        axPos_.x = (float)(m_item_2 / -2);
+                    }
+                    axPos_.z = axPos_.z - (this->pFontData->fBaseLine + *(float*)&axData2.iLineStart);
+                }
+                else if (axData.xNewText.pString[axData.xNewText.pString != 0 ? axData2.iCharCount : 0] == '\t')
+                {
+                    axPos__3 = axPos_.x;
+                    AlignLineWidthToTab(axPos_.x, 75.0);
+                    axPos__4 = axPos__3;
+                    axPos_.x = 75.0 - axPos__4 + axPos_.x;
+                }
+                cCurrentChar = axData.xNewText.pString[axData.xNewText.pString != 0 ? axData2.iCharCount : 0];
+                ConvertToAsciiQuotes(&cCurrentChar);
+                cCurrentChar_1 = cCurrentChar;
+                if (cCurrentChar == 1)
+                {
+                    if (this->ButtonIcons.uiSize)
+                        Font::AddIcon((int)axData2.xNewText.pString++, (NiTriShape*)*apIconShape, &axPos_);
+                }
+                else
+                {
+                    FontAddChar(
+                        &this->pFontData->pFontLetters[cCurrentChar],
+                        axData2.iLineEnd++,
+                        (NiTriShape*)*apTextShape,
+                        &axPos_.x,
+                        axFontColor);
+                }
+                v19 = *aiWidth;
+                v20 = ConditionalFloatToUInt(axPos_.x - axPos__2);
+                if (v20 <= v19)
+                    v16 = v19;
+                else
+                    v16 = v20;
+                *aiWidth = v16;
+            }
+            *(DWORD*)&axData2.cLineSep = *(DWORD*)((*apTextShape)[46] + 32);
+            ThisStdCall(
+                0xA7EE30,
+                (float*)((*apTextShape)[46] + 16),
+                *(unsigned __int16*)((*apTextShape)[46] + 8),
+                *(float**)&axData2.cLineSep);
+            if (*apIconShape)
+                ThisStdCall(
+                    0xA7EE30,
+                    (float*)((*apIconShape)[46] + 16),
+                    *(unsigned __int16*)((*apIconShape)[46] + 8),
+                    *(float**)((*apIconShape)[46] + 32));
+            this->ButtonIcons.Clear(1);
+            v37 = -1;
+            gLog.FormattedMessage("Font::CreateText End\n");
+            return ThisStdCall(0x7593E0, (char*)&axData);
         }
     };
 
@@ -1140,19 +1319,19 @@ namespace fonthook {
             FontLetter* fontCharMetrics; // [esp+54h] [ebp-8h]
             float fontVerticalSpacingAdjust; // [esp+58h] [ebp-4h]
 
-            //gLog.Message("Call GetStringDimensionsEx");
+            //gLog.FormattedMessage("Call GetStringDimensionsEx");
 
             if (fontID >= 1 && fontID <= 8 && srcString)
             {
                 StringDimensions = StringDefaulDimensions;
                 // 0xEC6130
-                //gLog.Message("Call strlen");
+                //gLog.FormattedMessage("Call strlen");
                 sourceStringLength = strlen(srcString);
                 //gLog.FormattedMessage("sourceStringLength: %u", sourceStringLength);
                 fontCharMetrics = this->pFont[fontID - 1]->pFontData->pFontLetters;
                 lastValidWrapPosition = 0.0;
                 currentLineWidth = 0.0;
-                //gLog.Message("Call VertSpacingAdjust");
+                //gLog.FormattedMessage("Call VertSpacingAdjust");
                 fontVerticalSpacingAdjust = FontManagerGetLinePadding(fontID);
                 //gLog.FormattedMessage("fontVerticalSpacingAdjust: %u", fontVerticalSpacingAdjust);
                 previousCharTotalWidth = 0.0;
@@ -1163,9 +1342,9 @@ namespace fonthook {
                 {
                     currentChar = srcString[currentCharIndex];
                     currentCharTotalWidth = 0.0;
-                    //gLog.Message("Call ConvertToAsciiQuotes");
+                    //gLog.FormattedMessage("Call ConvertToAsciiQuotes");
                     ConvertToAsciiQuotes(&currentChar);
-                    //gLog.Message("Call ConvertToAsciiQuotes end");
+                    //gLog.FormattedMessage("Call ConvertToAsciiQuotes end");
                     currentCharTotalWidth = fontCharMetrics[currentChar].fLeadingEdge
                         + fontCharMetrics[currentChar].fWidth
                         + fontCharMetrics[currentChar].fSpacing;
@@ -1268,7 +1447,7 @@ namespace fonthook {
         //WriteRelCall(0xA19622, &FontAddChar);
         // 
         // Font::CreateText
-        //WriteRelCallEx(0xA22211, &FontEx::CreateText);
+        WriteRelCallEx(0xA22211, &FontEx::CreateText);
         // 
         // FontManager::CalculateStringDimensions
         WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);

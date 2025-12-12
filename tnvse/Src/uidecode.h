@@ -261,13 +261,6 @@ struct  Font
 
 	struct TextData
 	{
-		struct BSSimpleList_int
-		{
-			int m_item;
-			BSSimpleList_int* m_pkNext;
-		};
-
-
 		BSStringT<char> xNewText;
 		int iWidth;
 		int iHeight;
@@ -275,8 +268,13 @@ struct  Font
 		int iLineEnd;
 		int iCharCount;
 		char cLineSep;
-		BSSimpleList_int xLineWidths;
+		BSSimpleList<int> xLineWidths;
 	};
+
+	__forceinline NiPoint3* AddIcon(int aiIconIndex, NiTriShape* apShape, NiPoint3* aPos)
+	{
+		return ThisStdCall<NiPoint3*>(0xA14650, this, aiIconIndex, apShape, aPos);
+	}
 
 	__forceinline Font* AddTextIcon(const char* astrIcon)
 	{
