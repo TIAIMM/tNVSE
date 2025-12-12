@@ -308,14 +308,26 @@ namespace fonthook {
             gLog.FormattedMessage("\nCall Font::Font");
             gLog.FormattedMessage("iFontNum: %u", iFontNum);
             gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
+
             Font* ret = ThisStdCall<Font*>(
                 0xA12020,
                 this,
                 iFontNum,
                 apFilename,
                 abLoad);
-            gLog.FormattedMessage("Font::Font End\n");
-            //gLog.FormattedMessage("ret: %s", ret);
+
+            if (!gExtraFontLetters[fontNameKey].empty()) {
+                gLog.FormattedMessage("From gExtraFontLetters to gNumberedExtraLetters");
+                gNumberedExtraLetters[iFontNum] = gExtraFontLetters[fontNameKey];
+                UInt32 numRemoved = gExtraFontLetters.erase(fontNameKey);
+                if (!gNumberedExtraLetters[iFontNum].empty())
+                    gLog.FormattedMessage("gNumberedExtraLetters[%d] is filled", iFontNum);
+                fontNameKey = "";
+            }
+            else {
+                gLog.FormattedMessage("gExtraFontLetters for %s is empty", fontNameKey);
+                fontNameKey = "";
+            }
             return ret;
         }
 
