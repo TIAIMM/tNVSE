@@ -234,40 +234,6 @@ namespace fonthook {
 
     class FontInfoEx : public FontInfo {
     public:
-        UINT32 __thiscall GenerateTextGeometryEx(
-            BSString* srcText,
-            UINT32* unk01,
-            UINT32* unk02,
-            int initdToZero,
-            int initdToMaxInt,
-            UINT32 alignmentType,                      // (2=Center, 4=Right Align)
-            char lineBreakChar,
-            void* unk04,
-            void** unk05,
-            void** unk06) {
-
-            //const char* str = srcText->pString;
-            //gLog.FormattedMessage("str = '%s'", str);
-            //gLog.FormattedMessage("WrapWidth = %u", *unk01);
-            //gLog.FormattedMessage("WrapLimit = %u", *unk02);
-
-            UINT32 ret = ThisStdCall<UInt32>(
-                0xA12880,
-                this,
-                srcText,
-                unk01,
-                unk02,
-                initdToZero,
-                initdToMaxInt,
-                alignmentType,
-                lineBreakChar,
-                unk04,
-                unk05,
-                unk06);
-
-            return ret;
-        }
-
         void __thiscall CalculateTextLayoutEx(const char* textSrc, FontTextReplaced* textParams) {
             unsigned int charWidthWithKerning; // eax
             unsigned int spaceCharWidth; // eax
@@ -1200,6 +1166,37 @@ namespace fonthook {
             v25[1] = savedTlsValue;
             *(DWORD*)targetAddress = savedTlsValue;
         }
+
+        UInt32 CreateText(
+            BSStringT<char>* axTextString,
+            int* aiWidth,
+            int* aiHeight,
+            int aiLineStart,
+            int aiLineEnd,
+            int aiFlags,
+            char aiLineBreakChar,
+            const NiColorA* axFontColor,
+            NiTriShape** apTextShape,
+            NiTriShape** apIconShape
+        ) {
+            gLog.FormattedMessage("\nCall Font::CreateText");
+            gLog.FormattedMessage("axTextString: '%s'", (const char*)axTextString->pString);
+            UInt32 ret = ThisStdCall<UInt32>(
+                0xA12880,
+                this,
+                axTextString,
+                aiWidth,
+                aiHeight,
+                aiLineStart,
+                aiLineEnd,
+                aiFlags,
+                aiLineBreakChar,
+                axFontColor,
+                apTextShape,
+                apIconShape);
+            gLog.FormattedMessage("Font::CreateText End\n");
+            return ret;
+        }
     };
 
     class FontManagerEx : public FontManager {
@@ -1216,12 +1213,6 @@ namespace fonthook {
             return (fontCharMetrics[' '].kerningLeft
                 + fontCharMetrics[' '].width
                 + fontCharMetrics[' '].kerningRight);
-        }
-
-        char __thiscall CreateTextEx(BSString a2, int a3, int a4) {
-            gLog.FormattedMessage("CreateTextEx");
-            char ret = ThisStdCall<char>(0xA18F00, this, a2, a3, a4);
-            return ret;
         }
 
         //	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
@@ -1374,27 +1365,11 @@ namespace fonthook {
         // FontInfo::CalculateTextLayout
         //WriteRelJumpEx(0xA12FB0, &FontInfoEx::CalculateTextLayoutEx);
         // 
-        // Font::Font
-        //1
-        //WriteRelCallEx(0xA1695A, &FontEx::FontCreate);
-        //2
-        //WriteRelCallEx(0xA169C7, &FontEx::FontCreate);
-        //3
-        //WriteRelCallEx(0xA16A35, &FontEx::FontCreate);
-        //4
-        //WriteRelCallEx(0xA16AA3, &FontEx::FontCreate);
-        //5
-        //WriteRelCallEx(0xA16B11, &FontEx::FontCreate);
-        //6
-        //WriteRelCallEx(0xA16B7F, &FontEx::FontCreate);
-        //7
-        //WriteRelCallEx(0xA16BED, &FontEx::FontCreate);
-        //8
-        //WriteRelCallEx(0xA16C5B, &FontEx::FontCreate);
-        // 
         // Font::Load
-        //WriteRelCallEx(0xA1219D, &FontInfoEx::LoadFontDataEx);
         WriteRelCallEx(0xA1219D, &FontEx::Load);
+        // 
+        // Font::CreateText
+        WriteRelCallEx(0xA22211, &FontEx::CreateText);
         // 
         // FileFinder::GetFile
         //WriteRelCall(0xA15A86, &FileFinder_GetFile);
@@ -1408,9 +1383,6 @@ namespace fonthook {
         // NiSourceTexture::SetFilename
         //WriteRelCallEx(0xA5FF9B, &NiSourceTextureEx::SetFilename);
         // 
-        // FontInfo::GenerateTextGeometry
-        //WriteRelCallEx(0xA22211, &FontInfoEx::GenerateTextGeometryEx);
-        // 
         // FontTextReplaced::StringSet
         //WriteRelCallEx(0xA21D64, &FontTextReplacedEx::StringSet);
         // 
@@ -1418,9 +1390,6 @@ namespace fonthook {
         //WriteRelCall(0xA1278B, &RenderCharacterGlyphEx1);
         //WriteRelCall(0xA12E1B, &RenderCharacterGlyphEx2);
         //WriteRelCall(0xA19622, &RenderCharacterGlyphEx3);
-        // 
-        //FontManager::CreateText
-        //WriteRelCallEx(0xA220C6, &FontManagerEx::CreateTextEx);
         //
         //NiTexturingProperty::NiTexturingProperty
         //WriteRelCallEx(0xA15D86, &NiTexturingPropertyEx::NiTexturingPropertyBuild);
