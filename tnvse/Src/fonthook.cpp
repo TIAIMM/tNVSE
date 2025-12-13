@@ -796,6 +796,12 @@ namespace fonthook {
             UInt32 sourceTextLen; // [esp+7D8h] [ebp-8h]
             int maxAllowedLines; // [esp+7DCh] [ebp-4h]
 
+            bool bLastIsHanzi,bHanzi;
+            unsigned char cMSB, cLSB;
+            UInt32 uiGBKcode, uiTempGBKcode;
+            auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
+            auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
+
             gLog.FormattedMessage("Call PrepText");
 
             if (!apOrigString)
@@ -1002,47 +1008,70 @@ namespace fonthook {
                 }
                 else
                 {
+                    bHanzi = false;
+                    if ((charIndex + 1) < sourceTextLen) {
+                        bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
+                    }
+
+                    if (!extraGlyphs) {
+                        bHanzi = false;
+                    }
+
                     if (processedOriginalText[charIndex] == '\t')
                     {
                         currentLineWidth += 75 - currentLineWidth % 75;
                         continue;
                     }
-                    currentChar = processedOriginalText[charIndex];
-                    gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
-                    ConvertToAsciiQuotes(&currentChar);
-                    gLog.FormattedMessage("ConvertToAsciiQuotes: '%c' end", currentChar);
-                    pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
-                    if (currentChar == 1)
-                    {
-                        if (buttonIconIndex < this->ButtonIcons.uiSize)
+
+                    if (!bHanzi) {
+                        currentChar = processedOriginalText[charIndex];
+                        gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
+                        ConvertToAsciiQuotes(&currentChar);
+                        gLog.FormattedMessage("ConvertToAsciiQuotes: '%c' end", currentChar);
+                        pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
+                        if (currentChar == 1)
                         {
-                            pCurrentGlyph->fWidth = this->ButtonIcons.pBuffer[buttonIconIndex].fWidth;
-                            pCurrentGlyph->fSpacing = this->ButtonIcons.pBuffer[buttonIconIndex].fSpacing;
+                            if (buttonIconIndex < this->ButtonIcons.uiSize)
+                            {
+                                pCurrentGlyph->fWidth = this->ButtonIcons.pBuffer[buttonIconIndex].fWidth;
+                                pCurrentGlyph->fSpacing = this->ButtonIcons.pBuffer[buttonIconIndex].fSpacing;
+                            }
+                            ++buttonIconIndex;
                         }
-                        ++buttonIconIndex;
+                        //gLog.FormattedMessage("ConditionalFloatToUInt: %d", pCurrentGlyph->width + pCurrentGlyph->kerningRight);
+                        charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                        gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
+                        currentLineWidth += charWidthWithKerning;
+                        if (currentChar == ' ')
+                        {
+                            lastWrapPosition = processedTextLen;
+                            spaceCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                            preSpaceWidth = currentLineWidth - spaceCharWidth;
+                            postSpaceWidth = currentLineWidth;
+                            isTildeChar = 0;
+                        }
+                        else if (currentChar == '~')
+                        {
+                            lastWrapPosition = processedTextLen;
+                            isTildeChar = 1;
+                            tildeCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                            currentLineWidth -= tildeCharWidth;
+                            preSpaceWidth = currentLineWidth;
+                            postSpaceWidth = currentLineWidth;
+                        }
                     }
-                    //gLog.FormattedMessage("ConditionalFloatToUInt: %d", pCurrentGlyph->width + pCurrentGlyph->kerningRight);
-                    charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
-                    gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
-                    currentLineWidth += charWidthWithKerning;
-                    if (currentChar == ' ')
-                    {
-                        lastWrapPosition = processedTextLen;
-                        spaceCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
-                        preSpaceWidth = currentLineWidth - spaceCharWidth;
-                        postSpaceWidth = currentLineWidth;
-                        isTildeChar = 0;
+                    else {
+                        auto glyphIt = extraGlyphs->find(uiGBKcode);
+                        if (glyphIt != extraGlyphs->end()) {
+                            pCurrentGlyph = &glyphIt->second;
+                            charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                            gLog.FormattedMessage("HanziWidthWithKerning: %d", charWidthWithKerning);
+                            currentLineWidth += charWidthWithKerning;
+                        }
                     }
-                    else if (currentChar == '~')
-                    {
-                        lastWrapPosition = processedTextLen;
-                        isTildeChar = 1;
-                        tildeCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
-                        currentLineWidth -= tildeCharWidth;
-                        preSpaceWidth = currentLineWidth;
-                        postSpaceWidth = currentLineWidth;
-                    }
+
                     gLog.FormattedMessage("currentChar '%c' process end", currentChar);
+
                     if (currentLineWidth > axData->iWidth)
                     {
                         if (lastWrapPosition)
@@ -1070,7 +1099,7 @@ namespace fonthook {
                                 memmove(
                                     &dynamicTextBuffer[lastWrapPosition + 1],
                                     &dynamicTextBuffer[lastWrapPosition],
-                                    processedTextLen - lastWrapPosition);
+                                    (processedTextLen - lastWrapPosition) + 1);
                                 dynamicTextBuffer[lastWrapPosition] = axData->cLineSep;
                                 processedTextLen += 1;
 
@@ -1082,9 +1111,33 @@ namespace fonthook {
                                 maxLineWidth = tempLineWidthComp3;
                                 lastWrapPosition = 0;
                                 ++currentLineCount;
-                                pCurrentGlyph = &this->pFontData->pFontLetters[*(dynamicTextBuffer - 1)];
+
+                                bLastIsHanzi = false;
+                                if (IsGBKTrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
+                                    if (TryDecodeGBK(&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode)) {
+                                        auto glyphIt2 = extraGlyphs->find(uiTempGBKcode);
+                                        if (glyphIt2 != extraGlyphs->end()) {
+                                            pCurrentGlyph = &glyphIt2->second;
+                                            bLastIsHanzi = true;
+                                        }
+                                    }
+                                }
+
+                                if (!bLastIsHanzi) {
+                                    pCurrentGlyph = &this->pFontData->pFontLetters[dynamicTextBuffer[processedTextLen - 1]];
+                                }
                                 currentLineWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
-                                pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
+
+                                if (bHanzi) {
+                                    auto glyphIt3 = extraGlyphs->find(uiGBKcode);
+                                    if (glyphIt3 != extraGlyphs->end()) {
+                                        pCurrentGlyph = &glyphIt3->second;
+                                    }
+                                }
+                                else {
+                                    pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
+                                }
+
                                 nextCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
                                 currentLineWidth += nextCharWidth;
                             }
@@ -1108,13 +1161,14 @@ namespace fonthook {
                         }
                         else
                         {
-                            if (processedTextLen + 3 >= textBufferSize)
+                            if (processedTextLen + 4 >= textBufferSize)
                             {
-                                dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 6));
-                                textBufferSize = processedTextLen + 6;
+                                dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 8));
+                                textBufferSize = processedTextLen + 8;
                             }
-                            dynamicTextBuffer[processedTextLen + 2] = dynamicTextBuffer[processedTextLen];
-                            dynamicTextBuffer[processedTextLen + 1] = dynamicTextBuffer[processedTextLen - 1];
+
+                            /*dynamicTextBuffer[processedTextLen + 1] = dynamicTextBuffer[processedTextLen];
+                            dynamicTextBuffer[processedTextLen] = dynamicTextBuffer[processedTextLen - 1];*/
 
                             //qmemcpy
                             /*memcpy(&dynamicTextBuffer[processedTextLen - 1], "-\n", 2);
@@ -1125,11 +1179,27 @@ namespace fonthook {
                             hyphenInsertWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
                             currentLineWidth -= hyphenInsertWidth;*/
 
-                            memmove(&dynamicTextBuffer[processedTextLen],
-                                &dynamicTextBuffer[processedTextLen - 1],
-                                2);
-                            dynamicTextBuffer[processedTextLen - 1] = axData->cLineSep;
+                            UInt32 tailStart = processedTextLen - 1;
+                            UInt32 tailBytes = 2;
+
+                            if (processedTextLen >= 2) {
+                                unsigned char cmsb = (unsigned char)dynamicTextBuffer[processedTextLen - 2];
+                                unsigned char clsb = (unsigned char)dynamicTextBuffer[processedTextLen - 1];
+
+                                if (IsGBKLeadByte(cmsb) && IsGBKTrailByte(clsb)) {
+                                    tailStart = processedTextLen - 2;
+                                    tailBytes = 3;
+                                }
+                            }
+
+                            memmove(&dynamicTextBuffer[tailStart + 1],
+                                &dynamicTextBuffer[tailStart],
+                                tailBytes);
+
+                            dynamicTextBuffer[tailStart] = axData->cLineSep;
+
                             processedTextLen += 1;
+                            totalTextHeight += (this->pFontData->fBaseLine + lineSpacingAdjust);
 
                             AppendToListTail(&axData->xLineWidths, &currentLineWidth);
                             if (maxLineWidth <= currentLineWidth)
@@ -1139,15 +1209,67 @@ namespace fonthook {
                             maxLineWidth = tempLineWidthComp1;
                             lastWrapPosition = 0;
                             ++currentLineCount;
-                            pCurrentGlyph = &this->pFontData->pFontLetters[dynamicTextBuffer[processedTextLen - 1]];
+
+                            bLastIsHanzi = false;
+                            if (IsGBKTrailByte(dynamicTextBuffer[processedTextLen - 1])) {
+                                if (TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode)) {
+                                    auto glyphIt2 = extraGlyphs->find(uiTempGBKcode);
+                                    if (glyphIt2 != extraGlyphs->end()) {
+                                        pCurrentGlyph = &glyphIt2->second;
+                                        bLastIsHanzi = true;
+                                    }
+                                }
+                            }
+
+                            if (!bLastIsHanzi) {
+                                pCurrentGlyph = &this->pFontData->pFontLetters[dynamicTextBuffer[processedTextLen - 1]];
+                            }
+
                             currentLineWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
-                            pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
+
+                            if (bHanzi) {
+                                auto glyphIt3 = extraGlyphs->find(uiGBKcode);
+                                if (glyphIt3 != extraGlyphs->end()) {
+                                    pCurrentGlyph = &glyphIt3->second;
+                                }
+                            }
+                            else {
+                                pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
+                            }
+
                             combinedCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+
                             currentLineWidth += combinedCharWidth;
                         }
                     }
-                    if (currentChar != '~')
-                        dynamicTextBuffer[processedTextLen++] = currentChar;
+
+                    if (bHanzi)
+                    {
+                        if (processedTextLen + 4 >= textBufferSize) {
+                            dynamicTextBuffer = (char*)MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 8);
+                            textBufferSize = processedTextLen + 8;
+                        }
+
+                        dynamicTextBuffer[processedTextLen++] = processedOriginalText[charIndex];
+                        dynamicTextBuffer[processedTextLen++] = processedOriginalText[charIndex + 1];
+                        dynamicTextBuffer[processedTextLen] = 0;
+
+                        ++charIndex;
+                    }
+                    else
+                    {
+                        if (currentChar != '~')
+                        {
+                            if (processedTextLen + 1 >= textBufferSize) {
+                                dynamicTextBuffer = (char*)MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 8);
+                                textBufferSize = processedTextLen + 8;
+                            }
+
+                            dynamicTextBuffer[processedTextLen++] = (char)currentChar;
+                            dynamicTextBuffer[processedTextLen] = 0;
+                        }
+                    }
+
                     if (processedTextLen >= textBufferSize)
                     {
                         dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 4));
@@ -1156,14 +1278,18 @@ namespace fonthook {
                 }
                 if (maxAllowedLines > 0 && currentLineCount > maxAllowedLines && processedTextLen)
                 {
-                    while (dynamicTextBuffer[processedTextLen] != axData->cLineSep)
+                    while (processedTextLen > 0 && dynamicTextBuffer[processedTextLen - 1] != axData->cLineSep)
                         --processedTextLen;
                     dynamicTextBuffer[processedTextLen] = 0;
+                    currentLineCount = maxAllowedLines;
+                    currentLineWidth = 0;
                     totalTextHeight = totalTextHeight - (this->pFontData->fBaseLine + lineSpacingAdjust);
                     break;
                 }
             }
+
             gLog.FormattedMessage("processedOriginalText Read 2 End");
+
             if (*dynamicTextBuffer && axData->iLineStart)
             {
                 truncatedTextLen = 0;
@@ -1172,7 +1298,7 @@ namespace fonthook {
                 {
                     if (lineCounter >= axData->iLineStart && lineCounter < axData->iLineEnd)
                         dynamicTextBuffer[truncatedTextLen++] = dynamicTextBuffer[truncateCharCounter];
-                    if (dynamicTextBuffer[truncateCharCounter] == 10)
+                    if (dynamicTextBuffer[truncateCharCounter] == axData->cLineSep)
                         ++lineCounter;
                 }
                 dynamicTextBuffer[truncatedTextLen] = 0;
@@ -1512,6 +1638,10 @@ namespace fonthook {
 
                     if ((currentCharIndex + 1) < sourceStringLength) {
                         bHanzi = TryDecodeGBK(&srcString[currentCharIndex], uiGBKcode);
+                    }
+
+                    if (!extraGlyphs) {
+                        bHanzi = false;
                     }
 
                     if (bHanzi) {
