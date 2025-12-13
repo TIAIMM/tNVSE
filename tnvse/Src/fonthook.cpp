@@ -908,6 +908,7 @@ namespace fonthook {
                     if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
                         || ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
                     {
+                        gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString Process Start");
                         // 0xEC6130
                         postEscapeTextLen = strlen(parsedTextBuffer);
                         escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
@@ -952,6 +953,7 @@ namespace fonthook {
                         for (bufferCopyIndex = 0; bufferCopyIndex < postEscapeTextLen; ++bufferCopyIndex)
                             dynamicTextBuffer[processedTextLen++] = parsedTextBuffer[bufferCopyIndex];
                         srcTextIndex = srcTextIndex + totalEscapeSeqLen - 1;
+                        gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString Process End");
                     }
                     else
                     {
@@ -1041,15 +1043,15 @@ namespace fonthook {
                         charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
                         gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
                         currentLineWidth += charWidthWithKerning;
-                        if (currentChar == ' ')
+                        /*if (currentChar == ' ')
                         {
                             lastWrapPosition = processedTextLen;
                             spaceCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
                             preSpaceWidth = currentLineWidth - spaceCharWidth;
                             postSpaceWidth = currentLineWidth;
                             isTildeChar = 0;
-                        }
-                        else if (currentChar == '~')
+                        }*/
+                        if (currentChar == '~')
                         {
                             lastWrapPosition = processedTextLen;
                             isTildeChar = 1;
@@ -1626,7 +1628,7 @@ namespace fonthook {
                 totalLines = 1;
                 StringDimensions.y = fontCharMetrics[' '].fHeight;
 
-                gLog.FormattedMessage("CalculateStringDimensions srcString: '%s'", srcString);
+                gLog.FormattedMessage("GetStringDimensionsEx srcString: '%s'", srcString);
 
                 for (currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
                 {
@@ -1667,14 +1669,14 @@ namespace fonthook {
                             break;
                         case '\n':
                         case ' ':
-                            lastValidWrapPosition = currentLineWidth;
-                            hasHyphenationPoint = 0;
+                            /*lastValidWrapPosition = currentLineWidth;
+                            hasHyphenationPoint = 0;*/
                             break;
                         case '~':
                             lastValidWrapPosition = currentLineWidth
-                                + fontCharMetrics['-'].fLeadingEdge
+                                /*+ fontCharMetrics['-'].fLeadingEdge
                                 + fontCharMetrics['-'].fWidth
-                                + fontCharMetrics['-'].fSpacing;
+                                + fontCharMetrics['-'].fSpacing*/;
                             hasHyphenationPoint = 1;
                             break;
                         default:
@@ -1691,9 +1693,9 @@ namespace fonthook {
                             lastValidWrapPosition = currentLineWidth
                                 - currentCharTotalWidth
                                 - previousCharTotalWidth
-                                + fontCharMetrics['-'].fLeadingEdge
+                                /*+ fontCharMetrics['-'].fLeadingEdge
                                 + fontCharMetrics['-'].fWidth
-                                + fontCharMetrics['-'].fSpacing;
+                                + fontCharMetrics['-'].fSpacing*/;
                             currentLineWidth = currentCharTotalWidth + previousCharTotalWidth;
                         }
                         else
@@ -1703,11 +1705,11 @@ namespace fonthook {
                             {
                                 if (currentChar == '\n')
                                     currentLineWidth = 0.0;
-                                else
+                                /*else
                                     currentLineWidth = currentLineWidth
                                     - (fontCharMetrics[' '].fLeadingEdge
                                         + fontCharMetrics[' '].fWidth
-                                        + fontCharMetrics[' '].fSpacing);
+                                        + fontCharMetrics[' '].fSpacing);*/
                             }
                         }
                         if (lastValidWrapPosition >= StringDimensions.x)
@@ -1742,7 +1744,7 @@ namespace fonthook {
     };
 
     void InitVertSpacingHook() {
-        WriteRelJump(0xA1B3A0, &VertSpacingAdjust);
+        //WriteRelJump(0xA1B3A0, &VertSpacingAdjust);
     }
 
     void InitFontHook() {
@@ -1753,9 +1755,9 @@ namespace fonthook {
         WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
         // 
         // Font::AddChar
-        WriteRelCall(0xA1278B, &FontAddChar1);
-        WriteRelCall(0xA12E1B, &FontAddChar2);
-        WriteRelCall(0xA19622, &FontAddChar3);
+        //WriteRelCall(0xA1278B, &FontAddChar1);
+        //WriteRelCall(0xA12E1B, &FontAddChar2);
+        //WriteRelCall(0xA19622, &FontAddChar3);
         // 
         // Font::CreateText
         WriteRelJumpEx(0xA12880, &FontEx::CreateText);
