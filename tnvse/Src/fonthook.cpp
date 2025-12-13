@@ -290,6 +290,69 @@ namespace fonthook {
         const NiColorA* apColor
     ) {
         //gLog.FormattedMessage("Call AddChar");
+        //gLog.FormattedMessage("Call AddChar from Font::CreateText");
+
+        FontLetter* ret = StdCall<FontLetter*>(
+            0xA142D0,
+            apLetter,
+            aiVert,
+            apShape,
+            axPos,
+            apColor);
+
+        return ret;
+    }
+
+    FontLetter* __stdcall FontAddChar1(
+        FontLetter* apLetter,
+        UInt32 aiVert,
+        NiTriShape* apShape,
+        float* axPos,
+        const NiColorA* apColor
+    ) {
+        //gLog.FormattedMessage("Call AddChar");
+        gLog.FormattedMessage("Call AddChar from Font::MakeString");
+
+        FontLetter* ret = StdCall<FontLetter*>(
+            0xA142D0,
+            apLetter,
+            aiVert,
+            apShape,
+            axPos,
+            apColor);
+
+        return ret;
+    }
+
+    FontLetter* __stdcall FontAddChar2(
+        FontLetter* apLetter,
+        UInt32 aiVert,
+        NiTriShape* apShape,
+        float* axPos,
+        const NiColorA* apColor
+    ) {
+        //gLog.FormattedMessage("Call AddChar");
+        gLog.FormattedMessage("Call AddChar from Font::CreateText");
+
+        FontLetter* ret = StdCall<FontLetter*>(
+            0xA142D0,
+            apLetter,
+            aiVert,
+            apShape,
+            axPos,
+            apColor);
+
+        return ret;
+    }
+
+    FontLetter* __stdcall FontAddChar3(
+        FontLetter* apLetter,
+        UInt32 aiVert,
+        NiTriShape* apShape,
+        float* axPos,
+        const NiColorA* apColor
+    ) {
+        gLog.FormattedMessage("Call AddChar from FontManager::CreateText");
 
         FontLetter* ret = StdCall<FontLetter*>(
             0xA142D0,
@@ -1186,6 +1249,7 @@ namespace fonthook {
             int v37; // [esp+174h] [ebp-4h]
             bool bHanzi, rendered;
             unsigned char cMSB, cLSB;
+            int iActualCharCount,iTempCharCount;
             UInt32 uiGBKcode;
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
@@ -1228,7 +1292,27 @@ namespace fonthook {
             v11 = this->pFontData->fBaseLine - this->fFontHeight;
             axPos_.z = v11 + v11;
             axPos_.y = 0.0;
-            *apTextShape = (UINT32*)Font::MakeTriShape(axData.iCharCount, axFontColor, 1);
+
+            iActualCharCount = axData.iCharCount;
+            if (extraGlyphs) {
+                iTempCharCount = axData.iCharCount;
+                for (int Charcount = 0;
+                    axData.xNewText.pString[axData.xNewText.pString != 0 ? Charcount : 0];
+                    ++Charcount) {
+                    bHanzi = false;
+
+                    cLSB = (unsigned char)axData.xNewText.pString[Charcount + 1];
+                    if (cLSB != 0) {
+                        bHanzi = TryDecodeGBK((const char*)&axData.xNewText.pString[Charcount], uiGBKcode);
+                    }
+                    if (bHanzi) {
+                        ++Charcount;
+                        iActualCharCount = iActualCharCount - 1;
+                    }
+                }
+            }
+
+            *apTextShape = (UINT32*)Font::MakeTriShape(iActualCharCount, axFontColor, 1);
             *(float*)&axData2.xNewText.sLen = 0.0;
             *(float*)&axData2.iWidth = axPos_.y;
             *(float*)&axData2.iHeight = axPos_.z;
@@ -1373,20 +1457,6 @@ namespace fonthook {
 
     class FontManagerEx : public FontManager {
     public:
-        inline float GetHanziWidth(uint16_t gbChar, FontLetter* fontCharMetrics) {
-            // Check if the character is a valid GB2312 character
-            if (fontCharMetrics[gbChar].fWidth > 0) {
-                return fontCharMetrics[gbChar].fLeadingEdge
-                    + fontCharMetrics[gbChar].fWidth
-                    + fontCharMetrics[gbChar].fSpacing;
-            }
-
-            // default space character width if the character is not found
-            return (fontCharMetrics[' '].fLeadingEdge
-                + fontCharMetrics[' '].fWidth
-                + fontCharMetrics[' '].fSpacing);
-        }
-
         //	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
         NiPoint3* __thiscall CalculateStringDimensions(NiPoint3* outDimensions, const char* srcString, uint32_t fontID, float maxWrapWidth, uint32_t startCharIndex) {
             double tabStopWidth; // st7
@@ -1405,6 +1475,11 @@ namespace fonthook {
             int sourceStringLength; // [esp+50h] [ebp-Ch]
             FontLetter* fontCharMetrics; // [esp+54h] [ebp-8h]
             float fontVerticalSpacingAdjust; // [esp+58h] [ebp-4h]
+
+            bool bHanzi;
+            UInt32 uiGBKcode;
+            auto extraGlyphEntry = gNumberedExtraLetters.find(fontID);
+            auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
             //gLog.FormattedMessage("Call GetStringDimensionsEx");
 
@@ -1425,39 +1500,59 @@ namespace fonthook {
                 hasHyphenationPoint = 0;
                 totalLines = 1;
                 StringDimensions.y = fontCharMetrics[' '].fHeight;
+
+                gLog.FormattedMessage("CalculateStringDimensions srcString: '%s'", srcString);
+
                 for (currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
                 {
+                    bHanzi = false;
+
                     currentChar = srcString[currentCharIndex];
                     currentCharTotalWidth = 0.0;
-                    //gLog.FormattedMessage("Call ConvertToAsciiQuotes");
-                    ConvertToAsciiQuotes(&currentChar);
-                    //gLog.FormattedMessage("Call ConvertToAsciiQuotes end");
-                    currentCharTotalWidth = fontCharMetrics[currentChar].fLeadingEdge
-                        + fontCharMetrics[currentChar].fWidth
-                        + fontCharMetrics[currentChar].fSpacing;
-                    switch (currentChar)
-                    {
-                    case '\t':
-                        tabStopWidth = currentLineWidth;
-                        AlignLineWidthToTab(currentLineWidth, 75.0);
-                        previousLineWidthAtTabStop = tabStopWidth;
-                        currentCharTotalWidth = 75.0 - previousLineWidthAtTabStop;
-                        break;
-                    case '\n':
-                    case ' ':
-                        lastValidWrapPosition = currentLineWidth;
-                        hasHyphenationPoint = 0;
-                        break;
-                    case '~':
-                        lastValidWrapPosition = currentLineWidth
-                            + fontCharMetrics['-'].fLeadingEdge
-                            + fontCharMetrics['-'].fWidth
-                            + fontCharMetrics['-'].fSpacing;
-                        hasHyphenationPoint = 1;
-                        break;
-                    default:
-                        break;
+
+                    if ((currentCharIndex + 1) < sourceStringLength) {
+                        bHanzi = TryDecodeGBK(&srcString[currentCharIndex], uiGBKcode);
                     }
+
+                    if (bHanzi) {
+                        gLog.FormattedMessage("CalculateStringDimensions found Hanzi");
+                        auto glyphIt = extraGlyphs->find(uiGBKcode);
+                        currentCharTotalWidth = glyphIt->second.fLeadingEdge
+                            + glyphIt->second.fWidth
+                            + glyphIt->second.fSpacing;
+                    }
+                    else {
+                        //gLog.FormattedMessage("Call ConvertToAsciiQuotes");
+                        ConvertToAsciiQuotes(&currentChar);
+                        //gLog.FormattedMessage("Call ConvertToAsciiQuotes end");
+                        currentCharTotalWidth = fontCharMetrics[currentChar].fLeadingEdge
+                            + fontCharMetrics[currentChar].fWidth
+                            + fontCharMetrics[currentChar].fSpacing;
+                        switch (currentChar)
+                        {
+                        case '\t':
+                            tabStopWidth = currentLineWidth;
+                            AlignLineWidthToTab(currentLineWidth, 75.0);
+                            previousLineWidthAtTabStop = tabStopWidth;
+                            currentCharTotalWidth = 75.0 - previousLineWidthAtTabStop;
+                            break;
+                        case '\n':
+                        case ' ':
+                            lastValidWrapPosition = currentLineWidth;
+                            hasHyphenationPoint = 0;
+                            break;
+                        case '~':
+                            lastValidWrapPosition = currentLineWidth
+                                + fontCharMetrics['-'].fLeadingEdge
+                                + fontCharMetrics['-'].fWidth
+                                + fontCharMetrics['-'].fSpacing;
+                            hasHyphenationPoint = 1;
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                    
                     if (currentChar != '~')
                         currentLineWidth = currentLineWidth + currentCharTotalWidth;
                     if (maxWrapWidth < currentLineWidth || currentChar == '\n')
@@ -1529,9 +1624,9 @@ namespace fonthook {
         WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
         // 
         // Font::AddChar
-        //WriteRelCall(0xA1278B, &FontAddChar);
-        //WriteRelCall(0xA12E1B, &FontAddChar);
-        //WriteRelCall(0xA19622, &FontAddChar);
+        //WriteRelCall(0xA1278B, &FontAddChar1);
+        //WriteRelCall(0xA12E1B, &FontAddChar2);
+        //WriteRelCall(0xA19622, &FontAddChar3);
         // 
         // Font::CreateText
         WriteRelJumpEx(0xA12880, &FontEx::CreateText);
