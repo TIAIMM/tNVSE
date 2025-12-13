@@ -738,11 +738,11 @@ namespace fonthook {
 
         void __thiscall PrepText(const char* apOrigString, Font::TextData* axData) {
             unsigned int charWidthWithKerning; // eax
-            unsigned int spaceCharWidth; // eax
+            //unsigned int spaceCharWidth; // eax
             unsigned int tildeCharWidth; // eax
-            unsigned int hyphenCharWidth; // eax
+            //unsigned int hyphenCharWidth; // eax
             unsigned int nextCharWidth; // eax
-            unsigned int hyphenInsertWidth; // eax
+            //unsigned int hyphenInsertWidth; // eax
             unsigned int combinedCharWidth; // eax
             int finalMaxLineWidth; // [esp+0h] [ebp-7E0h]
             int tempLineWidthComp1; // [esp+4h] [ebp-7DCh]
@@ -792,7 +792,6 @@ namespace fonthook {
             int maxAllowedLines; // [esp+7DCh] [ebp-4h]
 
             bool bLastIsHanzi,bHanzi;
-            unsigned char cMSB, cLSB;
             UInt32 uiGBKcode, uiTempGBKcode;
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
@@ -1378,8 +1377,8 @@ namespace fonthook {
             Font::TextData axData2; // [esp+14Ch] [ebp-2Ch]
             int v37; // [esp+174h] [ebp-4h]
             bool bHanzi, rendered;
-            unsigned char cMSB, cLSB;
-            int iActualCharCount,iTempCharCount;
+            unsigned char cLSB;
+            int iActualCharCount;
             UInt32 uiGBKcode;
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
@@ -1425,7 +1424,6 @@ namespace fonthook {
 
             iActualCharCount = axData.iCharCount;
             if (extraGlyphs) {
-                iTempCharCount = axData.iCharCount;
                 for (int Charcount = 0;
                     axData.xNewText.pString[axData.xNewText.pString != 0 ? Charcount : 0];
                     ++Charcount) {
@@ -1441,8 +1439,9 @@ namespace fonthook {
                     }
                 }
             }
+            axData.iCharCount = iActualCharCount;
 
-            *apTextShape = (UINT32*)Font::MakeTriShape(iActualCharCount, axFontColor, 1);
+            *apTextShape = (UINT32*)Font::MakeTriShape(axData.iCharCount, axFontColor, 1);
             *(float*)&axData2.xNewText.sLen = 0.0;
             *(float*)&axData2.iWidth = axPos_.y;
             *(float*)&axData2.iHeight = axPos_.z;
