@@ -277,7 +277,7 @@ namespace fonthook {
                 this,
                 kFilename);
             gLog.FormattedMessage("NiSourceTexture::SetFilename End\n");
-            //gLog.FormattedMessage("ret: %s", ret);
+            gLog.FormattedMessage("ret: %s", ret);
             return ret;
         }
     };
@@ -289,8 +289,8 @@ namespace fonthook {
         float* axPos,
         const NiColorA* apColor
     ) {
-        //gLog.FormattedMessage("Call AddChar");
-        //gLog.FormattedMessage("Call AddChar from Font::CreateText");
+        gLog.FormattedMessage("Call AddChar");
+        gLog.FormattedMessage("Call AddChar from Font::CreateText");
 
         FontLetter* ret = StdCall<FontLetter*>(
             0xA142D0,
@@ -310,7 +310,7 @@ namespace fonthook {
         float* axPos,
         const NiColorA* apColor
     ) {
-        //gLog.FormattedMessage("Call AddChar");
+        gLog.FormattedMessage("Call AddChar");
         gLog.FormattedMessage("Call AddChar from Font::MakeString");
 
         FontLetter* ret = StdCall<FontLetter*>(
@@ -331,7 +331,7 @@ namespace fonthook {
         float* axPos,
         const NiColorA* apColor
     ) {
-        //gLog.FormattedMessage("Call AddChar");
+        gLog.FormattedMessage("Call AddChar");
         gLog.FormattedMessage("Call AddChar from Font::CreateText");
 
         FontLetter* ret = StdCall<FontLetter*>(
@@ -492,9 +492,9 @@ namespace fonthook {
                 gLog.FormattedMessage("Font::Load End\n");
                 return;
             }
-            //gLog.FormattedMessage("Load %s", (const char*)this->pFontFile);
+            gLog.FormattedMessage("Load %s", (const char*)this->pFontFile);
             BSFile_1 = FileFinder_GetFile(this->pFontFile, (NiFile::OpenMode)0, 0x150000u, 2u);
-            //gLog.FormattedMessage("Load %s End", (const char*)this->pFontFile);
+            gLog.FormattedMessage("Load %s End", (const char*)this->pFontFile);
             if (BSFile_1)
             {
                 if (LOBYTE(BSFile_1->m_pFile))
@@ -614,11 +614,11 @@ namespace fonthook {
                             this->pFontData->pTextureFiles[iTextureCount].pFilename
                         );
 
-                        //gLog.FormattedMessage("Load %s", (const char*)apName_);
+                        gLog.FormattedMessage("Load %s", (const char*)apName_);
 
                         NiBinaryStream_0 = FileFinder_GetFile((const char*)apName_, (NiFile::OpenMode)0, 0x6000000u, 2u);
 
-                        //gLog.FormattedMessage("Load %s End", (const char*)apName_);
+                        gLog.FormattedMessage("Load %s End", (const char*)apName_);
 
                         if (!NiBinaryStream_0 || !(m_pfnWrite = (bool)NiBinaryStream_0->m_pFile))
                         {
@@ -829,7 +829,7 @@ namespace fonthook {
             gLog.FormattedMessage("sourceTextLen = %u", sourceTextLen);
             maxAllowedLines = axData->iLineEnd;
 
-            //gLog.FormattedMessage("Init originalTextBuffer");
+            gLog.FormattedMessage("Init originalTextBuffer");
             gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
             originalTextBuffer = static_cast<char*>(MemoryManagerSingleton->Allocate(sourceTextLen + 4));
             if (!originalTextBuffer) {
@@ -845,11 +845,11 @@ namespace fonthook {
             processedOriginalText = originalTextBuffer;
 
 
-            //gLog.FormattedMessage("Init processedTextBuffer");
+            gLog.FormattedMessage("Init processedTextBuffer");
             gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
             processedTextBuffer = static_cast<char*>(MemoryManagerSingleton->Allocate(sourceTextLen + 4));
             if (!processedTextBuffer) {
-                //gLog.FormattedMessage("Memory allocation failed for processedTextBuffer");
+                gLog.FormattedMessage("Memory allocation failed for processedTextBuffer");
                 MemoryManagerSingleton->Deallocate(originalTextBuffer);
                 return;
             }
@@ -1038,7 +1038,6 @@ namespace fonthook {
                             }
                             ++buttonIconIndex;
                         }
-                        //gLog.FormattedMessage("ConditionalFloatToUInt: %d", pCurrentGlyph->width + pCurrentGlyph->kerningRight);
                         charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
                         gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
                         currentLineWidth += charWidthWithKerning;
@@ -1607,21 +1606,21 @@ namespace fonthook {
             auto extraGlyphEntry = gNumberedExtraLetters.find(fontID);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
-            //gLog.FormattedMessage("Call GetStringDimensionsEx");
+            gLog.FormattedMessage("Call GetStringDimensionsEx");
 
             if (fontID >= 1 && fontID <= 8 && srcString)
             {
                 StringDimensions = StringDefaulDimensions;
                 // 0xEC6130
-                //gLog.FormattedMessage("Call strlen");
+                gLog.FormattedMessage("Call strlen");
                 sourceStringLength = strlen(srcString);
-                //gLog.FormattedMessage("sourceStringLength: %u", sourceStringLength);
+                gLog.FormattedMessage("sourceStringLength: %u", sourceStringLength);
                 fontCharMetrics = this->pFont[fontID - 1]->pFontData->pFontLetters;
                 lastValidWrapPosition = 0.0;
                 currentLineWidth = 0.0;
-                //gLog.FormattedMessage("Call VertSpacingAdjust");
+                gLog.FormattedMessage("Call VertSpacingAdjust");
                 fontVerticalSpacingAdjust = FontManagerGetLinePadding(fontID);
-                //gLog.FormattedMessage("fontVerticalSpacingAdjust: %u", fontVerticalSpacingAdjust);
+                gLog.FormattedMessage("fontVerticalSpacingAdjust: %u", fontVerticalSpacingAdjust);
                 previousCharTotalWidth = 0.0;
                 hasHyphenationPoint = 0;
                 totalLines = 1;
@@ -1652,9 +1651,9 @@ namespace fonthook {
                             + glyphIt->second.fSpacing;
                     }
                     else {
-                        //gLog.FormattedMessage("Call ConvertToAsciiQuotes");
+                        gLog.FormattedMessage("Call ConvertToAsciiQuotes");
                         ConvertToAsciiQuotes(&currentChar);
-                        //gLog.FormattedMessage("Call ConvertToAsciiQuotes end");
+                        gLog.FormattedMessage("Call ConvertToAsciiQuotes end");
                         currentCharTotalWidth = fontCharMetrics[currentChar].fLeadingEdge
                             + fontCharMetrics[currentChar].fWidth
                             + fontCharMetrics[currentChar].fSpacing;
@@ -1754,9 +1753,9 @@ namespace fonthook {
         WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
         // 
         // Font::AddChar
-        //WriteRelCall(0xA1278B, &FontAddChar1);
-        //WriteRelCall(0xA12E1B, &FontAddChar2);
-        //WriteRelCall(0xA19622, &FontAddChar3);
+        WriteRelCall(0xA1278B, &FontAddChar1);
+        WriteRelCall(0xA12E1B, &FontAddChar2);
+        WriteRelCall(0xA19622, &FontAddChar3);
         // 
         // Font::CreateText
         WriteRelJumpEx(0xA12880, &FontEx::CreateText);
