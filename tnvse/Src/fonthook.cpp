@@ -493,7 +493,7 @@ namespace fonthook {
                 return;
             }
             //gLog.FormattedMessage("Load %s", (const char*)this->pFontFile);
-            BSFile_1 = FileFinder_GetFile(this->pFontFile, (NiFile::OpenMode)0, 0x4000000u, 2u);
+            BSFile_1 = FileFinder_GetFile(this->pFontFile, (NiFile::OpenMode)0, 0x150000u, 2u);
             //gLog.FormattedMessage("Load %s End", (const char*)this->pFontFile);
             if (BSFile_1)
             {
@@ -616,7 +616,7 @@ namespace fonthook {
 
                         //gLog.FormattedMessage("Load %s", (const char*)apName_);
 
-                        NiBinaryStream_0 = FileFinder_GetFile((const char*)apName_, (NiFile::OpenMode)0, 0x4000000u, 2u);
+                        NiBinaryStream_0 = FileFinder_GetFile((const char*)apName_, (NiFile::OpenMode)0, 0x6000000u, 2u);
 
                         //gLog.FormattedMessage("Load %s End", (const char*)apName_);
 
