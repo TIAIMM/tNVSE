@@ -206,38 +206,6 @@ namespace fonthook {
         return ret;
     }
 
-    static Font* __fastcall FontCreateForJIP(Font* apThis, void*, int iFontNum, char* apFilename, bool abLoad) {
-        //gLog.FormattedMessage("\nCall Font::Font");
-        //gLog.FormattedMessage("iFontNum: %u", iFontNum);
-        //gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
-
-        Font* ret = ThisStdCall<Font*>(
-            0xA12020,
-            apThis,
-            iFontNum,
-            apFilename,
-            abLoad);
-
-        if (!fontNameKey.empty()) {
-            auto it = gExtraFontLetters.find(fontNameKey);
-            if (it != gExtraFontLetters.end() && !it->second.empty()) {
-                //gLog.FormattedMessage("From gExtraFontLetters to gNumberedExtraLetters");
-                gNumberedExtraLetters[iFontNum] = std::move(it->second);
-                gExtraFontLetters.erase(it);
-                if (!gNumberedExtraLetters[iFontNum].empty()) {
-                    //gLog.FormattedMessage("gNumberedExtraLetters[%d] is filled", iFontNum);
-                    fontNameKey.clear();
-                }
-            }
-            else {
-                //gLog.FormattedMessage("gExtraFontLetters for %s is empty", fontNameKey);
-                fontNameKey.clear();
-            }
-        }
-
-        return ret;
-    }
-
     class FontEx : public Font {
     public:
         Font* FontCreate(int iFontNum, char* apFilename, bool abLoad) {
@@ -303,19 +271,19 @@ namespace fonthook {
             int oldTlsValue; // [esp+BCh] [ebp-190h]
             int stringRefFlag; // [esp+C0h] [ebp-18Ch]
             BSFile* NiBinaryStream_3; // [esp+C4h] [ebp-188h]
-            BSFile* NiBinaryStream_4; // [esp+C8h] [ebp-184h]
+            //BSFile* NiBinaryStream_4; // [esp+C8h] [ebp-184h]
             NiFixedString kName_; // [esp+CCh] [ebp-180h] BYREF
             NiTexturingProperty* NiTexturingProperty_3; // [esp+D0h] [ebp-17Ch]
             NiTexturingProperty* NiTexturingProperty_1; // [esp+D4h] [ebp-178h]
             NiPixelData* v36; // [esp+D8h] [ebp-174h]
             NiPixelData* NiPixelData_2; // [esp+DCh] [ebp-170h]
             BSFile* NiBinaryStream_1; // [esp+E0h] [ebp-16Ch]
-            BSFile* NiBinaryStream_2; // [esp+E4h] [ebp-168h]
+            //BSFile* NiBinaryStream_2; // [esp+E4h] [ebp-168h]
             BSFile* NiFile_1; // [esp+E8h] [ebp-164h]
-            BSFile* BSFile_2; // [esp+ECh] [ebp-160h]
+            //BSFile* BSFile_2; // [esp+ECh] [ebp-160h]
             FontData* pFontData; // [esp+F0h] [ebp-15Ch]
             BSFile* BSFile_3; // [esp+F4h] [ebp-158h]
-            BSFile* BSFile_4; // [esp+F8h] [ebp-154h]
+            //BSFile* BSFile_4; // [esp+F8h] [ebp-154h]
             unsigned int a2; // [esp+FCh] [ebp-150h] BYREF
             unsigned int a3; // [esp+100h] [ebp-14Ch]
             NiTexture::FormatPrefs arPrefs_; // [esp+104h] [ebp-148h] BYREF
@@ -417,10 +385,10 @@ namespace fonthook {
                     }
 
                     NiFile_1 = BSFile_1;
-                    BSFile_2 = BSFile_1;
+                    //BSFile_2 = BSFile_1;
                     //gLog.FormattedMessage("Delete BSFile_2");
                     if (BSFile_1) {
-                        delete(BSFile_2);
+                        //delete(BSFile_2);
                     }
                     //gLog.FormattedMessage("Delete BSFile_2 End");
                     BSFile_1 = 0;
@@ -506,9 +474,9 @@ namespace fonthook {
                             if (NiBinaryStream_0)
                             {
                                 NiBinaryStream_1 = NiBinaryStream_0;
-                                NiBinaryStream_2 = NiBinaryStream_0;
+                                //NiBinaryStream_2 = NiBinaryStream_0;
                                 //gLog.FormattedMessage("Delete NiBinaryStream_2");
-                                delete(NiBinaryStream_2);
+                                //delete(NiBinaryStream_2);
                                 //gLog.FormattedMessage("Delete NiBinaryStream_2 End");
                             }
                             stackCookie = -1;
@@ -588,10 +556,10 @@ namespace fonthook {
                                 InterlockedDecrement((volatile LONG*)kName_.m_kHandle - 2);
                         }
                         NiBinaryStream_3 = NiBinaryStream_0;
-                        NiBinaryStream_4 = NiBinaryStream_0;
+                        //NiBinaryStream_4 = NiBinaryStream_0;
                         if (NiBinaryStream_0) {
                             //gLog.FormattedMessage("Delete NiBinaryStream_4");
-                            delete(NiBinaryStream_4);
+                            //delete(NiBinaryStream_4);
                             //gLog.FormattedMessage("Delete NiBinaryStream_4 End");
                         }
                         NiBinaryStream_0 = 0;
@@ -612,9 +580,9 @@ namespace fonthook {
             if (BSFile_1)
             {
                 BSFile_3 = BSFile_1;
-                BSFile_4 = BSFile_1;
+                //BSFile_4 = BSFile_1;
                 //gLog.FormattedMessage("Delete BSFile_4");
-                delete(BSFile_4);
+                //delete(BSFile_4);
                 //gLog.FormattedMessage("Delete BSFile_4 End");
             }
             stackCookie = -1;
@@ -1644,7 +1612,7 @@ namespace fonthook {
         WriteRelJumpEx(0xA15320, &FontEx::Load);
         // 
         // Font::PrepText
-        WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
+        //WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
         // 
         // Font::AddChar
         //WriteRelCall(0xA1278B, &FontAddChar1);
@@ -1652,10 +1620,10 @@ namespace fonthook {
         //WriteRelCall(0xA19622, &FontAddChar3);
         // 
         // Font::CreateText
-        WriteRelJumpEx(0xA12880, &FontEx::CreateText);
+        //WriteRelJumpEx(0xA12880, &FontEx::CreateText);
         // 
         // FontManager::CalculateStringDimensions
-        WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
+        //WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
         // 
         // FileFinder::GetFile
         //WriteRelCall(0xA15A86, &FileFinder_GetFile);
@@ -1674,6 +1642,38 @@ namespace fonthook {
 
         //NiPixelData::NiPixelData
         //WriteRelCallEx(0xA15C03, &NiPixelDataEx::NiPixelDataBuild);
+    }
+
+    static Font* __fastcall FontCreateForJIP(Font* apThis, void*, int iFontNum, char* apFilename, bool abLoad) {
+        //gLog.FormattedMessage("\nCall Font::Font");
+        //gLog.FormattedMessage("iFontNum: %u", iFontNum);
+        //gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
+
+        Font* ret = ThisStdCall<Font*>(
+            0xA12020,
+            apThis,
+            iFontNum,
+            apFilename,
+            abLoad);
+
+        if (!fontNameKey.empty()) {
+            auto it = gExtraFontLetters.find(fontNameKey);
+            if (it != gExtraFontLetters.end() && !it->second.empty()) {
+                //gLog.FormattedMessage("From gExtraFontLetters to gNumberedExtraLetters");
+                gNumberedExtraLetters[iFontNum] = std::move(it->second);
+                gExtraFontLetters.erase(it);
+                if (!gNumberedExtraLetters[iFontNum].empty()) {
+                    //gLog.FormattedMessage("gNumberedExtraLetters[%d] is filled", iFontNum);
+                    fontNameKey.clear();
+                }
+            }
+            else {
+                //gLog.FormattedMessage("gExtraFontLetters for %s is empty", fontNameKey);
+                fontNameKey.clear();
+            }
+        }
+        
+        return ret;
     }
 
     void InitJIPHooks() {
