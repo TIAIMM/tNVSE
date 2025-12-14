@@ -898,7 +898,7 @@ namespace fonthook {
                 {
                     bHanzi = false;
                     if (extraGlyphs) {
-                        if ((charIndex + 1) < sourceTextLen) {
+                        if ((charIndex + 1) <= sourceTextLen) {
                             if ((unsigned char)processedOriginalText[charIndex] >= 0x81) {
                                 bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
                             }
@@ -1535,9 +1535,18 @@ namespace fonthook {
                     currentCharTotalWidth = 0.0;
 
                     if (extraGlyphs) {
-                        if ((currentCharIndex + 1) < sourceStringLength) {
+                        if (bIsQuestTextMSBHanzi) {
+                            if (szGBKChar) {
+                                srcString = szGBKChar;
+                            }
+                        }
+
+                        if ((currentCharIndex + 1) <= sourceStringLength) {
                             if ((unsigned char)srcString[currentCharIndex] >= 0x81) {
                                 bHanzi = TryDecodeGBK(&srcString[currentCharIndex], uiGBKcode);
+                                if (bIsQuestTextMSBHanzi) {
+                                    srcString = "";
+                                }
                             }
                         }
                     }
@@ -1643,11 +1652,45 @@ namespace fonthook {
         }
     };
 
+    static void* __fastcall TileSetString(void* pThis, void*, int a2, char* a3, bool a4) {
+        gLog.FormattedMessage("Call QuestText TileSetString");
+        gLog.FormattedMessage("a2: %d", a2);
+        gLog.FormattedMessage("a3: %x", a3[0]);
+
+        bIsQuestTextLSBHanzi = false;
+        if (bIsQuestTextMSBHanzi) {
+            bIsQuestTextLSBHanzi = IsGBKTrailByte(a3[0]);
+            if (bIsQuestTextLSBHanzi) {
+				szGBKChar[0] = pFirstChar;
+				szGBKChar[1] = a3[0];
+                szGBKChar[2] = 0;
+				a3 = (char*)szGBKChar;
+            }
+        }
+
+        if (gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end() && !bIsQuestTextMSBHanzi) {
+            bIsQuestTextMSBHanzi = false;
+            bIsQuestTextMSBHanzi = IsGBKLeadByte((unsigned char)a3[0]);
+            if (bIsQuestTextMSBHanzi) {
+				pFirstChar = (unsigned char)a3[0];
+				gLog.FormattedMessage("QuestText FirstByte: 0x%x", pFirstChar);
+                a3 = (char*)"";
+            }
+        }
+        else {
+            bIsQuestTextMSBHanzi = false;
+        }
+
+		return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);
+    }
+
     void InitVertSpacingHook() {
         //WriteRelJump(0xA1B3A0, &VertSpacingAdjust);
     }
 
     void InitFontHook() {
+        WriteRelCall(0x77AF4B, &TileSetString);
+
         // Font::Load
         WriteRelJumpEx(0xA15320, &FontEx::Load);
         // 

@@ -153,6 +153,11 @@ namespace fonthook {
 
     static std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
 
+    static unsigned char pFirstChar;
+    static bool bIsQuestTextMSBHanzi;
+    static bool bIsQuestTextLSBHanzi;
+    static char szGBKChar[3];
+
 	void InitVertSpacingHook();
 	void InitFontHook();
 	void InitJIPHooks();
