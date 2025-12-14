@@ -37,7 +37,7 @@ bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info) {
 
 bool NVSEPlugin_Load(const NVSEInterface* nvse) {
 	if (!nvse->isEditor) {
-		//fonthook::InitVertSpacingHook();
+		fonthook::InitVertSpacingHook();
 		fonthook::InitFontHook();
 		fonthook::InitJIPHooks();
 	}
