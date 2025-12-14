@@ -70,6 +70,10 @@ namespace fonthook {
         return StdCall<Float32>(0xA1B3A0, fontID);
     }
 
+    static Float32 __stdcall VertSpacingAdjust(UInt32 fontID) {
+        return 0;
+    }
+
     static bool IsGBKLeadByte(unsigned char c) {
         return (c >= 0x81 && c <= 0xFE);
     }
@@ -512,7 +516,6 @@ namespace fonthook {
                     if (uiActualSize > 0x3928) {
                         fontNameKey = this->pFontFile ? this->pFontFile : "";
                         auto& extraMap = gExtraFontLetters[fontNameKey];
-                        extraMap.reserve(24066);
                         unsigned int hh, ll, code;
                         for (hh = 0x81; hh <= 0xFE; ++hh) {
                             for (ll = 0x40; ll <= 0xFE; ++ll) {
@@ -526,7 +529,9 @@ namespace fonthook {
                         }
 
                         if (!extraMap.empty()) {
-                            gLog.FormattedMessage("Loaded %u extra FontLetter records for %s",(unsigned)extraMap.size(),fontNameKey);
+                            gLog.FormattedMessage("Loaded %u extra FontLetter records for %s",
+                                (unsigned)extraMap.size(),
+                                fontNameKey);
                         }
                     }
 
@@ -769,7 +774,7 @@ namespace fonthook {
             int escapeSeqPrefixLen; // [esp+2FCh] [ebp-4E4h]
             UInt32 totalEscapeSeqLen; // [esp+300h] [ebp-4E0h]
             int varNameLen; // [esp+304h] [ebp-4DCh]
-            char varNameBuffer[128]; // [esp+308h] [ebp-4D8h] BYREF
+            char varNameBuffer[33]; // [esp+308h] [ebp-4D8h] BYREF
             unsigned int srcTextIndex; // [esp+38Ch] [ebp-454h]
             SInt32 currentLineWidth; // [esp+390h] [ebp-450h] BYREF
             unsigned int processedTextLen; // [esp+394h] [ebp-44Ch]
@@ -873,7 +878,6 @@ namespace fonthook {
                 gLog.FormattedMessage("process index %u", srcTextIndex);
                 if (processedOriginalText[srcTextIndex] == '&')
                 {
-                    gLog.FormattedMessage("Found replaceable text");
                     varNameLen = 0;
                     escapeSeqPrefixLen = 1;
                     isPositiveEscape = 1;
@@ -882,7 +886,6 @@ namespace fonthook {
                         isPositiveEscape = 0;
                         escapeSeqPrefixLen = 2;
                     }
-                    gLog.FormattedMessage("Replace replaceable varname");
                     while (processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex]
                         && varNameLen < 127
                         && processedOriginalText[varNameLen + srcTextIndex] != ';'
@@ -892,17 +895,13 @@ namespace fonthook {
                         varNameBuffer[varNameLen] = processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex];
                         ++varNameLen;
                     }
-                    gLog.FormattedMessage("Replace replaceable varname end");
                     if (varNameLen)
                         escapeSeqEffectiveLen = varNameLen - escapeSeqPrefixLen;
                     else
                         escapeSeqEffectiveLen = 0;
-                    gLog.FormattedMessage("Finish varNameBuffer string");
                     varNameBuffer[escapeSeqEffectiveLen] = 0;
                     // 0xEC6130
-                    gLog.FormattedMessage("Get varNameBuffer Length");
                     totalEscapeSeqLen = (strlen(varNameBuffer) + 1);
-                    gLog.FormattedMessage("Process ; Length");
                     if (processedOriginalText[varNameLen + srcTextIndex] == ';')
                         totalEscapeSeqLen += escapeSeqPrefixLen;
                     gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString");
@@ -949,7 +948,7 @@ namespace fonthook {
                         if (escapeSeqSizeDiff > 0)
                         {
                             textBufferSize += escapeSeqSizeDiff;
-                            dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, textBufferSize + 1));
+                            dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, textBufferSize));
                         }
                         for (bufferCopyIndex = 0; bufferCopyIndex < postEscapeTextLen; ++bufferCopyIndex)
                             dynamicTextBuffer[processedTextLen++] = parsedTextBuffer[bufferCopyIndex];
@@ -1013,9 +1012,7 @@ namespace fonthook {
                 {
                     bHanzi = false;
                     if ((charIndex + 1) < sourceTextLen) {
-                        if ((unsigned char)processedOriginalText[charIndex] >= 0x81) {
-                            bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
-                        }
+                        bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
                     }
 
                     if (!extraGlyphs) {
@@ -1084,7 +1081,7 @@ namespace fonthook {
                             {
                                 isTildeChar = 0;
                                 textBufferSize += 4;
-                                dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, textBufferSize + 1));
+                                dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, textBufferSize));
 
                                 // 0xEC7230
                                 /*memmove(
@@ -1625,7 +1622,7 @@ namespace fonthook {
                 currentLineWidth = 0.0;
                 gLog.FormattedMessage("Call VertSpacingAdjust");
                 fontVerticalSpacingAdjust = FontManagerGetLinePadding(fontID);
-                gLog.FormattedMessage("fontVerticalSpacingAdjust: %f", fontVerticalSpacingAdjust);
+                gLog.FormattedMessage("fontVerticalSpacingAdjust: %u", fontVerticalSpacingAdjust);
                 previousCharTotalWidth = 0.0;
                 hasHyphenationPoint = 0;
                 totalLines = 1;
@@ -1641,23 +1638,19 @@ namespace fonthook {
                     currentCharTotalWidth = 0.0;
 
                     if ((currentCharIndex + 1) < sourceStringLength) {
-                        if ((unsigned char)srcString[currentCharIndex] >= 0x81) {
-                            bHanzi = TryDecodeGBK(&srcString[currentCharIndex], uiGBKcode);
-                        }
+                        bHanzi = TryDecodeGBK(&srcString[currentCharIndex], uiGBKcode);
                     }
 
                     if (!extraGlyphs) {
                         bHanzi = false;
                     }
 
-                    if (bHanzi && extraGlyphs) {
+                    if (bHanzi) {
                         gLog.FormattedMessage("CalculateStringDimensions found Hanzi");
                         auto glyphIt = extraGlyphs->find(uiGBKcode);
-                        if (glyphIt != extraGlyphs->end()) {
-                            currentCharTotalWidth = glyphIt->second.fLeadingEdge
-                                + glyphIt->second.fWidth
-                                + glyphIt->second.fSpacing;
-                        }
+                        currentCharTotalWidth = glyphIt->second.fLeadingEdge
+                            + glyphIt->second.fWidth
+                            + glyphIt->second.fSpacing;
                     }
                     else {
                         gLog.FormattedMessage("Call ConvertToAsciiQuotes");
@@ -1791,7 +1784,7 @@ namespace fonthook {
         //WriteRelCallEx(0xA15C03, &NiPixelDataEx::NiPixelDataBuild);
     }
 
-    static Font* __fastcall FontCreateForJIP(Font* apThis, void*, int iFontNum, char* apFilename, bool abLoad) {
+    Font* __fastcall FontCreateForJIP(Font* apThis, void*, int iFontNum, char* apFilename, bool abLoad) {
         gLog.FormattedMessage("\nCall Font::Font");
         gLog.FormattedMessage("iFontNum: %u", iFontNum);
         gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
