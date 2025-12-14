@@ -1,14 +1,4 @@
 #pragma once
-#include <cstring>
-#include <cstdint>
-#include <limits>
-#include <unordered_map>
-#include "BSFile.hpp"
-#include "BSSimpleList.hpp"
-#include "NiPoint3.hpp"
-#include "NiTriShape.hpp"
-#include "MemoryManager.hpp"
-#include "uidecode.h"
 #include "fonthook.h"
 
 namespace fonthook {
@@ -140,8 +130,6 @@ namespace fonthook {
     }
 
     static NiPoint3& StringDefaulDimensions = *reinterpret_cast<NiPoint3*>(0x11F426C);
-
-    static MemoryManager* MemoryManagerSingleton = reinterpret_cast<MemoryManager*>(0x11F6238);
 
     static MemoryManager* MemoryManager_s_Instance = reinterpret_cast<MemoryManager*>(0x11F6238);
 
@@ -651,7 +639,7 @@ namespace fonthook {
                         arPrefs_.m_ePixelLayout = static_cast<NiTexture::FormatPrefs::PixelLayout>(0x6);
                         arPrefs_.m_eAlphaFmt = static_cast<NiTexture::FormatPrefs::AlphaFormat>(0x3);
                         arPrefs_.m_eMipMapped = static_cast<NiTexture::FormatPrefs::MipFlag>(0x2);
-                        v36 = (NiPixelData*)NiMemObject::operator new(0x74);
+                        v36 = (NiPixelData*)NiMemObject::operator new(sizeof(NiPixelData));
                         stackCookie = (stackCookie & 0xFFFFFF00) | 1;
                         if (v36) {
                             //gLog.FormattedMessage("Instancing NiPixelData");
@@ -674,7 +662,7 @@ namespace fonthook {
                         v9 = NiBinaryStream_0->m_pfnRead(NiBinaryStream_0, v8, 4 * a3 * a2, (UInt32*)&v10, 1u);
                         NiBinaryStream_0->m_uiAbsoluteCurrentPos += v9;
                         NiPixelData_3->bNoConvert = 1;
-                        NiTexturingProperty_3 = (NiTexturingProperty*)NiMemObject::operator new(0x30);
+                        NiTexturingProperty_3 = (NiTexturingProperty*)NiMemObject::operator new(sizeof(NiTexturingProperty));
                         stackCookie = (stackCookie & 0xFFFFFF00) | 2;
                         if (NiTexturingProperty_3)
                         {
@@ -834,7 +822,7 @@ namespace fonthook {
 
             //gLog.FormattedMessage("Init originalTextBuffer");
             //gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
-            originalTextBuffer = static_cast<char*>(MemoryManagerSingleton->Allocate(sourceTextLen + 4));
+            originalTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Allocate(sourceTextLen + 4));
             if (!originalTextBuffer) {
                 //gLog.FormattedMessage("Memory allocation failed for originalTextBuffer");
                 return;
@@ -850,10 +838,10 @@ namespace fonthook {
 
             //gLog.FormattedMessage("Init processedTextBuffer");
             //gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
-            processedTextBuffer = static_cast<char*>(MemoryManagerSingleton->Allocate(sourceTextLen + 4));
+            processedTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Allocate(sourceTextLen + 4));
             if (!processedTextBuffer) {
                 //gLog.FormattedMessage("Memory allocation failed for processedTextBuffer");
-                MemoryManagerSingleton->Deallocate(originalTextBuffer);
+                MemoryManager_s_Instance->Deallocate(originalTextBuffer);
                 return;
             }
 
@@ -957,7 +945,7 @@ namespace fonthook {
                         if (escapeSeqSizeDiff > 0)
                         {
                             textBufferSize += escapeSeqSizeDiff;
-                            dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, textBufferSize + 1));
+                            dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, textBufferSize + 1));
                         }
                         for (bufferCopyIndex = 0; bufferCopyIndex < postEscapeTextLen; ++bufferCopyIndex)
                             dynamicTextBuffer[processedTextLen++] = parsedTextBuffer[bufferCopyIndex];
@@ -983,7 +971,7 @@ namespace fonthook {
             {
                 sourceTextLen = processedTextLen;
                 //gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
-                processedOriginalText = static_cast<char*>(MemoryManagerSingleton->Reallocate(processedOriginalText, processedTextLen + 4));
+                processedOriginalText = static_cast<char*>(MemoryManager_s_Instance->Reallocate(processedOriginalText, processedTextLen + 4));
                 // 0xEC6370
                 //gLog.FormattedMessage("FastStringCopyAligned");
                 //strcpy(processedOriginalText, dynamicTextBuffer);
@@ -1002,7 +990,7 @@ namespace fonthook {
                     if (++processedTextLen >= textBufferSize)
                     {
                         //gLog.FormattedMessage("Relocating dynamicTextBuffer: size=%u", processedTextLen + 4);
-                        dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 4));
+                        dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
                         textBufferSize = processedTextLen + 4;
                     }
                     totalTextHeight = this->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
@@ -1092,7 +1080,7 @@ namespace fonthook {
                             {
                                 isTildeChar = 0;
                                 textBufferSize += 4;
-                                dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, textBufferSize + 1));
+                                dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, textBufferSize + 1));
 
                                 // 0xEC7230
                                 /*memmove(
@@ -1175,7 +1163,7 @@ namespace fonthook {
                         {
                             if (processedTextLen + 4 >= textBufferSize)
                             {
-                                dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 8));
+                                dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8));
                                 textBufferSize = processedTextLen + 8;
                             }
 
@@ -1258,7 +1246,7 @@ namespace fonthook {
                     if (bHanzi)
                     {
                         if (processedTextLen + 4 >= textBufferSize) {
-                            dynamicTextBuffer = (char*)MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 8);
+                            dynamicTextBuffer = (char*)MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8);
                             textBufferSize = processedTextLen + 8;
                         }
 
@@ -1273,7 +1261,7 @@ namespace fonthook {
                         if (currentChar != '~')
                         {
                             if (processedTextLen + 1 >= textBufferSize) {
-                                dynamicTextBuffer = (char*)MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 8);
+                                dynamicTextBuffer = (char*)MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8);
                                 textBufferSize = processedTextLen + 8;
                             }
 
@@ -1284,7 +1272,7 @@ namespace fonthook {
 
                     if (processedTextLen >= textBufferSize)
                     {
-                        dynamicTextBuffer = static_cast<char*>(MemoryManagerSingleton->Reallocate(dynamicTextBuffer, processedTextLen + 4));
+                        dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
                         textBufferSize = processedTextLen + 4;
                     }
                 }
@@ -1343,8 +1331,8 @@ namespace fonthook {
             axData->iLineEnd = currentLineCount;
             axData->iCharCount = processedTextLen;
             //gLog.FormattedMessage("Deallocate");
-            MemoryManagerSingleton->Deallocate(processedOriginalText);
-            MemoryManagerSingleton->Deallocate(dynamicTextBuffer);
+            MemoryManager_s_Instance->Deallocate(processedOriginalText);
+            MemoryManager_s_Instance->Deallocate(dynamicTextBuffer);
             //gLog.FormattedMessage("PrepText End");
         }
 
