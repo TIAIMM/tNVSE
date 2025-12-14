@@ -1549,6 +1549,7 @@ namespace fonthook {
                                 + glyphIt->second.fWidth
                                 + glyphIt->second.fSpacing;
                         }
+                        ++currentCharIndex;
                     }
                     else {
                         gLog.FormattedMessage("Call ConvertToAsciiQuotes");
