@@ -1,29 +1,62 @@
 #pragma once
 
-//#include <cstdint>
-//#include <limits>
-#include "NiPoint3.hpp"
-#include "NiTriShape.hpp"
 #include "NiPixelData.hpp"
 #include "NiTimeController.hpp"
 #include "NiProperty.hpp"
 #include "NiTexturingProperty.hpp"
-#include "NiColor.hpp"
-#include "MemoryManager.hpp"
-#include "NiTexture.hpp"
-#include "NiSourceTexture.hpp"
-#include "NiPersistentSrcTextureRendererData.hpp"
 #include "BSSimpleArray.hpp"
-#include "BSSimpleList.hpp"
 #include "BSString.hpp"
-#include "BSFile.hpp"
-//#include "tList.h"
+#include "NiColor.hpp"
+#include "NiTexture.hpp"
+#include "tList.h"
 
 // C
 //struct NiVector3
 //{
 //	float	x, y, z;
 //};
+
+struct NiPersistentSrcTextureRendererData : NiTexture::RendererData
+{
+	enum PlatformID : __int32
+	{
+		NI_ANY = 0x0,
+		NI_XENON = 0x1,
+		NI_PS3 = 0x2,
+		NI_DX9 = 0x3,
+		NI_NUM_PLATFORM_IDS = 0x4,
+	};
+
+
+	unsigned __int8* m_pucPixels;
+	unsigned int* m_puiWidth;
+	unsigned int* m_puiHeight;
+	unsigned int* m_puiOffsetInBytes;
+	unsigned int m_uiPadOffsetInBytes;
+	unsigned int m_uiMipmapLevels;
+	unsigned int m_uiPixelStride;
+	unsigned int m_uiFaces;
+	PlatformID m_eTargetPlatform;
+	unsigned __int8* m_pucPristinePixels;
+	unsigned int m_uiPristineMaxOffsetInBytes;
+	unsigned int m_uiPristinePadOffsetInBytes;
+	NiPointer<NiPalette> m_spPalette;
+};
+STATIC_ASSERT(sizeof(NiPersistentSrcTextureRendererData) == 0x94);
+
+struct NiSourceTexture : NiTexture
+{
+	NiFixedString m_kFilename;
+	NiFixedString m_kPlatformFilename;
+	NiPointer<NiPersistentSrcTextureRendererData> m_spPersistentSrcRendererData;
+	NiPointer<NiPixelData> m_spSrcPixelData;
+	bool m_bStatic;
+	bool m_bLoadDirectToRendererHint;
+	bool m_bSrcRendererDataIsPersistent;
+	char cLooked;
+	NiFile* m_pFile;
+};
+STATIC_ASSERT(sizeof(NiSourceTexture) == 0x48);
 
 // From OBSE
 //struct FNTFile { // sizeof == 0x3928

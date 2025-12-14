@@ -13,29 +13,27 @@ public:
 	virtual void AllocateData(UInt32 uiLevels, UInt32 uiFaces, UInt32 uiBytes);
 	virtual void FreeData();
 
-	enum PlatformID : __int32
-	{
-		NI_ANY = 0x0,
-		NI_XENON = 0x1,
-		NI_PS3 = 0x2,
-		NI_DX9 = 0x3,
-		NI_NUM_PLATFORM_IDS = 0x4,
+	enum PlatformID {
+		NI_ANY				= 0,
+		NI_XENON			= 1,
+		NI_PS3				= 2,
+		NI_DX9				= 3,
+		NI_NUM_PLATFORM_IDS = 4,
 	};
 
-
-	unsigned __int8* m_pucPixels;
-	unsigned int* m_puiWidth;
-	unsigned int* m_puiHeight;
-	unsigned int* m_puiOffsetInBytes;
-	unsigned int m_uiPadOffsetInBytes;
-	unsigned int m_uiMipmapLevels;
-	unsigned int m_uiPixelStride;
-	unsigned int m_uiFaces;
-	PlatformID m_eTargetPlatform;
-	unsigned __int8* m_pucPristinePixels;
-	unsigned int m_uiPristineMaxOffsetInBytes;
-	unsigned int m_uiPristinePadOffsetInBytes;
-	NiPointer<NiPalette> m_spPalette;
+	UInt8*		m_pucPixels;
+	UInt32*		m_puiWidth;
+	UInt32*		m_puiHeight;
+	UInt32*		m_puiOffsetInBytes;
+	UInt32		m_uiPadOffsetInBytes;
+	UInt32		m_uiMipmapLevels;
+	UInt32		m_uiPixelStride;
+	UInt32		m_uiFaces;
+	PlatformID	m_eTargetPlatform;
+	UInt8*		m_pucPristinePixels;
+	UInt32		m_uiPristineMaxOffsetInBytes;
+	UInt32		m_uiPristinePadOffsetInBytes;
+	NiPalette*	m_spPalette;
 
 	CREATE_OBJECT(NiPersistentSrcTextureRendererData, 0xA982D0)
 };

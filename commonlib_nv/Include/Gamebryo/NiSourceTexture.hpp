@@ -16,15 +16,15 @@ public:
 	virtual void DestroyAppPixelData();
 	virtual bool CreateRendererData();
 
-	NiFixedString m_kFilename;
-	NiFixedString m_kPlatformFilename;
-	NiPointer<NiPersistentSrcTextureRendererData> m_spPersistentSrcRendererData;
-	NiPointer<NiPixelData> m_spSrcPixelData;
-	bool m_bStatic;
-	bool m_bLoadDirectToRendererHint;
-	bool m_bSrcRendererDataIsPersistent;
-	char cLooked;
-	NiFile* m_pFile;
+	NiFixedString							m_kFilename;
+	NiFixedString							m_kPlatformFilename;
+	NiPersistentSrcTextureRendererDataPtr	m_spPersistentSrcRendererData;
+	NiPixelDataPtr							m_spSrcPixelData;
+	bool									m_bStatic;
+	bool									m_bLoadDirectToRendererHint;
+	bool									m_bSrcRendererDataIsPersistent;
+	bool									unk43;
+	NiFile*									m_pFile;
 
 	CREATE_OBJECT(NiSourceTexture, 0xA60070);
 	NIRTTI_ADDRESS(0x11F444C);
