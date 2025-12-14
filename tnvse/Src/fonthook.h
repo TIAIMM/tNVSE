@@ -137,7 +137,7 @@ namespace fonthook {
         return ret;
     }
 
-    static NiPoint3& StringDefaulDimensions = *reinterpret_cast<NiPoint3*>(0x11F426C);
+    static NiPoint3& StringDefaultDimensions = *reinterpret_cast<NiPoint3*>(0x11F426C);
 
     static MemoryManager* MemoryManager_s_Instance = reinterpret_cast<MemoryManager*>(0x11F6238);
 

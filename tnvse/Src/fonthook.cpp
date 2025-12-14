@@ -1505,10 +1505,11 @@ namespace fonthook {
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
             gLog.FormattedMessage("Call GetStringDimensionsEx");
+            gLog.FormattedMessage("fontID: %u", fontID);
 
-            if (fontID >= 1 && fontID <= 8 && srcString)
+            if (fontID >= 1 /*&& fontID <= 8*/ && srcString)
             {
-                StringDimensions = StringDefaulDimensions;
+                StringDimensions = StringDefaultDimensions;
                 // 0xEC6130
                 gLog.FormattedMessage("Call strlen");
                 sourceStringLength = strlen(srcString);
@@ -1636,7 +1637,7 @@ namespace fonthook {
             }
             else
             {
-                *outDimensions = StringDefaulDimensions;
+                *outDimensions = StringDefaultDimensions;
                 return outDimensions;
             }
         }
