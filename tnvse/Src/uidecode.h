@@ -2,21 +2,18 @@
 
 //#include <cstdint>
 //#include <limits>
-#include "NiPoint3.hpp"
+//#include "NiPoint3.hpp"
+//#include "NiTimeController.hpp"
+//#include "NiProperty.hpp"
+//#include "NiTexturingProperty.hpp"
+//#include "NiColor.hpp"
+//#include "NiTexture.hpp"
+//#include "NiPersistentSrcTextureRendererData.hpp"
 #include "NiTriShape.hpp"
-#include "NiPixelData.hpp"
-#include "NiTimeController.hpp"
-#include "NiProperty.hpp"
-#include "NiTexturingProperty.hpp"
-#include "NiColor.hpp"
-#include "MemoryManager.hpp"
-#include "NiTexture.hpp"
 #include "NiSourceTexture.hpp"
-#include "NiPersistentSrcTextureRendererData.hpp"
 #include "BSSimpleArray.hpp"
 #include "BSSimpleList.hpp"
 #include "BSString.hpp"
-#include "BSFile.hpp"
 //#include "tList.h"
 
 // C
