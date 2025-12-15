@@ -10,6 +10,10 @@ namespace fonthook {
 
 	};
 
+    static float __stdcall VertSpacingAdjust(UInt32 aiFont) {
+        return 0;
+    }
+
     static void __cdecl ConvertToAsciiQuotes(UInt8* currentChar) {
         CdeclCall(0xA122B0, currentChar);
     }
@@ -157,6 +161,9 @@ namespace fonthook {
     static bool bIsQuestTextMSBHanzi;
     static bool bIsQuestTextLSBHanzi;
     static char szGBKChar[3];
+
+    static bool bHasLeadByteInLast;
+    static unsigned char lastHanziByte;
 
 	void InitVertSpacingHook();
 	void InitFontHook();

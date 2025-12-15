@@ -8,16 +8,16 @@ namespace fonthook {
             NiPixelData* pkPixelData,
             const NiFixedString* kName,
             NiTexture::FormatPrefs* arPrefs) {
-            gLog.FormattedMessage("\nCall NiTexturingPropertyBuild");
+            //gLog.FormattedMessage("\nCall NiTexturingPropertyBuild");
             const char* sName = kName->m_kHandle ? kName->m_kHandle : "<null>";
 
-            gLog.FormattedMessage("source: %p", this);
-            gLog.FormattedMessage("pkPixelData: %p", pkPixelData);
+            //gLog.FormattedMessage("source: %p", this);
+            //gLog.FormattedMessage("pkPixelData: %p", pkPixelData);
 
-            gLog.FormattedMessage("kName: %s", sName);
-            gLog.FormattedMessage("m_ePixelLayout: %x", arPrefs->m_ePixelLayout);
-            gLog.FormattedMessage("m_eAlphaFmt: %x", arPrefs->m_eAlphaFmt);
-            gLog.FormattedMessage("m_eMipMapped: %x", arPrefs->m_eMipMapped);
+            //gLog.FormattedMessage("kName: %s", sName);
+            //gLog.FormattedMessage("m_ePixelLayout: %x", arPrefs->m_ePixelLayout);
+            //gLog.FormattedMessage("m_eAlphaFmt: %x", arPrefs->m_eAlphaFmt);
+            //gLog.FormattedMessage("m_eMipMapped: %x", arPrefs->m_eMipMapped);
 
             NiTexturingProperty* ret = ThisStdCall<NiTexturingProperty*>(
                 0xA6ABB0,
@@ -25,7 +25,7 @@ namespace fonthook {
                 pkPixelData,
                 kName,
                 arPrefs);
-            gLog.FormattedMessage("NiTexturingPropertyBuild End\n");
+            //gLog.FormattedMessage("NiTexturingPropertyBuild End\n");
             return ret;
         }
     };
@@ -35,16 +35,16 @@ namespace fonthook {
         NiPixelData* pkPixelData,
         const NiFixedString* kName,
         NiTexture::FormatPrefs* arPrefs) {
-        gLog.FormattedMessage("\nCall NiTexturingPropertyBuild");
+        //gLog.FormattedMessage("\nCall NiTexturingPropertyBuild");
         const char* sName = kName->m_kHandle ? kName->m_kHandle : "<null>";
 
-        gLog.FormattedMessage("source: %p", source);
-        gLog.FormattedMessage("pkPixelData: %p", pkPixelData);
+        //gLog.FormattedMessage("source: %p", source);
+        //gLog.FormattedMessage("pkPixelData: %p", pkPixelData);
 
-        gLog.FormattedMessage("kName: %s", sName);
-        gLog.FormattedMessage("m_ePixelLayout: %x", arPrefs->m_ePixelLayout);
-        gLog.FormattedMessage("m_eAlphaFmt: %x", arPrefs->m_eAlphaFmt);
-        gLog.FormattedMessage("m_eMipMapped: %x", arPrefs->m_eMipMapped);
+        //gLog.FormattedMessage("kName: %s", sName);
+        //gLog.FormattedMessage("m_ePixelLayout: %x", arPrefs->m_ePixelLayout);
+        //gLog.FormattedMessage("m_eAlphaFmt: %x", arPrefs->m_eAlphaFmt);
+        //gLog.FormattedMessage("m_eMipMapped: %x", arPrefs->m_eMipMapped);
 
         NiTexturingProperty* ret = ThisStdCall<NiTexturingProperty*>(
             0xA6ABB0,
@@ -52,7 +52,7 @@ namespace fonthook {
             pkPixelData,
             kName,
             arPrefs);
-        gLog.FormattedMessage("NiTexturingPropertyBuild End\n");
+        //gLog.FormattedMessage("NiTexturingPropertyBuild End\n");
         return ret;
     }
 
@@ -64,12 +64,12 @@ namespace fonthook {
             const NiPixelFormat* kFormat,
             unsigned int uiMipmapLevels,
             unsigned int uiFaces) {
-            gLog.FormattedMessage("\nCall NiPixelDataBuild");
-            gLog.FormattedMessage("uiWidth: %u", uiWidth);
-            gLog.FormattedMessage("uiHeight: %u", uiHeight);
-            gLog.FormattedMessage("kFormat: %p", kFormat);
-            gLog.FormattedMessage("uiMipmapLevels: %u", uiMipmapLevels);
-            gLog.FormattedMessage("uiFaces: %u", uiFaces);
+            //gLog.FormattedMessage("\nCall NiPixelDataBuild");
+            //gLog.FormattedMessage("uiWidth: %u", uiWidth);
+            //gLog.FormattedMessage("uiHeight: %u", uiHeight);
+            //gLog.FormattedMessage("kFormat: %p", kFormat);
+            //gLog.FormattedMessage("uiMipmapLevels: %u", uiMipmapLevels);
+            //gLog.FormattedMessage("uiFaces: %u", uiFaces);
             NiPixelData* ret = ThisStdCall<NiPixelData*>(
                 0xA7C190,
                 this,
@@ -78,7 +78,7 @@ namespace fonthook {
                 kFormat,
                 uiMipmapLevels,
                 uiFaces);
-            gLog.FormattedMessage("NiPixelDataBuild End\n");
+            //gLog.FormattedMessage("NiPixelDataBuild End\n");
             return ret;
         }
     };
@@ -90,12 +90,12 @@ namespace fonthook {
         const NiPixelFormat* kFormat,
         unsigned int uiMipmapLevels,
         unsigned int uiFaces) {
-        gLog.FormattedMessage("\nCall NiPixelDataBuild");
-        gLog.FormattedMessage("uiWidth: %u", uiWidth);
-        gLog.FormattedMessage("uiHeight: %u", uiHeight);
-        gLog.FormattedMessage("kFormat: %p", kFormat);
-        gLog.FormattedMessage("uiMipmapLevels: %u", uiMipmapLevels);
-        gLog.FormattedMessage("uiFaces: %u", uiFaces);
+        //gLog.FormattedMessage("\nCall NiPixelDataBuild");
+        //gLog.FormattedMessage("uiWidth: %u", uiWidth);
+        //gLog.FormattedMessage("uiHeight: %u", uiHeight);
+        //gLog.FormattedMessage("kFormat: %p", kFormat);
+        //gLog.FormattedMessage("uiMipmapLevels: %u", uiMipmapLevels);
+        //gLog.FormattedMessage("uiFaces: %u", uiFaces);
         NiPixelData* ret = ThisStdCall<NiPixelData*>(
             0xA7C190,
             source,
@@ -104,21 +104,21 @@ namespace fonthook {
             kFormat,
             uiMipmapLevels,
             uiFaces);
-        gLog.FormattedMessage("NiPixelDataBuild End\n");
+        //gLog.FormattedMessage("NiPixelDataBuild End\n");
         return ret;
     }
 
     class NiSourceTextureEx : public NiSourceTexture {
     public:
         char* SetFilename(const NiFixedString* kFilename) {
-            gLog.FormattedMessage("\nCall NiSourceTexture::SetFilename");
-            gLog.FormattedMessage("kFilename: %p", kFilename);
+            //gLog.FormattedMessage("\nCall NiSourceTexture::SetFilename");
+            //gLog.FormattedMessage("kFilename: %p", kFilename);
             char* ret = ThisStdCall<char*>(
                 0xA5FBA0,
                 this,
                 kFilename);
-            gLog.FormattedMessage("NiSourceTexture::SetFilename End\n");
-            gLog.FormattedMessage("ret: %s", ret);
+            //gLog.FormattedMessage("NiSourceTexture::SetFilename End\n");
+            //gLog.FormattedMessage("ret: %s", ret);
             return ret;
         }
     };
@@ -130,8 +130,8 @@ namespace fonthook {
         float* axPos,
         const NiColorA* apColor
     ) {
-        gLog.FormattedMessage("Call AddChar");
-        gLog.FormattedMessage("Call AddChar from Font::CreateText");
+        //gLog.FormattedMessage("Call AddChar");
+        //gLog.FormattedMessage("Call AddChar from Font::CreateText");
 
         FontLetter* ret = StdCall<FontLetter*>(
             0xA142D0,
@@ -151,8 +151,8 @@ namespace fonthook {
         float* axPos,
         const NiColorA* apColor
     ) {
-        gLog.FormattedMessage("Call AddChar");
-        gLog.FormattedMessage("Call AddChar from Font::MakeString");
+        //gLog.FormattedMessage("Call AddChar");
+        //gLog.FormattedMessage("Call AddChar from Font::MakeString");
 
         FontLetter* ret = StdCall<FontLetter*>(
             0xA142D0,
@@ -172,8 +172,8 @@ namespace fonthook {
         float* axPos,
         const NiColorA* apColor
     ) {
-        gLog.FormattedMessage("Call AddChar");
-        gLog.FormattedMessage("Call AddChar from Font::CreateText");
+        //gLog.FormattedMessage("Call AddChar");
+        //gLog.FormattedMessage("Call AddChar from Font::CreateText");
 
         FontLetter* ret = StdCall<FontLetter*>(
             0xA142D0,
@@ -193,7 +193,7 @@ namespace fonthook {
         float* axPos,
         const NiColorA* apColor
     ) {
-        gLog.FormattedMessage("Call AddChar from FontManager::CreateText");
+        //gLog.FormattedMessage("Call AddChar from FontManager::CreateText");
 
         FontLetter* ret = StdCall<FontLetter*>(
             0xA142D0,
@@ -207,9 +207,9 @@ namespace fonthook {
     }
 
     static Font* __fastcall FontCreateForJIP(Font* apThis, void*, int iFontNum, char* apFilename, bool abLoad) {
-        gLog.FormattedMessage("\nCall Font::Font");
-        gLog.FormattedMessage("iFontNum: %u", iFontNum);
-        gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
+        //gLog.FormattedMessage("\nCall Font::Font");
+        //gLog.FormattedMessage("iFontNum: %u", iFontNum);
+        //gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
 
         Font* ret = ThisStdCall<Font*>(
             0xA12020,
@@ -221,16 +221,16 @@ namespace fonthook {
         if (!fontNameKey.empty()) {
             auto it = gExtraFontLetters.find(fontNameKey);
             if (it != gExtraFontLetters.end() && !it->second.empty()) {
-                gLog.FormattedMessage("From gExtraFontLetters to gNumberedExtraLetters");
+                //gLog.FormattedMessage("From gExtraFontLetters to gNumberedExtraLetters");
                 gNumberedExtraLetters[iFontNum] = std::move(it->second);
                 gExtraFontLetters.erase(it);
                 if (!gNumberedExtraLetters[iFontNum].empty()) {
-                    gLog.FormattedMessage("gNumberedExtraLetters[%d] is filled", iFontNum);
+                    //gLog.FormattedMessage("gNumberedExtraLetters[%d] is filled", iFontNum);
                     fontNameKey.clear();
                 }
             }
             else {
-                gLog.FormattedMessage("gExtraFontLetters for %s is empty", fontNameKey);
+                //gLog.FormattedMessage("gExtraFontLetters for %s is empty", fontNameKey);
                 fontNameKey.clear();
             }
         }
@@ -241,9 +241,9 @@ namespace fonthook {
     class FontEx : public Font {
     public:
         Font* FontCreate(int iFontNum, char* apFilename, bool abLoad) {
-            gLog.FormattedMessage("\nCall Font::Font");
-            gLog.FormattedMessage("iFontNum: %u", iFontNum);
-            gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
+            //gLog.FormattedMessage("\nCall Font::Font");
+            //gLog.FormattedMessage("iFontNum: %u", iFontNum);
+            //gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
 
             Font* ret = ThisStdCall<Font*>(
                 0xA12020,
@@ -255,16 +255,16 @@ namespace fonthook {
             if (!fontNameKey.empty()) {
                 auto it = gExtraFontLetters.find(fontNameKey);
                 if (it != gExtraFontLetters.end() && !it->second.empty()) {
-                    gLog.FormattedMessage("From gExtraFontLetters to gNumberedExtraLetters");
+                    //gLog.FormattedMessage("From gExtraFontLetters to gNumberedExtraLetters");
                     gNumberedExtraLetters[iFontNum] = std::move(it->second);
                     gExtraFontLetters.erase(it);
                     if (!gNumberedExtraLetters[iFontNum].empty()) {
-                        gLog.FormattedMessage("gNumberedExtraLetters[%d] is filled", iFontNum);
+                        //gLog.FormattedMessage("gNumberedExtraLetters[%d] is filled", iFontNum);
                         fontNameKey.clear();
                     }
                 }
                 else {
-                    gLog.FormattedMessage("gExtraFontLetters for %s is empty", fontNameKey);
+                    //gLog.FormattedMessage("gExtraFontLetters for %s is empty", fontNameKey);
                     fontNameKey.clear();
                 }
             }
@@ -338,7 +338,7 @@ namespace fonthook {
             DWORD targetAddress;
             DWORD* pTlsIndex = (DWORD*)0x126FD98;
 
-            gLog.FormattedMessage("Call Font::Load");
+            //gLog.FormattedMessage("Call Font::Load");
 
             __asm {
                 mov eax, fs: [0x18]
@@ -348,7 +348,7 @@ namespace fonthook {
             tlsSlotAddress = *(DWORD*)(tlsPointer + (*pTlsIndex) * 4);
             targetAddress = tlsSlotAddress + 692;
 
-            gLog.FormattedMessage("Set stringRefFlag");
+            //gLog.FormattedMessage("Set stringRefFlag");
 
             stringRefFlag = 0;
 
@@ -356,32 +356,32 @@ namespace fonthook {
             savedTlsValue = oldTlsValue;
             *(DWORD*)targetAddress = 12;
 
-            gLog.FormattedMessage("Initialize stackCookie");
+            //gLog.FormattedMessage("Initialize stackCookie");
 
             stackCookie = 0;
             iRefCount = this->iRefCount;
             if (iRefCount || !this->pFontFile)
             {
             LABEL_46:
-                gLog.FormattedMessage("LABEL_46");
+                //gLog.FormattedMessage("LABEL_46");
                 ++this->iRefCount;
                 stackCookie = -1;
                 *(DWORD*)targetAddress = savedTlsValue;
-                gLog.FormattedMessage("Font::Load End\n");
+                //gLog.FormattedMessage("Font::Load End\n");
                 return;
             }
-            gLog.FormattedMessage("Load %s", (const char*)this->pFontFile);
+            //gLog.FormattedMessage("Load %s", (const char*)this->pFontFile);
             BSFile_1 = FileFinder_GetFile(this->pFontFile, (NiFile::OpenMode)0, 0x150000u, 2u);
-            gLog.FormattedMessage("Load %s End", (const char*)this->pFontFile);
+            //gLog.FormattedMessage("Load %s End", (const char*)this->pFontFile);
             if (BSFile_1)
             {
                 if (LOBYTE(BSFile_1->m_pFile))
                 {
-                    gLog.FormattedMessage("Allocate pFontData");
+                    //gLog.FormattedMessage("Allocate pFontData");
                     pFontData = (FontData*)MemoryManager_s_Instance->Allocate(0x3928u);
-                    gLog.FormattedMessage("Allocate pFontData End");
+                    //gLog.FormattedMessage("Allocate pFontData End");
                     this->pFontData = pFontData;
-                    gLog.FormattedMessage("Moved Font Data");
+                    //gLog.FormattedMessage("Moved Font Data");
                     //v21 = BSFile_1->GetSize();
                     v21 = 0x3928u;
                     pFontData_1 = this->pFontData;
@@ -411,18 +411,18 @@ namespace fonthook {
                             }
 
                             if (!extraMap.empty()) {
-                                gLog.FormattedMessage("Loaded %u extra FontLetter records for %s",(unsigned)extraMap.size(),fontNameKey);
+                                //gLog.FormattedMessage("Loaded %u extra FontLetter records for %s",(unsigned)extraMap.size(),fontNameKey);
                             }
                         }
                     }
 
                     NiFile_1 = BSFile_1;
                     BSFile_2 = BSFile_1;
-                    gLog.FormattedMessage("Delete BSFile_2");
+                    //gLog.FormattedMessage("Delete BSFile_2");
                     if (BSFile_1) {
                         delete(BSFile_2);
                     }
-                    gLog.FormattedMessage("Delete BSFile_2 End");
+                    //gLog.FormattedMessage("Delete BSFile_2 End");
                     BSFile_1 = 0;
                     this->fFontHeight = 0.0;
                     fHeight_2 = 0.0;
@@ -495,11 +495,11 @@ namespace fonthook {
                             this->pFontData->pTextureFiles[iTextureCount].pFilename
                         );
 
-                        gLog.FormattedMessage("Load %s", (const char*)apName_);
+                        //gLog.FormattedMessage("Load %s", (const char*)apName_);
 
                         NiBinaryStream_0 = FileFinder_GetFile((const char*)apName_, (NiFile::OpenMode)0, 0x6000000u, 2u);
 
-                        gLog.FormattedMessage("Load %s End", (const char*)apName_);
+                        //gLog.FormattedMessage("Load %s End", (const char*)apName_);
 
                         if (!NiBinaryStream_0 || !(m_pfnWrite = (bool)NiBinaryStream_0->m_pFile))
                         {
@@ -507,9 +507,9 @@ namespace fonthook {
                             {
                                 NiBinaryStream_1 = NiBinaryStream_0;
                                 NiBinaryStream_2 = NiBinaryStream_0;
-                                gLog.FormattedMessage("Delete NiBinaryStream_2");
+                                //gLog.FormattedMessage("Delete NiBinaryStream_2");
                                 delete(NiBinaryStream_2);
-                                gLog.FormattedMessage("Delete NiBinaryStream_2 End");
+                                //gLog.FormattedMessage("Delete NiBinaryStream_2 End");
                             }
                             stackCookie = -1;
                             v13[1] = savedTlsValue;
@@ -518,11 +518,11 @@ namespace fonthook {
                         }
 
                         v13[0] = 1;
-                        gLog.FormattedMessage("Read Texture Size");
+                        //gLog.FormattedMessage("Read Texture Size");
                         v11 = NiBinaryStream_0->m_pfnRead(NiBinaryStream_0, &a2, 4u, v13, 1u);
-                        gLog.FormattedMessage("Length: %u", a2);
+                        //gLog.FormattedMessage("Length: %u", a2);
                         v11 += NiBinaryStream_0->m_pfnRead(NiBinaryStream_0, &a3, 4u, v13, 1u);
-                        gLog.FormattedMessage("Width: %u", a3);
+                        //gLog.FormattedMessage("Width: %u", a3);
                         NiBinaryStream_0->m_uiAbsoluteCurrentPos += v11;
                         v12 = v11;
                         arPrefs_.m_ePixelLayout = static_cast<NiTexture::FormatPrefs::PixelLayout>(0x6);
@@ -531,7 +531,7 @@ namespace fonthook {
                         v36 = (NiPixelData*)NiMemObject::operator new(sizeof(NiPixelData));
                         stackCookie = (stackCookie & 0xFFFFFF00) | 1;
                         if (v36) {
-                            gLog.FormattedMessage("Instancing NiPixelData");
+                            //gLog.FormattedMessage("Instancing NiPixelData");
                             NiPixelData_1 = NiPixelDataBuild2(
                                 v36,
                                 a2,
@@ -539,7 +539,7 @@ namespace fonthook {
                                 reinterpret_cast<const NiPixelFormat*>(0x11AA2A0),
                                 1,
                                 1);
-                            gLog.FormattedMessage("Instancing NiPixelData End");
+                            //gLog.FormattedMessage("Instancing NiPixelData End");
                         }
                         else
                             NiPixelData_1 = 0;
@@ -562,7 +562,7 @@ namespace fonthook {
                                 kName_.m_kHandle = 0;
                             stackCookie = (stackCookie & 0xFFFFFF00) | 3;
                             stringRefFlag |= 1u;
-                            gLog.FormattedMessage("Instancing NiTexturingProperty");
+                            //gLog.FormattedMessage("Instancing NiTexturingProperty");
                             /*NiTexturingProperty_4 = static_cast<NiTexturingPropertyEx*>(NiTexturingProperty_3)->NiTexturingPropertyBuild(
                                 NiPixelData_3,
                                 &kName_,
@@ -572,7 +572,7 @@ namespace fonthook {
                                 NiPixelData_3,
                                 &kName_,
                                 &arPrefs_);
-                            gLog.FormattedMessage("Instancing NiTexturingProperty End");
+                            //gLog.FormattedMessage("Instancing NiTexturingProperty End");
                         }
                         else
                         {
@@ -590,9 +590,9 @@ namespace fonthook {
                         NiBinaryStream_3 = NiBinaryStream_0;
                         NiBinaryStream_4 = NiBinaryStream_0;
                         if (NiBinaryStream_0) {
-                            gLog.FormattedMessage("Delete NiBinaryStream_4");
+                            //gLog.FormattedMessage("Delete NiBinaryStream_4");
                             delete(NiBinaryStream_4);
-                            gLog.FormattedMessage("Delete NiBinaryStream_4 End");
+                            //gLog.FormattedMessage("Delete NiBinaryStream_4 End");
                         }
                         NiBinaryStream_0 = 0;
                         ThisStdCall(
@@ -603,7 +603,7 @@ namespace fonthook {
                             0x66B0D0,
                             &this->pTextureData[iTextureCount].m_pObject,
                             (int)NiTexturingProperty_2);
-                        gLog.FormattedMessage("finish load");
+                        //gLog.FormattedMessage("finish load");
                     }
                     goto LABEL_46;
                 }
@@ -613,16 +613,16 @@ namespace fonthook {
             {
                 BSFile_3 = BSFile_1;
                 BSFile_4 = BSFile_1;
-                gLog.FormattedMessage("Delete BSFile_4");
+                //gLog.FormattedMessage("Delete BSFile_4");
                 delete(BSFile_4);
-                gLog.FormattedMessage("Delete BSFile_4 End");
+                //gLog.FormattedMessage("Delete BSFile_4 End");
             }
             stackCookie = -1;
             v25[1] = savedTlsValue;
             *(DWORD*)targetAddress = savedTlsValue;
         }
 
-        void __thiscall PrepText(const char* apOrigString, Font::TextData* axData) {
+        void __thiscall PrepTextForTerminal(const char* apOrigString, Font::TextData* axData) {
             unsigned int charWidthWithKerning; // eax
             //unsigned int spaceCharWidth; // eax
             unsigned int tildeCharWidth; // eax
@@ -677,17 +677,19 @@ namespace fonthook {
             UInt32 sourceTextLen; // [esp+7D8h] [ebp-8h]
             int maxAllowedLines; // [esp+7DCh] [ebp-4h]
 
+            UInt32 origConsumed = 0;
+
             bool bLastIsHanzi,bHanzi;
             UInt32 uiGBKcode, uiTempGBKcode;
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
-            gLog.FormattedMessage("Call PrepText");
+            //gLog.FormattedMessage("\nCall PrepText");
 
             if (!apOrigString)
                 return;
 
-            gLog.FormattedMessage("apOrigString = '%s'", apOrigString);
+            //gLog.FormattedMessage("apOrigString = %s", apOrigString);
 
             if (axData->iWidth <= 0)
                 axData->iWidth = 0x7FFFFFFF;
@@ -706,45 +708,45 @@ namespace fonthook {
             currentLineCount = 1;
             // 0xEC6130
             sourceTextLen = strlen(apOrigString);
-            gLog.FormattedMessage("sourceTextLen = %u", sourceTextLen);
+            //gLog.FormattedMessage("sourceTextLen = %u", sourceTextLen);
             maxAllowedLines = axData->iLineEnd;
 
-            gLog.FormattedMessage("Init originalTextBuffer");
-            gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
+            //gLog.FormattedMessage("Init originalTextBuffer");
+            //gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
             originalTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Allocate(sourceTextLen + 4));
             if (!originalTextBuffer) {
-                gLog.FormattedMessage("Memory allocation failed for originalTextBuffer");
+                //gLog.FormattedMessage("Memory allocation failed for originalTextBuffer");
                 return;
             }
 
-            gLog.FormattedMessage("MemSet originalTextBuffer");
+            //gLog.FormattedMessage("MemSet originalTextBuffer");
             // 0xEC61C0
             memset(originalTextBuffer, 0, sourceTextLen + 4);
 
-            gLog.FormattedMessage("Init processedOriginalText");
+            //gLog.FormattedMessage("Init processedOriginalText");
             processedOriginalText = originalTextBuffer;
 
 
-            gLog.FormattedMessage("Init processedTextBuffer");
-            gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
+            //gLog.FormattedMessage("Init processedTextBuffer");
+            //gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
             processedTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Allocate(sourceTextLen + 4));
             if (!processedTextBuffer) {
-                gLog.FormattedMessage("Memory allocation failed for processedTextBuffer");
+                //gLog.FormattedMessage("Memory allocation failed for processedTextBuffer");
                 MemoryManager_s_Instance->Deallocate(originalTextBuffer);
                 return;
             }
 
-            gLog.FormattedMessage("MemSet processedTextBuffer");
+            //gLog.FormattedMessage("MemSet processedTextBuffer");
             // 0xEC61C0
             memset(processedTextBuffer, 0, sourceTextLen + 4);
 
-            gLog.FormattedMessage("Init dynamicTextBuffer");
+            //gLog.FormattedMessage("Init dynamicTextBuffer");
             dynamicTextBuffer = processedTextBuffer;
 
-            gLog.FormattedMessage("SafeFormatString originalTextBuffer");
+            //gLog.FormattedMessage("SafeFormatString originalTextBuffer");
             // 0xEC623A
             snprintf(originalTextBuffer, sourceTextLen + 1, "%s", apOrigString);
-            gLog.FormattedMessage("Buffer Init Finish");
+            //gLog.FormattedMessage("Buffer Init Finish");
 
             processedTextLen = 0;
             textBufferSize = sourceTextLen + 4;
@@ -752,13 +754,12 @@ namespace fonthook {
             isTildeChar = 0;
             parsedTextBuffer[0] = 0;
             hasEscapeSequence = 0;
-            gLog.FormattedMessage("processedOriginalText Read Start");
+            //gLog.FormattedMessage("processedOriginalText Read Start");
             for (srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
             {
-                gLog.FormattedMessage("process index %u", srcTextIndex);
                 if (processedOriginalText[srcTextIndex] == '&')
                 {
-                    gLog.FormattedMessage("Found replaceable text");
+                    //gLog.FormattedMessage("Found replaceable text");
                     varNameLen = 0;
                     escapeSeqPrefixLen = 1;
                     isPositiveEscape = 1;
@@ -767,7 +768,7 @@ namespace fonthook {
                         isPositiveEscape = 0;
                         escapeSeqPrefixLen = 2;
                     }
-                    gLog.FormattedMessage("Replace replaceable varname");
+                    //gLog.FormattedMessage("Replace replaceable varname");
                     while (processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex]
                         && varNameLen < 127
                         && processedOriginalText[varNameLen + srcTextIndex] != ';'
@@ -777,24 +778,24 @@ namespace fonthook {
                         varNameBuffer[varNameLen] = processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex];
                         ++varNameLen;
                     }
-                    gLog.FormattedMessage("Replace replaceable varname end");
+                    //gLog.FormattedMessage("Replace replaceable varname end");
                     if (varNameLen)
                         escapeSeqEffectiveLen = varNameLen - escapeSeqPrefixLen;
                     else
                         escapeSeqEffectiveLen = 0;
-                    gLog.FormattedMessage("Finish varNameBuffer string");
+                    //gLog.FormattedMessage("Finish varNameBuffer string");
                     varNameBuffer[escapeSeqEffectiveLen] = 0;
                     // 0xEC6130
-                    gLog.FormattedMessage("Get varNameBuffer Length");
+                    //gLog.FormattedMessage("Get varNameBuffer Length");
                     totalEscapeSeqLen = (strlen(varNameBuffer) + 1);
-                    gLog.FormattedMessage("Process ; Length");
+                    //gLog.FormattedMessage("Process ; Length");
                     if (processedOriginalText[varNameLen + srcTextIndex] == ';')
                         totalEscapeSeqLen += escapeSeqPrefixLen;
-                    gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString");
+                    //gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString");
                     if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
                         || ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
                     {
-                        gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString Process Start");
+                        //gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString Process Start");
                         // 0xEC6130
                         postEscapeTextLen = strlen(parsedTextBuffer);
                         escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
@@ -808,12 +809,12 @@ namespace fonthook {
                                 ;
                             substrBuffer[0] = 0;
                             // 0xEC6370
-                            gLog.FormattedMessage("FastStringCopyAligned 1");
+                            //gLog.FormattedMessage("FastStringCopyAligned 1");
                             //strcpy(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
                             strcpy_s(&parsedTextBuffer[charScanIndex + 1],
                                 sizeof(parsedTextBuffer) - (charScanIndex + 1),
                                 substrBuffer);
-                            gLog.FormattedMessage("FastStringCopyAligned 1 End");
+                            //gLog.FormattedMessage("FastStringCopyAligned 1 End");
                             // 0xEC6130
                             UInt32 strLen = strlen(substrBuffer);
                             *((char*)unkarray + strLen + 15) = 0;
@@ -838,8 +839,9 @@ namespace fonthook {
                         }
                         for (bufferCopyIndex = 0; bufferCopyIndex < postEscapeTextLen; ++bufferCopyIndex)
                             dynamicTextBuffer[processedTextLen++] = parsedTextBuffer[bufferCopyIndex];
+                        origConsumed += totalEscapeSeqLen;
                         srcTextIndex = srcTextIndex + totalEscapeSeqLen - 1;
-                        gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString Process End");
+                        //gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString Process End");
                     }
                     else
                     {
@@ -849,20 +851,18 @@ namespace fonthook {
                 }
                 else
                 {
-                    gLog.FormattedMessage("dynamicTextBuffer [%u] = processedOriginalText[%u]", processedTextLen + 1 , srcTextIndex);
                     dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
-                    gLog.FormattedMessage("Copy Finished");
                 }
             }
-            gLog.FormattedMessage("processedOriginalText Read Finish");
+            //gLog.FormattedMessage("processedOriginalText Read Finish");
             dynamicTextBuffer[processedTextLen] = 0;
             if (hasEscapeSequence)
             {
                 sourceTextLen = processedTextLen;
-                gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
+                //gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
                 processedOriginalText = static_cast<char*>(MemoryManager_s_Instance->Reallocate(processedOriginalText, processedTextLen + 4));
                 // 0xEC6370
-                gLog.FormattedMessage("FastStringCopyAligned");
+                //gLog.FormattedMessage("FastStringCopyAligned");
                 //strcpy(processedOriginalText, dynamicTextBuffer);
                 strcpy_s(processedOriginalText, processedTextLen + 4, dynamicTextBuffer);
             }
@@ -870,20 +870,21 @@ namespace fonthook {
             processedTextLen = 0;
             buttonIconIndex = 0;
 
-            gLog.FormattedMessage("processedOriginalText Read 2 Start");
+            //gLog.FormattedMessage("processedOriginalText Read 2 Start");
             for (charIndex = 0; charIndex < sourceTextLen && processedOriginalText[charIndex]; ++charIndex)
             {
                 if (processedOriginalText[charIndex] == axData->cLineSep)
                 {
                     dynamicTextBuffer[processedTextLen] = axData->cLineSep;
+                    origConsumed += 1;
                     if (++processedTextLen >= textBufferSize)
                     {
-                        gLog.FormattedMessage("Relocating dynamicTextBuffer: size=%u", processedTextLen + 4);
+                        //gLog.FormattedMessage("Relocating dynamicTextBuffer: size=%u", processedTextLen + 4);
                         dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
                         textBufferSize = processedTextLen + 4;
                     }
                     totalTextHeight = this->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
-                    gLog.FormattedMessage("AppendToListTail: %d", currentLineWidth);
+                    //gLog.FormattedMessage("AppendToListTail: %d", currentLineWidth);
                     AppendToListTail(&axData->xLineWidths, &currentLineWidth);
                     if (maxLineWidth <= currentLineWidth)
                         tempLineWidthComp4 = currentLineWidth;
@@ -908,14 +909,16 @@ namespace fonthook {
                     if (processedOriginalText[charIndex] == '\t')
                     {
                         currentLineWidth += 75 - currentLineWidth % 75;
+                        origConsumed += 1;
                         continue;
                     }
 
                     if (!bHanzi) {
                         currentChar = processedOriginalText[charIndex];
-                        gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
+                        origConsumed += 1;
+                        //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
                         ConvertToAsciiQuotes(&currentChar);
-                        gLog.FormattedMessage("ConvertToAsciiQuotes: '%c' end", currentChar);
+                        //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c' end", currentChar);
                         pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
                         if (currentChar == 1)
                         {
@@ -927,7 +930,7 @@ namespace fonthook {
                             ++buttonIconIndex;
                         }
                         charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
-                        gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
+                        //gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
                         currentLineWidth += charWidthWithKerning;
                         /*if (currentChar == ' ')
                         {
@@ -948,16 +951,17 @@ namespace fonthook {
                         }
                     }
                     else {
+                        origConsumed += 2;
                         auto glyphIt = extraGlyphs->find(uiGBKcode);
                         if (glyphIt != extraGlyphs->end()) {
                             pCurrentGlyph = &glyphIt->second;
                             charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
-                            gLog.FormattedMessage("HanziWidthWithKerning: %d", charWidthWithKerning);
+                            //gLog.FormattedMessage("HanziWidthWithKerning: %d", charWidthWithKerning);
                             currentLineWidth += charWidthWithKerning;
                         }
                     }
 
-                    gLog.FormattedMessage("currentChar '%c' process end", currentChar);
+                    //gLog.FormattedMessage("currentChar '%c' process end", currentChar);
 
                     if (currentLineWidth > axData->iWidth)
                     {
@@ -983,11 +987,22 @@ namespace fonthook {
                                 hyphenCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
                                 currentLineWidth -= hyphenCharWidth;*/
 
+                                UInt32 insertPos = lastWrapPosition;
+
+                                if (insertPos > 0) {
+                                    unsigned char prevByte = (unsigned char)dynamicTextBuffer[insertPos - 1];
+                                    if (IsGBKLeadByte(prevByte)) {
+                                        insertPos -= 1;
+                                    }
+                                }
+
                                 memmove(
-                                    &dynamicTextBuffer[lastWrapPosition + 1],
-                                    &dynamicTextBuffer[lastWrapPosition],
-                                    (processedTextLen - lastWrapPosition) + 1);
-                                dynamicTextBuffer[lastWrapPosition] = axData->cLineSep;
+                                    &dynamicTextBuffer[insertPos + 1],
+                                    &dynamicTextBuffer[insertPos],
+                                    (processedTextLen - insertPos) + 1
+                                );
+
+                                dynamicTextBuffer[insertPos] = axData->cLineSep;
                                 processedTextLen += 1;
 
                                 AppendToListTail(&axData->xLineWidths, &currentLineWidth);
@@ -1146,7 +1161,6 @@ namespace fonthook {
                         dynamicTextBuffer[processedTextLen++] = processedOriginalText[charIndex];
                         dynamicTextBuffer[processedTextLen++] = processedOriginalText[charIndex + 1];
                         dynamicTextBuffer[processedTextLen] = 0;
-
                         ++charIndex;
                     }
                     else
@@ -1169,10 +1183,28 @@ namespace fonthook {
                         textBufferSize = processedTextLen + 4;
                     }
                 }
+
                 if (maxAllowedLines > 0 && currentLineCount > maxAllowedLines && processedTextLen)
                 {
-                    while (processedTextLen > 0 && dynamicTextBuffer[processedTextLen - 1] != axData->cLineSep)
+                    while (processedTextLen > 0 && dynamicTextBuffer[processedTextLen - 1] != axData->cLineSep) {
+                        /*bHanzi = false;
+                        if (extraGlyphs) {
+                            if (processedTextLen >= 2) {
+                                bHanzi = TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode);
+                                if (bHanzi) {
+                                        --processedTextLen;
+                                        --processedTextLen;
+                                        continue;
+                                }
+                            }
+                        }
+
+                        if (!bHanzi) {
+                            --processedTextLen;
+                        }*/
                         --processedTextLen;
+                        --origConsumed;
+                    }
                     dynamicTextBuffer[processedTextLen] = 0;
                     currentLineCount = maxAllowedLines;
                     currentLineWidth = 0;
@@ -1181,7 +1213,7 @@ namespace fonthook {
                 }
             }
 
-            gLog.FormattedMessage("processedOriginalText Read 2 End");
+            //gLog.FormattedMessage("processedOriginalText Read 2 End");
 
             if (*dynamicTextBuffer && axData->iLineStart)
             {
@@ -1196,37 +1228,684 @@ namespace fonthook {
                 }
                 dynamicTextBuffer[truncatedTextLen] = 0;
                 processedTextLen = truncatedTextLen;
+                origConsumed = truncatedTextLen;
             }
+
             if (!*dynamicTextBuffer)
             {
                 //strcpy
                 strcpy_s(dynamicTextBuffer, textBufferSize, " ");
+                origConsumed = 1;
                 processedTextLen = 1;
                 currentLineCount = 1;
                 totalTextHeight = this->pFontData->pFontLetters[' '].fHeight;
                 currentLineWidth = ConditionalFloatToUInt(this->pFontData->pFontLetters[' '].fWidth);
             }
-            gLog.FormattedMessage("AppendToListTail");
+            //gLog.FormattedMessage("AppendToListTail");
             AppendToListTail(&axData->xLineWidths, &currentLineWidth);
-            gLog.FormattedMessage("AppendToListTail End");
+            //gLog.FormattedMessage("AppendToListTail End");
             if (maxLineWidth <= currentLineWidth)
                 finalMaxLineWidth = currentLineWidth;
             else
                 finalMaxLineWidth = maxLineWidth;
             maxLineWidth = finalMaxLineWidth;
             dynamicTextBuffer[processedTextLen] = 0;
-            gLog.FormattedMessage("Write axData");
+            //gLog.FormattedMessage("Write axData");
+            //gLog.FormattedMessage("dynamicTextBuffer: %s",(const char*)dynamicTextBuffer);
             axData->xNewText.Set(dynamicTextBuffer, 0);
-            gLog.FormattedMessage("Write Finish");
+            //gLog.FormattedMessage("Write Finish");
+            axData->iWidth = maxLineWidth;
+            axData->iHeight = totalTextHeight;
+            axData->iLineStart = 0;
+            axData->iLineEnd = currentLineCount;
+            axData->iCharCount = origConsumed;
+            //gLog.FormattedMessage("Deallocate");
+            MemoryManager_s_Instance->Deallocate(processedOriginalText);
+            MemoryManager_s_Instance->Deallocate(dynamicTextBuffer);
+            //gLog.FormattedMessage("PrepText End");
+        }
+
+        void __thiscall PrepText(const char* apOrigString, Font::TextData* axData) {
+            unsigned int charWidthWithKerning; // eax
+            //unsigned int spaceCharWidth; // eax
+            unsigned int tildeCharWidth; // eax
+            //unsigned int hyphenCharWidth; // eax
+            unsigned int nextCharWidth; // eax
+            //unsigned int hyphenInsertWidth; // eax
+            unsigned int combinedCharWidth; // eax
+            int finalMaxLineWidth; // [esp+0h] [ebp-7E0h]
+            int tempLineWidthComp1; // [esp+4h] [ebp-7DCh]
+            int tempLineWidthComp2; // [esp+8h] [ebp-7D8h]
+            int tempLineWidthComp3; // [esp+Ch] [ebp-7D4h]
+            int tempLineWidthComp4; // [esp+10h] [ebp-7D0h]
+            int escapeSeqEffectiveLen; // [esp+14h] [ebp-7CCh]
+            char* processedTextBuffer; // [esp+8Ch] [ebp-754h]
+            char* originalTextBuffer; // [esp+94h] [ebp-74Ch]
+            unsigned int truncateCharCounter; // [esp+9Ch] [ebp-744h]
+            SInt32 lineCounter; // [esp+A0h] [ebp-740h]
+            unsigned int truncatedTextLen; // [esp+A4h] [ebp-73Ch]
+            unsigned __int8 currentChar; // [esp+ABh] [ebp-735h] BYREF
+            FontLetter* pCurrentGlyph; // [esp+ACh] [ebp-734h]
+            UInt32 charIndex; // [esp+B0h] [ebp-730h]
+            UInt32 bufferCopyIndex; // [esp+B4h] [ebp-72Ch]
+            char textureNameBuffer[268]; // [esp+B8h] [ebp-728h] BYREF
+            int charScanIndex; // [esp+1C4h] [ebp-61Ch]
+            float unkarray[4]; // [esp+1D8h] [ebp-608h]
+            char substrBuffer[264]; // [esp+1E8h] [ebp-5F8h] BYREF
+            signed int escapeSeqSizeDiff; // [esp+2F0h] [ebp-4F0h]
+            UInt32 postEscapeTextLen; // [esp+2F4h] [ebp-4ECh]
+            bool isPositiveEscape; // [esp+2FBh] [ebp-4E5h]
+            int escapeSeqPrefixLen; // [esp+2FCh] [ebp-4E4h]
+            UInt32 totalEscapeSeqLen; // [esp+300h] [ebp-4E0h]
+            int varNameLen; // [esp+304h] [ebp-4DCh]
+            char varNameBuffer[128]; // [esp+308h] [ebp-4D8h] BYREF
+            unsigned int srcTextIndex; // [esp+38Ch] [ebp-454h]
+            SInt32 currentLineWidth; // [esp+390h] [ebp-450h] BYREF
+            unsigned int processedTextLen; // [esp+394h] [ebp-44Ch]
+            unsigned int lastWrapPosition; // [esp+398h] [ebp-448h]
+            SInt32 maxLineWidth; // [esp+39Ch] [ebp-444h]
+            char* dynamicTextBuffer; // [esp+3A0h] [ebp-440h]
+            UInt32 buttonIconIndex; // [esp+3A4h] [ebp-43Ch]
+            SInt32 preSpaceWidth; // [esp+3A8h] [ebp-438h] BYREF
+            bool hasEscapeSequence; // [esp+3AFh] [ebp-431h]
+            signed int postSpaceWidth; // [esp+3B0h] [ebp-430h]
+            bool isTildeChar; // [esp+3B7h] [ebp-429h]
+            char* processedOriginalText; // [esp+3B8h] [ebp-428h]
+            int currentLineCount; // [esp+3BCh] [ebp-424h]
+            UInt32 textBufferSize; // [esp+3C0h] [ebp-420h]
+            int hyphenInsertCount; // [esp+3C4h] [ebp-41Ch]
+            char parsedTextBuffer[1028]; // [esp+3C8h] [ebp-418h] BYREF
+            float lineSpacingAdjust; // [esp+7D0h] [ebp-10h]
+            float totalTextHeight; // [esp+7D4h] [ebp-Ch]
+            UInt32 sourceTextLen; // [esp+7D8h] [ebp-8h]
+            int maxAllowedLines; // [esp+7DCh] [ebp-4h]
+
+            UInt32 origConsumed = 0;
+
+            bool bLastIsHanzi, bHanzi;
+            UInt32 uiGBKcode, uiTempGBKcode;
+            auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
+            auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
+
+            //gLog.FormattedMessage("\nCall PrepText");
+
+            if (!apOrigString)
+                return;
+
+            //gLog.FormattedMessage("apOrigString = %s", apOrigString);
+
+            if (axData->iWidth <= 0)
+                axData->iWidth = 0x7FFFFFFF;
+            if (axData->iHeight <= 0)
+                axData->iHeight = 0x7FFFFFFF;
+            if (axData->iLineEnd <= 0)
+                axData->iLineEnd = 0x7FFFFFFF;
+
+            lineSpacingAdjust = FontManagerGetLinePadding(this->iFontNum);
+            lastWrapPosition = 0;
+            preSpaceWidth = 0;
+            postSpaceWidth = 0;
+            currentLineWidth = 0;
+            maxLineWidth = 0;
+            totalTextHeight = this->pFontData->pFontLetters[' '].fHeight;
+            currentLineCount = 1;
+            // 0xEC6130
+            sourceTextLen = strlen(apOrigString);
+            //gLog.FormattedMessage("sourceTextLen = %u", sourceTextLen);
+            maxAllowedLines = axData->iLineEnd;
+
+            //gLog.FormattedMessage("Init originalTextBuffer");
+            //gLog.FormattedMessage("Allocating originalTextBuffer: size=%d", sourceTextLen + 4);
+            originalTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Allocate(sourceTextLen + 4));
+            if (!originalTextBuffer) {
+                //gLog.FormattedMessage("Memory allocation failed for originalTextBuffer");
+                return;
+            }
+
+            //gLog.FormattedMessage("MemSet originalTextBuffer");
+            // 0xEC61C0
+            memset(originalTextBuffer, 0, sourceTextLen + 4);
+
+            //gLog.FormattedMessage("Init processedOriginalText");
+            processedOriginalText = originalTextBuffer;
+
+
+            //gLog.FormattedMessage("Init processedTextBuffer");
+            //gLog.FormattedMessage("Allocating processedTextBuffer: size=%u", sourceTextLen + 4);
+            processedTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Allocate(sourceTextLen + 4));
+            if (!processedTextBuffer) {
+                //gLog.FormattedMessage("Memory allocation failed for processedTextBuffer");
+                MemoryManager_s_Instance->Deallocate(originalTextBuffer);
+                return;
+            }
+
+            //gLog.FormattedMessage("MemSet processedTextBuffer");
+            // 0xEC61C0
+            memset(processedTextBuffer, 0, sourceTextLen + 4);
+
+            //gLog.FormattedMessage("Init dynamicTextBuffer");
+            dynamicTextBuffer = processedTextBuffer;
+
+            //gLog.FormattedMessage("SafeFormatString originalTextBuffer");
+            // 0xEC623A
+            snprintf(originalTextBuffer, sourceTextLen + 1, "%s", apOrigString);
+            //gLog.FormattedMessage("Buffer Init Finish");
+
+            processedTextLen = 0;
+            textBufferSize = sourceTextLen + 4;
+            hyphenInsertCount = 0;
+            isTildeChar = 0;
+            parsedTextBuffer[0] = 0;
+            hasEscapeSequence = 0;
+            //gLog.FormattedMessage("processedOriginalText Read Start");
+            for (srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
+            {
+                if (processedOriginalText[srcTextIndex] == '&')
+                {
+                    //gLog.FormattedMessage("Found replaceable text");
+                    varNameLen = 0;
+                    escapeSeqPrefixLen = 1;
+                    isPositiveEscape = 1;
+                    if (processedOriginalText[srcTextIndex + 1] == '-')
+                    {
+                        isPositiveEscape = 0;
+                        escapeSeqPrefixLen = 2;
+                    }
+                    //gLog.FormattedMessage("Replace replaceable varname");
+                    while (processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex]
+                        && varNameLen < 127
+                        && processedOriginalText[varNameLen + srcTextIndex] != ';'
+                        && processedOriginalText[varNameLen + srcTextIndex] != '\n'
+                        && processedOriginalText[varNameLen + srcTextIndex] != axData->cLineSep)
+                    {
+                        varNameBuffer[varNameLen] = processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex];
+                        ++varNameLen;
+                    }
+                    //gLog.FormattedMessage("Replace replaceable varname end");
+                    if (varNameLen)
+                        escapeSeqEffectiveLen = varNameLen - escapeSeqPrefixLen;
+                    else
+                        escapeSeqEffectiveLen = 0;
+                    //gLog.FormattedMessage("Finish varNameBuffer string");
+                    varNameBuffer[escapeSeqEffectiveLen] = 0;
+                    // 0xEC6130
+                    //gLog.FormattedMessage("Get varNameBuffer Length");
+                    totalEscapeSeqLen = (strlen(varNameBuffer) + 1);
+                    //gLog.FormattedMessage("Process ; Length");
+                    if (processedOriginalText[varNameLen + srcTextIndex] == ';')
+                        totalEscapeSeqLen += escapeSeqPrefixLen;
+                    //gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString");
+                    if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
+                        || ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
+                    {
+                        //gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString Process Start");
+                        // 0xEC6130
+                        postEscapeTextLen = strlen(parsedTextBuffer);
+                        escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
+                        if (parsedTextBuffer[postEscapeTextLen - 1] == '\\')
+                        {
+                            unkarray[0] = 0.0;
+                            unkarray[1] = 0.0;
+                            unkarray[2] = 0.0;
+                            unkarray[3] = 0.0;
+                            for (charScanIndex = 0; parsedTextBuffer[charScanIndex] != '\\'; ++charScanIndex)
+                                ;
+                            substrBuffer[0] = 0;
+                            // 0xEC6370
+                            //gLog.FormattedMessage("FastStringCopyAligned 1");
+                            //strcpy(&parsedTextBuffer[charScanIndex + 1], substrBuffer);
+                            strcpy_s(&parsedTextBuffer[charScanIndex + 1],
+                                sizeof(parsedTextBuffer) - (charScanIndex + 1),
+                                substrBuffer);
+                            //gLog.FormattedMessage("FastStringCopyAligned 1 End");
+                            // 0xEC6130
+                            UInt32 strLen = strlen(substrBuffer);
+                            *((char*)unkarray + strLen + 15) = 0;
+                            if (this->iFontNum == 7)
+                            {
+                                // 0xEC65A6
+                                strncpy_s(textureNameBuffer, sizeof(textureNameBuffer), substrBuffer, _TRUNCATE);
+                                // 0x406D00
+                                vsnprintf(substrBuffer, sizeof(substrBuffer), "glow_%s", textureNameBuffer);
+                            }
+                            this->AddTextIcon(substrBuffer);
+                            parsedTextBuffer[charScanIndex] = 1;
+                            parsedTextBuffer[charScanIndex + 1] = 0;
+                            // 0xEC6130
+                            postEscapeTextLen = strlen(parsedTextBuffer);
+                            escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
+                        }
+                        if (escapeSeqSizeDiff > 0)
+                        {
+                            textBufferSize += escapeSeqSizeDiff;
+                            dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, textBufferSize + 1));
+                        }
+                        for (bufferCopyIndex = 0; bufferCopyIndex < postEscapeTextLen; ++bufferCopyIndex)
+                            dynamicTextBuffer[processedTextLen++] = parsedTextBuffer[bufferCopyIndex];
+                        origConsumed += totalEscapeSeqLen;
+                        srcTextIndex = srcTextIndex + totalEscapeSeqLen - 1;
+                        //gLog.FormattedMessage("ReplaceVariableInString & ParseAndFormatVariableInString Process End");
+                    }
+                    else
+                    {
+                        dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
+                    }
+                    hasEscapeSequence = 1;
+                }
+                else
+                {
+                    dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
+                }
+            }
+            //gLog.FormattedMessage("processedOriginalText Read Finish");
+            dynamicTextBuffer[processedTextLen] = 0;
+            if (hasEscapeSequence)
+            {
+                sourceTextLen = processedTextLen;
+                //gLog.FormattedMessage("Relocating processedOriginalText: size=%u", processedTextLen + 4);
+                processedOriginalText = static_cast<char*>(MemoryManager_s_Instance->Reallocate(processedOriginalText, processedTextLen + 4));
+                // 0xEC6370
+                //gLog.FormattedMessage("FastStringCopyAligned");
+                //strcpy(processedOriginalText, dynamicTextBuffer);
+                strcpy_s(processedOriginalText, processedTextLen + 4, dynamicTextBuffer);
+            }
+            *dynamicTextBuffer = 0;
+            processedTextLen = 0;
+            buttonIconIndex = 0;
+
+            //gLog.FormattedMessage("processedOriginalText Read 2 Start");
+            for (charIndex = 0; charIndex < sourceTextLen && processedOriginalText[charIndex]; ++charIndex)
+            {
+                if (processedOriginalText[charIndex] == axData->cLineSep)
+                {
+                    dynamicTextBuffer[processedTextLen] = axData->cLineSep;
+                    origConsumed += 1;
+                    if (++processedTextLen >= textBufferSize)
+                    {
+                        //gLog.FormattedMessage("Relocating dynamicTextBuffer: size=%u", processedTextLen + 4);
+                        dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
+                        textBufferSize = processedTextLen + 4;
+                    }
+                    totalTextHeight = this->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
+                    //gLog.FormattedMessage("AppendToListTail: %d", currentLineWidth);
+                    AppendToListTail(&axData->xLineWidths, &currentLineWidth);
+                    if (maxLineWidth <= currentLineWidth)
+                        tempLineWidthComp4 = currentLineWidth;
+                    else
+                        tempLineWidthComp4 = maxLineWidth;
+                    maxLineWidth = tempLineWidthComp4;
+                    currentLineWidth = 0;
+                    lastWrapPosition = 0;
+                    ++currentLineCount;
+                }
+                else
+                {
+                    bHanzi = false;
+                    if (extraGlyphs) {
+                        if ((charIndex + 1) <= sourceTextLen) {
+                            if ((unsigned char)processedOriginalText[charIndex] >= 0x81) {
+                                bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
+                            }
+                        }
+                    }
+
+                    if (processedOriginalText[charIndex] == '\t')
+                    {
+                        currentLineWidth += 75 - currentLineWidth % 75;
+                        origConsumed += 1;
+                        continue;
+                    }
+
+                    if (!bHanzi) {
+                        currentChar = processedOriginalText[charIndex];
+                        origConsumed += 1;
+                        //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
+                        ConvertToAsciiQuotes(&currentChar);
+                        //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c' end", currentChar);
+                        pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
+                        if (currentChar == 1)
+                        {
+                            if (buttonIconIndex < this->ButtonIcons.uiSize)
+                            {
+                                pCurrentGlyph->fWidth = this->ButtonIcons.pBuffer[buttonIconIndex].fWidth;
+                                pCurrentGlyph->fSpacing = this->ButtonIcons.pBuffer[buttonIconIndex].fSpacing;
+                            }
+                            ++buttonIconIndex;
+                        }
+                        charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                        //gLog.FormattedMessage("charWidthWithKerning: %d", charWidthWithKerning);
+                        currentLineWidth += charWidthWithKerning;
+                        /*if (currentChar == ' ')
+                        {
+                            lastWrapPosition = processedTextLen;
+                            spaceCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                            preSpaceWidth = currentLineWidth - spaceCharWidth;
+                            postSpaceWidth = currentLineWidth;
+                            isTildeChar = 0;
+                        }*/
+                        if (currentChar == '~')
+                        {
+                            lastWrapPosition = processedTextLen;
+                            isTildeChar = 1;
+                            tildeCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                            currentLineWidth -= tildeCharWidth;
+                            preSpaceWidth = currentLineWidth;
+                            postSpaceWidth = currentLineWidth;
+                        }
+                    }
+                    else {
+                        origConsumed += 2;
+                        auto glyphIt = extraGlyphs->find(uiGBKcode);
+                        if (glyphIt != extraGlyphs->end()) {
+                            pCurrentGlyph = &glyphIt->second;
+                            charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                            //gLog.FormattedMessage("HanziWidthWithKerning: %d", charWidthWithKerning);
+                            currentLineWidth += charWidthWithKerning;
+                        }
+                    }
+
+                    //gLog.FormattedMessage("currentChar '%c' process end", currentChar);
+
+                    if (currentLineWidth > axData->iWidth)
+                    {
+                        if (lastWrapPosition)
+                        {
+                            if (isTildeChar)
+                            {
+                                isTildeChar = 0;
+                                textBufferSize += 4;
+                                dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, textBufferSize + 1));
+
+                                // 0xEC7230
+                                /*memmove(
+                                    &dynamicTextBuffer[lastWrapPosition + 2],
+                                    &dynamicTextBuffer[lastWrapPosition],
+                                    processedTextLen - lastWrapPosition);
+                                dynamicTextBuffer[lastWrapPosition + 1] = '\n';
+                                dynamicTextBuffer[lastWrapPosition] = '-';
+                                processedTextLen += 2;
+                                hyphenInsertCount += 2;
+                                pCurrentGlyph = &this->pFontData->pFontLetters['-'];
+                                totalTextHeight = this->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
+                                hyphenCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                                currentLineWidth -= hyphenCharWidth;*/
+
+                                UInt32 insertPos = lastWrapPosition;
+
+                                if (insertPos > 0) {
+                                    unsigned char prevByte = (unsigned char)dynamicTextBuffer[insertPos - 1];
+                                    if (IsGBKLeadByte(prevByte)) {
+                                        insertPos -= 1;
+                                    }
+                                }
+
+                                memmove(
+                                    &dynamicTextBuffer[insertPos + 1],
+                                    &dynamicTextBuffer[insertPos],
+                                    (processedTextLen - insertPos) + 1
+                                );
+
+                                dynamicTextBuffer[insertPos] = axData->cLineSep;
+                                processedTextLen += 1;
+
+                                AppendToListTail(&axData->xLineWidths, &currentLineWidth);
+                                if (maxLineWidth <= currentLineWidth)
+                                    tempLineWidthComp3 = currentLineWidth;
+                                else
+                                    tempLineWidthComp3 = maxLineWidth;
+                                maxLineWidth = tempLineWidthComp3;
+                                lastWrapPosition = 0;
+                                ++currentLineCount;
+
+                                bLastIsHanzi = false;
+                                if (extraGlyphs) {
+                                    if (IsGBKTrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
+                                        if (TryDecodeGBK(&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode)) {
+                                            auto glyphIt2 = extraGlyphs->find(uiTempGBKcode);
+                                            if (glyphIt2 != extraGlyphs->end()) {
+                                                pCurrentGlyph = &glyphIt2->second;
+                                                bLastIsHanzi = true;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (!bLastIsHanzi) {
+                                    pCurrentGlyph = &this->pFontData->pFontLetters[dynamicTextBuffer[processedTextLen - 1]];
+                                }
+                                currentLineWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+
+                                if (bHanzi) {
+                                    auto glyphIt3 = extraGlyphs->find(uiGBKcode);
+                                    if (glyphIt3 != extraGlyphs->end()) {
+                                        pCurrentGlyph = &glyphIt3->second;
+                                    }
+                                }
+                                else {
+                                    pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
+                                }
+
+                                nextCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                                currentLineWidth += nextCharWidth;
+                            }
+                            else
+                            {
+                                if (lastWrapPosition == processedTextLen)
+                                    currentChar = axData->cLineSep;
+                                else
+                                    dynamicTextBuffer[lastWrapPosition] = axData->cLineSep;
+                                totalTextHeight = this->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
+                                AppendToListTail(&axData->xLineWidths, &preSpaceWidth);
+                                if (maxLineWidth <= preSpaceWidth)
+                                    tempLineWidthComp2 = preSpaceWidth;
+                                else
+                                    tempLineWidthComp2 = maxLineWidth;
+                                maxLineWidth = tempLineWidthComp2;
+                                lastWrapPosition = 0;
+                                ++currentLineCount;
+                                currentLineWidth -= postSpaceWidth;
+                            }
+                        }
+                        else
+                        {
+                            if (processedTextLen + 4 >= textBufferSize)
+                            {
+                                dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8));
+                                textBufferSize = processedTextLen + 8;
+                            }
+
+                            /*dynamicTextBuffer[processedTextLen + 1] = dynamicTextBuffer[processedTextLen];
+                            dynamicTextBuffer[processedTextLen] = dynamicTextBuffer[processedTextLen - 1];*/
+
+                            //qmemcpy
+                            /*memcpy(&dynamicTextBuffer[processedTextLen - 1], "-\n", 2);
+                            processedTextLen += 2;
+                            hyphenInsertCount += 2;
+                            pCurrentGlyph = &this->pFontData->pFontLetters['-'];
+                            totalTextHeight = this->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
+                            hyphenInsertWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+                            currentLineWidth -= hyphenInsertWidth;*/
+
+                            UInt32 tailStart = processedTextLen - 1;
+                            UInt32 tailBytes = 2;
+
+                            if (processedTextLen >= 2) {
+                                unsigned char cmsb = (unsigned char)dynamicTextBuffer[processedTextLen - 2];
+                                unsigned char clsb = (unsigned char)dynamicTextBuffer[processedTextLen - 1];
+
+                                if (extraGlyphs) {
+                                    if (IsGBKLeadByte(cmsb) && IsGBKTrailByte(clsb)) {
+                                        tailStart = processedTextLen - 2;
+                                        tailBytes = 3;
+                                    }
+                                }
+                            }
+
+                            memmove(&dynamicTextBuffer[tailStart + 1],
+                                &dynamicTextBuffer[tailStart],
+                                tailBytes);
+
+                            dynamicTextBuffer[tailStart] = axData->cLineSep;
+
+                            processedTextLen += 1;
+                            totalTextHeight += (this->pFontData->fBaseLine + lineSpacingAdjust);
+
+                            AppendToListTail(&axData->xLineWidths, &currentLineWidth);
+                            if (maxLineWidth <= currentLineWidth)
+                                tempLineWidthComp1 = currentLineWidth;
+                            else
+                                tempLineWidthComp1 = maxLineWidth;
+                            maxLineWidth = tempLineWidthComp1;
+                            lastWrapPosition = 0;
+                            ++currentLineCount;
+
+                            bLastIsHanzi = false;
+                            if (extraGlyphs) {
+                                if (IsGBKTrailByte(dynamicTextBuffer[processedTextLen - 1])) {
+                                    if (TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode)) {
+                                        auto glyphIt2 = extraGlyphs->find(uiTempGBKcode);
+                                        if (glyphIt2 != extraGlyphs->end()) {
+                                            pCurrentGlyph = &glyphIt2->second;
+                                            bLastIsHanzi = true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (!bLastIsHanzi) {
+                                pCurrentGlyph = &this->pFontData->pFontLetters[dynamicTextBuffer[processedTextLen - 1]];
+                            }
+
+                            currentLineWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+
+                            if (bHanzi) {
+                                auto glyphIt3 = extraGlyphs->find(uiGBKcode);
+                                if (glyphIt3 != extraGlyphs->end()) {
+                                    pCurrentGlyph = &glyphIt3->second;
+                                }
+                            }
+                            else {
+                                pCurrentGlyph = &this->pFontData->pFontLetters[currentChar];
+                            }
+
+                            combinedCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+
+                            currentLineWidth += combinedCharWidth;
+                        }
+                    }
+
+                    if (bHanzi)
+                    {
+                        if (processedTextLen + 4 >= textBufferSize) {
+                            dynamicTextBuffer = (char*)MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8);
+                            textBufferSize = processedTextLen + 8;
+                        }
+
+                        dynamicTextBuffer[processedTextLen++] = processedOriginalText[charIndex];
+                        dynamicTextBuffer[processedTextLen++] = processedOriginalText[charIndex + 1];
+                        dynamicTextBuffer[processedTextLen] = 0;
+                        ++charIndex;
+                    }
+                    else
+                    {
+                        if (currentChar != '~')
+                        {
+                            if (processedTextLen + 1 >= textBufferSize) {
+                                dynamicTextBuffer = (char*)MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8);
+                                textBufferSize = processedTextLen + 8;
+                            }
+
+                            dynamicTextBuffer[processedTextLen++] = (char)currentChar;
+                            dynamicTextBuffer[processedTextLen] = 0;
+                        }
+                    }
+
+                    if (processedTextLen >= textBufferSize)
+                    {
+                        dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
+                        textBufferSize = processedTextLen + 4;
+                    }
+                }
+
+                if (maxAllowedLines > 0 && currentLineCount > maxAllowedLines && processedTextLen)
+                {
+                    while (processedTextLen > 0 && dynamicTextBuffer[processedTextLen - 1] != axData->cLineSep) {
+                        /*bHanzi = false;
+                        if (extraGlyphs) {
+                            if (processedTextLen >= 2) {
+                                bHanzi = TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode);
+                                if (bHanzi) {
+                                        --processedTextLen;
+                                        --processedTextLen;
+                                        continue;
+                                }
+                            }
+                        }
+
+                        if (!bHanzi) {
+                            --processedTextLen;
+                        }*/
+                        --processedTextLen;
+                        --origConsumed;
+                    }
+                    dynamicTextBuffer[processedTextLen] = 0;
+                    currentLineCount = maxAllowedLines;
+                    currentLineWidth = 0;
+                    totalTextHeight = totalTextHeight - (this->pFontData->fBaseLine + lineSpacingAdjust);
+                    break;
+                }
+            }
+
+            //gLog.FormattedMessage("processedOriginalText Read 2 End");
+
+            if (*dynamicTextBuffer && axData->iLineStart)
+            {
+                truncatedTextLen = 0;
+                lineCounter = 0;
+                for (truncateCharCounter = 0; truncateCharCounter < processedTextLen; ++truncateCharCounter)
+                {
+                    if (lineCounter >= axData->iLineStart && lineCounter < axData->iLineEnd)
+                        dynamicTextBuffer[truncatedTextLen++] = dynamicTextBuffer[truncateCharCounter];
+                    if (dynamicTextBuffer[truncateCharCounter] == axData->cLineSep)
+                        ++lineCounter;
+                }
+                dynamicTextBuffer[truncatedTextLen] = 0;
+                processedTextLen = truncatedTextLen;
+                origConsumed = truncatedTextLen;
+            }
+
+            if (!*dynamicTextBuffer)
+            {
+                //strcpy
+                strcpy_s(dynamicTextBuffer, textBufferSize, " ");
+                origConsumed = 1;
+                processedTextLen = 1;
+                currentLineCount = 1;
+                totalTextHeight = this->pFontData->pFontLetters[' '].fHeight;
+                currentLineWidth = ConditionalFloatToUInt(this->pFontData->pFontLetters[' '].fWidth);
+            }
+            //gLog.FormattedMessage("AppendToListTail");
+            AppendToListTail(&axData->xLineWidths, &currentLineWidth);
+            //gLog.FormattedMessage("AppendToListTail End");
+            if (maxLineWidth <= currentLineWidth)
+                finalMaxLineWidth = currentLineWidth;
+            else
+                finalMaxLineWidth = maxLineWidth;
+            maxLineWidth = finalMaxLineWidth;
+            dynamicTextBuffer[processedTextLen] = 0;
+            //gLog.FormattedMessage("Write axData");
+            //gLog.FormattedMessage("dynamicTextBuffer: %s",(const char*)dynamicTextBuffer);
+            axData->xNewText.Set(dynamicTextBuffer, 0);
+            //gLog.FormattedMessage("Write Finish");
             axData->iWidth = maxLineWidth;
             axData->iHeight = totalTextHeight;
             axData->iLineStart = 0;
             axData->iLineEnd = currentLineCount;
             axData->iCharCount = processedTextLen;
-            gLog.FormattedMessage("Deallocate");
+            //gLog.FormattedMessage("Deallocate");
             MemoryManager_s_Instance->Deallocate(processedOriginalText);
             MemoryManager_s_Instance->Deallocate(dynamicTextBuffer);
-            gLog.FormattedMessage("PrepText End");
+            //gLog.FormattedMessage("PrepText End");
         }
 
         UInt32 CreateText(
@@ -1273,7 +1952,7 @@ namespace fonthook {
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
-            gLog.FormattedMessage("\nCall Font::CreateText");
+            //gLog.FormattedMessage("\nCall Font::CreateText");
             if (!*aiHeight)
                 *aiHeight = 0x7FFFFFFF;
             if (!aiLineEnd)
@@ -1282,10 +1961,10 @@ namespace fonthook {
             ThisStdCall(0x759330, &axData, *aiWidth, *aiHeight, aiLineStart, aiLineEnd, aiLineBreakChar);
             v37 = 0;
 
-            gLog.FormattedMessage("axTextString->pString: '%s'", (const char*)axTextString->pString);
-            gLog.FormattedMessage("Call Font::PrepText");
+            //gLog.FormattedMessage("axTextString->pString: '%s'", (const char*)axTextString->pString);
+            //gLog.FormattedMessage("Call Font::PrepText");
             ThisStdCall(0xA12FB0, this, axTextString->pString, &axData);
-            gLog.FormattedMessage("Font::PrepText End");
+            //gLog.FormattedMessage("Font::PrepText End");
 
             *aiWidth = axData.iWidth;
             *aiHeight = axData.iHeight;
@@ -1329,9 +2008,9 @@ namespace fonthook {
                     }
                 }
             }
-            axData.iCharCount = iActualCharCount;
+            //axData.iCharCount = iActualCharCount;
 
-            *apTextShape = (UINT32*)Font::MakeTriShape(axData.iCharCount, axFontColor, 1);
+            *apTextShape = (UINT32*)Font::MakeTriShape(iActualCharCount, axFontColor, 1);
             *(float*)&axData2.xNewText.sLen = 0.0;
             *(float*)&axData2.iWidth = axPos_.y;
             *(float*)&axData2.iHeight = axPos_.z;
@@ -1419,9 +2098,9 @@ namespace fonthook {
                 else
                 {
                     if (extraGlyphs) {
-                        gLog.FormattedMessage("Found extraGlyphs");
+                        //gLog.FormattedMessage("Found extraGlyphs");
                         if (bHanzi) {
-                            gLog.FormattedMessage("Find GBKByte");
+                            //gLog.FormattedMessage("Find GBKByte");
                             auto glyphIt = extraGlyphs->find(uiGBKcode);
                             if (glyphIt != extraGlyphs->end()) {
                                 FontAddChar(&glyphIt->second,
@@ -1441,7 +2120,7 @@ namespace fonthook {
                         }
                     }
                     else {
-                        gLog.FormattedMessage("extraGlyphs Not Found");
+                        //gLog.FormattedMessage("extraGlyphs Not Found");
                     }
                     if (!rendered) {
                         FontAddChar(&this->pFontData->pFontLetters[cCurrentChar],
@@ -1473,7 +2152,7 @@ namespace fonthook {
                     *(float**)((*apIconShape)[46] + 32));
             this->ButtonIcons.Clear(1);
             v37 = -1;
-            gLog.FormattedMessage("Font::CreateText End\n");
+            //gLog.FormattedMessage("Font::CreateText End\n");
             return ThisStdCall(0x7593E0, (char*)&axData);
         }
     };
@@ -1504,28 +2183,28 @@ namespace fonthook {
             auto extraGlyphEntry = gNumberedExtraLetters.find(fontID);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
-            gLog.FormattedMessage("Call GetStringDimensionsEx");
-            gLog.FormattedMessage("fontID: %u", fontID);
+            //gLog.FormattedMessage("Call GetStringDimensionsEx");
+            //gLog.FormattedMessage("fontID: %u", fontID);
 
             if (fontID >= 1 /*&& fontID <= 8*/ && srcString)
             {
                 StringDimensions = StringDefaultDimensions;
                 // 0xEC6130
-                gLog.FormattedMessage("Call strlen");
+                //gLog.FormattedMessage("Call strlen");
                 sourceStringLength = strlen(srcString);
-                gLog.FormattedMessage("sourceStringLength: %u", sourceStringLength);
+                //gLog.FormattedMessage("sourceStringLength: %u", sourceStringLength);
                 fontCharMetrics = this->pFont[fontID - 1]->pFontData->pFontLetters;
                 lastValidWrapPosition = 0.0;
                 currentLineWidth = 0.0;
-                gLog.FormattedMessage("Call VertSpacingAdjust");
+                //gLog.FormattedMessage("Call VertSpacingAdjust");
                 fontVerticalSpacingAdjust = FontManagerGetLinePadding(fontID);
-                gLog.FormattedMessage("fontVerticalSpacingAdjust: %f", fontVerticalSpacingAdjust);
+                //gLog.FormattedMessage("fontVerticalSpacingAdjust: %f", fontVerticalSpacingAdjust);
                 previousCharTotalWidth = 0.0;
                 hasHyphenationPoint = 0;
                 totalLines = 1;
                 StringDimensions.y = fontCharMetrics[' '].fHeight;
 
-                gLog.FormattedMessage("GetStringDimensionsEx srcString: '%s'", srcString);
+                //gLog.FormattedMessage("GetStringDimensionsEx srcString: '%s'", srcString);
 
                 for (currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
                 {
@@ -1552,7 +2231,7 @@ namespace fonthook {
                     }
 
                     if (bHanzi) {
-                        gLog.FormattedMessage("CalculateStringDimensions found Hanzi");
+                        //gLog.FormattedMessage("CalculateStringDimensions found Hanzi");
                         auto glyphIt = extraGlyphs->find(uiGBKcode);
                         if (glyphIt != extraGlyphs->end()) {
                             currentCharTotalWidth = glyphIt->second.fLeadingEdge
@@ -1562,9 +2241,9 @@ namespace fonthook {
                         ++currentCharIndex;
                     }
                     else {
-                        gLog.FormattedMessage("Call ConvertToAsciiQuotes");
+                        //gLog.FormattedMessage("Call ConvertToAsciiQuotes");
                         ConvertToAsciiQuotes(&currentChar);
-                        gLog.FormattedMessage("Call ConvertToAsciiQuotes end");
+                        //gLog.FormattedMessage("Call ConvertToAsciiQuotes end");
                         currentCharTotalWidth = fontCharMetrics[currentChar].fLeadingEdge
                             + fontCharMetrics[currentChar].fWidth
                             + fontCharMetrics[currentChar].fSpacing;
@@ -1653,9 +2332,9 @@ namespace fonthook {
     };
 
     static void* __fastcall TileSetString(void* pThis, void*, int a2, char* a3, bool a4) {
-        gLog.FormattedMessage("Call QuestText TileSetString");
-        gLog.FormattedMessage("a2: %d", a2);
-        gLog.FormattedMessage("a3: %x", a3[0]);
+        //gLog.FormattedMessage("Call QuestText TileSetString");
+        //gLog.FormattedMessage("a2: %d", a2);
+        //gLog.FormattedMessage("a3: %x", a3[0]);
 
         bIsQuestTextLSBHanzi = false;
         if (bIsQuestTextMSBHanzi) {
@@ -1673,7 +2352,7 @@ namespace fonthook {
             bIsQuestTextMSBHanzi = IsGBKLeadByte((unsigned char)a3[0]);
             if (bIsQuestTextMSBHanzi) {
 				pFirstChar = (unsigned char)a3[0];
-				gLog.FormattedMessage("QuestText FirstByte: 0x%x", pFirstChar);
+				//gLog.FormattedMessage("QuestText FirstByte: 0x%x", pFirstChar);
                 a3 = (char*)"";
             }
         }
@@ -1684,18 +2363,90 @@ namespace fonthook {
 		return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);
     }
 
+    static int __fastcall ComputersMenu_DisplayNoteText(UInt32* pthis, void*, UInt32* BGSNote) {
+        //gLog.FormattedMessage("\nDisplayNoteText: %s", (const char*)*((DWORD*)pthis + 47));
+		int ret = ThisStdCall<int>(0x7590C0, pthis, BGSNote);
+        return ret;
+    }
+
+    static int __fastcall ComputersMenu_DoClick(UInt32* pthis, void*, int aiID, UInt32* apTarget) {
+        //gLog.FormattedMessage("\nDoClick: %s", (const char*)*((DWORD*)pthis + 47));
+        int ret = ThisStdCall<int>(0x757F70, pthis, aiID, apTarget);
+        return ret;
+    }
+
+    static int __fastcall ComputersMenu_DisplayTerminal(UInt32* pthis, void*, bool abAddToStack) {
+        //gLog.FormattedMessage("DisplayTerminal: %s", (const char*)*((DWORD*)pthis + 47));
+        int ret = ThisStdCall<int>(0x7586E0, pthis, abAddToStack);
+        return ret;
+    }
+
+    static int __fastcall ComputersMenu_AnimatingTextManager_AddItem(
+        void* pthis,
+        void*,
+        const char* a2,
+        UInt32 a3,
+        UInt32 a4,
+        UInt32 a5
+    ) {
+        //gLog.FormattedMessage("\nAnimatingTextManager_AddItem: %s", (const char*)a2);
+        int ret = ThisStdCall<int>(0x759DA0, pthis, a2, a3, a4, a5);
+        return ret;
+    }
+
+    static bool __fastcall BSStringT_char_Set(
+        BSStringT<char>* pthis,
+        void*,
+        const char* apString,
+        unsigned int aiMaxLen) {
+        //gLog.FormattedMessage("\nBSStringT_char_Set: %s", apString);
+        bool ret = ThisStdCall<bool>(0x4037F0, pthis, apString, aiMaxLen);
+        return ret;
+    }
+
+    // 0x84E3A0
+    static int __fastcall GetString(UInt32* pthis, void*) {
+        //gLog.FormattedMessage("\nComputerMenu_GetString: %s", (const char*)pthis[3]);
+        return pthis[3];
+    }
+
     void InitVertSpacingHook() {
+        //FontManager::GetLinePadding
         //WriteRelJump(0xA1B3A0, &VertSpacingAdjust);
     }
 
     void InitFontHook() {
-        WriteRelCall(0x77AF4B, &TileSetString);
+        //BSStringT<char>::Set
+        //WriteRelCall(0x75919E, &BSStringT_char_Set);
+
+        //WriteRelCall(0x75880D, &GetString);
+
+        //ComputersMenu::DisplayTerminal
+        //WriteRelCall(0x75802D, &ComputersMenu_DisplayTerminal);
+        //WriteRelCall(0x758179, &ComputersMenu_DisplayTerminal);
+        //WriteRelCall(0x758327, &ComputersMenu_DisplayTerminal);
+        //WriteRelCall(0x758ABF, &ComputersMenu_DisplayTerminal);
+        //WriteRelCall(0x758DA6, &ComputersMenu_DisplayTerminal);
+
+        //ComputersMenu::DoClick
+        //SafeWrite32((0x1072004 + 3*4), (UInt32)&ComputersMenu_DoClick);
+
+        //ComputersMenu::DisplayNoteText
+        //SafeWrite32((0x7578B5+6), (UInt32)&ComputersMenu_DisplayNoteText);
+        //WriteRelCall(0x757FEB, &ComputersMenu_DisplayNoteText);
+
+        //ComputersMenu::AnimatingTextManager::AddItem
+        //WriteRelCall(0x7592BC, &ComputersMenu_AnimatingTextManager_AddItem);
+
+        //Tile::Value::SetString
+        //WriteRelCall(0x77AF4B, &TileSetString);
 
         // Font::Load
         WriteRelJumpEx(0xA15320, &FontEx::Load);
         // 
         // Font::PrepText
         WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
+        WriteRelCallEx(0x759281, &FontEx::PrepTextForTerminal);
         // 
         // Font::AddChar
         //WriteRelCall(0xA1278B, &FontAddChar1);
@@ -1730,7 +2481,7 @@ namespace fonthook {
     void InitJIPHooks() {
         hJIP = GetModuleHandle("jip_nvse.dll");
         if (!hJIP) {
-            gLog.FormattedMessage("JIP not find");
+            //gLog.FormattedMessage("JIP not find");
             //1
             WriteRelCallEx(0xA1695A, &FontEx::FontCreate);
             //2
@@ -1749,7 +2500,7 @@ namespace fonthook {
             WriteRelCallEx(0xA16C5B, &FontEx::FontCreate);
             return;
         }
-        gLog.FormattedMessage("hook JIP Font::Font");
+        //gLog.FormattedMessage("hook JIP Font::Font");
         SafeWrite32(GetJIPAddress(0x10011A3E + 1), uint32_t(FontCreateForJIP));
         SafeWrite32(GetJIPAddress(0x10011AA9 + 1), uint32_t(FontCreateForJIP));
         SafeWrite32(GetJIPAddress(0x1003943F + 1), uint32_t(FontCreateForJIP));
