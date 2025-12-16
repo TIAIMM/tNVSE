@@ -97,32 +97,6 @@ namespace fonthook {
         return func(fntFileHandle);
     }
 
-    static NiSourceTexture* NiSourceTextureCreate(
-        NiPixelData* pkPixelData,
-        const char* apName,
-        NiTexture::FormatPrefs* kPrefs
-    ) {
-        //gLog.FormattedMessage("\nCall NiSourceTexture::Create");
-        //gLog.FormattedMessage("apName: %s", apName);
-        NiSourceTexture* ret = CdeclCall<NiSourceTexture*>(
-            0xA5FF10,
-            pkPixelData,
-            apName,
-            kPrefs);
-        //gLog.FormattedMessage("NiSourceTexture::Create End\n");
-        return ret;
-    }
-
-    static char* NiGlobalStringTableAddString(const char* pcString) {
-        //gLog.FormattedMessage("\nCall NiGlobalStringTable::AddString");
-        //gLog.FormattedMessage("pcString: %s", pcString);
-        char* ret = CdeclCall<char*>(
-            0xA5B690,
-            pcString);
-        //gLog.FormattedMessage("NiGlobalStringTable::AddString End\n");
-        return ret;
-    }
-
     static BSFile* __cdecl LoadFile(const char* filePath, SInt32 loadMode, UInt32 allocFlags, SInt32 openMode) {
         return CdeclCall<BSFile*>(0xAFDF20, filePath, loadMode, allocFlags, openMode);
     }

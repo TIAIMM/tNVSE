@@ -2,210 +2,6 @@
 #include "fonthook.h"
 
 namespace fonthook {
-    class NiTexturingPropertyEx : public NiTexturingProperty {
-    public:
-        NiTexturingProperty* NiTexturingPropertyBuild(
-            NiPixelData* pkPixelData,
-            const NiFixedString* kName,
-            NiTexture::FormatPrefs* arPrefs) {
-            //gLog.FormattedMessage("\nCall NiTexturingPropertyBuild");
-            const char* sName = kName->m_kHandle ? kName->m_kHandle : "<null>";
-
-            //gLog.FormattedMessage("source: %p", this);
-            //gLog.FormattedMessage("pkPixelData: %p", pkPixelData);
-
-            //gLog.FormattedMessage("kName: %s", sName);
-            //gLog.FormattedMessage("m_ePixelLayout: %x", arPrefs->m_ePixelLayout);
-            //gLog.FormattedMessage("m_eAlphaFmt: %x", arPrefs->m_eAlphaFmt);
-            //gLog.FormattedMessage("m_eMipMapped: %x", arPrefs->m_eMipMapped);
-
-            NiTexturingProperty* ret = ThisStdCall<NiTexturingProperty*>(
-                0xA6ABB0,
-                this,
-                pkPixelData,
-                kName,
-                arPrefs);
-            //gLog.FormattedMessage("NiTexturingPropertyBuild End\n");
-            return ret;
-        }
-    };
-
-    NiTexturingProperty* NiTexturingPropertyBuild2(
-        NiTexturingProperty* source,
-        NiPixelData* pkPixelData,
-        const NiFixedString* kName,
-        NiTexture::FormatPrefs* arPrefs) {
-        //gLog.FormattedMessage("\nCall NiTexturingPropertyBuild");
-        const char* sName = kName->m_kHandle ? kName->m_kHandle : "<null>";
-
-        //gLog.FormattedMessage("source: %p", source);
-        //gLog.FormattedMessage("pkPixelData: %p", pkPixelData);
-
-        //gLog.FormattedMessage("kName: %s", sName);
-        //gLog.FormattedMessage("m_ePixelLayout: %x", arPrefs->m_ePixelLayout);
-        //gLog.FormattedMessage("m_eAlphaFmt: %x", arPrefs->m_eAlphaFmt);
-        //gLog.FormattedMessage("m_eMipMapped: %x", arPrefs->m_eMipMapped);
-
-        NiTexturingProperty* ret = ThisStdCall<NiTexturingProperty*>(
-            0xA6ABB0,
-            source,
-            pkPixelData,
-            kName,
-            arPrefs);
-        //gLog.FormattedMessage("NiTexturingPropertyBuild End\n");
-        return ret;
-    }
-
-    class NiPixelDataEx : public NiPixelData {
-    public:
-        NiPixelData* NiPixelDataBuild(
-            unsigned int uiWidth,
-            unsigned int uiHeight,
-            const NiPixelFormat* kFormat,
-            unsigned int uiMipmapLevels,
-            unsigned int uiFaces) {
-            //gLog.FormattedMessage("\nCall NiPixelDataBuild");
-            //gLog.FormattedMessage("uiWidth: %u", uiWidth);
-            //gLog.FormattedMessage("uiHeight: %u", uiHeight);
-            //gLog.FormattedMessage("kFormat: %p", kFormat);
-            //gLog.FormattedMessage("uiMipmapLevels: %u", uiMipmapLevels);
-            //gLog.FormattedMessage("uiFaces: %u", uiFaces);
-            NiPixelData* ret = ThisStdCall<NiPixelData*>(
-                0xA7C190,
-                this,
-                uiWidth,
-                uiHeight,
-                kFormat,
-                uiMipmapLevels,
-                uiFaces);
-            //gLog.FormattedMessage("NiPixelDataBuild End\n");
-            return ret;
-        }
-    };
-
-    NiPixelData* NiPixelDataBuild2(
-        NiPixelData* source,
-        unsigned int uiWidth,
-        unsigned int uiHeight,
-        const NiPixelFormat* kFormat,
-        unsigned int uiMipmapLevels,
-        unsigned int uiFaces) {
-        //gLog.FormattedMessage("\nCall NiPixelDataBuild");
-        //gLog.FormattedMessage("uiWidth: %u", uiWidth);
-        //gLog.FormattedMessage("uiHeight: %u", uiHeight);
-        //gLog.FormattedMessage("kFormat: %p", kFormat);
-        //gLog.FormattedMessage("uiMipmapLevels: %u", uiMipmapLevels);
-        //gLog.FormattedMessage("uiFaces: %u", uiFaces);
-        NiPixelData* ret = ThisStdCall<NiPixelData*>(
-            0xA7C190,
-            source,
-            uiWidth,
-            uiHeight,
-            kFormat,
-            uiMipmapLevels,
-            uiFaces);
-        //gLog.FormattedMessage("NiPixelDataBuild End\n");
-        return ret;
-    }
-
-    class NiSourceTextureEx : public NiSourceTexture {
-    public:
-        char* SetFilename(const NiFixedString* kFilename) {
-            //gLog.FormattedMessage("\nCall NiSourceTexture::SetFilename");
-            //gLog.FormattedMessage("kFilename: %p", kFilename);
-            char* ret = ThisStdCall<char*>(
-                0xA5FBA0,
-                this,
-                kFilename);
-            //gLog.FormattedMessage("NiSourceTexture::SetFilename End\n");
-            //gLog.FormattedMessage("ret: %s", ret);
-            return ret;
-        }
-    };
-
-    FontLetter* __stdcall FontAddChar(
-        FontLetter* apLetter,
-        UInt32 aiVert,
-        NiTriShape* apShape,
-        float* axPos,
-        const NiColorA* apColor
-    ) {
-        //gLog.FormattedMessage("Call AddChar");
-        //gLog.FormattedMessage("Call AddChar from Font::CreateText");
-
-        FontLetter* ret = StdCall<FontLetter*>(
-            0xA142D0,
-            apLetter,
-            aiVert,
-            apShape,
-            axPos,
-            apColor);
-
-        return ret;
-    }
-
-    FontLetter* __stdcall FontAddChar1(
-        FontLetter* apLetter,
-        UInt32 aiVert,
-        NiTriShape* apShape,
-        float* axPos,
-        const NiColorA* apColor
-    ) {
-        //gLog.FormattedMessage("Call AddChar");
-        //gLog.FormattedMessage("Call AddChar from Font::MakeString");
-
-        FontLetter* ret = StdCall<FontLetter*>(
-            0xA142D0,
-            apLetter,
-            aiVert,
-            apShape,
-            axPos,
-            apColor);
-
-        return ret;
-    }
-
-    FontLetter* __stdcall FontAddChar2(
-        FontLetter* apLetter,
-        UInt32 aiVert,
-        NiTriShape* apShape,
-        float* axPos,
-        const NiColorA* apColor
-    ) {
-        //gLog.FormattedMessage("Call AddChar");
-        //gLog.FormattedMessage("Call AddChar from Font::CreateText");
-
-        FontLetter* ret = StdCall<FontLetter*>(
-            0xA142D0,
-            apLetter,
-            aiVert,
-            apShape,
-            axPos,
-            apColor);
-
-        return ret;
-    }
-
-    FontLetter* __stdcall FontAddChar3(
-        FontLetter* apLetter,
-        UInt32 aiVert,
-        NiTriShape* apShape,
-        float* axPos,
-        const NiColorA* apColor
-    ) {
-        //gLog.FormattedMessage("Call AddChar from FontManager::CreateText");
-
-        FontLetter* ret = StdCall<FontLetter*>(
-            0xA142D0,
-            apLetter,
-            aiVert,
-            apShape,
-            axPos,
-            apColor);
-
-        return ret;
-    }
-
     static Font* __fastcall FontCreateForJIP(Font* apThis, void*, int iFontNum, char* apFilename, bool abLoad) {
         //gLog.FormattedMessage("\nCall Font::Font");
         //gLog.FormattedMessage("iFontNum: %u", iFontNum);
@@ -532,7 +328,8 @@ namespace fonthook {
                         stackCookie = (stackCookie & 0xFFFFFF00) | 1;
                         if (v36) {
                             //gLog.FormattedMessage("Instancing NiPixelData");
-                            NiPixelData_1 = NiPixelDataBuild2(
+                            NiPixelData_1 = ThisStdCall<NiPixelData*>(
+                                0xA7C190,
                                 v36,
                                 a2,
                                 a3,
@@ -567,7 +364,8 @@ namespace fonthook {
                                 NiPixelData_3,
                                 &kName_,
                                 &arPrefs_);*/
-                            NiTexturingProperty_4 = NiTexturingPropertyBuild2(
+                            NiTexturingProperty_4 = ThisStdCall<NiTexturingProperty*>(
+                                0xA6ABB0,
                                 NiTexturingProperty_3,
                                 NiPixelData_3,
                                 &kName_,
@@ -2103,7 +1901,10 @@ namespace fonthook {
                             //gLog.FormattedMessage("Find GBKByte");
                             auto glyphIt = extraGlyphs->find(uiGBKcode);
                             if (glyphIt != extraGlyphs->end()) {
-                                FontAddChar(&glyphIt->second,
+                                //Call Font::AddChar
+                                StdCall<FontLetter*>(
+                                    0xA142D0, 
+                                    &glyphIt->second,
                                     axData2.iLineEnd++,
                                     (NiTriShape*)*apTextShape,
                                     &axPos_.x,
@@ -2123,7 +1924,10 @@ namespace fonthook {
                         //gLog.FormattedMessage("extraGlyphs Not Found");
                     }
                     if (!rendered) {
-                        FontAddChar(&this->pFontData->pFontLetters[cCurrentChar],
+                        //Call Font::AddChar
+                        StdCall<FontLetter*>(
+                            0xA142D0, 
+                            &this->pFontData->pFontLetters[cCurrentChar],
                             axData2.iLineEnd++,
                             (NiTriShape*)*apTextShape,
                             &axPos_.x,
@@ -2331,116 +2135,12 @@ namespace fonthook {
         }
     };
 
-    static void* __fastcall TileSetString(void* pThis, void*, int a2, char* a3, bool a4) {
-        //gLog.FormattedMessage("Call QuestText TileSetString");
-        //gLog.FormattedMessage("a2: %d", a2);
-        //gLog.FormattedMessage("a3: %x", a3[0]);
-
-        bIsQuestTextLSBHanzi = false;
-        if (bIsQuestTextMSBHanzi) {
-            bIsQuestTextLSBHanzi = IsGBKTrailByte(a3[0]);
-            if (bIsQuestTextLSBHanzi) {
-				szGBKChar[0] = pFirstChar;
-				szGBKChar[1] = a3[0];
-                szGBKChar[2] = 0;
-				a3 = (char*)szGBKChar;
-            }
-        }
-
-        if (gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end() && !bIsQuestTextMSBHanzi) {
-            bIsQuestTextMSBHanzi = false;
-            bIsQuestTextMSBHanzi = IsGBKLeadByte((unsigned char)a3[0]);
-            if (bIsQuestTextMSBHanzi) {
-				pFirstChar = (unsigned char)a3[0];
-				//gLog.FormattedMessage("QuestText FirstByte: 0x%x", pFirstChar);
-                a3 = (char*)"";
-            }
-        }
-        else {
-            bIsQuestTextMSBHanzi = false;
-        }
-
-		return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);
-    }
-
-    static int __fastcall ComputersMenu_DisplayNoteText(UInt32* pthis, void*, UInt32* BGSNote) {
-        //gLog.FormattedMessage("\nDisplayNoteText: %s", (const char*)*((DWORD*)pthis + 47));
-		int ret = ThisStdCall<int>(0x7590C0, pthis, BGSNote);
-        return ret;
-    }
-
-    static int __fastcall ComputersMenu_DoClick(UInt32* pthis, void*, int aiID, UInt32* apTarget) {
-        //gLog.FormattedMessage("\nDoClick: %s", (const char*)*((DWORD*)pthis + 47));
-        int ret = ThisStdCall<int>(0x757F70, pthis, aiID, apTarget);
-        return ret;
-    }
-
-    static int __fastcall ComputersMenu_DisplayTerminal(UInt32* pthis, void*, bool abAddToStack) {
-        //gLog.FormattedMessage("DisplayTerminal: %s", (const char*)*((DWORD*)pthis + 47));
-        int ret = ThisStdCall<int>(0x7586E0, pthis, abAddToStack);
-        return ret;
-    }
-
-    static int __fastcall ComputersMenu_AnimatingTextManager_AddItem(
-        void* pthis,
-        void*,
-        const char* a2,
-        UInt32 a3,
-        UInt32 a4,
-        UInt32 a5
-    ) {
-        //gLog.FormattedMessage("\nAnimatingTextManager_AddItem: %s", (const char*)a2);
-        int ret = ThisStdCall<int>(0x759DA0, pthis, a2, a3, a4, a5);
-        return ret;
-    }
-
-    static bool __fastcall BSStringT_char_Set(
-        BSStringT<char>* pthis,
-        void*,
-        const char* apString,
-        unsigned int aiMaxLen) {
-        //gLog.FormattedMessage("\nBSStringT_char_Set: %s", apString);
-        bool ret = ThisStdCall<bool>(0x4037F0, pthis, apString, aiMaxLen);
-        return ret;
-    }
-
-    // 0x84E3A0
-    static int __fastcall GetString(UInt32* pthis, void*) {
-        //gLog.FormattedMessage("\nComputerMenu_GetString: %s", (const char*)pthis[3]);
-        return pthis[3];
-    }
-
     void InitVertSpacingHook() {
         //FontManager::GetLinePadding
         //WriteRelJump(0xA1B3A0, &VertSpacingAdjust);
     }
 
     void InitFontHook() {
-        //BSStringT<char>::Set
-        //WriteRelCall(0x75919E, &BSStringT_char_Set);
-
-        //WriteRelCall(0x75880D, &GetString);
-
-        //ComputersMenu::DisplayTerminal
-        //WriteRelCall(0x75802D, &ComputersMenu_DisplayTerminal);
-        //WriteRelCall(0x758179, &ComputersMenu_DisplayTerminal);
-        //WriteRelCall(0x758327, &ComputersMenu_DisplayTerminal);
-        //WriteRelCall(0x758ABF, &ComputersMenu_DisplayTerminal);
-        //WriteRelCall(0x758DA6, &ComputersMenu_DisplayTerminal);
-
-        //ComputersMenu::DoClick
-        //SafeWrite32((0x1072004 + 3*4), (UInt32)&ComputersMenu_DoClick);
-
-        //ComputersMenu::DisplayNoteText
-        //SafeWrite32((0x7578B5+6), (UInt32)&ComputersMenu_DisplayNoteText);
-        //WriteRelCall(0x757FEB, &ComputersMenu_DisplayNoteText);
-
-        //ComputersMenu::AnimatingTextManager::AddItem
-        //WriteRelCall(0x7592BC, &ComputersMenu_AnimatingTextManager_AddItem);
-
-        //Tile::Value::SetString
-        //WriteRelCall(0x77AF4B, &TileSetString);
-
         // Font::Load
         WriteRelJumpEx(0xA15320, &FontEx::Load);
         // 
@@ -2448,28 +2148,11 @@ namespace fonthook {
         WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
         WriteRelCallEx(0x759281, &FontEx::PrepTextForTerminal);
         // 
-        // Font::AddChar
-        //WriteRelCall(0xA1278B, &FontAddChar1);
-        //WriteRelCall(0xA12E1B, &FontAddChar2);
-        //WriteRelCall(0xA19622, &FontAddChar3);
-        // 
         // Font::CreateText
         WriteRelJumpEx(0xA12880, &FontEx::CreateText);
         // 
         // FontManager::CalculateStringDimensions
         WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
-        // 
-        // FileFinder::GetFile
-        //WriteRelCall(0xA15A86, &FileFinder_GetFile);
-        // 
-        // NiSourceTexture::Create
-        //WriteRelCall(0xA6AC12, &NiSourceTextureCreate);
-        // 
-        // NiGlobalStringTable::AddString
-        //WriteRelCall(0xA5FF86, &NiGlobalStringTableAddString);
-        // 
-        // NiSourceTexture::SetFilename
-        //WriteRelCallEx(0xA5FF9B, &NiSourceTextureEx::SetFilename);
         //
         //NiTexturingProperty::NiTexturingProperty
         //WriteRelCallEx(0xA15D86, &NiTexturingPropertyEx::NiTexturingPropertyBuild);
