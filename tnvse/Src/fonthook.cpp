@@ -1988,8 +1988,8 @@ namespace fonthook {
             float arg4__1; // [esp+60h] [ebp-5Ch] BYREF
             unsigned __int8 cCurrentChar; // [esp+67h] [ebp-55h] BYREF
             int v25; // [esp+68h] [ebp-54h]
-            FontLetter* apLetter; // [esp+6Ch] [ebp-50h]
-            int i; // [esp+70h] [ebp-4Ch]
+            //FontLetter* apLetter; // [esp+6Ch] [ebp-50h]
+            UINT32 i; // [esp+70h] [ebp-4Ch]
             float arg4__2; // [esp+74h] [ebp-48h] BYREF
             float afZ_1; // [esp+78h] [ebp-44h]
             float afStartY_1; // [esp+7Ch] [ebp-40h]
@@ -2044,7 +2044,7 @@ namespace fonthook {
             iActualCharCount = i;
 
             if (extraGlyphs) {
-                for (int Charcount = 0;
+                for (UINT32 Charcount = 0;
                     apTextString->pString[apTextString->pString != 0 ? Charcount : 0];
                     ++Charcount) {
                     bHanzi = false;
@@ -2376,14 +2376,7 @@ namespace fonthook {
         WriteRelJumpEx(0xA12880, &FontEx::CreateText);
         // 
         // Font::MakeString
-        //CreditsMenu::InitCreditsRoot
-        WriteRelCallEx(0x760924, &FontEx::MakeString);
-        //DebugText::CreateDebugText
-        WriteRelCallEx(0xA10223, &FontEx::MakeString);
-        // DebugText::CreateBillboardText
-        WriteRelCallEx(0xA108B1, &FontEx::MakeString);
-        // DebugText::AddFloatingText
-        WriteRelCallEx(0xA10FF9, &FontEx::MakeString);
+        WriteRelJumpEx(0xA12460, &FontEx::MakeString);
         // 
         // FontManager::CalculateStringDimensions
         WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
