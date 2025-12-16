@@ -1959,12 +1959,149 @@ namespace fonthook {
             //gLog.FormattedMessage("Font::CreateText End\n");
             return ThisStdCall(0x7593E0, (char*)&axData);
         }
+
+        UINT32* MakeString(
+            float afStartX,
+            float afStartY,
+            float afZ,
+            BSStringT<char>* apTextString,
+            int* aiWidth,
+            bool abPrepareObject,
+            const NiColorA* arg1C,
+            bool abUpperLeftCorner,
+            bool abPrepareObject_1) {
+
+            gLog.FormattedMessage("Call Font::MakeString");
+            gLog.FormattedMessage("apTextString: %s", (const char*)apTextString->pString);
+
+            double v11; // st7
+            UINT32* NiTriShape_1; // eax
+            double arg4__4; // st7
+            int pString_1; // [esp+10h] [ebp-ACh]
+            float arg4__5; // [esp+14h] [ebp-A8h]
+            char n10; // [esp+18h] [ebp-A4h]
+            UINT32 i_1; // [esp+1Ch] [ebp-A0h]
+            UINT32 sLen; // [esp+20h] [ebp-9Ch]
+            int pString; // [esp+3Ch] [ebp-80h]
+            signed int pString_2; // [esp+40h] [ebp-7Ch]
+            char _54__1[4]; // [esp+5Ch] [ebp-60h] BYREF
+            float arg4__1; // [esp+60h] [ebp-5Ch] BYREF
+            unsigned __int8 v24; // [esp+67h] [ebp-55h] BYREF
+            int v25; // [esp+68h] [ebp-54h]
+            FontLetter* apLetter; // [esp+6Ch] [ebp-50h]
+            int i; // [esp+70h] [ebp-4Ch]
+            float arg4__2; // [esp+74h] [ebp-48h] BYREF
+            float afZ_1; // [esp+78h] [ebp-44h]
+            float afStartY_1; // [esp+7Ch] [ebp-40h]
+            UINT32* NiTriShape_0; // [esp+80h] [ebp-3Ch]
+            float arg4__3; // [esp+84h] [ebp-38h]
+            NiColorA* apColor; // [esp+88h] [ebp-34h]
+            float v34[4]; // [esp+8Ch] [ebp-30h] BYREF
+            char _54_[4]; // [esp+9Ch] [ebp-20h] BYREF
+            float afStartX_1; // [esp+A0h] [ebp-1Ch]
+            float afZ_2; // [esp+A4h] [ebp-18h]
+            float afStartY_2; // [esp+A8h] [ebp-14h]
+            float arg4; // [esp+ACh] [ebp-10h] BYREF
+            int aiVert; // [esp+B0h] [ebp-Ch]
+            int j; // [esp+B4h] [ebp-8h]
+            float* v42; // [esp+B8h] [ebp-4h]
+
+            bool bHanzi, rendered;
+            unsigned char cLSB;
+            int iActualCharCount;
+            UInt32 uiGBKcode;
+            auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
+            auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
+
+            if (apTextString->sLen == 0xFFFF)
+                sLen = strlen(apTextString->pString);
+            else
+                sLen = apTextString->sLen;
+            if (!sLen || !this->pFontData)
+                return 0;
+            arg4 = (float)*aiWidth;
+            ThisStdCall(0xA12370, (int*)this, apTextString->pString, &arg4, (int)_54_, abPrepareObject, 0);
+            arg4__2 = afStartX + arg4;
+            afStartY_1 = afStartY;
+            afZ_1 = afZ;
+            if (abUpperLeftCorner)
+            {
+                v11 = this->pFontData->pFontLetters[32].fHeight - this->pFontData->fBaseLine;
+                afStartY_1 = afStartY_1 - (v11 + v11);
+            }
+            for (i = 0; ; ++i)
+            {
+                i_1 = apTextString->sLen == 0xFFFF ? strlen(apTextString->pString) : apTextString->sLen;
+                if (i >= i_1 || !apTextString->pString[apTextString->pString != 0 ? i : 0])
+                    break;
+            }
+            if (!i)
+                return 0;
+            NiTriShape_1 = (UINT32*)Font::MakeTriShape(i, arg1C, abPrepareObject_1);
+            NiTriShape_0 = NiTriShape_1;
+            afStartX_1 = afStartX;
+            afZ_2 = afZ_1;
+            afStartY_2 = afStartY_1;
+            *((float*)NiTriShape_1 + 22) = afStartX;
+            *((float*)NiTriShape_1 + 23) = afZ_2;
+            *((float*)NiTriShape_1 + 24) = afStartY_2;
+            apColor = 0;
+            v34[0] = 0.0;
+            v34[1] = 0.0;
+            v34[2] = 1.0;
+            v34[3] = 1.0;
+            *aiWidth = 0;
+            arg4__3 = arg4__2;
+            aiVert = 0;
+            for (j = 0; apTextString->pString[apTextString->pString != 0 ? j : 0]; ++j)
+            {
+                if (apTextString->pString[apTextString->pString != 0 ? j : 0] == 3)
+                    apColor = 0;
+                n10 = apTextString->pString[apTextString->pString != 0 ? j : 0];
+                if (n10 == '\t')
+                {
+                    arg4__4 = arg4__2;
+                    AlignLineWidthToTab(arg4__2, 75.0);
+                    arg4__5 = arg4__4;
+                    arg4__2 = 75.0 - arg4__5 + arg4__2;
+                }
+                else if (n10 == '\n')
+                {
+                    arg4__1 = (float)*aiWidth;
+                    ThisStdCall(0xA12370, (int*)this, apTextString->pString, &arg4__1, (int)_54__1, abPrepareObject, j + 1);
+                    arg4__2 = arg4__1;
+                    afStartY_1 = afStartY_1 - this->pFontData->fBaseLine;
+                }
+                v24 = apTextString->pString[apTextString->pString != 0 ? j : 0];
+                ConvertToAsciiQuotes(&v24);
+                v25 = v24;
+                apLetter = &this->pFontData->pFontLetters[v24];
+                //Font::AddChar
+                StdCall<FontLetter*>(0xA142D0, apLetter, aiVert++, (NiTriShape*)NiTriShape_0, &arg4__2, apColor);
+                pString = *aiWidth;
+                pString_2 = ConditionalFloatToUInt(arg4__2 - arg4__3);
+                if (pString_2 <= pString)
+                    pString_1 = pString;
+                else
+                    pString_1 = pString_2;
+                *aiWidth = pString_1;
+                if (apTextString->pString[apTextString->pString != 0 ? j : 0] == 2)
+                    apColor = (NiColorA*)v34;
+            }
+            v42 = *(float**)(NiTriShape_0[46] + 32);
+            //NiBound::ComputeFromData
+            ThisStdCall(
+                0xA7EE30,
+                (float*)(NiTriShape_0[46] + 16),
+                *(unsigned __int16*)(NiTriShape_0[46] + 8), v42);
+            return NiTriShape_0;
+        }
     };
 
     class FontManagerEx : public FontManager {
     public:
         //	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
-        NiPoint3* __thiscall CalculateStringDimensions(NiPoint3* outDimensions, const char* srcString, uint32_t fontID, float maxWrapWidth, uint32_t startCharIndex) {
+        NiPoint3* __thiscall CalculateStringDimensions(NiPoint3* outDimensions, const char* srcString, UInt32 fontID, float maxWrapWidth, UInt32 startCharIndex) {
             double tabStopWidth; // st7
             float finalMaxLineWidth; // [esp+10h] [ebp-4Ch]
             float adjustedWrapWidth; // [esp+14h] [ebp-48h]
@@ -2151,14 +2288,18 @@ namespace fonthook {
         // Font::CreateText
         WriteRelJumpEx(0xA12880, &FontEx::CreateText);
         // 
+        // Font::MakeString
+        //CreditsMenu::InitCreditsRoot
+        WriteRelCallEx(0x760924, &FontEx::MakeString);
+        //DebugText::CreateDebugText
+        WriteRelCallEx(0xA10223, &FontEx::MakeString);
+        // DebugText::CreateBillboardText
+        WriteRelCallEx(0xA108B1, &FontEx::MakeString);
+        // DebugText::AddFloatingText
+        WriteRelCallEx(0xA10FF9, &FontEx::MakeString);
+        // 
         // FontManager::CalculateStringDimensions
         WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
-        //
-        //NiTexturingProperty::NiTexturingProperty
-        //WriteRelCallEx(0xA15D86, &NiTexturingPropertyEx::NiTexturingPropertyBuild);
-
-        //NiPixelData::NiPixelData
-        //WriteRelCallEx(0xA15C03, &NiPixelDataEx::NiPixelDataBuild);
     }
 
     void InitJIPHooks() {
