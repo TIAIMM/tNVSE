@@ -1971,8 +1971,8 @@ namespace fonthook {
             bool abUpperLeftCorner,
             bool abPrepareObject_1) {
 
-            gLog.FormattedMessage("Call Font::MakeString");
-            gLog.FormattedMessage("apTextString: %s", (const char*)apTextString->pString);
+            //gLog.FormattedMessage("Call Font::MakeString");
+            //gLog.FormattedMessage("apTextString: %s", (const char*)apTextString->pString);
 
             double v11; // st7
             UINT32* NiTriShape_1; // eax
@@ -1986,7 +1986,7 @@ namespace fonthook {
             signed int pString_2; // [esp+40h] [ebp-7Ch]
             char _54__1[4]; // [esp+5Ch] [ebp-60h] BYREF
             float arg4__1; // [esp+60h] [ebp-5Ch] BYREF
-            unsigned __int8 v24; // [esp+67h] [ebp-55h] BYREF
+            unsigned __int8 cCurrentChar; // [esp+67h] [ebp-55h] BYREF
             int v25; // [esp+68h] [ebp-54h]
             FontLetter* apLetter; // [esp+6Ch] [ebp-50h]
             int i; // [esp+70h] [ebp-4Ch]
@@ -2024,20 +2024,47 @@ namespace fonthook {
             arg4__2 = afStartX + arg4;
             afStartY_1 = afStartY;
             afZ_1 = afZ;
+
             if (abUpperLeftCorner)
             {
                 v11 = this->pFontData->pFontLetters[32].fHeight - this->pFontData->fBaseLine;
                 afStartY_1 = afStartY_1 - (v11 + v11);
             }
+
             for (i = 0; ; ++i)
             {
                 i_1 = apTextString->sLen == 0xFFFF ? strlen(apTextString->pString) : apTextString->sLen;
                 if (i >= i_1 || !apTextString->pString[apTextString->pString != 0 ? i : 0])
                     break;
             }
+
             if (!i)
                 return 0;
-            NiTriShape_1 = (UINT32*)Font::MakeTriShape(i, arg1C, abPrepareObject_1);
+
+            iActualCharCount = i;
+
+            if (extraGlyphs) {
+                for (int Charcount = 0;
+                    apTextString->pString[apTextString->pString != 0 ? Charcount : 0];
+                    ++Charcount) {
+                    bHanzi = false;
+
+                    if (Charcount >= i_1) {
+                        break;
+                    }
+
+                    cLSB = (unsigned char)apTextString->pString[Charcount + 1];
+                    if (cLSB != 0) {
+                        bHanzi = TryDecodeGBK((const char*)&apTextString->pString[Charcount], uiGBKcode);
+                    }
+                    if (bHanzi) {
+                        ++Charcount;
+                        iActualCharCount = iActualCharCount - 1;
+                    }
+                }
+            }
+
+            NiTriShape_1 = (UINT32*)Font::MakeTriShape(iActualCharCount, arg1C, abPrepareObject_1);
             NiTriShape_0 = NiTriShape_1;
             afStartX_1 = afStartX;
             afZ_2 = afZ_1;
@@ -2072,12 +2099,72 @@ namespace fonthook {
                     arg4__2 = arg4__1;
                     afStartY_1 = afStartY_1 - this->pFontData->fBaseLine;
                 }
-                v24 = apTextString->pString[apTextString->pString != 0 ? j : 0];
-                ConvertToAsciiQuotes(&v24);
-                v25 = v24;
-                apLetter = &this->pFontData->pFontLetters[v24];
+
+                cCurrentChar = apTextString->pString[apTextString->pString != 0 ? j : 0];
+
+                bHanzi = false;
+
+                if (extraGlyphs) {
+                    cLSB = (unsigned char)apTextString->pString[j + 1];
+                    if (cLSB != 0) {
+                        bHanzi = TryDecodeGBK((const char*)&apTextString->pString[j], uiGBKcode);
+                    }
+                    else {
+                        bHanzi = false;
+                    }
+                }
+
+                if (!bHanzi) {
+                    ConvertToAsciiQuotes(&cCurrentChar);
+                }
+
+                rendered = false;
+
+                v25 = cCurrentChar;
+
+                //apLetter = &this->pFontData->pFontLetters[cCurrentChar];
                 //Font::AddChar
-                StdCall<FontLetter*>(0xA142D0, apLetter, aiVert++, (NiTriShape*)NiTriShape_0, &arg4__2, apColor);
+                //StdCall<FontLetter*>(0xA142D0, apLetter, aiVert++, (NiTriShape*)NiTriShape_0, &arg4__2, apColor);
+
+                if (extraGlyphs) {
+                    //gLog.FormattedMessage("Found extraGlyphs");
+                    if (bHanzi) {
+                        //gLog.FormattedMessage("Find GBKByte");
+                        auto glyphIt = extraGlyphs->find(uiGBKcode);
+                        if (glyphIt != extraGlyphs->end()) {
+                            //Call Font::AddChar
+                            StdCall<FontLetter*>(
+                                0xA142D0,
+                                &glyphIt->second,
+                                aiVert++,
+                                (NiTriShape*)NiTriShape_0,
+                                &arg4__2,
+                                apColor);
+                            j += 1;
+                            rendered = true;
+                        }
+                        /*FontAddChar(
+                            &this->pFontData->pFontLetters[cCurrentChar],
+                            axData2.iLineEnd++,
+                            (NiTriShape*)*apTextShape,
+                            &axPos_.x,
+                            axFontColor);*/
+                    }
+                }
+                else {
+                    //gLog.FormattedMessage("extraGlyphs Not Found");
+                }
+                if (!rendered) {
+                    //Call Font::AddChar
+                    StdCall<FontLetter*>(
+                        0xA142D0,
+                        &this->pFontData->pFontLetters[cCurrentChar],
+                        aiVert++,
+                        (NiTriShape*)NiTriShape_0,
+                        &arg4__2,
+                        apColor);
+                }
+
                 pString = *aiWidth;
                 pString_2 = ConditionalFloatToUInt(arg4__2 - arg4__3);
                 if (pString_2 <= pString)
