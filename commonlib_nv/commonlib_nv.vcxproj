@@ -849,7 +849,7 @@
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ForcedIncludeFiles>ITypes.h;Memory.h;IErrors.h;Prefix.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
-      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <DisableSpecificWarnings>4244;</DisableSpecificWarnings>
     </ClCompile>
     <Link>
