@@ -2397,6 +2397,8 @@ namespace fonthook {
     }
 
     void InitFontHook() {
+        //Font::Create hook in InitJIPHooks
+
         // Font::Load
         WriteRelJumpEx(0xA15320, &FontEx::Load);
         // 
