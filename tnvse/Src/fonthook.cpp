@@ -2359,6 +2359,38 @@ namespace fonthook {
         }
     };
 
+    static void* __fastcall TileSetString(void* pThis, void*, int a2, char* a3, bool a4) {
+        //gLog.FormattedMessage("Call QuestText TileSetString");
+        //gLog.FormattedMessage("a2: %d", a2);
+        //gLog.FormattedMessage("a3: %x", a3[0]);
+
+        bIsQuestTextLSBHanzi = false;
+        if (bIsQuestTextMSBHanzi) {
+            bIsQuestTextLSBHanzi = IsGBKTrailByte(a3[0]);
+            if (bIsQuestTextLSBHanzi) {
+                szGBKChar[0] = pFirstChar;
+                szGBKChar[1] = a3[0];
+                szGBKChar[2] = 0;
+                a3 = (char*)szGBKChar;
+            }
+        }
+
+        if (gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end() && !bIsQuestTextMSBHanzi) {
+            bIsQuestTextMSBHanzi = false;
+            bIsQuestTextMSBHanzi = IsGBKLeadByte((unsigned char)a3[0]);
+            if (bIsQuestTextMSBHanzi) {
+                pFirstChar = (unsigned char)a3[0];
+                //gLog.FormattedMessage("QuestText FirstByte: 0x%x", pFirstChar);
+                a3 = (char*)"";
+            }
+        }
+        else {
+            bIsQuestTextMSBHanzi = false;
+        }
+
+        return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);
+    }
+
     void InitVertSpacingHook() {
         //FontManager::GetLinePadding
         //WriteRelJump(0xA1B3A0, &VertSpacingAdjust);
@@ -2380,6 +2412,11 @@ namespace fonthook {
         // 
         // FontManager::CalculateStringDimensions
         WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
+
+        //QuestText and LocationText
+        //Tile::Value::SetString
+        WriteRelCall(0x77AF4B, &TileSetString);
+        WriteRelCall(0x772B5E, &TileSetString);
     }
 
     void InitJIPHooks() {
