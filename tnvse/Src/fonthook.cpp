@@ -479,25 +479,25 @@ namespace fonthook {
 
             UInt32 origConsumed = 0;
 
-            bool bLastIsHanzi,bHanzi;
-            UInt32 uiGBKcode, uiTempGBKcode;
+            bool bLastIsDBCharacter,bIsDBCharacter;
+            UInt32 uiDoubleByteCode, uiTempDoubleByteCode;
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
-            std::string sCurrentStr, sConvertedStr;
+            //std::string sCurrentStr, sConvertedStr;
 
             //gLog.FormattedMessage("\nCall PrepText");
 
             if (!apOrigString)
                 return;
 
-            if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
-                if (IsValidUTF8(apOrigString)) {
+            /*if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+                if (IsValidUTF8With3ByteMin(apOrigString)) {
                     sCurrentStr = apOrigString;
                     sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
                     apOrigString = sConvertedStr.c_str();
                 }
-            }
+            }*/
 
             //gLog.FormattedMessage("apOrigString = %s", apOrigString);
 
@@ -707,10 +707,21 @@ namespace fonthook {
                 }
                 else
                 {
-                    bHanzi = false;
+                    bIsDBCharacter = false;
                     if (extraGlyphs) {
                         if ((charIndex + 1) <= sourceTextLen) {
-                            bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
+                            if (g_usingWinEncoding == 936) {
+                                bIsDBCharacter = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiDoubleByteCode);
+                            }
+                            else if (g_usingWinEncoding == 950) {
+                                bIsDBCharacter = TryDecodeBig5((const char*)&processedOriginalText[charIndex], uiDoubleByteCode);
+                            }
+                            else if (g_usingWinEncoding == 932) {
+                                bIsDBCharacter = TryDecodeSJIS((const char*)&processedOriginalText[charIndex], uiDoubleByteCode);
+                            }
+                            else if (g_usingWinEncoding == 949) {
+                                bIsDBCharacter = TryDecodeKorean((const char*)&processedOriginalText[charIndex], uiDoubleByteCode);
+                            }
                         }
                     }
 
@@ -721,7 +732,7 @@ namespace fonthook {
                         continue;
                     }
 
-                    if (!bHanzi) {
+                    if (!bIsDBCharacter) {
                         currentChar = processedOriginalText[charIndex];
                         origConsumed += 1;
                         //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
@@ -760,7 +771,7 @@ namespace fonthook {
                     }
                     else {
                         origConsumed += 2;
-                        auto glyphIt = extraGlyphs->find(uiGBKcode);
+                        auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
                         if (glyphIt != extraGlyphs->end()) {
                             pCurrentGlyph = &glyphIt->second;
                             charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
@@ -799,9 +810,26 @@ namespace fonthook {
 
                                 if (insertPos > 0) {
                                     unsigned char prevByte = (unsigned char)dynamicTextBuffer[insertPos - 1];
-                                    if (IsGBKLeadByte(prevByte)) {
-                                        insertPos -= 1;
+                                    if (g_usingWinEncoding == 936) {
+                                        if (IsGBKLeadByte(prevByte)) {
+                                            insertPos -= 1;
+                                        }
                                     }
+                                    else if (g_usingWinEncoding == 950) {
+                                        if (IsBig5LeadByte(prevByte)) {
+                                            insertPos -= 1;
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 932) {
+                                        if (IsSJISLeadByte(prevByte)) {
+                                            insertPos -= 1;
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 949) {
+                                        if (IsKoreanLeadByte(prevByte)) {
+                                            insertPos -= 1;
+                                        }
+									}
                                 }
 
                                 memmove(
@@ -822,26 +850,61 @@ namespace fonthook {
                                 lastWrapPosition = 0;
                                 ++currentLineCount;
 
-                                bLastIsHanzi = false;
+                                bLastIsDBCharacter = false;
                                 if (extraGlyphs) {
-                                    if (IsGBKTrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
-                                        if (TryDecodeGBK(&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode)) {
-                                            auto glyphIt2 = extraGlyphs->find(uiTempGBKcode);
-                                            if (glyphIt2 != extraGlyphs->end()) {
-                                                pCurrentGlyph = &glyphIt2->second;
-                                                bLastIsHanzi = true;
+                                    if (g_usingWinEncoding == 936) {
+                                        if (IsGBKTrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
+                                            if (TryDecodeGBK(&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                                auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                                if (glyphIt2 != extraGlyphs->end()) {
+                                                    pCurrentGlyph = &glyphIt2->second;
+                                                    bLastIsDBCharacter = true;
+                                                }
                                             }
                                         }
                                     }
+                                    else if (g_usingWinEncoding == 950) {
+                                        if (IsBig5TrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
+                                            if (TryDecodeBig5(&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                                auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                                if (glyphIt2 != extraGlyphs->end()) {
+                                                    pCurrentGlyph = &glyphIt2->second;
+                                                    bLastIsDBCharacter = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 932) {
+                                        if (IsSJISTrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
+                                            if (TryDecodeSJIS(&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                                auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                                if (glyphIt2 != extraGlyphs->end()) {
+                                                    pCurrentGlyph = &glyphIt2->second;
+                                                    bLastIsDBCharacter = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 949) {
+                                        if (IsKoreanTrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
+                                            if (TryDecodeKorean(&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                                auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                                if (glyphIt2 != extraGlyphs->end()) {
+                                                    pCurrentGlyph = &glyphIt2->second;
+                                                    bLastIsDBCharacter = true;
+                                                }
+                                            }
+                                        }
+									}
                                 }
 
-                                if (!bLastIsHanzi) {
+                                if (!bLastIsDBCharacter) {
                                     pCurrentGlyph = &this->pFontData->pFontLetters[dynamicTextBuffer[processedTextLen - 1]];
                                 }
                                 currentLineWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
 
-                                if (bHanzi) {
-                                    auto glyphIt3 = extraGlyphs->find(uiGBKcode);
+                                if (bIsDBCharacter) {
+                                    auto glyphIt3 = extraGlyphs->find(uiDoubleByteCode);
                                     if (glyphIt3 != extraGlyphs->end()) {
                                         pCurrentGlyph = &glyphIt3->second;
                                     }
@@ -924,27 +987,62 @@ namespace fonthook {
                             lastWrapPosition = 0;
                             ++currentLineCount;
 
-                            bLastIsHanzi = false;
+                            bLastIsDBCharacter = false;
                             if (extraGlyphs) {
-                                if (IsGBKTrailByte(dynamicTextBuffer[processedTextLen - 1])) {
-                                    if (TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode)) {
-                                        auto glyphIt2 = extraGlyphs->find(uiTempGBKcode);
-                                        if (glyphIt2 != extraGlyphs->end()) {
-                                            pCurrentGlyph = &glyphIt2->second;
-                                            bLastIsHanzi = true;
+                                if (g_usingWinEncoding == 936) {
+                                    if (IsGBKTrailByte(dynamicTextBuffer[processedTextLen - 1])) {
+                                        if (TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                            auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                            if (glyphIt2 != extraGlyphs->end()) {
+                                                pCurrentGlyph = &glyphIt2->second;
+                                                bLastIsDBCharacter = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                else if (g_usingWinEncoding == 950) {
+                                    if (IsBig5TrailByte(dynamicTextBuffer[processedTextLen - 1])) {
+                                        if (TryDecodeBig5((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                            auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                            if (glyphIt2 != extraGlyphs->end()) {
+                                                pCurrentGlyph = &glyphIt2->second;
+                                                bLastIsDBCharacter = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                else if (g_usingWinEncoding == 932) {
+                                    if (IsSJISTrailByte(dynamicTextBuffer[processedTextLen - 1])) {
+                                        if (TryDecodeSJIS((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                            auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                            if (glyphIt2 != extraGlyphs->end()) {
+                                                pCurrentGlyph = &glyphIt2->second;
+                                                bLastIsDBCharacter = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                else if (g_usingWinEncoding == 949) {
+                                    if (IsKoreanTrailByte(dynamicTextBuffer[processedTextLen - 1])) {
+                                        if (TryDecodeKorean((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                            auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                            if (glyphIt2 != extraGlyphs->end()) {
+                                                pCurrentGlyph = &glyphIt2->second;
+                                                bLastIsDBCharacter = true;
+                                            }
                                         }
                                     }
                                 }
                             }
 
-                            if (!bLastIsHanzi) {
+                            if (!bLastIsDBCharacter) {
                                 pCurrentGlyph = &this->pFontData->pFontLetters[dynamicTextBuffer[processedTextLen - 1]];
                             }
 
                             currentLineWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
 
-                            if (bHanzi) {
-                                auto glyphIt3 = extraGlyphs->find(uiGBKcode);
+                            if (bIsDBCharacter) {
+                                auto glyphIt3 = extraGlyphs->find(uiDoubleByteCode);
                                 if (glyphIt3 != extraGlyphs->end()) {
                                     pCurrentGlyph = &glyphIt3->second;
                                 }
@@ -959,7 +1057,7 @@ namespace fonthook {
                         }
                     }
 
-                    if (bHanzi)
+                    if (bIsDBCharacter)
                     {
                         if (processedTextLen + 4 >= textBufferSize) {
                             dynamicTextBuffer = (char*)MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8);
@@ -995,11 +1093,11 @@ namespace fonthook {
                 if (maxAllowedLines > 0 && currentLineCount > maxAllowedLines && processedTextLen)
                 {
                     while (processedTextLen > 0 && dynamicTextBuffer[processedTextLen - 1] != axData->cLineSep) {
-                        /*bHanzi = false;
+                        /*bIsDBCharacter = false;
                         if (extraGlyphs) {
                             if (processedTextLen >= 2) {
-                                bHanzi = TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode);
-                                if (bHanzi) {
+                                bIsDBCharacter = TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode);
+                                if (bIsDBCharacter) {
                                         --processedTextLen;
                                         --processedTextLen;
                                         continue;
@@ -1007,7 +1105,7 @@ namespace fonthook {
                             }
                         }
 
-                        if (!bHanzi) {
+                        if (!bIsDBCharacter) {
                             --processedTextLen;
                         }*/
                         --processedTextLen;
@@ -1130,8 +1228,8 @@ namespace fonthook {
 
             UInt32 origConsumed = 0;
 
-            bool bLastIsHanzi, bHanzi;
-            UInt32 uiGBKcode, uiTempGBKcode;
+            bool bLastIsDBCharacter, bIsDBCharacter;
+            UInt32 uiDoubleByteCode, uiTempDoubleByteCode;
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
@@ -1143,7 +1241,7 @@ namespace fonthook {
                 return;
 
             /*if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
-                if (IsValidUTF8(apOrigString)) {
+                if (IsValidUTF8With3ByteMin(apOrigString)) {
                     sCurrentStr = apOrigString;
                     sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
                     apOrigString = sConvertedStr.c_str();
@@ -1358,10 +1456,21 @@ namespace fonthook {
                 }
                 else
                 {
-                    bHanzi = false;
+                    bIsDBCharacter = false;
                     if (extraGlyphs) {
                         if ((charIndex + 1) <= sourceTextLen) {
-                            bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
+                            if (g_usingWinEncoding == 936) {
+                                bIsDBCharacter = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiDoubleByteCode);
+                            }
+                            else if (g_usingWinEncoding == 950) {
+                                bIsDBCharacter = TryDecodeBig5((const char*)&processedOriginalText[charIndex], uiDoubleByteCode);
+                            }
+                            else if (g_usingWinEncoding == 932) {
+                                bIsDBCharacter = TryDecodeSJIS((const char*)&processedOriginalText[charIndex], uiDoubleByteCode);
+                            }
+                            else if (g_usingWinEncoding == 949) {
+                                bIsDBCharacter = TryDecodeKorean((const char*)&processedOriginalText[charIndex], uiDoubleByteCode);
+                            }
                         }
                     }
 
@@ -1372,7 +1481,7 @@ namespace fonthook {
                         continue;
                     }
 
-                    if (!bHanzi) {
+                    if (!bIsDBCharacter) {
                         currentChar = processedOriginalText[charIndex];
                         origConsumed += 1;
                         //gLog.FormattedMessage("ConvertToAsciiQuotes: '%c'", currentChar);
@@ -1411,7 +1520,7 @@ namespace fonthook {
                     }
                     else {
                         origConsumed += 2;
-                        auto glyphIt = extraGlyphs->find(uiGBKcode);
+                        auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
                         if (glyphIt != extraGlyphs->end()) {
                             pCurrentGlyph = &glyphIt->second;
                             charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
@@ -1450,9 +1559,26 @@ namespace fonthook {
 
                                 if (insertPos > 0) {
                                     unsigned char prevByte = (unsigned char)dynamicTextBuffer[insertPos - 1];
-                                    if (IsGBKLeadByte(prevByte)) {
-                                        insertPos -= 1;
+                                    if (g_usingWinEncoding == 936) {
+                                        if (IsGBKLeadByte(prevByte)) {
+                                            insertPos -= 1;
+                                        }
                                     }
+                                    else if (g_usingWinEncoding == 950) {
+                                        if (IsBig5LeadByte(prevByte)) {
+                                            insertPos -= 1;
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 932) {
+                                        if (IsSJISLeadByte(prevByte)) {
+                                            insertPos -= 1;
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 949) {
+                                        if (IsKoreanLeadByte(prevByte)) {
+                                            insertPos -= 1;
+                                        }
+									}
                                 }
 
                                 memmove(
@@ -1473,26 +1599,61 @@ namespace fonthook {
                                 lastWrapPosition = 0;
                                 ++currentLineCount;
 
-                                bLastIsHanzi = false;
+                                bLastIsDBCharacter = false;
                                 if (extraGlyphs) {
-                                    if (IsGBKTrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
-                                        if (TryDecodeGBK(&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode)) {
-                                            auto glyphIt2 = extraGlyphs->find(uiTempGBKcode);
-                                            if (glyphIt2 != extraGlyphs->end()) {
-                                                pCurrentGlyph = &glyphIt2->second;
-                                                bLastIsHanzi = true;
+                                    if (g_usingWinEncoding == 936) {
+                                        if (IsGBKTrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
+                                            if (TryDecodeGBK(&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                                auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                                if (glyphIt2 != extraGlyphs->end()) {
+                                                    pCurrentGlyph = &glyphIt2->second;
+                                                    bLastIsDBCharacter = true;
+                                                }
                                             }
                                         }
                                     }
+                                    else if (g_usingWinEncoding == 950) {
+                                        if (IsBig5TrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
+                                            if (TryDecodeBig5(&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                                auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                                if (glyphIt2 != extraGlyphs->end()) {
+                                                    pCurrentGlyph = &glyphIt2->second;
+                                                    bLastIsDBCharacter = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 932) {
+                                        if (IsSJISTrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
+                                            if (TryDecodeSJIS(&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                                auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                                if (glyphIt2 != extraGlyphs->end()) {
+                                                    pCurrentGlyph = &glyphIt2->second;
+                                                    bLastIsDBCharacter = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 949) {
+                                        if (IsKoreanTrailByte((dynamicTextBuffer[processedTextLen - 1]))) {
+                                            if (TryDecodeKorean(&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                                auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                                if (glyphIt2 != extraGlyphs->end()) {
+                                                    pCurrentGlyph = &glyphIt2->second;
+                                                    bLastIsDBCharacter = true;
+                                                }
+                                            }
+                                        }
+									}
                                 }
 
-                                if (!bLastIsHanzi) {
+                                if (!bLastIsDBCharacter) {
                                     pCurrentGlyph = &this->pFontData->pFontLetters[dynamicTextBuffer[processedTextLen - 1]];
                                 }
                                 currentLineWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
 
-                                if (bHanzi) {
-                                    auto glyphIt3 = extraGlyphs->find(uiGBKcode);
+                                if (bIsDBCharacter) {
+                                    auto glyphIt3 = extraGlyphs->find(uiDoubleByteCode);
                                     if (glyphIt3 != extraGlyphs->end()) {
                                         pCurrentGlyph = &glyphIt3->second;
                                     }
@@ -1550,9 +1711,29 @@ namespace fonthook {
                                 unsigned char clsb = (unsigned char)dynamicTextBuffer[processedTextLen - 1];
 
                                 if (extraGlyphs) {
-                                    if (IsGBKLeadByte(cmsb) && IsGBKTrailByte(clsb)) {
-                                        tailStart = processedTextLen - 2;
-                                        tailBytes = 3;
+                                    if (g_usingWinEncoding == 936) {
+                                        if (IsGBKLeadByte(cmsb) && IsGBKTrailByte(clsb)) {
+                                            tailStart = processedTextLen - 2;
+                                            tailBytes = 3;
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 950) {
+                                        if (IsBig5LeadByte(cmsb) && IsBig5TrailByte(clsb)) {
+                                            tailStart = processedTextLen - 2;
+                                            tailBytes = 3;
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 932) {
+                                        if (IsSJISLeadByte(cmsb) && IsSJISTrailByte(clsb)) {
+                                            tailStart = processedTextLen - 2;
+                                            tailBytes = 3;
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 949) {
+                                        if (IsKoreanLeadByte(cmsb) && IsKoreanTrailByte(clsb)) {
+                                            tailStart = processedTextLen - 2;
+                                            tailBytes = 3;
+                                        }
                                     }
                                 }
                             }
@@ -1575,27 +1756,62 @@ namespace fonthook {
                             lastWrapPosition = 0;
                             ++currentLineCount;
 
-                            bLastIsHanzi = false;
+                            bLastIsDBCharacter = false;
                             if (extraGlyphs) {
-                                if (IsGBKTrailByte(dynamicTextBuffer[processedTextLen - 1])) {
-                                    if (TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode)) {
-                                        auto glyphIt2 = extraGlyphs->find(uiTempGBKcode);
-                                        if (glyphIt2 != extraGlyphs->end()) {
-                                            pCurrentGlyph = &glyphIt2->second;
-                                            bLastIsHanzi = true;
+                                if (g_usingWinEncoding == 936) {
+                                    if (IsGBKTrailByte(dynamicTextBuffer[processedTextLen - 1])) {
+                                        if (TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                            auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                            if (glyphIt2 != extraGlyphs->end()) {
+                                                pCurrentGlyph = &glyphIt2->second;
+                                                bLastIsDBCharacter = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                else if (g_usingWinEncoding == 950) {
+                                    if (IsBig5TrailByte(dynamicTextBuffer[processedTextLen - 1])) {
+                                        if (TryDecodeBig5((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                            auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                            if (glyphIt2 != extraGlyphs->end()) {
+                                                pCurrentGlyph = &glyphIt2->second;
+                                                bLastIsDBCharacter = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                else if (g_usingWinEncoding == 932) {
+                                    if (IsSJISTrailByte(dynamicTextBuffer[processedTextLen - 1])) {
+                                        if (TryDecodeSJIS((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                            auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                            if (glyphIt2 != extraGlyphs->end()) {
+                                                pCurrentGlyph = &glyphIt2->second;
+                                                bLastIsDBCharacter = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                else if (g_usingWinEncoding == 949) {
+                                    if (IsKoreanTrailByte(dynamicTextBuffer[processedTextLen - 1])) {
+                                        if (TryDecodeKorean((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode)) {
+                                            auto glyphIt2 = extraGlyphs->find(uiTempDoubleByteCode);
+                                            if (glyphIt2 != extraGlyphs->end()) {
+                                                pCurrentGlyph = &glyphIt2->second;
+                                                bLastIsDBCharacter = true;
+                                            }
                                         }
                                     }
                                 }
                             }
 
-                            if (!bLastIsHanzi) {
+                            if (!bLastIsDBCharacter) {
                                 pCurrentGlyph = &this->pFontData->pFontLetters[dynamicTextBuffer[processedTextLen - 1]];
                             }
 
                             currentLineWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
 
-                            if (bHanzi) {
-                                auto glyphIt3 = extraGlyphs->find(uiGBKcode);
+                            if (bIsDBCharacter) {
+                                auto glyphIt3 = extraGlyphs->find(uiDoubleByteCode);
                                 if (glyphIt3 != extraGlyphs->end()) {
                                     pCurrentGlyph = &glyphIt3->second;
                                 }
@@ -1610,7 +1826,7 @@ namespace fonthook {
                         }
                     }
 
-                    if (bHanzi)
+                    if (bIsDBCharacter)
                     {
                         if (processedTextLen + 4 >= textBufferSize) {
                             dynamicTextBuffer = (char*)MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8);
@@ -1646,11 +1862,11 @@ namespace fonthook {
                 if (maxAllowedLines > 0 && currentLineCount > maxAllowedLines && processedTextLen)
                 {
                     while (processedTextLen > 0 && dynamicTextBuffer[processedTextLen - 1] != axData->cLineSep) {
-                        /*bHanzi = false;
+                        /*bIsDBCharacter = false;
                         if (extraGlyphs) {
                             if (processedTextLen >= 2) {
-                                bHanzi = TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempGBKcode);
-                                if (bHanzi) {
+                                bIsDBCharacter = TryDecodeGBK((const char*)&dynamicTextBuffer[processedTextLen - 2], uiTempDoubleByteCode);
+                                if (bIsDBCharacter) {
                                         --processedTextLen;
                                         --processedTextLen;
                                         continue;
@@ -1658,7 +1874,7 @@ namespace fonthook {
                             }
                         }
 
-                        if (!bHanzi) {
+                        if (!bIsDBCharacter) {
                             --processedTextLen;
                         }*/
                         --processedTextLen;
@@ -1761,10 +1977,10 @@ namespace fonthook {
             int j_1; // [esp+148h] [ebp-30h]
             Font::TextData axData2; // [esp+14Ch] [ebp-2Ch]
             int v37; // [esp+174h] [ebp-4h]
-            bool bHanzi, rendered;
+            bool bIsDBCharacter, rendered;
             unsigned char cLSB;
             int iActualCharCount;
-            UInt32 uiGBKcode;
+            UInt32 uiDoubleByteCode;
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
@@ -1780,7 +1996,7 @@ namespace fonthook {
             v37 = 0;
 
             if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
-                if (IsValidUTF8(axTextString->pString)) {
+                if (IsValidUTF8With3ByteMin(axTextString->pString)) {
                     gLog.FormattedMessage("axTextString->pString Before: '%s'", (const char*)axTextString->pString);
                     sCurrentStr = axTextString->pString;
                     sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
@@ -1825,13 +2041,25 @@ namespace fonthook {
                 for (int Charcount = 0;
                     axData.xNewText.pString[axData.xNewText.pString != 0 ? Charcount : 0];
                     ++Charcount) {
-                    bHanzi = false;
+                    bIsDBCharacter = false;
 
                     cLSB = (unsigned char)axData.xNewText.pString[Charcount + 1];
                     if (cLSB != 0) {
-                        bHanzi = TryDecodeGBK((const char*)&axData.xNewText.pString[Charcount], uiGBKcode);
+                        if (g_usingWinEncoding == 936) {
+                            bIsDBCharacter = TryDecodeGBK((const char*)&axData.xNewText.pString[Charcount], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 950) {
+                            bIsDBCharacter = TryDecodeBig5((const char*)&axData.xNewText.pString[Charcount], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 932) {
+                            bIsDBCharacter = TryDecodeSJIS((const char*)&axData.xNewText.pString[Charcount], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 949) {
+                            bIsDBCharacter = TryDecodeKorean((const char*)&axData.xNewText.pString[Charcount], uiDoubleByteCode);
+                        }
                     }
-                    if (bHanzi) {
+
+                    if (bIsDBCharacter) {
                         ++Charcount;
                         iActualCharCount = iActualCharCount - 1;
                     }
@@ -1900,19 +2128,30 @@ namespace fonthook {
                 }
                 cCurrentChar = axData.xNewText.pString[axData.xNewText.pString != 0 ? axData2.iCharCount : 0];
 
-                bHanzi = false;
+                bIsDBCharacter = false;
 
                 if (extraGlyphs) {
                     cLSB = (unsigned char)axData.xNewText.pString[axData2.iCharCount + 1];
                     if (cLSB != 0) {
-                        bHanzi = TryDecodeGBK((const char*)&axData.xNewText.pString[axData2.iCharCount], uiGBKcode);
+                        if (g_usingWinEncoding == 936) {
+                            bIsDBCharacter = TryDecodeGBK((const char*)&axData.xNewText.pString[axData2.iCharCount], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 950) {
+                            bIsDBCharacter = TryDecodeBig5((const char*)&axData.xNewText.pString[axData2.iCharCount], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 932) {
+                            bIsDBCharacter = TryDecodeSJIS((const char*)&axData.xNewText.pString[axData2.iCharCount], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 949) {
+                            bIsDBCharacter = TryDecodeKorean((const char*)&axData.xNewText.pString[axData2.iCharCount], uiDoubleByteCode);
+                        }
                     }
                     else {
-                        bHanzi = false;
+                        bIsDBCharacter = false;
                     }
                 }
 
-                if (!bHanzi) {
+                if (!bIsDBCharacter) {
                     ConvertToAsciiQuotes(&cCurrentChar);
                 }
 
@@ -1928,9 +2167,9 @@ namespace fonthook {
                 {
                     if (extraGlyphs) {
                         //gLog.FormattedMessage("Found extraGlyphs");
-                        if (bHanzi) {
+                        if (bIsDBCharacter) {
                             //gLog.FormattedMessage("Find GBKByte");
-                            auto glyphIt = extraGlyphs->find(uiGBKcode);
+                            auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
                             if (glyphIt != extraGlyphs->end()) {
                                 //Call Font::AddChar
                                 StdCall<FontLetter*>(
@@ -2037,17 +2276,17 @@ namespace fonthook {
             int j; // [esp+B4h] [ebp-8h]
             float* v42; // [esp+B8h] [ebp-4h]
 
-            bool bHanzi, rendered;
+            bool bIsDBCharacter, rendered;
             unsigned char cLSB;
             int iActualCharCount;
-            UInt32 uiGBKcode;
+            UInt32 uiDoubleByteCode;
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
             std::string sCurrentStr, sConvertedStr;
 
             if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
-                if (IsValidUTF8(apTextString->pString)) {
+                if (IsValidUTF8With3ByteMin(apTextString->pString)) {
                     sCurrentStr = apTextString->pString;
                     sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
                     apTextString->Set(sConvertedStr.c_str());
@@ -2088,7 +2327,7 @@ namespace fonthook {
                 for (UINT32 Charcount = 0;
                     apTextString->pString[apTextString->pString != 0 ? Charcount : 0];
                     ++Charcount) {
-                    bHanzi = false;
+                    bIsDBCharacter = false;
 
                     if (Charcount >= i_1) {
                         break;
@@ -2096,9 +2335,20 @@ namespace fonthook {
 
                     cLSB = (unsigned char)apTextString->pString[Charcount + 1];
                     if (cLSB != 0) {
-                        bHanzi = TryDecodeGBK((const char*)&apTextString->pString[Charcount], uiGBKcode);
+                        if (g_usingWinEncoding == 936) {
+                            bIsDBCharacter = TryDecodeGBK((const char*)&apTextString->pString[Charcount], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 950) {
+                            bIsDBCharacter = TryDecodeBig5((const char*)&apTextString->pString[Charcount], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 932) {
+                            bIsDBCharacter = TryDecodeSJIS((const char*)&apTextString->pString[Charcount], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 949) {
+                            bIsDBCharacter = TryDecodeKorean((const char*)&apTextString->pString[Charcount], uiDoubleByteCode);
+						}
                     }
-                    if (bHanzi) {
+                    if (bIsDBCharacter) {
                         ++Charcount;
                         iActualCharCount = iActualCharCount - 1;
                     }
@@ -2143,19 +2393,30 @@ namespace fonthook {
 
                 cCurrentChar = apTextString->pString[apTextString->pString != 0 ? j : 0];
 
-                bHanzi = false;
+                bIsDBCharacter = false;
 
                 if (extraGlyphs) {
                     cLSB = (unsigned char)apTextString->pString[j + 1];
                     if (cLSB != 0) {
-                        bHanzi = TryDecodeGBK((const char*)&apTextString->pString[j], uiGBKcode);
+                        if (g_usingWinEncoding == 936) {
+                            bIsDBCharacter = TryDecodeGBK((const char*)&apTextString->pString[j], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 950) {
+                            bIsDBCharacter = TryDecodeBig5((const char*)&apTextString->pString[j], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 932) {
+                            bIsDBCharacter = TryDecodeSJIS((const char*)&apTextString->pString[j], uiDoubleByteCode);
+                        }
+                        else if (g_usingWinEncoding == 949) {
+                            bIsDBCharacter = TryDecodeKorean((const char*)&apTextString->pString[j], uiDoubleByteCode);
+						}
                     }
                     else {
-                        bHanzi = false;
+                        bIsDBCharacter = false;
                     }
                 }
 
-                if (!bHanzi) {
+                if (!bIsDBCharacter) {
                     ConvertToAsciiQuotes(&cCurrentChar);
                 }
 
@@ -2169,9 +2430,9 @@ namespace fonthook {
 
                 if (extraGlyphs) {
                     //gLog.FormattedMessage("Found extraGlyphs");
-                    if (bHanzi) {
+                    if (bIsDBCharacter) {
                         //gLog.FormattedMessage("Find GBKByte");
-                        auto glyphIt = extraGlyphs->find(uiGBKcode);
+                        auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
                         if (glyphIt != extraGlyphs->end()) {
                             //Call Font::AddChar
                             StdCall<FontLetter*>(
@@ -2247,8 +2508,8 @@ namespace fonthook {
             FontLetter* fontCharMetrics; // [esp+54h] [ebp-8h]
             float fontVerticalSpacingAdjust; // [esp+58h] [ebp-4h]
 
-            bool bHanzi;
-            UInt32 uiGBKcode;
+            bool bIsDBCharacter;
+            UInt32 uiDoubleByteCode;
             auto extraGlyphEntry = gNumberedExtraLetters.find(fontID);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
@@ -2259,7 +2520,7 @@ namespace fonthook {
             //gLog.FormattedMessage("fontID: %u", fontID);
 
             if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
-                if (IsValidUTF8(srcString)) {
+                if (IsValidUTF8With3ByteMin(srcString)) {
                     sCurrentStr = srcString;
                     sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
                     srcString = sConvertedStr.c_str();
@@ -2289,29 +2550,41 @@ namespace fonthook {
 
                 for (currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
                 {
-                    bHanzi = false;
+                    bIsDBCharacter = false;
 
                     currentChar = srcString[currentCharIndex];
                     currentCharTotalWidth = 0.0;
 
                     if (extraGlyphs) {
-                        if (bIsQuestTextMSBHanzi) {
-                            if (szGBKChar) {
-                                srcString = szGBKChar;
+                        if (bIsQuestTextMSBDBCharacter) {
+                            if (szDBChar) {
+                                srcString = szDBChar;
                             }
                         }
 
                         if ((currentCharIndex + 1) <= sourceStringLength) {
-                            bHanzi = TryDecodeGBK(&srcString[currentCharIndex], uiGBKcode);
-                            if (bIsQuestTextMSBHanzi) {
+                            if (g_usingWinEncoding == 936) {
+                                bIsDBCharacter = TryDecodeGBK(&srcString[currentCharIndex], uiDoubleByteCode);
+                            }
+                            else if (g_usingWinEncoding == 950) {
+                                bIsDBCharacter = TryDecodeBig5(&srcString[currentCharIndex], uiDoubleByteCode);
+                            }
+                            else if (g_usingWinEncoding == 932) {
+                                bIsDBCharacter = TryDecodeSJIS(&srcString[currentCharIndex], uiDoubleByteCode);
+                            }
+                            else if (g_usingWinEncoding == 949) {
+                                bIsDBCharacter = TryDecodeKorean(&srcString[currentCharIndex], uiDoubleByteCode);
+							}
+
+                            if (bIsQuestTextMSBDBCharacter) {
                                     srcString = "";
                             }
                         }
                     }
 
-                    if (bHanzi) {
+                    if (bIsDBCharacter) {
                         //gLog.FormattedMessage("CalculateStringDimensions found Hanzi");
-                        auto glyphIt = extraGlyphs->find(uiGBKcode);
+                        auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
                         if (glyphIt != extraGlyphs->end()) {
                             currentCharTotalWidth = glyphIt->second.fLeadingEdge
                                 + glyphIt->second.fWidth
@@ -2416,36 +2689,111 @@ namespace fonthook {
         }
     };
 
-    static void* __fastcall TileSetStringForQueueText(void* pThis, void*, int a2, char* a3, bool a4) {
+    static void* __fastcall TileSetStringHookForQueueText(void* pThis, void*, int a2, char* a3, bool a4) {
         //gLog.FormattedMessage("Call QuestText TileSetString");
         //gLog.FormattedMessage("a2: %d", a2);
         //gLog.FormattedMessage("a3: %x", a3[0]);
 
-        bIsQuestTextLSBHanzi = false;
-        if (bIsQuestTextMSBHanzi) {
-            bIsQuestTextLSBHanzi = IsGBKTrailByte(a3[0]);
-            if (bIsQuestTextLSBHanzi) {
-                szGBKChar[0] = pFirstChar;
-                szGBKChar[1] = a3[0];
-                szGBKChar[2] = 0;
-                a3 = (char*)szGBKChar;
+        bIsQuestTextLSBDBCharacter = false;
+        if (bIsQuestTextMSBDBCharacter) {
+            if (g_usingWinEncoding == 936) {
+                bIsQuestTextLSBDBCharacter = IsGBKTrailByte(a3[0]);
+            }
+            else if (g_usingWinEncoding == 950) {
+                bIsQuestTextLSBDBCharacter = IsBig5TrailByte(a3[0]);
+            }
+            else if (g_usingWinEncoding == 932) {
+                bIsQuestTextLSBDBCharacter = IsSJISTrailByte(a3[0]);
+            }
+            else if (g_usingWinEncoding == 949) {
+                bIsQuestTextLSBDBCharacter = IsKoreanTrailByte(a3[0]);
+            }
+
+            if (bIsQuestTextLSBDBCharacter) {
+                szDBChar[0] = pFirstChar;
+                szDBChar[1] = a3[0];
+                szDBChar[2] = 0;
+                a3 = (char*)szDBChar;
             }
         }
 
-        if (gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end() && !bIsQuestTextMSBHanzi) {
-            bIsQuestTextMSBHanzi = false;
-            bIsQuestTextMSBHanzi = IsGBKLeadByte((unsigned char)a3[0]);
-            if (bIsQuestTextMSBHanzi) {
+        if (gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end() && !bIsQuestTextMSBDBCharacter) {
+            bIsQuestTextMSBDBCharacter = false;
+
+            if (g_usingWinEncoding == 936) {
+                bIsQuestTextMSBDBCharacter = IsGBKLeadByte((unsigned char)a3[0]);
+            }
+            else if (g_usingWinEncoding == 950) {
+                bIsQuestTextMSBDBCharacter = IsBig5LeadByte((unsigned char)a3[0]);
+            }
+            else if (g_usingWinEncoding == 932) {
+                bIsQuestTextMSBDBCharacter = IsSJISLeadByte((unsigned char)a3[0]);
+            }
+            else if (g_usingWinEncoding == 949) {
+                bIsQuestTextMSBDBCharacter = IsKoreanLeadByte((unsigned char)a3[0]);
+			}
+
+            if (bIsQuestTextMSBDBCharacter) {
                 pFirstChar = (unsigned char)a3[0];
                 //gLog.FormattedMessage("QuestText FirstByte: 0x%x", pFirstChar);
                 a3 = (char*)"";
             }
         }
         else {
-            bIsQuestTextMSBHanzi = false;
+            bIsQuestTextMSBDBCharacter = false;
         }
 
         return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);
+    }
+
+    static char* __fastcall BSString_c_strHook(BSStringT<char>* pthis, void*) {
+        auto extraGlyphEntry = gNumberedExtraLetters.find(5);
+        auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
+        std::string sCurrentStr, sConvertedStr;
+
+        if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+            if (IsValidUTF8With3ByteMin(pthis->pString)) {
+                sCurrentStr = pthis->pString;
+                sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
+                pthis->Set(sConvertedStr.c_str());
+            }
+        }
+        return pthis->pString;
+    }
+
+    static char* __fastcall BSString_GetCStringOrEmptyHook(BSStringT<char>* pthis, void*) {
+        auto extraGlyphEntry = gNumberedExtraLetters.find(8);
+        auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
+        std::string sCurrentStr, sConvertedStr;
+
+        if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+            if (IsValidUTF8With3ByteMin(pthis->pString)) {
+                sCurrentStr = pthis->pString;
+                sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
+                pthis->Set(sConvertedStr.c_str());
+            }
+        }
+
+        char* ret = ThisStdCall<char*>(0x408DA0, pthis);
+        return ret;
+    }
+
+    static int __cdecl strcpy_sHook(char* dest, int dest_size, const char* src) {
+        auto extraGlyphEntry = gNumberedExtraLetters.find(8);
+        auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
+        std::string sCurrentStr, sConvertedStr;
+
+        gLog.FormattedMessage("strcpy_s src before: %s", src);
+        if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+            if (IsValidUTF8With3ByteMin(src)) {
+                sCurrentStr = src;
+                sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
+                src = sConvertedStr.c_str();
+                gLog.FormattedMessage("strcpy_s src after: %s", src);
+            }
+        }
+
+        return strcpy_s(dest, dest_size, src);
     }
 
     void InitVertSpacingHook() {
@@ -2473,9 +2821,23 @@ namespace fonthook {
         WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
 
         //Tile::SetString
-        //Quest Text and Location Text
-        WriteRelCall(0x77AF4B, &TileSetStringForQueueText);
-        WriteRelCall(0x772B5E, &TileSetStringForQueueText);
+        //Quest Text
+        WriteRelCall(0x77AF4B, &TileSetStringHookForQueueText);
+        //Location Text
+        WriteRelCall(0x772B5E, &TileSetStringHookForQueueText);
+
+        //BSStringT<char>::c_str
+        //Terminal UTF8 convey
+        WriteRelCall(0x7591AC, &BSString_c_strHook);
+
+        //BSStringT<char>::GetCStringOrEmpty
+		//Location Text UTF8 convey
+        WriteRelCall(0x772B4B, &BSString_GetCStringOrEmptyHook);
+
+        //strcpy_s_w
+		//Quest Text UTF8 convey
+        WriteRelCall(0x77ACCC, &strcpy_sHook);
+        WriteRelCall(0x77ACF8, &strcpy_sHook);
     }
 
     void InitJIPHooks() {

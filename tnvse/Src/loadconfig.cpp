@@ -20,10 +20,10 @@ void LoadConfig() {
 
 	switch (g_uiEncoding) {
 	case 0: g_usingWinEncoding = 0; break;
-	case 1: g_usingWinEncoding = 936; break;
-	case 2: g_usingWinEncoding = 950; break;
-	case 3:  g_usingWinEncoding = 932;  break;
-	case 4: g_usingWinEncoding = 949; break;
+	case 1: g_usingWinEncoding = 936; break; //GBK
+	case 2: g_usingWinEncoding = 950; break; //Big5
+	case 3:  g_usingWinEncoding = 932;  break; //Shift-JIS
+	case 4: g_usingWinEncoding = 949; break; //UHC
 
 	default:
 		g_usingWinEncoding = 936;

@@ -176,9 +176,14 @@ namespace fonthook {
         return mb;
     }
 
-    static bool IsValidUTF8(const char* s)
+    static bool IsValidUTF8With3ByteMin(const char* s)
     {
+        if (!s)
+            return false;
+
         const unsigned char* p = (const unsigned char*)s;
+        bool has3ByteOrMore = false;
+
         while (*p)
         {
             if (*p < 0x80) {
@@ -193,40 +198,36 @@ namespace fonthook {
                 p += 2;
             }
             else if (*p < 0xF0) {
-                unsigned char c1 = p[0], c2 = p[1], c3 = p[2];
-
-                if (c1 == 0xE0 && (c2 < 0xA0 || c2 > 0xBF))
-                    return false;
-
-                if (c1 == 0xED && (c2 >= 0xA0 && c2 <= 0xBF))
-                    return false;
-
+                unsigned char c2 = p[1], c3 = p[2];
                 if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80)
                     return false;
-
+                has3ByteOrMore = true;
                 p += 3;
             }
             else if (*p < 0xF5) {
-                unsigned char c1 = p[0], c2 = p[1], c3 = p[2], c4 = p[3];
-
-                if (c1 == 0xF0 && (c2 < 0x90 || c2 > 0xBF))
-                    return false;
-
-                if (c1 == 0xF4 && (c2 > 0x8F))
-                    return false;
-
+                unsigned char c2 = p[1], c3 = p[2], c4 = p[3];
                 if ((c2 & 0xC0) != 0x80 ||
                     (c3 & 0xC0) != 0x80 ||
                     (c4 & 0xC0) != 0x80)
                     return false;
-
+                has3ByteOrMore = true;
                 p += 4;
             }
             else {
                 return false;
             }
         }
-        return true;
+
+        return has3ByteOrMore;
+    }
+
+
+    inline bool IsUTF8Lead3(unsigned char c) {
+        return (c & 0xF0) == 0xE0;
+    }
+
+    inline bool IsUTF8Trail(unsigned char c) {
+        return (c & 0xC0) == 0x80;
     }
 
     typedef UINT32(__thiscall* GetFileSizeFunc)(void* pThis);
@@ -272,9 +273,14 @@ namespace fonthook {
     static std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
 
     static unsigned char pFirstChar;
-    static bool bIsQuestTextMSBHanzi;
-    static bool bIsQuestTextLSBHanzi;
-    static char szGBKChar[3];
+    static bool bIsQuestTextMSBDBCharacter;
+    static bool bIsQuestTextLSBDBCharacter;
+    static char szDBChar[3];
+    static bool bProcessingUTF8QueneText;
+    static bool bIsQuestTextUTF8FirstChar;
+    static bool bIsQuestTextUTF8SecondChar;
+    static bool bIsQuestTextUTF8ThirdChar;
+    static char szUTF8Char[4];
 
     static bool bHasLeadByteInLast;
     static unsigned char lastHanziByte;
