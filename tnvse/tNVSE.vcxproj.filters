@@ -6,6 +6,9 @@
     <ClCompile Include="Src\fonthook.cpp">
       <Filter>fonthook</Filter>
     </ClCompile>
+    <ClCompile Include="Src\loadconfig.cpp">
+      <Filter>loadconfig</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Src\PluginAPI.h" />
@@ -18,6 +21,9 @@
     <ClInclude Include="Src\tList.h">
       <Filter>fonthook</Filter>
     </ClInclude>
+    <ClInclude Include="Src\loadconfig.h">
+      <Filter>loadconfig</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="exports.def" />
@@ -26,6 +32,9 @@
   <ItemGroup>
     <Filter Include="fonthook">
       <UniqueIdentifier>{baa721cc-f897-4680-a187-264319b21672}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="loadconfig">
+      <UniqueIdentifier>{f7219eff-dec6-45f7-99d6-41cd4dcdab2f}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

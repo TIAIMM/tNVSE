@@ -10,6 +10,7 @@
 #include "PlayerCharacter.hpp"
 #include "ShadowSceneNode.hpp"
 #include "InterfaceManager.hpp"
+#include "loadconfig.h"
 #include "fonthook.h"
 
 IDebugLog gLog("tnvse.log");
@@ -37,6 +38,7 @@ bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info) {
 
 bool NVSEPlugin_Load(const NVSEInterface* nvse) {
 	if (!nvse->isEditor) {
+		LoadConfig();
 		fonthook::InitVertSpacingHook();
 		fonthook::InitFontHook();
 		fonthook::InitJIPHooks();

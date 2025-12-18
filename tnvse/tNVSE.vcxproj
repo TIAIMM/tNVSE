@@ -142,6 +142,7 @@
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="Src\fonthook.cpp" />
+    <ClCompile Include="Src\loadconfig.cpp" />
     <ClCompile Include="Src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -150,6 +151,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Src\fonthook.h" />
+    <ClInclude Include="Src\loadconfig.h" />
     <ClInclude Include="Src\PluginAPI.h" />
     <ClInclude Include="Src\tList.h" />
     <ClInclude Include="Src\uidecode.h" />

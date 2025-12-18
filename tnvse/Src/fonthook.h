@@ -1,15 +1,12 @@
 #pragma once
+#include <icu.h>
 #include "uidecode.h"
+#include "loadconfig.h"
 #include <unordered_map>
 #include "MemoryManager.hpp"
 #include "BSFile.hpp"
 
 namespace fonthook {
-	class ExtraFontData {
-	public:
-
-	};
-
     static float __stdcall VertSpacingAdjust(UInt32 aiFont) {
         return 0;
     }
@@ -35,13 +32,13 @@ namespace fonthook {
     }
 
     // 0xEC62F6
-    static uint32_t SafeDoubleToUInt32(double a1)
+    static UINT32 SafeDoubleToUInt32(double a1)
     {
         uint64_t bits;
         std::memcpy(&bits, &a1, sizeof(bits));
 
-        uint32_t low = static_cast<uint32_t>(bits);
-        uint32_t high = static_cast<uint32_t>(bits >> 32);
+        UINT32 low = static_cast<UINT32>(bits);
+        UINT32 high = static_cast<UINT32>(bits >> 32);
 
         if (low == 0 && (high & 0x7FFFFFFF) == 0)
             return 0;
@@ -55,15 +52,15 @@ namespace fonthook {
         else
         {
             uint64_t pair64 = (static_cast<uint64_t>(0) << 32) | low;
-            return static_cast<uint32_t>((pair64 + 0x7FFFFFFF) >> 32);
+            return static_cast<UINT32>((pair64 + 0x7FFFFFFF) >> 32);
         }
     }
 
     // 0xEC62C0
-    static uint32_t ConditionalFloatToUInt(double a1)
+    static UINT32 ConditionalFloatToUInt(double a1)
     {
-        if (*(volatile uint32_t*)0x01270A6C)
-            return static_cast<uint32_t>(a1);
+        if (*(volatile UINT32*)0x01270A6C)
+            return static_cast<UINT32>(a1);
         else
             return SafeDoubleToUInt32(a1);
     }
@@ -89,9 +86,152 @@ namespace fonthook {
         return true;
     }
 
-    typedef uint32_t(__thiscall* GetFileSizeFunc)(void* pThis);
+    static bool IsBig5LeadByte(unsigned char c) {
+        return (c >= 0x81 && c <= 0xFE);
+    }
 
-    static uint32_t GetFileSize(void* fntFileHandle) {
+    static bool IsBig5TrailByte(unsigned char c) {
+        return ((c >= 0x40 && c <= 0x7E) || (c >= 0xA1 && c <= 0xFE));
+    }
+
+    static bool TryDecodeBig5(const char* p, UInt32& outCode) {
+        unsigned char lead = (unsigned char)p[0];
+        unsigned char trail = (unsigned char)p[1];
+
+        if (!IsBig5LeadByte(lead) || !IsBig5TrailByte(trail))
+            return false;
+
+        outCode = (UInt32(lead) << 8) | UInt32(trail);
+        return true;
+    }
+
+    static bool IsSJISLeadByte(unsigned char c) {
+        if (c >= 0x81 && c <= 0x9F) return true;
+        if (c >= 0xE0 && c <= 0xEA) return true;
+        if (c == 0xED || c == 0xEE) return true;
+        if (c >= 0xFA && c <= 0xFC) return true;
+        return false;
+    }
+
+    static bool IsSJISTrailByte(unsigned char c) {
+        if (c >= 0x40 && c <= 0x7E) return true;
+        if (c >= 0x80 && c <= 0xFC) return true;
+        return false;
+    }
+
+    static bool TryDecodeSJIS(const char* p, UInt32& outCode) {
+        unsigned char lead = (unsigned char)p[0];
+        unsigned char trail = (unsigned char)p[1];
+
+        if (!IsSJISLeadByte(lead) || !IsSJISTrailByte(trail))
+            return false;
+
+        outCode = (UInt32(lead) << 8) | UInt32(trail);
+        return true;
+    }
+
+    static bool IsKoreanLeadByte(unsigned char c) {
+        return (c >= 0x81 && c <= 0xC8);
+    }
+
+    static bool IsKoreanTrailByte(unsigned char c) {
+        if (c >= 0x41 && c <= 0x5A) return true;
+        if (c >= 0x61 && c <= 0x7A) return true;
+        if (c >= 0x81 && c <= 0xFE) return true;
+        return false;
+    }
+
+    static bool TryDecodeKorean(const char* p, UInt32& outCode) {
+        unsigned char lead = (unsigned char)p[0];
+        unsigned char trail = (unsigned char)p[1];
+
+        if (!IsKoreanLeadByte(lead) || !IsKoreanTrailByte(trail))
+            return false;
+
+        outCode = (UInt32(lead) << 8) | UInt32(trail);
+        return true;
+    }
+
+    static std::string MultiByteToUTF8(const std::string& src, UINT32 codePage) {
+        int len = MultiByteToWideChar(codePage, 0, src.c_str(), -1, nullptr, 0);
+        if (len == 0) return "";
+        std::wstring wstr(len, L'\0');
+        MultiByteToWideChar(codePage, 0, src.c_str(), -1, &wstr[0], len);
+
+        len = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string utf8(len, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &utf8[0], len, nullptr, nullptr);
+        return utf8;
+    }
+
+    static std::string UTF8ToMultiByteStr(const std::string& utf8, UINT32 codePage) {
+        int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+        if (len == 0) return "";
+        std::wstring wstr(len, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &wstr[0], len);
+
+        len = WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string mb(len, '\0');
+        WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, &mb[0], len, nullptr, nullptr);
+        return mb;
+    }
+
+    static bool IsValidUTF8(const char* s)
+    {
+        const unsigned char* p = (const unsigned char*)s;
+        while (*p)
+        {
+            if (*p < 0x80) {
+                p++;
+            }
+            else if (*p < 0xC2) {
+                return false;
+            }
+            else if (*p < 0xE0) {
+                if ((p[1] & 0xC0) != 0x80)
+                    return false;
+                p += 2;
+            }
+            else if (*p < 0xF0) {
+                unsigned char c1 = p[0], c2 = p[1], c3 = p[2];
+
+                if (c1 == 0xE0 && (c2 < 0xA0 || c2 > 0xBF))
+                    return false;
+
+                if (c1 == 0xED && (c2 >= 0xA0 && c2 <= 0xBF))
+                    return false;
+
+                if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80)
+                    return false;
+
+                p += 3;
+            }
+            else if (*p < 0xF5) {
+                unsigned char c1 = p[0], c2 = p[1], c3 = p[2], c4 = p[3];
+
+                if (c1 == 0xF0 && (c2 < 0x90 || c2 > 0xBF))
+                    return false;
+
+                if (c1 == 0xF4 && (c2 > 0x8F))
+                    return false;
+
+                if ((c2 & 0xC0) != 0x80 ||
+                    (c3 & 0xC0) != 0x80 ||
+                    (c4 & 0xC0) != 0x80)
+                    return false;
+
+                p += 4;
+            }
+            else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    typedef UINT32(__thiscall* GetFileSizeFunc)(void* pThis);
+
+    static UINT32 GetFileSize(void* fntFileHandle) {
         void** vtable = *(void***)fntFileHandle;
         GetFileSizeFunc func = (GetFileSizeFunc)vtable[10];
         return func(fntFileHandle);

@@ -186,28 +186,30 @@ namespace fonthook {
                     BSFile_1->m_uiAbsoluteCurrentPos += v23;
                     v24 = v23;
 
-                    unsigned int uiActualSize = BSFile_1->GetSize();
-                    if (uiActualSize > 0x3928) {
-                        fontNameKey = this->pFontFile ? this->pFontFile : 0;
-                        if (!fontNameKey.empty()) {
-                            auto& extraMap = gExtraFontLetters[fontNameKey];
-                            if (extraMap.empty()) {
-                                extraMap.reserve(24066);
-                                unsigned int hh, ll, code;
-                                for (hh = 0x81; hh <= 0xFE; ++hh) {
-                                    for (ll = 0x40; ll <= 0xFE; ++ll) {
-                                        code = (hh << 8) | ll;
-                                        FontLetter letter{};
-                                        UInt32 r2 = BSFile_1->m_pfnRead(BSFile_1, &letter, sizeof(letter), v25, 1u);
-                                        BSFile_1->m_uiAbsoluteCurrentPos += r2;
-                                        if (r2 != sizeof(letter)) break;
-                                        extraMap[code] = letter;
+                    if (g_uiEncoding != 0) {
+                        unsigned int uiActualSize = BSFile_1->GetSize();
+                        if (uiActualSize > 0x3928) {
+                            fontNameKey = this->pFontFile ? this->pFontFile : 0;
+                            if (!fontNameKey.empty()) {
+                                auto& extraMap = gExtraFontLetters[fontNameKey];
+                                if (extraMap.empty()) {
+                                    extraMap.reserve(24066);
+                                    unsigned int hh, ll, code;
+                                    for (hh = 0x81; hh <= 0xFE; ++hh) {
+                                        for (ll = 0x40; ll <= 0xFE; ++ll) {
+                                            code = (hh << 8) | ll;
+                                            FontLetter letter{};
+                                            UInt32 r2 = BSFile_1->m_pfnRead(BSFile_1, &letter, sizeof(letter), v25, 1u);
+                                            BSFile_1->m_uiAbsoluteCurrentPos += r2;
+                                            if (r2 != sizeof(letter)) break;
+                                            extraMap[code] = letter;
+                                        }
                                     }
                                 }
-                            }
 
-                            if (!extraMap.empty()) {
-                                //gLog.FormattedMessage("Loaded %u extra FontLetter records for %s",(unsigned)extraMap.size(),fontNameKey);
+                                //if (!extraMap.empty()) {
+                                //    //gLog.FormattedMessage("Loaded %u extra FontLetter records for %s",(unsigned)extraMap.size(),fontNameKey);
+                                //}
                             }
                         }
                     }
@@ -482,10 +484,20 @@ namespace fonthook {
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
+            std::string sCurrentStr, sConvertedStr;
+
             //gLog.FormattedMessage("\nCall PrepText");
 
             if (!apOrigString)
                 return;
+
+            if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+                if (IsValidUTF8(apOrigString)) {
+                    sCurrentStr = apOrigString;
+                    sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
+                    apOrigString = sConvertedStr.c_str();
+                }
+            }
 
             //gLog.FormattedMessage("apOrigString = %s", apOrigString);
 
@@ -698,9 +710,7 @@ namespace fonthook {
                     bHanzi = false;
                     if (extraGlyphs) {
                         if ((charIndex + 1) <= sourceTextLen) {
-                            if ((unsigned char)processedOriginalText[charIndex] >= 0x81) {
-                                bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
-                            }
+                            bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
                         }
                     }
 
@@ -1125,12 +1135,22 @@ namespace fonthook {
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
-            //gLog.FormattedMessage("\nCall PrepText");
+            //std::string sCurrentStr, sConvertedStr;
+
+            gLog.FormattedMessage("\nCall PrepText");
 
             if (!apOrigString)
                 return;
 
-            //gLog.FormattedMessage("apOrigString = %s", apOrigString);
+            /*if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+                if (IsValidUTF8(apOrigString)) {
+                    sCurrentStr = apOrigString;
+                    sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
+                    apOrigString = sConvertedStr.c_str();
+                }
+            }*/
+
+            gLog.FormattedMessage("apOrigString = %s", apOrigString);
 
             if (axData->iWidth <= 0)
                 axData->iWidth = 0x7FFFFFFF;
@@ -1341,9 +1361,7 @@ namespace fonthook {
                     bHanzi = false;
                     if (extraGlyphs) {
                         if ((charIndex + 1) <= sourceTextLen) {
-                            if ((unsigned char)processedOriginalText[charIndex] >= 0x81) {
-                                bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
-                            }
+                            bHanzi = TryDecodeGBK((const char*)&processedOriginalText[charIndex], uiGBKcode);
                         }
                     }
 
@@ -1750,7 +1768,9 @@ namespace fonthook {
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
-            //gLog.FormattedMessage("\nCall Font::CreateText");
+            std::string sCurrentStr, sConvertedStr;
+
+            gLog.FormattedMessage("\nCall Font::CreateText");
             if (!*aiHeight)
                 *aiHeight = 0x7FFFFFFF;
             if (!aiLineEnd)
@@ -1758,6 +1778,17 @@ namespace fonthook {
             *(float*)&axData2.iLineStart = FontManagerGetLinePadding(this->iFontNum);
             ThisStdCall(0x759330, &axData, *aiWidth, *aiHeight, aiLineStart, aiLineEnd, aiLineBreakChar);
             v37 = 0;
+
+            if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+                if (IsValidUTF8(axTextString->pString)) {
+                    gLog.FormattedMessage("axTextString->pString Before: '%s'", (const char*)axTextString->pString);
+                    sCurrentStr = axTextString->pString;
+                    sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
+                    gLog.FormattedMessage("sConvertedStr.c_str: '%s'", (const char*)sConvertedStr.c_str());
+                    axTextString->Set(sConvertedStr.c_str());
+                    gLog.FormattedMessage("axTextString->pString After: '%s'", (const char*)axTextString->pString);
+                }
+            }
 
             //gLog.FormattedMessage("axTextString->pString: '%s'", (const char*)axTextString->pString);
             //gLog.FormattedMessage("Call Font::PrepText");
@@ -2013,6 +2044,16 @@ namespace fonthook {
             auto extraGlyphEntry = gNumberedExtraLetters.find(this->iFontNum);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
+            std::string sCurrentStr, sConvertedStr;
+
+            if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+                if (IsValidUTF8(apTextString->pString)) {
+                    sCurrentStr = apTextString->pString;
+                    sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
+                    apTextString->Set(sConvertedStr.c_str());
+                }
+            }
+
             if (apTextString->sLen == 0xFFFF)
                 sLen = strlen(apTextString->pString);
             else
@@ -2211,8 +2252,20 @@ namespace fonthook {
             auto extraGlyphEntry = gNumberedExtraLetters.find(fontID);
             auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
-            //gLog.FormattedMessage("Call GetStringDimensionsEx");
+            std::string sCurrentStr, sConvertedStr;
+
+            gLog.FormattedMessage("Call GetStringDimensionsEx");
+            gLog.FormattedMessage("srcString = %s", srcString);
             //gLog.FormattedMessage("fontID: %u", fontID);
+
+            if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+                if (IsValidUTF8(srcString)) {
+                    sCurrentStr = srcString;
+                    sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
+                    srcString = sConvertedStr.c_str();
+                    gLog.FormattedMessage("srcString After = %s", srcString);
+                }
+            }
 
             if (fontID >= 1 /*&& fontID <= 8*/ && srcString)
             {
@@ -2249,11 +2302,9 @@ namespace fonthook {
                         }
 
                         if ((currentCharIndex + 1) <= sourceStringLength) {
-                            if ((unsigned char)srcString[currentCharIndex] >= 0x81) {
-                                bHanzi = TryDecodeGBK(&srcString[currentCharIndex], uiGBKcode);
-                                if (bIsQuestTextMSBHanzi) {
+                            bHanzi = TryDecodeGBK(&srcString[currentCharIndex], uiGBKcode);
+                            if (bIsQuestTextMSBHanzi) {
                                     srcString = "";
-                                }
                             }
                         }
                     }
@@ -2357,9 +2408,15 @@ namespace fonthook {
                 return outDimensions;
             }
         }
+
+        UINT32* PrepText(BSStringT<char>* a7, int a3) {
+            gLog.FormattedMessage("\nCall FontManager::PrepText");
+            gLog.FormattedMessage("a7: %s", (const char*)a7->pString);
+            return ThisStdCall<UINT32*>(0xA18A30, this, a7, a3);
+        }
     };
 
-    static void* __fastcall TileSetString(void* pThis, void*, int a2, char* a3, bool a4) {
+    static void* __fastcall TileSetStringForQueueText(void* pThis, void*, int a2, char* a3, bool a4) {
         //gLog.FormattedMessage("Call QuestText TileSetString");
         //gLog.FormattedMessage("a2: %d", a2);
         //gLog.FormattedMessage("a3: %x", a3[0]);
@@ -2415,10 +2472,10 @@ namespace fonthook {
         // FontManager::CalculateStringDimensions
         WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
 
-        //QuestText and LocationText
-        //Tile::Value::SetString
-        WriteRelCall(0x77AF4B, &TileSetString);
-        WriteRelCall(0x772B5E, &TileSetString);
+        //Tile::SetString
+        //Quest Text and Location Text
+        WriteRelCall(0x77AF4B, &TileSetStringForQueueText);
+        WriteRelCall(0x772B5E, &TileSetStringForQueueText);
     }
 
     void InitJIPHooks() {
