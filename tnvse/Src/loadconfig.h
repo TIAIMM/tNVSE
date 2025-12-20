@@ -18,6 +18,11 @@
 
 extern UINT32 g_uiEncoding;
 extern UINT32 g_usingWinEncoding;
-extern bool bEnableUTF8;
+extern bool g_bEnableUTF8;
+extern bool g_bChangeJIPBigGunDesc;
+extern const char* g_sNewBigGunsDesc;
+extern bool g_bReorderDoorPrompt;
+extern const char* g_sOptionalStructuralParticle;
+extern bool g_bRemovePlural;
 
 void LoadConfig();

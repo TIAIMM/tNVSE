@@ -39,6 +39,15 @@ bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info) {
 bool NVSEPlugin_Load(const NVSEInterface* nvse) {
 	if (!nvse->isEditor) {
 		LoadConfig();
+
+		if (g_bReorderDoorPrompt) {
+			fonthook::InitDoorPromptHooks();
+		}
+
+		if (g_bRemovePlural) {
+			fonthook::InitPluralHooks();
+		}
+
 		fonthook::InitVertSpacingHook();
 		fonthook::InitFontHook();
 		fonthook::InitJIPHooks();

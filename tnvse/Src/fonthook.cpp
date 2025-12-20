@@ -491,7 +491,7 @@ namespace fonthook {
             if (!apOrigString)
                 return;
 
-            /*if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+            /*if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
                 if (IsValidUTF8With3ByteMin(apOrigString)) {
                     sCurrentStr = apOrigString;
                     sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
@@ -1235,12 +1235,12 @@ namespace fonthook {
 
             //std::string sCurrentStr, sConvertedStr;
 
-            gLog.FormattedMessage("\nCall PrepText");
+            //gLog.FormattedMessage("\nCall PrepText");
 
             if (!apOrigString)
                 return;
 
-            /*if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+            /*if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
                 if (IsValidUTF8With3ByteMin(apOrigString)) {
                     sCurrentStr = apOrigString;
                     sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
@@ -1248,7 +1248,7 @@ namespace fonthook {
                 }
             }*/
 
-            gLog.FormattedMessage("apOrigString = %s", apOrigString);
+            //gLog.FormattedMessage("apOrigString = %s", apOrigString);
 
             if (axData->iWidth <= 0)
                 axData->iWidth = 0x7FFFFFFF;
@@ -1986,7 +1986,7 @@ namespace fonthook {
 
             std::string sCurrentStr, sConvertedStr;
 
-            gLog.FormattedMessage("\nCall Font::CreateText");
+            //gLog.FormattedMessage("\nCall Font::CreateText");
             if (!*aiHeight)
                 *aiHeight = 0x7FFFFFFF;
             if (!aiLineEnd)
@@ -1995,14 +1995,14 @@ namespace fonthook {
             ThisStdCall(0x759330, &axData, *aiWidth, *aiHeight, aiLineStart, aiLineEnd, aiLineBreakChar);
             v37 = 0;
 
-            if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+            if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
                 if (IsValidUTF8With3ByteMin(axTextString->pString)) {
-                    gLog.FormattedMessage("axTextString->pString Before: '%s'", (const char*)axTextString->pString);
+                    //gLog.FormattedMessage("axTextString->pString Before: '%s'", (const char*)axTextString->pString);
                     sCurrentStr = axTextString->pString;
                     sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
-                    gLog.FormattedMessage("sConvertedStr.c_str: '%s'", (const char*)sConvertedStr.c_str());
+                    //gLog.FormattedMessage("sConvertedStr.c_str: '%s'", (const char*)sConvertedStr.c_str());
                     axTextString->Set(sConvertedStr.c_str());
-                    gLog.FormattedMessage("axTextString->pString After: '%s'", (const char*)axTextString->pString);
+                    //gLog.FormattedMessage("axTextString->pString After: '%s'", (const char*)axTextString->pString);
                 }
             }
 
@@ -2285,7 +2285,7 @@ namespace fonthook {
 
             std::string sCurrentStr, sConvertedStr;
 
-            if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+            if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
                 if (IsValidUTF8With3ByteMin(apTextString->pString)) {
                     sCurrentStr = apTextString->pString;
                     sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
@@ -2515,16 +2515,16 @@ namespace fonthook {
 
             std::string sCurrentStr, sConvertedStr;
 
-            gLog.FormattedMessage("Call GetStringDimensionsEx");
-            gLog.FormattedMessage("srcString = %s", srcString);
+            //gLog.FormattedMessage("Call GetStringDimensionsEx");
+            //gLog.FormattedMessage("srcString = %s", srcString);
             //gLog.FormattedMessage("fontID: %u", fontID);
 
-            if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+            if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
                 if (IsValidUTF8With3ByteMin(srcString)) {
                     sCurrentStr = srcString;
                     sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
                     srcString = sConvertedStr.c_str();
-                    gLog.FormattedMessage("srcString After = %s", srcString);
+                    //gLog.FormattedMessage("srcString After = %s", srcString);
                 }
             }
 
@@ -2683,8 +2683,8 @@ namespace fonthook {
         }
 
         UINT32* PrepText(BSStringT<char>* a7, int a3) {
-            gLog.FormattedMessage("\nCall FontManager::PrepText");
-            gLog.FormattedMessage("a7: %s", (const char*)a7->pString);
+            //gLog.FormattedMessage("\nCall FontManager::PrepText");
+            //gLog.FormattedMessage("a7: %s", (const char*)a7->pString);
             return ThisStdCall<UINT32*>(0xA18A30, this, a7, a3);
         }
     };
@@ -2751,7 +2751,7 @@ namespace fonthook {
         auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
         std::string sCurrentStr, sConvertedStr;
 
-        if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+        if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
             if (IsValidUTF8With3ByteMin(pthis->pString)) {
                 sCurrentStr = pthis->pString;
                 sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
@@ -2766,7 +2766,7 @@ namespace fonthook {
         auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
         std::string sCurrentStr, sConvertedStr;
 
-        if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+        if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
             if (IsValidUTF8With3ByteMin(pthis->pString)) {
                 sCurrentStr = pthis->pString;
                 sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
@@ -2783,17 +2783,38 @@ namespace fonthook {
         auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
         std::string sCurrentStr, sConvertedStr;
 
-        gLog.FormattedMessage("strcpy_s src before: %s", src);
-        if (bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
+        //gLog.FormattedMessage("strcpy_s src before: %s", src);
+        if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
             if (IsValidUTF8With3ByteMin(src)) {
                 sCurrentStr = src;
                 sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
                 src = sConvertedStr.c_str();
-                gLog.FormattedMessage("strcpy_s src after: %s", src);
+                //gLog.FormattedMessage("strcpy_s src after: %s", src);
             }
         }
 
         return strcpy_s(dest, dest_size, src);
+    }
+
+    static int BSsprintfHook(
+        char* buffer,
+        size_t sizeOfBuffer,
+        const char* sformat,
+        const char* sDst,
+        const char* sTo, 
+        const char* sCellName) {
+
+        static std::string sConvertedStructuralParticle = UTF8ToMultiByteStr(g_sOptionalStructuralParticle, g_usingWinEncoding);
+
+        return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", sTo, sCellName, sConvertedStructuralParticle.c_str(), sDst);
+    }
+
+    void InitDoorPromptHooks() {
+        WriteRelCall(0x777006, &BSsprintfHook);
+    }
+
+    void InitPluralHooks() {
+        SafeWrite8(0x753E39, 0xEB);
     }
 
     void InitVertSpacingHook() {
@@ -2866,5 +2887,10 @@ namespace fonthook {
         SafeWrite32(GetJIPAddress(0x10011A3E + 1), UINT32(FontCreateForJIP));
         SafeWrite32(GetJIPAddress(0x10011AA9 + 1), UINT32(FontCreateForJIP));
         SafeWrite32(GetJIPAddress(0x1003943F + 1), UINT32(FontCreateForJIP));
+
+        if (g_bChangeJIPBigGunDesc) {
+            static std::string sConvertedBigGunsDesc = UTF8ToMultiByteStr(g_sNewBigGunsDesc, g_usingWinEncoding);
+            SafeWrite32(GetJIPAddress(0x100113BD + 1), (UINT32)sConvertedBigGunsDesc.c_str());
+        }
     }
 }

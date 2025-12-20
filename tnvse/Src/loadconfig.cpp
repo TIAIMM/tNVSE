@@ -2,20 +2,25 @@
 
 UINT32 g_uiEncoding;
 UINT32 g_usingWinEncoding;
-bool bEnableUTF8;
+bool g_bEnableUTF8;
+bool g_bChangeJIPBigGunDesc;
+const char* g_sNewBigGunsDesc;
+bool g_bReorderDoorPrompt;
+const char* g_sOptionalStructuralParticle;
+bool g_bRemovePlural;
 
 void LoadConfig() {
 	// From JGNVSE
 	char filename[MAX_PATH];
 	GetModuleFileNameA(NULL, filename, MAX_PATH);
-	char g_workingDir[MAX_PATH];
-	strncpy_s(g_workingDir, filename, (strlen(filename) - 13));
+	char workingDir[MAX_PATH];
+	strncpy_s(workingDir, filename, (strlen(filename) - 13));
 	char* lastSlash = (char*)(strrchr(filename, '\\') + 1);
 	uint32_t length = filename - lastSlash;
 	strcpy_s(lastSlash, length, "Data\\nvse\\plugins\\tnvse.ini");
 
 	g_uiEncoding = static_cast<UINT32>(GetPrivateProfileInt("MAIN", "uiEncoding", 1, filename));
-	bEnableUTF8 = static_cast<bool>(GetPrivateProfileInt("MAIN", "uiUTF8", 1, filename));
+	g_bEnableUTF8 = static_cast<bool>(GetPrivateProfileInt("MAIN", "bUTF8", 1, filename));
 	//gLog.FormattedMessage("Encoding: %u", (unsigned int)g_uiEncoding);
 
 	switch (g_uiEncoding) {
@@ -30,6 +35,38 @@ void LoadConfig() {
 		break;
 	}
 
-	gLog.FormattedMessage("EnableUTF8: %d", (unsigned int)bEnableUTF8);
+	gLog.FormattedMessage("EnableUTF8: %d", (unsigned int)g_bEnableUTF8);
 	gLog.FormattedMessage("Encoding: %u", (unsigned int)g_usingWinEncoding);
+
+	g_bChangeJIPBigGunDesc = static_cast<bool>(GetPrivateProfileInt("MAIN", "bChangeJIPBigGunDesc", 1, filename));
+
+	char sTempBigGunsDesc[512] = { 0 };
+	GetPrivateProfileStringA(
+		"MAIN",
+		"sNewBigGunsDesc",
+		"The Big Guns skill determines your combat effectiveness with all oversized weapons such as the Fat Man, Missile Launcher, Flamer, Minigun, Gatling Laser, etc.",
+		sTempBigGunsDesc,
+		512,
+		filename
+	);
+	g_sNewBigGunsDesc = _strdup(sTempBigGunsDesc);
+	gLog.FormattedMessage("g_sNewBigGunsDesc: %s", g_sNewBigGunsDesc);
+
+	g_bReorderDoorPrompt = static_cast<bool>(GetPrivateProfileInt("MAIN", "bReorderDoorPrompt", 1, filename));
+	gLog.FormattedMessage("g_bReorderDoorPrompt: %d", (unsigned int)g_bReorderDoorPrompt);
+
+	char sTempStructuralParticle[512] = { 0 };
+	GetPrivateProfileStringA(
+		"MAIN",
+		"sOptionalStructuralParticle",
+		"",
+		sTempStructuralParticle,
+		512,
+		filename
+	);
+	g_sOptionalStructuralParticle = _strdup(sTempStructuralParticle);
+	gLog.FormattedMessage("g_sOptionalStructuralParticle: %s", g_sOptionalStructuralParticle);
+
+	g_bRemovePlural = static_cast<bool>(GetPrivateProfileInt("MAIN", "bRemovePlural", 1, filename));
+	gLog.FormattedMessage("g_bRemovePlural: %d", (unsigned int)g_bRemovePlural);
 }
