@@ -2863,8 +2863,8 @@ namespace fonthook {
             return;
         }
         //gLog.FormattedMessage("hook JIP Font::Font");
-        SafeWrite32(GetJIPAddress(0x10011A3E + 1), uint32_t(FontCreateForJIP));
-        SafeWrite32(GetJIPAddress(0x10011AA9 + 1), uint32_t(FontCreateForJIP));
-        SafeWrite32(GetJIPAddress(0x1003943F + 1), uint32_t(FontCreateForJIP));
+        SafeWrite32(GetJIPAddress(0x10011A3E + 1), UINT32(FontCreateForJIP));
+        SafeWrite32(GetJIPAddress(0x10011AA9 + 1), UINT32(FontCreateForJIP));
+        SafeWrite32(GetJIPAddress(0x1003943F + 1), UINT32(FontCreateForJIP));
     }
 }
