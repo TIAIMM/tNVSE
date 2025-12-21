@@ -2812,6 +2812,11 @@ namespace fonthook {
         return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", sTo, sCellName, sConvertedStructuralParticle.c_str(), sDst);
     }
 
+    void InitBigGunsDescHooks() {
+        static std::string sConvertedBigGunsDesc = UTF8ToMultiByteStr(g_sNewBigGunsDesc, g_usingWinEncoding);
+        SafeWrite32(GetJIPAddress(0x100113BD + 1), (UINT32)sConvertedBigGunsDesc.c_str());
+    }
+
     void InitDoorPromptHooks() {
         WriteRelCall(0x777006, &BSsprintfHook);
     }
@@ -2863,12 +2868,5 @@ namespace fonthook {
 		//Quest Text UTF8 convey
         WriteRelCall(0x77ACCC, &strcpy_sHook);
         WriteRelCall(0x77ACF8, &strcpy_sHook);
-    }
-
-    void InitJIPHooks() {
-        if (g_bChangeJIPBigGunDesc) {
-            static std::string sConvertedBigGunsDesc = UTF8ToMultiByteStr(g_sNewBigGunsDesc, g_usingWinEncoding);
-            SafeWrite32(GetJIPAddress(0x100113BD + 1), (UINT32)sConvertedBigGunsDesc.c_str());
-        }
     }
 }

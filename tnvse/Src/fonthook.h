@@ -280,9 +280,9 @@ namespace fonthook {
     static bool bHasLeadByteInLast;
     static unsigned char lastHanziByte;
 
+    void InitBigGunsDescHooks();
     void InitDoorPromptHooks();
     void InitPluralHooks();
 	void InitVertSpacingHook();
 	void InitFontHook();
-	void InitJIPHooks();
 }

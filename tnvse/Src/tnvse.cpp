@@ -41,6 +41,18 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse) {
 	if (!nvse->isEditor) {
 		LoadConfig();
 
+		hJIP = GetModuleHandle("jip_nvse.dll");
+		g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);
+
+		if (g_bChangeJIPBigGunDesc) {
+			if (hJIP) {
+				const PluginInfo* pInfo = g_cmdTableInterface->GetPluginInfoByName("JIP LN NVSE");
+				if (pInfo->version == 5730) {
+					fonthook::InitBigGunsDescHooks();
+				}
+			}
+		}
+
 		if (g_bReorderDoorPrompt) {
 			fonthook::InitDoorPromptHooks();
 		}
@@ -51,14 +63,6 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse) {
 
 		fonthook::InitVertSpacingHook();
 		fonthook::InitFontHook();
-
-		hJIP = GetModuleHandle("jip_nvse.dll");
-		if (hJIP) {
-			/*const PluginInfo* pInfo = g_cmdTableInterface->GetPluginInfoByName("JIP LN NVSE");
-			if (pInfo->version == 5730) {
-				fonthook::InitJIPHooks();
-			}*/
-		}
 	}
 
 	return true;
