@@ -53,11 +53,11 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse) {
 		fonthook::InitFontHook();
 
 		hJIP = GetModuleHandle("jip_nvse.dll");
-		if (!hJIP) {
-			const PluginInfo* pInfo = g_cmdTableInterface->GetPluginInfoByName("JIP LN NVSE");
-			if (pInfo->version != 5730) {
+		if (hJIP) {
+			/*const PluginInfo* pInfo = g_cmdTableInterface->GetPluginInfoByName("JIP LN NVSE");
+			if (pInfo->version == 5730) {
 				fonthook::InitJIPHooks();
-			}
+			}*/
 		}
 	}
 
