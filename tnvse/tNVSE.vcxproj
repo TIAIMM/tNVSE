@@ -143,6 +143,7 @@
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="Src\fonthook.cpp" />
     <ClCompile Include="Src\loadconfig.cpp" />
+    <ClCompile Include="Src\nvse\PluginAPI.cpp" />
     <ClCompile Include="Src\tnvse.cpp" />
   </ItemGroup>
   <ItemGroup>

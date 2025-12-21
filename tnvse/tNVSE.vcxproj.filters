@@ -9,6 +9,9 @@
     <ClCompile Include="Src\loadconfig.cpp">
       <Filter>loadconfig</Filter>
     </ClCompile>
+    <ClCompile Include="Src\nvse\PluginAPI.cpp">
+      <Filter>nvse</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Src\fonthook.h">

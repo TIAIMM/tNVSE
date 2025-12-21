@@ -2867,8 +2867,9 @@ namespace fonthook {
 
     void InitJIPHooks() {
         if (g_bChangeJIPBigGunDesc) {
-            static std::string sConvertedBigGunsDesc = UTF8ToMultiByteStr(g_sNewBigGunsDesc, g_usingWinEncoding);
-            SafeWrite32(GetJIPAddress(0x100113BD + 1), (UINT32)sConvertedBigGunsDesc.c_str());
+            //gLog.FormattedMessage("g_sNewBigGunsDesc: %p", g_sNewBigGunsDesc.c_str());
+            //static std::string sConvertedBigGunsDesc = UTF8ToMultiByteStr(g_sNewBigGunsDesc, g_usingWinEncoding);
+            //SafeWrite32(GetJIPAddress(0x100113BD + 1), (UINT32)sConvertedBigGunsDesc.c_str());
         }
     }
 }
