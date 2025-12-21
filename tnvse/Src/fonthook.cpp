@@ -298,7 +298,7 @@ namespace fonthook {
 
                         //gLog.FormattedMessage("Load %s", (const char*)apName_);
 
-                        NiBinaryStream_0 = FileFinder_GetFile((const char*)apName_, (NiFile::OpenMode)0, 0x8000000u, 2u);
+                        NiBinaryStream_0 = FileFinder_GetFile((const char*)apName_, (NiFile::OpenMode)0, 0x5000000u, 2u);
 
                         //gLog.FormattedMessage("Load %s End", (const char*)apName_);
 

@@ -62,6 +62,7 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse) {
 		}
 
 		fonthook::InitVertSpacingHook();
+
 		fonthook::InitFontHook();
 	}
 
