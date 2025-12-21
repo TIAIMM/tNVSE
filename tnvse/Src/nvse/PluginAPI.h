@@ -1,7 +1,4 @@
 #pragma once
-#include <string>
-#include <vector>
-
 #include "ITypes.h"
 
 struct CommandInfo;
@@ -157,6 +154,24 @@ struct PluginInfo {
 
 typedef bool (*_NVSEPlugin_Query)(const NVSEInterface* nvse, PluginInfo* info);
 typedef bool (*_NVSEPlugin_Load)(const NVSEInterface* nvse);
+
+struct NVSECommandTableInterface
+{
+	enum {
+		kVersion = 2
+	};
+
+	UInt32	version;
+	const CommandInfo* (*Start)(void);
+	const CommandInfo* (*End)(void);
+	const CommandInfo* (*GetByOpcode)(UInt32 opcode);
+	const CommandInfo* (*GetByName)(const char* name);
+	UInt32(*GetReturnType)(const CommandInfo* cmd);		// return type enum defined in CommandTable.h
+	UInt32(*GetRequiredNVSEVersion)(const CommandInfo* cmd);
+	const PluginInfo* (*GetParentPlugin)(const CommandInfo* cmd);	// returns a pointer to the PluginInfo of the NVSE plugin that adds the command, if any. returns NULL otherwise
+	const PluginInfo* (*GetPluginInfoByName)(const char* pluginName);	// Returns a pointer to the PluginInfo of the NVSE plugin of the specified name; returns NULL is the plugin is not loaded.
+	const PluginInfo* (*GetPluginInfoByDLLName)(const char* dllName);	// Returns a pointer to the PluginInfo of the NVSE plugin with the specified DLL name; returns NULL if the plugin is not loaded.
+};
 
 struct NVSEStringVarInterface
 {
@@ -495,83 +510,4 @@ struct NVSEEventManagerInterface
 		TESForm** scriptsToIgnore, UInt32 numScriptsToIgnore,
 		const char** pluginsToIgnore, UInt32 numPluginsToIgnore,
 		const char** pluginHandlersToIgnore, UInt32 numPluginHandlersToIgnore);
-};
-
-enum CommandReturnType : UInt8
-{
-	kRetnType_Default,
-	kRetnType_Form,
-	kRetnType_String,
-	kRetnType_Array,
-	kRetnType_ArrayIndex,
-	kRetnType_Ambiguous,
-
-	kRetnType_Max
-};
-
-const char* CommandReturnTypeToString(CommandReturnType in);
-
-class PluginManager
-{
-public:
-
-	PluginInfo* GetInfoByName(const char* name);
-	PluginInfo* GetInfoFromHandle(PluginHandle handle);
-	PluginInfo* GetInfoFromBase(UInt32 baseOpcode);
-	PluginInfo* GetInfoByDLLName(const char* DLLName);
-	const char* GetPluginNameFromHandle(PluginHandle handle);
-
-	UInt32			GetNumPlugins(void);
-	UInt32			GetBaseOpcode(UInt32 idx);
-	PluginHandle	LookupHandleFromBaseOpcode(UInt32 baseOpcode);
-
-private:
-	struct LoadedPlugin
-	{
-		HMODULE		handle;
-		PluginInfo	info;
-		UInt32		baseOpcode;
-
-		_NVSEPlugin_Query	query;
-		_NVSEPlugin_Load	load;
-
-		char path[MAX_PATH]{};			// Added version 4.5 Beta 7
-	};
-
-	struct PluginLoadState
-	{
-		LoadedPlugin plugin{};
-		std::string loadStatus;
-		bool querySuccess = false;
-		bool loadSuccess = false;
-	};
-
-	typedef std::vector <LoadedPlugin>	LoadedPluginList;
-
-	std::string			m_pluginDirectory;
-	LoadedPluginList	m_plugins;
-
-	static LoadedPlugin* s_currentLoadingPlugin;
-	static PluginHandle		   s_currentPluginHandle;
-};
-
-extern PluginManager	g_pluginManager;
-
-extern CommandInfo kCommandInfo_IsPluginInstalled;
-extern CommandInfo kCommandInfo_GetPluginVersion;
-
-typedef UInt32(__stdcall* _GetLNEventMask)(const char* eventName);
-extern _GetLNEventMask GetLNEventMask;
-typedef bool(__stdcall* _ProcessLNEventHandler)(UInt32 eventMask, Script* udfScript, bool addEvt, TESForm* formFilter, UInt32 numFilter);
-extern _ProcessLNEventHandler ProcessLNEventHandler;
-
-struct NVSECommandTableInterface
-{
-	enum {
-		kVersion = 2
-	};
-
-	UInt32	version;
-	const PluginInfo* GetPluginInfoByName(const char* pluginName) { return g_pluginManager.GetInfoByName(pluginName); }	// Returns a pointer to the PluginInfo of the NVSE plugin of the specified name; returns NULL is the plugin is not loaded.
-	const PluginInfo* GetPluginInfoByDLLName(const char* dllName) { return g_pluginManager.GetInfoByDLLName(dllName); }	// Returns a pointer to the PluginInfo of the NVSE plugin with the specified DLL name; returns NULL if the plugin is not loaded.
 };

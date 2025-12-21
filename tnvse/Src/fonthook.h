@@ -1,8 +1,8 @@
 #pragma once
 #include <icu.h>
-#include <unordered_map>
 #include "uidecode.h"
 #include "loadconfig.h"
+#include <unordered_map>
 #include "MemoryManager.hpp"
 #include "BSFile.hpp"
 #include "tnvse.h"
