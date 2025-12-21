@@ -2,51 +2,53 @@
 #include "fonthook.h"
 
 namespace fonthook {
-    static Font* __fastcall FontCreateForJIP(Font* apThis, void*, int iFontNum, char* apFilename, bool abLoad) {
-        //gLog.FormattedMessage("\nCall Font::Font");
-        //gLog.FormattedMessage("iFontNum: %u", iFontNum);
-        //gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
-
-        Font* ret = ThisStdCall<Font*>(
-            0xA12020,
-            apThis,
-            iFontNum,
-            apFilename,
-            abLoad);
-
-        if (!fontNameKey.empty()) {
-            auto it = gExtraFontLetters.find(fontNameKey);
-            if (it != gExtraFontLetters.end() && !it->second.empty()) {
-                //gLog.FormattedMessage("From gExtraFontLetters to gNumberedExtraLetters");
-                gNumberedExtraLetters[iFontNum] = std::move(it->second);
-                gExtraFontLetters.erase(it);
-                if (!gNumberedExtraLetters[iFontNum].empty()) {
-                    //gLog.FormattedMessage("gNumberedExtraLetters[%d] is filled", iFontNum);
-                    fontNameKey.clear();
-                }
-            }
-            else {
-                //gLog.FormattedMessage("gExtraFontLetters for %s is empty", fontNameKey);
-                fontNameKey.clear();
-            }
-        }
-
-        return ret;
-    }
-
     class FontEx : public Font {
     public:
-        Font* FontCreate(int iFontNum, char* apFilename, bool abLoad) {
-            //gLog.FormattedMessage("\nCall Font::Font");
-            //gLog.FormattedMessage("iFontNum: %u", iFontNum);
-            //gLog.FormattedMessage("apFilename: %s", (const char*)apFilename);
+        Font* FontInit(int iFontNum, char* apFilename, bool abLoad)
+        {
+            UINT32 v6; // [esp+28h] [ebp-14h]
+            int v7; // [esp+2Ch] [ebp-10h]
 
-            Font* ret = ThisStdCall<Font*>(
-                0xA12020,
-                this,
-                iFontNum,
-                apFilename,
-                abLoad);
+            DWORD tebAddress;
+            DWORD tlsPointer;
+            DWORD tlsSlotAddress;
+            DWORD targetAddress;
+            DWORD* pTlsIndex = (DWORD*)0x126FD98;
+
+            StdCall(0xEC782F, this->pTextureData, 4, 8, 0xA1B410, 0x45CEC0);
+            this->IconAtlasTextureName.pString = 0;
+            this->IconAtlasTextureName.sLen = 0;
+            this->IconAtlasTextureName.sMaxLen = 0;
+            ThisStdCall(0xA1BEF0, &this->ButtonIcons);
+
+            __asm {
+                mov eax, fs: [0x18]
+                mov tebAddress, eax
+            }
+            tlsPointer = *(DWORD*)(tebAddress + 0x2C);
+            tlsSlotAddress = *(DWORD*)(tlsPointer + (*pTlsIndex) * 4);
+            targetAddress = tlsSlotAddress + 692;
+
+            //gLog.FormattedMessage("Set stringRefFlag");
+
+            v7 = *(DWORD*)targetAddress;
+            *(DWORD*)targetAddress = 12;
+
+            this->pFontFile = 0;
+            this->iRefCount = 0;
+            this->pFontData = 0;
+            if (apFilename)
+            {
+                v6 = strlen(apFilename);
+                if (v6)
+                {
+                    this->pFontFile = (char*)MemoryManager_s_Instance->Allocate(v6 + 1);
+                    strcpy_s(this->pFontFile, v6 + 1, apFilename);
+                }
+                this->iFontNum = iFontNum;
+                if (abLoad)
+                    ThisStdCall(0xA15320, this);
+            }
 
             if (!fontNameKey.empty()) {
                 auto it = gExtraFontLetters.find(fontNameKey);
@@ -65,7 +67,8 @@ namespace fonthook {
                 }
             }
 
-            return ret;
+            *(DWORD*)targetAddress = v7;
+            return this;
         }
 
         void Load()
@@ -2823,7 +2826,8 @@ namespace fonthook {
     }
 
     void InitFontHook() {
-        //Font::Create hook in InitJIPHooks
+        //Font::Create
+        WriteRelJumpEx(0xA12020, &FontEx::FontInit);
 
         // Font::Load
         WriteRelJumpEx(0xA15320, &FontEx::Load);
@@ -2862,32 +2866,6 @@ namespace fonthook {
     }
 
     void InitJIPHooks() {
-        hJIP = GetModuleHandle("jip_nvse.dll");
-        if (!hJIP) {
-            //gLog.FormattedMessage("JIP not find");
-            //1
-            WriteRelCallEx(0xA1695A, &FontEx::FontCreate);
-            //2
-            WriteRelCallEx(0xA169C7, &FontEx::FontCreate);
-            //3
-            WriteRelCallEx(0xA16A35, &FontEx::FontCreate);
-            //4
-            WriteRelCallEx(0xA16AA3, &FontEx::FontCreate);
-            //5
-            WriteRelCallEx(0xA16B11, &FontEx::FontCreate);
-            //6
-            WriteRelCallEx(0xA16B7F, &FontEx::FontCreate);
-            //7
-            WriteRelCallEx(0xA16BED, &FontEx::FontCreate);
-            //8
-            WriteRelCallEx(0xA16C5B, &FontEx::FontCreate);
-            return;
-        }
-        //gLog.FormattedMessage("hook JIP Font::Font");
-        SafeWrite32(GetJIPAddress(0x10011A3E + 1), UINT32(FontCreateForJIP));
-        SafeWrite32(GetJIPAddress(0x10011AA9 + 1), UINT32(FontCreateForJIP));
-        SafeWrite32(GetJIPAddress(0x1003943F + 1), UINT32(FontCreateForJIP));
-
         if (g_bChangeJIPBigGunDesc) {
             static std::string sConvertedBigGunsDesc = UTF8ToMultiByteStr(g_sNewBigGunsDesc, g_usingWinEncoding);
             SafeWrite32(GetJIPAddress(0x100113BD + 1), (UINT32)sConvertedBigGunsDesc.c_str());

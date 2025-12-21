@@ -143,7 +143,7 @@
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="Src\fonthook.cpp" />
     <ClCompile Include="Src\loadconfig.cpp" />
-    <ClCompile Include="Src\main.cpp" />
+    <ClCompile Include="Src\tnvse.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="exports.def" />
@@ -152,8 +152,8 @@
   <ItemGroup>
     <ClInclude Include="Src\fonthook.h" />
     <ClInclude Include="Src\loadconfig.h" />
-    <ClInclude Include="Src\PluginAPI.h" />
-    <ClInclude Include="Src\tList.h" />
+    <ClInclude Include="Src\nvse\PluginAPI.h" />
+    <ClInclude Include="Src\tnvse.h" />
     <ClInclude Include="Src\uidecode.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

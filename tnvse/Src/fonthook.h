@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include "MemoryManager.hpp"
 #include "BSFile.hpp"
+#include "tnvse.h"
 
 namespace fonthook {
     static float __stdcall VertSpacingAdjust(UInt32 aiFont) {
@@ -259,12 +260,6 @@ namespace fonthook {
     static NiPoint3& StringDefaultDimensions = *reinterpret_cast<NiPoint3*>(0x11F426C);
 
     static MemoryManager* MemoryManager_s_Instance = reinterpret_cast<MemoryManager*>(0x11F6238);
-
-    static HMODULE hJIP = 0;
-
-    static size_t __fastcall GetJIPAddress(size_t aiAddress) {
-        return reinterpret_cast<size_t>(hJIP) + aiAddress - 0x10000000;
-    }
 
     static std::string fontNameKey;
 

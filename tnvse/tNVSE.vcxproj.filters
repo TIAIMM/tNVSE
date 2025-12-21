@@ -2,7 +2,7 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
-    <ClCompile Include="Src\main.cpp" />
+    <ClCompile Include="Src\tnvse.cpp" />
     <ClCompile Include="Src\fonthook.cpp">
       <Filter>fonthook</Filter>
     </ClCompile>
@@ -11,19 +11,19 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Src\PluginAPI.h" />
     <ClInclude Include="Src\fonthook.h">
       <Filter>fonthook</Filter>
     </ClInclude>
     <ClInclude Include="Src\uidecode.h">
       <Filter>fonthook</Filter>
     </ClInclude>
-    <ClInclude Include="Src\tList.h">
-      <Filter>fonthook</Filter>
-    </ClInclude>
     <ClInclude Include="Src\loadconfig.h">
       <Filter>loadconfig</Filter>
     </ClInclude>
+    <ClInclude Include="Src\nvse\PluginAPI.h">
+      <Filter>nvse</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\tnvse.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="exports.def" />
@@ -35,6 +35,9 @@
     </Filter>
     <Filter Include="loadconfig">
       <UniqueIdentifier>{f7219eff-dec6-45f7-99d6-41cd4dcdab2f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="nvse">
+      <UniqueIdentifier>{ac31691c-9770-41f1-8ae9-62bd2ed526c8}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
