@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 
 //enum class UIEncoding : UInt32 {
 //    ENG = 0,
@@ -20,9 +21,9 @@ extern UINT32 g_uiEncoding;
 extern UINT32 g_usingWinEncoding;
 extern bool g_bEnableUTF8;
 extern bool g_bChangeJIPBigGunDesc;
-extern const char* g_sNewBigGunsDesc;
+extern std::string g_sNewBigGunsDesc;
 extern UINT32 g_uiReorderDoorPrompt;
-extern const char* g_sOptionalStructuralParticle;
+extern std::string g_sOptionalStructuralParticle;
 extern bool g_bRemovePlural;
 
 void LoadConfig();

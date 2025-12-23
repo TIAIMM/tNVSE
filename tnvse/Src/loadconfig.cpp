@@ -4,9 +4,9 @@ UINT32 g_uiEncoding;
 UINT32 g_usingWinEncoding;
 bool g_bEnableUTF8;
 bool g_bChangeJIPBigGunDesc;
-const char* g_sNewBigGunsDesc;
+std::string g_sNewBigGunsDesc;
 UINT32 g_uiReorderDoorPrompt;
-const char* g_sOptionalStructuralParticle;
+std::string g_sOptionalStructuralParticle;
 bool g_bRemovePlural;
 
 void LoadConfig() {
@@ -49,7 +49,7 @@ void LoadConfig() {
 		512,
 		filename
 	);
-	g_sNewBigGunsDesc = _strdup(sTempBigGunsDesc);
+	g_sNewBigGunsDesc = sTempBigGunsDesc;
 	gLog.FormattedMessage("g_sNewBigGunsDesc: %s", g_sNewBigGunsDesc);
 
 	g_uiReorderDoorPrompt = static_cast<UINT32>(GetPrivateProfileInt("MAIN", "uiReorderDoorPrompt", 1, filename));
@@ -64,7 +64,7 @@ void LoadConfig() {
 		512,
 		filename
 	);
-	g_sOptionalStructuralParticle = _strdup(sTempStructuralParticle);
+	g_sOptionalStructuralParticle = sTempStructuralParticle;
 	gLog.FormattedMessage("g_sOptionalStructuralParticle: %s", g_sOptionalStructuralParticle);
 
 	g_bRemovePlural = static_cast<bool>(GetPrivateProfileInt("MAIN", "bRemovePlural", 1, filename));
