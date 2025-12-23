@@ -37,6 +37,7 @@ namespace fonthook {
             this->pFontFile = 0;
             this->iRefCount = 0;
             this->pFontData = 0;
+
             if (apFilename)
             {
                 v6 = strlen(apFilename);
@@ -2848,7 +2849,7 @@ namespace fonthook {
     }
 
     void InitFontHook() {
-        //Font::Create
+        //Font::Font
         WriteRelJumpEx(0xA12020, &FontEx::FontInit);
 
         // Font::Load
@@ -2867,17 +2868,17 @@ namespace fonthook {
         // FontManager::CalculateStringDimensions
         WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
 
-        //Tile::SetString
+        //Tile::SetString ?
         //Quest Text
         WriteRelCall(0x77AF4B, &TileSetStringHookForQueueText);
         //Location Text
         WriteRelCall(0x772B5E, &TileSetStringHookForQueueText);
 
-        //BSStringT<char>::c_str
+        //BSStringT<char>::c_str ?
         //Terminal UTF8 convey
         WriteRelCall(0x7591AC, &BSString_c_strHook);
 
-        //BSStringT<char>::GetCStringOrEmpty
+        //BSStringT<char>::GetCStringOrEmpty ?
 		//Location Text UTF8 convey
         WriteRelCall(0x772B4B, &BSString_GetCStringOrEmptyHook);
 

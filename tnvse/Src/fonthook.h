@@ -70,6 +70,7 @@ namespace fonthook {
         return StdCall<Float32>(0xA1B3A0, fontID);
     }
 
+	// This part can be templated
     static bool IsGBKLeadByte(unsigned char c) {
         return (c >= 0x81 && c <= 0xFE);
     }
