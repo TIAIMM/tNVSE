@@ -2799,7 +2799,7 @@ namespace fonthook {
         return strcpy_s(dest, dest_size, src);
     }
 
-    static int BSsprintfHook(
+    static int BSsprintfHookCHS(
         char* buffer,
         size_t sizeOfBuffer,
         const char* sformat,
@@ -2812,13 +2812,30 @@ namespace fonthook {
         return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", sTo, sCellName, sConvertedStructuralParticle.c_str(), sDst);
     }
 
+    static int BSsprintfHookKOR(
+        char* buffer,
+        size_t sizeOfBuffer,
+        const char* sformat,
+        const char* sDst,
+        const char* sTo,
+        const char* sCellName) {
+
+        static std::string sConvertedStructuralParticle = UTF8ToMultiByteStr(g_sOptionalStructuralParticle, g_usingWinEncoding);
+
+        return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", sCellName, sTo, sConvertedStructuralParticle.c_str(), sDst);
+    }
+
     void InitBigGunsDescHooks() {
         static std::string sConvertedBigGunsDesc = UTF8ToMultiByteStr(g_sNewBigGunsDesc, g_usingWinEncoding);
         SafeWrite32(GetJIPAddress(0x100113BD + 1), (UINT32)sConvertedBigGunsDesc.c_str());
     }
 
-    void InitDoorPromptHooks() {
-        WriteRelCall(0x777006, &BSsprintfHook);
+    void InitDoorPromptHooksCHS() {
+        WriteRelCall(0x777006, &BSsprintfHookCHS);
+    }
+
+    void InitDoorPromptHooksKOR() {
+        WriteRelCall(0x777006, &BSsprintfHookKOR);
     }
 
     void InitPluralHooks() {

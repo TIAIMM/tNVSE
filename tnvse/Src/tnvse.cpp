@@ -53,8 +53,11 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse) {
 			}
 		}
 
-		if (g_bReorderDoorPrompt) {
-			fonthook::InitDoorPromptHooks();
+		if (g_uiReorderDoorPrompt == 1) {
+			fonthook::InitDoorPromptHooksCHS();
+		}
+		else if (g_uiReorderDoorPrompt == 2) {
+			fonthook::InitDoorPromptHooksKOR();
 		}
 
 		if (g_bRemovePlural) {

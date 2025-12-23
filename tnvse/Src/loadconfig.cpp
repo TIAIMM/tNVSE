@@ -5,7 +5,7 @@ UINT32 g_usingWinEncoding;
 bool g_bEnableUTF8;
 bool g_bChangeJIPBigGunDesc;
 const char* g_sNewBigGunsDesc;
-bool g_bReorderDoorPrompt;
+UINT32 g_uiReorderDoorPrompt;
 const char* g_sOptionalStructuralParticle;
 bool g_bRemovePlural;
 
@@ -52,8 +52,8 @@ void LoadConfig() {
 	g_sNewBigGunsDesc = _strdup(sTempBigGunsDesc);
 	gLog.FormattedMessage("g_sNewBigGunsDesc: %s", g_sNewBigGunsDesc);
 
-	g_bReorderDoorPrompt = static_cast<bool>(GetPrivateProfileInt("MAIN", "bReorderDoorPrompt", 1, filename));
-	gLog.FormattedMessage("g_bReorderDoorPrompt: %d", (unsigned int)g_bReorderDoorPrompt);
+	g_uiReorderDoorPrompt = static_cast<UINT32>(GetPrivateProfileInt("MAIN", "uiReorderDoorPrompt", 1, filename));
+	gLog.FormattedMessage("g_uiReorderDoorPrompt: %d", (unsigned int)g_uiReorderDoorPrompt);
 
 	char sTempStructuralParticle[512] = { 0 };
 	GetPrivateProfileStringA(

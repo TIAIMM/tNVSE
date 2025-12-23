@@ -21,7 +21,7 @@ extern UINT32 g_usingWinEncoding;
 extern bool g_bEnableUTF8;
 extern bool g_bChangeJIPBigGunDesc;
 extern const char* g_sNewBigGunsDesc;
-extern bool g_bReorderDoorPrompt;
+extern UINT32 g_uiReorderDoorPrompt;
 extern const char* g_sOptionalStructuralParticle;
 extern bool g_bRemovePlural;
 

@@ -281,7 +281,8 @@ namespace fonthook {
     static unsigned char lastHanziByte;
 
     void InitBigGunsDescHooks();
-    void InitDoorPromptHooks();
+    void InitDoorPromptHooksCHS();
+    void InitDoorPromptHooksKOR();
     void InitPluralHooks();
 	void InitVertSpacingHook();
 	void InitFontHook();
