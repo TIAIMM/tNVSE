@@ -966,9 +966,29 @@ namespace fonthook {
                                 unsigned char clsb = (unsigned char)dynamicTextBuffer[processedTextLen - 1];
 
                                 if (extraGlyphs) {
-                                    if (IsGBKLeadByte(cmsb) && IsGBKTrailByte(clsb)) {
-                                        tailStart = processedTextLen - 2;
-                                        tailBytes = 3;
+                                    if (g_usingWinEncoding == 936) {
+                                        if (IsGBKLeadByte(cmsb) && IsGBKTrailByte(clsb)) {
+                                            tailStart = processedTextLen - 2;
+                                            tailBytes = processedTextLen - tailStart;
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 950) {
+                                        if (IsBig5LeadByte(cmsb) && IsBig5TrailByte(clsb)) {
+                                            tailStart = processedTextLen - 2;
+                                            tailBytes = processedTextLen - tailStart;
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 932) {
+                                        if (IsSJISLeadByte(cmsb) && IsSJISTrailByte(clsb)) {
+                                            tailStart = processedTextLen - 2;
+                                            tailBytes = processedTextLen - tailStart;
+                                        }
+                                    }
+                                    else if (g_usingWinEncoding == 949) {
+                                        if (IsKoreanLeadByte(cmsb) && IsKoreanTrailByte(clsb)) {
+                                            tailStart = processedTextLen - 2;
+                                            tailBytes = processedTextLen - tailStart;
+                                        }
                                     }
                                 }
                             }
@@ -1708,7 +1728,7 @@ namespace fonthook {
                             currentLineWidth -= hyphenInsertWidth;*/
 
                             UInt32 tailStart = processedTextLen - 1;
-                            UInt32 tailBytes = 2;
+                            UInt32 tailBytes = processedTextLen - tailStart;
 
                             if (processedTextLen >= 2) {
                                 unsigned char cmsb = (unsigned char)dynamicTextBuffer[processedTextLen - 2];
@@ -1718,25 +1738,25 @@ namespace fonthook {
                                     if (g_usingWinEncoding == 936) {
                                         if (IsGBKLeadByte(cmsb) && IsGBKTrailByte(clsb)) {
                                             tailStart = processedTextLen - 2;
-                                            tailBytes = 3;
+                                            tailBytes = processedTextLen - tailStart;
                                         }
                                     }
                                     else if (g_usingWinEncoding == 950) {
                                         if (IsBig5LeadByte(cmsb) && IsBig5TrailByte(clsb)) {
                                             tailStart = processedTextLen - 2;
-                                            tailBytes = 3;
+                                            tailBytes = processedTextLen - tailStart;
                                         }
                                     }
                                     else if (g_usingWinEncoding == 932) {
                                         if (IsSJISLeadByte(cmsb) && IsSJISTrailByte(clsb)) {
                                             tailStart = processedTextLen - 2;
-                                            tailBytes = 3;
+                                            tailBytes = processedTextLen - tailStart;
                                         }
                                     }
                                     else if (g_usingWinEncoding == 949) {
                                         if (IsKoreanLeadByte(cmsb) && IsKoreanTrailByte(clsb)) {
                                             tailStart = processedTextLen - 2;
-                                            tailBytes = 3;
+                                            tailBytes = processedTextLen - tailStart;
                                         }
                                     }
                                 }
