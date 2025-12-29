@@ -2612,6 +2612,9 @@ namespace fonthook {
                             currentCharTotalWidth = 75.0 - previousLineWidthAtTabStop;
                             break;
                         case '\n':
+                            lastValidWrapPosition = currentLineWidth;
+                            hasHyphenationPoint = 0;
+                            break;
                         case ' ':
                             /*lastValidWrapPosition = currentLineWidth;
                             hasHyphenationPoint = 0;*/
