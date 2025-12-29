@@ -962,30 +962,29 @@ namespace fonthook {
                             UInt32 tailBytes = 2;
 
                             if (processedTextLen >= 2) {
-                                unsigned char cmsb = (unsigned char)dynamicTextBuffer[processedTextLen - 2];
-                                unsigned char clsb = (unsigned char)dynamicTextBuffer[processedTextLen - 1];
+                                unsigned char cLastChar = (unsigned char)dynamicTextBuffer[processedTextLen - 1];
 
                                 if (extraGlyphs) {
                                     if (g_usingWinEncoding == 936) {
-                                        if (IsGBKLeadByte(cmsb) && IsGBKTrailByte(clsb)) {
+                                        if (IsGBKLeadByte(cLastChar)) {
                                             tailStart = processedTextLen - 2;
                                             tailBytes = processedTextLen - tailStart;
                                         }
                                     }
                                     else if (g_usingWinEncoding == 950) {
-                                        if (IsBig5LeadByte(cmsb) && IsBig5TrailByte(clsb)) {
+                                        if (IsBig5LeadByte(cLastChar)) {
                                             tailStart = processedTextLen - 2;
                                             tailBytes = processedTextLen - tailStart;
                                         }
                                     }
                                     else if (g_usingWinEncoding == 932) {
-                                        if (IsSJISLeadByte(cmsb) && IsSJISTrailByte(clsb)) {
+                                        if (IsSJISLeadByte(cLastChar)) {
                                             tailStart = processedTextLen - 2;
                                             tailBytes = processedTextLen - tailStart;
                                         }
                                     }
                                     else if (g_usingWinEncoding == 949) {
-                                        if (IsKoreanLeadByte(cmsb) && IsKoreanTrailByte(clsb)) {
+                                        if (IsKoreanLeadByte(cLastChar)) {
                                             tailStart = processedTextLen - 2;
                                             tailBytes = processedTextLen - tailStart;
                                         }
@@ -1709,6 +1708,8 @@ namespace fonthook {
                         }
                         else
                         {
+                            gLog.FormattedMessage("Force line breaking");
+
                             if (processedTextLen + 4 >= textBufferSize)
                             {
                                 dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8));
@@ -1731,30 +1732,29 @@ namespace fonthook {
                             UInt32 tailBytes = processedTextLen - tailStart;
 
                             if (processedTextLen >= 2) {
-                                unsigned char cmsb = (unsigned char)dynamicTextBuffer[processedTextLen - 2];
-                                unsigned char clsb = (unsigned char)dynamicTextBuffer[processedTextLen - 1];
+                                unsigned char cLastChar = (unsigned char)dynamicTextBuffer[processedTextLen - 1];
 
                                 if (extraGlyphs) {
                                     if (g_usingWinEncoding == 936) {
-                                        if (IsGBKLeadByte(cmsb) && IsGBKTrailByte(clsb)) {
+                                        if (IsGBKLeadByte(cLastChar)) {
                                             tailStart = processedTextLen - 2;
                                             tailBytes = processedTextLen - tailStart;
                                         }
                                     }
                                     else if (g_usingWinEncoding == 950) {
-                                        if (IsBig5LeadByte(cmsb) && IsBig5TrailByte(clsb)) {
+                                        if (IsBig5LeadByte(cLastChar)) {
                                             tailStart = processedTextLen - 2;
                                             tailBytes = processedTextLen - tailStart;
                                         }
                                     }
                                     else if (g_usingWinEncoding == 932) {
-                                        if (IsSJISLeadByte(cmsb) && IsSJISTrailByte(clsb)) {
+                                        if (IsSJISLeadByte(cLastChar)) {
                                             tailStart = processedTextLen - 2;
                                             tailBytes = processedTextLen - tailStart;
                                         }
                                     }
                                     else if (g_usingWinEncoding == 949) {
-                                        if (IsKoreanLeadByte(cmsb) && IsKoreanTrailByte(clsb)) {
+                                        if (IsKoreanLeadByte(cLastChar)) {
                                             tailStart = processedTextLen - 2;
                                             tailBytes = processedTextLen - tailStart;
                                         }
