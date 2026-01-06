@@ -1708,7 +1708,7 @@ namespace fonthook {
                         }
                         else
                         {
-                            gLog.FormattedMessage("Force line breaking");
+                            //gLog.FormattedMessage("Force line breaking");
 
                             if (processedTextLen + 4 >= textBufferSize)
                             {
