@@ -959,7 +959,7 @@ namespace fonthook {
                             currentLineWidth -= hyphenInsertWidth;*/
 
                             UInt32 tailStart = processedTextLen - 1;
-                            UInt32 tailBytes = 2;
+                            UInt32 tailBytes = processedTextLen - tailStart;
 
                             if (processedTextLen >= 2) {
                                 unsigned char cLastChar = (unsigned char)dynamicTextBuffer[processedTextLen - 1];
