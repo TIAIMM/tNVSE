@@ -613,7 +613,7 @@ namespace fonthook {
                         // 0xEC6130
                         postEscapeTextLen = strlen(parsedTextBuffer);
                         escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
-                        if (parsedTextBuffer[postEscapeTextLen - 1] == '\\')
+                        if (postEscapeTextLen > 0 && parsedTextBuffer[postEscapeTextLen - 1] == '\\')
                         {
                             unkarray[0] = 0.0;
                             unkarray[1] = 0.0;
@@ -635,9 +635,14 @@ namespace fonthook {
                             if (this->iFontNum == 7)
                             {
                                 // 0xEC65A6
-                                strncpy_s(textureNameBuffer, sizeof(textureNameBuffer), substrBuffer, _TRUNCATE);
+                                strcpy_s(textureNameBuffer, 0x104u, substrBuffer);
                                 // 0x406D00
-                                vsnprintf(substrBuffer, sizeof(substrBuffer), "glow_%s", textureNameBuffer);
+                                sprintf_s(
+                                    substrBuffer,
+                                    0x104u,
+                                    "glow_%s",
+                                    textureNameBuffer
+                                );
                             }
                             this->AddTextIcon(substrBuffer);
                             parsedTextBuffer[charScanIndex] = 1;
@@ -1381,7 +1386,7 @@ namespace fonthook {
                         // 0xEC6130
                         postEscapeTextLen = strlen(parsedTextBuffer);
                         escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
-                        if (parsedTextBuffer[postEscapeTextLen - 1] == '\\')
+                        if (postEscapeTextLen > 0 && parsedTextBuffer[postEscapeTextLen - 1] == '\\')
                         {
                             unkarray[0] = 0.0;
                             unkarray[1] = 0.0;
@@ -1403,9 +1408,14 @@ namespace fonthook {
                             if (this->iFontNum == 7)
                             {
                                 // 0xEC65A6
-                                strncpy_s(textureNameBuffer, sizeof(textureNameBuffer), substrBuffer, _TRUNCATE);
+                                strcpy_s(textureNameBuffer, 0x104u, substrBuffer);
                                 // 0x406D00
-                                vsnprintf(substrBuffer, sizeof(substrBuffer), "glow_%s", textureNameBuffer);
+                                sprintf_s(
+                                    substrBuffer,
+                                    0x104u,
+                                    "glow_%s",
+                                    textureNameBuffer
+                                );
                             }
                             this->AddTextIcon(substrBuffer);
                             parsedTextBuffer[charScanIndex] = 1;
