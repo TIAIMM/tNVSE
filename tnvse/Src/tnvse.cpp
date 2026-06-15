@@ -24,12 +24,15 @@ NVSECommandTableInterface* g_cmdTableInterface = NULL;
 // Config
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-void MessageHandler(NVSEMessagingInterface::Message* const g_msg) {
-	if (g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop) {
+void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
+{
+	if (g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
+	{
 	}
 }
 
-bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info) {
+bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info)
+{
 	info->infoVersion = PluginInfo::kInfoVersion;
 	info->name = "tNVSE";
 	info->version = 1;
@@ -37,30 +40,38 @@ bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info) {
 	return true;
 }
 
-bool NVSEPlugin_Load(const NVSEInterface* nvse) {
-	if (!nvse->isEditor) {
+bool NVSEPlugin_Load(const NVSEInterface* nvse)
+{
+	if (!nvse->isEditor)
+	{
 		LoadConfig();
 
 		hJIP = GetModuleHandle("jip_nvse.dll");
 		g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);
 
-		if (g_bChangeJIPBigGunDesc) {
-			if (hJIP) {
+		if (g_bChangeJIPBigGunDesc)
+		{
+			if (hJIP)
+			{
 				const PluginInfo* pInfo = g_cmdTableInterface->GetPluginInfoByName("JIP LN NVSE");
-				if (pInfo->version == 5730) {
+				if (pInfo->version == 5730)
+				{
 					fonthook::InitBigGunsDescHooks();
 				}
 			}
 		}
 
-		if (g_uiReorderDoorPrompt == 1) {
+		if (g_uiReorderDoorPrompt == 1)
+		{
 			fonthook::InitDoorPromptHooksCHS();
 		}
-		else if (g_uiReorderDoorPrompt == 2) {
+		else if (g_uiReorderDoorPrompt == 2)
+		{
 			fonthook::InitDoorPromptHooksKOR();
 		}
 
-		if (g_bRemovePlural) {
+		if (g_bRemovePlural)
+		{
 			fonthook::InitPluralHooks();
 		}
 

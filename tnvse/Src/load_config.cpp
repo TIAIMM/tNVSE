@@ -9,7 +9,8 @@ UINT32 g_uiReorderDoorPrompt;
 std::string g_sOptionalStructuralParticle;
 bool g_bRemovePlural;
 
-void LoadConfig() {
+void LoadConfig()
+{
 	char filename[MAX_PATH];
 	GetModuleFileNameA(NULL, filename, MAX_PATH);
 	char* lastSlash = strrchr(filename, '\\') + 1;
@@ -19,7 +20,8 @@ void LoadConfig() {
 	g_bEnableUTF8 = static_cast<bool>(GetPrivateProfileInt("MAIN", "bUTF8", 1, filename));
 	//gLog.FormattedMessage("Encoding: %u", (unsigned int)g_uiEncoding);
 
-	switch (g_uiEncoding) {
+	switch (g_uiEncoding)
+	{
 	case 0: g_usingWinEncoding = 0; break;
 	case 1: g_usingWinEncoding = 936; break; //GBK
 	case 2: g_usingWinEncoding = 950; break; //Big5

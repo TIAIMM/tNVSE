@@ -1,62 +1,69 @@
 #include "MemoryManager.hpp"
 #include "native_calls.h"
 
-namespace fonthook {
-
-void __cdecl ConvertToAsciiQuotes(UInt8* currentChar) {
-    CdeclCall(0xA122B0, currentChar);
-}
-
-bool __cdecl ReplaceVariableInString(const char* varName, char* outBuffer, UInt32 bufferSize, bool isPositiveEscape) {
-    return CdeclCall<bool>(0x7070C0, varName, outBuffer, bufferSize, isPositiveEscape);
-}
-
-bool __cdecl ParseAndFormatVariableInString(const char* p_varNameBuffer, void* p_parsedTextBuffer) {
-    return CdeclCall<bool>(0x7073D0, p_varNameBuffer, p_parsedTextBuffer);
-}
-
-SInt32 __cdecl AlignLineWidthToTab(double currentWidth, double tabInterval) {
-    return CdeclCall<SInt32>(0xEC9130, currentWidth, tabInterval);
-}
-
-void* __cdecl AppendToListTail(void* listNode, void* itemData) {
-    return ThisStdCall<void*>(0xAF25B0, listNode, itemData);
-}
-
-UINT32 SafeDoubleToUInt32(double value)
+namespace fonthook
 {
-    if (value >= 0.0)
-        return static_cast<UINT32>(value);
-    if (value <= -4294967296.0)
-        return 0;
-    if (value < -4294967295.0)
-        return 1;
-    return static_cast<UINT32>(-value);
-}
+	void __cdecl ConvertToAsciiQuotes(UInt8* currentChar)
+	{
+		CdeclCall(0xA122B0, currentChar);
+	}
 
-UINT32 ConditionalFloatToUInt(double value)
-{
-    if (*(volatile UINT32*)0x01270A6C)
-        return static_cast<UINT32>(value);
-    else
-        return SafeDoubleToUInt32(value);
-}
+	bool __cdecl ReplaceVariableInString(const char* varName, char* outBuffer, UInt32 bufferSize, bool isPositiveEscape)
+	{
+		return CdeclCall<bool>(0x7070C0, varName, outBuffer, bufferSize, isPositiveEscape);
+	}
 
-Float32 __stdcall FontManagerGetLinePadding(UInt32 fontID) {
-    return StdCall<Float32>(0xA1B3A0, fontID);
-}
+	bool __cdecl ParseAndFormatVariableInString(const char* p_varNameBuffer, void* p_parsedTextBuffer)
+	{
+		return CdeclCall<bool>(0x7073D0, p_varNameBuffer, p_parsedTextBuffer);
+	}
 
-BSFile* FileFinder_GetFile(
-    const char* apName,
-    NiFile::OpenMode aeMode,
-    unsigned int aiSize,
-    unsigned int aiArchiveType
-) {
-    return CdeclCall<BSFile*>(0xAFDF20, apName, aeMode, aiSize, aiArchiveType);
-}
+	SInt32 __cdecl AlignLineWidthToTab(double currentWidth, double tabInterval)
+	{
+		return CdeclCall<SInt32>(0xEC9130, currentWidth, tabInterval);
+	}
 
-// ---- Global singletons ----
-MemoryManager* MemoryManager_s_Instance = reinterpret_cast<MemoryManager*>(0x11F6238);
-NiPoint3& StringDefaultDimensions = *reinterpret_cast<NiPoint3*>(0x11F426C);
+	void* __cdecl AppendToListTail(void* listNode, void* itemData)
+	{
+		return ThisStdCall<void*>(0xAF25B0, listNode, itemData);
+	}
+
+	UINT32 SafeDoubleToUInt32(double value)
+	{
+		if (value >= 0.0)
+			return static_cast<UINT32>(value);
+		if (value <= -4294967296.0)
+			return 0;
+		if (value < -4294967295.0)
+			return 1;
+		return static_cast<UINT32>(-value);
+	}
+
+	UINT32 ConditionalFloatToUInt(double value)
+	{
+		if (*(volatile UINT32*)0x01270A6C)
+			return static_cast<UINT32>(value);
+		else
+			return SafeDoubleToUInt32(value);
+	}
+
+	Float32 __stdcall FontManagerGetLinePadding(UInt32 fontID)
+	{
+		return StdCall<Float32>(0xA1B3A0, fontID);
+	}
+
+	BSFile* FileFinder_GetFile(
+		const char* apName,
+		NiFile::OpenMode aeMode,
+		unsigned int aiSize,
+		unsigned int aiArchiveType
+	)
+	{
+		return CdeclCall<BSFile*>(0xAFDF20, apName, aeMode, aiSize, aiArchiveType);
+	}
+
+	// ---- Global singletons ----
+	MemoryManager* MemoryManager_s_Instance = reinterpret_cast<MemoryManager*>(0x11F6238);
+	NiPoint3& StringDefaultDimensions = *reinterpret_cast<NiPoint3*>(0x11F426C);
 
 } // namespace fonthook

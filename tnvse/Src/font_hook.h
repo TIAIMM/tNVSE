@@ -15,22 +15,23 @@
 #include "native_calls.h"
 #include "text_hooks.h"
 
-namespace fonthook {
+namespace fonthook
+{
+	// ---- Vertical spacing adjust (currently unused) ----
+	static float __stdcall VertSpacingAdjust(UInt32 aiFont)
+	{
+		return 0;
+	}
 
-// ---- Vertical spacing adjust (currently unused) ----
-static float __stdcall VertSpacingAdjust(UInt32 aiFont) {
-    return 0;
-}
+	// ---- Global state: Font letter caches ----
+	extern std::string fontNameKey;
+	extern std::unordered_map<std::string, std::unordered_map<UInt32, FontLetter>> gExtraFontLetters;
+	extern std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
 
-// ---- Global state: Font letter caches ----
-extern std::string fontNameKey;
-extern std::unordered_map<std::string, std::unordered_map<UInt32, FontLetter>> gExtraFontLetters;
-extern std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
-
-// ---- Global state: Quest text double-byte character state machine ----
-extern unsigned char pFirstChar;
-extern bool bIsQuestTextMSBDBCharacter;
-extern bool bIsQuestTextLSBDBCharacter;
-extern char szDBChar[3];
+	// ---- Global state: Quest text double-byte character state machine ----
+	extern unsigned char pFirstChar;
+	extern bool bIsQuestTextMSBDBCharacter;
+	extern bool bIsQuestTextLSBDBCharacter;
+	extern char szDBChar[3];
 
 } // namespace fonthook
