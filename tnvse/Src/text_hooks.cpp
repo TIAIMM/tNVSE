@@ -42,54 +42,27 @@ namespace fonthook
 	// ==================== UTF-8 Conversion Hooks ====================
 	char* __fastcall BSString_c_strHook(BSStringT<char>* pthis, void*)
 	{
-		auto extraGlyphEntry = gNumberedExtraLetters.find(5);
-		auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
-
-		if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs)
-		{
-			if (IsValidUTF8With3ByteMin(pthis->pString))
-			{
-				std::string sCurrentStr = pthis->pString;
-				std::string sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
-				pthis->Set(sConvertedStr.c_str());
-			}
-		}
+		const char* pStr = pthis->pString;
+		std::string sConvertedStr;
+		if (ConvertToMultiByte(pStr, sConvertedStr, gNumberedExtraLetters.find(5) != gNumberedExtraLetters.end()))
+			pthis->Set(pStr);
 		return pthis->pString;
 	}
 
 	char* __fastcall BSString_GetCStringOrEmptyHook(BSStringT<char>* pthis, void*)
 	{
-		auto extraGlyphEntry = gNumberedExtraLetters.find(8);
-		auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
-
-		if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs)
-		{
-			if (IsValidUTF8With3ByteMin(pthis->pString))
-			{
-				std::string sCurrentStr = pthis->pString;
-				std::string sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
-				pthis->Set(sConvertedStr.c_str());
-			}
-		}
+		const char* pStr = pthis->pString;
+		std::string sConvertedStr;
+		if (ConvertToMultiByte(pStr, sConvertedStr, gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end()))
+			pthis->Set(pStr);
 
 		return ThisStdCall<char*>(0x408DA0, pthis);
 	}
 
 	int __cdecl strcpy_sHook(char* dest, int dest_size, const char* src)
 	{
-		auto extraGlyphEntry = gNumberedExtraLetters.find(8);
-		auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
-
 		std::string sConvertedStr;
-		if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs)
-		{
-			if (IsValidUTF8With3ByteMin(src))
-			{
-				sConvertedStr = UTF8ToMultiByteStr(src, g_usingWinEncoding);
-				src = sConvertedStr.c_str();
-			}
-		}
-
+		ConvertToMultiByte(src, sConvertedStr, gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end());
 		return strcpy_s(dest, dest_size, src);
 	}
 

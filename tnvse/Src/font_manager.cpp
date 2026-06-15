@@ -9,14 +9,7 @@ namespace fonthook
 		auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
 		std::string sConvertedStr;
-		if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs)
-		{
-			if (IsValidUTF8With3ByteMin(srcString))
-			{
-				sConvertedStr = UTF8ToMultiByteStr(srcString, g_usingWinEncoding);
-				srcString = sConvertedStr.c_str();
-			}
-		}
+		ConvertToMultiByte(srcString, sConvertedStr, extraGlyphs != nullptr);
 
 		if (fontID < 1 || !srcString)
 		{

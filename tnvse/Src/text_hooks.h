@@ -1,20 +1,12 @@
 #pragma once
 #include "encoding.h"
+#include "globals.h"
 #include "load_config.h"
 #include "ui_decode.h"
 #include <unordered_map>
 
 namespace fonthook
 {
-	// Forward-declared globals (defined in font_hook.cpp)
-	extern std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
-
-	// Quest text state globals (defined in font_hook.cpp)
-	extern unsigned char pFirstChar;
-	extern bool bIsQuestTextMSBDBCharacter;
-	extern bool bIsQuestTextLSBDBCharacter;
-	extern char szDBChar[3];
-
 	// ---- Quest/Location Text Hooks ----
 	void* __fastcall TileSetStringHookForQueueText(void* pThis, void*, int a2, char* a3, bool a4);
 

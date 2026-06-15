@@ -1,4 +1,3 @@
-#pragma once
 #include "font_hook.h"
 
 namespace fonthook

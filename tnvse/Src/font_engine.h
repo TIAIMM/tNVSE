@@ -1,19 +1,54 @@
 #pragma once
 #include "BSFile.hpp"
 #include "encoding.h"
+#include "globals.h"
 #include "load_config.h"
-#include "MemoryManager.hpp"
 #include "ui_decode.h"
 #include <unordered_map>
 
 namespace fonthook
 {
-	// ---- Forward-declared globals (defined in font_hook.cpp) ----
-	extern MemoryManager* MemoryManager_s_Instance;
-	extern NiPoint3& StringDefaultDimensions;
-	extern std::string fontNameKey;
-	extern std::unordered_map<std::string, std::unordered_map<UInt32, FontLetter>> gExtraFontLetters;
-	extern std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
+	// ---- Constants ----
+	static constexpr DWORD kTlsIndexAddr = 0x126FD98;
+	static constexpr DWORD kTlsSlotValue = 12;
+	static constexpr int kTlsByteOffset = 692;
+	static constexpr UInt32 kFontDataSize = 0x3928;
+	static constexpr UInt32 kMaxGlyphCount = 256;
+	static constexpr UInt32 kExtraGlyphReserve = 24066;
+	static constexpr UInt32 kSentinelMax = 0x7FFFFFFF;
+	static constexpr int kTabWidth = 75;
+	static constexpr char kSpaceChar = 32;
+	static constexpr char kNBSPChar = 160;
+	static constexpr char kDelChar = 127;
+	static constexpr char kPipeChar = 124;
+
+	// ---- RAII guard for TLS slot management ----
+	class TlsSlotGuard
+	{
+		DWORD m_savedValue;
+		DWORD* m_target;
+	public:
+		TlsSlotGuard()
+		{
+			DWORD* pTlsIndex = (DWORD*)kTlsIndexAddr;
+			DWORD tebAddress;
+			__asm {
+				mov eax, fs: [0x18]
+				mov tebAddress, eax
+			}
+			DWORD tlsPointer = *(DWORD*)(tebAddress + 0x2C);
+			DWORD tlsSlotAddress = *(DWORD*)(tlsPointer + (*pTlsIndex) * 4);
+			m_target = (DWORD*)(tlsSlotAddress + kTlsByteOffset);
+			m_savedValue = *m_target;
+			*m_target = kTlsSlotValue;
+		}
+		~TlsSlotGuard()
+		{
+			*m_target = m_savedValue;
+		}
+		TlsSlotGuard(const TlsSlotGuard&) = delete;
+		TlsSlotGuard& operator=(const TlsSlotGuard&) = delete;
+	};
 
 	// ---- FontEx - Extended font class with multi-byte support ----
 	class FontEx : public Font
@@ -31,6 +66,11 @@ namespace fonthook
 			float afStartX, float afStartY, float afZ,
 			BSStringT<char>* apTextString, int* aiWidth, bool abPrepareObject,
 			const NiColorA* arg1C, bool abUpperLeftCorner, bool abPrepareObject_1);
+
+	private:
+		void LoadExtraGlyphs(BSFile* fontFile, DWORD* textureMarkers);
+		float ComputeGlyphMetrics();
+		bool LoadFontTextures(DWORD* textureMarkers, int& stringRefFlag);
 	};
 
 } // namespace fonthook

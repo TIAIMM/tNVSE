@@ -57,28 +57,13 @@ namespace fonthook
 	// ==================== FontEx::FontInit ====================
 	Font* FontEx::FontInit(int iFontNum, char* apFilename, bool abLoad)
 	{
-		DWORD tebAddress;
-		DWORD tlsPointer;
-		DWORD tlsSlotAddress;
-		DWORD targetAddress;
-		DWORD* pTlsIndex = (DWORD*)0x126FD98;
+		TlsSlotGuard tlsGuard;
 
 		StdCall(0xEC782F, this->pTextureData, 4, 8, 0xA1B410, 0x45CEC0);
 		this->IconAtlasTextureName.pString = 0;
 		this->IconAtlasTextureName.sLen = 0;
 		this->IconAtlasTextureName.sMaxLen = 0;
 		ThisStdCall(0xA1BEF0, &this->ButtonIcons);
-
-		__asm {
-			mov eax, fs: [0x18]
-			mov tebAddress, eax
-		}
-		tlsPointer = *(DWORD*)(tebAddress + 0x2C);
-		tlsSlotAddress = *(DWORD*)(tlsPointer + (*pTlsIndex) * 4);
-		targetAddress = tlsSlotAddress + 692;
-
-		int savedTlsValue = *(DWORD*)targetAddress;
-		*(DWORD*)targetAddress = 12;
 
 		this->pFontFile = 0;
 		this->iRefCount = 0;
@@ -115,33 +100,18 @@ namespace fonthook
 			}
 		}
 
-		*(DWORD*)targetAddress = savedTlsValue;
 		return this;
 	}
 
 	// ==================== FontEx::Load ====================
 	void FontEx::Load()
 	{
-		// ---- TLS setup ----
-		DWORD* pTlsIndex = (DWORD*)0x126FD98;
-		DWORD tebAddress;
-		__asm {
-			mov eax, fs: [0x18]
-			mov tebAddress, eax
-		}
-		DWORD tlsPointer = *(DWORD*)(tebAddress + 0x2C);
-		DWORD tlsSlotAddress = *(DWORD*)(tlsPointer + (*pTlsIndex) * 4);
-		DWORD targetAddress = tlsSlotAddress + 692;
-
-		int stringRefFlag = 0;
-		int savedTlsValue = *(DWORD*)targetAddress;
-		*(DWORD*)targetAddress = 12;
+		TlsSlotGuard tlsGuard;
 
 		unsigned __int16 refCount = this->iRefCount;
 		if (refCount || !this->pFontFile)
 		{
 			++this->iRefCount;
-			*(DWORD*)targetAddress = savedTlsValue;
 			return;
 		}
 
@@ -150,111 +120,124 @@ namespace fonthook
 		if (!fontFile || !fontFile->m_pFile)
 		{
 			if (fontFile) delete fontFile;
-			*(DWORD*)targetAddress = savedTlsValue;
 			return;
 		}
 
 		// ---- Read font data header ----
 		DWORD textureMarkers[2] = {};
 		textureMarkers[0] = 1;
-		FontData* pFontData = (FontData*)MemoryManager_s_Instance->Allocate(0x3928u);
-		this->pFontData = pFontData;
+		this->pFontData = (FontData*)MemoryManager_s_Instance->Allocate(kFontDataSize);
+		fontFile->m_uiAbsoluteCurrentPos +=
+			fontFile->m_pfnRead(fontFile, this->pFontData, kFontDataSize, textureMarkers, 1u);
 
-		unsigned int textureReadBytes = fontFile->m_pfnRead(fontFile, pFontData, 0x3928u, textureMarkers, 1u);
-		fontFile->m_uiAbsoluteCurrentPos += textureReadBytes;
-
-		// ---- Load extra double-byte glyphs from extended font file ----
-		if (g_uiEncoding != 0)
-		{
-			unsigned int uiActualSize = fontFile->GetSize();
-			if (uiActualSize > 0x3928)
-			{
-				fontNameKey = this->pFontFile ? this->pFontFile : "";
-				if (!fontNameKey.empty())
-				{
-					auto& extraMap = gExtraFontLetters[fontNameKey];
-					if (extraMap.empty())
-					{
-						extraMap.reserve(24066);
-						for (unsigned int highByte = 0x81; highByte <= 0xFE; ++highByte)
-						{
-							for (unsigned int lowByte = 0x40; lowByte <= 0xFE; ++lowByte)
-							{
-								unsigned int charCode = (highByte << 8) | lowByte;
-								FontLetter letter{};
-								UInt32 letterRead = fontFile->m_pfnRead(fontFile, &letter, sizeof(letter), textureMarkers, 1u);
-								fontFile->m_uiAbsoluteCurrentPos += letterRead;
-								if (letterRead != sizeof(letter)) break;
-								extraMap[charCode] = letter;
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Close the font file
+		// ---- Load extended glyphs then close the file ----
+		LoadExtraGlyphs(fontFile, textureMarkers);
 		if (fontFile) delete fontFile;
 
-		// ---- Calculate glyph metrics ----
-		this->fFontHeight = 0.0;
-		float maxHeight = 0.0;
-		this->fMaxDrop = 0.0;
-		for (int glyphIndex = 0; glyphIndex < 256; ++glyphIndex)
-		{
-			float glyphFontHeight = this->pFontData->fBaseLine - this->pFontData->pFontLetters[glyphIndex].fTopEdge;
-			glyphFontHeight += this->pFontData->pFontLetters[glyphIndex].fHeight;
-			this->fFontHeight = MaxFloat(glyphFontHeight, this->fFontHeight);
-			maxHeight = MaxFloat(this->pFontData->pFontLetters[glyphIndex].fHeight, glyphFontHeight);
-			this->fMaxDrop = MinFloat(
-				this->pFontData->pFontLetters[glyphIndex].fTopEdge - this->pFontData->pFontLetters[glyphIndex].fHeight,
-				this->fMaxDrop);
-		}
-
-		// ---- Copy space/nbsp/delete letter properties ----
-		float savedWidth = this->pFontData->pFontLetters[32].fWidth;
-		this->pFontData->pFontLetters[32].fWidth = this->pFontData->pFontLetters[32].fSpacing;
-		this->pFontData->pFontLetters[32].fSpacing = savedWidth;
-		this->pFontData->pFontLetters[32].fHeight = maxHeight;
-		this->pFontData->pFontLetters[32].fTopEdge = this->fMaxDrop + maxHeight;
-		this->pFontData->pFontLetters[160].fWidth = this->pFontData->pFontLetters[32].fWidth;
-		this->pFontData->pFontLetters[160].fSpacing = this->pFontData->pFontLetters[32].fSpacing;
-		this->pFontData->pFontLetters[160].fHeight = this->pFontData->pFontLetters[32].fHeight;
-		this->pFontData->pFontLetters[160].fTopEdge = this->pFontData->pFontLetters[32].fTopEdge;
-		this->pFontData->pFontLetters[127].fWidth = this->pFontData->pFontLetters[124].fWidth;
-		this->pFontData->pFontLetters[127].fLeadingEdge = this->pFontData->pFontLetters[124].fLeadingEdge;
-		this->pFontData->pFontLetters[127].fSpacing = this->pFontData->pFontLetters[124].fSpacing;
-		this->pFontData->pFontLetters[127].fHeight = this->pFontData->pFontLetters[124].fHeight;
-		this->pFontData->pFontLetters[127].fTopEdge = this->pFontData->pFontLetters[124].fTopEdge;
-		this->pFontData->pFontLetters[0].fWidth = 0.0;
-		this->pFontData->pFontLetters[0].fSpacing = 0.0;
-		this->pFontData->pFontLetters[0].fHeight = maxHeight;
-		this->pFontData->pFontLetters[0].fTopEdge = this->fMaxDrop + maxHeight;
-		memset(&this->pFontData->pFontLetters[0].pMapping[0], 0, sizeof(UVMap) * 4);
+		// ---- Calculate metrics & copy special character properties ----
+		ComputeGlyphMetrics();
 
 		if (this->pFontData->iTextureCount > 8)
-		{
-			*(DWORD*)targetAddress = savedTlsValue;
 			return;
-		}
 
 		// ---- Load font textures ----
+		int stringRefFlag = 0;
+		if (!LoadFontTextures(textureMarkers, stringRefFlag))
+			return;
+
+		++this->iRefCount;
+	}
+
+	// ---- FontEx::Load helpers ----
+
+	void FontEx::LoadExtraGlyphs(BSFile* fontFile, DWORD* textureMarkers)
+	{
+		if (!g_uiEncoding) return;
+
+		unsigned int uiActualSize = fontFile->GetSize();
+		if (uiActualSize <= kFontDataSize) return;
+
+		fontNameKey = this->pFontFile ? this->pFontFile : "";
+		if (fontNameKey.empty()) return;
+
+		auto& extraMap = gExtraFontLetters[fontNameKey];
+		if (!extraMap.empty()) return;
+
+		extraMap.reserve(kExtraGlyphReserve);
+		for (unsigned int highByte = 0x81; highByte <= 0xFE; ++highByte)
+		{
+			for (unsigned int lowByte = 0x40; lowByte <= 0xFE; ++lowByte)
+			{
+				FontLetter letter{};
+				UInt32 letterRead = fontFile->m_pfnRead(fontFile, &letter, sizeof(letter), textureMarkers, 1u);
+				fontFile->m_uiAbsoluteCurrentPos += letterRead;
+				if (letterRead != sizeof(letter)) return;
+				extraMap[(highByte << 8) | lowByte] = letter;
+			}
+		}
+	}
+
+	float FontEx::ComputeGlyphMetrics()
+	{
+		this->fFontHeight = 0.0f;
+		float maxHeight = 0.0f;
+		this->fMaxDrop = 0.0f;
+
+		for (int i = 0; i < kMaxGlyphCount; ++i)
+		{
+			auto& letter = this->pFontData->pFontLetters[i];
+			float glyphHeight = this->pFontData->fBaseLine - letter.fTopEdge + letter.fHeight;
+			this->fFontHeight = MaxFloat(glyphHeight, this->fFontHeight);
+			maxHeight = MaxFloat(letter.fHeight, glyphHeight);
+			this->fMaxDrop = MinFloat(letter.fTopEdge - letter.fHeight, this->fMaxDrop);
+		}
+
+		// Space character (swap width & spacing)
+		float savedWidth = this->pFontData->pFontLetters[kSpaceChar].fWidth;
+		this->pFontData->pFontLetters[kSpaceChar].fWidth = this->pFontData->pFontLetters[kSpaceChar].fSpacing;
+		this->pFontData->pFontLetters[kSpaceChar].fSpacing = savedWidth;
+		this->pFontData->pFontLetters[kSpaceChar].fHeight = maxHeight;
+		this->pFontData->pFontLetters[kSpaceChar].fTopEdge = this->fMaxDrop + maxHeight;
+
+		// NBSP copies space
+		this->pFontData->pFontLetters[kNBSPChar].fWidth = this->pFontData->pFontLetters[kSpaceChar].fWidth;
+		this->pFontData->pFontLetters[kNBSPChar].fSpacing = this->pFontData->pFontLetters[kSpaceChar].fSpacing;
+		this->pFontData->pFontLetters[kNBSPChar].fHeight = this->pFontData->pFontLetters[kSpaceChar].fHeight;
+		this->pFontData->pFontLetters[kNBSPChar].fTopEdge = this->pFontData->pFontLetters[kSpaceChar].fTopEdge;
+
+		// Delete char copies pipe
+		this->pFontData->pFontLetters[kDelChar].fWidth = this->pFontData->pFontLetters[kPipeChar].fWidth;
+		this->pFontData->pFontLetters[kDelChar].fLeadingEdge = this->pFontData->pFontLetters[kPipeChar].fLeadingEdge;
+		this->pFontData->pFontLetters[kDelChar].fSpacing = this->pFontData->pFontLetters[kPipeChar].fSpacing;
+		this->pFontData->pFontLetters[kDelChar].fHeight = this->pFontData->pFontLetters[kPipeChar].fHeight;
+		this->pFontData->pFontLetters[kDelChar].fTopEdge = this->pFontData->pFontLetters[kPipeChar].fTopEdge;
+
+		// Null glyph
+		auto& nullGlyph = this->pFontData->pFontLetters[0];
+		nullGlyph.fWidth = 0.0f;
+		nullGlyph.fSpacing = 0.0f;
+		nullGlyph.fHeight = maxHeight;
+		nullGlyph.fTopEdge = this->fMaxDrop + maxHeight;
+		memset(nullGlyph.pMapping, 0, sizeof(UVMap) * 4);
+
+		return maxHeight;
+	}
+
+	bool FontEx::LoadFontTextures(DWORD* textureMarkers, int& stringRefFlag)
+	{
 		for (int textureCount = 0; textureCount < this->pFontData->iTextureCount; ++textureCount)
 		{
 			char texNameBuffer[260];
-			_snprintf_s(
-				texNameBuffer, 0x100u, _TRUNCATE,
+			_snprintf_s(texNameBuffer, 0x100u, _TRUNCATE,
 				"TEXTURES\\FONTS\\%s.TEX",
 				this->pFontData->pTextureFiles[textureCount].pFilename);
 
 			BSFile* textureReadStream = FileFinder_GetFile(
 				(const char*)texNameBuffer, (NiFile::OpenMode)0, 0x5000000u, 2u);
-
 			if (!textureReadStream || !textureReadStream->m_pFile)
 			{
 				if (textureReadStream) delete textureReadStream;
-				*(DWORD*)targetAddress = savedTlsValue;
-				return;
+				return false;
 			}
 
 			unsigned int texWidth, texHeight;
@@ -316,26 +299,125 @@ namespace fonthook
 			ThisStdCall(0x60AEB0, textureProperty, 1);
 			ThisStdCall(0x66B0D0, &this->pTextureData[textureCount].m_pObject, (int)textureProperty);
 		}
-
-		++this->iRefCount;
-		*(DWORD*)targetAddress = savedTlsValue;
+		return true;
 	}
 
 	// ==================== Shared PrepText implementation ====================
 	// PrepTextForTerminal and PrepText differ only in how iCharCount is set at the end:
 	//   PrepTextForTerminal: iCharCount = origConsumed
 	//   PrepText:            iCharCount = processedTextLen
+
+	// Pass 1: process escape sequences (&variable;) in-place
+	static bool ProcessEscapeSequences(
+		char*& processedOriginalText, char*& dynamicTextBuffer,
+		UInt32& textBufferSize, unsigned int& processedTextLen,
+		UInt32& origConsumed, UInt32& sourceTextLen,
+		FontEx* font, Font::TextData* axData)
+	{
+		char parsedTextBuffer[1028] = {};
+		bool hasEscapeSequence = false;
+
+		for (unsigned int srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
+		{
+			if (processedOriginalText[srcTextIndex] != '&')
+			{
+				dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
+				continue;
+			}
+
+			int varNameLen = 0;
+			int escapeSeqPrefixLen = 1;
+			bool isPositiveEscape = true;
+			if (processedOriginalText[srcTextIndex + 1] == '-')
+			{
+				isPositiveEscape = false;
+				escapeSeqPrefixLen = 2;
+			}
+			char varNameBuffer[128];
+			while (processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex]
+				&& varNameLen < 127
+				&& processedOriginalText[varNameLen + srcTextIndex] != ';'
+				&& processedOriginalText[varNameLen + srcTextIndex] != '\n'
+				&& processedOriginalText[varNameLen + srcTextIndex] != axData->cLineSep)
+			{
+				varNameBuffer[varNameLen] = processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex];
+				++varNameLen;
+			}
+			int escapeSeqEffectiveLen = varNameLen ? varNameLen - escapeSeqPrefixLen : 0;
+			varNameBuffer[escapeSeqEffectiveLen] = 0;
+			UInt32 totalEscapeSeqLen = strlen(varNameBuffer) + 1;
+			if (processedOriginalText[varNameLen + srcTextIndex] == ';')
+				totalEscapeSeqLen += escapeSeqPrefixLen;
+
+			if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
+				|| ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
+			{
+				UInt32 postEscapeTextLen = strlen(parsedTextBuffer);
+				int escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
+
+				if (postEscapeTextLen > 0 && parsedTextBuffer[postEscapeTextLen - 1] == '\\')
+				{
+					float unkarray[4] = {};
+					int charScanIndex = 0;
+					while (parsedTextBuffer[charScanIndex] != '\\') ++charScanIndex;
+
+					char substrBuffer[264] = {};
+					char textureNameBuffer[268];
+					strcpy_s(&parsedTextBuffer[charScanIndex + 1],
+						sizeof(parsedTextBuffer) - (charScanIndex + 1), substrBuffer);
+					UInt32 strLen = strlen(substrBuffer);
+					*((char*)unkarray + strLen + 15) = 0;
+					if (font->iFontNum == 7)
+					{
+						strcpy_s(textureNameBuffer, 0x104u, substrBuffer);
+						sprintf_s(substrBuffer, 0x104u, "glow_%s", textureNameBuffer);
+					}
+					font->AddTextIcon(substrBuffer);
+					parsedTextBuffer[charScanIndex] = 1;
+					parsedTextBuffer[charScanIndex + 1] = 0;
+					postEscapeTextLen = strlen(parsedTextBuffer);
+					escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
+				}
+				if (escapeSeqSizeDiff > 0)
+				{
+					textBufferSize += escapeSeqSizeDiff;
+					dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, textBufferSize + 1));
+				}
+				for (UInt32 bufferCopyIndex = 0; bufferCopyIndex < postEscapeTextLen; ++bufferCopyIndex)
+					dynamicTextBuffer[processedTextLen++] = parsedTextBuffer[bufferCopyIndex];
+				origConsumed += totalEscapeSeqLen;
+				srcTextIndex = srcTextIndex + totalEscapeSeqLen - 1;
+			}
+			else
+			{
+				dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
+			}
+			hasEscapeSequence = true;
+		}
+
+		dynamicTextBuffer[processedTextLen] = 0;
+		if (hasEscapeSequence)
+		{
+			sourceTextLen = processedTextLen;
+			processedOriginalText = static_cast<char*>(MemoryManager_s_Instance->Reallocate(processedOriginalText, processedTextLen + 4));
+			strcpy_s(processedOriginalText, processedTextLen + 4, dynamicTextBuffer);
+		}
+		*dynamicTextBuffer = 0;
+		processedTextLen = 0;
+		return hasEscapeSequence;
+	}
+
 	static void PrepTextImpl(FontEx* font, const char* apOrigString, Font::TextData* axData, bool isTerminal)
 	{
 		if (!apOrigString)
 			return;
 
 		if (axData->iWidth <= 0)
-			axData->iWidth = 0x7FFFFFFF;
+			axData->iWidth = kSentinelMax;
 		if (axData->iHeight <= 0)
-			axData->iHeight = 0x7FFFFFFF;
+			axData->iHeight = kSentinelMax;
 		if (axData->iLineEnd <= 0)
-			axData->iLineEnd = 0x7FFFFFFF;
+			axData->iLineEnd = kSentinelMax;
 
 		auto* extraGlyphs = GetExtraGlyphs(font->iFontNum);
 		UInt32 origConsumed = 0;
@@ -368,98 +450,12 @@ namespace fonthook
 
 		unsigned int processedTextLen = 0;
 		UInt32 textBufferSize = sourceTextLen + 4;
-		bool isTildeChar = false;
-		char parsedTextBuffer[1028] = {};
-		bool hasEscapeSequence = false;
 
 		// ---- Pass 1: Process escape sequences (&variable;) ----
-		for (unsigned int srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
-		{
-			if (processedOriginalText[srcTextIndex] == '&')
-			{
-				int varNameLen = 0;
-				int escapeSeqPrefixLen = 1;
-				bool isPositiveEscape = true;
-				if (processedOriginalText[srcTextIndex + 1] == '-')
-				{
-					isPositiveEscape = false;
-					escapeSeqPrefixLen = 2;
-				}
-				char varNameBuffer[128];
-				while (processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex]
-					&& varNameLen < 127
-					&& processedOriginalText[varNameLen + srcTextIndex] != ';'
-					&& processedOriginalText[varNameLen + srcTextIndex] != '\n'
-					&& processedOriginalText[varNameLen + srcTextIndex] != axData->cLineSep)
-				{
-					varNameBuffer[varNameLen] = processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex];
-					++varNameLen;
-				}
-				int escapeSeqEffectiveLen = varNameLen ? varNameLen - escapeSeqPrefixLen : 0;
-				varNameBuffer[escapeSeqEffectiveLen] = 0;
-				UInt32 totalEscapeSeqLen = strlen(varNameBuffer) + 1;
-				if (processedOriginalText[varNameLen + srcTextIndex] == ';')
-					totalEscapeSeqLen += escapeSeqPrefixLen;
+		ProcessEscapeSequences(processedOriginalText, dynamicTextBuffer,
+			textBufferSize, processedTextLen, origConsumed, sourceTextLen, font, axData);
 
-				if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
-					|| ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
-				{
-					UInt32 postEscapeTextLen = strlen(parsedTextBuffer);
-					int escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
-
-					if (postEscapeTextLen > 0 && parsedTextBuffer[postEscapeTextLen - 1] == '\\')
-					{
-						float unkarray[4] = {};
-						int charScanIndex = 0;
-						while (parsedTextBuffer[charScanIndex] != '\\') ++charScanIndex;
-
-						char substrBuffer[264] = {};
-						char textureNameBuffer[268];
-						strcpy_s(&parsedTextBuffer[charScanIndex + 1],
-							sizeof(parsedTextBuffer) - (charScanIndex + 1), substrBuffer);
-						UInt32 strLen = strlen(substrBuffer);
-						*((char*)unkarray + strLen + 15) = 0;
-						if (font->iFontNum == 7)
-						{
-							strcpy_s(textureNameBuffer, 0x104u, substrBuffer);
-							sprintf_s(substrBuffer, 0x104u, "glow_%s", textureNameBuffer);
-						}
-						font->AddTextIcon(substrBuffer);
-						parsedTextBuffer[charScanIndex] = 1;
-						parsedTextBuffer[charScanIndex + 1] = 0;
-						postEscapeTextLen = strlen(parsedTextBuffer);
-						escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
-					}
-					if (escapeSeqSizeDiff > 0)
-					{
-						textBufferSize += escapeSeqSizeDiff;
-						dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, textBufferSize + 1));
-					}
-					for (UInt32 bufferCopyIndex = 0; bufferCopyIndex < postEscapeTextLen; ++bufferCopyIndex)
-						dynamicTextBuffer[processedTextLen++] = parsedTextBuffer[bufferCopyIndex];
-					origConsumed += totalEscapeSeqLen;
-					srcTextIndex = srcTextIndex + totalEscapeSeqLen - 1;
-				}
-				else
-				{
-					dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
-				}
-				hasEscapeSequence = true;
-			}
-			else
-			{
-				dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
-			}
-		}
-		dynamicTextBuffer[processedTextLen] = 0;
-		if (hasEscapeSequence)
-		{
-			sourceTextLen = processedTextLen;
-			processedOriginalText = static_cast<char*>(MemoryManager_s_Instance->Reallocate(processedOriginalText, processedTextLen + 4));
-			strcpy_s(processedOriginalText, processedTextLen + 4, dynamicTextBuffer);
-		}
-		*dynamicTextBuffer = 0;
-		processedTextLen = 0;
+		bool isTildeChar = false;
 		UInt32 buttonIconIndex = 0;
 
 		// ---- Pass 2: Text layout with wrapping ----
@@ -750,22 +746,17 @@ namespace fonthook
 		Font::TextData textData;
 
 		if (!*aiHeight)
-			*aiHeight = 0x7FFFFFFF;
+			*aiHeight = kSentinelMax;
 		if (!aiLineEnd)
-			aiLineEnd = 0x7FFFFFFF;
+			aiLineEnd = kSentinelMax;
 
 		float linePadding = FontManagerGetLinePadding(this->iFontNum);
 		ThisStdCall(0x759330, &textData, *aiWidth, *aiHeight, aiLineStart, aiLineEnd, aiLineBreakChar);
 
-		if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs)
-		{
-			if (IsValidUTF8With3ByteMin(axTextString->pString))
-			{
-				std::string sCurrentStr = axTextString->pString;
-				std::string sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
-				axTextString->Set(sConvertedStr.c_str());
-			}
-		}
+		const char* pStr = axTextString->pString;
+		std::string sConvertedStr;
+		if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
+			axTextString->Set(pStr);
 
 		ThisStdCall(0xA12FB0, this, axTextString->pString, &textData);
 
@@ -784,28 +775,8 @@ namespace fonthook
 		textPosition.z = lineBaseOffset + lineBaseOffset;
 		textPosition.y = 0.0;
 
-		int iActualCharCount = textData.iCharCount;
-		if (extraGlyphs)
-		{
-			UInt32 uiDoubleByteCode;
-			for (int charIdx = 0;
-				textData.xNewText.pString[textData.xNewText.pString ? charIdx : 0];
-				++charIdx)
-			{
-				bool bIsDBCharacter = false;
-				unsigned char cNextByte = (unsigned char)textData.xNewText.pString[charIdx + 1];
-				if (cNextByte != 0)
-				{
-					bIsDBCharacter = TryDecodeDoubleByte(
-						(const char*)&textData.xNewText.pString[charIdx], uiDoubleByteCode);
-				}
-				if (bIsDBCharacter)
-				{
-					++charIdx;
-					--iActualCharCount;
-				}
-			}
-		}
+		int iActualCharCount = AdjustCharCountForDB(
+			textData.xNewText.pString, textData.iCharCount, extraGlyphs);
 
 		*apTextShape = (UINT32*)Font::MakeTriShape(iActualCharCount, axFontColor, 1);
 
@@ -929,15 +900,10 @@ namespace fonthook
 
 		auto* extraGlyphs = GetExtraGlyphs(this->iFontNum);
 
-		if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs)
-		{
-			if (IsValidUTF8With3ByteMin(apTextString->pString))
-			{
-				std::string sCurrentStr = apTextString->pString;
-				std::string sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
-				apTextString->Set(sConvertedStr.c_str());
-			}
-		}
+		const char* pStr = apTextString->pString;
+		std::string sConvertedStr;
+		if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
+			apTextString->Set(pStr);
 
 		UINT32 textLen = (apTextString->sLen == 0xFFFF)
 			? strlen(apTextString->pString) : apTextString->sLen;
@@ -972,33 +938,8 @@ namespace fonthook
 		if (!charIdx)
 			return 0;
 
-		int iActualCharCount = charIdx;
-
-		// Adjust count for double-byte characters
-		if (extraGlyphs)
-		{
-			UINT32 stringLength = (apTextString->sLen == 0xFFFF)
-				? strlen(apTextString->pString) : apTextString->sLen;
-			UInt32 uiDoubleByteCode;
-			for (UINT32 scanIdx = 0;
-				apTextString->pString[apTextString->pString ? scanIdx : 0];
-				++scanIdx)
-			{
-				if (scanIdx >= stringLength) break;
-
-				unsigned char cNextByte = (unsigned char)apTextString->pString[scanIdx + 1];
-				if (cNextByte != 0)
-				{
-					bool bIsDBCharacter = TryDecodeDoubleByte(
-						(const char*)&apTextString->pString[scanIdx], uiDoubleByteCode);
-					if (bIsDBCharacter)
-					{
-						++scanIdx;
-						--iActualCharCount;
-					}
-				}
-			}
-		}
+		int iActualCharCount = AdjustCharCountForDB(
+			apTextString->pString, charIdx, extraGlyphs);
 
 		UINT32* pTriShape = (UINT32*)Font::MakeTriShape(iActualCharCount, arg1C, abPrepareObject_1);
 		float startY = currentY;

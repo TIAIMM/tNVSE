@@ -1,6 +1,6 @@
 #pragma once
 #include "BSFile.hpp"
-#include "MemoryManager.hpp"
+#include "globals.h"
 #include "ui_decode.h"
 
 namespace fonthook
@@ -19,10 +19,6 @@ namespace fonthook
 	// ---- Font/FontManager helpers ----
 	Float32 __stdcall FontManagerGetLinePadding(UInt32 fontID);
 	BSFile* FileFinder_GetFile(const char* apName, NiFile::OpenMode aeMode, unsigned int aiSize, unsigned int aiArchiveType);
-
-	// ---- Global singletons ----
-	extern MemoryManager* MemoryManager_s_Instance;
-	extern NiPoint3& StringDefaultDimensions;
 
 	// ---- Inline helpers ----
 	inline int MaxInt(int a, int b)

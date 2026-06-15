@@ -1,5 +1,6 @@
 #pragma once
 #include "ITypes.h"
+#include "load_config.h"
 #include <string>
 #include <Windows.h>
 
@@ -54,5 +55,42 @@ namespace fonthook
 	// ---- Encoding Conversion ----
 	std::string MultiByteToUTF8(const std::string& src, UINT32 codePage);
 	std::string UTF8ToMultiByteStr(const std::string& utf8, UINT32 codePage);
+
+	// ---- Double-byte character counting ----
+	// Reduces charCount by the number of double-byte character pairs in str.
+	template<typename TExtraGlyphs>
+	inline int AdjustCharCountForDB(const char* str, int charCount, TExtraGlyphs* extraGlyphs)
+	{
+		if (!extraGlyphs || !str) return charCount;
+		int count = charCount;
+		UInt32 code;
+		for (int i = 0; str[i]; ++i)
+		{
+			if (TryDecodeDoubleByte(&str[i], code))
+			{
+				++i; // skip trail byte
+				--count;
+			}
+		}
+		return count;
+	}
+
+	// ---- Shared UTF8 detection helper ----
+	inline bool ShouldConvertUTF8(bool hasExtraGlyphs)
+	{
+		return g_bEnableUTF8 && g_uiEncoding != 0 && hasExtraGlyphs;
+	}
+
+	// Converts src from UTF-8 to multi-byte, reassigning pSrc to point into outConverted.
+	// Caller must keep outConverted alive while using pSrc.
+	// Returns true if conversion was performed.
+	inline bool ConvertToMultiByte(const char*& pSrc, std::string& outConverted, bool hasExtraGlyphs)
+	{
+		if (!ShouldConvertUTF8(hasExtraGlyphs)) return false;
+		if (!IsValidUTF8With3ByteMin(pSrc)) return false;
+		outConverted = UTF8ToMultiByteStr(pSrc, g_usingWinEncoding);
+		pSrc = outConverted.c_str();
+		return true;
+	}
 
 } // namespace fonthook
