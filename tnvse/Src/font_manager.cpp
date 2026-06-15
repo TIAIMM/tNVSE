@@ -1,166 +1,144 @@
 #include "font_manager.h"
 #include "native_calls.h"
 
-namespace fonthook {
+namespace fonthook
+{
+	NiPoint3* __thiscall FontManagerEx::CalculateStringDimensions(NiPoint3* outDimensions, const char* srcString, UInt32 fontID, float maxWrapWidth, UInt32 startCharIndex)
+	{
+		auto extraGlyphEntry = gNumberedExtraLetters.find(fontID);
+		auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
-NiPoint3* __thiscall FontManagerEx::CalculateStringDimensions(NiPoint3* outDimensions, const char* srcString, UInt32 fontID, float maxWrapWidth, UInt32 startCharIndex) {
-    double tabStopWidth;
-    float finalMaxLineWidth;
-    float adjustedWrapWidth;
-    float previousLineWidthAtTabStop;
-    unsigned __int8 currentChar;
-    float currentCharTotalWidth;
-    signed int currentCharIndex;
-    float previousCharTotalWidth;
-    int totalLines;
-    char hasHyphenationPoint;
-    NiPoint3 StringDimensions;
-    float lastValidWrapPosition;
-    float currentLineWidth;
-    int sourceStringLength;
-    FontLetter* fontCharMetrics;
-    float fontVerticalSpacingAdjust;
+		std::string sConvertedStr;
+		if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs)
+		{
+			if (IsValidUTF8With3ByteMin(srcString))
+			{
+				sConvertedStr = UTF8ToMultiByteStr(srcString, g_usingWinEncoding);
+				srcString = sConvertedStr.c_str();
+			}
+		}
 
-    bool bIsDBCharacter;
-    UInt32 uiDoubleByteCode;
-    auto extraGlyphEntry = gNumberedExtraLetters.find(fontID);
-    auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
+		if (fontID < 1 || !srcString)
+		{
+			*outDimensions = StringDefaultDimensions;
+			return outDimensions;
+		}
 
-    std::string sCurrentStr, sConvertedStr;
+		NiPoint3 StringDimensions = StringDefaultDimensions;
+		int sourceStringLength = strlen(srcString);
+		FontLetter* fontCharMetrics = this->pFont[fontID - 1]->pFontData->pFontLetters;
+		float lastValidWrapPosition = 0.0;
+		float currentLineWidth = 0.0;
+		float fontVerticalSpacingAdjust = FontManagerGetLinePadding(fontID);
+		float previousCharTotalWidth = 0.0;
+		char hasHyphenationPoint = 0;
+		int totalLines = 1;
+		StringDimensions.y = fontCharMetrics[' '].fHeight;
 
-    if (g_bEnableUTF8 && g_uiEncoding != 0 && extraGlyphs) {
-        if (IsValidUTF8With3ByteMin(srcString)) {
-            sCurrentStr = srcString;
-            sConvertedStr = UTF8ToMultiByteStr(sCurrentStr, g_usingWinEncoding);
-            srcString = sConvertedStr.c_str();
-        }
-    }
+		UInt32 uiDoubleByteCode;
+		for (int currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
+		{
+			bool bIsDBCharacter = false;
+			unsigned __int8 currentChar = srcString[currentCharIndex];
+			float currentCharTotalWidth = 0.0;
 
-    if (fontID >= 1 && srcString)
-    {
-        StringDimensions = StringDefaultDimensions;
-        sourceStringLength = strlen(srcString);
-        fontCharMetrics = this->pFont[fontID - 1]->pFontData->pFontLetters;
-        lastValidWrapPosition = 0.0;
-        currentLineWidth = 0.0;
-        fontVerticalSpacingAdjust = FontManagerGetLinePadding(fontID);
-        previousCharTotalWidth = 0.0;
-        hasHyphenationPoint = 0;
-        totalLines = 1;
-        StringDimensions.y = fontCharMetrics[' '].fHeight;
+			if (extraGlyphs)
+			{
+				if (bIsQuestTextMSBDBCharacter && szDBChar)
+				{
+					srcString = szDBChar;
+				}
 
-        for (currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
-        {
-            bIsDBCharacter = false;
+				if ((currentCharIndex + 1) <= sourceStringLength)
+				{
+					bIsDBCharacter = TryDecodeDoubleByte(&srcString[currentCharIndex], uiDoubleByteCode);
 
-            currentChar = srcString[currentCharIndex];
-            currentCharTotalWidth = 0.0;
+					if (bIsQuestTextMSBDBCharacter)
+					{
+						srcString = "";
+					}
+				}
+			}
 
-            if (extraGlyphs) {
-                if (bIsQuestTextMSBDBCharacter) {
-                    if (szDBChar) {
-                        srcString = szDBChar;
-                    }
-                }
+			if (bIsDBCharacter)
+			{
+				auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
+				if (glyphIt != extraGlyphs->end())
+				{
+					currentCharTotalWidth = glyphIt->second.fLeadingEdge
+						+ glyphIt->second.fWidth + glyphIt->second.fSpacing;
+				}
+				++currentCharIndex;
+			}
+			else
+			{
+				ConvertToAsciiQuotes(&currentChar);
+				currentCharTotalWidth = fontCharMetrics[currentChar].fLeadingEdge
+					+ fontCharMetrics[currentChar].fWidth + fontCharMetrics[currentChar].fSpacing;
+				switch (currentChar)
+				{
+				case '\t':
+				{
+					double tabStopWidth = currentLineWidth;
+					AlignLineWidthToTab(currentLineWidth, 75.0);
+					currentCharTotalWidth = (float)(75.0 - tabStopWidth);
+					break;
+				}
+				case '\n':
+					lastValidWrapPosition = currentLineWidth;
+					hasHyphenationPoint = 0;
+					break;
+				case ' ':
+					break;
+				case '~':
+					lastValidWrapPosition = currentLineWidth;
+					hasHyphenationPoint = 1;
+					break;
+				default:
+					break;
+				}
+			}
 
-                if ((currentCharIndex + 1) <= sourceStringLength) {
-                    bIsDBCharacter = TryDecodeDoubleByte(&srcString[currentCharIndex], uiDoubleByteCode);
+			if (currentChar != '~')
+				currentLineWidth = currentLineWidth + currentCharTotalWidth;
 
-                    if (bIsQuestTextMSBDBCharacter) {
-                        srcString = "";
-                    }
-                }
-            }
+			if (maxWrapWidth < currentLineWidth || currentChar == '\n')
+			{
+				if (lastValidWrapPosition <= 0.0)
+				{
+					lastValidWrapPosition = currentLineWidth
+						- currentCharTotalWidth - previousCharTotalWidth;
+					currentLineWidth = currentCharTotalWidth + previousCharTotalWidth;
+				}
+				else
+				{
+					currentLineWidth = currentLineWidth - lastValidWrapPosition;
+					if (!hasHyphenationPoint && currentChar == '\n')
+						currentLineWidth = 0.0;
+				}
 
-            if (bIsDBCharacter) {
-                auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
-                if (glyphIt != extraGlyphs->end()) {
-                    currentCharTotalWidth = glyphIt->second.fLeadingEdge
-                        + glyphIt->second.fWidth
-                        + glyphIt->second.fSpacing;
-                }
-                ++currentCharIndex;
-            }
-            else {
-                ConvertToAsciiQuotes(&currentChar);
-                currentCharTotalWidth = fontCharMetrics[currentChar].fLeadingEdge
-                    + fontCharMetrics[currentChar].fWidth
-                    + fontCharMetrics[currentChar].fSpacing;
-                switch (currentChar)
-                {
-                case '\t':
-                    tabStopWidth = currentLineWidth;
-                    AlignLineWidthToTab(currentLineWidth, 75.0);
-                    previousLineWidthAtTabStop = tabStopWidth;
-                    currentCharTotalWidth = 75.0 - previousLineWidthAtTabStop;
-                    break;
-                case '\n':
-                    lastValidWrapPosition = currentLineWidth;
-                    hasHyphenationPoint = 0;
-                    break;
-                case ' ':
-                    break;
-                case '~':
-                    lastValidWrapPosition = currentLineWidth;
-                    hasHyphenationPoint = 1;
-                    break;
-                default:
-                    break;
-                }
-            }
+				StringDimensions.x = (lastValidWrapPosition >= StringDimensions.x)
+					? lastValidWrapPosition : StringDimensions.x;
+				StringDimensions.y = fontVerticalSpacingAdjust
+					+ this->pFont[fontID - 1]->pFontData->fBaseLine + StringDimensions.y;
+				lastValidWrapPosition = 0.0;
+				++totalLines;
+			}
+			previousCharTotalWidth = currentCharTotalWidth;
+		}
 
-            if (currentChar != '~')
-                currentLineWidth = currentLineWidth + currentCharTotalWidth;
-            if (maxWrapWidth < currentLineWidth || currentChar == '\n')
-            {
-                if (lastValidWrapPosition <= 0.0)
-                {
-                    lastValidWrapPosition = currentLineWidth
-                        - currentCharTotalWidth
-                        - previousCharTotalWidth;
-                    currentLineWidth = currentCharTotalWidth + previousCharTotalWidth;
-                }
-                else
-                {
-                    currentLineWidth = currentLineWidth - lastValidWrapPosition;
-                    if (!hasHyphenationPoint)
-                    {
-                        if (currentChar == '\n')
-                            currentLineWidth = 0.0;
-                    }
-                }
-                if (lastValidWrapPosition >= StringDimensions.x)
-                    adjustedWrapWidth = lastValidWrapPosition;
-                else
-                    adjustedWrapWidth = StringDimensions.x;
-                StringDimensions.x = adjustedWrapWidth;
-                StringDimensions.y = fontVerticalSpacingAdjust
-                    + this->pFont[fontID - 1]->pFontData->fBaseLine
-                    + StringDimensions.y;
-                lastValidWrapPosition = 0.0;
-                ++totalLines;
-            }
-            previousCharTotalWidth = currentCharTotalWidth;
-        }
-        if (currentLineWidth >= StringDimensions.x)
-            finalMaxLineWidth = currentLineWidth;
-        else
-            finalMaxLineWidth = StringDimensions.x;
-        StringDimensions.z = totalLines;
-        outDimensions->x = finalMaxLineWidth;
-        outDimensions->y = StringDimensions.y;
-        outDimensions->z = StringDimensions.z;
-        return outDimensions;
-    }
-    else
-    {
-        *outDimensions = StringDefaultDimensions;
-        return outDimensions;
-    }
-}
+		float finalMaxLineWidth = (currentLineWidth >= StringDimensions.x)
+			? currentLineWidth : StringDimensions.x;
+		StringDimensions.z = (float)totalLines;
+		outDimensions->x = finalMaxLineWidth;
+		outDimensions->y = StringDimensions.y;
+		outDimensions->z = StringDimensions.z;
+		return outDimensions;
+	}
 
-UINT32* FontManagerEx::PrepText(BSStringT<char>* a7, int a3) {
-    return ThisStdCall<UINT32*>(0xA18A30, this, a7, a3);
-}
+	UINT32* FontManagerEx::PrepText(BSStringT<char>* a7, int a3)
+	{
+		return ThisStdCall<UINT32*>(0xA18A30, this, a7, a3);
+	}
 
 } // namespace fonthook

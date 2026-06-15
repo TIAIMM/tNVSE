@@ -10,14 +10,10 @@ std::string g_sOptionalStructuralParticle;
 bool g_bRemovePlural;
 
 void LoadConfig() {
-	// From JGNVSE
 	char filename[MAX_PATH];
 	GetModuleFileNameA(NULL, filename, MAX_PATH);
-	char workingDir[MAX_PATH];
-	strncpy_s(workingDir, filename, (strlen(filename) - 13));
-	char* lastSlash = (char*)(strrchr(filename, '\\') + 1);
-	uint32_t length = filename - lastSlash;
-	strcpy_s(lastSlash, length, "Data\\nvse\\plugins\\tnvse.ini");
+	char* lastSlash = strrchr(filename, '\\') + 1;
+	strcpy_s(lastSlash, MAX_PATH - (lastSlash - filename), "Data\\nvse\\plugins\\tnvse.ini");
 
 	g_uiEncoding = static_cast<UINT32>(GetPrivateProfileInt("MAIN", "uiEncoding", 1, filename));
 	g_bEnableUTF8 = static_cast<bool>(GetPrivateProfileInt("MAIN", "bUTF8", 1, filename));
