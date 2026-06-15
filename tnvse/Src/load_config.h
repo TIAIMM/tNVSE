@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <Windows.h>
 
 //enum class UIEncoding : UInt32 {
 //    ENG = 0,

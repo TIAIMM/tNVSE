@@ -141,8 +141,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
-    <ClCompile Include="Src\fonthook.cpp" />
-    <ClCompile Include="Src\loadconfig.cpp" />
+    <ClCompile Include="Src\encoding.cpp" />
+    <ClCompile Include="Src\native_calls.cpp" />
+    <ClCompile Include="Src\font_engine.cpp" />
+    <ClCompile Include="Src\font_manager.cpp" />
+    <ClCompile Include="Src\text_hooks.cpp" />
+    <ClCompile Include="Src\game_hooks.cpp" />
+    <ClCompile Include="Src\font_hook.cpp" />
+    <ClCompile Include="Src\load_config.cpp" />
     <ClCompile Include="Src\tnvse.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -150,11 +156,17 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Src\fonthook.h" />
-    <ClInclude Include="Src\loadconfig.h" />
+    <ClInclude Include="Src\encoding.h" />
+    <ClInclude Include="Src\native_calls.h" />
+    <ClInclude Include="Src\font_engine.h" />
+    <ClInclude Include="Src\font_manager.h" />
+    <ClInclude Include="Src\text_hooks.h" />
+    <ClInclude Include="Src\game_hooks.h" />
+    <ClInclude Include="Src\font_hook.h" />
+    <ClInclude Include="Src\load_config.h" />
     <ClInclude Include="Src\nvse\PluginAPI.h" />
     <ClInclude Include="Src\tnvse.h" />
-    <ClInclude Include="Src\uidecode.h" />
+    <ClInclude Include="Src\ui_decode.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

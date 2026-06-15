@@ -9,9 +9,9 @@
 //#include "ShadowSceneNode.hpp"
 //#include "InterfaceManager.hpp"
 //#include "nvse/PluginAPI.h"
-#include "loadconfig.h"
+#include "load_config.h"
 #include "tnvse.h"
-#include "fonthook.h"
+#include "font_hook.h"
 
 IDebugLog gLog("tnvse.log");
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;

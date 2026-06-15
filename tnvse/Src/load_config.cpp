@@ -1,4 +1,4 @@
-#include "loadconfig.h"
+#include "load_config.h"
 
 UINT32 g_uiEncoding;
 UINT32 g_usingWinEncoding;
