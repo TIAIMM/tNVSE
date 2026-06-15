@@ -1,10 +1,10 @@
-#include "game_hooks.h"
-#include "text_hooks.h"
 #include "font_engine.h"
 #include "font_manager.h"
+#include "game_hooks.h"
 #include "load_config.h"
-#include "tnvse.h"
 #include "SafeWrite.h"
+#include "text_hooks.h"
+#include "tnvse.h"
 
 namespace fonthook {
 

@@ -1,8 +1,8 @@
 #pragma once
-#include <unordered_map>
-#include "ui_decode.h"
 #include "encoding.h"
 #include "load_config.h"
+#include "ui_decode.h"
+#include <unordered_map>
 
 namespace fonthook {
 

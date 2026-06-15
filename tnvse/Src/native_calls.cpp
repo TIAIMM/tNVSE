@@ -1,5 +1,5 @@
-#include "native_calls.h"
 #include "MemoryManager.hpp"
+#include "native_calls.h"
 
 namespace fonthook {
 

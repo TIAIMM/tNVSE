@@ -1,10 +1,10 @@
 #pragma once
-#include <unordered_map>
-#include "ui_decode.h"
+#include "BSFile.hpp"
 #include "encoding.h"
 #include "load_config.h"
 #include "MemoryManager.hpp"
-#include "BSFile.hpp"
+#include "ui_decode.h"
+#include <unordered_map>
 
 namespace fonthook {
 

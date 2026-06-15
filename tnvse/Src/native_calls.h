@@ -1,7 +1,7 @@
 #pragma once
-#include "ui_decode.h"
 #include "BSFile.hpp"
 #include "MemoryManager.hpp"
+#include "ui_decode.h"
 
 namespace fonthook {
 

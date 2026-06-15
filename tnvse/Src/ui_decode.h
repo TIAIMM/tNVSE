@@ -1,20 +1,20 @@
 #pragma once
 
-#include "ITypes.h"
-#include <cstdint>
-#include <limits>
-#include "NiPoint3.hpp"
-#include "NiTimeController.hpp"
-#include "NiProperty.hpp"
-#include "NiTexturingProperty.hpp"
-#include "NiColor.hpp"
-#include "NiTexture.hpp"
-#include "NiPersistentSrcTextureRendererData.hpp"
-#include "NiTriShape.hpp"
-#include "NiSourceTexture.hpp"
 #include "BSSimpleArray.hpp"
 #include "BSSimpleList.hpp"
 #include "BSString.hpp"
+#include "ITypes.h"
+#include "NiColor.hpp"
+#include "NiPersistentSrcTextureRendererData.hpp"
+#include "NiPoint3.hpp"
+#include "NiProperty.hpp"
+#include "NiSourceTexture.hpp"
+#include "NiTexture.hpp"
+#include "NiTexturingProperty.hpp"
+#include "NiTimeController.hpp"
+#include "NiTriShape.hpp"
+#include <cstdint>
+#include <limits>
 
 // C
 //struct NiVector3
