@@ -2,28 +2,12 @@
 #include <string>
 #include <Windows.h>
 
-//enum class UIEncoding : UInt32 {
-//    ENG = 0,
-//    CHS = 1,
-//    CHT = 2,
-//    JP = 3,
-//    KOR = 4
-//};
-//
-//enum class WinEncoding : UInt32 {
-//    ENG = CP_ACP,
-//    CHS = 936,
-//    CHT = 950,
-//    JP = 932,
-//    KOR = 949
-//};
-
-extern UINT32 g_uiEncoding;
-extern UINT32 g_usingWinEncoding;
+extern UINT32 g_uiEncoding;       // UI encoding identifier: 0=English, 1=GBK, 2=Big5, 3=SJIS, 4=UHC
+extern UINT32 g_usingWinEncoding; // Windows code page derived from g_uiEncoding
 extern bool g_bEnableUTF8;
 extern bool g_bChangeJIPBigGunDesc;
 extern std::string g_sNewBigGunsDesc;
-extern UINT32 g_uiReorderDoorPrompt;
+extern UINT32 g_uiReorderDoorPrompt;  // 0=off, 1=CHS order, 2=KOR order
 extern std::string g_sOptionalStructuralParticle;
 extern bool g_bRemovePlural;
 

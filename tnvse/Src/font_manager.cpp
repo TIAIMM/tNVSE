@@ -64,18 +64,7 @@ NiPoint3* __thiscall FontManagerEx::CalculateStringDimensions(NiPoint3* outDimen
                 }
 
                 if ((currentCharIndex + 1) <= sourceStringLength) {
-                    if (g_usingWinEncoding == 936) {
-                        bIsDBCharacter = TryDecodeGBK(&srcString[currentCharIndex], uiDoubleByteCode);
-                    }
-                    else if (g_usingWinEncoding == 950) {
-                        bIsDBCharacter = TryDecodeBig5(&srcString[currentCharIndex], uiDoubleByteCode);
-                    }
-                    else if (g_usingWinEncoding == 932) {
-                        bIsDBCharacter = TryDecodeSJIS(&srcString[currentCharIndex], uiDoubleByteCode);
-                    }
-                    else if (g_usingWinEncoding == 949) {
-                        bIsDBCharacter = TryDecodeKorean(&srcString[currentCharIndex], uiDoubleByteCode);
-                    }
+                    bIsDBCharacter = TryDecodeDoubleByte(&srcString[currentCharIndex], uiDoubleByteCode);
 
                     if (bIsQuestTextMSBDBCharacter) {
                         srcString = "";

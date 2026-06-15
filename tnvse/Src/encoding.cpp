@@ -155,3 +155,43 @@ std::string UTF8ToMultiByteStr(const std::string& utf8, UINT32 codePage) {
 }
 
 } // namespace fonthook
+
+// ---- Unified encoding dispatch ----
+// These functions use the global g_usingWinEncoding to dispatch to the correct codec.
+// They replace the repeated if/else-if chains scattered across the codebase.
+
+extern UINT32 g_usingWinEncoding;
+
+namespace fonthook {
+
+bool IsLeadByte(unsigned char c) {
+	switch (g_usingWinEncoding) {
+	case 936:  return IsGBKLeadByte(c);
+	case 950:  return IsBig5LeadByte(c);
+	case 932:  return IsSJISLeadByte(c);
+	case 949:  return IsKoreanLeadByte(c);
+	default:   return false;
+	}
+}
+
+bool IsTrailByte(unsigned char c) {
+	switch (g_usingWinEncoding) {
+	case 936:  return IsGBKTrailByte(c);
+	case 950:  return IsBig5TrailByte(c);
+	case 932:  return IsSJISTrailByte(c);
+	case 949:  return IsKoreanTrailByte(c);
+	default:   return false;
+	}
+}
+
+bool TryDecodeDoubleByte(const char* p, UInt32& outCode) {
+	switch (g_usingWinEncoding) {
+	case 936:  return TryDecodeGBK(p, outCode);
+	case 950:  return TryDecodeBig5(p, outCode);
+	case 932:  return TryDecodeSJIS(p, outCode);
+	case 949:  return TryDecodeKorean(p, outCode);
+	default:   return false;
+	}
+}
+
+} // namespace fonthook

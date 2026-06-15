@@ -15,59 +15,35 @@ bool __cdecl ParseAndFormatVariableInString(const char* p_varNameBuffer, void* p
     return CdeclCall<bool>(0x7073D0, p_varNameBuffer, p_parsedTextBuffer);
 }
 
-SInt32 __cdecl AlignLineWidthToTab(double a1, double a2) {
-    return CdeclCall<SInt32>(0xEC9130, a1, a2);
+SInt32 __cdecl AlignLineWidthToTab(double currentWidth, double tabInterval) {
+    return CdeclCall<SInt32>(0xEC9130, currentWidth, tabInterval);
 }
 
-void* __cdecl AppendToListTail(void* ListNode, void* ListNode2) {
-    return ThisStdCall<void*>(0xAF25B0, ListNode, ListNode2);
+void* __cdecl AppendToListTail(void* listNode, void* itemData) {
+    return ThisStdCall<void*>(0xAF25B0, listNode, itemData);
 }
 
-UINT32 SafeDoubleToUInt32(double a1)
+UINT32 SafeDoubleToUInt32(double value)
 {
-    uint64_t bits;
-    std::memcpy(&bits, &a1, sizeof(bits));
-
-    UINT32 low = static_cast<UINT32>(bits);
-    UINT32 high = static_cast<UINT32>(bits >> 32);
-
-    if (low == 0 && (high & 0x7FFFFFFF) == 0)
+    if (value >= 0.0)
+        return static_cast<UINT32>(value);
+    if (value <= -4294967296.0)
         return 0;
-
-    bool sign = (high & 0x80000000u) != 0;
-
-    if (!sign)
-    {
-        return low;
-    }
-    else
-    {
-        uint64_t pair64 = (static_cast<uint64_t>(0) << 32) | low;
-        return static_cast<UINT32>((pair64 + 0x7FFFFFFF) >> 32);
-    }
+    if (value < -4294967295.0)
+        return 1;
+    return static_cast<UINT32>(-value);
 }
 
-UINT32 ConditionalFloatToUInt(double a1)
+UINT32 ConditionalFloatToUInt(double value)
 {
     if (*(volatile UINT32*)0x01270A6C)
-        return static_cast<UINT32>(a1);
+        return static_cast<UINT32>(value);
     else
-        return SafeDoubleToUInt32(a1);
+        return SafeDoubleToUInt32(value);
 }
 
 Float32 __stdcall FontManagerGetLinePadding(UInt32 fontID) {
     return StdCall<Float32>(0xA1B3A0, fontID);
-}
-
-UINT32 GetFileSize(void* fntFileHandle) {
-    void** vtable = *(void***)fntFileHandle;
-    typedef UINT32(__thiscall* GetFileSizeFunc)(void* pThis);
-    GetFileSizeFunc func = (GetFileSizeFunc)vtable[10];
-    return func(fntFileHandle);
-}
-
-BSFile* __cdecl LoadFile(const char* filePath, SInt32 loadMode, UInt32 allocFlags, SInt32 openMode) {
-    return CdeclCall<BSFile*>(0xAFDF20, filePath, loadMode, allocFlags, openMode);
 }
 
 BSFile* FileFinder_GetFile(

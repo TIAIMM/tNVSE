@@ -33,15 +33,4 @@ extern bool bIsQuestTextMSBDBCharacter;
 extern bool bIsQuestTextLSBDBCharacter;
 extern char szDBChar[3];
 
-// ---- Global state: Quest text UTF-8 state machine ----
-extern bool bProcessingUTF8QueneText;
-extern bool bIsQuestTextUTF8FirstChar;
-extern bool bIsQuestTextUTF8SecondChar;
-extern bool bIsQuestTextUTF8ThirdChar;
-extern char szUTF8Char[4];
-
-// ---- Global state: Line break helpers ----
-extern bool bHasLeadByteInLast;
-extern unsigned char lastHanziByte;
-
 } // namespace fonthook

@@ -5,6 +5,20 @@
 
 namespace fonthook {
 
+// ---- Encoding identifier ----
+enum class CodePage : UInt32 {
+	English = 0,
+	GBK = 936,
+	Big5 = 950,
+	SJIS = 932,
+	UHC = 949,
+};
+
+// ---- Unified encoding dispatch (replaces repeated if/else-if chains) ----
+bool IsLeadByte(unsigned char c);
+bool IsTrailByte(unsigned char c);
+bool TryDecodeDoubleByte(const char* p, UInt32& outCode);
+
 // ---- GBK (Code Page 936) ----
 bool IsGBKLeadByte(unsigned char c);
 bool IsGBKTrailByte(unsigned char c);

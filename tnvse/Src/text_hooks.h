@@ -6,10 +6,10 @@
 
 namespace fonthook {
 
-// Forward-declared globals (defined in fonthook.cpp)
+// Forward-declared globals (defined in font_hook.cpp)
 extern std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
 
-// Quest text state globals
+// Quest text state globals (defined in font_hook.cpp)
 extern unsigned char pFirstChar;
 extern bool bIsQuestTextMSBDBCharacter;
 extern bool bIsQuestTextLSBDBCharacter;

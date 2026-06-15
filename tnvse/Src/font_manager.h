@@ -6,21 +6,14 @@
 
 namespace fonthook {
 
-// Forward-declared globals (defined in fonthook.cpp)
+// Forward-declared globals (defined in font_hook.cpp)
 extern std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
 
-// Quest text state globals (defined in fonthook.cpp)
+// Quest text state globals (defined in font_hook.cpp)
 extern unsigned char pFirstChar;
 extern bool bIsQuestTextMSBDBCharacter;
 extern bool bIsQuestTextLSBDBCharacter;
 extern char szDBChar[3];
-extern bool bProcessingUTF8QueneText;
-extern bool bIsQuestTextUTF8FirstChar;
-extern bool bIsQuestTextUTF8SecondChar;
-extern bool bIsQuestTextUTF8ThirdChar;
-extern char szUTF8Char[4];
-extern bool bHasLeadByteInLast;
-extern unsigned char lastHanziByte;
 
 class FontManagerEx : public FontManager {
 public:

@@ -14,12 +14,5 @@ unsigned char pFirstChar;
 bool bIsQuestTextMSBDBCharacter;
 bool bIsQuestTextLSBDBCharacter;
 char szDBChar[3];
-bool bProcessingUTF8QueneText;
-bool bIsQuestTextUTF8FirstChar;
-bool bIsQuestTextUTF8SecondChar;
-bool bIsQuestTextUTF8ThirdChar;
-char szUTF8Char[4];
-bool bHasLeadByteInLast;
-unsigned char lastHanziByte;
 
 } // namespace fonthook

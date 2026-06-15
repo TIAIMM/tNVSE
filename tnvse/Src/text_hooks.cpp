@@ -6,18 +6,7 @@ namespace fonthook {
 void* __fastcall TileSetStringHookForQueueText(void* pThis, void*, int a2, char* a3, bool a4) {
     bIsQuestTextLSBDBCharacter = false;
     if (bIsQuestTextMSBDBCharacter) {
-        if (g_usingWinEncoding == 936) {
-            bIsQuestTextLSBDBCharacter = IsGBKTrailByte(a3[0]);
-        }
-        else if (g_usingWinEncoding == 950) {
-            bIsQuestTextLSBDBCharacter = IsBig5TrailByte(a3[0]);
-        }
-        else if (g_usingWinEncoding == 932) {
-            bIsQuestTextLSBDBCharacter = IsSJISTrailByte(a3[0]);
-        }
-        else if (g_usingWinEncoding == 949) {
-            bIsQuestTextLSBDBCharacter = IsKoreanTrailByte(a3[0]);
-        }
+        bIsQuestTextLSBDBCharacter = IsTrailByte(a3[0]);
 
         if (bIsQuestTextLSBDBCharacter) {
             szDBChar[0] = pFirstChar;
@@ -30,18 +19,7 @@ void* __fastcall TileSetStringHookForQueueText(void* pThis, void*, int a2, char*
     if (gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end() && !bIsQuestTextMSBDBCharacter) {
         bIsQuestTextMSBDBCharacter = false;
 
-        if (g_usingWinEncoding == 936) {
-            bIsQuestTextMSBDBCharacter = IsGBKLeadByte((unsigned char)a3[0]);
-        }
-        else if (g_usingWinEncoding == 950) {
-            bIsQuestTextMSBDBCharacter = IsBig5LeadByte((unsigned char)a3[0]);
-        }
-        else if (g_usingWinEncoding == 932) {
-            bIsQuestTextMSBDBCharacter = IsSJISLeadByte((unsigned char)a3[0]);
-        }
-        else if (g_usingWinEncoding == 949) {
-            bIsQuestTextMSBDBCharacter = IsKoreanLeadByte((unsigned char)a3[0]);
-        }
+        bIsQuestTextMSBDBCharacter = IsLeadByte((unsigned char)a3[0]);
 
         if (bIsQuestTextMSBDBCharacter) {
             pFirstChar = (unsigned char)a3[0];
