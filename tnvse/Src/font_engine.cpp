@@ -780,19 +780,23 @@ namespace fonthook
 
 		*apTextShape = (UINT32*)Font::MakeTriShape(iActualCharCount, axFontColor, 1);
 
-		// Initialize text shape position data
+		// Initialize text shape position data via iconData (preserves original struct layout)
+		Font::TextData iconData;
+		*(float*)&iconData.xNewText.sLen = 0.0f;
+		*(float*)&iconData.iWidth = textPosition.y;
+		*(float*)&iconData.iHeight = textPosition.z;
 		UINT32* pTextShapeData = *apTextShape + 22;
 		*(float*)pTextShapeData = 0.0f;
-		pTextShapeData[1] = 0;       // textPosition.y (initially 0)
-		pTextShapeData[2] = *(UINT32*)&textPosition.z;
+		pTextShapeData[1] = iconData.iWidth;
+		pTextShapeData[2] = iconData.iHeight;
 
 		if (this->ButtonIcons.uiSize)
 		{
 			*apIconShape = (UINT32*)Font::MakeIconsTriShape();
 			UINT32* pIconShapeData = *apIconShape + 22;
-			pIconShapeData[0] = 0;
-			pIconShapeData[1] = 0;
-			pIconShapeData[2] = *(UINT32*)&textPosition.z;
+			*pIconShapeData = *(DWORD*)&iconData.xNewText.sLen;
+			pIconShapeData[1] = iconData.iWidth;
+			pIconShapeData[2] = iconData.iHeight;
 			ThisStdCall(0xA67050, (NiGeometryData*)(*apIconShape)[46], 0x4000);
 		}
 
@@ -926,20 +930,17 @@ namespace fonthook
 		}
 
 		// Count printable characters
+		UINT32 stringLength = (apTextString->sLen == 0xFFFF)
+			? strlen(apTextString->pString) : apTextString->sLen;
 		UINT32 charIdx = 0;
-		for (; ; ++charIdx)
-		{
-			UINT32 stringLength = (apTextString->sLen == 0xFFFF)
-				? strlen(apTextString->pString) : apTextString->sLen;
-			if (charIdx >= stringLength || !apTextString->pString[apTextString->pString ? charIdx : 0])
-				break;
-		}
+		for (; charIdx < stringLength && apTextString->pString[charIdx]; ++charIdx)
+			;
 
 		if (!charIdx)
 			return 0;
 
 		int iActualCharCount = AdjustCharCountForDB(
-			apTextString->pString, charIdx, extraGlyphs);
+			apTextString->pString, charIdx, extraGlyphs, stringLength);
 
 		UINT32* pTriShape = (UINT32*)Font::MakeTriShape(iActualCharCount, arg1C, abPrepareObject_1);
 		float startY = currentY;

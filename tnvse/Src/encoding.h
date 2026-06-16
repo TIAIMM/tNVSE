@@ -57,14 +57,15 @@ namespace fonthook
 	std::string UTF8ToMultiByteStr(const std::string& utf8, UINT32 codePage);
 
 	// ---- Double-byte character counting ----
-	// Reduces charCount by the number of double-byte character pairs in str.
+	// Reduces charCount by the number of double-byte character pairs in str,
+	// scanning up to maxLen bytes (0 means scan until null terminator).
 	template<typename TExtraGlyphs>
-	inline int AdjustCharCountForDB(const char* str, int charCount, TExtraGlyphs* extraGlyphs)
+	inline int AdjustCharCountForDB(const char* str, int charCount, TExtraGlyphs* extraGlyphs, UInt32 maxLen = 0)
 	{
 		if (!extraGlyphs || !str) return charCount;
 		int count = charCount;
 		UInt32 code;
-		for (int i = 0; str[i]; ++i)
+		for (UInt32 i = 0; (maxLen ? i < maxLen : str[i] != 0); ++i)
 		{
 			if (TryDecodeDoubleByte(&str[i], code))
 			{
