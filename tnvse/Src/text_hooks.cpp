@@ -23,11 +23,11 @@ namespace fonthook
 		{
 			bIsQuestTextMSBDBCharacter = false;
 
-			bIsQuestTextMSBDBCharacter = IsLeadByte((unsigned char)a3[0]);
+			bIsQuestTextMSBDBCharacter = IsLeadByte((UInt8)a3[0]);
 
 			if (bIsQuestTextMSBDBCharacter)
 			{
-				pFirstChar = (unsigned char)a3[0];
+				pFirstChar = (UInt8)a3[0];
 				a3 = (char*)"";
 			}
 		}

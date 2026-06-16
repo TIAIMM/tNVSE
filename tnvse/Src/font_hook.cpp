@@ -9,7 +9,7 @@ namespace fonthook
 	std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
 
 	// Quest text state machine variables
-	unsigned char pFirstChar;
+	UInt8 pFirstChar;
 	bool bIsQuestTextMSBDBCharacter;
 	bool bIsQuestTextLSBDBCharacter;
 	char szDBChar[3];

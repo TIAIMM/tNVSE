@@ -11,7 +11,7 @@ namespace fonthook
 	void InitBigGunsDescHooks()
 	{
 		static std::string sConvertedBigGunsDesc = UTF8ToMultiByteStr(g_sNewBigGunsDesc, g_usingWinEncoding);
-		SafeWrite32(GetJIPAddress(0x100113BD + 1), (UINT32)sConvertedBigGunsDesc.c_str());
+		SafeWrite32(GetJIPAddress(0x100113BD + 1), (UInt32)sConvertedBigGunsDesc.c_str());
 	}
 
 	void InitDoorPromptHooksCHS()

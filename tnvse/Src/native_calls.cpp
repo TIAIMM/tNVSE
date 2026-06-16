@@ -28,21 +28,21 @@ namespace fonthook
 		return ThisStdCall<void*>(0xAF25B0, listNode, itemData);
 	}
 
-	UINT32 SafeDoubleToUInt32(double value)
+	UInt32 SafeDoubleToUInt32(double value)
 	{
 		if (value >= 0.0)
-			return static_cast<UINT32>(value);
+			return static_cast<UInt32>(value);
 		if (value <= -4294967296.0)
 			return 0;
 		if (value < -4294967295.0)
 			return 1;
-		return static_cast<UINT32>(-value);
+		return static_cast<UInt32>(-value);
 	}
 
-	UINT32 ConditionalFloatToUInt(double value)
+	UInt32 ConditionalFloatToUInt(double value)
 	{
-		if (*(volatile UINT32*)0x01270A6C)
-			return static_cast<UINT32>(value);
+		if (*(volatile UInt32*)0x01270A6C)
+			return static_cast<UInt32>(value);
 		else
 			return SafeDoubleToUInt32(value);
 	}
@@ -55,8 +55,8 @@ namespace fonthook
 	BSFile* FileFinder_GetFile(
 		const char* apName,
 		NiFile::OpenMode aeMode,
-		unsigned int aiSize,
-		unsigned int aiArchiveType
+		UInt32 aiSize,
+		UInt32 aiArchiveType
 	)
 	{
 		return CdeclCall<BSFile*>(0xAFDF20, apName, aeMode, aiSize, aiArchiveType);

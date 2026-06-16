@@ -212,7 +212,7 @@ struct  Font
 	};
 	STATIC_ASSERT(sizeof(ButtonIcon) == 0x20);
 
-	unsigned __int16 iRefCount;
+	UInt16 iRefCount;
 	char* pFontFile;
 	int iFontNum;
 	NiPointer<NiTexturingProperty> pTextureData[8];

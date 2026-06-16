@@ -4,20 +4,20 @@
 namespace fonthook
 {
 	// ===================== GBK (Code Page 936) =====================
-	bool IsGBKLeadByte(unsigned char c)
+	bool IsGBKLeadByte(UInt8 c)
 	{
 		return (c >= 0x81 && c <= 0xFE);
 	}
 
-	bool IsGBKTrailByte(unsigned char c)
+	bool IsGBKTrailByte(UInt8 c)
 	{
 		return (c >= 0x40 && c <= 0xFE && c != 0x7F);
 	}
 
 	bool TryDecodeGBK(const char* p, UInt32& outCode)
 	{
-		unsigned char lead = (unsigned char)p[0];
-		unsigned char trail = (unsigned char)p[1];
+		UInt8 lead = (UInt8)p[0];
+		UInt8 trail = (UInt8)p[1];
 		if (!IsGBKLeadByte(lead) || !IsGBKTrailByte(trail))
 			return false;
 		outCode = (UInt32(lead) << 8) | UInt32(trail);
@@ -25,20 +25,20 @@ namespace fonthook
 	}
 
 	// ===================== Big5 (Code Page 950) =====================
-	bool IsBig5LeadByte(unsigned char c)
+	bool IsBig5LeadByte(UInt8 c)
 	{
 		return (c >= 0x81 && c <= 0xFE);
 	}
 
-	bool IsBig5TrailByte(unsigned char c)
+	bool IsBig5TrailByte(UInt8 c)
 	{
 		return ((c >= 0x40 && c <= 0x7E) || (c >= 0xA1 && c <= 0xFE));
 	}
 
 	bool TryDecodeBig5(const char* p, UInt32& outCode)
 	{
-		unsigned char lead = (unsigned char)p[0];
-		unsigned char trail = (unsigned char)p[1];
+		UInt8 lead = (UInt8)p[0];
+		UInt8 trail = (UInt8)p[1];
 		if (!IsBig5LeadByte(lead) || !IsBig5TrailByte(trail))
 			return false;
 		outCode = (UInt32(lead) << 8) | UInt32(trail);
@@ -46,7 +46,7 @@ namespace fonthook
 	}
 
 	// ===================== Shift-JIS (Code Page 932) =====================
-	bool IsSJISLeadByte(unsigned char c)
+	bool IsSJISLeadByte(UInt8 c)
 	{
 		if (c >= 0x81 && c <= 0x9F) return true;
 		if (c >= 0xE0 && c <= 0xEA) return true;
@@ -55,7 +55,7 @@ namespace fonthook
 		return false;
 	}
 
-	bool IsSJISTrailByte(unsigned char c)
+	bool IsSJISTrailByte(UInt8 c)
 	{
 		if (c >= 0x40 && c <= 0x7E) return true;
 		if (c >= 0x80 && c <= 0xFC) return true;
@@ -64,8 +64,8 @@ namespace fonthook
 
 	bool TryDecodeSJIS(const char* p, UInt32& outCode)
 	{
-		unsigned char lead = (unsigned char)p[0];
-		unsigned char trail = (unsigned char)p[1];
+		UInt8 lead = (UInt8)p[0];
+		UInt8 trail = (UInt8)p[1];
 		if (!IsSJISLeadByte(lead) || !IsSJISTrailByte(trail))
 			return false;
 		outCode = (UInt32(lead) << 8) | UInt32(trail);
@@ -73,12 +73,12 @@ namespace fonthook
 	}
 
 	// ===================== Korean/UHC (Code Page 949) =====================
-	bool IsKoreanLeadByte(unsigned char c)
+	bool IsKoreanLeadByte(UInt8 c)
 	{
 		return (c >= 0x81 && c <= 0xC8);
 	}
 
-	bool IsKoreanTrailByte(unsigned char c)
+	bool IsKoreanTrailByte(UInt8 c)
 	{
 		if (c >= 0x41 && c <= 0x5A) return true;
 		if (c >= 0x61 && c <= 0x7A) return true;
@@ -88,8 +88,8 @@ namespace fonthook
 
 	bool TryDecodeKorean(const char* p, UInt32& outCode)
 	{
-		unsigned char lead = (unsigned char)p[0];
-		unsigned char trail = (unsigned char)p[1];
+		UInt8 lead = (UInt8)p[0];
+		UInt8 trail = (UInt8)p[1];
 		if (!IsKoreanLeadByte(lead) || !IsKoreanTrailByte(trail))
 			return false;
 		outCode = (UInt32(lead) << 8) | UInt32(trail);
@@ -102,7 +102,7 @@ namespace fonthook
 		if (!s)
 			return false;
 
-		const unsigned char* p = (const unsigned char*)s;
+		const UInt8* p = (const UInt8*)s;
 		bool has3ByteOrMore = false;
 
 		while (*p)
@@ -123,7 +123,7 @@ namespace fonthook
 			}
 			else if (*p < 0xF0)
 			{
-				unsigned char c2 = p[1], c3 = p[2];
+				UInt8 c2 = p[1], c3 = p[2];
 				if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80)
 					return false;
 				has3ByteOrMore = true;
@@ -131,7 +131,7 @@ namespace fonthook
 			}
 			else if (*p < 0xF5)
 			{
-				unsigned char c2 = p[1], c3 = p[2], c4 = p[3];
+				UInt8 c2 = p[1], c3 = p[2], c4 = p[3];
 				if ((c2 & 0xC0) != 0x80 ||
 					(c3 & 0xC0) != 0x80 ||
 					(c4 & 0xC0) != 0x80)
@@ -149,7 +149,7 @@ namespace fonthook
 	}
 
 	// ===================== Encoding Conversion =====================
-	std::string MultiByteToUTF8(const std::string& src, UINT32 codePage)
+	std::string MultiByteToUTF8(const std::string& src, UInt32 codePage)
 	{
 		int len = MultiByteToWideChar(codePage, 0, src.c_str(), -1, nullptr, 0);
 		if (len == 0) return "";
@@ -162,7 +162,7 @@ namespace fonthook
 		return utf8;
 	}
 
-	std::string UTF8ToMultiByteStr(const std::string& utf8, UINT32 codePage)
+	std::string UTF8ToMultiByteStr(const std::string& utf8, UInt32 codePage)
 	{
 		int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
 		if (len == 0) return "";
@@ -184,7 +184,7 @@ namespace fonthook
 namespace fonthook
 {
 
-	bool IsLeadByte(unsigned char c)
+	bool IsLeadByte(UInt8 c)
 	{
 		switch (g_usingWinEncoding)
 		{
@@ -196,7 +196,7 @@ namespace fonthook
 		}
 	}
 
-	bool IsTrailByte(unsigned char c)
+	bool IsTrailByte(UInt8 c)
 	{
 		switch (g_usingWinEncoding)
 		{

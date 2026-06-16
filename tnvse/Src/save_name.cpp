@@ -23,9 +23,9 @@ bool __fastcall fonthook::CharInList(const char* list, char c)
  * 双引号 " 特殊处理为单引号 '
  * 其余非法字符（包括控制字符、高位字符、禁用符号）替换为空格
  */
-void __fastcall fonthook::SavePathProcess(DWORD a1, DWORD a2, char* szFileName)
+void __fastcall fonthook::SavePathProcess(UInt32 a1, UInt32 a2, char* szFileName)
 {
-	size_t len = CdeclCall<UINT>(0xEC6130, szFileName);//FastStrlen
+	size_t len = CdeclCall<UInt32>(0xEC6130, szFileName);//FastStrlen
 	for (size_t i = 0; i < len; i++)
 	{
 	    char c = szFileName[i];

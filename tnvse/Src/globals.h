@@ -13,7 +13,7 @@ namespace fonthook
 	extern std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
 
 	// ---- Quest text double-byte character state machine (defined in font_hook.cpp) ----
-	extern unsigned char pFirstChar;
+	extern UInt8 pFirstChar;
 	extern bool bIsQuestTextMSBDBCharacter;
 	extern bool bIsQuestTextLSBDBCharacter;
 	extern char szDBChar[3];

@@ -13,12 +13,12 @@ namespace fonthook
 	void* __cdecl AppendToListTail(void* listNode, void* itemData);
 
 	// ---- Float/int conversion helpers ----
-	UINT32 SafeDoubleToUInt32(double value);
-	UINT32 ConditionalFloatToUInt(double value);
+	UInt32 SafeDoubleToUInt32(double value);
+	UInt32 ConditionalFloatToUInt(double value);
 
 	// ---- Font/FontManager helpers ----
 	Float32 __stdcall FontManagerGetLinePadding(UInt32 fontID);
-	BSFile* FileFinder_GetFile(const char* apName, NiFile::OpenMode aeMode, unsigned int aiSize, unsigned int aiArchiveType);
+	BSFile* FileFinder_GetFile(const char* apName, NiFile::OpenMode aeMode, UInt32 aiSize, UInt32 aiArchiveType);
 
 	// ---- Inline helpers ----
 	inline int MaxInt(int a, int b)

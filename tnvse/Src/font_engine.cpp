@@ -27,7 +27,7 @@ namespace fonthook
 		outIsDB = false;
 		if (extraGlyphs && processedLen >= 2)
 		{
-			unsigned char lastByte = (unsigned char)buffer[processedLen - 1];
+			UInt8 lastByte = (UInt8)buffer[processedLen - 1];
 			if (IsTrailByte(lastByte))
 			{
 				if (TryDecodeDoubleByte(&buffer[processedLen - 2], outDBCode))
@@ -41,13 +41,13 @@ namespace fonthook
 				}
 			}
 		}
-		return &fontData->pFontLetters[(unsigned char)buffer[processedLen - 1]];
+		return &fontData->pFontLetters[(UInt8)buffer[processedLen - 1]];
 	}
 
 	// ---- Helper: adjust wrap position to avoid splitting a double-byte character ----
 	static UInt32 AdjustWrapPositionForDB(UInt32 insertPos, const char* buffer)
 	{
-		if (insertPos > 0 && IsLeadByte((unsigned char)buffer[insertPos - 1]))
+		if (insertPos > 0 && IsLeadByte((UInt8)buffer[insertPos - 1]))
 		{
 			return insertPos - 1;
 		}
@@ -71,7 +71,7 @@ namespace fonthook
 
 		if (apFilename)
 		{
-			UINT32 filenameLen = strlen(apFilename);
+			UInt32 filenameLen = strlen(apFilename);
 			if (filenameLen)
 			{
 				this->pFontFile = (char*)MemoryManager_s_Instance->Allocate(filenameLen + 1);
@@ -108,7 +108,7 @@ namespace fonthook
 	{
 		TlsSlotGuard tlsGuard;
 
-		unsigned __int16 refCount = this->iRefCount;
+		UInt16 refCount = this->iRefCount;
 		if (refCount || !this->pFontFile)
 		{
 			++this->iRefCount;
@@ -124,7 +124,7 @@ namespace fonthook
 		}
 
 		// ---- Read font data header ----
-		DWORD textureMarkers[2] = {};
+		UInt32 textureMarkers[2] = {};
 		textureMarkers[0] = 1;
 		this->pFontData = (FontData*)MemoryManager_s_Instance->Allocate(kFontDataSize);
 		fontFile->m_uiAbsoluteCurrentPos +=
@@ -150,11 +150,11 @@ namespace fonthook
 
 	// ---- FontEx::Load helpers ----
 
-	void FontEx::LoadExtraGlyphs(BSFile* fontFile, DWORD* textureMarkers)
+	void FontEx::LoadExtraGlyphs(BSFile* fontFile, UInt32* textureMarkers)
 	{
 		if (!g_uiEncoding) return;
 
-		unsigned int uiActualSize = fontFile->GetSize();
+		UInt32 uiActualSize = fontFile->GetSize();
 		if (uiActualSize <= kFontDataSize) return;
 
 		fontNameKey = this->pFontFile ? this->pFontFile : "";
@@ -164,9 +164,9 @@ namespace fonthook
 		if (!extraMap.empty()) return;
 
 		extraMap.reserve(kExtraGlyphReserve);
-		for (unsigned int highByte = 0x81; highByte <= 0xFE; ++highByte)
+		for (UInt32 highByte = 0x81; highByte <= 0xFE; ++highByte)
 		{
-			for (unsigned int lowByte = 0x40; lowByte <= 0xFE; ++lowByte)
+			for (UInt32 lowByte = 0x40; lowByte <= 0xFE; ++lowByte)
 			{
 				FontLetter letter{};
 				UInt32 letterRead = fontFile->m_pfnRead(fontFile, &letter, sizeof(letter), textureMarkers, 1u);
@@ -223,7 +223,7 @@ namespace fonthook
 		return maxHeight;
 	}
 
-	bool FontEx::LoadFontTextures(DWORD* textureMarkers, int& stringRefFlag)
+	bool FontEx::LoadFontTextures(UInt32* textureMarkers, int& stringRefFlag)
 	{
 		for (int textureCount = 0; textureCount < this->pFontData->iTextureCount; ++textureCount)
 		{
@@ -240,9 +240,9 @@ namespace fonthook
 				return false;
 			}
 
-			unsigned int texWidth, texHeight;
+			UInt32 texWidth, texHeight;
 			textureMarkers[0] = 1;
-			unsigned int readFlagValue = textureReadStream->m_pfnRead(textureReadStream, &texWidth, 4u, textureMarkers, 1u);
+			UInt32 readFlagValue = textureReadStream->m_pfnRead(textureReadStream, &texWidth, 4u, textureMarkers, 1u);
 			readFlagValue += textureReadStream->m_pfnRead(textureReadStream, &texHeight, 4u, textureMarkers, 1u);
 			textureReadStream->m_uiAbsoluteCurrentPos += readFlagValue;
 
@@ -266,7 +266,7 @@ namespace fonthook
 
 			void* readBuffer = &finalPixelData->m_pucPixels[*finalPixelData->m_puiOffsetInBytes];
 			int readFlag = 1;
-			unsigned int bytesRead = textureReadStream->m_pfnRead(
+			UInt32 bytesRead = textureReadStream->m_pfnRead(
 				textureReadStream, readBuffer, 4 * texHeight * texWidth, (UInt32*)&readFlag, 1u);
 			textureReadStream->m_uiAbsoluteCurrentPos += bytesRead;
 			finalPixelData->bNoConvert = 1;
@@ -310,14 +310,14 @@ namespace fonthook
 	// Pass 1: process escape sequences (&variable;) in-place
 	static bool ProcessEscapeSequences(
 		char*& processedOriginalText, char*& dynamicTextBuffer,
-		UInt32& textBufferSize, unsigned int& processedTextLen,
+		UInt32& textBufferSize, UInt32& processedTextLen,
 		UInt32& origConsumed, UInt32& sourceTextLen,
 		FontEx* font, Font::TextData* axData)
 	{
 		char parsedTextBuffer[1028] = {};
 		bool hasEscapeSequence = false;
 
-		for (unsigned int srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
+		for (UInt32 srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
 		{
 			if (processedOriginalText[srcTextIndex] != '&')
 			{
@@ -423,7 +423,7 @@ namespace fonthook
 		UInt32 origConsumed = 0;
 
 		float lineSpacingAdjust = FontManagerGetLinePadding(font->iFontNum);
-		unsigned int lastWrapPosition = 0;
+		UInt32 lastWrapPosition = 0;
 		SInt32 preSpaceWidth = 0;
 		SInt32 postSpaceWidth = 0;
 		SInt32 currentLineWidth = 0;
@@ -448,7 +448,7 @@ namespace fonthook
 		char* dynamicTextBuffer = processedTextBuffer;
 		snprintf(originalTextBuffer, sourceTextLen + 1, "%s", apOrigString);
 
-		unsigned int processedTextLen = 0;
+		UInt32 processedTextLen = 0;
 		UInt32 textBufferSize = sourceTextLen + 4;
 
 		// ---- Pass 1: Process escape sequences (&variable;) ----
@@ -494,9 +494,9 @@ namespace fonthook
 					continue;
 				}
 
-				unsigned __int8 currentChar;
+				UInt8 currentChar;
 				FontLetter* pCurrentGlyph;
-				unsigned int charWidthWithKerning;
+				UInt32 charWidthWithKerning;
 
 				if (!bIsDBCharacter)
 				{
@@ -519,7 +519,7 @@ namespace fonthook
 					{
 						lastWrapPosition = processedTextLen;
 						isTildeChar = true;
-						unsigned int tildeCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+						UInt32 tildeCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
 						currentLineWidth -= tildeCharWidth;
 						preSpaceWidth = currentLineWidth;
 						postSpaceWidth = currentLineWidth;
@@ -571,7 +571,7 @@ namespace fonthook
 								pCurrentGlyph = &font->pFontData->pFontLetters[currentChar];
 							}
 
-							unsigned int nextCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+							UInt32 nextCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
 							currentLineWidth += nextCharWidth;
 						}
 						else
@@ -600,7 +600,7 @@ namespace fonthook
 						UInt32 tailBytes = processedTextLen - tailStart;
 						if (processedTextLen >= 2)
 						{
-							unsigned char lastChar = (unsigned char)dynamicTextBuffer[processedTextLen - 1];
+							UInt8 lastChar = (UInt8)dynamicTextBuffer[processedTextLen - 1];
 							if (extraGlyphs && IsLeadByte(lastChar))
 							{
 								tailStart = processedTextLen - 2;
@@ -632,7 +632,7 @@ namespace fonthook
 							pCurrentGlyph = &font->pFontData->pFontLetters[currentChar];
 						}
 
-						unsigned int combinedCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+						UInt32 combinedCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
 						currentLineWidth += combinedCharWidth;
 					}
 				}
@@ -687,9 +687,9 @@ namespace fonthook
 
 		if (*dynamicTextBuffer && axData->iLineStart)
 		{
-			unsigned int truncatedTextLen = 0;
+			UInt32 truncatedTextLen = 0;
 			SInt32 lineCounter = 0;
-			for (unsigned int truncateCharCounter = 0; truncateCharCounter < processedTextLen; ++truncateCharCounter)
+			for (UInt32 truncateCharCounter = 0; truncateCharCounter < processedTextLen; ++truncateCharCounter)
 			{
 				if (lineCounter >= axData->iLineStart && lineCounter < axData->iLineEnd)
 					dynamicTextBuffer[truncatedTextLen++] = dynamicTextBuffer[truncateCharCounter];
@@ -739,7 +739,7 @@ namespace fonthook
 	UInt32 FontEx::CreateText(
 		BSStringT<char>* axTextString, int* aiWidth, int* aiHeight,
 		int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
-		const NiColorA* axFontColor, UINT32** apTextShape, UINT32** apIconShape)
+		const NiColorA* axFontColor, UInt32** apTextShape, UInt32** apIconShape)
 	{
 
 		auto* extraGlyphs = GetExtraGlyphs(this->iFontNum);
@@ -778,23 +778,23 @@ namespace fonthook
 		int iActualCharCount = AdjustCharCountForDB(
 			textData.xNewText.pString, textData.iCharCount, extraGlyphs);
 
-		*apTextShape = (UINT32*)Font::MakeTriShape(iActualCharCount, axFontColor, 1);
+		*apTextShape = (UInt32*)Font::MakeTriShape(iActualCharCount, axFontColor, 1);
 
 		// Initialize text shape position data via iconData (preserves original struct layout)
 		Font::TextData iconData;
 		*(float*)&iconData.xNewText.sLen = 0.0f;
 		*(float*)&iconData.iWidth = textPosition.y;
 		*(float*)&iconData.iHeight = textPosition.z;
-		UINT32* pTextShapeData = *apTextShape + 22;
+		UInt32* pTextShapeData = *apTextShape + 22;
 		*(float*)pTextShapeData = 0.0f;
 		pTextShapeData[1] = iconData.iWidth;
 		pTextShapeData[2] = iconData.iHeight;
 
 		if (this->ButtonIcons.uiSize)
 		{
-			*apIconShape = (UINT32*)Font::MakeIconsTriShape();
-			UINT32* pIconShapeData = *apIconShape + 22;
-			*pIconShapeData = *(DWORD*)&iconData.xNewText.sLen;
+			*apIconShape = (UInt32*)Font::MakeIconsTriShape();
+			UInt32* pIconShapeData = *apIconShape + 22;
+			*pIconShapeData = *(UInt32*)&iconData.xNewText.sLen;
 			pIconShapeData[1] = iconData.iWidth;
 			pIconShapeData[2] = iconData.iHeight;
 			ThisStdCall(0xA67050, (NiGeometryData*)(*apIconShape)[46], 0x4000);
@@ -838,12 +838,12 @@ namespace fonthook
 				textPosition.x = 75.0 - prevTabX + textPosition.x;
 			}
 
-			unsigned __int8 currentChar = textData.xNewText.pString[textData.xNewText.pString ? charIdx : 0];
+			UInt8 currentChar = textData.xNewText.pString[textData.xNewText.pString ? charIdx : 0];
 
 			bool bIsDBCharacter = false;
 			if (extraGlyphs)
 			{
-				unsigned char cNextByte = (unsigned char)textData.xNewText.pString[charIdx + 1];
+				UInt8 cNextByte = (UInt8)textData.xNewText.pString[charIdx + 1];
 				if (cNextByte != 0)
 				{
 					bIsDBCharacter = TryDecodeDoubleByte(
@@ -884,12 +884,12 @@ namespace fonthook
 			*aiWidth = MaxInt(renderedWidth, maxRenderedWidth);
 		}
 
-		*(DWORD*)&textData.cLineSep = *(DWORD*)((*apTextShape)[46] + 32);
+		*(UInt32*)&textData.cLineSep = *(UInt32*)((*apTextShape)[46] + 32);
 		ThisStdCall(0xA7EE30, (float*)((*apTextShape)[46] + 16),
-			*(unsigned __int16*)((*apTextShape)[46] + 8), *(float**)&textData.cLineSep);
+			*(UInt16*)((*apTextShape)[46] + 8), *(float**)&textData.cLineSep);
 		if (*apIconShape)
 			ThisStdCall(0xA7EE30, (float*)((*apIconShape)[46] + 16),
-				*(unsigned __int16*)((*apIconShape)[46] + 8),
+				*(UInt16*)((*apIconShape)[46] + 8),
 				*(float**)((*apIconShape)[46] + 32));
 		this->ButtonIcons.Clear(1);
 		return ThisStdCall(0x7593E0, (char*)&textData);
@@ -909,7 +909,7 @@ namespace fonthook
 		if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
 			apTextString->Set(pStr);
 
-		UINT32 textLen = (apTextString->sLen == 0xFFFF)
+		UInt32 textLen = (apTextString->sLen == 0xFFFF)
 			? strlen(apTextString->pString) : apTextString->sLen;
 		if (!textLen || !this->pFontData)
 			return 0;
@@ -930,9 +930,9 @@ namespace fonthook
 		}
 
 		// Count printable characters
-		UINT32 stringLength = (apTextString->sLen == 0xFFFF)
+		UInt32 stringLength = (apTextString->sLen == 0xFFFF)
 			? strlen(apTextString->pString) : apTextString->sLen;
-		UINT32 charIdx = 0;
+		UInt32 charIdx = 0;
 		for (; charIdx < stringLength && apTextString->pString[charIdx]; ++charIdx)
 			;
 
@@ -942,7 +942,7 @@ namespace fonthook
 		int iActualCharCount = AdjustCharCountForDB(
 			apTextString->pString, charIdx, extraGlyphs, stringLength);
 
-		UINT32* pTriShape = (UINT32*)Font::MakeTriShape(iActualCharCount, arg1C, abPrepareObject_1);
+		UInt32* pTriShape = (UInt32*)Font::MakeTriShape(iActualCharCount, arg1C, abPrepareObject_1);
 		float startY = currentY;
 		*((float*)pTriShape + 22) = afStartX;
 		*((float*)pTriShape + 23) = currentZ;
@@ -977,12 +977,12 @@ namespace fonthook
 				currentY = currentY - this->pFontData->fBaseLine;
 			}
 
-			unsigned __int8 currentChar = apTextString->pString[apTextString->pString ? lineIdx : 0];
+			UInt8 currentChar = apTextString->pString[apTextString->pString ? lineIdx : 0];
 
 			bool bIsDBCharacter = false;
 			if (extraGlyphs)
 			{
-				unsigned char cNextByte = (unsigned char)apTextString->pString[lineIdx + 1];
+				UInt8 cNextByte = (UInt8)apTextString->pString[lineIdx + 1];
 				if (cNextByte != 0)
 				{
 					bIsDBCharacter = TryDecodeDoubleByte(
@@ -1023,7 +1023,7 @@ namespace fonthook
 
 		float* pVertexData = *(float**)(pTriShape[46] + 32);
 		ThisStdCall(0xA7EE30, (float*)(pTriShape[46] + 16),
-			*(unsigned __int16*)(pTriShape[46] + 8), pVertexData);
+			*(UInt16*)(pTriShape[46] + 8), pVertexData);
 		return (UInt32*)pTriShape;
 	}
 

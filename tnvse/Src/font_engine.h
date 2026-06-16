@@ -9,36 +9,36 @@
 namespace fonthook
 {
 	// ---- Constants ----
-	static constexpr DWORD kTlsIndexAddr = 0x126FD98;
-	static constexpr DWORD kTlsSlotValue = 12;
+	static constexpr UInt32 kTlsIndexAddr = 0x126FD98;
+	static constexpr UInt32 kTlsSlotValue = 12;
 	static constexpr int kTlsByteOffset = 692;
 	static constexpr UInt32 kFontDataSize = 0x3928;
 	static constexpr UInt32 kMaxGlyphCount = 256;
 	static constexpr UInt32 kExtraGlyphReserve = 24066;
 	static constexpr UInt32 kSentinelMax = 0x7FFFFFFF;
 	static constexpr int kTabWidth = 75;
-	static constexpr char kSpaceChar = 32;
-	static constexpr char kNBSPChar = 160;
-	static constexpr char kDelChar = 127;
-	static constexpr char kPipeChar = 124;
+	static constexpr UInt8 kSpaceChar = 32;
+	static constexpr UInt8 kNBSPChar = 160;
+	static constexpr UInt8 kDelChar = 127;
+	static constexpr UInt8 kPipeChar = 124;
 
 	// ---- RAII guard for TLS slot management ----
 	class TlsSlotGuard
 	{
-		DWORD m_savedValue;
-		DWORD* m_target;
+		UInt32 m_savedValue;
+		UInt32* m_target;
 	public:
 		TlsSlotGuard()
 		{
-			DWORD* pTlsIndex = (DWORD*)kTlsIndexAddr;
-			DWORD tebAddress;
+			UInt32* pTlsIndex = (UInt32*)kTlsIndexAddr;
+			UInt32 tebAddress;
 			__asm {
 				mov eax, fs: [0x18]
 				mov tebAddress, eax
 			}
-			DWORD tlsPointer = *(DWORD*)(tebAddress + 0x2C);
-			DWORD tlsSlotAddress = *(DWORD*)(tlsPointer + (*pTlsIndex) * 4);
-			m_target = (DWORD*)(tlsSlotAddress + kTlsByteOffset);
+			UInt32 tlsPointer = *(UInt32*)(tebAddress + 0x2C);
+			UInt32 tlsSlotAddress = *(UInt32*)(tlsPointer + (*pTlsIndex) * 4);
+			m_target = (UInt32*)(tlsSlotAddress + kTlsByteOffset);
 			m_savedValue = *m_target;
 			*m_target = kTlsSlotValue;
 		}
@@ -61,16 +61,16 @@ namespace fonthook
 		UInt32 CreateText(
 			BSStringT<char>* axTextString, int* aiWidth, int* aiHeight,
 			int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
-			const NiColorA* axFontColor, UINT32** apTextShape, UINT32** apIconShape);
+			const NiColorA* axFontColor, UInt32** apTextShape, UInt32** apIconShape);
 		UInt32* MakeString(
 			float afStartX, float afStartY, float afZ,
 			BSStringT<char>* apTextString, int* aiWidth, bool abPrepareObject,
 			const NiColorA* arg1C, bool abUpperLeftCorner, bool abPrepareObject_1);
 
 	private:
-		void LoadExtraGlyphs(BSFile* fontFile, DWORD* textureMarkers);
+		void LoadExtraGlyphs(BSFile* fontFile, UInt32* textureMarkers);
 		float ComputeGlyphMetrics();
-		bool LoadFontTextures(DWORD* textureMarkers, int& stringRefFlag);
+		bool LoadFontTextures(UInt32* textureMarkers, int& stringRefFlag);
 	};
 
 } // namespace fonthook

@@ -32,7 +32,7 @@ namespace fonthook
 		for (int currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
 		{
 			bool bIsDBCharacter = false;
-			unsigned __int8 currentChar = srcString[currentCharIndex];
+			UInt8 currentChar = srcString[currentCharIndex];
 			float currentCharTotalWidth = 0.0;
 
 			if (extraGlyphs)
@@ -129,9 +129,9 @@ namespace fonthook
 		return outDimensions;
 	}
 
-	UINT32* FontManagerEx::PrepText(BSStringT<char>* a7, int a3)
+	UInt32* FontManagerEx::PrepText(BSStringT<char>* a7, int a3)
 	{
-		return ThisStdCall<UINT32*>(0xA18A30, this, a7, a3);
+		return ThisStdCall<UInt32*>(0xA18A30, this, a7, a3);
 	}
 
 } // namespace fonthook
