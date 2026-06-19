@@ -399,9 +399,6 @@
     <ClInclude Include="Include\Gamebryo\NiSourceTexture.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Include\Gamebryo\NiTransform (1).hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Include\Gamebryo\NiTriBasedGeom.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>

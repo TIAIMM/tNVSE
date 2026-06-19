@@ -520,7 +520,6 @@
     <ClInclude Include="Include\Gamebryo\NiTPointerList.hpp" />
     <ClInclude Include="Include\Gamebryo\NiTPointerListBase.hpp" />
     <ClInclude Include="Include\Gamebryo\NiTPointerMap.hpp" />
-    <ClInclude Include="Include\Gamebryo\NiTransform (1).hpp" />
     <ClInclude Include="Include\Gamebryo\NiTransform.hpp" />
     <ClInclude Include="Include\Gamebryo\NiTransformData.hpp" />
     <ClInclude Include="Include\Gamebryo\NiTransformInterpolator.hpp" />
