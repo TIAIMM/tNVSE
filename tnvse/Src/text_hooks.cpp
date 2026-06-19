@@ -8,7 +8,7 @@ namespace fonthook
 		bIsQuestTextLSBDBCharacter = false;
 		if (bIsQuestTextMSBDBCharacter)
 		{
-			bIsQuestTextLSBDBCharacter = IsTrailByte(a3[0]);
+			bIsQuestTextLSBDBCharacter = IsTrailByte((UInt8)a3[0]);
 
 			if (bIsQuestTextLSBDBCharacter)
 			{
@@ -19,10 +19,9 @@ namespace fonthook
 			}
 		}
 
-		if (gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end() && !bIsQuestTextMSBDBCharacter)
+		bool bHasFont8 = gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end();
+		if (bHasFont8 && !bIsQuestTextMSBDBCharacter)
 		{
-			bIsQuestTextMSBDBCharacter = false;
-
 			bIsQuestTextMSBDBCharacter = IsLeadByte((UInt8)a3[0]);
 
 			if (bIsQuestTextMSBDBCharacter)

@@ -186,6 +186,7 @@ namespace fonthook
 
 	bool IsLeadByte(UInt8 c)
 	{
+		if (c < 0x80) return false;  // ASCII fast-path
 		switch (g_usingWinEncoding)
 		{
 		case 936:  return IsGBKLeadByte(c);
@@ -198,6 +199,7 @@ namespace fonthook
 
 	bool IsTrailByte(UInt8 c)
 	{
+		if (c < 0x80) return false;  // ASCII fast-path
 		switch (g_usingWinEncoding)
 		{
 		case 936:  return IsGBKTrailByte(c);
@@ -210,6 +212,7 @@ namespace fonthook
 
 	bool TryDecodeDoubleByte(const char* p, UInt32& outCode)
 	{
+		if ((UInt8)p[0] < 0x80) return false;  // ASCII fast-path
 		switch (g_usingWinEncoding)
 		{
 		case 936:  return TryDecodeGBK(p, outCode);

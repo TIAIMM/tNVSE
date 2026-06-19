@@ -8,18 +8,19 @@ namespace fonthook
 		auto extraGlyphEntry = gNumberedExtraLetters.find(fontID);
 		auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
 
-		std::string sConvertedStr;
-		ConvertToMultiByte(srcString, sConvertedStr, extraGlyphs != nullptr);
-
 		if (fontID < 1 || !srcString)
 		{
 			*outDimensions = StringDefaultDimensions;
 			return outDimensions;
 		}
 
+		std::string sConvertedStr;
+		ConvertToMultiByte(srcString, sConvertedStr, extraGlyphs != nullptr);
+
 		NiPoint3 StringDimensions = StringDefaultDimensions;
 		int sourceStringLength = strlen(srcString);
 		FontLetter* fontCharMetrics = this->pFont[fontID - 1]->pFontData->pFontLetters;
+		float fontBaseLine = this->pFont[fontID - 1]->pFontData->fBaseLine;
 		float lastValidWrapPosition = 0.0;
 		float currentLineWidth = 0.0;
 		float fontVerticalSpacingAdjust = FontManagerGetLinePadding(fontID);
@@ -113,7 +114,7 @@ namespace fonthook
 				StringDimensions.x = (lastValidWrapPosition >= StringDimensions.x)
 					? lastValidWrapPosition : StringDimensions.x;
 				StringDimensions.y = fontVerticalSpacingAdjust
-					+ this->pFont[fontID - 1]->pFontData->fBaseLine + StringDimensions.y;
+					+ fontBaseLine + StringDimensions.y;
 				lastValidWrapPosition = 0.0;
 				++totalLines;
 			}
