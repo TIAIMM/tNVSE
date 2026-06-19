@@ -12,7 +12,7 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{AE7CFEE7-4058-4E3C-ADC2-AE7480EE2028}</ProjectGuid>
-    <RootNamespace>nvse_plugin_example</RootNamespace>
+    <RootNamespace>tnvse</RootNamespace>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <ProjectName>tnvse</ProjectName>
@@ -46,7 +46,7 @@
     <OutDir>$(SolutionDir)\Build\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\Build\tmp\$(Configuration)\</IntDir>
     <LinkIncremental>true</LinkIncremental>
-    <LibraryPath>$(DXSDK_DIR)\Lib\x86;$(ProjectDir)..\commonlib_nv\Debug;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
+    <LibraryPath>$(DXSDK_DIR)\Lib\x86;$(ProjectDir)..\commonlib_nv\Build\Debug;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
     <IncludePath>$(ProjectDir)Src;$(ProjectDir)..\commonlib_nv\Include\Utils;$(ProjectDir)..\commonlib_nv\Include;$(ProjectDir)..\commonlib_nv\Include\Gamebryo;$(ProjectDir)..\commonlib_nv\Include\Havok;$(ProjectDir)..\commonlib_nv\Include\Bethesda;$(DXSDK_DIR)Include</IncludePath>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
   </PropertyGroup>
@@ -55,7 +55,7 @@
     <IntDir>$(SolutionDir)\Build\tmp\$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
     <IncludePath>$(ProjectDir)Src;$(ProjectDir)..\commonlib_nv\Include\Utils;$(ProjectDir)..\commonlib_nv\Include;$(ProjectDir)..\commonlib_nv\Include\Gamebryo;$(ProjectDir)..\commonlib_nv\Include\Havok;$(ProjectDir)..\commonlib_nv\Include\Bethesda;$(DXSDK_DIR)Include</IncludePath>
-    <LibraryPath>$(DXSDK_DIR)\Lib\x86;$(ProjectDir)..\commonlib_nv\Release;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
+    <LibraryPath>$(DXSDK_DIR)\Lib\x86;$(ProjectDir)..\commonlib_nv\Build\Release;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
@@ -168,6 +168,7 @@
     <ClInclude Include="Src\load_config.h" />
     <ClInclude Include="Src\nvse\PluginAPI.h" />
     <ClInclude Include="Src\tnvse.h" />
+    <ClInclude Include="Src\globals.h" />
     <ClInclude Include="Src\ui_decode.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

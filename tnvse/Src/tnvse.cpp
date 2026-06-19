@@ -42,45 +42,47 @@ bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info)
 
 bool NVSEPlugin_Load(const NVSEInterface* nvse)
 {
-	if (!nvse->isEditor)
+	if (nvse->isEditor)
 	{
-		LoadConfig();
+		return true;
+	}
 
-		hJIP = GetModuleHandle("jip_nvse.dll");
-		g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);
+	LoadConfig();
 
-		if (g_bChangeJIPBigGunDesc)
+	hJIP = GetModuleHandle("jip_nvse.dll");
+	g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);
+
+	if (g_bChangeJIPBigGunDesc)
+	{
+		if (hJIP)
 		{
-			if (hJIP)
+			const PluginInfo* pInfo = g_cmdTableInterface->GetPluginInfoByName("JIP LN NVSE");
+			if (pInfo->version == 5730)
 			{
-				const PluginInfo* pInfo = g_cmdTableInterface->GetPluginInfoByName("JIP LN NVSE");
-				if (pInfo->version == 5730)
-				{
-					fonthook::InitBigGunsDescHooks();
-				}
+				fonthook::InitBigGunsDescHooks();
 			}
 		}
-
-		if (g_uiReorderDoorPrompt == 1)
-		{
-			fonthook::InitDoorPromptHooksCHS();
-		}
-		else if (g_uiReorderDoorPrompt == 2)
-		{
-			fonthook::InitDoorPromptHooksKOR();
-		}
-
-		if (g_bRemovePlural)
-		{
-			fonthook::InitPluralHooks();
-		}
-
-		fonthook::InitVertSpacingHook();
-
-		fonthook::InitFontHook();
-
-		//fonthook::InitSaveNameHook();
 	}
+
+	if (g_uiReorderDoorPrompt == 1)
+	{
+		fonthook::InitDoorPromptHooksCHS();
+	}
+	else if (g_uiReorderDoorPrompt == 2)
+	{
+		fonthook::InitDoorPromptHooksKOR();
+	}
+
+	if (g_bRemovePlural)
+	{
+		fonthook::InitPluralHooks();
+	}
+
+	fonthook::InitVertSpacingHook();
+
+	fonthook::InitFontHook();
+
+	//fonthook::InitSaveNameHook();
 
 	return true;
 }
