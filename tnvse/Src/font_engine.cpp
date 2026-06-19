@@ -227,7 +227,7 @@ namespace fonthook
 	{
 		for (int textureCount = 0; textureCount < this->pFontData->iTextureCount; ++textureCount)
 		{
-			char texNameBuffer[260];
+			char texNameBuffer[MAX_PATH];
 			_snprintf_s(texNameBuffer, 0x100u, _TRUNCATE,
 				"TEXTURES\\FONTS\\%s.TEX",
 				this->pFontData->pTextureFiles[textureCount].pFilename);
@@ -334,20 +334,21 @@ namespace fonthook
 				escapeSeqPrefixLen = 2;
 			}
 			char varNameBuffer[128];
-			while (processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex]
-				&& varNameLen < 127
-				&& processedOriginalText[varNameLen + srcTextIndex] != ';'
-				&& processedOriginalText[varNameLen + srcTextIndex] != '\n'
-				&& processedOriginalText[varNameLen + srcTextIndex] != axData->cLineSep)
+			int rawLen = 0;
+			while (processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex]
+				&& rawLen < 127
+				&& processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex] != ';'
+				&& processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex] != '\n'
+				&& processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex] != axData->cLineSep)
 			{
-				varNameBuffer[varNameLen] = processedOriginalText[escapeSeqPrefixLen + varNameLen + srcTextIndex];
-				++varNameLen;
+				varNameBuffer[rawLen] = processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex];
+				++rawLen;
 			}
-			int escapeSeqEffectiveLen = varNameLen ? varNameLen - escapeSeqPrefixLen : 0;
-			varNameBuffer[escapeSeqEffectiveLen] = 0;
-			UInt32 totalEscapeSeqLen = strlen(varNameBuffer) + 1;
-			if (processedOriginalText[varNameLen + srcTextIndex] == ';')
-				totalEscapeSeqLen += escapeSeqPrefixLen;
+			int effectiveLen = rawLen > escapeSeqPrefixLen ? rawLen - escapeSeqPrefixLen : 0;
+			varNameBuffer[effectiveLen] = 0;
+			UInt32 totalEscapeSeqLen = rawLen + 1; // +1 for '&'
+			if (processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex] == ';')
+				totalEscapeSeqLen += 1;
 
 			if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
 				|| ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
@@ -357,25 +358,21 @@ namespace fonthook
 
 				if (postEscapeTextLen > 0 && parsedTextBuffer[postEscapeTextLen - 1] == '\\')
 				{
-					float unkarray[4] = {};
 					int charScanIndex = 0;
 					while (parsedTextBuffer[charScanIndex] != '\\') ++charScanIndex;
 
-					char substrBuffer[264] = {};
+					char iconPath[264] = {};
 					char textureNameBuffer[268];
-					strcpy_s(&parsedTextBuffer[charScanIndex + 1],
-						sizeof(parsedTextBuffer) - (charScanIndex + 1), substrBuffer);
-					UInt32 strLen = strlen(substrBuffer);
-					*((char*)unkarray + strLen + 15) = 0;
+					strcpy_s(iconPath, sizeof(iconPath), &parsedTextBuffer[charScanIndex + 1]);
 					if (font->iFontNum == 7)
 					{
-						strcpy_s(textureNameBuffer, 0x104u, substrBuffer);
-						sprintf_s(substrBuffer, 0x104u, "glow_%s", textureNameBuffer);
+						strcpy_s(textureNameBuffer, MAX_PATH, iconPath);
+						sprintf_s(iconPath, MAX_PATH, "glow_%s", textureNameBuffer);
 					}
-					font->AddTextIcon(substrBuffer);
+					font->AddTextIcon(iconPath);
 					parsedTextBuffer[charScanIndex] = 1;
 					parsedTextBuffer[charScanIndex + 1] = 0;
-					postEscapeTextLen = strlen(parsedTextBuffer);
+					postEscapeTextLen = charScanIndex + 2;
 					escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
 				}
 				if (escapeSeqSizeDiff > 0)
@@ -797,12 +794,9 @@ namespace fonthook
 		int iconIdx = 0;
 
 		UInt32 uiDoubleByteCode;
-		for (int charIdx = 0;
-			textData.xNewText.pString[textData.xNewText.pString ? charIdx : 0];
-			++charIdx)
+		for (int charIdx = 0; textData.xNewText.pString[charIdx]; ++charIdx)
 		{
-
-			if (textData.xNewText.pString[textData.xNewText.pString ? charIdx : 0] == aiLineBreakChar)
+			if (textData.xNewText.pString[charIdx] == aiLineBreakChar)
 			{
 				++lineCounter;
 				textPosition.x = 0.0;
@@ -822,14 +816,14 @@ namespace fonthook
 				}
 				textPosition.z = textPosition.z - (this->pFontData->fBaseLine + linePadding);
 			}
-			else if (textData.xNewText.pString[textData.xNewText.pString ? charIdx : 0] == '\t')
+			else if (textData.xNewText.pString[charIdx] == '\t')
 			{
 				float prevTabX = textPosition.x;
 				AlignLineWidthToTab(textPosition.x, 75.0);
 				textPosition.x = 75.0 - prevTabX + textPosition.x;
 			}
 
-			UInt8 currentChar = textData.xNewText.pString[textData.xNewText.pString ? charIdx : 0];
+			UInt8 currentChar = textData.xNewText.pString[charIdx];
 
 			bool bIsDBCharacter = false;
 			if (extraGlyphs)
@@ -851,7 +845,7 @@ namespace fonthook
 
 			if (currentChar == 1)
 			{
-				if (this->ButtonIcons.uiSize)
+				if (this->ButtonIcons.uiSize && this->ButtonIcons.pBuffer)
 					Font::AddIcon(iconIdx++, pIconShape, &textPosition);
 			}
 			else
@@ -891,12 +885,11 @@ namespace fonthook
 	}
 
 	// ==================== FontEx::MakeString ====================
-	UInt32* FontEx::MakeString(
+	NiTriShape* FontEx::MakeString(
 		float afStartX, float afStartY, float afZ,
 		BSStringT<char>* apTextString, int* aiWidth, bool abPrepareObject,
 		const NiColorA* arg1C, bool abUpperLeftCorner, bool abPrepareObject_1)
 	{
-
 		auto* extraGlyphs = GetExtraGlyphs(this->iFontNum);
 
 		const char* pStr = apTextString->pString;
@@ -904,15 +897,18 @@ namespace fonthook
 		if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
 			apTextString->Set(pStr);
 
+		if (!apTextString->pString || !this->pFontData)
+			return 0;
+
 		UInt32 textLen = (apTextString->sLen == 0xFFFF)
 			? strlen(apTextString->pString) : apTextString->sLen;
-		if (!textLen || !this->pFontData)
+		if (!textLen)
 			return 0;
 
 		char newlineBuffer[4];
 		float textXOffset = (float)*aiWidth;
-		ThisStdCall(0xA12370, (int*)this, apTextString->pString, &textXOffset,
-			(int)newlineBuffer, abPrepareObject, 0);
+		ThisStdCall(0xA12370, this, apTextString->pString, &textXOffset,
+			newlineBuffer, abPrepareObject, 0);
 
 		float currentX = afStartX + textXOffset;
 		float currentY = afStartY;
@@ -948,12 +944,12 @@ namespace fonthook
 		int vertexIdx = 0;
 		UInt32 uiDoubleByteCode;
 
-		for (int lineIdx = 0; apTextString->pString[apTextString->pString ? lineIdx : 0]; ++lineIdx)
+		for (int lineIdx = 0; apTextString->pString[lineIdx]; ++lineIdx)
 		{
-			if (apTextString->pString[apTextString->pString ? lineIdx : 0] == 3)
+			if (apTextString->pString[lineIdx] == 3)
 				pColor = 0;
 
-			char currentCharValue = apTextString->pString[apTextString->pString ? lineIdx : 0];
+			char currentCharValue = apTextString->pString[lineIdx];
 			if (currentCharValue == '\t')
 			{
 				double prevXPos = currentX;
@@ -964,13 +960,13 @@ namespace fonthook
 			{
 				char escapeBuffer[4];
 				float tabPrevX = (float)*aiWidth;
-				ThisStdCall(0xA12370, (int*)this, apTextString->pString, &tabPrevX,
-					(int)escapeBuffer, abPrepareObject, lineIdx + 1);
+				ThisStdCall(0xA12370, this, apTextString->pString, &tabPrevX,
+					escapeBuffer, abPrepareObject, lineIdx + 1);
 				currentX = tabPrevX;
 				currentY = currentY - this->pFontData->fBaseLine;
 			}
 
-			UInt8 currentChar = apTextString->pString[apTextString->pString ? lineIdx : 0];
+			UInt8 currentChar = apTextString->pString[lineIdx];
 
 			bool bIsDBCharacter = false;
 			if (extraGlyphs)
@@ -1010,7 +1006,7 @@ namespace fonthook
 			int renderedWidth = ConditionalFloatToUInt(currentX - lineBaseOffset);
 			*aiWidth = MaxInt(renderedWidth, prevWidth);
 
-			if (apTextString->pString[apTextString->pString ? lineIdx : 0] == 2)
+			if (apTextString->pString[lineIdx] == 2)
 				pColor = (NiColorA*)defaultColor;
 		}
 
@@ -1019,7 +1015,7 @@ namespace fonthook
 		auto* pGeomData = *reinterpret_cast<NiTriShapeData**>(reinterpret_cast<char*>(pTriShape) + 0xB8);
 		ThisStdCall(0xA7EE30, &pGeomData->m_kBound,
 			pGeomData->m_usVertices, pGeomData->m_pkVertex);
-		return (UInt32*)pTriShape;
+		return pTriShape;
 	}
 
 } // namespace fonthook
