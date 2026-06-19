@@ -739,7 +739,7 @@ namespace fonthook
 	UInt32 FontEx::CreateText(
 		BSStringT<char>* axTextString, int* aiWidth, int* aiHeight,
 		int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
-		const NiColorA* axFontColor, UInt32** apTextShape, UInt32** apIconShape)
+		const NiColorA* axFontColor, NiTriShape** apTextShape, NiTriShape** apIconShape)
 	{
 
 		auto* extraGlyphs = GetExtraGlyphs(this->iFontNum);
@@ -778,26 +778,17 @@ namespace fonthook
 		int iActualCharCount = AdjustCharCountForDB(
 			textData.xNewText.pString, textData.iCharCount, extraGlyphs);
 
-		*apTextShape = (UInt32*)Font::MakeTriShape(iActualCharCount, axFontColor, 1);
+		auto* pTextShape = Font::MakeTriShape(iActualCharCount, axFontColor, 1);
+		*apTextShape = pTextShape;
+		pTextShape->m_kLocal.m_Translate = NiPoint3(0.0f, textPosition.y, textPosition.z);
 
-		// Initialize text shape position data via iconData (preserves original struct layout)
-		Font::TextData iconData;
-		*(float*)&iconData.xNewText.sLen = 0.0f;
-		*(float*)&iconData.iWidth = textPosition.y;
-		*(float*)&iconData.iHeight = textPosition.z;
-		UInt32* pTextShapeData = *apTextShape + 22;
-		*(float*)pTextShapeData = 0.0f;
-		pTextShapeData[1] = iconData.iWidth;
-		pTextShapeData[2] = iconData.iHeight;
-
+		NiTriShape* pIconShape = nullptr;
 		if (this->ButtonIcons.uiSize)
 		{
-			*apIconShape = (UInt32*)Font::MakeIconsTriShape();
-			UInt32* pIconShapeData = *apIconShape + 22;
-			*pIconShapeData = *(UInt32*)&iconData.xNewText.sLen;
-			pIconShapeData[1] = iconData.iWidth;
-			pIconShapeData[2] = iconData.iHeight;
-			ThisStdCall(0xA67050, (NiGeometryData*)(*apIconShape)[46], 0x4000);
+			pIconShape = Font::MakeIconsTriShape();
+			*apIconShape = pIconShape;
+			pIconShape->m_kLocal.m_Translate = NiPoint3(0.0f, textPosition.y, textPosition.z);
+			ThisStdCall(0xA67050, *reinterpret_cast<NiTriShapeData**>(reinterpret_cast<char*>(pIconShape) + 0xB8), 0x4000);
 		}
 
 		float yOffsetStart = textPosition.x;
@@ -861,7 +852,7 @@ namespace fonthook
 			if (currentChar == 1)
 			{
 				if (this->ButtonIcons.uiSize)
-					Font::AddIcon(iconIdx++, (NiTriShape*)*apIconShape, &textPosition);
+					Font::AddIcon(iconIdx++, pIconShape, &textPosition);
 			}
 			else
 			{
@@ -869,14 +860,14 @@ namespace fonthook
 				if (extraGlyphs && bIsDBCharacter && glyph)
 				{
 					StdCall<FontLetter*>(0xA142D0, glyph, vertexIdx++,
-						(NiTriShape*)*apTextShape, &textPosition.x, axFontColor);
+						pTextShape, &textPosition.x, axFontColor);
 					++charIdx;
 					rendered = true;
 				}
 				if (!rendered)
 				{
 					StdCall<FontLetter*>(0xA142D0, &this->pFontData->pFontLetters[currentChar],
-						vertexIdx++, (NiTriShape*)*apTextShape, &textPosition.x, axFontColor);
+						vertexIdx++, pTextShape, &textPosition.x, axFontColor);
 				}
 			}
 			int maxRenderedWidth = *aiWidth;
@@ -884,13 +875,17 @@ namespace fonthook
 			*aiWidth = MaxInt(renderedWidth, maxRenderedWidth);
 		}
 
-		*(UInt32*)&textData.cLineSep = *(UInt32*)((*apTextShape)[46] + 32);
-		ThisStdCall(0xA7EE30, (float*)((*apTextShape)[46] + 16),
-			*(UInt16*)((*apTextShape)[46] + 8), *(float**)&textData.cLineSep);
-		if (*apIconShape)
-			ThisStdCall(0xA7EE30, (float*)((*apIconShape)[46] + 16),
-				*(UInt16*)((*apIconShape)[46] + 8),
-				*(float**)((*apIconShape)[46] + 32));
+		// Recompute bounding volumes for text/icon geometry (NiBound::ComputeFromData)
+		// Use direct offset (0xB8) to access m_spModelData, bypassing unimplemented GetModelData()
+		auto* pTextGeomData = *reinterpret_cast<NiTriShapeData**>(reinterpret_cast<char*>(pTextShape) + 0xB8);
+		ThisStdCall(0xA7EE30, &pTextGeomData->m_kBound,
+			pTextGeomData->m_usVertices, pTextGeomData->m_pkVertex);
+		if (pIconShape)
+		{
+			auto* pIconGeomData = *reinterpret_cast<NiTriShapeData**>(reinterpret_cast<char*>(pIconShape) + 0xB8);
+			ThisStdCall(0xA7EE30, &pIconGeomData->m_kBound,
+				pIconGeomData->m_usVertices, pIconGeomData->m_pkVertex);
+		}
 		this->ButtonIcons.Clear(1);
 		return ThisStdCall(0x7593E0, (char*)&textData);
 	}
@@ -942,11 +937,9 @@ namespace fonthook
 		int iActualCharCount = AdjustCharCountForDB(
 			apTextString->pString, charIdx, extraGlyphs, stringLength);
 
-		UInt32* pTriShape = (UInt32*)Font::MakeTriShape(iActualCharCount, arg1C, abPrepareObject_1);
+		auto* pTriShape = Font::MakeTriShape(iActualCharCount, arg1C, abPrepareObject_1);
 		float startY = currentY;
-		*((float*)pTriShape + 22) = afStartX;
-		*((float*)pTriShape + 23) = currentZ;
-		*((float*)pTriShape + 24) = startY;
+		pTriShape->m_kLocal.m_Translate = NiPoint3(afStartX, currentZ, startY);
 
 		NiColorA* pColor = 0;
 		float defaultColor[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
@@ -1002,7 +995,7 @@ namespace fonthook
 				if (glyph)
 				{
 					StdCall<FontLetter*>(0xA142D0, glyph, vertexIdx++,
-						(NiTriShape*)pTriShape, &currentX, pColor);
+						pTriShape, &currentX, pColor);
 					lineIdx += 1;
 					rendered = true;
 				}
@@ -1010,7 +1003,7 @@ namespace fonthook
 			if (!rendered)
 			{
 				StdCall<FontLetter*>(0xA142D0, &this->pFontData->pFontLetters[currentChar],
-					vertexIdx++, (NiTriShape*)pTriShape, &currentX, pColor);
+					vertexIdx++, pTriShape, &currentX, pColor);
 			}
 
 			int prevWidth = *aiWidth;
@@ -1021,9 +1014,11 @@ namespace fonthook
 				pColor = (NiColorA*)defaultColor;
 		}
 
-		float* pVertexData = *(float**)(pTriShape[46] + 32);
-		ThisStdCall(0xA7EE30, (float*)(pTriShape[46] + 16),
-			*(UInt16*)(pTriShape[46] + 8), pVertexData);
+		// Recompute bounding volume for text geometry (NiBound::ComputeFromData)
+		// Use direct offset (0xB8) to access m_spModelData, bypassing unimplemented GetModelData()
+		auto* pGeomData = *reinterpret_cast<NiTriShapeData**>(reinterpret_cast<char*>(pTriShape) + 0xB8);
+		ThisStdCall(0xA7EE30, &pGeomData->m_kBound,
+			pGeomData->m_usVertices, pGeomData->m_pkVertex);
 		return (UInt32*)pTriShape;
 	}
 

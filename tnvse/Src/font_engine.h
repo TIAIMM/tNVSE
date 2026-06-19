@@ -61,7 +61,7 @@ namespace fonthook
 		UInt32 CreateText(
 			BSStringT<char>* axTextString, int* aiWidth, int* aiHeight,
 			int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
-			const NiColorA* axFontColor, UInt32** apTextShape, UInt32** apIconShape);
+			const NiColorA* axFontColor, NiTriShape** apTextShape, NiTriShape** apIconShape);
 		UInt32* MakeString(
 			float afStartX, float afStartY, float afZ,
 			BSStringT<char>* apTextString, int* aiWidth, bool abPrepareObject,
