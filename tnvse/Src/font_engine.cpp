@@ -932,10 +932,15 @@ namespace fonthook
 			currentY = currentY - (lineBaseOffset + lineBaseOffset);
 		}
 
-		// Count printable characters (reuse textLen instead of re-computing strlen)
-		UInt32 charIdx = 0;
-		for (; charIdx < textLen && apTextString->pString[charIdx]; ++charIdx)
-			;
+		// For sLen==0xFFFF, textLen==strlen so charIdx==textLen; otherwise scan for embedded nulls
+		UInt32 charIdx;
+		if (apTextString->sLen == 0xFFFF)
+			charIdx = textLen;
+		else {
+			charIdx = 0;
+			for (; charIdx < textLen && apTextString->pString[charIdx]; ++charIdx)
+				;
+		}
 
 		if (!charIdx)
 			return 0;
