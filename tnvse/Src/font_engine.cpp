@@ -164,16 +164,23 @@ namespace fonthook
 		if (!extraMap.empty()) return;
 
 		extraMap.reserve(kExtraGlyphReserve);
+
+		// Batch-read all FontLetters for each high-byte row (195 entries at once)
+		// instead of 24,960 individual m_pfnRead calls → 128 calls total
+		static constexpr UInt32 kRowGlyphCount = 0xFE - 0x40 + 1; // 195
+		static constexpr UInt32 kRowBytes = kRowGlyphCount * sizeof(FontLetter);
+		FontLetter batchRow[kRowGlyphCount];
+
 		for (UInt32 highByte = 0x81; highByte <= 0xFE; ++highByte)
 		{
-			for (UInt32 lowByte = 0x40; lowByte <= 0xFE; ++lowByte)
-			{
-				FontLetter letter{};
-				UInt32 letterRead = fontFile->m_pfnRead(fontFile, &letter, sizeof(letter), textureMarkers, 1u);
-				fontFile->m_uiAbsoluteCurrentPos += letterRead;
-				if (letterRead != sizeof(letter)) return;
-				extraMap[(highByte << 8) | lowByte] = letter;
-			}
+			UInt32 bytesRead = fontFile->m_pfnRead(
+				fontFile, batchRow, kRowBytes, textureMarkers, 1u);
+			fontFile->m_uiAbsoluteCurrentPos += bytesRead;
+			if (bytesRead != kRowBytes) return;
+
+			UInt32 keyBase = highByte << 8;
+			for (UInt32 i = 0; i < kRowGlyphCount; ++i)
+				extraMap[keyBase | (0x40 + i)] = batchRow[i];
 		}
 	}
 
@@ -183,37 +190,40 @@ namespace fonthook
 		float maxHeight = 0.0f;
 		this->fMaxDrop = 0.0f;
 
+		auto* pLetters = this->pFontData->pFontLetters;
+		float baseLine = this->pFontData->fBaseLine;
+
 		for (int i = 0; i < kMaxGlyphCount; ++i)
 		{
-			auto& letter = this->pFontData->pFontLetters[i];
-			float glyphHeight = this->pFontData->fBaseLine - letter.fTopEdge + letter.fHeight;
+			auto& letter = pLetters[i];
+			float glyphHeight = baseLine - letter.fTopEdge + letter.fHeight;
 			this->fFontHeight = MaxFloat(glyphHeight, this->fFontHeight);
 			maxHeight = MaxFloat(letter.fHeight, glyphHeight);
 			this->fMaxDrop = MinFloat(letter.fTopEdge - letter.fHeight, this->fMaxDrop);
 		}
 
 		// Space character (swap width & spacing)
-		float savedWidth = this->pFontData->pFontLetters[kSpaceChar].fWidth;
-		this->pFontData->pFontLetters[kSpaceChar].fWidth = this->pFontData->pFontLetters[kSpaceChar].fSpacing;
-		this->pFontData->pFontLetters[kSpaceChar].fSpacing = savedWidth;
-		this->pFontData->pFontLetters[kSpaceChar].fHeight = maxHeight;
-		this->pFontData->pFontLetters[kSpaceChar].fTopEdge = this->fMaxDrop + maxHeight;
+		float savedWidth = pLetters[kSpaceChar].fWidth;
+		pLetters[kSpaceChar].fWidth = pLetters[kSpaceChar].fSpacing;
+		pLetters[kSpaceChar].fSpacing = savedWidth;
+		pLetters[kSpaceChar].fHeight = maxHeight;
+		pLetters[kSpaceChar].fTopEdge = this->fMaxDrop + maxHeight;
 
 		// NBSP copies space
-		this->pFontData->pFontLetters[kNBSPChar].fWidth = this->pFontData->pFontLetters[kSpaceChar].fWidth;
-		this->pFontData->pFontLetters[kNBSPChar].fSpacing = this->pFontData->pFontLetters[kSpaceChar].fSpacing;
-		this->pFontData->pFontLetters[kNBSPChar].fHeight = this->pFontData->pFontLetters[kSpaceChar].fHeight;
-		this->pFontData->pFontLetters[kNBSPChar].fTopEdge = this->pFontData->pFontLetters[kSpaceChar].fTopEdge;
+		pLetters[kNBSPChar].fWidth = pLetters[kSpaceChar].fWidth;
+		pLetters[kNBSPChar].fSpacing = pLetters[kSpaceChar].fSpacing;
+		pLetters[kNBSPChar].fHeight = pLetters[kSpaceChar].fHeight;
+		pLetters[kNBSPChar].fTopEdge = pLetters[kSpaceChar].fTopEdge;
 
 		// Delete char copies pipe
-		this->pFontData->pFontLetters[kDelChar].fWidth = this->pFontData->pFontLetters[kPipeChar].fWidth;
-		this->pFontData->pFontLetters[kDelChar].fLeadingEdge = this->pFontData->pFontLetters[kPipeChar].fLeadingEdge;
-		this->pFontData->pFontLetters[kDelChar].fSpacing = this->pFontData->pFontLetters[kPipeChar].fSpacing;
-		this->pFontData->pFontLetters[kDelChar].fHeight = this->pFontData->pFontLetters[kPipeChar].fHeight;
-		this->pFontData->pFontLetters[kDelChar].fTopEdge = this->pFontData->pFontLetters[kPipeChar].fTopEdge;
+		pLetters[kDelChar].fWidth = pLetters[kPipeChar].fWidth;
+		pLetters[kDelChar].fLeadingEdge = pLetters[kPipeChar].fLeadingEdge;
+		pLetters[kDelChar].fSpacing = pLetters[kPipeChar].fSpacing;
+		pLetters[kDelChar].fHeight = pLetters[kPipeChar].fHeight;
+		pLetters[kDelChar].fTopEdge = pLetters[kPipeChar].fTopEdge;
 
 		// Null glyph
-		auto& nullGlyph = this->pFontData->pFontLetters[0];
+		auto& nullGlyph = pLetters[0];
 		nullGlyph.fWidth = 0.0f;
 		nullGlyph.fSpacing = 0.0f;
 		nullGlyph.fHeight = maxHeight;
@@ -380,8 +390,8 @@ namespace fonthook
 					textBufferSize += escapeSeqSizeDiff;
 					dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, textBufferSize + 1));
 				}
-				for (UInt32 bufferCopyIndex = 0; bufferCopyIndex < postEscapeTextLen; ++bufferCopyIndex)
-					dynamicTextBuffer[processedTextLen++] = parsedTextBuffer[bufferCopyIndex];
+				memcpy(&dynamicTextBuffer[processedTextLen], parsedTextBuffer, postEscapeTextLen);
+				processedTextLen += postEscapeTextLen;
 				origConsumed += totalEscapeSeqLen;
 				srcTextIndex = srcTextIndex + totalEscapeSeqLen - 1;
 			}
@@ -419,13 +429,17 @@ namespace fonthook
 		auto* extraGlyphs = GetExtraGlyphs(font->iFontNum);
 		UInt32 origConsumed = 0;
 
+		// Cache frequently accessed font data to avoid repeated pointer chasing
+		auto* pFontLetters = font->pFontData->pFontLetters;
+		float fBaseLine = font->pFontData->fBaseLine;
 		float lineSpacingAdjust = FontManagerGetLinePadding(font->iFontNum);
+		float lineHeight = fBaseLine + lineSpacingAdjust;
 		UInt32 lastWrapPosition = 0;
 		SInt32 preSpaceWidth = 0;
 		SInt32 postSpaceWidth = 0;
 		SInt32 currentLineWidth = 0;
 		SInt32 maxLineWidth = 0;
-		float totalTextHeight = font->pFontData->pFontLetters[' '].fHeight;
+		float totalTextHeight = pFontLetters[kSpaceChar].fHeight;
 		int currentLineCount = 1;
 		UInt32 sourceTextLen = strlen(apOrigString);
 		int maxAllowedLines = axData->iLineEnd;
@@ -469,7 +483,7 @@ namespace fonthook
 					dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
 					textBufferSize = processedTextLen + 4;
 				}
-				totalTextHeight = font->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
+				totalTextHeight = lineHeight + totalTextHeight;
 				AppendToListTail(&axData->xLineWidths, &currentLineWidth);
 				maxLineWidth = MaxInt(maxLineWidth, currentLineWidth);
 				currentLineWidth = 0;
@@ -500,7 +514,7 @@ namespace fonthook
 					currentChar = processedOriginalText[charIndex];
 					origConsumed += 1;
 					ConvertToAsciiQuotes(&currentChar);
-					pCurrentGlyph = &font->pFontData->pFontLetters[currentChar];
+					pCurrentGlyph = &pFontLetters[currentChar];
 					if (currentChar == 1)
 					{
 						if (buttonIconIndex < font->ButtonIcons.uiSize)
@@ -565,7 +579,7 @@ namespace fonthook
 							}
 							else
 							{
-								pCurrentGlyph = &font->pFontData->pFontLetters[currentChar];
+								pCurrentGlyph = &pFontLetters[currentChar];
 							}
 
 							UInt32 nextCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
@@ -577,7 +591,7 @@ namespace fonthook
 								currentChar = axData->cLineSep;
 							else
 								dynamicTextBuffer[lastWrapPosition] = axData->cLineSep;
-							totalTextHeight = font->pFontData->fBaseLine + lineSpacingAdjust + totalTextHeight;
+							totalTextHeight = lineHeight + totalTextHeight;
 							AppendToListTail(&axData->xLineWidths, &preSpaceWidth);
 							maxLineWidth = MaxInt(maxLineWidth, preSpaceWidth);
 							lastWrapPosition = 0;
@@ -609,7 +623,7 @@ namespace fonthook
 						dynamicTextBuffer[tailStart] = axData->cLineSep;
 
 						processedTextLen += 1;
-						totalTextHeight += (font->pFontData->fBaseLine + lineSpacingAdjust);
+						totalTextHeight += lineHeight;
 
 						AppendToListTail(&axData->xLineWidths, &currentLineWidth);
 						maxLineWidth = MaxInt(maxLineWidth, currentLineWidth);
@@ -626,7 +640,7 @@ namespace fonthook
 						}
 						else
 						{
-							pCurrentGlyph = &font->pFontData->pFontLetters[currentChar];
+							pCurrentGlyph = &pFontLetters[currentChar];
 						}
 
 						UInt32 combinedCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
@@ -677,7 +691,7 @@ namespace fonthook
 				dynamicTextBuffer[processedTextLen] = 0;
 				currentLineCount = maxAllowedLines;
 				currentLineWidth = 0;
-				totalTextHeight = totalTextHeight - (font->pFontData->fBaseLine + lineSpacingAdjust);
+				totalTextHeight = totalTextHeight - lineHeight;
 				break;
 			}
 		}
@@ -704,8 +718,8 @@ namespace fonthook
 			origConsumed = 1;
 			processedTextLen = 1;
 			currentLineCount = 1;
-			totalTextHeight = font->pFontData->pFontLetters[' '].fHeight;
-			currentLineWidth = ConditionalFloatToUInt(font->pFontData->pFontLetters[' '].fWidth);
+			totalTextHeight = pFontLetters[kSpaceChar].fHeight;
+			currentLineWidth = ConditionalFloatToUInt(pFontLetters[kSpaceChar].fWidth);
 		}
 		AppendToListTail(&axData->xLineWidths, &currentLineWidth);
 		maxLineWidth = MaxInt(maxLineWidth, currentLineWidth);
@@ -793,6 +807,9 @@ namespace fonthook
 		int vertexIdx = 0;
 		int iconIdx = 0;
 
+		// Cursor for O(1) linked list traversal per line break (was O(n) from head each time)
+		BSSimpleList<int>* pLineWidthCursor = &textData.xLineWidths;
+
 		UInt32 uiDoubleByteCode;
 		for (int charIdx = 0; textData.xNewText.pString[charIdx]; ++charIdx)
 		{
@@ -800,19 +817,14 @@ namespace fonthook
 			{
 				++lineCounter;
 				textPosition.x = 0.0;
-				if (aiFlags == 4)
+				if (aiFlags == 4 || aiFlags == 2)
 				{
-					BSSimpleList<int>* pNode = &textData.xLineWidths;
-					for (int lineIdx = 0; lineIdx < lineCounter && pNode; ++lineIdx)
-						pNode = pNode->m_pkNext;
-					textPosition.x = (float)(pNode ? -pNode->m_item : 1);
-				}
-				else if (aiFlags == 2)
-				{
-					BSSimpleList<int>* pNode = &textData.xLineWidths;
-					for (int lineIdx = 0; lineIdx < lineCounter && pNode; ++lineIdx)
-						pNode = pNode->m_pkNext;
-					textPosition.x = (float)(pNode ? pNode->m_item / -2 : 0);
+					// Advance cursor by 1 instead of traversing from head (O(n²) → O(n))
+					if (pLineWidthCursor && pLineWidthCursor->m_pkNext)
+						pLineWidthCursor = pLineWidthCursor->m_pkNext;
+					textPosition.x = (aiFlags == 4)
+						? (float)(pLineWidthCursor ? -pLineWidthCursor->m_item : 1)
+						: (float)(pLineWidthCursor ? pLineWidthCursor->m_item / -2 : 0);
 				}
 				textPosition.z = textPosition.z - (this->pFontData->fBaseLine + linePadding);
 			}
@@ -920,18 +932,16 @@ namespace fonthook
 			currentY = currentY - (lineBaseOffset + lineBaseOffset);
 		}
 
-		// Count printable characters
-		UInt32 stringLength = (apTextString->sLen == 0xFFFF)
-			? strlen(apTextString->pString) : apTextString->sLen;
+		// Count printable characters (reuse textLen instead of re-computing strlen)
 		UInt32 charIdx = 0;
-		for (; charIdx < stringLength && apTextString->pString[charIdx]; ++charIdx)
+		for (; charIdx < textLen && apTextString->pString[charIdx]; ++charIdx)
 			;
 
 		if (!charIdx)
 			return 0;
 
 		int iActualCharCount = AdjustCharCountForDB(
-			apTextString->pString, charIdx, extraGlyphs, stringLength);
+			apTextString->pString, charIdx, extraGlyphs, textLen);
 
 		auto* pTriShape = Font::MakeTriShape(iActualCharCount, arg1C, abPrepareObject_1);
 		float startY = currentY;
