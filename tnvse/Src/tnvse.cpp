@@ -79,7 +79,7 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 
 		fonthook::InitFontHook();
 
-		fonthook::InitSaveNameHook();
+		//fonthook::InitSaveNameHook();
 	}
 
 	return true;
