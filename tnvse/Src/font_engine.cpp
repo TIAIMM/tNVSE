@@ -354,9 +354,9 @@ namespace fonthook
 				varNameBuffer[rawLen] = processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex];
 				++rawLen;
 			}
-			int effectiveLen = rawLen > escapeSeqPrefixLen ? rawLen - escapeSeqPrefixLen : 0;
+			int effectiveLen = rawLen;
 			varNameBuffer[effectiveLen] = 0;
-			UInt32 totalEscapeSeqLen = rawLen + 1; // +1 for '&'
+			UInt32 totalEscapeSeqLen = rawLen + escapeSeqPrefixLen; // prefix + variable name
 			if (processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex] == ';')
 				totalEscapeSeqLen += 1;
 
