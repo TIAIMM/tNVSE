@@ -198,7 +198,7 @@ namespace fonthook
 			auto& letter = pLetters[i];
 			float glyphHeight = baseLine - letter.fTopEdge + letter.fHeight;
 			this->fFontHeight = MaxFloat(glyphHeight, this->fFontHeight);
-			maxHeight = MaxFloat(letter.fHeight, glyphHeight);
+			maxHeight = MaxFloat(maxHeight, letter.fHeight);
 			this->fMaxDrop = MinFloat(letter.fTopEdge - letter.fHeight, this->fMaxDrop);
 		}
 
