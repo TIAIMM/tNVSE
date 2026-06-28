@@ -5,34 +5,41 @@ namespace fonthook
 	// ==================== Quest/Location Text Hook ====================
 	void* __fastcall TileSetStringHookForQueueText(void* pThis, void*, int a2, char* a3, bool a4)
 	{
-		bIsQuestTextLSBDBCharacter = false;
-		if (bIsQuestTextMSBDBCharacter)
-		{
-			bIsQuestTextLSBDBCharacter = IsTrailByte((UInt8)a3[0]);
-
-			if (bIsQuestTextLSBDBCharacter)
-			{
-				szDBChar[0] = pFirstChar;
-				szDBChar[1] = a3[0];
-				szDBChar[2] = 0;
-				a3 = (char*)szDBChar;
-			}
-		}
+		if (!a3)
+			return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);
 
 		bool bHasFont8 = gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end();
-		if (bHasFont8 && !bIsQuestTextMSBDBCharacter)
+		if (bHasFont8)
 		{
-			bIsQuestTextMSBDBCharacter = IsLeadByte((UInt8)a3[0]);
-
+			bIsQuestTextLSBDBCharacter = false;
 			if (bIsQuestTextMSBDBCharacter)
 			{
+				bIsQuestTextMSBDBCharacter = false;
+				bMeasureQuestTextMSBAsEmpty = false;
+				bIsQuestTextLSBDBCharacter = IsTrailByte((UInt8)a3[0]);
+
+				if (bIsQuestTextLSBDBCharacter)
+				{
+					szDBChar[0] = pFirstChar;
+					szDBChar[1] = a3[0];
+					szDBChar[2] = 0;
+					a3 = (char*)szDBChar;
+				}
+			}
+
+			if (!bIsQuestTextLSBDBCharacter && IsLeadByte((UInt8)a3[0]))
+			{
 				pFirstChar = (UInt8)a3[0];
+				bIsQuestTextMSBDBCharacter = true;
+				bMeasureQuestTextMSBAsEmpty = true;
 				a3 = (char*)"";
 			}
 		}
 		else
 		{
+			bIsQuestTextLSBDBCharacter = false;
 			bIsQuestTextMSBDBCharacter = false;
+			bMeasureQuestTextMSBAsEmpty = false;
 		}
 
 		return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);

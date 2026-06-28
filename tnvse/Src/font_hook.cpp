@@ -12,6 +12,7 @@ namespace fonthook
 	UInt8 pFirstChar;
 	bool bIsQuestTextMSBDBCharacter;
 	bool bIsQuestTextLSBDBCharacter;
+	bool bMeasureQuestTextMSBAsEmpty;
 	char szDBChar[3];
 
 } // namespace fonthook

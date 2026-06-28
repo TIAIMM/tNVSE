@@ -16,6 +16,16 @@ namespace fonthook
 
 		std::string sConvertedStr;
 		ConvertToMultiByte(srcString, sConvertedStr, extraGlyphs != nullptr);
+		if (extraGlyphs && bIsQuestTextLSBDBCharacter && szDBChar[0] && szDBChar[1])
+		{
+			srcString = szDBChar;
+			bIsQuestTextLSBDBCharacter = false;
+		}
+		else if (extraGlyphs && bMeasureQuestTextMSBAsEmpty)
+		{
+			srcString = "";
+			bMeasureQuestTextMSBAsEmpty = false;
+		}
 
 		NiPoint3 StringDimensions = StringDefaultDimensions;
 		int sourceStringLength = strlen(srcString);

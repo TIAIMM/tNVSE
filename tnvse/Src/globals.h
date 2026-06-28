@@ -16,6 +16,7 @@ namespace fonthook
 	extern UInt8 pFirstChar;
 	extern bool bIsQuestTextMSBDBCharacter;
 	extern bool bIsQuestTextLSBDBCharacter;
+	extern bool bMeasureQuestTextMSBAsEmpty;
 	extern char szDBChar[3];
 
 	// ---- Memory / rendering singletons (defined in native_calls.cpp) ----
