@@ -199,7 +199,7 @@ namespace fonthook
 
 	bool IsTrailByte(UInt8 c)
 	{
-		if (c < 0x80) return false;  // ASCII fast-path
+		// DBCS trail bytes may be in the ASCII range, e.g. GBK/Big5/SJIS 0x40-0x7E.
 		switch (g_usingWinEncoding)
 		{
 		case 936:  return IsGBKTrailByte(c);
