@@ -48,6 +48,12 @@
     <ClCompile Include="Src\dictionary_loader.cpp">
       <Filter>Source Files\Config</Filter>
     </ClCompile>
+    <ClCompile Include="Src\dictionary_match.cpp">
+      <Filter>Source Files\Config</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\dictionary_regex.cpp">
+      <Filter>Source Files\Config</Filter>
+    </ClCompile>
     <ClCompile Include="Src\dictionary_translate.cpp">
       <Filter>Source Files\Config</Filter>
     </ClCompile>
