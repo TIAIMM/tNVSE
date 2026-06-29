@@ -528,7 +528,7 @@ namespace fonthook
 
 				// Build result: substitute $N placeholders with translated captures
 				std::string result = rule.replacement;
-				for (size_t i = 1; i < match.size(); ++i)
+				for (int i = static_cast<int>(match.size()) - 1; i >= 1; --i)
 				{
 					std::string capture = match[i].str();
 					std::string translatedCapture;
