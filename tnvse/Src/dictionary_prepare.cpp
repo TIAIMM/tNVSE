@@ -6,6 +6,112 @@
 
 namespace fonthook
 {
+	namespace
+	{
+		bool IsSourceWhitespace(char ch)
+		{
+			return
+				ch == ' ' ||
+				ch == '\t' ||
+				ch == '\n' ||
+				ch == '\r' ||
+				ch == '\v' ||
+				ch == '\f';
+		}
+
+		bool IsAsciiAlpha(char ch)
+		{
+			return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+		}
+
+		char ToLowerAsciiChar(char ch)
+		{
+			if (ch >= 'A' && ch <= 'Z')
+				return static_cast<char>(ch + ('a' - 'A'));
+			return ch;
+		}
+
+		bool IsSourceBreakTag(const std::string& text, size_t tagBegin, size_t tagEnd)
+		{
+			size_t pos = tagBegin + 1;
+			while (pos < tagEnd && IsSourceWhitespace(text[pos]))
+				++pos;
+			if (pos < tagEnd && text[pos] == '/')
+			{
+				++pos;
+				while (pos < tagEnd && IsSourceWhitespace(text[pos]))
+					++pos;
+			}
+
+			const size_t nameBegin = pos;
+			while (pos < tagEnd && IsAsciiAlpha(text[pos]))
+				++pos;
+			const size_t nameLength = pos - nameBegin;
+			if (nameLength == 0)
+				return false;
+
+			const bool isParagraph =
+				nameLength == 1 &&
+				ToLowerAsciiChar(text[nameBegin]) == 'p';
+			const bool isDiv =
+				nameLength == 3 &&
+				ToLowerAsciiChar(text[nameBegin]) == 'd' &&
+				ToLowerAsciiChar(text[nameBegin + 1]) == 'i' &&
+				ToLowerAsciiChar(text[nameBegin + 2]) == 'v';
+			if (!isParagraph && !isDiv)
+				return false;
+
+			return pos == tagEnd || IsSourceWhitespace(text[pos]) || text[pos] == '/';
+		}
+
+		void NormalizeSourceMarkup(std::string& text)
+		{
+			if (text.find('<') == std::string::npos)
+				return;
+
+			std::string result;
+			result.reserve(text.size());
+			for (size_t i = 0; i < text.size();)
+			{
+				if (text[i] == '<')
+				{
+					const size_t end = text.find('>', i + 1);
+					if (end != std::string::npos && IsSourceBreakTag(text, i, end))
+					{
+						result.push_back(' ');
+						i = end + 1;
+						continue;
+					}
+				}
+				result.push_back(text[i]);
+				++i;
+			}
+			text.swap(result);
+		}
+
+		void NormalizeSourceWhitespace(std::string& text)
+		{
+			std::string result;
+			result.reserve(text.size());
+			bool previousSpace = false;
+			for (char ch : text)
+			{
+				if (IsSourceWhitespace(ch))
+				{
+					if (!previousSpace)
+						result.push_back(' ');
+					previousSpace = true;
+				}
+				else
+				{
+					result.push_back(ch);
+					previousSpace = false;
+				}
+			}
+			text.swap(result);
+			Trim(text);
+		}
+	}
 
 	// ---- bind-token helpers ----
 
@@ -97,9 +203,13 @@ namespace fonthook
 		if (g_bEnableDictionaryTranslationLog && str != before)
 		{
 			const bool toMb = g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(before.c_str());
-			gLog.FormattedMessage("tnvse_dictionary:   convertGameVars: \"%s\" ->\"%s\"",
-				toMb ? UTF8ToMultiByteStr(before, g_usingWinEncoding).c_str() : before.c_str(),
-				toMb ? UTF8ToMultiByteStr(str, g_usingWinEncoding).c_str() : str.c_str());
+			const std::string logBefore = toMb ? UTF8ToMultiByteStr(before, g_usingWinEncoding) : before;
+			const std::string logAfter  = toMb ? UTF8ToMultiByteStr(str, g_usingWinEncoding) : str;
+			gLog.FormattedMessage("tnvse_dictionary: ");
+			gLog.FormattedMessage("tnvse_dictionary:   convertGameVars:");
+			gLog.FormattedMessage("tnvse_dictionary:     before: \"%s\"", logBefore.c_str());
+			gLog.FormattedMessage("tnvse_dictionary:     after:  \"%s\"", logAfter.c_str());
+			gLog.FormattedMessage("tnvse_dictionary: ");
 		}
 	}
 
@@ -131,9 +241,13 @@ namespace fonthook
 		if (g_bEnableDictionaryTranslationLog && str != before)
 		{
 			const bool toMb = g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(before.c_str());
-			gLog.FormattedMessage("tnvse_dictionary:   convertFmtSpec: \"%s\" ->\"%s\"",
-				toMb ? UTF8ToMultiByteStr(before, g_usingWinEncoding).c_str() : before.c_str(),
-				toMb ? UTF8ToMultiByteStr(str, g_usingWinEncoding).c_str() : str.c_str());
+			const std::string logBefore = toMb ? UTF8ToMultiByteStr(before, g_usingWinEncoding) : before;
+			const std::string logAfter  = toMb ? UTF8ToMultiByteStr(str, g_usingWinEncoding) : str;
+			gLog.FormattedMessage("tnvse_dictionary: ");
+			gLog.FormattedMessage("tnvse_dictionary:   convertFmtSpec:");
+			gLog.FormattedMessage("tnvse_dictionary:     before: \"%s\"", logBefore.c_str());
+			gLog.FormattedMessage("tnvse_dictionary:     after:  \"%s\"", logAfter.c_str());
+			gLog.FormattedMessage("tnvse_dictionary: ");
 		}
 	}
 
@@ -142,6 +256,8 @@ namespace fonthook
 	std::string PrepareSourceForRegistration(std::string text)
 	{
 		StripUtf8Bom(text);
+		NormalizeSourceMarkup(text);
+		NormalizeSourceWhitespace(text);
 		RemoveControlChars(text);
 		Correct1252ToAscii(text);
 		ConvertGameVariablesToBind(text);
@@ -149,18 +265,18 @@ namespace fonthook
 		ReplaceAll(text, "%%", "%"); // escaped percent → literal % (after format conversion)
 		RemoveAlignmentTag(text);
 		ReplaceAll(text, "[QUOTE]", "\"");
-		CollapseSpaces(text);
-		Trim(text);
+		NormalizeSourceWhitespace(text);
 		ToLowerAscii(text);
 		return text;
 	}
 
 	std::string PrepareSourceForLookup(std::string text)
 	{
+		NormalizeSourceMarkup(text);
+		NormalizeSourceWhitespace(text);
 		RemoveControlChars(text);
 		Correct1252ToAscii(text);
-		CollapseSpaces(text);
-		Trim(text);
+		NormalizeSourceWhitespace(text);
 		ToLowerAscii(text);
 		return text;
 	}
