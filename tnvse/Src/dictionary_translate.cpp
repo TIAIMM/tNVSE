@@ -492,7 +492,54 @@ namespace fonthook
 			return text;
 		}
 
-		bool TryTranslatePreparedKey(const std::string& key, PreparedTranslationMatch& match, int depth)
+		bool MatchWildcardWithCaptureSource(
+			const DictionaryEntry& entry,
+			const std::string& key,
+			const std::string& captureSource,
+			std::vector<std::string>& captures)
+		{
+			if (captureSource.size() != key.size())
+				return MatchWildcard(entry, key, captures);
+
+			captures.clear();
+			size_t cursor = 0;
+			const bool startsWithBind = entry.tokens.size() > 0 && entry.tokens.front().empty();
+			const bool endsWithBind = entry.tokens.size() > 0 && entry.tokens.back().empty();
+
+			for (size_t i = 0; i < entry.tokens.size(); ++i)
+			{
+				const std::string& token = entry.tokens[i];
+				if (token.empty())
+					continue;
+
+				const size_t found = key.find(token, cursor);
+				if (found == std::string::npos)
+					return false;
+				if (i == 0 && !startsWithBind && found != 0)
+					return false;
+
+				if (found > cursor)
+					captures.push_back(captureSource.substr(cursor, found - cursor));
+				else if (i > 0)
+					captures.emplace_back();
+				cursor = found + token.size();
+			}
+
+			if (!endsWithBind && cursor != key.size())
+				return false;
+			if (endsWithBind)
+				captures.push_back(captureSource.substr(cursor));
+
+			while (captures.size() < entry.bindCount)
+				captures.emplace_back();
+			return captures.size() == entry.bindCount;
+		}
+
+		bool TryTranslatePreparedKey(
+			const std::string& key,
+			PreparedTranslationMatch& match,
+			int depth,
+			const std::string* captureSource = nullptr)
 		{
 			match = PreparedTranslationMatch{};
 
@@ -516,7 +563,11 @@ namespace fonthook
 				const auto& entry = s_entries[index];
 				if (key.size() < entry.lengthWithoutBinds)
 					continue;
-				if (MatchWildcard(entry, key, captures) && ExpandTarget(entry, captures, match.translated, depth))
+
+				const std::string& wildcardCaptureSource =
+					(captureSource && captureSource->size() == key.size()) ? *captureSource : key;
+				if (MatchWildcardWithCaptureSource(entry, key, wildcardCaptureSource, captures) &&
+					ExpandTarget(entry, captures, match.translated, depth))
 				{
 					match.entryIndex = index;
 					match.exact = false;
@@ -641,14 +692,16 @@ namespace fonthook
 			if (!HasAlphabet(candidateText))
 				return false;
 
-			std::string key = PrepareSourceForLookup(candidateText);
+			std::string captureSource = PrepareSourceForLookupPreserveCase(candidateText);
+			std::string key = captureSource;
+			ToLowerAscii(key);
 			if (key.empty() || key == fullKey)
 				return false;
 			if (!searchedKeys.insert(key).second)
 				return false;
 
 			PreparedTranslationMatch match;
-			if (!TryTranslatePreparedKey(key, match, depth))
+			if (!TryTranslatePreparedKey(key, match, depth, &captureSource))
 				return false;
 
 			result.side = side;
@@ -962,10 +1015,8 @@ namespace fonthook
 		PreResolveGameVariables(raw);
 		const std::string originalRaw = raw;
 
-		// Normalize cache key once: lowercase the original source so that
-		// "Hello", "HELLO", and "hello" share one cache entry instead of three.
+		// Cache by the original text because wildcard captures preserve source casing.
 		std::string cacheKey(raw);
-		ToLowerAscii(cacheKey);
 
 		auto positive = s_positiveCache.find(cacheKey);
 		if (positive != s_positiveCache.end())
@@ -993,9 +1044,11 @@ namespace fonthook
 			raw = withoutId;
 		}
 
-		const std::string key = PrepareSourceForLookup(raw);
+		std::string captureSource = PrepareSourceForLookupPreserveCase(raw);
+		std::string key = captureSource;
+		ToLowerAscii(key);
 		PreparedTranslationMatch fullMatch;
-		if (TryTranslatePreparedKey(key, fullMatch, depth))
+		if (TryTranslatePreparedKey(key, fullMatch, depth, &captureSource))
 		{
 			translated = fullMatch.translated;
 			if (g_bEnableDictionaryTranslationLog)

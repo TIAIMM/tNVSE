@@ -102,6 +102,7 @@ namespace fonthook
 	void ConvertFormatSpecifiersToBind(std::string& str);
 	std::string PrepareSourceForRegistration(std::string text);
 	std::string PrepareSourceForLookup(std::string text);
+	std::string PrepareSourceForLookupPreserveCase(std::string text);
 	std::string PrepareTarget(std::string text);
 
 	// ---- entry management (dictionary_entry.cpp) ----
