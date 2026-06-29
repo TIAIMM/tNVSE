@@ -344,9 +344,12 @@ namespace fonthook
 		std::string autoTarget(targetFormat);
 		ReplaceAll(autoTarget, "[@]", cleanTarget);
 
-		if (g_bEnableDictionaryTranslationLog)
-			gLog.FormattedMessage("tnvse_dictionary:   uihint %s: \"%s\" ->\"%s\"",
-				typeKey, autoSource.c_str(), autoTarget.c_str());
+		{
+				const bool toMb = g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(autoTarget.c_str());
+				gLog.FormattedMessage("tnvse_dictionary:   uihint %s: \"%s\" ->\"%s\"",
+					typeKey, autoSource.c_str(),
+					toMb ? UTF8ToMultiByteStr(autoTarget, g_usingWinEncoding).c_str() : autoTarget.c_str());
+			}
 
 		RegisterText(std::move(autoSource), std::move(autoTarget), priority, {});
 	}
