@@ -324,24 +324,66 @@ namespace fonthook
 				AddWildcardCandidatesForKey(s_wildcardSuffixIndex, key.substr(begin), candidates, seen);
 		}
 
-		bool TryTranslatePreparedKey(const std::string& key, PreparedTranslationMatch& match, int depth)
+		bool TryTranslateExactKey(const std::string& key, PreparedTranslationMatch& match, int depth)
 		{
 			match = PreparedTranslationMatch{};
 
 			auto exactIt = s_exactIndex.find(key);
-			if (exactIt != s_exactIndex.end())
+			if (exactIt == s_exactIndex.end())
+				return false;
+
+			for (size_t index : exactIt->second)
 			{
-				for (size_t index : exactIt->second)
+				if (ExpandTarget(s_entries[index], {}, match.translated, depth))
 				{
-					if (ExpandTarget(s_entries[index], {}, match.translated, depth))
-					{
-						match.entryIndex = index;
-						match.exact = true;
-						match.found = true;
-						return true;
-					}
+					match.entryIndex = index;
+					match.exact = true;
+					match.found = true;
+					return true;
 				}
 			}
+
+			return false;
+		}
+
+		std::vector<std::string> SplitNonEmptyLines(std::string text)
+		{
+			std::vector<std::string> lines;
+			size_t cursor = 0;
+			while (cursor <= text.size())
+			{
+				const size_t end = text.find('\n', cursor);
+				std::string line = end == std::string::npos
+					? text.substr(cursor)
+					: text.substr(cursor, end - cursor);
+				TrimAsciiWhitespace(line);
+				if (!line.empty())
+					lines.push_back(std::move(line));
+				if (end == std::string::npos)
+					break;
+				cursor = end + 1;
+			}
+			return lines;
+		}
+
+		std::string JoinLines(const std::vector<std::string>& lines, size_t begin, size_t end, const char* separator)
+		{
+			std::string result;
+			for (size_t i = begin; i < end && i < lines.size(); ++i)
+			{
+				if (!result.empty())
+					result += separator;
+				result += lines[i];
+			}
+			return result;
+		}
+
+		bool TryTranslatePreparedKey(const std::string& key, PreparedTranslationMatch& match, int depth)
+		{
+			match = PreparedTranslationMatch{};
+
+			if (TryTranslateExactKey(key, match, depth))
+				return true;
 
 			std::vector<size_t> candidateIndexes;
 			std::unordered_set<size_t> seenCandidates;
@@ -367,6 +409,55 @@ namespace fonthook
 					match.found = true;
 					return true;
 				}
+			}
+
+			return false;
+		}
+
+		bool TryTranslateBeforeLinebreakText(const std::string& source, const std::string& fullKey, std::string& translated, int depth)
+		{
+			if (depth >= 4 || source.find('\n') == std::string::npos)
+				return false;
+
+			std::vector<std::string> lines = SplitNonEmptyLines(source);
+			if (lines.size() < 2)
+				return false;
+
+			std::unordered_set<std::string> searchedKeys;
+			searchedKeys.insert(fullKey);
+
+			for (size_t prefixLineCount = lines.size() - 1; prefixLineCount > 0; --prefixLineCount)
+			{
+				const std::string candidateText = JoinLines(lines, 0, prefixLineCount, " ");
+				if (!HasAlphabet(candidateText))
+					continue;
+
+				const std::string key = PrepareSourceForLookup(candidateText);
+				if (key.empty() || !searchedKeys.insert(key).second)
+					continue;
+
+				PreparedTranslationMatch match;
+				if (!TryTranslateExactKey(key, match, depth))
+					continue;
+
+				const std::string remainder = JoinLines(lines, prefixLineCount, lines.size(), "\n");
+				std::string translatedRemainder;
+				const bool translatedRest = !remainder.empty() && TranslateInternal(remainder.c_str(), translatedRemainder, depth + 1);
+				translated = match.translated;
+				if (!remainder.empty())
+				{
+					translated += '\n';
+					translated += translatedRest ? translatedRemainder : remainder;
+				}
+
+				if (g_bEnableDictionaryTranslationLog)
+				{
+					gLog.FormattedMessage("tnvse_dictionary: before-linebreak exact hit:");
+					gLog.FormattedMessage("tnvse_dictionary:   candidate=\"%s\"", candidateText.c_str());
+					gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
+						s_entries[match.entryIndex].key.c_str(), match.translated.c_str());
+				}
+				return true;
 			}
 
 			return false;
@@ -747,6 +838,13 @@ namespace fonthook
 				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
 					s_entries[fullMatch.entryIndex].key.c_str(), translated.c_str());
 			}
+			s_positiveCache.emplace(cacheKey, translated);
+			TrimPositiveCache();
+			return true;
+		}
+
+		if (TryTranslateBeforeLinebreakText(raw, key, translated, depth))
+		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
