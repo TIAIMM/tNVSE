@@ -45,6 +45,9 @@
     <ClCompile Include="Src\dictionary_entry.cpp">
       <Filter>Source Files\Config</Filter>
     </ClCompile>
+    <ClCompile Include="Src\dictionary_effects.cpp">
+      <Filter>Source Files\Config</Filter>
+    </ClCompile>
     <ClCompile Include="Src\dictionary_loader.cpp">
       <Filter>Source Files\Config</Filter>
     </ClCompile>

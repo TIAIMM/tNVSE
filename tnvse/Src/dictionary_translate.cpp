@@ -308,16 +308,13 @@ namespace fonthook
 			return captures.size() == entry.bindCount;
 		}
 
-		bool TryTranslatePreparedKey(
+		bool TryTranslateWildcardKey(
 			const std::string& key,
 			PreparedTranslationMatch& match,
 			int depth,
 			const std::string* captureSource = nullptr)
 		{
 			match = PreparedTranslationMatch{};
-
-			if (TryTranslateExactKey(key, match, depth))
-				return true;
 
 			std::vector<size_t> candidateIndexes;
 			std::unordered_set<size_t> seenCandidates;
@@ -350,6 +347,17 @@ namespace fonthook
 			}
 
 			return false;
+		}
+
+		bool TryTranslatePreparedKey(
+			const std::string& key,
+			PreparedTranslationMatch& match,
+			int depth,
+			const std::string* captureSource = nullptr)
+		{
+			if (TryTranslateExactKey(key, match, depth))
+				return true;
+			return TryTranslateWildcardKey(key, match, depth, captureSource);
 		}
 
 		bool TryTranslateBeforeLinebreakText(const std::string& source, const std::string& fullKey, std::string& translated, int depth)
@@ -599,12 +607,34 @@ namespace fonthook
 		std::string key = captureSource;
 		ToLowerAscii(key);
 		PreparedTranslationMatch fullMatch;
-		if (TryTranslatePreparedKey(key, fullMatch, depth, &captureSource))
+		if (TryTranslateExactKey(key, fullMatch, depth))
 		{
 			translated = fullMatch.translated;
 			if (g_bEnableDictionaryTranslationLog)
 			{
 				gLog.FormattedMessage("tnvse_dictionary: TranslateInternal %s match:", fullMatch.exact ? "exact" : "wildcard");
+				gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
+				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
+					s_entries[fullMatch.entryIndex].key.c_str(), translated.c_str());
+			}
+			s_positiveCache.emplace(cacheKey, translated);
+			TrimPositiveCache();
+			return true;
+		}
+
+		if (TryTranslateItemEffectList(raw, translated, depth))
+		{
+			s_positiveCache.emplace(cacheKey, translated);
+			TrimPositiveCache();
+			return true;
+		}
+
+		if (TryTranslateWildcardKey(key, fullMatch, depth, &captureSource))
+		{
+			translated = fullMatch.translated;
+			if (g_bEnableDictionaryTranslationLog)
+			{
+				gLog.FormattedMessage("tnvse_dictionary: TranslateInternal wildcard match:");
 				gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
 				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
 					s_entries[fullMatch.entryIndex].key.c_str(), translated.c_str());

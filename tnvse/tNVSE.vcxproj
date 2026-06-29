@@ -159,6 +159,7 @@
     <ClCompile Include="Src\dictionary_utils.cpp" />
     <ClCompile Include="Src\dictionary_prepare.cpp" />
     <ClCompile Include="Src\dictionary_entry.cpp" />
+    <ClCompile Include="Src\dictionary_effects.cpp" />
     <ClCompile Include="Src\dictionary_loader.cpp" />
     <ClCompile Include="Src\dictionary_match.cpp" />
     <ClCompile Include="Src\dictionary_regex.cpp" />
