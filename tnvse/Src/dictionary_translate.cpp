@@ -419,8 +419,12 @@ namespace fonthook
 			result.translated = source.substr(0, trimBegin) + match.translated + source.substr(trimEnd);
 
 			if (g_bEnableDictionaryTranslationLog)
-				gLog.FormattedMessage("tnvse_dictionary: shrink fuzzy hit[%s]: candidate=\"%s\" entry=\"%s\" ->\"%s\"",
-					result.side.c_str(), result.candidateText.c_str(), s_entries[result.entryIndex].key.c_str(), result.translated.c_str());
+			{
+				gLog.FormattedMessage("tnvse_dictionary: shrink fuzzy hit[%s]:", result.side.c_str());
+				gLog.FormattedMessage("tnvse_dictionary:   candidate=\"%s\"", result.candidateText.c_str());
+				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
+					s_entries[result.entryIndex].key.c_str(), result.translated.c_str());
+			}
 
 			return true;
 		}
@@ -741,11 +745,12 @@ namespace fonthook
 		{
 			translated = fullMatch.translated;
 			if (g_bEnableDictionaryTranslationLog)
-				gLog.FormattedMessage("tnvse_dictionary: TranslateInternal %s match: \"%s\" ->\"%s\" (entry=\"%s\")",
-					fullMatch.exact ? "exact" : "wildcard",
-					source,
-					translated.c_str(),
-					s_entries[fullMatch.entryIndex].key.c_str());
+			{
+				gLog.FormattedMessage("tnvse_dictionary: TranslateInternal %s match:", fullMatch.exact ? "exact" : "wildcard");
+				gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
+				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
+					s_entries[fullMatch.entryIndex].key.c_str(), translated.c_str());
+			}
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
