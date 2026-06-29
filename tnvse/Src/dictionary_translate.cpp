@@ -526,11 +526,19 @@ namespace fonthook
 				if (!std::regex_match(regexSource, match, rule.regex))
 					continue;
 
-				translated = std::regex_replace(
-					regexSource,
-					rule.regex,
-					rule.replacement,
-					std::regex_constants::format_first_only);
+				// Build result: substitute $N placeholders with translated captures
+				std::string result = rule.replacement;
+				for (size_t i = 1; i < match.size(); ++i)
+				{
+					std::string capture = match[i].str();
+					std::string translatedCapture;
+					TranslateInternal(capture.c_str(), translatedCapture, 0);
+					const std::string& replacement = translatedCapture.empty() ? capture : translatedCapture;
+					ReplaceAll(result, "$" + std::to_string(i), replacement);
+				}
+
+
+				translated = std::move(result);
 
 				if (g_bEnableDictionaryTranslationLog)
 				{
