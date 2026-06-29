@@ -3,6 +3,87 @@
 
 namespace fonthook
 {
+	namespace
+	{
+		std::string GetDoorStructuralParticle()
+		{
+			if (g_sOptionalStructuralParticle.empty())
+				return {};
+			if (g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(g_sOptionalStructuralParticle.c_str()))
+				return UTF8ToMultiByteStr(g_sOptionalStructuralParticle, g_usingWinEncoding);
+			return g_sOptionalStructuralParticle;
+		}
+
+		const char* SafeCString(const char* value)
+		{
+			return value ? value : "";
+		}
+
+		const char* TranslateDoorPiece(const char* source, std::string& translated)
+		{
+			const char* safeSource = SafeCString(source);
+			translated.clear();
+			if (*safeSource && TranslateText(safeSource, translated))
+				return translated.c_str();
+			return safeSource;
+		}
+
+		const char* TranslateDoorToPiece(
+			const char* source,
+			const std::string& structuralParticle,
+			bool& usedStructuralParticleFallback)
+		{
+			const char* safeSource = SafeCString(source);
+			if (!structuralParticle.empty())
+			{
+				usedStructuralParticleFallback = true;
+				return structuralParticle.c_str();
+			}
+			usedStructuralParticleFallback = false;
+			return safeSource;
+		}
+
+		int FormatDoorPromptCHS(
+			char* buffer, size_t sizeOfBuffer,
+			const char* sDst, const char* sTo, const char* sCellName,
+			bool translatePieces)
+		{
+			static std::string sConvertedStructuralParticle = GetDoorStructuralParticle();
+
+			std::string translatedDst;
+			std::string translatedCellName;
+			bool usedStructuralParticleFallback = false;
+			const char* dst = translatePieces ? TranslateDoorPiece(sDst, translatedDst) : SafeCString(sDst);
+			const char* to = translatePieces ? TranslateDoorToPiece(sTo, sConvertedStructuralParticle, usedStructuralParticleFallback) : SafeCString(sTo);
+			const char* cellName = translatePieces ? TranslateDoorPiece(sCellName, translatedCellName) : SafeCString(sCellName);
+
+			if (usedStructuralParticleFallback)
+				return sprintf_s(buffer, sizeOfBuffer, "%s%s%s", cellName, to, dst);
+
+			return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", to, cellName, sConvertedStructuralParticle.c_str(), dst);
+		}
+
+		int FormatDoorPromptKOR(
+			char* buffer, size_t sizeOfBuffer,
+			const char* sDst, const char* sTo, const char* sCellName,
+			bool translatePieces)
+		{
+			static std::string sConvertedStructuralParticle = GetDoorStructuralParticle();
+
+			std::string translatedDst;
+			std::string translatedCellName;
+			bool usedStructuralParticleFallback = false;
+			const char* dst = translatePieces ? TranslateDoorPiece(sDst, translatedDst) : SafeCString(sDst);
+			const char* to = translatePieces ? TranslateDoorToPiece(sTo, sConvertedStructuralParticle, usedStructuralParticleFallback) : SafeCString(sTo);
+			const char* cellName = translatePieces ? TranslateDoorPiece(sCellName, translatedCellName) : SafeCString(sCellName);
+
+			if (usedStructuralParticleFallback)
+				return sprintf_s(buffer, sizeOfBuffer, "%s%s%s", cellName, to, dst);
+
+			return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", cellName, to, sConvertedStructuralParticle.c_str(), dst);
+		}
+	}
+
 	// ==================== Quest/Location Text Hook ====================
 	void* __fastcall TileSetStringHookForQueueText(void* pThis, void*, int a2, char* a3, bool a4)
 	{
@@ -88,12 +169,17 @@ namespace fonthook
 		const char* sformat, const char* sDst,
 		const char* sTo, const char* sCellName)
 	{
+		if (!g_bEnableDictionaryTranslation)
+			return FormatDoorPromptCHS(buffer, sizeOfBuffer, sDst, sTo, sCellName, false);
 
-		static std::string sConvertedStructuralParticle = UTF8ToMultiByteStr(g_sOptionalStructuralParticle, g_usingWinEncoding);
+		char sourceBuffer[1024] = {};
+		sprintf_s(sourceBuffer, sizeof(sourceBuffer), "%s%s%s", SafeCString(sTo), SafeCString(sCellName), SafeCString(sDst));
 
-		gLog.FormattedMessage("g_sOptionalStructuralParticle: %s", sConvertedStructuralParticle.c_str());
+		std::string translated;
+		if (TranslateText(sourceBuffer, translated))
+			return sprintf_s(buffer, sizeOfBuffer, "%s", translated.c_str());
 
-		return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", sTo, sCellName, sConvertedStructuralParticle.c_str(), sDst);
+		return FormatDoorPromptCHS(buffer, sizeOfBuffer, sDst, sTo, sCellName, true);
 	}
 
 	int BSsprintfHookKOR(
@@ -101,12 +187,17 @@ namespace fonthook
 		const char* sformat, const char* sDst,
 		const char* sTo, const char* sCellName)
 	{
+		if (!g_bEnableDictionaryTranslation)
+			return FormatDoorPromptKOR(buffer, sizeOfBuffer, sDst, sTo, sCellName, false);
 
-		static std::string sConvertedStructuralParticle = UTF8ToMultiByteStr(g_sOptionalStructuralParticle, g_usingWinEncoding);
+		char sourceBuffer[1024] = {};
+		sprintf_s(sourceBuffer, sizeof(sourceBuffer), "%s%s%s", SafeCString(sCellName), SafeCString(sTo), SafeCString(sDst));
 
-		gLog.FormattedMessage("g_sOptionalStructuralParticle: %s", sConvertedStructuralParticle.c_str());
+		std::string translated;
+		if (TranslateText(sourceBuffer, translated))
+			return sprintf_s(buffer, sizeOfBuffer, "%s", translated.c_str());
 
-		return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", sCellName, sTo, sConvertedStructuralParticle.c_str(), sDst);
+		return FormatDoorPromptKOR(buffer, sizeOfBuffer, sDst, sTo, sCellName, true);
 	}
 
 } // namespace fonthook

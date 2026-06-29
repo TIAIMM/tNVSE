@@ -126,6 +126,19 @@ namespace fonthook
 			CollapseSpaces(text);
 			Trim(text);
 		}
+
+		std::string BuildDoorSourceFormat()
+		{
+			switch (g_uiReorderDoorPrompt)
+			{
+			case 1:
+				return "to[%]{}";
+			case 2:
+				return "[%]to{}";
+			default:
+				return "{} to [%]";
+			}
+		}
 	}
 
 	// ---- record type detection ----
@@ -272,11 +285,11 @@ namespace fonthook
 	                         int priority)
 	{
 		const char* typeKey = nullptr;
-		const char* sourceFormat = nullptr;
+		std::string sourceFormat;
 		switch (type)
 		{
 		case RecordType::Bptd:          typeKey = "bptd";      sourceFormat = "[%]{} Crippled"; break;
-		case RecordType::Door:          typeKey = "door";      sourceFormat = "{} to [%]";      break;
+		case RecordType::Door:          typeKey = "door";      sourceFormat = BuildDoorSourceFormat(); break;
 		case RecordType::ChallengeName: typeKey = "chal_name"; sourceFormat = "{} [%]";         break;
 		case RecordType::ChallengeDesc: typeKey = "chal_desc"; sourceFormat = "[%] {}";         break;
 		default: return;
