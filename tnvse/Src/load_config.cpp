@@ -48,7 +48,6 @@ void LoadConfig()
 		filename
 	);
 	g_sNewBigGunsDesc = sTempBigGunsDesc;
-	gLog.FormattedMessage("g_sNewBigGunsDesc: %s", g_sNewBigGunsDesc.c_str());
 
 	g_uiReorderDoorPrompt = GetPrivateProfileInt("MAIN", "uiReorderDoorPrompt", 1, filename);
 	gLog.FormattedMessage("g_uiReorderDoorPrompt: %d", g_uiReorderDoorPrompt);
@@ -63,7 +62,6 @@ void LoadConfig()
 		filename
 	);
 	g_sOptionalStructuralParticle = sTempStructuralParticle;
-	gLog.FormattedMessage("g_sOptionalStructuralParticle: %s", g_sOptionalStructuralParticle.c_str());
 
 	g_bRemovePlural = GetPrivateProfileInt("MAIN", "bRemovePlural", 1, filename);
 	gLog.FormattedMessage("g_bRemovePlural: %d", g_bRemovePlural);

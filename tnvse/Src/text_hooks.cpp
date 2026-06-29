@@ -91,6 +91,8 @@ namespace fonthook
 
 		static std::string sConvertedStructuralParticle = UTF8ToMultiByteStr(g_sOptionalStructuralParticle, g_usingWinEncoding);
 
+		gLog.FormattedMessage("g_sOptionalStructuralParticle: %s", sConvertedStructuralParticle.c_str());
+
 		return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", sTo, sCellName, sConvertedStructuralParticle.c_str(), sDst);
 	}
 
@@ -101,6 +103,8 @@ namespace fonthook
 	{
 
 		static std::string sConvertedStructuralParticle = UTF8ToMultiByteStr(g_sOptionalStructuralParticle, g_usingWinEncoding);
+
+		gLog.FormattedMessage("g_sOptionalStructuralParticle: %s", sConvertedStructuralParticle.c_str());
 
 		return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", sCellName, sTo, sConvertedStructuralParticle.c_str(), sDst);
 	}
