@@ -56,6 +56,9 @@ namespace fonthook
 	extern std::vector<DictionaryEntry> s_entries;
 	extern std::unordered_map<std::string, std::vector<size_t>> s_exactIndex;
 	extern std::vector<size_t> s_wildcardIndex;
+	extern std::unordered_map<std::string, std::vector<size_t>> s_wildcardPrefixIndex;
+	extern std::unordered_map<std::string, std::vector<size_t>> s_wildcardSuffixIndex;
+	extern std::vector<size_t> s_wildcardLooseIndex;
 	extern std::unordered_map<std::string, size_t> s_idIndex;
 	extern std::unordered_map<std::string, std::string> s_positiveCache;
 	extern std::unordered_set<std::string> s_negativeCache;

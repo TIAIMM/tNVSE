@@ -139,6 +139,40 @@ namespace fonthook
 				return "{} to [%]";
 			}
 		}
+
+		void AddWildcardIndex(size_t index)
+		{
+			const auto& entry = s_entries[index];
+			const std::string* prefix = entry.tokens.empty() ? nullptr : &entry.tokens.front();
+			const std::string* suffix = entry.tokens.empty() ? nullptr : &entry.tokens.back();
+
+			if (prefix && !prefix->empty() && prefix->size() >= (suffix ? suffix->size() : 0))
+			{
+				s_wildcardPrefixIndex[*prefix].push_back(index);
+			}
+			else if (suffix && !suffix->empty())
+			{
+				s_wildcardSuffixIndex[*suffix].push_back(index);
+			}
+			else
+			{
+				s_wildcardLooseIndex.push_back(index);
+			}
+		}
+
+		void SortIndexVector(std::vector<size_t>& indexes)
+		{
+			std::sort(indexes.begin(), indexes.end(), [](size_t a, size_t b)
+				{
+					return EntryLess(s_entries[a], s_entries[b]);
+				});
+		}
+
+		void SortIndexMap(std::unordered_map<std::string, std::vector<size_t>>& indexMap)
+		{
+			for (auto& pair : indexMap)
+				SortIndexVector(pair.second);
+		}
 	}
 
 	// ---- record type detection ----
@@ -242,7 +276,10 @@ namespace fonthook
 		if (s_entries[index].isExact)
 			s_exactIndex[s_entries[index].key].push_back(index);
 		else
+		{
 			s_wildcardIndex.push_back(index);
+			AddWildcardIndex(index);
+		}
 
 		if (!id.empty())
 			s_idIndex[id] = index;
@@ -384,18 +421,12 @@ namespace fonthook
 	void SortIndexes()
 	{
 		for (auto& pair : s_exactIndex)
-		{
-			auto& indexes = pair.second;
-			std::sort(indexes.begin(), indexes.end(), [](size_t a, size_t b)
-				{
-					return EntryLess(s_entries[a], s_entries[b]);
-				});
-		}
+			SortIndexVector(pair.second);
 
-		std::sort(s_wildcardIndex.begin(), s_wildcardIndex.end(), [](size_t a, size_t b)
-			{
-				return EntryLess(s_entries[a], s_entries[b]);
-			});
+		SortIndexVector(s_wildcardIndex);
+		SortIndexMap(s_wildcardPrefixIndex);
+		SortIndexMap(s_wildcardSuffixIndex);
+		SortIndexVector(s_wildcardLooseIndex);
 	}
 
 } // namespace fonthook

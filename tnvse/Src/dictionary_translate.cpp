@@ -2,6 +2,7 @@
 #include "encoding.h"
 #include "load_config.h"
 
+#include <algorithm>
 #include <regex>
 
 namespace fonthook
@@ -282,6 +283,47 @@ namespace fonthook
 				--end;
 		}
 
+		void AddWildcardCandidates(
+			const std::vector<size_t>& indexes,
+			std::vector<size_t>& candidates,
+			std::unordered_set<size_t>& seen)
+		{
+			for (size_t index : indexes)
+			{
+				if (seen.insert(index).second)
+					candidates.push_back(index);
+			}
+		}
+
+		void AddWildcardCandidatesForKey(
+			const std::unordered_map<std::string, std::vector<size_t>>& indexMap,
+			const std::string& candidateKey,
+			std::vector<size_t>& candidates,
+			std::unordered_set<size_t>& seen)
+		{
+			const auto it = indexMap.find(candidateKey);
+			if (it != indexMap.end())
+				AddWildcardCandidates(it->second, candidates, seen);
+		}
+
+		void CollectPrefixWildcardCandidates(
+			const std::string& key,
+			std::vector<size_t>& candidates,
+			std::unordered_set<size_t>& seen)
+		{
+			for (size_t end = key.size(); end > 0; --end)
+				AddWildcardCandidatesForKey(s_wildcardPrefixIndex, key.substr(0, end), candidates, seen);
+		}
+
+		void CollectSuffixWildcardCandidates(
+			const std::string& key,
+			std::vector<size_t>& candidates,
+			std::unordered_set<size_t>& seen)
+		{
+			for (size_t begin = 0; begin < key.size(); ++begin)
+				AddWildcardCandidatesForKey(s_wildcardSuffixIndex, key.substr(begin), candidates, seen);
+		}
+
 		bool TryTranslatePreparedKey(const std::string& key, PreparedTranslationMatch& match, int depth)
 		{
 			match = PreparedTranslationMatch{};
@@ -301,8 +343,19 @@ namespace fonthook
 				}
 			}
 
+			std::vector<size_t> candidateIndexes;
+			std::unordered_set<size_t> seenCandidates;
+			CollectPrefixWildcardCandidates(key, candidateIndexes, seenCandidates);
+			CollectSuffixWildcardCandidates(key, candidateIndexes, seenCandidates);
+			AddWildcardCandidates(s_wildcardLooseIndex, candidateIndexes, seenCandidates);
+
+			std::sort(candidateIndexes.begin(), candidateIndexes.end(), [](size_t left, size_t right)
+				{
+					return EntryLess(s_entries[left], s_entries[right]);
+				});
+
 			std::vector<std::string> captures;
-			for (size_t index : s_wildcardIndex)
+			for (size_t index : candidateIndexes)
 			{
 				const auto& entry = s_entries[index];
 				if (key.size() < entry.lengthWithoutBinds)

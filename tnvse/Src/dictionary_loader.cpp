@@ -394,6 +394,9 @@ namespace fonthook
 		s_entries.clear();
 		s_exactIndex.clear();
 		s_wildcardIndex.clear();
+		s_wildcardPrefixIndex.clear();
+		s_wildcardSuffixIndex.clear();
+		s_wildcardLooseIndex.clear();
 		s_idIndex.clear();
 		s_positiveCache.clear();
 		s_negativeCache.clear();
