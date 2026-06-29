@@ -402,10 +402,6 @@ namespace fonthook
 			if (!searchedKeys.insert(key).second)
 				return false;
 
-			if (g_bEnableDictionaryTranslationLog)
-				gLog.FormattedMessage("tnvse_dictionary: shrink fuzzy candidate[%s]: \"%s\" key=\"%s\"",
-					side, candidateText.c_str(), key.c_str());
-
 			PreparedTranslationMatch match;
 			if (!TryTranslatePreparedKey(key, match, depth))
 				return false;
