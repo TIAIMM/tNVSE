@@ -123,6 +123,8 @@ namespace fonthook
 	bool TranslateInternal(const char* source, std::string& translated, int depth);
 	void ResetFuzzyTextConfig();
 	void LoadFuzzyTextConfig(pugi::xml_node root);
+	bool HasTranslationRegexRules();
+	size_t GetTranslationRegexRuleCount();
 	void LoadUiHintConfig(pugi::xml_node root);
 
 } // namespace fonthook

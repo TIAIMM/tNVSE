@@ -437,31 +437,34 @@ namespace fonthook
 			return;
 		}
 
-		pugi::xml_node dictNode = tnvseRoot.child("dictionary");
-		if (!dictNode)
-		{
-			gLog.FormattedMessage("tnvse_dictionary: missing <dictionary> node");
-			return;
-		}
-
 		LoadFuzzyTextConfig(tnvseRoot);
 		LoadUiHintConfig(tnvseRoot);
 
-		for (auto node : dictNode.children("file"))
-			LoadFileNode(node);
+		pugi::xml_node dictNode = tnvseRoot.child("dictionary");
+		if (dictNode)
+		{
+			for (auto node : dictNode.children("file"))
+				LoadFileNode(node);
 
-		for (auto node : dictNode.children("directory"))
-			LoadDirectoryNode(node);
+			for (auto node : dictNode.children("directory"))
+				LoadDirectoryNode(node);
 
-		for (auto node : dictNode.children("xml"))
-			LoadXmlNode(node);
+			for (auto node : dictNode.children("xml"))
+				LoadXmlNode(node);
 
-		for (auto node : dictNode.children("json"))
-			LoadJsonNode(node);
+			for (auto node : dictNode.children("json"))
+				LoadJsonNode(node);
+		}
+		else
+		{
+			gLog.FormattedMessage("tnvse_dictionary: missing <dictionary> node");
+		}
 
 		SortIndexes();
-		s_dictionaryLoaded = !s_entries.empty();
-		gLog.FormattedMessage("tnvse_dictionary: loaded %u entries", static_cast<UInt32>(s_entries.size()));
+		s_dictionaryLoaded = !s_entries.empty() || HasTranslationRegexRules();
+		gLog.FormattedMessage("tnvse_dictionary: loaded %u entries, %u regex rules",
+			static_cast<UInt32>(s_entries.size()),
+			static_cast<UInt32>(GetTranslationRegexRuleCount()));
 	}
 
 } // namespace fonthook
