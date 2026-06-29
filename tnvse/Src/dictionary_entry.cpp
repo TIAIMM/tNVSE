@@ -140,6 +140,8 @@ namespace fonthook
 			return RecordType::Bptd;
 		if (strcmp(grup, "DOOR") == 0)
 			return RecordType::Door;
+		if (strcmp(grup, "INFO") == 0)
+			return RecordType::Info;
 
 		if (strcmp(grup, "CHAL") == 0)
 		{
@@ -175,6 +177,8 @@ namespace fonthook
 			return RecordType::Message;
 		if (strcmp(rec, "SCPT:SCDA") == 0)
 			return RecordType::Script;
+		if (strncmp(rec, "INFO:", 5) == 0)
+			return RecordType::Info;
 
 		return RecordType::Unknown;
 	}
@@ -297,22 +301,32 @@ namespace fonthook
 		RegisterText(std::move(autoSource), std::move(autoTarget), priority, {});
 	}
 
-	void RegisterXmlEntry(const std::string& source, const std::string& target,
-	                      RecordType type, int priority)
+	bool RegisterXmlEntry(const std::string& source, const std::string& target,
+	                      RecordType type, int priority, const std::string& id)
 	{
 		if (source.empty() || target.empty())
-			return;
+			return false;
 
-		std::wstring sourceWide = Utf8ToWide(source);
-		std::wstring targetWide = Utf8ToWide(target);
+		std::string sourceText = source;
+		std::string targetText = target;
+		if (type == RecordType::Info)
+		{
+			RemoveBraceComments(sourceText);
+			RemoveBraceComments(targetText);
+		}
+
+		std::wstring sourceWide = Utf8ToWide(sourceText);
+		std::wstring targetWide = Utf8ToWide(targetText);
 		Replace1252ForXml(sourceWide);
 		std::string cleanSource = WideToUtf8(sourceWide);
 		std::string cleanTarget = WideToUtf8(targetWide);
 
-		RegisterText(cleanSource, cleanTarget, priority, {});
+		const bool registered = RegisterText(cleanSource, cleanTarget, priority, id);
 
-		if (type != RecordType::Unknown)
+		if (registered && type != RecordType::Unknown)
 			GenerateAutoEntries(cleanSource, cleanTarget, type, priority);
+
+		return registered;
 	}
 
 	void RegisterXmlNodesTyped(pugi::xml_node parent,

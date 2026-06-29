@@ -108,6 +108,29 @@ namespace fonthook
 			return ReadJsonStage(item, stage) && filter.stages.find(stage) != filter.stages.end();
 		}
 
+		RecordType DetectRecordTypeFromJsonKey(const std::string& key)
+		{
+			const size_t firstHash = key.find('#');
+			if (firstHash == std::string::npos)
+				return RecordType::Unknown;
+
+			const size_t secondHash = key.find('#', firstHash + 1);
+			const size_t recLength = secondHash == std::string::npos
+				? std::string::npos
+				: secondHash - firstHash - 1;
+			std::string rec = key.substr(firstHash + 1, recLength);
+			if (rec.size() < 4)
+				return RecordType::Unknown;
+
+			const size_t colon = rec.find(':');
+			std::string grup = colon == std::string::npos ? rec.substr(0, 4) : rec.substr(0, colon);
+			std::string field = colon == std::string::npos ? std::string() : rec.substr(colon + 1);
+			if (grup.size() != 4)
+				return RecordType::Unknown;
+
+			return DetectRecordTypeGrupChamp(grup.c_str(), field.c_str());
+		}
+
 		void LoadFileDictionaryType1(const std::string& sourcePath, const std::string& targetPath, int priority)
 		{
 			std::string sourceText;
@@ -258,7 +281,8 @@ namespace fonthook
 
 				std::string id;
 				ReadJsonString(item, "key", id);
-				if (RegisterText(original, translation, priority, id))
+				const RecordType type = DetectRecordTypeFromJsonKey(id);
+				if (RegisterXmlEntry(original, translation, type, priority, id))
 					++registered;
 				else
 					++skippedInvalid;

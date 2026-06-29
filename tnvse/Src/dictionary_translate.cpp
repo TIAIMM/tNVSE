@@ -23,6 +23,25 @@ namespace fonthook
 			bool changed = false;
 		};
 
+		struct PreparedTranslationMatch
+		{
+			std::string translated;
+			size_t entryIndex = 0;
+			bool exact = false;
+			bool found = false;
+		};
+
+		struct ShrinkTranslationMatch
+		{
+			std::string side;
+			std::string candidateText;
+			std::string key;
+			std::string translated;
+			size_t entryIndex = 0;
+			bool exact = false;
+			bool found = false;
+		};
+
 		FuzzyRegexRule s_trimPrefixRegex;
 		FuzzyRegexRule s_trimSuffixRegex;
 		FuzzyRegexRule s_bypassPrefixRegex;
@@ -213,6 +232,220 @@ namespace fonthook
 			if (translatedInner == inner)
 				return text;
 			return text.substr(0, begin + 1) + translatedInner + text.substr(end);
+		}
+
+		bool IsAsciiLetter(char ch)
+		{
+			return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+		}
+
+		size_t ShrinkRight(const std::string& text, size_t end)
+		{
+			if (end == 0)
+				return 0;
+
+			if (IsAsciiLetter(text[end - 1]))
+			{
+				while (end > 0 && IsAsciiLetter(text[end - 1]))
+					--end;
+				return end;
+			}
+
+			return end - 1;
+		}
+
+		size_t ShrinkLeft(const std::string& text, size_t begin)
+		{
+			if (begin >= text.size())
+				return text.size();
+
+			if (IsAsciiLetter(text[begin]))
+			{
+				while (begin < text.size() && IsAsciiLetter(text[begin]))
+					++begin;
+				return begin;
+			}
+
+			return begin + 1;
+		}
+
+		void TrimCandidateRange(const std::string& text, size_t& begin, size_t& end)
+		{
+			const auto isTrim = [](unsigned char ch)
+				{
+					return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+				};
+
+			while (begin < end && isTrim((unsigned char)text[begin]))
+				++begin;
+			while (end > begin && isTrim((unsigned char)text[end - 1]))
+				--end;
+		}
+
+		bool TryTranslatePreparedKey(const std::string& key, PreparedTranslationMatch& match, int depth)
+		{
+			match = PreparedTranslationMatch{};
+
+			auto exactIt = s_exactIndex.find(key);
+			if (exactIt != s_exactIndex.end())
+			{
+				for (size_t index : exactIt->second)
+				{
+					if (ExpandTarget(s_entries[index], {}, match.translated, depth))
+					{
+						match.entryIndex = index;
+						match.exact = true;
+						match.found = true;
+						return true;
+					}
+				}
+			}
+
+			std::vector<std::string> captures;
+			for (size_t index : s_wildcardIndex)
+			{
+				const auto& entry = s_entries[index];
+				if (key.size() < entry.lengthWithoutBinds)
+					continue;
+				if (MatchWildcard(entry, key, captures) && ExpandTarget(entry, captures, match.translated, depth))
+				{
+					match.entryIndex = index;
+					match.exact = false;
+					match.found = true;
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		bool TryBuildShrinkMatch(
+			const std::string& source,
+			size_t begin,
+			size_t end,
+			const char* side,
+			const std::string& fullKey,
+			std::unordered_set<std::string>& searchedKeys,
+			ShrinkTranslationMatch& result,
+			int depth)
+		{
+			result = ShrinkTranslationMatch{};
+			if (begin >= end)
+				return false;
+
+			size_t trimBegin = begin;
+			size_t trimEnd = end;
+			TrimCandidateRange(source, trimBegin, trimEnd);
+			if (trimBegin >= trimEnd)
+				return false;
+
+			std::string candidateText = source.substr(trimBegin, trimEnd - trimBegin);
+			if (!HasAlphabet(candidateText))
+				return false;
+
+			std::string key = PrepareSourceForLookup(candidateText);
+			if (key.empty() || key == fullKey)
+				return false;
+			if (!searchedKeys.insert(key).second)
+				return false;
+
+			if (g_bEnableDictionaryTranslationLog)
+				gLog.FormattedMessage("tnvse_dictionary: shrink fuzzy candidate[%s]: \"%s\" key=\"%s\"",
+					side, candidateText.c_str(), key.c_str());
+
+			PreparedTranslationMatch match;
+			if (!TryTranslatePreparedKey(key, match, depth))
+				return false;
+
+			result.side = side;
+			result.candidateText = std::move(candidateText);
+			result.key = std::move(key);
+			result.entryIndex = match.entryIndex;
+			result.exact = match.exact;
+			result.found = true;
+			result.translated = source.substr(0, trimBegin) + match.translated + source.substr(trimEnd);
+
+			if (g_bEnableDictionaryTranslationLog)
+				gLog.FormattedMessage("tnvse_dictionary: shrink fuzzy hit[%s]: candidate=\"%s\" entry=\"%s\" ->\"%s\"",
+					result.side.c_str(), result.candidateText.c_str(), s_entries[result.entryIndex].key.c_str(), result.translated.c_str());
+
+			return true;
+		}
+
+		bool IsBetterShrinkMatch(const ShrinkTranslationMatch& left, const ShrinkTranslationMatch& right)
+		{
+			if (!right.found)
+				return true;
+			return EntryLess(s_entries[left.entryIndex], s_entries[right.entryIndex]);
+		}
+
+		bool TryTranslateShrinkText(const std::string& source, std::string& translated, int depth)
+		{
+			if (depth >= 4)
+				return false;
+
+			std::string fullKey = PrepareSourceForLookup(source);
+			if (fullKey.empty())
+				return false;
+
+			std::unordered_set<std::string> searchedKeys;
+			searchedKeys.insert(fullKey);
+
+			size_t rightEnd = source.size();
+			size_t leftBegin = 0;
+			while (rightEnd > 0 || leftBegin < source.size())
+			{
+				bool progressed = false;
+				ShrinkTranslationMatch bestMatch;
+
+				if (rightEnd > 0)
+				{
+					const size_t nextRightEnd = ShrinkRight(source, rightEnd);
+					if (nextRightEnd != rightEnd)
+					{
+						rightEnd = nextRightEnd;
+						progressed = true;
+
+						ShrinkTranslationMatch match;
+						if (TryBuildShrinkMatch(source, 0, rightEnd, "prefix", fullKey, searchedKeys, match, depth) &&
+							IsBetterShrinkMatch(match, bestMatch))
+						{
+							bestMatch = std::move(match);
+						}
+					}
+				}
+
+				if (leftBegin < source.size())
+				{
+					const size_t nextLeftBegin = ShrinkLeft(source, leftBegin);
+					if (nextLeftBegin != leftBegin)
+					{
+						leftBegin = nextLeftBegin;
+						progressed = true;
+
+						ShrinkTranslationMatch match;
+						if (TryBuildShrinkMatch(source, leftBegin, source.size(), "suffix", fullKey, searchedKeys, match, depth) &&
+							IsBetterShrinkMatch(match, bestMatch))
+						{
+							bestMatch = std::move(match);
+						}
+					}
+				}
+
+				if (bestMatch.found)
+				{
+					translated = bestMatch.translated;
+					if (g_bEnableDictionaryTranslationLog)
+						gLog.FormattedMessage("tnvse_dictionary: shrink fuzzy result[%s]: \"%s\" ->\"%s\"",
+							bestMatch.side.c_str(), source.c_str(), translated.c_str());
+					return true;
+				}
+
+				if (!progressed)
+					break;
+			}
+
+			return false;
 		}
 
 		bool TryTranslateFuzzyText(const std::string& source, std::string& translated, int depth)
@@ -450,38 +683,26 @@ namespace fonthook
 		}
 
 		const std::string key = PrepareSourceForLookup(raw);
-		auto exactIt = s_exactIndex.find(key);
-		if (exactIt != s_exactIndex.end())
+		PreparedTranslationMatch fullMatch;
+		if (TryTranslatePreparedKey(key, fullMatch, depth))
 		{
-			for (size_t index : exactIt->second)
-			{
-				if (ExpandTarget(s_entries[index], {}, translated, depth))
-				{
-					if (g_bEnableDictionaryTranslationLog)
-						gLog.FormattedMessage("tnvse_dictionary: TranslateInternal exact match: \"%s\" ->\"%s\"",
-							source, translated.c_str());
-					s_positiveCache.emplace(cacheKey, translated);
-					TrimPositiveCache();
-					return true;
-				}
-			}
+			translated = fullMatch.translated;
+			if (g_bEnableDictionaryTranslationLog)
+				gLog.FormattedMessage("tnvse_dictionary: TranslateInternal %s match: \"%s\" ->\"%s\" (entry=\"%s\")",
+					fullMatch.exact ? "exact" : "wildcard",
+					source,
+					translated.c_str(),
+					s_entries[fullMatch.entryIndex].key.c_str());
+			s_positiveCache.emplace(cacheKey, translated);
+			TrimPositiveCache();
+			return true;
 		}
 
-		std::vector<std::string> captures;
-		for (size_t index : s_wildcardIndex)
+		if (TryTranslateShrinkText(raw, translated, depth))
 		{
-			const auto& entry = s_entries[index];
-			if (key.size() < entry.lengthWithoutBinds)
-				continue;
-			if (MatchWildcard(entry, key, captures) && ExpandTarget(entry, captures, translated, depth))
-			{
-				if (g_bEnableDictionaryTranslationLog)
-					gLog.FormattedMessage("tnvse_dictionary: TranslateInternal wildcard match: \"%s\" ->\"%s\" (entry=\"%s\")",
-						source, translated.c_str(), entry.key.c_str());
-				s_positiveCache.emplace(cacheKey, translated);
-				TrimPositiveCache();
-				return true;
-			}
+			s_positiveCache.emplace(cacheKey, translated);
+			TrimPositiveCache();
+			return true;
 		}
 
 		if (TryTranslateFuzzyText(originalRaw, translated, depth))

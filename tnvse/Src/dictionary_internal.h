@@ -42,6 +42,7 @@ namespace fonthook
 		ChallengeDesc, // challenge description (CHAL:DESC)
 		Message,       // message (MESG:DESC)
 		Script,        // script (SCPT:SCDA)
+		Info,          // dialogue info (INFO:*)
 	};
 
 	// ---- UI hint format for auto-generated entries ----
@@ -105,7 +106,7 @@ namespace fonthook
 	bool AddEntry(const std::string& source, const std::string& target, int priority, const std::string& id);
 	bool RegisterText(std::string source, std::string target, int priority, const std::string& id);
 	void RegisterXmlNodes(pugi::xml_node parent, const char* nodeName, const char* sourceName, const char* targetName, const char* fieldName, int priority);
-	void RegisterXmlEntry(const std::string& source, const std::string& target, RecordType type, int priority);
+	bool RegisterXmlEntry(const std::string& source, const std::string& target, RecordType type, int priority, const std::string& id = {});
 	void RegisterXmlNodesTyped(pugi::xml_node parent, const char* nodeName, const char* sourceName, const char* targetName, const char* champName, int priority, bool isEET);
 	void SortIndexes();
 
