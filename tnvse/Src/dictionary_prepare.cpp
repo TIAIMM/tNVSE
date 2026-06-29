@@ -2,8 +2,6 @@
 #include "encoding.h"
 #include "load_config.h"
 
-#include <regex>
-
 namespace fonthook
 {
 	namespace
@@ -111,6 +109,176 @@ namespace fonthook
 			text.swap(result);
 			Trim(text);
 		}
+
+		bool IsAsciiDigit(char ch)
+		{
+			return ch >= '0' && ch <= '9';
+		}
+
+		bool IsAsciiAlnum(char ch)
+		{
+			return IsAsciiAlpha(ch) || IsAsciiDigit(ch);
+		}
+
+		bool StartsWithIgnoreCase(const std::string& text, size_t pos, std::string_view pattern)
+		{
+			if (pos + pattern.size() > text.size())
+				return false;
+			for (size_t i = 0; i < pattern.size(); ++i)
+			{
+				if (ToLowerAsciiChar(text[pos + i]) != ToLowerAsciiChar(pattern[i]))
+					return false;
+			}
+			return true;
+		}
+
+		bool TryMatchPcVariable(const std::string& text, size_t ampPos, size_t& end)
+		{
+			static constexpr std::string_view names[] =
+			{
+				"PCName",
+				"PCRace",
+				"PCSex",
+				"PCSexPronoun",
+				"PCSexPossessive",
+			};
+
+			for (std::string_view name : names)
+			{
+				const size_t semicolon = ampPos + 1 + name.size();
+				if (StartsWithIgnoreCase(text, ampPos + 1, name) &&
+					semicolon < text.size() && text[semicolon] == ';')
+				{
+					end = semicolon + 1;
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		bool TryMatchControlVariable(const std::string& text, size_t begin, size_t& end)
+		{
+			size_t ampPos = begin;
+			if ((text[begin] == 'p' || text[begin] == 'P') &&
+				begin + 1 < text.size() && text[begin + 1] == '&')
+			{
+				ampPos = begin + 1;
+			}
+			else if (text[begin] != '&')
+			{
+				return false;
+			}
+
+			size_t pos = ampPos + 1;
+			if (pos < text.size() && text[pos] == '-')
+				++pos;
+			if (pos >= text.size() || ToLowerAsciiChar(text[pos]) != 's')
+				return false;
+
+			++pos;
+			const size_t payloadBegin = pos;
+			while (pos < text.size() && IsAsciiAlnum(text[pos]))
+				++pos;
+			if (pos == payloadBegin)
+				return false;
+			if (pos >= text.size() || text[pos] != ';')
+				return false;
+
+			end = pos + 1;
+			return true;
+		}
+
+		bool TryMatchGameVariable(const std::string& text, size_t begin, size_t& end)
+		{
+			if (text[begin] == '&' && TryMatchPcVariable(text, begin, end))
+				return true;
+			return TryMatchControlVariable(text, begin, end);
+		}
+
+		bool IsSimpleFormatSpecifier(char ch)
+		{
+			switch (ch)
+			{
+			case 'a':
+			case 'b':
+			case 'B':
+			case 'c':
+			case 'd':
+			case 'e':
+			case 'f':
+			case 'g':
+			case 'i':
+			case 'k':
+			case 'n':
+			case 'v':
+			case 'x':
+			case 'z':
+			case 's':
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		bool IsFloatFormatFlag(char ch)
+		{
+			return ch == '+' || ch == '-' || ch == ' ' || ch == '0';
+		}
+
+		bool TryMatchFloatFormatSpecifier(const std::string& text, size_t percentPos, size_t& end)
+		{
+			size_t pos = percentPos + 1;
+			if (pos >= text.size())
+				return false;
+
+			if (IsFloatFormatFlag(text[pos]))
+				++pos;
+			while (pos < text.size() && IsAsciiDigit(text[pos]))
+				++pos;
+			if (pos >= text.size() || text[pos] != '.')
+				return false;
+
+			++pos;
+			while (pos < text.size() && IsAsciiDigit(text[pos]))
+				++pos;
+			if (pos >= text.size() || (text[pos] != 'e' && text[pos] != 'f'))
+				return false;
+
+			end = pos + 1;
+			return true;
+		}
+
+		bool TryMatchBindFormatSpecifier(const std::string& text, size_t percentPos, size_t& end)
+		{
+			if (percentPos + 1 >= text.size())
+				return false;
+
+			const char next = text[percentPos + 1];
+			if (next == 'x' && percentPos + 2 < text.size() && IsAsciiDigit(text[percentPos + 2]))
+			{
+				end = percentPos + 3;
+				return true;
+			}
+
+			if (IsSimpleFormatSpecifier(next))
+			{
+				end = percentPos + 2;
+				return true;
+			}
+
+			if (next == 'p' && percentPos + 2 < text.size())
+			{
+				const char pronoun = text[percentPos + 2];
+				if (pronoun == 'o' || pronoun == 'p' || pronoun == 's')
+				{
+					end = percentPos + 3;
+					return true;
+				}
+			}
+
+			return TryMatchFloatFormatSpecifier(text, percentPos, end);
+		}
 	}
 
 	// ---- bind-token helpers ----
@@ -177,12 +345,30 @@ namespace fonthook
 		if (str.find('&') == std::string::npos)
 			return;
 
-		static const std::regex pattern(
-			R"((&pc(name|race|sex|sexpronoun|sexpossessive);|p?&-?s[0-9a-z]+;))",
-			std::regex_constants::ECMAScript | std::regex_constants::icase | std::regex_constants::optimize);
+		const std::string before = g_bEnableDictionaryTranslationLog ? str : std::string{};
+		std::string result;
+		result.reserve(str.size());
+		bool changed = false;
 
-		const std::string before = str;
-		str = std::regex_replace(str, pattern, "[%]");
+		for (size_t i = 0; i < str.size();)
+		{
+			size_t end = 0;
+			if ((str[i] == '&' || str[i] == 'p' || str[i] == 'P') &&
+				TryMatchGameVariable(str, i, end))
+			{
+				result += kBindSymbol;
+				i = end;
+				changed = true;
+				continue;
+			}
+
+			result.push_back(str[i++]);
+		}
+
+		if (!changed)
+			return;
+
+		str.swap(result);
 
 		if (g_bEnableDictionaryTranslationLog && str != before)
 		{
@@ -205,22 +391,48 @@ namespace fonthook
 		if (str.find('%') == std::string::npos)
 			return;
 
-		// Matches GECK / NVSE format specifiers:
-		//   %a %b %B %c %d %e %f %g %i %k %n %v %x %z %s   (simple types)
-		//   %p[ops]                                           (pronoun / percent-sign)
-		//   %[flags][width].[precision][ef]                   (floating-point,
-		//     e.g. %+.2f, %10.4f, %.0f)
-		//   %x[0-9]                                           (hex with min-width)
-		static const std::regex formatting(
-			R"((%[abBcdefgiknvxzs]|%x[0-9]|%p[ops]|%[\+\- 0]?[0-9]*\.[0-9]*[ef]))",
-			std::regex_constants::ECMAScript | std::regex_constants::optimize);
+		const std::string before = g_bEnableDictionaryTranslationLog ? str : std::string{};
+		std::string result;
+		result.reserve(str.size());
+		bool changed = false;
 
-		const std::string before = str;
-		str = std::regex_replace(str, formatting, "[%]");
+		for (size_t i = 0; i < str.size();)
+		{
+			if (str[i] == '%' && i + 1 < str.size())
+			{
+				const char next = str[i + 1];
+				if (next == 'q')
+				{
+					result.push_back('"');
+					i += 2;
+					changed = true;
+					continue;
+				}
+				if (next == 'r')
+				{
+					result += "[CRLF]";
+					i += 2;
+					changed = true;
+					continue;
+				}
 
-		// Special single-character conversions
-		ReplaceAll(str, "%q", "\"");     // %q → literal double-quote
-		ReplaceAll(str, "%r", "[CRLF]"); // %r → line break placeholder
+				size_t end = 0;
+				if (TryMatchBindFormatSpecifier(str, i, end))
+				{
+					result += kBindSymbol;
+					i = end;
+					changed = true;
+					continue;
+				}
+			}
+
+			result.push_back(str[i++]);
+		}
+
+		if (!changed)
+			return;
+
+		str.swap(result);
 
 		if (g_bEnableDictionaryTranslationLog && str != before)
 		{
