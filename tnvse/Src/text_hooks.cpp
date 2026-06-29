@@ -1,4 +1,5 @@
 #include "text_hooks.h"
+#include "dictionary.h"
 
 namespace fonthook
 {
@@ -52,6 +53,9 @@ namespace fonthook
 		std::string sConvertedStr;
 		if (ConvertToMultiByte(pStr, sConvertedStr, gNumberedExtraLetters.find(5) != gNumberedExtraLetters.end()))
 			pthis->Set(pStr);
+		std::string sTranslatedStr;
+		if (TranslateText(pthis->pString, sTranslatedStr))
+			pthis->Set(sTranslatedStr.c_str());
 		return pthis->pString;
 	}
 
@@ -61,6 +65,9 @@ namespace fonthook
 		std::string sConvertedStr;
 		if (ConvertToMultiByte(pStr, sConvertedStr, gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end()))
 			pthis->Set(pStr);
+		std::string sTranslatedStr;
+		if (TranslateText(pthis->pString, sTranslatedStr))
+			pthis->Set(sTranslatedStr.c_str());
 
 		return ThisStdCall<char*>(0x408DA0, pthis);
 	}
@@ -69,6 +76,9 @@ namespace fonthook
 	{
 		std::string sConvertedStr;
 		ConvertToMultiByte(src, sConvertedStr, gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end());
+		std::string sTranslatedStr;
+		if (TranslateText(src, sTranslatedStr))
+			return strcpy_s(dest, dest_size, sTranslatedStr.c_str());
 		return strcpy_s(dest, dest_size, src);
 	}
 

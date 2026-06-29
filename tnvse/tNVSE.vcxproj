@@ -53,14 +53,14 @@
     <IntDir>$(SolutionDir)\Build\tmp\$(Configuration)\</IntDir>
     <LinkIncremental>true</LinkIncremental>
     <LibraryPath>$(DXSDK_DIR)\Lib\x86;$(ProjectDir)..\commonlib_nv\Build\Debug;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
-    <IncludePath>$(ProjectDir)Src;$(ProjectDir)..\commonlib_nv\Include\Utils;$(ProjectDir)..\commonlib_nv\Include;$(ProjectDir)..\commonlib_nv\Include\Gamebryo;$(ProjectDir)..\commonlib_nv\Include\Havok;$(ProjectDir)..\commonlib_nv\Include\Bethesda;$(DXSDK_DIR)Include</IncludePath>
+    <IncludePath>$(ProjectDir)Src;$(ProjectDir)include;$(ProjectDir)..\commonlib_nv\Include\Utils;$(ProjectDir)..\commonlib_nv\Include;$(ProjectDir)..\commonlib_nv\Include\Gamebryo;$(ProjectDir)..\commonlib_nv\Include\Havok;$(ProjectDir)..\commonlib_nv\Include\Bethesda;$(DXSDK_DIR)Include</IncludePath>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>$(SolutionDir)\Build\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\Build\tmp\$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>$(ProjectDir)Src;$(ProjectDir)..\commonlib_nv\Include\Utils;$(ProjectDir)..\commonlib_nv\Include;$(ProjectDir)..\commonlib_nv\Include\Gamebryo;$(ProjectDir)..\commonlib_nv\Include\Havok;$(ProjectDir)..\commonlib_nv\Include\Bethesda;$(DXSDK_DIR)Include</IncludePath>
+    <IncludePath>$(ProjectDir)Src;$(ProjectDir)include;$(ProjectDir)..\commonlib_nv\Include\Utils;$(ProjectDir)..\commonlib_nv\Include;$(ProjectDir)..\commonlib_nv\Include\Gamebryo;$(ProjectDir)..\commonlib_nv\Include\Havok;$(ProjectDir)..\commonlib_nv\Include\Bethesda;$(DXSDK_DIR)Include</IncludePath>
     <LibraryPath>$(DXSDK_DIR)\Lib\x86;$(ProjectDir)..\commonlib_nv\Build\Release;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
   </PropertyGroup>
@@ -155,6 +155,12 @@
     <ClCompile Include="Src\text_hooks.cpp" />
     <ClCompile Include="Src\game_hooks.cpp" />
     <ClCompile Include="Src\font_hook.cpp" />
+    <ClCompile Include="Src\dictionary.cpp" />
+    <ClCompile Include="Src\dictionary_utils.cpp" />
+    <ClCompile Include="Src\dictionary_prepare.cpp" />
+    <ClCompile Include="Src\dictionary_entry.cpp" />
+    <ClCompile Include="Src\dictionary_loader.cpp" />
+    <ClCompile Include="Src\dictionary_translate.cpp" />
     <ClCompile Include="Src\load_config.cpp" />
     <ClCompile Include="Src\tnvse.cpp" />
   </ItemGroup>
@@ -171,6 +177,8 @@
     <ClInclude Include="Src\text_hooks.h" />
     <ClInclude Include="Src\game_hooks.h" />
     <ClInclude Include="Src\font_hook.h" />
+    <ClInclude Include="Src\dictionary.h" />
+    <ClInclude Include="Src\dictionary_internal.h" />
     <ClInclude Include="Src\load_config.h" />
     <ClInclude Include="Src\nvse\PluginAPI.h" />
     <ClInclude Include="Src\tnvse.h" />

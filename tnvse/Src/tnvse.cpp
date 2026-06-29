@@ -12,6 +12,7 @@
 #include "load_config.h"
 #include "tnvse.h"
 #include "font_hook.h"
+#include "dictionary.h"
 
 IDebugLog gLog("tnvse.log");
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;
@@ -48,6 +49,7 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 	}
 
 	LoadConfig();
+	fonthook::LoadDictionaryConfig();
 
 	hJIP = GetModuleHandle("jip_nvse.dll");
 	g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);

@@ -1,4 +1,5 @@
 #include "font_manager.h"
+#include "dictionary.h"
 #include "native_calls.h"
 
 namespace fonthook
@@ -16,16 +17,22 @@ namespace fonthook
 
 		std::string sConvertedStr;
 		ConvertToMultiByte(srcString, sConvertedStr, extraGlyphs != nullptr);
+		bool bSkipDictionaryTranslation = false;
 		if (extraGlyphs && bIsQuestTextLSBDBCharacter && szDBChar[0] && szDBChar[1])
 		{
 			srcString = szDBChar;
 			bIsQuestTextLSBDBCharacter = false;
+			bSkipDictionaryTranslation = true;
 		}
 		else if (extraGlyphs && bMeasureQuestTextMSBAsEmpty)
 		{
 			srcString = "";
 			bMeasureQuestTextMSBAsEmpty = false;
+			bSkipDictionaryTranslation = true;
 		}
+		std::string sTranslatedStr;
+		if (!bSkipDictionaryTranslation && TranslateText(srcString, sTranslatedStr))
+			srcString = sTranslatedStr.c_str();
 
 		NiPoint3 StringDimensions = StringDefaultDimensions;
 		int sourceStringLength = strlen(srcString);

@@ -33,6 +33,24 @@
     <ClCompile Include="Src\font_hook.cpp">
       <Filter>Source Files\Font</Filter>
     </ClCompile>
+    <ClCompile Include="Src\dictionary.cpp">
+      <Filter>Source Files\Config</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\dictionary_utils.cpp">
+      <Filter>Source Files\Config</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\dictionary_prepare.cpp">
+      <Filter>Source Files\Config</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\dictionary_entry.cpp">
+      <Filter>Source Files\Config</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\dictionary_loader.cpp">
+      <Filter>Source Files\Config</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\dictionary_translate.cpp">
+      <Filter>Source Files\Config</Filter>
+    </ClCompile>
     <ClCompile Include="Src\font_manager.cpp">
       <Filter>Source Files\Font</Filter>
     </ClCompile>
@@ -67,6 +85,12 @@
     </ClInclude>
     <ClInclude Include="Src\font_hook.h">
       <Filter>Header Files\Font</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\dictionary.h">
+      <Filter>Header Files\Config</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\dictionary_internal.h">
+      <Filter>Header Files\Config</Filter>
     </ClInclude>
     <ClInclude Include="Src\font_manager.h">
       <Filter>Header Files\Font</Filter>

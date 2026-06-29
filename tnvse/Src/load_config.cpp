@@ -8,6 +8,7 @@ std::string g_sNewBigGunsDesc;
 UINT32 g_uiReorderDoorPrompt;
 std::string g_sOptionalStructuralParticle;
 bool g_bRemovePlural;
+bool g_bEnableDictionaryTranslation;
 
 void LoadConfig()
 {
@@ -65,4 +66,7 @@ void LoadConfig()
 
 	g_bRemovePlural = GetPrivateProfileInt("MAIN", "bRemovePlural", 1, filename);
 	gLog.FormattedMessage("g_bRemovePlural: %d", g_bRemovePlural);
+
+	g_bEnableDictionaryTranslation = GetPrivateProfileInt("MAIN", "bEnableDictionaryTranslation", 1, filename);
+	gLog.FormattedMessage("g_bEnableDictionaryTranslation: %d", g_bEnableDictionaryTranslation);
 }

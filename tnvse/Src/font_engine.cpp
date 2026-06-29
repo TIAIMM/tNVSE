@@ -1,4 +1,5 @@
 #include "font_engine.h"
+#include "dictionary.h"
 #include "native_calls.h"
 
 namespace fonthook
@@ -768,6 +769,9 @@ namespace fonthook
 		std::string sConvertedStr;
 		if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
 			axTextString->Set(pStr);
+		std::string sTranslatedStr;
+		if (TranslateText(axTextString->pString, sTranslatedStr))
+			axTextString->Set(sTranslatedStr.c_str());
 
 		ThisStdCall(0xA12FB0, this, axTextString->pString, &textData);
 
@@ -908,6 +912,9 @@ namespace fonthook
 		std::string sConvertedStr;
 		if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
 			apTextString->Set(pStr);
+		std::string sTranslatedStr;
+		if (TranslateText(apTextString->pString, sTranslatedStr))
+			apTextString->Set(sTranslatedStr.c_str());
 
 		if (!apTextString->pString || !this->pFontData)
 			return 0;
