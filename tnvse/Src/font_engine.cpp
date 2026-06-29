@@ -361,8 +361,8 @@ namespace fonthook
 			if (processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex] == ';')
 				totalEscapeSeqLen += 1;
 
-			if (ReplaceVariableInString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
-				|| ParseAndFormatVariableInString(varNameBuffer, parsedTextBuffer))
+			if (Interface_FindTextReplacementString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
+				|| Interface_TestConstantForGameSettings(varNameBuffer, parsedTextBuffer))
 			{
 				UInt32 postEscapeTextLen = strlen(parsedTextBuffer);
 				int escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;

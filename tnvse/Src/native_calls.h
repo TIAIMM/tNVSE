@@ -7,8 +7,8 @@ namespace fonthook
 {
 	// ---- Native game function wrappers ----
 	void __cdecl ConvertToAsciiQuotes(UInt8* currentChar);
-	bool __cdecl ReplaceVariableInString(const char* varName, char* outBuffer, UInt32 bufferSize, bool isPositiveEscape);
-	bool __cdecl ParseAndFormatVariableInString(const char* p_varNameBuffer, void* p_parsedTextBuffer);
+	bool __cdecl Interface_FindTextReplacementString(const char* varName, char* outBuffer, UInt32 bufferSize, bool isPositiveEscape);
+	bool __cdecl Interface_TestConstantForGameSettings(const char* p_varNameBuffer, void* p_parsedTextBuffer);
 	SInt32 __cdecl AlignLineWidthToTab(double currentWidth, double tabInterval);
 	void* __cdecl AppendToListTail(void* listNode, void* itemData);
 

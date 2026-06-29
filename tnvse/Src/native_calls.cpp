@@ -8,12 +8,12 @@ namespace fonthook
 		CdeclCall(0xA122B0, currentChar);
 	}
 
-	bool __cdecl ReplaceVariableInString(const char* varName, char* outBuffer, UInt32 bufferSize, bool isPositiveEscape)
+	bool __cdecl Interface_FindTextReplacementString(const char* varName, char* outBuffer, UInt32 bufferSize, bool isPositiveEscape)
 	{
 		return CdeclCall<bool>(0x7070C0, varName, outBuffer, bufferSize, isPositiveEscape);
 	}
 
-	bool __cdecl ParseAndFormatVariableInString(const char* p_varNameBuffer, void* p_parsedTextBuffer)
+	bool __cdecl Interface_TestConstantForGameSettings(const char* p_varNameBuffer, void* p_parsedTextBuffer)
 	{
 		return CdeclCall<bool>(0x7073D0, p_varNameBuffer, p_parsedTextBuffer);
 	}
