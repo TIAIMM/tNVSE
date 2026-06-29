@@ -2,12 +2,22 @@
 #include "encoding.h"
 #include "load_config.h"
 
+#include <nlohmann/json.hpp>
+
+#include <cstdlib>
 #include <cstring>
+#include <exception>
 
 namespace fonthook
 {
 	namespace
 	{
+		struct StageFilter
+		{
+			bool enabled = false;
+			std::unordered_set<int> stages;
+		};
+
 		std::string GetAttr(pugi::xml_node node, const char* name)
 		{
 			return node.attribute(name).as_string("");
@@ -16,6 +26,86 @@ namespace fonthook
 		int GetAttrInt(pugi::xml_node node, const char* name, int fallback)
 		{
 			return node.attribute(name).as_int(fallback);
+		}
+
+		bool ParseInt(const std::string& text, int& value)
+		{
+			if (text.empty())
+				return false;
+
+			char* end = nullptr;
+			const long parsed = std::strtol(text.c_str(), &end, 10);
+			if (end == text.c_str() || *end != '\0')
+				return false;
+
+			value = static_cast<int>(parsed);
+			return true;
+		}
+
+		StageFilter ParseStageFilter(pugi::xml_node node)
+		{
+			StageFilter filter;
+			auto attr = node.attribute("stage");
+			if (!attr)
+				return filter;
+
+			std::string stageText = attr.as_string("");
+			Trim(stageText);
+			if (stageText.empty() || stageText == "*")
+				return filter;
+
+			filter.enabled = true;
+			for (auto token : SplitByToken(stageText, ","))
+			{
+				Trim(token);
+				int stage = 0;
+				if (ParseInt(token, stage))
+					filter.stages.insert(stage);
+				else if (!token.empty())
+					gLog.FormattedMessage("tnvse_dictionary: ignored invalid JSON stage filter token: %s", token.c_str());
+			}
+			return filter;
+		}
+
+		bool ReadJsonString(const nlohmann::json& item, const char* name, std::string& value)
+		{
+			auto it = item.find(name);
+			if (it == item.end() || !it->is_string())
+				return false;
+
+			value = it->get<std::string>();
+			return true;
+		}
+
+		bool ReadJsonStage(const nlohmann::json& item, int& stage)
+		{
+			auto it = item.find("stage");
+			if (it == item.end())
+				return false;
+
+			if (it->is_number_integer())
+			{
+				stage = it->get<int>();
+				return true;
+			}
+
+			if (it->is_string())
+			{
+				std::string value = it->get<std::string>();
+				Trim(value);
+				return ParseInt(value, stage);
+			}
+
+			return false;
+		}
+
+		bool AllowsStage(const StageFilter& filter, const nlohmann::json& item)
+		{
+			if (!filter.enabled)
+				return true;
+
+			int stage = 0;
+			return ReadJsonStage(item, stage) && filter.stages.find(stage) != filter.stages.end();
 		}
 
 		void LoadFileDictionaryType1(const std::string& sourcePath, const std::string& targetPath, int priority)
@@ -112,6 +202,77 @@ namespace fonthook
 			}
 		}
 
+		void LoadJsonDictionary(const std::string& path, int priority, const StageFilter& stageFilter)
+		{
+			std::string text;
+			if (!ReadWholeFile(path, text))
+			{
+				gLog.FormattedMessage("tnvse_dictionary: failed to read JSON dictionary: %s", path.c_str());
+				return;
+			}
+
+			StripUtf8Bom(text);
+
+			nlohmann::json doc;
+			try
+			{
+				doc = nlohmann::json::parse(text);
+			}
+			catch (const std::exception& e)
+			{
+				gLog.FormattedMessage("tnvse_dictionary: failed to parse JSON dictionary: %s (%s)", path.c_str(), e.what());
+				return;
+			}
+
+			if (!doc.is_array())
+			{
+				gLog.FormattedMessage("tnvse_dictionary: unsupported JSON dictionary root: %s", path.c_str());
+				return;
+			}
+
+			UInt32 registered = 0;
+			UInt32 skippedStage = 0;
+			UInt32 skippedMalformed = 0;
+			UInt32 skippedInvalid = 0;
+			for (const auto& item : doc)
+			{
+				if (!item.is_object())
+				{
+					++skippedMalformed;
+					continue;
+				}
+
+				if (!AllowsStage(stageFilter, item))
+				{
+					++skippedStage;
+					continue;
+				}
+
+				std::string original;
+				std::string translation;
+				if (!ReadJsonString(item, "original", original) || !ReadJsonString(item, "translation", translation))
+				{
+					++skippedMalformed;
+					continue;
+				}
+
+				std::string id;
+				ReadJsonString(item, "key", id);
+				if (RegisterText(original, translation, priority, id))
+					++registered;
+				else
+					++skippedInvalid;
+			}
+
+			gLog.FormattedMessage(
+				"tnvse_dictionary: loaded JSON dictionary: %s, registered=%u, skipped_stage=%u, skipped_malformed=%u, skipped_invalid=%u",
+				path.c_str(),
+				registered,
+				skippedStage,
+				skippedMalformed,
+				skippedInvalid);
+		}
+
 		void LoadFileNode(pugi::xml_node node)
 		{
 			const std::string source = ResolvePath(GetAttr(node, "src"));
@@ -150,6 +311,22 @@ namespace fonthook
 				return;
 			}
 			LoadXmlDictionary(path, priority);
+		}
+
+		void LoadJsonNode(pugi::xml_node node)
+		{
+			std::string path = GetAttr(node, "path");
+			if (path.empty())
+				path = GetAttr(node, "src");
+			const int priority = GetAttrInt(node, "priority", 10);
+			const StageFilter stageFilter = ParseStageFilter(node);
+			path = ResolvePath(path);
+			if (!FileExists(path))
+			{
+				gLog.FormattedMessage("tnvse_dictionary: missing JSON dictionary: %s", path.c_str());
+				return;
+			}
+			LoadJsonDictionary(path, priority, stageFilter);
 		}
 	}
 
@@ -207,6 +384,9 @@ namespace fonthook
 
 		for (auto node : root.children("xml"))
 			LoadXmlNode(node);
+
+		for (auto node : root.children("json"))
+			LoadJsonNode(node);
 
 		SortIndexes();
 		s_dictionaryLoaded = !s_entries.empty();

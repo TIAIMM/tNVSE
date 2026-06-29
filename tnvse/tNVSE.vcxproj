@@ -179,6 +179,7 @@
     <ClInclude Include="Src\font_hook.h" />
     <ClInclude Include="Src\dictionary.h" />
     <ClInclude Include="Src\dictionary_internal.h" />
+    <ClInclude Include="include\nlohmann\json.hpp" />
     <ClInclude Include="Src\load_config.h" />
     <ClInclude Include="Src\nvse\PluginAPI.h" />
     <ClInclude Include="Src\tnvse.h" />

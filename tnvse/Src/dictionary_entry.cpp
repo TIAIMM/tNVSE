@@ -82,6 +82,50 @@ namespace fonthook
 			std::string processedTarget = WideToUtf8(targetWide);
 			RegisterText(processedSource, processedTarget, priority, {});
 		}
+
+		void RemoveBraceComments(std::string& text)
+		{
+			std::string result;
+			result.reserve(text.size());
+
+			size_t cursor = 0;
+			while (cursor < text.size())
+			{
+				if (text[cursor] != '{')
+				{
+					result.push_back(text[cursor++]);
+					continue;
+				}
+
+				size_t depth = 1;
+				size_t end = cursor + 1;
+				for (; end < text.size(); ++end)
+				{
+					if (text[end] == '{')
+					{
+						++depth;
+					}
+					else if (text[end] == '}')
+					{
+						--depth;
+						if (depth == 0)
+							break;
+					}
+				}
+
+				if (end == text.size())
+				{
+					result.append(text.substr(cursor));
+					break;
+				}
+
+				cursor = end + 1;
+			}
+
+			text.swap(result);
+			CollapseSpaces(text);
+			Trim(text);
+		}
 	}
 
 	// ---- entry comparison ----
@@ -154,8 +198,13 @@ namespace fonthook
 			const char* field = node.child(fieldName).text().as_string("");
 			if (strstr(field, "SCTX"))
 				continue;
-			const std::string source = node.child(sourceName).text().as_string("");
-			const std::string target = node.child(targetName).text().as_string("");
+			std::string source = node.child(sourceName).text().as_string("");
+			std::string target = node.child(targetName).text().as_string("");
+			if (strstr(field, "INFO GRUP"))
+			{
+				RemoveBraceComments(source);
+				RemoveBraceComments(target);
+			}
 			RegisterXmlText(source, target, priority);
 		}
 	}

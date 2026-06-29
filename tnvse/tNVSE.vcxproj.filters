@@ -92,6 +92,9 @@
     <ClInclude Include="Src\dictionary_internal.h">
       <Filter>Header Files\Config</Filter>
     </ClInclude>
+    <ClInclude Include="include\nlohmann\json.hpp">
+      <Filter>Header Files\Config</Filter>
+    </ClInclude>
     <ClInclude Include="Src\font_manager.h">
       <Filter>Header Files\Font</Filter>
     </ClInclude>
