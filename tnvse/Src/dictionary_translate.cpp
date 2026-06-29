@@ -929,21 +929,6 @@ namespace fonthook
 			raw = withoutId;
 		}
 
-		const bool hasDoubleByteText = ContainsDoubleByteText(source);
-		if (hasDoubleByteText)
-		{
-			if (TryTranslateRegexText(raw, translated))
-			{
-				s_positiveCache.emplace(cacheKey, translated);
-				TrimPositiveCache();
-				return true;
-			}
-
-			s_negativeCache.insert(std::move(cacheKey));
-			TrimNegativeCache();
-			return false;
-		}
-
 		const std::string key = PrepareSourceForLookup(raw);
 		PreparedTranslationMatch fullMatch;
 		if (TryTranslatePreparedKey(key, fullMatch, depth))

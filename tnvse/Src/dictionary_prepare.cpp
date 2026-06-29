@@ -163,22 +163,6 @@ namespace fonthook
 		return text.size() - CountToken(text, kBindSymbol) * 3;
 	}
 
-	// ---- double-byte detection ----
-
-	bool ContainsDoubleByteText(const char* text)
-	{
-		if (!text || g_usingWinEncoding == 0)
-			return false;
-
-		UInt32 code = 0;
-		for (size_t i = 0; text[i]; ++i)
-		{
-			if (TryDecodeDoubleByte(&text[i], code))
-				return true;
-		}
-		return false;
-	}
-
 	// ---- format-specifier / game-variable conversion ----
 
 	// Convert game-engine variable references to [%] bind symbols.

@@ -98,7 +98,6 @@ namespace fonthook
 	size_t CountTargetBindToken(const std::string& text);
 	std::vector<std::string> SplitTargetByBindToken(const std::string& text);
 	size_t LengthWithoutBinds(std::string_view text);
-	bool ContainsDoubleByteText(const char* text);
 	void ConvertGameVariablesToBind(std::string& str);
 	void ConvertFormatSpecifiersToBind(std::string& str);
 	std::string PrepareSourceForRegistration(std::string text);
