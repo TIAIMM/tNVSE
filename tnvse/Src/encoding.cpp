@@ -151,27 +151,29 @@ namespace fonthook
 	// ===================== Encoding Conversion =====================
 	std::string MultiByteToUTF8(const std::string& src, UInt32 codePage)
 	{
-		int len = MultiByteToWideChar(codePage, 0, src.c_str(), -1, nullptr, 0);
+		int len = MultiByteToWideChar(codePage, 0, src.c_str(), static_cast<int>(src.size()), nullptr, 0);
 		if (len == 0) return "";
 		std::wstring wstr(len, L'\0');
-		MultiByteToWideChar(codePage, 0, src.c_str(), -1, &wstr[0], len);
+		MultiByteToWideChar(codePage, 0, src.c_str(), static_cast<int>(src.size()), &wstr[0], len);
 
-		len = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+		len = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
+		if (len == 0) return "";
 		std::string utf8(len, '\0');
-		WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &utf8[0], len, nullptr, nullptr);
+		WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()), &utf8[0], len, nullptr, nullptr);
 		return utf8;
 	}
 
 	std::string UTF8ToMultiByteStr(const std::string& utf8, UInt32 codePage)
 	{
-		int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+		int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
 		if (len == 0) return "";
 		std::wstring wstr(len, L'\0');
-		MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &wstr[0], len);
+		MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), &wstr[0], len);
 
-		len = WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+		len = WideCharToMultiByte(codePage, 0, wstr.data(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
+		if (len == 0) return "";
 		std::string mb(len, '\0');
-		WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, &mb[0], len, nullptr, nullptr);
+		WideCharToMultiByte(codePage, 0, wstr.data(), static_cast<int>(wstr.size()), &mb[0], len, nullptr, nullptr);
 		return mb;
 	}
 

@@ -2,10 +2,32 @@
 #include "encoding.h"
 #include "load_config.h"
 
+#include <regex>
+
 namespace fonthook
 {
 	namespace
 	{
+		struct FuzzyRegexRule
+		{
+			std::regex regex;
+			std::string pattern;
+			bool enabled = false;
+		};
+
+		struct FuzzySplit
+		{
+			std::string prefix;
+			std::string stem;
+			std::string suffix;
+			bool changed = false;
+		};
+
+		FuzzyRegexRule s_trimPrefixRegex;
+		FuzzyRegexRule s_trimSuffixRegex;
+		FuzzyRegexRule s_bypassPrefixRegex;
+		FuzzyRegexRule s_bypassSuffixRegex;
+
 		std::string StripLeadingId(std::string text, std::string& id)
 		{
 			id.clear();
@@ -23,12 +45,261 @@ namespace fonthook
 			return text;
 		}
 
+		void TrimAsciiWhitespace(std::string& text)
+		{
+			const auto isTrim = [](unsigned char ch)
+				{
+					return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+				};
+
+			size_t first = 0;
+			while (first < text.size() && isTrim((unsigned char)text[first]))
+				++first;
+			size_t last = text.size();
+			while (last > first && isTrim((unsigned char)text[last - 1]))
+				--last;
+			text = text.substr(first, last - first);
+		}
+
+		void CompileFuzzyRegex(FuzzyRegexRule& rule, const std::string& pattern, const char* id)
+		{
+			rule = FuzzyRegexRule{};
+			if (pattern.empty())
+				return;
+
+			try
+			{
+				rule.regex = std::regex(pattern, std::regex_constants::ECMAScript | std::regex_constants::optimize);
+				rule.pattern = pattern;
+				rule.enabled = rule.regex.mark_count() > 0;
+				if (g_bEnableDictionaryTranslationLog)
+					gLog.FormattedMessage("tnvse_dictionary: compiled fuzzy regex %s = \"%s\"  groups=%u",
+						id, pattern.c_str(), static_cast<UInt32>(rule.regex.mark_count()));
+				if (!rule.enabled)
+					gLog.FormattedMessage("tnvse_dictionary: ignored fuzzy regex without capture group: %s", id);
+			}
+			catch (const std::regex_error& e)
+			{
+				gLog.FormattedMessage("tnvse_dictionary: failed to compile fuzzy regex %s: %s", id, e.what());
+			}
+		}
+
+		std::string GetConfigText(pugi::xml_node root, const char* id)
+		{
+			for (auto node : root.children("config"))
+			{
+				if (std::string(node.attribute("id").as_string("")) == id)
+				{
+					std::string text = node.text().as_string("");
+					TrimAsciiWhitespace(text);
+					return text;
+				}
+			}
+			return {};
+		}
+
+		bool ApplyCapturedRegex(std::string& text, const FuzzyRegexRule& rule, std::string* captured)
+		{
+			if (!rule.enabled)
+				return false;
+
+			std::smatch match;
+			if (!std::regex_search(text, match, rule.regex))
+				return false;
+			if (match.size() < 2 || !match[1].matched || match.position(1) < 0 || match.length(1) <= 0)
+				return false;
+
+			if (captured)
+				*captured = match.str(1);
+			text.erase(static_cast<size_t>(match.position(1)), static_cast<size_t>(match.length(1)));
+			return true;
+		}
+
+		bool HasFuzzyTextConfig()
+		{
+			return s_trimPrefixRegex.enabled || s_trimSuffixRegex.enabled ||
+				s_bypassPrefixRegex.enabled || s_bypassSuffixRegex.enabled;
+		}
+
+		FuzzySplit SplitFuzzyText(std::string text)
+		{
+			const std::string originalText = text;
+			FuzzySplit result;
+
+			std::string before = text;
+			if (ApplyCapturedRegex(text, s_trimPrefixRegex, nullptr))
+			{
+				if (g_bEnableDictionaryTranslationLog && !result.changed)
+					gLog.FormattedMessage("tnvse_dictionary: ");
+				if (g_bEnableDictionaryTranslationLog)
+					gLog.FormattedMessage("tnvse_dictionary:  trimPrefix: \"%s\" ->\"%s\"", before.c_str(), text.c_str());
+				result.changed = true;
+				before = text;
+			}
+
+			if (ApplyCapturedRegex(text, s_trimSuffixRegex, nullptr))
+			{
+				if (g_bEnableDictionaryTranslationLog && !result.changed)
+					gLog.FormattedMessage("tnvse_dictionary: ");
+				if (g_bEnableDictionaryTranslationLog)
+					gLog.FormattedMessage("tnvse_dictionary:  trimSuffix: \"%s\" ->\"%s\"", before.c_str(), text.c_str());
+				result.changed = true;
+				before = text;
+			}
+
+			if (ApplyCapturedRegex(text, s_bypassPrefixRegex, &result.prefix))
+			{
+				if (g_bEnableDictionaryTranslationLog && !result.changed)
+					gLog.FormattedMessage("tnvse_dictionary: ");
+				if (g_bEnableDictionaryTranslationLog)
+					gLog.FormattedMessage("tnvse_dictionary:  bypassPrefix: \"%s\" ->\"%s\" + \"%s\"",
+						before.c_str(), text.c_str(), result.prefix.c_str());
+				result.changed = true;
+				before = text;
+			}
+
+			if (ApplyCapturedRegex(text, s_bypassSuffixRegex, &result.suffix))
+			{
+				if (g_bEnableDictionaryTranslationLog && !result.changed)
+					gLog.FormattedMessage("tnvse_dictionary: ");
+				if (g_bEnableDictionaryTranslationLog)
+					gLog.FormattedMessage("tnvse_dictionary:  bypassSuffix: \"%s\" ->\"%s\" + \"%s\"",
+						before.c_str(), text.c_str(), result.suffix.c_str());
+				result.changed = true;
+			}
+
+			result.stem = std::move(text);
+
+			if (g_bEnableDictionaryTranslationLog && result.changed)
+			{
+				std::string parts;
+				if (!result.prefix.empty()) parts += " prefix=\"" + result.prefix + "\"";
+				parts += " stem=\"" + result.stem + "\"";
+				if (!result.suffix.empty()) parts += " suffix=\"" + result.suffix + "\"";
+				gLog.FormattedMessage("tnvse_dictionary: fuzzy split:%s", parts.c_str());
+			}
+
+			return result;
+		}
+
 		std::string TranslateCapture(const std::string& capture, int depth)
 		{
 			std::string translated;
 			if (depth < 4 && TranslateInternal(capture.c_str(), translated, depth + 1))
 				return translated;
 			return capture;
+		}
+
+		std::string TranslateIfPossible(const std::string& text, int depth)
+		{
+			if (text.empty())
+				return {};
+
+			std::string translated;
+			if (depth < 4 && TranslateInternal(text.c_str(), translated, depth + 1))
+				return translated;
+			return text;
+		}
+
+		std::string TranslateBracketInnerIfPossible(const std::string& text, int depth)
+		{
+			const size_t begin = text.find('[');
+			const size_t end = text.rfind(']');
+			if (begin == std::string::npos || end == std::string::npos || begin >= end)
+				return text;
+
+			const std::string inner = text.substr(begin + 1, end - begin - 1);
+			const std::string translatedInner = TranslateIfPossible(inner, depth);
+			if (translatedInner == inner)
+				return text;
+			return text.substr(0, begin + 1) + translatedInner + text.substr(end);
+		}
+
+		bool TryTranslateFuzzyText(const std::string& source, std::string& translated, int depth)
+		{
+			if (depth >= 4 || !HasFuzzyTextConfig())
+				return false;
+
+			FuzzySplit split = SplitFuzzyText(source);
+			if (!split.changed || split.stem.empty())
+			{
+				if (g_bEnableDictionaryTranslationLog && split.changed) {
+					gLog.FormattedMessage("tnvse_dictionary: TryTranslateFuzzyText skip: stem empty after split");
+					gLog.FormattedMessage("tnvse_dictionary: ");
+				}
+				return false;
+			}
+
+			std::string stem = split.stem;
+			TrimAsciiWhitespace(stem);
+			if (stem.empty())
+			{
+				if (g_bEnableDictionaryTranslationLog) {
+					gLog.FormattedMessage("tnvse_dictionary: TryTranslateFuzzyText skip: stem empty after trim");
+					gLog.FormattedMessage("tnvse_dictionary: ");
+				}
+				return false;
+			}
+
+			std::string sourceKey = PrepareSourceForLookup(source);
+			std::string stemKey = PrepareSourceForLookup(stem);
+			if (stemKey.empty() || stemKey == sourceKey)
+			{
+				if (g_bEnableDictionaryTranslationLog) {
+					gLog.FormattedMessage("tnvse_dictionary: TryTranslateFuzzyText skip: stemKey=\"%s\" == sourceKey=\"%s\"",
+						stemKey.c_str(), sourceKey.c_str());
+					gLog.FormattedMessage("tnvse_dictionary: ");
+				}
+				return false;
+			}
+
+			std::string stemTranslated;
+			if (!TranslateInternal(stem.c_str(), stemTranslated, depth + 1))
+			{
+				if (g_bEnableDictionaryTranslationLog) {
+					gLog.FormattedMessage("tnvse_dictionary: TryTranslateFuzzyText fail: stem \"%s\" not translated", stem.c_str());
+					gLog.FormattedMessage("tnvse_dictionary: ");
+				}
+				return false;
+			}
+
+			std::string prefixTranslated = TranslateIfPossible(split.prefix, depth + 1);
+			std::string suffixTranslated = TranslateIfPossible(split.suffix, depth + 1);
+
+			if (g_bEnableDictionaryTranslationLog)
+			{
+				std::string details = " stem=\"" + std::string(stem.c_str()) + "\"->\"" + stemTranslated + "\"";
+				if (!split.prefix.empty())
+					details += " prefix=\"" + split.prefix + "\"->\"" + prefixTranslated + "\"";
+				if (!split.suffix.empty())
+					details += " suffix=\"" + split.suffix + "\"->\"" + suffixTranslated + "\"";
+				gLog.FormattedMessage("tnvse_dictionary: TryTranslateFuzzyText%s", details.c_str());
+			}
+
+			if (!split.prefix.empty() && prefixTranslated == split.prefix)
+			{
+				auto bracketResult = TranslateBracketInnerIfPossible(split.prefix, depth + 1);
+				if (g_bEnableDictionaryTranslationLog && bracketResult != split.prefix)
+					gLog.FormattedMessage("tnvse_dictionary:  bracketTranslate: \"%s\" ->\"%s\"",
+						split.prefix.c_str(), bracketResult.c_str());
+				prefixTranslated = bracketResult;
+			}
+
+			if (!split.prefix.empty() && !prefixTranslated.empty() &&
+				split.prefix.back() == ' ' && prefixTranslated.back() != ' ')
+			{
+				const size_t lastNonSpace = split.prefix.find_last_not_of(' ');
+				const size_t trailingStart = lastNonSpace == std::string::npos ? split.prefix.size() : lastNonSpace + 1;
+				prefixTranslated += split.prefix.substr(trailingStart);
+			}
+
+			translated = prefixTranslated + stemTranslated + suffixTranslated;
+			if (g_bEnableDictionaryTranslationLog) {
+				gLog.FormattedMessage("tnvse_dictionary: TryTranslateFuzzyText result: \"%s\" ->\"%s\"",
+					source.c_str(), translated.c_str());
+				gLog.FormattedMessage("tnvse_dictionary: ");
+			}
+			return true;
 		}
 
 		void TrimPositiveCache()
@@ -50,6 +321,25 @@ namespace fonthook
 				s_negativeCache.clear();
 			}
 		}
+	}
+
+	void ResetFuzzyTextConfig()
+	{
+		s_trimPrefixRegex = FuzzyRegexRule{};
+		s_trimSuffixRegex = FuzzyRegexRule{};
+		s_bypassPrefixRegex = FuzzyRegexRule{};
+		s_bypassSuffixRegex = FuzzyRegexRule{};
+	}
+
+	void LoadFuzzyTextConfig(pugi::xml_node root)
+	{
+		auto reNode = root.child("regularexpressions");
+		if (!reNode)
+			return;
+		CompileFuzzyRegex(s_trimPrefixRegex, GetConfigText(reNode, "TrimPrefixRegularExpressions"), "TrimPrefixRegularExpressions");
+		CompileFuzzyRegex(s_trimSuffixRegex, GetConfigText(reNode, "TrimSuffixRegularExpressions"), "TrimSuffixRegularExpressions");
+		CompileFuzzyRegex(s_bypassPrefixRegex, GetConfigText(reNode, "BypassPrefixRegularExpressions"), "BypassPrefixRegularExpressions");
+		CompileFuzzyRegex(s_bypassSuffixRegex, GetConfigText(reNode, "BypassSuffixRegularExpressions"), "BypassSuffixRegularExpressions");
 	}
 
 	// ---- wildcard matching ----
@@ -126,6 +416,7 @@ namespace fonthook
 			return false;
 
 		std::string raw(source);
+		const std::string originalRaw = raw;
 
 		// Normalize cache key once: lowercase the original source so that
 		// "Hello", "HELLO", and "hello" share one cache entry instead of three.
@@ -166,6 +457,9 @@ namespace fonthook
 			{
 				if (ExpandTarget(s_entries[index], {}, translated, depth))
 				{
+					if (g_bEnableDictionaryTranslationLog)
+						gLog.FormattedMessage("tnvse_dictionary: TranslateInternal exact match: \"%s\" ->\"%s\"",
+							source, translated.c_str());
 					s_positiveCache.emplace(cacheKey, translated);
 					TrimPositiveCache();
 					return true;
@@ -181,11 +475,24 @@ namespace fonthook
 				continue;
 			if (MatchWildcard(entry, key, captures) && ExpandTarget(entry, captures, translated, depth))
 			{
+				if (g_bEnableDictionaryTranslationLog)
+					gLog.FormattedMessage("tnvse_dictionary: TranslateInternal wildcard match: \"%s\" ->\"%s\" (entry=\"%s\")",
+						source, translated.c_str(), entry.key.c_str());
 				s_positiveCache.emplace(cacheKey, translated);
 				TrimPositiveCache();
 				return true;
 			}
 		}
+
+		if (TryTranslateFuzzyText(originalRaw, translated, depth))
+		{
+			s_positiveCache.emplace(cacheKey, translated);
+			TrimPositiveCache();
+			return true;
+		}
+
+		if (g_bEnableDictionaryTranslationLog)
+			gLog.FormattedMessage("tnvse_dictionary: TranslateInternal no match: \"%s\" ->negative cache", source);
 
 		s_negativeCache.insert(std::move(cacheKey));
 		TrimNegativeCache();
@@ -198,7 +505,8 @@ namespace fonthook
 	{
 		if (!g_bEnableDictionaryTranslation)
 			return false;
-		return TranslateInternal(source, translated, 0);
+		const bool result = TranslateInternal(source, translated, 0);
+		return result;
 	}
 
 } // namespace fonthook

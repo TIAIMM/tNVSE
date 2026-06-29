@@ -9,6 +9,7 @@ UINT32 g_uiReorderDoorPrompt;
 std::string g_sOptionalStructuralParticle;
 bool g_bRemovePlural;
 bool g_bEnableDictionaryTranslation;
+bool g_bEnableDictionaryTranslationLog;
 
 void LoadConfig()
 {
@@ -69,4 +70,7 @@ void LoadConfig()
 
 	g_bEnableDictionaryTranslation = GetPrivateProfileInt("MAIN", "bEnableDictionaryTranslation", 1, filename);
 	gLog.FormattedMessage("g_bEnableDictionaryTranslation: %d", g_bEnableDictionaryTranslation);
+
+	g_bEnableDictionaryTranslationLog = GetPrivateProfileInt("MAIN", "bEnableDictionaryTranslationLog", 0, filename);
+	gLog.FormattedMessage("g_bEnableDictionaryTranslationLog: %d", g_bEnableDictionaryTranslationLog);
 }

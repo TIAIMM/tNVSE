@@ -341,6 +341,7 @@ namespace fonthook
 		s_positiveCache.clear();
 		s_negativeCache.clear();
 		s_dictionaryLoaded = false;
+		ResetFuzzyTextConfig();
 
 		if (!g_bEnableDictionaryTranslation)
 		{
@@ -369,23 +370,32 @@ namespace fonthook
 			return;
 		}
 
-		pugi::xml_node root = doc.first_child();
-		if (!root || std::string(root.name()) != "dictionary")
+		pugi::xml_node tnvseRoot = doc.first_child();
+		if (!tnvseRoot || std::string(tnvseRoot.name()) != "tNVSE")
 		{
 			gLog.FormattedMessage("tnvse_dictionary: unsupported config root");
 			return;
 		}
 
-		for (auto node : root.children("file"))
+		pugi::xml_node dictNode = tnvseRoot.child("dictionary");
+		if (!dictNode)
+		{
+			gLog.FormattedMessage("tnvse_dictionary: missing <dictionary> node");
+			return;
+		}
+
+		LoadFuzzyTextConfig(tnvseRoot);
+
+		for (auto node : dictNode.children("file"))
 			LoadFileNode(node);
 
-		for (auto node : root.children("directory"))
+		for (auto node : dictNode.children("directory"))
 			LoadDirectoryNode(node);
 
-		for (auto node : root.children("xml"))
+		for (auto node : dictNode.children("xml"))
 			LoadXmlNode(node);
 
-		for (auto node : root.children("json"))
+		for (auto node : dictNode.children("json"))
 			LoadJsonNode(node);
 
 		SortIndexes();

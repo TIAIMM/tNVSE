@@ -89,5 +89,7 @@ namespace fonthook
 	bool MatchWildcard(const DictionaryEntry& entry, const std::string& key, std::vector<std::string>& captures);
 	bool ExpandTarget(const DictionaryEntry& entry, const std::vector<std::string>& captures, std::string& translated, int depth);
 	bool TranslateInternal(const char* source, std::string& translated, int depth);
+	void ResetFuzzyTextConfig();
+	void LoadFuzzyTextConfig(pugi::xml_node root);
 
 } // namespace fonthook

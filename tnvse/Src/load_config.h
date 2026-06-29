@@ -11,5 +11,6 @@ extern UINT32 g_uiReorderDoorPrompt;  // 0=off, 1=CHS order, 2=KOR order
 extern std::string g_sOptionalStructuralParticle;
 extern bool g_bRemovePlural;
 extern bool g_bEnableDictionaryTranslation;
+extern bool g_bEnableDictionaryTranslationLog;
 
 void LoadConfig();
