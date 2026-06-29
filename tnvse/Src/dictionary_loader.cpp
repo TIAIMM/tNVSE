@@ -186,15 +186,15 @@ namespace fonthook
 			const std::string rootName = root.name();
 			if (rootName == "DocumentElement")
 			{
-				RegisterXmlNodes(root, "BDD", "ORIGINAL", "TRADUIT", "CHAMP", priority);
-				RegisterXmlNodes(root, "BP", "ORIGINAL", "TRADUIT", "CHAMP", priority);
-				RegisterXmlNodes(root, "ESP", "ORIGINAL", "TRADUIT", "CHAMP", priority);
+				RegisterXmlNodesTyped(root, "BDD", "ORIGINAL", "TRADUIT", "CHAMP", priority, true);
+				RegisterXmlNodesTyped(root, "BP", "ORIGINAL", "TRADUIT", "CHAMP", priority, true);
+				RegisterXmlNodesTyped(root, "ESP", "ORIGINAL", "TRADUIT", "CHAMP", priority, true);
 			}
 			else if (rootName == "SSTXMLRessources")
 			{
 				auto content = root.child("Content");
 				if (content)
-					RegisterXmlNodes(content, "String", "Source", "Dest", "REC", priority);
+					RegisterXmlNodesTyped(content, "String", "Source", "Dest", "REC", priority, false);
 			}
 			else
 			{
@@ -330,6 +330,39 @@ namespace fonthook
 		}
 	}
 
+	// ---- UI hint config loader ----
+
+	void LoadUiHintConfig(pugi::xml_node root)
+	{
+		s_uiHintFormats.clear();
+		auto uiHintNode = root.child("uihint");
+		if (!uiHintNode)
+			return;
+
+		static const char* kTypeNames[] = { "bptd", "door", "chal_name", "chal_desc" };
+		for (const char* typeName : kTypeNames)
+		{
+			auto node = uiHintNode.child(typeName);
+			if (!node)
+				continue;
+
+			std::string format = node.attribute("format").as_string("");
+			Trim(format);
+			if (format.empty())
+				continue;
+
+			UiHintFormat hint;
+			hint.targetFormat = std::move(format);
+			hint.enabled = true;
+			s_uiHintFormats[typeName] = std::move(hint);
+
+			const std::string& fmt = s_uiHintFormats[typeName].targetFormat;
+			const bool toMb = g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(fmt.c_str());
+			gLog.FormattedMessage("tnvse_dictionary: loaded uihint type=%s target_format=\"%s\"",
+				typeName, toMb ? UTF8ToMultiByteStr(fmt, g_usingWinEncoding).c_str() : fmt.c_str());
+		}
+	}
+
 	// ---- main config loader (public API) ----
 
 	void LoadDictionaryConfig()
@@ -385,6 +418,7 @@ namespace fonthook
 		}
 
 		LoadFuzzyTextConfig(tnvseRoot);
+		LoadUiHintConfig(tnvseRoot);
 
 		for (auto node : dictNode.children("file"))
 			LoadFileNode(node);

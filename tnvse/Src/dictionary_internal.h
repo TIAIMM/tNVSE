@@ -32,6 +32,25 @@ namespace fonthook
 		bool isExact = true;
 	};
 
+	// ---- record type for XML auto-entry generation ----
+	enum class RecordType : UInt8
+	{
+		Unknown = 0,
+		Bptd,          // body part data (BPTD:BPTN or GRUP=BPTD)
+		Door,          // door record (DOOR:FULL or GRUP=DOOR)
+		ChallengeName, // challenge name (CHAL:FULL)
+		ChallengeDesc, // challenge description (CHAL:DESC)
+		Message,       // message (MESG:DESC)
+		Script,        // script (SCPT:SCDA)
+	};
+
+	// ---- UI hint format for auto-generated entries ----
+	struct UiHintFormat
+	{
+		std::string targetFormat; // e.g. "[%]的[@]残废了" — [@] is replaced at registration time
+		bool enabled = false;
+	};
+
 	// ---- global state (defined in dictionary.cpp) ----
 	extern std::vector<DictionaryEntry> s_entries;
 	extern std::unordered_map<std::string, std::vector<size_t>> s_exactIndex;
@@ -39,6 +58,7 @@ namespace fonthook
 	extern std::unordered_map<std::string, size_t> s_idIndex;
 	extern std::unordered_map<std::string, std::string> s_positiveCache;
 	extern std::unordered_set<std::string> s_negativeCache;
+	extern std::unordered_map<std::string, UiHintFormat> s_uiHintFormats;
 	extern bool s_dictionaryLoaded;
 
 	// ---- OS / file utilities (dictionary_utils.cpp) ----
@@ -74,6 +94,8 @@ namespace fonthook
 	std::vector<std::string> SplitTargetByBindToken(const std::string& text);
 	size_t LengthWithoutBinds(std::string_view text);
 	bool ContainsDoubleByteText(const char* text);
+	void ConvertGameVariablesToBind(std::string& str);
+	void ConvertFormatSpecifiersToBind(std::string& str);
 	std::string PrepareSourceForRegistration(std::string text);
 	std::string PrepareSourceForLookup(std::string text);
 	std::string PrepareTarget(std::string text);
@@ -83,7 +105,13 @@ namespace fonthook
 	bool AddEntry(const std::string& source, const std::string& target, int priority, const std::string& id);
 	bool RegisterText(std::string source, std::string target, int priority, const std::string& id);
 	void RegisterXmlNodes(pugi::xml_node parent, const char* nodeName, const char* sourceName, const char* targetName, const char* fieldName, int priority);
+	void RegisterXmlEntry(const std::string& source, const std::string& target, RecordType type, int priority);
+	void RegisterXmlNodesTyped(pugi::xml_node parent, const char* nodeName, const char* sourceName, const char* targetName, const char* champName, int priority, bool isEET);
 	void SortIndexes();
+
+	// ---- record type detection (dictionary_entry.cpp) ----
+	RecordType DetectRecordTypeGrupChamp(const char* grup, const char* champ);
+	RecordType DetectRecordTypeFromRec(const char* rec);
 
 	// ---- translation (dictionary_translate.cpp) ----
 	bool MatchWildcard(const DictionaryEntry& entry, const std::string& key, std::vector<std::string>& captures);
@@ -91,5 +119,6 @@ namespace fonthook
 	bool TranslateInternal(const char* source, std::string& translated, int depth);
 	void ResetFuzzyTextConfig();
 	void LoadFuzzyTextConfig(pugi::xml_node root);
+	void LoadUiHintConfig(pugi::xml_node root);
 
 } // namespace fonthook

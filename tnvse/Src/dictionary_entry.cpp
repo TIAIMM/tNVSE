@@ -128,6 +128,57 @@ namespace fonthook
 		}
 	}
 
+	// ---- record type detection ----
+
+	// Parse GRUP + CHAMP fields (ESO-ESM Translator / DocumentElement format).
+	RecordType DetectRecordTypeGrupChamp(const char* grup, const char* champ)
+	{
+		if (!grup || !*grup)
+			return RecordType::Unknown;
+
+		if (strcmp(grup, "BPTD") == 0)
+			return RecordType::Bptd;
+		if (strcmp(grup, "DOOR") == 0)
+			return RecordType::Door;
+
+		if (strcmp(grup, "CHAL") == 0)
+		{
+			if (champ && strcmp(champ, "FULL") == 0)
+				return RecordType::ChallengeName;
+			if (champ && strcmp(champ, "DESC") == 0)
+				return RecordType::ChallengeDesc;
+		}
+
+		if (strcmp(grup, "MESG") == 0 && champ && strcmp(champ, "DESC") == 0)
+			return RecordType::Message;
+		if (strcmp(grup, "SCPT") == 0 && champ && strcmp(champ, "SCDA") == 0)
+			return RecordType::Script;
+
+		return RecordType::Unknown;
+	}
+
+	// Parse REC field (xTranslator / SSTXMLRessources format).
+	RecordType DetectRecordTypeFromRec(const char* rec)
+	{
+		if (!rec || !*rec)
+			return RecordType::Unknown;
+
+		if (strncmp(rec, "BPTD:", 5) == 0)
+			return RecordType::Bptd;
+		if (strncmp(rec, "DOOR:", 5) == 0)
+			return RecordType::Door;
+		if (strcmp(rec, "CHAL:FULL") == 0)
+			return RecordType::ChallengeName;
+		if (strcmp(rec, "CHAL:DESC") == 0)
+			return RecordType::ChallengeDesc;
+		if (strcmp(rec, "MESG:DESC") == 0)
+			return RecordType::Message;
+		if (strcmp(rec, "SCPT:SCDA") == 0)
+			return RecordType::Script;
+
+		return RecordType::Unknown;
+	}
+
 	// ---- entry comparison ----
 
 	bool EntryLess(const DictionaryEntry& left, const DictionaryEntry& right)
@@ -206,6 +257,98 @@ namespace fonthook
 				RemoveBraceComments(target);
 			}
 			RegisterXmlText(source, target, priority);
+		}
+	}
+
+	// ---- XML record-type-aware registration ----
+
+	void GenerateAutoEntries(const std::string& cleanSource,
+	                         const std::string& cleanTarget,
+	                         RecordType type,
+	                         int priority)
+	{
+		const char* typeKey = nullptr;
+		const char* sourceFormat = nullptr;
+		switch (type)
+		{
+		case RecordType::Bptd:          typeKey = "bptd";      sourceFormat = "[%]{} Crippled"; break;
+		case RecordType::Door:          typeKey = "door";      sourceFormat = "{} to [%]";      break;
+		case RecordType::ChallengeName: typeKey = "chal_name"; sourceFormat = "{} [%]";         break;
+		case RecordType::ChallengeDesc: typeKey = "chal_desc"; sourceFormat = "[%] {}";         break;
+		default: return;
+		}
+
+		auto it = s_uiHintFormats.find(typeKey);
+		if (it == s_uiHintFormats.end() || !it->second.enabled)
+			return;
+
+		const std::string& targetFormat = it->second.targetFormat;
+
+		std::string autoSource(sourceFormat);
+		ReplaceAll(autoSource, "{}", cleanSource);
+
+		std::string autoTarget(targetFormat);
+		ReplaceAll(autoTarget, "[@]", cleanTarget);
+
+		if (g_bEnableDictionaryTranslationLog)
+			gLog.FormattedMessage("tnvse_dictionary:   uihint %s: \"%s\" ->\"%s\"",
+				typeKey, autoSource.c_str(), autoTarget.c_str());
+
+		RegisterText(std::move(autoSource), std::move(autoTarget), priority, {});
+	}
+
+	void RegisterXmlEntry(const std::string& source, const std::string& target,
+	                      RecordType type, int priority)
+	{
+		if (source.empty() || target.empty())
+			return;
+
+		std::wstring sourceWide = Utf8ToWide(source);
+		std::wstring targetWide = Utf8ToWide(target);
+		Replace1252ForXml(sourceWide);
+		std::string cleanSource = WideToUtf8(sourceWide);
+		std::string cleanTarget = WideToUtf8(targetWide);
+
+		RegisterText(cleanSource, cleanTarget, priority, {});
+
+		if (type != RecordType::Unknown)
+			GenerateAutoEntries(cleanSource, cleanTarget, type, priority);
+	}
+
+	void RegisterXmlNodesTyped(pugi::xml_node parent,
+	                           const char* nodeName,
+	                           const char* sourceName,
+	                           const char* targetName,
+	                           const char* champName,
+	                           int priority,
+	                           bool isEET)
+	{
+		for (auto node : parent.children(nodeName))
+		{
+			const char* field = node.child(champName).text().as_string("");
+			if (strstr(field, "SCTX"))
+				continue;
+
+			std::string source = node.child(sourceName).text().as_string("");
+			std::string target = node.child(targetName).text().as_string("");
+			if (strstr(field, "INFO GRUP"))
+			{
+				RemoveBraceComments(source);
+				RemoveBraceComments(target);
+			}
+
+			RecordType type = RecordType::Unknown;
+			if (isEET)
+			{
+				const char* grup = node.child("GRUP").text().as_string("");
+				type = DetectRecordTypeGrupChamp(grup, field);
+			}
+			else
+			{
+				type = DetectRecordTypeFromRec(field);
+			}
+
+			RegisterXmlEntry(source, target, type, priority);
 		}
 	}
 
