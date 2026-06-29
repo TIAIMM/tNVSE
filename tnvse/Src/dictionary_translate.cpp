@@ -1,6 +1,7 @@
 #include "dictionary_internal.h"
 #include "encoding.h"
 #include "load_config.h"
+#include "native_calls.h"
 
 #include <algorithm>
 #include <regex>
@@ -57,6 +58,68 @@ namespace fonthook
 		FuzzyRegexRule s_bypassSuffixRegex;
 		std::vector<TranslationRegexRule> s_translationRegexRules;
 
+		// Resolve &variable; escape sequences in-place using the game engine.
+		// Returns true if any variables were resolved.
+		bool PreResolveGameVariables(std::string& text)
+		{
+			if (text.find('&') == std::string::npos)
+				return false;
+
+			std::string result;
+			result.reserve(text.size());
+			bool changed = false;
+
+			for (size_t i = 0; i < text.size(); )
+			{
+				if (text[i] != '&' || i + 2 >= text.size())
+				{
+					result.push_back(text[i++]);
+					continue;
+				}
+
+				// Extract variable name: & or &- followed by chars until ; \n or end
+				size_t nameStart = i + 1;
+				bool isNegative = false;
+				if (text[nameStart] == '-')
+				{
+					isNegative = true;
+					++nameStart;
+				}
+				size_t nameEnd = nameStart;
+				while (nameEnd < text.size()
+					&& text[nameEnd] != ';'
+					&& text[nameEnd] != '\n'
+					&& text[nameEnd] != '\0')
+				{
+					++nameEnd;
+				}
+				if (nameEnd == nameStart || nameEnd >= text.size())
+				{
+					result.push_back(text[i++]);
+					continue;
+				}
+				bool hasSemicolon = text[nameEnd] == ';';
+
+				std::string varName(text, nameStart, nameEnd - nameStart);
+				char outBuf[1024] = {};
+				if (Interface_FindTextReplacementString(
+					varName.c_str(), outBuf,
+					static_cast<UInt32>(sizeof(outBuf)), !isNegative))
+				{
+					result.append(outBuf);
+					i = nameEnd + (hasSemicolon ? 1 : 0);
+					changed = true;
+				}
+				else
+				{
+					result.push_back(text[i++]);
+				}
+			}
+
+			if (changed)
+				text.swap(result);
+			return changed;
+	}
 		std::string StripLeadingId(std::string text, std::string& id)
 		{
 			id.clear();
@@ -896,6 +959,7 @@ namespace fonthook
 			return false;
 
 		std::string raw(source);
+		PreResolveGameVariables(raw);
 		const std::string originalRaw = raw;
 
 		// Normalize cache key once: lowercase the original source so that
