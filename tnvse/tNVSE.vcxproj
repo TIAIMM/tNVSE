@@ -162,6 +162,7 @@
     <ClCompile Include="Src\dictionary_effects.cpp" />
     <ClCompile Include="Src\dictionary_loader.cpp" />
     <ClCompile Include="Src\dictionary_match.cpp" />
+    <ClCompile Include="Src\dictionary_mux.cpp" />
     <ClCompile Include="Src\dictionary_regex.cpp" />
     <ClCompile Include="Src\dictionary_translate.cpp" />
     <ClCompile Include="Src\load_config.cpp" />

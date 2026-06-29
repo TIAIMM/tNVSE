@@ -12,5 +12,6 @@ extern std::string g_sOptionalStructuralParticle;
 extern bool g_bRemovePlural;
 extern bool g_bEnableDictionaryTranslation;
 extern bool g_bEnableDictionaryTranslationLog;
+extern bool g_bEnableMuxQuestPromptTranslation;
 
 void LoadConfig();

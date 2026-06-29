@@ -10,6 +10,7 @@ std::string g_sOptionalStructuralParticle;
 bool g_bRemovePlural;
 bool g_bEnableDictionaryTranslation;
 bool g_bEnableDictionaryTranslationLog;
+bool g_bEnableMuxQuestPromptTranslation;
 
 void LoadConfig()
 {
@@ -71,4 +72,7 @@ void LoadConfig()
 
 	g_bEnableDictionaryTranslationLog = GetPrivateProfileInt("MAIN", "bEnableDictionaryTranslationLog", 0, filename);
 	gLog.FormattedMessage("g_bEnableDictionaryTranslationLog: %d", g_bEnableDictionaryTranslationLog);
+
+	g_bEnableMuxQuestPromptTranslation = GetPrivateProfileInt("MAIN", "bEnableMuxQuestPromptTranslation", 1, filename);
+	gLog.FormattedMessage("g_bEnableMuxQuestPromptTranslation: %d", g_bEnableMuxQuestPromptTranslation);
 }

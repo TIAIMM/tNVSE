@@ -122,6 +122,7 @@ namespace fonthook
 	bool MatchWildcard(const DictionaryEntry& entry, const std::string& key, std::vector<std::string>& captures);
 	bool ExpandTarget(const DictionaryEntry& entry, const std::vector<std::string>& captures, std::string& translated, int depth);
 	bool TranslateInternal(const char* source, std::string& translated, int depth);
+	bool TryTranslateMuxQuestPrompt(const std::string& source, std::string& translated, int depth);
 	bool TryTranslateItemEffectList(const std::string& source, std::string& translated, int depth);
 	bool TryTranslateRegexText(const std::string& source, std::string& translated);
 	bool TryTranslateFuzzyText(const std::string& source, std::string& translated, int depth);

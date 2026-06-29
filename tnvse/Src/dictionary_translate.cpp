@@ -622,6 +622,13 @@ namespace fonthook
 			return true;
 		}
 
+		if (g_bEnableMuxQuestPromptTranslation && TryTranslateMuxQuestPrompt(raw, translated, depth))
+		{
+			s_positiveCache.emplace(cacheKey, translated);
+			TrimPositiveCache();
+			return true;
+		}
+
 		if (TryTranslateItemEffectList(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
