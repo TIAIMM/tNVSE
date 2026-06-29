@@ -63,6 +63,7 @@ namespace fonthook
 	extern std::unordered_map<std::string, std::string> s_positiveCache;
 	extern std::unordered_set<std::string> s_negativeCache;
 	extern std::unordered_map<std::string, UiHintFormat> s_uiHintFormats;
+	extern std::unordered_set<std::string> s_registeredAutoKeys;
 	extern bool s_dictionaryLoaded;
 
 	// ---- OS / file utilities (dictionary_utils.cpp) ----

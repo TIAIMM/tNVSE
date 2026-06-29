@@ -15,6 +15,7 @@ namespace fonthook
 	std::unordered_map<std::string, std::string> s_positiveCache;
 	std::unordered_set<std::string> s_negativeCache;
 	std::unordered_map<std::string, UiHintFormat> s_uiHintFormats;
+	std::unordered_set<std::string> s_registeredAutoKeys;
 	bool s_dictionaryLoaded = false;
 
 } // namespace fonthook

@@ -342,6 +342,9 @@ namespace fonthook
 		std::string autoSource(sourceFormat);
 		ReplaceAll(autoSource, "{}", cleanSource);
 
+			// Deduplicate: same auto-source key from different XML nodes (BDD/BP/ESP)
+			if (!s_registeredAutoKeys.insert(autoSource).second)
+				return;
 		std::string autoTarget(targetFormat);
 		ReplaceAll(autoTarget, "[@]", cleanTarget);
 
