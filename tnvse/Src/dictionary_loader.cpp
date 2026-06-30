@@ -18,6 +18,29 @@ namespace fonthook
 			std::unordered_set<int> stages;
 		};
 
+		struct TextFileLoadStats
+		{
+			bool loaded = false;
+			UInt32 registered = 0;
+			UInt32 sourceLines = 0;
+			UInt32 targetLines = 0;
+			UInt32 paired = 0;
+			UInt32 sourceIds = 0;
+			UInt32 malformedSource = 0;
+			UInt32 malformedTarget = 0;
+			UInt32 missingSource = 0;
+			UInt32 invalid = 0;
+		};
+
+		struct DirectoryLoadStats
+		{
+			bool loaded = false;
+			UInt32 files = 0;
+			UInt32 registered = 0;
+			UInt32 missingTarget = 0;
+			UInt32 invalid = 0;
+		};
+
 		std::string GetAttr(pugi::xml_node node, const char* name)
 		{
 			return node.attribute(name).as_string("");
@@ -131,66 +154,130 @@ namespace fonthook
 			return DetectRecordTypeGrupChamp(grup.c_str(), field.c_str());
 		}
 
-		void LoadFileDictionaryType1(const std::string& sourcePath, const std::string& targetPath, int priority)
+		TextFileLoadStats LoadFileDictionaryType1(const std::string& sourcePath, const std::string& targetPath, int priority)
 		{
+			TextFileLoadStats stats;
 			std::string sourceText;
 			std::string targetText;
 			if (!ReadWholeFile(sourcePath, sourceText) || !ReadWholeFile(targetPath, targetText))
-				return;
+			{
+				gLog.FormattedMessage("tnvse_dictionary: failed to read file dictionary type=1: %s / %s",
+					sourcePath.c_str(), targetPath.c_str());
+				return stats;
+			}
+			stats.loaded = true;
 
 			auto sourceLines = SplitLines(sourceText);
 			auto targetLines = SplitLines(targetText);
+			stats.sourceLines = static_cast<UInt32>(sourceLines.size());
+			stats.targetLines = static_cast<UInt32>(targetLines.size());
 			const size_t count = std::min(sourceLines.size(), targetLines.size());
+			stats.paired = static_cast<UInt32>(count);
 			for (size_t i = 0; i < count; ++i)
-				RegisterText(sourceLines[i], targetLines[i], priority, {});
+			{
+				if (RegisterText(sourceLines[i], targetLines[i], priority, {}))
+					++stats.registered;
+				else
+					++stats.invalid;
+			}
+			return stats;
 		}
 
-		void LoadFileDictionaryType2(const std::string& sourcePath, const std::string& targetPath, int priority)
+		TextFileLoadStats LoadFileDictionaryType2(const std::string& sourcePath, const std::string& targetPath, int priority)
 		{
+			TextFileLoadStats stats;
 			std::string sourceText;
 			std::string targetText;
 			if (!ReadWholeFile(sourcePath, sourceText) || !ReadWholeFile(targetPath, targetText))
-				return;
+			{
+				gLog.FormattedMessage("tnvse_dictionary: failed to read file dictionary type=2: %s / %s",
+					sourcePath.c_str(), targetPath.c_str());
+				return stats;
+			}
+			stats.loaded = true;
 
 			std::unordered_map<std::string, std::string> sourceById;
 			for (auto& line : SplitLines(sourceText))
 			{
+				++stats.sourceLines;
 				StripUtf8Bom(line);
 				const auto [id, text] = SplitIdLine(line);
 				if (!id.empty())
-					sourceById.emplace(id, text);
+				{
+					if (sourceById.emplace(id, text).second)
+						++stats.sourceIds;
+				}
+				else
+				{
+					++stats.malformedSource;
+				}
 			}
 
 			for (auto& line : SplitLines(targetText))
 			{
+				++stats.targetLines;
 				StripUtf8Bom(line);
 				const auto [id, target] = SplitIdLine(line);
 				if (id.empty())
+				{
+					++stats.malformedTarget;
 					continue;
+				}
 				auto it = sourceById.find(id);
 				if (it != sourceById.end())
-					RegisterText(it->second, target, priority, id);
+				{
+					++stats.paired;
+					if (RegisterText(it->second, target, priority, id))
+						++stats.registered;
+					else
+						++stats.invalid;
+				}
+				else
+				{
+					++stats.missingSource;
+				}
 			}
+			return stats;
 		}
 
-		void LoadDirectoryDictionary(const std::string& sourceDir, const std::string& targetDir, int priority)
+		DirectoryLoadStats LoadDirectoryDictionary(const std::string& sourceDir, const std::string& targetDir, int priority)
 		{
+			DirectoryLoadStats stats;
 			if (!DirectoryExists(sourceDir) || !DirectoryExists(targetDir))
-				return;
+			{
+				gLog.FormattedMessage("tnvse_dictionary: missing directory dictionary: %s / %s",
+					sourceDir.c_str(), targetDir.c_str());
+				return stats;
+			}
+			stats.loaded = true;
 
 			for (const auto& fileName : FindFiles(sourceDir, "*.txt"))
 			{
+				++stats.files;
 				std::string sourceText;
 				std::string targetText;
 				const std::string sourcePath = sourceDir + "\\" + fileName;
 				const std::string targetPath = targetDir + "\\" + fileName;
 				if (ReadWholeFile(sourcePath, sourceText) && ReadWholeFile(targetPath, targetText))
-					RegisterText(sourceText, targetText, priority, {});
+				{
+					if (RegisterText(sourceText, targetText, priority, {}))
+						++stats.registered;
+					else
+						++stats.invalid;
+				}
+				else
+				{
+					++stats.missingTarget;
+					gLog.FormattedMessage("tnvse_dictionary: missing directory dictionary pair: %s / %s",
+						sourcePath.c_str(), targetPath.c_str());
+				}
 			}
+			return stats;
 		}
 
 		void LoadXmlDictionary(const std::string& path, int priority)
 		{
+			const size_t beforeEntries = s_entries.size();
 			pugi::xml_document doc;
 			pugi::xml_parse_result result = doc.load_file(path.c_str());
 			if (!result)
@@ -222,11 +309,19 @@ namespace fonthook
 			else
 			{
 				gLog.FormattedMessage("tnvse_dictionary: unsupported XML dictionary root in %s", path.c_str());
+				return;
 			}
+
+			gLog.FormattedMessage("tnvse_dictionary: loaded XML dictionary: %s, root=%s, priority=%d, entries_added=%u",
+				path.c_str(),
+				rootName.c_str(),
+				priority,
+				static_cast<UInt32>(s_entries.size() - beforeEntries));
 		}
 
 		void LoadJsonDictionary(const std::string& path, int priority, const StageFilter& stageFilter)
 		{
+			const size_t beforeEntries = s_entries.size();
 			std::string text;
 			if (!ReadWholeFile(path, text))
 			{
@@ -289,12 +384,15 @@ namespace fonthook
 			}
 
 			gLog.FormattedMessage(
-				"tnvse_dictionary: loaded JSON dictionary: %s, registered=%u, skipped_stage=%u, skipped_malformed=%u, skipped_invalid=%u",
+				"tnvse_dictionary: loaded JSON dictionary: %s, priority=%d, entries_added=%u, registered=%u, skipped_stage=%u, skipped_malformed=%u, skipped_invalid=%u, stage_filter=%s",
 				path.c_str(),
+				priority,
+				static_cast<UInt32>(s_entries.size() - beforeEntries),
 				registered,
 				skippedStage,
 				skippedMalformed,
-				skippedInvalid);
+				skippedInvalid,
+				stageFilter.enabled ? "on" : "off");
 		}
 
 		void LoadFileNode(pugi::xml_node node)
@@ -309,9 +407,41 @@ namespace fonthook
 				return;
 			}
 			if (type == 2)
-				LoadFileDictionaryType2(source, target, priority);
+			{
+				const TextFileLoadStats stats = LoadFileDictionaryType2(source, target, priority);
+				gLog.FormattedMessage(
+					"tnvse_dictionary: file dictionary type=2 status=%s priority=%d entries=%u source_ids=%u source_lines=%u target_lines=%u paired=%u skipped_no_source=%u skipped_malformed=%u skipped_invalid=%u source=%s target=%s",
+					stats.loaded ? "loaded" : "read_failed",
+					priority,
+					stats.registered,
+					stats.sourceIds,
+					stats.sourceLines,
+					stats.targetLines,
+					stats.paired,
+					stats.missingSource,
+					stats.malformedSource + stats.malformedTarget,
+					stats.invalid,
+					source.c_str(),
+					target.c_str());
+			}
 			else
-				LoadFileDictionaryType1(source, target, priority);
+			{
+				const TextFileLoadStats stats = LoadFileDictionaryType1(source, target, priority);
+				gLog.FormattedMessage(
+					"tnvse_dictionary: file dictionary type=1 status=%s priority=%d entries=%u source_lines=%u target_lines=%u paired=%u skipped_unpaired=%u skipped_invalid=%u source=%s target=%s",
+					stats.loaded ? "loaded" : "read_failed",
+					priority,
+					stats.registered,
+					stats.sourceLines,
+					stats.targetLines,
+					stats.paired,
+					static_cast<UInt32>((stats.sourceLines > stats.targetLines)
+						? stats.sourceLines - stats.targetLines
+						: stats.targetLines - stats.sourceLines),
+					stats.invalid,
+					source.c_str(),
+					target.c_str());
+			}
 		}
 
 		void LoadDirectoryNode(pugi::xml_node node)
@@ -319,7 +449,17 @@ namespace fonthook
 			const std::string source = ResolvePath(GetAttr(node, "src"));
 			const std::string target = ResolvePath(GetAttr(node, "target"));
 			const int priority = GetAttrInt(node, "priority", 10);
-			LoadDirectoryDictionary(source, target, priority);
+			const DirectoryLoadStats stats = LoadDirectoryDictionary(source, target, priority);
+			gLog.FormattedMessage(
+				"tnvse_dictionary: directory dictionary status=%s priority=%d entries=%u files=%u missing_pairs=%u skipped_invalid=%u source=%s target=%s",
+				stats.loaded ? "loaded" : "missing_directory",
+				priority,
+				stats.registered,
+				stats.files,
+				stats.missingTarget,
+				stats.invalid,
+				source.c_str(),
+				target.c_str());
 		}
 
 		void LoadXmlNode(pugi::xml_node node)
