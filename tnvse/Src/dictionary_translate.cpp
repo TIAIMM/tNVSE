@@ -911,6 +911,13 @@ namespace fonthook
 			return true;
 		}
 
+		if (TryTranslateMultiplierText(raw, translated, depth))
+		{
+			s_positiveCache.emplace(cacheKey, translated);
+			TrimPositiveCache();
+			return true;
+		}
+
 		if (TryTranslateWildcardKey(key, fullMatch, depth, &mappedSource))
 		{
 			translated = fullMatch.translated;

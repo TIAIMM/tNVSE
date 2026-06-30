@@ -29,6 +29,13 @@ namespace fonthook
 			std::string result;
 		};
 
+		struct MultiplierTextParts
+		{
+			std::string left;
+			std::string number;
+			std::string right;
+		};
+
 		bool IsAsciiDigit(char ch)
 		{
 			return ch >= '0' && ch <= '9';
@@ -56,6 +63,11 @@ namespace fonthook
 		bool IsInlineWhitespace(char ch)
 		{
 			return ch == ' ' || ch == '\t';
+		}
+
+		bool IsRegexWhitespace(char ch)
+		{
+			return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\v' || ch == '\f';
 		}
 
 		bool HasLineBreak(const std::string& source)
@@ -367,6 +379,58 @@ namespace fonthook
 				return false;
 			return TranslateInternal(text.c_str(), translated, depth + 1);
 		}
+
+		bool TrySplitMultiplierText(const std::string& source, MultiplierTextParts& parts)
+		{
+			parts = MultiplierTextParts{};
+			if (source.size() < 7)
+				return false;
+
+			for (size_t xPos = source.size(); xPos > 0;)
+			{
+				--xPos;
+				if (source[xPos] != 'x')
+					continue;
+				if (xPos < 2 || xPos + 2 >= source.size())
+					continue;
+				if (!IsRegexWhitespace(source[xPos - 1]) || !IsRegexWhitespace(source[xPos + 1]))
+					continue;
+
+				const size_t leftEnd = xPos - 1;
+				if (leftEnd == 0 || IsRegexWhitespace(source[leftEnd - 1]))
+					continue;
+
+				size_t numberBegin = xPos + 2;
+				if (numberBegin >= source.size() || !IsAsciiDigit(source[numberBegin]))
+					continue;
+
+				size_t numberEnd = numberBegin + 1;
+				while (numberEnd < source.size() && IsAsciiDigit(source[numberEnd]))
+					++numberEnd;
+
+				if (numberEnd >= source.size() || !IsRegexWhitespace(source[numberEnd]))
+					continue;
+
+				const size_t rightBegin = numberEnd + 1;
+				if (rightBegin >= source.size())
+					continue;
+
+				parts.left = source.substr(0, leftEnd);
+				parts.number = source.substr(numberBegin, numberEnd - numberBegin);
+				parts.right = source.substr(rightBegin);
+				return true;
+			}
+
+			return false;
+		}
+
+		bool TranslateMultiplierPart(const std::string& source, std::string& translated, int depth)
+		{
+			translated.clear();
+			if (source.empty() || depth >= 4)
+				return false;
+			return TranslateInternal(source.c_str(), translated, depth + 1);
+		}
 	}
 
 	bool TryTranslateItemEffectList(const std::string& source, std::string& translated, int depth)
@@ -508,6 +572,44 @@ namespace fonthook
 				gLog.FormattedMessage("tnvse_dictionary:     method=%s result=\"%s\"",
 					log.method.c_str(), log.result.c_str());
 			}
+		}
+		return true;
+	}
+
+	bool TryTranslateMultiplierText(const std::string& source, std::string& translated, int depth)
+	{
+		if (depth >= 4 || source.empty())
+			return false;
+
+		MultiplierTextParts parts;
+		if (!TrySplitMultiplierText(source, parts))
+			return false;
+
+		std::string translatedLeft;
+		std::string translatedRight;
+		const bool leftFound = TranslateMultiplierPart(parts.left, translatedLeft, depth) &&
+			translatedLeft != parts.left;
+		const bool rightFound = TranslateMultiplierPart(parts.right, translatedRight, depth) &&
+			translatedRight != parts.right;
+
+		if (!leftFound)
+			translatedLeft = parts.left;
+		if (!rightFound)
+			translatedRight = parts.right;
+		if (!leftFound && !rightFound)
+			return false;
+
+		translated = translatedLeft + " x " + parts.number + " " + translatedRight;
+
+		if (g_bEnableDictionaryTranslationLog)
+		{
+			gLog.FormattedMessage("tnvse_dictionary: multiplier text match:");
+			gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source.c_str());
+			gLog.FormattedMessage("tnvse_dictionary:   left=\"%s\" ->\"%s\"",
+				parts.left.c_str(), translatedLeft.c_str());
+			gLog.FormattedMessage("tnvse_dictionary:   right=\"%s\" ->\"%s\"",
+				parts.right.c_str(), translatedRight.c_str());
+			gLog.FormattedMessage("tnvse_dictionary:   result=\"%s\"", translated.c_str());
 		}
 		return true;
 	}

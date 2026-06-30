@@ -125,6 +125,7 @@ namespace fonthook
 	bool TranslateInternal(const char* source, std::string& translated, int depth);
 	bool TryTranslateMuxQuestPrompt(const std::string& source, std::string& translated, int depth);
 	bool TryTranslateItemEffectList(const std::string& source, std::string& translated, int depth);
+	bool TryTranslateMultiplierText(const std::string& source, std::string& translated, int depth);
 	bool TryTranslatePerkDescription(const std::string& source, std::string& translated, int depth);
 	bool TryTranslateRegexText(const std::string& source, std::string& translated);
 	bool TryTranslateFuzzyText(const std::string& source, std::string& translated, int depth);
