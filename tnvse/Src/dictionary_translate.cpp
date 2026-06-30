@@ -233,36 +233,66 @@ namespace fonthook
 			return false;
 		}
 
-		std::vector<std::string> SplitNonEmptyLines(std::string text)
+		struct FormattedLine
 		{
-			std::vector<std::string> lines;
-			size_t cursor = 0;
-			while (cursor <= text.size())
-			{
-				const size_t end = text.find('\n', cursor);
-				std::string line = end == std::string::npos
-					? text.substr(cursor)
-					: text.substr(cursor, end - cursor);
-				TrimAsciiWhitespace(line);
-				if (!line.empty())
-					lines.push_back(std::move(line));
-				if (end == std::string::npos)
-					break;
-				cursor = end + 1;
-			}
-			return lines;
+			std::string leadingWhitespace;
+			std::string text;
+			std::string trailingWhitespace;
+			std::string lineBreak;
+		};
+
+		bool IsLineWhitespace(char ch)
+		{
+			return ch == ' ' || ch == '\t';
 		}
 
-		std::string JoinLines(const std::vector<std::string>& lines, size_t begin, size_t end, const char* separator)
+		std::vector<FormattedLine> SplitFormattedLines(const std::string& text)
 		{
-			std::string result;
-			for (size_t i = begin; i < end && i < lines.size(); ++i)
+			std::vector<FormattedLine> lines;
+			size_t cursor = 0;
+			while (cursor < text.size())
 			{
-				if (!result.empty())
-					result += separator;
-				result += lines[i];
+				const size_t lineBegin = cursor;
+				size_t lineEnd = cursor;
+				while (lineEnd < text.size() && text[lineEnd] != '\r' && text[lineEnd] != '\n')
+					++lineEnd;
+
+				std::string lineBreak;
+				if (lineEnd < text.size())
+				{
+					if (text[lineEnd] == '\r' && lineEnd + 1 < text.size() && text[lineEnd + 1] == '\n')
+					{
+						lineBreak = "\r\n";
+						cursor = lineEnd + 2;
+					}
+					else
+					{
+						lineBreak.assign(1, text[lineEnd]);
+						cursor = lineEnd + 1;
+					}
+				}
+				else
+				{
+					cursor = lineEnd;
+				}
+
+				const std::string line = text.substr(lineBegin, lineEnd - lineBegin);
+				size_t textBegin = 0;
+				while (textBegin < line.size() && IsLineWhitespace(line[textBegin]))
+					++textBegin;
+
+				size_t textEnd = line.size();
+				while (textEnd > textBegin && IsLineWhitespace(line[textEnd - 1]))
+					--textEnd;
+
+				FormattedLine formattedLine;
+				formattedLine.leadingWhitespace = line.substr(0, textBegin);
+				formattedLine.text = line.substr(textBegin, textEnd - textBegin);
+				formattedLine.trailingWhitespace = line.substr(textEnd);
+				formattedLine.lineBreak = std::move(lineBreak);
+				lines.push_back(std::move(formattedLine));
 			}
-			return result;
+			return lines;
 		}
 
 		bool MatchWildcardWithCaptureSource(
@@ -360,53 +390,59 @@ namespace fonthook
 			return TryTranslateWildcardKey(key, match, depth, captureSource);
 		}
 
-		bool TryTranslateBeforeLinebreakText(const std::string& source, const std::string& fullKey, std::string& translated, int depth)
+		bool TryTranslateBeforeLinebreakText(const std::string& source, std::string& translated, int depth)
 		{
-			if (depth >= 4 || source.find('\n') == std::string::npos)
+			if (depth >= 4 || (source.find('\n') == std::string::npos && source.find('\r') == std::string::npos))
 				return false;
 
-			std::vector<std::string> lines = SplitNonEmptyLines(source);
+			const std::vector<FormattedLine> lines = SplitFormattedLines(source);
 			if (lines.size() < 2)
 				return false;
 
-			std::unordered_set<std::string> searchedKeys;
-			searchedKeys.insert(fullKey);
+			std::string result;
+			bool changed = false;
 
-			for (size_t prefixLineCount = lines.size() - 1; prefixLineCount > 0; --prefixLineCount)
+			for (const FormattedLine& line : lines)
 			{
-				const std::string candidateText = JoinLines(lines, 0, prefixLineCount, " ");
-				if (!HasAlphabet(candidateText))
-					continue;
+				result += line.leadingWhitespace;
 
-				const std::string key = PrepareSourceForLookup(candidateText);
-				if (key.empty() || !searchedKeys.insert(key).second)
+				if (line.text.empty() || !HasAlphabet(line.text))
+				{
+					result += line.text;
+					result += line.trailingWhitespace;
+					result += line.lineBreak;
 					continue;
+				}
 
+				const std::string key = PrepareSourceForLookup(line.text);
 				PreparedTranslationMatch match;
-				if (!TryTranslateExactKey(key, match, depth))
-					continue;
-
-				const std::string remainder = JoinLines(lines, prefixLineCount, lines.size(), "\n");
-				std::string translatedRemainder;
-				const bool translatedRest = !remainder.empty() && TranslateInternal(remainder.c_str(), translatedRemainder, depth + 1);
-				translated = match.translated;
-				if (!remainder.empty())
+				if (!key.empty() && TryTranslateExactKey(key, match, depth))
 				{
-					translated += '\n';
-					translated += translatedRest ? translatedRemainder : remainder;
+					result += match.translated;
+					changed = true;
+
+					if (g_bEnableDictionaryTranslationLog)
+					{
+						gLog.FormattedMessage("tnvse_dictionary: before-linebreak exact hit:");
+						gLog.FormattedMessage("tnvse_dictionary:   line=\"%s\"", line.text.c_str());
+						gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
+							s_entries[match.entryIndex].key.c_str(), match.translated.c_str());
+					}
+				}
+				else
+				{
+					result += line.text;
 				}
 
-				if (g_bEnableDictionaryTranslationLog)
-				{
-					gLog.FormattedMessage("tnvse_dictionary: before-linebreak exact hit:");
-					gLog.FormattedMessage("tnvse_dictionary:   candidate=\"%s\"", candidateText.c_str());
-					gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
-						s_entries[match.entryIndex].key.c_str(), match.translated.c_str());
-				}
-				return true;
+				result += line.trailingWhitespace;
+				result += line.lineBreak;
 			}
 
-			return false;
+			if (!changed)
+				return false;
+
+			translated = std::move(result);
+			return true;
 		}
 
 		bool TryBuildShrinkMatch(
@@ -658,7 +694,7 @@ namespace fonthook
 			return true;
 		}
 
-		if (TryTranslateBeforeLinebreakText(raw, key, translated, depth))
+		if (TryTranslateBeforeLinebreakText(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
