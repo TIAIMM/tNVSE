@@ -13,6 +13,14 @@ bool g_bRemovePlural;
 bool g_bEnableDictionaryTranslation;
 bool g_bEnableDictionaryTranslationLog;
 bool g_bEnableMuxQuestPromptTranslation;
+bool g_bEnableDictionaryPerkDescriptionTranslation;
+bool g_bEnableDictionaryItemEffectTranslation;
+bool g_bEnableDictionaryMultiplierTextTranslation;
+bool g_bEnableDictionaryWildcardTranslation;
+bool g_bEnableDictionaryRegexTranslation;
+bool g_bEnableDictionaryBeforeLinebreakTranslation;
+bool g_bEnableDictionaryShrinkFuzzyTranslation;
+bool g_bEnableDictionaryTrimBypassFuzzyTranslation;
 
 namespace
 {
@@ -124,4 +132,28 @@ void LoadConfig()
 
 	g_bEnableMuxQuestPromptTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableMuxQuestPromptTranslation", 1, filename);
 	gLog.FormattedMessage("g_bEnableMuxQuestPromptTranslation: %d", g_bEnableMuxQuestPromptTranslation);
+
+	g_bEnableDictionaryPerkDescriptionTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableDictionaryPerkDescriptionTranslation", 1, filename);
+	gLog.FormattedMessage("g_bEnableDictionaryPerkDescriptionTranslation: %d", g_bEnableDictionaryPerkDescriptionTranslation);
+
+	g_bEnableDictionaryItemEffectTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableDictionaryItemEffectTranslation", 1, filename);
+	gLog.FormattedMessage("g_bEnableDictionaryItemEffectTranslation: %d", g_bEnableDictionaryItemEffectTranslation);
+
+	g_bEnableDictionaryMultiplierTextTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableDictionaryMultiplierTextTranslation", 1, filename);
+	gLog.FormattedMessage("g_bEnableDictionaryMultiplierTextTranslation: %d", g_bEnableDictionaryMultiplierTextTranslation);
+
+	g_bEnableDictionaryWildcardTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableDictionaryWildcardTranslation", 1, filename);
+	gLog.FormattedMessage("g_bEnableDictionaryWildcardTranslation: %d", g_bEnableDictionaryWildcardTranslation);
+
+	g_bEnableDictionaryRegexTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableDictionaryRegexTranslation", 1, filename);
+	gLog.FormattedMessage("g_bEnableDictionaryRegexTranslation: %d", g_bEnableDictionaryRegexTranslation);
+
+	g_bEnableDictionaryBeforeLinebreakTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableDictionaryBeforeLinebreakTranslation", 1, filename);
+	gLog.FormattedMessage("g_bEnableDictionaryBeforeLinebreakTranslation: %d", g_bEnableDictionaryBeforeLinebreakTranslation);
+
+	g_bEnableDictionaryShrinkFuzzyTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableDictionaryShrinkFuzzyTranslation", 1, filename);
+	gLog.FormattedMessage("g_bEnableDictionaryShrinkFuzzyTranslation: %d", g_bEnableDictionaryShrinkFuzzyTranslation);
+
+	g_bEnableDictionaryTrimBypassFuzzyTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableDictionaryTrimBypassFuzzyTranslation", 1, filename);
+	gLog.FormattedMessage("g_bEnableDictionaryTrimBypassFuzzyTranslation: %d", g_bEnableDictionaryTrimBypassFuzzyTranslation);
 }

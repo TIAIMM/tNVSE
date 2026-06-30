@@ -563,6 +563,8 @@ namespace fonthook
 			const MappedPreparedSource* mappedSource = nullptr)
 		{
 			match = PreparedTranslationMatch{};
+			if (!g_bEnableDictionaryWildcardTranslation)
+				return false;
 
 			std::vector<size_t> candidateIndexes;
 			std::unordered_set<size_t> seenCandidates;
@@ -897,28 +899,28 @@ namespace fonthook
 			return true;
 		}
 
-		if (TryTranslatePerkDescription(raw, translated, depth))
+		if (g_bEnableDictionaryPerkDescriptionTranslation && TryTranslatePerkDescription(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (TryTranslateItemEffectList(raw, translated, depth))
+		if (g_bEnableDictionaryItemEffectTranslation && TryTranslateItemEffectList(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (TryTranslateMultiplierText(raw, translated, depth))
+		if (g_bEnableDictionaryMultiplierTextTranslation && TryTranslateMultiplierText(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (TryTranslateWildcardKey(key, fullMatch, depth, &mappedSource))
+		if (g_bEnableDictionaryWildcardTranslation && TryTranslateWildcardKey(key, fullMatch, depth, &mappedSource))
 		{
 			translated = fullMatch.translated;
 			if (g_bEnableDictionaryTranslationLog)
@@ -933,28 +935,28 @@ namespace fonthook
 			return true;
 		}
 
-		if (TryTranslateRegexText(raw, translated))
+		if (g_bEnableDictionaryRegexTranslation && TryTranslateRegexText(raw, translated))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (TryTranslateBeforeLinebreakText(raw, translated, depth))
+		if (g_bEnableDictionaryBeforeLinebreakTranslation && TryTranslateBeforeLinebreakText(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (TryTranslateShrinkText(raw, translated, depth))
+		if (g_bEnableDictionaryShrinkFuzzyTranslation && TryTranslateShrinkText(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (TryTranslateFuzzyText(originalRaw, translated, depth))
+		if (g_bEnableDictionaryTrimBypassFuzzyTranslation && TryTranslateFuzzyText(originalRaw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();

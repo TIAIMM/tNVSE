@@ -13,5 +13,13 @@ extern bool g_bRemovePlural;
 extern bool g_bEnableDictionaryTranslation;
 extern bool g_bEnableDictionaryTranslationLog;
 extern bool g_bEnableMuxQuestPromptTranslation;
+extern bool g_bEnableDictionaryPerkDescriptionTranslation;
+extern bool g_bEnableDictionaryItemEffectTranslation;
+extern bool g_bEnableDictionaryMultiplierTextTranslation;
+extern bool g_bEnableDictionaryWildcardTranslation;
+extern bool g_bEnableDictionaryRegexTranslation;
+extern bool g_bEnableDictionaryBeforeLinebreakTranslation;
+extern bool g_bEnableDictionaryShrinkFuzzyTranslation;
+extern bool g_bEnableDictionaryTrimBypassFuzzyTranslation;
 
 void LoadConfig();
