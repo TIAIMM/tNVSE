@@ -12,6 +12,23 @@ namespace fonthook
 			bool numeric = false;
 		};
 
+		struct RawEffectSegment
+		{
+			std::string leadingWhitespace;
+			std::string text;
+			std::string trailingWhitespace;
+			std::string delimiter;
+		};
+
+		struct EffectSegmentLog
+		{
+			std::string source;
+			std::string name;
+			std::string suffix;
+			std::string method;
+			std::string result;
+		};
+
 		bool IsAsciiDigit(char ch)
 		{
 			return ch >= '0' && ch <= '9';
@@ -36,39 +53,125 @@ namespace fonthook
 			return true;
 		}
 
-		void TrimAsciiWhitespace(std::string& text)
+		bool IsInlineWhitespace(char ch)
 		{
-			const auto isTrim = [](unsigned char ch)
-				{
-					return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
-				};
-
-			size_t first = 0;
-			while (first < text.size() && isTrim((unsigned char)text[first]))
-				++first;
-			size_t last = text.size();
-			while (last > first && isTrim((unsigned char)text[last - 1]))
-				--last;
-			text = text.substr(first, last - first);
+			return ch == ' ' || ch == '\t';
 		}
 
-		std::vector<std::string> SplitEffectSegments(const std::string& source)
+		bool HasLineBreak(const std::string& source)
 		{
-			std::vector<std::string> segments;
+			return source.find('\r') != std::string::npos || source.find('\n') != std::string::npos;
+		}
+
+		bool SplitOuterWhitespace(
+			const std::string& source,
+			std::string& leadingWhitespace,
+			std::string& core,
+			std::string& trailingWhitespace)
+		{
+			size_t coreBegin = 0;
+			while (coreBegin < source.size())
+			{
+				const char ch = source[coreBegin];
+				if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n')
+					break;
+				++coreBegin;
+			}
+
+			size_t coreEnd = source.size();
+			while (coreEnd > coreBegin)
+			{
+				const char ch = source[coreEnd - 1];
+				if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n')
+					break;
+				--coreEnd;
+			}
+
+			if (coreBegin == coreEnd)
+				return false;
+
+			leadingWhitespace = source.substr(0, coreBegin);
+			core = source.substr(coreBegin, coreEnd - coreBegin);
+			trailingWhitespace = source.substr(coreEnd);
+			return true;
+		}
+
+		bool BuildRawEffectSegment(const std::string& rawSegment, std::string delimiter, RawEffectSegment& segment)
+		{
+			size_t textBegin = 0;
+			while (textBegin < rawSegment.size() && IsInlineWhitespace(rawSegment[textBegin]))
+				++textBegin;
+
+			size_t textEnd = rawSegment.size();
+			while (textEnd > textBegin && IsInlineWhitespace(rawSegment[textEnd - 1]))
+				--textEnd;
+
+			if (textBegin == textEnd)
+				return false;
+
+			segment.leadingWhitespace = rawSegment.substr(0, textBegin);
+			segment.text = rawSegment.substr(textBegin, textEnd - textBegin);
+			segment.trailingWhitespace = rawSegment.substr(textEnd);
+			segment.delimiter = std::move(delimiter);
+			return true;
+		}
+
+		std::vector<RawEffectSegment> SplitCommaEffectSegments(const std::string& source)
+		{
+			std::vector<RawEffectSegment> segments;
 			size_t cursor = 0;
 			while (cursor <= source.size())
 			{
 				const size_t comma = source.find(',', cursor);
-				std::string segment = comma == std::string::npos
-					? source.substr(cursor)
-					: source.substr(cursor, comma - cursor);
-				TrimAsciiWhitespace(segment);
-				if (segment.empty())
+				const bool hasComma = comma != std::string::npos;
+				const std::string rawSegment = hasComma
+					? source.substr(cursor, comma - cursor)
+					: source.substr(cursor);
+
+				RawEffectSegment segment;
+				if (!BuildRawEffectSegment(rawSegment, hasComma ? "," : "", segment))
 					return {};
 				segments.push_back(std::move(segment));
-				if (comma == std::string::npos)
+
+				if (!hasComma)
 					break;
 				cursor = comma + 1;
+			}
+			return segments;
+		}
+
+		std::vector<RawEffectSegment> SplitLineEffectSegments(const std::string& source)
+		{
+			std::vector<RawEffectSegment> segments;
+			size_t cursor = 0;
+			while (cursor < source.size())
+			{
+				size_t lineEnd = cursor;
+				while (lineEnd < source.size() && source[lineEnd] != '\r' && source[lineEnd] != '\n')
+					++lineEnd;
+
+				std::string delimiter;
+				if (lineEnd < source.size())
+				{
+					if (source[lineEnd] == '\r' && lineEnd + 1 < source.size() && source[lineEnd + 1] == '\n')
+					{
+						delimiter = "\r\n";
+					}
+					else
+					{
+						delimiter.assign(1, source[lineEnd]);
+					}
+				}
+
+				const std::string rawSegment = source.substr(cursor, lineEnd - cursor);
+				RawEffectSegment segment;
+				if (!BuildRawEffectSegment(rawSegment, delimiter, segment))
+					return {};
+				segments.push_back(std::move(segment));
+
+				if (lineEnd == source.size())
+					break;
+				cursor = lineEnd + segments.back().delimiter.size();
 			}
 			return segments;
 		}
@@ -124,6 +227,42 @@ namespace fonthook
 			return true;
 		}
 
+		bool TrySplitNumericValue(const std::string& segment, size_t coreEnd, size_t& valueBegin)
+		{
+			valueBegin = coreEnd;
+			if (valueBegin == 0)
+				return false;
+
+			if (segment[valueBegin - 1] == '%')
+			{
+				--valueBegin;
+				if (valueBegin == 0)
+					return false;
+			}
+
+			const size_t fractionalEnd = valueBegin;
+			while (valueBegin > 0 && IsAsciiDigit(segment[valueBegin - 1]))
+				--valueBegin;
+			const bool hasFractionalDigits = valueBegin < fractionalEnd;
+
+			if (valueBegin > 0 && segment[valueBegin - 1] == '.')
+			{
+				--valueBegin;
+				const size_t integerEnd = valueBegin;
+				while (valueBegin > 0 && IsAsciiDigit(segment[valueBegin - 1]))
+					--valueBegin;
+				const bool hasIntegerDigits = valueBegin < integerEnd;
+				return hasIntegerDigits && hasFractionalDigits;
+			}
+
+			return hasFractionalDigits;
+		}
+
+		bool IsEffectOperator(char ch)
+		{
+			return ch == '+' || ch == '-' || ch == 'x' || ch == 'X' || ch == '|';
+		}
+
 		bool TryParseNumericEffectSegment(const std::string& segment, EffectSegment& parsed)
 		{
 			parsed = EffectSegment{};
@@ -136,34 +275,33 @@ namespace fonthook
 			if (coreEnd == 0)
 				return false;
 
-			size_t pos = coreEnd;
-			if (pos > 0 && segment[pos - 1] == '%')
-				--pos;
-			const size_t digitsEnd = pos;
-			while (pos > 0 && IsAsciiDigit(segment[pos - 1]))
-				--pos;
-			if (pos == digitsEnd)
-				return false;
-			if (pos == 0)
+			size_t valueBegin = 0;
+			if (!TrySplitNumericValue(segment, coreEnd, valueBegin))
 				return false;
 
-			const char sign = segment[pos - 1];
-			if (sign != '+' && sign != '-' && sign != '|')
-				return false;
-			if (pos < 2)
-				return false;
-			const char beforeSign = segment[pos - 2];
-			if (beforeSign != ' ' && beforeSign != '\t')
+			size_t operatorEnd = valueBegin;
+			while (operatorEnd > 0 && IsInlineWhitespace(segment[operatorEnd - 1]))
+				--operatorEnd;
+			if (operatorEnd == 0)
 				return false;
 
-			size_t nameEnd = pos - 1;
-			while (nameEnd > 0 && (segment[nameEnd - 1] == ' ' || segment[nameEnd - 1] == '\t'))
+			const char sign = segment[operatorEnd - 1];
+			if (!IsEffectOperator(sign))
+				return false;
+			if (operatorEnd < 2)
+				return false;
+			const char beforeSign = segment[operatorEnd - 2];
+			if (!IsInlineWhitespace(beforeSign))
+				return false;
+
+			size_t nameEnd = operatorEnd - 1;
+			while (nameEnd > 0 && IsInlineWhitespace(segment[nameEnd - 1]))
 				--nameEnd;
 			if (nameEnd == 0)
 				return false;
 
 			parsed.name = segment.substr(0, nameEnd);
-			parsed.suffix = std::string(" ") + segment.substr(pos - 1, coreEnd - (pos - 1)) + duration;
+			parsed.suffix = segment.substr(nameEnd, coreEnd - nameEnd) + duration;
 			parsed.numeric = true;
 			return true;
 		}
@@ -175,6 +313,60 @@ namespace fonthook
 				return false;
 			return TranslateInternal(name.c_str(), translated, depth + 1);
 		}
+
+		bool TranslateEffectNameExact(const std::string& name, std::string& translated, int depth)
+		{
+			translated.clear();
+			if (name.empty() || depth >= 4)
+				return false;
+			return TryTranslateExactText(name, translated, depth + 1);
+		}
+
+		bool TranslateCommaSeparatedEffectName(const std::string& name, std::string& translated, int depth)
+		{
+			translated.clear();
+			if (name.find(',') == std::string::npos)
+				return false;
+
+			const std::vector<RawEffectSegment> parts = SplitCommaEffectSegments(name);
+			if (parts.size() < 2)
+				return false;
+
+			std::string result;
+			bool changed = false;
+			for (const RawEffectSegment& part : parts)
+			{
+				std::string translatedPart;
+				if (TranslateEffectName(part.text, translatedPart, depth) &&
+					translatedPart != part.text)
+				{
+					changed = true;
+				}
+				else
+				{
+					translatedPart = part.text;
+				}
+
+				result += part.leadingWhitespace;
+				result += translatedPart;
+				result += part.trailingWhitespace;
+				result += part.delimiter;
+			}
+
+			if (!changed)
+				return false;
+
+			translated = std::move(result);
+			return true;
+		}
+
+		bool TranslateEffectSegmentText(const std::string& text, std::string& translated, int depth)
+		{
+			translated.clear();
+			if (text.empty() || depth >= 4)
+				return false;
+			return TranslateInternal(text.c_str(), translated, depth + 1);
+		}
 	}
 
 	bool TryTranslateItemEffectList(const std::string& source, std::string& translated, int depth)
@@ -182,28 +374,33 @@ namespace fonthook
 		if (depth >= 4 || source.empty())
 			return false;
 
-		std::string trimmedSource = source;
-		TrimAsciiWhitespace(trimmedSource);
-		if (trimmedSource.empty() || StartsWithIgnoreCase(trimmedSource, "Permanent"))
+		std::string leadingWhitespace;
+		std::string coreSource;
+		std::string trailingWhitespace;
+		if (!SplitOuterWhitespace(source, leadingWhitespace, coreSource, trailingWhitespace) ||
+			StartsWithIgnoreCase(coreSource, "Permanent"))
 			return false;
 
-		const std::vector<std::string> rawSegments = SplitEffectSegments(trimmedSource);
+		const bool lineSeparated = HasLineBreak(coreSource);
+		const std::vector<RawEffectSegment> rawSegments = lineSeparated
+			? SplitLineEffectSegments(coreSource)
+			: SplitCommaEffectSegments(coreSource);
 		if (rawSegments.empty())
 			return false;
 
 		std::vector<EffectSegment> segments;
 		segments.reserve(rawSegments.size());
 		bool hasNumericSegment = false;
-		for (const std::string& rawSegment : rawSegments)
+		for (const RawEffectSegment& rawSegment : rawSegments)
 		{
 			EffectSegment segment;
-			if (TryParseNumericEffectSegment(rawSegment, segment))
+			if (TryParseNumericEffectSegment(rawSegment.text, segment))
 			{
 				hasNumericSegment = true;
 			}
 			else
 			{
-				segment.name = rawSegment;
+				segment.name = rawSegment.text;
 			}
 
 			if (!HasAlphabet(segment.name))
@@ -214,32 +411,103 @@ namespace fonthook
 		if (!hasNumericSegment)
 			return false;
 
-		std::string result;
+		std::string result = leadingWhitespace;
 		bool changed = false;
-		for (const EffectSegment& segment : segments)
-		{
-			std::string translatedName;
-			const bool translatedSegment = TranslateEffectName(segment.name, translatedName, depth);
-			if (!translatedSegment)
-				translatedName = segment.name;
-			else if (translatedName != segment.name)
-				changed = true;
+		std::vector<EffectSegmentLog> segmentLogs;
+		if (g_bEnableDictionaryTranslationLog)
+			segmentLogs.reserve(segments.size());
 
-			if (!result.empty())
-				result += ", ";
-			result += translatedName;
-			result += segment.suffix;
+		for (size_t i = 0; i < segments.size(); ++i)
+		{
+			const RawEffectSegment& rawSegment = rawSegments[i];
+			const EffectSegment& segment = segments[i];
+			std::string translatedSegmentText;
+			const char* method = "none";
+
+			std::string translatedName;
+			bool translatedNameFound = false;
+			if (segment.numeric)
+			{
+				if (TranslateEffectNameExact(segment.name, translatedName, depth) &&
+					translatedName != segment.name)
+				{
+					method = "name-exact";
+					translatedNameFound = true;
+				}
+				else if (TranslateCommaSeparatedEffectName(segment.name, translatedName, depth) &&
+					translatedName != segment.name)
+				{
+					method = "name-parts";
+					translatedNameFound = true;
+				}
+				else if (TranslateEffectName(segment.name, translatedName, depth) &&
+					translatedName != segment.name)
+				{
+					method = "name";
+					translatedNameFound = true;
+				}
+			}
+			if (translatedNameFound)
+			{
+				translatedSegmentText = translatedName + segment.suffix;
+				changed = true;
+			}
+			else if (TranslateEffectSegmentText(rawSegment.text, translatedSegmentText, depth))
+			{
+				method = "segment";
+				if (translatedSegmentText != rawSegment.text)
+					changed = true;
+			}
+			else
+			{
+				if (translatedName.empty())
+					translatedName = segment.name;
+				else
+					method = "name";
+
+				translatedSegmentText = translatedName + segment.suffix;
+			}
+
+			if (g_bEnableDictionaryTranslationLog)
+			{
+				EffectSegmentLog log;
+				log.source = rawSegment.text;
+				log.name = segment.name;
+				log.suffix = segment.suffix;
+				log.method = method;
+				log.result = translatedSegmentText;
+				segmentLogs.push_back(std::move(log));
+			}
+
+			result += rawSegment.leadingWhitespace;
+			result += translatedSegmentText;
+			result += rawSegment.trailingWhitespace;
+			result += rawSegment.delimiter;
 		}
 
 		if (!changed)
 			return false;
 
+		result += trailingWhitespace;
 		translated = std::move(result);
 		if (g_bEnableDictionaryTranslationLog)
 		{
-			gLog.FormattedMessage("tnvse_dictionary: item effect list match:");
+			gLog.FormattedMessage("tnvse_dictionary: item effect %s match:",
+				lineSeparated ? "line-list" : "comma-list");
 			gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source.c_str());
 			gLog.FormattedMessage("tnvse_dictionary:   result=\"%s\"", translated.c_str());
+			for (size_t i = 0; i < segmentLogs.size(); ++i)
+			{
+				const EffectSegmentLog& log = segmentLogs[i];
+				gLog.FormattedMessage("tnvse_dictionary:   %s %u source=\"%s\"",
+					lineSeparated ? "line" : "segment",
+					static_cast<UInt32>(i + 1),
+					log.source.c_str());
+				gLog.FormattedMessage("tnvse_dictionary:     name=\"%s\" suffix=\"%s\"",
+					log.name.c_str(), log.suffix.c_str());
+				gLog.FormattedMessage("tnvse_dictionary:     method=%s result=\"%s\"",
+					log.method.c_str(), log.result.c_str());
+			}
 		}
 		return true;
 	}

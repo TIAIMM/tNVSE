@@ -764,6 +764,24 @@ namespace fonthook
 
 	// ---- main translation engine ----
 
+	bool TryTranslateExactText(const std::string& source, std::string& translated, int depth)
+	{
+		translated.clear();
+		if (source.empty() || depth >= 4 || !s_dictionaryLoaded || !HasAlphabet(source))
+			return false;
+
+		const MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(source);
+		if (mappedSource.key.empty())
+			return false;
+
+		PreparedTranslationMatch match;
+		if (!TryTranslateExactKey(mappedSource.key, match, depth))
+			return false;
+
+		translated = std::move(match.translated);
+		return true;
+	}
+
 	bool TranslateInternal(const char* source, std::string& translated, int depth)
 	{
 		if (!source || !*source || !s_dictionaryLoaded)
