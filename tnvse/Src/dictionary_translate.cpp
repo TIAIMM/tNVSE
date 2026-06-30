@@ -847,6 +847,13 @@ namespace fonthook
 			return true;
 		}
 
+		if (TryTranslatePerkDescription(raw, translated, depth))
+		{
+			s_positiveCache.emplace(cacheKey, translated);
+			TrimPositiveCache();
+			return true;
+		}
+
 		if (TryTranslateItemEffectList(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);

@@ -57,6 +57,9 @@
     <ClCompile Include="Src\dictionary_mux.cpp">
       <Filter>Source Files\Config</Filter>
     </ClCompile>
+    <ClCompile Include="Src\dictionary_perk.cpp">
+      <Filter>Source Files\Config</Filter>
+    </ClCompile>
     <ClCompile Include="Src\dictionary_regex.cpp">
       <Filter>Source Files\Config</Filter>
     </ClCompile>

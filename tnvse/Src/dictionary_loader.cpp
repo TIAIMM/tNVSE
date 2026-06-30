@@ -543,6 +543,7 @@ namespace fonthook
 		s_registeredAutoKeys.clear();
 		s_dictionaryLoaded = false;
 		ResetFuzzyTextConfig();
+		ResetPerkRequirementConfig();
 
 		if (!g_bEnableDictionaryTranslation)
 		{
@@ -579,6 +580,7 @@ namespace fonthook
 		}
 
 		LoadFuzzyTextConfig(tnvseRoot);
+		LoadPerkRequirementConfig(tnvseRoot);
 		LoadUiHintConfig(tnvseRoot);
 
 		pugi::xml_node dictNode = tnvseRoot.child("dictionary");

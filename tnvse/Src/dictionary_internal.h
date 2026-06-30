@@ -119,16 +119,19 @@ namespace fonthook
 	RecordType DetectRecordTypeFromRec(const char* rec);
 
 	// ---- translation ----
-bool MatchWildcard(const DictionaryEntry& entry, const std::string& key, std::vector<std::string>& captures);
-bool ExpandTarget(const DictionaryEntry& entry, const std::vector<std::string>& captures, std::string& translated, int depth);
-bool TryTranslateExactText(const std::string& source, std::string& translated, int depth);
-bool TranslateInternal(const char* source, std::string& translated, int depth);
-bool TryTranslateMuxQuestPrompt(const std::string& source, std::string& translated, int depth);
-bool TryTranslateItemEffectList(const std::string& source, std::string& translated, int depth);
+	bool MatchWildcard(const DictionaryEntry& entry, const std::string& key, std::vector<std::string>& captures);
+	bool ExpandTarget(const DictionaryEntry& entry, const std::vector<std::string>& captures, std::string& translated, int depth);
+	bool TryTranslateExactText(const std::string& source, std::string& translated, int depth);
+	bool TranslateInternal(const char* source, std::string& translated, int depth);
+	bool TryTranslateMuxQuestPrompt(const std::string& source, std::string& translated, int depth);
+	bool TryTranslateItemEffectList(const std::string& source, std::string& translated, int depth);
+	bool TryTranslatePerkDescription(const std::string& source, std::string& translated, int depth);
 	bool TryTranslateRegexText(const std::string& source, std::string& translated);
 	bool TryTranslateFuzzyText(const std::string& source, std::string& translated, int depth);
 	void ResetFuzzyTextConfig();
+	void ResetPerkRequirementConfig();
 	void LoadFuzzyTextConfig(pugi::xml_node root);
+	void LoadPerkRequirementConfig(pugi::xml_node root);
 	bool HasTranslationRegexRules();
 	size_t GetTranslationRegexRuleCount();
 	void LoadUiHintConfig(pugi::xml_node root);
