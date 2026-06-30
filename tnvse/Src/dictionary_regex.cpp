@@ -1,6 +1,7 @@
 #include "dictionary_internal.h"
 #include "load_config.h"
 
+#include <cctype>
 #include <regex>
 
 namespace fonthook
@@ -28,6 +29,14 @@ namespace fonthook
 			std::string stem;
 			std::string suffix;
 			bool changed = false;
+		};
+
+		struct RegexMappedSource
+		{
+			std::string original;
+			std::string text;
+			std::vector<size_t> rawBegin;
+			std::vector<size_t> rawEnd;
 		};
 
 		FuzzyRegexRule s_trimPrefixRegex;
@@ -231,12 +240,84 @@ namespace fonthook
 			return text.substr(0, begin + 1) + translatedInner + text.substr(end);
 		}
 
-		std::string PrepareSourceForRegexLookup(std::string text)
+		RegexMappedSource PrepareSourceForRegexLookup(const std::string& source)
 		{
-			RemoveControlChars(text);
-			ReplaceAll(text, "\r\n", "\n");
-			ReplaceAll(text, "\r", "\n");
-			return text;
+			RegexMappedSource mapped;
+			mapped.original = source;
+			mapped.text.reserve(source.size());
+			mapped.rawBegin.reserve(source.size());
+			mapped.rawEnd.reserve(source.size());
+
+			for (size_t i = 0; i < source.size();)
+			{
+				const unsigned char ch = static_cast<unsigned char>(source[i]);
+				if (source[i] == '\r')
+				{
+					const bool crlf = i + 1 < source.size() && source[i + 1] == '\n';
+					mapped.text.push_back('\n');
+					mapped.rawBegin.push_back(i);
+					mapped.rawEnd.push_back(i + (crlf ? 2 : 1));
+					i += crlf ? 2 : 1;
+					continue;
+				}
+
+				if (source[i] == '\n' || source[i] == '\t' || !std::iscntrl(ch))
+				{
+					mapped.text.push_back(source[i]);
+					mapped.rawBegin.push_back(i);
+					mapped.rawEnd.push_back(i + 1);
+				}
+				++i;
+			}
+
+			return mapped;
+		}
+
+		bool HasValidRegexMappedSource(const RegexMappedSource& mapped)
+		{
+			return mapped.text.size() == mapped.rawBegin.size() &&
+				mapped.text.size() == mapped.rawEnd.size();
+		}
+
+		std::string RawMappedRange(const RegexMappedSource& mapped, size_t begin, size_t length)
+		{
+			if (!HasValidRegexMappedSource(mapped) || length == 0 || begin >= mapped.text.size())
+				return {};
+			const size_t end = begin + length;
+			if (end > mapped.text.size())
+				return {};
+
+			const size_t rawBegin = mapped.rawBegin[begin];
+			const size_t rawEnd = mapped.rawEnd[end - 1];
+			if (rawBegin >= rawEnd || rawEnd > mapped.original.size())
+				return {};
+			return mapped.original.substr(rawBegin, rawEnd - rawBegin);
+		}
+
+		const char* DetectSourceLineBreak(const std::string& source)
+		{
+			if (source.find("\r\n") != std::string::npos)
+				return "\r\n";
+			if (source.find('\r') != std::string::npos)
+				return "\r";
+			return "\n";
+		}
+
+		std::string ApplyLineBreakStyle(std::string text, const char* lineBreak)
+		{
+			if (std::string(lineBreak) == "\n" || text.find('\n') == std::string::npos)
+				return text;
+
+			std::string result;
+			result.reserve(text.size());
+			for (char ch : text)
+			{
+				if (ch == '\n')
+					result += lineBreak;
+				else
+					result.push_back(ch);
+			}
+			return result;
 		}
 	}
 
@@ -245,17 +326,25 @@ namespace fonthook
 		if (s_translationRegexRules.empty())
 			return false;
 
-		const std::string regexSource = PrepareSourceForRegexLookup(source);
+		const RegexMappedSource regexSource = PrepareSourceForRegexLookup(source);
+		const char* sourceLineBreak = DetectSourceLineBreak(source);
 		for (const auto& rule : s_translationRegexRules)
 		{
 			std::smatch match;
-			if (!std::regex_match(regexSource, match, rule.regex))
+			if (!std::regex_match(regexSource.text, match, rule.regex))
 				continue;
 
-			std::string result = rule.replacement;
+			std::string result = ApplyLineBreakStyle(rule.replacement, sourceLineBreak);
 			for (int i = static_cast<int>(match.size()) - 1; i >= 1; --i)
 			{
-				std::string capture = match[i].str();
+				std::string capture;
+				if (match[i].matched && match.position(i) >= 0)
+				{
+					capture = RawMappedRange(
+						regexSource,
+						static_cast<size_t>(match.position(i)),
+						static_cast<size_t>(match.length(i)));
+				}
 				std::string translatedCapture;
 				TranslateInternal(capture.c_str(), translatedCapture, 0);
 				const std::string& replacement = translatedCapture.empty() ? capture : translatedCapture;

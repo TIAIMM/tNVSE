@@ -3,6 +3,7 @@
 #include "native_calls.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace fonthook
 {
@@ -26,6 +27,172 @@ namespace fonthook
 			bool exact = false;
 			bool found = false;
 		};
+
+		struct MappedPreparedSource
+		{
+			std::string original;
+			std::string text;
+			std::string key;
+			std::vector<size_t> rawBegin;
+			std::vector<size_t> rawEnd;
+		};
+
+		struct MappedChar
+		{
+			char ch = 0;
+			size_t rawBegin = 0;
+			size_t rawEnd = 0;
+		};
+
+		bool IsSourceWhitespace(char ch)
+		{
+			return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\v' || ch == '\f';
+		}
+
+		bool IsAsciiAlpha(char ch)
+		{
+			return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+		}
+
+		char ToLowerAsciiChar(char ch)
+		{
+			if (ch >= 'A' && ch <= 'Z')
+				return static_cast<char>(ch + ('a' - 'A'));
+			return ch;
+		}
+
+		bool IsSourceBreakTag(const std::string& text, size_t tagBegin, size_t tagEnd)
+		{
+			size_t pos = tagBegin + 1;
+			while (pos < tagEnd && IsSourceWhitespace(text[pos]))
+				++pos;
+			if (pos < tagEnd && text[pos] == '/')
+			{
+				++pos;
+				while (pos < tagEnd && IsSourceWhitespace(text[pos]))
+					++pos;
+			}
+
+			const size_t nameBegin = pos;
+			while (pos < tagEnd && IsAsciiAlpha(text[pos]))
+				++pos;
+			const size_t nameLength = pos - nameBegin;
+			if (nameLength == 0)
+				return false;
+
+			const bool isParagraph = nameLength == 1 && ToLowerAsciiChar(text[nameBegin]) == 'p';
+			const bool isDiv =
+				nameLength == 3 &&
+				ToLowerAsciiChar(text[nameBegin]) == 'd' &&
+				ToLowerAsciiChar(text[nameBegin + 1]) == 'i' &&
+				ToLowerAsciiChar(text[nameBegin + 2]) == 'v';
+			if (!isParagraph && !isDiv)
+				return false;
+
+			return pos == tagEnd || IsSourceWhitespace(text[pos]) || text[pos] == '/';
+		}
+
+		char Correct1252Char(char ch)
+		{
+			static constexpr char table[129] =
+				"                 ''\"\"                                           AAA A ACEEEEIIII NOOO O  UUUU  saaa a aceeeeiiii nooo o  uuuu   ";
+			const UInt8 c = (UInt8)ch;
+			if (c >= 128)
+				return table[c - 128];
+			return ch;
+		}
+
+		MappedPreparedSource PrepareSourceForLookupMapped(const std::string& source)
+		{
+			MappedPreparedSource mapped;
+			mapped.original = source;
+
+			std::vector<MappedChar> units;
+			units.reserve(source.size());
+			for (size_t i = 0; i < source.size();)
+			{
+				if (source[i] == '<')
+				{
+					const size_t end = source.find('>', i + 1);
+					if (end != std::string::npos && IsSourceBreakTag(source, i, end))
+					{
+						units.push_back({ ' ', i, end + 1 });
+						i = end + 1;
+						continue;
+					}
+				}
+
+				const unsigned char ch = static_cast<unsigned char>(source[i]);
+				if (IsSourceWhitespace(source[i]))
+				{
+					units.push_back({ ' ', i, i + 1 });
+				}
+				else if (!std::iscntrl(ch))
+				{
+					units.push_back({ Correct1252Char(source[i]), i, i + 1 });
+				}
+				++i;
+			}
+
+			std::vector<MappedChar> collapsed;
+			collapsed.reserve(units.size());
+			for (const MappedChar& unit : units)
+			{
+				if (IsSourceWhitespace(unit.ch))
+				{
+					if (!collapsed.empty() && collapsed.back().ch == ' ')
+					{
+						collapsed.back().rawEnd = unit.rawEnd;
+					}
+					else
+					{
+						collapsed.push_back({ ' ', unit.rawBegin, unit.rawEnd });
+					}
+				}
+				else
+				{
+					collapsed.push_back(unit);
+				}
+			}
+
+			size_t begin = 0;
+			while (begin < collapsed.size() && collapsed[begin].ch == ' ')
+				++begin;
+			size_t end = collapsed.size();
+			while (end > begin && collapsed[end - 1].ch == ' ')
+				--end;
+
+			mapped.text.reserve(end - begin);
+			mapped.key.reserve(end - begin);
+			mapped.rawBegin.reserve(end - begin);
+			mapped.rawEnd.reserve(end - begin);
+			for (size_t i = begin; i < end; ++i)
+			{
+				mapped.text.push_back(collapsed[i].ch);
+				mapped.key.push_back(ToLowerAsciiChar(collapsed[i].ch));
+				mapped.rawBegin.push_back(collapsed[i].rawBegin);
+				mapped.rawEnd.push_back(collapsed[i].rawEnd);
+			}
+			return mapped;
+		}
+
+		bool HasValidMappedSource(const MappedPreparedSource& mapped)
+		{
+			return mapped.text.size() == mapped.key.size() &&
+				mapped.text.size() == mapped.rawBegin.size() &&
+				mapped.text.size() == mapped.rawEnd.size();
+		}
+
+		std::string RawMappedRange(const MappedPreparedSource& mapped, size_t begin, size_t end)
+		{
+			if (!HasValidMappedSource(mapped) || begin >= end || end > mapped.text.size())
+				return {};
+			const size_t rawBegin = mapped.rawBegin[begin];
+			const size_t rawEnd = mapped.rawEnd[end - 1];
+			if (rawBegin >= rawEnd || rawEnd > mapped.original.size())
+				return {};
+			return mapped.original.substr(rawBegin, rawEnd - rawBegin);
+		}
 
 		// Resolve &variable; escape sequences in-place using the game engine.
 		// Returns true if any variables were resolved.
@@ -88,7 +255,8 @@ namespace fonthook
 			if (changed)
 				text.swap(result);
 			return changed;
-	}
+		}
+
 		std::string StripLeadingId(std::string text, std::string& id)
 		{
 			id.clear();
@@ -298,10 +466,10 @@ namespace fonthook
 		bool MatchWildcardWithCaptureSource(
 			const DictionaryEntry& entry,
 			const std::string& key,
-			const std::string& captureSource,
+			const MappedPreparedSource* mappedSource,
 			std::vector<std::string>& captures)
 		{
-			if (captureSource.size() != key.size())
+			if (!mappedSource || !HasValidMappedSource(*mappedSource) || mappedSource->key != key)
 				return MatchWildcard(entry, key, captures);
 
 			captures.clear();
@@ -322,7 +490,7 @@ namespace fonthook
 					return false;
 
 				if (found > cursor)
-					captures.push_back(captureSource.substr(cursor, found - cursor));
+					captures.push_back(RawMappedRange(*mappedSource, cursor, found));
 				else if (i > 0)
 					captures.emplace_back();
 				cursor = found + token.size();
@@ -331,7 +499,7 @@ namespace fonthook
 			if (!endsWithBind && cursor != key.size())
 				return false;
 			if (endsWithBind)
-				captures.push_back(captureSource.substr(cursor));
+				captures.push_back(RawMappedRange(*mappedSource, cursor, key.size()));
 
 			while (captures.size() < entry.bindCount)
 				captures.emplace_back();
@@ -342,7 +510,7 @@ namespace fonthook
 			const std::string& key,
 			PreparedTranslationMatch& match,
 			int depth,
-			const std::string* captureSource = nullptr)
+			const MappedPreparedSource* mappedSource = nullptr)
 		{
 			match = PreparedTranslationMatch{};
 
@@ -364,9 +532,7 @@ namespace fonthook
 				if (key.size() < entry.lengthWithoutBinds)
 					continue;
 
-				const std::string& wildcardCaptureSource =
-					(captureSource && captureSource->size() == key.size()) ? *captureSource : key;
-				if (MatchWildcardWithCaptureSource(entry, key, wildcardCaptureSource, captures) &&
+				if (MatchWildcardWithCaptureSource(entry, key, mappedSource, captures) &&
 					ExpandTarget(entry, captures, match.translated, depth))
 				{
 					match.entryIndex = index;
@@ -383,11 +549,11 @@ namespace fonthook
 			const std::string& key,
 			PreparedTranslationMatch& match,
 			int depth,
-			const std::string* captureSource = nullptr)
+			const MappedPreparedSource* mappedSource = nullptr)
 		{
 			if (TryTranslateExactKey(key, match, depth))
 				return true;
-			return TryTranslateWildcardKey(key, match, depth, captureSource);
+			return TryTranslateWildcardKey(key, match, depth, mappedSource);
 		}
 
 		bool TryTranslateBeforeLinebreakText(const std::string& source, std::string& translated, int depth)
@@ -469,16 +635,15 @@ namespace fonthook
 			if (!HasAlphabet(candidateText))
 				return false;
 
-			std::string captureSource = PrepareSourceForLookupPreserveCase(candidateText);
-			std::string key = captureSource;
-			ToLowerAscii(key);
+			MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(candidateText);
+			std::string key = mappedSource.key;
 			if (key.empty() || key == fullKey)
 				return false;
 			if (!searchedKeys.insert(key).second)
 				return false;
 
 			PreparedTranslationMatch match;
-			if (!TryTranslatePreparedKey(key, match, depth, &captureSource))
+			if (!TryTranslatePreparedKey(key, match, depth, &mappedSource))
 				return false;
 
 			result.side = side;
@@ -639,9 +804,8 @@ namespace fonthook
 			raw = withoutId;
 		}
 
-		std::string captureSource = PrepareSourceForLookupPreserveCase(raw);
-		std::string key = captureSource;
-		ToLowerAscii(key);
+		MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(raw);
+		std::string key = mappedSource.key;
 		PreparedTranslationMatch fullMatch;
 		if (TryTranslateExactKey(key, fullMatch, depth))
 		{
@@ -672,7 +836,7 @@ namespace fonthook
 			return true;
 		}
 
-		if (TryTranslateWildcardKey(key, fullMatch, depth, &captureSource))
+		if (TryTranslateWildcardKey(key, fullMatch, depth, &mappedSource))
 		{
 			translated = fullMatch.translated;
 			if (g_bEnableDictionaryTranslationLog)
