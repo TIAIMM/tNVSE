@@ -345,23 +345,20 @@ namespace fonthook
 			return "\xE6\xB2\xA1\xE6\x9C\x89";
 		}
 
-		std::string FindConfigText(pugi::xml_node reNode, const char* id)
+		std::string FindChildText(pugi::xml_node parent, const char* nodeName)
 		{
-			for (auto node : reNode.children("config"))
-			{
-				if (std::string(node.attribute("id").as_string("")) == id)
-				{
-					std::string text = node.text().as_string("");
-					TrimAsciiWhitespace(text);
-					return text;
-				}
-			}
-			return {};
+			pugi::xml_node node = parent.child(nodeName);
+			if (!node)
+				return {};
+
+			std::string text = node.text().as_string("");
+			TrimAsciiWhitespace(text);
+			return text;
 		}
 
-		std::string LoadConfigText(pugi::xml_node reNode, const char* id, const char* defaultText)
+		std::string LoadPerkConfigText(pugi::xml_node perkNode, const char* nodeName, const char* defaultText)
 		{
-			std::string text = reNode ? FindConfigText(reNode, id) : std::string{};
+			std::string text = perkNode ? FindChildText(perkNode, nodeName) : std::string{};
 			if (text.empty())
 				text = defaultText;
 			return PrepareTarget(std::move(text));
@@ -609,14 +606,14 @@ namespace fonthook
 
 	void LoadPerkRequirementConfig(pugi::xml_node root)
 	{
-		pugi::xml_node reNode = root.child("regularexpressions");
-		s_perkRequirementConfig.reqText = LoadConfigText(reNode, "PerkRequirementReqText", DefaultReqText());
-		s_perkRequirementConfig.ranksText = LoadConfigText(reNode, "PerkRequirementRanksText", DefaultRanksText());
-		s_perkRequirementConfig.sourceText = LoadConfigText(reNode, "PerkRequirementSourceText", DefaultSourceText());
-		s_perkRequirementConfig.levelSuffix = LoadConfigText(reNode, "PerkRequirementLevelSuffix", DefaultLevelSuffix());
-		s_perkRequirementConfig.andText = LoadConfigText(reNode, "PerkRequirementAndText", DefaultAndText());
-		s_perkRequirementConfig.orText = LoadConfigText(reNode, "PerkRequirementOrText", DefaultOrText());
-		s_perkRequirementConfig.notText = LoadConfigText(reNode, "PerkRequirementNotText", DefaultNotText());
+		pugi::xml_node perkNode = root.child("perkrequirements");
+		s_perkRequirementConfig.reqText = LoadPerkConfigText(perkNode, "req", DefaultReqText());
+		s_perkRequirementConfig.ranksText = LoadPerkConfigText(perkNode, "ranks", DefaultRanksText());
+		s_perkRequirementConfig.sourceText = LoadPerkConfigText(perkNode, "source", DefaultSourceText());
+		s_perkRequirementConfig.levelSuffix = LoadPerkConfigText(perkNode, "levelSuffix", DefaultLevelSuffix());
+		s_perkRequirementConfig.andText = LoadPerkConfigText(perkNode, "and", DefaultAndText());
+		s_perkRequirementConfig.orText = LoadPerkConfigText(perkNode, "or", DefaultOrText());
+		s_perkRequirementConfig.notText = LoadPerkConfigText(perkNode, "not", DefaultNotText());
 
 		if (g_bEnableDictionaryTranslationLog)
 		{
