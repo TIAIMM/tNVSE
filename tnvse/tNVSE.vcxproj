@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="packages\YY.NuGet.Import.Helper.1.0.2\build\native\YY.NuGet.Import.Helper.props" Condition="Exists('packages\YY.NuGet.Import.Helper.1.0.2\build\native\YY.NuGet.Import.Helper.props')" />
+  <Import Project="packages\VC-LTL.5.3.1\build\native\VC-LTL.props" Condition="Exists('packages\VC-LTL.5.3.1\build\native\VC-LTL.props')" />
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
       <Configuration>Debug</Configuration>
@@ -12,7 +14,7 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{AE7CFEE7-4058-4E3C-ADC2-AE7480EE2028}</ProjectGuid>
-    <RootNamespace>nvse_plugin_example</RootNamespace>
+    <RootNamespace>tnvse</RootNamespace>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <ProjectName>tnvse</ProjectName>
@@ -20,14 +22,18 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
     <WholeProgramOptimization>true</WholeProgramOptimization>
+    <SupportLTL>true</SupportLTL>
+    <WindowsTargetPlatformMinVersion>5.0.2195.0</WindowsTargetPlatformMinVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
+    <SupportLTL>true</SupportLTL>
+    <WindowsTargetPlatformMinVersion>5.0.2195.0</WindowsTargetPlatformMinVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -46,7 +52,7 @@
     <OutDir>$(SolutionDir)\Build\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\Build\tmp\$(Configuration)\</IntDir>
     <LinkIncremental>true</LinkIncremental>
-    <LibraryPath>$(DXSDK_DIR)\Lib\x86;$(ProjectDir)..\commonlib_nv\Debug;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
+    <LibraryPath>$(DXSDK_DIR)\Lib\x86;$(ProjectDir)..\commonlib_nv\Build\Debug;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
     <IncludePath>$(ProjectDir)Src;$(ProjectDir)..\commonlib_nv\Include\Utils;$(ProjectDir)..\commonlib_nv\Include;$(ProjectDir)..\commonlib_nv\Include\Gamebryo;$(ProjectDir)..\commonlib_nv\Include\Havok;$(ProjectDir)..\commonlib_nv\Include\Bethesda;$(DXSDK_DIR)Include</IncludePath>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
   </PropertyGroup>
@@ -55,7 +61,7 @@
     <IntDir>$(SolutionDir)\Build\tmp\$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
     <IncludePath>$(ProjectDir)Src;$(ProjectDir)..\commonlib_nv\Include\Utils;$(ProjectDir)..\commonlib_nv\Include;$(ProjectDir)..\commonlib_nv\Include\Gamebryo;$(ProjectDir)..\commonlib_nv\Include\Havok;$(ProjectDir)..\commonlib_nv\Include\Bethesda;$(DXSDK_DIR)Include</IncludePath>
-    <LibraryPath>$(DXSDK_DIR)\Lib\x86;$(ProjectDir)..\commonlib_nv\Release;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
+    <LibraryPath>$(DXSDK_DIR)\Lib\x86;$(ProjectDir)..\commonlib_nv\Build\Release;$(VC_LibraryPath_x86);$(WindowsSDK_LibraryPath_x86)</LibraryPath>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath)</ExternalIncludePath>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
@@ -99,7 +105,7 @@
     </Link>
     <PostBuildEvent>
       <Message>Installing DLL...</Message>
-      <Command>copy "$(TargetPath)" "E:\NVCNTest\MO2\mods\tNVSE\NVSE\plugins\$(TargetFileName)"</Command>
+      <Command>copy "$(TargetPath)" "$(NVSE_PLUGIN_PATH)\$(TargetFileName)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -136,13 +142,20 @@
     </Link>
     <PostBuildEvent>
       <Message>Installing DLL...</Message>
-      <Command>copy "$(TargetPath)" "E:\NVCNTest\MO2\mods\tNVSE\NVSE\plugins\$(TargetFileName)"</Command>
+      <Command>copy "$(TargetPath)" "$(NVSE_PLUGIN_PATH)\$(TargetFileName)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
-    <ClCompile Include="Src\fonthook.cpp" />
-    <ClCompile Include="Src\loadconfig.cpp" />
+    <ClCompile Include="Src\encoding.cpp" />
+    <ClCompile Include="Src\native_calls.cpp" />
+    <ClCompile Include="Src\font_engine.cpp" />
+    <ClCompile Include="Src\font_manager.cpp" />
+    <ClCompile Include="Src\save_name.cpp" />
+    <ClCompile Include="Src\text_hooks.cpp" />
+    <ClCompile Include="Src\game_hooks.cpp" />
+    <ClCompile Include="Src\font_hook.cpp" />
+    <ClCompile Include="Src\load_config.cpp" />
     <ClCompile Include="Src\tnvse.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -150,20 +163,34 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Src\fonthook.h" />
-    <ClInclude Include="Src\loadconfig.h" />
+    <ClInclude Include="Src\encoding.h" />
+    <ClInclude Include="Src\native_calls.h" />
+    <ClInclude Include="Src\font_engine.h" />
+    <ClInclude Include="Src\font_manager.h" />
+    <ClInclude Include="Src\save_name.h" />
+    <ClInclude Include="Src\text_hooks.h" />
+    <ClInclude Include="Src\game_hooks.h" />
+    <ClInclude Include="Src\font_hook.h" />
+    <ClInclude Include="Src\load_config.h" />
     <ClInclude Include="Src\nvse\PluginAPI.h" />
     <ClInclude Include="Src\tnvse.h" />
-    <ClInclude Include="Src\uidecode.h" />
+    <ClInclude Include="Src\globals.h" />
+    <ClInclude Include="Src\ui_decode.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets" Condition="Exists('packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets')" />
+    <Import Project="packages\YY-Thunks.1.2.1\build\native\YY-Thunks.targets" Condition="Exists('packages\YY-Thunks.1.2.1\build\native\YY-Thunks.targets')" />
+    <Import Project="packages\YY.NuGet.Import.Helper.1.0.2\build\native\YY.NuGet.Import.Helper.targets" Condition="Exists('packages\YY.NuGet.Import.Helper.1.0.2\build\native\YY.NuGet.Import.Helper.targets')" />
   </ImportGroup>
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
     <PropertyGroup>
       <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
     </PropertyGroup>
     <Error Condition="!Exists('packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets'))" />
+    <Error Condition="!Exists('packages\YY-Thunks.1.2.1\build\native\YY-Thunks.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\YY-Thunks.1.2.1\build\native\YY-Thunks.targets'))" />
+    <Error Condition="!Exists('packages\VC-LTL.5.3.1\build\native\VC-LTL.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\VC-LTL.5.3.1\build\native\VC-LTL.props'))" />
+    <Error Condition="!Exists('packages\YY.NuGet.Import.Helper.1.0.2\build\native\YY.NuGet.Import.Helper.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\YY.NuGet.Import.Helper.1.0.2\build\native\YY.NuGet.Import.Helper.props'))" />
+    <Error Condition="!Exists('packages\YY.NuGet.Import.Helper.1.0.2\build\native\YY.NuGet.Import.Helper.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\YY.NuGet.Import.Helper.1.0.2\build\native\YY.NuGet.Import.Helper.targets'))" />
   </Target>
 </Project>

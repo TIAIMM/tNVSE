@@ -1,43 +1,100 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="dllmain.cpp" />
-    <ClCompile Include="Src\tnvse.cpp" />
-    <ClCompile Include="Src\fonthook.cpp">
-      <Filter>fonthook</Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Source Files\Font" />
+    <Filter Include="Source Files\Hooks" />
+    <Filter Include="Source Files\Config" />
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Header Files\Font" />
+    <Filter Include="Header Files\Hooks" />
+    <Filter Include="Header Files\Config" />
+    <Filter Include="Header Files\NVSE" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dllmain.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Src\loadconfig.cpp">
-      <Filter>loadconfig</Filter>
+    <ClCompile Include="Src\tnvse.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\encoding.cpp">
+      <Filter>Source Files\Font</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_engine.cpp">
+      <Filter>Source Files\Font</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_hook.cpp">
+      <Filter>Source Files\Font</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_manager.cpp">
+      <Filter>Source Files\Font</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\game_hooks.cpp">
+      <Filter>Source Files\Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\text_hooks.cpp">
+      <Filter>Source Files\Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\native_calls.cpp">
+      <Filter>Source Files\Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\save_name.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\load_config.cpp">
+      <Filter>Source Files\Config</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Src\fonthook.h">
-      <Filter>fonthook</Filter>
+    <ClInclude Include="Src\tnvse.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Src\uidecode.h">
-      <Filter>fonthook</Filter>
+    <ClInclude Include="Src\globals.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Src\loadconfig.h">
-      <Filter>loadconfig</Filter>
+    <ClInclude Include="Src\encoding.h">
+      <Filter>Header Files\Font</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\font_engine.h">
+      <Filter>Header Files\Font</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\font_hook.h">
+      <Filter>Header Files\Font</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\font_manager.h">
+      <Filter>Header Files\Font</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\ui_decode.h">
+      <Filter>Header Files\Font</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\game_hooks.h">
+      <Filter>Header Files\Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\text_hooks.h">
+      <Filter>Header Files\Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\native_calls.h">
+      <Filter>Header Files\Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\save_name.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\load_config.h">
+      <Filter>Header Files\Config</Filter>
     </ClInclude>
     <ClInclude Include="Src\nvse\PluginAPI.h">
-      <Filter>nvse</Filter>
+      <Filter>Header Files\NVSE</Filter>
     </ClInclude>
-    <ClInclude Include="Src\tnvse.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="exports.def" />
     <None Include="packages.config" />
-  </ItemGroup>
-  <ItemGroup>
-    <Filter Include="fonthook">
-      <UniqueIdentifier>{baa721cc-f897-4680-a187-264319b21672}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="loadconfig">
-      <UniqueIdentifier>{f7219eff-dec6-45f7-99d6-41cd4dcdab2f}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="nvse">
-      <UniqueIdentifier>{ac31691c-9770-41f1-8ae9-62bd2ed526c8}</UniqueIdentifier>
-    </Filter>
   </ItemGroup>
 </Project>

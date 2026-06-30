@@ -1,5 +1,6 @@
 #include <Windows.h>
 
-BOOL WINAPI DllMain(HANDLE, DWORD, LPVOID) {
+BOOL WINAPI DllMain(HANDLE, DWORD, LPVOID)
+{
 	return TRUE;
 }

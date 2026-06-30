@@ -9,9 +9,9 @@
 //#include "ShadowSceneNode.hpp"
 //#include "InterfaceManager.hpp"
 //#include "nvse/PluginAPI.h"
-#include "loadconfig.h"
+#include "load_config.h"
 #include "tnvse.h"
-#include "fonthook.h"
+#include "font_hook.h"
 
 IDebugLog gLog("tnvse.log");
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;
@@ -24,12 +24,15 @@ NVSECommandTableInterface* g_cmdTableInterface = NULL;
 // Config
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
-void MessageHandler(NVSEMessagingInterface::Message* const g_msg) {
-	if (g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop) {
+void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
+{
+	if (g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
+	{
 	}
 }
 
-bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info) {
+bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info)
+{
 	info->infoVersion = PluginInfo::kInfoVersion;
 	info->name = "tNVSE";
 	info->version = 1;
@@ -37,37 +40,49 @@ bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info) {
 	return true;
 }
 
-bool NVSEPlugin_Load(const NVSEInterface* nvse) {
-	if (!nvse->isEditor) {
-		LoadConfig();
+bool NVSEPlugin_Load(const NVSEInterface* nvse)
+{
+	if (nvse->isEditor)
+	{
+		return true;
+	}
 
-		hJIP = GetModuleHandle("jip_nvse.dll");
-		g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);
+	LoadConfig();
 
-		if (g_bChangeJIPBigGunDesc) {
-			if (hJIP) {
-				const PluginInfo* pInfo = g_cmdTableInterface->GetPluginInfoByName("JIP LN NVSE");
-				if (pInfo->version == 5730) {
-					fonthook::InitBigGunsDescHooks();
-				}
+	hJIP = GetModuleHandle("jip_nvse.dll");
+	g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);
+
+	if (g_bChangeJIPBigGunDesc)
+	{
+		if (hJIP)
+		{
+			const PluginInfo* pInfo = g_cmdTableInterface->GetPluginInfoByName("JIP LN NVSE");
+			if (pInfo->version == 5730)
+			{
+				fonthook::InitBigGunsDescHooks();
 			}
 		}
-
-		if (g_uiReorderDoorPrompt == 1) {
-			fonthook::InitDoorPromptHooksCHS();
-		}
-		else if (g_uiReorderDoorPrompt == 2) {
-			fonthook::InitDoorPromptHooksKOR();
-		}
-
-		if (g_bRemovePlural) {
-			fonthook::InitPluralHooks();
-		}
-
-		fonthook::InitVertSpacingHook();
-
-		fonthook::InitFontHook();
 	}
+
+	if (g_uiReorderDoorPrompt == 1)
+	{
+		fonthook::InitDoorPromptHooksCHS();
+	}
+	else if (g_uiReorderDoorPrompt == 2)
+	{
+		fonthook::InitDoorPromptHooksKOR();
+	}
+
+	if (g_bRemovePlural)
+	{
+		fonthook::InitPluralHooks();
+	}
+
+	fonthook::InitVertSpacingHook();
+
+	fonthook::InitFontHook();
+
+	//fonthook::InitSaveNameHook();
 
 	return true;
 }

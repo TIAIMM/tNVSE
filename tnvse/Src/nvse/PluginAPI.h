@@ -9,147 +9,159 @@ class TESForm;
 struct ScriptEventList;
 struct ArrayKey;
 
-namespace PluginAPI {
-    class ArrayAPI;
+namespace PluginAPI
+{
+	class ArrayAPI;
 }
 
 struct PluginInfo;
 
 typedef UInt32 PluginHandle; // treat this as an opaque type
 
-enum : uint32_t {
-    kPluginHandle_Invalid = 0xFFFFFFFF,
+enum : uint32_t
+{
+	kPluginHandle_Invalid = 0xFFFFFFFF,
 };
 
-enum {
-    kInterface_Serialization = 0,
-    kInterface_Console,
+enum
+{
+	kInterface_Serialization = 0,
+	kInterface_Console,
 
-    // Added v0002
-    kInterface_Messaging,
-    kInterface_CommandTable,
+	// Added v0002
+	kInterface_Messaging,
+	kInterface_CommandTable,
 
-    // Added v0004
-    kInterface_StringVar,
-    kInterface_ArrayVar,
-    kInterface_Script,
+	// Added v0004
+	kInterface_StringVar,
+	kInterface_ArrayVar,
+	kInterface_Script,
 
-    // Added v0005 - version bumped to 3
-    kInterface_Data,
-    // Added v0006
-    kInterface_EventManager,
-    kInterface_Logging,
+	// Added v0005 - version bumped to 3
+	kInterface_Data,
+	// Added v0006
+	kInterface_EventManager,
+	kInterface_Logging,
 
-    kInterface_Max
+	kInterface_Max
 };
 
 struct ExpressionEvaluatorUtils;
 
-struct NVSEInterface {
-    UInt32 nvseVersion;
-    UInt32 runtimeVersion;
-    UInt32 editorVersion;
-    UInt32 isEditor;
-    bool (*RegisterCommand)(CommandInfo* info);
-    void (*SetOpcodeBase)(UInt32 opcode);
-    void* (*QueryInterface)(UInt32 id);
-    PluginHandle (*GetPluginHandle)(void);
+struct NVSEInterface
+{
+	UInt32 nvseVersion;
+	UInt32 runtimeVersion;
+	UInt32 editorVersion;
+	UInt32 isEditor;
+	bool (*RegisterCommand)(CommandInfo* info);
+	void (*SetOpcodeBase)(UInt32 opcode);
+	void* (*QueryInterface)(UInt32 id);
+	PluginHandle(*GetPluginHandle)(void);
 };
 
-struct NVSEConsoleInterface {
-    enum {
-        kVersion = 3
-    };
+struct NVSEConsoleInterface
+{
+	enum
+	{
+		kVersion = 3
+	};
 
-    UInt32 version;
-    bool (*RunScriptLine)(const char* buf, TESObjectREFR* object);
-    bool (*RunScriptLine2)(const char* buf, TESObjectREFR* callingRefr, bool bSuppressConsoleOutput);
+	UInt32 version;
+	bool (*RunScriptLine)(const char* buf, TESObjectREFR* object);
+	bool (*RunScriptLine2)(const char* buf, TESObjectREFR* callingRefr, bool bSuppressConsoleOutput);
 };
 
-struct NVSEMessagingInterface {
-    struct Message {
-        const char* sender;
-        UInt32 type;
-        UInt32 dataLen;
-        void* data;
-    };
+struct NVSEMessagingInterface
+{
+	struct Message
+	{
+		const char* sender;
+		UInt32 type;
+		UInt32 dataLen;
+		void* data;
+	};
 
-    typedef void (*EventCallback)(Message* msg);
+	typedef void (*EventCallback)(Message* msg);
 
-    enum {
-        kVersion = 4
-    };
+	enum
+	{
+		kVersion = 4
+	};
 
-    // NVSE messages
-    enum {
-        kMessage_PostLoad, // sent to registered plugins once all plugins have been loaded (no data)
-        kMessage_ExitGame, // exit to windows from main menu or in-game menu
-        kMessage_ExitToMainMenu, // exit to main menu from in-game menu
-        kMessage_LoadGame,
-        // Dispatched immediately before plugin serialization callbacks invoked, after savegame has been read by Fallout
-        // dataLen: length of file path, data: char* file path of .fos savegame file
-        // Receipt of this message does not *guarantee* the serialization callback will be invoked
-        // as there may be no .nvse file associated with the savegame
-        kMessage_SaveGame, // as above
-        kMessage_ScriptPrecompile, // EDITOR+RUNTIME: Dispatched when a script is about to be compiled.
-        // To custom-compile the script yourself during this step, set script->info.compiled to true.
-        // Alternatively, scriptBuffer->errorCode can be set to 1 to prevent the script from compiling entirely.
-        // If custom-compiling, certain Script* variables should be set, and SetEditorID should be called if there was a scriptname extracted.
-        // data: ScriptAndScriptBuffer* to the script + scriptBuffer representing the script under compilation
-        // dataLen: sizeof(ScriptAndScriptBuffer)
-        kMessage_PreLoadGame, // dispatched immediately before savegame is read by Fallout
-        // dataLen: length of file path, data: char* file path of .fos savegame file
-        kMessage_ExitGame_Console, // exit game using 'qqq' console command
-        kMessage_PostLoadGame,
-        //dispatched after an attempt to load a saved game has finished (the game's LoadGame() routine
-        //has returned). You will probably want to handle this event if your plugin uses a Preload callback
-        //as there is a chance that after that callback is invoked the game will encounter an error
-        //while loading the saved game (eg. corrupted save) which may require you to reset some of your
-        //plugin state.
-        //data: bool, true if game successfully loaded, false otherwise */
-        kMessage_PostPostLoad,
-        // sent right after kMessage_PostLoad to facilitate the correct dispatching/registering of messages/listeners
-        // plugins may register as listeners during the first callback while deferring dispatches until the next
-        kMessage_RuntimeScriptError, // dispatched when an NVSE script error is encountered during runtime/
-        // data: char* errorMessageText
-        // added for kVersion = 2
-        kMessage_DeleteGame, // sent right before deleting the .nvse cosave and the .fos save.
-        // dataLen: length of file path, data: char* file path of .fos savegame file
-        kMessage_RenameGame, // sent right before renaming the .nvse cosave and the .fos save.
-        // dataLen: length of old file path, data: char* old file path of .fos savegame file
-        // you are expected to save the data and wait for kMessage_RenameNewGame
-        kMessage_RenameNewGame, // sent right after kMessage_RenameGame.
-        // dataLen: length of new file path, data: char* new file path of .fos savegame file
-        kMessage_NewGame, // sent right before iterating through plugins newGame.
-        // dataLen: 0, data: NULL
-        // added for kVersion == 3
-        kMessage_DeleteGameName, // version of the messages sent with a save file name instead of a save file path.
-        kMessage_RenameGameName,
-        kMessage_RenameNewGameName,
-        // added for kVersion == 4 (xNVSE)
-        kMessage_DeferredInit,
-        kMessage_ClearScriptDataCache,
-        kMessage_MainGameLoop, // called each game loop
-        kMessage_ScriptCompile, // EDITOR: called after successful script compilation in GECK. data: pointer to Script
-        // RUNTIME: also gets called after successful script compilation at runtime via functions.
-        kMessage_EventListDestroyed,
-        // called before a script event list is destroyed, dataLen: 4, data: ScriptEventList* ptr
-        kMessage_PostQueryPlugins, // called after all plugins have been queried
-    };
+	// NVSE messages
+	enum
+	{
+		kMessage_PostLoad, // sent to registered plugins once all plugins have been loaded (no data)
+		kMessage_ExitGame, // exit to windows from main menu or in-game menu
+		kMessage_ExitToMainMenu, // exit to main menu from in-game menu
+		kMessage_LoadGame,
+		// Dispatched immediately before plugin serialization callbacks invoked, after savegame has been read by Fallout
+		// dataLen: length of file path, data: char* file path of .fos savegame file
+		// Receipt of this message does not *guarantee* the serialization callback will be invoked
+		// as there may be no .nvse file associated with the savegame
+		kMessage_SaveGame, // as above
+		kMessage_ScriptPrecompile, // EDITOR+RUNTIME: Dispatched when a script is about to be compiled.
+		// To custom-compile the script yourself during this step, set script->info.compiled to true.
+		// Alternatively, scriptBuffer->errorCode can be set to 1 to prevent the script from compiling entirely.
+		// If custom-compiling, certain Script* variables should be set, and SetEditorID should be called if there was a scriptname extracted.
+		// data: ScriptAndScriptBuffer* to the script + scriptBuffer representing the script under compilation
+		// dataLen: sizeof(ScriptAndScriptBuffer)
+		kMessage_PreLoadGame, // dispatched immediately before savegame is read by Fallout
+		// dataLen: length of file path, data: char* file path of .fos savegame file
+		kMessage_ExitGame_Console, // exit game using 'qqq' console command
+		kMessage_PostLoadGame,
+		//dispatched after an attempt to load a saved game has finished (the game's LoadGame() routine
+		//has returned). You will probably want to handle this event if your plugin uses a Preload callback
+		//as there is a chance that after that callback is invoked the game will encounter an error
+		//while loading the saved game (eg. corrupted save) which may require you to reset some of your
+		//plugin state.
+		//data: bool, true if game successfully loaded, false otherwise */
+		kMessage_PostPostLoad,
+		// sent right after kMessage_PostLoad to facilitate the correct dispatching/registering of messages/listeners
+		// plugins may register as listeners during the first callback while deferring dispatches until the next
+		kMessage_RuntimeScriptError, // dispatched when an NVSE script error is encountered during runtime/
+		// data: char* errorMessageText
+		// added for kVersion = 2
+		kMessage_DeleteGame, // sent right before deleting the .nvse cosave and the .fos save.
+		// dataLen: length of file path, data: char* file path of .fos savegame file
+		kMessage_RenameGame, // sent right before renaming the .nvse cosave and the .fos save.
+		// dataLen: length of old file path, data: char* old file path of .fos savegame file
+		// you are expected to save the data and wait for kMessage_RenameNewGame
+		kMessage_RenameNewGame, // sent right after kMessage_RenameGame.
+		// dataLen: length of new file path, data: char* new file path of .fos savegame file
+		kMessage_NewGame, // sent right before iterating through plugins newGame.
+		// dataLen: 0, data: NULL
+		// added for kVersion == 3
+		kMessage_DeleteGameName, // version of the messages sent with a save file name instead of a save file path.
+		kMessage_RenameGameName,
+		kMessage_RenameNewGameName,
+		// added for kVersion == 4 (xNVSE)
+		kMessage_DeferredInit,
+		kMessage_ClearScriptDataCache,
+		kMessage_MainGameLoop, // called each game loop
+		kMessage_ScriptCompile, // EDITOR: called after successful script compilation in GECK. data: pointer to Script
+		// RUNTIME: also gets called after successful script compilation at runtime via functions.
+		kMessage_EventListDestroyed,
+		// called before a script event list is destroyed, dataLen: 4, data: ScriptEventList* ptr
+		kMessage_PostQueryPlugins, // called after all plugins have been queried
+	};
 
-    UInt32 version;
-    bool (*RegisterListener)(PluginHandle listener, const char* sender, EventCallback handler);
-    bool (*Dispatch)(PluginHandle sender, UInt32 messageType, void* data, UInt32 dataLen, const char* receiver);
+	UInt32 version;
+	bool (*RegisterListener)(PluginHandle listener, const char* sender, EventCallback handler);
+	bool (*Dispatch)(PluginHandle sender, UInt32 messageType, void* data, UInt32 dataLen, const char* receiver);
 };
 
-struct PluginInfo {
-    enum {
-        kInfoVersion = 1
-    };
+struct PluginInfo
+{
+	enum
+	{
+		kInfoVersion = 1
+	};
 
-    UInt32 infoVersion;
-    const char* name;
-    UInt32 version;
+	UInt32 infoVersion;
+	const char* name;
+	UInt32 version;
 };
 
 typedef bool (*_NVSEPlugin_Query)(const NVSEInterface* nvse, PluginInfo* info);
@@ -157,7 +169,8 @@ typedef bool (*_NVSEPlugin_Load)(const NVSEInterface* nvse);
 
 struct NVSECommandTableInterface
 {
-	enum {
+	enum
+	{
 		kVersion = 2
 	};
 
@@ -175,7 +188,8 @@ struct NVSECommandTableInterface
 
 struct NVSEStringVarInterface
 {
-	enum {
+	enum
+	{
 		kVersion = 1
 	};
 
@@ -199,55 +213,56 @@ struct NVSEStringVarInterface
 
 struct NVSESerializationInterface
 {
-    enum
-    {
-        kVersion = 2,
-    };
+	enum
+	{
+		kVersion = 2,
+	};
 
-    typedef void (*EventCallback)(void* reserved);
+	typedef void (*EventCallback)(void* reserved);
 
-    UInt32	version;
-    void	(*SetSaveCallback)(PluginHandle plugin, EventCallback callback);
-    void	(*SetLoadCallback)(PluginHandle plugin, EventCallback callback);
-    void	(*SetNewGameCallback)(PluginHandle plugin, EventCallback callback);
+	UInt32	version;
+	void	(*SetSaveCallback)(PluginHandle plugin, EventCallback callback);
+	void	(*SetLoadCallback)(PluginHandle plugin, EventCallback callback);
+	void	(*SetNewGameCallback)(PluginHandle plugin, EventCallback callback);
 
-    bool	(*WriteRecord)(UInt32 type, UInt32 version, const void* buf, UInt32 length);
-    bool	(*OpenRecord)(UInt32 type, UInt32 version);
-    bool	(*WriteRecordData)(const void* buf, UInt32 length);
+	bool	(*WriteRecord)(UInt32 type, UInt32 version, const void* buf, UInt32 length);
+	bool	(*OpenRecord)(UInt32 type, UInt32 version);
+	bool	(*WriteRecordData)(const void* buf, UInt32 length);
 
-    bool	(*GetNextRecordInfo)(UInt32* type, UInt32* version, UInt32* length);
-    UInt32(*ReadRecordData)(void* buf, UInt32 length);
+	bool	(*GetNextRecordInfo)(UInt32* type, UInt32* version, UInt32* length);
+	UInt32(*ReadRecordData)(void* buf, UInt32 length);
 
-    // take a refid as stored in the loaded save file and resolve it using the currently
-    // loaded list of mods. All refids stored in a save file must be run through this
-    // function to account for changing mod lists. This returns true on success, and false
-    // if the mod owning the RefID was unloaded.
-    bool	(*ResolveRefID)(UInt32 refID, UInt32* outRefID);
+	// take a refid as stored in the loaded save file and resolve it using the currently
+	// loaded list of mods. All refids stored in a save file must be run through this
+	// function to account for changing mod lists. This returns true on success, and false
+	// if the mod owning the RefID was unloaded.
+	bool	(*ResolveRefID)(UInt32 refID, UInt32* outRefID);
 
-    void	(*SetPreLoadCallback)(PluginHandle plugin, EventCallback callback);
+	void	(*SetPreLoadCallback)(PluginHandle plugin, EventCallback callback);
 
-    // returns a full path to the last loaded save game
-    const char* (*GetSavePath)();
+	// returns a full path to the last loaded save game
+	const char* (*GetSavePath)();
 
-    // Peeks at the data without interfiring with the current position
-    UInt32(*PeekRecordData)(void* buf, UInt32 length);
+	// Peeks at the data without interfiring with the current position
+	UInt32(*PeekRecordData)(void* buf, UInt32 length);
 
-    void	(*WriteRecord8)(UInt8 inData);
-    void	(*WriteRecord16)(UInt16 inData);
-    void	(*WriteRecord32)(UInt32 inData);
-    void	(*WriteRecord64)(const void* inData);
+	void	(*WriteRecord8)(UInt8 inData);
+	void	(*WriteRecord16)(UInt16 inData);
+	void	(*WriteRecord32)(UInt32 inData);
+	void	(*WriteRecord64)(const void* inData);
 
-    UInt8(*ReadRecord8)();
-    UInt16(*ReadRecord16)();
-    UInt32(*ReadRecord32)();
-    void	(*ReadRecord64)(void* outData);
+	UInt8(*ReadRecord8)();
+	UInt16(*ReadRecord16)();
+	UInt32(*ReadRecord32)();
+	void	(*ReadRecord64)(void* outData);
 
-    void	(*SkipNBytes)(UInt32 byteNum);
+	void	(*SkipNBytes)(UInt32 byteNum);
 };
 
 struct NVSEArrayVarInterface
 {
-	enum {
+	enum
+	{
 		kVersion = 2
 	};
 
