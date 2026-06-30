@@ -61,6 +61,48 @@ namespace fonthook
 			return ch;
 		}
 
+		bool StartsWithIgnoreCase(const std::string& text, size_t pos, std::string_view pattern)
+		{
+			if (pos + pattern.size() > text.size())
+				return false;
+			for (size_t i = 0; i < pattern.size(); ++i)
+			{
+				if (ToLowerAsciiChar(text[pos + i]) != ToLowerAsciiChar(pattern[i]))
+					return false;
+			}
+			return true;
+		}
+
+		bool TryMatchEscapedSourceWhitespace(const std::string& text, size_t pos, size_t& end)
+		{
+			if (StartsWithIgnoreCase(text, pos, "[CRLF]"))
+			{
+				end = pos + 6;
+				return true;
+			}
+
+			if (pos + 1 >= text.size() || text[pos] != '\\')
+				return false;
+
+			const char code = text[pos + 1];
+			if ((code == 'r' || code == 'R') &&
+				pos + 3 < text.size() &&
+				text[pos + 2] == '\\' &&
+				(text[pos + 3] == 'n' || text[pos + 3] == 'N'))
+			{
+				end = pos + 4;
+				return true;
+			}
+
+			if (code == 'n' || code == 'N' || code == 'r' || code == 'R' || code == 't' || code == 'T')
+			{
+				end = pos + 2;
+				return true;
+			}
+
+			return false;
+		}
+
 		bool IsSourceBreakTag(const std::string& text, size_t tagBegin, size_t tagEnd)
 		{
 			size_t pos = tagBegin + 1;
@@ -111,6 +153,14 @@ namespace fonthook
 			units.reserve(source.size());
 			for (size_t i = 0; i < source.size();)
 			{
+				size_t escapedEnd = 0;
+				if (TryMatchEscapedSourceWhitespace(source, i, escapedEnd))
+				{
+					units.push_back({ ' ', i, escapedEnd });
+					i = escapedEnd;
+					continue;
+				}
+
 				if (source[i] == '<')
 				{
 					const size_t end = source.find('>', i + 1);

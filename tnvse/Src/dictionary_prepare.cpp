@@ -132,6 +132,120 @@ namespace fonthook
 			return true;
 		}
 
+		bool TryMatchEscapedSourceWhitespace(const std::string& text, size_t pos, size_t& end)
+		{
+			if (StartsWithIgnoreCase(text, pos, "[CRLF]"))
+			{
+				end = pos + 6;
+				return true;
+			}
+
+			if (pos + 1 >= text.size() || text[pos] != '\\')
+				return false;
+
+			const char code = text[pos + 1];
+			if ((code == 'r' || code == 'R') &&
+				pos + 3 < text.size() &&
+				text[pos + 2] == '\\' &&
+				(text[pos + 3] == 'n' || text[pos + 3] == 'N'))
+			{
+				end = pos + 4;
+				return true;
+			}
+
+			if (code == 'n' || code == 'N' || code == 'r' || code == 'R' || code == 't' || code == 'T')
+			{
+				end = pos + 2;
+				return true;
+			}
+
+			return false;
+		}
+
+		void NormalizeEscapedSourceWhitespace(std::string& text)
+		{
+			if (text.find('\\') == std::string::npos && text.find('[') == std::string::npos)
+				return;
+
+			std::string result;
+			result.reserve(text.size());
+			bool changed = false;
+
+			for (size_t i = 0; i < text.size();)
+			{
+				size_t end = 0;
+				if (TryMatchEscapedSourceWhitespace(text, i, end))
+				{
+					result.push_back(' ');
+					i = end;
+					changed = true;
+					continue;
+				}
+
+				result.push_back(text[i++]);
+			}
+
+			if (changed)
+				text.swap(result);
+		}
+
+		void NormalizeEscapedTargetWhitespace(std::string& text)
+		{
+			if (text.find('\\') == std::string::npos && text.find('[') == std::string::npos)
+				return;
+
+			std::string result;
+			result.reserve(text.size());
+			bool changed = false;
+
+			for (size_t i = 0; i < text.size();)
+			{
+				if (StartsWithIgnoreCase(text, i, "[CRLF]"))
+				{
+					result.push_back('\n');
+					i += 6;
+					changed = true;
+					continue;
+				}
+
+				if (i + 1 < text.size() && text[i] == '\\')
+				{
+					const char code = text[i + 1];
+					if ((code == 'r' || code == 'R') &&
+						i + 3 < text.size() &&
+						text[i + 2] == '\\' &&
+						(text[i + 3] == 'n' || text[i + 3] == 'N'))
+					{
+						result.push_back('\n');
+						i += 4;
+						changed = true;
+						continue;
+					}
+
+					if (code == 'n' || code == 'N' || code == 'r' || code == 'R')
+					{
+						result.push_back('\n');
+						i += 2;
+						changed = true;
+						continue;
+					}
+
+					if (code == 't' || code == 'T')
+					{
+						result += "    ";
+						i += 2;
+						changed = true;
+						continue;
+					}
+				}
+
+				result.push_back(text[i++]);
+			}
+
+			if (changed)
+				text.swap(result);
+		}
+
 		bool TryMatchPcVariable(const std::string& text, size_t ampPos, size_t& end)
 		{
 			static constexpr std::string_view names[] =
@@ -458,6 +572,7 @@ namespace fonthook
 		Correct1252ToAscii(text);
 		ConvertGameVariablesToBind(text);
 		ConvertFormatSpecifiersToBind(text);
+		NormalizeEscapedSourceWhitespace(text);
 		ReplaceAll(text, "%%", "%"); // escaped percent → literal % (after format conversion)
 		RemoveAlignmentTag(text);
 		ReplaceAll(text, "[QUOTE]", "\"");
@@ -469,6 +584,7 @@ namespace fonthook
 	std::string PrepareSourceForLookup(std::string text)
 	{
 		NormalizeSourceMarkup(text);
+		NormalizeEscapedSourceWhitespace(text);
 		NormalizeSourceWhitespace(text);
 		RemoveControlChars(text);
 		Correct1252ToAscii(text);
@@ -480,6 +596,7 @@ namespace fonthook
 	std::string PrepareSourceForLookupPreserveCase(std::string text)
 	{
 		NormalizeSourceMarkup(text);
+		NormalizeEscapedSourceWhitespace(text);
 		NormalizeSourceWhitespace(text);
 		RemoveControlChars(text);
 		Correct1252ToAscii(text);
@@ -494,9 +611,8 @@ namespace fonthook
 		ConvertGameVariablesToBind(text);
 		ConvertFormatSpecifiersToBind(text);
 		ReplaceAll(text, "%%", "%"); // escaped percent → literal % (after format conversion)
-		ReplaceAll(text, "[CRLF]", "\n");
+		NormalizeEscapedTargetWhitespace(text);
 		ReplaceAll(text, "[QUOTE]", "\"");
-		ReplaceAll(text, "\\n", "\n");
 		ReplaceAll(text, "\t", "    ");
 		if (g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(text.c_str()))
 			text = UTF8ToMultiByteStr(text, g_usingWinEncoding);
