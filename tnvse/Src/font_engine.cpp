@@ -1,6 +1,7 @@
 #include "font_engine.h"
 #include "dictionary.h"
 #include "native_calls.h"
+#include <cmath>
 
 namespace fonthook
 {
@@ -834,9 +835,9 @@ namespace fonthook
 			}
 			else if (textData.xNewText.pString[charIdx] == '\t')
 			{
-				float prevTabX = textPosition.x;
-				AlignLineWidthToTab(textPosition.x, 75.0);
-				textPosition.x = 75.0 - prevTabX + textPosition.x;
+				// 0xEC9130
+				double tabRemainder = fmod(textPosition.x, 75.0);
+				textPosition.x = (float)(textPosition.x + 75.0 - tabRemainder);
 			}
 
 			UInt8 currentChar = textData.xNewText.pString[charIdx];
@@ -974,9 +975,9 @@ namespace fonthook
 			char currentCharValue = apTextString->pString[lineIdx];
 			if (currentCharValue == '\t')
 			{
-				double prevXPos = currentX;
-				AlignLineWidthToTab(currentX, 75.0);
-				currentX = 75.0 - (float)prevXPos + currentX;
+				// 0xEC9130
+				double tabRemainder = fmod(currentX, 75.0);
+				currentX += 75.0 - tabRemainder;
 			}
 			else if (currentCharValue == '\n')
 			{

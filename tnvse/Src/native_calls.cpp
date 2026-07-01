@@ -18,10 +18,10 @@ namespace fonthook
 		return CdeclCall<bool>(0x7073D0, p_varNameBuffer, p_parsedTextBuffer);
 	}
 
-	SInt32 __cdecl AlignLineWidthToTab(double currentWidth, double tabInterval)
-	{
-		return CdeclCall<SInt32>(0xEC9130, currentWidth, tabInterval);
-	}
+	//float __cdecl BSfmod(double currentWidth, double tabInterval)
+	//{
+	//	return CdeclCall<float>(0xEC9130, currentWidth, tabInterval);
+	//}
 
 	void* __cdecl AppendToListTail(void* listNode, void* itemData)
 	{

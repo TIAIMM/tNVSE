@@ -1,6 +1,7 @@
 #include "font_manager.h"
 #include "dictionary.h"
 #include "native_calls.h"
+#include <cmath>
 
 namespace fonthook
 {
@@ -90,9 +91,9 @@ namespace fonthook
 				{
 				case '\t':
 				{
-					double tabStopWidth = currentLineWidth;
-					AlignLineWidthToTab(currentLineWidth, 75.0);
-					currentCharTotalWidth = (float)(75.0 - tabStopWidth);
+					// 0xEC9130
+					double tabRemainder = fmod(currentLineWidth, 75.0);
+					currentCharTotalWidth = (float)(75.0 - tabRemainder);
 					break;
 				}
 				case '\n':
