@@ -18,6 +18,7 @@ namespace fonthook
 		return CdeclCall<bool>(0x7073D0, p_varNameBuffer, p_parsedTextBuffer);
 	}
 
+	// 0xEC62C0
 	UInt32 SafeDoubleToUInt32(double value)
 	{
 		if (value >= 0.0)
@@ -29,6 +30,7 @@ namespace fonthook
 		return static_cast<UInt32>(-value);
 	}
 
+	// 0xEC62C0
 	UInt32 ConditionalFloatToUInt(double value)
 	{
 		if (*(volatile UInt32*)0x01270A6C)
