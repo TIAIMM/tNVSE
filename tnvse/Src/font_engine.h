@@ -17,10 +17,10 @@ namespace fonthook
 	static constexpr UInt32 kExtraGlyphReserve = 24066;
 	static constexpr UInt32 kSentinelMax = 0x7FFFFFFF;
 	static constexpr int kTabWidth = 75;
-	static constexpr UInt8 kSpaceChar = 32;
+	static constexpr UInt8 kSpaceChar = ' ';
 	static constexpr UInt8 kNBSPChar = 160;
 	static constexpr UInt8 kDelChar = 127;
-	static constexpr UInt8 kPipeChar = 124;
+	static constexpr UInt8 kPipeChar = '|';
 
 	// ---- RAII guard for TLS slot management ----
 	class TlsSlotGuard
