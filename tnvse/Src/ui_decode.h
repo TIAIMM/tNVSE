@@ -9,7 +9,6 @@
 #include "NiPoint3.hpp"
 #include "NiProperty.hpp"
 #include "NiSourceTexture.hpp"
-#include "NiTPointerList.hpp"
 #include "NiTexture.hpp"
 #include "NiTexturingProperty.hpp"
 #include "NiTimeController.hpp"
@@ -265,79 +264,6 @@ STATIC_ASSERT(sizeof(Font::TextData) == 0x28);
 class FontManager
 {
 public:
-	// Rich-text path used by FontManager::PrepText (0xA18A30),
-	// FontManager::PrepHypertext (0xA17390), and TextDoc::Render (0xA19060).
-	// Field names are from the Aug 22, 2010 Xbox Release Beta PDB; offsets are
-	// verified against the PC 1.4.0.525 executable.
-	struct TextData
-	{
-		int iDefaultFont;        // 00
-		int iJustification;      // 04: left=1, center=2, right=4
-		NiColorA xColor;         // 08
-		char cLineSep;           // 18
-		UInt8 pad19[3];          // 19
-		int iWidth;              // 1C
-		int iHeight;             // 20
-		int iPageNum;            // 24
-		int iLines;              // 28
-		int iNumPages;           // 2C
-		int iNumLines;           // 30
-		bool bIsHypertext;       // 34
-		UInt8 pad35[3];          // 35
-		BSStringT<char> xNewText;// 38
-	};
-
-	struct CharData
-	{
-		int iFontIndex;          // 00
-		UInt8 cChar;             // 04
-		UInt8 pad05[3];          // 05
-		NiColorA xColor;         // 08
-		int iJustification;      // 18
-		BSStringT<char> xFilename;// 1C: non-empty means IMG/SRC image entry
-		int iWidth;              // 24
-		int iRise;               // 28
-		int iDrop;               // 2C
-		int iLeadingEdge;        // 30
-		int iX;                  // 34
-	};
-
-	struct TextDoc;
-	struct TextPage;
-	struct TextLine
-	{
-		NiTPointerList<CharData*> xChars; // 00
-		int iWidth;                       // 0C
-		int iNextSpacing;                 // 10
-		int iRise;                        // 14
-		int iDrop;                        // 18
-		int iSkippedSpace;                // 1C
-		int iJustify;                     // 20
-		int iPageWidth;                   // 24
-		UInt32 unk28;                     // 28
-		TextPage* pPage;                  // 2C
-	};
-
-	struct TextPage
-	{
-		NiTPointerList<TextLine*> xLines; // 00
-		int iWidth;                       // 0C: widest line on page
-		int iHeight;                      // 10
-		int iPageWidth;                   // 14
-		int iPageHeight;                  // 18
-		int iLastFontHeight;              // 1C
-		int pCharsPerFont[8];             // 20
-		TextDoc* pDoc;                    // 40
-	};
-
-	struct TextDoc
-	{
-		NiTPointerList<TextPage*> xPages; // 00
-		int iPageWidth;                   // 0C
-		int iPageHeight;                  // 10
-		int iPageNum;                     // 14
-	};
-
 	FontManager();
 	~FontManager();
 
@@ -355,12 +281,6 @@ public:
 		return *(FontManager**)0x11F33F8;
 	}
 };
-
-STATIC_ASSERT(sizeof(FontManager::TextData) == 0x40);
-STATIC_ASSERT(sizeof(FontManager::CharData) == 0x38);
-STATIC_ASSERT(sizeof(FontManager::TextLine) == 0x30);
-STATIC_ASSERT(sizeof(FontManager::TextPage) == 0x44);
-STATIC_ASSERT(sizeof(FontManager::TextDoc) == 0x18);
 
 // From JG
 //0x11F33F8
