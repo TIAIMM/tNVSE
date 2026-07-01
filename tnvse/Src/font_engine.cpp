@@ -118,7 +118,7 @@ namespace fonthook
 		}
 
 		// ---- Open and validate font file ----
-		BSFile* fontFile = FileFinder_GetFile(this->pFontFile, (NiFile::OpenMode)0, 0x150000u, 2u);
+		BSFile* fontFile = FileFinder_GetFile(this->pFontFile, (NiFile::OpenMode)0, 0x4000u, 2u);
 		if (!fontFile || !fontFile->m_pFile)
 		{
 			if (fontFile) delete fontFile;
@@ -245,7 +245,7 @@ namespace fonthook
 				this->pFontData->pTextureFiles[textureCount].pFilename);
 
 			BSFile* textureReadStream = FileFinder_GetFile(
-				(const char*)texNameBuffer, (NiFile::OpenMode)0, 0x5000000u, 2u);
+				(const char*)texNameBuffer, (NiFile::OpenMode)0, 0x4000u, 2u);
 			if (!textureReadStream || !textureReadStream->m_pFile)
 			{
 				if (textureReadStream) delete textureReadStream;
