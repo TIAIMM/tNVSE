@@ -49,9 +49,7 @@ namespace fonthook
 	bool IsSJISLeadByte(UInt8 c)
 	{
 		if (c >= 0x81 && c <= 0x9F) return true;
-		if (c >= 0xE0 && c <= 0xEA) return true;
-		if (c == 0xED || c == 0xEE) return true;
-		if (c >= 0xFA && c <= 0xFC) return true;
+		if (c >= 0xE0 && c <= 0xFC) return true;
 		return false;
 	}
 
@@ -81,7 +79,7 @@ namespace fonthook
 	bool IsKoreanTrailByte(UInt8 c)
 	{
 		if (c >= 0x41 && c <= 0x5A) return true;
-		if (c >= 0x61 && c <= 0x7A) return true;
+		if (c >= 0x60 && c <= 0x7A) return true;
 		if (c >= 0x81 && c <= 0xFE) return true;
 		return false;
 	}
