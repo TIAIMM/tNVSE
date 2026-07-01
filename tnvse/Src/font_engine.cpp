@@ -47,9 +47,17 @@ namespace fonthook
 	}
 
 	// ---- Helper: adjust wrap position to avoid splitting a double-byte character ----
-	static UInt32 AdjustWrapPositionForDB(UInt32 insertPos, const char* buffer)
+	static bool TryGetDoubleByteAt(const char* buffer, UInt32 byteIndex, UInt32 bufferLen)
 	{
-		if (insertPos > 0 && IsLeadByte((UInt8)buffer[insertPos - 1]))
+		if (byteIndex + 1 >= bufferLen) return false;
+
+		UInt32 dbCode = 0;
+		return TryDecodeDoubleByte(&buffer[byteIndex], dbCode);
+	}
+
+	static UInt32 AdjustWrapPositionForDB(UInt32 insertPos, const char* buffer, UInt32 bufferLen)
+	{
+		if (insertPos > 0 && TryGetDoubleByteAt(buffer, insertPos - 1, bufferLen))
 		{
 			return insertPos - 1;
 		}
@@ -560,7 +568,7 @@ namespace fonthook
 							textBufferSize += 4;
 							dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, textBufferSize + 1));
 
-							UInt32 insertPos = AdjustWrapPositionForDB(lastWrapPosition, dynamicTextBuffer);
+							UInt32 insertPos = AdjustWrapPositionForDB(lastWrapPosition, dynamicTextBuffer, processedTextLen);
 							memmove(&dynamicTextBuffer[insertPos + 1], &dynamicTextBuffer[insertPos],
 								(processedTextLen - insertPos) + 1);
 							dynamicTextBuffer[insertPos] = axData->cLineSep;
@@ -613,10 +621,10 @@ namespace fonthook
 						UInt32 tailBytes = processedTextLen - tailStart;
 						if (processedTextLen >= 2)
 						{
-							UInt8 lastChar = (UInt8)dynamicTextBuffer[processedTextLen - 1];
-							if (extraGlyphs && IsLeadByte(lastChar))
+							UInt32 dbStart = processedTextLen - 2;
+							if (extraGlyphs && TryGetDoubleByteAt(dynamicTextBuffer, dbStart, processedTextLen))
 							{
-								tailStart = processedTextLen - 2;
+								tailStart = dbStart;
 								tailBytes = processedTextLen - tailStart;
 							}
 						}
