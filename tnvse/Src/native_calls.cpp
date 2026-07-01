@@ -23,10 +23,10 @@ namespace fonthook
 	//	return CdeclCall<float>(0xEC9130, currentWidth, tabInterval);
 	//}
 
-	void* __cdecl AppendToListTail(void* listNode, void* itemData)
-	{
-		return ThisStdCall<void*>(0xAF25B0, listNode, itemData);
-	}
+	//void* __cdecl AppendToListTail(void* listNode, void* itemData)
+	//{
+	//	return ThisStdCall<void*>(0xAF25B0, listNode, itemData);
+	//}
 
 	UInt32 SafeDoubleToUInt32(double value)
 	{
@@ -47,10 +47,10 @@ namespace fonthook
 			return SafeDoubleToUInt32(value);
 	}
 
-	Float32 __stdcall FontManagerGetLinePadding(UInt32 fontID)
-	{
-		return StdCall<Float32>(0xA1B3A0, fontID);
-	}
+	//Float32 __stdcall FontManagerGetLinePadding(UInt32 fontID)
+	//{
+	//	return StdCall<Float32>(0xA1B3A0, fontID);
+	//}
 
 	BSFile* FileFinder_GetFile(
 		const char* apName,

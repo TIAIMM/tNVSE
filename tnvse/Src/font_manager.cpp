@@ -41,7 +41,7 @@ namespace fonthook
 		float fontBaseLine = this->pFont[fontID - 1]->pFontData->fBaseLine;
 		float lastValidWrapPosition = 0.0;
 		float currentLineWidth = 0.0;
-		float fontVerticalSpacingAdjust = FontManagerGetLinePadding(fontID);
+		float fontVerticalSpacingAdjust = FontManager::GetLinePadding(fontID);
 		float previousCharTotalWidth = 0.0;
 		char hasHyphenationPoint = 0;
 		int totalLines = 1;

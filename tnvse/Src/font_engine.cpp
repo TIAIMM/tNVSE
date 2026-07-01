@@ -434,13 +434,13 @@ namespace fonthook
 		// Cache frequently accessed font data to avoid repeated pointer chasing
 		auto* pFontLetters = font->pFontData->pFontLetters;
 		float fBaseLine = font->pFontData->fBaseLine;
-		float lineSpacingAdjust = FontManagerGetLinePadding(font->iFontNum);
+		float lineSpacingAdjust = FontManager::GetLinePadding(font->iFontNum);
 		float lineHeight = fBaseLine + lineSpacingAdjust;
 		UInt32 lastWrapPosition = 0;
-		SInt32 preSpaceWidth = 0;
-		SInt32 postSpaceWidth = 0;
-		SInt32 currentLineWidth = 0;
-		SInt32 maxLineWidth = 0;
+		int preSpaceWidth = 0;
+		int postSpaceWidth = 0;
+		int currentLineWidth = 0;
+		int maxLineWidth = 0;
 		float totalTextHeight = pFontLetters[kSpaceChar].fHeight;
 		int currentLineCount = 1;
 		UInt32 sourceTextLen = strlen(apOrigString);
@@ -486,7 +486,7 @@ namespace fonthook
 					textBufferSize = processedTextLen + 4;
 				}
 				totalTextHeight = lineHeight + totalTextHeight;
-				AppendToListTail(&axData->xLineWidths, &currentLineWidth);
+				axData->xLineWidths.AddTail(currentLineWidth);
 				maxLineWidth = MaxInt(maxLineWidth, currentLineWidth);
 				currentLineWidth = 0;
 				lastWrapPosition = 0;
@@ -566,7 +566,7 @@ namespace fonthook
 							dynamicTextBuffer[insertPos] = axData->cLineSep;
 							processedTextLen += 1;
 
-							AppendToListTail(&axData->xLineWidths, &currentLineWidth);
+							axData->xLineWidths.AddTail(currentLineWidth);
 							maxLineWidth = MaxInt(maxLineWidth, currentLineWidth);
 							lastWrapPosition = 0;
 							++currentLineCount;
@@ -594,7 +594,7 @@ namespace fonthook
 							else
 								dynamicTextBuffer[lastWrapPosition] = axData->cLineSep;
 							totalTextHeight = lineHeight + totalTextHeight;
-							AppendToListTail(&axData->xLineWidths, &preSpaceWidth);
+							axData->xLineWidths.AddTail(preSpaceWidth);
 							maxLineWidth = MaxInt(maxLineWidth, preSpaceWidth);
 							lastWrapPosition = 0;
 							++currentLineCount;
@@ -627,7 +627,7 @@ namespace fonthook
 						processedTextLen += 1;
 						totalTextHeight += lineHeight;
 
-						AppendToListTail(&axData->xLineWidths, &currentLineWidth);
+						axData->xLineWidths.AddTail(currentLineWidth);
 						maxLineWidth = MaxInt(maxLineWidth, currentLineWidth);
 						lastWrapPosition = 0;
 						++currentLineCount;
@@ -723,7 +723,7 @@ namespace fonthook
 			totalTextHeight = pFontLetters[kSpaceChar].fHeight;
 			currentLineWidth = ConditionalFloatToUInt(pFontLetters[kSpaceChar].fWidth);
 		}
-		AppendToListTail(&axData->xLineWidths, &currentLineWidth);
+		axData->xLineWidths.AddTail(currentLineWidth);
 		maxLineWidth = MaxInt(maxLineWidth, currentLineWidth);
 		dynamicTextBuffer[processedTextLen] = 0;
 		axData->xNewText.Set(dynamicTextBuffer, 0);
@@ -763,7 +763,7 @@ namespace fonthook
 		if (!aiLineEnd)
 			aiLineEnd = kSentinelMax;
 
-		float linePadding = FontManagerGetLinePadding(this->iFontNum);
+		float linePadding = FontManager::GetLinePadding(this->iFontNum);
 		ThisStdCall(0x759330, &textData, *aiWidth, *aiHeight, aiLineStart, aiLineEnd, aiLineBreakChar);
 
 		const char* pStr = axTextString->pString;

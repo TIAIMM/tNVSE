@@ -354,6 +354,11 @@ public:
 	{
 		return *(FontManager**)0x11F33F8;
 	}
+
+	__forceinline static Float32 __stdcall GetLinePadding(UInt32 fontID)
+	{
+		return StdCall<Float32>(0xA1B3A0, fontID);
+	}
 };
 
 STATIC_ASSERT(sizeof(FontManager::TextData) == 0x40);
