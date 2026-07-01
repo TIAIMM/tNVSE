@@ -935,6 +935,13 @@ namespace fonthook
 			return true;
 		}
 
+		if (g_bEnableDictionaryTrimBypassFuzzyTranslation && TryTranslateFuzzyText(originalRaw, translated, depth))
+		{
+			s_positiveCache.emplace(cacheKey, translated);
+			TrimPositiveCache();
+			return true;
+		}
+
 		if (g_bEnableDictionaryRegexTranslation && TryTranslateRegexText(raw, translated))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
@@ -950,13 +957,6 @@ namespace fonthook
 		}
 
 		if (g_bEnableDictionaryShrinkFuzzyTranslation && TryTranslateShrinkText(raw, translated, depth))
-		{
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
-			return true;
-		}
-
-		if (g_bEnableDictionaryTrimBypassFuzzyTranslation && TryTranslateFuzzyText(originalRaw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
