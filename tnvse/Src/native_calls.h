@@ -9,15 +9,12 @@ namespace fonthook
 	void __cdecl ConvertToAsciiQuotes(UInt8* currentChar);
 	bool __cdecl Interface_FindTextReplacementString(const char* varName, char* outBuffer, UInt32 bufferSize, bool isPositiveEscape);
 	bool __cdecl Interface_TestConstantForGameSettings(const char* p_varNameBuffer, void* p_parsedTextBuffer);
-	//float __cdecl BSfmod(double currentWidth, double tabInterval);
-	//void* __cdecl AppendToListTail(void* listNode, void* itemData);
 
 	// ---- Float/int conversion helpers ----
 	UInt32 SafeDoubleToUInt32(double value);
 	UInt32 ConditionalFloatToUInt(double value);
 
 	// ---- Font/FontManager helpers ----
-	//Float32 __stdcall FontManagerGetLinePadding(UInt32 fontID);
 	BSFile* FileFinder_GetFile(const char* apName, NiFile::OpenMode aeMode, UInt32 aiSize, UInt32 aiArchiveType);
 
 	// ---- Inline helpers ----
