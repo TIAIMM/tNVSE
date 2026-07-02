@@ -57,6 +57,28 @@ namespace fonthook
 		// FontManager::CalculateStringDimensions
 		WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
 
+		// FontManager::CreateText -> FontManager::PrepText
+		WriteRelCallEx(0xA18F4A, &FontManagerEx::PrepText);
+
+		// FontManager::PrepText -> FontManager::PrepHypertext
+		WriteRelCallEx(0xA18ACC, &FontManagerEx::PrepHypertext);
+
+		// FontManager::CreateText -> TextDoc::Render
+		WriteRelCallEx(0xA18F63, &FontManagerEx::TextDocRender);
+
+		// TextDoc::Render -> Font::AddChar
+		WriteRelCallEx(0xA19622, &FontEx::TextDocRenderAddChar);
+
+		// FontManager::CreateText -> TextDoc::Destroy
+		WriteRelCallEx(0xA18F7D, &FontManagerEx::TextDocDestroy);
+
+		// FontManager::PrepHypertext -> TextDoc::AddChar
+		WriteRelCallEx(0xA178A4, &FontManagerEx::TextDocAddChar_A178A4);
+		WriteRelCallEx(0xA179D9, &FontManagerEx::TextDocAddChar_A179D9);
+		WriteRelCallEx(0xA17FC2, &FontManagerEx::TextDocAddChar_A17FC2);
+		// FontManager::PrepText -> TextDoc::AddChar (non-hypertext comparison)
+		WriteRelCallEx(0xA18D7C, &FontManagerEx::TextDocAddChar_A18D7C);
+
 		// Tile::SetString - Quest Text
 		WriteRelCall(0x77AF4B, &TileSetStringHookForQueueText);
 		// Location Text

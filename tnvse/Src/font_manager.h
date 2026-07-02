@@ -7,12 +7,41 @@
 
 namespace fonthook
 {
+	struct RichTextCharExtra
+	{
+		UInt32 dbcsCode;
+	};
+
+	void SetRichTextCharDbcs(const FontManager::CharData* apChar, UInt32 auiDbcsCode);
+	bool TryGetRichTextCharDbcs(const FontManager::CharData* apChar, UInt32& arDbcsCode);
+	void ClearRichTextCharExtra(const FontManager::CharData* apChar);
+	void ClearRichTextCharExtras();
+
+	struct RichTextRenderAddCharInfo
+	{
+		const FontManager::TextDoc* textDoc;
+		const FontManager::CharData* charData;
+		UInt32 callIndex;
+		UInt32 expectedAddCharCount;
+	};
+
+	void BeginRichTextRenderContext(FontManager::TextDoc* apDoc, FontManager::TextData* apData);
+	void EndRichTextRenderContext(FontManager::TextDoc* apDoc);
+	bool TryConsumeRichTextRenderAddChar(RichTextRenderAddCharInfo& arInfo);
+
 	class FontManagerEx : public FontManager
 	{
 	public:
 		// outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
 		NiPoint3* __thiscall CalculateStringDimensions(NiPoint3* outDimensions, const char* srcString, UInt32 fontID, float maxWrapWidth, UInt32 startCharIndex);
-		UInt32* PrepText(BSStringT<char>* a7, int a3);
+		TextDoc* __thiscall PrepHypertext(BSStringT<char>& arTextString, TextData& arData);
+		TextDoc* __thiscall PrepText(BSStringT<char>& arTextString, TextData& arData);
+		void __thiscall TextDocRender(NiNode* apNode, TextData* apData);
+		void __thiscall TextDocDestroy();
+		void __thiscall TextDocAddChar_A178A4(CharData* apChar, int aiNewLines, bool abNewPage);
+		void __thiscall TextDocAddChar_A179D9(CharData* apChar, int aiNewLines, bool abNewPage);
+		void __thiscall TextDocAddChar_A17FC2(CharData* apChar, int aiNewLines, bool abNewPage);
+		void __thiscall TextDocAddChar_A18D7C(CharData* apChar, int aiNewLines, bool abNewPage);
 	};
 
 } // namespace fonthook

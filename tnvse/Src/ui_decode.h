@@ -5,6 +5,7 @@
 #include "BSString.hpp"
 #include "ITypes.h"
 #include "NiColor.hpp"
+#include "NiNode.hpp"
 #include "NiPersistentSrcTextureRendererData.hpp"
 #include "NiPoint3.hpp"
 #include "NiProperty.hpp"
@@ -192,26 +193,29 @@ struct FontData
 };
 STATIC_ASSERT(sizeof(FontData) == 0x3928);
 
+struct NiRect_float
+{
+	float m_left;
+	float m_right;
+	float m_top;
+	float m_bottom;
+};
+STATIC_ASSERT(sizeof(NiRect_float) == 0x10);
+
+struct ButtonIcon
+{
+	float fWidth;
+	float fXOffset;
+	float fZOffset;
+	float fSpacing;
+	NiRect_float UVCoords;
+};
+STATIC_ASSERT(sizeof(ButtonIcon) == 0x20);
+
 struct  Font
 {
-	struct NiRect_float
-	{
-		float m_left;
-		float m_right;
-		float m_top;
-		float m_bottom;
-	};
-	STATIC_ASSERT(sizeof(NiRect_float) == 0x10);
-
-	struct ButtonIcon
-	{
-		float fWidth;
-		float fXOffset;
-		float fZOffset;
-		float fSpacing;
-		NiRect_float UVCoords;
-	};
-	STATIC_ASSERT(sizeof(ButtonIcon) == 0x20);
+	using NiRect_float = ::NiRect_float;
+	using ButtonIcon = ::ButtonIcon;
 
 	UInt16 iRefCount;
 	char* pFontFile;
@@ -254,6 +258,16 @@ struct  Font
 	__forceinline NiTriShape* MakeIconsTriShape()
 	{
 		return ThisStdCall<NiTriShape*>(0xA14DA0, this);
+	}
+
+	__forceinline static void __cdecl ConvertCharacter(UInt8& arChar)
+	{
+		CdeclCall(0xA122B0, &arChar);
+	}
+
+	__forceinline void AddChar(FontLetter* apLetter, int aiVert, NiTriShape* apShape, NiPoint3* apPosition, const NiColorA* apColor)
+	{
+		ThisStdCall(0xA142D0, this, apLetter, aiVert, apShape, apPosition, apColor);
 	}
 
 };
@@ -300,6 +314,21 @@ public:
 		int iDrop;               // 2C
 		int iLeadingEdge;        // 30
 		int iX;                  // 34
+
+		__forceinline void SetChar(UInt8 acChar)
+		{
+			ThisStdCall(0xA1B7F0, this, acChar);
+		}
+
+		__forceinline CharData* Copy()
+		{
+			return ThisStdCall<CharData*>(0xA1B660, this);
+		}
+
+		__forceinline void RevertToDefault()
+		{
+			ThisStdCall(0xA1B770, this);
+		}
 	};
 
 	struct TextDoc;
@@ -316,6 +345,11 @@ public:
 		int iPageWidth;                   // 24
 		UInt32 unk28;                     // 28
 		TextPage* pPage;                  // 2C
+
+		__forceinline TextLine* AddChar(CharData* apChar, bool abAddHead)
+		{
+			return ThisStdCall<TextLine*>(0xA19F70, this, apChar, abAddHead);
+		}
 	};
 
 	struct TextPage
@@ -328,6 +362,16 @@ public:
 		int iLastFontHeight;              // 1C
 		int pCharsPerFont[8];             // 20
 		TextDoc* pDoc;                    // 40
+
+		__forceinline int GetCharCountForFont(int aiFont)
+		{
+			return ThisStdCall<int>(0xA19B00, this, aiFont);
+		}
+
+		__forceinline TextPage* AddChar(CharData* apChar, int aiNewLines)
+		{
+			return ThisStdCall<TextPage*>(0xA19C00, this, apChar, aiNewLines);
+		}
 	};
 
 	struct TextDoc
@@ -336,6 +380,26 @@ public:
 		int iPageWidth;                   // 0C
 		int iPageHeight;                  // 10
 		int iPageNum;                     // 14
+
+		__forceinline TextPage* CurrentPage()
+		{
+			return ThisStdCall<TextPage*>(0xA18FF0, this);
+		}
+
+		__forceinline void AddChar(CharData* apChar, int aiNewLines, bool abNewPage)
+		{
+			ThisStdCall(0xA19A10, this, apChar, aiNewLines, abNewPage);
+		}
+
+		__forceinline void Render(NiNode* apNode, TextData* apData)
+		{
+			ThisStdCall(0xA19060, this, apNode, apData);
+		}
+
+		__forceinline void Destroy()
+		{
+			ThisStdCall(0xA1B990, this);
+		}
 	};
 
 	FontManager();
@@ -358,6 +422,21 @@ public:
 	__forceinline static Float32 __stdcall GetLinePadding(UInt32 fontID)
 	{
 		return StdCall<Float32>(0xA1B3A0, fontID);
+	}
+
+	__forceinline static int __stdcall GetCharType(char acChar)
+	{
+		return StdCall<int>(0xA16DA0, acChar);
+	}
+
+	__forceinline TextDoc* PrepHypertext(BSStringT<char>& arTextString, TextData& arData)
+	{
+		return ThisStdCall<TextDoc*>(0xA17390, this, &arTextString, &arData);
+	}
+
+	__forceinline TextDoc* PrepText(BSStringT<char>& arTextString, TextData& arData)
+	{
+		return ThisStdCall<TextDoc*>(0xA18A30, this, &arTextString, &arData);
 	}
 };
 

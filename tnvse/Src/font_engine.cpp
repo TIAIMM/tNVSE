@@ -1,5 +1,6 @@
 #include "font_engine.h"
 #include "dictionary.h"
+#include "font_manager.h"
 #include "native_calls.h"
 #include <cmath>
 
@@ -53,6 +54,127 @@ namespace fonthook
 
 		UInt32 dbCode = 0;
 		return TryDecodeDoubleByte(&buffer[byteIndex], dbCode);
+	}
+
+	static constexpr UInt32 kInitialRenderAddCharLogCount = 16;
+
+	static int GetBaseFontGlyphIndex(const Font* apFont, const FontLetter* apLetter)
+	{
+		if (!apFont || !apFont->pFontData || !apLetter)
+			return -1;
+
+		const UInt32 glyphAddr = reinterpret_cast<UInt32>(apLetter);
+		const UInt32 glyphBegin = reinterpret_cast<UInt32>(apFont->pFontData->pFontLetters);
+		const UInt32 glyphEnd = glyphBegin + (sizeof(FontLetter) * kMaxGlyphCount);
+		if (glyphAddr < glyphBegin || glyphAddr >= glyphEnd)
+			return -1;
+
+		const UInt32 glyphOffset = glyphAddr - glyphBegin;
+		if (glyphOffset % sizeof(FontLetter))
+			return -1;
+
+		return glyphOffset / sizeof(FontLetter);
+	}
+
+	static bool ShouldLogTextDocRenderAddChar(
+		const RichTextRenderAddCharInfo& arRenderInfo,
+		bool abHasRenderInfo,
+		const Font* apFont,
+		const FontLetter* apLetter,
+		UInt32 callCount)
+	{
+		if (callCount < kInitialRenderAddCharLogCount)
+			return true;
+
+		const FontManager::CharData* ch = arRenderInfo.charData;
+		UInt32 dbcsCode = 0;
+		if (TryGetRichTextCharDbcs(ch, dbcsCode))
+			return true;
+
+		if (ch && ch->cChar >= 0x80)
+			return true;
+
+		int glyphIndex = GetBaseFontGlyphIndex(apFont, apLetter);
+		if (glyphIndex < 0)
+			return true;
+
+		if (abHasRenderInfo && !ch)
+			return true;
+
+		return ch && glyphIndex != ch->cChar;
+	}
+
+	static void LogTextDocRenderAddChar(
+		Font* apFont,
+		const RichTextRenderAddCharInfo& arRenderInfo,
+		bool abHasRenderInfo,
+		FontLetter* apLetter,
+		int aiVert,
+		NiTriShape* apShape,
+		NiPoint3* apPosition,
+		const NiColorA* apColor,
+		UInt32& arCallCount)
+	{
+		UInt32 callCount = abHasRenderInfo ? arRenderInfo.callIndex : arCallCount++;
+		if (!ShouldLogTextDocRenderAddChar(arRenderInfo, abHasRenderInfo, apFont, apLetter, callCount))
+			return;
+
+		const FontManager::CharData* ch = arRenderInfo.charData;
+		UInt32 dbcsCode = 0;
+		bool isDbcs = TryGetRichTextCharDbcs(ch, dbcsCode);
+		UInt8 charByte = ch ? ch->cChar : 0;
+		char printable = (charByte >= 0x20 && charByte < 0x7F) ? (char)charByte : '.';
+		int glyphIndex = GetBaseFontGlyphIndex(apFont, apLetter);
+		const char* fontFile = apFont && apFont->pFontFile ? apFont->pFontFile : "";
+
+		gLog.FormattedMessage(
+			"tnvse_rich_text_render_addchar:\n"
+			"  callsite=0xA19622 TextDoc::Render -> Font::AddChar\n"
+			"  callIndex=%u\n"
+			"  renderContext: active=%d textDoc=0x%08X expectedAddChars=%u charData=0x%08X\n"
+			"  font=0x%08X fontNum=%d fontFile=\"%s\"\n"
+			"  char: byte=0x%02X ascii='%c' font=%d width=%d rise=%d drop=%d leading=%d x=%d richDbcs=%d dbcsCode=0x%04X\n"
+			"  args: letter=0x%08X vert=%d shape=0x%08X pos=0x%08X color=0x%08X\n"
+			"  glyph: baseGlyphIndex=%d texture=%d width=%.3f height=%.3f leading=%.3f spacing=%.3f top=%.3f\n"
+			"  pos: x=%.3f y=%.3f z=%.3f\n"
+			"  color: r=%.3f g=%.3f b=%.3f a=%.3f",
+			callCount,
+			abHasRenderInfo ? 1 : 0,
+			reinterpret_cast<UInt32>(arRenderInfo.textDoc),
+			arRenderInfo.expectedAddCharCount,
+			reinterpret_cast<UInt32>(ch),
+			reinterpret_cast<UInt32>(apFont),
+			apFont ? apFont->iFontNum : -1,
+			fontFile,
+			charByte,
+			printable,
+			ch ? ch->iFontIndex : -1,
+			ch ? ch->iWidth : -1,
+			ch ? ch->iRise : -1,
+			ch ? ch->iDrop : -1,
+			ch ? ch->iLeadingEdge : -1,
+			ch ? ch->iX : -1,
+			isDbcs ? 1 : 0,
+			isDbcs ? dbcsCode : 0,
+			reinterpret_cast<UInt32>(apLetter),
+			aiVert,
+			reinterpret_cast<UInt32>(apShape),
+			reinterpret_cast<UInt32>(apPosition),
+			reinterpret_cast<UInt32>(apColor),
+			glyphIndex,
+			apLetter ? apLetter->iTextureIndex : -1,
+			apLetter ? apLetter->fWidth : 0.0f,
+			apLetter ? apLetter->fHeight : 0.0f,
+			apLetter ? apLetter->fLeadingEdge : 0.0f,
+			apLetter ? apLetter->fSpacing : 0.0f,
+			apLetter ? apLetter->fTopEdge : 0.0f,
+			apPosition ? apPosition->x : 0.0f,
+			apPosition ? apPosition->y : 0.0f,
+			apPosition ? apPosition->z : 0.0f,
+			apColor ? apColor->r : 0.0f,
+			apColor ? apColor->g : 0.0f,
+			apColor ? apColor->b : 0.0f,
+			apColor ? apColor->a : 0.0f);
 	}
 
 	static UInt32 AdjustWrapPositionForDB(UInt32 insertPos, const char* buffer, UInt32 bufferLen)
@@ -1047,6 +1169,21 @@ namespace fonthook
 		ThisStdCall(0xA7EE30, &pGeomData->m_kBound,
 			pGeomData->m_usVertices, pGeomData->m_pkVertex);
 		return pTriShape;
+	}
+
+	void __thiscall FontEx::TextDocRenderAddChar(
+		FontLetter* apLetter,
+		int aiVert,
+		NiTriShape* apShape,
+		NiPoint3* apPosition,
+		const NiColorA* apColor)
+	{
+		static UInt32 sCallCount = 0;
+		RichTextRenderAddCharInfo renderInfo = {};
+		bool hasRenderInfo = TryConsumeRichTextRenderAddChar(renderInfo);
+		LogTextDocRenderAddChar(this, renderInfo, hasRenderInfo, apLetter,
+			aiVert, apShape, apPosition, apColor, sCallCount);
+		Font::AddChar(apLetter, aiVert, apShape, apPosition, apColor);
 	}
 
 } // namespace fonthook

@@ -66,6 +66,9 @@ namespace fonthook
 			float afStartX, float afStartY, float afZ,
 			BSStringT<char>* apTextString, int* aiWidth, bool abPrepareObject,
 			const NiColorA* arg1C, bool abUpperLeftCorner, bool abPrepareObject_1);
+		void __thiscall TextDocRenderAddChar(
+			FontLetter* apLetter, int aiVert, NiTriShape* apShape,
+			NiPoint3* apPosition, const NiColorA* apColor);
 
 	private:
 		void LoadExtraGlyphs(BSFile* fontFile, UInt32* textureMarkers);
