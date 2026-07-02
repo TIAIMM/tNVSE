@@ -90,7 +90,7 @@ tNVSE 当前已经覆盖了普通 `Font` 文本路径：
 | ---: | --- | --- |
 | `00` | `iFontIndex` | 字体索引，沿用原版语义 |
 | `04` | `cChar` | 原版单字节字符 |
-| `05` | `pad05[3]` | 当前可作为 tNVSE DBCS 扩展标记使用 |
+| `05` | `pad05[3]` | 原版 padding；tNVSE 不在这里保存私有状态 |
 | `08` | `xColor` | 字符颜色 |
 | `18` | `iJustification` | 对齐方式 |
 | `1C` | `xFilename` | 非空时表示 `IMG`/`SRC` 图片项，不应按字符渲染 |
@@ -252,13 +252,9 @@ for (i = 0; i < collectedTextLen; ++i)
 - 将 `iLeadingEdge` 置 `0`。
 - 不复制 `pad05[3]`。
 
-这点非常关键：如果 DBCS 标记存在 `pad05`，原版 `Copy` 会丢失 trail byte 和 flag。因此富文本 hook 不能把 DBCS 标记写在栈上 `CharData` 后再裸调用原版 `Copy`。必须采用以下之一：
+这点非常关键：`pad05[3]` 不是稳定的业务字段，原版 constructor、`SetChar` 和 `Copy` 都不保证它的内容。tNVSE 不应把 DBCS trail byte 或 flag 写进 `pad05`，否则会同时遇到两个问题：原版 `Copy` 丢失扩展状态，以及未初始化 padding 被误判为 tNVSE 标记。
 
-- DBCS 分支调用原版 `Copy` 后，立刻在返回的 heap `CharData` 上补写 `pad05`。
-- hook/替换 `CharData::Copy`，让它复制 `pad05[3]`。
-- 不用原版 `Copy`，为富文本 DBCS 分支手动分配 `0x38` 并完整初始化字段。
-
-ASCII 分支还必须显式清零 `pad05[3]`，因为原版 constructor 和 `SetChar` 都不会保证 padding 为零。
+富文本 DBCS 状态应使用外部 side table 保存，例如 `CharData* -> RichTextCharExtra`。DBCS 分支在得到最终 heap `CharData*` 后登记 side table；ASCII、图片、icon 路径不登记。若 `CharData` 经过 `Copy` 或 layout 迁移，wrapper 必须同步迁移 side table 关联，而不是修改原结构体 padding。
 
 #### 2.3.5 `TextDoc`/`TextPage`/`TextLine` layout helper
 
@@ -371,11 +367,11 @@ void __thiscall RenderTextDoc(FontManager::TextDoc* doc, ...);
 | `FontManager::PrepText` | `0xA18A30` | 接管普通富文本构建 |
 | `FontManager::PrepHypertext` | `0xA17390` | 接管超文本构建，保留 link/hypertext 语义 |
 | `TextDoc::Render` 或内部字符发射点 | `0xA19060` | 让 DBCS `CharData` 使用扩展 glyph 渲染 |
-| `CharData::Copy` 或 DBCS copy wrapper | `0xA1B660` | 确保 `pad05` trail/flag 不在复制时丢失 |
+| `CharData::Copy` 或 DBCS copy wrapper | `0xA1B660` | 确保 `RichTextCharExtra` side table 关联不在复制时丢失 |
 | `TextPage::AddChar` DBCS 分支 | `0xA19C00` | 修正 `iLastFontHeight` 对 `pFontLetters[lead]` 的错误依赖 |
 | `TextLine::AddChar` DBCS 分支 | `0xA19F70` | 避免 CJK 无空格换行触发原版 hyphen 插入 |
 
-如果 `TextDoc::Render` 整体重写风险过高，优先选择其内部“从 `CharData` 发射 glyph”的 call site 做局部 hook。局部 hook 的目标是：ASCII 仍走原版，图片项仍走原版；只有带 tNVSE DBCS 标记的 `CharData` 改走扩展 glyph。
+如果 `TextDoc::Render` 整体重写风险过高，优先选择其内部“从 `CharData` 发射 glyph”的 call site 做局部 hook。局部 hook 的目标是：ASCII 仍走原版，图片项仍走原版；只有能在 side table 中查到 DBCS code 的 `CharData` 改走扩展 glyph。
 
 如果富文本 parser 选择完全自行 layout，并且不调用原版 `TextPage::AddChar`/`TextLine::AddChar`，后两个 helper 可以不 hook；但此时必须自己完整维护 `TextLine::iWidth/iRise/iDrop/iSkippedSpace`、`TextPage::iHeight/iLastFontHeight/pCharsPerFont[8]` 和分页。
 
@@ -420,43 +416,40 @@ else
 
 原因是 GBK/Big5/SJIS/CP949 的 trail byte 可能落在 ASCII 范围。例如 `0x40..0x7E` 可以是 DBCS trail；parser 如果只扫描单字节 delimiter，会把 trail byte 误识别为 ASCII 符号。
 
-### 5.4 `CharData` 中保存 DBCS 的推荐方式
+### 5.4 DBCS 扩展状态的保存方式
 
-不能改变正式版结构体大小。推荐使用 `CharData::pad05[3]` 保存 tNVSE 私有标记：
+不能改变正式版结构体大小，也不要把 tNVSE 状态写进正式版结构体 padding。推荐沿用普通 `FontEx` 旧管线的思路：游戏结构只保存原版能理解的数据，tNVSE 新增状态放在自己的外部结构中。
 
-| 字段 | 用途 |
-| --- | --- |
-| `cChar` | DBCS lead byte；ASCII 时仍为原版字符 |
-| `pad05[0]` | DBCS trail byte；ASCII 时置 `0` |
-| `pad05[1]` | flag；`bit0 = isDbcs` |
-| `pad05[2]` | 保留，置 `0` |
-
-辅助函数建议：
+富文本路径新增 side table：
 
 ```cpp
-static constexpr UInt8 kRichCharFlagDbcs = 0x01;
-
-inline bool IsRichDbcsChar(const FontManager::CharData* ch)
+struct RichTextCharExtra
 {
-    return (ch->pad05[1] & kRichCharFlagDbcs) != 0;
-}
+    UInt32 dbcsCode; // (lead << 8) | trail
+};
 
-inline UInt32 GetRichDbcsCode(const FontManager::CharData* ch)
-{
-    return (UInt32(ch->cChar) << 8) | UInt32(ch->pad05[0]);
-}
+std::unordered_map<const FontManager::CharData*, RichTextCharExtra> gRichTextCharExtras;
 ```
 
-创建 ASCII `CharData` 时必须清空 `pad05`。否则渲染阶段可能把旧内存误识别为 DBCS。
+使用规则：
 
-图片项例外：`xFilename` 非空表示 `IMG`/`SRC` 图像条目，不应读取 `cChar` 或 `pad05`。
+- `CharData::cChar` 仍只按原版语义保存一个字节。ASCII 时就是 ASCII 字符；DBCS 时可保存 lead byte，但完整 code 只从 side table 读取。
+- DBCS 分支在生成最终 heap `CharData*` 后调用 `SetRichTextCharDbcs(ch, code)`。
+- ASCII、icon、image 路径不登记 side table；`xFilename` 非空的图片项永远走原版图片逻辑。
+- `IsRichDbcsChar(ch)` 必须查询 side table，不能读取 `pad05`。
+- 若调用原版 `CharData::Copy 0xA1B660`，copy wrapper 必须在拿到 new `CharData*` 后把 old `CharData*` 的 side table 记录复制到 new `CharData*`。
+- `TextDoc` 销毁、页面重建或 `CharData` 被释放时必须清理 side table，避免悬挂指针。
 
-正式版 `CharData::Copy 0xA1B660` 不复制 `pad05[3]`，且 `CharData::CharData 0xA1B450` / `SetChar 0xA1B7F0` 不初始化或清空 `pad05[3]`。因此实现时必须满足以下约束：
+示例 helper：
 
-- DBCS `CharData` 如果通过原版 `Copy` 生成，必须在 `Copy` 返回的 heap 对象上补写 `pad05[0..2]`。
-- 或者替换 `CharData::Copy`，让它复制 `pad05[3]`。
-- ASCII、icon、image 路径必须显式清零 `pad05[3]`。
-- 不要假设栈上模板 `CharData` 的 padding 会被原版构造函数清空。
+```cpp
+void SetRichTextCharDbcs(const FontManager::CharData* ch, UInt32 code);
+bool TryGetRichTextCharDbcs(const FontManager::CharData* ch, UInt32& code);
+void ClearRichTextCharExtra(const FontManager::CharData* ch);
+void ClearRichTextCharExtras();
+```
+
+这比使用 `pad05` 更接近现有普通文字管线：普通 `FontEx::PrepText/CreateText/MakeString` 没有扩展游戏结构体，而是在 tNVSE 自己的 buffer、extra glyph map 和 helper 里维护多字节语义。富文本也应保持同样边界。
 
 ### 5.5 宽度、rise/drop 和分页
 
@@ -521,7 +514,7 @@ leadingEdge = glyph->fLeadingEdge;
 
 - 新增富文本 parser helper：`TryReadRichChar`、`GetRichCharWidth`、`InitRichCharData`。
 - Hook `0xA18A30`，先只处理普通富文本，不处理 hypertext 特有交互。
-- 写 `CharData::pad05` DBCS 标记；若使用原版 `CharData::Copy`，必须在 copy 返回后补写标记。
+- 对 DBCS `CharData*` 登记 `RichTextCharExtra` side table；若使用原版 `CharData::Copy`，必须在 copy wrapper 中复制 side table 关联。
 - 暂时可沿用原版 `TextDoc::AddChar`，但要记录 `TextPage::AddChar` 的 `iLastFontHeight` 仍需 DBCS 修正。
 
 验收：
@@ -532,7 +525,7 @@ leadingEdge = glyph->fLeadingEdge;
 
 ### 阶段 2：局部 hook 渲染字符发射点
 
-目标是让已标记 DBCS 的 `CharData` 显示为扩展 glyph。
+目标是让 side table 标记为 DBCS 的 `CharData` 显示为扩展 glyph。
 
 工作：
 
@@ -611,15 +604,15 @@ parser 必须只在“非 DBCS 字符”时把以下字节当作语法：
 - 推荐写入一个宽度为 0 或 fallback glyph 的 DBCS `CharData`，并打印一次性 debug log。
 - 不应访问 `pFontLetters[lead]` 和 `pFontLetters[trail]` 伪造宽度，因为这会造成换行和渲染不一致。
 
-### 7.4 `pad05` 使用约束
+### 7.4 Side Table 生命周期
 
-`pad05` 只允许 tNVSE 富文本 hook 读写。写入前清零，ASCII 和图片项不得残留 flag。若后续逆向确认正式版某路径读取了 `pad05`，必须改用外部 side table：
+tNVSE 富文本 hook 不读写 `pad05`，所有扩展状态都在 side table 中。生命周期规则：
 
-```cpp
-std::unordered_map<FontManager::CharData*, UInt16> gRichCharDbcsCodes;
-```
-
-side table 需要在 `TextDoc` 销毁或页面重建时清理，否则会泄漏或悬挂。
+- side table 的 key 是最终进入 `TextDoc` 的 heap `CharData*`。
+- DBCS `CharData` 被复制、移动或重建时，必须同步迁移 `CharData* -> RichTextCharExtra` 记录。
+- ASCII、图片、icon 项不登记 side table，渲染时查不到记录就按原版路径处理。
+- `TextDoc` 销毁、页面重建或 `CharData` 释放时清理对应记录；调试阶段可以在 `TextDoc::Destroy 0xA1B990` wrapper 中粗粒度清空，正式实现应尽量按文档实例清理。
+- side table 只保存 tNVSE 需要的扩展语义，不反向修改游戏原结构体字段。
 
 ## 8. 测试矩阵
 
@@ -649,7 +642,7 @@ side table 需要在 `TextDoc` 销毁或页面重建时清理，否则会泄漏�
 - `<IMG SRC=...>` 或等价图片 tag。
 - hypertext link 包含 CJK 文本。
 - DBCS trail byte 等于 `<`, `>`, `=`, quote, `&`, `;` 的样例，确认 `CollectTo` 不在 trail byte 中间切 token。
-- DBCS `CharData` 经过 copy 后再渲染，确认 `pad05` trail/flag 没有被 `CharData::Copy` 丢失。
+- DBCS `CharData` 经过 copy 后再渲染，确认 side table 关联没有被 `CharData::Copy` 丢失。
 
 ### 8.3 回归路径
 
@@ -670,7 +663,7 @@ side table 需要在 `TextDoc` 销毁或页面重建时清理，否则会泄漏�
 - 页数、行数和超链接区域与可见文本对齐。
 - 图片项不被当作字符渲染。
 - DBCS 字符的三角形预分配数量与实际 `Font::AddChar` 发射次数一致。
-- `pad05` 在 ASCII、icon、image 项上为零，不产生误判。
+- ASCII、icon、image 项没有 side table 记录，不产生 DBCS 误判。
 - ASCII 富文本与原版表现一致。
 
 ## 9. 实现注意事项
@@ -678,7 +671,7 @@ side table 需要在 `TextDoc` 销毁或页面重建时清理，否则会泄漏�
 - 优先局部 hook `TextDoc::Render` 的 glyph 发射点，避免重写完整 renderer。
 - 富文本 parser 若必须重写，先覆盖 `PrepText 0xA18A30`，再扩展到 `PrepHypertext 0xA17390`。
 - 所有 native call 移除或替换时，按项目约定保留注释，不直接删除历史地址说明。
-- 不要扩大 `FontManager` 结构体；所有新增状态必须放在 padding 或外部 side table。
+- 不要扩大 `FontManager`/`CharData` 等游戏结构体，也不要把新增状态写入 padding；所有新增状态必须放在 tNVSE 外部 side table 或自有 helper 结构。
 - 不要把 UTF-8 字节直接写入 `CharData`；`CharData` 只保存 codepage 字节。
 - 不要用 `IsLeadByte(lastByte)` 判断换行边界；必须用 `TryDecodeDoubleByte` 成对验证。
 
@@ -737,7 +730,7 @@ TileText::MakeNode 0xA21AF0
 | 必须 | `TextDoc::Render` 字符发射点 | `0xA19604..0xA19622` | naked/code cave 局部 hook，或整体替换 `0xA19060` | 原版固定取 `pFontLetters[cChar]`；DBCS 必须改取 extra glyph |
 | 必须 | `TextPage::AddChar` | `0xA19C00` | 整体 hook 或 DBCS 分支局部 hook | 修正 `iLastFontHeight` 不能按 lead byte 基础 glyph 计算 |
 | 必须 | `TextLine::AddChar` | `0xA19F70` | 整体 hook 或 overflow 分支局部 hook | CJK 无空格长行不能触发原版 `'-'` hyphen 插入 |
-| 必须 | `CharData::Copy` 或 rich copy wrapper | `0xA1B660` | 推荐 wrapper；也可 `WriteRelJumpEx` 替换 | 原版不复制 `pad05[3]`，会丢失 DBCS trail/flag |
+| 必须 | `CharData::Copy` 或 rich copy wrapper | `0xA1B660` | 推荐 wrapper；也可 `WriteRelJumpEx` 替换 | 原版只复制游戏字段；DBCS 的 side table 关联必须由 tNVSE 同步复制 |
 | 推荐 | `FontManager::PrepHypertext` | `0xA17390` | 若保留原版 `PrepText` 调用链则 `WriteRelJumpEx`；若 `PrepText` 全替代则作为内部实现即可 | 超文本/tag/parser 入口；需要 DBCS-aware tokenizer |
 
 推荐不要把 `Font::AddChar 0xA142D0` 做全局替换。普通 `Font` 路径已经有 `FontEx::CreateText` / `MakeString`，全局 hook 会影响现有稳定路径。富文本只需要处理 `TextDoc::Render` 内 `0xA19622` 这一个 call site。
@@ -750,7 +743,7 @@ TileText::MakeNode 0xA21AF0
 | --- | --- | ---: | --- |
 | 如果不重写 `PrepHypertext`，而想复用原版 parser | `FontManager::CollectTo` | `0xA16EA0` | 必须让普通文本收集 DBCS-aware；否则 trail byte 会被当成 delimiter |
 | 如果复用 `CollectTo` 但只改字符分类 | `FontManager::GetCharType` | `0xA16DA0` | 不推荐单独 hook，因为它只有 `char` 参数，没有 lead/trail 上下文 |
-| 如果使用外部 side table 而不是 `pad05` | `TextDoc::~TextDoc` / `TextLine`/`TextPage` 析构 | `0xA1B990` 等 | 用于清理 `CharData* -> UInt16` 映射；使用 `pad05` 时不需要 |
+| 如果使用 side table 保存 DBCS 状态 | `TextDoc::~TextDoc` / `TextLine`/`TextPage` 析构 | `0xA1B990` 等 | 用于清理 `CharData* -> RichTextCharExtra` 映射 |
 | 如果希望在最外层统一转换输入 | `FontManager::CreateText` | `0xA18F00` | 可作为 wrapper，但不是必须；`PrepText` 已能接收 `BSStringT<char>*` 并转换 |
 | 如果要确认所有 tile 文本入口 | `TileText::MakeNode` | `0xA21AF0` / call `0xA220C6` | 只用于入口调查；不建议作为编码 hook 点 |
 
@@ -761,10 +754,10 @@ TileText::MakeNode 0xA21AF0
 ```text
 1. Hook FontManager::PrepText 0xA18A30
 2. 在新 PrepText 内调用 tNVSE 自己的 PrepHypertext parser
-3. 使用 rich copy wrapper，或 hook CharData::Copy 0xA1B660
+3. 使用 rich copy wrapper，或 hook CharData::Copy 0xA1B660，同步 side table 关联
 4. Hook TextPage::AddChar 0xA19C00 的 DBCS 高度更新
 5. Hook TextLine::AddChar 0xA19F70 的 DBCS overflow 换行
 6. Hook TextDoc::Render 的 0xA19604..0xA19622 glyph 发射点
 ```
 
-如果实现选择完全自建 `TextDoc` layout，不再调用原版 `TextPage::AddChar` / `TextLine::AddChar`，第 4、5 项可以变成内部 layout 代码，而不是二进制 hook。但第 1、3、6 项仍然存在：入口要接管，DBCS 标记要复制，渲染 glyph 要改用 extra glyph。
+如果实现选择完全自建 `TextDoc` layout，不再调用原版 `TextPage::AddChar` / `TextLine::AddChar`，第 4、5 项可以变成内部 layout 代码，而不是二进制 hook。但第 1、3、6 项仍然存在：入口要接管，DBCS side table 关联要维护，渲染 glyph 要改用 extra glyph。
