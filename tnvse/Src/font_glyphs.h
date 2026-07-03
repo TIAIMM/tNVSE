@@ -36,4 +36,14 @@ namespace fonthook
 	{
 		return glyph ? ConditionalFloatToUInt(glyph->fWidth + glyph->fSpacing) : 0;
 	}
+
+	inline float GetGlyphLineHeight(const FontData* fontData, const FontLetter* glyph)
+	{
+		return (fontData && glyph) ? fontData->fBaseLine - glyph->fTopEdge + glyph->fHeight : 0.0f;
+	}
+
+	inline UInt32 GetGlyphLayoutLineHeight(const FontData* fontData, const FontLetter* glyph)
+	{
+		return ConditionalFloatToUInt(GetGlyphLineHeight(fontData, glyph));
+	}
 }

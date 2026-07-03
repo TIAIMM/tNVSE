@@ -38,10 +38,8 @@ namespace fonthook
 		TextDoc* __thiscall PrepText(BSStringT<char>& arTextString, TextData& arData);
 		void __thiscall TextDocRender(NiNode* apNode, TextData* apData);
 		void __thiscall TextDocDestroy();
-		void __thiscall TextDocAddChar_A178A4(CharData* apChar, int aiNewLines, bool abNewPage);
-		void __thiscall TextDocAddChar_A179D9(CharData* apChar, int aiNewLines, bool abNewPage);
-		void __thiscall TextDocAddChar_A17FC2(CharData* apChar, int aiNewLines, bool abNewPage);
-		void __thiscall TextDocAddChar_A18D7C(CharData* apChar, int aiNewLines, bool abNewPage);
+		void __thiscall TextDocAddChar(CharData* apChar, int aiNewLines, bool abNewPage);
+		static CharData* __fastcall CharDataCopy(CharData* apChar, void*);
 	};
 
 } // namespace fonthook

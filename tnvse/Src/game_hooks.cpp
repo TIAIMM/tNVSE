@@ -32,29 +32,20 @@ namespace fonthook
 
 	void InitVertSpacingHook()
 	{
-		//FontManager::GetLinePadding
+		// FontManager::GetLinePadding
 		//WriteRelJump(0xA1B3A0, &VertSpacingAdjust);
 	}
 
 	void InitFontHook()
 	{
-		// Font::Font
 		WriteRelJumpEx(0xA12020, &FontEx::FontInit);
-
-		// Font::Load
 		WriteRelJumpEx(0xA15320, &FontEx::Load);
-
-		// Font::PrepText
 		WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
+		// Terminal -> Font::PrepTextForTerminal
 		WriteRelCallEx(0x759281, &FontEx::PrepTextForTerminal);
 
-		// Font::CreateText
 		WriteRelJumpEx(0xA12880, &FontEx::CreateText);
-
-		// Font::MakeString
 		WriteRelJumpEx(0xA12460, &FontEx::MakeString);
-
-		// FontManager::CalculateStringDimensions
 		WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
 
 		// FontManager::CreateText -> FontManager::PrepText
@@ -73,15 +64,22 @@ namespace fonthook
 		WriteRelCallEx(0xA18F7D, &FontManagerEx::TextDocDestroy);
 
 		// FontManager::PrepHypertext -> TextDoc::AddChar
-		WriteRelCallEx(0xA178A4, &FontManagerEx::TextDocAddChar_A178A4);
-		WriteRelCallEx(0xA179D9, &FontManagerEx::TextDocAddChar_A179D9);
-		WriteRelCallEx(0xA17FC2, &FontManagerEx::TextDocAddChar_A17FC2);
-		// FontManager::PrepText -> TextDoc::AddChar (non-hypertext comparison)
-		WriteRelCallEx(0xA18D7C, &FontManagerEx::TextDocAddChar_A18D7C);
+		WriteRelCallEx(0xA178A4, &FontManagerEx::TextDocAddChar);
+		WriteRelCallEx(0xA179D9, &FontManagerEx::TextDocAddChar);
+		WriteRelCallEx(0xA17FC2, &FontManagerEx::TextDocAddChar);
+		// FontManager::PrepText -> TextDoc::AddChar
+		WriteRelCallEx(0xA18D7C, &FontManagerEx::TextDocAddChar);
+
+		// FontManager::PrepHypertext -> CharData::Copy
+		WriteRelCall(0xA17898, &FontManagerEx::CharDataCopy);
+		WriteRelCall(0xA179CD, &FontManagerEx::CharDataCopy);
+		WriteRelCall(0xA17FB6, &FontManagerEx::CharDataCopy);
+		// FontManager::PrepText -> CharData::Copy
+		WriteRelCall(0xA18D73, &FontManagerEx::CharDataCopy);
 
 		// Tile::SetString - Quest Text
 		WriteRelCall(0x77AF4B, &TileSetStringHookForQueueText);
-		// Location Text
+		// Tile::SetString - Location Text
 		WriteRelCall(0x772B5E, &TileSetStringHookForQueueText);
 
 		// BSStringT<char>::c_str - Terminal UTF8 conversion

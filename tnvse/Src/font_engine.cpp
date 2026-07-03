@@ -329,12 +329,11 @@ namespace fonthook
 		this->fMaxDrop = 0.0f;
 
 		auto* pLetters = this->pFontData->pFontLetters;
-		float baseLine = this->pFontData->fBaseLine;
 
 		for (int i = 0; i < kMaxGlyphCount; ++i)
 		{
 			auto& letter = pLetters[i];
-			float glyphHeight = baseLine - letter.fTopEdge + letter.fHeight;
+			float glyphHeight = GetGlyphLineHeight(this->pFontData, &letter);
 			this->fFontHeight = MaxFloat(glyphHeight, this->fFontHeight);
 			maxHeight = MaxFloat(maxHeight, letter.fHeight);
 			this->fMaxDrop = MinFloat(letter.fTopEdge - letter.fHeight, this->fMaxDrop);

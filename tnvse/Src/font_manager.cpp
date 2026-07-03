@@ -816,6 +816,7 @@ namespace fonthook
 		{
 			ThisStdCall(0xA1B990, apDoc);
 		}
+
 	}
 
 	void SetRichTextCharDbcs(const FontManager::CharData* apChar, UInt32 auiDbcsCode)
@@ -1134,32 +1135,26 @@ namespace fonthook
 		CallTextDocDestroy(doc);
 	}
 
-	void __thiscall FontManagerEx::TextDocAddChar_A178A4(FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
+	void __thiscall FontManagerEx::TextDocAddChar(FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
 	{
 		static UInt32 sCallCount = 0;
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
-		HandleTextDocAddChar("0xA178A4 PrepHypertext", doc, apChar, aiNewLines, abNewPage, sCallCount);
+		HandleTextDocAddChar("TextDoc::AddChar", doc, apChar, aiNewLines, abNewPage, sCallCount);
 	}
 
-	void __thiscall FontManagerEx::TextDocAddChar_A179D9(FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
+	FontManager::CharData* __fastcall FontManagerEx::CharDataCopy(FontManager::CharData* apChar, void*)
 	{
-		static UInt32 sCallCount = 0;
-		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
-		HandleTextDocAddChar("0xA179D9 PrepHypertext", doc, apChar, aiNewLines, abNewPage, sCallCount);
-	}
+		FontManager::CharData* copiedChar = ThisStdCall<FontManager::CharData*>(0xA1B660, apChar);
+		if (!copiedChar)
+			return nullptr;
 
-	void __thiscall FontManagerEx::TextDocAddChar_A17FC2(FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
-	{
-		static UInt32 sCallCount = 0;
-		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
-		HandleTextDocAddChar("0xA17FC2 PrepHypertext", doc, apChar, aiNewLines, abNewPage, sCallCount);
-	}
+		UInt32 dbcsCode = 0;
+		if (TryGetRichTextCharDbcs(apChar, dbcsCode))
+			SetRichTextCharDbcs(copiedChar, dbcsCode);
+		else
+			ClearRichTextCharExtra(copiedChar);
 
-	void __thiscall FontManagerEx::TextDocAddChar_A18D7C(FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
-	{
-		static UInt32 sCallCount = 0;
-		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
-		HandleTextDocAddChar("0xA18D7C PrepText", doc, apChar, aiNewLines, abNewPage, sCallCount);
+		return copiedChar;
 	}
 
 } // namespace fonthook
