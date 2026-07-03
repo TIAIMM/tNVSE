@@ -26,9 +26,9 @@ tNVSE 当前已经覆盖了普通 `Font` 文本路径：
 | `TextDoc::Render` | `0xA19060` | `WriteRelCallEx(0xA18F63, &FontManagerEx::TextDocRender)`；内部 `BeginRichTextRenderContext` + 原版 `0xA19060` + `EndRichTextRenderContext` |
 | `TextDoc::Render` 字符发射点 | `0xA19622` | `WriteRelCallEx(0xA19622, &FontEx::TextDocRenderAddChar)`；DBCS 改用扩展 glyph |
 | `TextDoc::~TextDoc` | `0xA1B990` | `WriteRelCallEx(0xA18F7D, &FontManagerEx::TextDocDestroy)`；清理 side table 后调原版析构 |
-| `TextDoc::AddChar` | `0xA19A10` | `WriteRelCallEx` 4 处 call site 重定向；DBCS lead/trail 合并 + side table 登记 + CJK 零宽断行标记 |
+| `TextDoc::AddChar` | `0xA19A10` | `WriteRelCallEx` 4 处 call site 重定向；DBCS lead/trail 合并 + side table 登记；trail `CharData` 合并后释放 |
 | `TextPage::AddChar` | `0xA19C00` | `WriteRelCallEx` 2 处 call site 重定向到 `FontManagerEx::TextPageAddChar`；DBCS 后置修正 `iLastFontHeight` |
-| `TextLine::AddChar` | `0xA19F70` | 未 hook；通过 DBCS 后置零宽 space 断点复刻普通 `FontEx::PrepText` 的 CJK 字符边界换行，避免原版 hyphen 分支 |
+| `TextLine::AddChar` | `0xA19F70` | `WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar)`；DBCS 当前字符溢出时直接新建下一行，避免原版 hyphen 分支 |
 | `CharData::Copy` | `0xA1B660` | `WriteRelCall` 4 处 call site 重定向到 `FontManagerEx::CharDataCopy`；复制时同步/清理 side table |
 
 详见第 12 节"当前实现进度"。
@@ -383,7 +383,7 @@ static CharData* __fastcall CharDataCopy(CharData* apChar, void*);
 | `TextDoc::Render` 或内部字符发射点 | `0xA19060` | 让 DBCS `CharData` 使用扩展 glyph 渲染 | 已 hook render 入口和 `0xA19622` 字符发射点 |
 | `CharData::Copy` 或 DBCS copy wrapper | `0xA1B660` | 确保 `RichTextCharExtra` side table 关联不在复制时丢失 | 已 hook 4 个 call site |
 | `TextPage::AddChar` DBCS 分支 | `0xA19C00` | 修正 `iLastFontHeight` 对 `pFontLetters[lead]` 的错误依赖 | 已通过 2 个 call site wrapper 后置修正 |
-| `TextLine::AddChar` DBCS 分支 | `0xA19F70` | 避免 CJK 无空格换行触发原版 hyphen 插入 | 未 hook；当前用 DBCS 后置零宽 space 断点绕开 |
+| `TextLine::AddChar` DBCS 分支 | `0xA19F70` | 避免 CJK 无空格换行触发原版 hyphen 插入 | 已 hook `0xA19C80` 外部 call site；DBCS 溢出时直接新建下一行 |
 
 如果 `TextDoc::Render` 整体重写风险过高，优先选择其内部“从 `CharData` 发射 glyph”的 call site 做局部 hook。局部 hook 的目标是：ASCII 仍走原版，图片项仍走原版；只有能在 side table 中查到 DBCS code 的 `CharData` 改走扩展 glyph。
 
@@ -521,7 +521,7 @@ leadingEdge = 0;
 
 正式版 `TextDoc::Render` 在 `0xA19604..0xA19622` 一带读取 `apCurrentChar->cChar`，计算 `cChar * sizeof(FontLetter)`，再把 `&pFontLetters[cChar]` 传给 `Font::AddChar 0xA142D0`。这是最适合局部 hook 的字符发射点：DBCS 分支只替换 `FontLetter*`，保留 `aiVert`、`NiTriShape*`、`NiPoint3` 和 `NiColorA` 参数。
 
-`TextPage::GetCharCountForFont 0xA19B00` 只统计 `xFilename` 为空且 `iFontIndex` 匹配的 `CharData`，不关心 `cChar` 值，也不检查 `iWidth`。因此 DBCS 采用“一个可见 glyph 一个 `CharData`”时，原版计数逻辑可继续复用；当前零宽 space 断点标记会额外占一个 `CharData`，需要按第 12.4 / 13 节继续验证其预分配和渲染序列影响。
+`TextPage::GetCharCountForFont 0xA19B00` 只统计 `xFilename` 为空且 `iFontIndex` 匹配的 `CharData`，不关心 `cChar` 值，也不检查 `iWidth`。因此 DBCS 必须保持“一个可见 glyph 一个 `CharData`”。当前实现已移除早期的零宽 space 断点方案，DBCS trail `CharData` 合并后释放，不再额外进入 `TextDoc` / render 序列。
 
 如果 hook `TextDoc::Render` 整体实现，必须完整复刻原版的：
 
@@ -758,7 +758,7 @@ TileText::MakeNode 0xA21AF0
 | 必须 | `FontManager::PrepText` | `0xA18F4A` call site 调 `0xA18A30` | 当前 `WriteRelCallEx` 到 `FontManagerEx::PrepText`，内部做 UTF-8 转换后调原版 | 富文本普通入口；负责 UTF-8 转 codepage、DBCS 合并进入 `TextDoc` |
 | 必须 | `TextDoc::Render` 字符发射点 | `0xA18F63` / `0xA19622` | 当前 render 入口 wrapper + `FontEx::TextDocRenderAddChar` 局部 hook | 原版固定取 `pFontLetters[cChar]`；DBCS 必须改取 extra glyph |
 | 必须 | `TextPage::AddChar` | `0xA19A6F` / `0xA1BD1C` call site 调 `0xA19C00` | 当前 `WriteRelCallEx` 到 `FontManagerEx::TextPageAddChar`，调原版后修正 DBCS `iLastFontHeight` | 修正 `iLastFontHeight` 不能按 lead byte 基础 glyph 计算 |
-| 必须 | `TextLine::AddChar` | `0xA19F70` | 当前未 hook；用 DBCS 后置零宽 space 断点复刻 CJK 字符边界换行 | CJK 无空格长行不能触发原版 `'-'` hyphen 插入 |
+| 必须 | `TextLine::AddChar` | `0xA19C80` call site 调 `0xA19F70` | 当前 `WriteRelCallEx` 到 `FontManagerEx::TextLineAddChar`；仅 DBCS 当前字符溢出时新建下一行，其余回原版 | CJK 无空格长行不能触发原版 `'-'` hyphen 插入 |
 | 必须 | `CharData::Copy` 或 rich copy wrapper | `0xA17898` / `0xA179CD` / `0xA17FB6` / `0xA18D73` call site 调 `0xA1B660` | 当前 `WriteRelCall` 到 `FontManagerEx::CharDataCopy` | 原版只复制游戏字段；DBCS 的 side table 关联必须由 tNVSE 同步复制 |
 | 推荐 | `FontManager::PrepHypertext` tokenizer | `0xA18ACC` call site 调 `0xA17390` | 当前只有入口 wrapper；后续推荐自建 DBCS-aware tokenizer | 超文本/tag/parser 入口；需要让 `CollectTo` / `GetCharType` 不再拆开 trail byte |
 
@@ -785,15 +785,15 @@ TileText::MakeNode 0xA21AF0
 2. Hook FontManager::PrepHypertext 入口，后续接管 tNVSE 自己的 DBCS-aware tokenizer
 3. 使用 rich copy wrapper，或 hook CharData::Copy 0xA1B660，同步 side table 关联
 4. Hook TextPage::AddChar 0xA19C00 的 DBCS 高度更新
-5. 处理 TextLine::AddChar 0xA19F70 的 DBCS overflow 换行（当前用零宽断点方案）
+5. 处理 TextLine::AddChar 0xA19F70 的 DBCS overflow 换行
 6. Hook TextDoc::Render 的 0xA19604..0xA19622 glyph 发射点
 ```
 
-当前第 1、3、4、6 项已通过 call site wrapper 或局部 hook 落地；第 5 项以零宽断点方案落地但仍需游戏内回归；第 2 项只完成入口 wrapper，完整 tokenizer 仍是后续最大改动。如果未来实现选择完全自建 `TextDoc` layout，不再调用原版 `TextPage::AddChar` / `TextLine::AddChar`，第 4、5 项可以变成内部 layout 代码，而不是二进制 hook。但第 1、3、6 项仍然存在：入口要接管，DBCS side table 关联要维护，渲染 glyph 要改用 extra glyph。
+当前第 1、3、4、5、6 项已通过 call site wrapper 或局部 hook 落地；第 2 项只完成入口 wrapper，完整 tokenizer 仍是后续最大改动。如果未来实现选择完全自建 `TextDoc` layout，不再调用原版 `TextPage::AddChar` / `TextLine::AddChar`，第 4、5 项可以变成内部 layout 代码，而不是二进制 hook。但第 1、3、6 项仍然存在：入口要接管，DBCS side table 关联要维护，渲染 glyph 要改用 extra glyph。
 
 ## 12. 当前实现进度（2026-07-04 更新）
 
-本节记录相对第 11 节"最小可落地组合"的实际落地情况。代码位于 `tnvse/Src/font_manager.cpp` / `font_engine.cpp` / `game_hooks.cpp`。整体策略已从"完全自建 layout"转向**复用原版 layout + side table + 局部 hook**，其中 `TextPage::AddChar` 已通过 call site wrapper 修正 DBCS 行高，`TextLine::AddChar` 暂未做二进制 hook。
+本节记录相对第 11 节"最小可落地组合"的实际落地情况。代码位于 `tnvse/Src/font_manager.cpp` / `font_engine.cpp` / `game_hooks.cpp`。整体策略已从"完全自建 layout"转向**复用原版 layout + side table + 局部 hook**，其中 `TextPage::AddChar` 已通过 call site wrapper 修正 DBCS 行高，`TextLine::AddChar` 已通过外部 call site wrapper 处理 DBCS overflow。
 
 ### 12.1 已安装的 Hook
 
@@ -810,6 +810,7 @@ TileText::MakeNode 0xA21AF0
 | `0xA18D7C` | `PrepText → TextDoc::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextDocAddChar` |
 | `0xA19A6F` | `TextDoc::AddChar → TextPage::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextPageAddChar` |
 | `0xA1BD1C` | `TextPage::TextPage → TextPage::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextPageAddChar` |
+| `0xA19C80` | `TextPage::AddChar → TextLine::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextLineAddChar` |
 | `0xA17898` / `0xA179CD` / `0xA17FB6` | `PrepHypertext → CharData::Copy` | `WriteRelCall` | `FontManagerEx::CharDataCopy` |
 | `0xA18D73` | `PrepText → CharData::Copy` | `WriteRelCall` | `FontManagerEx::CharDataCopy` |
 | `0xA1B020` | `FontManager::CalculateStringDimensions` | `WriteRelJumpEx` | `FontManagerEx::CalculateStringDimensions` |
@@ -858,13 +859,14 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 普通 `FontEx::PrepText` 的 DBCS 换行策略是：DBCS 字符作为不可拆分单元，宽度按 `glyph->fWidth + glyph->fSpacing` 统计；行宽溢出且没有显式断点时，在完整字符边界插入 `cLineSep`，不会插入西文 `'-'`。
 
-富文本当前仍复用原版 `TextLine::AddChar 0xA19F70`。反汇编确认该函数在 `lineWidth + charWidth > pageWidth` 且当前行找不到 `cChar == ' '` 的断点时，会走 `0xA1A223 push 0x2D` 分支插入 hyphen。为在不整体 hook `TextLine::AddChar` 的前提下复刻普通管线行为，`TextDocAddChar` 在 DBCS lead/trail 合并后：
+反汇编确认原版 `TextLine::AddChar 0xA19F70` 在 `lineWidth + charWidth > pageWidth` 且当前行找不到 `cChar == ' '` 的断点时，会走 `0xA1A223 push 0x2D` 分支插入 hyphen。当前实现已在 `0xA19C80`（`TextPage::AddChar → TextLine::AddChar`）安装 `FontManagerEx::TextLineAddChar`：
 
-- 让 lead `CharData` 保存完整 DBCS side table 记录并使用扩展 glyph 度量。
-- 将已经被合并掉的 trail `CharData` 复用为零宽 ASCII space 断行标记：`cChar=' '`, `iWidth=0`, `iRise=0`, `iDrop=0`, `iLeadingEdge=0`, `iX=0`。
-- 先把 DBCS lead 加入原版 `TextDoc::AddChar`，再把零宽断点加入同一文档。
+- DBCS lead/trail 合并后，只让 lead `CharData` 保存完整 DBCS side table 记录并使用扩展 glyph 度量。
+- trail `CharData` 不再复用为零宽断点；合并成功后直接释放，保证 `TextDoc` 中仍是“一个 DBCS glyph 一个 `CharData`”。
+- `TextLineAddChar` 只在 `apChar` 命中 DBCS side table、`abAddHead == false`、当前行非空且 `line->iWidth + apChar->iWidth > line->iPageWidth` 时介入：分配 `0x30` 字节 `TextLine`，调用原版 `TextLine::TextLine 0xA1BD40` 构造下一行，并把当前 DBCS 字符作为新行首字符。
+- 其他所有情况继续调用原版 `TextLine::AddChar 0xA19F70`，保留图片、ASCII space、普通西文 hyphen、向前搬移和递归行为。
 
-这个断点不进入 `RichTextCharExtra`，渲染时按普通零宽 space 处理；它只给原版 `TextLine::AddChar` 的“向前找空格断点”逻辑提供 CJK 字符边界，从而避免长中文行被当作无空格西文长词并插入 hyphen。
+这个方案比早期零宽 space 断点更接近普通 `FontEx::PrepText`：不会额外增加 `CharData` 数量，也不会让 `TextPage::GetCharCountForFont` 和 `TextDoc::Render` 为每个 DBCS 字符额外处理一个 marker。
 
 #### TextPage::AddChar DBCS 行高修正
 
@@ -890,14 +892,12 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 | 2. 自建 PrepHypertext parser | `WriteRelJumpEx` 或内部实现 | `WriteRelCallEx` 在 `0xA18ACC` 重定向，`FontManagerEx::PrepHypertext` 包一层 UTF-8 转换后调用原版 `0xA17390` | ⚠️ 入口落地；DBCS-aware tokenizer 未接管 |
 | 3. CharData::Copy side table 同步 | hook `0xA1B660` 或 wrapper | `WriteRelCall` 包装 4 个 `CharData::Copy` call site；`FontManagerEx::CharDataCopy` 调原版 copy 后同步/清理 side table | ✅ 落地 |
 | 4. Hook `TextPage::AddChar 0xA19C00` DBCS 高度 | 整体或局部 hook | `WriteRelCallEx` 包装 `0xA19A6F` / `0xA1BD1C` 两个 call site；`FontManagerEx::TextPageAddChar` 调原版后修正 DBCS `iLastFontHeight` | ✅ 落地（call site 级） |
-| 5. Hook `TextLine::AddChar 0xA19F70` overflow | 整体或局部 hook | **未 hook**；改为在 `TextDocAddChar` 合并 DBCS 后插入零宽 space 断点，复刻普通 Font 管线的 CJK 字符边界换行 | ✅ 落地（不新增二进制 hook） |
+| 5. Hook `TextLine::AddChar 0xA19F70` overflow | 整体或局部 hook | `WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar)`；DBCS 当前字符溢出时直接构造下一行，其他走原版 | ✅ 落地（call site 级） |
 | 6. Hook `TextDoc::Render` 发射点 | 局部 hook `0xA19604..0xA19622` | `WriteRelCallEx(0xA19622, &FontEx::TextDocRenderAddChar)` + `BeginRichTextRenderContext` 预扫描 | ✅ 落地 |
 
 ### 12.4 已知未闭环项
 
-1. **`TextLine::AddChar` 无空格 hyphen**：已通过 DBCS 后置零宽 space 断点绕开原版 `0xA1A223 push 0x2D` hyphen 分支。仍需在游戏内回归长中文富文本，确认断点标记不会影响链接命中区域、图片项和分页统计。
-
-2. **PrepHypertext tag/tokenizer 的 DBCS cursor 问题**：当前 `CollectTo` 未 hook（已回退，见 12.2），`PrepHypertext` 内部 `CollectTo` 仍按单字节判断 delimiter，且除 `CollectTo` 外 `PrepHypertext` 还有直接调用 `GetCharType` 的位置（`0xA17DB9`）。对当前支持的 Windows DBCS codepage，`<`、`>`、`=`、quote、`&`、`;`、space 并不是合法 trail byte；但 `{`、`}` 等 `GetCharType` delimiter 可落入 GBK/Big5/SJIS 的 trail 范围。后续自建/接管 `PrepHypertext` tokenizer 时应统一改为 cursor-based DBCS 消费，而不是继续让普通文本段的 trail byte 参与单字节语法判断。
+1. **PrepHypertext tag/tokenizer 的 DBCS cursor 问题**：当前 `CollectTo` 未 hook（已回退，见 12.2），`PrepHypertext` 内部 `CollectTo` 仍按单字节判断 delimiter，且除 `CollectTo` 外 `PrepHypertext` 还有直接调用 `GetCharType` 的位置（`0xA17DB9`）。对当前支持的 Windows DBCS codepage，`<`、`>`、`=`、quote、`&`、`;`、space 并不是合法 trail byte；但 `{`、`}` 等 `GetCharType` delimiter 可落入 GBK/Big5/SJIS 的 trail 范围。后续自建/接管 `PrepHypertext` tokenizer 时应统一改为 cursor-based DBCS 消费，而不是继续让普通文本段的 trail byte 参与单字节语法判断。
 
 ### 12.5 测试与验证状态
 
@@ -914,7 +914,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 ### 12.6 下一步建议优先级
 
-1. 用当前 book 样本回归长中文行，确认行尾 hyphen 消失，且页数/行数与普通 Font 管线预期一致。
+1. 用当前 book 样本回归长中文行，确认 `TextLineAddChar` 后行尾 hyphen 消失，且 `TextDoc::Render` 的字符数不再因零宽 marker 翻倍。
 2. 测试多页 + 连续空行富文本，确认 `TextPageAddChar` 修正后的 DBCS `iLastFontHeight` 让空行高度与 CJK glyph 行高一致。
 3. 接管 `PrepHypertext` tokenizer，复刻 `CollectTo` 的 DBCS-aware 普通文本收集语义；同时让 `0xA17DB9` 这类直接 `GetCharType` 分支不再看到普通文本段中的 trail byte。
 
@@ -1020,19 +1020,19 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 ---
 
-### 修改七：零宽 space 断点标记在 `TextLine::AddChar` 溢出路径中的健壮性回归
+### 修改七：`TextLine::AddChar` DBCS overflow 换行（已完成）
 
-**改什么**（不修改代码，纯测试验证）：
-- 用包含长中文段落的富文本输入（GBK/Big5/SJIS/CP949 各一组），通过 `BeginRichTextRenderContext` / `TryConsumeRichTextRenderAddChar` 的 debug 日志验证：
-  1. DBCS lead/trail 合并后 `Render` 的 DBCS 发射次数 = 可见 DBCS 字符数（每 DBCS 对 = 1 次）。
-  2. 确认零宽 space 断点标记（`cChar=' '`, `iWidth=0`）是否进入 `Render` 发射序列；如果进入，必须保持它是不可见 ASCII space，且不能破坏 `BeginRichTextRenderContext` 的序列对齐。
-  3. 确认 `TextPage::GetCharCountForFont` 的统计数是否包含零宽标记。反汇编显示它只检查 `xFilename` 与 `iFontIndex`，因此更可能会多计，需要以日志验证实际 page/font 统计。
-  4. 断点标记不影响 `TextLine::iWidth`（`iWidth=0` 的 CharData 加入后不会增加行宽）。
-- 如果发现零宽标记导致 `pCharsPerFont[iFontIndex]` 多计 1，则修正方式为在 `ClearRichTextCharExtrasForDoc` 中遍历时同时将零宽标记的 `CharData` 标记为已处理（不为它登记 side table，也不让它进入计数），或在自建 layout（修改三）中直接换行而不再插入标记。
+**已改内容**：
+- 在 `game_hooks.cpp` 用 `WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar)` 包装 `TextPage::AddChar → TextLine::AddChar` 这一处外部 call site。
+- `FontManagerEx::TextLineAddChar` 只在当前 `CharData` 命中 DBCS side table、不是 add-head 搬移、当前行非空且 `line->iWidth + char->iWidth > line->iPageWidth` 时介入。
+- 命中上述条件时，分配 `sizeof(FontManager::TextLine)`，调用原版 `TextLine::TextLine 0xA1BD40` 构造下一行，并把当前 DBCS 字符作为新行首字符。
+- 其他路径继续调用原版 `TextLine::AddChar 0xA19F70`，保留原版对 ASCII space、西文 hyphen、图片、搬移和递归的处理。
+- `TextDocAddChar` 的 DBCS 合并逻辑不再把 trail `CharData` 改造成零宽 space；合并成功后直接释放 trail。
 
 **为什么**：
-- `TextPage::GetCharCountForFont 0xA19B00` 只检查 `xFilename` 为空且 `iFontIndex == n8`。零宽断点标记的 `iFontIndex` 等于前一个 DBCS lead 的 `iFontIndex`，因此会被计数为 +1。但这多出的 1 会在 `NiTriShape` 的顶点预分配中多分配 4 个顶点 / 2 个三角形。`NiTriShape` 的顶点数多于实际填充数不会导致崩溃（多余的顶点只是未被写入数据），但会在 GPU 内存中留下未初始化的三角形，可能在帧分析工具中显示为闪烁随机像素。
-- 确认影响后再决定是在当前零宽 space 方案上补 `pCharsPerFont` 修正，还是在修改三"自建 layout"中直接处理换行逻辑。
+- 反编译确认 `TextLine::AddChar 0xA19F70` 的无空格溢出分支会插入 `'-'`，这是西文 hyphenation 行为，不适合 CJK 富文本。
+- 早期零宽 space 断点方案虽然能绕开 hyphen，但会让每个 DBCS 字符额外产生一个 `CharData`，并被 `TextPage::GetCharCountForFont` / `TextDoc::Render` 当作普通字符处理。当前方案让富文本重新回到“一个 DBCS glyph 一个 CharData”，更符合渲染阶段和 page/font 计数的原版假设。
+- 只 hook `0xA19C80` 而不是替换所有 `TextLine::AddChar` call site，是为了让原版内部的尾部搬移、递归和构造器首字符添加继续保持正式版行为。
 
 ---
 
@@ -1046,10 +1046,9 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
    独立，不依赖其他修改
 
 修改三（自建 PrepHypertext tokenizer） ← 最核心
-   └→ 修改七（零宽space验证，自建 layout 后可取消）
 
 修改六（glyph 查找共享化，已完成）
    独立，不影响任何其他修改
 ```
 
-优先级顺序：**三 → 七**（一、二、四、五、六已完成）。
+优先级顺序：**三**（一、二、四、五、六、七已完成）。

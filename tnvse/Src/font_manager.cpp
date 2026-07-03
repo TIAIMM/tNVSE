@@ -317,20 +317,6 @@ namespace fonthook
 			apChar->iX = 0;
 		}
 
-		void InitRichTextLineBreakMarker(FontManager::CharData* apChar)
-		{
-			if (!apChar)
-				return;
-
-			ClearRichTextCharExtra(apChar);
-			apChar->cChar = ' ';
-			apChar->iWidth = 0;
-			apChar->iRise = 0;
-			apChar->iDrop = 0;
-			apChar->iLeadingEdge = 0;
-			apChar->iX = 0;
-		}
-
 		void LogRichTextDbcsMerge(
 			const char* callsite,
 			FontManager::TextDoc* apDoc,
@@ -559,9 +545,21 @@ namespace fonthook
 			ApplyRichTextGlyphMetrics(lead, font, glyph);
 			LogRichTextDbcsMerge(arPending.callsite, apDoc, lead, apTrail, dbcsCode, glyph);
 			CallTextDocAddChar(apDoc, lead, arPending.newLines, arPending.newPage);
-			InitRichTextLineBreakMarker(apTrail);
-			CallTextDocAddChar(apDoc, apTrail, 0, false);
+			FreeRichTextCharData(apTrail);
 			return true;
+		}
+
+		bool ShouldStartNewLineForRichTextDbcs(FontManager::TextLine* apLine, FontManager::CharData* apChar, bool abAddHead)
+		{
+			if (!apLine || !apChar || abAddHead || HasRichTextFilename(apChar))
+				return false;
+			if (!apLine->pPage || apLine->iWidth <= 0 || apLine->iPageWidth <= 0)
+				return false;
+			if (apLine->iWidth + apChar->iWidth <= apLine->iPageWidth)
+				return false;
+
+			UInt32 dbcsCode = 0;
+			return TryGetRichTextCharDbcs(apChar, dbcsCode);
 		}
 
 		void HandleTextDocAddChar(
@@ -1161,6 +1159,20 @@ namespace fonthook
 			targetPage->iLastFontHeight = GetGlyphLayoutLineHeight(font->pFontData, glyph);
 
 		return addedPage;
+	}
+
+	FontManager::TextLine* __thiscall FontManagerEx::TextLineAddChar(FontManager::CharData* apChar, bool abAddHead)
+	{
+		FontManager::TextLine* line = reinterpret_cast<FontManager::TextLine*>(this);
+		if (!ShouldStartNewLineForRichTextDbcs(line, apChar, abAddHead))
+			return ThisStdCall<FontManager::TextLine*>(0xA19F70, line, apChar, abAddHead);
+
+		void* lineMem = MemoryManager_s_Instance->Allocate(sizeof(FontManager::TextLine));
+		if (!lineMem)
+			return ThisStdCall<FontManager::TextLine*>(0xA19F70, line, apChar, abAddHead);
+
+		return ThisStdCall<FontManager::TextLine*>(0xA1BD40,
+			lineMem, line->pPage, apChar, 0, line->iPageWidth);
 	}
 
 	FontManager::CharData* __fastcall FontManagerEx::CharDataCopy(FontManager::CharData* apChar, void*)

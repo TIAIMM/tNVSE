@@ -40,6 +40,7 @@ namespace fonthook
 		void __thiscall TextDocDestroy();
 		void __thiscall TextDocAddChar(CharData* apChar, int aiNewLines, bool abNewPage);
 		TextPage* __thiscall TextPageAddChar(CharData* apChar, int aiNewLines);
+		TextLine* __thiscall TextLineAddChar(CharData* apChar, bool abAddHead);
 		static CharData* __fastcall CharDataCopy(CharData* apChar, void*);
 	};
 

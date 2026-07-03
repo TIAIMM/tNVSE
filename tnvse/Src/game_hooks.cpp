@@ -75,6 +75,9 @@ namespace fonthook
 		// TextPage::TextPage -> TextPage::AddChar
 		WriteRelCallEx(0xA1BD1C, &FontManagerEx::TextPageAddChar);
 
+		// TextPage::AddChar -> TextLine::AddChar
+		WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar);
+
 		// FontManager::PrepHypertext -> CharData::Copy
 		WriteRelCall(0xA17898, &FontManagerEx::CharDataCopy);
 		WriteRelCall(0xA179CD, &FontManagerEx::CharDataCopy);
