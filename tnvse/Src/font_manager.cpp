@@ -10,10 +10,23 @@ namespace fonthook
 	namespace
 	{
 		static constexpr UInt32 kInitialAddCharLogCount = 8;
+		static constexpr UInt32 kRichTextHookEnterLogLimit = 64;
+		static constexpr UInt32 kRichTextHookEnterTextPreviewLimit = 1024;
+		static constexpr UInt32 kRichTextUtf8ProbeLogLimit = 32;
+		static constexpr UInt32 kRichTextDbcsMergeLogLimit = 32;
+		static constexpr UInt32 kRichTextDbcsFailureLogLimit = 64;
+		static constexpr UInt32 kRichTextCollectToScanLogLimit = 32;
+		static constexpr UInt32 kRichTextCollectToRiskLogLimit = 64;
 		std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCharExtras;
 		std::vector<FontManager::CharData*> sRichTextRenderAddChars;
 		FontManager::TextDoc* sRichTextRenderDoc = nullptr;
 		UInt32 sRichTextRenderAddCharIndex = 0;
+		UInt32 sRichTextHookEnterLogCount = 0;
+		UInt32 sRichTextUtf8ProbeLogCount = 0;
+		UInt32 sRichTextDbcsMergeLogCount = 0;
+		UInt32 sRichTextDbcsFailureLogCount = 0;
+		UInt32 sRichTextCollectToScanLogCount = 0;
+		UInt32 sRichTextCollectToRiskLogCount = 0;
 
 		struct PendingRichTextLead
 		{
@@ -25,6 +38,7 @@ namespace fonthook
 
 		std::unordered_map<FontManager::TextDoc*, PendingRichTextLead> sPendingRichTextLeads;
 		thread_local UInt32 sRichTextConvertedInputDepth = 0;
+		thread_local UInt32 sRichTextPrepTextParseDepth = 0;
 
 		using ExtraGlyphMap = std::unordered_map<UInt32, FontLetter>;
 
@@ -45,28 +59,63 @@ namespace fonthook
 			}
 		};
 
+		struct ScopedRichTextPrepTextParse
+		{
+			bool active = false;
+
+			explicit ScopedRichTextPrepTextParse(bool abActive) : active(abActive)
+			{
+				if (active)
+					++sRichTextPrepTextParseDepth;
+			}
+
+			~ScopedRichTextPrepTextParse()
+			{
+				if (active)
+					--sRichTextPrepTextParseDepth;
+			}
+		};
+
 		void LogRichTextHookEnter(const char* hookName, BSStringT<char>& arTextString, FontManager::TextData& arData)
 		{
+			if (sRichTextHookEnterLogCount >= kRichTextHookEnterLogLimit)
+				return;
+			++sRichTextHookEnterLogCount;
+
 			const char* text = arTextString.pString ? arTextString.pString : "";
 			UInt32 textLength = arTextString.pString ? arTextString.GetLength() : 0;
+			UInt32 previewLength = textLength;
+			bool truncated = false;
+			if (previewLength > kRichTextHookEnterTextPreviewLimit)
+			{
+				previewLength = kRichTextHookEnterTextPreviewLimit;
+				truncated = true;
+			}
+			std::string textPreview(text, text + previewLength);
+			if (truncated)
+				textPreview += "\n...<truncated>";
+
 			gLog.FormattedMessage(
 				"tnvse_rich_text:\n"
 				"  hook=%s\n"
 				"  phase=enter\n"
 				"  textLen=%u\n"
+				"  textPreviewLen=%u truncated=%d\n"
 				"  data: font=%d justify=%d width=%d height=%d page=%d hyper=%d\n"
 				"  textBegin:\n"
 				"%s\n"
 				"  textEnd",
 				hookName,
 				textLength,
+				previewLength,
+				truncated ? 1 : 0,
 				arData.iDefaultFont,
 				arData.iJustification,
 				arData.iWidth,
 				arData.iHeight,
 				arData.iPageNum,
 				arData.bIsHypertext ? 1 : 0,
-				text);
+				textPreview.c_str());
 		}
 
 		bool HasRichTextExtraGlyphs()
@@ -91,6 +140,187 @@ namespace fonthook
 				g_usingWinEncoding,
 				originalLength,
 				convertedLength);
+		}
+
+		bool HasHighBytes(const char* apText)
+		{
+			if (!apText)
+				return false;
+
+			for (const UInt8* p = reinterpret_cast<const UInt8*>(apText); *p; ++p)
+			{
+				if (*p >= 0x80)
+					return true;
+			}
+
+			return false;
+		}
+
+		void LogRichTextUtf8Probe(const char* hookName, const char* reason, UInt32 textLength)
+		{
+			if (sRichTextUtf8ProbeLogCount >= kRichTextUtf8ProbeLogLimit)
+				return;
+			++sRichTextUtf8ProbeLogCount;
+
+			gLog.FormattedMessage(
+				"tnvse_rich_text_convert_probe:\n"
+				"  hook=%s\n"
+				"  result=%s\n"
+				"  targetCodePage=%u\n"
+				"  textLen=%u",
+				hookName,
+				reason,
+				g_usingWinEncoding,
+				textLength);
+		}
+
+		bool TryConvertRichTextInput(
+			const char* hookName,
+			BSStringT<char>& arTextString,
+			const char*& arParserText,
+			std::string& arConvertedTextStorage)
+		{
+			const char* text = arTextString.pString ? arTextString.pString : "";
+			UInt32 textLength = arTextString.pString ? arTextString.GetLength() : 0;
+			if (!ShouldConvertRichTextInput())
+			{
+				if (HasHighBytes(text))
+					LogRichTextUtf8Probe(hookName, "skip-disabled-or-no-extra-glyphs", textLength);
+				return false;
+			}
+
+			if (!HasHighBytes(text))
+				return false;
+
+			if (!IsValidUTF8With3ByteMin(text))
+			{
+				LogRichTextUtf8Probe(hookName, "skip-not-valid-utf8", textLength);
+				return false;
+			}
+
+			arConvertedTextStorage = UTF8ToMultiByteStr(text, g_usingWinEncoding);
+			if (arConvertedTextStorage.empty())
+			{
+				LogRichTextUtf8Probe(hookName, "fail-empty-conversion", textLength);
+				return false;
+			}
+
+			arParserText = arConvertedTextStorage.c_str();
+			LogRichTextUtf8Conversion(hookName, textLength, (UInt32)arConvertedTextStorage.size());
+			return true;
+		}
+
+		char PrintableAscii(UInt8 c)
+		{
+			return (c >= 0x20 && c <= 0x7E) ? (char)c : '.';
+		}
+
+		bool IsRichTextCollectToRiskTrail(UInt8 c)
+		{
+			switch (c)
+			{
+			case '\t':
+			case '\n':
+			case '\r':
+			case ' ':
+			case '"':
+			case '\'':
+			case '&':
+			case '/':
+			case ';':
+			case '<':
+			case '=':
+			case '>':
+			case '{':
+			case '|':
+			case '}':
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		void LogRichTextCollectToRisk(
+			const char* hookName,
+			UInt32 pos,
+			UInt32 dbcsCode,
+			UInt8 lead,
+			UInt8 trail)
+		{
+			if (sRichTextCollectToRiskLogCount >= kRichTextCollectToRiskLogLimit)
+				return;
+			++sRichTextCollectToRiskLogCount;
+
+			gLog.FormattedMessage(
+				"tnvse_rich_text_collectto_risk:\n"
+				"  hook=%s\n"
+				"  pos=%u\n"
+				"  dbcsCode=0x%04X\n"
+				"  bytes=0x%02X 0x%02X trailAscii='%c'",
+				hookName,
+				pos,
+				dbcsCode,
+				lead,
+				trail,
+				PrintableAscii(trail));
+		}
+
+		void LogRichTextCollectToScan(
+			const char* hookName,
+			BSStringT<char>& arTextString)
+		{
+			if (!HasRichTextExtraGlyphs())
+				return;
+
+			const char* text = arTextString.pString ? arTextString.pString : "";
+			UInt32 textLength = arTextString.pString ? arTextString.GetLength() : 0;
+			if (!HasHighBytes(text))
+				return;
+
+			const UInt8* bytes = reinterpret_cast<const UInt8*>(text);
+			UInt32 dbcsPairs = 0;
+			UInt32 delimiterTrailPairs = 0;
+			UInt32 unmatchedHighBytes = 0;
+			for (UInt32 i = 0; i < textLength; ++i)
+			{
+				if (bytes[i] < 0x80)
+					continue;
+
+				UInt32 dbcsCode = 0;
+				if (i + 1 < textLength && TryDecodeDoubleByte(reinterpret_cast<const char*>(&bytes[i]), dbcsCode))
+				{
+					++dbcsPairs;
+					UInt8 trail = bytes[i + 1];
+					if (IsRichTextCollectToRiskTrail(trail))
+					{
+						++delimiterTrailPairs;
+						LogRichTextCollectToRisk(hookName, i, dbcsCode, bytes[i], trail);
+					}
+					++i;
+					continue;
+				}
+
+				++unmatchedHighBytes;
+			}
+
+			if (!dbcsPairs && !unmatchedHighBytes)
+				return;
+			if (sRichTextCollectToScanLogCount >= kRichTextCollectToScanLogLimit)
+				return;
+			++sRichTextCollectToScanLogCount;
+
+			gLog.FormattedMessage(
+				"tnvse_rich_text_collectto_scan:\n"
+				"  hook=%s\n"
+				"  targetCodePage=%u\n"
+				"  textLen=%u\n"
+				"  dbcsPairs=%u delimiterTrailPairs=%u unmatchedHighBytes=%u",
+				hookName,
+				g_usingWinEncoding,
+				textLength,
+				dbcsPairs,
+				delimiterTrailPairs,
+				unmatchedHighBytes);
 		}
 
 		ExtraGlyphMap* GetExtraGlyphsForChar(const FontManager::CharData* apChar, Font** apOutFont = nullptr)
@@ -143,13 +373,23 @@ namespace fonthook
 			if (!apChar || !apFont || !apFont->pFontData || !apGlyph)
 				return;
 
-			float width = apGlyph->fWidth;
-			if (apGlyph->fWidth != 0.0f)
-				width += apGlyph->fLeadingEdge + apGlyph->fSpacing;
-
-			apChar->iWidth = ConditionalFloatToUInt(width);
+			apChar->iWidth = ConditionalFloatToUInt(apGlyph->fWidth + apGlyph->fSpacing);
 			apChar->iRise = ConditionalFloatToUInt(apFont->pFontData->fBaseLine);
 			apChar->iDrop = ConditionalFloatToUInt(-apFont->fMaxDrop);
+			apChar->iLeadingEdge = 0;
+			apChar->iX = 0;
+		}
+
+		void InitRichTextLineBreakMarker(FontManager::CharData* apChar)
+		{
+			if (!apChar)
+				return;
+
+			ClearRichTextCharExtra(apChar);
+			apChar->cChar = ' ';
+			apChar->iWidth = 0;
+			apChar->iRise = 0;
+			apChar->iDrop = 0;
 			apChar->iLeadingEdge = 0;
 			apChar->iX = 0;
 		}
@@ -162,6 +402,10 @@ namespace fonthook
 			UInt32 auiDbcsCode,
 			const FontLetter* apGlyph)
 		{
+			if (sRichTextDbcsMergeLogCount >= kRichTextDbcsMergeLogLimit)
+				return;
+			++sRichTextDbcsMergeLogCount;
+
 			gLog.FormattedMessage(
 				"tnvse_rich_text_dbcs:\n"
 				"  callsite=%s\n"
@@ -183,6 +427,40 @@ namespace fonthook
 				apGlyph ? apGlyph->fSpacing : 0.0f);
 		}
 
+		void LogRichTextDbcsFailure(
+			const char* callsite,
+			const char* action,
+			const char* reason,
+			FontManager::TextDoc* apDoc,
+			const FontManager::CharData* apLead,
+			const FontManager::CharData* apTrail,
+			int aiTrailNewLines = 0,
+			bool abTrailNewPage = false)
+		{
+			if (sRichTextDbcsFailureLogCount >= kRichTextDbcsFailureLogLimit)
+				return;
+			++sRichTextDbcsFailureLogCount;
+
+			gLog.FormattedMessage(
+				"tnvse_rich_text_dbcs:\n"
+				"  callsite=%s\n"
+				"  action=%s\n"
+				"  reason=%s\n"
+				"  textDoc=0x%08X lead=0x%08X trail=0x%08X\n"
+				"  bytes=0x%02X 0x%02X\n"
+				"  trailArgs: newLines=%d newPage=%d",
+				callsite ? callsite : "",
+				action,
+				reason,
+				(UInt32)apDoc,
+				(UInt32)apLead,
+				(UInt32)apTrail,
+				apLead ? apLead->cChar : 0,
+				apTrail ? apTrail->cChar : 0,
+				aiTrailNewLines,
+				abTrailNewPage ? 1 : 0);
+		}
+
 		void FreeRichTextCharData(FontManager::CharData* apChar)
 		{
 			if (!apChar)
@@ -195,10 +473,6 @@ namespace fonthook
 		bool ShouldLogTextDocAddChar(const FontManager::CharData* apChar, UInt32 callCount)
 		{
 			if (callCount < kInitialAddCharLogCount || !apChar)
-				return true;
-
-			UInt32 dbcsCode = 0;
-			if (TryGetRichTextCharDbcs(apChar, dbcsCode) || apChar->cChar >= 0x80)
 				return true;
 
 			if (apChar->cChar == '\n' || apChar->cChar == '\r' || apChar->cChar == '\t')
@@ -275,7 +549,7 @@ namespace fonthook
 			ThisStdCall(0xA19A10, apDoc, apChar, aiNewLines, abNewPage);
 		}
 
-		void FlushPendingRichTextLead(FontManager::TextDoc* apDoc)
+		void FlushPendingRichTextLead(FontManager::TextDoc* apDoc, const char* reason)
 		{
 			auto it = sPendingRichTextLeads.find(apDoc);
 			if (it == sPendingRichTextLeads.end())
@@ -284,7 +558,11 @@ namespace fonthook
 			PendingRichTextLead pending = it->second;
 			sPendingRichTextLeads.erase(it);
 			if (pending.charData)
+			{
+				LogRichTextDbcsFailure(pending.callsite, "flush-pending-lead",
+					reason, apDoc, pending.charData, nullptr);
 				CallTextDocAddChar(apDoc, pending.charData, pending.newLines, pending.newPage);
+			}
 		}
 
 		void DiscardPendingRichTextLead(FontManager::TextDoc* apDoc)
@@ -303,31 +581,49 @@ namespace fonthook
 			const PendingRichTextLead& arPending,
 			FontManager::CharData* apTrail,
 			int aiTrailNewLines,
-			bool abTrailNewPage)
+			bool abTrailNewPage,
+			const char*& arRejectReason)
 		{
+			arRejectReason = "unknown";
 			FontManager::CharData* lead = arPending.charData;
 			if (!lead || !apTrail || aiTrailNewLines != 0 || abTrailNewPage)
+			{
+				arRejectReason = "missing-trail-or-newline-page-boundary";
 				return false;
+			}
 			if (HasRichTextFilename(lead) || HasRichTextFilename(apTrail))
+			{
+				arRejectReason = "image-entry";
 				return false;
+			}
 			if (lead->iFontIndex != apTrail->iFontIndex)
+			{
+				arRejectReason = "font-changed-between-bytes";
 				return false;
+			}
 
 			char bytes[2] = { (char)lead->cChar, (char)apTrail->cChar };
 			UInt32 dbcsCode = 0;
 			if (!TryDecodeDoubleByte(bytes, dbcsCode))
+			{
+				arRejectReason = "invalid-dbcs-pair";
 				return false;
+			}
 
 			Font* font = nullptr;
 			FontLetter* glyph = LookupRichTextDbcsGlyph(lead, dbcsCode, &font);
 			if (!glyph)
+			{
+				arRejectReason = "glyph-missing";
 				return false;
+			}
 
 			SetRichTextCharDbcs(lead, dbcsCode);
 			ApplyRichTextGlyphMetrics(lead, font, glyph);
 			LogRichTextDbcsMerge(arPending.callsite, apDoc, lead, apTrail, dbcsCode, glyph);
 			CallTextDocAddChar(apDoc, lead, arPending.newLines, arPending.newPage);
-			FreeRichTextCharData(apTrail);
+			InitRichTextLineBreakMarker(apTrail);
+			CallTextDocAddChar(apDoc, apTrail, 0, false);
 			return true;
 		}
 
@@ -351,13 +647,17 @@ namespace fonthook
 			if (pendingIt != sPendingRichTextLeads.end())
 			{
 				PendingRichTextLead pending = pendingIt->second;
-				if (TryMergePendingRichTextLead(apDoc, pending, apChar, aiNewLines, abNewPage))
+				const char* rejectReason = nullptr;
+				if (TryMergePendingRichTextLead(apDoc, pending, apChar, aiNewLines, abNewPage, rejectReason))
 				{
 					sPendingRichTextLeads.erase(pendingIt);
 					return;
 				}
 
-				FlushPendingRichTextLead(apDoc);
+				LogRichTextDbcsFailure(pending.callsite, "merge-rejected",
+					rejectReason ? rejectReason : "unknown", apDoc, pending.charData,
+					apChar, aiNewLines, abNewPage);
+				FlushPendingRichTextLead(apDoc, "merge-rejected");
 			}
 
 			if (CanHoldRichTextLead(apChar))
@@ -820,23 +1120,28 @@ namespace fonthook
 		const char* parserText = text;
 		std::string convertedTextStorage;
 		bool usedConvertedText = false;
-		if (ConvertToMultiByte(parserText, convertedTextStorage, ShouldConvertRichTextInput()))
+		if (TryConvertRichTextInput("FontManager::PrepHypertext",
+			arTextString, parserText, convertedTextStorage))
 		{
 			BSStringT<char> convertedText;
 			if (convertedText.Set(parserText))
 			{
 				usedConvertedText = true;
-				LogRichTextUtf8Conversion("FontManager::PrepHypertext",
-					arTextString.GetLength(), convertedText.GetLength());
+				if (sRichTextPrepTextParseDepth == 0)
+					LogRichTextCollectToScan("FontManager::PrepHypertext", convertedText);
 				ScopedRichTextConvertedInput convertedScope(true);
 				textDoc = FontManager::PrepHypertext(convertedText, arData);
 			}
 		}
 
 		if (!usedConvertedText)
+		{
+			if (sRichTextPrepTextParseDepth == 0)
+				LogRichTextCollectToScan("FontManager::PrepHypertext", arTextString);
 			textDoc = FontManager::PrepHypertext(arTextString, arData);
+		}
 
-		FlushPendingRichTextLead(textDoc);
+		FlushPendingRichTextLead(textDoc, "prep-hypertext-leave");
 		gLog.FormattedMessage(
 			"tnvse_rich_text:\n"
 			"  hook=FontManager::PrepHypertext\n"
@@ -853,22 +1158,25 @@ namespace fonthook
 		const char* text = arTextString.pString ? arTextString.pString : "";
 		const char* parserText = text;
 		std::string convertedTextStorage;
-		if (ConvertToMultiByte(parserText, convertedTextStorage, ShouldConvertRichTextInput()))
+		if (TryConvertRichTextInput("FontManager::PrepText",
+			arTextString, parserText, convertedTextStorage))
 		{
 			BSStringT<char> convertedText;
 			if (convertedText.Set(parserText))
 			{
-				LogRichTextUtf8Conversion("FontManager::PrepText",
-					arTextString.GetLength(), convertedText.GetLength());
+				LogRichTextCollectToScan("FontManager::PrepText", convertedText);
 				ScopedRichTextConvertedInput convertedScope(true);
+				ScopedRichTextPrepTextParse prepTextParseScope(true);
 				FontManager::TextDoc* textDoc = FontManager::PrepText(convertedText, arData);
-				FlushPendingRichTextLead(textDoc);
+				FlushPendingRichTextLead(textDoc, "prep-text-leave");
 				return textDoc;
 			}
 		}
 
+		LogRichTextCollectToScan("FontManager::PrepText", arTextString);
+		ScopedRichTextPrepTextParse prepTextParseScope(true);
 		FontManager::TextDoc* textDoc = FontManager::PrepText(arTextString, arData);
-		FlushPendingRichTextLead(textDoc);
+		FlushPendingRichTextLead(textDoc, "prep-text-leave");
 		return textDoc;
 	}
 
