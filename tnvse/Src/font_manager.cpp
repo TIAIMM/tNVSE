@@ -2,6 +2,7 @@
 #include "dictionary.h"
 #include "native_calls.h"
 #include <cmath>
+#include <string>
 #include <vector>
 
 namespace fonthook
@@ -13,6 +14,36 @@ namespace fonthook
 		std::vector<FontManager::CharData*> sRichTextRenderAddChars;
 		FontManager::TextDoc* sRichTextRenderDoc = nullptr;
 		UInt32 sRichTextRenderAddCharIndex = 0;
+
+		struct PendingRichTextLead
+		{
+			FontManager::CharData* charData = nullptr;
+			int newLines = 0;
+			bool newPage = false;
+			const char* callsite = nullptr;
+		};
+
+		std::unordered_map<FontManager::TextDoc*, PendingRichTextLead> sPendingRichTextLeads;
+		thread_local UInt32 sRichTextConvertedInputDepth = 0;
+
+		using ExtraGlyphMap = std::unordered_map<UInt32, FontLetter>;
+
+		struct ScopedRichTextConvertedInput
+		{
+			bool active = false;
+
+			explicit ScopedRichTextConvertedInput(bool abActive) : active(abActive)
+			{
+				if (active)
+					++sRichTextConvertedInputDepth;
+			}
+
+			~ScopedRichTextConvertedInput()
+			{
+				if (active)
+					--sRichTextConvertedInputDepth;
+			}
+		};
 
 		void LogRichTextHookEnter(const char* hookName, BSStringT<char>& arTextString, FontManager::TextData& arData)
 		{
@@ -36,6 +67,129 @@ namespace fonthook
 				arData.iPageNum,
 				arData.bIsHypertext ? 1 : 0,
 				text);
+		}
+
+		bool HasRichTextExtraGlyphs()
+		{
+			return !gNumberedExtraLetters.empty();
+		}
+
+		bool ShouldConvertRichTextInput()
+		{
+			return sRichTextConvertedInputDepth == 0 && HasRichTextExtraGlyphs();
+		}
+
+		void LogRichTextUtf8Conversion(const char* hookName, UInt32 originalLength, UInt32 convertedLength)
+		{
+			gLog.FormattedMessage(
+				"tnvse_rich_text_convert:\n"
+				"  hook=%s\n"
+				"  source=UTF-8\n"
+				"  targetCodePage=%u\n"
+				"  originalLen=%u convertedLen=%u",
+				hookName,
+				g_usingWinEncoding,
+				originalLength,
+				convertedLength);
+		}
+
+		ExtraGlyphMap* GetExtraGlyphsForChar(const FontManager::CharData* apChar, Font** apOutFont = nullptr)
+		{
+			if (apOutFont)
+				*apOutFont = nullptr;
+			if (!apChar)
+				return nullptr;
+
+			FontManager* fontManager = FontManager::GetSingleton();
+			if (!fontManager || apChar->iFontIndex < 0 || apChar->iFontIndex >= 8)
+				return nullptr;
+
+			Font* font = fontManager->pFont[apChar->iFontIndex];
+			if (!font)
+				return nullptr;
+
+			if (apOutFont)
+				*apOutFont = font;
+
+			auto it = gNumberedExtraLetters.find(font->iFontNum);
+			return it != gNumberedExtraLetters.end() ? &it->second : nullptr;
+		}
+
+		bool HasRichTextFilename(const FontManager::CharData* apChar)
+		{
+			return apChar && apChar->xFilename.pString && apChar->xFilename.pString[0];
+		}
+
+		bool CanHoldRichTextLead(const FontManager::CharData* apChar)
+		{
+			if (!apChar || HasRichTextFilename(apChar) || !IsLeadByte(apChar->cChar))
+				return false;
+
+			return GetExtraGlyphsForChar(apChar) != nullptr;
+		}
+
+		FontLetter* LookupRichTextDbcsGlyph(const FontManager::CharData* apChar, UInt32 auiDbcsCode, Font** apOutFont = nullptr)
+		{
+			ExtraGlyphMap* extraGlyphs = GetExtraGlyphsForChar(apChar, apOutFont);
+			if (!extraGlyphs)
+				return nullptr;
+
+			auto it = extraGlyphs->find(auiDbcsCode);
+			return it != extraGlyphs->end() ? &it->second : nullptr;
+		}
+
+		void ApplyRichTextGlyphMetrics(FontManager::CharData* apChar, Font* apFont, const FontLetter* apGlyph)
+		{
+			if (!apChar || !apFont || !apFont->pFontData || !apGlyph)
+				return;
+
+			float width = apGlyph->fWidth;
+			if (apGlyph->fWidth != 0.0f)
+				width += apGlyph->fLeadingEdge + apGlyph->fSpacing;
+
+			apChar->iWidth = ConditionalFloatToUInt(width);
+			apChar->iRise = ConditionalFloatToUInt(apFont->pFontData->fBaseLine);
+			apChar->iDrop = ConditionalFloatToUInt(-apFont->fMaxDrop);
+			apChar->iLeadingEdge = 0;
+			apChar->iX = 0;
+		}
+
+		void LogRichTextDbcsMerge(
+			const char* callsite,
+			FontManager::TextDoc* apDoc,
+			const FontManager::CharData* apLead,
+			const FontManager::CharData* apTrail,
+			UInt32 auiDbcsCode,
+			const FontLetter* apGlyph)
+		{
+			gLog.FormattedMessage(
+				"tnvse_rich_text_dbcs:\n"
+				"  callsite=%s\n"
+				"  action=merge-lead-trail\n"
+				"  textDoc=0x%08X lead=0x%08X trail=0x%08X\n"
+				"  bytes=0x%02X 0x%02X dbcsCode=0x%04X\n"
+				"  glyph=0x%08X texture=%d width=%.3f height=%.3f spacing=%.3f",
+				callsite,
+				(UInt32)apDoc,
+				(UInt32)apLead,
+				(UInt32)apTrail,
+				apLead ? apLead->cChar : 0,
+				apTrail ? apTrail->cChar : 0,
+				auiDbcsCode,
+				(UInt32)apGlyph,
+				apGlyph ? apGlyph->iTextureIndex : -1,
+				apGlyph ? apGlyph->fWidth : 0.0f,
+				apGlyph ? apGlyph->fHeight : 0.0f,
+				apGlyph ? apGlyph->fSpacing : 0.0f);
+		}
+
+		void FreeRichTextCharData(FontManager::CharData* apChar)
+		{
+			if (!apChar)
+				return;
+
+			ClearRichTextCharExtra(apChar);
+			MemoryManager_s_Instance->Deallocate(apChar);
 		}
 
 		bool ShouldLogTextDocAddChar(const FontManager::CharData* apChar, UInt32 callCount)
@@ -119,6 +273,100 @@ namespace fonthook
 		void CallTextDocAddChar(FontManager::TextDoc* apDoc, FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
 		{
 			ThisStdCall(0xA19A10, apDoc, apChar, aiNewLines, abNewPage);
+		}
+
+		void FlushPendingRichTextLead(FontManager::TextDoc* apDoc)
+		{
+			auto it = sPendingRichTextLeads.find(apDoc);
+			if (it == sPendingRichTextLeads.end())
+				return;
+
+			PendingRichTextLead pending = it->second;
+			sPendingRichTextLeads.erase(it);
+			if (pending.charData)
+				CallTextDocAddChar(apDoc, pending.charData, pending.newLines, pending.newPage);
+		}
+
+		void DiscardPendingRichTextLead(FontManager::TextDoc* apDoc)
+		{
+			auto it = sPendingRichTextLeads.find(apDoc);
+			if (it == sPendingRichTextLeads.end())
+				return;
+
+			FontManager::CharData* pendingChar = it->second.charData;
+			sPendingRichTextLeads.erase(it);
+			FreeRichTextCharData(pendingChar);
+		}
+
+		bool TryMergePendingRichTextLead(
+			FontManager::TextDoc* apDoc,
+			const PendingRichTextLead& arPending,
+			FontManager::CharData* apTrail,
+			int aiTrailNewLines,
+			bool abTrailNewPage)
+		{
+			FontManager::CharData* lead = arPending.charData;
+			if (!lead || !apTrail || aiTrailNewLines != 0 || abTrailNewPage)
+				return false;
+			if (HasRichTextFilename(lead) || HasRichTextFilename(apTrail))
+				return false;
+			if (lead->iFontIndex != apTrail->iFontIndex)
+				return false;
+
+			char bytes[2] = { (char)lead->cChar, (char)apTrail->cChar };
+			UInt32 dbcsCode = 0;
+			if (!TryDecodeDoubleByte(bytes, dbcsCode))
+				return false;
+
+			Font* font = nullptr;
+			FontLetter* glyph = LookupRichTextDbcsGlyph(lead, dbcsCode, &font);
+			if (!glyph)
+				return false;
+
+			SetRichTextCharDbcs(lead, dbcsCode);
+			ApplyRichTextGlyphMetrics(lead, font, glyph);
+			LogRichTextDbcsMerge(arPending.callsite, apDoc, lead, apTrail, dbcsCode, glyph);
+			CallTextDocAddChar(apDoc, lead, arPending.newLines, arPending.newPage);
+			FreeRichTextCharData(apTrail);
+			return true;
+		}
+
+		void HandleTextDocAddChar(
+			const char* callsite,
+			FontManager::TextDoc* apDoc,
+			FontManager::CharData* apChar,
+			int aiNewLines,
+			bool abNewPage,
+			UInt32& arCallCount)
+		{
+			LogTextDocAddChar(callsite, apDoc, apChar, aiNewLines, abNewPage, arCallCount);
+
+			if (!apDoc || !apChar)
+			{
+				CallTextDocAddChar(apDoc, apChar, aiNewLines, abNewPage);
+				return;
+			}
+
+			auto pendingIt = sPendingRichTextLeads.find(apDoc);
+			if (pendingIt != sPendingRichTextLeads.end())
+			{
+				PendingRichTextLead pending = pendingIt->second;
+				if (TryMergePendingRichTextLead(apDoc, pending, apChar, aiNewLines, abNewPage))
+				{
+					sPendingRichTextLeads.erase(pendingIt);
+					return;
+				}
+
+				FlushPendingRichTextLead(apDoc);
+			}
+
+			if (CanHoldRichTextLead(apChar))
+			{
+				sPendingRichTextLeads[apDoc] = { apChar, aiNewLines, abNewPage, callsite };
+				return;
+			}
+
+			CallTextDocAddChar(apDoc, apChar, aiNewLines, abNewPage);
 		}
 
 		void LogTextDocRenderEnter(FontManager::TextDoc* apDoc, NiNode* apNode, FontManager::TextData* apData)
@@ -567,7 +815,28 @@ namespace fonthook
 	{
 		LogRichTextHookEnter("FontManager::PrepHypertext", arTextString, arData);
 
-		FontManager::TextDoc* textDoc = FontManager::PrepHypertext(arTextString, arData);
+		FontManager::TextDoc* textDoc = nullptr;
+		const char* text = arTextString.pString ? arTextString.pString : "";
+		const char* parserText = text;
+		std::string convertedTextStorage;
+		bool usedConvertedText = false;
+		if (ConvertToMultiByte(parserText, convertedTextStorage, ShouldConvertRichTextInput()))
+		{
+			BSStringT<char> convertedText;
+			if (convertedText.Set(parserText))
+			{
+				usedConvertedText = true;
+				LogRichTextUtf8Conversion("FontManager::PrepHypertext",
+					arTextString.GetLength(), convertedText.GetLength());
+				ScopedRichTextConvertedInput convertedScope(true);
+				textDoc = FontManager::PrepHypertext(convertedText, arData);
+			}
+		}
+
+		if (!usedConvertedText)
+			textDoc = FontManager::PrepHypertext(arTextString, arData);
+
+		FlushPendingRichTextLead(textDoc);
 		gLog.FormattedMessage(
 			"tnvse_rich_text:\n"
 			"  hook=FontManager::PrepHypertext\n"
@@ -580,7 +849,27 @@ namespace fonthook
 	FontManager::TextDoc* __thiscall FontManagerEx::PrepText(BSStringT<char>& arTextString, FontManager::TextData& arData)
 	{
 		LogRichTextHookEnter("FontManager::PrepText", arTextString, arData);
-		return FontManager::PrepText(arTextString, arData);
+
+		const char* text = arTextString.pString ? arTextString.pString : "";
+		const char* parserText = text;
+		std::string convertedTextStorage;
+		if (ConvertToMultiByte(parserText, convertedTextStorage, ShouldConvertRichTextInput()))
+		{
+			BSStringT<char> convertedText;
+			if (convertedText.Set(parserText))
+			{
+				LogRichTextUtf8Conversion("FontManager::PrepText",
+					arTextString.GetLength(), convertedText.GetLength());
+				ScopedRichTextConvertedInput convertedScope(true);
+				FontManager::TextDoc* textDoc = FontManager::PrepText(convertedText, arData);
+				FlushPendingRichTextLead(textDoc);
+				return textDoc;
+			}
+		}
+
+		FontManager::TextDoc* textDoc = FontManager::PrepText(arTextString, arData);
+		FlushPendingRichTextLead(textDoc);
+		return textDoc;
 	}
 
 	void __thiscall FontManagerEx::TextDocRender(NiNode* apNode, FontManager::TextData* apData)
@@ -595,6 +884,7 @@ namespace fonthook
 	void __thiscall FontManagerEx::TextDocDestroy()
 	{
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
+		DiscardPendingRichTextLead(doc);
 		UInt32 clearedExtraCount = ClearRichTextCharExtrasForDoc(doc);
 		LogTextDocDestroy(doc, clearedExtraCount);
 		CallTextDocDestroy(doc);
@@ -604,32 +894,28 @@ namespace fonthook
 	{
 		static UInt32 sCallCount = 0;
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
-		LogTextDocAddChar("0xA178A4 PrepHypertext", doc, apChar, aiNewLines, abNewPage, sCallCount);
-		CallTextDocAddChar(doc, apChar, aiNewLines, abNewPage);
+		HandleTextDocAddChar("0xA178A4 PrepHypertext", doc, apChar, aiNewLines, abNewPage, sCallCount);
 	}
 
 	void __thiscall FontManagerEx::TextDocAddChar_A179D9(FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
 	{
 		static UInt32 sCallCount = 0;
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
-		LogTextDocAddChar("0xA179D9 PrepHypertext", doc, apChar, aiNewLines, abNewPage, sCallCount);
-		CallTextDocAddChar(doc, apChar, aiNewLines, abNewPage);
+		HandleTextDocAddChar("0xA179D9 PrepHypertext", doc, apChar, aiNewLines, abNewPage, sCallCount);
 	}
 
 	void __thiscall FontManagerEx::TextDocAddChar_A17FC2(FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
 	{
 		static UInt32 sCallCount = 0;
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
-		LogTextDocAddChar("0xA17FC2 PrepHypertext", doc, apChar, aiNewLines, abNewPage, sCallCount);
-		CallTextDocAddChar(doc, apChar, aiNewLines, abNewPage);
+		HandleTextDocAddChar("0xA17FC2 PrepHypertext", doc, apChar, aiNewLines, abNewPage, sCallCount);
 	}
 
 	void __thiscall FontManagerEx::TextDocAddChar_A18D7C(FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
 	{
 		static UInt32 sCallCount = 0;
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
-		LogTextDocAddChar("0xA18D7C PrepText", doc, apChar, aiNewLines, abNewPage, sCallCount);
-		CallTextDocAddChar(doc, apChar, aiNewLines, abNewPage);
+		HandleTextDocAddChar("0xA18D7C PrepText", doc, apChar, aiNewLines, abNewPage, sCallCount);
 	}
 
 } // namespace fonthook

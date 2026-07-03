@@ -76,6 +76,23 @@ namespace fonthook
 		return glyphOffset / sizeof(FontLetter);
 	}
 
+	static FontLetter* ResolveRichTextRenderGlyph(
+		Font* apFont,
+		const RichTextRenderAddCharInfo& arRenderInfo,
+		bool abHasRenderInfo,
+		FontLetter* apOriginalLetter)
+	{
+		if (!abHasRenderInfo || !apFont || !arRenderInfo.charData)
+			return apOriginalLetter;
+
+		UInt32 dbcsCode = 0;
+		if (!TryGetRichTextCharDbcs(arRenderInfo.charData, dbcsCode))
+			return apOriginalLetter;
+
+		FontLetter* glyph = LookupDBGlyph(GetExtraGlyphs(apFont->iFontNum), dbcsCode);
+		return glyph ? glyph : apOriginalLetter;
+	}
+
 	static bool ShouldLogTextDocRenderAddChar(
 		const RichTextRenderAddCharInfo& arRenderInfo,
 		bool abHasRenderInfo,
@@ -109,6 +126,7 @@ namespace fonthook
 		const RichTextRenderAddCharInfo& arRenderInfo,
 		bool abHasRenderInfo,
 		FontLetter* apLetter,
+		FontLetter* apRenderLetter,
 		int aiVert,
 		NiTriShape* apShape,
 		NiPoint3* apPosition,
@@ -135,7 +153,7 @@ namespace fonthook
 			"  font=0x%08X fontNum=%d fontFile=\"%s\"\n"
 			"  char: byte=0x%02X ascii='%c' font=%d width=%d rise=%d drop=%d leading=%d x=%d richDbcs=%d dbcsCode=0x%04X\n"
 			"  args: letter=0x%08X vert=%d shape=0x%08X pos=0x%08X color=0x%08X\n"
-			"  glyph: baseGlyphIndex=%d texture=%d width=%.3f height=%.3f leading=%.3f spacing=%.3f top=%.3f\n"
+			"  glyph: baseGlyphIndex=%d renderLetter=0x%08X replaced=%d texture=%d width=%.3f height=%.3f leading=%.3f spacing=%.3f top=%.3f\n"
 			"  pos: x=%.3f y=%.3f z=%.3f\n"
 			"  color: r=%.3f g=%.3f b=%.3f a=%.3f",
 			callCount,
@@ -162,12 +180,14 @@ namespace fonthook
 			reinterpret_cast<UInt32>(apPosition),
 			reinterpret_cast<UInt32>(apColor),
 			glyphIndex,
-			apLetter ? apLetter->iTextureIndex : -1,
-			apLetter ? apLetter->fWidth : 0.0f,
-			apLetter ? apLetter->fHeight : 0.0f,
-			apLetter ? apLetter->fLeadingEdge : 0.0f,
-			apLetter ? apLetter->fSpacing : 0.0f,
-			apLetter ? apLetter->fTopEdge : 0.0f,
+			reinterpret_cast<UInt32>(apRenderLetter),
+			apRenderLetter != apLetter ? 1 : 0,
+			apRenderLetter ? apRenderLetter->iTextureIndex : -1,
+			apRenderLetter ? apRenderLetter->fWidth : 0.0f,
+			apRenderLetter ? apRenderLetter->fHeight : 0.0f,
+			apRenderLetter ? apRenderLetter->fLeadingEdge : 0.0f,
+			apRenderLetter ? apRenderLetter->fSpacing : 0.0f,
+			apRenderLetter ? apRenderLetter->fTopEdge : 0.0f,
 			apPosition ? apPosition->x : 0.0f,
 			apPosition ? apPosition->y : 0.0f,
 			apPosition ? apPosition->z : 0.0f,
@@ -1181,9 +1201,10 @@ namespace fonthook
 		static UInt32 sCallCount = 0;
 		RichTextRenderAddCharInfo renderInfo = {};
 		bool hasRenderInfo = TryConsumeRichTextRenderAddChar(renderInfo);
+		FontLetter* renderLetter = ResolveRichTextRenderGlyph(this, renderInfo, hasRenderInfo, apLetter);
 		LogTextDocRenderAddChar(this, renderInfo, hasRenderInfo, apLetter,
-			aiVert, apShape, apPosition, apColor, sCallCount);
-		Font::AddChar(apLetter, aiVert, apShape, apPosition, apColor);
+			renderLetter, aiVert, apShape, apPosition, apColor, sCallCount);
+		Font::AddChar(renderLetter, aiVert, apShape, apPosition, apColor);
 	}
 
 } // namespace fonthook
