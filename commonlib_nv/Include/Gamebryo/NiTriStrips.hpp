@@ -14,7 +14,7 @@ public:
 
 	static NiTriStrips* Create(UInt16 ausVertices, NiPoint3* apVertex, NiPoint3* apNormal, NiColorA* apColor, NiPoint2* apTexture, UInt16 ausNumTextureSets, NiGeometryData::DataFlags aeNBTMethod, UInt16 ausTriangles, UInt16 ausStrips, UInt16* apusStripLengths, UInt16* apusStripLists);
 
-	NiTriStripsData* GetModelData() const;
+	__forceinline NiTriStripsData* GetModelData() const { return (NiTriStripsData*)NiGeometry::GetModelData(); }
 
 	void RenderImmediateEx(NiDX9Renderer* apRenderer);
 	void RenderImmediateAltEx(NiDX9Renderer* apRenderer);

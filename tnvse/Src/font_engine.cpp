@@ -954,7 +954,7 @@ namespace fonthook
 			pIconShape = Font::MakeIconsTriShape();
 			*apIconShape = pIconShape;
 			pIconShape->m_kLocal.m_Translate = NiPoint3(0.0f, textPosition.y, textPosition.z);
-			ThisStdCall(0xA67050, *reinterpret_cast<NiTriShapeData**>(reinterpret_cast<char*>(pIconShape) + 0xB8), 0x4000);
+			ThisStdCall(0xA67050, pIconShape->GetModelData(), 0x4000);
 		}
 
 		float yOffsetStart = textPosition.x;
@@ -1037,13 +1037,12 @@ namespace fonthook
 		}
 
 		// Recompute bounding volumes for text/icon geometry (NiBound::ComputeFromData)
-		// Use direct offset (0xB8) to access m_spModelData, bypassing unimplemented GetModelData()
-		auto* pTextGeomData = *reinterpret_cast<NiTriShapeData**>(reinterpret_cast<char*>(pTextShape) + 0xB8);
+		auto* pTextGeomData = pTextShape->GetModelData();
 		ThisStdCall(0xA7EE30, &pTextGeomData->m_kBound,
 			pTextGeomData->m_usVertices, pTextGeomData->m_pkVertex);
 		if (pIconShape)
 		{
-			auto* pIconGeomData = *reinterpret_cast<NiTriShapeData**>(reinterpret_cast<char*>(pIconShape) + 0xB8);
+			auto* pIconGeomData = pIconShape->GetModelData();
 			ThisStdCall(0xA7EE30, &pIconGeomData->m_kBound,
 				pIconGeomData->m_usVertices, pIconGeomData->m_pkVertex);
 		}
@@ -1184,8 +1183,7 @@ namespace fonthook
 		}
 
 		// Recompute bounding volume for text geometry (NiBound::ComputeFromData)
-		// Use direct offset (0xB8) to access m_spModelData, bypassing unimplemented GetModelData()
-		auto* pGeomData = *reinterpret_cast<NiTriShapeData**>(reinterpret_cast<char*>(pTriShape) + 0xB8);
+		auto* pGeomData = pTriShape->GetModelData();
 		ThisStdCall(0xA7EE30, &pGeomData->m_kBound,
 			pGeomData->m_usVertices, pGeomData->m_pkVertex);
 		return pTriShape;

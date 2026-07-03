@@ -13,7 +13,7 @@ public:
 
 	NIRTTI_ADDRESS(0x11F5B70);
 
-	NiTriBasedGeomData* GetModelData() const;
+	__forceinline NiTriBasedGeomData* GetModelData() const { return (NiTriBasedGeomData*)NiGeometry::GetModelData(); }
 };
 
 ASSERT_SIZE(NiTriBasedGeom, 0xC4);

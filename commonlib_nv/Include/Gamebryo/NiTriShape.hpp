@@ -15,7 +15,7 @@ public:
 	static NiTriShape* Create(NiTriShapeData* apData);
 	static NiTriShape* Create(UInt16 ausVertices, NiPoint3* apkVertex, NiPoint3* apkNormal, NiColorA* apkColor, NiPoint2* apkTexture, UInt16 ausNumTextureSets, UInt32 aeNBTMethod, UInt16 ausTriangles, UInt16* apusTriList);
 
-	NiTriShapeData* GetModelData() const;
+	__forceinline NiTriShapeData* GetModelData() const { return (NiTriShapeData*)NiGeometry::GetModelData(); }
 
 	UInt32 GetTriListLength();
 	UInt16* GetTriList();
