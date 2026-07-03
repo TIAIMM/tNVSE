@@ -1142,6 +1142,27 @@ namespace fonthook
 		HandleTextDocAddChar("TextDoc::AddChar", doc, apChar, aiNewLines, abNewPage, sCallCount);
 	}
 
+	FontManager::TextPage* __thiscall FontManagerEx::TextPageAddChar(FontManager::CharData* apChar, int aiNewLines)
+	{
+		FontManager::TextPage* page = reinterpret_cast<FontManager::TextPage*>(this);
+		FontManager::TextPage* addedPage = ThisStdCall<FontManager::TextPage*>(0xA19C00, page, apChar, aiNewLines);
+
+		UInt32 dbcsCode = 0;
+		if (!apChar || HasRichTextFilename(apChar) || !TryGetRichTextCharDbcs(apChar, dbcsCode))
+			return addedPage;
+
+		Font* font = nullptr;
+		FontLetter* glyph = LookupRichTextDbcsGlyph(apChar, dbcsCode, &font);
+		if (!font || !font->pFontData || !glyph)
+			return addedPage;
+
+		FontManager::TextPage* targetPage = addedPage ? addedPage : page;
+		if (targetPage)
+			targetPage->iLastFontHeight = GetGlyphLayoutLineHeight(font->pFontData, glyph);
+
+		return addedPage;
+	}
+
 	FontManager::CharData* __fastcall FontManagerEx::CharDataCopy(FontManager::CharData* apChar, void*)
 	{
 		FontManager::CharData* copiedChar = ThisStdCall<FontManager::CharData*>(0xA1B660, apChar);
