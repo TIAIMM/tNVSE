@@ -1,5 +1,6 @@
 #include "text_hooks.h"
 #include "dictionary.h"
+#include "font_glyphs.h"
 
 namespace fonthook
 {
@@ -90,7 +91,7 @@ namespace fonthook
 		if (!a3)
 			return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);
 
-		bool bHasFont8 = gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end();
+		bool bHasFont8 = HasExtraGlyphsForFont(8);
 		if (bHasFont8)
 		{
 			bIsQuestTextLSBDBCharacter = false;
@@ -132,7 +133,7 @@ namespace fonthook
 	{
 		const char* pStr = pthis->pString;
 		std::string sConvertedStr;
-		if (ConvertToMultiByte(pStr, sConvertedStr, gNumberedExtraLetters.find(5) != gNumberedExtraLetters.end()))
+		if (ConvertToMultiByte(pStr, sConvertedStr, HasExtraGlyphsForFont(5)))
 			pthis->Set(pStr);
 		std::string sTranslatedStr;
 		if (TranslateText(pthis->pString, sTranslatedStr))
@@ -144,7 +145,7 @@ namespace fonthook
 	{
 		const char* pStr = pthis->pString;
 		std::string sConvertedStr;
-		if (ConvertToMultiByte(pStr, sConvertedStr, gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end()))
+		if (ConvertToMultiByte(pStr, sConvertedStr, HasExtraGlyphsForFont(8)))
 			pthis->Set(pStr);
 		std::string sTranslatedStr;
 		if (TranslateText(pthis->pString, sTranslatedStr))
@@ -156,7 +157,7 @@ namespace fonthook
 	int __cdecl strcpy_sHook(char* dest, int dest_size, const char* src)
 	{
 		std::string sConvertedStr;
-		ConvertToMultiByte(src, sConvertedStr, gNumberedExtraLetters.find(8) != gNumberedExtraLetters.end());
+		ConvertToMultiByte(src, sConvertedStr, HasExtraGlyphsForFont(8));
 		std::string sTranslatedStr;
 		if (TranslateText(src, sTranslatedStr))
 			return strcpy_s(dest, dest_size, sTranslatedStr.c_str());

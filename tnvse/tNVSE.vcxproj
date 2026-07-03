@@ -171,6 +171,7 @@
     <ClInclude Include="Src\encoding.h" />
     <ClInclude Include="Src\native_calls.h" />
     <ClInclude Include="Src\font_engine.h" />
+    <ClInclude Include="Src\font_glyphs.h" />
     <ClInclude Include="Src\font_manager.h" />
     <ClInclude Include="Src\save_name.h" />
     <ClInclude Include="Src\text_hooks.h" />

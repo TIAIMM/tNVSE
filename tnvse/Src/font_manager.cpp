@@ -1,5 +1,6 @@
 #include "font_manager.h"
 #include "dictionary.h"
+#include "font_glyphs.h"
 #include "native_calls.h"
 #include <cmath>
 #include <string>
@@ -12,7 +13,6 @@ namespace fonthook
 		static constexpr UInt32 kInitialAddCharLogCount = 8;
 		static constexpr UInt32 kRichTextHookEnterLogLimit = 64;
 		static constexpr UInt32 kRichTextHookEnterTextPreviewLimit = 1024;
-		static constexpr UInt32 kRichTextUtf8ProbeLogLimit = 32;
 		static constexpr UInt32 kRichTextDbcsMergeLogLimit = 32;
 		static constexpr UInt32 kRichTextDbcsFailureLogLimit = 64;
 		static constexpr UInt32 kRichTextCollectToScanLogLimit = 32;
@@ -22,7 +22,6 @@ namespace fonthook
 		FontManager::TextDoc* sRichTextRenderDoc = nullptr;
 		UInt32 sRichTextRenderAddCharIndex = 0;
 		UInt32 sRichTextHookEnterLogCount = 0;
-		UInt32 sRichTextUtf8ProbeLogCount = 0;
 		UInt32 sRichTextDbcsMergeLogCount = 0;
 		UInt32 sRichTextDbcsFailureLogCount = 0;
 		UInt32 sRichTextCollectToScanLogCount = 0;
@@ -39,8 +38,6 @@ namespace fonthook
 		std::unordered_map<FontManager::TextDoc*, PendingRichTextLead> sPendingRichTextLeads;
 		thread_local UInt32 sRichTextConvertedInputDepth = 0;
 		thread_local UInt32 sRichTextPrepTextParseDepth = 0;
-
-		using ExtraGlyphMap = std::unordered_map<UInt32, FontLetter>;
 
 		struct ScopedRichTextConvertedInput
 		{
@@ -120,12 +117,7 @@ namespace fonthook
 
 		bool HasRichTextExtraGlyphs()
 		{
-			return !gNumberedExtraLetters.empty();
-		}
-
-		bool ShouldConvertRichTextInput()
-		{
-			return sRichTextConvertedInputDepth == 0 && HasRichTextExtraGlyphs();
+			return HasAnyExtraGlyphs();
 		}
 
 		void LogRichTextUtf8Conversion(const char* hookName, UInt32 originalLength, UInt32 convertedLength)
@@ -142,38 +134,6 @@ namespace fonthook
 				convertedLength);
 		}
 
-		bool HasHighBytes(const char* apText)
-		{
-			if (!apText)
-				return false;
-
-			for (const UInt8* p = reinterpret_cast<const UInt8*>(apText); *p; ++p)
-			{
-				if (*p >= 0x80)
-					return true;
-			}
-
-			return false;
-		}
-
-		void LogRichTextUtf8Probe(const char* hookName, const char* reason, UInt32 textLength)
-		{
-			if (sRichTextUtf8ProbeLogCount >= kRichTextUtf8ProbeLogLimit)
-				return;
-			++sRichTextUtf8ProbeLogCount;
-
-			gLog.FormattedMessage(
-				"tnvse_rich_text_convert_probe:\n"
-				"  hook=%s\n"
-				"  result=%s\n"
-				"  targetCodePage=%u\n"
-				"  textLen=%u",
-				hookName,
-				reason,
-				g_usingWinEncoding,
-				textLength);
-		}
-
 		bool TryConvertRichTextInput(
 			const char* hookName,
 			BSStringT<char>& arTextString,
@@ -182,30 +142,14 @@ namespace fonthook
 		{
 			const char* text = arTextString.pString ? arTextString.pString : "";
 			UInt32 textLength = arTextString.pString ? arTextString.GetLength() : 0;
-			if (!ShouldConvertRichTextInput())
-			{
-				if (HasHighBytes(text))
-					LogRichTextUtf8Probe(hookName, "skip-disabled-or-no-extra-glyphs", textLength);
-				return false;
-			}
-
-			if (!HasHighBytes(text))
+			if (sRichTextConvertedInputDepth != 0)
 				return false;
 
-			if (!IsValidUTF8With3ByteMin(text))
-			{
-				LogRichTextUtf8Probe(hookName, "skip-not-valid-utf8", textLength);
+			const char* parserText = text;
+			if (!ConvertToMultiByte(parserText, arConvertedTextStorage, HasRichTextExtraGlyphs()))
 				return false;
-			}
 
-			arConvertedTextStorage = UTF8ToMultiByteStr(text, g_usingWinEncoding);
-			if (arConvertedTextStorage.empty())
-			{
-				LogRichTextUtf8Probe(hookName, "fail-empty-conversion", textLength);
-				return false;
-			}
-
-			arParserText = arConvertedTextStorage.c_str();
+			arParserText = parserText;
 			LogRichTextUtf8Conversion(hookName, textLength, (UInt32)arConvertedTextStorage.size());
 			return true;
 		}
@@ -274,8 +218,6 @@ namespace fonthook
 
 			const char* text = arTextString.pString ? arTextString.pString : "";
 			UInt32 textLength = arTextString.pString ? arTextString.GetLength() : 0;
-			if (!HasHighBytes(text))
-				return;
 
 			const UInt8* bytes = reinterpret_cast<const UInt8*>(text);
 			UInt32 dbcsPairs = 0;
@@ -341,8 +283,7 @@ namespace fonthook
 			if (apOutFont)
 				*apOutFont = font;
 
-			auto it = gNumberedExtraLetters.find(font->iFontNum);
-			return it != gNumberedExtraLetters.end() ? &it->second : nullptr;
+			return GetExtraGlyphs(font->iFontNum);
 		}
 
 		bool HasRichTextFilename(const FontManager::CharData* apChar)
@@ -361,11 +302,7 @@ namespace fonthook
 		FontLetter* LookupRichTextDbcsGlyph(const FontManager::CharData* apChar, UInt32 auiDbcsCode, Font** apOutFont = nullptr)
 		{
 			ExtraGlyphMap* extraGlyphs = GetExtraGlyphsForChar(apChar, apOutFont);
-			if (!extraGlyphs)
-				return nullptr;
-
-			auto it = extraGlyphs->find(auiDbcsCode);
-			return it != extraGlyphs->end() ? &it->second : nullptr;
+			return LookupDBGlyph(extraGlyphs, auiDbcsCode);
 		}
 
 		void ApplyRichTextGlyphMetrics(FontManager::CharData* apChar, Font* apFont, const FontLetter* apGlyph)
@@ -373,7 +310,7 @@ namespace fonthook
 			if (!apChar || !apFont || !apFont->pFontData || !apGlyph)
 				return;
 
-			apChar->iWidth = ConditionalFloatToUInt(apGlyph->fWidth + apGlyph->fSpacing);
+			apChar->iWidth = GetGlyphLayoutWidth(apGlyph);
 			apChar->iRise = ConditionalFloatToUInt(apFont->pFontData->fBaseLine);
 			apChar->iDrop = ConditionalFloatToUInt(-apFont->fMaxDrop);
 			apChar->iLeadingEdge = 0;
@@ -970,8 +907,7 @@ namespace fonthook
 
 	NiPoint3* __thiscall FontManagerEx::CalculateStringDimensions(NiPoint3* outDimensions, const char* srcString, UInt32 fontID, float maxWrapWidth, UInt32 startCharIndex)
 	{
-		auto extraGlyphEntry = gNumberedExtraLetters.find(fontID);
-		auto* extraGlyphs = extraGlyphEntry != gNumberedExtraLetters.end() ? &extraGlyphEntry->second : nullptr;
+		auto* extraGlyphs = GetExtraGlyphs(fontID);
 
 		if (fontID < 1 || !srcString)
 		{

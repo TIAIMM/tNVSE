@@ -1,29 +1,15 @@
 #include "font_engine.h"
 #include "dictionary.h"
+#include "font_glyphs.h"
 #include "font_manager.h"
 #include "native_calls.h"
 #include <cmath>
 
 namespace fonthook
 {
-	// ---- Helper: find extra glyphs for a given font number ----
-	static auto GetExtraGlyphs(int fontNum)
-	{
-		auto it = gNumberedExtraLetters.find(fontNum);
-		return it != gNumberedExtraLetters.end() ? &it->second : nullptr;
-	}
-
-	// ---- Helper: look up a double-byte glyph, returns nullptr if not found ----
-	static FontLetter* LookupDBGlyph(std::unordered_map<UInt32, FontLetter>* extraGlyphs, UInt32 code)
-	{
-		if (!extraGlyphs) return nullptr;
-		auto it = extraGlyphs->find(code);
-		return it != extraGlyphs->end() ? &it->second : nullptr;
-	}
-
 	// ---- Helper: look up last character glyph (for wrap handling) ----
 	static FontLetter* LookupLastCharGlyph(
-		std::unordered_map<UInt32, FontLetter>* extraGlyphs,
+		ExtraGlyphMap* extraGlyphs,
 		const char* buffer, UInt32 processedLen, FontData* fontData,
 		UInt32& outDBCode, bool& outIsDB)
 	{
@@ -676,13 +662,13 @@ namespace fonthook
 						}
 						++buttonIconIndex;
 					}
-					charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+					charWidthWithKerning = GetGlyphLayoutWidth(pCurrentGlyph);
 					currentLineWidth += charWidthWithKerning;
 					if (currentChar == '~')
 					{
 						lastWrapPosition = processedTextLen;
 						isTildeChar = true;
-						UInt32 tildeCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+						UInt32 tildeCharWidth = GetGlyphLayoutWidth(pCurrentGlyph);
 						currentLineWidth -= tildeCharWidth;
 						preSpaceWidth = currentLineWidth;
 						postSpaceWidth = currentLineWidth;
@@ -695,7 +681,7 @@ namespace fonthook
 					if (glyph)
 					{
 						pCurrentGlyph = glyph;
-						charWidthWithKerning = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+						charWidthWithKerning = GetGlyphLayoutWidth(pCurrentGlyph);
 						currentLineWidth += charWidthWithKerning;
 					}
 				}
@@ -722,7 +708,7 @@ namespace fonthook
 							++currentLineCount;
 
 							pCurrentGlyph = LookupLastCharGlyph(extraGlyphs, dynamicTextBuffer, processedTextLen, font->pFontData, uiTempDoubleByteCode, bLastIsDBCharacter);
-							currentLineWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+							currentLineWidth = GetGlyphLayoutWidth(pCurrentGlyph);
 
 							if (bIsDBCharacter)
 							{
@@ -734,7 +720,7 @@ namespace fonthook
 								pCurrentGlyph = &pFontLetters[currentChar];
 							}
 
-							UInt32 nextCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+							UInt32 nextCharWidth = GetGlyphLayoutWidth(pCurrentGlyph);
 							currentLineWidth += nextCharWidth;
 						}
 						else
@@ -783,7 +769,7 @@ namespace fonthook
 						++currentLineCount;
 
 						pCurrentGlyph = LookupLastCharGlyph(extraGlyphs, dynamicTextBuffer, processedTextLen, font->pFontData, uiTempDoubleByteCode, bLastIsDBCharacter);
-						currentLineWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+						currentLineWidth = GetGlyphLayoutWidth(pCurrentGlyph);
 
 						if (bIsDBCharacter)
 						{
@@ -795,7 +781,7 @@ namespace fonthook
 							pCurrentGlyph = &pFontLetters[currentChar];
 						}
 
-						UInt32 combinedCharWidth = ConditionalFloatToUInt(pCurrentGlyph->fWidth + pCurrentGlyph->fSpacing);
+						UInt32 combinedCharWidth = GetGlyphLayoutWidth(pCurrentGlyph);
 						currentLineWidth += combinedCharWidth;
 					}
 				}

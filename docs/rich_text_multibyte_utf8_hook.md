@@ -853,11 +853,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 #### 输入 UTF-8 转换
 
-`PrepText` / `PrepHypertext` 入口通过 `TryConvertRichTextInput` 在解析前完成 UTF-8 → codepage 转换（第 5.2 节）。`ScopedRichTextConvertedInput` / `ScopedRichTextPrepTextParse` 用 thread_local 深度计数防止递归转换。
-
-> **与成熟 `Font` 管线的风格偏离（待对齐）**：当前 `TryConvertRichTextInput` 内联手写了 `ShouldConvertRichTextInput`（`sRichTextConvertedInputDepth == 0 && HasRichTextExtraGlyphs()`）+ `HasHighBytes` + `IsValidUTF8With3ByteMin` + `UTF8ToMultiByteStr` 的条件链，而普通 `Font` 管线的 `FontEx::PrepText` / `CreateText` / `MakeString` 直接调用 `ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr)`（`encoding.h` 已封装 `ShouldConvertUTF8` + `IsValidUTF8With3ByteMin` + `UTF8ToMultiByteStr`）。
->
-> 为使两条管线行为与代码风格一致，下一步应将 `TryConvertRichTextInput` 主体替换为对 `ConvertToMultiByte` 的直接调用（仅保留 thread_local 递归守卫和入口日志），删除 `HasHighBytes` / 重复的 `IsValidUTF8With3ByteMin` 触点。这样富文本就能自动继承 `ConvertToMultiByte` 的未来调整，不再单独维护一字节条件链。
+`PrepText` / `PrepHypertext` 入口通过 `TryConvertRichTextInput` 在解析前完成 UTF-8 → codepage 转换（第 5.2 节）。`TryConvertRichTextInput` 当前已统一调用 `ConvertToMultiByte(parserText, convertedTextStorage, HasRichTextExtraGlyphs())`，与普通 `FontEx::PrepText` / `CreateText` / `MakeString` 共享同一套 `ShouldConvertUTF8`、`IsValidUTF8With3ByteMin` 和 `UTF8ToMultiByteStr` 判断。富文本侧只额外保留 `sRichTextConvertedInputDepth` / `ScopedRichTextConvertedInput` 递归守卫，以及转换成功日志。
 
 #### 渲染字符发射点
 
@@ -884,13 +880,13 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 4. **PrepHypertext tag 内 DBCS trail byte 分隔符冲突**：当前 `CollectTo` 未 hook（已回退，见 12.2），`PrepHypertext` 内部 `CollectTo` 仍按单字节判断 delimiter，且除 `CollectTo` 外 `PrepHypertext` 还有直接调用 `GetCharType` 的位置（`0xA17DB9`）。如果 DBCS trail byte 等于 `<`/`>`/`=`/quote 等，这些位置仍按单字节判断。需在后续自建/接管 `PrepHypertext` tokenizer 时统一修正（此时也一并复刻 `CollectTo` 的 DBCS-aware 普通文本收集语义）。
 
-5. **输入转换与成熟 `Font` 管线对齐**：`TryConvertRichTextInput` 仍用手写条件链而非 `ConvertToMultiByte`，与普通 `FontEx::PrepText` / `CreateText` / `MakeString` 的统一入口不同。下一步将 `TryConvertRichTextInput` 主体替换为 `ConvertToMultiByte` 调用，仅保留 thread_local 递归守卫与入口日志，删除 `HasHighBytes` 和重复的 `IsValidUTF8With3ByteMin` 触点，使两条管线共享同一转换逻辑来源。
+5. **输入转换与成熟 `Font` 管线对齐**：已完成。`TryConvertRichTextInput` 只负责富文本递归守卫和转换成功日志，实际 UTF-8 → codepage 转换统一由 `ConvertToMultiByte` 执行。
 
 ### 12.5 测试与验证状态
 
 `font_manager.cpp` 已内置详尽的 debug 日志（受 `kRichTextHookEnterLogLimit` 等计数器限流），覆盖：
 - `tnvse_rich_text` hook enter/leave
-- `tnvse_rich_text_convert` / `_probe` UTF-8 转换
+- `tnvse_rich_text_convert` UTF-8 转换成功
 - `tnvse_rich_text_dbcs` lead/trail 合并 / 失败
 - `tnvse_rich_text_addchar` 每次 `TextDoc::AddChar`
 - `tnvse_rich_text_render` Render 入口统计（pageCount/lineCount/charCount/images/highBytes/richDbcs）
@@ -905,20 +901,19 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 2. 用当前 book 样本回归长中文行，确认行尾 hyphen 消失，且页数/行数与普通 Font 管线预期一致。
 3. 评估 `0xA19C00`（TextPage::AddChar）`iLastFontHeight` 偏小是否在实际多页文档中可见，决定是否补 hook。
 4. 接管 `PrepHypertext` tokenizer，复刻 `CollectTo` 的 DBCS-aware 普通文本收集语义；同时修正 `0xA17DB9` 直接 `GetCharType` 调用对 DBCS trail byte 的误判。
-5. 将 `TryConvertRichTextInput` 主体替换为 `ConvertToMultiByte` 直接调用，使富文本入口转换与成熟 `Font` 管线（`FontEx::PrepText` / `CreateText` / `MakeString`）共享同一转换逻辑来源，删除冗余的 `HasHighBytes` / 重复 `IsValidUTF8With3ByteMin` 触点。
 
 ## 13. 富文本管线未来代码修改计划
 
-本节按优先级列出仍需执行的代码修改，每项说明**要改什么**和**为什么必须改**。
+本节按优先级记录已完成和仍需执行的代码修改，每项说明**改什么**和**为什么必须改**。
 
-### 修改一：输入转换统一为 `ConvertToMultiByte`
+### 修改一：输入转换统一为 `ConvertToMultiByte`（已完成）
 
-**改什么**（`font_manager.cpp`）：
-- 将 `TryConvertRichTextInput()` 主体替换为对 `encoding.h` 中 `ConvertToMultiByte(pSrc, sConvertedStr, hasExtraGlyphs)` 的单次调用。
-- 删除 `HasHighBytes()`（遍历字符串检测 `>= 0x80` 的逻辑）。
-- 删除 `TryConvertRichTextInput` 中对 `IsValidUTF8With3ByteMin` 的额外调用（`ConvertToMultiByte` 内部已完成此判断）。
-- 删除 `ShouldConvertRichTextInput()` — 其 `g_uiEncoding == 0 || !HasRichTextExtraGlyphs()` 等价于 `ConvertToMultiByte` 第三参数 `false`（`ShouldConvertUTF8(false)` 立即返回 `false`），唯一的额外门控 `sRichTextConvertedInputDepth == 0` 移到外侧作为 `ConvertToMultiByte` 的守卫条件。
-- 保留 thread_local 递归守卫 `ScopedRichTextConvertedInput` 和入口日志 `LogRichTextHookEnter`。
+**已改内容**（`font_manager.cpp`）：
+- `TryConvertRichTextInput()` 主体已替换为对 `encoding.h` 中 `ConvertToMultiByte(pSrc, sConvertedStr, hasExtraGlyphs)` 的单次调用。
+- 已删除 `HasHighBytes()`（遍历字符串检测 `>= 0x80` 的逻辑）。
+- 已删除 `TryConvertRichTextInput` 中对 `IsValidUTF8With3ByteMin` 的额外调用（`ConvertToMultiByte` 内部已完成此判断）。
+- 已删除 `ShouldConvertRichTextInput()`；`g_bEnableUTF8` / `g_uiEncoding` / `hasExtraGlyphs` 的门控统一交给 `ConvertToMultiByte` 内部的 `ShouldConvertUTF8`。
+- 保留 thread-local 递归守卫 `sRichTextConvertedInputDepth` / `ScopedRichTextConvertedInput` 和入口日志 `LogRichTextHookEnter`。
 
 **为什么**：
 1. 避免两条管线对 UTF-8 的判断逻辑分叉。当前 `FontEx::CreateText` / `MakeString` 都走 `ConvertToMultiByte`，而 `FontManagerEx::PrepText` / `PrepHypertext` 手写了一套等价但独立的 `HasHighBytes` + `IsValidUTF8With3ByteMin` 条件链。未来若 `encoding.h` 里新增编码支持或修正边界条件，只有走 `ConvertToMultiByte` 的路径能自动受益。
@@ -977,11 +972,11 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 ---
 
-### 修改五：`TryConvertRichTextInput` 中的 `LogRichTextUtf8Probe` 统一为 `ConvertToMultiByte` 调用者的统一日志
+### 修改五：`TryConvertRichTextInput` 中的 `LogRichTextUtf8Probe` 统一为 `ConvertToMultiByte` 调用者的统一日志（已完成）
 
-**改什么**（在修改一基础上）：
-- 将 `LogRichTextUtf8Conversion` 和 `LogRichTextUtf8Probe` 合并为一个共享的 `LogUTF8Conversion("FontManager::PrepText", ...)` 调用，与 `Font` 管线风格一致（当前 `Font` 管线没有对每次转换打日志，但富文本路径可以在 `ConvertToMultiByte` 返回 `true` 后打一次统一日志）。
-- 删除 `kRichTextUtf8ProbeLogLimit` / `sRichTextUtf8ProbeLogCount` / `LogRichTextUtf8Probe` / `HasHighBytes` 四个仅服务于旧 `TryConvertRichTextInput` 链的常量/函数。
+**已改内容**（在修改一基础上）：
+- 保留 `LogRichTextUtf8Conversion("FontManager::PrepText", ...)` 作为转换成功日志；普通 `Font` 管线没有逐次转换日志，富文本保留该日志用于当前调试。
+- 已删除 `kRichTextUtf8ProbeLogLimit` / `sRichTextUtf8ProbeLogCount` / `LogRichTextUtf8Probe` / `HasHighBytes` 四个仅服务于旧 `TryConvertRichTextInput` 链的常量/函数。
 
 **为什么**：
 - 这些函数的存在理由是当前`TryConvertRichTextInput` 的多阶段探测（先 `HasHighBytes`，再 `IsValidUTF8With3ByteMin`，再 `UTF8ToMultiByteStr`）。每个阶段的失败产生不同日志。替换为单一 `ConvertToMultiByte` 调用后，这些探测阶段消失，多级日志退化为一次转换日志。
@@ -989,14 +984,14 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 ---
 
-### 修改六：清理 `gNumberedExtraLetters` 的查找风格对接
+### 修改六：清理 `gNumberedExtraLetters` 的查找风格对接（已完成）
 
-**改什么**（`font_manager.cpp` + `font_engine.cpp` 共享化）：
-- 将 `font_engine.cpp` 中私有的 `GetExtraGlyphs(int fontNum)`（返回 `std::unordered_map<UInt32, FontLetter>*`）从文件级 static 提升为共享 helper，移到 `encoding.h` 或新建 `glyph_cache.h`。
-- `font_manager.cpp` 删除 `GetExtraGlyphsForChar`（`const FontManager::CharData*` 版本，做 iFontIndex 到 fontNum 的转换）和 `LookupRichTextDbcsGlyph`，改为：
-  - 入口处：`auto* extraGlyphs = GetExtraGlyphs(apChar->iFontIndex)`（若 iFontIndex 到 fontNum 的映射已确定）
-  - 或保持 `GetExtraGlyphsForChar` 但内部调共享的 `GetExtraGlyphs(font->iFontNum)`。
-- 统一 `FontLetter*` 查找接口：`font_engine.cpp` 的 `LookupDBGlyph(extraGlyphs, code)` 和 `font_manager.cpp` 的 `LookupRichTextDbcsGlyph(apChar, code, &font)` 实质上做同一件事，但参数和返回值不同。改为都调用同一 `LookupDBGlyph`。
+**已改内容**（`font_glyphs.h` + `font_manager.cpp` + `font_engine.cpp` + `text_hooks.cpp`）：
+- 新增 `font_glyphs.h`，集中提供 `ExtraGlyphMap`、`HasAnyExtraGlyphs()`、`GetExtraGlyphs(fontNum)`、`HasExtraGlyphsForFont(fontNum)`、`LookupDBGlyph(extraGlyphs, code)` 和 `GetGlyphLayoutWidth(glyph)`。
+- `font_engine.cpp` 删除文件级 static `GetExtraGlyphs` / `LookupDBGlyph`，改用共享 helper。
+- `font_manager.cpp` 的 `GetExtraGlyphsForChar` 保留，因为富文本需要从 `CharData::iFontIndex` 映射到 `FontManager::pFont[i]->iFontNum`，但内部改为调用共享 `GetExtraGlyphs(font->iFontNum)`；`LookupRichTextDbcsGlyph` 内部改为调用共享 `LookupDBGlyph`。
+- `text_hooks.cpp` 中针对 font 5 / font 8 的 `gNumberedExtraLetters.find(...) != end` 判断改为 `HasExtraGlyphsForFont(...)`。
+- 普通 `FontEx::PrepText` 和富文本 `FontManagerEx` 的 DBCS 布局宽度都改为调用 `GetGlyphLayoutWidth(glyph)`，避免两边重复写 `ConditionalFloatToUInt(glyph->fWidth + glyph->fSpacing)`。
 
 **为什么**：
 - 这是文档第 6 节"阶段 4：整理共享代码"的落地。两条管线的 DBCS glyph 查找逻辑应从两份独立实现收敛为一份。
@@ -1034,8 +1029,8 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
    ├→ 修改四（iLastFontHeight，若走策略B则自动解决）
    └→ 修改七（零宽space验证，自建 layout 后可取消）
 
-修改六（glyph 查找共享化）
-   独立，可随时执行，不影响任何其他修改
+修改六（glyph 查找共享化，已完成）
+   独立，不影响任何其他修改
 ```
 
-优先级顺序：**一 → 二 → 三 → 四~七**（六可在任意时间点平行执行）。
+优先级顺序：**二 → 三 → 四 → 七**（一、五、六已完成）。
