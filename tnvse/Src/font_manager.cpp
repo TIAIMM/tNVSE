@@ -3,6 +3,7 @@
 #include "font_glyphs.h"
 #include "native_calls.h"
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,12 @@ namespace fonthook
 		static constexpr UInt32 kRichTextDbcsFailureLogLimit = 64;
 		static constexpr UInt32 kRichTextCollectToScanLogLimit = 32;
 		static constexpr UInt32 kRichTextCollectToRiskLogLimit = 64;
+		static constexpr UInt32 kRichTextCharTypeOpen = 0x01;
+		static constexpr UInt32 kRichTextCharTypeClose = 0x02;
+		static constexpr UInt32 kRichTextCharTypeSpace = 0x04;
+		static constexpr UInt32 kRichTextCharTypeQuote = 0x08;
+		static constexpr UInt32 kRichTextCharTypeEquals = 0x10;
+		static constexpr UInt32 kRichTextCharTypeEnd = 0x20;
 		std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCharExtras;
 		std::vector<FontManager::CharData*> sRichTextRenderAddChars;
 		FontManager::TextDoc* sRichTextRenderDoc = nullptr;
@@ -118,6 +125,28 @@ namespace fonthook
 		bool HasRichTextExtraGlyphs()
 		{
 			return HasAnyExtraGlyphs();
+		}
+
+		UInt32 GetRichTextCharType(UInt8 c)
+		{
+			switch (c)
+			{
+			case 0:
+				return kRichTextCharTypeEnd;
+			case '"':
+			case '\'':
+				return kRichTextCharTypeQuote;
+			case '<':
+			case '{':
+				return kRichTextCharTypeOpen;
+			case '=':
+				return kRichTextCharTypeEquals;
+			case '>':
+			case '}':
+				return kRichTextCharTypeClose;
+			default:
+				return c > ' ' ? 0 : kRichTextCharTypeSpace;
+			}
 		}
 
 		void LogRichTextUtf8Conversion(const char* hookName, UInt32 originalLength, UInt32 convertedLength)
@@ -263,6 +292,80 @@ namespace fonthook
 				dbcsPairs,
 				delimiterTrailPairs,
 				unmatchedHighBytes);
+		}
+
+		BSStringT<char>* CallOriginalCollectTo(
+			FontManager* apManager,
+			BSStringT<char>* apOutString,
+			const char* apSource,
+			UInt32* apIndex,
+			UInt32 aiStopMask,
+			UInt32 aiRequiredMask,
+			UInt32* apOutType,
+			char* apOutChar,
+			bool abUseReplacements)
+		{
+			FontManager* fontManager = apManager ? apManager : FontManager::GetSingleton();
+			return ThisStdCall<BSStringT<char>*>(0xA16EA0, fontManager,
+				apOutString, apSource, apIndex, aiStopMask, aiRequiredMask,
+				apOutType, apOutChar, abUseReplacements);
+		}
+
+		bool TryAppendRichTextReplacement(FontManager* apManager, const char* apSource, UInt32& arIndex, std::string& arOut)
+		{
+			if (!apSource || apSource[arIndex] != '&')
+				return false;
+
+			UInt32 length = 1;
+			while (apSource[arIndex + length] &&
+				!GetRichTextCharType(static_cast<UInt8>(apSource[arIndex + length])) &&
+				apSource[arIndex + length - 1] != ';')
+			{
+				++length;
+			}
+
+			if (apSource[arIndex + length - 1] != ';')
+			{
+				++arIndex;
+				return true;
+			}
+
+			std::string entity(apSource + arIndex, apSource + arIndex + length);
+			char replacement[260] = {};
+			Interface_FindTextReplacementString(entity.c_str(), replacement, sizeof(replacement), false);
+			if (replacement[0] == '\\')
+			{
+				FontManager* fontManager = apManager ? apManager : FontManager::GetSingleton();
+				if (fontManager && fontManager->pFont[0])
+				{
+					fontManager->pFont[0]->AddTextIcon(replacement + 1);
+					arOut.push_back(1);
+				}
+			}
+			else if (replacement[0])
+			{
+				arOut += replacement;
+			}
+			else
+			{
+				arOut += entity;
+			}
+
+			arIndex += length;
+			return true;
+		}
+
+		bool ShouldUseRichTextCollectTo(
+			const char* apSource,
+			const UInt32* apIndex,
+			UInt32 aiStopMask,
+			UInt32 aiRequiredMask,
+			bool abUseReplacements)
+		{
+			return apSource && apIndex && HasRichTextExtraGlyphs() &&
+				aiStopMask == kRichTextCharTypeOpen &&
+				aiRequiredMask == 0 &&
+				abUseReplacements;
 		}
 
 		ExtraGlyphMap* GetExtraGlyphsForChar(const FontManager::CharData* apChar, Font** apOutFont = nullptr)
@@ -1044,6 +1147,79 @@ namespace fonthook
 		outDimensions->y = StringDimensions.y;
 		outDimensions->z = StringDimensions.z;
 		return outDimensions;
+	}
+
+	BSStringT<char>* __fastcall FontManagerEx::CollectTo(
+		FontManager* apManager,
+		void*,
+		BSStringT<char>* apOutString,
+		const char* apSource,
+		UInt32* apIndex,
+		UInt32 aiStopMask,
+		UInt32 aiRequiredMask,
+		UInt32* apOutType,
+		char* apOutChar,
+		bool abUseReplacements)
+	{
+		if (!apOutString || !apSource || !apIndex || !apOutType || !apOutChar ||
+			!ShouldUseRichTextCollectTo(apSource, apIndex, aiStopMask, aiRequiredMask, abUseReplacements))
+		{
+			return CallOriginalCollectTo(apManager, apOutString, apSource, apIndex, aiStopMask,
+				aiRequiredMask, apOutType, apOutChar, abUseReplacements);
+		}
+
+		std::string collected;
+		while (true)
+		{
+			UInt8 current = static_cast<UInt8>(apSource[*apIndex]);
+			*apOutChar = static_cast<char>(current);
+			UInt32 charType = GetRichTextCharType(current);
+			if (charType & kRichTextCharTypeEnd)
+			{
+				*apOutType = kRichTextCharTypeEnd;
+				break;
+			}
+
+			UInt32 dbcsCode = 0;
+			if (TryDecodeDoubleByte(&apSource[*apIndex], dbcsCode))
+			{
+				collected.push_back(apSource[*apIndex]);
+				collected.push_back(apSource[*apIndex + 1]);
+				*apIndex += 2;
+				continue;
+			}
+
+			if (aiStopMask & charType)
+			{
+				*apOutType = charType;
+				++*apIndex;
+				break;
+			}
+
+			if (aiRequiredMask && (aiRequiredMask & charType) == 0)
+			{
+				*apOutType = charType;
+				break;
+			}
+
+			if (current == '\n' || current == '\r')
+			{
+				++*apIndex;
+				continue;
+			}
+
+			if (abUseReplacements && current == '&' &&
+				TryAppendRichTextReplacement(apManager, apSource, *apIndex, collected))
+			{
+				continue;
+			}
+
+			collected.push_back(static_cast<char>(current));
+			++*apIndex;
+		}
+
+		apOutString->Set(collected.c_str());
+		return apOutString;
 	}
 
 	FontManager::TextDoc* __thiscall FontManagerEx::PrepHypertext(BSStringT<char>& arTextString, FontManager::TextData& arData)

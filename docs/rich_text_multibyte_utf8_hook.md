@@ -22,7 +22,7 @@ tNVSE 当前已经覆盖了普通 `Font` 文本路径：
 | --- | ---: | --- |
 | `FontManager::PrepText` | `0xA18A30` | `WriteRelCallEx(0xA18F4A, &FontManagerEx::PrepText)` call site 重定向；内部包 UTF-8 转换后调原版 `0xA18A30` |
 | `FontManager::PrepHypertext` | `0xA17390` | `WriteRelCallEx(0xA18ACC, &FontManagerEx::PrepHypertext)` call site 重定向；内部包 UTF-8 转换后调原版 `0xA17390` |
-| `FontManager::CollectTo` | `0xA16EA0` | 未 hook；直接 hook 返回 `BSStringT<char>` 的 call site 已因 ABI/临时对象风险回退，目前只保留输入扫描日志 |
+| `FontManager::CollectTo` | `0xA16EA0` | 仅 `PrepHypertext` 普通文本段 call site `0xA17835` 用 `WriteRelCall` 重定向到 `FontManagerEx::CollectTo`；其余 7 处 tag/属性 call site 仍走原版 |
 | `TextDoc::Render` | `0xA19060` | `WriteRelCallEx(0xA18F63, &FontManagerEx::TextDocRender)`；内部 `BeginRichTextRenderContext` + 原版 `0xA19060` + `EndRichTextRenderContext` |
 | `TextDoc::Render` 字符发射点 | `0xA19622` | `WriteRelCallEx(0xA19622, &FontEx::TextDocRenderAddChar)`；DBCS 改用扩展 glyph |
 | `TextDoc::~TextDoc` | `0xA1B990` | `WriteRelCallEx(0xA18F7D, &FontManagerEx::TextDocDestroy)`；清理 side table 后调原版析构 |
@@ -363,8 +363,10 @@ tNVSE 当前多字节机制由以下部分组成：
 
 ```cpp
 NiPoint3* __thiscall CalculateStringDimensions(NiPoint3* out, const char* src, UInt32 font, float wrap, UInt32 start);
-BSStringT<char> __thiscall CollectTo(const char* apSource, UInt32* apIndex, UInt32 aiStopMask,
-                                     bool abUseReplacements, UInt32* apOutType, char* apOutChar);
+static BSStringT<char>* __fastcall CollectTo(FontManager* apManager, void*, BSStringT<char>* apOutString,
+                                             const char* apSource, UInt32* apIndex, UInt32 aiStopMask,
+                                             UInt32 aiRequiredMask, UInt32* apOutType,
+                                             char* apOutChar, bool abUseReplacements);
 TextDoc* __thiscall PrepHypertext(BSStringT<char>& arTextString, TextData& arData);
 TextDoc* __thiscall PrepText(BSStringT<char>& arTextString, TextData& arData);
 void __thiscall TextDocRender(NiNode* apNode, TextData* apData);
@@ -379,11 +381,12 @@ static CharData* __fastcall CharDataCopy(CharData* apChar, void*);
 | Hook | 地址 | 目的 | 当前状态 |
 | --- | ---: | --- | --- |
 | `FontManager::PrepText` | `0xA18A30` | 接管普通富文本构建 | 已通过 `0xA18F4A` call site wrapper 落地 |
-| `FontManager::PrepHypertext` | `0xA17390` | 接管超文本构建，保留 link/hypertext 语义 | 已通过 `0xA18ACC` wrapper 做 UTF-8 转换；DBCS-aware tokenizer 未接管 |
+| `FontManager::PrepHypertext` | `0xA17390` | 接管超文本构建，保留 link/hypertext 语义 | 已通过 `0xA18ACC` wrapper 做 UTF-8 转换；`0xA17835` 普通文本段已局部接管，完整 tokenizer 未接管 |
 | `TextDoc::Render` 或内部字符发射点 | `0xA19060` | 让 DBCS `CharData` 使用扩展 glyph 渲染 | 已 hook render 入口和 `0xA19622` 字符发射点 |
 | `CharData::Copy` 或 DBCS copy wrapper | `0xA1B660` | 确保 `RichTextCharExtra` side table 关联不在复制时丢失 | 已 hook 4 个 call site |
 | `TextPage::AddChar` DBCS 分支 | `0xA19C00` | 修正 `iLastFontHeight` 对 `pFontLetters[lead]` 的错误依赖 | 已通过 2 个 call site wrapper 后置修正 |
 | `TextLine::AddChar` DBCS 分支 | `0xA19F70` | 避免 CJK 无空格换行触发原版 hyphen 插入 | 已 hook `0xA19C80` 外部 call site；DBCS 溢出时直接新建下一行 |
+| `FontManager::CollectTo` 普通文本段 | `0xA17835` call site 调 `0xA16EA0` | 让普通可见文本段按 DBCS cursor 收集，不让 trail byte 参与 `<`/`{` delimiter 判断 | 已用 `WriteRelCall` 到 `FontManagerEx::CollectTo`；仅覆盖 `stopMask=1, requiredMask=0, useReplacements=1` 的文本段 |
 
 如果 `TextDoc::Render` 整体重写风险过高，优先选择其内部“从 `CharData` 发射 glyph”的 call site 做局部 hook。局部 hook 的目标是：ASCII 仍走原版，图片项仍走原版；只有能在 side table 中查到 DBCS code 的 `CharData` 改走扩展 glyph。
 
@@ -760,7 +763,8 @@ TileText::MakeNode 0xA21AF0
 | 必须 | `TextPage::AddChar` | `0xA19A6F` / `0xA1BD1C` call site 调 `0xA19C00` | 当前 `WriteRelCallEx` 到 `FontManagerEx::TextPageAddChar`，调原版后修正 DBCS `iLastFontHeight` | 修正 `iLastFontHeight` 不能按 lead byte 基础 glyph 计算 |
 | 必须 | `TextLine::AddChar` | `0xA19C80` call site 调 `0xA19F70` | 当前 `WriteRelCallEx` 到 `FontManagerEx::TextLineAddChar`；仅 DBCS 当前字符溢出时新建下一行，其余回原版 | CJK 无空格长行不能触发原版 `'-'` hyphen 插入 |
 | 必须 | `CharData::Copy` 或 rich copy wrapper | `0xA17898` / `0xA179CD` / `0xA17FB6` / `0xA18D73` call site 调 `0xA1B660` | 当前 `WriteRelCall` 到 `FontManagerEx::CharDataCopy` | 原版只复制游戏字段；DBCS 的 side table 关联必须由 tNVSE 同步复制 |
-| 推荐 | `FontManager::PrepHypertext` tokenizer | `0xA18ACC` call site 调 `0xA17390` | 当前只有入口 wrapper；后续推荐自建 DBCS-aware tokenizer | 超文本/tag/parser 入口；需要让 `CollectTo` / `GetCharType` 不再拆开 trail byte |
+| 必须 | `FontManager::CollectTo` 普通文本段 | `0xA17835` call site 调 `0xA16EA0` | 当前 `WriteRelCall` 到 `FontManagerEx::CollectTo`；仅覆盖普通可见文本段 | 原版普通文本段会让 DBCS trail byte 参与 `<`/`{` delimiter 判断 |
+| 推荐 | `FontManager::PrepHypertext` tokenizer | `0xA18ACC` call site 调 `0xA17390` | 当前入口 wrapper + `0xA17835` 文本段 `CollectTo` 局部接管；完整 tokenizer 尚未接管 | 超文本/tag/parser 入口；剩余 tag/属性 call site 和 direct `GetCharType` 仍是原版 |
 
 推荐不要把 `Font::AddChar 0xA142D0` 做全局替换。普通 `Font` 路径已经有 `FontEx::CreateText` / `MakeString`，全局 hook 会影响现有稳定路径。富文本只需要处理 `TextDoc::Render` 内 `0xA19622` 这一个 call site。
 
@@ -770,7 +774,7 @@ TileText::MakeNode 0xA21AF0
 
 | 条件 | Hook 点 | 地址 | 说明 |
 | --- | --- | ---: | --- |
-| 如果不重写 `PrepHypertext`，而想复用原版 parser | `FontManager::CollectTo` | `0xA16EA0` | 必须让普通文本收集 DBCS-aware；否则 trail byte 会被当成 delimiter |
+| 如果不重写 `PrepHypertext`，而想复用原版 parser | `FontManager::CollectTo` | `0xA16EA0` / `0xA17835` | 当前已只接管普通文本段 call site；tag/属性 call site 仍走原版，避免破坏 ASCII 富文本语法 |
 | 如果复用 `CollectTo` 但只改字符分类 | `FontManager::GetCharType` | `0xA16DA0` | 不推荐单独 hook，因为它只有 `char` 参数，没有 lead/trail 上下文 |
 | 如果使用 side table 保存 DBCS 状态 | `TextDoc::~TextDoc` / `TextLine`/`TextPage` 析构 | `0xA1B990` 等 | 用于清理 `CharData* -> RichTextCharExtra` 映射 |
 | 如果希望在最外层统一转换输入 | `FontManager::CreateText` | `0xA18F00` | 可作为 wrapper，但不是必须；`PrepText` 已能接收 `BSStringT<char>*` 并转换 |
@@ -782,14 +786,14 @@ TileText::MakeNode 0xA21AF0
 
 ```text
 1. Hook FontManager::PrepText 入口并统一 UTF-8 转 codepage
-2. Hook FontManager::PrepHypertext 入口，后续接管 tNVSE 自己的 DBCS-aware tokenizer
+2. Hook FontManager::PrepHypertext 入口，并至少接管普通文本段的 DBCS-aware `CollectTo`
 3. 使用 rich copy wrapper，或 hook CharData::Copy 0xA1B660，同步 side table 关联
 4. Hook TextPage::AddChar 0xA19C00 的 DBCS 高度更新
 5. 处理 TextLine::AddChar 0xA19F70 的 DBCS overflow 换行
 6. Hook TextDoc::Render 的 0xA19604..0xA19622 glyph 发射点
 ```
 
-当前第 1、3、4、5、6 项已通过 call site wrapper 或局部 hook 落地；第 2 项只完成入口 wrapper，完整 tokenizer 仍是后续最大改动。如果未来实现选择完全自建 `TextDoc` layout，不再调用原版 `TextPage::AddChar` / `TextLine::AddChar`，第 4、5 项可以变成内部 layout 代码，而不是二进制 hook。但第 1、3、6 项仍然存在：入口要接管，DBCS side table 关联要维护，渲染 glyph 要改用 extra glyph。
+当前第 1、3、4、5、6 项已通过 call site wrapper 或局部 hook 落地；第 2 项完成入口 wrapper，并已把 `0xA17835` 普通文本段 `CollectTo` 改成 DBCS-aware 收集。完整 tokenizer 仍是后续最大改动，因为 tag/属性收集和 `0xA17DB9` direct `GetCharType` 仍由原版执行。如果未来实现选择完全自建 `TextDoc` layout，不再调用原版 `TextPage::AddChar` / `TextLine::AddChar`，第 4、5 项可以变成内部 layout 代码，而不是二进制 hook。但第 1、3、6 项仍然存在：入口要接管，DBCS side table 关联要维护，渲染 glyph 要改用 extra glyph。
 
 ## 12. 当前实现进度（2026-07-04 更新）
 
@@ -814,9 +818,10 @@ TileText::MakeNode 0xA21AF0
 | `0xA17898` / `0xA179CD` / `0xA17FB6` | `PrepHypertext → CharData::Copy` | `WriteRelCall` | `FontManagerEx::CharDataCopy` |
 | `0xA18D73` | `PrepText → CharData::Copy` | `WriteRelCall` | `FontManagerEx::CharDataCopy` |
 | `0xA1B020` | `FontManager::CalculateStringDimensions` | `WriteRelJumpEx` | `FontManagerEx::CalculateStringDimensions` |
-| `0xA1772D..0xA17DE9` (8 处) | `PrepHypertext → CollectTo` | `WriteRelCallEx` 未启用 | `FontManagerEx::CollectTo` 包装曾尝试，**已回退**（见 12.2 CollectTo 风险扫描） |
+| `0xA17835` | `PrepHypertext 普通文本段 → CollectTo` | `WriteRelCall` | `FontManagerEx::CollectTo` |
+| `0xA1772D` / `0xA17A1E` / `0xA17B65` / `0xA17BB1` / `0xA17CFE` / `0xA17D5D` / `0xA17DE9` | `PrepHypertext tag/属性 → CollectTo` | 未 hook | 仍走原版 `0xA16EA0` |
 
-注意：上述富文本入口大多是 `WriteRelCallEx`（call site 重定向），不是 `WriteRelJumpEx`（函数整体替换）。这意味着函数本身的 prolog 仍是原版代码，tNVSE 只在指定 call site 切入。`CharData::Copy` 例外使用 `WriteRelCall` 到 `static __fastcall FontManagerEx::CharDataCopy(CharData*, void*)`，因为原版 call site 的 `ECX` 是 `CharData*`，不能伪装成 `FontManagerEx*` 成员函数。`Font::AddChar 0xA142D0` 未做全局替换，符合第 11.2 节"推荐不要全局 hook"的结论。
+注意：上述富文本入口大多是 `WriteRelCallEx`（call site 重定向），不是 `WriteRelJumpEx`（函数整体替换）。这意味着函数本身的 prolog 仍是原版代码，tNVSE 只在指定 call site 切入。`CharData::Copy` 例外使用 `WriteRelCall` 到 `static __fastcall FontManagerEx::CharDataCopy(CharData*, void*)`，因为原版 call site 的 `ECX` 是 `CharData*`，不能伪装成 `FontManagerEx*` 成员函数。`CollectTo` 例外使用 `WriteRelCall` 到 `static __fastcall FontManagerEx::CollectTo(FontManager*, void*, ...)`：正式版 `CollectTo 0xA16EA0` 的栈参数是隐藏返回对象指针 + 7 个逻辑参数，函数尾部 `retn 20h`，但入口仍通过 `ECX` 携带 `FontManager*`。`Font::AddChar 0xA142D0` 未做全局替换，符合第 11.2 节"推荐不要全局 hook"的结论。
 
 ### 12.2 已实现的 DBCS 机制
 
@@ -844,16 +849,24 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 - 当前 `game_hooks.cpp` 已把这 4 个 call site 重定向到 `FontManagerEx::CharDataCopy`。地址只保留在安装点注释与本表格中，不进入函数名。`CharDataCopy` 是 `static __fastcall` wrapper，保留原版 call site 的 `ECX=CharData*`，先调用原版 `0xA1B660`，若源 `CharData*` 有 DBCS 记录则复制到新 `CharData*`；若源没有 DBCS 记录，则清理新地址可能残留的旧 side table 记录。
 - 该实现不读写 `pad05`，不改变 `CharData` 大小，也不依赖调用点栈布局。
 
-#### CollectTo 风险扫描
+#### CollectTo 普通文本段局部接管
 
-`CollectTo 0xA16EA0` 的直接 hook 已回退。原因是它返回 `BSStringT<char>`，用 `WriteRelCallEx` 包装 8 个 call site 时必须精确匹配隐藏返回对象、临时对象构造/析构和调用点生命周期；实测该点容易造成返回对象/栈约定破坏。
+`CollectTo 0xA16EA0` 不能按普通 `thiscall` 或返回值对象去 hook。IDA 反编译和汇编显示它的第一个栈参数是输出 `BSStringT<char>*`，函数最后 `retn 20h`；同时入口保存 `ECX` 作为 `FontManager*`，后续 `GetCharType` / `Font::AddTextIcon` 路径会用到这个对象。因此当前实现没有再尝试用 `WriteRelCallEx` 包装 8 个 call site，而是只在已确认语义的 `0xA17835` 使用 `WriteRelCall` 到 `static __fastcall FontManagerEx::CollectTo(FontManager*, void*, ...)`，正常接收 `ECX`，并保留原 8 个栈参数。
 
-当前只在 `PrepText` / `PrepHypertext` 入口做 `LogRichTextCollectToScan`：
+`0xA17835` 对应 `PrepHypertext` 主循环里的普通可见文本段，原版调用参数是：
+
+```text
+CollectTo(outText, source, &index, stopMask=0x01, requiredMask=0, &outType, &outChar, useReplacements=1)
+```
+
+`FontManagerEx::CollectTo` 只在这些参数匹配、且当前已加载 extra glyph 时启用自定义路径；其他参数全部回原版 `0xA16EA0`。自定义路径复刻原版普通文本收集规则，但在 cursor 指向 DBCS lead byte 时一次 append lead+trail，并把 index 前进 2。这样 `{` / `}` 等合法 ASCII-range trail byte 不会被当成 `GetCharType` 的 open/close delimiter。ASCII `&...;` 实体替换仍调用 `Interface::FindTextReplacementString`，替换为 `\...` 时继续通过 `Font::AddTextIcon` 生成 icon 字符 `1`。输出对象不手动清空 `BSStringT` 字段，而是直接调用 `BSStringT::Set`，由字符串类按原有语义释放或复用旧 buffer。
+
+当前仍保留 `PrepText` / `PrepHypertext` 入口的 `LogRichTextCollectToScan`：
 - 统计 DBCS pair、delimiter trail pair、unmatched high byte。
 - 对风险 pair 打印位置、DBCS code、lead/trail byte 和 trail ASCII。
-- 不改变 parser 行为。
+- 用于确认 `0xA17835` 局部接管后，风险 trail byte 不再导致普通文本段提前截断。
 
-后续如果要闭环 `CollectTo` 语义，应在自建/接管 `PrepHypertext` tokenizer 时复刻 `CollectTo` 的普通文本收集规则，而不是重新 hook `CollectTo` 返回对象 helper。
+剩余 7 个 `CollectTo` call site 负责初始空白、tag 名、属性名、属性值和 close delimiter，它们仍走原版。这样能避免把 DBCS 规则错误引入 HTML/tag 语法内部；后续若需要完整接管，应优先实现自建 `PrepHypertext` tokenizer，而不是把 8 处 call site 全部替换成同一个 wrapper。
 
 #### 复刻普通 Font 管线的 CJK 换行语义
 
@@ -889,7 +902,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 | 项 | 第 11.2 节建议 | 当前实现 | 状态 |
 | --- | --- | --- | --- |
 | 1. Hook `PrepText 0xA18A30` | `WriteRelJumpEx` 整体替代 | `WriteRelCallEx` 在 `0xA18F4A` call site 重定向，`FontManagerEx::PrepText` 内部调用原版 `0xA18A30` | ✅ 落地（call site 级） |
-| 2. 自建 PrepHypertext parser | `WriteRelJumpEx` 或内部实现 | `WriteRelCallEx` 在 `0xA18ACC` 重定向，`FontManagerEx::PrepHypertext` 包一层 UTF-8 转换后调用原版 `0xA17390` | ⚠️ 入口落地；DBCS-aware tokenizer 未接管 |
+| 2. 自建 PrepHypertext parser | `WriteRelJumpEx` 或内部实现 | `WriteRelCallEx` 在 `0xA18ACC` 重定向，入口 wrapper 做 UTF-8 转换；`0xA17835` 普通文本段 `CollectTo` 已局部 DBCS-aware | ⚠️ 部分落地；tag/属性 tokenizer 未接管 |
 | 3. CharData::Copy side table 同步 | hook `0xA1B660` 或 wrapper | `WriteRelCall` 包装 4 个 `CharData::Copy` call site；`FontManagerEx::CharDataCopy` 调原版 copy 后同步/清理 side table | ✅ 落地 |
 | 4. Hook `TextPage::AddChar 0xA19C00` DBCS 高度 | 整体或局部 hook | `WriteRelCallEx` 包装 `0xA19A6F` / `0xA1BD1C` 两个 call site；`FontManagerEx::TextPageAddChar` 调原版后修正 DBCS `iLastFontHeight` | ✅ 落地（call site 级） |
 | 5. Hook `TextLine::AddChar 0xA19F70` overflow | 整体或局部 hook | `WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar)`；DBCS 当前字符溢出时直接构造下一行，其他走原版 | ✅ 落地（call site 级） |
@@ -897,7 +910,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 ### 12.4 已知未闭环项
 
-1. **PrepHypertext tag/tokenizer 的 DBCS cursor 问题**：当前 `CollectTo` 未 hook（已回退，见 12.2），`PrepHypertext` 内部 `CollectTo` 仍按单字节判断 delimiter，且除 `CollectTo` 外 `PrepHypertext` 还有直接调用 `GetCharType` 的位置（`0xA17DB9`）。对当前支持的 Windows DBCS codepage，`<`、`>`、`=`、quote、`&`、`;`、space 并不是合法 trail byte；但 `{`、`}` 等 `GetCharType` delimiter 可落入 GBK/Big5/SJIS 的 trail 范围。后续自建/接管 `PrepHypertext` tokenizer 时应统一改为 cursor-based DBCS 消费，而不是继续让普通文本段的 trail byte 参与单字节语法判断。
+1. **PrepHypertext tag/tokenizer 的剩余 DBCS cursor 问题**：`0xA17835` 普通文本段已局部接管，但 `PrepHypertext` 仍有 7 个 `CollectTo` call site 和一个 direct `GetCharType` call site（`0xA17DB9`）走原版。对当前支持的 Windows DBCS codepage，`<`、`>`、`=`、quote、`&`、`;`、space 并不是合法 trail byte；但 `{`、`}` 等 `GetCharType` delimiter 可落入 GBK/Big5/SJIS 的 trail 范围。当前最危险的普通文本段已由 `FontManagerEx::CollectTo` 处理，剩余风险主要来自复杂 tag/属性边界和后续新增编码。完整闭环仍应由自建/接管 `PrepHypertext` tokenizer 完成。
 
 ### 12.5 测试与验证状态
 
@@ -912,11 +925,14 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 第 8 节测试矩阵的回归路径（Terminal / Quest / Location / HUD / `CalculateStringDimensions`）由第 12.1 节中 `0xA1B020` / `0x759281` / `0x77AF4B` / `0x772B5E` / `0x7591AC` / `0x772B4B` / `0x77ACCC` / `0x77ACF8` 等 hook 保持，富文本新增 hook 不应破坏这些路径。
 
+当前 GBK/CP936 book 样本日志显示，输入扫描多次命中 `delimiterTrailPairs=4` 且 `unmatchedHighBytes=0`；最后的 render context 为 `expectedAddChars=1115 emittedAddChars=1115 remaining=0`，`TextDoc::Destroy` 清理结果为 `richTextExtrasCleared=570 richTextExtrasRemaining=0`。同时未出现 `merge-rejected`、`glyph-missing`、`flush-pending`、`remaining=[1-9]` 或 `richTextExtrasRemaining=[1-9]`。这说明当前 `0xA17835` 普通文本段局部 `CollectTo`、DBCS side table、Render 发射点和 Destroy 清理在该样本上是自洽的。
+
 ### 12.6 下一步建议优先级
 
 1. 用当前 book 样本回归长中文行，确认 `TextLineAddChar` 后行尾 hyphen 消失，且 `TextDoc::Render` 的字符数不再因零宽 marker 翻倍。
 2. 测试多页 + 连续空行富文本，确认 `TextPageAddChar` 修正后的 DBCS `iLastFontHeight` 让空行高度与 CJK glyph 行高一致。
-3. 接管 `PrepHypertext` tokenizer，复刻 `CollectTo` 的 DBCS-aware 普通文本收集语义；同时让 `0xA17DB9` 这类直接 `GetCharType` 分支不再看到普通文本段中的 trail byte。
+3. 用包含 `{` / `}` / `|` 等 trail byte 的 GBK/Big5/SJIS 样本回归 `0xA17835` 局部 `CollectTo` hook，确认普通文本段不再提前截断。
+4. 接管完整 `PrepHypertext` tokenizer，覆盖剩余 7 个 `CollectTo` 语义点和 `0xA17DB9` direct `GetCharType`，但 tag 内继续保持 ASCII 语法。
 
 ## 13. 富文本管线未来代码修改计划
 
@@ -957,11 +973,17 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 ---
 
-### 修改三：接管 `PrepHypertext` tokenizer（CollectTo + GetCharType）
+### 修改三：接管 `PrepHypertext` tokenizer（CollectTo + GetCharType，进行中）
 
-**改什么**（`font_manager.cpp`，可能涉及新文件 `font_rich_parser.cpp`）：
+**已改内容**（`font_manager.cpp` / `font_manager.h` / `game_hooks.cpp`）：
+1. 新增 `static BSStringT<char>* __fastcall FontManagerEx::CollectTo(FontManager*, void*, ...)`，签名按正式版 `ECX=FontManager*`、隐藏返回对象指针和 `retn 20h` 行为建模，不再把它当成普通 `thiscall` 成员函数。
+2. 在 `game_hooks.cpp` 用 `WriteRelCall(0xA17835, &FontManagerEx::CollectTo)` 只替换 `PrepHypertext` 主循环的普通可见文本段。
+3. `FontManagerEx::CollectTo` 只在 `stopMask=0x01`、`requiredMask=0`、`useReplacements=1` 且 extra glyph 已加载时启用；其他情况调用原版 `0xA16EA0`。
+4. 自定义收集逻辑复刻原版 `GetCharType` bitmask 和 `&...;` replacement 行为，但 DBCS lead/trail 成对 append，trail byte 不参与 delimiter 判断。
+
+**仍需改什么**（可能涉及新文件 `font_rich_parser.cpp`）：
 1. 在 `PrepHypertext` wrapper 中不再直接调原版 `0xA17390`。改为 tNVSE 自建 tokenizer，复刻原版 `PrepHypertext` 的全部语义（HTML tag 识别 / CollectTo 分段 / 属性解析 / 字体颜色对齐切换 / 图标构造 / 分页换行 / `Font::AddTextIcon`），但对普通文本段和分隔符判断改用 DBCS-aware cursor。
-2. 在自建 tokenizer 内部实现一个 DBCS-aware 的文本收集函数，等价于原版 `CollectTo 0xA16EA0` + `GetCharType 0xA16DA0` 的联合语义，但：
+2. 在自建 tokenizer 内部保留一个 DBCS-aware 的文本收集函数，等价于原版 `CollectTo 0xA16EA0` + `GetCharType 0xA16DA0` 的联合语义，但：
    - DBCS lead/trail 成对消费，trail byte 不参与 `GetCharType` 分隔符判断。
    - `&...;` 实体扫描仅在 cursor 指向 ASCII `'&'` 时启动，不在 DBCS trail byte 为 `0x26` 时启动。
    - `'\0'` 测试只在 cursor 到达字符串末端时触发，不在 DBCS trail byte 为 `0x00` 时报错。
@@ -969,7 +991,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 4. `GetCharType 0xA17DB9` 的 direct call site 不在 `CollectTo` 内，它位于 `PrepHypertext` 的另一分支 —— 自建 tokenizer 后此 call site 不再执行，因此无需额外二进制 hook。
 
 **为什么**：
-- **这是整个富文本管线最核心的未闭环问题**。当前 `CollectTo` hook 已回退，原版 `PrepHypertext 0xA17390` 仍然在每次被调用时执行单字节 tokenizer。普通文本段如果靠单字节 `GetCharType` 扫描，任何落入合法 trail 范围的 ASCII 符号都可能被当成语法字符处理。
+- **这是整个富文本管线最核心的未闭环问题**。当前已经用 `0xA17835` 局部 `CollectTo` hook 先关闭普通文本段的最高风险路径，但原版 `PrepHypertext 0xA17390` 仍负责 tag/属性 parser。普通文本段以外如果继续靠单字节 `GetCharType` 扫描，后续新增编码或复杂富文本边界仍可能出现 trail byte 被当成语法字符的问题。
 - 对当前支持的 Windows DBCS codepage，`<`(`0x3C`)、`>`(`0x3E`)、`=`(`0x3D`)、quote、`&`(`0x26`)、`;`(`0x3B`) 和 space(`0x20`) 不在 GBK/Big5/SJIS/CP949 的合法 trail 范围内，不能继续作为“必现风险”样例。真实需要重点覆盖的是 GBK/Big5/SJIS 的 `0x40..0x7E` 范围内符号，例如 `{`、`}`、`|`、`~`、`@`、`[`、`]`、`` ` ``，以及 CP949 的 `0x41..0x5A` / `0x60..0x7A` 兼容范围。
 - 设计上仍应由 tNVSE 自建 tokenizer 彻底控制这一层，而不是依赖“当前编码下某些 delimiter 碰不到”的事实。这样可以保证后续新增编码或扩大字符集时，富文本 parser 仍按 cursor 语义消费 DBCS。
 - 成熟 `Font` 管线之所以不需要类似 `CollectTo` 的复杂逻辑，是因为它只处理纯文本 — `PrepText` 用 `cLineSep` 和 `'\t'` / `' '` 做分割，逻辑简单。富文本不同，它有 8 个类型位、tag 嵌套、实体替换。这个复杂度决定了`CollectTo` 不能只做轻量级包装，而必须被完整复刻为 DBCS-aware 实现。
@@ -1045,10 +1067,10 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 修改二（CharData::Copy side table 同步，已完成）
    独立，不依赖其他修改
 
-修改三（自建 PrepHypertext tokenizer） ← 最核心
+修改三（PrepHypertext tokenizer，普通文本段局部 CollectTo 已完成；完整 tokenizer 仍是核心）
 
 修改六（glyph 查找共享化，已完成）
    独立，不影响任何其他修改
 ```
 
-优先级顺序：**三**（一、二、四、五、六、七已完成）。
+优先级顺序：**三的剩余部分**（一、二、四、五、六、七已完成；三已完成 `0xA17835` 普通文本段局部接管）。
