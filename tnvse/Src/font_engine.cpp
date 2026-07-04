@@ -42,7 +42,7 @@ namespace fonthook
 		return TryDecodeDoubleByte(&buffer[byteIndex], dbCode);
 	}
 
-	static constexpr UInt32 kInitialRenderAddCharLogCount = 16;
+	static constexpr UInt32 kInitialRenderAddCharLogCount = 0;
 
 	static int GetBaseFontGlyphIndex(const Font* apFont, const FontLetter* apLetter)
 	{
@@ -90,12 +90,6 @@ namespace fonthook
 			return true;
 
 		const FontManager::CharData* ch = arRenderInfo.charData;
-		UInt32 dbcsCode = 0;
-		if (TryGetRichTextCharDbcs(ch, dbcsCode))
-			return true;
-
-		if (ch && ch->cChar >= 0x80)
-			return true;
 
 		int glyphIndex = GetBaseFontGlyphIndex(apFont, apLetter);
 		if (glyphIndex < 0)
@@ -304,7 +298,7 @@ namespace fonthook
 		extraMap.reserve(kExtraGlyphReserve);
 
 		// Batch-read all FontLetters for each high-byte row (195 entries at once)
-		// instead of 24,960 individual m_pfnRead calls → 128 calls total
+		// instead of 24,960 individual m_pfnRead calls: 128 calls total
 		static constexpr UInt32 kRowGlyphCount = 0xFE - 0x40 + 1; // 195
 		static constexpr UInt32 kRowBytes = kRowGlyphCount * sizeof(FontLetter);
 		FontLetter batchRow[kRowGlyphCount];
@@ -959,7 +953,7 @@ namespace fonthook
 				textPosition.x = 0.0;
 				if (aiFlags == 4 || aiFlags == 2)
 				{
-					// Advance cursor by 1 instead of traversing from head (O(n²) → O(n))
+					// Advance cursor by 1 instead of traversing from head (O(n^2) to O(n))
 					if (pLineWidthCursor && pLineWidthCursor->m_pkNext)
 						pLineWidthCursor = pLineWidthCursor->m_pkNext;
 					textPosition.x = (aiFlags == 4)

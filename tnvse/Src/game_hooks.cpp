@@ -54,8 +54,15 @@ namespace fonthook
 		// FontManager::PrepText -> FontManager::PrepHypertext
 		WriteRelCallEx(0xA18ACC, &FontManagerEx::PrepHypertext);
 
-		// FontManager::PrepHypertext text segment -> CollectTo
+		// FontManager::PrepHypertext -> CollectTo
+		WriteRelCall(0xA1772D, &FontManagerEx::CollectTo);
 		WriteRelCall(0xA17835, &FontManagerEx::CollectTo);
+		WriteRelCall(0xA17A1E, &FontManagerEx::CollectTo);
+		WriteRelCall(0xA17B65, &FontManagerEx::CollectTo);
+		WriteRelCall(0xA17BB1, &FontManagerEx::CollectTo);
+		WriteRelCall(0xA17CFE, &FontManagerEx::CollectTo);
+		WriteRelCall(0xA17D5D, &FontManagerEx::CollectToAttributeValue);
+		WriteRelCall(0xA17DE9, &FontManagerEx::CollectToAttributeValue);
 
 		// FontManager::CreateText -> TextDoc::Render
 		WriteRelCallEx(0xA18F63, &FontManagerEx::TextDocRender);

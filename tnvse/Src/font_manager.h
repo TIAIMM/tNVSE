@@ -10,9 +10,10 @@ namespace fonthook
 	struct RichTextCharExtra
 	{
 		UInt32 dbcsCode;
+		const FontManager::TextDoc* textDoc;
 	};
 
-	void SetRichTextCharDbcs(const FontManager::CharData* apChar, UInt32 auiDbcsCode);
+	void SetRichTextCharDbcs(const FontManager::CharData* apChar, UInt32 auiDbcsCode, const FontManager::TextDoc* apDoc = nullptr);
 	bool TryGetRichTextCharDbcs(const FontManager::CharData* apChar, UInt32& arDbcsCode);
 	void ClearRichTextCharExtra(const FontManager::CharData* apChar);
 	void ClearRichTextCharExtras();
@@ -35,6 +36,7 @@ namespace fonthook
 		// outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
 		NiPoint3* __thiscall CalculateStringDimensions(NiPoint3* outDimensions, const char* srcString, UInt32 fontID, float maxWrapWidth, UInt32 startCharIndex);
 		static BSStringT<char>* __fastcall CollectTo(FontManager* apManager, void*, BSStringT<char>* apOutString, const char* apSource, UInt32* apIndex, UInt32 aiStopMask, UInt32 aiRequiredMask, UInt32* apOutType, char* apOutChar, bool abUseReplacements);
+		static BSStringT<char>* __fastcall CollectToAttributeValue(FontManager* apManager, void*, BSStringT<char>* apOutString, const char* apSource, UInt32* apIndex, UInt32 aiStopMask, UInt32 aiRequiredMask, UInt32* apOutType, char* apOutChar, bool abUseReplacements);
 		TextDoc* __thiscall PrepHypertext(BSStringT<char>& arTextString, TextData& arData);
 		TextDoc* __thiscall PrepText(BSStringT<char>& arTextString, TextData& arData);
 		void __thiscall TextDocRender(NiNode* apNode, TextData* apData);
