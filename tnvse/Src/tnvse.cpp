@@ -96,7 +96,14 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 
 	fonthook::InitVertSpacingHook();
 
-	fonthook::InitFontHook();
+	if (g_bEnableMultibyteFontHook)
+	{
+		fonthook::InitFontHook();
+	}
+	else
+	{
+		gLog.FormattedMessage("Multibyte font hooks disabled by tnvse.ini");
+	}
 
 	if (g_bSaveDisplayNameMap)
 	{

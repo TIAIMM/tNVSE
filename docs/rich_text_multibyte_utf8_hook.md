@@ -343,6 +343,7 @@ tNVSE 当前多字节机制由以下部分组成：
 - `g_uiEncoding` 控制 UI 编码选项：`0=English`, `1=GBK`, `2=Big5`, `3=SJIS`, `4=UHC/CP949`。
 - `g_usingWinEncoding` 保存 Windows codepage：`936`, `950`, `932`, `949`。
 - `g_bEnableUTF8` 控制是否将 UTF-8 输入转换为当前 codepage。
+- `g_bEnableMultibyteFontHook` 控制是否安装多字节字体 hook。默认 `1`；设为 `0` 时，`InitFontHook()` 不会安装普通 `FontEx`、富文本、Quest/Location/Terminal 文本转换相关 hook，适合英语用户或兼容性排查。
 - `ConvertToMultiByte` / `UTF8ToMultiByteStr` 负责 UTF-8 到 codepage 字节串转换。
 - `TryDecodeDoubleByte` 根据当前 codepage 识别 DBCS 字符，并返回 `code = (lead << 8) | trail`。
 - `gNumberedExtraLetters[fontID]` 保存扩展 `FontLetter` map；代码层通过 `font_glyphs.h` 的共享 helper 访问它，用于 CJK glyph 宽度、行高和渲染。
@@ -807,7 +808,7 @@ TileText::MakeNode 0xA21AF0
 
 ### 12.1 已安装的 Hook
 
-`game_hooks.cpp::InitFontHook` 当前安装的富文本相关 hook：
+`game_hooks.cpp::InitFontHook` 当前安装的富文本相关 hook。该函数现在受 `[Main] bEnableMultibyteFontHook` 总开关控制；当配置为 `0` 时不会写入本节这些 font/rich-text patch：
 
 | 地址 | Hook 目标 | 安装方式 | tNVSE 实现 |
 | --- | --- | --- | --- |

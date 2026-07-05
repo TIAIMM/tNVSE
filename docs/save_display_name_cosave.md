@@ -80,17 +80,13 @@ Under `[Main]`:
 
 ```ini
 bSaveDisplayNameMap=1
-bSaveDisplayNameDebug=0
 ```
-
-`bSaveDisplayNameDebug=1` logs capture and co-save lookup decisions. Normal builds should leave it disabled.
 
 ## Verification notes
 
 - Original project build with `PlatformToolset=v145` still requires the v145 toolset to be installed.
 - A temporary local build using installed VS 2022 `v143` completed successfully for `Release|Win32`.
 - A `std::length_error` on the same path means a game-filled C string was not safely bounded before conversion. The fixed path rejects overlong/non-terminated save paths and actual keys instead of letting the STL scan past the buffer.
-- If a newly written `SVDN` record exists but a damaged multibyte manual save still displays as a raw filename row, first enable `bSaveDisplayNameDebug=1` and check the `list lookup miss` line. It prints the actual key, formal save path, derived `.nvse` path, and whether a file stamp was available.
 
 ## Test plan
 

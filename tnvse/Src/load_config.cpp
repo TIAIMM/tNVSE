@@ -5,13 +5,13 @@
 UINT32 g_uiEncoding;
 UINT32 g_usingWinEncoding;
 bool g_bEnableUTF8;
+bool g_bEnableMultibyteFontHook;
 bool g_bChangeJIPBigGunDesc;
 std::string g_sNewBigGunsDesc;
 UINT32 g_uiReorderDoorPrompt;
 std::string g_sOptionalStructuralParticle;
 bool g_bRemovePlural;
 bool g_bSaveDisplayNameMap;
-bool g_bSaveDisplayNameDebug;
 bool g_bEnableDictionaryTranslation;
 bool g_bEnableDictionaryTranslationLog;
 bool g_bEnableMuxQuestPromptTranslation;
@@ -94,6 +94,9 @@ void LoadConfig()
 	g_bEnableUTF8 = ReadConfigInt(kMainSection, nullptr, "bUTF8", 1, filename);
 	gLog.FormattedMessage("EnableUTF8: %d", g_bEnableUTF8);
 
+	g_bEnableMultibyteFontHook = ReadConfigInt(kMainSection, nullptr, "bEnableMultibyteFontHook", 1, filename);
+	gLog.FormattedMessage("g_bEnableMultibyteFontHook: %d", g_bEnableMultibyteFontHook);
+
 	g_bChangeJIPBigGunDesc = ReadConfigInt(kMainSection, nullptr, "bChangeJIPBigGunDesc", 1, filename);
 
 	char sTempBigGunsDesc[512] = { 0 };
@@ -128,9 +131,6 @@ void LoadConfig()
 
 	g_bSaveDisplayNameMap = ReadConfigInt(kMainSection, nullptr, "bSaveDisplayNameMap", 1, filename);
 	gLog.FormattedMessage("g_bSaveDisplayNameMap: %d", g_bSaveDisplayNameMap);
-
-	g_bSaveDisplayNameDebug = ReadConfigInt(kMainSection, nullptr, "bSaveDisplayNameDebug", 0, filename);
-	gLog.FormattedMessage("g_bSaveDisplayNameDebug: %d", g_bSaveDisplayNameDebug);
 
 	g_bEnableDictionaryTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableDictionaryTranslation", 1, filename);
 	gLog.FormattedMessage("g_bEnableDictionaryTranslation: %d", g_bEnableDictionaryTranslation);

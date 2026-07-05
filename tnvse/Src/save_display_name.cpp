@@ -604,16 +604,6 @@ namespace fonthook
 			entry.hasRecord = ResolveDisplayNameForSavePath(savePath, actualKey, entry.displayNameMb);
 			s_displayCache[actualKey] = entry;
 
-			if (g_bSaveDisplayNameDebug && !entry.hasRecord)
-			{
-				gLog.FormattedMessage(
-					"tnvse_save_display_name: list lookup miss actual=\"%s\" savePath=\"%s\" cosavePath=\"%s\" stampExists=%u",
-					actualKey.c_str(),
-					savePath.c_str(),
-					cosavePath.c_str(),
-					stamp.exists ? 1 : 0);
-			}
-
 			if (!entry.hasRecord)
 				return false;
 			outDisplayNameMb = entry.displayNameMb;
@@ -703,15 +693,6 @@ namespace fonthook
 
 		s_pendingByActualKey[actualKey] = record;
 		s_displayCache.erase(actualKey);
-
-		if (g_bSaveDisplayNameDebug)
-		{
-			gLog.FormattedMessage(
-				"tnvse_save_display_name: captured actual=\"%s\" display=\"%s\" codePage=%u",
-				record.actualKey.c_str(),
-				record.displayNameMb.c_str(),
-				record.codePage);
-		}
 	}
 
 	void SaveDisplayName_SaveCallback(void*)
