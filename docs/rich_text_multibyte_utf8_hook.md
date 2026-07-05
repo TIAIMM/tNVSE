@@ -909,7 +909,21 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 #### 输入 UTF-8 转换
 
-`PrepText` / `PrepHypertext` 入口通过 `TryConvertRichTextInput` 在解析前完成 UTF-8 → codepage 转换（第 5.2 节）。`TryConvertRichTextInput` 当前已统一调用 `ConvertToMultiByte(parserText, convertedTextStorage, HasRichTextExtraGlyphs())`，与普通 `FontEx::PrepText` / `CreateText` / `MakeString` 共享同一套 `ShouldConvertUTF8`、`IsValidUTF8With3ByteMin` 和 `UTF8ToMultiByteStr` 判断。富文本侧只额外保留 `sRichTextConvertedInputDepth` / `ScopedRichTextConvertedInput` 递归守卫；转换成功日志已在验证通过后删除。
+`PrepText` / `PrepHypertext` 入口通过 `TryPrepareRichTextInput` 在解析前统一完成 UTF-8 → codepage 转换和富文本词典翻译。转换阶段仍调用 `ConvertToMultiByte(parserText, convertedTextStorage, HasRichTextExtraGlyphs())`，与普通 `FontEx::PrepText` / `CreateText` / `MakeString` 共享同一套 `ShouldConvertUTF8`、`IsValidUTF8With3ByteMin` 和 `UTF8ToMultiByteStr` 判断。富文本侧只额外保留 `sRichTextConvertedInputDepth` / `ScopedRichTextConvertedInput` 递归守卫；转换成功日志已在验证通过后删除。
+
+#### 富文本词典翻译
+
+`TryPrepareRichTextInput` 在 UTF-8 转换后调用 `TranslateRichText`。该函数不复制词典匹配逻辑，只用 DBCS-aware scanner 从 `<...>` / `{...}` 富文本中提取可见文本 key，然后把 key 交给既有 `TranslateInternal`，因此 exact / wildcard / fuzzy / regex / per-line 等词典规则继续复用普通文本路径。
+
+富文本 scanner 的职责限定为：
+- DBCS lead/trail 成对推进，trail byte 不参与 `<`、`>`、`{`、`}` 等 delimiter 判断。
+- `<...>` / `{...}` 的结束扫描会跳过 quoted 属性值，因此 `src="a>b.dds"` 这类属性不会被中途截断。
+- tag 不进入词典 key；tag 边界在 key 中作为空白边界处理，最终归一化仍由现有词典预处理完成。
+- `<div>`、`<p>`、`<br>` 等排版标签不从原文迁移，译文排版由词典 target 决定。
+- 位于整个可见文本外层且闭合完整的全局样式标签（如 `<font color=...>...</font>`）保留在译文外侧。
+- 位于可见文本前后的边界媒体/装饰标签（如 `<img ...>`、`<hr>`）保留；局部包住原文某个词的 `<font>` / `</font>` 不迁移。
+
+未命中词典时，`PrepText` / `PrepHypertext` 完全走既有路径；命中时，生成的新富文本字符串再交给原版 `FontManager::PrepText 0xA18A30` 或 `FontManager::PrepHypertext 0xA17390` 解析。`bEnableDictionaryTranslation=0` 时 `TranslateRichText` 直接返回 false；`bEnableMultibyteFontHook=0` 时富文本 hook 不安装，因此该能力自然关闭。
 
 #### 渲染字符发射点
 
@@ -1129,7 +1143,8 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 ```
 修改一（ConvertToMultiByte 统一）
-   └→ 修改五（UTF-8 探测/转换正常路径日志删除，已完成）
+   ├→ 修改五（UTF-8 探测/转换正常路径日志删除，已完成）
+   └→ 修改十一（富文本词典翻译接入，已完成）
    
 修改二（CharData::Copy side table 同步，已完成）
    独立，不依赖其他修改
@@ -1149,4 +1164,22 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
    独立，不改变 hook 行为
 ```
 
-优先级顺序：一、二、四、五、六、七、八、九、十已落地；三已完成普通可见文本段和属性值，GBK quoted/unquoted `IMG SRC` 与中文 UTF-8 → GBK/CP936 回归已复测通过。tag 名/属性名/空白扫描继续回原版，当前不作为未完成项；完整自建 `PrepHypertext` parser 不再列入当前计划，仅保留为稳定失败样本触发后的备用方案。当前判断：富文本管线 hook 已基本完成，后续只需根据新失败样本做针对性补丁。
+优先级顺序：一、二、四、五、六、七、八、九、十、十一已落地；三已完成普通可见文本段和属性值，GBK quoted/unquoted `IMG SRC` 与中文 UTF-8 → GBK/CP936 回归已复测通过。tag 名/属性名/空白扫描继续回原版，当前不作为未完成项；完整自建 `PrepHypertext` parser 不再列入当前计划，仅保留为稳定失败样本触发后的备用方案。当前判断：富文本管线 hook 已基本完成，后续只需根据新失败样本做针对性补丁。
+
+---
+
+### 修改十一：富文本词典翻译与标签过滤（已完成）
+
+**已改内容**：
+- 在 `dictionary_translate.cpp` 新增 `TranslateRichText(const char* source, std::string& translated)`。
+- `TranslateRichText` 使用 DBCS-aware scanner 拆分普通文本段和 `<...>` / `{...}` tag；tag 不进入词典 key，普通可见文本交给现有 `TranslateInternal`。
+- 保留规则只覆盖整个可见文本外侧的全局样式标签，以及位于可见文本前后的 `IMG` / `HR` 等边界元素；`DIV` / `P` / `BR` 等排版标签和局部文字样式不从原文迁移。若全局样式闭合不完整，只丢弃 style 标签，仍保留边界媒体/装饰标签。
+- `font_manager.cpp` 中 `PrepText` / `PrepHypertext` 改为调用 `TryPrepareRichTextInput`，在 UTF-8 → codepage 转换后尝试富文本词典翻译；命中则用准备后的字符串调用原版 parser，未命中则走原路径。
+- `dictionary_translate.cpp` 的 shrink fuzzy 左右收缩改为 DBCS-aware，prefix/suffix fuzzy 命中时不会从 GBK/Big5/SJIS/CP949 双字节字符中间截断并拼回半个字符。
+
+**为什么**：
+- 词典 source 应面向可见文本，而不是要求用户把 `<div>`、`<p>`、`<font>`、`<img>` 等原版富文本语法全部写进条目。
+- DBCS trail byte 可能落在 `{`、`}`、`|`、`~` 等 ASCII 范围，过滤 tag 时必须复用 DBCS-aware cursor，否则会把一个 CJK 字符拆成半个可见文本和半个 tag delimiter。
+- 翻译 target 可以显式写自己的富文本排版和局部样式，因此原文中的布局标签和局部样式不应被强行迁移；只保留全局样式和边界媒体，能避免把原文词序相关的格式错误套到译文上。
+- 匹配仍走 `TranslateInternal`，所以现有 exact / wildcard / fuzzy / regex / per-line 等规则不需要维护第二套。
+- shrink fuzzy 需要同样遵守 DBCS 字符边界。此前日志中的 `shrink fuzzy hit[prefix]` 样本显示，英文前缀命中后如果后缀以中文开头，按单字节收缩会切开第一个中文字符并造成渲染乱码；当前已改为按逻辑字符推进。

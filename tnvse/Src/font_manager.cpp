@@ -114,6 +114,27 @@ namespace fonthook
 			return true;
 		}
 
+		bool TryPrepareRichTextInput(
+			BSStringT<char>& arTextString,
+			const char*& arParserText,
+			std::string& arConvertedTextStorage,
+			std::string& arTranslatedTextStorage)
+		{
+			const char* text = arTextString.pString ? arTextString.pString : "";
+			arParserText = text;
+			if (sRichTextConvertedInputDepth != 0)
+				return false;
+
+			bool changed = TryConvertRichTextInput(arTextString, arParserText, arConvertedTextStorage);
+			if (TranslateRichText(arParserText, arTranslatedTextStorage))
+			{
+				arParserText = arTranslatedTextStorage.c_str();
+				changed = true;
+			}
+
+			return changed;
+		}
+
 		BSStringT<char>* CallOriginalCollectTo(
 			FontManager* apManager,
 			BSStringT<char>* apOutString,
@@ -972,22 +993,22 @@ namespace fonthook
 	FontManager::TextDoc* __thiscall FontManagerEx::PrepHypertext(BSStringT<char>& arTextString, FontManager::TextData& arData)
 	{
 		FontManager::TextDoc* textDoc = nullptr;
-		const char* text = arTextString.pString ? arTextString.pString : "";
-		const char* parserText = text;
+		const char* parserText = arTextString.pString ? arTextString.pString : "";
 		std::string convertedTextStorage;
-		bool usedConvertedText = false;
-		if (TryConvertRichTextInput(arTextString, parserText, convertedTextStorage))
+		std::string translatedTextStorage;
+		bool usedPreparedText = false;
+		if (TryPrepareRichTextInput(arTextString, parserText, convertedTextStorage, translatedTextStorage))
 		{
-			BSStringT<char> convertedText;
-			if (convertedText.Set(parserText))
+			BSStringT<char> preparedText;
+			if (preparedText.Set(parserText))
 			{
-				usedConvertedText = true;
-				ScopedRichTextConvertedInput convertedScope(true);
-				textDoc = FontManager::PrepHypertext(convertedText, arData);
+				usedPreparedText = true;
+				ScopedRichTextConvertedInput preparedScope(true);
+				textDoc = FontManager::PrepHypertext(preparedText, arData);
 			}
 		}
 
-		if (!usedConvertedText)
+		if (!usedPreparedText)
 			textDoc = FontManager::PrepHypertext(arTextString, arData);
 
 		FlushPendingRichTextLead(textDoc, "prep-hypertext-leave");
@@ -996,17 +1017,17 @@ namespace fonthook
 
 	FontManager::TextDoc* __thiscall FontManagerEx::PrepText(BSStringT<char>& arTextString, FontManager::TextData& arData)
 	{
-		const char* text = arTextString.pString ? arTextString.pString : "";
-		const char* parserText = text;
+		const char* parserText = arTextString.pString ? arTextString.pString : "";
 		std::string convertedTextStorage;
-		if (TryConvertRichTextInput(arTextString, parserText, convertedTextStorage))
+		std::string translatedTextStorage;
+		if (TryPrepareRichTextInput(arTextString, parserText, convertedTextStorage, translatedTextStorage))
 		{
-			BSStringT<char> convertedText;
-			if (convertedText.Set(parserText))
+			BSStringT<char> preparedText;
+			if (preparedText.Set(parserText))
 			{
-				ScopedRichTextConvertedInput convertedScope(true);
+				ScopedRichTextConvertedInput preparedScope(true);
 				ScopedRichTextPrepTextParse prepTextParseScope(true);
-				FontManager::TextDoc* textDoc = FontManager::PrepText(convertedText, arData);
+				FontManager::TextDoc* textDoc = FontManager::PrepText(preparedText, arData);
 				FlushPendingRichTextLead(textDoc, "prep-text-leave");
 				return textDoc;
 			}

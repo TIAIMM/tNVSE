@@ -1,9 +1,11 @@
 #include "dictionary_internal.h"
+#include "encoding.h"
 #include "load_config.h"
 #include "native_calls.h"
 
 #include <algorithm>
 #include <cctype>
+#include <string_view>
 
 namespace fonthook
 {
@@ -44,6 +46,36 @@ namespace fonthook
 			size_t rawEnd = 0;
 		};
 
+		struct RichTextTag
+		{
+			std::string text;
+			std::string name;
+			bool closing = false;
+			bool selfClosing = false;
+			bool valid = false;
+		};
+
+		struct RichTextSegment
+		{
+			std::string text;
+			RichTextTag tag;
+			bool isTag = false;
+			bool hasVisibleText = false;
+		};
+
+		struct RichTextParts
+		{
+			std::string visibleText;
+			std::string prefix;
+			std::string suffix;
+		};
+
+		struct RichTextRetainedPart
+		{
+			std::string text;
+			bool isStyle = false;
+		};
+
 		bool IsSourceWhitespace(char ch)
 		{
 			return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\v' || ch == '\f';
@@ -71,6 +103,289 @@ namespace fonthook
 					return false;
 			}
 			return true;
+		}
+
+		bool EqualsIgnoreCase(std::string_view left, std::string_view right)
+		{
+			if (left.size() != right.size())
+				return false;
+			for (size_t i = 0; i < left.size(); ++i)
+			{
+				if (ToLowerAsciiChar(left[i]) != ToLowerAsciiChar(right[i]))
+					return false;
+			}
+			return true;
+		}
+
+		bool TryDecodeDoubleByteAt(const std::string& text, size_t pos, UInt32& outCode)
+		{
+			return pos + 1 < text.size() && TryDecodeDoubleByte(&text[pos], outCode);
+		}
+
+		bool FindDbcsAwareTagEnd(const std::string& text, size_t begin, char closeChar, size_t& end)
+		{
+			char quote = 0;
+			for (size_t i = begin + 1; i < text.size();)
+			{
+				UInt32 dbcsCode = 0;
+				if (TryDecodeDoubleByteAt(text, i, dbcsCode))
+				{
+					i += 2;
+					continue;
+				}
+
+				const char ch = text[i];
+				if (quote)
+				{
+					if (ch == quote)
+						quote = 0;
+					++i;
+					continue;
+				}
+
+				if (ch == '"' || ch == '\'')
+				{
+					quote = ch;
+					++i;
+					continue;
+				}
+
+				if (ch == closeChar)
+				{
+					end = i;
+					return true;
+				}
+				++i;
+			}
+			return false;
+		}
+
+		RichTextTag ParseRichTextTag(const std::string& text, size_t begin, size_t end)
+		{
+			RichTextTag tag;
+			if (begin >= end || end >= text.size())
+				return tag;
+
+			tag.text = text.substr(begin, end - begin + 1);
+			size_t pos = begin + 1;
+			while (pos < end && IsSourceWhitespace(text[pos]))
+				++pos;
+			if (pos < end && text[pos] == '/')
+			{
+				tag.closing = true;
+				++pos;
+				while (pos < end && IsSourceWhitespace(text[pos]))
+					++pos;
+			}
+
+			const size_t nameBegin = pos;
+			while (pos < end && IsAsciiAlpha(text[pos]))
+			{
+				tag.name.push_back(ToLowerAsciiChar(text[pos]));
+				++pos;
+			}
+			if (pos == nameBegin)
+				return tag;
+
+			size_t trim = end;
+			while (trim > begin && IsSourceWhitespace(text[trim - 1]))
+				--trim;
+			tag.selfClosing = trim > begin && text[trim - 1] == '/';
+			tag.valid = true;
+			return tag;
+		}
+
+		bool IsRetainableRichTextStyleTag(const RichTextTag& tag)
+		{
+			return tag.valid &&
+				!tag.selfClosing &&
+				(EqualsIgnoreCase(tag.name, "font") ||
+					EqualsIgnoreCase(tag.name, "color") ||
+					EqualsIgnoreCase(tag.name, "face"));
+		}
+
+		bool IsRetainableRichTextMediaTag(const RichTextTag& tag)
+		{
+			return tag.valid && !tag.closing &&
+				(EqualsIgnoreCase(tag.name, "img") ||
+					EqualsIgnoreCase(tag.name, "hr"));
+		}
+
+		bool HasClosingStyleAfter(
+			const std::vector<RichTextSegment>& segments,
+			size_t begin,
+			std::string_view name)
+		{
+			for (size_t i = begin; i < segments.size(); ++i)
+			{
+				const RichTextTag& tag = segments[i].tag;
+				if (segments[i].isTag && tag.valid && tag.closing &&
+					EqualsIgnoreCase(tag.name, name))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
+		bool RichTextSegmentHasVisibleText(const std::string& text)
+		{
+			for (size_t i = 0; i < text.size();)
+			{
+				UInt32 dbcsCode = 0;
+				if (TryDecodeDoubleByteAt(text, i, dbcsCode))
+					return true;
+
+				const unsigned char ch = static_cast<unsigned char>(text[i]);
+				if (!IsSourceWhitespace(text[i]) && !std::iscntrl(ch))
+					return true;
+				++i;
+			}
+			return false;
+		}
+
+		std::vector<RichTextSegment> SplitRichTextSegments(const std::string& source)
+		{
+			std::vector<RichTextSegment> segments;
+			std::string textBuffer;
+			textBuffer.reserve(source.size());
+
+			const auto flushText = [&]()
+				{
+					if (textBuffer.empty())
+						return;
+					RichTextSegment segment;
+					segment.text = std::move(textBuffer);
+					segment.hasVisibleText = RichTextSegmentHasVisibleText(segment.text);
+					segments.push_back(std::move(segment));
+					textBuffer.clear();
+				};
+
+			for (size_t i = 0; i < source.size();)
+			{
+				UInt32 dbcsCode = 0;
+				if (TryDecodeDoubleByteAt(source, i, dbcsCode))
+				{
+					textBuffer.push_back(source[i]);
+					textBuffer.push_back(source[i + 1]);
+					i += 2;
+					continue;
+				}
+
+				const char ch = source[i];
+				const char closeChar = ch == '<' ? '>' : (ch == '{' ? '}' : 0);
+				size_t tagEnd = 0;
+				if (closeChar && FindDbcsAwareTagEnd(source, i, closeChar, tagEnd))
+				{
+					RichTextTag tag = ParseRichTextTag(source, i, tagEnd);
+					if (tag.valid)
+					{
+						flushText();
+						RichTextSegment segment;
+						segment.isTag = true;
+						segment.text = tag.text;
+						segment.tag = std::move(tag);
+						segments.push_back(std::move(segment));
+						i = tagEnd + 1;
+						continue;
+					}
+				}
+
+				textBuffer.push_back(ch);
+				++i;
+			}
+
+			flushText();
+			return segments;
+		}
+
+		RichTextParts ExtractRichTextParts(const std::string& source)
+		{
+			RichTextParts parts;
+			const std::vector<RichTextSegment> segments = SplitRichTextSegments(source);
+			if (segments.empty())
+				return parts;
+
+			size_t firstVisible = segments.size();
+			size_t lastVisible = 0;
+			for (size_t i = 0; i < segments.size(); ++i)
+			{
+				if (!segments[i].isTag && segments[i].hasVisibleText)
+				{
+					firstVisible = std::min(firstVisible, i);
+					lastVisible = i;
+				}
+			}
+
+			if (firstVisible == segments.size())
+				return parts;
+
+			std::vector<RichTextRetainedPart> prefixParts;
+			std::vector<std::string> retainedStyleStack;
+			for (size_t i = 0; i < firstVisible; ++i)
+			{
+				if (!segments[i].isTag)
+					continue;
+
+				const RichTextTag& tag = segments[i].tag;
+				if (IsRetainableRichTextMediaTag(tag))
+				{
+					prefixParts.push_back({ tag.text, false });
+				}
+				else if (!tag.closing && IsRetainableRichTextStyleTag(tag) &&
+					HasClosingStyleAfter(segments, lastVisible + 1, tag.name))
+				{
+					prefixParts.push_back({ tag.text, true });
+					retainedStyleStack.push_back(tag.name);
+				}
+			}
+
+			for (const RichTextSegment& segment : segments)
+			{
+				if (segment.isTag)
+				{
+					parts.visibleText.push_back(' ');
+				}
+				else
+				{
+					parts.visibleText += segment.text;
+				}
+			}
+
+			std::vector<RichTextRetainedPart> suffixParts;
+			for (size_t i = lastVisible + 1; i < segments.size(); ++i)
+			{
+				if (!segments[i].isTag)
+					continue;
+
+				const RichTextTag& tag = segments[i].tag;
+				if (IsRetainableRichTextMediaTag(tag))
+				{
+					suffixParts.push_back({ tag.text, false });
+				}
+				else if (tag.closing && IsRetainableRichTextStyleTag(tag) &&
+					!retainedStyleStack.empty() &&
+					EqualsIgnoreCase(tag.name, retainedStyleStack.back()))
+				{
+					suffixParts.push_back({ tag.text, true });
+					retainedStyleStack.pop_back();
+				}
+			}
+
+			const bool keepStyleParts = retainedStyleStack.empty();
+			for (const RichTextRetainedPart& prefixPart : prefixParts)
+			{
+				if (keepStyleParts || !prefixPart.isStyle)
+					parts.prefix += prefixPart.text;
+			}
+
+			for (const RichTextRetainedPart& suffixPart : suffixParts)
+			{
+				if (keepStyleParts || !suffixPart.isStyle)
+					parts.suffix += suffixPart.text;
+			}
+
+			return parts;
 		}
 
 		bool TryMatchEscapedSourceWhitespace(const std::string& text, size_t pos, size_t& end)
@@ -345,19 +660,55 @@ namespace fonthook
 			return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
 		}
 
+		size_t NextDbcsAwareCharEnd(const std::string& text, size_t begin)
+		{
+			if (begin >= text.size())
+				return text.size();
+
+			UInt32 dbcsCode = 0;
+			if (TryDecodeDoubleByteAt(text, begin, dbcsCode))
+				return begin + 2;
+
+			return begin + 1;
+		}
+
+		size_t PreviousDbcsAwareCharBegin(const std::string& text, size_t end)
+		{
+			if (end == 0)
+				return 0;
+
+			size_t previous = 0;
+			for (size_t cursor = 0; cursor < end;)
+			{
+				previous = cursor;
+				const size_t next = NextDbcsAwareCharEnd(text, cursor);
+				if (next >= end)
+					break;
+				cursor = next;
+			}
+
+			return previous;
+		}
+
 		size_t ShrinkRight(const std::string& text, size_t end)
 		{
 			if (end == 0)
 				return 0;
 
-			if (IsAsciiLetter(text[end - 1]))
+			const size_t charBegin = PreviousDbcsAwareCharBegin(text, end);
+			if (IsAsciiLetter(text[charBegin]))
 			{
-				while (end > 0 && IsAsciiLetter(text[end - 1]))
-					--end;
+				while (end > 0)
+				{
+					const size_t previous = PreviousDbcsAwareCharBegin(text, end);
+					if (!IsAsciiLetter(text[previous]))
+						break;
+					end = previous;
+				}
 				return end;
 			}
 
-			return end - 1;
+			return charBegin;
 		}
 
 		size_t ShrinkLeft(const std::string& text, size_t begin)
@@ -372,7 +723,7 @@ namespace fonthook
 				return begin;
 			}
 
-			return begin + 1;
+			return NextDbcsAwareCharEnd(text, begin);
 		}
 
 		void TrimCandidateRange(const std::string& text, size_t& begin, size_t& end)
@@ -979,6 +1330,27 @@ namespace fonthook
 			return false;
 		const bool result = TranslateInternal(source, translated, 0);
 		return result;
+	}
+
+	bool TranslateRichText(const char* source, std::string& translated)
+	{
+		translated.clear();
+		if (!g_bEnableDictionaryTranslation || !source || !*source)
+			return false;
+
+		const RichTextParts parts = ExtractRichTextParts(source);
+		if (parts.visibleText.empty())
+			return false;
+
+		std::string translatedBody;
+		if (!TranslateText(parts.visibleText.c_str(), translatedBody))
+			return false;
+
+		translated.reserve(parts.prefix.size() + translatedBody.size() + parts.suffix.size());
+		translated = parts.prefix;
+		translated += translatedBody;
+		translated += parts.suffix;
+		return true;
 	}
 
 } // namespace fonthook
