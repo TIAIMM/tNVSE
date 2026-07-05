@@ -241,14 +241,15 @@ for (i = 0; i < collectedTextLen; ++i)
 
 - 分配/初始化结构大小为 `0x38`。
 - 写 `iFontIndex`、`cChar`、`xColor`、`iJustification`、`xFilename`。
-- 用 `pFont[iFontIndex]->pFontData->pFontLetters[cChar]` 计算 `iWidth/iRise/iDrop/iLeadingEdge/iX`。
+- 用 `pFont[iFontIndex]->pFontData->pFontLetters[cChar]` 分字段读取 `fLeadingEdge/fWidth/fSpacing/fHeight/fTopEdge`，再写回 `iWidth/iRise/iDrop/iLeadingEdge/iX`。
 - 不初始化 `pad05[3]`。
 
 `CharData::SetChar 0xA1B7F0`：
 
 - 写 `cChar = acChar`。
 - 如果 `xFilename` 为空，则用 `pFontLetters[cChar]` 刷新 `iWidth/iRise/iDrop`。
-- 最后把 `iX` 置 `0`。
+- `iWidth` 不是只写 `fWidth`，也不是 `fWidth + fSpacing`：当 `fWidth > 0` 时写 `ConditionalFloatToUInt(fWidth + fLeadingEdge + fSpacing)`；否则写 `ConditionalFloatToUInt(fWidth)`。
+- `iLeadingEdge` 写 `0`，`iX` 写 `0`。正式版在 `CharData` 层没有把 leading 单独保存在 `iLeadingEdge` 里，而是把它折进 `iWidth`。
 - 不清理 `pad05[3]`。
 
 `CharData::Copy 0xA1B660`：
@@ -490,19 +491,23 @@ DBCS `CharData` 的度量应来自扩展 `FontLetter`：
 
 ```cpp
 FontLetter* glyph = LookupDBGlyph(extraGlyphs, code);
-width = glyph->fWidth + glyph->fSpacing;
+iWidth = ConditionalFloatToUInt(
+    glyph->fWidth +
+    (glyph->fWidth > 0.0f ? glyph->fLeadingEdge + glyph->fSpacing : 0.0f));
 rise = baseline;
 drop = -font->fMaxDrop;
-leadingEdge = 0;
+iLeadingEdge = 0;
 ```
 
-这里刻意复刻当前普通 `FontEx::PrepText` 的排版口径：准备阶段用 `glyph->fWidth + glyph->fSpacing` 统计 DBCS 宽度，`Font::AddChar` 渲染阶段再由实际 `FontLetter` 处理 UV/顶点推进。富文本 `CharData::iLeadingEdge` 保持 0，避免在 `TextLine::AddChar` 和渲染阶段重复计算 leading。
+这里刻意复刻正式版 `CharData::SetChar 0xA1B7F0` 的 `CharData` 写入口径：`FontLetter` 保留 `fLeadingEdge/fWidth/fSpacing` 分字段，但进入富文本 layout 后，`TextLine::AddChar 0xA19F70` 的溢出判断只读取 `CharData::iWidth`。因此 DBCS 合并后的 `CharData::iWidth` 必须承载原版逻辑 advance，`CharData::iLeadingEdge` 继续保持 0。
+
+渲染阶段仍复用 `Font::AddChar 0xA142D0` 的分字段推进：先把 `position.x` 加 `fLeadingEdge`，用 `fWidth` 生成 quad，最后再加 `fWidth + fSpacing`（`fSpacing` 只在 `fWidth > 0` 时生效）。这与 `CharData::SetChar` 在正常正宽 glyph 上的总 advance 一致，同时避免在 `TextLine::AddChar` 和渲染阶段重复计算 leading。
 
 分页和换行规则：
 
 - DBCS 字符是不可拆分单元。
 - 强制换行时，如果插入点落在 DBCS 的 lead/trail 中间，必须回退到 lead 前。
-- `TextLine::iWidth` 统计应使用与普通路径一致的 DBCS 宽度：`glyph->fWidth + glyph->fSpacing`。
+- `TextLine::iWidth` 统计应使用与正式版 `CharData::SetChar` 一致的 DBCS 宽度：`fWidth > 0 ? fWidth + fLeadingEdge + fSpacing : fWidth`。
 - `TextPage::iWidth` 保持页面内最大行宽。
 - `TextPage::iHeight` 和 `iLastFontHeight` 继续使用正式版行高规则与 `GetLinePadding`。
 
@@ -882,7 +887,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 
 #### 复刻普通 Font 管线的 CJK 换行语义
 
-普通 `FontEx::PrepText` 的 DBCS 换行策略是：DBCS 字符作为不可拆分单元，宽度按 `glyph->fWidth + glyph->fSpacing` 统计；行宽溢出且没有显式断点时，在完整字符边界插入 `cLineSep`，不会插入西文 `'-'`。
+普通 `FontEx::PrepText` 的 DBCS 换行策略是：DBCS 字符作为不可拆分单元，宽度按 `Font::AddChar` 的分字段推进统计，即 `fLeadingEdge + fWidth + (fWidth > 0 ? fSpacing : 0)`；行宽溢出且没有显式断点时，在完整字符边界插入 `cLineSep`，不会插入西文 `'-'`。
 
 反汇编确认原版 `TextLine::AddChar 0xA19F70` 在 `lineWidth + charWidth > pageWidth` 且当前行找不到 `cChar == ' '` 的断点时，会走 `0xA1A223 push 0x2D` 分支插入 hyphen。当前实现已在 `0xA19C80`（`TextPage::AddChar → TextLine::AddChar`）安装 `FontManagerEx::TextLineAddChar`：
 
@@ -1046,11 +1051,11 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 ### 修改六：清理 `gNumberedExtraLetters` 的查找/度量风格对接（已完成）
 
 **已改内容**（`font_glyphs.h` + `font_manager.cpp` + `font_engine.cpp` + `text_hooks.cpp`）：
-- 新增 `font_glyphs.h`，集中提供 `ExtraGlyphMap`、`HasAnyExtraGlyphs()`、`GetExtraGlyphs(fontNum)`、`HasExtraGlyphsForFont(fontNum)`、`LookupDBGlyph(extraGlyphs, code)`、`GetGlyphLayoutWidth(glyph)`、`GetGlyphLineHeight(fontData, glyph)` 和 `GetGlyphLayoutLineHeight(fontData, glyph)`。
+- 新增 `font_glyphs.h`，集中提供 `ExtraGlyphMap`、`HasAnyExtraGlyphs()`、`GetExtraGlyphs(fontNum)`、`HasExtraGlyphsForFont(fontNum)`、`LookupDBGlyph(extraGlyphs, code)`、`GetGlyphRenderAdvance(glyph)`、`GetGlyphCharDataWidth(glyph)`、`GetGlyphMeasureWidth(glyph)`、`GetGlyphLayoutWidth(glyph)`、`GetGlyphCharDataLayoutWidth(glyph)`、`GetGlyphLineHeight(fontData, glyph)` 和 `GetGlyphLayoutLineHeight(fontData, glyph)`。
 - `font_engine.cpp` 删除文件级 static `GetExtraGlyphs` / `LookupDBGlyph`，改用共享 helper。
 - `font_manager.cpp` 的 `GetExtraGlyphsForChar` 保留，因为富文本需要从 `CharData::iFontIndex` 映射到 `FontManager::pFont[i]->iFontNum`，但内部改为调用共享 `GetExtraGlyphs(font->iFontNum)`；`LookupRichTextDbcsGlyph` 内部改为调用共享 `LookupDBGlyph`。
 - `text_hooks.cpp` 中针对 font 5 / font 8 的 `gNumberedExtraLetters.find(...) != end` 判断改为 `HasExtraGlyphsForFont(...)`。
-- 普通 `FontEx::PrepText` 和富文本 `FontManagerEx` 的 DBCS 布局宽度都改为调用 `GetGlyphLayoutWidth(glyph)`，避免两边重复写 `ConditionalFloatToUInt(glyph->fWidth + glyph->fSpacing)`。
+- 普通 `FontEx::PrepText` 的 DBCS 布局宽度调用 `GetGlyphLayoutWidth(glyph)`，复刻 `Font::AddChar` 的分字段推进；富文本 `FontManagerEx` 写 `CharData::iWidth` 时调用 `GetGlyphCharDataLayoutWidth(glyph)`，复刻 `CharData::SetChar` 的折叠写入口径；`FontManagerEx::CalculateStringDimensions` 调用 `GetGlyphMeasureWidth(glyph)`，复刻原版尺寸测量的 `fLeadingEdge + fWidth + fSpacing` 口径。
 - 普通 `FontEx::ComputeGlyphMetrics` 的行高公式改为调用 `GetGlyphLineHeight(fontData, glyph)`；富文本 `FontManagerEx::TextPageAddChar` 修正 `TextPage::AddChar 0xA19C00` 的 `iLastFontHeight` 时复用 `GetGlyphLayoutLineHeight(fontData, glyph)`，不再复制 `fBaseLine - fTopEdge + fHeight` 公式。
 
 **为什么**：

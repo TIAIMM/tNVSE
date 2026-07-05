@@ -266,7 +266,7 @@ namespace fonthook
 			if (!apChar || !apFont || !apFont->pFontData || !apGlyph)
 				return;
 
-			apChar->iWidth = GetGlyphLayoutWidth(apGlyph);
+			apChar->iWidth = GetGlyphCharDataLayoutWidth(apGlyph);
 			apChar->iRise = ConditionalFloatToUInt(apFont->pFontData->fBaseLine);
 			apChar->iDrop = ConditionalFloatToUInt(-apFont->fMaxDrop);
 			apChar->iLeadingEdge = 0;
@@ -787,16 +787,14 @@ namespace fonthook
 				auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
 				if (glyphIt != extraGlyphs->end())
 				{
-					currentCharTotalWidth = glyphIt->second.fLeadingEdge
-						+ glyphIt->second.fWidth + glyphIt->second.fSpacing;
+					currentCharTotalWidth = GetGlyphMeasureWidth(&glyphIt->second);
 				}
 				++currentCharIndex;
 			}
 			else
 			{
 				ConvertToAsciiQuotes(&currentChar);
-				currentCharTotalWidth = fontCharMetrics[currentChar].fLeadingEdge
-					+ fontCharMetrics[currentChar].fWidth + fontCharMetrics[currentChar].fSpacing;
+				currentCharTotalWidth = GetGlyphMeasureWidth(&fontCharMetrics[currentChar]);
 				switch (currentChar)
 				{
 				case '\t':

@@ -32,9 +32,39 @@ namespace fonthook
 		return it != extraGlyphs->end() ? &it->second : nullptr;
 	}
 
+	// The original code consumes FontLetter spacing differently in render,
+	// CharData layout, and string measurement paths. Keep those rules separate.
+	inline float GetGlyphRenderAdvance(const FontLetter* glyph)
+	{
+		if (!glyph)
+			return 0.0f;
+
+		return glyph->fLeadingEdge + glyph->fWidth +
+			(glyph->fWidth > 0.0f ? glyph->fSpacing : 0.0f);
+	}
+
+	inline float GetGlyphCharDataWidth(const FontLetter* glyph)
+	{
+		if (!glyph)
+			return 0.0f;
+
+		return glyph->fWidth +
+			(glyph->fWidth > 0.0f ? glyph->fLeadingEdge + glyph->fSpacing : 0.0f);
+	}
+
+	inline float GetGlyphMeasureWidth(const FontLetter* glyph)
+	{
+		return glyph ? glyph->fLeadingEdge + glyph->fWidth + glyph->fSpacing : 0.0f;
+	}
+
 	inline UInt32 GetGlyphLayoutWidth(const FontLetter* glyph)
 	{
-		return glyph ? ConditionalFloatToUInt(glyph->fWidth + glyph->fSpacing) : 0;
+		return ConditionalFloatToUInt(GetGlyphRenderAdvance(glyph));
+	}
+
+	inline UInt32 GetGlyphCharDataLayoutWidth(const FontLetter* glyph)
+	{
+		return ConditionalFloatToUInt(GetGlyphCharDataWidth(glyph));
 	}
 
 	inline float GetGlyphLineHeight(const FontData* fontData, const FontLetter* glyph)
