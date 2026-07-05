@@ -13,6 +13,7 @@
 #include "tnvse.h"
 #include "font_hook.h"
 #include "dictionary.h"
+#include "save_display_name.h"
 
 IDebugLog gLog("tnvse.log");
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;
@@ -27,16 +28,20 @@ NVSECommandTableInterface* g_cmdTableInterface = NULL;
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
 void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 {
+	fonthook::HandleSaveDisplayNameMessage(g_msg);
+
 	if (g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 	{
 	}
 }
 
-bool NVSEPlugin_Query(const NVSEInterface*, PluginInfo* info)
+bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 {
 	info->infoVersion = PluginInfo::kInfoVersion;
 	info->name = "tNVSE";
 	info->version = 1;
+
+	nvse->SetOpcodeBase(fonthook::kTNVSEOpcodeBase);
 
 	return true;
 }
@@ -50,6 +55,15 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 
 	LoadConfig();
 	fonthook::LoadDictionaryConfig();
+
+	g_nvseInterface = const_cast<NVSEInterface*>(nvse);
+	g_pluginHandle = nvse->GetPluginHandle();
+	g_messagingInterface = static_cast<NVSEMessagingInterface*>(nvse->QueryInterface(kInterface_Messaging));
+	if (g_messagingInterface)
+		g_messagingInterface->RegisterListener(g_pluginHandle, "NVSE", MessageHandler);
+
+	auto* serializationInterface = static_cast<NVSESerializationInterface*>(nvse->QueryInterface(kInterface_Serialization));
+	fonthook::InitSaveDisplayName(serializationInterface);
 
 	hJIP = GetModuleHandle("jip_nvse.dll");
 	g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);
@@ -84,7 +98,10 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 
 	fonthook::InitFontHook();
 
-	//fonthook::InitSaveNameHook();
+	if (g_bSaveDisplayNameMap)
+	{
+		fonthook::InitSaveDisplayNameHook();
+	}
 
 	return true;
 }

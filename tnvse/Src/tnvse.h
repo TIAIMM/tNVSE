@@ -2,6 +2,8 @@
 #include "nvse/PluginAPI.h"
 
 extern HMODULE hJIP;
+extern PluginHandle g_pluginHandle;
+extern NVSEMessagingInterface* g_messagingInterface;
 
 static size_t __fastcall GetJIPAddress(size_t aiAddress)
 {

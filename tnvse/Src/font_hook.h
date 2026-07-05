@@ -14,6 +14,5 @@
 #include "game_hooks.h"
 #include "native_calls.h"
 #include "text_hooks.h"
-#include "save_name.h"
 
 // All global externs are centralized in globals.h

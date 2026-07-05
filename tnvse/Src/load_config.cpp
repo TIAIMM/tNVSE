@@ -10,6 +10,8 @@ std::string g_sNewBigGunsDesc;
 UINT32 g_uiReorderDoorPrompt;
 std::string g_sOptionalStructuralParticle;
 bool g_bRemovePlural;
+bool g_bSaveDisplayNameMap;
+bool g_bSaveDisplayNameDebug;
 bool g_bEnableDictionaryTranslation;
 bool g_bEnableDictionaryTranslationLog;
 bool g_bEnableMuxQuestPromptTranslation;
@@ -123,6 +125,12 @@ void LoadConfig()
 
 	g_bRemovePlural = ReadConfigInt(kMainSection, nullptr, "bRemovePlural", 1, filename);
 	gLog.FormattedMessage("g_bRemovePlural: %d", g_bRemovePlural);
+
+	g_bSaveDisplayNameMap = ReadConfigInt(kMainSection, nullptr, "bSaveDisplayNameMap", 1, filename);
+	gLog.FormattedMessage("g_bSaveDisplayNameMap: %d", g_bSaveDisplayNameMap);
+
+	g_bSaveDisplayNameDebug = ReadConfigInt(kMainSection, nullptr, "bSaveDisplayNameDebug", 0, filename);
+	gLog.FormattedMessage("g_bSaveDisplayNameDebug: %d", g_bSaveDisplayNameDebug);
 
 	g_bEnableDictionaryTranslation = ReadConfigInt(kDictionarySection, kMainSection, "bEnableDictionaryTranslation", 1, filename);
 	gLog.FormattedMessage("g_bEnableDictionaryTranslation: %d", g_bEnableDictionaryTranslation);

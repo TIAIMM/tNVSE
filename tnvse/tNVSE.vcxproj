@@ -145,7 +145,7 @@
     <ClCompile Include="Src\native_calls.cpp" />
     <ClCompile Include="Src\font_engine.cpp" />
     <ClCompile Include="Src\font_manager.cpp" />
-    <ClCompile Include="Src\save_name.cpp" />
+    <ClCompile Include="Src\save_display_name.cpp" />
     <ClCompile Include="Src\text_hooks.cpp" />
     <ClCompile Include="Src\game_hooks.cpp" />
     <ClCompile Include="Src\font_hook.cpp" />
@@ -173,7 +173,7 @@
     <ClInclude Include="Src\font_engine.h" />
     <ClInclude Include="Src\font_glyphs.h" />
     <ClInclude Include="Src\font_manager.h" />
-    <ClInclude Include="Src\save_name.h" />
+    <ClInclude Include="Src\save_display_name.h" />
     <ClInclude Include="Src\text_hooks.h" />
     <ClInclude Include="Src\game_hooks.h" />
     <ClInclude Include="Src\font_hook.h" />
