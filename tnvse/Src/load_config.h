@@ -9,6 +9,8 @@ extern bool g_bEnableMultibyteFontHook;
 extern bool g_bMultibyteInput;
 extern bool g_bMultibyteInputDebug;
 extern bool g_bMultibyteInputCompositionPreview;
+extern bool g_bMultibyteInputHideSystemCandidateWindow;
+extern bool g_bMultibyteInputUseTSFCandidates;
 extern bool g_bChangeJIPBigGunDesc;
 extern std::string g_sNewBigGunsDesc;
 extern UINT32 g_uiReorderDoorPrompt;  // 0=off, 1=CHS order, 2=KOR order

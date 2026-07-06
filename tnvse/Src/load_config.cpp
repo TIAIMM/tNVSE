@@ -9,6 +9,8 @@ bool g_bEnableMultibyteFontHook;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputDebug;
 bool g_bMultibyteInputCompositionPreview;
+bool g_bMultibyteInputHideSystemCandidateWindow;
+bool g_bMultibyteInputUseTSFCandidates;
 bool g_bChangeJIPBigGunDesc;
 std::string g_sNewBigGunsDesc;
 UINT32 g_uiReorderDoorPrompt;
@@ -108,6 +110,12 @@ void LoadConfig()
 
 	g_bMultibyteInputCompositionPreview = ReadConfigInt(kMainSection, nullptr, "bMultibyteInputCompositionPreview", 0, filename);
 	gLog.FormattedMessage("g_bMultibyteInputCompositionPreview: %d", g_bMultibyteInputCompositionPreview);
+
+	g_bMultibyteInputHideSystemCandidateWindow = ReadConfigInt(kMainSection, nullptr, "bMultibyteInputHideSystemCandidateWindow", 1, filename);
+	gLog.FormattedMessage("g_bMultibyteInputHideSystemCandidateWindow: %d", g_bMultibyteInputHideSystemCandidateWindow);
+
+	g_bMultibyteInputUseTSFCandidates = ReadConfigInt(kMainSection, nullptr, "bMultibyteInputUseTSFCandidates", 1, filename);
+	gLog.FormattedMessage("g_bMultibyteInputUseTSFCandidates: %d", g_bMultibyteInputUseTSFCandidates);
 
 	g_bChangeJIPBigGunDesc = ReadConfigInt(kMainSection, nullptr, "bChangeJIPBigGunDesc", 1, filename);
 

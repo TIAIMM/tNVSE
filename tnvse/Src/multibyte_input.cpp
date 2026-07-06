@@ -2,6 +2,7 @@
 
 #include "encoding.h"
 #include "load_config.h"
+#include "NiDX9Renderer.hpp"
 #include "SafeWrite.h"
 #include "tnvse.h"
 #include "Tile.hpp"
@@ -9,12 +10,20 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cwchar>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 #include <Windows.h>
+#include <d3d9.h>
 #include <Imm.h>
+#include <msctf.h>
+#include <OleAuto.h>
 
 namespace fonthook
 {
@@ -31,6 +40,12 @@ namespace fonthook
 		constexpr UInt32 kJipEnterAcceptsOkFlag = 2;
 		constexpr DWORD kDuplicateImeCharSuppressMs = 250;
 		constexpr DWORD kDuplicateAsciiSuppressMs = 100;
+		constexpr UInt32 kMaxImeCandidatesToDisplay = 9;
+		constexpr UInt32 kMessage_OnFramePresent = NVSEMessagingInterface::kMessage_PostQueryPlugins + 1;
+		constexpr UInt32 kOverlayPadding = 10;
+		constexpr UInt32 kOverlayLineHeight = 24;
+		constexpr UInt32 kOverlayMinWidth = 260;
+		constexpr UInt32 kOverlayMaxWidth = 620;
 
 		constexpr UInt32 kInputCode_Backspace = 0x80000000;
 		constexpr UInt32 kInputCode_ArrowLeft = 0x80000001;
@@ -56,12 +71,53 @@ namespace fonthook
 		UInt32 s_suppressedImeCharCount = 0;
 		SIZE_T s_jipOriginalInputHandler = 0;
 
+		struct ImeCandidateState
+		{
+			bool composing = false;
+			bool imeOpen = false;
+			DWORD conversionMode = 0;
+			DWORD sentenceMode = 0;
+			DWORD selection = 0;
+			DWORD pageStart = 0;
+			DWORD pageSize = 0;
+			bool candidatesFromTsf = false;
+			std::wstring imeName;
+			std::wstring composition;
+			std::vector<std::wstring> candidates;
+		};
+
+		struct CandidateOverlayLine
+		{
+			std::wstring text;
+			bool highlighted = false;
+		};
+
+		struct CandidateOverlayState
+		{
+			LPDIRECT3DTEXTURE9 texture = nullptr;
+			UInt32 textureWidth = 0;
+			UInt32 textureHeight = 0;
+			std::wstring lastKey;
+			bool dirty = true;
+			bool visible = false;
+		};
+
+		ImeCandidateState s_imeCandidateState;
+		CandidateOverlayState s_candidateOverlay;
+		bool s_tsfInitialized = false;
+		bool s_tsfCandidateActive = false;
+
 		class JipTextInputAdapterEx
 		{
 		public:
 			static bool __fastcall Input(TextEditMenu* apMenu, void*, UInt32 aiInput);
 		};
 
+		void UpdateCandidateOverlay();
+		void DrawCandidateOverlay();
+		void ReleaseCandidateOverlayTexture();
+		void ClearImeCandidates();
+		TextEditMenu* GetAnyActiveTextInputMenu();
 		bool IsImeCompositionActive();
 		bool IsImeConsumingAscii();
 		std::string WideToCurrentCodePage(std::wstring_view value);
@@ -76,6 +132,297 @@ namespace fonthook
 			gLog.FormattedMessage(fmt, args);
 			va_end(args);
 		}
+
+		template <class T>
+		void SafeRelease(T*& ptr)
+		{
+			if (ptr)
+			{
+				ptr->Release();
+				ptr = nullptr;
+			}
+		}
+
+		class TsfCandidateSink final : public ITfUIElementSink
+		{
+		public:
+			TsfCandidateSink() = default;
+
+			~TsfCandidateSink()
+			{
+				Shutdown();
+			}
+
+			STDMETHODIMP QueryInterface(REFIID riid, void** ppvObj) override
+			{
+				if (!ppvObj)
+					return E_INVALIDARG;
+
+				*ppvObj = nullptr;
+				if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_ITfUIElementSink))
+				{
+					*ppvObj = static_cast<ITfUIElementSink*>(this);
+					AddRef();
+					return S_OK;
+				}
+
+				return E_NOINTERFACE;
+			}
+
+			STDMETHODIMP_(ULONG) AddRef() override
+			{
+				return static_cast<ULONG>(InterlockedIncrement(&m_refCount));
+			}
+
+			STDMETHODIMP_(ULONG) Release() override
+			{
+				const LONG result = InterlockedDecrement(&m_refCount);
+				return static_cast<ULONG>(result);
+			}
+
+			STDMETHODIMP BeginUIElement(DWORD dwUIElementId, BOOL* pbShow) override
+			{
+				if (pbShow && g_bMultibyteInputHideSystemCandidateWindow && GetAnyActiveTextInputMenu())
+					*pbShow = FALSE;
+
+				ReadCandidateElement(dwUIElementId);
+				UpdateCandidateOverlay();
+				return S_OK;
+			}
+
+			STDMETHODIMP UpdateUIElement(DWORD dwUIElementId) override
+			{
+				ReadCandidateElement(dwUIElementId);
+				UpdateCandidateOverlay();
+				return S_OK;
+			}
+
+			STDMETHODIMP EndUIElement(DWORD) override
+			{
+				s_tsfCandidateActive = false;
+				if (s_imeCandidateState.candidatesFromTsf)
+					ClearImeCandidates();
+				UpdateCandidateOverlay();
+				return S_OK;
+			}
+
+			bool Initialize()
+			{
+				if (m_initialized)
+					return true;
+
+				const HRESULT coInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+				m_coInitialized = SUCCEEDED(coInit);
+				if (FAILED(coInit) && coInit != RPC_E_CHANGED_MODE)
+					return false;
+
+				HRESULT hr = CoCreateInstance(
+					CLSID_TF_ThreadMgr,
+					nullptr,
+					CLSCTX_INPROC_SERVER,
+					__uuidof(ITfThreadMgrEx),
+					reinterpret_cast<void**>(&m_threadMgrEx));
+				if (FAILED(hr) || !m_threadMgrEx)
+					return false;
+
+				hr = m_threadMgrEx->ActivateEx(&m_clientId, TF_TMAE_UIELEMENTENABLEDONLY);
+				if (FAILED(hr))
+					return false;
+
+				m_activated = true;
+
+				ITfSource* source = nullptr;
+				hr = m_threadMgrEx->QueryInterface(__uuidof(ITfSource), reinterpret_cast<void**>(&source));
+				if (FAILED(hr) || !source)
+					return false;
+
+				hr = source->AdviseSink(__uuidof(ITfUIElementSink), static_cast<ITfUIElementSink*>(this), &m_uiElementSinkCookie);
+				SafeRelease(source);
+				if (FAILED(hr))
+					return false;
+
+				ITfInputProcessorProfiles* profiles = nullptr;
+				if (SUCCEEDED(CoCreateInstance(
+					CLSID_TF_InputProcessorProfiles,
+					nullptr,
+					CLSCTX_INPROC_SERVER,
+					IID_ITfInputProcessorProfiles,
+					reinterpret_cast<void**>(&profiles))) && profiles)
+				{
+					profiles->QueryInterface(IID_ITfInputProcessorProfileMgr, reinterpret_cast<void**>(&m_profileMgr));
+					SafeRelease(profiles);
+				}
+
+				m_initialized = true;
+				return true;
+			}
+
+			void Shutdown()
+			{
+				if (m_threadMgrEx)
+				{
+					ITfSource* source = nullptr;
+					if (m_uiElementSinkCookie != TF_INVALID_COOKIE
+						&& SUCCEEDED(m_threadMgrEx->QueryInterface(__uuidof(ITfSource), reinterpret_cast<void**>(&source)))
+						&& source)
+					{
+						source->UnadviseSink(m_uiElementSinkCookie);
+						SafeRelease(source);
+					}
+
+					if (m_activated)
+						m_threadMgrEx->Deactivate();
+				}
+
+				m_uiElementSinkCookie = TF_INVALID_COOKIE;
+				m_activated = false;
+				m_initialized = false;
+				SafeRelease(m_profileMgr);
+				SafeRelease(m_threadMgrEx);
+
+				if (m_coInitialized)
+				{
+					CoUninitialize();
+					m_coInitialized = false;
+				}
+			}
+
+			std::wstring GetCurrentInputMethodName() const
+			{
+				if (!m_profileMgr)
+					return {};
+
+				TF_INPUTPROCESSORPROFILE profile = {};
+				if (FAILED(m_profileMgr->GetActiveProfile(GUID_TFCAT_TIP_KEYBOARD, &profile)))
+					return {};
+
+				if (profile.dwProfileType != TF_PROFILETYPE_INPUTPROCESSOR)
+					return {};
+
+				ITfInputProcessorProfiles* profiles = nullptr;
+				if (FAILED(CoCreateInstance(
+					CLSID_TF_InputProcessorProfiles,
+					nullptr,
+					CLSCTX_INPROC_SERVER,
+					IID_ITfInputProcessorProfiles,
+					reinterpret_cast<void**>(&profiles))) || !profiles)
+					return {};
+
+				BSTR description = nullptr;
+				std::wstring result;
+				if (SUCCEEDED(profiles->GetLanguageProfileDescription(
+					profile.clsid,
+					profile.langid,
+					profile.guidProfile,
+					&description)) && description)
+				{
+					result = description;
+					SysFreeString(description);
+				}
+
+				SafeRelease(profiles);
+				return result;
+			}
+
+		private:
+			ITfUIElement* GetUIElement(DWORD id) const
+			{
+				if (!m_threadMgrEx)
+					return nullptr;
+
+				ITfUIElementMgr* manager = nullptr;
+				ITfUIElement* element = nullptr;
+				if (SUCCEEDED(m_threadMgrEx->QueryInterface(__uuidof(ITfUIElementMgr), reinterpret_cast<void**>(&manager))) && manager)
+				{
+					manager->GetUIElement(id, &element);
+					SafeRelease(manager);
+				}
+				return element;
+			}
+
+			void ReadCandidateElement(DWORD id)
+			{
+				ITfUIElement* element = GetUIElement(id);
+				if (!element)
+					return;
+
+				ITfCandidateListUIElement* candidate = nullptr;
+				if (SUCCEEDED(element->QueryInterface(__uuidof(ITfCandidateListUIElement), reinterpret_cast<void**>(&candidate))) && candidate)
+				{
+					ReadCandidateList(candidate);
+					SafeRelease(candidate);
+				}
+
+				SafeRelease(element);
+			}
+
+			void ReadCandidateList(ITfCandidateListUIElement* candidate)
+			{
+				UINT selection = 0;
+				UINT count = 0;
+				UINT currentPage = 0;
+				UINT pageCount = 0;
+				if (FAILED(candidate->GetCount(&count)) || !count)
+					return;
+
+				if (FAILED(candidate->GetSelection(&selection)))
+					selection = 0;
+
+				if (FAILED(candidate->GetCurrentPage(&currentPage)))
+					currentPage = 0;
+
+				DWORD pageStart = 0;
+				DWORD pageSize = count;
+				if (SUCCEEDED(candidate->GetPageIndex(nullptr, 0, &pageCount)) && pageCount)
+				{
+					std::vector<UINT> pageIndexes(pageCount);
+					if (SUCCEEDED(candidate->GetPageIndex(pageIndexes.data(), pageCount, &pageCount))
+						&& currentPage < pageCount)
+					{
+						pageStart = pageIndexes[currentPage];
+						const DWORD nextPageStart = currentPage + 1 < pageCount
+							? pageIndexes[currentPage + 1]
+							: count;
+						pageSize = nextPageStart > pageStart ? nextPageStart - pageStart : count - pageStart;
+					}
+				}
+
+				pageSize = std::min<DWORD>(pageSize, kMaxImeCandidatesToDisplay);
+
+				std::vector<std::wstring> candidates;
+				candidates.reserve(pageSize);
+				for (DWORD i = 0; i < pageSize; ++i)
+				{
+					BSTR value = nullptr;
+					if (SUCCEEDED(candidate->GetString(pageStart + i, &value)) && value)
+					{
+						candidates.emplace_back(value);
+						SysFreeString(value);
+					}
+				}
+
+				if (candidates.empty())
+					return;
+
+				s_tsfCandidateActive = true;
+				s_imeCandidateState.candidatesFromTsf = true;
+				s_imeCandidateState.selection = selection;
+				s_imeCandidateState.pageStart = pageStart;
+				s_imeCandidateState.pageSize = pageSize;
+				s_imeCandidateState.candidates = std::move(candidates);
+			}
+
+			LONG m_refCount = 1;
+			bool m_initialized = false;
+			bool m_activated = false;
+			bool m_coInitialized = false;
+			TfClientId m_clientId = TF_CLIENTID_NULL;
+			DWORD m_uiElementSinkCookie = TF_INVALID_COOKIE;
+			ITfThreadMgrEx* m_threadMgrEx = nullptr;
+			ITfInputProcessorProfileMgr* m_profileMgr = nullptr;
+		};
+
+		std::unique_ptr<TsfCandidateSink> s_tsfCandidateSink;
 
 		char PrintableAscii(UInt32 value)
 		{
@@ -951,6 +1298,501 @@ namespace fonthook
 			return converted;
 		}
 
+		std::wstring GetCurrentImeName(HWND hwnd)
+		{
+			if (g_bMultibyteInputUseTSFCandidates && s_tsfCandidateSink)
+			{
+				std::wstring tsfName = s_tsfCandidateSink->GetCurrentInputMethodName();
+				if (!tsfName.empty())
+					return tsfName;
+			}
+
+			DWORD threadId = hwnd ? GetWindowThreadProcessId(hwnd, nullptr) : GetCurrentThreadId();
+			HKL layout = GetKeyboardLayout(threadId);
+			if (layout)
+			{
+				wchar_t description[128] = {};
+				if (ImmGetDescriptionW(layout, description, ARRAYSIZE(description)) > 0 && description[0])
+					return description;
+			}
+
+			wchar_t layoutName[KL_NAMELENGTH] = {};
+			if (GetKeyboardLayoutNameW(layoutName) && layoutName[0])
+				return layoutName;
+
+			return L"IME";
+		}
+
+		void RefreshImeStatus(HWND hwnd)
+		{
+			s_imeCandidateState.imeName = GetCurrentImeName(hwnd);
+			s_imeCandidateState.imeOpen = false;
+			s_imeCandidateState.conversionMode = 0;
+			s_imeCandidateState.sentenceMode = 0;
+
+			HIMC context = hwnd ? ImmGetContext(hwnd) : nullptr;
+			if (!context)
+				return;
+
+			s_imeCandidateState.imeOpen = ImmGetOpenStatus(context) != FALSE;
+			ImmGetConversionStatus(
+				context,
+				&s_imeCandidateState.conversionMode,
+				&s_imeCandidateState.sentenceMode);
+			ImmReleaseContext(hwnd, context);
+		}
+
+		void RefreshImeComposition(HWND hwnd)
+		{
+			s_imeCandidateState.composition = GetImeCompositionString(hwnd, GCS_COMPSTR);
+		}
+
+		void ClearImeCandidates()
+		{
+			s_imeCandidateState.candidates.clear();
+			s_imeCandidateState.selection = 0;
+			s_imeCandidateState.pageStart = 0;
+			s_imeCandidateState.pageSize = 0;
+			s_imeCandidateState.candidatesFromTsf = false;
+			s_tsfCandidateActive = false;
+		}
+
+		void RefreshImeCandidatesFromImm(HWND hwnd)
+		{
+			ClearImeCandidates();
+
+			HIMC context = hwnd ? ImmGetContext(hwnd) : nullptr;
+			if (!context)
+				return;
+
+			const DWORD bytes = ImmGetCandidateListW(context, 0, nullptr, 0);
+			if (!bytes)
+			{
+				ImmReleaseContext(hwnd, context);
+				return;
+			}
+
+			std::unique_ptr<char[]> buffer(new char[bytes]);
+			auto* list = reinterpret_cast<LPCANDIDATELIST>(buffer.get());
+			if (ImmGetCandidateListW(context, 0, list, bytes) != bytes)
+			{
+				ImmReleaseContext(hwnd, context);
+				return;
+			}
+
+			if (list->dwStyle != IME_CAND_CODE)
+			{
+				s_imeCandidateState.selection = list->dwSelection;
+				s_imeCandidateState.pageStart = list->dwPageStart;
+				s_imeCandidateState.pageSize = list->dwPageSize;
+
+				const DWORD pageEnd = std::min<DWORD>(
+					list->dwCount,
+					list->dwPageStart + std::min<DWORD>(list->dwPageSize, kMaxImeCandidatesToDisplay));
+				for (DWORD index = list->dwPageStart; index < pageEnd; ++index)
+				{
+					const DWORD offset = list->dwOffset[index];
+					if (!offset || offset >= bytes)
+						continue;
+
+					const wchar_t* candidate = reinterpret_cast<const wchar_t*>(buffer.get() + offset);
+					if (candidate && *candidate)
+						s_imeCandidateState.candidates.emplace_back(candidate);
+				}
+			}
+
+			ImmReleaseContext(hwnd, context);
+		}
+
+		void RefreshImeCandidates(HWND hwnd)
+		{
+			if (g_bMultibyteInputUseTSFCandidates
+				&& s_tsfCandidateActive
+				&& s_imeCandidateState.candidatesFromTsf
+				&& !s_imeCandidateState.candidates.empty())
+				return;
+
+			RefreshImeCandidatesFromImm(hwnd);
+		}
+
+		void ClearImePreviewState()
+		{
+			s_imeCandidateState.composing = false;
+			s_imeCandidateState.composition.clear();
+			ClearImeCandidates();
+		}
+
+		const wchar_t* GetNativeModeLabel()
+		{
+			const bool native = (s_imeCandidateState.conversionMode & IME_CMODE_NATIVE) != 0;
+			switch (g_uiEncoding)
+			{
+			case 3:
+				return native ? L"\u65E5\u672C\u8A9E" : L"\u82F1\u6570";
+			case 4:
+				return native ? L"\uD55C\uAD6D\uC5B4" : L"\uC601\uBB38";
+			default:
+				return native ? L"\u4E2D\u6587" : L"\u82F1\u6587";
+			}
+		}
+
+		std::wstring BuildImeStatusLineWide()
+		{
+			std::wstring line = s_imeCandidateState.imeName.empty()
+				? L"IME"
+				: s_imeCandidateState.imeName;
+			line += s_imeCandidateState.imeOpen ? L" ON" : L" OFF";
+			if (s_imeCandidateState.imeOpen)
+			{
+				line += L" ";
+				line += GetNativeModeLabel();
+				line += (s_imeCandidateState.conversionMode & IME_CMODE_FULLSHAPE)
+					? L" \u5168\u89D2"
+					: L" \u534A\u89D2";
+			}
+			return line;
+		}
+
+		std::vector<CandidateOverlayLine> BuildCandidateOverlayLines()
+		{
+			std::vector<CandidateOverlayLine> lines;
+			if (!g_bMultibyteInputCompositionPreview || !GetAnyActiveTextInputMenu() || !s_imeCandidateState.imeOpen)
+				return lines;
+
+			lines.push_back({ BuildImeStatusLineWide(), false });
+
+			if (!s_imeCandidateState.composition.empty())
+			{
+				std::wstring composition = L"> ";
+				composition += s_imeCandidateState.composition;
+				lines.push_back({ std::move(composition), false });
+			}
+
+			for (size_t i = 0; i < s_imeCandidateState.candidates.size(); ++i)
+			{
+				if (s_imeCandidateState.candidates[i].empty())
+					continue;
+
+				const DWORD globalIndex = s_imeCandidateState.pageStart + static_cast<DWORD>(i);
+				wchar_t prefix[8] = {};
+				std::swprintf(prefix, ARRAYSIZE(prefix), L"%u. ", static_cast<UInt32>(i + 1));
+				std::wstring line = prefix;
+				line += s_imeCandidateState.candidates[i];
+				lines.push_back({ std::move(line), globalIndex == s_imeCandidateState.selection });
+			}
+
+			return lines;
+		}
+
+		std::wstring BuildCandidateOverlayKey(const std::vector<CandidateOverlayLine>& lines)
+		{
+			std::wstring key;
+			for (const CandidateOverlayLine& line : lines)
+			{
+				key += line.highlighted ? L"\x0001" : L"\x0000";
+				key += line.text;
+				key += L"\n";
+			}
+			return key;
+		}
+
+		const wchar_t* GetOverlayFontName()
+		{
+			switch (g_uiEncoding)
+			{
+			case 2:
+				return L"Microsoft JhengHei UI";
+			case 3:
+				return L"Meiryo";
+			case 4:
+				return L"Malgun Gothic";
+			default:
+				return L"Microsoft YaHei UI";
+			}
+		}
+
+		void ReleaseCandidateOverlayTexture()
+		{
+			if (s_candidateOverlay.texture)
+			{
+				s_candidateOverlay.texture->Release();
+				s_candidateOverlay.texture = nullptr;
+			}
+			s_candidateOverlay.textureWidth = 0;
+			s_candidateOverlay.textureHeight = 0;
+		}
+
+		void HideCandidateOverlay(bool)
+		{
+			s_candidateOverlay.visible = false;
+			s_candidateOverlay.dirty = true;
+			s_candidateOverlay.lastKey.clear();
+		}
+
+		void UpdateCandidateOverlay()
+		{
+			if (!g_bMultibyteInputCompositionPreview)
+			{
+				HideCandidateOverlay(false);
+				return;
+			}
+
+			if (!GetAnyActiveTextInputMenu() || !s_imeCandidateState.imeOpen)
+			{
+				HideCandidateOverlay(false);
+				return;
+			}
+
+			s_candidateOverlay.visible = true;
+			s_candidateOverlay.dirty = true;
+		}
+
+		bool RenderOverlayTexture(
+			LPDIRECT3DDEVICE9 device,
+			const std::vector<CandidateOverlayLine>& lines)
+		{
+			if (!device || lines.empty())
+				return false;
+
+			HDC hdc = CreateCompatibleDC(nullptr);
+			if (!hdc)
+				return false;
+
+			HFONT font = CreateFontW(
+				-18,
+				0,
+				0,
+				0,
+				FW_NORMAL,
+				FALSE,
+				FALSE,
+				FALSE,
+				DEFAULT_CHARSET,
+				OUT_DEFAULT_PRECIS,
+				CLIP_DEFAULT_PRECIS,
+				CLEARTYPE_QUALITY,
+				DEFAULT_PITCH | FF_DONTCARE,
+				GetOverlayFontName());
+			HGDIOBJ oldFont = font ? SelectObject(hdc, font) : nullptr;
+
+			UInt32 maxLineWidth = 0;
+			for (const CandidateOverlayLine& line : lines)
+			{
+				SIZE current = {};
+				if (GetTextExtentPoint32W(hdc, line.text.c_str(), static_cast<int>(line.text.size()), &current))
+					maxLineWidth = std::max<UInt32>(maxLineWidth, static_cast<UInt32>(current.cx));
+			}
+
+			UInt32 width = std::clamp<UInt32>(maxLineWidth + kOverlayPadding * 2, kOverlayMinWidth, kOverlayMaxWidth);
+			UInt32 height = kOverlayPadding * 2 + static_cast<UInt32>(lines.size()) * kOverlayLineHeight;
+			width = std::max<UInt32>(width, 1);
+			height = std::max<UInt32>(height, 1);
+
+			BITMAPINFO bmi = {};
+			bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+			bmi.bmiHeader.biWidth = static_cast<LONG>(width);
+			bmi.bmiHeader.biHeight = -static_cast<LONG>(height);
+			bmi.bmiHeader.biPlanes = 1;
+			bmi.bmiHeader.biBitCount = 32;
+			bmi.bmiHeader.biCompression = BI_RGB;
+
+			void* pixels = nullptr;
+			HBITMAP bitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pixels, nullptr, 0);
+			if (!bitmap || !pixels)
+			{
+				if (oldFont)
+					SelectObject(hdc, oldFont);
+				if (font)
+					DeleteObject(font);
+				DeleteDC(hdc);
+				return false;
+			}
+
+			HGDIOBJ oldBitmap = SelectObject(hdc, bitmap);
+			RECT background = { 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
+			HBRUSH backgroundBrush = CreateSolidBrush(RGB(18, 18, 18));
+			FillRect(hdc, &background, backgroundBrush);
+			DeleteObject(backgroundBrush);
+
+			HBRUSH borderBrush = CreateSolidBrush(RGB(220, 220, 220));
+			FrameRect(hdc, &background, borderBrush);
+			DeleteObject(borderBrush);
+
+			SetBkMode(hdc, TRANSPARENT);
+			for (size_t i = 0; i < lines.size(); ++i)
+			{
+				RECT lineRect = {
+					static_cast<LONG>(kOverlayPadding),
+					static_cast<LONG>(kOverlayPadding + i * kOverlayLineHeight),
+					static_cast<LONG>(width - kOverlayPadding),
+					static_cast<LONG>(kOverlayPadding + (i + 1) * kOverlayLineHeight)
+				};
+
+				if (lines[i].highlighted)
+				{
+					RECT highlightRect = lineRect;
+					highlightRect.left -= 4;
+					highlightRect.right += 4;
+					HBRUSH highlightBrush = CreateSolidBrush(RGB(58, 84, 126));
+					FillRect(hdc, &highlightRect, highlightBrush);
+					DeleteObject(highlightBrush);
+				}
+
+				SetTextColor(hdc, lines[i].highlighted ? RGB(255, 255, 255) : RGB(230, 230, 230));
+				DrawTextW(
+					hdc,
+					lines[i].text.c_str(),
+					static_cast<int>(lines[i].text.size()),
+					&lineRect,
+					DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+			}
+
+			auto* argb = static_cast<UInt32*>(pixels);
+			for (UInt32 i = 0; i < width * height; ++i)
+				argb[i] |= 0xE8000000;
+
+			if (!s_candidateOverlay.texture
+				|| s_candidateOverlay.textureWidth != width
+				|| s_candidateOverlay.textureHeight != height)
+			{
+				ReleaseCandidateOverlayTexture();
+				if (FAILED(device->CreateTexture(
+					width,
+					height,
+					1,
+					0,
+					D3DFMT_A8R8G8B8,
+					D3DPOOL_MANAGED,
+					&s_candidateOverlay.texture,
+					nullptr)))
+				{
+					SelectObject(hdc, oldBitmap);
+					DeleteObject(bitmap);
+					if (oldFont)
+						SelectObject(hdc, oldFont);
+					if (font)
+						DeleteObject(font);
+					DeleteDC(hdc);
+					return false;
+				}
+
+				s_candidateOverlay.textureWidth = width;
+				s_candidateOverlay.textureHeight = height;
+			}
+
+			D3DLOCKED_RECT locked = {};
+			if (SUCCEEDED(s_candidateOverlay.texture->LockRect(0, &locked, nullptr, 0)))
+			{
+				for (UInt32 y = 0; y < height; ++y)
+				{
+					std::memcpy(
+						static_cast<UInt8*>(locked.pBits) + y * locked.Pitch,
+						argb + y * width,
+						width * sizeof(UInt32));
+				}
+				s_candidateOverlay.texture->UnlockRect(0);
+			}
+
+			SelectObject(hdc, oldBitmap);
+			DeleteObject(bitmap);
+			if (oldFont)
+				SelectObject(hdc, oldFont);
+			if (font)
+				DeleteObject(font);
+			DeleteDC(hdc);
+			return true;
+		}
+
+		struct OverlayVertex
+		{
+			float x;
+			float y;
+			float z;
+			float rhw;
+			D3DCOLOR color;
+			float u;
+			float v;
+		};
+
+		void DrawCandidateOverlay()
+		{
+			if (!g_bMultibyteInputCompositionPreview || !s_candidateOverlay.visible)
+				return;
+
+			std::vector<CandidateOverlayLine> lines = BuildCandidateOverlayLines();
+			if (lines.empty())
+			{
+				HideCandidateOverlay(false);
+				return;
+			}
+
+			std::wstring key = BuildCandidateOverlayKey(lines);
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			LPDIRECT3DDEVICE9 device = renderer ? renderer->GetD3DDevice() : nullptr;
+			if (!device)
+				return;
+
+			if (s_candidateOverlay.dirty || key != s_candidateOverlay.lastKey || !s_candidateOverlay.texture)
+			{
+				if (!RenderOverlayTexture(device, lines))
+					return;
+
+				s_candidateOverlay.lastKey = std::move(key);
+				s_candidateOverlay.dirty = false;
+			}
+
+			if (!s_candidateOverlay.texture)
+				return;
+
+			D3DVIEWPORT9 viewport = {};
+			if (FAILED(device->GetViewport(&viewport)))
+				return;
+
+			const float x = std::max<float>(
+				12.0f,
+				(static_cast<float>(viewport.Width) - static_cast<float>(s_candidateOverlay.textureWidth)) * 0.5f);
+			const float y = std::min<float>(
+				static_cast<float>(viewport.Height) - static_cast<float>(s_candidateOverlay.textureHeight) - 12.0f,
+				static_cast<float>(viewport.Height) * 0.58f);
+			const float right = x + static_cast<float>(s_candidateOverlay.textureWidth);
+			const float bottom = y + static_cast<float>(s_candidateOverlay.textureHeight);
+
+			OverlayVertex vertices[4] = {
+				{ x - 0.5f, y - 0.5f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 0.0f },
+				{ right - 0.5f, y - 0.5f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 0.0f },
+				{ x - 0.5f, bottom - 0.5f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 1.0f },
+				{ right - 0.5f, bottom - 0.5f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 1.0f },
+			};
+
+			IDirect3DStateBlock9* stateBlock = nullptr;
+			if (SUCCEEDED(device->CreateStateBlock(D3DSBT_ALL, &stateBlock)) && stateBlock)
+				stateBlock->Capture();
+
+			device->SetTexture(0, s_candidateOverlay.texture);
+			device->SetPixelShader(nullptr);
+			device->SetVertexShader(nullptr);
+			device->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1);
+			device->SetRenderState(D3DRS_ZENABLE, FALSE);
+			device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+			device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+			device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+			device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+			device->SetRenderState(D3DRS_LIGHTING, FALSE);
+			device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+			device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+			device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+			device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+			device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+			device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+			device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(OverlayVertex));
+
+			if (stateBlock)
+			{
+				stateBlock->Apply();
+				stateBlock->Release();
+			}
+		}
+
 		bool InsertWideText(TextEditMenu* menu, std::wstring_view value)
 		{
 			std::string converted = WideToCurrentCodePage(value);
@@ -1032,6 +1874,9 @@ namespace fonthook
 
 			s_lastImeCommitTick = GetTickCount();
 			s_suppressedImeCharCount = static_cast<UInt32>(result.size());
+			ClearImePreviewState();
+			RefreshImeStatus(hwnd);
+			UpdateCandidateOverlay();
 			if (jipMenu)
 				DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_inserted", jipMenu, static_cast<UInt32>(lParam));
 			else
@@ -1158,7 +2003,54 @@ namespace fonthook
 				if (msg == WM_IME_STARTCOMPOSITION && GetAnyActiveTextInputMenu())
 				{
 					s_imeComposing = true;
+					s_imeCandidateState.composing = true;
+					RefreshImeStatus(hwnd);
+					RefreshImeComposition(hwnd);
+					RefreshImeCandidates(hwnd);
+					UpdateCandidateOverlay();
 					DebugLogState("WndProc.WM_IME_STARTCOMPOSITION", "composition_start", GetAnyActiveTextInputMenu(), 0);
+				}
+
+				if (msg == WM_INPUTLANGCHANGE && GetAnyActiveTextInputMenu())
+				{
+					RefreshImeStatus(hwnd);
+					ClearImeCandidates();
+					UpdateCandidateOverlay();
+					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_INPUTLANGCHANGE action=refresh_ime_name");
+				}
+
+				if (msg == WM_IME_NOTIFY && GetAnyActiveTextInputMenu())
+				{
+					RefreshImeStatus(hwnd);
+					switch (wParam)
+					{
+					case IMN_OPENCANDIDATE:
+					case IMN_SETCANDIDATEPOS:
+					case IMN_CHANGECANDIDATE:
+						RefreshImeCandidates(hwnd);
+						UpdateCandidateOverlay();
+						DebugLog(
+							"tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=refresh_candidates notify=0x%08X count=%u selection=%u pageStart=%u pageSize=%u",
+							static_cast<UInt32>(wParam),
+							static_cast<UInt32>(s_imeCandidateState.candidates.size()),
+							static_cast<UInt32>(s_imeCandidateState.selection),
+							static_cast<UInt32>(s_imeCandidateState.pageStart),
+							static_cast<UInt32>(s_imeCandidateState.pageSize));
+						return 0;
+					case IMN_CLOSECANDIDATE:
+						ClearImeCandidates();
+						UpdateCandidateOverlay();
+						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=close_candidates");
+						return 0;
+					case IMN_SETOPENSTATUS:
+					case IMN_SETCONVERSIONMODE:
+					case IMN_SETSENTENCEMODE:
+						UpdateCandidateOverlay();
+						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=refresh_ime_status");
+						break;
+					default:
+						break;
+					}
 				}
 
 				if (msg == WM_IME_COMPOSITION)
@@ -1182,6 +2074,12 @@ namespace fonthook
 					if (GetAnyActiveTextInputMenu())
 					{
 						s_imeComposing = true;
+						s_imeCandidateState.composing = true;
+						RefreshImeStatus(hwnd);
+						if (lParam & GCS_COMPSTR)
+							RefreshImeComposition(hwnd);
+						RefreshImeCandidates(hwnd);
+						UpdateCandidateOverlay();
 						DebugLogState("WndProc.WM_IME_COMPOSITION", "composition_continue", GetAnyActiveTextInputMenu(), static_cast<SInt32>(lParam));
 					}
 				}
@@ -1189,7 +2087,21 @@ namespace fonthook
 				if (msg == WM_IME_ENDCOMPOSITION)
 				{
 					s_imeComposing = false;
+					ClearImePreviewState();
+					RefreshImeStatus(hwnd);
+					UpdateCandidateOverlay();
 					DebugLogState("WndProc.WM_IME_ENDCOMPOSITION", "composition_end", GetAnyActiveTextInputMenu(), 0);
+				}
+
+				if (msg == WM_IME_SETCONTEXT
+					&& g_bMultibyteInputHideSystemCandidateWindow
+					&& GetAnyActiveTextInputMenu())
+				{
+					const LPARAM hiddenImeUi = lParam & ~(
+						ISC_SHOWUICOMPOSITIONWINDOW
+						| ISC_SHOWUICANDIDATEWINDOW
+						| ISC_SHOWUIGUIDELINE);
+					return CallWindowProcA(s_originalWndProc, hwnd, msg, wParam, hiddenImeUi);
 				}
 
 				if (msg == WM_CHAR && HandleCharFallback(wParam))
@@ -1278,6 +2190,9 @@ namespace fonthook
 		{
 			s_activeTextEditMenu = nullptr;
 			s_imeComposing = false;
+			ClearImePreviewState();
+			HideCandidateOverlay(false);
+			ReleaseCandidateOverlayTexture();
 			s_suppressedImeCharCount = 0;
 			s_lastImeCommitTick = 0;
 			s_lastWndProcAsciiTick = 0;
@@ -1297,6 +2212,12 @@ namespace fonthook
 
 			s_window = nullptr;
 			s_originalWndProc = nullptr;
+			if (s_tsfCandidateSink)
+			{
+				s_tsfCandidateSink->Shutdown();
+				s_tsfCandidateSink.reset();
+				s_tsfInitialized = false;
+			}
 			ClearInputState();
 		}
 	}
@@ -1453,7 +2374,23 @@ namespace fonthook
 		s_hooksInstalled = true;
 		TryInstallWindowProc();
 		if (g_bMultibyteInputCompositionPreview)
-			gLog.FormattedMessage("tnvse_multibyte_input: composition preview is reserved for a later stage");
+		{
+			if (g_bMultibyteInputUseTSFCandidates)
+			{
+				s_tsfCandidateSink = std::make_unique<TsfCandidateSink>();
+				s_tsfInitialized = s_tsfCandidateSink->Initialize();
+				if (!s_tsfInitialized)
+				{
+					s_tsfCandidateSink.reset();
+					gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink unavailable; using IMM32 fallback");
+				}
+				else
+				{
+					gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink enabled");
+				}
+			}
+			gLog.FormattedMessage("tnvse_multibyte_input: composition preview overlay enabled");
+		}
 		gLog.FormattedMessage("tnvse_multibyte_input: hooks installed");
 	}
 
@@ -1462,13 +2399,24 @@ namespace fonthook
 		if (!s_initialized || !g_bMultibyteInput || !apMessage)
 			return;
 
-		if (apMessage->type == NVSEMessagingInterface::kMessage_MainGameLoop)
+		if (apMessage->type == kMessage_OnFramePresent)
+		{
+			if (s_hooksInstalled && s_window && g_bMultibyteInputCompositionPreview)
+				DrawCandidateOverlay();
+		}
+		else if (apMessage->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 		{
 			if (s_hooksInstalled && !s_originalWndProc)
 				TryInstallWindowProc();
 
 			if (s_hooksInstalled)
 				TryInstallJipTextInputHook();
+
+			if (s_hooksInstalled && s_window && g_bMultibyteInputCompositionPreview)
+			{
+				RefreshImeStatus(s_window);
+				UpdateCandidateOverlay();
+			}
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitGame
 			|| apMessage->type == NVSEMessagingInterface::kMessage_ExitToMainMenu)

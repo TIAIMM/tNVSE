@@ -150,7 +150,7 @@ namespace fonthook
 			const std::string gameDirectory = GetGameDirectory();
 			if (gameDirectory.empty())
 				return {};
-			return gameDirectory + "\\Data\\plugins\\tnvse";
+			return gameDirectory + "\\Data\\NVSE\\plugins\\tnvse";
 		}
 
 		std::string GetStorePath()
@@ -168,10 +168,12 @@ namespace fonthook
 				return false;
 
 			const std::string dataDirectory = gameDirectory + "\\Data";
-			const std::string pluginsDirectory = dataDirectory + "\\plugins";
+			const std::string nvseDirectory = dataDirectory + "\\NVSE";
+			const std::string pluginsDirectory = nvseDirectory + "\\plugins";
 			const std::string storeDirectory = pluginsDirectory + "\\tnvse";
 
 			CreateDirectoryA(dataDirectory.c_str(), nullptr);
+			CreateDirectoryA(nvseDirectory.c_str(), nullptr);
 			CreateDirectoryA(pluginsDirectory.c_str(), nullptr);
 			CreateDirectoryA(storeDirectory.c_str(), nullptr);
 			return DirectoryExists(storeDirectory);

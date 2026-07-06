@@ -25,7 +25,7 @@ tNVSE 已经具备的相关能力：
 - 富文本路径已经在 `font_manager.cpp` 中加入 DBCS-aware parser/render hook。
 - Quest/location 等部分 UI 文本通过 `Tile::SetString` 局部 hook 进入现有文本转换路径。
 - 存档名 sanitizer call site `0x8518BB` 已经能在实际 `.fos` 文件名被清洗前捕获原始候选名。
-- 存档显示名映射已经改为 `Data\plugins\tnvse\save_display_names.dat` 单文件 sidecar，不修改 `.fos`、`.nvse` 或 `SaveGameData::pName`。
+- 存档显示名映射已经改为 `Data\NVSE\plugins\tnvse\save_display_names.dat` 单文件 sidecar，不修改 `.fos`、`.nvse` 或 `SaveGameData::pName`。
 
 首版已完成的输入层能力：
 
@@ -73,8 +73,8 @@ F4SE 项目的主要路径是“Windows IME/TSF + FO4 Unicode char event 注入�
 
 可借鉴的部分：
 
-- tNVSE 第一阶段应优先采用 `WM_IME_COMPOSITION + GCS_RESULTSTR` 的 commit-only 路径。
-- `GCS_COMPSTR` 和 TSF/Cicero 只作为 composition preview / candidate window 增强，不应写入真实 edit buffer。
+- tNVSE 的真实写入仍应只采用 `WM_IME_COMPOSITION + GCS_RESULTSTR` 的 commit-only 路径。
+- `GCS_COMPSTR`、IMM32 candidate list 和 TSF/Cicero 只作为 composition preview / candidate window 增强，不应写入真实 edit buffer。
 - 必须有 text-input gate：只有当前 active target 是已知可编辑控件时才消费 IME 消息。
 - `WM_CHAR` 只能作为非 IME fallback，并且必须避免和 `GCS_RESULTSTR` 双插入。
 
@@ -395,6 +395,8 @@ tnvse/Src/multibyte_input.cpp
 bMultibyteInput = 0
 bMultibyteInputDebug = 0
 bMultibyteInputCompositionPreview = 0
+bMultibyteInputHideSystemCandidateWindow = 1
+bMultibyteInputUseTSFCandidates = 1
 ```
 
 默认关闭更安全。启用条件：
@@ -423,8 +425,11 @@ SetWindowLongPtrA(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(MultibyteInputW
 
 首版实际处理的消息：
 
-- `WM_IME_COMPOSITION`：只读取 `GCS_RESULTSTR`，提交成功后写入 active `TextEditMenu`。
+- `WM_IME_COMPOSITION`：读取 `GCS_COMPSTR` 更新游戏内预览；只有 `GCS_RESULTSTR` 提交成功后才写入 active `TextEditMenu`。
 - `WM_IME_STARTCOMPOSITION` / `WM_IME_ENDCOMPOSITION`：维护 composition 状态。
+- `WM_IME_NOTIFY`：在 `IMN_OPENCANDIDATE` / `IMN_CHANGECANDIDATE` / `IMN_SETCANDIDATEPOS` 时通过 `ImmGetCandidateListW` 镜像旧式候选列表；现代 IME 的候选优先由 TSF `ITfCandidateListUIElement` sink 更新；`IMN_CLOSECANDIDATE` 清空 IMM32 fallback 候选。
+- `WM_INPUTLANGCHANGE`：刷新当前键盘布局 / IME 名称。
+- `WM_IME_SETCONTEXT`：当 `bMultibyteInputHideSystemCandidateWindow=1` 且存在 active target 时，清除系统 composition/candidate UI flags，避免系统候选窗和游戏内预览同时显示。
 - `WM_CHAR`：未组字时在 active `TextEditMenu` 下接管可打印 ASCII 和非 ASCII fallback；组字期间吞掉拼音等 ASCII `WM_CHAR`，避免预编辑串写入真实 buffer。
 - `WM_NCDESTROY`：恢复原 WndProc。
 - `WM_PASTE`：后续可选，必须走同一套 DBCS 边界、宽度限制和 byte 上限检查。
@@ -450,13 +455,47 @@ UTF-16 -> WideCharToMultiByte(g_usingWinEncoding)
 消息消费规则：
 
 - 只有 `GCS_RESULTSTR` 成功转换且成功插入 active target 时才返回已处理。
-- `GCS_COMPSTR` 首版不写 edit buffer；`bMultibyteInputCompositionPreview` 目前只作为后续预览阶段的保留开关。
+- `GCS_COMPSTR` 不写 edit buffer；`bMultibyteInputCompositionPreview=1` 时只写入游戏内预览。
 - `WM_CHAR` 在 active `TextEditMenu` 下直接处理可打印 ASCII；若游戏输入管线随后又发出同一 ASCII input，`0x7E6620` 内部输入 hook 会用短期 suppress 防止双插入。
 - IME composition active，或 IMM context 处于 open/native 且存在预编辑串时，ASCII `WM_CHAR` 视为拼音/假名等预编辑输入并直接消费，不进入真实 edit buffer。
 - 游戏原本 `TextEditMenu::HandleKeyboardInput` 路径也必须应用同一规则；正式版日志确认拼音字母可能先从该 vtable 路径到达，而不是只从 `WM_CHAR` 到达。
 - `TextEditMenu::HandleKeyboardInput` 在 composition active 时还应吞掉 Backspace/Delete/Left/Right/Home/End/Confirm 等控制输入，避免用户编辑 IME 预编辑串时误删或提交游戏真实文本。
 - `GCS_RESULTSTR` 后用短期 suppress 计数避免同一提交又以 `WM_CHAR` 形式插入一次。
 - 所有未明确消费的消息都调用原 WndProc。
+
+### 2.1 游戏内 IME 状态和候选窗预览
+
+当前实现新增 `ImeCandidateState`，字段包括：
+
+```cpp
+bool composing;
+bool imeOpen;
+DWORD conversionMode;
+DWORD sentenceMode;
+DWORD selection;
+DWORD pageStart;
+DWORD pageSize;
+bool candidatesFromTsf;
+std::wstring imeName;
+std::wstring composition;
+std::vector<std::wstring> candidates;
+```
+
+预览层只镜像系统 IME 状态，不接管候选选择逻辑：
+
+- `composition` 来自 `ImmGetCompositionStringW(..., GCS_COMPSTR, ...)`，它只代表拼音/假名等预编辑串，不是候选汉字列表。
+- `candidates` 优先来自 TSF `ITfCandidateListUIElement`；TSF 初始化失败、关闭或未返回候选时，再用 `ImmGetCandidateListW` 作为 fallback，最多显示 9 项。
+- `imeName` 优先通过 TSF active profile description；失败时退回当前 `HKL` 的 `ImmGetDescriptionW`；再失败退回 `GetKeyboardLayoutNameW` / `IME`。
+- `imeOpen/conversionMode/sentenceMode` 来自 `ImmGetOpenStatus` 和 `ImmGetConversionStatus`。
+- 独立 overlay 直接绘制 UTF-16 预览文本；只有 `GCS_RESULTSTR` 的真实提交结果才用 `WideCharToMultiByte(g_usingWinEncoding, WC_NO_BEST_FIT_CHARS, ...)` 转成当前 UI codepage 写入 edit buffer。
+
+当前预览实现不复用任何菜单 tile：
+
+- `bMultibyteInputCompositionPreview=1` 时，tNVSE 在 `kMessage_OnFramePresent` 中从 `NiDX9Renderer::GetSingleton()->GetD3DDevice()` 取得 DX9 device。
+- GDI `DrawTextW` 先把输入法名称、语言模式、全角/半角、composition 和候选列表画到 32-bit DIB，再上传为 `D3DFMT_A8R8G8B8` texture。
+- DX9 屏幕空间 quad 在帧提交前绘制该 texture；不依赖 D3DXFont、菜单 XML、`pTitle`、`pEditText` 或 JIP XML 字段。
+- `WM_IME_SETCONTEXT` 清 IMM32 composition/candidate UI flags；TSF `ITfUIElementSink::BeginUIElement` 在同一配置开启时设置 `*pbShow = FALSE`，隐藏现代 IME 自带候选 UI。
+- active target 丢失、IME 关闭或预览配置关闭时只隐藏独立 overlay，不写回或恢复任何菜单 tile。
 
 ### 3. Active target 追踪
 
@@ -587,7 +626,7 @@ bool DeleteNextChar(TextEditMenu*);
 3. `0x8518BB` hook 捕获原始候选名。
 4. 原版等价 sanitizer 继续生成 ASCII-safe `.fos` basename。
 5. `CaptureSaveDisplayName(originalName, actualName)` 生成 pending record。
-6. `kMessage_SaveGame` 用实际 `.fos` path 更新 `Data\plugins\tnvse\save_display_names.dat`。
+6. `kMessage_SaveGame` 用实际 `.fos` path 更新 `Data\NVSE\plugins\tnvse\save_display_names.dat`。
 7. 保存/读取列表中，`0x851AAE` 手动存档识别 hook 只阻止 raw basename 覆盖原版 save header 摘要。
 
 注意：sidecar 中的 display name 是当前 UI codepage 多字节，不是 UTF-8。若输入源是 UTF-8 或 IME UTF-16，都应在进入 record 前转换为当前 codepage。
@@ -622,9 +661,9 @@ bool DeleteNextChar(TextEditMenu*);
 
 日志不要在正常构建长期保留。
 
-### 阶段 B：仅提交结果的 IME 输入
+### 阶段 B：提交结果和预览层
 
-先只支持 `GCS_RESULTSTR`：
+当前实现已经支持 `GCS_RESULTSTR` 提交和独立候选窗预览：
 
 - 捕获 IME commit。
 - 转当前 codepage。
@@ -633,8 +672,9 @@ bool DeleteNextChar(TextEditMenu*);
 - 校验 1023-byte 安全上限和 `0x717230` 宽度限制。
 - 调 `0x7E6700` 刷新。
 - 消费该 IME message。
-
-不做 composition preview，不调整候选窗位置。
+- `GCS_COMPSTR` 只用于 composition 行，不进入真实 buffer。
+- TSF `ITfCandidateListUIElement` 优先提供候选汉字；`ImmGetCandidateListW` 只作为旧 IME fallback。
+- 输入法名称优先来自 TSF profile description，失败才退回 `ImmGetDescriptionW` / keyboard layout。
 
 ### 阶段 C：DBCS 编辑键
 
@@ -655,7 +695,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 - Stewie Tweaks Menu Search：不改 Stewie 源码时，需要单独用 active search bar gate + codepage byte replay 或 shadow buffer 方案；不要混进 `TextEditMenu` adapter。
 - Console 输入只在明确需要时处理，因为命令解析和普通 UI 文本不同。
-- Rime 后端、自绘候选窗、TSF/Cicero candidate list 都属于第二阶段增强，不影响第一阶段 commit-only 设计。
+- Rime 后端、Stewie Menu Search、Console 输入属于后续扩展；当前独立 DX9 overlay 和 TSF/IMM32 候选读取不影响 commit-only 写入层。
 
 每个字段都要单独确认提交路径是否会 sanitize、是否写入存档、是否要求 ASCII。
 
@@ -675,8 +715,8 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 ## 风险
 
-- 全屏/窗口化下 IME candidate window 行为不同。
-- 如果不调用 `ImmSetCompositionWindow`，候选窗可能出现在默认位置。
+- 全屏/窗口化下系统 IME candidate window 行为不同；当前默认通过 `WM_IME_SETCONTEXT` 和 TSF `BeginUIElement(*pbShow=FALSE)` 隐藏系统候选窗。
+- 独立 DX9 overlay 使用 GDI-to-texture；设备丢失、分辨率变化或 device 不可用时必须安全跳过并在下一帧重建纹理。
 - 原版 `TextEditMenu` caret marker 是单 byte 插入；如果 caret byte offset 错误，会破坏 DBCS。
 - 有些输入字段可能用 byte length 当字符数，最大长度要实测。
 - `0x7170A0` 和 `InputUnk01` 使用 1024/1028 bytes 级栈缓冲，tNVSE 不能写入超长文本后再交给原版刷新。
@@ -719,7 +759,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 - 使用中文玩家名后创建手动存档。
 - `.fos` basename 仍为原版 sanitizer 后的 ASCII-safe 文本。
-- `Data\plugins\tnvse\save_display_names.dat` 写入 mapping。
+- `Data\NVSE\plugins\tnvse\save_display_names.dat` 写入 mapping。
 - 载入/保存列表显示原版摘要，例如 `清泉镇 - 3.0 MB`，而不是 raw sanitized filename。
 - 覆盖已有中文映射时 display name 不丢。
 - 删除/重命名存档时 sidecar record 正确删除/移动。
@@ -739,10 +779,11 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - 富文本、终端、任务、地点、HUD 渲染不受影响。
 - 未启用 `bMultibyteInput` 时不 subclass WndProc，不影响其他输入插件。
 
-### 可选候选窗 / 输入法后端
+### 候选窗 / 输入法后端
 
-- Windows 系统候选窗在窗口化和全屏下是否可用。
-- 如果不可用，再测试 tile/DX9 overlay 的 composition preview。
+- `bMultibyteInputCompositionPreview=1` 时，composition、候选项和当前输入法名称显示在独立 DX9 overlay，不修改 active text input 的任何 tile。
+- `bMultibyteInputHideSystemCandidateWindow=1` 时，系统候选窗应默认隐藏。
+- `bMultibyteInputUseTSFCandidates=1` 时，优先测试 Microsoft Pinyin / Sogou / Japanese IME / Korean IME 下 TSF candidate UI 是否能返回候选；关闭该配置时再验证 `ImmGetCandidateListW` fallback。
 - Rime 后端如作为可选项，应测试组字期间吞键、commit-only 写入、候选翻页和 ASCII mode 切换。
 
 ## 完成标准
@@ -750,6 +791,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 多字节字符输入 hook 可认为完成的条件：
 
 - 至少玩家名 `TextEditMenu` 能接收 IME 多字节字符 commit。
+- 开启 `bMultibyteInputCompositionPreview=1` 时，能显示当前输入法名称、中文/英文或对应语言模式、全角/半角、composition 和 TSF/IMM32 candidate list；关闭时回到 commit-only 行为。
 - 编辑框打字期间能正确显示当前 `uiEncoding` 对应字符。
 - Backspace/delete/left/right 不拆 DBCS。
 - 实际 `.fos` 文件名仍由原版 sanitizer 生成。

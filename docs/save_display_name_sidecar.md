@@ -32,12 +32,12 @@ This avoids changing `SaveGameData::pName`, the actual load path, delete/rename 
 Path:
 
 ```text
-Data\plugins\tnvse\save_display_names.dat
+Data\NVSE\plugins\tnvse\save_display_names.dat
 ```
 
 The path is relative to the game root and is not inside the active save directory. One file stores all mappings.
 
-The repository tracks an empty template fixture at `docs\fixtures\save_display_names.dat`. That file is not read by the game; it only documents the initial binary layout. Runtime data belongs at the `Data\plugins\tnvse` path above and is ignored by Git.
+The repository tracks an empty template fixture at `docs\fixtures\save_display_names.dat`. That file is not read by the game; it only documents the initial binary layout. Runtime data belongs at the `Data\NVSE\plugins\tnvse` path above and is ignored by Git.
 
 Store header:
 
@@ -113,7 +113,7 @@ bSaveDisplayNameMap=1
 ## Test plan
 
 - Save with a GBK/CP936 Chinese name. Confirm the `.fos` filename is ASCII-safe and the load menu shows the parsed location/size summary rather than the raw sanitized filename.
-- Confirm `Data\plugins\tnvse\save_display_names.dat` contains a sidecar record for the new save.
+- Confirm `Data\NVSE\plugins\tnvse\save_display_names.dat` contains a sidecar record for the new save.
 - Save with UTF-8 Chinese input while `bUTF8=1`. Confirm the store uses current-codepage bytes and the menu does not double-convert.
 - Overwrite an existing sidecar-mapped save. Confirm the display name is not lost.
 - Delete and rename mapped saves. Confirm the sidecar record is removed or moved.
