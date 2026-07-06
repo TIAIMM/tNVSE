@@ -347,21 +347,63 @@ namespace fonthook
 			return value.substr(begin, end - begin + 1);
 		}
 
+		void CollectAsciiDelimiterPositionsOutsideDbcs(
+			const std::string& text,
+			char delimiter,
+			std::vector<size_t>& outPositions)
+		{
+			outPositions.clear();
+			for (size_t i = 0; i < text.size(); ++i)
+			{
+				UInt32 dbcsCode = 0;
+				if (i + 1 < text.size() && TryDecodeDoubleByte(&text[i], dbcsCode))
+				{
+					++i;
+					continue;
+				}
+
+				if (text[i] == delimiter)
+					outPositions.push_back(i);
+			}
+		}
+
+		size_t FindAsciiTokenOutsideDbcs(const std::string& text, const char* token)
+		{
+			if (!token || !*token)
+				return std::string::npos;
+
+			const size_t tokenLen = std::strlen(token);
+			for (size_t i = 0; i < text.size(); ++i)
+			{
+				UInt32 dbcsCode = 0;
+				if (i + 1 < text.size() && TryDecodeDoubleByte(&text[i], dbcsCode))
+				{
+					++i;
+					continue;
+				}
+
+				if (i + tokenLen <= text.size() && std::memcmp(text.data() + i, token, tokenLen) == 0)
+					return i;
+			}
+
+			return std::string::npos;
+		}
+
 		bool TryExtractManualSaveLocation(
 			const std::string& displayNameMb,
 			std::string& outLocation)
 		{
 			outLocation.clear();
 
-			const size_t lastComma = displayNameMb.rfind(',');
-			if (lastComma == std::string::npos)
+			std::vector<size_t> commaPositions;
+			CollectAsciiDelimiterPositionsOutsideDbcs(displayNameMb, ',', commaPositions);
+			if (commaPositions.size() < 2)
 				return false;
 
-			const size_t previousComma = displayNameMb.rfind(',', lastComma - 1);
-			if (previousComma == std::string::npos)
-				return false;
+			const size_t lastComma = commaPositions.back();
+			const size_t previousComma = commaPositions[commaPositions.size() - 2];
 
-			const size_t headerSep = displayNameMb.find(" - ");
+			const size_t headerSep = FindAsciiTokenOutsideDbcs(displayNameMb, " - ");
 			if (headerSep == std::string::npos || headerSep > previousComma)
 				return false;
 
@@ -755,7 +797,11 @@ namespace fonthook
 		std::string PrepareDisplayNameMb(const std::string& originalName)
 		{
 			if (g_bEnableUTF8 && g_usingWinEncoding && IsValidUTF8With3ByteMin(originalName.c_str()))
-				return UTF8ToMultiByteStr(originalName, g_usingWinEncoding);
+			{
+				const std::string converted = UTF8ToMultiByteStr(originalName, g_usingWinEncoding);
+				if (!converted.empty())
+					return converted;
+			}
 			return originalName;
 		}
 
