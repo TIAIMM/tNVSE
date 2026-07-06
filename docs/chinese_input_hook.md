@@ -14,7 +14,7 @@ tNVSE already has these relevant pieces:
 - Rich text has DBCS-aware parser/render hooks in `font_manager.cpp`.
 - Quest/location and selected UI text paths use `Tile::SetString` hooks in `text_hooks.cpp`.
 - Save name sanitizer at `0x8518BB` can capture the original candidate before the actual `.fos` name is sanitized.
-- Save display names can be stored in `.nvse` co-save through the `SVDN` mapping.
+- Save display names can be stored in `Data\plugins\tnvse\save_display_names.dat` through the sidecar mapping.
 
 What is still missing:
 
@@ -190,7 +190,7 @@ For save names, separate three names:
 ```text
 edit display string: multibyte text shown while typing
 actual save key: vanilla-sanitized ASCII-safe filename
-load-menu display name: co-save SVDN mapping
+load-menu display name: sidecar save-display-name mapping
 ```
 
 When the player commits a Chinese save name:
@@ -198,8 +198,8 @@ When the player commits a Chinese save name:
 1. The edit field shows the multibyte candidate.
 2. The save path sanitizer still produces the actual `.fos` key.
 3. `CaptureSaveDisplayName(originalName, actualName)` stores the multibyte display name as pending.
-4. The save callback writes `SVDN` into `.nvse`.
-5. The load menu displays `SVDN` if present.
+4. `kMessage_SaveGame` resolves the actual `.fos` path and writes the pending mapping into `Data\plugins\tnvse\save_display_names.dat`.
+5. The load menu uses the sidecar mapping if present.
 
 Do not allow CJK bytes into the real `.fos` filename.
 
@@ -316,7 +316,7 @@ Forward the original Windows message to the original WndProc unless tNVSE succes
 - Hit max-length boundary with Chinese text and verify no half character remains.
 - Save with Chinese display name:
   - `.fos` stays ASCII-safe.
-  - `.nvse` contains `SVDN`.
+  - `Data\plugins\tnvse\save_display_names.dat` contains the sidecar mapping.
   - load menu displays Chinese.
   - load operation still uses the real save key.
 
@@ -341,6 +341,6 @@ The Chinese input hook can be considered complete when:
 - The edit field displays Chinese while typing.
 - Backspace/delete/caret movement do not split DBCS pairs.
 - Save names still use vanilla-safe actual filenames.
-- Load menu display uses `SVDN` mapping for Chinese names.
+- Load menu display uses the sidecar mapping for Chinese names.
 - No global `Tile::SetString` or WndProc debug logging remains in normal builds.
 - Missing IME/config/font support falls back without breaking normal input.

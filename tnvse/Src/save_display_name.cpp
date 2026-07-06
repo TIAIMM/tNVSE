@@ -15,42 +15,28 @@
 namespace fonthook
 {
 	void CaptureSaveDisplayName(const char* originalName, const char* actualName);
-	void SaveDisplayName_SaveCallback(void* reserved);
-	void SaveDisplayName_LoadCallback(void* reserved);
 
 	namespace
 	{
-		constexpr UInt32 kRecordType = 'SVDN';
-		constexpr UInt32 kRecordVersion = 1;
-		constexpr UInt32 kNvseSignature = MACRO_SWAP32('NVSE');
+		constexpr UInt32 kStoreMagic = 'SVDN';
+		constexpr UInt32 kStoreVersion = 1;
+		constexpr UInt32 kMaxStoreFileSize = 16 * 1024 * 1024;
+		constexpr UInt32 kMaxStoreRecords = 8192;
+		constexpr UInt32 kMaxActualKeyLen = 260;
+		constexpr UInt32 kMaxSavePathKeyLen = MAX_PATH * 2;
+		constexpr UInt32 kMaxDisplayNameLen = 1024;
 
-		struct NvseHeader
+		struct StoreHeader
 		{
-			UInt32 signature;
-			UInt32 formatVersion;
-			UInt16 nvseVersion;
-			UInt16 nvseMinorVersion;
-			UInt32 falloutVersion;
-			UInt32 numPlugins;
-		};
-
-		struct PluginHeader
-		{
-			UInt32 opcodeBase;
-			UInt32 numChunks;
-			UInt32 length;
-		};
-
-		struct ChunkHeader
-		{
-			UInt32 type;
+			UInt32 magic;
 			UInt32 version;
-			UInt32 length;
+			UInt32 recordCount;
 		};
 
-		struct SaveDisplayNameRecordHeader
+		struct StoreRecordHeader
 		{
 			UInt32 actualKeyLen;
+			UInt32 savePathKeyLen;
 			UInt32 displayNameLen;
 			UInt32 uiEncoding;
 			UInt32 codePage;
@@ -66,6 +52,7 @@ namespace fonthook
 		struct DisplayRecord
 		{
 			std::string actualKey;
+			std::string savePathKey;
 			std::string displayNameMb;
 			UInt32 uiEncoding = 0;
 			UInt32 codePage = 0;
@@ -78,10 +65,9 @@ namespace fonthook
 			std::string displayNameMb;
 		};
 
-		NVSESerializationInterface* s_serialization = nullptr;
 		std::unordered_map<std::string, DisplayRecord> s_pendingByActualKey;
 		std::unordered_map<std::string, CacheEntry> s_displayCache;
-		std::string s_lastSavePath;
+		std::string s_pendingRenameOldPath;
 
 		std::string ToLowerAscii(std::string value)
 		{
@@ -140,6 +126,63 @@ namespace fonthook
 			return StripFosExtension(StripPath(pathOrName));
 		}
 
+		std::string GetGameDirectory()
+		{
+			char path[MAX_PATH] = {};
+			GetModuleFileNameA(nullptr, path, MAX_PATH);
+			path[MAX_PATH - 1] = '\0';
+
+			char* slash = std::strrchr(path, '\\');
+			if (!slash)
+				return {};
+			*slash = '\0';
+			return path;
+		}
+
+		bool DirectoryExists(const std::string& path)
+		{
+			const DWORD attributes = GetFileAttributesA(path.c_str());
+			return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY);
+		}
+
+		std::string GetStoreDirectory()
+		{
+			const std::string gameDirectory = GetGameDirectory();
+			if (gameDirectory.empty())
+				return {};
+			return gameDirectory + "\\Data\\plugins\\tnvse";
+		}
+
+		std::string GetStorePath()
+		{
+			const std::string directory = GetStoreDirectory();
+			if (directory.empty())
+				return {};
+			return directory + "\\save_display_names.dat";
+		}
+
+		bool EnsureStoreDirectory()
+		{
+			const std::string gameDirectory = GetGameDirectory();
+			if (gameDirectory.empty())
+				return false;
+
+			const std::string dataDirectory = gameDirectory + "\\Data";
+			const std::string pluginsDirectory = dataDirectory + "\\plugins";
+			const std::string storeDirectory = pluginsDirectory + "\\tnvse";
+
+			CreateDirectoryA(dataDirectory.c_str(), nullptr);
+			CreateDirectoryA(pluginsDirectory.c_str(), nullptr);
+			CreateDirectoryA(storeDirectory.c_str(), nullptr);
+			return DirectoryExists(storeDirectory);
+		}
+
+		std::string NormalizeSavePathKey(std::string path)
+		{
+			std::replace(path.begin(), path.end(), '/', '\\');
+			return ToLowerAscii(path);
+		}
+
 		std::string GetSaveGamePath()
 		{
 			char savePath[MAX_PATH] = {};
@@ -178,41 +221,19 @@ namespace fonthook
 			return result;
 		}
 
-		std::string ConvertSaveFileNameToCosave(std::string name)
+		std::string ResolveSavePathKey(const std::string& savePath, const std::string& actualKey)
 		{
-			if (name.empty() || name.size() >= MAX_PATH * 2)
+			std::string resolvedPath = savePath;
+			if (resolvedPath.empty() || resolvedPath.find_last_of("\\/") == std::string::npos)
+				resolvedPath = BuildSavePathFromActualKey(actualKey);
+			if (resolvedPath.empty() || resolvedPath.size() > kMaxSavePathKeyLen)
 				return {};
+			return NormalizeSavePathKey(resolvedPath);
+		}
 
-			std::string bakSuffix;
-			const size_t firstDotBak = name.find(".bak");
-			if (firstDotBak != std::string::npos)
-			{
-				bakSuffix = name.substr(firstDotBak);
-				name = name.substr(0, firstDotBak);
-			}
-
-			std::string result;
-			const size_t lastPeriod = name.rfind('.');
-			if (lastPeriod == std::string::npos)
-				result = name;
-			else
-				result = name.substr(0, lastPeriod);
-
-			result += ".nvse";
-			result += bakSuffix;
-
-			if (result.find_last_of("\\/") == std::string::npos)
-			{
-				std::string savePath = GetSaveGamePath();
-				if (savePath.empty() || savePath.size() >= MAX_PATH)
-					return {};
-
-				if (!savePath.empty() && savePath.back() != '\\' && savePath.back() != '/')
-					savePath.push_back('\\');
-				result = savePath + result;
-			}
-
-			return result;
+		std::string MakeCacheKey(const std::string& savePathKey, const std::string& actualKey)
+		{
+			return savePathKey + "\n" + actualKey;
 		}
 
 		bool SameStamp(const FileStamp& lhs, const FileStamp& rhs)
@@ -250,7 +271,7 @@ namespace fonthook
 				return false;
 
 			LARGE_INTEGER size = {};
-			if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > 16 * 1024 * 1024)
+			if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > kMaxStoreFileSize)
 			{
 				CloseHandle(file);
 				return false;
@@ -429,6 +450,282 @@ namespace fonthook
 			return true;
 		}
 
+		void AppendBytes(std::vector<UInt8>& outData, const void* data, size_t length)
+		{
+			if (!length)
+				return;
+
+			const UInt8* bytes = static_cast<const UInt8*>(data);
+			outData.insert(outData.end(), bytes, bytes + length);
+		}
+
+		template <class T>
+		void AppendValue(std::vector<UInt8>& outData, const T& value)
+		{
+			AppendBytes(outData, &value, sizeof(value));
+		}
+
+		bool WriteWholeFileAtomic(const std::string& path, const std::vector<UInt8>& data)
+		{
+			if (path.empty() || data.empty())
+				return false;
+
+			const std::string tempPath = path + ".tnvse.tmp";
+			HANDLE file = CreateFileA(
+				tempPath.c_str(),
+				GENERIC_WRITE,
+				0,
+				nullptr,
+				CREATE_ALWAYS,
+				FILE_ATTRIBUTE_NORMAL,
+				nullptr);
+			if (file == INVALID_HANDLE_VALUE)
+				return false;
+
+			DWORD bytesWritten = 0;
+			const BOOL ok = WriteFile(file, data.data(), static_cast<DWORD>(data.size()), &bytesWritten, nullptr);
+			if (ok)
+				FlushFileBuffers(file);
+			CloseHandle(file);
+
+			if (!ok || bytesWritten != data.size())
+			{
+				DeleteFileA(tempPath.c_str());
+				return false;
+			}
+
+			if (!MoveFileExA(
+				tempPath.c_str(),
+				path.c_str(),
+				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+			{
+				DeleteFileA(tempPath.c_str());
+				return false;
+			}
+
+			return true;
+		}
+
+		bool IsValidRecord(const DisplayRecord& record)
+		{
+			return !record.actualKey.empty()
+				&& !record.savePathKey.empty()
+				&& !record.displayNameMb.empty()
+				&& record.actualKey.size() <= kMaxActualKeyLen
+				&& record.savePathKey.size() <= kMaxSavePathKeyLen
+				&& record.displayNameMb.size() <= kMaxDisplayNameLen;
+		}
+
+		bool ReadStoreRecords(std::vector<DisplayRecord>& outRecords)
+		{
+			outRecords.clear();
+
+			const std::string storePath = GetStorePath();
+			if (storePath.empty())
+				return false;
+			if (!GetFileStamp(storePath).exists)
+				return true;
+
+			std::vector<UInt8> data;
+			if (!ReadWholeFile(storePath, data))
+				return false;
+
+			size_t offset = 0;
+			StoreHeader header = {};
+			if (!ReadValue(data, offset, header)
+				|| header.magic != kStoreMagic
+				|| header.version != kStoreVersion
+				|| header.recordCount > kMaxStoreRecords)
+			{
+				return false;
+			}
+
+			outRecords.reserve(header.recordCount);
+			for (UInt32 i = 0; i < header.recordCount; ++i)
+			{
+				StoreRecordHeader recordHeader = {};
+				if (!ReadValue(data, offset, recordHeader))
+					return false;
+				if (!recordHeader.actualKeyLen
+					|| !recordHeader.savePathKeyLen
+					|| !recordHeader.displayNameLen
+					|| recordHeader.actualKeyLen > kMaxActualKeyLen
+					|| recordHeader.savePathKeyLen > kMaxSavePathKeyLen
+					|| recordHeader.displayNameLen > kMaxDisplayNameLen)
+				{
+					return false;
+				}
+
+				DisplayRecord record;
+				record.uiEncoding = recordHeader.uiEncoding;
+				record.codePage = recordHeader.codePage;
+				if (!ReadBytes(data, offset, record.actualKey, recordHeader.actualKeyLen)
+					|| !ReadBytes(data, offset, record.savePathKey, recordHeader.savePathKeyLen)
+					|| !ReadBytes(data, offset, record.displayNameMb, recordHeader.displayNameLen)
+					|| !IsValidRecord(record))
+				{
+					return false;
+				}
+
+				outRecords.push_back(std::move(record));
+			}
+
+			return offset == data.size();
+		}
+
+		bool WriteStoreRecords(const std::vector<DisplayRecord>& records)
+		{
+			if (!EnsureStoreDirectory())
+				return false;
+
+			std::vector<DisplayRecord> validRecords;
+			validRecords.reserve(records.size());
+			for (const DisplayRecord& record : records)
+			{
+				if (IsValidRecord(record))
+					validRecords.push_back(record);
+			}
+			if (validRecords.size() > kMaxStoreRecords)
+				return false;
+
+			StoreHeader header = {};
+			header.magic = kStoreMagic;
+			header.version = kStoreVersion;
+			header.recordCount = static_cast<UInt32>(validRecords.size());
+
+			std::vector<UInt8> data;
+			data.reserve(sizeof(header) + validRecords.size() * 128);
+			AppendValue(data, header);
+			for (const DisplayRecord& record : validRecords)
+			{
+				StoreRecordHeader recordHeader = {};
+				recordHeader.actualKeyLen = static_cast<UInt32>(record.actualKey.size());
+				recordHeader.savePathKeyLen = static_cast<UInt32>(record.savePathKey.size());
+				recordHeader.displayNameLen = static_cast<UInt32>(record.displayNameMb.size());
+				recordHeader.uiEncoding = record.uiEncoding;
+				recordHeader.codePage = record.codePage;
+
+				AppendValue(data, recordHeader);
+				AppendBytes(data, record.actualKey.data(), record.actualKey.size());
+				AppendBytes(data, record.savePathKey.data(), record.savePathKey.size());
+				AppendBytes(data, record.displayNameMb.data(), record.displayNameMb.size());
+			}
+
+			return WriteWholeFileAtomic(GetStorePath(), data);
+		}
+
+		bool FindDisplayRecord(
+			const std::string& savePathKey,
+			const std::string& actualKey,
+			DisplayRecord& outRecord)
+		{
+			if (savePathKey.empty() || actualKey.empty())
+				return false;
+
+			std::vector<DisplayRecord> records;
+			if (!ReadStoreRecords(records))
+				return false;
+
+			for (auto it = records.rbegin(); it != records.rend(); ++it)
+			{
+				if (it->actualKey == actualKey && it->savePathKey == savePathKey)
+				{
+					outRecord = *it;
+					return true;
+				}
+			}
+			return false;
+		}
+
+		bool UpsertDisplayRecord(const DisplayRecord& record)
+		{
+			if (!IsValidRecord(record))
+				return false;
+
+			std::vector<DisplayRecord> records;
+			if (!ReadStoreRecords(records))
+				return false;
+
+			records.erase(
+				std::remove_if(
+					records.begin(),
+					records.end(),
+					[&](const DisplayRecord& entry)
+					{
+						return entry.actualKey == record.actualKey && entry.savePathKey == record.savePathKey;
+					}),
+				records.end());
+			records.push_back(record);
+			return WriteStoreRecords(records);
+		}
+
+		bool DeleteDisplayRecord(const std::string& savePathKey, const std::string& actualKey)
+		{
+			if (savePathKey.empty() || actualKey.empty())
+				return false;
+
+			std::vector<DisplayRecord> records;
+			if (!ReadStoreRecords(records))
+				return false;
+
+			const size_t oldSize = records.size();
+			records.erase(
+				std::remove_if(
+					records.begin(),
+					records.end(),
+					[&](const DisplayRecord& entry)
+					{
+						return entry.actualKey == actualKey && entry.savePathKey == savePathKey;
+					}),
+				records.end());
+
+			if (records.size() == oldSize)
+				return true;
+			return WriteStoreRecords(records);
+		}
+
+		bool MoveDisplayRecord(const std::string& oldSavePath, const std::string& newSavePath)
+		{
+			const std::string oldActualKey = ExtractActualKey(oldSavePath.c_str());
+			const std::string newActualKey = ExtractActualKey(newSavePath.c_str());
+			const std::string oldSavePathKey = ResolveSavePathKey(oldSavePath, oldActualKey);
+			const std::string newSavePathKey = ResolveSavePathKey(newSavePath, newActualKey);
+			if (oldActualKey.empty() || newActualKey.empty() || oldSavePathKey.empty() || newSavePathKey.empty())
+				return false;
+
+			std::vector<DisplayRecord> records;
+			if (!ReadStoreRecords(records))
+				return false;
+
+			DisplayRecord movedRecord;
+			bool found = false;
+			records.erase(
+				std::remove_if(
+					records.begin(),
+					records.end(),
+					[&](const DisplayRecord& entry)
+					{
+						if (entry.actualKey == oldActualKey && entry.savePathKey == oldSavePathKey)
+						{
+							movedRecord = entry;
+							found = true;
+							return true;
+						}
+						return entry.actualKey == newActualKey && entry.savePathKey == newSavePathKey;
+					}),
+				records.end());
+
+			if (!found)
+				return true;
+
+			movedRecord.actualKey = newActualKey;
+			movedRecord.savePathKey = newSavePathKey;
+			if (IsValidRecord(movedRecord))
+				records.push_back(movedRecord);
+
+			return WriteStoreRecords(records);
+		}
+
 		bool ConvertCodePage(const std::string& src, UInt32 fromCodePage, UInt32 toCodePage, std::string& out)
 		{
 			if (fromCodePage == toCodePage)
@@ -455,92 +752,6 @@ namespace fonthook
 			return true;
 		}
 
-		bool ParseDisplayRecord(const std::vector<UInt8>& data, size_t chunkStart, UInt32 chunkLength, DisplayRecord& outRecord)
-		{
-			size_t offset = chunkStart;
-			const size_t chunkEnd = chunkStart + chunkLength;
-			if (chunkEnd > data.size())
-				return false;
-
-			SaveDisplayNameRecordHeader header = {};
-			if (!ReadValue(data, offset, header))
-				return false;
-			if (header.actualKeyLen > 260 || header.displayNameLen > 1024)
-				return false;
-			if (offset + header.actualKeyLen + header.displayNameLen > chunkEnd)
-				return false;
-
-			DisplayRecord record;
-			record.uiEncoding = header.uiEncoding;
-			record.codePage = header.codePage;
-			if (!ReadBytes(data, offset, record.actualKey, header.actualKeyLen))
-				return false;
-			if (!ReadBytes(data, offset, record.displayNameMb, header.displayNameLen))
-				return false;
-			if (record.actualKey.empty() || record.displayNameMb.empty())
-				return false;
-
-			outRecord = record;
-			return true;
-		}
-
-		bool ReadDisplayRecordFromCosave(const std::string& cosavePath, const std::string& expectedActualKey, DisplayRecord& outRecord)
-		{
-			std::vector<UInt8> data;
-			if (!ReadWholeFile(cosavePath, data))
-				return false;
-
-			size_t offset = 0;
-			NvseHeader header = {};
-			if (!ReadValue(data, offset, header))
-				return false;
-			if (header.signature != kNvseSignature || header.formatVersion == 0)
-				return false;
-
-			for (UInt32 pluginIndex = 0; pluginIndex < header.numPlugins && offset + sizeof(PluginHeader) <= data.size(); ++pluginIndex)
-			{
-				PluginHeader plugin = {};
-				if (!ReadValue(data, offset, plugin) || !plugin.length)
-					return false;
-
-				const size_t pluginEnd = offset + plugin.length;
-				if (pluginEnd > data.size())
-					return false;
-
-				if (plugin.opcodeBase != kTNVSEOpcodeBase)
-				{
-					offset = pluginEnd;
-					continue;
-				}
-
-				for (UInt32 chunkIndex = 0; chunkIndex < plugin.numChunks && offset + sizeof(ChunkHeader) <= pluginEnd; ++chunkIndex)
-				{
-					ChunkHeader chunk = {};
-					if (!ReadValue(data, offset, chunk))
-						return false;
-					if (offset + chunk.length > pluginEnd)
-						return false;
-
-					if (chunk.type == kRecordType && chunk.version == kRecordVersion)
-					{
-						DisplayRecord record;
-						if (ParseDisplayRecord(data, offset, chunk.length, record)
-							&& record.actualKey == expectedActualKey)
-						{
-							outRecord = record;
-							return true;
-						}
-					}
-
-					offset += chunk.length;
-				}
-
-				offset = pluginEnd;
-			}
-
-			return false;
-		}
-
 		std::string PrepareDisplayNameMb(const std::string& originalName)
 		{
 			if (g_bEnableUTF8 && g_usingWinEncoding && IsValidUTF8With3ByteMin(originalName.c_str()))
@@ -553,15 +764,15 @@ namespace fonthook
 			const std::string& actualKey,
 			std::string& outDisplayNameMb)
 		{
-			if (savePath.empty() || actualKey.empty() || actualKey.size() >= MAX_PATH)
+			if (actualKey.empty() || actualKey.size() >= MAX_PATH)
 				return false;
 
-			const std::string cosavePath = ConvertSaveFileNameToCosave(savePath);
-			if (cosavePath.empty())
+			const std::string savePathKey = ResolveSavePathKey(savePath, actualKey);
+			if (savePathKey.empty())
 				return false;
 
 			DisplayRecord record;
-			if (!ReadDisplayRecordFromCosave(cosavePath, actualKey, record))
+			if (!FindDisplayRecord(savePathKey, actualKey, record))
 				return false;
 
 			if (record.codePage == g_usingWinEncoding || !record.codePage || !g_usingWinEncoding)
@@ -582,16 +793,14 @@ namespace fonthook
 			if (savePath.empty())
 				return false;
 
-			const std::string cosavePath = ConvertSaveFileNameToCosave(savePath);
-			if (cosavePath.empty())
+			const std::string savePathKey = ResolveSavePathKey(savePath, actualKey);
+			if (savePathKey.empty())
 				return false;
 
-			const FileStamp stamp = GetFileStamp(cosavePath);
-
-			auto cached = s_displayCache.find(actualKey);
-			if (cached != s_displayCache.end()
-				&& (stamp.exists || cached->second.hasRecord)
-				&& SameStamp(cached->second.stamp, stamp))
+			const FileStamp stamp = GetFileStamp(GetStorePath());
+			const std::string cacheKey = MakeCacheKey(savePathKey, actualKey);
+			auto cached = s_displayCache.find(cacheKey);
+			if (cached != s_displayCache.end() && SameStamp(cached->second.stamp, stamp))
 			{
 				if (!cached->second.hasRecord)
 					return false;
@@ -602,7 +811,7 @@ namespace fonthook
 			CacheEntry entry;
 			entry.stamp = stamp;
 			entry.hasRecord = ResolveDisplayNameForSavePath(savePath, actualKey, entry.displayNameMb);
-			s_displayCache[actualKey] = entry;
+			s_displayCache[cacheKey] = entry;
 
 			if (!entry.hasRecord)
 				return false;
@@ -627,37 +836,96 @@ namespace fonthook
 				&& LooksLikeManualSaveDisplayName(displayNameMb);
 		}
 
-		void WriteRecord(const DisplayRecord& record)
+		bool ShouldStoreDisplayRecord(const DisplayRecord& record)
 		{
-			if (!s_serialization || record.actualKey.empty() || record.displayNameMb.empty())
-				return;
-
-			SaveDisplayNameRecordHeader header = {};
-			header.actualKeyLen = static_cast<UInt32>(record.actualKey.size());
-			header.displayNameLen = static_cast<UInt32>(record.displayNameMb.size());
-			header.uiEncoding = record.uiEncoding;
-			header.codePage = record.codePage;
-
-			if (!s_serialization->OpenRecord(kRecordType, kRecordVersion))
-				return;
-
-			s_serialization->WriteRecordData(&header, sizeof(header));
-			s_serialization->WriteRecordData(record.actualKey.data(), header.actualKeyLen);
-			s_serialization->WriteRecordData(record.displayNameMb.data(), header.displayNameLen);
+			return IsValidRecord(record)
+				&& record.displayNameMb != record.actualKey
+				&& !StartsWithAsciiInsensitive(record.actualKey, "Save ");
 		}
-	}
 
-	void InitSaveDisplayName(NVSESerializationInterface* serialization)
-	{
-		s_serialization = serialization;
-		if (!s_serialization)
-			return;
+		void UpdateDisplayRecordForSavePath(const std::string& savePath)
+		{
+			const std::string actualKey = ExtractActualKey(savePath.c_str());
+			if (actualKey.empty())
+				return;
 
-		s_serialization->SetLoadCallback(g_pluginHandle, SaveDisplayName_LoadCallback);
-		s_serialization->SetPreLoadCallback(g_pluginHandle, SaveDisplayName_LoadCallback);
+			const std::string savePathKey = ResolveSavePathKey(savePath, actualKey);
+			if (savePathKey.empty())
+				return;
 
-		if (g_bSaveDisplayNameMap)
-			s_serialization->SetSaveCallback(g_pluginHandle, SaveDisplayName_SaveCallback);
+			s_displayCache.erase(MakeCacheKey(savePathKey, actualKey));
+
+			DisplayRecord record;
+			bool hasRecord = false;
+
+			auto pending = s_pendingByActualKey.find(actualKey);
+			if (pending != s_pendingByActualKey.end())
+			{
+				if (pending->second.displayNameMb == actualKey)
+				{
+					if (FindDisplayRecord(savePathKey, actualKey, record))
+					{
+						record.uiEncoding = g_uiEncoding;
+						record.codePage = g_usingWinEncoding;
+					}
+					else
+					{
+						record = pending->second;
+						record.savePathKey = savePathKey;
+					}
+				}
+				else
+				{
+					record = pending->second;
+					record.savePathKey = savePathKey;
+				}
+
+				hasRecord = true;
+				s_pendingByActualKey.erase(pending);
+			}
+
+			if (!hasRecord)
+				return;
+
+			if (ShouldStoreDisplayRecord(record))
+				UpsertDisplayRecord(record);
+			else
+				DeleteDisplayRecord(savePathKey, actualKey);
+
+			s_displayCache.clear();
+		}
+
+		void DeleteDisplayRecordForSavePath(const std::string& savePath)
+		{
+			const std::string actualKey = ExtractActualKey(savePath.c_str());
+			const std::string savePathKey = ResolveSavePathKey(savePath, actualKey);
+			if (actualKey.empty() || savePathKey.empty())
+				return;
+
+			DeleteDisplayRecord(savePathKey, actualKey);
+			s_displayCache.clear();
+		}
+
+		void RenameDisplayRecordForSavePath(const std::string& oldSavePath, const std::string& newSavePath)
+		{
+			if (oldSavePath.empty() || newSavePath.empty())
+				return;
+
+			MoveDisplayRecord(oldSavePath, newSavePath);
+			s_displayCache.clear();
+		}
+
+		std::string MessageDataToString(NVSEMessagingInterface::Message* message)
+		{
+			if (!message || !message->data || !message->dataLen)
+				return {};
+
+			std::string value(static_cast<const char*>(message->data), message->dataLen);
+			const size_t terminator = value.find('\0');
+			if (terminator != std::string::npos)
+				value.resize(terminator);
+			return value;
+		}
 	}
 
 	void HandleSaveDisplayNameMessage(NVSEMessagingInterface::Message* message)
@@ -665,12 +933,22 @@ namespace fonthook
 		if (!g_bSaveDisplayNameMap || !message)
 			return;
 
-		if (message->type == NVSEMessagingInterface::kMessage_SaveGame && message->data)
+		if (message->type == NVSEMessagingInterface::kMessage_SaveGame)
 		{
-			s_lastSavePath.assign(static_cast<const char*>(message->data), message->dataLen);
-			const std::string actualKey = ExtractActualKey(s_lastSavePath.c_str());
-			if (!actualKey.empty())
-				s_displayCache.erase(actualKey);
+			UpdateDisplayRecordForSavePath(MessageDataToString(message));
+		}
+		else if (message->type == NVSEMessagingInterface::kMessage_DeleteGame)
+		{
+			DeleteDisplayRecordForSavePath(MessageDataToString(message));
+		}
+		else if (message->type == NVSEMessagingInterface::kMessage_RenameGame)
+		{
+			s_pendingRenameOldPath = MessageDataToString(message);
+		}
+		else if (message->type == NVSEMessagingInterface::kMessage_RenameNewGame)
+		{
+			RenameDisplayRecordForSavePath(s_pendingRenameOldPath, MessageDataToString(message));
+			s_pendingRenameOldPath.clear();
 		}
 	}
 
@@ -692,68 +970,7 @@ namespace fonthook
 			return;
 
 		s_pendingByActualKey[actualKey] = record;
-		s_displayCache.erase(actualKey);
-	}
-
-	void SaveDisplayName_SaveCallback(void*)
-	{
-		if (!g_bSaveDisplayNameMap || !s_serialization || s_lastSavePath.empty())
-			return;
-
-		const std::string actualKey = ExtractActualKey(s_lastSavePath.c_str());
-		if (actualKey.empty())
-			return;
-
-		auto pending = s_pendingByActualKey.find(actualKey);
-		if (pending != s_pendingByActualKey.end())
-		{
-			std::string existingDisplayName;
-			if (pending->second.displayNameMb == actualKey
-				&& ResolveDisplayNameForSavePath(s_lastSavePath, actualKey, existingDisplayName))
-			{
-				DisplayRecord record;
-				record.actualKey = actualKey;
-				record.displayNameMb = existingDisplayName;
-				record.uiEncoding = g_uiEncoding;
-				record.codePage = g_usingWinEncoding;
-				WriteRecord(record);
-			}
-			else
-			{
-				WriteRecord(pending->second);
-			}
-
-			s_pendingByActualKey.erase(pending);
-			s_displayCache.erase(actualKey);
-			return;
-		}
-
-		std::string existingDisplayName;
-		if (ResolveDisplayNameForSavePath(s_lastSavePath, actualKey, existingDisplayName))
-		{
-			DisplayRecord record;
-			record.actualKey = actualKey;
-			record.displayNameMb = existingDisplayName;
-			record.uiEncoding = g_uiEncoding;
-			record.codePage = g_usingWinEncoding;
-			WriteRecord(record);
-			s_displayCache.erase(actualKey);
-		}
-	}
-
-	void SaveDisplayName_LoadCallback(void*)
-	{
-		if (!s_serialization)
-			return;
-
-		UInt32 type = 0;
-		UInt32 version = 0;
-		UInt32 length = 0;
-		while (s_serialization->GetNextRecordInfo(&type, &version, &length))
-		{
-			if (length)
-				s_serialization->SkipNBytes(length);
-		}
+		s_displayCache.clear();
 	}
 
 	void InitSaveDisplayNameHook()

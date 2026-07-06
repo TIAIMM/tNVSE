@@ -29,10 +29,6 @@ NVSECommandTableInterface* g_cmdTableInterface = NULL;
 void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 {
 	fonthook::HandleSaveDisplayNameMessage(g_msg);
-
-	if (g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
-	{
-	}
 }
 
 bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
@@ -40,8 +36,6 @@ bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 	info->infoVersion = PluginInfo::kInfoVersion;
 	info->name = "tNVSE";
 	info->version = 1;
-
-	nvse->SetOpcodeBase(fonthook::kTNVSEOpcodeBase);
 
 	return true;
 }
@@ -61,9 +55,6 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 	g_messagingInterface = static_cast<NVSEMessagingInterface*>(nvse->QueryInterface(kInterface_Messaging));
 	if (g_messagingInterface)
 		g_messagingInterface->RegisterListener(g_pluginHandle, "NVSE", MessageHandler);
-
-	auto* serializationInterface = static_cast<NVSESerializationInterface*>(nvse->QueryInterface(kInterface_Serialization));
-	fonthook::InitSaveDisplayName(serializationInterface);
 
 	hJIP = GetModuleHandle("jip_nvse.dll");
 	g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);
