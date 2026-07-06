@@ -6,6 +6,9 @@ UINT32 g_uiEncoding;
 UINT32 g_usingWinEncoding;
 bool g_bEnableUTF8;
 bool g_bEnableMultibyteFontHook;
+bool g_bMultibyteInput;
+bool g_bMultibyteInputDebug;
+bool g_bMultibyteInputCompositionPreview;
 bool g_bChangeJIPBigGunDesc;
 std::string g_sNewBigGunsDesc;
 UINT32 g_uiReorderDoorPrompt;
@@ -96,6 +99,15 @@ void LoadConfig()
 
 	g_bEnableMultibyteFontHook = ReadConfigInt(kMainSection, nullptr, "bEnableMultibyteFontHook", 1, filename);
 	gLog.FormattedMessage("g_bEnableMultibyteFontHook: %d", g_bEnableMultibyteFontHook);
+
+	g_bMultibyteInput = ReadConfigInt(kMainSection, nullptr, "bMultibyteInput", 0, filename);
+	gLog.FormattedMessage("g_bMultibyteInput: %d", g_bMultibyteInput);
+
+	g_bMultibyteInputDebug = ReadConfigInt(kMainSection, nullptr, "bMultibyteInputDebug", 0, filename);
+	gLog.FormattedMessage("g_bMultibyteInputDebug: %d", g_bMultibyteInputDebug);
+
+	g_bMultibyteInputCompositionPreview = ReadConfigInt(kMainSection, nullptr, "bMultibyteInputCompositionPreview", 0, filename);
+	gLog.FormattedMessage("g_bMultibyteInputCompositionPreview: %d", g_bMultibyteInputCompositionPreview);
 
 	g_bChangeJIPBigGunDesc = ReadConfigInt(kMainSection, nullptr, "bChangeJIPBigGunDesc", 1, filename);
 

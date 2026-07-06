@@ -13,6 +13,7 @@
 #include "tnvse.h"
 #include "font_hook.h"
 #include "dictionary.h"
+#include "multibyte_input.h"
 #include "save_display_name.h"
 
 IDebugLog gLog("tnvse.log");
@@ -29,6 +30,7 @@ NVSECommandTableInterface* g_cmdTableInterface = NULL;
 void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 {
 	fonthook::HandleSaveDisplayNameMessage(g_msg);
+	fonthook::HandleMultibyteInputMessage(g_msg);
 }
 
 bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
@@ -95,6 +97,8 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 	{
 		gLog.FormattedMessage("Multibyte font hooks disabled by tnvse.ini");
 	}
+
+	fonthook::InitMultibyteInputHook();
 
 	if (g_bSaveDisplayNameMap)
 	{

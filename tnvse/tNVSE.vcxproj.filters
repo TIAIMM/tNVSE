@@ -69,6 +69,9 @@
     <ClCompile Include="Src\font_manager.cpp">
       <Filter>Source Files\Font</Filter>
     </ClCompile>
+    <ClCompile Include="Src\multibyte_input.cpp">
+      <Filter>Source Files\Hooks</Filter>
+    </ClCompile>
     <ClCompile Include="Src\game_hooks.cpp">
       <Filter>Source Files\Hooks</Filter>
     </ClCompile>
@@ -115,6 +118,9 @@
     </ClInclude>
     <ClInclude Include="Src\font_manager.h">
       <Filter>Header Files\Font</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\multibyte_input.h">
+      <Filter>Header Files\Hooks</Filter>
     </ClInclude>
     <ClInclude Include="Src\ui_decode.h">
       <Filter>Header Files\Font</Filter>

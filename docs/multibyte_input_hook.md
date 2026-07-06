@@ -1,8 +1,8 @@
-# FalloutNV 中文输入 Hook 方案
+# FalloutNV 多字节字符输入 Hook 方案
 
 ## 目标
 
-让游戏内可编辑文本框支持中文输入，同时不要求游戏内部存储全面改成 UTF-8。
+让游戏内可编辑文本框支持多字节字符输入，同时不要求游戏内部存储全面改成 UTF-8。
 
 推荐的数据方向是：
 
@@ -214,7 +214,7 @@ state->active = enable;
 state->clearOnNextType = enable;
 ```
 
-`0x717230(state, candidate)` 会用 `FontManager::CalculateStringDimensions(candidate, state + 24 fontId, hugeWidth, 0)` 计算候选字符串宽度，再比较 `ConditionalFloatToUInt(width) <= state + 20`。所以 `state + 20` 不是 byte capacity，而是原版文本框宽度限制。实现中文输入时仍要额外保护原版临时栈缓冲的 byte 上限。
+`0x717230(state, candidate)` 会用 `FontManager::CalculateStringDimensions(candidate, state + 24 fontId, hugeWidth, 0)` 计算候选字符串宽度，再比较 `ConditionalFloatToUInt(width) <= state + 20`。所以 `state + 20` 不是 byte capacity，而是原版文本框宽度限制。实现多字节字符输入时仍要额外保护原版临时栈缓冲的 byte 上限。
 
 原始反编译中可见的结构摘要：
 
@@ -251,7 +251,7 @@ while (srcIndex <= sourceLen) {
 }
 ```
 
-这说明 `state + 16` 是 byte offset，不是字符 index。中文输入层必须保证它只落在合法 DBCS 边界上，同时应把真实文本限制到 `source[1024]` 可安全复制的范围内；建议最大可见文本不超过 1023 bytes，再加结尾 `NUL`。
+这说明 `state + 16` 是 byte offset，不是字符 index。多字节字符输入层必须保证它只落在合法 DBCS 边界上，同时应把真实文本限制到 `source[1024]` 可安全复制的范围内；建议最大可见文本不超过 1023 bytes，再加结尾 `NUL`。
 
 `0x7E6700(this)` 刷新显示：
 
@@ -265,7 +265,7 @@ if (*(this + 0x58)) {
 }
 ```
 
-因此中文输入 hook 在成功修改 edit buffer 后，应该调用原版刷新函数 `0x7E6700`，而不是全局 hook `Tile::SetString`。
+因此多字节字符输入 hook 在成功修改 edit buffer 后，应该调用原版刷新函数 `0x7E6700`，而不是全局 hook `Tile::SetString`。
 
 反汇编确认 `0x7E6700` 也是先取 `this + 0x34` 调 `0x7170A0`，再对 `this + 0x28` 的 edit tile 写 string trait `4036`。如果 `this + 0x58` validator 非空，它会从 `this + 0x34` 取 raw text 传给 callback，并把结果写到当前 tile 的 float trait `4015`。
 
@@ -320,7 +320,7 @@ return 0;
 00716DF5  add edx, 1      ; right
 ```
 
-也就是说，即使 WndProc 把 GBK/Big5/SJIS/CP949 的两个 byte 分两次送进原版输入函数，原版 caret、delete、display caret 都仍然只知道 byte，不知道逻辑字符。最终实现不能通过“逐 byte 调原版 `InputUnk01`”来宣称支持中文输入。
+也就是说，即使 WndProc 把 GBK/Big5/SJIS/CP949 的两个 byte 分两次送进原版输入函数，原版 caret、delete、display caret 都仍然只知道 byte，不知道逻辑字符。最终实现不能通过“逐 byte 调原版 `InputUnk01`”来宣称支持多字节字符输入。
 
 已确认的按键语义：
 
@@ -334,7 +334,7 @@ return 0;
 -2147483640  Confirm / close path depending on caller
 ```
 
-这就是中文输入必须重写或包裹编辑操作的核心原因：原版 `InputUnk01` 会把 GBK/Big5/SJIS/CP949 的 lead/trail pair 当成两个独立字符处理。
+这就是多字节字符输入必须重写或包裹编辑操作的核心原因：原版 `InputUnk01` 会把 GBK/Big5/SJIS/CP949 的 lead/trail pair 当成两个独立字符处理。
 
 ### 保存名生成和显示链路
 
@@ -355,7 +355,7 @@ if (!tempSave) {
 }
 ```
 
-tNVSE 当前在 `0x8518BB` 替换 sanitizer call site：先捕获原始候选名，再执行原版等价 sanitizer。这里的原则仍然适用于中文输入：
+tNVSE 当前在 `0x8518BB` 替换 sanitizer call site：先捕获原始候选名，再执行原版等价 sanitizer。这里的原则仍然适用于多字节字符输入：
 
 ```text
 上游可编辑文本：当前 codepage 多字节文本
@@ -374,26 +374,26 @@ tNVSE 当前在 `0x8518BB` 替换 sanitizer call site：先捕获原始候选名
 - `0x84FF30` 构造存档目录并确保目录存在。
 - `0x84FF90` 根据 actual basename 构造完整 `.fos` 路径；tNVSE 使用它确保 sidecar lookup 和游戏路径一致。
 
-中文输入不应改动这些已稳定路径。它只需要让玩家名等上游可编辑文本能以当前 codepage 多字节形式进入游戏；保存名 sidecar 继续在 `0x8518BB` 捕获下游格式化结果。
+多字节字符输入不应改动这些已稳定路径。它只需要让玩家名等上游可编辑文本能以当前 codepage 多字节形式进入游戏；保存名 sidecar 继续在 `0x8518BB` 捕获下游格式化结果。
 
-## 推荐实现
+## 当前首版实现
 
 ### 1. 新增输入模块
 
-建议新增：
+已新增：
 
 ```text
-tnvse/Src/chinese_input.h
-tnvse/Src/chinese_input.cpp
+tnvse/Src/multibyte_input.h
+tnvse/Src/multibyte_input.cpp
 ```
 
-配置项建议：
+新增配置项：
 
 ```ini
 [Main]
-bChineseInput = 0
-bChineseInputDebug = 0
-bChineseInputCompositionPreview = 0
+bMultibyteInput = 0
+bMultibyteInputDebug = 0
+bMultibyteInputCompositionPreview = 0
 ```
 
 默认关闭更安全。启用条件：
@@ -403,29 +403,29 @@ bChineseInputCompositionPreview = 0
 - 当前字体包含对应 codepage 的 extra glyph
 - 至少玩家名 `TextEditMenu` 路径已验证
 
-初始化建议：
+初始化行为：
 
 - 在 `LoadConfig()` 后读取上述配置。
-- 在 `NVSEPlugin_Load` 中安装 hook；不要从 `DllMain` 安装 WndProc。
-- `bChineseInput=0` 时不 subclass WndProc，不安装 `TextEditMenu` hook。
-- `bChineseInput=1` 但字体 hook 未启用或 `uiEncoding=0` 时打印一次日志并跳过初始化。
+- 在 `NVSEPlugin_Load` 中安装 hook；不从 `DllMain` 安装 WndProc。
+- `bMultibyteInput=0` 时不 subclass WndProc，不安装 `TextEditMenu` hook。
+- `bMultibyteInput=1` 但字体 hook 未启用或 `uiEncoding=0` 时打印一次日志并跳过初始化。
 
 ### 2. WndProc / IME 捕获
 
 在主窗口 HWND 可用后 subclass 游戏窗口：
 
 ```cpp
-SetWindowLongPtrA(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(ChineseInputWndProc));
+SetWindowLongPtrA(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(MultibyteInputWndProc));
 ```
 
 不要在 `DllMain` 中安装。所有未消费消息必须转发给原 WndProc。
 
-需要处理的消息：
+首版实际处理的消息：
 
-- `WM_IME_STARTCOMPOSITION`：记录 composition active。
-- `WM_IME_COMPOSITION`：读取 `GCS_RESULTSTR`；`GCS_COMPSTR` 只用于可选预览。
-- `WM_IME_ENDCOMPOSITION`：清除 composition 状态。
-- `WM_CHAR`：用于非 IME 字符 fallback，但要避免和 IME result 双插入。
+- `WM_IME_COMPOSITION`：只读取 `GCS_RESULTSTR`，提交成功后写入 active `TextEditMenu`。
+- `WM_IME_STARTCOMPOSITION` / `WM_IME_ENDCOMPOSITION`：维护 composition 状态。
+- `WM_CHAR`：未组字时在 active `TextEditMenu` 下接管可打印 ASCII 和非 ASCII fallback；组字期间吞掉拼音等 ASCII `WM_CHAR`，避免预编辑串写入真实 buffer。
+- `WM_NCDESTROY`：恢复原 WndProc。
 - `WM_PASTE`：后续可选，必须走同一套 DBCS 边界、宽度限制和 byte 上限检查。
 
 IME 结果用 Unicode API 读取：
@@ -449,25 +449,31 @@ UTF-16 -> WideCharToMultiByte(g_usingWinEncoding)
 消息消费规则：
 
 - 只有 `GCS_RESULTSTR` 成功转换且成功插入 active target 时才返回已处理。
-- `GCS_COMPSTR` 默认只更新 preview state，不消费文本，也不写 edit buffer。
-- `WM_CHAR` 只处理非 IME 输入；在一次 `GCS_RESULTSTR` 之后应设置短期 suppress 标志，避免同一提交又以 `WM_CHAR` 形式插入一次。
-- composition active 时可以吞掉由输入法使用的方向键、PageUp/PageDown、数字选词、Enter、Esc；未进入 composition 时应交回原 WndProc。
+- `GCS_COMPSTR` 首版不写 edit buffer；`bMultibyteInputCompositionPreview` 目前只作为后续预览阶段的保留开关。
+- `WM_CHAR` 在 active `TextEditMenu` 下直接处理可打印 ASCII；若游戏输入管线随后又发出同一 ASCII input，vtable 包装会用短期 suppress 防止双插入。
+- IME composition active，或 IMM context 处于 open/native 且存在预编辑串时，ASCII `WM_CHAR` 视为拼音/假名等预编辑输入并直接消费，不进入真实 edit buffer。
+- 游戏原本 `TextEditMenu::HandleKeyboardInput` 路径也必须应用同一规则；正式版日志确认拼音字母可能先从该 vtable 路径到达，而不是只从 `WM_CHAR` 到达。
+- `TextEditMenu::HandleKeyboardInput` 在 composition active 时还应吞掉 Backspace/Delete/Left/Right/Home/End/Confirm 等控制输入，避免用户编辑 IME 预编辑串时误删或提交游戏真实文本。
+- `GCS_RESULTSTR` 后用短期 suppress 计数避免同一提交又以 `WM_CHAR` 形式插入一次。
 - 所有未明确消费的消息都调用原 WndProc。
 
 ### 3. Active target 追踪
 
 IME result 只有在已知可编辑目标 active 时才允许消费。第一阶段只支持正式版已确认的 `TextEditMenu` 玩家名输入路径：
 
-- 在 `0x7E6320` 成功返回后记录当前 `TextEditMenu*`，或在函数内 `dword_11DAEC4` 赋值后记录。
-- 当前静态调用方 `0x7AB690` 是 `PlayerNameEntryMenu`；若后续发现其他 `TextEditMenu` 调用方，必须先加日志确认 title/initial text/validator。
-- 在 menu close、destruct 或 `TextEditMenu` accept/cancel 后清空 current target。若暂时未确认析构/close 地址，WndProc 每次使用前必须校验 `dword_11DAEC4` 仍等于 current target 且 `sub_716AE0(target + 0x34)` 为 true。
+- `0x7AB740` 是 `PlayerNameEntryMenu` 调用 `TextEditMenu::Open` 的 call 指令；首版用 `WriteRelCall` 包装它。
+- 包装函数调用原版 `TextEditMenu::Open(0x7E6320)`，成功后记录 `TextEditMenu::GetCurrent()`。
+- 当原始 validator 是 `PlayerNameEntryMenu::IsValidName(0x7AB820)` 时，首版替换为 DBCS-aware validator；原因是原版 validator 按单字节查 base font 宽度，DBCS high/trail byte 会导致 OK 按钮保持 disabled。
+- `0x1070064` 是 `TextEditMenu` vtable 第 12 项；首版用 `ReplaceVirtualFuncEx` 替换为 `TextEditMenuEx::HandleKeyboardInput`。
+- `TextEditMenuEx::HandleKeyboardInput` 包装原版 `0x7E6620`，但 ASCII 插入、Backspace、Delete、Left、Right、Home、End 走 DBCS-aware helper；Confirm 仍交给原版并在成功后清空 current target。
+- WndProc 每次使用前校验 `dword_11DAEC4` 仍等于 current target 且 `sub_716AE0(target + 0x34)` 为 true。
 - 通过 `this + 0x34` 访问编辑状态对象。
 - 插入文本后调用 `0x7E6700(this)` 刷新显示和校验状态。
 
-适配层建议抽象成：
+当前代码通过 `TextEditMenu` / `TextEditState` 结构体访问字段，等价适配层语义如下：
 
 ```cpp
-struct ChineseInputTarget
+struct MultibyteInputTarget
 {
     void* owner;              // TextEditMenu*
     void* editState;          // owner + 0x34
@@ -482,13 +488,13 @@ struct ChineseInputTarget
 };
 ```
 
-不要让 WndProc 直接硬写一堆 offset；offset 应集中在 `TextEditMenuInputAdapter` 一处。`TextEditMenuInputAdapter` 负责：
+不要让 WndProc 直接硬写一堆 offset；当前 offset 集中在 `ui_decode.h` 的结构体定义和 `multibyte_input.cpp` 的 helper 中。helper 负责：
 
 - 校验 target 是否仍 active。
 - 读取 raw text 和 caret。
 - 执行 DBCS-aware 编辑。
 - 调 `0x717230` 或等价宽度计算做候选文本验证。
-- 用 `0x438390` 或 `BSStringT<char>::Set` 写回真实文本。
+- 用 `TextEditState::SetText(0x716A70)` 写回真实文本。
 - 调 `0x7E6700(owner)` 刷新显示和 validator。
 
 ### 4. DBCS-aware 编辑层
@@ -499,16 +505,16 @@ struct ChineseInputTarget
 - `IsLeadByte`
 - `IsTrailByte`
 
-必须实现这些边界 helper：
+首版已经实现这些边界 helper：
 
 ```cpp
-bool IsCharBoundary(const char* text, size_t len, size_t offset);
-size_t PrevCharBoundary(const char* text, size_t len, size_t offset);
-size_t NextCharBoundary(const char* text, size_t len, size_t offset);
-size_t ClampToPrevBoundary(const char* text, size_t len, size_t offset);
-bool InsertTextAtCaret(TextEditMenuTarget&, std::string_view mbText);
-bool DeletePreviousChar(TextEditMenuTarget&);
-bool DeleteNextChar(TextEditMenuTarget&);
+bool IsCharBoundary(const std::string& text, size_t offset);
+size_t PrevCharBoundary(const std::string& text, size_t offset);
+size_t NextCharBoundary(const std::string& text, size_t offset);
+size_t ClampToPrevBoundary(const std::string& text, size_t offset);
+bool InsertTextAtCaret(TextEditMenu*, std::string_view mbText);
+bool DeletePreviousChar(TextEditMenu*);
+bool DeleteNextChar(TextEditMenu*);
 ```
 
 规则：
@@ -518,7 +524,7 @@ bool DeleteNextChar(TextEditMenuTarget&);
 - 无效 lead byte 保守按单 byte 处理，不跨越未知内存。
 - `state + 0x10` 在任何操作后必须是 `IsCharBoundary(text, len, caret)`。
 - 写回前必须保证真实文本长度不超过 1023 bytes，避免 `0x7170A0` 的 `source[1024]` 栈缓冲溢出。
-- 如果 `state + 0x14 != -1`，写回前必须调用 `0x717230(editState, candidate)` 或复用同等 `FontManager::CalculateStringDimensions` 校验；失败时拒绝插入或按 DBCS 边界截断到可通过的前缀。
+- 如果 `state + 0x14 != -1`，写回前必须调用 `0x717230(editState, candidate)` 或复用同等 `FontManager::CalculateStringDimensions` 校验；首版失败时拒绝插入，不做自动截断。
 - Backspace 删除前一个逻辑字符。
 - Delete 删除后一个逻辑字符。
 - Left/right 按逻辑字符移动。
@@ -530,13 +536,13 @@ bool DeleteNextChar(TextEditMenuTarget&);
 
 ### 5. 显示和 caret marker
 
-原版显示刷新 `0x7170A0` 会把 caret marker 插入到 byte offset。中文输入层必须保证 `state + 0x10` 永远位于合法字符边界，否则 caret marker 会插入 lead/trail 中间，渲染路径会出现乱码或丢字。
+原版显示刷新 `0x7170A0` 会把 caret marker 插入到 byte offset。多字节字符输入层必须保证 `state + 0x10` 永远位于合法字符边界，否则 caret marker 会插入 lead/trail 中间，渲染路径会出现乱码或丢字。
 
 如果 edit field 走普通 `Font::PrepText`，现有普通字体 hook 应能渲染多字节文本。如果某个字段逐 byte 发射字符，需要复用富文本/Tile 文本中已验证的 lead/trail staging 思路，但应局部作用于该字段，不要全局 hook `Tile::SetString`。
 
 ### 6. 保存名集成
 
-中文输入本身不应修改保存名生成逻辑。正式版 `TextEditMenu` 当前确认的是玩家名输入；玩家名、地点名等多字节文本之后可能进入保存名格式化路径。保存名下游行为应保持当前稳定设计：
+多字节字符输入本身不应修改保存名生成逻辑。正式版 `TextEditMenu` 当前确认的是玩家名输入；玩家名、地点名等多字节文本之后可能进入保存名格式化路径。保存名下游行为应保持当前稳定设计：
 
 1. `TextEditMenu` 中显示多字节玩家名或其他已确认可编辑字段。
 2. 保存生成路径 `0x8517C0` 仍拼出原始候选名。
@@ -549,6 +555,20 @@ bool DeleteNextChar(TextEditMenuTarget&);
 注意：sidecar 中的 display name 是当前 UI codepage 多字节，不是 UTF-8。若输入源是 UTF-8 或 IME UTF-16，都应在进入 record 前转换为当前 codepage。
 
 ## Hook 阶段
+
+### 当前诊断日志
+
+设置 `bMultibyteInputDebug=1` 后，首版会打印 `tnvse_multibyte_input_event` 日志，用于区分输入来源：
+
+- `source=WndProc.WM_CHAR`：Windows 字符消息路径。
+- `source=WndProc.WM_IME_COMPOSITION`：IME composition/result 路径。
+- `source=TextEditMenu::HandleKeyboardInput`：游戏原本键盘输入路径。
+- `action=insert_ascii` 表示该路径实际写入 ASCII。
+- `action=suppress_composition_ascii` 表示组字期间拼音/假名 ASCII 被吞掉；该动作可能来自 `WM_CHAR`，也可能来自 `TextEditMenu::HandleKeyboardInput`。
+- `action=suppress_composition_control` 表示组字期间 Backspace/Delete/Left/Right/Home/End/Confirm 等游戏编辑控制输入被吞掉，由 IME 自己处理预编辑串。
+- `action=result_inserted` 表示 `GCS_RESULTSTR` 最终提交串已写入。
+
+当前日志已确认一个关键行为：拼音字母可以在 `composing=1` 时由 `TextEditMenu::HandleKeyboardInput action=insert_ascii` 写入真实文本。因此实现必须在 vtable 包装层吞掉 composition ASCII；只处理 `WM_CHAR` 不足以避免拼音泄漏。如果拼音仍进入真实文本，需要查看拼音字母对应日志是否仍为 `insert_ascii`，以及当时 IMM open/native 状态是否没有被识别。
 
 ### 阶段 A：只读/低量日志定位
 
@@ -630,7 +650,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 ### CP936/GBK
 
-- 输入 `测试中文输入`。
+- 输入 `测试多字节字符输入`。
 - 输入混合文本 `Save-测试-01`。
 - 输入 GBK trail byte 覆盖 ASCII 范围的样本，包含 `@ [ ] ' } ~ < > = " & ;` 等风险字符，确认编辑层不把 trail 当 delimiter 或控制键。
 - 在中文前、中、后插入 ASCII。
@@ -671,7 +691,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - 键盘、手柄导航不变。
 - 自动存档、快速存档不受影响。
 - 富文本、终端、任务、地点、HUD 渲染不受影响。
-- 未启用 `bChineseInput` 时不 subclass WndProc，不影响其他输入插件。
+- 未启用 `bMultibyteInput` 时不 subclass WndProc，不影响其他输入插件。
 
 ### 可选候选窗 / 输入法后端
 
@@ -681,10 +701,10 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 ## 完成标准
 
-中文输入 hook 可认为完成的条件：
+多字节字符输入 hook 可认为完成的条件：
 
-- 至少玩家名 `TextEditMenu` 能接收 IME 中文 commit。
-- 编辑框打字期间能正确显示中文。
+- 至少玩家名 `TextEditMenu` 能接收 IME 多字节字符 commit。
+- 编辑框打字期间能正确显示当前 `uiEncoding` 对应字符。
 - Backspace/delete/left/right 不拆 DBCS。
 - 实际 `.fos` 文件名仍由原版 sanitizer 生成。
 - 载入/保存列表继续走原版 save header 摘要显示。

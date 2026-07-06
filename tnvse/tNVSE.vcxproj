@@ -93,7 +93,7 @@
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
       <DataExecutionPrevention />
       <TargetMachine>MachineX86</TargetMachine>
-      <AdditionalDependencies>dxguid.lib;commonlib_nv.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>dxguid.lib;imm32.lib;commonlib_nv.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
       <ShowProgress>NotSet</ShowProgress>
     </Link>
@@ -132,7 +132,7 @@
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
       <DataExecutionPrevention />
       <TargetMachine>MachineX86</TargetMachine>
-      <AdditionalDependencies>dxguid.lib;commonlib_nv.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>dxguid.lib;imm32.lib;commonlib_nv.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Message>Installing DLL...</Message>
@@ -145,6 +145,7 @@
     <ClCompile Include="Src\native_calls.cpp" />
     <ClCompile Include="Src\font_engine.cpp" />
     <ClCompile Include="Src\font_manager.cpp" />
+    <ClCompile Include="Src\multibyte_input.cpp" />
     <ClCompile Include="Src\save_display_name.cpp" />
     <ClCompile Include="Src\text_hooks.cpp" />
     <ClCompile Include="Src\game_hooks.cpp" />
@@ -173,6 +174,7 @@
     <ClInclude Include="Src\font_engine.h" />
     <ClInclude Include="Src\font_glyphs.h" />
     <ClInclude Include="Src\font_manager.h" />
+    <ClInclude Include="Src\multibyte_input.h" />
     <ClInclude Include="Src\save_display_name.h" />
     <ClInclude Include="Src\text_hooks.h" />
     <ClInclude Include="Src\game_hooks.h" />
