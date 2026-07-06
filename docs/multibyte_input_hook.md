@@ -27,12 +27,13 @@ tNVSE 已经具备的相关能力：
 - 存档名 sanitizer call site `0x8518BB` 已经能在实际 `.fos` 文件名被清洗前捕获原始候选名。
 - 存档显示名映射已经改为 `Data\plugins\tnvse\save_display_names.dat` 单文件 sidecar，不修改 `.fos`、`.nvse` 或 `SaveGameData::pName`。
 
-尚未完成的输入层能力：
+首版已完成的输入层能力：
 
-- Windows IME 提交串没有自然进入游戏 edit buffer。
-- `TextEditMenu` 的原版编辑模型按单字节处理光标、退格、删除和插入，会拆开 DBCS。
-- 尚未建立“当前可编辑目标”的统一追踪。
-- 玩家名输入、mod 使用的 `TextEditMenu` 字段需要分别确认打开、编辑、提交和显示刷新路径。
+- Windows IME `GCS_RESULTSTR` 提交串进入当前 `uiEncoding` 对应的多字节 edit buffer。
+- 原版 `TextEditMenu` 通过 `0x7E6620 -> 0x716B00` 的内部 call site `0x7E6685` 接管编辑核心，避免改写全局 vtable，保留 Confirm 分支和 Stewie Tweaks 在 `0x7E6627` 的补丁。
+- 原版 `TextEditMenu` 的 ASCII 插入、IME commit、退格、删除、左右移动、Home/End 均走 DBCS-aware 编辑层。
+- 玩家名输入保留 validator 特例；`0x7AB740` 只包装 `TextEditMenu::Open` 来替换玩家名 validator，不改变通用打开逻辑。
+- JIP LN `ShowTextInputMenu` 已按 JIP 自定义字段布局单独处理，使用 `JipTextInputAdapterEx` 临时链回 JIP 写入 `0x1070064` 的 input handler，不再把 JIP 的 `inputRect` / `minLength` / `maxLength` 误当成原版 `TextEditState` 字段。
 - 正式版静态 xref 显示 `0x7E6320` 当前由 `PlayerNameEntryMenu` 调用；存档名显示链路是下游保存名生成和 sidecar 映射，不应把它误写成已经确认的 `TextEditMenu` 保存名输入框。
 
 ## 参考项目结论
@@ -450,7 +451,7 @@ UTF-16 -> WideCharToMultiByte(g_usingWinEncoding)
 
 - 只有 `GCS_RESULTSTR` 成功转换且成功插入 active target 时才返回已处理。
 - `GCS_COMPSTR` 首版不写 edit buffer；`bMultibyteInputCompositionPreview` 目前只作为后续预览阶段的保留开关。
-- `WM_CHAR` 在 active `TextEditMenu` 下直接处理可打印 ASCII；若游戏输入管线随后又发出同一 ASCII input，vtable 包装会用短期 suppress 防止双插入。
+- `WM_CHAR` 在 active `TextEditMenu` 下直接处理可打印 ASCII；若游戏输入管线随后又发出同一 ASCII input，`0x7E6620` 内部输入 hook 会用短期 suppress 防止双插入。
 - IME composition active，或 IMM context 处于 open/native 且存在预编辑串时，ASCII `WM_CHAR` 视为拼音/假名等预编辑输入并直接消费，不进入真实 edit buffer。
 - 游戏原本 `TextEditMenu::HandleKeyboardInput` 路径也必须应用同一规则；正式版日志确认拼音字母可能先从该 vtable 路径到达，而不是只从 `WM_CHAR` 到达。
 - `TextEditMenu::HandleKeyboardInput` 在 composition active 时还应吞掉 Backspace/Delete/Left/Right/Home/End/Confirm 等控制输入，避免用户编辑 IME 预编辑串时误删或提交游戏真实文本。
@@ -459,14 +460,14 @@ UTF-16 -> WideCharToMultiByte(g_usingWinEncoding)
 
 ### 3. Active target 追踪
 
-IME result 只有在已知可编辑目标 active 时才允许消费。第一阶段只支持正式版已确认的 `TextEditMenu` 玩家名输入路径：
+IME result 只有在已知可编辑目标 active 时才允许消费。当前实现覆盖通用 active 原版 `TextEditMenu`：只要 `dword_11DAEC4` 指向 `TextEditMenu` vtable、`TextEditState` active，且 vtable 输入槽仍指向原版 `0x7E6620`，就允许 WndProc 和函数体输入 hook 接管输入。
 
-- `0x7AB740` 是 `PlayerNameEntryMenu` 调用 `TextEditMenu::Open` 的 call 指令；首版用 `WriteRelCall` 包装它。
-- 包装函数调用原版 `TextEditMenu::Open(0x7E6320)`，成功后记录 `TextEditMenu::GetCurrent()`。
-- 当原始 validator 是 `PlayerNameEntryMenu::IsValidName(0x7AB820)` 时，首版替换为 DBCS-aware validator；原因是原版 validator 按单字节查 base font 宽度，DBCS high/trail byte 会导致 OK 按钮保持 disabled。
-- `0x1070064` 是 `TextEditMenu` vtable 第 12 项；首版用 `ReplaceVirtualFuncEx` 替换为 `TextEditMenuEx::HandleKeyboardInput`。
-- `TextEditMenuEx::HandleKeyboardInput` 包装原版 `0x7E6620`，但 ASCII 插入、Backspace、Delete、Left、Right、Home、End 走 DBCS-aware helper；Confirm 仍交给原版并在成功后清空 current target。
-- WndProc 每次使用前校验 `dword_11DAEC4` 仍等于 current target 且 `sub_716AE0(target + 0x34)` 为 true。
+- `0x7AB740` 是 `PlayerNameEntryMenu` 调用 `TextEditMenu::Open` 的 call 指令；当前只包装它来替换玩家名 validator。
+- 包装函数调用原版 `TextEditMenu::Open(0x7E6320)`，并在原始 validator 是 `PlayerNameEntryMenu::IsValidName(0x7AB820)` 时替换为 DBCS-aware validator；原因是原版 validator 按单字节查 base font 宽度，DBCS high/trail byte 会导致 OK 按钮保持 disabled。
+- `0x1070064` 是 `TextEditMenu` vtable 第 12 项；tNVSE 不再改写该 vtable 槽，避免和 JIP `ShowTextInputMenu` 生命周期 hook 冲突。
+- 当前改为替换 `0x7E6620` 内部的 `InputUnk01` call site `0x7E6685`，让原版 confirm 分支和 Stewie Tweaks 在 `0x7E6627` 的补丁继续保留。
+- `TextEditStateEx::Input` 接管 ASCII 插入、Backspace、Delete、Left、Right、Home、End；Confirm 仍由原版 `0x7E6620` 分支处理。
+- WndProc 每次使用前校验 `dword_11DAEC4` 当前对象仍是 `TextEditMenu` vtable，`0x1070064` 仍是 `0x7E6620`，且 `sub_716AE0(target + 0x34)` 为 true。
 - 通过 `this + 0x34` 访问编辑状态对象。
 - 插入文本后调用 `0x7E6700(this)` 刷新显示和校验状态。
 
@@ -496,6 +497,43 @@ struct MultibyteInputTarget
 - 调 `0x717230` 或等价宽度计算做候选文本验证。
 - 用 `TextEditState::SetText(0x716A70)` 写回真实文本。
 - 调 `0x7E6700(owner)` 刷新显示和 validator。
+
+### 3.1 JIP ShowTextInputMenu 适配
+
+JIP LN 的 `ShowTextInputMenu` 复用 `TextEditMenu` vtable 和 `dword_11DAEC4`，但把 `TextEditMenu + 0x34` 之后的字段按自己的文本输入结构解释。因此不能用原版 `TextEditState` helper 处理 JIP 菜单。
+
+JIP 源码和反汇编对应的字段布局：
+
+```cpp
+struct JipTextInputView
+{
+    Tile* editText;              // +0x28
+    Tile* okButton;              // +0x2C
+    Tile* title;                 // +0x30
+    BSStringT<char> currentText; // +0x34
+    BSStringT<char> displayed;   // +0x3C
+    UInt32 cursorIndex;          // +0x44, byte offset
+    UInt16 minLength;            // +0x48
+    UInt16 maxLength;            // +0x4A
+    Tile* inputRect;             // +0x4C
+    UInt32 cursorBlink;          // +0x50
+    UInt8 cursorVisible;         // +0x54
+    UInt8 isActive;              // +0x55
+    UInt8 miscFlags;             // +0x57
+    Script* callback;            // +0x58
+};
+```
+
+当前实现的 JIP 策略：
+
+- 当 `TextEditMenu::GetCurrent()` 仍是 `0x1070034` vtable、`+0x55` active、`currentText/displayedText` 至少有 JIP 初始化出的 `0x400` 容量、`+0x4A` max length 合法、`+0x4C` inputRect 非空，且 `0x1070064` 不再是原版 `0x7E6620` 时，判定为 JIP TextInput。
+- 首次检测到 JIP active 时保存 `0x1070064` 当前值作为 `s_jipOriginalInputHandler`，再把 `0x1070064` 临时写成 `JipTextInputAdapterEx::Input`。
+- `JipTextInputAdapterEx::Input` 自己处理 ASCII、多字节 commit 后的缓冲插入、Backspace/Delete/Left/Right/Home/End/PageUp/PageDown，并在 composition active 时吞掉拼音 ASCII 和编辑控制键。
+- Enter 在 `miscFlags & 2` 时链回 JIP 原 handler，保留 JIP 的 OK 按钮、关闭菜单和脚本 callback 语义。
+- JIP 的刷新不调用原版 `TextEditMenu::Refresh(0x7E6700)`；当前代码按 JIP 字段重建 `displayedText`，更新 edit tile `string`、OK tile `target`，并同步 `inputRect user1 -> user2`。
+- JIP 关闭时它自己的 close hook 会恢复 `0x1070064` 到 `0x7E6620`；tNVSE 在 main loop 中看到槽位恢复后清掉保存的原 handler。
+
+这个 adapter 的核心边界是：只在 JIP active 时接管 JIP 的 input handler，不改变 JIP 的打开、关闭、脚本回调、XML 布局或原版 `TextEditMenu` 路径。
 
 ### 4. DBCS-aware 编辑层
 
@@ -562,13 +600,14 @@ bool DeleteNextChar(TextEditMenu*);
 
 - `source=WndProc.WM_CHAR`：Windows 字符消息路径。
 - `source=WndProc.WM_IME_COMPOSITION`：IME composition/result 路径。
-- `source=TextEditMenu::HandleKeyboardInput`：游戏原本键盘输入路径。
+- `source=TextEditState::Input`：原版 `TextEditMenu::HandleKeyboardInput(0x7E6620)` 内部 `InputUnk01(0x716B00)` call site 路径。
+- `source=JipTextInputAdapter::Input`：JIP `ShowTextInputMenu` 的临时 vtable adapter 路径。
 - `action=insert_ascii` 表示该路径实际写入 ASCII。
 - `action=suppress_composition_ascii` 表示组字期间拼音/假名 ASCII 被吞掉；该动作可能来自 `WM_CHAR`，也可能来自 `TextEditMenu::HandleKeyboardInput`。
 - `action=suppress_composition_control` 表示组字期间 Backspace/Delete/Left/Right/Home/End/Confirm 等游戏编辑控制输入被吞掉，由 IME 自己处理预编辑串。
 - `action=result_inserted` 表示 `GCS_RESULTSTR` 最终提交串已写入。
 
-当前日志已确认一个关键行为：拼音字母可以在 `composing=1` 时由 `TextEditMenu::HandleKeyboardInput action=insert_ascii` 写入真实文本。因此实现必须在 vtable 包装层吞掉 composition ASCII；只处理 `WM_CHAR` 不足以避免拼音泄漏。如果拼音仍进入真实文本，需要查看拼音字母对应日志是否仍为 `insert_ascii`，以及当时 IMM open/native 状态是否没有被识别。
+当前日志已确认一个关键行为：拼音字母可以在 `composing=1` 时由游戏输入处理路径写入真实文本，而不一定只经过 `WM_CHAR`。因此原版路径必须在 `0x7E6620` 内部输入 hook 中吞掉 composition ASCII；JIP 路径必须由 `JipTextInputAdapterEx` 吞掉 composition ASCII。只处理 `WM_CHAR` 不足以避免拼音泄漏。如果拼音仍进入真实文本，需要查看拼音字母对应日志是否仍为 `insert_ascii`，以及当时 IMM open/native 状态是否没有被识别。
 
 ### 阶段 A：只读/低量日志定位
 
@@ -612,10 +651,8 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 ### 阶段 D：扩展字段
 
-玩家名 `TextEditMenu` 稳定后再扩展：
+原版 `TextEditMenu` 和 JIP `ShowTextInputMenu` 已由 active target 逻辑覆盖。下一步扩展应优先处理非 `TextEditMenu` 输入框：
 
-- 其他角色名/玩家名入口，若它们不共用 `0x7E6320`。
-- mod 打开的通用 `TextEditMenu` 文本框。
 - Stewie Tweaks Menu Search：不改 Stewie 源码时，需要单独用 active search bar gate + codepage byte replay 或 shadow buffer 方案；不要混进 `TextEditMenu` adapter。
 - Console 输入只在明确需要时处理，因为命令解析和普通 UI 文本不同。
 - Rime 后端、自绘候选窗、TSF/Cicero candidate list 都属于第二阶段增强，不影响第一阶段 commit-only 设计。
@@ -668,6 +705,15 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - 初始默认名在第一次输入时被 `clearOnNextType` 正确替换。
 - 光标移动、删除、确认后，最终玩家名保持当前 codepage 多字节。
 - `0x7E6700` validator 仍能控制确认按钮有效状态。
+
+### JIP ShowTextInputMenu
+
+- 使用 JIP 的 `ShowTextInputMenu` 打开通用文本输入框。
+- 中文/日文/韩文 IME commit 能进入 JIP `currentText`，拼音/假名预编辑 ASCII 不残留。
+- 英文 ASCII 输入仍能进入 JIP 文本框，且不出现 WndProc + JIP adapter 双插入。
+- Backspace/Delete/Left/Right 在 CJK 字符上按逻辑字符移动或删除。
+- Enter 确认仍触发 JIP 原 handler、关闭菜单并执行脚本 callback。
+- `SetTextInputExtendedProps` 的 min/max length、numeric-only 和 Enter-OK 行为不被破坏。
 
 ### 保存名
 

@@ -4,9 +4,11 @@
 #include "load_config.h"
 #include "SafeWrite.h"
 #include "tnvse.h"
+#include "Tile.hpp"
 #include "ui_decode.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -20,10 +22,27 @@ namespace fonthook
 	{
 		constexpr SIZE_T kPlayerNameTextEditOpenCall = 0x7AB740;
 		constexpr SIZE_T kPlayerNameIsValidName = 0x7AB820;
+		constexpr SIZE_T kTextEditMenuVTable = 0x1070034;
+		constexpr SIZE_T kTextEditMenuHandleKeyboardInput = 0x7E6620;
 		constexpr SIZE_T kTextEditMenuInputVTableEntry = 0x1070064;
+		constexpr SIZE_T kTextEditStateInputCallInHandleKeyboardInput = 0x7E6685;
 		constexpr UInt32 kMaxTextEditRawBytes = 1023;
+		constexpr UInt32 kJipNumericOnlyFlag = 1;
+		constexpr UInt32 kJipEnterAcceptsOkFlag = 2;
 		constexpr DWORD kDuplicateImeCharSuppressMs = 250;
 		constexpr DWORD kDuplicateAsciiSuppressMs = 100;
+
+		constexpr UInt32 kInputCode_Backspace = 0x80000000;
+		constexpr UInt32 kInputCode_ArrowLeft = 0x80000001;
+		constexpr UInt32 kInputCode_ArrowRight = 0x80000002;
+		constexpr UInt32 kInputCode_ArrowUp = 0x80000003;
+		constexpr UInt32 kInputCode_ArrowDown = 0x80000004;
+		constexpr UInt32 kInputCode_Home = 0x80000005;
+		constexpr UInt32 kInputCode_End = 0x80000006;
+		constexpr UInt32 kInputCode_Delete = 0x80000007;
+		constexpr UInt32 kInputCode_Enter = 0x80000008;
+		constexpr UInt32 kInputCode_PageUp = 0x80000009;
+		constexpr UInt32 kInputCode_PageDown = 0x8000000A;
 
 		HWND s_window = nullptr;
 		WNDPROC s_originalWndProc = nullptr;
@@ -35,6 +54,17 @@ namespace fonthook
 		DWORD s_lastWndProcAsciiTick = 0;
 		UInt8 s_lastWndProcAsciiChar = 0;
 		UInt32 s_suppressedImeCharCount = 0;
+		SIZE_T s_jipOriginalInputHandler = 0;
+
+		class JipTextInputAdapterEx
+		{
+		public:
+			static bool __fastcall Input(TextEditMenu* apMenu, void*, UInt32 aiInput);
+		};
+
+		bool IsImeCompositionActive();
+		bool IsImeConsumingAscii();
+		std::string WideToCurrentCodePage(std::wstring_view value);
 
 		void DebugLog(const char* fmt, ...)
 		{
@@ -161,40 +191,518 @@ namespace fonthook
 		TextEditMenu* GetActiveTextEditMenu()
 		{
 			TextEditMenu* current = TextEditMenu::GetCurrent();
-			if (!s_activeTextEditMenu || s_activeTextEditMenu != current)
+			if (!current || *reinterpret_cast<SIZE_T*>(current) != kTextEditMenuVTable)
 			{
 				s_activeTextEditMenu = nullptr;
 				return nullptr;
 			}
 
-			if (!current || !current->xEditState.IsActive())
+			if (*reinterpret_cast<SIZE_T*>(kTextEditMenuInputVTableEntry) != kTextEditMenuHandleKeyboardInput)
+			{
+				s_activeTextEditMenu = nullptr;
+				return nullptr;
+			}
+
+			if (!current->xEditState.IsActive())
 				return nullptr;
 
+			s_activeTextEditMenu = current;
 			return current;
 		}
 
-		bool CommitCandidate(TextEditMenu* menu, std::string& candidate, size_t caret)
+		SIZE_T CurrentTextEditInputHandler()
+		{
+			return *reinterpret_cast<SIZE_T*>(kTextEditMenuInputVTableEntry);
+		}
+
+		SIZE_T JipTextInputHandlerAddress()
+		{
+			return reinterpret_cast<SIZE_T>(&JipTextInputAdapterEx::Input);
+		}
+
+		BSStringT<char>& JipCurrentText(TextEditMenu* menu)
+		{
+			return *reinterpret_cast<BSStringT<char>*>(reinterpret_cast<UInt8*>(menu) + 0x34);
+		}
+
+		BSStringT<char>& JipDisplayedText(TextEditMenu* menu)
+		{
+			return *reinterpret_cast<BSStringT<char>*>(reinterpret_cast<UInt8*>(menu) + 0x3C);
+		}
+
+		UInt32& JipCursorIndex(TextEditMenu* menu)
+		{
+			return *reinterpret_cast<UInt32*>(reinterpret_cast<UInt8*>(menu) + 0x44);
+		}
+
+		UInt16 JipMinLength(TextEditMenu* menu)
+		{
+			return *reinterpret_cast<UInt16*>(reinterpret_cast<UInt8*>(menu) + 0x48);
+		}
+
+		UInt16 JipMaxLength(TextEditMenu* menu)
+		{
+			return *reinterpret_cast<UInt16*>(reinterpret_cast<UInt8*>(menu) + 0x4A);
+		}
+
+		Tile* JipInputRect(TextEditMenu* menu)
+		{
+			return *reinterpret_cast<Tile**>(reinterpret_cast<UInt8*>(menu) + 0x4C);
+		}
+
+		UInt32& JipCursorBlink(TextEditMenu* menu)
+		{
+			return *reinterpret_cast<UInt32*>(reinterpret_cast<UInt8*>(menu) + 0x50);
+		}
+
+		UInt8& JipCursorVisible(TextEditMenu* menu)
+		{
+			return *reinterpret_cast<UInt8*>(reinterpret_cast<UInt8*>(menu) + 0x54);
+		}
+
+		UInt8 JipIsActiveFlag(TextEditMenu* menu)
+		{
+			return *reinterpret_cast<UInt8*>(reinterpret_cast<UInt8*>(menu) + 0x55);
+		}
+
+		UInt8 JipMiscFlags(TextEditMenu* menu)
+		{
+			return *reinterpret_cast<UInt8*>(reinterpret_cast<UInt8*>(menu) + 0x57);
+		}
+
+		bool LooksLikeJipTextInput(TextEditMenu* menu)
+		{
+			if (!menu || *reinterpret_cast<SIZE_T*>(menu) != kTextEditMenuVTable)
+				return false;
+
+			const SIZE_T handler = CurrentTextEditInputHandler();
+			if (handler == kTextEditMenuHandleKeyboardInput)
+				return false;
+
+			if (!JipIsActiveFlag(menu))
+				return false;
+
+			if (JipCurrentText(menu).GetMaxLength() < 0x400 || JipDisplayedText(menu).GetMaxLength() < 0x400)
+				return false;
+
+			const UInt16 maxLength = JipMaxLength(menu);
+			if (!maxLength || maxLength > 0x7FFF)
+				return false;
+
+			const auto inputRect = reinterpret_cast<SIZE_T>(JipInputRect(menu));
+			return inputRect > 0x10000;
+		}
+
+		TextEditMenu* GetActiveJipTextInputMenu()
+		{
+			TextEditMenu* current = TextEditMenu::GetCurrent();
+			return LooksLikeJipTextInput(current) ? current : nullptr;
+		}
+
+		TextEditMenu* GetAnyActiveTextInputMenu()
+		{
+			if (TextEditMenu* menu = GetActiveTextEditMenu())
+				return menu;
+
+			return GetActiveJipTextInputMenu();
+		}
+
+		void ClearJipTextInputHookState()
+		{
+			s_jipOriginalInputHandler = 0;
+		}
+
+		bool CallJipOriginalInput(TextEditMenu* menu, UInt32 input)
+		{
+			if (!menu || !s_jipOriginalInputHandler || s_jipOriginalInputHandler == JipTextInputHandlerAddress())
+				return false;
+
+			using InputHandler = bool(__thiscall*)(TextEditMenu*, UInt32);
+			return reinterpret_cast<InputHandler>(s_jipOriginalInputHandler)(menu, input);
+		}
+
+		void TryInstallJipTextInputHook()
+		{
+			const SIZE_T currentHandler = CurrentTextEditInputHandler();
+			const SIZE_T hookHandler = JipTextInputHandlerAddress();
+
+			if (currentHandler == kTextEditMenuHandleKeyboardInput)
+			{
+				ClearJipTextInputHookState();
+				return;
+			}
+
+			if (currentHandler == hookHandler)
+				return;
+
+			TextEditMenu* current = TextEditMenu::GetCurrent();
+			if (!LooksLikeJipTextInput(current))
+				return;
+
+			s_jipOriginalInputHandler = currentHandler;
+			SafeWrite32(kTextEditMenuInputVTableEntry, hookHandler);
+			DebugLog(
+				"tnvse_multibyte_input: chained JIP TextInput handler=0x%08X menu=0x%08X",
+				static_cast<UInt32>(currentHandler),
+				reinterpret_cast<UInt32>(current));
+		}
+
+		std::string GetJipText(TextEditMenu* menu)
+		{
+			BSStringT<char>& text = JipCurrentText(menu);
+			const UInt32 length = text.GetLength();
+			if (!length)
+				return {};
+
+			return std::string(text.c_str(), length);
+		}
+
+		void DebugLogJipState(const char* source, const char* action, TextEditMenu* menu, UInt32 input)
+		{
+			if (!g_bMultibyteInputDebug)
+				return;
+
+			const UInt32 textLen = menu ? JipCurrentText(menu).GetLength() : 0;
+			const UInt32 caret = menu ? JipCursorIndex(menu) : 0;
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input_event: source=%s action=%s input=0x%08X ascii='%c' composing=%u jip=1 active=0x%08X current=0x%08X caret=%u textLen=%u min=%u max=%u flags=0x%02X handler=0x%08X",
+				source,
+				action,
+				input,
+				PrintableAscii(input),
+				s_imeComposing ? 1 : 0,
+				reinterpret_cast<UInt32>(menu),
+				reinterpret_cast<UInt32>(TextEditMenu::GetCurrent()),
+				caret,
+				textLen,
+				menu ? JipMinLength(menu) : 0,
+				menu ? JipMaxLength(menu) : 0,
+				menu ? JipMiscFlags(menu) : 0,
+				static_cast<UInt32>(CurrentTextEditInputHandler()));
+		}
+
+		bool JipNumericInsertIsValid(TextEditMenu* menu, std::string_view text, const std::string& current, size_t caret)
+		{
+			if (!(JipMiscFlags(menu) & kJipNumericOnlyFlag))
+				return true;
+
+			for (char raw : text)
+			{
+				const UInt8 ch = static_cast<UInt8>(raw);
+				if (ch >= 0x80)
+					return false;
+
+				if (ch == '-')
+				{
+					if (caret != 0 || current.find('-') != std::string::npos)
+						return false;
+					continue;
+				}
+
+				if (ch == '.')
+				{
+					if (current.find('.') != std::string::npos)
+						return false;
+					continue;
+				}
+
+				if (!std::isdigit(ch))
+					return false;
+			}
+
+			return true;
+		}
+
+		void RefreshJipTextInput(TextEditMenu* menu)
+		{
+			if (!menu)
+				return;
+
+			std::string current = GetJipText(menu);
+			size_t caret = ClampToPrevBoundary(current, JipCursorIndex(menu));
+			JipCursorIndex(menu) = static_cast<UInt32>(caret);
+
+			std::string displayText;
+			displayText.reserve(current.size() + 1);
+			displayText.append(current, 0, caret);
+			displayText.push_back(JipCursorVisible(menu) ? '|' : '\x7F');
+			displayText.append(current, caret, std::string::npos);
+			JipDisplayedText(menu).Set(displayText.c_str());
+
+			if (menu->pEditText)
+				menu->pEditText->SetValueString(Tile::kTileValue_string, JipDisplayedText(menu).c_str(), true);
+
+			if (menu->pOkButton)
+			{
+				const bool enabled = JipCurrentText(menu).GetLength() >= JipMinLength(menu);
+				menu->pOkButton->SetValueFloat(Tile::kTileValue_target, enabled ? 1.0f : 0.0f, true);
+			}
+
+			if (Tile* inputRect = JipInputRect(menu))
+			{
+				const float user1 = inputRect->GetValueFloat(Tile::kTileValue_user1);
+				inputRect->SetValueFloat(Tile::kTileValue_user2, user1, true);
+			}
+		}
+
+		bool CommitJipCandidate(TextEditMenu* menu, const std::string& candidate, size_t caret)
 		{
 			if (!menu)
 				return false;
 
-			TextEditState& state = menu->xEditState;
+			const UInt32 maxLength = std::min<UInt32>(JipMaxLength(menu), kMaxTextEditRawBytes);
+			if (candidate.size() > maxLength)
+				return false;
+
+			JipCurrentText(menu).Set(candidate.c_str());
+			JipCursorIndex(menu) = static_cast<UInt32>(ClampToPrevBoundary(candidate, caret));
+			RefreshJipTextInput(menu);
+			return true;
+		}
+
+		bool InsertJipTextAtCaret(TextEditMenu* menu, std::string_view text)
+		{
+			if (!menu || text.empty())
+				return false;
+
+			std::string current = GetJipText(menu);
+			size_t caret = ClampToPrevBoundary(current, JipCursorIndex(menu));
+			if (!JipNumericInsertIsValid(menu, text, current, caret))
+				return false;
+
+			std::string candidate;
+			candidate.reserve(current.size() + text.size());
+			candidate.append(current, 0, caret);
+			candidate.append(text.data(), text.size());
+			candidate.append(current, caret, std::string::npos);
+			return CommitJipCandidate(menu, candidate, caret + text.size());
+		}
+
+		bool DeletePreviousJipChar(TextEditMenu* menu)
+		{
+			std::string current = GetJipText(menu);
+			size_t caret = ClampToPrevBoundary(current, JipCursorIndex(menu));
+			if (!caret)
+				return true;
+
+			const size_t previous = PrevCharBoundary(current, caret);
+			current.erase(previous, caret - previous);
+			return CommitJipCandidate(menu, current, previous);
+		}
+
+		bool DeleteNextJipChar(TextEditMenu* menu)
+		{
+			std::string current = GetJipText(menu);
+			size_t caret = ClampToPrevBoundary(current, JipCursorIndex(menu));
+			if (caret >= current.size())
+				return true;
+
+			const size_t next = NextCharBoundary(current, caret);
+			current.erase(caret, next - caret);
+			return CommitJipCandidate(menu, current, caret);
+		}
+
+		bool MoveJipCaret(TextEditMenu* menu, size_t caret)
+		{
+			const std::string current = GetJipText(menu);
+			JipCursorIndex(menu) = static_cast<UInt32>(ClampToPrevBoundary(current, caret));
+			RefreshJipTextInput(menu);
+			return true;
+		}
+
+		bool MoveJipCaretPrevious(TextEditMenu* menu)
+		{
+			const std::string current = GetJipText(menu);
+			const size_t caret = ClampToPrevBoundary(current, JipCursorIndex(menu));
+			return MoveJipCaret(menu, PrevCharBoundary(current, caret));
+		}
+
+		bool MoveJipCaretNext(TextEditMenu* menu)
+		{
+			const std::string current = GetJipText(menu);
+			return MoveJipCaret(menu, NextCharBoundary(current, JipCursorIndex(menu)));
+		}
+
+		bool MoveJipCaretLineStart(TextEditMenu* menu)
+		{
+			const std::string current = GetJipText(menu);
+			size_t caret = ClampToPrevBoundary(current, JipCursorIndex(menu));
+			if (!caret)
+				return MoveJipCaret(menu, 0);
+
+			const size_t lineStart = current.rfind('\n', caret ? caret - 1 : 0);
+			return MoveJipCaret(menu, lineStart == std::string::npos ? 0 : lineStart + 1);
+		}
+
+		bool MoveJipCaretLineEnd(TextEditMenu* menu)
+		{
+			const std::string current = GetJipText(menu);
+			const size_t caret = ClampToPrevBoundary(current, JipCursorIndex(menu));
+			const size_t lineEnd = current.find('\n', caret);
+			return MoveJipCaret(menu, lineEnd == std::string::npos ? current.size() : lineEnd);
+		}
+
+		bool MoveJipCaretByChars(TextEditMenu* menu, int count)
+		{
+			const std::string current = GetJipText(menu);
+			size_t caret = ClampToPrevBoundary(current, JipCursorIndex(menu));
+			if (count < 0)
+			{
+				for (int i = 0; i < -count; ++i)
+					caret = PrevCharBoundary(current, caret);
+			}
+			else
+			{
+				for (int i = 0; i < count; ++i)
+					caret = NextCharBoundary(current, caret);
+			}
+
+			return MoveJipCaret(menu, caret);
+		}
+
+		bool InsertWideTextJip(TextEditMenu* menu, std::wstring_view value)
+		{
+			std::string converted = WideToCurrentCodePage(value);
+			if (converted.empty())
+				return false;
+
+			return InsertJipTextAtCaret(menu, converted);
+		}
+
+		bool JipInputCompositionControlShouldSuppress(UInt32 input)
+		{
+			if (!IsImeCompositionActive())
+				return false;
+
+			switch (input)
+			{
+			case kInputCode_Backspace:
+			case kInputCode_Delete:
+			case kInputCode_ArrowLeft:
+			case kInputCode_ArrowRight:
+			case kInputCode_Home:
+			case kInputCode_End:
+			case kInputCode_PageUp:
+			case kInputCode_PageDown:
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		bool __fastcall JipTextInputAdapterEx::Input(TextEditMenu* apMenu, void*, UInt32 aiInput)
+		{
+			if (!LooksLikeJipTextInput(apMenu))
+				return CallJipOriginalInput(apMenu, aiInput);
+
+			if (aiInput >= 0x20 && aiInput <= 0x7E)
+			{
+				if (IsImeConsumingAscii())
+				{
+					DebugLogJipState("JipTextInputAdapter::Input", "suppress_composition_ascii", apMenu, aiInput);
+					return true;
+				}
+
+				if (s_lastWndProcAsciiChar == static_cast<UInt8>(aiInput)
+					&& GetTickCount() - s_lastWndProcAsciiTick <= kDuplicateAsciiSuppressMs)
+				{
+					s_lastWndProcAsciiChar = 0;
+					DebugLogJipState("JipTextInputAdapter::Input", "suppress_duplicate_wndproc_ascii", apMenu, aiInput);
+					return true;
+				}
+
+				const char ch = static_cast<char>(aiInput);
+				if (!InsertJipTextAtCaret(apMenu, std::string_view(&ch, 1)))
+				{
+					DebugLogJipState("JipTextInputAdapter::Input", "reject_ascii_insert", apMenu, aiInput);
+					return false;
+				}
+
+				DebugLogJipState("JipTextInputAdapter::Input", "insert_ascii", apMenu, aiInput);
+				return true;
+			}
+
+			if (aiInput > 0x7F && aiInput < kInputCode_Backspace)
+			{
+				DebugLogJipState("JipTextInputAdapter::Input", "swallow_high_byte", apMenu, aiInput);
+				return true;
+			}
+
+			if (JipInputCompositionControlShouldSuppress(aiInput))
+			{
+				DebugLogJipState("JipTextInputAdapter::Input", "suppress_composition_control", apMenu, aiInput);
+				return true;
+			}
+
+			switch (aiInput)
+			{
+			case kInputCode_Backspace:
+				DebugLogJipState("JipTextInputAdapter::Input", "delete_previous", apMenu, aiInput);
+				return DeletePreviousJipChar(apMenu);
+			case kInputCode_Delete:
+				DebugLogJipState("JipTextInputAdapter::Input", "delete_next", apMenu, aiInput);
+				return DeleteNextJipChar(apMenu);
+			case kInputCode_ArrowLeft:
+				DebugLogJipState("JipTextInputAdapter::Input", "move_left", apMenu, aiInput);
+				return MoveJipCaretPrevious(apMenu);
+			case kInputCode_ArrowRight:
+				DebugLogJipState("JipTextInputAdapter::Input", "move_right", apMenu, aiInput);
+				return MoveJipCaretNext(apMenu);
+			case kInputCode_Home:
+				DebugLogJipState("JipTextInputAdapter::Input", "move_home", apMenu, aiInput);
+				return MoveJipCaretLineStart(apMenu);
+			case kInputCode_End:
+				DebugLogJipState("JipTextInputAdapter::Input", "move_end", apMenu, aiInput);
+				return MoveJipCaretLineEnd(apMenu);
+			case kInputCode_Enter:
+				if (JipMiscFlags(apMenu) & kJipEnterAcceptsOkFlag)
+				{
+					DebugLogJipState("JipTextInputAdapter::Input", "pass_enter_to_jip", apMenu, aiInput);
+					return CallJipOriginalInput(apMenu, aiInput);
+				}
+				DebugLogJipState("JipTextInputAdapter::Input", "insert_newline", apMenu, aiInput);
+				return InsertJipTextAtCaret(apMenu, std::string_view("\n", 1));
+			case kInputCode_PageUp:
+				DebugLogJipState("JipTextInputAdapter::Input", "page_up", apMenu, aiInput);
+				return MoveJipCaretByChars(apMenu, -5);
+			case kInputCode_PageDown:
+				DebugLogJipState("JipTextInputAdapter::Input", "page_down", apMenu, aiInput);
+				return MoveJipCaretByChars(apMenu, 5);
+			case kInputCode_ArrowUp:
+			case kInputCode_ArrowDown:
+				DebugLogJipState("JipTextInputAdapter::Input", "pass_vertical_arrow_to_jip", apMenu, aiInput);
+				return CallJipOriginalInput(apMenu, aiInput);
+			default:
+				DebugLogJipState("JipTextInputAdapter::Input", "pass_original", apMenu, aiInput);
+				return CallJipOriginalInput(apMenu, aiInput);
+			}
+		}
+
+		bool CommitCandidate(TextEditState& state, const std::string& candidate, size_t caret)
+		{
 			if (!FitsTextEditConstraints(state, candidate))
 				return false;
 
 			state.SetText(candidate.c_str());
 			SetCaret(state, ClampToPrevBoundary(candidate, caret));
 			state.bClearOnNextType = false;
+			return true;
+		}
+
+		bool CommitCandidate(TextEditMenu* menu, const std::string& candidate, size_t caret)
+		{
+			if (!menu || !CommitCandidate(menu->xEditState, candidate, caret))
+				return false;
+
 			menu->Refresh();
 			return true;
 		}
 
-		bool InsertTextAtCaret(TextEditMenu* menu, std::string_view text)
+		bool InsertTextAtCaret(TextEditState& state, std::string_view text)
 		{
-			if (!menu || text.empty())
+			if (text.empty())
 				return false;
 
-			TextEditState& state = menu->xEditState;
 			std::string current = GetText(state);
 			size_t caret = ClampToPrevBoundary(current, state.iCaretByteOffset);
 
@@ -210,15 +718,23 @@ namespace fonthook
 			candidate.append(text.data(), text.size());
 			candidate.append(current, caret, std::string::npos);
 
-			return CommitCandidate(menu, candidate, caret + text.size());
+			return CommitCandidate(state, candidate, caret + text.size());
 		}
 
-		bool DeletePreviousChar(TextEditMenu* menu)
+		bool InsertTextAtCaret(TextEditMenu* menu, std::string_view text)
 		{
 			if (!menu)
 				return false;
 
-			TextEditState& state = menu->xEditState;
+			if (!InsertTextAtCaret(menu->xEditState, text))
+				return false;
+
+			menu->Refresh();
+			return true;
+		}
+
+		bool DeletePreviousChar(TextEditState& state)
+		{
 			std::string current = GetText(state);
 			size_t caret = ClampToPrevBoundary(current, state.iCaretByteOffset);
 			if (!caret)
@@ -226,15 +742,23 @@ namespace fonthook
 
 			const size_t previous = PrevCharBoundary(current, caret);
 			current.erase(previous, caret - previous);
-			return CommitCandidate(menu, current, previous);
+			return CommitCandidate(state, current, previous);
 		}
 
-		bool DeleteNextChar(TextEditMenu* menu)
+		bool DeletePreviousChar(TextEditMenu* menu)
 		{
 			if (!menu)
 				return false;
 
-			TextEditState& state = menu->xEditState;
+			if (!DeletePreviousChar(menu->xEditState))
+				return false;
+
+			menu->Refresh();
+			return true;
+		}
+
+		bool DeleteNextChar(TextEditState& state)
+		{
 			std::string current = GetText(state);
 			size_t caret = ClampToPrevBoundary(current, state.iCaretByteOffset);
 			if (caret >= current.size())
@@ -242,7 +766,26 @@ namespace fonthook
 
 			const size_t next = NextCharBoundary(current, caret);
 			current.erase(caret, next - caret);
-			return CommitCandidate(menu, current, caret);
+			return CommitCandidate(state, current, caret);
+		}
+
+		bool DeleteNextChar(TextEditMenu* menu)
+		{
+			if (!menu)
+				return false;
+
+			if (!DeleteNextChar(menu->xEditState))
+				return false;
+
+			menu->Refresh();
+			return true;
+		}
+
+		bool MoveCaretPrevious(TextEditState& state)
+		{
+			const std::string current = GetText(state);
+			SetCaret(state, PrevCharBoundary(current, ClampToPrevBoundary(current, state.iCaretByteOffset)));
+			return true;
 		}
 
 		bool MoveCaretPrevious(TextEditMenu* menu)
@@ -250,10 +793,15 @@ namespace fonthook
 			if (!menu)
 				return false;
 
-			TextEditState& state = menu->xEditState;
-			const std::string current = GetText(state);
-			SetCaret(state, PrevCharBoundary(current, ClampToPrevBoundary(current, state.iCaretByteOffset)));
+			MoveCaretPrevious(menu->xEditState);
 			menu->Refresh();
+			return true;
+		}
+
+		bool MoveCaretNext(TextEditState& state)
+		{
+			const std::string current = GetText(state);
+			SetCaret(state, NextCharBoundary(current, state.iCaretByteOffset));
 			return true;
 		}
 
@@ -262,10 +810,14 @@ namespace fonthook
 			if (!menu)
 				return false;
 
-			TextEditState& state = menu->xEditState;
-			const std::string current = GetText(state);
-			SetCaret(state, NextCharBoundary(current, state.iCaretByteOffset));
+			MoveCaretNext(menu->xEditState);
 			menu->Refresh();
+			return true;
+		}
+
+		bool MoveCaretHome(TextEditState& state)
+		{
+			SetCaret(state, 0);
 			return true;
 		}
 
@@ -274,8 +826,15 @@ namespace fonthook
 			if (!menu)
 				return false;
 
-			SetCaret(menu->xEditState, 0);
+			MoveCaretHome(menu->xEditState);
 			menu->Refresh();
+			return true;
+		}
+
+		bool MoveCaretEnd(TextEditState& state)
+		{
+			const std::string current = GetText(state);
+			SetCaret(state, current.size());
 			return true;
 		}
 
@@ -284,8 +843,7 @@ namespace fonthook
 			if (!menu)
 				return false;
 
-			const std::string current = GetText(menu->xEditState);
-			SetCaret(menu->xEditState, current.size());
+			MoveCaretEnd(menu->xEditState);
 			menu->Refresh();
 			return true;
 		}
@@ -444,7 +1002,8 @@ namespace fonthook
 				return false;
 
 			TextEditMenu* menu = GetActiveTextEditMenu();
-			if (!menu)
+			TextEditMenu* jipMenu = menu ? nullptr : GetActiveJipTextInputMenu();
+			if (!menu && !jipMenu)
 			{
 				DebugLogState("WndProc.WM_IME_COMPOSITION", "result_no_active_target", nullptr, static_cast<SInt32>(lParam));
 				return false;
@@ -453,20 +1012,30 @@ namespace fonthook
 			std::wstring result = GetImeCompositionString(hwnd, GCS_RESULTSTR);
 			if (result.empty())
 			{
-				DebugLogState("WndProc.WM_IME_COMPOSITION", "result_empty", menu, static_cast<SInt32>(lParam));
+				if (jipMenu)
+					DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_empty", jipMenu, static_cast<UInt32>(lParam));
+				else
+					DebugLogState("WndProc.WM_IME_COMPOSITION", "result_empty", menu, static_cast<SInt32>(lParam));
 				return false;
 			}
 
-			if (!InsertWideText(menu, result))
+			const bool inserted = menu ? InsertWideText(menu, result) : InsertWideTextJip(jipMenu, result);
+			if (!inserted)
 			{
-				DebugLogState("WndProc.WM_IME_COMPOSITION", "result_rejected", menu, static_cast<SInt32>(lParam));
+				if (jipMenu)
+					DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_rejected", jipMenu, static_cast<UInt32>(lParam));
+				else
+					DebugLogState("WndProc.WM_IME_COMPOSITION", "result_rejected", menu, static_cast<SInt32>(lParam));
 				DebugLog("tnvse_multibyte_input: rejected IME result length=%u", static_cast<UInt32>(result.size()));
 				return false;
 			}
 
 			s_lastImeCommitTick = GetTickCount();
 			s_suppressedImeCharCount = static_cast<UInt32>(result.size());
-			DebugLogState("WndProc.WM_IME_COMPOSITION", "result_inserted", menu, static_cast<SInt32>(lParam));
+			if (jipMenu)
+				DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_inserted", jipMenu, static_cast<UInt32>(lParam));
+			else
+				DebugLogState("WndProc.WM_IME_COMPOSITION", "result_inserted", menu, static_cast<SInt32>(lParam));
 			DebugLog("tnvse_multibyte_input: committed IME result chars=%u", s_suppressedImeCharCount);
 			return true;
 		}
@@ -490,21 +1059,56 @@ namespace fonthook
 		{
 			if (ShouldSuppressDuplicateImeChar())
 			{
-				DebugLogState("WndProc.WM_CHAR", "suppress_duplicate_ime_char", GetActiveTextEditMenu(), static_cast<SInt32>(wParam));
+				if (TextEditMenu* jipMenu = GetActiveJipTextInputMenu())
+					DebugLogJipState("WndProc.WM_CHAR", "suppress_duplicate_ime_char", jipMenu, static_cast<UInt32>(wParam));
+				else
+					DebugLogState("WndProc.WM_CHAR", "suppress_duplicate_ime_char", GetActiveTextEditMenu(), static_cast<SInt32>(wParam));
 				return true;
 			}
 
 			if (wParam > 0xFFFF)
 			{
-				DebugLogState("WndProc.WM_CHAR", "pass_out_of_range", GetActiveTextEditMenu(), static_cast<SInt32>(wParam));
+				DebugLogState("WndProc.WM_CHAR", "pass_out_of_range", GetAnyActiveTextInputMenu(), static_cast<SInt32>(wParam));
 				return false;
 			}
 
 			TextEditMenu* menu = GetActiveTextEditMenu();
-			if (!menu)
+			TextEditMenu* jipMenu = menu ? nullptr : GetActiveJipTextInputMenu();
+			if (!menu && !jipMenu)
 			{
 				DebugLogState("WndProc.WM_CHAR", "pass_no_active_target", nullptr, static_cast<SInt32>(wParam));
 				return false;
+			}
+
+			if (jipMenu)
+			{
+				if (wParam >= 0x20 && wParam <= 0x7E)
+				{
+					if (IsImeConsumingAscii())
+					{
+						DebugLogJipState("WndProc.WM_CHAR", "suppress_composition_ascii", jipMenu, static_cast<UInt32>(wParam));
+						return true;
+					}
+
+					DebugLogJipState("WndProc.WM_CHAR", "pass_ascii_to_jip_adapter", jipMenu, static_cast<UInt32>(wParam));
+					return false;
+				}
+
+				if (wParam < 0x80)
+				{
+					DebugLogJipState("WndProc.WM_CHAR", "pass_control_char", jipMenu, static_cast<UInt32>(wParam));
+					return false;
+				}
+
+				const wchar_t ch = static_cast<wchar_t>(wParam);
+				if (!InsertWideTextJip(jipMenu, std::wstring_view(&ch, 1)))
+				{
+					DebugLogJipState("WndProc.WM_CHAR", "reject_nonascii_insert", jipMenu, static_cast<UInt32>(wParam));
+					return false;
+				}
+
+				DebugLogJipState("WndProc.WM_CHAR", "insert_nonascii", jipMenu, static_cast<UInt32>(wParam));
+				return true;
 			}
 
 			if (wParam >= 0x20 && wParam <= 0x7E && IsImeConsumingAscii())
@@ -549,40 +1153,43 @@ namespace fonthook
 		{
 			if (s_hooksInstalled)
 			{
-				if (msg == WM_IME_STARTCOMPOSITION && GetActiveTextEditMenu())
+				TryInstallJipTextInputHook();
+
+				if (msg == WM_IME_STARTCOMPOSITION && GetAnyActiveTextInputMenu())
 				{
 					s_imeComposing = true;
-					DebugLogState("WndProc.WM_IME_STARTCOMPOSITION", "composition_start", GetActiveTextEditMenu(), 0);
+					DebugLogState("WndProc.WM_IME_STARTCOMPOSITION", "composition_start", GetAnyActiveTextInputMenu(), 0);
 				}
 
 				if (msg == WM_IME_COMPOSITION)
 				{
+					TextEditMenu* activeTarget = GetAnyActiveTextInputMenu();
 					DebugLog(
 						"tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION lParam=0x%08X hasResult=%u hasComp=%u composingBefore=%u active=0x%08X",
 						static_cast<UInt32>(lParam),
 						(lParam & GCS_RESULTSTR) ? 1 : 0,
 						(lParam & GCS_COMPSTR) ? 1 : 0,
 						s_imeComposing ? 1 : 0,
-						reinterpret_cast<UInt32>(GetActiveTextEditMenu()));
+						reinterpret_cast<UInt32>(activeTarget));
 
 					if (HandleImeResult(hwnd, lParam))
 					{
 						s_imeComposing = false;
-						DebugLogState("WndProc.WM_IME_COMPOSITION", "composition_result_consumed", GetActiveTextEditMenu(), static_cast<SInt32>(lParam));
+						DebugLogState("WndProc.WM_IME_COMPOSITION", "composition_result_consumed", GetAnyActiveTextInputMenu(), static_cast<SInt32>(lParam));
 						return 0;
 					}
 
-					if (GetActiveTextEditMenu())
+					if (GetAnyActiveTextInputMenu())
 					{
 						s_imeComposing = true;
-						DebugLogState("WndProc.WM_IME_COMPOSITION", "composition_continue", GetActiveTextEditMenu(), static_cast<SInt32>(lParam));
+						DebugLogState("WndProc.WM_IME_COMPOSITION", "composition_continue", GetAnyActiveTextInputMenu(), static_cast<SInt32>(lParam));
 					}
 				}
 
 				if (msg == WM_IME_ENDCOMPOSITION)
 				{
 					s_imeComposing = false;
-					DebugLogState("WndProc.WM_IME_ENDCOMPOSITION", "composition_end", GetActiveTextEditMenu(), 0);
+					DebugLogState("WndProc.WM_IME_ENDCOMPOSITION", "composition_end", GetAnyActiveTextInputMenu(), 0);
 				}
 
 				if (msg == WM_CHAR && HandleCharFallback(wParam))
@@ -675,10 +1282,14 @@ namespace fonthook
 			s_lastImeCommitTick = 0;
 			s_lastWndProcAsciiTick = 0;
 			s_lastWndProcAsciiChar = 0;
+			ClearJipTextInputHookState();
 		}
 
 		void RestoreWindowProc()
 		{
+			if (CurrentTextEditInputHandler() == JipTextInputHandlerAddress())
+				SafeWrite32(kTextEditMenuInputVTableEntry, kTextEditMenuHandleKeyboardInput);
+
 			if (s_window && s_originalWndProc)
 			{
 				SetWindowLongPtrA(s_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(s_originalWndProc));
@@ -709,119 +1320,115 @@ namespace fonthook
 				reinterpret_cast<UInt32>(s_activeTextEditMenu));
 			return opened;
 		}
+	};
 
-		bool __thiscall HandleKeyboardInput(SInt32 aiInput)
+	class TextEditStateEx : public TextEditState
+	{
+	public:
+		static void __fastcall Input(TextEditState* apState, SInt32 aiInput, SInt32 aiChar)
 		{
-			TextEditMenu* menu = (s_activeTextEditMenu == this
-				&& this == TextEditMenu::GetCurrent()
-				&& xEditState.IsActive()) ? this : nullptr;
-			if (menu)
+			if (!apState || !apState->IsActive())
+				return;
+
+			TextEditMenu* menu = GetActiveTextEditMenu();
+			if (menu && &menu->xEditState != apState)
+				menu = nullptr;
+
+			if (aiInput >= 0x20 && aiInput <= 0x7E)
 			{
-				if (aiInput >= 0x20 && aiInput <= 0x7E)
+				if (IsImeConsumingAscii())
 				{
-					if (IsImeConsumingAscii())
-					{
-						DebugLogState("TextEditMenu::HandleKeyboardInput", "suppress_composition_ascii", menu, aiInput);
-						return true;
-					}
-
-					if (s_lastWndProcAsciiChar == static_cast<UInt8>(aiInput)
-						&& GetTickCount() - s_lastWndProcAsciiTick <= kDuplicateAsciiSuppressMs)
-					{
-						s_lastWndProcAsciiChar = 0;
-						DebugLogState("TextEditMenu::HandleKeyboardInput", "suppress_duplicate_wndproc_ascii", menu, aiInput);
-						return true;
-					}
-
-					const char ch = static_cast<char>(aiInput);
-					if (!InsertTextAtCaret(menu, std::string_view(&ch, 1)))
-					{
-						DebugLogState("TextEditMenu::HandleKeyboardInput", "reject_ascii_insert", menu, aiInput);
-						return false;
-					}
-
-					DebugLogState("TextEditMenu::HandleKeyboardInput", "insert_ascii", menu, aiInput);
-					return true;
+					DebugLogState("TextEditState::Input", "suppress_composition_ascii", menu, aiInput);
+					return;
 				}
 
-				if (aiInput > 0x7F && aiInput <= 0xFF)
+				if (s_lastWndProcAsciiChar == static_cast<UInt8>(aiInput)
+					&& GetTickCount() - s_lastWndProcAsciiTick <= kDuplicateAsciiSuppressMs)
 				{
-					DebugLogState("TextEditMenu::HandleKeyboardInput", "swallow_high_byte", menu, aiInput);
-					return true;
+					s_lastWndProcAsciiChar = 0;
+					DebugLogState("TextEditState::Input", "suppress_duplicate_wndproc_ascii", menu, aiInput);
+					return;
 				}
 
-				const bool imeCompositionActive = IsImeCompositionActive();
-				switch (aiInput)
+				const char ch = static_cast<char>(aiInput);
+				if (!InsertTextAtCaret(*apState, std::string_view(&ch, 1)))
 				{
-				case kTextEditInput_Backspace:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditMenu::HandleKeyboardInput", "suppress_composition_control", menu, aiInput);
-						return true;
-					}
-					DebugLogState("TextEditMenu::HandleKeyboardInput", "delete_previous", menu, aiInput);
-					return DeletePreviousChar(menu);
-				case kTextEditInput_Delete:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditMenu::HandleKeyboardInput", "suppress_composition_control", menu, aiInput);
-						return true;
-					}
-					DebugLogState("TextEditMenu::HandleKeyboardInput", "delete_next", menu, aiInput);
-					return DeleteNextChar(menu);
-				case kTextEditInput_Left:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditMenu::HandleKeyboardInput", "suppress_composition_control", menu, aiInput);
-						return true;
-					}
-					DebugLogState("TextEditMenu::HandleKeyboardInput", "move_left", menu, aiInput);
-					return MoveCaretPrevious(menu);
-				case kTextEditInput_Right:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditMenu::HandleKeyboardInput", "suppress_composition_control", menu, aiInput);
-						return true;
-					}
-					DebugLogState("TextEditMenu::HandleKeyboardInput", "move_right", menu, aiInput);
-					return MoveCaretNext(menu);
-				case kTextEditInput_Home:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditMenu::HandleKeyboardInput", "suppress_composition_control", menu, aiInput);
-						return true;
-					}
-					DebugLogState("TextEditMenu::HandleKeyboardInput", "move_home", menu, aiInput);
-					return MoveCaretHome(menu);
-				case kTextEditInput_End:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditMenu::HandleKeyboardInput", "suppress_composition_control", menu, aiInput);
-						return true;
-					}
-					DebugLogState("TextEditMenu::HandleKeyboardInput", "move_end", menu, aiInput);
-					return MoveCaretEnd(menu);
-				case kTextEditInput_Confirm:
-				{
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditMenu::HandleKeyboardInput", "suppress_composition_control", menu, aiInput);
-						return true;
-					}
-					DebugLogState("TextEditMenu::HandleKeyboardInput", "confirm_original_enter", menu, aiInput);
-					const bool handled = TextEditMenu::HandleKeyboardInput(aiInput);
-					if (handled)
-						ClearInputState();
-					DebugLogState("TextEditMenu::HandleKeyboardInput", handled ? "confirm_original_handled" : "confirm_original_unhandled", nullptr, aiInput);
-					return handled;
+					DebugLogState("TextEditState::Input", "reject_ascii_insert", menu, aiInput);
+					return;
 				}
-				default:
-					DebugLogState("TextEditMenu::HandleKeyboardInput", "pass_original", menu, aiInput);
-					break;
-				}
+
+				DebugLogState("TextEditState::Input", "insert_ascii", menu, aiInput);
+				return;
 			}
 
-			return TextEditMenu::HandleKeyboardInput(aiInput);
+			if (aiInput > 0x7F && aiInput <= 0xFF)
+			{
+				DebugLogState("TextEditState::Input", "swallow_high_byte", menu, aiInput);
+				return;
+			}
+
+			const bool imeCompositionActive = IsImeCompositionActive();
+			switch (aiInput)
+			{
+			case kTextEditInput_Backspace:
+				if (imeCompositionActive)
+				{
+					DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
+					return;
+				}
+				DebugLogState("TextEditState::Input", "delete_previous", menu, aiInput);
+				DeletePreviousChar(*apState);
+				return;
+			case kTextEditInput_Delete:
+				if (imeCompositionActive)
+				{
+					DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
+					return;
+				}
+				DebugLogState("TextEditState::Input", "delete_next", menu, aiInput);
+				DeleteNextChar(*apState);
+				return;
+			case kTextEditInput_Left:
+				if (imeCompositionActive)
+				{
+					DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
+					return;
+				}
+				DebugLogState("TextEditState::Input", "move_left", menu, aiInput);
+				MoveCaretPrevious(*apState);
+				return;
+			case kTextEditInput_Right:
+				if (imeCompositionActive)
+				{
+					DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
+					return;
+				}
+				DebugLogState("TextEditState::Input", "move_right", menu, aiInput);
+				MoveCaretNext(*apState);
+				return;
+			case kTextEditInput_Home:
+				if (imeCompositionActive)
+				{
+					DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
+					return;
+				}
+				DebugLogState("TextEditState::Input", "move_home", menu, aiInput);
+				MoveCaretHome(*apState);
+				return;
+			case kTextEditInput_End:
+				if (imeCompositionActive)
+				{
+					DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
+					return;
+				}
+				DebugLogState("TextEditState::Input", "move_end", menu, aiInput);
+				MoveCaretEnd(*apState);
+				return;
+			default:
+				DebugLogState("TextEditState::Input", "pass_original", menu, aiInput);
+				apState->InputUnk01(aiInput, aiChar);
+				return;
+			}
 		}
 	};
 
@@ -842,7 +1449,7 @@ namespace fonthook
 		}
 
 		WriteRelCall(kPlayerNameTextEditOpenCall, &TextEditMenuEx::Open);
-		ReplaceVirtualFuncEx(kTextEditMenuInputVTableEntry, &TextEditMenuEx::HandleKeyboardInput);
+		WriteRelCall(kTextEditStateInputCallInHandleKeyboardInput, &TextEditStateEx::Input);
 		s_hooksInstalled = true;
 		TryInstallWindowProc();
 		if (g_bMultibyteInputCompositionPreview)
@@ -859,6 +1466,9 @@ namespace fonthook
 		{
 			if (s_hooksInstalled && !s_originalWndProc)
 				TryInstallWindowProc();
+
+			if (s_hooksInstalled)
+				TryInstallJipTextInputHook();
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitGame
 			|| apMessage->type == NVSEMessagingInterface::kMessage_ExitToMainMenu)
