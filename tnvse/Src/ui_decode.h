@@ -4,6 +4,9 @@
 #include "BSSimpleList.hpp"
 #include "BSString.hpp"
 #include "ITypes.h"
+#include "Memory.h"
+#include "GameRTTI.h"
+#include "Menu.hpp"
 #include "NiColor.hpp"
 #include "NiNode.hpp"
 #include "NiPersistentSrcTextureRendererData.hpp"
@@ -17,6 +20,8 @@
 #include "NiTriShape.hpp"
 #include <cstdint>
 #include <limits>
+
+class TESNPC;
 
 // C
 //struct NiVector3
@@ -273,6 +278,137 @@ struct  Font
 };
 STATIC_ASSERT(sizeof(Font) == 0x54);
 STATIC_ASSERT(sizeof(Font::TextData) == 0x28);
+
+// PC TextEditMenu path. Xbox Release Beta uses XVirtualKeyboard for
+// PlayerNameEntryMenu, so the TextEditState/TextEditMenu layout is recovered
+// from the PC 1.4.0.525 executable. PlayerNameEntryMenu names are from the
+// Aug 22, 2010 Xbox Release Beta PDB.
+enum TextEditInputCode : SInt32
+{
+	kTextEditInput_Backspace = -2147483647 - 1,
+	kTextEditInput_Left = -2147483647,
+	kTextEditInput_Right = -2147483646,
+	kTextEditInput_Home = -2147483643,
+	kTextEditInput_End = -2147483642,
+	kTextEditInput_Delete = -2147483641,
+	kTextEditInput_Confirm = -2147483640,
+};
+
+struct TextEditState
+{
+	BSStringT<char> xText;        // 00: raw edit buffer
+	BSStringT<char> xDisplayText; // 08: buffer returned by BuildDisplayText
+	UInt32 iCaretByteOffset;      // 10
+	SInt32 iMaxPixelWidth;        // 14: -1 disables width validation
+	UInt32 iFontIndex;            // 18
+	UInt32 uiCaretBlinkTime;      // 1C
+	bool bCaretVisible;           // 20
+	bool bActive;                 // 21
+	bool bClearOnNextType;        // 22
+	UInt8 pad23;                  // 23
+
+	__forceinline TextEditState* Init()
+	{
+		return ThisStdCall<TextEditState*>(0x716980, this);
+	}
+
+	__forceinline void SetText(const char* apText)
+	{
+		ThisStdCall(0x716A70, this, apText);
+	}
+
+	__forceinline UInt32 SetMaxPixelWidth(UInt32 auiTileWidth)
+	{
+		return ThisStdCall<UInt32>(0x716AA0, this, auiTileWidth);
+	}
+
+	__forceinline bool IsActive() const
+	{
+		return ThisStdCall<bool>(0x716AE0, this);
+	}
+
+	// 0x716B00 is ECX=this, EDX=aiKey, stack=aiChar; it is not a normal
+	// thiscall wrapper.
+	__forceinline void InputUnk01(SInt32 aiKey, SInt32 aiChar)
+	{
+		reinterpret_cast<void(__fastcall*)(TextEditState*, SInt32, SInt32)>(0x716B00)(this, aiKey, aiChar);
+	}
+
+	__forceinline void SetActive(bool abActive)
+	{
+		ThisStdCall(0x717010, this, abActive);
+	}
+
+	__forceinline const char* BuildDisplayText()
+	{
+		return ThisStdCall<const char*>(0x7170A0, this);
+	}
+
+	__forceinline bool FitsMaxPixelWidth(const char* apText)
+	{
+		return ThisStdCall<bool>(0x717230, this, apText);
+	}
+
+	__forceinline void SetClearOnNextType(bool abClear)
+	{
+		ThisStdCall(0x7E6580, this, abClear);
+	}
+};
+STATIC_ASSERT(sizeof(TextEditState) == 0x24);
+
+class TextEditMenu : public Menu
+{
+public:
+	static inline auto bs_rtti = RTTI_TextEditMenu;
+
+	using ValidateTextCallback = bool(__cdecl*)(const char* apText);
+
+	Tile* pEditText;                      // 28
+	Tile* pOkButton;                      // 2C
+	Tile* pTitle;                         // 30
+	TextEditState xEditState;             // 34
+	ValidateTextCallback pValidateText;   // 58
+
+	__forceinline static TextEditMenu* GetCurrent()
+	{
+		return *reinterpret_cast<TextEditMenu**>(0x11DAEC4);
+	}
+
+	__forceinline static bool __cdecl Open(const char* apTitle, const char* apInitialText, ValidateTextCallback apValidateText)
+	{
+		return CdeclCall<bool>(0x7E6320, apTitle, apInitialText, apValidateText);
+	}
+
+	__forceinline bool HandleKeyboardInput(SInt32 aiInput)
+	{
+		return ThisStdCall<bool>(0x7E6620, this, aiInput);
+	}
+
+	__forceinline void Refresh()
+	{
+		ThisStdCall(0x7E6700, this);
+	}
+};
+STATIC_ASSERT(sizeof(TextEditMenu) == 0x5C);
+
+class PlayerNameEntryMenu : public Menu
+{
+public:
+	static inline auto bs_rtti = RTTI_PlayerNameEntryMenu;
+
+	TESNPC* pPlayerBase; // 28
+
+	__forceinline static bool __cdecl IsValidName(const char* apText)
+	{
+		return CdeclCall<bool>(0x7AB820, apText);
+	}
+
+	__forceinline void Finish(const char* apName)
+	{
+		ThisStdCall(0x7AB9A0, this, apName);
+	}
+};
+STATIC_ASSERT(sizeof(PlayerNameEntryMenu) == 0x2C);
 
 // From JG and tweaked with pdb
 // 164 (24)
