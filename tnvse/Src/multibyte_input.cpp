@@ -40,6 +40,7 @@ namespace fonthook
 		constexpr UInt32 kJipEnterAcceptsOkFlag = 2;
 		constexpr DWORD kDuplicateImeCharSuppressMs = 250;
 		constexpr DWORD kDuplicateAsciiSuppressMs = 100;
+		constexpr DWORD kNativeImeAsciiGuardMs = 1000;
 		constexpr UInt32 kMaxImeCandidatesToDisplay = 9;
 		constexpr UInt32 kMessage_OnFramePresent = NVSEMessagingInterface::kMessage_PostQueryPlugins + 1;
 		constexpr UInt32 kOverlayPadding = 10;
@@ -64,7 +65,7 @@ namespace fonthook
 		bool s_initialized = false;
 		bool s_hooksInstalled = false;
 		bool s_imeComposing = false;
-		TextEditMenu* s_activeTextEditMenu = nullptr;
+		bool s_compositionEchoChecked = false;
 		DWORD s_lastImeCommitTick = 0;
 		DWORD s_lastWndProcAsciiTick = 0;
 		UInt8 s_lastWndProcAsciiChar = 0;
@@ -104,8 +105,11 @@ namespace fonthook
 
 		ImeCandidateState s_imeCandidateState;
 		CandidateOverlayState s_candidateOverlay;
-		bool s_tsfInitialized = false;
 		bool s_tsfCandidateActive = false;
+		bool s_hidingSystemImeWindows = false;
+		bool s_gameImeContextDetached = false;
+		bool s_textInputSessionActive = false;
+		DWORD s_nativeImeAsciiGuardUntilTick = 0;
 
 		class JipTextInputAdapterEx
 		{
@@ -116,8 +120,18 @@ namespace fonthook
 		void UpdateCandidateOverlay();
 		void DrawCandidateOverlay();
 		void ReleaseCandidateOverlayTexture();
+		void HideCandidateOverlay();
 		void ClearImeCandidates();
 		TextEditMenu* GetAnyActiveTextInputMenu();
+		TextEditMenu* GetOverlayTextInputMenu();
+		void HideSystemImeWindows(HWND hwnd);
+		void SetTextInputSessionActive(bool active);
+		void SetGameImeEnabled(HWND hwnd, bool enable);
+		void RestoreDefaultGameImeContext(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);
+		void EnsureConfiguredImeOpen(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);
+		void UpdateGameImeAssociation();
+		bool IsConfiguredImeLayout(HWND hwnd, HKL expectedLayout = nullptr);
+		bool IsNativeImeAsciiGuardActive();
 		bool IsImeCompositionActive();
 		bool IsImeConsumingAscii();
 		std::string WideToCurrentCodePage(std::wstring_view value);
@@ -182,7 +196,7 @@ namespace fonthook
 
 			STDMETHODIMP BeginUIElement(DWORD dwUIElementId, BOOL* pbShow) override
 			{
-				if (pbShow && g_bMultibyteInputHideSystemCandidateWindow && GetAnyActiveTextInputMenu())
+				if (pbShow && g_bMultibyteInputHideSystemCandidateWindow && GetOverlayTextInputMenu())
 					*pbShow = FALSE;
 
 				ReadCandidateElement(dwUIElementId);
@@ -429,6 +443,14 @@ namespace fonthook
 			return (value >= 0x20 && value <= 0x7E) ? static_cast<char>(value) : '.';
 		}
 
+		bool AsciiEqualsIgnoreCase(UInt8 lhs, wchar_t rhs)
+		{
+			if (lhs > 0x7F || rhs > 0x7F)
+				return false;
+
+			return std::tolower(lhs) == std::tolower(static_cast<unsigned char>(rhs));
+		}
+
 		void DebugLogState(const char* source, const char* action, TextEditMenu* menu, SInt32 input)
 		{
 			if (!g_bMultibyteInputDebug)
@@ -535,25 +557,27 @@ namespace fonthook
 			return true;
 		}
 
-		TextEditMenu* GetActiveTextEditMenu()
+		TextEditMenu* GetCurrentTextEditMenuObject()
 		{
 			TextEditMenu* current = TextEditMenu::GetCurrent();
 			if (!current || *reinterpret_cast<SIZE_T*>(current) != kTextEditMenuVTable)
-			{
-				s_activeTextEditMenu = nullptr;
 				return nullptr;
-			}
+
+			return current;
+		}
+
+		TextEditMenu* GetActiveTextEditMenu()
+		{
+			TextEditMenu* current = GetCurrentTextEditMenuObject();
+			if (!current)
+				return nullptr;
 
 			if (*reinterpret_cast<SIZE_T*>(kTextEditMenuInputVTableEntry) != kTextEditMenuHandleKeyboardInput)
-			{
-				s_activeTextEditMenu = nullptr;
 				return nullptr;
-			}
 
 			if (!current->xEditState.IsActive())
 				return nullptr;
 
-			s_activeTextEditMenu = current;
 			return current;
 		}
 
@@ -597,11 +621,6 @@ namespace fonthook
 			return *reinterpret_cast<Tile**>(reinterpret_cast<UInt8*>(menu) + 0x4C);
 		}
 
-		UInt32& JipCursorBlink(TextEditMenu* menu)
-		{
-			return *reinterpret_cast<UInt32*>(reinterpret_cast<UInt8*>(menu) + 0x50);
-		}
-
 		UInt8& JipCursorVisible(TextEditMenu* menu)
 		{
 			return *reinterpret_cast<UInt8*>(reinterpret_cast<UInt8*>(menu) + 0x54);
@@ -617,7 +636,7 @@ namespace fonthook
 			return *reinterpret_cast<UInt8*>(reinterpret_cast<UInt8*>(menu) + 0x57);
 		}
 
-		bool LooksLikeJipTextInput(TextEditMenu* menu)
+		bool LooksLikeJipTextInputStorage(TextEditMenu* menu)
 		{
 			if (!menu || *reinterpret_cast<SIZE_T*>(menu) != kTextEditMenuVTable)
 				return false;
@@ -626,10 +645,7 @@ namespace fonthook
 			if (handler == kTextEditMenuHandleKeyboardInput)
 				return false;
 
-			if (!JipIsActiveFlag(menu))
-				return false;
-
-			if (JipCurrentText(menu).GetMaxLength() < 0x400 || JipDisplayedText(menu).GetMaxLength() < 0x400)
+			if (!JipCurrentText(menu).GetMaxLength() || !JipDisplayedText(menu).GetMaxLength())
 				return false;
 
 			const UInt16 maxLength = JipMaxLength(menu);
@@ -638,6 +654,17 @@ namespace fonthook
 
 			const auto inputRect = reinterpret_cast<SIZE_T>(JipInputRect(menu));
 			return inputRect > 0x10000;
+		}
+
+		bool LooksLikeJipTextInput(TextEditMenu* menu)
+		{
+			return LooksLikeJipTextInputStorage(menu) && JipIsActiveFlag(menu);
+		}
+
+		TextEditMenu* GetCurrentJipTextInputMenu()
+		{
+			TextEditMenu* current = TextEditMenu::GetCurrent();
+			return LooksLikeJipTextInputStorage(current) ? current : nullptr;
 		}
 
 		TextEditMenu* GetActiveJipTextInputMenu()
@@ -652,6 +679,18 @@ namespace fonthook
 				return menu;
 
 			return GetActiveJipTextInputMenu();
+		}
+
+		TextEditMenu* GetOverlayTextInputMenu()
+		{
+			if (TextEditMenu* menu = GetAnyActiveTextInputMenu())
+				return menu;
+
+			TextEditMenu* current = GetCurrentTextEditMenuObject();
+			if (!current)
+				return nullptr;
+
+			return current;
 		}
 
 		void ClearJipTextInputHookState()
@@ -939,9 +978,10 @@ namespace fonthook
 
 		bool __fastcall JipTextInputAdapterEx::Input(TextEditMenu* apMenu, void*, UInt32 aiInput)
 		{
-			if (!LooksLikeJipTextInput(apMenu))
+			if (!LooksLikeJipTextInputStorage(apMenu))
 				return CallJipOriginalInput(apMenu, aiInput);
 
+			const bool editActive = JipIsActiveFlag(apMenu) != 0;
 			if (aiInput >= 0x20 && aiInput <= 0x7E)
 			{
 				if (IsImeConsumingAscii())
@@ -949,6 +989,9 @@ namespace fonthook
 					DebugLogJipState("JipTextInputAdapter::Input", "suppress_composition_ascii", apMenu, aiInput);
 					return true;
 				}
+
+				if (!editActive)
+					return CallJipOriginalInput(apMenu, aiInput);
 
 				if (s_lastWndProcAsciiChar == static_cast<UInt8>(aiInput)
 					&& GetTickCount() - s_lastWndProcAsciiTick <= kDuplicateAsciiSuppressMs)
@@ -980,6 +1023,9 @@ namespace fonthook
 				DebugLogJipState("JipTextInputAdapter::Input", "suppress_composition_control", apMenu, aiInput);
 				return true;
 			}
+
+			if (!editActive)
+				return CallJipOriginalInput(apMenu, aiInput);
 
 			switch (aiInput)
 			{
@@ -1092,18 +1138,6 @@ namespace fonthook
 			return CommitCandidate(state, current, previous);
 		}
 
-		bool DeletePreviousChar(TextEditMenu* menu)
-		{
-			if (!menu)
-				return false;
-
-			if (!DeletePreviousChar(menu->xEditState))
-				return false;
-
-			menu->Refresh();
-			return true;
-		}
-
 		bool DeleteNextChar(TextEditState& state)
 		{
 			std::string current = GetText(state);
@@ -1116,32 +1150,10 @@ namespace fonthook
 			return CommitCandidate(state, current, caret);
 		}
 
-		bool DeleteNextChar(TextEditMenu* menu)
-		{
-			if (!menu)
-				return false;
-
-			if (!DeleteNextChar(menu->xEditState))
-				return false;
-
-			menu->Refresh();
-			return true;
-		}
-
 		bool MoveCaretPrevious(TextEditState& state)
 		{
 			const std::string current = GetText(state);
 			SetCaret(state, PrevCharBoundary(current, ClampToPrevBoundary(current, state.iCaretByteOffset)));
-			return true;
-		}
-
-		bool MoveCaretPrevious(TextEditMenu* menu)
-		{
-			if (!menu)
-				return false;
-
-			MoveCaretPrevious(menu->xEditState);
-			menu->Refresh();
 			return true;
 		}
 
@@ -1152,29 +1164,9 @@ namespace fonthook
 			return true;
 		}
 
-		bool MoveCaretNext(TextEditMenu* menu)
-		{
-			if (!menu)
-				return false;
-
-			MoveCaretNext(menu->xEditState);
-			menu->Refresh();
-			return true;
-		}
-
 		bool MoveCaretHome(TextEditState& state)
 		{
 			SetCaret(state, 0);
-			return true;
-		}
-
-		bool MoveCaretHome(TextEditMenu* menu)
-		{
-			if (!menu)
-				return false;
-
-			MoveCaretHome(menu->xEditState);
-			menu->Refresh();
 			return true;
 		}
 
@@ -1185,14 +1177,70 @@ namespace fonthook
 			return true;
 		}
 
-		bool MoveCaretEnd(TextEditMenu* menu)
+		bool RemovePreviousAsciiCompositionEcho(TextEditState& state, wchar_t compositionLead)
 		{
-			if (!menu)
+			std::string current = GetText(state);
+			size_t caret = ClampToPrevBoundary(current, state.iCaretByteOffset);
+			if (!caret)
 				return false;
 
-			MoveCaretEnd(menu->xEditState);
-			menu->Refresh();
-			return true;
+			const size_t previous = PrevCharBoundary(current, caret);
+			if (caret - previous != 1)
+				return false;
+
+			if (!AsciiEqualsIgnoreCase(static_cast<UInt8>(current[previous]), compositionLead))
+				return false;
+
+			current.erase(previous, 1);
+			return CommitCandidate(state, current, previous);
+		}
+
+		bool RemovePreviousJipAsciiCompositionEcho(TextEditMenu* menu, wchar_t compositionLead)
+		{
+			if (!LooksLikeJipTextInputStorage(menu))
+				return false;
+
+			std::string current = GetJipText(menu);
+			size_t caret = ClampToPrevBoundary(current, JipCursorIndex(menu));
+			if (!caret)
+				return false;
+
+			const size_t previous = PrevCharBoundary(current, caret);
+			if (caret - previous != 1)
+				return false;
+
+			if (!AsciiEqualsIgnoreCase(static_cast<UInt8>(current[previous]), compositionLead))
+				return false;
+
+			current.erase(previous, 1);
+			return CommitJipCandidate(menu, current, previous);
+		}
+
+		void TryRemoveCompositionEcho()
+		{
+			if (s_compositionEchoChecked || s_imeCandidateState.composition.empty())
+				return;
+
+			s_compositionEchoChecked = true;
+			if (!IsConfiguredImeLayout(s_window))
+				return;
+
+			const wchar_t compositionLead = s_imeCandidateState.composition.front();
+			if (TextEditMenu* menu = GetActiveTextEditMenu())
+			{
+				if (RemovePreviousAsciiCompositionEcho(menu->xEditState, compositionLead))
+				{
+					menu->Refresh();
+					DebugLogState("IMECompositionEcho", "remove_ascii_echo", menu, static_cast<SInt32>(compositionLead));
+				}
+				return;
+			}
+
+			if (TextEditMenu* jipMenu = GetCurrentJipTextInputMenu())
+			{
+				if (RemovePreviousJipAsciiCompositionEcho(jipMenu, compositionLead))
+					DebugLogJipState("IMECompositionEcho", "remove_ascii_echo", jipMenu, static_cast<UInt32>(compositionLead));
+			}
 		}
 
 		std::wstring GetImeCompositionString(HWND hwnd, DWORD index)
@@ -1241,11 +1289,24 @@ namespace fonthook
 
 		bool IsImeConsumingAscii()
 		{
+			if (!s_window || !IsConfiguredImeLayout(s_window))
+				return false;
+
 			if (IsImeCompositionActive())
 				return true;
 
-			if (!s_window)
-				return false;
+			if (IsNativeImeAsciiGuardActive())
+				return true;
+
+			if (s_textInputSessionActive && GetOverlayTextInputMenu())
+			{
+				if (!s_imeCandidateState.composition.empty() || !s_imeCandidateState.candidates.empty())
+					return true;
+
+				if (s_imeCandidateState.imeOpen
+					&& (s_imeCandidateState.conversionMode & IME_CMODE_NATIVE))
+					return true;
+			}
 
 			HIMC context = ImmGetContext(s_window);
 			if (!context)
@@ -1323,12 +1384,15 @@ namespace fonthook
 			return L"IME";
 		}
 
-		void RefreshImeStatus(HWND hwnd)
+		void RefreshImeStatus(HWND hwnd, HKL expectedLayout = nullptr)
 		{
 			s_imeCandidateState.imeName = GetCurrentImeName(hwnd);
 			s_imeCandidateState.imeOpen = false;
 			s_imeCandidateState.conversionMode = 0;
 			s_imeCandidateState.sentenceMode = 0;
+
+			if (!IsConfiguredImeLayout(hwnd, expectedLayout))
+				return;
 
 			HIMC context = hwnd ? ImmGetContext(hwnd) : nullptr;
 			if (!context)
@@ -1406,6 +1470,12 @@ namespace fonthook
 
 		void RefreshImeCandidates(HWND hwnd)
 		{
+			if (!IsConfiguredImeLayout(hwnd))
+			{
+				ClearImeCandidates();
+				return;
+			}
+
 			if (g_bMultibyteInputUseTSFCandidates
 				&& s_tsfCandidateActive
 				&& s_imeCandidateState.candidatesFromTsf
@@ -1419,7 +1489,279 @@ namespace fonthook
 		{
 			s_imeCandidateState.composing = false;
 			s_imeCandidateState.composition.clear();
+			s_compositionEchoChecked = false;
 			ClearImeCandidates();
+		}
+
+		void HideSystemImeWindows(HWND hwnd)
+		{
+			if (!g_bMultibyteInputHideSystemCandidateWindow || !hwnd)
+				return;
+
+			if (s_hidingSystemImeWindows)
+				return;
+
+			HIMC context = ImmGetContext(hwnd);
+			if (!context)
+				return;
+
+			s_hidingSystemImeWindows = true;
+
+			COMPOSITIONFORM compositionForm = {};
+			compositionForm.dwStyle = CFS_FORCE_POSITION;
+			compositionForm.ptCurrentPos.x = -32000;
+			compositionForm.ptCurrentPos.y = -32000;
+			ImmSetCompositionWindow(context, &compositionForm);
+
+			for (DWORD i = 0; i < 4; ++i)
+			{
+				CANDIDATEFORM candidateForm = {};
+				candidateForm.dwIndex = i;
+				candidateForm.dwStyle = CFS_CANDIDATEPOS;
+				candidateForm.ptCurrentPos.x = -32000;
+				candidateForm.ptCurrentPos.y = -32000;
+				ImmSetCandidateWindow(context, &candidateForm);
+			}
+
+			ImmReleaseContext(hwnd, context);
+			s_hidingSystemImeWindows = false;
+		}
+
+		void CancelGameImeComposition(HWND hwnd)
+		{
+			if (!hwnd)
+				return;
+
+			HIMC context = ImmGetContext(hwnd);
+			if (!context)
+				return;
+
+			ImmNotifyIME(context, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+			ImmReleaseContext(hwnd, context);
+		}
+
+		void EnsureConfiguredImeOpen(HWND hwnd, const char* reason, HKL expectedLayout)
+		{
+			if (!hwnd)
+				return;
+
+			if (!IsConfiguredImeLayout(hwnd, expectedLayout))
+			{
+				s_nativeImeAsciiGuardUntilTick = 0;
+				return;
+			}
+
+			HIMC context = ImmGetContext(hwnd);
+			if (!context)
+				return;
+
+			DWORD conversionMode = 0;
+			DWORD sentenceMode = 0;
+			const bool wasOpen = ImmGetOpenStatus(context) != FALSE;
+			const bool hasConversionStatus = ImmGetConversionStatus(
+				context,
+				&conversionMode,
+				&sentenceMode) != FALSE;
+
+			bool changed = false;
+			if (!wasOpen)
+			{
+				ImmSetOpenStatus(context, TRUE);
+				changed = true;
+			}
+
+			if (hasConversionStatus && !(conversionMode & IME_CMODE_NATIVE))
+			{
+				ImmSetConversionStatus(context, conversionMode | IME_CMODE_NATIVE, sentenceMode);
+				conversionMode |= IME_CMODE_NATIVE;
+				changed = true;
+			}
+
+			ImmReleaseContext(hwnd, context);
+
+			const bool guardNativeAscii = hasConversionStatus && (conversionMode & IME_CMODE_NATIVE);
+			if (guardNativeAscii)
+				s_nativeImeAsciiGuardUntilTick = GetTickCount() + kNativeImeAsciiGuardMs;
+
+			if (changed || guardNativeAscii)
+			{
+				RefreshImeStatus(hwnd, expectedLayout);
+				DebugLog(
+					"tnvse_multibyte_input: prepared configured IME reason=%s changed=%u guard=%u open=%u native=%u",
+					reason ? reason : "unknown",
+					changed ? 1 : 0,
+					guardNativeAscii ? 1 : 0,
+					s_imeCandidateState.imeOpen ? 1 : 0,
+					(s_imeCandidateState.conversionMode & IME_CMODE_NATIVE) ? 1 : 0);
+			}
+		}
+
+		void RestoreDefaultGameImeContext(HWND hwnd, const char* reason, HKL expectedLayout)
+		{
+			if (!hwnd)
+				return;
+
+			ImmAssociateContextEx(hwnd, nullptr, IACE_DEFAULT);
+			s_gameImeContextDetached = false;
+			if (!IsConfiguredImeLayout(hwnd, expectedLayout))
+			{
+				s_nativeImeAsciiGuardUntilTick = 0;
+				s_imeComposing = false;
+				ClearImePreviewState();
+			}
+			EnsureConfiguredImeOpen(hwnd, reason, expectedLayout);
+			RefreshImeStatus(hwnd, expectedLayout);
+			DebugLog(
+				"tnvse_multibyte_input: game IME default context enabled reason=%s open=%u native=%u",
+				reason ? reason : "unknown",
+				s_imeCandidateState.imeOpen ? 1 : 0,
+				(s_imeCandidateState.conversionMode & IME_CMODE_NATIVE) ? 1 : 0);
+		}
+
+		void SetGameImeEnabled(HWND hwnd, bool enable)
+		{
+			if (!hwnd)
+				return;
+
+			if (enable)
+			{
+				if (!s_gameImeContextDetached)
+					return;
+
+				RestoreDefaultGameImeContext(hwnd, "enable");
+				DebugLog("tnvse_multibyte_input: game IME context enabled");
+				return;
+			}
+
+			if (s_gameImeContextDetached)
+				return;
+
+			CancelGameImeComposition(hwnd);
+			s_imeComposing = false;
+			ClearImePreviewState();
+			HideCandidateOverlay();
+
+			if (!s_gameImeContextDetached)
+			{
+				ImmAssociateContext(hwnd, nullptr);
+				s_gameImeContextDetached = true;
+			}
+
+			DebugLog("tnvse_multibyte_input: game IME context disabled");
+		}
+
+		void SetTextInputSessionActive(bool active)
+		{
+			if (s_textInputSessionActive == active)
+				return;
+
+			s_textInputSessionActive = active;
+			if (s_window)
+			{
+				if (active)
+					RestoreDefaultGameImeContext(s_window, "session_start");
+				else
+					SetGameImeEnabled(s_window, false);
+			}
+
+			DebugLog(
+				"tnvse_multibyte_input: text input session %s",
+				active ? "started" : "ended");
+		}
+
+		void UpdateGameImeAssociation()
+		{
+			if (!s_window)
+				return;
+
+			SetTextInputSessionActive(GetCurrentTextEditMenuObject() != nullptr);
+		}
+
+		bool IsImeWindowMessage(UINT msg)
+		{
+			switch (msg)
+			{
+			case WM_IME_STARTCOMPOSITION:
+			case WM_IME_COMPOSITION:
+			case WM_IME_ENDCOMPOSITION:
+			case WM_IME_NOTIFY:
+			case WM_IME_SETCONTEXT:
+			case WM_IME_CHAR:
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		bool IsVirtualKeyDown(int vk)
+		{
+			return (GetKeyState(vk) & 0x8000) != 0 || (GetAsyncKeyState(vk) & 0x8000) != 0;
+		}
+
+		bool IsWinSpaceInputLanguageHotkey(UINT msg, WPARAM wParam)
+		{
+			if (msg != WM_KEYDOWN && msg != WM_SYSKEYDOWN)
+				return false;
+
+			if (wParam != VK_SPACE)
+				return false;
+
+			return IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
+		}
+
+		HKL GetGameKeyboardLayout(HWND hwnd)
+		{
+			DWORD threadId = hwnd ? GetWindowThreadProcessId(hwnd, nullptr) : GetCurrentThreadId();
+			return GetKeyboardLayout(threadId);
+		}
+
+		bool LayoutMatchesCurrentEncoding(HKL layout)
+		{
+			if (!layout || !g_uiEncoding)
+				return false;
+
+			const LANGID language = LOWORD(reinterpret_cast<ULONG_PTR>(layout));
+			switch (g_uiEncoding)
+			{
+			case 1:
+			case 2:
+				return PRIMARYLANGID(language) == LANG_CHINESE;
+			case 3:
+				return PRIMARYLANGID(language) == LANG_JAPANESE;
+			case 4:
+				return PRIMARYLANGID(language) == LANG_KOREAN;
+			default:
+				return false;
+			}
+		}
+
+		bool IsConfiguredImeLayout(HWND hwnd, HKL expectedLayout)
+		{
+			HKL layout = expectedLayout ? expectedLayout : GetGameKeyboardLayout(hwnd);
+			return LayoutMatchesCurrentEncoding(layout);
+		}
+
+		bool IsNativeImeAsciiGuardActive()
+		{
+			return s_window
+				&& s_textInputSessionActive
+				&& IsConfiguredImeLayout(s_window)
+				&& static_cast<SInt32>(s_nativeImeAsciiGuardUntilTick - GetTickCount()) > 0;
+		}
+
+		bool IsFocusRestoreMessage(UINT msg, WPARAM wParam)
+		{
+			switch (msg)
+			{
+			case WM_SETFOCUS:
+				return true;
+			case WM_ACTIVATEAPP:
+				return wParam != FALSE;
+			case WM_ACTIVATE:
+				return LOWORD(wParam) != WA_INACTIVE;
+			default:
+				return false;
+			}
 		}
 
 		const wchar_t* GetNativeModeLabel()
@@ -1456,7 +1798,7 @@ namespace fonthook
 		std::vector<CandidateOverlayLine> BuildCandidateOverlayLines()
 		{
 			std::vector<CandidateOverlayLine> lines;
-			if (!g_bMultibyteInputCompositionPreview || !GetAnyActiveTextInputMenu() || !s_imeCandidateState.imeOpen)
+			if (!g_bMultibyteInputCompositionPreview || !GetOverlayTextInputMenu() || !s_imeCandidateState.imeOpen)
 				return lines;
 
 			lines.push_back({ BuildImeStatusLineWide(), false });
@@ -1522,7 +1864,7 @@ namespace fonthook
 			s_candidateOverlay.textureHeight = 0;
 		}
 
-		void HideCandidateOverlay(bool)
+		void HideCandidateOverlay()
 		{
 			s_candidateOverlay.visible = false;
 			s_candidateOverlay.dirty = true;
@@ -1533,13 +1875,13 @@ namespace fonthook
 		{
 			if (!g_bMultibyteInputCompositionPreview)
 			{
-				HideCandidateOverlay(false);
+				HideCandidateOverlay();
 				return;
 			}
 
-			if (!GetAnyActiveTextInputMenu() || !s_imeCandidateState.imeOpen)
+			if (!GetOverlayTextInputMenu() || !s_imeCandidateState.imeOpen)
 			{
-				HideCandidateOverlay(false);
+				HideCandidateOverlay();
 				return;
 			}
 
@@ -1722,7 +2064,7 @@ namespace fonthook
 			std::vector<CandidateOverlayLine> lines = BuildCandidateOverlayLines();
 			if (lines.empty())
 			{
-				HideCandidateOverlay(false);
+				HideCandidateOverlay();
 				return;
 			}
 
@@ -1846,6 +2188,8 @@ namespace fonthook
 			TextEditMenu* menu = GetActiveTextEditMenu();
 			TextEditMenu* jipMenu = menu ? nullptr : GetActiveJipTextInputMenu();
 			if (!menu && !jipMenu)
+				jipMenu = GetCurrentJipTextInputMenu();
+			if (!menu && !jipMenu)
 			{
 				DebugLogState("WndProc.WM_IME_COMPOSITION", "result_no_active_target", nullptr, static_cast<SInt32>(lParam));
 				return false;
@@ -1921,6 +2265,12 @@ namespace fonthook
 			TextEditMenu* jipMenu = menu ? nullptr : GetActiveJipTextInputMenu();
 			if (!menu && !jipMenu)
 			{
+				if (wParam >= 0x20 && wParam <= 0x7E && GetOverlayTextInputMenu() && IsImeConsumingAscii())
+				{
+					DebugLogState("WndProc.WM_CHAR", "suppress_overlay_composition_ascii", GetOverlayTextInputMenu(), static_cast<SInt32>(wParam));
+					return true;
+				}
+
 				DebugLogState("WndProc.WM_CHAR", "pass_no_active_target", nullptr, static_cast<SInt32>(wParam));
 				return false;
 			}
@@ -1999,27 +2349,88 @@ namespace fonthook
 			if (s_hooksInstalled)
 			{
 				TryInstallJipTextInputHook();
-
-				if (msg == WM_IME_STARTCOMPOSITION && GetAnyActiveTextInputMenu())
+				TextEditMenu* inputTarget = GetOverlayTextInputMenu();
+				if (inputTarget)
 				{
+					SetTextInputSessionActive(true);
+				}
+				else if (s_textInputSessionActive && GetCurrentTextEditMenuObject() == nullptr)
+				{
+					SetTextInputSessionActive(false);
+				}
+
+				if (msg == WM_INPUTLANGCHANGEREQUEST && s_textInputSessionActive)
+				{
+					ImmAssociateContextEx(hwnd, nullptr, IACE_DEFAULT);
+					s_gameImeContextDetached = false;
+					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_INPUTLANGCHANGEREQUEST action=def_window_proc");
+					return DefWindowProcA(hwnd, msg, wParam, lParam);
+				}
+
+				if (msg == WM_INPUTLANGCHANGE && s_textInputSessionActive)
+				{
+					HKL newLayout = reinterpret_cast<HKL>(lParam);
+					RestoreDefaultGameImeContext(hwnd, "inputlangchange", newLayout);
+					ClearImeCandidates();
+					UpdateCandidateOverlay();
+					DebugLog(
+						"tnvse_multibyte_input_event: source=WndProc.WM_INPUTLANGCHANGE action=refresh_ime_name layout=0x%08X configured=%u",
+						static_cast<UInt32>(reinterpret_cast<ULONG_PTR>(newLayout)),
+						LayoutMatchesCurrentEncoding(newLayout) ? 1 : 0);
+					return 0;
+				}
+
+				if (s_textInputSessionActive && IsWinSpaceInputLanguageHotkey(msg, wParam))
+				{
+					RestoreDefaultGameImeContext(hwnd, "winspace_before");
+					HKL previousLayout = ActivateKeyboardLayout(reinterpret_cast<HKL>(HKL_NEXT), KLF_SETFORPROCESS);
+					HKL currentLayout = GetGameKeyboardLayout(hwnd);
+					RestoreDefaultGameImeContext(hwnd, "winspace_after", currentLayout);
+					ClearImeCandidates();
+					UpdateCandidateOverlay();
+					DebugLog(
+						"tnvse_multibyte_input_event: source=WndProc action=winspace_next_layout previous=0x%08X current=0x%08X",
+						static_cast<UInt32>(reinterpret_cast<ULONG_PTR>(previousLayout)),
+						static_cast<UInt32>(reinterpret_cast<ULONG_PTR>(currentLayout)));
+					return 0;
+				}
+
+				if (s_textInputSessionActive && IsFocusRestoreMessage(msg, wParam))
+				{
+					RestoreDefaultGameImeContext(hwnd, "focus_restore");
+					ClearImeCandidates();
+					UpdateCandidateOverlay();
+					DebugLog("tnvse_multibyte_input_event: source=WndProc action=focus_restore_ime msg=0x%04X", static_cast<UInt32>(msg));
+				}
+
+				if (inputTarget)
+				{
+					SetGameImeEnabled(hwnd, true);
+				}
+				else if (IsImeWindowMessage(msg))
+				{
+					SetGameImeEnabled(hwnd, false);
+					DebugLog("tnvse_multibyte_input_event: source=WndProc action=suppress_ime_without_target msg=0x%04X", static_cast<UInt32>(msg));
+					if (msg == WM_IME_SETCONTEXT)
+						return DefWindowProcA(hwnd, WM_IME_SETCONTEXT, wParam, 0);
+					return 0;
+				}
+
+				if (msg == WM_IME_STARTCOMPOSITION && inputTarget)
+				{
+					HideSystemImeWindows(hwnd);
 					s_imeComposing = true;
+					s_compositionEchoChecked = false;
 					s_imeCandidateState.composing = true;
 					RefreshImeStatus(hwnd);
 					RefreshImeComposition(hwnd);
+					TryRemoveCompositionEcho();
 					RefreshImeCandidates(hwnd);
 					UpdateCandidateOverlay();
 					DebugLogState("WndProc.WM_IME_STARTCOMPOSITION", "composition_start", GetAnyActiveTextInputMenu(), 0);
 				}
 
-				if (msg == WM_INPUTLANGCHANGE && GetAnyActiveTextInputMenu())
-				{
-					RefreshImeStatus(hwnd);
-					ClearImeCandidates();
-					UpdateCandidateOverlay();
-					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_INPUTLANGCHANGE action=refresh_ime_name");
-				}
-
-				if (msg == WM_IME_NOTIFY && GetAnyActiveTextInputMenu())
+				if (msg == WM_IME_NOTIFY && inputTarget)
 				{
 					RefreshImeStatus(hwnd);
 					switch (wParam)
@@ -2056,13 +2467,17 @@ namespace fonthook
 				if (msg == WM_IME_COMPOSITION)
 				{
 					TextEditMenu* activeTarget = GetAnyActiveTextInputMenu();
+					TextEditMenu* overlayTarget = inputTarget;
+					if (overlayTarget)
+						HideSystemImeWindows(hwnd);
 					DebugLog(
-						"tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION lParam=0x%08X hasResult=%u hasComp=%u composingBefore=%u active=0x%08X",
+						"tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION lParam=0x%08X hasResult=%u hasComp=%u composingBefore=%u active=0x%08X overlay=0x%08X",
 						static_cast<UInt32>(lParam),
 						(lParam & GCS_RESULTSTR) ? 1 : 0,
 						(lParam & GCS_COMPSTR) ? 1 : 0,
 						s_imeComposing ? 1 : 0,
-						reinterpret_cast<UInt32>(activeTarget));
+						reinterpret_cast<UInt32>(activeTarget),
+						reinterpret_cast<UInt32>(overlayTarget));
 
 					if (HandleImeResult(hwnd, lParam))
 					{
@@ -2071,16 +2486,28 @@ namespace fonthook
 						return 0;
 					}
 
-					if (GetAnyActiveTextInputMenu())
+					if (overlayTarget)
 					{
-						s_imeComposing = true;
-						s_imeCandidateState.composing = true;
+						if (lParam & GCS_RESULTSTR)
+						{
+							s_imeComposing = false;
+							ClearImePreviewState();
+						}
+						else
+						{
+							s_imeComposing = true;
+							s_imeCandidateState.composing = true;
+						}
 						RefreshImeStatus(hwnd);
 						if (lParam & GCS_COMPSTR)
+						{
 							RefreshImeComposition(hwnd);
+							TryRemoveCompositionEcho();
+						}
 						RefreshImeCandidates(hwnd);
 						UpdateCandidateOverlay();
 						DebugLogState("WndProc.WM_IME_COMPOSITION", "composition_continue", GetAnyActiveTextInputMenu(), static_cast<SInt32>(lParam));
+						return 0;
 					}
 				}
 
@@ -2091,17 +2518,22 @@ namespace fonthook
 					RefreshImeStatus(hwnd);
 					UpdateCandidateOverlay();
 					DebugLogState("WndProc.WM_IME_ENDCOMPOSITION", "composition_end", GetAnyActiveTextInputMenu(), 0);
+					if (inputTarget)
+						return 0;
 				}
 
 				if (msg == WM_IME_SETCONTEXT
 					&& g_bMultibyteInputHideSystemCandidateWindow
-					&& GetAnyActiveTextInputMenu())
+					&& inputTarget)
 				{
-					const LPARAM hiddenImeUi = lParam & ~(
-						ISC_SHOWUICOMPOSITIONWINDOW
-						| ISC_SHOWUICANDIDATEWINDOW
-						| ISC_SHOWUIGUIDELINE);
-					return CallWindowProcA(s_originalWndProc, hwnd, msg, wParam, hiddenImeUi);
+					HideSystemImeWindows(hwnd);
+					return DefWindowProcA(hwnd, WM_IME_SETCONTEXT, wParam, 0);
+				}
+
+				if (msg == WM_IME_CHAR && inputTarget)
+				{
+					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_CHAR action=suppress_ime_char input=0x%08X", static_cast<UInt32>(wParam));
+					return 0;
 				}
 
 				if (msg == WM_CHAR && HandleCharFallback(wParam))
@@ -2111,6 +2543,7 @@ namespace fonthook
 			if (msg == WM_NCDESTROY && hwnd == s_window && s_originalWndProc)
 			{
 				WNDPROC original = s_originalWndProc;
+				SetGameImeEnabled(hwnd, true);
 				SetWindowLongPtrA(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(original));
 				s_originalWndProc = nullptr;
 				s_window = nullptr;
@@ -2182,16 +2615,17 @@ namespace fonthook
 
 			s_window = hwnd;
 			s_originalWndProc = reinterpret_cast<WNDPROC>(original);
+			SetGameImeEnabled(hwnd, false);
 			DebugLog("tnvse_multibyte_input: subclassed hwnd=0x%08X", reinterpret_cast<UInt32>(hwnd));
 			return true;
 		}
 
 		void ClearInputState()
 		{
-			s_activeTextEditMenu = nullptr;
+			s_textInputSessionActive = false;
 			s_imeComposing = false;
 			ClearImePreviewState();
-			HideCandidateOverlay(false);
+			HideCandidateOverlay();
 			ReleaseCandidateOverlayTexture();
 			s_suppressedImeCharCount = 0;
 			s_lastImeCommitTick = 0;
@@ -2207,6 +2641,7 @@ namespace fonthook
 
 			if (s_window && s_originalWndProc)
 			{
+				SetGameImeEnabled(s_window, true);
 				SetWindowLongPtrA(s_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(s_originalWndProc));
 			}
 
@@ -2216,7 +2651,6 @@ namespace fonthook
 			{
 				s_tsfCandidateSink->Shutdown();
 				s_tsfCandidateSink.reset();
-				s_tsfInitialized = false;
 			}
 			ClearInputState();
 		}
@@ -2232,13 +2666,14 @@ namespace fonthook
 				validateText = &ValidatePlayerName;
 
 			const bool opened = TextEditMenu::Open(apTitle, apInitialText, validateText);
-			s_activeTextEditMenu = opened ? TextEditMenu::GetCurrent() : nullptr;
+			if (opened && s_window)
+				SetTextInputSessionActive(true);
 			DebugLog(
 				"tnvse_multibyte_input: TextEditMenu::Open opened=%u title=\"%s\" initialLen=%u menu=0x%08X",
 				opened ? 1 : 0,
 				apTitle ? apTitle : "",
 				apInitialText ? static_cast<UInt32>(std::strlen(apInitialText)) : 0,
-				reinterpret_cast<UInt32>(s_activeTextEditMenu));
+				reinterpret_cast<UInt32>(opened ? TextEditMenu::GetCurrent() : nullptr));
 			return opened;
 		}
 	};
@@ -2246,7 +2681,7 @@ namespace fonthook
 	class TextEditStateEx : public TextEditState
 	{
 	public:
-		static void __fastcall Input(TextEditState* apState, SInt32 aiInput, SInt32 aiChar)
+		static void __fastcall Input(TextEditState* apState, void*, SInt32 aiInput, SInt32 aiChar)
 		{
 			if (!apState || !apState->IsActive())
 				return;
@@ -2378,8 +2813,8 @@ namespace fonthook
 			if (g_bMultibyteInputUseTSFCandidates)
 			{
 				s_tsfCandidateSink = std::make_unique<TsfCandidateSink>();
-				s_tsfInitialized = s_tsfCandidateSink->Initialize();
-				if (!s_tsfInitialized)
+				const bool tsfInitialized = s_tsfCandidateSink->Initialize();
+				if (!tsfInitialized)
 				{
 					s_tsfCandidateSink.reset();
 					gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink unavailable; using IMM32 fallback");
@@ -2411,6 +2846,9 @@ namespace fonthook
 
 			if (s_hooksInstalled)
 				TryInstallJipTextInputHook();
+
+			if (s_hooksInstalled && s_window)
+				UpdateGameImeAssociation();
 
 			if (s_hooksInstalled && s_window && g_bMultibyteInputCompositionPreview)
 			{

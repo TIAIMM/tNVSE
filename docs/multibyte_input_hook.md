@@ -27,7 +27,7 @@ tNVSE 已经具备的相关能力：
 - 存档名 sanitizer call site `0x8518BB` 已经能在实际 `.fos` 文件名被清洗前捕获原始候选名。
 - 存档显示名映射已经改为 `Data\NVSE\plugins\tnvse\save_display_names.dat` 单文件 sidecar，不修改 `.fos`、`.nvse` 或 `SaveGameData::pName`。
 
-首版已完成的输入层能力：
+当前已完成的输入层能力：
 
 - Windows IME `GCS_RESULTSTR` 提交串进入当前 `uiEncoding` 对应的多字节 edit buffer。
 - 原版 `TextEditMenu` 通过 `0x7E6620 -> 0x716B00` 的内部 call site `0x7E6685` 接管编辑核心，避免改写全局 vtable，保留 Confirm 分支和 Stewie Tweaks 在 `0x7E6627` 的补丁。
@@ -75,7 +75,7 @@ F4SE 项目的主要路径是“Windows IME/TSF + FO4 Unicode char event 注入�
 
 - tNVSE 的真实写入仍应只采用 `WM_IME_COMPOSITION + GCS_RESULTSTR` 的 commit-only 路径。
 - `GCS_COMPSTR`、IMM32 candidate list 和 TSF/Cicero 只作为 composition preview / candidate window 增强，不应写入真实 edit buffer。
-- 必须有 text-input gate：只有当前 active target 是已知可编辑控件时才消费 IME 消息。
+- 必须有 text-input gate：composition/候选预览只在当前输入菜单对象存在时消费；真实提交只写入已确认的原版 active `TextEditMenu`，或字段布局仍有效的 JIP `ShowTextInputMenu`。
 - `WM_CHAR` 只能作为非 IME fallback，并且必须避免和 `GCS_RESULTSTR` 双插入。
 
 不能照搬的部分：
@@ -377,7 +377,7 @@ tNVSE 当前在 `0x8518BB` 替换 sanitizer call site：先捕获原始候选名
 
 多字节字符输入不应改动这些已稳定路径。它只需要让玩家名等上游可编辑文本能以当前 codepage 多字节形式进入游戏；保存名 sidecar 继续在 `0x8518BB` 捕获下游格式化结果。
 
-## 当前首版实现
+## 当前实现
 
 ### 1. 新增输入模块
 
@@ -423,13 +423,14 @@ SetWindowLongPtrA(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(MultibyteInputW
 
 不要在 `DllMain` 中安装。所有未消费消息必须转发给原 WndProc。
 
-首版实际处理的消息：
+当前实际处理的消息：
 
-- `WM_IME_COMPOSITION`：读取 `GCS_COMPSTR` 更新游戏内预览；只有 `GCS_RESULTSTR` 提交成功后才写入 active `TextEditMenu`。
+- `WM_IME_COMPOSITION`：读取 `GCS_COMPSTR` 更新游戏内预览；有 overlay target 时该消息由 tNVSE 消费，不再落回系统默认 composition UI；只有 `GCS_RESULTSTR` 提交成功后才写入真实 edit buffer。
 - `WM_IME_STARTCOMPOSITION` / `WM_IME_ENDCOMPOSITION`：维护 composition 状态。
-- `WM_IME_NOTIFY`：在 `IMN_OPENCANDIDATE` / `IMN_CHANGECANDIDATE` / `IMN_SETCANDIDATEPOS` 时通过 `ImmGetCandidateListW` 镜像旧式候选列表；现代 IME 的候选优先由 TSF `ITfCandidateListUIElement` sink 更新；`IMN_CLOSECANDIDATE` 清空 IMM32 fallback 候选。
+- `WM_IME_NOTIFY`：在 `IMN_OPENCANDIDATE` / `IMN_CHANGECANDIDATE` / `IMN_SETCANDIDATEPOS` 时只通过 `ImmGetCandidateListW` 镜像旧式候选列表；现代 IME 的候选优先由 TSF `ITfCandidateListUIElement` sink 更新；`IMN_CLOSECANDIDATE` 清空 IMM32 fallback 候选。这里不能调用 `ImmSetCandidateWindow`，否则会再次触发 `IMN_SETCANDIDATEPOS` 并形成 notify 循环。
+- `WM_INPUTLANGCHANGEREQUEST`：输入菜单会话中直接交给 `DefWindowProc`，让 `Win+Space` / 输入法热键真正切换当前窗口的输入语言。
 - `WM_INPUTLANGCHANGE`：刷新当前键盘布局 / IME 名称。
-- `WM_IME_SETCONTEXT`：当 `bMultibyteInputHideSystemCandidateWindow=1` 且存在 active target 时，清除系统 composition/candidate UI flags，避免系统候选窗和游戏内预览同时显示。
+- `WM_IME_SETCONTEXT`：当存在输入菜单对象时，清除系统 composition/candidate UI flags，避免系统候选窗和游戏内预览同时显示；没有输入菜单对象时直接禁用窗口 IME context 并消费 IME 消息。
 - `WM_CHAR`：未组字时在 active `TextEditMenu` 下接管可打印 ASCII 和非 ASCII fallback；组字期间吞掉拼音等 ASCII `WM_CHAR`，避免预编辑串写入真实 buffer。
 - `WM_NCDESTROY`：恢复原 WndProc。
 - `WM_PASTE`：后续可选，必须走同一套 DBCS 边界、宽度限制和 byte 上限检查。
@@ -454,9 +455,16 @@ UTF-16 -> WideCharToMultiByte(g_usingWinEncoding)
 
 消息消费规则：
 
-- 只有 `GCS_RESULTSTR` 成功转换且成功插入 active target 时才返回已处理。
+- 正常游玩、没有 `TextEditMenu` / JIP `ShowTextInputMenu` 当前对象时，tNVSE 取消当前 composition，并用 `ImmAssociateContext(hwnd, nullptr)` 解绑游戏窗口的 HIMC。此时收到 `WM_IME_STARTCOMPOSITION` / `WM_IME_COMPOSITION` / `WM_IME_NOTIFY` / `WM_IME_CHAR` 等消息都会直接消费，不转发给原 WndProc。
+- 进入输入菜单时启动 input session latch，并用 `ImmAssociateContextEx(hwnd, nullptr, IACE_DEFAULT)` 重新绑定当前 HKL 的默认 IME context；不要恢复之前解绑时返回的旧 `HIMC`，否则 Alt-Tab 或输入法切换后可能继续使用旧输入法状态。输入会话开始时必须显式重建一次 context，即使当前窗口看起来尚未解绑，也要刷新 open/native 状态和首键 guard。
+- 输入菜单会话中收到 `WM_INPUTLANGCHANGEREQUEST` 时必须交给 `DefWindowProc`，否则 `Win+Space` / 输入法热键可能不会真正切换当前窗口的输入语言；收到 `WM_INPUTLANGCHANGE` 后用该消息携带的新 `HKL` 重建默认 IME context，并刷新 overlay 的输入法名称和模式。这个新 `HKL` 只用于本次重建，不能保存为长期 fallback。
+- 部分全屏/插件组合下 `Win+Space` 可能不会向游戏窗口投递 `WM_INPUTLANGCHANGEREQUEST`。当前实现额外在输入菜单会话中捕获 `VK_LWIN/VK_RWIN + VK_SPACE`，调用 `ActivateKeyboardLayout(HKL_NEXT, KLF_SETFORPROCESS)`，随后立即读取当前窗口线程 `HKL` 并重建默认 IME context，作为窗口消息缺失时的兜底。
+- 输入菜单会话中收到 `WM_SETFOCUS`、`WM_ACTIVATEAPP`、`WM_ACTIVATE` 回到激活状态时，也重建默认 IME context。这样 Alt-Tab 到外部程序切换输入法再回游戏时，不会继续沿用离焦前的 stale context。
+- 某些 IME 在 Alt-Tab、输入法切换或刚打开输入菜单后，会先让第一个拼音字母经过游戏输入路径，然后才投递 `WM_IME_STARTCOMPOSITION` / `GCS_COMPSTR`。当前实现对与 `uiEncoding` 匹配的输入语言 layout 调用 `ImmSetOpenStatus(TRUE)`，必要时补 `IME_CMODE_NATIVE`；只要最终状态是 open/native，就刷新约 1 秒的 ASCII guard，直到 composition 正常接管。若首字母仍已经抢先进入真实 buffer，则在本次 composition 的第一条非空 `GCS_COMPSTR` 到达时，只检查一次 caret 前一字节：它必须是单字节 ASCII 且与 composition 首字符一致，才会被删除。这里按 `LANG_CHINESE` / `LANG_JAPANESE` / `LANG_KOREAN` 与 `uiEncoding` 匹配判定，不依赖 `ImmIsIME()`，因为 Windows 10/11 的 TSF 输入法不一定稳定通过该 API 表现为 legacy IME。
+- `IsConfiguredImeLayout` 只能按当前窗口线程 `HKL`，或 `WM_INPUTLANGCHANGE` 本次传入的 `HKL`，判断是否匹配当前 `uiEncoding`。不能用“最近一次中文/日文/韩文 HKL”兜底；否则切到系统英文 `00000409` 后仍会继承中文 IME 的 open/native 状态，导致 overlay 显示 `00000409 ON 中文 半角`，并把普通 ASCII 当作拼音吞掉。
+- 有 overlay target 时，`WM_IME_COMPOSITION` 总是返回已处理，避免系统默认预编辑小窗绘制；只有 `GCS_RESULTSTR` 成功转换且目标仍可写时才修改真实文本。
 - `GCS_COMPSTR` 不写 edit buffer；`bMultibyteInputCompositionPreview=1` 时只写入游戏内预览。
-- `WM_CHAR` 在 active `TextEditMenu` 下直接处理可打印 ASCII；若游戏输入管线随后又发出同一 ASCII input，`0x7E6620` 内部输入 hook 会用短期 suppress 防止双插入。
+- `WM_CHAR` 在 active `TextEditMenu` 下直接处理可打印 ASCII；若游戏输入管线随后又发出同一 ASCII input，`0x7E6620` 内部输入 hook 会用短期 suppress 防止双插入。`WM_IME_CHAR` 在输入菜单存在时直接消费，避免 IME result 又走一次系统字符路径。
 - IME composition active，或 IMM context 处于 open/native 且存在预编辑串时，ASCII `WM_CHAR` 视为拼音/假名等预编辑输入并直接消费，不进入真实 edit buffer。
 - 游戏原本 `TextEditMenu::HandleKeyboardInput` 路径也必须应用同一规则；正式版日志确认拼音字母可能先从该 vtable 路径到达，而不是只从 `WM_CHAR` 到达。
 - `TextEditMenu::HandleKeyboardInput` 在 composition active 时还应吞掉 Backspace/Delete/Left/Right/Home/End/Confirm 等控制输入，避免用户编辑 IME 预编辑串时误删或提交游戏真实文本。
@@ -486,7 +494,7 @@ std::vector<std::wstring> candidates;
 - `composition` 来自 `ImmGetCompositionStringW(..., GCS_COMPSTR, ...)`，它只代表拼音/假名等预编辑串，不是候选汉字列表。
 - `candidates` 优先来自 TSF `ITfCandidateListUIElement`；TSF 初始化失败、关闭或未返回候选时，再用 `ImmGetCandidateListW` 作为 fallback，最多显示 9 项。
 - `imeName` 优先通过 TSF active profile description；失败时退回当前 `HKL` 的 `ImmGetDescriptionW`；再失败退回 `GetKeyboardLayoutNameW` / `IME`。
-- `imeOpen/conversionMode/sentenceMode` 来自 `ImmGetOpenStatus` 和 `ImmGetConversionStatus`。
+- `imeOpen/conversionMode/sentenceMode` 来自 `ImmGetOpenStatus` 和 `ImmGetConversionStatus`，但只有当前 `HKL` 匹配 `uiEncoding` 时才采信；系统英文等不匹配布局即使旧 HIMC 仍报告 open/native，也按 `OFF` 处理。
 - 独立 overlay 直接绘制 UTF-16 预览文本；只有 `GCS_RESULTSTR` 的真实提交结果才用 `WideCharToMultiByte(g_usingWinEncoding, WC_NO_BEST_FIT_CHARS, ...)` 转成当前 UI codepage 写入 edit buffer。
 
 当前预览实现不复用任何菜单 tile：
@@ -494,12 +502,15 @@ std::vector<std::wstring> candidates;
 - `bMultibyteInputCompositionPreview=1` 时，tNVSE 在 `kMessage_OnFramePresent` 中从 `NiDX9Renderer::GetSingleton()->GetD3DDevice()` 取得 DX9 device。
 - GDI `DrawTextW` 先把输入法名称、语言模式、全角/半角、composition 和候选列表画到 32-bit DIB，再上传为 `D3DFMT_A8R8G8B8` texture。
 - DX9 屏幕空间 quad 在帧提交前绘制该 texture；不依赖 D3DXFont、菜单 XML、`pTitle`、`pEditText` 或 JIP XML 字段。
-- `WM_IME_SETCONTEXT` 清 IMM32 composition/candidate UI flags；TSF `ITfUIElementSink::BeginUIElement` 在同一配置开启时设置 `*pbShow = FALSE`，隐藏现代 IME 自带候选 UI。
-- active target 丢失、IME 关闭或预览配置关闭时只隐藏独立 overlay，不写回或恢复任何菜单 tile。
+- 正常游玩期没有输入菜单对象时，tNVSE 不只是隐藏系统 IME UI，而是解绑游戏窗口 IME context；这会阻止系统在左上角绘制 composition 小窗，也避免拼音预编辑串干扰快捷键/普通游玩。输入菜单对象存在时用 input session latch 保持 IME context enabled，并在输入语言变化后重建默认 context，因此 `Win+Space` / Alt-Tab 后切换输入法不会继续沿用旧 `HIMC`。
+- `WM_IME_SETCONTEXT` 在输入菜单对象存在时不再转交原 WndProc，而是调用 `DefWindowProc(..., lParam=0)`；同时在 composition/setcontext 入口用 `ImmSetCompositionWindow(CFS_FORCE_POSITION)` 和 `ImmSetCandidateWindow(CFS_CANDIDATEPOS)` 把 IMM32 composition/candidate window 移到屏幕外，避免微软拼音等 IME 在左上角绘制系统预编辑小窗。`WM_IME_COMPOSITION` 有 overlay target 时也必须 `return 0`，否则系统默认窗口仍可能绘制预编辑框。
+- TSF `ITfUIElementSink::BeginUIElement` 在同一配置开启时设置 `*pbShow = FALSE`，隐藏现代 IME 自带候选 UI。
+- overlay 的显示 gate 只要求当前 `TextEditMenu` 对象仍存在并且 IME 处于 open 状态，不要求 `TextEditState::IsActive()` 为 true。这样用户把编辑文本删空、validator 暂时禁用 OK 按钮、或原版 edit state 短暂切换状态时，composition/candidate overlay 不会被误隐藏。
+- 当前菜单对象丢失、IME 关闭或预览配置关闭时只隐藏独立 overlay，不写回或恢复任何菜单 tile。
 
 ### 3. Active target 追踪
 
-IME result 只有在已知可编辑目标 active 时才允许消费。当前实现覆盖通用 active 原版 `TextEditMenu`：只要 `dword_11DAEC4` 指向 `TextEditMenu` vtable、`TextEditState` active，且 vtable 输入槽仍指向原版 `0x7E6620`，就允许 WndProc 和函数体输入 hook 接管输入。
+IME result 只有在已知可编辑目标有效时才允许写入。当前实现覆盖通用 active 原版 `TextEditMenu`：只要 `dword_11DAEC4` 指向 `TextEditMenu` vtable、`TextEditState` active，且 vtable 输入槽仍指向原版 `0x7E6620`，就允许 WndProc 和函数体输入 hook 接管输入。
 
 - `0x7AB740` 是 `PlayerNameEntryMenu` 调用 `TextEditMenu::Open` 的 call 指令；当前只包装它来替换玩家名 validator。
 - 包装函数调用原版 `TextEditMenu::Open(0x7E6320)`，并在原始 validator 是 `PlayerNameEntryMenu::IsValidName(0x7AB820)` 时替换为 DBCS-aware validator；原因是原版 validator 按单字节查 base font 宽度，DBCS high/trail byte 会导致 OK 按钮保持 disabled。
@@ -507,6 +518,7 @@ IME result 只有在已知可编辑目标 active 时才允许消费。当前实�
 - 当前改为替换 `0x7E6620` 内部的 `InputUnk01` call site `0x7E6685`，让原版 confirm 分支和 Stewie Tweaks 在 `0x7E6627` 的补丁继续保留。
 - `TextEditStateEx::Input` 接管 ASCII 插入、Backspace、Delete、Left、Right、Home、End；Confirm 仍由原版 `0x7E6620` 分支处理。
 - WndProc 每次使用前校验 `dword_11DAEC4` 当前对象仍是 `TextEditMenu` vtable，`0x1070064` 仍是 `0x7E6620`，且 `sub_716AE0(target + 0x34)` 为 true。
+- 注意：上述严格 active 校验用于原版 `TextEditMenu` 真实文本写入和编辑键处理。IME overlay/candidate 刷新使用更宽松的 `GetOverlayTextInputMenu()`，只确认当前输入菜单对象存在；因此候选窗跟随“当前输入菜单存在”，而不是跟随“当前可提交文本 active”。若只有 overlay target 而真实 edit target 暂时不可写，且当前 `HKL` 与 `uiEncoding` 匹配，composition/candidate/IME native 状态会吞掉 ASCII，避免拼音或选词数字泄漏到原 handler。若当前布局是系统英文等不匹配布局，则不吞 ASCII，保证普通字母输入仍可用。JIP `ShowTextInputMenu` 的 `GCS_RESULTSTR` 额外允许在 `+0x34` 之后的 JIP 字段布局仍有效时写入，因为 JIP 的 `+0x55 isActive` 在 IME 组字期间可能短暂为 false。
 - 通过 `this + 0x34` 访问编辑状态对象。
 - 插入文本后调用 `0x7E6700(this)` 刷新显示和校验状态。
 
@@ -565,14 +577,14 @@ struct JipTextInputView
 
 当前实现的 JIP 策略：
 
-- 当 `TextEditMenu::GetCurrent()` 仍是 `0x1070034` vtable、`+0x55` active、`currentText/displayedText` 至少有 JIP 初始化出的 `0x400` 容量、`+0x4A` max length 合法、`+0x4C` inputRect 非空，且 `0x1070064` 不再是原版 `0x7E6620` 时，判定为 JIP TextInput。
+- 当 `TextEditMenu::GetCurrent()` 仍是 `0x1070034` vtable、`currentText/displayedText` 已初始化、`+0x4A` max length 合法、`+0x4C` inputRect 非空，且 `0x1070064` 不再是原版 `0x7E6620` 时，判定为 JIP TextInput 存储布局有效；普通编辑键接管仍要求 `+0x55` active。
 - 首次检测到 JIP active 时保存 `0x1070064` 当前值作为 `s_jipOriginalInputHandler`，再把 `0x1070064` 临时写成 `JipTextInputAdapterEx::Input`。
-- `JipTextInputAdapterEx::Input` 自己处理 ASCII、多字节 commit 后的缓冲插入、Backspace/Delete/Left/Right/Home/End/PageUp/PageDown，并在 composition active 时吞掉拼音 ASCII 和编辑控制键。
+- `JipTextInputAdapterEx::Input` 自己处理 ASCII、多字节 commit 后的缓冲插入、Backspace/Delete/Left/Right/Home/End/PageUp/PageDown，并在 composition active 时即使 `+0x55 active` 暂时为 false 也吞掉拼音 ASCII 和候选选择数字/控制键，防止退回 JIP 原 handler 后把预编辑串写进 `currentText`。
 - Enter 在 `miscFlags & 2` 时链回 JIP 原 handler，保留 JIP 的 OK 按钮、关闭菜单和脚本 callback 语义。
 - JIP 的刷新不调用原版 `TextEditMenu::Refresh(0x7E6700)`；当前代码按 JIP 字段重建 `displayedText`，更新 edit tile `string`、OK tile `target`，并同步 `inputRect user1 -> user2`。
 - JIP 关闭时它自己的 close hook 会恢复 `0x1070064` 到 `0x7E6620`；tNVSE 在 main loop 中看到槽位恢复后清掉保存的原 handler。
 
-这个 adapter 的核心边界是：只在 JIP active 时接管 JIP 的 input handler，不改变 JIP 的打开、关闭、脚本回调、XML 布局或原版 `TextEditMenu` 路径。
+这个 adapter 的核心边界是：只在 JIP 字段布局有效时临时接管 JIP 的 input handler；真实普通编辑仍要求 JIP active，IME commit 则允许在布局有效但 active flag 短暂为 false 时写入。不改变 JIP 的打开、关闭、脚本回调、XML 布局或原版 `TextEditMenu` 路径。
 
 ### 4. DBCS-aware 编辑层
 
@@ -582,7 +594,7 @@ struct JipTextInputView
 - `IsLeadByte`
 - `IsTrailByte`
 
-首版已经实现这些边界 helper：
+当前已经实现这些边界 helper：
 
 ```cpp
 bool IsCharBoundary(const std::string& text, size_t offset);
@@ -590,8 +602,10 @@ size_t PrevCharBoundary(const std::string& text, size_t offset);
 size_t NextCharBoundary(const std::string& text, size_t offset);
 size_t ClampToPrevBoundary(const std::string& text, size_t offset);
 bool InsertTextAtCaret(TextEditMenu*, std::string_view mbText);
-bool DeletePreviousChar(TextEditMenu*);
-bool DeleteNextChar(TextEditMenu*);
+bool DeletePreviousChar(TextEditState&);
+bool DeleteNextChar(TextEditState&);
+bool MoveCaretPrevious(TextEditState&);
+bool MoveCaretNext(TextEditState&);
 ```
 
 规则：
@@ -601,7 +615,7 @@ bool DeleteNextChar(TextEditMenu*);
 - 无效 lead byte 保守按单 byte 处理，不跨越未知内存。
 - `state + 0x10` 在任何操作后必须是 `IsCharBoundary(text, len, caret)`。
 - 写回前必须保证真实文本长度不超过 1023 bytes，避免 `0x7170A0` 的 `source[1024]` 栈缓冲溢出。
-- 如果 `state + 0x14 != -1`，写回前必须调用 `0x717230(editState, candidate)` 或复用同等 `FontManager::CalculateStringDimensions` 校验；首版失败时拒绝插入，不做自动截断。
+- 如果 `state + 0x14 != -1`，写回前必须调用 `0x717230(editState, candidate)` 或复用同等 `FontManager::CalculateStringDimensions` 校验；失败时拒绝插入，不做自动截断。
 - Backspace 删除前一个逻辑字符。
 - Delete 删除后一个逻辑字符。
 - Left/right 按逻辑字符移动。
@@ -635,7 +649,7 @@ bool DeleteNextChar(TextEditMenu*);
 
 ### 当前诊断日志
 
-设置 `bMultibyteInputDebug=1` 后，首版会打印 `tnvse_multibyte_input_event` 日志，用于区分输入来源：
+设置 `bMultibyteInputDebug=1` 后，会打印 `tnvse_multibyte_input_event` 日志，用于区分输入来源：
 
 - `source=WndProc.WM_CHAR`：Windows 字符消息路径。
 - `source=WndProc.WM_IME_COMPOSITION`：IME composition/result 路径。
@@ -648,20 +662,11 @@ bool DeleteNextChar(TextEditMenu*);
 
 当前日志已确认一个关键行为：拼音字母可以在 `composing=1` 时由游戏输入处理路径写入真实文本，而不一定只经过 `WM_CHAR`。因此原版路径必须在 `0x7E6620` 内部输入 hook 中吞掉 composition ASCII；JIP 路径必须由 `JipTextInputAdapterEx` 吞掉 composition ASCII。只处理 `WM_CHAR` 不足以避免拼音泄漏。如果拼音仍进入真实文本，需要查看拼音字母对应日志是否仍为 `insert_ascii`，以及当时 IMM open/native 状态是否没有被识别。
 
-### 阶段 A：只读/低量日志定位
+若只泄漏拼音开头第一个字母，通常说明该字母早于 composition 消息进入 `TextEditState::Input` / JIP adapter。回归日志应看到输入会话开始或 focus restore 后先出现 `prepared configured IME ... guard=1`；若仍发生抢先写入，第一条非空 composition 后应出现 `source=IMECompositionEcho action=remove_ascii_echo`，然后最终 `GCS_RESULTSTR` 只提交候选文字。
 
-临时日志建议：
+切到系统英文输入法的回归日志应满足：当前 layout 为 `00000409` 时，`IsConfiguredImeLayout` 为 false，`imeOpen` 在 overlay 状态中被钳成 false，不设置 ASCII guard，不出现 `suppress_composition_ascii`，普通 `WM_CHAR` 或 JIP adapter ASCII 输入应走 `insert_ascii` / 原 handler。
 
-- `TextEditMenu` open：`this`、title、initial text、callback。
-- `TextEditMenu` caller：至少记录 `0x7AB690` 玩家名路径；若发现其他调用方，再单独分类。
-- `TextEditMenu` close/destruct：`this`。
-- `0x7E6620` 输入事件：key code、active flag、caret byte offset、文本长度。
-- `InputUnk01` 前后：仅 ASCII 测试时记录，确认原版行为。
-- IME result：UTF-16 length、转换后 byte length、active target 类型。
-
-日志不要在正常构建长期保留。
-
-### 阶段 B：提交结果和预览层
+### 提交结果和预览层
 
 当前实现已经支持 `GCS_RESULTSTR` 提交和独立候选窗预览：
 
@@ -676,7 +681,7 @@ bool DeleteNextChar(TextEditMenu*);
 - TSF `ITfCandidateListUIElement` 优先提供候选汉字；`ImmGetCandidateListW` 只作为旧 IME fallback。
 - 输入法名称优先来自 TSF profile description，失败才退回 `ImmGetDescriptionW` / keyboard layout。
 
-### 阶段 C：DBCS 编辑键
+### DBCS 编辑键
 
 拦截或包裹：
 
@@ -689,7 +694,7 @@ bool DeleteNextChar(TextEditMenu*);
 
 ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS，就必须在原版返回后校正 caret boundary，或者统一改用 tNVSE 编辑层。
 
-### 阶段 D：扩展字段
+### 扩展字段
 
 原版 `TextEditMenu` 和 JIP `ShowTextInputMenu` 已由 active target 逻辑覆盖。下一步扩展应优先处理非 `TextEditMenu` 输入框：
 
@@ -715,13 +720,13 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 ## 风险
 
-- 全屏/窗口化下系统 IME candidate window 行为不同；当前默认通过 `WM_IME_SETCONTEXT` 和 TSF `BeginUIElement(*pbShow=FALSE)` 隐藏系统候选窗。
+- 全屏/窗口化下系统 IME candidate/composition window 行为不同；当前主路径是在没有输入菜单对象时解绑游戏窗口 HIMC，输入期再恢复 HIMC。输入期仍通过 `WM_IME_SETCONTEXT -> DefWindowProc(lParam=0)`、IMM32 offscreen composition/candidate forms、以及 TSF `BeginUIElement(*pbShow=FALSE)` 隐藏系统 IME UI。注意 IMM32 offscreen 设置不能放在 `WM_IME_NOTIFY/IMN_SETCANDIDATEPOS` 路径内，否则 `ImmSetCandidateWindow` 会反复触发候选位置通知。
 - 独立 DX9 overlay 使用 GDI-to-texture；设备丢失、分辨率变化或 device 不可用时必须安全跳过并在下一帧重建纹理。
 - 原版 `TextEditMenu` caret marker 是单 byte 插入；如果 caret byte offset 错误，会破坏 DBCS。
 - 有些输入字段可能用 byte length 当字符数，最大长度要实测。
 - `0x7170A0` 和 `InputUnk01` 使用 1024/1028 bytes 级栈缓冲，tNVSE 不能写入超长文本后再交给原版刷新。
 - 剪贴板粘贴会一次插入大量文本，必须和 IME result 使用同一套 byte 上限、宽度限制和 DBCS 边界检查。
-- WndProc subclass 可能和 overlay、输入法增强、其他 NVSE 插件冲突，必须只在 active target 时消费确定的 commit。
+- WndProc subclass 可能和 overlay、输入法增强、其他 NVSE 插件冲突。没有输入菜单对象时只消费 IME 系列消息并禁用 HIMC，普通键鼠消息仍交回原 WndProc；有输入菜单对象时才消费 composition/commit。
 
 ## 测试计划
 
