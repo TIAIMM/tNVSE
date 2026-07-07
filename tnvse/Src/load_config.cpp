@@ -11,6 +11,7 @@ bool g_bMultibyteInputDebug;
 bool g_bMultibyteInputCompositionPreview;
 bool g_bMultibyteInputHideSystemCandidateWindow;
 bool g_bMultibyteInputUseTSFCandidates;
+bool g_bMultibyteInputStewieTweaks;
 bool g_bChangeJIPBigGunDesc;
 std::string g_sNewBigGunsDesc;
 UINT32 g_uiReorderDoorPrompt;
@@ -116,6 +117,9 @@ void LoadConfig()
 
 	g_bMultibyteInputUseTSFCandidates = ReadConfigInt(kMainSection, nullptr, "bMultibyteInputUseTSFCandidates", 1, filename);
 	gLog.FormattedMessage("g_bMultibyteInputUseTSFCandidates: %d", g_bMultibyteInputUseTSFCandidates);
+
+	g_bMultibyteInputStewieTweaks = ReadConfigInt(kMainSection, nullptr, "bMultibyteInputStewieTweaks", 1, filename);
+	gLog.FormattedMessage("g_bMultibyteInputStewieTweaks: %d", g_bMultibyteInputStewieTweaks);
 
 	g_bChangeJIPBigGunDesc = ReadConfigInt(kMainSection, nullptr, "bChangeJIPBigGunDesc", 1, filename);
 

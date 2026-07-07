@@ -34,6 +34,7 @@ tNVSE 已经具备的相关能力：
 - 原版 `TextEditMenu` 的 ASCII 插入、IME commit、退格、删除、左右移动、Home/End 均走 DBCS-aware 编辑层。
 - 玩家名输入保留 validator 特例；`0x7AB740` 只包装 `TextEditMenu::Open` 来替换玩家名 validator，不改变通用打开逻辑。
 - JIP LN `ShowTextInputMenu` 已按 JIP 自定义字段布局单独处理，使用 `JipTextInputAdapterEx` 临时链回 JIP 写入 `0x1070064` 的 input handler，不再把 JIP 的 `inputRect` / `minLength` / `maxLength` 误当成原版 `TextEditState` 字段。
+- Stewie Tweaks 9.90+ 已单独作为 `StewieTweaksInputTarget` 适配；不改 Stewie DLL，覆盖 StewMenu 搜索、StewMenu 字符串子设置输入，以及 Stewie MenuSearch 在常见菜单中的搜索框。
 - 正式版静态 xref 显示 `0x7E6320` 当前由 `PlayerNameEntryMenu` 调用；存档名显示链路是下游保存名生成和 sidecar 映射，不应把它误写成已经确认的 `TextEditMenu` 保存名输入框。
 
 ## 参考项目结论
@@ -397,6 +398,7 @@ bMultibyteInputDebug = 0
 bMultibyteInputCompositionPreview = 0
 bMultibyteInputHideSystemCandidateWindow = 1
 bMultibyteInputUseTSFCandidates = 1
+bMultibyteInputStewieTweaks = 1
 ```
 
 默认关闭更安全。启用条件：
@@ -412,6 +414,7 @@ bMultibyteInputUseTSFCandidates = 1
 - 在 `NVSEPlugin_Load` 中安装 hook；不从 `DllMain` 安装 WndProc。
 - `bMultibyteInput=0` 时不 subclass WndProc，不安装 `TextEditMenu` hook。
 - `bMultibyteInput=1` 但字体 hook 未启用或 `uiEncoding=0` 时打印一次日志并跳过初始化。
+- `bMultibyteInputStewieTweaks=0` 时不检测或 hook Stewie Tweaks 输入框；该开关仍受 `bMultibyteInput` 总开关约束。
 
 ### 2. WndProc / IME 捕获
 
@@ -586,6 +589,58 @@ struct JipTextInputView
 
 这个 adapter 的核心边界是：只在 JIP 字段布局有效时临时接管 JIP 的 input handler；真实普通编辑仍要求 JIP active，IME commit 则允许在布局有效但 active flag 短暂为 false 时写入。不改变 JIP 的打开、关闭、脚本回调、XML 布局或原版 `TextEditMenu` 路径。
 
+### 3.2 Stewie Tweaks 输入适配
+
+Stewie Tweaks 的搜索框不是原版 `TextEditMenu`，也不是 JIP 的 `ShowTextInputMenu` 字段布局。tNVSE 因此把它作为第三类 target：`StewieTweaksInputTarget`。这个 target 只复用统一的 IME 捕获、TSF/IMM32 候选窗、UTF-16 到当前 codepage 转换、DBCS 边界 helper；不复用原版 `TextEditState` 或 JIP adapter。
+
+启用条件：
+
+- `[Main] bMultibyteInput=1`。
+- `[Main] bMultibyteInputStewieTweaks=1`。
+- NVSE 插件表中存在 `lStewieAl's Tweaks`，且版本大于等于 9.90 / `990`。低于该版本不主动启用，避免字段布局或 vtable patch 变化导致误写。
+
+当前覆盖范围：
+
+- StewMenu `MENU_ID=1069` 的 `STW_SearchBar`，tile id `5`。
+- StewMenu 字符串子设置输入，文本 tile id `103`，并额外扫描 Stewie `InputField` 的 `inputType`，只在 `inputType == 0` 的 string 输入项接管。
+- Stewie MenuSearch 的搜索 tile id `87698483`，当前 hook 的菜单包括 Inventory、Stats、Map、Container、Barter、LevelUp、Recipe、Save/Load `StartMenu`。
+- 数字、浮点、十六进制、Hotkey 输入不接管；RaceMenu preset 文件名输入也不在本轮范围内。
+
+hook 策略：
+
+- MenuSearch 使用 Stewie 已经写入的菜单 keyboard handler 入口做链式 hook；tNVSE 保存当前 handler 作为 original，再写入自己的 wrapper。
+- StewMenu 是自定义菜单，目标校验使用虚函数 `Menu::GetID()` 返回的 `1069`，不要用原版菜单常用的 `uiID` 字段假设。
+- StewMenu 的 handler 由菜单实例 vtable `+0x30` 动态定位，菜单打开后链式替换；不是写死一个全局原版地址。
+- StewMenu 搜索框和字符串子设置都优先从菜单对象内的 `InputField` 反查 active 状态和 `inputType`。搜索框 id `5` 反查失败时才回退到 root `_IsSearchActive` / tile `_IsActive`；字符串子设置 id `103` 会在列表项模板中重复出现，必须反查到 active `InputField` 且 `inputType == 0` 才接管。
+- `Ctrl` 组合键直接链回 Stewie original，并清掉 tNVSE shadow，保留 `Ctrl-F`、`Ctrl-R` 等 Stewie 原行为。
+
+`StewMenu::subSettingInput` 使用 Stewie 自己的 `InputField`，当前按 Stewie 9.90+ 源码布局只读判断：
+
+```cpp
+struct InputField
+{
+    Tile* tile;          // +0x00
+    String input;        // +0x04, char* + UInt16 length + UInt16 capacity
+    bool isActive;       // +0x0C
+    bool isCaretShown;   // +0x0D
+    SInt16 caretIndex;   // +0x0E
+    UInt32 lastCaretUpdateTime; // +0x10
+    UInt8 inputType;     // +0x14, 0=string, 1=int, 2=float, 3=hex
+};
+```
+
+只有 `isActive == true` 且 `inputType == 0` 时接管；否则交还 Stewie 原 handler。
+
+编辑策略：
+
+- tNVSE 为当前 Stewie target 维护一份 shadow buffer，shadow 的 caret 是 byte offset，但移动和删除都按 DBCS 边界处理。
+- ASCII、IME commit、Backspace、Delete、Left、Right、Home、End 都先修改 shadow。
+- shadow 修改后，tNVSE 用 Stewie original handler 清空当前 Stewie 输入框，再按 byte 重放完整 shadow，最后把 caret 左移回目标位置。这样 Stewie 自己的刷新、过滤、确认逻辑仍由原 DLL 执行，tNVSE 不复制它的搜索实现。
+- 组合输入期间，拼音/假名 ASCII 和候选选择键由 Stewie target 吞掉；只有 `GCS_RESULTSTR` 成功转成当前 `uiEncoding` codepage 后才写入 shadow。
+- 独立 DX9 candidate overlay 的 target gate 也包含 Stewie target，因此候选窗可以跟随 StewMenu / MenuSearch 搜索框显示。
+
+这个 adapter 的边界是：不修改 Stewie DLL，不改 Stewie 菜单 XML，不接管搜索匹配语义。Stewie 仍然按它自己的 codepage byte substring 逻辑过滤列表；tNVSE 只保证输入框里的多字节文本不会被按单 byte 删除、移动或被 IME 预编辑串污染。
+
 ### 4. DBCS-aware 编辑层
 
 需要复用现有 encoding helper：
@@ -655,6 +710,7 @@ bool MoveCaretNext(TextEditState&);
 - `source=WndProc.WM_IME_COMPOSITION`：IME composition/result 路径。
 - `source=TextEditState::Input`：原版 `TextEditMenu::HandleKeyboardInput(0x7E6620)` 内部 `InputUnk01(0x716B00)` call site 路径。
 - `source=JipTextInputAdapter::Input`：JIP `ShowTextInputMenu` 的临时 vtable adapter 路径。
+- `source=StewieTweaksInputTarget`：Stewie Tweaks 搜索框或 string 子设置输入 target 路径。
 - `action=insert_ascii` 表示该路径实际写入 ASCII。
 - `action=suppress_composition_ascii` 表示组字期间拼音/假名 ASCII 被吞掉；该动作可能来自 `WM_CHAR`，也可能来自 `TextEditMenu::HandleKeyboardInput`。
 - `action=suppress_composition_control` 表示组字期间 Backspace/Delete/Left/Right/Home/End/Confirm 等游戏编辑控制输入被吞掉，由 IME 自己处理预编辑串。
@@ -696,11 +752,11 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 ### 扩展字段
 
-原版 `TextEditMenu` 和 JIP `ShowTextInputMenu` 已由 active target 逻辑覆盖。下一步扩展应优先处理非 `TextEditMenu` 输入框：
+原版 `TextEditMenu`、JIP `ShowTextInputMenu`、Stewie Tweaks StewMenu/MenuSearch 已由各自独立 target 覆盖。后续扩展应继续按“每种输入框单独 adapter”的方式处理，不要把不同字段布局强行合并：
 
-- Stewie Tweaks Menu Search：不改 Stewie 源码时，需要单独用 active search bar gate + codepage byte replay 或 shadow buffer 方案；不要混进 `TextEditMenu` adapter。
 - Console 输入只在明确需要时处理，因为命令解析和普通 UI 文本不同。
-- Rime 后端、Stewie Menu Search、Console 输入属于后续扩展；当前独立 DX9 overlay 和 TSF/IMM32 候选读取不影响 commit-only 写入层。
+- MCM Extender / 其他 XML 菜单搜索如果不是 Stewie target，需要先确认 tile、handler 和内部 buffer，再决定是否做单独 adapter。
+- Rime 后端、Console 输入属于后续扩展；当前独立 DX9 overlay 和 TSF/IMM32 候选读取不影响 commit-only 写入层。
 
 每个字段都要单独确认提交路径是否会 sanitize、是否写入存档、是否要求 ASCII。
 
@@ -760,6 +816,15 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - Enter 确认仍触发 JIP 原 handler、关闭菜单并执行脚本 callback。
 - `SetTextInputExtendedProps` 的 min/max length、numeric-only 和 Enter-OK 行为不被破坏。
 
+### Stewie Tweaks
+
+- Stewie Tweaks 版本大于等于 9.90 时，日志出现一次 `Stewie Tweaks version ... detected` 和对应 handler chain 日志。
+- StewMenu 中 `Ctrl-F` 打开搜索，输入中文后候选选择只提交汉字，拼音/假名预编辑串不残留。
+- StewMenu 搜索框中 Backspace/Delete/Left/Right/Home/End 不拆分多字节字符，`Ctrl-R` 清空仍走 Stewie 原逻辑。
+- StewMenu 字符串子设置输入只在 string 输入项启用；数字、浮点、十六进制、Hotkey 子设置仍由 Stewie 原逻辑处理。
+- Inventory、Stats、Map、Container、Barter、LevelUp、Recipe、Save/Load 的 Stewie MenuSearch 搜索框能输入当前 codepage 多字节文本，关闭搜索和刷新列表行为保持 Stewie 原样。
+- 英文 ASCII 输入不出现 WndProc + Stewie handler 双插入，Win+Space 切换输入法后仍能在 Stewie 搜索框中 commit 多字节字符。
+
 ### 保存名
 
 - 使用中文玩家名后创建手动存档。
@@ -799,6 +864,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - 开启 `bMultibyteInputCompositionPreview=1` 时，能显示当前输入法名称、中文/英文或对应语言模式、全角/半角、composition 和 TSF/IMM32 candidate list；关闭时回到 commit-only 行为。
 - 编辑框打字期间能正确显示当前 `uiEncoding` 对应字符。
 - Backspace/delete/left/right 不拆 DBCS。
+- Stewie Tweaks 9.90+ 的 StewMenu 搜索、string 子设置输入和常见 MenuSearch 搜索框不残留预编辑串，编辑键不拆多字节字符。
 - 实际 `.fos` 文件名仍由原版 sanitizer 生成。
 - 载入/保存列表继续走原版 save header 摘要显示。
 - 没有正常构建中的全局 `Tile::SetString` 或 WndProc 调试日志。
