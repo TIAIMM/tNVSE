@@ -950,13 +950,41 @@ namespace fonthook
 			if (StewieInputTarget target = GetActiveStewieInputTarget(); target.valid)
 				return target;
 
-			if (s_stewieShadow.initialized)
+			if (!s_stewieShadow.initialized)
+				return {};
+
+			switch (s_stewieShadow.target.kind)
 			{
-				StewieInputTarget target = FindStewieTargetForMenu(s_stewieShadow.target.menu);
-				if (target.valid)
-					return target;
+			case StewieInputKind::StewMenuSearch:
+			case StewieInputKind::StewMenuStringSubsetting:
+			{
+				if (Menu* menu = GetOpenMenu(kMenuType_StewMenu))
+				{
+					if (StewieInputTarget target = FindStewMenuTarget(menu); target.valid)
+						return target;
+				}
+				break;
 			}
 
+			case StewieInputKind::MenuSearch:
+			{
+				for (const StewieMenuHook& hook : s_stewieMenuHooks)
+				{
+					if (Menu* menu = GetOpenMenu(hook.menuID))
+					{
+						if (StewieInputTarget target = FindStewieMenuSearchTarget(menu); target.valid)
+							return target;
+					}
+				}
+				break;
+			}
+
+			default:
+				break;
+			}
+
+			ClearStewieInputState();
+			HideCandidateOverlay();
 			return {};
 		}
 
@@ -2567,6 +2595,12 @@ namespace fonthook
 			if (!g_bMultibyteInputCompositionPreview || !HasOverlayInputTarget() || !s_imeCandidateState.imeOpen)
 				return lines;
 
+			if (!HasOverlayInputTarget())
+			{
+				ClearStewieInputState();
+				return lines;
+			}
+
 			lines.push_back({ BuildImeStatusLineWide(), false });
 
 			if (!s_imeCandidateState.composition.empty())
@@ -2645,8 +2679,15 @@ namespace fonthook
 				return;
 			}
 
-			if (!HasOverlayInputTarget() || !s_imeCandidateState.imeOpen)
+			if (!s_imeCandidateState.imeOpen)
 			{
+				HideCandidateOverlay();
+				return;
+			}
+
+			if (!HasOverlayInputTarget())
+			{
+				ClearStewieInputState();
 				HideCandidateOverlay();
 				return;
 			}
