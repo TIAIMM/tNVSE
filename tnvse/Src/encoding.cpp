@@ -175,6 +175,42 @@ namespace fonthook
 		return mb;
 	}
 
+	std::string WideToUTF8(std::wstring_view value)
+	{
+		if (value.empty())
+			return {};
+
+		const int len = WideCharToMultiByte(
+			CP_UTF8,
+			0,
+			value.data(),
+			static_cast<int>(value.size()),
+			nullptr,
+			0,
+			nullptr,
+			nullptr);
+
+		if (len <= 0)
+			return {};
+
+		std::string utf8(static_cast<size_t>(len), '\0');
+
+		const int written = WideCharToMultiByte(
+			CP_UTF8,
+			0,
+			value.data(),
+			static_cast<int>(value.size()),
+			utf8.data(),
+			len,
+			nullptr,
+			nullptr);
+
+		if (written <= 0)
+			return {};
+
+		return utf8;
+	}
+
 } // namespace fonthook
 
 // ---- Unified encoding dispatch ----

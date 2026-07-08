@@ -2,6 +2,7 @@
 #include "ITypes.h"
 #include "load_config.h"
 #include <string>
+#include <string_view>
 #include <Windows.h>
 
 namespace fonthook
@@ -55,6 +56,7 @@ namespace fonthook
 	// ---- Encoding Conversion ----
 	std::string MultiByteToUTF8(const std::string& src, UInt32 codePage);
 	std::string UTF8ToMultiByteStr(const std::string& utf8, UInt32 codePage);
+	std::string WideToUTF8(std::wstring_view value);
 
 	// ---- Double-byte character counting ----
 	// Reduces charCount by the number of double-byte character pairs in str,

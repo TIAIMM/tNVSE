@@ -638,6 +638,90 @@ namespace fonthook
 			return NextOffset(text, offset);
 		}
 
+		size_t NextUTF8Offset(const std::string& text, size_t offset)
+		{
+			if (offset >= text.size())
+				return text.size();
+
+			const UInt8 c = static_cast<UInt8>(text[offset]);
+
+			if (c < 0x80)
+				return offset + 1;
+
+			auto hasTrail = [&](size_t index) -> bool
+				{
+					return index < text.size()
+						&& IsUTF8Trail(static_cast<UInt8>(text[index]));
+				};
+
+			if (c >= 0xC2 && c <= 0xDF)
+			{
+				if (hasTrail(offset + 1))
+					return offset + 2;
+			}
+
+			if (c >= 0xE0 && c <= 0xEF)
+			{
+				if (hasTrail(offset + 1) && hasTrail(offset + 2))
+					return offset + 3;
+			}
+
+			if (c >= 0xF0 && c <= 0xF4)
+			{
+				if (hasTrail(offset + 1) && hasTrail(offset + 2) && hasTrail(offset + 3))
+					return offset + 4;
+			}
+
+			return offset + 1;
+		}
+
+		bool IsUTF8CharBoundary(const std::string& text, size_t offset)
+		{
+			if (offset > text.size())
+				return false;
+
+			size_t current = 0;
+			while (current < text.size())
+			{
+				if (current == offset)
+					return true;
+
+				current = NextUTF8Offset(text, current);
+			}
+
+			return offset == text.size();
+		}
+
+		size_t PrevUTF8CharBoundary(const std::string& text, size_t offset)
+		{
+			offset = std::min(offset, text.size());
+
+			size_t previous = 0;
+			size_t current = 0;
+			while (current < offset)
+			{
+				previous = current;
+				current = NextUTF8Offset(text, current);
+			}
+
+			return previous;
+		}
+
+		size_t ClampToPrevUTF8Boundary(const std::string& text, size_t offset)
+		{
+			offset = std::min(offset, text.size());
+			if (IsUTF8CharBoundary(text, offset))
+				return offset;
+
+			return PrevUTF8CharBoundary(text, offset);
+		}
+
+		size_t NextUTF8CharBoundary(const std::string& text, size_t offset)
+		{
+			offset = ClampToPrevUTF8Boundary(text, offset);
+			return NextUTF8Offset(text, offset);
+		}
+
 		bool IsCtrlKeyDown()
 		{
 			return (GetKeyState(VK_CONTROL) & 0x8000) != 0
@@ -722,7 +806,7 @@ namespace fonthook
 			if (caretMarker != std::string::npos)
 			{
 				text.erase(caretMarker, 1);
-				caret = ClampToPrevBoundary(text, caretMarker);
+				caret = ClampToPrevUTF8Boundary(text, caretMarker);
 				return text;
 			}
 
@@ -732,7 +816,7 @@ namespace fonthook
 				if (caretIndex < text.size())
 				{
 					text.erase(caretIndex, 1);
-					caret = ClampToPrevBoundary(text, caretIndex);
+					caret = ClampToPrevUTF8Boundary(text, caretMarker);
 					return text;
 				}
 			}
@@ -1029,7 +1113,7 @@ namespace fonthook
 			s_stewieShadow.text = TileStringWithoutCaret(target.tile, s_stewieShadow.caret);
 			if (!target.inputField && s_stewieShadow.text == "_")
 				s_stewieShadow.text.clear();
-			s_stewieShadow.caret = ClampToPrevBoundary(s_stewieShadow.text, s_stewieShadow.caret);
+			s_stewieShadow.caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, s_stewieShadow.caret);
 			s_stewieShadow.appliedBytes = s_stewieShadow.text.size();
 			s_stewieShadow.initialized = target.valid;
 		}
@@ -1049,7 +1133,7 @@ namespace fonthook
 			for (unsigned char ch : s_stewieShadow.text)
 				CallStewieOriginalInput(target.menu, ch);
 
-			const size_t caret = ClampToPrevBoundary(s_stewieShadow.text, s_stewieShadow.caret);
+			const size_t caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, s_stewieShadow.caret);
 			for (size_t i = caret; i < s_stewieShadow.text.size(); ++i)
 				CallStewieOriginalInput(target.menu, kInputCode_ArrowLeft);
 			s_stewieReplay = false;
@@ -1070,7 +1154,7 @@ namespace fonthook
 
 			s_stewieShadow.target = target;
 			s_stewieShadow.text = std::move(candidate);
-			s_stewieShadow.caret = ClampToPrevBoundary(s_stewieShadow.text, caret);
+			s_stewieShadow.caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, caret);
 			s_stewieShadow.initialized = true;
 			return ReplayStewieShadow(target);
 		}
@@ -1082,14 +1166,14 @@ namespace fonthook
 
 			EnsureStewieShadow(target);
 			std::string candidate = s_stewieShadow.text;
-			size_t caret = ClampToPrevBoundary(candidate, s_stewieShadow.caret);
+			size_t caret = ClampToPrevUTF8Boundary(candidate, s_stewieShadow.caret);
 			candidate.insert(caret, text.data(), text.size());
 			return CommitStewieShadow(target, std::move(candidate), caret + text.size());
 		}
 
 		bool InsertWideTextStewie(const StewieInputTarget& target, std::wstring_view text)
 		{
-			std::string converted = WideToCurrentCodePage(text);
+			std::string converted = WideToUTF8(text);
 			if (converted.empty())
 				return false;
 
@@ -1099,11 +1183,11 @@ namespace fonthook
 		bool DeletePreviousStewieChar(const StewieInputTarget& target)
 		{
 			EnsureStewieShadow(target);
-			size_t caret = ClampToPrevBoundary(s_stewieShadow.text, s_stewieShadow.caret);
+			size_t caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, s_stewieShadow.caret);
 			if (!caret)
 				return true;
 
-			const size_t previous = PrevCharBoundary(s_stewieShadow.text, caret);
+			const size_t previous = PrevUTF8CharBoundary(s_stewieShadow.text, caret);
 			std::string candidate = s_stewieShadow.text;
 			candidate.erase(previous, caret - previous);
 			return CommitStewieShadow(target, std::move(candidate), previous);
@@ -1112,11 +1196,11 @@ namespace fonthook
 		bool DeleteNextStewieChar(const StewieInputTarget& target)
 		{
 			EnsureStewieShadow(target);
-			size_t caret = ClampToPrevBoundary(s_stewieShadow.text, s_stewieShadow.caret);
+			size_t caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, s_stewieShadow.caret);
 			if (caret >= s_stewieShadow.text.size())
 				return true;
 
-			const size_t next = NextCharBoundary(s_stewieShadow.text, caret);
+			const size_t next = NextUTF8CharBoundary(s_stewieShadow.text, caret);
 			std::string candidate = s_stewieShadow.text;
 			candidate.erase(caret, next - caret);
 			return CommitStewieShadow(target, std::move(candidate), caret);
@@ -1125,13 +1209,19 @@ namespace fonthook
 		bool MoveStewieCaretPrevious(const StewieInputTarget& target)
 		{
 			EnsureStewieShadow(target);
-			return CommitStewieShadow(target, s_stewieShadow.text, PrevCharBoundary(s_stewieShadow.text, s_stewieShadow.caret));
+			return CommitStewieShadow(
+				target,
+				s_stewieShadow.text,
+				PrevUTF8CharBoundary(s_stewieShadow.text, s_stewieShadow.caret));
 		}
 
 		bool MoveStewieCaretNext(const StewieInputTarget& target)
 		{
 			EnsureStewieShadow(target);
-			return CommitStewieShadow(target, s_stewieShadow.text, NextCharBoundary(s_stewieShadow.text, s_stewieShadow.caret));
+			return CommitStewieShadow(
+				target,
+				s_stewieShadow.text,
+				NextUTF8CharBoundary(s_stewieShadow.text, s_stewieShadow.caret));
 		}
 
 		bool MoveStewieCaretHome(const StewieInputTarget& target)
@@ -1153,11 +1243,11 @@ namespace fonthook
 				return false;
 
 			EnsureStewieShadow(target);
-			size_t caret = ClampToPrevBoundary(s_stewieShadow.text, s_stewieShadow.caret);
+			size_t caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, s_stewieShadow.caret);
 			if (!caret)
 				return false;
 
-			const size_t previous = PrevCharBoundary(s_stewieShadow.text, caret);
+			const size_t previous = PrevUTF8CharBoundary(s_stewieShadow.text, caret);
 			if (caret - previous != 1)
 				return false;
 
