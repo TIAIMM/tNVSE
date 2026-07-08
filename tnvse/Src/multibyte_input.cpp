@@ -816,7 +816,7 @@ namespace fonthook
 				if (caretIndex < text.size())
 				{
 					text.erase(caretIndex, 1);
-					caret = ClampToPrevUTF8Boundary(text, caretMarker);
+					caret = ClampToPrevUTF8Boundary(text, caretIndex);
 					return text;
 				}
 			}
@@ -2682,7 +2682,7 @@ namespace fonthook
 		std::vector<CandidateOverlayLine> BuildCandidateOverlayLines()
 		{
 			std::vector<CandidateOverlayLine> lines;
-			if (!g_bMultibyteInputCompositionPreview || !HasOverlayInputTarget() || !s_imeCandidateState.imeOpen)
+			if (!g_bMultibyteInputCompositionPreview || !s_imeCandidateState.imeOpen)
 				return lines;
 
 			if (!HasOverlayInputTarget())
