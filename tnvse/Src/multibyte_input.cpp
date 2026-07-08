@@ -3051,13 +3051,7 @@ namespace fonthook
 							return true;
 						}
 
-						const char ch = static_cast<char>(wParam);
-						if (!InsertTextAtCaretStewie(stewieTarget, std::string_view(&ch, 1)))
-							return false;
-
-						s_lastWndProcAsciiTick = GetTickCount();
-						s_lastWndProcAsciiChar = static_cast<UInt8>(wParam);
-						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_CHAR action=insert_ascii_stewie input=0x%08X", static_cast<UInt32>(wParam));
+						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_CHAR action=consume_ascii_handled_by_stewie_adapter input=0x%08X", static_cast<UInt32>(wParam));
 						return true;
 					}
 
@@ -3092,8 +3086,8 @@ namespace fonthook
 						return true;
 					}
 
-					DebugLogJipState("WndProc.WM_CHAR", "pass_ascii_to_jip_adapter", jipMenu, static_cast<UInt32>(wParam));
-					return false;
+					DebugLogJipState("WndProc.WM_CHAR", "consume_ascii_handled_by_jip_adapter", jipMenu, static_cast<UInt32>(wParam));
+					return true;
 				}
 
 				if (wParam < 0x80)
@@ -3121,16 +3115,7 @@ namespace fonthook
 
 			if (wParam >= 0x20 && wParam <= 0x7E)
 			{
-				const char ch = static_cast<char>(wParam);
-				if (!InsertTextAtCaret(menu, std::string_view(&ch, 1)))
-				{
-					DebugLogState("WndProc.WM_CHAR", "reject_ascii_insert", menu, static_cast<SInt32>(wParam));
-					return false;
-				}
-
-				s_lastWndProcAsciiTick = GetTickCount();
-				s_lastWndProcAsciiChar = static_cast<UInt8>(wParam);
-				DebugLogState("WndProc.WM_CHAR", "insert_ascii", menu, static_cast<SInt32>(wParam));
+				DebugLogState("WndProc.WM_CHAR", "consume_ascii_handled_by_textedit", menu, static_cast<SInt32>(wParam));
 				return true;
 			}
 
