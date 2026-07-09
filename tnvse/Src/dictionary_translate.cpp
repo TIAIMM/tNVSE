@@ -37,6 +37,7 @@ namespace fonthook
 			std::string key;
 			std::vector<size_t> rawBegin;
 			std::vector<size_t> rawEnd;
+			bool containsDbcs = false;
 		};
 
 		struct MappedChar
@@ -44,7 +45,10 @@ namespace fonthook
 			char ch = 0;
 			size_t rawBegin = 0;
 			size_t rawEnd = 0;
+			bool dbcs = false;
 		};
+
+		constexpr char kDbcsLookupUnit = '\x1F';
 
 		struct RichTextTag
 		{
@@ -487,6 +491,15 @@ namespace fonthook
 					}
 				}
 
+				UInt32 dbcsCode = 0;
+				if (TryDecodeDoubleByteAt(source, i, dbcsCode))
+				{
+					units.push_back({ kDbcsLookupUnit, i, i + 2, true });
+					mapped.containsDbcs = true;
+					i += 2;
+					continue;
+				}
+
 				const unsigned char ch = static_cast<unsigned char>(source[i]);
 				if (IsSourceWhitespace(source[i]))
 				{
@@ -503,9 +516,9 @@ namespace fonthook
 			collapsed.reserve(units.size());
 			for (const MappedChar& unit : units)
 			{
-				if (IsSourceWhitespace(unit.ch))
+				if (!unit.dbcs && IsSourceWhitespace(unit.ch))
 				{
-					if (!collapsed.empty() && collapsed.back().ch == ' ')
+					if (!collapsed.empty() && !collapsed.back().dbcs && collapsed.back().ch == ' ')
 					{
 						collapsed.back().rawEnd = unit.rawEnd;
 					}
@@ -521,10 +534,10 @@ namespace fonthook
 			}
 
 			size_t begin = 0;
-			while (begin < collapsed.size() && collapsed[begin].ch == ' ')
+			while (begin < collapsed.size() && !collapsed[begin].dbcs && collapsed[begin].ch == ' ')
 				++begin;
 			size_t end = collapsed.size();
-			while (end > begin && collapsed[end - 1].ch == ' ')
+			while (end > begin && !collapsed[end - 1].dbcs && collapsed[end - 1].ch == ' ')
 				--end;
 
 			mapped.text.reserve(end - begin);
@@ -533,10 +546,19 @@ namespace fonthook
 			mapped.rawEnd.reserve(end - begin);
 			for (size_t i = begin; i < end; ++i)
 			{
-				mapped.text.push_back(collapsed[i].ch);
-				mapped.key.push_back(ToLowerAsciiChar(collapsed[i].ch));
-				mapped.rawBegin.push_back(collapsed[i].rawBegin);
-				mapped.rawEnd.push_back(collapsed[i].rawEnd);
+				const MappedChar& unit = collapsed[i];
+				if (unit.dbcs)
+				{
+					mapped.text.push_back(kDbcsLookupUnit);
+					mapped.key.push_back(kDbcsLookupUnit);
+				}
+				else
+				{
+					mapped.text.push_back(unit.ch);
+					mapped.key.push_back(ToLowerAsciiChar(unit.ch));
+				}
+				mapped.rawBegin.push_back(unit.rawBegin);
+				mapped.rawEnd.push_back(unit.rawEnd);
 			}
 			return mapped;
 		}
@@ -1227,6 +1249,7 @@ namespace fonthook
 
 		MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(raw);
 		std::string key = mappedSource.key;
+		const bool sourceContainsDbcs = mappedSource.containsDbcs;
 		PreparedTranslationMatch fullMatch;
 		if (TryTranslateExactKey(key, fullMatch, depth))
 		{
@@ -1243,35 +1266,35 @@ namespace fonthook
 			return true;
 		}
 
-		if (g_bEnableMuxQuestPromptTranslation && TryTranslateMuxQuestPrompt(raw, translated, depth))
+		if (!sourceContainsDbcs && g_bEnableMuxQuestPromptTranslation && TryTranslateMuxQuestPrompt(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (g_bEnableDictionaryPerkDescriptionTranslation && TryTranslatePerkDescription(raw, translated, depth))
+		if (!sourceContainsDbcs && g_bEnableDictionaryPerkDescriptionTranslation && TryTranslatePerkDescription(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (g_bEnableDictionaryItemEffectTranslation && TryTranslateItemEffectList(raw, translated, depth))
+		if (!sourceContainsDbcs && g_bEnableDictionaryItemEffectTranslation && TryTranslateItemEffectList(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (g_bEnableDictionaryMultiplierTextTranslation && TryTranslateMultiplierText(raw, translated, depth))
+		if (!sourceContainsDbcs && g_bEnableDictionaryMultiplierTextTranslation && TryTranslateMultiplierText(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (g_bEnableDictionaryWildcardTranslation && TryTranslateWildcardKey(key, fullMatch, depth, &mappedSource))
+		if (!sourceContainsDbcs && g_bEnableDictionaryWildcardTranslation && TryTranslateWildcardKey(key, fullMatch, depth, &mappedSource))
 		{
 			translated = fullMatch.translated;
 			if (g_bEnableDictionaryTranslationLog)
@@ -1286,28 +1309,28 @@ namespace fonthook
 			return true;
 		}
 
-		if (g_bEnableDictionaryTrimBypassFuzzyTranslation && TryTranslateFuzzyText(originalRaw, translated, depth))
+		if (!sourceContainsDbcs && g_bEnableDictionaryTrimBypassFuzzyTranslation && TryTranslateFuzzyText(originalRaw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (g_bEnableDictionaryRegexTranslation && TryTranslateRegexText(raw, translated))
+		if (!sourceContainsDbcs && g_bEnableDictionaryRegexTranslation && TryTranslateRegexText(raw, translated))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (g_bEnableDictionaryBeforeLinebreakTranslation && TryTranslateBeforeLinebreakText(raw, translated, depth))
+		if (!sourceContainsDbcs && g_bEnableDictionaryBeforeLinebreakTranslation && TryTranslateBeforeLinebreakText(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
 			return true;
 		}
 
-		if (g_bEnableDictionaryShrinkFuzzyTranslation && TryTranslateShrinkText(raw, translated, depth))
+		if (!sourceContainsDbcs && g_bEnableDictionaryShrinkFuzzyTranslation && TryTranslateShrinkText(raw, translated, depth))
 		{
 			s_positiveCache.emplace(cacheKey, translated);
 			TrimPositiveCache();
