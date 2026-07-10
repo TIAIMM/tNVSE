@@ -1,35 +1,17 @@
 #include "multibyte_input_internal.h"
 
-// Stewie Tweaks search and string-subsetting input integration.
+// Shared Stewie Tweaks UTF-8 input engine and StewMenu integration.
 
 namespace fonthook
 {
 	namespace multibyte_input
 	{
-		constexpr SIZE_T kAddr_ReadXML = 0x00A01B00;
-		constexpr SIZE_T kReadXMLPatchLen = 5;
 		constexpr UInt32 kStewieTweaksMinVersion = 990;
 		constexpr const char* kStewieTweaksPluginName = "lStewieAl's Tweaks";
 		constexpr UInt32 kMenuType_StewMenu = 1069;
 		constexpr UInt32 kStewMenu_SearchBar = 5;
 		constexpr UInt32 kStewMenu_SubsettingInputFieldText = 103;
-		constexpr UInt32 kStewieMenuSearch_TextTile = 87698483;
 		constexpr UInt32 kStewieMaxShadowBytes = 1023;
-		constexpr DWORD kStewieMenuSearchStateSyncDelayMs = 150;
-		constexpr DWORD kStewieMenuSearchStateSyncRetryMs = 50;
-		constexpr DWORD kStewieMenuSearchStateSyncTimeoutMs = 1000;
-		constexpr UInt8 kStewieMenuSearchSync_None = 0;
-		constexpr UInt8 kStewieMenuSearchSync_Toggle = 1;
-		constexpr UInt8 kStewieMenuSearchSync_Deactivate = 2;
-
-		constexpr SIZE_T kInventoryMenuHandleKeyboardInputEntry = 0x10739E4;
-		constexpr SIZE_T kStatsMenuHandleKeyboardInputEntry = 0x1070004;
-		constexpr SIZE_T kMapMenuHandleKeyboardInputEntry = 0x1074D74;
-		constexpr SIZE_T kContainerMenuHandleKeyboardInputEntry = 0x10721DC;
-		constexpr SIZE_T kBarterMenuHandleKeyboardInputEntry = 0x107071C;
-		constexpr SIZE_T kLevelUpMenuHandleKeyboardInputEntry = 0x1073D0C;
-		constexpr SIZE_T kRecipeMenuHandleKeyboardInputEntry = 0x10704BC;
-		constexpr SIZE_T kStartMenuHandleKeyboardInputEntry = 0x1076D4C;
 		constexpr UInt32 kMenuHandleKeyboardInputVTableOffset = 0x30;
 
 		struct StewieShadowState
@@ -43,29 +25,8 @@ namespace fonthook
 
 		using StewieKeyboardHandler = bool(__thiscall*)(Menu*, UInt32);
 
-		struct StewieMenuHook
-		{
-			const char* name = "";
-			UInt32 menuID = 0;
-			SIZE_T entry = 0;
-			SIZE_T original = 0;
-			SIZE_T hook = 0;
-			bool installed = false;
-
-			Tile* menuSearchRoot = nullptr;
-			Tile* menuSearchTile = nullptr;
-			DWORD menuSearchSeenTick = 0;
-			bool menuSearchKeyboardActive = false;
-			bool menuSearchStateSyncPending = false;
-			UInt8 menuSearchStateSyncAction = kStewieMenuSearchSync_None;
-			bool menuSearchStateSyncWasActive = false;
-			DWORD menuSearchStateSyncStartTick = 0;
-			DWORD menuSearchStateSyncDueTick = 0;
-		};
-
 		bool s_stewieChecked = false;
 		bool s_stewieAvailable = false;
-		bool s_stewieHooksInstalled = false;
 		bool s_stewieReplay = false;
 		SIZE_T s_stewMenuOriginalInputHandler = 0;
 		SIZE_T s_stewMenuHookedEntry = 0;
@@ -74,37 +35,10 @@ namespace fonthook
 		UInt32 s_tileTraitCaretIndex = 0;
 		StewieShadowState s_stewieShadow;
 
-		using TileReadXMLFn = Tile * (__thiscall*)(Tile*, const char*);
-
-		TileReadXMLFn s_originalTileReadXML = nullptr;
-		void* s_tileReadXMLTrampoline = nullptr;
-		bool s_tileReadXMLHookInstalled = false;
-
-
 		class StewieTweaksInputTargetEx
 		{
 		public:
 			static bool __fastcall StewMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput);
-			static bool __fastcall InventoryMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput);
-			static bool __fastcall StatsMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput);
-			static bool __fastcall MapMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput);
-			static bool __fastcall ContainerMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput);
-			static bool __fastcall BarterMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput);
-			static bool __fastcall LevelUpMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput);
-			static bool __fastcall RecipeMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput);
-			static bool __fastcall StartMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput);
-		};
-
-		StewieMenuHook s_stewieMenuHooks[] =
-		{
-			{ "InventoryMenu", Inventory, kInventoryMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::InventoryMenuKeyboardInput), false },
-			{ "StatsMenu", Stats, kStatsMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::StatsMenuKeyboardInput), false },
-			{ "MapMenu", PipboyData, kMapMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::MapMenuKeyboardInput), false },
-			{ "ContainerMenu", Container, kContainerMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::ContainerMenuKeyboardInput), false },
-			{ "BarterMenu", Barter, kBarterMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::BarterMenuKeyboardInput), false },
-			{ "LevelUpMenu", LevelUp, kLevelUpMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::LevelUpMenuKeyboardInput), false },
-			{ "RecipeMenu", Recipe, kRecipeMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::RecipeMenuKeyboardInput), false },
-			{ "StartMenu", Pause, kStartMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::StartMenuKeyboardInput), false },
 		};
 
 		UInt32 TileID(Tile* tile)
@@ -160,257 +94,6 @@ namespace fonthook
 			return nullptr;
 		}
 
-		bool ContainsNoCase(const char* haystack, const char* needle)
-		{
-			if (!haystack || !needle || !*needle)
-				return false;
-
-			const size_t needleLen = std::strlen(needle);
-
-			for (const char* p = haystack; *p; ++p)
-			{
-				size_t i = 0;
-				while (i < needleLen
-					&& p[i]
-					&& std::tolower(static_cast<unsigned char>(p[i])) ==
-					std::tolower(static_cast<unsigned char>(needle[i])))
-				{
-					++i;
-				}
-
-				if (i == needleLen)
-					return true;
-			}
-
-			return false;
-		}
-
-		bool IsStewieMenuSearchXmlPath(const char* path)
-		{
-			return path
-				&& ContainsNoCase(path, "lStewieAl")
-				&& ContainsNoCase(path, "MenuSearch")
-				&& ContainsNoCase(path, ".xml");
-		}
-
-		StewieMenuHook* FindStewieHookByMenuID(UInt32 menuID)
-		{
-			for (StewieMenuHook& hook : s_stewieMenuHooks)
-			{
-				if (hook.menuID == menuID)
-					return &hook;
-			}
-
-			return nullptr;
-		}
-
-		StewieMenuHook* FindStewieHookByMenu(Menu* menu)
-		{
-			return menu ? FindStewieHookByMenuID(MenuID(menu)) : nullptr;
-		}
-
-		StewieMenuHook* FindStewieHookByRoot(Tile* root)
-		{
-			if (!root)
-				return nullptr;
-
-			for (StewieMenuHook& hook : s_stewieMenuHooks)
-			{
-				if (Menu* menu = GetOpenMenu(hook.menuID))
-				{
-					if (MenuRoot(menu) == root)
-						return &hook;
-				}
-			}
-
-			return nullptr;
-		}
-
-		StewieMenuHook* FindStewieHookByMenuSearchXmlPath(const char* path)
-		{
-			if (!path)
-				return nullptr;
-
-			if (ContainsNoCase(path, "Inventory.xml"))
-				return FindStewieHookByMenuID(Inventory);
-
-			if (ContainsNoCase(path, "Stats.xml"))
-				return FindStewieHookByMenuID(Stats);
-
-			if (ContainsNoCase(path, "Map.xml"))
-				return FindStewieHookByMenuID(PipboyData);
-
-			if (ContainsNoCase(path, "Container.xml"))
-				return FindStewieHookByMenuID(Container);
-
-			if (ContainsNoCase(path, "Barter.xml"))
-				return FindStewieHookByMenuID(Barter);
-
-			if (ContainsNoCase(path, "LevelUp.xml"))
-				return FindStewieHookByMenuID(LevelUp);
-
-			if (ContainsNoCase(path, "Recipe.xml"))
-				return FindStewieHookByMenuID(Recipe);
-
-			if (ContainsNoCase(path, "SaveLoad.xml"))
-				return FindStewieHookByMenuID(Pause);
-
-			return nullptr;
-		}
-
-		void ResetStewieMenuSearchStateSync(StewieMenuHook& hook)
-		{
-			hook.menuSearchStateSyncPending = false;
-			hook.menuSearchStateSyncAction = kStewieMenuSearchSync_None;
-			hook.menuSearchStateSyncWasActive = false;
-			hook.menuSearchStateSyncStartTick = 0;
-			hook.menuSearchStateSyncDueTick = 0;
-		}
-
-
-		void TrackStewieMenuSearchTile(
-			StewieMenuHook& hook,
-			Tile* root,
-			Tile* tile,
-			const char* path)
-		{
-			if (!tile)
-				return;
-
-			hook.menuSearchRoot = root;
-			hook.menuSearchTile = tile;
-			hook.menuSearchSeenTick = GetTickCount();
-			hook.menuSearchKeyboardActive = false;
-			ResetStewieMenuSearchStateSync(hook);
-
-			DebugLog(
-				"tnvse_multibyte_input_debug: menusearch_track name=%s menu=%u root=0x%08X tile=0x%08X id=%u path='%s' string='%s'",
-				hook.name,
-				hook.menuID,
-				reinterpret_cast<UInt32>(root),
-				reinterpret_cast<UInt32>(tile),
-				TileID(tile),
-				path ? path : "",
-				tile->GetValueString(Tile::kTileValue_string));
-		}
-
-		Tile* __fastcall TileReadXMLHook(Tile* root, void*, const char* xmlPath)
-		{
-			Tile* result = s_originalTileReadXML(root, xmlPath);
-
-			if (result && IsStewieMenuSearchXmlPath(xmlPath))
-			{
-				StewieMenuHook* hook = FindStewieHookByRoot(root);
-				if (!hook)
-					hook = FindStewieHookByMenuSearchXmlPath(xmlPath);
-
-				if (hook)
-				{
-					TrackStewieMenuSearchTile(*hook, root, result, xmlPath);
-				}
-				else
-				{
-					DebugLog(
-						"tnvse_multibyte_input_debug: menusearch_track_unmapped root=0x%08X tile=0x%08X id=%u path='%s'",
-						reinterpret_cast<UInt32>(root),
-						reinterpret_cast<UInt32>(result),
-						TileID(result),
-						xmlPath ? xmlPath : "");
-				}
-			}
-
-			return result;
-		}
-
-		void TryInstallTileReadXMLHook()
-		{
-			if (s_tileReadXMLHookInstalled)
-				return;
-
-			UInt8* trampoline = static_cast<UInt8*>(
-				VirtualAlloc(
-					nullptr,
-					kReadXMLPatchLen + 5,
-					MEM_COMMIT | MEM_RESERVE,
-					PAGE_EXECUTE_READWRITE));
-
-			if (!trampoline)
-			{
-				gLog.FormattedMessage("tnvse_multibyte_input: failed to allocate Tile::ReadXML trampoline");
-				return;
-			}
-
-			std::memcpy(
-				trampoline,
-				reinterpret_cast<void*>(kAddr_ReadXML),
-				kReadXMLPatchLen);
-
-			WriteRelJump(
-				reinterpret_cast<SIZE_T>(trampoline + kReadXMLPatchLen),
-				kAddr_ReadXML + kReadXMLPatchLen);
-
-			s_tileReadXMLTrampoline = trampoline;
-			s_originalTileReadXML = reinterpret_cast<TileReadXMLFn>(trampoline);
-
-			WriteRelJump(
-				kAddr_ReadXML,
-				reinterpret_cast<SIZE_T>(&TileReadXMLHook));
-
-			s_tileReadXMLHookInstalled = true;
-
-			gLog.FormattedMessage(
-				"tnvse_multibyte_input: Tile::ReadXML hook installed addr=0x%08X patchLen=%u",
-				static_cast<UInt32>(kAddr_ReadXML),
-				static_cast<UInt32>(kReadXMLPatchLen));
-		}
-
-		bool TileTreeContains(Tile* root, Tile* target, UInt32 depth = 0)
-		{
-			if (!root || !target || depth > 64)
-				return false;
-
-			if (root == target)
-				return true;
-
-			const std::vector<Tile*> children = root->GetChildren();
-			for (Tile* child : children)
-			{
-				if (TileTreeContains(child, target, depth + 1))
-					return true;
-			}
-
-			return false;
-		}
-
-		Tile* GetTrackedMenuSearchTile(Menu* menu)
-		{
-			StewieMenuHook* hook = FindStewieHookByMenu(menu);
-			if (!hook || !hook->menuSearchTile)
-				return nullptr;
-
-			Tile* root = MenuRoot(menu);
-			if (!root)
-				return nullptr;
-
-			if (TileTreeContains(root, hook->menuSearchTile))
-				return hook->menuSearchTile;
-
-			DebugLog(
-				"tnvse_multibyte_input_debug: menusearch_track_stale name=%s menu=%u oldRoot=0x%08X newRoot=0x%08X oldTile=0x%08X",
-				hook->name,
-				hook->menuID,
-				reinterpret_cast<UInt32>(hook->menuSearchRoot),
-				reinterpret_cast<UInt32>(root),
-				reinterpret_cast<UInt32>(hook->menuSearchTile));
-
-			hook->menuSearchRoot = nullptr;
-			hook->menuSearchTile = nullptr;
-			hook->menuSearchSeenTick = 0;
-			hook->menuSearchKeyboardActive = false;
-			ResetStewieMenuSearchStateSync(*hook);
-			return nullptr;
-		}
-
 		Tile* FindStewieActiveInputTile(Tile* tile, UInt32 id)
 		{
 			if (!tile)
@@ -428,19 +111,46 @@ namespace fonthook
 			return nullptr;
 		}
 
-		std::string TileStringWithoutCaret(Tile* tile, bool inputField, size_t& caret)
+		bool UsesUTF8StewieEncoding(const StewieInputTarget& target)
+		{
+			return target.kind != StewieInputKind::MenuSearch;
+		}
+
+		size_t ClampStewieBoundary(const StewieInputTarget& target, const std::string& text, size_t offset)
+		{
+			return UsesUTF8StewieEncoding(target)
+				? ClampToPrevUTF8Boundary(text, offset)
+				: ClampToPrevBoundary(text, offset);
+		}
+
+		size_t PreviousStewieBoundary(const StewieInputTarget& target, const std::string& text, size_t offset)
+		{
+			return UsesUTF8StewieEncoding(target)
+				? PrevUTF8CharBoundary(text, offset)
+				: PrevCharBoundary(text, offset);
+		}
+
+		size_t NextStewieBoundary(const StewieInputTarget& target, const std::string& text, size_t offset)
+		{
+			return UsesUTF8StewieEncoding(target)
+				? NextUTF8CharBoundary(text, offset)
+				: NextCharBoundary(text, offset);
+		}
+
+		std::string TileStringWithoutCaret(const StewieInputTarget& target, size_t& caret)
 		{
 			caret = 0;
+			Tile* tile = target.tile;
 			std::string text = tile ? tile->GetValueString(Tile::kTileValue_string) : "";
 			const size_t caretMarker = text.find('|');
 			if (caretMarker != std::string::npos)
 			{
 				text.erase(caretMarker, 1);
-				caret = ClampToPrevUTF8Boundary(text, caretMarker);
+				caret = ClampStewieBoundary(target, text, caretMarker);
 				return text;
 			}
 
-			if (inputField
+			if (target.inputField
 				&& s_tileTraitCaretIndex
 				&& TileTraitFloat(tile, s_tileTraitIsActive) > 0.5f)
 			{
@@ -448,7 +158,7 @@ namespace fonthook
 				if (caretIndex < text.size())
 				{
 					text.erase(caretIndex, 1);
-					caret = ClampToPrevUTF8Boundary(text, caretIndex);
+					caret = ClampStewieBoundary(target, text, caretIndex);
 					return text;
 				}
 			}
@@ -602,70 +312,10 @@ namespace fonthook
 			return {};
 		}
 
-		StewieInputTarget FindStewieMenuSearchTarget(Menu* menu)
-		{
-			if (!menu)
-				return {};
-
-			StewieMenuHook* hook = FindStewieHookByMenu(menu);
-			if (!hook || !hook->menuSearchKeyboardActive)
-				return {};
-
-			Tile* root = MenuRoot(menu);
-			if (!root)
-				return {};
-
-			Tile* searchTile = GetTrackedMenuSearchTile(menu);
-
-			if (!searchTile)
-			{
-				// Legacy fallback for older MenuSearch XML tracking. Do not use tile visibility or _IsActive as state.
-				searchTile = FindTileByID(root, kStewieMenuSearch_TextTile);
-			}
-
-			if (!searchTile)
-			{
-				hook->menuSearchKeyboardActive = false;
-				DebugLog(
-					"tnvse_multibyte_input_debug: menusearch_target_miss reason=no_tracked_searchbar menu=%u root=0x%08X legacyID=%u",
-					MenuID(menu),
-					reinterpret_cast<UInt32>(root),
-					kStewieMenuSearch_TextTile);
-				return {};
-			}
-
-			DebugLog(
-				"tnvse_multibyte_input_debug: menusearch_target_found menu=%u tile=0x%08X id=%u string='%s' keyboardActive=%u",
-				MenuID(menu),
-				reinterpret_cast<UInt32>(searchTile),
-				TileID(searchTile),
-				searchTile->GetValueString(Tile::kTileValue_string),
-				hook->menuSearchKeyboardActive ? 1 : 0);
-
-			return MakeStewieTarget(
-				StewieInputKind::MenuSearch,
-				menu,
-				searchTile,
-				false);
-		}
-
-		StewieInputTarget FindStewieTargetForMenu(Menu* menu)
-		{
-			if (!IsStewieTweaksAvailable() || !menu)
-				return {};
-
-			if (MenuID(menu) == kMenuType_StewMenu)
-				return FindStewMenuTarget(menu);
-
-			return FindStewieMenuSearchTarget(menu);
-		}
-
 		StewieInputTarget GetActiveStewieInputTarget()
 		{
 			if (!IsStewieTweaksAvailable())
 				return {};
-
-			TryInstallTileReadXMLHook();
 
 			if (Menu* menu = GetOpenMenu(kMenuType_StewMenu))
 			{
@@ -673,16 +323,7 @@ namespace fonthook
 					return target;
 			}
 
-			for (const StewieMenuHook& hook : s_stewieMenuHooks)
-			{
-				if (Menu* menu = GetOpenMenu(hook.menuID))
-				{
-					if (StewieInputTarget target = FindStewieMenuSearchTarget(menu); target.valid)
-						return target;
-				}
-			}
-
-			return {};
+			return GetActiveStewieMenuSearchTarget();
 		}
 
 		StewieInputTarget GetOverlayStewieInputTarget()
@@ -707,17 +348,9 @@ namespace fonthook
 			}
 
 			case StewieInputKind::MenuSearch:
-			{
-				for (const StewieMenuHook& hook : s_stewieMenuHooks)
-				{
-					if (Menu* menu = GetOpenMenu(hook.menuID))
-					{
-						if (StewieInputTarget target = FindStewieMenuSearchTarget(menu); target.valid)
-							return target;
-					}
-				}
+				if (StewieInputTarget target = GetActiveStewieMenuSearchTarget(); target.valid)
+					return target;
 				break;
-			}
 
 			default:
 				break;
@@ -728,23 +361,15 @@ namespace fonthook
 			return {};
 		}
 
-
 		SIZE_T OriginalStewieHandlerForMenu(Menu* menu)
 		{
 			if (!menu)
 				return 0;
 
-			const UInt32 menuID = MenuID(menu);
-			if (menuID == kMenuType_StewMenu)
+			if (MenuID(menu) == kMenuType_StewMenu)
 				return s_stewMenuOriginalInputHandler;
 
-			for (const StewieMenuHook& hook : s_stewieMenuHooks)
-			{
-				if (hook.menuID == menuID)
-					return hook.original;
-			}
-
-			return 0;
+			return GetStewieMenuSearchOriginalInputHandler(menu);
 		}
 
 		bool CallStewieOriginalInput(Menu* menu, UInt32 input)
@@ -762,10 +387,10 @@ namespace fonthook
 				return;
 
 			s_stewieShadow.target = target;
-			s_stewieShadow.text = TileStringWithoutCaret(target.tile, target.inputField, s_stewieShadow.caret);
+			s_stewieShadow.text = TileStringWithoutCaret(target, s_stewieShadow.caret);
 			if (!target.inputField && s_stewieShadow.text == "_")
 				s_stewieShadow.text.clear();
-			s_stewieShadow.caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, s_stewieShadow.caret);
+			s_stewieShadow.caret = ClampStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret);
 			s_stewieShadow.appliedBytes = s_stewieShadow.text.size();
 			s_stewieShadow.initialized = target.valid;
 		}
@@ -785,7 +410,7 @@ namespace fonthook
 			for (unsigned char ch : s_stewieShadow.text)
 				CallStewieOriginalInput(target.menu, ch);
 
-			const size_t caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, s_stewieShadow.caret);
+			const size_t caret = ClampStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret);
 			for (size_t i = caret; i < s_stewieShadow.text.size(); ++i)
 				CallStewieOriginalInput(target.menu, kInputCode_ArrowLeft);
 			s_stewieReplay = false;
@@ -806,7 +431,7 @@ namespace fonthook
 
 			s_stewieShadow.target = target;
 			s_stewieShadow.text = std::move(candidate);
-			s_stewieShadow.caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, caret);
+			s_stewieShadow.caret = ClampStewieBoundary(target, s_stewieShadow.text, caret);
 			s_stewieShadow.initialized = true;
 			return ReplayStewieShadow(target);
 		}
@@ -818,14 +443,16 @@ namespace fonthook
 
 			EnsureStewieShadow(target);
 			std::string candidate = s_stewieShadow.text;
-			size_t caret = ClampToPrevUTF8Boundary(candidate, s_stewieShadow.caret);
+			size_t caret = ClampStewieBoundary(target, candidate, s_stewieShadow.caret);
 			candidate.insert(caret, text.data(), text.size());
 			return CommitStewieShadow(target, std::move(candidate), caret + text.size());
 		}
 
 		bool InsertWideTextStewie(const StewieInputTarget& target, std::wstring_view text)
 		{
-			std::string converted = WideToUTF8(text);
+			std::string converted = UsesUTF8StewieEncoding(target)
+				? WideToUTF8(text)
+				: WideToCurrentCodePage(text);
 			if (converted.empty())
 				return false;
 
@@ -835,11 +462,11 @@ namespace fonthook
 		bool DeletePreviousStewieChar(const StewieInputTarget& target)
 		{
 			EnsureStewieShadow(target);
-			size_t caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, s_stewieShadow.caret);
+			size_t caret = ClampStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret);
 			if (!caret)
 				return true;
 
-			const size_t previous = PrevUTF8CharBoundary(s_stewieShadow.text, caret);
+			const size_t previous = PreviousStewieBoundary(target, s_stewieShadow.text, caret);
 			std::string candidate = s_stewieShadow.text;
 			candidate.erase(previous, caret - previous);
 			return CommitStewieShadow(target, std::move(candidate), previous);
@@ -848,11 +475,11 @@ namespace fonthook
 		bool DeleteNextStewieChar(const StewieInputTarget& target)
 		{
 			EnsureStewieShadow(target);
-			size_t caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, s_stewieShadow.caret);
+			size_t caret = ClampStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret);
 			if (caret >= s_stewieShadow.text.size())
 				return true;
 
-			const size_t next = NextUTF8CharBoundary(s_stewieShadow.text, caret);
+			const size_t next = NextStewieBoundary(target, s_stewieShadow.text, caret);
 			std::string candidate = s_stewieShadow.text;
 			candidate.erase(caret, next - caret);
 			return CommitStewieShadow(target, std::move(candidate), caret);
@@ -864,7 +491,7 @@ namespace fonthook
 			return CommitStewieShadow(
 				target,
 				s_stewieShadow.text,
-				PrevUTF8CharBoundary(s_stewieShadow.text, s_stewieShadow.caret));
+				PreviousStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret));
 		}
 
 		bool MoveStewieCaretNext(const StewieInputTarget& target)
@@ -873,7 +500,7 @@ namespace fonthook
 			return CommitStewieShadow(
 				target,
 				s_stewieShadow.text,
-				NextUTF8CharBoundary(s_stewieShadow.text, s_stewieShadow.caret));
+				NextStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret));
 		}
 
 		bool MoveStewieCaretHome(const StewieInputTarget& target)
@@ -895,11 +522,11 @@ namespace fonthook
 				return false;
 
 			EnsureStewieShadow(target);
-			size_t caret = ClampToPrevUTF8Boundary(s_stewieShadow.text, s_stewieShadow.caret);
+			size_t caret = ClampStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret);
 			if (!caret)
 				return false;
 
-			const size_t previous = PrevUTF8CharBoundary(s_stewieShadow.text, caret);
+			const size_t previous = PreviousStewieBoundary(target, s_stewieShadow.text, caret);
 			if (caret - previous != 1)
 				return false;
 
@@ -916,273 +543,14 @@ namespace fonthook
 			s_stewieShadow = StewieShadowState();
 		}
 
-		void ClearStewieMenuSearchTracking()
-		{
-			for (StewieMenuHook& hook : s_stewieMenuHooks)
-			{
-				hook.menuSearchRoot = nullptr;
-				hook.menuSearchTile = nullptr;
-				hook.menuSearchSeenTick = 0;
-				hook.menuSearchKeyboardActive = false;
-				ResetStewieMenuSearchStateSync(hook);
-			}
-		}
-
-
-		bool HasMenuSearchTileForHotkey(Menu* menu)
-		{
-			if (!menu)
-				return false;
-
-			Tile* root = MenuRoot(menu);
-			if (!root)
-				return false;
-
-			if (GetTrackedMenuSearchTile(menu))
-				return true;
-
-			return FindTileByID(root, kStewieMenuSearch_TextTile) != nullptr;
-		}
-
-		void ScheduleStewieMenuSearchStateSync(Menu* menu, UInt32 input, const char* source, bool originalHandled)
-		{
-			if (!menu || MenuID(menu) == kMenuType_StewMenu)
-				return;
-
-			StewieMenuHook* hook = FindStewieHookByMenu(menu);
-			if (!hook)
-				return;
-
-			const UInt32 key = input | 0x20;
-			if (key != 'f' && key != 'r')
-				return;
-
-			const DWORD now = GetTickCount();
-			const bool wasActive = hook->menuSearchKeyboardActive;
-
-			hook->menuSearchStateSyncPending = true;
-			hook->menuSearchStateSyncAction = key == 'r'
-				? kStewieMenuSearchSync_Deactivate
-				: kStewieMenuSearchSync_Toggle;
-			hook->menuSearchStateSyncWasActive = wasActive;
-			hook->menuSearchStateSyncStartTick = now;
-			hook->menuSearchStateSyncDueTick = now + kStewieMenuSearchStateSyncDelayMs;
-
-			if (key == 'r')
-			{
-				hook->menuSearchKeyboardActive = false;
-				ClearStewieInputState();
-				HideCandidateOverlay();
-			}
-
-			DebugLog(
-				"tnvse_multibyte_input_event: source=%s action=menusearch_sync_schedule menu=%u key=0x%08X handled=%u activeBefore=%u dueInMs=%u",
-				source ? source : "unknown",
-				MenuID(menu),
-				input,
-				originalHandled ? 1 : 0,
-				wasActive ? 1 : 0,
-				static_cast<UInt32>(kStewieMenuSearchStateSyncDelayMs));
-		}
-
-		Menu* GetStewieMenuSearchHotkeyMenu()
-		{
-			if (InterfaceManager* manager = InterfaceManager::GetSingleton())
-			{
-				if (Menu* activeMenu = manager->pActiveMenu)
-				{
-					if (FindStewieHookByMenu(activeMenu))
-						return activeMenu;
-				}
-			}
-
-			for (StewieMenuHook& hook : s_stewieMenuHooks)
-			{
-				if (Menu* menu = GetOpenMenu(hook.menuID))
-				{
-					if (HasMenuSearchTileForHotkey(menu))
-						return menu;
-				}
-			}
-
-			return nullptr;
-		}
-
-		bool TryTranslateMenuSearchHotkeyMessage(UINT msg, WPARAM wParam, LPARAM lParam, UInt32& key, const char*& source)
-		{
-			key = 0;
-			source = nullptr;
-
-			if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
-			{
-				if (lParam & (1 << 30))
-					return false;
-
-				if (!IsCtrlKeyDown())
-					return false;
-
-				if (wParam != 'F' && wParam != 'R')
-					return false;
-
-				key = static_cast<UInt32>(wParam);
-				source = msg == WM_SYSKEYDOWN ? "WndProc.WM_SYSKEYDOWN" : "WndProc.WM_KEYDOWN";
-				return true;
-			}
-
-			if (msg != WM_CHAR)
-				return false;
-
-			if (wParam == 0x06)
-			{
-				key = 'F';
-				source = "WndProc.WM_CHAR_CTRL_F";
-				return true;
-			}
-
-			if (wParam == 0x12)
-			{
-				key = 'R';
-				source = "WndProc.WM_CHAR_CTRL_R";
-				return true;
-			}
-
-			if (!IsCtrlKeyDown())
-				return false;
-
-			const UInt32 lowered = static_cast<UInt32>(wParam) | 0x20;
-			if (lowered != 'f' && lowered != 'r')
-				return false;
-
-			key = lowered;
-			source = "WndProc.WM_CHAR";
-			return true;
-		}
-
-		bool ObserveStewieMenuSearchHotkeyMessage(UINT msg, WPARAM wParam, LPARAM lParam)
-		{
-			UInt32 key = 0;
-			const char* source = nullptr;
-			if (!TryTranslateMenuSearchHotkeyMessage(msg, wParam, lParam, key, source))
-				return false;
-
-			Menu* menu = GetStewieMenuSearchHotkeyMenu();
-			if (!menu)
-			{
-				DebugLog(
-					"tnvse_multibyte_input_event: source=%s action=menusearch_hotkey_no_menu key=0x%08X raw=0x%08X",
-					source ? source : "WndProc",
-					key,
-					static_cast<UInt32>(wParam));
-				return false;
-			}
-
-			ScheduleStewieMenuSearchStateSync(
-				menu,
-				key,
-				source,
-				false);
-			return true;
-		}
-
-		void ProcessStewieMenuSearchPendingStateSync()
-		{
-			const DWORD now = GetTickCount();
-
-			for (StewieMenuHook& hook : s_stewieMenuHooks)
-			{
-				if (!hook.menuSearchStateSyncPending)
-					continue;
-
-				if (static_cast<SInt32>(now - hook.menuSearchStateSyncDueTick) < 0)
-					continue;
-
-				Menu* menu = GetOpenMenu(hook.menuID);
-				if (!menu)
-				{
-					hook.menuSearchKeyboardActive = false;
-					ResetStewieMenuSearchStateSync(hook);
-					ClearStewieInputState();
-					HideCandidateOverlay();
-					DebugLog(
-						"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_cancel_no_menu menu=%u",
-						hook.menuID);
-					continue;
-				}
-
-				if (hook.menuSearchStateSyncAction == kStewieMenuSearchSync_Deactivate)
-				{
-					hook.menuSearchKeyboardActive = false;
-					ResetStewieMenuSearchStateSync(hook);
-					ClearStewieInputState();
-					HideCandidateOverlay();
-					DebugLog(
-						"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_deactivate menu=%u",
-						hook.menuID);
-					continue;
-				}
-
-				if (hook.menuSearchStateSyncAction != kStewieMenuSearchSync_Toggle)
-				{
-					ResetStewieMenuSearchStateSync(hook);
-					continue;
-				}
-
-				const bool hasSearchTile = HasMenuSearchTileForHotkey(menu);
-				if (!hasSearchTile
-					&& static_cast<SInt32>(now - hook.menuSearchStateSyncStartTick) < static_cast<SInt32>(kStewieMenuSearchStateSyncTimeoutMs))
-				{
-					hook.menuSearchStateSyncDueTick = now + kStewieMenuSearchStateSyncRetryMs;
-					DebugLog(
-						"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_retry_no_tile menu=%u retryInMs=%u",
-						hook.menuID,
-						static_cast<UInt32>(kStewieMenuSearchStateSyncRetryMs));
-					continue;
-				}
-
-				hook.menuSearchKeyboardActive = !hook.menuSearchStateSyncWasActive && hasSearchTile;
-				ResetStewieMenuSearchStateSync(hook);
-				ClearStewieInputState();
-
-				DebugLog(
-					"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_apply menu=%u hasTile=%u activeAfter=%u",
-					hook.menuID,
-					hasSearchTile ? 1 : 0,
-					hook.menuSearchKeyboardActive ? 1 : 0);
-			}
-		}
-
-		bool HandleStewieMenuSearchControlInput(Menu* menu, UInt32 input, bool& handled)
-		{
-			handled = false;
-
-			if (!menu || MenuID(menu) == kMenuType_StewMenu || !IsCtrlKeyDown())
-				return false;
-
-			const UInt32 key = input | 0x20;
-			if (key != 'f' && key != 'r')
-				return false;
-
-			handled = CallStewieOriginalInput(menu, input);
-			ClearStewieInputState();
-			ScheduleStewieMenuSearchStateSync(
-				menu,
-				input,
-				"StewieTweaksInputTarget",
-				handled);
-
-			return true;
-		}
-
 		bool HandleStewieInput(Menu* menu, UInt32 input)
 		{
 			if (s_stewieReplay)
 				return CallStewieOriginalInput(menu, input);
 
-			bool menuSearchControlHandled = false;
-			if (HandleStewieMenuSearchControlInput(menu, input, menuSearchControlHandled))
-				return menuSearchControlHandled;
-
-			StewieInputTarget target = FindStewieTargetForMenu(menu);
+			StewieInputTarget target = MenuID(menu) == kMenuType_StewMenu
+				? FindStewMenuTarget(menu)
+				: FindStewieMenuSearchTarget(menu);
 			if (!target.valid)
 			{
 				DebugLog(
@@ -1270,34 +638,12 @@ namespace fonthook
 			}
 		}
 
-		bool InstallStewieHook(StewieMenuHook& hook)
-		{
-			if (hook.installed)
-				return true;
-
-			SIZE_T current = *reinterpret_cast<SIZE_T*>(hook.entry);
-			if (current == hook.hook)
-			{
-				hook.installed = true;
-				return true;
-			}
-
-			hook.original = current;
-			SafeWrite32(hook.entry, hook.hook);
-			hook.installed = true;
-			DebugLog(
-				"tnvse_multibyte_input: chained Stewie %s handler=0x%08X",
-				hook.name,
-				static_cast<UInt32>(current));
-			return true;
-		}
-
 		void TryInstallStewieTweaksInputHooks()
 		{
 			if (!IsStewieTweaksAvailable())
 				return;
 
-			TryInstallTileReadXMLHook();
+			TryInstallStewieMenuSearchHooks();
 
 			if (!s_tileTraitIsActive)
 				s_tileTraitIsActive = Tile::TraitNameToID("_IsActive");
@@ -1305,15 +651,6 @@ namespace fonthook
 				s_tileTraitIsSearchActive = Tile::TraitNameToID("_IsSearchActive");
 			if (!s_tileTraitCaretIndex)
 				s_tileTraitCaretIndex = Tile::TraitNameToID("_CaretIndex");
-
-			if (!s_stewieHooksInstalled)
-			{
-				for (StewieMenuHook& hook : s_stewieMenuHooks)
-					InstallStewieHook(hook);
-
-				s_stewieHooksInstalled = true;
-				gLog.FormattedMessage("tnvse_multibyte_input: Stewie Tweaks menu search input adapter installed");
-			}
 
 			if (Menu* stewMenu = GetOpenMenu(kMenuType_StewMenu))
 			{
@@ -1337,7 +674,7 @@ namespace fonthook
 		void ResetStewieInputState()
 		{
 			ClearStewieInputState();
-			ClearStewieMenuSearchTracking();
+			ResetStewieMenuSearchState();
 			s_stewieReplay = false;
 		}
 
@@ -1346,44 +683,5 @@ namespace fonthook
 			return HandleStewieInput(apMenu, aiInput);
 		}
 
-		bool __fastcall StewieTweaksInputTargetEx::InventoryMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
-		{
-			return HandleStewieInput(apMenu, aiInput);
-		}
-
-		bool __fastcall StewieTweaksInputTargetEx::StatsMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
-		{
-			return HandleStewieInput(apMenu, aiInput);
-		}
-
-		bool __fastcall StewieTweaksInputTargetEx::MapMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
-		{
-			return HandleStewieInput(apMenu, aiInput);
-		}
-
-		bool __fastcall StewieTweaksInputTargetEx::ContainerMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
-		{
-			return HandleStewieInput(apMenu, aiInput);
-		}
-
-		bool __fastcall StewieTweaksInputTargetEx::BarterMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
-		{
-			return HandleStewieInput(apMenu, aiInput);
-		}
-
-		bool __fastcall StewieTweaksInputTargetEx::LevelUpMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
-		{
-			return HandleStewieInput(apMenu, aiInput);
-		}
-
-		bool __fastcall StewieTweaksInputTargetEx::RecipeMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
-		{
-			return HandleStewieInput(apMenu, aiInput);
-		}
-
-		bool __fastcall StewieTweaksInputTargetEx::StartMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
-		{
-			return HandleStewieInput(apMenu, aiInput);
-		}
 	}
 }

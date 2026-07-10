@@ -73,6 +73,23 @@ namespace fonthook
 			bool valid = false;
 		};
 
+		UInt32 TileID(Tile* tile);
+		float TileTraitFloat(Tile* tile, UInt32 trait);
+		Tile* MenuRoot(Menu* menu);
+		UInt32 MenuID(Menu* menu);
+		Menu* GetOpenMenu(UInt32 menuID);
+		Tile* FindTileByID(Tile* tile, UInt32 id);
+		bool IsStewieTweaksAvailable();
+		StewieInputTarget MakeStewieTarget(StewieInputKind kind, Menu* menu, Tile* tile, bool inputField);
+		bool CallStewieOriginalInput(Menu* menu, UInt32 input);
+		bool HandleStewieInput(Menu* menu, UInt32 input);
+
+		StewieInputTarget FindStewieMenuSearchTarget(Menu* menu);
+		StewieInputTarget GetActiveStewieMenuSearchTarget();
+		SIZE_T GetStewieMenuSearchOriginalInputHandler(Menu* menu);
+		void TryInstallStewieMenuSearchHooks();
+		void ResetStewieMenuSearchState();
+
 		void DebugLog(const char* fmt, ...);
 		void DebugLogState(const char* source, const char* action, TextEditMenu* menu, SInt32 input);
 		char PrintableAscii(UInt32 value);
@@ -111,7 +128,6 @@ namespace fonthook
 		StewieInputTarget GetOverlayStewieInputTarget();
 		void TryInstallStewieTweaksInputHooks();
 		void TryInstallTileReadXMLHook();
-		void ClearStewieMenuSearchTracking();
 		void ClearStewieInputState();
 		void ResetStewieInputState();
 		void ProcessStewieMenuSearchPendingStateSync();

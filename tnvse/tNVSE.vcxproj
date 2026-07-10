@@ -148,6 +148,7 @@
     <ClCompile Include="Src\multibyte_input.cpp" />
     <ClCompile Include="Src\multibyte_input_common.cpp" />
     <ClCompile Include="Src\multibyte_input_ime.cpp" />
+    <ClCompile Include="Src\multibyte_input_menu_search.cpp" />
     <ClCompile Include="Src\multibyte_input_stewie.cpp" />
     <ClCompile Include="Src\multibyte_input_text_edit.cpp" />
     <ClCompile Include="Src\save_display_name.cpp" />
