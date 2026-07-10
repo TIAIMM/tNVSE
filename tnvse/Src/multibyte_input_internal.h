@@ -73,6 +73,12 @@ namespace fonthook
 			bool valid = false;
 		};
 
+		struct CandidateOverlayLine
+		{
+			std::wstring text;
+			bool highlighted = false;
+		};
+
 		UInt32 TileID(Tile* tile);
 		float TileTraitFloat(Tile* tile, UInt32 trait);
 		Tile* MenuRoot(Menu* menu);
@@ -136,6 +142,14 @@ namespace fonthook
 		bool RemovePreviousStewieAsciiCompositionEcho(wchar_t compositionLead);
 
 		bool HasOverlayInputTarget();
+		bool InitializeCandidateOverlayRenderer();
+		bool IsCandidateOverlayRendererAvailable();
+		bool RasterizeCandidateOverlay(
+			const std::vector<CandidateOverlayLine>& lines,
+			std::vector<UInt32>& pixels,
+			UInt32& width,
+			UInt32& height);
+		void ShutdownCandidateOverlayRenderer();
 		bool InitializeTsfCandidateSupport();
 		void UpdateCandidateOverlay();
 		void DrawCandidateOverlay();

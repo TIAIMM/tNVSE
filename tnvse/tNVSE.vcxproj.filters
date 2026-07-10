@@ -81,6 +81,9 @@
     <ClCompile Include="Src\multibyte_input_menu_search.cpp">
       <Filter>Source Files\Hooks</Filter>
     </ClCompile>
+    <ClCompile Include="Src\multibyte_input_overlay_freetype.cpp">
+      <Filter>Source Files\Hooks</Filter>
+    </ClCompile>
     <ClCompile Include="Src\multibyte_input_stewie.cpp">
       <Filter>Source Files\Hooks</Filter>
     </ClCompile>

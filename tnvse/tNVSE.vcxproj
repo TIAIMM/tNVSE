@@ -68,7 +68,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)third_party\freetype-2.14.3\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>SOL_ALL_SAFETIES_ON;SOL_SAFE_REFERENCES;SOL_SAFE_FUNCTION_CALLS;SOL_PRINT_ERRORS;SOL_USING_CXX_LUA_JIT;WIN32;_DEBUG;_WINDOWS;_USRDLL;NVSE_PLUGIN_EXAMPLE_EXPORTS;RUNTIME_VERSION=0x040020D0;RUNTIME;NOMINMAX;%(PreprocessorDefinitions);WIN32_LEAN_AND_MEAN</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -104,7 +104,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)third_party\freetype-2.14.3\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>SOL_ALL_SAFETIES_ON;SOL_SAFE_REFERENCES;SOL_SAFE_FUNCTION_CALLS;SOL_PRINT_ERRORS;SOL_USING_CXX_LUA_JIT;WIN32;NDEBUG;_WINDOWS;_USRDLL;NVSE_PLUGIN_EXAMPLE_EXPORTS;RUNTIME_VERSION=0x040020D0;RUNTIME;NOMINMAX;%(PreprocessorDefinitions);WIN32_LEAN_AND_MEAN</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <PrecompiledHeader />
@@ -149,6 +149,7 @@
     <ClCompile Include="Src\multibyte_input_common.cpp" />
     <ClCompile Include="Src\multibyte_input_ime.cpp" />
     <ClCompile Include="Src\multibyte_input_menu_search.cpp" />
+    <ClCompile Include="Src\multibyte_input_overlay_freetype.cpp" />
     <ClCompile Include="Src\multibyte_input_stewie.cpp" />
     <ClCompile Include="Src\multibyte_input_text_edit.cpp" />
     <ClCompile Include="Src\save_display_name.cpp" />
@@ -172,6 +173,11 @@
   <ItemGroup>
     <None Include="exports.def" />
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="third_party\freetype_tnvse.vcxproj">
+      <Project>{CC82EED8-B6AF-4F5B-8895-3078E22D16F4}</Project>
+    </ProjectReference>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Src\encoding.h" />

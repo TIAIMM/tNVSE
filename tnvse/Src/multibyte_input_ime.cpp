@@ -9,10 +9,6 @@ namespace fonthook
 		constexpr DWORD kDuplicateImeCharSuppressMs = 250;
 		constexpr DWORD kNativeImeAsciiGuardMs = 1000;
 		constexpr UInt32 kMaxImeCandidatesToDisplay = 9;
-		constexpr UInt32 kOverlayPadding = 10;
-		constexpr UInt32 kOverlayLineHeight = 24;
-		constexpr UInt32 kOverlayMinWidth = 260;
-		constexpr UInt32 kOverlayMaxWidth = 620;
 
 		bool s_compositionEchoChecked = false;
 		DWORD s_lastImeCommitTick = 0;
@@ -31,12 +27,6 @@ namespace fonthook
 			std::wstring imeName;
 			std::wstring composition;
 			std::vector<std::wstring> candidates;
-		};
-
-		struct CandidateOverlayLine
-		{
-			std::wstring text;
-			bool highlighted = false;
 		};
 
 		struct CandidateOverlayState
@@ -106,7 +96,10 @@ namespace fonthook
 
 			STDMETHODIMP BeginUIElement(DWORD dwUIElementId, BOOL* pbShow) override
 			{
-				if (pbShow && g_bMultibyteInputHideSystemCandidateWindow && HasOverlayInputTarget())
+				if (pbShow
+					&& g_bMultibyteInputHideSystemCandidateWindow
+					&& IsCandidateOverlayRendererAvailable()
+					&& HasOverlayInputTarget())
 					*pbShow = FALSE;
 
 				ReadCandidateElement(dwUIElementId);
@@ -652,7 +645,9 @@ namespace fonthook
 
 		void HideSystemImeWindows(HWND hwnd)
 		{
-			if (!g_bMultibyteInputHideSystemCandidateWindow || !hwnd)
+			if (!g_bMultibyteInputHideSystemCandidateWindow
+				|| !IsCandidateOverlayRendererAvailable()
+				|| !hwnd)
 				return;
 
 			if (s_hidingSystemImeWindows)
@@ -1001,21 +996,6 @@ namespace fonthook
 			return key;
 		}
 
-		const wchar_t* GetOverlayFontName()
-		{
-			switch (g_uiEncoding)
-			{
-			case 2:
-				return L"Microsoft JhengHei UI";
-			case 3:
-				return L"Meiryo";
-			case 4:
-				return L"Malgun Gothic";
-			default:
-				return L"Microsoft YaHei UI";
-			}
-		}
-
 		void ReleaseCandidateOverlayTexture()
 		{
 			if (s_candidateOverlay.texture)
@@ -1036,7 +1016,7 @@ namespace fonthook
 
 		void UpdateCandidateOverlay()
 		{
-			if (!g_bMultibyteInputCompositionPreview)
+			if (!g_bMultibyteInputCompositionPreview || !IsCandidateOverlayRendererAvailable())
 			{
 				HideCandidateOverlay();
 				return;
@@ -1056,112 +1036,25 @@ namespace fonthook
 			}
 
 			s_candidateOverlay.visible = true;
-			s_candidateOverlay.dirty = true;
 		}
 
 		bool RenderOverlayTexture(
 			LPDIRECT3DDEVICE9 device,
 			const std::vector<CandidateOverlayLine>& lines)
 		{
-			if (!device || lines.empty())
+			if (!device || lines.empty() || !IsCandidateOverlayRendererAvailable())
 				return false;
 
-			HDC hdc = CreateCompatibleDC(nullptr);
-			if (!hdc)
-				return false;
-
-			HFONT font = CreateFontW(
-				-18,
-				0,
-				0,
-				0,
-				FW_NORMAL,
-				FALSE,
-				FALSE,
-				FALSE,
-				DEFAULT_CHARSET,
-				OUT_DEFAULT_PRECIS,
-				CLIP_DEFAULT_PRECIS,
-				CLEARTYPE_QUALITY,
-				DEFAULT_PITCH | FF_DONTCARE,
-				GetOverlayFontName());
-			HGDIOBJ oldFont = font ? SelectObject(hdc, font) : nullptr;
-
-			UInt32 maxLineWidth = 0;
-			for (const CandidateOverlayLine& line : lines)
+			std::vector<UInt32> pixels;
+			UInt32 width = 0;
+			UInt32 height = 0;
+			if (!RasterizeCandidateOverlay(lines, pixels, width, height)
+				|| !width
+				|| !height
+				|| pixels.size() != static_cast<size_t>(width) * height)
 			{
-				SIZE current = {};
-				if (GetTextExtentPoint32W(hdc, line.text.c_str(), static_cast<int>(line.text.size()), &current))
-					maxLineWidth = std::max<UInt32>(maxLineWidth, static_cast<UInt32>(current.cx));
-			}
-
-			UInt32 width = std::clamp<UInt32>(maxLineWidth + kOverlayPadding * 2, kOverlayMinWidth, kOverlayMaxWidth);
-			UInt32 height = kOverlayPadding * 2 + static_cast<UInt32>(lines.size()) * kOverlayLineHeight;
-			width = std::max<UInt32>(width, 1);
-			height = std::max<UInt32>(height, 1);
-
-			BITMAPINFO bmi = {};
-			bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-			bmi.bmiHeader.biWidth = static_cast<LONG>(width);
-			bmi.bmiHeader.biHeight = -static_cast<LONG>(height);
-			bmi.bmiHeader.biPlanes = 1;
-			bmi.bmiHeader.biBitCount = 32;
-			bmi.bmiHeader.biCompression = BI_RGB;
-
-			void* pixels = nullptr;
-			HBITMAP bitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pixels, nullptr, 0);
-			if (!bitmap || !pixels)
-			{
-				if (oldFont)
-					SelectObject(hdc, oldFont);
-				if (font)
-					DeleteObject(font);
-				DeleteDC(hdc);
 				return false;
 			}
-
-			HGDIOBJ oldBitmap = SelectObject(hdc, bitmap);
-			RECT background = { 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
-			HBRUSH backgroundBrush = CreateSolidBrush(RGB(18, 18, 18));
-			FillRect(hdc, &background, backgroundBrush);
-			DeleteObject(backgroundBrush);
-
-			HBRUSH borderBrush = CreateSolidBrush(RGB(220, 220, 220));
-			FrameRect(hdc, &background, borderBrush);
-			DeleteObject(borderBrush);
-
-			SetBkMode(hdc, TRANSPARENT);
-			for (size_t i = 0; i < lines.size(); ++i)
-			{
-				RECT lineRect = {
-					static_cast<LONG>(kOverlayPadding),
-					static_cast<LONG>(kOverlayPadding + i * kOverlayLineHeight),
-					static_cast<LONG>(width - kOverlayPadding),
-					static_cast<LONG>(kOverlayPadding + (i + 1) * kOverlayLineHeight)
-				};
-
-				if (lines[i].highlighted)
-				{
-					RECT highlightRect = lineRect;
-					highlightRect.left -= 4;
-					highlightRect.right += 4;
-					HBRUSH highlightBrush = CreateSolidBrush(RGB(58, 84, 126));
-					FillRect(hdc, &highlightRect, highlightBrush);
-					DeleteObject(highlightBrush);
-				}
-
-				SetTextColor(hdc, lines[i].highlighted ? RGB(255, 255, 255) : RGB(230, 230, 230));
-				DrawTextW(
-					hdc,
-					lines[i].text.c_str(),
-					static_cast<int>(lines[i].text.size()),
-					&lineRect,
-					DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-			}
-
-			auto* argb = static_cast<UInt32*>(pixels);
-			for (UInt32 i = 0; i < width * height; ++i)
-				argb[i] |= 0xE8000000;
 
 			if (!s_candidateOverlay.texture
 				|| s_candidateOverlay.textureWidth != width
@@ -1178,13 +1071,6 @@ namespace fonthook
 					&s_candidateOverlay.texture,
 					nullptr)))
 				{
-					SelectObject(hdc, oldBitmap);
-					DeleteObject(bitmap);
-					if (oldFont)
-						SelectObject(hdc, oldFont);
-					if (font)
-						DeleteObject(font);
-					DeleteDC(hdc);
 					return false;
 				}
 
@@ -1193,28 +1079,19 @@ namespace fonthook
 			}
 
 			D3DLOCKED_RECT locked = {};
-			if (SUCCEEDED(s_candidateOverlay.texture->LockRect(0, &locked, nullptr, 0)))
-			{
-				for (UInt32 y = 0; y < height; ++y)
-				{
-					std::memcpy(
-						static_cast<UInt8*>(locked.pBits) + y * locked.Pitch,
-						argb + y * width,
-						width * sizeof(UInt32));
-				}
-				s_candidateOverlay.texture->UnlockRect(0);
-			}
+			if (FAILED(s_candidateOverlay.texture->LockRect(0, &locked, nullptr, 0)))
+				return false;
 
-			SelectObject(hdc, oldBitmap);
-			DeleteObject(bitmap);
-			if (oldFont)
-				SelectObject(hdc, oldFont);
-			if (font)
-				DeleteObject(font);
-			DeleteDC(hdc);
+			for (UInt32 y = 0; y < height; ++y)
+			{
+				std::memcpy(
+					static_cast<UInt8*>(locked.pBits) + y * locked.Pitch,
+					pixels.data() + static_cast<size_t>(y) * width,
+					width * sizeof(UInt32));
+			}
+			s_candidateOverlay.texture->UnlockRect(0);
 			return true;
 		}
-
 		struct OverlayVertex
 		{
 			float x;
@@ -1228,7 +1105,9 @@ namespace fonthook
 
 		void DrawCandidateOverlay()
 		{
-			if (!g_bMultibyteInputCompositionPreview || !s_candidateOverlay.visible)
+			if (!g_bMultibyteInputCompositionPreview
+				|| !IsCandidateOverlayRendererAvailable()
+				|| !s_candidateOverlay.visible)
 				return;
 
 			std::vector<CandidateOverlayLine> lines = BuildCandidateOverlayLines();
@@ -1247,7 +1126,10 @@ namespace fonthook
 			if (s_candidateOverlay.dirty || key != s_candidateOverlay.lastKey || !s_candidateOverlay.texture)
 			{
 				if (!RenderOverlayTexture(device, lines))
+				{
+					s_candidateOverlay.dirty = true;
 					return;
+				}
 
 				s_candidateOverlay.lastKey = std::move(key);
 				s_candidateOverlay.dirty = false;
@@ -1682,6 +1564,7 @@ namespace fonthook
 
 				if (msg == WM_IME_SETCONTEXT
 					&& g_bMultibyteInputHideSystemCandidateWindow
+					&& IsCandidateOverlayRendererAvailable()
 					&& hasInputTarget)
 				{
 					HideSystemImeWindows(hwnd);

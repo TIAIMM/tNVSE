@@ -9,6 +9,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "tNVSE", "tNVSE.vcxproj", "{
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "commonlib_nv", "..\commonlib_nv\commonlib_nv.vcxproj", "{FDFF5558-96EF-47ED-932D-ECCEEC5A58DE}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "freetype_tnvse", "third_party\freetype_tnvse.vcxproj", "{CC82EED8-B6AF-4F5B-8895-3078E22D16F4}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -23,6 +25,10 @@ Global
 		{FDFF5558-96EF-47ED-932D-ECCEEC5A58DE}.Debug|Win32.Build.0 = Debug|Win32
 		{FDFF5558-96EF-47ED-932D-ECCEEC5A58DE}.Release|Win32.ActiveCfg = Release|Win32
 		{FDFF5558-96EF-47ED-932D-ECCEEC5A58DE}.Release|Win32.Build.0 = Release|Win32
+		{CC82EED8-B6AF-4F5B-8895-3078E22D16F4}.Debug|Win32.ActiveCfg = Debug|Win32
+		{CC82EED8-B6AF-4F5B-8895-3078E22D16F4}.Debug|Win32.Build.0 = Debug|Win32
+		{CC82EED8-B6AF-4F5B-8895-3078E22D16F4}.Release|Win32.ActiveCfg = Release|Win32
+		{CC82EED8-B6AF-4F5B-8895-3078E22D16F4}.Release|Win32.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -47,14 +47,17 @@ namespace fonthook
 
 		if (g_bMultibyteInputCompositionPreview)
 		{
-			if (g_bMultibyteInputUseTSFCandidates)
+			if (InitializeCandidateOverlayRenderer())
 			{
-				if (InitializeTsfCandidateSupport())
-					gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink enabled");
-				else
-					gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink unavailable; using IMM32 fallback");
+				if (g_bMultibyteInputUseTSFCandidates)
+				{
+					if (InitializeTsfCandidateSupport())
+						gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink enabled");
+					else
+						gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink unavailable; using IMM32 fallback");
+				}
+				gLog.FormattedMessage("tnvse_multibyte_input: composition preview overlay enabled");
 			}
-			gLog.FormattedMessage("tnvse_multibyte_input: composition preview overlay enabled");
 		}
 		gLog.FormattedMessage("tnvse_multibyte_input: hooks installed");
 	}
@@ -94,8 +97,12 @@ namespace fonthook
 				UpdateCandidateOverlay();
 			}
 		}
-		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitGame
-			|| apMessage->type == NVSEMessagingInterface::kMessage_ExitToMainMenu)
+		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitGame)
+		{
+			RestoreWindowProc();
+			ShutdownCandidateOverlayRenderer();
+		}
+		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitToMainMenu)
 		{
 			RestoreWindowProc();
 		}
