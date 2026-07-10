@@ -12,6 +12,7 @@
 #include "load_config.h"
 #include "tnvse.h"
 #include "font_hook.h"
+#include "font_vector.h"
 #include "dictionary.h"
 #include "multibyte_input.h"
 #include "save_display_name.h"
@@ -29,6 +30,11 @@ NVSECommandTableInterface* g_cmdTableInterface = NULL;
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
 void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 {
+	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit
+		|| g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop))
+	{
+		fonthook::FlushFreeTypeFontDebugLog();
+	}
 	fonthook::HandleSaveDisplayNameMessage(g_msg);
 	fonthook::HandleMultibyteInputMessage(g_msg);
 }
@@ -50,6 +56,7 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 	}
 
 	LoadConfig();
+	fonthook::LoadFreeTypeFontConfig();
 	fonthook::LoadDictionaryConfig();
 
 	g_nvseInterface = const_cast<NVSEInterface*>(nvse);

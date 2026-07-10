@@ -75,8 +75,10 @@
     <ClCompile Include="freetype-2.14.3\src\autofit\autofit.c" />
     <ClCompile Include="freetype-2.14.3\src\base\ftbase.c" />
     <ClCompile Include="freetype-2.14.3\src\base\ftbitmap.c" />
+    <ClCompile Include="freetype-2.14.3\src\base\ftglyph.c" />
     <ClCompile Include="freetype-2.14.3\src\base\ftinit.c" />
     <ClCompile Include="freetype-2.14.3\src\base\ftmm.c" />
+    <ClCompile Include="freetype-2.14.3\src\base\ftstroke.c" />
     <ClCompile Include="freetype-2.14.3\src\cff\cff.c" />
     <ClCompile Include="freetype-2.14.3\src\psaux\psaux.c" />
     <ClCompile Include="freetype-2.14.3\src\pshinter\pshinter.c" />

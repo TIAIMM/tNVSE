@@ -1,0 +1,6 @@
+[submodule "tnvse/third_party/freetype-2.14.3"]
+	path = tnvse/third_party/freetype-2.14.3
+	url = https://github.com/freetype/freetype.git
+[submodule "tnvse/third_party/libtess2"]
+	path = tnvse/third_party/libtess2
+	url = https://github.com/memononen/libtess2.git

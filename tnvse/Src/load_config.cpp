@@ -6,6 +6,8 @@ UINT32 g_uiEncoding;
 UINT32 g_usingWinEncoding;
 bool g_bEnableUTF8;
 bool g_bEnableMultibyteFontHook;
+bool g_bEnableFreeTypeFontRendering;
+bool g_bEnableFreeTypeFontRenderingLog;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputDebug;
 bool g_bMultibyteInputCompositionPreview;
@@ -103,6 +105,12 @@ void LoadConfig()
 
 	g_bEnableMultibyteFontHook = ReadConfigInt(kMainSection, nullptr, "bEnableMultibyteFontHook", 1, filename);
 	gLog.FormattedMessage("g_bEnableMultibyteFontHook: %d", g_bEnableMultibyteFontHook);
+
+	g_bEnableFreeTypeFontRendering = ReadConfigInt(kMainSection, nullptr, "bEnableFreeTypeFontRendering", 0, filename);
+	gLog.FormattedMessage("g_bEnableFreeTypeFontRendering: %d", g_bEnableFreeTypeFontRendering);
+
+	g_bEnableFreeTypeFontRenderingLog = ReadConfigInt(kMainSection, nullptr, "bEnableFreeTypeFontRenderingLog", 0, filename);
+	gLog.FormattedMessage("g_bEnableFreeTypeFontRenderingLog: %d", g_bEnableFreeTypeFontRenderingLog);
 
 	g_bMultibyteInput = ReadConfigInt(kMainSection, nullptr, "bMultibyteInput", 0, filename);
 	gLog.FormattedMessage("g_bMultibyteInput: %d", g_bMultibyteInput);

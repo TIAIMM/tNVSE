@@ -6,6 +6,8 @@ extern UINT32 g_uiEncoding;       // UI encoding identifier: 0=English, 1=GBK, 2
 extern UINT32 g_usingWinEncoding; // Windows code page derived from g_uiEncoding
 extern bool g_bEnableUTF8;
 extern bool g_bEnableMultibyteFontHook;
+extern bool g_bEnableFreeTypeFontRendering;
+extern bool g_bEnableFreeTypeFontRenderingLog;
 extern bool g_bMultibyteInput;
 extern bool g_bMultibyteInputDebug;
 extern bool g_bMultibyteInputCompositionPreview;

@@ -2,8 +2,10 @@
 #include "dictionary.h"
 #include "font_glyphs.h"
 #include "font_manager.h"
+#include "font_vector.h"
 #include "native_calls.h"
 #include <cmath>
+#include <vector>
 
 namespace fonthook
 {
@@ -190,6 +192,7 @@ namespace fonthook
 	Font* FontEx::FontInit(int iFontNum, char* apFilename, bool abLoad)
 	{
 		TlsSlotGuard tlsGuard;
+		bool movedExtraGlyphs = false;
 
 		StdCall(0xEC782F, this->pTextureData, 4, 8, 0xA1B410, 0x45CEC0);
 		this->IconAtlasTextureName.pString = 0;
@@ -221,6 +224,7 @@ namespace fonthook
 			{
 				gNumberedExtraLetters[iFontNum] = std::move(it->second);
 				gExtraFontLetters.erase(it);
+				movedExtraGlyphs = true;
 				if (!gNumberedExtraLetters[iFontNum].empty())
 				{
 					fontNameKey.clear();
@@ -231,6 +235,8 @@ namespace fonthook
 				fontNameKey.clear();
 			}
 		}
+
+		ActivateFreeTypeFont(this, movedExtraGlyphs);
 
 		return this;
 	}
@@ -244,6 +250,8 @@ namespace fonthook
 		if (refCount || !this->pFontFile)
 		{
 			++this->iRefCount;
+			if (this->pFontData)
+				ActivateFreeTypeFont(this);
 			return;
 		}
 
@@ -278,6 +286,7 @@ namespace fonthook
 			return;
 
 		++this->iRefCount;
+		ActivateFreeTypeFont(this);
 	}
 
 	// ---- FontEx::Load helpers ----
@@ -670,6 +679,7 @@ namespace fonthook
 				else
 				{
 					origConsumed += 2;
+					EnsureFreeTypeDoubleByteMetrics(font, uiDoubleByteCode);
 					FontLetter* glyph = LookupDBGlyph(extraGlyphs, uiDoubleByteCode);
 					if (glyph)
 					{
@@ -877,6 +887,232 @@ namespace fonthook
 		PrepTextImpl(this, apOrigString, axData, false);
 	}
 
+	static bool DecodeRenderableVectorGlyph(FontEx* font, const char* text, VectorEncodedGlyph& glyph)
+	{
+		UInt32 dbcsCode = 0;
+		if (text && text[1] && TryDecodeDoubleByte(text, dbcsCode))
+			return DecodeFreeTypeGlyph(font, text, glyph);
+
+		char converted[2] = { text ? text[0] : 0, 0 };
+		ConvertToAsciiQuotes(reinterpret_cast<UInt8*>(converted));
+		return DecodeFreeTypeGlyph(font, converted, glyph);
+	}
+
+	static float GetPreparedIconAdvance(FontEx* font, int iconIndex)
+	{
+		if (!font || !font->pFontData)
+			return 0.0f;
+
+		const FontLetter* iconGlyph = &font->pFontData->pFontLetters[1];
+		if (!font->ButtonIcons.pBuffer
+			|| iconIndex < 0
+			|| iconIndex >= static_cast<int>(font->ButtonIcons.uiSize))
+		{
+			return GetGlyphRenderAdvance(iconGlyph);
+		}
+
+		const ButtonIcon& icon = font->ButtonIcons.pBuffer[iconIndex];
+		return iconGlyph->fLeadingEdge + icon.fWidth
+			+ (icon.fWidth > 0.0f ? icon.fSpacing : 0.0f);
+	}
+
+	static std::vector<float> MeasureFreeTypePreparedLineWidths(
+		FontEx* font,
+		const char* text,
+		char lineBreakChar)
+	{
+		std::vector<float> widths;
+		float lineAdvance = 0.0f;
+		int iconIndex = 0;
+
+		for (int byteIndex = 0; text && text[byteIndex]; ++byteIndex)
+		{
+			const UInt8 current = static_cast<UInt8>(text[byteIndex]);
+			if (current == static_cast<UInt8>(lineBreakChar))
+			{
+				widths.push_back(lineAdvance);
+				lineAdvance = 0.0f;
+				continue;
+			}
+			if (current == '\t')
+			{
+				const float remainder = fmodf(lineAdvance, static_cast<float>(kTabWidth));
+				lineAdvance += static_cast<float>(kTabWidth) - remainder;
+				continue;
+			}
+			if (current == 1)
+			{
+				lineAdvance += GetPreparedIconAdvance(font, iconIndex++);
+				continue;
+			}
+			if (current < 0x20 || current == kDelChar)
+				continue;
+
+			VectorEncodedGlyph glyph;
+			if (!DecodeRenderableVectorGlyph(font, &text[byteIndex], glyph))
+				continue;
+			lineAdvance += GetGlyphRenderAdvance(glyph.metrics);
+			byteIndex += glyph.byteLength - 1;
+		}
+
+		widths.push_back(lineAdvance);
+		return widths;
+	}
+
+	static float GetLineAlignmentOffset(int flags, float lineWidth)
+	{
+		if (flags == 4)
+			return -lineWidth;
+		if (flags == 2)
+			return lineWidth * -0.5f;
+		return 0.0f;
+	}
+
+	static void LogFreeTypeOrdinaryAlignmentOnce(
+		const FontEx* font,
+		int flags,
+		int preparedWidth,
+		float vectorWidth,
+		float alignmentOffset)
+	{
+		static bool logged[32][3] = {};
+		if (!font || font->iFontNum < 0 || font->iFontNum >= 32)
+			return;
+
+		const int alignmentIndex = flags == 2 ? 1 : flags == 4 ? 2 : 0;
+		if (logged[font->iFontNum][alignmentIndex])
+			return;
+		logged[font->iFontNum][alignmentIndex] = true;
+
+		const char* alignmentName = flags == 2 ? "center" : flags == 4 ? "right" : "left";
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_font: ordinary layout font=%d flags=%d alignment=%s preparedWidth=%d vectorWidth=%.3f offset=%.3f",
+			font->iFontNum,
+			flags,
+			alignmentName,
+			preparedWidth,
+			vectorWidth,
+			alignmentOffset);
+	}
+
+	static UInt32 CreateFreeTypePreparedText(
+		FontEx* font,
+		Font::TextData& textData,
+		int* aiWidth,
+		int* aiHeight,
+		int aiFlags,
+		char aiLineBreakChar,
+		const NiColorA* fontColor,
+		NiTriShape** textShape,
+		NiTriShape** iconShape)
+	{
+		*textShape = nullptr;
+		*iconShape = nullptr;
+		VectorTextBuilder builder(font, true);
+		if (!builder.IsAvailable())
+		{
+			if (NiNode* empty = NiNode::Create())
+				*textShape = reinterpret_cast<NiTriShape*>(empty);
+			font->ButtonIcons.Clear(1);
+			return ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&textData));
+		}
+
+		const std::vector<float> lineWidths = MeasureFreeTypePreparedLineWidths(
+			font, textData.xNewText.pString, aiLineBreakChar);
+		float maxLineWidth = 0.0f;
+		for (float lineWidth : lineWidths)
+		{
+			if (lineWidth > maxLineWidth)
+				maxLineWidth = lineWidth;
+		}
+		*aiWidth = static_cast<int>(ceilf(maxLineWidth));
+
+		size_t lineIndex = 0;
+		float lineWidth = lineWidths.empty() ? 0.0f : lineWidths[0];
+		float lineOrigin = GetLineAlignmentOffset(aiFlags, lineWidth);
+		LogFreeTypeOrdinaryAlignmentOnce(
+			font, aiFlags, textData.xLineWidths.m_item, lineWidth, lineOrigin);
+
+		NiPoint3 position;
+		position.x = lineOrigin;
+		const double lineBaseOffset = font->pFontData->fBaseLine - font->fFontHeight;
+		position.z = static_cast<float>(lineBaseOffset + lineBaseOffset);
+		position.y = 0.0f;
+
+		NiTriShape* icons = nullptr;
+		if (font->ButtonIcons.uiSize)
+		{
+			icons = font->MakeIconsTriShape();
+			*iconShape = icons;
+			if (icons)
+			{
+				icons->m_kLocal.m_Translate = NiPoint3(0.0f, position.y, position.z);
+				ThisStdCall(0xA67050, icons->GetModelData(), 0x4000);
+			}
+		}
+
+		const float linePadding = FontManager::GetLinePadding(font->iFontNum);
+		float lineAdvance = 0.0f;
+		int iconIndex = 0;
+		for (int byteIndex = 0; textData.xNewText.pString[byteIndex]; ++byteIndex)
+		{
+			const UInt8 current = static_cast<UInt8>(textData.xNewText.pString[byteIndex]);
+			if (current == static_cast<UInt8>(aiLineBreakChar))
+			{
+				++lineIndex;
+				lineWidth = lineIndex < lineWidths.size() ? lineWidths[lineIndex] : 0.0f;
+				lineOrigin = GetLineAlignmentOffset(aiFlags, lineWidth);
+				lineAdvance = 0.0f;
+				position.x = lineOrigin;
+				position.z -= font->pFontData->fBaseLine + linePadding;
+				continue;
+			}
+			if (current == '\t')
+			{
+				const float remainder = fmodf(lineAdvance, static_cast<float>(kTabWidth));
+				lineAdvance += static_cast<float>(kTabWidth) - remainder;
+				position.x = lineOrigin + lineAdvance;
+				continue;
+			}
+			if (current == 1)
+			{
+				if (icons && font->ButtonIcons.pBuffer)
+				{
+					font->AddIcon(iconIndex++, icons, &position);
+					lineAdvance = position.x - lineOrigin;
+				}
+				else
+				{
+					lineAdvance += GetPreparedIconAdvance(font, iconIndex++);
+					position.x = lineOrigin + lineAdvance;
+				}
+				continue;
+			}
+			if (current < 0x20 || current == kDelChar)
+				continue;
+
+			VectorEncodedGlyph glyph;
+			if (!DecodeRenderableVectorGlyph(font, &textData.xNewText.pString[byteIndex], glyph))
+				continue;
+			builder.AddGlyph(glyph, position, fontColor);
+			lineAdvance += GetGlyphRenderAdvance(glyph.metrics);
+			position.x = lineOrigin + lineAdvance;
+			byteIndex += glyph.byteLength - 1;
+		}
+
+		NiNode* root = builder.Finish();
+		if (!root)
+			root = NiNode::Create();
+		if (root)
+		{
+			root->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f,
+				static_cast<float>(lineBaseOffset + lineBaseOffset));
+			*textShape = reinterpret_cast<NiTriShape*>(root);
+		}
+		font->ButtonIcons.Clear(1);
+		return ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&textData));
+	}
+
 	// ==================== FontEx::CreateText ====================
 	UInt32 FontEx::CreateText(
 		BSStringT<char>* axTextString, int* aiWidth, int* aiHeight,
@@ -907,6 +1143,12 @@ namespace fonthook
 
 		*aiWidth = textData.iWidth;
 		*aiHeight = textData.iHeight;
+
+		if (IsFreeTypeFontActive(this))
+		{
+			return CreateFreeTypePreparedText(this, textData, aiWidth, aiHeight,
+				aiFlags, aiLineBreakChar, axFontColor, apTextShape, apIconShape);
+		}
 
 		int alignmentOffset = 0;
 		if (aiFlags == 4)
@@ -1081,6 +1323,72 @@ namespace fonthook
 		if (!charIdx)
 			return 0;
 
+		if (IsFreeTypeFontActive(this))
+		{
+			VectorTextBuilder builder(this, abPrepareObject_1);
+			if (!builder.IsAvailable())
+			{
+				NiNode* empty = NiNode::Create();
+				if (empty)
+				empty->m_kLocal.m_Translate = NiPoint3(afStartX, currentZ, currentY);
+				return reinterpret_cast<NiTriShape*>(empty);
+			}
+
+			const float startY = currentY;
+			const float startX = currentX;
+			NiColorA* activeColor = nullptr;
+			NiColorA defaultColor = { 0.0f, 0.0f, 1.0f, 1.0f };
+			*aiWidth = 0;
+			for (int byteIndex = 0; apTextString->pString[byteIndex]; ++byteIndex)
+			{
+				const UInt8 current = static_cast<UInt8>(apTextString->pString[byteIndex]);
+				if (current == 3)
+				{
+					activeColor = nullptr;
+					continue;
+				}
+				if (current == 2)
+				{
+					activeColor = &defaultColor;
+					continue;
+				}
+				if (current == '\t')
+				{
+					const double remainder = fmod(currentX, static_cast<double>(kTabWidth));
+					currentX = static_cast<float>(currentX + kTabWidth - remainder);
+					continue;
+				}
+				if (current == '\n')
+				{
+					char escapeBuffer[4];
+					float nextLineX = static_cast<float>(*aiWidth);
+					ThisStdCall(0xA12370, this, apTextString->pString, &nextLineX,
+						escapeBuffer, abPrepareObject, byteIndex + 1);
+					currentX = nextLineX;
+					currentY -= this->pFontData->fBaseLine;
+					continue;
+				}
+				if (current < 0x20 || current == kDelChar)
+					continue;
+
+				VectorEncodedGlyph glyph;
+				if (!DecodeRenderableVectorGlyph(this, &apTextString->pString[byteIndex], glyph))
+					continue;
+				const NiPoint3 pen(currentX, currentY, currentZ);
+				builder.AddGlyph(glyph, pen, activeColor ? activeColor : arg1C);
+				currentX += GetGlyphRenderAdvance(glyph.metrics);
+				byteIndex += glyph.byteLength - 1;
+				*aiWidth = MaxInt(*aiWidth, ConditionalFloatToUInt(currentX - startX));
+			}
+
+			NiNode* root = builder.Finish();
+			if (!root)
+				root = NiNode::Create();
+			if (root)
+				root->m_kLocal.m_Translate = NiPoint3(afStartX, currentZ, startY);
+			return reinterpret_cast<NiTriShape*>(root);
+		}
+
 		int iActualCharCount = AdjustCharCountForDB(
 			apTextString->pString, charIdx, extraGlyphs, textLen);
 
@@ -1181,6 +1489,13 @@ namespace fonthook
 		FontLetter* renderLetter = ResolveRichTextRenderGlyph(this, renderInfo, hasRenderInfo, apLetter);
 		LogTextDocRenderAddChar(this, renderInfo, hasRenderInfo, apLetter,
 			renderLetter, aiVert, apShape, apPosition, apColor, sCallCount);
+		if (hasRenderInfo && apPosition
+			&& AddFreeTypeRichTextGlyph(this, renderInfo.charData, *apPosition, apColor))
+		{
+			static FontLetter emptyLetter = {};
+			Font::AddChar(&emptyLetter, aiVert, apShape, apPosition, apColor);
+			return;
+		}
 		Font::AddChar(renderLetter, aiVert, apShape, apPosition, apColor);
 	}
 

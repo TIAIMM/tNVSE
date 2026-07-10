@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<tNVSE>
+  <fonts>
+    <!--
+      This configuration uses fonts installed on the current Windows system.
+      Replace the absolute paths when deploying to a machine without them.
+
+      IDs 1-8 correspond to the standard Fallout: New Vegas font slots. Each
+      slot uses Arial Narrow for single-byte text and Microsoft YaHei for DBCS
+      text. Segoe UI Symbol is kept inside each byte class as a fallback.
+    -->
+
+    <!-- 1: Glow_Monofonto_Large -->
+    <font id="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" lineHeight="0"
+          curveTolerance="0.35">
+      <singleByte>
+        <face path="C:/Windows/Fonts/ARIALN.TTF" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </singleByte>
+      <doubleByte>
+        <face path="C:/Windows/Fonts/msyh.ttc" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </doubleByte>
+      <glow enabled="0" width="2" color="#FFFFFF" alpha="0.35"/>
+      <outline enabled="1" width="0.5" color="#000000" alpha="1"/>
+      <shadow enabled="0" x="1" y="1" color="#000000" alpha="0.65"/>
+    </font>
+
+    <!-- 2: Monofonto_Large -->
+    <font id="2" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" lineHeight="0"
+          curveTolerance="0.35">
+      <singleByte>
+        <face path="C:/Windows/Fonts/ARIALN.TTF" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </singleByte>
+      <doubleByte>
+        <face path="C:/Windows/Fonts/msyh.ttc" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </doubleByte>
+      <glow enabled="0" width="2" color="#FFFFFF" alpha="0.35"/>
+      <outline enabled="0" width="0" color="#000000" alpha="1"/>
+      <shadow enabled="0" x="1" y="1" color="#000000" alpha="0.65"/>
+    </font>
+
+    <!-- 3: Glow_Monofonto_Medium -->
+    <font id="3" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" lineHeight="0"
+          curveTolerance="0.35">
+      <singleByte>
+        <face path="C:/Windows/Fonts/ARIALN.TTF" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </singleByte>
+      <doubleByte>
+        <face path="C:/Windows/Fonts/msyh.ttc" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </doubleByte>
+      <glow enabled="0" width="2" color="#FFFFFF" alpha="0.35"/>
+      <outline enabled="1" width="0.75" color="#000000" alpha="1"/>
+      <shadow enabled="0" x="1" y="1" color="#000000" alpha="0.65"/>
+    </font>
+
+    <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
+    <font id="4" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" lineHeight="0"
+          curveTolerance="0.35">
+      <singleByte>
+        <face path="C:/Windows/Fonts/ARIALN.TTF" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </singleByte>
+      <doubleByte>
+        <face path="C:/Windows/Fonts/msyh.ttc" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </doubleByte>
+      <glow enabled="0" width="2" color="#FFFFFF" alpha="0.35"/>
+      <outline enabled="0" width="0" color="#000000" alpha="1"/>
+      <shadow enabled="0" x="1" y="1" color="#000000" alpha="0.65"/>
+    </font>
+
+    <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
+    <font id="5" pixelSize="25" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" lineHeight="0"
+          curveTolerance="0.35">
+      <singleByte>
+        <face path="C:/Windows/Fonts/ARIALN.TTF" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </singleByte>
+      <doubleByte>
+        <face path="C:/Windows/Fonts/msyh.ttc" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </doubleByte>
+      <glow enabled="0" width="2" color="#FFFFFF" alpha="0.35"/>
+      <outline enabled="0" width="0" color="#000000" alpha="1"/>
+      <shadow enabled="0" x="1" y="1" color="#000000" alpha="0.65"/>
+    </font>
+
+    <!-- 6: Glow_Monofonto_VL_dialogs -->
+    <font id="6" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" lineHeight="0"
+          curveTolerance="0.35">
+      <singleByte>
+        <face path="C:/Windows/Fonts/ARIALN.TTF" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </singleByte>
+      <doubleByte>
+        <face path="C:/Windows/Fonts/msyh.ttc" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </doubleByte>
+      <glow enabled="0" width="2" color="#FFFFFF" alpha="0.35"/>
+      <outline enabled="1" width="0.5" color="#000000" alpha="1"/>
+      <shadow enabled="0" x="1" y="1" color="#000000" alpha="0.65"/>
+    </font>
+
+    <!-- 7: Baked-in_Monofonto_Large -->
+    <font id="7" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" lineHeight="0"
+          curveTolerance="0.35">
+      <singleByte>
+        <face path="C:/Windows/Fonts/ARIALN.TTF" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </singleByte>
+      <doubleByte>
+        <face path="C:/Windows/Fonts/msyh.ttc" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </doubleByte>
+      <glow enabled="0" width="2" color="#FFFFFF" alpha="0.35"/>
+      <outline enabled="1" width="1.5" color="#000000" alpha="1"/>
+      <shadow enabled="0" x="1" y="1" color="#000000" alpha="0.65"/>
+    </font>
+
+    <!-- 8: Glow_Futura_Caps_Large -->
+    <font id="8" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" lineHeight="0"
+          curveTolerance="0.35">
+      <singleByte>
+        <face path="C:/Windows/Fonts/ARIALN.TTF" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </singleByte>
+      <doubleByte>
+        <face path="C:/Windows/Fonts/msyh.ttc" index="0"/>
+        <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
+      </doubleByte>
+      <glow enabled="0" width="3" color="#FFFFFF" alpha="0.35"/>
+      <outline enabled="1" width="1.25" color="#000000" alpha="1"/>
+      <shadow enabled="0" x="1" y="1" color="#000000" alpha="0.65"/>
+    </font>
+  </fonts>
+</tNVSE>

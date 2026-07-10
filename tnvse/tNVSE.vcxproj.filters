@@ -30,6 +30,18 @@
     <ClCompile Include="Src\font_engine.cpp">
       <Filter>Source Files\Font</Filter>
     </ClCompile>
+    <ClCompile Include="Src\font_vector_config.cpp">
+      <Filter>Source Files\Font</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_vector_freetype.cpp">
+      <Filter>Source Files\Font</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_vector_log.cpp">
+      <Filter>Source Files\Font</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_vector_render.cpp">
+      <Filter>Source Files\Font</Filter>
+    </ClCompile>
     <ClCompile Include="Src\font_hook.cpp">
       <Filter>Source Files\Font</Filter>
     </ClCompile>
@@ -117,6 +129,12 @@
       <Filter>Header Files\Font</Filter>
     </ClInclude>
     <ClInclude Include="Src\font_engine.h">
+      <Filter>Header Files\Font</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\font_vector.h">
+      <Filter>Header Files\Font</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\font_vector_internal.h">
       <Filter>Header Files\Font</Filter>
     </ClInclude>
     <ClInclude Include="Src\font_glyphs.h">

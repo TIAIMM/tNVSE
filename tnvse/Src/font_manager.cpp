@@ -1,6 +1,7 @@
 #include "font_manager.h"
 #include "dictionary.h"
 #include "font_glyphs.h"
+#include "font_vector.h"
 #include "native_calls.h"
 #include <cmath>
 #include <cstring>
@@ -279,6 +280,9 @@ namespace fonthook
 		FontLetter* LookupRichTextDbcsGlyph(const FontManager::CharData* apChar, UInt32 auiDbcsCode, Font** apOutFont = nullptr)
 		{
 			ExtraGlyphMap* extraGlyphs = GetExtraGlyphsForChar(apChar, apOutFont);
+			Font* font = apOutFont ? *apOutFont : nullptr;
+			if (font)
+				EnsureFreeTypeDoubleByteMetrics(font, auiDbcsCode);
 			return LookupDBGlyph(extraGlyphs, auiDbcsCode);
 		}
 
@@ -805,6 +809,7 @@ namespace fonthook
 
 			if (bIsDBCharacter)
 			{
+				EnsureFreeTypeDoubleByteMetrics(this->pFont[fontID - 1], uiDoubleByteCode);
 				auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
 				if (glyphIt != extraGlyphs->end())
 				{
@@ -1043,7 +1048,9 @@ namespace fonthook
 	{
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
 		ScopedRichTextRenderContext renderContext(doc, apData);
+		BeginFreeTypeRichTextRender(apNode);
 		CallTextDocRender(doc, apNode, apData);
+		EndFreeTypeRichTextRender();
 	}
 
 	void __thiscall FontManagerEx::TextDocDestroy()
