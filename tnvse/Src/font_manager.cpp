@@ -774,20 +774,29 @@ namespace fonthook
 		int sourceStringLength = strlen(srcString);
 		FontLetter* fontCharMetrics = this->pFont[fontID - 1]->pFontData->pFontLetters;
 		float fontBaseLine = this->pFont[fontID - 1]->pFontData->fBaseLine;
-		float lastValidWrapPosition = 0.0;
-		float currentLineWidth = 0.0;
+		float softWrapWidth = 0.0f;
+		bool hasSoftWrap = false;
+		UInt32 unitsAtSoftWrap = 0;
+		float currentLineWidth = 0.0f;
 		float fontVerticalSpacingAdjust = FontManager::GetLinePadding(fontID);
-		float previousCharTotalWidth = 0.0;
-		char hasHyphenationPoint = 0;
+		float previousCharTotalWidth = 0.0f;
+		UInt32 currentLineUnitCount = 0;
 		int totalLines = 1;
 		StringDimensions.y = fontCharMetrics[' '].fHeight;
+		auto finishLine = [&](float completedWidth)
+		{
+			StringDimensions.x = (completedWidth >= StringDimensions.x)
+				? completedWidth : StringDimensions.x;
+			StringDimensions.y += fontVerticalSpacingAdjust + fontBaseLine;
+			++totalLines;
+		};
 
 		UInt32 uiDoubleByteCode;
 		for (int currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
 		{
 			bool bIsDBCharacter = false;
 			UInt8 currentChar = srcString[currentCharIndex];
-			float currentCharTotalWidth = 0.0;
+			float currentCharTotalWidth = 0.0f;
 
 			if (extraGlyphs)
 			{
@@ -813,63 +822,81 @@ namespace fonthook
 				auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
 				if (glyphIt != extraGlyphs->end())
 				{
-					currentCharTotalWidth = GetGlyphMeasureWidth(&glyphIt->second);
+					currentCharTotalWidth = static_cast<float>(GetGlyphLayoutWidth(&glyphIt->second));
 				}
 				++currentCharIndex;
 			}
 			else
 			{
 				ConvertToAsciiQuotes(&currentChar);
-				currentCharTotalWidth = GetGlyphMeasureWidth(&fontCharMetrics[currentChar]);
-				switch (currentChar)
+				currentCharTotalWidth = static_cast<float>(GetGlyphLayoutWidth(&fontCharMetrics[currentChar]));
+				if (currentChar == '\t')
 				{
-				case '\t':
-				{
-					// 0xEC9130
+					// PrepTextImpl advances tabs to the next 75-pixel stop without
+					// making the tab an encoded unit or triggering a wrap itself.
 					double tabRemainder = fmod(currentLineWidth, 75.0);
-					currentCharTotalWidth = (float)(75.0 - tabRemainder);
-					break;
+					currentLineWidth += static_cast<float>(75.0 - tabRemainder);
+					continue;
 				}
-				case '\n':
-					lastValidWrapPosition = currentLineWidth;
-					hasHyphenationPoint = 0;
-					break;
-				case ' ':
-					break;
-				case '~':
-					lastValidWrapPosition = currentLineWidth;
-					hasHyphenationPoint = 1;
-					break;
-				default:
-					break;
+				if (currentChar == '\n')
+				{
+					finishLine(currentLineWidth);
+					currentLineWidth = 0.0f;
+					previousCharTotalWidth = 0.0f;
+					currentLineUnitCount = 0;
+					softWrapWidth = 0.0f;
+					hasSoftWrap = false;
+					unitsAtSoftWrap = 0;
+					continue;
+				}
+				if (currentChar == '~')
+				{
+					if (currentLineUnitCount > 0)
+					{
+						softWrapWidth = currentLineWidth;
+						hasSoftWrap = true;
+						unitsAtSoftWrap = currentLineUnitCount;
+					}
+					if (maxWrapWidth < currentLineWidth && hasSoftWrap)
+					{
+						finishLine(softWrapWidth);
+						currentLineWidth -= softWrapWidth;
+						currentLineUnitCount = currentLineUnitCount >= unitsAtSoftWrap
+							? currentLineUnitCount - unitsAtSoftWrap : 0;
+						softWrapWidth = 0.0f;
+						hasSoftWrap = false;
+						unitsAtSoftWrap = 0;
+					}
+					continue;
 				}
 			}
 
-			if (currentChar != '~')
-				currentLineWidth = currentLineWidth + currentCharTotalWidth;
+			currentLineWidth += currentCharTotalWidth;
 
-			if (maxWrapWidth < currentLineWidth || currentChar == '\n')
+			if (maxWrapWidth < currentLineWidth)
 			{
-				if (lastValidWrapPosition <= 0.0)
+				if (hasSoftWrap)
 				{
-					lastValidWrapPosition = currentLineWidth
-						- currentCharTotalWidth - previousCharTotalWidth;
-					currentLineWidth = currentCharTotalWidth + previousCharTotalWidth;
+					finishLine(softWrapWidth);
+					currentLineWidth -= softWrapWidth;
+					currentLineUnitCount = currentLineUnitCount >= unitsAtSoftWrap
+						? currentLineUnitCount - unitsAtSoftWrap : 0;
+					softWrapWidth = 0.0f;
+					hasSoftWrap = false;
+					unitsAtSoftWrap = 0;
 				}
-				else
+				else if (currentLineUnitCount > 0)
 				{
-					currentLineWidth = currentLineWidth - lastValidWrapPosition;
-					if (!hasHyphenationPoint && currentChar == '\n')
-						currentLineWidth = 0.0;
+					float completedWidth = currentLineWidth
+						- previousCharTotalWidth - currentCharTotalWidth;
+					if (completedWidth < 0.0f)
+						completedWidth = 0.0f;
+					finishLine(completedWidth);
+					currentLineWidth = previousCharTotalWidth + currentCharTotalWidth;
+					currentLineUnitCount = 1;
 				}
-
-				StringDimensions.x = (lastValidWrapPosition >= StringDimensions.x)
-					? lastValidWrapPosition : StringDimensions.x;
-				StringDimensions.y = fontVerticalSpacingAdjust
-					+ fontBaseLine + StringDimensions.y;
-				lastValidWrapPosition = 0.0;
-				++totalLines;
 			}
+			++currentLineUnitCount;
 			previousCharTotalWidth = currentCharTotalWidth;
 		}
 
