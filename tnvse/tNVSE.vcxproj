@@ -146,6 +146,10 @@
     <ClCompile Include="Src\font_engine.cpp" />
     <ClCompile Include="Src\font_manager.cpp" />
     <ClCompile Include="Src\multibyte_input.cpp" />
+    <ClCompile Include="Src\multibyte_input_common.cpp" />
+    <ClCompile Include="Src\multibyte_input_ime.cpp" />
+    <ClCompile Include="Src\multibyte_input_stewie.cpp" />
+    <ClCompile Include="Src\multibyte_input_text_edit.cpp" />
     <ClCompile Include="Src\save_display_name.cpp" />
     <ClCompile Include="Src\text_hooks.cpp" />
     <ClCompile Include="Src\game_hooks.cpp" />
@@ -175,6 +179,7 @@
     <ClInclude Include="Src\font_glyphs.h" />
     <ClInclude Include="Src\font_manager.h" />
     <ClInclude Include="Src\multibyte_input.h" />
+    <ClInclude Include="Src\multibyte_input_internal.h" />
     <ClInclude Include="Src\save_display_name.h" />
     <ClInclude Include="Src\text_hooks.h" />
     <ClInclude Include="Src\game_hooks.h" />
