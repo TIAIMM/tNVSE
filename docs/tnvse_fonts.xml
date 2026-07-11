@@ -1,6 +1,120 @@
 <?xml version="1.0" encoding="utf-8"?>
 <tNVSE>
   <fonts>
+    <!--
+      Requirements: bEnableMultibyteFontHook=1 and
+                    bEnableFreeTypeFontRendering=1 in tnvse.ini.
+      Only font IDs listed in this file are handled by FreeType. Unlisted IDs
+      continue to use the original .fnt/.tex renderer. If an ID is configured
+      more than once, the last configuration replaces earlier ones.
+
+      1. <font> attributes
+
+      id
+        Required positive integer identifying the game font slot. Common
+        Fallout: New Vegas font slots are:
+        1 = Glow_Monofonto_Large
+        2 = Monofonto_Large
+        3 = Glow_Monofonto_Medium
+        4 = Monofonto_VeryLarge02_Dialogs2
+        5 = Fixedsys_Comp_uniform_width (terminal font)
+        6 = Glow_Monofonto_VL_dialogs
+        7 = Baked-in_Monofonto_Large
+        8 = Glow_Futura_Caps_Large
+
+      pixelSize
+        Font size in pixels. Must be greater than 0. This is the default for
+        both singleByte and doubleByte.
+      tracking
+        Additional character spacing in pixels. May be positive, zero, or
+        negative. Default: 0.
+      scaleX / scaleY
+        Horizontal and vertical glyph scale. Must be greater than 0.
+        Default: 1.
+      embolden
+        FreeType outline emboldening in pixels. Must be 0 or greater.
+        Default: 0. There is no weight attribute; use embolden or select a
+        bold font file.
+      slant
+        Slant angle in degrees, clamped to the range -45 through 45.
+        Positive values slant to the right. Default: 0. There is no italic
+        attribute.
+      baselineOffset
+        Vertical baseline adjustment in pixels. May be positive or negative.
+        Default: 0.
+      lineHeight
+        Shared line height in pixels. 0 derives line metrics from both byte
+        classes. Default: 0. This attribute is read only from <font> and
+        cannot be overridden per byte class.
+      curveTolerance
+        Curve-flattening tolerance for the vector fallback path. Minimum:
+        0.01. Default: 0.35. The normal grayscale atlas path does not use it.
+      fontColor
+        Optional fill-color override in #RRGGBB format. When omitted, the
+        renderer keeps the text color supplied by the game.
+      fontAlpha
+        Alpha for fontColor, clamped to the range 0 through 1. Default: 1.
+        It is used only when fontColor is present.
+
+      2. Single-byte and double-byte font groups
+
+      <singleByte> handles valid single-byte encoding units in uiEncoding.
+      <doubleByte> handles valid DBCS two-byte encoding units in uiEncoding.
+      Shift-JIS half-width katakana use singleByte. Routing is based on the
+      encoded byte length, not the Unicode range or glyph availability.
+
+      singleByte and doubleByte may independently override these <font>
+      attributes:
+        pixelSize, tracking, scaleX, scaleY, embolden, slant, baselineOffset
+
+      Attributes not overridden by a byte class are inherited from <font>.
+      lineHeight, curveTolerance, fontColor, fontAlpha, glow, outline, and
+      shadow apply to the entire font ID and cannot be overridden per group.
+
+      3. Font files and fallback chains
+
+      <face path="..." index="0"/>
+        Primary font. Every resolved byte class must have one primary face.
+      <fallback path="..." index="0"/>
+        Optional fallback font. Multiple fallbacks may be listed in lookup
+        order.
+
+      path
+        May be absolute or relative to the FalloutNV.exe directory. Forward
+        and backward slashes are accepted. Relative paths can be redirected
+        through the MO2 virtual file system.
+      index
+        Face index inside the font collection. Default: 0. It must be 0 or
+        greater. Regular TTF/OTF files normally use 0; TTC/OTC collections
+        may use another index to select a contained face.
+
+      A face/fallback chain directly under <font> is the default for both byte
+      classes. A byte class with no face or fallback children inherits that
+      chain. If a byte class contains any face or fallback child, its complete
+      chain replaces the parent chain and it must provide a valid <face>.
+      Glyph lookup never falls back across byte classes.
+
+      4. Font effects
+
+      <glow enabled="1" width="2" color="#FFFFFF" alpha="0.35"/>
+      <outline enabled="1" width="1" color="#000000" alpha="1"/>
+        enabled: 0 disables and 1 enables the effect. A present node defaults
+                 to enabled when this attribute is omitted.
+        width:   effect width in pixels. It must be greater than 0, otherwise
+                 the effect is disabled.
+        color:   #RRGGBB only. Default: #000000.
+        alpha:   clamped to the range 0 through 1. Default: 1. An alpha of 0
+                 disables the effect.
+
+      <shadow enabled="1" x="1" y="1" color="#000000" alpha="0.65"/>
+        enabled, color, and alpha follow the same rules as above.
+        x / y are shadow offsets in pixels, may be positive or negative, and
+        default to 0.
+
+      An absent glow, outline, or shadow node disables that effect. Effect
+      alpha and fontAlpha are multiplied by the text alpha supplied by the
+      game.
+    -->
 
     <!-- 1: Glow_Monofonto_Large -->
     <font id="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
