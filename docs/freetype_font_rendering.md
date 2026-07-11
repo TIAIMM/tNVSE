@@ -21,6 +21,8 @@ fonts continue to use the original `.fnt` and `.tex` files.
 <tNVSE>
   <fonts>
     <font id="1"
+          shaping="1"
+          features="kern,liga,clig,calt"
           pixelSize="24"
           fontColor="#FFFFFF"
           fontAlpha="1"
@@ -85,6 +87,15 @@ geometry in that order. Every configured alpha is multiplied by the game text
 alpha, so visibility and fade animations continue to work. Glow and outline
 are generated as grayscale masks and share the same text atlas as the fill.
 
+`shaping="0"` is the default. It uses FreeType 26.6 advances and
+`FT_Get_Kerning()` without rounding every glyph in advance. `shaping="1"`
+enables HarfBuzz GSUB/GPOS for ordinary `Font` text. The optional
+comma-separated `features` attribute uses HarfBuzz feature syntax, for example
+`kern,liga,ss01=1,-dlig`; unspecified features keep HarfBuzz's script defaults.
+`features` is invalid unless shaping is enabled. Rich text keeps one game
+`CharData` per encoded character and therefore uses precise FreeType kerning
+without GSUB substitutions.
+
 Routing follows the selected `uiEncoding`: valid one-byte units use
 `singleByte`, while valid DBCS pairs use `doubleByte`. Shift-JIS half-width
 katakana therefore use the single-byte font. Missing glyph lookup stays inside
@@ -102,6 +113,7 @@ When UIO 2.30 scales a TileText call, tNVSE includes the validated UIO scale in
 the effective raster size and aligns glyph geometry to final screen pixels.
 Other UIO versions and ordinary calls use a raster scale of `1.0`. If atlas
 creation fails, the renderer falls back to the libtess2 outline path. HarfBuzz
-shaping, kerning, RTL layout, LCD subpixel rendering, color-font rendering, and
+shaping is limited to horizontal LTR text in the configured DBCS code pages;
+bidirectional layout, LCD subpixel rendering, color-font rendering, and
 variable-font axis controls are outside this feature. Invalid or unavailable
 configurations leave that entire font ID on the original `.fnt`/`.tex` renderer.

@@ -4,3 +4,6 @@
 [submodule "tnvse/third_party/libtess2"]
 	path = tnvse/third_party/libtess2
 	url = https://github.com/memononen/libtess2.git
+[submodule "tnvse/third_party/harfbuzz"]
+	path = tnvse/third_party/harfbuzz
+	url = https://github.com/harfbuzz/harfbuzz.git

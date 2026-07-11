@@ -2,7 +2,9 @@
 
 #include "ui_decode.h"
 
+#include <cstddef>
 #include <memory>
+#include <vector>
 
 namespace fonthook
 {
@@ -16,9 +18,28 @@ namespace fonthook
 	{
 		UInt32 encodedCode = 0;
 		UInt32 codePoint = 0;
+		UInt32 glyphIndex = 0;
+		UInt16 faceIndex = 0;
+		bool hasGlyphIdentity = false;
 		UInt8 byteLength = 0;
 		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 		FontLetter* metrics = nullptr;
+	};
+
+	struct FreeTypeLayoutGlyph
+	{
+		VectorEncodedGlyph glyph;
+		UInt32 cluster = 0;
+		float xAdvance = 0.0f;
+		float xOffset = 0.0f;
+		float yOffset = 0.0f;
+	};
+
+	struct FreeTypeLayoutRun
+	{
+		std::vector<FreeTypeLayoutGlyph> glyphs;
+		float advance = 0.0f;
+		bool shaped = false;
 	};
 
 	void LoadFreeTypeFontConfig();
@@ -32,6 +53,9 @@ namespace fonthook
 	bool IsFreeTypeFontActive(const Font* apFont);
 	FontLetter* EnsureFreeTypeDoubleByteMetrics(Font* apFont, UInt32 auiEncodedCode);
 	bool DecodeFreeTypeGlyph(Font* apFont, const char* apText, VectorEncodedGlyph& arGlyph);
+	bool LayoutFreeTypeRun(Font* apFont, const char* apText, size_t auiLength,
+		FreeTypeLayoutRun& arLayout, bool abAllowShaping = true);
+	bool IsHarfBuzzShapingEnabled(const Font* apFont);
 	NiTriShape* CreateEmptyFreeTypeTextShape(Font* apFont, bool abPrepareObject);
 
 	class VectorTextBuilder

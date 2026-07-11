@@ -4,8 +4,11 @@
 
 #include "../include/pugixml/pugixml.hpp"
 
+#include <hb.h>
+
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -188,6 +191,13 @@ namespace fonthook::vectorfont
 		{
 			UInt64 hash = 1469598103934665603ull;
 			HashBytes(hash, &config.fontId, sizeof(config.fontId));
+			HashBytes(hash, &config.shaping, sizeof(config.shaping));
+			for (const std::string& feature : config.shapingFeatures)
+			{
+				const size_t featureLength = feature.size();
+				HashBytes(hash, &featureLength, sizeof(featureLength));
+				HashBytes(hash, feature.data(), feature.size());
+			}
 			HashBytes(hash, &config.baseline, sizeof(config.baseline));
 			HashBytes(hash, &config.curveTolerance, sizeof(config.curveTolerance));
 			HashBytes(hash, &config.fontColor.configured, sizeof(config.fontColor.configured));
@@ -279,6 +289,44 @@ namespace fonthook::vectorfont
 				reason = "baseline must be finite and zero or greater";
 				return false;
 			}
+			config.shaping = node.attribute("shaping").as_bool(false);
+			const std::string features = node.attribute("features").as_string();
+			if (!features.empty())
+			{
+				if (!config.shaping)
+				{
+					reason = "features requires shaping=1";
+					return false;
+				}
+				size_t begin = 0;
+				while (begin < features.size())
+				{
+					const size_t comma = features.find(',', begin);
+					const size_t end = comma == std::string::npos ? features.size() : comma;
+					size_t first = begin;
+					size_t last = end;
+					while (first < last && std::isspace(static_cast<unsigned char>(features[first])))
+						++first;
+					while (last > first && std::isspace(static_cast<unsigned char>(features[last - 1])))
+						--last;
+					if (first == last)
+					{
+						reason = "features contains an empty token";
+						return false;
+					}
+					std::string token = features.substr(first, last - first);
+					hb_feature_t parsed = {};
+					if (!hb_feature_from_string(token.data(), static_cast<int>(token.size()), &parsed))
+					{
+						reason = "invalid HarfBuzz feature: " + token;
+						return false;
+					}
+					config.shapingFeatures.push_back(std::move(token));
+					if (comma == std::string::npos)
+						break;
+					begin = comma + 1;
+				}
+			}
 			config.curveTolerance = std::max(0.01f, node.attribute("curveTolerance").as_float(kDefaultCurveTolerance));
 			if (!ReadFontColor(node, config.fontColor))
 			{
@@ -297,8 +345,10 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u baseline=%.2f tolerance=%.3f fontColor=%d glow=%d outline=%d shadow=%d",
-				config.fontId, config.baseline, config.curveTolerance,
+				"tnvse_freetype_font: config font id=%u shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d glow=%d outline=%d shadow=%d",
+				config.fontId, config.shaping ? 1 : 0,
+				static_cast<UInt32>(config.shapingFeatures.size()),
+				config.baseline, config.curveTolerance,
 				config.fontColor.configured, config.glow.enabled,
 				config.outline.enabled, config.shadow.enabled);
 			if (config.fontColor.configured)

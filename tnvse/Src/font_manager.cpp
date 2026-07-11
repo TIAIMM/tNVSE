@@ -4,6 +4,8 @@
 #include "font_vector.h"
 #include "native_calls.h"
 #include <cstring>
+#include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -447,6 +449,90 @@ namespace fonthook
 			return TryGetRichTextCharDbcs(apChar, dbcsCode);
 		}
 
+		bool EncodeRichTextChar(const FontManager::CharData* character,
+			char (&encoded)[3], size_t& length)
+		{
+			encoded[0] = encoded[1] = encoded[2] = 0;
+			length = 0;
+			if (!character || HasRichTextFilename(character) || character->cChar < 0x20)
+				return false;
+			UInt32 dbcsCode = 0;
+			if (TryGetRichTextCharDbcs(character, dbcsCode))
+			{
+				encoded[0] = static_cast<char>((dbcsCode >> 8) & 0xFF);
+				encoded[1] = static_cast<char>(dbcsCode & 0xFF);
+				length = 2;
+				return true;
+			}
+			encoded[0] = static_cast<char>(character->cChar);
+			length = 1;
+			return true;
+		}
+
+		void ApplyPreciseRichTextWidth(FontManager::TextLine* line,
+			FontManager::CharData* character, bool addHead)
+		{
+			if (!line || !character || addHead || HasRichTextFilename(character))
+				return;
+			Font* font = nullptr;
+			GetExtraGlyphsForChar(character, &font);
+			if (!font || !IsFreeTypeFontActive(font))
+				return;
+			char currentBytes[3] = {};
+			size_t currentLength = 0;
+			if (!EncodeRichTextChar(character, currentBytes, currentLength))
+				return;
+			FreeTypeLayoutRun currentLayout;
+			if (!LayoutFreeTypeRun(font, currentBytes, currentLength,
+				currentLayout, false))
+			{
+				return;
+			}
+
+			float pairKerning = 0.0f;
+			FontManager::CharData* previous = line->xChars.m_pkTail
+				? line->xChars.m_pkTail->m_element : nullptr;
+			Font* previousFont = nullptr;
+			GetExtraGlyphsForChar(previous, &previousFont);
+			if (previous && previousFont == font
+				&& previous->iJustification == character->iJustification
+				&& std::memcmp(&previous->xColor, &character->xColor, sizeof(NiColorA)) == 0)
+			{
+				char previousBytes[3] = {};
+				size_t previousLength = 0;
+				if (EncodeRichTextChar(previous, previousBytes, previousLength))
+				{
+					FreeTypeLayoutRun previousLayout;
+					char pairBytes[5] = {};
+					std::memcpy(pairBytes, previousBytes, previousLength);
+					std::memcpy(pairBytes + previousLength, currentBytes, currentLength);
+					FreeTypeLayoutRun pairLayout;
+					if (LayoutFreeTypeRun(font, previousBytes, previousLength,
+						previousLayout, false)
+						&& LayoutFreeTypeRun(font, pairBytes,
+							previousLength + currentLength, pairLayout, false))
+					{
+						pairKerning = pairLayout.advance
+							- previousLayout.advance - currentLayout.advance;
+					}
+				}
+			}
+			double exactLineEnd = static_cast<double>(line->iWidth)
+				+ currentLayout.advance + pairKerning;
+			const bool startsNewLine = line->iWidth > 0 && line->iPageWidth > 0
+				&& exactLineEnd > line->iPageWidth;
+			if (startsNewLine)
+			{
+				character->iWidth = static_cast<int>(std::ceil(
+					std::max(0.0f, currentLayout.advance)));
+				character->iLeadingEdge = 0;
+				return;
+			}
+			const int quantizedEnd = static_cast<int>(std::ceil(std::max(0.0, exactLineEnd)));
+			character->iWidth = std::max(0, quantizedEnd - line->iWidth);
+			character->iLeadingEdge = static_cast<int>(std::floor(pairKerning));
+		}
+
 		void HandleTextDocAddChar(
 			const char* callsite,
 			FontManager::TextDoc* apDoc,
@@ -785,6 +871,83 @@ namespace fonthook
 			++totalLines;
 		};
 
+		Font* activeFont = this->pFont[fontID - 1];
+		if (IsFreeTypeFontActive(activeFont))
+		{
+			for (int offset = startCharIndex; offset < sourceStringLength;)
+			{
+				const UInt8 current = static_cast<UInt8>(srcString[offset]);
+				if (current == '\t')
+				{
+					wrapState.AdvanceTab(75);
+					++offset;
+					continue;
+				}
+				if (current == '\n')
+				{
+					finishLine(static_cast<float>(wrapState.currentLineWidth));
+					wrapState.ResetLine();
+					++offset;
+					continue;
+				}
+				if (current == '~')
+				{
+					wrapState.MarkSoftWrap();
+					++offset;
+					continue;
+				}
+				if (current < 0x20 || current == 0x7F)
+				{
+					++offset;
+					continue;
+				}
+
+				int runEnd = offset;
+				while (runEnd < sourceStringLength)
+				{
+					const UInt8 value = static_cast<UInt8>(srcString[runEnd]);
+					if (value < 0x20 || value == 0x7F || value == '~')
+						break;
+					UInt32 dbcsCode = 0;
+					runEnd += TryDecodeDoubleByte(srcString + runEnd, dbcsCode) ? 2 : 1;
+				}
+				FreeTypeLayoutRun layout;
+				if (runEnd > offset && LayoutFreeTypeRun(activeFont,
+					srcString + offset, runEnd - offset, layout, true))
+				{
+					UInt32 cluster = std::numeric_limits<UInt32>::max();
+					double clusterAdvance = 0.0;
+					auto flushCluster = [&]()
+					{
+						if (cluster == std::numeric_limits<UInt32>::max())
+							return;
+						const LayoutWrapResult result = wrapState.AddUnit(clusterAdvance, maxWrapWidth);
+						if (result.kind != LayoutWrapKind::None)
+							finishLine(static_cast<float>(result.completedWidth));
+					};
+					for (const FreeTypeLayoutGlyph& glyph : layout.glyphs)
+					{
+						if (cluster != glyph.cluster)
+						{
+							flushCluster();
+							cluster = glyph.cluster;
+							clusterAdvance = 0.0;
+						}
+						clusterAdvance += glyph.xAdvance;
+					}
+					flushCluster();
+				}
+				offset = runEnd > offset ? runEnd : offset + 1;
+			}
+
+			const double finalWidth = std::max(wrapState.currentLineWidth,
+				static_cast<double>(StringDimensions.x));
+			outDimensions->x = static_cast<float>(std::ceil(std::max(0.0, finalWidth)));
+			outDimensions->y = StringDimensions.y;
+			outDimensions->z = static_cast<float>(totalLines);
+			return outDimensions;
+		}
+
 		UInt32 uiDoubleByteCode;
 		for (int currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
 		{
@@ -1069,6 +1232,7 @@ namespace fonthook
 	FontManager::TextLine* __thiscall FontManagerEx::TextLineAddChar(FontManager::CharData* apChar, bool abAddHead)
 	{
 		FontManager::TextLine* line = reinterpret_cast<FontManager::TextLine*>(this);
+		ApplyPreciseRichTextWidth(line, apChar, abAddHead);
 		if (!ShouldStartNewLineForRichTextDbcs(line, apChar, abAddHead))
 			return ThisStdCall<FontManager::TextLine*>(0xA19F70, line, apChar, abAddHead);
 

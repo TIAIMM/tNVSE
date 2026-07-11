@@ -52,6 +52,15 @@
       curveTolerance
         Curve-flattening tolerance for the vector fallback path. Minimum:
         0.01. Default: 0.35. The normal grayscale atlas path does not use it.
+      shaping
+        0 uses precise FreeType 26.6 advances and FT_Get_Kerning. 1 enables
+        HarfBuzz GSUB/GPOS for ordinary Font text. Default: 0. Rich text keeps
+        one CharData per encoded character and does not use GSUB substitutions.
+      features
+        Optional comma-separated HarfBuzz feature overrides, for example
+        "kern,liga,clig,calt,ss01=1,-dlig". Unspecified features retain the
+        HarfBuzz script defaults. Requires shaping="1". Invalid tokens reject
+        the complete font ID configuration.
       fontColor
         Optional fill-color override in #RRGGBB format. When omitted, the
         renderer keeps the text color supplied by the game.
@@ -71,8 +80,9 @@
         pixelSize, tracking, scaleX, scaleY, embolden, slant, baselineOffset
 
       Attributes not overridden by a byte class are inherited from <font>.
-      baseline, curveTolerance, fontColor, fontAlpha, glow, outline, and
-      shadow apply to the entire font ID and cannot be overridden per group.
+      shaping, features, baseline, curveTolerance, fontColor, fontAlpha, glow,
+      outline, and shadow apply to the entire font ID and cannot be overridden
+      per group.
 
       3. Font files and fallback chains
 
@@ -120,7 +130,7 @@
     -->
 
     <!-- 1: Glow_Monofonto_Large -->
-    <font id="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="1" shaping="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="31"
           curveTolerance="0.35">
       <singleByte pixelSize="27">
@@ -137,7 +147,7 @@
     </font>
 
     <!-- 2: Monofonto_Large -->
-    <font id="2" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="2" shaping="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="31"
           curveTolerance="0.35">
       <singleByte pixelSize="27">
@@ -154,7 +164,7 @@
     </font>
 
     <!-- 3: Glow_Monofonto_Medium -->
-    <font id="3" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="3" shaping="1" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="26"
           curveTolerance="0.35">
       <singleByte pixelSize="26">
@@ -171,7 +181,7 @@
     </font>
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
-    <font id="4" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="4" shaping="1" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="36"
           curveTolerance="0.35">
       <singleByte pixelSize="32">
@@ -188,7 +198,7 @@
     </font>
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
-    <font id="5" pixelSize="25" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="5" shaping="1" pixelSize="25" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="25"
           curveTolerance="0.35">
       <singleByte pixelSize="32">
@@ -205,7 +215,7 @@
     </font>
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
-    <font id="6" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="6" shaping="1" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="34"
           curveTolerance="0.35">
       <singleByte pixelSize="30">
@@ -222,7 +232,7 @@
     </font>
 
     <!-- 7: Baked-in_Monofonto_Large -->
-    <font id="7" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="7" shaping="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="-2" baseline="36"
           curveTolerance="0.35">
       <singleByte pixelSize="27">
@@ -239,7 +249,7 @@
     </font>
 
     <!-- 8: Glow_Futura_Caps_Large -->
-    <font id="8" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="8" shaping="1" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="52"
           curveTolerance="0.35">
       <singleByte pixelSize="52">

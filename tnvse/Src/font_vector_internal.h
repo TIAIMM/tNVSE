@@ -62,6 +62,8 @@ namespace fonthook::vectorfont
 	{
 		UInt32 fontId = 0;
 		std::array<ByteStyle, 2> styles;
+		bool shaping = false;
+		std::vector<std::string> shapingFeatures;
 		float baseline = 0.0f;
 		float curveTolerance = 0.35f;
 		FontColorStyle fontColor;

@@ -3,6 +3,8 @@
 #include "globals.h"
 #include "native_calls.h"
 
+#include <cmath>
+
 namespace fonthook
 {
 	using ExtraGlyphMap = std::unordered_map<UInt32, FontLetter>;
@@ -17,15 +19,15 @@ namespace fonthook
 	struct LayoutWrapResult
 	{
 		LayoutWrapKind kind = LayoutWrapKind::None;
-		UInt32 completedWidth = 0;
+		double completedWidth = 0.0;
 	};
 
 	struct LayoutWrapState
 	{
-		UInt32 currentLineWidth = 0;
-		UInt32 previousUnitWidth = 0;
+		double currentLineWidth = 0.0;
+		double previousUnitWidth = 0.0;
 		UInt32 currentLineUnitCount = 0;
-		UInt32 softWrapWidth = 0;
+		double softWrapWidth = 0.0;
 		UInt32 unitsAtSoftWrap = 0;
 		bool hasSoftWrap = false;
 
@@ -56,10 +58,13 @@ namespace fonthook
 		void AdvanceTab(UInt32 tabWidth)
 		{
 			if (tabWidth)
-				currentLineWidth += tabWidth - currentLineWidth % tabWidth;
+			{
+				const double remainder = std::fmod(currentLineWidth, static_cast<double>(tabWidth));
+				currentLineWidth += static_cast<double>(tabWidth) - remainder;
+			}
 		}
 
-		LayoutWrapResult AddUnit(UInt32 unitWidth, float maxWidth)
+		LayoutWrapResult AddUnit(double unitWidth, float maxWidth)
 		{
 			LayoutWrapResult result;
 			currentLineWidth += unitWidth;
@@ -79,7 +84,7 @@ namespace fonthook
 				else if (currentLineUnitCount)
 				{
 					result.kind = LayoutWrapKind::Hard;
-					const UInt32 movedWidth = previousUnitWidth + unitWidth;
+					const double movedWidth = previousUnitWidth + unitWidth;
 					result.completedWidth = currentLineWidth >= movedWidth
 						? currentLineWidth - movedWidth : 0;
 					currentLineWidth = movedWidth;
