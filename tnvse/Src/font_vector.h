@@ -41,7 +41,7 @@ namespace fonthook
 
 		bool IsAvailable() const;
 		bool AddGlyph(const VectorEncodedGlyph& arGlyph, const NiPoint3& arPen, const NiColorA* apColor);
-		NiNode* Finish();
+		NiAVObject* Finish();
 
 	private:
 		struct Impl;

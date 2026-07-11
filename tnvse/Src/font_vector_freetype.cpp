@@ -375,7 +375,8 @@ namespace fonthook::vectorfont
 			result.fWidth = std::max(0.0f, xMax - xMin);
 			result.fHeight = std::max(0.0f, yMax - yMin);
 			result.fTopEdge = yMax;
-			const float totalAdvance = advance + role.style->tracking;
+			const float requestedAdvance = std::max(0.0f, advance + role.style->tracking);
+			const float totalAdvance = static_cast<float>(ConditionalFloatToUInt(requestedAdvance));
 			if (result.fWidth <= 0.0f && totalAdvance > 0.0f)
 			{
 				result.fLeadingEdge = 0.0f;

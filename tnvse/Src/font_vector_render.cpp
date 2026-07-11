@@ -234,6 +234,7 @@ namespace fonthook
 				static_cast<UInt32>(chunk.vertices.size()), triangleCount, color, false);
 			if (!shape)
 				return nullptr;
+			shape->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f, 0.0f);
 
 			NiTriShapeData* data = shape->GetModelData();
 			const UInt32 capacityVertices = data->m_usVertices;
@@ -307,10 +308,13 @@ namespace fonthook
 						shaderColor = *reinterpret_cast<NiColorA*>(reinterpret_cast<UInt8*>(shade) + 0x68);
 					}
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: first vector shape layer=%s font=%u vertices=%u triangles=%u flipped=%u winding=%.4f->%.4f depth=%.3f propertyTexture=%p expectedProperty=%p shaderTexture=%p expectedTexture=%p requestedColor=(%.3f,%.3f,%.3f,%.3f) shaderColor=(%.3f,%.3f,%.3f,%.3f)",
+						"tnvse_freetype_font: first vector shape layer=%s font=%u vertices=%u triangles=%u flipped=%u winding=%.4f->%.4f depth=%.3f local=(%.3f,%.3f,%.3f) propertyTexture=%p expectedProperty=%p shaderTexture=%p expectedTexture=%p requestedColor=(%.3f,%.3f,%.3f,%.3f) shaderColor=(%.3f,%.3f,%.3f,%.3f)",
 						GetLayerName(layer), font.iFontNum,
 						static_cast<UInt32>(chunk.vertices.size()), triangleCount,
 						flippedTriangles, firstWindingBefore, firstWindingAfter, layerDepth,
+						shape->m_kLocal.m_Translate.x,
+						shape->m_kLocal.m_Translate.y,
+						shape->m_kLocal.m_Translate.z,
 						shape->GetTexturingProperty(), s_whiteTextureProperty,
 						shaderTexture, GetWhiteTexture(),
 						color.r, color.g, color.b, color.a,
@@ -492,7 +496,7 @@ namespace fonthook
 		return true;
 	}
 
-	NiNode* VectorTextBuilder::Finish()
+	NiAVObject* VectorTextBuilder::Finish()
 	{
 		if (!IsAvailable() || m_impl->finished)
 			return nullptr;
@@ -501,6 +505,27 @@ namespace fonthook
 		UInt32 childCount = 0;
 		for (const ColorGroup& group : m_impl->groups)
 			childCount += static_cast<UInt32>(group.chunks.size());
+
+		// Font::CreateText normally returns one NiTriShape directly. Preserve that
+		// hierarchy when vector text has only one fill/effect chunk; TileText stores
+		// and later replaces the returned object's local transform, so an otherwise
+		// unnecessary NiNode changes the object contract used by the Font pipeline.
+		if (childCount == 1)
+		{
+			for (UInt32 layer = static_cast<UInt32>(VectorLayer::Shadow);
+				layer <= static_cast<UInt32>(VectorLayer::Fill); ++layer)
+			{
+				for (const ColorGroup& group : m_impl->groups)
+				{
+					if (static_cast<UInt32>(group.layer) != layer || group.chunks.empty())
+						continue;
+					return CreateChunkShape(*m_impl->font, group.chunks.front(),
+						group.layer, group.color, m_impl->prepareObject);
+				}
+			}
+			return nullptr;
+		}
+
 		NiNode* root = NiNode::Create(static_cast<UInt16>(std::min<UInt32>(childCount, 0xFFFF)));
 		if (!root)
 			return nullptr;
@@ -521,6 +546,8 @@ namespace fonthook
 				}
 			}
 		}
+		if (m_impl->prepareObject)
+			root->PrepareObject();
 		return root;
 	}
 
@@ -538,8 +565,8 @@ namespace fonthook
 		{
 			for (auto& [font, builder] : s_richTextContext->builders)
 			{
-				if (NiNode* node = builder->Finish())
-					s_richTextContext->parent->AttachChild(node, true);
+				if (NiAVObject* object = builder->Finish())
+					s_richTextContext->parent->AttachChild(object, true);
 			}
 		}
 		s_richTextContext.reset();

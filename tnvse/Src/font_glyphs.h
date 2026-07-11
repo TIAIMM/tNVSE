@@ -7,6 +7,100 @@ namespace fonthook
 {
 	using ExtraGlyphMap = std::unordered_map<UInt32, FontLetter>;
 
+	enum class LayoutWrapKind : UInt8
+	{
+		None,
+		Soft,
+		Hard
+	};
+
+	struct LayoutWrapResult
+	{
+		LayoutWrapKind kind = LayoutWrapKind::None;
+		UInt32 completedWidth = 0;
+	};
+
+	struct LayoutWrapState
+	{
+		UInt32 currentLineWidth = 0;
+		UInt32 previousUnitWidth = 0;
+		UInt32 currentLineUnitCount = 0;
+		UInt32 softWrapWidth = 0;
+		UInt32 unitsAtSoftWrap = 0;
+		bool hasSoftWrap = false;
+
+		void ResetLine()
+		{
+			currentLineWidth = 0;
+			previousUnitWidth = 0;
+			currentLineUnitCount = 0;
+			ClearSoftWrap();
+		}
+
+		void ClearSoftWrap()
+		{
+			softWrapWidth = 0;
+			unitsAtSoftWrap = 0;
+			hasSoftWrap = false;
+		}
+
+		void MarkSoftWrap()
+		{
+			if (!currentLineUnitCount)
+				return;
+			softWrapWidth = currentLineWidth;
+			unitsAtSoftWrap = currentLineUnitCount;
+			hasSoftWrap = true;
+		}
+
+		void AdvanceTab(UInt32 tabWidth)
+		{
+			if (tabWidth)
+				currentLineWidth += tabWidth - currentLineWidth % tabWidth;
+		}
+
+		LayoutWrapResult AddUnit(UInt32 unitWidth, float maxWidth)
+		{
+			LayoutWrapResult result;
+			currentLineWidth += unitWidth;
+			const UInt32 totalUnits = currentLineUnitCount + 1;
+
+			if (static_cast<float>(currentLineWidth) > maxWidth)
+			{
+				if (hasSoftWrap)
+				{
+					result.kind = LayoutWrapKind::Soft;
+					result.completedWidth = softWrapWidth;
+					currentLineWidth -= softWrapWidth;
+					currentLineUnitCount = totalUnits >= unitsAtSoftWrap
+						? totalUnits - unitsAtSoftWrap : 0;
+					ClearSoftWrap();
+				}
+				else if (currentLineUnitCount)
+				{
+					result.kind = LayoutWrapKind::Hard;
+					const UInt32 movedWidth = previousUnitWidth + unitWidth;
+					result.completedWidth = currentLineWidth >= movedWidth
+						? currentLineWidth - movedWidth : 0;
+					currentLineWidth = movedWidth;
+					currentLineUnitCount = 2;
+					ClearSoftWrap();
+				}
+				else
+				{
+					currentLineUnitCount = totalUnits;
+				}
+			}
+			else
+			{
+				currentLineUnitCount = totalUnits;
+			}
+
+			previousUnitWidth = unitWidth;
+			return result;
+		}
+	};
+
 	inline bool HasAnyExtraGlyphs()
 	{
 		return !gNumberedExtraLetters.empty();

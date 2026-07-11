@@ -3,7 +3,6 @@
 #include "font_glyphs.h"
 #include "font_vector.h"
 #include "native_calls.h"
-#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -774,13 +773,8 @@ namespace fonthook
 		int sourceStringLength = strlen(srcString);
 		FontLetter* fontCharMetrics = this->pFont[fontID - 1]->pFontData->pFontLetters;
 		float fontBaseLine = this->pFont[fontID - 1]->pFontData->fBaseLine;
-		float softWrapWidth = 0.0f;
-		bool hasSoftWrap = false;
-		UInt32 unitsAtSoftWrap = 0;
-		float currentLineWidth = 0.0f;
+		LayoutWrapState wrapState;
 		float fontVerticalSpacingAdjust = FontManager::GetLinePadding(fontID);
-		float previousCharTotalWidth = 0.0f;
-		UInt32 currentLineUnitCount = 0;
 		int totalLines = 1;
 		StringDimensions.y = fontCharMetrics[' '].fHeight;
 		auto finishLine = [&](float completedWidth)
@@ -796,7 +790,7 @@ namespace fonthook
 		{
 			bool bIsDBCharacter = false;
 			UInt8 currentChar = srcString[currentCharIndex];
-			float currentCharTotalWidth = 0.0f;
+			UInt32 currentCharTotalWidth = 0;
 
 			if (extraGlyphs)
 			{
@@ -822,86 +816,41 @@ namespace fonthook
 				auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
 				if (glyphIt != extraGlyphs->end())
 				{
-					currentCharTotalWidth = static_cast<float>(GetGlyphLayoutWidth(&glyphIt->second));
+					currentCharTotalWidth = GetGlyphLayoutWidth(&glyphIt->second);
 				}
 				++currentCharIndex;
 			}
 			else
 			{
 				ConvertToAsciiQuotes(&currentChar);
-				currentCharTotalWidth = static_cast<float>(GetGlyphLayoutWidth(&fontCharMetrics[currentChar]));
+				currentCharTotalWidth = GetGlyphLayoutWidth(&fontCharMetrics[currentChar]);
 				if (currentChar == '\t')
 				{
 					// PrepTextImpl advances tabs to the next 75-pixel stop without
 					// making the tab an encoded unit or triggering a wrap itself.
-					double tabRemainder = fmod(currentLineWidth, 75.0);
-					currentLineWidth += static_cast<float>(75.0 - tabRemainder);
+					wrapState.AdvanceTab(75);
 					continue;
 				}
 				if (currentChar == '\n')
 				{
-					finishLine(currentLineWidth);
-					currentLineWidth = 0.0f;
-					previousCharTotalWidth = 0.0f;
-					currentLineUnitCount = 0;
-					softWrapWidth = 0.0f;
-					hasSoftWrap = false;
-					unitsAtSoftWrap = 0;
+					finishLine(static_cast<float>(wrapState.currentLineWidth));
+					wrapState.ResetLine();
 					continue;
 				}
 				if (currentChar == '~')
 				{
-					if (currentLineUnitCount > 0)
-					{
-						softWrapWidth = currentLineWidth;
-						hasSoftWrap = true;
-						unitsAtSoftWrap = currentLineUnitCount;
-					}
-					if (maxWrapWidth < currentLineWidth && hasSoftWrap)
-					{
-						finishLine(softWrapWidth);
-						currentLineWidth -= softWrapWidth;
-						currentLineUnitCount = currentLineUnitCount >= unitsAtSoftWrap
-							? currentLineUnitCount - unitsAtSoftWrap : 0;
-						softWrapWidth = 0.0f;
-						hasSoftWrap = false;
-						unitsAtSoftWrap = 0;
-					}
+					wrapState.MarkSoftWrap();
 					continue;
 				}
 			}
 
-			currentLineWidth += currentCharTotalWidth;
-
-			if (maxWrapWidth < currentLineWidth)
-			{
-				if (hasSoftWrap)
-				{
-					finishLine(softWrapWidth);
-					currentLineWidth -= softWrapWidth;
-					currentLineUnitCount = currentLineUnitCount >= unitsAtSoftWrap
-						? currentLineUnitCount - unitsAtSoftWrap : 0;
-					softWrapWidth = 0.0f;
-					hasSoftWrap = false;
-					unitsAtSoftWrap = 0;
-				}
-				else if (currentLineUnitCount > 0)
-				{
-					float completedWidth = currentLineWidth
-						- previousCharTotalWidth - currentCharTotalWidth;
-					if (completedWidth < 0.0f)
-						completedWidth = 0.0f;
-					finishLine(completedWidth);
-					currentLineWidth = previousCharTotalWidth + currentCharTotalWidth;
-					currentLineUnitCount = 1;
-				}
-			}
-			++currentLineUnitCount;
-			previousCharTotalWidth = currentCharTotalWidth;
+			const LayoutWrapResult wrapResult = wrapState.AddUnit(currentCharTotalWidth, maxWrapWidth);
+			if (wrapResult.kind != LayoutWrapKind::None)
+				finishLine(static_cast<float>(wrapResult.completedWidth));
 		}
 
-		float finalMaxLineWidth = (currentLineWidth >= StringDimensions.x)
-			? currentLineWidth : StringDimensions.x;
+		float finalMaxLineWidth = (wrapState.currentLineWidth >= StringDimensions.x)
+			? static_cast<float>(wrapState.currentLineWidth) : StringDimensions.x;
 		StringDimensions.z = (float)totalLines;
 		outDimensions->x = finalMaxLineWidth;
 		outDimensions->y = StringDimensions.y;
