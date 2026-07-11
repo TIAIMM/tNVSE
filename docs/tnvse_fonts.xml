@@ -3,7 +3,7 @@
   <fonts>
 
     <!-- 1: Glow_Monofonto_Large -->
-    <font id="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-rgb" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-bgr" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" lineHeight="31"
           curveTolerance="0.35">
       <singleByte pixelSize="27">
@@ -20,7 +20,7 @@
     </font>
 
     <!-- 2: Monofonto_Large -->
-    <font id="2" pixelSize="31" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-rgb" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="2" pixelSize="31" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-bgr" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" lineHeight="31"
           curveTolerance="0.35">
       <singleByte pixelSize="27">
@@ -37,7 +37,7 @@
     </font>
 
     <!-- 3: Glow_Monofonto_Medium -->
-    <font id="3" pixelSize="26" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-rgb" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="3" pixelSize="26" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-bgr" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" lineHeight="26"
           curveTolerance="0.35">
       <singleByte pixelSize="26">
@@ -54,7 +54,7 @@
     </font>
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
-    <font id="4" pixelSize="36" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-rgb" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="4" pixelSize="36" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-bgr" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" lineHeight="36"
           curveTolerance="0.35">
       <singleByte pixelSize="32">
@@ -71,7 +71,7 @@
     </font>
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
-    <font id="5" pixelSize="25" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-rgb" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="5" pixelSize="25" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-bgr" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" lineHeight="25"
           curveTolerance="0.35">
       <singleByte pixelSize="32">
@@ -88,7 +88,7 @@
     </font>
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
-    <font id="6" pixelSize="34" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-rgb" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="6" pixelSize="34" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-bgr" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" lineHeight="34"
           curveTolerance="0.35">
       <singleByte pixelSize="30">
@@ -105,7 +105,7 @@
     </font>
 
     <!-- 7: Baked-in_Monofonto_Large -->
-    <font id="7" pixelSize="31" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-rgb" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="7" pixelSize="31" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-bgr" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" lineHeight="36"
           curveTolerance="0.35">
       <singleByte pixelSize="27">
@@ -122,7 +122,7 @@
     </font>
 
     <!-- 8: Glow_Futura_Caps_Large -->
-    <font id="8" pixelSize="52" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-rgb" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="8" pixelSize="52" tracking="0" scaleX="1" scaleY="1" renderMode="lcd-bgr" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" lineHeight="52"
           curveTolerance="0.35">
       <singleByte pixelSize="52">
