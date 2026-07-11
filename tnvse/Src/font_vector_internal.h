@@ -65,6 +65,13 @@ namespace fonthook::vectorfont
 		NiColorA color = { 1.0f, 1.0f, 1.0f, 1.0f };
 	};
 
+	enum class FontPrewarmMode : UInt8
+	{
+		None = 0,
+		Common = 1,
+		CodePage = 2,
+	};
+
 	enum class GlyphMeshType : UInt8
 	{
 		Fill = 0,
@@ -83,6 +90,7 @@ namespace fonthook::vectorfont
 	{
 		UInt32 fontId = 0;
 		std::array<ByteStyle, 2> styles;
+		FontPrewarmMode prewarm = FontPrewarmMode::None;
 		bool shaping = false;
 		std::vector<std::string> shapingFeatures;
 		float baseline = 0.0f;
@@ -141,7 +149,16 @@ namespace fonthook::vectorfont
 		const VectorEncodedGlyph& arGlyph, GlyphMeshType aeMeshType);
 	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph, GlyphMaskType aeMaskType, float afRasterScale);
+	bool ResolvePrewarmGlyph(RuntimeFont& arRuntime, const char* apBytes,
+		size_t auiLength, VectorEncodedGlyph& arGlyph);
+	bool PrewarmGlyphAtlas(RuntimeFont& arRuntime,
+		const std::vector<std::shared_ptr<const GlyphBitmap>>& arBitmaps,
+		float afRasterScale);
+	void QueueFontPrewarm(UInt32 auiFontId);
+	void PumpFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
 		bool abPrepareObject);
+	bool IsA8RendererAvailable();
+	bool PrepareA8AtlasShape(NiTriShape* apShape);
 }

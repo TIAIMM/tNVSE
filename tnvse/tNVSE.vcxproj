@@ -145,6 +145,8 @@
     <ClCompile Include="Src\native_calls.cpp" />
     <ClCompile Include="Src\font_engine.cpp" />
 	<ClCompile Include="Src\font_atlas_render.cpp" />
+	<ClCompile Include="Src\font_a8_render.cpp" />
+	<ClCompile Include="Src\font_prewarm.cpp" />
 	<ClCompile Include="Src\font_performance.cpp" />
     <ClCompile Include="Src\font_vector_config.cpp" />
     <ClCompile Include="Src\font_vector_freetype.cpp" />
@@ -180,6 +182,9 @@
   <ItemGroup>
     <None Include="exports.def" />
     <None Include="packages.config" />
+	<None Include="shaders\freetype_a8.hlsl" />
+	<None Include="shaders\compile_a8_shader.bat" />
+	<None Include="shaders\compiled\tnvse_freetype_a8.pso" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="third_party\freetype_tnvse.vcxproj">
@@ -224,5 +229,15 @@
       <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
     </PropertyGroup>
     <Error Condition="!Exists('packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets'))" />
+  </Target>
+  <Target Name="InstallFreeTypeA8Shader" AfterTargets="Build"
+          Condition="Exists('$(ProjectDir)shaders\compiled\tnvse_freetype_a8.pso') and '$(NVSE_PLUGIN_PATH)' != ''">
+    <PropertyGroup>
+      <_FreeTypeShaderOutputDir>$(NVSE_PLUGIN_PATH)\..\..\Shaders\Loose</_FreeTypeShaderOutputDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(_FreeTypeShaderOutputDir)" />
+    <Copy SourceFiles="$(ProjectDir)shaders\compiled\tnvse_freetype_a8.pso"
+          DestinationFolder="$(_FreeTypeShaderOutputDir)"
+          SkipUnchangedFiles="true" />
   </Target>
 </Project>

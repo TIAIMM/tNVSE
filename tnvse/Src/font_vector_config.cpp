@@ -247,6 +247,18 @@ namespace fonthook::vectorfont
 				reason = "missing or zero id";
 				return false;
 			}
+			const std::string prewarm = node.attribute("prewarm").as_string("none");
+			if (prewarm == "none")
+				config.prewarm = FontPrewarmMode::None;
+			else if (prewarm == "common")
+				config.prewarm = FontPrewarmMode::Common;
+			else if (prewarm == "codepage")
+				config.prewarm = FontPrewarmMode::CodePage;
+			else
+			{
+				reason = "prewarm must be none, common, or codepage";
+				return false;
+			}
 
 			ByteStyle defaults;
 			ReadStyleAttributes(node, defaults);
@@ -345,8 +357,8 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d glow=%d outline=%d shadow=%d",
-				config.fontId, config.shaping ? 1 : 0,
+				"tnvse_freetype_font: config font id=%u prewarm=%u shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d glow=%d outline=%d shadow=%d",
+				config.fontId, static_cast<UInt32>(config.prewarm), config.shaping ? 1 : 0,
 				static_cast<UInt32>(config.shapingFeatures.size()),
 				config.baseline, config.curveTolerance,
 				config.fontColor.configured, config.glow.enabled,

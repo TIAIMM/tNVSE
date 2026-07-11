@@ -61,6 +61,17 @@
         "kern,liga,clig,calt,ss01=1,-dlig". Unspecified features retain the
         HarfBuzz script defaults. Requires shaping="1". Invalid tokens reject
         the complete font ID configuration.
+      prewarm
+        Optional startup atlas prewarming mode. "none" disables prewarming
+        and is the default. "common" incrementally prepares all valid
+        single-byte units and up to 7000 valid double-byte units from the code
+        page's standard common-character region. "codepage"
+        incrementally prepares the explicit encoding ranges used by DCFGCF for
+        the current uiEncoding code page. CP936 uses DCFGCF's complete GBK
+        profile rather than its smaller GB2312 profile. Work is limited to a
+        small batch per frame. Only raster scale 1.0 is prepared; UIO-derived
+        sizes remain demand-driven. If the atlas reaches its maximum size,
+        prewarming for that font stops safely.
       fontColor
         Optional fill-color override in #RRGGBB format. When omitted, the
         renderer keeps the text color supplied by the game.
@@ -130,14 +141,16 @@
     -->
 
     <!-- 1: Glow_Monofonto_Large -->
-    <font id="1" shaping="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="1" prewarm="codepage" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="31"
           curveTolerance="0.35">
-      <singleByte pixelSize="27">
+      <singleByte pixelSize="27" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
-      <doubleByte pixelSize="22">
+      <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
@@ -147,14 +160,16 @@
     </font>
 
     <!-- 2: Monofonto_Large -->
-    <font id="2" shaping="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="2" prewarm="codepage" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="31"
           curveTolerance="0.35">
-      <singleByte pixelSize="27">
+      <singleByte pixelSize="27" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
-      <doubleByte pixelSize="22">
+      <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
@@ -164,14 +179,16 @@
     </font>
 
     <!-- 3: Glow_Monofonto_Medium -->
-    <font id="3" shaping="1" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="3" prewarm="codepage" shaping="1" features="" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="26"
           curveTolerance="0.35">
-      <singleByte pixelSize="26">
+      <singleByte pixelSize="26" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
-      <doubleByte pixelSize="22">
+      <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
@@ -181,14 +198,16 @@
     </font>
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
-    <font id="4" shaping="1" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="4" prewarm="codepage" shaping="1" features="" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="36"
           curveTolerance="0.35">
-      <singleByte pixelSize="32">
+      <singleByte pixelSize="32" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
-      <doubleByte pixelSize="26">
+      <doubleByte pixelSize="26" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
@@ -198,14 +217,16 @@
     </font>
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
-    <font id="5" shaping="1" pixelSize="25" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="5" prewarm="codepage" shaping="1" features="" pixelSize="25" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="25"
           curveTolerance="0.35">
-      <singleByte pixelSize="32">
+      <singleByte pixelSize="32" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
-      <doubleByte pixelSize="20">
+      <doubleByte pixelSize="20" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
@@ -215,14 +236,16 @@
     </font>
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
-    <font id="6" shaping="1" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="6" prewarm="codepage" shaping="1" features="" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="34"
           curveTolerance="0.35">
-      <singleByte pixelSize="30">
+      <singleByte pixelSize="30" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
-      <doubleByte pixelSize="24">
+      <doubleByte pixelSize="24" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
@@ -232,14 +255,16 @@
     </font>
 
     <!-- 7: Baked-in_Monofonto_Large -->
-    <font id="7" shaping="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="7" prewarm="codepage" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="-2" baseline="36"
           curveTolerance="0.35">
-      <singleByte pixelSize="27">
+      <singleByte pixelSize="27" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="-2">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
-      <doubleByte pixelSize="22">
+      <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="-2">
         <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
@@ -249,14 +274,16 @@
     </font>
 
     <!-- 8: Glow_Futura_Caps_Large -->
-    <font id="8" shaping="1" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="8" prewarm="codepage" shaping="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="52"
           curveTolerance="0.35">
-      <singleByte pixelSize="52">
+      <singleByte pixelSize="52" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
-      <doubleByte pixelSize="43">
+      <doubleByte pixelSize="43" tracking="0" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>

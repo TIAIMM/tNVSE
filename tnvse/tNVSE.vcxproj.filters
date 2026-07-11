@@ -33,6 +33,12 @@
 	<ClCompile Include="Src\font_atlas_render.cpp">
 	  <Filter>Source Files\Font</Filter>
 	</ClCompile>
+	<ClCompile Include="Src\font_a8_render.cpp">
+	  <Filter>Source Files\Font</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_prewarm.cpp">
+	  <Filter>Source Files\Font</Filter>
+	</ClCompile>
 	<ClCompile Include="Src\font_performance.cpp">
 	  <Filter>Source Files\Font</Filter>
 	</ClCompile>
@@ -195,5 +201,10 @@
   <ItemGroup>
     <None Include="exports.def" />
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="shaders\freetype_a8.hlsl" />
+    <None Include="shaders\compile_a8_shader.bat" />
+    <None Include="shaders\compiled\tnvse_freetype_a8.pso" />
   </ItemGroup>
 </Project>

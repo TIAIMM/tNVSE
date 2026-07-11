@@ -1630,6 +1630,34 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
+	bool ResolvePrewarmGlyph(RuntimeFont& runtime, const char* bytes,
+		size_t length, VectorEncodedGlyph& glyph)
+	{
+		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		glyph = {};
+		if (!bytes || (length != 1 && length != 2))
+			return false;
+
+		glyph.byteLength = static_cast<UInt8>(length);
+		glyph.byteClass = length == 2
+			? VectorFontByteClass::DoubleByte : VectorFontByteClass::SingleByte;
+		glyph.encodedCode = length == 2
+			? (static_cast<UInt32>(static_cast<UInt8>(bytes[0])) << 8)
+				| static_cast<UInt8>(bytes[1])
+			: static_cast<UInt8>(bytes[0]);
+		if (!DecodeCodePoint(bytes, static_cast<int>(length), glyph.codePoint))
+			return false;
+
+		ResolvedGlyph resolved;
+		if (!ResolveGlyph(runtime.roles[static_cast<size_t>(glyph.byteClass)],
+			glyph.codePoint, resolved))
+		{
+			return false;
+		}
+		ApplyResolvedIdentity(glyph, resolved);
+		return glyph.hasGlyphIdentity;
+	}
+
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& runtime)
 	{
 		return *runtime.config;
@@ -1898,6 +1926,7 @@ namespace fonthook
 		}
 		gLog.FormattedMessage("tnvse_freetype_font: activated font id=%d file=%s",
 			apFont->iFontNum, apFont->pFontFile ? apFont->pFontFile : "");
+		vectorfont::QueueFontPrewarm(apFont->iFontNum);
 		return true;
 	}
 

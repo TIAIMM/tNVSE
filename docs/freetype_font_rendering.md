@@ -21,6 +21,7 @@ fonts continue to use the original `.fnt` and `.tex` files.
 <tNVSE>
   <fonts>
     <font id="1"
+          prewarm="none"
           shaping="1"
           features="kern,liga,clig,calt"
           pixelSize="24"
@@ -96,6 +97,18 @@ comma-separated `features` attribute uses HarfBuzz feature syntax, for example
 `CharData` per encoded character and therefore uses precise FreeType kerning
 without GSUB substitutions.
 
+`prewarm="none"` is the default and preserves fully demand-driven atlas
+generation. `prewarm="common"` prepares valid single-byte units plus up to
+7000 valid double-byte units from the code page's standard common-character
+region, while `prewarm="codepage"` follows DCFGCF's explicit encoding ranges
+for the current `uiEncoding` code page. CP936 uses DCFGCF's complete GBK
+profile instead of its smaller GB2312 profile. Prewarming begins after the configured font is
+activated and processes at most eight valid encoded units per game frame, so
+it does not block startup with one large rasterization pass. It only prepares
+the base raster scale of `1.0`; UIO-derived sizes remain demand-driven. A font
+task stops and reports `atlas-full` if its complete set cannot fit the maximum
+atlas size.
+
 Routing follows the selected `uiEncoding`: valid one-byte units use
 `singleByte`, while valid DBCS pairs use `doubleByte`. Shift-JIS half-width
 katakana therefore use the single-byte font. Missing glyph lookup stays inside
@@ -103,13 +116,27 @@ the selected byte-class fallback chain and then tries `U+FFFD`, `?`, and the
 primary face's `.notdef` glyph.
 
 The normal rendering path rasterizes hinted grayscale glyphs with FreeType at
-the effective display size. Each font/style/effective-size profile owns a
-persistent `A8R8G8B8` D3D9 atlas that starts at 512x512 and grows without
-moving existing glyphs. Missing glyphs are rasterized as one batch and uploaded
-through one dirty rectangle. Atlas regions have two transparent padding pixels,
-mipmaps are disabled, and sampling is nearest. Repeated text also reuses cached
-layout and vertex/UV/index templates. Shadow, glow, outline, and fill are
-emitted into one `NiTriShape` using the shared atlas.
+the effective display size. When Fallout Shader Loader 1.40 or newer,
+`tnvse_freetype_a8.pso`, and a real `D3DFMT_A8` texture are available, each
+font/style/effective-size profile uses a one-byte A8 atlas. A shape-specific
+pixel shader reads the atlas alpha as coverage and preserves the game/XML
+vertex color. tNVSE does not replace the global TileShader. If any dependency
+or runtime validation fails, that profile automatically uses the existing
+`A8R8G8B8` atlas path, so FreeType rendering itself does not require Shader
+Loader.
+
+The project contains the HLSL source, its `ps_2_0` build script, and the
+compiled PSO. When `NVSE_PLUGIN_PATH` is defined, an ordinary project build
+copies the PSO to `Data\Shaders\Loose\tnvse_freetype_a8.pso` next to the
+deployed mod data.
+
+Persistent atlases start at 512x512 and grow without moving existing glyphs.
+Missing glyphs are rasterized as one batch and uploaded through one dirty
+rectangle. Atlas regions have two transparent padding pixels, mipmaps are
+disabled, and sampling is nearest. Repeated text also reuses cached layout and
+vertex/UV/index templates. Shadow, glow, outline, and fill are emitted into one
+`NiTriShape` using the shared atlas. A8 and 32-bit profiles use separate cache
+keys and may coexist when text was created before Shader Loader initialization.
 
 Generated grayscale masks, layouts, batch templates, and persistent atlas pages
 are cached in process memory. `uiFreeTypeFontMemoryCacheMB` in `tnvse.ini`

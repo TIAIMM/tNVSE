@@ -46,6 +46,10 @@ namespace fonthook
 	void FreeTypeFontDebugLog(const char* apFormat, ...);
 	void FlushFreeTypeFontDebugLog();
 	void FinalizeFreeTypeUioDetection();
+	void FinalizeFreeTypeA8Detection();
+	void HandleFreeTypeA8MainLoop();
+	void HandleFreeTypeShaderLoaderMessage(UInt32 auiMessageType);
+	void PumpFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
 	float ConsumeFreeTypeCreateTextScale();
 	void FreeTypeCreateTextEntryHook();

@@ -46,6 +46,12 @@ namespace fonthook::vectorfont
 			Fill = 3,
 		};
 
+		enum class AtlasPixelMode : UInt8
+		{
+			Argb32 = 0,
+			A8 = 1,
+		};
+
 		struct AtlasRect
 		{
 			UInt32 x = 0;
@@ -64,7 +70,8 @@ namespace fonthook::vectorfont
 			UInt32 cursorY = kAtlasPadding;
 			UInt32 shelfHeight = 0;
 			UInt32 generation = 0;
-			std::vector<UInt32> pixels;
+			AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
+			std::vector<UInt8> pixels;
 			std::unordered_map<UInt64, AtlasRect> placements;
 		};
 
@@ -73,11 +80,12 @@ namespace fonthook::vectorfont
 			UInt64 styleHash = 0;
 			UInt32 fontId = 0;
 			UInt32 scaleMilli = 1000;
+			AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
 
 			bool operator==(const AtlasCacheKey& other) const
 			{
 				return styleHash == other.styleHash && fontId == other.fontId
-					&& scaleMilli == other.scaleMilli;
+					&& scaleMilli == other.scaleMilli && pixelMode == other.pixelMode;
 			}
 		};
 
@@ -88,6 +96,7 @@ namespace fonthook::vectorfont
 				size_t result = static_cast<size_t>(key.styleHash ^ (key.styleHash >> 32));
 				result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
 				result ^= static_cast<size_t>(key.scaleMilli) * 0x85EBCA77u;
+				result ^= static_cast<size_t>(key.pixelMode) << 4;
 				return result;
 			}
 		};
@@ -336,31 +345,87 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		NiTexturingProperty* CreateAtlasProperty(UInt32 width, UInt32 height,
-			const std::vector<UInt32>& source, NiPixelDataPtr& outPixelData)
+		UInt32 AtlasBytesPerPixel(AtlasPixelMode mode)
 		{
+			return mode == AtlasPixelMode::A8 ? 1u : 4u;
+		}
 
+		const NiPixelFormat* FindA8PixelFormat()
+		{
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			if (!renderer)
+				return nullptr;
+			for (const auto& formatsByDepth : renderer->m_aapkTextureFormats)
+			{
+				for (const NiPixelFormat* format : formatsByDepth)
+				{
+					if (format && format->m_uiRendererHint == D3DFMT_A8
+						&& format->m_ucBitsPerPixel == 8)
+					{
+						return format;
+					}
+				}
+			}
+			return nullptr;
+		}
+
+		bool PropertyUsesA8(NiTexturingProperty* property)
+		{
+			if (!property || !property->m_kMaps.GetSize() || !property->m_kMaps[0])
+				return false;
+			NiTexture* texture = property->m_kMaps[0]->m_spTexture;
+			if (!texture || !texture->GetDX9RendererData())
+				return false;
+			LPDIRECT3DBASETEXTURE9 base = texture->GetDX9RendererData()->GetD3DTexture();
+			if (!base)
+				return false;
+			IDirect3DTexture9* d3dTexture = nullptr;
+			if (FAILED(base->QueryInterface(IID_IDirect3DTexture9,
+				reinterpret_cast<void**>(&d3dTexture))) || !d3dTexture)
+			{
+				return false;
+			}
+			D3DSURFACE_DESC description = {};
+			const bool result = SUCCEEDED(d3dTexture->GetLevelDesc(0, &description))
+				&& description.Format == D3DFMT_A8;
+			d3dTexture->Release();
+			return result;
+		}
+
+		NiTexturingProperty* CreateAtlasProperty(UInt32 width, UInt32 height,
+			AtlasPixelMode mode, const std::vector<UInt8>& source,
+			NiPixelDataPtr& outPixelData)
+		{
+			const NiPixelFormat* pixelFormat = mode == AtlasPixelMode::A8
+				? FindA8PixelFormat()
+				: reinterpret_cast<const NiPixelFormat*>(0x11AA2A0);
+			if (!pixelFormat)
+				return nullptr;
 			NiPixelData* pixelData = static_cast<NiPixelData*>(
 				NiMemObject::operator new(sizeof(NiPixelData)));
 			if (!pixelData)
 				return nullptr;
 			pixelData = ThisStdCall<NiPixelData*>(0xA7C190, pixelData, width, height,
-				reinterpret_cast<const NiPixelFormat*>(0x11AA2A0), 1, 1);
+				pixelFormat, 1, 1);
 			if (!pixelData || !pixelData->m_pucPixels || !pixelData->m_puiOffsetInBytes)
 				return nullptr;
-			UInt32* pixels = reinterpret_cast<UInt32*>(
-				pixelData->m_pucPixels + *pixelData->m_puiOffsetInBytes);
-			const size_t pixelCount = static_cast<size_t>(width) * height;
-			if (source.size() == pixelCount)
+			UInt8* pixels = pixelData->m_pucPixels + *pixelData->m_puiOffsetInBytes;
+			const size_t byteCount = static_cast<size_t>(width) * height
+				* AtlasBytesPerPixel(mode);
+			if (source.size() == byteCount)
 				std::copy(source.begin(), source.end(), pixels);
 			else
-				std::fill(pixels, pixels + pixelCount, 0u);
+				std::fill(pixels, pixels + byteCount, static_cast<UInt8>(0));
 			pixelData->bNoConvert = 1;
 			outPixelData = pixelData;
 
 			NiTexture::FormatPrefs prefs;
-			prefs.m_ePixelLayout = static_cast<NiTexture::FormatPrefs::PixelLayout>(0x6);
-			prefs.m_eAlphaFmt = static_cast<NiTexture::FormatPrefs::AlphaFormat>(0x3);
+			prefs.m_ePixelLayout = mode == AtlasPixelMode::A8
+				? NiTexture::FormatPrefs::SINGLE_COLOR_8
+				: NiTexture::FormatPrefs::PIX_DEFAULT;
+			prefs.m_eAlphaFmt = mode == AtlasPixelMode::A8
+				? NiTexture::FormatPrefs::SMOOTH
+				: NiTexture::FormatPrefs::ALPHA_DEFAULT;
 			prefs.m_eMipMapped = NiTexture::FormatPrefs::NO;
 			NiTexturingProperty* property = static_cast<NiTexturingProperty*>(
 				NiMemObject::operator new(sizeof(NiTexturingProperty)));
@@ -374,6 +439,8 @@ namespace fonthook::vectorfont
 			if (!property || !property->m_kMaps.GetSize())
 				return nullptr;
 			ThisStdCall(0x60AEB0, property, 1);
+			if (mode == AtlasPixelMode::A8 && !PropertyUsesA8(property))
+				return nullptr;
 			if (NiTexturingProperty::Map* map = property->m_kMaps[0])
 			{
 				map->m_usflags = static_cast<UInt16>((map->m_usflags & ~0x1Fu)
@@ -384,7 +451,7 @@ namespace fonthook::vectorfont
 			return property;
 		}
 
-		UInt32* GetAtlasBacking(AtlasResource& resource)
+		UInt8* GetAtlasBacking(AtlasResource& resource)
 		{
 			if (!resource.pixels.empty())
 				return resource.pixels.data();
@@ -393,14 +460,13 @@ namespace fonthook::vectorfont
 			{
 				return nullptr;
 			}
-			return reinterpret_cast<UInt32*>(resource.pixelData->m_pucPixels
-				+ *resource.pixelData->m_puiOffsetInBytes);
+			return resource.pixelData->m_pucPixels + *resource.pixelData->m_puiOffsetInBytes;
 		}
 
 		void CopyBitmapToAtlas(AtlasResource& resource, const GlyphBitmap& bitmap,
 			const AtlasRect& rect)
 		{
-			UInt32* pixels = GetAtlasBacking(resource);
+			UInt8* pixels = GetAtlasBacking(resource);
 			if (!pixels)
 				return;
 			for (UInt32 y = 0; y < rect.height; ++y)
@@ -408,26 +474,39 @@ namespace fonthook::vectorfont
 				for (UInt32 x = 0; x < rect.width; ++x)
 				{
 					const UInt8 alpha = bitmap.alpha[static_cast<size_t>(y) * rect.width + x];
-					pixels[static_cast<size_t>(rect.y + y) * resource.width + rect.x + x]
-						= (static_cast<UInt32>(alpha) << 24) | 0x00FFFFFFu;
+					const size_t pixelIndex = static_cast<size_t>(rect.y + y)
+						* resource.width + rect.x + x;
+					if (resource.pixelMode == AtlasPixelMode::A8)
+					{
+						pixels[pixelIndex] = alpha;
+					}
+					else
+					{
+						UInt8* destination = pixels + pixelIndex * 4;
+						destination[0] = 0xFF;
+						destination[1] = 0xFF;
+						destination[2] = 0xFF;
+						destination[3] = alpha;
+					}
 				}
 			}
 		}
 
 		bool RecreateAtlasProperty(AtlasResource& resource)
 		{
-			const size_t pixelCount = static_cast<size_t>(resource.width) * resource.height;
-			std::vector<UInt32> source;
-			const bool movedTemporaryBacking = resource.pixels.size() == pixelCount;
+			const size_t byteCount = static_cast<size_t>(resource.width) * resource.height
+				* AtlasBytesPerPixel(resource.pixelMode);
+			std::vector<UInt8> source;
+			const bool movedTemporaryBacking = resource.pixels.size() == byteCount;
 			if (movedTemporaryBacking)
 				source = std::move(resource.pixels);
-			else if (UInt32* current = GetAtlasBacking(resource))
-				source.assign(current, current + pixelCount);
+			else if (UInt8* current = GetAtlasBacking(resource))
+				source.assign(current, current + byteCount);
 			else
 				return false;
 			NiPixelDataPtr pixelData;
 			NiTexturingProperty* property = CreateAtlasProperty(
-				resource.width, resource.height, source, pixelData);
+				resource.width, resource.height, resource.pixelMode, source, pixelData);
 			if (!property)
 			{
 				if (movedTemporaryBacking)
@@ -436,11 +515,11 @@ namespace fonthook::vectorfont
 			}
 			resource.property = property;
 			resource.pixelData = pixelData;
-			std::vector<UInt32>().swap(resource.pixels);
+			std::vector<UInt8>().swap(resource.pixels);
 			++resource.generation;
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasUpload);
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadBytes,
-				static_cast<UInt64>(resource.width) * resource.height * sizeof(UInt32));
+				static_cast<UInt64>(byteCount));
 			return true;
 		}
 
@@ -451,14 +530,17 @@ namespace fonthook::vectorfont
 				return false;
 			const UInt32 newWidth = std::min(maximum, resource.width * 2);
 			const UInt32 newHeight = std::min(maximum, resource.height * 2);
-			std::vector<UInt32> expanded(static_cast<size_t>(newWidth) * newHeight, 0u);
-			UInt32* current = GetAtlasBacking(resource);
+			const UInt32 bytesPerPixel = AtlasBytesPerPixel(resource.pixelMode);
+			std::vector<UInt8> expanded(static_cast<size_t>(newWidth) * newHeight
+				* bytesPerPixel, 0u);
+			UInt8* current = GetAtlasBacking(resource);
 			if (!current)
 				return false;
 			for (UInt32 y = 0; y < resource.height; ++y)
 			{
-				std::copy_n(current + static_cast<size_t>(y) * resource.width,
-					resource.width, expanded.data() + static_cast<size_t>(y) * newWidth);
+				std::copy_n(current + static_cast<size_t>(y) * resource.width * bytesPerPixel,
+					static_cast<size_t>(resource.width) * bytesPerPixel,
+					expanded.data() + static_cast<size_t>(y) * newWidth * bytesPerPixel);
 			}
 			resource.width = newWidth;
 			resource.height = newHeight;
@@ -472,7 +554,7 @@ namespace fonthook::vectorfont
 			if (!resource.pixelData || !resource.pixelData->m_pucPixels
 				|| !resource.pixelData->m_puiOffsetInBytes)
 				return false;
-			UInt32* sourcePixels = GetAtlasBacking(resource);
+			UInt8* sourcePixels = GetAtlasBacking(resource);
 			if (!sourcePixels)
 				return false;
 
@@ -486,6 +568,15 @@ namespace fonthook::vectorfont
 			if (FAILED(baseTexture->QueryInterface(IID_IDirect3DTexture9,
 				reinterpret_cast<void**>(&d3dTexture))) || !d3dTexture)
 				return false;
+			D3DSURFACE_DESC description = {};
+			const D3DFORMAT expectedFormat = resource.pixelMode == AtlasPixelMode::A8
+				? D3DFMT_A8 : D3DFMT_A8R8G8B8;
+			if (FAILED(d3dTexture->GetLevelDesc(0, &description))
+				|| description.Format != expectedFormat)
+			{
+				d3dTexture->Release();
+				return false;
+			}
 			RECT rect = {
 				static_cast<LONG>(dirty.x), static_cast<LONG>(dirty.y),
 				static_cast<LONG>(dirty.x + dirty.width),
@@ -495,13 +586,16 @@ namespace fonthook::vectorfont
 			const HRESULT result = d3dTexture->LockRect(0, &locked, &rect, 0);
 			if (SUCCEEDED(result))
 			{
+				const UInt32 bytesPerPixel = AtlasBytesPerPixel(resource.pixelMode);
 				for (UInt32 y = 0; y < dirty.height; ++y)
 				{
-					const UInt32* source = sourcePixels
-						+ static_cast<size_t>(dirty.y + y) * resource.width + dirty.x;
+					const UInt8* source = sourcePixels
+						+ (static_cast<size_t>(dirty.y + y) * resource.width + dirty.x)
+							* bytesPerPixel;
 					UInt8* destination = static_cast<UInt8*>(locked.pBits)
 						+ static_cast<size_t>(y) * locked.Pitch;
-					std::memcpy(destination, source, static_cast<size_t>(dirty.width) * sizeof(UInt32));
+					std::memcpy(destination, source,
+						static_cast<size_t>(dirty.width) * bytesPerPixel);
 				}
 				d3dTexture->UnlockRect(0);
 			}
@@ -510,7 +604,8 @@ namespace fonthook::vectorfont
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::AtlasUpload);
 				RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadBytes,
-					static_cast<UInt64>(dirty.width) * dirty.height * sizeof(UInt32));
+					static_cast<UInt64>(dirty.width) * dirty.height
+						* AtlasBytesPerPixel(resource.pixelMode));
 			}
 			return SUCCEEDED(result);
 		}
@@ -518,6 +613,35 @@ namespace fonthook::vectorfont
 		bool AddBitmapsToAtlas(AtlasResource& resource,
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps)
 		{
+			AtlasResource planned;
+			planned.width = resource.width;
+			planned.height = resource.height;
+			planned.cursorX = resource.cursorX;
+			planned.cursorY = resource.cursorY;
+			planned.shelfHeight = resource.shelfHeight;
+			const UInt32 maximum = GetMaximumAtlasSize();
+			for (const auto& bitmap : bitmaps)
+			{
+				if (!bitmap || resource.placements.find(bitmap->cacheId)
+					!= resource.placements.end())
+				{
+					continue;
+				}
+				AtlasRect ignored;
+				while (!PlaceBitmap(planned, *bitmap, ignored))
+				{
+					if (planned.width >= maximum || planned.height >= maximum)
+						return false;
+					planned.width = std::min(maximum, planned.width * 2);
+					planned.height = std::min(maximum, planned.height * 2);
+				}
+			}
+			while (resource.width < planned.width || resource.height < planned.height)
+			{
+				if (!GrowAtlas(resource))
+					return false;
+			}
+
 			bool changed = false;
 			UInt32 minX = resource.width;
 			UInt32 minY = resource.height;
@@ -528,11 +652,8 @@ namespace fonthook::vectorfont
 				if (!bitmap || resource.placements.find(bitmap->cacheId) != resource.placements.end())
 					continue;
 				AtlasRect rect;
-				while (!PlaceBitmap(resource, *bitmap, rect))
-				{
-					if (!GrowAtlas(resource))
-						return false;
-				}
+				if (!PlaceBitmap(resource, *bitmap, rect))
+					return false;
 				resource.placements.emplace(bitmap->cacheId, rect);
 				CopyBitmapToAtlas(resource, *bitmap, rect);
 				minX = std::min(minX, rect.x);
@@ -555,12 +676,14 @@ namespace fonthook::vectorfont
 
 		std::shared_ptr<AtlasResource> GetAtlasResource(
 			const FontConfig& config, float rasterScale,
-			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps)
+			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
+			AtlasPixelMode pixelMode)
 		{
 			AtlasCacheKey key = {
 				config.styleHash,
 				config.fontId,
-				static_cast<UInt32>(std::lround(rasterScale * 1000.0f))
+				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
+				pixelMode
 			};
 
 			std::lock_guard<std::mutex> lock(s_atlasMutex);
@@ -573,7 +696,7 @@ namespace fonthook::vectorfont
 				if (AddBitmapsToAtlas(*resource, bitmaps))
 				{
 					const size_t bytes = static_cast<size_t>(resource->width)
-						* resource->height * 4;
+						* resource->height * AtlasBytesPerPixel(resource->pixelMode);
 					if (bytes != existing->second.bytes)
 					{
 						s_atlasCacheBytes -= existing->second.bytes;
@@ -587,12 +710,15 @@ namespace fonthook::vectorfont
 			}
 			auto resource = std::make_shared<AtlasResource>();
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasCreated);
+			resource->pixelMode = pixelMode;
 			resource->width = std::min<UInt32>(512, GetMaximumAtlasSize());
 			resource->height = resource->width;
-			resource->pixels.assign(static_cast<size_t>(resource->width) * resource->height, 0u);
+			resource->pixels.assign(static_cast<size_t>(resource->width) * resource->height
+				* AtlasBytesPerPixel(resource->pixelMode), 0u);
 			if (!AddBitmapsToAtlas(*resource, bitmaps))
 				return nullptr;
-			const size_t bytes = static_cast<size_t>(resource->width) * resource->height * 4;
+			const size_t bytes = static_cast<size_t>(resource->width) * resource->height
+				* AtlasBytesPerPixel(resource->pixelMode);
 			s_atlasLru.push_front(key);
 			s_atlasCache.emplace(key,
 				AtlasCacheEntry{ resource, bytes, s_atlasLru.begin() });
@@ -602,16 +728,18 @@ namespace fonthook::vectorfont
 		}
 
 		std::shared_ptr<AtlasResource> CreateTransientAtlas(
-			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps)
+			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
+			AtlasPixelMode pixelMode)
 		{
 			auto resource = std::make_shared<AtlasResource>();
+			resource->pixelMode = pixelMode;
 			if (!PackAtlas(bitmaps, resource->width, resource->height,
 				resource->placements))
 			{
 				return nullptr;
 			}
 			resource->pixels.assign(static_cast<size_t>(resource->width)
-				* resource->height, 0u);
+				* resource->height * AtlasBytesPerPixel(resource->pixelMode), 0u);
 			for (const auto& bitmap : bitmaps)
 			{
 				if (bitmap)
@@ -848,10 +976,38 @@ namespace fonthook::vectorfont
 			std::copy(batch->colors.begin(), batch->colors.end(), data->m_pkColor);
 			std::copy(batch->indices.begin(), batch->indices.end(), data->m_pusTriList);
 			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
+			if (atlas->pixelMode == AtlasPixelMode::A8 && !PrepareA8AtlasShape(shape))
+				return nullptr;
 			if (prepareObject)
 				shape->PrepareObject();
 			return shape;
 		}
+
+		NiTriShape* TryCreateAtlasShapeForMode(Font& font,
+			const std::vector<PendingQuad>& quads,
+			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
+			const FontConfig& config, float rasterScale, bool prepareObject,
+			AtlasPixelMode pixelMode, std::shared_ptr<AtlasResource>& outAtlas)
+		{
+			outAtlas = GetAtlasResource(config, rasterScale, bitmaps, pixelMode);
+			if (!outAtlas)
+				outAtlas = CreateTransientAtlas(bitmaps, pixelMode);
+			if (!outAtlas)
+				return nullptr;
+			return CreateAtlasShape(font, quads, outAtlas, prepareObject);
+		}
+	}
+
+	bool PrewarmGlyphAtlas(RuntimeFont& runtime,
+		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
+		float rasterScale)
+	{
+		if (bitmaps.empty())
+			return true;
+		const FontConfig& config = GetRuntimeConfig(runtime);
+		const AtlasPixelMode pixelMode = IsA8RendererAvailable()
+			? AtlasPixelMode::A8 : AtlasPixelMode::Argb32;
+		return GetAtlasResource(config, rasterScale, bitmaps, pixelMode) != nullptr;
 	}
 
 	NiTriShape* TryCreateGlyphAtlasShape(Font& font, RuntimeFont& runtime,
@@ -888,33 +1044,40 @@ namespace fonthook::vectorfont
 				{
 					return lhs->cacheId < rhs->cacheId;
 				});
-				std::shared_ptr<AtlasResource> atlas = GetAtlasResource(
-					GetRuntimeConfig(runtime), rasterScale, bitmaps);
-				if (!atlas)
-					atlas = CreateTransientAtlas(bitmaps);
-				if (atlas)
+				const FontConfig& config = GetRuntimeConfig(runtime);
+				AtlasPixelMode pixelMode = IsA8RendererAvailable()
+					? AtlasPixelMode::A8 : AtlasPixelMode::Argb32;
+				std::shared_ptr<AtlasResource> atlas;
+				NiTriShape* shape = TryCreateAtlasShapeForMode(font, quads, bitmaps,
+					config, rasterScale, prepareObject, pixelMode, atlas);
+				if (!shape && pixelMode == AtlasPixelMode::A8)
 				{
-					if (NiTriShape* shape = CreateAtlasShape(font, quads, atlas, prepareObject))
+					pixelMode = AtlasPixelMode::Argb32;
+					shape = TryCreateAtlasShapeForMode(font, quads, bitmaps,
+						config, rasterScale, prepareObject, pixelMode, atlas);
+				}
+				if (shape)
+				{
+					const UInt64 logKey = (static_cast<UInt64>(font.iFontNum) << 32)
+						| (static_cast<UInt32>(std::lround(rasterScale * 1000.0f)) << 1)
+						| static_cast<UInt32>(pixelMode);
+					bool shouldLog = false;
+					if (g_bEnableFreeTypeFontRenderingLog)
 					{
-						const UInt64 logKey = (static_cast<UInt64>(font.iFontNum) << 32)
-							| static_cast<UInt32>(std::lround(rasterScale * 1000.0f));
-						bool shouldLog = false;
-						if (g_bEnableFreeTypeFontRenderingLog)
-						{
-							std::lock_guard<std::mutex> lock(s_atlasMutex);
-							shouldLog = s_loggedAtlasBatches.insert(logKey).second;
-						}
-						if (shouldLog)
-						{
-							FreeTypeFontDebugLog(
-								"tnvse_freetype_font: atlas batch font=%u scale=%.3f glyphs=%u quads=%u texture=%ux%u",
-								font.iFontNum, rasterScale,
-								static_cast<UInt32>(glyphs.size()),
-								static_cast<UInt32>(quads.size()),
-								atlas->width, atlas->height);
-						}
-						return shape;
+						std::lock_guard<std::mutex> lock(s_atlasMutex);
+						shouldLog = s_loggedAtlasBatches.insert(logKey).second;
 					}
+					if (shouldLog)
+					{
+						FreeTypeFontDebugLog(
+							"tnvse_freetype_font: atlas batch font=%u scale=%.3f mode=%s glyphs=%u quads=%u texture=%ux%u",
+							font.iFontNum, rasterScale,
+							pixelMode == AtlasPixelMode::A8 ? "a8" : "argb32",
+							static_cast<UInt32>(glyphs.size()),
+							static_cast<UInt32>(quads.size()),
+							atlas->width, atlas->height);
+					}
+					return shape;
 				}
 			}
 			if (attempt < degradationOrder.size())
