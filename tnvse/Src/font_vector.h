@@ -29,6 +29,7 @@ namespace fonthook
 	bool IsFreeTypeFontActive(const Font* apFont);
 	FontLetter* EnsureFreeTypeDoubleByteMetrics(Font* apFont, UInt32 auiEncodedCode);
 	bool DecodeFreeTypeGlyph(Font* apFont, const char* apText, VectorEncodedGlyph& arGlyph);
+	NiTriShape* CreateEmptyFreeTypeTextShape(Font* apFont, bool abPrepareObject);
 
 	class VectorTextBuilder
 	{
@@ -41,7 +42,7 @@ namespace fonthook
 
 		bool IsAvailable() const;
 		bool AddGlyph(const VectorEncodedGlyph& arGlyph, const NiPoint3& arPen, const NiColorA* apColor);
-		NiAVObject* Finish();
+		NiTriShape* Finish();
 
 	private:
 		struct Impl;

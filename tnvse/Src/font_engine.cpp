@@ -939,8 +939,7 @@ namespace fonthook
 		VectorTextBuilder builder(font, true);
 		if (!builder.IsAvailable())
 		{
-			if (NiNode* empty = NiNode::Create())
-				*textShape = reinterpret_cast<NiTriShape*>(empty);
+			*textShape = CreateEmptyFreeTypeTextShape(font, true);
 			font->ButtonIcons.Clear(1);
 			return ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&textData));
 		}
@@ -1039,9 +1038,9 @@ namespace fonthook
 			position.x - lineStartX, trailingWhitespaceCount,
 			trailingWhitespaceWidth, textData.xNewText.pString);
 
-		NiAVObject* textObject = builder.Finish();
+		NiTriShape* textObject = builder.Finish();
 		if (!textObject)
-			textObject = NiNode::Create();
+			textObject = CreateEmptyFreeTypeTextShape(font, true);
 		if (textObject)
 		{
 			textObject->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f,
@@ -1054,13 +1053,13 @@ namespace fonthook
 					loggedRootTransform = true;
 					FreeTypeFontDebugLog(
 						"tnvse_freetype_font: ordinary object type=%s local=(%.3f,%.3f,%.3f)",
-						textObject->IsNiNode() ? "node" : "shape",
+						"shape",
 						textObject->m_kLocal.m_Translate.x,
 						textObject->m_kLocal.m_Translate.y,
 						textObject->m_kLocal.m_Translate.z);
 				}
 			}
-			*textShape = reinterpret_cast<NiTriShape*>(textObject);
+			*textShape = textObject;
 		}
 		font->ButtonIcons.Clear(1);
 		return ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&textData));
@@ -1281,10 +1280,10 @@ namespace fonthook
 			VectorTextBuilder builder(this, abPrepareObject_1);
 			if (!builder.IsAvailable())
 			{
-				NiNode* empty = NiNode::Create();
+				NiTriShape* empty = CreateEmptyFreeTypeTextShape(this, abPrepareObject_1);
 				if (empty)
-				empty->m_kLocal.m_Translate = NiPoint3(afStartX, currentZ, currentY);
-				return reinterpret_cast<NiTriShape*>(empty);
+					empty->m_kLocal.m_Translate = NiPoint3(afStartX, currentZ, currentY);
+				return empty;
 			}
 
 			const float startY = currentY;
@@ -1334,12 +1333,12 @@ namespace fonthook
 				*aiWidth = MaxInt(*aiWidth, ConditionalFloatToUInt(currentX - startX));
 			}
 
-			NiAVObject* textObject = builder.Finish();
+			NiTriShape* textObject = builder.Finish();
 			if (!textObject)
-				textObject = NiNode::Create();
+				textObject = CreateEmptyFreeTypeTextShape(this, abPrepareObject_1);
 			if (textObject)
 				textObject->m_kLocal.m_Translate = NiPoint3(afStartX, currentZ, startY);
-			return reinterpret_cast<NiTriShape*>(textObject);
+			return textObject;
 		}
 
 		int iActualCharCount = AdjustCharCountForDB(

@@ -14,7 +14,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -25,8 +24,8 @@ namespace fonthook
 {
 	namespace
 	{
-		constexpr UInt32 kMaxChunkVertices = 65532;
-		constexpr UInt32 kMaxChunkTriangles = 32766;
+		constexpr UInt32 kMaxShapeVertices = 65532;
+		constexpr UInt32 kMaxShapeTriangles = 32766;
 		constexpr UInt32 kGeometryFailureLogLimit = 64;
 		constexpr float kLayerDepthStep = 0.01f;
 
@@ -38,28 +37,13 @@ namespace fonthook
 			Fill = 3,
 		};
 
-		struct PackedColor
-		{
-			std::array<UInt32, 4> channels = {};
+		constexpr size_t kVectorLayerCount = 4;
 
-			bool operator==(const PackedColor& other) const
-			{
-				return channels == other.channels;
-			}
-		};
-
-		struct Chunk
+		struct LayerGeometry
 		{
 			std::vector<NiPoint3> vertices;
-			std::vector<UInt16> indices;
-		};
-
-		struct ColorGroup
-		{
-			VectorLayer layer = VectorLayer::Fill;
-			NiColorA color = { 1.0f, 1.0f, 1.0f, 1.0f };
-			PackedColor packed;
-			std::vector<Chunk> chunks;
+			std::vector<NiColorA> colors;
+			std::vector<UInt32> indices;
 		};
 
 		NiTexturingProperty* s_whiteTextureProperty = nullptr;
@@ -68,17 +52,7 @@ namespace fonthook
 		UInt32 s_geometryFailureLogCount = 0;
 		std::mutex s_routeLogMutex;
 		std::unordered_set<UInt64> s_loggedGlyphRoutes;
-		std::array<bool, 4> s_loggedShapeDiagnostics = {};
-
-		PackedColor PackColor(const NiColorA& color)
-		{
-			return { {
-				std::bit_cast<UInt32>(color.r),
-				std::bit_cast<UInt32>(color.g),
-				std::bit_cast<UInt32>(color.b),
-				std::bit_cast<UInt32>(color.a)
-			} };
-		}
+		bool s_loggedMergedShapeDiagnostics = false;
 
 		NiColorA ResolveFillColor(const vectorfont::FontColorStyle& style, const NiColorA* source)
 		{
@@ -192,23 +166,111 @@ namespace fonthook
 			return s_whiteTextureAvailable;
 		}
 
-		NiTriShape* MakeVectorTriShape(Font& font, UInt32 vertexCount, UInt32 triangleCount,
-			const NiColorA& color, bool prepareObject)
+		NiTriShape* CreateEmptyVectorShape(Font* font, bool prepareObject)
 		{
-			if (!vertexCount || !triangleCount || !InitializeWhiteTexture())
+			if (!font)
 				return nullptr;
-			const UInt32 charCapacity = std::max((vertexCount + 3) / 4, (triangleCount + 1) / 2);
-			if (!charCapacity || charCapacity > 16383)
-				return nullptr;
-
-			NiTriShape* shape = font.MakeTriShape(static_cast<int>(charCapacity), &color, false);
+			const NiColorA transparent = { 1.0f, 1.0f, 1.0f, 0.0f };
+			NiTriShape* shape = font->MakeTriShape(1, &transparent, false);
 			if (!shape || !shape->GetModelData())
 				return nullptr;
 
-			// Font::MakeTriShape installs the original bitmap texture in both the
-			// property state and the tile shader. Replace both after construction;
-			// changing Font::pTextureData temporarily does not update the shape's
-			// resolved property state reliably.
+			shape->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f, 0.0f);
+			NiTriShapeData* data = shape->GetModelData();
+			for (UInt32 i = 0; i < data->m_usVertices; ++i)
+			{
+				data->m_pkVertex[i] = NiPoint3(0.0f, 0.0f, 0.0f);
+				if (data->m_pkTexture)
+					data->m_pkTexture[i] = NiPoint2(0.5f, 0.5f);
+			}
+			for (UInt32 i = 0; i < static_cast<UInt32>(data->m_usTriangles) * 3; ++i)
+				data->m_pusTriList[i] = 0;
+			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
+			if (prepareObject)
+				shape->PrepareObject();
+			return shape;
+		}
+
+		bool AppendMesh(LayerGeometry& layerGeometry, VectorLayer layer,
+			const vectorfont::GlyphMesh& mesh, const NiPoint3& pen,
+			const NiColorA& color, float offsetX, float offsetY)
+		{
+			const size_t meshVertices = mesh.vertices.size();
+			const size_t meshTriangles = mesh.indices.size() / 3;
+			if (!meshVertices || !meshTriangles)
+				return true;
+			if (layerGeometry.vertices.size() > UINT32_MAX - meshVertices)
+				return false;
+
+			const UInt32 baseVertex = static_cast<UInt32>(layerGeometry.vertices.size());
+			for (UInt32 index : mesh.indices)
+			{
+				if (index >= meshVertices || baseVertex > UINT32_MAX - index)
+					return false;
+			}
+			layerGeometry.vertices.reserve(layerGeometry.vertices.size() + meshVertices);
+			layerGeometry.colors.reserve(layerGeometry.colors.size() + meshVertices);
+			const float layerDepth = GetLayerDepthOffset(layer);
+			for (const vectorfont::MeshPoint& point : mesh.vertices)
+			{
+				layerGeometry.vertices.emplace_back(
+					pen.x + point.x + offsetX,
+					pen.y + layerDepth,
+					pen.z + point.y - offsetY);
+				layerGeometry.colors.push_back(color);
+			}
+
+			layerGeometry.indices.reserve(layerGeometry.indices.size() + mesh.indices.size());
+			for (UInt32 index : mesh.indices)
+				layerGeometry.indices.push_back(baseVertex + index);
+			return true;
+		}
+
+		bool FitsSingleShape(const std::array<LayerGeometry, kVectorLayerCount>& layers,
+			const std::array<bool, kVectorLayerCount>& included,
+			UInt32& vertexCount, UInt32& triangleCount)
+		{
+			size_t vertices = 0;
+			size_t triangles = 0;
+			for (size_t i = 0; i < layers.size(); ++i)
+			{
+				if (!included[i])
+					continue;
+				vertices += layers[i].vertices.size();
+				triangles += layers[i].indices.size() / 3;
+			}
+			vertexCount = vertices <= UINT32_MAX ? static_cast<UInt32>(vertices) : UINT32_MAX;
+			triangleCount = triangles <= UINT32_MAX ? static_cast<UInt32>(triangles) : UINT32_MAX;
+			return vertices <= kMaxShapeVertices && triangles <= kMaxShapeTriangles;
+		}
+
+		NiTriShape* CreateMergedShape(Font& font,
+			const std::array<LayerGeometry, kVectorLayerCount>& layers,
+			const std::array<bool, kVectorLayerCount>& included,
+			UInt32 vertexCount, UInt32 triangleCount, bool prepareObject)
+		{
+			if (!vertexCount || !triangleCount || !InitializeWhiteTexture())
+				return CreateEmptyVectorShape(&font, prepareObject);
+
+			const UInt32 charCapacity = std::max((vertexCount + 3) / 4, (triangleCount + 1) / 2);
+			if (!charCapacity || charCapacity > 16383)
+				return CreateEmptyVectorShape(&font, prepareObject);
+
+			const UInt32 capacityVertices = charCapacity * 4;
+			NiColorA* vertexColors = static_cast<NiColorA*>(
+				MemoryManager_s_Instance->Allocate(sizeof(NiColorA) * capacityVertices));
+			if (!vertexColors)
+				return CreateEmptyVectorShape(&font, prepareObject);
+
+			const NiColorA white = { 1.0f, 1.0f, 1.0f, 1.0f };
+			NiTriShape* shape = font.MakeTriShape(static_cast<int>(charCapacity), &white, false);
+			if (!shape || !shape->GetModelData())
+			{
+				MemoryManager_s_Instance->Deallocate(vertexColors);
+				return CreateEmptyVectorShape(&font, prepareObject);
+			}
+
+			shape->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f, 0.0f);
 			shape->RemoveProperty(NiProperty::TEXTURING);
 			shape->AddProperty(s_whiteTextureProperty);
 			shape->UpdateProperties();
@@ -218,42 +280,41 @@ namespace fonthook
 			{
 				if (whiteTexture)
 					ThisStdCall(0xBB7A10, shade, whiteTexture);
-				*reinterpret_cast<NiColorA*>(reinterpret_cast<UInt8*>(shade) + 0x68) = color;
+				*reinterpret_cast<NiColorA*>(reinterpret_cast<UInt8*>(shade) + 0x68) = white;
 			}
 
-			if (prepareObject)
-				shape->PrepareObject();
-			return shape;
-		}
-
-		NiTriShape* CreateChunkShape(Font& font, const Chunk& chunk,
-			VectorLayer layer, const NiColorA& color, bool prepareObject)
-		{
-			const UInt32 triangleCount = static_cast<UInt32>(chunk.indices.size() / 3);
-			NiTriShape* shape = MakeVectorTriShape(font,
-				static_cast<UInt32>(chunk.vertices.size()), triangleCount, color, false);
-			if (!shape)
-				return nullptr;
-			shape->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f, 0.0f);
-
 			NiTriShapeData* data = shape->GetModelData();
-			const UInt32 capacityVertices = data->m_usVertices;
-			const UInt32 capacityTriangles = data->m_usTriangles;
-			const NiPoint3 paddingVertex = chunk.vertices.empty() ? NiPoint3{} : chunk.vertices.front();
-			const float layerDepth = GetLayerDepthOffset(layer);
-			for (UInt32 i = 0; i < capacityVertices; ++i)
+			data->m_pkColor = vertexColors;
+			data->m_ucKeepFlags |= NiGeometryData::KEEP_COLOR;
+			const NiColorA transparent = { 1.0f, 1.0f, 1.0f, 0.0f };
+			for (UInt32 i = 0; i < data->m_usVertices; ++i)
 			{
-				data->m_pkVertex[i] = i < chunk.vertices.size() ? chunk.vertices[i] : paddingVertex;
-				data->m_pkVertex[i].y += layerDepth;
+				data->m_pkVertex[i] = NiPoint3(0.0f, 0.0f, 0.0f);
+				data->m_pkColor[i] = transparent;
 				if (data->m_pkTexture)
 					data->m_pkTexture[i] = NiPoint2(0.5f, 0.5f);
 			}
-			for (UInt32 i = 0; i < capacityTriangles * 3; ++i)
-				data->m_pusTriList[i] = i < chunk.indices.size() ? chunk.indices[i] : 0;
+			for (UInt32 i = 0; i < static_cast<UInt32>(data->m_usTriangles) * 3; ++i)
+				data->m_pusTriList[i] = 0;
 
-			// The original bitmap font quads face -Y. libtess2 does not promise
-			// that its output winding matches that Gamebryo UI convention, and
-			// opposite-facing glyphs are removed by back-face culling.
+			UInt32 vertexCursor = 0;
+			UInt32 indexCursor = 0;
+			for (size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex)
+			{
+				if (!included[layerIndex])
+					continue;
+				const LayerGeometry& layer = layers[layerIndex];
+				const UInt32 baseVertex = vertexCursor;
+				for (size_t i = 0; i < layer.vertices.size(); ++i)
+				{
+					data->m_pkVertex[vertexCursor] = layer.vertices[i];
+					data->m_pkColor[vertexCursor] = layer.colors[i];
+					++vertexCursor;
+				}
+				for (UInt32 index : layer.indices)
+					data->m_pusTriList[indexCursor++] = static_cast<UInt16>(baseVertex + index);
+			}
+
 			UInt32 flippedTriangles = 0;
 			float firstWindingBefore = 0.0f;
 			float firstWindingAfter = 0.0f;
@@ -261,13 +322,6 @@ namespace fonthook
 			for (UInt32 triangle = 0; triangle < triangleCount; ++triangle)
 			{
 				UInt16* indices = &data->m_pusTriList[triangle * 3];
-				if (indices[0] >= chunk.vertices.size()
-					|| indices[1] >= chunk.vertices.size()
-					|| indices[2] >= chunk.vertices.size())
-				{
-					continue;
-				}
-
 				const NiPoint3& v0 = data->m_pkVertex[indices[0]];
 				const NiPoint3& v1 = data->m_pkVertex[indices[1]];
 				const NiPoint3& v2 = data->m_pkVertex[indices[2]];
@@ -294,81 +348,26 @@ namespace fonthook
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
 				std::lock_guard<std::mutex> lock(s_routeLogMutex);
-				const size_t layerIndex = static_cast<size_t>(layer);
-				if (layerIndex < s_loggedShapeDiagnostics.size()
-					&& !s_loggedShapeDiagnostics[layerIndex])
+				if (!s_loggedMergedShapeDiagnostics)
 				{
-					s_loggedShapeDiagnostics[layerIndex] = true;
-					NiShadeProperty* shade = shape->GetShadeProperty();
-					NiTexture* shaderTexture = nullptr;
-					NiColorA shaderColor = {};
-					if (shade && shade->m_eShaderType == NiShadeProperty::PROP_Tile)
-					{
-						shaderTexture = *reinterpret_cast<NiTexture**>(reinterpret_cast<UInt8*>(shade) + 0x60);
-						shaderColor = *reinterpret_cast<NiColorA*>(reinterpret_cast<UInt8*>(shade) + 0x68);
-					}
+					s_loggedMergedShapeDiagnostics = true;
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: first vector shape layer=%s font=%u vertices=%u triangles=%u flipped=%u winding=%.4f->%.4f depth=%.3f local=(%.3f,%.3f,%.3f) propertyTexture=%p expectedProperty=%p shaderTexture=%p expectedTexture=%p requestedColor=(%.3f,%.3f,%.3f,%.3f) shaderColor=(%.3f,%.3f,%.3f,%.3f)",
-						GetLayerName(layer), font.iFontNum,
-						static_cast<UInt32>(chunk.vertices.size()), triangleCount,
-						flippedTriangles, firstWindingBefore, firstWindingAfter, layerDepth,
+						"tnvse_freetype_font: first merged shape font=%u vertices=%u triangles=%u shadow=%d glow=%d outline=%d fill=%d flipped=%u winding=%.4f->%.4f colors=%p local=(%.3f,%.3f,%.3f)",
+						font.iFontNum, vertexCount, triangleCount,
+						included[static_cast<size_t>(VectorLayer::Shadow)] ? 1 : 0,
+						included[static_cast<size_t>(VectorLayer::Glow)] ? 1 : 0,
+						included[static_cast<size_t>(VectorLayer::Outline)] ? 1 : 0,
+						included[static_cast<size_t>(VectorLayer::Fill)] ? 1 : 0,
+						flippedTriangles,
+						firstWindingBefore, firstWindingAfter, data->m_pkColor,
 						shape->m_kLocal.m_Translate.x,
 						shape->m_kLocal.m_Translate.y,
-						shape->m_kLocal.m_Translate.z,
-						shape->GetTexturingProperty(), s_whiteTextureProperty,
-						shaderTexture, GetWhiteTexture(),
-						color.r, color.g, color.b, color.a,
-						shaderColor.r, shaderColor.g, shaderColor.b, shaderColor.a);
+						shape->m_kLocal.m_Translate.z);
 				}
 			}
 			if (prepareObject)
 				shape->PrepareObject();
 			return shape;
-		}
-
-		ColorGroup& GetColorGroup(std::vector<ColorGroup>& groups, VectorLayer layer, const NiColorA& color)
-		{
-			const PackedColor packed = PackColor(color);
-			for (ColorGroup& group : groups)
-			{
-				if (group.layer == layer && group.packed == packed)
-					return group;
-			}
-			groups.push_back({ layer, color, packed, {} });
-			return groups.back();
-		}
-
-		bool AppendMesh(ColorGroup& group, const vectorfont::GlyphMesh& mesh,
-			const NiPoint3& pen, float offsetX, float offsetY)
-		{
-			const UInt32 meshVertices = static_cast<UInt32>(mesh.vertices.size());
-			const UInt32 meshTriangles = static_cast<UInt32>(mesh.indices.size() / 3);
-			if (!meshVertices || !meshTriangles)
-				return true;
-			if (meshVertices > kMaxChunkVertices || meshTriangles > kMaxChunkTriangles)
-				return false;
-
-			if (group.chunks.empty()
-				|| group.chunks.back().vertices.size() + meshVertices > kMaxChunkVertices
-				|| group.chunks.back().indices.size() / 3 + meshTriangles > kMaxChunkTriangles)
-			{
-				group.chunks.emplace_back();
-			}
-
-			Chunk& chunk = group.chunks.back();
-			const UInt32 baseVertex = static_cast<UInt32>(chunk.vertices.size());
-			chunk.vertices.reserve(chunk.vertices.size() + meshVertices);
-			for (const vectorfont::MeshPoint& point : mesh.vertices)
-			{
-				chunk.vertices.emplace_back(
-					pen.x + point.x + offsetX,
-					pen.y,
-					pen.z + point.y - offsetY);
-			}
-			chunk.indices.reserve(chunk.indices.size() + mesh.indices.size());
-			for (UInt32 index : mesh.indices)
-				chunk.indices.push_back(static_cast<UInt16>(baseVertex + index));
-			return true;
 		}
 
 		struct RichTextVectorContext
@@ -387,7 +386,7 @@ namespace fonthook
 		bool prepareObject = false;
 		bool available = false;
 		bool finished = false;
-		std::vector<ColorGroup> groups;
+		std::array<LayerGeometry, kVectorLayerCount> layers;
 
 		Impl(Font* apFont, bool abPrepareObject)
 			: font(apFont), prepareObject(abPrepareObject)
@@ -402,6 +401,11 @@ namespace fonthook
 	bool InitializeFreeTypeVectorRenderer()
 	{
 		return InitializeWhiteTexture();
+	}
+
+	NiTriShape* CreateEmptyFreeTypeTextShape(Font* font, bool prepareObject)
+	{
+		return CreateEmptyVectorShape(font, prepareObject);
 	}
 
 	VectorTextBuilder::VectorTextBuilder(Font* apFont, bool abPrepareObject)
@@ -446,10 +450,10 @@ namespace fonthook
 
 		if (config.shadow.enabled && !fill->vertices.empty())
 		{
-			ColorGroup& shadow = GetColorGroup(m_impl->groups, VectorLayer::Shadow,
-				ResolveEffectColor(config.shadow, color));
-			if (!AppendMesh(shadow, *fill, pen, config.shadow.x, config.shadow.y))
-				LogGeometryFailure(config.fontId, glyph.codePoint, "shadow mesh exceeds chunk limits");
+			if (!AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Shadow)],
+				VectorLayer::Shadow, *fill, pen, ResolveEffectColor(config.shadow, color),
+				config.shadow.x, config.shadow.y))
+				LogGeometryFailure(config.fontId, glyph.codePoint, "shadow mesh accumulation failed");
 		}
 
 		if (config.glow.enabled)
@@ -462,10 +466,10 @@ namespace fonthook
 			}
 			else if (!glow->vertices.empty())
 			{
-				ColorGroup& glowGroup = GetColorGroup(m_impl->groups, VectorLayer::Glow,
-					ResolveEffectColor(config.glow, color));
-				if (!AppendMesh(glowGroup, *glow, pen, 0.0f, 0.0f))
-					LogGeometryFailure(config.fontId, glyph.codePoint, "glow mesh exceeds chunk limits");
+				if (!AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Glow)],
+					VectorLayer::Glow, *glow, pen, ResolveEffectColor(config.glow, color),
+					0.0f, 0.0f))
+					LogGeometryFailure(config.fontId, glyph.codePoint, "glow mesh accumulation failed");
 			}
 		}
 
@@ -479,76 +483,85 @@ namespace fonthook
 			}
 			else if (!outline->vertices.empty())
 			{
-				ColorGroup& outlineGroup = GetColorGroup(m_impl->groups, VectorLayer::Outline,
-					ResolveEffectColor(config.outline, color));
-				if (!AppendMesh(outlineGroup, *outline, pen, 0.0f, 0.0f))
-					LogGeometryFailure(config.fontId, glyph.codePoint, "outline mesh exceeds chunk limits");
+				if (!AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Outline)],
+					VectorLayer::Outline, *outline, pen, ResolveEffectColor(config.outline, color),
+					0.0f, 0.0f))
+					LogGeometryFailure(config.fontId, glyph.codePoint, "outline mesh accumulation failed");
 			}
 		}
 
 		if (!fill->vertices.empty())
 		{
-			ColorGroup& fillGroup = GetColorGroup(m_impl->groups, VectorLayer::Fill,
-				ResolveFillColor(config.fontColor, color));
-			if (!AppendMesh(fillGroup, *fill, pen, 0.0f, 0.0f))
-				LogGeometryFailure(config.fontId, glyph.codePoint, "fill mesh exceeds chunk limits");
+			if (!AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Fill)],
+				VectorLayer::Fill, *fill, pen, ResolveFillColor(config.fontColor, color),
+				0.0f, 0.0f))
+				LogGeometryFailure(config.fontId, glyph.codePoint, "fill mesh accumulation failed");
 		}
 		return true;
 	}
 
-	NiAVObject* VectorTextBuilder::Finish()
+	NiTriShape* VectorTextBuilder::Finish()
 	{
-		if (!IsAvailable() || m_impl->finished)
+		if (!m_impl || m_impl->finished)
 			return nullptr;
 		m_impl->finished = true;
-
-		UInt32 childCount = 0;
-		for (const ColorGroup& group : m_impl->groups)
-			childCount += static_cast<UInt32>(group.chunks.size());
-
-		// Font::CreateText normally returns one NiTriShape directly. Preserve that
-		// hierarchy when vector text has only one fill/effect chunk; TileText stores
-		// and later replaces the returned object's local transform, so an otherwise
-		// unnecessary NiNode changes the object contract used by the Font pipeline.
-		if (childCount == 1)
-		{
-			for (UInt32 layer = static_cast<UInt32>(VectorLayer::Shadow);
-				layer <= static_cast<UInt32>(VectorLayer::Fill); ++layer)
-			{
-				for (const ColorGroup& group : m_impl->groups)
-				{
-					if (static_cast<UInt32>(group.layer) != layer || group.chunks.empty())
-						continue;
-					return CreateChunkShape(*m_impl->font, group.chunks.front(),
-						group.layer, group.color, m_impl->prepareObject);
-				}
-			}
+		if (!m_impl->font)
 			return nullptr;
-		}
+		if (!m_impl->available)
+			return CreateEmptyVectorShape(m_impl->font, m_impl->prepareObject);
 
-		NiNode* root = NiNode::Create(static_cast<UInt16>(std::min<UInt32>(childCount, 0xFFFF)));
-		if (!root)
-			return nullptr;
+		std::array<bool, kVectorLayerCount> included = {};
+		for (size_t i = 0; i < included.size(); ++i)
+			included[i] = !m_impl->layers[i].vertices.empty();
 
-		for (UInt32 layer = static_cast<UInt32>(VectorLayer::Shadow);
-			layer <= static_cast<UInt32>(VectorLayer::Fill); ++layer)
+		UInt32 vertexCount = 0;
+		UInt32 triangleCount = 0;
+		std::array<bool, kVectorLayerCount> dropped = {};
+		const std::array<VectorLayer, 3> degradationOrder = {
+			VectorLayer::Glow,
+			VectorLayer::Shadow,
+			VectorLayer::Outline,
+		};
+		for (VectorLayer layer : degradationOrder)
 		{
-			for (const ColorGroup& group : m_impl->groups)
+			if (FitsSingleShape(m_impl->layers, included, vertexCount, triangleCount))
+				break;
+			const size_t layerIndex = static_cast<size_t>(layer);
+			if (included[layerIndex])
 			{
-				if (static_cast<UInt32>(group.layer) != layer)
-					continue;
-				for (const Chunk& chunk : group.chunks)
-				{
-					NiTriShape* shape = CreateChunkShape(*m_impl->font, chunk,
-						group.layer, group.color, m_impl->prepareObject);
-					if (shape)
-						root->AttachChild(shape, true);
-				}
+				included[layerIndex] = false;
+				dropped[layerIndex] = true;
 			}
 		}
-		if (m_impl->prepareObject)
-			root->PrepareObject();
-		return root;
+
+		if (!FitsSingleShape(m_impl->layers, included, vertexCount, triangleCount))
+		{
+			if (s_geometryFailureLogCount < kGeometryFailureLogLimit)
+			{
+				++s_geometryFailureLogCount;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: merged fill exceeds single-shape limit font=%u vertices=%u triangles=%u; returning empty shape",
+					m_impl->font->iFontNum, vertexCount, triangleCount);
+			}
+			return CreateEmptyVectorShape(m_impl->font, m_impl->prepareObject);
+		}
+
+		if (g_bEnableFreeTypeFontRenderingLog
+			&& (dropped[static_cast<size_t>(VectorLayer::Glow)]
+				|| dropped[static_cast<size_t>(VectorLayer::Shadow)]
+				|| dropped[static_cast<size_t>(VectorLayer::Outline)]))
+		{
+			FreeTypeFontDebugLog(
+				"tnvse_freetype_font: merged shape degraded font=%u dropGlow=%d dropShadow=%d dropOutline=%d vertices=%u triangles=%u",
+				m_impl->font->iFontNum,
+				dropped[static_cast<size_t>(VectorLayer::Glow)] ? 1 : 0,
+				dropped[static_cast<size_t>(VectorLayer::Shadow)] ? 1 : 0,
+				dropped[static_cast<size_t>(VectorLayer::Outline)] ? 1 : 0,
+				vertexCount, triangleCount);
+		}
+
+		return CreateMergedShape(*m_impl->font, m_impl->layers, included,
+			vertexCount, triangleCount, m_impl->prepareObject);
 	}
 
 	void BeginFreeTypeRichTextRender(NiNode* parent)
@@ -565,8 +578,8 @@ namespace fonthook
 		{
 			for (auto& [font, builder] : s_richTextContext->builders)
 			{
-				if (NiAVObject* object = builder->Finish())
-					s_richTextContext->parent->AttachChild(object, true);
+				if (NiTriShape* shape = builder->Finish())
+					s_richTextContext->parent->AttachChild(shape, true);
 			}
 		}
 		s_richTextContext.reset();
