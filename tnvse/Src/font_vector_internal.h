@@ -62,7 +62,7 @@ namespace fonthook::vectorfont
 	{
 		UInt32 fontId = 0;
 		std::array<ByteStyle, 2> styles;
-		float lineHeight = 0.0f;
+		float baseline = 0.0f;
 		float curveTolerance = 0.35f;
 		FontColorStyle fontColor;
 		EffectStyle glow;

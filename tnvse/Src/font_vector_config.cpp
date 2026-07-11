@@ -188,7 +188,7 @@ namespace fonthook::vectorfont
 		{
 			UInt64 hash = 1469598103934665603ull;
 			HashBytes(hash, &config.fontId, sizeof(config.fontId));
-			HashBytes(hash, &config.lineHeight, sizeof(config.lineHeight));
+			HashBytes(hash, &config.baseline, sizeof(config.baseline));
 			HashBytes(hash, &config.curveTolerance, sizeof(config.curveTolerance));
 			HashBytes(hash, &config.fontColor.configured, sizeof(config.fontColor.configured));
 			HashBytes(hash, &config.fontColor.color.r, sizeof(config.fontColor.color.r));
@@ -273,7 +273,12 @@ namespace fonthook::vectorfont
 				config.styles[i] = std::move(style);
 			}
 
-			config.lineHeight = std::max(0.0f, node.attribute("lineHeight").as_float(0.0f));
+			config.baseline = node.attribute("baseline").as_float(0.0f);
+			if (!std::isfinite(config.baseline) || config.baseline < 0.0f)
+			{
+				reason = "baseline must be finite and zero or greater";
+				return false;
+			}
 			config.curveTolerance = std::max(0.01f, node.attribute("curveTolerance").as_float(kDefaultCurveTolerance));
 			if (!ReadFontColor(node, config.fontColor))
 			{
@@ -292,8 +297,8 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u lineHeight=%.2f tolerance=%.3f fontColor=%d glow=%d outline=%d shadow=%d",
-				config.fontId, config.lineHeight, config.curveTolerance,
+				"tnvse_freetype_font: config font id=%u baseline=%.2f tolerance=%.3f fontColor=%d glow=%d outline=%d shadow=%d",
+				config.fontId, config.baseline, config.curveTolerance,
 				config.fontColor.configured, config.glow.enabled,
 				config.outline.enabled, config.shadow.enabled);
 			if (config.fontColor.configured)

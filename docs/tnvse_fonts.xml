@@ -42,10 +42,13 @@
       baselineOffset
         Vertical baseline adjustment in pixels. May be positive or negative.
         Default: 0.
-      lineHeight
-        Shared line height in pixels. 0 derives line metrics from both byte
-        classes. Default: 0. This attribute is read only from <font> and
-        cannot be overridden per byte class.
+      baseline
+        Fallout fBaseLine (line rise/ascent) in pixels; it is not the total
+        line-box height. 0 derives it from both byte classes. A positive value
+        sets it manually, rounds it upward to the game's integer metric, and
+        disables automatic visual-center correction between byte classes.
+        Default: 0. This attribute is read only from <font> and cannot be
+        overridden per byte class.
       curveTolerance
         Curve-flattening tolerance for the vector fallback path. Minimum:
         0.01. Default: 0.35. The normal grayscale atlas path does not use it.
@@ -68,7 +71,7 @@
         pixelSize, tracking, scaleX, scaleY, embolden, slant, baselineOffset
 
       Attributes not overridden by a byte class are inherited from <font>.
-      lineHeight, curveTolerance, fontColor, fontAlpha, glow, outline, and
+      baseline, curveTolerance, fontColor, fontAlpha, glow, outline, and
       shadow apply to the entire font ID and cannot be overridden per group.
 
       3. Font files and fallback chains
@@ -118,7 +121,7 @@
 
     <!-- 1: Glow_Monofonto_Large -->
     <font id="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" lineHeight="31"
+          embolden="0" slant="0" baselineOffset="0" baseline="31"
           curveTolerance="0.35">
       <singleByte pixelSize="27">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -135,7 +138,7 @@
 
     <!-- 2: Monofonto_Large -->
     <font id="2" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" lineHeight="31"
+          embolden="0" slant="0" baselineOffset="0" baseline="31"
           curveTolerance="0.35">
       <singleByte pixelSize="27">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -152,7 +155,7 @@
 
     <!-- 3: Glow_Monofonto_Medium -->
     <font id="3" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" lineHeight="26"
+          embolden="0" slant="0" baselineOffset="0" baseline="26"
           curveTolerance="0.35">
       <singleByte pixelSize="26">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -169,7 +172,7 @@
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
     <font id="4" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" lineHeight="36"
+          embolden="0" slant="0" baselineOffset="0" baseline="36"
           curveTolerance="0.35">
       <singleByte pixelSize="32">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -186,7 +189,7 @@
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
     <font id="5" pixelSize="25" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" lineHeight="25"
+          embolden="0" slant="0" baselineOffset="0" baseline="25"
           curveTolerance="0.35">
       <singleByte pixelSize="32">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -203,7 +206,7 @@
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
     <font id="6" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" lineHeight="34"
+          embolden="0" slant="0" baselineOffset="0" baseline="34"
           curveTolerance="0.35">
       <singleByte pixelSize="30">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -220,7 +223,7 @@
 
     <!-- 7: Baked-in_Monofonto_Large -->
     <font id="7" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" lineHeight="36"
+          embolden="0" slant="0" baselineOffset="-2" baseline="36"
           curveTolerance="0.35">
       <singleByte pixelSize="27">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -237,7 +240,7 @@
 
     <!-- 8: Glow_Futura_Caps_Large -->
     <font id="8" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" lineHeight="52"
+          embolden="0" slant="0" baselineOffset="0" baseline="52"
           curveTolerance="0.35">
       <singleByte pixelSize="52">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>

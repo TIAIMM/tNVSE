@@ -94,6 +94,7 @@ namespace fonthook::vectorfont
 			float offsetX = 0.0f;
 			float offsetY = 0.0f;
 			float rasterScale = 1.0f;
+			float logicalTopEdge = 0.0f;
 			AtlasLayer layer = AtlasLayer::Fill;
 		};
 
@@ -103,6 +104,7 @@ namespace fonthook::vectorfont
 		std::mutex s_atlasMutex;
 		UInt32 s_atlasFailureLogCount = 0;
 		std::unordered_set<UInt64> s_loggedAtlasBatches;
+		std::unordered_set<UInt32> s_loggedVerticalMetricFonts;
 
 		NiColorA ResolveFillColor(const FontColorStyle& style, const NiColorA& source)
 		{
@@ -339,7 +341,8 @@ namespace fonthook::vectorfont
 		{
 			if (bitmap && bitmap->width > 0 && bitmap->height > 0 && !bitmap->alpha.empty())
 				quads.push_back({ bitmap, instance.pen, color, offsetX, offsetY,
-					rasterScale, layer });
+					rasterScale, instance.glyph.metrics ? instance.glyph.metrics->fTopEdge : 0.0f,
+					layer });
 		}
 
 		bool BuildPendingQuads(RuntimeFont& runtime,
@@ -441,6 +444,24 @@ namespace fonthook::vectorfont
 					- quad.offsetY) * scale + static_cast<float>(quad.bitmap->top)) / scale;
 				const float x1 = x0 + static_cast<float>(quad.bitmap->width) / scale;
 				const float z1 = z0 - static_cast<float>(quad.bitmap->height) / scale;
+				if (g_bEnableFreeTypeFontRenderingLog && quad.layer == AtlasLayer::Fill)
+				{
+					bool shouldLog = false;
+					{
+						std::lock_guard<std::mutex> lock(s_atlasMutex);
+						shouldLog = s_loggedVerticalMetricFonts.insert(font.iFontNum).second;
+					}
+					if (shouldLog)
+					{
+						const float bitmapTop = static_cast<float>(quad.bitmap->top) / scale
+							+ quad.bitmap->baselineOffset;
+						FreeTypeFontDebugLog(
+							"tnvse_freetype_font: first atlas vertical metrics font=%u scale=%.3f bitmapTop=%.3f logicalTopEdge=%.3f delta=%.3f baselineOffset=%.3f penZ=%.3f quadTop=%.3f",
+							font.iFontNum, scale, bitmapTop, quad.logicalTopEdge,
+							bitmapTop - quad.logicalTopEdge, quad.bitmap->baselineOffset,
+							quad.pen.z, z0);
+					}
+				}
 				const float depth = quad.pen.y + LayerDepth(quad.layer);
 				const float u0 = static_cast<float>(rect.x) / atlas->width;
 				const float v0 = static_cast<float>(rect.y) / atlas->height;

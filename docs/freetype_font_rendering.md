@@ -30,7 +30,7 @@ fonts continue to use the original `.fnt` and `.tex` files.
           embolden="0"
           slant="0"
           baselineOffset="0"
-          lineHeight="0"
+          baseline="0"
           curveTolerance="0.35">
 
       <!-- Optional defaults inherited by both byte classes. -->
@@ -63,9 +63,19 @@ byte-class configuration must have one primary face and a positive
 
 Paths may be absolute or relative to the Fallout New Vegas directory. `index`
 selects a face in TTC/OTC files. `slant` is measured in degrees; other style
-dimensions are pixels. `lineHeight="0"` derives the shared line metrics from
-both primary faces. Glow, outline, and shadow are disabled when their node is
-absent; when a node is present, `enabled` defaults to `1`.
+dimensions are pixels. `baseline="0"` derives the shared Fallout `fBaseLine`
+from both primary faces. A positive value sets that baseline manually, is
+rounded upward to the game's integer metric, and disables automatic
+visual-center correction between the byte classes. Glow, outline, and shadow
+are disabled when their node is absent; when a node is present, `enabled`
+defaults to `1`.
+
+`baseline` controls Fallout's line rise and therefore the distance between
+lines. It is not a general glyph Y offset. Use the independently inheritable
+`baselineOffset` on `singleByte` or `doubleByte` to move that byte class within
+the line; positive values move glyphs upward. In manual baseline mode the
+renderer keeps the FreeType body top/drop metrics and does not apply automatic
+single/double-byte visual-center correction.
 
 `fontColor="#RRGGBB"` and `fontAlpha` optionally override the fill color for
 the font ID. When `fontColor` is omitted, fill geometry keeps the color supplied
