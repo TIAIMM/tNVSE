@@ -27,11 +27,20 @@ namespace fonthook::vectorfont
 {
 	namespace
 	{
-		constexpr size_t kMeshCacheLimit = 64u * 1024u * 1024u;
-		constexpr size_t kBitmapCacheLimit = 64u * 1024u * 1024u;
+		constexpr size_t kMeshCacheLimit = 8u * 1024u * 1024u;
 		constexpr FT_Int32 kGlyphLoadFlags =
 			FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP | FT_LOAD_NO_SVG;
 		constexpr float kFixedScale = 65536.0f;
+
+		size_t GetBitmapCacheLimit()
+		{
+			return static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 4u;
+		}
+
+		size_t GetLayoutCacheLimit()
+		{
+			return static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 8u;
+		}
 
 		struct MappedFontFile
 		{
@@ -56,37 +65,64 @@ namespace fonthook::vectorfont
 		{
 			std::shared_ptr<MappedFontFile> file;
 			FT_Face face = nullptr;
+			hb_font_t* hbFont = nullptr;
+			bool configured = false;
+			bool configuredRaster = false;
+			FT_UInt configuredWidth = 0;
+			FT_UInt configuredHeight = 0;
 
 			RuntimeFace() = default;
 			RuntimeFace(const RuntimeFace&) = delete;
 			RuntimeFace& operator=(const RuntimeFace&) = delete;
-			RuntimeFace(RuntimeFace&& other) noexcept : file(std::move(other.file)), face(other.face)
+			RuntimeFace(RuntimeFace&& other) noexcept
+				: file(std::move(other.file)), face(other.face), hbFont(other.hbFont),
+				configured(other.configured), configuredRaster(other.configuredRaster),
+				configuredWidth(other.configuredWidth), configuredHeight(other.configuredHeight)
 			{
 				other.face = nullptr;
+				other.hbFont = nullptr;
 			}
 			RuntimeFace& operator=(RuntimeFace&& other) noexcept
 			{
 				if (this != &other)
 				{
+					if (hbFont)
+						hb_font_destroy(hbFont);
 					if (face)
 						FT_Done_Face(face);
 					file = std::move(other.file);
 					face = other.face;
+					hbFont = other.hbFont;
+					configured = other.configured;
+					configuredRaster = other.configuredRaster;
+					configuredWidth = other.configuredWidth;
+					configuredHeight = other.configuredHeight;
 					other.face = nullptr;
+					other.hbFont = nullptr;
 				}
 				return *this;
 			}
 			~RuntimeFace()
 			{
+				if (hbFont)
+					hb_font_destroy(hbFont);
 				if (face)
 					FT_Done_Face(face);
 			}
+		};
+
+		struct CachedGlyphIdentity
+		{
+			UInt16 faceIndex = 0;
+			FT_UInt glyphIndex = 0;
+			UInt32 renderedCodePoint = 0;
 		};
 
 		struct RuntimeRole
 		{
 			const ByteStyle* style = nullptr;
 			std::vector<RuntimeFace> faces;
+			std::unordered_map<UInt32, CachedGlyphIdentity> glyphIdentities;
 			float resolvedBaselineOffset = 0.0f;
 			float ascender = 0.0f;
 			float descender = 0.0f;
@@ -201,6 +237,74 @@ namespace fonthook::vectorfont
 			std::list<BitmapCacheKey>::iterator lru;
 		};
 
+		struct LayoutCacheKey
+		{
+			UInt64 styleHash = 0;
+			UInt32 fontId = 0;
+			UInt32 codePage = 0;
+			bool allowShaping = false;
+			std::string text;
+
+			bool operator==(const LayoutCacheKey& other) const
+			{
+				return styleHash == other.styleHash && fontId == other.fontId
+					&& codePage == other.codePage && allowShaping == other.allowShaping
+					&& text == other.text;
+			}
+		};
+
+		struct LayoutCacheKeyHash
+		{
+			size_t operator()(const LayoutCacheKey& key) const
+			{
+				size_t result = static_cast<size_t>(key.styleHash ^ (key.styleHash >> 32));
+				result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
+				result ^= static_cast<size_t>(key.codePage) * 0x85EBCA77u;
+				result ^= static_cast<size_t>(key.allowShaping) << 7;
+				for (UInt8 value : key.text)
+					result = (result ^ value) * static_cast<size_t>(16777619u);
+				return result;
+			}
+		};
+
+		struct LayoutCacheEntry
+		{
+			FreeTypeLayoutRun layout;
+			size_t bytes = 0;
+			std::list<LayoutCacheKey>::iterator lru;
+		};
+
+		struct KerningCacheKey
+		{
+			UInt64 styleHash = 0;
+			UInt32 fontId = 0;
+			UInt32 leftGlyph = 0;
+			UInt32 rightGlyph = 0;
+			UInt16 faceIndex = 0;
+			UInt8 byteClass = 0;
+
+			bool operator==(const KerningCacheKey& other) const
+			{
+				return styleHash == other.styleHash && fontId == other.fontId
+					&& leftGlyph == other.leftGlyph && rightGlyph == other.rightGlyph
+					&& faceIndex == other.faceIndex && byteClass == other.byteClass;
+			}
+		};
+
+		struct KerningCacheKeyHash
+		{
+			size_t operator()(const KerningCacheKey& key) const
+			{
+				size_t result = static_cast<size_t>(key.styleHash ^ (key.styleHash >> 32));
+				result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
+				result ^= static_cast<size_t>(key.leftGlyph) * 0x85EBCA77u;
+				result ^= static_cast<size_t>(key.rightGlyph) * 0xC2B2AE3Du;
+				result ^= static_cast<size_t>(key.faceIndex) << 8;
+				result ^= key.byteClass;
+				return result;
+			}
+		};
+
 		struct ActiveFontState
 		{
 			const FontData* data = nullptr;
@@ -215,11 +319,18 @@ namespace fonthook::vectorfont
 		std::list<MeshCacheKey> s_meshLru;
 		std::unordered_map<BitmapCacheKey, BitmapCacheEntry, BitmapCacheKeyHash> s_bitmapCache;
 		std::list<BitmapCacheKey> s_bitmapLru;
+		std::unordered_map<LayoutCacheKey, LayoutCacheEntry, LayoutCacheKeyHash> s_layoutCache;
+		std::list<LayoutCacheKey> s_layoutLru;
+		std::unordered_map<KerningCacheKey, float, KerningCacheKeyHash> s_kerningCache;
+		std::array<UInt32, 256> s_singleByteCodePoints = {};
+		std::array<UInt32, 65536> s_doubleByteCodePoints = {};
+		UInt32 s_codePointCacheCodePage = UINT32_MAX;
 		std::unordered_set<UInt32> s_loggedUnconfiguredFontIds;
 		std::unordered_set<UInt64> s_loggedVerticalMetricRoles;
 		UInt32 s_shapingFallbackLogCount = 0;
 		size_t s_meshCacheBytes = 0;
 		size_t s_bitmapCacheBytes = 0;
+		size_t s_layoutCacheBytes = 0;
 		std::recursive_mutex s_mutex;
 
 		std::wstring NormalizePathKey(std::wstring path)
@@ -327,6 +438,32 @@ namespace fonthook::vectorfont
 			return error == 0;
 		}
 
+		bool ConfigureRuntimeFace(RuntimeFace& runtimeFace, const ByteStyle& style,
+			float rasterScale, bool raster)
+		{
+			const float safeScale = std::isfinite(rasterScale)
+				&& rasterScale >= 0.1f && rasterScale <= 10.0f ? rasterScale : 1.0f;
+			const FT_UInt width = raster ? static_cast<FT_UInt>(std::max(1.0f,
+				std::round(style.pixelSize * style.scaleX * safeScale))) : 0;
+			const FT_UInt height = raster ? static_cast<FT_UInt>(std::max(1.0f,
+				std::round(style.pixelSize * style.scaleY * safeScale)))
+				: static_cast<FT_UInt>(std::max(1.0f, std::round(style.pixelSize * 64.0f)));
+			if (runtimeFace.configured && runtimeFace.configuredRaster == raster
+				&& runtimeFace.configuredWidth == width && runtimeFace.configuredHeight == height)
+			{
+				return true;
+			}
+			if (!ConfigureFace(runtimeFace.face, style, safeScale, raster))
+				return false;
+			runtimeFace.configured = true;
+			runtimeFace.configuredRaster = raster;
+			runtimeFace.configuredWidth = width;
+			runtimeFace.configuredHeight = height;
+			if (runtimeFace.hbFont)
+				hb_ft_font_changed(runtimeFace.hbFont);
+			return true;
+		}
+
 		bool CreateRuntimeFace(const FaceConfig& config, const ByteStyle& style, RuntimeFace& result)
 		{
 			result.file = MapFontFile(config.path);
@@ -349,7 +486,7 @@ namespace fonthook::vectorfont
 					config.path.c_str(), config.faceIndex, static_cast<UInt32>(error));
 				return false;
 			}
-			if (!ConfigureFace(result.face, style, 1.0f, false))
+			if (!ConfigureRuntimeFace(result, style, 1.0f, false))
 			{
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: base face sizing failed path=%ls index=%ld size=%.2f",
@@ -370,7 +507,7 @@ namespace fonthook::vectorfont
 
 		bool LoadGlyph(RuntimeRole& role, RuntimeFace& face, FT_UInt glyphIndex)
 		{
-			if (!ConfigureFace(face.face, *role.style, 1.0f, false))
+			if (!ConfigureRuntimeFace(face, *role.style, 1.0f, false))
 				return false;
 			if (FT_Load_Glyph(face.face, glyphIndex, kGlyphLoadFlags))
 				return false;
@@ -388,7 +525,7 @@ namespace fonthook::vectorfont
 			{
 				RuntimeFace& face = role.faces[i];
 				const FT_UInt glyphIndex = FT_Get_Char_Index(face.face, codePoint);
-				if (!glyphIndex || !LoadGlyph(role, face, glyphIndex))
+				if (!glyphIndex)
 					continue;
 				result = { &role, &face, i, glyphIndex, codePoint };
 				return true;
@@ -398,15 +535,25 @@ namespace fonthook::vectorfont
 
 		bool ResolveGlyph(RuntimeRole& role, UInt32 codePoint, ResolvedGlyph& result)
 		{
-			if (ResolveExactGlyph(role, codePoint, result))
+			auto cached = role.glyphIdentities.find(codePoint);
+			if (cached != role.glyphIdentities.end() && cached->second.faceIndex < role.faces.size())
+			{
+				const CachedGlyphIdentity& identity = cached->second;
+				result = { &role, &role.faces[identity.faceIndex], identity.faceIndex,
+					identity.glyphIndex, identity.renderedCodePoint };
 				return true;
-			if (codePoint != 0xFFFD && ResolveExactGlyph(role, 0xFFFD, result))
-				return true;
-			if (codePoint != '?' && ResolveExactGlyph(role, '?', result))
-				return true;
-			if (role.faces.empty() || !LoadGlyph(role, role.faces.front(), 0))
-				return false;
-			result = { &role, &role.faces.front(), 0, 0, 0 };
+			}
+
+			if (!ResolveExactGlyph(role, codePoint, result)
+				&& (codePoint == 0xFFFD || !ResolveExactGlyph(role, 0xFFFD, result))
+				&& (codePoint == '?' || !ResolveExactGlyph(role, '?', result)))
+			{
+				if (role.faces.empty())
+					return false;
+				result = { &role, &role.faces.front(), 0, 0, 0 };
+			}
+			role.glyphIdentities.emplace(codePoint, CachedGlyphIdentity{
+				static_cast<UInt16>(result.faceIndex), result.glyphIndex, result.renderedCodePoint });
 			return true;
 		}
 
@@ -420,6 +567,26 @@ namespace fonthook::vectorfont
 				return length == 1;
 			}
 
+			if (s_codePointCacheCodePage != g_usingWinEncoding)
+			{
+				s_singleByteCodePoints.fill(UINT32_MAX);
+				s_doubleByteCodePoints.fill(UINT32_MAX);
+				s_codePointCacheCodePage = g_usingWinEncoding;
+			}
+			const UInt32 encoded = length == 1
+				? static_cast<UInt8>(bytes[0])
+				: (static_cast<UInt32>(static_cast<UInt8>(bytes[0])) << 8)
+					| static_cast<UInt8>(bytes[1]);
+			UInt32& cached = length == 1
+				? s_singleByteCodePoints[encoded] : s_doubleByteCodePoints[encoded];
+			if (cached != UINT32_MAX)
+			{
+				if (cached == UINT32_MAX - 1)
+					return false;
+				codePoint = cached;
+				return true;
+			}
+
 			wchar_t wide[2] = {};
 			int count = MultiByteToWideChar(g_usingWinEncoding, MB_ERR_INVALID_CHARS,
 				bytes, length, wide, static_cast<int>(std::size(wide)));
@@ -430,15 +597,16 @@ namespace fonthook::vectorfont
 			}
 			if (count == 1)
 			{
-				codePoint = static_cast<UInt16>(wide[0]);
+				codePoint = cached = static_cast<UInt16>(wide[0]);
 				return true;
 			}
 			if (count == 2 && wide[0] >= 0xD800 && wide[0] <= 0xDBFF
 				&& wide[1] >= 0xDC00 && wide[1] <= 0xDFFF)
 			{
-				codePoint = 0x10000 + ((wide[0] - 0xD800) << 10) + (wide[1] - 0xDC00);
+				codePoint = cached = 0x10000 + ((wide[0] - 0xD800) << 10) + (wide[1] - 0xDC00);
 				return true;
 			}
+			cached = UINT32_MAX - 1;
 			return false;
 		}
 
@@ -446,6 +614,8 @@ namespace fonthook::vectorfont
 		{
 			ResolvedGlyph glyph;
 			if (!ResolveGlyph(role, codePoint, glyph))
+				return false;
+			if (!LoadGlyph(role, *glyph.runtimeFace, glyph.glyphIndex))
 				return false;
 			FT_GlyphSlot slot = glyph.runtimeFace->face->glyph;
 			if (slot->format == FT_GLYPH_FORMAT_OUTLINE)
@@ -725,8 +895,7 @@ namespace fonthook::vectorfont
 
 		void TouchCacheEntry(MeshCacheEntry& entry, const MeshCacheKey& key)
 		{
-			s_meshLru.erase(entry.lru);
-			s_meshLru.push_front(key);
+			s_meshLru.splice(s_meshLru.begin(), s_meshLru, entry.lru);
 			entry.lru = s_meshLru.begin();
 		}
 
@@ -747,14 +916,19 @@ namespace fonthook::vectorfont
 
 		void TouchBitmapCacheEntry(BitmapCacheEntry& entry, const BitmapCacheKey& key)
 		{
-			s_bitmapLru.erase(entry.lru);
-			s_bitmapLru.push_front(key);
+			s_bitmapLru.splice(s_bitmapLru.begin(), s_bitmapLru, entry.lru);
 			entry.lru = s_bitmapLru.begin();
+		}
+
+		void TouchLayoutCacheEntry(LayoutCacheEntry& entry)
+		{
+			s_layoutLru.splice(s_layoutLru.begin(), s_layoutLru, entry.lru);
+			entry.lru = s_layoutLru.begin();
 		}
 
 		void TrimBitmapCache()
 		{
-			while (s_bitmapCacheBytes > kBitmapCacheLimit && !s_bitmapLru.empty())
+			while (s_bitmapCacheBytes > GetBitmapCacheLimit() && !s_bitmapLru.empty())
 			{
 				const BitmapCacheKey key = s_bitmapLru.back();
 				auto it = s_bitmapCache.find(key);
@@ -840,6 +1014,7 @@ namespace fonthook::vectorfont
 	{
 		const FontConfig* config = nullptr;
 		std::array<RuntimeRole, 2> roles;
+		std::vector<hb_feature_t> hbFeatures;
 		float baseLine = 0.0f;
 		float glyphTop = 0.0f;
 		float minBottom = 0.0f;
@@ -858,13 +1033,25 @@ namespace fonthook::vectorfont
 			if (glyph.hasGlyphIdentity && glyph.faceIndex < role.faces.size())
 			{
 				RuntimeFace& face = role.faces[glyph.faceIndex];
-				if (LoadGlyph(role, face, glyph.glyphIndex))
-				{
-					result = { &role, &face, glyph.faceIndex, glyph.glyphIndex, glyph.codePoint };
-					return true;
-				}
+				result = { &role, &face, glyph.faceIndex, glyph.glyphIndex, glyph.codePoint };
+				return true;
 			}
 			return ResolveGlyph(role, glyph.codePoint, result);
+		}
+
+		void TrimLayoutCache()
+		{
+			while (s_layoutCacheBytes > GetLayoutCacheLimit() && !s_layoutLru.empty())
+			{
+				const LayoutCacheKey key = s_layoutLru.back();
+				auto it = s_layoutCache.find(key);
+				if (it != s_layoutCache.end())
+				{
+					s_layoutCacheBytes -= it->second.bytes;
+					s_layoutCache.erase(it);
+				}
+				s_layoutLru.pop_back();
+			}
 		}
 
 		std::unique_ptr<RuntimeFont> CreateRuntimeFont(const FontConfig& config)
@@ -873,6 +1060,15 @@ namespace fonthook::vectorfont
 				return nullptr;
 			auto runtime = std::make_unique<RuntimeFont>();
 			runtime->config = &config;
+			for (const std::string& featureText : config.shapingFeatures)
+			{
+				hb_feature_t feature = {};
+				if (hb_feature_from_string(featureText.data(),
+					static_cast<int>(featureText.size()), &feature))
+				{
+					runtime->hbFeatures.push_back(feature);
+				}
+			}
 
 			for (size_t i = 0; i < runtime->roles.size(); ++i)
 			{
@@ -959,6 +1155,14 @@ namespace fonthook::vectorfont
 			}
 		}
 
+		hb_buffer_t* GetThreadHarfBuzzBuffer()
+		{
+			thread_local hb_buffer_t* buffer = hb_buffer_create();
+			if (buffer)
+				hb_buffer_clear_contents(buffer);
+			return buffer;
+		}
+
 		bool DecodeLayoutInput(RuntimeFont& runtime, Font& font,
 			const char* text, size_t length, std::vector<LayoutInputGlyph>& input)
 		{
@@ -1003,7 +1207,7 @@ namespace fonthook::vectorfont
 				const LayoutInputGlyph& item = input[index];
 				RuntimeRole& role = *item.resolved.role;
 				RuntimeFace& face = *item.resolved.runtimeFace;
-				ConfigureFace(face.face, *role.style, 1.0f, false);
+				ConfigureRuntimeFace(face, *role.style, 1.0f, false);
 				float kerning = 0.0f;
 				if (previousFace == &face && previousClass == item.glyph.byteClass
 					&& previousGlyph && item.resolved.glyphIndex
@@ -1039,18 +1243,19 @@ namespace fonthook::vectorfont
 				return true;
 			RuntimeRole& role = *input[begin].resolved.role;
 			RuntimeFace& face = *input[begin].resolved.runtimeFace;
-			if (!ConfigureFace(face.face, *role.style, 1.0f, false))
+			if (!ConfigureRuntimeFace(face, *role.style, 1.0f, false))
 				return false;
 
-			hb_font_t* hbFont = hb_ft_font_create_referenced(face.face);
-			hb_buffer_t* buffer = hb_buffer_create();
-			if (!hbFont || !buffer)
+			if (!face.hbFont)
 			{
-				if (buffer) hb_buffer_destroy(buffer);
-				if (hbFont) hb_font_destroy(hbFont);
-				return false;
+				face.hbFont = hb_ft_font_create_referenced(face.face);
+				if (face.hbFont)
+					hb_ft_font_set_load_flags(face.hbFont, kGlyphLoadFlags);
 			}
-			hb_ft_font_set_load_flags(hbFont, kGlyphLoadFlags);
+			hb_font_t* hbFont = face.hbFont;
+			hb_buffer_t* buffer = GetThreadHarfBuzzBuffer();
+			if (!hbFont || !buffer)
+				return false;
 			for (size_t index = begin; index < end; ++index)
 			{
 				hb_buffer_add(buffer, input[index].resolved.renderedCodePoint,
@@ -1061,28 +1266,15 @@ namespace fonthook::vectorfont
 			hb_buffer_set_direction(buffer, HB_DIRECTION_LTR);
 			hb_buffer_set_language(buffer, GetLayoutLanguage());
 
-			std::vector<hb_feature_t> features;
-			features.reserve(runtime.config->shapingFeatures.size());
-			for (const std::string& featureText : runtime.config->shapingFeatures)
-			{
-				hb_feature_t feature = {};
-				if (hb_feature_from_string(featureText.data(),
-					static_cast<int>(featureText.size()), &feature))
-				{
-					features.push_back(feature);
-				}
-			}
-			hb_shape(hbFont, buffer, features.empty() ? nullptr : features.data(),
-				static_cast<unsigned int>(features.size()));
+			RecordFreeTypePerf(FreeTypePerfCounter::HarfBuzzShape);
+			hb_shape(hbFont, buffer,
+				runtime.hbFeatures.empty() ? nullptr : runtime.hbFeatures.data(),
+				static_cast<unsigned int>(runtime.hbFeatures.size()));
 			unsigned int glyphCount = 0;
 			const hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(buffer, &glyphCount);
 			const hb_glyph_position_t* positions = hb_buffer_get_glyph_positions(buffer, &glyphCount);
 			if (!glyphCount || !infos || !positions)
-			{
-				hb_buffer_destroy(buffer);
-				hb_font_destroy(hbFont);
 				return false;
-			}
 
 			for (unsigned int glyphIndex = 0; glyphIndex < glyphCount; ++glyphIndex)
 			{
@@ -1110,8 +1302,6 @@ namespace fonthook::vectorfont
 				layout.advance += positioned.xAdvance;
 				layout.glyphs.push_back(std::move(positioned));
 			}
-			hb_buffer_destroy(buffer);
-			hb_font_destroy(hbFont);
 			layout.shaped = true;
 			return true;
 		}
@@ -1174,6 +1364,8 @@ namespace fonthook::vectorfont
 			if (!ResolveVectorGlyph(runtime, glyph, resolved))
 				return mesh;
 			RuntimeRole& role = *resolved.role;
+			if (!LoadGlyph(role, *resolved.runtimeFace, resolved.glyphIndex))
+				return mesh;
 			FT_GlyphSlot slot = resolved.runtimeFace->face->glyph;
 			if (slot->format != FT_GLYPH_FORMAT_OUTLINE || !slot->outline.n_points)
 				return mesh;
@@ -1235,7 +1427,7 @@ namespace fonthook::vectorfont
 			ResolvedGlyph resolved;
 			if (!ResolveVectorGlyph(runtime, glyph, resolved))
 				return nullptr;
-			if (!ConfigureFace(resolved.runtimeFace->face, *role.style, rasterScale, true))
+			if (!ConfigureRuntimeFace(*resolved.runtimeFace, *role.style, rasterScale, true))
 				return nullptr;
 
 			const FT_Int32 loadFlags = FT_LOAD_DEFAULT | FT_LOAD_TARGET_NORMAL
@@ -1443,11 +1635,56 @@ namespace fonthook::vectorfont
 		return *runtime.config;
 	}
 
+	void HydrateLayoutMetrics(RuntimeFont& runtime, Font& font,
+		FreeTypeLayoutRun& layout)
+	{
+		for (FreeTypeLayoutGlyph& positioned : layout.glyphs)
+		{
+			VectorEncodedGlyph& glyph = positioned.glyph;
+			if (glyph.byteClass == VectorFontByteClass::DoubleByte)
+				glyph.metrics = EnsureDoubleByteMetrics(runtime, font, glyph.encodedCode);
+			else
+				glyph.metrics = &font.pFontData->pFontLetters[glyph.encodedCode & 0xFF];
+		}
+	}
+
 	bool LayoutRuntimeRun(RuntimeFont& runtime, Font& font, const char* text,
 		size_t length, bool allowShaping, FreeTypeLayoutRun& layout)
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
-		return BuildLayoutRun(runtime, font, text, length, allowShaping, layout);
+		LayoutCacheKey key = {
+			runtime.config->styleHash,
+			runtime.config->fontId,
+			g_usingWinEncoding,
+			allowShaping,
+			std::string(text, length)
+		};
+		auto existing = s_layoutCache.find(key);
+		if (existing != s_layoutCache.end())
+		{
+			TouchLayoutCacheEntry(existing->second);
+			layout = existing->second.layout;
+			HydrateLayoutMetrics(runtime, font, layout);
+			RecordFreeTypePerf(FreeTypePerfCounter::LayoutHit);
+			return true;
+		}
+		RecordFreeTypePerf(FreeTypePerfCounter::LayoutMiss);
+		if (!BuildLayoutRun(runtime, font, text, length, allowShaping, layout))
+			return false;
+		if (length <= 65536)
+		{
+			FreeTypeLayoutRun cachedLayout = layout;
+			for (FreeTypeLayoutGlyph& glyph : cachedLayout.glyphs)
+				glyph.glyph.metrics = nullptr;
+			const size_t bytes = sizeof(LayoutCacheEntry) + key.text.size()
+				+ layout.glyphs.size() * sizeof(FreeTypeLayoutGlyph);
+			s_layoutLru.push_front(key);
+			s_layoutCache.emplace(std::move(key),
+				LayoutCacheEntry{ std::move(cachedLayout), bytes, s_layoutLru.begin() });
+			s_layoutCacheBytes += bytes;
+			TrimLayoutCache();
+		}
+		return true;
 	}
 
 	std::shared_ptr<const GlyphMesh> GetGlyphMesh(RuntimeFont& runtime,
@@ -1515,11 +1752,13 @@ namespace fonthook::vectorfont
 		if (existing != s_bitmapCache.end())
 		{
 			TouchBitmapCacheEntry(existing->second, key);
+			RecordFreeTypePerf(FreeTypePerfCounter::BitmapMemoryHit);
 			return existing->second.bitmap;
 		}
 
-		std::shared_ptr<GlyphBitmap> bitmap = BuildGlyphBitmap(
-			runtime, glyph, maskType, safeScale, key);
+		RecordFreeTypePerf(FreeTypePerfCounter::BitmapRasterized);
+		std::shared_ptr<GlyphBitmap> bitmap =
+			BuildGlyphBitmap(runtime, glyph, maskType, safeScale, key);
 		if (!bitmap)
 			return nullptr;
 		const size_t bytes = sizeof(GlyphBitmap) + bitmap->alpha.size();
@@ -1543,6 +1782,65 @@ namespace fonthook
 		vectorfont::RuntimeFont* runtime = vectorfont::FindRuntimeFont(apFont->iFontNum);
 		return runtime && vectorfont::LayoutRuntimeRun(
 			*runtime, *apFont, apText, auiLength, abAllowShaping, arLayout);
+	}
+
+	bool GetFreeTypePairKerning(Font* apFont,
+		const char* apLeft, size_t auiLeftLength,
+		const char* apRight, size_t auiRightLength, float& arKerning)
+	{
+		arKerning = 0.0f;
+		if (!apFont || !apLeft || !apRight || !auiLeftLength || !auiRightLength
+			|| !IsFreeTypeFontActive(apFont))
+		{
+			return false;
+		}
+		std::lock_guard<std::recursive_mutex> lock(vectorfont::s_mutex);
+		vectorfont::RuntimeFont* runtime = vectorfont::FindRuntimeFont(apFont->iFontNum);
+		if (!runtime)
+			return false;
+		VectorEncodedGlyph left;
+		VectorEncodedGlyph right;
+		if (!vectorfont::DecodeEncodedGlyph(*runtime, *apFont, apLeft, left)
+			|| !vectorfont::DecodeEncodedGlyph(*runtime, *apFont, apRight, right)
+			|| left.byteLength != auiLeftLength || right.byteLength != auiRightLength
+			|| left.byteClass != right.byteClass || left.faceIndex != right.faceIndex
+			|| !left.glyphIndex || !right.glyphIndex)
+		{
+			return false;
+		}
+		vectorfont::RuntimeRole& role = runtime->roles[static_cast<size_t>(left.byteClass)];
+		if (left.faceIndex >= role.faces.size())
+			return false;
+		vectorfont::RuntimeFace& face = role.faces[left.faceIndex];
+		const vectorfont::KerningCacheKey cacheKey = {
+			runtime->config->styleHash, runtime->config->fontId,
+			left.glyphIndex, right.glyphIndex, left.faceIndex,
+			static_cast<UInt8>(left.byteClass)
+		};
+		auto cached = vectorfont::s_kerningCache.find(cacheKey);
+		if (cached != vectorfont::s_kerningCache.end())
+		{
+			arKerning = cached->second;
+			vectorfont::RecordFreeTypePerf(vectorfont::FreeTypePerfCounter::KerningHit);
+			return true;
+		}
+		vectorfont::RecordFreeTypePerf(vectorfont::FreeTypePerfCounter::KerningMiss);
+		if (!vectorfont::ConfigureRuntimeFace(face, *role.style, 1.0f, false)
+			|| !FT_HAS_KERNING(face.face))
+		{
+			vectorfont::s_kerningCache.emplace(cacheKey, 0.0f);
+			return true;
+		}
+		FT_Vector delta = {};
+		if (!FT_Get_Kerning(face.face, left.glyphIndex, right.glyphIndex,
+			FT_KERNING_DEFAULT, &delta))
+		{
+			arKerning = static_cast<float>(delta.x) / 64.0f;
+		}
+		if (vectorfont::s_kerningCache.size() >= 16384)
+			vectorfont::s_kerningCache.clear();
+		vectorfont::s_kerningCache.emplace(cacheKey, arKerning);
+		return true;
 	}
 
 	bool IsHarfBuzzShapingEnabled(const Font* apFont)

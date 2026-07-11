@@ -502,19 +502,9 @@ namespace fonthook
 				size_t previousLength = 0;
 				if (EncodeRichTextChar(previous, previousBytes, previousLength))
 				{
-					FreeTypeLayoutRun previousLayout;
-					char pairBytes[5] = {};
-					std::memcpy(pairBytes, previousBytes, previousLength);
-					std::memcpy(pairBytes + previousLength, currentBytes, currentLength);
-					FreeTypeLayoutRun pairLayout;
-					if (LayoutFreeTypeRun(font, previousBytes, previousLength,
-						previousLayout, false)
-						&& LayoutFreeTypeRun(font, pairBytes,
-							previousLength + currentLength, pairLayout, false))
-					{
-						pairKerning = pairLayout.advance
-							- previousLayout.advance - currentLayout.advance;
-					}
+					GetFreeTypePairKerning(font,
+						previousBytes, previousLength,
+						currentBytes, currentLength, pairKerning);
 				}
 			}
 			double exactLineEnd = static_cast<double>(line->iWidth)

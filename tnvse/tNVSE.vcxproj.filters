@@ -33,6 +33,9 @@
 	<ClCompile Include="Src\font_atlas_render.cpp">
 	  <Filter>Source Files\Font</Filter>
 	</ClCompile>
+	<ClCompile Include="Src\font_performance.cpp">
+	  <Filter>Source Files\Font</Filter>
+	</ClCompile>
     <ClCompile Include="Src\font_vector_config.cpp">
       <Filter>Source Files\Font</Filter>
     </ClCompile>

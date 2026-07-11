@@ -11,6 +11,27 @@
 
 namespace fonthook::vectorfont
 {
+	enum class FreeTypePerfCounter : UInt8
+	{
+		LayoutHit,
+		LayoutMiss,
+		HarfBuzzShape,
+		KerningHit,
+		KerningMiss,
+		BitmapMemoryHit,
+		BitmapRasterized,
+		AtlasHit,
+		AtlasCreated,
+		AtlasGrown,
+		AtlasUpload,
+		AtlasUploadBytes,
+		BatchHit,
+		BatchMiss,
+		Count,
+	};
+
+	void RecordFreeTypePerf(FreeTypePerfCounter aeCounter, UInt64 auiAmount = 1);
+	void ReportFreeTypePerf();
 	struct FaceConfig
 	{
 		std::wstring path;

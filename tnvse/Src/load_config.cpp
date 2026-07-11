@@ -1,5 +1,6 @@
 #include "load_config.h"
 
+#include <algorithm>
 #include <cstring>
 
 UINT32 g_uiEncoding;
@@ -8,6 +9,7 @@ bool g_bEnableUTF8;
 bool g_bEnableMultibyteFontHook;
 bool g_bEnableFreeTypeFontRendering;
 bool g_bEnableFreeTypeFontRenderingLog;
+UINT32 g_uiFreeTypeFontMemoryCacheMB;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputDebug;
 bool g_bMultibyteInputCompositionPreview;
@@ -111,6 +113,10 @@ void LoadConfig()
 
 	g_bEnableFreeTypeFontRenderingLog = ReadConfigInt(kMainSection, nullptr, "bEnableFreeTypeFontRenderingLog", 0, filename);
 	gLog.FormattedMessage("g_bEnableFreeTypeFontRenderingLog: %d", g_bEnableFreeTypeFontRenderingLog);
+
+	g_uiFreeTypeFontMemoryCacheMB = std::clamp<UINT32>(
+		ReadConfigInt(kMainSection, nullptr, "uiFreeTypeFontMemoryCacheMB", 192, filename), 64, 384);
+	gLog.FormattedMessage("g_uiFreeTypeFontMemoryCacheMB: %u", g_uiFreeTypeFontMemoryCacheMB);
 
 	g_bMultibyteInput = ReadConfigInt(kMainSection, nullptr, "bMultibyteInput", 0, filename);
 	gLog.FormattedMessage("g_bMultibyteInput: %d", g_bMultibyteInput);

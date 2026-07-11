@@ -145,6 +145,7 @@
     <ClCompile Include="Src\native_calls.cpp" />
     <ClCompile Include="Src\font_engine.cpp" />
 	<ClCompile Include="Src\font_atlas_render.cpp" />
+	<ClCompile Include="Src\font_performance.cpp" />
     <ClCompile Include="Src\font_vector_config.cpp" />
     <ClCompile Include="Src\font_vector_freetype.cpp" />
     <ClCompile Include="Src\font_vector_log.cpp" />

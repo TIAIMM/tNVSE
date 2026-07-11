@@ -34,6 +34,8 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 	{
 		fonthook::FinalizeFreeTypeUioDetection();
 	}
+	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
+		fonthook::PumpFreeTypeFontPerformance();
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit
 		|| g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop))
 	{

@@ -103,11 +103,24 @@ the selected byte-class fallback chain and then tries `U+FFFD`, `?`, and the
 primary face's `.notdef` glyph.
 
 The normal rendering path rasterizes hinted grayscale glyphs with FreeType at
-the effective display size. Glyph masks use a 64 MB process-wide CPU LRU cache;
-each text batch packs its unique masks into one `A8R8G8B8` atlas held by a
-128 MB atlas LRU cache. Atlas regions have two transparent padding pixels,
-mipmaps are disabled, and sampling is nearest. Shadow, glow, outline, and fill
-are emitted into one `NiTriShape` using that atlas.
+the effective display size. Each font/style/effective-size profile owns a
+persistent `A8R8G8B8` D3D9 atlas that starts at 512x512 and grows without
+moving existing glyphs. Missing glyphs are rasterized as one batch and uploaded
+through one dirty rectangle. Atlas regions have two transparent padding pixels,
+mipmaps are disabled, and sampling is nearest. Repeated text also reuses cached
+layout and vertex/UV/index templates. Shadow, glow, outline, and fill are
+emitted into one `NiTriShape` using the shared atlas.
+
+Generated grayscale masks, layouts, batch templates, and persistent atlas pages
+are cached in process memory. `uiFreeTypeFontMemoryCacheMB` in `tnvse.ini`
+controls their combined budget. Cache misses are handled at runtime; tNVSE does
+not perform background code-page generation or glyph-cache file I/O.
+
+FreeType rasterization remains CPU based. Adding Skia, D3D11, or D3D12 would
+require a readback or cross-API copy before Fallout New Vegas can consume the
+result through D3D9, increasing synchronization cost and reducing DXVK/Wine
+compatibility. The GPU is therefore used for persistent atlas sampling and
+quad rendering, while hinted masks are generated once on the CPU.
 
 When UIO 2.30 scales a TileText call, tNVSE includes the validated UIO scale in
 the effective raster size and aligns glyph geometry to final screen pixels.
