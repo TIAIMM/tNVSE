@@ -27,6 +27,7 @@ fonts continue to use the original `.fnt` and `.tex` files.
           tracking="0"
           scaleX="1"
           scaleY="1"
+          renderMode="gray"
           embolden="0"
           slant="0"
           baselineOffset="0"
@@ -37,7 +38,7 @@ fonts continue to use the original `.fnt` and `.tex` files.
       <face path="Data/Fonts/Default.ttf" index="0"/>
       <fallback path="Data/Fonts/Symbols.ttf" index="0"/>
 
-      <singleByte pixelSize="20" baselineOffset="0">
+      <singleByte pixelSize="20" baselineOffset="0" renderMode="lcd-rgb">
         <face path="Data/Fonts/RobotoCondensed-Regular.ttf" index="0"/>
       </singleByte>
 
@@ -59,7 +60,26 @@ override them independently. If a byte-class node contains a `<face>` or
 `<fallback>`, its complete face chain replaces the parent chain. A resolved
 byte-class configuration must have one primary face and a positive
 `pixelSize`. The independently overridable attributes are `pixelSize`,
-`tracking`, `scaleX`, `scaleY`, `embolden`, `slant`, and `baselineOffset`.
+`tracking`, `scaleX`, `scaleY`, `embolden`, `slant`, `baselineOffset`, and
+`renderMode`.
+
+`renderMode` accepts `gray`, `lcd-rgb`, and `lcd-bgr`. It defaults to `gray`.
+LCD mode is explicit because the game cannot reliably detect the monitor's
+physical subpixel order. `lcd-rgb` and `lcd-bgr` use FreeType's horizontal LCD
+filter and exchange the red/blue coverage channels as requested.
+
+LCD rendering requires Fallout Shader Loader 1.40 and these files:
+
+```text
+Data\Shaders\Loose\tnvse_freetype_lcd_r.pso
+Data\Shaders\Loose\tnvse_freetype_lcd_g.pso
+Data\Shaders\Loose\tnvse_freetype_lcd_b.pso
+```
+
+The files are built from `tnvse/shaders/freetype_lcd.hlsl`. If Shader Loader,
+its `CreatePixelShader` export, or any shader file is unavailable, LCD styles
+fall back to the grayscale atlas renderer; other FreeType functionality stays
+enabled.
 
 Paths may be absolute or relative to the Fallout New Vegas directory. `index`
 selects a face in TTC/OTC files. `slant` is measured in degrees; other style
@@ -81,9 +101,15 @@ katakana therefore use the single-byte font. Missing glyph lookup stays inside
 the selected byte-class fallback chain and then tries `U+FFFD`, `?`, and the
 primary face's `.notdef` glyph.
 
-Glyph outlines are flattened and triangulated with libtess2, then cached in a
-64 MB process-wide LRU mesh cache. The generated text uses the game's existing
-text shader with a 1x1 white texture; it does not create a glyph bitmap atlas.
-HarfBuzz shaping, kerning, RTL layout, color-font rendering, and variable-font
-axis controls are outside this feature. Invalid or unavailable configurations
-leave that entire font ID on the original `.fnt`/`.tex` renderer.
+Normal rendering uses FreeType hinted grayscale or LCD bitmaps cached by final
+effective pixel size in a 64 MB process-wide LRU. A text batch packs its masks
+into one `A8R8G8B8` atlas and returns one `NiTriShape`. Gray batches use the
+standard TileShader pass. LCD batches draw that same shape three times with
+independent red, green, and blue write masks; outline, glow, and shadow remain
+grayscale masks in the same atlas. UIO scaling is included in the effective
+pixel size only when the detected UIO plugin version is exactly 2.30.
+
+The old libtess2 outline renderer remains the atlas failure fallback. HarfBuzz
+shaping, kerning, RTL layout, color-font rendering, and variable-font axis
+controls are outside this feature. Invalid or unavailable configurations leave
+that entire font ID on the original `.fnt`/`.tex` renderer.

@@ -76,6 +76,25 @@ namespace fonthook::vectorfont
 				style.slantDegrees = node.attribute("slant").as_float(style.slantDegrees);
 			if (node.attribute("baselineOffset"))
 				style.baselineOffset = node.attribute("baselineOffset").as_float(style.baselineOffset);
+			if (node.attribute("renderMode"))
+			{
+				const char* value = node.attribute("renderMode").as_string();
+				if (_stricmp(value, "gray") == 0)
+					style.renderMode = GlyphRenderMode::Gray;
+				else if (_stricmp(value, "lcd-rgb") == 0)
+					style.renderMode = GlyphRenderMode::LcdRgb;
+				else if (_stricmp(value, "lcd-bgr") == 0)
+					style.renderMode = GlyphRenderMode::LcdBgr;
+				else
+				{
+					style.renderMode = GlyphRenderMode::Gray;
+					const pugi::xml_node fontNode = std::strcmp(node.name(), "font") == 0
+						? node : node.parent();
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: invalid renderMode=%s font=%u node=%s; using gray",
+						value, fontNode.attribute("id").as_uint(0), node.name());
+				}
+			}
 		}
 
 		bool IsValidStyle(const ByteStyle& style)
@@ -218,6 +237,7 @@ namespace fonthook::vectorfont
 				HashBytes(hash, &style.embolden, sizeof(style.embolden));
 				HashBytes(hash, &style.slantDegrees, sizeof(style.slantDegrees));
 				HashBytes(hash, &style.baselineOffset, sizeof(style.baselineOffset));
+				HashBytes(hash, &style.renderMode, sizeof(style.renderMode));
 				for (const FaceConfig& face : style.faces)
 				{
 					HashBytes(hash, face.path.data(), face.path.size() * sizeof(wchar_t));
@@ -308,10 +328,13 @@ namespace fonthook::vectorfont
 			{
 				const ByteStyle& style = config.styles[roleIndex];
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font:   %s size=%.2f tracking=%.2f scale=(%.3f,%.3f) embolden=%.2f slant=%.2f baseline=%.2f faces=%u",
+					"tnvse_freetype_font:   %s size=%.2f tracking=%.2f scale=(%.3f,%.3f) embolden=%.2f slant=%.2f baseline=%.2f mode=%s faces=%u",
 					roleNames[roleIndex], style.pixelSize, style.tracking,
 					style.scaleX, style.scaleY, style.embolden, style.slantDegrees,
-					style.baselineOffset, static_cast<UInt32>(style.faces.size()));
+					style.baselineOffset,
+					style.renderMode == GlyphRenderMode::LcdRgb ? "lcd-rgb"
+						: style.renderMode == GlyphRenderMode::LcdBgr ? "lcd-bgr" : "gray",
+					static_cast<UInt32>(style.faces.size()));
 				for (size_t faceIndex = 0; faceIndex < style.faces.size(); ++faceIndex)
 				{
 					const FaceConfig& face = style.faces[faceIndex];

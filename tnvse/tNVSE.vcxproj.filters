@@ -16,6 +16,7 @@
     <Filter Include="Header Files\Hooks" />
     <Filter Include="Header Files\Config" />
     <Filter Include="Header Files\NVSE" />
+	<Filter Include="Shader Files" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -31,6 +32,9 @@
       <Filter>Source Files\Font</Filter>
     </ClCompile>
 	<ClCompile Include="Src\font_atlas_render.cpp">
+	  <Filter>Source Files\Font</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_lcd_render.cpp">
 	  <Filter>Source Files\Font</Filter>
 	</ClCompile>
     <ClCompile Include="Src\font_vector_config.cpp">
@@ -192,5 +196,20 @@
   <ItemGroup>
     <None Include="exports.def" />
     <None Include="packages.config" />
+	<None Include="shaders\freetype_lcd.hlsl">
+	  <Filter>Shader Files</Filter>
+	</None>
+	<None Include="shaders\compile_lcd_shaders.bat">
+	  <Filter>Shader Files</Filter>
+	</None>
+	<None Include="shaders\compiled\tnvse_freetype_lcd_r.pso">
+	  <Filter>Shader Files</Filter>
+	</None>
+	<None Include="shaders\compiled\tnvse_freetype_lcd_g.pso">
+	  <Filter>Shader Files</Filter>
+	</None>
+	<None Include="shaders\compiled\tnvse_freetype_lcd_b.pso">
+	  <Filter>Shader Files</Filter>
+	</None>
   </ItemGroup>
 </Project>

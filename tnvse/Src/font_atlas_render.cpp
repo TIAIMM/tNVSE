@@ -52,6 +52,7 @@ namespace fonthook::vectorfont
 			NiTexturingPropertyPtr property;
 			UInt32 width = 0;
 			UInt32 height = 0;
+			bool hasLcd = false;
 			std::unordered_map<UInt64, AtlasRect> placements;
 		};
 
@@ -246,6 +247,12 @@ namespace fonthook::vectorfont
 			if (!PackAtlas(bitmaps, width, height, placements) || !width || !height)
 				return nullptr;
 
+			const bool hasLcd = std::any_of(bitmaps.begin(), bitmaps.end(),
+				[](const auto& bitmap)
+				{
+					return bitmap->renderMode != GlyphRenderMode::Gray;
+				});
+
 			NiPixelData* pixelData = static_cast<NiPixelData*>(
 				NiMemObject::operator new(sizeof(NiPixelData)));
 			if (!pixelData)
@@ -264,9 +271,23 @@ namespace fonthook::vectorfont
 				{
 					for (UInt32 x = 0; x < rect.width; ++x)
 					{
-						const UInt8 alpha = bitmap->alpha[static_cast<size_t>(y) * rect.width + x];
-						pixels[static_cast<size_t>(rect.y + y) * width + rect.x + x]
-							= (static_cast<UInt32>(alpha) << 24) | 0x00FFFFFFu;
+						UInt32 pixel = 0;
+						if (bitmap->renderMode == GlyphRenderMode::Gray)
+						{
+							const UInt8 alpha = bitmap->alpha[
+								static_cast<size_t>(y) * rect.width + x];
+							pixel = static_cast<UInt32>(alpha) << 24;
+							if (!hasLcd)
+								pixel |= 0x00FFFFFFu;
+						}
+						else
+						{
+							const size_t offset = (static_cast<size_t>(y) * rect.width + x) * 3;
+							pixel = static_cast<UInt32>(bitmap->lcd[offset + 0]) << 16
+								| static_cast<UInt32>(bitmap->lcd[offset + 1]) << 8
+								| static_cast<UInt32>(bitmap->lcd[offset + 2]);
+						}
+						pixels[static_cast<size_t>(rect.y + y) * width + rect.x + x] = pixel;
 					}
 				}
 			}
@@ -299,6 +320,7 @@ namespace fonthook::vectorfont
 			resource->property = property;
 			resource->width = width;
 			resource->height = height;
+			resource->hasLcd = hasLcd;
 			resource->placements = std::move(placements);
 			return resource;
 		}
@@ -337,7 +359,8 @@ namespace fonthook::vectorfont
 			const AtlasGlyphInstance& instance, const NiColorA& color,
 			float offsetX, float offsetY, float rasterScale, AtlasLayer layer)
 		{
-			if (bitmap && bitmap->width > 0 && bitmap->height > 0 && !bitmap->alpha.empty())
+			if (bitmap && bitmap->width > 0 && bitmap->height > 0
+				&& (!bitmap->alpha.empty() || !bitmap->lcd.empty()))
 				quads.push_back({ bitmap, instance.pen, color, offsetX, offsetY,
 					rasterScale, layer });
 		}
@@ -356,7 +379,12 @@ namespace fonthook::vectorfont
 					return false;
 				if (included[static_cast<size_t>(AtlasLayer::Shadow)] && config.shadow.enabled)
 				{
-					AddPendingQuad(quads, fill, instance,
+					const auto shadow = fill->renderMode == GlyphRenderMode::Gray
+						? fill : GetGlyphBitmap(runtime, instance.glyph,
+							GlyphMaskType::Shadow, rasterScale);
+					if (!shadow)
+						return false;
+					AddPendingQuad(quads, shadow, instance,
 						ResolveEffectColor(config.shadow, instance.color),
 						config.shadow.x, config.shadow.y, rasterScale, AtlasLayer::Shadow);
 				}
@@ -468,6 +496,8 @@ namespace fonthook::vectorfont
 			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
 			if (prepareObject)
 				shape->PrepareObject();
+			if (atlas->hasLcd && !PrepareLcdAtlasShape(shape))
+				return nullptr;
 			return shape;
 		}
 	}

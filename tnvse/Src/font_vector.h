@@ -25,6 +25,9 @@ namespace fonthook
 	void FreeTypeFontDebugLog(const char* apFormat, ...);
 	void FlushFreeTypeFontDebugLog();
 	void FinalizeFreeTypeUioDetection();
+	void FinalizeFreeTypeLcdDetection();
+	void HandleFreeTypeLcdMainLoop();
+	void HandleFreeTypeShaderLoaderMessage(UInt32 auiMessageType);
 	float ConsumeFreeTypeCreateTextScale();
 	void FreeTypeCreateTextEntryHook();
 	bool InitializeFreeTypeVectorRenderer();

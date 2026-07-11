@@ -17,6 +17,13 @@ namespace fonthook::vectorfont
 		long faceIndex = 0;
 	};
 
+	enum class GlyphRenderMode : UInt8
+	{
+		Gray = 0,
+		LcdRgb = 1,
+		LcdBgr = 2,
+	};
+
 	struct ByteStyle
 	{
 		float pixelSize = 0.0f;
@@ -26,6 +33,7 @@ namespace fonthook::vectorfont
 		float embolden = 0.0f;
 		float slantDegrees = 0.0f;
 		float baselineOffset = 0.0f;
+		GlyphRenderMode renderMode = GlyphRenderMode::Gray;
 		std::vector<FaceConfig> faces;
 	};
 
@@ -56,6 +64,7 @@ namespace fonthook::vectorfont
 		Fill = 0,
 		Outline = 1,
 		Glow = 2,
+		Shadow = 3,
 	};
 
 	struct FontConfig
@@ -93,7 +102,9 @@ namespace fonthook::vectorfont
 		int effectiveWidth = 0;
 		int effectiveHeight = 0;
 		float baselineOffset = 0.0f;
+		GlyphRenderMode renderMode = GlyphRenderMode::Gray;
 		std::vector<UInt8> alpha;
+		std::vector<UInt8> lcd;
 	};
 
 	struct AtlasGlyphInstance
@@ -121,4 +132,9 @@ namespace fonthook::vectorfont
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
 		bool abPrepareObject);
+	void FinalizeLcdRendererDetection();
+	void HandleLcdRendererMainLoop();
+	void HandleShaderLoaderMessage(UInt32 auiMessageType);
+	bool IsLcdRendererAvailable();
+	bool PrepareLcdAtlasShape(NiTriShape* apShape);
 }

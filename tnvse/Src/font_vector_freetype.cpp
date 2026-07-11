@@ -7,6 +7,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_GLYPH_H
+#include FT_LCD_FILTER_H
 #include FT_OUTLINE_H
 #include FT_STROKER_H
 
@@ -147,6 +148,7 @@ namespace fonthook::vectorfont
 			SInt32 strokeWidth26Dot6 = 0;
 			UInt8 byteClass = 0;
 			UInt8 maskType = 0;
+			UInt8 renderMode = 0;
 
 			bool operator==(const BitmapCacheKey& other) const
 			{
@@ -158,7 +160,8 @@ namespace fonthook::vectorfont
 					&& embolden26Dot6 == other.embolden26Dot6
 					&& strokeWidth26Dot6 == other.strokeWidth26Dot6
 					&& byteClass == other.byteClass
-					&& maskType == other.maskType;
+					&& maskType == other.maskType
+					&& renderMode == other.renderMode;
 			}
 		};
 
@@ -175,6 +178,7 @@ namespace fonthook::vectorfont
 				result ^= static_cast<size_t>(key.strokeWidth26Dot6) * 0xC2B2AE3Du;
 				result ^= static_cast<size_t>(key.byteClass) << 8;
 				result ^= key.maskType;
+				result ^= static_cast<size_t>(key.renderMode) << 16;
 				return result;
 			}
 		};
@@ -193,6 +197,7 @@ namespace fonthook::vectorfont
 		};
 
 		FT_Library s_library = nullptr;
+		bool s_lcdRasterAvailable = false;
 		std::unordered_map<std::wstring, std::weak_ptr<MappedFontFile>> s_mappedFiles;
 		std::unordered_map<UInt32, std::unique_ptr<RuntimeFont>> s_runtimeFonts;
 		std::unordered_map<const Font*, ActiveFontState> s_activeFonts;
@@ -272,6 +277,10 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage("tnvse_freetype_font: FT_Init_FreeType failed");
 				return false;
 			}
+			s_lcdRasterAvailable = FT_Library_SetLcdFilter(
+				s_library, FT_LCD_FILTER_DEFAULT) == 0;
+			if (!s_lcdRasterAvailable)
+				gLog.FormattedMessage("tnvse_freetype_font: LCD filter unavailable; LCD styles use gray rendering");
 			return true;
 		}
 
@@ -722,6 +731,7 @@ namespace fonthook::vectorfont
 			add(&key.strokeWidth26Dot6, sizeof(key.strokeWidth26Dot6));
 			add(&key.byteClass, sizeof(key.byteClass));
 			add(&key.maskType, sizeof(key.maskType));
+			add(&key.renderMode, sizeof(key.renderMode));
 			return hash;
 		}
 
@@ -763,6 +773,51 @@ namespace fonthook::vectorfont
 				else
 				{
 					return false;
+				}
+			}
+			return true;
+		}
+
+		bool CopyLcdBitmap(const FT_Bitmap& source, GlyphBitmap& target,
+			GlyphRenderMode renderMode)
+		{
+			if (source.pixel_mode != FT_PIXEL_MODE_LCD || source.width % 3 != 0)
+				return false;
+			target.width = static_cast<int>(source.width / 3);
+			target.height = static_cast<int>(source.rows);
+			target.renderMode = renderMode;
+			if (target.width <= 0 || target.height <= 0)
+			{
+				target.width = 0;
+				target.height = 0;
+				return true;
+			}
+			if (!source.buffer)
+				return false;
+			target.lcd.assign(static_cast<size_t>(target.width) * target.height * 3, 0);
+			const int pitch = source.pitch;
+			for (int y = 0; y < target.height; ++y)
+			{
+				const int sourceY = pitch >= 0 ? y : target.height - 1 - y;
+				const UInt8* row = source.buffer
+					+ static_cast<ptrdiff_t>(sourceY) * std::abs(pitch);
+				UInt8* output = target.lcd.data()
+					+ static_cast<size_t>(y) * target.width * 3;
+				for (int x = 0; x < target.width; ++x)
+				{
+					const UInt8* input = row + x * 3;
+					if (renderMode == GlyphRenderMode::LcdBgr)
+					{
+						output[x * 3 + 0] = input[2];
+						output[x * 3 + 1] = input[1];
+						output[x * 3 + 2] = input[0];
+					}
+					else
+					{
+						output[x * 3 + 0] = input[0];
+						output[x * 3 + 1] = input[1];
+						output[x * 3 + 2] = input[2];
+					}
 				}
 			}
 			return true;
@@ -920,6 +975,7 @@ namespace fonthook::vectorfont
 			bitmap->cacheId = HashBitmapKey(key);
 			bitmap->effectiveWidth = key.effectiveWidth;
 			bitmap->effectiveHeight = key.effectiveHeight;
+			bitmap->renderMode = static_cast<GlyphRenderMode>(key.renderMode);
 			RuntimeRole& role = runtime.roles[static_cast<size_t>(glyph.byteClass)];
 			bitmap->baselineOffset = role.resolvedBaselineOffset;
 			ResolvedGlyph resolved;
@@ -928,7 +984,12 @@ namespace fonthook::vectorfont
 			if (!ConfigureFace(resolved.runtimeFace->face, *role.style, rasterScale, true))
 				return nullptr;
 
-			const FT_Int32 loadFlags = FT_LOAD_DEFAULT | FT_LOAD_TARGET_NORMAL
+			const bool fillMask = maskType == GlyphMaskType::Fill
+				|| maskType == GlyphMaskType::Shadow;
+			const bool lcd = maskType == GlyphMaskType::Fill
+				&& bitmap->renderMode != GlyphRenderMode::Gray;
+			const FT_Int32 loadFlags = FT_LOAD_DEFAULT
+				| (lcd ? FT_LOAD_TARGET_LCD : FT_LOAD_TARGET_NORMAL)
 				| FT_LOAD_NO_BITMAP | FT_LOAD_NO_SVG;
 			if (FT_Load_Glyph(resolved.runtimeFace->face, resolved.glyphIndex, loadFlags))
 				return nullptr;
@@ -941,13 +1002,15 @@ namespace fonthook::vectorfont
 				FT_Outline_EmboldenXY(&slot->outline, strength, strength);
 			}
 
-			if (maskType == GlyphMaskType::Fill)
+			if (fillMask)
 			{
-				if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL))
+				if (FT_Render_Glyph(slot, lcd ? FT_RENDER_MODE_LCD : FT_RENDER_MODE_NORMAL))
 					return nullptr;
 				bitmap->left = slot->bitmap_left;
 				bitmap->top = slot->bitmap_top;
-				return CopyGrayBitmap(slot->bitmap, *bitmap) ? bitmap : nullptr;
+				return lcd
+					? (CopyLcdBitmap(slot->bitmap, *bitmap, bitmap->renderMode) ? bitmap : nullptr)
+					: (CopyGrayBitmap(slot->bitmap, *bitmap) ? bitmap : nullptr);
 			}
 
 			const EffectStyle& effect = maskType == GlyphMaskType::Glow
@@ -1143,6 +1206,12 @@ namespace fonthook::vectorfont
 		const float safeScale = std::isfinite(rasterScale)
 			&& rasterScale >= 0.1f && rasterScale <= 10.0f ? rasterScale : 1.0f;
 		const ByteStyle& style = runtime.config->styles[static_cast<size_t>(glyph.byteClass)];
+		GlyphRenderMode renderMode = GlyphRenderMode::Gray;
+		if (maskType == GlyphMaskType::Fill && s_lcdRasterAvailable
+			&& IsLcdRendererAvailable())
+		{
+			renderMode = style.renderMode;
+		}
 		const int effectiveWidth = std::clamp(static_cast<int>(std::lround(
 			style.pixelSize * style.scaleX * safeScale)), 1, 65535);
 		const int effectiveHeight = std::clamp(static_cast<int>(std::lround(
@@ -1163,7 +1232,8 @@ namespace fonthook::vectorfont
 			embolden,
 			strokeWidth,
 			static_cast<UInt8>(glyph.byteClass),
-			static_cast<UInt8>(maskType)
+			static_cast<UInt8>(maskType),
+			static_cast<UInt8>(renderMode)
 		};
 		auto existing = s_bitmapCache.find(key);
 		if (existing != s_bitmapCache.end())
@@ -1176,7 +1246,8 @@ namespace fonthook::vectorfont
 			runtime, glyph, maskType, safeScale, key);
 		if (!bitmap)
 			return nullptr;
-		const size_t bytes = sizeof(GlyphBitmap) + bitmap->alpha.size();
+		const size_t bytes = sizeof(GlyphBitmap) + bitmap->alpha.size()
+			+ bitmap->lcd.size();
 		s_bitmapLru.push_front(key);
 		s_bitmapCache.emplace(key,
 			BitmapCacheEntry{ bitmap, bytes, s_bitmapLru.begin() });
