@@ -2,8 +2,6 @@
 
 #include <freetype/config/ftoption.h>
 
-#define FT_CONFIG_OPTION_SUBPIXEL_RENDERING
-
 // tNVSE loads uncompressed outline fonts and does not use external renderers.
 #undef FT_CONFIG_OPTION_USE_LZW
 #undef FT_CONFIG_OPTION_USE_ZLIB

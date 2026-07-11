@@ -17,8 +17,6 @@
 #include "multibyte_input.h"
 #include "save_display_name.h"
 
-#include <cstring>
-
 IDebugLog gLog("tnvse.log");
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;
 NVSEMessagingInterface* g_messagingInterface{};
@@ -32,21 +30,13 @@ NVSECommandTableInterface* g_cmdTableInterface = NULL;
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
 void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 {
-	if (g_msg && g_msg->sender && std::strcmp(g_msg->sender, "Shader Loader") == 0)
-	{
-		fonthook::HandleFreeTypeShaderLoaderMessage(g_msg->type);
-		return;
-	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit)
 	{
 		fonthook::FinalizeFreeTypeUioDetection();
-		fonthook::FinalizeFreeTypeLcdDetection();
 	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit
 		|| g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop))
 	{
-		if (g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
-			fonthook::HandleFreeTypeLcdMainLoop();
 		fonthook::FlushFreeTypeFontDebugLog();
 	}
 	fonthook::HandleSaveDisplayNameMessage(g_msg);
@@ -77,10 +67,7 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 	g_pluginHandle = nvse->GetPluginHandle();
 	g_messagingInterface = static_cast<NVSEMessagingInterface*>(nvse->QueryInterface(kInterface_Messaging));
 	if (g_messagingInterface)
-	{
 		g_messagingInterface->RegisterListener(g_pluginHandle, "NVSE", MessageHandler);
-		g_messagingInterface->RegisterListener(g_pluginHandle, "Shader Loader", MessageHandler);
-	}
 
 	hJIP = GetModuleHandle("jip_nvse.dll");
 	g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);
