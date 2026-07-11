@@ -11,7 +11,7 @@ bEnableFreeTypeFontRenderingLog=0
 
 Set `bEnableFreeTypeFontRenderingLog=1` while diagnosing configuration or font
 loading. The log records the XML path, resolved face paths, FreeType errors,
-font-ID activation, and the first vector-rendered glyph for each byte class.
+font-ID activation, and the first atlas-rendered glyph for each byte class.
 
 Font IDs are configured under `<fonts>` in
 `Data\NVSE\plugins\tnvse_fonts.xml`. Only listed IDs are replaced. Other
@@ -72,8 +72,8 @@ the font ID. When `fontColor` is omitted, fill geometry keeps the color supplied
 by the game. `glow`, `outline`, and `shadow` belong to the font ID and are
 shared by both byte classes. The renderer emits shadow, glow, outline, and fill
 geometry in that order. Every configured alpha is multiplied by the game text
-alpha, so visibility and fade animations continue to work. Glow is a solid
-outer vector stroke; it is not a blurred bitmap effect.
+alpha, so visibility and fade animations continue to work. Glow and outline
+are generated as grayscale masks and share the same text atlas as the fill.
 
 Routing follows the selected `uiEncoding`: valid one-byte units use
 `singleByte`, while valid DBCS pairs use `doubleByte`. Shift-JIS half-width
@@ -81,9 +81,17 @@ katakana therefore use the single-byte font. Missing glyph lookup stays inside
 the selected byte-class fallback chain and then tries `U+FFFD`, `?`, and the
 primary face's `.notdef` glyph.
 
-Glyph outlines are flattened and triangulated with libtess2, then cached in a
-64 MB process-wide LRU mesh cache. The generated text uses the game's existing
-text shader with a 1x1 white texture; it does not create a glyph bitmap atlas.
-HarfBuzz shaping, kerning, RTL layout, color-font rendering, and variable-font
-axis controls are outside this feature. Invalid or unavailable configurations
-leave that entire font ID on the original `.fnt`/`.tex` renderer.
+The normal rendering path rasterizes hinted grayscale glyphs with FreeType at
+the effective display size. Glyph masks use a 64 MB process-wide CPU LRU cache;
+each text batch packs its unique masks into one `A8R8G8B8` atlas held by a
+128 MB atlas LRU cache. Atlas regions have two transparent padding pixels,
+mipmaps are disabled, and sampling is nearest. Shadow, glow, outline, and fill
+are emitted into one `NiTriShape` using that atlas.
+
+When UIO 2.30 scales a TileText call, tNVSE includes the validated UIO scale in
+the effective raster size and aligns glyph geometry to final screen pixels.
+Other UIO versions and ordinary calls use a raster scale of `1.0`. If atlas
+creation fails, the renderer falls back to the libtess2 outline path. HarfBuzz
+shaping, kerning, RTL layout, LCD subpixel rendering, color-font rendering, and
+variable-font axis controls are outside this feature. Invalid or unavailable
+configurations leave that entire font ID on the original `.fnt`/`.tex` renderer.

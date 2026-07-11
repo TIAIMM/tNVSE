@@ -275,7 +275,7 @@ namespace fonthook::vectorfont
 			NiTexture::FormatPrefs prefs;
 			prefs.m_ePixelLayout = static_cast<NiTexture::FormatPrefs::PixelLayout>(0x6);
 			prefs.m_eAlphaFmt = static_cast<NiTexture::FormatPrefs::AlphaFormat>(0x3);
-			prefs.m_eMipMapped = static_cast<NiTexture::FormatPrefs::MipFlag>(0x2);
+			prefs.m_eMipMapped = NiTexture::FormatPrefs::NO;
 			NiTexturingProperty* property = static_cast<NiTexturingProperty*>(
 				NiMemObject::operator new(sizeof(NiTexturingProperty)));
 			if (!property)
