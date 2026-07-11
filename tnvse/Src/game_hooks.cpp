@@ -1,5 +1,6 @@
 #include "font_engine.h"
 #include "font_manager.h"
+#include "font_vector.h"
 #include "game_hooks.h"
 #include "load_config.h"
 #include "SafeWrite.h"
@@ -44,7 +45,7 @@ namespace fonthook
 		// Terminal -> Font::PrepTextForTerminal
 		WriteRelCallEx(0x759281, &FontEx::PrepTextForTerminal);
 
-		WriteRelJumpEx(0xA12880, &FontEx::CreateText);
+		WriteRelJump(0xA12880, reinterpret_cast<UInt32>(&FreeTypeCreateTextEntryHook));
 		WriteRelJumpEx(0xA12460, &FontEx::MakeString);
 		WriteRelJumpEx(0xA1B020, &FontManagerEx::CalculateStringDimensions);
 

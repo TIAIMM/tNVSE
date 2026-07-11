@@ -30,6 +30,9 @@
     <ClCompile Include="Src\font_engine.cpp">
       <Filter>Source Files\Font</Filter>
     </ClCompile>
+	<ClCompile Include="Src\font_atlas_render.cpp">
+	  <Filter>Source Files\Font</Filter>
+	</ClCompile>
     <ClCompile Include="Src\font_vector_config.cpp">
       <Filter>Source Files\Font</Filter>
     </ClCompile>
@@ -81,6 +84,9 @@
     <ClCompile Include="Src\font_manager.cpp">
       <Filter>Source Files\Font</Filter>
     </ClCompile>
+	<ClCompile Include="Src\font_uio_scale.cpp">
+	  <Filter>Source Files\Font</Filter>
+	</ClCompile>
     <ClCompile Include="Src\multibyte_input.cpp">
       <Filter>Source Files\Hooks</Filter>
     </ClCompile>

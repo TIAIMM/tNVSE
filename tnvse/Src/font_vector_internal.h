@@ -51,6 +51,13 @@ namespace fonthook::vectorfont
 		Glow = 2,
 	};
 
+	enum class GlyphMaskType : UInt8
+	{
+		Fill = 0,
+		Outline = 1,
+		Glow = 2,
+	};
+
 	struct FontConfig
 	{
 		UInt32 fontId = 0;
@@ -76,6 +83,26 @@ namespace fonthook::vectorfont
 		std::vector<UInt32> indices;
 	};
 
+	struct GlyphBitmap
+	{
+		UInt64 cacheId = 0;
+		int width = 0;
+		int height = 0;
+		int left = 0;
+		int top = 0;
+		int effectiveWidth = 0;
+		int effectiveHeight = 0;
+		float baselineOffset = 0.0f;
+		std::vector<UInt8> alpha;
+	};
+
+	struct AtlasGlyphInstance
+	{
+		VectorEncodedGlyph glyph;
+		NiPoint3 pen;
+		NiColorA color;
+	};
+
 	struct RuntimeFont;
 
 	extern std::unordered_map<UInt32, FontConfig> g_configs;
@@ -89,4 +116,9 @@ namespace fonthook::vectorfont
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
 	std::shared_ptr<const GlyphMesh> GetGlyphMesh(RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph, GlyphMeshType aeMeshType);
+	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& arRuntime,
+		const VectorEncodedGlyph& arGlyph, GlyphMaskType aeMaskType, float afRasterScale);
+	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
+		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
+		bool abPrepareObject);
 }

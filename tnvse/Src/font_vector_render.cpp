@@ -386,10 +386,14 @@ namespace fonthook
 		bool prepareObject = false;
 		bool available = false;
 		bool finished = false;
+		float rasterScale = 1.0f;
 		std::array<LayerGeometry, kVectorLayerCount> layers;
+		std::vector<vectorfont::AtlasGlyphInstance> glyphs;
 
-		Impl(Font* apFont, bool abPrepareObject)
-			: font(apFont), prepareObject(abPrepareObject)
+		Impl(Font* apFont, bool abPrepareObject, float afRasterScale)
+			: font(apFont), prepareObject(abPrepareObject),
+			rasterScale(std::isfinite(afRasterScale) && afRasterScale >= 0.1f
+				&& afRasterScale <= 10.0f ? afRasterScale : 1.0f)
 		{
 			if (!font || !IsFreeTypeFontActive(font) || !InitializeWhiteTexture())
 				return;
@@ -408,8 +412,8 @@ namespace fonthook
 		return CreateEmptyVectorShape(font, prepareObject);
 	}
 
-	VectorTextBuilder::VectorTextBuilder(Font* apFont, bool abPrepareObject)
-		: m_impl(std::make_unique<Impl>(apFont, abPrepareObject))
+	VectorTextBuilder::VectorTextBuilder(Font* apFont, bool abPrepareObject, float afRasterScale)
+		: m_impl(std::make_unique<Impl>(apFont, abPrepareObject, afRasterScale))
 	{
 	}
 
@@ -434,69 +438,14 @@ namespace fonthook
 			if (s_loggedGlyphRoutes.insert(routeKey).second)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: first vector glyph font=%u role=%s bytes=%u encoded=0x%04X codepoint=U+%04X",
+					"tnvse_freetype_font: first atlas glyph font=%u role=%s bytes=%u encoded=0x%04X codepoint=U+%04X",
 					config.fontId,
 					glyph.byteClass == VectorFontByteClass::DoubleByte ? "doubleByte" : "singleByte",
 					glyph.byteLength, glyph.encodedCode, glyph.codePoint);
 			}
 		}
-		std::shared_ptr<const vectorfont::GlyphMesh> fill =
-			vectorfont::GetGlyphMesh(*m_impl->runtime, glyph, vectorfont::GlyphMeshType::Fill);
-		if (!fill)
-		{
-			LogGeometryFailure(config.fontId, glyph.codePoint, "fill tessellation failed");
-			return true;
-		}
-
-		if (config.shadow.enabled && !fill->vertices.empty())
-		{
-			if (!AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Shadow)],
-				VectorLayer::Shadow, *fill, pen, ResolveEffectColor(config.shadow, color),
-				config.shadow.x, config.shadow.y))
-				LogGeometryFailure(config.fontId, glyph.codePoint, "shadow mesh accumulation failed");
-		}
-
-		if (config.glow.enabled)
-		{
-			std::shared_ptr<const vectorfont::GlyphMesh> glow =
-				vectorfont::GetGlyphMesh(*m_impl->runtime, glyph, vectorfont::GlyphMeshType::Glow);
-			if (!glow)
-			{
-				LogGeometryFailure(config.fontId, glyph.codePoint, "glow tessellation failed");
-			}
-			else if (!glow->vertices.empty())
-			{
-				if (!AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Glow)],
-					VectorLayer::Glow, *glow, pen, ResolveEffectColor(config.glow, color),
-					0.0f, 0.0f))
-					LogGeometryFailure(config.fontId, glyph.codePoint, "glow mesh accumulation failed");
-			}
-		}
-
-		if (config.outline.enabled)
-		{
-			std::shared_ptr<const vectorfont::GlyphMesh> outline =
-				vectorfont::GetGlyphMesh(*m_impl->runtime, glyph, vectorfont::GlyphMeshType::Outline);
-			if (!outline)
-			{
-				LogGeometryFailure(config.fontId, glyph.codePoint, "outline tessellation failed");
-			}
-			else if (!outline->vertices.empty())
-			{
-				if (!AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Outline)],
-					VectorLayer::Outline, *outline, pen, ResolveEffectColor(config.outline, color),
-					0.0f, 0.0f))
-					LogGeometryFailure(config.fontId, glyph.codePoint, "outline mesh accumulation failed");
-			}
-		}
-
-		if (!fill->vertices.empty())
-		{
-			if (!AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Fill)],
-				VectorLayer::Fill, *fill, pen, ResolveFillColor(config.fontColor, color),
-				0.0f, 0.0f))
-				LogGeometryFailure(config.fontId, glyph.codePoint, "fill mesh accumulation failed");
-		}
+		const NiColorA sourceColor = color ? *color : NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f };
+		m_impl->glyphs.push_back({ glyph, pen, sourceColor });
 		return true;
 	}
 
@@ -509,6 +458,59 @@ namespace fonthook
 			return nullptr;
 		if (!m_impl->available)
 			return CreateEmptyVectorShape(m_impl->font, m_impl->prepareObject);
+
+		if (NiTriShape* atlasShape = vectorfont::TryCreateGlyphAtlasShape(
+			*m_impl->font, *m_impl->runtime, m_impl->glyphs,
+			m_impl->rasterScale, m_impl->prepareObject))
+		{
+			return atlasShape;
+		}
+
+		// Build the old outline geometry only when atlas creation failed.
+		const vectorfont::FontConfig& config = vectorfont::GetRuntimeConfig(*m_impl->runtime);
+		for (const vectorfont::AtlasGlyphInstance& instance : m_impl->glyphs)
+		{
+			const NiColorA* color = &instance.color;
+			std::shared_ptr<const vectorfont::GlyphMesh> fill = vectorfont::GetGlyphMesh(
+				*m_impl->runtime, instance.glyph, vectorfont::GlyphMeshType::Fill);
+			if (!fill)
+			{
+				LogGeometryFailure(config.fontId, instance.glyph.codePoint,
+					"fill tessellation failed");
+				continue;
+			}
+			if (config.shadow.enabled && !fill->vertices.empty())
+			{
+				AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Shadow)],
+					VectorLayer::Shadow, *fill, instance.pen,
+					ResolveEffectColor(config.shadow, color),
+					config.shadow.x, config.shadow.y);
+			}
+			if (config.glow.enabled)
+			{
+				auto glow = vectorfont::GetGlyphMesh(*m_impl->runtime,
+					instance.glyph, vectorfont::GlyphMeshType::Glow);
+				if (glow && !glow->vertices.empty())
+					AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Glow)],
+						VectorLayer::Glow, *glow, instance.pen,
+						ResolveEffectColor(config.glow, color), 0.0f, 0.0f);
+			}
+			if (config.outline.enabled)
+			{
+				auto outline = vectorfont::GetGlyphMesh(*m_impl->runtime,
+					instance.glyph, vectorfont::GlyphMeshType::Outline);
+				if (outline && !outline->vertices.empty())
+					AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Outline)],
+						VectorLayer::Outline, *outline, instance.pen,
+						ResolveEffectColor(config.outline, color), 0.0f, 0.0f);
+			}
+			if (!fill->vertices.empty())
+			{
+				AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Fill)],
+					VectorLayer::Fill, *fill, instance.pen,
+					ResolveFillColor(config.fontColor, color), 0.0f, 0.0f);
+			}
+		}
 
 		std::array<bool, kVectorLayerCount> included = {};
 		for (size_t i = 0; i < included.size(); ++i)

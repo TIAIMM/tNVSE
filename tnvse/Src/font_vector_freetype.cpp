@@ -25,6 +25,7 @@ namespace fonthook::vectorfont
 	namespace
 	{
 		constexpr size_t kMeshCacheLimit = 64u * 1024u * 1024u;
+		constexpr size_t kBitmapCacheLimit = 64u * 1024u * 1024u;
 		constexpr FT_Int32 kGlyphLoadFlags =
 			FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP | FT_LOAD_NO_SVG;
 		constexpr float kFixedScale = 65536.0f;
@@ -135,6 +136,56 @@ namespace fonthook::vectorfont
 			std::list<MeshCacheKey>::iterator lru;
 		};
 
+		struct BitmapCacheKey
+		{
+			UInt64 styleHash = 0;
+			UInt32 fontId = 0;
+			UInt32 codePoint = 0;
+			UInt16 effectiveWidth = 0;
+			UInt16 effectiveHeight = 0;
+			SInt32 embolden26Dot6 = 0;
+			SInt32 strokeWidth26Dot6 = 0;
+			UInt8 byteClass = 0;
+			UInt8 maskType = 0;
+
+			bool operator==(const BitmapCacheKey& other) const
+			{
+				return styleHash == other.styleHash
+					&& fontId == other.fontId
+					&& codePoint == other.codePoint
+					&& effectiveWidth == other.effectiveWidth
+					&& effectiveHeight == other.effectiveHeight
+					&& embolden26Dot6 == other.embolden26Dot6
+					&& strokeWidth26Dot6 == other.strokeWidth26Dot6
+					&& byteClass == other.byteClass
+					&& maskType == other.maskType;
+			}
+		};
+
+		struct BitmapCacheKeyHash
+		{
+			size_t operator()(const BitmapCacheKey& key) const
+			{
+				size_t result = static_cast<size_t>(key.styleHash ^ (key.styleHash >> 32));
+				result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
+				result ^= static_cast<size_t>(key.codePoint) * 0x85EBCA77u;
+				result ^= static_cast<size_t>(key.effectiveWidth) << 16;
+				result ^= static_cast<size_t>(key.effectiveHeight);
+				result ^= static_cast<size_t>(key.embolden26Dot6) * 0x27D4EB2Du;
+				result ^= static_cast<size_t>(key.strokeWidth26Dot6) * 0xC2B2AE3Du;
+				result ^= static_cast<size_t>(key.byteClass) << 8;
+				result ^= key.maskType;
+				return result;
+			}
+		};
+
+		struct BitmapCacheEntry
+		{
+			std::shared_ptr<GlyphBitmap> bitmap;
+			size_t bytes = 0;
+			std::list<BitmapCacheKey>::iterator lru;
+		};
+
 		struct ActiveFontState
 		{
 			const FontData* data = nullptr;
@@ -147,8 +198,11 @@ namespace fonthook::vectorfont
 		std::unordered_map<const Font*, ActiveFontState> s_activeFonts;
 		std::unordered_map<MeshCacheKey, MeshCacheEntry, MeshCacheKeyHash> s_meshCache;
 		std::list<MeshCacheKey> s_meshLru;
+		std::unordered_map<BitmapCacheKey, BitmapCacheEntry, BitmapCacheKeyHash> s_bitmapCache;
+		std::list<BitmapCacheKey> s_bitmapLru;
 		std::unordered_set<UInt32> s_loggedUnconfiguredFontIds;
 		size_t s_meshCacheBytes = 0;
+		size_t s_bitmapCacheBytes = 0;
 		std::recursive_mutex s_mutex;
 
 		std::wstring NormalizePathKey(std::wstring path)
@@ -221,6 +275,41 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		bool ConfigureFace(FT_Face face, const ByteStyle& style,
+			float rasterScale, bool raster)
+		{
+			if (!face)
+				return false;
+			const float safeScale = std::isfinite(rasterScale)
+				&& rasterScale >= 0.1f && rasterScale <= 10.0f ? rasterScale : 1.0f;
+			FT_Error error = 0;
+			FT_Matrix matrix = {};
+			const float slant = std::tan(style.slantDegrees
+				* 3.14159265358979323846f / 180.0f);
+			if (raster)
+			{
+				const FT_UInt width = static_cast<FT_UInt>(std::max(1.0f,
+					std::round(style.pixelSize * style.scaleX * safeScale)));
+				const FT_UInt height = static_cast<FT_UInt>(std::max(1.0f,
+					std::round(style.pixelSize * style.scaleY * safeScale)));
+				error = FT_Set_Pixel_Sizes(face, width, height);
+				matrix.xx = static_cast<FT_Fixed>(kFixedScale);
+				matrix.xy = static_cast<FT_Fixed>(std::lround(slant * kFixedScale));
+				matrix.yy = static_cast<FT_Fixed>(kFixedScale);
+			}
+			else
+			{
+				error = FT_Set_Char_Size(face, 0,
+					static_cast<FT_F26Dot6>(std::lround(style.pixelSize * 64.0f)), 72, 72);
+				matrix.xx = static_cast<FT_Fixed>(std::lround(style.scaleX * kFixedScale));
+				matrix.xy = static_cast<FT_Fixed>(std::lround(slant * style.scaleY * kFixedScale));
+				matrix.yy = static_cast<FT_Fixed>(std::lround(style.scaleY * kFixedScale));
+			}
+			matrix.yx = 0;
+			FT_Set_Transform(face, &matrix, nullptr);
+			return error == 0;
+		}
+
 		bool CreateRuntimeFace(const FaceConfig& config, const ByteStyle& style, RuntimeFace& result)
 		{
 			result.file = MapFontFile(config.path);
@@ -243,23 +332,13 @@ namespace fonthook::vectorfont
 					config.path.c_str(), config.faceIndex, static_cast<UInt32>(error));
 				return false;
 			}
-			error = FT_Set_Char_Size(result.face, 0,
-				static_cast<FT_F26Dot6>(std::lround(style.pixelSize * 64.0f)), 72, 72);
-			if (error)
+			if (!ConfigureFace(result.face, style, 1.0f, false))
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: FT_Set_Char_Size failed path=%ls index=%ld size=%.2f error=0x%02X",
-					config.path.c_str(), config.faceIndex, style.pixelSize,
-					static_cast<UInt32>(error));
+					"tnvse_freetype_font: base face sizing failed path=%ls index=%ld size=%.2f",
+					config.path.c_str(), config.faceIndex, style.pixelSize);
 				return false;
 			}
-
-			const float slant = std::tan(style.slantDegrees * 3.14159265358979323846f / 180.0f);
-			FT_Matrix matrix = {};
-			matrix.xx = static_cast<FT_Fixed>(std::lround(style.scaleX * kFixedScale));
-			matrix.xy = static_cast<FT_Fixed>(std::lround(slant * style.scaleY * kFixedScale));
-			matrix.yy = static_cast<FT_Fixed>(std::lround(style.scaleY * kFixedScale));
-			FT_Set_Transform(result.face, &matrix, nullptr);
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
 				FreeTypeFontDebugLog(
@@ -274,6 +353,8 @@ namespace fonthook::vectorfont
 
 		bool LoadGlyph(RuntimeRole& role, RuntimeFace& face, FT_UInt glyphIndex)
 		{
+			if (!ConfigureFace(face.face, *role.style, 1.0f, false))
+				return false;
 			if (FT_Load_Glyph(face.face, glyphIndex, kGlyphLoadFlags))
 				return false;
 			if (face.face->glyph->format == FT_GLYPH_FORMAT_OUTLINE && role.style->embolden > 0.0f)
@@ -597,6 +678,95 @@ namespace fonthook::vectorfont
 				s_meshLru.pop_back();
 			}
 		}
+
+		void TouchBitmapCacheEntry(BitmapCacheEntry& entry, const BitmapCacheKey& key)
+		{
+			s_bitmapLru.erase(entry.lru);
+			s_bitmapLru.push_front(key);
+			entry.lru = s_bitmapLru.begin();
+		}
+
+		void TrimBitmapCache()
+		{
+			while (s_bitmapCacheBytes > kBitmapCacheLimit && !s_bitmapLru.empty())
+			{
+				const BitmapCacheKey key = s_bitmapLru.back();
+				auto it = s_bitmapCache.find(key);
+				if (it != s_bitmapCache.end())
+				{
+					s_bitmapCacheBytes -= it->second.bytes;
+					s_bitmapCache.erase(it);
+				}
+				s_bitmapLru.pop_back();
+			}
+		}
+
+		UInt64 HashBitmapKey(const BitmapCacheKey& key)
+		{
+			UInt64 hash = 1469598103934665603ull;
+			auto add = [&](const void* data, size_t size)
+			{
+				const UInt8* bytes = static_cast<const UInt8*>(data);
+				for (size_t i = 0; i < size; ++i)
+				{
+					hash ^= bytes[i];
+					hash *= 1099511628211ull;
+				}
+			};
+			add(&key.styleHash, sizeof(key.styleHash));
+			add(&key.fontId, sizeof(key.fontId));
+			add(&key.codePoint, sizeof(key.codePoint));
+			add(&key.effectiveWidth, sizeof(key.effectiveWidth));
+			add(&key.effectiveHeight, sizeof(key.effectiveHeight));
+			add(&key.embolden26Dot6, sizeof(key.embolden26Dot6));
+			add(&key.strokeWidth26Dot6, sizeof(key.strokeWidth26Dot6));
+			add(&key.byteClass, sizeof(key.byteClass));
+			add(&key.maskType, sizeof(key.maskType));
+			return hash;
+		}
+
+		bool CopyGrayBitmap(const FT_Bitmap& source, GlyphBitmap& target)
+		{
+			target.width = static_cast<int>(source.width);
+			target.height = static_cast<int>(source.rows);
+			if (target.width <= 0 || target.height <= 0)
+			{
+				target.width = 0;
+				target.height = 0;
+				return true;
+			}
+			if (!source.buffer)
+				return false;
+			target.alpha.assign(static_cast<size_t>(target.width) * target.height, 0);
+			const int pitch = source.pitch;
+			for (int y = 0; y < target.height; ++y)
+			{
+				const int sourceY = pitch >= 0 ? y : target.height - 1 - y;
+				const UInt8* row = source.buffer + static_cast<ptrdiff_t>(sourceY) * std::abs(pitch);
+				UInt8* output = target.alpha.data() + static_cast<size_t>(y) * target.width;
+				if (source.pixel_mode == FT_PIXEL_MODE_GRAY)
+				{
+					if (source.num_grays == 256)
+						std::copy(row, row + target.width, output);
+					else
+					{
+						const UInt32 denominator = std::max<UInt32>(1, source.num_grays - 1);
+						for (int x = 0; x < target.width; ++x)
+							output[x] = static_cast<UInt8>(row[x] * 255u / denominator);
+					}
+				}
+				else if (source.pixel_mode == FT_PIXEL_MODE_MONO)
+				{
+					for (int x = 0; x < target.width; ++x)
+						output[x] = (row[x >> 3] & (0x80 >> (x & 7))) ? 255 : 0;
+				}
+				else
+				{
+					return false;
+				}
+			}
+			return true;
+		}
 	}
 
 	struct RuntimeFont
@@ -741,6 +911,86 @@ namespace fonthook::vectorfont
 			}
 			return tessellated ? mesh : nullptr;
 		}
+
+		std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(RuntimeFont& runtime,
+			const VectorEncodedGlyph& glyph, GlyphMaskType maskType,
+			float rasterScale, const BitmapCacheKey& key)
+		{
+			auto bitmap = std::make_shared<GlyphBitmap>();
+			bitmap->cacheId = HashBitmapKey(key);
+			bitmap->effectiveWidth = key.effectiveWidth;
+			bitmap->effectiveHeight = key.effectiveHeight;
+			RuntimeRole& role = runtime.roles[static_cast<size_t>(glyph.byteClass)];
+			bitmap->baselineOffset = role.resolvedBaselineOffset;
+			ResolvedGlyph resolved;
+			if (!ResolveGlyph(role, glyph.codePoint, resolved))
+				return nullptr;
+			if (!ConfigureFace(resolved.runtimeFace->face, *role.style, rasterScale, true))
+				return nullptr;
+
+			const FT_Int32 loadFlags = FT_LOAD_DEFAULT | FT_LOAD_TARGET_NORMAL
+				| FT_LOAD_NO_BITMAP | FT_LOAD_NO_SVG;
+			if (FT_Load_Glyph(resolved.runtimeFace->face, resolved.glyphIndex, loadFlags))
+				return nullptr;
+			FT_GlyphSlot slot = resolved.runtimeFace->face->glyph;
+			if (slot->format != FT_GLYPH_FORMAT_OUTLINE)
+				return bitmap;
+			if (role.style->embolden > 0.0f && slot->outline.n_points)
+			{
+				const FT_Pos strength = key.embolden26Dot6;
+				FT_Outline_EmboldenXY(&slot->outline, strength, strength);
+			}
+
+			if (maskType == GlyphMaskType::Fill)
+			{
+				if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL))
+					return nullptr;
+				bitmap->left = slot->bitmap_left;
+				bitmap->top = slot->bitmap_top;
+				return CopyGrayBitmap(slot->bitmap, *bitmap) ? bitmap : nullptr;
+			}
+
+			const EffectStyle& effect = maskType == GlyphMaskType::Glow
+				? runtime.config->glow : runtime.config->outline;
+			if (!effect.enabled || effect.width <= 0.0f || !slot->outline.n_points)
+				return bitmap;
+
+			FT_Glyph strokedGlyph = nullptr;
+			FT_Stroker stroker = nullptr;
+			if (FT_Get_Glyph(slot, &strokedGlyph)
+				|| FT_Stroker_New(s_library, &stroker))
+			{
+				if (strokedGlyph)
+					FT_Done_Glyph(strokedGlyph);
+				return nullptr;
+			}
+			FT_Stroker_Set(stroker, key.strokeWidth26Dot6,
+				FT_STROKER_LINECAP_ROUND, FT_STROKER_LINEJOIN_ROUND, 0);
+			const FT_Error strokeError = FT_Glyph_StrokeBorder(
+				&strokedGlyph, stroker, false, true);
+			FT_Stroker_Done(stroker);
+			if (strokeError || !strokedGlyph)
+			{
+				if (strokedGlyph)
+					FT_Done_Glyph(strokedGlyph);
+				return nullptr;
+			}
+
+			const FT_Error bitmapError = FT_Glyph_To_Bitmap(
+				&strokedGlyph, FT_RENDER_MODE_NORMAL, nullptr, true);
+			if (bitmapError || !strokedGlyph || strokedGlyph->format != FT_GLYPH_FORMAT_BITMAP)
+			{
+				if (strokedGlyph)
+					FT_Done_Glyph(strokedGlyph);
+				return nullptr;
+			}
+			const FT_BitmapGlyph bitmapGlyph = reinterpret_cast<FT_BitmapGlyph>(strokedGlyph);
+			bitmap->left = bitmapGlyph->left;
+			bitmap->top = bitmapGlyph->top;
+			const bool copied = CopyGrayBitmap(bitmapGlyph->bitmap, *bitmap);
+			FT_Done_Glyph(strokedGlyph);
+			return copied ? bitmap : nullptr;
+		}
 	}
 
 	RuntimeFont* FindRuntimeFont(UInt32 auiFontId)
@@ -884,6 +1134,55 @@ namespace fonthook::vectorfont
 		s_meshCacheBytes += bytes;
 		TrimMeshCache();
 		return mesh;
+	}
+
+	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& runtime,
+		const VectorEncodedGlyph& glyph, GlyphMaskType maskType, float rasterScale)
+	{
+		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		const float safeScale = std::isfinite(rasterScale)
+			&& rasterScale >= 0.1f && rasterScale <= 10.0f ? rasterScale : 1.0f;
+		const ByteStyle& style = runtime.config->styles[static_cast<size_t>(glyph.byteClass)];
+		const int effectiveWidth = std::clamp(static_cast<int>(std::lround(
+			style.pixelSize * style.scaleX * safeScale)), 1, 65535);
+		const int effectiveHeight = std::clamp(static_cast<int>(std::lround(
+			style.pixelSize * style.scaleY * safeScale)), 1, 65535);
+		const EffectStyle* effect = maskType == GlyphMaskType::Glow
+			? &runtime.config->glow
+			: maskType == GlyphMaskType::Outline ? &runtime.config->outline : nullptr;
+		const SInt32 strokeWidth = effect && effect->enabled
+			? static_cast<SInt32>(std::lround(effect->width * safeScale * 64.0f)) : 0;
+		const SInt32 embolden = static_cast<SInt32>(std::lround(
+			style.embolden * safeScale * 64.0f));
+		const BitmapCacheKey key = {
+			runtime.config->styleHash,
+			runtime.config->fontId,
+			glyph.codePoint,
+			static_cast<UInt16>(effectiveWidth),
+			static_cast<UInt16>(effectiveHeight),
+			embolden,
+			strokeWidth,
+			static_cast<UInt8>(glyph.byteClass),
+			static_cast<UInt8>(maskType)
+		};
+		auto existing = s_bitmapCache.find(key);
+		if (existing != s_bitmapCache.end())
+		{
+			TouchBitmapCacheEntry(existing->second, key);
+			return existing->second.bitmap;
+		}
+
+		std::shared_ptr<GlyphBitmap> bitmap = BuildGlyphBitmap(
+			runtime, glyph, maskType, safeScale, key);
+		if (!bitmap)
+			return nullptr;
+		const size_t bytes = sizeof(GlyphBitmap) + bitmap->alpha.size();
+		s_bitmapLru.push_front(key);
+		s_bitmapCache.emplace(key,
+			BitmapCacheEntry{ bitmap, bytes, s_bitmapLru.begin() });
+		s_bitmapCacheBytes += bytes;
+		TrimBitmapCache();
+		return bitmap;
 	}
 }
 

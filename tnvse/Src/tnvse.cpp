@@ -30,6 +30,10 @@ NVSECommandTableInterface* g_cmdTableInterface = NULL;
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
 void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 {
+	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit)
+	{
+		fonthook::FinalizeFreeTypeUioDetection();
+	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit
 		|| g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop))
 	{

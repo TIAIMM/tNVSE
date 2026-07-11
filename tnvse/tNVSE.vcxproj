@@ -144,11 +144,13 @@
     <ClCompile Include="Src\encoding.cpp" />
     <ClCompile Include="Src\native_calls.cpp" />
     <ClCompile Include="Src\font_engine.cpp" />
+	<ClCompile Include="Src\font_atlas_render.cpp" />
     <ClCompile Include="Src\font_vector_config.cpp" />
     <ClCompile Include="Src\font_vector_freetype.cpp" />
     <ClCompile Include="Src\font_vector_log.cpp" />
     <ClCompile Include="Src\font_vector_render.cpp" />
     <ClCompile Include="Src\font_manager.cpp" />
+	<ClCompile Include="Src\font_uio_scale.cpp" />
     <ClCompile Include="Src\multibyte_input.cpp" />
     <ClCompile Include="Src\multibyte_input_common.cpp" />
     <ClCompile Include="Src\multibyte_input_ime.cpp" />

@@ -932,11 +932,12 @@ namespace fonthook
 		char aiLineBreakChar,
 		const NiColorA* fontColor,
 		NiTriShape** textShape,
-		NiTriShape** iconShape)
+		NiTriShape** iconShape,
+		float rasterScale)
 	{
 		*textShape = nullptr;
 		*iconShape = nullptr;
-		VectorTextBuilder builder(font, true);
+		VectorTextBuilder builder(font, true, rasterScale);
 		if (!builder.IsAvailable())
 		{
 			*textShape = CreateEmptyFreeTypeTextShape(font, true);
@@ -1043,8 +1044,9 @@ namespace fonthook
 			textObject = CreateEmptyFreeTypeTextShape(font, true);
 		if (textObject)
 		{
+			const float rootZ = static_cast<float>(lineBaseOffset + lineBaseOffset);
 			textObject->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f,
-				static_cast<float>(lineBaseOffset + lineBaseOffset));
+				std::round(rootZ * rasterScale) / rasterScale);
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
 				static bool loggedRootTransform = false;
@@ -1071,6 +1073,7 @@ namespace fonthook
 		int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
 		const NiColorA* axFontColor, NiTriShape** apTextShape, NiTriShape** apIconShape)
 	{
+		const float rasterScale = ConsumeFreeTypeCreateTextScale();
 
 		auto* extraGlyphs = GetExtraGlyphs(this->iFontNum);
 		Font::TextData textData;
@@ -1099,7 +1102,8 @@ namespace fonthook
 		if (IsFreeTypeFontActive(this))
 		{
 			return CreateFreeTypePreparedText(this, textData,
-				aiFlags, aiLineBreakChar, axFontColor, apTextShape, apIconShape);
+				aiFlags, aiLineBreakChar, axFontColor, apTextShape, apIconShape,
+				rasterScale);
 		}
 
 		int alignmentOffset = 0;

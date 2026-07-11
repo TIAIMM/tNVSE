@@ -24,6 +24,9 @@ namespace fonthook
 	void LoadFreeTypeFontConfig();
 	void FreeTypeFontDebugLog(const char* apFormat, ...);
 	void FlushFreeTypeFontDebugLog();
+	void FinalizeFreeTypeUioDetection();
+	float ConsumeFreeTypeCreateTextScale();
+	void FreeTypeCreateTextEntryHook();
 	bool InitializeFreeTypeVectorRenderer();
 	bool ActivateFreeTypeFont(Font* apFont, bool abForce = false);
 	bool IsFreeTypeFontActive(const Font* apFont);
@@ -34,7 +37,7 @@ namespace fonthook
 	class VectorTextBuilder
 	{
 	public:
-		VectorTextBuilder(Font* apFont, bool abPrepareObject);
+		VectorTextBuilder(Font* apFont, bool abPrepareObject, float afRasterScale = 1.0f);
 		~VectorTextBuilder();
 
 		VectorTextBuilder(const VectorTextBuilder&) = delete;
