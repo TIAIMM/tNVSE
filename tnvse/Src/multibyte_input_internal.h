@@ -36,6 +36,7 @@ namespace fonthook
 	namespace multibyte_input
 	{
 		constexpr DWORD kDuplicateAsciiSuppressMs = 100;
+		constexpr UINT kMessage_FlushDeferredStewieAscii = WM_APP + 0x5E1;
 
 		constexpr UInt32 kInputCode_Backspace = 0x80000000;
 		constexpr UInt32 kInputCode_ArrowLeft = 0x80000001;
@@ -139,6 +140,12 @@ namespace fonthook
 		void ProcessStewieMenuSearchPendingStateSync();
 		bool ObserveStewieMenuSearchHotkeyMessage(UINT msg, WPARAM wParam, LPARAM lParam);
 		bool InsertWideTextStewie(const StewieInputTarget& target, std::wstring_view text);
+		bool HandleStewieWndProcAscii(const StewieInputTarget& target, UInt8 input);
+		bool HandleStewieImeEnter(const StewieInputTarget& target);
+		bool ShouldSuppressInputLanguageSwitchAscii(UInt8 input);
+		void SuppressStewieInputLanguageSwitchSpace();
+		bool FlushDeferredStewieAscii(UInt32 token);
+		void CancelDeferredStewieAscii();
 		bool RemovePreviousStewieAsciiCompositionEcho(wchar_t compositionLead);
 
 		bool HasOverlayInputTarget();
@@ -159,6 +166,7 @@ namespace fonthook
 		void HideSystemImeWindows(HWND hwnd);
 		void SetTextInputSessionActive(bool active);
 		void RefreshTextInputSessionForActiveTarget(const char* reason);
+		void EndStewieTextInputSession(const char* reason);
 		void SetGameImeEnabled(HWND hwnd, bool enable);
 		void RestoreDefaultGameImeContext(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);
 		void EnsureConfiguredImeOpen(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);

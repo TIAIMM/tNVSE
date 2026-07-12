@@ -322,7 +322,7 @@ namespace fonthook
 			hook.targetReported = false;
 			ResetMenuSearchStateSync(hook);
 			ClearStewieInputState();
-			HideCandidateOverlay();
+			EndStewieTextInputSession(reason);
 
 			DebugLog(
 				"tnvse_multibyte_input_event: source=StatePoll action=menusearch_deactivate reason=%s menu=%u tile=0x%08X visible=%.1f alpha=%.1f",
@@ -547,7 +547,7 @@ namespace fonthook
 			{
 				hook->keyboardActive = false;
 				ClearStewieInputState();
-				HideCandidateOverlay();
+				EndStewieTextInputSession("menusearch_ctrl_r");
 			}
 
 			DebugLog(
@@ -692,7 +692,7 @@ namespace fonthook
 					hook.keyboardActive = false;
 					ResetMenuSearchStateSync(hook);
 					ClearStewieInputState();
-					HideCandidateOverlay();
+					EndStewieTextInputSession("menusearch_sync_no_menu");
 					DebugLog(
 						"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_cancel_no_menu menu=%u",
 						hook.menuID);
@@ -705,7 +705,7 @@ namespace fonthook
 					hook.keyboardActive = false;
 					ResetMenuSearchStateSync(hook);
 					ClearStewieInputState();
-					HideCandidateOverlay();
+					EndStewieTextInputSession("menusearch_sync_deactivate");
 					DebugLog(
 						"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_deactivate menu=%u",
 						hook.menuID);
@@ -740,6 +740,8 @@ namespace fonthook
 				DebugLogMenuSearchState("sync_applied", hook, menu);
 				ResetMenuSearchStateSync(hook);
 				ClearStewieInputState();
+				if (!hook.keyboardActive)
+					EndStewieTextInputSession("menusearch_sync_closed");
 			}
 
 			for (StewieMenuSearchHook& hook : s_menuSearchHooks)
@@ -815,8 +817,7 @@ namespace fonthook
 			}
 			else
 			{
-				HideCandidateOverlay();
-				UpdateGameImeAssociation();
+				EndStewieTextInputSession("menusearch_ctrl_f_close");
 				DebugLog(
 					"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=menusearch_deactivate_immediate menu=%u",
 					MenuID(menu));
@@ -831,6 +832,13 @@ namespace fonthook
 				return controlHandled;
 
 			const StewieInputTarget target = FindStewieMenuSearchTarget(menu);
+			if (input == kInputCode_Enter
+				&& target.valid
+				&& HandleStewieImeEnter(target))
+			{
+				return true;
+			}
+
 			const bool handled = HandleStewieInput(menu, input);
 
 			// Stewie's Inventory and Stats InputField deactivates on Enter. Map
@@ -842,7 +850,7 @@ namespace fonthook
 				&& MenuID(menu) != PipboyData)
 			{
 				if (StewieMenuSearchHook* hook = FindMenuSearchHookByMenu(menu))
-					DeactivateMenuSearch(*hook, "inputfield_enter", target.tile);
+					DeactivateMenuSearch(*hook, "inputfield_enter");
 			}
 
 			return handled;

@@ -23,6 +23,27 @@ namespace fonthook
 			bool initialized = false;
 		};
 
+		struct PendingStewieAscii
+		{
+			UInt8 input = 0;
+			DWORD tick = 0;
+		};
+
+		enum class StewieAsciiSource : UInt8
+		{
+			Adapter,
+			WndProc,
+		};
+
+		struct DeferredStewieAscii
+		{
+			UInt32 token = 0;
+			StewieInputTarget target;
+			UInt8 input = 0;
+			bool adapterSeen = false;
+			bool wndProcSeen = false;
+		};
+
 		using StewieKeyboardHandler = bool(__thiscall*)(Menu*, UInt32);
 
 		bool s_stewieChecked = false;
@@ -34,6 +55,14 @@ namespace fonthook
 		UInt32 s_tileTraitIsSearchActive = 0;
 		UInt32 s_tileTraitCaretIndex = 0;
 		StewieShadowState s_stewieShadow;
+		std::vector<PendingStewieAscii> s_pendingStewieAdapterAscii;
+		std::vector<PendingStewieAscii> s_pendingStewieWndProcAscii;
+		std::vector<DeferredStewieAscii> s_deferredStewieAscii;
+		UInt32 s_nextDeferredStewieAsciiToken = 1;
+		DWORD s_lastDeferredStewieAsciiCommitTick = 0;
+		UInt8 s_lastDeferredStewieAsciiCommitChar = 0;
+		DWORD s_lastStewieSpaceCommitTick = 0;
+		StewieInputTarget s_lastStewieSpaceCommitTarget;
 
 		class StewieTweaksInputTargetEx
 		{
@@ -459,6 +488,251 @@ namespace fonthook
 			return InsertTextAtCaretStewie(target, converted);
 		}
 
+		bool ConsumePendingStewieAscii(std::vector<PendingStewieAscii>& pending, UInt8 input, DWORD now)
+		{
+			pending.erase(
+				std::remove_if(
+					pending.begin(),
+					pending.end(),
+					[now](const PendingStewieAscii& value)
+					{
+						return now - value.tick > kDuplicateAsciiSuppressMs;
+					}),
+				pending.end());
+
+			const auto match = std::find_if(
+				pending.begin(),
+				pending.end(),
+				[input](const PendingStewieAscii& value)
+				{
+					return value.input == input;
+				});
+			if (match == pending.end())
+				return false;
+
+			pending.erase(match);
+			return true;
+		}
+
+		void RecordPendingStewieAscii(std::vector<PendingStewieAscii>& pending, UInt8 input, DWORD now)
+		{
+			constexpr size_t kMaxPendingAscii = 16;
+			if (pending.size() >= kMaxPendingAscii)
+				pending.erase(pending.begin());
+			pending.push_back({ input, now });
+		}
+
+		void RecordStewieSpaceCommit(const StewieInputTarget& target, UInt8 input, DWORD now)
+		{
+			if (input != ' ')
+				return;
+
+			s_lastStewieSpaceCommitTick = now;
+			s_lastStewieSpaceCommitTarget = target;
+		}
+
+		bool DeferredSourceSeen(const DeferredStewieAscii& pending, StewieAsciiSource source)
+		{
+			return source == StewieAsciiSource::Adapter
+				? pending.adapterSeen
+				: pending.wndProcSeen;
+		}
+
+		void MarkDeferredSourceSeen(DeferredStewieAscii& pending, StewieAsciiSource source)
+		{
+			if (source == StewieAsciiSource::Adapter)
+				pending.adapterSeen = true;
+			else
+				pending.wndProcSeen = true;
+		}
+
+		bool ShouldDeferStewieAscii(const StewieInputTarget& target)
+		{
+			return target.kind == StewieInputKind::MenuSearch
+				&& s_window
+				&& IsConfiguredImeLayout(s_window)
+				&& !IsImeCompositionActive();
+		}
+
+		bool QueueDeferredStewieAscii(
+			const StewieInputTarget& target,
+			UInt8 input,
+			StewieAsciiSource source)
+		{
+			for (DeferredStewieAscii& pending : s_deferredStewieAscii)
+			{
+				if (pending.input != input
+					|| !SameStewieTarget(pending.target, target)
+					|| DeferredSourceSeen(pending, source))
+				{
+					continue;
+				}
+
+				MarkDeferredSourceSeen(pending, source);
+				return true;
+			}
+
+			DeferredStewieAscii pending;
+			pending.token = s_nextDeferredStewieAsciiToken++;
+			if (!pending.token)
+				pending.token = s_nextDeferredStewieAsciiToken++;
+			pending.target = target;
+			pending.input = input;
+			MarkDeferredSourceSeen(pending, source);
+			s_deferredStewieAscii.push_back(pending);
+
+			if (PostMessageA(s_window, kMessage_FlushDeferredStewieAscii, pending.token, 0))
+			{
+				DebugLog(
+					"tnvse_multibyte_input_event: source=StewieAscii action=defer_ascii input=0x%08X token=%u source=%s",
+					static_cast<UInt32>(input),
+					pending.token,
+					source == StewieAsciiSource::Adapter ? "adapter" : "wndproc");
+				return true;
+			}
+
+			s_deferredStewieAscii.pop_back();
+			const char ch = static_cast<char>(input);
+			const bool inserted = InsertTextAtCaretStewie(target, std::string_view(&ch, 1));
+			if (inserted)
+			{
+				std::vector<PendingStewieAscii>& own = source == StewieAsciiSource::Adapter
+					? s_pendingStewieAdapterAscii
+					: s_pendingStewieWndProcAscii;
+				RecordPendingStewieAscii(own, input, GetTickCount());
+				s_lastDeferredStewieAsciiCommitTick = GetTickCount();
+				s_lastDeferredStewieAsciiCommitChar = input;
+				RecordStewieSpaceCommit(target, input, s_lastDeferredStewieAsciiCommitTick);
+			}
+			return inserted;
+		}
+
+		bool HandleStewieAscii(
+			const StewieInputTarget& target,
+			UInt8 input,
+			StewieAsciiSource source)
+		{
+			if (!target.valid || input < 0x20 || input > 0x7E)
+				return false;
+			if (ShouldSuppressInputLanguageSwitchAscii(input))
+				return true;
+
+			const DWORD now = GetTickCount();
+			std::vector<PendingStewieAscii>& opposite = source == StewieAsciiSource::Adapter
+				? s_pendingStewieWndProcAscii
+				: s_pendingStewieAdapterAscii;
+			if (ConsumePendingStewieAscii(opposite, input, now))
+				return true;
+
+			if (ShouldDeferStewieAscii(target))
+				return QueueDeferredStewieAscii(target, input, source);
+
+			const char ch = static_cast<char>(input);
+			if (!InsertTextAtCaretStewie(target, std::string_view(&ch, 1)))
+				return false;
+
+			std::vector<PendingStewieAscii>& own = source == StewieAsciiSource::Adapter
+				? s_pendingStewieAdapterAscii
+				: s_pendingStewieWndProcAscii;
+			RecordPendingStewieAscii(own, input, now);
+			RecordStewieSpaceCommit(target, input, now);
+			return true;
+		}
+
+		bool HandleStewieWndProcAscii(const StewieInputTarget& target, UInt8 input)
+		{
+			return HandleStewieAscii(target, input, StewieAsciiSource::WndProc);
+		}
+
+		bool FlushDeferredStewieAscii(UInt32 token)
+		{
+			const auto match = std::find_if(
+				s_deferredStewieAscii.begin(),
+				s_deferredStewieAscii.end(),
+				[token](const DeferredStewieAscii& pending)
+				{
+					return pending.token == token;
+				});
+			if (match == s_deferredStewieAscii.end())
+				return false;
+
+			const DeferredStewieAscii pending = *match;
+			s_deferredStewieAscii.erase(match);
+			if (IsImeCompositionActive())
+				return true;
+
+			const StewieInputTarget target = GetOverlayStewieInputTarget();
+			if (!target.valid || !SameStewieTarget(target, pending.target))
+				return true;
+
+			const char ch = static_cast<char>(pending.input);
+			if (!InsertTextAtCaretStewie(target, std::string_view(&ch, 1)))
+				return true;
+
+			s_lastDeferredStewieAsciiCommitTick = GetTickCount();
+			s_lastDeferredStewieAsciiCommitChar = pending.input;
+			RecordStewieSpaceCommit(target, pending.input, s_lastDeferredStewieAsciiCommitTick);
+			if (pending.adapterSeen != pending.wndProcSeen)
+			{
+				std::vector<PendingStewieAscii>& own = pending.adapterSeen
+					? s_pendingStewieAdapterAscii
+					: s_pendingStewieWndProcAscii;
+				RecordPendingStewieAscii(own, pending.input, s_lastDeferredStewieAsciiCommitTick);
+			}
+			DebugLog(
+				"tnvse_multibyte_input_event: source=WndProc action=flush_deferred_stewie_ascii input=0x%08X token=%u",
+				static_cast<UInt32>(pending.input),
+				token);
+			return true;
+		}
+
+		void CancelDeferredStewieAscii()
+		{
+			if (s_deferredStewieAscii.empty())
+				return;
+
+			DebugLog(
+				"tnvse_multibyte_input_event: source=IMEComposition action=cancel_deferred_stewie_ascii count=%u",
+				static_cast<UInt32>(s_deferredStewieAscii.size()));
+			s_deferredStewieAscii.clear();
+		}
+
+		void SuppressStewieInputLanguageSwitchSpace()
+		{
+			CancelDeferredStewieAscii();
+			s_pendingStewieAdapterAscii.clear();
+			s_pendingStewieWndProcAscii.clear();
+
+			constexpr DWORD kLanguageSwitchRollbackMs = 250;
+			const StewieInputTarget target = GetOverlayStewieInputTarget();
+			if (!s_lastStewieSpaceCommitTick
+				|| GetTickCount() - s_lastStewieSpaceCommitTick > kLanguageSwitchRollbackMs
+				|| !target.valid
+				|| !SameStewieTarget(target, s_lastStewieSpaceCommitTarget))
+			{
+				s_lastStewieSpaceCommitTick = 0;
+				s_lastStewieSpaceCommitTarget = {};
+				return;
+			}
+
+			EnsureStewieShadow(target);
+			const size_t caret = ClampStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret);
+			if (caret)
+			{
+				const size_t previous = PreviousStewieBoundary(target, s_stewieShadow.text, caret);
+				if (caret - previous == 1 && s_stewieShadow.text[previous] == ' ')
+				{
+					std::string candidate = s_stewieShadow.text;
+					candidate.erase(previous, 1);
+					CommitStewieShadow(target, std::move(candidate), previous);
+					DebugLog("tnvse_multibyte_input_event: source=WinSpace action=rollback_search_space");
+				}
+			}
+
+			s_lastStewieSpaceCommitTick = 0;
+			s_lastStewieSpaceCommitTarget = {};
+		}
+
 		bool DeletePreviousStewieChar(const StewieInputTarget& target)
 		{
 			EnsureStewieShadow(target);
@@ -517,6 +791,14 @@ namespace fonthook
 
 		bool RemovePreviousStewieAsciiCompositionEcho(wchar_t compositionLead)
 		{
+			if (!s_lastDeferredStewieAsciiCommitChar
+				|| GetTickCount() - s_lastDeferredStewieAsciiCommitTick > kDuplicateAsciiSuppressMs
+				|| !AsciiEqualsIgnoreCase(s_lastDeferredStewieAsciiCommitChar, compositionLead))
+			{
+				return false;
+			}
+			s_lastDeferredStewieAsciiCommitChar = 0;
+
 			StewieInputTarget target = GetOverlayStewieInputTarget();
 			if (!target.valid)
 				return false;
@@ -541,6 +823,13 @@ namespace fonthook
 		void ClearStewieInputState()
 		{
 			s_stewieShadow = StewieShadowState();
+			s_pendingStewieAdapterAscii.clear();
+			s_pendingStewieWndProcAscii.clear();
+			s_deferredStewieAscii.clear();
+			s_lastDeferredStewieAsciiCommitTick = 0;
+			s_lastDeferredStewieAsciiCommitChar = 0;
+			s_lastStewieSpaceCommitTick = 0;
+			s_lastStewieSpaceCommitTarget = {};
 		}
 
 		bool HandleStewieInput(Menu* menu, UInt32 input)
@@ -602,15 +891,10 @@ namespace fonthook
 				if (IsImeConsumingAscii())
 					return true;
 
-				if (s_lastWndProcAsciiChar == static_cast<UInt8>(input)
-					&& GetTickCount() - s_lastWndProcAsciiTick <= kDuplicateAsciiSuppressMs)
-				{
-					s_lastWndProcAsciiChar = 0;
-					return true;
-				}
-
-				const char ch = static_cast<char>(input);
-				return InsertTextAtCaretStewie(target, std::string_view(&ch, 1));
+				return HandleStewieAscii(
+					target,
+					static_cast<UInt8>(input),
+					StewieAsciiSource::Adapter);
 			}
 
 			if (input > 0x7F && input <= 0xFF)

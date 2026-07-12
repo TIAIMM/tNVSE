@@ -13,6 +13,9 @@ namespace fonthook
 		bool s_compositionEchoChecked = false;
 		DWORD s_lastImeCommitTick = 0;
 		UInt32 s_suppressedImeCharCount = 0;
+		DWORD s_lastStewieImeCommitTick = 0;
+		DWORD s_lastStewieImeEnterKeyTick = 0;
+		DWORD s_inputLanguageSwitchGuardUntilTick = 0;
 
 		struct ImeCandidateState
 		{
@@ -43,9 +46,74 @@ namespace fonthook
 		CandidateOverlayState s_candidateOverlay;
 		bool s_tsfCandidateActive = false;
 		bool s_hidingSystemImeWindows = false;
-		bool s_gameImeContextDetached = false;
+		bool s_gameImeEnabled = false;
 		bool s_textInputSessionActive = false;
 		DWORD s_nativeImeAsciiGuardUntilTick = 0;
+
+		struct TsfUiElementSession
+		{
+			DWORD id = 0;
+			UInt32 generation = 0;
+		};
+
+		UInt32 s_tsfSessionGeneration = 1;
+		std::vector<TsfUiElementSession> s_tsfUiElementSessions;
+
+		void AdvanceTsfCandidateSession()
+		{
+			if (++s_tsfSessionGeneration == 0)
+			{
+				s_tsfSessionGeneration = 1;
+				s_tsfUiElementSessions.clear();
+			}
+		}
+
+		bool RegisterTsfUiElement(DWORD id)
+		{
+			const auto existing = std::find_if(
+				s_tsfUiElementSessions.begin(),
+				s_tsfUiElementSessions.end(),
+				[id](const TsfUiElementSession& value)
+				{
+					return value.id == id;
+				});
+			if (existing != s_tsfUiElementSessions.end())
+				return existing->generation == s_tsfSessionGeneration;
+
+			constexpr size_t kMaxRememberedTsfUiElements = 64;
+			if (s_tsfUiElementSessions.size() >= kMaxRememberedTsfUiElements)
+				s_tsfUiElementSessions.erase(s_tsfUiElementSessions.begin());
+			s_tsfUiElementSessions.push_back({ id, s_tsfSessionGeneration });
+			return true;
+		}
+
+		bool IsCurrentTsfUiElement(DWORD id)
+		{
+			return std::any_of(
+				s_tsfUiElementSessions.begin(),
+				s_tsfUiElementSessions.end(),
+				[id](const TsfUiElementSession& value)
+				{
+					return value.id == id && value.generation == s_tsfSessionGeneration;
+				});
+		}
+
+		bool ReleaseTsfUiElement(DWORD id)
+		{
+			const auto existing = std::find_if(
+				s_tsfUiElementSessions.begin(),
+				s_tsfUiElementSessions.end(),
+				[id](const TsfUiElementSession& value)
+				{
+					return value.id == id;
+				});
+			if (existing == s_tsfUiElementSessions.end())
+				return false;
+
+			const bool wasCurrent = existing->generation == s_tsfSessionGeneration;
+			s_tsfUiElementSessions.erase(existing);
+			return wasCurrent;
+		}
 
 		template <class T>
 		void SafeRelease(T*& ptr)
@@ -96,11 +164,22 @@ namespace fonthook
 
 			STDMETHODIMP BeginUIElement(DWORD dwUIElementId, BOOL* pbShow) override
 			{
+				const bool hasOverlayTarget = HasOverlayInputTarget();
+				const bool acceptsCandidates = s_imeComposing
+					&& hasOverlayTarget
+					&& RegisterTsfUiElement(dwUIElementId);
 				if (pbShow
 					&& g_bMultibyteInputHideSystemCandidateWindow
 					&& IsCandidateOverlayRendererAvailable()
-					&& HasOverlayInputTarget())
+					&& hasOverlayTarget)
 					*pbShow = FALSE;
+
+				if (!acceptsCandidates)
+				{
+					ClearImeCandidates();
+					UpdateCandidateOverlay();
+					return S_OK;
+				}
 
 				ReadCandidateElement(dwUIElementId);
 				UpdateCandidateOverlay();
@@ -109,13 +188,25 @@ namespace fonthook
 
 			STDMETHODIMP UpdateUIElement(DWORD dwUIElementId) override
 			{
+				if (!s_imeComposing
+					|| !HasOverlayInputTarget()
+					|| !IsCurrentTsfUiElement(dwUIElementId))
+				{
+					ClearImeCandidates();
+					UpdateCandidateOverlay();
+					return S_OK;
+				}
+
 				ReadCandidateElement(dwUIElementId);
 				UpdateCandidateOverlay();
 				return S_OK;
 			}
 
-			STDMETHODIMP EndUIElement(DWORD) override
+			STDMETHODIMP EndUIElement(DWORD dwUIElementId) override
 			{
+				if (!ReleaseTsfUiElement(dwUIElementId))
+					return S_OK;
+
 				s_tsfCandidateActive = false;
 				if (s_imeCandidateState.candidatesFromTsf)
 					ClearImeCandidates();
@@ -741,8 +832,6 @@ namespace fonthook
 			if (!hwnd)
 				return;
 
-			ImmAssociateContextEx(hwnd, nullptr, IACE_DEFAULT);
-			s_gameImeContextDetached = false;
 			if (!IsConfiguredImeLayout(hwnd, expectedLayout))
 			{
 				s_nativeImeAsciiGuardUntilTick = 0;
@@ -762,32 +851,25 @@ namespace fonthook
 		{
 			if (!hwnd)
 				return;
+			if (s_gameImeEnabled == enable)
+				return;
+
+			// Change the state before calling IMM. Cancel can synchronously deliver
+			// IME messages, and those messages must observe the disabled state.
+			s_gameImeEnabled = enable;
 
 			if (enable)
 			{
-				if (!s_gameImeContextDetached)
-					return;
-
 				RestoreDefaultGameImeContext(hwnd, "enable");
 				DebugLog("tnvse_multibyte_input: game IME context enabled");
 				return;
 			}
 
-			if (s_gameImeContextDetached)
-				return;
-
 			CancelGameImeComposition(hwnd);
 			s_imeComposing = false;
 			ClearImePreviewState();
 			HideCandidateOverlay();
-
-			if (!s_gameImeContextDetached)
-			{
-				ImmAssociateContext(hwnd, nullptr);
-				s_gameImeContextDetached = true;
-			}
-
-			DebugLog("tnvse_multibyte_input: game IME context disabled");
+			DebugLog("tnvse_multibyte_input: game IME input disabled; context retained");
 		}
 
 		void SetTextInputSessionActive(bool active)
@@ -797,12 +879,7 @@ namespace fonthook
 
 			s_textInputSessionActive = active;
 			if (s_window)
-			{
-				if (active)
-					RestoreDefaultGameImeContext(s_window, "session_start");
-				else
-					SetGameImeEnabled(s_window, false);
-			}
+				SetGameImeEnabled(s_window, active);
 
 			DebugLog(
 				"tnvse_multibyte_input: text input session %s",
@@ -812,9 +889,19 @@ namespace fonthook
 		void RefreshTextInputSessionForActiveTarget(const char* reason)
 		{
 			const bool wasActive = s_textInputSessionActive;
+			CancelDeferredStewieAscii();
+			s_imeComposing = false;
+			AdvanceTsfCandidateSession();
+			ClearImePreviewState();
+			HideCandidateOverlay();
 			s_textInputSessionActive = true;
 			if (s_window)
-				RestoreDefaultGameImeContext(s_window, reason ? reason : "target_refresh");
+			{
+				if (s_gameImeEnabled)
+					RestoreDefaultGameImeContext(s_window, reason ? reason : "target_refresh");
+				else
+					SetGameImeEnabled(s_window, true);
+			}
 
 			DebugLog(
 				"tnvse_multibyte_input: text input session %s reason=%s",
@@ -828,6 +915,24 @@ namespace fonthook
 				return;
 
 			SetTextInputSessionActive(GetCurrentTextEditMenuObject() != nullptr || GetOverlayStewieInputTarget().valid);
+		}
+
+		void EndStewieTextInputSession(const char* reason)
+		{
+			CancelDeferredStewieAscii();
+			s_imeComposing = false;
+			s_nativeImeAsciiGuardUntilTick = 0;
+			s_lastStewieImeCommitTick = 0;
+			s_lastStewieImeEnterKeyTick = 0;
+			AdvanceTsfCandidateSession();
+			ClearImePreviewState();
+			HideCandidateOverlay();
+			SetTextInputSessionActive(false);
+			UpdateGameImeAssociation();
+
+			DebugLog(
+				"tnvse_multibyte_input: Stewie text input session reset reason=%s",
+				reason ? reason : "unknown");
 		}
 
 		bool IsImeWindowMessage(UINT msg)
@@ -860,6 +965,16 @@ namespace fonthook
 				return false;
 
 			return IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
+		}
+
+		bool ShouldSuppressInputLanguageSwitchAscii(UInt8 input)
+		{
+			if (input != ' ')
+				return false;
+
+			return IsVirtualKeyDown(VK_LWIN)
+				|| IsVirtualKeyDown(VK_RWIN)
+				|| static_cast<SInt32>(s_inputLanguageSwitchGuardUntilTick - GetTickCount()) > 0;
 		}
 
 		HKL GetGameKeyboardLayout(HWND hwnd)
@@ -1233,6 +1348,14 @@ namespace fonthook
 			}
 
 			s_lastImeCommitTick = GetTickCount();
+			constexpr DWORD kImeEnterPairMs = 250;
+			if (stewieTarget.valid
+				&& s_lastStewieImeEnterKeyTick
+				&& s_lastImeCommitTick - s_lastStewieImeEnterKeyTick <= kImeEnterPairMs)
+			{
+				s_lastStewieImeCommitTick = s_lastImeCommitTick;
+				s_lastStewieImeEnterKeyTick = 0;
+			}
 			s_suppressedImeCharCount = static_cast<UInt32>(result.size());
 			ClearImePreviewState();
 			RefreshImeStatus(hwnd);
@@ -1245,6 +1368,75 @@ namespace fonthook
 				DebugLogState("WndProc.WM_IME_COMPOSITION", "result_inserted", menu, static_cast<SInt32>(lParam));
 			DebugLog("tnvse_multibyte_input: committed IME result chars=%u", s_suppressedImeCharCount);
 			return true;
+		}
+
+		std::wstring GetStewieImeEnterLiteral(HWND hwnd)
+		{
+			std::wstring literal = GetImeCompositionString(hwnd, GCS_COMPREADSTR);
+			if (literal.empty())
+				literal = GetImeCompositionString(hwnd, GCS_COMPSTR);
+			if (literal.empty())
+				literal = s_imeCandidateState.composition;
+
+			if (g_uiEncoding == 1)
+			{
+				literal.erase(
+					std::remove_if(
+						literal.begin(),
+						literal.end(),
+						[](wchar_t value)
+						{
+							return !((value >= L'A' && value <= L'Z')
+								|| (value >= L'a' && value <= L'z'));
+						}),
+					literal.end());
+			}
+
+			return literal;
+		}
+
+		bool HandleStewieImeEnter(const StewieInputTarget& target)
+		{
+			if (!target.valid || !s_window || !IsConfiguredImeLayout(s_window))
+				return false;
+
+			std::wstring composition = GetStewieImeEnterLiteral(s_window);
+
+			if (!composition.empty())
+			{
+				CancelDeferredStewieAscii();
+				s_lastStewieImeEnterKeyTick = 0;
+				CancelGameImeComposition(s_window);
+				s_imeComposing = false;
+				ClearImePreviewState();
+
+				const bool inserted = InsertWideTextStewie(target, composition);
+				EnsureConfiguredImeOpen(s_window, "menusearch_enter_literal");
+				RefreshImeStatus(s_window);
+				UpdateCandidateOverlay();
+				DebugLog(
+					"tnvse_multibyte_input_event: source=MenuSearch.Enter action=commit_ime_literal chars=%u inserted=%u",
+					static_cast<UInt32>(composition.size()),
+					inserted ? 1 : 0);
+				return true;
+			}
+
+			if (IsImeCompositionActive() || !s_imeCandidateState.candidates.empty())
+			{
+				s_lastStewieImeEnterKeyTick = 0;
+				return true;
+			}
+
+			constexpr DWORD kImeEnterPairMs = 250;
+			if (s_lastStewieImeCommitTick
+				&& GetTickCount() - s_lastStewieImeCommitTick <= kImeEnterPairMs)
+			{
+				s_lastStewieImeCommitTick = 0;
+				DebugLog("tnvse_multibyte_input_event: source=MenuSearch.Enter action=suppress_paired_ime_enter");
+				return true;
+			}
+
+			return false;
 		}
 
 		bool ShouldSuppressDuplicateImeChar()
@@ -1294,8 +1486,7 @@ namespace fonthook
 							return true;
 						}
 
-						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_CHAR action=consume_ascii_handled_by_stewie_adapter input=0x%08X", static_cast<UInt32>(wParam));
-						return true;
+						return HandleStewieWndProcAscii(stewieTarget, static_cast<UInt8>(wParam));
 					}
 
 					if (wParam < 0x80)
@@ -1383,6 +1574,12 @@ namespace fonthook
 		{
 			if (s_hooksInstalled)
 			{
+				if (msg == kMessage_FlushDeferredStewieAscii)
+				{
+					FlushDeferredStewieAscii(static_cast<UInt32>(wParam));
+					return 0;
+				}
+
 				TryInstallJipTextInputHook();
 				TryInstallStewieTweaksInputHooks();
 				ObserveStewieMenuSearchHotkeyMessage(msg, wParam, lParam);
@@ -1390,6 +1587,13 @@ namespace fonthook
 				TextEditMenu* inputTarget = GetOverlayTextInputMenu();
 				StewieInputTarget stewieOverlayTarget = GetOverlayStewieInputTarget();
 				const bool hasInputTarget = inputTarget || stewieOverlayTarget.valid;
+				if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+					&& wParam == VK_RETURN
+					&& stewieOverlayTarget.valid
+					&& IsConfiguredImeLayout(hwnd))
+				{
+					s_lastStewieImeEnterKeyTick = GetTickCount();
+				}
 				if (hasInputTarget)
 				{
 					SetTextInputSessionActive(true);
@@ -1401,8 +1605,6 @@ namespace fonthook
 
 				if (msg == WM_INPUTLANGCHANGEREQUEST && s_textInputSessionActive)
 				{
-					ImmAssociateContextEx(hwnd, nullptr, IACE_DEFAULT);
-					s_gameImeContextDetached = false;
 					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_INPUTLANGCHANGEREQUEST action=def_window_proc");
 					return DefWindowProcA(hwnd, msg, wParam, lParam);
 				}
@@ -1422,6 +1624,8 @@ namespace fonthook
 
 				if (s_textInputSessionActive && IsWinSpaceInputLanguageHotkey(msg, wParam))
 				{
+					s_inputLanguageSwitchGuardUntilTick = GetTickCount() + 250;
+					SuppressStewieInputLanguageSwitchSpace();
 					RestoreDefaultGameImeContext(hwnd, "winspace_before");
 					HKL previousLayout = ActivateKeyboardLayout(reinterpret_cast<HKL>(HKL_NEXT), KLF_SETFORPROCESS);
 					HKL currentLayout = GetGameKeyboardLayout(hwnd);
@@ -1458,6 +1662,7 @@ namespace fonthook
 
 				if (msg == WM_IME_STARTCOMPOSITION && hasInputTarget)
 				{
+					CancelDeferredStewieAscii();
 					HideSystemImeWindows(hwnd);
 					s_imeComposing = true;
 					s_compositionEchoChecked = false;
@@ -1465,7 +1670,10 @@ namespace fonthook
 					RefreshImeStatus(hwnd);
 					RefreshImeComposition(hwnd);
 					TryRemoveCompositionEcho();
-					RefreshImeCandidates(hwnd);
+					// Candidate data is not valid until TSF or IMN_OPENCANDIDATE /
+					// IMN_CHANGECANDIDATE publishes it for this composition. Reading
+					// IMM here can return the previous composition's cached list.
+					ClearImeCandidates();
 					UpdateCandidateOverlay();
 					DebugLogState("WndProc.WM_IME_STARTCOMPOSITION", "composition_start", GetAnyActiveTextInputMenu(), 0);
 				}
@@ -1478,7 +1686,9 @@ namespace fonthook
 					case IMN_OPENCANDIDATE:
 					case IMN_SETCANDIDATEPOS:
 					case IMN_CHANGECANDIDATE:
-						RefreshImeCandidates(hwnd);
+						// Candidate list updates are driven by WM_IME_NOTIFY and the TSF
+						// UI element sink. Do not poll IMM during composition text updates;
+						// some IMEs retain the previous list until the open/change notify.
 						UpdateCandidateOverlay();
 						DebugLog(
 							"tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=refresh_candidates notify=0x%08X count=%u selection=%u pageStart=%u pageSize=%u",
@@ -1506,6 +1716,9 @@ namespace fonthook
 
 				if (msg == WM_IME_COMPOSITION)
 				{
+					if (lParam & GCS_COMPSTR)
+						CancelDeferredStewieAscii();
+
 					TextEditMenu* activeTarget = GetAnyActiveTextInputMenu();
 					TextEditMenu* overlayTarget = inputTarget;
 					if (hasInputTarget)
@@ -1666,11 +1879,16 @@ namespace fonthook
 		{
 			s_textInputSessionActive = false;
 			s_imeComposing = false;
+			s_tsfSessionGeneration = 1;
+			s_tsfUiElementSessions.clear();
 			ClearImePreviewState();
 			HideCandidateOverlay();
 			ReleaseCandidateOverlayTexture();
 			s_suppressedImeCharCount = 0;
 			s_lastImeCommitTick = 0;
+			s_lastStewieImeCommitTick = 0;
+			s_lastStewieImeEnterKeyTick = 0;
+			s_inputLanguageSwitchGuardUntilTick = 0;
 			s_lastWndProcAsciiTick = 0;
 			s_lastWndProcAsciiChar = 0;
 			ClearJipTextInputHookState();
