@@ -236,12 +236,12 @@
     <font id="5" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
-      <singleByte pixelSize="28" tracking="0" fixedWidth="17" scaleX="1" scaleY="1"
+      <singleByte pixelSize="32" tracking="0" fixedWidth="17" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="-1">
-        <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\FixedsysExcelsior.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
-      <doubleByte pixelSize="26" tracking="0" fixedWidth="0" scaleX="1" scaleY="1"
+      <doubleByte pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\WenQuanYi Bitmap Song 16px.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
@@ -293,7 +293,7 @@
     <font id="8" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
-      <singleByte pixelSize="52" tracking="0" scaleX="1" scaleY="1"
+      <singleByte pixelSize="52" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
