@@ -49,6 +49,9 @@ namespace fonthook
 	void FinalizeFreeTypeA8Detection();
 	void HandleFreeTypeA8MainLoop();
 	void HandleFreeTypeShaderLoaderMessage(UInt32 auiMessageType);
+	void InitializeFreeTypeDefaultPoolAtlas();
+	void HandleFreeTypeDefaultPoolAtlasMainLoop();
+	void ShutdownFreeTypeDefaultPoolAtlas();
 	void PumpFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
 	void UpdateFreeTypeDevicePixelScale();

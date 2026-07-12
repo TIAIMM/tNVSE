@@ -132,6 +132,9 @@
     <ClCompile Include="Src\load_config.cpp">
       <Filter>Source Files\Config</Filter>
     </ClCompile>
+	<ClCompile Include="Src\plugin_dependencies.cpp">
+	  <Filter>Source Files\Config</Filter>
+	</ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Src\tnvse.h">
@@ -194,6 +197,9 @@
     <ClInclude Include="Src\load_config.h">
       <Filter>Header Files\Config</Filter>
     </ClInclude>
+	<ClInclude Include="Src\plugin_dependencies.h">
+	  <Filter>Header Files\Config</Filter>
+	</ClInclude>
     <ClInclude Include="Src\nvse\PluginAPI.h">
       <Filter>Header Files\NVSE</Filter>
     </ClInclude>

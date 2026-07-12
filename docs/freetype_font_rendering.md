@@ -145,10 +145,23 @@ vertex/UV/index templates. Shadow, glow, outline, and fill are emitted into one
 `NiTriShape` using the shared atlas. A8 and 32-bit profiles use separate cache
 keys and may coexist when text was created before Shader Loader initialization.
 
-Generated grayscale masks, layouts, batch templates, and persistent atlas pages
-are cached in process memory. `uiFreeTypeFontMemoryCacheMB` in `tnvse.ini`
-controls their combined budget. Cache misses are handled at runtime; tNVSE does
-not perform background code-page generation or glyph-cache file I/O.
+Generated grayscale masks, layouts, and batch templates are cached in process
+memory. `uiFreeTypeFontMemoryCacheMB` controls those CPU-side caches. When
+`bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
+atlas textures and retains only the masks used by each live atlas generation;
+it does not retain a complete CPU copy of the atlas. The current and retired
+generations are restored from those masks after a D3D9 device reset. If the
+DEFAULT-pool path is unavailable, that profile falls back to the engine-managed
+atlas implementation.
+
+`uiFreeTypeFontGpuAtlasCacheMB` controls the soft GPU atlas budget. A value of
+zero selects one eighth of the available texture memory, rounded to 16 MB and
+clamped to 64-256 MB; 128 MB is used when the device does not report a reliable
+value. A nonzero value is used directly. Atlas generations still referenced by
+visible game shapes cannot be evicted, so live usage may temporarily exceed the
+soft budget. The resolved value is written to `tnvse.log` at initialization and
+when a device reset changes the automatic result. Cache misses are handled at
+runtime; tNVSE does not perform glyph-cache file I/O.
 
 FreeType rasterization remains CPU based. Adding Skia, D3D11, or D3D12 would
 require a readback or cross-API copy before Fallout New Vegas can consume the

@@ -12,9 +12,11 @@
 #include "NiTexturingProperty.hpp"
 #include "NiTriShape.hpp"
 #include "NiTriShapeData.hpp"
+#include "Utils/SafeWrite.h"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -32,11 +34,10 @@ namespace fonthook::vectorfont
 		constexpr UInt32 kAtlasHardLimit = 4096;
 		constexpr UInt32 kMaximumQuads = 16383;
 		constexpr float kLayerDepthStep = 0.01f;
-
-		size_t GetAtlasCacheLimit()
-		{
-			return static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 2u;
-		}
+		constexpr UInt32 kAutomaticAtlasBudgetFallbackMB = 128;
+		constexpr UInt32 kAutomaticAtlasBudgetMinimumMB = 64;
+		constexpr UInt32 kAutomaticAtlasBudgetMaximumMB = 256;
+		constexpr UInt32 kAutomaticAtlasBudgetQuantumMB = 16;
 
 		enum class AtlasLayer : UInt8
 		{
@@ -50,6 +51,12 @@ namespace fonthook::vectorfont
 		{
 			Argb32 = 0,
 			A8 = 1,
+		};
+
+		enum class AtlasBackend : UInt8
+		{
+			Managed = 0,
+			DefaultPool = 1,
 		};
 
 		struct AtlasRect
@@ -71,8 +78,17 @@ namespace fonthook::vectorfont
 			UInt32 shelfHeight = 0;
 			UInt32 generation = 0;
 			AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
+			AtlasBackend backend = AtlasBackend::Managed;
+			bool resetPending = false;
+			bool transient = false;
 			std::vector<UInt8> pixels;
 			std::unordered_map<UInt64, AtlasRect> placements;
+			std::unordered_map<UInt64, std::shared_ptr<const GlyphBitmap>> residentBitmaps;
+		};
+
+		struct RetiredAtlasGeneration
+		{
+			std::shared_ptr<AtlasResource> resource;
 		};
 
 		struct AtlasCacheKey
@@ -163,6 +179,13 @@ namespace fonthook::vectorfont
 		std::list<AtlasCacheKey> s_atlasLru;
 		size_t s_atlasCacheBytes = 0;
 		std::mutex s_atlasMutex;
+		std::vector<RetiredAtlasGeneration> s_retiredAtlases;
+		bool s_defaultPoolResetRegistered = false;
+		bool s_defaultPoolShutdown = false;
+		bool s_budgetResolved = false;
+		size_t s_resolvedGpuBudgetBytes = 0;
+		UInt32 s_lastAvailableTextureMemoryMB = 0;
+		UInt32 s_defaultPoolFailureLogCount = 0;
 		UInt32 s_atlasFailureLogCount = 0;
 		std::unordered_set<UInt64> s_loggedAtlasBatches;
 		std::unordered_set<UInt32> s_loggedVerticalMetricFonts;
@@ -173,6 +196,24 @@ namespace fonthook::vectorfont
 		std::mutex s_batchMutex;
 
 		NiTexture* GetAtlasTexture(const AtlasResource& resource);
+		void RetireDefaultGeneration(const AtlasResource& resource);
+		NiTexturingProperty* CreateManagedAtlasProperty(UInt32 width, UInt32 height,
+			AtlasPixelMode mode, const std::vector<UInt8>& source,
+			NiPixelDataPtr& outPixelData);
+
+		class DefaultAtlasTexture : public NiTexture
+		{
+		public:
+			static DefaultAtlasTexture* Create(IDirect3DTexture9* texture,
+				AtlasPixelMode mode);
+			UInt32 GetWidthEx() const;
+			UInt32 GetHeightEx() const;
+
+		private:
+			static void* s_vtable[41];
+		};
+
+		void* DefaultAtlasTexture::s_vtable[41] = {};
 
 		NiColorA ResolveFillColor(const FontColorStyle& style, const NiColorA& source)
 		{
@@ -218,6 +259,138 @@ namespace fonthook::vectorfont
 					renderer->m_kD3DCaps9.MaxTextureHeight));
 			}
 			return std::max<UInt32>(64, result);
+		}
+
+		UInt32 ResolveAutomaticGpuBudgetMB(UInt32& availableMB)
+		{
+			availableMB = 0;
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
+			if (!device)
+				return kAutomaticAtlasBudgetFallbackMB;
+			availableMB = device->GetAvailableTextureMem() / (1024u * 1024u);
+			if (availableMB < 64 || availableMB > 4096)
+				return kAutomaticAtlasBudgetFallbackMB;
+			UInt32 budget = availableMB / 8u;
+			budget = (budget / kAutomaticAtlasBudgetQuantumMB)
+				* kAutomaticAtlasBudgetQuantumMB;
+			return std::clamp(budget, kAutomaticAtlasBudgetMinimumMB,
+				kAutomaticAtlasBudgetMaximumMB);
+		}
+
+		void ResolveGpuAtlasBudget(bool force)
+		{
+			if (s_budgetResolved && !force)
+				return;
+			const size_t previous = s_resolvedGpuBudgetBytes;
+			UInt32 availableMB = 0;
+			UInt32 resolvedMB = g_uiFreeTypeFontGpuAtlasCacheMB;
+			const bool automatic = resolvedMB == 0;
+			if (automatic)
+				resolvedMB = ResolveAutomaticGpuBudgetMB(availableMB);
+			s_lastAvailableTextureMemoryMB = availableMB;
+			s_resolvedGpuBudgetBytes = static_cast<size_t>(resolvedMB)
+				* 1024u * 1024u;
+			s_budgetResolved = true;
+			if (!previous)
+			{
+				if (automatic)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: GPU atlas cache budget configured=0 resolved=%uMB source=automatic availableTextureMem=%uMB",
+						resolvedMB, availableMB);
+				}
+				else
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: GPU atlas cache budget configured=%u resolved=%uMB source=configured",
+						g_uiFreeTypeFontGpuAtlasCacheMB, resolvedMB);
+				}
+			}
+			else if (previous != s_resolvedGpuBudgetBytes)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: GPU atlas cache budget changed old=%uMB new=%uMB availableTextureMem=%uMB",
+					static_cast<UInt32>(previous / (1024u * 1024u)), resolvedMB,
+					availableMB);
+			}
+		}
+
+		size_t GetAtlasCacheLimit()
+		{
+			if (!g_bEnableFreeTypeDefaultPoolAtlas)
+			{
+				return static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB)
+					* 1024u * 1024u / 2u;
+			}
+			ResolveGpuAtlasBudget(false);
+			return s_resolvedGpuBudgetBytes
+				? s_resolvedGpuBudgetBytes
+				: static_cast<size_t>(kAutomaticAtlasBudgetFallbackMB) * 1024u * 1024u;
+		}
+
+		UInt32 DefaultAtlasTexture::GetWidthEx() const
+		{
+			return m_pkRendererData ? m_pkRendererData->m_uiWidth : 0;
+		}
+
+		UInt32 DefaultAtlasTexture::GetHeightEx() const
+		{
+			return m_pkRendererData ? m_pkRendererData->m_uiHeight : 0;
+		}
+
+		DefaultAtlasTexture* DefaultAtlasTexture::Create(IDirect3DTexture9* texture,
+			AtlasPixelMode mode)
+		{
+			if (!texture)
+				return nullptr;
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			if (!renderer)
+				return nullptr;
+			auto* result = static_cast<DefaultAtlasTexture*>(
+				NiMemObject::operator new(sizeof(DefaultAtlasTexture)));
+			if (!result)
+				return nullptr;
+			ThisStdCall(0xA5C200, result);
+			*reinterpret_cast<void**>(result) = reinterpret_cast<void*>(0x109B944);
+			if (!s_vtable[0])
+			{
+				std::copy_n(*reinterpret_cast<void***>(result),
+					_countof(s_vtable), s_vtable);
+				ReplaceVTableEntry(s_vtable, 37, &DefaultAtlasTexture::GetWidthEx);
+				ReplaceVTableEntry(s_vtable, 38, &DefaultAtlasTexture::GetHeightEx);
+			}
+			*reinterpret_cast<void***>(result) = s_vtable;
+			result->m_kFormatPrefs.m_ePixelLayout = mode == AtlasPixelMode::A8
+				? NiTexture::FormatPrefs::SINGLE_COLOR_8
+				: NiTexture::FormatPrefs::TRUE_COLOR_32;
+			result->m_kFormatPrefs.m_eAlphaFmt = NiTexture::FormatPrefs::SMOOTH;
+			result->m_kFormatPrefs.m_eMipMapped = NiTexture::FormatPrefs::NO;
+
+			auto* data = static_cast<NiDX9TextureData*>(
+				NiMemObject::operator new(sizeof(NiDX9TextureData)));
+			if (!data)
+			{
+				result->DeleteThis();
+				return nullptr;
+			}
+			data = ThisStdCall<NiDX9TextureData*>(0xE8A260, data, result, renderer);
+			if (!data)
+			{
+				result->DeleteThis();
+				return nullptr;
+			}
+			data->m_pkD3DTexture = texture;
+			if (!data->InitializeFromD3DTexture(texture))
+			{
+				data->m_pkD3DTexture = nullptr;
+				data->DeleteThis();
+				result->DeleteThis();
+				return nullptr;
+			}
+			result->m_pkRendererData = data;
+			ThisStdCall(0xA5F7B0, result);
+			return result;
 		}
 
 		bool PackAtWidth(const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
@@ -299,6 +472,7 @@ namespace fonthook::vectorfont
 				auto it = s_atlasCache.find(key);
 				if (it != s_atlasCache.end())
 				{
+					RetireDefaultGeneration(*it->second.resource);
 					s_atlasCacheBytes -= it->second.bytes;
 					s_atlasCache.erase(it);
 				}
@@ -350,6 +524,17 @@ namespace fonthook::vectorfont
 			return mode == AtlasPixelMode::A8 ? 1u : 4u;
 		}
 
+		size_t GetResidentMaskBytes(const AtlasResource& resource)
+		{
+			size_t result = 0;
+			for (const auto& [id, bitmap] : resource.residentBitmaps)
+			{
+				if (bitmap)
+					result += bitmap->alpha.size();
+			}
+			return result;
+		}
+
 		const NiPixelFormat* FindA8PixelFormat()
 		{
 			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
@@ -392,7 +577,7 @@ namespace fonthook::vectorfont
 			return result;
 		}
 
-		NiTexturingProperty* CreateAtlasProperty(UInt32 width, UInt32 height,
+		NiTexturingProperty* CreateManagedAtlasProperty(UInt32 width, UInt32 height,
 			AtlasPixelMode mode, const std::vector<UInt8>& source,
 			NiPixelDataPtr& outPixelData)
 		{
@@ -451,6 +636,167 @@ namespace fonthook::vectorfont
 			return property;
 		}
 
+		void WriteBitmapPixels(UInt8* destination, LONG pitch, AtlasPixelMode mode,
+			const GlyphBitmap& bitmap, const AtlasRect& rect,
+			UInt32 destinationX = 0, UInt32 destinationY = 0)
+		{
+			const UInt32 bytesPerPixel = AtlasBytesPerPixel(mode);
+			for (UInt32 y = 0; y < rect.height; ++y)
+			{
+				UInt8* row = destination + static_cast<size_t>(destinationY + y) * pitch
+					+ static_cast<size_t>(destinationX) * bytesPerPixel;
+				const UInt8* alpha = bitmap.alpha.data()
+					+ static_cast<size_t>(y) * rect.width;
+				if (mode == AtlasPixelMode::A8)
+				{
+					std::memcpy(row, alpha, rect.width);
+				}
+				else
+				{
+					for (UInt32 x = 0; x < rect.width; ++x)
+					{
+						row[x * 4 + 0] = 0xFF;
+						row[x * 4 + 1] = 0xFF;
+						row[x * 4 + 2] = 0xFF;
+						row[x * 4 + 3] = alpha[x];
+					}
+				}
+			}
+		}
+
+		IDirect3DTexture9* CreateDynamicAtlasTexture(UInt32 width, UInt32 height,
+			AtlasPixelMode mode)
+		{
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
+			if (!device)
+				return nullptr;
+			IDirect3DTexture9* texture = nullptr;
+			const D3DFORMAT format = mode == AtlasPixelMode::A8
+				? D3DFMT_A8 : D3DFMT_A8R8G8B8;
+			if (FAILED(device->CreateTexture(width, height, 1, D3DUSAGE_DYNAMIC,
+				format, D3DPOOL_DEFAULT, &texture, nullptr)))
+			{
+				return nullptr;
+			}
+			D3DSURFACE_DESC description = {};
+			if (FAILED(texture->GetLevelDesc(0, &description))
+				|| description.Format != format || description.Pool != D3DPOOL_DEFAULT)
+			{
+				texture->Release();
+				return nullptr;
+			}
+			return texture;
+		}
+
+		bool PopulateDefaultTexture(IDirect3DTexture9* texture,
+			const AtlasResource& resource, AtlasPixelMode mode)
+		{
+			if (!texture)
+				return false;
+			D3DLOCKED_RECT locked = {};
+			if (FAILED(texture->LockRect(0, &locked, nullptr, D3DLOCK_DISCARD)))
+				return false;
+			for (UInt32 y = 0; y < resource.height; ++y)
+			{
+				std::memset(static_cast<UInt8*>(locked.pBits)
+					+ static_cast<size_t>(y) * locked.Pitch, 0,
+					static_cast<size_t>(resource.width) * AtlasBytesPerPixel(mode));
+			}
+			for (const auto& [id, bitmap] : resource.residentBitmaps)
+			{
+				auto placement = resource.placements.find(id);
+				if (!bitmap || placement == resource.placements.end())
+					continue;
+				const AtlasRect& rect = placement->second;
+				WriteBitmapPixels(static_cast<UInt8*>(locked.pBits), locked.Pitch,
+					mode, *bitmap, rect, rect.x, rect.y);
+			}
+			return SUCCEEDED(texture->UnlockRect(0));
+		}
+
+		NiTexturingProperty* CreatePropertyForDefaultTexture(
+			IDirect3DTexture9*& d3dTexture, AtlasPixelMode mode)
+		{
+			DefaultAtlasTexture* texture = DefaultAtlasTexture::Create(d3dTexture, mode);
+			if (!texture)
+				return nullptr;
+			d3dTexture = nullptr;
+			std::vector<UInt8> bootstrapPixels(4, 0u);
+			NiPixelDataPtr bootstrapData;
+			NiTexturingProperty* property = CreateManagedAtlasProperty(
+				1, 1, AtlasPixelMode::Argb32, bootstrapPixels, bootstrapData);
+			if (!property || !property->m_kMaps.GetSize() || !property->m_kMaps[0])
+			{
+				texture->DeleteThis();
+				return nullptr;
+			}
+			NiTexturingProperty::Map* map = property->m_kMaps[0];
+			texture->IncRefCount();
+			NiTexture* oldTexture = map->m_spTexture;
+			map->m_spTexture = texture;
+			if (oldTexture)
+				oldTexture->DecRefCount();
+			map->m_usflags = static_cast<UInt16>((map->m_usflags & ~0x1Fu)
+				| (NiTexturingProperty::FILTER_NEAREST << 2)
+				| NiTexturingProperty::CLAMP_S_CLAMP_T);
+			return property;
+		}
+
+		bool CreateDefaultPoolAtlas(AtlasResource& resource, AtlasPixelMode requestedMode)
+		{
+			if (!g_bEnableFreeTypeDefaultPoolAtlas || s_defaultPoolShutdown)
+				return false;
+			AtlasPixelMode mode = requestedMode;
+			for (UInt32 attempt = 0; attempt < 2; ++attempt)
+			{
+				if (mode == AtlasPixelMode::A8 && !IsA8RendererAvailable())
+				{
+					mode = AtlasPixelMode::Argb32;
+					continue;
+				}
+				IDirect3DTexture9* d3dTexture = CreateDynamicAtlasTexture(
+					resource.width, resource.height, mode);
+				if (d3dTexture && PopulateDefaultTexture(d3dTexture, resource, mode))
+				{
+					NiTexturingProperty* property = CreatePropertyForDefaultTexture(
+						d3dTexture, mode);
+					if (property)
+					{
+						resource.property = property;
+						resource.pixelData = nullptr;
+						std::vector<UInt8>().swap(resource.pixels);
+						resource.pixelMode = mode;
+						resource.backend = AtlasBackend::DefaultPool;
+						resource.resetPending = false;
+						++resource.generation;
+						if (g_bEnableFreeTypeFontRenderingLog)
+						{
+							FreeTypeFontDebugLog(
+								"tnvse_freetype_font: default atlas created size=%ux%u format=%s pool=default usage=dynamic gpuBytes=%llu residentMaskBytes=%llu cpuBacking=0 bytes",
+								resource.width, resource.height,
+								mode == AtlasPixelMode::A8 ? "a8" : "argb32",
+								static_cast<unsigned long long>(resource.width)
+									* resource.height * AtlasBytesPerPixel(mode),
+								static_cast<unsigned long long>(GetResidentMaskBytes(resource)));
+						}
+						return true;
+					}
+				}
+				if (d3dTexture)
+					d3dTexture->Release();
+				if (mode == AtlasPixelMode::Argb32)
+					break;
+				mode = AtlasPixelMode::Argb32;
+			}
+			if (s_defaultPoolFailureLogCount++ < 8)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: DEFAULT atlas creation failed; using engine-managed atlas fallback");
+			}
+			return false;
+		}
+
 		UInt8* GetAtlasBacking(AtlasResource& resource)
 		{
 			if (!resource.pixels.empty())
@@ -492,7 +838,7 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		bool RecreateAtlasProperty(AtlasResource& resource)
+		bool RecreateManagedAtlasProperty(AtlasResource& resource)
 		{
 			const size_t byteCount = static_cast<size_t>(resource.width) * resource.height
 				* AtlasBytesPerPixel(resource.pixelMode);
@@ -505,7 +851,7 @@ namespace fonthook::vectorfont
 			else
 				return false;
 			NiPixelDataPtr pixelData;
-			NiTexturingProperty* property = CreateAtlasProperty(
+			NiTexturingProperty* property = CreateManagedAtlasProperty(
 				resource.width, resource.height, resource.pixelMode, source, pixelData);
 			if (!property)
 			{
@@ -515,6 +861,7 @@ namespace fonthook::vectorfont
 			}
 			resource.property = property;
 			resource.pixelData = pixelData;
+			resource.backend = AtlasBackend::Managed;
 			std::vector<UInt8>().swap(resource.pixels);
 			++resource.generation;
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasUpload);
@@ -523,7 +870,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool GrowAtlas(AtlasResource& resource)
+		bool GrowManagedAtlas(AtlasResource& resource)
 		{
 			const UInt32 maximum = GetMaximumAtlasSize();
 			if (resource.width >= maximum || resource.height >= maximum)
@@ -546,10 +893,10 @@ namespace fonthook::vectorfont
 			resource.height = newHeight;
 			resource.pixels.swap(expanded);
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasGrown);
-			return RecreateAtlasProperty(resource);
+			return RecreateManagedAtlasProperty(resource);
 		}
 
-		bool UploadAtlasRegion(AtlasResource& resource, const AtlasRect& dirty)
+		bool UploadManagedAtlasRegion(AtlasResource& resource, const AtlasRect& dirty)
 		{
 			if (!resource.pixelData || !resource.pixelData->m_pucPixels
 				|| !resource.pixelData->m_puiOffsetInBytes)
@@ -610,7 +957,208 @@ namespace fonthook::vectorfont
 			return SUCCEEDED(result);
 		}
 
-		bool AddBitmapsToAtlas(AtlasResource& resource,
+		std::shared_ptr<AtlasResource> MakeGenerationSnapshot(
+			const AtlasResource& resource)
+		{
+			auto snapshot = std::make_shared<AtlasResource>();
+			snapshot->property = resource.property;
+			snapshot->width = resource.width;
+			snapshot->height = resource.height;
+			snapshot->generation = resource.generation;
+			snapshot->pixelMode = resource.pixelMode;
+			snapshot->backend = resource.backend;
+			snapshot->resetPending = resource.resetPending;
+			snapshot->placements = resource.placements;
+			snapshot->residentBitmaps = resource.residentBitmaps;
+			return snapshot;
+		}
+
+		void RetireDefaultGeneration(const AtlasResource& resource)
+		{
+			if (resource.backend != AtlasBackend::DefaultPool || !resource.property)
+			{
+				return;
+			}
+			s_retiredAtlases.push_back({ MakeGenerationSnapshot(resource) });
+		}
+
+		void PruneRetiredAtlases()
+		{
+			s_retiredAtlases.erase(std::remove_if(s_retiredAtlases.begin(),
+				s_retiredAtlases.end(), [](const RetiredAtlasGeneration& retired)
+			{
+				return !retired.resource || !retired.resource->property
+					|| retired.resource->property->m_uiRefCount <= 1;
+			}), s_retiredAtlases.end());
+		}
+
+		IDirect3DTexture9* QueryAtlasD3DTexture(const AtlasResource& resource)
+		{
+			NiTexture* texture = GetAtlasTexture(resource);
+			NiDX9TextureData* data = texture ? texture->GetDX9RendererData() : nullptr;
+			LPDIRECT3DBASETEXTURE9 base = data ? data->GetD3DTexture() : nullptr;
+			if (!base)
+				return nullptr;
+			IDirect3DTexture9* result = nullptr;
+			if (FAILED(base->QueryInterface(IID_IDirect3DTexture9,
+				reinterpret_cast<void**>(&result))))
+			{
+				return nullptr;
+			}
+			return result;
+		}
+
+		struct PendingAtlasPlacement
+		{
+			std::shared_ptr<const GlyphBitmap> bitmap;
+			AtlasRect rect;
+		};
+
+		bool UploadDefaultAtlasRegions(AtlasResource& resource,
+			const std::vector<PendingAtlasPlacement>& pending, const AtlasRect& dirty)
+		{
+			IDirect3DTexture9* texture = QueryAtlasD3DTexture(resource);
+			if (!texture)
+				return false;
+			RECT lockRect = {
+				static_cast<LONG>(dirty.x), static_cast<LONG>(dirty.y),
+				static_cast<LONG>(dirty.x + dirty.width),
+				static_cast<LONG>(dirty.y + dirty.height)
+			};
+			D3DLOCKED_RECT locked = {};
+			HRESULT result = texture->LockRect(0, &locked, &lockRect, 0);
+			if (SUCCEEDED(result))
+			{
+				for (const PendingAtlasPlacement& entry : pending)
+				{
+					if (!entry.bitmap)
+						continue;
+					WriteBitmapPixels(static_cast<UInt8*>(locked.pBits), locked.Pitch,
+						resource.pixelMode, *entry.bitmap, entry.rect,
+						entry.rect.x - dirty.x, entry.rect.y - dirty.y);
+				}
+				result = texture->UnlockRect(0);
+			}
+			texture->Release();
+			if (FAILED(result))
+				return false;
+			RecordFreeTypePerf(FreeTypePerfCounter::AtlasUpload);
+			RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadBytes,
+				static_cast<UInt64>(dirty.width) * dirty.height
+					* AtlasBytesPerPixel(resource.pixelMode));
+			return true;
+		}
+
+		void CommitDefaultCandidate(AtlasResource& resource, AtlasResource& candidate)
+		{
+			RetireDefaultGeneration(resource);
+			resource.property = candidate.property;
+			resource.pixelData = nullptr;
+			resource.width = candidate.width;
+			resource.height = candidate.height;
+			resource.cursorX = candidate.cursorX;
+			resource.cursorY = candidate.cursorY;
+			resource.shelfHeight = candidate.shelfHeight;
+			resource.generation = candidate.generation;
+			resource.pixelMode = candidate.pixelMode;
+			resource.backend = AtlasBackend::DefaultPool;
+			resource.resetPending = false;
+			resource.placements = std::move(candidate.placements);
+			resource.residentBitmaps = std::move(candidate.residentBitmaps);
+			std::vector<UInt8>().swap(resource.pixels);
+		}
+
+		bool AddBitmapsToDefaultAtlas(AtlasResource& resource,
+			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps)
+		{
+			const UInt32 maximum = GetMaximumAtlasSize();
+			UInt32 targetWidth = resource.width;
+			UInt32 targetHeight = resource.height;
+			AtlasResource layout;
+			std::vector<PendingAtlasPlacement> pending;
+			for (;;)
+			{
+				layout.width = targetWidth;
+				layout.height = targetHeight;
+				layout.cursorX = resource.cursorX;
+				layout.cursorY = resource.cursorY;
+				layout.shelfHeight = resource.shelfHeight;
+				pending.clear();
+				bool placedAll = true;
+				for (const auto& bitmap : bitmaps)
+				{
+					if (!bitmap || resource.placements.count(bitmap->cacheId))
+						continue;
+					AtlasRect rect;
+					if (!PlaceBitmap(layout, *bitmap, rect))
+					{
+						placedAll = false;
+						break;
+					}
+					pending.push_back({ bitmap, rect });
+				}
+				if (placedAll)
+					break;
+				if (targetWidth >= maximum || targetHeight >= maximum)
+					return false;
+				targetWidth = std::min(maximum, targetWidth * 2);
+				targetHeight = std::min(maximum, targetHeight * 2);
+			}
+			if (pending.empty())
+				return true;
+
+			AtlasResource candidate;
+			candidate.width = layout.width;
+			candidate.height = layout.height;
+			candidate.cursorX = layout.cursorX;
+			candidate.cursorY = layout.cursorY;
+			candidate.shelfHeight = layout.shelfHeight;
+			candidate.pixelMode = resource.pixelMode;
+			candidate.backend = AtlasBackend::DefaultPool;
+			candidate.generation = resource.generation;
+			candidate.placements = resource.placements;
+			candidate.residentBitmaps = resource.residentBitmaps;
+			UInt32 minX = candidate.width;
+			UInt32 minY = candidate.height;
+			UInt32 maxX = 0;
+			UInt32 maxY = 0;
+			for (const PendingAtlasPlacement& entry : pending)
+			{
+				candidate.placements[entry.bitmap->cacheId] = entry.rect;
+				candidate.residentBitmaps[entry.bitmap->cacheId] = entry.bitmap;
+				minX = std::min(minX, entry.rect.x);
+				minY = std::min(minY, entry.rect.y);
+				maxX = std::max(maxX, entry.rect.x + entry.rect.width);
+				maxY = std::max(maxY, entry.rect.y + entry.rect.height);
+			}
+			const bool needsRebuild = !resource.property
+				|| resource.width != candidate.width || resource.height != candidate.height;
+			if (needsRebuild)
+			{
+				if (!CreateDefaultPoolAtlas(candidate, resource.pixelMode))
+					return false;
+				if (resource.property)
+					RecordFreeTypePerf(FreeTypePerfCounter::AtlasGrown);
+				CommitDefaultCandidate(resource, candidate);
+				return true;
+			}
+			const AtlasRect dirty = { minX, minY, maxX - minX, maxY - minY };
+			if (UploadDefaultAtlasRegions(resource, pending, dirty))
+			{
+				resource.cursorX = candidate.cursorX;
+				resource.cursorY = candidate.cursorY;
+				resource.shelfHeight = candidate.shelfHeight;
+				resource.placements = std::move(candidate.placements);
+				resource.residentBitmaps = std::move(candidate.residentBitmaps);
+				return true;
+			}
+			if (!CreateDefaultPoolAtlas(candidate, resource.pixelMode))
+				return false;
+			CommitDefaultCandidate(resource, candidate);
+			return true;
+		}
+
+		bool AddBitmapsToManagedAtlas(AtlasResource& resource,
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps)
 		{
 			AtlasResource planned;
@@ -622,11 +1170,8 @@ namespace fonthook::vectorfont
 			const UInt32 maximum = GetMaximumAtlasSize();
 			for (const auto& bitmap : bitmaps)
 			{
-				if (!bitmap || resource.placements.find(bitmap->cacheId)
-					!= resource.placements.end())
-				{
+				if (!bitmap || resource.placements.count(bitmap->cacheId))
 					continue;
-				}
 				AtlasRect ignored;
 				while (!PlaceBitmap(planned, *bitmap, ignored))
 				{
@@ -638,23 +1183,23 @@ namespace fonthook::vectorfont
 			}
 			while (resource.width < planned.width || resource.height < planned.height)
 			{
-				if (!GrowAtlas(resource))
+				if (!GrowManagedAtlas(resource))
 					return false;
 			}
-
-			bool changed = false;
 			UInt32 minX = resource.width;
 			UInt32 minY = resource.height;
 			UInt32 maxX = 0;
 			UInt32 maxY = 0;
+			bool changed = false;
 			for (const auto& bitmap : bitmaps)
 			{
-				if (!bitmap || resource.placements.find(bitmap->cacheId) != resource.placements.end())
+				if (!bitmap || resource.placements.count(bitmap->cacheId))
 					continue;
 				AtlasRect rect;
 				if (!PlaceBitmap(resource, *bitmap, rect))
 					return false;
-				resource.placements.emplace(bitmap->cacheId, rect);
+				resource.placements[bitmap->cacheId] = rect;
+				resource.residentBitmaps[bitmap->cacheId] = bitmap;
 				CopyBitmapToAtlas(resource, *bitmap, rect);
 				minX = std::min(minX, rect.x);
 				minY = std::min(minY, rect.y);
@@ -665,13 +1210,37 @@ namespace fonthook::vectorfont
 			if (!changed)
 				return true;
 			if (!resource.property)
-				return RecreateAtlasProperty(resource);
+				return RecreateManagedAtlasProperty(resource);
 			const AtlasRect dirty = { minX, minY, maxX - minX, maxY - minY };
-			if (UploadAtlasRegion(resource, dirty))
+			if (UploadManagedAtlasRegion(resource, dirty))
 				return true;
-			// Some D3D9 wrappers reject managed-texture partial locks. Rebuilding the
-			// current generation preserves correctness and remains a rare fallback.
-			return RecreateAtlasProperty(resource);
+			return RecreateManagedAtlasProperty(resource);
+		}
+
+		bool AddBitmapsToAtlas(AtlasResource& resource,
+			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps)
+		{
+			if (resource.backend == AtlasBackend::DefaultPool)
+			{
+				if (AddBitmapsToDefaultAtlas(resource, bitmaps))
+					return true;
+				// Keep an established DEFAULT generation intact. The caller can use a
+				// transient atlas for this text without invalidating existing shapes.
+				if (resource.property)
+					return false;
+				resource.backend = AtlasBackend::Managed;
+				resource.pixelMode = AtlasPixelMode::Argb32;
+				resource.property = nullptr;
+				resource.pixelData = nullptr;
+				resource.pixels.assign(static_cast<size_t>(resource.width)
+					* resource.height * AtlasBytesPerPixel(resource.pixelMode), 0u);
+				resource.placements.clear();
+				resource.residentBitmaps.clear();
+				resource.cursorX = kAtlasPadding;
+				resource.cursorY = kAtlasPadding;
+				resource.shelfHeight = 0;
+			}
+			return AddBitmapsToManagedAtlas(resource, bitmaps);
 		}
 
 		std::shared_ptr<AtlasResource> GetAtlasResource(
@@ -711,10 +1280,15 @@ namespace fonthook::vectorfont
 			auto resource = std::make_shared<AtlasResource>();
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasCreated);
 			resource->pixelMode = pixelMode;
+			resource->backend = g_bEnableFreeTypeDefaultPoolAtlas
+				? AtlasBackend::DefaultPool : AtlasBackend::Managed;
 			resource->width = std::min<UInt32>(512, GetMaximumAtlasSize());
 			resource->height = resource->width;
-			resource->pixels.assign(static_cast<size_t>(resource->width) * resource->height
-				* AtlasBytesPerPixel(resource->pixelMode), 0u);
+			if (resource->backend == AtlasBackend::Managed)
+			{
+				resource->pixels.assign(static_cast<size_t>(resource->width)
+					* resource->height * AtlasBytesPerPixel(resource->pixelMode), 0u);
+			}
 			if (!AddBitmapsToAtlas(*resource, bitmaps))
 				return nullptr;
 			const size_t bytes = static_cast<size_t>(resource->width) * resource->height
@@ -733,11 +1307,26 @@ namespace fonthook::vectorfont
 		{
 			auto resource = std::make_shared<AtlasResource>();
 			resource->pixelMode = pixelMode;
+			resource->backend = g_bEnableFreeTypeDefaultPoolAtlas
+				? AtlasBackend::DefaultPool : AtlasBackend::Managed;
+			resource->transient = true;
 			if (!PackAtlas(bitmaps, resource->width, resource->height,
 				resource->placements))
 			{
 				return nullptr;
 			}
+			for (const auto& bitmap : bitmaps)
+			{
+				if (bitmap)
+					resource->residentBitmaps[bitmap->cacheId] = bitmap;
+			}
+			if (resource->backend == AtlasBackend::DefaultPool
+				&& CreateDefaultPoolAtlas(*resource, pixelMode))
+			{
+				return resource;
+			}
+			resource->backend = AtlasBackend::Managed;
+			resource->pixelMode = AtlasPixelMode::Argb32;
 			resource->pixels.assign(static_cast<size_t>(resource->width)
 				* resource->height * AtlasBytesPerPixel(resource->pixelMode), 0u);
 			for (const auto& bitmap : bitmaps)
@@ -746,7 +1335,7 @@ namespace fonthook::vectorfont
 					CopyBitmapToAtlas(*resource, *bitmap,
 						resource->placements.at(bitmap->cacheId));
 			}
-			return RecreateAtlasProperty(*resource) ? resource : nullptr;
+			return RecreateManagedAtlasProperty(*resource) ? resource : nullptr;
 		}
 
 		void AddPendingQuad(std::vector<PendingQuad>& quads,
@@ -998,7 +1587,191 @@ namespace fonthook::vectorfont
 				outAtlas = CreateTransientAtlas(bitmaps, pixelMode);
 			if (!outAtlas)
 				return nullptr;
-			return CreateAtlasShape(font, quads, outAtlas, prepareObject);
+			NiTriShape* shape = CreateAtlasShape(font, quads, outAtlas, prepareObject);
+			if (shape && outAtlas->transient
+				&& outAtlas->backend == AtlasBackend::DefaultPool)
+			{
+				std::lock_guard<std::mutex> lock(s_atlasMutex);
+				RetireDefaultGeneration(*outAtlas);
+			}
+			return shape;
+		}
+
+		void ReleaseDefaultPoolTexture(AtlasResource& resource)
+		{
+			if (resource.backend != AtlasBackend::DefaultPool)
+				return;
+			NiTexture* texture = GetAtlasTexture(resource);
+			NiDX9TextureData* data = texture ? texture->GetDX9RendererData() : nullptr;
+			if (data && data->m_pkD3DTexture)
+			{
+				data->m_pkD3DTexture->Release();
+				data->m_pkD3DTexture = nullptr;
+				data->m_uiLevels = 0;
+			}
+			resource.resetPending = true;
+		}
+
+		bool RebuildDefaultPoolTexture(AtlasResource& resource)
+		{
+			if (resource.backend != AtlasBackend::DefaultPool || !resource.property)
+				return true;
+			NiTexture* texture = GetAtlasTexture(resource);
+			NiDX9TextureData* data = texture ? texture->GetDX9RendererData() : nullptr;
+			if (!texture || !data)
+				return false;
+			AtlasPixelMode mode = resource.pixelMode;
+			for (UInt32 attempt = 0; attempt < 2; ++attempt)
+			{
+				IDirect3DTexture9* d3dTexture = CreateDynamicAtlasTexture(
+					resource.width, resource.height, mode);
+				if (d3dTexture && PopulateDefaultTexture(d3dTexture, resource, mode))
+				{
+					data->m_pkD3DTexture = d3dTexture;
+					if (data->InitializeFromD3DTexture(d3dTexture))
+					{
+						texture->m_kFormatPrefs.m_ePixelLayout = mode == AtlasPixelMode::A8
+							? NiTexture::FormatPrefs::SINGLE_COLOR_8
+							: NiTexture::FormatPrefs::TRUE_COLOR_32;
+						resource.pixelMode = mode;
+						resource.resetPending = false;
+						RecordFreeTypePerf(FreeTypePerfCounter::AtlasUpload);
+						RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadBytes,
+							static_cast<UInt64>(resource.width) * resource.height
+								* AtlasBytesPerPixel(mode));
+						return true;
+					}
+					data->m_pkD3DTexture = nullptr;
+				}
+				if (d3dTexture)
+					d3dTexture->Release();
+				if (mode == AtlasPixelMode::Argb32)
+					break;
+				mode = AtlasPixelMode::Argb32;
+			}
+			resource.resetPending = true;
+			return false;
+		}
+
+		bool DefaultPoolResetCallback(bool beforeReset, void*)
+		{
+			if (s_defaultPoolShutdown)
+				return true;
+			const auto started = std::chrono::steady_clock::now();
+			UInt32 processed = 0;
+			UInt32 failed = 0;
+			{
+				std::lock_guard<std::mutex> lock(s_atlasMutex);
+				if (!beforeReset)
+					ResolveGpuAtlasBudget(true);
+				auto process = [&](AtlasResource& resource)
+				{
+					if (resource.backend != AtlasBackend::DefaultPool)
+						return;
+					++processed;
+					if (beforeReset)
+						ReleaseDefaultPoolTexture(resource);
+					else if (!RebuildDefaultPoolTexture(resource))
+						++failed;
+				};
+				for (auto& [key, entry] : s_atlasCache)
+				{
+					if (entry.resource)
+						process(*entry.resource);
+				}
+				for (RetiredAtlasGeneration& retired : s_retiredAtlases)
+				{
+					if (retired.resource)
+						process(*retired.resource);
+				}
+				if (!beforeReset)
+				{
+					s_atlasCacheBytes = 0;
+					for (auto& [key, entry] : s_atlasCache)
+					{
+						if (!entry.resource)
+							continue;
+						entry.bytes = static_cast<size_t>(entry.resource->width)
+							* entry.resource->height
+							* AtlasBytesPerPixel(entry.resource->pixelMode);
+						s_atlasCacheBytes += entry.bytes;
+					}
+					PruneRetiredAtlases();
+					TrimAtlasCache();
+				}
+			}
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - started).count();
+				FreeTypeFontDebugLog(
+					"tnvse_freetype_font: DEFAULT atlas reset phase=%s generations=%u failed=%u timeUs=%lld",
+					beforeReset ? "release" : "rebuild", processed, failed,
+					static_cast<long long>(elapsed));
+			}
+			return true;
+		}
+	}
+
+	void InitializeDefaultPoolAtlasLifecycle()
+	{
+		if (!g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeDefaultPoolAtlas
+			|| s_defaultPoolResetRegistered)
+			return;
+		s_defaultPoolShutdown = false;
+		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+		if (!renderer || !renderer->GetD3DDevice())
+			return;
+		ResolveGpuAtlasBudget(true);
+		ThisStdCall<UInt32>(0x86BAE0, renderer, DefaultPoolResetCallback, nullptr);
+		s_defaultPoolResetRegistered = true;
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: registered DEFAULT atlas device reset lifecycle");
+	}
+
+	void PumpDefaultPoolAtlasLifecycle()
+	{
+		if (!g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeDefaultPoolAtlas
+			|| s_defaultPoolShutdown)
+			return;
+		InitializeDefaultPoolAtlasLifecycle();
+		static UInt32 retryFrame = 0;
+		const bool retry = (++retryFrame % 120u) == 0;
+		std::lock_guard<std::mutex> lock(s_atlasMutex);
+		PruneRetiredAtlases();
+		if (retry)
+		{
+			for (auto& [key, entry] : s_atlasCache)
+			{
+				if (entry.resource && entry.resource->resetPending)
+					RebuildDefaultPoolTexture(*entry.resource);
+			}
+			for (RetiredAtlasGeneration& retired : s_retiredAtlases)
+			{
+				if (retired.resource && retired.resource->resetPending)
+					RebuildDefaultPoolTexture(*retired.resource);
+			}
+		}
+		TrimAtlasCache();
+	}
+
+	void ShutdownDefaultPoolAtlasLifecycle()
+	{
+		s_defaultPoolShutdown = true;
+		{
+			std::lock_guard<std::mutex> lock(s_atlasMutex);
+			s_atlasCache.clear();
+			s_atlasLru.clear();
+			s_atlasCacheBytes = 0;
+			s_retiredAtlases.clear();
+			s_loggedAtlasBatches.clear();
+			s_loggedVerticalMetricFonts.clear();
+		}
+		{
+			std::lock_guard<std::mutex> lock(s_batchMutex);
+			s_batchCache.clear();
+			s_batchLru.clear();
+			s_batchCacheBytes = 0;
 		}
 	}
 
@@ -1062,6 +1835,7 @@ namespace fonthook::vectorfont
 				}
 				if (shape)
 				{
+					pixelMode = atlas->pixelMode;
 					const UInt64 logKey = (static_cast<UInt64>(font.iFontNum) << 32)
 						| (static_cast<UInt32>(std::lround(rasterScale * 1000.0f)) << 1)
 						| static_cast<UInt32>(pixelMode);
@@ -1074,12 +1848,17 @@ namespace fonthook::vectorfont
 					if (shouldLog)
 					{
 						FreeTypeFontDebugLog(
-							"tnvse_freetype_font: atlas batch font=%u scale=%.3f mode=%s glyphs=%u quads=%u texture=%ux%u",
+							"tnvse_freetype_font: atlas batch font=%u scale=%.3f mode=%s backend=%s glyphs=%u quads=%u texture=%ux%u generation=%u gpuBytes=%llu residentMaskBytes=%llu",
 							font.iFontNum, rasterScale,
 							pixelMode == AtlasPixelMode::A8 ? "a8" : "argb32",
+							atlas->backend == AtlasBackend::DefaultPool
+								? "default" : "managed",
 							static_cast<UInt32>(glyphs.size()),
 							static_cast<UInt32>(quads.size()),
-							atlas->width, atlas->height);
+							atlas->width, atlas->height, atlas->generation,
+							static_cast<unsigned long long>(atlas->width)
+								* atlas->height * AtlasBytesPerPixel(atlas->pixelMode),
+							static_cast<unsigned long long>(GetResidentMaskBytes(*atlas)));
 					}
 					return shape;
 				}
@@ -1092,5 +1871,23 @@ namespace fonthook::vectorfont
 			gLog.FormattedMessage("tnvse_freetype_font: atlas batch failed font=%u; using vector fallback",
 				font.iFontNum);
 		return nullptr;
+	}
+}
+
+namespace fonthook
+{
+	void InitializeFreeTypeDefaultPoolAtlas()
+	{
+		vectorfont::InitializeDefaultPoolAtlasLifecycle();
+	}
+
+	void HandleFreeTypeDefaultPoolAtlasMainLoop()
+	{
+		vectorfont::PumpDefaultPoolAtlasLifecycle();
+	}
+
+	void ShutdownFreeTypeDefaultPoolAtlas()
+	{
+		vectorfont::ShutdownDefaultPoolAtlasLifecycle();
 	}
 }

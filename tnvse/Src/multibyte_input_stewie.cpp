@@ -1,4 +1,5 @@
 #include "multibyte_input_internal.h"
+#include "plugin_dependencies.h"
 
 // Shared Stewie Tweaks UTF-8 input engine and StewMenu integration.
 
@@ -6,8 +7,6 @@ namespace fonthook
 {
 	namespace multibyte_input
 	{
-		constexpr UInt32 kStewieTweaksMinVersion = 990;
-		constexpr const char* kStewieTweaksPluginName = "lStewieAl's Tweaks";
 		constexpr UInt32 kMenuType_StewMenu = 1069;
 		constexpr UInt32 kStewMenu_SearchBar = 5;
 		constexpr UInt32 kStewMenu_SubsettingInputFieldText = 103;
@@ -214,19 +213,20 @@ namespace fonthook
 			if (s_stewieChecked)
 				return s_stewieAvailable;
 
-			const PluginInfo* info = g_cmdTableInterface->GetPluginInfoByName(kStewieTweaksPluginName);
+			const PluginInfo* info = g_cmdTableInterface->GetPluginInfoByName(
+				dependencies::kStewieTweaksPluginName);
 			if (!info)
 				return false;
 
 			s_stewieChecked = true;
-			s_stewieAvailable = info
-				&& info->version >= kStewieTweaksMinVersion;
+			s_stewieAvailable = dependencies::IsPluginInfoValid(info)
+				&& info->version >= dependencies::kStewieTweaksMinVersion;
 			if (info && !s_stewieAvailable)
 			{
 				gLog.FormattedMessage(
 					"tnvse_multibyte_input: Stewie Tweaks version %u is older than supported minimum %u; Stewie input adapter disabled",
 					info->version,
-					kStewieTweaksMinVersion);
+					dependencies::kStewieTweaksMinVersion);
 			}
 			else if (s_stewieAvailable)
 			{

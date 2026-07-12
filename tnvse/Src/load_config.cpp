@@ -11,6 +11,9 @@ bool g_bEnableFreeTypeFontRendering;
 bool g_bEnableFreeTypeFontRenderingLog;
 bool g_bEnableFreeTypeDevicePixelScale;
 UINT32 g_uiFreeTypeFontMemoryCacheMB;
+bool g_bEnableFreeTypeDefaultPoolAtlas;
+bool g_bEnableFreeTypeA8Atlas;
+UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputDebug;
 bool g_bMultibyteInputCompositionPreview;
@@ -121,6 +124,23 @@ void LoadConfig()
 	g_uiFreeTypeFontMemoryCacheMB = std::clamp<UINT32>(
 		ReadConfigInt(kMainSection, nullptr, "uiFreeTypeFontMemoryCacheMB", 192, filename), 64, 384);
 	gLog.FormattedMessage("g_uiFreeTypeFontMemoryCacheMB: %u", g_uiFreeTypeFontMemoryCacheMB);
+
+	g_bEnableFreeTypeDefaultPoolAtlas = ReadConfigInt(
+		kMainSection, nullptr, "bEnableFreeTypeDefaultPoolAtlas", 1, filename) != 0;
+	gLog.FormattedMessage("g_bEnableFreeTypeDefaultPoolAtlas: %d",
+		g_bEnableFreeTypeDefaultPoolAtlas);
+
+	g_bEnableFreeTypeA8Atlas = ReadConfigInt(
+		kMainSection, nullptr, "bEnableFreeTypeA8Atlas", 1, filename) != 0;
+	gLog.FormattedMessage("g_bEnableFreeTypeA8Atlas: %d",
+		g_bEnableFreeTypeA8Atlas);
+
+	g_uiFreeTypeFontGpuAtlasCacheMB = ReadConfigInt(
+		kMainSection, nullptr, "uiFreeTypeFontGpuAtlasCacheMB", 0, filename);
+	if (g_uiFreeTypeFontGpuAtlasCacheMB > 4095)
+		g_uiFreeTypeFontGpuAtlasCacheMB = 4095;
+	gLog.FormattedMessage("g_uiFreeTypeFontGpuAtlasCacheMB: %u",
+		g_uiFreeTypeFontGpuAtlasCacheMB);
 
 	g_bMultibyteInput = ReadConfigInt(kMainSection, nullptr, "bMultibyteInput", 0, filename);
 	gLog.FormattedMessage("g_bMultibyteInput: %d", g_bMultibyteInput);

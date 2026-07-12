@@ -177,6 +177,7 @@
     <ClCompile Include="Src\dictionary_regex.cpp" />
     <ClCompile Include="Src\dictionary_translate.cpp" />
     <ClCompile Include="Src\load_config.cpp" />
+	<ClCompile Include="Src\plugin_dependencies.cpp" />
     <ClCompile Include="Src\tnvse.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -215,6 +216,7 @@
     <ClInclude Include="Src\dictionary_internal.h" />
     <ClInclude Include="include\nlohmann\json.hpp" />
     <ClInclude Include="Src\load_config.h" />
+	<ClInclude Include="Src\plugin_dependencies.h" />
     <ClInclude Include="Src\nvse\PluginAPI.h" />
     <ClInclude Include="Src\tnvse.h" />
     <ClInclude Include="Src\globals.h" />

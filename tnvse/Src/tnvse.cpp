@@ -15,6 +15,7 @@
 #include "font_vector.h"
 #include "dictionary.h"
 #include "multibyte_input.h"
+#include "plugin_dependencies.h"
 #include "save_display_name.h"
 
 IDebugLog gLog("tnvse.log");
@@ -37,15 +38,23 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit)
 	{
+		fonthook::dependencies::ShowExternalPluginDependencyWarnings();
 		fonthook::FinalizeFreeTypeUioDetection();
 		fonthook::FinalizeFreeTypeA8Detection();
+		fonthook::InitializeFreeTypeDefaultPoolAtlas();
 	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 	{
 		fonthook::UpdateFreeTypeDevicePixelScale();
 		fonthook::HandleFreeTypeA8MainLoop();
+		fonthook::HandleFreeTypeDefaultPoolAtlasMainLoop();
 		fonthook::PumpFreeTypeFontPrewarm();
 		fonthook::PumpFreeTypeFontPerformance();
+	}
+	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_ExitGame
+		|| g_msg->type == NVSEMessagingInterface::kMessage_ExitGame_Console))
+	{
+		fonthook::ShutdownFreeTypeDefaultPoolAtlas();
 	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit
 		|| g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop))
@@ -92,8 +101,11 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 	{
 		if (hJIP)
 		{
-			const PluginInfo* pInfo = g_cmdTableInterface->GetPluginInfoByName("JIP LN NVSE");
-			if (pInfo->version == 5730)
+			const PluginInfo* pInfo = g_cmdTableInterface
+				? g_cmdTableInterface->GetPluginInfoByName(
+					fonthook::dependencies::kJipPluginName) : nullptr;
+			if (fonthook::dependencies::IsPluginInfoValid(pInfo)
+				&& pInfo->version == fonthook::dependencies::kJipBigGunsVersion)
 			{
 				fonthook::InitBigGunsDescHooks();
 			}

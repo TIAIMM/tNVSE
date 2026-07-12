@@ -1,6 +1,7 @@
 #include "font_vector_internal.h"
 
 #include "load_config.h"
+#include "plugin_dependencies.h"
 #include "tnvse.h"
 
 #include "NiD3DPixelShader.hpp"
@@ -24,7 +25,6 @@ namespace fonthook::vectorfont
 
 	namespace
 	{
-		constexpr UInt32 kMinimumShaderLoaderVersion = 140;
 		constexpr UInt32 kDrawIndexedPrimitiveSlot = 82;
 		constexpr UInt32 kRenderImmediateSlot = 55;
 		constexpr UInt32 kRenderImmediateAltSlot = 56;
@@ -459,7 +459,8 @@ namespace fonthook::vectorfont
 		if (s_detectionFinalized)
 			return;
 		s_detectionFinalized = true;
-		if (!g_bEnableFreeTypeFontRendering || !g_cmdTableInterface
+		if (!g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeA8Atlas
+			|| !g_cmdTableInterface
 			|| !g_cmdTableInterface->GetPluginInfoByDLLName)
 		{
 			return;
@@ -468,7 +469,7 @@ namespace fonthook::vectorfont
 		const PluginInfo* info = g_cmdTableInterface->GetPluginInfoByDLLName(
 			"Fallout Shader Loader.dll");
 		if (!info || info->infoVersion != PluginInfo::kInfoVersion
-			|| info->version < kMinimumShaderLoaderVersion)
+			|| info->version < dependencies::kShaderLoaderMinVersion)
 		{
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: Fallout Shader Loader 1.40 or newer is unavailable; using 32-bit atlases");
