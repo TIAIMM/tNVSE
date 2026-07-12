@@ -124,6 +124,7 @@ namespace fonthook::vectorfont
 			std::vector<RuntimeFace> faces;
 			std::unordered_map<UInt32, CachedGlyphIdentity> glyphIdentities;
 			float resolvedBaselineOffset = 0.0f;
+			float visualCenterCorrection = 0.0f;
 			float ascender = 0.0f;
 			float descender = 0.0f;
 		};
@@ -307,8 +308,21 @@ namespace fonthook::vectorfont
 
 		struct ActiveFontState
 		{
+			struct OriginalVerticalMetrics
+			{
+				float baseLine = 0.0f;
+				float fontHeight = 0.0f;
+				float maxDrop = 0.0f;
+				float spaceHeight = 0.0f;
+				float spaceTopEdge = 0.0f;
+				bool valid = false;
+			};
+
 			const FontData* data = nullptr;
 			UInt32 fontId = 0;
+			OriginalVerticalMetrics originalMetrics;
+			bool originalMetricsCaptured = false;
+			bool originalFallbackLogged = false;
 		};
 
 		FT_Library s_library = nullptr;
@@ -327,6 +341,7 @@ namespace fonthook::vectorfont
 		UInt32 s_codePointCacheCodePage = UINT32_MAX;
 		std::unordered_set<UInt32> s_loggedUnconfiguredFontIds;
 		std::unordered_set<UInt64> s_loggedVerticalMetricRoles;
+		std::unordered_set<UInt64> s_loggedHarfBuzzVerticalRoles;
 		UInt32 s_shapingFallbackLogCount = 0;
 		size_t s_meshCacheBytes = 0;
 		size_t s_bitmapCacheBytes = 0;
@@ -626,6 +641,24 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		float GetFixedCellAdvance(const ByteStyle& style)
+		{
+			return std::max(0.0f, style.fixedWidth + style.tracking);
+		}
+
+		float GetFixedCellGlyphOffset(const ByteStyle& style, const FT_GlyphSlot slot)
+		{
+			if (style.fixedWidth <= 0.0f || !slot || slot->format != FT_GLYPH_FORMAT_OUTLINE)
+				return 0.0f;
+			FT_BBox box = {};
+			FT_Outline_Get_CBox(&slot->outline, &box);
+			const float xMin = std::floor(static_cast<float>(box.xMin) / 64.0f);
+			const float xMax = std::ceil(static_cast<float>(box.xMax) / 64.0f);
+			const float bodyWidth = std::max(0.0f, xMax - xMin);
+			const float centeredLeading = (style.fixedWidth - bodyWidth) * 0.5f;
+			return centeredLeading - xMin;
+		}
+
 		void ApplyResolvedIdentity(VectorEncodedGlyph& glyph, const ResolvedGlyph& resolved)
 		{
 			glyph.faceIndex = static_cast<UInt16>(resolved.faceIndex);
@@ -664,11 +697,14 @@ namespace fonthook::vectorfont
 			const VerticalEffectExtents effects = GetVerticalEffectExtents(config);
 			const float glyphBottom = bodyBottom - effects.bottom;
 			const float glyphTop = bodyTop + effects.top;
-			result.fLeadingEdge = xMin;
 			result.fWidth = std::max(0.0f, xMax - xMin);
+			result.fLeadingEdge = role.style->fixedWidth > 0.0f
+				? (role.style->fixedWidth - result.fWidth) * 0.5f : xMin;
 			result.fHeight = std::max(0.0f, glyphTop - glyphBottom);
 			result.fTopEdge = glyphTop;
-			const float requestedAdvance = std::max(0.0f, advance + role.style->tracking);
+			const float requestedAdvance = role.style->fixedWidth > 0.0f
+				? GetFixedCellAdvance(*role.style)
+				: std::max(0.0f, advance + role.style->tracking);
 			const float totalAdvance = requestedAdvance;
 			if (codePoint == 0x20)
 			{
@@ -696,12 +732,13 @@ namespace fonthook::vectorfont
 				if (s_loggedVerticalMetricRoles.insert(logKey).second)
 				{
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: glyph metrics font=%u role=%s codepoint=U+%04X bodyTop=%.2f bodyBottom=%.2f effectTop=%.2f effectBottom=%.2f topEdge=%.2f height=%.2f drop=%.2f baselineOffset=%.2f",
+						"tnvse_freetype_font: glyph metrics font=%u role=%s codepoint=U+%04X bodyTop=%.2f bodyBottom=%.2f effectTop=%.2f effectBottom=%.2f topEdge=%.2f height=%.2f drop=%.2f configuredBaselineOffset=%.2f visualCorrection=%.2f resolvedBaselineOffset=%.2f",
 						config.fontId,
 						byteClass == VectorFontByteClass::DoubleByte ? "doubleByte" : "singleByte",
 						codePoint, bodyTop, bodyBottom, effects.top, effects.bottom,
 						result.fTopEdge, result.fHeight,
-						result.fHeight - result.fTopEdge, role.resolvedBaselineOffset);
+						result.fHeight - result.fTopEdge, role.style->baselineOffset,
+						role.visualCenterCorrection, role.resolvedBaselineOffset);
 				}
 			}
 			return result;
@@ -1095,7 +1132,8 @@ namespace fonthook::vectorfont
 			}
 
 			runtime->manualBaseline = config.baseline > 0.0f;
-			if (!runtime->manualBaseline)
+			if (!runtime->manualBaseline
+				|| config.verticalMetrics == VerticalMetricsMode::Original)
 			{
 				static constexpr UInt32 kSingleReferences[] = { 'H', 'M', 'W', 'A', '0', '8', 'B', 'E', 'N', 'T', 'X' };
 				static constexpr UInt32 kDoubleReferences[] = { 0x4E2D, 0x56FD, 0x6F22, 0x3042, 0xAC00 };
@@ -1105,6 +1143,7 @@ namespace fonthook::vectorfont
 					&& MeasureVisualCenter(runtime->roles[1], kDoubleReferences, std::size(kDoubleReferences), doubleCenter))
 				{
 					const float correction = std::clamp(std::round(singleCenter - doubleCenter), -1.0f, 1.0f);
+					runtime->roles[1].visualCenterCorrection = correction;
 					runtime->roles[1].resolvedBaselineOffset += correction;
 				}
 			}
@@ -1208,8 +1247,9 @@ namespace fonthook::vectorfont
 				RuntimeRole& role = *item.resolved.role;
 				RuntimeFace& face = *item.resolved.runtimeFace;
 				ConfigureRuntimeFace(face, *role.style, 1.0f, false);
+				const bool fixedCell = role.style->fixedWidth > 0.0f;
 				float kerning = 0.0f;
-				if (previousFace == &face && previousClass == item.glyph.byteClass
+				if (!fixedCell && previousFace == &face && previousClass == item.glyph.byteClass
 					&& previousGlyph && item.resolved.glyphIndex
 					&& FT_HAS_KERNING(face.face))
 				{
@@ -1225,8 +1265,11 @@ namespace fonthook::vectorfont
 				FreeTypeLayoutGlyph positioned;
 				positioned.glyph = item.glyph;
 				positioned.cluster = item.byteOffset;
-				positioned.xOffset = kerning;
-				positioned.xAdvance = baseAdvance + role.style->tracking + kerning;
+				positioned.xOffset = fixedCell
+					? GetFixedCellGlyphOffset(*role.style, face.face->glyph) : kerning;
+				positioned.xAdvance = fixedCell
+					? GetFixedCellAdvance(*role.style)
+					: baseAdvance + role.style->tracking + kerning;
 				layout.advance += positioned.xAdvance;
 				layout.glyphs.push_back(std::move(positioned));
 				previousGlyph = item.resolved.glyphIndex;
@@ -1275,6 +1318,23 @@ namespace fonthook::vectorfont
 			const hb_glyph_position_t* positions = hb_buffer_get_glyph_positions(buffer, &glyphCount);
 			if (!glyphCount || !infos || !positions)
 				return false;
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				const VectorFontByteClass byteClass = input[begin].glyph.byteClass;
+				const UInt64 logKey = (static_cast<UInt64>(runtime.config->fontId) << 8)
+					| static_cast<UInt8>(byteClass);
+				if (s_loggedHarfBuzzVerticalRoles.insert(logKey).second)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: HarfBuzz vertical metrics font=%u role=%s glyph=%u cluster=%u yAdvance=%.2f yOffset=%.2f resolvedBaselineOffset=%.2f",
+						runtime.config->fontId,
+						byteClass == VectorFontByteClass::DoubleByte ? "doubleByte" : "singleByte",
+						infos[0].codepoint, infos[0].cluster,
+						static_cast<float>(positions[0].y_advance) / 64.0f,
+						static_cast<float>(positions[0].y_offset) / 64.0f,
+						role.resolvedBaselineOffset);
+				}
+			}
 
 			for (unsigned int glyphIndex = 0; glyphIndex < glyphCount; ++glyphIndex)
 			{
@@ -1323,7 +1383,8 @@ namespace fonthook::vectorfont
 				{
 					++end;
 				}
-				bool canShapeGroup = shape;
+				RuntimeRole& groupRole = *input[begin].resolved.role;
+				bool canShapeGroup = shape && groupRole.style->fixedWidth <= 0.0f;
 				for (size_t index = begin; canShapeGroup && index < end; ++index)
 				{
 					canShapeGroup = input[index].resolved.glyphIndex != 0
@@ -1521,11 +1582,59 @@ namespace fonthook::vectorfont
 		return result;
 	}
 
+	ActiveFontState::OriginalVerticalMetrics CaptureOriginalVerticalMetrics(const Font& font)
+	{
+		ActiveFontState::OriginalVerticalMetrics result;
+		if (!font.pFontData)
+			return result;
+
+		const FontLetter& space = font.pFontData->pFontLetters[' '];
+		result.baseLine = font.pFontData->fBaseLine;
+		result.fontHeight = font.fFontHeight;
+		result.maxDrop = font.fMaxDrop;
+		result.spaceHeight = space.fHeight;
+		result.spaceTopEdge = space.fTopEdge;
+		result.valid = std::isfinite(result.baseLine) && result.baseLine > 0.0f
+			&& std::isfinite(result.fontHeight) && result.fontHeight >= 0.0f
+			&& std::isfinite(result.maxDrop) && result.maxDrop <= 0.0f
+			&& std::isfinite(result.spaceHeight) && result.spaceHeight >= 0.0f
+			&& std::isfinite(result.spaceTopEdge);
+		return result;
+	}
+
 	bool ApplyRuntimeMetrics(RuntimeFont& runtime, Font& font)
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
 		if (!runtime.initialized || !font.pFontData)
 			return false;
+
+		ActiveFontState activeState;
+		const auto active = s_activeFonts.find(&font);
+		if (active != s_activeFonts.end()
+			&& active->second.data == font.pFontData
+			&& active->second.fontId == static_cast<UInt32>(font.iFontNum))
+		{
+			activeState = active->second;
+		}
+		else
+		{
+			activeState.data = font.pFontData;
+			activeState.fontId = static_cast<UInt32>(font.iFontNum);
+		}
+		if (!activeState.originalMetricsCaptured)
+		{
+			activeState.originalMetrics = CaptureOriginalVerticalMetrics(font);
+			activeState.originalMetricsCaptured = true;
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				const auto& original = activeState.originalMetrics;
+				FreeTypeFontDebugLog(
+					"tnvse_freetype_font: original metrics snapshot font=%u valid=%d baseline=%.2f fontHeight=%.2f maxDrop=%.2f space=(top=%.2f height=%.2f)",
+					font.iFontNum, original.valid ? 1 : 0, original.baseLine,
+					original.fontHeight, original.maxDrop,
+					original.spaceTopEdge, original.spaceHeight);
+			}
+		}
 
 		for (UInt32 value = 0x20; value <= 0xFF; ++value)
 		{
@@ -1539,34 +1648,64 @@ namespace fonthook::vectorfont
 				VectorFontByteClass::SingleByte, codePoint);
 		}
 
-		font.pFontData->fBaseLine = runtime.baseLine;
-		font.fMaxDrop = runtime.minBottom;
-		font.fFontHeight = runtime.fontHeight;
+		const bool requestedOriginal = runtime.config->verticalMetrics == VerticalMetricsMode::Original;
+		const bool useOriginal = requestedOriginal && activeState.originalMetrics.valid;
+		if (requestedOriginal && !useOriginal && !activeState.originalFallbackLogged)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: invalid original metrics font=%u; falling back to freetype vertical metrics",
+				font.iFontNum);
+			activeState.originalFallbackLogged = true;
+		}
+
+		const auto& original = activeState.originalMetrics;
+		const bool configuredBaseline = runtime.config->baseline > 0.0f;
+		const float resolvedBaseline = useOriginal
+			? (configuredBaseline
+				? std::ceil(std::max(1.0f, runtime.config->baseline))
+				: original.baseLine)
+			: runtime.baseLine;
+		const float resolvedMaxDrop = useOriginal ? original.maxDrop : runtime.minBottom;
+		const float resolvedFontHeight = useOriginal
+			? resolvedBaseline - original.maxDrop : runtime.fontHeight;
+		const float resolvedSpaceHeight = useOriginal
+			? original.spaceHeight : runtime.glyphHeight;
+		const float resolvedSpaceTop = useOriginal
+			? original.maxDrop + original.spaceHeight
+			: runtime.minBottom + runtime.glyphHeight;
+
+		font.pFontData->fBaseLine = resolvedBaseline;
+		font.fMaxDrop = resolvedMaxDrop;
+		font.fFontHeight = resolvedFontHeight;
 		font.iLineOverlap = 0;
 		FontLetter& space = font.pFontData->pFontLetters[' '];
 		const float serializedSpaceWidth = space.fWidth;
 		space.fWidth = space.fSpacing;
 		space.fSpacing = serializedSpaceWidth;
-		space.fHeight = runtime.glyphHeight;
-		space.fTopEdge = runtime.minBottom + runtime.glyphHeight;
+		space.fHeight = resolvedSpaceHeight;
+		space.fTopEdge = resolvedSpaceTop;
 		font.pFontData->pFontLetters[160] = space;
 		font.pFontData->pFontLetters[0x7F] = font.pFontData->pFontLetters['|'];
 		font.pFontData->pFontLetters[0].fWidth = 0.0f;
 		font.pFontData->pFontLetters[0].fSpacing = 0.0f;
-		font.pFontData->pFontLetters[0].fHeight = runtime.glyphHeight;
-		font.pFontData->pFontLetters[0].fTopEdge = runtime.minBottom + runtime.glyphHeight;
+		font.pFontData->pFontLetters[0].fHeight = resolvedSpaceHeight;
+		font.pFontData->pFontLetters[0].fTopEdge = resolvedSpaceTop;
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: applied metrics font=%u baseline=%.2f fontHeight=%.2f maxDrop=%.2f space=(width=%.2f spacing=%.2f top=%.2f height=%.2f)",
-				font.iFontNum, font.pFontData->fBaseLine, font.fFontHeight, font.fMaxDrop,
+				"tnvse_freetype_font: applied metrics font=%u verticalMetrics=%s baselineSource=%s requestedBaseline=%.2f resolvedBaseline=%.2f fontHeight=%.2f maxDrop=%.2f space=(width=%.2f spacing=%.2f top=%.2f height=%.2f)",
+				font.iFontNum, useOriginal ? "original" : "freetype",
+				useOriginal ? (configuredBaseline ? "configured" : "original")
+					: (configuredBaseline ? "configured" : "freetype"),
+				runtime.config->baseline, font.pFontData->fBaseLine,
+				font.fFontHeight, font.fMaxDrop,
 				space.fWidth, space.fSpacing, space.fTopEdge, space.fHeight);
 		}
 
 		ExtraGlyphMap& extra = gNumberedExtraLetters[font.iFontNum];
 		extra.clear();
 		extra.reserve(25000);
-		s_activeFonts[&font] = { font.pFontData, static_cast<UInt32>(font.iFontNum) };
+		s_activeFonts[&font] = activeState;
 		return true;
 	}
 
@@ -1837,6 +1976,8 @@ namespace fonthook
 			return false;
 		}
 		vectorfont::RuntimeRole& role = runtime->roles[static_cast<size_t>(left.byteClass)];
+		if (role.style->fixedWidth > 0.0f)
+			return true;
 		if (left.faceIndex >= role.faces.size())
 			return false;
 		vectorfont::RuntimeFace& face = role.faces[left.faceIndex];

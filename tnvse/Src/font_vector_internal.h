@@ -47,6 +47,7 @@ namespace fonthook::vectorfont
 		float embolden = 0.0f;
 		float slantDegrees = 0.0f;
 		float baselineOffset = 0.0f;
+		float fixedWidth = 0.0f;
 		std::vector<FaceConfig> faces;
 	};
 
@@ -72,6 +73,12 @@ namespace fonthook::vectorfont
 		CodePage = 2,
 	};
 
+	enum class VerticalMetricsMode : UInt8
+	{
+		FreeType = 0,
+		Original = 1,
+	};
+
 	enum class GlyphMeshType : UInt8
 	{
 		Fill = 0,
@@ -91,6 +98,7 @@ namespace fonthook::vectorfont
 		UInt32 fontId = 0;
 		std::array<ByteStyle, 2> styles;
 		FontPrewarmMode prewarm = FontPrewarmMode::None;
+		VerticalMetricsMode verticalMetrics = VerticalMetricsMode::FreeType;
 		bool shaping = false;
 		std::vector<std::string> shapingFeatures;
 		float baseline = 0.0f;

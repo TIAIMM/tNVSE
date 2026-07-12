@@ -79,6 +79,8 @@ namespace fonthook::vectorfont
 				style.slantDegrees = node.attribute("slant").as_float(style.slantDegrees);
 			if (node.attribute("baselineOffset"))
 				style.baselineOffset = node.attribute("baselineOffset").as_float(style.baselineOffset);
+			if (node.attribute("fixedWidth"))
+				style.fixedWidth = node.attribute("fixedWidth").as_float(style.fixedWidth);
 		}
 
 		bool IsValidStyle(const ByteStyle& style)
@@ -89,7 +91,8 @@ namespace fonthook::vectorfont
 				&& std::isfinite(style.scaleY) && style.scaleY > 0.0f
 				&& std::isfinite(style.embolden) && style.embolden >= 0.0f
 				&& std::isfinite(style.slantDegrees)
-				&& std::isfinite(style.baselineOffset);
+				&& std::isfinite(style.baselineOffset)
+				&& std::isfinite(style.fixedWidth) && style.fixedWidth >= 0.0f;
 		}
 
 		bool ReadFaceChain(pugi::xml_node node, std::vector<FaceConfig>& faces)
@@ -191,6 +194,7 @@ namespace fonthook::vectorfont
 		{
 			UInt64 hash = 1469598103934665603ull;
 			HashBytes(hash, &config.fontId, sizeof(config.fontId));
+			HashBytes(hash, &config.verticalMetrics, sizeof(config.verticalMetrics));
 			HashBytes(hash, &config.shaping, sizeof(config.shaping));
 			for (const std::string& feature : config.shapingFeatures)
 			{
@@ -228,6 +232,7 @@ namespace fonthook::vectorfont
 				HashBytes(hash, &style.embolden, sizeof(style.embolden));
 				HashBytes(hash, &style.slantDegrees, sizeof(style.slantDegrees));
 				HashBytes(hash, &style.baselineOffset, sizeof(style.baselineOffset));
+				HashBytes(hash, &style.fixedWidth, sizeof(style.fixedWidth));
 				for (const FaceConfig& face : style.faces)
 				{
 					HashBytes(hash, face.path.data(), face.path.size() * sizeof(wchar_t));
@@ -257,6 +262,17 @@ namespace fonthook::vectorfont
 			else
 			{
 				reason = "prewarm must be none, common, or codepage";
+				return false;
+			}
+
+			const std::string verticalMetrics = node.attribute("verticalMetrics").as_string("freetype");
+			if (verticalMetrics == "freetype")
+				config.verticalMetrics = VerticalMetricsMode::FreeType;
+			else if (verticalMetrics == "original")
+				config.verticalMetrics = VerticalMetricsMode::Original;
+			else
+			{
+				reason = "verticalMetrics must be freetype or original";
 				return false;
 			}
 
@@ -357,8 +373,10 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d glow=%d outline=%d shadow=%d",
-				config.fontId, static_cast<UInt32>(config.prewarm), config.shaping ? 1 : 0,
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d glow=%d outline=%d shadow=%d",
+				config.fontId, static_cast<UInt32>(config.prewarm),
+				config.verticalMetrics == VerticalMetricsMode::Original ? "original" : "freetype",
+				config.shaping ? 1 : 0,
 				static_cast<UInt32>(config.shapingFeatures.size()),
 				config.baseline, config.curveTolerance,
 				config.fontColor.configured, config.glow.enabled,
@@ -375,9 +393,9 @@ namespace fonthook::vectorfont
 			{
 				const ByteStyle& style = config.styles[roleIndex];
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font:   %s size=%.2f tracking=%.2f scale=(%.3f,%.3f) embolden=%.2f slant=%.2f baseline=%.2f faces=%u",
+					"tnvse_freetype_font:   %s size=%.2f tracking=%.2f fixedWidth=%.2f scale=(%.3f,%.3f) embolden=%.2f slant=%.2f baseline=%.2f faces=%u",
 					roleNames[roleIndex], style.pixelSize, style.tracking,
-					style.scaleX, style.scaleY, style.embolden, style.slantDegrees,
+					style.fixedWidth, style.scaleX, style.scaleY, style.embolden, style.slantDegrees,
 					style.baselineOffset, static_cast<UInt32>(style.faces.size()));
 				for (size_t faceIndex = 0; faceIndex < style.faces.size(); ++faceIndex)
 				{

@@ -28,6 +28,13 @@
       tracking
         Additional character spacing in pixels. May be positive, zero, or
         negative. Default: 0.
+      fixedWidth
+        Fixed logical cell width in pixels. 0 keeps proportional advances and
+        is the default. A positive value centers each glyph body in a cell of
+        this width, disables kerning and HarfBuzz shaping for that byte class,
+        and makes its final advance fixedWidth + tracking. This follows the
+        fixed-font behavior used by DCFGCF and is intended for grid-based UI
+        such as the terminal hacking screen.
       scaleX / scaleY
         Horizontal and vertical glyph scale. Must be greater than 0.
         Default: 1.
@@ -42,13 +49,21 @@
       baselineOffset
         Vertical baseline adjustment in pixels. May be positive or negative.
         Default: 0.
+      verticalMetrics
+        Selects the aggregate line-box source. "freetype" derives fBaseLine,
+        fFontHeight, fMaxDrop, and space height from the configured faces and
+        is the backward-compatible default. "original" preserves the line box
+        loaded from the original .fnt while FreeType and HarfBuzz continue to
+        position the actual glyphs. This attribute is read only from <font>.
       baseline
         Fallout fBaseLine (line rise/ascent) in pixels; it is not the total
-        line-box height. 0 derives it from both byte classes. A positive value
-        sets it manually, rounds it upward to the game's integer metric, and
-        disables automatic visual-center correction between byte classes.
-        Default: 0. This attribute is read only from <font> and cannot be
-        overridden per byte class.
+        line-box height. In verticalMetrics="original" mode, 0 inherits the
+        original .fnt baseline and a positive value takes priority over it.
+        In verticalMetrics="freetype" mode, 0 derives it from both byte
+        classes. Positive values round upward to the game's integer metric.
+        Original mode retains automatic visual-center correction between byte
+        classes even with a manual baseline. This attribute is read only from
+        <font> and cannot be overridden per byte class. Default: 0.
       curveTolerance
         Curve-flattening tolerance for the vector fallback path. Minimum:
         0.01. Default: 0.35. The normal grayscale atlas path does not use it.
@@ -88,12 +103,13 @@
 
       singleByte and doubleByte may independently override these <font>
       attributes:
-        pixelSize, tracking, scaleX, scaleY, embolden, slant, baselineOffset
+        pixelSize, tracking, fixedWidth, scaleX, scaleY, embolden, slant,
+        baselineOffset
 
       Attributes not overridden by a byte class are inherited from <font>.
-      shaping, features, baseline, curveTolerance, fontColor, fontAlpha, glow,
-      outline, and shadow apply to the entire font ID and cannot be overridden
-      per group.
+      shaping, features, verticalMetrics, baseline, curveTolerance, fontColor,
+      fontAlpha, glow, outline, and shadow apply to the entire font ID and
+      cannot be overridden per group.
 
       3. Font files and fallback chains
 
@@ -141,10 +157,10 @@
     -->
 
     <!-- 1: Glow_Monofonto_Large -->
-    <font id="1" prewarm="codepage" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="31"
+    <font id="1" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
-      <singleByte pixelSize="27" tracking="0" scaleX="1" scaleY="1"
+      <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
@@ -160,10 +176,10 @@
     </font>
 
     <!-- 2: Monofonto_Large -->
-    <font id="2" prewarm="codepage" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="31"
+    <font id="2" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
-      <singleByte pixelSize="27" tracking="0" scaleX="1" scaleY="1"
+      <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
@@ -179,10 +195,10 @@
     </font>
 
     <!-- 3: Glow_Monofonto_Medium -->
-    <font id="3" prewarm="codepage" shaping="1" features="" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="26"
+    <font id="3" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
-      <singleByte pixelSize="26" tracking="0" scaleX="1" scaleY="1"
+      <singleByte pixelSize="26" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
@@ -198,10 +214,10 @@
     </font>
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
-    <font id="4" prewarm="codepage" shaping="1" features="" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="36"
+    <font id="4" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
-      <singleByte pixelSize="32" tracking="0" scaleX="1" scaleY="1"
+      <singleByte pixelSize="32" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
@@ -217,17 +233,17 @@
     </font>
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
-    <font id="5" prewarm="codepage" shaping="1" features="" pixelSize="25" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="25"
+    <font id="5" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
-      <singleByte pixelSize="32" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
+      <singleByte pixelSize="28" tracking="0" fixedWidth="17" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="-1">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
-      <doubleByte pixelSize="20" tracking="0" scaleX="1" scaleY="1"
+      <doubleByte pixelSize="26" tracking="0" fixedWidth="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\WenQuanYi Bitmap Song 16px.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
       <glow enabled="0" width="2" color="#FFFFFF" alpha="0.35"/>
@@ -236,10 +252,10 @@
     </font>
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
-    <font id="6" prewarm="codepage" shaping="1" features="" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="34"
+    <font id="6" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
-      <singleByte pixelSize="30" tracking="0" scaleX="1" scaleY="1"
+      <singleByte pixelSize="30" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
@@ -255,16 +271,16 @@
     </font>
 
     <!-- 7: Baked-in_Monofonto_Large -->
-    <font id="7" prewarm="codepage" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="-2" baseline="36"
+    <font id="7" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
-      <singleByte pixelSize="27" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="-2">
+      <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="-2">
+                  embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
@@ -274,8 +290,8 @@
     </font>
 
     <!-- 8: Glow_Futura_Caps_Large -->
-    <font id="8" prewarm="codepage" shaping="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="52"
+    <font id="8" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+          embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="52" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
