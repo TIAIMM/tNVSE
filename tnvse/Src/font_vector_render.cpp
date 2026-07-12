@@ -373,6 +373,7 @@ namespace fonthook
 		struct RichTextVectorContext
 		{
 			NiNode* parent = nullptr;
+			float rasterScale = 1.0f;
 			std::unordered_map<Font*, std::unique_ptr<VectorTextBuilder>> builders;
 		};
 
@@ -570,6 +571,7 @@ namespace fonthook
 	{
 		s_richTextContext = std::make_unique<RichTextVectorContext>();
 		s_richTextContext->parent = parent;
+		s_richTextContext->rasterScale = ResolveFreeTypeRasterScale();
 	}
 
 	void EndFreeTypeRichTextRender()
@@ -611,7 +613,8 @@ namespace fonthook
 
 		auto& builder = s_richTextContext->builders[font];
 		if (!builder)
-			builder = std::make_unique<VectorTextBuilder>(font, true);
+			builder = std::make_unique<VectorTextBuilder>(font, true,
+				s_richTextContext->rasterScale);
 		if (builder->IsAvailable())
 			builder->AddGlyph(glyph, pen, color);
 		return true;

@@ -7,7 +7,14 @@ The feature is disabled by default. Enable both options in `tnvse.ini`:
 bEnableMultibyteFontHook=1
 bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
+bEnableFreeTypeDevicePixelScale=1
 ```
+
+`bEnableFreeTypeDevicePixelScale=1` rasterizes glyphs at the physical screen
+pixel density reported by the UI `resolutionconverter` trait. UIO 2.30 zoom is
+multiplied into that device scale for affected `CreateText` calls. Layout,
+wrapping, alignment, and returned dimensions remain in game UI units. Set the
+option to `0` to retain the previous 1.0 device raster scale.
 
 Set `bEnableFreeTypeFontRenderingLog=1` while diagnosing configuration or font
 loading. The log records the XML path, resolved face paths, FreeType errors,

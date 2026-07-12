@@ -51,6 +51,9 @@ namespace fonthook
 	void HandleFreeTypeShaderLoaderMessage(UInt32 auiMessageType);
 	void PumpFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
+	void UpdateFreeTypeDevicePixelScale();
+	bool TryGetFreeTypeDevicePixelScale(float& arScale);
+	float ResolveFreeTypeRasterScale(float afLocalScale = 1.0f);
 	float ConsumeFreeTypeCreateTextScale();
 	void FreeTypeCreateTextEntryHook();
 	bool InitializeFreeTypeVectorRenderer();

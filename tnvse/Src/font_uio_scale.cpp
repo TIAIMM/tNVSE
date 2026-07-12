@@ -2,9 +2,11 @@
 #include "font_vector.h"
 #include "load_config.h"
 #include "tnvse.h"
+#include "InterfaceManager.hpp"
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -13,6 +15,9 @@ namespace
 	constexpr UInt32 kSupportedUioVersion = 230;
 	constexpr float kMinimumUioScale = 0.1f;
 	constexpr float kMaximumUioScale = 10.0f;
+	constexpr float kMinimumRasterScale = 0.1f;
+	constexpr float kMaximumRasterScale = 10.0f;
+	constexpr LONG kRasterScalePrecision = 1000;
 	constexpr UInt8 kUioReturnSignature[] = { 0x8B, 0x95, 0x50, 0xFF, 0xFF, 0xFF };
 
 	enum UioCompatibilityState : LONG
@@ -25,6 +30,9 @@ namespace
 
 	volatile LONG s_uioState = kUioUnchecked;
 	volatile LONG s_failureLogMask = 0;
+	volatile LONG s_deviceScaleMilli = 0;
+	volatile LONG s_lastCombinedScaleKey = 0;
+	volatile LONG s_combinedScaleLogCount = 0;
 	thread_local float s_createTextScale = 1.0f;
 
 	enum UioFailureLog : LONG
@@ -35,6 +43,16 @@ namespace
 		kLogCaller = 1 << 3,
 		kLogFrame = 1 << 4,
 		kLogScale = 1 << 5,
+		kLogDeviceScaleMissing = 1 << 6,
+		kLogDeviceScaleInvalid = 1 << 7,
+		kLogDeviceScaleClamped = 1 << 8,
+	};
+
+	enum class DeviceScaleReadResult
+	{
+		Success,
+		Missing,
+		Invalid,
 	};
 
 	void LogFailureOnce(LONG bit, const char* message)
@@ -99,6 +117,83 @@ namespace
 		begin = reinterpret_cast<uintptr_t>(module);
 		end = begin + nt->OptionalHeader.SizeOfImage;
 		return end > begin;
+	}
+
+	LONG CanonicalScaleMilli(float scale)
+	{
+		const float clamped = std::max(kMinimumRasterScale,
+			std::min(kMaximumRasterScale, scale));
+		return std::max<LONG>(1, static_cast<LONG>(std::lround(
+			clamped * static_cast<float>(kRasterScalePrecision))));
+	}
+
+	DeviceScaleReadResult ReadDevicePixelScale(
+		float& resolutionConverter, float& deviceScale, bool& clamped)
+	{
+		resolutionConverter = 0.0f;
+		deviceScale = 1.0f;
+		clamped = false;
+
+		InterfaceManager* manager = InterfaceManager::GetSingleton();
+		if (!manager || !manager->pMenuRoot)
+			return DeviceScaleReadResult::Missing;
+
+		Tile::Value* value = manager->pMenuRoot->GetValue(
+			Tile::kTileValue_resolutionconverter);
+		if (!value)
+			return DeviceScaleReadResult::Missing;
+
+		resolutionConverter = value->fNum;
+		if (!std::isfinite(resolutionConverter) || resolutionConverter <= 0.0f)
+			return DeviceScaleReadResult::Invalid;
+
+		const float rawScale = 1.0f / resolutionConverter;
+		if (!std::isfinite(rawScale) || rawScale <= 0.0f)
+			return DeviceScaleReadResult::Invalid;
+
+		deviceScale = std::max(kMinimumRasterScale,
+			std::min(kMaximumRasterScale, rawScale));
+		clamped = std::fabs(deviceScale - rawScale) > 0.0001f;
+		return DeviceScaleReadResult::Success;
+	}
+
+	void RefreshDevicePixelScale()
+	{
+		if (!g_bEnableFreeTypeDevicePixelScale)
+		{
+			InterlockedExchange(&s_deviceScaleMilli, kRasterScalePrecision);
+			return;
+		}
+
+		float resolutionConverter = 0.0f;
+		float deviceScale = 1.0f;
+		bool clamped = false;
+		const DeviceScaleReadResult result = ReadDevicePixelScale(
+			resolutionConverter, deviceScale, clamped);
+		if (result != DeviceScaleReadResult::Success)
+		{
+			InterlockedExchange(&s_deviceScaleMilli, 0);
+			LogFailureOnce(result == DeviceScaleReadResult::Missing
+				? kLogDeviceScaleMissing : kLogDeviceScaleInvalid,
+				result == DeviceScaleReadResult::Missing
+					? "screen resolutionconverter is not available; device scale uses 1.0 and prewarm is deferred"
+					: "screen resolutionconverter is invalid; device scale uses 1.0 and prewarm is deferred");
+			return;
+		}
+
+		if (clamped)
+			LogFailureOnce(kLogDeviceScaleClamped,
+				"device pixel scale was clamped to the supported 0.1-10.0 range");
+
+		const LONG canonical = CanonicalScaleMilli(deviceScale);
+		const LONG previous = InterlockedExchange(&s_deviceScaleMilli, canonical);
+		if (g_bEnableFreeTypeFontRenderingLog && previous != canonical)
+		{
+			fonthook::FreeTypeFontDebugLog(
+				"tnvse_freetype_font: device pixel scale resolutionconverter=%.6f raw=%.6f canonical=%.3f",
+				resolutionConverter, 1.0f / resolutionConverter,
+				static_cast<float>(canonical) / kRasterScalePrecision);
+		}
 	}
 }
 
@@ -169,14 +264,71 @@ namespace fonthook
 	void FinalizeFreeTypeUioDetection()
 	{
 		QueryUioCompatibility(true);
+		RefreshDevicePixelScale();
+	}
+
+	void UpdateFreeTypeDevicePixelScale()
+	{
+		RefreshDevicePixelScale();
+	}
+
+	bool TryGetFreeTypeDevicePixelScale(float& scale)
+	{
+		if (!g_bEnableFreeTypeDevicePixelScale)
+		{
+			scale = 1.0f;
+			return true;
+		}
+
+		LONG milli = InterlockedCompareExchange(&s_deviceScaleMilli, 0, 0);
+		if (!milli)
+		{
+			RefreshDevicePixelScale();
+			milli = InterlockedCompareExchange(&s_deviceScaleMilli, 0, 0);
+		}
+		if (!milli)
+		{
+			scale = 1.0f;
+			return false;
+		}
+
+		scale = static_cast<float>(milli) / kRasterScalePrecision;
+		return true;
+	}
+
+	float ResolveFreeTypeRasterScale(float localScale)
+	{
+		if (!std::isfinite(localScale)
+			|| localScale < kMinimumRasterScale || localScale > kMaximumRasterScale)
+		{
+			localScale = 1.0f;
+		}
+
+		float deviceScale = 1.0f;
+		TryGetFreeTypeDevicePixelScale(deviceScale);
+		const float rawCombined = deviceScale * localScale;
+		const LONG finalMilli = CanonicalScaleMilli(rawCombined);
+		const LONG localMilli = CanonicalScaleMilli(localScale);
+		const LONG logKey = localMilli * 10001 + finalMilli;
+		const LONG previousKey = InterlockedExchange(&s_lastCombinedScaleKey, logKey);
+		if (g_bEnableFreeTypeFontRenderingLog && previousKey != logKey
+			&& InterlockedIncrement(&s_combinedScaleLogCount) <= 64)
+		{
+			FreeTypeFontDebugLog(
+				"tnvse_freetype_font: raster scale device=%.3f uio=%.3f combined=%.6f canonical=%.3f%s",
+				deviceScale, localScale, rawCombined,
+				static_cast<float>(finalMilli) / kRasterScalePrecision,
+				std::fabs(rawCombined - static_cast<float>(finalMilli)
+					/ kRasterScalePrecision) > 0.0005f ? " clamped-or-rounded" : "");
+		}
+		return static_cast<float>(finalMilli) / kRasterScalePrecision;
 	}
 
 	float ConsumeFreeTypeCreateTextScale()
 	{
-		const float result = s_createTextScale;
+		const float localScale = s_createTextScale;
 		s_createTextScale = 1.0f;
-		return std::isfinite(result) && result >= kMinimumUioScale
-			&& result <= kMaximumUioScale ? result : 1.0f;
+		return ResolveFreeTypeRasterScale(localScale);
 	}
 
 	__declspec(naked) void FreeTypeCreateTextEntryHook()

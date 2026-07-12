@@ -4,6 +4,7 @@
 #include "load_config.h"
 
 #include <array>
+#include <cmath>
 #include <deque>
 #include <unordered_set>
 
@@ -28,6 +29,7 @@ namespace fonthook::vectorfont
 			UInt32 trailByteStart = 0x40;
 			UInt32 validDoubleByteCount = 0;
 			UInt32 rasterizedGlyphCount = 0;
+			UInt32 rasterScaleMilli = 0;
 			bool scanningDoubleByte = false;
 		};
 
@@ -242,10 +244,27 @@ namespace fonthook::vectorfont
 		void FinishJob(const PrewarmJob& job, const char* status)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm font=%u mode=%s glyphs=%u doubleByte=%u status=%s",
+				"tnvse_freetype_font: prewarm font=%u mode=%s scale=%.3f glyphs=%u doubleByte=%u status=%s",
 				job.fontId,
 				job.mode == FontPrewarmMode::CodePage ? "codepage" : "common",
+				job.rasterScaleMilli ? job.rasterScaleMilli / 1000.0f : 0.0f,
 				job.rasterizedGlyphCount, job.validDoubleByteCount, status);
+		}
+
+		void ResetPrewarmScan(PrewarmJob& job, UInt32 rasterScaleMilli)
+		{
+			job.singleByte = 0x20;
+			job.leadByte = 0x81;
+			job.leadByteEnd = 0xFE;
+			job.trailByte = 0x40;
+			job.trailByteStart = 0x40;
+			job.validDoubleByteCount = 0;
+			job.rasterizedGlyphCount = 0;
+			job.rasterScaleMilli = rasterScaleMilli;
+			job.scanningDoubleByte = false;
+			if (!job.codePage)
+				job.leadByteEnd = 0;
+			ConfigureCommonRange(job);
 		}
 	}
 
@@ -262,9 +281,7 @@ namespace fonthook::vectorfont
 		job.styleHash = config->styleHash;
 		job.codePage = g_usingWinEncoding;
 		job.mode = config->prewarm;
-		if (!job.codePage)
-			job.leadByteEnd = 0;
-		ConfigureCommonRange(job);
+		ResetPrewarmScan(job, 0);
 		s_jobs.push_back(job);
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: queued prewarm font=%u mode=%s codePage=%u",
@@ -277,8 +294,17 @@ namespace fonthook::vectorfont
 		if (s_jobs.empty() || !g_bEnableFreeTypeFontRendering)
 			return;
 
+		float deviceScale = 1.0f;
+		if (!TryGetFreeTypeDevicePixelScale(deviceScale))
+			return;
+		const UInt32 rasterScaleMilli = static_cast<UInt32>(std::lround(
+			deviceScale * 1000.0f));
+
 		PrewarmJob job = s_jobs.front();
 		s_jobs.pop_front();
+		if (job.rasterScaleMilli != rasterScaleMilli)
+			ResetPrewarmScan(job, rasterScaleMilli);
+		const float rasterScale = job.rasterScaleMilli / 1000.0f;
 		const FontConfig* config = FindConfig(job.fontId);
 		RuntimeFont* runtime = FindRuntimeFont(job.fontId);
 		if (!config || !runtime || config->styleHash != job.styleHash
@@ -320,22 +346,22 @@ namespace fonthook::vectorfont
 			}
 
 			AddBitmap(bitmaps, unique, GetGlyphBitmap(
-				*runtime, glyph, GlyphMaskType::Fill, 1.0f));
+				*runtime, glyph, GlyphMaskType::Fill, rasterScale));
 			if (config->glow.enabled)
 			{
 				AddBitmap(bitmaps, unique, GetGlyphBitmap(
-					*runtime, glyph, GlyphMaskType::Glow, 1.0f));
+					*runtime, glyph, GlyphMaskType::Glow, rasterScale));
 			}
 			if (config->outline.enabled)
 			{
 				AddBitmap(bitmaps, unique, GetGlyphBitmap(
-					*runtime, glyph, GlyphMaskType::Outline, 1.0f));
+					*runtime, glyph, GlyphMaskType::Outline, rasterScale));
 			}
 			++glyphs;
 			++job.rasterizedGlyphCount;
 		}
 
-		if (!bitmaps.empty() && !PrewarmGlyphAtlas(*runtime, bitmaps, 1.0f))
+		if (!bitmaps.empty() && !PrewarmGlyphAtlas(*runtime, bitmaps, rasterScale))
 		{
 			FinishJob(job, "atlas-full");
 			return;

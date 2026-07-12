@@ -9,6 +9,7 @@ bool g_bEnableUTF8;
 bool g_bEnableMultibyteFontHook;
 bool g_bEnableFreeTypeFontRendering;
 bool g_bEnableFreeTypeFontRenderingLog;
+bool g_bEnableFreeTypeDevicePixelScale;
 UINT32 g_uiFreeTypeFontMemoryCacheMB;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputDebug;
@@ -113,6 +114,9 @@ void LoadConfig()
 
 	g_bEnableFreeTypeFontRenderingLog = ReadConfigInt(kMainSection, nullptr, "bEnableFreeTypeFontRenderingLog", 0, filename);
 	gLog.FormattedMessage("g_bEnableFreeTypeFontRenderingLog: %d", g_bEnableFreeTypeFontRenderingLog);
+
+	g_bEnableFreeTypeDevicePixelScale = ReadConfigInt(kMainSection, nullptr, "bEnableFreeTypeDevicePixelScale", 1, filename);
+	gLog.FormattedMessage("g_bEnableFreeTypeDevicePixelScale: %d", g_bEnableFreeTypeDevicePixelScale);
 
 	g_uiFreeTypeFontMemoryCacheMB = std::clamp<UINT32>(
 		ReadConfigInt(kMainSection, nullptr, "uiFreeTypeFontMemoryCacheMB", 192, filename), 64, 384);

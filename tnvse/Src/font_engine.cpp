@@ -1463,7 +1463,8 @@ namespace fonthook
 
 		if (IsFreeTypeFontActive(this))
 		{
-			VectorTextBuilder builder(this, abPrepareObject_1);
+			const float rasterScale = ResolveFreeTypeRasterScale();
+			VectorTextBuilder builder(this, abPrepareObject_1, rasterScale);
 			if (!builder.IsAvailable())
 			{
 				NiTriShape* empty = CreateEmptyFreeTypeTextShape(this, abPrepareObject_1);

@@ -42,6 +42,7 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 	{
+		fonthook::UpdateFreeTypeDevicePixelScale();
 		fonthook::HandleFreeTypeA8MainLoop();
 		fonthook::PumpFreeTypeFontPrewarm();
 		fonthook::PumpFreeTypeFontPerformance();
