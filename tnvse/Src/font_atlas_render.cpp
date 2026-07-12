@@ -1353,44 +1353,80 @@ namespace fonthook::vectorfont
 			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
 			const std::array<bool, 4>& included, std::vector<PendingQuad>& quads)
 		{
+			struct PreparedGlyph
+			{
+				const AtlasGlyphInstance* instance = nullptr;
+				std::shared_ptr<const GlyphBitmap> fill;
+				std::shared_ptr<const GlyphBitmap> glow;
+				std::shared_ptr<const GlyphBitmap> outline;
+			};
+
 			quads.clear();
 			const FontConfig& config = GetRuntimeConfig(runtime);
+			thread_local std::vector<PreparedGlyph> prepared;
+			prepared.clear();
+			prepared.reserve(glyphs.size());
 			for (const AtlasGlyphInstance& instance : glyphs)
 			{
-				const auto fill = GetGlyphBitmap(runtime, instance.glyph,
+				PreparedGlyph glyph;
+				glyph.instance = &instance;
+				glyph.fill = GetGlyphBitmap(runtime, instance.glyph,
 					GlyphMaskType::Fill, rasterScale);
-				if (!fill)
+				if (!glyph.fill)
 					return false;
-				if (included[static_cast<size_t>(AtlasLayer::Shadow)] && config.shadow.enabled)
-				{
-					AddPendingQuad(quads, fill, instance,
-						ResolveEffectColor(config.shadow, instance.color),
-						config.shadow.x, config.shadow.y, rasterScale, AtlasLayer::Shadow);
-				}
 				if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
 				{
-					const auto glow = GetGlyphBitmap(runtime, instance.glyph,
+					glyph.glow = GetGlyphBitmap(runtime, instance.glyph,
 						GlyphMaskType::Glow, rasterScale);
-					if (!glow)
+					if (!glyph.glow)
 						return false;
-					AddPendingQuad(quads, glow, instance,
-						ResolveEffectColor(config.glow, instance.color),
-						0.0f, 0.0f, rasterScale, AtlasLayer::Glow);
 				}
 				if (included[static_cast<size_t>(AtlasLayer::Outline)] && config.outline.enabled)
 				{
-					const auto outline = GetGlyphBitmap(runtime, instance.glyph,
+					glyph.outline = GetGlyphBitmap(runtime, instance.glyph,
 						GlyphMaskType::Outline, rasterScale);
-					if (!outline)
+					if (!glyph.outline)
 						return false;
-					AddPendingQuad(quads, outline, instance,
-						ResolveEffectColor(config.outline, instance.color),
+				}
+				prepared.push_back(std::move(glyph));
+			}
+
+			// Tile text does not consistently depth-test effect triangles. Submit each
+			// complete layer before the next one so a later glyph's effect cannot cover
+			// an earlier glyph's fill.
+			if (included[static_cast<size_t>(AtlasLayer::Shadow)] && config.shadow.enabled)
+			{
+				for (const PreparedGlyph& glyph : prepared)
+				{
+					AddPendingQuad(quads, glyph.fill, *glyph.instance,
+						ResolveEffectColor(config.shadow, glyph.instance->color),
+						config.shadow.x, config.shadow.y, rasterScale, AtlasLayer::Shadow);
+				}
+			}
+			if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
+			{
+				for (const PreparedGlyph& glyph : prepared)
+				{
+					AddPendingQuad(quads, glyph.glow, *glyph.instance,
+						ResolveEffectColor(config.glow, glyph.instance->color),
+						0.0f, 0.0f, rasterScale, AtlasLayer::Glow);
+				}
+			}
+			if (included[static_cast<size_t>(AtlasLayer::Outline)] && config.outline.enabled)
+			{
+				for (const PreparedGlyph& glyph : prepared)
+				{
+					AddPendingQuad(quads, glyph.outline, *glyph.instance,
+						ResolveEffectColor(config.outline, glyph.instance->color),
 						0.0f, 0.0f, rasterScale, AtlasLayer::Outline);
 				}
-				if (included[static_cast<size_t>(AtlasLayer::Fill)])
+			}
+			if (included[static_cast<size_t>(AtlasLayer::Fill)])
+			{
+				for (const PreparedGlyph& glyph : prepared)
 				{
-					AddPendingQuad(quads, fill, instance,
-						ResolveFillColor(config.fontColor, instance.color),
+					AddPendingQuad(quads, glyph.fill, *glyph.instance,
+						ResolveFillColor(config.fontColor, glyph.instance->color),
 						0.0f, 0.0f, rasterScale, AtlasLayer::Fill);
 				}
 			}
