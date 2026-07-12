@@ -838,20 +838,21 @@ namespace fonthook
 			{
 				return true;
 			}
-
-			const bool handled = HandleStewieInput(menu, input);
-
-			// Stewie's Inventory and Stats InputField deactivates on Enter. Map
-			// reserves Enter for recentering and keeps search active.
 			if (input == kInputCode_Enter
-				&& handled
 				&& target.valid
 				&& target.inputField
 				&& MenuID(menu) != PipboyData)
 			{
-				if (StewieMenuSearchHook* hook = FindMenuSearchHookByMenu(menu))
-					DeactivateMenuSearch(*hook, "inputfield_enter");
+				// Inventory and Stats close Stewie's InputField on Enter while the
+				// visible search tile remains open. Consume empty Enter for ordinary
+				// English layouts as well, keeping keyboardActive and Ctrl+F in sync.
+				DebugLog(
+					"tnvse_multibyte_input_event: source=MenuSearch.Enter action=suppress_empty_inputfield_enter menu=%u",
+					MenuID(menu));
+				return true;
 			}
+
+			const bool handled = HandleStewieInput(menu, input);
 
 			return handled;
 		}

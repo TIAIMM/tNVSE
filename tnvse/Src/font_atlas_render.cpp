@@ -976,7 +976,11 @@ namespace fonthook::vectorfont
 			std::copy(batch->colors.begin(), batch->colors.end(), data->m_pkColor);
 			std::copy(batch->indices.begin(), batch->indices.end(), data->m_pusTriList);
 			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
-			if (atlas->pixelMode == AtlasPixelMode::A8 && !PrepareA8AtlasShape(shape))
+			if (atlas->pixelMode == AtlasPixelMode::A8
+				&& !PrepareA8AtlasShape(shape, font.iFontNum,
+					static_cast<UInt32>(std::count_if(quads.begin(), quads.end(),
+						[](const PendingQuad& quad) { return quad.layer == AtlasLayer::Fill; })),
+					static_cast<UInt32>(quads.size())))
 				return nullptr;
 			if (prepareObject)
 				shape->PrepareObject();

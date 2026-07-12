@@ -1400,6 +1400,11 @@ namespace fonthook
 			if (!target.valid || !s_window || !IsConfiguredImeLayout(s_window))
 				return false;
 
+			RefreshImeStatus(s_window);
+			const bool imeWasOpen = s_imeCandidateState.imeOpen;
+			const bool imeWasNative =
+				(s_imeCandidateState.conversionMode & IME_CMODE_NATIVE) != 0;
+
 			std::wstring composition = GetStewieImeEnterLiteral(s_window);
 
 			if (!composition.empty())
@@ -1436,7 +1441,17 @@ namespace fonthook
 				return true;
 			}
 
-			return false;
+			// An empty Enter belongs to the active menu-search session whenever the
+			// configured IME layout is selected, including its English sub-mode.
+			// Stewie's InputField otherwise deactivates while the visible search tile
+			// remains open, leaving both the IME session and the next Ctrl+F out of sync.
+			s_lastStewieImeEnterKeyTick = 0;
+			UpdateCandidateOverlay();
+			DebugLog(
+				"tnvse_multibyte_input_event: source=MenuSearch.Enter action=suppress_empty_configured_ime_enter open=%u native=%u",
+				imeWasOpen ? 1 : 0,
+				imeWasNative ? 1 : 0);
+			return true;
 		}
 
 		bool ShouldSuppressDuplicateImeChar()

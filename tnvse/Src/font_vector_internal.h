@@ -160,5 +160,6 @@ namespace fonthook::vectorfont
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
 		bool abPrepareObject);
 	bool IsA8RendererAvailable();
-	bool PrepareA8AtlasShape(NiTriShape* apShape);
+	bool PrepareA8AtlasShape(NiTriShape* apShape, UInt32 auiFontId,
+		UInt32 auiGlyphCount, UInt32 auiQuadCount);
 }

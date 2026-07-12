@@ -1,4 +1,5 @@
 sampler2D FontAtlas : register(s0);
+float4 TileColor : register(c0);
 
 struct PixelInput
 {
@@ -9,5 +10,6 @@ struct PixelInput
 float4 Main(PixelInput input) : COLOR0
 {
 	const float coverage = tex2D(FontAtlas, input.uv).a;
-	return float4(input.color.rgb, saturate(input.color.a * coverage));
+	const float4 color = input.color * TileColor;
+	return float4(color.rgb, saturate(color.a * coverage));
 }
