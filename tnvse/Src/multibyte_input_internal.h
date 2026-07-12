@@ -158,6 +158,7 @@ namespace fonthook
 		void ClearImeCandidates();
 		void HideSystemImeWindows(HWND hwnd);
 		void SetTextInputSessionActive(bool active);
+		void RefreshTextInputSessionForActiveTarget(const char* reason);
 		void SetGameImeEnabled(HWND hwnd, bool enable);
 		void RestoreDefaultGameImeContext(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);
 		void EnsureConfiguredImeOpen(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);

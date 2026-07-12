@@ -7,7 +7,7 @@ namespace fonthook
 	namespace multibyte_input
 	{
 		constexpr DWORD kDuplicateImeCharSuppressMs = 250;
-		constexpr DWORD kNativeImeAsciiGuardMs = 1000;
+		constexpr DWORD kNativeImeAsciiGuardMs = 250;
 		constexpr UInt32 kMaxImeCandidatesToDisplay = 9;
 
 		bool s_compositionEchoChecked = false;
@@ -452,26 +452,14 @@ namespace fonthook
 			{
 				if (!s_imeCandidateState.composition.empty() || !s_imeCandidateState.candidates.empty())
 					return true;
-
-				if (s_imeCandidateState.imeOpen
-					&& (s_imeCandidateState.conversionMode & IME_CMODE_NATIVE))
-					return true;
 			}
 
-			HIMC context = ImmGetContext(s_window);
-			if (!context)
-				return false;
-
-			DWORD conversionMode = 0;
-			DWORD sentenceMode = 0;
-			const bool isOpen = ImmGetOpenStatus(context) != FALSE;
-			const bool hasConversionStatus = ImmGetConversionStatus(
-				context,
-				&conversionMode,
-				&sentenceMode) != FALSE;
-			ImmReleaseContext(s_window, context);
-
-			return isOpen && hasConversionStatus && (conversionMode & IME_CMODE_NATIVE);
+			// Open/native is only the requested IMM compatibility state. Modern TSF
+			// IMEs can report it before they actually start a composition. Treating it
+			// as permanent consumption loses every ASCII key until the input profile is
+			// switched. The short activation guard above covers the first-key race;
+			// after that, only real composition or candidate state consumes ASCII.
+			return false;
 		}
 
 		std::string WideToCurrentCodePage(std::wstring_view value)
@@ -819,6 +807,19 @@ namespace fonthook
 			DebugLog(
 				"tnvse_multibyte_input: text input session %s",
 				active ? "started" : "ended");
+		}
+
+		void RefreshTextInputSessionForActiveTarget(const char* reason)
+		{
+			const bool wasActive = s_textInputSessionActive;
+			s_textInputSessionActive = true;
+			if (s_window)
+				RestoreDefaultGameImeContext(s_window, reason ? reason : "target_refresh");
+
+			DebugLog(
+				"tnvse_multibyte_input: text input session %s reason=%s",
+				wasActive ? "refreshed" : "started",
+				reason ? reason : "target_refresh");
 		}
 
 		void UpdateGameImeAssociation()

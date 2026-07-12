@@ -656,6 +656,20 @@ namespace fonthook
 				return false;
 			}
 
+			// The chained menu handler observes the result after Stewie has actually
+			// processed Ctrl+F/Ctrl+R. Avoid scheduling the same physical key again
+			// from WM_KEYDOWN and WM_CHAR; keep this path only as a fallback if another
+			// plugin has replaced our vtable entry.
+			if (StewieMenuSearchHook* hook = FindMenuSearchHookByMenu(menu))
+			{
+				if (hook->installed
+					&& hook->entry
+					&& *reinterpret_cast<SIZE_T*>(hook->entry) == hook->hook)
+				{
+					return false;
+				}
+			}
+
 			ScheduleMenuSearchStateSync(menu, key, source, false);
 			return true;
 		}
@@ -773,9 +787,40 @@ namespace fonthook
 			if (key != 'f' && key != 'r')
 				return false;
 
+			StewieMenuSearchHook* hook = FindMenuSearchHookByMenu(menu);
+			const bool wasActive = hook && hook->keyboardActive;
 			handled = CallStewieOriginalInput(menu, input);
 			ClearStewieInputState();
-			ScheduleMenuSearchStateSync(menu, input, "StewieTweaksInputTarget", handled);
+
+			if (!handled)
+			{
+				if (hook)
+					ResetMenuSearchStateSync(*hook);
+				return true;
+			}
+
+			ScheduleMenuSearchStateSync(menu, input, "StewieTweaksInputTarget", true);
+			if (!hook)
+				return true;
+
+			const bool active = key == 'f' ? !wasActive : false;
+			hook->keyboardActive = active;
+			hook->targetReported = false;
+			if (active)
+			{
+				RefreshTextInputSessionForActiveTarget("menusearch_ctrl_f_open");
+				DebugLog(
+					"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=menusearch_activate_immediate menu=%u",
+					MenuID(menu));
+			}
+			else
+			{
+				HideCandidateOverlay();
+				UpdateGameImeAssociation();
+				DebugLog(
+					"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=menusearch_deactivate_immediate menu=%u",
+					MenuID(menu));
+			}
 			return true;
 		}
 
