@@ -10,5 +10,13 @@ if not exist "%FXC%" (
 )
 
 if not exist "%~dp0compiled" mkdir "%~dp0compiled"
-"%FXC%" /nologo /T ps_2_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_a8.pso" "%~dp0freetype_a8.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_a8.pso" "%~dp0freetype_a8.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_effects_fast.pso" "%~dp0freetype_effects.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_effects_balanced.pso" "%~dp0freetype_effects.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_effects_high.pso" "%~dp0freetype_effects.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0verify_shader_contract.ps1" -Fxc "%FXC%" -ShaderDirectory "%~dp0."
 exit /b %errorlevel%

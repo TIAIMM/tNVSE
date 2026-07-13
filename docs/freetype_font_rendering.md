@@ -90,10 +90,11 @@ single/double-byte visual-center correction.
 `fontColor="#RRGGBB"` and `fontAlpha` optionally override the fill color for
 the font ID. When `fontColor` is omitted, fill geometry keeps the color supplied
 by the game. `glow`, `outline`, and `shadow` belong to the font ID and are
-shared by both byte classes. The renderer emits shadow, glow, outline, and fill
-geometry in that order. Every configured alpha is multiplied by the game text
-alpha, so visibility and fade animations continue to work. Glow and outline
-are generated as grayscale masks and share the same text atlas as the fill.
+shared by both byte classes. `effectQuality="fast|balanced|high"` selects the
+PS 3.0 sampling preset and defaults to `balanced`. Shadow accepts an optional
+non-negative `blur` radius; zero preserves a hard offset shadow. Every
+configured alpha is multiplied by the game text alpha, so visibility and fade
+animations continue to work.
 
 `shaping="0"` is the default. It uses FreeType 26.6 advances and
 `FT_Get_Kerning()` without rounding every glyph in advance. `shaping="1"`
@@ -126,24 +127,41 @@ The normal rendering path rasterizes hinted grayscale glyphs with FreeType at
 the effective display size. When Fallout Shader Loader 1.40 or newer,
 `tnvse_freetype_a8.pso`, and a real `D3DFMT_A8` texture are available, each
 font/style/effective-size profile uses a one-byte A8 atlas. A shape-specific
-pixel shader reads the atlas alpha as coverage and preserves the game/XML
-vertex color. tNVSE does not replace the global TileShader. If any dependency
+pixel shader reads the atlas alpha as coverage and follows the game's
+uniform Tile contract: RGB is `c0.rgb` multiplied by the per-layer XML color
+modifier, while alpha is coverage multiplied by `c0.a` and the per-layer XML
+alpha. The shaders do not consume a `COLOR0` vertex stream, and RGB remains
+straight rather than premultiplied by alpha. This same ABI is shared by fill,
+shadow, glow, outline, and future FreeType effects. tNVSE does not replace the
+global TileShader.
+If any dependency
 or runtime validation fails, that profile automatically uses the existing
 `A8R8G8B8` atlas path, so FreeType rendering itself does not require Shader
-Loader.
+Loader. In that fallback, XML layer RGB and alpha are baked into the 32-bit
+atlas and the original Tile shader still supplies the dynamic Tile color and
+alpha.
 
-The project contains the HLSL source, its `ps_2_0` build script, and the
-compiled PSO. When `NVSE_PLUGIN_PATH` is defined, an ordinary project build
-copies the PSO to `Data\Shaders\Loose\tnvse_freetype_a8.pso` next to the
-deployed mod data.
+The base A8 shader and all effect variants use `ps_3_0`. Shader effects reuse
+the fill mask and execute global shadow, glow, outline, and fill passes over
+one `NiTriShape`; this prevents a later glyph effect from covering an earlier
+glyph fill. Glow is a soft outer halo and outline is an outer-only dilation.
+When an effect shader is unavailable, the renderer retains the CPU mask path
+with the same global layer order. When `NVSE_PLUGIN_PATH` is defined, an
+ordinary project build copies all compiled PSOs to `Data\Shaders\Loose`.
+Custom draws switch pixel shader and sampler state through Gamebryo's render
+state manager and restore private constants after every draw. A detected
+Gamebryo/D3D state mismatch disables the custom pass for that draw instead of
+leaking state into later UI rendering.
 
 Persistent atlases start at 512x512 and grow without moving existing glyphs.
 Missing glyphs are rasterized as one batch and uploaded through one dirty
-rectangle. Atlas regions have two transparent padding pixels, mipmaps are
-disabled, and sampling is nearest. Repeated text also reuses cached layout and
-vertex/UV/index templates. Shadow, glow, outline, and fill are emitted into one
-`NiTriShape` using the shared atlas. A8 and 32-bit profiles use separate cache
-keys and may coexist when text was created before Shader Loader initialization.
+rectangle. CPU-effect atlas regions have two transparent padding pixels.
+Shader-effect profiles reserve a larger transparent gutter based on the final
+device-pixel radius, preventing neighboring glyphs from entering effect
+samples. Mipmaps are disabled and sampling is nearest. Repeated text also
+reuses cached layout and vertex/UV/index templates. A8 and 32-bit profiles use
+separate cache keys and may coexist when text was created before Shader Loader
+initialization.
 
 Generated grayscale masks, layouts, and batch templates are cached in process
 memory. `uiFreeTypeFontMemoryCacheMB` controls those CPU-side caches. When

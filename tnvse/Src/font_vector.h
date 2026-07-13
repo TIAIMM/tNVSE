@@ -75,7 +75,8 @@ namespace fonthook
 	class VectorTextBuilder
 	{
 	public:
-		VectorTextBuilder(Font* apFont, bool abPrepareObject, float afRasterScale = 1.0f);
+		VectorTextBuilder(Font* apFont, bool abPrepareObject, float afRasterScale = 1.0f,
+			const NiColorA* apTileColor = nullptr);
 		~VectorTextBuilder();
 
 		VectorTextBuilder(const VectorTextBuilder&) = delete;

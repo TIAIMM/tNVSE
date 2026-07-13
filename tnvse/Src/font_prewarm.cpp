@@ -347,12 +347,15 @@ namespace fonthook::vectorfont
 
 			AddBitmap(bitmaps, unique, GetGlyphBitmap(
 				*runtime, glyph, GlyphMaskType::Fill, rasterScale));
-			if (config->glow.enabled)
+			EffectQuality resolvedQuality = config->effectQuality;
+			const bool shaderEffects = IsA8RendererAvailable()
+				&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
+			if (config->glow.enabled && !shaderEffects)
 			{
 				AddBitmap(bitmaps, unique, GetGlyphBitmap(
 					*runtime, glyph, GlyphMaskType::Glow, rasterScale));
 			}
-			if (config->outline.enabled)
+			if (config->outline.enabled && !shaderEffects)
 			{
 				AddBitmap(bitmaps, unique, GetGlyphBitmap(
 					*runtime, glyph, GlyphMaskType::Outline, rasterScale));

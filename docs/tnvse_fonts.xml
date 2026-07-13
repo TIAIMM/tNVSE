@@ -87,9 +87,15 @@
         small batch per frame. Only raster scale 1.0 is prepared; UIO-derived
         sizes remain demand-driven. If the atlas reaches its maximum size,
         prewarming for that font stops safely.
+      effectQuality
+        Shader effect sampling preset: "fast", "balanced", or "high".
+        Default: "balanced". Higher presets use more samples for smoother
+        glow, outline, and blurred shadow edges. This attribute affects only
+        the A8 PS 3.0 shader path; CPU fallback rendering remains available.
       fontColor
         Optional fill-color override in #RRGGBB format. When omitted, the
-        renderer keeps the text color supplied by the game.
+        renderer uses a white modifier and keeps the text color supplied by
+        the game's Tile tint. XML RGB values multiply that Tile tint.
       fontAlpha
         Alpha for fontColor, clamped to the range 0 through 1. Default: 1.
         It is used only when fontColor is present.
@@ -108,7 +114,7 @@
 
       Attributes not overridden by a byte class are inherited from <font>.
       shaping, features, verticalMetrics, baseline, curveTolerance, fontColor,
-      fontAlpha, glow, outline, and shadow apply to the entire font ID and
+      fontAlpha, effectQuality, glow, outline, and shadow apply to the entire font ID and
       cannot be overridden per group.
 
       3. Font files and fallback chains
@@ -146,18 +152,21 @@
         alpha:   clamped to the range 0 through 1. Default: 1. An alpha of 0
                  disables the effect.
 
-      <shadow enabled="1" x="1" y="1" color="#000000" alpha="0.65"/>
+      <shadow enabled="1" x="1" y="1" blur="0" color="#000000" alpha="0.65"/>
         enabled, color, and alpha follow the same rules as above.
         x / y are shadow offsets in pixels, may be positive or negative, and
         default to 0.
+        blur is an optional non-negative blur radius in pixels. Default: 0,
+        which preserves the original hard shadow.
 
       An absent glow, outline, or shadow node disables that effect. Effect
-      alpha and fontAlpha are multiplied by the text alpha supplied by the
-      game.
+      alpha and fontAlpha are multiplied by Tile c0 alpha supplied by the
+      game. Effect RGB is multiplied by Tile c0 RGB. All custom FreeType
+      shaders use this uniform-color contract and do not read COLOR0.
     -->
 
     <!-- 1: Glow_Monofonto_Large -->
-    <font id="1" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="1" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
@@ -176,7 +185,7 @@
     </font>
 
     <!-- 2: Monofonto_Large -->
-    <font id="2" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="2" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
@@ -195,7 +204,7 @@
     </font>
 
     <!-- 3: Glow_Monofonto_Medium -->
-    <font id="3" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="3" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="26" tracking="-1" scaleX="1" scaleY="1"
@@ -214,7 +223,7 @@
     </font>
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
-    <font id="4" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="4" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="32" tracking="-1" scaleX="1" scaleY="1"
@@ -233,7 +242,7 @@
     </font>
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
-    <font id="5" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="5" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="32" tracking="0" fixedWidth="17" scaleX="1" scaleY="1"
@@ -252,7 +261,7 @@
     </font>
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
-    <font id="6" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="6" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="30" tracking="-1" scaleX="1" scaleY="1"
@@ -271,7 +280,7 @@
     </font>
 
     <!-- 7: Baked-in_Monofonto_Large -->
-    <font id="7" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="7" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
@@ -290,7 +299,7 @@
     </font>
 
     <!-- 8: Glow_Futura_Caps_Large -->
-    <font id="8" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="8" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="52" tracking="-1" scaleX="1" scaleY="1"
@@ -309,7 +318,7 @@
     </font>
 
 	<!-- 42: Monofonto_STn (same as Monofonto_Large) -->
-    <font id="42" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="42" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"

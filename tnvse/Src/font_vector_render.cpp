@@ -44,6 +44,7 @@ namespace fonthook
 			std::vector<NiPoint3> vertices;
 			std::vector<NiColorA> colors;
 			std::vector<UInt32> indices;
+			std::vector<vectorfont::A8DrawRange> ranges;
 		};
 
 		NiTexturingProperty* s_whiteTextureProperty = nullptr;
@@ -54,19 +55,38 @@ namespace fonthook
 		std::unordered_set<UInt64> s_loggedGlyphRoutes;
 		bool s_loggedMergedShapeDiagnostics = false;
 
-		NiColorA ResolveFillColor(const vectorfont::FontColorStyle& style, const NiColorA* source)
+		float ResolveModifierChannel(float source, float tile)
 		{
-			if (!style.configured)
-				return source ? *source : NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f };
-			NiColorA result = style.color;
-			result.a *= source ? source->a : 1.0f;
+			if (std::fabs(tile) > 0.000001f)
+				return source / tile;
+			return std::fabs(source) <= 0.000001f ? 1.0f : source;
+		}
+
+		NiColorA ResolveFillColor(const vectorfont::FontColorStyle& style,
+			const NiColorA* source, const NiColorA& tile)
+		{
+			const NiColorA actual = source ? *source : tile;
+			NiColorA result = {
+				ResolveModifierChannel(actual.r, tile.r),
+				ResolveModifierChannel(actual.g, tile.g),
+				ResolveModifierChannel(actual.b, tile.b),
+				ResolveModifierChannel(actual.a, tile.a)
+			};
+			if (style.configured)
+			{
+				result.r *= style.color.r;
+				result.g *= style.color.g;
+				result.b *= style.color.b;
+				result.a *= style.color.a;
+			}
 			return result;
 		}
 
-		NiColorA ResolveEffectColor(const vectorfont::EffectStyle& effect, const NiColorA* source)
+		NiColorA ResolveEffectColor(const vectorfont::EffectStyle& effect,
+			const NiColorA* source, const NiColorA& tile)
 		{
 			NiColorA result = effect.color;
-			result.a *= source ? source->a : 1.0f;
+			result.a *= ResolveModifierChannel(source ? source->a : tile.a, tile.a);
 			return result;
 		}
 
@@ -203,6 +223,7 @@ namespace fonthook
 				return false;
 
 			const UInt32 baseVertex = static_cast<UInt32>(layerGeometry.vertices.size());
+			const UInt32 baseIndex = static_cast<UInt32>(layerGeometry.indices.size());
 			for (UInt32 index : mesh.indices)
 			{
 				if (index >= meshVertices || baseVertex > UINT32_MAX - index)
@@ -223,6 +244,14 @@ namespace fonthook
 			layerGeometry.indices.reserve(layerGeometry.indices.size() + mesh.indices.size());
 			for (UInt32 index : mesh.indices)
 				layerGeometry.indices.push_back(baseVertex + index);
+			vectorfont::A8DrawRange range;
+			range.firstVertex = baseVertex;
+			range.vertexCount = static_cast<UInt32>(meshVertices);
+			range.startIndex = baseIndex;
+			range.primitiveCount = static_cast<UInt32>(meshTriangles);
+			range.layer = static_cast<UInt32>(layer);
+			range.colorModifier = color;
+			layerGeometry.ranges.push_back(range);
 			return true;
 		}
 
@@ -247,7 +276,8 @@ namespace fonthook
 		NiTriShape* CreateMergedShape(Font& font,
 			const std::array<LayerGeometry, kVectorLayerCount>& layers,
 			const std::array<bool, kVectorLayerCount>& included,
-			UInt32 vertexCount, UInt32 triangleCount, bool prepareObject)
+			UInt32 vertexCount, UInt32 triangleCount, bool prepareObject,
+			const NiColorA& tileColor)
 		{
 			if (!vertexCount || !triangleCount || !InitializeWhiteTexture())
 				return CreateEmptyVectorShape(&font, prepareObject);
@@ -256,17 +286,22 @@ namespace fonthook
 			if (!charCapacity || charCapacity > 16383)
 				return CreateEmptyVectorShape(&font, prepareObject);
 
+			const bool useUniformColorShader = vectorfont::IsA8RendererAvailable();
 			const UInt32 capacityVertices = charCapacity * 4;
-			NiColorA* vertexColors = static_cast<NiColorA*>(
-				MemoryManager_s_Instance->Allocate(sizeof(NiColorA) * capacityVertices));
-			if (!vertexColors)
-				return CreateEmptyVectorShape(&font, prepareObject);
+			NiColorA* vertexColors = nullptr;
+			if (!useUniformColorShader)
+			{
+				vertexColors = static_cast<NiColorA*>(
+					MemoryManager_s_Instance->Allocate(sizeof(NiColorA) * capacityVertices));
+				if (!vertexColors)
+					return CreateEmptyVectorShape(&font, prepareObject);
+			}
 
-			const NiColorA white = { 1.0f, 1.0f, 1.0f, 1.0f };
-			NiTriShape* shape = font.MakeTriShape(static_cast<int>(charCapacity), &white, false);
+			NiTriShape* shape = font.MakeTriShape(static_cast<int>(charCapacity), &tileColor, false);
 			if (!shape || !shape->GetModelData())
 			{
-				MemoryManager_s_Instance->Deallocate(vertexColors);
+				if (vertexColors)
+					MemoryManager_s_Instance->Deallocate(vertexColors);
 				return CreateEmptyVectorShape(&font, prepareObject);
 			}
 
@@ -280,17 +315,20 @@ namespace fonthook
 			{
 				if (whiteTexture)
 					ThisStdCall(0xBB7A10, shade, whiteTexture);
-				*reinterpret_cast<NiColorA*>(reinterpret_cast<UInt8*>(shade) + 0x68) = white;
 			}
 
 			NiTriShapeData* data = shape->GetModelData();
-			data->m_pkColor = vertexColors;
-			data->m_ucKeepFlags |= NiGeometryData::KEEP_COLOR;
+			if (vertexColors)
+			{
+				data->m_pkColor = vertexColors;
+				data->m_ucKeepFlags |= NiGeometryData::KEEP_COLOR;
+			}
 			const NiColorA transparent = { 1.0f, 1.0f, 1.0f, 0.0f };
 			for (UInt32 i = 0; i < data->m_usVertices; ++i)
 			{
 				data->m_pkVertex[i] = NiPoint3(0.0f, 0.0f, 0.0f);
-				data->m_pkColor[i] = transparent;
+				if (data->m_pkColor)
+					data->m_pkColor[i] = transparent;
 				if (data->m_pkTexture)
 					data->m_pkTexture[i] = NiPoint2(0.5f, 0.5f);
 			}
@@ -299,6 +337,29 @@ namespace fonthook
 
 			UInt32 vertexCursor = 0;
 			UInt32 indexCursor = 0;
+			vectorfont::A8EffectShapeConfig effectConfig;
+			effectConfig.enabled = useUniformColorShader;
+			effectConfig.shaderEffects = false;
+			vectorfont::A8ShapeColorContract colorContract;
+			bool haveColorModifier = false;
+			auto recordColorModifier = [&](const NiColorA& color)
+			{
+				if (!haveColorModifier)
+				{
+					colorContract.minimumModifier = color;
+					colorContract.maximumModifier = color;
+					haveColorModifier = true;
+					return;
+				}
+				colorContract.minimumModifier.r = std::min(colorContract.minimumModifier.r, color.r);
+				colorContract.minimumModifier.g = std::min(colorContract.minimumModifier.g, color.g);
+				colorContract.minimumModifier.b = std::min(colorContract.minimumModifier.b, color.b);
+				colorContract.minimumModifier.a = std::min(colorContract.minimumModifier.a, color.a);
+				colorContract.maximumModifier.r = std::max(colorContract.maximumModifier.r, color.r);
+				colorContract.maximumModifier.g = std::max(colorContract.maximumModifier.g, color.g);
+				colorContract.maximumModifier.b = std::max(colorContract.maximumModifier.b, color.b);
+				colorContract.maximumModifier.a = std::max(colorContract.maximumModifier.a, color.a);
+			};
 			for (size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex)
 			{
 				if (!included[layerIndex])
@@ -308,11 +369,25 @@ namespace fonthook
 				for (size_t i = 0; i < layer.vertices.size(); ++i)
 				{
 					data->m_pkVertex[vertexCursor] = layer.vertices[i];
-					data->m_pkColor[vertexCursor] = layer.colors[i];
+					if (data->m_pkColor)
+						data->m_pkColor[vertexCursor] = layer.colors[i];
 					++vertexCursor;
 				}
 				for (UInt32 index : layer.indices)
 					data->m_pusTriList[indexCursor++] = static_cast<UInt16>(baseVertex + index);
+				if (useUniformColorShader)
+				{
+					const UInt32 layerIndexBase = indexCursor
+						- static_cast<UInt32>(layer.indices.size());
+					for (const vectorfont::A8DrawRange& localRange : layer.ranges)
+					{
+						vectorfont::A8DrawRange range = localRange;
+						range.firstVertex += baseVertex;
+						range.startIndex += layerIndexBase;
+						effectConfig.ranges.push_back(range);
+						recordColorModifier(range.colorModifier);
+					}
+				}
 			}
 
 			UInt32 flippedTriangles = 0;
@@ -345,6 +420,14 @@ namespace fonthook
 			}
 
 			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
+			if (useUniformColorShader
+				&& !vectorfont::PrepareA8AtlasShape(shape, font.iFontNum,
+					static_cast<UInt32>(effectConfig.ranges.size()),
+					static_cast<UInt32>(effectConfig.ranges.size()),
+					&effectConfig, &colorContract))
+			{
+				return CreateEmptyVectorShape(&font, prepareObject);
+			}
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
 				std::lock_guard<std::mutex> lock(s_routeLogMutex);
@@ -388,13 +471,17 @@ namespace fonthook
 		bool available = false;
 		bool finished = false;
 		float rasterScale = 1.0f;
+		NiColorA tileColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 		std::array<LayerGeometry, kVectorLayerCount> layers;
 		std::vector<vectorfont::AtlasGlyphInstance> glyphs;
 
-		Impl(Font* apFont, bool abPrepareObject, float afRasterScale)
+		Impl(Font* apFont, bool abPrepareObject, float afRasterScale,
+			const NiColorA* apTileColor)
 			: font(apFont), prepareObject(abPrepareObject),
 			rasterScale(std::isfinite(afRasterScale) && afRasterScale >= 0.1f
-				&& afRasterScale <= 10.0f ? afRasterScale : 1.0f)
+				&& afRasterScale <= 10.0f ? afRasterScale : 1.0f),
+			tileColor(apTileColor ? *apTileColor
+				: NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f })
 		{
 			if (!font || !IsFreeTypeFontActive(font) || !InitializeWhiteTexture())
 				return;
@@ -413,8 +500,10 @@ namespace fonthook
 		return CreateEmptyVectorShape(font, prepareObject);
 	}
 
-	VectorTextBuilder::VectorTextBuilder(Font* apFont, bool abPrepareObject, float afRasterScale)
-		: m_impl(std::make_unique<Impl>(apFont, abPrepareObject, afRasterScale))
+	VectorTextBuilder::VectorTextBuilder(Font* apFont, bool abPrepareObject,
+		float afRasterScale, const NiColorA* apTileColor)
+		: m_impl(std::make_unique<Impl>(apFont, abPrepareObject,
+			afRasterScale, apTileColor))
 	{
 	}
 
@@ -445,7 +534,7 @@ namespace fonthook
 					glyph.byteLength, glyph.encodedCode, glyph.codePoint);
 			}
 		}
-		const NiColorA sourceColor = color ? *color : NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f };
+		const NiColorA sourceColor = color ? *color : m_impl->tileColor;
 		m_impl->glyphs.push_back({ glyph, pen, sourceColor });
 		return true;
 	}
@@ -462,7 +551,7 @@ namespace fonthook
 
 		if (NiTriShape* atlasShape = vectorfont::TryCreateGlyphAtlasShape(
 			*m_impl->font, *m_impl->runtime, m_impl->glyphs,
-			m_impl->rasterScale, m_impl->prepareObject))
+			m_impl->rasterScale, m_impl->prepareObject, m_impl->tileColor))
 		{
 			return atlasShape;
 		}
@@ -484,7 +573,7 @@ namespace fonthook
 			{
 				AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Shadow)],
 					VectorLayer::Shadow, *fill, instance.pen,
-					ResolveEffectColor(config.shadow, color),
+					ResolveEffectColor(config.shadow, color, m_impl->tileColor),
 					config.shadow.x, config.shadow.y);
 			}
 			if (config.glow.enabled)
@@ -494,7 +583,7 @@ namespace fonthook
 				if (glow && !glow->vertices.empty())
 					AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Glow)],
 						VectorLayer::Glow, *glow, instance.pen,
-						ResolveEffectColor(config.glow, color), 0.0f, 0.0f);
+						ResolveEffectColor(config.glow, color, m_impl->tileColor), 0.0f, 0.0f);
 			}
 			if (config.outline.enabled)
 			{
@@ -503,13 +592,13 @@ namespace fonthook
 				if (outline && !outline->vertices.empty())
 					AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Outline)],
 						VectorLayer::Outline, *outline, instance.pen,
-						ResolveEffectColor(config.outline, color), 0.0f, 0.0f);
+						ResolveEffectColor(config.outline, color, m_impl->tileColor), 0.0f, 0.0f);
 			}
 			if (!fill->vertices.empty())
 			{
 				AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Fill)],
 					VectorLayer::Fill, *fill, instance.pen,
-					ResolveFillColor(config.fontColor, color), 0.0f, 0.0f);
+					ResolveFillColor(config.fontColor, color, m_impl->tileColor), 0.0f, 0.0f);
 			}
 		}
 
@@ -564,7 +653,7 @@ namespace fonthook
 		}
 
 		return CreateMergedShape(*m_impl->font, m_impl->layers, included,
-			vertexCount, triangleCount, m_impl->prepareObject);
+			vertexCount, triangleCount, m_impl->prepareObject, m_impl->tileColor);
 	}
 
 	void BeginFreeTypeRichTextRender(NiNode* parent)
@@ -614,7 +703,7 @@ namespace fonthook
 		auto& builder = s_richTextContext->builders[font];
 		if (!builder)
 			builder = std::make_unique<VectorTextBuilder>(font, true,
-				s_richTextContext->rasterScale);
+				s_richTextContext->rasterScale, color);
 		if (builder->IsAvailable())
 			builder->AddGlyph(glyph, pen, color);
 		return true;

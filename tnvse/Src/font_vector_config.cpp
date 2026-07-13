@@ -156,6 +156,7 @@ namespace fonthook::vectorfont
 			{
 				result.x = node.attribute("x").as_float(0.0f);
 				result.y = node.attribute("y").as_float(0.0f);
+				result.blur = node.attribute("blur").as_float(0.0f);
 				if (!std::isfinite(result.x))
 					result.x = 0.0f;
 				if (!std::isfinite(result.y))
@@ -209,10 +210,12 @@ namespace fonthook::vectorfont
 			HashBytes(hash, &config.fontColor.color.g, sizeof(config.fontColor.color.g));
 			HashBytes(hash, &config.fontColor.color.b, sizeof(config.fontColor.color.b));
 			HashBytes(hash, &config.fontColor.color.a, sizeof(config.fontColor.color.a));
+			HashBytes(hash, &config.effectQuality, sizeof(config.effectQuality));
 			auto hashEffect = [&](const EffectStyle& effect)
 			{
 				HashBytes(hash, &effect.enabled, sizeof(effect.enabled));
 				HashBytes(hash, &effect.width, sizeof(effect.width));
+				HashBytes(hash, &effect.blur, sizeof(effect.blur));
 				HashBytes(hash, &effect.x, sizeof(effect.x));
 				HashBytes(hash, &effect.y, sizeof(effect.y));
 				HashBytes(hash, &effect.color.r, sizeof(effect.color.r));
@@ -273,6 +276,19 @@ namespace fonthook::vectorfont
 			else
 			{
 				reason = "verticalMetrics must be freetype or original";
+				return false;
+			}
+
+			const std::string effectQuality = node.attribute("effectQuality").as_string("balanced");
+			if (effectQuality == "fast")
+				config.effectQuality = EffectQuality::Fast;
+			else if (effectQuality == "balanced")
+				config.effectQuality = EffectQuality::Balanced;
+			else if (effectQuality == "high")
+				config.effectQuality = EffectQuality::High;
+			else
+			{
+				reason = "effectQuality must be fast, balanced, or high";
 				return false;
 			}
 
@@ -364,6 +380,11 @@ namespace fonthook::vectorfont
 			config.glow = ReadEffect(node.child("glow"), true);
 			config.outline = ReadEffect(node.child("outline"), true);
 			config.shadow = ReadEffect(node.child("shadow"), false);
+			if (!std::isfinite(config.shadow.blur) || config.shadow.blur < 0.0f)
+			{
+				reason = "shadow blur must be finite and zero or greater";
+				return false;
+			}
 			config.styleHash = BuildStyleHash(config);
 			return true;
 		}
@@ -373,14 +394,15 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d glow=%d outline=%d shadow=%d",
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d effectQuality=%u glow=%d outline=%d shadow=%d shadowBlur=%.2f",
 				config.fontId, static_cast<UInt32>(config.prewarm),
 				config.verticalMetrics == VerticalMetricsMode::Original ? "original" : "freetype",
 				config.shaping ? 1 : 0,
 				static_cast<UInt32>(config.shapingFeatures.size()),
 				config.baseline, config.curveTolerance,
-				config.fontColor.configured, config.glow.enabled,
-				config.outline.enabled, config.shadow.enabled);
+				config.fontColor.configured, static_cast<UInt32>(config.effectQuality),
+				config.glow.enabled, config.outline.enabled, config.shadow.enabled,
+				config.shadow.blur);
 			if (config.fontColor.configured)
 			{
 				FreeTypeFontDebugLog(

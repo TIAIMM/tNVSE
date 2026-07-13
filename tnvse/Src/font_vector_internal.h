@@ -27,6 +27,10 @@ namespace fonthook::vectorfont
 		AtlasUploadBytes,
 		BatchHit,
 		BatchMiss,
+		ShaderEffectBatch,
+		ShaderEffectPass,
+		ShaderEffectSamples,
+		CpuEffectMasksAvoided,
 		Count,
 	};
 
@@ -55,6 +59,7 @@ namespace fonthook::vectorfont
 	{
 		bool enabled = false;
 		float width = 0.0f;
+		float blur = 0.0f;
 		float x = 0.0f;
 		float y = 0.0f;
 		NiColorA color = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -64,6 +69,13 @@ namespace fonthook::vectorfont
 	{
 		bool configured = false;
 		NiColorA color = { 1.0f, 1.0f, 1.0f, 1.0f };
+	};
+
+	enum class EffectQuality : UInt8
+	{
+		Fast = 0,
+		Balanced = 1,
+		High = 2,
 	};
 
 	enum class FontPrewarmMode : UInt8
@@ -104,6 +116,7 @@ namespace fonthook::vectorfont
 		float baseline = 0.0f;
 		float curveTolerance = 0.35f;
 		FontColorStyle fontColor;
+		EffectQuality effectQuality = EffectQuality::Balanced;
 		EffectStyle glow;
 		EffectStyle outline;
 		EffectStyle shadow;
@@ -125,6 +138,7 @@ namespace fonthook::vectorfont
 	struct GlyphBitmap
 	{
 		UInt64 cacheId = 0;
+		UInt32 atlasRgb = 0x00FFFFFF;
 		int width = 0;
 		int height = 0;
 		int left = 0;
@@ -133,6 +147,38 @@ namespace fonthook::vectorfont
 		int effectiveHeight = 0;
 		float baselineOffset = 0.0f;
 		std::vector<UInt8> alpha;
+	};
+
+	struct A8DrawRange
+	{
+		UInt32 firstVertex = 0;
+		UInt32 vertexCount = 0;
+		UInt32 startIndex = 0;
+		UInt32 primitiveCount = 0;
+		UInt32 layer = 3;
+		NiColorA colorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
+	};
+
+	struct A8EffectShapeConfig
+	{
+		bool enabled = false;
+		bool shaderEffects = false;
+		EffectQuality quality = EffectQuality::Balanced;
+		float inverseAtlasWidth = 0.0f;
+		float inverseAtlasHeight = 0.0f;
+		float shadowBlurPixels = 0.0f;
+		float glowRadiusPixels = 0.0f;
+		float outlineRadiusPixels = 0.0f;
+		std::vector<A8DrawRange> ranges;
+	};
+
+	struct A8ShapeColorContract
+	{
+		static constexpr UInt32 kTileUniformColorAbi = 3;
+
+		UInt32 abiVersion = kTileUniformColorAbi;
+		NiColorA minimumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
+		NiColorA maximumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 	};
 
 	struct AtlasGlyphInstance
@@ -166,8 +212,12 @@ namespace fonthook::vectorfont
 	void PumpFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
-		bool abPrepareObject);
+		bool abPrepareObject, const NiColorA& arTileColor);
 	bool IsA8RendererAvailable();
+	bool IsA8EffectRendererAvailable(EffectQuality aeQuality);
+	bool ResolveA8EffectQuality(EffectQuality aeRequested, EffectQuality& arResolved);
 	bool PrepareA8AtlasShape(NiTriShape* apShape, UInt32 auiFontId,
-		UInt32 auiGlyphCount, UInt32 auiQuadCount);
+		UInt32 auiGlyphCount, UInt32 auiQuadCount,
+		const A8EffectShapeConfig* apEffectConfig = nullptr,
+		const A8ShapeColorContract* apColorContract = nullptr);
 }

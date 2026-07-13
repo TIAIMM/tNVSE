@@ -184,8 +184,14 @@
     <None Include="exports.def" />
     <None Include="packages.config" />
 	<None Include="shaders\freetype_a8.hlsl" />
+	<None Include="shaders\freetype_effects.hlsl" />
+	<None Include="shaders\freetype_tile_compat.hlsli" />
+	<None Include="shaders\verify_shader_contract.ps1" />
 	<None Include="shaders\compile_a8_shader.bat" />
 	<None Include="shaders\compiled\tnvse_freetype_a8.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_effects_fast.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_effects_balanced.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_effects_high.pso" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="third_party\freetype_tnvse.vcxproj">
@@ -232,13 +238,22 @@
     </PropertyGroup>
     <Error Condition="!Exists('packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.DXSDK.D3DX.9.29.952.8\build\native\Microsoft.DXSDK.D3DX.targets'))" />
   </Target>
+  <Target Name="CompileAndVerifyFreeTypeShaders" BeforeTargets="ClCompile">
+    <Exec Command="&quot;$(ProjectDir)shaders\compile_a8_shader.bat&quot;" />
+  </Target>
   <Target Name="InstallFreeTypeA8Shader" AfterTargets="Build"
           Condition="Exists('$(ProjectDir)shaders\compiled\tnvse_freetype_a8.pso') and '$(NVSE_PLUGIN_PATH)' != ''">
     <PropertyGroup>
       <_FreeTypeShaderOutputDir>$(NVSE_PLUGIN_PATH)\..\..\Shaders\Loose</_FreeTypeShaderOutputDir>
     </PropertyGroup>
     <MakeDir Directories="$(_FreeTypeShaderOutputDir)" />
-    <Copy SourceFiles="$(ProjectDir)shaders\compiled\tnvse_freetype_a8.pso"
+    <ItemGroup>
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_a8.pso" />
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_effects_fast.pso" />
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_effects_balanced.pso" />
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_effects_high.pso" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_FreeTypeShaderFiles)"
           DestinationFolder="$(_FreeTypeShaderOutputDir)"
           SkipUnchangedFiles="true" />
   </Target>
