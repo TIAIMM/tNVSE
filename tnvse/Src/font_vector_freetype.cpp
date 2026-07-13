@@ -1010,9 +1010,10 @@ namespace fonthook::vectorfont
 
 		bool CopyGrayBitmap(const FT_Bitmap& source, GlyphBitmap& target)
 		{
-			target.width = static_cast<int>(source.width);
-			target.height = static_cast<int>(source.rows);
-			if (target.width <= 0 || target.height <= 0)
+			constexpr int kBitmapGuardPixels = 1;
+			const int sourceWidth = static_cast<int>(source.width);
+			const int sourceHeight = static_cast<int>(source.rows);
+			if (sourceWidth <= 0 || sourceHeight <= 0)
 			{
 				target.width = 0;
 				target.height = 0;
@@ -1020,27 +1021,36 @@ namespace fonthook::vectorfont
 			}
 			if (!source.buffer)
 				return false;
+			// FreeType returns the tight bitmap bounds. Keep a transparent texel around
+			// every mask so point/linear sampling and fractional UI transforms cannot
+			// clip the first or last coverage row or read a neighbouring atlas region.
+			target.width = sourceWidth + kBitmapGuardPixels * 2;
+			target.height = sourceHeight + kBitmapGuardPixels * 2;
+			target.left -= kBitmapGuardPixels;
+			target.top += kBitmapGuardPixels;
 			target.alpha.assign(static_cast<size_t>(target.width) * target.height, 0);
 			const int pitch = source.pitch;
-			for (int y = 0; y < target.height; ++y)
+			for (int y = 0; y < sourceHeight; ++y)
 			{
-				const int sourceY = pitch >= 0 ? y : target.height - 1 - y;
+				const int sourceY = pitch >= 0 ? y : sourceHeight - 1 - y;
 				const UInt8* row = source.buffer + static_cast<ptrdiff_t>(sourceY) * std::abs(pitch);
-				UInt8* output = target.alpha.data() + static_cast<size_t>(y) * target.width;
+				UInt8* output = target.alpha.data()
+					+ static_cast<size_t>(y + kBitmapGuardPixels) * target.width
+					+ kBitmapGuardPixels;
 				if (source.pixel_mode == FT_PIXEL_MODE_GRAY)
 				{
 					if (source.num_grays == 256)
-						std::copy(row, row + target.width, output);
+						std::copy(row, row + sourceWidth, output);
 					else
 					{
 						const UInt32 denominator = std::max<UInt32>(1, source.num_grays - 1);
-						for (int x = 0; x < target.width; ++x)
+						for (int x = 0; x < sourceWidth; ++x)
 							output[x] = static_cast<UInt8>(row[x] * 255u / denominator);
 					}
 				}
 				else if (source.pixel_mode == FT_PIXEL_MODE_MONO)
 				{
-					for (int x = 0; x < target.width; ++x)
+					for (int x = 0; x < sourceWidth; ++x)
 						output[x] = (row[x >> 3] & (0x80 >> (x & 7))) ? 255 : 0;
 				}
 				else

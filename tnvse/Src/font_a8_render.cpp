@@ -291,6 +291,14 @@ namespace fonthook::vectorfont
 				&& s_effectShaders[index]->GetShaderHandle();
 		}
 
+		bool NeedsScaledFillSampling(const NiTriShape* shape)
+		{
+			if (!shape)
+				return false;
+			const float worldScale = std::abs(shape->m_kWorld.m_fScale);
+			return std::isfinite(worldScale) && std::abs(worldScale - 1.0f) > 0.001f;
+		}
+
 		bool LoadA8Shader(CreatePixelShaderFn createPixelShader)
 		{
 			if (!createPixelShader)
@@ -646,7 +654,9 @@ namespace fonthook::vectorfont
 				state.SetEffectPassState(range.layer != 3);
 				state.SetSmoothEffectSampling(range.layer == 1 || range.layer == 2
 					|| (range.layer == 0
-						&& metadata.effects.shadowBlurPixels > 0.001f));
+						&& metadata.effects.shadowBlurPixels > 0.001f)
+					|| (range.layer == 3
+						&& NeedsScaledFillSampling(s_currentA8Shape)));
 
 				if (g_bEnableFreeTypeFontRenderingLog && range.layer == 0
 					&& s_shadowContractLogCount++ < 8)
