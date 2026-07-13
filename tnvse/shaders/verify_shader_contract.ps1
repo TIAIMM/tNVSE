@@ -74,4 +74,4 @@ foreach ($shaderName in $shaders) {
     }
 }
 
-Write-Host 'FreeType shader contract tile-uniform-v3-alpha verification succeeded.'
+Write-Host 'FreeType shader contract tile-uniform-v4-sdf verification succeeded.'

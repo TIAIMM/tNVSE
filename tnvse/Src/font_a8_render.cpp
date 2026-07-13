@@ -199,7 +199,7 @@ namespace fonthook::vectorfont
 				shadeColor.r, shadeColor.g, shadeColor.b, shadeColor.a,
 				alphaFlags, propertyAlphaReference);
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_a8_diag:   contract=tile-uniform-v3-alpha abi=%u rgb=c0.rgb*c1.rgb alpha=coverage*c0.a*c1.a modifier=[(%.4f,%.4f,%.4f,%.4f)..(%.4f,%.4f,%.4f,%.4f)]",
+				"tnvse_freetype_a8_diag:   contract=tile-uniform-v4-sdf abi=%u rgb=c0.rgb*c1.rgb alpha=coverage*c0.a*c1.a modifier=[(%.4f,%.4f,%.4f,%.4f)..(%.4f,%.4f,%.4f,%.4f)]",
 				metadata.colorContract.abiVersion,
 				metadata.colorContract.minimumModifier.r,
 				metadata.colorContract.minimumModifier.g,
@@ -229,14 +229,19 @@ namespace fonthook::vectorfont
 			if (metadata.effects.enabled)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_a8_diag:   effects quality=%u shaderEffects=%u atlasTexel=(%.7f,%.7f) radii=(shadow=%.3f glow=%.3f outline=%.3f) contract=tile-uniform-v3-alpha",
+					"tnvse_freetype_a8_diag:   effects quality=%u shaderEffects=%u atlasTexel=(%.7f,%.7f) spread=%.3f shadow=(blur=%.3f power=%.3f) glow=(inner=%.3f outer=%.3f power=%.3f) outline=(width=%.3f softness=%.3f) contract=tile-uniform-v4-sdf",
 					static_cast<UInt32>(metadata.effects.quality),
 					metadata.effects.shaderEffects ? 1 : 0,
 					metadata.effects.inverseAtlasWidth,
 					metadata.effects.inverseAtlasHeight,
+					metadata.effects.sdfSpreadPixels,
 					metadata.effects.shadowBlurPixels,
-					metadata.effects.glowRadiusPixels,
-					metadata.effects.outlineRadiusPixels);
+					metadata.effects.shadowPower,
+					metadata.effects.glowInnerPixels,
+					metadata.effects.glowOuterPixels,
+					metadata.effects.glowPower,
+					metadata.effects.outlineWidthPixels,
+					metadata.effects.outlineSoftnessPixels);
 				for (UInt32 rangeIndex = 0;
 					rangeIndex < metadata.effects.ranges.size(); ++rangeIndex)
 				{
@@ -353,7 +358,7 @@ namespace fonthook::vectorfont
 			s_effectShaders = effects;
 			if (g_bEnableFreeTypeFontRenderingLog)
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: atomically refreshed Tile-compatible shader set contract=tile-uniform-v3-alpha");
+					"tnvse_freetype_font: atomically refreshed Tile-compatible shader set contract=tile-uniform-v4-sdf");
 			return true;
 		}
 
@@ -500,6 +505,18 @@ namespace fonthook::vectorfont
 				m_modified = true;
 			}
 
+			void SetSmoothEffectSampling(bool enabled)
+			{
+				if (!m_valid || !m_renderState)
+					return;
+				const DWORD filter = enabled ? D3DTEXF_LINEAR : D3DTEXF_POINT;
+				m_renderState->SetSamplerState(0, D3DSAMP_MINFILTER,
+					filter, false);
+				m_renderState->SetSamplerState(0, D3DSAMP_MAGFILTER,
+					filter, false);
+				m_modified = true;
+			}
+
 		private:
 			struct SamplerSetting
 			{
@@ -590,28 +607,46 @@ namespace fonthook::vectorfont
 				if (metadata.effects.shaderEffects && !useShaderEffects && range.layer != 3)
 					continue;
 
-				float radius = metadata.effects.shadowBlurPixels;
+				float parameter0 = metadata.effects.shadowBlurPixels;
+				float parameter1 = metadata.effects.shadowPower;
+				float parameter2 = 0.0f;
 				if (range.layer == 1)
-					radius = metadata.effects.glowRadiusPixels;
+				{
+					parameter0 = metadata.effects.glowInnerPixels;
+					parameter1 = metadata.effects.glowOuterPixels;
+					parameter2 = metadata.effects.glowPower;
+				}
 				else if (range.layer == 2)
-					radius = metadata.effects.outlineRadiusPixels;
+				{
+					parameter0 = metadata.effects.outlineWidthPixels;
+					parameter1 = metadata.effects.outlineSoftnessPixels;
+					parameter2 = 0.0f;
+				}
 				else if (range.layer == 3)
-					radius = 0.0f;
-				const float constants[12] = {
+				{
+					parameter0 = 0.0f;
+					parameter1 = 0.0f;
+					parameter2 = 0.0f;
+				}
+				const float constants[16] = {
 					range.colorModifier.r, range.colorModifier.g,
 					range.colorModifier.b, range.colorModifier.a,
 					metadata.effects.inverseAtlasWidth,
 					metadata.effects.inverseAtlasHeight,
-					static_cast<float>(range.layer), 0.0f,
-					radius, 0.0f, 0.0f, 0.0f
+					static_cast<float>(range.layer), metadata.effects.sdfSpreadPixels,
+					parameter0, parameter1, parameter2, 0.0f,
+					0.0f, 0.0f, 0.0f, 0.0f
 				};
-				if (FAILED(device->SetPixelShaderConstantF(1, constants, 3)))
+				if (FAILED(device->SetPixelShaderConstantF(1, constants, 4)))
 				{
 					if (SUCCEEDED(result))
 						result = D3DERR_INVALIDCALL;
 					continue;
 				}
 				state.SetEffectPassState(range.layer != 3);
+				state.SetSmoothEffectSampling(range.layer == 1 || range.layer == 2
+					|| (range.layer == 0
+						&& metadata.effects.shadowBlurPixels > 0.001f));
 
 				if (g_bEnableFreeTypeFontRenderingLog && range.layer == 0
 					&& s_shadowContractLogCount++ < 8)
@@ -621,7 +656,7 @@ namespace fonthook::vectorfont
 					device->GetPixelShaderConstantF(0, actualTile.data(), 1);
 					device->GetPixelShaderConstantF(1, actualLayer.data(), 1);
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_a8_diag: shadow contract=tile-uniform-v3-alpha c0=(%.4f,%.4f,%.4f,%.4f) c1=(%.4f,%.4f,%.4f,%.4f) coverage=atlas-sampled expectedMaxAlpha=%.4f blend=preserved alphaTest=disabled",
+						"tnvse_freetype_a8_diag: shadow contract=tile-uniform-v4-sdf c0=(%.4f,%.4f,%.4f,%.4f) c1=(%.4f,%.4f,%.4f,%.4f) coverage=atlas-sampled expectedMaxAlpha=%.4f blend=preserved alphaTest=disabled",
 						actualTile[0], actualTile[1], actualTile[2], actualTile[3],
 						actualLayer[0], actualLayer[1], actualLayer[2], actualLayer[3],
 						actualTile[3] * actualLayer[3]);
@@ -629,12 +664,10 @@ namespace fonthook::vectorfont
 
 				UInt32 samples = 1;
 				const UInt32 quality = static_cast<UInt32>(metadata.effects.quality);
-				if (useShaderEffects && range.layer == 0 && radius > 0.001f)
-					samples = quality == 0 ? 5 : quality == 1 ? 9 : 13;
-				else if (useShaderEffects && range.layer == 1)
-					samples = quality == 0 ? 9 : quality == 1 ? 17 : 25;
-				else if (useShaderEffects && range.layer == 2)
-					samples = quality == 0 ? 8 : quality == 1 ? 16 : 24;
+				const bool sdfPass = range.layer == 1 || range.layer == 2
+					|| (range.layer == 0 && metadata.effects.shadowBlurPixels > 0.001f);
+				if (useShaderEffects && sdfPass)
+					samples = quality == 0 ? 1 : quality == 1 ? 4 : 8;
 				if (useShaderEffects)
 				{
 					RecordFreeTypePerf(FreeTypePerfCounter::ShaderEffectPass);

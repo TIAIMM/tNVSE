@@ -84,6 +84,7 @@
     <ClCompile Include="freetype-2.14.3\src\pshinter\pshinter.c" />
     <ClCompile Include="freetype-2.14.3\src\psnames\psmodule.c" />
     <ClCompile Include="freetype-2.14.3\src\sfnt\sfnt.c" />
+    <ClCompile Include="freetype-2.14.3\src\sdf\sdf.c" />
     <ClCompile Include="freetype-2.14.3\src\smooth\smooth.c" />
     <ClCompile Include="freetype-2.14.3\src\truetype\truetype.c" />
     <ClCompile Include="freetype-2.14.3\builds\windows\ftdebug.c" />

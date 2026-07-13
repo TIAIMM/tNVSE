@@ -1,8 +1,9 @@
 sampler2D FontAtlas : register(s0);
 float4 TileColor : register(c0);
 float4 LayerColor : register(c1);
-float4 AtlasPass : register(c2); // invWidth, invHeight, pass, unused
-float4 EffectParams : register(c3); // radius in device pixels
+float4 AtlasPass : register(c2); // invWidth, invHeight, layer, SDF spread
+float4 EffectParams : register(c3); // layer-specific parameters in device pixels
+float4 EffectReserved : register(c4);
 
 #include "freetype_tile_compat.hlsli"
 
@@ -16,115 +17,97 @@ float Coverage(float2 uv)
 	return tex2D(FontAtlas, uv).a;
 }
 
-float SampleOffset(float2 uv, float2 offset)
+float DecodeDistance(float encodedDistance)
 {
-	return Coverage(uv + offset * EffectParams.x * AtlasPass.xy);
+	// FreeType packs zero at byte 128 and one normalized distance unit into
+	// 128 levels.  Texture sampling divides the stored byte by 255.
+	return (encodedDistance * (255.0 / 128.0) - 1.0) * AtlasPass.w;
 }
 
-void Ring8(float2 uv, float scale, inout float maximum, inout float sum)
+float ResolveAntialiasWidth(float distance)
 {
-	const float d = 0.70710678 * scale;
-	const float s = scale;
-	float value = SampleOffset(uv, float2( s, 0)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2(-s, 0)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2(0,  s)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2(0, -s)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2( d,  d)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2(-d,  d)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2( d, -d)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2(-d, -d)); maximum = max(maximum, value); sum += value;
+	return max(0.35, 0.5 * (abs(ddx(distance)) + abs(ddy(distance))));
 }
 
-void Ring8Rotated(float2 uv, float scale, inout float maximum, inout float sum)
+float BodyCoverage(float distance, float antialiasWidth)
 {
-	const float a = 0.92387953 * scale;
-	const float b = 0.38268343 * scale;
-	float value = SampleOffset(uv, float2( a,  b)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2(-a,  b)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2( a, -b)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2(-a, -b)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2( b,  a)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2(-b,  a)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2( b, -a)); maximum = max(maximum, value); sum += value;
-	value = SampleOffset(uv, float2(-b, -a)); maximum = max(maximum, value); sum += value;
+	return smoothstep(-antialiasWidth, antialiasWidth, distance);
 }
 
-float OutlineCoverage(float2 uv, float center)
+float EvaluateSdfEffect(float distance, float antialiasWidth, int layer)
 {
-	float maximum = center;
-	float unused = 0.0;
-	Ring8(uv, 1.0, maximum, unused);
-#if EFFECT_QUALITY >= 1
-	Ring8(uv, 0.5, maximum, unused);
-#endif
-#if EFFECT_QUALITY >= 2
-	Ring8Rotated(uv, 1.0, maximum, unused);
-#endif
-	return saturate(maximum - center);
+	const float body = BodyCoverage(distance, antialiasWidth);
+	if (layer == 0)
+	{
+		const float blur = max(EffectParams.x, 0.0);
+		const float power = max(EffectParams.y, 0.0001);
+		const float blurred = smoothstep(-blur - antialiasWidth,
+			blur + antialiasWidth, distance);
+		return pow(saturate(blurred), power);
+	}
+	if (layer == 1)
+	{
+		const float inner = max(EffectParams.x, 0.0);
+		const float outer = max(EffectParams.y, inner + 0.0001);
+		const float power = max(EffectParams.z, 0.0001);
+		const float outsideDistance = max(-distance, 0.0);
+		const float fade = outsideDistance <= inner
+			? 1.0
+			: pow(saturate((outer - outsideDistance) / (outer - inner)), power);
+		return saturate((1.0 - body) * fade);
+	}
+	if (layer == 2)
+	{
+		const float width = max(EffectParams.x, 0.0);
+		const float softness = max(EffectParams.y, 0.0);
+		const float expanded = smoothstep(-width - softness - antialiasWidth,
+			-width + antialiasWidth, distance);
+		return saturate(expanded - body);
+	}
+	return body;
 }
 
-float GlowCoverage(float2 uv, float center)
+float EvaluateAt(float2 uv, float antialiasWidth, int layer)
 {
-	float maximum = center;
-	float sum = 0.0;
-	Ring8(uv, 1.0, maximum, sum);
+	return EvaluateSdfEffect(DecodeDistance(Coverage(uv)), antialiasWidth, layer);
+}
+
+float SupersampledSdfCoverage(float2 uv, int layer)
+{
+	const float centerDistance = DecodeDistance(Coverage(uv));
+	const float antialiasWidth = ResolveAntialiasWidth(centerDistance);
 #if EFFECT_QUALITY == 0
-	float blurred = (center * 4.0 + sum) / 12.0;
+	return EvaluateSdfEffect(centerDistance, antialiasWidth, layer);
 #elif EFFECT_QUALITY == 1
-	float outer = 0.0;
-	Ring8Rotated(uv, 1.0, maximum, outer);
-	float blurred = (center * 6.0 + sum + outer) / 22.0;
-#else
-	float outer = 0.0;
-	float inner = 0.0;
-	Ring8Rotated(uv, 1.0, maximum, outer);
-	Ring8(uv, 0.5, maximum, inner);
-	float blurred = (center * 8.0 + sum + outer + inner * 2.0) / 40.0;
-#endif
-	return saturate(max(blurred, maximum * 0.35) - center);
-}
-
-float ShadowCoverage(float2 uv, float center)
-{
-	if (EffectParams.x <= 0.001)
-		return center;
+	const float2 quarter = AtlasPass.xy * 0.25;
 	float sum = 0.0;
-	float value = SampleOffset(uv, float2( 1, 0)); sum += value;
-	value = SampleOffset(uv, float2(-1, 0)); sum += value;
-	value = SampleOffset(uv, float2(0,  1)); sum += value;
-	value = SampleOffset(uv, float2(0, -1)); sum += value;
-#if EFFECT_QUALITY >= 1
-	const float d = 0.70710678;
-	value = SampleOffset(uv, float2( d,  d)); sum += value;
-	value = SampleOffset(uv, float2(-d,  d)); sum += value;
-	value = SampleOffset(uv, float2( d, -d)); sum += value;
-	value = SampleOffset(uv, float2(-d, -d)); sum += value;
-#endif
-#if EFFECT_QUALITY >= 2
-	value = SampleOffset(uv, float2( 0.5, 0)); sum += value;
-	value = SampleOffset(uv, float2(-0.5, 0)); sum += value;
-	value = SampleOffset(uv, float2(0,  0.5)); sum += value;
-	value = SampleOffset(uv, float2(0, -0.5)); sum += value;
-#endif
-#if EFFECT_QUALITY == 0
-	return saturate((center * 2.0 + sum) / 6.0);
-#elif EFFECT_QUALITY == 1
-	return saturate((center * 4.0 + sum) / 12.0);
+	sum += EvaluateAt(uv + float2(-quarter.x, -quarter.y), antialiasWidth, layer);
+	sum += EvaluateAt(uv + float2( quarter.x, -quarter.y), antialiasWidth, layer);
+	sum += EvaluateAt(uv + float2(-quarter.x,  quarter.y), antialiasWidth, layer);
+	sum += EvaluateAt(uv + float2( quarter.x,  quarter.y), antialiasWidth, layer);
+	return sum * 0.25;
 #else
-	return saturate((center * 6.0 + sum) / 18.0);
+	const float2 texel = AtlasPass.xy;
+	float sum = 0.0;
+	sum += EvaluateAt(uv + texel * float2(-0.375, -0.125), antialiasWidth, layer);
+	sum += EvaluateAt(uv + texel * float2(-0.125,  0.375), antialiasWidth, layer);
+	sum += EvaluateAt(uv + texel * float2( 0.125, -0.375), antialiasWidth, layer);
+	sum += EvaluateAt(uv + texel * float2( 0.375,  0.125), antialiasWidth, layer);
+	sum += EvaluateAt(uv + texel * float2(-0.375,  0.375), antialiasWidth, layer);
+	sum += EvaluateAt(uv + texel * float2( 0.375, -0.375), antialiasWidth, layer);
+	sum += EvaluateAt(uv + texel * float2(-0.125, -0.125), antialiasWidth, layer);
+	sum += EvaluateAt(uv + texel * float2( 0.125,  0.125), antialiasWidth, layer);
+	return sum * 0.125;
 #endif
 }
 
 float4 Main(PixelInput input) : COLOR0
 {
-	const float center = Coverage(input.uv);
 	const int layer = (int)(AtlasPass.z + 0.5);
-	float coverage = center;
-	if (layer == 0)
-		coverage = ShadowCoverage(input.uv, center);
-	else if (layer == 1)
-		coverage = GlowCoverage(input.uv, center);
-	else if (layer == 2)
-		coverage = OutlineCoverage(input.uv, center);
+	float coverage;
+	if (layer == 3 || (layer == 0 && EffectParams.x <= 0.001))
+		coverage = Coverage(input.uv);
+	else
+		coverage = SupersampledSdfCoverage(input.uv, layer);
 	return ComposeFreeTypeTileColor(coverage, TileColor, LayerColor);
 }

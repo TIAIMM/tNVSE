@@ -317,6 +317,14 @@ namespace fonthook::vectorfont
 		std::vector<std::shared_ptr<const GlyphBitmap>> bitmaps;
 		bitmaps.reserve(kMaximumGlyphsPerFrame * 3);
 		std::unordered_set<UInt64> unique;
+		EffectQuality resolvedQuality = config->effectQuality;
+		bool shaderEffects = IsA8RendererAvailable()
+			&& (config->shadow.enabled || config->glow.enabled || config->outline.enabled)
+			&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
+		UInt32 sdfSpread = 0;
+		const bool needsSdf = shaderEffects && HasSdfEffects(*config);
+		if (needsSdf && !ResolveSdfSpread(*config, rasterScale, sdfSpread))
+			shaderEffects = false;
 		UInt32 candidates = 0;
 		UInt32 glyphs = 0;
 		bool exhausted = false;
@@ -347,9 +355,15 @@ namespace fonthook::vectorfont
 
 			AddBitmap(bitmaps, unique, GetGlyphBitmap(
 				*runtime, glyph, GlyphMaskType::Fill, rasterScale));
-			EffectQuality resolvedQuality = config->effectQuality;
-			const bool shaderEffects = IsA8RendererAvailable()
-				&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
+			const bool prewarmSdf = shaderEffects && HasSdfEffects(*config)
+				&& (length == 1 || job.mode == FontPrewarmMode::Common
+					|| job.validDoubleByteCount <= kCommonDoubleByteLimit);
+			if (prewarmSdf)
+			{
+				AddBitmap(bitmaps, unique, GetGlyphBitmap(
+					*runtime, glyph, GlyphMaskType::DistanceField,
+					rasterScale, sdfSpread));
+			}
 			if (config->glow.enabled && !shaderEffects)
 			{
 				AddBitmap(bitmaps, unique, GetGlyphBitmap(

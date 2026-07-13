@@ -548,7 +548,8 @@ namespace fonthook::vectorfont
 				if (!quad.bitmap)
 					continue;
 				const UInt32 rgba = PackColorModifierRgba(quad.color);
-				const UInt64 bakedId = BuildBakedBitmapId(quad.bitmap->cacheId, rgba);
+				UInt64 bakedId = BuildBakedBitmapId(quad.bitmap->cacheId, rgba);
+				bakedId = BuildBakedBitmapId(bakedId, static_cast<UInt8>(quad.layer));
 				auto found = unique.find(bakedId);
 				if (found == unique.end())
 				{
@@ -1650,54 +1651,82 @@ namespace fonthook::vectorfont
 			build.config.shaderEffects = true;
 			build.config.quality = quality;
 			const FontConfig& config = GetRuntimeConfig(runtime);
+			const bool needsSdf = HasSdfEffects(config);
+			UInt32 sdfSpread = 0;
+			if (needsSdf && !ResolveSdfSpread(config, rasterScale, sdfSpread))
+			{
+				if (g_bEnableFreeTypeFontRenderingLog)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: SDF spread unsupported font=%u scale=%.3f glowOuter=%.3f outline=%.3f softness=%.3f shadowBlur=%.3f; using CPU effects",
+						config.fontId, rasterScale, config.glow.outer,
+						config.outline.width, config.outline.softness,
+						config.shadow.blur);
+				}
+				return false;
+			}
+			build.config.sdfSpreadPixels = static_cast<float>(sdfSpread);
 			build.config.shadowBlurPixels = config.shadow.blur * rasterScale;
-			build.config.glowRadiusPixels = config.glow.width * rasterScale;
-			build.config.outlineRadiusPixels = config.outline.width * rasterScale;
+			build.config.shadowPower = config.shadow.power;
+			build.config.glowInnerPixels = config.glow.inner * rasterScale;
+			build.config.glowOuterPixels = config.glow.outer * rasterScale;
+			build.config.glowPower = config.glow.power;
+			build.config.outlineWidthPixels = config.outline.width * rasterScale;
+			build.config.outlineSoftnessPixels = config.outline.softness * rasterScale;
 
-			thread_local std::vector<std::pair<const AtlasGlyphInstance*,
-				std::shared_ptr<const GlyphBitmap>>> prepared;
+			struct PreparedShaderGlyph
+			{
+				const AtlasGlyphInstance* instance = nullptr;
+				std::shared_ptr<const GlyphBitmap> fill;
+				std::shared_ptr<const GlyphBitmap> sdf;
+			};
+			thread_local std::vector<PreparedShaderGlyph> prepared;
 			prepared.clear();
 			prepared.reserve(glyphs.size());
 			for (const AtlasGlyphInstance& instance : glyphs)
 			{
-				auto fill = GetGlyphBitmap(runtime, instance.glyph,
+				PreparedShaderGlyph glyph;
+				glyph.instance = &instance;
+				glyph.fill = GetGlyphBitmap(runtime, instance.glyph,
 					GlyphMaskType::Fill, rasterScale);
-				if (!fill)
+				if (!glyph.fill)
 					return false;
-				prepared.emplace_back(&instance, std::move(fill));
+				if (needsSdf)
+				{
+					glyph.sdf = GetGlyphBitmap(runtime, instance.glyph,
+						GlyphMaskType::DistanceField, rasterScale, sdfSpread);
+					if (!glyph.sdf)
+						return false;
+				}
+				prepared.push_back(std::move(glyph));
 			}
 
-			auto addRange = [&](AtlasLayer layer, bool enabled, float offsetX,
-				float offsetY, float radius)
+			auto addRange = [&](AtlasLayer layer, bool enabled, bool useSdf,
+				float offsetX, float offsetY)
 			{
 				if (!enabled)
 					return;
-				const UInt32 expansion = static_cast<UInt32>(std::ceil(
-					std::max(0.0f, radius * rasterScale)));
-				build.padding = std::max(build.padding, expansion + kAtlasPadding);
-				for (const auto& entry : prepared)
+				for (const PreparedShaderGlyph& entry : prepared)
 				{
-					NiColorA layerColor = entry.first->color;
+					NiColorA layerColor = entry.instance->color;
 					if (layer == AtlasLayer::Shadow)
-						layerColor = ResolveEffectColor(config.shadow, entry.first->color, tileColor);
+						layerColor = ResolveEffectColor(config.shadow, entry.instance->color, tileColor);
 					else if (layer == AtlasLayer::Glow)
-						layerColor = ResolveEffectColor(config.glow, entry.first->color, tileColor);
+						layerColor = ResolveEffectColor(config.glow, entry.instance->color, tileColor);
 					else if (layer == AtlasLayer::Outline)
-						layerColor = ResolveEffectColor(config.outline, entry.first->color, tileColor);
+						layerColor = ResolveEffectColor(config.outline, entry.instance->color, tileColor);
 					else if (layer == AtlasLayer::Fill)
-						layerColor = ResolveFillColor(config.fontColor, entry.first->color, tileColor);
-					AddPendingQuad(quads, entry.second, *entry.first, layerColor,
-						offsetX, offsetY, rasterScale, layer, expansion);
+						layerColor = ResolveFillColor(config.fontColor, entry.instance->color, tileColor);
+					AddPendingQuad(quads, useSdf ? entry.sdf : entry.fill,
+						*entry.instance, layerColor, offsetX, offsetY, rasterScale, layer);
 				}
 			};
 
 			addRange(AtlasLayer::Shadow, config.shadow.enabled,
-				config.shadow.x, config.shadow.y, config.shadow.blur);
-			addRange(AtlasLayer::Glow, config.glow.enabled,
-				0.0f, 0.0f, config.glow.width);
-			addRange(AtlasLayer::Outline, config.outline.enabled,
-				0.0f, 0.0f, config.outline.width);
-			addRange(AtlasLayer::Fill, true, 0.0f, 0.0f, 0.0f);
+				config.shadow.blur > 0.0f, config.shadow.x, config.shadow.y);
+			addRange(AtlasLayer::Glow, config.glow.enabled, true, 0.0f, 0.0f);
+			addRange(AtlasLayer::Outline, config.outline.enabled, true, 0.0f, 0.0f);
+			addRange(AtlasLayer::Fill, true, false, 0.0f, 0.0f);
 			return true;
 		}
 
@@ -2118,15 +2147,14 @@ namespace fonthook::vectorfont
 		const AtlasPixelMode pixelMode = IsA8RendererAvailable()
 			? AtlasPixelMode::A8 : AtlasPixelMode::Argb32;
 		EffectQuality resolved = config.effectQuality;
-		const bool shaderEffects = pixelMode == AtlasPixelMode::A8
+		bool shaderEffects = pixelMode == AtlasPixelMode::A8
 			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled)
 			&& ResolveA8EffectQuality(config.effectQuality, resolved);
-		const float maximumRadius = std::max({ config.shadow.blur,
-			config.glow.width, config.outline.width });
-		const UInt32 padding = shaderEffects
-			? static_cast<UInt32>(std::ceil(maximumRadius * rasterScale))
-				+ kAtlasPadding
-			: kAtlasPadding;
+		UInt32 sdfSpread = 0;
+		if (shaderEffects && HasSdfEffects(config)
+			&& !ResolveSdfSpread(config, rasterScale, sdfSpread))
+			shaderEffects = false;
+		const UInt32 padding = kAtlasPadding;
 		return GetAtlasResource(config, rasterScale, bitmaps, pixelMode,
 			shaderEffects ? AtlasRenderMode::ShaderEffects : AtlasRenderMode::CpuEffects,
 			padding) != nullptr;

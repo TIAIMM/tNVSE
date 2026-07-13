@@ -60,6 +60,10 @@ namespace fonthook::vectorfont
 		bool enabled = false;
 		float width = 0.0f;
 		float blur = 0.0f;
+		float inner = 0.0f;
+		float outer = 0.0f;
+		float power = 2.0f;
+		float softness = 0.5f;
 		float x = 0.0f;
 		float y = 0.0f;
 		NiColorA color = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -103,6 +107,7 @@ namespace fonthook::vectorfont
 		Fill = 0,
 		Outline = 1,
 		Glow = 2,
+		DistanceField = 3,
 	};
 
 	struct FontConfig
@@ -166,15 +171,20 @@ namespace fonthook::vectorfont
 		EffectQuality quality = EffectQuality::Balanced;
 		float inverseAtlasWidth = 0.0f;
 		float inverseAtlasHeight = 0.0f;
+		float sdfSpreadPixels = 0.0f;
 		float shadowBlurPixels = 0.0f;
-		float glowRadiusPixels = 0.0f;
-		float outlineRadiusPixels = 0.0f;
+		float shadowPower = 2.0f;
+		float glowInnerPixels = 0.0f;
+		float glowOuterPixels = 0.0f;
+		float glowPower = 2.0f;
+		float outlineWidthPixels = 0.0f;
+		float outlineSoftnessPixels = 0.5f;
 		std::vector<A8DrawRange> ranges;
 	};
 
 	struct A8ShapeColorContract
 	{
-		static constexpr UInt32 kTileUniformColorAbi = 3;
+		static constexpr UInt32 kTileUniformColorAbi = 4;
 
 		UInt32 abiVersion = kTileUniformColorAbi;
 		NiColorA minimumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -202,7 +212,10 @@ namespace fonthook::vectorfont
 	std::shared_ptr<const GlyphMesh> GetGlyphMesh(RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph, GlyphMeshType aeMeshType);
 	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& arRuntime,
-		const VectorEncodedGlyph& arGlyph, GlyphMaskType aeMaskType, float afRasterScale);
+		const VectorEncodedGlyph& arGlyph, GlyphMaskType aeMaskType, float afRasterScale,
+		UInt32 auiSdfSpread = 0);
+	bool HasSdfEffects(const FontConfig& arConfig);
+	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread);
 	bool ResolvePrewarmGlyph(RuntimeFont& arRuntime, const char* apBytes,
 		size_t auiLength, VectorEncodedGlyph& arGlyph);
 	bool PrewarmGlyphAtlas(RuntimeFont& arRuntime,

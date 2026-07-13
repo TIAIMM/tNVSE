@@ -7,6 +7,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_GLYPH_H
+#include FT_MODULE_H
 #include FT_OUTLINE_H
 #include FT_STROKER_H
 
@@ -195,6 +196,7 @@ namespace fonthook::vectorfont
 			UInt16 effectiveHeight = 0;
 			SInt32 embolden26Dot6 = 0;
 			SInt32 strokeWidth26Dot6 = 0;
+			UInt8 sdfSpread = 0;
 			UInt8 byteClass = 0;
 			UInt8 maskType = 0;
 
@@ -208,6 +210,7 @@ namespace fonthook::vectorfont
 					&& effectiveHeight == other.effectiveHeight
 					&& embolden26Dot6 == other.embolden26Dot6
 					&& strokeWidth26Dot6 == other.strokeWidth26Dot6
+					&& sdfSpread == other.sdfSpread
 					&& byteClass == other.byteClass
 					&& maskType == other.maskType;
 			}
@@ -225,6 +228,7 @@ namespace fonthook::vectorfont
 				result ^= static_cast<size_t>(key.effectiveHeight);
 				result ^= static_cast<size_t>(key.embolden26Dot6) * 0x27D4EB2Du;
 				result ^= static_cast<size_t>(key.strokeWidth26Dot6) * 0xC2B2AE3Du;
+				result ^= static_cast<size_t>(key.sdfSpread) * 0x165667B1u;
 				result ^= static_cast<size_t>(key.byteClass) << 8;
 				result ^= key.maskType;
 				return result;
@@ -998,6 +1002,7 @@ namespace fonthook::vectorfont
 			add(&key.effectiveHeight, sizeof(key.effectiveHeight));
 			add(&key.embolden26Dot6, sizeof(key.embolden26Dot6));
 			add(&key.strokeWidth26Dot6, sizeof(key.strokeWidth26Dot6));
+			add(&key.sdfSpread, sizeof(key.sdfSpread));
 			add(&key.byteClass, sizeof(key.byteClass));
 			add(&key.maskType, sizeof(key.maskType));
 			return hash;
@@ -1513,6 +1518,20 @@ namespace fonthook::vectorfont
 				return CopyGrayBitmap(slot->bitmap, *bitmap) ? bitmap : nullptr;
 			}
 
+			if (maskType == GlyphMaskType::DistanceField)
+			{
+				if (key.sdfSpread < 2 || key.sdfSpread > 32
+					|| FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL))
+					return nullptr;
+				FT_Int spread = key.sdfSpread;
+				if (FT_Property_Set(s_library, "bsdf", "spread", &spread)
+					|| FT_Render_Glyph(slot, FT_RENDER_MODE_SDF))
+					return nullptr;
+				bitmap->left = slot->bitmap_left;
+				bitmap->top = slot->bitmap_top;
+				return CopyGrayBitmap(slot->bitmap, *bitmap) ? bitmap : nullptr;
+			}
+
 			const EffectStyle& effect = maskType == GlyphMaskType::Glow
 				? runtime.config->glow : runtime.config->outline;
 			if (!effect.enabled || effect.width <= 0.0f || !slot->outline.n_points)
@@ -1886,7 +1905,8 @@ namespace fonthook::vectorfont
 	}
 
 	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& runtime,
-		const VectorEncodedGlyph& glyph, GlyphMaskType maskType, float rasterScale)
+		const VectorEncodedGlyph& glyph, GlyphMaskType maskType, float rasterScale,
+		UInt32 sdfSpread)
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
 		const float safeScale = std::isfinite(rasterScale)
@@ -1903,6 +1923,11 @@ namespace fonthook::vectorfont
 			? static_cast<SInt32>(std::lround(effect->width * safeScale * 64.0f)) : 0;
 		const SInt32 embolden = static_cast<SInt32>(std::lround(
 			style.embolden * safeScale * 64.0f));
+		const UInt8 resolvedSdfSpread = maskType == GlyphMaskType::DistanceField
+			&& sdfSpread >= 2 && sdfSpread <= 32
+			? static_cast<UInt8>(sdfSpread) : 0;
+		if (maskType == GlyphMaskType::DistanceField && !resolvedSdfSpread)
+			return nullptr;
 		const BitmapCacheKey key = {
 			runtime.config->styleHash,
 			runtime.config->fontId,
@@ -1912,6 +1937,7 @@ namespace fonthook::vectorfont
 			static_cast<UInt16>(effectiveHeight),
 			embolden,
 			strokeWidth,
+			resolvedSdfSpread,
 			static_cast<UInt8>(glyph.byteClass),
 			static_cast<UInt8>(maskType)
 		};

@@ -139,31 +139,101 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		EffectStyle ReadEffect(pugi::xml_node node, bool outline)
+		enum class EffectKind
 		{
-			EffectStyle result;
+			Glow,
+			Outline,
+			Shadow,
+		};
+
+		bool ReadEffect(pugi::xml_node node, EffectKind kind, EffectStyle& result,
+			std::string& reason)
+		{
+			result = {};
 			if (!node)
-				return result;
+				return true;
 			result.enabled = node.attribute("enabled").as_bool(true);
-			result.color.a = std::clamp(node.attribute("alpha").as_float(1.0f), 0.0f, 1.0f);
-			ParseHexColor(node.attribute("color").as_string("#000000"), result.color);
-			if (outline)
+			const float alpha = node.attribute("alpha").as_float(1.0f);
+			if (!std::isfinite(alpha))
 			{
-				result.width = std::max(0.0f, node.attribute("width").as_float(0.0f));
-				result.enabled = result.enabled && result.width > 0.0f && result.color.a > 0.0f;
+				reason = "effect alpha must be finite";
+				return false;
 			}
-			else
+			result.color.a = std::clamp(alpha, 0.0f, 1.0f);
+			if (!ParseHexColor(node.attribute("color").as_string("#000000"), result.color))
+			{
+				reason = "effect color must be #RRGGBB";
+				return false;
+			}
+
+			if (kind == EffectKind::Glow)
+			{
+				const bool hasOuter = node.attribute("outer");
+				const bool hasWidth = node.attribute("width");
+				if (hasOuter && hasWidth)
+				{
+					reason = "glow cannot specify both outer and legacy width";
+					return false;
+				}
+				result.inner = node.attribute("inner").as_float(0.0f);
+				result.outer = hasOuter
+					? node.attribute("outer").as_float(0.0f)
+					: node.attribute("width").as_float(0.0f);
+				result.width = result.outer;
+				result.power = node.attribute("power").as_float(2.0f);
+				if (!std::isfinite(result.inner) || result.inner < 0.0f
+					|| !std::isfinite(result.outer) || result.outer < 0.0f
+					|| !std::isfinite(result.power) || result.power <= 0.0f)
+				{
+					reason = "glow inner/outer must be finite and non-negative, and power must be positive";
+					return false;
+				}
+				if (result.enabled && result.outer <= result.inner)
+				{
+					reason = "enabled glow outer must be greater than inner";
+					return false;
+				}
+				result.enabled = result.enabled && result.color.a > 0.0f;
+				return true;
+			}
+
+			if (kind == EffectKind::Outline)
+			{
+				result.width = node.attribute("width").as_float(0.0f);
+				result.softness = node.attribute("softness").as_float(0.5f);
+				if (!std::isfinite(result.width) || result.width < 0.0f
+					|| !std::isfinite(result.softness) || result.softness < 0.0f)
+				{
+					reason = "outline width and softness must be finite and non-negative";
+					return false;
+				}
+				if (result.enabled && result.width <= 0.0f)
+				{
+					reason = "enabled outline width must be greater than zero";
+					return false;
+				}
+				result.enabled = result.enabled && result.color.a > 0.0f;
+				return true;
+			}
+
+			if (kind == EffectKind::Shadow)
 			{
 				result.x = node.attribute("x").as_float(0.0f);
 				result.y = node.attribute("y").as_float(0.0f);
 				result.blur = node.attribute("blur").as_float(0.0f);
-				if (!std::isfinite(result.x))
-					result.x = 0.0f;
-				if (!std::isfinite(result.y))
-					result.y = 0.0f;
+				result.power = node.attribute("power").as_float(2.0f);
+				if (!std::isfinite(result.x) || !std::isfinite(result.y)
+					|| !std::isfinite(result.blur) || result.blur < 0.0f
+					|| !std::isfinite(result.power) || result.power <= 0.0f)
+				{
+					reason = "shadow offsets/blur must be finite, blur non-negative, and power positive";
+					return false;
+				}
 				result.enabled = result.enabled && result.color.a > 0.0f;
+				return true;
 			}
-			return result;
+
+			return false;
 		}
 
 		bool ReadFontColor(pugi::xml_node node, FontColorStyle& style)
@@ -216,6 +286,10 @@ namespace fonthook::vectorfont
 				HashBytes(hash, &effect.enabled, sizeof(effect.enabled));
 				HashBytes(hash, &effect.width, sizeof(effect.width));
 				HashBytes(hash, &effect.blur, sizeof(effect.blur));
+				HashBytes(hash, &effect.inner, sizeof(effect.inner));
+				HashBytes(hash, &effect.outer, sizeof(effect.outer));
+				HashBytes(hash, &effect.power, sizeof(effect.power));
+				HashBytes(hash, &effect.softness, sizeof(effect.softness));
 				HashBytes(hash, &effect.x, sizeof(effect.x));
 				HashBytes(hash, &effect.y, sizeof(effect.y));
 				HashBytes(hash, &effect.color.r, sizeof(effect.color.r));
@@ -377,14 +451,10 @@ namespace fonthook::vectorfont
 				reason = "fontColor must be #RRGGBB and fontAlpha must be finite";
 				return false;
 			}
-			config.glow = ReadEffect(node.child("glow"), true);
-			config.outline = ReadEffect(node.child("outline"), true);
-			config.shadow = ReadEffect(node.child("shadow"), false);
-			if (!std::isfinite(config.shadow.blur) || config.shadow.blur < 0.0f)
-			{
-				reason = "shadow blur must be finite and zero or greater";
+			if (!ReadEffect(node.child("glow"), EffectKind::Glow, config.glow, reason)
+				|| !ReadEffect(node.child("outline"), EffectKind::Outline, config.outline, reason)
+				|| !ReadEffect(node.child("shadow"), EffectKind::Shadow, config.shadow, reason))
 				return false;
-			}
 			config.styleHash = BuildStyleHash(config);
 			return true;
 		}
@@ -394,15 +464,16 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d effectQuality=%u glow=%d outline=%d shadow=%d shadowBlur=%.2f",
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d effectQuality=%u glow=%d inner=%.2f outer=%.2f power=%.2f outline=%d width=%.2f softness=%.2f shadow=%d blur=%.2f power=%.2f",
 				config.fontId, static_cast<UInt32>(config.prewarm),
 				config.verticalMetrics == VerticalMetricsMode::Original ? "original" : "freetype",
 				config.shaping ? 1 : 0,
 				static_cast<UInt32>(config.shapingFeatures.size()),
 				config.baseline, config.curveTolerance,
 				config.fontColor.configured, static_cast<UInt32>(config.effectQuality),
-				config.glow.enabled, config.outline.enabled, config.shadow.enabled,
-				config.shadow.blur);
+				config.glow.enabled, config.glow.inner, config.glow.outer, config.glow.power,
+				config.outline.enabled, config.outline.width, config.outline.softness,
+				config.shadow.enabled, config.shadow.blur, config.shadow.power);
 			if (config.fontColor.configured)
 			{
 				FreeTypeFontDebugLog(
@@ -437,6 +508,34 @@ namespace fonthook::vectorfont
 	{
 		auto it = g_configs.find(auiFontId);
 		return it == g_configs.end() ? nullptr : &it->second;
+	}
+
+	bool HasSdfEffects(const FontConfig& arConfig)
+	{
+		return arConfig.glow.enabled
+			|| arConfig.outline.enabled
+			|| (arConfig.shadow.enabled && arConfig.shadow.blur > 0.0f);
+	}
+
+	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread)
+	{
+		arSpread = 0;
+		if (!HasSdfEffects(arConfig) || !std::isfinite(afRasterScale) || afRasterScale <= 0.0f)
+			return false;
+
+		float radius = 0.0f;
+		if (arConfig.glow.enabled)
+			radius = std::max(radius, arConfig.glow.outer);
+		if (arConfig.outline.enabled)
+			radius = std::max(radius, arConfig.outline.width + arConfig.outline.softness);
+		if (arConfig.shadow.enabled && arConfig.shadow.blur > 0.0f)
+			radius = std::max(radius, arConfig.shadow.blur);
+
+		const float physicalSpread = std::ceil(radius * afRasterScale) + 2.0f;
+		if (!std::isfinite(physicalSpread) || physicalSpread < 2.0f || physicalSpread > 32.0f)
+			return false;
+		arSpread = static_cast<UInt32>(physicalSpread);
+		return true;
 	}
 }
 

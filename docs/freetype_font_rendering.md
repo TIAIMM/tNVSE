@@ -56,9 +56,12 @@ fonts continue to use the original `.fnt` and `.tex` files.
         <fallback path="Data/Fonts/NotoSansSymbols2-Regular.ttf" index="0"/>
       </doubleByte>
 
-      <glow enabled="1" width="2" color="#66FF99" alpha="0.35"/>
-      <outline enabled="1" width="1" color="#000000" alpha="1"/>
-      <shadow enabled="1" x="1" y="1" color="#000000" alpha="0.65"/>
+      <glow enabled="1" inner="0" outer="4" power="2"
+            color="#66FF99" alpha="0.35"/>
+      <outline enabled="1" width="1" softness="0.5"
+               color="#000000" alpha="1"/>
+      <shadow enabled="1" x="1" y="1" blur="2" power="2"
+              color="#000000" alpha="0.65"/>
     </font>
   </fonts>
 </tNVSE>
@@ -91,10 +94,14 @@ single/double-byte visual-center correction.
 the font ID. When `fontColor` is omitted, fill geometry keeps the color supplied
 by the game. `glow`, `outline`, and `shadow` belong to the font ID and are
 shared by both byte classes. `effectQuality="fast|balanced|high"` selects the
-PS 3.0 sampling preset and defaults to `balanced`. Shadow accepts an optional
-non-negative `blur` radius; zero preserves a hard offset shadow. Every
-configured alpha is multiplied by the game text alpha, so visibility and fade
-animations continue to work.
+PS 3.0 SDF sampling preset and defaults to `balanced`; the presets use 1, 4,
+or 8 subpixel samples. The fill always remains the hinted FreeType grayscale
+bitmap. Glow uses `inner`, `outer`, and `power`; legacy `width` is accepted as
+an alias for `outer` only when `outer` is absent. Outline accepts a
+non-negative `softness`. Shadow accepts a non-negative `blur` and a positive
+`power`; `blur=0` preserves the exact hinted offset mask. Every configured
+alpha is multiplied by the game text alpha, so visibility and fade animations
+continue to work.
 
 `shaping="0"` is the default. It uses FreeType 26.6 advances and
 `FT_Get_Kerning()` without rounding every glyph in advance. `shaping="1"`
@@ -115,7 +122,9 @@ activated and processes at most eight valid encoded units per game frame, so
 it does not block startup with one large rasterization pass. It only prepares
 the base raster scale of `1.0`; UIO-derived sizes remain demand-driven. A font
 task stops and reports `atlas-full` if its complete set cannot fit the maximum
-atlas size.
+atlas size. Full code-page prewarming generates hinted fill masks for every
+valid unit, but SDF masks are limited to single-byte and common double-byte
+characters; uncommon effect masks remain demand-driven.
 
 Routing follows the selected `uiEncoding`: valid one-byte units use
 `singleByte`, while valid DBCS pairs use `doubleByte`. Shift-JIS half-width
@@ -141,10 +150,19 @@ Loader. In that fallback, XML layer RGB and alpha are baked into the 32-bit
 atlas and the original Tile shader still supplies the dynamic Tile color and
 alpha.
 
-The base A8 shader and all effect variants use `ps_3_0`. Shader effects reuse
-the fill mask and execute global shadow, glow, outline, and fill passes over
-one `NiTriShape`; this prevents a later glyph effect from covering an earlier
-glyph fill. Glow is a soft outer halo and outline is an outer-only dilation.
+The base A8 shader and all effect variants use `ps_3_0`. The body uses the
+hinted grayscale mask. Glow, outline, and blurred shadow share a FreeType
+bitmap-to-SDF mask generated from that hinted body; hard shadow continues to
+reuse the grayscale mask. Both masks can occupy the same A8 atlas. Effects
+execute global shadow, glow, outline, and fill passes over one `NiTriShape`,
+which prevents a later glyph effect from covering an earlier glyph fill. SDF
+passes use linear sampling and derivative-based edge antialiasing. Glow keeps
+full intensity through `inner`, then decays to zero at `outer` according to
+`power`; outline uses `width` plus `softness`; blurred shadow uses `blur` and
+`power`. The physical SDF spread is derived from the largest enabled radius
+and must remain in FreeType's supported 2-32 pixel range. An unsupported
+spread causes the complete text batch to use the CPU effect path rather than
+silently reducing the requested effect.
 When an effect shader is unavailable, the renderer retains the CPU mask path
 with the same global layer order. When `NVSE_PLUGIN_PATH` is defined, an
 ordinary project build copies all compiled PSOs to `Data\Shaders\Loose`.
