@@ -55,11 +55,31 @@ namespace fonthook
 		std::unordered_set<UInt64> s_loggedGlyphRoutes;
 		bool s_loggedMergedShapeDiagnostics = false;
 
+		float SanitizeColorChannel(float value, float fallback = 1.0f)
+		{
+			return std::isfinite(value) ? value : fallback;
+		}
+
+		NiColorA SanitizeColor(const NiColorA& color)
+		{
+			return {
+				SanitizeColorChannel(color.r),
+				SanitizeColorChannel(color.g),
+				SanitizeColorChannel(color.b),
+				SanitizeColorChannel(color.a)
+			};
+		}
+
 		float ResolveModifierChannel(float source, float tile)
 		{
+			if (!std::isfinite(source) || !std::isfinite(tile))
+				return 1.0f;
 			if (std::fabs(tile) > 0.000001f)
-				return source / tile;
-			return std::fabs(source) <= 0.000001f ? 1.0f : source;
+			{
+				const float result = source / tile;
+				return std::isfinite(result) ? result : 1.0f;
+			}
+			return 1.0f;
 		}
 
 		NiColorA ResolveFillColor(const vectorfont::FontColorStyle& style,
@@ -79,15 +99,15 @@ namespace fonthook
 				result.b *= style.color.b;
 				result.a *= style.color.a;
 			}
-			return result;
+			return SanitizeColor(result);
 		}
 
 		NiColorA ResolveEffectColor(const vectorfont::EffectStyle& effect,
 			const NiColorA* source, const NiColorA& tile)
 		{
-			NiColorA result = effect.color;
+			NiColorA result = SanitizeColor(effect.color);
 			result.a *= ResolveModifierChannel(source ? source->a : tile.a, tile.a);
-			return result;
+			return SanitizeColor(result);
 		}
 
 		const char* GetLayerName(VectorLayer layer)
@@ -114,12 +134,100 @@ namespace fonthook
 				- static_cast<UInt32>(layer)) * kLayerDepthStep;
 		}
 
+		NiTexture* GetPropertyTexture(NiTexturingProperty* property)
+		{
+			if (!property || !property->m_kMaps.GetSize())
+				return nullptr;
+			NiTexturingProperty::Map* map = property->m_kMaps[0];
+			return map ? map->m_spTexture : nullptr;
+		}
+
 		NiTexture* GetWhiteTexture()
 		{
-			if (!s_whiteTextureProperty || !s_whiteTextureProperty->m_kMaps.GetSize())
+			return GetPropertyTexture(s_whiteTextureProperty);
+		}
+
+		UInt32 PackColorRgba(const NiColorA& input)
+		{
+			const NiColorA color = SanitizeColor(input);
+			auto channel = [](float value)
+			{
+				return static_cast<UInt32>(std::lround(
+					std::clamp(value, 0.0f, 1.0f) * 255.0f));
+			};
+			return (channel(color.a) << 24) | (channel(color.r) << 16)
+				| (channel(color.g) << 8) | channel(color.b);
+		}
+
+		UInt32 NextPowerOfTwo(UInt32 value)
+		{
+			if (value <= 1)
+				return 1;
+			--value;
+			value |= value >> 1;
+			value |= value >> 2;
+			value |= value >> 4;
+			value |= value >> 8;
+			value |= value >> 16;
+			return value + 1;
+		}
+
+		NiTexturingPropertyPtr CreatePaletteTextureProperty(
+			const std::vector<UInt32>& colors, UInt32& width, UInt32& height)
+		{
+			width = 0;
+			height = 0;
+			if (colors.empty() || colors.size() > kMaxShapeVertices)
 				return nullptr;
-			NiTexturingProperty::Map* map = s_whiteTextureProperty->m_kMaps[0];
-			return map ? map->m_spTexture : nullptr;
+
+			width = NextPowerOfTwo(static_cast<UInt32>(
+				std::min<size_t>(colors.size(), 256)));
+			height = NextPowerOfTwo(static_cast<UInt32>(
+				(colors.size() + width - 1) / width));
+
+			NiPixelData* rawPixelData = static_cast<NiPixelData*>(
+				NiMemObject::operator new(sizeof(NiPixelData)));
+			if (!rawPixelData)
+				return nullptr;
+			rawPixelData = ThisStdCall<NiPixelData*>(0xA7C190, rawPixelData,
+				width, height, reinterpret_cast<const NiPixelFormat*>(0x11AA2A0), 1, 1);
+			if (!rawPixelData || !rawPixelData->m_pucPixels
+				|| !rawPixelData->m_puiOffsetInBytes)
+			{
+				return nullptr;
+			}
+			NiPixelDataPtr pixelData = rawPixelData;
+			UInt32* pixels = reinterpret_cast<UInt32*>(rawPixelData->m_pucPixels
+				+ *rawPixelData->m_puiOffsetInBytes);
+			std::fill(pixels, pixels + static_cast<size_t>(width) * height, 0u);
+			std::copy(colors.begin(), colors.end(), pixels);
+			rawPixelData->bNoConvert = 1;
+
+			NiTexture::FormatPrefs formatPrefs;
+			formatPrefs.m_ePixelLayout = NiTexture::FormatPrefs::PIX_DEFAULT;
+			formatPrefs.m_eAlphaFmt = NiTexture::FormatPrefs::ALPHA_DEFAULT;
+			formatPrefs.m_eMipMapped = NiTexture::FormatPrefs::NO;
+
+			NiTexturingProperty* rawProperty = static_cast<NiTexturingProperty*>(
+				NiMemObject::operator new(sizeof(NiTexturingProperty)));
+			if (!rawProperty)
+				return nullptr;
+			NiFixedString textureName;
+			textureName.m_kHandle = static_cast<char*>(
+				NiGlobalStringTable::AddString("tNVSE FreeType Vector Palette"));
+			rawProperty = ThisStdCall<NiTexturingProperty*>(0xA6ABB0,
+				rawProperty, rawPixelData, &textureName, &formatPrefs);
+			if (!rawProperty || !rawProperty->m_kMaps.GetSize())
+				return nullptr;
+			NiTexturingPropertyPtr property = rawProperty;
+			ThisStdCall(0x60AEB0, rawProperty, 1);
+			if (NiTexturingProperty::Map* map = rawProperty->m_kMaps[0])
+			{
+				map->m_usflags = static_cast<UInt16>((map->m_usflags & ~0x1Fu)
+					| (NiTexturingProperty::FILTER_NEAREST << 2)
+					| NiTexturingProperty::CLAMP_S_CLAMP_T);
+			}
+			return property;
 		}
 
 		void LogGeometryFailure(UInt32 fontId, UInt32 codePoint, const char* reason)
@@ -279,7 +387,7 @@ namespace fonthook
 			UInt32 vertexCount, UInt32 triangleCount, bool prepareObject,
 			const NiColorA& tileColor)
 		{
-			if (!vertexCount || !triangleCount || !InitializeWhiteTexture())
+			if (!vertexCount || !triangleCount)
 				return CreateEmptyVectorShape(&font, prepareObject);
 
 			const UInt32 charCapacity = std::max((vertexCount + 3) / 4, (triangleCount + 1) / 2);
@@ -287,50 +395,66 @@ namespace fonthook
 				return CreateEmptyVectorShape(&font, prepareObject);
 
 			const bool useUniformColorShader = vectorfont::IsA8RendererAvailable();
-			const UInt32 capacityVertices = charCapacity * 4;
-			NiColorA* vertexColors = nullptr;
-			if (!useUniformColorShader)
+			NiTexturingPropertyPtr textureProperty;
+			std::unordered_map<UInt32, UInt32> paletteIndices;
+			std::vector<UInt32> paletteColors;
+			UInt32 paletteWidth = 1;
+			UInt32 paletteHeight = 1;
+			if (useUniformColorShader)
 			{
-				vertexColors = static_cast<NiColorA*>(
-					MemoryManager_s_Instance->Allocate(sizeof(NiColorA) * capacityVertices));
-				if (!vertexColors)
+				if (!InitializeWhiteTexture())
+					return CreateEmptyVectorShape(&font, prepareObject);
+				textureProperty = s_whiteTextureProperty;
+			}
+			else
+			{
+				for (size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex)
+				{
+					if (!included[layerIndex])
+						continue;
+					const LayerGeometry& layer = layers[layerIndex];
+					if (layer.colors.size() != layer.vertices.size())
+						return CreateEmptyVectorShape(&font, prepareObject);
+					for (const NiColorA& color : layer.colors)
+					{
+						const UInt32 rgba = PackColorRgba(color);
+						if (paletteIndices.find(rgba) == paletteIndices.end())
+						{
+							const UInt32 index = static_cast<UInt32>(paletteColors.size());
+							paletteIndices.emplace(rgba, index);
+							paletteColors.push_back(rgba);
+						}
+					}
+				}
+				textureProperty = CreatePaletteTextureProperty(paletteColors,
+					paletteWidth, paletteHeight);
+				if (!textureProperty)
 					return CreateEmptyVectorShape(&font, prepareObject);
 			}
 
 			NiTriShape* shape = font.MakeTriShape(static_cast<int>(charCapacity), &tileColor, false);
 			if (!shape || !shape->GetModelData())
-			{
-				if (vertexColors)
-					MemoryManager_s_Instance->Deallocate(vertexColors);
 				return CreateEmptyVectorShape(&font, prepareObject);
-			}
 
 			shape->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f, 0.0f);
 			shape->RemoveProperty(NiProperty::TEXTURING);
-			shape->AddProperty(s_whiteTextureProperty);
+			shape->AddProperty(textureProperty);
 			shape->UpdateProperties();
 			NiShadeProperty* shade = shape->GetShadeProperty();
-			NiTexture* whiteTexture = GetWhiteTexture();
+			NiTexture* texture = GetPropertyTexture(textureProperty);
 			if (shade && shade->m_eShaderType == NiShadeProperty::PROP_Tile)
 			{
-				if (whiteTexture)
-					ThisStdCall(0xBB7A10, shade, whiteTexture);
+				if (texture)
+					ThisStdCall(0xBB7A10, shade, texture);
 			}
 
 			NiTriShapeData* data = shape->GetModelData();
-			if (vertexColors)
-			{
-				data->m_pkColor = vertexColors;
-				data->m_ucKeepFlags |= NiGeometryData::KEEP_COLOR;
-			}
-			const NiColorA transparent = { 1.0f, 1.0f, 1.0f, 0.0f };
+			if (!data->m_pkTexture)
+				return CreateEmptyVectorShape(&font, prepareObject);
 			for (UInt32 i = 0; i < data->m_usVertices; ++i)
 			{
 				data->m_pkVertex[i] = NiPoint3(0.0f, 0.0f, 0.0f);
-				if (data->m_pkColor)
-					data->m_pkColor[i] = transparent;
-				if (data->m_pkTexture)
-					data->m_pkTexture[i] = NiPoint2(0.5f, 0.5f);
+				data->m_pkTexture[i] = NiPoint2(0.5f, 0.5f);
 			}
 			for (UInt32 i = 0; i < static_cast<UInt32>(data->m_usTriangles) * 3; ++i)
 				data->m_pusTriList[i] = 0;
@@ -369,8 +493,18 @@ namespace fonthook
 				for (size_t i = 0; i < layer.vertices.size(); ++i)
 				{
 					data->m_pkVertex[vertexCursor] = layer.vertices[i];
-					if (data->m_pkColor)
-						data->m_pkColor[vertexCursor] = layer.colors[i];
+					if (!useUniformColorShader)
+					{
+						const UInt32 rgba = PackColorRgba(layer.colors[i]);
+						const auto palette = paletteIndices.find(rgba);
+						if (palette == paletteIndices.end())
+							return CreateEmptyVectorShape(&font, prepareObject);
+						const UInt32 paletteX = palette->second % paletteWidth;
+						const UInt32 paletteY = palette->second / paletteWidth;
+						data->m_pkTexture[vertexCursor] = NiPoint2(
+							(static_cast<float>(paletteX) + 0.5f) / paletteWidth,
+							(static_cast<float>(paletteY) + 0.5f) / paletteHeight);
+					}
 					++vertexCursor;
 				}
 				for (UInt32 index : layer.indices)
@@ -435,14 +569,16 @@ namespace fonthook
 				{
 					s_loggedMergedShapeDiagnostics = true;
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: first merged shape font=%u vertices=%u triangles=%u shadow=%d glow=%d outline=%d fill=%d flipped=%u winding=%.4f->%.4f colors=%p local=(%.3f,%.3f,%.3f)",
+						"tnvse_freetype_font: first merged shape font=%u vertices=%u triangles=%u shadow=%d glow=%d outline=%d fill=%d flipped=%u winding=%.4f->%.4f colorSource=%s palette=%ux%u colors=%p local=(%.3f,%.3f,%.3f)",
 						font.iFontNum, vertexCount, triangleCount,
 						included[static_cast<size_t>(VectorLayer::Shadow)] ? 1 : 0,
 						included[static_cast<size_t>(VectorLayer::Glow)] ? 1 : 0,
 						included[static_cast<size_t>(VectorLayer::Outline)] ? 1 : 0,
 						included[static_cast<size_t>(VectorLayer::Fill)] ? 1 : 0,
 						flippedTriangles,
-						firstWindingBefore, firstWindingAfter, data->m_pkColor,
+						firstWindingBefore, firstWindingAfter,
+						useUniformColorShader ? "c1" : "texture",
+						paletteWidth, paletteHeight, data->m_pkColor,
 						shape->m_kLocal.m_Translate.x,
 						shape->m_kLocal.m_Translate.y,
 						shape->m_kLocal.m_Translate.z);

@@ -319,12 +319,18 @@ namespace fonthook::vectorfont
 		std::unordered_set<UInt64> unique;
 		EffectQuality resolvedQuality = config->effectQuality;
 		bool shaderEffects = IsA8RendererAvailable()
-			&& (config->shadow.enabled || config->glow.enabled || config->outline.enabled)
+			&& (config->shadow.enabled || config->glow.enabled || config->outline.enabled
+				|| UsesSdfFill(*config))
 			&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
 		UInt32 sdfSpread = 0;
-		const bool needsSdf = shaderEffects && HasSdfEffects(*config);
+		const bool needsSdf = shaderEffects && NeedsSdfMask(*config);
 		if (needsSdf && !ResolveSdfSpread(*config, rasterScale, sdfSpread))
 			shaderEffects = false;
+		const bool resolvedSdfFill = shaderEffects && UsesSdfFill(*config);
+		const bool needsGrayFill = !resolvedSdfFill
+			|| (config->shadow.enabled && config->shadow.blur <= 0.0f);
+		const bool needsFullCodePageScan = job.mode == FontPrewarmMode::CodePage
+			&& needsGrayFill;
 		UInt32 candidates = 0;
 		UInt32 glyphs = 0;
 		bool exhausted = false;
@@ -344,7 +350,8 @@ namespace fonthook::vectorfont
 				continue;
 			if (length == 2)
 			{
-				if (job.mode == FontPrewarmMode::Common
+				if ((!needsFullCodePageScan
+						|| job.mode == FontPrewarmMode::Common)
 					&& job.validDoubleByteCount >= kCommonDoubleByteLimit)
 				{
 					exhausted = true;
@@ -353,9 +360,12 @@ namespace fonthook::vectorfont
 				++job.validDoubleByteCount;
 			}
 
-			AddBitmap(bitmaps, unique, GetGlyphBitmap(
-				*runtime, glyph, GlyphMaskType::Fill, rasterScale));
-			const bool prewarmSdf = shaderEffects && HasSdfEffects(*config)
+			if (needsGrayFill)
+			{
+				AddBitmap(bitmaps, unique, GetGlyphBitmap(
+					*runtime, glyph, GlyphMaskType::Fill, rasterScale));
+			}
+			const bool prewarmSdf = shaderEffects && NeedsSdfMask(*config)
 				&& (length == 1 || job.mode == FontPrewarmMode::Common
 					|| job.validDoubleByteCount <= kCommonDoubleByteLimit);
 			if (prewarmSdf)

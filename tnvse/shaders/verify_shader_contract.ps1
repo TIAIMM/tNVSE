@@ -17,6 +17,9 @@ foreach ($sourceName in $sources) {
     if ($source -notmatch '#include\s+"freetype_tile_compat\.hlsli"') {
         throw "$sourceName does not include freetype_tile_compat.hlsli"
     }
+    if ($source -notmatch '#include\s+"freetype_sdf_compat\.hlsli"') {
+        throw "$sourceName does not include freetype_sdf_compat.hlsli"
+    }
 }
 
 $compatPath = Join-Path $ShaderDirectory 'freetype_tile_compat.hlsli'
@@ -74,4 +77,4 @@ foreach ($shaderName in $shaders) {
     }
 }
 
-Write-Host 'FreeType shader contract tile-uniform-v4-sdf verification succeeded.'
+Write-Host 'FreeType shader contract tile-uniform-v6-preserved-blend verification succeeded.'

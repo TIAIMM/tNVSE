@@ -66,7 +66,7 @@
         <font> and cannot be overridden per byte class. Default: 0.
       curveTolerance
         Curve-flattening tolerance for the vector fallback path. Minimum:
-        0.01. Default: 0.35. The normal grayscale atlas path does not use it.
+        0.01. Default: 0.35. The normal atlas paths do not use it.
       shaping
         0 uses precise FreeType 26.6 advances and FT_Get_Kerning. 1 enables
         HarfBuzz GSUB/GPOS for ordinary Font text. Default: 0. Rich text keeps
@@ -87,13 +87,20 @@
         small batch per frame. Only raster scale 1.0 is prepared; UIO-derived
         sizes remain demand-driven. If the atlas reaches its maximum size,
         prewarming for that font stops safely.
+      fillRenderMode
+        Selects fill mask rendering for the entire font ID. "grayscale" keeps
+        the hinted FreeType grayscale bitmap and is the parser default. "sdf"
+        uses the shared FreeType distance field for the fill and enabled SDF
+        effects. SDF fill requires the A8 custom shader path; if that path is
+        unavailable, the fill safely falls back to grayscale. This attribute
+        cannot be overridden by singleByte or doubleByte.
       effectQuality
         Shader effect sampling preset: "fast", "balanced", or "high".
         Default: "balanced". The presets use 1, 4, or 8 subpixel samples for
-        SDF glow, outline, and blurred shadow edges. The fill remains the
-        hinted FreeType grayscale bitmap at every quality level. This
-        attribute affects only the A8 PS 3.0 shader path; CPU fallback
-        rendering remains available.
+        SDF fill, glow, outline, and blurred shadow edges. Grayscale fill remains
+        the hinted FreeType bitmap at every quality level. This attribute
+        affects only the A8 PS 3.0 shader path; CPU fallback rendering remains
+        available.
       fontColor
         Optional fill-color override in #RRGGBB format. When omitted, the
         renderer uses a white modifier and keeps the text color supplied by
@@ -116,8 +123,8 @@
 
       Attributes not overridden by a byte class are inherited from <font>.
       shaping, features, verticalMetrics, baseline, curveTolerance, fontColor,
-      fontAlpha, effectQuality, glow, outline, and shadow apply to the entire font ID and
-      cannot be overridden per group.
+      fontAlpha, fillRenderMode, effectQuality, glow, outline, and shadow apply
+      to the entire font ID and cannot be overridden per group.
 
       3. Font files and fallback chains
 
@@ -183,7 +190,7 @@
     -->
 
     <!-- 1: Glow_Monofonto_Large -->
-    <font id="1" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="1" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
@@ -202,7 +209,7 @@
     </font>
 
     <!-- 2: Monofonto_Large -->
-    <font id="2" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="2" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
@@ -221,7 +228,7 @@
     </font>
 
     <!-- 3: Glow_Monofonto_Medium -->
-    <font id="3" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="3" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="26" tracking="-1" scaleX="1" scaleY="1"
@@ -240,7 +247,7 @@
     </font>
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
-    <font id="4" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="4" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="32" tracking="-1" scaleX="1" scaleY="1"
@@ -259,7 +266,7 @@
     </font>
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
-    <font id="5" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="5" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="32" tracking="0" fixedWidth="17" scaleX="1" scaleY="1"
@@ -278,7 +285,7 @@
     </font>
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
-    <font id="6" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="6" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="30" tracking="-1" scaleX="1" scaleY="1"
@@ -297,7 +304,7 @@
     </font>
 
     <!-- 7: Baked-in_Monofonto_Large -->
-    <font id="7" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="7" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
@@ -316,7 +323,7 @@
     </font>
 
     <!-- 8: Glow_Futura_Caps_Large -->
-    <font id="8" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="8" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="52" tracking="-1" scaleX="1" scaleY="1"
@@ -335,7 +342,7 @@
     </font>
 
 	<!-- 42: Monofonto_STn (same as Monofonto_Large) -->
-    <font id="42" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="42" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"

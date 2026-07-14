@@ -82,6 +82,12 @@ namespace fonthook::vectorfont
 		High = 2,
 	};
 
+	enum class FillRenderMode : UInt8
+	{
+		Grayscale = 0,
+		Sdf = 1,
+	};
+
 	enum class FontPrewarmMode : UInt8
 	{
 		None = 0,
@@ -121,6 +127,7 @@ namespace fonthook::vectorfont
 		float baseline = 0.0f;
 		float curveTolerance = 0.35f;
 		FontColorStyle fontColor;
+		FillRenderMode fillRenderMode = FillRenderMode::Grayscale;
 		EffectQuality effectQuality = EffectQuality::Balanced;
 		EffectStyle glow;
 		EffectStyle outline;
@@ -161,6 +168,7 @@ namespace fonthook::vectorfont
 		UInt32 startIndex = 0;
 		UInt32 primitiveCount = 0;
 		UInt32 layer = 3;
+		bool usesSdf = false;
 		NiColorA colorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 	};
 
@@ -168,6 +176,8 @@ namespace fonthook::vectorfont
 	{
 		bool enabled = false;
 		bool shaderEffects = false;
+		bool useOriginalShader = false;
+		bool fillUsesSdf = false;
 		EffectQuality quality = EffectQuality::Balanced;
 		float inverseAtlasWidth = 0.0f;
 		float inverseAtlasHeight = 0.0f;
@@ -184,7 +194,7 @@ namespace fonthook::vectorfont
 
 	struct A8ShapeColorContract
 	{
-		static constexpr UInt32 kTileUniformColorAbi = 4;
+		static constexpr UInt32 kTileUniformColorAbi = 6;
 
 		UInt32 abiVersion = kTileUniformColorAbi;
 		NiColorA minimumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -214,7 +224,9 @@ namespace fonthook::vectorfont
 	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph, GlyphMaskType aeMaskType, float afRasterScale,
 		UInt32 auiSdfSpread = 0);
+	bool UsesSdfFill(const FontConfig& arConfig);
 	bool HasSdfEffects(const FontConfig& arConfig);
+	bool NeedsSdfMask(const FontConfig& arConfig);
 	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread);
 	bool ResolvePrewarmGlyph(RuntimeFont& arRuntime, const char* apBytes,
 		size_t auiLength, VectorEncodedGlyph& arGlyph);
@@ -227,6 +239,7 @@ namespace fonthook::vectorfont
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
 		bool abPrepareObject, const NiColorA& arTileColor);
 	bool IsA8RendererAvailable();
+	bool IsAtlasRangeRendererAvailable();
 	bool IsA8EffectRendererAvailable(EffectQuality aeQuality);
 	bool ResolveA8EffectQuality(EffectQuality aeRequested, EffectQuality& arResolved);
 	bool PrepareA8AtlasShape(NiTriShape* apShape, UInt32 auiFontId,

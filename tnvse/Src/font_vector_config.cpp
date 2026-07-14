@@ -280,6 +280,7 @@ namespace fonthook::vectorfont
 			HashBytes(hash, &config.fontColor.color.g, sizeof(config.fontColor.color.g));
 			HashBytes(hash, &config.fontColor.color.b, sizeof(config.fontColor.color.b));
 			HashBytes(hash, &config.fontColor.color.a, sizeof(config.fontColor.color.a));
+			HashBytes(hash, &config.fillRenderMode, sizeof(config.fillRenderMode));
 			HashBytes(hash, &config.effectQuality, sizeof(config.effectQuality));
 			auto hashEffect = [&](const EffectStyle& effect)
 			{
@@ -354,6 +355,17 @@ namespace fonthook::vectorfont
 			}
 
 			const std::string effectQuality = node.attribute("effectQuality").as_string("balanced");
+			const std::string fillRenderMode = node.attribute("fillRenderMode").as_string("grayscale");
+			if (fillRenderMode == "grayscale")
+				config.fillRenderMode = FillRenderMode::Grayscale;
+			else if (fillRenderMode == "sdf")
+				config.fillRenderMode = FillRenderMode::Sdf;
+			else
+			{
+				reason = "fillRenderMode must be grayscale or sdf";
+				return false;
+			}
+
 			if (effectQuality == "fast")
 				config.effectQuality = EffectQuality::Fast;
 			else if (effectQuality == "balanced")
@@ -464,13 +476,15 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d effectQuality=%u glow=%d inner=%.2f outer=%.2f power=%.2f outline=%d width=%.2f softness=%.2f shadow=%d blur=%.2f power=%.2f",
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d fillRenderMode=%s effectQuality=%u glow=%d inner=%.2f outer=%.2f power=%.2f outline=%d width=%.2f softness=%.2f shadow=%d blur=%.2f power=%.2f",
 				config.fontId, static_cast<UInt32>(config.prewarm),
 				config.verticalMetrics == VerticalMetricsMode::Original ? "original" : "freetype",
 				config.shaping ? 1 : 0,
 				static_cast<UInt32>(config.shapingFeatures.size()),
 				config.baseline, config.curveTolerance,
-				config.fontColor.configured, static_cast<UInt32>(config.effectQuality),
+				config.fontColor.configured,
+				config.fillRenderMode == FillRenderMode::Sdf ? "sdf" : "grayscale",
+				static_cast<UInt32>(config.effectQuality),
 				config.glow.enabled, config.glow.inner, config.glow.outer, config.glow.power,
 				config.outline.enabled, config.outline.width, config.outline.softness,
 				config.shadow.enabled, config.shadow.blur, config.shadow.power);
@@ -510,6 +524,11 @@ namespace fonthook::vectorfont
 		return it == g_configs.end() ? nullptr : &it->second;
 	}
 
+	bool UsesSdfFill(const FontConfig& arConfig)
+	{
+		return arConfig.fillRenderMode == FillRenderMode::Sdf;
+	}
+
 	bool HasSdfEffects(const FontConfig& arConfig)
 	{
 		return arConfig.glow.enabled
@@ -517,10 +536,15 @@ namespace fonthook::vectorfont
 			|| (arConfig.shadow.enabled && arConfig.shadow.blur > 0.0f);
 	}
 
+	bool NeedsSdfMask(const FontConfig& arConfig)
+	{
+		return UsesSdfFill(arConfig) || HasSdfEffects(arConfig);
+	}
+
 	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread)
 	{
 		arSpread = 0;
-		if (!HasSdfEffects(arConfig) || !std::isfinite(afRasterScale) || afRasterScale <= 0.0f)
+		if (!NeedsSdfMask(arConfig) || !std::isfinite(afRasterScale) || afRasterScale <= 0.0f)
 			return false;
 
 		float radius = 0.0f;
@@ -531,7 +555,9 @@ namespace fonthook::vectorfont
 		if (arConfig.shadow.enabled && arConfig.shadow.blur > 0.0f)
 			radius = std::max(radius, arConfig.shadow.blur);
 
-		const float physicalSpread = std::ceil(radius * afRasterScale) + 2.0f;
+		float physicalSpread = std::ceil(radius * afRasterScale) + 2.0f;
+		if (UsesSdfFill(arConfig))
+			physicalSpread = std::max(physicalSpread, 4.0f);
 		if (!std::isfinite(physicalSpread) || physicalSpread < 2.0f || physicalSpread > 32.0f)
 			return false;
 		arSpread = static_cast<UInt32>(physicalSpread);

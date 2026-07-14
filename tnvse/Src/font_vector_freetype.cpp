@@ -1008,7 +1008,8 @@ namespace fonthook::vectorfont
 			return hash;
 		}
 
-		bool CopyGrayBitmap(const FT_Bitmap& source, GlyphBitmap& target)
+		bool CopyGrayBitmap(const FT_Bitmap& source, GlyphBitmap& target,
+			bool preserveEncodedValues = false)
 		{
 			constexpr int kBitmapGuardPixels = 1;
 			const int sourceWidth = static_cast<int>(source.width);
@@ -1039,13 +1040,18 @@ namespace fonthook::vectorfont
 					+ kBitmapGuardPixels;
 				if (source.pixel_mode == FT_PIXEL_MODE_GRAY)
 				{
-					if (source.num_grays == 256)
+					// SDF pixels are encoded distances, not coverage levels.  FreeType's
+					// bitmap SDF renderer reports num_grays=255 while still using the full
+					// 0..255 byte range, so normalizing it would turn 255 into 256 and then
+					// wrap the glyph interior to zero.
+					if (preserveEncodedValues || source.num_grays == 256)
 						std::copy(row, row + sourceWidth, output);
 					else
 					{
 						const UInt32 denominator = std::max<UInt32>(1, source.num_grays - 1);
 						for (int x = 0; x < sourceWidth; ++x)
-							output[x] = static_cast<UInt8>(row[x] * 255u / denominator);
+							output[x] = static_cast<UInt8>(std::min<UInt32>(255,
+								row[x] * 255u / denominator));
 					}
 				}
 				else if (source.pixel_mode == FT_PIXEL_MODE_MONO)
@@ -1539,7 +1545,7 @@ namespace fonthook::vectorfont
 					return nullptr;
 				bitmap->left = slot->bitmap_left;
 				bitmap->top = slot->bitmap_top;
-				return CopyGrayBitmap(slot->bitmap, *bitmap) ? bitmap : nullptr;
+				return CopyGrayBitmap(slot->bitmap, *bitmap, true) ? bitmap : nullptr;
 			}
 
 			const EffectStyle& effect = maskType == GlyphMaskType::Glow

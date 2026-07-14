@@ -33,7 +33,6 @@ namespace fonthook::vectorfont
 		constexpr UInt32 kAtlasPadding = 2;
 		constexpr UInt32 kAtlasHardLimit = 4096;
 		constexpr UInt32 kMaximumQuads = 16383;
-		constexpr float kLayerDepthStep = 0.01f;
 		constexpr UInt32 kAutomaticAtlasBudgetFallbackMB = 128;
 		constexpr UInt32 kAutomaticAtlasBudgetMinimumMB = 64;
 		constexpr UInt32 kAutomaticAtlasBudgetMaximumMB = 256;
@@ -45,6 +44,14 @@ namespace fonthook::vectorfont
 			Glow = 1,
 			Outline = 2,
 			Fill = 3,
+		};
+
+		enum class PendingQuadBuildFailure : UInt8
+		{
+			None = 0,
+			Fill,
+			Glow,
+			Outline,
 		};
 
 		enum class AtlasPixelMode : UInt8
@@ -148,6 +155,7 @@ namespace fonthook::vectorfont
 			float logicalTopEdge = 0.0f;
 			UInt32 expansionPixels = 0;
 			AtlasLayer layer = AtlasLayer::Fill;
+			bool usesSdf = false;
 		};
 
 		struct BatchTemplateKey
@@ -200,6 +208,8 @@ namespace fonthook::vectorfont
 		UInt32 s_lastAvailableTextureMemoryMB = 0;
 		UInt32 s_defaultPoolFailureLogCount = 0;
 		UInt32 s_atlasFailureLogCount = 0;
+		UInt32 s_shaderBatchFailureLogCount = 0;
+		UInt32 s_cpuMaskFailureLogCount = 0;
 		std::unordered_set<UInt64> s_loggedAtlasBatches;
 		std::unordered_set<UInt32> s_loggedVerticalMetricFonts;
 		std::unordered_set<UInt64> s_loggedQualityDowngrades;
@@ -235,11 +245,34 @@ namespace fonthook::vectorfont
 
 		void* DefaultAtlasTexture::s_vtable[41] = {};
 
+		float SanitizeColorChannel(float value, float fallback = 1.0f)
+		{
+			return std::isfinite(value) ? value : fallback;
+		}
+
+		NiColorA SanitizeColor(const NiColorA& color)
+		{
+			return {
+				SanitizeColorChannel(color.r),
+				SanitizeColorChannel(color.g),
+				SanitizeColorChannel(color.b),
+				SanitizeColorChannel(color.a)
+			};
+		}
+
 		float ResolveModifierChannel(float source, float tile)
 		{
+			if (!std::isfinite(source) || !std::isfinite(tile))
+				return 1.0f;
 			if (std::fabs(tile) > 0.000001f)
-				return source / tile;
-			return std::fabs(source) <= 0.000001f ? 1.0f : source;
+			{
+				const float result = source / tile;
+				return std::isfinite(result) ? result : 1.0f;
+			}
+			// The original TILE1000 contract multiplies the texture by c0. A zero
+			// c0 channel cannot be recovered by any finite texture/modifier value,
+			// so preserve that dynamic game state instead of trying to replace it.
+			return 1.0f;
 		}
 
 		NiColorA ResolveSourceModifier(const NiColorA& source, const NiColorA& tile)
@@ -263,39 +296,24 @@ namespace fonthook::vectorfont
 				result.b *= style.color.b;
 				result.a *= style.color.a;
 			}
-			return result;
+			return SanitizeColor(result);
 		}
 
 		NiColorA ResolveEffectColor(const EffectStyle& effect, const NiColorA& source,
 			const NiColorA& tile)
 		{
-			NiColorA result = effect.color;
+			NiColorA result = SanitizeColor(effect.color);
 			result.a *= ResolveModifierChannel(source.a, tile.a);
-			return result;
+			return SanitizeColor(result);
 		}
 
-		NiColorA ResolveSafeTileColor(const std::vector<AtlasGlyphInstance>& glyphs,
+		NiColorA ResolveSafeTileColor(const std::vector<AtlasGlyphInstance>&,
 			const NiColorA& requested)
 		{
-			NiColorA result = requested;
-			for (const AtlasGlyphInstance& glyph : glyphs)
-			{
-				if (std::fabs(result.r) <= 0.000001f && std::fabs(glyph.color.r) > 0.000001f)
-					result.r = 1.0f;
-				if (std::fabs(result.g) <= 0.000001f && std::fabs(glyph.color.g) > 0.000001f)
-					result.g = 1.0f;
-				if (std::fabs(result.b) <= 0.000001f && std::fabs(glyph.color.b) > 0.000001f)
-					result.b = 1.0f;
-				if (std::fabs(result.a) <= 0.000001f && std::fabs(glyph.color.a) > 0.000001f)
-					result.a = 1.0f;
-			}
-			return result;
-		}
-
-		float LayerDepth(AtlasLayer layer)
-		{
-			return static_cast<float>(static_cast<UInt32>(AtlasLayer::Fill)
-				- static_cast<UInt32>(layer)) * kLayerDepthStep;
+			// c0 is the live Tile color/alpha selected by the game (and may also be
+			// changed by render extensions such as NVR). Never infer or replace zero
+			// channels from glyph colors; only discard non-finite input.
+			return SanitizeColor(requested);
 		}
 
 		UInt32 NextPowerOfTwo(UInt32 value)
@@ -459,18 +477,19 @@ namespace fonthook::vectorfont
 			A8ShapeColorContract result;
 			if (quads.empty())
 				return result;
-			result.minimumModifier = quads.front().color;
-			result.maximumModifier = quads.front().color;
+			result.minimumModifier = SanitizeColor(quads.front().color);
+			result.maximumModifier = result.minimumModifier;
 			for (const PendingQuad& quad : quads)
 			{
-				result.minimumModifier.r = std::min(result.minimumModifier.r, quad.color.r);
-				result.minimumModifier.g = std::min(result.minimumModifier.g, quad.color.g);
-				result.minimumModifier.b = std::min(result.minimumModifier.b, quad.color.b);
-				result.minimumModifier.a = std::min(result.minimumModifier.a, quad.color.a);
-				result.maximumModifier.r = std::max(result.maximumModifier.r, quad.color.r);
-				result.maximumModifier.g = std::max(result.maximumModifier.g, quad.color.g);
-				result.maximumModifier.b = std::max(result.maximumModifier.b, quad.color.b);
-				result.maximumModifier.a = std::max(result.maximumModifier.a, quad.color.a);
+				const NiColorA color = SanitizeColor(quad.color);
+				result.minimumModifier.r = std::min(result.minimumModifier.r, color.r);
+				result.minimumModifier.g = std::min(result.minimumModifier.g, color.g);
+				result.minimumModifier.b = std::min(result.minimumModifier.b, color.b);
+				result.minimumModifier.a = std::min(result.minimumModifier.a, color.a);
+				result.maximumModifier.r = std::max(result.maximumModifier.r, color.r);
+				result.maximumModifier.g = std::max(result.maximumModifier.g, color.g);
+				result.maximumModifier.b = std::max(result.maximumModifier.b, color.b);
+				result.maximumModifier.a = std::max(result.maximumModifier.a, color.a);
 			}
 			return result;
 		}
@@ -488,16 +507,19 @@ namespace fonthook::vectorfont
 			for (UInt32 index = 0; index < quads.size(); ++index)
 			{
 				const PendingQuad& quad = quads[index];
+				const NiColorA color = SanitizeColor(quad.color);
 				const UInt32 layer = static_cast<UInt32>(quad.layer);
 				if (config.ranges.empty()
 					|| config.ranges.back().layer != layer
-					|| !SameColorModifier(config.ranges.back().colorModifier, quad.color))
+					|| config.ranges.back().usesSdf != quad.usesSdf
+					|| !SameColorModifier(config.ranges.back().colorModifier, color))
 				{
 					A8DrawRange range;
 					range.firstVertex = index * 4;
 					range.startIndex = index * 6;
 					range.layer = layer;
-					range.colorModifier = quad.color;
+					range.usesSdf = quad.usesSdf;
+					range.colorModifier = color;
 					config.ranges.push_back(range);
 				}
 				A8DrawRange& range = config.ranges.back();
@@ -509,13 +531,14 @@ namespace fonthook::vectorfont
 
 		UInt32 PackColorModifierRgba(const NiColorA& color)
 		{
+			const NiColorA safeColor = SanitizeColor(color);
 			auto channel = [](float value)
 			{
 				return static_cast<UInt32>(std::lround(
 					std::clamp(value, 0.0f, 1.0f) * 255.0f));
 			};
-			return (channel(color.a) << 24) | (channel(color.r) << 16)
-				| (channel(color.g) << 8) | channel(color.b);
+			return (channel(safeColor.a) << 24) | (channel(safeColor.r) << 16)
+				| (channel(safeColor.g) << 8) | channel(safeColor.b);
 		}
 
 		UInt64 BuildBakedBitmapId(UInt64 sourceId, UInt32 rgba)
@@ -547,6 +570,7 @@ namespace fonthook::vectorfont
 			{
 				if (!quad.bitmap)
 					continue;
+				quad.color = SanitizeColor(quad.color);
 				const UInt32 rgba = PackColorModifierRgba(quad.color);
 				UInt64 bakedId = BuildBakedBitmapId(quad.bitmap->cacheId, rgba);
 				bakedId = BuildBakedBitmapId(bakedId, static_cast<UInt8>(quad.layer));
@@ -1546,18 +1570,18 @@ namespace fonthook::vectorfont
 			const std::shared_ptr<const GlyphBitmap>& bitmap,
 			const AtlasGlyphInstance& instance, const NiColorA& color,
 			float offsetX, float offsetY, float rasterScale, AtlasLayer layer,
-			UInt32 expansionPixels = 0)
+			UInt32 expansionPixels = 0, bool usesSdf = false)
 		{
 			if (bitmap && bitmap->width > 0 && bitmap->height > 0 && !bitmap->alpha.empty())
 				quads.push_back({ bitmap, instance.pen, color, offsetX, offsetY,
 					rasterScale, instance.glyph.metrics ? instance.glyph.metrics->fTopEdge : 0.0f,
-					expansionPixels, layer });
+					expansionPixels, layer, usesSdf });
 		}
 
 		bool BuildPendingQuads(RuntimeFont& runtime,
 			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
 			const std::array<bool, 4>& included, const NiColorA& tileColor,
-			std::vector<PendingQuad>& quads)
+			std::vector<PendingQuad>& quads, PendingQuadBuildFailure& failure)
 		{
 			struct PreparedGlyph
 			{
@@ -1568,6 +1592,7 @@ namespace fonthook::vectorfont
 			};
 
 			quads.clear();
+			failure = PendingQuadBuildFailure::None;
 			const FontConfig& config = GetRuntimeConfig(runtime);
 			thread_local std::vector<PreparedGlyph> prepared;
 			prepared.clear();
@@ -1579,20 +1604,29 @@ namespace fonthook::vectorfont
 				glyph.fill = GetGlyphBitmap(runtime, instance.glyph,
 					GlyphMaskType::Fill, rasterScale);
 				if (!glyph.fill)
+				{
+					failure = PendingQuadBuildFailure::Fill;
 					return false;
+				}
 				if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
 				{
 					glyph.glow = GetGlyphBitmap(runtime, instance.glyph,
 						GlyphMaskType::Glow, rasterScale);
 					if (!glyph.glow)
+					{
+						failure = PendingQuadBuildFailure::Glow;
 						return false;
+					}
 				}
 				if (included[static_cast<size_t>(AtlasLayer::Outline)] && config.outline.enabled)
 				{
 					glyph.outline = GetGlyphBitmap(runtime, instance.glyph,
 						GlyphMaskType::Outline, rasterScale);
 					if (!glyph.outline)
+					{
+						failure = PendingQuadBuildFailure::Outline;
 						return false;
+					}
 				}
 				prepared.push_back(std::move(glyph));
 			}
@@ -1651,7 +1685,13 @@ namespace fonthook::vectorfont
 			build.config.shaderEffects = true;
 			build.config.quality = quality;
 			const FontConfig& config = GetRuntimeConfig(runtime);
-			const bool needsSdf = HasSdfEffects(config);
+			const bool fillUsesSdf = UsesSdfFill(config);
+			const bool needsSdf = NeedsSdfMask(config);
+			// An SDF body is also an exact hard-shadow source. Reusing it avoids
+			// inserting a second grayscale copy of every glyph into the atlas when
+			// SDF fill is active.
+			const bool needsGrayFill = !fillUsesSdf;
+			build.config.fillUsesSdf = fillUsesSdf;
 			UInt32 sdfSpread = 0;
 			if (needsSdf && !ResolveSdfSpread(config, rasterScale, sdfSpread))
 			{
@@ -1687,10 +1727,13 @@ namespace fonthook::vectorfont
 			{
 				PreparedShaderGlyph glyph;
 				glyph.instance = &instance;
-				glyph.fill = GetGlyphBitmap(runtime, instance.glyph,
-					GlyphMaskType::Fill, rasterScale);
-				if (!glyph.fill)
-					return false;
+				if (needsGrayFill)
+				{
+					glyph.fill = GetGlyphBitmap(runtime, instance.glyph,
+						GlyphMaskType::Fill, rasterScale);
+					if (!glyph.fill)
+						return false;
+				}
 				if (needsSdf)
 				{
 					glyph.sdf = GetGlyphBitmap(runtime, instance.glyph,
@@ -1718,15 +1761,17 @@ namespace fonthook::vectorfont
 					else if (layer == AtlasLayer::Fill)
 						layerColor = ResolveFillColor(config.fontColor, entry.instance->color, tileColor);
 					AddPendingQuad(quads, useSdf ? entry.sdf : entry.fill,
-						*entry.instance, layerColor, offsetX, offsetY, rasterScale, layer);
+						*entry.instance, layerColor, offsetX, offsetY, rasterScale,
+						layer, 0, useSdf);
 				}
 			};
 
 			addRange(AtlasLayer::Shadow, config.shadow.enabled,
-				config.shadow.blur > 0.0f, config.shadow.x, config.shadow.y);
+				fillUsesSdf || config.shadow.blur > 0.0f,
+				config.shadow.x, config.shadow.y);
 			addRange(AtlasLayer::Glow, config.glow.enabled, true, 0.0f, 0.0f);
 			addRange(AtlasLayer::Outline, config.outline.enabled, true, 0.0f, 0.0f);
-			addRange(AtlasLayer::Fill, true, false, 0.0f, 0.0f);
+			addRange(AtlasLayer::Fill, true, fillUsesSdf, 0.0f, 0.0f);
 			return true;
 		}
 
@@ -1763,6 +1808,7 @@ namespace fonthook::vectorfont
 				add(&quad.rasterScale, sizeof(quad.rasterScale));
 				add(&quad.expansionPixels, sizeof(quad.expansionPixels));
 				add(&quad.layer, sizeof(quad.layer));
+				add(&quad.usesSdf, sizeof(quad.usesSdf));
 			}
 			return { reinterpret_cast<uintptr_t>(&atlas), hash, atlas.generation,
 				static_cast<UInt32>(quads.size()) };
@@ -1822,7 +1868,11 @@ namespace fonthook::vectorfont
 							quad.pen.z, z0);
 					}
 				}
-				const float depth = quad.pen.y + LayerDepth(quad.layer);
+				// All layers belong to the same logical Tile text. Ordering is provided by
+				// the contiguous draw ranges, not by depth offsets. Artificial per-layer
+				// depth can make an effect occlude the fill (or another Tile) on Pip-Boy
+				// render targets whose UI pass has depth testing enabled.
+				const float depth = quad.pen.y;
 				const float u0 = (static_cast<float>(rect.x) - expansion) / atlas->width;
 				const float v0 = (static_cast<float>(rect.y) - expansion) / atlas->height;
 				const float u1 = (static_cast<float>(rect.x + rect.width) + expansion)
@@ -1893,12 +1943,25 @@ namespace fonthook::vectorfont
 			std::copy(batch->texture.begin(), batch->texture.end(), data->m_pkTexture);
 			std::copy(batch->indices.begin(), batch->indices.end(), data->m_pusTriList);
 			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
-			if (IsA8RendererAvailable())
+			const bool useCustomA8Shader = IsA8RendererAvailable();
+			const bool hasEffectLayer = std::any_of(quads.begin(), quads.end(),
+				[](const PendingQuad& quad) { return quad.layer != AtlasLayer::Fill; });
+			const bool needsRangeBridge = useCustomA8Shader || hasEffectLayer;
+			if (needsRangeBridge)
 			{
 				A8EffectShapeConfig resolvedEffect = effectConfig
 					? *effectConfig : A8EffectShapeConfig{};
+				resolvedEffect.useOriginalShader = !useCustomA8Shader;
 				BuildA8DrawRanges(quads, resolvedEffect);
 				const A8ShapeColorContract colorContract = BuildColorContract(quads);
+				if (resolvedEffect.useOriginalShader
+					&& !IsAtlasRangeRendererAvailable())
+				{
+					// A monolithic effect draw is unsafe when the caller enables depth writes:
+					// shadow/glow/outline can suppress the mandatory fill. Let the caller use
+					// the vector fallback instead of returning intermittently missing text.
+					return nullptr;
+				}
 				if (!PrepareA8AtlasShape(shape, font.iFontNum,
 					static_cast<UInt32>(std::count_if(quads.begin(), quads.end(),
 						[](const PendingQuad& quad) { return quad.layer == AtlasLayer::Fill; })),
@@ -2148,10 +2211,11 @@ namespace fonthook::vectorfont
 			? AtlasPixelMode::A8 : AtlasPixelMode::Argb32;
 		EffectQuality resolved = config.effectQuality;
 		bool shaderEffects = pixelMode == AtlasPixelMode::A8
-			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled)
+			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled
+				|| UsesSdfFill(config))
 			&& ResolveA8EffectQuality(config.effectQuality, resolved);
 		UInt32 sdfSpread = 0;
-		if (shaderEffects && HasSdfEffects(config)
+		if (shaderEffects && NeedsSdfMask(config)
 			&& !ResolveSdfSpread(config, rasterScale, sdfSpread))
 			shaderEffects = false;
 		const UInt32 padding = kAtlasPadding;
@@ -2170,8 +2234,10 @@ namespace fonthook::vectorfont
 		const NiColorA tileColor = ResolveSafeTileColor(glyphs, requestedTileColor);
 		const bool hasEffects = config.shadow.enabled || config.glow.enabled
 			|| config.outline.enabled;
+		const bool requestsSdfFill = UsesSdfFill(config);
+		const bool wantsShaderPath = hasEffects || requestsSdfFill;
 		EffectQuality resolvedQuality = config.effectQuality;
-		if (hasEffects && IsA8RendererAvailable()
+		if (wantsShaderPath && IsA8RendererAvailable()
 			&& ResolveA8EffectQuality(config.effectQuality, resolvedQuality))
 		{
 			if (resolvedQuality != config.effectQuality && g_bEnableFreeTypeFontRenderingLog)
@@ -2194,9 +2260,12 @@ namespace fonthook::vectorfont
 			}
 			thread_local std::vector<PendingQuad> shaderQuads;
 			ShaderEffectBuild shaderBuild;
-			if (BuildShaderEffectQuads(runtime, glyphs, rasterScale,
-				resolvedQuality, tileColor, shaderQuads, shaderBuild)
-				&& !shaderQuads.empty() && shaderQuads.size() <= kMaximumQuads)
+			const bool shaderQuadsBuilt = BuildShaderEffectQuads(runtime, glyphs,
+				rasterScale, resolvedQuality, tileColor, shaderQuads, shaderBuild);
+			const bool shaderQuadCountValid = shaderQuadsBuilt && !shaderQuads.empty()
+				&& shaderQuads.size() <= kMaximumQuads;
+			bool shaderAtlasOrShapeFailed = false;
+			if (shaderQuadCountValid)
 			{
 				thread_local std::unordered_map<UInt64,
 					std::shared_ptr<const GlyphBitmap>> shaderUnique;
@@ -2228,23 +2297,42 @@ namespace fonthook::vectorfont
 					if (g_bEnableFreeTypeFontRenderingLog)
 					{
 						FreeTypeFontDebugLog(
-							"tnvse_freetype_font: shader effect batch font=%u quality=%u glyphs=%u quads=%u padding=%u texture=%ux%u",
-							font.iFontNum, static_cast<UInt32>(resolvedQuality),
+							"tnvse_freetype_font: shader batch font=%u requestedFill=%s resolvedFill=%s quality=%u spread=%.0f glyphs=%u quads=%u padding=%u texture=%ux%u abi=%u",
+							font.iFontNum,
+							requestsSdfFill ? "sdf" : "grayscale",
+							shaderBuild.config.fillUsesSdf ? "sdf" : "grayscale",
+							static_cast<UInt32>(resolvedQuality),
+							shaderBuild.config.sdfSpreadPixels,
 							static_cast<UInt32>(glyphs.size()),
 							static_cast<UInt32>(shaderQuads.size()), shaderBuild.padding,
-							shaderAtlas->width, shaderAtlas->height);
+							shaderAtlas->width, shaderAtlas->height,
+							A8ShapeColorContract::kTileUniformColorAbi);
 					}
 					return shaderShape;
 				}
+				shaderAtlasOrShapeFailed = true;
 			}
-			if (g_bEnableFreeTypeFontRenderingLog)
+			if (g_bEnableFreeTypeFontRenderingLog
+				&& s_shaderBatchFailureLogCount++ < 32)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: shader effect atlas failed font=%u; using CPU effect masks",
-					font.iFontNum);
+					"tnvse_freetype_font: shader batch failed font=%u stage=%s requestedFill=%s resolvedFill=grayscale quads=%u; using CPU masks",
+					font.iFontNum,
+					!shaderQuadsBuilt ? "mask-build"
+						: shaderQuads.empty() ? "empty-batch"
+						: shaderQuads.size() > kMaximumQuads ? "quad-limit"
+						: shaderAtlasOrShapeFailed ? "atlas-or-shape"
+						: "unknown",
+					requestsSdfFill ? "sdf" : "grayscale",
+					static_cast<UInt32>(shaderQuads.size()));
 			}
 		}
-		std::array<bool, 4> included = { true, true, true, true };
+		std::array<bool, 4> included = {
+			config.shadow.enabled,
+			config.glow.enabled,
+			config.outline.enabled,
+			true
+		};
 		const std::array<AtlasLayer, 3> degradationOrder = {
 			AtlasLayer::Glow, AtlasLayer::Shadow, AtlasLayer::Outline
 		};
@@ -2252,9 +2340,36 @@ namespace fonthook::vectorfont
 		{
 			thread_local std::vector<PendingQuad> quads;
 			quads.clear();
+			PendingQuadBuildFailure buildFailure = PendingQuadBuildFailure::None;
 			if (!BuildPendingQuads(runtime, glyphs, rasterScale, included,
-				tileColor, quads))
+				tileColor, quads, buildFailure))
+			{
+				AtlasLayer failedLayer = AtlasLayer::Fill;
+				if (buildFailure == PendingQuadBuildFailure::Glow)
+					failedLayer = AtlasLayer::Glow;
+				else if (buildFailure == PendingQuadBuildFailure::Outline)
+					failedLayer = AtlasLayer::Outline;
+				const bool optionalFailure = buildFailure != PendingQuadBuildFailure::Fill
+					&& included[static_cast<size_t>(failedLayer)];
+				if (g_bEnableFreeTypeFontRenderingLog
+					&& s_cpuMaskFailureLogCount++ < 32)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: CPU mask batch failure font=%u layer=%s action=%s",
+						font.iFontNum,
+						buildFailure == PendingQuadBuildFailure::Fill ? "fill"
+							: buildFailure == PendingQuadBuildFailure::Glow ? "glow"
+							: buildFailure == PendingQuadBuildFailure::Outline ? "outline"
+							: "unknown",
+						optionalFailure ? "disable-layer-and-retry" : "vector-fallback");
+				}
+				if (optionalFailure)
+				{
+					included[static_cast<size_t>(failedLayer)] = false;
+					continue;
+				}
 				return nullptr;
+			}
 			if (quads.empty())
 				return nullptr;
 			if (quads.size() <= kMaximumQuads)
@@ -2317,7 +2432,16 @@ namespace fonthook::vectorfont
 				}
 			}
 			if (attempt < degradationOrder.size())
-				included[static_cast<size_t>(degradationOrder[attempt])] = false;
+			{
+				for (AtlasLayer layer : degradationOrder)
+				{
+					if (included[static_cast<size_t>(layer)])
+					{
+						included[static_cast<size_t>(layer)] = false;
+						break;
+					}
+				}
+			}
 		}
 
 		if (s_atlasFailureLogCount++ < 32)

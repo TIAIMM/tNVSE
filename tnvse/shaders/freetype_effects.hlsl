@@ -3,9 +3,10 @@ float4 TileColor : register(c0);
 float4 LayerColor : register(c1);
 float4 AtlasPass : register(c2); // invWidth, invHeight, layer, SDF spread
 float4 EffectParams : register(c3); // layer-specific parameters in device pixels
-float4 EffectReserved : register(c4);
+float4 SdfFlags : register(c4); // x: current range uses an SDF mask
 
 #include "freetype_tile_compat.hlsli"
+#include "freetype_sdf_compat.hlsli"
 
 struct PixelInput
 {
@@ -14,29 +15,12 @@ struct PixelInput
 
 float Coverage(float2 uv)
 {
-	return tex2D(FontAtlas, uv).a;
-}
-
-float DecodeDistance(float encodedDistance)
-{
-	// FreeType packs zero at byte 128 and one normalized distance unit into
-	// 128 levels.  Texture sampling divides the stored byte by 255.
-	return (encodedDistance * (255.0 / 128.0) - 1.0) * AtlasPass.w;
-}
-
-float ResolveAntialiasWidth(float distance)
-{
-	return max(0.35, 0.5 * (abs(ddx(distance)) + abs(ddy(distance))));
-}
-
-float BodyCoverage(float distance, float antialiasWidth)
-{
-	return smoothstep(-antialiasWidth, antialiasWidth, distance);
+	return SampleFreeTypeMask(FontAtlas, uv);
 }
 
 float EvaluateSdfEffect(float distance, float antialiasWidth, int layer)
 {
-	const float body = BodyCoverage(distance, antialiasWidth);
+	const float body = FreeTypeSdfBodyCoverage(distance, antialiasWidth);
 	if (layer == 0)
 	{
 		const float blur = max(EffectParams.x, 0.0);
@@ -69,13 +53,16 @@ float EvaluateSdfEffect(float distance, float antialiasWidth, int layer)
 
 float EvaluateAt(float2 uv, float antialiasWidth, int layer)
 {
-	return EvaluateSdfEffect(DecodeDistance(Coverage(uv)), antialiasWidth, layer);
+	return EvaluateSdfEffect(
+		DecodeFreeTypeSdfDistance(Coverage(uv), AtlasPass.w),
+		antialiasWidth, layer);
 }
 
 float SupersampledSdfCoverage(float2 uv, int layer)
 {
-	const float centerDistance = DecodeDistance(Coverage(uv));
-	const float antialiasWidth = ResolveAntialiasWidth(centerDistance);
+	const float centerDistance = DecodeFreeTypeSdfDistance(
+		Coverage(uv), AtlasPass.w);
+	const float antialiasWidth = ResolveFreeTypeSdfAntialiasWidth(centerDistance);
 #if EFFECT_QUALITY == 0
 	return EvaluateSdfEffect(centerDistance, antialiasWidth, layer);
 #elif EFFECT_QUALITY == 1
@@ -105,9 +92,9 @@ float4 Main(PixelInput input) : COLOR0
 {
 	const int layer = (int)(AtlasPass.z + 0.5);
 	float coverage;
-	if (layer == 3 || (layer == 0 && EffectParams.x <= 0.001))
-		coverage = Coverage(input.uv);
-	else
+	if (SdfFlags.x >= 0.5)
 		coverage = SupersampledSdfCoverage(input.uv, layer);
+	else
+		coverage = Coverage(input.uv);
 	return ComposeFreeTypeTileColor(coverage, TileColor, LayerColor);
 }
