@@ -338,6 +338,53 @@ namespace fonthook::vectorfont
 			return value >= first && value <= last;
 		}
 
+		bool IsGb2312DoubleByteUnit(UInt32 lead, UInt32 trail)
+		{
+			if (lead == 0xA1 || lead == 0xA3)
+				return IsInRange(trail, 0xA1, 0xFE);
+			if (lead == 0xA2)
+				return IsInRange(trail, 0xB1, 0xE2)
+					|| IsInRange(trail, 0xE5, 0xEE)
+					|| IsInRange(trail, 0xF1, 0xFC);
+			if (lead == 0xA4)
+				return IsInRange(trail, 0xA1, 0xF3);
+			if (lead == 0xA5)
+				return IsInRange(trail, 0xA1, 0xF6);
+			if (lead == 0xA6)
+				return IsInRange(trail, 0xA1, 0xB8)
+					|| IsInRange(trail, 0xC1, 0xD8);
+			if (lead == 0xA7)
+				return IsInRange(trail, 0xA1, 0xC1)
+					|| IsInRange(trail, 0xD1, 0xF1);
+			if (lead == 0xA8)
+				return IsInRange(trail, 0xA1, 0xBA)
+					|| IsInRange(trail, 0xC5, 0xE9);
+			if (lead == 0xA9)
+				return IsInRange(trail, 0xA4, 0xEF);
+			if (IsInRange(lead, 0xB0, 0xD6)
+				|| IsInRange(lead, 0xD8, 0xF7))
+			{
+				return IsInRange(trail, 0xA1, 0xFE);
+			}
+			return lead == 0xD7 && IsInRange(trail, 0xA1, 0xF9);
+		}
+
+		bool IsCommonCodePageUnit(UInt32 codePage, UInt32 lead, UInt32 trail)
+		{
+			if (codePage == 936)
+				return IsGb2312DoubleByteUnit(lead, trail);
+			const char bytes[2] = {
+				static_cast<char>(lead), static_cast<char>(trail)
+			};
+			UInt32 decoded = 0;
+			return TryDecodeDoubleByte(bytes, decoded);
+		}
+
+		bool HasCommonDoubleByteLimit(const PrewarmJob& job)
+		{
+			return job.mode == FontPrewarmMode::Common && job.codePage != 936;
+		}
+
 		bool IsDcfgCodePageUnit(UInt32 codePage, UInt32 lead, UInt32 trail)
 		{
 			const UInt32 encoded = (lead << 8) | trail;
@@ -474,11 +521,11 @@ namespace fonthook::vectorfont
 				{
 					bytes[0] = static_cast<char>(job.leadByte);
 					bytes[1] = static_cast<char>(job.trailByte++);
-					UInt32 encoded = 0;
 					const bool selected = job.mode == FontPrewarmMode::CodePage
 						? IsDcfgCodePageUnit(job.codePage, job.leadByte,
 							static_cast<UInt8>(bytes[1]))
-						: TryDecodeDoubleByte(bytes.data(), encoded);
+						: IsCommonCodePageUnit(job.codePage, job.leadByte,
+							static_cast<UInt8>(bytes[1]));
 					if (selected)
 					{
 						length = 2;
@@ -537,15 +584,11 @@ namespace fonthook::vectorfont
 			{
 				for (UInt32 trail = job.trailByteStart; trail <= 0xFE; ++trail)
 				{
-					const char bytes[2] = {
-						static_cast<char>(lead), static_cast<char>(trail)
-					};
-					UInt32 decoded = 0;
 					const bool selected = job.mode == FontPrewarmMode::CodePage
 						? IsDcfgCodePageUnit(job.codePage, lead, trail)
-						: TryDecodeDoubleByte(bytes, decoded);
+						: IsCommonCodePageUnit(job.codePage, lead, trail);
 					if (selected && ++count >= kCommonDoubleByteLimit
-						&& job.mode == FontPrewarmMode::Common)
+						&& HasCommonDoubleByteLimit(job))
 						return count;
 				}
 			}
@@ -732,7 +775,6 @@ namespace fonthook::vectorfont
 			// will never request. A codepage job must also cover every SDF fill,
 			// while effect-only SDF masks may retain the common-character limit.
 			const bool needsGrayFill = !resolvedSdfFill;
-			const bool needsFullCodePageScan = job.mode == FontPrewarmMode::CodePage;
 			UInt32 candidates = 0;
 			UInt32 glyphs = 0;
 			bool exhausted = false;
@@ -752,8 +794,7 @@ namespace fonthook::vectorfont
 					continue;
 				if (length == 2)
 				{
-					if ((!needsFullCodePageScan
-							|| job.mode == FontPrewarmMode::Common)
+					if (HasCommonDoubleByteLimit(job)
 						&& job.validDoubleByteCount >= kCommonDoubleByteLimit)
 					{
 						exhausted = true;

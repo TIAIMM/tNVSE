@@ -51,8 +51,10 @@
         "kern,liga,clig,calt,ss01=1,-dlig". Requires shaping="1".
       prewarm
         "none" disables startup prewarming and is the default. "common"
-        prepares all valid single-byte units and up to 7000 common double-byte
-        units. "codepage" prepares the configured code-page profile.
+        prepares all valid single-byte units plus the complete GB2312
+        double-byte set under CP936; other code pages prepare up to 7000
+        common double-byte units. "codepage" prepares the configured code-page
+        profile (complete GBK under CP936).
       fillRenderMode
         "grayscale" selects hinted grayscale fill and is the default. "sdf"
         selects SDF fill.

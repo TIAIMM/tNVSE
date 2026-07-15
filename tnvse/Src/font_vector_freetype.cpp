@@ -385,7 +385,9 @@ namespace fonthook::vectorfont
 			}
 		};
 
-		constexpr UInt32 kPersistentGlyphManifestVersion = 1;
+		// Version 2 expands CP936 common prewarming from the legacy 7000-unit
+		// subset to the complete GB2312 repertoire.
+		constexpr UInt32 kPersistentGlyphManifestVersion = 2;
 		constexpr UInt32 kPersistentGlyphManifestEntries = 65536;
 
 #pragma pack(push, 1)

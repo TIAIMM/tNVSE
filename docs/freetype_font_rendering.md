@@ -153,11 +153,12 @@ proportional advances.
 ## Blocking prewarm and persistent caches
 
 `prewarm="none"` is the default and preserves fully demand-driven atlas
-generation. `prewarm="common"` prepares valid single-byte units plus up to
-7000 valid double-byte units from the code page's standard common-character
-region, while `prewarm="codepage"` follows DCFGCF's explicit encoding ranges
-for the current `uiEncoding` code page. CP936 uses DCFGCF's complete GBK
-profile instead of its smaller GB2312 profile. Prewarming begins after the
+generation. `prewarm="common"` prepares valid single-byte units and a common
+double-byte repertoire. Under CP936 that repertoire is the complete GB2312
+set; other supported code pages retain their limit of up to 7000 valid
+double-byte units. `prewarm="codepage"` follows DCFGCF's explicit encoding
+ranges for the current `uiEncoding` code page, with CP936 using the complete
+GBK profile. Prewarming begins after the
 configured fonts are activated. On the first game-loop callback where the
 final device scale is available, tNVSE synchronously drains the complete queue;
 the game remains blocked until every queued profile reports `complete`,
