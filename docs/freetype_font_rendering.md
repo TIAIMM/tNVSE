@@ -137,18 +137,30 @@ the effective display size. When Fallout Shader Loader 1.40 or newer,
 `tnvse_freetype_a8.pso`, and a real `D3DFMT_A8` texture are available, each
 font/style/effective-size profile uses a one-byte A8 atlas. A shape-specific
 pixel shader reads the atlas alpha as coverage and follows the game's
-uniform Tile contract: RGB is `c0.rgb` multiplied by the per-layer XML color
-modifier, while alpha is coverage multiplied by `c0.a` and the per-layer XML
-alpha. The shaders do not consume a `COLOR0` vertex stream, and RGB remains
-straight rather than premultiplied by alpha. This same ABI is shared by fill,
-shadow, glow, outline, and future FreeType effects. tNVSE does not replace the
-global TileShader.
+Tile contract for the fill: RGB is `c0.rgb` multiplied by the per-glyph fill
+modifier. Effect ranges use their configured XML RGB directly and inherit the
+live Tile alpha only. All ranges output alpha as coverage multiplied by `c0.a`
+and their per-layer alpha. The bridge therefore sets effect `c0.rgb` to white,
+restores the complete original `c0` before every fill range, and restores it
+again on every exit path. The shaders do not consume a `COLOR0` vertex stream,
+and RGB remains straight rather than premultiplied by alpha. tNVSE does not
+replace the global TileShader.
 If any dependency
 or runtime validation fails, that profile automatically uses the existing
 `A8R8G8B8` atlas path, so FreeType rendering itself does not require Shader
 Loader. In that fallback, XML layer RGB and alpha are baked into the 32-bit
-atlas and the original Tile shader still supplies the dynamic Tile color and
+atlas. The range bridge neutralizes Tile RGB only for effect ranges; the fill
+continues to use the original Tile color and all ranges retain dynamic Tile
 alpha.
+
+Range routing is installed independently of Shader Loader and is attempted
+synchronously while a shape is created and again at the first Tile render.
+This is required for `start_menu.xml`, `HUDMainMenu`, and other persistent UI
+created before NVSE `DeferredInit`. Such shapes retain all effect/fill ranges
+even when the D3D device is not ready yet; the Tile accumulator call-site route
+then establishes the exact shape context before the engine chooses its normal
+or fast draw branch. Shader discovery is staged and retryable, so a temporary
+startup ordering difference cannot permanently cache a fill-only shape.
 
 The base A8 shader and all effect variants use `ps_3_0`. The body uses the
 hinted grayscale mask. Glow, outline, and blurred shadow share a FreeType
@@ -166,10 +178,15 @@ silently reducing the requested effect.
 When an effect shader is unavailable, the renderer retains the CPU mask path
 with the same global layer order. When `NVSE_PLUGIN_PATH` is defined, an
 ordinary project build copies all compiled PSOs to `Data\Shaders\Loose`.
-Custom draws switch pixel shader and sampler state through Gamebryo's render
-state manager and restore private constants after every draw. A detected
-Gamebryo/D3D state mismatch disables the custom pass for that draw instead of
-leaking state into later UI rendering.
+Custom draws snapshot the authoritative D3D device state, switch only the
+pixel shader, private constants, sampling, and pass-local write state, then
+restore everything after the draw. Effect passes preserve the caller's RGB
+blend. If the target permits alpha writes, they use a separate source-over
+alpha blend so shadows outside the fill survive off-screen UI compositing
+without reducing existing destination alpha. They also suppress stencil and
+depth writes while preserving the caller's tests. A detected contract or
+state mismatch forwards the original Tile draw instead of leaking state or
+dropping the text body.
 
 Persistent atlases start at 512x512 and grow without moving existing glyphs.
 Missing glyphs are rasterized as one batch and uploaded through one dirty

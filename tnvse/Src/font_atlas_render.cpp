@@ -962,11 +962,6 @@ namespace fonthook::vectorfont
 			AtlasPixelMode mode = requestedMode;
 			for (UInt32 attempt = 0; attempt < 2; ++attempt)
 			{
-				if (mode == AtlasPixelMode::A8 && !IsA8RendererAvailable())
-				{
-					mode = AtlasPixelMode::Argb32;
-					continue;
-				}
 				IDirect3DTexture9* d3dTexture = CreateDynamicAtlasTexture(
 					resource.width, resource.height, mode);
 				if (d3dTexture && PopulateDefaultTexture(d3dTexture, resource, mode))
@@ -1913,7 +1908,8 @@ namespace fonthook::vectorfont
 
 		NiTriShape* CreateAtlasShape(Font& font, const std::vector<PendingQuad>& quads,
 			const std::shared_ptr<AtlasResource>& atlas, bool prepareObject,
-			const NiColorA& tileColor, const A8EffectShapeConfig* effectConfig)
+			const NiColorA& tileColor, bool useCustomA8Shader,
+			const A8EffectShapeConfig* effectConfig)
 		{
 			if (!atlas || quads.empty() || quads.size() > kMaximumQuads)
 				return nullptr;
@@ -1943,7 +1939,6 @@ namespace fonthook::vectorfont
 			std::copy(batch->texture.begin(), batch->texture.end(), data->m_pkTexture);
 			std::copy(batch->indices.begin(), batch->indices.end(), data->m_pusTriList);
 			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
-			const bool useCustomA8Shader = IsA8RendererAvailable();
 			const bool hasEffectLayer = std::any_of(quads.begin(), quads.end(),
 				[](const PendingQuad& quad) { return quad.layer != AtlasLayer::Fill; });
 			const bool needsRangeBridge = useCustomA8Shader || hasEffectLayer;
@@ -1954,14 +1949,6 @@ namespace fonthook::vectorfont
 				resolvedEffect.useOriginalShader = !useCustomA8Shader;
 				BuildA8DrawRanges(quads, resolvedEffect);
 				const A8ShapeColorContract colorContract = BuildColorContract(quads);
-				if (resolvedEffect.useOriginalShader
-					&& !IsAtlasRangeRendererAvailable())
-				{
-					// A monolithic effect draw is unsafe when the caller enables depth writes:
-					// shadow/glow/outline can suppress the mandatory fill. Let the caller use
-					// the vector fallback instead of returning intermittently missing text.
-					return nullptr;
-				}
 				if (!PrepareA8AtlasShape(shape, font.iFontNum,
 					static_cast<UInt32>(std::count_if(quads.begin(), quads.end(),
 						[](const PendingQuad& quad) { return quad.layer == AtlasLayer::Fill; })),
@@ -1981,14 +1968,16 @@ namespace fonthook::vectorfont
 			const FontConfig& config, float rasterScale, bool prepareObject,
 			AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
 			std::shared_ptr<AtlasResource>& outAtlas,
-			const NiColorA& tileColor,
+			const NiColorA& tileColor, bool useCustomA8Shader,
 			const A8EffectShapeConfig* effectConfig = nullptr)
 		{
+			if (pixelMode == AtlasPixelMode::A8 && !useCustomA8Shader)
+				return nullptr;
 			const std::vector<PendingQuad>* activeQuads = &quads;
 			const std::vector<std::shared_ptr<const GlyphBitmap>>* activeBitmaps = &bitmaps;
 			thread_local std::vector<PendingQuad> bakedQuads;
 			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bakedBitmaps;
-			if (pixelMode == AtlasPixelMode::Argb32 && !IsA8RendererAvailable())
+			if (pixelMode == AtlasPixelMode::Argb32 && !useCustomA8Shader)
 			{
 				BuildBakedArgbFallback(quads, bakedQuads, bakedBitmaps);
 				activeQuads = &bakedQuads;
@@ -2011,7 +2000,7 @@ namespace fonthook::vectorfont
 				resolvedEffectPointer = &resolvedEffect;
 			}
 			NiTriShape* shape = CreateAtlasShape(font, *activeQuads, outAtlas, prepareObject,
-				tileColor, resolvedEffectPointer);
+				tileColor, useCustomA8Shader, resolvedEffectPointer);
 			if (shape && outAtlas->transient
 				&& outAtlas->backend == AtlasBackend::DefaultPool)
 			{
@@ -2207,8 +2196,13 @@ namespace fonthook::vectorfont
 		if (bitmaps.empty())
 			return true;
 		const FontConfig& config = GetRuntimeConfig(runtime);
-		const AtlasPixelMode pixelMode = IsA8RendererAvailable()
-			? AtlasPixelMode::A8 : AtlasPixelMode::Argb32;
+		const bool useCustomA8Shader = IsA8RendererAvailable();
+		// Original-shader ARGB glyphs bake a per-range color into distinct bitmap
+		// cache IDs at shape-build time. A raw ARGB prewarm atlas cannot be reused
+		// and would only evict useful A8 generations.
+		if (!useCustomA8Shader)
+			return true;
+		const AtlasPixelMode pixelMode = AtlasPixelMode::A8;
 		EffectQuality resolved = config.effectQuality;
 		bool shaderEffects = pixelMode == AtlasPixelMode::A8
 			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled
@@ -2262,6 +2256,11 @@ namespace fonthook::vectorfont
 			ShaderEffectBuild shaderBuild;
 			const bool shaderQuadsBuilt = BuildShaderEffectQuads(runtime, glyphs,
 				rasterScale, resolvedQuality, tileColor, shaderQuads, shaderBuild);
+			// Spaces and control-only fragments legitimately have metrics but no bitmap
+			// area. They need no shape and are not a shader failure; falling through to
+			// CPU masks only wastes work and consumes the real failure-log quota.
+			if (shaderQuadsBuilt && shaderQuads.empty())
+				return nullptr;
 			const bool shaderQuadCountValid = shaderQuadsBuilt && !shaderQuads.empty()
 				&& shaderQuads.size() <= kMaximumQuads;
 			bool shaderAtlasOrShapeFailed = false;
@@ -2286,7 +2285,8 @@ namespace fonthook::vectorfont
 				NiTriShape* shaderShape = TryCreateAtlasShapeForMode(font,
 					shaderQuads, shaderBitmaps, config, rasterScale, prepareObject,
 					AtlasPixelMode::A8, AtlasRenderMode::ShaderEffects,
-					shaderBuild.padding, shaderAtlas, tileColor, &shaderBuild.config);
+					shaderBuild.padding, shaderAtlas, tileColor, true,
+					&shaderBuild.config);
 				if (shaderShape)
 				{
 					RecordFreeTypePerf(FreeTypePerfCounter::ShaderEffectBatch);
@@ -2388,18 +2388,25 @@ namespace fonthook::vectorfont
 				{
 					return lhs->cacheId < rhs->cacheId;
 				});
-				AtlasPixelMode pixelMode = IsA8RendererAvailable()
+				bool useCustomA8Shader = IsA8RendererAvailable();
+				AtlasPixelMode pixelMode = useCustomA8Shader
 					? AtlasPixelMode::A8 : AtlasPixelMode::Argb32;
 				std::shared_ptr<AtlasResource> atlas;
 				NiTriShape* shape = TryCreateAtlasShapeForMode(font, quads, bitmaps,
 					config, rasterScale, prepareObject, pixelMode,
-					AtlasRenderMode::CpuEffects, kAtlasPadding, atlas, tileColor);
+					AtlasRenderMode::CpuEffects, kAtlasPadding, atlas, tileColor,
+					useCustomA8Shader);
 				if (!shape && pixelMode == AtlasPixelMode::A8)
 				{
+					// A failed A8 attempt may coincide with a device/Shader Loader
+					// transition. Snapshot a fresh, internally consistent route for the
+					// ARGB retry rather than mixing baked colors with a custom shader.
+					useCustomA8Shader = IsA8RendererAvailable();
 					pixelMode = AtlasPixelMode::Argb32;
 					shape = TryCreateAtlasShapeForMode(font, quads, bitmaps,
 						config, rasterScale, prepareObject, pixelMode,
-						AtlasRenderMode::CpuEffects, kAtlasPadding, atlas, tileColor);
+						AtlasRenderMode::CpuEffects, kAtlasPadding, atlas, tileColor,
+						useCustomA8Shader);
 				}
 				if (shape)
 				{

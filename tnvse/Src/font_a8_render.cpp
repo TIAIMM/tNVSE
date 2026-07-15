@@ -11,10 +11,13 @@
 #include "NiRenderer.hpp"
 #include "NiTriShape.hpp"
 #include "NiTriShapeData.hpp"
+#include "BSShaderProperty.hpp"
+#include "Utils/SafeWrite.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <deque>
 #include <limits>
 #include <mutex>
@@ -24,6 +27,8 @@
 namespace fonthook::vectorfont
 {
 	static_assert(sizeof(void*) == 4, "FreeType A8 rendering requires the Win32 runtime");
+	static_assert(sizeof(BSShaderProperty::RenderPass) == 0x10,
+		"Tile RenderPass ABI changed");
 
 	namespace
 	{
@@ -31,17 +36,28 @@ namespace fonthook::vectorfont
 		constexpr UInt32 kDeleteThisSlot = 1;
 		constexpr UInt32 kRenderImmediateSlot = 55;
 		constexpr UInt32 kRenderImmediateAltSlot = 56;
+		constexpr UInt32 kRendererBeginBatchSlot = 103;
+		constexpr UInt32 kRendererEndBatchSlot = 104;
+		constexpr UInt32 kRendererBatchRenderShapeSlot = 105;
 		constexpr UInt32 kRendererRenderShapeSlot = 107;
 		constexpr UInt32 kRendererRenderShapeAltSlot = 109;
 		constexpr UInt32 kCopiedTriShapeVtableEntries = 64;
 		constexpr UInt32 kShaderRefreshMessage = 0;
+		constexpr UInt32 kTileRenderPassCallSite = 0xB64FD1;
+		constexpr UInt32 kStockTileRenderPassImmediately = 0xB994F0;
 
 		using CreatePixelShaderFn = NiD3DPixelShader* (__cdecl*)(const char*);
 		using DrawIndexedPrimitiveFn = HRESULT(__stdcall*)(IDirect3DDevice9*,
 			D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
+		using BeginBatchFn = void(__thiscall*)(NiDX9Renderer*,
+			const NiPropertyState*, NiDynamicEffectState*);
+		using EndBatchFn = void(__thiscall*)(NiDX9Renderer*);
+		using BatchRenderShapeFn = void(__thiscall*)(NiDX9Renderer*, NiTriShape*);
 		using RenderImmediateFn = void(__thiscall*)(NiTriShape*, NiRenderer*);
 		using RenderShapeFn = void(__thiscall*)(NiDX9Renderer*, NiTriShape*);
 		using DeleteThisFn = void(__thiscall*)(NiTriShape*);
+		using TileRenderPassFn = void(__cdecl*)(BSShaderProperty::RenderPass*,
+			UInt32, bool, bool, bool);
 
 		NiD3DPixelShaderPtr s_a8Shader;
 		std::array<NiD3DPixelShaderPtr, 3> s_effectShaders;
@@ -50,15 +66,30 @@ namespace fonthook::vectorfont
 		RenderImmediateFn s_originalRenderImmediate = nullptr;
 		RenderImmediateFn s_originalRenderImmediateAlt = nullptr;
 		DrawIndexedPrimitiveFn s_originalDrawIndexedPrimitive = nullptr;
+		BeginBatchFn s_originalBeginBatch = nullptr;
+		EndBatchFn s_originalEndBatch = nullptr;
+		BatchRenderShapeFn s_originalBatchRenderShape = nullptr;
 		RenderShapeFn s_originalRenderShape = nullptr;
 		RenderShapeFn s_originalRenderShapeAlt = nullptr;
 		DeleteThisFn s_originalDeleteThis = nullptr;
+		TileRenderPassFn s_originalTileRenderPass = nullptr;
 		IDirect3DDevice9* s_hookedDevice = nullptr;
-		bool s_detectionFinalized = false;
+		bool s_initializationInProgress = false;
+		bool s_initializationAttempted = false;
 		bool s_shaderLoaderCompatible = false;
 		bool s_a8Available = false;
 		bool s_rangeBridgeAvailable = false;
+		bool s_tileRenderPassHookInstalled = false;
+		bool s_loggedTileRenderPassHookConflict = false;
+		bool s_loggedTileRenderPassHit = false;
+		std::unordered_set<UInt32> s_loggedTileShadowResultFonts;
+		bool s_loggedPendingRangeShape = false;
+		bool s_loggedShaderLoaderUnavailable = false;
+		bool s_loggedA8ShaderLoadFailure = false;
+		std::array<bool, 3> s_loggedEffectShaderLoadFailure = {};
 		bool s_loggedHookConflict = false;
+		bool s_loggedRendererHookConflict = false;
+		bool s_loggedBatchRouteHit = false;
 		thread_local UInt32 s_a8RenderDepth = 0;
 		thread_local NiTriShape* s_currentA8Shape = nullptr;
 		UInt32 s_stateMismatchLogCount = 0;
@@ -66,6 +97,7 @@ namespace fonthook::vectorfont
 		UInt32 s_rangeDrawFailureLogCount = 0;
 		UInt32 s_shapeValidationFailureLogCount = 0;
 		UInt64 s_shadowTraceSerial = 0;
+		DWORD s_lastInitializationAttemptTick = 0;
 		constexpr UInt32 kMaximumStateMismatchLogs = 16;
 		constexpr UInt32 kMaximumRangeDrawFailureLogs = 16;
 		constexpr UInt32 kMaximumShapeValidationFailureLogs = 16;
@@ -220,7 +252,159 @@ namespace fonthook::vectorfont
 				trace.effectSuccesses, trace.effectFailures,
 				trace.fillSuccesses, trace.fillFailures,
 				trace.fillSuccesses ? "fill-submitted"
+					: trace.forwardedCalls ? "original-draw-forwarded"
 					: trace.drawCalls ? "fill-missing-or-failed" : "no-dip-observed");
+		}
+
+		bool HookD3DDevice();
+
+		bool HasA8ShapeMetadata(const NiTriShape* shape, bool* hasShadow = nullptr,
+			UInt32* fontId = nullptr)
+		{
+			if (hasShadow)
+				*hasShadow = false;
+			if (fontId)
+				*fontId = 0;
+			if (!shape)
+				return false;
+			std::lock_guard<std::mutex> lock(s_diagnosticsMutex);
+			const auto found = s_shapeMetadata.find(shape);
+			if (found == s_shapeMetadata.end())
+				return false;
+			if (hasShadow)
+				*hasShadow = HasShadowRange(found->second);
+			if (fontId)
+				*fontId = found->second.fontId;
+			return true;
+		}
+
+		TileRenderPassFn ReadTileRenderPassCallTarget()
+		{
+			const UInt8* call = reinterpret_cast<const UInt8*>(kTileRenderPassCallSite);
+			if (!call || call[0] != 0xE8)
+				return nullptr;
+			SInt32 displacement = 0;
+			std::memcpy(&displacement, call + 1, sizeof(displacement));
+			return reinterpret_cast<TileRenderPassFn>(
+				kTileRenderPassCallSite + 5 + displacement);
+		}
+
+		void __cdecl A8TileRenderPass(BSShaderProperty::RenderPass* pass,
+			UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupDrawmode)
+		{
+			if (!s_originalTileRenderPass)
+				return;
+
+			NiTriShape* shape = pass
+				? reinterpret_cast<NiTriShape*>(pass->pGeometry) : nullptr;
+			bool hasShadow = false;
+			UInt32 fontId = 0;
+			const bool tracked = HasA8ShapeMetadata(shape, &hasShadow, &fontId);
+			NiTriShape* previousShape = s_currentA8Shape;
+			if (tracked)
+			{
+				// Startup menus can reach the Tile accumulator before NVSE's
+				// DeferredInit message. At this call site the renderer/device are live,
+				// so make one final synchronous attempt before this shape's first DIP.
+				NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+				IDirect3DDevice9* device = renderer
+					? renderer->GetD3DDevice() : nullptr;
+				if (!s_rangeBridgeAvailable || device != s_hookedDevice)
+					s_rangeBridgeAvailable = HookD3DDevice();
+				if (g_bEnableFreeTypeFontRenderingLog && !s_loggedTileRenderPassHit)
+				{
+					s_loggedTileRenderPassHit = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: Tile accumulator range route hit shape=%p font=%u pass=%u depth=%u",
+						shape, fontId, currentPass, s_a8RenderDepth);
+				}
+				BeginA8RenderTrace(shape, "tile-render-pass");
+				++s_a8RenderDepth;
+				s_currentA8Shape = shape;
+			}
+			s_originalTileRenderPass(pass, currentPass, testAlpha, blendAlpha,
+				setupDrawmode);
+			if (tracked)
+			{
+				A8RenderTraceContext* trace = CurrentRenderTrace();
+				if (hasShadow && trace && trace->shape == shape
+					&& s_loggedTileShadowResultFonts.insert(fontId).second)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: Tile accumulator shadow result shape=%p font=%u draws=%u forwarded=%u ranges=%u effectOk=%u effectFail=%u fillOk=%u fillFail=%u bridge=%u",
+						shape, fontId, trace->drawCalls, trace->forwardedCalls,
+						trace->rangeAttempts,
+						trace->effectSuccesses, trace->effectFailures,
+						trace->fillSuccesses, trace->fillFailures,
+						s_rangeBridgeAvailable ? 1 : 0);
+				}
+				s_currentA8Shape = previousShape;
+				--s_a8RenderDepth;
+				EndA8RenderTrace(shape, "tile-render-pass");
+			}
+		}
+
+		bool HookTileRenderPass()
+		{
+			TileRenderPassFn current = ReadTileRenderPassCallTarget();
+			const TileRenderPassFn hook = &A8TileRenderPass;
+			if (current == hook)
+			{
+				s_tileRenderPassHookInstalled = s_originalTileRenderPass != nullptr;
+				return s_tileRenderPassHookInstalled;
+			}
+			if (!current)
+			{
+				if (!s_loggedTileRenderPassHookConflict)
+				{
+					s_loggedTileRenderPassHookConflict = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: Tile accumulator call site is not CALL rel32; startup range route unavailable");
+				}
+				return false;
+			}
+			if (s_tileRenderPassHookInstalled)
+			{
+				if (!s_loggedTileRenderPassHookConflict)
+				{
+					s_loggedTileRenderPassHookConflict = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: Tile accumulator range route was replaced; retaining safe fallback routes");
+				}
+				return false;
+			}
+			if (reinterpret_cast<UInt32>(current)
+				!= kStockTileRenderPassImmediately)
+			{
+				if (!s_loggedTileRenderPassHookConflict)
+				{
+					s_loggedTileRenderPassHookConflict = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: Tile accumulator call site already has a non-stock target=%p; leaving it untouched",
+						current);
+				}
+				return false;
+			}
+
+			// Only wrap the verified stock cdecl target. An arbitrary pre-existing
+			// naked hook may depend on volatile registers from the original call site;
+			// invoking it through a C++ wrapper would not be a safe compatibility chain.
+			s_originalTileRenderPass = current;
+			WriteRelCall(kTileRenderPassCallSite, hook);
+			s_tileRenderPassHookInstalled = ReadTileRenderPassCallTarget() == hook;
+			if (!s_tileRenderPassHookInstalled)
+			{
+				s_originalTileRenderPass = nullptr;
+				return false;
+			}
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: installed Tile accumulator range route original=%p stock=%u",
+					current, reinterpret_cast<UInt32>(current)
+						== kStockTileRenderPassImmediately ? 1 : 0);
+			}
+			return true;
 		}
 
 		void LogShadowTraceDeviceState(IDirect3DDevice9* device, const char* stage,
@@ -238,12 +422,16 @@ namespace fonthook::vectorfont
 			IDirect3DBaseTexture9* texture = nullptr;
 			IDirect3DVertexBuffer9* vertexBuffer = nullptr;
 			IDirect3DIndexBuffer9* indexBuffer = nullptr;
+			IDirect3DSurface9* renderTarget = nullptr;
+			IDirect3DSurface9* backBuffer = nullptr;
 			UINT streamOffset = 0;
 			UINT streamStride = 0;
 			device->GetPixelShader(&actualShader);
 			device->GetTexture(0, &texture);
 			device->GetStreamSource(0, &vertexBuffer, &streamOffset, &streamStride);
 			device->GetIndices(&indexBuffer);
+			device->GetRenderTarget(0, &renderTarget);
+			device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer);
 
 			std::array<float, 20> constants = {};
 			device->GetPixelShaderConstantF(0, constants.data(), 5);
@@ -251,6 +439,10 @@ namespace fonthook::vectorfont
 			DWORD sourceBlend = 0;
 			DWORD destinationBlend = 0;
 			DWORD blendOperation = 0;
+			DWORD separateAlpha = 0;
+			DWORD sourceAlphaBlend = 0;
+			DWORD destinationAlphaBlend = 0;
+			DWORD alphaBlendOperation = 0;
 			DWORD alphaTest = 0;
 			DWORD alphaFunction = 0;
 			DWORD alphaReference = 0;
@@ -259,6 +451,7 @@ namespace fonthook::vectorfont
 			DWORD colorWrite = 0;
 			DWORD scissorEnable = 0;
 			DWORD stencilEnable = 0;
+			DWORD stencilWriteMask = 0;
 			DWORD minFilter = 0;
 			DWORD magFilter = 0;
 			DWORD mipFilter = 0;
@@ -266,6 +459,10 @@ namespace fonthook::vectorfont
 			device->GetRenderState(D3DRS_SRCBLEND, &sourceBlend);
 			device->GetRenderState(D3DRS_DESTBLEND, &destinationBlend);
 			device->GetRenderState(D3DRS_BLENDOP, &blendOperation);
+			device->GetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, &separateAlpha);
+			device->GetRenderState(D3DRS_SRCBLENDALPHA, &sourceAlphaBlend);
+			device->GetRenderState(D3DRS_DESTBLENDALPHA, &destinationAlphaBlend);
+			device->GetRenderState(D3DRS_BLENDOPALPHA, &alphaBlendOperation);
 			device->GetRenderState(D3DRS_ALPHATESTENABLE, &alphaTest);
 			device->GetRenderState(D3DRS_ALPHAFUNC, &alphaFunction);
 			device->GetRenderState(D3DRS_ALPHAREF, &alphaReference);
@@ -274,23 +471,31 @@ namespace fonthook::vectorfont
 			device->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
 			device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorEnable);
 			device->GetRenderState(D3DRS_STENCILENABLE, &stencilEnable);
+			device->GetRenderState(D3DRS_STENCILWRITEMASK, &stencilWriteMask);
 			device->GetSamplerState(0, D3DSAMP_MINFILTER, &minFilter);
 			device->GetSamplerState(0, D3DSAMP_MAGFILTER, &magFilter);
 			device->GetSamplerState(0, D3DSAMP_MIPFILTER, &mipFilter);
 
 			D3DSURFACE_DESC textureDescription = {};
+			D3DSURFACE_DESC targetDescription = {};
 			if (texture && texture->GetType() == D3DRTYPE_TEXTURE)
 			{
 				static_cast<IDirect3DTexture9*>(texture)->GetLevelDesc(0,
 					&textureDescription);
 			}
+			if (renderTarget)
+				renderTarget->GetDesc(&targetDescription);
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_shadow_trace: state serial=%llu dip=%u stage=%s layer=%d hr=0x%08X ps=(actual=%p expected=%p match=%u) tex=(ptr=%p format=%u size=%ux%u) buffers=(vb=%p offset=%u stride=%u ib=%p)",
+				"tnvse_freetype_shadow_trace: state serial=%llu dip=%u stage=%s layer=%d hr=0x%08X ps=(actual=%p expected=%p match=%u) tex=(ptr=%p format=%u size=%ux%u) rt0=(ptr=%p backbuffer=%u format=%u size=%ux%u) buffers=(vb=%p offset=%u stride=%u ib=%p)",
 				static_cast<unsigned long long>(trace->serial), drawCall,
 				stage ? stage : "unknown", layer, static_cast<UInt32>(result),
-				actualShader, expectedShader, actualShader == expectedShader ? 1 : 0,
+				actualShader, expectedShader,
+				!expectedShader || actualShader == expectedShader ? 1 : 0,
 				texture, static_cast<UInt32>(textureDescription.Format),
-				textureDescription.Width, textureDescription.Height, vertexBuffer,
+				textureDescription.Width, textureDescription.Height, renderTarget,
+				renderTarget && renderTarget == backBuffer ? 1 : 0,
+				static_cast<UInt32>(targetDescription.Format), targetDescription.Width,
+				targetDescription.Height, vertexBuffer,
 				streamOffset, streamStride, indexBuffer);
 			FreeTypeFontDebugLog(
 				"tnvse_freetype_shadow_trace:   constants c0=(%.5g,%.5g,%.5g,%.5g) c1=(%.5g,%.5g,%.5g,%.5g) c2=(%.5g,%.5g,%.5g,%.5g) c3=(%.5g,%.5g,%.5g,%.5g) c4=(%.5g,%.5g,%.5g,%.5g)",
@@ -300,14 +505,20 @@ namespace fonthook::vectorfont
 				constants[12], constants[13], constants[14], constants[15],
 				constants[16], constants[17], constants[18], constants[19]);
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_shadow_trace:   renderState blend=(enable=%u src=%u dst=%u op=%u) alphaTest=(enable=%u func=%u ref=%u) depth=(enable=%u write=%u) colorWrite=0x%X scissor=%u stencil=%u sampler=(min=%u mag=%u mip=%u)",
+				"tnvse_freetype_shadow_trace:   renderState blend=(enable=%u rgb=%u/%u op=%u separate=%u alpha=%u/%u op=%u) alphaTest=(enable=%u func=%u ref=%u) depth=(enable=%u write=%u) colorWrite=0x%X scissor=%u stencil=(enable=%u writeMask=0x%X) sampler=(min=%u mag=%u mip=%u)",
 				alphaBlend, sourceBlend, destinationBlend, blendOperation,
-				alphaTest, alphaFunction, alphaReference, zEnable, zWrite,
-				colorWrite, scissorEnable, stencilEnable, minFilter, magFilter,
+				separateAlpha, sourceAlphaBlend, destinationAlphaBlend,
+				alphaBlendOperation, alphaTest, alphaFunction, alphaReference,
+				zEnable, zWrite, colorWrite, scissorEnable, stencilEnable,
+				stencilWriteMask, minFilter, magFilter,
 				mipFilter);
 
 			if (indexBuffer)
 				indexBuffer->Release();
+			if (backBuffer)
+				backBuffer->Release();
+			if (renderTarget)
+				renderTarget->Release();
 			if (vertexBuffer)
 				vertexBuffer->Release();
 			if (texture)
@@ -444,7 +655,7 @@ namespace fonthook::vectorfont
 				shadeColor.r, shadeColor.g, shadeColor.b, shadeColor.a,
 				alphaFlags, propertyAlphaReference);
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_a8_diag:   contract=tile-uniform-v6-preserved-blend abi=%u rgb=c0.rgb*c1.rgb alpha=coverage*c0.a*c1.a modifier=[(%.4f,%.4f,%.4f,%.4f)..(%.4f,%.4f,%.4f,%.4f)]",
+				"tnvse_freetype_a8_diag:   contract=tile-fill-effect-rgb-v7 abi=%u rgb=(fill:c0.rgb*c1.rgb effect:c1.rgb) alpha=coverage*c0.a*c1.a modifier=[(%.4f,%.4f,%.4f,%.4f)..(%.4f,%.4f,%.4f,%.4f)]",
 				metadata.colorContract.abiVersion,
 				metadata.colorContract.minimumModifier.r,
 				metadata.colorContract.minimumModifier.g,
@@ -475,7 +686,7 @@ namespace fonthook::vectorfont
 			if (metadata.effects.enabled)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_a8_diag:   effects quality=%u shaderEffects=%u fillUsesSdf=%u atlasTexel=(%.7f,%.7f) spread=%.3f shadow=(blur=%.3f power=%.3f) glow=(inner=%.3f outer=%.3f power=%.3f) outline=(width=%.3f softness=%.3f) contract=tile-uniform-v6-preserved-blend",
+					"tnvse_freetype_a8_diag:   effects quality=%u shaderEffects=%u fillUsesSdf=%u atlasTexel=(%.7f,%.7f) spread=%.3f shadow=(blur=%.3f power=%.3f) glow=(inner=%.3f outer=%.3f power=%.3f) outline=(width=%.3f softness=%.3f) contract=tile-fill-effect-rgb-v7",
 					static_cast<UInt32>(metadata.effects.quality),
 					metadata.effects.shaderEffects ? 1 : 0,
 					metadata.effects.fillUsesSdf ? 1 : 0,
@@ -538,6 +749,16 @@ namespace fonthook::vectorfont
 				&& s_effectShaders[index]->GetShaderHandle();
 		}
 
+		bool HaveAllEffectShaders()
+		{
+			for (size_t index = 0; index < s_effectShaders.size(); ++index)
+			{
+				if (!HaveEffectShader(static_cast<EffectQuality>(index)))
+					return false;
+			}
+			return true;
+		}
+
 		bool NeedsScaledFillSampling(const NiTriShape* shape)
 		{
 			if (!shape)
@@ -553,10 +774,15 @@ namespace fonthook::vectorfont
 			NiD3DPixelShaderPtr loaded = createPixelShader("tnvse_freetype_a8.pso");
 			if (!loaded || !loaded->GetShaderHandle())
 			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_font: Shader Loader failed to load tnvse_freetype_a8.pso; using 32-bit atlases");
+				if (!s_loggedA8ShaderLoadFailure)
+				{
+					s_loggedA8ShaderLoadFailure = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: Shader Loader failed to load tnvse_freetype_a8.pso; using 32-bit atlases and retrying");
+				}
 				return false;
 			}
+			s_loggedA8ShaderLoadFailure = false;
 			s_a8Shader = loaded;
 			if (g_bEnableFreeTypeFontRenderingLog)
 				FreeTypeFontDebugLog("tnvse_freetype_font: loaded Shader Loader A8 font shader");
@@ -578,11 +804,14 @@ namespace fonthook::vectorfont
 				if (loaded && loaded->GetShaderHandle())
 				{
 					s_effectShaders[index] = loaded;
+					s_loggedEffectShaderLoadFailure[index] = false;
 					if (g_bEnableFreeTypeFontRenderingLog)
 						FreeTypeFontDebugLog("tnvse_freetype_font: loaded %s", names[index]);
 				}
-				else if (!s_effectShaders[index])
+				else if (!s_effectShaders[index]
+					&& !s_loggedEffectShaderLoadFailure[index])
 				{
+					s_loggedEffectShaderLoadFailure[index] = true;
 					gLog.FormattedMessage(
 						"tnvse_freetype_font: failed to load %s; using a lower shader quality or CPU effects",
 						names[index]);
@@ -613,7 +842,7 @@ namespace fonthook::vectorfont
 			s_effectShaders = effects;
 			if (g_bEnableFreeTypeFontRenderingLog)
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: atomically refreshed Tile-compatible shader set contract=tile-uniform-v6-preserved-blend");
+						"tnvse_freetype_font: atomically refreshed Tile-compatible shader set contract=tile-fill-effect-rgb-v7");
 			return true;
 		}
 
@@ -641,6 +870,9 @@ namespace fonthook::vectorfont
 					LogStateIsolationFailure("d3d-device-unavailable");
 					return;
 				}
+				m_supportsSeparateAlphaBlend = renderer
+					&& (renderer->m_kD3DCaps9.PrimitiveMiscCaps
+						& D3DPMISCCAPS_SEPARATEALPHABLEND) != 0;
 
 				if (FAILED(m_device->GetPixelShader(&m_originalPixelShader)))
 				{
@@ -677,14 +909,31 @@ namespace fonthook::vectorfont
 						return;
 					}
 				}
-				if (FAILED(m_device->GetRenderState(D3DRS_ALPHATESTENABLE,
+				if (FAILED(m_device->GetRenderState(D3DRS_ALPHABLENDENABLE,
+					&m_originalAlphaBlend))
+					|| FAILED(m_device->GetRenderState(D3DRS_ALPHATESTENABLE,
 					&m_originalAlphaTest))
 					|| FAILED(m_device->GetRenderState(D3DRS_ZWRITEENABLE,
 						&m_originalZWrite))
 					|| FAILED(m_device->GetRenderState(D3DRS_COLORWRITEENABLE,
-						&m_originalColorWrite)))
+						&m_originalColorWrite))
+					|| FAILED(m_device->GetRenderState(D3DRS_STENCILWRITEMASK,
+						&m_originalStencilWriteMask)))
 				{
 					LogStateIsolationFailure("get-render-state-failed");
+					return;
+				}
+				if (m_supportsSeparateAlphaBlend
+					&& (FAILED(m_device->GetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,
+						&m_originalSeparateAlphaBlend))
+						|| FAILED(m_device->GetRenderState(D3DRS_SRCBLENDALPHA,
+							&m_originalSourceAlphaBlend))
+						|| FAILED(m_device->GetRenderState(D3DRS_DESTBLENDALPHA,
+							&m_originalDestinationAlphaBlend))
+						|| FAILED(m_device->GetRenderState(D3DRS_BLENDOPALPHA,
+							&m_originalAlphaBlendOperation))))
+				{
+					LogStateIsolationFailure("get-separate-alpha-state-failed");
 					return;
 				}
 				m_valid = true;
@@ -694,12 +943,27 @@ namespace fonthook::vectorfont
 			{
 				if (m_modified && m_device)
 				{
+					m_device->SetPixelShaderConstantF(0,
+						m_originalTileColor.data(), 1);
 					m_device->SetPixelShaderConstantF(1, m_originalConstants.data(), 4);
 					for (const SamplerSetting& setting : m_samplerSettings)
 						m_device->SetSamplerState(0, setting.state, setting.value);
 					m_device->SetRenderState(D3DRS_ALPHATESTENABLE, m_originalAlphaTest);
 					m_device->SetRenderState(D3DRS_ZWRITEENABLE, m_originalZWrite);
 					m_device->SetRenderState(D3DRS_COLORWRITEENABLE, m_originalColorWrite);
+					if (m_supportsSeparateAlphaBlend)
+					{
+						m_device->SetRenderState(D3DRS_SRCBLENDALPHA,
+							m_originalSourceAlphaBlend);
+						m_device->SetRenderState(D3DRS_DESTBLENDALPHA,
+							m_originalDestinationAlphaBlend);
+						m_device->SetRenderState(D3DRS_BLENDOPALPHA,
+							m_originalAlphaBlendOperation);
+						m_device->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,
+							m_originalSeparateAlphaBlend);
+					}
+					m_device->SetRenderState(D3DRS_STENCILWRITEMASK,
+						m_originalStencilWriteMask);
 					m_device->SetPixelShader(m_originalPixelShader);
 					for (const SamplerSetting& setting : m_samplerSettings)
 					{
@@ -723,6 +987,24 @@ namespace fonthook::vectorfont
 						m_originalZWrite, "z-write-restore-mismatch");
 					VerifyRestoredRenderState(D3DRS_COLORWRITEENABLE,
 						m_originalColorWrite, "color-write-restore-mismatch");
+					if (m_supportsSeparateAlphaBlend)
+					{
+						VerifyRestoredRenderState(D3DRS_SEPARATEALPHABLENDENABLE,
+							m_originalSeparateAlphaBlend,
+							"separate-alpha-restore-mismatch");
+						VerifyRestoredRenderState(D3DRS_SRCBLENDALPHA,
+							m_originalSourceAlphaBlend,
+							"source-alpha-restore-mismatch");
+						VerifyRestoredRenderState(D3DRS_DESTBLENDALPHA,
+							m_originalDestinationAlphaBlend,
+							"destination-alpha-restore-mismatch");
+						VerifyRestoredRenderState(D3DRS_BLENDOPALPHA,
+							m_originalAlphaBlendOperation,
+							"alpha-operation-restore-mismatch");
+					}
+					VerifyRestoredRenderState(D3DRS_STENCILWRITEMASK,
+						m_originalStencilWriteMask,
+						"stencil-write-mask-restore-mismatch");
 
 					IDirect3DPixelShader9* restored = nullptr;
 					if (SUCCEEDED(m_device->GetPixelShader(&restored)))
@@ -747,8 +1029,8 @@ namespace fonthook::vectorfont
 				if (!m_valid || !shader)
 					return false;
 				// Mark the guard dirty before the first mutation so a partial failure is
-				// still restored. Blend, depth-test, scissor, stencil and stream state
-				// remain exactly as established by the original Tile pass.
+				// still restored. RGB blend, depth-test, scissor, stencil test/ref and
+				// stream state remain exactly as established by the original Tile pass.
 				m_modified = true;
 				return SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MINFILTER,
 					D3DTEXF_POINT))
@@ -767,23 +1049,55 @@ namespace fonthook::vectorfont
 			{
 				if (!m_valid)
 					return false;
-				// Effects must never modify the destination alpha of an off-screen UI
-				// target. Pip-Boy compositing consumes that channel after this draw; an
-				// effect write can therefore erase unrelated text even when RGB looks
-				// correct. The mandatory fill restores the caller's complete write mask.
-				const DWORD colorWrite = effectPass
+				// Fill follows the original TILE1000 c0 contract. Effects instead own
+				// their configured RGB and inherit only the live Tile alpha. This avoids
+				// dim/zero Tile RGB channels destroying a configured shadow color, while
+				// preserving menu fades and per-glyph alpha exactly.
+				const std::array<float, 4> passTileColor = effectPass
+					? std::array<float, 4>{ 1.0f, 1.0f, 1.0f,
+						m_originalTileColor[3] }
+					: m_originalTileColor;
+				// Off-screen UI targets consume destination alpha when composited later.
+				// RGB-only effects disappear outside the fill, while the caller's usual
+				// non-separate SRCALPHA blend can reduce existing destination alpha. Use
+				// source-over union for alpha only; RGB blend remains caller-controlled.
+				const bool writeEffectAlpha = effectPass
+					&& m_originalAlphaBlend && m_supportsSeparateAlphaBlend
+					&& (m_originalColorWrite & D3DCOLORWRITEENABLE_ALPHA) != 0;
+				const DWORD colorWrite = effectPass && !writeEffectAlpha
 					? (m_originalColorWrite
 						& ~static_cast<DWORD>(D3DCOLORWRITEENABLE_ALPHA))
 					: m_originalColorWrite;
 				const DWORD alphaTest = customCoverageShader
 					? FALSE : (effectPass ? FALSE : m_originalAlphaTest);
 				m_modified = true;
-				return SUCCEEDED(m_device->SetRenderState(D3DRS_ALPHATESTENABLE,
+				const bool tileColorReady = SUCCEEDED(m_device->SetPixelShaderConstantF(
+					0, passTileColor.data(), 1));
+				bool alphaStateReady = true;
+				if (m_supportsSeparateAlphaBlend)
+				{
+					alphaStateReady = SUCCEEDED(m_device->SetRenderState(
+						D3DRS_SRCBLENDALPHA,
+						writeEffectAlpha ? D3DBLEND_ONE : m_originalSourceAlphaBlend))
+						&& SUCCEEDED(m_device->SetRenderState(D3DRS_DESTBLENDALPHA,
+							writeEffectAlpha ? D3DBLEND_INVSRCALPHA
+								: m_originalDestinationAlphaBlend))
+						&& SUCCEEDED(m_device->SetRenderState(D3DRS_BLENDOPALPHA,
+							writeEffectAlpha ? D3DBLENDOP_ADD
+								: m_originalAlphaBlendOperation))
+						&& SUCCEEDED(m_device->SetRenderState(
+							D3DRS_SEPARATEALPHABLENDENABLE,
+							writeEffectAlpha ? TRUE : m_originalSeparateAlphaBlend));
+				}
+				return tileColorReady && alphaStateReady
+					&& SUCCEEDED(m_device->SetRenderState(D3DRS_ALPHATESTENABLE,
 					alphaTest))
 					&& SUCCEEDED(m_device->SetRenderState(D3DRS_ZWRITEENABLE,
 						effectPass ? FALSE : m_originalZWrite))
 					&& SUCCEEDED(m_device->SetRenderState(D3DRS_COLORWRITEENABLE,
-						colorWrite));
+						colorWrite))
+					&& SUCCEEDED(m_device->SetRenderState(D3DRS_STENCILWRITEMASK,
+						effectPass ? 0 : m_originalStencilWriteMask));
 			}
 
 			bool SetSmoothSampling(bool enabled)
@@ -826,10 +1140,17 @@ namespace fonthook::vectorfont
 				{ D3DSAMP_ADDRESSV, 0 }
 			}};
 			UInt32 m_originalAlphaTest = FALSE;
+			UInt32 m_originalAlphaBlend = FALSE;
 			UInt32 m_originalZWrite = FALSE;
 			UInt32 m_originalColorWrite = D3DCOLORWRITEENABLE_RED
 				| D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE
 				| D3DCOLORWRITEENABLE_ALPHA;
+			UInt32 m_originalSeparateAlphaBlend = FALSE;
+			UInt32 m_originalSourceAlphaBlend = D3DBLEND_ONE;
+			UInt32 m_originalDestinationAlphaBlend = D3DBLEND_ZERO;
+			UInt32 m_originalAlphaBlendOperation = D3DBLENDOP_ADD;
+			UInt32 m_originalStencilWriteMask = 0xFFFFFFFFu;
+			bool m_supportsSeparateAlphaBlend = false;
 			bool m_valid = false;
 			bool m_modified = false;
 		};
@@ -884,6 +1205,15 @@ namespace fonthook::vectorfont
 
 			LogA8DrawDiagnostics(device, primitiveType, baseVertexIndex,
 				minimumVertexIndex, numberOfVertices, startIndex, primitiveCount);
+			const bool validContract = haveMetadata
+				&& metadata.colorContract.abiVersion
+					== A8ShapeColorContract::kTileUniformColorAbi;
+			const bool geometryMatches = validContract
+				&& primitiveType == D3DPT_TRIANGLELIST
+				&& metadata.vertexCount == numberOfVertices
+				&& metadata.primitiveCount == primitiveCount
+				&& static_cast<UInt64>(metadata.indexCount)
+					== static_cast<UInt64>(primitiveCount) * 3;
 			if (detailedTrace)
 			{
 				FreeTypeFontDebugLog(
@@ -895,42 +1225,50 @@ namespace fonthook::vectorfont
 					primitiveCount * 3, haveMetadata ? 1 : 0,
 					metadata.vertexCount, metadata.primitiveCount, metadata.indexCount,
 					static_cast<UInt32>(metadata.effects.ranges.size()),
-					haveMetadata && metadata.vertexCount == numberOfVertices
-						&& metadata.primitiveCount == primitiveCount ? 1 : 0);
+					geometryMatches ? 1 : 0);
 				LogShadowTraceDeviceState(device, "dip-entry", drawCall, -1,
 					nullptr, D3D_OK);
 			}
-
-			ScopedA8RenderState state(device);
-			const bool validContract = haveMetadata
-				&& metadata.colorContract.abiVersion
-					== A8ShapeColorContract::kTileUniformColorAbi;
-			if (!validContract)
+			if (!geometryMatches)
 			{
 				UpdateCurrentRenderTraces([](A8RenderTraceContext& trace)
-					{ ++trace.fillFailures; });
+					{ ++trace.forwardedCalls; });
+				if (s_rangeDrawFailureLogCount++ < kMaximumRangeDrawFailureLogs)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_a8_diag: draw contract mismatch; forwarding original draw metadata=%u abi=0x%08X type=%u vertices=%u/%u primitives=%u/%u indices=%llu/%u",
+						haveMetadata ? 1 : 0, metadata.colorContract.abiVersion,
+						static_cast<UInt32>(primitiveType), numberOfVertices,
+						metadata.vertexCount, primitiveCount, metadata.primitiveCount,
+						static_cast<unsigned long long>(
+							static_cast<UInt64>(primitiveCount) * 3), metadata.indexCount);
+				}
 				if (detailedTrace)
 				{
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_shadow_trace: dip-abort serial=%llu dip=%u reason=missing-or-stale-shape-metadata metadata=%u abi=0x%08X expectedAbi=0x%08X",
+						"tnvse_freetype_shadow_trace: dip-forward serial=%llu dip=%u reason=draw-contract-mismatch metadata=%u abi=0x%08X type=%u vertices=%u/%u primitives=%u/%u",
 						static_cast<unsigned long long>(currentTrace->serial), drawCall,
 						haveMetadata ? 1 : 0, metadata.colorContract.abiVersion,
-						A8ShapeColorContract::kTileUniformColorAbi);
+						static_cast<UInt32>(primitiveType), numberOfVertices,
+						metadata.vertexCount, primitiveCount, metadata.primitiveCount);
 				}
-				LogStateIsolationFailure("missing-or-stale-shape-metadata");
-				return D3DERR_INVALIDCALL;
+				return s_originalDrawIndexedPrimitive(device, primitiveType, baseVertexIndex,
+					minimumVertexIndex, numberOfVertices, startIndex, primitiveCount);
 			}
+
+			ScopedA8RenderState state(device);
 			if (!state.IsValid())
 			{
 				UpdateCurrentRenderTraces([](A8RenderTraceContext& trace)
-					{ ++trace.fillFailures; });
+					{ ++trace.forwardedCalls; });
 				if (detailedTrace)
 				{
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_shadow_trace: dip-abort serial=%llu dip=%u reason=render-state-snapshot-failed",
+						"tnvse_freetype_shadow_trace: dip-forward serial=%llu dip=%u reason=render-state-snapshot-failed",
 						static_cast<unsigned long long>(currentTrace->serial), drawCall);
 				}
-				return D3DERR_INVALIDCALL;
+				return s_originalDrawIndexedPrimitive(device, primitiveType, baseVertexIndex,
+					minimumVertexIndex, numberOfVertices, startIndex, primitiveCount);
 			}
 			const bool haveRanges = validContract && metadata.effects.enabled
 				&& !metadata.effects.ranges.empty();
@@ -1300,7 +1638,7 @@ namespace fonthook::vectorfont
 					device->GetRenderState(D3DRS_BLENDOPALPHA, &actualAlphaOperation);
 					device->GetRenderState(D3DRS_COLORWRITEENABLE, &actualColorWrite);
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_a8_diag: shadow contract=tile-uniform-v6-preserved-blend c0=(%.4f,%.4f,%.4f,%.4f) c1=(%.4f,%.4f,%.4f,%.4f) coverage=atlas-sampled expectedMaxAlpha=%.4f blend=caller-preserved alphaState=(separate=%u src=%u dst=%u op=%u) colorWrite=0x%X alphaTest=disabled",
+						"tnvse_freetype_a8_diag: shadow contract=tile-fill-effect-rgb-v7 c0=(%.4f,%.4f,%.4f,%.4f) c1=(%.4f,%.4f,%.4f,%.4f) coverage=atlas-sampled expectedMaxAlpha=%.4f blend=rgb-caller-alpha-source-over alphaState=(separate=%u src=%u dst=%u op=%u) colorWrite=0x%X alphaTest=disabled",
 						actualTile[0], actualTile[1], actualTile[2], actualTile[3],
 						actualLayer[0], actualLayer[1], actualLayer[2], actualLayer[3],
 						actualTile[3] * actualLayer[3], actualSeparateAlpha,
@@ -1426,6 +1764,65 @@ namespace fonthook::vectorfont
 			}
 		}
 
+		void __fastcall A8BatchRenderShape(NiDX9Renderer* renderer, void*,
+			NiTriShape* shape)
+		{
+			if (!s_originalBatchRenderShape)
+				return;
+			if (!renderer)
+				return;
+			if (!IsA8AtlasShape(shape)
+				|| !s_originalBeginBatch || !s_originalEndBatch)
+			{
+				s_originalBatchRenderShape(renderer, shape);
+				return;
+			}
+			if (g_bEnableFreeTypeFontRenderingLog && !s_loggedBatchRouteHit)
+			{
+				s_loggedBatchRouteHit = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: renderer batch route hit shape=%p depth=%u",
+					shape, s_a8RenderDepth);
+			}
+
+			// NiDX9Renderer's batch path queues geometry and emits its D3D draw calls
+			// later from Do_EndBatch. At that point there is no per-shape virtual call
+			// left from which the range bridge can recover this shape's metadata. Isolate
+			// a marked atlas shape in its own batch so the original renderer keeps the
+			// caller's Tile properties and shader selection, while the D3D bridge retains
+			// an unambiguous shape context for every draw in that batch.
+			NiPropertyState* properties = renderer->m_pkBatchedPropertyState;
+			NiDynamicEffectState* effects = renderer->m_pkBatchedEffectState;
+			NiTriShape* previousShape = s_currentA8Shape;
+			const UInt32 previousDepth = s_a8RenderDepth;
+			// End even an apparently empty batch: AddToBatch may already have selected
+			// m_spBatchedShader before rejecting all geometry. Reusing that cached shader
+			// for this shape would recreate the same missing/incorrect-pass failure. Any
+			// older queued geometry is not part of this shape, so do not let an inherited
+			// immediate-render scope misclassify its draw calls as FreeType ranges.
+			s_a8RenderDepth = 0;
+			s_currentA8Shape = nullptr;
+			s_originalEndBatch(renderer);
+			s_a8RenderDepth = previousDepth;
+			s_currentA8Shape = previousShape;
+			s_originalBeginBatch(renderer, properties, effects);
+
+			BeginA8RenderTrace(shape, "renderer-batch-shape");
+			++s_a8RenderDepth;
+			s_currentA8Shape = shape;
+			// Keep the scope active while submitting as well as flushing. The stock
+			// function only queues, but this also remains correct if another renderer
+			// extension has wrapped the slot and chooses to issue an immediate draw.
+			s_originalBatchRenderShape(renderer, shape);
+			s_originalEndBatch(renderer);
+			s_currentA8Shape = previousShape;
+			--s_a8RenderDepth;
+			EndA8RenderTrace(shape, "renderer-batch-shape");
+
+			// The caller still owns the surrounding batch and will submit more objects.
+			s_originalBeginBatch(renderer, properties, effects);
+		}
+
 		bool WriteVtableEntry(void** vtable, UInt32 slot, void* replacement)
 		{
 			DWORD oldProtect = 0;
@@ -1446,35 +1843,84 @@ namespace fonthook::vectorfont
 			void** vtable = renderer ? *reinterpret_cast<void***>(renderer) : nullptr;
 			if (!vtable)
 				return false;
-			if (vtable[kRendererRenderShapeSlot] != reinterpret_cast<void*>(&A8RenderShape))
+
+			// Begin/End are not replaced, but always follow the current vtable targets so
+			// a renderer extension installed before or after tNVSE remains in the chain.
+			s_originalBeginBatch = reinterpret_cast<BeginBatchFn>(
+				vtable[kRendererBeginBatchSlot]);
+			s_originalEndBatch = reinterpret_cast<EndBatchFn>(
+				vtable[kRendererEndBatchSlot]);
+
+			void* batchEntry = vtable[kRendererBatchRenderShapeSlot];
+			void* renderEntry = vtable[kRendererRenderShapeSlot];
+			void* renderAltEntry = vtable[kRendererRenderShapeAltSlot];
+			void* batchHook = reinterpret_cast<void*>(&A8BatchRenderShape);
+			void* renderHook = reinterpret_cast<void*>(&A8RenderShape);
+			void* renderAltHook = reinterpret_cast<void*>(&A8RenderShapeAlt);
+
+			if (!s_originalBatchRenderShape && batchEntry != batchHook)
+				s_originalBatchRenderShape = reinterpret_cast<BatchRenderShapeFn>(batchEntry);
+			if (!s_originalRenderShape && renderEntry != renderHook)
+				s_originalRenderShape = reinterpret_cast<RenderShapeFn>(renderEntry);
+			if (!s_originalRenderShapeAlt && renderAltEntry != renderAltHook)
+				s_originalRenderShapeAlt = reinterpret_cast<RenderShapeFn>(renderAltEntry);
+			const bool entriesValid = s_originalBatchRenderShape
+				&& s_originalRenderShape && s_originalRenderShapeAlt
+				&& (batchEntry == batchHook || batchEntry
+					== reinterpret_cast<void*>(s_originalBatchRenderShape))
+				&& (renderEntry == renderHook || renderEntry
+					== reinterpret_cast<void*>(s_originalRenderShape))
+				&& (renderAltEntry == renderAltHook || renderAltEntry
+					== reinterpret_cast<void*>(s_originalRenderShapeAlt));
+			if (!entriesValid)
 			{
-				if (s_originalRenderShape)
-					return false;
-				s_originalRenderShape = reinterpret_cast<RenderShapeFn>(
-					vtable[kRendererRenderShapeSlot]);
-				if (!WriteVtableEntry(vtable, kRendererRenderShapeSlot,
-					reinterpret_cast<void*>(&A8RenderShape)))
+				if (!s_loggedRendererHookConflict)
 				{
+					s_loggedRendererHookConflict = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: renderer shape bridge was replaced; new atlases use 32-bit fallback");
+				}
+				return false;
+			}
+
+			bool wroteBatch = false;
+			bool wroteRender = false;
+			if (batchEntry != batchHook)
+			{
+				if (!WriteVtableEntry(vtable, kRendererBatchRenderShapeSlot, batchHook))
+					return false;
+				wroteBatch = true;
+			}
+			if (renderEntry != renderHook)
+			{
+				if (!WriteVtableEntry(vtable, kRendererRenderShapeSlot, renderHook))
+				{
+					if (wroteBatch)
+						WriteVtableEntry(vtable, kRendererBatchRenderShapeSlot,
+							reinterpret_cast<void*>(s_originalBatchRenderShape));
 					return false;
 				}
+				wroteRender = true;
 			}
-			if (vtable[kRendererRenderShapeAltSlot] != reinterpret_cast<void*>(&A8RenderShapeAlt))
+			if (renderAltEntry != renderAltHook
+				&& !WriteVtableEntry(vtable, kRendererRenderShapeAltSlot, renderAltHook))
 			{
-				if (s_originalRenderShapeAlt)
-					return false;
-				s_originalRenderShapeAlt = reinterpret_cast<RenderShapeFn>(
-					vtable[kRendererRenderShapeAltSlot]);
-				if (!WriteVtableEntry(vtable, kRendererRenderShapeAltSlot,
-					reinterpret_cast<void*>(&A8RenderShapeAlt)))
-				{
-					return false;
-				}
+				if (wroteRender)
+					WriteVtableEntry(vtable, kRendererRenderShapeSlot,
+						reinterpret_cast<void*>(s_originalRenderShape));
+				if (wroteBatch)
+					WriteVtableEntry(vtable, kRendererBatchRenderShapeSlot,
+						reinterpret_cast<void*>(s_originalBatchRenderShape));
+				return false;
 			}
-			return s_originalRenderShape && s_originalRenderShapeAlt;
+			return s_originalBeginBatch && s_originalEndBatch
+				&& s_originalBatchRenderShape && s_originalRenderShape
+				&& s_originalRenderShapeAlt;
 		}
 
 		bool HookD3DDevice()
 		{
+			const bool tileRouteAvailable = HookTileRenderPass();
 			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
 			if (!device)
@@ -1486,7 +1932,9 @@ namespace fonthook::vectorfont
 				== reinterpret_cast<void*>(&A8DrawIndexedPrimitive))
 			{
 				s_hookedDevice = device;
-				return s_originalDrawIndexedPrimitive && HookRendererShapeEntries(renderer);
+				const bool rendererRoutesAvailable = HookRendererShapeEntries(renderer);
+				return s_originalDrawIndexedPrimitive
+					&& (rendererRoutesAvailable || tileRouteAvailable);
 			}
 			if (s_hookedDevice && s_hookedDevice == device)
 			{
@@ -1507,14 +1955,20 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			s_hookedDevice = device;
+			const bool rendererBridgeAvailable = HookRendererShapeEntries(renderer);
 			if (g_bEnableFreeTypeFontRenderingLog)
-				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: installed FreeType atlas D3D9 range draw bridge");
-			return HookRendererShapeEntries(renderer);
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: installed FreeType atlas D3D9 range draw bridge rendererRoutes=%u batchRoute=%u",
+					rendererBridgeAvailable ? 1 : 0,
+					vtable && renderer
+						&& (*reinterpret_cast<void***>(renderer))[kRendererBatchRenderShapeSlot]
+							== reinterpret_cast<void*>(&A8BatchRenderShape) ? 1 : 0);
+			return rendererBridgeAvailable || tileRouteAvailable;
 		}
 
 		void __fastcall A8RenderImmediate(NiTriShape* shape, void*, NiRenderer* renderer)
 		{
+			s_rangeBridgeAvailable = HookD3DDevice();
 			NiTriShape* previousShape = s_currentA8Shape;
 			BeginA8RenderTrace(shape, "shape-immediate");
 			++s_a8RenderDepth;
@@ -1527,6 +1981,7 @@ namespace fonthook::vectorfont
 
 		void __fastcall A8RenderImmediateAlt(NiTriShape* shape, void*, NiRenderer* renderer)
 		{
+			s_rangeBridgeAvailable = HookD3DDevice();
 			NiTriShape* previousShape = s_currentA8Shape;
 			BeginA8RenderTrace(shape, "shape-immediate-alt");
 			++s_a8RenderDepth;
@@ -1594,7 +2049,7 @@ namespace fonthook::vectorfont
 					< kMaximumShapeValidationFailureLogs)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_a8_diag: rejected shape contract=tile-uniform-v6-preserved-blend reason=%s",
+					"tnvse_freetype_a8_diag: rejected shape contract=tile-fill-effect-rgb-v7 reason=%s",
 					reason ? reason : "unknown");
 			}
 			return false;
@@ -1696,72 +2151,107 @@ namespace fonthook::vectorfont
 			}
 			return haveFill || RejectA8Shape("missing-fill-range");
 		}
+
+		bool TryInitializeA8Renderer(bool forceShaderAttempt, bool reportFailures)
+		{
+			if (!g_bEnableFreeTypeFontRendering)
+			{
+				s_a8Available = false;
+				s_rangeBridgeAvailable = false;
+				return false;
+			}
+
+			// The original-shader ARGB path needs only the Tile/D3D range bridge;
+			// shader-loader discovery is an independent, opportunistic upgrade.
+			HookTileRenderPass();
+			s_rangeBridgeAvailable = HookD3DDevice();
+			if (!g_bEnableFreeTypeA8Atlas)
+			{
+				s_a8Available = false;
+				return false;
+			}
+			const bool baseShaderReady = HaveA8Shader();
+			s_a8Available = baseShaderReady && s_rangeBridgeAvailable;
+			if (baseShaderReady && HaveAllEffectShaders())
+			{
+				return s_a8Available;
+			}
+			if (s_initializationInProgress)
+				return s_a8Available;
+
+			const DWORD now = GetTickCount();
+			if (!forceShaderAttempt && s_initializationAttempted
+				&& now - s_lastInitializationAttemptTick < 1000)
+			{
+				return s_a8Available;
+			}
+			s_initializationAttempted = true;
+			s_lastInitializationAttemptTick = now;
+			s_initializationInProgress = true;
+			bool loaded = false;
+			do
+			{
+				if (!g_cmdTableInterface
+					|| !g_cmdTableInterface->GetPluginInfoByDLLName)
+				{
+					break;
+				}
+				const PluginInfo* info = g_cmdTableInterface->GetPluginInfoByDLLName(
+					"Fallout Shader Loader.dll");
+				if (!info || info->infoVersion != PluginInfo::kInfoVersion
+					|| info->version < dependencies::kShaderLoaderMinVersion)
+				{
+					break;
+				}
+				HMODULE module = GetModuleHandleA("Fallout Shader Loader.dll");
+				const auto createPixelShader = module
+					? reinterpret_cast<CreatePixelShaderFn>(GetProcAddress(
+						module, "CreatePixelShader")) : nullptr;
+				if (!createPixelShader)
+					break;
+				NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+				if (!renderer
+					|| renderer->m_kD3DCaps9.PixelShaderVersion < D3DPS_VERSION(3, 0))
+				{
+					break;
+				}
+				s_shaderLoaderCompatible = true;
+				loaded = baseShaderReady || LoadA8Shader(createPixelShader);
+				if (loaded)
+					LoadEffectShaders(createPixelShader);
+			} while (false);
+			s_initializationInProgress = false;
+			s_a8Available = HaveA8Shader() && s_rangeBridgeAvailable;
+
+			if (!HaveA8Shader() && reportFailures
+				&& !s_loggedShaderLoaderUnavailable)
+			{
+				s_loggedShaderLoaderUnavailable = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: Shader Loader/PS3 font shader is not ready; retaining range-safe 32-bit atlases and retrying later");
+			}
+			return s_a8Available;
+		}
 	}
 
 	void FinalizeA8RendererDetection()
 	{
-		if (s_detectionFinalized)
-			return;
-		s_detectionFinalized = true;
-		if (!g_bEnableFreeTypeFontRendering)
-			return;
-
-		// The range bridge is also required by the ARGB32 CPU-effect path. It
-		// separates shadow/glow/outline from fill so off-screen UI targets cannot
-		// lose text through depth or destination-alpha writes.
-		s_rangeBridgeAvailable = HookD3DDevice();
-		if (!g_bEnableFreeTypeA8Atlas || !g_cmdTableInterface
-			|| !g_cmdTableInterface->GetPluginInfoByDLLName)
-		{
-			return;
-		}
-
-		const PluginInfo* info = g_cmdTableInterface->GetPluginInfoByDLLName(
-			"Fallout Shader Loader.dll");
-		if (!info || info->infoVersion != PluginInfo::kInfoVersion
-			|| info->version < dependencies::kShaderLoaderMinVersion)
-		{
-			gLog.FormattedMessage(
-				"tnvse_freetype_font: Fallout Shader Loader 1.40 or newer is unavailable; using 32-bit atlases");
-			return;
-		}
-		HMODULE module = GetModuleHandleA("Fallout Shader Loader.dll");
-		const auto createPixelShader = module
-			? reinterpret_cast<CreatePixelShaderFn>(GetProcAddress(module, "CreatePixelShader"))
-			: nullptr;
-		if (!createPixelShader)
-		{
-			gLog.FormattedMessage(
-				"tnvse_freetype_font: Shader Loader CreatePixelShader export is unavailable; using 32-bit atlases");
-			return;
-		}
-		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-		if (!renderer || renderer->m_kD3DCaps9.PixelShaderVersion < D3DPS_VERSION(3, 0))
-		{
-			gLog.FormattedMessage(
-				"tnvse_freetype_font: pixel shader 3.0 is unavailable; using 32-bit atlases");
-			return;
-		}
-		s_shaderLoaderCompatible = true;
-		const bool loaded = LoadA8Shader(createPixelShader);
-		if (loaded)
-			LoadEffectShaders(createPixelShader);
-		s_rangeBridgeAvailable = HookD3DDevice();
-		s_a8Available = loaded && s_rangeBridgeAvailable;
+		TryInitializeA8Renderer(true, true);
 	}
 
 	void HandleA8RendererMainLoop()
 	{
-		if (!s_detectionFinalized || !g_bEnableFreeTypeFontRendering)
+		if (!g_bEnableFreeTypeFontRendering)
 			return;
-		s_rangeBridgeAvailable = HookD3DDevice();
-		s_a8Available = s_rangeBridgeAvailable && s_shaderLoaderCompatible
-			&& HaveA8Shader();
+		TryInitializeA8Renderer(false, false);
 	}
 
 	void HandleA8ShaderLoaderMessage(UInt32 messageType)
 	{
-		if (messageType != kShaderRefreshMessage || !s_shaderLoaderCompatible)
+		if (messageType != kShaderRefreshMessage)
+			return;
+		TryInitializeA8Renderer(true, false);
+		if (!s_shaderLoaderCompatible)
 			return;
 		HMODULE module = GetModuleHandleA("Fallout Shader Loader.dll");
 		const auto createPixelShader = module
@@ -1781,12 +2271,15 @@ namespace fonthook::vectorfont
 
 	bool IsA8RendererAvailable()
 	{
+		TryInitializeA8Renderer(false, false);
 		return s_a8Available && HaveA8Shader()
 			&& IsAtlasRangeRendererAvailable();
 	}
 
 	bool IsAtlasRangeRendererAvailable()
 	{
+		HookTileRenderPass();
+		s_rangeBridgeAvailable = HookD3DDevice();
 		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 		return s_rangeBridgeAvailable && s_originalDrawIndexedPrimitive
 			&& renderer && renderer->GetD3DDevice();
@@ -1818,8 +2311,10 @@ namespace fonthook::vectorfont
 	{
 		const bool useOriginalShader = effectConfig
 			&& effectConfig->useOriginalShader;
+		const bool rangeBridgeReady = useOriginalShader
+			? IsAtlasRangeRendererAvailable() : false;
 		const bool rendererAvailable = useOriginalShader
-			? IsAtlasRangeRendererAvailable() : IsA8RendererAvailable();
+			? (rangeBridgeReady || HookTileRenderPass()) : IsA8RendererAvailable();
 		if (!rendererAvailable
 			|| !ValidateA8Shape(shape, effectConfig, colorContract)
 			|| !InitializeA8TriShapeVtable(shape))
@@ -1846,6 +2341,14 @@ namespace fonthook::vectorfont
 		// Publish the marker vtable only after its metadata is complete. The draw
 		// bridge must never observe a custom shape with a stale/default contract.
 		*reinterpret_cast<void***>(shape) = &s_a8TriShapeVtable[1];
+		if (useOriginalShader && !rangeBridgeReady
+			&& g_bEnableFreeTypeFontRenderingLog && !s_loggedPendingRangeShape)
+		{
+			s_loggedPendingRangeShape = true;
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: retained startup effect shape pending first-render D3D range bridge shape=%p font=%u",
+				shape, fontId);
+		}
 		return true;
 	}
 }

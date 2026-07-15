@@ -194,7 +194,9 @@ namespace fonthook::vectorfont
 
 	struct A8ShapeColorContract
 	{
-		static constexpr UInt32 kTileUniformColorAbi = 6;
+		// Fill preserves the stock Tile c0 RGB/alpha contract. Effect ranges use
+		// their configured RGB verbatim while inheriting only the live Tile alpha.
+		static constexpr UInt32 kTileUniformColorAbi = 7;
 
 		UInt32 abiVersion = kTileUniformColorAbi;
 		NiColorA minimumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };

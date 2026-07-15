@@ -24,6 +24,11 @@ float EvaluateSdfEffect(float distance, float antialiasWidth, int layer)
 	if (layer == 0)
 	{
 		const float blur = max(EffectParams.x, 0.0);
+		// A zero-blur shadow is the translated glyph body, not a powered copy of
+		// its antialiased edge. Keep this threshold aligned with the CPU/runtime
+		// decision that selects the hard-shadow mask.
+		if (blur <= 0.001)
+			return body;
 		const float power = max(EffectParams.y, 0.0001);
 		const float blurred = smoothstep(-blur - antialiasWidth,
 			blur + antialiasWidth, distance);

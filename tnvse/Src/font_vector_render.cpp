@@ -54,6 +54,7 @@ namespace fonthook
 		std::mutex s_routeLogMutex;
 		std::unordered_set<UInt64> s_loggedGlyphRoutes;
 		bool s_loggedMergedShapeDiagnostics = false;
+		bool s_loggedPaletteRangeFallback = false;
 
 		float SanitizeColorChannel(float value, float fallback = 1.0f)
 		{
@@ -462,8 +463,9 @@ namespace fonthook
 			UInt32 vertexCursor = 0;
 			UInt32 indexCursor = 0;
 			vectorfont::A8EffectShapeConfig effectConfig;
-			effectConfig.enabled = useUniformColorShader;
+			effectConfig.enabled = true;
 			effectConfig.shaderEffects = false;
+			effectConfig.useOriginalShader = !useUniformColorShader;
 			vectorfont::A8ShapeColorContract colorContract;
 			bool haveColorModifier = false;
 			auto recordColorModifier = [&](const NiColorA& color)
@@ -509,7 +511,6 @@ namespace fonthook
 				}
 				for (UInt32 index : layer.indices)
 					data->m_pusTriList[indexCursor++] = static_cast<UInt16>(baseVertex + index);
-				if (useUniformColorShader)
 				{
 					const UInt32 layerIndexBase = indexCursor
 						- static_cast<UInt32>(layer.indices.size());
@@ -554,13 +555,26 @@ namespace fonthook
 			}
 
 			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
-			if (useUniformColorShader
-				&& !vectorfont::PrepareA8AtlasShape(shape, font.iFontNum,
-					static_cast<UInt32>(effectConfig.ranges.size()),
-					static_cast<UInt32>(effectConfig.ranges.size()),
-					&effectConfig, &colorContract))
+			const UInt32 fillRangeCount = static_cast<UInt32>(std::count_if(
+				effectConfig.ranges.begin(), effectConfig.ranges.end(),
+				[](const vectorfont::A8DrawRange& range)
+				{
+					return range.layer == static_cast<UInt32>(VectorLayer::Fill);
+				}));
+			const bool rangeShapePrepared = vectorfont::PrepareA8AtlasShape(
+				shape, font.iFontNum,
+				fillRangeCount,
+				static_cast<UInt32>(effectConfig.ranges.size()),
+				&effectConfig, &colorContract);
+			if (!rangeShapePrepared && useUniformColorShader)
 			{
 				return CreateEmptyVectorShape(&font, prepareObject);
+			}
+			if (!rangeShapePrepared && !s_loggedPaletteRangeFallback)
+			{
+				s_loggedPaletteRangeFallback = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: vector palette range bridge unavailable; retaining readable stock Tile fallback");
 			}
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
@@ -834,14 +848,12 @@ namespace fonthook
 
 		VectorEncodedGlyph glyph;
 		if (!DecodeFreeTypeGlyph(font, encoded, glyph))
-			return true;
+			return false;
 
 		auto& builder = s_richTextContext->builders[font];
 		if (!builder)
 			builder = std::make_unique<VectorTextBuilder>(font, true,
 				s_richTextContext->rasterScale, color);
-		if (builder->IsAvailable())
-			builder->AddGlyph(glyph, pen, color);
-		return true;
+		return builder->IsAvailable() && builder->AddGlyph(glyph, pen, color);
 	}
 }

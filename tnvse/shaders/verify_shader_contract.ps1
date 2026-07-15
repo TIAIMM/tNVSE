@@ -22,6 +22,12 @@ foreach ($sourceName in $sources) {
     }
 }
 
+$effectsSource = Get-Content -LiteralPath (
+    Join-Path $ShaderDirectory 'freetype_effects.hlsl') -Raw
+if ($effectsSource -notmatch 'blur\s*<=\s*0\.001[\s\S]*?return\s+body\s*;') {
+    throw 'Hard SDF shadow does not bypass blur/power shaping at the runtime epsilon'
+}
+
 $compatPath = Join-Path $ShaderDirectory 'freetype_tile_compat.hlsli'
 $compat = Get-Content -LiteralPath $compatPath -Raw
 if ($compat -notmatch 'tileColor\.rgb\s*\*\s*layerColor\.rgb') {
@@ -45,6 +51,15 @@ foreach ($sourceName in $sources) {
 }
 
 $compiledDirectory = Join-Path $ShaderDirectory 'compiled'
+$shaderInputs = @(
+    'freetype_a8.hlsl',
+    'freetype_effects.hlsl',
+    'freetype_tile_compat.hlsli',
+    'freetype_sdf_compat.hlsli'
+) | ForEach-Object { Get-Item -LiteralPath (Join-Path $ShaderDirectory $_) }
+$newestShaderSource = ($shaderInputs |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1).LastWriteTimeUtc
 $shaders = @(
     'tnvse_freetype_a8.pso',
     'tnvse_freetype_effects_fast.pso',
@@ -53,6 +68,9 @@ $shaders = @(
 )
 foreach ($shaderName in $shaders) {
     $shaderPath = Join-Path $compiledDirectory $shaderName
+    if ((Get-Item -LiteralPath $shaderPath).LastWriteTimeUtc -lt $newestShaderSource) {
+        throw "$shaderName is older than its HLSL/include inputs"
+    }
     $dump = & $Fxc /nologo /dumpbin $shaderPath 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "fxc /dumpbin failed for $shaderName"
@@ -75,6 +93,10 @@ foreach ($shaderName in $shaders) {
         -not ($instructions -cmatch '\bc1\.w\b')) {
         throw "$shaderName output alpha is not derived from both c0.a and c1.a"
     }
+    if ($shaderName -like 'tnvse_freetype_effects_*.pso' -and
+        -not ($dump -match '\b0\.001(?:0+\d*)?\b')) {
+        throw "$shaderName does not contain the hard-shadow epsilon"
+    }
 }
 
-Write-Host 'FreeType shader contract tile-uniform-v6-preserved-blend verification succeeded.'
+Write-Host 'FreeType shader contract tile-fill-effect-rgb-v7 verification succeeded.'
