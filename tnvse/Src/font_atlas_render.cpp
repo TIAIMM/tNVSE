@@ -2286,11 +2286,19 @@ namespace fonthook::vectorfont
 				const AtlasRect& rect = atlas.placements.at(quad.bitmap->cacheId);
 				const float scale = quad.rasterScale;
 				const float expansion = static_cast<float>(quad.expansionPixels);
-				const float x0 = std::round((quad.pen.x + quad.offsetX) * scale
-					+ static_cast<float>(quad.bitmap->left) - expansion) / scale;
-				const float z0 = std::round((quad.pen.z + quad.baselineOffset
-					- quad.offsetY) * scale + static_cast<float>(quad.bitmap->top)
-					+ expansion) / scale;
+				const float logicalX = quad.pen.x + quad.offsetX;
+				const float logicalZ = quad.pen.z + quad.baselineOffset - quad.offsetY;
+				const float bitmapLeft = static_cast<float>(quad.bitmap->left) - expansion;
+				const float bitmapTop = static_cast<float>(quad.bitmap->top) + expansion;
+				// Coverage masks stay aligned to their source-pixel grid. SDF masks are
+				// reconstructed analytically by the shader, so snapping their logical
+				// origin would discard shaped fractional advances and effect offsets.
+				const float x0 = quad.usesSdf
+					? logicalX + bitmapLeft / scale
+					: std::round(logicalX * scale + bitmapLeft) / scale;
+				const float z0 = quad.usesSdf
+					? logicalZ + bitmapTop / scale
+					: std::round(logicalZ * scale + bitmapTop) / scale;
 				const float x1 = x0 + (static_cast<float>(quad.bitmap->width)
 					+ expansion * 2.0f) / scale;
 				const float z1 = z0 - (static_cast<float>(quad.bitmap->height)
@@ -2307,10 +2315,11 @@ namespace fonthook::vectorfont
 						const float bitmapTop = static_cast<float>(quad.bitmap->top) / scale
 							+ quad.baselineOffset;
 						FreeTypeFontDebugLog(
-							"tnvse_freetype_font: first atlas vertical metrics font=%u scale=%.3f bitmapTop=%.3f logicalTopEdge=%.3f delta=%.3f baselineOffset=%.3f penZ=%.3f quadTop=%.3f",
+							"tnvse_freetype_font: first atlas vertical metrics font=%u scale=%.3f bitmapTop=%.3f logicalTopEdge=%.3f delta=%.3f baselineOffset=%.3f penZ=%.3f quadTop=%.3f positioning=%s",
 							font.iFontNum, scale, bitmapTop, quad.logicalTopEdge,
 							bitmapTop - quad.logicalTopEdge, quad.baselineOffset,
-							quad.pen.z, z0);
+							quad.pen.z, z0,
+							quad.usesSdf ? "sdf-subpixel" : "source-pixel-snapped");
 					}
 				}
 				// All layers belong to the same logical Tile text. Ordering is provided by
@@ -2677,23 +2686,18 @@ namespace fonthook::vectorfont
 
 	void ShutdownDefaultPoolAtlasLifecycle()
 	{
+		// NVSE broadcasts ExitGame while the active StartMenu can still own and
+		// render text shapes during its final fade.  A menu overhaul may keep many
+		// retired atlas generations alive; synchronously clearing them here walks
+		// and destroys large pixel buffers and glyph maps before the window closes,
+		// leaving the game visibly stuck on that transition frame.  Quiesce reset
+		// handling and new DEFAULT-pool allocations, but keep all referenced atlas
+		// generations valid.  ExitProcess reclaims them with the rest of the address
+		// space, while normal device-reset and runtime eviction paths are unchanged.
 		s_defaultPoolShutdown = true;
-		{
-			std::lock_guard<std::mutex> lock(s_atlasMutex);
-			s_atlasCache.clear();
-			s_atlasLru.clear();
-			s_atlasCacheBytes = 0;
-			s_retiredAtlases.clear();
-			s_loggedAtlasBatches.clear();
-			s_loggedVerticalMetricFonts.clear();
-			s_loggedQualityDowngrades.clear();
-		}
-		{
-			std::lock_guard<std::mutex> lock(s_batchMutex);
-			s_batchCache.clear();
-			s_batchLru.clear();
-			s_batchCacheBytes = 0;
-		}
+		if (g_bEnableFreeTypeFontRenderingLog)
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: atlas lifecycle quiesced for process exit; resource reclamation deferred");
 	}
 
 	namespace

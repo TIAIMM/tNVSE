@@ -308,13 +308,11 @@ namespace fonthook
 
 		float baseScale = 1.0f;
 		TryGetFreeTypeSourceRasterScale(baseScale);
-		// Device-pixel mode keeps one source profile and leaves every UIO zoom to the
-		// scene transform.  Fixed-resolution mode intentionally restores the legacy
-		// behavior: its configured base multiplier is combined with UIO's local scale.
-		// This preserves grayscale detail when automatic device scaling is disabled,
-		// and applies exactly the same source-size policy to grayscale and SDF masks.
-		const float rawSource = g_bEnableFreeTypeDevicePixelScale
-			? baseScale : baseScale * localScale;
+		// Both policies keep one UIO-1.0 source profile. UIO zoom remains a scene
+		// transform and never creates another bitmap or atlas profile. Device mode uses
+		// the final physical-pixel density; manual mode uses the configured multiplier,
+		// where 1.0 matches the original grayscale renderer's ordinary UIO-1.0 path.
+		const float rawSource = baseScale;
 		const LONG sourceMilli = CanonicalScaleMilli(rawSource);
 		const LONG localMilli = CanonicalScaleMilli(localScale);
 		const LONG logKey = localMilli * 10001 + sourceMilli;
@@ -327,7 +325,7 @@ namespace fonthook
 				baseScale, localScale,
 				static_cast<float>(sourceMilli) / kRasterScalePrecision,
 				g_bEnableFreeTypeDevicePixelScale
-					? "fixed-device-mipmapped" : "custom-times-uio");
+					? "fixed-device-uio-1" : "fixed-manual-uio-1");
 		}
 		return static_cast<float>(sourceMilli) / kRasterScalePrecision;
 	}

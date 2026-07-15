@@ -24,15 +24,17 @@ density is the single source resolution used by ordinary and UIO 2.30
 `CreateText` calls. UIO zoom remains a scene-node transform and selects from
 the shared atlas mip chain instead of producing another bitmap/atlas profile.
 Layout, wrapping, alignment, and returned dimensions remain in game UI units.
-Set the option to `0` to use `fFreeTypeFontResolutionScale` as the base source
-resolution multiplier. Its default is `1.0`, its valid range is `0.1-10.0`,
-and it is ignored while device-pixel scaling is enabled. In this manual mode
-the base multiplier is combined with UIO's local `CreateText` scale, restoring
-the behavior used before device-pixel scaling was introduced. Values such as
-`1.5` or `2.0` retain more grayscale detail when text is enlarged, at the cost
-of larger CPU masks and atlas usage. Grayscale and SDF bodies use the same
-resolved source scale; their cache keys include the resulting effective pixel
-dimensions, so changing the multiplier selects a new compatible cache profile.
+Both policies always generate the UIO `1.0` source profile. UIO zoom remains a
+scene-node transform and never creates another bitmap or atlas profile. Set
+`bEnableFreeTypeDevicePixelScale=0` to replace the device-pixel source scale
+with `fFreeTypeFontResolutionScale`. Its default is `1.0`, its valid range is
+`0.1-10.0`, and it is ignored while device-pixel scaling is enabled. Manual
+`1.0` matches the original grayscale renderer's ordinary UIO `1.0` source
+resolution; values such as `1.5` or `2.0` increase source resolution without
+changing layout or displayed font size, at the cost of larger CPU masks and
+atlas usage. Grayscale and SDF bodies use the same resolved source scale; their
+cache keys include the resulting effective pixel dimensions, so changing the
+multiplier selects a new compatible cache profile.
 
 Set `bEnableFreeTypeFontRenderingLog=1` while diagnosing configuration or font
 loading. The log records the XML path, resolved face paths, FreeType errors,
@@ -159,11 +161,9 @@ profile instead of its smaller GB2312 profile. Prewarming begins after the
 configured fonts are activated. On the first game-loop callback where the
 final device scale is available, tNVSE synchronously drains the complete queue;
 the game remains blocked until every queued profile reports `complete`,
-`atlas-full`, or `cancelled`. Device-pixel mode prewarms its single device
-source size, so UIO-derived calls do not generate per-zoom masks or atlases.
-Manual resolution mode prewarms its configured base multiplier; a UIO call
-whose local scale is not `1.0` creates the corresponding combined profile on
-demand, matching the legacy behavior selected by disabling device-pixel mode.
+`atlas-full`, or `cancelled`. Both device-pixel and manual resolution modes
+prewarm one canonical UIO `1.0` source size. UIO-derived calls reuse that mask
+and atlas profile instead of generating per-zoom variants.
 While this startup barrier is active, a non-activating English progress window
 runs on a separate UI thread. It shows the current font ID, grayscale/SDF mode,
 the active scan or snapshot stage, and overall progress. The window remains
@@ -269,6 +269,9 @@ execute global shadow, glow, outline, and fill passes over one `NiTriShape`,
 which prevents a later glyph effect from covering an earlier glyph fill. SDF
 passes use bilinear MIN/MAG sampling at atlas LOD 0 and derivative-based edge
 antialiasing; they never consume the coverage-averaged atlas mip chain.
+SDF draw ranges also preserve fractional pen positions, shaped advances, and
+effect offsets in their quad coordinates. Grayscale coverage ranges remain
+snapped to the resolved source-pixel grid so their coverage texels stay aligned.
 Grayscale masks can still use trilinear mip sampling when scene scaling needs
 it. Glow keeps
 full intensity through `inner`, then decays to zero at `outer` according to
@@ -345,8 +348,9 @@ quad rendering, while hinted masks are generated once on the CPU.
 When device-pixel mode is enabled and UIO 2.30 scales a TileText call, tNVSE
 keeps the mask at the canonical device raster size and lets the existing world
 transform minify or magnify the mipmapped atlas. Trilinear sampling is enabled
-for scaled A8 grayscale shapes. Manual resolution mode instead combines the
-configured multiplier with UIO's local scale. If atlas creation fails, the
+for scaled A8 grayscale shapes. Manual resolution mode likewise keeps a
+canonical UIO `1.0` profile at its configured source multiplier; UIO zoom is
+applied by the existing transform. If atlas creation fails, the
 renderer falls back to the libtess2 outline path. HarfBuzz
 shaping is limited to horizontal LTR text in the configured DBCS code pages;
 bidirectional layout, LCD subpixel rendering, color-font rendering, and
