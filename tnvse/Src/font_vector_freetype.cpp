@@ -26,6 +26,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <winioctl.h>
 
 namespace fonthook::vectorfont
 {
@@ -264,9 +265,9 @@ namespace fonthook::vectorfont
 			UInt32 sourceFontId = 0;
 		};
 
-		// Version 3 keeps hinted outline-to-SDF data and replaces the startup
-		// record scan/hash map with a fixed glyph-index table at the file front.
-		constexpr UInt32 kPersistentBitmapVersion = 3;
+		// Version 5 combines sparse index extents with transparent NTFS compression.
+		// Version 4 files are left untouched and are retired through normal cleanup.
+		constexpr UInt32 kPersistentBitmapVersion = 5;
 		constexpr UInt32 kPersistentBitmapRecordMagic = 0x4B534D47u; // GMSK
 		constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
 		constexpr UInt32 kMaximumPersistentBitmapBytes = 16u * 1024u * 1024u;
@@ -386,9 +387,9 @@ namespace fonthook::vectorfont
 			}
 		};
 
-		// Version 3 stores effect-independent body metrics. Runtime effect extents
-		// are applied after loading so shader-only changes can reuse the manifest.
-		constexpr UInt32 kPersistentGlyphManifestVersion = 3;
+		// Version 5 stores effect-independent body metrics in a sparse, compressed,
+		// content-addressed file so identical configurations share it across font IDs.
+		constexpr UInt32 kPersistentGlyphManifestVersion = 5;
 		constexpr UInt32 kPersistentGlyphManifestEntries = 65536;
 
 #pragma pack(push, 1)
@@ -400,7 +401,7 @@ namespace fonthook::vectorfont
 			UInt64 manifestHash = 0;
 			UInt64 layoutContentHash = 0;
 			UInt64 layoutHash = 0;
-			UInt32 fontId = 0;
+			UInt32 reservedFontId = 0;
 			UInt32 codePage = 0;
 			UInt32 entryCount = 0;
 			UInt32 entrySize = 0;
@@ -1492,6 +1493,25 @@ namespace fonthook::vectorfont
 				&& SetEndOfFile(file);
 		}
 
+		bool TryEnableSparseFile(HANDLE file)
+		{
+			if (file == INVALID_HANDLE_VALUE)
+				return false;
+			DWORD bytesReturned = 0;
+			return DeviceIoControl(file, FSCTL_SET_SPARSE, nullptr, 0,
+				nullptr, 0, &bytesReturned, nullptr) != FALSE;
+		}
+
+		bool TryEnableFileCompression(HANDLE file)
+		{
+			if (file == INVALID_HANDLE_VALUE)
+				return false;
+			USHORT format = COMPRESSION_FORMAT_DEFAULT;
+			DWORD bytesReturned = 0;
+			return DeviceIoControl(file, FSCTL_SET_COMPRESSION,
+				&format, sizeof(format), nullptr, 0, &bytesReturned, nullptr) != FALSE;
+		}
+
 		bool ReadFileAt(HANDLE file, UInt64 offset, void* data, UInt32 size)
 		{
 			if (!size)
@@ -1651,11 +1671,15 @@ namespace fonthook::vectorfont
 					profile.glyphCapacity);
 			const UInt64 indexBytes = static_cast<UInt64>(profile.glyphCapacity)
 				* sizeof(PersistentBitmapIndexEntry);
-			std::vector<UInt8> zeroIndex(static_cast<size_t>(indexBytes), 0);
-			if (!SetFileSize64(profile.file, 0)
-				|| !WriteFileAt(profile.file, 0, &header, sizeof(header))
-				|| !WriteFileAt(profile.file, sizeof(header), zeroIndex.data(),
-					static_cast<UInt32>(zeroIndex.size())))
+			if (header.dataOffset != sizeof(header) + indexBytes
+				|| !SetFileSize64(profile.file, 0))
+			{
+				return false;
+			}
+			TryEnableSparseFile(profile.file);
+			TryEnableFileCompression(profile.file);
+			if (!SetFileSize64(profile.file, header.dataOffset)
+				|| !WriteFileAt(profile.file, 0, &header, sizeof(header)))
 			{
 				return false;
 			}
@@ -1698,6 +1722,11 @@ namespace fonthook::vectorfont
 				GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
 				OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 			profile.writable = profile.file != INVALID_HANDLE_VALUE;
+			if (profile.writable)
+			{
+				TryEnableSparseFile(profile.file);
+				TryEnableFileCompression(profile.file);
+			}
 			if (!profile.writable)
 			{
 				profile.file = CreateFileW(profile.path.c_str(), GENERIC_READ,
@@ -2028,7 +2057,7 @@ namespace fonthook::vectorfont
 			header.manifestHash = manifestHash;
 			header.layoutContentHash = layoutContentHash;
 			header.layoutHash = runtime.config->layoutHash;
-			header.fontId = runtime.config->fontId;
+			header.reservedFontId = 0;
 			header.codePage = g_usingWinEncoding;
 			header.entryCount = kPersistentGlyphManifestEntries;
 			header.entrySize = sizeof(PersistentGlyphManifestEntry);
@@ -2047,7 +2076,7 @@ namespace fonthook::vectorfont
 				&& header.manifestHash == manifestHash
 				&& header.layoutContentHash == layoutContentHash
 				&& header.layoutHash == runtime.config->layoutHash
-				&& header.fontId == runtime.config->fontId
+				&& header.reservedFontId == 0
 				&& header.codePage == g_usingWinEncoding
 				&& header.entryCount == kPersistentGlyphManifestEntries
 				&& header.entrySize == sizeof(PersistentGlyphManifestEntry)
@@ -2063,8 +2092,6 @@ namespace fonthook::vectorfont
 			const UInt64 layoutContentHash = ComputeRuntimeLayoutContentHash(runtime);
 			UInt64 manifestHash = HashBytes64(&layoutContentHash,
 				sizeof(layoutContentHash));
-			manifestHash = HashBytes64(&runtime.config->fontId,
-				sizeof(runtime.config->fontId), manifestHash);
 			manifestHash = HashBytes64(&g_usingWinEncoding,
 				sizeof(g_usingWinEncoding), manifestHash);
 			manifest->manifestHash = manifestHash;
@@ -2075,20 +2102,25 @@ namespace fonthook::vectorfont
 				runtime.manifest = std::move(manifest);
 				return nullptr;
 			}
-			std::wstring primaryName = L"font";
-			if (!runtime.roles[0].faces.empty() && runtime.roles[0].faces[0].file)
-				primaryName = SanitizePersistentBitmapFontName(
-					runtime.roles[0].faces[0].file->path);
 			wchar_t fileName[256] = {};
 			_snwprintf_s(fileName, _countof(fileName), _TRUNCATE,
-				L"%u_%ls_%016llX.tnvfmanifest", runtime.config->fontId,
-				primaryName.c_str(), static_cast<unsigned long long>(manifestHash));
+				L"shared_%016llX.tnvfmanifest",
+				static_cast<unsigned long long>(manifestHash));
 			manifest->path = directory + L"\\" + fileName;
 			s_usedPersistentCachePaths.insert(NormalizePathKey(manifest->path));
 			manifest->file = CreateFileW(manifest->path.c_str(),
-				GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+				GENERIC_READ | GENERIC_WRITE,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+				nullptr, OPEN_ALWAYS,
 				FILE_ATTRIBUTE_NORMAL, nullptr);
 			manifest->writable = manifest->file != INVALID_HANDLE_VALUE;
+			if (manifest->writable)
+			{
+				// Packed entries rarely leave full sparse clusters. NTFS compression
+				// complements sparse allocation without changing mapped-file access.
+				TryEnableSparseFile(manifest->file);
+				TryEnableFileCompression(manifest->file);
+			}
 			if (!manifest->writable)
 			{
 				manifest->file = CreateFileW(manifest->path.c_str(), GENERIC_READ,
@@ -2119,8 +2151,14 @@ namespace fonthook::vectorfont
 				}
 				header = MakeGlyphManifestHeader(runtime, manifestHash,
 					layoutContentHash);
-				if (!SetFileSize64(manifest->file, 0)
-					|| !SetFileSize64(manifest->file, expectedSize)
+				if (!SetFileSize64(manifest->file, 0))
+				{
+					runtime.manifest = std::move(manifest);
+					return nullptr;
+				}
+				TryEnableSparseFile(manifest->file);
+				TryEnableFileCompression(manifest->file);
+				if (!SetFileSize64(manifest->file, expectedSize)
 					|| !WriteFileAt(manifest->file, 0, &header, sizeof(header)))
 				{
 					runtime.manifest = std::move(manifest);
@@ -3030,14 +3068,6 @@ namespace fonthook::vectorfont
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
 		return ComputeRuntimeMaskContentHash(runtime);
-	}
-
-	std::wstring GetRuntimePrimaryFontFileName(const RuntimeFont& runtime)
-	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
-		if (!runtime.roles[0].faces.empty() && runtime.roles[0].faces[0].file)
-			return SanitizePersistentBitmapFontName(runtime.roles[0].faces[0].file->path);
-		return L"font";
 	}
 
 	bool GetFreeTypeFontCacheDirectory(std::wstring& directory)

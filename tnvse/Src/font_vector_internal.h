@@ -243,7 +243,6 @@ namespace fonthook::vectorfont
 	bool DecodeEncodedGlyph(RuntimeFont& arRuntime, Font& arFont, const char* apText, VectorEncodedGlyph& arGlyph);
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
 	UInt64 GetRuntimeMaskContentHash(RuntimeFont& arRuntime);
-	std::wstring GetRuntimePrimaryFontFileName(const RuntimeFont& arRuntime);
 	bool GetFreeTypeFontCacheDirectory(std::wstring& arDirectory);
 	void MarkFreeTypeFontCacheFileUsed(const std::wstring& arPath);
 	void DeleteUnusedFreeTypeFontCacheFiles();

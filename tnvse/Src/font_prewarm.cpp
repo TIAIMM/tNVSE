@@ -293,12 +293,14 @@ namespace fonthook::vectorfont
 			UInt32 rasterizedGlyphCount = 0;
 			UInt32 targetUnitCount = 0;
 			UInt32 rasterScaleMilli = 0;
+			UInt64 snapshotRevision = 0;
 			bool scanningDoubleByte = false;
 			bool snapshotAttempted = false;
 		};
 
 		std::deque<PrewarmJob> s_jobs;
 		std::unordered_set<UInt64> s_scheduledProfiles;
+		UInt64 s_snapshotRevision = 0;
 
 		UInt64 BuildProfileKey(const FontConfig& config)
 		{
@@ -586,6 +588,7 @@ namespace fonthook::vectorfont
 			job.validDoubleByteCount = 0;
 			job.rasterizedGlyphCount = 0;
 			job.rasterScaleMilli = rasterScaleMilli;
+			job.snapshotRevision = s_snapshotRevision;
 			job.scanningDoubleByte = false;
 			job.snapshotAttempted = false;
 			if (!job.codePage)
@@ -720,6 +723,7 @@ namespace fonthook::vectorfont
 				continue;
 			}
 			job.snapshotAttempted = true;
+			job.snapshotRevision = s_snapshotRevision;
 			if (TryLoadGlyphAtlasSnapshot(*runtime, rasterScale))
 			{
 				FinishJob(job, "snapshot");
@@ -763,9 +767,10 @@ namespace fonthook::vectorfont
 				++finishedFonts;
 				continue;
 			}
-			if (!job.snapshotAttempted)
+			if (!job.snapshotAttempted || job.snapshotRevision != s_snapshotRevision)
 			{
 				job.snapshotAttempted = true;
+				job.snapshotRevision = s_snapshotRevision;
 				ReportPrewarmProgress(job, fontOrdinal, queuedFonts, finishedFonts,
 					L"Checking cached atlas...");
 				if (TryLoadGlyphAtlasSnapshot(*runtime, rasterScale))
@@ -875,6 +880,7 @@ namespace fonthook::vectorfont
 					continue;
 				}
 				MarkGlyphManifestComplete(*runtime, job.mode);
+				++s_snapshotRevision;
 				FinishJob(job, "complete");
 				++completedFonts;
 				++finishedFonts;

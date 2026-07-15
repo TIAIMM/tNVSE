@@ -248,7 +248,7 @@
     <font id="8" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0"
           curveTolerance="0.35">
-      <singleByte pixelSize="52" tracking="-1" scaleX="1" scaleY="1"
+      <singleByte pixelSize="52" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\Futura BdCn BT Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>

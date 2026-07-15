@@ -287,8 +287,10 @@ namespace fonthook::vectorfont
 
 		UInt64 BuildLayoutHash(const FontConfig& config)
 		{
+			// This is a content hash, not a runtime-font identity. Callers that require
+			// isolation carry fontId separately; excluding it lets identical font nodes
+			// share persistent manifests across Gamebryo font IDs.
 			UInt64 hash = 1469598103934665603ull;
-			HashBytes(hash, &config.fontId, sizeof(config.fontId));
 			HashBytes(hash, &config.verticalMetrics, sizeof(config.verticalMetrics));
 			HashBytes(hash, &config.shaping, sizeof(config.shaping));
 			for (const std::string& feature : config.shapingFeatures)
@@ -304,8 +306,10 @@ namespace fonthook::vectorfont
 
 		UInt64 BuildMaskGenerationHash(const FontConfig& config)
 		{
+			// Bitmap/atlas content is independent of the Gamebryo font slot. Atlas cache
+			// keys still include fontId in memory, while disk snapshots use this content
+			// identity together with the resolved font-file hashes.
 			UInt64 hash = 1469598103934665603ull;
-			HashBytes(hash, &config.fontId, sizeof(config.fontId));
 			HashFaceStyles(hash, config, false);
 			return hash;
 		}
