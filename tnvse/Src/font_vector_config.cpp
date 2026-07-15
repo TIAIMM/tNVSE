@@ -261,7 +261,31 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		UInt64 BuildStyleHash(const FontConfig& config)
+		void HashFaceStyles(UInt64& hash, const FontConfig& config,
+			bool includeLayoutFields)
+		{
+			for (const ByteStyle& style : config.styles)
+			{
+				HashBytes(hash, &style.pixelSize, sizeof(style.pixelSize));
+				HashBytes(hash, &style.scaleX, sizeof(style.scaleX));
+				HashBytes(hash, &style.scaleY, sizeof(style.scaleY));
+				HashBytes(hash, &style.embolden, sizeof(style.embolden));
+				HashBytes(hash, &style.slantDegrees, sizeof(style.slantDegrees));
+				if (includeLayoutFields)
+				{
+					HashBytes(hash, &style.tracking, sizeof(style.tracking));
+					HashBytes(hash, &style.baselineOffset, sizeof(style.baselineOffset));
+					HashBytes(hash, &style.fixedWidth, sizeof(style.fixedWidth));
+				}
+				for (const FaceConfig& face : style.faces)
+				{
+					HashBytes(hash, face.path.data(), face.path.size() * sizeof(wchar_t));
+					HashBytes(hash, &face.faceIndex, sizeof(face.faceIndex));
+				}
+			}
+		}
+
+		UInt64 BuildLayoutHash(const FontConfig& config)
 		{
 			UInt64 hash = 1469598103934665603ull;
 			HashBytes(hash, &config.fontId, sizeof(config.fontId));
@@ -274,12 +298,23 @@ namespace fonthook::vectorfont
 				HashBytes(hash, feature.data(), feature.size());
 			}
 			HashBytes(hash, &config.baseline, sizeof(config.baseline));
-			HashBytes(hash, &config.curveTolerance, sizeof(config.curveTolerance));
+			HashFaceStyles(hash, config, true);
+			return hash;
+		}
+
+		UInt64 BuildMaskGenerationHash(const FontConfig& config)
+		{
+			UInt64 hash = 1469598103934665603ull;
+			HashBytes(hash, &config.fontId, sizeof(config.fontId));
+			HashFaceStyles(hash, config, false);
+			return hash;
+		}
+
+		UInt64 BuildShaderEffectHash(const FontConfig& config)
+		{
+			UInt64 hash = 1469598103934665603ull;
 			HashBytes(hash, &config.fontColor.configured, sizeof(config.fontColor.configured));
-			HashBytes(hash, &config.fontColor.color.r, sizeof(config.fontColor.color.r));
-			HashBytes(hash, &config.fontColor.color.g, sizeof(config.fontColor.color.g));
-			HashBytes(hash, &config.fontColor.color.b, sizeof(config.fontColor.color.b));
-			HashBytes(hash, &config.fontColor.color.a, sizeof(config.fontColor.color.a));
+			HashBytes(hash, &config.fontColor.color, sizeof(config.fontColor.color));
 			HashBytes(hash, &config.fillRenderMode, sizeof(config.fillRenderMode));
 			HashBytes(hash, &config.effectQuality, sizeof(config.effectQuality));
 			auto hashEffect = [&](const EffectStyle& effect)
@@ -293,30 +328,11 @@ namespace fonthook::vectorfont
 				HashBytes(hash, &effect.softness, sizeof(effect.softness));
 				HashBytes(hash, &effect.x, sizeof(effect.x));
 				HashBytes(hash, &effect.y, sizeof(effect.y));
-				HashBytes(hash, &effect.color.r, sizeof(effect.color.r));
-				HashBytes(hash, &effect.color.g, sizeof(effect.color.g));
-				HashBytes(hash, &effect.color.b, sizeof(effect.color.b));
-				HashBytes(hash, &effect.color.a, sizeof(effect.color.a));
+				HashBytes(hash, &effect.color, sizeof(effect.color));
 			};
 			hashEffect(config.glow);
 			hashEffect(config.outline);
 			hashEffect(config.shadow);
-			for (const ByteStyle& style : config.styles)
-			{
-				HashBytes(hash, &style.pixelSize, sizeof(style.pixelSize));
-				HashBytes(hash, &style.tracking, sizeof(style.tracking));
-				HashBytes(hash, &style.scaleX, sizeof(style.scaleX));
-				HashBytes(hash, &style.scaleY, sizeof(style.scaleY));
-				HashBytes(hash, &style.embolden, sizeof(style.embolden));
-				HashBytes(hash, &style.slantDegrees, sizeof(style.slantDegrees));
-				HashBytes(hash, &style.baselineOffset, sizeof(style.baselineOffset));
-				HashBytes(hash, &style.fixedWidth, sizeof(style.fixedWidth));
-				for (const FaceConfig& face : style.faces)
-				{
-					HashBytes(hash, face.path.data(), face.path.size() * sizeof(wchar_t));
-					HashBytes(hash, &face.faceIndex, sizeof(face.faceIndex));
-				}
-			}
 			return hash;
 		}
 
@@ -467,7 +483,9 @@ namespace fonthook::vectorfont
 				|| !ReadEffect(node.child("outline"), EffectKind::Outline, config.outline, reason)
 				|| !ReadEffect(node.child("shadow"), EffectKind::Shadow, config.shadow, reason))
 				return false;
-			config.styleHash = BuildStyleHash(config);
+			config.layoutHash = BuildLayoutHash(config);
+			config.maskGenerationHash = BuildMaskGenerationHash(config);
+			config.shaderEffectHash = BuildShaderEffectHash(config);
 			return true;
 		}
 
@@ -488,6 +506,11 @@ namespace fonthook::vectorfont
 				config.glow.enabled, config.glow.inner, config.glow.outer, config.glow.power,
 				config.outline.enabled, config.outline.width, config.outline.softness,
 				config.shadow.enabled, config.shadow.blur, config.shadow.power);
+			FreeTypeFontDebugLog(
+				"tnvse_freetype_font:   hashes layout=%016llX mask=%016llX shader=%016llX",
+				static_cast<unsigned long long>(config.layoutHash),
+				static_cast<unsigned long long>(config.maskGenerationHash),
+				static_cast<unsigned long long>(config.shaderEffectHash));
 			if (config.fontColor.configured)
 			{
 				FreeTypeFontDebugLog(

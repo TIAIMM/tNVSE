@@ -205,8 +205,32 @@ stable glyph-ID placement map. Each page records and validates the total page
 count. After a successful full prewarm every page is written atomically, then
 the manifest is marked complete. A later launch restores the complete page set
 directly and skips code-page enumeration, per-glyph mask loading, packing, and
-mip generation. Every layer includes its schema/style/font/code-page inputs in
+mip generation. Every layer includes its schema/layout/mask/font/code-page inputs in
 its hash; stale files are ignored rather than migrated.
+
+`bDeleteUnusedFreeTypeFontCache=1` removes stale `.tnvfmask`, `.tnvfhash`,
+`.tnvfmanifest`, and `.tnvfatlas` files that were not accessed by the current
+run after every configured prewarm atlas has been generated or restored
+successfully. Cleanup is skipped if any prewarm job fails or is cancelled, and
+unknown files in `fontdata` are never removed. The option defaults to `0`.
+
+Cache identity is split by responsibility. The layout hash covers font faces,
+metrics, advances, shaping, and fallback identity. Persistent manifests store
+effect-independent body metrics and add the current visual effect extents when
+loaded. The mask-generation hash covers only outline inputs that change glyph
+pixels. The atlas-content hash is resolved at the final raster scale from that
+mask identity, the actual mask-type combination, the quantized SDF spread, and
+CPU fallback stroke widths. Shader colors, offsets, powers, inner thresholds,
+and quality selection use a separate shader-effect hash and do not invalidate
+an SDF atlas. Consequently an effect edit selects a new prewarm snapshot only
+when it changes the final SDF spread or the masks that the atlas must contain.
+The grayscale CPU fallback remains content-sensitive: independently generated
+coverage masks include the enabled glow, outline, and shadow parameters after
+physical-pixel quantization (including stroke, blur, softness, and power) in the
+atlas identity. Effect offsets remain draw geometry and do not invalidate mask
+pixels. Disabled-effect values are ignored. The ARGB fallback additionally
+hashes every baked layer/color variant because its RGB and alpha modifiers are
+stored in atlas pixels rather than supplied only as shader constants.
 
 ## Encoding and fallback routing
 

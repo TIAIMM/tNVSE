@@ -279,7 +279,9 @@ namespace fonthook::vectorfont
 		struct PrewarmJob
 		{
 			UInt32 fontId = 0;
-			UInt64 styleHash = 0;
+			UInt64 layoutHash = 0;
+			UInt64 maskGenerationHash = 0;
+			UInt64 shaderEffectHash = 0;
 			UInt32 codePage = 0;
 			FontPrewarmMode mode = FontPrewarmMode::None;
 			UInt32 singleByte = 0x20;
@@ -300,7 +302,21 @@ namespace fonthook::vectorfont
 
 		UInt64 BuildProfileKey(const FontConfig& config)
 		{
-			return config.styleHash ^ (static_cast<UInt64>(config.fontId) << 32);
+			UInt64 hash = 1469598103934665603ull;
+			auto add = [&](const void* data, size_t size)
+			{
+				const UInt8* bytes = static_cast<const UInt8*>(data);
+				for (size_t index = 0; index < size; ++index)
+				{
+					hash ^= bytes[index];
+					hash *= 1099511628211ull;
+				}
+			};
+			add(&config.fontId, sizeof(config.fontId));
+			add(&config.layoutHash, sizeof(config.layoutHash));
+			add(&config.maskGenerationHash, sizeof(config.maskGenerationHash));
+			add(&config.shaderEffectHash, sizeof(config.shaderEffectHash));
+			return hash;
 		}
 
 		void ConfigureCommonRange(PrewarmJob& job)
@@ -638,7 +654,9 @@ namespace fonthook::vectorfont
 			return;
 		PrewarmJob job;
 		job.fontId = fontId;
-		job.styleHash = config->styleHash;
+		job.layoutHash = config->layoutHash;
+		job.maskGenerationHash = config->maskGenerationHash;
+		job.shaderEffectHash = config->shaderEffectHash;
 		job.codePage = g_usingWinEncoding;
 		job.mode = config->prewarm;
 		ResetPrewarmScan(job, 0);
@@ -691,7 +709,9 @@ namespace fonthook::vectorfont
 			const float rasterScale = job.rasterScaleMilli / 1000.0f;
 			const FontConfig* config = FindConfig(job.fontId);
 			RuntimeFont* runtime = FindRuntimeFont(job.fontId);
-			if (!config || !runtime || config->styleHash != job.styleHash
+			if (!config || !runtime || config->layoutHash != job.layoutHash
+				|| config->maskGenerationHash != job.maskGenerationHash
+				|| config->shaderEffectHash != job.shaderEffectHash
 				|| job.codePage != g_usingWinEncoding)
 			{
 				FinishJob(job, "cancelled");
@@ -733,7 +753,9 @@ namespace fonthook::vectorfont
 			const FontConfig* config = FindConfig(job.fontId);
 			RuntimeFont* runtime = FindRuntimeFont(job.fontId);
 			const UInt32 fontOrdinal = std::min(queuedFonts, finishedFonts + 1);
-			if (!config || !runtime || config->styleHash != job.styleHash
+			if (!config || !runtime || config->layoutHash != job.layoutHash
+				|| config->maskGenerationHash != job.maskGenerationHash
+				|| config->shaderEffectHash != job.shaderEffectHash
 				|| job.codePage != g_usingWinEncoding)
 			{
 				FinishJob(job, "cancelled");
@@ -872,6 +894,13 @@ namespace fonthook::vectorfont
 			queuedFonts, completedFonts, fullFonts, saveFailedFonts, cancelledFonts, batches,
 			static_cast<unsigned long long>(GetTickCount64() - started));
 		FlushGlyphBitmapDiskCache();
+		if (g_bDeleteUnusedFreeTypeFontCache && completedFonts == queuedFonts)
+			DeleteUnusedFreeTypeFontCacheFiles();
+		else if (g_bDeleteUnusedFreeTypeFontCache)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: unused persistent cache cleanup skipped because prewarm did not complete successfully");
+		}
 		if (s_progressThread)
 		{
 			UpdatePrewarmProgress(L"Font cache is ready.",

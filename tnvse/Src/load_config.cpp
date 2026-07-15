@@ -14,6 +14,7 @@ bool g_bEnableFreeTypeFontRenderingLog;
 bool g_bEnableFreeTypeDevicePixelScale;
 float g_fFreeTypeFontResolutionScale;
 UINT32 g_uiFreeTypeFontMemoryCacheMB;
+bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
@@ -151,6 +152,11 @@ void LoadConfig()
 	g_uiFreeTypeFontMemoryCacheMB = std::clamp<UINT32>(
 		ReadConfigInt(kMainSection, nullptr, "uiFreeTypeFontMemoryCacheMB", 192, filename), 64, 384);
 	gLog.FormattedMessage("g_uiFreeTypeFontMemoryCacheMB: %u", g_uiFreeTypeFontMemoryCacheMB);
+
+	g_bDeleteUnusedFreeTypeFontCache = ReadConfigInt(
+		kMainSection, nullptr, "bDeleteUnusedFreeTypeFontCache", 0, filename) != 0;
+	gLog.FormattedMessage("g_bDeleteUnusedFreeTypeFontCache: %d",
+		g_bDeleteUnusedFreeTypeFontCache);
 
 	g_bEnableFreeTypeDefaultPoolAtlas = ReadConfigInt(
 		kMainSection, nullptr, "bEnableFreeTypeDefaultPoolAtlas", 1, filename) != 0;

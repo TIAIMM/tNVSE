@@ -169,7 +169,7 @@ namespace fonthook::vectorfont
 
 		struct MeshCacheKey
 		{
-			UInt64 styleHash = 0;
+			UInt64 generationHash = 0;
 			UInt32 fontId = 0;
 			UInt32 glyphIndex = 0;
 			UInt16 faceIndex = 0;
@@ -178,7 +178,7 @@ namespace fonthook::vectorfont
 
 			bool operator==(const MeshCacheKey& other) const
 			{
-				return styleHash == other.styleHash
+				return generationHash == other.generationHash
 					&& fontId == other.fontId
 					&& glyphIndex == other.glyphIndex
 					&& faceIndex == other.faceIndex
@@ -191,7 +191,8 @@ namespace fonthook::vectorfont
 		{
 			size_t operator()(const MeshCacheKey& key) const
 			{
-				size_t result = static_cast<size_t>(key.styleHash ^ (key.styleHash >> 32));
+				size_t result = static_cast<size_t>(
+					key.generationHash ^ (key.generationHash >> 32));
 				result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
 				result ^= static_cast<size_t>(key.glyphIndex) * 0x85EBCA77u;
 				result ^= static_cast<size_t>(key.faceIndex) * 0xC2B2AE3Du;
@@ -385,9 +386,9 @@ namespace fonthook::vectorfont
 			}
 		};
 
-		// Version 2 expands CP936 common prewarming from the legacy 7000-unit
-		// subset to the complete GB2312 repertoire.
-		constexpr UInt32 kPersistentGlyphManifestVersion = 2;
+		// Version 3 stores effect-independent body metrics. Runtime effect extents
+		// are applied after loading so shader-only changes can reuse the manifest.
+		constexpr UInt32 kPersistentGlyphManifestVersion = 3;
 		constexpr UInt32 kPersistentGlyphManifestEntries = 65536;
 
 #pragma pack(push, 1)
@@ -397,8 +398,8 @@ namespace fonthook::vectorfont
 			UInt32 version = 0;
 			UInt32 headerSize = 0;
 			UInt64 manifestHash = 0;
-			UInt64 fontContentHash = 0;
-			UInt64 styleHash = 0;
+			UInt64 layoutContentHash = 0;
+			UInt64 layoutHash = 0;
 			UInt32 fontId = 0;
 			UInt32 codePage = 0;
 			UInt32 entryCount = 0;
@@ -429,7 +430,7 @@ namespace fonthook::vectorfont
 		struct PersistentGlyphManifest
 		{
 			UInt64 manifestHash = 0;
-			UInt64 fontContentHash = 0;
+			UInt64 layoutContentHash = 0;
 			std::wstring path;
 			HANDLE file = INVALID_HANDLE_VALUE;
 			HANDLE mapping = nullptr;
@@ -449,7 +450,7 @@ namespace fonthook::vectorfont
 
 		struct LayoutCacheKey
 		{
-			UInt64 styleHash = 0;
+			UInt64 layoutHash = 0;
 			UInt32 fontId = 0;
 			UInt32 codePage = 0;
 			bool allowShaping = false;
@@ -457,7 +458,7 @@ namespace fonthook::vectorfont
 
 			bool operator==(const LayoutCacheKey& other) const
 			{
-				return styleHash == other.styleHash && fontId == other.fontId
+				return layoutHash == other.layoutHash && fontId == other.fontId
 					&& codePage == other.codePage && allowShaping == other.allowShaping
 					&& text == other.text;
 			}
@@ -467,7 +468,7 @@ namespace fonthook::vectorfont
 		{
 			size_t operator()(const LayoutCacheKey& key) const
 			{
-				size_t result = static_cast<size_t>(key.styleHash ^ (key.styleHash >> 32));
+				size_t result = static_cast<size_t>(key.layoutHash ^ (key.layoutHash >> 32));
 				result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
 				result ^= static_cast<size_t>(key.codePage) * 0x85EBCA77u;
 				result ^= static_cast<size_t>(key.allowShaping) << 7;
@@ -486,7 +487,7 @@ namespace fonthook::vectorfont
 
 		struct KerningCacheKey
 		{
-			UInt64 styleHash = 0;
+			UInt64 layoutHash = 0;
 			UInt32 fontId = 0;
 			UInt32 leftGlyph = 0;
 			UInt32 rightGlyph = 0;
@@ -495,7 +496,7 @@ namespace fonthook::vectorfont
 
 			bool operator==(const KerningCacheKey& other) const
 			{
-				return styleHash == other.styleHash && fontId == other.fontId
+				return layoutHash == other.layoutHash && fontId == other.fontId
 					&& leftGlyph == other.leftGlyph && rightGlyph == other.rightGlyph
 					&& faceIndex == other.faceIndex && byteClass == other.byteClass;
 			}
@@ -505,7 +506,7 @@ namespace fonthook::vectorfont
 		{
 			size_t operator()(const KerningCacheKey& key) const
 			{
-				size_t result = static_cast<size_t>(key.styleHash ^ (key.styleHash >> 32));
+				size_t result = static_cast<size_t>(key.layoutHash ^ (key.layoutHash >> 32));
 				result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
 				result ^= static_cast<size_t>(key.leftGlyph) * 0x85EBCA77u;
 				result ^= static_cast<size_t>(key.rightGlyph) * 0xC2B2AE3Du;
@@ -545,6 +546,7 @@ namespace fonthook::vectorfont
 		std::unordered_map<PersistentBitmapProfileKey,
 			std::unique_ptr<PersistentBitmapProfile>,
 			PersistentBitmapProfileKeyHash> s_persistentBitmapProfiles;
+		std::unordered_set<std::wstring> s_usedPersistentCachePaths;
 		std::unordered_map<LayoutCacheKey, LayoutCacheEntry, LayoutCacheKeyHash> s_layoutCache;
 		std::list<LayoutCacheKey> s_layoutLru;
 		std::unordered_map<KerningCacheKey, float, KerningCacheKeyHash> s_kerningCache;
@@ -911,6 +913,27 @@ namespace fonthook::vectorfont
 			const float shadowBottom = config.shadow.enabled
 				? std::max(0.0f, config.shadow.y) : 0.0f;
 			return { std::max(stroke, shadowTop), std::max(stroke, shadowBottom) };
+		}
+
+		void RemoveEffectExtentsFromMetrics(const FontConfig& config,
+			UInt32 codePoint, FontLetter& metrics)
+		{
+			if (codePoint == 0x20)
+				return;
+			const VerticalEffectExtents effects = GetVerticalEffectExtents(config);
+			metrics.fTopEdge -= effects.top;
+			metrics.fHeight = std::max(0.0f,
+				metrics.fHeight - effects.top - effects.bottom);
+		}
+
+		void ApplyEffectExtentsToMetrics(const FontConfig& config,
+			UInt32 codePoint, FontLetter& metrics)
+		{
+			if (codePoint == 0x20)
+				return;
+			const VerticalEffectExtents effects = GetVerticalEffectExtents(config);
+			metrics.fTopEdge += effects.top;
+			metrics.fHeight += effects.top + effects.bottom;
 		}
 
 		FontLetter BuildFontLetter(RuntimeRole& role, const FontConfig& config,
@@ -1513,6 +1536,7 @@ namespace fonthook::vectorfont
 				L"hash_%ls_%016llX.tnvfhash", fontName.c_str(),
 				static_cast<unsigned long long>(pathHash));
 			const std::wstring cachePath = directory + L"\\" + fileName;
+			s_usedPersistentCachePaths.insert(NormalizePathKey(cachePath));
 			PersistentFontHashRecord record;
 			HANDLE cache = CreateFileW(cachePath.c_str(), GENERIC_READ,
 				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
@@ -1669,6 +1693,7 @@ namespace fonthook::vectorfont
 				profile.profileHash);
 			if (profile.path.empty())
 				profile.path = FormatPersistentBitmapPath(directory, profile);
+			s_usedPersistentCachePaths.insert(NormalizePathKey(profile.path));
 			profile.file = CreateFileW(profile.path.c_str(),
 				GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
 				OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -1804,6 +1829,9 @@ namespace fonthook::vectorfont
 			bitmap->top = record.top;
 			bitmap->effectiveWidth = key.effectiveWidth;
 			bitmap->effectiveHeight = key.effectiveHeight;
+			bitmap->maskType = static_cast<GlyphMaskType>(key.maskType);
+			bitmap->sdfSpread = key.sdfSpread;
+			bitmap->strokeWidth26Dot6 = key.strokeWidth26Dot6;
 			bitmap->alpha.resize(record.alphaSize);
 			const UInt64 alphaOffset = entry.offset + sizeof(record);
 			if (!ReadPersistentProfileBytes(profile, alphaOffset,
@@ -1942,20 +1970,15 @@ namespace fonthook::vectorfont
 		float fontHeight = 0.0f;
 		bool manualBaseline = false;
 		bool initialized = false;
-		UInt64 contentHash = 0;
+		UInt64 layoutContentHash = 0;
+		UInt64 maskContentHash = 0;
 		std::unique_ptr<PersistentGlyphManifest> manifest;
 	};
 
 	namespace
 	{
-		UInt64 ComputeRuntimeFontContentHash(RuntimeFont& runtime)
+		UInt64 HashRuntimeFontFaces(RuntimeFont& runtime, UInt64 hash)
 		{
-			if (runtime.contentHash)
-				return runtime.contentHash;
-			UInt64 hash = HashBytes64(&kPersistentGlyphManifestVersion,
-				sizeof(kPersistentGlyphManifestVersion));
-			hash = HashBytes64(&runtime.config->styleHash,
-				sizeof(runtime.config->styleHash), hash);
 			for (const RuntimeRole& role : runtime.roles)
 			{
 				const UInt32 count = static_cast<UInt32>(role.faces.size());
@@ -1969,12 +1992,33 @@ namespace fonthook::vectorfont
 					hash = HashBytes64(&faceIndex, sizeof(faceIndex), hash);
 				}
 			}
-			runtime.contentHash = hash ? hash : 1;
-			return runtime.contentHash;
+			return hash ? hash : 1;
+		}
+
+		UInt64 ComputeRuntimeLayoutContentHash(RuntimeFont& runtime)
+		{
+			if (runtime.layoutContentHash)
+				return runtime.layoutContentHash;
+			UInt64 hash = HashBytes64(&kPersistentGlyphManifestVersion,
+				sizeof(kPersistentGlyphManifestVersion));
+			hash = HashBytes64(&runtime.config->layoutHash,
+				sizeof(runtime.config->layoutHash), hash);
+			runtime.layoutContentHash = HashRuntimeFontFaces(runtime, hash);
+			return runtime.layoutContentHash;
+		}
+
+		UInt64 ComputeRuntimeMaskContentHash(RuntimeFont& runtime)
+		{
+			if (runtime.maskContentHash)
+				return runtime.maskContentHash;
+			UInt64 hash = HashBytes64(&runtime.config->maskGenerationHash,
+				sizeof(runtime.config->maskGenerationHash));
+			runtime.maskContentHash = HashRuntimeFontFaces(runtime, hash);
+			return runtime.maskContentHash;
 		}
 
 		PersistentGlyphManifestHeader MakeGlyphManifestHeader(
-			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 contentHash)
+			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 layoutContentHash)
 		{
 			PersistentGlyphManifestHeader header;
 			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'G', 'L', 'Y', '1' };
@@ -1982,8 +2026,8 @@ namespace fonthook::vectorfont
 			header.version = kPersistentGlyphManifestVersion;
 			header.headerSize = sizeof(header);
 			header.manifestHash = manifestHash;
-			header.fontContentHash = contentHash;
-			header.styleHash = runtime.config->styleHash;
+			header.layoutContentHash = layoutContentHash;
+			header.layoutHash = runtime.config->layoutHash;
 			header.fontId = runtime.config->fontId;
 			header.codePage = g_usingWinEncoding;
 			header.entryCount = kPersistentGlyphManifestEntries;
@@ -1994,15 +2038,15 @@ namespace fonthook::vectorfont
 		}
 
 		bool MatchesGlyphManifestHeader(const PersistentGlyphManifestHeader& header,
-			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 contentHash)
+			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 layoutContentHash)
 		{
 			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'G', 'L', 'Y', '1' };
 			return std::memcmp(header.magic, magic, sizeof(magic)) == 0
 				&& header.version == kPersistentGlyphManifestVersion
 				&& header.headerSize == sizeof(header)
 				&& header.manifestHash == manifestHash
-				&& header.fontContentHash == contentHash
-				&& header.styleHash == runtime.config->styleHash
+				&& header.layoutContentHash == layoutContentHash
+				&& header.layoutHash == runtime.config->layoutHash
 				&& header.fontId == runtime.config->fontId
 				&& header.codePage == g_usingWinEncoding
 				&& header.entryCount == kPersistentGlyphManifestEntries
@@ -2016,16 +2060,15 @@ namespace fonthook::vectorfont
 			if (runtime.manifest)
 				return runtime.manifest->mappedData ? runtime.manifest.get() : nullptr;
 			auto manifest = std::make_unique<PersistentGlyphManifest>();
-			const UInt64 contentHash = ComputeRuntimeFontContentHash(runtime);
-			UInt64 manifestHash = HashBytes64(&contentHash, sizeof(contentHash));
-			manifestHash = HashBytes64(&runtime.config->styleHash,
-				sizeof(runtime.config->styleHash), manifestHash);
+			const UInt64 layoutContentHash = ComputeRuntimeLayoutContentHash(runtime);
+			UInt64 manifestHash = HashBytes64(&layoutContentHash,
+				sizeof(layoutContentHash));
 			manifestHash = HashBytes64(&runtime.config->fontId,
 				sizeof(runtime.config->fontId), manifestHash);
 			manifestHash = HashBytes64(&g_usingWinEncoding,
 				sizeof(g_usingWinEncoding), manifestHash);
 			manifest->manifestHash = manifestHash;
-			manifest->fontContentHash = contentHash;
+			manifest->layoutContentHash = layoutContentHash;
 			std::wstring directory;
 			if (!EnsurePersistentBitmapDirectory(directory))
 			{
@@ -2041,6 +2084,7 @@ namespace fonthook::vectorfont
 				L"%u_%ls_%016llX.tnvfmanifest", runtime.config->fontId,
 				primaryName.c_str(), static_cast<unsigned long long>(manifestHash));
 			manifest->path = directory + L"\\" + fileName;
+			s_usedPersistentCachePaths.insert(NormalizePathKey(manifest->path));
 			manifest->file = CreateFileW(manifest->path.c_str(),
 				GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
 				FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -2064,7 +2108,8 @@ namespace fonthook::vectorfont
 			bool valid = GetFileSize64(manifest->file, fileSize)
 				&& fileSize == expectedSize
 				&& ReadFileAt(manifest->file, 0, &header, sizeof(header))
-				&& MatchesGlyphManifestHeader(header, runtime, manifestHash, contentHash);
+				&& MatchesGlyphManifestHeader(header, runtime, manifestHash,
+					layoutContentHash);
 			if (!valid)
 			{
 				if (!manifest->writable)
@@ -2072,7 +2117,8 @@ namespace fonthook::vectorfont
 					runtime.manifest = std::move(manifest);
 					return nullptr;
 				}
-				header = MakeGlyphManifestHeader(runtime, manifestHash, contentHash);
+				header = MakeGlyphManifestHeader(runtime, manifestHash,
+					layoutContentHash);
 				if (!SetFileSize64(manifest->file, 0)
 					|| !SetFileSize64(manifest->file, expectedSize)
 					|| !WriteFileAt(manifest->file, 0, &header, sizeof(header)))
@@ -2134,6 +2180,8 @@ namespace fonthook::vectorfont
 				metrics->fHeight = entry->height;
 				metrics->fTopEdge = entry->topEdge;
 				metrics->fSpacing = entry->spacing;
+				ApplyEffectExtentsToMetrics(*runtime.config,
+					entry->codePoint, *metrics);
 			}
 			role.glyphIdentities.emplace(entry->codePoint, CachedGlyphIdentity{
 				entry->faceIndex, entry->glyphIndex, entry->renderedCodePoint });
@@ -2155,12 +2203,15 @@ namespace fonthook::vectorfont
 			entry.glyphIndex = resolved.glyphIndex;
 			entry.codePoint = glyph.codePoint;
 			entry.renderedCodePoint = resolved.renderedCodePoint;
-			entry.textureIndex = metrics.iTextureIndex;
-			entry.width = metrics.fWidth;
-			entry.leadingEdge = metrics.fLeadingEdge;
-			entry.height = metrics.fHeight;
-			entry.topEdge = metrics.fTopEdge;
-			entry.spacing = metrics.fSpacing;
+			FontLetter bodyMetrics = metrics;
+			RemoveEffectExtentsFromMetrics(*runtime.config,
+				glyph.codePoint, bodyMetrics);
+			entry.textureIndex = bodyMetrics.iTextureIndex;
+			entry.width = bodyMetrics.fWidth;
+			entry.leadingEdge = bodyMetrics.fLeadingEdge;
+			entry.height = bodyMetrics.fHeight;
+			entry.topEdge = bodyMetrics.fTopEdge;
+			entry.spacing = bodyMetrics.fSpacing;
 			entry.checksum = HashBytes64(&entry,
 				offsetof(PersistentGlyphManifestEntry, checksum));
 			std::memcpy(destination, &entry, sizeof(entry));
@@ -2586,6 +2637,9 @@ namespace fonthook::vectorfont
 			bitmap->cacheId = HashBitmapKey(key);
 			bitmap->effectiveWidth = key.effectiveWidth;
 			bitmap->effectiveHeight = key.effectiveHeight;
+			bitmap->maskType = maskType;
+			bitmap->sdfSpread = key.sdfSpread;
+			bitmap->strokeWidth26Dot6 = key.strokeWidth26Dot6;
 			RuntimeRole& role = runtime.roles[static_cast<size_t>(glyph.byteClass)];
 			ResolvedGlyph resolved;
 			if (!ResolveVectorGlyph(runtime, glyph, resolved))
@@ -2972,10 +3026,10 @@ namespace fonthook::vectorfont
 		return *runtime.config;
 	}
 
-	UInt64 GetRuntimeFontContentHash(RuntimeFont& runtime)
+	UInt64 GetRuntimeMaskContentHash(RuntimeFont& runtime)
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
-		return ComputeRuntimeFontContentHash(runtime);
+		return ComputeRuntimeMaskContentHash(runtime);
 	}
 
 	std::wstring GetRuntimePrimaryFontFileName(const RuntimeFont& runtime)
@@ -2990,6 +3044,66 @@ namespace fonthook::vectorfont
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
 		return EnsurePersistentBitmapDirectory(directory);
+	}
+
+	void MarkFreeTypeFontCacheFileUsed(const std::wstring& path)
+	{
+		if (path.empty())
+			return;
+		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		s_usedPersistentCachePaths.insert(NormalizePathKey(path));
+	}
+
+	void DeleteUnusedFreeTypeFontCacheFiles()
+	{
+		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		std::wstring directory;
+		if (!EnsurePersistentBitmapDirectory(directory))
+			return;
+		const std::wstring pattern = directory + L"\\*";
+		WIN32_FIND_DATAW found = {};
+		HANDLE search = FindFirstFileW(pattern.c_str(), &found);
+		if (search == INVALID_HANDLE_VALUE)
+			return;
+		UInt32 deleted = 0;
+		UInt32 failed = 0;
+		UInt64 deletedBytes = 0;
+		auto hasSuffix = [](const std::wstring& value, const wchar_t* suffix)
+		{
+			const size_t length = std::wcslen(suffix);
+			return value.size() >= length
+				&& value.compare(value.size() - length, length, suffix) == 0;
+		};
+		do
+		{
+			if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+				continue;
+			const std::wstring path = directory + L"\\" + found.cFileName;
+			const std::wstring normalized = NormalizePathKey(path);
+			const bool managed = hasSuffix(normalized, L".tnvfmask")
+				|| hasSuffix(normalized, L".tnvfhash")
+				|| hasSuffix(normalized, L".tnvfmanifest")
+				|| hasSuffix(normalized, L".tnvfatlas")
+				|| hasSuffix(normalized, L".tnvfatlas.tmp");
+			if (!managed || s_usedPersistentCachePaths.count(normalized))
+				continue;
+			const UInt64 size = (static_cast<UInt64>(found.nFileSizeHigh) << 32)
+				| found.nFileSizeLow;
+			if (DeleteFileW(path.c_str()))
+			{
+				++deleted;
+				deletedBytes += size;
+			}
+			else
+			{
+				++failed;
+			}
+		} while (FindNextFileW(search, &found));
+		FindClose(search);
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: unused persistent cache cleanup deleted=%u bytes=%llu failed=%u retained=%llu",
+			deleted, static_cast<unsigned long long>(deletedBytes), failed,
+			static_cast<unsigned long long>(s_usedPersistentCachePaths.size()));
 	}
 
 	bool HasCompleteGlyphManifest(RuntimeFont& runtime, FontPrewarmMode mode)
@@ -3078,7 +3192,7 @@ namespace fonthook::vectorfont
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
 		LayoutCacheKey key = {
-			runtime.config->styleHash,
+			runtime.config->layoutHash,
 			runtime.config->fontId,
 			g_usingWinEncoding,
 			allowShaping,
@@ -3116,8 +3230,21 @@ namespace fonthook::vectorfont
 		const VectorEncodedGlyph& glyph, GlyphMeshType meshType)
 	{
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		UInt64 generationHash = runtime.config->maskGenerationHash
+			^ runtime.config->layoutHash;
+		generationHash = HashBytes64(&runtime.config->curveTolerance,
+			sizeof(runtime.config->curveTolerance), generationHash);
+		if (meshType != GlyphMeshType::Fill)
+		{
+			const EffectStyle& effect = meshType == GlyphMeshType::Glow
+				? runtime.config->glow : runtime.config->outline;
+			generationHash = HashBytes64(&effect.enabled,
+				sizeof(effect.enabled), generationHash);
+			generationHash = HashBytes64(&effect.width,
+				sizeof(effect.width), generationHash);
+		}
 		const MeshCacheKey key = {
-			runtime.config->styleHash,
+			generationHash,
 			runtime.config->fontId,
 			glyph.glyphIndex,
 			glyph.faceIndex,
@@ -3323,7 +3450,7 @@ namespace fonthook
 			return false;
 		vectorfont::RuntimeFace& face = role.faces[left.faceIndex];
 		const vectorfont::KerningCacheKey cacheKey = {
-			runtime->config->styleHash, runtime->config->fontId,
+			runtime->config->layoutHash, runtime->config->fontId,
 			left.glyphIndex, right.glyphIndex, left.faceIndex,
 			static_cast<UInt8>(left.byteClass)
 		};

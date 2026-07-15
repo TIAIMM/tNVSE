@@ -138,7 +138,9 @@ namespace fonthook::vectorfont
 		EffectStyle glow;
 		EffectStyle outline;
 		EffectStyle shadow;
-		UInt64 styleHash = 0;
+		UInt64 layoutHash = 0;
+		UInt64 maskGenerationHash = 0;
+		UInt64 shaderEffectHash = 0;
 	};
 
 	struct MeshPoint
@@ -163,6 +165,12 @@ namespace fonthook::vectorfont
 		int top = 0;
 		int effectiveWidth = 0;
 		int effectiveHeight = 0;
+		GlyphMaskType maskType = GlyphMaskType::Fill;
+		UInt8 sdfSpread = 0;
+		SInt32 strokeWidth26Dot6 = 0;
+		bool colorBaked = false;
+		UInt32 bakedRgba = 0;
+		UInt8 bakedLayer = 0;
 		std::vector<UInt8> alpha;
 	};
 
@@ -234,9 +242,11 @@ namespace fonthook::vectorfont
 	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& arRuntime, Font& arFont, UInt32 auiEncodedCode);
 	bool DecodeEncodedGlyph(RuntimeFont& arRuntime, Font& arFont, const char* apText, VectorEncodedGlyph& arGlyph);
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
-	UInt64 GetRuntimeFontContentHash(RuntimeFont& arRuntime);
+	UInt64 GetRuntimeMaskContentHash(RuntimeFont& arRuntime);
 	std::wstring GetRuntimePrimaryFontFileName(const RuntimeFont& arRuntime);
 	bool GetFreeTypeFontCacheDirectory(std::wstring& arDirectory);
+	void MarkFreeTypeFontCacheFileUsed(const std::wstring& arPath);
+	void DeleteUnusedFreeTypeFontCacheFiles();
 	bool HasCompleteGlyphManifest(RuntimeFont& arRuntime, FontPrewarmMode aeMode);
 	void MarkGlyphManifestComplete(RuntimeFont& arRuntime, FontPrewarmMode aeMode);
 	float GetGlyphBaselineOffset(const RuntimeFont& arRuntime,

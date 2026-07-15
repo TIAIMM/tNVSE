@@ -109,7 +109,7 @@ namespace fonthook::vectorfont
 			std::unordered_map<UInt64, std::shared_ptr<const GlyphBitmap>> residentBitmaps;
 		};
 
-		constexpr UInt32 kAtlasSnapshotVersion = 2;
+		constexpr UInt32 kAtlasSnapshotVersion = 3;
 		constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 #pragma pack(push, 1)
 		struct AtlasSnapshotHeader
@@ -118,8 +118,8 @@ namespace fonthook::vectorfont
 			UInt32 version = 0;
 			UInt32 headerSize = 0;
 			UInt64 snapshotHash = 0;
-			UInt64 fontContentHash = 0;
-			UInt64 styleHash = 0;
+			UInt64 maskContentHash = 0;
+			UInt64 atlasContentHash = 0;
 			UInt32 fontId = 0;
 			UInt32 scaleMilli = 0;
 			UInt32 width = 0;
@@ -154,7 +154,7 @@ namespace fonthook::vectorfont
 
 		struct AtlasCacheKey
 		{
-			UInt64 styleHash = 0;
+			UInt64 atlasContentHash = 0;
 			UInt32 fontId = 0;
 			UInt32 scaleMilli = 1000;
 			AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
@@ -164,9 +164,9 @@ namespace fonthook::vectorfont
 
 			bool operator==(const AtlasCacheKey& other) const
 			{
-				return styleHash == other.styleHash && fontId == other.fontId
+				return atlasContentHash == other.atlasContentHash && fontId == other.fontId
 					&& scaleMilli == other.scaleMilli && pixelMode == other.pixelMode
-					&& renderMode == other.renderMode && padding == other.padding
+					&& padding == other.padding
 					&& pageIndex == other.pageIndex;
 			}
 		};
@@ -175,11 +175,11 @@ namespace fonthook::vectorfont
 		{
 			size_t operator()(const AtlasCacheKey& key) const
 			{
-				size_t result = static_cast<size_t>(key.styleHash ^ (key.styleHash >> 32));
+				size_t result = static_cast<size_t>(
+					key.atlasContentHash ^ (key.atlasContentHash >> 32));
 				result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
 				result ^= static_cast<size_t>(key.scaleMilli) * 0x85EBCA77u;
 				result ^= static_cast<size_t>(key.pixelMode) << 4;
-				result ^= static_cast<size_t>(key.renderMode) << 8;
 				result ^= static_cast<size_t>(key.padding) * 0x27D4EB2Du;
 				result ^= static_cast<size_t>(key.pageIndex) * 0x165667B1u;
 				return result;
@@ -633,6 +633,9 @@ namespace fonthook::vectorfont
 					auto baked = std::make_shared<GlyphBitmap>(*quad.bitmap);
 					baked->cacheId = bakedId;
 					baked->atlasRgb = rgba & 0x00FFFFFF;
+					baked->colorBaked = true;
+					baked->bakedRgba = rgba;
+					baked->bakedLayer = static_cast<UInt8>(quad.layer);
 					const float alphaModifier = std::clamp(quad.color.a, 0.0f, 1.0f);
 					for (UInt8& alpha : baked->alpha)
 					{
@@ -1820,6 +1823,164 @@ namespace fonthook::vectorfont
 			return AddBitmapsToManagedAtlas(resource, bitmaps);
 		}
 
+		UInt64 BuildAtlasContentHash(UInt64 maskGenerationHash,
+			UInt8 maskCombination, UInt8 sdfSpread,
+			SInt32 outlineStroke, SInt32 glowStroke, UInt64 cpuCoverageHash,
+			UInt64 bakedColorHash)
+		{
+			UInt64 hash = 1469598103934665603ull;
+			auto add = [&](const void* data, size_t size)
+			{
+				const UInt8* bytes = static_cast<const UInt8*>(data);
+				for (size_t index = 0; index < size; ++index)
+				{
+					hash ^= bytes[index];
+					hash *= 1099511628211ull;
+				}
+			};
+			add(&maskGenerationHash, sizeof(maskGenerationHash));
+			add(&maskCombination, sizeof(maskCombination));
+			add(&sdfSpread, sizeof(sdfSpread));
+			add(&outlineStroke, sizeof(outlineStroke));
+			add(&glowStroke, sizeof(glowStroke));
+			add(&cpuCoverageHash, sizeof(cpuCoverageHash));
+			add(&bakedColorHash, sizeof(bakedColorHash));
+			return hash;
+		}
+
+		UInt64 BuildCpuCoverageHash(const FontConfig& config, float rasterScale)
+		{
+			UInt64 hash = 1469598103934665603ull;
+			auto add = [&](const void* data, size_t size)
+			{
+				const UInt8* bytes = static_cast<const UInt8*>(data);
+				for (size_t index = 0; index < size; ++index)
+				{
+					hash ^= bytes[index];
+					hash *= 1099511628211ull;
+				}
+			};
+			auto addEffect = [&](const EffectStyle& effect)
+			{
+				add(&effect.enabled, sizeof(effect.enabled));
+				if (!effect.enabled)
+					return;
+				const SInt32 width = static_cast<SInt32>(std::lround(
+					effect.width * rasterScale * 64.0f));
+				const SInt32 blur = static_cast<SInt32>(std::lround(
+					effect.blur * rasterScale * 64.0f));
+				const SInt32 inner = static_cast<SInt32>(std::lround(
+					effect.inner * rasterScale * 64.0f));
+				const SInt32 outer = static_cast<SInt32>(std::lround(
+					effect.outer * rasterScale * 64.0f));
+				const SInt32 softness = static_cast<SInt32>(std::lround(
+					effect.softness * rasterScale * 64.0f));
+				add(&width, sizeof(width));
+				add(&blur, sizeof(blur));
+				add(&inner, sizeof(inner));
+				add(&outer, sizeof(outer));
+				add(&softness, sizeof(softness));
+				add(&effect.power, sizeof(effect.power));
+			};
+			addEffect(config.glow);
+			addEffect(config.outline);
+			addEffect(config.shadow);
+			return hash;
+		}
+
+		UInt64 BuildAtlasContentHash(const FontConfig& config,
+			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
+			float rasterScale, AtlasRenderMode renderMode)
+		{
+			UInt8 combination = 0;
+			UInt8 sdfSpread = 0;
+			SInt32 outlineStroke = 0;
+			SInt32 glowStroke = 0;
+			std::vector<UInt64> bakedVariants;
+			for (const auto& bitmap : bitmaps)
+			{
+				if (!bitmap)
+					continue;
+				combination |= static_cast<UInt8>(1u
+					<< static_cast<UInt8>(bitmap->maskType));
+				if (bitmap->maskType == GlyphMaskType::DistanceField)
+					sdfSpread = std::max(sdfSpread, bitmap->sdfSpread);
+				else if (bitmap->maskType == GlyphMaskType::Outline)
+					outlineStroke = bitmap->strokeWidth26Dot6;
+				else if (bitmap->maskType == GlyphMaskType::Glow)
+					glowStroke = bitmap->strokeWidth26Dot6;
+				if (bitmap->colorBaked)
+				{
+					bakedVariants.push_back((static_cast<UInt64>(bitmap->bakedLayer) << 32)
+						| bitmap->bakedRgba);
+				}
+			}
+			std::sort(bakedVariants.begin(), bakedVariants.end());
+			bakedVariants.erase(std::unique(bakedVariants.begin(), bakedVariants.end()),
+				bakedVariants.end());
+			UInt64 bakedColorHash = 1469598103934665603ull;
+			for (UInt64 variant : bakedVariants)
+			{
+				for (size_t index = 0; index < sizeof(variant); ++index)
+				{
+					bakedColorHash ^= reinterpret_cast<const UInt8*>(&variant)[index];
+					bakedColorHash *= 1099511628211ull;
+				}
+			}
+			return BuildAtlasContentHash(config.maskGenerationHash,
+				combination, sdfSpread, outlineStroke, glowStroke,
+				renderMode == AtlasRenderMode::CpuEffects
+					? BuildCpuCoverageHash(config, rasterScale) : 0,
+				bakedColorHash);
+		}
+
+		UInt64 BuildPrewarmAtlasContentHash(const FontConfig& config,
+			float rasterScale, bool shaderEffects)
+		{
+			UInt8 combination = 0;
+			UInt8 sdfSpread = 0;
+			SInt32 outlineStroke = 0;
+			SInt32 glowStroke = 0;
+			auto include = [&](GlyphMaskType type)
+			{
+				combination |= static_cast<UInt8>(1u << static_cast<UInt8>(type));
+			};
+			if (shaderEffects)
+			{
+				if (!UsesSdfFill(config))
+					include(GlyphMaskType::Fill);
+				if (NeedsSdfMask(config))
+				{
+					UInt32 resolvedSpread = 0;
+					if (ResolveSdfSpread(config, rasterScale, resolvedSpread))
+					{
+						include(GlyphMaskType::DistanceField);
+						sdfSpread = static_cast<UInt8>(resolvedSpread);
+					}
+				}
+			}
+			else
+			{
+				include(GlyphMaskType::Fill);
+				if (config.glow.enabled)
+				{
+					include(GlyphMaskType::Glow);
+					glowStroke = static_cast<SInt32>(std::lround(
+						config.glow.width * rasterScale * 64.0f));
+				}
+				if (config.outline.enabled)
+				{
+					include(GlyphMaskType::Outline);
+					outlineStroke = static_cast<SInt32>(std::lround(
+						config.outline.width * rasterScale * 64.0f));
+				}
+			}
+			return BuildAtlasContentHash(config.maskGenerationHash,
+				combination, sdfSpread, outlineStroke, glowStroke,
+				shaderEffects ? 0 : BuildCpuCoverageHash(config, rasterScale),
+				1469598103934665603ull);
+		}
+
 		std::vector<std::shared_ptr<AtlasResource>> GetAtlasResources(
 			const FontConfig& config, float rasterScale,
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
@@ -1827,7 +1988,7 @@ namespace fonthook::vectorfont
 			UInt32 padding)
 		{
 			const AtlasCacheKey baseKey = {
-				config.styleHash,
+				BuildAtlasContentHash(config, bitmaps, rasterScale, renderMode),
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
 				pixelMode,
@@ -1840,10 +2001,10 @@ namespace fonthook::vectorfont
 			for (auto& pair : s_atlasCache)
 			{
 				const AtlasCacheKey& key = pair.first;
-				if (key.styleHash == baseKey.styleHash && key.fontId == baseKey.fontId
+				if (key.atlasContentHash == baseKey.atlasContentHash
+					&& key.fontId == baseKey.fontId
 					&& key.scaleMilli == baseKey.scaleMilli
 					&& key.pixelMode == baseKey.pixelMode
-					&& key.renderMode == baseKey.renderMode
 					&& key.padding == baseKey.padding && pair.second.resource)
 					entries.push_back({ key, &pair.second });
 			}
@@ -2728,7 +2889,7 @@ namespace fonthook::vectorfont
 				&& !ResolveSdfSpread(config, rasterScale, sdfSpread))
 				shaderEffects = false;
 			key = {
-				config.styleHash,
+				BuildPrewarmAtlasContentHash(config, rasterScale, shaderEffects),
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
 				AtlasPixelMode::A8,
@@ -2739,17 +2900,21 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		UInt64 GetAtlasSnapshotHash(const AtlasCacheKey& key, UInt64 contentHash)
+		UInt64 GetAtlasSnapshotHash(const AtlasCacheKey& key, UInt64 maskContentHash,
+			FontPrewarmMode prewarmMode)
 		{
 			UInt64 hash = HashAtlasBytes(&kAtlasSnapshotVersion,
 				sizeof(kAtlasSnapshotVersion));
-			hash = HashAtlasBytes(&contentHash, sizeof(contentHash), hash);
-			hash = HashAtlasBytes(&key.styleHash, sizeof(key.styleHash), hash);
+			hash = HashAtlasBytes(&maskContentHash, sizeof(maskContentHash), hash);
+			hash = HashAtlasBytes(&key.atlasContentHash,
+				sizeof(key.atlasContentHash), hash);
 			hash = HashAtlasBytes(&key.fontId, sizeof(key.fontId), hash);
 			hash = HashAtlasBytes(&key.scaleMilli, sizeof(key.scaleMilli), hash);
 			hash = HashAtlasBytes(&key.pixelMode, sizeof(key.pixelMode), hash);
-			hash = HashAtlasBytes(&key.renderMode, sizeof(key.renderMode), hash);
 			hash = HashAtlasBytes(&key.padding, sizeof(key.padding), hash);
+			hash = HashAtlasBytes(&g_usingWinEncoding,
+				sizeof(g_usingWinEncoding), hash);
+			hash = HashAtlasBytes(&prewarmMode, sizeof(prewarmMode), hash);
 			hash = HashAtlasBytes(&kMaximumAtlasMipLevels,
 				sizeof(kMaximumAtlasMipLevels), hash);
 			return HashAtlasBytes(&A8ShapeColorContract::kTileUniformColorAbi,
@@ -2757,19 +2922,22 @@ namespace fonthook::vectorfont
 		}
 
 		std::wstring GetAtlasSnapshotPath(RuntimeFont& runtime,
-			const AtlasCacheKey& key, UInt64& snapshotHash, UInt64& contentHash)
+			const AtlasCacheKey& key, UInt64& snapshotHash, UInt64& maskContentHash)
 		{
 			std::wstring directory;
 			if (!GetFreeTypeFontCacheDirectory(directory))
 				return {};
-			contentHash = GetRuntimeFontContentHash(runtime);
-			snapshotHash = GetAtlasSnapshotHash(key, contentHash);
+			maskContentHash = GetRuntimeMaskContentHash(runtime);
+			snapshotHash = GetAtlasSnapshotHash(key, maskContentHash,
+				GetRuntimeConfig(runtime).prewarm);
 			wchar_t fileName[256] = {};
 			const std::wstring fontName = GetRuntimePrimaryFontFileName(runtime);
 			_snwprintf_s(fileName, _countof(fileName), _TRUNCATE,
 				L"%u_%ls_%016llX_p%u.tnvfatlas", key.fontId, fontName.c_str(),
 				static_cast<unsigned long long>(snapshotHash), key.pageIndex);
-			return directory + L"\\" + fileName;
+			const std::wstring path = directory + L"\\" + fileName;
+			MarkFreeTypeFontCacheFileUsed(path);
+			return path;
 		}
 
 		bool BuildAtlasSnapshotPixels(const AtlasResource& resource,
@@ -2858,7 +3026,7 @@ namespace fonthook::vectorfont
 		if (!ResolvePrewarmAtlasKey(config, rasterScale, key))
 			return false;
 		UInt64 snapshotHash = 0;
-		UInt64 contentHash = 0;
+		UInt64 maskContentHash = 0;
 		std::vector<std::pair<AtlasCacheKey, std::shared_ptr<AtlasResource>>> pages;
 		UInt64 totalBytes = 0;
 		UInt64 totalPlacements = 0;
@@ -2876,16 +3044,17 @@ namespace fonthook::vectorfont
 			if (pageIndex == 0)
 			{
 				snapshotHash = pageSnapshotHash;
-				contentHash = pageContentHash;
+				maskContentHash = pageContentHash;
 			}
 			std::vector<UInt8> serialized;
-			if (pageSnapshotHash != snapshotHash || pageContentHash != contentHash
+			if (pageSnapshotHash != snapshotHash
+				|| pageContentHash != maskContentHash
 				|| !ReadSnapshotFile(path, serialized)
 				|| serialized.size() < sizeof(AtlasSnapshotHeader))
 				return false;
 			AtlasSnapshotHeader header;
 			std::memcpy(&header, serialized.data(), sizeof(header));
-			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '2' };
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '3' };
 			const UInt64 placementsBytes = static_cast<UInt64>(header.placementCount)
 				* sizeof(AtlasSnapshotPlacement);
 			const UInt64 expectedSize = sizeof(header) + placementsBytes + header.pixelBytes;
@@ -2893,11 +3062,11 @@ namespace fonthook::vectorfont
 				|| header.version != kAtlasSnapshotVersion
 				|| header.headerSize != sizeof(header)
 				|| header.snapshotHash != snapshotHash
-				|| header.fontContentHash != contentHash
-				|| header.styleHash != pageKey.styleHash || header.fontId != pageKey.fontId
+				|| header.maskContentHash != maskContentHash
+				|| header.atlasContentHash != pageKey.atlasContentHash
+				|| header.fontId != pageKey.fontId
 				|| header.scaleMilli != pageKey.scaleMilli
 				|| header.pixelMode != static_cast<UInt8>(pageKey.pixelMode)
-				|| header.renderMode != static_cast<UInt8>(pageKey.renderMode)
 				|| header.padding != pageKey.padding || expectedSize != serialized.size()
 				|| header.pageIndex != pageIndex || !header.pageCount
 				|| header.pageCount > kMaximumAtlasSnapshotPages
@@ -2980,8 +3149,8 @@ namespace fonthook::vectorfont
 		if (!ResolvePrewarmAtlasKey(config, rasterScale, key))
 			return false;
 		UInt64 snapshotHash = 0;
-		UInt64 contentHash = 0;
-		if (GetAtlasSnapshotPath(runtime, key, snapshotHash, contentHash).empty())
+		UInt64 maskContentHash = 0;
+		if (GetAtlasSnapshotPath(runtime, key, snapshotHash, maskContentHash).empty())
 			return false;
 		struct SnapshotPage
 		{
@@ -2998,10 +3167,10 @@ namespace fonthook::vectorfont
 			for (const auto& pair : s_atlasCache)
 			{
 				const AtlasCacheKey& candidate = pair.first;
-				if (candidate.styleHash == key.styleHash && candidate.fontId == key.fontId
+				if (candidate.atlasContentHash == key.atlasContentHash
+					&& candidate.fontId == key.fontId
 					&& candidate.scaleMilli == key.scaleMilli
 					&& candidate.pixelMode == key.pixelMode
-					&& candidate.renderMode == key.renderMode
 					&& candidate.padding == key.padding && pair.second.resource)
 					resources.push_back({ candidate, pair.second.resource.get() });
 			}
@@ -3028,13 +3197,13 @@ namespace fonthook::vectorfont
 					{
 						return lhs.cacheId < rhs.cacheId;
 					});
-				const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '2' };
+				const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '3' };
 				std::memcpy(page.header.magic, magic, sizeof(magic));
 				page.header.version = kAtlasSnapshotVersion;
 				page.header.headerSize = sizeof(page.header);
 				page.header.snapshotHash = snapshotHash;
-				page.header.fontContentHash = contentHash;
-				page.header.styleHash = page.key.styleHash;
+				page.header.maskContentHash = maskContentHash;
+				page.header.atlasContentHash = page.key.atlasContentHash;
 				page.header.fontId = page.key.fontId;
 				page.header.scaleMilli = page.key.scaleMilli;
 				page.header.width = resource.width;
@@ -3069,7 +3238,7 @@ namespace fonthook::vectorfont
 			page.path = GetAtlasSnapshotPath(runtime, page.key,
 				ignoredSnapshotHash, ignoredContentHash);
 			if (page.path.empty() || ignoredSnapshotHash != snapshotHash
-				|| ignoredContentHash != contentHash)
+				|| ignoredContentHash != maskContentHash)
 				return false;
 			const std::wstring temporary = page.path + L".tmp";
 			HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr,
