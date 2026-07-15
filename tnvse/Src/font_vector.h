@@ -54,11 +54,13 @@ namespace fonthook
 	void ShutdownFreeTypeDefaultPoolAtlas();
 	void PumpFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
+	void FlushFreeTypePersistentFontCache();
 	void UpdateFreeTypeDevicePixelScale();
-	bool TryGetFreeTypeDevicePixelScale(float& arScale);
+	bool TryGetFreeTypeSourceRasterScale(float& arScale);
 	float ResolveFreeTypeRasterScale(float afLocalScale = 1.0f);
 	float ConsumeFreeTypeCreateTextScale();
 	void FreeTypeCreateTextEntryHook();
+	bool IsFreeTypeEffectSuppressionActive();
 	bool InitializeFreeTypeVectorRenderer();
 	bool ActivateFreeTypeFont(Font* apFont, bool abForce = false);
 	bool IsFreeTypeFontActive(const Font* apFont);

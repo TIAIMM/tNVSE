@@ -7,8 +7,111 @@
 #include "text_hooks.h"
 #include "tnvse.h"
 
+#include "TileText.hpp"
+
+#include <cstring>
+
 namespace fonthook
 {
+	namespace
+	{
+		constexpr SIZE_T kTileTextMakeNodeVTableEntry = 0x1094880;
+		constexpr SIZE_T kVanillaTileTextMakeNode = 0xA21AF0;
+		using TileTextMakeNodeFn = NiNode* (__thiscall*)(TileText*);
+
+		TileTextMakeNodeFn s_tileTextMakeNode = nullptr;
+		thread_local UInt32 s_effectSuppressionDepth = 0;
+		bool s_loggedVuiShadowSuppression = false;
+		bool s_loggedVuiOutlineSuppression = false;
+
+		bool IsVuiEffectProxy(const TileText* tile, bool& isOutline)
+		{
+			// VUI+'s Prefabs/VUI+/outline.xml implements its original-style dark
+			// shadow/outline by cloning the source text into these two named tiles.
+			// They must keep their fill and Tile color, but must not recursively gain
+			// the configured tNVSE font effects of their own.
+			isOutline = false;
+			if (!tile)
+				return false;
+			const char* name = tile->strName.c_str();
+			if (!name)
+				return false;
+			if (_stricmp(name, "VUI+Shadow") == 0)
+				return true;
+			if (_stricmp(name, "VUI+Outline") == 0)
+			{
+				isOutline = true;
+				return true;
+			}
+			return false;
+		}
+
+		class ScopedEffectSuppression
+		{
+		public:
+			explicit ScopedEffectSuppression(bool suppress) : m_suppress(suppress)
+			{
+				if (m_suppress)
+					++s_effectSuppressionDepth;
+			}
+
+			~ScopedEffectSuppression()
+			{
+				if (m_suppress)
+					--s_effectSuppressionDepth;
+			}
+
+		private:
+			bool m_suppress;
+		};
+
+		NiNode* __fastcall TileTextMakeNodeHook(TileText* tile, void*)
+		{
+			bool isOutline = false;
+			const bool suppress = IsVuiEffectProxy(tile, isOutline);
+			if (suppress)
+			{
+				bool& logged = isOutline
+					? s_loggedVuiOutlineSuppression : s_loggedVuiShadowSuppression;
+				if (!logged)
+				{
+					logged = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: suppressing configured effects for VUI+ proxy tile=%s",
+						tile->strName.c_str());
+				}
+			}
+			ScopedEffectSuppression scope(suppress);
+			return s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
+		}
+
+		void InstallVuiEffectProxyCompatibility()
+		{
+			const SIZE_T current = *reinterpret_cast<const SIZE_T*>(
+				kTileTextMakeNodeVTableEntry);
+			const SIZE_T hook = reinterpret_cast<SIZE_T>(&TileTextMakeNodeHook);
+			if (current == hook)
+				return;
+			if (!current)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: VUI+ effect proxy compatibility skipped; TileText::MakeNode is null");
+				return;
+			}
+			s_tileTextMakeNode = reinterpret_cast<TileTextMakeNodeFn>(current);
+			SafeWrite32(kTileTextMakeNodeVTableEntry, hook);
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: VUI+ effect proxy compatibility installed entry=%08X target=%08X chained=%d",
+				static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
+				static_cast<UInt32>(current), current != kVanillaTileTextMakeNode ? 1 : 0);
+		}
+	}
+
+	bool IsFreeTypeEffectSuppressionActive()
+	{
+		return s_effectSuppressionDepth != 0;
+	}
+
 	void InitBigGunsDescHooks()
 	{
 		static std::string sConvertedBigGunsDesc = UTF8ToMultiByteStr(g_sNewBigGunsDesc, g_usingWinEncoding);
@@ -39,6 +142,8 @@ namespace fonthook
 
 	void InitFontHook()
 	{
+		InstallVuiEffectProxyCompatibility();
+
 		WriteRelJumpEx(0xA12020, &FontEx::FontInit);
 		WriteRelJumpEx(0xA15320, &FontEx::Load);
 		WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);

@@ -2,191 +2,111 @@
 <tNVSE>
   <fonts>
     <!--
-      Requirements: bEnableMultibyteFontHook=1 and
-                    bEnableFreeTypeFontRendering=1 in tnvse.ini.
-      Only font IDs listed in this file are handled by FreeType. Unlisted IDs
-      continue to use the original .fnt/.tex renderer. If an ID is configured
-      more than once, the last configuration replaces earlier ones.
+      Configuration reference
 
-      1. <font> attributes
+      Only listed font IDs are configured. If an ID appears more than once,
+      the last entry wins.
+
+      <font> attributes
 
       id
-        Required positive integer identifying the game font slot. Common
-        Fallout: New Vegas font slots are:
+        Required positive game font slot. Common slots:
         1 = Glow_Monofonto_Large
         2 = Monofonto_Large
         3 = Glow_Monofonto_Medium
         4 = Monofonto_VeryLarge02_Dialogs2
-        5 = Fixedsys_Comp_uniform_width (terminal font)
+        5 = Fixedsys_Comp_uniform_width
         6 = Glow_Monofonto_VL_dialogs
         7 = Baked-in_Monofonto_Large
         8 = Glow_Futura_Caps_Large
 
       pixelSize
-        Font size in pixels. Must be greater than 0. This is the default for
-        both singleByte and doubleByte.
+        Font size in pixels; must be greater than 0.
       tracking
-        Additional character spacing in pixels. May be positive, zero, or
-        negative. Default: 0.
+        Additional character spacing in pixels. Default: 0.
       fixedWidth
-        Fixed logical cell width in pixels. 0 keeps proportional advances and
-        is the default. A positive value centers each glyph body in a cell of
-        this width, disables kerning and HarfBuzz shaping for that byte class,
-        and makes its final advance fixedWidth + tracking. This follows the
-        fixed-font behavior used by DCFGCF and is intended for grid-based UI
-        such as the terminal hacking screen.
+        Logical cell width in pixels. 0 selects proportional advances;
+        positive values select a fixed cell. Default: 0.
       scaleX / scaleY
-        Horizontal and vertical glyph scale. Must be greater than 0.
-        Default: 1.
+        Horizontal and vertical glyph scale; must be greater than 0. Default: 1.
       embolden
-        FreeType outline emboldening in pixels. Must be 0 or greater.
-        Default: 0. There is no weight attribute; use embolden or select a
-        bold font file.
+        Outline emboldening in pixels; must be 0 or greater. Default: 0.
       slant
-        Slant angle in degrees, clamped to the range -45 through 45.
-        Positive values slant to the right. Default: 0. There is no italic
-        attribute.
+        Slant angle in degrees from -45 through 45. Default: 0.
       baselineOffset
-        Vertical baseline adjustment in pixels. May be positive or negative.
-        Default: 0.
+        Per-glyph vertical adjustment in pixels; may be negative. Default: 0.
       verticalMetrics
-        Selects the aggregate line-box source. "freetype" derives fBaseLine,
-        fFontHeight, fMaxDrop, and space height from the configured faces and
-        is the backward-compatible default. "original" preserves the line box
-        loaded from the original .fnt while FreeType and HarfBuzz continue to
-        position the actual glyphs. This attribute is read only from <font>.
+        "freetype" derives the line box from configured faces and is the
+        default. "original" preserves the original .fnt line box.
       baseline
-        Fallout fBaseLine (line rise/ascent) in pixels; it is not the total
-        line-box height. In verticalMetrics="original" mode, 0 inherits the
-        original .fnt baseline and a positive value takes priority over it.
-        In verticalMetrics="freetype" mode, 0 derives it from both byte
-        classes. Positive values round upward to the game's integer metric.
-        Original mode retains automatic visual-center correction between byte
-        classes even with a manual baseline. This attribute is read only from
-        <font> and cannot be overridden per byte class. Default: 0.
+        Fallout line rise/ascent in pixels. 0 derives or inherits it according
+        to verticalMetrics; a positive value overrides it. Default: 0.
       curveTolerance
-        Curve-flattening tolerance for the vector fallback path. Minimum:
-        0.01. Default: 0.35. The normal atlas paths do not use it.
+        Curve-flattening tolerance; minimum 0.01. Default: 0.35.
       shaping
-        0 uses precise FreeType 26.6 advances and FT_Get_Kerning. 1 enables
-        HarfBuzz GSUB/GPOS for ordinary Font text. Default: 0. Rich text keeps
-        one CharData per encoded character and does not use GSUB substitutions.
+        0 selects FreeType advances/kerning. 1 enables HarfBuzz shaping.
+        Default: 0.
       features
-        Optional comma-separated HarfBuzz feature overrides, for example
-        "kern,liga,clig,calt,ss01=1,-dlig". Unspecified features retain the
-        HarfBuzz script defaults. Requires shaping="1". Invalid tokens reject
-        the complete font ID configuration.
+        Optional comma-separated HarfBuzz features, for example
+        "kern,liga,clig,calt,ss01=1,-dlig". Requires shaping="1".
       prewarm
-        Optional startup atlas prewarming mode. "none" disables prewarming
-        and is the default. "common" incrementally prepares all valid
-        single-byte units and up to 7000 valid double-byte units from the code
-        page's standard common-character region. "codepage"
-        incrementally prepares the explicit encoding ranges used by DCFGCF for
-        the current uiEncoding code page. CP936 uses DCFGCF's complete GBK
-        profile rather than its smaller GB2312 profile. Work is limited to a
-        small batch per frame. Only raster scale 1.0 is prepared; UIO-derived
-        sizes remain demand-driven. If the atlas reaches its maximum size,
-        prewarming for that font stops safely.
+        "none" disables startup prewarming and is the default. "common"
+        prepares all valid single-byte units and up to 7000 common double-byte
+        units. "codepage" prepares the configured code-page profile.
       fillRenderMode
-        Selects fill mask rendering for the entire font ID. "grayscale" keeps
-        the hinted FreeType grayscale bitmap and is the parser default. "sdf"
-        uses the shared FreeType distance field for the fill and enabled SDF
-        effects. SDF fill requires the A8 custom shader path; if that path is
-        unavailable, the fill safely falls back to grayscale. This attribute
-        cannot be overridden by singleByte or doubleByte.
+        "grayscale" selects hinted grayscale fill and is the default. "sdf"
+        selects SDF fill.
       effectQuality
-        Shader effect sampling preset: "fast", "balanced", or "high".
-        Default: "balanced". The presets use 1, 4, or 8 subpixel samples for
-        SDF fill, glow, outline, and blurred shadow edges. Grayscale fill remains
-        the hinted FreeType bitmap at every quality level. This attribute
-        affects only the A8 PS 3.0 shader path; CPU fallback rendering remains
-        available.
+        "fast", "balanced", or "high". Default: "balanced".
       fontColor
-        Optional fill-color override in #RRGGBB format. When omitted, the
-        renderer uses a white modifier and keeps the text color supplied by
-        the game's Tile tint. XML RGB values multiply that Tile tint.
+        Optional fill-color override in #RRGGBB format.
       fontAlpha
-        Alpha for fontColor, clamped to the range 0 through 1. Default: 1.
-        It is used only when fontColor is present.
+        Alpha used with fontColor, clamped from 0 through 1. Default: 1.
 
-      2. Single-byte and double-byte font groups
+      <singleByte> and <doubleByte>
 
-      <singleByte> handles valid single-byte encoding units in uiEncoding.
-      <doubleByte> handles valid DBCS two-byte encoding units in uiEncoding.
-      Shift-JIS half-width katakana use singleByte. Routing is based on the
-      encoded byte length, not the Unicode range or glyph availability.
-
-      singleByte and doubleByte may independently override these <font>
-      attributes:
+      singleByte handles valid one-byte units; doubleByte handles valid DBCS
+      two-byte units. Each may override:
         pixelSize, tracking, fixedWidth, scaleX, scaleY, embolden, slant,
         baselineOffset
+      Unspecified values inherit from <font>. Other <font> attributes and all
+      effect nodes apply to the complete font ID.
 
-      Attributes not overridden by a byte class are inherited from <font>.
-      shaping, features, verticalMetrics, baseline, curveTolerance, fontColor,
-      fontAlpha, fillRenderMode, effectQuality, glow, outline, and shadow apply
-      to the entire font ID and cannot be overridden per group.
-
-      3. Font files and fallback chains
+      Font files
 
       <face path="..." index="0"/>
-        Primary font. Every resolved byte class must have one primary face.
+        Required primary font for each resolved byte class.
       <fallback path="..." index="0"/>
-        Optional fallback font. Multiple fallbacks may be listed in lookup
-        order.
-
+        Optional fallback; multiple entries are tried in document order.
       path
-        May be absolute or relative to the FalloutNV.exe directory. Forward
-        and backward slashes are accepted. Relative paths can be redirected
-        through the MO2 virtual file system.
+        Absolute or relative to FalloutNV.exe; either slash style is accepted.
       index
-        Face index inside the font collection. Default: 0. It must be 0 or
-        greater. Regular TTF/OTF files normally use 0; TTC/OTC collections
-        may use another index to select a contained face.
+        Non-negative face index for TTF/OTF/TTC/OTC files. Default: 0.
 
-      A face/fallback chain directly under <font> is the default for both byte
-      classes. A byte class with no face or fallback children inherits that
-      chain. If a byte class contains any face or fallback child, its complete
-      chain replaces the parent chain and it must provide a valid <face>.
-      Glyph lookup never falls back across byte classes.
+      A face chain directly under <font> is inherited by both byte classes.
+      A byte class containing any face/fallback child replaces the inherited
+      chain and must contain a valid <face>.
 
-      4. Font effects
+      Effects
 
-      <glow enabled="1" inner="0" outer="4" power="2"
-            color="#FFFFFF" alpha="0.35"/>
-        inner: distance from the glyph edge that retains full intensity.
-               Default: 0.
-        outer: maximum outward distance. It must be greater than inner when
-               the effect is enabled.
-        power: positive falloff exponent. Default: 2. Larger values keep the
-               glow more concentrated near the glyph edge.
-        width: legacy alias for outer. It is accepted only when outer is not
-               present. Specifying both width and outer rejects the font ID.
+      Every effect node accepts enabled, color="#RRGGBB", and alpha="0..1".
+      A present node defaults to enabled; an absent node is disabled. Default
+      color is #000000 and default alpha is 1.
 
-      <outline enabled="1" width="1" softness="0.5"
-               color="#000000" alpha="1"/>
-        width: outer outline width. It must be greater than 0 when enabled.
-        softness: non-negative outer-edge transition width. Default: 0.5.
+      <glow inner="0" outer="4" power="2"/>
+        inner: full-intensity distance. Default: 0.
+        outer: maximum distance; must be greater than inner when enabled.
+        power: positive falloff exponent. Default: 2.
+        width: legacy alias for outer; do not specify both.
 
-      <shadow enabled="1" x="1" y="1" blur="2" power="2"
-              color="#000000" alpha="0.65"/>
-        x / y: shadow offsets; may be positive or negative. Default: 0.
-        blur: non-negative blur radius. A value of 0 uses the exact hinted
-              grayscale mask instead of the distance field. Default: 0.
-        power: positive falloff exponent for blurred shadows. Default: 2.
+      <outline width="1" softness="0.5"/>
+        width: positive outline width when enabled.
+        softness: non-negative edge transition. Default: 0.5.
 
-      For every effect, enabled="0" disables it and a present node defaults
-      to enabled when the attribute is omitted. color accepts #RRGGBB and
-      defaults to #000000. alpha is clamped to 0 through 1 and defaults to 1;
-      alpha=0 disables the effect. All distances are logical pixels and are
-      multiplied by the final device/UIO raster scale. Glow, outline, and
-      blurred shadow share a single FreeType bitmap SDF. The physical SDF
-      spread must resolve to 2 through 32 pixels; otherwise that text batch
-      uses the CPU effect path without reducing the requested radius.
-
-      An absent glow, outline, or shadow node disables that effect. Effect
-      alpha and fontAlpha are multiplied by Tile c0 alpha supplied by the
-      game. Effect RGB is multiplied by Tile c0 RGB. All custom FreeType
-      shaders use this uniform-color contract and do not read COLOR0.
+      <shadow x="1" y="1" blur="2" power="2"/>
+        x / y: signed offsets. Default: 0.
+        blur: non-negative blur radius. Default: 0.
+        power: positive falloff exponent. Default: 2.
     -->
 
     <!-- 1: Glow_Monofonto_Large -->

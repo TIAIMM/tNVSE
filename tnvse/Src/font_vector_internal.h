@@ -19,6 +19,12 @@ namespace fonthook::vectorfont
 		KerningHit,
 		KerningMiss,
 		BitmapMemoryHit,
+		BitmapCrossFontHit,
+		BitmapDiskHit,
+		BitmapDiskMiss,
+		BitmapDiskWrite,
+		BitmapDiskReadBytes,
+		BitmapDiskWriteBytes,
 		BitmapRasterized,
 		AtlasHit,
 		AtlasCreated,
@@ -157,7 +163,6 @@ namespace fonthook::vectorfont
 		int top = 0;
 		int effectiveWidth = 0;
 		int effectiveHeight = 0;
-		float baselineOffset = 0.0f;
 		std::vector<UInt8> alpha;
 	};
 
@@ -168,6 +173,7 @@ namespace fonthook::vectorfont
 		UInt32 startIndex = 0;
 		UInt32 primitiveCount = 0;
 		UInt32 layer = 3;
+		UInt16 atlasPage = 0;
 		bool usesSdf = false;
 		NiColorA colorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 	};
@@ -189,6 +195,13 @@ namespace fonthook::vectorfont
 		float glowPower = 2.0f;
 		float outlineWidthPixels = 0.0f;
 		float outlineSoftnessPixels = 0.5f;
+		// Retain every page property for the lifetime of the shape. This is
+		// required by the DEFAULT-pool reset/retirement path; page 0 is already a
+		// shape property, but secondary page textures otherwise have no property
+		// reference that the reset tracker can observe.
+		std::vector<NiTexturingPropertyPtr> atlasProperties;
+		std::vector<NiTexturePtr> atlasTextures;
+		std::vector<NiPoint2> atlasInverseSizes;
 		std::vector<A8DrawRange> ranges;
 	};
 
@@ -221,25 +234,36 @@ namespace fonthook::vectorfont
 	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& arRuntime, Font& arFont, UInt32 auiEncodedCode);
 	bool DecodeEncodedGlyph(RuntimeFont& arRuntime, Font& arFont, const char* apText, VectorEncodedGlyph& arGlyph);
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
+	UInt64 GetRuntimeFontContentHash(RuntimeFont& arRuntime);
+	std::wstring GetRuntimePrimaryFontFileName(const RuntimeFont& arRuntime);
+	bool GetFreeTypeFontCacheDirectory(std::wstring& arDirectory);
+	bool HasCompleteGlyphManifest(RuntimeFont& arRuntime, FontPrewarmMode aeMode);
+	void MarkGlyphManifestComplete(RuntimeFont& arRuntime, FontPrewarmMode aeMode);
+	float GetGlyphBaselineOffset(const RuntimeFont& arRuntime,
+		VectorFontByteClass aeByteClass);
 	std::shared_ptr<const GlyphMesh> GetGlyphMesh(RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph, GlyphMeshType aeMeshType);
 	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph, GlyphMaskType aeMaskType, float afRasterScale,
 		UInt32 auiSdfSpread = 0);
+	void FlushGlyphBitmapDiskCache();
 	bool UsesSdfFill(const FontConfig& arConfig);
 	bool HasSdfEffects(const FontConfig& arConfig);
 	bool NeedsSdfMask(const FontConfig& arConfig);
-	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread);
+	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread,
+		bool abIncludeEffects = true);
 	bool ResolvePrewarmGlyph(RuntimeFont& arRuntime, const char* apBytes,
 		size_t auiLength, VectorEncodedGlyph& arGlyph);
 	bool PrewarmGlyphAtlas(RuntimeFont& arRuntime,
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& arBitmaps,
 		float afRasterScale);
+	bool TryLoadGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
+	bool SaveGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	void QueueFontPrewarm(UInt32 auiFontId);
 	void PumpFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
-		bool abPrepareObject, const NiColorA& arTileColor);
+		bool abPrepareObject, const NiColorA& arTileColor, bool abSuppressEffects);
 	bool IsA8RendererAvailable();
 	bool IsAtlasRangeRendererAvailable();
 	bool IsA8EffectRendererAvailable(EffectQuality aeQuality);

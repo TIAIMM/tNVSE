@@ -620,6 +620,7 @@ namespace fonthook
 		bool prepareObject = false;
 		bool available = false;
 		bool finished = false;
+		bool suppressEffects = false;
 		float rasterScale = 1.0f;
 		NiColorA tileColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 		std::array<LayerGeometry, kVectorLayerCount> layers;
@@ -628,6 +629,7 @@ namespace fonthook
 		Impl(Font* apFont, bool abPrepareObject, float afRasterScale,
 			const NiColorA* apTileColor)
 			: font(apFont), prepareObject(abPrepareObject),
+			suppressEffects(IsFreeTypeEffectSuppressionActive()),
 			rasterScale(std::isfinite(afRasterScale) && afRasterScale >= 0.1f
 				&& afRasterScale <= 10.0f ? afRasterScale : 1.0f),
 			tileColor(apTileColor ? *apTileColor
@@ -701,7 +703,8 @@ namespace fonthook
 
 		if (NiTriShape* atlasShape = vectorfont::TryCreateGlyphAtlasShape(
 			*m_impl->font, *m_impl->runtime, m_impl->glyphs,
-			m_impl->rasterScale, m_impl->prepareObject, m_impl->tileColor))
+			m_impl->rasterScale, m_impl->prepareObject, m_impl->tileColor,
+			m_impl->suppressEffects))
 		{
 			return atlasShape;
 		}
@@ -719,14 +722,14 @@ namespace fonthook
 					"fill tessellation failed");
 				continue;
 			}
-			if (config.shadow.enabled && !fill->vertices.empty())
+			if (!m_impl->suppressEffects && config.shadow.enabled && !fill->vertices.empty())
 			{
 				AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Shadow)],
 					VectorLayer::Shadow, *fill, instance.pen,
 					ResolveEffectColor(config.shadow, color, m_impl->tileColor),
 					config.shadow.x, config.shadow.y);
 			}
-			if (config.glow.enabled)
+			if (!m_impl->suppressEffects && config.glow.enabled)
 			{
 				auto glow = vectorfont::GetGlyphMesh(*m_impl->runtime,
 					instance.glyph, vectorfont::GlyphMeshType::Glow);
@@ -735,7 +738,7 @@ namespace fonthook
 						VectorLayer::Glow, *glow, instance.pen,
 						ResolveEffectColor(config.glow, color, m_impl->tileColor), 0.0f, 0.0f);
 			}
-			if (config.outline.enabled)
+			if (!m_impl->suppressEffects && config.outline.enabled)
 			{
 				auto outline = vectorfont::GetGlyphMesh(*m_impl->runtime,
 					instance.glyph, vectorfont::GlyphMeshType::Outline);

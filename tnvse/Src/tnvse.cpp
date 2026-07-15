@@ -54,6 +54,7 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_ExitGame
 		|| g_msg->type == NVSEMessagingInterface::kMessage_ExitGame_Console))
 	{
+		fonthook::FlushFreeTypePersistentFontCache();
 		fonthook::ShutdownFreeTypeDefaultPoolAtlas();
 	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit

@@ -1,6 +1,8 @@
 #include "load_config.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 UINT32 g_uiEncoding;
@@ -10,6 +12,7 @@ bool g_bEnableMultibyteFontHook;
 bool g_bEnableFreeTypeFontRendering;
 bool g_bEnableFreeTypeFontRenderingLog;
 bool g_bEnableFreeTypeDevicePixelScale;
+float g_fFreeTypeFontResolutionScale;
 UINT32 g_uiFreeTypeFontMemoryCacheMB;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
@@ -82,6 +85,23 @@ namespace
 		}
 		GetPrivateProfileString(section, key, defaultValue, buffer, bufferSize, filename);
 	}
+
+	float ReadConfigFloat(const char* section, const char* legacySection,
+		const char* key, float defaultValue, const char* filename)
+	{
+		char defaultBuffer[32] = {};
+		_snprintf_s(defaultBuffer, _countof(defaultBuffer), _TRUNCATE,
+			"%.6g", defaultValue);
+		char value[64] = {};
+		ReadConfigString(section, legacySection, key, defaultBuffer,
+			value, static_cast<DWORD>(sizeof(value)), filename);
+		char* end = nullptr;
+		const float parsed = std::strtof(value, &end);
+		while (end && *end == ' ')
+			++end;
+		return end != value && end && !*end && std::isfinite(parsed)
+			? parsed : defaultValue;
+	}
 }
 
 void LoadConfig()
@@ -120,6 +140,13 @@ void LoadConfig()
 
 	g_bEnableFreeTypeDevicePixelScale = ReadConfigInt(kMainSection, nullptr, "bEnableFreeTypeDevicePixelScale", 1, filename);
 	gLog.FormattedMessage("g_bEnableFreeTypeDevicePixelScale: %d", g_bEnableFreeTypeDevicePixelScale);
+
+	g_fFreeTypeFontResolutionScale = std::clamp(
+		ReadConfigFloat(kMainSection, nullptr, "fFreeTypeFontResolutionScale",
+			1.0f, filename), 0.1f, 10.0f);
+	gLog.FormattedMessage("g_fFreeTypeFontResolutionScale: %.3f%s",
+		g_fFreeTypeFontResolutionScale,
+		g_bEnableFreeTypeDevicePixelScale ? " (ignored: device pixel scale enabled)" : "");
 
 	g_uiFreeTypeFontMemoryCacheMB = std::clamp<UINT32>(
 		ReadConfigInt(kMainSection, nullptr, "uiFreeTypeFontMemoryCacheMB", 192, filename), 64, 384);

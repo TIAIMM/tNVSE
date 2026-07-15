@@ -7,6 +7,7 @@
 #include "NiD3DPixelShader.hpp"
 #include "NiDX9RenderState.hpp"
 #include "NiDX9Renderer.hpp"
+#include "NiDX9TextureData.hpp"
 #include "NiAlphaProperty.hpp"
 #include "NiRenderer.hpp"
 #include "NiTriShape.hpp"
@@ -455,6 +456,8 @@ namespace fonthook::vectorfont
 			DWORD minFilter = 0;
 			DWORD magFilter = 0;
 			DWORD mipFilter = 0;
+			DWORD maximumMipLevel = 0;
+			DWORD mipLodBias = 0;
 			device->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
 			device->GetRenderState(D3DRS_SRCBLEND, &sourceBlend);
 			device->GetRenderState(D3DRS_DESTBLEND, &destinationBlend);
@@ -475,6 +478,8 @@ namespace fonthook::vectorfont
 			device->GetSamplerState(0, D3DSAMP_MINFILTER, &minFilter);
 			device->GetSamplerState(0, D3DSAMP_MAGFILTER, &magFilter);
 			device->GetSamplerState(0, D3DSAMP_MIPFILTER, &mipFilter);
+			device->GetSamplerState(0, D3DSAMP_MAXMIPLEVEL, &maximumMipLevel);
+			device->GetSamplerState(0, D3DSAMP_MIPMAPLODBIAS, &mipLodBias);
 
 			D3DSURFACE_DESC textureDescription = {};
 			D3DSURFACE_DESC targetDescription = {};
@@ -505,13 +510,13 @@ namespace fonthook::vectorfont
 				constants[12], constants[13], constants[14], constants[15],
 				constants[16], constants[17], constants[18], constants[19]);
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_shadow_trace:   renderState blend=(enable=%u rgb=%u/%u op=%u separate=%u alpha=%u/%u op=%u) alphaTest=(enable=%u func=%u ref=%u) depth=(enable=%u write=%u) colorWrite=0x%X scissor=%u stencil=(enable=%u writeMask=0x%X) sampler=(min=%u mag=%u mip=%u)",
+				"tnvse_freetype_shadow_trace:   renderState blend=(enable=%u rgb=%u/%u op=%u separate=%u alpha=%u/%u op=%u) alphaTest=(enable=%u func=%u ref=%u) depth=(enable=%u write=%u) colorWrite=0x%X scissor=%u stencil=(enable=%u writeMask=0x%X) sampler=(min=%u mag=%u mip=%u maxMip=%u lodBiasBits=0x%08X)",
 				alphaBlend, sourceBlend, destinationBlend, blendOperation,
 				separateAlpha, sourceAlphaBlend, destinationAlphaBlend,
 				alphaBlendOperation, alphaTest, alphaFunction, alphaReference,
 				zEnable, zWrite, colorWrite, scissorEnable, stencilEnable,
-				stencilWriteMask, minFilter, magFilter,
-				mipFilter);
+				stencilWriteMask, minFilter, magFilter, mipFilter,
+				maximumMipLevel, mipLodBias);
 
 			if (indexBuffer)
 				indexBuffer->Release();
@@ -565,6 +570,7 @@ namespace fonthook::vectorfont
 			DWORD alphaReference = 0;
 			DWORD zWrite = 0, colorWrite = 0, textureFactor = 0;
 			DWORD minFilter = 0, magFilter = 0, mipFilter = 0;
+			DWORD maximumMipLevel = 0, mipLodBias = 0;
 			device->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
 			device->GetRenderState(D3DRS_SRCBLEND, &sourceBlend);
 			device->GetRenderState(D3DRS_DESTBLEND, &destinationBlend);
@@ -582,6 +588,8 @@ namespace fonthook::vectorfont
 			device->GetSamplerState(0, D3DSAMP_MINFILTER, &minFilter);
 			device->GetSamplerState(0, D3DSAMP_MAGFILTER, &magFilter);
 			device->GetSamplerState(0, D3DSAMP_MIPFILTER, &mipFilter);
+			device->GetSamplerState(0, D3DSAMP_MAXMIPLEVEL, &maximumMipLevel);
+			device->GetSamplerState(0, D3DSAMP_MIPMAPLODBIAS, &mipLodBias);
 
 			std::array<float, 16> pixelConstants = {};
 			std::array<float, 32> vertexConstants = {};
@@ -671,12 +679,13 @@ namespace fonthook::vectorfont
 				maximumVertex.x, maximumVertex.y, maximumVertex.z,
 				minimumUv.x, minimumUv.y, maximumUv.x, maximumUv.y);
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_a8_diag:   d3d ps=%p cachedPs=%p cacheMatch=%u vs=%p tex0=%p blend=(enable=%u rgb=%u/%u op=%u separate=%u alpha=%u/%u op=%u) alphaTest=(enable=%u func=%u ref=%u) zWrite=%u colorWrite=0x%X textureFactor=0x%08X sampler=(min=%u mag=%u mip=%u)",
+				"tnvse_freetype_a8_diag:   d3d ps=%p cachedPs=%p cacheMatch=%u vs=%p tex0=%p blend=(enable=%u rgb=%u/%u op=%u separate=%u alpha=%u/%u op=%u) alphaTest=(enable=%u func=%u ref=%u) zWrite=%u colorWrite=0x%X textureFactor=0x%08X sampler=(min=%u mag=%u mip=%u maxMip=%u lodBiasBits=0x%08X)",
 				pixelShader, cachedPixelShader, pixelShader == cachedPixelShader,
 				vertexShader, texture, alphaBlend, sourceBlend, destinationBlend,
 				blendOperation, separateAlpha, sourceBlendAlpha, destinationBlendAlpha,
 				blendOperationAlpha, alphaTest, alphaFunction, alphaReference,
-				zWrite, colorWrite, textureFactor, minFilter, magFilter, mipFilter);
+				zWrite, colorWrite, textureFactor, minFilter, magFilter, mipFilter,
+				maximumMipLevel, mipLodBias);
 			FreeTypeFontDebugLog(
 				"tnvse_freetype_a8_diag:   ps_c0_c3=(%.4g %.4g %.4g %.4g | %.4g %.4g %.4g %.4g | %.4g %.4g %.4g %.4g | %.4g %.4g %.4g %.4g)",
 				pixelConstants[0], pixelConstants[1], pixelConstants[2], pixelConstants[3],
@@ -879,6 +888,11 @@ namespace fonthook::vectorfont
 					LogStateIsolationFailure("get-pixel-shader-failed");
 					return;
 				}
+				if (FAILED(m_device->GetTexture(0, &m_originalTexture)))
+				{
+					LogStateIsolationFailure("get-texture0-failed");
+					return;
+				}
 				IDirect3DPixelShader9* cached = m_cachedRenderState
 					? m_cachedRenderState->GetPixelShader() : nullptr;
 				if (m_cachedRenderState && cached != m_originalPixelShader)
@@ -965,6 +979,7 @@ namespace fonthook::vectorfont
 					m_device->SetRenderState(D3DRS_STENCILWRITEMASK,
 						m_originalStencilWriteMask);
 					m_device->SetPixelShader(m_originalPixelShader);
+					m_device->SetTexture(0, m_originalTexture);
 					for (const SamplerSetting& setting : m_samplerSettings)
 					{
 						DWORD restoredValue = 0;
@@ -1020,6 +1035,8 @@ namespace fonthook::vectorfont
 				}
 				if (m_originalPixelShader)
 					m_originalPixelShader->Release();
+				if (m_originalTexture)
+					m_originalTexture->Release();
 			}
 
 			bool IsValid() const { return m_valid; }
@@ -1038,6 +1055,8 @@ namespace fonthook::vectorfont
 						D3DTEXF_POINT))
 					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MIPFILTER,
 						D3DTEXF_NONE))
+					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MAXMIPLEVEL, 0))
+					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MIPMAPLODBIAS, 0))
 					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_ADDRESSU,
 						D3DTADDRESS_CLAMP))
 					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_ADDRESSV,
@@ -1100,16 +1119,32 @@ namespace fonthook::vectorfont
 						effectPass ? 0 : m_originalStencilWriteMask));
 			}
 
-			bool SetSmoothSampling(bool enabled)
+			bool SetSampling(bool linear, bool mipmapped)
 			{
 				if (!m_valid)
 					return false;
-				const DWORD filter = enabled ? D3DTEXF_LINEAR : D3DTEXF_POINT;
+				const DWORD filter = linear ? D3DTEXF_LINEAR : D3DTEXF_POINT;
+				const DWORD mipFilter = linear && mipmapped
+					? D3DTEXF_LINEAR : D3DTEXF_NONE;
 				m_modified = true;
 				return SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MINFILTER,
 					filter))
 					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MAGFILTER,
-						filter));
+						filter))
+					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MIPFILTER,
+						mipFilter))
+					&& SUCCEEDED(m_device->SetSamplerState(0,
+						D3DSAMP_MAXMIPLEVEL, 0))
+					&& SUCCEEDED(m_device->SetSamplerState(0,
+						D3DSAMP_MIPMAPLODBIAS, 0));
+			}
+
+			bool SetTexture(IDirect3DBaseTexture9* texture)
+			{
+				if (!m_valid || !texture)
+					return false;
+				m_modified = true;
+				return SUCCEEDED(m_device->SetTexture(0, texture));
 			}
 
 		private:
@@ -1130,14 +1165,17 @@ namespace fonthook::vectorfont
 			IDirect3DDevice9* m_device = nullptr;
 			NiDX9RenderState* m_cachedRenderState = nullptr;
 			IDirect3DPixelShader9* m_originalPixelShader = nullptr;
+			IDirect3DBaseTexture9* m_originalTexture = nullptr;
 			std::array<float, 16> m_originalConstants = {};
 			std::array<float, 4> m_originalTileColor = {};
-			std::array<SamplerSetting, 5> m_samplerSettings = {{
+			std::array<SamplerSetting, 7> m_samplerSettings = {{
 				{ D3DSAMP_MINFILTER, 0 },
 				{ D3DSAMP_MAGFILTER, 0 },
 				{ D3DSAMP_MIPFILTER, 0 },
 				{ D3DSAMP_ADDRESSU, 0 },
-				{ D3DSAMP_ADDRESSV, 0 }
+				{ D3DSAMP_ADDRESSV, 0 },
+				{ D3DSAMP_MAXMIPLEVEL, 0 },
+				{ D3DSAMP_MIPMAPLODBIAS, 0 }
 			}};
 			UInt32 m_originalAlphaTest = FALSE;
 			UInt32 m_originalAlphaBlend = FALSE;
@@ -1299,6 +1337,16 @@ namespace fonthook::vectorfont
 
 			if (!haveRanges)
 			{
+				if (!metadata.effects.atlasTextures.empty())
+				{
+					NiTexture* atlasTexture = metadata.effects.atlasTextures.front();
+					NiDX9TextureData* rendererData = atlasTexture
+						? atlasTexture->GetDX9RendererData() : nullptr;
+					IDirect3DBaseTexture9* d3dTexture = rendererData
+						? rendererData->GetD3DTexture() : nullptr;
+					if (!d3dTexture || !state.SetTexture(d3dTexture))
+						return D3DERR_INVALIDCALL;
+				}
 				const float constants[16] = {
 					1.0f, 1.0f, 1.0f, 1.0f,
 					0.0f, 0.0f, 0.0f, 0.0f,
@@ -1322,7 +1370,8 @@ namespace fonthook::vectorfont
 				}
 				if (!state.SetPassState(false, !useOriginalShader)
 					|| (!useOriginalShader
-						&& !state.SetSmoothSampling(NeedsScaledFillSampling(s_currentA8Shape))))
+						&& !state.SetSampling(NeedsScaledFillSampling(s_currentA8Shape),
+							NeedsScaledFillSampling(s_currentA8Shape))))
 				{
 					UpdateCurrentRenderTraces([](A8RenderTraceContext& trace)
 						{ ++trace.fillFailures; });
@@ -1444,6 +1493,30 @@ namespace fonthook::vectorfont
 					continue;
 				}
 
+				float inverseAtlasWidth = metadata.effects.inverseAtlasWidth;
+				float inverseAtlasHeight = metadata.effects.inverseAtlasHeight;
+				if (!metadata.effects.atlasTextures.empty())
+				{
+					if (range.atlasPage >= metadata.effects.atlasTextures.size()
+						|| range.atlasPage >= metadata.effects.atlasInverseSizes.size())
+					{
+						recordRangeResult(range.layer, D3DERR_INVALIDCALL);
+						continue;
+					}
+					NiTexture* atlasTexture = metadata.effects.atlasTextures[range.atlasPage];
+					NiDX9TextureData* rendererData = atlasTexture
+						? atlasTexture->GetDX9RendererData() : nullptr;
+					IDirect3DBaseTexture9* d3dTexture = rendererData
+						? rendererData->GetD3DTexture() : nullptr;
+					if (!d3dTexture || !state.SetTexture(d3dTexture))
+					{
+						recordRangeResult(range.layer, D3DERR_INVALIDCALL);
+						continue;
+					}
+					inverseAtlasWidth = metadata.effects.atlasInverseSizes[range.atlasPage].x;
+					inverseAtlasHeight = metadata.effects.atlasInverseSizes[range.atlasPage].y;
+				}
+
 				float parameter0 = metadata.effects.shadowBlurPixels;
 				float parameter1 = metadata.effects.shadowPower;
 				float parameter2 = 0.0f;
@@ -1468,8 +1541,8 @@ namespace fonthook::vectorfont
 				const float constants[16] = {
 					range.colorModifier.r, range.colorModifier.g,
 					range.colorModifier.b, range.colorModifier.a,
-					metadata.effects.inverseAtlasWidth,
-					metadata.effects.inverseAtlasHeight,
+					inverseAtlasWidth,
+					inverseAtlasHeight,
 					static_cast<float>(range.layer), metadata.effects.sdfSpreadPixels,
 					parameter0, parameter1, parameter2, 0.0f,
 					range.usesSdf ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f
@@ -1573,16 +1646,20 @@ namespace fonthook::vectorfont
 					}
 					continue;
 				}
-				const bool needsSmoothSampling = range.layer == 1 || range.layer == 2
+				const bool needsSmoothSampling = NeedsScaledFillSampling(s_currentA8Shape)
+					|| range.layer == 1 || range.layer == 2
 					|| (range.layer == 0
 						&& metadata.effects.shadowBlurPixels > 0.001f)
-					|| range.usesSdf
-					|| (range.layer == 3
-						&& NeedsScaledFillSampling(s_currentA8Shape));
+					|| range.usesSdf;
+				// SDF texels encode signed distances around the 0.5 isocontour.
+				// Coverage mip averaging and trilinear blending can move that contour
+				// and bridge neighbouring CJK strokes.  Keep bilinear MIN/MAG filtering
+				// for subpixel placement, but force every SDF pass to atlas LOD 0.
+				const bool useCoverageMipmaps = needsSmoothSampling && !range.usesSdf;
 				const bool passStateReady = state.SetPassState(range.layer != 3,
 					!useOriginalShader)
 					&& (useOriginalShader
-						|| state.SetSmoothSampling(needsSmoothSampling));
+						|| state.SetSampling(needsSmoothSampling, useCoverageMipmaps));
 				if (!passStateReady)
 				{
 					const HRESULT stateResult = D3DERR_INVALIDCALL;
@@ -2117,6 +2194,13 @@ namespace fonthook::vectorfont
 			UInt32 previousLayer = 0;
 			bool firstRange = true;
 			bool haveFill = false;
+			if (effectConfig->atlasTextures.size()
+				!= effectConfig->atlasInverseSizes.size())
+				return RejectA8Shape("atlas-page-metadata-size-mismatch");
+			if (!effectConfig->atlasProperties.empty()
+				&& effectConfig->atlasProperties.size()
+					!= effectConfig->atlasTextures.size())
+				return RejectA8Shape("atlas-page-property-size-mismatch");
 			for (const A8DrawRange& range : effectConfig->ranges)
 			{
 				if (range.layer > 3 || !range.vertexCount || !range.primitiveCount
@@ -2124,6 +2208,10 @@ namespace fonthook::vectorfont
 				{
 					return RejectA8Shape("invalid-draw-range");
 				}
+				if (!effectConfig->atlasTextures.empty()
+					&& (range.atlasPage >= effectConfig->atlasTextures.size()
+						|| !effectConfig->atlasTextures[range.atlasPage]))
+					return RejectA8Shape("invalid-atlas-page");
 				const UInt64 vertexEnd = static_cast<UInt64>(range.firstVertex)
 					+ range.vertexCount;
 				const UInt64 indexEnd = static_cast<UInt64>(range.startIndex)

@@ -541,18 +541,21 @@ namespace fonthook::vectorfont
 		return UsesSdfFill(arConfig) || HasSdfEffects(arConfig);
 	}
 
-	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread)
+	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread,
+		bool abIncludeEffects)
 	{
 		arSpread = 0;
-		if (!NeedsSdfMask(arConfig) || !std::isfinite(afRasterScale) || afRasterScale <= 0.0f)
+		const bool needsMask = UsesSdfFill(arConfig)
+			|| (abIncludeEffects && HasSdfEffects(arConfig));
+		if (!needsMask || !std::isfinite(afRasterScale) || afRasterScale <= 0.0f)
 			return false;
 
 		float radius = 0.0f;
-		if (arConfig.glow.enabled)
+		if (abIncludeEffects && arConfig.glow.enabled)
 			radius = std::max(radius, arConfig.glow.outer);
-		if (arConfig.outline.enabled)
+		if (abIncludeEffects && arConfig.outline.enabled)
 			radius = std::max(radius, arConfig.outline.width + arConfig.outline.softness);
-		if (arConfig.shadow.enabled && arConfig.shadow.blur > 0.0f)
+		if (abIncludeEffects && arConfig.shadow.enabled && arConfig.shadow.blur > 0.0f)
 			radius = std::max(radius, arConfig.shadow.blur);
 
 		float physicalSpread = std::ceil(radius * afRasterScale) + 2.0f;

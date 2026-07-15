@@ -32,13 +32,19 @@ namespace fonthook::vectorfont
 		for (size_t i = 0; i < values.size(); ++i)
 			values[i] = s_counters[i].exchange(0, std::memory_order_relaxed);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: layout_hit=%llu miss=%llu hb=%llu kerning_hit=%llu miss=%llu bitmap_mem=%llu raster=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu batch_hit=%llu miss=%llu shader_batches=%llu passes=%llu estimated_samples=%llu cpu_effect_masks_avoided=%llu",
+			"tnvse_freetype_perf: layout_hit=%llu miss=%llu hb=%llu kerning_hit=%llu miss=%llu bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu batch_hit=%llu miss=%llu shader_batches=%llu passes=%llu estimated_samples=%llu cpu_effect_masks_avoided=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::LayoutHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::LayoutMiss)],
 			values[static_cast<size_t>(FreeTypePerfCounter::HarfBuzzShape)],
 			values[static_cast<size_t>(FreeTypePerfCounter::KerningHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::KerningMiss)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapMemoryHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::BitmapCrossFontHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskMiss)],
+			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskWrite)],
+			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskReadBytes)],
+			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskWriteBytes)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapRasterized)],
 			values[static_cast<size_t>(FreeTypePerfCounter::AtlasHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::AtlasCreated)],

@@ -161,7 +161,8 @@ namespace
 	{
 		if (!g_bEnableFreeTypeDevicePixelScale)
 		{
-			InterlockedExchange(&s_deviceScaleMilli, kRasterScalePrecision);
+			InterlockedExchange(&s_deviceScaleMilli,
+				CanonicalScaleMilli(g_fFreeTypeFontResolutionScale));
 			return;
 		}
 
@@ -272,11 +273,12 @@ namespace fonthook
 		RefreshDevicePixelScale();
 	}
 
-	bool TryGetFreeTypeDevicePixelScale(float& scale)
+	bool TryGetFreeTypeSourceRasterScale(float& scale)
 	{
 		if (!g_bEnableFreeTypeDevicePixelScale)
 		{
-			scale = 1.0f;
+			scale = static_cast<float>(CanonicalScaleMilli(
+				g_fFreeTypeFontResolutionScale)) / kRasterScalePrecision;
 			return true;
 		}
 
@@ -304,24 +306,30 @@ namespace fonthook
 			localScale = 1.0f;
 		}
 
-		float deviceScale = 1.0f;
-		TryGetFreeTypeDevicePixelScale(deviceScale);
-		const float rawCombined = deviceScale * localScale;
-		const LONG finalMilli = CanonicalScaleMilli(rawCombined);
+		float baseScale = 1.0f;
+		TryGetFreeTypeSourceRasterScale(baseScale);
+		// Device-pixel mode keeps one source profile and leaves every UIO zoom to the
+		// scene transform.  Fixed-resolution mode intentionally restores the legacy
+		// behavior: its configured base multiplier is combined with UIO's local scale.
+		// This preserves grayscale detail when automatic device scaling is disabled,
+		// and applies exactly the same source-size policy to grayscale and SDF masks.
+		const float rawSource = g_bEnableFreeTypeDevicePixelScale
+			? baseScale : baseScale * localScale;
+		const LONG sourceMilli = CanonicalScaleMilli(rawSource);
 		const LONG localMilli = CanonicalScaleMilli(localScale);
-		const LONG logKey = localMilli * 10001 + finalMilli;
+		const LONG logKey = localMilli * 10001 + sourceMilli;
 		const LONG previousKey = InterlockedExchange(&s_lastCombinedScaleKey, logKey);
 		if (g_bEnableFreeTypeFontRenderingLog && previousKey != logKey
 			&& InterlockedIncrement(&s_combinedScaleLogCount) <= 64)
 		{
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: raster scale device=%.3f uio=%.3f combined=%.6f canonical=%.3f%s",
-				deviceScale, localScale, rawCombined,
-				static_cast<float>(finalMilli) / kRasterScalePrecision,
-				std::fabs(rawCombined - static_cast<float>(finalMilli)
-					/ kRasterScalePrecision) > 0.0005f ? " clamped-or-rounded" : "");
+				"tnvse_freetype_font: raster scale base=%.3f uio=%.3f source=%.3f policy=%s",
+				baseScale, localScale,
+				static_cast<float>(sourceMilli) / kRasterScalePrecision,
+				g_bEnableFreeTypeDevicePixelScale
+					? "fixed-device-mipmapped" : "custom-times-uio");
 		}
-		return static_cast<float>(finalMilli) / kRasterScalePrecision;
+		return static_cast<float>(sourceMilli) / kRasterScalePrecision;
 	}
 
 	float ConsumeFreeTypeCreateTextScale()

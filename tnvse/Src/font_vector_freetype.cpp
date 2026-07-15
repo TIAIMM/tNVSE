@@ -18,7 +18,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cmath>
+#include <cstring>
+#include <cwchar>
 #include <limits>
 #include <mutex>
 #include <unordered_map>
@@ -50,6 +53,7 @@ namespace fonthook::vectorfont
 			HANDLE mapping = nullptr;
 			const FT_Byte* data = nullptr;
 			FT_Long size = 0;
+			UInt64 contentHash = 0;
 
 			~MappedFontFile()
 			{
@@ -111,6 +115,24 @@ namespace fonthook::vectorfont
 					FT_Done_Face(face);
 			}
 		};
+
+#pragma pack(push, 1)
+		struct PersistentFontHashRecord
+		{
+			UInt8 magic[8] = {};
+			UInt32 version = 1;
+			UInt32 recordSize = 0;
+			UInt64 normalizedPathHash = 0;
+			UInt64 fileSize = 0;
+			UInt32 volumeSerial = 0;
+			UInt32 fileIndexHigh = 0;
+			UInt32 fileIndexLow = 0;
+			UInt32 lastWriteHigh = 0;
+			UInt32 lastWriteLow = 0;
+			UInt64 contentHash = 0;
+			UInt64 checksum = 0;
+		};
+#pragma pack(pop)
 
 		struct CachedGlyphIdentity
 		{
@@ -188,30 +210,28 @@ namespace fonthook::vectorfont
 
 		struct BitmapCacheKey
 		{
-			UInt64 styleHash = 0;
-			UInt32 fontId = 0;
+			UInt64 fontContentHash = 0;
+			SInt32 fontFaceIndex = 0;
 			UInt32 glyphIndex = 0;
-			UInt16 faceIndex = 0;
 			UInt16 effectiveWidth = 0;
 			UInt16 effectiveHeight = 0;
 			SInt32 embolden26Dot6 = 0;
 			SInt32 strokeWidth26Dot6 = 0;
+			SInt32 slant16Dot16 = 0;
 			UInt8 sdfSpread = 0;
-			UInt8 byteClass = 0;
 			UInt8 maskType = 0;
 
 			bool operator==(const BitmapCacheKey& other) const
 			{
-				return styleHash == other.styleHash
-					&& fontId == other.fontId
+				return fontContentHash == other.fontContentHash
+					&& fontFaceIndex == other.fontFaceIndex
 					&& glyphIndex == other.glyphIndex
-					&& faceIndex == other.faceIndex
 					&& effectiveWidth == other.effectiveWidth
 					&& effectiveHeight == other.effectiveHeight
 					&& embolden26Dot6 == other.embolden26Dot6
 					&& strokeWidth26Dot6 == other.strokeWidth26Dot6
+					&& slant16Dot16 == other.slant16Dot16
 					&& sdfSpread == other.sdfSpread
-					&& byteClass == other.byteClass
 					&& maskType == other.maskType;
 			}
 		};
@@ -220,16 +240,16 @@ namespace fonthook::vectorfont
 		{
 			size_t operator()(const BitmapCacheKey& key) const
 			{
-				size_t result = static_cast<size_t>(key.styleHash ^ (key.styleHash >> 32));
-				result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
+				size_t result = static_cast<size_t>(
+					key.fontContentHash ^ (key.fontContentHash >> 32));
+				result ^= static_cast<size_t>(key.fontFaceIndex) * 0x9E3779B1u;
 				result ^= static_cast<size_t>(key.glyphIndex) * 0x85EBCA77u;
-				result ^= static_cast<size_t>(key.faceIndex) * 0xC2B2AE3Du;
 				result ^= static_cast<size_t>(key.effectiveWidth) << 16;
 				result ^= static_cast<size_t>(key.effectiveHeight);
 				result ^= static_cast<size_t>(key.embolden26Dot6) * 0x27D4EB2Du;
 				result ^= static_cast<size_t>(key.strokeWidth26Dot6) * 0xC2B2AE3Du;
+				result ^= static_cast<size_t>(key.slant16Dot16) * 0x165667B1u;
 				result ^= static_cast<size_t>(key.sdfSpread) * 0x165667B1u;
-				result ^= static_cast<size_t>(key.byteClass) << 8;
 				result ^= key.maskType;
 				return result;
 			}
@@ -240,6 +260,189 @@ namespace fonthook::vectorfont
 			std::shared_ptr<GlyphBitmap> bitmap;
 			size_t bytes = 0;
 			std::list<BitmapCacheKey>::iterator lru;
+			UInt32 sourceFontId = 0;
+		};
+
+		// Version 3 keeps hinted outline-to-SDF data and replaces the startup
+		// record scan/hash map with a fixed glyph-index table at the file front.
+		constexpr UInt32 kPersistentBitmapVersion = 3;
+		constexpr UInt32 kPersistentBitmapRecordMagic = 0x4B534D47u; // GMSK
+		constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
+		constexpr UInt32 kMaximumPersistentBitmapBytes = 16u * 1024u * 1024u;
+
+		struct PersistentBitmapProfileKey
+		{
+			UInt64 fontContentHash = 0;
+			SInt32 fontFaceIndex = 0;
+			UInt16 effectiveWidth = 0;
+			UInt16 effectiveHeight = 0;
+			SInt32 embolden26Dot6 = 0;
+			SInt32 strokeWidth26Dot6 = 0;
+			SInt32 slant16Dot16 = 0;
+			UInt8 sdfSpread = 0;
+			UInt8 maskType = 0;
+
+			bool operator==(const PersistentBitmapProfileKey& other) const
+			{
+				return fontContentHash == other.fontContentHash
+					&& fontFaceIndex == other.fontFaceIndex
+					&& effectiveWidth == other.effectiveWidth
+					&& effectiveHeight == other.effectiveHeight
+					&& embolden26Dot6 == other.embolden26Dot6
+					&& strokeWidth26Dot6 == other.strokeWidth26Dot6
+					&& slant16Dot16 == other.slant16Dot16
+					&& sdfSpread == other.sdfSpread
+					&& maskType == other.maskType;
+			}
+		};
+
+		struct PersistentBitmapProfileKeyHash
+		{
+			size_t operator()(const PersistentBitmapProfileKey& key) const
+			{
+				size_t result = static_cast<size_t>(
+					key.fontContentHash ^ (key.fontContentHash >> 32));
+				result ^= static_cast<size_t>(key.fontFaceIndex) * 0x9E3779B1u;
+				result ^= static_cast<size_t>(key.effectiveWidth) << 16;
+				result ^= static_cast<size_t>(key.effectiveHeight);
+				result ^= static_cast<size_t>(key.embolden26Dot6) * 0x85EBCA77u;
+				result ^= static_cast<size_t>(key.strokeWidth26Dot6) * 0xC2B2AE3Du;
+				result ^= static_cast<size_t>(key.slant16Dot16) * 0x27D4EB2Du;
+				result ^= static_cast<size_t>(key.sdfSpread) << 8;
+				result ^= key.maskType;
+				return result;
+			}
+		};
+
+#pragma pack(push, 1)
+		struct PersistentBitmapFileHeader
+		{
+			UInt8 magic[8] = {};
+			UInt32 version = 0;
+			UInt32 headerSize = 0;
+			UInt64 profileHash = 0;
+			UInt64 fontContentHash = 0;
+			SInt32 fontFaceIndex = 0;
+			UInt16 effectiveWidth = 0;
+			UInt16 effectiveHeight = 0;
+			SInt32 embolden26Dot6 = 0;
+			SInt32 strokeWidth26Dot6 = 0;
+			SInt32 slant16Dot16 = 0;
+			UInt8 sdfSpread = 0;
+			UInt8 maskType = 0;
+			UInt16 reserved = 0;
+			UInt32 glyphCapacity = 0;
+			UInt32 indexEntrySize = 0;
+			UInt64 dataOffset = 0;
+			UInt64 checksum = 0;
+		};
+
+		struct PersistentBitmapIndexEntry
+		{
+			UInt64 offset = 0;
+			UInt32 size = 0;
+			UInt32 reserved = 0;
+		};
+
+		struct PersistentBitmapRecordHeader
+		{
+			UInt32 magic = 0;
+			UInt32 headerSize = 0;
+			UInt32 glyphIndex = 0;
+			SInt32 width = 0;
+			SInt32 height = 0;
+			SInt32 left = 0;
+			SInt32 top = 0;
+			UInt32 alphaSize = 0;
+			UInt64 checksum = 0;
+		};
+#pragma pack(pop)
+
+		struct PersistentBitmapProfile
+		{
+			PersistentBitmapProfileKey key;
+			UInt64 profileHash = 0;
+			UInt32 fontId = 0;
+			std::wstring fontFileName;
+			std::wstring path;
+			HANDLE file = INVALID_HANDLE_VALUE;
+			HANDLE mapping = nullptr;
+			const UInt8* mappedData = nullptr;
+			UInt64 mappedSize = 0;
+			UInt64 validSize = 0;
+			UInt32 glyphCapacity = 0;
+			UInt32 recordCount = 0;
+			bool writable = false;
+			bool initialized = false;
+			~PersistentBitmapProfile()
+			{
+				if (mappedData)
+					UnmapViewOfFile(mappedData);
+				if (mapping)
+					CloseHandle(mapping);
+				if (file != INVALID_HANDLE_VALUE)
+					CloseHandle(file);
+			}
+		};
+
+		constexpr UInt32 kPersistentGlyphManifestVersion = 1;
+		constexpr UInt32 kPersistentGlyphManifestEntries = 65536;
+
+#pragma pack(push, 1)
+		struct PersistentGlyphManifestHeader
+		{
+			UInt8 magic[8] = {};
+			UInt32 version = 0;
+			UInt32 headerSize = 0;
+			UInt64 manifestHash = 0;
+			UInt64 fontContentHash = 0;
+			UInt64 styleHash = 0;
+			UInt32 fontId = 0;
+			UInt32 codePage = 0;
+			UInt32 entryCount = 0;
+			UInt32 entrySize = 0;
+			UInt8 completeMode = 0;
+			UInt8 reserved[7] = {};
+			UInt64 checksum = 0;
+		};
+
+		struct PersistentGlyphManifestEntry
+		{
+			UInt8 valid = 0;
+			UInt8 byteClass = 0;
+			UInt16 faceIndex = 0;
+			UInt32 glyphIndex = 0;
+			UInt32 codePoint = 0;
+			UInt32 renderedCodePoint = 0;
+			SInt32 textureIndex = 0;
+			float width = 0.0f;
+			float leadingEdge = 0.0f;
+			float height = 0.0f;
+			float topEdge = 0.0f;
+			float spacing = 0.0f;
+			UInt64 checksum = 0;
+		};
+#pragma pack(pop)
+
+		struct PersistentGlyphManifest
+		{
+			UInt64 manifestHash = 0;
+			UInt64 fontContentHash = 0;
+			std::wstring path;
+			HANDLE file = INVALID_HANDLE_VALUE;
+			HANDLE mapping = nullptr;
+			UInt8* mappedData = nullptr;
+			bool writable = false;
+
+			~PersistentGlyphManifest()
+			{
+				if (mappedData)
+					UnmapViewOfFile(mappedData);
+				if (mapping)
+					CloseHandle(mapping);
+				if (file != INVALID_HANDLE_VALUE)
+					CloseHandle(file);
+			}
 		};
 
 		struct LayoutCacheKey
@@ -337,6 +540,9 @@ namespace fonthook::vectorfont
 		std::list<MeshCacheKey> s_meshLru;
 		std::unordered_map<BitmapCacheKey, BitmapCacheEntry, BitmapCacheKeyHash> s_bitmapCache;
 		std::list<BitmapCacheKey> s_bitmapLru;
+		std::unordered_map<PersistentBitmapProfileKey,
+			std::unique_ptr<PersistentBitmapProfile>,
+			PersistentBitmapProfileKeyHash> s_persistentBitmapProfiles;
 		std::unordered_map<LayoutCacheKey, LayoutCacheEntry, LayoutCacheKeyHash> s_layoutCache;
 		std::list<LayoutCacheKey> s_layoutLru;
 		std::unordered_map<KerningCacheKey, float, KerningCacheKeyHash> s_kerningCache;
@@ -347,6 +553,11 @@ namespace fonthook::vectorfont
 		std::unordered_set<UInt64> s_loggedVerticalMetricRoles;
 		std::unordered_set<UInt64> s_loggedHarfBuzzVerticalRoles;
 		UInt32 s_shapingFallbackLogCount = 0;
+		bool s_loggedCrossFontBitmapShare = false;
+		bool s_loggedPersistentBitmapDirectory = false;
+		bool s_loggedPersistentBitmapHit = false;
+		bool s_persistentBitmapUnavailable = false;
+		UInt32 s_persistentBitmapFailureLogCount = 0;
 		size_t s_meshCacheBytes = 0;
 		size_t s_bitmapCacheBytes = 0;
 		size_t s_layoutCacheBytes = 0;
@@ -358,6 +569,21 @@ namespace fonthook::vectorfont
 			std::transform(path.begin(), path.end(), path.begin(), towlower);
 			return path;
 		}
+
+		UInt64 HashBytes64(const void* data, size_t size,
+			UInt64 hash = 1469598103934665603ull)
+		{
+			const UInt8* bytes = static_cast<const UInt8*>(data);
+			for (size_t index = 0; index < size; ++index)
+			{
+				hash ^= bytes[index];
+				hash *= 1099511628211ull;
+			}
+			return hash;
+		}
+
+		bool ResolvePersistentFontContentHash(MappedFontFile& mapped,
+			const std::wstring& normalizedPath);
 
 		std::shared_ptr<MappedFontFile> MapFontFile(const std::wstring& path)
 		{
@@ -405,6 +631,9 @@ namespace fonthook::vectorfont
 					path.c_str(), GetLastError());
 				return nullptr;
 			}
+			if (!ResolvePersistentFontContentHash(*mapped, key))
+				mapped->contentHash = HashBytes64(mapped->data,
+					static_cast<size_t>(mapped->size));
 
 			s_mappedFiles[key] = mapped;
 			return mapped;
@@ -994,18 +1223,649 @@ namespace fonthook::vectorfont
 					hash *= 1099511628211ull;
 				}
 			};
-			add(&key.styleHash, sizeof(key.styleHash));
-			add(&key.fontId, sizeof(key.fontId));
+			add(&key.fontContentHash, sizeof(key.fontContentHash));
+			add(&key.fontFaceIndex, sizeof(key.fontFaceIndex));
 			add(&key.glyphIndex, sizeof(key.glyphIndex));
-			add(&key.faceIndex, sizeof(key.faceIndex));
 			add(&key.effectiveWidth, sizeof(key.effectiveWidth));
 			add(&key.effectiveHeight, sizeof(key.effectiveHeight));
 			add(&key.embolden26Dot6, sizeof(key.embolden26Dot6));
 			add(&key.strokeWidth26Dot6, sizeof(key.strokeWidth26Dot6));
+			add(&key.slant16Dot16, sizeof(key.slant16Dot16));
 			add(&key.sdfSpread, sizeof(key.sdfSpread));
-			add(&key.byteClass, sizeof(key.byteClass));
 			add(&key.maskType, sizeof(key.maskType));
 			return hash;
+		}
+
+		UInt64 HashPersistentBitmapProfileKey(
+			const PersistentBitmapProfileKey& key)
+		{
+			UInt64 hash = HashBytes64(&kPersistentBitmapVersion,
+				sizeof(kPersistentBitmapVersion));
+			hash = HashBytes64(&key.fontContentHash, sizeof(key.fontContentHash), hash);
+			hash = HashBytes64(&key.fontFaceIndex, sizeof(key.fontFaceIndex), hash);
+			hash = HashBytes64(&key.effectiveWidth, sizeof(key.effectiveWidth), hash);
+			hash = HashBytes64(&key.effectiveHeight, sizeof(key.effectiveHeight), hash);
+			hash = HashBytes64(&key.embolden26Dot6, sizeof(key.embolden26Dot6), hash);
+			hash = HashBytes64(&key.strokeWidth26Dot6, sizeof(key.strokeWidth26Dot6), hash);
+			hash = HashBytes64(&key.slant16Dot16, sizeof(key.slant16Dot16), hash);
+			hash = HashBytes64(&key.sdfSpread, sizeof(key.sdfSpread), hash);
+			return HashBytes64(&key.maskType, sizeof(key.maskType), hash);
+		}
+
+		PersistentBitmapProfileKey MakePersistentBitmapProfileKey(
+			const BitmapCacheKey& key, UInt64 fontContentHash)
+		{
+			return {
+				fontContentHash,
+				key.fontFaceIndex,
+				key.effectiveWidth,
+				key.effectiveHeight,
+				key.embolden26Dot6,
+				key.strokeWidth26Dot6,
+				key.slant16Dot16,
+				key.sdfSpread,
+				key.maskType
+			};
+		}
+
+		PersistentBitmapFileHeader MakePersistentBitmapFileHeader(
+			const PersistentBitmapProfileKey& key, UInt64 profileHash,
+			UInt32 glyphCapacity)
+		{
+			PersistentBitmapFileHeader header;
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'M', 'S', 'K', '1' };
+			std::memcpy(header.magic, magic, sizeof(magic));
+			header.version = kPersistentBitmapVersion;
+			header.headerSize = sizeof(header);
+			header.profileHash = profileHash;
+			header.fontContentHash = key.fontContentHash;
+			header.fontFaceIndex = key.fontFaceIndex;
+			header.effectiveWidth = key.effectiveWidth;
+			header.effectiveHeight = key.effectiveHeight;
+			header.embolden26Dot6 = key.embolden26Dot6;
+			header.strokeWidth26Dot6 = key.strokeWidth26Dot6;
+			header.slant16Dot16 = key.slant16Dot16;
+			header.sdfSpread = key.sdfSpread;
+			header.maskType = key.maskType;
+			header.glyphCapacity = glyphCapacity;
+			header.indexEntrySize = sizeof(PersistentBitmapIndexEntry);
+			header.dataOffset = sizeof(PersistentBitmapFileHeader)
+				+ static_cast<UInt64>(glyphCapacity) * sizeof(PersistentBitmapIndexEntry);
+			header.checksum = HashBytes64(&header,
+				offsetof(PersistentBitmapFileHeader, checksum));
+			return header;
+		}
+
+		bool MatchesPersistentBitmapFileHeader(
+			const PersistentBitmapFileHeader& header,
+			const PersistentBitmapProfileKey& key, UInt64 profileHash,
+			UInt32 glyphCapacity)
+		{
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'M', 'S', 'K', '1' };
+			return std::memcmp(header.magic, magic, sizeof(magic)) == 0
+				&& header.version == kPersistentBitmapVersion
+				&& header.headerSize == sizeof(header)
+				&& header.profileHash == profileHash
+				&& header.fontContentHash == key.fontContentHash
+				&& header.fontFaceIndex == key.fontFaceIndex
+				&& header.effectiveWidth == key.effectiveWidth
+				&& header.effectiveHeight == key.effectiveHeight
+				&& header.embolden26Dot6 == key.embolden26Dot6
+				&& header.strokeWidth26Dot6 == key.strokeWidth26Dot6
+				&& header.slant16Dot16 == key.slant16Dot16
+				&& header.sdfSpread == key.sdfSpread
+				&& header.maskType == key.maskType
+				&& header.glyphCapacity == glyphCapacity
+				&& header.indexEntrySize == sizeof(PersistentBitmapIndexEntry)
+				&& header.dataOffset == sizeof(PersistentBitmapFileHeader)
+					+ static_cast<UInt64>(glyphCapacity) * sizeof(PersistentBitmapIndexEntry)
+				&& header.checksum == HashBytes64(&header,
+					offsetof(PersistentBitmapFileHeader, checksum));
+		}
+
+		std::wstring GetPersistentBitmapDirectory()
+		{
+			std::array<wchar_t, MAX_PATH> modulePath = {};
+			const DWORD length = GetModuleFileNameW(nullptr, modulePath.data(),
+				static_cast<DWORD>(modulePath.size()));
+			if (!length || length >= modulePath.size())
+				return {};
+			std::wstring gameDirectory(modulePath.data(), length);
+			const size_t slash = gameDirectory.find_last_of(L"\\/");
+			if (slash == std::wstring::npos)
+				return {};
+			gameDirectory.resize(slash);
+			return gameDirectory + L"\\Data\\NVSE\\plugins\\tnvse\\fontdata";
+		}
+
+		std::wstring SanitizePersistentBitmapFontName(const std::wstring& path)
+		{
+			const size_t slash = path.find_last_of(L"\\/");
+			std::wstring name = slash == std::wstring::npos
+				? path : path.substr(slash + 1);
+			if (name.empty())
+				name = L"font";
+			for (wchar_t& character : name)
+			{
+				if (character < 0x20 || std::wcschr(L"<>:\"/\\|?*", character))
+					character = L'_';
+			}
+			constexpr size_t kMaximumPersistentFontNameLength = 80;
+			if (name.size() > kMaximumPersistentFontNameLength)
+				name.resize(kMaximumPersistentFontNameLength);
+			return name;
+		}
+
+		bool IsPersistentBitmapFontIdName(const wchar_t* fileName)
+		{
+			if (!fileName)
+				return false;
+			wchar_t* end = nullptr;
+			const unsigned long fontId = std::wcstoul(fileName, &end, 10);
+			return end != fileName && end && *end == L'_'
+				&& fontId <= std::numeric_limits<UInt32>::max();
+		}
+
+		std::wstring FindPersistentBitmapByHash(const std::wstring& directory,
+			UInt64 profileHash)
+		{
+			wchar_t pattern[160] = {};
+			_snwprintf_s(pattern, _countof(pattern), _TRUNCATE,
+				L"%ls\\*_%016llX.tnvfmask", directory.c_str(),
+				static_cast<unsigned long long>(profileHash));
+			WIN32_FIND_DATAW found = {};
+			HANDLE search = FindFirstFileW(pattern, &found);
+			if (search == INVALID_HANDLE_VALUE)
+				return {};
+			std::wstring path;
+			do
+			{
+				if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+					&& IsPersistentBitmapFontIdName(found.cFileName))
+				{
+					path = directory + L"\\" + found.cFileName;
+					break;
+				}
+			} while (FindNextFileW(search, &found));
+			FindClose(search);
+			return path;
+		}
+
+		std::wstring FormatPersistentBitmapPath(const std::wstring& directory,
+			const PersistentBitmapProfile& profile)
+		{
+			wchar_t fileName[256] = {};
+			_snwprintf_s(fileName, _countof(fileName), _TRUNCATE,
+				L"%u_%ls_%016llX.tnvfmask", profile.fontId,
+				profile.fontFileName.c_str(),
+				static_cast<unsigned long long>(profile.profileHash));
+			return directory + L"\\" + fileName;
+		}
+
+		bool DirectoryExists(const std::wstring& path)
+		{
+			const DWORD attributes = GetFileAttributesW(path.c_str());
+			return attributes != INVALID_FILE_ATTRIBUTES
+				&& (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+		}
+
+		bool EnsurePersistentBitmapDirectory(std::wstring& directory)
+		{
+			directory = GetPersistentBitmapDirectory();
+			if (directory.empty())
+				return false;
+			const size_t suffixLength = std::wcslen(
+				L"\\Data\\NVSE\\plugins\\tnvse\\fontdata");
+			if (directory.size() <= suffixLength)
+				return false;
+			const std::wstring gameDirectory = directory.substr(
+				0, directory.size() - suffixLength);
+			const std::array<std::wstring, 5> paths = {
+				gameDirectory + L"\\Data",
+				gameDirectory + L"\\Data\\NVSE",
+				gameDirectory + L"\\Data\\NVSE\\plugins",
+				gameDirectory + L"\\Data\\NVSE\\plugins\\tnvse",
+				directory
+			};
+			for (const std::wstring& path : paths)
+			{
+				if (!DirectoryExists(path)
+					&& !CreateDirectoryW(path.c_str(), nullptr)
+					&& GetLastError() != ERROR_ALREADY_EXISTS)
+				{
+					return false;
+				}
+			}
+			if (!s_loggedPersistentBitmapDirectory)
+			{
+				s_loggedPersistentBitmapDirectory = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: persistent bitmap cache directory=%ls version=%u",
+					directory.c_str(), kPersistentBitmapVersion);
+			}
+			return true;
+		}
+
+		bool GetFileSize64(HANDLE file, UInt64& size)
+		{
+			LARGE_INTEGER value = {};
+			if (file == INVALID_HANDLE_VALUE || !GetFileSizeEx(file, &value)
+				|| value.QuadPart < 0)
+			{
+				return false;
+			}
+			size = static_cast<UInt64>(value.QuadPart);
+			return true;
+		}
+
+		bool SetFileSize64(HANDLE file, UInt64 size)
+		{
+			LARGE_INTEGER position = {};
+			position.QuadPart = static_cast<LONGLONG>(size);
+			return file != INVALID_HANDLE_VALUE
+				&& SetFilePointerEx(file, position, nullptr, FILE_BEGIN)
+				&& SetEndOfFile(file);
+		}
+
+		bool ReadFileAt(HANDLE file, UInt64 offset, void* data, UInt32 size)
+		{
+			if (!size)
+				return true;
+			LARGE_INTEGER position = {};
+			position.QuadPart = static_cast<LONGLONG>(offset);
+			DWORD read = 0;
+			return file != INVALID_HANDLE_VALUE
+				&& SetFilePointerEx(file, position, nullptr, FILE_BEGIN)
+				&& ReadFile(file, data, size, &read, nullptr)
+				&& read == size;
+		}
+
+		bool WriteFileAt(HANDLE file, UInt64 offset, const void* data, UInt32 size)
+		{
+			if (!size)
+				return true;
+			LARGE_INTEGER position = {};
+			position.QuadPart = static_cast<LONGLONG>(offset);
+			DWORD written = 0;
+			return file != INVALID_HANDLE_VALUE
+				&& SetFilePointerEx(file, position, nullptr, FILE_BEGIN)
+				&& WriteFile(file, data, size, &written, nullptr)
+				&& written == size;
+		}
+
+		bool ResolvePersistentFontContentHash(MappedFontFile& mapped,
+			const std::wstring& normalizedPath)
+		{
+			BY_HANDLE_FILE_INFORMATION information = {};
+			if (mapped.file == INVALID_HANDLE_VALUE
+				|| !GetFileInformationByHandle(mapped.file, &information))
+				return false;
+			const UInt64 pathHash = HashBytes64(normalizedPath.data(),
+				normalizedPath.size() * sizeof(wchar_t));
+			std::wstring directory;
+			if (!EnsurePersistentBitmapDirectory(directory))
+				return false;
+			wchar_t fileName[256] = {};
+			const std::wstring fontName = SanitizePersistentBitmapFontName(mapped.path);
+			_snwprintf_s(fileName, _countof(fileName), _TRUNCATE,
+				L"hash_%ls_%016llX.tnvfhash", fontName.c_str(),
+				static_cast<unsigned long long>(pathHash));
+			const std::wstring cachePath = directory + L"\\" + fileName;
+			PersistentFontHashRecord record;
+			HANDLE cache = CreateFileW(cachePath.c_str(), GENERIC_READ,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+				OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (cache != INVALID_HANDLE_VALUE)
+			{
+				const bool read = ReadFileAt(cache, 0, &record, sizeof(record));
+				CloseHandle(cache);
+				const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'H', 'S', 'H', '1' };
+				if (read && std::memcmp(record.magic, magic, sizeof(magic)) == 0
+					&& record.version == 1 && record.recordSize == sizeof(record)
+					&& record.normalizedPathHash == pathHash
+					&& record.fileSize == static_cast<UInt64>(mapped.size)
+					&& record.volumeSerial == information.dwVolumeSerialNumber
+					&& record.fileIndexHigh == information.nFileIndexHigh
+					&& record.fileIndexLow == information.nFileIndexLow
+					&& record.lastWriteHigh == information.ftLastWriteTime.dwHighDateTime
+					&& record.lastWriteLow == information.ftLastWriteTime.dwLowDateTime
+					&& record.checksum == HashBytes64(&record,
+						offsetof(PersistentFontHashRecord, checksum)))
+				{
+					mapped.contentHash = record.contentHash;
+					return true;
+				}
+			}
+
+			mapped.contentHash = HashBytes64(mapped.data,
+				static_cast<size_t>(mapped.size));
+			record = {};
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'H', 'S', 'H', '1' };
+			std::memcpy(record.magic, magic, sizeof(magic));
+			record.version = 1;
+			record.recordSize = sizeof(record);
+			record.normalizedPathHash = pathHash;
+			record.fileSize = static_cast<UInt64>(mapped.size);
+			record.volumeSerial = information.dwVolumeSerialNumber;
+			record.fileIndexHigh = information.nFileIndexHigh;
+			record.fileIndexLow = information.nFileIndexLow;
+			record.lastWriteHigh = information.ftLastWriteTime.dwHighDateTime;
+			record.lastWriteLow = information.ftLastWriteTime.dwLowDateTime;
+			record.contentHash = mapped.contentHash;
+			record.checksum = HashBytes64(&record,
+				offsetof(PersistentFontHashRecord, checksum));
+			cache = CreateFileW(cachePath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+				nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (cache != INVALID_HANDLE_VALUE)
+			{
+				WriteFileAt(cache, 0, &record, sizeof(record));
+				CloseHandle(cache);
+			}
+			return true;
+		}
+
+		void UnmapPersistentBitmapProfile(PersistentBitmapProfile& profile)
+		{
+			if (profile.mappedData)
+				UnmapViewOfFile(profile.mappedData);
+			if (profile.mapping)
+				CloseHandle(profile.mapping);
+			profile.mappedData = nullptr;
+			profile.mapping = nullptr;
+			profile.mappedSize = 0;
+		}
+
+		void MapPersistentBitmapProfile(PersistentBitmapProfile& profile)
+		{
+			UnmapPersistentBitmapProfile(profile);
+			UInt64 size = 0;
+			if (!GetFileSize64(profile.file, size) || !size
+				|| size > kMaximumPersistentProfileBytes)
+			{
+				return;
+			}
+			profile.mapping = CreateFileMappingW(
+				profile.file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+			if (!profile.mapping)
+				return;
+			profile.mappedData = static_cast<const UInt8*>(MapViewOfFile(
+				profile.mapping, FILE_MAP_READ, 0, 0, 0));
+			if (!profile.mappedData)
+			{
+				CloseHandle(profile.mapping);
+				profile.mapping = nullptr;
+				return;
+			}
+			profile.mappedSize = size;
+		}
+
+		bool ReadPersistentProfileBytes(const PersistentBitmapProfile& profile,
+			UInt64 offset, void* data, UInt32 size)
+		{
+			if (offset > profile.validSize
+				|| static_cast<UInt64>(size) > profile.validSize - offset)
+			{
+				return false;
+			}
+			if (profile.mappedData && offset + size <= profile.mappedSize)
+			{
+				std::memcpy(data, profile.mappedData + static_cast<size_t>(offset), size);
+				return true;
+			}
+			return ReadFileAt(profile.file, offset, data, size);
+		}
+
+		bool ResetPersistentBitmapProfile(PersistentBitmapProfile& profile)
+		{
+			if (!profile.writable)
+				return false;
+			UnmapPersistentBitmapProfile(profile);
+			const PersistentBitmapFileHeader header =
+				MakePersistentBitmapFileHeader(profile.key, profile.profileHash,
+					profile.glyphCapacity);
+			const UInt64 indexBytes = static_cast<UInt64>(profile.glyphCapacity)
+				* sizeof(PersistentBitmapIndexEntry);
+			std::vector<UInt8> zeroIndex(static_cast<size_t>(indexBytes), 0);
+			if (!SetFileSize64(profile.file, 0)
+				|| !WriteFileAt(profile.file, 0, &header, sizeof(header))
+				|| !WriteFileAt(profile.file, sizeof(header), zeroIndex.data(),
+					static_cast<UInt32>(zeroIndex.size())))
+			{
+				return false;
+			}
+			profile.recordCount = 0;
+			profile.validSize = header.dataOffset;
+			MapPersistentBitmapProfile(profile);
+			return true;
+		}
+
+		bool IsValidPersistentRecordHeader(
+			const PersistentBitmapRecordHeader& record)
+		{
+			if (record.magic != kPersistentBitmapRecordMagic
+				|| record.headerSize != sizeof(record)
+				|| record.width <= 0 || record.height <= 0
+				|| !record.alphaSize
+				|| record.alphaSize > kMaximumPersistentBitmapBytes)
+			{
+				return false;
+			}
+			return static_cast<UInt64>(record.width)
+				* static_cast<UInt64>(record.height) == record.alphaSize;
+		}
+
+		bool InitializePersistentBitmapProfile(PersistentBitmapProfile& profile)
+		{
+			std::wstring directory;
+			if (s_persistentBitmapUnavailable
+				|| !EnsurePersistentBitmapDirectory(directory))
+			{
+				s_persistentBitmapUnavailable = true;
+				return false;
+			}
+			profile.path = FindPersistentBitmapByHash(directory,
+				profile.profileHash);
+			if (profile.path.empty())
+				profile.path = FormatPersistentBitmapPath(directory, profile);
+			profile.file = CreateFileW(profile.path.c_str(),
+				GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+				OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+			profile.writable = profile.file != INVALID_HANDLE_VALUE;
+			if (!profile.writable)
+			{
+				profile.file = CreateFileW(profile.path.c_str(), GENERIC_READ,
+					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+					OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			}
+			if (profile.file == INVALID_HANDLE_VALUE)
+				return false;
+
+			UInt64 fileSize = 0;
+			if (!GetFileSize64(profile.file, fileSize))
+				return false;
+			profile.validSize = fileSize;
+			if (!fileSize || fileSize > kMaximumPersistentProfileBytes)
+			{
+				if (!ResetPersistentBitmapProfile(profile))
+					return false;
+				fileSize = profile.validSize;
+			}
+			else
+			{
+				MapPersistentBitmapProfile(profile);
+				PersistentBitmapFileHeader header;
+				if (!ReadPersistentProfileBytes(profile, 0, &header, sizeof(header))
+					|| !MatchesPersistentBitmapFileHeader(
+						header, profile.key, profile.profileHash,
+						profile.glyphCapacity))
+				{
+					if (!ResetPersistentBitmapProfile(profile))
+						return false;
+					fileSize = profile.validSize;
+				}
+			}
+
+			const UInt64 dataOffset = sizeof(PersistentBitmapFileHeader)
+				+ static_cast<UInt64>(profile.glyphCapacity)
+					* sizeof(PersistentBitmapIndexEntry);
+			if (fileSize < dataOffset)
+			{
+				if (!ResetPersistentBitmapProfile(profile))
+					return false;
+				fileSize = profile.validSize;
+			}
+			profile.recordCount = 0;
+			for (UInt32 glyphIndex = 0; glyphIndex < profile.glyphCapacity; ++glyphIndex)
+			{
+				PersistentBitmapIndexEntry entry;
+				const UInt64 entryOffset = sizeof(PersistentBitmapFileHeader)
+					+ static_cast<UInt64>(glyphIndex) * sizeof(entry);
+				if (!ReadPersistentProfileBytes(profile, entryOffset, &entry, sizeof(entry)))
+					return false;
+				if (!entry.offset && !entry.size)
+					continue;
+				if (entry.offset < dataOffset || entry.size < sizeof(PersistentBitmapRecordHeader)
+					|| entry.offset > fileSize || entry.size > fileSize - entry.offset)
+				{
+					if (profile.writable)
+					{
+						const PersistentBitmapIndexEntry empty;
+						WriteFileAt(profile.file, entryOffset, &empty, sizeof(empty));
+					}
+					continue;
+				}
+				++profile.recordCount;
+			}
+			profile.validSize = fileSize;
+			profile.initialized = true;
+			return true;
+		}
+
+		PersistentBitmapProfile* GetPersistentBitmapProfile(
+			const PersistentBitmapProfileKey& key,
+			const std::wstring& fontPath, UInt32 fontId, UInt32 glyphCapacity)
+		{
+			auto existing = s_persistentBitmapProfiles.find(key);
+			if (existing != s_persistentBitmapProfiles.end())
+				return existing->second->initialized ? existing->second.get() : nullptr;
+			auto profile = std::make_unique<PersistentBitmapProfile>();
+			profile->key = key;
+			profile->profileHash = HashPersistentBitmapProfileKey(key);
+			profile->fontId = fontId;
+			profile->glyphCapacity = std::max<UInt32>(1, glyphCapacity);
+			profile->fontFileName = SanitizePersistentBitmapFontName(fontPath);
+			PersistentBitmapProfile* result = profile.get();
+			s_persistentBitmapProfiles.emplace(key, std::move(profile));
+			if (InitializePersistentBitmapProfile(*result))
+				return result;
+			if (s_persistentBitmapFailureLogCount++ < 8)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: persistent bitmap profile unavailable hash=%016llX path=%ls",
+					static_cast<unsigned long long>(result->profileHash),
+					result->path.empty() ? L"<unresolved>" : result->path.c_str());
+			}
+			return nullptr;
+		}
+
+		UInt64 HashPersistentBitmapRecord(
+			const PersistentBitmapRecordHeader& record, const UInt8* alpha)
+		{
+			UInt64 hash = HashBytes64(&record,
+				offsetof(PersistentBitmapRecordHeader, checksum));
+			return HashBytes64(alpha, record.alphaSize, hash);
+		}
+
+		std::shared_ptr<GlyphBitmap> LoadPersistentGlyphBitmap(
+			PersistentBitmapProfile& profile, const BitmapCacheKey& key)
+		{
+			if (key.glyphIndex >= profile.glyphCapacity)
+				return nullptr;
+			PersistentBitmapIndexEntry entry;
+			const UInt64 entryOffset = sizeof(PersistentBitmapFileHeader)
+				+ static_cast<UInt64>(key.glyphIndex) * sizeof(entry);
+			if (!ReadPersistentProfileBytes(profile, entryOffset, &entry, sizeof(entry))
+				|| !entry.offset || !entry.size)
+				return nullptr;
+			PersistentBitmapRecordHeader record;
+			if (!ReadPersistentProfileBytes(profile, entry.offset,
+					&record, sizeof(record))
+				|| !IsValidPersistentRecordHeader(record)
+				|| record.glyphIndex != key.glyphIndex
+				|| entry.size != sizeof(record) + record.alphaSize)
+				return nullptr;
+			auto bitmap = std::make_shared<GlyphBitmap>();
+			bitmap->cacheId = HashBitmapKey(key);
+			bitmap->width = record.width;
+			bitmap->height = record.height;
+			bitmap->left = record.left;
+			bitmap->top = record.top;
+			bitmap->effectiveWidth = key.effectiveWidth;
+			bitmap->effectiveHeight = key.effectiveHeight;
+			bitmap->alpha.resize(record.alphaSize);
+			const UInt64 alphaOffset = entry.offset + sizeof(record);
+			if (!ReadPersistentProfileBytes(profile, alphaOffset,
+					bitmap->alpha.data(), record.alphaSize)
+				|| record.checksum != HashPersistentBitmapRecord(
+					record, bitmap->alpha.data()))
+			{
+				return nullptr;
+			}
+			return bitmap;
+		}
+
+		bool StorePersistentGlyphBitmap(PersistentBitmapProfile& profile,
+			const BitmapCacheKey& key, const GlyphBitmap& bitmap)
+		{
+			if (!profile.writable || key.glyphIndex >= profile.glyphCapacity
+				|| bitmap.width <= 0 || bitmap.height <= 0 || bitmap.alpha.empty()
+				|| bitmap.alpha.size() > kMaximumPersistentBitmapBytes
+				|| static_cast<UInt64>(bitmap.width) * bitmap.height
+					!= bitmap.alpha.size())
+			{
+				return false;
+			}
+			PersistentBitmapIndexEntry existing;
+			const UInt64 indexOffset = sizeof(PersistentBitmapFileHeader)
+				+ static_cast<UInt64>(key.glyphIndex) * sizeof(existing);
+			if (!ReadPersistentProfileBytes(profile, indexOffset, &existing, sizeof(existing))
+				|| existing.offset || existing.size)
+				return false;
+			PersistentBitmapRecordHeader record;
+			record.magic = kPersistentBitmapRecordMagic;
+			record.headerSize = sizeof(record);
+			record.glyphIndex = key.glyphIndex;
+			record.width = bitmap.width;
+			record.height = bitmap.height;
+			record.left = bitmap.left;
+			record.top = bitmap.top;
+			record.alphaSize = static_cast<UInt32>(bitmap.alpha.size());
+			record.checksum = HashPersistentBitmapRecord(record, bitmap.alpha.data());
+			const UInt64 recordSize = sizeof(record) + bitmap.alpha.size();
+			if (recordSize > kMaximumPersistentProfileBytes - profile.validSize)
+				return false;
+			std::vector<UInt8> serialized(static_cast<size_t>(recordSize));
+			std::memcpy(serialized.data(), &record, sizeof(record));
+			std::memcpy(serialized.data() + sizeof(record), bitmap.alpha.data(),
+				bitmap.alpha.size());
+			const UInt64 offset = profile.validSize;
+			// Extending a file while an older, shorter view is still mapped has
+			// platform-dependent failure modes. Existing records remain readable
+			// through ReadFileAt after the view is released.
+			UnmapPersistentBitmapProfile(profile);
+			if (!WriteFileAt(profile.file, offset, serialized.data(),
+					static_cast<UInt32>(serialized.size())))
+			{
+				return false;
+			}
+			profile.validSize += recordSize;
+			const PersistentBitmapIndexEntry entry = {
+				offset, static_cast<UInt32>(recordSize)
+			};
+			if (!WriteFileAt(profile.file, indexOffset, &entry, sizeof(entry)))
+				return false;
+			++profile.recordCount;
+			return true;
 		}
 
 		bool CopyGrayBitmap(const FT_Bitmap& source, GlyphBitmap& target,
@@ -1041,9 +1901,9 @@ namespace fonthook::vectorfont
 				if (source.pixel_mode == FT_PIXEL_MODE_GRAY)
 				{
 					// SDF pixels are encoded distances, not coverage levels.  FreeType's
-					// bitmap SDF renderer reports num_grays=255 while still using the full
-					// 0..255 byte range, so normalizing it would turn 255 into 256 and then
-					// wrap the glyph interior to zero.
+					// SDF renderers report num_grays=255 while still using the full 0..255
+					// byte range, so normalizing it would turn 255 into 256 and then wrap
+					// the glyph interior to zero.
 					if (preserveEncodedValues || source.num_grays == 256)
 						std::copy(row, row + sourceWidth, output);
 					else
@@ -1080,10 +1940,230 @@ namespace fonthook::vectorfont
 		float fontHeight = 0.0f;
 		bool manualBaseline = false;
 		bool initialized = false;
+		UInt64 contentHash = 0;
+		std::unique_ptr<PersistentGlyphManifest> manifest;
 	};
 
 	namespace
 	{
+		UInt64 ComputeRuntimeFontContentHash(RuntimeFont& runtime)
+		{
+			if (runtime.contentHash)
+				return runtime.contentHash;
+			UInt64 hash = HashBytes64(&kPersistentGlyphManifestVersion,
+				sizeof(kPersistentGlyphManifestVersion));
+			hash = HashBytes64(&runtime.config->styleHash,
+				sizeof(runtime.config->styleHash), hash);
+			for (const RuntimeRole& role : runtime.roles)
+			{
+				const UInt32 count = static_cast<UInt32>(role.faces.size());
+				hash = HashBytes64(&count, sizeof(count), hash);
+				for (const RuntimeFace& face : role.faces)
+				{
+					const UInt64 contentHash = face.file ? face.file->contentHash : 0;
+					const SInt32 faceIndex = face.face
+						? static_cast<SInt32>(face.face->face_index) : 0;
+					hash = HashBytes64(&contentHash, sizeof(contentHash), hash);
+					hash = HashBytes64(&faceIndex, sizeof(faceIndex), hash);
+				}
+			}
+			runtime.contentHash = hash ? hash : 1;
+			return runtime.contentHash;
+		}
+
+		PersistentGlyphManifestHeader MakeGlyphManifestHeader(
+			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 contentHash)
+		{
+			PersistentGlyphManifestHeader header;
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'G', 'L', 'Y', '1' };
+			std::memcpy(header.magic, magic, sizeof(magic));
+			header.version = kPersistentGlyphManifestVersion;
+			header.headerSize = sizeof(header);
+			header.manifestHash = manifestHash;
+			header.fontContentHash = contentHash;
+			header.styleHash = runtime.config->styleHash;
+			header.fontId = runtime.config->fontId;
+			header.codePage = g_usingWinEncoding;
+			header.entryCount = kPersistentGlyphManifestEntries;
+			header.entrySize = sizeof(PersistentGlyphManifestEntry);
+			header.checksum = HashBytes64(&header,
+				offsetof(PersistentGlyphManifestHeader, checksum));
+			return header;
+		}
+
+		bool MatchesGlyphManifestHeader(const PersistentGlyphManifestHeader& header,
+			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 contentHash)
+		{
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'G', 'L', 'Y', '1' };
+			return std::memcmp(header.magic, magic, sizeof(magic)) == 0
+				&& header.version == kPersistentGlyphManifestVersion
+				&& header.headerSize == sizeof(header)
+				&& header.manifestHash == manifestHash
+				&& header.fontContentHash == contentHash
+				&& header.styleHash == runtime.config->styleHash
+				&& header.fontId == runtime.config->fontId
+				&& header.codePage == g_usingWinEncoding
+				&& header.entryCount == kPersistentGlyphManifestEntries
+				&& header.entrySize == sizeof(PersistentGlyphManifestEntry)
+				&& header.checksum == HashBytes64(&header,
+					offsetof(PersistentGlyphManifestHeader, checksum));
+		}
+
+		PersistentGlyphManifest* GetGlyphManifest(RuntimeFont& runtime)
+		{
+			if (runtime.manifest)
+				return runtime.manifest->mappedData ? runtime.manifest.get() : nullptr;
+			auto manifest = std::make_unique<PersistentGlyphManifest>();
+			const UInt64 contentHash = ComputeRuntimeFontContentHash(runtime);
+			UInt64 manifestHash = HashBytes64(&contentHash, sizeof(contentHash));
+			manifestHash = HashBytes64(&runtime.config->styleHash,
+				sizeof(runtime.config->styleHash), manifestHash);
+			manifestHash = HashBytes64(&runtime.config->fontId,
+				sizeof(runtime.config->fontId), manifestHash);
+			manifestHash = HashBytes64(&g_usingWinEncoding,
+				sizeof(g_usingWinEncoding), manifestHash);
+			manifest->manifestHash = manifestHash;
+			manifest->fontContentHash = contentHash;
+			std::wstring directory;
+			if (!EnsurePersistentBitmapDirectory(directory))
+			{
+				runtime.manifest = std::move(manifest);
+				return nullptr;
+			}
+			std::wstring primaryName = L"font";
+			if (!runtime.roles[0].faces.empty() && runtime.roles[0].faces[0].file)
+				primaryName = SanitizePersistentBitmapFontName(
+					runtime.roles[0].faces[0].file->path);
+			wchar_t fileName[256] = {};
+			_snwprintf_s(fileName, _countof(fileName), _TRUNCATE,
+				L"%u_%ls_%016llX.tnvfmanifest", runtime.config->fontId,
+				primaryName.c_str(), static_cast<unsigned long long>(manifestHash));
+			manifest->path = directory + L"\\" + fileName;
+			manifest->file = CreateFileW(manifest->path.c_str(),
+				GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+				FILE_ATTRIBUTE_NORMAL, nullptr);
+			manifest->writable = manifest->file != INVALID_HANDLE_VALUE;
+			if (!manifest->writable)
+			{
+				manifest->file = CreateFileW(manifest->path.c_str(), GENERIC_READ,
+					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+					OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			}
+			if (manifest->file == INVALID_HANDLE_VALUE)
+			{
+				runtime.manifest = std::move(manifest);
+				return nullptr;
+			}
+			const UInt64 expectedSize = sizeof(PersistentGlyphManifestHeader)
+				+ static_cast<UInt64>(kPersistentGlyphManifestEntries)
+					* sizeof(PersistentGlyphManifestEntry);
+			UInt64 fileSize = 0;
+			PersistentGlyphManifestHeader header;
+			bool valid = GetFileSize64(manifest->file, fileSize)
+				&& fileSize == expectedSize
+				&& ReadFileAt(manifest->file, 0, &header, sizeof(header))
+				&& MatchesGlyphManifestHeader(header, runtime, manifestHash, contentHash);
+			if (!valid)
+			{
+				if (!manifest->writable)
+				{
+					runtime.manifest = std::move(manifest);
+					return nullptr;
+				}
+				header = MakeGlyphManifestHeader(runtime, manifestHash, contentHash);
+				if (!SetFileSize64(manifest->file, 0)
+					|| !SetFileSize64(manifest->file, expectedSize)
+					|| !WriteFileAt(manifest->file, 0, &header, sizeof(header)))
+				{
+					runtime.manifest = std::move(manifest);
+					return nullptr;
+				}
+			}
+			manifest->mapping = CreateFileMappingW(manifest->file, nullptr,
+				manifest->writable ? PAGE_READWRITE : PAGE_READONLY, 0, 0, nullptr);
+			if (manifest->mapping)
+			{
+				manifest->mappedData = static_cast<UInt8*>(MapViewOfFile(manifest->mapping,
+					manifest->writable ? FILE_MAP_WRITE | FILE_MAP_READ : FILE_MAP_READ,
+					0, 0, 0));
+			}
+			runtime.manifest = std::move(manifest);
+			return runtime.manifest->mappedData ? runtime.manifest.get() : nullptr;
+		}
+
+		PersistentGlyphManifestEntry* GetGlyphManifestEntry(
+			PersistentGlyphManifest& manifest, UInt32 encodedCode)
+		{
+			if (!manifest.mappedData || encodedCode >= kPersistentGlyphManifestEntries)
+				return nullptr;
+			return reinterpret_cast<PersistentGlyphManifestEntry*>(
+				manifest.mappedData + sizeof(PersistentGlyphManifestHeader)) + encodedCode;
+		}
+
+		bool LoadGlyphManifest(RuntimeFont& runtime, UInt32 encodedCode,
+			VectorFontByteClass byteClass, VectorEncodedGlyph* glyph, FontLetter* metrics)
+		{
+			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
+			PersistentGlyphManifestEntry* entry = manifest
+				? GetGlyphManifestEntry(*manifest, encodedCode) : nullptr;
+			if (!entry || !entry->valid
+				|| entry->byteClass != static_cast<UInt8>(byteClass)
+				|| entry->checksum != HashBytes64(entry,
+					offsetof(PersistentGlyphManifestEntry, checksum)))
+				return false;
+			RuntimeRole& role = runtime.roles[static_cast<size_t>(byteClass)];
+			if (entry->faceIndex >= role.faces.size())
+				return false;
+			if (glyph)
+			{
+				glyph->encodedCode = encodedCode;
+				glyph->byteClass = byteClass;
+				glyph->byteLength = byteClass == VectorFontByteClass::DoubleByte ? 2 : 1;
+				glyph->codePoint = entry->codePoint;
+				glyph->faceIndex = entry->faceIndex;
+				glyph->glyphIndex = entry->glyphIndex;
+				glyph->hasGlyphIdentity = true;
+			}
+			if (metrics)
+			{
+				metrics->iTextureIndex = entry->textureIndex;
+				metrics->fWidth = entry->width;
+				metrics->fLeadingEdge = entry->leadingEdge;
+				metrics->fHeight = entry->height;
+				metrics->fTopEdge = entry->topEdge;
+				metrics->fSpacing = entry->spacing;
+			}
+			role.glyphIdentities.emplace(entry->codePoint, CachedGlyphIdentity{
+				entry->faceIndex, entry->glyphIndex, entry->renderedCodePoint });
+			return true;
+		}
+
+		void StoreGlyphManifest(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
+			const ResolvedGlyph& resolved, const FontLetter& metrics)
+		{
+			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
+			PersistentGlyphManifestEntry* destination = manifest
+				? GetGlyphManifestEntry(*manifest, glyph.encodedCode) : nullptr;
+			if (!destination || !manifest->writable || destination->valid)
+				return;
+			PersistentGlyphManifestEntry entry;
+			entry.valid = 1;
+			entry.byteClass = static_cast<UInt8>(glyph.byteClass);
+			entry.faceIndex = static_cast<UInt16>(resolved.faceIndex);
+			entry.glyphIndex = resolved.glyphIndex;
+			entry.codePoint = glyph.codePoint;
+			entry.renderedCodePoint = resolved.renderedCodePoint;
+			entry.textureIndex = metrics.iTextureIndex;
+			entry.width = metrics.fWidth;
+			entry.leadingEdge = metrics.fLeadingEdge;
+			entry.height = metrics.fHeight;
+			entry.topEdge = metrics.fTopEdge;
+			entry.spacing = metrics.fSpacing;
+			entry.checksum = HashBytes64(&entry,
+				offsetof(PersistentGlyphManifestEntry, checksum));
+			std::memcpy(destination, &entry, sizeof(entry));
+		}
+
 		bool ResolveVectorGlyph(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
 			ResolvedGlyph& result)
 		{
@@ -1505,7 +2585,6 @@ namespace fonthook::vectorfont
 			bitmap->effectiveWidth = key.effectiveWidth;
 			bitmap->effectiveHeight = key.effectiveHeight;
 			RuntimeRole& role = runtime.roles[static_cast<size_t>(glyph.byteClass)];
-			bitmap->baselineOffset = role.resolvedBaselineOffset;
 			ResolvedGlyph resolved;
 			if (!ResolveVectorGlyph(runtime, glyph, resolved))
 				return nullptr;
@@ -1536,11 +2615,17 @@ namespace fonthook::vectorfont
 
 			if (maskType == GlyphMaskType::DistanceField)
 			{
-				if (key.sdfSpread < 2 || key.sdfSpread > 32
-					|| FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL))
+				if (key.sdfSpread < 2 || key.sdfSpread > 32)
 					return nullptr;
 				FT_Int spread = key.sdfSpread;
-				if (FT_Property_Set(s_library, "bsdf", "spread", &spread)
+				// FT_Load_Glyph above applies the face's native/autohinter at the exact
+				// device source size.  Render that hinted outline directly: rendering
+				// NORMAL first would convert the slot to a bitmap and silently select
+				// FreeType's bsdf coverage-to-distance path instead.
+				const FT_Bool overlaps = (slot->outline.flags & FT_OUTLINE_OVERLAP)
+					? 1 : 0;
+				if (FT_Property_Set(s_library, "sdf", "spread", &spread)
+					|| FT_Property_Set(s_library, "sdf", "overlaps", &overlaps)
 					|| FT_Render_Glyph(slot, FT_RENDER_MODE_SDF))
 					return nullptr;
 				bitmap->left = slot->bitmap_left;
@@ -1675,12 +2760,27 @@ namespace fonthook::vectorfont
 		{
 			if (value == 0x7F)
 				continue;
+			if (LoadGlyphManifest(runtime, value,
+				VectorFontByteClass::SingleByte, nullptr,
+				&font.pFontData->pFontLetters[value]))
+				continue;
 			char byte = static_cast<char>(value);
 			UInt32 codePoint = 0xFFFD;
 			DecodeCodePoint(&byte, 1, codePoint);
-			font.pFontData->pFontLetters[value] = BuildFontLetter(
+			FontLetter metrics = BuildFontLetter(
 				runtime.roles[0], *runtime.config,
 				VectorFontByteClass::SingleByte, codePoint);
+			font.pFontData->pFontLetters[value] = metrics;
+			ResolvedGlyph resolved;
+			if (ResolveGlyph(runtime.roles[0], codePoint, resolved))
+			{
+				VectorEncodedGlyph glyph;
+				glyph.encodedCode = value;
+				glyph.byteClass = VectorFontByteClass::SingleByte;
+				glyph.byteLength = 1;
+				glyph.codePoint = codePoint;
+				StoreGlyphManifest(runtime, glyph, resolved, metrics);
+			}
 		}
 
 		const bool requestedOriginal = runtime.config->verticalMetrics == VerticalMetricsMode::Original;
@@ -1751,6 +2851,13 @@ namespace fonthook::vectorfont
 		auto existing = extra.find(encodedCode);
 		if (existing != extra.end())
 			return &existing->second;
+		FontLetter cachedMetrics;
+		if (LoadGlyphManifest(runtime, encodedCode,
+			VectorFontByteClass::DoubleByte, nullptr, &cachedMetrics))
+		{
+			auto [cached, inserted] = extra.emplace(encodedCode, cachedMetrics);
+			return &cached->second;
+		}
 
 		const char bytes[2] = {
 			static_cast<char>((encodedCode >> 8) & 0xFF),
@@ -1758,9 +2865,19 @@ namespace fonthook::vectorfont
 		};
 		UInt32 codePoint = 0xFFFD;
 		DecodeCodePoint(bytes, 2, codePoint);
-		auto [it, inserted] = extra.emplace(encodedCode,
-			BuildFontLetter(runtime.roles[1], *runtime.config,
-				VectorFontByteClass::DoubleByte, codePoint));
+		FontLetter metrics = BuildFontLetter(runtime.roles[1], *runtime.config,
+			VectorFontByteClass::DoubleByte, codePoint);
+		auto [it, inserted] = extra.emplace(encodedCode, metrics);
+		ResolvedGlyph resolved;
+		if (ResolveGlyph(runtime.roles[1], codePoint, resolved))
+		{
+			VectorEncodedGlyph glyph;
+			glyph.encodedCode = encodedCode;
+			glyph.byteClass = VectorFontByteClass::DoubleByte;
+			glyph.byteLength = 2;
+			glyph.codePoint = codePoint;
+			StoreGlyphManifest(runtime, glyph, resolved, metrics);
+		}
 		return &it->second;
 	}
 
@@ -1780,6 +2897,11 @@ namespace fonthook::vectorfont
 			if (!DecodeCodePoint(bytes, 2, glyph.codePoint))
 				glyph.codePoint = 0xFFFD;
 			glyph.metrics = EnsureDoubleByteMetrics(runtime, font, encodedCode);
+			if (LoadGlyphManifest(runtime, encodedCode, glyph.byteClass, &glyph, nullptr))
+			{
+				glyph.metrics = EnsureDoubleByteMetrics(runtime, font, encodedCode);
+				return glyph.metrics != nullptr;
+			}
 			ResolvedGlyph resolved;
 			if (ResolveGlyph(runtime.roles[static_cast<size_t>(glyph.byteClass)],
 				glyph.codePoint, resolved))
@@ -1795,6 +2917,11 @@ namespace fonthook::vectorfont
 		if (!DecodeCodePoint(text, 1, glyph.codePoint))
 			glyph.codePoint = 0xFFFD;
 		glyph.metrics = &font.pFontData->pFontLetters[static_cast<UInt8>(text[0])];
+		if (LoadGlyphManifest(runtime, glyph.encodedCode, glyph.byteClass, &glyph, nullptr))
+		{
+			glyph.metrics = &font.pFontData->pFontLetters[static_cast<UInt8>(text[0])];
+			return true;
+		}
 		ResolvedGlyph resolved;
 		if (ResolveGlyph(runtime.roles[static_cast<size_t>(glyph.byteClass)],
 			glyph.codePoint, resolved))
@@ -1819,6 +2946,8 @@ namespace fonthook::vectorfont
 			? (static_cast<UInt32>(static_cast<UInt8>(bytes[0])) << 8)
 				| static_cast<UInt8>(bytes[1])
 			: static_cast<UInt8>(bytes[0]);
+		if (LoadGlyphManifest(runtime, glyph.encodedCode, glyph.byteClass, &glyph, nullptr))
+			return true;
 		if (!DecodeCodePoint(bytes, static_cast<int>(length), glyph.codePoint))
 			return false;
 
@@ -1829,12 +2958,104 @@ namespace fonthook::vectorfont
 			return false;
 		}
 		ApplyResolvedIdentity(glyph, resolved);
+		const FontLetter metrics = BuildFontLetter(
+			runtime.roles[static_cast<size_t>(glyph.byteClass)], *runtime.config,
+			glyph.byteClass, glyph.codePoint);
+		StoreGlyphManifest(runtime, glyph, resolved, metrics);
 		return glyph.hasGlyphIdentity;
 	}
 
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& runtime)
 	{
 		return *runtime.config;
+	}
+
+	UInt64 GetRuntimeFontContentHash(RuntimeFont& runtime)
+	{
+		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		return ComputeRuntimeFontContentHash(runtime);
+	}
+
+	std::wstring GetRuntimePrimaryFontFileName(const RuntimeFont& runtime)
+	{
+		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		if (!runtime.roles[0].faces.empty() && runtime.roles[0].faces[0].file)
+			return SanitizePersistentBitmapFontName(runtime.roles[0].faces[0].file->path);
+		return L"font";
+	}
+
+	bool GetFreeTypeFontCacheDirectory(std::wstring& directory)
+	{
+		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		return EnsurePersistentBitmapDirectory(directory);
+	}
+
+	bool HasCompleteGlyphManifest(RuntimeFont& runtime, FontPrewarmMode mode)
+	{
+		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
+		if (!manifest || !manifest->mappedData)
+			return false;
+		const auto* header = reinterpret_cast<const PersistentGlyphManifestHeader*>(
+			manifest->mappedData);
+		return header->completeMode >= static_cast<UInt8>(mode);
+	}
+
+	void MarkGlyphManifestComplete(RuntimeFont& runtime, FontPrewarmMode mode)
+	{
+		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
+		if (!manifest || !manifest->mappedData || !manifest->writable)
+			return;
+		auto* header = reinterpret_cast<PersistentGlyphManifestHeader*>(
+			manifest->mappedData);
+		if (header->completeMode >= static_cast<UInt8>(mode))
+			return;
+		header->completeMode = static_cast<UInt8>(mode);
+		header->checksum = HashBytes64(header,
+			offsetof(PersistentGlyphManifestHeader, checksum));
+		FlushViewOfFile(header, sizeof(*header));
+	}
+
+	void FlushGlyphBitmapDiskCache()
+	{
+		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		UInt32 profileCount = 0;
+		UInt64 recordCount = 0;
+		UInt64 byteCount = 0;
+		for (auto& pair : s_persistentBitmapProfiles)
+		{
+			PersistentBitmapProfile& profile = *pair.second;
+			if (!profile.initialized || profile.file == INVALID_HANDLE_VALUE)
+				continue;
+			if (profile.writable)
+				FlushFileBuffers(profile.file);
+			++profileCount;
+			recordCount += profile.recordCount;
+			byteCount += profile.validSize;
+		}
+		for (auto& pair : s_runtimeFonts)
+		{
+			RuntimeFont& runtime = *pair.second;
+			if (!runtime.manifest || !runtime.manifest->mappedData)
+				continue;
+			FlushViewOfFile(runtime.manifest->mappedData, 0);
+			if (runtime.manifest->writable)
+				FlushFileBuffers(runtime.manifest->file);
+		}
+		if (profileCount)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: persistent bitmap cache flushed profiles=%u records=%llu bytes=%llu",
+				profileCount, static_cast<unsigned long long>(recordCount),
+				static_cast<unsigned long long>(byteCount));
+		}
+	}
+
+	float GetGlyphBaselineOffset(const RuntimeFont& runtime,
+		VectorFontByteClass byteClass)
+	{
+		return runtime.roles[static_cast<size_t>(byteClass)].resolvedBaselineOffset;
 	}
 
 	void HydrateLayoutMetrics(RuntimeFont& runtime, Font& font,
@@ -1927,7 +3148,14 @@ namespace fonthook::vectorfont
 		std::lock_guard<std::recursive_mutex> lock(s_mutex);
 		const float safeScale = std::isfinite(rasterScale)
 			&& rasterScale >= 0.1f && rasterScale <= 10.0f ? rasterScale : 1.0f;
-		const ByteStyle& style = runtime.config->styles[static_cast<size_t>(glyph.byteClass)];
+		ResolvedGlyph resolved;
+		if (!ResolveVectorGlyph(runtime, glyph, resolved) || !resolved.role
+			|| !resolved.runtimeFace || !resolved.runtimeFace->face
+			|| !resolved.runtimeFace->file)
+		{
+			return nullptr;
+		}
+		const ByteStyle& style = *resolved.role->style;
 		const int effectiveWidth = std::clamp(static_cast<int>(std::lround(
 			style.pixelSize * style.scaleX * safeScale)), 1, 65535);
 		const int effectiveHeight = std::clamp(static_cast<int>(std::lround(
@@ -1944,17 +3172,20 @@ namespace fonthook::vectorfont
 			? static_cast<UInt8>(sdfSpread) : 0;
 		if (maskType == GlyphMaskType::DistanceField && !resolvedSdfSpread)
 			return nullptr;
+		const float slant = std::tan(style.slantDegrees
+			* 3.14159265358979323846f / 180.0f);
+		const SInt32 slant16Dot16 = static_cast<SInt32>(std::lround(
+			slant * kFixedScale));
 		const BitmapCacheKey key = {
-			runtime.config->styleHash,
-			runtime.config->fontId,
-			glyph.glyphIndex,
-			glyph.faceIndex,
+			resolved.runtimeFace->file->contentHash,
+			static_cast<SInt32>(resolved.runtimeFace->face->face_index),
+			resolved.glyphIndex,
 			static_cast<UInt16>(effectiveWidth),
 			static_cast<UInt16>(effectiveHeight),
 			embolden,
 			strokeWidth,
+			slant16Dot16,
 			resolvedSdfSpread,
-			static_cast<UInt8>(glyph.byteClass),
 			static_cast<UInt8>(maskType)
 		};
 		auto existing = s_bitmapCache.find(key);
@@ -1962,7 +3193,61 @@ namespace fonthook::vectorfont
 		{
 			TouchBitmapCacheEntry(existing->second, key);
 			RecordFreeTypePerf(FreeTypePerfCounter::BitmapMemoryHit);
+			if (existing->second.sourceFontId != runtime.config->fontId)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::BitmapCrossFontHit);
+				if (g_bEnableFreeTypeFontRenderingLog
+					&& !s_loggedCrossFontBitmapShare)
+				{
+					s_loggedCrossFontBitmapShare = true;
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: first cross-font bitmap cache hit sourceFont=%u targetFont=%u path=%ls face=%d glyph=%u size=%ux%u mask=%u",
+						existing->second.sourceFontId, runtime.config->fontId,
+						resolved.runtimeFace->file->path.c_str(), key.fontFaceIndex,
+						key.glyphIndex, key.effectiveWidth, key.effectiveHeight,
+						key.maskType);
+				}
+			}
 			return existing->second.bitmap;
+		}
+
+		const PersistentBitmapProfileKey persistentKey =
+			MakePersistentBitmapProfileKey(key,
+				resolved.runtimeFace->file->contentHash);
+		PersistentBitmapProfile* persistentProfile =
+			GetPersistentBitmapProfile(persistentKey,
+				resolved.runtimeFace->file->path, runtime.config->fontId,
+				static_cast<UInt32>(std::max<FT_Long>(1,
+					resolved.runtimeFace->face->num_glyphs)));
+		if (persistentProfile)
+		{
+			std::shared_ptr<GlyphBitmap> diskBitmap =
+				LoadPersistentGlyphBitmap(*persistentProfile, key);
+			if (diskBitmap)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskHit);
+				RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskReadBytes,
+					diskBitmap->alpha.size());
+				if (g_bEnableFreeTypeFontRenderingLog
+					&& !s_loggedPersistentBitmapHit)
+				{
+					s_loggedPersistentBitmapHit = true;
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: first persistent bitmap cache hit path=%ls font=%u glyph=%u size=%ux%u mask=%u bytes=%u records=%u",
+						persistentProfile->path.c_str(), runtime.config->fontId,
+						key.glyphIndex, key.effectiveWidth, key.effectiveHeight,
+						key.maskType, static_cast<UInt32>(diskBitmap->alpha.size()),
+						persistentProfile->recordCount);
+				}
+				const size_t bytes = sizeof(GlyphBitmap) + diskBitmap->alpha.size();
+				s_bitmapLru.push_front(key);
+				s_bitmapCache.emplace(key, BitmapCacheEntry{
+					diskBitmap, bytes, s_bitmapLru.begin(), runtime.config->fontId });
+				s_bitmapCacheBytes += bytes;
+				TrimBitmapCache();
+				return diskBitmap;
+			}
+			RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskMiss);
 		}
 
 		RecordFreeTypePerf(FreeTypePerfCounter::BitmapRasterized);
@@ -1970,10 +3255,17 @@ namespace fonthook::vectorfont
 			BuildGlyphBitmap(runtime, glyph, maskType, safeScale, key);
 		if (!bitmap)
 			return nullptr;
+		if (persistentProfile
+			&& StorePersistentGlyphBitmap(*persistentProfile, key, *bitmap))
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskWrite);
+			RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskWriteBytes,
+				bitmap->alpha.size());
+		}
 		const size_t bytes = sizeof(GlyphBitmap) + bitmap->alpha.size();
 		s_bitmapLru.push_front(key);
 		s_bitmapCache.emplace(key,
-			BitmapCacheEntry{ bitmap, bytes, s_bitmapLru.begin() });
+			BitmapCacheEntry{ bitmap, bytes, s_bitmapLru.begin(), runtime.config->fontId });
 		s_bitmapCacheBytes += bytes;
 		TrimBitmapCache();
 		return bitmap;
@@ -1982,6 +3274,11 @@ namespace fonthook::vectorfont
 
 namespace fonthook
 {
+	void FlushFreeTypePersistentFontCache()
+	{
+		vectorfont::FlushGlyphBitmapDiskCache();
+	}
+
 	bool LayoutFreeTypeRun(Font* apFont, const char* apText, size_t auiLength,
 		FreeTypeLayoutRun& arLayout, bool abAllowShaping)
 	{

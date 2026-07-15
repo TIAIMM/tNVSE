@@ -9,6 +9,7 @@ extern bool g_bEnableMultibyteFontHook;
 extern bool g_bEnableFreeTypeFontRendering;
 extern bool g_bEnableFreeTypeFontRenderingLog;
 extern bool g_bEnableFreeTypeDevicePixelScale;
+extern float g_fFreeTypeFontResolutionScale;
 extern UINT32 g_uiFreeTypeFontMemoryCacheMB;
 extern bool g_bEnableFreeTypeDefaultPoolAtlas;
 extern bool g_bEnableFreeTypeA8Atlas;
