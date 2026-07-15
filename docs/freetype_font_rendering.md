@@ -200,13 +200,14 @@ The same directory also contains three startup-oriented cache layers. A
 last-write time still match. A dense 65536-entry `.tnvfmanifest` stores the
 encoded unit's Unicode value, fallback face/glyph identity, and serialized
 `FontLetter` metrics. One `_p<page>.tnvfatlas` snapshot per atlas page stores
-the completed level 0, every generated mip level, shelf cursor state, and
-stable glyph-ID placement map. Each page records and validates the total page
-count. After a successful full prewarm every page is written atomically, then
-the manifest is marked complete. A later launch restores the complete page set
-directly and skips code-page enumeration, per-glyph mask loading, packing, and
-mip generation. Every layer includes its schema/layout/mask/font/code-page inputs in
-its hash; stale files are ignored rather than migrated.
+the shelf cursor state and stable glyph-ID placement map. Pure SDF pages store
+only the placed level-zero rectangles; other pages retain their complete mip
+chain. Each page records and validates the total page count. After a successful
+full prewarm every page is written atomically, then the manifest is marked
+complete. A later launch restores the complete page set directly and skips
+code-page enumeration, per-glyph mask loading, packing, and mip generation.
+Every layer includes its schema/layout/mask/font/code-page inputs in its hash;
+stale files are ignored rather than migrated.
 
 `bDeleteUnusedFreeTypeFontCache=1` removes stale `.tnvfmask`, `.tnvfhash`,
 `.tnvfmanifest`, and `.tnvfatlas` files that were not accessed by the current
@@ -340,9 +341,11 @@ CPU-side caches. When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
-generations are restored from those masks after a D3D9 device reset. If the
-DEFAULT-pool path is unavailable, that profile falls back to the engine-managed
-atlas implementation.
+generations are restored after a D3D9 device reset. A pure SDF v5 snapshot is
+uploaded directly to this path and keeps its packed placement payload as reset
+backing; glyphs added later retain only their individual masks. If direct
+DEFAULT-pool creation is unavailable, snapshot restore and normal atlas
+creation fall back to the engine-managed implementation.
 
 `uiFreeTypeFontGpuAtlasCacheMB` controls the soft GPU atlas budget. A value of
 zero selects one eighth of the available texture memory, rounded to 16 MB and
@@ -350,10 +353,9 @@ clamped to 64-256 MB; 128 MB is used when the device does not report a reliable
 value. A nonzero value is used directly. Atlas generations still referenced by
 visible game shapes cannot be evicted, so live usage may temporarily exceed the
 soft budget. The resolved value is written to `tnvse.log` at initialization and
-when a device reset changes the automatic result. Completed prewarm atlases are
-persisted with their full mip chain and placement manifest; a validated
-snapshot is restored through an engine-managed texture on the next process.
-Font atlases contain three mip levels (1x,
+when a device reset changes the automatic result. Validated pure SDF snapshots
+restore directly to the DEFAULT pool when enabled; other snapshots use the
+engine-managed path. Non-SDF font atlases contain three mip levels (1x,
 1/2x, and 1/4x); the cache budget and upload counters include all levels.
 Limiting the chain to three levels together with four-pixel per-side packing
 padding prevents the coarsest bilinear footprint from reaching a neighboring
