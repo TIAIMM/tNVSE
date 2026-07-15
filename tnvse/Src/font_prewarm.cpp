@@ -36,6 +36,15 @@ namespace fonthook::vectorfont
 		HANDLE s_progressThread = nullptr;
 		HANDLE s_progressReadyEvent = nullptr;
 
+		bool IsCurrentProcessForeground()
+		{
+			HWND foreground = GetForegroundWindow();
+			DWORD processId = 0;
+			if (foreground)
+				GetWindowThreadProcessId(foreground, &processId);
+			return processId == GetCurrentProcessId();
+		}
+
 		void DrawPrewarmProgress(HWND window)
 		{
 			PAINTSTRUCT paint = {};
@@ -123,6 +132,9 @@ namespace fonthook::vectorfont
 				InvalidateRect(window, nullptr, FALSE);
 				UpdateWindow(window);
 				return 0;
+			case WM_ACTIVATEAPP:
+				ShowWindowAsync(window, wParam ? SW_SHOWNOACTIVATE : SW_HIDE);
+				return DefWindowProcW(window, message, wParam, lParam);
 			case WM_CLOSE:
 				DestroyWindow(window);
 				return 0;
@@ -212,11 +224,15 @@ namespace fonthook::vectorfont
 		{
 			if (s_progressThread)
 				return;
+			// Blocking prewarm intentionally keeps the game-window thread busy. A
+			// ghost window would freeze the initial progress frame above the live
+			// owned progress window and can leave it hidden after reactivation.
+			DisableProcessWindowsGhosting();
 			{
 				std::lock_guard<std::mutex> lock(s_progressMutex);
 				s_progressState = {};
-				s_progressState.detail = L"Initializing font cache...";
-				s_progressState.stage = L"Please wait. The game will continue automatically.";
+				s_progressState.detail = L"Generating missing font cache...";
+				s_progressState.stage = L"Preparing glyphs...";
 				s_progressState.owner = FindPrewarmProgressOwner();
 			}
 			s_progressReadyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -236,7 +252,11 @@ namespace fonthook::vectorfont
 				s_progressState.progress = progress;
 			}
 			if (HWND window = s_progressWindow.load(std::memory_order_acquire))
+			{
 				PostMessageW(window, kPrewarmProgressRefreshMessage, 0, 0);
+				if (IsCurrentProcessForeground() && !IsWindowVisible(window))
+					ShowWindowAsync(window, SW_SHOWNOACTIVATE);
+			}
 		}
 
 		void StopPrewarmProgress()
@@ -609,13 +629,51 @@ namespace fonthook::vectorfont
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: blocking prewarm begin fonts=%u scale=%.3f",
 			queuedFonts, deviceScale);
-		StartPrewarmProgress();
-		UpdatePrewarmProgress(L"Initializing font cache...",
-			L"Please wait. The game will continue automatically.", 0.0f);
 		std::vector<std::shared_ptr<const GlyphBitmap>> bitmaps;
 		bitmaps.reserve(kMaximumGlyphsPerBatch * 3);
 		std::unordered_set<UInt64> unique;
 		unique.reserve(kMaximumGlyphsPerBatch * 2);
+
+		// Restore every valid snapshot before creating the progress window. This
+		// keeps the normal cache-hit startup path silent and ensures a mixed hit/
+		// miss queue only displays progress while missing atlases are generated.
+		std::deque<PrewarmJob> cacheMisses;
+		while (!s_jobs.empty())
+		{
+			PrewarmJob job = s_jobs.front();
+			s_jobs.pop_front();
+			++batches;
+			if (job.rasterScaleMilli != rasterScaleMilli)
+				ResetPrewarmScan(job, rasterScaleMilli);
+			const float rasterScale = job.rasterScaleMilli / 1000.0f;
+			const FontConfig* config = FindConfig(job.fontId);
+			RuntimeFont* runtime = FindRuntimeFont(job.fontId);
+			if (!config || !runtime || config->styleHash != job.styleHash
+				|| job.codePage != g_usingWinEncoding)
+			{
+				FinishJob(job, "cancelled");
+				++cancelledFonts;
+				++finishedFonts;
+				continue;
+			}
+			job.snapshotAttempted = true;
+			if (TryLoadGlyphAtlasSnapshot(*runtime, rasterScale))
+			{
+				FinishJob(job, "snapshot");
+				++completedFonts;
+				++finishedFonts;
+				continue;
+			}
+			cacheMisses.push_back(job);
+		}
+		s_jobs.swap(cacheMisses);
+		if (!s_jobs.empty())
+		{
+			StartPrewarmProgress();
+			UpdatePrewarmProgress(L"Generating missing font cache...",
+				L"Preparing glyphs...",
+				static_cast<float>(finishedFonts) / queuedFonts);
+		}
 
 		// Deliberately drain the complete queue on the first game-loop callback
 		// where the final device scale is available. This is an experimental
@@ -773,9 +831,12 @@ namespace fonthook::vectorfont
 			queuedFonts, completedFonts, fullFonts, saveFailedFonts, cancelledFonts, batches,
 			static_cast<unsigned long long>(GetTickCount64() - started));
 		FlushGlyphBitmapDiskCache();
-		UpdatePrewarmProgress(L"Font cache is ready.",
-			L"Starting the game...", 1.0f);
-		StopPrewarmProgress();
+		if (s_progressThread)
+		{
+			UpdatePrewarmProgress(L"Font cache is ready.",
+				L"Starting the game...", 1.0f);
+			StopPrewarmProgress();
+		}
 	}
 }
 
