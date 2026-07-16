@@ -1,0 +1,933 @@
+#include "font_freetype_internal.h"
+
+#include "encoding.h"
+#include "font_glyphs.h"
+#include "globals.h"
+
+namespace fonthook::vectorfont
+{
+	namespace
+	{
+		FreeTypeState s_freeTypeState;
+		thread_local FreeTypeThreadState s_freeTypeThreadState;
+	}
+
+	FreeTypeState& State()
+	{
+		return s_freeTypeState;
+	}
+
+	FreeTypeThreadState& ThreadState()
+	{
+		return s_freeTypeThreadState;
+	}
+
+	size_t GetBitmapCacheLimit()
+	{
+		return static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 4u;
+	}
+
+	size_t GetLayoutCacheLimit()
+	{
+		return static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 8u;
+	}
+
+		std::wstring NormalizePathKey(std::wstring path)
+		{
+			std::replace(path.begin(), path.end(), L'/', L'\\');
+			std::transform(path.begin(), path.end(), path.begin(), towlower);
+			return path;
+		}
+
+		UInt64 HashBytes64(const void* data, size_t size,
+			UInt64 hash)
+		{
+			const UInt8* bytes = static_cast<const UInt8*>(data);
+			for (size_t index = 0; index < size; ++index)
+			{
+				hash ^= bytes[index];
+				hash *= 1099511628211ull;
+			}
+			return hash;
+		}
+
+		bool ResolvePersistentFontContentHash(MappedFontFile& mapped,
+			const std::wstring& normalizedPath);
+
+		std::shared_ptr<MappedFontFile> MapFontFile(const std::wstring& path)
+		{
+			const std::wstring key = NormalizePathKey(path);
+			auto existing = State().mappedFiles.find(key);
+			if (existing != State().mappedFiles.end())
+			{
+				if (std::shared_ptr<MappedFontFile> mapped = existing->second.lock())
+					return mapped;
+			}
+
+			auto mapped = std::make_shared<MappedFontFile>();
+			mapped->path = path;
+			mapped->file = CreateFileW(path.c_str(), GENERIC_READ,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+				nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (mapped->file == INVALID_HANDLE_VALUE)
+			{
+				gLog.FormattedMessage("tnvse_freetype_font: CreateFileW failed path=%ls win32=%lu",
+					path.c_str(), GetLastError());
+				return nullptr;
+			}
+
+			LARGE_INTEGER size = {};
+			if (!GetFileSizeEx(mapped->file, &size)
+				|| size.QuadPart <= 0
+				|| size.QuadPart > std::numeric_limits<FT_Long>::max())
+			{
+				gLog.FormattedMessage("tnvse_freetype_font: invalid font file size path=%ls size=%lld win32=%lu",
+					path.c_str(), size.QuadPart, GetLastError());
+				return nullptr;
+			}
+			mapped->size = static_cast<FT_Long>(size.QuadPart);
+			mapped->mapping = CreateFileMappingW(mapped->file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+			if (!mapped->mapping)
+			{
+				gLog.FormattedMessage("tnvse_freetype_font: CreateFileMappingW failed path=%ls win32=%lu",
+					path.c_str(), GetLastError());
+				return nullptr;
+			}
+			mapped->data = static_cast<const FT_Byte*>(MapViewOfFile(mapped->mapping, FILE_MAP_READ, 0, 0, 0));
+			if (!mapped->data)
+			{
+				gLog.FormattedMessage("tnvse_freetype_font: MapViewOfFile failed path=%ls win32=%lu",
+					path.c_str(), GetLastError());
+				return nullptr;
+			}
+			if (!ResolvePersistentFontContentHash(*mapped, key))
+				mapped->contentHash = HashBytes64(mapped->data,
+					static_cast<size_t>(mapped->size));
+
+			State().mappedFiles[key] = mapped;
+			return mapped;
+		}
+
+		bool InitializeLibrary()
+		{
+			if (State().library)
+				return true;
+			if (FT_Init_FreeType(&State().library))
+			{
+				gLog.FormattedMessage("tnvse_freetype_font: FT_Init_FreeType failed");
+				return false;
+			}
+			return true;
+		}
+
+		bool ConfigureFace(FT_Face face, const ByteStyle& style,
+			float rasterScale, bool raster)
+		{
+			if (!face)
+				return false;
+			const float safeScale = std::isfinite(rasterScale)
+				&& rasterScale >= 0.1f && rasterScale <= 10.0f ? rasterScale : 1.0f;
+			FT_Error error = 0;
+			FT_Matrix matrix = {};
+			const float slant = std::tan(style.slantDegrees
+				* 3.14159265358979323846f / 180.0f);
+			if (raster)
+			{
+				const FT_UInt width = static_cast<FT_UInt>(std::max(1.0f,
+					std::round(style.pixelSize * style.scaleX * safeScale)));
+				const FT_UInt height = static_cast<FT_UInt>(std::max(1.0f,
+					std::round(style.pixelSize * style.scaleY * safeScale)));
+				error = FT_Set_Pixel_Sizes(face, width, height);
+				matrix.xx = static_cast<FT_Fixed>(kFixedScale);
+				matrix.xy = static_cast<FT_Fixed>(std::lround(slant * kFixedScale));
+				matrix.yy = static_cast<FT_Fixed>(kFixedScale);
+			}
+			else
+			{
+				error = FT_Set_Char_Size(face, 0,
+					static_cast<FT_F26Dot6>(std::lround(style.pixelSize * 64.0f)), 72, 72);
+				matrix.xx = static_cast<FT_Fixed>(std::lround(style.scaleX * kFixedScale));
+				matrix.xy = static_cast<FT_Fixed>(std::lround(slant * style.scaleY * kFixedScale));
+				matrix.yy = static_cast<FT_Fixed>(std::lround(style.scaleY * kFixedScale));
+			}
+			matrix.yx = 0;
+			FT_Set_Transform(face, &matrix, nullptr);
+			return error == 0;
+		}
+
+		bool ConfigureRuntimeFace(RuntimeFace& runtimeFace, const ByteStyle& style,
+			float rasterScale, bool raster)
+		{
+			const float safeScale = std::isfinite(rasterScale)
+				&& rasterScale >= 0.1f && rasterScale <= 10.0f ? rasterScale : 1.0f;
+			const FT_UInt width = raster ? static_cast<FT_UInt>(std::max(1.0f,
+				std::round(style.pixelSize * style.scaleX * safeScale))) : 0;
+			const FT_UInt height = raster ? static_cast<FT_UInt>(std::max(1.0f,
+				std::round(style.pixelSize * style.scaleY * safeScale)))
+				: static_cast<FT_UInt>(std::max(1.0f, std::round(style.pixelSize * 64.0f)));
+			if (runtimeFace.configured && runtimeFace.configuredRaster == raster
+				&& runtimeFace.configuredWidth == width && runtimeFace.configuredHeight == height)
+			{
+				return true;
+			}
+			if (!ConfigureFace(runtimeFace.face, style, safeScale, raster))
+				return false;
+			runtimeFace.configured = true;
+			runtimeFace.configuredRaster = raster;
+			runtimeFace.configuredWidth = width;
+			runtimeFace.configuredHeight = height;
+			if (runtimeFace.hbFont)
+				hb_ft_font_changed(runtimeFace.hbFont);
+			return true;
+		}
+
+		bool CreateRuntimeFace(const FaceConfig& config, const ByteStyle& style, RuntimeFace& result)
+		{
+			result.file = MapFontFile(config.path);
+			if (!result.file)
+				return false;
+			FT_Error error = FT_New_Memory_Face(State().library, result.file->data,
+				result.file->size, config.faceIndex, &result.face);
+			if (error)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: FT_New_Memory_Face failed path=%ls index=%ld error=0x%02X",
+					config.path.c_str(), config.faceIndex, static_cast<UInt32>(error));
+				return false;
+			}
+			error = FT_Select_Charmap(result.face, FT_ENCODING_UNICODE);
+			if (error)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: FT_Select_Charmap failed path=%ls index=%ld error=0x%02X",
+					config.path.c_str(), config.faceIndex, static_cast<UInt32>(error));
+				return false;
+			}
+			if (!ConfigureRuntimeFace(result, style, 1.0f, false))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: base face sizing failed path=%ls index=%ld size=%.2f",
+					config.path.c_str(), config.faceIndex, style.pixelSize);
+				return false;
+			}
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				FreeTypeFontDebugLog(
+					"tnvse_freetype_font: loaded face path=%ls index=%ld family=%s style=%s faces=%ld glyphs=%ld",
+					config.path.c_str(), config.faceIndex,
+					result.face->family_name ? result.face->family_name : "",
+					result.face->style_name ? result.face->style_name : "",
+					result.face->num_faces, result.face->num_glyphs);
+			}
+			return true;
+		}
+
+		bool LoadGlyph(RuntimeRole& role, RuntimeFace& face, FT_UInt glyphIndex)
+		{
+			if (!ConfigureRuntimeFace(face, *role.style, 1.0f, false))
+				return false;
+			if (FT_Load_Glyph(face.face, glyphIndex, kGlyphLoadFlags))
+				return false;
+			if (face.face->glyph->format == FT_GLYPH_FORMAT_OUTLINE && role.style->embolden > 0.0f)
+			{
+				const FT_Pos strength = static_cast<FT_Pos>(std::lround(role.style->embolden * 64.0f));
+				FT_Outline_EmboldenXY(&face.face->glyph->outline, strength, strength);
+			}
+			return true;
+		}
+
+		bool ResolveExactGlyph(RuntimeRole& role, UInt32 codePoint, ResolvedGlyph& result)
+		{
+			for (UInt32 i = 0; i < role.faces.size(); ++i)
+			{
+				RuntimeFace& face = role.faces[i];
+				const FT_UInt glyphIndex = FT_Get_Char_Index(face.face, codePoint);
+				if (!glyphIndex)
+					continue;
+				result = { &role, &face, i, glyphIndex, codePoint };
+				return true;
+			}
+			return false;
+		}
+
+		bool ResolveGlyph(RuntimeRole& role, UInt32 codePoint, ResolvedGlyph& result)
+		{
+			auto cached = role.glyphIdentities.find(codePoint);
+			if (cached != role.glyphIdentities.end() && cached->second.faceIndex < role.faces.size())
+			{
+				const CachedGlyphIdentity& identity = cached->second;
+				result = { &role, &role.faces[identity.faceIndex], identity.faceIndex,
+					identity.glyphIndex, identity.renderedCodePoint };
+				return true;
+			}
+
+			if (!ResolveExactGlyph(role, codePoint, result)
+				&& (codePoint == 0xFFFD || !ResolveExactGlyph(role, 0xFFFD, result))
+				&& (codePoint == '?' || !ResolveExactGlyph(role, '?', result)))
+			{
+				if (role.faces.empty())
+					return false;
+				result = { &role, &role.faces.front(), 0, 0, 0 };
+			}
+			role.glyphIdentities.emplace(codePoint, CachedGlyphIdentity{
+				static_cast<UInt16>(result.faceIndex), result.glyphIndex, result.renderedCodePoint });
+			return true;
+		}
+
+		bool DecodeCodePoint(const char* bytes, int length, UInt32& codePoint)
+		{
+			if (!bytes || length <= 0)
+				return false;
+			if (!g_usingWinEncoding)
+			{
+				codePoint = static_cast<UInt8>(bytes[0]);
+				return length == 1;
+			}
+
+			FreeTypeState& state = State();
+			if (state.codePointCacheCodePage != g_usingWinEncoding)
+			{
+				state.singleByteCodePoints.fill(UINT32_MAX);
+				state.doubleByteCodePoints.fill(UINT32_MAX);
+				state.codePointCacheCodePage = g_usingWinEncoding;
+			}
+			const UInt32 encoded = length == 1
+				? static_cast<UInt8>(bytes[0])
+				: (static_cast<UInt32>(static_cast<UInt8>(bytes[0])) << 8)
+					| static_cast<UInt8>(bytes[1]);
+			UInt32& cached = length == 1
+				? state.singleByteCodePoints[encoded] : state.doubleByteCodePoints[encoded];
+			if (cached != UINT32_MAX)
+			{
+				if (cached == UINT32_MAX - 1)
+					return false;
+				codePoint = cached;
+				return true;
+			}
+
+			wchar_t wide[2] = {};
+			int count = MultiByteToWideChar(g_usingWinEncoding, MB_ERR_INVALID_CHARS,
+				bytes, length, wide, static_cast<int>(std::size(wide)));
+			if (!count && GetLastError() == ERROR_INVALID_FLAGS)
+			{
+				count = MultiByteToWideChar(g_usingWinEncoding, 0,
+					bytes, length, wide, static_cast<int>(std::size(wide)));
+			}
+			if (count == 1)
+			{
+				codePoint = cached = static_cast<UInt16>(wide[0]);
+				return true;
+			}
+			if (count == 2 && wide[0] >= 0xD800 && wide[0] <= 0xDBFF
+				&& wide[1] >= 0xDC00 && wide[1] <= 0xDFFF)
+			{
+				codePoint = cached = 0x10000 + ((wide[0] - 0xD800) << 10) + (wide[1] - 0xDC00);
+				return true;
+			}
+			cached = UINT32_MAX - 1;
+			return false;
+		}
+
+		bool GetGlyphBox(RuntimeRole& role, UInt32 codePoint, FT_BBox& box, float& advance)
+		{
+			ResolvedGlyph glyph;
+			if (!ResolveGlyph(role, codePoint, glyph))
+				return false;
+			if (!LoadGlyph(role, *glyph.runtimeFace, glyph.glyphIndex))
+				return false;
+			FT_GlyphSlot slot = glyph.runtimeFace->face->glyph;
+			if (slot->format == FT_GLYPH_FORMAT_OUTLINE)
+				FT_Outline_Get_CBox(&slot->outline, &box);
+			else
+				box = {};
+			advance = static_cast<float>(slot->advance.x) / 64.0f;
+			return true;
+		}
+
+		float GetFixedCellAdvance(const ByteStyle& style)
+		{
+			return std::max(0.0f, style.fixedWidth + style.tracking);
+		}
+
+		float GetFixedCellGlyphOffset(const ByteStyle& style, const FT_GlyphSlot slot)
+		{
+			if (style.fixedWidth <= 0.0f || !slot || slot->format != FT_GLYPH_FORMAT_OUTLINE)
+				return 0.0f;
+			FT_BBox box = {};
+			FT_Outline_Get_CBox(&slot->outline, &box);
+			const float xMin = std::floor(static_cast<float>(box.xMin) / 64.0f);
+			const float xMax = std::ceil(static_cast<float>(box.xMax) / 64.0f);
+			const float bodyWidth = std::max(0.0f, xMax - xMin);
+			const float centeredLeading = (style.fixedWidth - bodyWidth) * 0.5f;
+			return centeredLeading - xMin;
+		}
+
+		void ApplyResolvedIdentity(VectorEncodedGlyph& glyph, const ResolvedGlyph& resolved)
+		{
+			glyph.faceIndex = static_cast<UInt16>(resolved.faceIndex);
+			glyph.glyphIndex = resolved.glyphIndex;
+			glyph.hasGlyphIdentity = true;
+		}
+
+		VerticalEffectExtents GetVerticalEffectExtents(const FontConfig& config)
+		{
+			const float stroke = std::max(
+				config.glow.enabled ? std::max(0.0f, config.glow.width) : 0.0f,
+				config.outline.enabled ? std::max(0.0f, config.outline.width) : 0.0f);
+			const float shadowTop = config.shadow.enabled
+				? std::max(0.0f, -config.shadow.y) : 0.0f;
+			const float shadowBottom = config.shadow.enabled
+				? std::max(0.0f, config.shadow.y) : 0.0f;
+			return { std::max(stroke, shadowTop), std::max(stroke, shadowBottom) };
+		}
+
+		void RemoveEffectExtentsFromMetrics(const FontConfig& config,
+			UInt32 codePoint, FontLetter& metrics)
+		{
+			if (codePoint == 0x20)
+				return;
+			const VerticalEffectExtents effects = GetVerticalEffectExtents(config);
+			metrics.fTopEdge -= effects.top;
+			metrics.fHeight = std::max(0.0f,
+				metrics.fHeight - effects.top - effects.bottom);
+		}
+
+		void ApplyEffectExtentsToMetrics(const FontConfig& config,
+			UInt32 codePoint, FontLetter& metrics)
+		{
+			if (codePoint == 0x20)
+				return;
+			const VerticalEffectExtents effects = GetVerticalEffectExtents(config);
+			metrics.fTopEdge += effects.top;
+			metrics.fHeight += effects.top + effects.bottom;
+		}
+
+		FontLetter BuildFontLetter(RuntimeRole& role, const FontConfig& config,
+			VectorFontByteClass byteClass, UInt32 codePoint)
+		{
+			FontLetter result = {};
+			result.iTextureIndex = 0;
+			FT_BBox box = {};
+			float advance = 0.0f;
+			if (!GetGlyphBox(role, codePoint, box, advance))
+				return result;
+
+			const float xMin = std::floor(static_cast<float>(box.xMin) / 64.0f);
+			const float xMax = std::ceil(static_cast<float>(box.xMax) / 64.0f);
+			const float bodyBottom = std::floor(static_cast<float>(box.yMin) / 64.0f)
+				+ role.resolvedBaselineOffset;
+			const float bodyTop = std::ceil(static_cast<float>(box.yMax) / 64.0f)
+				+ role.resolvedBaselineOffset;
+			const VerticalEffectExtents effects = GetVerticalEffectExtents(config);
+			const float glyphBottom = bodyBottom - effects.bottom;
+			const float glyphTop = bodyTop + effects.top;
+			result.fWidth = std::max(0.0f, xMax - xMin);
+			result.fLeadingEdge = role.style->fixedWidth > 0.0f
+				? (role.style->fixedWidth - result.fWidth) * 0.5f : xMin;
+			result.fHeight = std::max(0.0f, glyphTop - glyphBottom);
+			result.fTopEdge = glyphTop;
+			const float requestedAdvance = role.style->fixedWidth > 0.0f
+				? GetFixedCellAdvance(*role.style)
+				: std::max(0.0f, advance + role.style->tracking);
+			const float totalAdvance = requestedAdvance;
+			if (codePoint == 0x20)
+			{
+				result.fLeadingEdge = 0.0f;
+				result.fWidth = 0.0f;
+				result.fSpacing = totalAdvance;
+				result.fHeight = 0.0f;
+				result.fTopEdge = 0.0f;
+				return result;
+			}
+			if (result.fWidth <= 0.0f && totalAdvance > 0.0f)
+			{
+				result.fLeadingEdge = 0.0f;
+				result.fWidth = totalAdvance;
+				result.fSpacing = 0.0f;
+			}
+			else
+			{
+				result.fSpacing = totalAdvance - result.fLeadingEdge - result.fWidth;
+			}
+			if (g_bEnableFreeTypeFontRenderingLog && codePoint >= 0x21)
+			{
+				const UInt64 logKey = (static_cast<UInt64>(config.fontId) << 8)
+					| static_cast<UInt8>(byteClass);
+				if (State().loggedVerticalMetricRoles.insert(logKey).second)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: glyph metrics font=%u role=%s codepoint=U+%04X bodyTop=%.2f bodyBottom=%.2f effectTop=%.2f effectBottom=%.2f topEdge=%.2f height=%.2f drop=%.2f configuredBaselineOffset=%.2f visualCorrection=%.2f resolvedBaselineOffset=%.2f",
+						config.fontId,
+						byteClass == VectorFontByteClass::DoubleByte ? "doubleByte" : "singleByte",
+						codePoint, bodyTop, bodyBottom, effects.top, effects.bottom,
+						result.fTopEdge, result.fHeight,
+						result.fHeight - result.fTopEdge, role.style->baselineOffset,
+						role.visualCenterCorrection, role.resolvedBaselineOffset);
+				}
+			}
+			return result;
+		}
+
+		bool MeasureVisualCenter(RuntimeRole& role, const UInt32* codePoints, size_t count, float& center)
+		{
+			float total = 0.0f;
+			UInt32 measured = 0;
+			for (size_t i = 0; i < count; ++i)
+			{
+				ResolvedGlyph glyph;
+				if (!ResolveExactGlyph(role, codePoints[i], glyph)
+					|| glyph.runtimeFace->face->glyph->format != FT_GLYPH_FORMAT_OUTLINE)
+				{
+					continue;
+				}
+				FT_BBox box = {};
+				FT_Outline_Get_CBox(&glyph.runtimeFace->face->glyph->outline, &box);
+				total += static_cast<float>(box.yMin + box.yMax) / 128.0f;
+				++measured;
+			}
+			if (!measured)
+				return false;
+			center = total / static_cast<float>(measured);
+			return true;
+		}
+
+	bool ResolveVectorGlyph(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
+		ResolvedGlyph& result)
+	{
+		RuntimeRole& role = runtime.roles[static_cast<size_t>(glyph.byteClass)];
+		if (glyph.hasGlyphIdentity && glyph.faceIndex < role.faces.size())
+		{
+			RuntimeFace& face = role.faces[glyph.faceIndex];
+			result = { &role, &face, glyph.faceIndex, glyph.glyphIndex, glyph.codePoint };
+			return true;
+		}
+		return ResolveGlyph(role, glyph.codePoint, result);
+	}
+
+		std::unique_ptr<RuntimeFont> CreateRuntimeFont(const FontConfig& config)
+		{
+			if (!InitializeLibrary())
+				return nullptr;
+			auto runtime = std::make_unique<RuntimeFont>();
+			runtime->config = &config;
+			for (const std::string& featureText : config.shapingFeatures)
+			{
+				hb_feature_t feature = {};
+				if (hb_feature_from_string(featureText.data(),
+					static_cast<int>(featureText.size()), &feature))
+				{
+					runtime->hbFeatures.push_back(feature);
+				}
+			}
+
+			for (size_t i = 0; i < runtime->roles.size(); ++i)
+			{
+				RuntimeRole& role = runtime->roles[i];
+				role.style = &config.styles[i];
+				role.resolvedBaselineOffset = role.style->baselineOffset;
+				for (const FaceConfig& faceConfig : role.style->faces)
+				{
+					RuntimeFace face;
+					if (CreateRuntimeFace(faceConfig, *role.style, face))
+						role.faces.push_back(std::move(face));
+					else
+						gLog.FormattedMessage("tnvse_freetype_font: failed to load face font=%u path=%ls index=%ld",
+							config.fontId, faceConfig.path.c_str(), faceConfig.faceIndex);
+				}
+				if (role.faces.empty())
+					return nullptr;
+
+				FT_Face primary = role.faces.front().face;
+				role.ascender = static_cast<float>(primary->size->metrics.ascender) / 64.0f
+					* role.style->scaleY + role.style->embolden;
+				role.descender = static_cast<float>(primary->size->metrics.descender) / 64.0f
+					* role.style->scaleY - role.style->embolden;
+			}
+
+			runtime->manualBaseline = config.baseline > 0.0f;
+			if (!runtime->manualBaseline
+				|| config.verticalMetrics == VerticalMetricsMode::Original)
+			{
+				static constexpr UInt32 kSingleReferences[] = { 'H', 'M', 'W', 'A', '0', '8', 'B', 'E', 'N', 'T', 'X' };
+				static constexpr UInt32 kDoubleReferences[] = { 0x4E2D, 0x56FD, 0x6F22, 0x3042, 0xAC00 };
+				float singleCenter = 0.0f;
+				float doubleCenter = 0.0f;
+				if (MeasureVisualCenter(runtime->roles[0], kSingleReferences, std::size(kSingleReferences), singleCenter)
+					&& MeasureVisualCenter(runtime->roles[1], kDoubleReferences, std::size(kDoubleReferences), doubleCenter))
+				{
+					const float correction = std::clamp(std::round(singleCenter - doubleCenter), -1.0f, 1.0f);
+					runtime->roles[1].visualCenterCorrection = correction;
+					runtime->roles[1].resolvedBaselineOffset += correction;
+				}
+			}
+
+			float maxTop = -std::numeric_limits<float>::infinity();
+			float minBottom = std::numeric_limits<float>::infinity();
+			for (const RuntimeRole& role : runtime->roles)
+			{
+				maxTop = std::max(maxTop, role.ascender + role.resolvedBaselineOffset);
+				minBottom = std::min(minBottom, role.descender + role.resolvedBaselineOffset);
+			}
+			const VerticalEffectExtents effects = GetVerticalEffectExtents(config);
+			maxTop += effects.top;
+			minBottom -= effects.bottom;
+			runtime->baseLine = std::ceil(runtime->manualBaseline ? config.baseline : std::max(1.0f, maxTop));
+			runtime->glyphTop = maxTop;
+			runtime->minBottom = std::min(0.0f, minBottom);
+			runtime->glyphHeight = std::max(0.0f, runtime->glyphTop - runtime->minBottom);
+			runtime->fontHeight = runtime->baseLine - runtime->minBottom;
+			runtime->initialized = true;
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				FreeTypeFontDebugLog(
+					"tnvse_freetype_font: runtime font id=%u baselineMode=%s baseline=%.2f glyphTop=%.2f bottom=%.2f glyphHeight=%.2f fontHeight=%.2f",
+					config.fontId, runtime->manualBaseline ? "manual" : "auto",
+					runtime->baseLine, runtime->glyphTop, runtime->minBottom,
+					runtime->glyphHeight, runtime->fontHeight);
+			}
+			return runtime;
+		}
+
+	RuntimeFont* FindRuntimeFont(UInt32 auiFontId)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		auto it = State().runtimeFonts.find(auiFontId);
+		return it == State().runtimeFonts.end() ? nullptr : it->second.get();
+	}
+
+	RuntimeFont* FindActiveRuntime(const Font* apFont)
+	{
+		if (!apFont || !g_bEnableFreeTypeFontRendering)
+			return nullptr;
+
+		FreeTypeState& state = State();
+		FreeTypeThreadState& thread = ThreadState();
+		const UInt32 fontId = static_cast<UInt32>(apFont->iFontNum);
+		if (thread.activeRuntime.font == apFont
+			&& thread.activeRuntime.data == apFont->pFontData
+			&& thread.activeRuntime.fontId == fontId
+			&& thread.activeRuntime.runtime)
+		{
+			return thread.activeRuntime.runtime;
+		}
+
+		std::lock_guard<std::recursive_mutex> lock(state.mutex);
+		const auto active = state.activeFonts.find(apFont);
+		if (active == state.activeFonts.end() || active->second.data != apFont->pFontData
+			|| active->second.fontId != fontId)
+		{
+			return nullptr;
+		}
+		const auto runtime = state.runtimeFonts.find(fontId);
+		if (runtime == state.runtimeFonts.end())
+			return nullptr;
+		thread.activeRuntime = {
+			apFont, apFont->pFontData, fontId, runtime->second.get()
+		};
+		return thread.activeRuntime.runtime;
+	}
+
+	RuntimeFont* EnsureRuntimeFont(UInt32 auiFontId)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		if (RuntimeFont* runtime = FindRuntimeFont(auiFontId))
+			return runtime;
+		const FontConfig* config = FindConfig(auiFontId);
+		if (!config)
+			return nullptr;
+		std::unique_ptr<RuntimeFont> runtime = CreateRuntimeFont(*config);
+		if (!runtime)
+		{
+			gLog.FormattedMessage("tnvse_freetype_font: failed to initialize font id=%u", auiFontId);
+			return nullptr;
+		}
+		RuntimeFont* result = runtime.get();
+		State().runtimeFonts.emplace(auiFontId, std::move(runtime));
+		return result;
+	}
+
+	ActiveFontState::OriginalVerticalMetrics CaptureOriginalVerticalMetrics(const Font& font)
+	{
+		ActiveFontState::OriginalVerticalMetrics result;
+		if (!font.pFontData)
+			return result;
+
+		const FontLetter& space = font.pFontData->pFontLetters[' '];
+		result.baseLine = font.pFontData->fBaseLine;
+		result.fontHeight = font.fFontHeight;
+		result.maxDrop = font.fMaxDrop;
+		result.spaceHeight = space.fHeight;
+		result.spaceTopEdge = space.fTopEdge;
+		result.valid = std::isfinite(result.baseLine) && result.baseLine > 0.0f
+			&& std::isfinite(result.fontHeight) && result.fontHeight >= 0.0f
+			&& std::isfinite(result.maxDrop) && result.maxDrop <= 0.0f
+			&& std::isfinite(result.spaceHeight) && result.spaceHeight >= 0.0f
+			&& std::isfinite(result.spaceTopEdge);
+		return result;
+	}
+
+	bool ApplyRuntimeMetrics(RuntimeFont& runtime, Font& font)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		if (!runtime.initialized || !font.pFontData)
+			return false;
+
+		ActiveFontState activeState;
+		const auto active = State().activeFonts.find(&font);
+		if (active != State().activeFonts.end()
+			&& active->second.data == font.pFontData
+			&& active->second.fontId == static_cast<UInt32>(font.iFontNum))
+		{
+			activeState = active->second;
+		}
+		else
+		{
+			activeState.data = font.pFontData;
+			activeState.fontId = static_cast<UInt32>(font.iFontNum);
+		}
+		if (!activeState.originalMetricsCaptured)
+		{
+			activeState.originalMetrics = CaptureOriginalVerticalMetrics(font);
+			activeState.originalMetricsCaptured = true;
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				const auto& original = activeState.originalMetrics;
+				FreeTypeFontDebugLog(
+					"tnvse_freetype_font: original metrics snapshot font=%u valid=%d baseline=%.2f fontHeight=%.2f maxDrop=%.2f space=(top=%.2f height=%.2f)",
+					font.iFontNum, original.valid ? 1 : 0, original.baseLine,
+					original.fontHeight, original.maxDrop,
+					original.spaceTopEdge, original.spaceHeight);
+			}
+		}
+
+		for (UInt32 value = 0x20; value <= 0xFF; ++value)
+		{
+			if (value == 0x7F)
+				continue;
+			if (LoadGlyphManifest(runtime, value,
+				VectorFontByteClass::SingleByte, nullptr,
+				&font.pFontData->pFontLetters[value]))
+				continue;
+			char byte = static_cast<char>(value);
+			UInt32 codePoint = 0xFFFD;
+			DecodeCodePoint(&byte, 1, codePoint);
+			FontLetter metrics = BuildFontLetter(
+				runtime.roles[0], *runtime.config,
+				VectorFontByteClass::SingleByte, codePoint);
+			font.pFontData->pFontLetters[value] = metrics;
+			ResolvedGlyph resolved;
+			if (ResolveGlyph(runtime.roles[0], codePoint, resolved))
+			{
+				VectorEncodedGlyph glyph;
+				glyph.encodedCode = value;
+				glyph.byteClass = VectorFontByteClass::SingleByte;
+				glyph.byteLength = 1;
+				glyph.codePoint = codePoint;
+				StoreGlyphManifest(runtime, glyph, resolved, metrics);
+			}
+		}
+
+		const bool requestedOriginal = runtime.config->verticalMetrics == VerticalMetricsMode::Original;
+		const bool useOriginal = requestedOriginal && activeState.originalMetrics.valid;
+		if (requestedOriginal && !useOriginal && !activeState.originalFallbackLogged)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: invalid original metrics font=%u; falling back to freetype vertical metrics",
+				font.iFontNum);
+			activeState.originalFallbackLogged = true;
+		}
+
+		const auto& original = activeState.originalMetrics;
+		const bool configuredBaseline = runtime.config->baseline > 0.0f;
+		const float resolvedBaseline = useOriginal
+			? (configuredBaseline
+				? std::ceil(std::max(1.0f, runtime.config->baseline))
+				: original.baseLine)
+			: runtime.baseLine;
+		const float resolvedMaxDrop = useOriginal ? original.maxDrop : runtime.minBottom;
+		const float resolvedFontHeight = useOriginal
+			? resolvedBaseline - original.maxDrop : runtime.fontHeight;
+		const float resolvedSpaceHeight = useOriginal
+			? original.spaceHeight : runtime.glyphHeight;
+		const float resolvedSpaceTop = useOriginal
+			? original.maxDrop + original.spaceHeight
+			: runtime.minBottom + runtime.glyphHeight;
+
+		font.pFontData->fBaseLine = resolvedBaseline;
+		font.fMaxDrop = resolvedMaxDrop;
+		font.fFontHeight = resolvedFontHeight;
+		font.iLineOverlap = 0;
+		FontLetter& space = font.pFontData->pFontLetters[' '];
+		const float serializedSpaceWidth = space.fWidth;
+		space.fWidth = space.fSpacing;
+		space.fSpacing = serializedSpaceWidth;
+		space.fHeight = resolvedSpaceHeight;
+		space.fTopEdge = resolvedSpaceTop;
+		font.pFontData->pFontLetters[160] = space;
+		font.pFontData->pFontLetters[0x7F] = font.pFontData->pFontLetters['|'];
+		font.pFontData->pFontLetters[0].fWidth = 0.0f;
+		font.pFontData->pFontLetters[0].fSpacing = 0.0f;
+		font.pFontData->pFontLetters[0].fHeight = resolvedSpaceHeight;
+		font.pFontData->pFontLetters[0].fTopEdge = resolvedSpaceTop;
+		if (g_bEnableFreeTypeFontRenderingLog)
+		{
+			FreeTypeFontDebugLog(
+				"tnvse_freetype_font: applied metrics font=%u verticalMetrics=%s baselineSource=%s requestedBaseline=%.2f resolvedBaseline=%.2f fontHeight=%.2f maxDrop=%.2f space=(width=%.2f spacing=%.2f top=%.2f height=%.2f)",
+				font.iFontNum, useOriginal ? "original" : "freetype",
+				useOriginal ? (configuredBaseline ? "configured" : "original")
+					: (configuredBaseline ? "configured" : "freetype"),
+				runtime.config->baseline, font.pFontData->fBaseLine,
+				font.fFontHeight, font.fMaxDrop,
+				space.fWidth, space.fSpacing, space.fTopEdge, space.fHeight);
+		}
+
+		ExtraGlyphMap& extra = gNumberedExtraLetters[font.iFontNum];
+		extra.clear();
+		extra.reserve(25000);
+		State().activeFonts[&font] = activeState;
+		return true;
+	}
+
+	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& runtime, Font& font, UInt32 encodedCode)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		ExtraGlyphMap& extra = gNumberedExtraLetters[font.iFontNum];
+		auto existing = extra.find(encodedCode);
+		if (existing != extra.end())
+			return &existing->second;
+		FontLetter cachedMetrics;
+		if (LoadGlyphManifest(runtime, encodedCode,
+			VectorFontByteClass::DoubleByte, nullptr, &cachedMetrics))
+		{
+			auto [cached, inserted] = extra.emplace(encodedCode, cachedMetrics);
+			return &cached->second;
+		}
+
+		const char bytes[2] = {
+			static_cast<char>((encodedCode >> 8) & 0xFF),
+			static_cast<char>(encodedCode & 0xFF)
+		};
+		UInt32 codePoint = 0xFFFD;
+		DecodeCodePoint(bytes, 2, codePoint);
+		FontLetter metrics = BuildFontLetter(runtime.roles[1], *runtime.config,
+			VectorFontByteClass::DoubleByte, codePoint);
+		auto [it, inserted] = extra.emplace(encodedCode, metrics);
+		ResolvedGlyph resolved;
+		if (ResolveGlyph(runtime.roles[1], codePoint, resolved))
+		{
+			VectorEncodedGlyph glyph;
+			glyph.encodedCode = encodedCode;
+			glyph.byteClass = VectorFontByteClass::DoubleByte;
+			glyph.byteLength = 2;
+			glyph.codePoint = codePoint;
+			StoreGlyphManifest(runtime, glyph, resolved, metrics);
+		}
+		return &it->second;
+	}
+
+	bool DecodeEncodedGlyphIdentity(RuntimeFont& runtime, const char* text,
+		VectorEncodedGlyph& glyph)
+	{
+		glyph = {};
+		if (!text || !*text)
+			return false;
+
+		UInt32 encodedCode = 0;
+		if (text[1] && TryDecodeDoubleByte(text, encodedCode))
+		{
+			glyph.encodedCode = encodedCode;
+			glyph.byteLength = 2;
+			glyph.byteClass = VectorFontByteClass::DoubleByte;
+			const char bytes[2] = { text[0], text[1] };
+			if (!DecodeCodePoint(bytes, 2, glyph.codePoint))
+				glyph.codePoint = 0xFFFD;
+			if (LoadGlyphManifest(runtime, encodedCode, glyph.byteClass, &glyph, nullptr))
+				return true;
+			ResolvedGlyph resolved;
+			if (ResolveGlyph(runtime.roles[static_cast<size_t>(glyph.byteClass)],
+				glyph.codePoint, resolved))
+			{
+				ApplyResolvedIdentity(glyph, resolved);
+			}
+			return true;
+		}
+
+		glyph.encodedCode = static_cast<UInt8>(text[0]);
+		glyph.byteLength = 1;
+		glyph.byteClass = VectorFontByteClass::SingleByte;
+		if (!DecodeCodePoint(text, 1, glyph.codePoint))
+			glyph.codePoint = 0xFFFD;
+		if (LoadGlyphManifest(runtime, glyph.encodedCode, glyph.byteClass, &glyph, nullptr))
+			return true;
+		ResolvedGlyph resolved;
+		if (ResolveGlyph(runtime.roles[static_cast<size_t>(glyph.byteClass)],
+			glyph.codePoint, resolved))
+		{
+			ApplyResolvedIdentity(glyph, resolved);
+		}
+		return true;
+	}
+
+	bool DecodeEncodedGlyph(RuntimeFont& runtime, Font& font, const char* text,
+		VectorEncodedGlyph& glyph)
+	{
+		if (!DecodeEncodedGlyphIdentity(runtime, text, glyph))
+			return false;
+		glyph.metrics = glyph.byteClass == VectorFontByteClass::DoubleByte
+			? EnsureDoubleByteMetrics(runtime, font, glyph.encodedCode)
+			: &font.pFontData->pFontLetters[glyph.encodedCode & 0xFF];
+		return glyph.metrics != nullptr;
+	}
+
+	bool ResolvePrewarmGlyph(RuntimeFont& runtime, const char* bytes,
+		size_t length, VectorEncodedGlyph& glyph)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		glyph = {};
+		if (!bytes || (length != 1 && length != 2))
+			return false;
+
+		glyph.byteLength = static_cast<UInt8>(length);
+		glyph.byteClass = length == 2
+			? VectorFontByteClass::DoubleByte : VectorFontByteClass::SingleByte;
+		glyph.encodedCode = length == 2
+			? (static_cast<UInt32>(static_cast<UInt8>(bytes[0])) << 8)
+				| static_cast<UInt8>(bytes[1])
+			: static_cast<UInt8>(bytes[0]);
+		if (LoadGlyphManifest(runtime, glyph.encodedCode, glyph.byteClass, &glyph, nullptr))
+			return true;
+		if (!DecodeCodePoint(bytes, static_cast<int>(length), glyph.codePoint))
+			return false;
+
+		ResolvedGlyph resolved;
+		if (!ResolveGlyph(runtime.roles[static_cast<size_t>(glyph.byteClass)],
+			glyph.codePoint, resolved))
+		{
+			return false;
+		}
+		ApplyResolvedIdentity(glyph, resolved);
+		const FontLetter metrics = BuildFontLetter(
+			runtime.roles[static_cast<size_t>(glyph.byteClass)], *runtime.config,
+			glyph.byteClass, glyph.codePoint);
+		StoreGlyphManifest(runtime, glyph, resolved, metrics);
+		return glyph.hasGlyphIdentity;
+	}
+
+	const FontConfig& GetRuntimeConfig(const RuntimeFont& runtime)
+	{
+		return *runtime.config;
+	}
+
+	UInt64 GetRuntimeMaskContentHash(RuntimeFont& runtime)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		return ComputeRuntimeMaskContentHash(runtime);
+	}
+
+
+	float GetGlyphBaselineOffset(const RuntimeFont& runtime,
+		VectorFontByteClass byteClass)
+	{
+		return runtime.roles[static_cast<size_t>(byteClass)].resolvedBaselineOffset;
+	}
+}

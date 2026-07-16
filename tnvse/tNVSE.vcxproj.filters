@@ -6,6 +6,11 @@
       <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
     <Filter Include="Source Files\Font" />
+    <Filter Include="Source Files\Font Engine" />
+    <Filter Include="Source Files\FreeType" />
+    <Filter Include="Source Files\Atlas" />
+    <Filter Include="Source Files\A8" />
+    <Filter Include="Source Files\Input" />
     <Filter Include="Source Files\Hooks" />
     <Filter Include="Source Files\Config" />
     <Filter Include="Header Files">
@@ -13,6 +18,11 @@
       <Extensions>h;hh;hpp;hxx;hm;inl;inc;ipp;xsd</Extensions>
     </Filter>
     <Filter Include="Header Files\Font" />
+    <Filter Include="Header Files\Font Engine" />
+    <Filter Include="Header Files\FreeType" />
+    <Filter Include="Header Files\Atlas" />
+    <Filter Include="Header Files\A8" />
+    <Filter Include="Header Files\Input" />
     <Filter Include="Header Files\Hooks" />
     <Filter Include="Header Files\Config" />
     <Filter Include="Header Files\NVSE" />
@@ -28,31 +38,70 @@
       <Filter>Source Files\Font</Filter>
     </ClCompile>
     <ClCompile Include="Src\font_engine.cpp">
-      <Filter>Source Files\Font</Filter>
+      <Filter>Source Files\Font Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_text_layout.cpp">
+      <Filter>Source Files\Font Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_text_geometry.cpp">
+      <Filter>Source Files\Font Engine</Filter>
     </ClCompile>
 	<ClCompile Include="Src\font_atlas_render.cpp">
-	  <Filter>Source Files\Font</Filter>
+	  <Filter>Source Files\Atlas</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_atlas_cache.cpp">
+	  <Filter>Source Files\Atlas</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_atlas_resource.cpp">
+	  <Filter>Source Files\Atlas</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_atlas_shape.cpp">
+	  <Filter>Source Files\Atlas</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_atlas_snapshot.cpp">
+	  <Filter>Source Files\Atlas</Filter>
 	</ClCompile>
 	<ClCompile Include="Src\font_a8_render.cpp">
-	  <Filter>Source Files\Font</Filter>
+	  <Filter>Source Files\A8</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_a8_draw.cpp">
+	  <Filter>Source Files\A8</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_a8_hooks.cpp">
+	  <Filter>Source Files\A8</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_a8_diagnostics.cpp">
+	  <Filter>Source Files\A8</Filter>
 	</ClCompile>
 	<ClCompile Include="Src\font_prewarm.cpp">
-	  <Filter>Source Files\Font</Filter>
+	  <Filter>Source Files\FreeType</Filter>
 	</ClCompile>
 	<ClCompile Include="Src\font_performance.cpp">
-	  <Filter>Source Files\Font</Filter>
+	  <Filter>Source Files\FreeType</Filter>
 	</ClCompile>
     <ClCompile Include="Src\font_vector_config.cpp">
-      <Filter>Source Files\Font</Filter>
+      <Filter>Source Files\FreeType</Filter>
     </ClCompile>
     <ClCompile Include="Src\font_vector_freetype.cpp">
-      <Filter>Source Files\Font</Filter>
+      <Filter>Source Files\FreeType</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_vector_runtime.cpp">
+      <Filter>Source Files\FreeType</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_vector_layout.cpp">
+      <Filter>Source Files\FreeType</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_vector_glyph_raster.cpp">
+      <Filter>Source Files\FreeType</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\font_vector_persistent_cache.cpp">
+      <Filter>Source Files\FreeType</Filter>
     </ClCompile>
     <ClCompile Include="Src\font_vector_log.cpp">
-      <Filter>Source Files\Font</Filter>
+      <Filter>Source Files\FreeType</Filter>
     </ClCompile>
     <ClCompile Include="Src\font_vector_render.cpp">
-      <Filter>Source Files\Font</Filter>
+      <Filter>Source Files\FreeType</Filter>
     </ClCompile>
     <ClCompile Include="Src\font_hook.cpp">
       <Filter>Source Files\Font</Filter>
@@ -91,31 +140,40 @@
       <Filter>Source Files\Config</Filter>
     </ClCompile>
     <ClCompile Include="Src\font_manager.cpp">
-      <Filter>Source Files\Font</Filter>
+      <Filter>Source Files\Font Engine</Filter>
     </ClCompile>
 	<ClCompile Include="Src\font_uio_scale.cpp">
 	  <Filter>Source Files\Font</Filter>
 	</ClCompile>
     <ClCompile Include="Src\multibyte_input.cpp">
-      <Filter>Source Files\Hooks</Filter>
+      <Filter>Source Files\Input</Filter>
     </ClCompile>
     <ClCompile Include="Src\multibyte_input_common.cpp">
-      <Filter>Source Files\Hooks</Filter>
+      <Filter>Source Files\Input</Filter>
     </ClCompile>
     <ClCompile Include="Src\multibyte_input_ime.cpp">
-      <Filter>Source Files\Hooks</Filter>
+      <Filter>Source Files\Input</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\multibyte_input_tsf.cpp">
+      <Filter>Source Files\Input</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\multibyte_input_candidate_overlay.cpp">
+      <Filter>Source Files\Input</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\multibyte_input_wndproc.cpp">
+      <Filter>Source Files\Input</Filter>
     </ClCompile>
     <ClCompile Include="Src\multibyte_input_menu_search.cpp">
-      <Filter>Source Files\Hooks</Filter>
+      <Filter>Source Files\Input</Filter>
     </ClCompile>
     <ClCompile Include="Src\multibyte_input_overlay_freetype.cpp">
-      <Filter>Source Files\Hooks</Filter>
+      <Filter>Source Files\Input</Filter>
     </ClCompile>
     <ClCompile Include="Src\multibyte_input_stewie.cpp">
-      <Filter>Source Files\Hooks</Filter>
+      <Filter>Source Files\Input</Filter>
     </ClCompile>
     <ClCompile Include="Src\multibyte_input_text_edit.cpp">
-      <Filter>Source Files\Hooks</Filter>
+      <Filter>Source Files\Input</Filter>
     </ClCompile>
     <ClCompile Include="Src\game_hooks.cpp">
       <Filter>Source Files\Hooks</Filter>
@@ -147,16 +205,16 @@
       <Filter>Header Files\Font</Filter>
     </ClInclude>
     <ClInclude Include="Src\font_engine.h">
-      <Filter>Header Files\Font</Filter>
+      <Filter>Header Files\Font Engine</Filter>
     </ClInclude>
     <ClInclude Include="Src\font_vector.h">
-      <Filter>Header Files\Font</Filter>
+      <Filter>Header Files\FreeType</Filter>
     </ClInclude>
     <ClInclude Include="Src\font_vector_internal.h">
-      <Filter>Header Files\Font</Filter>
+      <Filter>Header Files\FreeType</Filter>
     </ClInclude>
     <ClInclude Include="Src\font_glyphs.h">
-      <Filter>Header Files\Font</Filter>
+      <Filter>Header Files\Font Engine</Filter>
     </ClInclude>
     <ClInclude Include="Src\font_hook.h">
       <Filter>Header Files\Font</Filter>
@@ -171,13 +229,25 @@
       <Filter>Header Files\Config</Filter>
     </ClInclude>
     <ClInclude Include="Src\font_manager.h">
-      <Filter>Header Files\Font</Filter>
+      <Filter>Header Files\Font Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\font_freetype_internal.h">
+      <Filter>Header Files\FreeType</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\font_atlas_internal.h">
+      <Filter>Header Files\Atlas</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\font_a8_internal.h">
+      <Filter>Header Files\A8</Filter>
     </ClInclude>
     <ClInclude Include="Src\multibyte_input.h">
-      <Filter>Header Files\Hooks</Filter>
+      <Filter>Header Files\Input</Filter>
     </ClInclude>
     <ClInclude Include="Src\multibyte_input_internal.h">
-      <Filter>Header Files\Hooks</Filter>
+      <Filter>Header Files\Input</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\multibyte_input_ime_internal.h">
+      <Filter>Header Files\Input</Filter>
     </ClInclude>
     <ClInclude Include="Src\ui_decode.h">
       <Filter>Header Files\Font</Filter>

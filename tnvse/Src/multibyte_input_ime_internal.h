@@ -1,0 +1,106 @@
+#pragma once
+
+// Private IME implementation contract. Public input services remain declared in
+// multibyte_input_internal.h.
+
+#include "multibyte_input_internal.h"
+
+namespace fonthook
+{
+	namespace multibyte_input
+	{
+		constexpr DWORD kDuplicateImeCharSuppressMs = 250;
+		constexpr DWORD kNativeImeAsciiGuardMs = 250;
+		constexpr DWORD kInputLanguageSwitchAsciiGuardMs = 500;
+		constexpr UInt32 kMaxImeCandidatesToDisplay = 9;
+
+		struct ImeCandidateState
+		{
+			bool composing = false;
+			bool imeOpen = false;
+			DWORD conversionMode = 0;
+			DWORD sentenceMode = 0;
+			DWORD selection = 0;
+			DWORD pageStart = 0;
+			DWORD pageSize = 0;
+			bool candidatesFromTsf = false;
+			std::wstring imeName;
+			std::wstring composition;
+			std::vector<std::wstring> candidates;
+		};
+
+		struct CandidateOverlayState
+		{
+			LPDIRECT3DTEXTURE9 texture = nullptr;
+			UInt32 textureWidth = 0;
+			UInt32 textureHeight = 0;
+			std::wstring lastKey;
+			bool dirty = true;
+			bool visible = false;
+		};
+
+		struct TsfUiElementSession
+		{
+			DWORD id = 0;
+			UInt32 generation = 0;
+		};
+
+		class TsfCandidateSink;
+
+		struct TsfCandidateSinkDeleter
+		{
+			void operator()(TsfCandidateSink* sink) const;
+		};
+
+		using TsfCandidateSinkPtr =
+			std::unique_ptr<TsfCandidateSink, TsfCandidateSinkDeleter>;
+
+		struct ImeState
+		{
+			bool compositionEchoChecked = false;
+			DWORD lastImeCommitTick = 0;
+			UInt32 suppressedImeCharCount = 0;
+			DWORD lastStewieImeCommitTick = 0;
+			DWORD lastStewieImeEnterKeyTick = 0;
+			DWORD inputLanguageSwitchGuardUntilTick = 0;
+			HKL winSpaceLayoutBefore = nullptr;
+			bool winSpaceChordArmed = false;
+			bool winSpaceSwitchPending = false;
+			bool winSpaceLanguageChangeObserved = false;
+
+			ImeCandidateState candidate;
+			CandidateOverlayState overlay;
+			bool tsfCandidateActive = false;
+			bool hidingSystemImeWindows = false;
+			bool gameImeEnabled = false;
+			bool textInputSessionActive = false;
+			DWORD nativeImeAsciiGuardUntilTick = 0;
+			DWORD lastImeWatchdogTick = 0;
+
+			UInt32 tsfSessionGeneration = 1;
+			std::vector<TsfUiElementSession> tsfUiElementSessions;
+			TsfCandidateSinkPtr tsfCandidateSink;
+		};
+
+		ImeState& State();
+
+		void AdvanceTsfCandidateSession();
+		std::wstring GetCurrentTsfInputMethodName();
+		void ShutdownTsfCandidateSupport();
+
+		void TryRemoveCompositionEcho();
+		std::wstring GetImeCompositionString(HWND hwnd, DWORD index);
+		void RefreshImeComposition(HWND hwnd);
+		void RefreshImeCandidates(HWND hwnd);
+		void ClearImePreviewState();
+		void CancelGameImeComposition(HWND hwnd);
+		bool IsImeWindowMessage(UINT msg);
+		bool IsVirtualKeyDown(int vk);
+		bool IsWinSpaceInputLanguageHotkey(UINT msg, WPARAM wParam);
+		bool IsPendingWinSpaceRelease(UINT msg, WPARAM wParam);
+		bool IsWindowsKeyMessage(UINT msg, WPARAM wParam);
+		HKL GetGameKeyboardLayout(HWND hwnd);
+		bool LayoutMatchesCurrentEncoding(HKL layout);
+		bool IsFocusRestoreMessage(UINT msg, WPARAM wParam);
+	}
+}
