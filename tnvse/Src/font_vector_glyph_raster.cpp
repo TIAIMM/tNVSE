@@ -6,6 +6,9 @@
 
 #include <tesselator.h>
 
+#include <atomic>
+#include <thread>
+
 namespace fonthook::vectorfont
 {
 		struct OutlineCollector
@@ -526,11 +529,11 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	static std::shared_ptr<const GlyphBitmap> GetGlyphBitmapLocked(
-		FreeTypeState& state, RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
-		const ResolvedGlyph& resolved, GlyphMaskType maskType, float safeScale,
-		const BitmapCacheKey& key)
+	static std::shared_ptr<const GlyphBitmap> FindCachedGlyphBitmapLocked(
+		FreeTypeState& state, RuntimeFont& runtime, const ResolvedGlyph& resolved,
+		const BitmapCacheKey& key, PersistentBitmapProfile*& persistentProfile)
 	{
+		persistentProfile = nullptr;
 		auto existing = state.bitmapCache.find(key);
 		if (existing != state.bitmapCache.end())
 		{
@@ -557,7 +560,7 @@ namespace fonthook::vectorfont
 		const PersistentBitmapProfileKey persistentKey =
 			MakePersistentBitmapProfileKey(key,
 				resolved.runtimeFace->file->contentHash);
-		PersistentBitmapProfile* persistentProfile =
+		persistentProfile =
 			GetPersistentBitmapProfile(persistentKey,
 				resolved.runtimeFace->file->path, runtime.config->fontId,
 				static_cast<UInt32>(std::max<FT_Long>(1,
@@ -592,6 +595,34 @@ namespace fonthook::vectorfont
 			}
 			RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskMiss);
 		}
+		return nullptr;
+	}
+
+	static void InsertGlyphBitmapCacheLocked(FreeTypeState& state,
+		RuntimeFont& runtime, const BitmapCacheKey& key,
+		const std::shared_ptr<GlyphBitmap>& bitmap)
+	{
+		if (!bitmap)
+			return;
+		const size_t bytes = sizeof(GlyphBitmap) + bitmap->alpha.size();
+		state.bitmapLru.push_front(key);
+		state.bitmapCache.emplace(key,
+			BitmapCacheEntry{ bitmap, bytes, state.bitmapLru.begin(),
+				runtime.config->fontId });
+		state.bitmapCacheBytes += bytes;
+	}
+
+	static std::shared_ptr<const GlyphBitmap> GetGlyphBitmapLocked(
+		FreeTypeState& state, RuntimeFont& runtime,
+		const ResolvedGlyph& resolved, GlyphMaskType maskType, float safeScale,
+		const BitmapCacheKey& key)
+	{
+		PersistentBitmapProfile* persistentProfile = nullptr;
+		if (std::shared_ptr<const GlyphBitmap> cached = FindCachedGlyphBitmapLocked(
+			state, runtime, resolved, key, persistentProfile))
+		{
+			return cached;
+		}
 
 		RecordFreeTypePerf(FreeTypePerfCounter::BitmapRasterized);
 		std::shared_ptr<GlyphBitmap> bitmap =
@@ -605,11 +636,7 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskWriteBytes,
 				bitmap->alpha.size());
 		}
-		const size_t bytes = sizeof(GlyphBitmap) + bitmap->alpha.size();
-		state.bitmapLru.push_front(key);
-		state.bitmapCache.emplace(key,
-			BitmapCacheEntry{ bitmap, bytes, state.bitmapLru.begin(), runtime.config->fontId });
-		state.bitmapCacheBytes += bytes;
+		InsertGlyphBitmapCacheLocked(state, runtime, key, bitmap);
 		TrimBitmapCache(state);
 		return bitmap;
 	}
@@ -657,7 +684,7 @@ namespace fonthook::vectorfont
 		{
 			return nullptr;
 		}
-		return GetGlyphBitmapLocked(state, runtime, glyph, resolved,
+		return GetGlyphBitmapLocked(state, runtime, resolved,
 			maskType, safeScale, key);
 	}
 
@@ -699,7 +726,7 @@ namespace fonthook::vectorfont
 					slot.key = key;
 					slot.resultIndex = requestIndex;
 					results[requestIndex] = GetGlyphBitmapLocked(state, runtime,
-						*request.glyph, resolved, request.maskType, safeScale, key);
+						resolved, request.maskType, safeScale, key);
 					break;
 				}
 				if (slot.key == key)
@@ -711,6 +738,246 @@ namespace fonthook::vectorfont
 				slotIndex = (slotIndex + 1) & slotMask;
 			}
 		}
+		RecordFreeTypePerf(FreeTypePerfCounter::BitmapBatchRequest,
+			static_cast<UInt64>(requests.size()));
+		if (duplicateCount)
+			RecordFreeTypePerf(FreeTypePerfCounter::BitmapBatchDedupe, duplicateCount);
+	}
+
+	struct PrewarmBitmapWorkItem
+	{
+		size_t requestIndex = 0;
+		ResolvedGlyph resolved;
+		BitmapCacheKey key;
+		GlyphMaskType maskType = GlyphMaskType::Fill;
+		PersistentBitmapProfile* persistentProfile = nullptr;
+		std::shared_ptr<GlyphBitmap> bitmap;
+	};
+
+	struct PrewarmWorkerFace
+	{
+		std::shared_ptr<MappedFontFile> file;
+		SInt32 faceIndex = 0;
+		RuntimeFace runtimeFace;
+	};
+
+	static RuntimeFace* GetPrewarmWorkerFace(FT_Library library,
+		std::vector<PrewarmWorkerFace>& faces,
+		const std::shared_ptr<MappedFontFile>& file, SInt32 faceIndex)
+	{
+		for (PrewarmWorkerFace& face : faces)
+		{
+			if (face.file == file && face.faceIndex == faceIndex)
+				return &face.runtimeFace;
+		}
+		if (!library || !file || !file->data || file->size <= 0)
+			return nullptr;
+		PrewarmWorkerFace workerFace;
+		workerFace.file = file;
+		workerFace.faceIndex = faceIndex;
+		workerFace.runtimeFace.file = file;
+		if (FT_New_Memory_Face(library, file->data, file->size, faceIndex,
+			&workerFace.runtimeFace.face))
+		{
+			return nullptr;
+		}
+		faces.push_back(std::move(workerFace));
+		return &faces.back().runtimeFace;
+	}
+
+	static UInt32 ResolvePrewarmWorkerCount(size_t workCount)
+	{
+		if (workCount < 64)
+			return 1;
+		UInt32 processors = std::thread::hardware_concurrency();
+		if (!processors)
+		{
+			SYSTEM_INFO info = {};
+			GetSystemInfo(&info);
+			processors = std::max<DWORD>(1, info.dwNumberOfProcessors);
+		}
+		// Leave one logical processor for the progress window and system services.
+		// The x86 process also caps worker-local FreeType heaps at a predictable level.
+		const UInt32 workers = processors > 2 ? processors - 1 : processors;
+		return static_cast<UInt32>(std::min<size_t>(workCount,
+			std::clamp<UInt32>(workers, 1, 12)));
+	}
+
+	void GetPrewarmGlyphBitmaps(RuntimeFont& runtime,
+		const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
+		std::vector<std::shared_ptr<const GlyphBitmap>>& results)
+	{
+		if (requests.size() < 64)
+		{
+			GetGlyphBitmaps(runtime, requests, rasterScale, results);
+			return;
+		}
+		results.assign(requests.size(), nullptr);
+		const float safeScale = SanitizeBitmapRasterScale(rasterScale);
+		FreeTypeState& state = State();
+		std::vector<PrewarmBitmapWorkItem> workItems;
+		workItems.reserve(requests.size());
+		std::vector<std::pair<size_t, size_t>> duplicates;
+		duplicates.reserve(requests.size() / 8);
+		UInt64 duplicateCount = 0;
+		{
+			std::lock_guard<std::recursive_mutex> lock(state.mutex);
+			thread_local BitmapBatchDedupeScratch scratch;
+			scratch.Prepare(requests.size());
+			const size_t slotMask = scratch.slots.size() - 1;
+			for (size_t requestIndex = 0; requestIndex < requests.size(); ++requestIndex)
+			{
+				const GlyphBitmapRequest& request = requests[requestIndex];
+				if (!request.glyph)
+					continue;
+				ResolvedGlyph resolved;
+				BitmapCacheKey key;
+				if (!ResolveBitmapCacheKey(runtime, *request.glyph,
+					request.maskType, safeScale, request.sdfSpread, resolved, key))
+				{
+					continue;
+				}
+				size_t slotIndex = BitmapCacheKeyHash{}(key) & slotMask;
+				for (;;)
+				{
+					BitmapBatchDedupeSlot& slot = scratch.slots[slotIndex];
+					if (slot.generation != scratch.generation)
+					{
+						slot.generation = scratch.generation;
+						slot.key = key;
+						slot.resultIndex = requestIndex;
+						PersistentBitmapProfile* persistentProfile = nullptr;
+						if (std::shared_ptr<const GlyphBitmap> cached =
+							FindCachedGlyphBitmapLocked(state, runtime, resolved,
+								key, persistentProfile))
+						{
+							results[requestIndex] = std::move(cached);
+						}
+						else
+						{
+							PrewarmBitmapWorkItem item;
+							item.requestIndex = requestIndex;
+							item.resolved = resolved;
+							item.key = key;
+							item.maskType = request.maskType;
+							item.persistentProfile = persistentProfile;
+							workItems.push_back(std::move(item));
+						}
+						break;
+					}
+					if (slot.key == key)
+					{
+						++duplicateCount;
+						duplicates.push_back({ requestIndex, slot.resultIndex });
+						break;
+					}
+					slotIndex = (slotIndex + 1) & slotMask;
+				}
+			}
+		}
+
+		if (!workItems.empty())
+		{
+			const UInt32 workerCount = ResolvePrewarmWorkerCount(workItems.size());
+			static bool loggedWorkers = false;
+			if (!loggedWorkers)
+			{
+				loggedWorkers = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: parallel prewarm raster workers=%u batchMisses=%u",
+					workerCount, static_cast<UInt32>(workItems.size()));
+			}
+			std::atomic<size_t> nextWork{ 0 };
+			auto worker = [&]()
+			{
+				FreeTypeState workerState;
+				if (FT_Init_FreeType(&workerState.library))
+					return;
+				{
+					std::vector<PrewarmWorkerFace> faces;
+					faces.reserve(8);
+					for (;;)
+					{
+						const size_t index = nextWork.fetch_add(1,
+							std::memory_order_relaxed);
+						if (index >= workItems.size())
+							break;
+						PrewarmBitmapWorkItem& item = workItems[index];
+						RuntimeFace* face = GetPrewarmWorkerFace(workerState.library,
+							faces, item.resolved.runtimeFace->file,
+							item.key.fontFaceIndex);
+						if (!face)
+							continue;
+						ResolvedGlyph workerResolved = item.resolved;
+						workerResolved.runtimeFace = face;
+						item.bitmap = BuildGlyphBitmap(workerState, runtime,
+							workerResolved, item.maskType, safeScale, item.key);
+					}
+				}
+				FT_Done_FreeType(workerState.library);
+				workerState.library = nullptr;
+			};
+			std::vector<std::thread> workers;
+			workers.reserve(workerCount > 0 ? workerCount - 1 : 0);
+			for (UInt32 index = 1; index < workerCount; ++index)
+				workers.emplace_back(worker);
+			worker();
+			for (std::thread& thread : workers)
+				thread.join();
+
+			std::lock_guard<std::recursive_mutex> lock(state.mutex);
+			RecordFreeTypePerf(FreeTypePerfCounter::BitmapRasterized,
+				static_cast<UInt64>(workItems.size()));
+			// Worker initialization or a cloned face can fail independently. Preserve
+			// the runtime path's behavior by retrying only those entries on the main face.
+			for (PrewarmBitmapWorkItem& item : workItems)
+			{
+				if (!item.bitmap)
+				{
+					item.bitmap = BuildGlyphBitmap(state, runtime, item.resolved,
+						item.maskType, safeScale, item.key);
+				}
+			}
+
+			std::unordered_map<PersistentBitmapProfile*,
+				std::vector<PersistentBitmapStoreRequest>> stores;
+			for (PrewarmBitmapWorkItem& item : workItems)
+			{
+				if (item.bitmap && item.persistentProfile)
+					stores[item.persistentProfile].push_back(
+						{ &item.key, item.bitmap.get() });
+			}
+			for (auto& pair : stores)
+			{
+				UInt64 storedBytes = 0;
+				const UInt32 stored = StorePersistentGlyphBitmaps(
+					*pair.first, pair.second, storedBytes);
+				if (stored)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskWrite, stored);
+					RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskWriteBytes,
+						storedBytes);
+				}
+			}
+			for (PrewarmBitmapWorkItem& item : workItems)
+			{
+				if (!item.bitmap)
+					continue;
+				auto existing = state.bitmapCache.find(item.key);
+				if (existing != state.bitmapCache.end())
+				{
+					TouchBitmapCacheEntry(state, existing->second, item.key);
+					results[item.requestIndex] = existing->second.bitmap;
+					continue;
+				}
+				InsertGlyphBitmapCacheLocked(state, runtime, item.key, item.bitmap);
+				results[item.requestIndex] = item.bitmap;
+			}
+			TrimBitmapCache(state);
+		}
+
+		for (const auto& duplicate : duplicates)
+			results[duplicate.first] = results[duplicate.second];
 		RecordFreeTypePerf(FreeTypePerfCounter::BitmapBatchRequest,
 			static_cast<UInt64>(requests.size()));
 		if (duplicateCount)

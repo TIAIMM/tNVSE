@@ -456,6 +456,7 @@ namespace fonthook::vectorfont
 			}
 			profile.recordCount = 0;
 			profile.validSize = header.dataOffset;
+			profile.indexEntries.assign(profile.glyphCapacity, {});
 			MapPersistentBitmapProfile(profile);
 			return true;
 		}
@@ -542,6 +543,7 @@ namespace fonthook::vectorfont
 				fileSize = profile.validSize;
 			}
 			profile.recordCount = 0;
+			profile.indexEntries.assign(profile.glyphCapacity, {});
 			auto inspectEntry = [&](UInt32 glyphIndex,
 				const PersistentBitmapIndexEntry& entry)
 			{
@@ -559,6 +561,7 @@ namespace fonthook::vectorfont
 					}
 					return;
 				}
+				profile.indexEntries[glyphIndex] = entry;
 				++profile.recordCount;
 			};
 			const UInt64 indexBytes = static_cast<UInt64>(profile.glyphCapacity)
@@ -632,13 +635,12 @@ namespace fonthook::vectorfont
 		std::shared_ptr<GlyphBitmap> LoadPersistentGlyphBitmap(
 			PersistentBitmapProfile& profile, const BitmapCacheKey& key)
 		{
-			if (key.glyphIndex >= profile.glyphCapacity)
+			if (key.glyphIndex >= profile.glyphCapacity
+				|| key.glyphIndex >= profile.indexEntries.size())
 				return nullptr;
-			PersistentBitmapIndexEntry entry;
-			const UInt64 entryOffset = sizeof(PersistentBitmapFileHeader)
-				+ static_cast<UInt64>(key.glyphIndex) * sizeof(entry);
-			if (!ReadPersistentProfileBytes(profile, entryOffset, &entry, sizeof(entry))
-				|| !entry.offset || !entry.size)
+			const PersistentBitmapIndexEntry entry =
+				profile.indexEntries[key.glyphIndex];
+			if (!entry.offset || !entry.size)
 				return nullptr;
 			PersistentBitmapRecordHeader record;
 			if (!ReadPersistentProfileBytes(profile, entry.offset,
@@ -670,58 +672,155 @@ namespace fonthook::vectorfont
 			return bitmap;
 		}
 
-		bool StorePersistentGlyphBitmap(PersistentBitmapProfile& profile,
-			const BitmapCacheKey& key, const GlyphBitmap& bitmap)
+		UInt32 StorePersistentGlyphBitmaps(PersistentBitmapProfile& profile,
+			const std::vector<PersistentBitmapStoreRequest>& requests,
+			UInt64& storedAlphaBytes)
 		{
-			if (!profile.writable || key.glyphIndex >= profile.glyphCapacity
-				|| bitmap.width <= 0 || bitmap.height <= 0 || bitmap.alpha.empty()
-				|| bitmap.alpha.size() > kMaximumPersistentBitmapBytes
-				|| static_cast<UInt64>(bitmap.width) * bitmap.height
-					!= bitmap.alpha.size())
+			storedAlphaBytes = 0;
+			if (!profile.writable || requests.empty()
+				|| profile.indexEntries.size() != profile.glyphCapacity)
 			{
-				return false;
+				return 0;
 			}
-			PersistentBitmapIndexEntry existing;
-			const UInt64 indexOffset = sizeof(PersistentBitmapFileHeader)
-				+ static_cast<UInt64>(key.glyphIndex) * sizeof(existing);
-			if (!ReadPersistentProfileBytes(profile, indexOffset, &existing, sizeof(existing))
-				|| existing.offset || existing.size)
-				return false;
-			PersistentBitmapRecordHeader record;
-			record.magic = kPersistentBitmapRecordMagic;
-			record.headerSize = sizeof(record);
-			record.glyphIndex = key.glyphIndex;
-			record.width = bitmap.width;
-			record.height = bitmap.height;
-			record.left = bitmap.left;
-			record.top = bitmap.top;
-			record.alphaSize = static_cast<UInt32>(bitmap.alpha.size());
-			record.checksum = HashPersistentBitmapRecord(record, bitmap.alpha.data());
-			const UInt64 recordSize = sizeof(record) + bitmap.alpha.size();
-			if (recordSize > kMaximumPersistentProfileBytes - profile.validSize)
-				return false;
-			std::vector<UInt8> serialized(static_cast<size_t>(recordSize));
-			std::memcpy(serialized.data(), &record, sizeof(record));
-			std::memcpy(serialized.data() + sizeof(record), bitmap.alpha.data(),
-				bitmap.alpha.size());
-			const UInt64 offset = profile.validSize;
+
+			struct PendingIndex
+			{
+				UInt32 glyphIndex = 0;
+				PersistentBitmapIndexEntry entry;
+			};
+			std::vector<PendingIndex> pending;
+			pending.reserve(requests.size());
+			std::vector<UInt8> serialized;
+			UInt64 estimatedBytes = 0;
+			for (const PersistentBitmapStoreRequest& request : requests)
+			{
+				if (!request.key || !request.bitmap)
+					continue;
+				const BitmapCacheKey& key = *request.key;
+				const GlyphBitmap& bitmap = *request.bitmap;
+				if (key.glyphIndex >= profile.glyphCapacity
+					|| profile.indexEntries[key.glyphIndex].offset
+					|| profile.indexEntries[key.glyphIndex].size
+					|| bitmap.width <= 0 || bitmap.height <= 0
+					|| bitmap.alpha.empty()
+					|| bitmap.alpha.size() > kMaximumPersistentBitmapBytes
+					|| static_cast<UInt64>(bitmap.width) * bitmap.height
+						!= bitmap.alpha.size())
+				{
+					continue;
+				}
+				estimatedBytes += sizeof(PersistentBitmapRecordHeader)
+					+ bitmap.alpha.size();
+			}
+			if (!estimatedBytes
+				|| estimatedBytes > kMaximumPersistentProfileBytes - profile.validSize
+				|| estimatedBytes > std::numeric_limits<UInt32>::max())
+			{
+				return 0;
+			}
+			serialized.reserve(static_cast<size_t>(estimatedBytes));
+			for (const PersistentBitmapStoreRequest& request : requests)
+			{
+				if (!request.key || !request.bitmap)
+					continue;
+				const BitmapCacheKey& key = *request.key;
+				const GlyphBitmap& bitmap = *request.bitmap;
+				if (key.glyphIndex >= profile.glyphCapacity
+					|| profile.indexEntries[key.glyphIndex].offset
+					|| profile.indexEntries[key.glyphIndex].size
+					|| bitmap.width <= 0 || bitmap.height <= 0
+					|| bitmap.alpha.empty()
+					|| bitmap.alpha.size() > kMaximumPersistentBitmapBytes
+					|| static_cast<UInt64>(bitmap.width) * bitmap.height
+						!= bitmap.alpha.size())
+				{
+					continue;
+				}
+				PersistentBitmapRecordHeader record;
+				record.magic = kPersistentBitmapRecordMagic;
+				record.headerSize = sizeof(record);
+				record.glyphIndex = key.glyphIndex;
+				record.width = bitmap.width;
+				record.height = bitmap.height;
+				record.left = bitmap.left;
+				record.top = bitmap.top;
+				record.alphaSize = static_cast<UInt32>(bitmap.alpha.size());
+				record.checksum = HashPersistentBitmapRecord(record,
+					bitmap.alpha.data());
+				const UInt64 offset = profile.validSize + serialized.size();
+				const UInt32 recordSize = static_cast<UInt32>(
+					sizeof(record) + bitmap.alpha.size());
+				const size_t oldSize = serialized.size();
+				serialized.resize(oldSize + recordSize);
+				std::memcpy(serialized.data() + oldSize, &record, sizeof(record));
+				std::memcpy(serialized.data() + oldSize + sizeof(record),
+					bitmap.alpha.data(), bitmap.alpha.size());
+				pending.push_back({ key.glyphIndex, { offset, recordSize } });
+			}
+			if (pending.empty())
+				return 0;
+
 			// Extending a file while an older, shorter view is still mapped has
 			// platform-dependent failure modes. Existing records remain readable
 			// through ReadFileAt after the view is released.
 			UnmapPersistentBitmapProfile(profile);
-			if (!WriteFileAt(profile.file, offset, serialized.data(),
+			const UInt64 dataOffset = profile.validSize;
+			if (!WriteFileAt(profile.file, dataOffset, serialized.data(),
 					static_cast<UInt32>(serialized.size())))
 			{
-				return false;
+				return 0;
 			}
-			profile.validSize += recordSize;
-			const PersistentBitmapIndexEntry entry = {
-				offset, static_cast<UInt32>(recordSize)
+			profile.validSize += serialized.size();
+
+			std::sort(pending.begin(), pending.end(),
+				[](const PendingIndex& lhs, const PendingIndex& rhs)
+				{
+					return lhs.glyphIndex < rhs.glyphIndex;
+				});
+			UInt32 stored = 0;
+			for (size_t first = 0; first < pending.size();)
+			{
+				size_t last = first + 1;
+				while (last < pending.size()
+					&& pending[last].glyphIndex == pending[last - 1].glyphIndex + 1)
+				{
+					++last;
+				}
+				std::vector<PersistentBitmapIndexEntry> entries;
+				entries.reserve(last - first);
+				for (size_t index = first; index < last; ++index)
+					entries.push_back(pending[index].entry);
+				const UInt64 indexOffset = sizeof(PersistentBitmapFileHeader)
+					+ static_cast<UInt64>(pending[first].glyphIndex)
+						* sizeof(PersistentBitmapIndexEntry);
+				const UInt32 indexBytes = static_cast<UInt32>(entries.size()
+					* sizeof(PersistentBitmapIndexEntry));
+				if (WriteFileAt(profile.file, indexOffset, entries.data(), indexBytes))
+				{
+					for (size_t index = first; index < last; ++index)
+					{
+						const PendingIndex& value = pending[index];
+						profile.indexEntries[value.glyphIndex] = value.entry;
+						storedAlphaBytes += value.entry.size
+							- sizeof(PersistentBitmapRecordHeader);
+					}
+					stored += static_cast<UInt32>(last - first);
+				}
+				first = last;
+			}
+			profile.recordCount += stored;
+			return stored;
+		}
+
+		bool StorePersistentGlyphBitmap(PersistentBitmapProfile& profile,
+			const BitmapCacheKey& key, const GlyphBitmap& bitmap)
+		{
+			const std::vector<PersistentBitmapStoreRequest> requests = {
+				{ &key, &bitmap }
 			};
-			if (!WriteFileAt(profile.file, indexOffset, &entry, sizeof(entry)))
-				return false;
-			++profile.recordCount;
-			return true;
+			UInt64 storedAlphaBytes = 0;
+			return StorePersistentGlyphBitmaps(profile, requests,
+				storedAlphaBytes) == 1;
 		}
 
 

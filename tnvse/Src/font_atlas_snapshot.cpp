@@ -581,7 +581,9 @@ namespace fonthook::vectorfont
 			std::vector<UInt8> pixels;
 			std::wstring path;
 		};
-		std::vector<SnapshotPage> pages;
+		UInt64 totalBytes = 0;
+		UInt64 totalPlacements = 0;
+		UInt32 pageCount = 0;
 		{
 			std::lock_guard<std::mutex> lock(State().atlasMutex);
 			std::vector<std::pair<AtlasCacheKey, const AtlasResource*>> resources;
@@ -599,6 +601,7 @@ namespace fonthook::vectorfont
 			}
 			if (resources.empty() || resources.size() > kMaximumAtlasSnapshotPages)
 				return false;
+			pageCount = static_cast<UInt32>(resources.size());
 			for (size_t index = 0; index < resources.size(); ++index)
 			{
 				if (resources[index].first.pageIndex != index)
@@ -652,47 +655,42 @@ namespace fonthook::vectorfont
 					page.pixels.size(), payloadHash);
 				page.header.checksum = HashAtlasBytes(&page.header,
 					offsetof(AtlasSnapshotHeader, checksum));
-				pages.push_back(std::move(page));
+
+				UInt64 ignoredSnapshotHash = 0;
+				UInt64 ignoredContentHash = 0;
+				page.path = GetAtlasSnapshotPath(runtime, page.key,
+					ignoredSnapshotHash, ignoredContentHash);
+				if (page.path.empty() || ignoredSnapshotHash != snapshotHash
+					|| ignoredContentHash != maskContentHash)
+					return false;
+				const std::wstring temporary = page.path + L".tmp";
+				HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr,
+					CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+				if (file == INVALID_HANDLE_VALUE)
+					return false;
+				const bool sparse = TryEnableSparseFile(file);
+				TryEnableFileCompression(file);
+				const bool written = WriteSequentialFileBytes(file,
+					&page.header, sizeof(page.header))
+					&& WriteSequentialFileBytes(file, page.placements.data(),
+						page.placements.size() * sizeof(page.placements[0]))
+					&& WriteSparseFileBytes(file, page.pixels.data(),
+						page.pixels.size(), sparse)
+					&& FlushFileBuffers(file);
+				CloseHandle(file);
+				if (!written || !MoveFileExW(temporary.c_str(), page.path.c_str(),
+					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+				{
+					DeleteFileW(temporary.c_str());
+					return false;
+				}
+				totalBytes += page.header.pixelBytes;
+				totalPlacements += page.header.placementCount;
 			}
-		}
-		UInt64 totalBytes = 0;
-		UInt64 totalPlacements = 0;
-		for (SnapshotPage& page : pages)
-		{
-			UInt64 ignoredSnapshotHash = 0;
-			UInt64 ignoredContentHash = 0;
-			page.path = GetAtlasSnapshotPath(runtime, page.key,
-				ignoredSnapshotHash, ignoredContentHash);
-			if (page.path.empty() || ignoredSnapshotHash != snapshotHash
-				|| ignoredContentHash != maskContentHash)
-				return false;
-			const std::wstring temporary = page.path + L".tmp";
-			HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr,
-				CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-			if (file == INVALID_HANDLE_VALUE)
-				return false;
-			const bool sparse = TryEnableSparseFile(file);
-			TryEnableFileCompression(file);
-			const bool written = WriteSequentialFileBytes(file,
-				&page.header, sizeof(page.header))
-				&& WriteSequentialFileBytes(file, page.placements.data(),
-					page.placements.size() * sizeof(page.placements[0]))
-				&& WriteSparseFileBytes(file, page.pixels.data(),
-					page.pixels.size(), sparse)
-				&& FlushFileBuffers(file);
-			CloseHandle(file);
-			if (!written || !MoveFileExW(temporary.c_str(), page.path.c_str(),
-				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-			{
-				DeleteFileW(temporary.c_str());
-				return false;
-			}
-			totalBytes += page.header.pixelBytes;
-			totalPlacements += page.header.placementCount;
 		}
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: atlas snapshot saved font=%u pages=%u placements=%llu bytes=%llu",
-			key.fontId, static_cast<UInt32>(pages.size()),
+			key.fontId, pageCount,
 			static_cast<unsigned long long>(totalPlacements),
 			static_cast<unsigned long long>(totalBytes));
 		return true;
@@ -722,7 +720,19 @@ namespace fonthook::vectorfont
 			&& !ResolveSdfSpread(config, rasterScale, sdfSpread))
 			shaderEffects = false;
 		const UInt32 padding = kAtlasPadding;
-		return !GetAtlasResources(config, rasterScale, bitmaps, pixelMode,
+		// Height-first shelves make a complete prewarm profile substantially denser
+		// than appending scan-order batches, and let every page be uploaded once.
+		std::vector<std::shared_ptr<const GlyphBitmap>> packedBitmaps = bitmaps;
+		std::sort(packedBitmaps.begin(), packedBitmaps.end(),
+			[](const auto& lhs, const auto& rhs)
+			{
+				if (lhs->height != rhs->height)
+					return lhs->height > rhs->height;
+				if (lhs->width != rhs->width)
+					return lhs->width > rhs->width;
+				return lhs->cacheId < rhs->cacheId;
+			});
+		return !GetAtlasResources(config, rasterScale, packedBitmaps, pixelMode,
 			shaderEffects ? AtlasRenderMode::ShaderEffects : AtlasRenderMode::CpuEffects,
 			padding).empty();
 	}

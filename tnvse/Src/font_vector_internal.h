@@ -271,6 +271,9 @@ namespace fonthook::vectorfont
 	void GetGlyphBitmaps(RuntimeFont& arRuntime,
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults);
+	void GetPrewarmGlyphBitmaps(RuntimeFont& arRuntime,
+		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
+		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults);
 	void FlushGlyphBitmapDiskCache();
 	bool UsesSdfFill(const FontConfig& arConfig);
 	bool HasSdfEffects(const FontConfig& arConfig);

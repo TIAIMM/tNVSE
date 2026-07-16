@@ -189,6 +189,50 @@ namespace fonthook::vectorfont
 			return bestArea != UINT64_MAX;
 		}
 
+		void PartitionBitmapsForAtlasPage(const AtlasResource& resource,
+			const std::vector<std::shared_ptr<const GlyphBitmap>>& source,
+			std::vector<std::shared_ptr<const GlyphBitmap>>& accepted,
+			std::vector<std::shared_ptr<const GlyphBitmap>>& remaining)
+		{
+			accepted.clear();
+			remaining.clear();
+			accepted.reserve(source.size());
+			remaining.reserve(source.size());
+			const UInt32 maximum = GetMaximumAtlasSize();
+			const UInt32 padding = resource.padding;
+			UInt32 cursorX = resource.cursorX;
+			UInt32 cursorY = resource.cursorY;
+			UInt32 shelfHeight = resource.shelfHeight;
+			for (const auto& bitmap : source)
+			{
+				if (!bitmap)
+					continue;
+				const UInt32 width = static_cast<UInt32>(bitmap->width);
+				const UInt32 height = static_cast<UInt32>(bitmap->height);
+				UInt32 nextX = cursorX;
+				UInt32 nextY = cursorY;
+				UInt32 nextShelf = shelfHeight;
+				bool fits = width + padding * 2 <= maximum
+					&& height + padding * 2 <= maximum;
+				if (fits && nextX + width + padding > maximum)
+				{
+					nextX = padding;
+					nextY += nextShelf;
+					nextShelf = 0;
+				}
+				fits = fits && nextY + height + padding <= maximum;
+				if (!fits)
+				{
+					remaining.push_back(bitmap);
+					continue;
+				}
+				accepted.push_back(bitmap);
+				cursorX = nextX + width + padding * 2;
+				cursorY = nextY;
+				shelfHeight = std::max(nextShelf, height + padding * 2);
+			}
+		}
+
 		void TouchAtlasEntry(AtlasState& state, AtlasCacheEntry& entry,
 			const AtlasCacheKey& key)
 		{
@@ -652,67 +696,99 @@ namespace fonthook::vectorfont
 			if (missing.empty() && !pages.empty())
 				return pages;
 
-			if (!pages.empty() && AddBitmapsToAtlas(*pages.back(), missing))
+			auto updateExistingPage = [&](AtlasCacheEntry& entry,
+				const AtlasCacheKey& pageKey, const std::shared_ptr<AtlasResource>& resource)
 			{
-				IndexAtlasPage(state, entries.back().first, *pages.back());
-				assignPageOrdinal(*pages.back(), static_cast<UInt16>(pages.size() - 1));
-				AtlasCacheEntry* entry = entries.back().second;
-				const size_t bytes = GetAtlasStorageBytes(pages.back()->width,
-					pages.back()->height, pages.back()->pixelMode, pages.back()->mipLevels);
-				if (bytes != entry->bytes)
+				IndexAtlasPage(state, pageKey, *resource);
+				assignPageOrdinal(*resource, static_cast<UInt16>(pages.size() - 1));
+				const size_t bytes = GetAtlasStorageBytes(resource->width,
+					resource->height, resource->pixelMode, resource->mipLevels);
+				if (bytes != entry.bytes)
 				{
-					state.atlasCacheBytes -= entry->bytes;
-					entry->bytes = bytes;
+					state.atlasCacheBytes -= entry.bytes;
+					entry.bytes = bytes;
 					state.atlasCacheBytes += bytes;
-					TrimAtlasCache(state);
 				}
-				return pages;
-			}
-			if (entries.size() >= kMaximumAtlasSnapshotPages)
-				return {};
+			};
 
-			auto resource = std::make_shared<AtlasResource>();
-			RecordFreeTypePerf(FreeTypePerfCounter::AtlasCreated);
-			resource->pixelMode = pixelMode;
-			resource->backend = g_bEnableFreeTypeDefaultPoolAtlas
-				? AtlasBackend::DefaultPool : AtlasBackend::Managed;
-			resource->renderMode = renderMode;
-			resource->levelZeroOnly = baseKey.levelZeroOnly;
-			resource->padding = padding;
-			resource->width = std::min<UInt32>(512, GetMaximumAtlasSize());
-			resource->height = resource->width;
-			resource->mipLevels = GetAtlasMipLevelCount(
-				resource->width, resource->height, resource->levelZeroOnly);
-			resource->cursorX = padding;
-			resource->cursorY = padding;
-			if (resource->backend == AtlasBackend::Managed)
+			std::vector<std::shared_ptr<const GlyphBitmap>> accepted;
+			std::vector<std::shared_ptr<const GlyphBitmap>> remaining;
+			if (!pages.empty())
 			{
-				resource->pixels.assign(static_cast<size_t>(resource->width)
-					* resource->height * AtlasBytesPerPixel(resource->pixelMode), 0u);
+				AtlasCacheEntry& entry = *entries.back().second;
+				if (AddBitmapsToAtlas(*pages.back(), missing))
+				{
+					updateExistingPage(entry, entries.back().first, pages.back());
+					missing.clear();
+				}
+				else
+				{
+					PartitionBitmapsForAtlasPage(*pages.back(), missing,
+						accepted, remaining);
+					if (!accepted.empty() && accepted.size() < missing.size()
+						&& AddBitmapsToAtlas(*pages.back(), accepted))
+					{
+						updateExistingPage(entry, entries.back().first, pages.back());
+						missing.swap(remaining);
+					}
+				}
 			}
-			if (!AddBitmapsToAtlas(*resource, missing))
-				return {};
-			const size_t bytes = GetAtlasStorageBytes(resource->width,
-				resource->height, resource->pixelMode, resource->mipLevels);
-			AtlasCacheKey pageKey = baseKey;
-			pageKey.pageIndex = entries.empty() ? 0
-				: static_cast<UInt16>(entries.back().first.pageIndex + 1);
-			state.atlasLru.push_front(pageKey);
-			state.atlasCache.emplace(pageKey,
-				AtlasCacheEntry{ resource, bytes, state.atlasLru.begin() });
-			IndexAtlasPage(state, pageKey, *resource);
-			state.atlasCacheBytes += bytes;
-			pages.push_back(resource);
-			assignPageOrdinal(*resource, static_cast<UInt16>(pages.size() - 1));
+
+			UInt32 nextPageIndex = entries.empty() ? 0u
+				: static_cast<UInt32>(entries.back().first.pageIndex) + 1u;
+			while (!missing.empty())
+			{
+				if (nextPageIndex >= kMaximumAtlasSnapshotPages)
+					return {};
+				auto resource = std::make_shared<AtlasResource>();
+				RecordFreeTypePerf(FreeTypePerfCounter::AtlasCreated);
+				resource->pixelMode = pixelMode;
+				resource->backend = g_bEnableFreeTypeDefaultPoolAtlas
+					? AtlasBackend::DefaultPool : AtlasBackend::Managed;
+				resource->renderMode = renderMode;
+				resource->levelZeroOnly = baseKey.levelZeroOnly;
+				resource->padding = padding;
+				resource->width = std::min<UInt32>(512, GetMaximumAtlasSize());
+				resource->height = resource->width;
+				resource->mipLevels = GetAtlasMipLevelCount(
+					resource->width, resource->height, resource->levelZeroOnly);
+				resource->cursorX = padding;
+				resource->cursorY = padding;
+				if (resource->backend == AtlasBackend::Managed)
+				{
+					resource->pixels.assign(static_cast<size_t>(resource->width)
+						* resource->height * AtlasBytesPerPixel(resource->pixelMode), 0u);
+				}
+				PartitionBitmapsForAtlasPage(*resource, missing, accepted, remaining);
+				if (accepted.empty() || !AddBitmapsToAtlas(*resource, accepted))
+					return {};
+				const size_t bytes = GetAtlasStorageBytes(resource->width,
+					resource->height, resource->pixelMode, resource->mipLevels);
+				AtlasCacheKey pageKey = baseKey;
+				pageKey.pageIndex = static_cast<UInt16>(nextPageIndex++);
+				state.atlasLru.push_front(pageKey);
+				const auto inserted = state.atlasCache.emplace(pageKey,
+					AtlasCacheEntry{ resource, bytes, state.atlasLru.begin() });
+				if (!inserted.second)
+				{
+					state.atlasLru.pop_front();
+					return {};
+				}
+				IndexAtlasPage(state, pageKey, *resource);
+				state.atlasCacheBytes += bytes;
+				pages.push_back(resource);
+				assignPageOrdinal(*resource, static_cast<UInt16>(pages.size() - 1));
+				if (g_bEnableFreeTypeFontRenderingLog)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: atlas page created font=%u page=%u size=%ux%u pixelMode=%u renderMode=%u",
+						pageKey.fontId, pageKey.pageIndex, resource->width, resource->height,
+						static_cast<UInt32>(resource->pixelMode),
+						static_cast<UInt32>(resource->renderMode));
+				}
+				missing.swap(remaining);
+			}
 			TrimAtlasCache(state);
-			if (g_bEnableFreeTypeFontRenderingLog)
-			{
-				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: atlas page created font=%u page=%u size=%ux%u pixelMode=%u renderMode=%u",
-					pageKey.fontId, pageKey.pageIndex, resource->width, resource->height,
-					static_cast<UInt32>(resource->pixelMode),
-					static_cast<UInt32>(resource->renderMode));
-			}
 			return pages;
 		}
 

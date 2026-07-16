@@ -357,6 +357,7 @@ namespace fonthook::vectorfont
 		UInt64 validSize = 0;
 		UInt32 glyphCapacity = 0;
 		UInt32 recordCount = 0;
+		std::vector<PersistentBitmapIndexEntry> indexEntries;
 		bool writable = false;
 		bool initialized = false;
 		~PersistentBitmapProfile()
@@ -692,12 +693,19 @@ namespace fonthook::vectorfont
 		PersistentBitmapProfile& profile, const BitmapCacheKey& key);
 	bool StorePersistentGlyphBitmap(PersistentBitmapProfile& profile,
 		const BitmapCacheKey& key, const GlyphBitmap& bitmap);
+	struct PersistentBitmapStoreRequest
+	{
+		const BitmapCacheKey* key = nullptr;
+		const GlyphBitmap* bitmap = nullptr;
+	};
+	UInt32 StorePersistentGlyphBitmaps(PersistentBitmapProfile& profile,
+		const std::vector<PersistentBitmapStoreRequest>& requests,
+		UInt64& storedAlphaBytes);
 
 	std::shared_ptr<GlyphMesh> BuildGlyphMesh(FreeTypeState& state,
 		RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
 		GlyphMeshType meshType);
 	std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(FreeTypeState& state,
-		RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
-		const ResolvedGlyph& resolved, GlyphMaskType maskType,
+		RuntimeFont& runtime, const ResolvedGlyph& resolved, GlyphMaskType maskType,
 		float rasterScale, const BitmapCacheKey& key);
 }
