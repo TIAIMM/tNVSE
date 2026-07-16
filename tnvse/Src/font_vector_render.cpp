@@ -632,13 +632,15 @@ namespace fonthook
 			suppressEffects(IsFreeTypeEffectSuppressionActive()),
 			rasterScale(std::isfinite(afRasterScale) && afRasterScale >= 0.1f
 				&& afRasterScale <= 10.0f ? afRasterScale : 1.0f),
-			tileColor(apTileColor ? *apTileColor
-				: NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f })
+				tileColor(apTileColor ? *apTileColor
+					: NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f })
 		{
-			if (!font || !IsFreeTypeFontActive(font) || !InitializeWhiteTexture())
+			if (!font)
 				return;
-			runtime = vectorfont::FindRuntimeFont(font->iFontNum);
-			available = runtime != nullptr;
+			runtime = vectorfont::FindActiveRuntime(font);
+			if (!runtime || !InitializeWhiteTexture())
+				return;
+			available = true;
 		}
 	};
 
@@ -664,6 +666,12 @@ namespace fonthook
 	bool VectorTextBuilder::IsAvailable() const
 	{
 		return m_impl && m_impl->available;
+	}
+
+	void VectorTextBuilder::ReserveGlyphs(size_t auiCount)
+	{
+		if (m_impl && m_impl->available)
+			m_impl->glyphs.reserve(auiCount);
 	}
 
 	bool VectorTextBuilder::AddGlyph(const VectorEncodedGlyph& glyph,

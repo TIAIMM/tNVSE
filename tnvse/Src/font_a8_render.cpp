@@ -56,6 +56,29 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		void PublishCoverageShader(const NiD3DPixelShaderPtr& loaded)
+		{
+			if (loaded && loaded->GetShaderHandle())
+			{
+				State().coverageShader = loaded;
+				State().loggedCoverageShaderLoadFailure = false;
+				if (g_bEnableFreeTypeFontRenderingLog)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: loaded coverage-only A8 font shader");
+				}
+				return;
+			}
+
+			State().coverageShader = nullptr;
+			if (!State().loggedCoverageShaderLoadFailure)
+			{
+				State().loggedCoverageShaderLoadFailure = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: failed to load tnvse_freetype_coverage.pso; using the generic A8 shader");
+			}
+		}
+
 		bool NeedsScaledFillSampling(const NiTriShape* shape)
 		{
 			if (!shape)
@@ -81,6 +104,7 @@ namespace fonthook::vectorfont
 			}
 			State().loggedA8ShaderLoadFailure = false;
 			State().a8Shader = loaded;
+			PublishCoverageShader(createPixelShader("tnvse_freetype_coverage.pso"));
 			if (g_bEnableFreeTypeFontRenderingLog)
 				FreeTypeFontDebugLog("tnvse_freetype_font: loaded Shader Loader A8 font shader");
 			return true;
@@ -123,6 +147,8 @@ namespace fonthook::vectorfont
 			NiD3DPixelShaderPtr base = createPixelShader("tnvse_freetype_a8.pso");
 			if (!base || !base->GetShaderHandle())
 				return false;
+			NiD3DPixelShaderPtr coverage = createPixelShader(
+				"tnvse_freetype_coverage.pso");
 			const char* names[] = {
 				"tnvse_freetype_effects_fast.pso",
 				"tnvse_freetype_effects_balanced.pso",
@@ -137,6 +163,7 @@ namespace fonthook::vectorfont
 			}
 			State().a8Shader = base;
 			State().effectShaders = effects;
+			PublishCoverageShader(coverage);
 			if (g_bEnableFreeTypeFontRenderingLog)
 					FreeTypeFontDebugLog(
 						"tnvse_freetype_font: atomically refreshed Tile-compatible shader set contract=tile-fill-effect-rgb-v7");
@@ -280,7 +307,11 @@ namespace fonthook::vectorfont
 		{
 			metadata.compiledRanges.clear();
 			metadata.compiledRanges.reserve(metadata.effects.ranges.size());
+			metadata.firstRangeShaderClass = A8CompiledShaderClass::Original;
+			metadata.firstFillShaderClass = A8CompiledShaderClass::Original;
 			metadata.hasShadowRange = false;
+			bool haveFirstRange = false;
+			bool haveFirstFill = false;
 			for (const A8DrawRange& range : metadata.effects.ranges)
 			{
 				metadata.hasShadowRange = metadata.hasShadowRange
@@ -325,6 +356,49 @@ namespace fonthook::vectorfont
 					parameter0, parameter1, parameter2, 0.0f,
 					range.usesSdf ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f
 				}};
+				if (metadata.effects.useOriginalShader)
+				{
+					compiled.shaderClass = A8CompiledShaderClass::Original;
+				}
+				else if (!range.usesSdf)
+				{
+					// Coverage masks, including zero-blur translated shadows, need
+					// only the original single atlas lookup and Tile color ABI.
+					compiled.shaderClass = A8CompiledShaderClass::Coverage;
+				}
+				else if (metadata.effects.shaderEffects && range.layer != 3)
+				{
+					compiled.shaderClass = A8CompiledShaderClass::Effect;
+				}
+				else
+				{
+					compiled.shaderClass = A8CompiledShaderClass::Body;
+				}
+				if (compiled.shaderClass == A8CompiledShaderClass::Effect)
+				{
+					switch (metadata.effects.quality)
+					{
+					case EffectQuality::Balanced:
+						compiled.textureSamplesPerGlyph = 5;
+						break;
+					case EffectQuality::High:
+						compiled.textureSamplesPerGlyph = 9;
+						break;
+					default:
+						compiled.textureSamplesPerGlyph = 1;
+						break;
+					}
+				}
+				if (!haveFirstRange)
+				{
+					metadata.firstRangeShaderClass = compiled.shaderClass;
+					haveFirstRange = true;
+				}
+				if (!haveFirstFill && range.layer == 3)
+				{
+					metadata.firstFillShaderClass = compiled.shaderClass;
+					haveFirstFill = true;
+				}
 				compiled.staticSmoothSampling = range.layer == 1 || range.layer == 2
 					|| (range.layer == 0
 						&& metadata.effects.shadowBlurPixels > 0.001f)

@@ -244,7 +244,7 @@ namespace fonthook
 			apOutString->sMaxLen = 0;
 		}
 
-		ExtraGlyphMap* GetExtraGlyphsForChar(const FontManager::CharData* apChar, Font** apOutFont = nullptr)
+		ExtraGlyphStore* GetExtraGlyphsForChar(const FontManager::CharData* apChar, Font** apOutFont = nullptr)
 		{
 			if (apOutFont)
 				*apOutFont = nullptr;
@@ -280,7 +280,7 @@ namespace fonthook
 
 		FontLetter* LookupRichTextDbcsGlyph(const FontManager::CharData* apChar, UInt32 auiDbcsCode, Font** apOutFont = nullptr)
 		{
-			ExtraGlyphMap* extraGlyphs = GetExtraGlyphsForChar(apChar, apOutFont);
+			ExtraGlyphStore* extraGlyphs = GetExtraGlyphsForChar(apChar, apOutFont);
 			Font* font = apOutFont ? *apOutFont : nullptr;
 			if (font)
 				EnsureFreeTypeDoubleByteMetrics(font, auiDbcsCode);
@@ -966,11 +966,8 @@ namespace fonthook
 			if (bIsDBCharacter)
 			{
 				EnsureFreeTypeDoubleByteMetrics(this->pFont[fontID - 1], uiDoubleByteCode);
-				auto glyphIt = extraGlyphs->find(uiDoubleByteCode);
-				if (glyphIt != extraGlyphs->end())
-				{
-					currentCharTotalWidth = GetGlyphLayoutWidth(&glyphIt->second);
-				}
+				if (FontLetter* glyph = LookupDBGlyph(extraGlyphs, uiDoubleByteCode))
+					currentCharTotalWidth = GetGlyphLayoutWidth(glyph);
 				++currentCharIndex;
 			}
 			else

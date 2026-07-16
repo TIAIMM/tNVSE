@@ -217,9 +217,8 @@ namespace fonthook::vectorfont
 			if (page == profile.pages.end() || *page != key.pageIndex)
 				profile.pages.insert(page, key.pageIndex);
 
-			// Re-indexing an appended or restored page used to scan every resident in
-			// the profile. Track each page's own IDs so updates stay proportional to
-			// that page while preserving the same cacheId -> page result.
+			// Track each page's own IDs so re-indexing stays proportional to that page
+			// and keeps the direct cacheId -> first page lookup synchronized.
 			std::vector<UInt64>& pageResidents = profile.pageResidents[key.pageIndex];
 			for (UInt64 cacheId : pageResidents)
 			{
@@ -234,7 +233,23 @@ namespace fonthook::vectorfont
 			pageResidents.reserve(resource.placements.size());
 			for (const auto& placement : resource.placements)
 			{
-				profile.residentPages[placement.first] = key.pageIndex;
+				const auto resident = profile.residentPages.find(placement.first);
+				if (resident == profile.residentPages.end())
+				{
+					profile.residentPages.emplace(placement.first, key.pageIndex);
+				}
+				else
+				{
+					if (resident->second != key.pageIndex)
+						profile.duplicateResidents.insert(placement.first);
+					if (key.pageIndex < resident->second)
+					{
+						// Profile pages are consumed in ascending order. Preserve the
+						// original placement scan's first-page-wins behavior even when a
+						// restored or legacy profile happens to contain a duplicate ID.
+						resident->second = key.pageIndex;
+					}
+				}
 				pageResidents.push_back(placement.first);
 			}
 		}
@@ -255,12 +270,46 @@ namespace fonthook::vectorfont
 			{
 				for (UInt64 cacheId : pageResidents->second)
 				{
-					const auto resident = profile.residentPages.find(cacheId);
+					auto resident = profile.residentPages.find(cacheId);
 					if (resident != profile.residentPages.end()
 						&& resident->second == key.pageIndex)
-					{
 						profile.residentPages.erase(resident);
+
+					if (profile.duplicateResidents.find(cacheId)
+						== profile.duplicateResidents.end())
+					{
+						continue;
 					}
+
+					// Duplicate IDs are not produced by the current packer, but old
+					// snapshots may contain them. Only those IDs pay for a successor
+					// search when a page is retired; the common unique-ID path remains
+					// linear in this page's resident count.
+					UInt16 firstResidentPage = 0;
+					UInt32 residentCount = 0;
+					for (UInt16 candidatePageIndex : profile.pages)
+					{
+						AtlasCacheKey candidateKey = key;
+						candidateKey.pageIndex = candidatePageIndex;
+						const auto candidate = state.atlasCache.find(candidateKey);
+						if (candidate == state.atlasCache.end()
+							|| !candidate->second.resource
+							|| candidate->second.resource->placements.find(cacheId)
+								== candidate->second.resource->placements.end())
+						{
+							continue;
+						}
+						if (residentCount++ == 0)
+							firstResidentPage = candidatePageIndex;
+						if (residentCount == 2)
+							break;
+					}
+					if (residentCount != 0)
+						profile.residentPages[cacheId] = firstResidentPage;
+					else
+						profile.residentPages.erase(cacheId);
+					if (residentCount < 2)
+						profile.duplicateResidents.erase(cacheId);
 				}
 				profile.pageResidents.erase(pageResidents);
 			}
@@ -502,8 +551,25 @@ namespace fonthook::vectorfont
 			const FontConfig& config, float rasterScale,
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 			AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
-			UInt32 padding)
+			UInt32 padding, std::vector<UInt16>* outBitmapPageOrdinals)
 		{
+			constexpr UInt16 kUnavailablePage = std::numeric_limits<UInt16>::max();
+			if (outBitmapPageOrdinals)
+				outBitmapPageOrdinals->assign(bitmaps.size(), kUnavailablePage);
+			const auto assignPageOrdinal = [&](const AtlasResource& resource, UInt16 ordinal)
+			{
+				if (!outBitmapPageOrdinals)
+					return;
+				for (size_t bitmapIndex = 0; bitmapIndex < bitmaps.size(); ++bitmapIndex)
+				{
+					const auto& bitmap = bitmaps[bitmapIndex];
+					if (!bitmap || (*outBitmapPageOrdinals)[bitmapIndex] != kUnavailablePage)
+						continue;
+					if (resource.placements.find(bitmap->cacheId) != resource.placements.end())
+						(*outBitmapPageOrdinals)[bitmapIndex] = ordinal;
+				}
+			};
+
 			AtlasState& state = State();
 			const AtlasCacheKey baseKey = {
 				BuildAtlasContentHash(config, bitmaps, rasterScale, renderMode),
@@ -533,24 +599,55 @@ namespace fonthook::vectorfont
 			}
 			std::vector<std::shared_ptr<AtlasResource>> pages;
 			pages.reserve(entries.size() + 1);
-			for (auto& entry : entries)
+			thread_local std::unordered_map<UInt16, UInt16> availablePageOrdinals;
+			if (outBitmapPageOrdinals)
 			{
+				availablePageOrdinals.clear();
+				availablePageOrdinals.reserve(entries.size() + 1);
+			}
+			for (size_t ordinal = 0; ordinal < entries.size(); ++ordinal)
+			{
+				auto& entry = entries[ordinal];
 				TouchAtlasEntry(state, *entry.second, entry.first);
 				pages.push_back(entry.second->resource);
+				if (outBitmapPageOrdinals)
+				{
+					availablePageOrdinals.emplace(entry.first.pageIndex,
+						static_cast<UInt16>(ordinal));
+				}
 			}
 			if (!pages.empty())
 				RecordFreeTypePerf(FreeTypePerfCounter::AtlasHit);
 
 			std::vector<std::shared_ptr<const GlyphBitmap>> missing;
 			missing.reserve(bitmaps.size());
-			for (const auto& bitmap : bitmaps)
+			for (size_t bitmapIndex = 0; bitmapIndex < bitmaps.size(); ++bitmapIndex)
 			{
+				const auto& bitmap = bitmaps[bitmapIndex];
 				if (!bitmap)
 					continue;
-				const bool resident = profile != state.atlasProfiles.end()
-					&& profile->second.residentPages.count(bitmap->cacheId) != 0;
-				if (!resident)
+				UInt16 residentPage = 0;
+				bool isResident = false;
+				if (profile != state.atlasProfiles.end())
+				{
+					const auto resident = profile->second.residentPages.find(bitmap->cacheId);
+					if (resident != profile->second.residentPages.end())
+					{
+						residentPage = resident->second;
+						isResident = true;
+					}
+				}
+				if (!isResident)
+				{
 					missing.push_back(bitmap);
+					continue;
+				}
+				if (outBitmapPageOrdinals)
+				{
+					const auto ordinal = availablePageOrdinals.find(residentPage);
+					if (ordinal != availablePageOrdinals.end())
+						(*outBitmapPageOrdinals)[bitmapIndex] = ordinal->second;
+				}
 			}
 			if (missing.empty() && !pages.empty())
 				return pages;
@@ -558,6 +655,7 @@ namespace fonthook::vectorfont
 			if (!pages.empty() && AddBitmapsToAtlas(*pages.back(), missing))
 			{
 				IndexAtlasPage(state, entries.back().first, *pages.back());
+				assignPageOrdinal(*pages.back(), static_cast<UInt16>(pages.size() - 1));
 				AtlasCacheEntry* entry = entries.back().second;
 				const size_t bytes = GetAtlasStorageBytes(pages.back()->width,
 					pages.back()->height, pages.back()->pixelMode, pages.back()->mipLevels);
@@ -604,8 +702,9 @@ namespace fonthook::vectorfont
 				AtlasCacheEntry{ resource, bytes, state.atlasLru.begin() });
 			IndexAtlasPage(state, pageKey, *resource);
 			state.atlasCacheBytes += bytes;
-			TrimAtlasCache(state);
 			pages.push_back(resource);
+			assignPageOrdinal(*resource, static_cast<UInt16>(pages.size() - 1));
+			TrimAtlasCache(state);
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
 				FreeTypeFontDebugLog(

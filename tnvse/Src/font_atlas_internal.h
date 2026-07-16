@@ -254,6 +254,7 @@ namespace fonthook::vectorfont
 		std::vector<UInt16> pages;
 		std::unordered_map<UInt64, UInt16> residentPages;
 		std::unordered_map<UInt16, std::vector<UInt64>> pageResidents;
+		std::unordered_set<UInt64> duplicateResidents;
 	};
 
 	struct BatchTemplateKey
@@ -416,7 +417,9 @@ namespace fonthook::vectorfont
 	std::vector<std::shared_ptr<AtlasResource>> GetAtlasResources(
 		const FontConfig& config, float rasterScale,
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
-		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding);
+		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
+		// When requested, entries align with bitmaps and index the returned pages.
+		std::vector<UInt16>* outBitmapPageOrdinals = nullptr);
 	std::shared_ptr<AtlasResource> CreateTransientAtlas(
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding);

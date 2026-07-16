@@ -43,7 +43,7 @@ namespace fonthook
 			return code;
 		};
 		const vectorfont::KerningCacheKey cacheKey = {
-			runtime->config->layoutHash, runtime->config->fontId,
+			runtime->config->layoutHash,
 			g_usingWinEncoding, packCode(apLeft, auiLeftLength),
 			packCode(apRight, auiRightLength),
 			static_cast<UInt8>(auiLeftLength), static_cast<UInt8>(auiRightLength)
@@ -109,6 +109,11 @@ namespace fonthook
 	{
 		const vectorfont::RuntimeFont* runtime = vectorfont::FindActiveRuntime(apFont);
 		return runtime && runtime->config && runtime->config->shaping;
+	}
+
+	bool IsFreeTypeFontConfigured(UInt32 auiFontId)
+	{
+		return vectorfont::FindConfig(auiFontId) != nullptr;
 	}
 
 	bool ActivateFreeTypeFont(Font* apFont, bool abForce)

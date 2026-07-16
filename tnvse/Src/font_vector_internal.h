@@ -237,6 +237,7 @@ namespace fonthook::vectorfont
 
 	const FontConfig* FindConfig(UInt32 auiFontId);
 	RuntimeFont* FindRuntimeFont(UInt32 auiFontId);
+	RuntimeFont* FindActiveRuntime(const Font* apFont);
 	RuntimeFont* EnsureRuntimeFont(UInt32 auiFontId);
 	bool ApplyRuntimeMetrics(RuntimeFont& arRuntime, Font& arFont);
 	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& arRuntime, Font& arFont, UInt32 auiEncodedCode);

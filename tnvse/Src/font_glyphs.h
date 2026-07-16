@@ -7,8 +7,6 @@
 
 namespace fonthook
 {
-	using ExtraGlyphMap = std::unordered_map<UInt32, FontLetter>;
-
 	enum class LayoutWrapKind : UInt8
 	{
 		None,
@@ -111,7 +109,7 @@ namespace fonthook
 		return !gNumberedExtraLetters.empty();
 	}
 
-	inline ExtraGlyphMap* GetExtraGlyphs(int fontNum)
+	inline ExtraGlyphStore* GetExtraGlyphs(int fontNum)
 	{
 		auto it = gNumberedExtraLetters.find(fontNum);
 		return it != gNumberedExtraLetters.end() ? &it->second : nullptr;
@@ -122,13 +120,15 @@ namespace fonthook
 		return GetExtraGlyphs(fontNum) != nullptr;
 	}
 
-	inline FontLetter* LookupDBGlyph(ExtraGlyphMap* extraGlyphs, UInt32 code)
+	inline FontLetter* LookupDBGlyph(ExtraGlyphStore* extraGlyphs, UInt32 code)
 	{
 		if (!extraGlyphs)
 			return nullptr;
 
-		auto it = extraGlyphs->find(code);
-		return it != extraGlyphs->end() ? &it->second : nullptr;
+		auto generated = extraGlyphs->generated.find(code);
+		if (generated != extraGlyphs->generated.end())
+			return &generated->second;
+		return extraGlyphs->serialized.find(code);
 	}
 
 	// The original code consumes FontLetter spacing differently in render,

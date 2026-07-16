@@ -57,8 +57,10 @@ namespace
 
 	void LogFailureOnce(LONG bit, const char* message)
 	{
+		if (!g_bEnableFreeTypeFontRenderingLog)
+			return;
 		const LONG previous = InterlockedOr(&s_failureLogMask, bit);
-		if (!(previous & bit) && g_bEnableFreeTypeFontRenderingLog)
+		if (!(previous & bit))
 			fonthook::FreeTypeFontDebugLog("tnvse_freetype_font: %s", message);
 	}
 
@@ -161,8 +163,9 @@ namespace
 	{
 		if (!g_bEnableFreeTypeDevicePixelScale)
 		{
-			InterlockedExchange(&s_deviceScaleMilli,
-				CanonicalScaleMilli(g_fFreeTypeFontResolutionScale));
+			const LONG canonical = CanonicalScaleMilli(g_fFreeTypeFontResolutionScale);
+			if (s_deviceScaleMilli != canonical)
+				InterlockedExchange(&s_deviceScaleMilli, canonical);
 			return;
 		}
 
@@ -173,7 +176,8 @@ namespace
 			resolutionConverter, deviceScale, clamped);
 		if (result != DeviceScaleReadResult::Success)
 		{
-			InterlockedExchange(&s_deviceScaleMilli, 0);
+			if (s_deviceScaleMilli)
+				InterlockedExchange(&s_deviceScaleMilli, 0);
 			LogFailureOnce(result == DeviceScaleReadResult::Missing
 				? kLogDeviceScaleMissing : kLogDeviceScaleInvalid,
 				result == DeviceScaleReadResult::Missing
@@ -187,7 +191,9 @@ namespace
 				"device pixel scale was clamped to the supported 0.1-10.0 range");
 
 		const LONG canonical = CanonicalScaleMilli(deviceScale);
-		const LONG previous = InterlockedExchange(&s_deviceScaleMilli, canonical);
+		LONG previous = s_deviceScaleMilli;
+		if (previous != canonical)
+			previous = InterlockedExchange(&s_deviceScaleMilli, canonical);
 		if (g_bEnableFreeTypeFontRenderingLog && previous != canonical)
 		{
 			fonthook::FreeTypeFontDebugLog(
@@ -202,6 +208,10 @@ extern "C" void __cdecl tnvse_SetFreeTypeCreateTextScale(
 	const void* callerFrame, const void* returnAddress)
 {
 	s_createTextScale = 1.0f;
+	// UIO zoom intentionally remains a scene transform. Its stack scale is only
+	// used by diagnostics, so avoid PE/frame inspection in normal rendering.
+	if (!g_bEnableFreeTypeFontRenderingLog)
+		return;
 	if (!QueryUioCompatibility(false))
 		return;
 
@@ -300,12 +310,6 @@ namespace fonthook
 
 	float ResolveFreeTypeRasterScale(float localScale)
 	{
-		if (!std::isfinite(localScale)
-			|| localScale < kMinimumRasterScale || localScale > kMaximumRasterScale)
-		{
-			localScale = 1.0f;
-		}
-
 		float baseScale = 1.0f;
 		TryGetFreeTypeSourceRasterScale(baseScale);
 		// Both policies keep one UIO-1.0 source profile. UIO zoom remains a scene
@@ -314,18 +318,26 @@ namespace fonthook
 		// where 1.0 matches the original grayscale renderer's ordinary UIO-1.0 path.
 		const float rawSource = baseScale;
 		const LONG sourceMilli = CanonicalScaleMilli(rawSource);
-		const LONG localMilli = CanonicalScaleMilli(localScale);
-		const LONG logKey = localMilli * 10001 + sourceMilli;
-		const LONG previousKey = InterlockedExchange(&s_lastCombinedScaleKey, logKey);
-		if (g_bEnableFreeTypeFontRenderingLog && previousKey != logKey
-			&& InterlockedIncrement(&s_combinedScaleLogCount) <= 64)
+		if (g_bEnableFreeTypeFontRenderingLog)
 		{
-			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: raster scale base=%.3f uio=%.3f source=%.3f policy=%s",
-				baseScale, localScale,
-				static_cast<float>(sourceMilli) / kRasterScalePrecision,
-				g_bEnableFreeTypeDevicePixelScale
-					? "fixed-device-uio-1" : "fixed-manual-uio-1");
+			if (!std::isfinite(localScale)
+				|| localScale < kMinimumRasterScale || localScale > kMaximumRasterScale)
+			{
+				localScale = 1.0f;
+			}
+			const LONG localMilli = CanonicalScaleMilli(localScale);
+			const LONG logKey = localMilli * 10001 + sourceMilli;
+			const LONG previousKey = InterlockedExchange(&s_lastCombinedScaleKey, logKey);
+			if (previousKey != logKey
+				&& InterlockedIncrement(&s_combinedScaleLogCount) <= 64)
+			{
+				FreeTypeFontDebugLog(
+					"tnvse_freetype_font: raster scale base=%.3f uio=%.3f source=%.3f policy=%s",
+					baseScale, localScale,
+					static_cast<float>(sourceMilli) / kRasterScalePrecision,
+					g_bEnableFreeTypeDevicePixelScale
+						? "fixed-device-uio-1" : "fixed-manual-uio-1");
+			}
 		}
 		return static_cast<float>(sourceMilli) / kRasterScalePrecision;
 	}
@@ -341,6 +353,8 @@ namespace fonthook
 	{
 		__asm
 		{
+			cmp byte ptr [g_bEnableFreeTypeFontRenderingLog], 0
+			je dispatch
 			pushfd
 			pushad
 			mov eax, [esp + 36]
@@ -350,6 +364,7 @@ namespace fonthook
 			add esp, 8
 			popad
 			popfd
+		dispatch:
 			jmp tnvse_FreeTypeCreateTextDispatch
 		}
 	}

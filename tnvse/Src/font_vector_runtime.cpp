@@ -603,12 +603,23 @@ namespace fonthook::vectorfont
 		FreeTypeState& state = State();
 		FreeTypeThreadState& thread = ThreadState();
 		const UInt32 fontId = static_cast<UInt32>(apFont->iFontNum);
-		if (thread.activeRuntime.font == apFont
-			&& thread.activeRuntime.data == apFont->pFontData
-			&& thread.activeRuntime.fontId == fontId
-			&& thread.activeRuntime.runtime)
+		for (size_t index = 0; index < thread.activeRuntimes.size(); ++index)
 		{
-			return thread.activeRuntime.runtime;
+			const ActiveRuntimeCache& cached = thread.activeRuntimes[index];
+			if (cached.font != apFont || cached.data != apFont->pFontData
+				|| cached.fontId != fontId || !cached.runtime)
+			{
+				continue;
+			}
+			RuntimeFont* runtime = cached.runtime;
+			if (index)
+			{
+				const ActiveRuntimeCache hit = cached;
+				for (size_t position = index; position > 0; --position)
+					thread.activeRuntimes[position] = thread.activeRuntimes[position - 1];
+				thread.activeRuntimes[0] = hit;
+			}
+			return runtime;
 		}
 
 		std::lock_guard<std::recursive_mutex> lock(state.mutex);
@@ -621,17 +632,21 @@ namespace fonthook::vectorfont
 		const auto runtime = state.runtimeFonts.find(fontId);
 		if (runtime == state.runtimeFonts.end())
 			return nullptr;
-		thread.activeRuntime = {
+		for (size_t index = thread.activeRuntimes.size() - 1; index > 0; --index)
+			thread.activeRuntimes[index] = thread.activeRuntimes[index - 1];
+		thread.activeRuntimes[0] = {
 			apFont, apFont->pFontData, fontId, runtime->second.get()
 		};
-		return thread.activeRuntime.runtime;
+		return thread.activeRuntimes[0].runtime;
 	}
 
 	RuntimeFont* EnsureRuntimeFont(UInt32 auiFontId)
 	{
-		std::lock_guard<std::recursive_mutex> lock(State().mutex);
-		if (RuntimeFont* runtime = FindRuntimeFont(auiFontId))
-			return runtime;
+		FreeTypeState& state = State();
+		std::lock_guard<std::recursive_mutex> lock(state.mutex);
+		const auto existing = state.runtimeFonts.find(auiFontId);
+		if (existing != state.runtimeFonts.end())
+			return existing->second.get();
 		const FontConfig* config = FindConfig(auiFontId);
 		if (!config)
 			return nullptr;
@@ -642,7 +657,7 @@ namespace fonthook::vectorfont
 			return nullptr;
 		}
 		RuntimeFont* result = runtime.get();
-		State().runtimeFonts.emplace(auiFontId, std::move(runtime));
+		state.runtimeFonts.emplace(auiFontId, std::move(runtime));
 		return result;
 	}
 
@@ -781,9 +796,10 @@ namespace fonthook::vectorfont
 				space.fWidth, space.fSpacing, space.fTopEdge, space.fHeight);
 		}
 
-		ExtraGlyphMap& extra = gNumberedExtraLetters[font.iFontNum];
-		extra.clear();
-		extra.reserve(25000);
+		ExtraGlyphStore& extraStore = gNumberedExtraLetters[font.iFontNum];
+		extraStore.serialized.clear();
+		extraStore.generated.clear();
+		extraStore.generated.reserve(SerializedExtraGlyphTable::kGlyphCount);
 		State().activeFonts[&font] = activeState;
 		return true;
 	}
@@ -791,7 +807,7 @@ namespace fonthook::vectorfont
 	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& runtime, Font& font, UInt32 encodedCode)
 	{
 		std::lock_guard<std::recursive_mutex> lock(State().mutex);
-		ExtraGlyphMap& extra = gNumberedExtraLetters[font.iFontNum];
+		ExtraGlyphMap& extra = gNumberedExtraLetters[font.iFontNum].generated;
 		auto existing = extra.find(encodedCode);
 		if (existing != extra.end())
 			return &existing->second;

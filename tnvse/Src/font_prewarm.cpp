@@ -743,6 +743,8 @@ namespace fonthook::vectorfont
 	{
 		if (!g_bEnableFreeTypeFontRendering)
 			return;
+		if (s_configuredFontsQueued && s_jobs.empty())
+			return;
 
 		float deviceScale = 1.0f;
 		if (!TryGetFreeTypeSourceRasterScale(deviceScale))

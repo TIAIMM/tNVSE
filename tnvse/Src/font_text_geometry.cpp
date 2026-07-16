@@ -81,6 +81,8 @@ namespace fonthook
 		const NiColorA* apColor,
 		UInt32& arCallCount)
 	{
+		if (!g_bEnableFreeTypeFontRenderingLog)
+			return;
 		UInt32 callCount = abHasRenderInfo ? arRenderInfo.callIndex : arCallCount++;
 		if (!ShouldLogTextDocRenderAddChar(arRenderInfo, abHasRenderInfo, apFont, apLetter, callCount))
 			return;
@@ -274,6 +276,86 @@ namespace fonthook
 			escaped.c_str());
 	}
 
+	struct PreparedTextMeasuredRun
+	{
+		size_t byteOffset = 0;
+		size_t byteLength = 0;
+		FreeTypeLayoutRun layout;
+		bool available = false;
+	};
+
+	struct PreparedTextLayoutScratch
+	{
+		std::vector<float> lineWidths;
+		std::vector<PreparedTextMeasuredRun> measuredRuns;
+
+		void Reset()
+		{
+			lineWidths.clear();
+			measuredRuns.clear();
+		}
+
+		void ReleaseLayoutsAndTrim()
+		{
+			constexpr size_t kMaximumRetainedLines = 1024;
+			constexpr size_t kMaximumRetainedRuns = 8192;
+			Reset();
+			if (lineWidths.capacity() > kMaximumRetainedLines)
+				std::vector<float>().swap(lineWidths);
+			if (measuredRuns.capacity() > kMaximumRetainedRuns)
+				std::vector<PreparedTextMeasuredRun>().swap(measuredRuns);
+		}
+
+		const FreeTypeLayoutRun* FindMeasuredRun(size_t byteOffset,
+			size_t byteLength, size_t& cursor) const
+		{
+			while (cursor < measuredRuns.size()
+				&& measuredRuns[cursor].byteOffset < byteOffset)
+			{
+				++cursor;
+			}
+			if (cursor >= measuredRuns.size())
+				return nullptr;
+			const PreparedTextMeasuredRun& measured = measuredRuns[cursor];
+			if (measured.byteOffset != byteOffset || measured.byteLength != byteLength)
+				return nullptr;
+			++cursor;
+			return measured.available ? &measured.layout : nullptr;
+		}
+	};
+
+	struct PreparedTextLayoutScratchPool
+	{
+		std::array<PreparedTextLayoutScratch, 4> slots;
+		size_t depth = 0;
+	};
+
+	class PreparedTextLayoutScratchLease
+	{
+	public:
+		explicit PreparedTextLayoutScratchLease(PreparedTextLayoutScratchPool& pool)
+			: m_pool(pool)
+		{
+			m_scratch = m_pool.depth < m_pool.slots.size()
+				? &m_pool.slots[m_pool.depth] : &m_fallback;
+			++m_pool.depth;
+			m_scratch->Reset();
+		}
+
+		~PreparedTextLayoutScratchLease()
+		{
+			m_scratch->ReleaseLayoutsAndTrim();
+			--m_pool.depth;
+		}
+
+		PreparedTextLayoutScratch& Get() { return *m_scratch; }
+
+	private:
+		PreparedTextLayoutScratchPool& m_pool;
+		PreparedTextLayoutScratch m_fallback;
+		PreparedTextLayoutScratch* m_scratch = nullptr;
+	};
+
 	static UInt32 CreateFreeTypePreparedText(
 		FontEx* font,
 		Font::TextData& textData,
@@ -294,10 +376,16 @@ namespace fonthook
 			font->ButtonIcons.Clear(1);
 			return ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&textData));
 		}
+		builder.ReserveGlyphs(static_cast<size_t>(std::max(0, textData.iCharCount)));
 
-		std::vector<float> exactLineWidths;
+		thread_local PreparedTextLayoutScratchPool layoutScratchPool;
+		PreparedTextLayoutScratchLease layoutScratchLease(layoutScratchPool);
+		PreparedTextLayoutScratch& layoutScratch = layoutScratchLease.Get();
+		std::vector<float>& exactLineWidths = layoutScratch.lineWidths;
+		std::vector<PreparedTextMeasuredRun>& measuredRuns = layoutScratch.measuredRuns;
+		const char* const preparedText = textData.xNewText.pString;
 		int measureIconIndex = 0;
-		const char* measureCursor = textData.xNewText.pString;
+		const char* measureCursor = preparedText;
 		while (measureCursor && *measureCursor)
 		{
 			const char* lineEnd = std::strchr(measureCursor, aiLineBreakChar);
@@ -339,11 +427,16 @@ namespace fonthook
 					UInt32 dbcsCode = 0;
 					runEnd += TryDecodeDoubleByte(runEnd, dbcsCode) ? 2 : 1;
 				}
-				FreeTypeLayoutRun run;
-				if (runEnd > cursor && LayoutFreeTypeRun(font, cursor,
-					static_cast<size_t>(runEnd - cursor), run, true))
+				if (runEnd > cursor)
 				{
-					width += run.advance;
+					PreparedTextMeasuredRun measured;
+					measured.byteOffset = static_cast<size_t>(cursor - preparedText);
+					measured.byteLength = static_cast<size_t>(runEnd - cursor);
+					measured.available = LayoutFreeTypeRun(font, cursor,
+						measured.byteLength, measured.layout, true);
+					if (measured.available)
+						width += measured.layout.advance;
+					measuredRuns.push_back(std::move(measured));
 				}
 				cursor = runEnd > cursor ? runEnd : cursor + 1;
 			}
@@ -402,6 +495,7 @@ namespace fonthook
 		int trailingWhitespaceCount = 0;
 		float trailingWhitespaceWidth = 0.0f;
 		int iconIndex = 0;
+		size_t measuredRunCursor = 0;
 		for (int byteIndex = 0; textData.xNewText.pString[byteIndex]; ++byteIndex)
 		{
 			const UInt8 current = static_cast<UInt8>(textData.xNewText.pString[byteIndex]);
@@ -457,12 +551,21 @@ namespace fonthook
 				UInt32 dbcsCode = 0;
 				runEnd += TryDecodeDoubleByte(&textData.xNewText.pString[runEnd], dbcsCode) ? 2 : 1;
 			}
-			FreeTypeLayoutRun run;
-			if (runEnd > byteIndex && LayoutFreeTypeRun(font,
-				&textData.xNewText.pString[byteIndex], runEnd - byteIndex, run, true))
+			FreeTypeLayoutRun fallbackRun;
+			const size_t runLength = runEnd > byteIndex
+				? static_cast<size_t>(runEnd - byteIndex) : 0;
+			const FreeTypeLayoutRun* run = runLength
+				? layoutScratch.FindMeasuredRun(static_cast<size_t>(byteIndex),
+					runLength, measuredRunCursor) : nullptr;
+			if (!run && runLength && LayoutFreeTypeRun(font,
+				&textData.xNewText.pString[byteIndex], runLength, fallbackRun, true))
+			{
+				run = &fallbackRun;
+			}
+			if (run)
 			{
 				float runPen = position.x;
-				for (const FreeTypeLayoutGlyph& item : *run.glyphs)
+				for (const FreeTypeLayoutGlyph& item : *run->glyphs)
 				{
 					NiPoint3 glyphPen(runPen + item.xOffset, position.y,
 						position.z + item.yOffset);
@@ -476,7 +579,7 @@ namespace fonthook
 					builder.AddGlyph(glyph, glyphPen, fontColor);
 					runPen += item.xAdvance;
 				}
-				position.x += run.advance;
+				position.x += run->advance;
 			}
 			trailingWhitespaceCount = 0;
 			trailingWhitespaceWidth = 0.0f;
@@ -737,6 +840,7 @@ namespace fonthook
 					empty->m_kLocal.m_Translate = NiPoint3(afStartX, currentZ, currentY);
 				return empty;
 			}
+			builder.ReserveGlyphs(charIdx);
 
 			const float startY = currentY;
 			const float startX = currentX;

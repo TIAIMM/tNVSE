@@ -230,9 +230,9 @@ namespace fonthook::vectorfont
 
 			bool IsValid() const { return m_valid; }
 
-			bool Apply(IDirect3DPixelShader9* shader)
+			bool ApplySamplerContract()
 			{
-				if (!m_valid || !shader)
+				if (!m_valid)
 					return false;
 				// Mark the guard dirty before the first mutation so a partial failure is
 				// still restored. RGB blend, depth-test, scissor, stencil test/ref and
@@ -244,8 +244,7 @@ namespace fonthook::vectorfont
 					&& SetSamplerStateIfChanged(kMaxMipLevelSampler, 0)
 					&& SetSamplerStateIfChanged(kMipLodBiasSampler, 0)
 					&& SetSamplerStateIfChanged(kAddressUSampler, D3DTADDRESS_CLAMP)
-					&& SetSamplerStateIfChanged(kAddressVSampler, D3DTADDRESS_CLAMP)
-					&& SetPixelShaderIfChanged(shader);
+					&& SetSamplerStateIfChanged(kAddressVSampler, D3DTADDRESS_CLAMP);
 			}
 
 			bool SetShader(IDirect3DPixelShader9* shader)
@@ -585,21 +584,80 @@ namespace fonthook::vectorfont
 				: nullptr;
 			IDirect3DPixelShader9* fillShader = useOriginalShader
 				? nullptr : a8State.a8Shader->GetShaderHandle();
-			// Install the fill shader first. Optional effect shaders are selected
-			// per range below, so enabling an effect can never replace the shader
-			// responsible for the mandatory text body.
-			if (!useOriginalShader && !state.Apply(fillShader))
+			bool useCoverageShader = !useOriginalShader && a8State.coverageShader
+				&& a8State.coverageShader->GetShaderHandle();
+			IDirect3DPixelShader9* coverageShader = useCoverageShader
+				? a8State.coverageShader->GetShaderHandle() : fillShader;
+			auto resolveRangeShader = [&](A8CompiledShaderClass shaderClass)
+				-> IDirect3DPixelShader9*
+			{
+				switch (shaderClass)
+				{
+				case A8CompiledShaderClass::Coverage:
+					return useCoverageShader ? coverageShader : fillShader;
+				case A8CompiledShaderClass::Effect:
+					return effectShader;
+				case A8CompiledShaderClass::Body:
+				case A8CompiledShaderClass::Original:
+				default:
+					return fillShader;
+				}
+			};
+
+			A8CompiledShaderClass initialShaderClass =
+				A8CompiledShaderClass::Coverage;
+			if (haveRanges)
+			{
+				initialShaderClass = metadata.effects.shaderEffects
+					&& !useShaderEffects
+					? metadata.firstFillShaderClass
+					: metadata.firstRangeShaderClass;
+			}
+			IDirect3DPixelShader9* initialShader = useOriginalShader
+				? nullptr : resolveRangeShader(initialShaderClass);
+			if (!useOriginalShader && !state.ApplySamplerContract())
 			{
 				UpdateCurrentRenderTraces([](A8RenderTraceContext& trace)
 					{ ++trace.fillFailures; });
 				if (detailedTrace)
 				{
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_shadow_trace: dip-abort serial=%llu dip=%u reason=fill-shader-apply-failed shader=%p",
+						"tnvse_freetype_shadow_trace: dip-abort serial=%llu dip=%u reason=sampler-contract-apply-failed shader=%p",
 						static_cast<unsigned long long>(currentTrace->serial), drawCall,
-						fillShader);
+						initialShader);
 				}
 				return D3DERR_INVALIDCALL;
+			}
+			if (!useOriginalShader && !state.SetShader(initialShader))
+			{
+				bool recovered = false;
+				if (initialShaderClass == A8CompiledShaderClass::Coverage
+					&& useCoverageShader)
+				{
+					useCoverageShader = false;
+					initialShader = fillShader;
+					recovered = state.SetShader(fillShader);
+				}
+				else if (initialShaderClass == A8CompiledShaderClass::Effect)
+				{
+					useShaderEffects = false;
+					effectShader = nullptr;
+					initialShader = fillShader;
+					recovered = state.SetShader(fillShader);
+				}
+				if (!recovered)
+				{
+					UpdateCurrentRenderTraces([](A8RenderTraceContext& trace)
+						{ ++trace.fillFailures; });
+					if (detailedTrace)
+					{
+						FreeTypeFontDebugLog(
+							"tnvse_freetype_shadow_trace: dip-abort serial=%llu dip=%u reason=initial-shader-apply-failed shader=%p",
+							static_cast<unsigned long long>(currentTrace->serial), drawCall,
+							initialShader);
+					}
+					return D3DERR_INVALIDCALL;
+				}
 			}
 
 			if (!haveRanges)
@@ -652,7 +710,7 @@ namespace fonthook::vectorfont
 					return D3DERR_INVALIDCALL;
 				}
 				LogShadowTraceDeviceState(device, "fill-ready-no-ranges", drawCall,
-					3, fillShader, D3D_OK);
+					3, initialShader, D3D_OK);
 				const HRESULT fillResult = a8State.originalDrawIndexedPrimitive(device, primitiveType,
 					baseVertexIndex, minimumVertexIndex, numberOfVertices, startIndex, primitiveCount);
 				UpdateCurrentRenderTraces([fillResult](A8RenderTraceContext& trace)
@@ -663,7 +721,7 @@ namespace fonthook::vectorfont
 							++trace.fillFailures;
 					});
 				LogShadowTraceDeviceState(device, "fill-complete-no-ranges", drawCall,
-					3, fillShader, fillResult);
+					3, initialShader, fillResult);
 				return fillResult;
 			}
 
@@ -736,27 +794,28 @@ namespace fonthook::vectorfont
 					}
 				}
 
-				IDirect3DPixelShader9* rangeShader = fillShader;
-				if (range.layer != 3 && metadata.effects.shaderEffects)
+				IDirect3DPixelShader9* rangeShader = useOriginalShader
+					? nullptr : resolveRangeShader(compiled.shaderClass);
+				bool rangeShaderReady = true;
+				if (!useOriginalShader)
 				{
-					if (!useShaderEffects)
+					rangeShaderReady = state.SetShader(rangeShader);
+					if (!rangeShaderReady
+						&& compiled.shaderClass == A8CompiledShaderClass::Coverage
+						&& useCoverageShader)
 					{
-						recordRangeResult(range.layer, D3DERR_NOTAVAILABLE);
-						if (detailedTrace)
-						{
-							FreeTypeFontDebugLog(
-								"tnvse_freetype_shadow_trace: range-skip serial=%llu dip=%u ordinal=%u layer=%u reason=effect-disabled-after-prior-failure",
-								static_cast<unsigned long long>(currentTrace->serial), drawCall,
-								currentOrdinal, range.layer);
-						}
-						continue;
+						// The coverage-only shader is an optional specialization. A
+						// runtime SetPixelShader failure falls back to the generic body
+						// shader just like a load failure, without dropping the range.
+						useCoverageShader = false;
+						rangeShader = fillShader;
+						rangeShaderReady = state.SetShader(fillShader);
 					}
-					rangeShader = effectShader;
 				}
-				// Apply() establishes the fixed sampler contract once before the first
-				// range. Adjacent ranges only need to switch the shader itself; their
+				// The fixed sampler contract is established once before the first
+				// range. Adjacent ranges only switch a compiled target shader; their
 				// dynamic filtering is handled by SetSampling below.
-				if (!useOriginalShader && !state.SetShader(rangeShader))
+				if (!rangeShaderReady)
 				{
 					const HRESULT shaderResult = D3DERR_INVALIDCALL;
 					recordRangeResult(range.layer, shaderResult);
@@ -883,18 +942,12 @@ namespace fonthook::vectorfont
 						actualAlphaOperation, actualColorWrite);
 				}
 
-				UInt32 samples = 1;
-				const UInt32 quality = static_cast<UInt32>(metadata.effects.quality);
-				const bool sdfPass = range.layer == 1 || range.layer == 2
-					|| (range.layer == 0 && metadata.effects.shadowBlurPixels > 0.001f)
-					|| range.usesSdf;
-				if (useShaderEffects && sdfPass)
-					samples = quality == 0 ? 1 : quality == 1 ? 4 : 8;
 				if (useShaderEffects)
 				{
 					RecordFreeTypePerf(FreeTypePerfCounter::ShaderEffectPass);
 					RecordFreeTypePerf(FreeTypePerfCounter::ShaderEffectSamples,
-						static_cast<UInt64>(samples) * metadata.glyphCount);
+						static_cast<UInt64>(compiled.textureSamplesPerGlyph)
+							* (range.vertexCount / 4));
 				}
 				// The engine may submit a shape from a packed vertex buffer where both
 				// BaseVertexIndex and MinVertexIndex are non-zero. The range indices are

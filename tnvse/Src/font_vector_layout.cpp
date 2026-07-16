@@ -16,7 +16,7 @@ namespace fonthook::vectorfont
 		{
 			while (state.layoutCacheBytes > GetLayoutCacheLimit() && !state.layoutLru.empty())
 			{
-				const LayoutCacheKey key = state.layoutLru.back();
+				const LayoutCacheKey& key = state.layoutLru.back();
 				auto it = state.layoutCache.find(key);
 				if (it != state.layoutCache.end())
 				{
@@ -329,7 +329,6 @@ namespace fonthook::vectorfont
 		std::lock_guard<std::recursive_mutex> lock(state.mutex);
 		const LayoutCacheLookupKey lookup = {
 			runtime.config->layoutHash,
-			runtime.config->fontId,
 			g_usingWinEncoding,
 			allowShaping,
 			std::string_view(text, length)
@@ -349,7 +348,6 @@ namespace fonthook::vectorfont
 		{
 			LayoutCacheKey key = {
 				runtime.config->layoutHash,
-				runtime.config->fontId,
 				g_usingWinEncoding,
 				allowShaping,
 				std::string(text, length)

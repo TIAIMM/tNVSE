@@ -717,15 +717,30 @@ namespace fonthook::vectorfont
 				activeBitmaps = &bakedBitmaps;
 			}
 
+			thread_local std::vector<UInt16> bitmapPageOrdinals;
 			std::vector<std::shared_ptr<AtlasResource>> availableAtlases =
 				GetAtlasResources(config, rasterScale, *activeBitmaps, pixelMode,
-				renderMode, padding);
+				renderMode, padding, &bitmapPageOrdinals);
 			if (availableAtlases.empty())
 			{
 				std::shared_ptr<AtlasResource> transient = CreateTransientAtlas(
 					*activeBitmaps, pixelMode, renderMode, padding);
 				if (transient)
+				{
 					availableAtlases.push_back(std::move(transient));
+					bitmapPageOrdinals.assign(activeBitmaps->size(),
+						std::numeric_limits<UInt16>::max());
+					for (size_t bitmapIndex = 0; bitmapIndex < activeBitmaps->size();
+						++bitmapIndex)
+					{
+						const auto& bitmap = (*activeBitmaps)[bitmapIndex];
+						if (bitmap && availableAtlases[0]->placements.find(bitmap->cacheId)
+							!= availableAtlases[0]->placements.end())
+						{
+							bitmapPageOrdinals[bitmapIndex] = 0;
+						}
+					}
+				}
 			}
 			if (availableAtlases.empty())
 				return nullptr;
@@ -736,16 +751,15 @@ namespace fonthook::vectorfont
 				std::numeric_limits<UInt16>::max());
 			thread_local std::unordered_map<UInt64, UInt16> placementPages;
 			placementPages.clear();
-			size_t placementCount = 0;
-			for (const auto& atlas : availableAtlases)
-				placementCount += atlas ? atlas->placements.size() : 0;
-			placementPages.reserve(placementCount);
-			for (UInt16 page = 0; page < availableAtlases.size(); ++page)
+			placementPages.reserve(activeBitmaps->size());
+			for (size_t bitmapIndex = 0; bitmapIndex < activeBitmaps->size(); ++bitmapIndex)
 			{
-				if (!availableAtlases[page])
+				const auto& bitmap = (*activeBitmaps)[bitmapIndex];
+				if (!bitmap || placementPages.find(bitmap->cacheId) != placementPages.end())
 					continue;
-				for (const auto& placement : availableAtlases[page]->placements)
-					placementPages.emplace(placement.first, page);
+				const UInt16 page = bitmapPageOrdinals[bitmapIndex];
+				if (page < availableAtlases.size())
+					placementPages.emplace(bitmap->cacheId, page);
 			}
 			for (PendingQuad& quad : pagedQuads)
 			{
@@ -761,13 +775,16 @@ namespace fonthook::vectorfont
 				}
 				quad.atlasPage = compactPage;
 			}
-			std::stable_sort(pagedQuads.begin(), pagedQuads.end(),
-				[](const PendingQuad& lhs, const PendingQuad& rhs)
-				{
-					if (lhs.layer != rhs.layer)
-						return lhs.layer < rhs.layer;
-					return lhs.atlasPage < rhs.atlasPage;
-				});
+			const auto batchOrder = [](const PendingQuad& lhs, const PendingQuad& rhs)
+			{
+				if (lhs.layer != rhs.layer)
+					return lhs.layer < rhs.layer;
+				return lhs.atlasPage < rhs.atlasPage;
+			};
+			if (!std::is_sorted(pagedQuads.begin(), pagedQuads.end(), batchOrder))
+			{
+				std::stable_sort(pagedQuads.begin(), pagedQuads.end(), batchOrder);
+			}
 			const QuadBatchFingerprint fingerprint =
 				BuildQuadBatchFingerprint(pagedQuads);
 			A8EffectShapeConfig resolvedEffect;

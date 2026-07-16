@@ -5,8 +5,8 @@ namespace fonthook
 	// ---- Global state variables ----
 	std::string fontNameKey;
 
-	std::unordered_map<std::string, std::unordered_map<UInt32, FontLetter>> gExtraFontLetters;
-	std::unordered_map<UInt32, std::unordered_map<UInt32, FontLetter>> gNumberedExtraLetters;
+	std::unordered_map<std::string, ExtraGlyphStore> gExtraFontLetters;
+	std::unordered_map<UInt32, ExtraGlyphStore> gNumberedExtraLetters;
 
 	// Quest text state machine variables
 	UInt8 pFirstChar;

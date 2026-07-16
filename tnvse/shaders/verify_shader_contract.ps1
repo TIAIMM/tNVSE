@@ -7,16 +7,25 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$sources = @(
+$tileSources = @(
     'freetype_a8.hlsl',
-    'freetype_effects.hlsl'
+    'freetype_effects.hlsl',
+    'freetype_coverage.hlsl'
 )
-foreach ($sourceName in $sources) {
+foreach ($sourceName in $tileSources) {
     $sourcePath = Join-Path $ShaderDirectory $sourceName
     $source = Get-Content -LiteralPath $sourcePath -Raw
     if ($source -notmatch '#include\s+"freetype_tile_compat\.hlsli"') {
         throw "$sourceName does not include freetype_tile_compat.hlsli"
     }
+}
+$sdfSources = @(
+    'freetype_a8.hlsl',
+    'freetype_effects.hlsl'
+)
+foreach ($sourceName in $sdfSources) {
+    $sourcePath = Join-Path $ShaderDirectory $sourceName
+    $source = Get-Content -LiteralPath $sourcePath -Raw
     if ($source -notmatch '#include\s+"freetype_sdf_compat\.hlsli"') {
         throw "$sourceName does not include freetype_sdf_compat.hlsli"
     }
@@ -39,7 +48,7 @@ if ($compat -notmatch 'coverage\s*\*\s*tileColor\.a\s*\*\s*layerColor\.a') {
 if ($compat -match 'float4\s*\([^,]+\*[^,]*coverage') {
     throw 'Shared FreeType shader ABI appears to premultiply RGB by coverage'
 }
-foreach ($sourceName in $sources) {
+foreach ($sourceName in $tileSources) {
     $sourcePath = Join-Path $ShaderDirectory $sourceName
     $source = Get-Content -LiteralPath $sourcePath -Raw
     if ($source -match 'float4\s+\w+\s*:\s*COLOR0\s*;') {
@@ -54,6 +63,7 @@ $compiledDirectory = Join-Path $ShaderDirectory 'compiled'
 $shaderInputs = @(
     'freetype_a8.hlsl',
     'freetype_effects.hlsl',
+    'freetype_coverage.hlsl',
     'freetype_tile_compat.hlsli',
     'freetype_sdf_compat.hlsli'
 ) | ForEach-Object { Get-Item -LiteralPath (Join-Path $ShaderDirectory $_) }
@@ -62,6 +72,7 @@ $newestShaderSource = ($shaderInputs |
     Select-Object -First 1).LastWriteTimeUtc
 $shaders = @(
     'tnvse_freetype_a8.pso',
+    'tnvse_freetype_coverage.pso',
     'tnvse_freetype_effects_fast.pso',
     'tnvse_freetype_effects_balanced.pso',
     'tnvse_freetype_effects_high.pso'
@@ -96,6 +107,17 @@ foreach ($shaderName in $shaders) {
     if ($shaderName -like 'tnvse_freetype_effects_*.pso' -and
         -not ($dump -match '\b0\.001(?:0+\d*)?\b')) {
         throw "$shaderName does not contain the hard-shadow epsilon"
+    }
+    if ($shaderName -eq 'tnvse_freetype_coverage.pso') {
+        $textureSamples = @($instructions | Where-Object {
+            $_ -match '^\s+texld(?:\s|_)'
+        }).Count
+        if ($textureSamples -ne 1) {
+            throw "$shaderName is not a single-sample coverage shader"
+        }
+        if ($instructions -match '\b(?:dsx|dsy|ifc|loop)\b') {
+            throw "$shaderName contains SDF/effect control-flow instructions"
+        }
     }
 }
 

@@ -436,15 +436,14 @@ namespace fonthook::vectorfont
 	struct LayoutCacheKey
 	{
 		UInt64 layoutHash = 0;
-		UInt32 fontId = 0;
 		UInt32 codePage = 0;
 		bool allowShaping = false;
 		std::string text;
 
 		bool operator==(const LayoutCacheKey& other) const
 		{
-			return layoutHash == other.layoutHash && fontId == other.fontId
-				&& codePage == other.codePage && allowShaping == other.allowShaping
+			return layoutHash == other.layoutHash && codePage == other.codePage
+				&& allowShaping == other.allowShaping
 				&& text == other.text;
 		}
 	};
@@ -452,7 +451,6 @@ namespace fonthook::vectorfont
 	struct LayoutCacheLookupKey
 	{
 		UInt64 layoutHash = 0;
-		UInt32 fontId = 0;
 		UInt32 codePage = 0;
 		bool allowShaping = false;
 		std::string_view text;
@@ -464,22 +462,21 @@ namespace fonthook::vectorfont
 
 		size_t operator()(const LayoutCacheKey& key) const
 		{
-			return Hash(key.layoutHash, key.fontId, key.codePage,
+			return Hash(key.layoutHash, key.codePage,
 				key.allowShaping, key.text);
 		}
 
 		size_t operator()(const LayoutCacheLookupKey& key) const
 		{
-			return Hash(key.layoutHash, key.fontId, key.codePage,
+			return Hash(key.layoutHash, key.codePage,
 				key.allowShaping, key.text);
 		}
 
 	private:
-		static size_t Hash(UInt64 layoutHash, UInt32 fontId, UInt32 codePage,
+		static size_t Hash(UInt64 layoutHash, UInt32 codePage,
 			bool allowShaping, std::string_view text)
 		{
 			size_t result = static_cast<size_t>(layoutHash ^ (layoutHash >> 32));
-			result ^= static_cast<size_t>(fontId) * 0x9E3779B1u;
 			result ^= static_cast<size_t>(codePage) * 0x85EBCA77u;
 			result ^= static_cast<size_t>(allowShaping) << 7;
 			for (char value : text)
@@ -502,8 +499,7 @@ namespace fonthook::vectorfont
 		bool operator()(const LayoutCacheKey& lhs,
 			const LayoutCacheLookupKey& rhs) const
 		{
-			return lhs.layoutHash == rhs.layoutHash && lhs.fontId == rhs.fontId
-				&& lhs.codePage == rhs.codePage
+			return lhs.layoutHash == rhs.layoutHash && lhs.codePage == rhs.codePage
 				&& lhs.allowShaping == rhs.allowShaping && lhs.text == rhs.text;
 		}
 
@@ -524,7 +520,6 @@ namespace fonthook::vectorfont
 	struct KerningCacheKey
 	{
 		UInt64 layoutHash = 0;
-		UInt32 fontId = 0;
 		UInt32 codePage = 0;
 		UInt16 leftCode = 0;
 		UInt16 rightCode = 0;
@@ -533,8 +528,8 @@ namespace fonthook::vectorfont
 
 		bool operator==(const KerningCacheKey& other) const
 		{
-			return layoutHash == other.layoutHash && fontId == other.fontId
-				&& codePage == other.codePage && leftCode == other.leftCode
+			return layoutHash == other.layoutHash && codePage == other.codePage
+				&& leftCode == other.leftCode
 				&& rightCode == other.rightCode && leftLength == other.leftLength
 				&& rightLength == other.rightLength;
 		}
@@ -545,7 +540,6 @@ namespace fonthook::vectorfont
 		size_t operator()(const KerningCacheKey& key) const
 		{
 			size_t result = static_cast<size_t>(key.layoutHash ^ (key.layoutHash >> 32));
-			result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
 			result ^= static_cast<size_t>(key.codePage) * 0x85EBCA77u;
 			result ^= static_cast<size_t>(key.leftCode) * 0xC2B2AE3Du;
 			result ^= static_cast<size_t>(key.rightCode) * 0x27D4EB2Du;
@@ -608,7 +602,7 @@ namespace fonthook::vectorfont
 
 	struct FreeTypeThreadState
 	{
-		ActiveRuntimeCache activeRuntime;
+		std::array<ActiveRuntimeCache, 4> activeRuntimes;
 	};
 
 	struct FreeTypeState

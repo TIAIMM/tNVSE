@@ -162,10 +162,13 @@ namespace fonthook
 		std::vector<char> processed;
 		FreeTypeClusterAdvanceMap clusterAdvances;
 
-		void Prepare(size_t bytes)
+		void Prepare(const char* source, size_t length)
 		{
-			original.assign(bytes, 0);
-			processed.assign(bytes, 0);
+			const size_t bytes = length + 4;
+			original.resize(bytes);
+			memcpy(original.data(), source, length + 1);
+			processed.resize(bytes);
+			processed[0] = 0;
 		}
 
 		void TrimRetainedCapacity()
@@ -306,8 +309,7 @@ namespace fonthook
 		thread_local PrepTextScratchPool scratchPool;
 		PrepTextScratchLease scratchLease(scratchPool);
 		PrepTextScratch& scratch = scratchLease.Get();
-		scratch.Prepare(sourceTextLen + 4);
-		memcpy(scratch.original.data(), apOrigString, sourceTextLen + 1);
+		scratch.Prepare(apOrigString, sourceTextLen);
 		char* processedOriginalText = scratch.original.data();
 		char* dynamicTextBuffer = scratch.processed.data();
 

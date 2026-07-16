@@ -280,12 +280,14 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\freetype_a8.hlsl" />
+	<None Include="shaders\freetype_coverage.hlsl" />
 	<None Include="shaders\freetype_effects.hlsl" />
 	<None Include="shaders\freetype_sdf_compat.hlsli" />
 	<None Include="shaders\freetype_tile_compat.hlsli" />
 	<None Include="shaders\verify_shader_contract.ps1" />
     <None Include="shaders\compile_a8_shader.bat" />
     <None Include="shaders\compiled\tnvse_freetype_a8.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_coverage.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_effects_fast.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_effects_balanced.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_effects_high.pso" />

@@ -63,6 +63,7 @@ namespace fonthook
 	void FreeTypeCreateTextEntryHook();
 	bool IsFreeTypeEffectSuppressionActive();
 	bool InitializeFreeTypeVectorRenderer();
+	bool IsFreeTypeFontConfigured(UInt32 auiFontId);
 	bool ActivateFreeTypeFont(Font* apFont, bool abForce = false);
 	bool IsFreeTypeFontActive(const Font* apFont);
 	FontLetter* EnsureFreeTypeDoubleByteMetrics(Font* apFont, UInt32 auiEncodedCode);
@@ -86,6 +87,7 @@ namespace fonthook
 		VectorTextBuilder& operator=(const VectorTextBuilder&) = delete;
 
 		bool IsAvailable() const;
+		void ReserveGlyphs(size_t auiCount);
 		bool AddGlyph(const VectorEncodedGlyph& arGlyph, const NiPoint3& arPen, const NiColorA* apColor);
 		NiTriShape* Finish();
 

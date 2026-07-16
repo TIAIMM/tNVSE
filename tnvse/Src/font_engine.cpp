@@ -8,12 +8,25 @@
 #include <cmath>
 #include <vector>
 
+namespace
+{
+	thread_local UInt32 s_fontInitLoadDepth = 0;
+
+	class FontInitLoadScope
+	{
+	public:
+		FontInitLoadScope() { ++s_fontInitLoadDepth; }
+		~FontInitLoadScope() { --s_fontInitLoadDepth; }
+	};
+}
+
 namespace fonthook
 {
 	// ==================== FontEx::FontInit ====================
 	Font* FontEx::FontInit(int iFontNum, char* apFilename, bool abLoad)
 	{
 		TlsSlotGuard tlsGuard;
+		fontNameKey.clear();
 		bool movedExtraGlyphs = false;
 
 		StdCall(0xEC782F, this->pTextureData, 4, 8, 0xA1B410, 0x45CEC0);
@@ -36,7 +49,10 @@ namespace fonthook
 			}
 			this->iFontNum = iFontNum;
 			if (abLoad)
+			{
+				FontInitLoadScope loadScope;
 				ThisStdCall(0xA15320, this);
+			}
 		}
 
 		if (!fontNameKey.empty())
@@ -72,7 +88,7 @@ namespace fonthook
 		if (refCount || !this->pFontFile)
 		{
 			++this->iRefCount;
-			if (this->pFontData)
+			if (this->pFontData && !s_fontInitLoadDepth)
 				ActivateFreeTypeFont(this);
 			return;
 		}
@@ -108,7 +124,10 @@ namespace fonthook
 			return;
 
 		++this->iRefCount;
-		ActivateFreeTypeFont(this);
+		// FontInit binds path-keyed extended metrics to the numeric font slot and
+		// activates once after Load returns. Standalone Load calls still activate here.
+		if (!s_fontInitLoadDepth)
+			ActivateFreeTypeFont(this);
 	}
 
 	// ---- FontEx::Load helpers ----
@@ -123,27 +142,35 @@ namespace fonthook
 		fontNameKey = this->pFontFile ? this->pFontFile : "";
 		if (fontNameKey.empty()) return;
 
-		auto& extraMap = gExtraFontLetters[fontNameKey];
-		if (!extraMap.empty()) return;
+		auto& extraStore = gExtraFontLetters[fontNameKey];
+		if (!extraStore.empty()) return;
 
-		extraMap.reserve(kExtraGlyphReserve);
-
-		// Batch-read all FontLetters for each high-byte row (195 entries at once)
-		// instead of 24,960 individual m_pfnRead calls: 128 calls total
-		static constexpr UInt32 kRowGlyphCount = 0xFE - 0x40 + 1; // 195
+		// Batch-read all FontLetters for each high-byte row (191 entries at once)
+		// instead of 24,066 individual m_pfnRead calls: 126 calls total.
+		static constexpr UInt32 kRowGlyphCount =
+			SerializedExtraGlyphTable::kGlyphsPerRow;
 		static constexpr UInt32 kRowBytes = kRowGlyphCount * sizeof(FontLetter);
-		FontLetter batchRow[kRowGlyphCount];
+		extraStore.serialized.glyphs.reset(
+			new FontLetter[SerializedExtraGlyphTable::kGlyphCount]);
+		extraStore.serialized.validGlyphs = 0;
 
-		for (UInt32 highByte = 0x81; highByte <= 0xFE; ++highByte)
+		for (UInt32 highByte = SerializedExtraGlyphTable::kFirstLeadByte;
+			highByte <= SerializedExtraGlyphTable::kLastLeadByte; ++highByte)
 		{
+			FontLetter* row = extraStore.serialized.glyphs.get()
+				+ extraStore.serialized.validGlyphs;
 			UInt32 bytesRead = fontFile->m_pfnRead(
-				fontFile, batchRow, kRowBytes, textureMarkers, 1u);
+				fontFile, row, kRowBytes, textureMarkers, 1u);
 			fontFile->m_uiAbsoluteCurrentPos += bytesRead;
-			if (bytesRead != kRowBytes) return;
-
-			UInt32 keyBase = highByte << 8;
-			for (UInt32 i = 0; i < kRowGlyphCount; ++i)
-				extraMap[keyBase | (0x40 + i)] = batchRow[i];
+			if (bytesRead != kRowBytes)
+			{
+				// The old map published only complete rows. Avoid retaining the
+				// allocation when even the first serialized row was incomplete.
+				if (!extraStore.serialized.validGlyphs)
+					extraStore.serialized.clear();
+				return;
+			}
+			extraStore.serialized.validGlyphs += kRowGlyphCount;
 		}
 	}
 

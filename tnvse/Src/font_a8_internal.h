@@ -58,10 +58,20 @@ namespace fonthook::vectorfont
 	using TileRenderPassFn = SInt32(__cdecl*)(BSShaderProperty::RenderPass*,
 		UInt32, bool, bool, bool);
 
+	enum class A8CompiledShaderClass : UInt8
+	{
+		Original,
+		Coverage,
+		Body,
+		Effect
+	};
+
 	struct A8CompiledRange
 	{
 		A8DrawRange range;
 		std::array<float, 16> constants = {};
+		A8CompiledShaderClass shaderClass = A8CompiledShaderClass::Original;
+		UInt8 textureSamplesPerGlyph = 1;
 		bool staticSmoothSampling = false;
 	};
 
@@ -76,6 +86,10 @@ namespace fonthook::vectorfont
 		A8ShapeColorContract colorContract;
 		A8EffectShapeConfig effects;
 		std::vector<A8CompiledRange> compiledRanges;
+		A8CompiledShaderClass firstRangeShaderClass =
+			A8CompiledShaderClass::Original;
+		A8CompiledShaderClass firstFillShaderClass =
+			A8CompiledShaderClass::Original;
 		bool hasShadowRange = false;
 	};
 	using A8ShapeMetadataPtr = std::shared_ptr<const A8ShapeMetadata>;
@@ -107,6 +121,7 @@ namespace fonthook::vectorfont
 	struct A8State
 	{
 		NiD3DPixelShaderPtr a8Shader;
+		NiD3DPixelShaderPtr coverageShader;
 		std::array<NiD3DPixelShaderPtr, 3> effectShaders;
 		std::array<void*, kCopiedTriShapeVtableEntries + 1> triShapeVtable = {};
 		void** originalTriShapeVtable = nullptr;
@@ -133,6 +148,7 @@ namespace fonthook::vectorfont
 		bool loggedPendingRangeShape = false;
 		bool loggedShaderLoaderUnavailable = false;
 		bool loggedA8ShaderLoadFailure = false;
+		bool loggedCoverageShaderLoadFailure = false;
 		std::array<bool, 3> loggedEffectShaderLoadFailure = {};
 		bool loggedHookConflict = false;
 		bool loggedRendererHookConflict = false;
