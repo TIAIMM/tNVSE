@@ -330,81 +330,9 @@ namespace fonthook::vectorfont
 			return tessellated ? mesh : nullptr;
 		}
 
-		UInt8 ReadCoveragePixel(const FT_Bitmap& bitmap, int x, int y)
-		{
-			const int pitch = bitmap.pitch;
-			const int sourceY = pitch >= 0 ? y : static_cast<int>(bitmap.rows) - 1 - y;
-			const UInt8* row = bitmap.buffer
-				+ static_cast<ptrdiff_t>(sourceY) * std::abs(pitch);
-			if (bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
-				return (row[x >> 3] & (0x80 >> (x & 7))) ? 255 : 0;
-			if (bitmap.pixel_mode != FT_PIXEL_MODE_GRAY)
-				return 0;
-			if (bitmap.num_grays == 256)
-				return row[x];
-			const UInt32 denominator = std::max<UInt32>(1, bitmap.num_grays - 1);
-			return static_cast<UInt8>(std::min<UInt32>(255,
-				static_cast<UInt32>(row[x]) * 255u / denominator));
-		}
-
-		bool HasSdfCoverageMismatch(const FT_Bitmap& sdf, SInt32 sdfLeft,
-			SInt32 sdfTop, const FT_BitmapGlyph coverage)
-		{
-			if (!coverage || !sdf.buffer || !coverage->bitmap.buffer
-				|| sdf.pixel_mode != FT_PIXEL_MODE_GRAY
-				|| (coverage->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY
-					&& coverage->bitmap.pixel_mode != FT_PIXEL_MODE_MONO))
-			{
-				return false;
-			}
-
-			UInt32 solidPixels = 0;
-			UInt32 emptyPixels = 0;
-			UInt32 lostSolidPixels = 0;
-			UInt32 inventedSolidPixels = 0;
-			for (int y = 0; y < static_cast<int>(coverage->bitmap.rows); ++y)
-			{
-				const int sdfY = sdfTop - coverage->top + y;
-				if (sdfY < 0 || sdfY >= static_cast<int>(sdf.rows))
-					continue;
-				const int sdfSourceY = sdf.pitch >= 0
-					? sdfY : static_cast<int>(sdf.rows) - 1 - sdfY;
-				const UInt8* sdfRow = sdf.buffer
-					+ static_cast<ptrdiff_t>(sdfSourceY) * std::abs(sdf.pitch);
-				for (int x = 0; x < static_cast<int>(coverage->bitmap.width); ++x)
-				{
-					const int sdfX = coverage->left + x - sdfLeft;
-					if (sdfX < 0 || sdfX >= static_cast<int>(sdf.width))
-						continue;
-					const UInt8 coverageValue = ReadCoveragePixel(coverage->bitmap, x, y);
-					const UInt8 sdfValue = sdfRow[sdfX];
-					if (coverageValue >= 224)
-					{
-						++solidPixels;
-						if (sdfValue <= 96)
-							++lostSolidPixels;
-					}
-					else if (coverageValue <= 31)
-					{
-						++emptyPixels;
-						if (sdfValue >= 160)
-							++inventedSolidPixels;
-					}
-				}
-			}
-
-			const bool lostCoverage = lostSolidPixels >= 8
-				&& static_cast<UInt64>(lostSolidPixels) * 100
-					>= static_cast<UInt64>(solidPixels) * 2;
-			const bool inventedCoverage = inventedSolidPixels >= 8
-				&& static_cast<UInt64>(inventedSolidPixels) * 100
-					>= static_cast<UInt64>(emptyPixels) * 2;
-			return lostCoverage || inventedCoverage;
-		}
-
 		std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(FreeTypeState& state,
 			RuntimeFont& runtime,
-			const VectorEncodedGlyph& glyph, const ResolvedGlyph& resolved,
+			const ResolvedGlyph& resolved,
 			GlyphMaskType maskType,
 			float rasterScale, const BitmapCacheKey& key)
 		{
@@ -446,122 +374,15 @@ namespace fonthook::vectorfont
 				if (key.sdfSpread < 2 || key.sdfSpread > 32)
 					return nullptr;
 				FT_Int spread = key.sdfSpread;
-				// FT_Load_Glyph above applies the face's native/autohinter at the exact
-				// device source size.  Render that hinted outline directly: rendering
-				// NORMAL first would convert the slot to a bitmap and silently select
-				// FreeType's bsdf coverage-to-distance path instead.
-				FT_Bool overlaps = (slot->outline.flags & FT_OUTLINE_OVERLAP)
-					? 1 : 0;
-				const int contourCount = slot->outline.n_contours;
-				FT_Glyph coverageGlyph = nullptr;
-				if (slot->outline.n_contours > 1
-					&& !FT_Get_Glyph(slot, &coverageGlyph))
-				{
-					if (FT_Glyph_To_Bitmap(&coverageGlyph, FT_RENDER_MODE_NORMAL,
-						nullptr, true)
-						|| !coverageGlyph
-						|| coverageGlyph->format != FT_GLYPH_FORMAT_BITMAP)
-					{
-						if (coverageGlyph)
-							FT_Done_Glyph(coverageGlyph);
-						coverageGlyph = nullptr;
-					}
-				}
-				auto releaseCoverage = [&]()
-				{
-					if (coverageGlyph)
-					{
-						FT_Done_Glyph(coverageGlyph);
-						coverageGlyph = nullptr;
-					}
-				};
-				auto reloadOutline = [&]()
-				{
-					if (FT_Load_Glyph(resolved.runtimeFace->face,
-						resolved.glyphIndex, loadFlags))
-						return false;
-					slot = resolved.runtimeFace->face->glyph;
-					if (slot->format != FT_GLYPH_FORMAT_OUTLINE)
-						return false;
-					if (role.style->embolden > 0.0f && slot->outline.n_points)
-					{
-						FT_Outline_EmboldenXY(&slot->outline,
-							key.embolden26Dot6, key.embolden26Dot6);
-					}
-					return true;
-				};
-				if (FT_Property_Set(state.library, "sdf", "spread", &spread)
-					|| FT_Property_Set(state.library, "sdf", "overlaps", &overlaps)
+				// Always resolve the hinted outline to grayscale coverage first. The
+				// BSDF renderer then derives the distance field from that bitmap, so
+				// complex/overlapping contours cannot drop strokes during outline-SDF
+				// decomposition.
+				if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL)
+					|| FT_Property_Set(state.library, "bsdf", "spread", &spread)
 					|| FT_Render_Glyph(slot, FT_RENDER_MODE_SDF))
 				{
-					releaseCoverage();
 					return nullptr;
-				}
-
-				bool coverageMismatch = coverageGlyph
-					&& HasSdfCoverageMismatch(slot->bitmap, slot->bitmap_left,
-						slot->bitmap_top,
-						reinterpret_cast<FT_BitmapGlyph>(coverageGlyph));
-				bool usedOverlapFallback = false;
-				bool usedBsdfFallback = false;
-				if (coverageMismatch && !overlaps)
-				{
-					if (!reloadOutline())
-					{
-						releaseCoverage();
-						return nullptr;
-					}
-					overlaps = 1;
-					if (FT_Property_Set(state.library, "sdf", "spread", &spread)
-						|| FT_Property_Set(state.library, "sdf", "overlaps", &overlaps)
-						|| FT_Render_Glyph(slot, FT_RENDER_MODE_SDF))
-					{
-						releaseCoverage();
-						return nullptr;
-					}
-					usedOverlapFallback = true;
-					coverageMismatch = HasSdfCoverageMismatch(slot->bitmap,
-						slot->bitmap_left, slot->bitmap_top,
-						reinterpret_cast<FT_BitmapGlyph>(coverageGlyph));
-				}
-
-				if (coverageMismatch)
-				{
-					// Some fonts mark overlap correctly but still contain contour geometry
-					// that FreeType's overlap SDF cannot resolve (for example U+56FE in
-					// Sarasa Fixed SC). The normal rasterizer resolves the fill rule first;
-					// converting that coverage bitmap to BSDF preserves the intended glyph.
-					if (!reloadOutline()
-						|| FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL)
-						|| FT_Property_Set(state.library, "bsdf", "spread", &spread)
-						|| FT_Render_Glyph(slot, FT_RENDER_MODE_SDF))
-					{
-						releaseCoverage();
-						return nullptr;
-					}
-					usedBsdfFallback = true;
-				}
-				releaseCoverage();
-
-				if ((usedOverlapFallback || usedBsdfFallback)
-					&& g_bEnableFreeTypeFontRenderingLog
-					&& state.overlapSdfFallbackLogCount < 32)
-				{
-					++state.overlapSdfFallbackLogCount;
-					if (usedBsdfFallback)
-					{
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_font: coverage BSDF fallback font=%u glyph=%u codepoint=U+%04X contours=%d",
-							runtime.config->fontId, resolved.glyphIndex,
-							glyph.codePoint, contourCount);
-					}
-					else
-					{
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_font: overlap SDF fallback font=%u glyph=%u codepoint=U+%04X contours=%d",
-							runtime.config->fontId, resolved.glyphIndex,
-							glyph.codePoint, contourCount);
-					}
 				}
 				bitmap->left = slot->bitmap_left;
 				bitmap->top = slot->bitmap_top;
@@ -774,7 +595,7 @@ namespace fonthook::vectorfont
 
 		RecordFreeTypePerf(FreeTypePerfCounter::BitmapRasterized);
 		std::shared_ptr<GlyphBitmap> bitmap =
-			BuildGlyphBitmap(state, runtime, glyph, resolved, maskType, safeScale, key);
+			BuildGlyphBitmap(state, runtime, resolved, maskType, safeScale, key);
 		if (!bitmap)
 			return nullptr;
 		if (persistentProfile

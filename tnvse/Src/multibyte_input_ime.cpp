@@ -603,6 +603,8 @@ namespace fonthook
 
 			return IsVirtualKeyDown(VK_LWIN)
 				|| IsVirtualKeyDown(VK_RWIN)
+				|| State().winSpaceChordArmed
+				|| State().winSpaceSwitchPending
 				|| static_cast<SInt32>(State().inputLanguageSwitchGuardUntilTick - GetTickCount()) > 0;
 		}
 

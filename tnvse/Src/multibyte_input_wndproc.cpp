@@ -346,7 +346,15 @@ namespace fonthook
 				{
 					HKL newLayout = reinterpret_cast<HKL>(lParam);
 					if (state.winSpaceChordArmed || state.winSpaceSwitchPending)
+					{
 						state.winSpaceLanguageChangeObserved = true;
+						// The shell may consume the Space key messages entirely. Treat
+						// the observed layout change as confirmation of the armed chord,
+						// and cover MenuSearch's delayed keyboard polling from here.
+						state.inputLanguageSwitchGuardUntilTick = GetTickCount()
+							+ kInputLanguageSwitchAsciiGuardMs;
+						SuppressStewieInputLanguageSwitchSpace();
+					}
 					RestoreDefaultGameImeContext(hwnd, "inputlangchange", newLayout);
 					ClearImeCandidates();
 					UpdateCandidateOverlay();

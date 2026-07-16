@@ -43,6 +43,15 @@ namespace fonthook
 			bool wndProcSeen = false;
 		};
 
+		struct StewieSpaceCommitState
+		{
+			DWORD tick = 0;
+			StewieInputTarget target;
+			UInt32 menuID = 0;
+			std::string text;
+			size_t caret = 0;
+		};
+
 		using StewieKeyboardHandler = bool(__thiscall*)(Menu*, UInt32);
 
 		bool s_stewieChecked = false;
@@ -60,8 +69,7 @@ namespace fonthook
 		UInt32 s_nextDeferredStewieAsciiToken = 1;
 		DWORD s_lastDeferredStewieAsciiCommitTick = 0;
 		UInt8 s_lastDeferredStewieAsciiCommitChar = 0;
-		DWORD s_lastStewieSpaceCommitTick = 0;
-		StewieInputTarget s_lastStewieSpaceCommitTarget;
+		StewieSpaceCommitState s_lastStewieSpaceCommit;
 		DWORD s_lastStewTargetPollTick = 0;
 		StewieInputTarget s_observedStewTarget;
 
@@ -541,8 +549,19 @@ namespace fonthook
 			if (input != ' ')
 				return;
 
-			s_lastStewieSpaceCommitTick = now;
-			s_lastStewieSpaceCommitTarget = target;
+			s_lastStewieSpaceCommit = {};
+			if (!target.valid
+				|| !s_stewieShadow.initialized
+				|| !SameStewieTarget(target, s_stewieShadow.target))
+			{
+				return;
+			}
+
+			s_lastStewieSpaceCommit.tick = now;
+			s_lastStewieSpaceCommit.target = target;
+			s_lastStewieSpaceCommit.menuID = MenuID(target.menu);
+			s_lastStewieSpaceCommit.text = s_stewieShadow.text;
+			s_lastStewieSpaceCommit.caret = s_stewieShadow.caret;
 		}
 
 		bool DeferredSourceSeen(const DeferredStewieAscii& pending, StewieAsciiSource source)
@@ -727,15 +746,15 @@ namespace fonthook
 			// Stewie polls keyboard input and can observe the hotkey Space after the
 			// shell's fullscreen language-switch UI has finished.
 			constexpr DWORD kLanguageSwitchRollbackMs = 500;
-			const StewieInputTarget target = s_lastStewieSpaceCommitTarget;
-			if (!s_lastStewieSpaceCommitTick
-				|| GetTickCount() - s_lastStewieSpaceCommitTick > kLanguageSwitchRollbackMs
+			const StewieSpaceCommitState commit = s_lastStewieSpaceCommit;
+			s_lastStewieSpaceCommit = {};
+			const StewieInputTarget target = commit.target;
+			if (!commit.tick
+				|| GetTickCount() - commit.tick > kLanguageSwitchRollbackMs
 				|| !target.valid
-				|| !s_stewieShadow.initialized
-				|| !SameStewieTarget(target, s_stewieShadow.target))
+				|| !commit.menuID
+				|| GetOpenMenu(commit.menuID) != target.menu)
 			{
-				s_lastStewieSpaceCommitTick = 0;
-				s_lastStewieSpaceCommitTarget = {};
 				return;
 			}
 
@@ -745,13 +764,26 @@ namespace fonthook
 			// the shell language picker, while the saved menu/tile pair remains exact.
 			const StewieInputTarget activeTarget = GetActiveStewieInputTarget();
 			if (activeTarget.valid && !SameStewieTarget(activeTarget, target))
-			{
-				s_lastStewieSpaceCommitTick = 0;
-				s_lastStewieSpaceCommitTarget = {};
 				return;
-			}
 
-			const size_t caret = ClampStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret);
+			// MenuSearch can clear the shared shadow when its visibility traits flicker
+			// under the shell language picker. Re-read the exact tile and only restore
+			// the saved shadow when its text and caret still match the committed Space.
+			size_t currentCaret = 0;
+			std::string currentText = TileStringWithoutCaret(target, currentCaret);
+			if (!target.inputField && currentText == "_")
+				currentText.clear();
+			currentCaret = ClampStewieBoundary(target, currentText, currentCaret);
+			if (currentText != commit.text || currentCaret != commit.caret)
+				return;
+
+			s_stewieShadow.target = target;
+			s_stewieShadow.text = currentText;
+			s_stewieShadow.caret = currentCaret;
+			s_stewieShadow.appliedBytes = currentText.size();
+			s_stewieShadow.initialized = true;
+
+			const size_t caret = ClampStewieBoundary(target, s_stewieShadow.text, currentCaret);
 			if (caret)
 			{
 				const size_t previous = PreviousStewieBoundary(target, s_stewieShadow.text, caret);
@@ -763,9 +795,6 @@ namespace fonthook
 					DebugLog("tnvse_multibyte_input_event: source=WinSpace action=rollback_search_space");
 				}
 			}
-
-			s_lastStewieSpaceCommitTick = 0;
-			s_lastStewieSpaceCommitTarget = {};
 		}
 
 		bool DeletePreviousStewieChar(const StewieInputTarget& target)
@@ -857,14 +886,19 @@ namespace fonthook
 
 		void ClearStewieInputState()
 		{
+			// MenuSearch state can briefly deactivate while Windows owns the language
+			// picker. Keep its self-validating Space snapshot so the switch path can
+			// still remove a Space already replayed into the search tile.
+			const bool preserveMenuSearchSpaceCommit =
+				s_lastStewieSpaceCommit.target.kind == StewieInputKind::MenuSearch;
 			s_stewieShadow = StewieShadowState();
 			s_pendingStewieAdapterAscii.clear();
 			s_pendingStewieWndProcAscii.clear();
 			s_deferredStewieAscii.clear();
 			s_lastDeferredStewieAsciiCommitTick = 0;
 			s_lastDeferredStewieAsciiCommitChar = 0;
-			s_lastStewieSpaceCommitTick = 0;
-			s_lastStewieSpaceCommitTarget = {};
+			if (!preserveMenuSearchSpaceCommit)
+				s_lastStewieSpaceCommit = {};
 		}
 
 		bool HandleStewieInput(Menu* menu, UInt32 input)
@@ -1067,6 +1101,7 @@ namespace fonthook
 		void ResetStewieInputState()
 		{
 			ClearStewieInputState();
+			s_lastStewieSpaceCommit = {};
 			ResetStewieMenuSearchState();
 			s_stewieReplay = false;
 			s_lastStewTargetPollTick = 0;

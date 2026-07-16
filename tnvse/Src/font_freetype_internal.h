@@ -248,10 +248,9 @@ namespace fonthook::vectorfont
 		UInt32 sourceFontId = 0;
 	};
 
-	// Version 7 validates overlap-SDF output and falls back to coverage BSDF
-	// when FreeType cannot resolve a glyph's contour geometry. Older masks are
-	// left untouched and are retired through normal cleanup.
-	constexpr UInt32 kPersistentBitmapVersion = 7;
+	// Version 8 makes coverage-derived BSDF the sole distance-field source.
+	// Version 7 outline-SDF masks must not be reused under the new contract.
+	constexpr UInt32 kPersistentBitmapVersion = 8;
 	constexpr UInt32 kPersistentBitmapRecordMagic = 0x4B534D47u; // GMSK
 	constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
 	constexpr UInt32 kMaximumPersistentBitmapBytes = 16u * 1024u * 1024u;
@@ -631,7 +630,6 @@ namespace fonthook::vectorfont
 		std::unordered_set<UInt64> loggedVerticalMetricRoles;
 		std::unordered_set<UInt64> loggedHarfBuzzVerticalRoles;
 		UInt32 shapingFallbackLogCount = 0;
-		UInt32 overlapSdfFallbackLogCount = 0;
 		bool loggedCrossFontBitmapShare = false;
 		bool loggedPersistentBitmapDirectory = false;
 		bool loggedPersistentBitmapHit = false;
