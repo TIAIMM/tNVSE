@@ -274,6 +274,61 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		bool BuildGlyphCoverageReference(FT_GlyphSlot slot, GlyphBitmap& coverage)
+		{
+			FT_Glyph glyph = nullptr;
+			if (!slot || FT_Get_Glyph(slot, &glyph))
+				return false;
+			const FT_Error error = FT_Glyph_To_Bitmap(
+				&glyph, FT_RENDER_MODE_NORMAL, nullptr, true);
+			if (error || !glyph || glyph->format != FT_GLYPH_FORMAT_BITMAP)
+			{
+				if (glyph)
+					FT_Done_Glyph(glyph);
+				return false;
+			}
+			const FT_BitmapGlyph bitmapGlyph = reinterpret_cast<FT_BitmapGlyph>(glyph);
+			coverage.left = bitmapGlyph->left;
+			coverage.top = bitmapGlyph->top;
+			const bool copied = CopyGrayBitmap(bitmapGlyph->bitmap, coverage);
+			FT_Done_Glyph(glyph);
+			return copied;
+		}
+
+		bool ApplyCoverageSigns(GlyphBitmap& sdf, const GlyphBitmap& coverage)
+		{
+			if (sdf.width < 0 || sdf.height < 0 || coverage.width < 0
+				|| coverage.height < 0
+				|| sdf.alpha.size() != static_cast<size_t>(sdf.width) * sdf.height
+				|| coverage.alpha.size() != static_cast<size_t>(coverage.width)
+					* coverage.height)
+			{
+				return false;
+			}
+			constexpr UInt8 kInsideCoverage = 128;
+			for (int y = 0; y < sdf.height; ++y)
+			{
+				const int coverageY = coverage.top - sdf.top + y;
+				for (int x = 0; x < sdf.width; ++x)
+				{
+					const int coverageX = sdf.left + x - coverage.left;
+					UInt8 coverageValue = 0;
+					if (coverageX >= 0 && coverageX < coverage.width
+						&& coverageY >= 0 && coverageY < coverage.height)
+					{
+						coverageValue = coverage.alpha[static_cast<size_t>(coverageY)
+							* coverage.width + coverageX];
+					}
+					UInt8& encoded = sdf.alpha[static_cast<size_t>(y) * sdf.width + x];
+					const int magnitude = std::abs(static_cast<int>(encoded) - 128);
+					encoded = static_cast<UInt8>(coverageValue >= kInsideCoverage
+						? std::min(255, 128 + magnitude)
+						: std::max(0, 128 - magnitude));
+				}
+			}
+			return true;
+		}
+
 		std::shared_ptr<GlyphMesh> BuildGlyphMesh(FreeTypeState& state,
 			RuntimeFont& runtime,
 			const VectorEncodedGlyph& glyph, GlyphMeshType meshType)
@@ -377,19 +432,28 @@ namespace fonthook::vectorfont
 				if (key.sdfSpread < 2 || key.sdfSpread > 32)
 					return nullptr;
 				FT_Int spread = key.sdfSpread;
-				// Always resolve the hinted outline to grayscale coverage first. The
-				// BSDF renderer then derives the distance field from that bitmap, so
-				// complex/overlapping contours cannot drop strokes during outline-SDF
-				// decomposition.
-				if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL)
-					|| FT_Property_Set(state.library, "bsdf", "spread", &spread)
+				FT_Bool overlaps = false;
+				GlyphBitmap coverage;
+				// Keep distance precision vector-derived while using the matching hinted
+				// grayscale raster as the authoritative non-zero-fill classifier.  This
+				// corrects overlap and self-intersection sign errors without performing a
+				// bitmap distance transform.  FreeType's per-contour overlap mode is
+				// redundant after sign replacement and substantially more expensive.
+				if (!BuildGlyphCoverageReference(slot, coverage)
+					|| FT_Property_Set(state.library, "sdf", "spread", &spread)
+					|| FT_Property_Set(state.library, "sdf", "overlaps", &overlaps)
 					|| FT_Render_Glyph(slot, FT_RENDER_MODE_SDF))
 				{
 					return nullptr;
 				}
 				bitmap->left = slot->bitmap_left;
 				bitmap->top = slot->bitmap_top;
-				return CopyGrayBitmap(slot->bitmap, *bitmap, true) ? bitmap : nullptr;
+				if (!CopyGrayBitmap(slot->bitmap, *bitmap, true)
+					|| !ApplyCoverageSigns(*bitmap, coverage))
+				{
+					return nullptr;
+				}
+				return bitmap;
 			}
 
 			const EffectStyle& effect = maskType == GlyphMaskType::Glow

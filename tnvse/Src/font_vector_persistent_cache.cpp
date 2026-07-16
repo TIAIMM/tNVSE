@@ -1075,6 +1075,149 @@ namespace fonthook::vectorfont
 			std::memcpy(destination, &entry, sizeof(entry));
 		}
 
+		SInt16 QuantizeCollisionCoordinate(float value)
+		{
+			const long quantized = std::lround(value * 64.0f);
+			return static_cast<SInt16>(std::clamp<long>(quantized,
+				std::numeric_limits<SInt16>::min(),
+				std::numeric_limits<SInt16>::max()));
+		}
+
+		bool LoadGlyphCollisionProfile(RuntimeFont& runtime,
+			const VectorEncodedGlyph& glyph, GlyphCollisionProfile& profile)
+		{
+			profile = {};
+			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
+			PersistentGlyphManifestEntry* entry = manifest
+				? GetGlyphManifestEntry(*manifest, glyph.encodedCode) : nullptr;
+			if (!entry || !entry->valid || !entry->collisionValid
+				|| entry->byteClass != static_cast<UInt8>(glyph.byteClass)
+				|| entry->faceIndex != glyph.faceIndex
+				|| entry->glyphIndex != glyph.glyphIndex
+				|| entry->checksum != HashBytes64(entry,
+					offsetof(PersistentGlyphManifestEntry, checksum)))
+			{
+				return false;
+			}
+			profile.top = static_cast<float>(entry->collisionTop26Dot6) / 64.0f;
+			profile.bottom = static_cast<float>(entry->collisionBottom26Dot6) / 64.0f;
+			profile.bandMask = entry->collisionBandMask;
+			for (size_t index = 0; index < kGlyphCollisionBandCount; ++index)
+			{
+				profile.left[index] = static_cast<float>(
+					entry->collisionLeft26Dot6[index]) / 64.0f;
+				profile.right[index] = static_cast<float>(
+					entry->collisionRight26Dot6[index]) / 64.0f;
+			}
+			return true;
+		}
+
+		void StoreGlyphCollisionProfile(RuntimeFont& runtime,
+			const VectorEncodedGlyph& glyph, const GlyphBitmap& bitmap, float rasterScale)
+		{
+			if (bitmap.maskType != GlyphMaskType::Fill
+				&& bitmap.maskType != GlyphMaskType::DistanceField)
+			{
+				return;
+			}
+			if (!std::isfinite(rasterScale) || rasterScale < 0.1f
+				|| bitmap.width < 0 || bitmap.height < 0
+				|| bitmap.alpha.size() != static_cast<size_t>(bitmap.width)
+					* static_cast<size_t>(bitmap.height))
+			{
+				return;
+			}
+
+			std::lock_guard<std::recursive_mutex> lock(State().mutex);
+			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
+			PersistentGlyphManifestEntry* destination = manifest
+				? GetGlyphManifestEntry(*manifest, glyph.encodedCode) : nullptr;
+			if (!destination || !manifest->writable || !destination->valid
+				|| destination->collisionValid
+				|| destination->byteClass != static_cast<UInt8>(glyph.byteClass)
+				|| destination->faceIndex != glyph.faceIndex
+				|| destination->glyphIndex != glyph.glyphIndex
+				|| destination->checksum != HashBytes64(destination,
+					offsetof(PersistentGlyphManifestEntry, checksum)))
+			{
+				return;
+			}
+
+			constexpr UInt8 kBodyThreshold = 128;
+			int firstRow = bitmap.height;
+			int lastRow = -1;
+			for (int y = 0; y < bitmap.height; ++y)
+			{
+				const UInt8* row = bitmap.alpha.data()
+					+ static_cast<size_t>(y) * bitmap.width;
+				if (std::find_if(row, row + bitmap.width,
+					[](UInt8 value) { return value >= kBodyThreshold; })
+					!= row + bitmap.width)
+				{
+					firstRow = std::min(firstRow, y);
+					lastRow = y;
+				}
+			}
+
+			PersistentGlyphManifestEntry entry = *destination;
+			entry.collisionValid = 1;
+			entry.collisionBandMask = 0;
+			if (lastRow >= firstRow)
+			{
+				entry.collisionTop26Dot6 = QuantizeCollisionCoordinate(
+					(static_cast<float>(bitmap.top - firstRow)) / rasterScale);
+				entry.collisionBottom26Dot6 = QuantizeCollisionCoordinate(
+					(static_cast<float>(bitmap.top - lastRow - 1)) / rasterScale);
+				std::array<float, kGlyphCollisionBandCount> left;
+				std::array<float, kGlyphCollisionBandCount> right;
+				left.fill(std::numeric_limits<float>::infinity());
+				right.fill(-std::numeric_limits<float>::infinity());
+				const int visibleRows = lastRow - firstRow + 1;
+				for (int y = firstRow; y <= lastRow; ++y)
+				{
+					const UInt8* row = bitmap.alpha.data()
+						+ static_cast<size_t>(y) * bitmap.width;
+					int first = 0;
+					while (first < bitmap.width && row[first] < kBodyThreshold)
+						++first;
+					if (first == bitmap.width)
+						continue;
+					int last = bitmap.width - 1;
+					while (last > first && row[last] < kBodyThreshold)
+						--last;
+
+					const float previous = first > 0 ? row[first - 1] : 0.0f;
+					const float currentLeft = row[first];
+					const float leftMix = currentLeft > previous
+						? (kBodyThreshold - previous) / (currentLeft - previous) : 1.0f;
+					const float leftPixel = static_cast<float>(first) - 0.5f + leftMix;
+					const float currentRight = row[last];
+					const float next = last + 1 < bitmap.width ? row[last + 1] : 0.0f;
+					const float rightMix = currentRight > next
+						? (currentRight - kBodyThreshold) / (currentRight - next) : 0.0f;
+					const float rightPixel = static_cast<float>(last) + 0.5f + rightMix;
+					const size_t band = std::min<size_t>(kGlyphCollisionBandCount - 1,
+						static_cast<size_t>(y - firstRow) * kGlyphCollisionBandCount
+							/ static_cast<size_t>(visibleRows));
+					left[band] = std::min(left[band],
+						(static_cast<float>(bitmap.left) + leftPixel) / rasterScale);
+					right[band] = std::max(right[band],
+						(static_cast<float>(bitmap.left) + rightPixel) / rasterScale);
+				}
+				for (size_t band = 0; band < kGlyphCollisionBandCount; ++band)
+				{
+					if (!std::isfinite(left[band]) || !std::isfinite(right[band]))
+						continue;
+					entry.collisionBandMask |= static_cast<UInt16>(1u << band);
+					entry.collisionLeft26Dot6[band] = QuantizeCollisionCoordinate(left[band]);
+					entry.collisionRight26Dot6[band] = QuantizeCollisionCoordinate(right[band]);
+				}
+			}
+			entry.checksum = HashBytes64(&entry,
+				offsetof(PersistentGlyphManifestEntry, checksum));
+			std::memcpy(destination, &entry, sizeof(entry));
+		}
+
 
 	bool GetFreeTypeFontCacheDirectory(std::wstring& directory)
 	{

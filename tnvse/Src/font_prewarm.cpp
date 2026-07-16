@@ -940,6 +940,17 @@ namespace fonthook::vectorfont
 				++job.rasterizedGlyphCount;
 			}
 			GetPrewarmGlyphBitmaps(*runtime, bitmapRequests, rasterScale, bitmapResults);
+			for (size_t index = 0; index < bitmapRequests.size()
+				&& index < bitmapResults.size(); ++index)
+			{
+				if (bitmapRequests[index].glyph && bitmapResults[index]
+					&& (bitmapRequests[index].maskType == GlyphMaskType::Fill
+						|| bitmapRequests[index].maskType == GlyphMaskType::DistanceField))
+				{
+					StoreGlyphCollisionProfile(*runtime, *bitmapRequests[index].glyph,
+						*bitmapResults[index], rasterScale);
+				}
+			}
 			for (const std::shared_ptr<const GlyphBitmap>& bitmap : bitmapResults)
 				AddBitmap(job.atlasBitmaps, job.atlasBitmapIds, bitmap);
 			ReportPrewarmProgress(job, fontOrdinal, queuedFonts, finishedFonts,

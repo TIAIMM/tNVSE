@@ -17,6 +17,7 @@ UINT32 g_uiFreeTypeFontMemoryCacheMB;
 bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
+bool g_bEnableFreeTypeGlyphCollisionProtection;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputDebug;
@@ -167,6 +168,12 @@ void LoadConfig()
 		kMainSection, nullptr, "bEnableFreeTypeA8Atlas", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableFreeTypeA8Atlas: %d",
 		g_bEnableFreeTypeA8Atlas);
+
+	g_bEnableFreeTypeGlyphCollisionProtection = ReadConfigInt(
+		kMainSection, nullptr, "bEnableFreeTypeGlyphCollisionProtection", 1,
+		filename) != 0;
+	gLog.FormattedMessage("g_bEnableFreeTypeGlyphCollisionProtection: %d",
+		g_bEnableFreeTypeGlyphCollisionProtection);
 
 	g_uiFreeTypeFontGpuAtlasCacheMB = ReadConfigInt(
 		kMainSection, nullptr, "uiFreeTypeFontGpuAtlasCacheMB", 0, filename);

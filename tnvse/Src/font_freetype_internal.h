@@ -248,9 +248,9 @@ namespace fonthook::vectorfont
 		UInt32 sourceFontId = 0;
 	};
 
-	// Version 8 makes coverage-derived BSDF the sole distance-field source.
-	// Version 7 outline-SDF masks must not be reused under the new contract.
-	constexpr UInt32 kPersistentBitmapVersion = 8;
+	// Version 9 uses outline distance magnitudes with signs resolved from the
+	// matching hinted grayscale coverage.  Older BSDF masks are incompatible.
+	constexpr UInt32 kPersistentBitmapVersion = 9;
 	constexpr UInt32 kPersistentBitmapRecordMagic = 0x4B534D47u; // GMSK
 	constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
 	constexpr UInt32 kMaximumPersistentBitmapBytes = 16u * 1024u * 1024u;
@@ -371,10 +371,20 @@ namespace fonthook::vectorfont
 		}
 	};
 
-	// Version 5 stores effect-independent body metrics in a sparse, compressed,
-	// content-addressed file so identical configurations share it across font IDs.
-	constexpr UInt32 kPersistentGlyphManifestVersion = 5;
+	// Version 7 rebuilds compact body-contour bands from coverage-signed outline
+	// SDF masks.  The fixed-size entries remain content-addressed across font IDs.
+	constexpr UInt32 kPersistentGlyphManifestVersion = 7;
 	constexpr UInt32 kPersistentGlyphManifestEntries = 65536;
+	constexpr size_t kGlyphCollisionBandCount = 16;
+
+	struct GlyphCollisionProfile
+	{
+		float top = 0.0f;
+		float bottom = 0.0f;
+		UInt16 bandMask = 0;
+		std::array<float, kGlyphCollisionBandCount> left = {};
+		std::array<float, kGlyphCollisionBandCount> right = {};
+	};
 
 #pragma pack(push, 1)
 	struct PersistentGlyphManifestHeader
@@ -408,6 +418,13 @@ namespace fonthook::vectorfont
 		float height = 0.0f;
 		float topEdge = 0.0f;
 		float spacing = 0.0f;
+		UInt8 collisionValid = 0;
+		UInt8 collisionReserved = 0;
+		UInt16 collisionBandMask = 0;
+		SInt16 collisionTop26Dot6 = 0;
+		SInt16 collisionBottom26Dot6 = 0;
+		SInt16 collisionLeft26Dot6[kGlyphCollisionBandCount] = {};
+		SInt16 collisionRight26Dot6[kGlyphCollisionBandCount] = {};
 		UInt64 checksum = 0;
 	};
 #pragma pack(pop)
@@ -590,7 +607,7 @@ namespace fonthook::vectorfont
 	static_assert(sizeof(PersistentBitmapIndexEntry) == 16);
 	static_assert(sizeof(PersistentBitmapRecordHeader) == 40);
 	static_assert(sizeof(PersistentGlyphManifestHeader) == 72);
-	static_assert(sizeof(PersistentGlyphManifestEntry) == 48);
+	static_assert(sizeof(PersistentGlyphManifestEntry) == 120);
 
 	struct ActiveRuntimeCache
 	{
@@ -683,6 +700,10 @@ namespace fonthook::vectorfont
 		FontLetter* metrics);
 	void StoreGlyphManifest(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
 		const ResolvedGlyph& resolved, const FontLetter& metrics);
+	bool LoadGlyphCollisionProfile(RuntimeFont& runtime,
+		const VectorEncodedGlyph& glyph, GlyphCollisionProfile& profile);
+	void StoreGlyphCollisionProfile(RuntimeFont& runtime,
+		const VectorEncodedGlyph& glyph, const GlyphBitmap& bitmap, float rasterScale);
 	PersistentBitmapProfileKey MakePersistentBitmapProfileKey(
 		const BitmapCacheKey& key, UInt64 fontContentHash);
 	UInt64 HashBitmapKey(const BitmapCacheKey& key);

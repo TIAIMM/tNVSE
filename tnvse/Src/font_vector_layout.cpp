@@ -265,6 +265,114 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		struct CollisionSpan
+		{
+			float top = 0.0f;
+			float bottom = 0.0f;
+			float left = 0.0f;
+			float right = 0.0f;
+		};
+
+		void AppendCollisionSpans(RuntimeFont& runtime,
+			const FreeTypeLayoutGlyph& positioned, float glyphPen,
+			std::vector<CollisionSpan>& spans)
+		{
+			GlyphCollisionProfile profile;
+			if (!LoadGlyphCollisionProfile(runtime, positioned.glyph, profile)
+				|| !profile.bandMask || profile.top <= profile.bottom)
+			{
+				return;
+			}
+			const float bandHeight = (profile.top - profile.bottom)
+				/ static_cast<float>(kGlyphCollisionBandCount);
+			const float originX = glyphPen + positioned.xOffset;
+			const float originY = positioned.yOffset + GetGlyphBaselineOffset(
+				runtime, positioned.glyph.byteClass);
+			for (size_t band = 0; band < kGlyphCollisionBandCount; ++band)
+			{
+				if (!(profile.bandMask & static_cast<UInt16>(1u << band)))
+					continue;
+				CollisionSpan span;
+				span.top = originY + profile.top
+					- static_cast<float>(band) * bandHeight;
+				span.bottom = span.top - bandHeight;
+				span.left = originX + profile.left[band];
+				span.right = originX + profile.right[band];
+				if (span.right > span.left)
+					spans.push_back(span);
+			}
+		}
+
+		void ApplyGlyphCollisionProtection(RuntimeFont& runtime,
+			FreeTypeLayoutRun::GlyphStorage& glyphs, FreeTypeLayoutRun& layout)
+		{
+			if (!g_bEnableFreeTypeGlyphCollisionProtection || glyphs.size() < 2)
+				return;
+			constexpr float kCollisionClearance = 1.0f / 64.0f;
+			constexpr float kMaximumCollisionCorrection = 1.0f;
+			std::vector<CollisionSpan> previousSpans;
+			std::vector<CollisionSpan> currentSpans;
+			previousSpans.reserve(kGlyphCollisionBandCount * 2);
+			currentSpans.reserve(kGlyphCollisionBandCount * 2);
+			float pen = 0.0f;
+			size_t previousEnd = 0;
+			for (size_t begin = 0; begin < glyphs.size();)
+			{
+				size_t end = begin + 1;
+				while (end < glyphs.size()
+					&& glyphs[end].cluster == glyphs[begin].cluster)
+				{
+					++end;
+				}
+				currentSpans.clear();
+				for (size_t index = begin; index < end; ++index)
+				{
+					AppendCollisionSpans(runtime, glyphs[index], pen, currentSpans);
+					pen += glyphs[index].xAdvance;
+				}
+
+				float correction = 0.0f;
+				if (previousEnd && !previousSpans.empty() && !currentSpans.empty())
+				{
+					const FreeTypeLayoutGlyph& terminal = glyphs[previousEnd - 1];
+					const RuntimeRole& role = runtime.roles[static_cast<size_t>(
+						terminal.glyph.byteClass)];
+					if (role.style && role.style->tracking <= 0.0f)
+					{
+						for (const CollisionSpan& previous : previousSpans)
+						{
+							for (const CollisionSpan& current : currentSpans)
+							{
+								if (std::min(previous.top, current.top)
+									<= std::max(previous.bottom, current.bottom))
+								{
+									continue;
+								}
+								correction = std::max(correction,
+									previous.right - current.left + kCollisionClearance);
+							}
+						}
+					}
+				}
+				correction = std::clamp(correction, 0.0f,
+					kMaximumCollisionCorrection);
+				if (correction > 0.0f)
+				{
+					glyphs[previousEnd - 1].xAdvance += correction;
+					layout.advance += correction;
+					pen += correction;
+					for (CollisionSpan& span : currentSpans)
+					{
+						span.left += correction;
+						span.right += correction;
+					}
+				}
+				previousSpans.swap(currentSpans);
+				previousEnd = end;
+				begin = end;
+			}
+		}
+
 		bool BuildLayoutRun(FreeTypeState& state, RuntimeFont& runtime, const char* text,
 			size_t length, bool allowShaping, FreeTypeLayoutRun& layout)
 		{
@@ -319,6 +427,7 @@ namespace fonthook::vectorfont
 				}
 				begin = end;
 			}
+			ApplyGlyphCollisionProtection(runtime, *glyphs, layout);
 			return true;
 		}
 
