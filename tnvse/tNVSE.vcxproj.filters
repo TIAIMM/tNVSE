@@ -73,6 +73,18 @@
 	<ClCompile Include="Src\font_a8_diagnostics.cpp">
 	  <Filter>Source Files\A8</Filter>
 	</ClCompile>
+	<ClCompile Include="Src\font_native_packets.cpp">
+	  <Filter>Source Files\A8</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_native_accumulator.cpp">
+	  <Filter>Source Files\A8</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_native_shader.cpp">
+	  <Filter>Source Files\A8</Filter>
+	</ClCompile>
+	<ClCompile Include="Src\font_native_fallback.cpp">
+	  <Filter>Source Files\A8</Filter>
+	</ClCompile>
 	<ClCompile Include="Src\font_prewarm.cpp">
 	  <Filter>Source Files\FreeType</Filter>
 	</ClCompile>
@@ -240,6 +252,9 @@
     <ClInclude Include="Src\font_a8_internal.h">
       <Filter>Header Files\A8</Filter>
     </ClInclude>
+	<ClInclude Include="Src\font_native_internal.h">
+	  <Filter>Header Files\A8</Filter>
+	</ClInclude>
     <ClInclude Include="Src\multibyte_input.h">
       <Filter>Header Files\Input</Filter>
     </ClInclude>
@@ -282,6 +297,12 @@
     <None Include="shaders\freetype_a8.hlsl" />
 	<None Include="shaders\freetype_coverage.hlsl" />
 	<None Include="shaders\freetype_effects.hlsl" />
+	<None Include="shaders\freetype_native_common.hlsli" />
+	<None Include="shaders\freetype_native_vs.hlsl" />
+	<None Include="shaders\freetype_native_original.hlsl" />
+	<None Include="shaders\freetype_native_coverage.hlsl" />
+	<None Include="shaders\freetype_native_sdf.hlsl" />
+	<None Include="shaders\freetype_native_effects.hlsl" />
 	<None Include="shaders\freetype_sdf_compat.hlsli" />
 	<None Include="shaders\freetype_tile_compat.hlsli" />
 	<None Include="shaders\verify_shader_contract.ps1" />
@@ -291,5 +312,12 @@
 	<None Include="shaders\compiled\tnvse_freetype_effects_fast.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_effects_balanced.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_effects_high.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_vs.vso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_original.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_coverage.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_sdf.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_effects_fast.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_effects_balanced.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_effects_high.pso" />
   </ItemGroup>
 </Project>

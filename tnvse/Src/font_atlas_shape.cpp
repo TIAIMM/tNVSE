@@ -705,7 +705,7 @@ namespace fonthook::vectorfont
 				}
 				BuildA8DrawRanges(quads, resolvedEffect);
 				const A8ShapeColorContract colorContract = BuildColorContract(quads);
-				if (!PrepareA8AtlasShape(shape, font.iFontNum,
+				if (!PrepareA8AtlasShape(font, shape, font.iFontNum,
 					static_cast<UInt32>(std::count_if(quads.begin(), quads.end(),
 						[](const PendingQuad& quad) { return quad.layer == AtlasLayer::Fill; })),
 					static_cast<UInt32>(quads.size()), &resolvedEffect, &colorContract))

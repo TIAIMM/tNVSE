@@ -293,7 +293,7 @@ namespace fonthook::vectorfont
 	bool IsAtlasRangeRendererAvailable();
 	bool IsA8EffectRendererAvailable(EffectQuality aeQuality);
 	bool ResolveA8EffectQuality(EffectQuality aeRequested, EffectQuality& arResolved);
-	bool PrepareA8AtlasShape(NiTriShape* apShape, UInt32 auiFontId,
+	bool PrepareA8AtlasShape(Font& arFont, NiTriShape* apShape, UInt32 auiFontId,
 		UInt32 auiGlyphCount, UInt32 auiQuadCount,
 		const A8EffectShapeConfig* apEffectConfig = nullptr,
 		const A8ShapeColorContract* apColorContract = nullptr);

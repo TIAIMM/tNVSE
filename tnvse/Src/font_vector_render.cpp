@@ -466,6 +466,11 @@ namespace fonthook
 			effectConfig.enabled = true;
 			effectConfig.shaderEffects = false;
 			effectConfig.useOriginalShader = !useUniformColorShader;
+			effectConfig.atlasProperties.push_back(textureProperty);
+			effectConfig.atlasTextures.push_back(texture);
+			effectConfig.atlasInverseSizes.push_back(NiPoint2(
+				1.0f / static_cast<float>(std::max<UInt32>(paletteWidth, 1)),
+				1.0f / static_cast<float>(std::max<UInt32>(paletteHeight, 1))));
 			vectorfont::A8ShapeColorContract colorContract;
 			bool haveColorModifier = false;
 			auto recordColorModifier = [&](const NiColorA& color)
@@ -562,7 +567,7 @@ namespace fonthook
 					return range.layer == static_cast<UInt32>(VectorLayer::Fill);
 				}));
 			const bool rangeShapePrepared = vectorfont::PrepareA8AtlasShape(
-				shape, font.iFontNum,
+				font, shape, font.iFontNum,
 				fillRangeCount,
 				static_cast<UInt32>(effectConfig.ranges.size()),
 				&effectConfig, &colorContract);

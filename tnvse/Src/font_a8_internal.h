@@ -3,6 +3,7 @@
 // Private A8 bridge model and sibling-module services.
 
 #include "font_vector_internal.h"
+#include "font_native_internal.h"
 
 #include "NiD3DPixelShader.hpp"
 #include "NiDX9Renderer.hpp"
@@ -55,7 +56,7 @@ namespace fonthook::vectorfont
 	using RenderImmediateFn = void(__thiscall*)(NiTriShape*, NiRenderer*);
 	using RenderShapeFn = void(__thiscall*)(NiDX9Renderer*, NiTriShape*);
 	using DeleteThisFn = void(__thiscall*)(NiTriShape*);
-	using TileRenderPassFn = SInt32(__cdecl*)(BSShaderProperty::RenderPass*,
+	using TileRenderPassFn = void(__cdecl*)(BSShaderProperty::RenderPass*,
 		UInt32, bool, bool, bool);
 
 	enum class A8CompiledShaderClass : UInt8
@@ -91,6 +92,7 @@ namespace fonthook::vectorfont
 		A8CompiledShaderClass firstFillShaderClass =
 			A8CompiledShaderClass::Original;
 		bool hasShadowRange = false;
+		NativeA8ShapePayloadPtr nativePayload;
 	};
 	using A8ShapeMetadataPtr = std::shared_ptr<const A8ShapeMetadata>;
 
@@ -112,6 +114,7 @@ namespace fonthook::vectorfont
 	struct A8ThreadState
 	{
 		UInt32 renderDepth = 0;
+		UInt32 nativePacketDepth = 0;
 		NiTriShape* currentShape = nullptr;
 		A8ShapeMetadataPtr currentMetadata;
 		std::array<A8RenderTraceContext, kMaximumRenderTraceDepth> renderTraceStack = {};
@@ -200,13 +203,16 @@ namespace fonthook::vectorfont
 	}
 
 	bool HaveA8Shader();
+	bool IsA8AtlasShape(const NiTriShape* shape);
 	bool HaveEffectShader(EffectQuality quality);
 	bool HaveAllEffectShaders();
 	bool NeedsScaledFillSampling(const NiTriShape* shape);
 	bool HookD3DDevice();
+	bool InitializeA8BridgeFallback(bool reportFailures);
 	bool HookTileRenderPass();
+	bool IsA8TileRenderPassHookCurrent();
 	TileRenderPassFn ReadTileRenderPassCallTarget();
-	SInt32 __cdecl A8TileRenderPass(BSShaderProperty::RenderPass* pass,
+	void __cdecl A8TileRenderPass(BSShaderProperty::RenderPass* pass,
 		UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupDrawmode);
 	void __fastcall A8RenderShape(NiDX9Renderer* renderer, void*,
 		NiTriShape* shape);

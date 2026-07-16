@@ -491,15 +491,33 @@ namespace fonthook::vectorfont
 			return State().a8Available;
 		}
 
+	bool InitializeA8BridgeFallback(bool reportFailures)
+	{
+		return TryInitializeA8Renderer(true, reportFailures)
+			&& IsPublishedRangeBridgeReady();
+	}
+
 	void FinalizeA8RendererDetection()
 	{
-		TryInitializeA8Renderer(true, true);
+		const bool accumulatorReady = HookNativeA8Accumulator();
+		const bool tileRouteReady = HookTileRenderPass();
+		if (!accumulatorReady || !tileRouteReady
+			|| !InitializeNativeA8Renderer(true, true))
+			InitializeA8BridgeFallback(true);
 	}
 
 	void HandleA8RendererMainLoop()
 	{
 		if (!g_bEnableFreeTypeFontRendering)
 			return;
+		HandleNativeA8RendererMainLoop();
+		if (IsNativeA8RendererAvailable()
+			&& IsNativeA8AccumulatorHookCurrent()
+			&& IsA8TileRenderPassHookCurrent())
+		{
+			return;
+		}
+
 		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 		IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
 		void** deviceVtable = device ? *reinterpret_cast<void***>(device) : nullptr;
@@ -552,6 +570,12 @@ namespace fonthook::vectorfont
 	{
 		if (messageType != kShaderRefreshMessage)
 			return;
+		HandleNativeA8ShaderLoaderMessage(messageType);
+		if (IsNativeA8RendererAvailable()
+			&& IsNativeA8AccumulatorHookCurrent()
+			&& IsA8TileRenderPassHookCurrent() && !State().rangeBridgeAvailable)
+			return;
+
 		TryInitializeA8Renderer(true, false);
 		if (!State().shaderLoaderCompatible)
 			return;
@@ -573,6 +597,9 @@ namespace fonthook::vectorfont
 
 	bool IsA8RendererAvailable()
 	{
+		if (HookNativeA8Accumulator() && HookTileRenderPass()
+			&& InitializeNativeA8Renderer(false, false))
+			return true;
 		return TryInitializeA8Renderer(false, false);
 	}
 
@@ -586,6 +613,15 @@ namespace fonthook::vectorfont
 
 	bool ResolveA8EffectQuality(EffectQuality requested, EffectQuality& resolved)
 	{
+		if (IsNativeA8RendererAvailable()
+			&& IsNativeA8AccumulatorHookCurrent()
+			&& IsA8TileRenderPassHookCurrent()
+			&& static_cast<UInt32>(requested)
+				<= static_cast<UInt32>(EffectQuality::High))
+		{
+			resolved = requested;
+			return true;
+		}
 		for (int quality = static_cast<int>(requested); quality >= 0; --quality)
 		{
 			const EffectQuality candidate = static_cast<EffectQuality>(quality);
@@ -604,17 +640,11 @@ namespace fonthook::vectorfont
 		return IsA8RendererAvailable() && ResolveA8EffectQuality(quality, resolved);
 	}
 
-	bool PrepareA8AtlasShape(NiTriShape* shape, UInt32 fontId,
+	bool PrepareA8AtlasShape(Font& font, NiTriShape* shape, UInt32 fontId,
 		UInt32 glyphCount, UInt32 quadCount, const A8EffectShapeConfig* effectConfig,
 		const A8ShapeColorContract* colorContract)
 	{
-		const bool useOriginalShader = effectConfig
-			&& effectConfig->useOriginalShader;
-		const bool rangeBridgeReady = useOriginalShader
-			? IsAtlasRangeRendererAvailable() : false;
-		const bool rendererAvailable = useOriginalShader
-			? (rangeBridgeReady || HookTileRenderPass()) : IsA8RendererAvailable();
-		if (!rendererAvailable
+		if (!IsA8RendererAvailable()
 			|| !ValidateA8Shape(shape, effectConfig, colorContract)
 			|| !InitializeA8TriShapeVtable(shape))
 			return false;
@@ -634,6 +664,14 @@ namespace fonthook::vectorfont
 		if (effectConfig)
 			metadata->effects = *effectConfig;
 		CompileA8DrawRanges(*metadata);
+		metadata->nativePayload = BuildNativeA8ShapePayload(font, shape, *metadata);
+		if (!metadata->nativePayload && !IsPublishedRangeBridgeReady()
+			&& !InitializeA8BridgeFallback(true))
+		{
+			// Never publish a custom A8 facade when neither a complete native packet
+			// group nor the audited whole-shape bridge can render it safely.
+			return false;
+		}
 		{
 			std::lock_guard<std::mutex> lock(State().diagnosticsMutex);
 			State().shapeMetadata[shape] = std::move(metadata);
@@ -641,14 +679,6 @@ namespace fonthook::vectorfont
 		// Publish the marker vtable only after its metadata is complete. The draw
 		// bridge must never observe a custom shape with a stale/default contract.
 		*reinterpret_cast<void***>(shape) = &State().triShapeVtable[1];
-		if (useOriginalShader && !rangeBridgeReady
-			&& g_bEnableFreeTypeFontRenderingLog && !State().loggedPendingRangeShape)
-		{
-			State().loggedPendingRangeShape = true;
-			gLog.FormattedMessage(
-				"tnvse_freetype_font: retained startup effect shape pending first-render D3D range bridge shape=%p font=%u",
-				shape, fontId);
-		}
 		return true;
 	}
 }

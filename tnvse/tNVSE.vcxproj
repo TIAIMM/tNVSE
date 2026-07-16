@@ -155,6 +155,10 @@
 	<ClCompile Include="Src\font_a8_draw.cpp" />
 	<ClCompile Include="Src\font_a8_hooks.cpp" />
 	<ClCompile Include="Src\font_a8_diagnostics.cpp" />
+	<ClCompile Include="Src\font_native_packets.cpp" />
+	<ClCompile Include="Src\font_native_accumulator.cpp" />
+	<ClCompile Include="Src\font_native_shader.cpp" />
+	<ClCompile Include="Src\font_native_fallback.cpp" />
 	<ClCompile Include="Src\font_prewarm.cpp" />
 	<ClCompile Include="Src\font_performance.cpp" />
     <ClCompile Include="Src\font_vector_config.cpp" />
@@ -202,6 +206,12 @@
 	<None Include="shaders\freetype_a8.hlsl" />
 	<None Include="shaders\freetype_coverage.hlsl" />
 	<None Include="shaders\freetype_effects.hlsl" />
+	<None Include="shaders\freetype_native_common.hlsli" />
+	<None Include="shaders\freetype_native_vs.hlsl" />
+	<None Include="shaders\freetype_native_original.hlsl" />
+	<None Include="shaders\freetype_native_coverage.hlsl" />
+	<None Include="shaders\freetype_native_sdf.hlsl" />
+	<None Include="shaders\freetype_native_effects.hlsl" />
 	<None Include="shaders\freetype_sdf_compat.hlsli" />
 	<None Include="shaders\freetype_tile_compat.hlsli" />
 	<None Include="shaders\verify_shader_contract.ps1" />
@@ -211,6 +221,13 @@
 	<None Include="shaders\compiled\tnvse_freetype_effects_fast.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_effects_balanced.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_effects_high.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_vs.vso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_original.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_coverage.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_sdf.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_effects_fast.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_effects_balanced.pso" />
+	<None Include="shaders\compiled\tnvse_freetype_native_effects_high.pso" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="third_party\freetype_tnvse.vcxproj">
@@ -234,6 +251,7 @@
     <ClInclude Include="Src\font_freetype_internal.h" />
     <ClInclude Include="Src\font_atlas_internal.h" />
     <ClInclude Include="Src\font_a8_internal.h" />
+	<ClInclude Include="Src\font_native_internal.h" />
     <ClInclude Include="Src\multibyte_input.h" />
     <ClInclude Include="Src\multibyte_input_internal.h" />
     <ClInclude Include="Src\multibyte_input_ime_internal.h" />
@@ -276,6 +294,13 @@
       <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_effects_fast.pso" />
       <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_effects_balanced.pso" />
       <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_effects_high.pso" />
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_native_vs.vso" />
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_native_original.pso" />
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_native_coverage.pso" />
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_native_sdf.pso" />
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_native_effects_fast.pso" />
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_native_effects_balanced.pso" />
+      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_native_effects_high.pso" />
     </ItemGroup>
     <Copy SourceFiles="@(_FreeTypeShaderFiles)"
           DestinationFolder="$(_FreeTypeShaderOutputDir)"

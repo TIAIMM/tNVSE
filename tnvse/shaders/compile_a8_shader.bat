@@ -20,5 +20,19 @@ if errorlevel 1 exit /b %errorlevel%
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_effects_high.pso" "%~dp0freetype_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_vs.vso" "%~dp0freetype_native_vs.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_original.pso" "%~dp0freetype_native_original.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_coverage.pso" "%~dp0freetype_native_coverage.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_sdf.pso" "%~dp0freetype_native_sdf.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_effects_fast.pso" "%~dp0freetype_native_effects.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_effects_balanced.pso" "%~dp0freetype_native_effects.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_effects_high.pso" "%~dp0freetype_native_effects.hlsl"
+if errorlevel 1 exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0verify_shader_contract.ps1" -Fxc "%FXC%" -ShaderDirectory "%~dp0."
 exit /b %errorlevel%

@@ -470,7 +470,7 @@ namespace fonthook::vectorfont
 			if (!a8State.originalDrawIndexedPrimitive)
 				return D3DERR_INVALIDCALL;
 
-			if (!thread.renderDepth)
+			if (thread.nativePacketDepth || !thread.renderDepth)
 			{
 				return a8State.originalDrawIndexedPrimitive(device, primitiveType, baseVertexIndex,
 					minimumVertexIndex, numberOfVertices, startIndex, primitiveCount);

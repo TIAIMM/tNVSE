@@ -12,6 +12,7 @@
 #include "Utils/SafeWrite.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -19,6 +20,133 @@
 namespace fonthook::vectorfont
 {
 		bool HookD3DDevice();
+		namespace
+		{
+			class NativePixelConstantScope
+			{
+			public:
+				static constexpr UINT kFirstRegister = 0;
+				static constexpr UINT kRegisterCount = 5;
+				static constexpr size_t kFloatCount = kRegisterCount * 4;
+
+				explicit NativePixelConstantScope(IDirect3DDevice9* device)
+					: m_device(device)
+				{
+					m_result = m_device
+						? m_device->GetPixelShaderConstantF(kFirstRegister,
+							m_original.data(), kRegisterCount)
+						: D3DERR_INVALIDCALL;
+					m_captured = SUCCEEDED(m_result);
+					if (!m_captured)
+						m_operation = "capture-pixel-constants";
+				}
+
+				~NativePixelConstantScope()
+				{
+					if (m_captured && !m_finished)
+						RestoreAndVerify();
+				}
+
+				bool Captured() const { return m_captured; }
+				HRESULT Result() const { return m_result; }
+				const char* Operation() const { return m_operation; }
+				SInt32 MismatchRegister() const { return m_mismatchRegister; }
+
+				bool RestoreAndVerify()
+				{
+					if (!m_captured)
+						return false;
+					if (m_finished)
+						return SUCCEEDED(m_result);
+					m_finished = true;
+
+					m_result = m_device->SetPixelShaderConstantF(kFirstRegister,
+						m_original.data(), kRegisterCount);
+					if (FAILED(m_result))
+					{
+						m_operation = "restore-pixel-constants";
+						return false;
+					}
+
+					m_result = m_device->GetPixelShaderConstantF(kFirstRegister,
+						m_verify.data(), kRegisterCount);
+					if (FAILED(m_result))
+					{
+						m_operation = "verify-pixel-constants";
+						return false;
+					}
+
+					for (size_t index = 0; index < kFloatCount; ++index)
+					{
+						if (std::memcmp(&m_original[index], &m_verify[index],
+							sizeof(float)) != 0)
+						{
+							m_operation = "pixel-constant-mismatch";
+							m_mismatchRegister = static_cast<SInt32>(index / 4);
+							m_result = E_FAIL;
+							return false;
+						}
+					}
+					m_operation = "none";
+					m_result = D3D_OK;
+					return true;
+				}
+
+			private:
+				IDirect3DDevice9* m_device = nullptr;
+				std::array<float, kFloatCount> m_original = {};
+				std::array<float, kFloatCount> m_verify = {};
+				HRESULT m_result = D3DERR_INVALIDCALL;
+				const char* m_operation = "capture-pixel-constants";
+				SInt32 m_mismatchRegister = -1;
+				bool m_captured = false;
+				bool m_finished = false;
+			};
+
+			class NativeTilePacketScope
+			{
+			public:
+				explicit NativeTilePacketScope(BSShaderProperty::RenderPass* pass)
+					: m_pass(pass), m_facade(pass ? pass->pGeometry : nullptr),
+					m_thread(ThreadState())
+				{
+					++m_thread.nativePacketDepth;
+				}
+
+				~NativeTilePacketScope()
+				{
+					if (m_pass)
+						m_pass->pGeometry = m_facade;
+					--m_thread.nativePacketDepth;
+				}
+
+				void Select(NiGeometry* geometry)
+				{
+					m_pass->pGeometry = geometry;
+				}
+
+			private:
+				BSShaderProperty::RenderPass* m_pass = nullptr;
+				NiGeometry* m_facade = nullptr;
+				A8ThreadState& m_thread;
+			};
+
+			void ActivateDirectBridgeFallback(NiTriShape* shape,
+				const A8ShapeMetadataPtr& metadata)
+			{
+				A8ThreadState& thread = ThreadState();
+				if (thread.nativePacketDepth || thread.renderDepth || !metadata)
+					return;
+				const bool bridgeReady = EnsureA8BridgeFallbackReady();
+				const NativeA8FallbackReason reason = metadata->nativePayload
+					? NativeA8FallbackReason::DirectImmediate
+					: NativeA8FallbackReason::PacketBuild;
+				RecordNativeA8Fallback(shape, *metadata,
+					bridgeReady ? reason
+						: NativeA8FallbackReason::BridgeUnavailable,
+					bridgeReady);
+			}
+		}
 
 		bool HasA8ShapeMetadata(const NiTriShape* shape, bool* hasShadow = nullptr,
 			UInt32* fontId = nullptr)
@@ -50,16 +178,150 @@ namespace fonthook::vectorfont
 				kTileRenderPassCallSite + 5 + displacement);
 		}
 
-		SInt32 __cdecl A8TileRenderPass(BSShaderProperty::RenderPass* pass,
+		bool IsA8TileRenderPassHookCurrent()
+		{
+			return State().originalTileRenderPass
+				&& ReadTileRenderPassCallTarget() == &A8TileRenderPass;
+		}
+
+
+		void __cdecl A8TileRenderPass(BSShaderProperty::RenderPass* pass,
 			UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupDrawmode)
 		{
-			if (!State().originalTileRenderPass)
-				return 0;
+			A8State& state = State();
+			if (!state.originalTileRenderPass)
+				return;
 
 			NiTriShape* shape = pass
 				? reinterpret_cast<NiTriShape*>(pass->pGeometry) : nullptr;
+			if (!IsA8AtlasShape(shape))
+			{
+				state.originalTileRenderPass(pass, currentPass, testAlpha,
+					blendAlpha, setupDrawmode);
+				return;
+			}
 			const A8ShapeMetadataPtr metadata = ResolveRenderMetadata(shape);
 			const bool tracked = static_cast<bool>(metadata);
+			if (tracked)
+			{
+				NativeA8FallbackReason failure = NativeA8FallbackReason::None;
+				NativeA8ShapePayload* payload = metadata->nativePayload.get();
+				if (!payload)
+				{
+					failure = NativeA8FallbackReason::PacketBuild;
+				}
+				else if (payload->bridgeNextSubmit.exchange(false,
+					std::memory_order_acq_rel))
+				{
+					failure = payload->stickyReason.exchange(
+						NativeA8FallbackReason::None, std::memory_order_acq_rel);
+					if (failure == NativeA8FallbackReason::None)
+						failure = NativeA8FallbackReason::RuntimeFault;
+				}
+				else
+				{
+					failure = PrepareNativeA8Group(shape, *metadata, *payload);
+				}
+
+				if (failure == NativeA8FallbackReason::None)
+				{
+					bool runtimeFault = false;
+					bool drewPacket = false;
+					bool constantStateFault = false;
+					const char* faultOperation = "generation-changed-after-packet";
+					HRESULT faultResult = D3DERR_DEVICELOST;
+					SInt32 faultRegister = -1;
+					{
+						NativeTilePacketScope packetScope(pass);
+						NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+						IDirect3DDevice9* device = renderer
+							? renderer->GetD3DDevice() : nullptr;
+						if (!device)
+						{
+							runtimeFault = true;
+							constantStateFault = true;
+							faultOperation = "capture-pixel-constants";
+							faultResult = D3DERR_DEVICELOST;
+						}
+						for (NativeA8Packet& packet : payload->packets)
+						{
+							if (runtimeFault)
+								break;
+							packetScope.Select(packet.shape.m_pObject);
+							NativePixelConstantScope constants(device);
+							if (!constants.Captured())
+							{
+								runtimeFault = true;
+								constantStateFault = true;
+								faultOperation = constants.Operation();
+								faultResult = constants.Result();
+								break;
+							}
+
+							state.originalTileRenderPass(pass, currentPass, testAlpha,
+								blendAlpha, setupDrawmode);
+							drewPacket = true;
+							if (!constants.RestoreAndVerify())
+							{
+								runtimeFault = true;
+								constantStateFault = true;
+								faultOperation = constants.Operation();
+								faultResult = constants.Result();
+								faultRegister = constants.MismatchRegister();
+								break;
+							}
+							if (!IsNativeA8ShaderGenerationCurrent(
+								payload->preparedGeneration))
+							{
+								runtimeFault = true;
+								break;
+							}
+						}
+					}
+					if (runtimeFault)
+					{
+						if (constantStateFault)
+						{
+							MarkNativeA8GenerationFault(payload->preparedGeneration,
+								faultOperation, faultResult);
+							gLog.FormattedMessage(
+								"tnvse_freetype_native: pixel-constant isolation fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u; aborting native group and explicitly routing bridge fallback",
+								faultOperation, static_cast<UInt32>(faultResult),
+								faultRegister, shape, metadata->fontId,
+								payload->preparedGeneration, drewPacket ? 1 : 0);
+						}
+						if (drewPacket)
+						{
+							MarkNativeA8RuntimeFault(*payload,
+								NativeA8FallbackReason::RuntimeFault);
+							return;
+						}
+						failure = NativeA8FallbackReason::RuntimeFault;
+					}
+					else if (g_bEnableFreeTypeFontRenderingLog
+						&& !state.loggedTileRenderPassHit)
+					{
+						state.loggedTileRenderPassHit = true;
+						gLog.FormattedMessage(
+							"tnvse_freetype_native: native Tile group route hit shape=%p font=%u pass=%u packets=%u ranges=%u",
+							shape, metadata->fontId, currentPass,
+							static_cast<UInt32>(payload->packets.size()),
+							static_cast<UInt32>(metadata->compiledRanges.size()));
+					}
+					if (!runtimeFault)
+					{
+						RecordNativeA8Recovery(shape, *metadata);
+						return;
+					}
+				}
+
+				const bool bridgeReady = EnsureA8BridgeFallbackReady();
+				RecordNativeA8Fallback(shape, *metadata,
+					bridgeReady ? failure
+						: NativeA8FallbackReason::BridgeUnavailable,
+					bridgeReady);
+			}
+
 			const bool hasShadow = metadata && HasShadowRange(*metadata);
 			const UInt32 fontId = metadata ? metadata->fontId : 0;
 			NiTriShape* previousShape = ThreadState().currentShape;
@@ -72,13 +334,13 @@ namespace fonthook::vectorfont
 				NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 				IDirect3DDevice9* device = renderer
 					? renderer->GetD3DDevice() : nullptr;
-				if (!State().rangeBridgeAvailable || device != State().hookedDevice)
-					State().rangeBridgeAvailable = HookD3DDevice();
-				if (g_bEnableFreeTypeFontRenderingLog && !State().loggedTileRenderPassHit)
+				if (!state.rangeBridgeAvailable || device != state.hookedDevice)
+					state.rangeBridgeAvailable = HookD3DDevice();
+				if (g_bEnableFreeTypeFontRenderingLog && !state.loggedTileRenderPassHit)
 				{
-					State().loggedTileRenderPassHit = true;
+					state.loggedTileRenderPassHit = true;
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: Tile accumulator range route hit shape=%p font=%u pass=%u depth=%u",
+						"tnvse_freetype_font: Tile accumulator bridge route hit shape=%p font=%u pass=%u depth=%u",
 						shape, fontId, currentPass, ThreadState().renderDepth);
 				}
 				BeginA8RenderTrace(shape, "tile-render-pass", metadata);
@@ -86,14 +348,13 @@ namespace fonthook::vectorfont
 				ThreadState().currentShape = shape;
 				ThreadState().currentMetadata = metadata;
 			}
-			const SInt32 result = State().originalTileRenderPass(
-				pass, currentPass, testAlpha, blendAlpha,
+			state.originalTileRenderPass(pass, currentPass, testAlpha, blendAlpha,
 				setupDrawmode);
 			if (tracked)
 			{
 				A8RenderTraceContext* trace = CurrentRenderTrace();
 				if (hasShadow && trace && trace->shape == shape
-					&& State().loggedTileShadowResultFonts.insert(fontId).second)
+					&& state.loggedTileShadowResultFonts.insert(fontId).second)
 				{
 					gLog.FormattedMessage(
 						"tnvse_freetype_font: Tile accumulator shadow result shape=%p font=%u draws=%u forwarded=%u ranges=%u effectOk=%u effectFail=%u fillOk=%u fillFail=%u bridge=%u",
@@ -101,14 +362,13 @@ namespace fonthook::vectorfont
 						trace->rangeAttempts,
 						trace->effectSuccesses, trace->effectFailures,
 						trace->fillSuccesses, trace->fillFailures,
-						State().rangeBridgeAvailable ? 1 : 0);
+						state.rangeBridgeAvailable ? 1 : 0);
 				}
 				ThreadState().currentShape = previousShape;
 				ThreadState().currentMetadata = std::move(previousMetadata);
 				--ThreadState().renderDepth;
 				EndA8RenderTrace(shape, "tile-render-pass");
 			}
-			return result;
 		}
 
 		bool HookTileRenderPass()
@@ -185,6 +445,7 @@ namespace fonthook::vectorfont
 		{
 			const bool a8 = IsA8AtlasShape(shape);
 			const A8ShapeMetadataPtr metadata = a8 ? ResolveRenderMetadata(shape) : nullptr;
+			ActivateDirectBridgeFallback(shape, metadata);
 			NiTriShape* previousShape = ThreadState().currentShape;
 			A8ShapeMetadataPtr previousMetadata = ThreadState().currentMetadata;
 			if (a8)
@@ -208,6 +469,7 @@ namespace fonthook::vectorfont
 		{
 			const bool a8 = IsA8AtlasShape(shape);
 			const A8ShapeMetadataPtr metadata = a8 ? ResolveRenderMetadata(shape) : nullptr;
+			ActivateDirectBridgeFallback(shape, metadata);
 			NiTriShape* previousShape = ThreadState().currentShape;
 			A8ShapeMetadataPtr previousMetadata = ThreadState().currentMetadata;
 			if (a8)
@@ -257,6 +519,7 @@ namespace fonthook::vectorfont
 			NiPropertyState* properties = renderer->m_pkBatchedPropertyState;
 			NiDynamicEffectState* effects = renderer->m_pkBatchedEffectState;
 			const A8ShapeMetadataPtr metadata = ResolveRenderMetadata(shape);
+			ActivateDirectBridgeFallback(shape, metadata);
 			NiTriShape* previousShape = ThreadState().currentShape;
 			A8ShapeMetadataPtr previousMetadata = ThreadState().currentMetadata;
 			const UInt32 previousDepth = ThreadState().renderDepth;
@@ -441,7 +704,24 @@ namespace fonthook::vectorfont
 				return false;
 			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
-			return device && device == State().hookedDevice;
+			void** deviceVtable = device ? *reinterpret_cast<void***>(device) : nullptr;
+			if (!device || device != State().hookedDevice || !deviceVtable
+				|| deviceVtable[kDrawIndexedPrimitiveSlot]
+					!= reinterpret_cast<void*>(&A8DrawIndexedPrimitive))
+			{
+				return false;
+			}
+
+			void** rendererVtable = renderer
+				? *reinterpret_cast<void***>(renderer) : nullptr;
+			const bool rendererRoutesCurrent = rendererVtable
+				&& rendererVtable[kRendererBatchRenderShapeSlot]
+					== reinterpret_cast<void*>(&A8BatchRenderShape)
+				&& rendererVtable[kRendererRenderShapeSlot]
+					== reinterpret_cast<void*>(&A8RenderShape)
+				&& rendererVtable[kRendererRenderShapeAltSlot]
+					== reinterpret_cast<void*>(&A8RenderShapeAlt);
+			return rendererRoutesCurrent || IsA8TileRenderPassHookCurrent();
 		}
 
 		void __fastcall A8RenderImmediate(NiTriShape* shape, void*, NiRenderer* renderer)
@@ -449,6 +729,7 @@ namespace fonthook::vectorfont
 			if (!IsPublishedRangeBridgeReady())
 				State().rangeBridgeAvailable = HookD3DDevice();
 			const A8ShapeMetadataPtr metadata = ResolveRenderMetadata(shape);
+			ActivateDirectBridgeFallback(shape, metadata);
 			NiTriShape* previousShape = ThreadState().currentShape;
 			A8ShapeMetadataPtr previousMetadata = ThreadState().currentMetadata;
 			BeginA8RenderTrace(shape, "shape-immediate", metadata);
@@ -467,6 +748,7 @@ namespace fonthook::vectorfont
 			if (!IsPublishedRangeBridgeReady())
 				State().rangeBridgeAvailable = HookD3DDevice();
 			const A8ShapeMetadataPtr metadata = ResolveRenderMetadata(shape);
+			ActivateDirectBridgeFallback(shape, metadata);
 			NiTriShape* previousShape = ThreadState().currentShape;
 			A8ShapeMetadataPtr previousMetadata = ThreadState().currentMetadata;
 			BeginA8RenderTrace(shape, "shape-immediate-alt", metadata);
@@ -482,16 +764,27 @@ namespace fonthook::vectorfont
 
 		void __fastcall A8DeleteThis(NiTriShape* shape, void*)
 		{
+			A8State& state = State();
+			A8ShapeMetadataPtr retiredMetadata;
 			{
-				std::lock_guard<std::mutex> lock(State().diagnosticsMutex);
-				State().shapeMetadata.erase(shape);
-				State().loggedShapes.erase(shape);
-				State().tracedShadowShapes.erase(shape);
-				State().tracedShadowShapeOrder.erase(std::remove(
-					State().tracedShadowShapeOrder.begin(), State().tracedShadowShapeOrder.end(),
-					shape), State().tracedShadowShapeOrder.end());
+				std::lock_guard<std::mutex> lock(state.diagnosticsMutex);
+				auto found = state.shapeMetadata.find(shape);
+				if (found != state.shapeMetadata.end())
+				{
+					retiredMetadata = std::move(found->second);
+					state.shapeMetadata.erase(found);
+				}
+				state.loggedShapes.erase(shape);
+				state.tracedShadowShapes.erase(shape);
+				state.tracedShadowShapeOrder.erase(std::remove(
+					state.tracedShadowShapeOrder.begin(), state.tracedShadowShapeOrder.end(),
+					shape), state.tracedShadowShapeOrder.end());
 			}
-			State().originalDeleteThis(shape);
+			ForgetNativeA8FallbackShape(shape);
+			// Packet smart pointers may release renderer resources; keep that work out
+			// of the metadata registry lock and before the facade itself is destroyed.
+			retiredMetadata.reset();
+			state.originalDeleteThis(shape);
 		}
 
 		bool InitializeA8TriShapeVtable(NiTriShape* shape)
