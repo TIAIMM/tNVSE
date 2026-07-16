@@ -695,9 +695,11 @@ namespace fonthook::vectorfont
 	bool StorePersistentGlyphBitmap(PersistentBitmapProfile& profile,
 		const BitmapCacheKey& key, const GlyphBitmap& bitmap);
 
-	std::shared_ptr<GlyphMesh> BuildGlyphMesh(RuntimeFont& runtime,
-		const VectorEncodedGlyph& glyph, GlyphMeshType meshType);
-	std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(RuntimeFont& runtime,
-		const VectorEncodedGlyph& glyph, GlyphMaskType maskType,
+	std::shared_ptr<GlyphMesh> BuildGlyphMesh(FreeTypeState& state,
+		RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
+		GlyphMeshType meshType);
+	std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(FreeTypeState& state,
+		RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
+		const ResolvedGlyph& resolved, GlyphMaskType maskType,
 		float rasterScale, const BitmapCacheKey& key);
 }

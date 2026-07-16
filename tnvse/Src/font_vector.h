@@ -55,6 +55,7 @@ namespace fonthook
 	void ShutdownFreeTypeDefaultPoolAtlas();
 	void PumpFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
+	void RecordFreeTypePreparedTextCacheResult(bool abHit);
 	void FlushFreeTypePersistentFontCache();
 	void UpdateFreeTypeDevicePixelScale();
 	bool TryGetFreeTypeSourceRasterScale(float& arScale);
@@ -66,6 +67,7 @@ namespace fonthook
 	bool IsFreeTypeFontConfigured(UInt32 auiFontId);
 	bool ActivateFreeTypeFont(Font* apFont, bool abForce = false);
 	bool IsFreeTypeFontActive(const Font* apFont);
+	bool GetFreeTypeLayoutIdentity(const Font* apFont, UInt64& arIdentity);
 	FontLetter* EnsureFreeTypeDoubleByteMetrics(Font* apFont, UInt32 auiEncodedCode);
 	bool DecodeFreeTypeGlyph(Font* apFont, const char* apText, VectorEncodedGlyph& arGlyph);
 	bool LayoutFreeTypeRun(Font* apFont, const char* apText, size_t auiLength,

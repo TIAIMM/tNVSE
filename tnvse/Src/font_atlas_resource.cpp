@@ -136,6 +136,146 @@ namespace fonthook::vectorfont
 			return { x0, y0, x1 - x0, y1 - y0 };
 		}
 
+		static AtlasRect UnionAtlasRects(const AtlasRect& lhs, const AtlasRect& rhs)
+		{
+			const UInt32 x0 = std::min(lhs.x, rhs.x);
+			const UInt32 y0 = std::min(lhs.y, rhs.y);
+			const UInt32 x1 = std::max(lhs.x + lhs.width, rhs.x + rhs.width);
+			const UInt32 y1 = std::max(lhs.y + lhs.height, rhs.y + rhs.height);
+			return { x0, y0, x1 - x0, y1 - y0 };
+		}
+
+		static bool AtlasRectsTouchOrOverlap(const AtlasRect& lhs, const AtlasRect& rhs)
+		{
+			return lhs.x <= rhs.x + rhs.width && rhs.x <= lhs.x + lhs.width
+				&& lhs.y <= rhs.y + rhs.height && rhs.y <= lhs.y + lhs.height;
+		}
+
+		static bool AtlasRectContains(const AtlasRect& outer, const AtlasRect& inner)
+		{
+			return inner.x >= outer.x && inner.y >= outer.y
+				&& inner.x + inner.width <= outer.x + outer.width
+				&& inner.y + inner.height <= outer.y + outer.height;
+		}
+
+		static UInt64 EstimateDirtyRectUploadBytes(AtlasRect rect, UInt32 mipLevels,
+			AtlasPixelMode mode)
+		{
+			UInt64 result = 0;
+			const UInt32 bytesPerPixel = AtlasBytesPerPixel(mode);
+			for (UInt32 level = 0; level < std::max<UInt32>(1, mipLevels); ++level)
+			{
+				result += static_cast<UInt64>(rect.width) * rect.height * bytesPerPixel;
+				rect.x /= 2;
+				rect.y /= 2;
+				rect.width = std::max<UInt32>(1, rect.width / 2);
+				rect.height = std::max<UInt32>(1, rect.height / 2);
+			}
+			return result;
+		}
+
+		static void BuildMergedAtlasDirtyRects(const std::vector<AtlasRect>& source,
+			UInt32 width, UInt32 height, UInt32 mipLevels, AtlasPixelMode mode,
+			std::vector<AtlasRect>& result)
+		{
+			constexpr size_t kMaximumDirtyRectUploads = 16;
+			constexpr UInt64 kEstimatedLockPairCostBytes = 4096;
+			const UInt64 mergeAllowance = kEstimatedLockPairCostBytes
+				* std::max<UInt32>(1, mipLevels);
+			result.clear();
+			result.reserve(source.size());
+			for (const AtlasRect& raw : source)
+			{
+				AtlasRect current = AlignDirtyRectForMipChain(raw,
+					width, height, mipLevels);
+				if (!current.width || !current.height)
+					continue;
+				for (;;)
+				{
+					size_t best = result.size();
+					UInt64 bestExtra = std::numeric_limits<UInt64>::max();
+					for (size_t index = 0; index < result.size(); ++index)
+					{
+						const AtlasRect combined = UnionAtlasRects(current, result[index]);
+						const UInt64 separateCost = EstimateDirtyRectUploadBytes(
+							current, mipLevels, mode) + EstimateDirtyRectUploadBytes(
+								result[index], mipLevels, mode);
+						const UInt64 combinedCost = EstimateDirtyRectUploadBytes(
+							combined, mipLevels, mode);
+						const UInt64 extra = combinedCost > separateCost
+							? combinedCost - separateCost : 0;
+						if ((AtlasRectsTouchOrOverlap(current, result[index])
+							|| extra <= mergeAllowance) && extra < bestExtra)
+						{
+							best = index;
+							bestExtra = extra;
+						}
+					}
+					if (best == result.size())
+						break;
+					current = UnionAtlasRects(current, result[best]);
+					result.erase(result.begin() + best);
+				}
+				result.push_back(current);
+			}
+
+			// Bound D3D9 LockRect traffic for unusually fragmented batches. Merge the
+			// least expensive pair until the batch fits the fixed submission budget.
+			while (result.size() > kMaximumDirtyRectUploads)
+			{
+				size_t bestLeft = 0;
+				size_t bestRight = 1;
+				UInt64 bestExtra = std::numeric_limits<UInt64>::max();
+				for (size_t left = 0; left + 1 < result.size(); ++left)
+				{
+					for (size_t right = left + 1; right < result.size(); ++right)
+					{
+						const AtlasRect combined = UnionAtlasRects(
+							result[left], result[right]);
+						const UInt64 separateCost = EstimateDirtyRectUploadBytes(
+							result[left], mipLevels, mode) + EstimateDirtyRectUploadBytes(
+								result[right], mipLevels, mode);
+						const UInt64 combinedCost = EstimateDirtyRectUploadBytes(
+							combined, mipLevels, mode);
+						const UInt64 extra = combinedCost > separateCost
+							? combinedCost - separateCost : 0;
+						if (extra < bestExtra)
+						{
+							bestLeft = left;
+							bestRight = right;
+							bestExtra = extra;
+						}
+					}
+				}
+				result[bestLeft] = UnionAtlasRects(result[bestLeft], result[bestRight]);
+				result.erase(result.begin() + bestRight);
+			}
+			// A forced merge can bridge a third rectangle. Coalesce any resulting
+			// overlap so no glyph or mip region is submitted twice.
+			bool coalesced = true;
+			while (coalesced)
+			{
+				coalesced = false;
+				for (size_t left = 0; left + 1 < result.size() && !coalesced; ++left)
+				{
+					for (size_t right = left + 1; right < result.size(); ++right)
+					{
+						if (!AtlasRectsTouchOrOverlap(result[left], result[right]))
+							continue;
+						result[left] = UnionAtlasRects(result[left], result[right]);
+						result.erase(result.begin() + right);
+						coalesced = true;
+						break;
+					}
+				}
+			}
+			std::sort(result.begin(), result.end(), [](const AtlasRect& lhs,
+				const AtlasRect& rhs)
+			{
+				return lhs.y != rhs.y ? lhs.y < rhs.y : lhs.x < rhs.x;
+			});
+		}
+
 		bool BuildNextMipLevel(const UInt8* source, UInt32 sourceWidth,
 			UInt32 sourceHeight, size_t sourcePitch, AtlasPixelMode mode,
 			std::vector<UInt8>& destination)
@@ -229,6 +369,75 @@ namespace fonthook::vectorfont
 				}
 				std::memcpy(pixelData.m_pucPixels + pixelData.m_puiOffsetInBytes[level],
 					mip.data(), mip.size());
+			}
+			return true;
+		}
+
+		static bool GeneratePixelDataMipRegions(NiPixelData& pixelData,
+			AtlasPixelMode mode, const std::vector<AtlasRect>& dirtyRects)
+		{
+			if (!pixelData.m_pucPixels || !pixelData.m_puiWidth
+				|| !pixelData.m_puiHeight || !pixelData.m_puiOffsetInBytes
+				|| !pixelData.m_uiMipmapLevels)
+			{
+				return false;
+			}
+			const UInt32 levels = std::min(pixelData.m_uiMipmapLevels,
+				kMaximumAtlasMipLevels);
+			if (levels <= 1)
+				return true;
+			const UInt32 bytesPerPixel = AtlasBytesPerPixel(mode);
+			std::vector<UInt8> mip;
+			for (const AtlasRect& dirty : dirtyRects)
+			{
+				AtlasRect levelRect = dirty;
+				for (UInt32 level = 1; level < levels; ++level)
+				{
+					const UInt32 sourceWidth = pixelData.m_puiWidth[level - 1];
+					const UInt32 sourceHeight = pixelData.m_puiHeight[level - 1];
+					if (levelRect.x > sourceWidth
+						|| levelRect.width > sourceWidth - levelRect.x
+						|| levelRect.y > sourceHeight
+						|| levelRect.height > sourceHeight - levelRect.y)
+					{
+						return false;
+					}
+					const UInt8* source = pixelData.m_pucPixels
+						+ pixelData.m_puiOffsetInBytes[level - 1]
+						+ (static_cast<size_t>(levelRect.y) * sourceWidth
+							+ levelRect.x) * bytesPerPixel;
+					if (!BuildNextMipLevel(source, levelRect.width, levelRect.height,
+						static_cast<size_t>(sourceWidth) * bytesPerPixel, mode, mip))
+					{
+						return false;
+					}
+					AtlasRect targetRect = { levelRect.x / 2, levelRect.y / 2,
+						std::max<UInt32>(1, levelRect.width / 2),
+						std::max<UInt32>(1, levelRect.height / 2) };
+					const UInt32 targetWidth = pixelData.m_puiWidth[level];
+					const UInt32 targetHeight = pixelData.m_puiHeight[level];
+					if (targetRect.x > targetWidth
+						|| targetRect.width > targetWidth - targetRect.x
+						|| targetRect.y > targetHeight
+						|| targetRect.height > targetHeight - targetRect.y
+						|| mip.size() != static_cast<size_t>(targetRect.width)
+							* targetRect.height * bytesPerPixel)
+					{
+						return false;
+					}
+					UInt8* destination = pixelData.m_pucPixels
+						+ pixelData.m_puiOffsetInBytes[level];
+					for (UInt32 y = 0; y < targetRect.height; ++y)
+					{
+						std::memcpy(destination
+							+ (static_cast<size_t>(targetRect.y + y) * targetWidth
+								+ targetRect.x) * bytesPerPixel,
+							mip.data() + static_cast<size_t>(y)
+								* targetRect.width * bytesPerPixel,
+							static_cast<size_t>(targetRect.width) * bytesPerPixel);
+					}
+					levelRect = targetRect;
+				}
 			}
 			return true;
 		}
@@ -768,15 +977,19 @@ namespace fonthook::vectorfont
 			return RecreateManagedAtlasProperty(resource);
 		}
 
-		bool UploadManagedAtlasRegion(AtlasResource& resource, const AtlasRect& dirty)
+		bool UploadManagedAtlasRegions(AtlasResource& resource,
+			const std::vector<AtlasRect>& dirtyRects)
 		{
 			if (!resource.pixelData || !resource.pixelData->m_pucPixels
 				|| !resource.pixelData->m_puiOffsetInBytes)
 				return false;
+			if (dirtyRects.empty())
+				return true;
 			resource.mipLevels = std::min(resource.pixelData->m_uiMipmapLevels,
 				kMaximumAtlasMipLevels);
 			if (!resource.mipLevels
-				|| !GeneratePixelDataMipChain(*resource.pixelData, resource.pixelMode))
+				|| !GeneratePixelDataMipRegions(*resource.pixelData,
+					resource.pixelMode, dirtyRects))
 				return false;
 
 			NiTexture* texture = GetAtlasTexture(resource);
@@ -796,51 +1009,58 @@ namespace fonthook::vectorfont
 				d3dTexture->Release();
 				return false;
 			}
-
-			AtlasRect levelRect = AlignDirtyRectForMipChain(dirty,
-				resource.width, resource.height, resource.mipLevels);
-			const UInt32 bytesPerPixel = AtlasBytesPerPixel(resource.pixelMode);
-			UInt64 uploadedBytes = 0;
-			HRESULT result = D3D_OK;
 			for (UInt32 level = 0; level < resource.mipLevels; ++level)
 			{
 				D3DSURFACE_DESC description = {};
 				if (FAILED(d3dTexture->GetLevelDesc(level, &description))
 					|| description.Format != expectedFormat)
 				{
-					result = D3DERR_INVALIDCALL;
-					break;
+					d3dTexture->Release();
+					return false;
 				}
-				RECT rect = {
-					static_cast<LONG>(levelRect.x), static_cast<LONG>(levelRect.y),
-					static_cast<LONG>(levelRect.x + levelRect.width),
-					static_cast<LONG>(levelRect.y + levelRect.height)
-				};
-				D3DLOCKED_RECT locked = {};
-				result = d3dTexture->LockRect(level, &locked, &rect, 0);
-				if (FAILED(result))
-					break;
-				const UInt32 sourceWidth = resource.pixelData->m_puiWidth[level];
-				const UInt8* sourcePixels = resource.pixelData->m_pucPixels
-					+ resource.pixelData->m_puiOffsetInBytes[level];
-				for (UInt32 y = 0; y < levelRect.height; ++y)
+			}
+
+			const UInt32 bytesPerPixel = AtlasBytesPerPixel(resource.pixelMode);
+			UInt64 uploadedBytes = 0;
+			HRESULT result = D3D_OK;
+			for (const AtlasRect& dirty : dirtyRects)
+			{
+				AtlasRect levelRect = dirty;
+				for (UInt32 level = 0; level < resource.mipLevels; ++level)
 				{
-					const UInt8* source = sourcePixels
-						+ (static_cast<size_t>(levelRect.y + y) * sourceWidth
-							+ levelRect.x) * bytesPerPixel;
-					UInt8* destination = static_cast<UInt8*>(locked.pBits)
-						+ static_cast<size_t>(y) * locked.Pitch;
-					std::memcpy(destination, source,
-						static_cast<size_t>(levelRect.width) * bytesPerPixel);
+					RECT rect = {
+						static_cast<LONG>(levelRect.x), static_cast<LONG>(levelRect.y),
+						static_cast<LONG>(levelRect.x + levelRect.width),
+						static_cast<LONG>(levelRect.y + levelRect.height)
+					};
+					D3DLOCKED_RECT locked = {};
+					result = d3dTexture->LockRect(level, &locked, &rect, 0);
+					if (FAILED(result))
+						break;
+					const UInt32 sourceWidth = resource.pixelData->m_puiWidth[level];
+					const UInt8* sourcePixels = resource.pixelData->m_pucPixels
+						+ resource.pixelData->m_puiOffsetInBytes[level];
+					for (UInt32 y = 0; y < levelRect.height; ++y)
+					{
+						const UInt8* source = sourcePixels
+							+ (static_cast<size_t>(levelRect.y + y) * sourceWidth
+								+ levelRect.x) * bytesPerPixel;
+						UInt8* destination = static_cast<UInt8*>(locked.pBits)
+							+ static_cast<size_t>(y) * locked.Pitch;
+						std::memcpy(destination, source,
+							static_cast<size_t>(levelRect.width) * bytesPerPixel);
+					}
+					result = d3dTexture->UnlockRect(level);
+					if (FAILED(result))
+						break;
+					uploadedBytes += static_cast<UInt64>(levelRect.width)
+						* levelRect.height * bytesPerPixel;
+					levelRect = { levelRect.x / 2, levelRect.y / 2,
+						std::max<UInt32>(1, levelRect.width / 2),
+						std::max<UInt32>(1, levelRect.height / 2) };
 				}
-				result = d3dTexture->UnlockRect(level);
 				if (FAILED(result))
 					break;
-				uploadedBytes += static_cast<UInt64>(levelRect.width)
-					* levelRect.height * bytesPerPixel;
-				levelRect = { levelRect.x / 2, levelRect.y / 2,
-					std::max<UInt32>(1, levelRect.width / 2),
-					std::max<UInt32>(1, levelRect.height / 2) };
 			}
 			d3dTexture->Release();
 			if (SUCCEEDED(result))
@@ -848,6 +1068,8 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(FreeTypePerfCounter::AtlasUpload);
 				RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadBytes,
 					uploadedBytes);
+				RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadRect,
+					static_cast<UInt64>(dirtyRects.size()));
 			}
 			return SUCCEEDED(result);
 		}
@@ -928,8 +1150,11 @@ namespace fonthook::vectorfont
 		};
 
 		bool UploadDefaultAtlasRegions(AtlasResource& resource,
-			const std::vector<PendingAtlasPlacement>& pending, const AtlasRect& dirty)
+			const std::vector<PendingAtlasPlacement>& pending,
+			const std::vector<AtlasRect>& dirtyRects)
 		{
+			if (dirtyRects.empty())
+				return true;
 			IDirect3DTexture9* texture = QueryAtlasD3DTexture(resource);
 			if (!texture)
 				return false;
@@ -940,27 +1165,32 @@ namespace fonthook::vectorfont
 				texture->Release();
 				return false;
 			}
-			AtlasRect levelRect = AlignDirtyRectForMipChain(dirty,
-				resource.width, resource.height, resource.mipLevels);
-			RECT lockRect = {
-				static_cast<LONG>(levelRect.x), static_cast<LONG>(levelRect.y),
-				static_cast<LONG>(levelRect.x + levelRect.width),
-				static_cast<LONG>(levelRect.y + levelRect.height)
-			};
-			D3DLOCKED_RECT locked = {};
-			HRESULT result = texture->LockRect(0, &locked, &lockRect, 0);
 			const UInt32 bytesPerPixel = AtlasBytesPerPixel(resource.pixelMode);
 			std::vector<UInt8> current;
-			if (SUCCEEDED(result))
+			std::vector<UInt8> next;
+			UInt64 uploadedBytes = 0;
+			for (const AtlasRect& dirty : dirtyRects)
 			{
+				AtlasRect levelRect = dirty;
+				RECT lockRect = {
+					static_cast<LONG>(levelRect.x), static_cast<LONG>(levelRect.y),
+					static_cast<LONG>(levelRect.x + levelRect.width),
+					static_cast<LONG>(levelRect.y + levelRect.height)
+				};
+				D3DLOCKED_RECT locked = {};
+				HRESULT result = texture->LockRect(0, &locked, &lockRect, 0);
+				if (FAILED(result))
+				{
+					texture->Release();
+					return false;
+				}
 				for (const PendingAtlasPlacement& entry : pending)
 				{
-					if (!entry.bitmap)
+					if (!entry.bitmap || !AtlasRectContains(dirty, entry.rect))
 						continue;
 					WriteBitmapPixels(static_cast<UInt8*>(locked.pBits), locked.Pitch,
 						resource.pixelMode, *entry.bitmap, entry.rect,
 						entry.rect.x - levelRect.x, entry.rect.y - levelRect.y);
-
 				}
 				current.resize(static_cast<size_t>(levelRect.width)
 					* levelRect.height * bytesPerPixel);
@@ -973,49 +1203,6 @@ namespace fonthook::vectorfont
 						static_cast<size_t>(levelRect.width) * bytesPerPixel);
 				}
 				result = texture->UnlockRect(0);
-			}
-			if (FAILED(result))
-			{
-				texture->Release();
-				return false;
-			}
-
-			UInt64 uploadedBytes = static_cast<UInt64>(levelRect.width)
-				* levelRect.height * bytesPerPixel;
-			for (UInt32 level = 1; level < resource.mipLevels; ++level)
-			{
-				std::vector<UInt8> next;
-				if (!BuildNextMipLevel(current.data(), levelRect.width, levelRect.height,
-					static_cast<size_t>(levelRect.width) * bytesPerPixel,
-					resource.pixelMode, next))
-				{
-					texture->Release();
-					return false;
-				}
-				levelRect = { levelRect.x / 2, levelRect.y / 2,
-					std::max<UInt32>(1, levelRect.width / 2),
-					std::max<UInt32>(1, levelRect.height / 2) };
-				lockRect = {
-					static_cast<LONG>(levelRect.x), static_cast<LONG>(levelRect.y),
-					static_cast<LONG>(levelRect.x + levelRect.width),
-					static_cast<LONG>(levelRect.y + levelRect.height)
-				};
-				locked = {};
-				result = texture->LockRect(level, &locked, &lockRect, 0);
-				if (FAILED(result))
-				{
-					texture->Release();
-					return false;
-				}
-				for (UInt32 y = 0; y < levelRect.height; ++y)
-				{
-					std::memcpy(static_cast<UInt8*>(locked.pBits)
-						+ static_cast<size_t>(y) * locked.Pitch,
-						next.data() + static_cast<size_t>(y)
-							* levelRect.width * bytesPerPixel,
-						static_cast<size_t>(levelRect.width) * bytesPerPixel);
-				}
-				result = texture->UnlockRect(level);
 				if (FAILED(result))
 				{
 					texture->Release();
@@ -1023,12 +1210,56 @@ namespace fonthook::vectorfont
 				}
 				uploadedBytes += static_cast<UInt64>(levelRect.width)
 					* levelRect.height * bytesPerPixel;
-				current.swap(next);
+				for (UInt32 level = 1; level < resource.mipLevels; ++level)
+				{
+					if (!BuildNextMipLevel(current.data(), levelRect.width,
+						levelRect.height,
+						static_cast<size_t>(levelRect.width) * bytesPerPixel,
+						resource.pixelMode, next))
+					{
+						texture->Release();
+						return false;
+					}
+					levelRect = { levelRect.x / 2, levelRect.y / 2,
+						std::max<UInt32>(1, levelRect.width / 2),
+						std::max<UInt32>(1, levelRect.height / 2) };
+					lockRect = {
+						static_cast<LONG>(levelRect.x), static_cast<LONG>(levelRect.y),
+						static_cast<LONG>(levelRect.x + levelRect.width),
+						static_cast<LONG>(levelRect.y + levelRect.height)
+					};
+					locked = {};
+					result = texture->LockRect(level, &locked, &lockRect, 0);
+					if (FAILED(result))
+					{
+						texture->Release();
+						return false;
+					}
+					for (UInt32 y = 0; y < levelRect.height; ++y)
+					{
+						std::memcpy(static_cast<UInt8*>(locked.pBits)
+							+ static_cast<size_t>(y) * locked.Pitch,
+							next.data() + static_cast<size_t>(y)
+								* levelRect.width * bytesPerPixel,
+							static_cast<size_t>(levelRect.width) * bytesPerPixel);
+					}
+					result = texture->UnlockRect(level);
+					if (FAILED(result))
+					{
+						texture->Release();
+						return false;
+					}
+					uploadedBytes += static_cast<UInt64>(levelRect.width)
+						* levelRect.height * bytesPerPixel;
+					current.swap(next);
+				}
 			}
 			texture->Release();
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasUpload);
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadBytes,
 				uploadedBytes);
+			RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadRect,
+				static_cast<UInt64>(dirtyRects.size()));
 			return true;
 		}
 
@@ -1113,18 +1344,15 @@ namespace fonthook::vectorfont
 			candidate.placements = resource.placements;
 			candidate.residentBitmaps = resource.residentBitmaps;
 			candidate.compactSnapshot = resource.compactSnapshot;
-			UInt32 minX = candidate.width;
-			UInt32 minY = candidate.height;
-			UInt32 maxX = 0;
-			UInt32 maxY = 0;
+			thread_local std::vector<AtlasRect> rawDirtyRects;
+			thread_local std::vector<AtlasRect> dirtyRects;
+			rawDirtyRects.clear();
+			rawDirtyRects.reserve(pending.size());
 			for (const PendingAtlasPlacement& entry : pending)
 			{
 				candidate.placements[entry.bitmap->cacheId] = entry.rect;
 				candidate.residentBitmaps[entry.bitmap->cacheId] = entry.bitmap;
-				minX = std::min(minX, entry.rect.x);
-				minY = std::min(minY, entry.rect.y);
-				maxX = std::max(maxX, entry.rect.x + entry.rect.width);
-				maxY = std::max(maxY, entry.rect.y + entry.rect.height);
+				rawDirtyRects.push_back(entry.rect);
 			}
 			const bool needsRebuild = !resource.property
 				|| resource.width != candidate.width || resource.height != candidate.height;
@@ -1137,8 +1365,9 @@ namespace fonthook::vectorfont
 				CommitDefaultCandidate(resource, candidate);
 				return true;
 			}
-			const AtlasRect dirty = { minX, minY, maxX - minX, maxY - minY };
-			if (UploadDefaultAtlasRegions(resource, pending, dirty))
+			BuildMergedAtlasDirtyRects(rawDirtyRects, resource.width, resource.height,
+				resource.mipLevels, resource.pixelMode, dirtyRects);
+			if (UploadDefaultAtlasRegions(resource, pending, dirtyRects))
 			{
 				resource.cursorX = candidate.cursorX;
 				resource.cursorY = candidate.cursorY;
@@ -1182,11 +1411,10 @@ namespace fonthook::vectorfont
 				if (!GrowManagedAtlas(resource))
 					return false;
 			}
-			UInt32 minX = resource.width;
-			UInt32 minY = resource.height;
-			UInt32 maxX = 0;
-			UInt32 maxY = 0;
-			bool changed = false;
+			thread_local std::vector<AtlasRect> rawDirtyRects;
+			thread_local std::vector<AtlasRect> dirtyRects;
+			rawDirtyRects.clear();
+			rawDirtyRects.reserve(bitmaps.size());
 			for (const auto& bitmap : bitmaps)
 			{
 				if (!bitmap || resource.placements.count(bitmap->cacheId))
@@ -1197,18 +1425,15 @@ namespace fonthook::vectorfont
 				resource.placements[bitmap->cacheId] = rect;
 				resource.residentBitmaps[bitmap->cacheId] = bitmap;
 				CopyBitmapToAtlas(resource, *bitmap, rect);
-				minX = std::min(minX, rect.x);
-				minY = std::min(minY, rect.y);
-				maxX = std::max(maxX, rect.x + rect.width);
-				maxY = std::max(maxY, rect.y + rect.height);
-				changed = true;
+				rawDirtyRects.push_back(rect);
 			}
-			if (!changed)
+			if (rawDirtyRects.empty())
 				return true;
 			if (!resource.property)
 				return RecreateManagedAtlasProperty(resource);
-			const AtlasRect dirty = { minX, minY, maxX - minX, maxY - minY };
-			if (UploadManagedAtlasRegion(resource, dirty))
+			BuildMergedAtlasDirtyRects(rawDirtyRects, resource.width, resource.height,
+				resource.mipLevels, resource.pixelMode, dirtyRects);
+			if (UploadManagedAtlasRegions(resource, dirtyRects))
 				return true;
 			return RecreateManagedAtlasProperty(resource);
 		}

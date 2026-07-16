@@ -258,16 +258,30 @@ namespace fonthook::vectorfont
 			failure = PendingQuadBuildFailure::None;
 			const FontConfig& config = GetRuntimeConfig(runtime);
 			thread_local std::vector<PreparedGlyph> prepared;
+			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
+			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
 			prepared.clear();
 			prepared.reserve(glyphs.size());
+			bitmapRequests.clear();
+			bitmapRequests.reserve(glyphs.size() * 3);
 			for (const AtlasGlyphInstance& instance : glyphs)
 			{
 				PreparedGlyph glyph;
 				glyph.instance = &instance;
 				glyph.baselineOffset = GetGlyphBaselineOffset(
 					runtime, instance.glyph.byteClass);
-				glyph.fill = GetGlyphBitmap(runtime, instance.glyph,
-					GlyphMaskType::Fill, rasterScale);
+				bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Fill, 0 });
+				if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
+					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Glow, 0 });
+				if (included[static_cast<size_t>(AtlasLayer::Outline)] && config.outline.enabled)
+					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Outline, 0 });
+				prepared.push_back(std::move(glyph));
+			}
+			GetGlyphBitmaps(runtime, bitmapRequests, rasterScale, bitmapResults);
+			size_t bitmapIndex = 0;
+			for (PreparedGlyph& glyph : prepared)
+			{
+				glyph.fill = bitmapResults[bitmapIndex++];
 				if (!glyph.fill)
 				{
 					failure = PendingQuadBuildFailure::Fill;
@@ -275,8 +289,7 @@ namespace fonthook::vectorfont
 				}
 				if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
 				{
-					glyph.glow = GetGlyphBitmap(runtime, instance.glyph,
-						GlyphMaskType::Glow, rasterScale);
+					glyph.glow = bitmapResults[bitmapIndex++];
 					if (!glyph.glow)
 					{
 						failure = PendingQuadBuildFailure::Glow;
@@ -285,15 +298,13 @@ namespace fonthook::vectorfont
 				}
 				if (included[static_cast<size_t>(AtlasLayer::Outline)] && config.outline.enabled)
 				{
-					glyph.outline = GetGlyphBitmap(runtime, instance.glyph,
-						GlyphMaskType::Outline, rasterScale);
+					glyph.outline = bitmapResults[bitmapIndex++];
 					if (!glyph.outline)
 					{
 						failure = PendingQuadBuildFailure::Outline;
 						return false;
 					}
 				}
-				prepared.push_back(std::move(glyph));
 			}
 
 			// Tile text does not consistently depth-test effect triangles. Submit each
@@ -390,8 +401,12 @@ namespace fonthook::vectorfont
 				float baselineOffset = 0.0f;
 			};
 			thread_local std::vector<PreparedShaderGlyph> prepared;
+			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
+			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
 			prepared.clear();
 			prepared.reserve(glyphs.size());
+			bitmapRequests.clear();
+			bitmapRequests.reserve(glyphs.size() * 2);
 			for (const AtlasGlyphInstance& instance : glyphs)
 			{
 				PreparedShaderGlyph glyph;
@@ -399,20 +414,28 @@ namespace fonthook::vectorfont
 				glyph.baselineOffset = GetGlyphBaselineOffset(
 					runtime, instance.glyph.byteClass);
 				if (needsGrayFill)
+					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Fill, 0 });
+				if (needsSdf)
+					bitmapRequests.push_back({ &instance.glyph,
+						GlyphMaskType::DistanceField, sdfSpread });
+				prepared.push_back(std::move(glyph));
+			}
+			GetGlyphBitmaps(runtime, bitmapRequests, rasterScale, bitmapResults);
+			size_t bitmapIndex = 0;
+			for (PreparedShaderGlyph& glyph : prepared)
+			{
+				if (needsGrayFill)
 				{
-					glyph.fill = GetGlyphBitmap(runtime, instance.glyph,
-						GlyphMaskType::Fill, rasterScale);
+					glyph.fill = bitmapResults[bitmapIndex++];
 					if (!glyph.fill)
 						return false;
 				}
 				if (needsSdf)
 				{
-					glyph.sdf = GetGlyphBitmap(runtime, instance.glyph,
-						GlyphMaskType::DistanceField, rasterScale, sdfSpread);
+					glyph.sdf = bitmapResults[bitmapIndex++];
 					if (!glyph.sdf)
 						return false;
 				}
-				prepared.push_back(std::move(glyph));
 			}
 
 			auto addRange = [&](AtlasLayer layer, bool enabled, bool useSdf,

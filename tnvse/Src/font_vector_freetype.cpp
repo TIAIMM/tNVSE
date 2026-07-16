@@ -172,6 +172,16 @@ namespace fonthook
 		return vectorfont::FindActiveRuntime(apFont) != nullptr;
 	}
 
+	bool GetFreeTypeLayoutIdentity(const Font* apFont, UInt64& arIdentity)
+	{
+		arIdentity = 0;
+		const vectorfont::RuntimeFont* runtime = vectorfont::FindActiveRuntime(apFont);
+		if (!runtime || !runtime->config)
+			return false;
+		arIdentity = runtime->config->layoutHash;
+		return true;
+	}
+
 	FontLetter* EnsureFreeTypeDoubleByteMetrics(Font* apFont, UInt32 encodedCode)
 	{
 		vectorfont::RuntimeFont* runtime = vectorfont::FindActiveRuntime(apFont);

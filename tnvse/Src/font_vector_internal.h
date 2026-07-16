@@ -26,11 +26,16 @@ namespace fonthook::vectorfont
 		BitmapDiskReadBytes,
 		BitmapDiskWriteBytes,
 		BitmapRasterized,
+		BitmapBatchRequest,
+		BitmapBatchDedupe,
+		PreparedTextHit,
+		PreparedTextMiss,
 		AtlasHit,
 		AtlasCreated,
 		AtlasGrown,
 		AtlasUpload,
 		AtlasUploadBytes,
+		AtlasUploadRect,
 		BatchHit,
 		BatchMiss,
 		ShaderEffectBatch,
@@ -174,6 +179,13 @@ namespace fonthook::vectorfont
 		std::vector<UInt8> alpha;
 	};
 
+	struct GlyphBitmapRequest
+	{
+		const VectorEncodedGlyph* glyph = nullptr;
+		GlyphMaskType maskType = GlyphMaskType::Fill;
+		UInt32 sdfSpread = 0;
+	};
+
 	struct A8DrawRange
 	{
 		UInt32 firstVertex = 0;
@@ -256,6 +268,9 @@ namespace fonthook::vectorfont
 	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph, GlyphMaskType aeMaskType, float afRasterScale,
 		UInt32 auiSdfSpread = 0);
+	void GetGlyphBitmaps(RuntimeFont& arRuntime,
+		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
+		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults);
 	void FlushGlyphBitmapDiskCache();
 	bool UsesSdfFill(const FontConfig& arConfig);
 	bool HasSdfEffects(const FontConfig& arConfig);

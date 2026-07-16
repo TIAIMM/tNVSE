@@ -6,6 +6,14 @@
 #include "native_calls.h"
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <list>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace fonthook
@@ -212,6 +220,315 @@ namespace fonthook
 		PrepTextScratch* m_scratch = nullptr;
 	};
 
+	struct PreparedTextCacheLookupKey
+	{
+		const Font* font = nullptr;
+		const FontData* fontData = nullptr;
+		UInt64 layoutIdentity = 0;
+		UInt64 metricSignature = 0;
+		UInt64 iconSignature = 0;
+		UInt32 codePage = 0;
+		int width = 0;
+		int height = 0;
+		int lineStart = 0;
+		int lineEnd = 0;
+		char lineSeparator = 0;
+		bool terminal = false;
+		std::string_view source;
+		std::string_view resolved;
+	};
+
+	struct PreparedTextCacheKey
+	{
+		const Font* font = nullptr;
+		const FontData* fontData = nullptr;
+		UInt64 layoutIdentity = 0;
+		UInt64 metricSignature = 0;
+		UInt64 iconSignature = 0;
+		UInt32 codePage = 0;
+		int width = 0;
+		int height = 0;
+		int lineStart = 0;
+		int lineEnd = 0;
+		char lineSeparator = 0;
+		bool terminal = false;
+		std::string source;
+		std::string resolved;
+	};
+
+	template <class Key>
+	static size_t HashPreparedTextCacheKey(const Key& key)
+	{
+		UInt64 hash = 1469598103934665603ull;
+		auto addBytes = [&](const void* data, size_t size)
+		{
+			const UInt8* bytes = static_cast<const UInt8*>(data);
+			for (size_t index = 0; index < size; ++index)
+			{
+				hash ^= bytes[index];
+				hash *= 1099511628211ull;
+			}
+		};
+		const uintptr_t font = reinterpret_cast<uintptr_t>(key.font);
+		const uintptr_t fontData = reinterpret_cast<uintptr_t>(key.fontData);
+		addBytes(&font, sizeof(font));
+		addBytes(&fontData, sizeof(fontData));
+		addBytes(&key.layoutIdentity, sizeof(key.layoutIdentity));
+		addBytes(&key.metricSignature, sizeof(key.metricSignature));
+		addBytes(&key.iconSignature, sizeof(key.iconSignature));
+		addBytes(&key.codePage, sizeof(key.codePage));
+		addBytes(&key.width, sizeof(key.width));
+		addBytes(&key.height, sizeof(key.height));
+		addBytes(&key.lineStart, sizeof(key.lineStart));
+		addBytes(&key.lineEnd, sizeof(key.lineEnd));
+		addBytes(&key.lineSeparator, sizeof(key.lineSeparator));
+		addBytes(&key.terminal, sizeof(key.terminal));
+		addBytes(key.source.data(), key.source.size());
+		const UInt8 separator = 0xFF;
+		addBytes(&separator, sizeof(separator));
+		addBytes(key.resolved.data(), key.resolved.size());
+		return static_cast<size_t>(hash ^ (hash >> 32));
+	}
+
+	template <class Left, class Right>
+	static bool EqualPreparedTextCacheKey(const Left& left, const Right& right)
+	{
+		return left.font == right.font && left.fontData == right.fontData
+			&& left.layoutIdentity == right.layoutIdentity
+			&& left.metricSignature == right.metricSignature
+			&& left.iconSignature == right.iconSignature
+			&& left.codePage == right.codePage && left.width == right.width
+			&& left.height == right.height && left.lineStart == right.lineStart
+			&& left.lineEnd == right.lineEnd
+			&& left.lineSeparator == right.lineSeparator
+			&& left.terminal == right.terminal && left.source == right.source
+			&& left.resolved == right.resolved;
+	}
+
+	struct PreparedTextCacheKeyHash
+	{
+		using is_transparent = void;
+
+		size_t operator()(const PreparedTextCacheKey& key) const
+		{
+			return HashPreparedTextCacheKey(key);
+		}
+
+		size_t operator()(const PreparedTextCacheLookupKey& key) const
+		{
+			return HashPreparedTextCacheKey(key);
+		}
+	};
+
+	struct PreparedTextCacheKeyEqual
+	{
+		using is_transparent = void;
+
+		bool operator()(const PreparedTextCacheKey& left,
+			const PreparedTextCacheKey& right) const
+		{
+			return EqualPreparedTextCacheKey(left, right);
+		}
+
+		bool operator()(const PreparedTextCacheKey& left,
+			const PreparedTextCacheLookupKey& right) const
+		{
+			return EqualPreparedTextCacheKey(left, right);
+		}
+
+		bool operator()(const PreparedTextCacheLookupKey& left,
+			const PreparedTextCacheKey& right) const
+		{
+			return EqualPreparedTextCacheKey(left, right);
+		}
+	};
+
+	struct PreparedTextCacheValue
+	{
+		std::string text;
+		std::vector<int> lineWidths;
+		int width = 0;
+		int height = 0;
+		int lineStart = 0;
+		int lineEnd = 0;
+		int charCount = 0;
+	};
+
+	struct PreparedTextCacheEntry
+	{
+		std::shared_ptr<const PreparedTextCacheValue> value;
+		size_t bytes = 0;
+		std::list<PreparedTextCacheKey>::iterator lru;
+	};
+
+	struct PreparedTextCacheState
+	{
+		std::mutex mutex;
+		std::unordered_map<PreparedTextCacheKey, PreparedTextCacheEntry,
+			PreparedTextCacheKeyHash, PreparedTextCacheKeyEqual> entries;
+		std::list<PreparedTextCacheKey> lru;
+		size_t bytes = 0;
+	};
+
+	static PreparedTextCacheState& GetPreparedTextCacheState()
+	{
+		static PreparedTextCacheState state;
+		return state;
+	}
+
+	static size_t GetPreparedTextCacheLimit()
+	{
+		return static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB)
+			* 1024u * 1024u / 16u;
+	}
+
+	static UInt64 HashPreparedTextBytes(UInt64 hash, const void* data, size_t size)
+	{
+		const UInt8* bytes = static_cast<const UInt8*>(data);
+		for (size_t index = 0; index < size; ++index)
+		{
+			hash ^= bytes[index];
+			hash *= 1099511628211ull;
+		}
+		return hash;
+	}
+
+	static UInt64 GetPreparedTextMetricSignature(const FontEx* font,
+		float linePadding)
+	{
+		UInt64 hash = 1469598103934665603ull;
+		hash = HashPreparedTextBytes(hash, &linePadding, sizeof(linePadding));
+		if (!font || !font->pFontData)
+			return hash;
+		hash = HashPreparedTextBytes(hash, &font->pFontData->fBaseLine,
+			sizeof(font->pFontData->fBaseLine));
+		hash = HashPreparedTextBytes(hash, &font->fFontHeight,
+			sizeof(font->fFontHeight));
+		const FontLetter& space = font->pFontData->pFontLetters[kSpaceChar];
+		hash = HashPreparedTextBytes(hash, &space, sizeof(space));
+		return hash;
+	}
+
+	static UInt64 GetPreparedTextIconSignature(const FontEx* font)
+	{
+		UInt64 hash = 1469598103934665603ull;
+		const UInt32 count = font ? font->ButtonIcons.uiSize : 0;
+		hash = HashPreparedTextBytes(hash, &count, sizeof(count));
+		if (font && font->ButtonIcons.pBuffer)
+		{
+			for (UInt32 index = 0; index < count; ++index)
+			{
+				const ButtonIcon& icon = font->ButtonIcons.pBuffer[index];
+				hash = HashPreparedTextBytes(hash, &icon.fWidth, sizeof(icon.fWidth));
+				hash = HashPreparedTextBytes(hash, &icon.fSpacing, sizeof(icon.fSpacing));
+			}
+		}
+		return hash;
+	}
+
+	static void ApplyPreparedTextCacheValue(const PreparedTextCacheValue& value,
+		Font::TextData& data)
+	{
+		data.xNewText.Set(value.text.c_str(), 0);
+		data.iWidth = value.width;
+		data.iHeight = value.height;
+		data.iLineStart = value.lineStart;
+		data.iLineEnd = value.lineEnd;
+		data.iCharCount = value.charCount;
+		data.xLineWidths.RemoveAll();
+		for (int width : value.lineWidths)
+		{
+			int mutableWidth = width;
+			data.xLineWidths.AddTail(mutableWidth);
+		}
+	}
+
+	static std::shared_ptr<const PreparedTextCacheValue> FindPreparedTextCacheValue(
+		const PreparedTextCacheLookupKey& lookup)
+	{
+		PreparedTextCacheState& state = GetPreparedTextCacheState();
+		std::lock_guard<std::mutex> lock(state.mutex);
+		const auto found = state.entries.find(lookup);
+		if (found == state.entries.end())
+		{
+			RecordFreeTypePreparedTextCacheResult(false);
+			return nullptr;
+		}
+		state.lru.splice(state.lru.begin(), state.lru, found->second.lru);
+		RecordFreeTypePreparedTextCacheResult(true);
+		return found->second.value;
+	}
+
+	static std::shared_ptr<const PreparedTextCacheValue> CapturePreparedTextCacheValue(
+		const Font::TextData& data)
+	{
+		auto value = std::make_shared<PreparedTextCacheValue>();
+		value->text = data.xNewText.pString ? data.xNewText.pString : "";
+		value->width = data.iWidth;
+		value->height = data.iHeight;
+		value->lineStart = data.iLineStart;
+		value->lineEnd = data.iLineEnd;
+		value->charCount = data.iCharCount;
+		const BSSimpleList<int>* line = &data.xLineWidths;
+		for (;;)
+		{
+			value->lineWidths.push_back(line->m_item);
+			line = line->m_pkNext;
+			if (!line)
+				break;
+		}
+		return value;
+	}
+
+	static void StorePreparedTextCacheValue(const PreparedTextCacheLookupKey& lookup,
+		const std::shared_ptr<const PreparedTextCacheValue>& value)
+	{
+		if (!value)
+			return;
+		PreparedTextCacheKey key = {
+			lookup.font, lookup.fontData, lookup.layoutIdentity,
+			lookup.metricSignature, lookup.iconSignature, lookup.codePage,
+			lookup.width, lookup.height, lookup.lineStart, lookup.lineEnd,
+			lookup.lineSeparator, lookup.terminal,
+			std::string(lookup.source), std::string(lookup.resolved)
+		};
+		const size_t bytes = sizeof(PreparedTextCacheEntry)
+			+ sizeof(PreparedTextCacheValue) + sizeof(PreparedTextCacheKey) * 2
+			+ (key.source.size() + key.resolved.size()) * 2
+			+ value->text.size() + value->lineWidths.size() * sizeof(int);
+		const size_t limit = GetPreparedTextCacheLimit();
+		if (!limit || bytes > limit)
+			return;
+
+		PreparedTextCacheState& state = GetPreparedTextCacheState();
+		std::lock_guard<std::mutex> lock(state.mutex);
+		const auto existing = state.entries.find(key);
+		if (existing != state.entries.end())
+		{
+			state.lru.splice(state.lru.begin(), state.lru, existing->second.lru);
+			return;
+		}
+		state.lru.push_front(key);
+		const auto [inserted, success] = state.entries.emplace(std::move(key),
+			PreparedTextCacheEntry{ value, bytes, state.lru.begin() });
+		if (!success)
+		{
+			state.lru.pop_front();
+			return;
+		}
+		state.bytes += bytes;
+		while (state.bytes > limit && !state.lru.empty())
+		{
+			const auto oldest = state.entries.find(state.lru.back());
+			if (oldest != state.entries.end())
+			{
+				state.bytes -= oldest->second.bytes;
+				state.entries.erase(oldest);
+			}
+			state.lru.pop_back();
+		}
+	}
+
 	static void BuildFreeTypeClusterAdvanceMap(FontEx* font, const char* text,
 		UInt32 length, FreeTypeClusterAdvanceMap& result)
 	{
@@ -289,6 +606,31 @@ namespace fonthook
 			axData->iHeight = kSentinelMax;
 		if (axData->iLineEnd <= 0)
 			axData->iLineEnd = kSentinelMax;
+		const UInt32 originalTextLen = static_cast<UInt32>(strlen(apOrigString));
+		const float lineSpacingAdjust = FontManager::GetLinePadding(font->iFontNum);
+		UInt64 layoutIdentity = 0;
+		const bool cacheable = GetFreeTypeLayoutIdentity(font, layoutIdentity);
+		PreparedTextCacheLookupKey cacheLookup;
+		if (cacheable)
+		{
+			cacheLookup = {
+				font, font->pFontData, layoutIdentity,
+				GetPreparedTextMetricSignature(font, lineSpacingAdjust),
+				GetPreparedTextIconSignature(font), g_usingWinEncoding,
+				axData->iWidth, axData->iHeight, axData->iLineStart,
+				axData->iLineEnd, axData->cLineSep, isTerminal,
+				std::string_view(apOrigString, originalTextLen), {}
+			};
+			if (!std::memchr(apOrigString, '&', originalTextLen))
+			{
+				if (const std::shared_ptr<const PreparedTextCacheValue> cached =
+					FindPreparedTextCacheValue(cacheLookup))
+				{
+					ApplyPreparedTextCacheValue(*cached, *axData);
+					return;
+				}
+			}
+		}
 
 		auto* extraGlyphs = GetExtraGlyphs(font->iFontNum);
 		UInt32 origConsumed = 0;
@@ -296,14 +638,13 @@ namespace fonthook
 		// Cache frequently accessed font data to avoid repeated pointer chasing
 		auto* pFontLetters = font->pFontData->pFontLetters;
 		float fBaseLine = font->pFontData->fBaseLine;
-		float lineSpacingAdjust = FontManager::GetLinePadding(font->iFontNum);
 		float lineHeight = fBaseLine + lineSpacingAdjust;
 		LayoutWrapState wrapState;
 		UInt32 softWrapPosition = 0;
 		int maxLineWidth = 0;
 		float totalTextHeight = pFontLetters[kSpaceChar].fHeight;
 		int currentLineCount = 1;
-		UInt32 sourceTextLen = strlen(apOrigString);
+		UInt32 sourceTextLen = originalTextLen;
 		int maxAllowedLines = axData->iLineEnd;
 
 		thread_local PrepTextScratchPool scratchPool;
@@ -317,10 +658,21 @@ namespace fonthook
 		UInt32 textBufferSize = sourceTextLen + 4;
 
 		// ---- Pass 1: Process escape sequences (&variable;) ----
-		ProcessEscapeSequences(scratch.original, scratch.processed,
+		const bool processedEscapes = ProcessEscapeSequences(scratch.original, scratch.processed,
 			textBufferSize, processedTextLen, origConsumed, sourceTextLen, font, axData);
 		processedOriginalText = scratch.original.data();
 		dynamicTextBuffer = scratch.processed.data();
+		if (cacheable && processedEscapes)
+		{
+			cacheLookup.iconSignature = GetPreparedTextIconSignature(font);
+			cacheLookup.resolved = std::string_view(processedOriginalText, sourceTextLen);
+			if (const std::shared_ptr<const PreparedTextCacheValue> cached =
+				FindPreparedTextCacheValue(cacheLookup))
+			{
+				ApplyPreparedTextCacheValue(*cached, *axData);
+				return;
+			}
+		}
 
 		UInt32 buttonIconIndex = 0;
 		FreeTypeClusterAdvanceMap& freeTypeAdvances = scratch.clusterAdvances;
@@ -566,6 +918,8 @@ namespace fonthook
 		axData->iLineStart = 0;
 		axData->iLineEnd = currentLineCount;
 		axData->iCharCount = isTerminal ? origConsumed : processedTextLen;
+		if (cacheable)
+			StorePreparedTextCacheValue(cacheLookup, CapturePreparedTextCacheValue(*axData));
 	}
 
 	// ==================== FontEx::PrepTextForTerminal ====================

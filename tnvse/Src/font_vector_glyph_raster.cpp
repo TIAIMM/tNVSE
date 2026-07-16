@@ -404,7 +404,8 @@ namespace fonthook::vectorfont
 
 		std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(FreeTypeState& state,
 			RuntimeFont& runtime,
-			const VectorEncodedGlyph& glyph, GlyphMaskType maskType,
+			const VectorEncodedGlyph& glyph, const ResolvedGlyph& resolved,
+			GlyphMaskType maskType,
 			float rasterScale, const BitmapCacheKey& key)
 		{
 			auto bitmap = std::make_shared<GlyphBitmap>();
@@ -414,10 +415,7 @@ namespace fonthook::vectorfont
 			bitmap->maskType = maskType;
 			bitmap->sdfSpread = key.sdfSpread;
 			bitmap->strokeWidth26Dot6 = key.strokeWidth26Dot6;
-			RuntimeRole& role = runtime.roles[static_cast<size_t>(glyph.byteClass)];
-			ResolvedGlyph resolved;
-			if (!ResolveVectorGlyph(runtime, glyph, resolved))
-				return nullptr;
+			RuntimeRole& role = *resolved.role;
 			if (!ConfigureRuntimeFace(*resolved.runtimeFace, *role.style, rasterScale, true))
 				return nullptr;
 
@@ -657,20 +655,21 @@ namespace fonthook::vectorfont
 		return mesh;
 	}
 
-	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& runtime,
-		const VectorEncodedGlyph& glyph, GlyphMaskType maskType, float rasterScale,
-		UInt32 sdfSpread)
+	static float SanitizeBitmapRasterScale(float rasterScale)
 	{
-		FreeTypeState& state = State();
-		std::lock_guard<std::recursive_mutex> lock(state.mutex);
-		const float safeScale = std::isfinite(rasterScale)
-			&& rasterScale >= 0.1f && rasterScale <= 10.0f ? rasterScale : 1.0f;
-		ResolvedGlyph resolved;
+		return std::isfinite(rasterScale) && rasterScale >= 0.1f
+			&& rasterScale <= 10.0f ? rasterScale : 1.0f;
+	}
+
+	static bool ResolveBitmapCacheKey(RuntimeFont& runtime,
+		const VectorEncodedGlyph& glyph, GlyphMaskType maskType, float safeScale,
+		UInt32 sdfSpread, ResolvedGlyph& resolved, BitmapCacheKey& key)
+	{
 		if (!ResolveVectorGlyph(runtime, glyph, resolved) || !resolved.role
-			|| !resolved.runtimeFace || !resolved.runtimeFace->face
-			|| !resolved.runtimeFace->file)
+			|| !resolved.role->style || !resolved.runtimeFace
+			|| !resolved.runtimeFace->face || !resolved.runtimeFace->file)
 		{
-			return nullptr;
+			return false;
 		}
 		const ByteStyle& style = *resolved.role->style;
 		const int effectiveWidth = std::clamp(static_cast<int>(std::lround(
@@ -688,12 +687,10 @@ namespace fonthook::vectorfont
 			&& sdfSpread >= 2 && sdfSpread <= 32
 			? static_cast<UInt8>(sdfSpread) : 0;
 		if (maskType == GlyphMaskType::DistanceField && !resolvedSdfSpread)
-			return nullptr;
+			return false;
 		const float slant = std::tan(style.slantDegrees
 			* 3.14159265358979323846f / 180.0f);
-		const SInt32 slant16Dot16 = static_cast<SInt32>(std::lround(
-			slant * kFixedScale));
-		const BitmapCacheKey key = {
+		key = {
 			resolved.runtimeFace->file->contentHash,
 			static_cast<SInt32>(resolved.runtimeFace->face->face_index),
 			resolved.glyphIndex,
@@ -701,10 +698,18 @@ namespace fonthook::vectorfont
 			static_cast<UInt16>(effectiveHeight),
 			embolden,
 			strokeWidth,
-			slant16Dot16,
+			static_cast<SInt32>(std::lround(slant * kFixedScale)),
 			resolvedSdfSpread,
 			static_cast<UInt8>(maskType)
 		};
+		return true;
+	}
+
+	static std::shared_ptr<const GlyphBitmap> GetGlyphBitmapLocked(
+		FreeTypeState& state, RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
+		const ResolvedGlyph& resolved, GlyphMaskType maskType, float safeScale,
+		const BitmapCacheKey& key)
+	{
 		auto existing = state.bitmapCache.find(key);
 		if (existing != state.bitmapCache.end())
 		{
@@ -769,7 +774,7 @@ namespace fonthook::vectorfont
 
 		RecordFreeTypePerf(FreeTypePerfCounter::BitmapRasterized);
 		std::shared_ptr<GlyphBitmap> bitmap =
-			BuildGlyphBitmap(state, runtime, glyph, maskType, safeScale, key);
+			BuildGlyphBitmap(state, runtime, glyph, resolved, maskType, safeScale, key);
 		if (!bitmap)
 			return nullptr;
 		if (persistentProfile
@@ -786,5 +791,108 @@ namespace fonthook::vectorfont
 		state.bitmapCacheBytes += bytes;
 		TrimBitmapCache(state);
 		return bitmap;
+	}
+
+	struct BitmapBatchDedupeSlot
+	{
+		BitmapCacheKey key;
+		size_t resultIndex = 0;
+		UInt32 generation = 0;
+	};
+
+	struct BitmapBatchDedupeScratch
+	{
+		std::vector<BitmapBatchDedupeSlot> slots;
+		UInt32 generation = 0;
+
+		void Prepare(size_t requestCount)
+		{
+			size_t required = 8;
+			const size_t target = std::max<size_t>(8, requestCount * 2);
+			while (required < target)
+				required <<= 1;
+			if (slots.size() < required)
+				slots.resize(required);
+			if (++generation == 0)
+			{
+				for (BitmapBatchDedupeSlot& slot : slots)
+					slot.generation = 0;
+				generation = 1;
+			}
+		}
+	};
+
+	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& runtime,
+		const VectorEncodedGlyph& glyph, GlyphMaskType maskType, float rasterScale,
+		UInt32 sdfSpread)
+	{
+		FreeTypeState& state = State();
+		std::lock_guard<std::recursive_mutex> lock(state.mutex);
+		const float safeScale = SanitizeBitmapRasterScale(rasterScale);
+		ResolvedGlyph resolved;
+		BitmapCacheKey key;
+		if (!ResolveBitmapCacheKey(runtime, glyph, maskType, safeScale,
+			sdfSpread, resolved, key))
+		{
+			return nullptr;
+		}
+		return GetGlyphBitmapLocked(state, runtime, glyph, resolved,
+			maskType, safeScale, key);
+	}
+
+	void GetGlyphBitmaps(RuntimeFont& runtime,
+		const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
+		std::vector<std::shared_ptr<const GlyphBitmap>>& results)
+	{
+		results.assign(requests.size(), nullptr);
+		if (requests.empty())
+			return;
+
+		FreeTypeState& state = State();
+		std::lock_guard<std::recursive_mutex> lock(state.mutex);
+		const float safeScale = SanitizeBitmapRasterScale(rasterScale);
+		thread_local BitmapBatchDedupeScratch scratch;
+		scratch.Prepare(requests.size());
+		const size_t slotMask = scratch.slots.size() - 1;
+		UInt64 duplicateCount = 0;
+		for (size_t requestIndex = 0; requestIndex < requests.size(); ++requestIndex)
+		{
+			const GlyphBitmapRequest& request = requests[requestIndex];
+			if (!request.glyph)
+				continue;
+			ResolvedGlyph resolved;
+			BitmapCacheKey key;
+			if (!ResolveBitmapCacheKey(runtime, *request.glyph, request.maskType,
+				safeScale, request.sdfSpread, resolved, key))
+			{
+				continue;
+			}
+
+			size_t slotIndex = BitmapCacheKeyHash{}(key) & slotMask;
+			for (;;)
+			{
+				BitmapBatchDedupeSlot& slot = scratch.slots[slotIndex];
+				if (slot.generation != scratch.generation)
+				{
+					slot.generation = scratch.generation;
+					slot.key = key;
+					slot.resultIndex = requestIndex;
+					results[requestIndex] = GetGlyphBitmapLocked(state, runtime,
+						*request.glyph, resolved, request.maskType, safeScale, key);
+					break;
+				}
+				if (slot.key == key)
+				{
+					++duplicateCount;
+					results[requestIndex] = results[slot.resultIndex];
+					break;
+				}
+				slotIndex = (slotIndex + 1) & slotMask;
+			}
+		}
+		RecordFreeTypePerf(FreeTypePerfCounter::BitmapBatchRequest,
+			static_cast<UInt64>(requests.size()));
+		if (duplicateCount)
+			RecordFreeTypePerf(FreeTypePerfCounter::BitmapBatchDedupe, duplicateCount);
 	}
 }

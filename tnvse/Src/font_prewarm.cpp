@@ -770,6 +770,12 @@ namespace fonthook::vectorfont
 		bitmaps.reserve(kMaximumGlyphsPerBatch * 3);
 		std::unordered_set<UInt64> unique;
 		unique.reserve(kMaximumGlyphsPerBatch * 2);
+		std::vector<VectorEncodedGlyph> requestedGlyphs;
+		requestedGlyphs.reserve(kMaximumGlyphsPerBatch);
+		std::vector<GlyphBitmapRequest> bitmapRequests;
+		bitmapRequests.reserve(kMaximumGlyphsPerBatch * 4);
+		std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
+		bitmapResults.reserve(kMaximumGlyphsPerBatch * 4);
 
 		// Restore every valid snapshot before creating the progress window. This
 		// keeps the normal cache-hit startup path silent and ensures a mixed hit/
@@ -866,15 +872,20 @@ namespace fonthook::vectorfont
 					|| UsesSdfFill(*config))
 				&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
 			UInt32 sdfSpread = 0;
-			const bool needsSdf = shaderEffects && NeedsSdfMask(*config);
+			const bool configuredNeedsSdf = NeedsSdfMask(*config);
+			const bool needsSdf = shaderEffects && configuredNeedsSdf;
 			if (needsSdf && !ResolveSdfSpread(*config, rasterScale, sdfSpread))
 				shaderEffects = false;
 			const bool resolvedSdfFill = shaderEffects && UsesSdfFill(*config);
+			const bool prewarmSdfMasks = shaderEffects && configuredNeedsSdf;
+			const bool hasCommonDoubleByteLimit = HasCommonDoubleByteLimit(job);
 			// The shader path reuses an SDF fill as the exact source for a hard
 			// shadow. Do not prewarm a second grayscale mask that runtime rendering
 			// will never request. A codepage job must also cover every SDF fill,
 			// while effect-only SDF masks may retain the common-character limit.
 			const bool needsGrayFill = !resolvedSdfFill;
+			requestedGlyphs.clear();
+			bitmapRequests.clear();
 			UInt32 candidates = 0;
 			UInt32 glyphs = 0;
 			bool exhausted = false;
@@ -894,7 +905,7 @@ namespace fonthook::vectorfont
 					continue;
 				if (length == 2)
 				{
-					if (HasCommonDoubleByteLimit(job)
+					if (hasCommonDoubleByteLimit
 						&& job.validDoubleByteCount >= kCommonDoubleByteLimit)
 					{
 						exhausted = true;
@@ -902,34 +913,27 @@ namespace fonthook::vectorfont
 					}
 					++job.validDoubleByteCount;
 				}
+				requestedGlyphs.push_back(glyph);
+				const VectorEncodedGlyph* requestedGlyph = &requestedGlyphs.back();
 
 				if (needsGrayFill)
-				{
-					AddBitmap(bitmaps, unique, GetGlyphBitmap(
-						*runtime, glyph, GlyphMaskType::Fill, rasterScale));
-				}
-				const bool prewarmSdf = shaderEffects && NeedsSdfMask(*config)
+					bitmapRequests.push_back({ requestedGlyph, GlyphMaskType::Fill, 0 });
+				const bool prewarmSdf = prewarmSdfMasks
 					&& (resolvedSdfFill || length == 1 || job.mode == FontPrewarmMode::Common
 						|| job.validDoubleByteCount <= kCommonDoubleByteLimit);
 				if (prewarmSdf)
-				{
-					AddBitmap(bitmaps, unique, GetGlyphBitmap(
-						*runtime, glyph, GlyphMaskType::DistanceField,
-						rasterScale, sdfSpread));
-				}
+					bitmapRequests.push_back({ requestedGlyph,
+						GlyphMaskType::DistanceField, sdfSpread });
 				if (config->glow.enabled && !shaderEffects)
-				{
-					AddBitmap(bitmaps, unique, GetGlyphBitmap(
-						*runtime, glyph, GlyphMaskType::Glow, rasterScale));
-				}
+					bitmapRequests.push_back({ requestedGlyph, GlyphMaskType::Glow, 0 });
 				if (config->outline.enabled && !shaderEffects)
-				{
-					AddBitmap(bitmaps, unique, GetGlyphBitmap(
-						*runtime, glyph, GlyphMaskType::Outline, rasterScale));
-				}
+					bitmapRequests.push_back({ requestedGlyph, GlyphMaskType::Outline, 0 });
 				++glyphs;
 				++job.rasterizedGlyphCount;
 			}
+			GetGlyphBitmaps(*runtime, bitmapRequests, rasterScale, bitmapResults);
+			for (const std::shared_ptr<const GlyphBitmap>& bitmap : bitmapResults)
+				AddBitmap(bitmaps, unique, bitmap);
 
 			if (!bitmaps.empty() && !PrewarmGlyphAtlas(*runtime, bitmaps, rasterScale))
 			{

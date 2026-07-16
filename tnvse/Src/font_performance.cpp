@@ -32,7 +32,7 @@ namespace fonthook::vectorfont
 		for (size_t i = 0; i < values.size(); ++i)
 			values[i] = s_counters[i].exchange(0, std::memory_order_relaxed);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: layout_hit=%llu miss=%llu hb=%llu kerning_hit=%llu miss=%llu bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu batch_hit=%llu miss=%llu shader_batches=%llu passes=%llu estimated_samples=%llu cpu_effect_masks_avoided=%llu",
+			"tnvse_freetype_perf: layout_hit=%llu miss=%llu hb=%llu kerning_hit=%llu miss=%llu bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu batch_hit=%llu miss=%llu shader_batches=%llu passes=%llu estimated_samples=%llu cpu_effect_masks_avoided=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::LayoutHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::LayoutMiss)],
 			values[static_cast<size_t>(FreeTypePerfCounter::HarfBuzzShape)],
@@ -46,11 +46,16 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskReadBytes)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskWriteBytes)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapRasterized)],
+			values[static_cast<size_t>(FreeTypePerfCounter::BitmapBatchRequest)],
+			values[static_cast<size_t>(FreeTypePerfCounter::BitmapBatchDedupe)],
+			values[static_cast<size_t>(FreeTypePerfCounter::PreparedTextHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::PreparedTextMiss)],
 			values[static_cast<size_t>(FreeTypePerfCounter::AtlasHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::AtlasCreated)],
 			values[static_cast<size_t>(FreeTypePerfCounter::AtlasGrown)],
 			values[static_cast<size_t>(FreeTypePerfCounter::AtlasUpload)],
 			values[static_cast<size_t>(FreeTypePerfCounter::AtlasUploadBytes)],
+			values[static_cast<size_t>(FreeTypePerfCounter::AtlasUploadRect)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BatchHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BatchMiss)],
 			values[static_cast<size_t>(FreeTypePerfCounter::ShaderEffectBatch)],
@@ -62,6 +67,13 @@ namespace fonthook::vectorfont
 
 namespace fonthook
 {
+	void RecordFreeTypePreparedTextCacheResult(bool hit)
+	{
+		vectorfont::RecordFreeTypePerf(hit
+			? vectorfont::FreeTypePerfCounter::PreparedTextHit
+			: vectorfont::FreeTypePerfCounter::PreparedTextMiss);
+	}
+
 	void PumpFreeTypeFontPerformance()
 	{
 		vectorfont::ReportFreeTypePerf();
