@@ -171,6 +171,7 @@ namespace fonthook
 		void RestoreDefaultGameImeContext(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);
 		void EnsureConfiguredImeOpen(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);
 		void UpdateGameImeAssociation();
+		void PumpImeStatusWatchdog();
 		void RefreshImeStatus(HWND hwnd, HKL expectedLayout = nullptr);
 		bool IsConfiguredImeLayout(HWND hwnd, HKL expectedLayout = nullptr);
 		bool IsNativeImeAsciiGuardActive();

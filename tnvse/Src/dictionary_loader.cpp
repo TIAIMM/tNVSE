@@ -540,6 +540,8 @@ namespace fonthook
 		s_idIndex.clear();
 		s_positiveCache.clear();
 		s_negativeCache.clear();
+		s_positiveCacheOrder.clear();
+		s_negativeCacheOrder.clear();
 		s_registeredAutoKeys.clear();
 		s_dictionaryLoaded = false;
 		ResetFuzzyTextConfig();

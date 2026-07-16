@@ -3,6 +3,7 @@
 #include "load_config.h"
 
 #include <array>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -19,6 +20,7 @@ namespace fonthook
 
 		std::array<DeferredLogLine, kDeferredLogLineCount> s_deferredLogLines = {};
 		std::mutex s_deferredLogMutex;
+		std::atomic<bool> s_deferredLogPending = false;
 		size_t s_deferredLogCount = 0;
 		size_t s_droppedLogCount = 0;
 		bool s_firstLogFlush = true;
@@ -44,15 +46,19 @@ namespace fonthook
 		{
 			++s_droppedLogCount;
 		}
+		s_deferredLogPending.store(true, std::memory_order_release);
 	}
 
 	void FlushFreeTypeFontDebugLog()
 	{
+		if (!s_deferredLogPending.load(std::memory_order_acquire))
+			return;
 		std::lock_guard<std::mutex> lock(s_deferredLogMutex);
 		if (!g_bEnableFreeTypeFontRenderingLog)
 		{
 			s_deferredLogCount = 0;
 			s_droppedLogCount = 0;
+			s_deferredLogPending.store(false, std::memory_order_release);
 			return;
 		}
 		if (!s_deferredLogCount && !s_droppedLogCount)
@@ -75,5 +81,6 @@ namespace fonthook
 		}
 		s_deferredLogCount = 0;
 		s_droppedLogCount = 0;
+		s_deferredLogPending.store(false, std::memory_order_release);
 	}
 }

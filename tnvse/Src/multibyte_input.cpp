@@ -80,22 +80,10 @@ namespace fonthook
 				TryInstallWindowProc();
 
 			if (s_hooksInstalled)
-				TryInstallJipTextInputHook();
-
-			if (s_hooksInstalled)
-				TryInstallStewieTweaksInputHooks();
-
-			if (s_hooksInstalled)
 				ProcessStewieMenuSearchPendingStateSync();
 
 			if (s_hooksInstalled && s_window)
-				UpdateGameImeAssociation();
-
-			if (s_hooksInstalled && s_window && g_bMultibyteInputCompositionPreview)
-			{
-				RefreshImeStatus(s_window);
-				UpdateCandidateOverlay();
-			}
+				PumpImeStatusWatchdog();
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitGame)
 		{

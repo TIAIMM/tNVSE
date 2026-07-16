@@ -21,6 +21,7 @@
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -42,7 +43,11 @@ namespace fonthook::vectorfont
 		constexpr UInt32 kRendererBatchRenderShapeSlot = 105;
 		constexpr UInt32 kRendererRenderShapeSlot = 107;
 		constexpr UInt32 kRendererRenderShapeAltSlot = 109;
-		constexpr UInt32 kCopiedTriShapeVtableEntries = 64;
+		// The retail NiTriShape vtable has slots 0..60; the class-name data begins
+		// immediately at slot 61. Copy exactly the real table, including the two
+		// immediate-render entries at 55/56, without treating adjacent RTTI data as
+		// callable entries.
+		constexpr UInt32 kCopiedTriShapeVtableEntries = 61;
 		constexpr UInt32 kShaderRefreshMessage = 0;
 		constexpr UInt32 kTileRenderPassCallSite = 0xB64FD1;
 		constexpr UInt32 kStockTileRenderPassImmediately = 0xB994F0;
@@ -57,7 +62,7 @@ namespace fonthook::vectorfont
 		using RenderImmediateFn = void(__thiscall*)(NiTriShape*, NiRenderer*);
 		using RenderShapeFn = void(__thiscall*)(NiDX9Renderer*, NiTriShape*);
 		using DeleteThisFn = void(__thiscall*)(NiTriShape*);
-		using TileRenderPassFn = void(__cdecl*)(BSShaderProperty::RenderPass*,
+		using TileRenderPassFn = SInt32(__cdecl*)(BSShaderProperty::RenderPass*,
 			UInt32, bool, bool, bool);
 
 		NiD3DPixelShaderPtr s_a8Shader;
@@ -105,6 +110,13 @@ namespace fonthook::vectorfont
 		constexpr UInt32 kMaximumShadowTraceShapes = 256;
 		constexpr UInt32 kMaximumRenderTraceDepth = 8;
 
+		struct A8CompiledRange
+		{
+			A8DrawRange range;
+			std::array<float, 16> constants = {};
+			bool staticSmoothSampling = false;
+		};
+
 		struct A8ShapeMetadata
 		{
 			UInt32 fontId = 0;
@@ -115,7 +127,11 @@ namespace fonthook::vectorfont
 			UInt32 indexCount = 0;
 			A8ShapeColorContract colorContract;
 			A8EffectShapeConfig effects;
+			std::vector<A8CompiledRange> compiledRanges;
+			bool hasShadowRange = false;
 		};
+		using A8ShapeMetadataPtr = std::shared_ptr<const A8ShapeMetadata>;
+		thread_local A8ShapeMetadataPtr s_currentA8Metadata;
 
 		struct A8RenderTraceContext
 		{
@@ -133,7 +149,7 @@ namespace fonthook::vectorfont
 		};
 
 		std::mutex s_diagnosticsMutex;
-		std::unordered_map<const NiTriShape*, A8ShapeMetadata> s_shapeMetadata;
+		std::unordered_map<const NiTriShape*, A8ShapeMetadataPtr> s_shapeMetadata;
 		std::unordered_set<const NiTriShape*> s_loggedShapes;
 		std::unordered_set<const NiTriShape*> s_tracedShadowShapes;
 		std::deque<const NiTriShape*> s_tracedShadowShapeOrder;
@@ -143,13 +159,25 @@ namespace fonthook::vectorfont
 			s_renderTraceStack = {};
 		thread_local UInt32 s_renderTraceDepth = 0;
 
+		A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape)
+		{
+			if (!shape)
+				return {};
+			std::lock_guard<std::mutex> lock(s_diagnosticsMutex);
+			const auto found = s_shapeMetadata.find(shape);
+			return found != s_shapeMetadata.end() ? found->second : A8ShapeMetadataPtr{};
+		}
+
+		A8ShapeMetadataPtr ResolveRenderMetadata(const NiTriShape* shape)
+		{
+			if (shape && shape == s_currentA8Shape && s_currentA8Metadata)
+				return s_currentA8Metadata;
+			return FindA8ShapeMetadata(shape);
+		}
+
 		bool HasShadowRange(const A8ShapeMetadata& metadata)
 		{
-			return std::any_of(metadata.effects.ranges.begin(),
-				metadata.effects.ranges.end(), [](const A8DrawRange& range)
-				{
-					return range.layer == 0 && range.vertexCount && range.primitiveCount;
-				});
+			return metadata.hasShadowRange;
 		}
 
 		A8RenderTraceContext* CurrentRenderTrace()
@@ -180,9 +208,13 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		void BeginA8RenderTrace(NiTriShape* shape, const char* entryPoint)
+		void BeginA8RenderTrace(NiTriShape* shape, const char* entryPoint,
+			const A8ShapeMetadataPtr& metadata)
 		{
-			if (s_renderTraceDepth >= kMaximumRenderTraceDepth)
+			// Trace bookkeeping is diagnostic-only. Keep the entire render hot path
+			// free of serial increments and the diagnostics mutex when logging is off.
+			if (!g_bEnableFreeTypeFontRenderingLog
+				|| s_renderTraceDepth >= kMaximumRenderTraceDepth)
 				return;
 
 			A8RenderTraceContext& trace = s_renderTraceStack[s_renderTraceDepth++];
@@ -191,16 +223,9 @@ namespace fonthook::vectorfont
 			trace.shape = shape;
 			trace.entryPoint = entryPoint;
 
-			A8ShapeMetadata metadata;
-			bool haveMetadata = false;
+			const bool haveMetadata = static_cast<bool>(metadata);
 			{
 				std::lock_guard<std::mutex> lock(s_diagnosticsMutex);
-				auto found = s_shapeMetadata.find(shape);
-				if (found != s_shapeMetadata.end())
-				{
-					metadata = found->second;
-					haveMetadata = true;
-				}
 				bool inherited = false;
 				if (s_renderTraceDepth > 1)
 				{
@@ -208,8 +233,7 @@ namespace fonthook::vectorfont
 						s_renderTraceStack[s_renderTraceDepth - 2];
 					inherited = parent.detailed && parent.shape == shape;
 				}
-				const bool newlyTraced = g_bEnableFreeTypeFontRenderingLog
-					&& haveMetadata && HasShadowRange(metadata)
+				const bool newlyTraced = haveMetadata && HasShadowRange(*metadata)
 					&& s_tracedShadowShapes.insert(shape).second;
 				trace.detailed = inherited || newlyTraced;
 				if (newlyTraced)
@@ -231,9 +255,13 @@ namespace fonthook::vectorfont
 					static_cast<unsigned long long>(trace.serial), s_renderTraceDepth,
 					entryPoint ? entryPoint : "unknown", shape,
 					shape ? shape->m_pkParent : nullptr, haveMetadata ? 1 : 0,
-					metadata.fontId, metadata.glyphCount, metadata.quadCount,
-					metadata.vertexCount, metadata.primitiveCount, metadata.indexCount,
-					static_cast<UInt32>(metadata.effects.ranges.size()));
+					metadata ? metadata->fontId : 0,
+					metadata ? metadata->glyphCount : 0,
+					metadata ? metadata->quadCount : 0,
+					metadata ? metadata->vertexCount : 0,
+					metadata ? metadata->primitiveCount : 0,
+					metadata ? metadata->indexCount : 0,
+					metadata ? static_cast<UInt32>(metadata->effects.ranges.size()) : 0);
 			}
 		}
 
@@ -268,14 +296,13 @@ namespace fonthook::vectorfont
 				*fontId = 0;
 			if (!shape)
 				return false;
-			std::lock_guard<std::mutex> lock(s_diagnosticsMutex);
-			const auto found = s_shapeMetadata.find(shape);
-			if (found == s_shapeMetadata.end())
+			const A8ShapeMetadataPtr metadata = ResolveRenderMetadata(shape);
+			if (!metadata)
 				return false;
 			if (hasShadow)
-				*hasShadow = HasShadowRange(found->second);
+				*hasShadow = HasShadowRange(*metadata);
 			if (fontId)
-				*fontId = found->second.fontId;
+				*fontId = metadata->fontId;
 			return true;
 		}
 
@@ -290,18 +317,20 @@ namespace fonthook::vectorfont
 				kTileRenderPassCallSite + 5 + displacement);
 		}
 
-		void __cdecl A8TileRenderPass(BSShaderProperty::RenderPass* pass,
+		SInt32 __cdecl A8TileRenderPass(BSShaderProperty::RenderPass* pass,
 			UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupDrawmode)
 		{
 			if (!s_originalTileRenderPass)
-				return;
+				return 0;
 
 			NiTriShape* shape = pass
 				? reinterpret_cast<NiTriShape*>(pass->pGeometry) : nullptr;
-			bool hasShadow = false;
-			UInt32 fontId = 0;
-			const bool tracked = HasA8ShapeMetadata(shape, &hasShadow, &fontId);
+			const A8ShapeMetadataPtr metadata = ResolveRenderMetadata(shape);
+			const bool tracked = static_cast<bool>(metadata);
+			const bool hasShadow = metadata && HasShadowRange(*metadata);
+			const UInt32 fontId = metadata ? metadata->fontId : 0;
 			NiTriShape* previousShape = s_currentA8Shape;
+			A8ShapeMetadataPtr previousMetadata = s_currentA8Metadata;
 			if (tracked)
 			{
 				// Startup menus can reach the Tile accumulator before NVSE's
@@ -319,11 +348,13 @@ namespace fonthook::vectorfont
 						"tnvse_freetype_font: Tile accumulator range route hit shape=%p font=%u pass=%u depth=%u",
 						shape, fontId, currentPass, s_a8RenderDepth);
 				}
-				BeginA8RenderTrace(shape, "tile-render-pass");
+				BeginA8RenderTrace(shape, "tile-render-pass", metadata);
 				++s_a8RenderDepth;
 				s_currentA8Shape = shape;
+				s_currentA8Metadata = metadata;
 			}
-			s_originalTileRenderPass(pass, currentPass, testAlpha, blendAlpha,
+			const SInt32 result = s_originalTileRenderPass(
+				pass, currentPass, testAlpha, blendAlpha,
 				setupDrawmode);
 			if (tracked)
 			{
@@ -340,9 +371,11 @@ namespace fonthook::vectorfont
 						s_rangeBridgeAvailable ? 1 : 0);
 				}
 				s_currentA8Shape = previousShape;
+				s_currentA8Metadata = std::move(previousMetadata);
 				--s_a8RenderDepth;
 				EndA8RenderTrace(shape, "tile-render-pass");
 			}
+			return result;
 		}
 
 		bool HookTileRenderPass()
@@ -535,12 +568,12 @@ namespace fonthook::vectorfont
 		void LogA8DrawDiagnostics(IDirect3DDevice9* device,
 			D3DPRIMITIVETYPE primitiveType, INT baseVertexIndex,
 			UINT minimumVertexIndex, UINT numberOfVertices,
-			UINT startIndex, UINT primitiveCount)
+			UINT startIndex, UINT primitiveCount,
+			const A8ShapeMetadata& metadata)
 		{
 			if (!g_bEnableFreeTypeFontRenderingLog || !device || !s_currentA8Shape)
 				return;
 
-			A8ShapeMetadata metadata;
 			{
 				std::lock_guard<std::mutex> lock(s_diagnosticsMutex);
 				if (s_diagnosticLogCount >= kMaximumDiagnosticShapes
@@ -549,9 +582,6 @@ namespace fonthook::vectorfont
 					return;
 				}
 				++s_diagnosticLogCount;
-				auto found = s_shapeMetadata.find(s_currentA8Shape);
-				if (found != s_shapeMetadata.end())
-					metadata = found->second;
 			}
 
 			IDirect3DPixelShader9* pixelShader = nullptr;
@@ -868,11 +898,23 @@ namespace fonthook::vectorfont
 
 		class ScopedA8RenderState
 		{
+			enum SamplerIndex : size_t
+			{
+				kMinFilterSampler,
+				kMagFilterSampler,
+				kMipFilterSampler,
+				kAddressUSampler,
+				kAddressVSampler,
+				kMaxMipLevelSampler,
+				kMipLodBiasSampler
+			};
+
 		public:
 			explicit ScopedA8RenderState(IDirect3DDevice9* device) : m_device(device)
 			{
 				NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-				m_cachedRenderState = renderer && renderer->GetD3DDevice() == device
+				m_cachedRenderState = g_bEnableFreeTypeFontRenderingLog
+					&& renderer && renderer->GetD3DDevice() == device
 					? renderer->m_pkRenderState : nullptr;
 				if (!m_device)
 				{
@@ -950,6 +992,20 @@ namespace fonthook::vectorfont
 					LogStateIsolationFailure("get-separate-alpha-state-failed");
 					return;
 				}
+				for (size_t index = 0; index < m_samplerSettings.size(); ++index)
+					m_currentSamplerValues[index] = m_samplerSettings[index].value;
+				m_currentTileColor = m_originalTileColor;
+				m_currentConstants = m_originalConstants;
+				m_currentPixelShader = m_originalPixelShader;
+				m_currentTexture = m_originalTexture;
+				m_currentAlphaTest = m_originalAlphaTest;
+				m_currentZWrite = m_originalZWrite;
+				m_currentColorWrite = m_originalColorWrite;
+				m_currentSeparateAlphaBlend = m_originalSeparateAlphaBlend;
+				m_currentSourceAlphaBlend = m_originalSourceAlphaBlend;
+				m_currentDestinationAlphaBlend = m_originalDestinationAlphaBlend;
+				m_currentAlphaBlendOperation = m_originalAlphaBlendOperation;
+				m_currentStencilWriteMask = m_originalStencilWriteMask;
 				m_valid = true;
 			}
 
@@ -1049,19 +1105,40 @@ namespace fonthook::vectorfont
 				// still restored. RGB blend, depth-test, scissor, stencil test/ref and
 				// stream state remain exactly as established by the original Tile pass.
 				m_modified = true;
-				return SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MINFILTER,
-					D3DTEXF_POINT))
-					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MAGFILTER,
-						D3DTEXF_POINT))
-					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MIPFILTER,
-						D3DTEXF_NONE))
-					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MAXMIPLEVEL, 0))
-					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MIPMAPLODBIAS, 0))
-					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_ADDRESSU,
-						D3DTADDRESS_CLAMP))
-					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_ADDRESSV,
-						D3DTADDRESS_CLAMP))
-					&& SUCCEEDED(m_device->SetPixelShader(shader));
+				return SetSamplerStateIfChanged(kMinFilterSampler, D3DTEXF_POINT)
+					&& SetSamplerStateIfChanged(kMagFilterSampler, D3DTEXF_POINT)
+					&& SetSamplerStateIfChanged(kMipFilterSampler, D3DTEXF_NONE)
+					&& SetSamplerStateIfChanged(kMaxMipLevelSampler, 0)
+					&& SetSamplerStateIfChanged(kMipLodBiasSampler, 0)
+					&& SetSamplerStateIfChanged(kAddressUSampler, D3DTADDRESS_CLAMP)
+					&& SetSamplerStateIfChanged(kAddressVSampler, D3DTADDRESS_CLAMP)
+					&& SetPixelShaderIfChanged(shader);
+			}
+
+			bool SetShader(IDirect3DPixelShader9* shader)
+			{
+				if (!m_valid || !shader)
+					return false;
+				m_modified = true;
+				return SetPixelShaderIfChanged(shader);
+			}
+
+			HRESULT SetConstants(const float* constants)
+			{
+				if (!m_valid || !constants)
+					return D3DERR_INVALIDCALL;
+				m_modified = true;
+				if (std::memcmp(m_currentConstants.data(), constants,
+					sizeof(m_currentConstants)) == 0)
+				{
+					return D3D_OK;
+				}
+				const HRESULT result = m_device->SetPixelShaderConstantF(1,
+					constants, 4);
+				if (SUCCEEDED(result))
+					std::copy(constants, constants + m_currentConstants.size(),
+						m_currentConstants.begin());
+				return result;
 			}
 
 			bool SetPassState(bool effectPass, bool customCoverageShader)
@@ -1090,33 +1167,43 @@ namespace fonthook::vectorfont
 				const DWORD alphaTest = customCoverageShader
 					? FALSE : (effectPass ? FALSE : m_originalAlphaTest);
 				m_modified = true;
-				const bool tileColorReady = SUCCEEDED(m_device->SetPixelShaderConstantF(
-					0, passTileColor.data(), 1));
+				bool tileColorReady = true;
+				if (std::memcmp(m_currentTileColor.data(), passTileColor.data(),
+					sizeof(m_currentTileColor)) != 0)
+				{
+					tileColorReady = SUCCEEDED(m_device->SetPixelShaderConstantF(
+						0, passTileColor.data(), 1));
+					if (tileColorReady)
+						m_currentTileColor = passTileColor;
+				}
 				bool alphaStateReady = true;
 				if (m_supportsSeparateAlphaBlend)
 				{
-					alphaStateReady = SUCCEEDED(m_device->SetRenderState(
-						D3DRS_SRCBLENDALPHA,
-						writeEffectAlpha ? D3DBLEND_ONE : m_originalSourceAlphaBlend))
-						&& SUCCEEDED(m_device->SetRenderState(D3DRS_DESTBLENDALPHA,
+					alphaStateReady = SetRenderStateIfChanged(D3DRS_SRCBLENDALPHA,
+						writeEffectAlpha ? D3DBLEND_ONE : m_originalSourceAlphaBlend,
+						m_currentSourceAlphaBlend)
+						&& SetRenderStateIfChanged(D3DRS_DESTBLENDALPHA,
 							writeEffectAlpha ? D3DBLEND_INVSRCALPHA
-								: m_originalDestinationAlphaBlend))
-						&& SUCCEEDED(m_device->SetRenderState(D3DRS_BLENDOPALPHA,
+								: m_originalDestinationAlphaBlend,
+							m_currentDestinationAlphaBlend)
+						&& SetRenderStateIfChanged(D3DRS_BLENDOPALPHA,
 							writeEffectAlpha ? D3DBLENDOP_ADD
-								: m_originalAlphaBlendOperation))
-						&& SUCCEEDED(m_device->SetRenderState(
-							D3DRS_SEPARATEALPHABLENDENABLE,
-							writeEffectAlpha ? TRUE : m_originalSeparateAlphaBlend));
+								: m_originalAlphaBlendOperation,
+							m_currentAlphaBlendOperation)
+						&& SetRenderStateIfChanged(D3DRS_SEPARATEALPHABLENDENABLE,
+							writeEffectAlpha ? TRUE : m_originalSeparateAlphaBlend,
+							m_currentSeparateAlphaBlend);
 				}
 				return tileColorReady && alphaStateReady
-					&& SUCCEEDED(m_device->SetRenderState(D3DRS_ALPHATESTENABLE,
-					alphaTest))
-					&& SUCCEEDED(m_device->SetRenderState(D3DRS_ZWRITEENABLE,
-						effectPass ? FALSE : m_originalZWrite))
-					&& SUCCEEDED(m_device->SetRenderState(D3DRS_COLORWRITEENABLE,
-						colorWrite))
-					&& SUCCEEDED(m_device->SetRenderState(D3DRS_STENCILWRITEMASK,
-						effectPass ? 0 : m_originalStencilWriteMask));
+					&& SetRenderStateIfChanged(D3DRS_ALPHATESTENABLE, alphaTest,
+						m_currentAlphaTest)
+					&& SetRenderStateIfChanged(D3DRS_ZWRITEENABLE,
+						effectPass ? FALSE : m_originalZWrite, m_currentZWrite)
+					&& SetRenderStateIfChanged(D3DRS_COLORWRITEENABLE, colorWrite,
+						m_currentColorWrite)
+					&& SetRenderStateIfChanged(D3DRS_STENCILWRITEMASK,
+						effectPass ? 0 : m_originalStencilWriteMask,
+						m_currentStencilWriteMask);
 			}
 
 			bool SetSampling(bool linear, bool mipmapped)
@@ -1127,16 +1214,9 @@ namespace fonthook::vectorfont
 				const DWORD mipFilter = linear && mipmapped
 					? D3DTEXF_LINEAR : D3DTEXF_NONE;
 				m_modified = true;
-				return SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MINFILTER,
-					filter))
-					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MAGFILTER,
-						filter))
-					&& SUCCEEDED(m_device->SetSamplerState(0, D3DSAMP_MIPFILTER,
-						mipFilter))
-					&& SUCCEEDED(m_device->SetSamplerState(0,
-						D3DSAMP_MAXMIPLEVEL, 0))
-					&& SUCCEEDED(m_device->SetSamplerState(0,
-						D3DSAMP_MIPMAPLODBIAS, 0));
+				return SetSamplerStateIfChanged(kMinFilterSampler, filter)
+					&& SetSamplerStateIfChanged(kMagFilterSampler, filter)
+					&& SetSamplerStateIfChanged(kMipFilterSampler, mipFilter);
 			}
 
 			bool SetTexture(IDirect3DBaseTexture9* texture)
@@ -1144,10 +1224,50 @@ namespace fonthook::vectorfont
 				if (!m_valid || !texture)
 					return false;
 				m_modified = true;
-				return SUCCEEDED(m_device->SetTexture(0, texture));
+				if (m_currentTexture == texture)
+					return true;
+				if (FAILED(m_device->SetTexture(0, texture)))
+					return false;
+				m_currentTexture = texture;
+				return true;
 			}
 
 		private:
+			bool SetSamplerStateIfChanged(SamplerIndex sampler, DWORD value)
+			{
+				const size_t index = static_cast<size_t>(sampler);
+				if (m_currentSamplerValues[index] == value)
+					return true;
+				if (FAILED(m_device->SetSamplerState(0,
+					m_samplerSettings[index].state, value)))
+				{
+					return false;
+				}
+				m_currentSamplerValues[index] = value;
+				return true;
+			}
+
+			bool SetRenderStateIfChanged(D3DRENDERSTATETYPE state, DWORD value,
+				DWORD& current)
+			{
+				if (current == value)
+					return true;
+				if (FAILED(m_device->SetRenderState(state, value)))
+					return false;
+				current = value;
+				return true;
+			}
+
+			bool SetPixelShaderIfChanged(IDirect3DPixelShader9* shader)
+			{
+				if (m_currentPixelShader == shader)
+					return true;
+				if (FAILED(m_device->SetPixelShader(shader)))
+					return false;
+				m_currentPixelShader = shader;
+				return true;
+			}
+
 			void VerifyRestoredRenderState(D3DRENDERSTATETYPE state,
 				DWORD expected, const char* reason)
 			{
@@ -1177,6 +1297,11 @@ namespace fonthook::vectorfont
 				{ D3DSAMP_MAXMIPLEVEL, 0 },
 				{ D3DSAMP_MIPMAPLODBIAS, 0 }
 			}};
+			std::array<DWORD, 7> m_currentSamplerValues = {};
+			std::array<float, 16> m_currentConstants = {};
+			std::array<float, 4> m_currentTileColor = {};
+			IDirect3DPixelShader9* m_currentPixelShader = nullptr;
+			IDirect3DBaseTexture9* m_currentTexture = nullptr;
 			UInt32 m_originalAlphaTest = FALSE;
 			UInt32 m_originalAlphaBlend = FALSE;
 			UInt32 m_originalZWrite = FALSE;
@@ -1188,6 +1313,16 @@ namespace fonthook::vectorfont
 			UInt32 m_originalDestinationAlphaBlend = D3DBLEND_ZERO;
 			UInt32 m_originalAlphaBlendOperation = D3DBLENDOP_ADD;
 			UInt32 m_originalStencilWriteMask = 0xFFFFFFFFu;
+			DWORD m_currentAlphaTest = FALSE;
+			DWORD m_currentZWrite = FALSE;
+			DWORD m_currentColorWrite = D3DCOLORWRITEENABLE_RED
+				| D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE
+				| D3DCOLORWRITEENABLE_ALPHA;
+			DWORD m_currentSeparateAlphaBlend = FALSE;
+			DWORD m_currentSourceAlphaBlend = D3DBLEND_ONE;
+			DWORD m_currentDestinationAlphaBlend = D3DBLEND_ZERO;
+			DWORD m_currentAlphaBlendOperation = D3DBLENDOP_ADD;
+			DWORD m_currentStencilWriteMask = 0xFFFFFFFFu;
 			bool m_supportsSeparateAlphaBlend = false;
 			bool m_valid = false;
 			bool m_modified = false;
@@ -1211,17 +1346,11 @@ namespace fonthook::vectorfont
 			A8RenderTraceContext* currentTrace = CurrentRenderTrace();
 			const UInt32 drawCall = currentTrace ? currentTrace->drawCalls : 0;
 			const bool detailedTrace = IsDetailedShadowTraceActive();
-			A8ShapeMetadata metadata;
-			bool haveMetadata = false;
-			{
-				std::lock_guard<std::mutex> lock(s_diagnosticsMutex);
-				auto found = s_shapeMetadata.find(s_currentA8Shape);
-				if (found != s_shapeMetadata.end())
-				{
-					metadata = found->second;
-					haveMetadata = true;
-				}
-			}
+			static const A8ShapeMetadata emptyMetadata;
+			const A8ShapeMetadata* metadataPtr = s_currentA8Metadata.get();
+			const bool haveMetadata = metadataPtr != nullptr;
+			const A8ShapeMetadata& metadata = metadataPtr
+				? *metadataPtr : emptyMetadata;
 			const bool useOriginalShader = haveMetadata
 				&& metadata.effects.useOriginalShader;
 			if (!useOriginalShader && !HaveA8Shader())
@@ -1242,7 +1371,8 @@ namespace fonthook::vectorfont
 			}
 
 			LogA8DrawDiagnostics(device, primitiveType, baseVertexIndex,
-				minimumVertexIndex, numberOfVertices, startIndex, primitiveCount);
+				minimumVertexIndex, numberOfVertices, startIndex, primitiveCount,
+				metadata);
 			const bool validContract = haveMetadata
 				&& metadata.colorContract.abiVersion
 					== A8ShapeColorContract::kTileUniformColorAbi;
@@ -1309,7 +1439,8 @@ namespace fonthook::vectorfont
 					minimumVertexIndex, numberOfVertices, startIndex, primitiveCount);
 			}
 			const bool haveRanges = validContract && metadata.effects.enabled
-				&& !metadata.effects.ranges.empty();
+				&& !metadata.compiledRanges.empty();
+			const bool scaledFillSampling = NeedsScaledFillSampling(s_currentA8Shape);
 			bool useShaderEffects = !useOriginalShader && haveRanges
 				&& metadata.effects.shaderEffects
 				&& HaveEffectShader(metadata.effects.quality);
@@ -1354,7 +1485,7 @@ namespace fonthook::vectorfont
 					0.0f, 0.0f, 0.0f, 0.0f
 				};
 				const HRESULT constantResult = useOriginalShader ? D3D_OK
-					: device->SetPixelShaderConstantF(1, constants, 4);
+					: state.SetConstants(constants);
 				if (FAILED(constantResult))
 				{
 					UpdateCurrentRenderTraces([](A8RenderTraceContext& trace)
@@ -1370,8 +1501,8 @@ namespace fonthook::vectorfont
 				}
 				if (!state.SetPassState(false, !useOriginalShader)
 					|| (!useOriginalShader
-						&& !state.SetSampling(NeedsScaledFillSampling(s_currentA8Shape),
-							NeedsScaledFillSampling(s_currentA8Shape))))
+						&& !state.SetSampling(scaledFillSampling,
+							scaledFillSampling)))
 				{
 					UpdateCurrentRenderTraces([](A8RenderTraceContext& trace)
 						{ ++trace.fillFailures; });
@@ -1421,24 +1552,16 @@ namespace fonthook::vectorfont
 							++trace.effectFailures;
 					});
 			};
-			for (const A8DrawRange& range : metadata.effects.ranges)
+			thread_local std::vector<IDirect3DBaseTexture9*> resolvedPageTextures;
+			thread_local std::vector<UInt8> resolvedPageFlags;
+			resolvedPageTextures.assign(metadata.effects.atlasTextures.size(), nullptr);
+			resolvedPageFlags.assign(metadata.effects.atlasTextures.size(), 0);
+			for (const A8CompiledRange& compiled : metadata.compiledRanges)
 			{
+				const A8DrawRange& range = compiled.range;
 				const UInt32 currentOrdinal = rangeOrdinal++;
 				UpdateCurrentRenderTraces([](A8RenderTraceContext& trace)
 					{ ++trace.rangeAttempts; });
-				if (!range.primitiveCount || !range.vertexCount || range.layer > 3)
-				{
-					recordRangeResult(range.layer, D3DERR_INVALIDCALL);
-					if (detailedTrace)
-					{
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_shadow_trace: range-skip serial=%llu dip=%u ordinal=%u layer=%u reason=empty-or-invalid-range firstVertex=%u vertices=%u start=%u primitives=%u",
-							static_cast<unsigned long long>(currentTrace->serial), drawCall,
-							currentOrdinal, range.layer, range.firstVertex,
-							range.vertexCount, range.startIndex, range.primitiveCount);
-					}
-					continue;
-				}
 				// A shader-effect batch cannot reconstruct its CPU masks after a live
 				// shader loss. Preserve readable text by drawing only the fill ranges.
 				if (metadata.effects.shaderEffects && !useShaderEffects && range.layer != 3)
@@ -1455,125 +1578,25 @@ namespace fonthook::vectorfont
 					continue;
 				}
 
-				const UInt64 rangeVertexEnd = static_cast<UInt64>(range.firstVertex)
-					+ range.vertexCount;
-				const UInt64 rangeIndexEnd = static_cast<UInt64>(range.startIndex)
-					+ static_cast<UInt64>(range.primitiveCount) * 3;
-				const UInt64 submittedIndexCount = static_cast<UInt64>(primitiveCount) * 3;
-				if (rangeVertexEnd > numberOfVertices || rangeIndexEnd > submittedIndexCount)
-				{
-					const HRESULT rangeResult = D3DERR_INVALIDCALL;
-					recordRangeResult(range.layer, rangeResult);
-					if (range.layer == 3)
-					{
-						if (SUCCEEDED(firstFillFailure))
-							firstFillFailure = rangeResult;
-					}
-					else if (SUCCEEDED(firstEffectFailure))
-						firstEffectFailure = rangeResult;
-					if (g_bEnableFreeTypeFontRenderingLog
-						&& s_rangeDrawFailureLogCount++ < kMaximumRangeDrawFailureLogs)
-					{
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_a8_diag: invalid range layer=%u firstVertex=%u vertexCount=%u vertices=%u rangeStart=%u rangePrimitives=%u primitives=%u",
-							range.layer, range.firstVertex, range.vertexCount,
-							numberOfVertices, range.startIndex, range.primitiveCount,
-							primitiveCount);
-					}
-					if (detailedTrace)
-					{
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_shadow_trace: range-skip serial=%llu dip=%u ordinal=%u layer=%u reason=range-out-of-bounds vertexEnd=%llu/%u indexEnd=%llu/%llu",
-							static_cast<unsigned long long>(currentTrace->serial), drawCall,
-							currentOrdinal, range.layer,
-							static_cast<unsigned long long>(rangeVertexEnd), numberOfVertices,
-							static_cast<unsigned long long>(rangeIndexEnd),
-							static_cast<unsigned long long>(submittedIndexCount));
-					}
-					continue;
-				}
-
-				float inverseAtlasWidth = metadata.effects.inverseAtlasWidth;
-				float inverseAtlasHeight = metadata.effects.inverseAtlasHeight;
 				if (!metadata.effects.atlasTextures.empty())
 				{
-					if (range.atlasPage >= metadata.effects.atlasTextures.size()
-						|| range.atlasPage >= metadata.effects.atlasInverseSizes.size())
+					if (!resolvedPageFlags[range.atlasPage])
 					{
-						recordRangeResult(range.layer, D3DERR_INVALIDCALL);
-						continue;
+						NiTexture* atlasTexture =
+							metadata.effects.atlasTextures[range.atlasPage];
+						NiDX9TextureData* rendererData = atlasTexture
+							? atlasTexture->GetDX9RendererData() : nullptr;
+						resolvedPageTextures[range.atlasPage] = rendererData
+							? rendererData->GetD3DTexture() : nullptr;
+						resolvedPageFlags[range.atlasPage] = 1;
 					}
-					NiTexture* atlasTexture = metadata.effects.atlasTextures[range.atlasPage];
-					NiDX9TextureData* rendererData = atlasTexture
-						? atlasTexture->GetDX9RendererData() : nullptr;
-					IDirect3DBaseTexture9* d3dTexture = rendererData
-						? rendererData->GetD3DTexture() : nullptr;
+					IDirect3DBaseTexture9* d3dTexture =
+						resolvedPageTextures[range.atlasPage];
 					if (!d3dTexture || !state.SetTexture(d3dTexture))
 					{
 						recordRangeResult(range.layer, D3DERR_INVALIDCALL);
 						continue;
 					}
-					inverseAtlasWidth = metadata.effects.atlasInverseSizes[range.atlasPage].x;
-					inverseAtlasHeight = metadata.effects.atlasInverseSizes[range.atlasPage].y;
-				}
-
-				float parameter0 = metadata.effects.shadowBlurPixels;
-				float parameter1 = metadata.effects.shadowPower;
-				float parameter2 = 0.0f;
-				if (range.layer == 1)
-				{
-					parameter0 = metadata.effects.glowInnerPixels;
-					parameter1 = metadata.effects.glowOuterPixels;
-					parameter2 = metadata.effects.glowPower;
-				}
-				else if (range.layer == 2)
-				{
-					parameter0 = metadata.effects.outlineWidthPixels;
-					parameter1 = metadata.effects.outlineSoftnessPixels;
-					parameter2 = 0.0f;
-				}
-				else if (range.layer == 3)
-				{
-					parameter0 = 0.0f;
-					parameter1 = 0.0f;
-					parameter2 = 0.0f;
-				}
-				const float constants[16] = {
-					range.colorModifier.r, range.colorModifier.g,
-					range.colorModifier.b, range.colorModifier.a,
-					inverseAtlasWidth,
-					inverseAtlasHeight,
-					static_cast<float>(range.layer), metadata.effects.sdfSpreadPixels,
-					parameter0, parameter1, parameter2, 0.0f,
-					range.usesSdf ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f
-				};
-				if (!std::all_of(std::begin(constants), std::end(constants),
-					[](float value) { return std::isfinite(value); }))
-				{
-					const HRESULT constantResult = D3DERR_INVALIDCALL;
-					recordRangeResult(range.layer, constantResult);
-					if (range.layer == 3)
-					{
-						if (SUCCEEDED(firstFillFailure))
-							firstFillFailure = constantResult;
-					}
-					else if (SUCCEEDED(firstEffectFailure))
-						firstEffectFailure = constantResult;
-					if (g_bEnableFreeTypeFontRenderingLog
-						&& s_rangeDrawFailureLogCount++ < kMaximumRangeDrawFailureLogs)
-					{
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_a8_diag: rejected non-finite range constants layer=%u",
-							range.layer);
-					}
-					if (detailedTrace)
-					{
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_shadow_trace: range-skip serial=%llu dip=%u ordinal=%u layer=%u reason=non-finite-constants",
-							static_cast<unsigned long long>(currentTrace->serial), drawCall,
-							currentOrdinal, range.layer);
-					}
-					continue;
 				}
 
 				IDirect3DPixelShader9* rangeShader = fillShader;
@@ -1593,7 +1616,10 @@ namespace fonthook::vectorfont
 					}
 					rangeShader = effectShader;
 				}
-				if (!useOriginalShader && !state.Apply(rangeShader))
+				// Apply() establishes the fixed sampler contract once before the first
+				// range. Adjacent ranges only need to switch the shader itself; their
+				// dynamic filtering is handled by SetSampling below.
+				if (!useOriginalShader && !state.SetShader(rangeShader))
 				{
 					const HRESULT shaderResult = D3DERR_INVALIDCALL;
 					recordRangeResult(range.layer, shaderResult);
@@ -1618,7 +1644,7 @@ namespace fonthook::vectorfont
 					continue;
 				}
 				const HRESULT constantResult = useOriginalShader ? D3D_OK
-					: device->SetPixelShaderConstantF(1, constants, 4);
+					: state.SetConstants(compiled.constants.data());
 				if (FAILED(constantResult))
 				{
 					recordRangeResult(range.layer, constantResult);
@@ -1646,11 +1672,8 @@ namespace fonthook::vectorfont
 					}
 					continue;
 				}
-				const bool needsSmoothSampling = NeedsScaledFillSampling(s_currentA8Shape)
-					|| range.layer == 1 || range.layer == 2
-					|| (range.layer == 0
-						&& metadata.effects.shadowBlurPixels > 0.001f)
-					|| range.usesSdf;
+				const bool needsSmoothSampling = scaledFillSampling
+					|| compiled.staticSmoothSampling;
 				// SDF texels encode signed distances around the 0.5 isocontour.
 				// Coverage mip averaging and trilinear blending can move that contour
 				// and bridge neighbouring CJK strokes.  Keep bilinear MIN/MAG filtering
@@ -1806,17 +1829,21 @@ namespace fonthook::vectorfont
 		void __fastcall A8RenderShape(NiDX9Renderer* renderer, void*, NiTriShape* shape)
 		{
 			const bool a8 = IsA8AtlasShape(shape);
+			const A8ShapeMetadataPtr metadata = a8 ? ResolveRenderMetadata(shape) : nullptr;
 			NiTriShape* previousShape = s_currentA8Shape;
+			A8ShapeMetadataPtr previousMetadata = s_currentA8Metadata;
 			if (a8)
 			{
-				BeginA8RenderTrace(shape, "renderer-shape");
+				BeginA8RenderTrace(shape, "renderer-shape", metadata);
 				++s_a8RenderDepth;
 				s_currentA8Shape = shape;
+				s_currentA8Metadata = metadata;
 			}
 			s_originalRenderShape(renderer, shape);
 			if (a8)
 			{
 				s_currentA8Shape = previousShape;
+				s_currentA8Metadata = std::move(previousMetadata);
 				--s_a8RenderDepth;
 				EndA8RenderTrace(shape, "renderer-shape");
 			}
@@ -1825,17 +1852,21 @@ namespace fonthook::vectorfont
 		void __fastcall A8RenderShapeAlt(NiDX9Renderer* renderer, void*, NiTriShape* shape)
 		{
 			const bool a8 = IsA8AtlasShape(shape);
+			const A8ShapeMetadataPtr metadata = a8 ? ResolveRenderMetadata(shape) : nullptr;
 			NiTriShape* previousShape = s_currentA8Shape;
+			A8ShapeMetadataPtr previousMetadata = s_currentA8Metadata;
 			if (a8)
 			{
-				BeginA8RenderTrace(shape, "renderer-shape-alt");
+				BeginA8RenderTrace(shape, "renderer-shape-alt", metadata);
 				++s_a8RenderDepth;
 				s_currentA8Shape = shape;
+				s_currentA8Metadata = metadata;
 			}
 			s_originalRenderShapeAlt(renderer, shape);
 			if (a8)
 			{
 				s_currentA8Shape = previousShape;
+				s_currentA8Metadata = std::move(previousMetadata);
 				--s_a8RenderDepth;
 				EndA8RenderTrace(shape, "renderer-shape-alt");
 			}
@@ -1870,7 +1901,9 @@ namespace fonthook::vectorfont
 			// an unambiguous shape context for every draw in that batch.
 			NiPropertyState* properties = renderer->m_pkBatchedPropertyState;
 			NiDynamicEffectState* effects = renderer->m_pkBatchedEffectState;
+			const A8ShapeMetadataPtr metadata = ResolveRenderMetadata(shape);
 			NiTriShape* previousShape = s_currentA8Shape;
+			A8ShapeMetadataPtr previousMetadata = s_currentA8Metadata;
 			const UInt32 previousDepth = s_a8RenderDepth;
 			// End even an apparently empty batch: AddToBatch may already have selected
 			// m_spBatchedShader before rejecting all geometry. Reusing that cached shader
@@ -1879,20 +1912,24 @@ namespace fonthook::vectorfont
 			// immediate-render scope misclassify its draw calls as FreeType ranges.
 			s_a8RenderDepth = 0;
 			s_currentA8Shape = nullptr;
+			s_currentA8Metadata.reset();
 			s_originalEndBatch(renderer);
 			s_a8RenderDepth = previousDepth;
 			s_currentA8Shape = previousShape;
+			s_currentA8Metadata = previousMetadata;
 			s_originalBeginBatch(renderer, properties, effects);
 
-			BeginA8RenderTrace(shape, "renderer-batch-shape");
+			BeginA8RenderTrace(shape, "renderer-batch-shape", metadata);
 			++s_a8RenderDepth;
 			s_currentA8Shape = shape;
+			s_currentA8Metadata = metadata;
 			// Keep the scope active while submitting as well as flushing. The stock
 			// function only queues, but this also remains correct if another renderer
 			// extension has wrapped the slot and chooses to issue an immediate draw.
 			s_originalBatchRenderShape(renderer, shape);
 			s_originalEndBatch(renderer);
 			s_currentA8Shape = previousShape;
+			s_currentA8Metadata = std::move(previousMetadata);
 			--s_a8RenderDepth;
 			EndA8RenderTrace(shape, "renderer-batch-shape");
 
@@ -2043,28 +2080,47 @@ namespace fonthook::vectorfont
 			return rendererBridgeAvailable || tileRouteAvailable;
 		}
 
+		bool IsPublishedRangeBridgeReady()
+		{
+			if (!s_rangeBridgeAvailable || !s_originalDrawIndexedPrimitive)
+				return false;
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
+			return device && device == s_hookedDevice;
+		}
+
 		void __fastcall A8RenderImmediate(NiTriShape* shape, void*, NiRenderer* renderer)
 		{
-			s_rangeBridgeAvailable = HookD3DDevice();
+			if (!IsPublishedRangeBridgeReady())
+				s_rangeBridgeAvailable = HookD3DDevice();
+			const A8ShapeMetadataPtr metadata = ResolveRenderMetadata(shape);
 			NiTriShape* previousShape = s_currentA8Shape;
-			BeginA8RenderTrace(shape, "shape-immediate");
+			A8ShapeMetadataPtr previousMetadata = s_currentA8Metadata;
+			BeginA8RenderTrace(shape, "shape-immediate", metadata);
 			++s_a8RenderDepth;
 			s_currentA8Shape = shape;
+			s_currentA8Metadata = metadata;
 			s_originalRenderImmediate(shape, renderer);
 			s_currentA8Shape = previousShape;
+			s_currentA8Metadata = std::move(previousMetadata);
 			--s_a8RenderDepth;
 			EndA8RenderTrace(shape, "shape-immediate");
 		}
 
 		void __fastcall A8RenderImmediateAlt(NiTriShape* shape, void*, NiRenderer* renderer)
 		{
-			s_rangeBridgeAvailable = HookD3DDevice();
+			if (!IsPublishedRangeBridgeReady())
+				s_rangeBridgeAvailable = HookD3DDevice();
+			const A8ShapeMetadataPtr metadata = ResolveRenderMetadata(shape);
 			NiTriShape* previousShape = s_currentA8Shape;
-			BeginA8RenderTrace(shape, "shape-immediate-alt");
+			A8ShapeMetadataPtr previousMetadata = s_currentA8Metadata;
+			BeginA8RenderTrace(shape, "shape-immediate-alt", metadata);
 			++s_a8RenderDepth;
 			s_currentA8Shape = shape;
+			s_currentA8Metadata = metadata;
 			s_originalRenderImmediateAlt(shape, renderer);
 			s_currentA8Shape = previousShape;
+			s_currentA8Metadata = std::move(previousMetadata);
 			--s_a8RenderDepth;
 			EndA8RenderTrace(shape, "shape-immediate-alt");
 		}
@@ -2201,6 +2257,11 @@ namespace fonthook::vectorfont
 				&& effectConfig->atlasProperties.size()
 					!= effectConfig->atlasTextures.size())
 				return RejectA8Shape("atlas-page-property-size-mismatch");
+			for (const NiPoint2& inverseSize : effectConfig->atlasInverseSizes)
+			{
+				if (!std::isfinite(inverseSize.x) || !std::isfinite(inverseSize.y))
+					return RejectA8Shape("non-finite-atlas-inverse-size");
+			}
 			for (const A8DrawRange& range : effectConfig->ranges)
 			{
 				if (range.layer > 3 || !range.vertexCount || !range.primitiveCount
@@ -2240,6 +2301,63 @@ namespace fonthook::vectorfont
 			return haveFill || RejectA8Shape("missing-fill-range");
 		}
 
+		void CompileA8DrawRanges(A8ShapeMetadata& metadata)
+		{
+			metadata.compiledRanges.clear();
+			metadata.compiledRanges.reserve(metadata.effects.ranges.size());
+			metadata.hasShadowRange = false;
+			for (const A8DrawRange& range : metadata.effects.ranges)
+			{
+				metadata.hasShadowRange = metadata.hasShadowRange
+					|| (range.layer == 0 && range.vertexCount && range.primitiveCount);
+				float inverseAtlasWidth = metadata.effects.inverseAtlasWidth;
+				float inverseAtlasHeight = metadata.effects.inverseAtlasHeight;
+				if (!metadata.effects.atlasInverseSizes.empty())
+				{
+					const NiPoint2& inverseSize =
+						metadata.effects.atlasInverseSizes[range.atlasPage];
+					inverseAtlasWidth = inverseSize.x;
+					inverseAtlasHeight = inverseSize.y;
+				}
+
+				float parameter0 = metadata.effects.shadowBlurPixels;
+				float parameter1 = metadata.effects.shadowPower;
+				float parameter2 = 0.0f;
+				if (range.layer == 1)
+				{
+					parameter0 = metadata.effects.glowInnerPixels;
+					parameter1 = metadata.effects.glowOuterPixels;
+					parameter2 = metadata.effects.glowPower;
+				}
+				else if (range.layer == 2)
+				{
+					parameter0 = metadata.effects.outlineWidthPixels;
+					parameter1 = metadata.effects.outlineSoftnessPixels;
+				}
+				else if (range.layer == 3)
+				{
+					parameter0 = 0.0f;
+					parameter1 = 0.0f;
+				}
+
+				A8CompiledRange compiled;
+				compiled.range = range;
+				compiled.constants = {{
+					range.colorModifier.r, range.colorModifier.g,
+					range.colorModifier.b, range.colorModifier.a,
+					inverseAtlasWidth, inverseAtlasHeight,
+					static_cast<float>(range.layer), metadata.effects.sdfSpreadPixels,
+					parameter0, parameter1, parameter2, 0.0f,
+					range.usesSdf ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f
+				}};
+				compiled.staticSmoothSampling = range.layer == 1 || range.layer == 2
+					|| (range.layer == 0
+						&& metadata.effects.shadowBlurPixels > 0.001f)
+					|| range.usesSdf;
+				metadata.compiledRanges.push_back(std::move(compiled));
+			}
+		}
+
 		bool TryInitializeA8Renderer(bool forceShaderAttempt, bool reportFailures)
 		{
 			if (!g_bEnableFreeTypeFontRendering)
@@ -2250,9 +2368,12 @@ namespace fonthook::vectorfont
 			}
 
 			// The original-shader ARGB path needs only the Tile/D3D range bridge;
-			// shader-loader discovery is an independent, opportunistic upgrade.
-			HookTileRenderPass();
-			s_rangeBridgeAvailable = HookD3DDevice();
+			// shader-loader discovery is an independent, opportunistic upgrade. Once
+			// published, the bridge remains valid until the device changes or the
+			// per-frame pointer audit marks it stale, so text construction must not
+			// rerun the installation machinery.
+			if (!IsPublishedRangeBridgeReady())
+				s_rangeBridgeAvailable = HookD3DDevice();
 			if (!g_bEnableFreeTypeA8Atlas)
 			{
 				s_a8Available = false;
@@ -2331,6 +2452,51 @@ namespace fonthook::vectorfont
 	{
 		if (!g_bEnableFreeTypeFontRendering)
 			return;
+		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+		IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
+		void** deviceVtable = device ? *reinterpret_cast<void***>(device) : nullptr;
+		void** rendererVtable = renderer ? *reinterpret_cast<void***>(renderer) : nullptr;
+		const bool drawHookCurrent = deviceVtable
+			&& deviceVtable[kDrawIndexedPrimitiveSlot]
+				== reinterpret_cast<void*>(&A8DrawIndexedPrimitive);
+		const bool rendererHooksCurrent = drawHookCurrent && rendererVtable
+			&& rendererVtable[kRendererBatchRenderShapeSlot]
+				== reinterpret_cast<void*>(&A8BatchRenderShape)
+			&& rendererVtable[kRendererRenderShapeSlot]
+				== reinterpret_cast<void*>(&A8RenderShape)
+			&& rendererVtable[kRendererRenderShapeAltSlot]
+				== reinterpret_cast<void*>(&A8RenderShapeAlt);
+		// Either renderer route is sufficient for the bridge decision. Reading and
+		// decoding the Tile call target cannot affect the result once the renderer
+		// route is current, and is also irrelevant while the DIP hook is missing.
+		const bool tileHookCurrent = drawHookCurrent && !rendererHooksCurrent
+			&& ReadTileRenderPassCallTarget()
+				== reinterpret_cast<TileRenderPassFn>(&A8TileRenderPass);
+		const bool bridgeCurrent = drawHookCurrent
+			&& (rendererHooksCurrent || tileHookCurrent);
+		const bool haveA8Shader = g_bEnableFreeTypeA8Atlas && HaveA8Shader();
+		if (bridgeCurrent && (!g_bEnableFreeTypeA8Atlas
+			|| (haveA8Shader && HaveAllEffectShaders())))
+		{
+			s_hookedDevice = device;
+			s_rangeBridgeAvailable = true;
+			s_a8Available = haveA8Shader;
+			return;
+		}
+		if (!bridgeCurrent)
+		{
+			// Publish the pointer-audit result before entering the shared initializer;
+			// its hot-path fast check must not mistake an overwritten vtable entry for
+			// a still-current bridge on the same device.
+			s_rangeBridgeAvailable = false;
+			s_a8Available = false;
+		}
+		const DWORD now = GetTickCount();
+		if (bridgeCurrent && s_initializationAttempted
+			&& now - s_lastInitializationAttemptTick < 1000)
+		{
+			return;
+		}
 		TryInitializeA8Renderer(false, false);
 	}
 
@@ -2359,18 +2525,15 @@ namespace fonthook::vectorfont
 
 	bool IsA8RendererAvailable()
 	{
-		TryInitializeA8Renderer(false, false);
-		return s_a8Available && HaveA8Shader()
-			&& IsAtlasRangeRendererAvailable();
+		return TryInitializeA8Renderer(false, false);
 	}
 
 	bool IsAtlasRangeRendererAvailable()
 	{
-		HookTileRenderPass();
+		if (IsPublishedRangeBridgeReady())
+			return true;
 		s_rangeBridgeAvailable = HookD3DDevice();
-		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-		return s_rangeBridgeAvailable && s_originalDrawIndexedPrimitive
-			&& renderer && renderer->GetD3DDevice();
+		return IsPublishedRangeBridgeReady();
 	}
 
 	bool ResolveA8EffectQuality(EffectQuality requested, EffectQuality& resolved)
@@ -2407,24 +2570,25 @@ namespace fonthook::vectorfont
 			|| !ValidateA8Shape(shape, effectConfig, colorContract)
 			|| !InitializeA8TriShapeVtable(shape))
 			return false;
+		auto metadata = std::make_shared<A8ShapeMetadata>();
+		metadata->fontId = fontId;
+		metadata->glyphCount = glyphCount;
+		metadata->quadCount = quadCount;
+		if (NiTriShapeData* data = shape->GetModelData())
+		{
+			metadata->vertexCount = data->m_usVertices;
+			metadata->primitiveCount = data->m_usTriangles;
+			metadata->indexCount = data->m_uiTriListLength
+				? data->m_uiTriListLength : data->m_usTriangles * 3;
+		}
+		if (colorContract)
+			metadata->colorContract = *colorContract;
+		if (effectConfig)
+			metadata->effects = *effectConfig;
+		CompileA8DrawRanges(*metadata);
 		{
 			std::lock_guard<std::mutex> lock(s_diagnosticsMutex);
-			A8ShapeMetadata metadata;
-			metadata.fontId = fontId;
-			metadata.glyphCount = glyphCount;
-			metadata.quadCount = quadCount;
-			if (NiTriShapeData* data = shape->GetModelData())
-			{
-				metadata.vertexCount = data->m_usVertices;
-				metadata.primitiveCount = data->m_usTriangles;
-				metadata.indexCount = data->m_uiTriListLength
-					? data->m_uiTriListLength : data->m_usTriangles * 3;
-			}
-			if (colorContract)
-				metadata.colorContract = *colorContract;
-			if (effectConfig)
-				metadata.effects = *effectConfig;
-			s_shapeMetadata[shape] = metadata;
+			s_shapeMetadata[shape] = std::move(metadata);
 		}
 		// Publish the marker vtable only after its metadata is complete. The draw
 		// bridge must never observe a custom shape with a stale/default contract.

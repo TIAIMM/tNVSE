@@ -1168,22 +1168,39 @@ namespace fonthook
 
 		void TrimPositiveCache()
 		{
-			if (s_positiveCache.size() > kPositiveCacheLimit)
+			while (s_positiveCache.size() > kPositiveCacheLimit
+				&& !s_positiveCacheOrder.empty())
 			{
-				gLog.FormattedMessage("tnvse_dictionary: positive cache exceeded %u, clearing",
-					static_cast<UInt32>(kPositiveCacheLimit));
-				s_positiveCache.clear();
+				s_positiveCache.erase(*s_positiveCacheOrder.front());
+				s_positiveCacheOrder.pop_front();
 			}
 		}
 
 		void TrimNegativeCache()
 		{
-			if (s_negativeCache.size() > kNegativeCacheLimit)
+			while (s_negativeCache.size() > kNegativeCacheLimit
+				&& !s_negativeCacheOrder.empty())
 			{
-				gLog.FormattedMessage("tnvse_dictionary: negative cache exceeded %u, clearing",
-					static_cast<UInt32>(kNegativeCacheLimit));
-				s_negativeCache.clear();
+				s_negativeCache.erase(*s_negativeCacheOrder.front());
+				s_negativeCacheOrder.pop_front();
 			}
+		}
+
+		void StorePositiveCache(std::string_view key, const std::string& translated)
+		{
+			auto [entry, inserted] = s_positiveCache.emplace(
+				std::string(key), translated);
+			if (inserted)
+				s_positiveCacheOrder.push_back(&entry->first);
+			TrimPositiveCache();
+		}
+
+		void StoreNegativeCache(std::string_view key)
+		{
+			auto [entry, inserted] = s_negativeCache.emplace(key);
+			if (inserted)
+				s_negativeCacheOrder.push_back(&*entry);
+			TrimNegativeCache();
 		}
 	}
 
@@ -1216,19 +1233,19 @@ namespace fonthook
 
 		std::string raw(source);
 		PreResolveGameVariables(raw);
-		const std::string originalRaw = raw;
 
 		// Cache by the original text because wildcard captures preserve source casing.
-		std::string cacheKey(raw);
-
-		auto positive = s_positiveCache.find(cacheKey);
+		const std::string_view cacheLookup(raw);
+		auto positive = s_positiveCache.find(cacheLookup);
 		if (positive != s_positiveCache.end())
 		{
 			translated = positive->second;
 			return true;
 		}
-		if (s_negativeCache.find(cacheKey) != s_negativeCache.end())
+		if (s_negativeCache.find(cacheLookup) != s_negativeCache.end())
 			return false;
+		const std::string originalRaw = raw;
+		const std::string_view cacheKey(originalRaw);
 
 		std::string id;
 		std::string withoutId = StripLeadingId(raw, id);
@@ -1239,8 +1256,7 @@ namespace fonthook
 			{
 				if (ExpandTarget(s_entries[idIt->second], {}, translated, depth))
 				{
-					s_positiveCache.emplace(std::move(cacheKey), translated);
-					TrimPositiveCache();
+					StorePositiveCache(cacheKey, translated);
 					return true;
 				}
 			}
@@ -1261,36 +1277,31 @@ namespace fonthook
 				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
 					s_entries[fullMatch.entryIndex].key.c_str(), translated.c_str());
 			}
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
+			StorePositiveCache(cacheKey, translated);
 			return true;
 		}
 
 		if (!sourceContainsDbcs && g_bEnableMuxQuestPromptTranslation && TryTranslateMuxQuestPrompt(raw, translated, depth))
 		{
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
+			StorePositiveCache(cacheKey, translated);
 			return true;
 		}
 
 		if (!sourceContainsDbcs && g_bEnableDictionaryPerkDescriptionTranslation && TryTranslatePerkDescription(raw, translated, depth))
 		{
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
+			StorePositiveCache(cacheKey, translated);
 			return true;
 		}
 
 		if (!sourceContainsDbcs && g_bEnableDictionaryItemEffectTranslation && TryTranslateItemEffectList(raw, translated, depth))
 		{
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
+			StorePositiveCache(cacheKey, translated);
 			return true;
 		}
 
 		if (!sourceContainsDbcs && g_bEnableDictionaryMultiplierTextTranslation && TryTranslateMultiplierText(raw, translated, depth))
 		{
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
+			StorePositiveCache(cacheKey, translated);
 			return true;
 		}
 
@@ -1304,44 +1315,38 @@ namespace fonthook
 				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
 					s_entries[fullMatch.entryIndex].key.c_str(), translated.c_str());
 			}
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
+			StorePositiveCache(cacheKey, translated);
 			return true;
 		}
 
 		if (!sourceContainsDbcs && g_bEnableDictionaryTrimBypassFuzzyTranslation && TryTranslateFuzzyText(originalRaw, translated, depth))
 		{
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
+			StorePositiveCache(cacheKey, translated);
 			return true;
 		}
 
 		if (!sourceContainsDbcs && g_bEnableDictionaryRegexTranslation && TryTranslateRegexText(raw, translated))
 		{
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
+			StorePositiveCache(cacheKey, translated);
 			return true;
 		}
 
 		if (!sourceContainsDbcs && g_bEnableDictionaryBeforeLinebreakTranslation && TryTranslateBeforeLinebreakText(raw, translated, depth))
 		{
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
+			StorePositiveCache(cacheKey, translated);
 			return true;
 		}
 
 		if (!sourceContainsDbcs && g_bEnableDictionaryShrinkFuzzyTranslation && TryTranslateShrinkText(raw, translated, depth))
 		{
-			s_positiveCache.emplace(cacheKey, translated);
-			TrimPositiveCache();
+			StorePositiveCache(cacheKey, translated);
 			return true;
 		}
 
 		if (g_bEnableDictionaryTranslationLog)
 			gLog.FormattedMessage("tnvse_dictionary: TranslateInternal no match: \"%s\" ->negative cache", source);
 
-		s_negativeCache.insert(std::move(cacheKey));
-		TrimNegativeCache();
+		StoreNegativeCache(cacheKey);
 		return false;
 	}
 

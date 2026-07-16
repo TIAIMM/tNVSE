@@ -4,8 +4,9 @@
 #include "font_manager.h"
 #include "font_vector.h"
 #include "native_calls.h"
+#include <array>
 #include <cmath>
-#include <unordered_map>
+#include <vector>
 
 namespace fonthook
 {
@@ -423,14 +424,22 @@ namespace fonthook
 	//   PrepText:            iCharCount = processedTextLen
 
 	// Pass 1: process escape sequences (&variable;) in-place
+	static void EnsureTextScratchSize(std::vector<char>& buffer, size_t size)
+	{
+		if (buffer.size() < size)
+			buffer.resize(size, 0);
+	}
+
 	static bool ProcessEscapeSequences(
-		char*& processedOriginalText, char*& dynamicTextBuffer,
+		std::vector<char>& processedOriginalBuffer,
+		std::vector<char>& dynamicTextBuffer,
 		UInt32& textBufferSize, UInt32& processedTextLen,
 		UInt32& origConsumed, UInt32& sourceTextLen,
 		FontEx* font, Font::TextData* axData)
 	{
 		char parsedTextBuffer[1028] = {};
 		bool hasEscapeSequence = false;
+		char* processedOriginalText = processedOriginalBuffer.data();
 
 		for (UInt32 srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
 		{
@@ -493,7 +502,7 @@ namespace fonthook
 				if (escapeSeqSizeDiff > 0)
 				{
 					textBufferSize += escapeSeqSizeDiff;
-					dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, textBufferSize + 1));
+					EnsureTextScratchSize(dynamicTextBuffer, textBufferSize + 1);
 				}
 				memcpy(&dynamicTextBuffer[processedTextLen], parsedTextBuffer, postEscapeTextLen);
 				processedTextLen += postEscapeTextLen;
@@ -511,26 +520,103 @@ namespace fonthook
 		if (hasEscapeSequence)
 		{
 			sourceTextLen = processedTextLen;
-			processedOriginalText = static_cast<char*>(MemoryManager_s_Instance->Reallocate(processedOriginalText, processedTextLen + 4));
-			strcpy_s(processedOriginalText, processedTextLen + 4, dynamicTextBuffer);
+			processedOriginalBuffer.resize(processedTextLen + 4, 0);
+			memcpy(processedOriginalBuffer.data(), dynamicTextBuffer.data(),
+				processedTextLen + 1);
 		}
-		*dynamicTextBuffer = 0;
+		dynamicTextBuffer[0] = 0;
 		processedTextLen = 0;
 		return hasEscapeSequence;
 	}
 
 	struct FreeTypeClusterAdvanceMap
 	{
-		std::unordered_map<UInt32, float> advances;
-		std::unordered_map<UInt32, UInt32> owners;
+		static constexpr UInt32 kNoOwner = UINT32_MAX;
+		std::vector<float> advances;
+		std::vector<UInt32> owners;
+		std::vector<std::pair<UInt32, float>> clusters;
+
+		void Reset(UInt32 length)
+		{
+			advances.assign(length, 0.0f);
+			owners.assign(length, kNoOwner);
+			clusters.clear();
+		}
+
+		void TrimRetainedCapacity()
+		{
+			constexpr size_t kMaximumRetainedUnits = 65536;
+			if (advances.capacity() > kMaximumRetainedUnits)
+				std::vector<float>().swap(advances);
+			if (owners.capacity() > kMaximumRetainedUnits)
+				std::vector<UInt32>().swap(owners);
+			if (clusters.capacity() > kMaximumRetainedUnits)
+				std::vector<std::pair<UInt32, float>>().swap(clusters);
+		}
+	};
+
+	struct PrepTextScratch
+	{
+		std::vector<char> original;
+		std::vector<char> processed;
+		FreeTypeClusterAdvanceMap clusterAdvances;
+
+		void Prepare(size_t bytes)
+		{
+			original.assign(bytes, 0);
+			processed.assign(bytes, 0);
+		}
+
+		void TrimRetainedCapacity()
+		{
+			constexpr size_t kMaximumRetainedTextBytes = 64 * 1024;
+			if (original.capacity() > kMaximumRetainedTextBytes)
+				std::vector<char>().swap(original);
+			if (processed.capacity() > kMaximumRetainedTextBytes)
+				std::vector<char>().swap(processed);
+			clusterAdvances.TrimRetainedCapacity();
+		}
+	};
+
+	struct PrepTextScratchPool
+	{
+		std::array<PrepTextScratch, 4> slots;
+		size_t depth = 0;
+	};
+
+	class PrepTextScratchLease
+	{
+	public:
+		explicit PrepTextScratchLease(PrepTextScratchPool& pool) : m_pool(pool)
+		{
+			m_scratch = m_pool.depth < m_pool.slots.size()
+				? &m_pool.slots[m_pool.depth] : &m_fallback;
+			++m_pool.depth;
+		}
+
+		~PrepTextScratchLease()
+		{
+			m_scratch->TrimRetainedCapacity();
+			--m_pool.depth;
+		}
+
+		PrepTextScratch& Get() { return *m_scratch; }
+
+	private:
+		PrepTextScratchPool& m_pool;
+		PrepTextScratch m_fallback;
+		PrepTextScratch* m_scratch = nullptr;
 	};
 
 	static void BuildFreeTypeClusterAdvanceMap(FontEx* font, const char* text,
 		UInt32 length, FreeTypeClusterAdvanceMap& result)
 	{
-		result = {};
 		if (!font || !text || !IsFreeTypeFontActive(font))
+		{
+			result.Reset(0);
 			return;
+		}
+		result.Reset(length);
 		for (UInt32 runStart = 0; runStart < length;)
 		{
 			const UInt8 current = static_cast<UInt8>(text[runStart]);
@@ -556,19 +642,27 @@ namespace fonthook
 				runStart = runEnd > runStart ? runEnd : runStart + 1;
 				continue;
 			}
-			std::vector<std::pair<UInt32, float>> clusters;
-			for (const FreeTypeLayoutGlyph& glyph : layout.glyphs)
+			result.clusters.clear();
+			for (const FreeTypeLayoutGlyph& glyph : *layout.glyphs)
 			{
-				if (clusters.empty() || clusters.back().first != glyph.cluster)
-					clusters.emplace_back(glyph.cluster, 0.0f);
-				clusters.back().second += glyph.xAdvance;
+				if (result.clusters.empty()
+					|| result.clusters.back().first != glyph.cluster)
+				{
+					result.clusters.emplace_back(glyph.cluster, 0.0f);
+				}
+				result.clusters.back().second += glyph.xAdvance;
 			}
-			for (size_t clusterIndex = 0; clusterIndex < clusters.size(); ++clusterIndex)
+			for (size_t clusterIndex = 0;
+				clusterIndex < result.clusters.size(); ++clusterIndex)
 			{
-				const UInt32 clusterStart = runStart + clusters[clusterIndex].first;
-				const UInt32 clusterEnd = clusterIndex + 1 < clusters.size()
-					? runStart + clusters[clusterIndex + 1].first : runEnd;
-				result.advances[clusterStart] = clusters[clusterIndex].second;
+				const UInt32 clusterStart = runStart
+					+ result.clusters[clusterIndex].first;
+				const UInt32 clusterEnd = std::min<UInt32>(length,
+					clusterIndex + 1 < result.clusters.size()
+						? runStart + result.clusters[clusterIndex + 1].first : runEnd);
+				if (clusterStart >= length || clusterStart >= clusterEnd)
+					continue;
+				result.advances[clusterStart] = result.clusters[clusterIndex].second;
 				for (UInt32 unitOffset = clusterStart; unitOffset < clusterEnd;)
 				{
 					result.owners[unitOffset] = clusterStart;
@@ -608,30 +702,25 @@ namespace fonthook
 		UInt32 sourceTextLen = strlen(apOrigString);
 		int maxAllowedLines = axData->iLineEnd;
 
-		char* originalTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Allocate(sourceTextLen + 4));
-		if (!originalTextBuffer) return;
-		memset(originalTextBuffer, 0, sourceTextLen + 4);
-		char* processedOriginalText = originalTextBuffer;
-
-		char* processedTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Allocate(sourceTextLen + 4));
-		if (!processedTextBuffer)
-		{
-			MemoryManager_s_Instance->Deallocate(originalTextBuffer);
-			return;
-		}
-		memset(processedTextBuffer, 0, sourceTextLen + 4);
-		char* dynamicTextBuffer = processedTextBuffer;
-		snprintf(originalTextBuffer, sourceTextLen + 1, "%s", apOrigString);
+		thread_local PrepTextScratchPool scratchPool;
+		PrepTextScratchLease scratchLease(scratchPool);
+		PrepTextScratch& scratch = scratchLease.Get();
+		scratch.Prepare(sourceTextLen + 4);
+		memcpy(scratch.original.data(), apOrigString, sourceTextLen + 1);
+		char* processedOriginalText = scratch.original.data();
+		char* dynamicTextBuffer = scratch.processed.data();
 
 		UInt32 processedTextLen = 0;
 		UInt32 textBufferSize = sourceTextLen + 4;
 
 		// ---- Pass 1: Process escape sequences (&variable;) ----
-		ProcessEscapeSequences(processedOriginalText, dynamicTextBuffer,
+		ProcessEscapeSequences(scratch.original, scratch.processed,
 			textBufferSize, processedTextLen, origConsumed, sourceTextLen, font, axData);
+		processedOriginalText = scratch.original.data();
+		dynamicTextBuffer = scratch.processed.data();
 
 		UInt32 buttonIconIndex = 0;
-		FreeTypeClusterAdvanceMap freeTypeAdvances;
+		FreeTypeClusterAdvanceMap& freeTypeAdvances = scratch.clusterAdvances;
 		BuildFreeTypeClusterAdvanceMap(font, processedOriginalText,
 			sourceTextLen, freeTypeAdvances);
 		UInt32 previousClusterOutputStart = 0;
@@ -648,8 +737,9 @@ namespace fonthook
 				origConsumed += 1;
 				if (++processedTextLen >= textBufferSize)
 				{
-					dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
 					textBufferSize = processedTextLen + 4;
+					EnsureTextScratchSize(scratch.processed, textBufferSize);
+					dynamicTextBuffer = scratch.processed.data();
 				}
 				totalTextHeight = lineHeight + totalTextHeight;
 				int completedLineWidth = static_cast<int>(std::ceil(
@@ -681,6 +771,9 @@ namespace fonthook
 				double unitWidth = 0.0;
 				bool isSoftMarker = false;
 				bool isClusterContinuation = false;
+				const UInt32 layoutClusterOwner = charIndex < freeTypeAdvances.owners.size()
+					? freeTypeAdvances.owners[charIndex]
+					: FreeTypeClusterAdvanceMap::kNoOwner;
 
 				if (!bIsDBCharacter)
 				{
@@ -710,27 +803,23 @@ namespace fonthook
 				else
 				{
 					origConsumed += 2;
-					EnsureFreeTypeDoubleByteMetrics(font, uiDoubleByteCode);
-					FontLetter* glyph = LookupDBGlyph(extraGlyphs, uiDoubleByteCode);
-					if (glyph)
+					if (layoutClusterOwner == FreeTypeClusterAdvanceMap::kNoOwner)
 					{
-						pCurrentGlyph = glyph;
-						unitWidth = GetGlyphRenderAdvance(pCurrentGlyph);
-					}
-				}
-				if (!isSoftMarker && !freeTypeAdvances.owners.empty())
-				{
-					auto owner = freeTypeAdvances.owners.find(charIndex);
-					if (owner != freeTypeAdvances.owners.end())
-					{
-						isClusterContinuation = owner->second != charIndex;
-						if (!isClusterContinuation)
+						EnsureFreeTypeDoubleByteMetrics(font, uiDoubleByteCode);
+						FontLetter* glyph = LookupDBGlyph(extraGlyphs, uiDoubleByteCode);
+						if (glyph)
 						{
-							auto advance = freeTypeAdvances.advances.find(charIndex);
-							if (advance != freeTypeAdvances.advances.end())
-								unitWidth = advance->second;
+							pCurrentGlyph = glyph;
+							unitWidth = GetGlyphRenderAdvance(pCurrentGlyph);
 						}
 					}
+				}
+				if (!isSoftMarker
+					&& layoutClusterOwner != FreeTypeClusterAdvanceMap::kNoOwner)
+				{
+					isClusterContinuation = layoutClusterOwner != charIndex;
+					if (!isClusterContinuation)
+						unitWidth = freeTypeAdvances.advances[charIndex];
 				}
 
 				LayoutWrapResult wrapResult;
@@ -741,9 +830,9 @@ namespace fonthook
 				{
 					if (processedTextLen + 4 >= textBufferSize)
 					{
-						dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(
-							dynamicTextBuffer, processedTextLen + 8));
 						textBufferSize = processedTextLen + 8;
+						EnsureTextScratchSize(scratch.processed, textBufferSize);
+						dynamicTextBuffer = scratch.processed.data();
 					}
 
 					if (wrapResult.kind == LayoutWrapKind::Soft)
@@ -787,8 +876,9 @@ namespace fonthook
 				{
 					if (processedTextLen + 4 >= textBufferSize)
 					{
-						dynamicTextBuffer = (char*)MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8);
 						textBufferSize = processedTextLen + 8;
+						EnsureTextScratchSize(scratch.processed, textBufferSize);
+						dynamicTextBuffer = scratch.processed.data();
 					}
 					dynamicTextBuffer[processedTextLen++] = processedOriginalText[charIndex];
 					dynamicTextBuffer[processedTextLen++] = processedOriginalText[charIndex + 1];
@@ -801,8 +891,9 @@ namespace fonthook
 					{
 						if (processedTextLen + 1 >= textBufferSize)
 						{
-							dynamicTextBuffer = (char*)MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 8);
 							textBufferSize = processedTextLen + 8;
+							EnsureTextScratchSize(scratch.processed, textBufferSize);
+							dynamicTextBuffer = scratch.processed.data();
 						}
 						dynamicTextBuffer[processedTextLen++] = (char)currentChar;
 						dynamicTextBuffer[processedTextLen] = 0;
@@ -816,8 +907,9 @@ namespace fonthook
 
 				if (processedTextLen >= textBufferSize)
 				{
-					dynamicTextBuffer = static_cast<char*>(MemoryManager_s_Instance->Reallocate(dynamicTextBuffer, processedTextLen + 4));
 					textBufferSize = processedTextLen + 4;
+					EnsureTextScratchSize(scratch.processed, textBufferSize);
+					dynamicTextBuffer = scratch.processed.data();
 				}
 			}
 
@@ -871,8 +963,6 @@ namespace fonthook
 		axData->iLineStart = 0;
 		axData->iLineEnd = currentLineCount;
 		axData->iCharCount = isTerminal ? origConsumed : processedTextLen;
-		MemoryManager_s_Instance->Deallocate(processedOriginalText);
-		MemoryManager_s_Instance->Deallocate(dynamicTextBuffer);
 	}
 
 	// ==================== FontEx::PrepTextForTerminal ====================
@@ -1204,11 +1294,18 @@ namespace fonthook
 				&textData.xNewText.pString[byteIndex], runEnd - byteIndex, run, true))
 			{
 				float runPen = position.x;
-				for (const FreeTypeLayoutGlyph& item : run.glyphs)
+				for (const FreeTypeLayoutGlyph& item : *run.glyphs)
 				{
 					NiPoint3 glyphPen(runPen + item.xOffset, position.y,
 						position.z + item.yOffset);
-					builder.AddGlyph(item.glyph, glyphPen, fontColor);
+					VectorEncodedGlyph glyph = item.glyph;
+					if (!glyph.metrics)
+					{
+						glyph.metrics = glyph.byteClass == VectorFontByteClass::DoubleByte
+							? EnsureFreeTypeDoubleByteMetrics(font, glyph.encodedCode)
+							: &font->pFontData->pFontLetters[glyph.encodedCode & 0xFF];
+					}
+					builder.AddGlyph(glyph, glyphPen, fontColor);
 					runPen += item.xAdvance;
 				}
 				position.x += run.advance;
@@ -1524,11 +1621,18 @@ namespace fonthook
 					&apTextString->pString[byteIndex], runEnd - byteIndex, run, true))
 				{
 					float runPen = currentX;
-					for (const FreeTypeLayoutGlyph& item : run.glyphs)
+					for (const FreeTypeLayoutGlyph& item : *run.glyphs)
 					{
 						const NiPoint3 pen(runPen + item.xOffset, currentZ,
 							currentY + item.yOffset);
-						builder.AddGlyph(item.glyph, pen, activeColor ? activeColor : arg1C);
+						VectorEncodedGlyph glyph = item.glyph;
+						if (!glyph.metrics)
+						{
+							glyph.metrics = glyph.byteClass == VectorFontByteClass::DoubleByte
+								? EnsureFreeTypeDoubleByteMetrics(this, glyph.encodedCode)
+								: &pFontData->pFontLetters[glyph.encodedCode & 0xFF];
+						}
+						builder.AddGlyph(glyph, pen, activeColor ? activeColor : arg1C);
 						runPen += item.xAdvance;
 					}
 					currentX += run.advance;

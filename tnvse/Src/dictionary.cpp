@@ -12,8 +12,10 @@ namespace fonthook
 	std::unordered_map<std::string, std::vector<size_t>> s_wildcardSuffixIndex;
 	std::vector<size_t> s_wildcardLooseIndex;
 	std::unordered_map<std::string, size_t> s_idIndex;
-	std::unordered_map<std::string, std::string> s_positiveCache;
-	std::unordered_set<std::string> s_negativeCache;
+	PositiveTranslationCache s_positiveCache;
+	NegativeTranslationCache s_negativeCache;
+	std::deque<const std::string*> s_positiveCacheOrder;
+	std::deque<const std::string*> s_negativeCacheOrder;
 	std::unordered_map<std::string, UiHintFormat> s_uiHintFormats;
 	std::unordered_set<std::string> s_registeredAutoKeys;
 	bool s_dictionaryLoaded = false;

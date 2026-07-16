@@ -676,6 +676,13 @@ namespace fonthook
 
 		void ProcessStewieMenuSearchPendingStateSync()
 		{
+			const bool needsMaintenance = std::any_of(std::begin(s_menuSearchHooks),
+				std::end(s_menuSearchHooks), [](const StewieMenuSearchHook& hook)
+				{
+					return hook.stateSyncPending || hook.keyboardActive;
+				});
+			if (!needsMaintenance)
+				return;
 			const DWORD now = GetTickCount();
 			for (StewieMenuSearchHook& hook : s_menuSearchHooks)
 			{

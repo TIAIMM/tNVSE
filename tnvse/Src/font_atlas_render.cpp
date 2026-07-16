@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -184,7 +185,7 @@ namespace fonthook::vectorfont
 
 			bool operator==(const AtlasCacheKey& other) const
 			{
-				return atlasContentHash == other.atlasContentHash && fontId == other.fontId
+				return atlasContentHash == other.atlasContentHash
 					&& scaleMilli == other.scaleMilli && pixelMode == other.pixelMode
 					&& renderMode == other.renderMode && padding == other.padding
 					&& levelZeroOnly == other.levelZeroOnly
@@ -198,7 +199,6 @@ namespace fonthook::vectorfont
 			{
 				size_t result = static_cast<size_t>(
 					key.atlasContentHash ^ (key.atlasContentHash >> 32));
-				result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
 				result ^= static_cast<size_t>(key.scaleMilli) * 0x85EBCA77u;
 				result ^= static_cast<size_t>(key.pixelMode) << 4;
 				result ^= static_cast<size_t>(key.renderMode) << 6;
@@ -232,6 +232,46 @@ namespace fonthook::vectorfont
 			UInt16 atlasPage = 0;
 		};
 
+		struct AtlasProfileKey
+		{
+			UInt64 atlasContentHash = 0;
+			UInt32 scaleMilli = 1000;
+			AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
+			AtlasRenderMode renderMode = AtlasRenderMode::CpuEffects;
+			UInt32 padding = kAtlasPadding;
+			bool levelZeroOnly = false;
+
+			bool operator==(const AtlasProfileKey& other) const
+			{
+				return atlasContentHash == other.atlasContentHash
+					&& scaleMilli == other.scaleMilli && pixelMode == other.pixelMode
+					&& renderMode == other.renderMode && padding == other.padding
+					&& levelZeroOnly == other.levelZeroOnly;
+			}
+		};
+
+		struct AtlasProfileKeyHash
+		{
+			size_t operator()(const AtlasProfileKey& key) const
+			{
+				size_t result = static_cast<size_t>(
+					key.atlasContentHash ^ (key.atlasContentHash >> 32));
+				result ^= static_cast<size_t>(key.scaleMilli) * 0x85EBCA77u;
+				result ^= static_cast<size_t>(key.pixelMode) << 4;
+				result ^= static_cast<size_t>(key.renderMode) << 6;
+				result ^= static_cast<size_t>(key.padding) * 0x27D4EB2Du;
+				result ^= static_cast<size_t>(key.levelZeroOnly) << 11;
+				return result;
+			}
+		};
+
+		struct AtlasProfileIndex
+		{
+			std::vector<UInt16> pages;
+			std::unordered_map<UInt64, UInt16> residentPages;
+			std::unordered_map<UInt16, std::vector<UInt64>> pageResidents;
+		};
+
 		struct BatchTemplateKey
 		{
 			uintptr_t atlasIdentity = 0;
@@ -263,6 +303,12 @@ namespace fonthook::vectorfont
 			std::vector<UInt16> indices;
 		};
 
+		struct QuadBatchFingerprint
+		{
+			UInt64 contentHash = 0;
+			UInt32 quadCount = 0;
+		};
+
 		struct BatchTemplateEntry
 		{
 			std::shared_ptr<const BatchTemplate> data;
@@ -271,12 +317,15 @@ namespace fonthook::vectorfont
 		};
 
 		std::unordered_map<AtlasCacheKey, AtlasCacheEntry, AtlasCacheKeyHash> s_atlasCache;
+		std::unordered_map<AtlasProfileKey, AtlasProfileIndex,
+			AtlasProfileKeyHash> s_atlasProfiles;
 		std::list<AtlasCacheKey> s_atlasLru;
 		size_t s_atlasCacheBytes = 0;
 		std::mutex s_atlasMutex;
 		std::vector<RetiredAtlasGeneration> s_retiredAtlases;
 		bool s_defaultPoolResetRegistered = false;
 		bool s_defaultPoolShutdown = false;
+		std::atomic<bool> s_defaultPoolMaintenancePending = false;
 		bool s_budgetResolved = false;
 		size_t s_resolvedGpuBudgetBytes = 0;
 		UInt32 s_lastAvailableTextureMemoryMB = 0;
@@ -752,6 +801,77 @@ namespace fonthook::vectorfont
 			entry.lru = s_atlasLru.begin();
 		}
 
+		AtlasProfileKey MakeAtlasProfileKey(const AtlasCacheKey& key)
+		{
+			return {
+				key.atlasContentHash,
+				key.scaleMilli,
+				key.pixelMode,
+				key.renderMode,
+				key.padding,
+				key.levelZeroOnly
+			};
+		}
+
+		void IndexAtlasPage(const AtlasCacheKey& key, const AtlasResource& resource)
+		{
+			AtlasProfileIndex& profile = s_atlasProfiles[MakeAtlasProfileKey(key)];
+			const auto page = std::lower_bound(profile.pages.begin(), profile.pages.end(),
+				key.pageIndex);
+			if (page == profile.pages.end() || *page != key.pageIndex)
+				profile.pages.insert(page, key.pageIndex);
+
+			// Re-indexing an appended or restored page used to scan every resident in
+			// the profile. Track each page's own IDs so updates stay proportional to
+			// that page while preserving the same cacheId -> page result.
+			std::vector<UInt64>& pageResidents = profile.pageResidents[key.pageIndex];
+			for (UInt64 cacheId : pageResidents)
+			{
+				const auto resident = profile.residentPages.find(cacheId);
+				if (resident != profile.residentPages.end()
+					&& resident->second == key.pageIndex)
+				{
+					profile.residentPages.erase(resident);
+				}
+			}
+			pageResidents.clear();
+			pageResidents.reserve(resource.placements.size());
+			for (const auto& placement : resource.placements)
+			{
+				profile.residentPages[placement.first] = key.pageIndex;
+				pageResidents.push_back(placement.first);
+			}
+		}
+
+		void UnindexAtlasPage(const AtlasCacheKey& key)
+		{
+			const AtlasProfileKey profileKey = MakeAtlasProfileKey(key);
+			auto found = s_atlasProfiles.find(profileKey);
+			if (found == s_atlasProfiles.end())
+				return;
+			AtlasProfileIndex& profile = found->second;
+			const auto page = std::lower_bound(profile.pages.begin(), profile.pages.end(),
+				key.pageIndex);
+			if (page != profile.pages.end() && *page == key.pageIndex)
+				profile.pages.erase(page);
+			const auto pageResidents = profile.pageResidents.find(key.pageIndex);
+			if (pageResidents != profile.pageResidents.end())
+			{
+				for (UInt64 cacheId : pageResidents->second)
+				{
+					const auto resident = profile.residentPages.find(cacheId);
+					if (resident != profile.residentPages.end()
+						&& resident->second == key.pageIndex)
+					{
+						profile.residentPages.erase(resident);
+					}
+				}
+				profile.pageResidents.erase(pageResidents);
+			}
+			if (profile.pages.empty())
+				s_atlasProfiles.erase(found);
+		}
+
 		void TrimAtlasCache()
 		{
 			while (s_atlasCacheBytes > GetAtlasCacheLimit() && !s_atlasLru.empty())
@@ -761,6 +881,7 @@ namespace fonthook::vectorfont
 				if (it != s_atlasCache.end())
 				{
 					RetireDefaultGeneration(*it->second.resource);
+					UnindexAtlasPage(key);
 					s_atlasCacheBytes -= it->second.bytes;
 					s_atlasCache.erase(it);
 				}
@@ -1597,6 +1718,7 @@ namespace fonthook::vectorfont
 				return;
 			}
 			s_retiredAtlases.push_back({ MakeGenerationSnapshot(resource) });
+			s_defaultPoolMaintenancePending.store(true, std::memory_order_release);
 		}
 
 		void PruneRetiredAtlases()
@@ -1607,6 +1729,18 @@ namespace fonthook::vectorfont
 				return !retired.resource || !retired.resource->property
 					|| retired.resource->property->m_uiRefCount <= 1;
 			}), s_retiredAtlases.end());
+		}
+
+		bool HasDefaultPoolMaintenanceLocked()
+		{
+			if (!s_retiredAtlases.empty())
+				return true;
+			return std::any_of(s_atlasCache.begin(), s_atlasCache.end(),
+				[](const auto& entry)
+				{
+					return entry.second.resource
+						&& entry.second.resource->resetPending;
+				});
 		}
 
 		IDirect3DTexture9* QueryAtlasD3DTexture(const AtlasResource& resource)
@@ -2134,23 +2268,20 @@ namespace fonthook::vectorfont
 
 			std::lock_guard<std::mutex> lock(s_atlasMutex);
 			std::vector<std::pair<AtlasCacheKey, AtlasCacheEntry*>> entries;
-			for (auto& pair : s_atlasCache)
+			const AtlasProfileKey profileKey = MakeAtlasProfileKey(baseKey);
+			auto profile = s_atlasProfiles.find(profileKey);
+			if (profile != s_atlasProfiles.end())
 			{
-				const AtlasCacheKey& key = pair.first;
-				if (key.atlasContentHash == baseKey.atlasContentHash
-					&& key.fontId == baseKey.fontId
-					&& key.scaleMilli == baseKey.scaleMilli
-					&& key.pixelMode == baseKey.pixelMode
-					&& key.renderMode == baseKey.renderMode
-					&& key.padding == baseKey.padding
-					&& key.levelZeroOnly == baseKey.levelZeroOnly
-					&& pair.second.resource)
-					entries.push_back({ key, &pair.second });
+				entries.reserve(profile->second.pages.size());
+				for (UInt16 pageIndex : profile->second.pages)
+				{
+					AtlasCacheKey pageKey = baseKey;
+					pageKey.pageIndex = pageIndex;
+					auto page = s_atlasCache.find(pageKey);
+					if (page != s_atlasCache.end() && page->second.resource)
+						entries.push_back({ pageKey, &page->second });
+				}
 			}
-			std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs)
-			{
-				return lhs.first.pageIndex < rhs.first.pageIndex;
-			});
 			std::vector<std::shared_ptr<AtlasResource>> pages;
 			pages.reserve(entries.size() + 1);
 			for (auto& entry : entries)
@@ -2167,11 +2298,8 @@ namespace fonthook::vectorfont
 			{
 				if (!bitmap)
 					continue;
-				const bool resident = std::any_of(pages.begin(), pages.end(),
-					[&](const std::shared_ptr<AtlasResource>& page)
-					{
-						return page && page->placements.count(bitmap->cacheId) != 0;
-					});
+				const bool resident = profile != s_atlasProfiles.end()
+					&& profile->second.residentPages.count(bitmap->cacheId) != 0;
 				if (!resident)
 					missing.push_back(bitmap);
 			}
@@ -2180,6 +2308,7 @@ namespace fonthook::vectorfont
 
 			if (!pages.empty() && AddBitmapsToAtlas(*pages.back(), missing))
 			{
+				IndexAtlasPage(entries.back().first, *pages.back());
 				AtlasCacheEntry* entry = entries.back().second;
 				const size_t bytes = GetAtlasStorageBytes(pages.back()->width,
 					pages.back()->height, pages.back()->pixelMode, pages.back()->mipLevels);
@@ -2224,6 +2353,7 @@ namespace fonthook::vectorfont
 			s_atlasLru.push_front(pageKey);
 			s_atlasCache.emplace(pageKey,
 				AtlasCacheEntry{ resource, bytes, s_atlasLru.begin() });
+			IndexAtlasPage(pageKey, *resource);
 			s_atlasCacheBytes += bytes;
 			TrimAtlasCache();
 			pages.push_back(resource);
@@ -2512,10 +2642,40 @@ namespace fonthook::vectorfont
 			return map ? map->m_spTexture : nullptr;
 		}
 
-		BatchTemplateKey BuildBatchTemplateKey(const std::vector<PendingQuad>& quads,
-			const std::vector<std::shared_ptr<AtlasResource>>& atlases)
+		QuadBatchFingerprint BuildQuadBatchFingerprint(
+			const std::vector<PendingQuad>& quads)
 		{
 			UInt64 hash = 1469598103934665603ull;
+			auto add = [&](const void* data, size_t size)
+			{
+				const UInt8* bytes = static_cast<const UInt8*>(data);
+				for (size_t index = 0; index < size; ++index)
+				{
+					hash ^= bytes[index];
+					hash *= 1099511628211ull;
+				}
+			};
+			for (const PendingQuad& quad : quads)
+			{
+				add(&quad.bitmap->cacheId, sizeof(quad.bitmap->cacheId));
+				add(&quad.pen, sizeof(quad.pen));
+				add(&quad.color, sizeof(quad.color));
+				add(&quad.offsetX, sizeof(quad.offsetX));
+				add(&quad.offsetY, sizeof(quad.offsetY));
+				add(&quad.rasterScale, sizeof(quad.rasterScale));
+				add(&quad.baselineOffset, sizeof(quad.baselineOffset));
+				add(&quad.expansionPixels, sizeof(quad.expansionPixels));
+				add(&quad.layer, sizeof(quad.layer));
+				add(&quad.usesSdf, sizeof(quad.usesSdf));
+				add(&quad.atlasPage, sizeof(quad.atlasPage));
+			}
+			return { hash, static_cast<UInt32>(quads.size()) };
+		}
+
+		BatchTemplateKey BuildBatchTemplateKey(const QuadBatchFingerprint& fingerprint,
+			const std::vector<std::shared_ptr<AtlasResource>>& atlases)
+		{
+			UInt64 hash = fingerprint.contentHash;
 			auto add = [&](const void* data, size_t size)
 			{
 				const UInt8* bytes = static_cast<const UInt8*>(data);
@@ -2538,30 +2698,16 @@ namespace fonthook::vectorfont
 				generation ^= atlas->generation + 0x9E3779B9u
 					+ (generation << 6) + (generation >> 2);
 			}
-			for (const PendingQuad& quad : quads)
-			{
-				add(&quad.bitmap->cacheId, sizeof(quad.bitmap->cacheId));
-				add(&quad.pen, sizeof(quad.pen));
-				add(&quad.color, sizeof(quad.color));
-				add(&quad.offsetX, sizeof(quad.offsetX));
-				add(&quad.offsetY, sizeof(quad.offsetY));
-				add(&quad.rasterScale, sizeof(quad.rasterScale));
-				add(&quad.baselineOffset, sizeof(quad.baselineOffset));
-				add(&quad.expansionPixels, sizeof(quad.expansionPixels));
-				add(&quad.layer, sizeof(quad.layer));
-				add(&quad.usesSdf, sizeof(quad.usesSdf));
-				add(&quad.atlasPage, sizeof(quad.atlasPage));
-			}
 			return { atlases.empty() ? 0 : reinterpret_cast<uintptr_t>(atlases[0].get()),
-				hash, generation,
-				static_cast<UInt32>(quads.size()) };
+				hash, generation, fingerprint.quadCount };
 		}
 
 		std::shared_ptr<const BatchTemplate> GetBatchTemplate(Font& font,
 			const std::vector<PendingQuad>& quads,
-			const std::vector<std::shared_ptr<AtlasResource>>& atlases)
+			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
+			const QuadBatchFingerprint& fingerprint)
 		{
-			const BatchTemplateKey key = BuildBatchTemplateKey(quads, atlases);
+			const BatchTemplateKey key = BuildBatchTemplateKey(fingerprint, atlases);
 			{
 				std::lock_guard<std::mutex> lock(s_batchMutex);
 				auto existing = s_batchCache.find(key);
@@ -2670,7 +2816,8 @@ namespace fonthook::vectorfont
 		NiTriShape* CreateAtlasShape(Font& font, const std::vector<PendingQuad>& quads,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases, bool prepareObject,
 			const NiColorA& tileColor, bool useCustomA8Shader,
-			const A8EffectShapeConfig* effectConfig)
+			const A8EffectShapeConfig* effectConfig,
+			const QuadBatchFingerprint& fingerprint)
 		{
 			if (atlases.empty() || !atlases[0] || quads.empty()
 				|| quads.size() > kMaximumQuads)
@@ -2694,7 +2841,7 @@ namespace fonthook::vectorfont
 
 			NiTriShapeData* data = shape->GetModelData();
 			const std::shared_ptr<const BatchTemplate> batch =
-				GetBatchTemplate(font, quads, atlases);
+				GetBatchTemplate(font, quads, atlases, fingerprint);
 			if (!batch)
 				return nullptr;
 			std::copy(batch->vertices.begin(), batch->vertices.end(), data->m_pkVertex);
@@ -2777,27 +2924,32 @@ namespace fonthook::vectorfont
 			outAtlases.clear();
 			std::vector<UInt16> compactPageIndices(availableAtlases.size(),
 				std::numeric_limits<UInt16>::max());
+			thread_local std::unordered_map<UInt64, UInt16> placementPages;
+			placementPages.clear();
+			size_t placementCount = 0;
+			for (const auto& atlas : availableAtlases)
+				placementCount += atlas ? atlas->placements.size() : 0;
+			placementPages.reserve(placementCount);
+			for (UInt16 page = 0; page < availableAtlases.size(); ++page)
+			{
+				if (!availableAtlases[page])
+					continue;
+				for (const auto& placement : availableAtlases[page]->placements)
+					placementPages.emplace(placement.first, page);
+			}
 			for (PendingQuad& quad : pagedQuads)
 			{
-				bool found = false;
-				for (UInt16 page = 0; page < availableAtlases.size(); ++page)
-				{
-					if (availableAtlases[page]
-						&& availableAtlases[page]->placements.count(quad.bitmap->cacheId))
-					{
-						UInt16& compactPage = compactPageIndices[page];
-						if (compactPage == std::numeric_limits<UInt16>::max())
-						{
-							compactPage = static_cast<UInt16>(outAtlases.size());
-							outAtlases.push_back(availableAtlases[page]);
-						}
-						quad.atlasPage = compactPage;
-						found = true;
-						break;
-					}
-				}
-				if (!found)
+				const auto placement = placementPages.find(quad.bitmap->cacheId);
+				if (placement == placementPages.end())
 					return nullptr;
+				const UInt16 page = placement->second;
+				UInt16& compactPage = compactPageIndices[page];
+				if (compactPage == std::numeric_limits<UInt16>::max())
+				{
+					compactPage = static_cast<UInt16>(outAtlases.size());
+					outAtlases.push_back(availableAtlases[page]);
+				}
+				quad.atlasPage = compactPage;
 			}
 			std::stable_sort(pagedQuads.begin(), pagedQuads.end(),
 				[](const PendingQuad& lhs, const PendingQuad& rhs)
@@ -2806,6 +2958,8 @@ namespace fonthook::vectorfont
 						return lhs.layer < rhs.layer;
 					return lhs.atlasPage < rhs.atlasPage;
 				});
+			const QuadBatchFingerprint fingerprint =
+				BuildQuadBatchFingerprint(pagedQuads);
 			A8EffectShapeConfig resolvedEffect;
 			const A8EffectShapeConfig* resolvedEffectPointer = nullptr;
 			if (effectConfig)
@@ -2816,7 +2970,7 @@ namespace fonthook::vectorfont
 				resolvedEffectPointer = &resolvedEffect;
 			}
 			NiTriShape* shape = CreateAtlasShape(font, pagedQuads, outAtlases, prepareObject,
-				tileColor, useCustomA8Shader, resolvedEffectPointer);
+				tileColor, useCustomA8Shader, resolvedEffectPointer, fingerprint);
 			if (shape && outAtlases.size() == 1 && outAtlases[0]->transient
 				&& outAtlases[0]->backend == AtlasBackend::DefaultPool)
 			{
@@ -2839,6 +2993,7 @@ namespace fonthook::vectorfont
 				data->m_uiLevels = 0;
 			}
 			resource.resetPending = true;
+			s_defaultPoolMaintenancePending.store(true, std::memory_order_release);
 		}
 
 		bool RebuildDefaultPoolTexture(AtlasResource& resource)
@@ -2882,6 +3037,7 @@ namespace fonthook::vectorfont
 				mode = AtlasPixelMode::Argb32;
 			}
 			resource.resetPending = true;
+			s_defaultPoolMaintenancePending.store(true, std::memory_order_release);
 			return false;
 		}
 
@@ -2889,7 +3045,10 @@ namespace fonthook::vectorfont
 		{
 			if (s_defaultPoolShutdown)
 				return true;
-			const auto started = std::chrono::steady_clock::now();
+			const bool logResetTiming = g_bEnableFreeTypeFontRenderingLog;
+			const auto started = logResetTiming
+				? std::chrono::steady_clock::now()
+				: std::chrono::steady_clock::time_point{};
 			UInt32 processed = 0;
 			UInt32 failed = 0;
 			{
@@ -2931,8 +3090,10 @@ namespace fonthook::vectorfont
 					PruneRetiredAtlases();
 					TrimAtlasCache();
 				}
+				s_defaultPoolMaintenancePending.store(
+					HasDefaultPoolMaintenanceLocked(), std::memory_order_release);
 			}
-			if (g_bEnableFreeTypeFontRenderingLog)
+			if (logResetTiming)
 			{
 				const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now() - started).count();
@@ -2967,24 +3128,26 @@ namespace fonthook::vectorfont
 			|| s_defaultPoolShutdown)
 			return;
 		InitializeDefaultPoolAtlasLifecycle();
+		if (!s_defaultPoolMaintenancePending.load(std::memory_order_acquire))
+			return;
 		static UInt32 retryFrame = 0;
 		const bool retry = (++retryFrame % 120u) == 0;
+		if (!retry)
+			return;
 		std::lock_guard<std::mutex> lock(s_atlasMutex);
 		PruneRetiredAtlases();
-		if (retry)
+		for (auto& [key, entry] : s_atlasCache)
 		{
-			for (auto& [key, entry] : s_atlasCache)
-			{
-				if (entry.resource && entry.resource->resetPending)
-					RebuildDefaultPoolTexture(*entry.resource);
-			}
-			for (RetiredAtlasGeneration& retired : s_retiredAtlases)
-			{
-				if (retired.resource && retired.resource->resetPending)
-					RebuildDefaultPoolTexture(*retired.resource);
-			}
+			if (entry.resource && entry.resource->resetPending)
+				RebuildDefaultPoolTexture(*entry.resource);
 		}
-		TrimAtlasCache();
+		for (RetiredAtlasGeneration& retired : s_retiredAtlases)
+		{
+			if (retired.resource && retired.resource->resetPending)
+				RebuildDefaultPoolTexture(*retired.resource);
+		}
+		s_defaultPoolMaintenancePending.store(
+			HasDefaultPoolMaintenanceLocked(), std::memory_order_release);
 	}
 
 	void ShutdownDefaultPoolAtlasLifecycle()
@@ -3529,6 +3692,7 @@ namespace fonthook::vectorfont
 				s_atlasLru.push_front(page.first);
 				s_atlasCache.emplace(page.first, AtlasCacheEntry{
 					page.second, storageBytes, s_atlasLru.begin() });
+				IndexAtlasPage(page.first, *page.second);
 				s_atlasCacheBytes += storageBytes;
 			}
 			TrimAtlasCache();
@@ -3563,23 +3727,18 @@ namespace fonthook::vectorfont
 		{
 			std::lock_guard<std::mutex> lock(s_atlasMutex);
 			std::vector<std::pair<AtlasCacheKey, const AtlasResource*>> resources;
-			for (const auto& pair : s_atlasCache)
+			const auto profile = s_atlasProfiles.find(MakeAtlasProfileKey(key));
+			if (profile == s_atlasProfiles.end())
+				return false;
+			resources.reserve(profile->second.pages.size());
+			for (UInt16 pageIndex : profile->second.pages)
 			{
-				const AtlasCacheKey& candidate = pair.first;
-				if (candidate.atlasContentHash == key.atlasContentHash
-					&& candidate.fontId == key.fontId
-					&& candidate.scaleMilli == key.scaleMilli
-					&& candidate.pixelMode == key.pixelMode
-					&& candidate.renderMode == key.renderMode
-					&& candidate.padding == key.padding
-					&& candidate.levelZeroOnly == key.levelZeroOnly
-					&& pair.second.resource)
-					resources.push_back({ candidate, pair.second.resource.get() });
+				AtlasCacheKey pageKey = key;
+				pageKey.pageIndex = pageIndex;
+				const auto page = s_atlasCache.find(pageKey);
+				if (page != s_atlasCache.end() && page->second.resource)
+					resources.push_back({ pageKey, page->second.resource.get() });
 			}
-			std::sort(resources.begin(), resources.end(), [](const auto& lhs, const auto& rhs)
-			{
-				return lhs.first.pageIndex < rhs.first.pageIndex;
-			});
 			if (resources.empty() || resources.size() > kMaximumAtlasSnapshotPages)
 				return false;
 			for (size_t index = 0; index < resources.size(); ++index)

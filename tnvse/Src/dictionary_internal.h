@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <deque>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -18,6 +19,33 @@ namespace fonthook
 	// ---- cache limits ----
 	inline constexpr size_t kPositiveCacheLimit = 10000;
 	inline constexpr size_t kNegativeCacheLimit = 20000;
+
+	struct TransparentStringHash
+	{
+		using is_transparent = void;
+		size_t operator()(std::string_view value) const noexcept
+		{
+			return std::hash<std::string_view>{}(value);
+		}
+		size_t operator()(const std::string& value) const noexcept
+		{
+			return (*this)(std::string_view(value));
+		}
+	};
+
+	struct TransparentStringEqual
+	{
+		using is_transparent = void;
+		bool operator()(std::string_view lhs, std::string_view rhs) const noexcept
+		{
+			return lhs == rhs;
+		}
+	};
+
+	using PositiveTranslationCache = std::unordered_map<std::string, std::string,
+		TransparentStringHash, TransparentStringEqual>;
+	using NegativeTranslationCache = std::unordered_set<std::string,
+		TransparentStringHash, TransparentStringEqual>;
 
 	// ---- entry struct ----
 	struct DictionaryEntry
@@ -60,8 +88,10 @@ namespace fonthook
 	extern std::unordered_map<std::string, std::vector<size_t>> s_wildcardSuffixIndex;
 	extern std::vector<size_t> s_wildcardLooseIndex;
 	extern std::unordered_map<std::string, size_t> s_idIndex;
-	extern std::unordered_map<std::string, std::string> s_positiveCache;
-	extern std::unordered_set<std::string> s_negativeCache;
+	extern PositiveTranslationCache s_positiveCache;
+	extern NegativeTranslationCache s_negativeCache;
+	extern std::deque<const std::string*> s_positiveCacheOrder;
+	extern std::deque<const std::string*> s_negativeCacheOrder;
 	extern std::unordered_map<std::string, UiHintFormat> s_uiHintFormats;
 	extern std::unordered_set<std::string> s_registeredAutoKeys;
 	extern bool s_dictionaryLoaded;

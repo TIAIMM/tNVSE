@@ -16,6 +16,10 @@ namespace fonthook
 		DWORD s_lastStewieImeCommitTick = 0;
 		DWORD s_lastStewieImeEnterKeyTick = 0;
 		DWORD s_inputLanguageSwitchGuardUntilTick = 0;
+		HKL s_winSpaceLayoutBefore = nullptr;
+		bool s_winSpaceChordArmed = false;
+		bool s_winSpaceSwitchPending = false;
+		bool s_winSpaceLanguageChangeObserved = false;
 
 		struct ImeCandidateState
 		{
@@ -49,6 +53,7 @@ namespace fonthook
 		bool s_gameImeEnabled = false;
 		bool s_textInputSessionActive = false;
 		DWORD s_nativeImeAsciiGuardUntilTick = 0;
+		DWORD s_lastImeWatchdogTick = 0;
 
 		struct TsfUiElementSession
 		{
@@ -917,6 +922,37 @@ namespace fonthook
 			SetTextInputSessionActive(GetCurrentTextEditMenuObject() != nullptr || GetOverlayStewieInputTarget().valid);
 		}
 
+		void PumpImeStatusWatchdog()
+		{
+			if (!s_window)
+				return;
+
+			// Input, focus, language, composition and TSF candidate events refresh
+			// immediately in the window/TSF callbacks. Keep only a low-frequency
+			// safety net while there is live state that can become stale.
+			if (!s_textInputSessionActive && !s_candidateOverlay.visible)
+			{
+				s_lastImeWatchdogTick = 0;
+				return;
+			}
+
+			constexpr DWORD kImeWatchdogIntervalMs = 250;
+			const DWORD now = GetTickCount();
+			if (s_lastImeWatchdogTick && now - s_lastImeWatchdogTick < kImeWatchdogIntervalMs)
+				return;
+
+			s_lastImeWatchdogTick = now;
+			UpdateGameImeAssociation();
+			if (!s_textInputSessionActive && !s_candidateOverlay.visible)
+				return;
+
+			if (g_bMultibyteInputCompositionPreview)
+			{
+				RefreshImeStatus(s_window);
+				UpdateCandidateOverlay();
+			}
+		}
+
 		void EndStewieTextInputSession(const char* reason)
 		{
 			CancelDeferredStewieAscii();
@@ -965,6 +1001,22 @@ namespace fonthook
 				return false;
 
 			return IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
+		}
+
+		bool IsPendingWinSpaceRelease(UINT msg, WPARAM wParam)
+		{
+			return s_winSpaceSwitchPending
+				&& (msg == WM_KEYUP || msg == WM_SYSKEYUP)
+				&& wParam == VK_SPACE;
+		}
+
+		bool IsWindowsKeyMessage(UINT msg, WPARAM wParam)
+		{
+			return (msg == WM_KEYDOWN
+				|| msg == WM_SYSKEYDOWN
+				|| msg == WM_KEYUP
+				|| msg == WM_SYSKEYUP)
+				&& (wParam == VK_LWIN || wParam == VK_RWIN);
 		}
 
 		bool ShouldSuppressInputLanguageSwitchAscii(UInt8 input)
@@ -1618,6 +1670,23 @@ namespace fonthook
 					SetTextInputSessionActive(false);
 				}
 
+				if (IsWindowsKeyMessage(msg, wParam))
+				{
+					const bool keyDown = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+					if (keyDown && s_textInputSessionActive && !s_winSpaceSwitchPending)
+					{
+						s_winSpaceLayoutBefore = GetGameKeyboardLayout(hwnd);
+						s_winSpaceChordArmed = true;
+						s_winSpaceLanguageChangeObserved = false;
+					}
+					else if (!keyDown && !s_winSpaceSwitchPending)
+					{
+						s_winSpaceLayoutBefore = nullptr;
+						s_winSpaceChordArmed = false;
+						s_winSpaceLanguageChangeObserved = false;
+					}
+				}
+
 				if (msg == WM_INPUTLANGCHANGEREQUEST && s_textInputSessionActive)
 				{
 					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_INPUTLANGCHANGEREQUEST action=def_window_proc");
@@ -1627,6 +1696,8 @@ namespace fonthook
 				if (msg == WM_INPUTLANGCHANGE && s_textInputSessionActive)
 				{
 					HKL newLayout = reinterpret_cast<HKL>(lParam);
+					if (s_winSpaceChordArmed || s_winSpaceSwitchPending)
+						s_winSpaceLanguageChangeObserved = true;
 					RestoreDefaultGameImeContext(hwnd, "inputlangchange", newLayout);
 					ClearImeCandidates();
 					UpdateCandidateOverlay();
@@ -1637,20 +1708,67 @@ namespace fonthook
 					return 0;
 				}
 
+				if (IsPendingWinSpaceRelease(msg, wParam))
+				{
+					const HKL layoutBefore = s_winSpaceLayoutBefore;
+					s_winSpaceSwitchPending = false;
+
+					HKL currentLayout = GetGameKeyboardLayout(hwnd);
+					const bool systemChangedLayout = s_winSpaceLanguageChangeObserved
+						|| currentLayout != layoutBefore;
+					HKL previousLayout = currentLayout;
+					if (!systemChangedLayout)
+					{
+						// Win+Space is a shell hotkey. Normally its
+						// WM_INPUTLANGCHANGEREQUEST has already switched the focused
+						// thread by key release. Only compensate when the shell did
+						// not change anything; switching on key-down races the shell
+						// and can advance twice back to the original layout.
+						previousLayout = ActivateKeyboardLayout(
+							reinterpret_cast<HKL>(HKL_NEXT),
+							KLF_SETFORPROCESS);
+						currentLayout = GetGameKeyboardLayout(hwnd);
+					}
+
+					RestoreDefaultGameImeContext(hwnd, "winspace_complete", currentLayout);
+					ClearImeCandidates();
+					UpdateCandidateOverlay();
+					if (IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN))
+					{
+						// Keep the original layout for the next Space press while Win
+						// remains held, matching the shell's multi-layout cycling UI.
+						s_winSpaceLayoutBefore = currentLayout;
+						s_winSpaceChordArmed = true;
+						s_winSpaceLanguageChangeObserved = false;
+					}
+					else
+					{
+						s_winSpaceLayoutBefore = nullptr;
+						s_winSpaceChordArmed = false;
+						s_winSpaceLanguageChangeObserved = false;
+					}
+					DebugLog(
+						"tnvse_multibyte_input_event: source=WndProc action=winspace_complete systemChanged=%u previous=0x%08X current=0x%08X",
+						systemChangedLayout ? 1 : 0,
+						static_cast<UInt32>(reinterpret_cast<ULONG_PTR>(previousLayout)),
+						static_cast<UInt32>(reinterpret_cast<ULONG_PTR>(currentLayout)));
+					return 0;
+				}
+
 				if (s_textInputSessionActive && IsWinSpaceInputLanguageHotkey(msg, wParam))
 				{
 					s_inputLanguageSwitchGuardUntilTick = GetTickCount() + 250;
 					SuppressStewieInputLanguageSwitchSpace();
-					RestoreDefaultGameImeContext(hwnd, "winspace_before");
-					HKL previousLayout = ActivateKeyboardLayout(reinterpret_cast<HKL>(HKL_NEXT), KLF_SETFORPROCESS);
-					HKL currentLayout = GetGameKeyboardLayout(hwnd);
-					RestoreDefaultGameImeContext(hwnd, "winspace_after", currentLayout);
-					ClearImeCandidates();
-					UpdateCandidateOverlay();
+					if (!s_winSpaceChordArmed)
+					{
+						s_winSpaceLayoutBefore = GetGameKeyboardLayout(hwnd);
+						s_winSpaceChordArmed = true;
+						s_winSpaceLanguageChangeObserved = false;
+					}
+					s_winSpaceSwitchPending = true;
 					DebugLog(
-						"tnvse_multibyte_input_event: source=WndProc action=winspace_next_layout previous=0x%08X current=0x%08X",
-						static_cast<UInt32>(reinterpret_cast<ULONG_PTR>(previousLayout)),
-						static_cast<UInt32>(reinterpret_cast<ULONG_PTR>(currentLayout)));
+						"tnvse_multibyte_input_event: source=WndProc action=winspace_wait_for_system layout=0x%08X",
+						static_cast<UInt32>(reinterpret_cast<ULONG_PTR>(s_winSpaceLayoutBefore)));
 					return 0;
 				}
 
@@ -1904,6 +2022,10 @@ namespace fonthook
 			s_lastStewieImeCommitTick = 0;
 			s_lastStewieImeEnterKeyTick = 0;
 			s_inputLanguageSwitchGuardUntilTick = 0;
+			s_winSpaceLayoutBefore = nullptr;
+			s_winSpaceChordArmed = false;
+			s_winSpaceSwitchPending = false;
+			s_winSpaceLanguageChangeObserved = false;
 			s_lastWndProcAsciiTick = 0;
 			s_lastWndProcAsciiChar = 0;
 			ClearJipTextInputHookState();

@@ -3,10 +3,12 @@
 #include "encoding.h"
 #include "load_config.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
 #include <deque>
+#include <iterator>
 #include <mutex>
 #include <string>
 #include <unordered_set>
@@ -301,6 +303,7 @@ namespace fonthook::vectorfont
 		std::deque<PrewarmJob> s_jobs;
 		std::unordered_set<UInt64> s_scheduledProfiles;
 		UInt64 s_snapshotRevision = 0;
+		bool s_configuredFontsQueued = false;
 
 		UInt64 BuildProfileKey(const FontConfig& config)
 		{
@@ -314,11 +317,21 @@ namespace fonthook::vectorfont
 					hash *= 1099511628211ull;
 				}
 			};
-			add(&config.fontId, sizeof(config.fontId));
 			add(&config.layoutHash, sizeof(config.layoutHash));
 			add(&config.maskGenerationHash, sizeof(config.maskGenerationHash));
 			add(&config.shaderEffectHash, sizeof(config.shaderEffectHash));
+			add(&config.prewarm, sizeof(config.prewarm));
+			add(&g_usingWinEncoding, sizeof(g_usingWinEncoding));
 			return hash;
+		}
+
+		bool MatchesPrewarmProfile(const PrewarmJob& job, const FontConfig& config)
+		{
+			return job.layoutHash == config.layoutHash &&
+				job.maskGenerationHash == config.maskGenerationHash &&
+				job.shaderEffectHash == config.shaderEffectHash &&
+				job.codePage == g_usingWinEncoding &&
+				job.mode == config.prewarm;
 		}
 
 		void ConfigureCommonRange(PrewarmJob& job)
@@ -652,9 +665,42 @@ namespace fonthook::vectorfont
 		const FontConfig* config = FindConfig(fontId);
 		if (!config || config->prewarm == FontPrewarmMode::None)
 			return;
+		// Every configured font needs its own runtime even when its immutable
+		// prewarm profile is shared with another font id. Tweak/JIP fonts may not
+		// otherwise be initialized until their menu is first opened.
+		if (!EnsureRuntimeFont(fontId))
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: prewarm deferred because runtime initialization failed font=%u",
+				fontId);
+			return;
+		}
+
 		const UInt64 key = BuildProfileKey(*config);
 		if (!s_scheduledProfiles.insert(key).second)
+		{
+			const auto shared = std::find_if(
+				s_jobs.begin(),
+				s_jobs.end(),
+				[config](const PrewarmJob& job) { return MatchesPrewarmProfile(job, *config); });
+			if (shared != s_jobs.end())
+			{
+				const UInt32 ownerFontId = shared->fontId;
+				const bool promoted = shared != std::prev(s_jobs.end());
+				if (promoted)
+				{
+					PrewarmJob sharedJob = std::move(*shared);
+					s_jobs.erase(shared);
+					s_jobs.push_back(std::move(sharedJob));
+				}
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm profile alias font=%u owner=%u promoted=%u",
+					fontId,
+					ownerFontId,
+					promoted ? 1u : 0u);
+			}
 			return;
+		}
 		PrewarmJob job;
 		job.fontId = fontId;
 		job.layoutHash = config->layoutHash;
@@ -671,13 +717,38 @@ namespace fonthook::vectorfont
 				? "codepage" : "common", g_usingWinEncoding);
 	}
 
+	void QueueConfiguredFontPrewarms()
+	{
+		if (s_configuredFontsQueued)
+			return;
+		s_configuredFontsQueued = true;
+
+		// FontManager's eight base slots activate during startup, whereas the
+		// extended slots owned by JIP/Tweaks are commonly lazy.  Enumerating the
+		// validated configuration makes both kinds participate in the same
+		// profile de-duplication and blocking startup prewarm.
+		std::vector<UInt32> fontIds;
+		fontIds.reserve(g_configs.size());
+		for (const auto& entry : g_configs)
+		{
+			if (entry.second.prewarm != FontPrewarmMode::None)
+				fontIds.push_back(entry.first);
+		}
+		std::sort(fontIds.begin(), fontIds.end());
+		for (UInt32 fontId : fontIds)
+			QueueFontPrewarm(fontId);
+	}
+
 	void PumpFontPrewarm()
 	{
-		if (s_jobs.empty() || !g_bEnableFreeTypeFontRendering)
+		if (!g_bEnableFreeTypeFontRendering)
 			return;
 
 		float deviceScale = 1.0f;
 		if (!TryGetFreeTypeSourceRasterScale(deviceScale))
+			return;
+		QueueConfiguredFontPrewarms();
+		if (s_jobs.empty())
 			return;
 		const UInt32 rasterScaleMilli = static_cast<UInt32>(std::lround(
 			deviceScale * 1000.0f));

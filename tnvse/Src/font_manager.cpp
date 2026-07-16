@@ -915,7 +915,7 @@ namespace fonthook
 						if (result.kind != LayoutWrapKind::None)
 							finishLine(static_cast<float>(result.completedWidth));
 					};
-					for (const FreeTypeLayoutGlyph& glyph : layout.glyphs)
+					for (const FreeTypeLayoutGlyph& glyph : *layout.glyphs)
 					{
 						if (cluster != glyph.cluster)
 						{
