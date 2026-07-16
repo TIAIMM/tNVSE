@@ -122,7 +122,7 @@
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-SemiBold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-SemiBold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
       <glow enabled="1" inner="0" outer="2" power="2" color="#FFFFFF" alpha="0.5"/>
@@ -141,7 +141,7 @@
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-SemiBold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-SemiBold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
       <glow enabled="0" inner="0" outer="2" power="2" color="#FFFFFF" alpha="0.5"/>
@@ -160,7 +160,7 @@
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-SemiBold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-SemiBold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
       <glow enabled="1" inner="0" outer="2" power="2" color="#FFFFFF" alpha="0.5"/>
@@ -179,7 +179,7 @@
       </singleByte>
       <doubleByte pixelSize="26" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
       <glow enabled="0" inner="0" outer="2" power="2" color="#FFFFFF" alpha="0.5"/>
@@ -217,7 +217,7 @@
       </singleByte>
       <doubleByte pixelSize="24" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-Bold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
       <glow enabled="1" inner="0" outer="2" power="2" color="#FFFFFF" alpha="0.5"/>
@@ -236,7 +236,7 @@
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-SemiBold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-SemiBold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
       <glow enabled="1" inner="0" outer="2" power="2" color="#FFFFFF" alpha="0.5"/>
@@ -274,7 +274,7 @@
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaFixedSC-SemiBold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-SemiBold.ttf" index="0"/>
         <fallback path="C:/Windows/Fonts/seguisym.ttf" index="0"/>
       </doubleByte>
       <glow enabled="0" inner="0" outer="2" power="2" color="#FFFFFF" alpha="0.5"/>

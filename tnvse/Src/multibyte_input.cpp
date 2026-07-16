@@ -80,7 +80,10 @@ namespace fonthook
 				TryInstallWindowProc();
 
 			if (s_hooksInstalled)
+			{
+				ProcessStewieTweaksInputTargetState();
 				ProcessStewieMenuSearchPendingStateSync();
+			}
 
 			if (s_hooksInstalled && s_window)
 				PumpImeStatusWatchdog();

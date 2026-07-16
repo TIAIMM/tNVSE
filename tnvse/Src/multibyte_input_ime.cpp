@@ -8,6 +8,7 @@ namespace fonthook
 	{
 		constexpr DWORD kDuplicateImeCharSuppressMs = 250;
 		constexpr DWORD kNativeImeAsciiGuardMs = 250;
+		constexpr DWORD kInputLanguageSwitchAsciiGuardMs = 500;
 		constexpr UInt32 kMaxImeCandidatesToDisplay = 9;
 
 		bool s_compositionEchoChecked = false;
@@ -884,7 +885,17 @@ namespace fonthook
 
 			s_textInputSessionActive = active;
 			if (s_window)
+			{
 				SetGameImeEnabled(s_window, active);
+				if (active)
+				{
+					// Enabling the retained IMM context does not guarantee an
+					// IMN_SETOPENSTATUS notification. Read it explicitly so a newly
+					// focused Stewie input shows the current IME status before typing.
+					RefreshImeStatus(s_window);
+					UpdateCandidateOverlay();
+				}
+			}
 
 			DebugLog(
 				"tnvse_multibyte_input: text input session %s",
@@ -906,6 +917,11 @@ namespace fonthook
 					RestoreDefaultGameImeContext(s_window, reason ? reason : "target_refresh");
 				else
 					SetGameImeEnabled(s_window, true);
+
+				// Target activation is an input event in its own right. Do not wait
+				// for the first composition/key message to publish the status line.
+				RefreshImeStatus(s_window);
+				UpdateCandidateOverlay();
 			}
 
 			DebugLog(
@@ -1710,6 +1726,12 @@ namespace fonthook
 
 				if (IsPendingWinSpaceRelease(msg, wParam))
 				{
+					// Fullscreen language-switch UI can delay Stewie's polled Space
+					// until after the key-up message. Restart the guard from key-up
+					// and remove any Space that arrived while the shell was switching.
+					s_inputLanguageSwitchGuardUntilTick = GetTickCount()
+						+ kInputLanguageSwitchAsciiGuardMs;
+					SuppressStewieInputLanguageSwitchSpace();
 					const HKL layoutBefore = s_winSpaceLayoutBefore;
 					s_winSpaceSwitchPending = false;
 
@@ -1757,7 +1779,8 @@ namespace fonthook
 
 				if (s_textInputSessionActive && IsWinSpaceInputLanguageHotkey(msg, wParam))
 				{
-					s_inputLanguageSwitchGuardUntilTick = GetTickCount() + 250;
+					s_inputLanguageSwitchGuardUntilTick = GetTickCount()
+						+ kInputLanguageSwitchAsciiGuardMs;
 					SuppressStewieInputLanguageSwitchSpace();
 					if (!s_winSpaceChordArmed)
 					{
@@ -1796,6 +1819,15 @@ namespace fonthook
 				if (msg == WM_IME_STARTCOMPOSITION && hasInputTarget)
 				{
 					CancelDeferredStewieAscii();
+					if (static_cast<SInt32>(s_inputLanguageSwitchGuardUntilTick
+						- GetTickCount()) > 0)
+					{
+						// If the first phonetic key starts composition immediately after
+						// Win+Space, remove a late polled hotkey Space before committing
+						// any multibyte result. This only runs inside the switch guard.
+						SuppressStewieInputLanguageSwitchSpace();
+						s_inputLanguageSwitchGuardUntilTick = 0;
+					}
 					HideSystemImeWindows(hwnd);
 					s_imeComposing = true;
 					s_compositionEchoChecked = false;

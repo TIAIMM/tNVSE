@@ -134,6 +134,7 @@ namespace fonthook
 		StewieInputTarget GetActiveStewieInputTarget();
 		StewieInputTarget GetOverlayStewieInputTarget();
 		void TryInstallStewieTweaksInputHooks();
+		void ProcessStewieTweaksInputTargetState();
 		void TryInstallTileReadXMLHook();
 		void ClearStewieInputState();
 		void ResetStewieInputState();

@@ -62,6 +62,8 @@ namespace fonthook
 		UInt8 s_lastDeferredStewieAsciiCommitChar = 0;
 		DWORD s_lastStewieSpaceCommitTick = 0;
 		StewieInputTarget s_lastStewieSpaceCommitTarget;
+		DWORD s_lastStewTargetPollTick = 0;
+		StewieInputTarget s_observedStewTarget;
 
 		class StewieTweaksInputTargetEx
 		{
@@ -385,6 +387,18 @@ namespace fonthook
 				break;
 			}
 
+			// MenuSearch can briefly stop reporting its tracked tile as active while
+			// the shell owns the Win+Space language picker. Keep the last exact target
+			// for that chord instead of clearing the shadow needed to reject/roll back
+			// Stewie's independently polled Space input.
+			if (s_stewieShadow.target.kind == StewieInputKind::MenuSearch
+				&& ShouldSuppressInputLanguageSwitchAscii(' ')
+				&& s_stewieShadow.target.menu
+				&& GetOpenMenu(MenuID(s_stewieShadow.target.menu)) == s_stewieShadow.target.menu)
+			{
+				return s_stewieShadow.target;
+			}
+
 			ClearStewieInputState();
 			HideCandidateOverlay();
 			return {};
@@ -548,7 +562,13 @@ namespace fonthook
 
 		bool ShouldDeferStewieAscii(const StewieInputTarget& target)
 		{
-			return target.kind == StewieInputKind::MenuSearch
+			// StewMenu delivers printable input through its menu adapter before some
+			// TSF IMEs publish WM_IME_STARTCOMPOSITION, just like the external
+			// MenuSearch hooks. Defer one window-message turn for every writable
+			// Stewie string target so the composition-start message can cancel the
+			// pending ASCII instead of leaving its first phonetic letter in the field.
+			return target.valid
+				&& target.kind != StewieInputKind::None
 				&& s_window
 				&& IsConfiguredImeLayout(s_window)
 				&& !IsImeCompositionActive();
@@ -703,19 +723,34 @@ namespace fonthook
 			s_pendingStewieAdapterAscii.clear();
 			s_pendingStewieWndProcAscii.clear();
 
-			constexpr DWORD kLanguageSwitchRollbackMs = 250;
-			const StewieInputTarget target = GetOverlayStewieInputTarget();
+			// Match the WndProc guard that is restarted when Win+Space is released.
+			// Stewie polls keyboard input and can observe the hotkey Space after the
+			// shell's fullscreen language-switch UI has finished.
+			constexpr DWORD kLanguageSwitchRollbackMs = 500;
+			const StewieInputTarget target = s_lastStewieSpaceCommitTarget;
 			if (!s_lastStewieSpaceCommitTick
 				|| GetTickCount() - s_lastStewieSpaceCommitTick > kLanguageSwitchRollbackMs
 				|| !target.valid
-				|| !SameStewieTarget(target, s_lastStewieSpaceCommitTarget))
+				|| !s_stewieShadow.initialized
+				|| !SameStewieTarget(target, s_stewieShadow.target))
 			{
 				s_lastStewieSpaceCommitTick = 0;
 				s_lastStewieSpaceCommitTarget = {};
 				return;
 			}
 
-			EnsureStewieShadow(target);
+			// A valid active target that differs from the recorded one means focus
+			// really moved; never remove content from the previous field. An empty
+			// active probe is allowed because MenuSearch traits can be transient during
+			// the shell language picker, while the saved menu/tile pair remains exact.
+			const StewieInputTarget activeTarget = GetActiveStewieInputTarget();
+			if (activeTarget.valid && !SameStewieTarget(activeTarget, target))
+			{
+				s_lastStewieSpaceCommitTick = 0;
+				s_lastStewieSpaceCommitTarget = {};
+				return;
+			}
+
 			const size_t caret = ClampStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret);
 			if (caret)
 			{
@@ -837,6 +872,17 @@ namespace fonthook
 			if (s_stewieReplay)
 				return CallStewieOriginalInput(menu, input);
 
+			// MenuSearch target traits can flicker while Win+Space is owned by the
+			// shell. Reject the hotkey Space before target discovery so a transient
+			// miss cannot fall through to Stewie's original ASCII handler.
+			if (input == ' ' && ShouldSuppressInputLanguageSwitchAscii(' '))
+			{
+				DebugLog(
+					"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=suppress_language_switch_space_before_target menu=%u",
+					MenuID(menu));
+				return true;
+			}
+
 			StewieInputTarget target = MenuID(menu) == kMenuType_StewMenu
 				? FindStewMenuTarget(menu)
 				: FindStewieMenuSearchTarget(menu);
@@ -865,7 +911,24 @@ namespace fonthook
 						reinterpret_cast<UInt32>(subsettingTile),
 						subsettingInputType);
 				}
-				return CallStewieOriginalInput(menu, input);
+				const bool handled = CallStewieOriginalInput(menu, input);
+				if (MenuID(menu) == kMenuType_StewMenu)
+				{
+					// StewMenu activates its search/InputField inside the original
+					// handler. The pre-call probe above therefore cannot see a target
+					// for the key/controller action that opens it. Probe once after the
+					// state change and start the IME session in the same input event.
+					if (StewieInputTarget activatedTarget = FindStewMenuTarget(menu);
+						activatedTarget.valid)
+					{
+						EnsureStewieShadow(activatedTarget);
+						RefreshTextInputSessionForActiveTarget("stewmenu_target_activated");
+						DebugLog(
+							"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=stewmenu_activate_immediate kind=%u",
+							static_cast<UInt32>(activatedTarget.kind));
+					}
+				}
+				return handled;
 			}
 
 			EnsureStewieShadow(target);
@@ -954,12 +1017,60 @@ namespace fonthook
 			}
 		}
 
+		void ProcessStewieTweaksInputTargetState()
+		{
+			// StewMenu can activate an InputField entirely through its game-menu
+			// update path, without producing another Win32 input message. Install and
+			// observe it from the main loop, but only while that menu actually exists.
+			Menu* stewMenu = GetOpenMenu(kMenuType_StewMenu);
+			if (!stewMenu)
+			{
+				s_lastStewTargetPollTick = 0;
+				s_observedStewTarget = {};
+				return;
+			}
+
+			TryInstallStewieTweaksInputHooks();
+
+			// A 50 ms edge detector is visually immediate and avoids walking the
+			// Tweak XML tree every rendered frame while the settings list is open.
+			constexpr DWORD kStewTargetPollIntervalMs = 50;
+			const DWORD now = GetTickCount();
+			if (s_lastStewTargetPollTick
+				&& now - s_lastStewTargetPollTick < kStewTargetPollIntervalMs)
+			{
+				return;
+			}
+			s_lastStewTargetPollTick = now;
+
+			const StewieInputTarget target = FindStewMenuTarget(stewMenu);
+			if (!target.valid)
+			{
+				s_observedStewTarget = {};
+				return;
+			}
+
+			if (SameStewieTarget(target, s_observedStewTarget))
+				return;
+
+			s_observedStewTarget = target;
+			EnsureStewieShadow(target);
+			RefreshTextInputSessionForActiveTarget("stewmenu_target_poll_activate");
+			DebugLog(
+				"tnvse_multibyte_input_event: source=MainLoop action=stewmenu_activate_from_state kind=%u menu=0x%08X tile=0x%08X",
+				static_cast<UInt32>(target.kind),
+				reinterpret_cast<UInt32>(target.menu),
+				reinterpret_cast<UInt32>(target.tile));
+		}
+
 
 		void ResetStewieInputState()
 		{
 			ClearStewieInputState();
 			ResetStewieMenuSearchState();
 			s_stewieReplay = false;
+			s_lastStewTargetPollTick = 0;
+			s_observedStewTarget = {};
 		}
 
 		bool __fastcall StewieTweaksInputTargetEx::StewMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
