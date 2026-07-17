@@ -32,6 +32,21 @@ namespace fonthook
 		CalculateStringDimensionsFn s_originalCalculateStringDimensions = nullptr;
 		FontHookInstallState s_fontHookInstallState;
 
+		void* __cdecl CopyAnimatingTextEncodedUnits(
+			void* destination, const void* source, SIZE_T unitCount)
+		{
+			const char* encodedSource = static_cast<const char*>(source);
+			SIZE_T byteCount = 0;
+			for (SIZE_T unitIndex = 0;
+				unitIndex < unitCount && encodedSource[byteCount]; ++unitIndex)
+			{
+				UInt32 doubleByteCode = 0;
+				byteCount += TryDecodeDoubleByte(
+					encodedSource + byteCount, doubleByteCode) ? 2 : 1;
+			}
+			return std::memcpy(destination, source, byteCount);
+		}
+
 		constexpr std::array<UInt8, 5> kFontInitPrologue = {
 			0x55, 0x8B, 0xEC, 0x6A, 0xFF
 		};
@@ -343,6 +358,13 @@ namespace fonthook
 		// even when the global DBCS parser is disabled. Non-FreeType fonts are
 		// delegated by FontEx::PrepTextForTerminal.
 		WriteRelCallEx(0x759281, &FontEx::PrepTextForTerminal);
+		if (s_fontHookInstallState.multibyte)
+		{
+			// AnimatingText::Update normally treats its elapsed-interval count as
+			// a byte count.  Interpret it as encoded units at the single memcpy
+			// call site so a DBCS lead byte is never published on its own.
+			WriteRelCall(0x6FFFEE, &CopyAnimatingTextEncodedUnits);
+		}
 		// Feed final FreeType widths into word wrapping before TextLine chooses
 		// whether to retain the character, move a word, or create another line.
 		WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar);
