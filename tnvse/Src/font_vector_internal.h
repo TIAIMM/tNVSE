@@ -45,6 +45,14 @@ namespace fonthook::vectorfont
 		GpuResidentGlyphHit,
 		GpuResidentGlyphMiss,
 		AtlasSnapshotProfileReuse,
+		DynamicVertexUpload,
+		DynamicVertexUploadBytes,
+		DynamicVertexReuse,
+		DynamicVertexDiscard,
+		StaticVertexUpload,
+		StaticVertexUploadBytes,
+		StaticVertexHit,
+		StaticVertexPromotionFailed,
 		Count,
 	};
 

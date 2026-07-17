@@ -14,6 +14,9 @@
 #include <memory>
 #include <vector>
 
+class NiGeometryBufferData;
+class NiVBChip;
+
 namespace fonthook::vectorfont
 {
 	struct A8ShapeMetadata;
@@ -93,7 +96,8 @@ namespace fonthook::vectorfont
 
 	struct NativeA8PacketTemplate
 	{
-		std::vector<NativeA8GpuVertex> vertices;
+		UInt32 firstVertex = 0;
+		UInt32 vertexCount = 0;
 		NiBound bound;
 		std::array<float, 16> constants = {};
 		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Original;
@@ -108,6 +112,7 @@ namespace fonthook::vectorfont
 	{
 		UInt32 pageCount = 0;
 		UInt32 quadCount = 0;
+		std::vector<NativeA8GpuVertex> gpuVertices;
 		std::vector<NativeA8PacketTemplate> packets;
 	};
 	using NativeA8PayloadTemplatePtr =
@@ -151,12 +156,16 @@ namespace fonthook::vectorfont
 	struct NativeA8RingSubmission
 	{
 		NiTriShape* proxyShape = nullptr;
+		NiGeometryBufferData* proxyBuffer = nullptr;
+		NiVBChip* proxyChip = nullptr;
 		IDirect3DVertexBuffer9* vertexBuffer = nullptr;
 		UInt32 proxyIndex = std::numeric_limits<UInt32>::max();
 		UInt32 generation = 0;
+		UInt32 resourceSerial = 0;
 		UInt32 nextPacket = 0;
-		UInt32 nextBaseVertex = 0;
+		UInt32 payloadBaseVertex = 0;
 		UInt32 endVertex = 0;
+		bool staticResident = false;
 		bool active = false;
 	};
 
@@ -178,6 +187,7 @@ namespace fonthook::vectorfont
 	void MarkNativeA8GenerationFault(UInt32 generation,
 		const char* operation, HRESULT result);
 	UInt32 GetNativeA8ShaderGeneration();
+	IDirect3DVertexDeclaration9* GetNativeA8D3DDeclaration(UInt32 generation);
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation);
 	TileShader* ResolveNativeA8PacketShader(const NativeA8Packet& packet,
 		const NiTriShape* facade, bool scaledFillSampling);

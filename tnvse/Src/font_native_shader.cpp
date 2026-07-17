@@ -759,6 +759,16 @@ namespace fonthook::vectorfont
 			std::memory_order_acquire);
 		return GenerationMatchesCurrentDevice(generation) ? generation->id : 0;
 	}
+
+	IDirect3DVertexDeclaration9* GetNativeA8D3DDeclaration(UInt32 generation)
+	{
+		NativeShaderGeneration* current = s_publishedGeneration.load(
+			std::memory_order_acquire);
+		return current && current->id == generation
+			&& GenerationMatchesCurrentDevice(current)
+			? current->d3dDeclaration : nullptr;
+	}
+
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation)
 	{
 		NativeShaderGeneration* current = s_publishedGeneration.load(

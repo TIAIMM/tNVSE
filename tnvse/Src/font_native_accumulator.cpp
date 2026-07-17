@@ -75,9 +75,12 @@ namespace fonthook::vectorfont
 				}
 				const NativeA8PacketTemplate& packetTemplate =
 					payload.payloadTemplate->packets[packet.templateIndex];
+				const UInt64 vertexEnd = static_cast<UInt64>(
+					packetTemplate.firstVertex) + packetTemplate.vertexCount;
 				if (packetTemplate.atlasPage != packet.atlasPage
-					|| packetTemplate.vertices.empty()
-					|| (packetTemplate.vertices.size() & 3u))
+					|| !packetTemplate.vertexCount
+					|| (packetTemplate.vertexCount & 3u)
+					|| vertexEnd > payload.payloadTemplate->gpuVertices.size())
 				{
 					return NativeA8FallbackReason::PacketBuild;
 				}

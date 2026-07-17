@@ -32,7 +32,7 @@ namespace fonthook::vectorfont
 		for (size_t i = 0; i < values.size(); ++i)
 			values[i] = s_counters[i].exchange(0, std::memory_order_relaxed);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: layout_hit=%llu miss=%llu hb=%llu bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu batch_hit=%llu miss=%llu packet_template_hit=%llu miss=%llu shader_batches=%llu passes=%llu estimated_samples=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu",
+			"tnvse_freetype_perf: layout_hit=%llu miss=%llu hb=%llu bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu batch_hit=%llu miss=%llu packet_template_hit=%llu miss=%llu shader_batches=%llu passes=%llu estimated_samples=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::LayoutHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::LayoutMiss)],
 			values[static_cast<size_t>(FreeTypePerfCounter::HarfBuzzShape)],
@@ -64,7 +64,15 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CpuEffectMasksAvoided)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GpuResidentGlyphHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GpuResidentGlyphMiss)],
-			values[static_cast<size_t>(FreeTypePerfCounter::AtlasSnapshotProfileReuse)]);
+			values[static_cast<size_t>(FreeTypePerfCounter::AtlasSnapshotProfileReuse)],
+			values[static_cast<size_t>(FreeTypePerfCounter::DynamicVertexUpload)],
+			values[static_cast<size_t>(FreeTypePerfCounter::DynamicVertexUploadBytes)],
+			values[static_cast<size_t>(FreeTypePerfCounter::DynamicVertexReuse)],
+			values[static_cast<size_t>(FreeTypePerfCounter::DynamicVertexDiscard)],
+			values[static_cast<size_t>(FreeTypePerfCounter::StaticVertexUpload)],
+			values[static_cast<size_t>(FreeTypePerfCounter::StaticVertexUploadBytes)],
+			values[static_cast<size_t>(FreeTypePerfCounter::StaticVertexHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::StaticVertexPromotionFailed)]);
 	}
 }
 

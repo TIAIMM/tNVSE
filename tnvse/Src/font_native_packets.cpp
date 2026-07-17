@@ -183,9 +183,18 @@ namespace fonthook::vectorfont
 
 		bool FillPacketTemplate(const PacketSpan& span,
 			const A8ShapeMetadata& metadata, const NiTriShapeData& source,
-			const NiPoint3& geometryOrigin, NativeA8PacketTemplate& destination)
+			const NiPoint3& geometryOrigin, NativeA8PacketTemplate& destination,
+			std::vector<NativeA8GpuVertex>& gpuVertices)
 		{
-			destination.vertices.resize(span.vertexCount);
+			if (gpuVertices.size() > std::numeric_limits<UInt32>::max()
+				|| span.vertexCount > std::numeric_limits<UInt32>::max()
+					- static_cast<UInt32>(gpuVertices.size()))
+			{
+				return false;
+			}
+			destination.firstVertex = static_cast<UInt32>(gpuVertices.size());
+			destination.vertexCount = span.vertexCount;
+			gpuVertices.resize(gpuVertices.size() + span.vertexCount);
 			std::vector<NiPoint3> boundVertices(span.vertexCount);
 			for (UInt32 index = 0; index < span.vertexCount; ++index)
 			{
@@ -194,7 +203,8 @@ namespace fonthook::vectorfont
 				const NiPoint3 relative(vertex.x - geometryOrigin.x,
 					vertex.y - geometryOrigin.y, vertex.z - geometryOrigin.z);
 				boundVertices[index] = relative;
-				NativeA8GpuVertex& output = destination.vertices[index];
+				NativeA8GpuVertex& output = gpuVertices[
+					destination.firstVertex + index];
 				output.x = relative.x;
 				output.y = relative.y;
 				output.z = relative.z;
@@ -215,7 +225,8 @@ namespace fonthook::vectorfont
 				const UInt32 first = range.firstVertex - span.firstVertex;
 				for (UInt32 index = first; index < first + range.vertexCount; ++index)
 				{
-					NativeA8GpuVertex& vertex = destination.vertices[index];
+					NativeA8GpuVertex& vertex = gpuVertices[
+						destination.firstVertex + index];
 					vertex.r = range.colorModifier.r;
 					vertex.g = range.colorModifier.g;
 					vertex.b = range.colorModifier.b;
@@ -282,6 +293,7 @@ namespace fonthook::vectorfont
 		payload->pageCount = static_cast<UInt32>(
 			metadata.effects.atlasProperties.size());
 		payload->quadCount = metadata.quadCount;
+		payload->gpuVertices.reserve(sourceData->m_usVertices);
 		payload->packets.reserve(spans.size());
 
 		for (const PacketSpan& span : spans)
@@ -293,7 +305,7 @@ namespace fonthook::vectorfont
 			}
 			NativeA8PacketTemplate packet;
 			if (!FillPacketTemplate(span, metadata, *sourceData,
-				geometryOrigin, packet))
+				geometryOrigin, packet, payload->gpuVertices))
 				return {};
 			packet.constants = span.constants;
 			packet.shaderClass = span.shaderClass;
@@ -304,6 +316,8 @@ namespace fonthook::vectorfont
 			packet.staticSmoothSampling = span.staticSmoothSampling;
 			payload->packets.push_back(std::move(packet));
 		}
+		if (payload->gpuVertices.size() != sourceData->m_usVertices)
+			return {};
 		return payload;
 	}
 
@@ -316,6 +330,7 @@ namespace fonthook::vectorfont
 			|| !payloadTemplate->pageCount || !payloadTemplate->quadCount
 			|| payloadTemplate->pageCount != metadata.effects.atlasProperties.size()
 			|| payloadTemplate->quadCount != metadata.quadCount
+			|| payloadTemplate->gpuVertices.empty()
 			|| payloadTemplate->packets.empty() || !EnsureNativeA8ProxyPool(font))
 		{
 			return {};
@@ -328,13 +343,18 @@ namespace fonthook::vectorfont
 		payload->payloadTemplate = std::move(payloadTemplate);
 		payload->geometryOrigin = geometryOrigin;
 		payload->packets.reserve(payload->payloadTemplate->packets.size());
+		UInt64 nextVertex = 0;
 		for (size_t index = 0;
 			index < payload->payloadTemplate->packets.size(); ++index)
 		{
 			const NativeA8PacketTemplate& source =
 				payload->payloadTemplate->packets[index];
-			if (source.vertices.empty() || (source.vertices.size() & 3u)
-				|| source.vertices.size() / 4u > kNativeA8MaximumQuads
+			const UInt64 vertexEnd = static_cast<UInt64>(source.firstVertex)
+				+ source.vertexCount;
+			if (!source.vertexCount || (source.vertexCount & 3u)
+				|| source.vertexCount / 4u > kNativeA8MaximumQuads
+				|| source.firstVertex != nextVertex
+				|| vertexEnd > payload->payloadTemplate->gpuVertices.size()
 				|| index > std::numeric_limits<UInt32>::max())
 			{
 				return {};
@@ -350,7 +370,10 @@ namespace fonthook::vectorfont
 			packet.atlasPage = source.atlasPage;
 			packet.staticSmoothSampling = source.staticSmoothSampling;
 			payload->packets.push_back(std::move(packet));
+			nextVertex = vertexEnd;
 		}
+		if (nextVertex != payload->payloadTemplate->gpuVertices.size())
+			return {};
 
 		payload->preparedGeneration = 0;
 		payload->buildComplete = true;
@@ -361,9 +384,8 @@ namespace fonthook::vectorfont
 		const NativeA8PayloadTemplate& payloadTemplate)
 	{
 		size_t bytes = sizeof(payloadTemplate)
-			+ payloadTemplate.packets.capacity() * sizeof(NativeA8PacketTemplate);
-		for (const NativeA8PacketTemplate& packet : payloadTemplate.packets)
-			bytes += packet.vertices.capacity() * sizeof(NativeA8GpuVertex);
+			+ payloadTemplate.packets.capacity() * sizeof(NativeA8PacketTemplate)
+			+ payloadTemplate.gpuVertices.capacity() * sizeof(NativeA8GpuVertex);
 		return bytes;
 	}
 
