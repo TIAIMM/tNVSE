@@ -382,7 +382,7 @@ shadow share a FreeType distance field generated directly from the hinted
 outline; hard shadow reuses the selected body mask. FreeType overlap handling
 is enabled only when the loaded outline carries `FT_OUTLINE_OVERLAP`. Both
 masks can occupy the same A8 atlas. Effects
-execute global shadow, glow, outline, and fill passes over one `NiTriShape`,
+execute global glow, shadow, outline, and fill passes over one `NiTriShape`,
 which prevents a later glyph effect from covering an earlier glyph fill. SDF
 passes use bilinear MIN/MAG sampling at atlas LOD 0 and derivative-based edge
 antialiasing; they never consume the coverage-averaged atlas mip chain.

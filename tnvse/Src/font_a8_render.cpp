@@ -91,7 +91,7 @@ namespace fonthook::vectorfont
 				: triangleIndices;
 			UInt64 previousVertexEnd = 0;
 			UInt64 previousIndexEnd = 0;
-			UInt32 previousLayer = 0;
+			UInt32 previousLayerRank = 0;
 			bool firstRange = true;
 			bool haveFill = false;
 			if (effectConfig->atlasTextures.size()
@@ -127,9 +127,10 @@ namespace fonthook::vectorfont
 					+ range.vertexCount;
 				const UInt64 indexEnd = static_cast<UInt64>(range.startIndex)
 					+ static_cast<UInt64>(range.primitiveCount) * 3;
+				const UInt32 layerRank = GetA8LayerDrawRank(range.layer);
 				if (vertexEnd > data->m_usVertices || indexEnd > availableIndices)
 					return RejectA8Shape("draw-range-out-of-bounds");
-				if (!firstRange && (range.layer < previousLayer
+				if (!firstRange && (layerRank < previousLayerRank
 					|| range.firstVertex < previousVertexEnd
 					|| range.startIndex < previousIndexEnd))
 				{
@@ -143,7 +144,7 @@ namespace fonthook::vectorfont
 				if (range.usesSdf && effectConfig->sdfSpreadPixels <= 0.0f)
 					return RejectA8Shape("sdf-range-without-positive-spread");
 				haveFill = haveFill || range.layer == 3;
-				previousLayer = range.layer;
+				previousLayerRank = layerRank;
 				previousVertexEnd = vertexEnd;
 				previousIndexEnd = indexEnd;
 				firstRange = false;

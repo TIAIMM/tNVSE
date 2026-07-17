@@ -153,7 +153,7 @@ namespace fonthook::vectorfont
 
 			// Keep one facade in the stock Tile alpha list. Equal-depth entries are
 			// quicksorted unstably, so individually registered packets cannot retain
-			// Shadow/Glow/Outline/Fill order. Expand only after stock UI sorting.
+			// Glow/Shadow/Outline/Fill order. Expand only after stock UI sorting.
 			if (!IsA8TileRenderPassHookCurrent())
 				return SuppressNativeGroup(facade, *metadata,
 					NativeA8FallbackReason::TileRouteConflict, "register-object");

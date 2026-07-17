@@ -185,6 +185,20 @@ namespace fonthook::vectorfont
 		UInt32 sdfSpread = 0;
 	};
 
+	// Layer IDs are part of the shader/native-packet ABI. Keep those IDs stable
+	// while defining composition order independently: Glow, Shadow, Outline, Fill.
+	inline constexpr UInt32 GetA8LayerDrawRank(UInt32 layer)
+	{
+		switch (layer)
+		{
+		case 1: return 0; // Glow
+		case 0: return 1; // Shadow
+		case 2: return 2; // Outline
+		case 3: return 3; // Fill
+		default: return 4;
+		}
+	}
+
 	struct A8DrawRange
 	{
 		UInt32 firstVertex = 0;

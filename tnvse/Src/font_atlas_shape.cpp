@@ -319,8 +319,19 @@ namespace fonthook::vectorfont
 			}
 
 			// Tile text does not consistently depth-test effect triangles. Submit each
-			// complete layer before the next one so a later glyph's effect cannot cover
-			// an earlier glyph's fill.
+			// complete layer before the next one, with glow behind the hard shadow and
+			// every effect behind the fill.
+			if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
+			{
+				for (const PreparedGlyph& glyph : prepared)
+				{
+					AddPendingQuad(quads, glyph.glow, *glyph.instance,
+						ResolveEffectColor(config.glow, config.fontColor,
+							glyph.instance->color, tileColor),
+						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Glow,
+						EffectUsesLiveTileRgb(config.glow));
+				}
+			}
 			if (included[static_cast<size_t>(AtlasLayer::Shadow)] && config.shadow.enabled)
 			{
 				for (const PreparedGlyph& glyph : prepared)
@@ -331,17 +342,6 @@ namespace fonthook::vectorfont
 						config.shadow.x, config.shadow.y, rasterScale,
 						glyph.baselineOffset, AtlasLayer::Shadow,
 						EffectUsesLiveTileRgb(config.shadow));
-				}
-			}
-			if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
-			{
-				for (const PreparedGlyph& glyph : prepared)
-				{
-					AddPendingQuad(quads, glyph.glow, *glyph.instance,
-						ResolveEffectColor(config.glow, config.fontColor,
-							glyph.instance->color, tileColor),
-						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Glow,
-						EffectUsesLiveTileRgb(config.glow));
 				}
 			}
 			if (included[static_cast<size_t>(AtlasLayer::Outline)] && config.outline.enabled)
@@ -492,11 +492,11 @@ namespace fonthook::vectorfont
 				}
 			};
 
+			addRange(AtlasLayer::Glow, !suppressEffects && config.glow.enabled,
+				true, 0.0f, 0.0f);
 			addRange(AtlasLayer::Shadow, !suppressEffects && config.shadow.enabled,
 				fillUsesSdf || config.shadow.blur > 0.0f,
 				config.shadow.x, config.shadow.y);
-			addRange(AtlasLayer::Glow, !suppressEffects && config.glow.enabled,
-				true, 0.0f, 0.0f);
 			addRange(AtlasLayer::Outline, !suppressEffects && config.outline.enabled,
 				true, 0.0f, 0.0f);
 			addRange(AtlasLayer::Fill, true, fillUsesSdf, 0.0f, 0.0f);
@@ -906,8 +906,12 @@ namespace fonthook::vectorfont
 			}
 			const auto batchOrder = [](const PendingQuad& lhs, const PendingQuad& rhs)
 			{
-				if (lhs.layer != rhs.layer)
-					return lhs.layer < rhs.layer;
+				const UInt32 lhsRank = GetA8LayerDrawRank(
+					static_cast<UInt32>(lhs.layer));
+				const UInt32 rhsRank = GetA8LayerDrawRank(
+					static_cast<UInt32>(rhs.layer));
+				if (lhsRank != rhsRank)
+					return lhsRank < rhsRank;
 				return lhs.atlasPage < rhs.atlasPage;
 			};
 			if (!std::is_sorted(pagedQuads.begin(), pagedQuads.end(), batchOrder))
