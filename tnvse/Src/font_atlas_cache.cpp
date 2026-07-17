@@ -301,6 +301,7 @@ namespace fonthook::vectorfont
 		void UnindexAtlasPage(AtlasState& state, const AtlasCacheKey& key)
 		{
 			const AtlasProfileKey profileKey = MakeAtlasProfileKey(key);
+			state.completeAtlasProfiles.erase(profileKey);
 			auto found = state.atlasProfiles.find(profileKey);
 			if (found == state.atlasProfiles.end())
 				return;
@@ -589,6 +590,114 @@ namespace fonthook::vectorfont
 				combination, sdfSpread, outlineStroke, glowStroke,
 				shaderEffects ? 0 : BuildCpuCoverageHash(config, rasterScale),
 				1469598103934665603ull);
+		}
+
+		void GetAtlasBackedGlyphBitmaps(RuntimeFont& runtime,
+			const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
+			AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
+			std::vector<std::shared_ptr<const GlyphBitmap>>& results)
+		{
+			results.assign(requests.size(), nullptr);
+			if (requests.empty())
+				return;
+
+			std::vector<UInt64> cacheIds;
+			ResolveGlyphBitmapCacheIds(runtime, requests, rasterScale, cacheIds);
+			const FontConfig& config = GetRuntimeConfig(runtime);
+			UInt8 combination = 0;
+			UInt8 sdfSpread = 0;
+			SInt32 outlineStroke = 0;
+			SInt32 glowStroke = 0;
+			bool found = false;
+			bool levelZeroOnly = true;
+			for (size_t index = 0; index < requests.size(); ++index)
+			{
+				if (!cacheIds[index])
+					continue;
+				found = true;
+				const GlyphMaskType type = requests[index].maskType;
+				combination |= static_cast<UInt8>(1u << static_cast<UInt8>(type));
+				levelZeroOnly = levelZeroOnly && type == GlyphMaskType::DistanceField;
+				if (type == GlyphMaskType::DistanceField)
+					sdfSpread = std::max(sdfSpread,
+						static_cast<UInt8>(requests[index].sdfSpread));
+				else if (type == GlyphMaskType::Outline)
+					outlineStroke = static_cast<SInt32>(std::lround(
+						config.outline.width * rasterScale * 64.0f));
+				else if (type == GlyphMaskType::Glow)
+					glowStroke = static_cast<SInt32>(std::lround(
+						config.glow.width * rasterScale * 64.0f));
+			}
+
+			UInt64 residentHits = 0;
+			if (found)
+			{
+				const UInt64 atlasContentHash = BuildAtlasContentHash(
+					config.maskGenerationHash, combination, sdfSpread,
+					outlineStroke, glowStroke,
+					renderMode == AtlasRenderMode::CpuEffects
+						? BuildCpuCoverageHash(config, rasterScale) : 0,
+					1469598103934665603ull);
+				const AtlasCacheKey baseKey = {
+					atlasContentHash,
+					config.fontId,
+					static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
+					pixelMode,
+					renderMode,
+					padding,
+					levelZeroOnly
+				};
+				AtlasState& state = State();
+				std::lock_guard<std::mutex> lock(state.atlasMutex);
+				const auto profile = state.atlasProfiles.find(MakeAtlasProfileKey(baseKey));
+				if (profile != state.atlasProfiles.end())
+				{
+					for (size_t index = 0; index < cacheIds.size(); ++index)
+					{
+						if (!cacheIds[index])
+							continue;
+						const auto resident = profile->second.residentPages.find(cacheIds[index]);
+						if (resident == profile->second.residentPages.end())
+							continue;
+						AtlasCacheKey pageKey = baseKey;
+						pageKey.pageIndex = resident->second;
+						const auto page = state.atlasCache.find(pageKey);
+						if (page == state.atlasCache.end() || !page->second.resource)
+							continue;
+						const auto bitmap = page->second.resource->residentBitmaps.find(cacheIds[index]);
+						if (bitmap == page->second.resource->residentBitmaps.end()
+							|| !bitmap->second)
+						{
+							continue;
+						}
+						results[index] = bitmap->second;
+						++residentHits;
+					}
+				}
+			}
+
+			std::vector<GlyphBitmapRequest> misses;
+			std::vector<size_t> missIndices;
+			misses.reserve(requests.size() - static_cast<size_t>(residentHits));
+			missIndices.reserve(misses.capacity());
+			for (size_t index = 0; index < requests.size(); ++index)
+			{
+				if (results[index])
+					continue;
+				misses.push_back(requests[index]);
+				missIndices.push_back(index);
+			}
+			if (residentHits)
+				RecordFreeTypePerf(FreeTypePerfCounter::GpuResidentGlyphHit, residentHits);
+			if (!misses.empty())
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::GpuResidentGlyphMiss,
+					static_cast<UInt64>(misses.size()));
+				std::vector<std::shared_ptr<const GlyphBitmap>> fallback;
+				GetGlyphBitmaps(runtime, misses, rasterScale, fallback);
+				for (size_t index = 0; index < fallback.size(); ++index)
+					results[missIndices[index]] = std::move(fallback[index]);
+			}
 		}
 
 		std::vector<std::shared_ptr<AtlasResource>> GetAtlasResources(

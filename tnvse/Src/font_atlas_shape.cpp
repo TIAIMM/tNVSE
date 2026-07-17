@@ -234,7 +234,7 @@ namespace fonthook::vectorfont
 			AtlasLayer layer,
 			UInt32 expansionPixels = 0, bool usesSdf = false)
 		{
-			if (bitmap && bitmap->width > 0 && bitmap->height > 0 && !bitmap->alpha.empty())
+			if (bitmap && bitmap->width > 0 && bitmap->height > 0)
 				quads.push_back({ bitmap, instance.pen, color, offsetX, offsetY,
 					rasterScale, instance.glyph.metrics ? instance.glyph.metrics->fTopEdge : 0.0f,
 					baselineOffset, expansionPixels, layer, usesSdf });
@@ -420,7 +420,9 @@ namespace fonthook::vectorfont
 						GlyphMaskType::DistanceField, sdfSpread });
 				prepared.push_back(std::move(glyph));
 			}
-			GetGlyphBitmaps(runtime, bitmapRequests, rasterScale, bitmapResults);
+			GetAtlasBackedGlyphBitmaps(runtime, bitmapRequests, rasterScale,
+				AtlasPixelMode::A8, AtlasRenderMode::ShaderEffects,
+				kAtlasPadding, bitmapResults);
 			size_t bitmapIndex = 0;
 			for (PreparedShaderGlyph& glyph : prepared)
 			{

@@ -105,7 +105,7 @@ namespace fonthook::vectorfont
 		std::shared_ptr<const CompactAtlasSnapshot> compactSnapshot;
 	};
 
-	constexpr UInt32 kAtlasSnapshotVersion = 5;
+	constexpr UInt32 kAtlasSnapshotVersion = 6;
 	constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 #pragma pack(push, 1)
 	struct AtlasSnapshotHeader
@@ -141,6 +141,17 @@ namespace fonthook::vectorfont
 	{
 		UInt64 cacheId = 0;
 		AtlasRect rect;
+		SInt32 left = 0;
+		SInt32 top = 0;
+		SInt32 effectiveWidth = 0;
+		SInt32 effectiveHeight = 0;
+		SInt32 strokeWidth26Dot6 = 0;
+		UInt32 atlasRgb = 0x00FFFFFF;
+		UInt32 bakedRgba = 0;
+		UInt8 maskType = 0;
+		UInt8 sdfSpread = 0;
+		UInt8 colorBaked = 0;
+		UInt8 bakedLayer = 0;
 	};
 #pragma pack(pop)
 
@@ -320,13 +331,15 @@ namespace fonthook::vectorfont
 	};
 
 	static_assert(sizeof(AtlasSnapshotHeader) == 112);
-	static_assert(sizeof(AtlasSnapshotPlacement) == 24);
+	static_assert(sizeof(AtlasSnapshotPlacement) == 56);
 
 	struct AtlasState
 	{
 		std::unordered_map<AtlasCacheKey, AtlasCacheEntry, AtlasCacheKeyHash> atlasCache;
 		std::unordered_map<AtlasProfileKey, AtlasProfileIndex,
 			AtlasProfileKeyHash> atlasProfiles;
+		std::unordered_set<AtlasProfileKey, AtlasProfileKeyHash>
+			completeAtlasProfiles;
 		std::list<AtlasCacheKey> atlasLru;
 		size_t atlasCacheBytes = 0;
 		std::mutex atlasMutex;
@@ -420,6 +433,10 @@ namespace fonthook::vectorfont
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
 		// When requested, entries align with bitmaps and index the returned pages.
 		std::vector<UInt16>* outBitmapPageOrdinals = nullptr);
+	void GetAtlasBackedGlyphBitmaps(RuntimeFont& runtime,
+		const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
+		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
+		std::vector<std::shared_ptr<const GlyphBitmap>>& results);
 	std::shared_ptr<AtlasResource> CreateTransientAtlas(
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding);

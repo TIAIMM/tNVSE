@@ -592,6 +592,9 @@ namespace fonthook::vectorfont
 			const GlyphBitmap& bitmap, const AtlasRect& rect,
 			UInt32 destinationX, UInt32 destinationY)
 		{
+			const size_t requiredAlphaBytes = static_cast<size_t>(rect.width) * rect.height;
+			if (!destination || bitmap.alpha.size() < requiredAlphaBytes)
+				return;
 			const UInt32 bytesPerPixel = AtlasBytesPerPixel(mode);
 			for (UInt32 y = 0; y < rect.height; ++y)
 			{
@@ -732,7 +735,8 @@ namespace fonthook::vectorfont
 			for (const auto& [id, bitmap] : resource.residentBitmaps)
 			{
 				auto placement = resource.placements.find(id);
-				if (!bitmap || placement == resource.placements.end())
+				if (!bitmap || bitmap->alpha.empty()
+					|| placement == resource.placements.end())
 					continue;
 				const AtlasRect& rect = placement->second;
 				WriteBitmapPixels(static_cast<UInt8*>(locked.pBits), locked.Pitch,

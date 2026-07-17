@@ -40,6 +40,9 @@ namespace fonthook::vectorfont
 		ShaderEffectPass,
 		ShaderEffectSamples,
 		CpuEffectMasksAvoided,
+		GpuResidentGlyphHit,
+		GpuResidentGlyphMiss,
+		AtlasSnapshotProfileReuse,
 		Count,
 	};
 
@@ -297,6 +300,9 @@ namespace fonthook::vectorfont
 	void GetGlyphBitmaps(RuntimeFont& arRuntime,
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults);
+	void ResolveGlyphBitmapCacheIds(RuntimeFont& arRuntime,
+		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
+		std::vector<UInt64>& arCacheIds);
 	void GetPrewarmGlyphBitmaps(RuntimeFont& arRuntime,
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults);

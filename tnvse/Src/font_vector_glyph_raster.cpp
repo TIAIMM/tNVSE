@@ -306,6 +306,31 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
+	void ResolveGlyphBitmapCacheIds(RuntimeFont& runtime,
+		const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
+		std::vector<UInt64>& cacheIds)
+	{
+		cacheIds.assign(requests.size(), 0);
+		if (requests.empty())
+			return;
+		FreeTypeState& state = State();
+		std::lock_guard<std::recursive_mutex> lock(state.mutex);
+		const float safeScale = SanitizeBitmapRasterScale(rasterScale);
+		for (size_t index = 0; index < requests.size(); ++index)
+		{
+			const GlyphBitmapRequest& request = requests[index];
+			if (!request.glyph)
+				continue;
+			ResolvedGlyph resolved;
+			BitmapCacheKey key;
+			if (ResolveBitmapCacheKey(runtime, *request.glyph, request.maskType,
+				safeScale, request.sdfSpread, resolved, key))
+			{
+				cacheIds[index] = HashBitmapKey(key);
+			}
+		}
+	}
+
 	static std::shared_ptr<const GlyphBitmap> FindCachedGlyphBitmapLocked(
 		FreeTypeState& state, RuntimeFont& runtime, const ResolvedGlyph& resolved,
 		const BitmapCacheKey& key, PersistentBitmapProfile*& persistentProfile)
