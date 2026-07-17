@@ -10,6 +10,7 @@
 #include "BSShaderProperty.hpp"
 
 #include <array>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -68,6 +69,35 @@ namespace fonthook::vectorfont
 	};
 	using A8ShapeMetadataPtr = std::shared_ptr<const A8ShapeMetadata>;
 
+	struct NativeA8TemplateCacheKey
+	{
+		UInt64 contentHash = 0;
+		UInt32 quadCount = 0;
+		UInt32 pageCount = 0;
+
+		bool operator==(const NativeA8TemplateCacheKey& other) const
+		{
+			return contentHash == other.contentHash
+				&& quadCount == other.quadCount && pageCount == other.pageCount;
+		}
+	};
+
+	struct NativeA8TemplateCacheKeyHash
+	{
+		size_t operator()(const NativeA8TemplateCacheKey& key) const
+		{
+			return static_cast<size_t>(key.contentHash ^ (key.contentHash >> 32))
+				^ (static_cast<size_t>(key.quadCount) << 7) ^ key.pageCount;
+		}
+	};
+
+	struct NativeA8TemplateCacheEntry
+	{
+		NativeA8PayloadTemplatePtr data;
+		size_t bytes = 0;
+		std::list<NativeA8TemplateCacheKey>::iterator lru;
+	};
+
 	struct A8State
 	{
 		std::array<void*, kCopiedTriShapeVtableEntries + 1> triShapeVtable = {};
@@ -83,6 +113,13 @@ namespace fonthook::vectorfont
 
 		std::mutex metadataMutex;
 		std::unordered_map<const NiTriShape*, A8ShapeMetadataPtr> shapeMetadata;
+
+		std::mutex packetTemplateMutex;
+		std::unordered_map<NativeA8TemplateCacheKey,
+			NativeA8TemplateCacheEntry, NativeA8TemplateCacheKeyHash>
+			packetTemplateCache;
+		std::list<NativeA8TemplateCacheKey> packetTemplateLru;
+		size_t packetTemplateCacheBytes = 0;
 	};
 
 	A8State& State();

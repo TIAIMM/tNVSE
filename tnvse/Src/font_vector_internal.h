@@ -36,6 +36,8 @@ namespace fonthook::vectorfont
 		AtlasUploadRect,
 		BatchHit,
 		BatchMiss,
+		PacketTemplateHit,
+		PacketTemplateMiss,
 		ShaderEffectBatch,
 		ShaderEffectPass,
 		ShaderEffectSamples,
@@ -333,5 +335,7 @@ namespace fonthook::vectorfont
 	bool PrepareA8AtlasShape(Font& arFont, NiTriShape* apShape, UInt32 auiFontId,
 		UInt32 auiGlyphCount, UInt32 auiQuadCount,
 		const A8EffectShapeConfig* apEffectConfig = nullptr,
-		const A8ShapeColorContract* apColorContract = nullptr);
+		const A8ShapeColorContract* apColorContract = nullptr,
+		UInt64 auiPacketTemplateHash = 0,
+		const NiPoint3& arGeometryOrigin = NiPoint3());
 }

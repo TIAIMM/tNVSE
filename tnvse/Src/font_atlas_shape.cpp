@@ -537,13 +537,62 @@ namespace fonthook::vectorfont
 				hash, generation, fingerprint.quadCount };
 		}
 
+		UInt64 BuildPacketTemplateHash(const BatchTemplateKey& geometryKey,
+			const A8EffectShapeConfig& effect)
+		{
+			UInt64 hash = 1469598103934665603ull;
+			auto add = [&](const void* data, size_t size)
+			{
+				const UInt8* bytes = static_cast<const UInt8*>(data);
+				for (size_t index = 0; index < size; ++index)
+				{
+					hash ^= bytes[index];
+					hash *= 1099511628211ull;
+				}
+			};
+			add(&geometryKey.atlasIdentity, sizeof(geometryKey.atlasIdentity));
+			add(&geometryKey.contentHash, sizeof(geometryKey.contentHash));
+			add(&geometryKey.generation, sizeof(geometryKey.generation));
+			add(&geometryKey.quadCount, sizeof(geometryKey.quadCount));
+			add(&effect.enabled, sizeof(effect.enabled));
+			add(&effect.shaderEffects, sizeof(effect.shaderEffects));
+			add(&effect.useOriginalShader, sizeof(effect.useOriginalShader));
+			add(&effect.fillUsesSdf, sizeof(effect.fillUsesSdf));
+			add(&effect.quality, sizeof(effect.quality));
+			const std::array<float, 10> scalars = {
+				effect.inverseAtlasWidth, effect.inverseAtlasHeight,
+				effect.sdfSpreadPixels, effect.shadowBlurPixels,
+				effect.shadowPower, effect.glowInnerPixels,
+				effect.glowOuterPixels, effect.glowPower,
+				effect.outlineWidthPixels, effect.outlineSoftnessPixels
+			};
+			add(scalars.data(), scalars.size() * sizeof(float));
+			const size_t pageCount = effect.atlasInverseSizes.size();
+			add(&pageCount, sizeof(pageCount));
+			for (const NiPoint2& inverseSize : effect.atlasInverseSizes)
+				add(&inverseSize, sizeof(inverseSize));
+			const size_t rangeCount = effect.ranges.size();
+			add(&rangeCount, sizeof(rangeCount));
+			for (const A8DrawRange& range : effect.ranges)
+			{
+				add(&range.firstVertex, sizeof(range.firstVertex));
+				add(&range.vertexCount, sizeof(range.vertexCount));
+				add(&range.startIndex, sizeof(range.startIndex));
+				add(&range.primitiveCount, sizeof(range.primitiveCount));
+				add(&range.layer, sizeof(range.layer));
+				add(&range.atlasPage, sizeof(range.atlasPage));
+				add(&range.usesSdf, sizeof(range.usesSdf));
+				add(&range.colorModifier, sizeof(range.colorModifier));
+			}
+			return hash;
+		}
+
 		std::shared_ptr<const BatchTemplate> GetBatchTemplate(Font& font,
 			const std::vector<PendingQuad>& quads,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
-			const QuadBatchFingerprint& fingerprint, const NiPoint3& origin)
+			const BatchTemplateKey& key, const NiPoint3& origin)
 		{
 			AtlasState& state = State();
-			const BatchTemplateKey key = BuildBatchTemplateKey(fingerprint, atlases);
 			{
 				std::lock_guard<std::mutex> lock(state.batchMutex);
 				auto existing = state.batchCache.find(key);
@@ -636,11 +685,13 @@ namespace fonthook::vectorfont
 				result->indices[triangle + 4] = static_cast<UInt16>(base + 3);
 				result->indices[triangle + 5] = static_cast<UInt16>(base + 2);
 			}
+			ThisStdCall(0xA7EE30, &result->bound,
+				static_cast<UInt16>(result->vertices.size()), result->vertices.data());
 
 
 			const size_t bytes = result->vertices.size() * sizeof(NiPoint3)
 				+ result->texture.size() * sizeof(NiPoint2)
-				+ result->indices.size() * sizeof(UInt16);
+				+ result->indices.size() * sizeof(UInt16) + sizeof(result->bound);
 			{
 				std::lock_guard<std::mutex> lock(state.batchMutex);
 				state.batchLru.push_front(key);
@@ -679,8 +730,10 @@ namespace fonthook::vectorfont
 			}
 
 			NiTriShapeData* data = shape->GetModelData();
+			const BatchTemplateKey batchKey =
+				BuildBatchTemplateKey(fingerprint, atlases);
 			const std::shared_ptr<const BatchTemplate> batch =
-				GetBatchTemplate(font, quads, atlases, fingerprint, origin);
+				GetBatchTemplate(font, quads, atlases, batchKey, origin);
 			if (!batch)
 				return nullptr;
 			for (size_t index = 0; index < batch->vertices.size(); ++index)
@@ -693,7 +746,10 @@ namespace fonthook::vectorfont
 			}
 			std::copy(batch->texture.begin(), batch->texture.end(), data->m_pkTexture);
 			std::copy(batch->indices.begin(), batch->indices.end(), data->m_pusTriList);
-			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
+			data->m_kBound = batch->bound;
+			data->m_kBound.m_kCenter.x += origin.x;
+			data->m_kBound.m_kCenter.y += origin.y;
+			data->m_kBound.m_kCenter.z += origin.z;
 			const bool hasEffectLayer = std::any_of(quads.begin(), quads.end(),
 				[](const PendingQuad& quad) { return quad.layer != AtlasLayer::Fill; });
 			const bool needsNativeRangeRouting = useCustomA8Shader || hasEffectLayer
@@ -718,10 +774,13 @@ namespace fonthook::vectorfont
 				}
 				BuildA8DrawRanges(quads, resolvedEffect);
 				const A8ShapeColorContract colorContract = BuildColorContract(quads);
+				const UInt64 packetTemplateHash =
+					BuildPacketTemplateHash(batchKey, resolvedEffect);
 				if (!PrepareA8AtlasShape(font, shape, font.iFontNum,
 					static_cast<UInt32>(std::count_if(quads.begin(), quads.end(),
 						[](const PendingQuad& quad) { return quad.layer == AtlasLayer::Fill; })),
-					static_cast<UInt32>(quads.size()), &resolvedEffect, &colorContract))
+					static_cast<UInt32>(quads.size()), &resolvedEffect, &colorContract,
+					packetTemplateHash, origin))
 				{
 					return nullptr;
 				}

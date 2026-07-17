@@ -212,6 +212,72 @@ namespace fonthook::vectorfont
 				metadata.compiledRanges.push_back(std::move(compiled));
 			}
 		}
+
+		void TrimPacketTemplateCache(A8State& state)
+		{
+			const size_t limit = static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB)
+				* 1024u * 1024u / 12u;
+			while (state.packetTemplateCacheBytes > limit
+				&& !state.packetTemplateLru.empty())
+			{
+				const NativeA8TemplateCacheKey key = state.packetTemplateLru.back();
+				state.packetTemplateLru.pop_back();
+				const auto existing = state.packetTemplateCache.find(key);
+				if (existing == state.packetTemplateCache.end())
+					continue;
+				state.packetTemplateCacheBytes -= existing->second.bytes;
+				state.packetTemplateCache.erase(existing);
+			}
+		}
+
+		NativeA8PayloadTemplatePtr GetNativeA8PayloadTemplate(
+			NiTriShape* shape, const A8ShapeMetadata& metadata,
+			UInt64 contentHash, const NiPoint3& geometryOrigin)
+		{
+			if (!contentHash)
+				return BuildNativeA8PayloadTemplate(shape, metadata, geometryOrigin);
+			const NativeA8TemplateCacheKey key = {
+				contentHash,
+				metadata.quadCount,
+				static_cast<UInt32>(metadata.effects.atlasProperties.size())
+			};
+			A8State& state = State();
+			{
+				std::lock_guard<std::mutex> lock(state.packetTemplateMutex);
+				const auto existing = state.packetTemplateCache.find(key);
+				if (existing != state.packetTemplateCache.end())
+				{
+					state.packetTemplateLru.splice(state.packetTemplateLru.begin(),
+						state.packetTemplateLru, existing->second.lru);
+					existing->second.lru = state.packetTemplateLru.begin();
+					RecordFreeTypePerf(FreeTypePerfCounter::PacketTemplateHit);
+					return existing->second.data;
+				}
+			}
+			RecordFreeTypePerf(FreeTypePerfCounter::PacketTemplateMiss);
+			NativeA8PayloadTemplatePtr result =
+				BuildNativeA8PayloadTemplate(shape, metadata, geometryOrigin);
+			if (!result)
+				return {};
+			const size_t bytes = GetNativeA8PayloadTemplateBytes(*result);
+			{
+				std::lock_guard<std::mutex> lock(state.packetTemplateMutex);
+				const auto existing = state.packetTemplateCache.find(key);
+				if (existing != state.packetTemplateCache.end())
+				{
+					state.packetTemplateLru.splice(state.packetTemplateLru.begin(),
+						state.packetTemplateLru, existing->second.lru);
+					existing->second.lru = state.packetTemplateLru.begin();
+					return existing->second.data;
+				}
+				state.packetTemplateLru.push_front(key);
+				state.packetTemplateCache.emplace(key, NativeA8TemplateCacheEntry{
+					result, bytes, state.packetTemplateLru.begin() });
+				state.packetTemplateCacheBytes += bytes;
+				TrimPacketTemplateCache(state);
+			}
+			return result;
+		}
 	}
 
 	A8State& State()
@@ -274,7 +340,8 @@ namespace fonthook::vectorfont
 
 	bool PrepareA8AtlasShape(Font& font, NiTriShape* shape, UInt32 fontId,
 		UInt32 glyphCount, UInt32 quadCount, const A8EffectShapeConfig* effectConfig,
-		const A8ShapeColorContract* colorContract)
+		const A8ShapeColorContract* colorContract, UInt64 packetTemplateHash,
+		const NiPoint3& geometryOrigin)
 	{
 		if (!IsA8RendererAvailable()
 			|| !ValidateA8Shape(shape, effectConfig, colorContract)
@@ -298,7 +365,12 @@ namespace fonthook::vectorfont
 		if (effectConfig)
 			metadata->effects = *effectConfig;
 		CompileA8DrawRanges(*metadata);
-		metadata->nativePayload = BuildNativeA8ShapePayload(font, shape, *metadata);
+		const NativeA8PayloadTemplatePtr payloadTemplate = GetNativeA8PayloadTemplate(
+			shape, *metadata, packetTemplateHash, geometryOrigin);
+		metadata->nativePayload = payloadTemplate
+			? InstantiateNativeA8ShapePayload(font, shape, *metadata,
+				*payloadTemplate, geometryOrigin)
+			: NativeA8ShapePayloadPtr{};
 		if (!metadata->nativePayload)
 			return false;
 		{

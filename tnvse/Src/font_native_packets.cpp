@@ -234,41 +234,39 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool FillPacketGeometry(const PacketSpan& span,
+		bool FillPacketTemplate(const PacketSpan& span,
 			const A8ShapeMetadata& metadata, const NiTriShapeData& source,
-			NiTriShapeData& destination)
+			const NiPoint3& geometryOrigin, NativeA8PacketTemplate& destination)
 		{
-			if (destination.m_usVertices != span.vertexCount
-				|| destination.m_usTriangles * 3u != span.indexCount
-				|| destination.m_uiTriListLength != span.indexCount
-				|| !destination.m_pkVertex || !destination.m_pkTexture
-				|| !destination.m_pkColor
-				|| !destination.m_pusTriList)
-			{
-				return false;
-			}
-
-			std::copy_n(source.m_pkVertex + span.firstVertex,
-				span.vertexCount, destination.m_pkVertex);
-			std::copy_n(source.m_pkTexture + span.firstVertex,
-				span.vertexCount, destination.m_pkTexture);
-			std::fill_n(destination.m_pkColor, span.vertexCount,
+			destination.vertices.resize(span.vertexCount);
+			destination.texture.resize(span.vertexCount);
+			destination.colors.assign(span.vertexCount,
 				NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f });
+			destination.indices.resize(span.indexCount);
+			for (UInt32 index = 0; index < span.vertexCount; ++index)
+			{
+				const NiPoint3& vertex = source.m_pkVertex[span.firstVertex + index];
+				destination.vertices[index] = NiPoint3(
+					vertex.x - geometryOrigin.x,
+					vertex.y - geometryOrigin.y,
+					vertex.z - geometryOrigin.z);
+			}
+			std::copy_n(source.m_pkTexture + span.firstVertex,
+				span.vertexCount, destination.texture.begin());
 
 			const UInt32 packetVertexEnd = span.firstVertex + span.vertexCount;
 			for (size_t ordinal = 0; ordinal < span.rangeCount; ++ordinal)
 			{
 				const A8DrawRange& range =
 					metadata.compiledRanges[span.firstRange + ordinal].range;
-				const UInt32 localFirst = range.firstVertex - span.firstVertex;
 				if (range.firstVertex < span.firstVertex
 					|| range.firstVertex + range.vertexCount > packetVertexEnd)
 				{
 					return false;
 				}
-				const NiColorA& color = range.colorModifier;
-				std::fill_n(destination.m_pkColor + localFirst,
-					range.vertexCount, color);
+				std::fill_n(destination.colors.begin()
+					+ (range.firstVertex - span.firstVertex),
+					range.vertexCount, range.colorModifier);
 			}
 
 			for (UInt32 index = 0; index < span.indexCount; ++index)
@@ -277,12 +275,12 @@ namespace fonthook::vectorfont
 					source.m_pusTriList[span.startIndex + index];
 				if (sourceIndex < span.firstVertex || sourceIndex >= packetVertexEnd)
 					return false;
-				destination.m_pusTriList[index] = static_cast<UInt16>(
+				destination.indices[index] = static_cast<UInt16>(
 					sourceIndex - span.firstVertex);
 			}
-
-			ThisStdCall(0xA7EE30, &destination.m_kBound,
-				destination.m_usVertices, destination.m_pkVertex);
+			ThisStdCall(0xA7EE30, &destination.bound,
+				static_cast<UInt16>(destination.vertices.size()),
+				destination.vertices.data());
 			return true;
 		}
 
@@ -383,9 +381,20 @@ namespace fonthook::vectorfont
 	NativeA8ShapePayloadPtr BuildNativeA8ShapePayload(Font& font,
 		NiTriShape* facade, const A8ShapeMetadata& metadata)
 	{
+		const NativeA8PayloadTemplatePtr payloadTemplate =
+			BuildNativeA8PayloadTemplate(facade, metadata, NiPoint3());
+		return payloadTemplate
+			? InstantiateNativeA8ShapePayload(font, facade, metadata,
+				*payloadTemplate, NiPoint3())
+			: NativeA8ShapePayloadPtr{};
+	}
+
+	NativeA8PayloadTemplatePtr BuildNativeA8PayloadTemplate(
+		NiTriShape* facade, const A8ShapeMetadata& metadata,
+		const NiPoint3& geometryOrigin)
+	{
 		NiTriShapeData* sourceData = facade ? facade->GetModelData() : nullptr;
-		const TileShaderPropertyView* facadeTile = GetTileProperty(facade);
-		if (!sourceData || !facadeTile || !metadata.quadCount
+		if (!sourceData || !GetTileProperty(facade) || !metadata.quadCount
 			|| metadata.effects.atlasProperties.empty()
 			|| metadata.effects.atlasProperties.size()
 				!= metadata.effects.atlasTextures.size()
@@ -399,8 +408,7 @@ namespace fonthook::vectorfont
 		if (!BuildPacketSpans(metadata, *sourceData, spans) || spans.empty())
 			return {};
 
-		auto payload = std::make_shared<NativeA8ShapePayload>();
-		payload->fontId = metadata.fontId;
+		auto payload = std::make_shared<NativeA8PayloadTemplate>();
 		payload->pageCount = static_cast<UInt32>(
 			metadata.effects.atlasProperties.size());
 		payload->quadCount = metadata.quadCount;
@@ -414,19 +422,10 @@ namespace fonthook::vectorfont
 			{
 				return {};
 			}
-			NiTriShapePtr packetShape = font.MakeTriShape(
-				static_cast<int>(packetQuadCount), &facadeTile->overlayColor, false);
-			NiTriShapeData* packetData = packetShape
-				? packetShape->GetModelData() : nullptr;
-			if (!packetData || !InstallVertexColors(*packetData)
-				|| !FillPacketGeometry(span, metadata, *sourceData, *packetData)
-				|| !BindPacketAtlasPage(*packetShape, metadata, span.atlasPage))
-			{
+			NativeA8PacketTemplate packet;
+			if (!FillPacketTemplate(span, metadata, *sourceData,
+				geometryOrigin, packet))
 				return {};
-			}
-
-			NativeA8Packet packet;
-			packet.shape = packetShape;
 			packet.constants = span.constants;
 			packet.shaderClass = span.shaderClass;
 			packet.sampling = span.sampling;
@@ -434,7 +433,84 @@ namespace fonthook::vectorfont
 			packet.layer = span.layer;
 			packet.atlasPage = span.atlasPage;
 			packet.staticSmoothSampling = span.staticSmoothSampling;
-			payload->packets.push_back(packet);
+			payload->packets.push_back(std::move(packet));
+		}
+		return payload;
+	}
+
+	NativeA8ShapePayloadPtr InstantiateNativeA8ShapePayload(Font& font,
+		NiTriShape* facade, const A8ShapeMetadata& metadata,
+		const NativeA8PayloadTemplate& payloadTemplate,
+		const NiPoint3& geometryOrigin)
+	{
+		const TileShaderPropertyView* facadeTile = GetTileProperty(facade);
+		if (!facadeTile || !payloadTemplate.pageCount || !payloadTemplate.quadCount
+			|| payloadTemplate.pageCount != metadata.effects.atlasProperties.size()
+			|| payloadTemplate.quadCount != metadata.quadCount
+			|| payloadTemplate.packets.empty())
+		{
+			return {};
+		}
+
+		auto payload = std::make_shared<NativeA8ShapePayload>();
+		payload->fontId = metadata.fontId;
+		payload->pageCount = payloadTemplate.pageCount;
+		payload->quadCount = payloadTemplate.quadCount;
+		payload->packets.reserve(payloadTemplate.packets.size());
+		for (const NativeA8PacketTemplate& source : payloadTemplate.packets)
+		{
+			if (source.vertices.empty() || (source.vertices.size() & 3u)
+				|| source.vertices.size() != source.texture.size()
+				|| source.vertices.size() != source.colors.size()
+				|| source.indices.size() != source.vertices.size() / 4u * 6u
+				|| source.vertices.size() / 4u
+					> static_cast<size_t>(std::numeric_limits<int>::max()))
+			{
+				return {};
+			}
+
+			NiTriShapePtr packetShape = font.MakeTriShape(
+				static_cast<int>(source.vertices.size() / 4u),
+				&facadeTile->overlayColor, false);
+			NiTriShapeData* packetData = packetShape
+				? packetShape->GetModelData() : nullptr;
+			if (!packetData || !InstallVertexColors(*packetData)
+				|| packetData->m_usVertices != source.vertices.size()
+				|| packetData->m_uiTriListLength != source.indices.size())
+			{
+				return {};
+			}
+			for (size_t index = 0; index < source.vertices.size(); ++index)
+			{
+				const NiPoint3& vertex = source.vertices[index];
+				packetData->m_pkVertex[index] = NiPoint3(
+					vertex.x + geometryOrigin.x,
+					vertex.y + geometryOrigin.y,
+					vertex.z + geometryOrigin.z);
+			}
+			std::copy(source.texture.begin(), source.texture.end(),
+				packetData->m_pkTexture);
+			std::copy(source.colors.begin(), source.colors.end(),
+				packetData->m_pkColor);
+			std::copy(source.indices.begin(), source.indices.end(),
+				packetData->m_pusTriList);
+			packetData->m_kBound = source.bound;
+			packetData->m_kBound.m_kCenter.x += geometryOrigin.x;
+			packetData->m_kBound.m_kCenter.y += geometryOrigin.y;
+			packetData->m_kBound.m_kCenter.z += geometryOrigin.z;
+			if (!BindPacketAtlasPage(*packetShape, metadata, source.atlasPage))
+				return {};
+
+			NativeA8Packet packet;
+			packet.shape = packetShape;
+			packet.constants = source.constants;
+			packet.shaderClass = source.shaderClass;
+			packet.sampling = source.sampling;
+			packet.quality = source.quality;
+			packet.layer = source.layer;
+			packet.atlasPage = source.atlasPage;
+			packet.staticSmoothSampling = source.staticSmoothSampling;
+			payload->packets.push_back(std::move(packet));
 		}
 
 		if (!SyncNativeA8PacketState(facade, *payload))
@@ -442,6 +518,21 @@ namespace fonthook::vectorfont
 		payload->preparedGeneration = 0;
 		payload->buildComplete = true;
 		return payload;
+	}
+
+	size_t GetNativeA8PayloadTemplateBytes(
+		const NativeA8PayloadTemplate& payloadTemplate)
+	{
+		size_t bytes = sizeof(payloadTemplate)
+			+ payloadTemplate.packets.capacity() * sizeof(NativeA8PacketTemplate);
+		for (const NativeA8PacketTemplate& packet : payloadTemplate.packets)
+		{
+			bytes += packet.vertices.capacity() * sizeof(NiPoint3)
+				+ packet.texture.capacity() * sizeof(NiPoint2)
+				+ packet.colors.capacity() * sizeof(NiColorA)
+				+ packet.indices.capacity() * sizeof(UInt16);
+		}
+		return bytes;
 	}
 
 	bool SyncNativeA8PacketState(NiTriShape* facade,

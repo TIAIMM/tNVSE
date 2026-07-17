@@ -107,6 +107,31 @@ namespace fonthook::vectorfont
 		bool staticSmoothSampling = false;
 	};
 
+	struct NativeA8PacketTemplate
+	{
+		std::vector<NiPoint3> vertices;
+		std::vector<NiPoint2> texture;
+		std::vector<NiColorA> colors;
+		std::vector<UInt16> indices;
+		NiBound bound;
+		std::array<float, 16> constants = {};
+		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Original;
+		NativeA8Sampling sampling = NativeA8Sampling::Point;
+		EffectQuality quality = EffectQuality::Balanced;
+		UInt32 layer = 3;
+		UInt16 atlasPage = 0;
+		bool staticSmoothSampling = false;
+	};
+
+	struct NativeA8PayloadTemplate
+	{
+		UInt32 pageCount = 0;
+		UInt32 quadCount = 0;
+		std::vector<NativeA8PacketTemplate> packets;
+	};
+	using NativeA8PayloadTemplatePtr =
+		std::shared_ptr<const NativeA8PayloadTemplate>;
+
 	struct NativeA8ShapePayload
 	{
 		UInt32 fontId = 0;
@@ -137,6 +162,15 @@ namespace fonthook::vectorfont
 
 	NativeA8ShapePayloadPtr BuildNativeA8ShapePayload(Font& font,
 		NiTriShape* facade, const A8ShapeMetadata& metadata);
+	NativeA8PayloadTemplatePtr BuildNativeA8PayloadTemplate(
+		NiTriShape* facade, const A8ShapeMetadata& metadata,
+		const NiPoint3& geometryOrigin);
+	NativeA8ShapePayloadPtr InstantiateNativeA8ShapePayload(Font& font,
+		NiTriShape* facade, const A8ShapeMetadata& metadata,
+		const NativeA8PayloadTemplate& payloadTemplate,
+		const NiPoint3& geometryOrigin);
+	size_t GetNativeA8PayloadTemplateBytes(
+		const NativeA8PayloadTemplate& payloadTemplate);
 	bool SyncNativeA8PacketState(NiTriShape* facade,
 		NativeA8ShapePayload& payload);
 	bool PurgeNativeA8PacketBuffers(NativeA8ShapePayload& payload);

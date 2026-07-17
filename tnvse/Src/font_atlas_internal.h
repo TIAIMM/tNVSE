@@ -297,6 +297,7 @@ namespace fonthook::vectorfont
 		std::vector<NiPoint3> vertices;
 		std::vector<NiPoint2> texture;
 		std::vector<UInt16> indices;
+		NiBound bound;
 	};
 
 	struct QuadBatchFingerprint
