@@ -278,18 +278,14 @@ namespace fonthook::vectorfont
 		{
 			if (!bytes || length <= 0)
 				return false;
-			if (!g_usingWinEncoding)
-			{
-				codePoint = static_cast<UInt8>(bytes[0]);
-				return length == 1;
-			}
+			const UInt32 codePage = GetFreeTypeTextCodePage();
 
 			FreeTypeState& state = State();
-			if (state.codePointCacheCodePage != g_usingWinEncoding)
+			if (state.codePointCacheCodePage != codePage)
 			{
 				state.singleByteCodePoints.fill(UINT32_MAX);
 				state.doubleByteCodePoints.fill(UINT32_MAX);
-				state.codePointCacheCodePage = g_usingWinEncoding;
+				state.codePointCacheCodePage = codePage;
 			}
 			const UInt32 encoded = length == 1
 				? static_cast<UInt8>(bytes[0])
@@ -306,11 +302,11 @@ namespace fonthook::vectorfont
 			}
 
 			wchar_t wide[2] = {};
-			int count = MultiByteToWideChar(g_usingWinEncoding, MB_ERR_INVALID_CHARS,
+			int count = MultiByteToWideChar(codePage, MB_ERR_INVALID_CHARS,
 				bytes, length, wide, static_cast<int>(std::size(wide)));
 			if (!count && GetLastError() == ERROR_INVALID_FLAGS)
 			{
-				count = MultiByteToWideChar(g_usingWinEncoding, 0,
+				count = MultiByteToWideChar(codePage, 0,
 					bytes, length, wide, static_cast<int>(std::size(wide)));
 			}
 			if (count == 1)
@@ -849,7 +845,7 @@ namespace fonthook::vectorfont
 			return false;
 
 		UInt32 encodedCode = 0;
-		if (text[1] && TryDecodeDoubleByte(text, encodedCode))
+		if (text[1] && TryDecodeFreeTypeDoubleByte(text, encodedCode))
 		{
 			glyph.encodedCode = encodedCode;
 			glyph.byteLength = 2;

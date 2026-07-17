@@ -340,10 +340,10 @@ flowchart TD
 
 tNVSE 当前多字节机制由以下部分组成：
 
-- `g_uiEncoding` 控制 UI 编码选项：`0=English`, `1=GBK`, `2=Big5`, `3=SJIS`, `4=UHC/CP949`。
-- `g_usingWinEncoding` 保存 Windows codepage：`936`, `950`, `932`, `949`。
-- `g_bEnableUTF8` 控制是否将 UTF-8 输入转换为当前 codepage。
-- `g_bEnableMultibyteFontHook` 控制是否安装多字节字体 hook。默认 `1`；设为 `0` 时，`InitFontHook()` 不会安装普通 `FontEx`、富文本、Quest/Location/Terminal 文本转换相关 hook，适合英语用户或兼容性排查。
+- `g_uiEncoding` 控制 UI 编码选项：`0=Windows-1252`, `1=GBK`, `2=Big5`, `3=SJIS`, `4=UHC/CP949`。
+- `g_usingWinEncoding` 保存配置的 Windows codepage：`1252`, `936`, `950`, `932`, `949`；不再用 `0` 充当英文哨兵。
+- `g_bEnableUTF8` 只在东亚 UI 模式（`uiEncoding=1-4`）将 UTF-8 输入转换为当前 codepage；`uiEncoding=0` 保持原始 Windows-1252 字节。
+- `g_bEnableMultibyteFontHook` 只控制多字节解析能力。FreeType 有独立开关；FreeType-only 模式使用原版单字节排版拓扑和有效 code page 1252。
 - `ConvertToMultiByte` / `UTF8ToMultiByteStr` 负责 UTF-8 到 codepage 字节串转换。
 - `TryDecodeDoubleByte` 根据当前 codepage 识别 DBCS 字符，并返回 `code = (lead << 8) | trail`。
 - `gNumberedExtraLetters[fontID]` 保存扩展 `FontLetter` map；代码层通过 `font_glyphs.h` 的共享 helper 访问它，用于 CJK glyph 宽度、行高和渲染。
@@ -398,7 +398,7 @@ static CharData* __fastcall CharDataCopy(CharData* apChar, void*);
 
 富文本入口必须在解析 tag 前完成 UTF-8 到目标 codepage 的转换，但不能破坏原有富文本语法。**应当直接复用普通 `Font` 管线已封装的 `ConvertToMultiByte` 单调用模式，保持两条管线行为一致，不应在富文本侧重新组合 `g_bEnableUTF8` / `g_uiEncoding` / `IsValidUTF8With3ByteMin` 条件链。**
 
-`encoding.h` 中 `ConvertToMultiByte(const char*& pSrc, std::string& outConverted, bool hasExtraGlyphs)` 已经封装了第 4 节的 `ShouldConvertUTF8(hasExtraGlyphs)`（即 `g_bEnableUTF8 && g_uiEncoding != 0 && hasExtraGlyphs`）和 `IsValidUTF8With3ByteMin` 判断。富文本入口只需：
+`encoding.h` 中 `ConvertToMultiByte(const char*& pSrc, std::string& outConverted, bool hasExtraGlyphs)` 已经封装了第 4 节的 `ShouldConvertUTF8(hasExtraGlyphs)`（即 `g_bEnableUTF8 && IsEastAsianUiMode() && hasExtraGlyphs`）和 `IsValidUTF8With3ByteMin` 判断。富文本入口只需：
 
 ```cpp
 const char* parserText = arTextString.pString ? arTextString.pString : "";
@@ -630,6 +630,7 @@ parser 必须只在“非 DBCS 字符”时把以下字节当作语法：
 
 | `g_uiEncoding` | `g_usingWinEncoding` | 说明 |
 | ---: | ---: | --- |
+| `0` | `1252` | Windows-1252；不执行本节 UTF-8 转换或 DBCS 合并 |
 | `1` | `936` | GBK |
 | `2` | `950` | Big5 |
 | `3` | `932` | Shift-JIS / CP932 |
@@ -808,7 +809,12 @@ TileText::MakeNode 0xA21AF0
 
 ### 12.1 已安装的 Hook
 
-`game_hooks.cpp::InitFontHook` 当前安装的富文本相关 hook。该函数现在受 `[Main] bEnableMultibyteFontHook` 总开关控制；当配置为 `0` 时不会写入本节这些 font/rich-text patch：
+`game_hooks.cpp::InitFontHooks` 按 `[Multibyte] bEnableMultibyteFontHook` 与
+`[FreeTypeFont] bEnableFreeTypeFontRendering` 分别安装能力。两者都关闭时
+不写入字体 patch；FreeType-only 时只安装经过签名验证的核心入口
+trampoline、`PrepText`/Render/AddChar 共享桥，原版 `PrepHypertext`、
+`CollectTo`、DBCS 合并和 extra-glyph hook 均保持未修改。多字节能力开启
+时才安装下表中的 DBCS parser/layout patch：
 
 | 地址 | Hook 目标 | 安装方式 | tNVSE 实现 |
 | --- | --- | --- | --- |
@@ -923,7 +929,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 - 位于整个可见文本外层且闭合完整的全局样式标签（如 `<font color=...>...</font>`）保留在译文外侧。
 - 位于可见文本前后的边界媒体/装饰标签（如 `<img ...>`、`<hr>`）保留；局部包住原文某个词的 `<font>` / `</font>` 不迁移。
 
-未命中词典时，`PrepText` / `PrepHypertext` 完全走既有路径；命中时，生成的新富文本字符串再交给原版 `FontManager::PrepText 0xA18A30` 或 `FontManager::PrepHypertext 0xA17390` 解析。`bEnableDictionaryTranslation=0` 时 `TranslateRichText` 直接返回 false；`bEnableMultibyteFontHook=0` 时富文本 hook 不安装，因此该能力自然关闭。
+未命中词典时，`PrepText` / `PrepHypertext` 完全走既有路径；命中时，生成的新富文本字符串再交给原版 `FontManager::PrepText 0xA18A30` 或 `FontManager::PrepHypertext 0xA17390` 解析。`bEnableDictionaryTranslation=0` 时 `TranslateRichText` 直接返回 false；`uiEncoding=0` 的东亚 UI 功能门控会关闭词典加载和转换。FreeType-only 的共享富文本桥只在原版生成固定 `TextDoc` 后重测字形位置与行宽，不调用词典或 DBCS parser；即使 `uiEncoding=1-4` 仍有配置，未安装的多字节文本 hook 也不会把词典结果送入该路径。
 
 #### 渲染字符发射点
 

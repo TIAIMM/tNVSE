@@ -10,7 +10,8 @@ namespace fonthook
 		{
 			if (g_sOptionalStructuralParticle.empty())
 				return {};
-			if (g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(g_sOptionalStructuralParticle.c_str()))
+			if (IsEastAsianUiMode()
+				&& IsValidUTF8With3ByteMin(g_sOptionalStructuralParticle.c_str()))
 				return UTF8ToMultiByteStr(g_sOptionalStructuralParticle, g_usingWinEncoding);
 			return g_sOptionalStructuralParticle;
 		}

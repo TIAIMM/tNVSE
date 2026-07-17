@@ -3,6 +3,35 @@
 
 namespace fonthook
 {
+	bool IsDbcsCodePage(UInt32 codePage)
+	{
+		switch (codePage)
+		{
+		case 936:
+		case 950:
+		case 932:
+		case 949:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool IsEastAsianUiMode()
+	{
+		return g_uiEncoding >= 1 && g_uiEncoding <= 4;
+	}
+
+	bool UsesDbcsTextLayout()
+	{
+		return g_bEnableMultibyteFontHook && IsDbcsCodePage(g_usingWinEncoding);
+	}
+
+	UInt32 GetFreeTypeTextCodePage()
+	{
+		return UsesDbcsTextLayout() ? g_usingWinEncoding : kWindows1252CodePage;
+	}
+
 	// ===================== GBK (Code Page 936) =====================
 	bool IsGBKLeadByte(UInt8 c)
 	{
@@ -92,6 +121,27 @@ namespace fonthook
 			return false;
 		outCode = (UInt32(lead) << 8) | UInt32(trail);
 		return true;
+	}
+
+	bool TryDecodeDoubleByteForCodePage(
+		const char* p, UInt32 codePage, UInt32& outCode)
+	{
+		if (!p || static_cast<UInt8>(p[0]) < 0x80 || !p[1])
+			return false;
+		switch (codePage)
+		{
+		case 936: return TryDecodeGBK(p, outCode);
+		case 950: return TryDecodeBig5(p, outCode);
+		case 932: return TryDecodeSJIS(p, outCode);
+		case 949: return TryDecodeKorean(p, outCode);
+		default: return false;
+		}
+	}
+
+	bool TryDecodeFreeTypeDoubleByte(const char* p, UInt32& outCode)
+	{
+		return TryDecodeDoubleByteForCodePage(
+			p, GetFreeTypeTextCodePage(), outCode);
 	}
 
 	// ===================== UTF-8 =====================
@@ -214,7 +264,8 @@ namespace fonthook
 } // namespace fonthook
 
 // ---- Unified encoding dispatch ----
-// These functions use the global g_usingWinEncoding to dispatch to the correct codec.
+// These functions use the configured UI code page. FreeType-only code uses
+// TryDecodeFreeTypeDoubleByte so its resource identity remains Windows-1252.
 // They replace the repeated if/else-if chains scattered across the codebase.
 
 namespace fonthook
@@ -248,15 +299,7 @@ namespace fonthook
 
 	bool TryDecodeDoubleByte(const char* p, UInt32& outCode)
 	{
-		if ((UInt8)p[0] < 0x80) return false;  // ASCII fast-path
-		switch (g_usingWinEncoding)
-		{
-		case 936:  return TryDecodeGBK(p, outCode);
-		case 950:  return TryDecodeBig5(p, outCode);
-		case 932:  return TryDecodeSJIS(p, outCode);
-		case 949:  return TryDecodeKorean(p, outCode);
-		default:   return false;
-		}
+		return TryDecodeDoubleByteForCodePage(p, g_usingWinEncoding, outCode);
 	}
 
 } // namespace fonthook

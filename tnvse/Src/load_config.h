@@ -2,13 +2,12 @@
 #include <string>
 #include <Windows.h>
 
-extern UINT32 g_uiEncoding;       // UI encoding identifier: 0=English, 1=GBK, 2=Big5, 3=SJIS, 4=UHC
-extern UINT32 g_usingWinEncoding; // Windows code page derived from g_uiEncoding
+extern UINT32 g_uiEncoding;       // UI encoding identifier: 0=Windows-1252, 1=GBK, 2=Big5, 3=SJIS, 4=UHC
+extern UINT32 g_usingWinEncoding; // Configured Windows code page: 1252/936/950/932/949
 extern bool g_bEnableUTF8;
 extern bool g_bEnableMultibyteFontHook;
 extern bool g_bEnableFreeTypeFontRendering;
 extern bool g_bEnableFreeTypeFontRenderingLog;
-extern bool g_bEnableFreeTypeDevicePixelScale;
 extern float g_fFreeTypeFontResolutionScale;
 extern UINT32 g_uiFreeTypeFontMemoryCacheMB;
 extern bool g_bDeleteUnusedFreeTypeFontCache;
@@ -17,7 +16,7 @@ extern bool g_bEnableFreeTypeA8Atlas;
 extern bool g_bEnableFreeTypeGlyphCollisionProtection;
 extern UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 extern bool g_bMultibyteInput;
-extern bool g_bMultibyteInputDebug;
+extern bool g_bMultibyteInputLog;
 extern bool g_bMultibyteInputCompositionPreview;
 extern bool g_bMultibyteInputHideSystemCandidateWindow;
 extern bool g_bMultibyteInputUseTSFCandidates;

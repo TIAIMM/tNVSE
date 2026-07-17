@@ -826,7 +826,7 @@ namespace fonthook
 	{
 		s_richTextContext = std::make_unique<RichTextVectorContext>();
 		s_richTextContext->parent = parent;
-		s_richTextContext->rasterScale = ResolveFreeTypeRasterScale();
+		s_richTextContext->rasterScale = GetCanonicalFreeTypeRasterScale();
 	}
 
 	void EndFreeTypeRichTextRender()

@@ -582,6 +582,7 @@ namespace fonthook::vectorfont
 			resolved.runtimeFace->file->contentHash,
 			static_cast<SInt32>(resolved.runtimeFace->face->face_index),
 			resolved.glyphIndex,
+			GetFreeTypeTextCodePage(),
 			static_cast<UInt16>(effectiveWidth),
 			static_cast<UInt16>(effectiveHeight),
 			embolden,

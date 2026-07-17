@@ -392,9 +392,9 @@ tnvse/Src/multibyte_input.cpp
 新增配置项：
 
 ```ini
-[Main]
+[MultibyteInput]
 bMultibyteInput = 0
-bMultibyteInputDebug = 0
+bMultibyteInputLog = 0
 bMultibyteInputCompositionPreview = 0
 bMultibyteInputHideSystemCandidateWindow = 1
 bMultibyteInputUseTSFCandidates = 1
@@ -403,8 +403,8 @@ bMultibyteInputStewieTweaks = 1
 
 默认关闭更安全。启用条件：
 
-- `bEnableMultibyteFontHook=1`
-- `g_usingWinEncoding != 0`
+- `[Multibyte] bEnableMultibyteFontHook=1`，且多字节字体能力通过入口签名验证并实际安装
+- `uiEncoding=1, 2, 3 or 4`（`IsEastAsianUiMode()`）
 - 当前字体包含对应 codepage 的 extra glyph
 - 至少玩家名 `TextEditMenu` 路径已验证
 
@@ -413,7 +413,7 @@ bMultibyteInputStewieTweaks = 1
 - 在 `LoadConfig()` 后读取上述配置。
 - 在 `NVSEPlugin_Load` 中安装 hook；不从 `DllMain` 安装 WndProc。
 - `bMultibyteInput=0` 时不 subclass WndProc，不安装 `TextEditMenu` hook。
-- `bMultibyteInput=1` 但字体 hook 未启用或 `uiEncoding=0` 时打印一次日志并跳过初始化。
+- `bMultibyteInput=1` 但多字节字体能力未实际安装，或 `uiEncoding=0` 时打印一次日志并跳过初始化；FreeType 能力不满足这个依赖。
 - `bMultibyteInputStewieTweaks=0` 时不检测或 hook Stewie Tweaks 输入框；该开关仍受 `bMultibyteInput` 总开关约束。
 
 ### 2. WndProc / IME 捕获
@@ -595,8 +595,8 @@ Stewie Tweaks 的搜索框不是原版 `TextEditMenu`，也不是 JIP 的 `ShowT
 
 启用条件：
 
-- `[Main] bMultibyteInput=1`。
-- `[Main] bMultibyteInputStewieTweaks=1`。
+- `[MultibyteInput] bMultibyteInput=1`。
+- `[MultibyteInput] bMultibyteInputStewieTweaks=1`。
 - NVSE 插件表中存在 `lStewieAl's Tweaks`，且版本大于等于 9.90 / `990`。低于该版本不主动启用，避免字段布局或 vtable patch 变化导致误写。
 
 当前覆盖范围：
@@ -704,7 +704,8 @@ bool MoveCaretNext(TextEditState&);
 
 ### 当前诊断日志
 
-设置 `bMultibyteInputDebug=1` 后，会打印 `tnvse_multibyte_input_event` 日志，用于区分输入来源：
+设置 `[MultibyteInput] bMultibyteInputLog=1` 后，会打印
+`tnvse_multibyte_input_event` 日志，用于区分输入来源：
 
 - `source=WndProc.WM_CHAR`：Windows 字符消息路径。
 - `source=WndProc.WM_IME_COMPOSITION`：IME composition/result 路径。
@@ -765,7 +766,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 出现以下情况时不要消费输入：
 
 - 没有 active editable target。
-- `g_usingWinEncoding == 0`。
+- 当前不是东亚 UI 模式（`uiEncoding` 不在 `1-4`），或多字节字体能力未实际安装。
 - IME result 转码失败。
 - target 指针、edit state、caret offset、宽度限制或 byte 上限没有通过反编译确认。
 - 插入后会超过 byte 上限，且无法在 DBCS 边界安全截断。
@@ -836,7 +837,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 ### UTF-8 / IME 转码
 
-- `bUTF8=1` 时，UTF-8 输入源或 IME UTF-16 result 只转换一次到当前 codepage。
+- `bUTF8=1` 且 `uiEncoding=1-4` 时，UTF-8 输入源只转换一次到当前 codepage；IME UTF-16 result 同样只在已启用的东亚输入模式中提交。`uiEncoding=0` 不启动输入层，也不执行 UTF-8→Windows-1252 转换。
 - store 中保存当前 codepage bytes，不保存 UTF-8。
 - 列表读取时不二次 UTF-8 转换。
 

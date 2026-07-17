@@ -23,6 +23,7 @@ namespace fonthook::vectorfont
 			add(&key.fontContentHash, sizeof(key.fontContentHash));
 			add(&key.fontFaceIndex, sizeof(key.fontFaceIndex));
 			add(&key.glyphIndex, sizeof(key.glyphIndex));
+			add(&key.codePage, sizeof(key.codePage));
 			add(&key.effectiveWidth, sizeof(key.effectiveWidth));
 			add(&key.effectiveHeight, sizeof(key.effectiveHeight));
 			add(&key.embolden26Dot6, sizeof(key.embolden26Dot6));
@@ -40,6 +41,7 @@ namespace fonthook::vectorfont
 				sizeof(kPersistentBitmapVersion));
 			hash = HashBytes64(&key.fontContentHash, sizeof(key.fontContentHash), hash);
 			hash = HashBytes64(&key.fontFaceIndex, sizeof(key.fontFaceIndex), hash);
+			hash = HashBytes64(&key.codePage, sizeof(key.codePage), hash);
 			hash = HashBytes64(&key.effectiveWidth, sizeof(key.effectiveWidth), hash);
 			hash = HashBytes64(&key.effectiveHeight, sizeof(key.effectiveHeight), hash);
 			hash = HashBytes64(&key.embolden26Dot6, sizeof(key.embolden26Dot6), hash);
@@ -55,6 +57,7 @@ namespace fonthook::vectorfont
 			return {
 				fontContentHash,
 				key.fontFaceIndex,
+				key.codePage,
 				key.effectiveWidth,
 				key.effectiveHeight,
 				key.embolden26Dot6,
@@ -77,6 +80,7 @@ namespace fonthook::vectorfont
 			header.profileHash = profileHash;
 			header.fontContentHash = key.fontContentHash;
 			header.fontFaceIndex = key.fontFaceIndex;
+			header.codePage = key.codePage;
 			header.effectiveWidth = key.effectiveWidth;
 			header.effectiveHeight = key.effectiveHeight;
 			header.embolden26Dot6 = key.embolden26Dot6;
@@ -105,6 +109,7 @@ namespace fonthook::vectorfont
 				&& header.profileHash == profileHash
 				&& header.fontContentHash == key.fontContentHash
 				&& header.fontFaceIndex == key.fontFaceIndex
+				&& header.codePage == key.codePage
 				&& header.effectiveWidth == key.effectiveWidth
 				&& header.effectiveHeight == key.effectiveHeight
 				&& header.embolden26Dot6 == key.embolden26Dot6
@@ -878,7 +883,7 @@ namespace fonthook::vectorfont
 			header.layoutContentHash = layoutContentHash;
 			header.layoutHash = runtime.config->layoutHash;
 			header.reservedFontId = 0;
-			header.codePage = g_usingWinEncoding;
+			header.codePage = GetFreeTypeTextCodePage();
 			header.entryCount = kPersistentGlyphManifestEntries;
 			header.entrySize = sizeof(PersistentGlyphManifestEntry);
 			header.checksum = HashBytes64(&header,
@@ -897,7 +902,7 @@ namespace fonthook::vectorfont
 				&& header.layoutContentHash == layoutContentHash
 				&& header.layoutHash == runtime.config->layoutHash
 				&& header.reservedFontId == 0
-				&& header.codePage == g_usingWinEncoding
+				&& header.codePage == GetFreeTypeTextCodePage()
 				&& header.entryCount == kPersistentGlyphManifestEntries
 				&& header.entrySize == sizeof(PersistentGlyphManifestEntry)
 				&& header.checksum == HashBytes64(&header,
@@ -912,8 +917,9 @@ namespace fonthook::vectorfont
 			const UInt64 layoutContentHash = ComputeRuntimeLayoutContentHash(runtime);
 			UInt64 manifestHash = HashBytes64(&layoutContentHash,
 				sizeof(layoutContentHash));
-			manifestHash = HashBytes64(&g_usingWinEncoding,
-				sizeof(g_usingWinEncoding), manifestHash);
+			const UInt32 codePage = GetFreeTypeTextCodePage();
+			manifestHash = HashBytes64(&codePage,
+				sizeof(codePage), manifestHash);
 			manifest->manifestHash = manifestHash;
 			manifest->layoutContentHash = layoutContentHash;
 			std::wstring directory;

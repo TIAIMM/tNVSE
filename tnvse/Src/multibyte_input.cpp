@@ -1,4 +1,5 @@
 #include "multibyte_input_internal.h"
+#include "game_hooks.h"
 
 // Public lifecycle and frame-message integration for multibyte input.
 
@@ -32,9 +33,10 @@ namespace fonthook
 		if (!g_bMultibyteInput)
 			return;
 
-		if (!g_bEnableMultibyteFontHook || !g_usingWinEncoding)
+		if (!AreMultibyteFontHooksInstalled() || !IsEastAsianUiMode())
 		{
-			gLog.FormattedMessage("tnvse_multibyte_input: disabled because font hooks or uiEncoding are disabled");
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: disabled because multibyte font hooks are unavailable or uiEncoding is not 1-4");
 			return;
 		}
 

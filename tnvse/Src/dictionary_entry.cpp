@@ -350,7 +350,8 @@ namespace fonthook
 
 		if (g_bEnableDictionaryTranslationLog)
 			{
-				const bool toMb = g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(autoTarget.c_str());
+				const bool toMb = IsEastAsianUiMode()
+					&& IsValidUTF8With3ByteMin(autoTarget.c_str());
 				const std::string logTarget = toMb ? UTF8ToMultiByteStr(autoTarget, g_usingWinEncoding) : autoTarget;
 				gLog.FormattedMessage("tnvse_dictionary:   uihint %s: \"%s\" ->\"%s\"",
 					typeKey, autoSource.c_str(), logTarget.c_str());

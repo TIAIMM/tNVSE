@@ -798,7 +798,8 @@ namespace fonthook
 
 		std::string PrepareDisplayNameMb(const std::string& originalName)
 		{
-			if (g_bEnableUTF8 && g_usingWinEncoding && IsValidUTF8With3ByteMin(originalName.c_str()))
+			if (g_bEnableUTF8 && IsEastAsianUiMode()
+				&& IsValidUTF8With3ByteMin(originalName.c_str()))
 			{
 				const std::string converted = UTF8ToMultiByteStr(originalName, g_usingWinEncoding);
 				if (!converted.empty())
@@ -823,13 +824,16 @@ namespace fonthook
 			if (!FindDisplayRecord(savePathKey, actualKey, record))
 				return false;
 
-			if (record.codePage == g_usingWinEncoding || !record.codePage || !g_usingWinEncoding)
+			const UInt32 storedCodePage = record.codePage
+				? record.codePage : kWindows1252CodePage;
+			if (storedCodePage == g_usingWinEncoding)
 			{
 				outDisplayNameMb = record.displayNameMb;
 				return true;
 			}
 
-			return ConvertCodePage(record.displayNameMb, record.codePage, g_usingWinEncoding, outDisplayNameMb);
+			return ConvertCodePage(record.displayNameMb, storedCodePage,
+				g_usingWinEncoding, outDisplayNameMb);
 		}
 
 		bool LoadCachedDisplayName(const std::string& actualKey, std::string& outDisplayNameMb)

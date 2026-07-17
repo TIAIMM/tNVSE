@@ -605,11 +605,6 @@ namespace fonthook
 			gLog.FormattedMessage("tnvse_freetype_font: disabled by tnvse.ini");
 			return;
 		}
-		if (!g_bEnableMultibyteFontHook)
-		{
-			gLog.FormattedMessage("tnvse_freetype_font: disabled because bEnableMultibyteFontHook=0");
-			return;
-		}
 
 		std::array<char, MAX_PATH> modulePath = {};
 		GetModuleFileNameA(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));

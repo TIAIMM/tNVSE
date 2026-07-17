@@ -122,7 +122,7 @@ namespace fonthook
 
 		std::string WideToCurrentCodePage(std::wstring_view value)
 		{
-			if (value.empty() || !g_usingWinEncoding)
+			if (value.empty())
 				return {};
 
 			BOOL usedDefaultChar = FALSE;
@@ -616,7 +616,7 @@ namespace fonthook
 
 		bool LayoutMatchesCurrentEncoding(HKL layout)
 		{
-			if (!layout || !g_uiEncoding)
+			if (!layout || !IsEastAsianUiMode())
 				return false;
 
 			const LANGID language = LOWORD(reinterpret_cast<ULONG_PTR>(layout));

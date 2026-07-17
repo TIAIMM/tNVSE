@@ -44,7 +44,7 @@ namespace fonthook
 		};
 		const vectorfont::KerningCacheKey cacheKey = {
 			runtime->config->layoutHash,
-			g_usingWinEncoding, packCode(apLeft, auiLeftLength),
+			GetFreeTypeTextCodePage(), packCode(apLeft, auiLeftLength),
 			packCode(apRight, auiRightLength),
 			static_cast<UInt8>(auiLeftLength), static_cast<UInt8>(auiRightLength)
 		};

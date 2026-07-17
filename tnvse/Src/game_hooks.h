@@ -1,13 +1,38 @@
 #pragma once
 
+#include "ui_decode.h"
+
 namespace fonthook
 {
+	struct FontHookInstallState
+	{
+		bool multibyte = false;
+		bool freeType = false;
+	};
+
 	// ---- Initialization functions ----
 	void InitBigGunsDescHooks();
 	void InitDoorPromptHooksCHS();
 	void InitDoorPromptHooksKOR();
 	void InitPluralHooks();
 	void InitVertSpacingHook();
-	void InitFontHook();
+	FontHookInstallState InitFontHooks();
+	bool AreMultibyteFontHooksInstalled();
+	bool AreFreeTypeFontHooksInstalled();
+
+	Font* CallOriginalFontInit(
+		Font* font, int fontNum, char* filename, bool load);
+	void CallOriginalFontLoad(Font* font);
+	UInt32 CallOriginalFontCreateText(
+		Font* font, BSStringT<char>* text, int* width, int* height,
+		int lineStart, int lineEnd, int flags, char lineBreak,
+		const NiColorA* color, NiTriShape** textShape, NiTriShape** iconShape);
+	NiTriShape* CallOriginalFontMakeString(
+		Font* font, float startX, float startY, float z,
+		BSStringT<char>* text, int* width, bool prepareObject,
+		const NiColorA* color, bool upperLeftCorner, bool prepareObjectFinal);
+	NiPoint3* CallOriginalCalculateStringDimensions(
+		FontManager* manager, NiPoint3* dimensions, const char* text,
+		UInt32 fontId, float maxWrapWidth, UInt32 startCharIndex);
 
 } // namespace fonthook

@@ -521,7 +521,8 @@ namespace fonthook
 			s_uiHintFormats[typeName] = std::move(hint);
 
 			const std::string& fmt = s_uiHintFormats[typeName].targetFormat;
-			const bool toMb = g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(fmt.c_str());
+			const bool toMb = IsEastAsianUiMode()
+				&& IsValidUTF8With3ByteMin(fmt.c_str());
 			gLog.FormattedMessage("tnvse_dictionary: loaded uihint type=%s target_format=\"%s\"",
 				typeName, toMb ? UTF8ToMultiByteStr(fmt, g_usingWinEncoding).c_str() : fmt.c_str());
 		}
@@ -553,9 +554,10 @@ namespace fonthook
 			return;
 		}
 
-		if (g_usingWinEncoding == 0)
+		if (!IsEastAsianUiMode())
 		{
-			gLog.FormattedMessage("tnvse_dictionary: disabled because uiEncoding is English");
+			gLog.FormattedMessage(
+				"tnvse_dictionary: disabled because uiEncoding=0 is Windows-1252 single-byte mode");
 			return;
 		}
 

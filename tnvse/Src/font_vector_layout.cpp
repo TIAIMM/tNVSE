@@ -70,20 +70,21 @@ namespace fonthook::vectorfont
 
 		hb_language_t GetLayoutLanguage()
 		{
-			thread_local UInt32 cachedEncoding = UINT32_MAX;
+			thread_local UInt32 cachedCodePage = UINT32_MAX;
 			thread_local hb_language_t cachedLanguage = HB_LANGUAGE_INVALID;
-			if (cachedEncoding == g_uiEncoding && cachedLanguage != HB_LANGUAGE_INVALID)
+			const UInt32 codePage = GetFreeTypeTextCodePage();
+			if (cachedCodePage == codePage && cachedLanguage != HB_LANGUAGE_INVALID)
 				return cachedLanguage;
 			const char* language = "en";
-			switch (g_uiEncoding)
+			switch (codePage)
 			{
-			case 1: language = "zh-Hans"; break;
-			case 2: language = "zh-Hant"; break;
-			case 3: language = "ja"; break;
-			case 4: language = "ko"; break;
+			case 936: language = "zh-Hans"; break;
+			case 950: language = "zh-Hant"; break;
+			case 932: language = "ja"; break;
+			case 949: language = "ko"; break;
 			default: break;
 			}
-			cachedEncoding = g_uiEncoding;
+			cachedCodePage = codePage;
 			cachedLanguage = hb_language_from_string(language, -1);
 			return cachedLanguage;
 		}
@@ -105,7 +106,7 @@ namespace fonthook::vectorfont
 				const char* encodedText = text + offset;
 				char normalizedSingleByte[2] = { text[offset], 0 };
 				UInt32 dbcsCode = 0;
-				if (!TryDecodeDoubleByte(text + offset, dbcsCode))
+				if (!TryDecodeFreeTypeDoubleByte(text + offset, dbcsCode))
 				{
 					UInt8 normalized = static_cast<UInt8>(normalizedSingleByte[0]);
 					ConvertToAsciiQuotes(&normalized);
@@ -438,7 +439,7 @@ namespace fonthook::vectorfont
 		std::lock_guard<std::recursive_mutex> lock(state.mutex);
 		const LayoutCacheLookupKey lookup = {
 			runtime.config->layoutHash,
-			g_usingWinEncoding,
+			GetFreeTypeTextCodePage(),
 			allowShaping,
 			std::string_view(text, length)
 		};
@@ -457,7 +458,7 @@ namespace fonthook::vectorfont
 		{
 			LayoutCacheKey key = {
 				runtime.config->layoutHash,
-				g_usingWinEncoding,
+				GetFreeTypeTextCodePage(),
 				allowShaping,
 				std::string(text, length)
 			};

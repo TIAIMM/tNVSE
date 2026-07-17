@@ -1,6 +1,7 @@
 #include "font_engine.h"
 #include "dictionary.h"
 #include "font_glyphs.h"
+#include "game_hooks.h"
 #include "font_manager.h"
 #include "font_vector.h"
 #include "native_calls.h"
@@ -25,6 +26,16 @@ namespace fonthook
 	// ==================== FontEx::FontInit ====================
 	Font* FontEx::FontInit(int iFontNum, char* apFilename, bool abLoad)
 	{
+		if (!g_bEnableMultibyteFontHook)
+		{
+			FontInitLoadScope loadScope;
+			Font* result = CallOriginalFontInit(
+				this, iFontNum, apFilename, abLoad);
+			if (result && g_bEnableFreeTypeFontRendering)
+				ActivateFreeTypeFont(result);
+			return result;
+		}
+
 		TlsSlotGuard tlsGuard;
 		fontNameKey.clear();
 		bool movedExtraGlyphs = false;
@@ -82,6 +93,17 @@ namespace fonthook
 	// ==================== FontEx::Load ====================
 	void FontEx::Load()
 	{
+		if (!g_bEnableMultibyteFontHook)
+		{
+			CallOriginalFontLoad(this);
+			if (g_bEnableFreeTypeFontRendering && this->pFontData
+				&& !s_fontInitLoadDepth)
+			{
+				ActivateFreeTypeFont(this);
+			}
+			return;
+		}
+
 		TlsSlotGuard tlsGuard;
 
 		UInt16 refCount = this->iRefCount;
@@ -134,7 +156,7 @@ namespace fonthook
 
 	void FontEx::LoadExtraGlyphs(BSFile* fontFile, UInt32* textureMarkers)
 	{
-		if (!g_uiEncoding) return;
+		if (!UsesDbcsTextLayout()) return;
 
 		UInt32 uiActualSize = fontFile->GetSize();
 		if (uiActualSize <= kFontDataSize) return;

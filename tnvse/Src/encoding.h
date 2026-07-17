@@ -10,12 +10,23 @@ namespace fonthook
 	// ---- Encoding identifier ----
 	enum class CodePage : UInt32
 	{
-		English = 0,
+		Windows1252 = 1252,
 		GBK = 936,
 		Big5 = 950,
 		SJIS = 932,
 		UHC = 949,
 	};
+
+	constexpr UInt32 kWindows1252CodePage =
+		static_cast<UInt32>(CodePage::Windows1252);
+
+	bool IsDbcsCodePage(UInt32 codePage);
+	bool IsEastAsianUiMode();
+	bool UsesDbcsTextLayout();
+	UInt32 GetFreeTypeTextCodePage();
+	bool TryDecodeDoubleByteForCodePage(
+		const char* p, UInt32 codePage, UInt32& outCode);
+	bool TryDecodeFreeTypeDoubleByte(const char* p, UInt32& outCode);
 
 	// ---- Unified encoding dispatch (replaces repeated if/else-if chains) ----
 	bool IsLeadByte(UInt8 c);
@@ -81,7 +92,7 @@ namespace fonthook
 	// ---- Shared UTF8 detection helper ----
 	inline bool ShouldConvertUTF8(bool hasExtraGlyphs)
 	{
-		return g_bEnableUTF8 && g_uiEncoding != 0 && hasExtraGlyphs;
+		return g_bEnableUTF8 && IsEastAsianUiMode() && hasExtraGlyphs;
 	}
 
 	// Converts src from UTF-8 to multi-byte, reassigning pSrc to point into outConverted.

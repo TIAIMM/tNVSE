@@ -198,6 +198,7 @@ namespace fonthook::vectorfont
 		UInt64 fontContentHash = 0;
 		SInt32 fontFaceIndex = 0;
 		UInt32 glyphIndex = 0;
+		UInt32 codePage = 0;
 		UInt16 effectiveWidth = 0;
 		UInt16 effectiveHeight = 0;
 		SInt32 embolden26Dot6 = 0;
@@ -211,6 +212,7 @@ namespace fonthook::vectorfont
 			return fontContentHash == other.fontContentHash
 				&& fontFaceIndex == other.fontFaceIndex
 				&& glyphIndex == other.glyphIndex
+				&& codePage == other.codePage
 				&& effectiveWidth == other.effectiveWidth
 				&& effectiveHeight == other.effectiveHeight
 				&& embolden26Dot6 == other.embolden26Dot6
@@ -229,6 +231,7 @@ namespace fonthook::vectorfont
 				key.fontContentHash ^ (key.fontContentHash >> 32));
 			result ^= static_cast<size_t>(key.fontFaceIndex) * 0x9E3779B1u;
 			result ^= static_cast<size_t>(key.glyphIndex) * 0x85EBCA77u;
+			result ^= static_cast<size_t>(key.codePage) * 0xC2B2AE3Du;
 			result ^= static_cast<size_t>(key.effectiveWidth) << 16;
 			result ^= static_cast<size_t>(key.effectiveHeight);
 			result ^= static_cast<size_t>(key.embolden26Dot6) * 0x27D4EB2Du;
@@ -248,9 +251,10 @@ namespace fonthook::vectorfont
 		UInt32 sourceFontId = 0;
 	};
 
-	// Version 9 uses outline distance magnitudes with signs resolved from the
-	// matching hinted grayscale coverage.  Older BSDF masks are incompatible.
-	constexpr UInt32 kPersistentBitmapVersion = 9;
+	// Version 10 adds the effective text code page to persistent mask identity.
+	// Version 9 introduced coverage-signed outline SDF masks; all older profiles
+	// are intentionally incompatible.
+	constexpr UInt32 kPersistentBitmapVersion = 10;
 	constexpr UInt32 kPersistentBitmapRecordMagic = 0x4B534D47u; // GMSK
 	constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
 	constexpr UInt32 kMaximumPersistentBitmapBytes = 16u * 1024u * 1024u;
@@ -259,6 +263,7 @@ namespace fonthook::vectorfont
 	{
 		UInt64 fontContentHash = 0;
 		SInt32 fontFaceIndex = 0;
+		UInt32 codePage = 0;
 		UInt16 effectiveWidth = 0;
 		UInt16 effectiveHeight = 0;
 		SInt32 embolden26Dot6 = 0;
@@ -271,6 +276,7 @@ namespace fonthook::vectorfont
 		{
 			return fontContentHash == other.fontContentHash
 				&& fontFaceIndex == other.fontFaceIndex
+				&& codePage == other.codePage
 				&& effectiveWidth == other.effectiveWidth
 				&& effectiveHeight == other.effectiveHeight
 				&& embolden26Dot6 == other.embolden26Dot6
@@ -288,6 +294,7 @@ namespace fonthook::vectorfont
 			size_t result = static_cast<size_t>(
 				key.fontContentHash ^ (key.fontContentHash >> 32));
 			result ^= static_cast<size_t>(key.fontFaceIndex) * 0x9E3779B1u;
+			result ^= static_cast<size_t>(key.codePage) * 0xC2B2AE3Du;
 			result ^= static_cast<size_t>(key.effectiveWidth) << 16;
 			result ^= static_cast<size_t>(key.effectiveHeight);
 			result ^= static_cast<size_t>(key.embolden26Dot6) * 0x85EBCA77u;
@@ -308,6 +315,7 @@ namespace fonthook::vectorfont
 		UInt64 profileHash = 0;
 		UInt64 fontContentHash = 0;
 		SInt32 fontFaceIndex = 0;
+		UInt32 codePage = 0;
 		UInt16 effectiveWidth = 0;
 		UInt16 effectiveHeight = 0;
 		SInt32 embolden26Dot6 = 0;
@@ -603,7 +611,7 @@ namespace fonthook::vectorfont
 	};
 
 	static_assert(sizeof(PersistentFontHashRecord) == 68);
-	static_assert(sizeof(PersistentBitmapFileHeader) == 80);
+	static_assert(sizeof(PersistentBitmapFileHeader) == 84);
 	static_assert(sizeof(PersistentBitmapIndexEntry) == 16);
 	static_assert(sizeof(PersistentBitmapRecordHeader) == 40);
 	static_assert(sizeof(PersistentGlyphManifestHeader) == 72);

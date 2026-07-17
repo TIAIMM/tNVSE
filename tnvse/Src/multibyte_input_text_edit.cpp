@@ -231,7 +231,7 @@ namespace fonthook
 
 		void DebugLogJipState(const char* source, const char* action, TextEditMenu* menu, UInt32 input)
 		{
-			if (!g_bMultibyteInputDebug)
+			if (!g_bMultibyteInputLog)
 				return;
 
 			const UInt32 textLen = menu ? JipCurrentText(menu).GetLength() : 0;

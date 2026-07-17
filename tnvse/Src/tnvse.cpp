@@ -47,7 +47,8 @@ namespace
 	{
 		if (s_configuredGameFontsPrepared)
 			return;
-		if (!g_bEnableFreeTypeFontRendering)
+		if (!g_bEnableFreeTypeFontRendering
+			|| !fonthook::AreFreeTypeFontHooksInstalled())
 		{
 			s_configuredGameFontsPrepared = true;
 			return;
@@ -119,25 +120,31 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 {
 	if (g_msg && g_msg->sender && std::strcmp(g_msg->sender, "Shader Loader") == 0)
 	{
-		fonthook::HandleFreeTypeShaderLoaderMessage(g_msg->type);
+		if (fonthook::AreFreeTypeFontHooksInstalled())
+			fonthook::HandleFreeTypeShaderLoaderMessage(g_msg->type);
 		return;
 	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit)
 	{
 		fonthook::dependencies::ShowExternalPluginDependencyWarnings();
-		fonthook::FinalizeFreeTypeUioDetection();
-		fonthook::FinalizeFreeTypeA8Detection();
-		fonthook::InitializeFreeTypeDefaultPoolAtlas();
-		PrepareConfiguredGameFonts();
+		if (fonthook::AreFreeTypeFontHooksInstalled())
+		{
+			fonthook::FinalizeFreeTypeUioDetection();
+			fonthook::FinalizeFreeTypeA8Detection();
+			fonthook::InitializeFreeTypeDefaultPoolAtlas();
+			PrepareConfiguredGameFonts();
+		}
 	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 	{
-		PrepareConfiguredGameFonts();
-		fonthook::UpdateFreeTypeDevicePixelScale();
-		fonthook::HandleFreeTypeA8MainLoop();
-		fonthook::HandleFreeTypeDefaultPoolAtlasMainLoop();
-		fonthook::PumpFreeTypeFontPrewarm();
-		fonthook::PumpFreeTypeFontPerformance();
+		if (fonthook::AreFreeTypeFontHooksInstalled())
+		{
+			PrepareConfiguredGameFonts();
+			fonthook::HandleFreeTypeA8MainLoop();
+			fonthook::HandleFreeTypeDefaultPoolAtlasMainLoop();
+			fonthook::PumpFreeTypeFontPrewarm();
+			fonthook::PumpFreeTypeFontPerformance();
+		}
 	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_ExitGame
 		|| g_msg->type == NVSEMessagingInterface::kMessage_ExitGame_Console))
@@ -218,14 +225,8 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 
 	fonthook::InitVertSpacingHook();
 
-	if (g_bEnableMultibyteFontHook)
-	{
-		fonthook::InitFontHook();
-	}
-	else
-	{
-		gLog.FormattedMessage("Multibyte font hooks disabled by tnvse.ini");
-	}
+
+	fonthook::InitFontHooks();
 
 	fonthook::InitMultibyteInputHook();
 

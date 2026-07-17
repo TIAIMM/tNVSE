@@ -253,7 +253,7 @@ namespace fonthook
 
 		void DebugLogMenuSearchState(const char* stage, StewieMenuSearchHook& hook, Menu* menu)
 		{
-			if (!g_bMultibyteInputDebug)
+			if (!g_bMultibyteInputLog)
 				return;
 			if (!menu)
 				menu = GetOpenMenu(hook.menuID);

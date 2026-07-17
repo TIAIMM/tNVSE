@@ -326,7 +326,8 @@ namespace fonthook::vectorfont
 			add(&config.maskGenerationHash, sizeof(config.maskGenerationHash));
 			add(&config.shaderEffectHash, sizeof(config.shaderEffectHash));
 			add(&config.prewarm, sizeof(config.prewarm));
-			add(&g_usingWinEncoding, sizeof(g_usingWinEncoding));
+			const UInt32 codePage = GetFreeTypeTextCodePage();
+			add(&codePage, sizeof(codePage));
 			return hash;
 		}
 
@@ -335,7 +336,7 @@ namespace fonthook::vectorfont
 			return job.layoutHash == config.layoutHash &&
 				job.maskGenerationHash == config.maskGenerationHash &&
 				job.shaderEffectHash == config.shaderEffectHash &&
-				job.codePage == g_usingWinEncoding &&
+				job.codePage == GetFreeTypeTextCodePage() &&
 				job.mode == config.prewarm;
 		}
 
@@ -413,7 +414,7 @@ namespace fonthook::vectorfont
 				static_cast<char>(lead), static_cast<char>(trail)
 			};
 			UInt32 decoded = 0;
-			return TryDecodeDoubleByte(bytes, decoded);
+			return TryDecodeDoubleByteForCodePage(bytes, codePage, decoded);
 		}
 
 		bool HasCommonDoubleByteLimit(const PrewarmJob& job)
@@ -611,7 +612,7 @@ namespace fonthook::vectorfont
 			job.snapshotAttempted = false;
 			job.atlasBitmaps.clear();
 			job.atlasBitmapIds.clear();
-			if (!job.codePage)
+			if (!IsDbcsCodePage(job.codePage))
 				job.leadByteEnd = 0;
 			ConfigureCommonRange(job);
 		}
@@ -713,7 +714,7 @@ namespace fonthook::vectorfont
 		job.layoutHash = config->layoutHash;
 		job.maskGenerationHash = config->maskGenerationHash;
 		job.shaderEffectHash = config->shaderEffectHash;
-		job.codePage = g_usingWinEncoding;
+		job.codePage = GetFreeTypeTextCodePage();
 		job.mode = config->prewarm;
 		ResetPrewarmScan(job, 0);
 		job.targetUnitCount = (0x100 - 0x20) + CountPrewarmDoubleByteUnits(job);
@@ -721,7 +722,7 @@ namespace fonthook::vectorfont
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: queued prewarm font=%u mode=%s codePage=%u",
 			fontId, config->prewarm == FontPrewarmMode::CodePage
-				? "codepage" : "common", g_usingWinEncoding);
+				? "codepage" : "common", job.codePage);
 	}
 
 	void QueueConfiguredFontPrewarms()
@@ -753,14 +754,12 @@ namespace fonthook::vectorfont
 		if (s_configuredFontsQueued && s_jobs.empty())
 			return;
 
-		float deviceScale = 1.0f;
-		if (!TryGetFreeTypeSourceRasterScale(deviceScale))
-			return;
+		const float rasterScale = GetCanonicalFreeTypeRasterScale();
 		QueueConfiguredFontPrewarms();
 		if (s_jobs.empty())
 			return;
 		const UInt32 rasterScaleMilli = static_cast<UInt32>(std::lround(
-			deviceScale * 1000.0f));
+			rasterScale * 1000.0f));
 
 		const UInt32 queuedFonts = static_cast<UInt32>(s_jobs.size());
 		const ULONGLONG started = GetTickCount64();
@@ -772,7 +771,7 @@ namespace fonthook::vectorfont
 		UInt32 finishedFonts = 0;
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: blocking prewarm begin fonts=%u scale=%.3f",
-			queuedFonts, deviceScale);
+			queuedFonts, rasterScale);
 		std::vector<VectorEncodedGlyph> requestedGlyphs;
 		requestedGlyphs.reserve(kMaximumGlyphsPerBatch);
 		std::vector<GlyphBitmapRequest> bitmapRequests;
@@ -797,7 +796,7 @@ namespace fonthook::vectorfont
 			if (!config || !runtime || config->layoutHash != job.layoutHash
 				|| config->maskGenerationHash != job.maskGenerationHash
 				|| config->shaderEffectHash != job.shaderEffectHash
-				|| job.codePage != g_usingWinEncoding)
+				|| job.codePage != GetFreeTypeTextCodePage())
 			{
 				FinishJob(job, "cancelled");
 				++cancelledFonts;
@@ -825,7 +824,7 @@ namespace fonthook::vectorfont
 		}
 
 		// Deliberately drain the complete queue on the first game-loop callback
-		// where the final device scale is available. This is an experimental
+		// at the single configured source scale. This is an experimental
 		// startup barrier: control does not return to the game until every queued
 		// profile completes, reaches the atlas limit, or becomes invalid.
 		while (!s_jobs.empty())
@@ -842,7 +841,7 @@ namespace fonthook::vectorfont
 			if (!config || !runtime || config->layoutHash != job.layoutHash
 				|| config->maskGenerationHash != job.maskGenerationHash
 				|| config->shaderEffectHash != job.shaderEffectHash
-				|| job.codePage != g_usingWinEncoding)
+				|| job.codePage != GetFreeTypeTextCodePage())
 			{
 				FinishJob(job, "cancelled");
 				++cancelledFonts;

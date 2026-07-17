@@ -57,9 +57,7 @@ namespace fonthook
 	void PumpFreeTypeFontPerformance();
 	void RecordFreeTypePreparedTextCacheResult(bool abHit);
 	void FlushFreeTypePersistentFontCache();
-	void UpdateFreeTypeDevicePixelScale();
-	bool TryGetFreeTypeSourceRasterScale(float& arScale);
-	float ResolveFreeTypeRasterScale(float afLocalScale = 1.0f);
+	float GetCanonicalFreeTypeRasterScale();
 	float ConsumeFreeTypeCreateTextScale();
 	void FreeTypeCreateTextEntryHook();
 	bool IsFreeTypeEffectSuppressionActive();

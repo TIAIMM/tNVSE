@@ -8,7 +8,7 @@ namespace fonthook
 	{
 		void DebugLog(const char* fmt, ...)
 		{
-			if (!g_bMultibyteInputDebug)
+			if (!g_bMultibyteInputLog)
 				return;
 
 			va_list args;
@@ -33,7 +33,7 @@ namespace fonthook
 
 		void DebugLogState(const char* source, const char* action, TextEditMenu* menu, SInt32 input)
 		{
-			if (!g_bMultibyteInputDebug)
+			if (!g_bMultibyteInputLog)
 				return;
 
 			const UInt32 textLen = menu ? menu->xEditState.xText.GetLength() : 0;

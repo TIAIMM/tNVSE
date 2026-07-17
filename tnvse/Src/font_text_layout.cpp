@@ -616,7 +616,7 @@ namespace fonthook
 			cacheLookup = {
 				font, font->pFontData, layoutIdentity,
 				GetPreparedTextMetricSignature(font, lineSpacingAdjust),
-				GetPreparedTextIconSignature(font), g_usingWinEncoding,
+				GetPreparedTextIconSignature(font), GetFreeTypeTextCodePage(),
 				axData->iWidth, axData->iHeight, axData->iLineStart,
 				axData->iLineEnd, axData->cLineSep, isTerminal,
 				std::string_view(apOrigString, originalTextLen), {}

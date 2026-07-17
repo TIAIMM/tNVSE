@@ -1,4 +1,6 @@
 #include "plugin_dependencies.h"
+#include "encoding.h"
+#include "game_hooks.h"
 
 #include "load_config.h"
 #include "tnvse.h"
@@ -63,8 +65,8 @@ namespace fonthook::dependencies
 			}
 		}
 
-		if (g_bMultibyteInput && g_bEnableMultibyteFontHook
-			&& g_usingWinEncoding && g_bMultibyteInputStewieTweaks)
+		if (g_bMultibyteInput && AreMultibyteFontHooksInstalled()
+			&& IsEastAsianUiMode() && g_bMultibyteInputStewieTweaks)
 		{
 			const PluginInfo* info = g_cmdTableInterface->GetPluginInfoByName
 				? g_cmdTableInterface->GetPluginInfoByName(kStewieTweaksPluginName) : nullptr;
@@ -81,7 +83,7 @@ namespace fonthook::dependencies
 			}
 		}
 
-		if (g_bEnableFreeTypeFontRendering && g_bEnableFreeTypeA8Atlas)
+		if (AreFreeTypeFontHooksInstalled() && g_bEnableFreeTypeA8Atlas)
 		{
 			const PluginInfo* info = g_cmdTableInterface->GetPluginInfoByDLLName
 				? g_cmdTableInterface->GetPluginInfoByDLLName(kShaderLoaderDllName) : nullptr;

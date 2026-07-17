@@ -1,6 +1,7 @@
 #include "font_engine.h"
 #include "dictionary.h"
 #include "font_glyphs.h"
+#include "game_hooks.h"
 #include "font_manager.h"
 #include "font_vector.h"
 #include "native_calls.h"
@@ -150,7 +151,7 @@ namespace fonthook
 	static bool DecodeRenderableVectorGlyph(FontEx* font, const char* text, VectorEncodedGlyph& glyph)
 	{
 		UInt32 dbcsCode = 0;
-		if (text && text[1] && TryDecodeDoubleByte(text, dbcsCode))
+		if (text && text[1] && TryDecodeFreeTypeDoubleByte(text, dbcsCode))
 			return DecodeFreeTypeGlyph(font, text, glyph);
 
 		char converted[2] = { text ? text[0] : 0, 0 };
@@ -425,7 +426,7 @@ namespace fonthook
 					if (value < 0x20 || value == kDelChar)
 						break;
 					UInt32 dbcsCode = 0;
-					runEnd += TryDecodeDoubleByte(runEnd, dbcsCode) ? 2 : 1;
+					runEnd += TryDecodeFreeTypeDoubleByte(runEnd, dbcsCode) ? 2 : 1;
 				}
 				if (runEnd > cursor)
 				{
@@ -549,7 +550,8 @@ namespace fonthook
 					|| value < 0x20 || value == kDelChar)
 					break;
 				UInt32 dbcsCode = 0;
-				runEnd += TryDecodeDoubleByte(&textData.xNewText.pString[runEnd], dbcsCode) ? 2 : 1;
+				runEnd += TryDecodeFreeTypeDoubleByte(
+					&textData.xNewText.pString[runEnd], dbcsCode) ? 2 : 1;
 			}
 			FreeTypeLayoutRun fallbackRun;
 			const size_t runLength = runEnd > byteIndex
@@ -624,6 +626,13 @@ namespace fonthook
 		const NiColorA* axFontColor, NiTriShape** apTextShape, NiTriShape** apIconShape)
 	{
 		const float rasterScale = ConsumeFreeTypeCreateTextScale();
+		const bool freeTypeActive = IsFreeTypeFontActive(this);
+		if (!g_bEnableMultibyteFontHook && !freeTypeActive)
+		{
+			return CallOriginalFontCreateText(this, axTextString, aiWidth,
+				aiHeight, aiLineStart, aiLineEnd, aiFlags, aiLineBreakChar,
+				axFontColor, apTextShape, apIconShape);
+		}
 
 		auto* extraGlyphs = GetExtraGlyphs(this->iFontNum);
 		Font::TextData textData;
@@ -636,20 +645,23 @@ namespace fonthook
 		float linePadding = FontManager::GetLinePadding(this->iFontNum);
 		ThisStdCall(0x759330, &textData, *aiWidth, *aiHeight, aiLineStart, aiLineEnd, aiLineBreakChar);
 
-		const char* pStr = axTextString->pString;
-		std::string sConvertedStr;
-		if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
-			axTextString->Set(pStr);
-		std::string sTranslatedStr;
-		if (TranslateText(axTextString->pString, sTranslatedStr))
-			axTextString->Set(sTranslatedStr.c_str());
+		if (g_bEnableMultibyteFontHook)
+		{
+			const char* pStr = axTextString->pString;
+			std::string sConvertedStr;
+			if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
+				axTextString->Set(pStr);
+			std::string sTranslatedStr;
+			if (TranslateText(axTextString->pString, sTranslatedStr))
+				axTextString->Set(sTranslatedStr.c_str());
+		}
 
 		ThisStdCall(0xA12FB0, this, axTextString->pString, &textData);
 
 		*aiWidth = textData.iWidth;
 		*aiHeight = textData.iHeight;
 
-		if (IsFreeTypeFontActive(this))
+		if (freeTypeActive)
 		{
 			return CreateFreeTypePreparedText(this, textData, aiWidth,
 				aiFlags, aiLineBreakChar, axFontColor, apTextShape, apIconShape,
@@ -783,15 +795,26 @@ namespace fonthook
 		BSStringT<char>* apTextString, int* aiWidth, bool abPrepareObject,
 		const NiColorA* arg1C, bool abUpperLeftCorner, bool abPrepareObject_1)
 	{
+		const bool freeTypeActive = IsFreeTypeFontActive(this);
+		if (!g_bEnableMultibyteFontHook && !freeTypeActive)
+		{
+			return CallOriginalFontMakeString(this, afStartX, afStartY, afZ,
+				apTextString, aiWidth, abPrepareObject, arg1C,
+				abUpperLeftCorner, abPrepareObject_1);
+		}
+
 		auto* extraGlyphs = GetExtraGlyphs(this->iFontNum);
 
-		const char* pStr = apTextString->pString;
-		std::string sConvertedStr;
-		if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
-			apTextString->Set(pStr);
-		std::string sTranslatedStr;
-		if (TranslateText(apTextString->pString, sTranslatedStr))
-			apTextString->Set(sTranslatedStr.c_str());
+		if (g_bEnableMultibyteFontHook)
+		{
+			const char* pStr = apTextString->pString;
+			std::string sConvertedStr;
+			if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
+				apTextString->Set(pStr);
+			std::string sTranslatedStr;
+			if (TranslateText(apTextString->pString, sTranslatedStr))
+				apTextString->Set(sTranslatedStr.c_str());
+		}
 
 		if (!apTextString->pString || !this->pFontData)
 			return 0;
@@ -829,9 +852,9 @@ namespace fonthook
 		if (!charIdx)
 			return 0;
 
-		if (IsFreeTypeFontActive(this))
+		if (freeTypeActive)
 		{
-			const float rasterScale = ResolveFreeTypeRasterScale();
+			const float rasterScale = GetCanonicalFreeTypeRasterScale();
 			VectorTextBuilder builder(this, abPrepareObject_1, rasterScale, arg1C);
 			if (!builder.IsAvailable())
 			{
@@ -886,7 +909,8 @@ namespace fonthook
 					if (value < 0x20 || value == kDelChar)
 						break;
 					UInt32 dbcsCode = 0;
-					runEnd += TryDecodeDoubleByte(&apTextString->pString[runEnd], dbcsCode) ? 2 : 1;
+					runEnd += TryDecodeFreeTypeDoubleByte(
+						&apTextString->pString[runEnd], dbcsCode) ? 2 : 1;
 				}
 				FreeTypeLayoutRun run;
 				if (runEnd > byteIndex && LayoutFreeTypeRun(this,

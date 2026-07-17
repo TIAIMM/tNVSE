@@ -486,7 +486,8 @@ namespace fonthook
 
 		if (g_bEnableDictionaryTranslationLog && str != before)
 		{
-			const bool toMb = g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(before.c_str());
+			const bool toMb = IsEastAsianUiMode()
+				&& IsValidUTF8With3ByteMin(before.c_str());
 			const std::string logBefore = toMb ? UTF8ToMultiByteStr(before, g_usingWinEncoding) : before;
 			const std::string logAfter  = toMb ? UTF8ToMultiByteStr(str, g_usingWinEncoding) : str;
 			gLog.FormattedMessage("tnvse_dictionary: ");
@@ -550,7 +551,8 @@ namespace fonthook
 
 		if (g_bEnableDictionaryTranslationLog && str != before)
 		{
-			const bool toMb = g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(before.c_str());
+			const bool toMb = IsEastAsianUiMode()
+				&& IsValidUTF8With3ByteMin(before.c_str());
 			const std::string logBefore = toMb ? UTF8ToMultiByteStr(before, g_usingWinEncoding) : before;
 			const std::string logAfter  = toMb ? UTF8ToMultiByteStr(str, g_usingWinEncoding) : str;
 			gLog.FormattedMessage("tnvse_dictionary: ");
@@ -614,7 +616,7 @@ namespace fonthook
 		NormalizeEscapedTargetWhitespace(text);
 		ReplaceAll(text, "[QUOTE]", "\"");
 		ReplaceAll(text, "\t", "    ");
-		if (g_usingWinEncoding != 0 && IsValidUTF8With3ByteMin(text.c_str()))
+		if (IsEastAsianUiMode() && IsValidUTF8With3ByteMin(text.c_str()))
 			text = UTF8ToMultiByteStr(text, g_usingWinEncoding);
 		return text;
 	}

@@ -129,8 +129,8 @@ namespace fonthook::vectorfont
 			hash = HashAtlasBytes(&key.padding, sizeof(key.padding), hash);
 			hash = HashAtlasBytes(&key.levelZeroOnly,
 				sizeof(key.levelZeroOnly), hash);
-			hash = HashAtlasBytes(&g_usingWinEncoding,
-				sizeof(g_usingWinEncoding), hash);
+			const UInt32 codePage = GetFreeTypeTextCodePage();
+			hash = HashAtlasBytes(&codePage, sizeof(codePage), hash);
 			hash = HashAtlasBytes(&prewarmMode, sizeof(prewarmMode), hash);
 			hash = HashAtlasBytes(&kMaximumAtlasMipLevels,
 				sizeof(kMaximumAtlasMipLevels), hash);

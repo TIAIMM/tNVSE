@@ -62,9 +62,9 @@ char displayNameMb[displayNameLen];
 
 `actualKey` is the sanitized save basename without path or `.fos`. `savePathKey` is the normalized full `.fos` path and prevents collisions between profiles or save directories that have the same basename. `displayNameMb` is stored in the current UI Windows codepage, not UTF-8.
 
-If `bUTF8=1` and the original input validates as UTF-8, the display name is converted with the existing UTF-8-to-current-codepage path before serialization. Otherwise the original bytes are stored as already-multibyte UI text.
+If `bUTF8=1`, `uiEncoding=1-4`, and the original input validates as UTF-8, the display name is converted with the existing UTF-8-to-current-codepage path before serialization. At `uiEncoding=0`, UTF-8 conversion remains disabled and raw bytes are stored as Windows-1252. Otherwise the original bytes are stored as already-multibyte UI text.
 
-When reading, matching codepages are used directly. If the stored codepage differs from the current UI codepage, the reader attempts `stored codepage -> UTF-16 -> current codepage`; on failure it falls back to the actual save name.
+When reading, matching codepages are used directly. Legacy records whose code page is `0` are interpreted as Windows-1252/ASCII records. If the stored codepage differs from the current UI codepage, the reader attempts `stored codepage -> UTF-16 -> current codepage`; on failure it falls back to the actual save name. New English records write code page `1252`, never `0`.
 
 ## Writer behavior
 
@@ -97,7 +97,7 @@ The internal lookup cache is keyed by `{savePathKey, actualKey}` and invalidated
 
 ## Config
 
-Under `[Main]`:
+Under `[Multibyte]`:
 
 ```ini
 bSaveDisplayNameMap=1

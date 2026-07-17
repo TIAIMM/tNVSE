@@ -5,36 +5,43 @@ comment block in `tnvse_fonts.xml` is the concise configuration-item reference.
 
 ## Enable the renderer
 
-The feature is disabled by default. Enable both options in `tnvse.ini`:
+FreeType has its own strict INI section and does not depend on the multibyte
+font hook:
 
 ```ini
-[Main]
-bEnableMultibyteFontHook=1
+[FreeTypeFont]
 bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
-bEnableFreeTypeDevicePixelScale=1
 fFreeTypeFontResolutionScale=1.0
 ```
 
+With `[Multibyte] bEnableMultibyteFontHook=1`, FreeType uses the configured
+DBCS parser and byte-pair layout. With that switch disabled, configured
+FreeType font IDs instead retain the game's original Windows-1252 single-byte
+line breaking, control-character handling, pagination, and rich-text topology.
+tNVSE replaces only their glyph geometry and remeasures each already-prepared
+line for pair kerning, tracking, and outline collision protection; it never
+performs a second wrapping pass. Non-FreeType font IDs remain wholly on the
+original `.fnt`/`.tex` path.
+
 ## Raster scale and UIO
 
-`bEnableFreeTypeDevicePixelScale=1` rasterizes glyphs at the physical screen
-pixel density reported by the UI `resolutionconverter` trait. That device
-density is the single source resolution used by ordinary and UIO 2.30
-`CreateText` calls. UIO zoom remains a scene-node transform and selects from
-the shared atlas mip chain instead of producing another bitmap/atlas profile.
-Layout, wrapping, alignment, and returned dimensions remain in game UI units.
-Both policies always generate the UIO `1.0` source profile. UIO zoom remains a
-scene-node transform and never creates another bitmap or atlas profile. Set
-`bEnableFreeTypeDevicePixelScale=0` to replace the device-pixel source scale
-with `fFreeTypeFontResolutionScale`. Its default is `1.0`, its valid range is
-`0.1-10.0`, and it is ignored while device-pixel scaling is enabled. Manual
+`fFreeTypeFontResolutionScale` is the sole source multiplier used by startup
+prewarm, demand-generated glyphs, grayscale and SDF masks, atlas pages, and
+persistent caches. Its default is `1.0`, its valid range is `0.1-10.0`, and it
+is canonicalized to the nearest `0.001`. Output resolution and the UI
+`resolutionconverter` trait do not change the source profile. A display density
+below the configured multiplier minifies that profile; a higher density
+magnifies it without generating another mask or atlas.
+
 `1.0` matches the original grayscale renderer's ordinary UIO `1.0` source
-resolution; values such as `1.5` or `2.0` increase source resolution without
-changing layout or displayed font size, at the cost of larger CPU masks and
-atlas usage. Grayscale and SDF bodies use the same resolved source scale; their
-cache keys include the resulting effective pixel dimensions, so changing the
-multiplier selects a new compatible cache profile.
+resolution. Values such as `1.5` for a 1440p-oriented source or `2.25` for a
+4K-oriented source increase source resolution without changing layout or
+displayed font size, at the cost of larger CPU masks, persistent files and atlas
+usage. Layout, wrapping, alignment, and returned dimensions remain in game UI
+units. UIO zoom remains a scene-node transform and selects from the shared
+atlas profile rather than producing a bitmap or atlas variant. Changing the
+configured multiplier intentionally selects one new compatible cache profile.
 
 Set `bEnableFreeTypeFontRenderingLog=1` while diagnosing configuration or font
 loading. The log records the XML path, resolved face paths, FreeType errors,
@@ -153,18 +160,20 @@ proportional advances.
 ## Blocking prewarm and persistent caches
 
 `prewarm="none"` is the default and preserves fully demand-driven atlas
-generation. `prewarm="common"` prepares valid single-byte units and a common
-double-byte repertoire. Under CP936 that repertoire is the complete GB2312
-set; other supported code pages retain their limit of up to 7000 valid
-double-byte units. `prewarm="codepage"` follows DCFGCF's explicit encoding
-ranges for the current `uiEncoding` code page, with CP936 using the complete
-GBK profile. Prewarming begins after the
-configured fonts are activated. On the first game-loop callback where the
-final device scale is available, tNVSE synchronously drains the complete queue;
-the game remains blocked until every queued profile reports `complete`,
-`atlas-full`, or `cancelled`. Both device-pixel and manual resolution modes
-prewarm one canonical UIO `1.0` source size. UIO-derived calls reuse that mask
-and atlas profile instead of generating per-zoom variants.
+generation. In FreeType-only mode, both `prewarm="common"` and
+`prewarm="codepage"` enumerate exactly the 224 Windows-1252 byte units
+`0x20-0xFF`; no double-byte scan is performed. With the multibyte hook active,
+`common` prepares the valid single-byte units and a common double-byte
+repertoire. Under CP936 that repertoire is the complete GB2312 set; other
+supported DBCS code pages retain their limit of up to 7000 valid double-byte
+units. `codepage` follows DCFGCF's explicit encoding ranges, with CP936 using
+the complete GBK profile. Prewarming begins after the configured fonts are activated. On
+the first game-loop callback, tNVSE synchronously drains the complete queue at
+`fFreeTypeFontResolutionScale`; it does not wait for a menu root or device
+scale. The game remains blocked until every queued profile reports `complete`,
+`atlas-full`, or `cancelled`. Prewarm and demand rendering share one canonical
+source scale. UIO-derived calls reuse that mask and atlas profile
+instead of generating per-zoom variants.
 While this startup barrier is active, a non-activating English progress window
 runs on a separate UI thread. It shows the current font ID, grayscale/SDF mode,
 the active scan or snapshot stage, and overall progress. The window remains
@@ -235,11 +244,15 @@ stored in atlas pixels rather than supplied only as shader constants.
 
 ## Encoding and fallback routing
 
-Routing follows the selected `uiEncoding`: valid one-byte units use
-`singleByte`, while valid DBCS pairs use `doubleByte`. Shift-JIS half-width
-katakana therefore use the single-byte font. Missing glyph lookup stays inside
-the selected byte-class fallback chain and then tries `U+FFFD`, `?`, and the
-primary face's `.notdef` glyph.
+When the multibyte hook is active, routing follows the selected DBCS
+`uiEncoding`: valid one-byte units use `singleByte`, while valid pairs use
+`doubleByte`. Shift-JIS half-width katakana therefore use the single-byte font.
+In FreeType-only mode the effective FreeType code page is always 1252, even if
+`uiEncoding=1-4` remains configured, and every byte uses `singleByte`.
+Runtime glyph, layout, kerning, mask, manifest and atlas-snapshot identities all
+use that effective code page. Code-page-0 font caches are legacy and are never
+restored. Missing glyph lookup stays inside the selected byte-class fallback
+chain and then tries `U+FFFD`, `?`, and the primary face's `.notdef` glyph.
 
 ## Atlas and Tile shader routing
 
@@ -372,14 +385,15 @@ result through D3D9, increasing synchronization cost and reducing DXVK/Wine
 compatibility. The GPU is therefore used for persistent atlas sampling and
 quad rendering, while hinted masks are generated once on the CPU.
 
-When device-pixel mode is enabled and UIO 2.30 scales a TileText call, tNVSE
-keeps the mask at the canonical device raster size and lets the existing world
-transform minify or magnify the mipmapped atlas. Trilinear sampling is enabled
-for scaled A8 grayscale shapes. Manual resolution mode likewise keeps a
-canonical UIO `1.0` profile at its configured source multiplier; UIO zoom is
-applied by the existing transform. If atlas creation fails, the
-renderer falls back to the libtess2 outline path. HarfBuzz
-shaping is limited to horizontal LTR text in the configured DBCS code pages;
-bidirectional layout, LCD subpixel rendering, color-font rendering, and
+When output resolution or UIO 2.30 scales a TileText call, tNVSE keeps the mask
+at the single configured source multiplier and lets the existing world
+transform minify or magnify the atlas. Trilinear sampling is enabled for scaled
+A8 grayscale shapes; SDF ranges retain level-zero derivative-based sampling.
+Neither case creates a resolution- or zoom-specific profile. If atlas creation
+fails, the renderer falls back to the libtess2 outline path. HarfBuzz
+shaping is limited to horizontal LTR text in the active DBCS path; the
+FreeType-only rich-text post-pass intentionally preserves one byte per
+`CharData` and applies no GSUB. Bidirectional layout,
+LCD subpixel rendering, color-font rendering, and
 variable-font axis controls are outside this feature. Invalid or unavailable
 configurations leave that entire font ID on the original `.fnt`/`.tex` renderer.

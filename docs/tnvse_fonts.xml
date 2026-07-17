@@ -54,7 +54,8 @@
         prepares all valid single-byte units plus the complete GB2312
         double-byte set under CP936; other code pages prepare up to 7000
         common double-byte units. "codepage" prepares the configured code-page
-        profile (complete GBK under CP936).
+        profile (complete GBK under CP936). When the multibyte font hook is
+        disabled, both modes prepare only the 224 Windows-1252 units 0x20-0xFF.
       fillRenderMode
         "grayscale" selects hinted grayscale fill and is the default. "sdf"
         selects SDF fill.
@@ -68,7 +69,9 @@
       <singleByte> and <doubleByte>
 
       singleByte handles valid one-byte units; doubleByte handles valid DBCS
-      two-byte units. Each may override:
+      pairs. FreeType-only mode is always Windows-1252 and therefore routes
+      every byte through singleByte, regardless of configured uiEncoding.
+      Each byte-class node may override:
         pixelSize, tracking, fixedWidth, scaleX, scaleY, embolden, slant,
         baselineOffset
       Unspecified values inherit from <font>. Other <font> attributes and all
