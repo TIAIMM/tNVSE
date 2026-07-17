@@ -855,6 +855,8 @@ namespace fonthook::vectorfont
 				sizeof(kPersistentGlyphManifestVersion));
 			hash = HashBytes64(&runtime.config->layoutHash,
 				sizeof(runtime.config->layoutHash), hash);
+			hash = HashBytes64(&runtime.verticalAlignmentRasterScale,
+				sizeof(runtime.verticalAlignmentRasterScale), hash);
 			runtime.layoutContentHash = HashRuntimeFontFaces(runtime, hash);
 			return runtime.layoutContentHash;
 		}

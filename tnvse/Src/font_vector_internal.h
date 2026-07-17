@@ -316,7 +316,7 @@ namespace fonthook::vectorfont
 	bool HasCompleteGlyphManifest(RuntimeFont& arRuntime, FontPrewarmMode aeMode);
 	void MarkGlyphManifestComplete(RuntimeFont& arRuntime, FontPrewarmMode aeMode);
 	float GetGlyphBaselineOffset(const RuntimeFont& arRuntime,
-		VectorFontByteClass aeByteClass);
+		const VectorEncodedGlyph& arGlyph);
 	void GetGlyphBitmaps(RuntimeFont& arRuntime,
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults);

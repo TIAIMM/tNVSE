@@ -324,9 +324,9 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		bool GetGlyphBox(RuntimeRole& role, UInt32 codePoint, FT_BBox& box, float& advance)
+		bool GetGlyphBox(RuntimeRole& role, UInt32 codePoint, ResolvedGlyph& glyph,
+			FT_BBox& box, float& advance)
 		{
-			ResolvedGlyph glyph;
 			if (!ResolveGlyph(role, codePoint, glyph))
 				return false;
 			if (!LoadGlyph(role, *glyph.runtimeFace, glyph.glyphIndex))
@@ -338,6 +338,14 @@ namespace fonthook::vectorfont
 				box = {};
 			advance = static_cast<float>(slot->advance.x) / 64.0f;
 			return true;
+		}
+
+		float GetResolvedBaselineOffset(const RuntimeRole& role,
+			const ResolvedGlyph& glyph)
+		{
+			return glyph.runtimeFace
+				? glyph.runtimeFace->resolvedBaselineOffset
+				: role.resolvedBaselineOffset;
 		}
 
 		float GetFixedCellAdvance(const ByteStyle& style)
@@ -403,17 +411,19 @@ namespace fonthook::vectorfont
 		{
 			FontLetter result = {};
 			result.iTextureIndex = 0;
+			ResolvedGlyph resolved;
 			FT_BBox box = {};
 			float advance = 0.0f;
-			if (!GetGlyphBox(role, codePoint, box, advance))
+			if (!GetGlyphBox(role, codePoint, resolved, box, advance))
 				return result;
+			const float baselineOffset = GetResolvedBaselineOffset(role, resolved);
 
 			const float xMin = std::floor(static_cast<float>(box.xMin) / 64.0f);
 			const float xMax = std::ceil(static_cast<float>(box.xMax) / 64.0f);
 			const float bodyBottom = std::floor(static_cast<float>(box.yMin) / 64.0f)
-				+ role.resolvedBaselineOffset;
+				+ baselineOffset;
 			const float bodyTop = std::ceil(static_cast<float>(box.yMax) / 64.0f)
-				+ role.resolvedBaselineOffset;
+				+ baselineOffset;
 			const VerticalEffectExtents effects = GetVerticalEffectExtents(config);
 			const float glyphBottom = bodyBottom - effects.bottom;
 			const float glyphTop = bodyTop + effects.top;
@@ -452,39 +462,282 @@ namespace fonthook::vectorfont
 				if (State().loggedVerticalMetricRoles.insert(logKey).second)
 				{
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: glyph metrics font=%u role=%s codepoint=U+%04X bodyTop=%.2f bodyBottom=%.2f effectTop=%.2f effectBottom=%.2f topEdge=%.2f height=%.2f drop=%.2f configuredBaselineOffset=%.2f visualCorrection=%.2f resolvedBaselineOffset=%.2f",
+						"tnvse_freetype_font: glyph metrics font=%u role=%s face=%u codepoint=U+%04X bodyTop=%.2f bodyBottom=%.2f effectTop=%.2f effectBottom=%.2f topEdge=%.2f height=%.2f drop=%.2f configuredBaselineOffset=%.2f visualCorrection=%.3f resolvedBaselineOffset=%.3f",
 						config.fontId,
 						byteClass == VectorFontByteClass::DoubleByte ? "doubleByte" : "singleByte",
-						codePoint, bodyTop, bodyBottom, effects.top, effects.bottom,
+						resolved.faceIndex, codePoint, bodyTop, bodyBottom, effects.top, effects.bottom,
 						result.fTopEdge, result.fHeight,
 						result.fHeight - result.fTopEdge, role.style->baselineOffset,
-						role.visualCenterCorrection, role.resolvedBaselineOffset);
+						resolved.runtimeFace ? resolved.runtimeFace->visualCenterCorrection
+							: role.visualCenterCorrection,
+						baselineOffset);
 				}
 			}
 			return result;
 		}
 
-		bool MeasureVisualCenter(RuntimeRole& role, const UInt32* codePoints, size_t count, float& center)
+		struct VisualReferenceSet
 		{
-			float total = 0.0f;
-			UInt32 measured = 0;
-			for (size_t i = 0; i < count; ++i)
+			const UInt32* codePoints = nullptr;
+			size_t count = 0;
+			const char* name = "unknown";
+		};
+
+		struct VisualCenterMeasurement
+		{
+			float center = 0.0f;
+			float top = 0.0f;
+			float bottom = 0.0f;
+			UInt32 sampleCount = 0;
+		};
+
+		float RobustAverage(std::vector<float>& values)
+		{
+			std::sort(values.begin(), values.end());
+			const size_t trim = values.size() >= 5 ? values.size() / 5 : 0;
+			const size_t begin = trim;
+			const size_t end = values.size() - trim;
+			double total = 0.0;
+			for (size_t index = begin; index < end; ++index)
+				total += values[index];
+			return static_cast<float>(total / static_cast<double>(end - begin));
+		}
+
+		bool BitmapRowHasVisibleInk(const FT_Bitmap& bitmap, UInt32 row)
+		{
+			if (!bitmap.buffer || row >= bitmap.rows || !bitmap.width || !bitmap.pitch)
+				return false;
+			const ptrdiff_t pitch = bitmap.pitch;
+			const UInt8* rowData = pitch > 0
+				? bitmap.buffer + static_cast<ptrdiff_t>(row) * pitch
+				: bitmap.buffer + static_cast<ptrdiff_t>(bitmap.rows - row - 1) * -pitch;
+			switch (bitmap.pixel_mode)
 			{
-				ResolvedGlyph glyph;
-				if (!ResolveExactGlyph(role, codePoints[i], glyph)
-					|| glyph.runtimeFace->face->glyph->format != FT_GLYPH_FORMAT_OUTLINE)
+			case FT_PIXEL_MODE_GRAY:
+			{
+				const UInt8 threshold = static_cast<UInt8>(std::max<UInt32>(1,
+					bitmap.num_grays > 1 ? (bitmap.num_grays - 1) / 16 : 1));
+				for (UInt32 column = 0; column < bitmap.width; ++column)
+				{
+					if (rowData[column] >= threshold)
+						return true;
+				}
+				return false;
+			}
+			case FT_PIXEL_MODE_MONO:
+				for (UInt32 column = 0; column < (bitmap.width + 7) / 8; ++column)
+				{
+					if (rowData[column])
+						return true;
+				}
+				return false;
+			case FT_PIXEL_MODE_BGRA:
+				for (UInt32 column = 0; column < bitmap.width; ++column)
+				{
+					if (rowData[column * 4 + 3] >= 16)
+						return true;
+				}
+				return false;
+			default:
+				return false;
+			}
+		}
+
+		bool MeasureFaceVisualCenter(RuntimeRole& role, RuntimeFace& face,
+			const VisualReferenceSet& references, float rasterScale,
+			VisualCenterMeasurement& measurement)
+		{
+			const float safeScale = std::isfinite(rasterScale)
+				&& rasterScale >= 0.1f && rasterScale <= 10.0f ? rasterScale : 1.0f;
+			if (!ConfigureRuntimeFace(face, *role.style, safeScale, true))
+				return false;
+
+			std::vector<float> centers;
+			std::vector<float> tops;
+			std::vector<float> bottoms;
+			centers.reserve(references.count);
+			tops.reserve(references.count);
+			bottoms.reserve(references.count);
+			for (size_t index = 0; index < references.count; ++index)
+			{
+				const FT_UInt glyphIndex = FT_Get_Char_Index(face.face,
+					references.codePoints[index]);
+				if (!glyphIndex || FT_Load_Glyph(face.face, glyphIndex,
+					kGlyphLoadFlags | FT_LOAD_TARGET_NORMAL))
 				{
 					continue;
 				}
-				FT_BBox box = {};
-				FT_Outline_Get_CBox(&glyph.runtimeFace->face->glyph->outline, &box);
-				total += static_cast<float>(box.yMin + box.yMax) / 128.0f;
-				++measured;
+				FT_GlyphSlot slot = face.face->glyph;
+				if (slot->format != FT_GLYPH_FORMAT_OUTLINE || !slot->outline.n_points)
+					continue;
+				if (role.style->embolden > 0.0f)
+				{
+					const FT_Pos strength = static_cast<FT_Pos>(std::lround(
+						role.style->embolden * safeScale * 64.0f));
+					FT_Outline_EmboldenXY(&slot->outline, strength, strength);
+				}
+				if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL))
+					continue;
+
+				UInt32 firstRow = slot->bitmap.rows;
+				UInt32 lastRow = 0;
+				for (UInt32 row = 0; row < slot->bitmap.rows; ++row)
+				{
+					if (!BitmapRowHasVisibleInk(slot->bitmap, row))
+						continue;
+					firstRow = std::min(firstRow, row);
+					lastRow = std::max(lastRow, row);
+				}
+				if (firstRow >= slot->bitmap.rows)
+					continue;
+
+				const float top = (static_cast<float>(slot->bitmap_top)
+					- static_cast<float>(firstRow)) / safeScale;
+				const float bottom = (static_cast<float>(slot->bitmap_top)
+					- static_cast<float>(lastRow + 1)) / safeScale;
+				tops.push_back(top);
+				bottoms.push_back(bottom);
+				centers.push_back((top + bottom) * 0.5f);
 			}
-			if (!measured)
+			if (centers.size() < 3)
 				return false;
-			center = total / static_cast<float>(measured);
+
+			measurement.center = RobustAverage(centers);
+			measurement.top = RobustAverage(tops);
+			measurement.bottom = RobustAverage(bottoms);
+			measurement.sampleCount = static_cast<UInt32>(centers.size());
 			return true;
+		}
+
+		VisualReferenceSet GetSingleByteVisualReferences()
+		{
+			static constexpr UInt32 kReferences[] = {
+				'H', 'I', 'M', 'N', 'A', 'B', 'D', 'E', 'F', 'L', 'T', 'W', 'X', 'Z',
+				'0', '1', '2', '3', '5', '6', '8', '9'
+			};
+			return { kReferences, std::size(kReferences), "latin-cap" };
+		}
+
+		VisualReferenceSet GetDoubleByteVisualReferences()
+		{
+			static constexpr UInt32 kSimplifiedChinese[] = {
+				0x4E2D, 0x56FD, 0x6C49, 0x6587, 0x5B57, 0x5929, 0x5730, 0x6C38,
+				0x7530, 0x65E5, 0x76EE, 0x56DE, 0x6B63, 0x9AD8, 0x8BED, 0x4EBA
+			};
+			static constexpr UInt32 kTraditionalChinese[] = {
+				0x4E2D, 0x570B, 0x6F22, 0x6587, 0x5B57, 0x5929, 0x5730, 0x6C38,
+				0x7530, 0x65E5, 0x76EE, 0x56DE, 0x6B63, 0x9AD4, 0x8A9E, 0x4EBA
+			};
+			static constexpr UInt32 kJapanese[] = {
+				0x65E5, 0x672C, 0x8A9E, 0x4E2D, 0x56FD, 0x6F22, 0x6587, 0x7530,
+				0x3042, 0x304B, 0x3055, 0x306A, 0x30A2, 0x30AB, 0x30B5, 0x30CA
+			};
+			static constexpr UInt32 kKorean[] = {
+				0xD55C, 0xAE00, 0xAC00, 0xB098, 0xB2E4, 0xB77C,
+				0xB9C8, 0xBC14, 0xC0AC, 0xC544, 0xC790, 0xCC28
+			};
+			switch (GetFreeTypeTextCodePage())
+			{
+			case 932:
+				return { kJapanese, std::size(kJapanese), "japanese" };
+			case 949:
+				return { kKorean, std::size(kKorean), "korean" };
+			case 950:
+				return { kTraditionalChinese, std::size(kTraditionalChinese), "traditional-chinese" };
+			case 936:
+			default:
+				return { kSimplifiedChinese, std::size(kSimplifiedChinese), "simplified-chinese" };
+			}
+		}
+
+		void ApplyAutomaticVisualAlignment(RuntimeFont& runtime, float rasterScale)
+		{
+			// Fallout treats FontData::fBaseLine as the shared line rise and derives a
+			// character's drop from FontLetter::fHeight - fTopEdge. Keep the visual
+			// correction face-local so BuildFontLetter and atlas placement move together;
+			// the existing verticalMetrics policy remains the sole owner of the line box.
+			RuntimeRole& single = runtime.roles[0];
+			RuntimeRole& doubleByte = runtime.roles[1];
+			const VisualReferenceSet singleReferences = GetSingleByteVisualReferences();
+			const VisualReferenceSet doubleReferences = GetDoubleByteVisualReferences();
+			VisualCenterMeasurement singlePrimary;
+			VisualCenterMeasurement doublePrimary;
+			if (!MeasureFaceVisualCenter(single, single.faces.front(), singleReferences,
+				rasterScale, singlePrimary)
+				|| !MeasureFaceVisualCenter(doubleByte, doubleByte.faces.front(),
+					doubleReferences, rasterScale, doublePrimary))
+			{
+				if (g_bEnableFreeTypeFontRenderingLog)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: vertical alignment unavailable font=%u scale=%.3f singleSamples=%u doubleSamples=%u",
+						runtime.config->fontId, rasterScale,
+						singlePrimary.sampleCount, doublePrimary.sampleCount);
+				}
+				return;
+			}
+
+			const float targetCenter = singlePrimary.center;
+			for (size_t roleIndex = 0; roleIndex < runtime.roles.size(); ++roleIndex)
+			{
+				RuntimeRole& role = runtime.roles[roleIndex];
+				const VisualReferenceSet& references = roleIndex == 0
+					? singleReferences : doubleReferences;
+				const float primaryCorrection = roleIndex == 0
+					? 0.0f : targetCenter - doublePrimary.center;
+				for (size_t faceIndex = 0; faceIndex < role.faces.size(); ++faceIndex)
+				{
+					RuntimeFace& face = role.faces[faceIndex];
+					VisualCenterMeasurement measured;
+					const VisualReferenceSet* measuredReferences = &references;
+					bool exact = false;
+					if (faceIndex == 0)
+					{
+						measured = roleIndex == 0 ? singlePrimary : doublePrimary;
+						exact = true;
+					}
+					else
+					{
+						exact = MeasureFaceVisualCenter(
+							role, face, references, rasterScale, measured);
+						if (!exact && roleIndex == 1)
+						{
+							// A symbol fallback often has no CJK calibration glyphs. Its
+							// Latin cap box is still a better face-local anchor than blindly
+							// inheriting the primary CJK face's correction.
+							measuredReferences = &singleReferences;
+							exact = MeasureFaceVisualCenter(role, face,
+								singleReferences, rasterScale, measured);
+						}
+					}
+					const float rawCorrection = exact
+						? targetCenter - measured.center : primaryCorrection;
+					const float visualHeight = std::max(single.style->pixelSize * single.style->scaleY,
+						role.style->pixelSize * role.style->scaleY);
+					const float correctionLimit = std::max(2.0f, visualHeight * 0.25f);
+					const float correction = std::clamp(rawCorrection,
+						-correctionLimit, correctionLimit);
+					face.visualCenterCorrection = correction;
+					face.resolvedBaselineOffset = role.style->baselineOffset + correction;
+					if (g_bEnableFreeTypeFontRenderingLog)
+					{
+						FreeTypeFontDebugLog(
+							"tnvse_freetype_font: vertical alignment font=%u role=%s face=%u references=%s source=%s samples=%u scale=%.3f center=%.3f top=%.3f bottom=%.3f target=%.3f rawCorrection=%.3f appliedCorrection=%.3f configuredOffset=%.3f resolvedOffset=%.3f limit=%.3f",
+							runtime.config->fontId, roleIndex == 0 ? "singleByte" : "doubleByte",
+							static_cast<UInt32>(faceIndex), measuredReferences->name,
+							exact ? "raster-ink" : "primary-fallback",
+							exact ? measured.sampleCount : 0, rasterScale,
+							exact ? measured.center : 0.0f,
+							exact ? measured.top : 0.0f,
+							exact ? measured.bottom : 0.0f,
+							targetCenter, rawCorrection, correction,
+							role.style->baselineOffset, face.resolvedBaselineOffset,
+							correctionLimit);
+					}
+				}
+				role.visualCenterCorrection = role.faces.front().visualCenterCorrection;
+				role.resolvedBaselineOffset = role.faces.front().resolvedBaselineOffset;
+			}
 		}
 
 	bool ResolveVectorGlyph(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
@@ -525,7 +778,10 @@ namespace fonthook::vectorfont
 				{
 					RuntimeFace face;
 					if (CreateRuntimeFace(faceConfig, *role.style, face))
+					{
+						face.resolvedBaselineOffset = role.style->baselineOffset;
 						role.faces.push_back(std::move(face));
+					}
 					else
 						gLog.FormattedMessage("tnvse_freetype_font: failed to load face font=%u path=%ls index=%ld",
 							config.fontId, faceConfig.path.c_str(), faceConfig.faceIndex);
@@ -544,17 +800,9 @@ namespace fonthook::vectorfont
 			if (!runtime->manualBaseline
 				|| config.verticalMetrics == VerticalMetricsMode::Original)
 			{
-				static constexpr UInt32 kSingleReferences[] = { 'H', 'M', 'W', 'A', '0', '8', 'B', 'E', 'N', 'T', 'X' };
-				static constexpr UInt32 kDoubleReferences[] = { 0x4E2D, 0x56FD, 0x6F22, 0x3042, 0xAC00 };
-				float singleCenter = 0.0f;
-				float doubleCenter = 0.0f;
-				if (MeasureVisualCenter(runtime->roles[0], kSingleReferences, std::size(kSingleReferences), singleCenter)
-					&& MeasureVisualCenter(runtime->roles[1], kDoubleReferences, std::size(kDoubleReferences), doubleCenter))
-				{
-					const float correction = std::clamp(std::round(singleCenter - doubleCenter), -1.0f, 1.0f);
-					runtime->roles[1].visualCenterCorrection = correction;
-					runtime->roles[1].resolvedBaselineOffset += correction;
-				}
+				runtime->verticalAlignmentRasterScale = GetCanonicalFreeTypeRasterScale();
+				ApplyAutomaticVisualAlignment(
+					*runtime, runtime->verticalAlignmentRasterScale);
 			}
 
 			float maxTop = -std::numeric_limits<float>::infinity();
@@ -938,8 +1186,11 @@ namespace fonthook::vectorfont
 
 
 	float GetGlyphBaselineOffset(const RuntimeFont& runtime,
-		VectorFontByteClass byteClass)
+		const VectorEncodedGlyph& glyph)
 	{
-		return runtime.roles[static_cast<size_t>(byteClass)].resolvedBaselineOffset;
+		const RuntimeRole& role = runtime.roles[static_cast<size_t>(glyph.byteClass)];
+		return glyph.hasGlyphIdentity && glyph.faceIndex < role.faces.size()
+			? role.faces[glyph.faceIndex].resolvedBaselineOffset
+			: role.resolvedBaselineOffset;
 	}
 }

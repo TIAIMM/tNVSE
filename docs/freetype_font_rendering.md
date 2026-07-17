@@ -121,12 +121,26 @@ correction only to an automatically derived baseline. Glow, outline, and
 shadow are disabled when their node is absent; when a node is present,
 `enabled` defaults to `1`.
 
+Automatic visual alignment is based on the visible hinted coverage produced at
+`fFreeTypeFontResolutionScale`, rather than on the font-wide ascender and
+descender alone. The renderer measures robust Latin cap and code-page-specific
+Chinese, Japanese, or Korean reference sets, rejects the outer 20 percent of
+sample centers, and preserves the resulting fractional offset. Each fallback
+face is calibrated independently when it contains enough reference glyphs;
+otherwise it inherits its byte class primary-face correction. This changes the
+glyph-relative offset while retaining one shared baseline. That baseline is
+still inherited or derived by the selected `verticalMetrics` policy, preserving
+the Fallout line-rise and glyph-drop contract used by rich text and pagination.
+
 `baseline` controls Fallout's line rise and therefore the distance between
 lines. It is not a general glyph Y offset. Use the independently inheritable
 `baselineOffset` on `singleByte` or `doubleByte` to move that byte class within
-the line; positive values move glyphs upward. In manual baseline mode the
-renderer keeps the FreeType body top/drop metrics. The visual-center rule then
-depends on `verticalMetrics` as described above.
+the line; positive values move glyphs upward. This configured value is applied
+after automatic visual alignment, so it remains an explicit final adjustment.
+Fractional values are retained by the SDF path; grayscale output remains
+quantized to its source-pixel grid. In manual baseline mode the renderer keeps
+the FreeType body top/drop metrics. The visual-center rule then depends on
+`verticalMetrics` as described above.
 
 `fontColor="#RRGGBB"` and `fontAlpha` optionally override the fill color for
 the font ID. When `fontColor` is omitted, fill geometry keeps the color supplied

@@ -34,10 +34,14 @@
       slant
         Slant angle in degrees from -45 through 45. Default: 0.
       baselineOffset
-        Per-glyph vertical adjustment in pixels; may be negative. Default: 0.
+        Final per-glyph vertical adjustment in pixels, applied after automatic
+        visual alignment; may be fractional or negative. Default: 0.
       verticalMetrics
         "freetype" derives the line box from configured faces and is the
-        default. "original" preserves the original .fnt line box.
+        default. "original" preserves the original .fnt line box. Automatic
+        singleByte/doubleByte alignment measures hinted visible glyph ink at
+        the configured FreeType source-resolution scale without creating
+        separate line baselines.
       baseline
         Fallout line rise/ascent in pixels. 0 derives or inherits it according
         to verticalMetrics; a positive value overrides it. Default: 0.

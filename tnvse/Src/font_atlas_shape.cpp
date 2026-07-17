@@ -280,8 +280,7 @@ namespace fonthook::vectorfont
 			{
 				PreparedGlyph glyph;
 				glyph.instance = &instance;
-				glyph.baselineOffset = GetGlyphBaselineOffset(
-					runtime, instance.glyph.byteClass);
+				glyph.baselineOffset = GetGlyphBaselineOffset(runtime, instance.glyph);
 				bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Fill, 0 });
 				if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
 					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Glow, 0 });
@@ -430,8 +429,7 @@ namespace fonthook::vectorfont
 			{
 				PreparedShaderGlyph glyph;
 				glyph.instance = &instance;
-				glyph.baselineOffset = GetGlyphBaselineOffset(
-					runtime, instance.glyph.byteClass);
+				glyph.baselineOffset = GetGlyphBaselineOffset(runtime, instance.glyph);
 				if (needsGrayFill)
 					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Fill, 0 });
 				if (needsSdf)

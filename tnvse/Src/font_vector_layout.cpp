@@ -287,8 +287,8 @@ namespace fonthook::vectorfont
 			const float bandHeight = (profile.top - profile.bottom)
 				/ static_cast<float>(kGlyphCollisionBandCount);
 			const float originX = glyphPen + positioned.xOffset;
-			const float originY = positioned.yOffset + GetGlyphBaselineOffset(
-				runtime, positioned.glyph.byteClass);
+			const float originY = positioned.yOffset
+				+ GetGlyphBaselineOffset(runtime, positioned.glyph);
 			for (size_t band = 0; band < kGlyphCollisionBandCount; ++band)
 			{
 				if (!(profile.bandMask & static_cast<UInt16>(1u << band)))

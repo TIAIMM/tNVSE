@@ -57,6 +57,8 @@ namespace fonthook::vectorfont
 		bool configuredRaster = false;
 		FT_UInt configuredWidth = 0;
 		FT_UInt configuredHeight = 0;
+		float resolvedBaselineOffset = 0.0f;
+		float visualCenterCorrection = 0.0f;
 
 		RuntimeFace() = default;
 		RuntimeFace(const RuntimeFace&) = delete;
@@ -64,7 +66,9 @@ namespace fonthook::vectorfont
 		RuntimeFace(RuntimeFace&& other) noexcept
 			: file(std::move(other.file)), face(other.face), hbFont(other.hbFont),
 			configured(other.configured), configuredRaster(other.configuredRaster),
-			configuredWidth(other.configuredWidth), configuredHeight(other.configuredHeight)
+			configuredWidth(other.configuredWidth), configuredHeight(other.configuredHeight),
+			resolvedBaselineOffset(other.resolvedBaselineOffset),
+			visualCenterCorrection(other.visualCenterCorrection)
 		{
 			other.face = nullptr;
 			other.hbFont = nullptr;
@@ -84,6 +88,8 @@ namespace fonthook::vectorfont
 				configuredRaster = other.configuredRaster;
 				configuredWidth = other.configuredWidth;
 				configuredHeight = other.configuredHeight;
+				resolvedBaselineOffset = other.resolvedBaselineOffset;
+				visualCenterCorrection = other.visualCenterCorrection;
 				other.face = nullptr;
 				other.hbFont = nullptr;
 			}
@@ -335,9 +341,10 @@ namespace fonthook::vectorfont
 		}
 	};
 
-	// Version 7 rebuilds compact body-contour bands from coverage-signed outline
+	// Version 8 stores metrics produced by raster-ink, per-face vertical alignment.
+	// Version 7 rebuilt compact body-contour bands from coverage-signed outline
 	// SDF masks.  The fixed-size entries remain content-addressed across font IDs.
-	constexpr UInt32 kPersistentGlyphManifestVersion = 7;
+	constexpr UInt32 kPersistentGlyphManifestVersion = 8;
 	constexpr UInt32 kPersistentGlyphManifestEntries = 65536;
 	constexpr size_t kGlyphCollisionBandCount = 16;
 
@@ -527,6 +534,7 @@ namespace fonthook::vectorfont
 		float minBottom = 0.0f;
 		float glyphHeight = 0.0f;
 		float fontHeight = 0.0f;
+		float verticalAlignmentRasterScale = 1.0f;
 		bool manualBaseline = false;
 		bool initialized = false;
 		UInt64 layoutContentHash = 0;
