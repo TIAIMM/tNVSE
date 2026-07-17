@@ -258,7 +258,7 @@ namespace fonthook::vectorfont
 							: buildFailure == PendingQuadBuildFailure::Glow ? "glow"
 							: buildFailure == PendingQuadBuildFailure::Outline ? "outline"
 							: "unknown",
-						optionalFailure ? "disable-layer-and-retry" : "vector-fallback");
+						optionalFailure ? "disable-layer-and-retry" : "shape-build-failed");
 				}
 				if (optionalFailure)
 				{
@@ -397,7 +397,7 @@ namespace fonthook::vectorfont
 		}
 
 		if (state.atlasFailureLogCount++ < 32)
-			gLog.FormattedMessage("tnvse_freetype_font: atlas batch failed font=%u; using vector fallback",
+			gLog.FormattedMessage("tnvse_freetype_font: atlas batch failed font=%u; returning empty shape",
 				font.iFontNum);
 		if (diagnostics && diagnostics->outcome == GlyphAtlasBuildOutcome::Unknown)
 			diagnostics->outcome = GlyphAtlasBuildOutcome::AtlasOrShapeFailure;

@@ -166,26 +166,6 @@ namespace fonthook
 			apColor ? apColor->a : 0.0f);
 	}
 
-	static bool DecodeRenderableVectorGlyph(FontEx* font, const char* text, VectorEncodedGlyph& glyph)
-	{
-		UInt32 dbcsCode = 0;
-		if (text && text[1] && TryDecodeFreeTypeDoubleByte(text, dbcsCode))
-			return DecodeFreeTypeGlyph(font, text, glyph);
-
-		char converted[2] = { text ? text[0] : 0, 0 };
-		ConvertToAsciiQuotes(reinterpret_cast<UInt8*>(converted));
-		return DecodeFreeTypeGlyph(font, converted, glyph);
-	}
-
-	static float GetLineAlignmentOffset(int flags, int lineWidth)
-	{
-		if (flags == 4)
-			return static_cast<float>(-lineWidth);
-		if (flags == 2)
-			return static_cast<float>(lineWidth / -2);
-		return 0.0f;
-	}
-
 	static std::string EscapeFreeTypeLayoutText(const char* text)
 	{
 		static constexpr size_t kMaxLoggedBytes = 160;

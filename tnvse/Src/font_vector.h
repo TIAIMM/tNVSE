@@ -70,10 +70,6 @@ namespace fonthook
 	bool DecodeFreeTypeGlyph(Font* apFont, const char* apText, VectorEncodedGlyph& arGlyph);
 	bool LayoutFreeTypeRun(Font* apFont, const char* apText, size_t auiLength,
 		FreeTypeLayoutRun& arLayout, bool abAllowShaping = true);
-	bool GetFreeTypePairKerning(Font* apFont,
-		const char* apLeft, size_t auiLeftLength,
-		const char* apRight, size_t auiRightLength, float& arKerning);
-	bool IsHarfBuzzShapingEnabled(const Font* apFont);
 	NiTriShape* CreateEmptyFreeTypeTextShape(Font* apFont, bool abPrepareObject);
 
 	class VectorTextBuilder

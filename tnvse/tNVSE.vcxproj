@@ -68,7 +68,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>$(ProjectDir)third_party\freetype-2.14.3\include;$(ProjectDir)third_party\harfbuzz\src;$(ProjectDir)third_party\libtess2\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)third_party\freetype-2.14.3\include;$(ProjectDir)third_party\harfbuzz\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>SOL_ALL_SAFETIES_ON;SOL_SAFE_REFERENCES;SOL_SAFE_FUNCTION_CALLS;SOL_PRINT_ERRORS;SOL_USING_CXX_LUA_JIT;WIN32;_DEBUG;_WINDOWS;_USRDLL;NVSE_PLUGIN_EXAMPLE_EXPORTS;RUNTIME_VERSION=0x040020D0;RUNTIME;NOMINMAX;%(PreprocessorDefinitions);WIN32_LEAN_AND_MEAN</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -104,7 +104,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)third_party\freetype-2.14.3\include;$(ProjectDir)third_party\harfbuzz\src;$(ProjectDir)third_party\libtess2\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)third_party\freetype-2.14.3\include;$(ProjectDir)third_party\harfbuzz\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>SOL_ALL_SAFETIES_ON;SOL_SAFE_REFERENCES;SOL_SAFE_FUNCTION_CALLS;SOL_PRINT_ERRORS;SOL_USING_CXX_LUA_JIT;WIN32;NDEBUG;_WINDOWS;_USRDLL;NVSE_PLUGIN_EXAMPLE_EXPORTS;RUNTIME_VERSION=0x040020D0;RUNTIME;NOMINMAX;%(PreprocessorDefinitions);WIN32_LEAN_AND_MEAN</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <PrecompiledHeader />
@@ -220,9 +220,6 @@
   <ItemGroup>
     <ProjectReference Include="third_party\freetype_tnvse.vcxproj">
       <Project>{CC82EED8-B6AF-4F5B-8895-3078E22D16F4}</Project>
-    </ProjectReference>
-    <ProjectReference Include="third_party\libtess2_tnvse.vcxproj">
-      <Project>{7C7D07F1-86A1-4CB8-9684-AB8D99744E18}</Project>
     </ProjectReference>
     <ProjectReference Include="third_party\harfbuzz_tnvse.vcxproj">
       <Project>{5A89AF7B-83D3-4E14-A0B5-D8475A4822C7}</Project>

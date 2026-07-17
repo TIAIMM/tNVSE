@@ -35,7 +35,6 @@ namespace fonthook::vectorfont
 	enum class NativeA8FallbackReason : UInt8
 	{
 		None,
-		NativeInitialization,
 		ShaderGeneration,
 		PacketBuild,
 		PacketPrepare,
@@ -47,7 +46,6 @@ namespace fonthook::vectorfont
 		TileRouteConflict,
 		DirectImmediate,
 		DeviceReset,
-		ShaderRefresh,
 		RuntimeFault
 	};
 
@@ -106,7 +104,6 @@ namespace fonthook::vectorfont
 		UInt16 atlasPage = 0;
 		UInt32 queuedGeneration = 0;
 		bool queuedViaStock = false;
-		bool usesSdf = false;
 		bool staticSmoothSampling = false;
 	};
 

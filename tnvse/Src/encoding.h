@@ -65,7 +65,6 @@ namespace fonthook
 	}
 
 	// ---- Encoding Conversion ----
-	std::string MultiByteToUTF8(const std::string& src, UInt32 codePage);
 	std::string UTF8ToMultiByteStr(const std::string& utf8, UInt32 codePage);
 	std::string WideToUTF8(std::wstring_view value);
 

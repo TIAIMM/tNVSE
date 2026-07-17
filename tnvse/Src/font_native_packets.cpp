@@ -433,7 +433,6 @@ namespace fonthook::vectorfont
 			packet.quality = metadata.effects.quality;
 			packet.layer = span.layer;
 			packet.atlasPage = span.atlasPage;
-			packet.usesSdf = span.usesSdf;
 			packet.staticSmoothSampling = span.staticSmoothSampling;
 			payload->packets.push_back(packet);
 		}

@@ -155,15 +155,8 @@ namespace fonthook::vectorfont
 		{
 			metadata.compiledRanges.clear();
 			metadata.compiledRanges.reserve(metadata.effects.ranges.size());
-			metadata.firstRangeShaderClass = A8CompiledShaderClass::Original;
-			metadata.firstFillShaderClass = A8CompiledShaderClass::Original;
-			metadata.hasShadowRange = false;
-			bool haveFirstRange = false;
-			bool haveFirstFill = false;
 			for (const A8DrawRange& range : metadata.effects.ranges)
 			{
-				metadata.hasShadowRange = metadata.hasShadowRange
-					|| (range.layer == 0 && range.vertexCount && range.primitiveCount);
 				float inverseAtlasWidth = metadata.effects.inverseAtlasWidth;
 				float inverseAtlasHeight = metadata.effects.inverseAtlasHeight;
 				if (!metadata.effects.atlasInverseSizes.empty())
@@ -212,31 +205,6 @@ namespace fonthook::vectorfont
 					compiled.shaderClass = A8CompiledShaderClass::Effect;
 				else
 					compiled.shaderClass = A8CompiledShaderClass::Body;
-				if (compiled.shaderClass == A8CompiledShaderClass::Effect)
-				{
-					switch (metadata.effects.quality)
-					{
-					case EffectQuality::Balanced:
-						compiled.textureSamplesPerGlyph = 5;
-						break;
-					case EffectQuality::High:
-						compiled.textureSamplesPerGlyph = 9;
-						break;
-					default:
-						compiled.textureSamplesPerGlyph = 1;
-						break;
-					}
-				}
-				if (!haveFirstRange)
-				{
-					metadata.firstRangeShaderClass = compiled.shaderClass;
-					haveFirstRange = true;
-				}
-				if (!haveFirstFill && range.layer == 3)
-				{
-					metadata.firstFillShaderClass = compiled.shaderClass;
-					haveFirstFill = true;
-				}
 				compiled.staticSmoothSampling = range.layer == 1 || range.layer == 2
 					|| (range.layer == 0
 						&& metadata.effects.shadowBlurPixels > 0.001f)
@@ -302,12 +270,6 @@ namespace fonthook::vectorfont
 		}
 		resolved = requested;
 		return true;
-	}
-
-	bool IsA8EffectRendererAvailable(EffectQuality quality)
-	{
-		EffectQuality resolved = quality;
-		return ResolveA8EffectQuality(quality, resolved);
 	}
 
 	bool PrepareA8AtlasShape(Font& font, NiTriShape* shape, UInt32 fontId,

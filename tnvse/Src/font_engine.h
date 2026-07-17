@@ -14,7 +14,6 @@ namespace fonthook
 	static constexpr int kTlsByteOffset = 692;
 	static constexpr UInt32 kFontDataSize = 0x3928;
 	static constexpr UInt32 kMaxGlyphCount = 256;
-	static constexpr UInt32 kExtraGlyphReserve = 24066;
 	static constexpr UInt32 kSentinelMax = 0x7FFFFFFF;
 	static constexpr int kTabWidth = 75;
 	static constexpr UInt8 kSpaceChar = ' ';

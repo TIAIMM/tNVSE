@@ -31,8 +31,6 @@ namespace fonthook::vectorfont
 		{
 		case NativeA8FallbackReason::None:
 			return "none";
-		case NativeA8FallbackReason::NativeInitialization:
-			return "native-initialization";
 		case NativeA8FallbackReason::ShaderGeneration:
 			return "shader-generation";
 		case NativeA8FallbackReason::PacketBuild:
@@ -55,8 +53,6 @@ namespace fonthook::vectorfont
 			return "direct-immediate";
 		case NativeA8FallbackReason::DeviceReset:
 			return "device-reset";
-		case NativeA8FallbackReason::ShaderRefresh:
-			return "shader-refresh";
 		case NativeA8FallbackReason::RuntimeFault:
 			return "runtime-fault";
 		default:

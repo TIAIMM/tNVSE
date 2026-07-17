@@ -9,80 +9,6 @@ namespace fonthook
 {
 	namespace
 	{
-		std::vector<std::string> GenerateBraceVariants(const std::string& text)
-		{
-			const std::string startToken = "%{";
-			const std::string endToken = "%}";
-			const size_t count = CountToken(text, startToken);
-			if (count == 0 || count != CountToken(text, endToken) || count > 12)
-				return {};
-
-			std::vector<std::string> variants;
-			const size_t limit = size_t(1) << count;
-			variants.reserve(limit);
-			for (size_t mask = 0; mask < limit; ++mask)
-			{
-				std::string copy = text;
-				size_t search = 0;
-				size_t bit = 1;
-				while (true)
-				{
-					const size_t begin = copy.find(startToken, search);
-					if (begin == std::string::npos)
-						break;
-					const size_t end = copy.find(endToken, begin);
-					if (end == std::string::npos)
-						break;
-					if (mask & bit)
-					{
-						copy.erase(begin, end - begin);
-						search = begin;
-					}
-					else
-					{
-						search = begin + startToken.size();
-					}
-					bit <<= 1;
-				}
-				ReplaceAll(copy, startToken, "");
-				ReplaceAll(copy, endToken, "");
-				variants.push_back(std::move(copy));
-			}
-			return variants;
-		}
-
-		void RegisterMessageVariants(const std::string& source, const std::string& target, int priority)
-		{
-			auto sourceParts = SplitByToken(source, "|");
-			auto targetParts = SplitByCharDBCS(target, '|');
-			if (sourceParts.size() == targetParts.size() && sourceParts.size() > 1)
-			{
-				for (size_t i = 0; i < sourceParts.size(); ++i)
-					RegisterText(sourceParts[i], targetParts[i], priority, {});
-			}
-
-			auto sourceVariants = GenerateBraceVariants(source);
-			auto targetVariants = GenerateBraceVariants(target);
-			if (!sourceVariants.empty() && sourceVariants.size() == targetVariants.size())
-			{
-				for (size_t i = 0; i < sourceVariants.size(); ++i)
-					RegisterText(sourceVariants[i], targetVariants[i], priority, {});
-			}
-		}
-
-		void RegisterXmlText(const std::string& source, const std::string& target, int priority)
-		{
-			if (source.empty() || target.empty())
-				return;
-
-			std::wstring sourceWide = Utf8ToWide(source);
-			std::wstring targetWide = Utf8ToWide(target);
-			Replace1252ForXml(sourceWide);
-			std::string processedSource = WideToUtf8(sourceWide);
-			std::string processedTarget = WideToUtf8(targetWide);
-			RegisterText(processedSource, processedTarget, priority, {});
-		}
-
 		void RemoveBraceComments(std::string& text)
 		{
 			std::string result;
@@ -296,24 +222,6 @@ namespace fonthook
 	}
 
 	// ---- XML helpers ----
-
-	void RegisterXmlNodes(pugi::xml_node parent, const char* nodeName, const char* sourceName, const char* targetName, const char* fieldName, int priority)
-	{
-		for (auto node : parent.children(nodeName))
-		{
-			const char* field = node.child(fieldName).text().as_string("");
-			if (strstr(field, "SCTX"))
-				continue;
-			std::string source = node.child(sourceName).text().as_string("");
-			std::string target = node.child(targetName).text().as_string("");
-			if (strstr(field, "INFO GRUP"))
-			{
-				RemoveBraceComments(source);
-				RemoveBraceComments(target);
-			}
-			RegisterXmlText(source, target, priority);
-		}
-	}
 
 	// ---- XML record-type-aware registration ----
 

@@ -882,17 +882,6 @@ namespace fonthook
 		sRichTextCharExtras.erase(apChar);
 	}
 
-	void ClearRichTextCharExtras()
-	{
-		for (auto& entry : sPendingRichTextLeads)
-			FreeRichTextCharData(entry.second.charData);
-		sPendingRichTextLeads.clear();
-		sRichTextRenderAddChars.clear();
-		sRichTextRenderDoc = nullptr;
-		sRichTextRenderAddCharIndex = 0;
-		sRichTextCharExtras.clear();
-	}
-
 	void BeginRichTextRenderContext(FontManager::TextDoc* apDoc, FontManager::TextData* apData)
 	{
 		sRichTextRenderAddChars.clear();

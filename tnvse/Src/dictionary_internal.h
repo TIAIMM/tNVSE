@@ -120,7 +120,6 @@ namespace fonthook
 	void Replace1252ForXml(std::wstring& text);
 	void RemoveAlignmentTag(std::string& text);
 	std::vector<std::string> SplitByToken(std::string_view text, std::string_view token);
-	std::vector<std::string> SplitByCharDBCS(const std::string& text, char delimiter);
 	std::vector<std::string> SplitLines(const std::string& text);
 	std::pair<std::string, std::string> SplitIdLine(const std::string& line);
 
@@ -132,14 +131,12 @@ namespace fonthook
 	void ConvertFormatSpecifiersToBind(std::string& str);
 	std::string PrepareSourceForRegistration(std::string text);
 	std::string PrepareSourceForLookup(std::string text);
-	std::string PrepareSourceForLookupPreserveCase(std::string text);
 	std::string PrepareTarget(std::string text);
 
 	// ---- entry management (dictionary_entry.cpp) ----
 	bool EntryLess(const DictionaryEntry& left, const DictionaryEntry& right);
 	bool AddEntry(const std::string& source, const std::string& target, int priority, const std::string& id);
 	bool RegisterText(std::string source, std::string target, int priority, const std::string& id);
-	void RegisterXmlNodes(pugi::xml_node parent, const char* nodeName, const char* sourceName, const char* targetName, const char* fieldName, int priority);
 	bool RegisterXmlEntry(const std::string& source, const std::string& target, RecordType type, int priority, const std::string& id = {});
 	void RegisterXmlNodesTyped(pugi::xml_node parent, const char* nodeName, const char* sourceName, const char* targetName, const char* champName, int priority, bool isEET);
 	void SortIndexes();

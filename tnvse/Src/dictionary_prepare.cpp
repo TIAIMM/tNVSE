@@ -595,17 +595,6 @@ namespace fonthook
 		return text;
 	}
 
-	std::string PrepareSourceForLookupPreserveCase(std::string text)
-	{
-		NormalizeSourceMarkup(text);
-		NormalizeEscapedSourceWhitespace(text);
-		NormalizeSourceWhitespace(text);
-		RemoveControlChars(text);
-		Correct1252ToAscii(text);
-		NormalizeSourceWhitespace(text);
-		return text;
-	}
-
 	std::string PrepareTarget(std::string text)
 	{
 		StripUtf8Bom(text);

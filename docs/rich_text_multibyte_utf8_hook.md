@@ -481,7 +481,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> gRichTextCha
 void SetRichTextCharDbcs(const FontManager::CharData* ch, UInt32 code, const FontManager::TextDoc* doc = nullptr);
 bool TryGetRichTextCharDbcs(const FontManager::CharData* ch, UInt32& code);
 void ClearRichTextCharExtra(const FontManager::CharData* ch);
-void ClearRichTextCharExtras();
+UInt32 ClearRichTextCharExtrasForDoc(FontManager::TextDoc* doc);
 ```
 
 这比使用 `pad05` 更接近现有普通文字管线：普通 `FontEx::PrepText/CreateText/MakeString` 没有扩展游戏结构体，而是在 tNVSE 自己的 buffer、extra glyph map 和 helper 里维护多字节语义。富文本也应保持同样边界。
@@ -853,12 +853,11 @@ struct RichTextCharExtra
 std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCharExtras;
 ```
 
-对外 API：`SetRichTextCharDbcs` / `TryGetRichTextCharDbcs` / `ClearRichTextCharExtra` / `ClearRichTextCharExtras`。
+对外 API：`SetRichTextCharDbcs` / `TryGetRichTextCharDbcs` / `ClearRichTextCharExtra` / `ClearRichTextCharExtrasForDoc`。
 
 生命周期管理：
 - `TextDocDestroy`（hook `0xA18F7D`）通过 `ClearRichTextCharExtrasForDoc(doc)` 遍历 `xPages → xLines → xChars` 清理页面链表内字符，同时按 `RichTextCharExtra::textDoc == doc` 清理同一文档的离链副本，之后调用原版析构。
 - `TextDocAddChar` 在 DBCS lead 字符到达但 trail 尚未到达时，用 `sPendingRichTextLeads[doc]` 暂存；trail 到达后合并为单个 DBCS `CharData` 再走原版 `TextDoc::AddChar`。文档销毁前 `DiscardPendingRichTextLead` 释放未匹配的 lead。
-- `ClearRichTextCharExtras()` 现在清理 pending lead、render context 和 side table，避免只清 map 时留下未释放的 pending `CharData*`。
 
 #### CharData::Copy side table 同步
 
@@ -1112,7 +1111,6 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 - `FontManagerEx::CharDataCopy` 同步复制 `dbcsCode` 和 `textDoc`，避免原版 `CharData::Copy` 产生的副本丢失生命周期归属。
 - `TextDocDestroy` 的 `ClearRichTextCharExtrasForDoc(doc)` 先按页面链表清理实际渲染字符，再按 `extra.textDoc == doc` 清理同一文档的离链副本。
 - `tnvse_rich_text_destroy` 的异常判定改为看 `richTextExtrasRemainingForDoc`；`richTextExtrasTotal` 只作为辅助信息，避免多个 `TextDoc` 同时存在时误报其他文档的 side table。
-- `ClearRichTextCharExtras()` 同步清理 pending lead 和 render context，避免只清 side table map 时留下 pending `CharData*`。
 
 **为什么**：
 - 之前 Destroy 主要依赖 `xPages -> xLines -> xChars` 遍历。若原版 parser/layout 在 `CharData::Copy`、行搬移或异常边界中产生离链副本，单纯遍历页面链表无法证明这些副本的 side table 一定被清掉。

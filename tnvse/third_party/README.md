@@ -33,16 +33,6 @@ and the built-in Unicode data without adding a runtime DLL.
 - License: MIT-style HarfBuzz license
 - License text: `harfbuzz/COPYING`
 
-## libtess2
-
-tNVSE uses libtess2 to triangulate FreeType glyph outlines for configured
-in-game vector fonts.
-
-- Project: https://github.com/memononen/libtess2
-- Commit: `8dbd6483e920311a58c9af10a10beb278efebc36`
-- License: SGI Free Software License B, version 2.0
-- License text: `libtess2/LICENSE.txt`
-
 ## Initialize submodules
 
 After cloning or changing revisions, initialize all source trees with:

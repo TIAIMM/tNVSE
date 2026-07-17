@@ -15,7 +15,6 @@
 #include <hb.h>
 
 #include <array>
-#include <deque>
 #include <list>
 #include <mutex>
 #include <string_view>
@@ -25,7 +24,6 @@
 
 namespace fonthook::vectorfont
 {
-	inline constexpr size_t kMeshCacheLimit = 8u * 1024u * 1024u;
 	inline constexpr FT_Int32 kGlyphLoadFlags =
 		FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP | FT_LOAD_NO_SVG;
 	inline constexpr float kFixedScale = 65536.0f;
@@ -149,48 +147,6 @@ namespace fonthook::vectorfont
 		UInt32 faceIndex = 0;
 		FT_UInt glyphIndex = 0;
 		UInt32 renderedCodePoint = 0;
-	};
-
-	struct MeshCacheKey
-	{
-		UInt64 generationHash = 0;
-		UInt32 fontId = 0;
-		UInt32 glyphIndex = 0;
-		UInt16 faceIndex = 0;
-		UInt8 byteClass = 0;
-		UInt8 meshType = 0;
-
-		bool operator==(const MeshCacheKey& other) const
-		{
-			return generationHash == other.generationHash
-				&& fontId == other.fontId
-				&& glyphIndex == other.glyphIndex
-				&& faceIndex == other.faceIndex
-				&& byteClass == other.byteClass
-				&& meshType == other.meshType;
-		}
-	};
-
-	struct MeshCacheKeyHash
-	{
-		size_t operator()(const MeshCacheKey& key) const
-		{
-			size_t result = static_cast<size_t>(
-				key.generationHash ^ (key.generationHash >> 32));
-			result ^= static_cast<size_t>(key.fontId) * 0x9E3779B1u;
-			result ^= static_cast<size_t>(key.glyphIndex) * 0x85EBCA77u;
-			result ^= static_cast<size_t>(key.faceIndex) * 0xC2B2AE3Du;
-			result ^= static_cast<size_t>(key.byteClass) << 8;
-			result ^= key.meshType;
-			return result;
-		}
-	};
-
-	struct MeshCacheEntry
-	{
-		std::shared_ptr<GlyphMesh> mesh;
-		size_t bytes = 0;
-		std::list<MeshCacheKey>::iterator lru;
 	};
 
 	struct BitmapCacheKey
@@ -542,38 +498,6 @@ namespace fonthook::vectorfont
 		std::list<LayoutCacheKey>::iterator lru;
 	};
 
-	struct KerningCacheKey
-	{
-		UInt64 layoutHash = 0;
-		UInt32 codePage = 0;
-		UInt16 leftCode = 0;
-		UInt16 rightCode = 0;
-		UInt8 leftLength = 0;
-		UInt8 rightLength = 0;
-
-		bool operator==(const KerningCacheKey& other) const
-		{
-			return layoutHash == other.layoutHash && codePage == other.codePage
-				&& leftCode == other.leftCode
-				&& rightCode == other.rightCode && leftLength == other.leftLength
-				&& rightLength == other.rightLength;
-		}
-	};
-
-	struct KerningCacheKeyHash
-	{
-		size_t operator()(const KerningCacheKey& key) const
-		{
-			size_t result = static_cast<size_t>(key.layoutHash ^ (key.layoutHash >> 32));
-			result ^= static_cast<size_t>(key.codePage) * 0x85EBCA77u;
-			result ^= static_cast<size_t>(key.leftCode) * 0xC2B2AE3Du;
-			result ^= static_cast<size_t>(key.rightCode) * 0x27D4EB2Du;
-			result ^= static_cast<size_t>(key.leftLength) << 8;
-			result ^= key.rightLength;
-			return result;
-		}
-	};
-
 	struct ActiveFontState
 	{
 		struct OriginalVerticalMetrics
@@ -636,8 +560,6 @@ namespace fonthook::vectorfont
 		std::unordered_map<std::wstring, std::weak_ptr<MappedFontFile>> mappedFiles;
 		std::unordered_map<UInt32, std::unique_ptr<RuntimeFont>> runtimeFonts;
 		std::unordered_map<const Font*, ActiveFontState> activeFonts;
-		std::unordered_map<MeshCacheKey, MeshCacheEntry, MeshCacheKeyHash> meshCache;
-		std::list<MeshCacheKey> meshLru;
 		std::unordered_map<BitmapCacheKey, BitmapCacheEntry, BitmapCacheKeyHash> bitmapCache;
 		std::list<BitmapCacheKey> bitmapLru;
 		std::unordered_map<PersistentBitmapProfileKey,
@@ -647,8 +569,6 @@ namespace fonthook::vectorfont
 		std::unordered_map<LayoutCacheKey, LayoutCacheEntry, LayoutCacheKeyHash,
 			LayoutCacheKeyEqual> layoutCache;
 		std::list<LayoutCacheKey> layoutLru;
-		std::unordered_map<KerningCacheKey, float, KerningCacheKeyHash> kerningCache;
-		std::deque<KerningCacheKey> kerningCacheOrder;
 		std::array<UInt32, 256> singleByteCodePoints = {};
 		std::array<UInt32, 65536> doubleByteCodePoints = {};
 		UInt32 codePointCacheCodePage = UINT32_MAX;
@@ -661,7 +581,6 @@ namespace fonthook::vectorfont
 		bool loggedPersistentBitmapHit = false;
 		bool persistentBitmapUnavailable = false;
 		UInt32 persistentBitmapFailureLogCount = 0;
-		size_t meshCacheBytes = 0;
 		size_t bitmapCacheBytes = 0;
 		size_t layoutCacheBytes = 0;
 		std::recursive_mutex mutex;
@@ -731,9 +650,6 @@ namespace fonthook::vectorfont
 		const std::vector<PersistentBitmapStoreRequest>& requests,
 		UInt64& storedAlphaBytes);
 
-	std::shared_ptr<GlyphMesh> BuildGlyphMesh(FreeTypeState& state,
-		RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
-		GlyphMeshType meshType);
 	std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(FreeTypeState& state,
 		RuntimeFont& runtime, const ResolvedGlyph& resolved, GlyphMaskType maskType,
 		float rasterScale, const BitmapCacheKey& key);

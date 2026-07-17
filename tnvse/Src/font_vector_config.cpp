@@ -20,7 +20,6 @@ namespace fonthook::vectorfont
 
 	namespace
 	{
-		constexpr float kDefaultCurveTolerance = 0.35f;
 
 		std::wstring GetGameDirectory()
 		{
@@ -477,7 +476,6 @@ namespace fonthook::vectorfont
 					begin = comma + 1;
 				}
 			}
-			config.curveTolerance = std::max(0.01f, node.attribute("curveTolerance").as_float(kDefaultCurveTolerance));
 			if (!ReadFontColor(node, config.fontColor))
 			{
 				reason = "fontColor must be #RRGGBB and fontAlpha must be finite";
@@ -498,12 +496,12 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d features=%u baseline=%.2f tolerance=%.3f fontColor=%d fillRenderMode=%s effectQuality=%u glow=%d inner=%.2f outer=%.2f power=%.2f outline=%d width=%.2f softness=%.2f shadow=%d blur=%.2f power=%.2f",
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d features=%u baseline=%.2f fontColor=%d fillRenderMode=%s effectQuality=%u glow=%d inner=%.2f outer=%.2f power=%.2f outline=%d width=%.2f softness=%.2f shadow=%d blur=%.2f power=%.2f",
 				config.fontId, static_cast<UInt32>(config.prewarm),
 				config.verticalMetrics == VerticalMetricsMode::Original ? "original" : "freetype",
 				config.shaping ? 1 : 0,
 				static_cast<UInt32>(config.shapingFeatures.size()),
-				config.baseline, config.curveTolerance,
+				config.baseline,
 				config.fontColor.configured,
 				config.fillRenderMode == FillRenderMode::Sdf ? "sdf" : "grayscale",
 				static_cast<UInt32>(config.effectQuality),

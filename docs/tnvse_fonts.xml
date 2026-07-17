@@ -41,8 +41,6 @@
       baseline
         Fallout line rise/ascent in pixels. 0 derives or inherits it according
         to verticalMetrics; a positive value overrides it. Default: 0.
-      curveTolerance
-        Curve-flattening tolerance; minimum 0.01. Default: 0.35.
       shaping
         0 selects FreeType advances/kerning. 1 enables HarfBuzz shaping.
         Default: 0.
@@ -116,8 +114,7 @@
 
     <!-- 1: Glow_Monofonto_Large -->
     <font id="1" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="0"
-          curveTolerance="0.35">
+          embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -135,8 +132,7 @@
 
     <!-- 2: Monofonto_Large -->
     <font id="2" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="0"
-          curveTolerance="0.35">
+          embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -154,8 +150,7 @@
 
     <!-- 3: Glow_Monofonto_Medium -->
     <font id="3" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="0"
-          curveTolerance="0.35">
+          embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="26" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -173,8 +168,7 @@
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
     <font id="4" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="0"
-          curveTolerance="0.35">
+          embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="32" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -192,8 +186,7 @@
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
     <font id="5" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="0"
-          curveTolerance="0.35">
+          embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="32" tracking="0" fixedWidth="17" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\FixedsysExcelsior.ttf" index="0"/>
@@ -211,8 +204,7 @@
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
     <font id="6" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="0"
-          curveTolerance="0.35">
+          embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="30" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -230,8 +222,7 @@
 
     <!-- 7: Baked-in_Monofonto_Large -->
     <font id="7" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="0"
-          curveTolerance="0.35">
+          embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
@@ -249,8 +240,7 @@
 
     <!-- 8: Glow_Futura_Caps_Large -->
     <font id="8" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="0"
-          curveTolerance="0.35">
+          embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="52" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\Futura BdCn BT Bold.ttf" index="0"/>
@@ -268,8 +258,7 @@
 
 	<!-- 42: Monofonto_STn (same as Monofonto_Large) -->
     <font id="42" fillRenderMode="sdf" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
-          embolden="0" slant="0" baselineOffset="0" baseline="0"
-          curveTolerance="0.35">
+          embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
         <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>

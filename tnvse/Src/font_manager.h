@@ -16,7 +16,6 @@ namespace fonthook
 	void SetRichTextCharDbcs(const FontManager::CharData* apChar, UInt32 auiDbcsCode, const FontManager::TextDoc* apDoc = nullptr);
 	bool TryGetRichTextCharDbcs(const FontManager::CharData* apChar, UInt32& arDbcsCode);
 	void ClearRichTextCharExtra(const FontManager::CharData* apChar);
-	void ClearRichTextCharExtras();
 
 	struct RichTextRenderAddCharInfo
 	{

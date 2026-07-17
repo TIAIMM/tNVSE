@@ -292,28 +292,6 @@ namespace fonthook
 		return result;
 	}
 
-	std::vector<std::string> SplitByCharDBCS(const std::string& text, char delimiter)
-	{
-		std::vector<std::string> result;
-		size_t start = 0;
-		for (size_t i = 0; i < text.size(); ++i)
-		{
-			UInt32 code = 0;
-			if (TryDecodeDoubleByte(&text[i], code))
-			{
-				++i;
-				continue;
-			}
-			if (text[i] == delimiter)
-			{
-				result.push_back(text.substr(start, i - start));
-				start = i + 1;
-			}
-		}
-		result.push_back(text.substr(start));
-		return result;
-	}
-
 	std::vector<std::string> SplitLines(const std::string& text)
 	{
 		std::vector<std::string> lines;

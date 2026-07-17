@@ -72,8 +72,7 @@ fonts continue to use the original `.fnt` and `.tex` files.
           embolden="0"
           slant="0"
           baselineOffset="0"
-          baseline="0"
-          curveTolerance="0.35">
+		  baseline="0">
 
       <!-- Optional defaults inherited by both byte classes. -->
       <face path="Data/Fonts/Default.ttf" index="0"/>
@@ -118,9 +117,6 @@ classes even with a manual baseline; FreeType-metrics mode applies that
 correction only to an automatically derived baseline. Glow, outline, and
 shadow are disabled when their node is absent; when a node is present,
 `enabled` defaults to `1`.
-
-`curveTolerance` is consumed only by the libtess2 vector fallback. Atlas-backed
-grayscale and SDF paths do not use it.
 
 `baseline` controls Fallout's line rise and therefore the distance between
 lines. It is not a general glyph Y offset. Use the independently inheritable
@@ -328,7 +324,7 @@ Vanilla UI Plus implements its optional text treatment in
 two exact proxy names while their `TileText::MakeNode` call is active. Their
 FreeType body and live VUI+ Tile color are retained, but configured tNVSE
 shadow, glow, and outline layers are omitted on all shader, CPU-atlas, and
-vector-fallback routes. The original sibling and every unrelated dark or
+native and CPU-atlas routes. The original sibling and every unrelated dark or
 startup text remain unaffected, and no VUI+ XML file is modified.
 
 ## SDF effects and draw-state isolation

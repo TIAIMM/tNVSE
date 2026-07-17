@@ -50,7 +50,6 @@ namespace fonthook::vectorfont
 		A8DrawRange range;
 		std::array<float, 16> constants = {};
 		A8CompiledShaderClass shaderClass = A8CompiledShaderClass::Original;
-		UInt8 textureSamplesPerGlyph = 1;
 		bool staticSmoothSampling = false;
 	};
 
@@ -65,11 +64,6 @@ namespace fonthook::vectorfont
 		A8ShapeColorContract colorContract;
 		A8EffectShapeConfig effects;
 		std::vector<A8CompiledRange> compiledRanges;
-		A8CompiledShaderClass firstRangeShaderClass =
-			A8CompiledShaderClass::Original;
-		A8CompiledShaderClass firstFillShaderClass =
-			A8CompiledShaderClass::Original;
-		bool hasShadowRange = false;
 		NativeA8ShapePayloadPtr nativePayload;
 	};
 	using A8ShapeMetadataPtr = std::shared_ptr<const A8ShapeMetadata>;

@@ -16,8 +16,6 @@ namespace fonthook::vectorfont
 		LayoutHit,
 		LayoutMiss,
 		HarfBuzzShape,
-		KerningHit,
-		KerningMiss,
 		BitmapMemoryHit,
 		BitmapCrossFontHit,
 		BitmapDiskHit,
@@ -112,13 +110,6 @@ namespace fonthook::vectorfont
 		Original = 1,
 	};
 
-	enum class GlyphMeshType : UInt8
-	{
-		Fill = 0,
-		Outline = 1,
-		Glow = 2,
-	};
-
 	enum class GlyphMaskType : UInt8
 	{
 		Fill = 0,
@@ -136,7 +127,6 @@ namespace fonthook::vectorfont
 		bool shaping = false;
 		std::vector<std::string> shapingFeatures;
 		float baseline = 0.0f;
-		float curveTolerance = 0.35f;
 		FontColorStyle fontColor;
 		FillRenderMode fillRenderMode = FillRenderMode::Grayscale;
 		EffectQuality effectQuality = EffectQuality::Balanced;
@@ -146,18 +136,6 @@ namespace fonthook::vectorfont
 		UInt64 layoutHash = 0;
 		UInt64 maskGenerationHash = 0;
 		UInt64 shaderEffectHash = 0;
-	};
-
-	struct MeshPoint
-	{
-		float x = 0.0f;
-		float y = 0.0f;
-	};
-
-	struct GlyphMesh
-	{
-		std::vector<MeshPoint> vertices;
-		std::vector<UInt32> indices;
 	};
 
 	struct GlyphBitmap
@@ -316,11 +294,6 @@ namespace fonthook::vectorfont
 	void MarkGlyphManifestComplete(RuntimeFont& arRuntime, FontPrewarmMode aeMode);
 	float GetGlyphBaselineOffset(const RuntimeFont& arRuntime,
 		VectorFontByteClass aeByteClass);
-	std::shared_ptr<const GlyphMesh> GetGlyphMesh(RuntimeFont& arRuntime,
-		const VectorEncodedGlyph& arGlyph, GlyphMeshType aeMeshType);
-	std::shared_ptr<const GlyphBitmap> GetGlyphBitmap(RuntimeFont& arRuntime,
-		const VectorEncodedGlyph& arGlyph, GlyphMaskType aeMaskType, float afRasterScale,
-		UInt32 auiSdfSpread = 0);
 	void GetGlyphBitmaps(RuntimeFont& arRuntime,
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults);
@@ -350,7 +323,6 @@ namespace fonthook::vectorfont
 		bool abPrepareObject, const NiColorA& arTileColor, bool abSuppressEffects,
 		GlyphAtlasBuildDiagnostics* apDiagnostics = nullptr);
 	bool IsA8RendererAvailable();
-	bool IsA8EffectRendererAvailable(EffectQuality aeQuality);
 	bool ResolveA8EffectQuality(EffectQuality aeRequested, EffectQuality& arResolved);
 	bool PrepareA8AtlasShape(Font& arFont, NiTriShape* apShape, UInt32 auiFontId,
 		UInt32 auiGlyphCount, UInt32 auiQuadCount,
