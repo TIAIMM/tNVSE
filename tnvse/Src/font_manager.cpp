@@ -41,98 +41,6 @@ namespace fonthook
 		thread_local UInt32 sRichTextConvertedInputDepth = 0;
 		thread_local UInt32 sRichTextPrepTextParseDepth = 0;
 
-		bool MeasureOriginalPreparedFreeTypeWidth(Font* font, const char* text,
-			float maxWrapWidth, UInt32 startCharIndex, float& measuredWidth)
-		{
-			measuredWidth = 0.0f;
-			if (!font || !font->pFontData || !text)
-				return false;
-			const size_t textLength = std::strlen(text);
-			if (startCharIndex >= textLength)
-				return true;
-
-			int wrapWidth = kSentinelMax;
-			if (std::isfinite(maxWrapWidth) && maxWrapWidth > 0.0f
-				&& maxWrapWidth < static_cast<float>(kSentinelMax))
-			{
-				wrapWidth = static_cast<int>(std::ceil(maxWrapWidth));
-			}
-
-			Font::TextData prepared = {};
-			ThisStdCall(0x759330, &prepared, wrapWidth, kSentinelMax,
-				0, kSentinelMax, '\n');
-			ThisStdCall(0xA12FB0, font, text + startCharIndex, &prepared);
-			const char* preparedText = prepared.xNewText.pString;
-			bool measured = preparedText != nullptr;
-			float lineWidth = 0.0f;
-			int iconIndex = 0;
-			for (size_t offset = 0; preparedText && preparedText[offset];)
-			{
-				const UInt8 current = static_cast<UInt8>(preparedText[offset]);
-				if (current == static_cast<UInt8>(prepared.cLineSep))
-				{
-					measuredWidth = std::max(measuredWidth, lineWidth);
-					lineWidth = 0.0f;
-					++offset;
-					continue;
-				}
-				if (current == '\t')
-				{
-					const float remainder = std::fmod(lineWidth,
-						static_cast<float>(kTabWidth));
-					lineWidth += static_cast<float>(kTabWidth) - remainder;
-					++offset;
-					continue;
-				}
-				if (current == 1)
-				{
-					if (font->ButtonIcons.pBuffer
-						&& iconIndex < static_cast<int>(font->ButtonIcons.uiSize))
-					{
-						const Font::ButtonIcon& icon = font->ButtonIcons.pBuffer[iconIndex];
-						lineWidth += icon.fWidth + icon.fSpacing;
-					}
-					++iconIndex;
-					++offset;
-					continue;
-				}
-				if (current < 0x20 || current == kDelChar)
-				{
-					++offset;
-					continue;
-				}
-
-				size_t runEnd = offset;
-				while (preparedText[runEnd])
-				{
-					const UInt8 value = static_cast<UInt8>(preparedText[runEnd]);
-					if (value == static_cast<UInt8>(prepared.cLineSep)
-						|| value < 0x20 || value == kDelChar)
-					{
-						break;
-					}
-					UInt32 dbcsCode = 0;
-					runEnd += TryDecodeFreeTypeDoubleByte(
-						preparedText + runEnd, dbcsCode) ? 2 : 1;
-				}
-				FreeTypeLayoutRun layout;
-				if (runEnd > offset && LayoutFreeTypeRun(font,
-					preparedText + offset, runEnd - offset, layout, true))
-				{
-					lineWidth += layout.advance;
-				}
-				else if (runEnd > offset)
-				{
-					measured = false;
-				}
-				offset = runEnd > offset ? runEnd : offset + 1;
-			}
-			measuredWidth = std::max(measuredWidth, lineWidth);
-			font->ButtonIcons.Clear(1);
-			ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&prepared));
-			return measured;
-		}
-
 		struct ScopedRichTextConvertedInput
 		{
 			bool active = false;
@@ -629,7 +537,7 @@ namespace fonthook
 			character->iLeadingEdge = static_cast<int>(std::floor(pairKerning));
 		}
 
-		void RemeasureOriginalFreeTypeRichText(FontManager::TextDoc* doc,
+		void FinalizeFreeTypeRichTextLayout(FontManager::TextDoc* doc,
 			FontManager::TextData& data)
 		{
 			if (!doc)
@@ -747,6 +655,11 @@ namespace fonthook
 			int aiNewLines,
 			bool abNewPage)
 		{
+			if (!g_bEnableMultibyteFontHook)
+			{
+				CallTextDocAddChar(apDoc, apChar, aiNewLines, abNewPage);
+				return;
+			}
 			if (!apDoc || !apChar)
 			{
 				CallTextDocAddChar(apDoc, apChar, aiNewLines, abNewPage);
@@ -1037,20 +950,27 @@ namespace fonthook
 	{
 		if (!g_bEnableMultibyteFontHook)
 		{
-			NiPoint3* result = CallOriginalCalculateStringDimensions(this,
-				outDimensions, srcString, fontID, maxWrapWidth, startCharIndex);
-			if (!result || !srcString || fontID < 1 || fontID > 8)
-				return result;
+			if (!outDimensions)
+				return nullptr;
+			if (!srcString || fontID < 1 || fontID > 8)
+			{
+				*outDimensions = StringDefaultDimensions;
+				return outDimensions;
+			}
 			Font* font = this->pFont[fontID - 1];
 			if (!IsFreeTypeFontActive(font))
-				return result;
-			float measuredWidth = 0.0f;
-			if (MeasureOriginalPreparedFreeTypeWidth(font, srcString,
-				maxWrapWidth, startCharIndex, measuredWidth))
 			{
-				result->x = std::ceil(std::max(0.0f, measuredWidth));
+				return CallOriginalCalculateStringDimensions(this,
+					outDimensions, srcString, fontID, maxWrapWidth,
+					startCharIndex);
 			}
-			return result;
+			if (!MeasureFreeTypeSingleByteText(
+				reinterpret_cast<FontEx*>(font), srcString, maxWrapWidth,
+				startCharIndex, *outDimensions))
+			{
+				*outDimensions = StringDefaultDimensions;
+			}
+			return outDimensions;
 		}
 
 		auto* extraGlyphs = GetExtraGlyphs(fontID);
@@ -1385,9 +1305,13 @@ namespace fonthook
 	{
 		if (!g_bEnableMultibyteFontHook)
 		{
+			// The shared TextLine::AddChar hook has already replaced injected
+			// .fnt widths with final FreeType widths before the original line/page
+			// machinery makes any topology decision.  This final pass only makes
+			// positions and aggregate widths exactly match those same advances.
 			FontManager::TextDoc* textDoc = FontManager::PrepText(
 				arTextString, arData);
-			RemeasureOriginalFreeTypeRichText(textDoc, arData);
+			FinalizeFreeTypeRichTextLayout(textDoc, arData);
 			return textDoc;
 		}
 

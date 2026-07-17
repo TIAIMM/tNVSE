@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <list>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -595,7 +596,347 @@ namespace fonthook
 		}
 	}
 
-	static void PrepTextImpl(FontEx* font, const char* apOrigString, Font::TextData* axData, bool isTerminal)
+	enum class SingleByteBreakKind : UInt8
+	{
+		None,
+		Space,
+		SoftHyphen
+	};
+
+	struct SingleByteBreakOpportunity
+	{
+		SingleByteBreakKind kind = SingleByteBreakKind::None;
+		UInt32 outputPosition = 0;
+		double prefixWidth = 0.0;
+		double consumedWidth = 0.0;
+
+		void Clear()
+		{
+			kind = SingleByteBreakKind::None;
+			outputPosition = 0;
+			prefixWidth = 0.0;
+			consumedWidth = 0.0;
+		}
+	};
+
+	static void InsertPreparedBytes(std::vector<char>& output,
+		UInt32& outputLength, UInt32 position, const char* bytes, UInt32 count)
+	{
+		if (!bytes || !count || position > outputLength)
+			return;
+		EnsureTextScratchSize(output,
+			static_cast<size_t>(outputLength) + count + 1);
+		memmove(output.data() + position + count, output.data() + position,
+			static_cast<size_t>(outputLength - position) + 1);
+		memcpy(output.data() + position, bytes, count);
+		outputLength += count;
+	}
+
+	static double GetSingleByteFreeTypeAdvance(FontEx* font, UInt8 value,
+		const FreeTypeClusterAdvanceMap& advances, UInt32 sourceOffset)
+	{
+		if (sourceOffset < advances.owners.size()
+			&& advances.owners[sourceOffset] == sourceOffset)
+		{
+			return advances.advances[sourceOffset];
+		}
+		if (!font || !font->pFontData)
+			return 0.0;
+		return GetGlyphRenderAdvance(&font->pFontData->pFontLetters[value]);
+	}
+
+	static double GetFreeTypeHyphenAdvance(FontEx* font)
+	{
+		FreeTypeLayoutRun layout;
+		if (font && LayoutFreeTypeRun(font, "-", 1, layout, true))
+			return layout.advance;
+		return font && font->pFontData
+			? GetGlyphRenderAdvance(&font->pFontData->pFontLetters['-']) : 0.0;
+	}
+
+	// Reproduce the observable single-byte Font::PrepText rules while using
+	// the final FreeType advances.  In particular, vanilla treats a space as
+	// a removable word-break, '~' as an invisible discretionary hyphen, and a
+	// word without either break as a hyphenated hard wrap that carries the
+	// previous character onto the next line.
+	static void PrepSingleByteFreeTypeText(
+		FontEx* font,
+		char* source,
+		UInt32 sourceLength,
+		Font::TextData* data,
+		bool isTerminal,
+		UInt32 initialConsumed,
+		PrepTextScratch& scratch)
+	{
+		if (!font || !font->pFontData || !source || !data)
+			return;
+
+		for (UInt32 offset = 0; offset < sourceLength && source[offset]; ++offset)
+		{
+			if (source[offset] == data->cLineSep || source[offset] == '\t')
+				continue;
+			UInt8 normalized = static_cast<UInt8>(source[offset]);
+			ConvertToAsciiQuotes(&normalized);
+			source[offset] = static_cast<char>(normalized);
+		}
+
+		FreeTypeClusterAdvanceMap& advances = scratch.clusterAdvances;
+		BuildFreeTypeClusterAdvanceMap(font, source, sourceLength, advances);
+		std::vector<char>& output = scratch.processed;
+		EnsureTextScratchSize(output, static_cast<size_t>(sourceLength) + 8);
+		output[0] = 0;
+
+		FontLetter* letters = font->pFontData->pFontLetters;
+		const float lineHeight = font->pFontData->fBaseLine
+			+ FontManager::GetLinePadding(font->iFontNum);
+		float totalHeight = letters[kSpaceChar].fHeight;
+		const double hyphenAdvance = GetFreeTypeHyphenAdvance(font);
+		const double maxWidth = static_cast<double>(data->iWidth);
+		const int maxAllowedLines = data->iLineEnd;
+		UInt32 outputLength = 0;
+		UInt32 consumed = initialConsumed;
+		UInt32 iconIndex = 0;
+		int lineCount = 1;
+		int maximumLineWidth = 0;
+		double lineWidth = 0.0;
+		double previousUnitWidth = 0.0;
+		UInt32 previousUnitOutputStart = 0;
+		bool hasPreviousUnit = false;
+		bool stoppedAtLineLimit = false;
+		SingleByteBreakOpportunity breakOpportunity;
+
+		auto appendByte = [&](char value)
+		{
+			EnsureTextScratchSize(output,
+				static_cast<size_t>(outputLength) + 2);
+			output[outputLength++] = value;
+			output[outputLength] = 0;
+		};
+		auto finishLine = [&](double width)
+		{
+			int quantized = static_cast<int>(std::ceil(std::max(0.0, width)));
+			data->xLineWidths.AddTail(quantized);
+			maximumLineWidth = MaxInt(maximumLineWidth, quantized);
+			totalHeight += lineHeight;
+			++lineCount;
+		};
+		auto enforceLineLimit = [&]()
+		{
+			if (maxAllowedLines <= 0 || lineCount <= maxAllowedLines)
+				return false;
+			UInt32 eraseStart = outputLength;
+			while (eraseStart > 0
+				&& output[eraseStart - 1] != data->cLineSep)
+			{
+				--eraseStart;
+			}
+			if (eraseStart > 0)
+				--eraseStart;
+			const UInt32 erased = outputLength - eraseStart;
+			outputLength = eraseStart;
+			output[outputLength] = 0;
+			consumed = erased < consumed ? consumed - erased : 0;
+			lineCount = maxAllowedLines;
+			totalHeight -= lineHeight;
+			lineWidth = 0.0;
+			hasPreviousUnit = false;
+			breakOpportunity.Clear();
+			stoppedAtLineLimit = true;
+			return true;
+		};
+
+		for (UInt32 sourceOffset = 0;
+			sourceOffset < sourceLength && source[sourceOffset]; ++sourceOffset)
+		{
+			const UInt8 current = static_cast<UInt8>(source[sourceOffset]);
+			++consumed;
+
+			if (current == static_cast<UInt8>(data->cLineSep))
+			{
+				appendByte(data->cLineSep);
+				finishLine(lineWidth);
+				lineWidth = 0.0;
+				previousUnitWidth = 0.0;
+				hasPreviousUnit = false;
+				breakOpportunity.Clear();
+				if (enforceLineLimit())
+					break;
+				continue;
+			}
+
+			if (current == '\t')
+			{
+				const double remainder = std::fmod(lineWidth,
+					static_cast<double>(kTabWidth));
+				lineWidth += static_cast<double>(kTabWidth) - remainder;
+				continue;
+			}
+
+			if (current == '~')
+			{
+				if (hasPreviousUnit)
+				{
+					breakOpportunity.kind = SingleByteBreakKind::SoftHyphen;
+					breakOpportunity.outputPosition = outputLength;
+					breakOpportunity.prefixWidth = lineWidth;
+					breakOpportunity.consumedWidth = lineWidth;
+				}
+				continue;
+			}
+
+			const UInt32 owner = sourceOffset < advances.owners.size()
+				? advances.owners[sourceOffset]
+				: FreeTypeClusterAdvanceMap::kNoOwner;
+			const bool clusterContinuation = owner != FreeTypeClusterAdvanceMap::kNoOwner
+				&& owner != sourceOffset;
+			if (clusterContinuation)
+			{
+				appendByte(static_cast<char>(current));
+				continue;
+			}
+
+			double unitWidth = GetSingleByteFreeTypeAdvance(
+				font, current, advances, sourceOffset);
+			if (current == 1)
+			{
+				if (font->ButtonIcons.pBuffer && iconIndex < font->ButtonIcons.uiSize)
+				{
+					FontLetter& iconMetrics = letters[current];
+					iconMetrics.fWidth = font->ButtonIcons.pBuffer[iconIndex].fWidth;
+					iconMetrics.fSpacing = font->ButtonIcons.pBuffer[iconIndex].fSpacing;
+					unitWidth = GetGlyphRenderAdvance(&iconMetrics);
+				}
+				++iconIndex;
+			}
+
+			if (current == kSpaceChar && hasPreviousUnit)
+			{
+				breakOpportunity.kind = SingleByteBreakKind::Space;
+				breakOpportunity.outputPosition = outputLength;
+				breakOpportunity.prefixWidth = lineWidth;
+			}
+			lineWidth += unitWidth;
+			if (breakOpportunity.kind == SingleByteBreakKind::Space
+				&& breakOpportunity.outputPosition == outputLength)
+			{
+				breakOpportunity.consumedWidth = lineWidth;
+			}
+
+			bool emitCurrent = true;
+			if (lineWidth > maxWidth)
+			{
+				if (breakOpportunity.kind == SingleByteBreakKind::Space)
+				{
+					const UInt32 breakPosition = breakOpportunity.outputPosition;
+					const bool currentIsBreak = breakPosition == outputLength;
+					if (currentIsBreak)
+					{
+						appendByte(data->cLineSep);
+						emitCurrent = false;
+					}
+					else
+					{
+						output[breakPosition] = data->cLineSep;
+					}
+					finishLine(breakOpportunity.prefixWidth);
+					lineWidth = std::max(0.0,
+						lineWidth - breakOpportunity.consumedWidth);
+					hasPreviousUnit = !currentIsBreak
+						&& previousUnitOutputStart > breakPosition;
+					breakOpportunity.Clear();
+				}
+				else if (breakOpportunity.kind == SingleByteBreakKind::SoftHyphen)
+				{
+					const UInt32 breakPosition = breakOpportunity.outputPosition;
+					const char inserted[2] = { '-', data->cLineSep };
+					InsertPreparedBytes(output, outputLength, breakPosition,
+						inserted, static_cast<UInt32>(sizeof(inserted)));
+					if (hasPreviousUnit && previousUnitOutputStart >= breakPosition)
+						previousUnitOutputStart += 2;
+					finishLine(breakOpportunity.prefixWidth + hyphenAdvance);
+					lineWidth = std::max(0.0,
+						lineWidth - breakOpportunity.consumedWidth);
+					hasPreviousUnit = hasPreviousUnit
+						&& previousUnitOutputStart > breakPosition + 1;
+					breakOpportunity.Clear();
+				}
+				else if (hasPreviousUnit)
+				{
+					const UInt32 splitPosition = previousUnitOutputStart;
+					const char inserted[2] = { '-', data->cLineSep };
+					InsertPreparedBytes(output, outputLength, splitPosition,
+						inserted, static_cast<UInt32>(sizeof(inserted)));
+					previousUnitOutputStart += 2;
+					finishLine(std::max(0.0, lineWidth - previousUnitWidth
+						- unitWidth + hyphenAdvance));
+					lineWidth = previousUnitWidth + unitWidth;
+					breakOpportunity.Clear();
+				}
+			}
+
+			if (emitCurrent)
+			{
+				const UInt32 emittedOutputStart = outputLength;
+				appendByte(static_cast<char>(current));
+				previousUnitOutputStart = emittedOutputStart;
+				previousUnitWidth = unitWidth;
+				hasPreviousUnit = true;
+			}
+			else
+			{
+				previousUnitWidth = 0.0;
+				hasPreviousUnit = false;
+			}
+
+			if (enforceLineLimit())
+				break;
+		}
+
+		if (outputLength && data->iLineStart)
+		{
+			UInt32 retainedLength = 0;
+			int lineIndex = 0;
+			for (UInt32 sourceOffset = 0; sourceOffset < outputLength; ++sourceOffset)
+			{
+				const char value = output[sourceOffset];
+				if (lineIndex >= data->iLineStart && lineIndex < data->iLineEnd)
+					output[retainedLength++] = value;
+				if (value == data->cLineSep)
+					++lineIndex;
+			}
+			outputLength = retainedLength;
+			output[outputLength] = 0;
+			consumed = retainedLength;
+		}
+
+		if (!outputLength)
+		{
+			appendByte(' ');
+			consumed = 1;
+			lineCount = 1;
+			totalHeight = letters[kSpaceChar].fHeight;
+			FreeTypeLayoutRun spaceLayout;
+			lineWidth = LayoutFreeTypeRun(font, " ", 1, spaceLayout, true)
+				? spaceLayout.advance : GetGlyphRenderAdvance(&letters[kSpaceChar]);
+		}
+
+		const int finalLineWidth = stoppedAtLineLimit
+			? 0 : static_cast<int>(std::ceil(std::max(0.0, lineWidth)));
+		int mutableFinalWidth = finalLineWidth;
+		data->xLineWidths.AddTail(mutableFinalWidth);
+		maximumLineWidth = MaxInt(maximumLineWidth, finalLineWidth);
+		output[outputLength] = 0;
+		data->xNewText.Set(output.data(), 0);
+		data->iWidth = maximumLineWidth;
+		data->iHeight = static_cast<int>(totalHeight);
+		data->iLineStart = 0;
+		data->iLineEnd = lineCount;
+		data->iCharCount = isTerminal
+			? static_cast<int>(consumed) : static_cast<int>(outputLength);
+	}
+
+	static void PrepTextImpl(FontEx* font, const char* apOrigString,
+		Font::TextData* axData, bool isTerminal, bool resolveEscapes = true)
 	{
 		if (!apOrigString)
 			return;
@@ -609,7 +950,8 @@ namespace fonthook
 		const UInt32 originalTextLen = static_cast<UInt32>(strlen(apOrigString));
 		const float lineSpacingAdjust = FontManager::GetLinePadding(font->iFontNum);
 		UInt64 layoutIdentity = 0;
-		const bool cacheable = GetFreeTypeLayoutIdentity(font, layoutIdentity);
+		const bool cacheable = GetFreeTypeLayoutIdentity(font, layoutIdentity)
+			&& (resolveEscapes || !std::memchr(apOrigString, '&', originalTextLen));
 		PreparedTextCacheLookupKey cacheLookup;
 		if (cacheable)
 		{
@@ -658,8 +1000,10 @@ namespace fonthook
 		UInt32 textBufferSize = sourceTextLen + 4;
 
 		// ---- Pass 1: Process escape sequences (&variable;) ----
-		const bool processedEscapes = ProcessEscapeSequences(scratch.original, scratch.processed,
-			textBufferSize, processedTextLen, origConsumed, sourceTextLen, font, axData);
+		const bool processedEscapes = resolveEscapes
+			&& ProcessEscapeSequences(scratch.original, scratch.processed,
+				textBufferSize, processedTextLen, origConsumed, sourceTextLen,
+				font, axData);
 		processedOriginalText = scratch.original.data();
 		dynamicTextBuffer = scratch.processed.data();
 		if (cacheable && processedEscapes)
@@ -672,6 +1016,16 @@ namespace fonthook
 				ApplyPreparedTextCacheValue(*cached, *axData);
 				return;
 			}
+		}
+
+		if (!g_bEnableMultibyteFontHook && IsFreeTypeFontActive(font))
+		{
+			PrepSingleByteFreeTypeText(font, processedOriginalText,
+				sourceTextLen, axData, isTerminal, origConsumed, scratch);
+			if (cacheable)
+				StorePreparedTextCacheValue(cacheLookup,
+					CapturePreparedTextCacheValue(*axData));
+			return;
 		}
 
 		UInt32 buttonIconIndex = 0;
@@ -925,13 +1279,65 @@ namespace fonthook
 	// ==================== FontEx::PrepTextForTerminal ====================
 	void __thiscall FontEx::PrepTextForTerminal(const char* apOrigString, Font::TextData* axData)
 	{
+		if (!g_bEnableMultibyteFontHook && !IsFreeTypeFontActive(this))
+		{
+			ThisStdCall(0xA12FB0, this, apOrigString, axData);
+			return;
+		}
 		PrepTextImpl(this, apOrigString, axData, true);
 	}
 
 	// ==================== FontEx::PrepText ====================
 	void __thiscall FontEx::PrepText(const char* apOrigString, Font::TextData* axData)
 	{
+		if (!g_bEnableMultibyteFontHook && !IsFreeTypeFontActive(this))
+		{
+			ThisStdCall(0xA12FB0, this, apOrigString, axData);
+			return;
+		}
 		PrepTextImpl(this, apOrigString, axData, false);
+	}
+
+	bool MeasureFreeTypeSingleByteText(
+		FontEx* font,
+		const char* text,
+		float maxWrapWidth,
+		UInt32 startCharIndex,
+		NiPoint3& dimensions)
+	{
+		if (!font || !font->pFontData || !text || !IsFreeTypeFontActive(font))
+			return false;
+
+		const size_t textLength = std::strlen(text);
+		if (startCharIndex >= textLength)
+		{
+			dimensions.x = 0.0f;
+			dimensions.y = font->pFontData->pFontLetters[kSpaceChar].fHeight;
+			dimensions.z = 1.0f;
+			return true;
+		}
+
+		int wrapWidth = 1;
+		if (!std::isfinite(maxWrapWidth)
+			|| maxWrapWidth >= static_cast<float>(std::numeric_limits<int>::max()))
+		{
+			wrapWidth = std::numeric_limits<int>::max();
+		}
+		else if (maxWrapWidth > 1.0f)
+		{
+			wrapWidth = static_cast<int>(std::floor(maxWrapWidth));
+		}
+
+		Font::TextData prepared = {};
+		ThisStdCall(0x759330, &prepared, wrapWidth,
+			std::numeric_limits<int>::max(), 0,
+			std::numeric_limits<int>::max(), '\n');
+		PrepTextImpl(font, text + startCharIndex, &prepared, false, false);
+		dimensions.x = static_cast<float>(prepared.iWidth);
+		dimensions.y = static_cast<float>(prepared.iHeight);
+		dimensions.z = static_cast<float>(prepared.iLineEnd);
+		ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&prepared));
+		return true;
 	}
 
 } // namespace fonthook

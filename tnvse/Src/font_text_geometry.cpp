@@ -7,11 +7,29 @@
 #include "native_calls.h"
 #include <array>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace fonthook
 {
 	static constexpr UInt32 kInitialRenderAddCharLogCount = 0;
+
+	static float GetFreeTypeLineOffset(FontEx* font, const char* text,
+		float requestedWrapWidth, UInt32 flags, UInt32 startCharIndex)
+	{
+		const UInt32 justification = flags & 0x0F;
+		if (justification != 2 && justification != 4)
+			return 0.0f;
+		const float wrapWidth = requestedWrapWidth > 0.0f
+			? requestedWrapWidth : std::numeric_limits<float>::max();
+		NiPoint3 dimensions = {};
+		if (!MeasureFreeTypeSingleByteText(font, text, wrapWidth,
+			startCharIndex, dimensions))
+		{
+			return 0.0f;
+		}
+		return justification == 2 ? dimensions.x * -0.5f : -dimensions.x;
+	}
 
 	static int GetBaseFontGlyphIndex(const Font* apFont, const FontLetter* apLetter)
 	{
@@ -656,7 +674,10 @@ namespace fonthook
 				axTextString->Set(sTranslatedStr.c_str());
 		}
 
-		ThisStdCall(0xA12FB0, this, axTextString->pString, &textData);
+		if (g_bEnableMultibyteFontHook)
+			ThisStdCall(0xA12FB0, this, axTextString->pString, &textData);
+		else
+			PrepText(axTextString->pString, &textData);
 
 		*aiWidth = textData.iWidth;
 		*aiHeight = textData.iHeight;
@@ -826,8 +847,16 @@ namespace fonthook
 
 		char newlineBuffer[4];
 		float textXOffset = (float)*aiWidth;
-		ThisStdCall(0xA12370, this, apTextString->pString, &textXOffset,
-			newlineBuffer, abPrepareObject, 0);
+		if (!g_bEnableMultibyteFontHook && freeTypeActive)
+		{
+			textXOffset = GetFreeTypeLineOffset(this, apTextString->pString,
+				textXOffset, static_cast<UInt32>(abPrepareObject), 0);
+		}
+		else
+		{
+			ThisStdCall(0xA12370, this, apTextString->pString, &textXOffset,
+				newlineBuffer, abPrepareObject, 0);
+		}
 
 		float currentX = afStartX + textXOffset;
 		float currentY = afStartY;
@@ -891,10 +920,20 @@ namespace fonthook
 				}
 				if (current == '\n')
 				{
-					char escapeBuffer[4];
 					float nextLineX = static_cast<float>(*aiWidth);
-					ThisStdCall(0xA12370, this, apTextString->pString, &nextLineX,
-						escapeBuffer, abPrepareObject, byteIndex + 1);
+					if (!g_bEnableMultibyteFontHook)
+					{
+						nextLineX = GetFreeTypeLineOffset(this,
+							apTextString->pString, nextLineX,
+							static_cast<UInt32>(abPrepareObject), byteIndex + 1);
+					}
+					else
+					{
+						char escapeBuffer[4];
+						ThisStdCall(0xA12370, this, apTextString->pString,
+							&nextLineX, escapeBuffer, abPrepareObject,
+							byteIndex + 1);
+					}
 					currentX = nextLineX;
 					currentY -= this->pFontData->fBaseLine;
 					continue;

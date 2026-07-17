@@ -28,7 +28,7 @@ tNVSE 当前已经覆盖了普通 `Font` 文本路径：
 | `TextDoc::~TextDoc` | `0xA1B990` | `WriteRelCallEx(0xA18F7D, &FontManagerEx::TextDocDestroy)`；清理 side table 后调原版析构 |
 | `TextDoc::AddChar` | `0xA19A10` | `WriteRelCallEx` 4 处 call site 重定向；DBCS lead/trail 合并 + side table 登记；trail `CharData` 合并后释放 |
 | `TextPage::AddChar` | `0xA19C00` | `WriteRelCallEx` 2 处 call site 重定向到 `FontManagerEx::TextPageAddChar`；DBCS 后置修正 `iLastFontHeight` |
-| `TextLine::AddChar` | `0xA19F70` | `WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar)`；DBCS 当前字符溢出时直接新建下一行，避免原版 hyphen 分支 |
+| `TextLine::AddChar` | `0xA19F70` | `WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar)`；Multibyte 模式保留既有 DBCS overflow 处理，FreeType-only 在原版行/页决策前写入最终字形宽度 |
 | `CharData::Copy` | `0xA1B660` | `WriteRelCall` 4 处 call site 重定向到 `FontManagerEx::CharDataCopy`；复制时同步/清理 side table |
 
 详见第 12 节"当前实现进度"。
@@ -343,7 +343,7 @@ tNVSE 当前多字节机制由以下部分组成：
 - `g_uiEncoding` 控制 UI 编码选项：`0=Windows-1252`, `1=GBK`, `2=Big5`, `3=SJIS`, `4=UHC/CP949`。
 - `g_usingWinEncoding` 保存配置的 Windows codepage：`1252`, `936`, `950`, `932`, `949`；不再用 `0` 充当英文哨兵。
 - `g_bEnableUTF8` 只在东亚 UI 模式（`uiEncoding=1-4`）将 UTF-8 输入转换为当前 codepage；`uiEncoding=0` 保持原始 Windows-1252 字节。
-- `g_bEnableMultibyteFontHook` 只控制多字节解析能力。FreeType 有独立开关；FreeType-only 模式使用原版单字节排版拓扑和有效 code page 1252。
+- `g_bEnableMultibyteFontHook` 只控制多字节解析能力。FreeType 有独立开关；FreeType-only 模式固定使用有效 code page 1252，并由 tNVSE 按逆向得到的原版空格、`~`、硬连字符、控制字符和行数规则自行准备普通文本。富文本在原版 tag 状态机产生 `CharData` 时、拓扑决定之前注入最终 FreeType 宽度。开关为 `1` 时保留既有 DBCS 路径。
 - `ConvertToMultiByte` / `UTF8ToMultiByteStr` 负责 UTF-8 到 codepage 字节串转换。
 - `TryDecodeDoubleByte` 根据当前 codepage 识别 DBCS 字符，并返回 `code = (lead << 8) | trail`。
 - `gNumberedExtraLetters[fontID]` 保存扩展 `FontLetter` map；代码层通过 `font_glyphs.h` 的共享 helper 访问它，用于 CJK glyph 宽度、行高和渲染。
@@ -769,7 +769,7 @@ TileText::MakeNode 0xA21AF0
 | 必须 | `FontManager::PrepText` | `0xA18F4A` call site 调 `0xA18A30` | 当前 `WriteRelCallEx` 到 `FontManagerEx::PrepText`，内部做 UTF-8 转换后调原版 | 富文本普通入口；负责 UTF-8 转 codepage、DBCS 合并进入 `TextDoc` |
 | 必须 | `TextDoc::Render` 字符发射点 | `0xA18F63` / `0xA19622` | 当前 render 入口 wrapper + `FontEx::TextDocRenderAddChar` 局部 hook | 原版固定取 `pFontLetters[cChar]`；DBCS 必须改取 extra glyph |
 | 必须 | `TextPage::AddChar` | `0xA19A6F` / `0xA1BD1C` call site 调 `0xA19C00` | 当前 `WriteRelCallEx` 到 `FontManagerEx::TextPageAddChar`，调原版后修正 DBCS `iLastFontHeight` | 修正 `iLastFontHeight` 不能按 lead byte 基础 glyph 计算 |
-| 必须 | `TextLine::AddChar` | `0xA19C80` call site 调 `0xA19F70` | 当前 `WriteRelCallEx` 到 `FontManagerEx::TextLineAddChar`；仅 DBCS 当前字符溢出时新建下一行，其余回原版 | CJK 无空格长行不能触发原版 `'-'` hyphen 插入 |
+| 必须 | `TextLine::AddChar` | `0xA19C80` call site 调 `0xA19F70` | 当前 `WriteRelCallEx` 到 `FontManagerEx::TextLineAddChar`；Multibyte 模式维持既有 DBCS overflow 分支；FreeType-only 先写入最终字形宽度再进入原版行/页决策 | CJK 无空格长行不能触发原版 `'-'` hyphen；FreeType-only 的拓扑不能继续使用近似 `.fnt` 宽度 |
 | 必须 | `CharData::Copy` 或 rich copy wrapper | `0xA17898` / `0xA179CD` / `0xA17FB6` / `0xA18D73` call site 调 `0xA1B660` | 当前 `WriteRelCall` 到 `FontManagerEx::CharDataCopy` | 原版只复制游戏字段；DBCS 的 side table 关联必须由 tNVSE 同步复制 |
 | 必须 | `FontManager::CollectTo` | `PrepHypertext` 8 个 call site 调 `0xA16EA0` | 当前 6 处 `WriteRelCall` 到 `FontManagerEx::CollectTo`，`0xA17D5D` / `0xA17DE9` 到 `FontManagerEx::CollectToAttributeValue`；普通可见文本段和属性值启用自定义路径，其余参数回原版 | 原版按单字节分类，会让 DBCS trail byte 参与 delimiter 判断 |
 | 非当前计划 | `FontManager::PrepHypertext` 完整 tokenizer | `0xA18ACC` call site 调 `0xA17390` | 当前入口 wrapper + `CollectTo` 普通文本段/属性值 DBCS-aware；原版主体仍负责 tag/属性名状态机，`0xA17DB9` direct `GetCharType` 仍保留 | GBK native 与 UTF-8 回归已通过，当前没有必要自建完整 parser；仅在出现稳定失败样本时重新评估 |
@@ -811,8 +811,9 @@ TileText::MakeNode 0xA21AF0
 
 `game_hooks.cpp::InitFontHooks` 按 `[Multibyte] bEnableMultibyteFontHook` 与
 `[FreeTypeFont] bEnableFreeTypeFontRendering` 分别安装能力。两者都关闭时
-不写入字体 patch；FreeType-only 时只安装经过签名验证的核心入口
-trampoline、`PrepText`/Render/AddChar 共享桥，原版 `PrepHypertext`、
+不写入字体 patch；FreeType-only 时安装经过签名验证的核心入口、
+自定义普通文本准备/测量桥、Render/AddChar 共享桥，以及只属于该模式的
+`TextLine` 首字符精确宽度 call site。原版 `PrepHypertext` tag 状态机、
 `CollectTo`、DBCS 合并和 extra-glyph hook 均保持未修改。多字节能力开启
 时才安装下表中的 DBCS parser/layout patch：
 
@@ -827,7 +828,8 @@ trampoline、`PrepText`/Render/AddChar 共享桥，原版 `PrepHypertext`、
 | `0xA18D7C` | `PrepText → TextDoc::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextDocAddChar` |
 | `0xA19A6F` | `TextDoc::AddChar → TextPage::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextPageAddChar` |
 | `0xA1BD1C` | `TextPage::TextPage → TextPage::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextPageAddChar` |
-| `0xA19C80` | `TextPage::AddChar → TextLine::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextLineAddChar` |
+| `0xA19C80` | `TextPage::AddChar → TextLine::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextLineAddChar`；DBCS 模式沿用既有 overflow 处理，FreeType-only 在拓扑决定前写入精确宽度 |
+| `0xA1BDE2` | `TextLine::TextLine → TextLine::AddChar` | `WriteRelCallEx`，仅 FreeType-only | 让每条新行的首字符也在分页/高度累计前取得最终 FreeType 宽度；Multibyte 模式不安装 |
 | `0xA17898` / `0xA179CD` / `0xA17FB6` | `PrepHypertext → CharData::Copy` | `WriteRelCall` | `FontManagerEx::CharDataCopy` |
 | `0xA18D73` | `PrepText → CharData::Copy` | `WriteRelCall` | `FontManagerEx::CharDataCopy` |
 | `0xA1B020` | `FontManager::CalculateStringDimensions` | `WriteRelJumpEx` | `FontManagerEx::CalculateStringDimensions` |
@@ -929,7 +931,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 - 位于整个可见文本外层且闭合完整的全局样式标签（如 `<font color=...>...</font>`）保留在译文外侧。
 - 位于可见文本前后的边界媒体/装饰标签（如 `<img ...>`、`<hr>`）保留；局部包住原文某个词的 `<font>` / `</font>` 不迁移。
 
-未命中词典时，`PrepText` / `PrepHypertext` 完全走既有路径；命中时，生成的新富文本字符串再交给原版 `FontManager::PrepText 0xA18A30` 或 `FontManager::PrepHypertext 0xA17390` 解析。`bEnableDictionaryTranslation=0` 时 `TranslateRichText` 直接返回 false；`uiEncoding=0` 的东亚 UI 功能门控会关闭词典加载和转换。FreeType-only 的共享富文本桥只在原版生成固定 `TextDoc` 后重测字形位置与行宽，不调用词典或 DBCS parser；即使 `uiEncoding=1-4` 仍有配置，未安装的多字节文本 hook 也不会把词典结果送入该路径。
+未命中词典时，`PrepText` / `PrepHypertext` 完全走既有多字节路径；命中时，生成的新富文本字符串再交给原版 `FontManager::PrepText 0xA18A30` 或 `FontManager::PrepHypertext 0xA17390` 解析。`bEnableDictionaryTranslation=0` 时 `TranslateRichText` 直接返回 false；`uiEncoding=0` 的东亚 UI 功能门控会关闭词典加载和转换。FreeType-only 不调用词典或 DBCS parser：其普通文本由 tNVSE 的 Windows-1252 布局器准备，富文本则在 `TextLine::AddChar` 及 `TextLine` 构造首字符的 call site 上先应用最终 FreeType 宽度，使换行与分页使用增强度量，完成后只校正位置和汇总宽度。即使 `uiEncoding=1-4` 仍有配置，未安装的多字节文本 hook 也不会把词典结果送入该路径。
 
 #### 渲染字符发射点
 

@@ -339,18 +339,28 @@ namespace fonthook
 		WriteRelCallEx(0xA18F63, &FontManagerEx::TextDocRender);
 		// TextDoc::Render -> Font::AddChar
 		WriteRelCallEx(0xA19622, &FontEx::TextDocRenderAddChar);
+		// Terminal text needs the custom single-byte FreeType preparation path
+		// even when the global DBCS parser is disabled. Non-FreeType fonts are
+		// delegated by FontEx::PrepTextForTerminal.
+		WriteRelCallEx(0x759281, &FontEx::PrepTextForTerminal);
+		// Feed final FreeType widths into word wrapping before TextLine chooses
+		// whether to retain the character, move a word, or create another line.
+		WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar);
 
 		if (!s_fontHookInstallState.multibyte)
 		{
+			// TextLine's constructor inserts the first character through a
+			// separate call site. Patch it only for FreeType-only mode so every
+			// line starts with the same final-width contract, while the enabled
+			// multibyte path remains byte-for-byte on its existing hook set.
+			WriteRelCallEx(0xA1BDE2, &FontManagerEx::TextLineAddChar);
 			gLog.FormattedMessage(
-				"tnvse_font_hook: installed mode=freetype-original-single-byte configuredCodePage=%u freeTypeCodePage=%u",
+				"tnvse_font_hook: installed mode=freetype-custom-single-byte configuredCodePage=%u freeTypeCodePage=%u",
 				g_usingWinEncoding, GetFreeTypeTextCodePage());
 			return s_fontHookInstallState;
 		}
 
 		WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
-		// Terminal -> Font::PrepTextForTerminal
-		WriteRelCallEx(0x759281, &FontEx::PrepTextForTerminal);
 
 		// FontManager::PrepText -> FontManager::PrepHypertext
 		WriteRelCallEx(0xA18ACC, &FontManagerEx::PrepHypertext);
@@ -379,9 +389,6 @@ namespace fonthook
 		WriteRelCallEx(0xA19A6F, &FontManagerEx::TextPageAddChar);
 		// TextPage::TextPage -> TextPage::AddChar
 		WriteRelCallEx(0xA1BD1C, &FontManagerEx::TextPageAddChar);
-
-		// TextPage::AddChar -> TextLine::AddChar
-		WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar);
 
 		// FontManager::PrepHypertext -> CharData::Copy
 		WriteRelCall(0xA17898, &FontManagerEx::CharDataCopy);

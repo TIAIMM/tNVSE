@@ -16,13 +16,16 @@ fFreeTypeFontResolutionScale=1.0
 ```
 
 With `[Multibyte] bEnableMultibyteFontHook=1`, FreeType uses the configured
-DBCS parser and byte-pair layout. With that switch disabled, configured
-FreeType font IDs instead retain the game's original Windows-1252 single-byte
-line breaking, control-character handling, pagination, and rich-text topology.
-tNVSE replaces only their glyph geometry and remeasures each already-prepared
-line for pair kerning, tracking, and outline collision protection; it never
-performs a second wrapping pass. Non-FreeType font IDs remain wholly on the
-original `.fnt`/`.tex` path.
+DBCS parser and byte-pair layout; this mode retains its existing conversion,
+wrapping, rich-text merge, and pagination logic. With that switch disabled,
+configured FreeType font IDs use a dedicated tNVSE Windows-1252 layout path
+derived from the reverse-engineered vanilla rules. Spaces are removable word
+breaks, `~` is a discretionary hyphen, unbroken words use vanilla-style hard
+hyphenation, and line limits/control bytes follow the original single-byte
+semantics, but every decision uses final FreeType advances. Rich text feeds
+those advances into `TextLine::AddChar` before line/page topology is selected;
+the final traversal only normalizes positions and aggregate widths. Non-FreeType
+font IDs remain wholly on the original `.fnt`/`.tex` path.
 
 ## Raster scale and UIO
 
@@ -392,8 +395,9 @@ A8 grayscale shapes; SDF ranges retain level-zero derivative-based sampling.
 Neither case creates a resolution- or zoom-specific profile. If atlas creation
 fails, the renderer falls back to the libtess2 outline path. HarfBuzz
 shaping is limited to horizontal LTR text in the active DBCS path; the
-FreeType-only rich-text post-pass intentionally preserves one byte per
-`CharData` and applies no GSUB. Bidirectional layout,
+FreeType-only rich-text topology keeps one Windows-1252 byte per `CharData`,
+uses pair layout without GSUB before wrapping/pagination, and then normalizes
+the resulting positions. Bidirectional layout,
 LCD subpixel rendering, color-font rendering, and
 variable-font axis controls are outside this feature. Invalid or unavailable
 configurations leave that entire font ID on the original `.fnt`/`.tex` renderer.
