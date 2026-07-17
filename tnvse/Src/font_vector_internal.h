@@ -138,6 +138,7 @@ namespace fonthook::vectorfont
 		FontPrewarmMode prewarm = FontPrewarmMode::None;
 		VerticalMetricsMode verticalMetrics = VerticalMetricsMode::FreeType;
 		bool shaping = false;
+		bool unicodeLineBreaking = false;
 		std::vector<std::string> shapingFeatures;
 		float baseline = 0.0f;
 		FontColorStyle fontColor;

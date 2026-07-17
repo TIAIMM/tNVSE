@@ -68,7 +68,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>$(ProjectDir)third_party\freetype-2.14.3\include;$(ProjectDir)third_party\harfbuzz\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)third_party\freetype-2.14.3\include;$(ProjectDir)third_party\harfbuzz\src;$(ProjectDir)third_party\libunibreak\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>SOL_ALL_SAFETIES_ON;SOL_SAFE_REFERENCES;SOL_SAFE_FUNCTION_CALLS;SOL_PRINT_ERRORS;SOL_USING_CXX_LUA_JIT;WIN32;_DEBUG;_WINDOWS;_USRDLL;NVSE_PLUGIN_EXAMPLE_EXPORTS;RUNTIME_VERSION=0x040020D0;RUNTIME;NOMINMAX;%(PreprocessorDefinitions);WIN32_LEAN_AND_MEAN</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -104,7 +104,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)third_party\freetype-2.14.3\include;$(ProjectDir)third_party\harfbuzz\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)third_party\freetype-2.14.3\include;$(ProjectDir)third_party\harfbuzz\src;$(ProjectDir)third_party\libunibreak\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>SOL_ALL_SAFETIES_ON;SOL_SAFE_REFERENCES;SOL_SAFE_FUNCTION_CALLS;SOL_PRINT_ERRORS;SOL_USING_CXX_LUA_JIT;WIN32;NDEBUG;_WINDOWS;_USRDLL;NVSE_PLUGIN_EXAMPLE_EXPORTS;RUNTIME_VERSION=0x040020D0;RUNTIME;NOMINMAX;%(PreprocessorDefinitions);WIN32_LEAN_AND_MEAN</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <PrecompiledHeader />
@@ -224,6 +224,9 @@
     </ProjectReference>
     <ProjectReference Include="third_party\harfbuzz_tnvse.vcxproj">
       <Project>{5A89AF7B-83D3-4E14-A0B5-D8475A4822C7}</Project>
+    </ProjectReference>
+    <ProjectReference Include="third_party\libunibreak_tnvse.vcxproj">
+      <Project>{0B091F88-BBC1-44BB-AF97-D88A4B310362}</Project>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>

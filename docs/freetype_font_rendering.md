@@ -25,7 +25,9 @@ hyphenation, and line limits/control bytes follow the original single-byte
 semantics, but every decision uses final FreeType advances. Rich text feeds
 those advances into `TextLine::AddChar` before line/page topology is selected;
 the final traversal only normalizes positions and aggregate widths. Non-FreeType
-font IDs remain wholly on the original `.fnt`/`.tex` path.
+font IDs remain wholly on the original `.fnt`/`.tex` path. A configured font
+can additionally set `unicodeLineBreaking="1"` to add libunibreak UAX #14
+opportunities to either FreeType layout mode.
 
 ## Raster scale and UIO
 
@@ -62,6 +64,7 @@ fonts continue to use the original `.fnt` and `.tex` files.
     <font id="1"
           prewarm="none"
           shaping="1"
+          unicodeLineBreaking="1"
           features="kern,liga,clig,calt"
           pixelSize="24"
           fontColor="#FFFFFF"
@@ -155,6 +158,22 @@ kerning and HarfBuzz shaping for that byte class, and makes its final advance
 `fixedWidth + tracking`. This matches the grid-oriented DCFGCF behavior used by
 interfaces such as the terminal hacking screen. A value of zero retains
 proportional advances.
+
+## Unicode line breaking
+
+`unicodeLineBreaking="0"` is the default and preserves the existing prepared
+text rules. Setting it to `1` on one `<font>` enables libunibreak for that font
+ID only. tNVSE decodes the prepared byte string with the active FreeType text
+code page (Windows-1252, GBK, Big5, Shift-JIS, or UHC), supplies `zh`, `ja`,
+`ko`, or `en` language context as appropriate, and maps the UAX #14 results
+back to encoded-byte boundaries. A break is never inserted inside a DBCS pair
+or HarfBuzz cluster.
+
+The existing explicit line separator, `~` discretionary hyphen, removable
+single-byte space, and hard-wrap fallback remain available. The switch is part
+of the layout identity, so changing it cannot reuse prepared-text or layout
+cache entries made under the other setting. It has no effect on font IDs that
+remain on the original `.fnt`/`.tex` renderer.
 
 ## Blocking prewarm and persistent caches
 

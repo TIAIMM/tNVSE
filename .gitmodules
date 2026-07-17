@@ -4,3 +4,6 @@
 [submodule "tnvse/third_party/harfbuzz"]
 	path = tnvse/third_party/harfbuzz
 	url = https://github.com/harfbuzz/harfbuzz.git
+[submodule "tnvse/third_party/libunibreak"]
+	path = tnvse/third_party/libunibreak
+	url = https://github.com/adah1972/libunibreak.git

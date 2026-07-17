@@ -1008,6 +1008,9 @@ namespace fonthook
 		Font* activeFont = this->pFont[fontID - 1];
 		if (IsFreeTypeFontActive(activeFont))
 		{
+			std::vector<UInt8> unicodeBreaks;
+			BuildFreeTypeUnicodeLineBreakMap(activeFont, srcString,
+				static_cast<size_t>(sourceStringLength), unicodeBreaks);
 			for (int offset = startCharIndex; offset < sourceStringLength;)
 			{
 				const UInt8 current = static_cast<UInt8>(srcString[offset]);
@@ -1051,25 +1054,32 @@ namespace fonthook
 				{
 					UInt32 cluster = std::numeric_limits<UInt32>::max();
 					double clusterAdvance = 0.0;
-					auto flushCluster = [&]()
+					auto flushCluster = [&](UInt32 clusterEnd)
 					{
 						if (cluster == std::numeric_limits<UInt32>::max())
 							return;
 						const LayoutWrapResult result = wrapState.AddUnit(clusterAdvance, maxWrapWidth);
 						if (result.kind != LayoutWrapKind::None)
 							finishLine(static_cast<float>(result.completedWidth));
+						const size_t breakByte = static_cast<size_t>(offset)
+							+ clusterEnd - 1;
+						if (clusterEnd && breakByte < unicodeBreaks.size()
+							&& unicodeBreaks[breakByte])
+						{
+							wrapState.MarkSoftWrap();
+						}
 					};
 					for (const FreeTypeLayoutGlyph& glyph : *layout.glyphs)
 					{
 						if (cluster != glyph.cluster)
 						{
-							flushCluster();
+							flushCluster(glyph.cluster);
 							cluster = glyph.cluster;
 							clusterAdvance = 0.0;
 						}
 						clusterAdvance += glyph.xAdvance;
 					}
-					flushCluster();
+					flushCluster(static_cast<UInt32>(runEnd - offset));
 				}
 				offset = runEnd > offset ? runEnd : offset + 1;
 			}

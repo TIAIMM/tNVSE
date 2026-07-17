@@ -13,6 +13,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "freetype_tnvse", "third_par
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "harfbuzz_tnvse", "third_party\harfbuzz_tnvse.vcxproj", "{5A89AF7B-83D3-4E14-A0B5-D8475A4822C7}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libunibreak_tnvse", "third_party\libunibreak_tnvse.vcxproj", "{0B091F88-BBC1-44BB-AF97-D88A4B310362}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -35,6 +37,10 @@ Global
 		{5A89AF7B-83D3-4E14-A0B5-D8475A4822C7}.Debug|Win32.Build.0 = Debug|Win32
 		{5A89AF7B-83D3-4E14-A0B5-D8475A4822C7}.Release|Win32.ActiveCfg = Release|Win32
 		{5A89AF7B-83D3-4E14-A0B5-D8475A4822C7}.Release|Win32.Build.0 = Release|Win32
+		{0B091F88-BBC1-44BB-AF97-D88A4B310362}.Debug|Win32.ActiveCfg = Debug|Win32
+		{0B091F88-BBC1-44BB-AF97-D88A4B310362}.Debug|Win32.Build.0 = Debug|Win32
+		{0B091F88-BBC1-44BB-AF97-D88A4B310362}.Release|Win32.ActiveCfg = Release|Win32
+		{0B091F88-BBC1-44BB-AF97-D88A4B310362}.Release|Win32.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

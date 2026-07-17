@@ -292,6 +292,7 @@ namespace fonthook::vectorfont
 			UInt64 hash = 1469598103934665603ull;
 			HashBytes(hash, &config.verticalMetrics, sizeof(config.verticalMetrics));
 			HashBytes(hash, &config.shaping, sizeof(config.shaping));
+			HashBytes(hash, &config.unicodeLineBreaking, sizeof(config.unicodeLineBreaking));
 			for (const std::string& feature : config.shapingFeatures)
 			{
 				const size_t featureLength = feature.size();
@@ -439,6 +440,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			config.shaping = node.attribute("shaping").as_bool(false);
+			config.unicodeLineBreaking = node.attribute("unicodeLineBreaking").as_bool(false);
 			const std::string features = node.attribute("features").as_string();
 			if (!features.empty())
 			{
@@ -496,10 +498,11 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d features=%u baseline=%.2f fontColor=%d fillRenderMode=%s effectQuality=%u glow=%d inner=%.2f outer=%.2f power=%.2f outline=%d width=%.2f softness=%.2f shadow=%d blur=%.2f power=%.2f",
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d unicodeLineBreaking=%d features=%u baseline=%.2f fontColor=%d fillRenderMode=%s effectQuality=%u glow=%d inner=%.2f outer=%.2f power=%.2f outline=%d width=%.2f softness=%.2f shadow=%d blur=%.2f power=%.2f",
 				config.fontId, static_cast<UInt32>(config.prewarm),
 				config.verticalMetrics == VerticalMetricsMode::Original ? "original" : "freetype",
 				config.shaping ? 1 : 0,
+				config.unicodeLineBreaking ? 1 : 0,
 				static_cast<UInt32>(config.shapingFeatures.size()),
 				config.baseline,
 				config.fontColor.configured,

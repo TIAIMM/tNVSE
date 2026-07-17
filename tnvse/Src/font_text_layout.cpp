@@ -169,6 +169,7 @@ namespace fonthook
 	{
 		std::vector<char> original;
 		std::vector<char> processed;
+		std::vector<UInt8> unicodeBreaks;
 		FreeTypeClusterAdvanceMap clusterAdvances;
 
 		void Prepare(const char* source, size_t length)
@@ -187,6 +188,8 @@ namespace fonthook
 				std::vector<char>().swap(original);
 			if (processed.capacity() > kMaximumRetainedTextBytes)
 				std::vector<char>().swap(processed);
+			if (unicodeBreaks.capacity() > kMaximumRetainedTextBytes)
+				std::vector<UInt8>().swap(unicodeBreaks);
 			clusterAdvances.TrimRetainedCapacity();
 		}
 	};
@@ -600,7 +603,8 @@ namespace fonthook
 	{
 		None,
 		Space,
-		SoftHyphen
+		SoftHyphen,
+		Unicode
 	};
 
 	struct SingleByteBreakOpportunity
@@ -682,6 +686,17 @@ namespace fonthook
 
 		FreeTypeClusterAdvanceMap& advances = scratch.clusterAdvances;
 		BuildFreeTypeClusterAdvanceMap(font, source, sourceLength, advances);
+		std::vector<UInt8>& unicodeBreaks = scratch.unicodeBreaks;
+		BuildFreeTypeUnicodeLineBreakMap(font, source, sourceLength, unicodeBreaks);
+		auto isClusterBoundaryAfter = [&](UInt32 sourceOffset)
+		{
+			if (sourceOffset >= advances.owners.size())
+				return true;
+			const UInt32 owner = advances.owners[sourceOffset];
+			return owner == FreeTypeClusterAdvanceMap::kNoOwner
+				|| sourceOffset + 1 >= advances.owners.size()
+				|| advances.owners[sourceOffset + 1] != owner;
+		};
 		std::vector<char>& output = scratch.processed;
 		EnsureTextScratchSize(output, static_cast<size_t>(sourceLength) + 8);
 		output[0] = 0;
@@ -792,6 +807,15 @@ namespace fonthook
 			if (clusterContinuation)
 			{
 				appendByte(static_cast<char>(current));
+				if (sourceOffset < unicodeBreaks.size()
+					&& unicodeBreaks[sourceOffset]
+					&& isClusterBoundaryAfter(sourceOffset) && hasPreviousUnit)
+				{
+					breakOpportunity.kind = SingleByteBreakKind::Unicode;
+					breakOpportunity.outputPosition = outputLength;
+					breakOpportunity.prefixWidth = lineWidth;
+					breakOpportunity.consumedWidth = lineWidth;
+				}
 				continue;
 			}
 
@@ -860,6 +884,22 @@ namespace fonthook
 						&& previousUnitOutputStart > breakPosition + 1;
 					breakOpportunity.Clear();
 				}
+				else if (breakOpportunity.kind == SingleByteBreakKind::Unicode)
+				{
+					const UInt32 breakPosition = breakOpportunity.outputPosition;
+					const char inserted = data->cLineSep;
+					InsertPreparedBytes(output, outputLength, breakPosition,
+						&inserted, 1);
+					const bool retainedPrevious = hasPreviousUnit
+						&& previousUnitOutputStart >= breakPosition;
+					if (retainedPrevious)
+						++previousUnitOutputStart;
+					finishLine(breakOpportunity.prefixWidth);
+					lineWidth = std::max(0.0,
+						lineWidth - breakOpportunity.consumedWidth);
+					hasPreviousUnit = retainedPrevious;
+					breakOpportunity.Clear();
+				}
 				else if (hasPreviousUnit)
 				{
 					const UInt32 splitPosition = previousUnitOutputStart;
@@ -886,6 +926,16 @@ namespace fonthook
 			{
 				previousUnitWidth = 0.0;
 				hasPreviousUnit = false;
+			}
+			if (emitCurrent && current != kSpaceChar
+				&& sourceOffset < unicodeBreaks.size()
+				&& unicodeBreaks[sourceOffset]
+				&& isClusterBoundaryAfter(sourceOffset) && hasPreviousUnit)
+			{
+				breakOpportunity.kind = SingleByteBreakKind::Unicode;
+				breakOpportunity.outputPosition = outputLength;
+				breakOpportunity.prefixWidth = lineWidth;
+				breakOpportunity.consumedWidth = lineWidth;
 			}
 
 			if (enforceLineLimit())
@@ -1032,6 +1082,9 @@ namespace fonthook
 		FreeTypeClusterAdvanceMap& freeTypeAdvances = scratch.clusterAdvances;
 		BuildFreeTypeClusterAdvanceMap(font, processedOriginalText,
 			sourceTextLen, freeTypeAdvances);
+		std::vector<UInt8>& unicodeBreaks = scratch.unicodeBreaks;
+		BuildFreeTypeUnicodeLineBreakMap(font, processedOriginalText,
+			sourceTextLen, unicodeBreaks);
 		UInt32 previousClusterOutputStart = 0;
 		bool hasPreviousClusterOutput = false;
 
@@ -1062,6 +1115,7 @@ namespace fonthook
 			}
 			else
 			{
+				const UInt32 sourceUnitStart = charIndex;
 				bIsDBCharacter = false;
 				if (extraGlyphs && (charIndex + 1) <= sourceTextLen)
 				{
@@ -1212,6 +1266,21 @@ namespace fonthook
 				{
 					previousClusterOutputStart = currentClusterOutputStart;
 					hasPreviousClusterOutput = true;
+				}
+				const UInt32 sourceUnitEnd = sourceUnitStart
+					+ (bIsDBCharacter ? 2u : 1u);
+				const bool isLayoutClusterBoundary =
+					layoutClusterOwner == FreeTypeClusterAdvanceMap::kNoOwner
+					|| sourceUnitEnd >= freeTypeAdvances.owners.size()
+					|| freeTypeAdvances.owners[sourceUnitEnd] != layoutClusterOwner;
+				if (!isSoftMarker && sourceUnitEnd
+					&& sourceUnitEnd - 1 < unicodeBreaks.size()
+					&& unicodeBreaks[sourceUnitEnd - 1]
+					&& isLayoutClusterBoundary)
+				{
+					wrapState.MarkSoftWrap();
+					if (wrapState.hasSoftWrap)
+						softWrapPosition = processedTextLen;
 				}
 
 				if (processedTextLen >= textBufferSize)

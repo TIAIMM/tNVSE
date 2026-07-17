@@ -46,6 +46,18 @@ are being produced.
 - License selected for tNVSE: MIT
 - The MIT license text is included at the end of the vendored header.
 
+## libunibreak 7.0
+
+tNVSE statically links libunibreak for the optional per-font UAX #14 line-break
+mode. The local Visual Studio project builds the upstream C sources as a Win32
+static library and does not add a runtime DLL.
+
+- Project: https://github.com/adah1972/libunibreak
+- Tag: `libunibreak_7_0`
+- Commit: `3ce4bfa3129ff3738046a44a6db533d2ce25af2b`
+- License: zlib/libpng
+- License text: `libunibreak/LICENCE`
+
 ## Initialize submodules
 
 After cloning or changing revisions, initialize all source trees with:
