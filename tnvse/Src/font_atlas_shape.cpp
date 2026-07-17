@@ -683,9 +683,9 @@ namespace fonthook::vectorfont
 			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
 			const bool hasEffectLayer = std::any_of(quads.begin(), quads.end(),
 				[](const PendingQuad& quad) { return quad.layer != AtlasLayer::Fill; });
-			const bool needsRangeBridge = useCustomA8Shader || hasEffectLayer
+			const bool needsNativeRangeRouting = useCustomA8Shader || hasEffectLayer
 				|| atlases.size() > 1;
-			if (needsRangeBridge)
+			if (needsNativeRangeRouting)
 			{
 				A8EffectShapeConfig resolvedEffect = effectConfig
 					? *effectConfig : A8EffectShapeConfig{};

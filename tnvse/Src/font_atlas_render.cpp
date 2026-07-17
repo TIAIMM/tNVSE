@@ -5,12 +5,81 @@
 
 namespace fonthook::vectorfont
 {
+	namespace
+	{
+		bool IsControlCodePoint(UInt32 codePoint)
+		{
+			return codePoint < 0x20 || (codePoint >= 0x7F && codePoint <= 0x9F);
+		}
+
+		bool IsSpaceCodePoint(UInt32 codePoint)
+		{
+			return codePoint == 0x20 || codePoint == 0xA0 || codePoint == 0x1680
+				|| (codePoint >= 0x2000 && codePoint <= 0x200A)
+				|| codePoint == 0x202F || codePoint == 0x205F || codePoint == 0x3000;
+		}
+
+		GlyphAtlasMaskFailure ToDiagnosticMaskFailure(
+			PendingQuadBuildFailure failure)
+		{
+			switch (failure)
+			{
+			case PendingQuadBuildFailure::Fill:
+				return GlyphAtlasMaskFailure::Fill;
+			case PendingQuadBuildFailure::Glow:
+				return GlyphAtlasMaskFailure::Glow;
+			case PendingQuadBuildFailure::Outline:
+				return GlyphAtlasMaskFailure::Outline;
+			default:
+				return GlyphAtlasMaskFailure::None;
+			}
+		}
+
+		void InitializeBuildDiagnostics(const std::vector<AtlasGlyphInstance>& glyphs,
+			GlyphAtlasBuildDiagnostics* diagnostics)
+		{
+			if (!diagnostics)
+				return;
+			*diagnostics = {};
+			diagnostics->inputGlyphCount = static_cast<UInt32>(glyphs.size());
+			if (!glyphs.empty())
+			{
+				diagnostics->firstEncodedCode = glyphs.front().glyph.encodedCode;
+				diagnostics->firstCodePoint = glyphs.front().glyph.codePoint;
+				diagnostics->firstGlyphIndex = glyphs.front().glyph.glyphIndex;
+				diagnostics->firstByteLength = glyphs.front().glyph.byteLength;
+				diagnostics->firstByteClass = static_cast<UInt8>(
+					glyphs.front().glyph.byteClass);
+			}
+			for (const AtlasGlyphInstance& instance : glyphs)
+			{
+				if (!instance.glyph.metrics)
+					++diagnostics->missingMetricsCount;
+				if (!instance.glyph.byteLength)
+					++diagnostics->zeroByteLengthCount;
+				if (IsControlCodePoint(instance.glyph.codePoint))
+					++diagnostics->controlGlyphCount;
+				else if (IsSpaceCodePoint(instance.glyph.codePoint))
+					++diagnostics->spaceGlyphCount;
+			}
+		}
+	}
+
 	NiTriShape* TryCreateGlyphAtlasShape(Font& font, RuntimeFont& runtime,
 		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
-		bool prepareObject, const NiColorA& requestedTileColor, bool suppressEffects)
+		bool prepareObject, const NiColorA& requestedTileColor, bool suppressEffects,
+		GlyphAtlasBuildDiagnostics* diagnostics)
 	{
+		InitializeBuildDiagnostics(glyphs, diagnostics);
 		if (glyphs.empty())
+		{
+			if (diagnostics)
+			{
+				diagnostics->outcome = GlyphAtlasBuildOutcome::EmptyInput;
+				diagnostics->expectedEmpty = true;
+			}
 			return nullptr;
+		}
 		AtlasState& state = State();
 		const FontConfig& config = GetRuntimeConfig(runtime);
 		const NiColorA tileColor = ResolveSafeTileColor(glyphs, requestedTileColor);
@@ -18,10 +87,22 @@ namespace fonthook::vectorfont
 			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled);
 		const bool requestsSdfFill = UsesSdfFill(config);
 		const bool wantsShaderPath = hasEffects || requestsSdfFill;
+		const bool a8RendererAvailable = IsA8RendererAvailable();
+		if (diagnostics)
+		{
+			diagnostics->hasEffects = hasEffects;
+			diagnostics->requestsSdfFill = requestsSdfFill;
+			diagnostics->wantsShaderPath = wantsShaderPath;
+			diagnostics->a8RendererAvailable = a8RendererAvailable;
+			diagnostics->requestedQuality = static_cast<UInt8>(config.effectQuality);
+			diagnostics->resolvedQuality = diagnostics->requestedQuality;
+		}
 		EffectQuality resolvedQuality = config.effectQuality;
-		if (wantsShaderPath && IsA8RendererAvailable()
+		if (wantsShaderPath && a8RendererAvailable
 			&& ResolveA8EffectQuality(config.effectQuality, resolvedQuality))
 		{
+			if (diagnostics)
+				diagnostics->resolvedQuality = static_cast<UInt8>(resolvedQuality);
 			if (resolvedQuality != config.effectQuality && g_bEnableFreeTypeFontRenderingLog)
 			{
 				const UInt64 downgradeKey = (static_cast<UInt64>(font.iFontNum) << 32)
@@ -45,16 +126,30 @@ namespace fonthook::vectorfont
 			const bool shaderQuadsBuilt = BuildShaderEffectQuads(runtime, glyphs,
 				rasterScale, resolvedQuality, tileColor, suppressEffects,
 				shaderQuads, shaderBuild);
+			if (diagnostics)
+			{
+				diagnostics->shaderQuadsBuilt = shaderQuadsBuilt;
+				diagnostics->shaderQuadCount = static_cast<UInt32>(shaderQuads.size());
+			}
 			// Spaces and control-only fragments legitimately have metrics but no bitmap
 			// area. They need no shape and are not a shader failure; falling through to
 			// CPU masks only wastes work and consumes the real failure-log quota.
 			if (shaderQuadsBuilt && shaderQuads.empty())
+			{
+				if (diagnostics)
+				{
+					diagnostics->outcome = GlyphAtlasBuildOutcome::NoDrawableShaderQuads;
+					diagnostics->expectedEmpty = true;
+				}
 				return nullptr;
+			}
 			const bool shaderQuadCountValid = shaderQuadsBuilt && !shaderQuads.empty()
 				&& shaderQuads.size() <= kMaximumQuads;
 			bool shaderAtlasOrShapeFailed = false;
 			if (shaderQuadCountValid)
 			{
+				if (diagnostics)
+					++diagnostics->shaderShapeAttempts;
 				thread_local std::unordered_map<UInt64,
 					std::shared_ptr<const GlyphBitmap>> shaderUnique;
 				shaderUnique.clear();
@@ -78,6 +173,8 @@ namespace fonthook::vectorfont
 					&shaderBuild.config);
 				if (shaderShape)
 				{
+					if (diagnostics)
+						diagnostics->outcome = GlyphAtlasBuildOutcome::Created;
 					RecordFreeTypePerf(FreeTypePerfCounter::ShaderEffectBatch);
 					const UInt64 avoided = static_cast<UInt64>(glyphs.size())
 						* static_cast<UInt64>((config.glow.enabled ? 1 : 0)
@@ -101,6 +198,8 @@ namespace fonthook::vectorfont
 					return shaderShape;
 				}
 				shaderAtlasOrShapeFailed = true;
+				if (diagnostics)
+					diagnostics->shaderAtlasOrShapeFailed = true;
 			}
 			if (g_bEnableFreeTypeFontRenderingLog
 				&& state.shaderBatchFailureLogCount++ < 32)
@@ -128,12 +227,20 @@ namespace fonthook::vectorfont
 		};
 		for (size_t attempt = 0; attempt <= degradationOrder.size(); ++attempt)
 		{
+			if (diagnostics)
+				++diagnostics->cpuAttempts;
 			thread_local std::vector<PendingQuad> quads;
 			quads.clear();
 			PendingQuadBuildFailure buildFailure = PendingQuadBuildFailure::None;
 			if (!BuildPendingQuads(runtime, glyphs, rasterScale, included,
 				tileColor, quads, buildFailure))
 			{
+				if (diagnostics)
+				{
+					diagnostics->cpuQuadsBuilt = false;
+					diagnostics->cpuQuadCount = static_cast<UInt32>(quads.size());
+					diagnostics->cpuMaskFailure = ToDiagnosticMaskFailure(buildFailure);
+				}
 				AtlasLayer failedLayer = AtlasLayer::Fill;
 				if (buildFailure == PendingQuadBuildFailure::Glow)
 					failedLayer = AtlasLayer::Glow;
@@ -156,12 +263,29 @@ namespace fonthook::vectorfont
 				if (optionalFailure)
 				{
 					included[static_cast<size_t>(failedLayer)] = false;
+					if (diagnostics)
+						++diagnostics->degradedLayerCount;
 					continue;
+				}
+				if (diagnostics)
+					diagnostics->outcome = GlyphAtlasBuildOutcome::CpuMaskBuildFailure;
+				return nullptr;
+			}
+			if (diagnostics)
+			{
+				diagnostics->cpuQuadsBuilt = true;
+				diagnostics->cpuQuadCount = static_cast<UInt32>(quads.size());
+				diagnostics->cpuMaskFailure = GlyphAtlasMaskFailure::None;
+			}
+			if (quads.empty())
+			{
+				if (diagnostics)
+				{
+					diagnostics->outcome = GlyphAtlasBuildOutcome::NoDrawableCpuQuads;
+					diagnostics->expectedEmpty = true;
 				}
 				return nullptr;
 			}
-			if (quads.empty())
-				return nullptr;
 			if (quads.size() <= kMaximumQuads)
 			{
 				thread_local std::unordered_map<UInt64,
@@ -182,6 +306,8 @@ namespace fonthook::vectorfont
 				AtlasPixelMode pixelMode = useCustomA8Shader
 					? AtlasPixelMode::A8 : AtlasPixelMode::Argb32;
 				std::vector<std::shared_ptr<AtlasResource>> atlases;
+				if (diagnostics)
+					++diagnostics->cpuShapeAttempts;
 				NiTriShape* shape = TryCreateAtlasShapeForMode(font, quads, bitmaps,
 					config, rasterScale, prepareObject, pixelMode,
 					AtlasRenderMode::CpuEffects, kAtlasPadding, atlases, tileColor,
@@ -193,6 +319,11 @@ namespace fonthook::vectorfont
 					// ARGB retry rather than mixing baked colors with a custom shader.
 					useCustomA8Shader = IsA8RendererAvailable();
 					pixelMode = AtlasPixelMode::Argb32;
+					if (diagnostics)
+					{
+						++diagnostics->argbRetryAttempts;
+						++diagnostics->cpuShapeAttempts;
+					}
 					shape = TryCreateAtlasShapeForMode(font, quads, bitmaps,
 						config, rasterScale, prepareObject, pixelMode,
 						AtlasRenderMode::CpuEffects, kAtlasPadding, atlases, tileColor,
@@ -200,6 +331,8 @@ namespace fonthook::vectorfont
 				}
 				if (shape)
 				{
+					if (diagnostics)
+						diagnostics->outcome = GlyphAtlasBuildOutcome::Created;
 					AtlasResource& atlas = *atlases[0];
 					pixelMode = atlas.pixelMode;
 					const UInt64 logKey = (static_cast<UInt64>(font.iFontNum) << 32)
@@ -241,6 +374,12 @@ namespace fonthook::vectorfont
 					}
 					return shape;
 				}
+				if (diagnostics)
+					diagnostics->outcome = GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
+			}
+			else if (diagnostics)
+			{
+				diagnostics->outcome = GlyphAtlasBuildOutcome::QuadLimit;
 			}
 			if (attempt < degradationOrder.size())
 			{
@@ -249,6 +388,8 @@ namespace fonthook::vectorfont
 					if (included[static_cast<size_t>(layer)])
 					{
 						included[static_cast<size_t>(layer)] = false;
+						if (diagnostics)
+							++diagnostics->degradedLayerCount;
 						break;
 					}
 				}
@@ -258,6 +399,8 @@ namespace fonthook::vectorfont
 		if (state.atlasFailureLogCount++ < 32)
 			gLog.FormattedMessage("tnvse_freetype_font: atlas batch failed font=%u; using vector fallback",
 				font.iFontNum);
+		if (diagnostics && diagnostics->outcome == GlyphAtlasBuildOutcome::Unknown)
+			diagnostics->outcome = GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
 		return nullptr;
 	}
 }

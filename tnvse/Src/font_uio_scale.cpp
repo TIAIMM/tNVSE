@@ -90,7 +90,7 @@ namespace
 		else
 		{
 			LogFailureOnce(kLogVersion,
-				"UIO plugin version is not 230; stack scale bridge disabled");
+				"UIO plugin version is not 230; stack scale integration disabled");
 		}
 		return compatible;
 	}

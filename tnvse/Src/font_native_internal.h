@@ -1,8 +1,6 @@
 #pragma once
 
-// Private Gamebryo-native FreeType rendering model.  The legacy A8 range
-// bridge remains a whole-shape fallback and is deliberately kept out of the
-// packet/shader implementation exposed here.
+// Private Gamebryo-native FreeType rendering model.
 
 #include "font_vector_internal.h"
 
@@ -50,8 +48,7 @@ namespace fonthook::vectorfont
 		DirectImmediate,
 		DeviceReset,
 		ShaderRefresh,
-		RuntimeFault,
-		BridgeUnavailable
+		RuntimeFault
 	};
 
 	enum class NativeA8PacketPrepareFailure : UInt8
@@ -81,12 +78,21 @@ namespace fonthook::vectorfont
 		Failed
 	};
 
+	enum class NativeA8PacketPendingStage : UInt8
+	{
+		None,
+		ExternalQueue,
+		RendererPacking
+	};
+
 	struct NativeA8PacketPrepareResult
 	{
 		NativeA8PacketPrepareStatus status =
 			NativeA8PacketPrepareStatus::Failed;
 		NativeA8PacketPrepareFailure failure =
 			NativeA8PacketPrepareFailure::None;
+		NativeA8PacketPendingStage pendingStage =
+			NativeA8PacketPendingStage::None;
 	};
 
 	struct NativeA8Packet
@@ -99,6 +105,7 @@ namespace fonthook::vectorfont
 		UInt32 layer = 3;
 		UInt16 atlasPage = 0;
 		UInt32 queuedGeneration = 0;
+		bool queuedViaStock = false;
 		bool usesSdf = false;
 		bool staticSmoothSampling = false;
 	};
@@ -109,7 +116,7 @@ namespace fonthook::vectorfont
 		UInt32 pageCount = 0;
 		UInt32 quadCount = 0;
 		std::vector<NativeA8Packet> packets;
-		std::atomic<bool> bridgeNextSubmit = false;
+		std::atomic<bool> suppressNextSubmit = false;
 		std::atomic<bool> buffersRequirePurge = false;
 		std::atomic<NativeA8FallbackReason> stickyReason =
 			NativeA8FallbackReason::None;
@@ -118,6 +125,8 @@ namespace fonthook::vectorfont
 			NativeA8FallbackReason::None;
 		std::atomic<NativeA8PacketPrepareFailure> packetPrepareFailure =
 			NativeA8PacketPrepareFailure::None;
+		std::atomic<NativeA8PacketPendingStage> packetPendingStage =
+			NativeA8PacketPendingStage::None;
 		UInt32 preparedGeneration = 0;
 		bool buildComplete = false;
 	};
@@ -126,6 +135,8 @@ namespace fonthook::vectorfont
 	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason);
 	const char* NativeA8PacketPrepareFailureName(
 		NativeA8PacketPrepareFailure failure);
+	const char* NativeA8PacketPendingStageName(
+		NativeA8PacketPendingStage stage);
 
 	NativeA8ShapePayloadPtr BuildNativeA8ShapePayload(Font& font,
 		NiTriShape* facade, const A8ShapeMetadata& metadata);
@@ -139,7 +150,8 @@ namespace fonthook::vectorfont
 	void HandleNativeA8ShaderLoaderMessage(UInt32 messageType);
 	bool IsNativeA8RendererAvailable();
 	NativeA8PacketPrepareResult PrepareNativeA8PacketBuffer(
-		NativeA8Packet& packet, TileShader* shader, bool& rebuilt);
+		NativeA8Packet& packet, TileShader* shader, bool& rebuilt,
+		bool useStockPrecache);
 	void MarkNativeA8GenerationFault(UInt32 generation,
 		const char* operation, HRESULT result);
 	UInt32 GetNativeA8ShaderGeneration();
@@ -152,13 +164,9 @@ namespace fonthook::vectorfont
 	bool HookNativeA8Accumulator();
 	bool IsNativeA8AccumulatorHookCurrent();
 
-	bool EnsureA8BridgeFallbackReady();
-	void RecordNativeA8Fallback(NiTriShape* shape,
+	void RecordNativeA8Suppression(NiTriShape* shape,
 		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason,
-		bool bridgeReady);
-	void ForgetNativeA8FallbackShape(const NiTriShape* shape);
-	void RecordNativeA8Recovery(NiTriShape* shape,
-		const A8ShapeMetadata& metadata);
+		const char* phase);
 	void MarkNativeA8RuntimeFault(NativeA8ShapePayload& payload,
 		NativeA8FallbackReason reason);
 }

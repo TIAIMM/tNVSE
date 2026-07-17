@@ -79,7 +79,7 @@ namespace fonthook::vectorfont
 			size_t operator()(const NativeProfileKey& key) const
 			{
 				// FNV-1a over the exact immutable profile. Float bit identity is
-				// intentional: it preserves the bridge's compiled-constant ABI.
+				// intentional: it preserves the compiled native-constant ABI.
 				size_t hash = 2166136261u;
 				auto mix = [&hash](UInt32 value)
 				{
@@ -209,7 +209,7 @@ namespace fonthook::vectorfont
 				true, std::memory_order_acq_rel))
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: runtime fault generation=%u operation=%s hr=0x%08X; disabling this generation so subsequent submissions retry native or explicitly fall back to bridge",
+					"tnvse_freetype_native: runtime fault generation=%u operation=%s hr=0x%08X; disabling this generation so subsequent submissions retry native",
 					generation->id, operation ? operation : "unknown",
 					static_cast<UInt32>(result));
 			}
@@ -245,7 +245,7 @@ namespace fonthook::vectorfont
 					std::memory_order_acq_rel))
 				{
 					gLog.FormattedMessage(
-						"tnvse_freetype_native: invalid TileShader sidecar in UpdateConstants; native generation disabled and bridge fallback requested");
+						"tnvse_freetype_native: invalid TileShader sidecar in UpdateConstants; native generation disabled and affected submissions will be suppressed");
 				}
 				NativeShaderGeneration* current = s_publishedGeneration.load(
 					std::memory_order_acquire);
@@ -268,7 +268,7 @@ namespace fonthook::vectorfont
 			HRESULT firstFailure = D3D_OK;
 			if (profile->effectPass)
 			{
-				// Match the bridge: effect RGB owns its configured layer color while
+				// Effect RGB owns its configured layer color while
 				// the live Tile alpha still drives menu fades.
 				const float* stockTileColor = reinterpret_cast<const float*>(0x1202188);
 				const float effectTileColor[4] = {
@@ -619,7 +619,7 @@ namespace fonthook::vectorfont
 				if (current)
 					current->runtimeFault.store(true, std::memory_order_release);
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: route-transition route=bridge-next-submit reason=device-reset generation=%u phase=release; packet buffers purged",
+					"tnvse_freetype_native: generation-invalidated reason=device-reset generation=%u phase=release; packet buffers purged",
 					current ? current->id : 0);
 				return true;
 			}
@@ -628,7 +628,7 @@ namespace fonthook::vectorfont
 			if (!InitializeNativeA8Renderer(true, true))
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: route-transition route=bridge-fallback reason=device-reset phase=rebuild; no complete native generation available");
+					"tnvse_freetype_native: initialization unavailable reason=device-reset phase=rebuild; no complete native generation available");
 			}
 			return true;
 		}
@@ -694,7 +694,7 @@ namespace fonthook::vectorfont
 			if (reportFailures)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: initialization failed reason=%s; retaining generation=%u when valid and keeping the bridge as explicit fallback",
+					"tnvse_freetype_native: initialization failed reason=%s; retaining generation=%u when valid; incomplete native submissions will be suppressed",
 					failure, current ? current->id : 0);
 			}
 			return GenerationMatchesCurrentDevice(current);
@@ -704,7 +704,7 @@ namespace fonthook::vectorfont
 		s_processGenerations.push_back(candidate);
 		s_publishedGeneration.store(candidate, std::memory_order_release);
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p; bridge retained for abnormal fallback",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p",
 			candidate->id, candidate->device);
 		return true;
 	}
@@ -736,7 +736,7 @@ namespace fonthook::vectorfont
 		if (!after || after->id == beforeId)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: shader refresh did not publish a complete generation; retained generation=%u and bridge fallback",
+				"tnvse_freetype_native: shader refresh did not publish a complete generation; retained generation=%u",
 				beforeId);
 		}
 	}
@@ -828,20 +828,26 @@ namespace fonthook::vectorfont
 	}
 
 	NativeA8PacketPrepareResult PrepareNativeA8PacketBuffer(
-		NativeA8Packet& packet, TileShader* shader, bool& rebuilt)
+		NativeA8Packet& packet, TileShader* shader, bool& rebuilt,
+		bool useStockPrecache)
 	{
 		rebuilt = false;
 		auto failed = [](NativeA8PacketPrepareFailure failure)
 		{
 			return NativeA8PacketPrepareResult{
-				NativeA8PacketPrepareStatus::Failed, failure };
+				NativeA8PacketPrepareStatus::Failed, failure,
+				NativeA8PacketPendingStage::None };
 		};
-		const NativeA8PacketPrepareResult pending{
-			NativeA8PacketPrepareStatus::Pending,
-			NativeA8PacketPrepareFailure::None };
+		auto pending = [](NativeA8PacketPendingStage stage)
+		{
+			return NativeA8PacketPrepareResult{
+				NativeA8PacketPrepareStatus::Pending,
+				NativeA8PacketPrepareFailure::None, stage };
+		};
 		const NativeA8PacketPrepareResult ready{
 			NativeA8PacketPrepareStatus::Ready,
-			NativeA8PacketPrepareFailure::None };
+			NativeA8PacketPrepareFailure::None,
+			NativeA8PacketPendingStage::None };
 
 		NativeShaderGeneration* generation = s_publishedGeneration.load(
 			std::memory_order_acquire);
@@ -865,6 +871,7 @@ namespace fonthook::vectorfont
 			&& packet.queuedGeneration != generation->id)
 		{
 			packet.queuedGeneration = 0;
+			packet.queuedViaStock = false;
 		}
 
 		const UInt32 expectedIndices = data->m_uiTriListLength
@@ -876,7 +883,10 @@ namespace fonthook::vectorfont
 			const NiGeometryBufferData* buffer = data->m_pkBuffData;
 			if (!buffer)
 			{
-				return allowMissingBuffer ? pending
+				return allowMissingBuffer
+					? pending(packet.queuedViaStock
+						? NativeA8PacketPendingStage::RendererPacking
+						: NativeA8PacketPendingStage::ExternalQueue)
 					: failed(NativeA8PacketPrepareFailure::RendererBuffer);
 			}
 			if (buffer->m_hDeclaration != generation->d3dDeclaration)
@@ -894,7 +904,7 @@ namespace fonthook::vectorfont
 			const NiVBChip* vertexChip = buffer->m_ppkVBChip
 				? buffer->m_ppkVBChip[0] : nullptr;
 			if (!buffer->m_pkIB || !vertexChip || !vertexChip->m_pkVB)
-				return pending;
+				return pending(NativeA8PacketPendingStage::RendererPacking);
 			if (buffer->m_uiIndexCount < expectedIndices)
 				return failed(NativeA8PacketPrepareFailure::IndexCount);
 			return ready;
@@ -912,10 +922,18 @@ namespace fonthook::vectorfont
 		}
 		else if (packet.queuedGeneration == generation->id)
 		{
-			// A successful PrecacheGeometry call may only enqueue a PrePackObject.
-			// Do not enqueue the same packet again while that request is pending.
 			shape->SetShader(shader);
-			return pending;
+			if (!useStockPrecache || packet.queuedViaStock)
+			{
+				return pending(packet.queuedViaStock
+					? NativeA8PacketPendingStage::RendererPacking
+					: NativeA8PacketPendingStage::ExternalQueue);
+			}
+			// The virtual owner accepted the request but did not expose it to the
+			// renderer queue. Reissue this tNVSE packet through the audited stock
+			// entry; do not enqueue it through the external owner a second time.
+			packet.queuedGeneration = 0;
+			packet.queuedViaStock = false;
 		}
 
 		if (data->m_pkBuffData)
@@ -924,6 +942,7 @@ namespace fonthook::vectorfont
 			if (data->m_pkBuffData)
 				return failed(NativeA8PacketPrepareFailure::Purge);
 			packet.queuedGeneration = 0;
+			packet.queuedViaStock = false;
 		}
 
 		shape->UpdateProperties();
@@ -948,8 +967,9 @@ namespace fonthook::vectorfont
 		if (!declaration || declaration != generation->declaration.m_pObject)
 			return failed(NativeA8PacketPrepareFailure::Declaration);
 
-		const bool precached = renderer->PrecacheGeometry(shape, 18u, 4u,
-			declaration);
+		const bool precached = useStockPrecache
+			? renderer->PrecacheGeometryEx(shape, 18u, 4u, declaration)
+			: renderer->PrecacheGeometry(shape, 18u, 4u, declaration);
 		if (!precached || shape->GetShader() != shader)
 		{
 			if (data->m_pkBuffData)
@@ -959,6 +979,7 @@ namespace fonthook::vectorfont
 					return failed(NativeA8PacketPrepareFailure::Purge);
 			}
 			packet.queuedGeneration = 0;
+			packet.queuedViaStock = false;
 			return failed(precached
 				? NativeA8PacketPrepareFailure::ShaderBinding
 				: NativeA8PacketPrepareFailure::Precache);
@@ -966,6 +987,7 @@ namespace fonthook::vectorfont
 
 		rebuilt = true;
 		packet.queuedGeneration = generation->id;
+		packet.queuedViaStock = useStockPrecache;
 		const NativeA8PacketPrepareResult prepared = inspectBuffer(true);
 		if (prepared.status != NativeA8PacketPrepareStatus::Failed)
 			return prepared;
@@ -977,6 +999,7 @@ namespace fonthook::vectorfont
 				return failed(NativeA8PacketPrepareFailure::Purge);
 		}
 		packet.queuedGeneration = 0;
+		packet.queuedViaStock = false;
 		return prepared;
 	}
 }

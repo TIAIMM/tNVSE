@@ -250,7 +250,7 @@ namespace fonthook::vectorfont
 				result[bestLeft] = UnionAtlasRects(result[bestLeft], result[bestRight]);
 				result.erase(result.begin() + bestRight);
 			}
-			// A forced merge can bridge a third rectangle. Coalesce any resulting
+			// A forced merge can span a third rectangle. Coalesce any resulting
 			// overlap so no glyph or mip region is submitted twice.
 			bool coalesced = true;
 			while (coalesced)

@@ -64,13 +64,7 @@
 	<ClCompile Include="Src\font_a8_render.cpp">
 	  <Filter>Source Files\A8</Filter>
 	</ClCompile>
-	<ClCompile Include="Src\font_a8_draw.cpp">
-	  <Filter>Source Files\A8</Filter>
-	</ClCompile>
 	<ClCompile Include="Src\font_a8_hooks.cpp">
-	  <Filter>Source Files\A8</Filter>
-	</ClCompile>
-	<ClCompile Include="Src\font_a8_diagnostics.cpp">
 	  <Filter>Source Files\A8</Filter>
 	</ClCompile>
 	<ClCompile Include="Src\font_native_packets.cpp">
@@ -294,24 +288,14 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="shaders\freetype_a8.hlsl" />
-	<None Include="shaders\freetype_coverage.hlsl" />
-	<None Include="shaders\freetype_effects.hlsl" />
 	<None Include="shaders\freetype_native_common.hlsli" />
 	<None Include="shaders\freetype_native_vs.hlsl" />
 	<None Include="shaders\freetype_native_original.hlsl" />
 	<None Include="shaders\freetype_native_coverage.hlsl" />
 	<None Include="shaders\freetype_native_sdf.hlsl" />
 	<None Include="shaders\freetype_native_effects.hlsl" />
-	<None Include="shaders\freetype_sdf_compat.hlsli" />
-	<None Include="shaders\freetype_tile_compat.hlsli" />
 	<None Include="shaders\verify_shader_contract.ps1" />
     <None Include="shaders\compile_a8_shader.bat" />
-    <None Include="shaders\compiled\tnvse_freetype_a8.pso" />
-	<None Include="shaders\compiled\tnvse_freetype_coverage.pso" />
-	<None Include="shaders\compiled\tnvse_freetype_effects_fast.pso" />
-	<None Include="shaders\compiled\tnvse_freetype_effects_balanced.pso" />
-	<None Include="shaders\compiled\tnvse_freetype_effects_high.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_native_vs.vso" />
 	<None Include="shaders\compiled\tnvse_freetype_native_original.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_native_coverage.pso" />

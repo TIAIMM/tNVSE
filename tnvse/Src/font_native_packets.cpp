@@ -467,6 +467,7 @@ namespace fonthook::vectorfont
 			NiTriShape* shape = packet.shape.m_pObject;
 			NiTriShapeData* data = shape ? shape->GetModelData() : nullptr;
 			packet.queuedGeneration = 0;
+			packet.queuedViaStock = false;
 			if (!data || !data->m_pkBuffData)
 				continue;
 			if (!renderer || !shape)
@@ -491,7 +492,7 @@ namespace fonthook::vectorfont
 		std::vector<NativeA8ShapePayloadPtr> payloads;
 		std::unordered_set<NativeA8ShapePayload*> seen;
 		{
-			std::lock_guard<std::mutex> lock(State().diagnosticsMutex);
+			std::lock_guard<std::mutex> lock(State().metadataMutex);
 			for (const auto& entry : State().shapeMetadata)
 			{
 				const A8ShapeMetadataPtr& metadata = entry.second;
@@ -510,12 +511,12 @@ namespace fonthook::vectorfont
 			if (reason == NativeA8FallbackReason::None)
 			{
 				payload->stickyReason.store(reason, std::memory_order_relaxed);
-				payload->bridgeNextSubmit.store(false, std::memory_order_release);
+				payload->suppressNextSubmit.store(false, std::memory_order_release);
 			}
 			else
 			{
 				payload->stickyReason.store(reason, std::memory_order_relaxed);
-				payload->bridgeNextSubmit.store(true, std::memory_order_release);
+				payload->suppressNextSubmit.store(true, std::memory_order_release);
 			}
 			payload->packetPrepareFailure.store(
 				NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);

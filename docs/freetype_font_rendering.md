@@ -260,33 +260,65 @@ chain and then tries `U+FFFD`, `?`, and the primary face's `.notdef` glyph.
 ## Atlas and Tile shader routing
 
 The normal rendering path rasterizes hinted grayscale glyphs with FreeType at
-the effective display size. When Fallout Shader Loader 1.40 or newer,
-`tnvse_freetype_a8.pso`, and a real `D3DFMT_A8` texture are available, each
-font/style/effective-size profile uses a one-byte A8 atlas. A shape-specific
-pixel shader reads the atlas alpha as coverage and follows the game's
-Tile contract for the fill: RGB is `c0.rgb` multiplied by the per-glyph fill
-modifier. Effect ranges use their configured XML RGB directly and inherit the
-live Tile alpha only. All ranges output alpha as coverage multiplied by `c0.a`
-and their per-layer alpha. The bridge therefore sets effect `c0.rgb` to white,
-restores the complete original `c0` before every fill range, and restores it
-again on every exit path. The shaders do not consume a `COLOR0` vertex stream,
-and RGB remains straight rather than premultiplied by alpha. tNVSE does not
-replace the global TileShader. If any dependency or runtime validation fails,
-that profile automatically uses the existing
-`A8R8G8B8` atlas path, so FreeType rendering itself does not require Shader
-Loader. In that fallback, XML layer RGB and alpha are baked into the 32-bit
-atlas. The range bridge neutralizes Tile RGB only for effect ranges; the fill
-continues to use the original Tile color and all ranges retain dynamic Tile
-alpha.
+the effective display size. When Fallout Shader Loader 1.40 or newer, the
+native FreeType shader set, and a real `D3DFMT_A8` texture are available, each
+font/style/effective-size profile uses a one-byte A8 atlas. The visible text is
+represented by one facade in the stock Tile alpha list so the game retains its
+normal UI sorting. At the sorted Tile pass tNVSE expands that facade into native
+Gamebryo geometry packets grouped by layer, atlas page, shader class, and
+sampling contract. Those packets use `TileShader`, the renderer-owned shader
+declaration, and the renderer's `NiGeometryBufferData`. There is no private
+D3D draw path or whole-shape range fallback. If a marked facade cannot complete
+through the native route, that submission is suppressed and logged with a
+concrete `submission-suppressed` reason. Atlas-shape construction failure also
+returns an empty shape instead of rebuilding the text as legacy outline
+geometry, so visible FreeType text must have reached the native packet route.
 
-Range routing is installed independently of Shader Loader and is attempted
-synchronously while a shape is created and again at the first Tile render.
-This is required for `start_menu.xml`, `HUDMainMenu`, and other persistent UI
-created before NVSE `DeferredInit`. Such shapes retain all effect/fill ranges
-even when the D3D device is not ready yet; the Tile accumulator call-site route
-then establishes the exact shape context before the engine chooses its normal
-or fast draw branch. Shader discovery is staged and retryable, so a temporary
-startup ordering difference cannot permanently cache a fill-only shape.
+The native pixel shaders read atlas alpha as coverage and follow the game's
+Tile contract for the fill: RGB is `c0.rgb` multiplied by the per-glyph fill
+modifier. Effect packets use their configured XML RGB directly and inherit the
+live Tile alpha only. All packets output alpha as coverage multiplied by `c0.a`
+and their per-layer alpha. RGB remains straight rather than premultiplied by
+alpha, and tNVSE does not replace the global TileShader.
+
+Native packet buffers are requested at the sorted Tile submission, not while a
+text shape is being produced. When that submission runs on
+`TESMain::uiMainThreadID`, tNVSE preserves the installed virtual
+`PrecacheGeometry` and public `PerformPrecache` owners. This is the normal stock
+route and also lets NVTF retain its main-thread synchronization policy.
+
+`FinishAccumulating_Tiles` can instead execute on the renderer thread. NVTF
+deliberately sends a non-main-thread virtual precache request to its private
+worker, but that worker is paused while the frame is being rendered; such a
+request therefore cannot become drawable during the same Tile pass. For this
+case tNVSE sends only its own missing packets through the unvirtualized stock
+`PrecacheGeometry` entry and completes the stock `PrePackObject` queue before
+drawing. No hook or vtable slot is replaced. Both the stock geometry entry and
+the continuation of `PerformPrecache` are checked against the FalloutNV
+1.4.0.525 instruction bytes first. The continuation is the same post-detour
+entry used by NVTF itself. The stock functions acquire their own renderer
+critical sections; tNVSE no longer wraps a second blocking renderer lock around
+the public owner.
+
+The stock completion continuation is invoked through an explicit indirect x86
+ABI boundary, and the thread-local recursion guard is released by a separate
+constant-store routine. This is intentional: link-time code generation must not
+infer from the naked tail thunk that the game continuation preserves volatile
+registers. Without that boundary, a caller-saved return register can poison the
+guard after a successful completion and falsely classify the next packet group
+as recursive.
+
+Every packet is revalidated after completion. `packet-completion` records the
+chosen route, submitting thread, game main-thread ID, installed virtual entry,
+and whether the remaining state is `external-queue` or `renderer-packing`.
+Suppression records carry the same thread identity. If either audited stock
+body has been modified by another executable patch, tNVSE refuses to jump into
+unknown code and suppresses the affected marked submission. Incomplete shader
+generations, invalid atlas pages, property or hook conflicts, device-reset
+windows, and native runtime faults follow the same fail-closed policy. Startup
+discovery remains staged and retryable for `start_menu.xml`, `HUDMainMenu`, and
+other persistent UI created before NVSE `DeferredInit`; a temporary startup
+ordering difference does not permanently cache a fill-only shape.
 
 ## Vanilla UI Plus compatibility
 
@@ -327,16 +359,13 @@ route resolves the body through the hinted grayscale CPU/atlas path instead of
 sampling SDF with the stock Tile shader.
 When an effect shader is unavailable, the renderer retains the CPU mask path
 with the same global layer order. When `NVSE_PLUGIN_PATH` is defined, an
-ordinary project build copies all compiled PSOs to `Data\Shaders\Loose`.
-Custom draws snapshot the authoritative D3D device state, switch only the
-pixel shader, private constants, sampling, and pass-local write state, then
-restore everything after the draw. Effect passes preserve the caller's RGB
-blend. If the target permits alpha writes, they use a separate source-over
-alpha blend so shadows outside the fill survive off-screen UI compositing
-without reducing existing destination alpha. They also suppress stencil and
-depth writes while preserving the caller's tests. A detected contract or
-state mismatch forwards the original Tile draw instead of leaking state or
-dropping the text body.
+ordinary project build copies the native shader set to `Data\Shaders\Loose`.
+Native packets use immutable `TileShader` profiles and the game's normal render
+submission. Effect passes preserve the live Tile color/alpha contract and use
+separate source-over alpha where the target supports alpha writes, so shadows
+outside the fill survive off-screen UI compositing without reducing existing
+destination alpha. A detected profile, packet, or device-state mismatch marks
+the native generation faulty and suppresses the affected marked submission.
 
 ## Atlas allocation, mipmaps, and memory
 
@@ -375,10 +404,9 @@ engine-managed path. Non-SDF font atlases contain three mip levels (1x,
 1/2x, and 1/4x); the cache budget and upload counters include all levels.
 Limiting the chain to three levels together with four-pixel per-side packing
 padding prevents the coarsest bilinear footprint from reaching a neighboring
-glyph. Text spanning pages is sorted into contiguous layer/page draw ranges;
-the range bridge selects the corresponding texture before each submission and
-restores the caller's original texture afterward. Custom draws force mip level zero as the base and a zero LOD bias, then
-restore the caller's complete sampler state.
+glyph. Text spanning pages is sorted into contiguous layer/page native packets;
+each packet owns the corresponding atlas property and texture. SDF packets use
+mip level zero and a zero LOD bias through their immutable shader profile.
 
 ## Scope and fallbacks
 
@@ -393,7 +421,8 @@ at the single configured source multiplier and lets the existing world
 transform minify or magnify the atlas. Trilinear sampling is enabled for scaled
 A8 grayscale shapes; SDF ranges retain level-zero derivative-based sampling.
 Neither case creates a resolution- or zoom-specific profile. If atlas creation
-fails, the renderer falls back to the libtess2 outline path. HarfBuzz
+fails, the affected FreeType shape is empty and the detailed build diagnostic
+identifies the failed stage. HarfBuzz
 shaping is limited to horizontal LTR text in the active DBCS path; the
 FreeType-only rich-text topology keeps one Windows-1252 byte per `CharData`,
 uses pair layout without GSUB before wrapping/pagination, and then normalizes

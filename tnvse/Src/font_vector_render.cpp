@@ -1,5 +1,7 @@
 #include "font_vector_internal.h"
 
+#include "font_native_internal.h"
+
 #include "font_manager.h"
 #include "load_config.h"
 #include "native_calls.h"
@@ -54,7 +56,49 @@ namespace fonthook
 		std::mutex s_routeLogMutex;
 		std::unordered_set<UInt64> s_loggedGlyphRoutes;
 		bool s_loggedMergedShapeDiagnostics = false;
-		bool s_loggedPaletteRangeFallback = false;
+		bool s_loggedPaletteNativePreparationFailure = false;
+		UInt32 s_atlasEmptyLogCount = 0;
+		UInt32 s_atlasFailureLogCount = 0;
+
+		const char* GlyphAtlasBuildOutcomeName(
+			vectorfont::GlyphAtlasBuildOutcome outcome)
+		{
+			switch (outcome)
+			{
+			case vectorfont::GlyphAtlasBuildOutcome::Created:
+				return "created";
+			case vectorfont::GlyphAtlasBuildOutcome::EmptyInput:
+				return "empty-input";
+			case vectorfont::GlyphAtlasBuildOutcome::NoDrawableShaderQuads:
+				return "no-drawable-shader-quads";
+			case vectorfont::GlyphAtlasBuildOutcome::NoDrawableCpuQuads:
+				return "no-drawable-cpu-quads";
+			case vectorfont::GlyphAtlasBuildOutcome::CpuMaskBuildFailure:
+				return "cpu-mask-build";
+			case vectorfont::GlyphAtlasBuildOutcome::QuadLimit:
+				return "quad-limit";
+			case vectorfont::GlyphAtlasBuildOutcome::AtlasOrShapeFailure:
+				return "atlas-or-shape";
+			default:
+				return "unknown";
+			}
+		}
+
+		const char* GlyphAtlasMaskFailureName(
+			vectorfont::GlyphAtlasMaskFailure failure)
+		{
+			switch (failure)
+			{
+			case vectorfont::GlyphAtlasMaskFailure::Fill:
+				return "fill";
+			case vectorfont::GlyphAtlasMaskFailure::Glow:
+				return "glow";
+			case vectorfont::GlyphAtlasMaskFailure::Outline:
+				return "outline";
+			default:
+				return "none";
+			}
+		}
 
 		float SanitizeColorChannel(float value, float fallback = 1.0f)
 		{
@@ -575,11 +619,11 @@ namespace fonthook
 			{
 				return CreateEmptyVectorShape(&font, prepareObject);
 			}
-			if (!rangeShapePrepared && !s_loggedPaletteRangeFallback)
+			if (!rangeShapePrepared && !s_loggedPaletteNativePreparationFailure)
 			{
-				s_loggedPaletteRangeFallback = true;
+				s_loggedPaletteNativePreparationFailure = true;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: vector palette range bridge unavailable; retaining readable stock Tile fallback");
+					"tnvse_freetype_font: native range preparation unavailable; retaining readable stock Tile geometry");
 			}
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
@@ -714,112 +758,79 @@ namespace fonthook
 		if (!m_impl->available)
 			return CreateEmptyVectorShape(m_impl->font, m_impl->prepareObject);
 
+		vectorfont::GlyphAtlasBuildDiagnostics atlasDiagnostics;
 		if (NiTriShape* atlasShape = vectorfont::TryCreateGlyphAtlasShape(
 			*m_impl->font, *m_impl->runtime, m_impl->glyphs,
 			m_impl->rasterScale, m_impl->prepareObject, m_impl->tileColor,
-			m_impl->suppressEffects))
+			m_impl->suppressEffects, &atlasDiagnostics))
 		{
 			return atlasShape;
 		}
-
-		// Build the old outline geometry only when atlas creation failed.
-		const vectorfont::FontConfig& config = vectorfont::GetRuntimeConfig(*m_impl->runtime);
-		for (const vectorfont::AtlasGlyphInstance& instance : m_impl->glyphs)
+		NiTriShape* emptyShape = CreateEmptyVectorShape(
+			m_impl->font, m_impl->prepareObject);
+		if (g_bEnableFreeTypeFontRenderingLog)
 		{
-			const NiColorA* color = &instance.color;
-			std::shared_ptr<const vectorfont::GlyphMesh> fill = vectorfont::GetGlyphMesh(
-				*m_impl->runtime, instance.glyph, vectorfont::GlyphMeshType::Fill);
-			if (!fill)
+			std::lock_guard<std::mutex> lock(s_routeLogMutex);
+			const bool actualFailure = !atlasDiagnostics.expectedEmpty || !emptyShape;
+			UInt32& logCount = actualFailure
+				? s_atlasFailureLogCount : s_atlasEmptyLogCount;
+			const UInt32 maximumLogs = actualFailure ? 8 : 4;
+			if (logCount < maximumLogs)
 			{
-				LogGeometryFailure(config.fontId, instance.glyph.codePoint,
-					"fill tessellation failed");
-				continue;
-			}
-			if (!m_impl->suppressEffects && config.shadow.enabled && !fill->vertices.empty())
-			{
-				AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Shadow)],
-					VectorLayer::Shadow, *fill, instance.pen,
-					ResolveEffectColor(config.shadow, color, m_impl->tileColor),
-					config.shadow.x, config.shadow.y);
-			}
-			if (!m_impl->suppressEffects && config.glow.enabled)
-			{
-				auto glow = vectorfont::GetGlyphMesh(*m_impl->runtime,
-					instance.glyph, vectorfont::GlyphMeshType::Glow);
-				if (glow && !glow->vertices.empty())
-					AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Glow)],
-						VectorLayer::Glow, *glow, instance.pen,
-						ResolveEffectColor(config.glow, color, m_impl->tileColor), 0.0f, 0.0f);
-			}
-			if (!m_impl->suppressEffects && config.outline.enabled)
-			{
-				auto outline = vectorfont::GetGlyphMesh(*m_impl->runtime,
-					instance.glyph, vectorfont::GlyphMeshType::Outline);
-				if (outline && !outline->vertices.empty())
-					AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Outline)],
-						VectorLayer::Outline, *outline, instance.pen,
-						ResolveEffectColor(config.outline, color, m_impl->tileColor), 0.0f, 0.0f);
-			}
-			if (!fill->vertices.empty())
-			{
-				AppendMesh(m_impl->layers[static_cast<size_t>(VectorLayer::Fill)],
-					VectorLayer::Fill, *fill, instance.pen,
-					ResolveFillColor(config.fontColor, color, m_impl->tileColor), 0.0f, 0.0f);
-			}
-		}
-
-		std::array<bool, kVectorLayerCount> included = {};
-		for (size_t i = 0; i < included.size(); ++i)
-			included[i] = !m_impl->layers[i].vertices.empty();
-
-		UInt32 vertexCount = 0;
-		UInt32 triangleCount = 0;
-		std::array<bool, kVectorLayerCount> dropped = {};
-		const std::array<VectorLayer, 3> degradationOrder = {
-			VectorLayer::Glow,
-			VectorLayer::Shadow,
-			VectorLayer::Outline,
-		};
-		for (VectorLayer layer : degradationOrder)
-		{
-			if (FitsSingleShape(m_impl->layers, included, vertexCount, triangleCount))
-				break;
-			const size_t layerIndex = static_cast<size_t>(layer);
-			if (included[layerIndex])
-			{
-				included[layerIndex] = false;
-				dropped[layerIndex] = true;
-			}
-		}
-
-		if (!FitsSingleShape(m_impl->layers, included, vertexCount, triangleCount))
-		{
-			if (s_geometryFailureLogCount < kGeometryFailureLogLimit)
-			{
-				++s_geometryFailureLogCount;
+				++logCount;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: merged fill exceeds single-shape limit font=%u vertices=%u triangles=%u; returning empty shape",
-					m_impl->font->iFontNum, vertexCount, triangleCount);
+					actualFailure
+						? "tnvse_freetype_native: submission-suppressed reason=atlas-shape-build phase=shape-build classification=%s outcome=%s expectedEmpty=%u font=%u fontObject=%p runtime=%p emptyShape=%p glyphs=%u missingMetrics=%u zeroByteLength=%u controls=%u spaces=%u firstCodepoint=U+%04X firstEncoded=0x%04X firstGlyph=%u firstBytes=%u firstRole=%s scale=%.3f prepare=%u suppressEffects=%u wantsShader=%u hasEffects=%u sdfFill=%u a8Renderer=%u requestedQuality=%u resolvedQuality=%u shaderBuilt=%u shaderQuads=%u shaderShapeAttempts=%u shaderShapeFailed=%u cpuBuilt=%u cpuQuads=%u cpuAttempts=%u cpuMaskFailure=%s degradedLayers=%u cpuShapeAttempts=%u argbRetries=%u nativeReady=%u nativeGeneration=%u thread=%u"
+						: "tnvse_freetype_native: empty-shape reason=atlas-shape-build phase=shape-build classification=%s outcome=%s expectedEmpty=%u font=%u fontObject=%p runtime=%p emptyShape=%p glyphs=%u missingMetrics=%u zeroByteLength=%u controls=%u spaces=%u firstCodepoint=U+%04X firstEncoded=0x%04X firstGlyph=%u firstBytes=%u firstRole=%s scale=%.3f prepare=%u suppressEffects=%u wantsShader=%u hasEffects=%u sdfFill=%u a8Renderer=%u requestedQuality=%u resolvedQuality=%u shaderBuilt=%u shaderQuads=%u shaderShapeAttempts=%u shaderShapeFailed=%u cpuBuilt=%u cpuQuads=%u cpuAttempts=%u cpuMaskFailure=%s degradedLayers=%u cpuShapeAttempts=%u argbRetries=%u nativeReady=%u nativeGeneration=%u thread=%u",
+						actualFailure ? "failure" : "expected-empty",
+						GlyphAtlasBuildOutcomeName(atlasDiagnostics.outcome),
+						atlasDiagnostics.expectedEmpty ? 1 : 0,
+						m_impl->font->iFontNum, static_cast<void*>(m_impl->font),
+						static_cast<void*>(m_impl->runtime), static_cast<void*>(emptyShape),
+						atlasDiagnostics.inputGlyphCount,
+						atlasDiagnostics.missingMetricsCount,
+						atlasDiagnostics.zeroByteLengthCount,
+						atlasDiagnostics.controlGlyphCount,
+						atlasDiagnostics.spaceGlyphCount,
+						atlasDiagnostics.firstCodePoint,
+						atlasDiagnostics.firstEncodedCode,
+						atlasDiagnostics.firstGlyphIndex,
+						static_cast<UInt32>(atlasDiagnostics.firstByteLength),
+						!atlasDiagnostics.inputGlyphCount ? "none"
+							: atlasDiagnostics.firstByteClass
+								== static_cast<UInt8>(VectorFontByteClass::DoubleByte)
+									? "doubleByte" : "singleByte",
+						m_impl->rasterScale, m_impl->prepareObject ? 1 : 0,
+						m_impl->suppressEffects ? 1 : 0,
+						atlasDiagnostics.wantsShaderPath ? 1 : 0,
+						atlasDiagnostics.hasEffects ? 1 : 0,
+						atlasDiagnostics.requestsSdfFill ? 1 : 0,
+						atlasDiagnostics.a8RendererAvailable ? 1 : 0,
+						static_cast<UInt32>(atlasDiagnostics.requestedQuality),
+						static_cast<UInt32>(atlasDiagnostics.resolvedQuality),
+						atlasDiagnostics.shaderQuadsBuilt ? 1 : 0,
+						atlasDiagnostics.shaderQuadCount,
+						atlasDiagnostics.shaderShapeAttempts,
+						atlasDiagnostics.shaderAtlasOrShapeFailed ? 1 : 0,
+						atlasDiagnostics.cpuQuadsBuilt ? 1 : 0,
+						atlasDiagnostics.cpuQuadCount,
+						atlasDiagnostics.cpuAttempts,
+						GlyphAtlasMaskFailureName(atlasDiagnostics.cpuMaskFailure),
+						atlasDiagnostics.degradedLayerCount,
+						atlasDiagnostics.cpuShapeAttempts,
+						atlasDiagnostics.argbRetryAttempts,
+						vectorfont::IsNativeA8RendererAvailable() ? 1 : 0,
+						vectorfont::GetNativeA8ShaderGeneration(), GetCurrentThreadId());
 			}
-			return CreateEmptyVectorShape(m_impl->font, m_impl->prepareObject);
+			else if (logCount == maximumLogs)
+			{
+				++logCount;
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: atlas-shape-build %s logs suppressed after %u entries",
+					actualFailure ? "failure" : "expected-empty", maximumLogs);
+			}
 		}
-
-		if (g_bEnableFreeTypeFontRenderingLog
-			&& (dropped[static_cast<size_t>(VectorLayer::Glow)]
-				|| dropped[static_cast<size_t>(VectorLayer::Shadow)]
-				|| dropped[static_cast<size_t>(VectorLayer::Outline)]))
-		{
-			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: merged shape degraded font=%u dropGlow=%d dropShadow=%d dropOutline=%d vertices=%u triangles=%u",
-				m_impl->font->iFontNum,
-				dropped[static_cast<size_t>(VectorLayer::Glow)] ? 1 : 0,
-				dropped[static_cast<size_t>(VectorLayer::Shadow)] ? 1 : 0,
-				dropped[static_cast<size_t>(VectorLayer::Outline)] ? 1 : 0,
-				vertexCount, triangleCount);
-		}
-
-		return CreateMergedShape(*m_impl->font, m_impl->layers, included,
-			vertexCount, triangleCount, m_impl->prepareObject, m_impl->tileColor);
+		return emptyShape;
 	}
 
 	void BeginFreeTypeRichTextRender(NiNode* parent)

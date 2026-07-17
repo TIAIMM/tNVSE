@@ -152,9 +152,7 @@
 	<ClCompile Include="Src\font_atlas_shape.cpp" />
 	<ClCompile Include="Src\font_atlas_snapshot.cpp" />
 	<ClCompile Include="Src\font_a8_render.cpp" />
-	<ClCompile Include="Src\font_a8_draw.cpp" />
 	<ClCompile Include="Src\font_a8_hooks.cpp" />
-	<ClCompile Include="Src\font_a8_diagnostics.cpp" />
 	<ClCompile Include="Src\font_native_packets.cpp" />
 	<ClCompile Include="Src\font_native_accumulator.cpp" />
 	<ClCompile Include="Src\font_native_shader.cpp" />
@@ -203,24 +201,14 @@
   <ItemGroup>
     <None Include="exports.def" />
     <None Include="packages.config" />
-	<None Include="shaders\freetype_a8.hlsl" />
-	<None Include="shaders\freetype_coverage.hlsl" />
-	<None Include="shaders\freetype_effects.hlsl" />
 	<None Include="shaders\freetype_native_common.hlsli" />
 	<None Include="shaders\freetype_native_vs.hlsl" />
 	<None Include="shaders\freetype_native_original.hlsl" />
 	<None Include="shaders\freetype_native_coverage.hlsl" />
 	<None Include="shaders\freetype_native_sdf.hlsl" />
 	<None Include="shaders\freetype_native_effects.hlsl" />
-	<None Include="shaders\freetype_sdf_compat.hlsli" />
-	<None Include="shaders\freetype_tile_compat.hlsli" />
 	<None Include="shaders\verify_shader_contract.ps1" />
 	<None Include="shaders\compile_a8_shader.bat" />
-	<None Include="shaders\compiled\tnvse_freetype_a8.pso" />
-	<None Include="shaders\compiled\tnvse_freetype_coverage.pso" />
-	<None Include="shaders\compiled\tnvse_freetype_effects_fast.pso" />
-	<None Include="shaders\compiled\tnvse_freetype_effects_balanced.pso" />
-	<None Include="shaders\compiled\tnvse_freetype_effects_high.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_native_vs.vso" />
 	<None Include="shaders\compiled\tnvse_freetype_native_original.pso" />
 	<None Include="shaders\compiled\tnvse_freetype_native_coverage.pso" />
@@ -283,17 +271,12 @@
     <Exec Command="&quot;$(ProjectDir)shaders\compile_a8_shader.bat&quot;" />
   </Target>
   <Target Name="InstallFreeTypeA8Shader" AfterTargets="Build"
-          Condition="Exists('$(ProjectDir)shaders\compiled\tnvse_freetype_a8.pso') and '$(NVSE_PLUGIN_PATH)' != ''">
+          Condition="Exists('$(ProjectDir)shaders\compiled\tnvse_freetype_native_vs.vso') and '$(NVSE_PLUGIN_PATH)' != ''">
     <PropertyGroup>
       <_FreeTypeShaderOutputDir>$(NVSE_PLUGIN_PATH)\..\..\Shaders\Loose</_FreeTypeShaderOutputDir>
     </PropertyGroup>
     <MakeDir Directories="$(_FreeTypeShaderOutputDir)" />
     <ItemGroup>
-      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_a8.pso" />
-      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_coverage.pso" />
-      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_effects_fast.pso" />
-      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_effects_balanced.pso" />
-      <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_effects_high.pso" />
       <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_native_vs.vso" />
       <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_native_original.pso" />
       <_FreeTypeShaderFiles Include="$(ProjectDir)shaders\compiled\tnvse_freetype_native_coverage.pso" />

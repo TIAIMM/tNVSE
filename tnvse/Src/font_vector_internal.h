@@ -243,6 +243,59 @@ namespace fonthook::vectorfont
 		NiColorA color;
 	};
 
+	enum class GlyphAtlasBuildOutcome : UInt8
+	{
+		Unknown = 0,
+		Created,
+		EmptyInput,
+		NoDrawableShaderQuads,
+		NoDrawableCpuQuads,
+		CpuMaskBuildFailure,
+		QuadLimit,
+		AtlasOrShapeFailure,
+	};
+
+	enum class GlyphAtlasMaskFailure : UInt8
+	{
+		None = 0,
+		Fill,
+		Glow,
+		Outline,
+	};
+
+	struct GlyphAtlasBuildDiagnostics
+	{
+		GlyphAtlasBuildOutcome outcome = GlyphAtlasBuildOutcome::Unknown;
+		GlyphAtlasMaskFailure cpuMaskFailure = GlyphAtlasMaskFailure::None;
+		UInt32 inputGlyphCount = 0;
+		UInt32 missingMetricsCount = 0;
+		UInt32 zeroByteLengthCount = 0;
+		UInt32 controlGlyphCount = 0;
+		UInt32 spaceGlyphCount = 0;
+		UInt32 shaderQuadCount = 0;
+		UInt32 cpuQuadCount = 0;
+		UInt32 cpuAttempts = 0;
+		UInt32 degradedLayerCount = 0;
+		UInt32 shaderShapeAttempts = 0;
+		UInt32 cpuShapeAttempts = 0;
+		UInt32 argbRetryAttempts = 0;
+		UInt32 firstEncodedCode = 0;
+		UInt32 firstCodePoint = 0;
+		UInt32 firstGlyphIndex = 0;
+		UInt8 firstByteLength = 0;
+		UInt8 firstByteClass = 0;
+		UInt8 requestedQuality = 0;
+		UInt8 resolvedQuality = 0;
+		bool expectedEmpty = false;
+		bool wantsShaderPath = false;
+		bool hasEffects = false;
+		bool requestsSdfFill = false;
+		bool a8RendererAvailable = false;
+		bool shaderQuadsBuilt = false;
+		bool shaderAtlasOrShapeFailed = false;
+		bool cpuQuadsBuilt = false;
+	};
+
 	struct RuntimeFont;
 
 	extern std::unordered_map<UInt32, FontConfig> g_configs;
@@ -294,9 +347,9 @@ namespace fonthook::vectorfont
 	void PumpFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
-		bool abPrepareObject, const NiColorA& arTileColor, bool abSuppressEffects);
+		bool abPrepareObject, const NiColorA& arTileColor, bool abSuppressEffects,
+		GlyphAtlasBuildDiagnostics* apDiagnostics = nullptr);
 	bool IsA8RendererAvailable();
-	bool IsAtlasRangeRendererAvailable();
 	bool IsA8EffectRendererAvailable(EffectQuality aeQuality);
 	bool ResolveA8EffectQuality(EffectQuality aeRequested, EffectQuality& arResolved);
 	bool PrepareA8AtlasShape(Font& arFont, NiTriShape* apShape, UInt32 auiFontId,
