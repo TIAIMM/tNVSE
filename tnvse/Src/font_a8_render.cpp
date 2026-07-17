@@ -369,7 +369,7 @@ namespace fonthook::vectorfont
 			shape, *metadata, packetTemplateHash, geometryOrigin);
 		metadata->nativePayload = payloadTemplate
 			? InstantiateNativeA8ShapePayload(font, shape, *metadata,
-				*payloadTemplate, geometryOrigin)
+				payloadTemplate, geometryOrigin)
 			: NativeA8ShapePayloadPtr{};
 		if (!metadata->nativePayload)
 			return false;

@@ -154,6 +154,7 @@
 	<ClCompile Include="Src\font_a8_render.cpp" />
 	<ClCompile Include="Src\font_a8_hooks.cpp" />
 	<ClCompile Include="Src\font_native_packets.cpp" />
+	<ClCompile Include="Src\font_native_ring.cpp" />
 	<ClCompile Include="Src\font_native_accumulator.cpp" />
 	<ClCompile Include="Src\font_native_shader.cpp" />
 	<ClCompile Include="Src\font_native_fallback.cpp" />

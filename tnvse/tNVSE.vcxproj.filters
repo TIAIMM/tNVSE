@@ -70,6 +70,9 @@
 	<ClCompile Include="Src\font_native_packets.cpp">
 	  <Filter>Source Files\A8</Filter>
 	</ClCompile>
+	<ClCompile Include="Src\font_native_ring.cpp">
+	  <Filter>Source Files\A8</Filter>
+	</ClCompile>
 	<ClCompile Include="Src\font_native_accumulator.cpp">
 	  <Filter>Source Files\A8</Filter>
 	</ClCompile>

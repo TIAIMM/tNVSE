@@ -1,14 +1,8 @@
 #include "font_a8_internal.h"
 #include "font_native_internal.h"
 
-#include "BSShaderProperty.hpp"
 #include "NiBound.hpp"
-#include "NiMemory.hpp"
-#include "NiPoint4.hpp"
-#include "NiTexture.hpp"
-#include "NiTexturingProperty.hpp"
 #include "NiTriShapeData.hpp"
-#include "NiDX9Renderer.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -21,35 +15,6 @@ namespace fonthook::vectorfont
 {
 	namespace
 	{
-		inline constexpr UInt32 kScissorTriShapeSize = 0xD4;
-		inline constexpr UInt32 kScissorTailOffset = 0xC4;
-		inline constexpr UInt32 kScissorTailSize = 0x10;
-
-		// Font::MakeTriShape returns a BSScissorTriShape and a TileShaderProperty,
-		// but this CommonLib snapshot does not expose either concrete definition.
-		// Keep the two private views here, guarded by the reversed retail layouts.
-		struct TileShaderPropertyView : BSShaderProperty
-		{
-			NiTexturePtr sourceTexture;
-			NiTexturePtr alphaTexture;
-			NiColorA overlayColor;
-			float tileAlpha = 1.0f;
-			NiPoint4 textureTransform;
-			NiTexturingProperty::ClampMode clampMode =
-				NiTexturingProperty::CLAMP_S_CLAMP_T;
-			bool byte90 = false;
-			bool rotates = false;
-			bool hasVertexColors = false;
-			bool noTexture = false;
-			BSStringT<char> texturePath;
-			RECT scissorRect = {};
-			bool useScissorTest = false;
-		};
-
-		static_assert(sizeof(NiTriShape) == kScissorTailOffset);
-		static_assert(kScissorTailOffset + kScissorTailSize == kScissorTriShapeSize);
-		static_assert(sizeof(TileShaderPropertyView) == 0xB0);
-
 		struct PacketSpan
 		{
 			size_t firstRange = 0;
@@ -67,16 +32,10 @@ namespace fonthook::vectorfont
 			std::array<float, 16> constants = {};
 		};
 
-		TileShaderPropertyView* GetTileProperty(NiTriShape* shape)
+		bool HasTileProperty(const NiTriShape* shape)
 		{
 			NiShadeProperty* property = shape ? shape->GetShadeProperty() : nullptr;
-			return property && property->m_eShaderType == NiShadeProperty::PROP_Tile
-				? reinterpret_cast<TileShaderPropertyView*>(property) : nullptr;
-		}
-
-		const TileShaderPropertyView* GetTileProperty(const NiTriShape* shape)
-		{
-			return GetTileProperty(const_cast<NiTriShape*>(shape));
+			return property && property->m_eShaderType == NiShadeProperty::PROP_Tile;
 		}
 
 		bool ResolveNativeShaderClass(A8CompiledShaderClass source,
@@ -222,37 +181,26 @@ namespace fonthook::vectorfont
 				&& metadata.indexCount == sourceIndexCount;
 		}
 
-		bool InstallVertexColors(NiTriShapeData& data)
-		{
-			if (!data.m_usVertices || !data.m_pkTexture || data.m_pkColor
-				|| data.m_pkBuffData)
-				return false;
-			NiColorA* colors = NiAlloc<NiColorA>(data.m_usVertices);
-			if (!colors)
-				return false;
-			data.m_pkColor = colors;
-			return true;
-		}
-
 		bool FillPacketTemplate(const PacketSpan& span,
 			const A8ShapeMetadata& metadata, const NiTriShapeData& source,
 			const NiPoint3& geometryOrigin, NativeA8PacketTemplate& destination)
 		{
 			destination.vertices.resize(span.vertexCount);
-			destination.texture.resize(span.vertexCount);
-			destination.colors.assign(span.vertexCount,
-				NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f });
-			destination.indices.resize(span.indexCount);
+			std::vector<NiPoint3> boundVertices(span.vertexCount);
 			for (UInt32 index = 0; index < span.vertexCount; ++index)
 			{
 				const NiPoint3& vertex = source.m_pkVertex[span.firstVertex + index];
-				destination.vertices[index] = NiPoint3(
-					vertex.x - geometryOrigin.x,
-					vertex.y - geometryOrigin.y,
-					vertex.z - geometryOrigin.z);
+				const NiPoint2& texture = source.m_pkTexture[span.firstVertex + index];
+				const NiPoint3 relative(vertex.x - geometryOrigin.x,
+					vertex.y - geometryOrigin.y, vertex.z - geometryOrigin.z);
+				boundVertices[index] = relative;
+				NativeA8GpuVertex& output = destination.vertices[index];
+				output.x = relative.x;
+				output.y = relative.y;
+				output.z = relative.z;
+				output.u = texture.x;
+				output.v = texture.y;
 			}
-			std::copy_n(source.m_pkTexture + span.firstVertex,
-				span.vertexCount, destination.texture.begin());
 
 			const UInt32 packetVertexEnd = span.firstVertex + span.vertexCount;
 			for (size_t ordinal = 0; ordinal < span.rangeCount; ++ordinal)
@@ -264,116 +212,38 @@ namespace fonthook::vectorfont
 				{
 					return false;
 				}
-				std::fill_n(destination.colors.begin()
-					+ (range.firstVertex - span.firstVertex),
-					range.vertexCount, range.colorModifier);
+				const UInt32 first = range.firstVertex - span.firstVertex;
+				for (UInt32 index = first; index < first + range.vertexCount; ++index)
+				{
+					NativeA8GpuVertex& vertex = destination.vertices[index];
+					vertex.r = range.colorModifier.r;
+					vertex.g = range.colorModifier.g;
+					vertex.b = range.colorModifier.b;
+					vertex.a = range.colorModifier.a;
+				}
 			}
 
-			for (UInt32 index = 0; index < span.indexCount; ++index)
+			static constexpr UInt16 kCanonicalQuad[6] = { 0, 2, 1, 0, 3, 2 };
+			const UInt32 quadCount = span.vertexCount / 4u;
+			if (span.indexCount != quadCount * 6u
+				|| quadCount > kNativeA8MaximumQuads)
 			{
-				const UInt32 sourceIndex =
-					source.m_pusTriList[span.startIndex + index];
-				if (sourceIndex < span.firstVertex || sourceIndex >= packetVertexEnd)
-					return false;
-				destination.indices[index] = static_cast<UInt16>(
-					sourceIndex - span.firstVertex);
+				return false;
+			}
+			for (UInt32 quad = 0; quad < quadCount; ++quad)
+			{
+				for (UInt32 ordinal = 0; ordinal < 6u; ++ordinal)
+				{
+					const UInt32 sourceIndex = source.m_pusTriList[
+						span.startIndex + quad * 6u + ordinal];
+					const UInt32 expected = span.firstVertex + quad * 4u
+						+ kCanonicalQuad[ordinal];
+					if (sourceIndex != expected || sourceIndex >= packetVertexEnd)
+						return false;
+				}
 			}
 			ThisStdCall(0xA7EE30, &destination.bound,
-				static_cast<UInt16>(destination.vertices.size()),
-				destination.vertices.data());
-			return true;
-		}
-
-		bool BindPacketAtlasPage(NiTriShape& shape,
-			const A8ShapeMetadata& metadata, UInt16 page)
-		{
-			if (page >= metadata.effects.atlasProperties.size()
-				|| page >= metadata.effects.atlasTextures.size()
-				|| !metadata.effects.atlasProperties[page]
-				|| !metadata.effects.atlasTextures[page])
-			{
-				return false;
-			}
-
-			shape.RemoveProperty(NiProperty::TEXTURING);
-			shape.AddProperty(metadata.effects.atlasProperties[page]);
-			shape.UpdateProperties();
-			TileShaderPropertyView* tile = GetTileProperty(&shape);
-			if (!tile)
-				return false;
-			ThisStdCall(0xBB7A10, tile,
-				metadata.effects.atlasTextures[page].m_pObject);
-			return tile->sourceTexture.m_pObject != nullptr;
-		}
-
-		void CopyScissorTail(const NiTriShape& source, NiTriShape& destination)
-		{
-			std::memcpy(reinterpret_cast<UInt8*>(&destination) + kScissorTailOffset,
-				reinterpret_cast<const UInt8*>(&source) + kScissorTailOffset,
-				kScissorTailSize);
-		}
-
-		void CopyTileDynamicState(const TileShaderPropertyView& source,
-			TileShaderPropertyView& destination)
-		{
-			destination.m_usFlags = source.m_usFlags;
-			destination.ulFlags[0] = source.ulFlags[0];
-			destination.ulFlags[1] = source.ulFlags[1];
-			destination.fAlpha = source.fAlpha;
-			destination.fFadeAlpha = source.fFadeAlpha;
-			destination.fEnvMapScale = source.fEnvMapScale;
-			destination.fLODFade = source.fLODFade;
-			destination.fDepthBias = source.fDepthBias;
-			destination.uiShaderIndex = source.uiShaderIndex;
-			destination.alphaTexture = source.alphaTexture;
-			destination.overlayColor = source.overlayColor;
-			destination.tileAlpha = source.tileAlpha;
-			destination.textureTransform = source.textureTransform;
-			destination.clampMode = source.clampMode;
-			destination.byte90 = source.byte90;
-			destination.rotates = source.rotates;
-			destination.hasVertexColors = source.hasVertexColors;
-			destination.noTexture = source.noTexture;
-			destination.scissorRect = source.scissorRect;
-			destination.useScissorTest = source.useScissorTest;
-			// sourceTexture and texturePath deliberately remain page-specific.
-		}
-
-		bool SyncPacketState(const NiTriShape& facade, NiTriShape& packet)
-		{
-			const TileShaderPropertyView* sourceTile = GetTileProperty(&facade);
-			TileShaderPropertyView* packetTile = GetTileProperty(&packet);
-			if (!sourceTile || !packetTile || !packetTile->sourceTexture
-				|| !packet.GetTexturingProperty())
-			{
-				return false;
-			}
-
-			packet.m_kLocal = facade.m_kLocal;
-			packet.m_kWorld = facade.m_kWorld;
-			CopyScissorTail(facade, packet);
-
-			if (facade.m_pWorldBound)
-			{
-				if (!packet.m_pWorldBound)
-					packet.CreateWorldBoundIfMissing();
-				if (!packet.m_pWorldBound)
-					return false;
-				*packet.m_pWorldBound = *facade.m_pWorldBound;
-			}
-			packet.m_uiFlags = facade.m_uiFlags;
-
-			packet.m_kProperties.m_spAlphaProperty =
-				facade.m_kProperties.m_spAlphaProperty;
-			packet.m_kProperties.m_spCullingProperty =
-				facade.m_kProperties.m_spCullingProperty;
-			packet.m_kProperties.m_spMaterialProperty =
-				facade.m_kProperties.m_spMaterialProperty;
-			packet.m_kProperties.m_spStencilProperty =
-				facade.m_kProperties.m_spStencilProperty;
-			packet.m_kProperties.m_spUnknownProperty =
-				facade.m_kProperties.m_spUnknownProperty;
-			CopyTileDynamicState(*sourceTile, *packetTile);
+				static_cast<UInt16>(boundVertices.size()), boundVertices.data());
 			return true;
 		}
 	}
@@ -385,7 +255,7 @@ namespace fonthook::vectorfont
 			BuildNativeA8PayloadTemplate(facade, metadata, NiPoint3());
 		return payloadTemplate
 			? InstantiateNativeA8ShapePayload(font, facade, metadata,
-				*payloadTemplate, NiPoint3())
+				payloadTemplate, NiPoint3())
 			: NativeA8ShapePayloadPtr{};
 	}
 
@@ -394,7 +264,7 @@ namespace fonthook::vectorfont
 		const NiPoint3& geometryOrigin)
 	{
 		NiTriShapeData* sourceData = facade ? facade->GetModelData() : nullptr;
-		if (!sourceData || !GetTileProperty(facade) || !metadata.quadCount
+		if (!sourceData || !HasTileProperty(facade) || !metadata.quadCount
 			|| metadata.effects.atlasProperties.empty()
 			|| metadata.effects.atlasProperties.size()
 				!= metadata.effects.atlasTextures.size()
@@ -417,8 +287,7 @@ namespace fonthook::vectorfont
 		for (const PacketSpan& span : spans)
 		{
 			const UInt32 packetQuadCount = span.vertexCount / 4u;
-			if (!packetQuadCount
-				|| packetQuadCount > static_cast<UInt32>(std::numeric_limits<int>::max()))
+			if (!packetQuadCount || packetQuadCount > kNativeA8MaximumQuads)
 			{
 				return {};
 			}
@@ -440,69 +309,39 @@ namespace fonthook::vectorfont
 
 	NativeA8ShapePayloadPtr InstantiateNativeA8ShapePayload(Font& font,
 		NiTriShape* facade, const A8ShapeMetadata& metadata,
-		const NativeA8PayloadTemplate& payloadTemplate,
+		NativeA8PayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin)
 	{
-		const TileShaderPropertyView* facadeTile = GetTileProperty(facade);
-		if (!facadeTile || !payloadTemplate.pageCount || !payloadTemplate.quadCount
-			|| payloadTemplate.pageCount != metadata.effects.atlasProperties.size()
-			|| payloadTemplate.quadCount != metadata.quadCount
-			|| payloadTemplate.packets.empty())
+		if (!facade || !HasTileProperty(facade) || !payloadTemplate
+			|| !payloadTemplate->pageCount || !payloadTemplate->quadCount
+			|| payloadTemplate->pageCount != metadata.effects.atlasProperties.size()
+			|| payloadTemplate->quadCount != metadata.quadCount
+			|| payloadTemplate->packets.empty() || !EnsureNativeA8ProxyPool(font))
 		{
 			return {};
 		}
 
 		auto payload = std::make_shared<NativeA8ShapePayload>();
 		payload->fontId = metadata.fontId;
-		payload->pageCount = payloadTemplate.pageCount;
-		payload->quadCount = payloadTemplate.quadCount;
-		payload->packets.reserve(payloadTemplate.packets.size());
-		for (const NativeA8PacketTemplate& source : payloadTemplate.packets)
+		payload->pageCount = payloadTemplate->pageCount;
+		payload->quadCount = payloadTemplate->quadCount;
+		payload->payloadTemplate = std::move(payloadTemplate);
+		payload->geometryOrigin = geometryOrigin;
+		payload->packets.reserve(payload->payloadTemplate->packets.size());
+		for (size_t index = 0;
+			index < payload->payloadTemplate->packets.size(); ++index)
 		{
+			const NativeA8PacketTemplate& source =
+				payload->payloadTemplate->packets[index];
 			if (source.vertices.empty() || (source.vertices.size() & 3u)
-				|| source.vertices.size() != source.texture.size()
-				|| source.vertices.size() != source.colors.size()
-				|| source.indices.size() != source.vertices.size() / 4u * 6u
-				|| source.vertices.size() / 4u
-					> static_cast<size_t>(std::numeric_limits<int>::max()))
+				|| source.vertices.size() / 4u > kNativeA8MaximumQuads
+				|| index > std::numeric_limits<UInt32>::max())
 			{
 				return {};
 			}
-
-			NiTriShapePtr packetShape = font.MakeTriShape(
-				static_cast<int>(source.vertices.size() / 4u),
-				&facadeTile->overlayColor, false);
-			NiTriShapeData* packetData = packetShape
-				? packetShape->GetModelData() : nullptr;
-			if (!packetData || !InstallVertexColors(*packetData)
-				|| packetData->m_usVertices != source.vertices.size()
-				|| packetData->m_uiTriListLength != source.indices.size())
-			{
-				return {};
-			}
-			for (size_t index = 0; index < source.vertices.size(); ++index)
-			{
-				const NiPoint3& vertex = source.vertices[index];
-				packetData->m_pkVertex[index] = NiPoint3(
-					vertex.x + geometryOrigin.x,
-					vertex.y + geometryOrigin.y,
-					vertex.z + geometryOrigin.z);
-			}
-			std::copy(source.texture.begin(), source.texture.end(),
-				packetData->m_pkTexture);
-			std::copy(source.colors.begin(), source.colors.end(),
-				packetData->m_pkColor);
-			std::copy(source.indices.begin(), source.indices.end(),
-				packetData->m_pusTriList);
-			packetData->m_kBound = source.bound;
-			packetData->m_kBound.m_kCenter.x += geometryOrigin.x;
-			packetData->m_kBound.m_kCenter.y += geometryOrigin.y;
-			packetData->m_kBound.m_kCenter.z += geometryOrigin.z;
-			if (!BindPacketAtlasPage(*packetShape, metadata, source.atlasPage))
-				return {};
 
 			NativeA8Packet packet;
-			packet.shape = packetShape;
+			packet.templateIndex = static_cast<UInt32>(index);
 			packet.constants = source.constants;
 			packet.shaderClass = source.shaderClass;
 			packet.sampling = source.sampling;
@@ -513,8 +352,6 @@ namespace fonthook::vectorfont
 			payload->packets.push_back(std::move(packet));
 		}
 
-		if (!SyncNativeA8PacketState(facade, *payload))
-			return {};
 		payload->preparedGeneration = 0;
 		payload->buildComplete = true;
 		return payload;
@@ -526,59 +363,13 @@ namespace fonthook::vectorfont
 		size_t bytes = sizeof(payloadTemplate)
 			+ payloadTemplate.packets.capacity() * sizeof(NativeA8PacketTemplate);
 		for (const NativeA8PacketTemplate& packet : payloadTemplate.packets)
-		{
-			bytes += packet.vertices.capacity() * sizeof(NiPoint3)
-				+ packet.texture.capacity() * sizeof(NiPoint2)
-				+ packet.colors.capacity() * sizeof(NiColorA)
-				+ packet.indices.capacity() * sizeof(UInt16);
-		}
+			bytes += packet.vertices.capacity() * sizeof(NativeA8GpuVertex);
 		return bytes;
 	}
 
-	bool SyncNativeA8PacketState(NiTriShape* facade,
-		NativeA8ShapePayload& payload)
+	void InvalidateNativeA8RingResources(NativeA8FallbackReason reason)
 	{
-		if (!facade || payload.packets.empty())
-			return false;
-		for (NativeA8Packet& packet : payload.packets)
-		{
-			if (!packet.shape || !SyncPacketState(*facade, *packet.shape))
-				return false;
-		}
-		return true;
-	}
-
-	bool PurgeNativeA8PacketBuffers(NativeA8ShapePayload& payload)
-	{
-		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-		bool buffersPurged = true;
-		for (NativeA8Packet& packet : payload.packets)
-		{
-			NiTriShape* shape = packet.shape.m_pObject;
-			NiTriShapeData* data = shape ? shape->GetModelData() : nullptr;
-			packet.queuedGeneration = 0;
-			packet.queuedViaStock = false;
-			if (!data || !data->m_pkBuffData)
-				continue;
-			if (!renderer || !shape)
-			{
-				buffersPurged = false;
-				continue;
-			}
-			shape->PurgeRendererData(renderer);
-			if (data->m_pkBuffData)
-				buffersPurged = false;
-		}
-
-		payload.buffersRequirePurge.store(!buffersPurged,
-			std::memory_order_release);
-		if (buffersPurged)
-			payload.preparedGeneration = 0;
-		return buffersPurged;
-	}
-
-	void InvalidateNativeA8PacketBuffers(NativeA8FallbackReason reason)
-	{
+		ReleaseNativeA8RingResources();
 		std::vector<NativeA8ShapePayloadPtr> payloads;
 		std::unordered_set<NativeA8ShapePayload*> seen;
 		{
@@ -610,11 +401,9 @@ namespace fonthook::vectorfont
 			}
 			payload->packetPrepareFailure.store(
 				NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
-			payload->blockedReason.store(NativeA8FallbackReason::None,
-				std::memory_order_relaxed);
-			payload->blockedGeneration.store(0, std::memory_order_release);
-			payload->buffersRequirePurge.store(true, std::memory_order_release);
-			PurgeNativeA8PacketBuffers(*payload);
+			payload->preparedGeneration = 0;
+			for (NativeA8Packet& packet : payload->packets)
+				packet.shader = nullptr;
 		}
 	}
 }

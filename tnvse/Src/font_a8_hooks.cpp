@@ -118,6 +118,17 @@ namespace fonthook::vectorfont
 			NiGeometry* m_facade = nullptr;
 		};
 
+		class NativeRingSubmissionScope
+		{
+		public:
+			~NativeRingSubmissionScope()
+			{
+				EndNativeA8RingSubmission(submission);
+			}
+
+			NativeA8RingSubmission submission;
+		};
+
 		void LogMissingMetadata(NiTriShape* shape, const char* phase)
 		{
 			if (!g_bEnableFreeTypeFontRenderingLog)
@@ -239,10 +250,21 @@ namespace fonthook::vectorfont
 			bool runtimeFault = false;
 			bool drewPacket = false;
 			bool constantStateFault = false;
+			NativeA8FallbackReason runtimeFailure =
+				NativeA8FallbackReason::RuntimeFault;
 			const char* faultOperation = "generation-changed-after-packet";
 			HRESULT faultResult = D3DERR_DEVICELOST;
 			SInt32 faultRegister = -1;
 			{
+				NativeRingSubmissionScope ringScope;
+				failure = BeginNativeA8RingSubmission(shape, *metadata, *payload,
+					ringScope.submission);
+				if (failure != NativeA8FallbackReason::None)
+				{
+					runtimeFault = true;
+					runtimeFailure = failure;
+					faultOperation = "ring-submission";
+				}
 				NativeTilePacketScope packetScope(pass);
 				NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 				IDirect3DDevice9* device = renderer
@@ -254,11 +276,24 @@ namespace fonthook::vectorfont
 					faultOperation = "capture-pixel-constants";
 					faultResult = D3DERR_DEVICELOST;
 				}
-				for (NativeA8Packet& packet : payload->packets)
+				for (UInt32 packetIndex = 0;
+					packetIndex < payload->packets.size(); ++packetIndex)
 				{
 					if (runtimeFault)
 						break;
-					packetScope.Select(packet.shape.m_pObject);
+					NiTriShape* proxyShape = nullptr;
+					const NativeA8FallbackReason packetFailure =
+						PrepareNativeA8RingPacket(shape, *metadata, *payload,
+							ringScope.submission, packetIndex, proxyShape);
+					if (packetFailure != NativeA8FallbackReason::None || !proxyShape)
+					{
+						runtimeFault = true;
+						runtimeFailure = packetFailure != NativeA8FallbackReason::None
+							? packetFailure : NativeA8FallbackReason::RuntimeFault;
+						faultOperation = "ring-packet";
+						break;
+					}
+					packetScope.Select(proxyShape);
 					NativePixelConstantScope constants(device);
 					if (!constants.Captured())
 					{
@@ -313,11 +348,10 @@ namespace fonthook::vectorfont
 			}
 			if (drewPacket)
 			{
-				MarkNativeA8RuntimeFault(*payload,
-					NativeA8FallbackReason::RuntimeFault);
+				MarkNativeA8RuntimeFault(*payload, runtimeFailure);
 				return;
 			}
-			failure = NativeA8FallbackReason::RuntimeFault;
+			failure = runtimeFailure;
 		}
 
 		RecordNativeA8Suppression(shape, *metadata, failure, "tile-render-pass");

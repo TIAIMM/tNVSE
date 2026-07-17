@@ -10,12 +10,15 @@
 
 #include <array>
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <vector>
 
 namespace fonthook::vectorfont
 {
 	struct A8ShapeMetadata;
+	inline constexpr UInt32 kNativeA8MaximumQuads =
+		std::numeric_limits<UInt16>::max() / 4u;
 
 	enum class NativeA8ShaderClass : UInt8
 	{
@@ -38,7 +41,6 @@ namespace fonthook::vectorfont
 		ShaderGeneration,
 		PacketBuild,
 		PacketPrepare,
-		PacketPending,
 		AtlasGeneration,
 		PageTexture,
 		PropertySync,
@@ -53,66 +55,45 @@ namespace fonthook::vectorfont
 	{
 		None,
 		Generation,
-		Profile,
 		Geometry,
-		Purge,
-		ShaderSetup,
 		ShaderBinding,
-		Precache,
-		RendererBuffer,
 		Declaration,
-		StreamCount,
-		VertexStride,
-		VertexCount,
-		IndexCount,
+		ProxyUnavailable,
+		RingCapacity,
 		IndexBuffer,
 		VertexBuffer
 	};
 
-	enum class NativeA8PacketPrepareStatus : UInt8
-	{
-		Ready,
-		Pending,
-		Failed
-	};
-
-	enum class NativeA8PacketPendingStage : UInt8
-	{
-		None,
-		ExternalQueue,
-		RendererPacking
-	};
-
-	struct NativeA8PacketPrepareResult
-	{
-		NativeA8PacketPrepareStatus status =
-			NativeA8PacketPrepareStatus::Failed;
-		NativeA8PacketPrepareFailure failure =
-			NativeA8PacketPrepareFailure::None;
-		NativeA8PacketPendingStage pendingStage =
-			NativeA8PacketPendingStage::None;
-	};
-
 	struct NativeA8Packet
 	{
-		NiTriShapePtr shape;
+		UInt32 templateIndex = 0;
 		std::array<float, 16> constants = {};
 		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Original;
 		NativeA8Sampling sampling = NativeA8Sampling::Point;
 		EffectQuality quality = EffectQuality::Balanced;
 		UInt32 layer = 3;
 		UInt16 atlasPage = 0;
-		UInt32 queuedGeneration = 0;
-		bool queuedViaStock = false;
+		TileShader* shader = nullptr;
 		bool staticSmoothSampling = false;
 	};
 
+	struct NativeA8GpuVertex
+	{
+		float x = 0.0f;
+		float y = 0.0f;
+		float z = 0.0f;
+		float u = 0.0f;
+		float v = 0.0f;
+		float r = 1.0f;
+		float g = 1.0f;
+		float b = 1.0f;
+		float a = 1.0f;
+	};
+	static_assert(sizeof(NativeA8GpuVertex) == 9 * sizeof(float));
+
 	struct NativeA8PacketTemplate
 	{
-		std::vector<NiPoint3> vertices;
-		std::vector<NiPoint2> texture;
-		std::vector<NiColorA> colors;
-		std::vector<UInt16> indices;
+		std::vector<NativeA8GpuVertex> vertices;
 		NiBound bound;
 		std::array<float, 16> constants = {};
 		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Original;
@@ -137,18 +118,14 @@ namespace fonthook::vectorfont
 		UInt32 fontId = 0;
 		UInt32 pageCount = 0;
 		UInt32 quadCount = 0;
+		NativeA8PayloadTemplatePtr payloadTemplate;
+		NiPoint3 geometryOrigin;
 		std::vector<NativeA8Packet> packets;
 		std::atomic<bool> suppressNextSubmit = false;
-		std::atomic<bool> buffersRequirePurge = false;
 		std::atomic<NativeA8FallbackReason> stickyReason =
-			NativeA8FallbackReason::None;
-		std::atomic<UInt32> blockedGeneration = 0;
-		std::atomic<NativeA8FallbackReason> blockedReason =
 			NativeA8FallbackReason::None;
 		std::atomic<NativeA8PacketPrepareFailure> packetPrepareFailure =
 			NativeA8PacketPrepareFailure::None;
-		std::atomic<NativeA8PacketPendingStage> packetPendingStage =
-			NativeA8PacketPendingStage::None;
 		UInt32 preparedGeneration = 0;
 		bool buildComplete = false;
 	};
@@ -157,8 +134,6 @@ namespace fonthook::vectorfont
 	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason);
 	const char* NativeA8PacketPrepareFailureName(
 		NativeA8PacketPrepareFailure failure);
-	const char* NativeA8PacketPendingStageName(
-		NativeA8PacketPendingStage stage);
 
 	NativeA8ShapePayloadPtr BuildNativeA8ShapePayload(Font& font,
 		NiTriShape* facade, const A8ShapeMetadata& metadata);
@@ -167,28 +142,45 @@ namespace fonthook::vectorfont
 		const NiPoint3& geometryOrigin);
 	NativeA8ShapePayloadPtr InstantiateNativeA8ShapePayload(Font& font,
 		NiTriShape* facade, const A8ShapeMetadata& metadata,
-		const NativeA8PayloadTemplate& payloadTemplate,
+		NativeA8PayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin);
 	size_t GetNativeA8PayloadTemplateBytes(
 		const NativeA8PayloadTemplate& payloadTemplate);
-	bool SyncNativeA8PacketState(NiTriShape* facade,
-		NativeA8ShapePayload& payload);
-	bool PurgeNativeA8PacketBuffers(NativeA8ShapePayload& payload);
-	void InvalidateNativeA8PacketBuffers(NativeA8FallbackReason reason);
+	void InvalidateNativeA8RingResources(NativeA8FallbackReason reason);
+
+	struct NativeA8RingSubmission
+	{
+		NiTriShape* proxyShape = nullptr;
+		IDirect3DVertexBuffer9* vertexBuffer = nullptr;
+		UInt32 proxyIndex = std::numeric_limits<UInt32>::max();
+		UInt32 generation = 0;
+		UInt32 nextPacket = 0;
+		UInt32 nextBaseVertex = 0;
+		UInt32 endVertex = 0;
+		bool active = false;
+	};
+
+	bool EnsureNativeA8ProxyPool(Font& font);
+	NativeA8FallbackReason BeginNativeA8RingSubmission(
+		NiTriShape* facade, const A8ShapeMetadata& metadata,
+		NativeA8ShapePayload& payload, NativeA8RingSubmission& submission);
+	NativeA8FallbackReason PrepareNativeA8RingPacket(
+		NiTriShape* facade, const A8ShapeMetadata& metadata,
+		NativeA8ShapePayload& payload, NativeA8RingSubmission& submission,
+		UInt32 packetIndex, NiTriShape*& proxyShape);
+	void EndNativeA8RingSubmission(NativeA8RingSubmission& submission);
+	void ReleaseNativeA8RingResources();
 
 	bool InitializeNativeA8Renderer(bool forceAttempt, bool reportFailures);
 	void HandleNativeA8RendererMainLoop();
 	void HandleNativeA8ShaderLoaderMessage(UInt32 messageType);
 	bool IsNativeA8RendererAvailable();
-	NativeA8PacketPrepareResult PrepareNativeA8PacketBuffer(
-		NativeA8Packet& packet, TileShader* shader, bool& rebuilt,
-		bool useStockPrecache);
 	void MarkNativeA8GenerationFault(UInt32 generation,
 		const char* operation, HRESULT result);
 	UInt32 GetNativeA8ShaderGeneration();
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation);
 	TileShader* ResolveNativeA8PacketShader(const NativeA8Packet& packet,
-		bool scaledFillSampling);
+		const NiTriShape* facade, bool scaledFillSampling);
 	NativeA8FallbackReason PrepareNativeA8Group(NiTriShape* facade,
 		const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload);
 

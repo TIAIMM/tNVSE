@@ -612,14 +612,14 @@ namespace fonthook::vectorfont
 			if (beforeReset)
 			{
 				s_resetInProgress.store(true, std::memory_order_release);
-				InvalidateNativeA8PacketBuffers(
+				InvalidateNativeA8RingResources(
 					NativeA8FallbackReason::DeviceReset);
 				NativeShaderGeneration* current = s_publishedGeneration.load(
 					std::memory_order_acquire);
 				if (current)
 					current->runtimeFault.store(true, std::memory_order_release);
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: generation-invalidated reason=device-reset generation=%u phase=release; packet buffers purged",
+					"tnvse_freetype_native: generation-invalidated reason=device-reset generation=%u phase=release; dynamic VB/IB ring released",
 					current ? current->id : 0);
 				return true;
 			}
@@ -778,7 +778,7 @@ namespace fonthook::vectorfont
 	}
 
 	TileShader* ResolveNativeA8PacketShader(const NativeA8Packet& packet,
-		bool scaledFillSampling)
+		const NiTriShape* facade, bool scaledFillSampling)
 	{
 		if (!IsNativeA8RendererAvailable())
 			return nullptr;
@@ -789,9 +789,8 @@ namespace fonthook::vectorfont
 
 		const NativeA8Sampling sampling = ResolveEffectiveSampling(packet,
 			scaledFillSampling);
-		NiTriShape* packetShape = packet.shape.m_pObject;
-		const NiAlphaProperty* alpha = packetShape
-			? packetShape->GetAlphaProperty() : nullptr;
+		const NiAlphaProperty* alpha = facade
+			? facade->GetAlphaProperty() : nullptr;
 		const bool writeEffectAlpha = packet.layer != 3
 			&& generation->supportsSeparateAlpha
 			&& alpha && alpha->GetAlphaBlending();
@@ -827,179 +826,4 @@ namespace fonthook::vectorfont
 		return profile->shader;
 	}
 
-	NativeA8PacketPrepareResult PrepareNativeA8PacketBuffer(
-		NativeA8Packet& packet, TileShader* shader, bool& rebuilt,
-		bool useStockPrecache)
-	{
-		rebuilt = false;
-		auto failed = [](NativeA8PacketPrepareFailure failure)
-		{
-			return NativeA8PacketPrepareResult{
-				NativeA8PacketPrepareStatus::Failed, failure,
-				NativeA8PacketPendingStage::None };
-		};
-		auto pending = [](NativeA8PacketPendingStage stage)
-		{
-			return NativeA8PacketPrepareResult{
-				NativeA8PacketPrepareStatus::Pending,
-				NativeA8PacketPrepareFailure::None, stage };
-		};
-		const NativeA8PacketPrepareResult ready{
-			NativeA8PacketPrepareStatus::Ready,
-			NativeA8PacketPrepareFailure::None,
-			NativeA8PacketPendingStage::None };
-
-		NativeShaderGeneration* generation = s_publishedGeneration.load(
-			std::memory_order_acquire);
-		if (!GenerationMatchesCurrentDevice(generation) || !packet.shape || !shader)
-			return failed(NativeA8PacketPrepareFailure::Generation);
-
-		NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
-		NativeShaderProfile* profile = block ? block->profile : nullptr;
-		if (!profile || profile->owner != generation || profile->shader != shader)
-			return failed(NativeA8PacketPrepareFailure::Profile);
-
-		NiTriShape* shape = packet.shape.m_pObject;
-		NiTriShapeData* data = shape->GetModelData();
-		NiDX9Renderer* renderer = generation->renderer;
-		if (!data || !renderer || !generation->declaration
-			|| !generation->d3dDeclaration)
-		{
-			return failed(NativeA8PacketPrepareFailure::Geometry);
-		}
-		if (packet.queuedGeneration != 0
-			&& packet.queuedGeneration != generation->id)
-		{
-			packet.queuedGeneration = 0;
-			packet.queuedViaStock = false;
-		}
-
-		const UInt32 expectedIndices = data->m_uiTriListLength
-			? data->m_uiTriListLength
-			: static_cast<UInt32>(data->m_usTriangles) * 3u;
-		auto inspectBuffer = [&](bool allowMissingBuffer)
-			-> NativeA8PacketPrepareResult
-		{
-			const NiGeometryBufferData* buffer = data->m_pkBuffData;
-			if (!buffer)
-			{
-				return allowMissingBuffer
-					? pending(packet.queuedViaStock
-						? NativeA8PacketPendingStage::RendererPacking
-						: NativeA8PacketPendingStage::ExternalQueue)
-					: failed(NativeA8PacketPrepareFailure::RendererBuffer);
-			}
-			if (buffer->m_hDeclaration != generation->d3dDeclaration)
-				return failed(NativeA8PacketPrepareFailure::Declaration);
-			if (buffer->m_uiStreamCount != 1)
-				return failed(NativeA8PacketPrepareFailure::StreamCount);
-			if (!buffer->m_puiVertexStride
-				|| buffer->m_puiVertexStride[0] != 9u * sizeof(float))
-			{
-				return failed(NativeA8PacketPrepareFailure::VertexStride);
-			}
-			if (buffer->m_uiVertCount != data->m_usVertices)
-				return failed(NativeA8PacketPrepareFailure::VertexCount);
-
-			const NiVBChip* vertexChip = buffer->m_ppkVBChip
-				? buffer->m_ppkVBChip[0] : nullptr;
-			if (!buffer->m_pkIB || !vertexChip || !vertexChip->m_pkVB)
-				return pending(NativeA8PacketPendingStage::RendererPacking);
-			if (buffer->m_uiIndexCount < expectedIndices)
-				return failed(NativeA8PacketPrepareFailure::IndexCount);
-			return ready;
-		};
-
-		if (data->m_pkBuffData)
-		{
-			const NativeA8PacketPrepareResult existing = inspectBuffer(false);
-			if (existing.status != NativeA8PacketPrepareStatus::Failed)
-			{
-				packet.queuedGeneration = generation->id;
-				shape->SetShader(shader);
-				return existing;
-			}
-		}
-		else if (packet.queuedGeneration == generation->id)
-		{
-			shape->SetShader(shader);
-			if (!useStockPrecache || packet.queuedViaStock)
-			{
-				return pending(packet.queuedViaStock
-					? NativeA8PacketPendingStage::RendererPacking
-					: NativeA8PacketPendingStage::ExternalQueue);
-			}
-			// The virtual owner accepted the request but did not expose it to the
-			// renderer queue. Reissue this tNVSE packet through the audited stock
-			// entry; do not enqueue it through the external owner a second time.
-			packet.queuedGeneration = 0;
-			packet.queuedViaStock = false;
-		}
-
-		if (data->m_pkBuffData)
-		{
-			shape->PurgeRendererData(renderer);
-			if (data->m_pkBuffData)
-				return failed(NativeA8PacketPrepareFailure::Purge);
-			packet.queuedGeneration = 0;
-			packet.queuedViaStock = false;
-		}
-
-		shape->UpdateProperties();
-		shape->SetShader(shader);
-		if (!shader->SetupGeometry(shape))
-			return failed(NativeA8PacketPrepareFailure::ShaderSetup);
-		if (shape->GetShader() != shader)
-			return failed(NativeA8PacketPrepareFailure::ShaderBinding);
-
-		data = shape->GetModelData();
-		if (!data)
-			return failed(NativeA8PacketPrepareFailure::Geometry);
-		data->m_ucKeepFlags |= static_cast<UInt8>(NiGeometryData::KEEP_XYZ
-			| NiGeometryData::KEEP_NORM | NiGeometryData::KEEP_COLOR
-			| NiGeometryData::KEEP_UV
-			| NiGeometryData::KEEP_INDICES | NiGeometryData::KEEP_BONEDATA);
-
-		BSShaderProperty* property = reinterpret_cast<BSShaderProperty*>(
-			shape->GetShadeProperty());
-		NiDX9ShaderDeclaration* declaration = property
-			? shader->GetShaderDeclaration(shape, property) : nullptr;
-		if (!declaration || declaration != generation->declaration.m_pObject)
-			return failed(NativeA8PacketPrepareFailure::Declaration);
-
-		const bool precached = useStockPrecache
-			? renderer->PrecacheGeometryEx(shape, 18u, 4u, declaration)
-			: renderer->PrecacheGeometry(shape, 18u, 4u, declaration);
-		if (!precached || shape->GetShader() != shader)
-		{
-			if (data->m_pkBuffData)
-			{
-				shape->PurgeRendererData(renderer);
-				if (data->m_pkBuffData)
-					return failed(NativeA8PacketPrepareFailure::Purge);
-			}
-			packet.queuedGeneration = 0;
-			packet.queuedViaStock = false;
-			return failed(precached
-				? NativeA8PacketPrepareFailure::ShaderBinding
-				: NativeA8PacketPrepareFailure::Precache);
-		}
-
-		rebuilt = true;
-		packet.queuedGeneration = generation->id;
-		packet.queuedViaStock = useStockPrecache;
-		const NativeA8PacketPrepareResult prepared = inspectBuffer(true);
-		if (prepared.status != NativeA8PacketPrepareStatus::Failed)
-			return prepared;
-
-		if (data->m_pkBuffData)
-		{
-			shape->PurgeRendererData(renderer);
-			if (data->m_pkBuffData)
-				return failed(NativeA8PacketPrepareFailure::Purge);
-		}
-		packet.queuedGeneration = 0;
-		packet.queuedViaStock = false;
-		return prepared;
-	}
 }
