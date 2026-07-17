@@ -227,6 +227,7 @@ namespace fonthook::vectorfont
 		UInt32 expansionPixels = 0;
 		AtlasLayer layer = AtlasLayer::Fill;
 		bool usesSdf = false;
+		bool usesLiveTileRgb = true;
 		UInt16 atlasPage = 0;
 	};
 

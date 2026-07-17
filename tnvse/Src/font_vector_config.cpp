@@ -145,6 +145,11 @@ namespace fonthook::vectorfont
 			Shadow,
 		};
 
+		const char* EffectColorModeName(EffectColorMode mode)
+		{
+			return mode == EffectColorMode::Fill ? "fill" : "fixed";
+		}
+
 		bool ReadEffect(pugi::xml_node node, EffectKind kind, EffectStyle& result,
 			std::string& reason)
 		{
@@ -152,6 +157,16 @@ namespace fonthook::vectorfont
 			if (!node)
 				return true;
 			result.enabled = node.attribute("enabled").as_bool(true);
+			const std::string colorMode = node.attribute("colorMode").as_string("fixed");
+			if (colorMode == "fixed")
+				result.colorMode = EffectColorMode::Fixed;
+			else if (colorMode == "fill")
+				result.colorMode = EffectColorMode::Fill;
+			else
+			{
+				reason = "effect colorMode must be fixed or fill";
+				return false;
+			}
 			const float alpha = node.attribute("alpha").as_float(1.0f);
 			if (!std::isfinite(alpha))
 			{
@@ -333,6 +348,7 @@ namespace fonthook::vectorfont
 				HashBytes(hash, &effect.x, sizeof(effect.x));
 				HashBytes(hash, &effect.y, sizeof(effect.y));
 				HashBytes(hash, &effect.color, sizeof(effect.color));
+				HashBytes(hash, &effect.colorMode, sizeof(effect.colorMode));
 			};
 			hashEffect(config.glow);
 			hashEffect(config.outline);
@@ -498,7 +514,7 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d unicodeLineBreaking=%d features=%u baseline=%.2f fontColor=%d fillRenderMode=%s effectQuality=%u glow=%d inner=%.2f outer=%.2f power=%.2f outline=%d width=%.2f softness=%.2f shadow=%d blur=%.2f power=%.2f",
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d unicodeLineBreaking=%d features=%u baseline=%.2f fontColor=%d fillRenderMode=%s effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f",
 				config.fontId, static_cast<UInt32>(config.prewarm),
 				config.verticalMetrics == VerticalMetricsMode::Original ? "original" : "freetype",
 				config.shaping ? 1 : 0,
@@ -508,9 +524,12 @@ namespace fonthook::vectorfont
 				config.fontColor.configured,
 				config.fillRenderMode == FillRenderMode::Sdf ? "sdf" : "grayscale",
 				static_cast<UInt32>(config.effectQuality),
-				config.glow.enabled, config.glow.inner, config.glow.outer, config.glow.power,
-				config.outline.enabled, config.outline.width, config.outline.softness,
-				config.shadow.enabled, config.shadow.blur, config.shadow.power);
+				config.glow.enabled, EffectColorModeName(config.glow.colorMode),
+				config.glow.inner, config.glow.outer, config.glow.power,
+				config.outline.enabled, EffectColorModeName(config.outline.colorMode),
+				config.outline.width, config.outline.softness,
+				config.shadow.enabled, EffectColorModeName(config.shadow.colorMode),
+				config.shadow.blur, config.shadow.power);
 			FreeTypeFontDebugLog(
 				"tnvse_freetype_font:   hashes layout=%016llX mask=%016llX shader=%016llX",
 				static_cast<unsigned long long>(config.layoutHash),

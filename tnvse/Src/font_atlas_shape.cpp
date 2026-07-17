@@ -75,12 +75,22 @@ namespace fonthook::vectorfont
 			return SanitizeColor(result);
 		}
 
-		NiColorA ResolveEffectColor(const EffectStyle& effect, const NiColorA& source,
+		NiColorA ResolveEffectColor(const EffectStyle& effect,
+			const FontColorStyle& fillStyle, const NiColorA& source,
 			const NiColorA& tile)
 		{
-			NiColorA result = SanitizeColor(effect.color);
-			result.a *= ResolveModifierChannel(source.a, tile.a);
+			NiColorA result = effect.colorMode == EffectColorMode::Fill
+				? ResolveFillColor(fillStyle, source, tile)
+				: SanitizeColor(effect.color);
+			// Effect opacity remains independent from fontAlpha in both color modes.
+			result.a = SanitizeColor(effect.color).a
+				* ResolveModifierChannel(source.a, tile.a);
 			return SanitizeColor(result);
+		}
+
+		bool EffectUsesLiveTileRgb(const EffectStyle& effect)
+		{
+			return effect.colorMode == EffectColorMode::Fill;
 		}
 
 		NiColorA ResolveSafeTileColor(const std::vector<AtlasGlyphInstance>&,
@@ -133,14 +143,16 @@ namespace fonthook::vectorfont
 					|| config.ranges.back().layer != layer
 					|| config.ranges.back().atlasPage != quad.atlasPage
 					|| config.ranges.back().usesSdf != quad.usesSdf
+					|| config.ranges.back().usesLiveTileRgb != quad.usesLiveTileRgb
 					|| !SameColorModifier(config.ranges.back().colorModifier, color))
 				{
 					A8DrawRange range;
 					range.firstVertex = index * 4;
 					range.startIndex = index * 6;
-				range.layer = layer;
-				range.atlasPage = quad.atlasPage;
+					range.layer = layer;
+					range.atlasPage = quad.atlasPage;
 					range.usesSdf = quad.usesSdf;
+					range.usesLiveTileRgb = quad.usesLiveTileRgb;
 					range.colorModifier = color;
 					config.ranges.push_back(range);
 				}
@@ -231,13 +243,13 @@ namespace fonthook::vectorfont
 			const std::shared_ptr<const GlyphBitmap>& bitmap,
 			const AtlasGlyphInstance& instance, const NiColorA& color,
 			float offsetX, float offsetY, float rasterScale, float baselineOffset,
-			AtlasLayer layer,
+			AtlasLayer layer, bool usesLiveTileRgb,
 			UInt32 expansionPixels = 0, bool usesSdf = false)
 		{
 			if (bitmap && bitmap->width > 0 && bitmap->height > 0)
 				quads.push_back({ bitmap, instance.pen, color, offsetX, offsetY,
 					rasterScale, instance.glyph.metrics ? instance.glyph.metrics->fTopEdge : 0.0f,
-					baselineOffset, expansionPixels, layer, usesSdf });
+					baselineOffset, expansionPixels, layer, usesSdf, usesLiveTileRgb });
 		}
 
 		bool BuildPendingQuads(RuntimeFont& runtime,
@@ -315,9 +327,11 @@ namespace fonthook::vectorfont
 				for (const PreparedGlyph& glyph : prepared)
 				{
 					AddPendingQuad(quads, glyph.fill, *glyph.instance,
-						ResolveEffectColor(config.shadow, glyph.instance->color, tileColor),
+						ResolveEffectColor(config.shadow, config.fontColor,
+							glyph.instance->color, tileColor),
 						config.shadow.x, config.shadow.y, rasterScale,
-						glyph.baselineOffset, AtlasLayer::Shadow);
+						glyph.baselineOffset, AtlasLayer::Shadow,
+						EffectUsesLiveTileRgb(config.shadow));
 				}
 			}
 			if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
@@ -325,8 +339,10 @@ namespace fonthook::vectorfont
 				for (const PreparedGlyph& glyph : prepared)
 				{
 					AddPendingQuad(quads, glyph.glow, *glyph.instance,
-						ResolveEffectColor(config.glow, glyph.instance->color, tileColor),
-						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Glow);
+						ResolveEffectColor(config.glow, config.fontColor,
+							glyph.instance->color, tileColor),
+						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Glow,
+						EffectUsesLiveTileRgb(config.glow));
 				}
 			}
 			if (included[static_cast<size_t>(AtlasLayer::Outline)] && config.outline.enabled)
@@ -334,8 +350,10 @@ namespace fonthook::vectorfont
 				for (const PreparedGlyph& glyph : prepared)
 				{
 					AddPendingQuad(quads, glyph.outline, *glyph.instance,
-						ResolveEffectColor(config.outline, glyph.instance->color, tileColor),
-						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Outline);
+						ResolveEffectColor(config.outline, config.fontColor,
+							glyph.instance->color, tileColor),
+						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Outline,
+						EffectUsesLiveTileRgb(config.outline));
 				}
 			}
 			if (included[static_cast<size_t>(AtlasLayer::Fill)])
@@ -344,7 +362,8 @@ namespace fonthook::vectorfont
 				{
 					AddPendingQuad(quads, glyph.fill, *glyph.instance,
 						ResolveFillColor(config.fontColor, glyph.instance->color, tileColor),
-						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Fill);
+						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Fill,
+						true);
 				}
 			}
 			return true;
@@ -448,17 +467,30 @@ namespace fonthook::vectorfont
 				for (const PreparedShaderGlyph& entry : prepared)
 				{
 					NiColorA layerColor = entry.instance->color;
+					bool usesLiveTileRgb = true;
 					if (layer == AtlasLayer::Shadow)
-						layerColor = ResolveEffectColor(config.shadow, entry.instance->color, tileColor);
+					{
+						layerColor = ResolveEffectColor(config.shadow, config.fontColor,
+							entry.instance->color, tileColor);
+						usesLiveTileRgb = EffectUsesLiveTileRgb(config.shadow);
+					}
 					else if (layer == AtlasLayer::Glow)
-						layerColor = ResolveEffectColor(config.glow, entry.instance->color, tileColor);
+					{
+						layerColor = ResolveEffectColor(config.glow, config.fontColor,
+							entry.instance->color, tileColor);
+						usesLiveTileRgb = EffectUsesLiveTileRgb(config.glow);
+					}
 					else if (layer == AtlasLayer::Outline)
-						layerColor = ResolveEffectColor(config.outline, entry.instance->color, tileColor);
+					{
+						layerColor = ResolveEffectColor(config.outline, config.fontColor,
+							entry.instance->color, tileColor);
+						usesLiveTileRgb = EffectUsesLiveTileRgb(config.outline);
+					}
 					else if (layer == AtlasLayer::Fill)
 						layerColor = ResolveFillColor(config.fontColor, entry.instance->color, tileColor);
 					AddPendingQuad(quads, useSdf ? entry.sdf : entry.fill,
 						*entry.instance, layerColor, offsetX, offsetY, rasterScale,
-						entry.baselineOffset, layer, 0, useSdf);
+						entry.baselineOffset, layer, usesLiveTileRgb, 0, useSdf);
 				}
 			};
 
@@ -582,6 +614,7 @@ namespace fonthook::vectorfont
 				add(&range.layer, sizeof(range.layer));
 				add(&range.atlasPage, sizeof(range.atlasPage));
 				add(&range.usesSdf, sizeof(range.usesSdf));
+				add(&range.usesLiveTileRgb, sizeof(range.usesLiveTileRgb));
 				add(&range.colorModifier, sizeof(range.colorModifier));
 			}
 			return hash;

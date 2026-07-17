@@ -28,7 +28,7 @@ namespace fonthook::vectorfont
 					< kMaximumShapeValidationFailureLogs)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_a8_diag: rejected shape contract=tile-fill-effect-rgb-v7 reason=%s",
+					"tnvse_freetype_a8_diag: rejected shape contract=tile-fill-effect-rgb-v8 reason=%s",
 					reason ? reason : "unknown");
 			}
 			return false;

@@ -78,6 +78,7 @@ namespace fonthook::vectorfont
 		UInt16 atlasPage = 0;
 		TileShader* shader = nullptr;
 		bool staticSmoothSampling = false;
+		bool usesLiveTileRgb = true;
 	};
 
 	struct NativeA8GpuVertex
@@ -106,6 +107,7 @@ namespace fonthook::vectorfont
 		UInt32 layer = 3;
 		UInt16 atlasPage = 0;
 		bool staticSmoothSampling = false;
+		bool usesLiveTileRgb = true;
 	};
 
 	struct NativeA8PayloadTemplate

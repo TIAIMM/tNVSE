@@ -63,6 +63,7 @@ namespace fonthook::vectorfont
 			EffectQuality quality = EffectQuality::Balanced;
 			std::array<UInt32, 12> constantBits = {};
 			bool writeEffectAlpha = false;
+			bool usesLiveTileRgb = true;
 
 			bool operator==(const NativeProfileKey& other) const
 			{
@@ -70,6 +71,7 @@ namespace fonthook::vectorfont
 					&& sampling == other.sampling
 					&& quality == other.quality
 					&& writeEffectAlpha == other.writeEffectAlpha
+					&& usesLiveTileRgb == other.usesLiveTileRgb
 					&& constantBits == other.constantBits;
 			}
 		};
@@ -90,6 +92,7 @@ namespace fonthook::vectorfont
 				mix(static_cast<UInt32>(key.sampling));
 				mix(static_cast<UInt32>(key.quality));
 				mix(key.writeEffectAlpha ? 1u : 0u);
+				mix(key.usesLiveTileRgb ? 1u : 0u);
 				for (UInt32 value : key.constantBits)
 					mix(value);
 				return hash;
@@ -266,10 +269,10 @@ namespace fonthook::vectorfont
 			}
 
 			HRESULT firstFailure = D3D_OK;
-			if (profile->effectPass)
+			if (profile->effectPass && !profile->key.usesLiveTileRgb)
 			{
-				// Effect RGB owns its configured layer color while
-				// the live Tile alpha still drives menu fades.
+				// Fixed effects own their configured vertex RGB. Neutralize only the
+				// stock Tile RGB while retaining its live alpha for menu fades.
 				const float* stockTileColor = reinterpret_cast<const float*>(0x1202188);
 				const float effectTileColor[4] = {
 					1.0f, 1.0f, 1.0f, stockTileColor[3]
@@ -300,6 +303,7 @@ namespace fonthook::vectorfont
 			key.sampling = sampling;
 			key.quality = packet.quality;
 			key.writeEffectAlpha = writeEffectAlpha;
+			key.usesLiveTileRgb = packet.usesLiveTileRgb;
 			std::memcpy(key.constantBits.data(), packet.constants.data() + 4,
 				key.constantBits.size() * sizeof(UInt32));
 			return key;

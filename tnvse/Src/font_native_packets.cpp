@@ -29,6 +29,7 @@ namespace fonthook::vectorfont
 			UInt16 atlasPage = 0;
 			bool usesSdf = false;
 			bool staticSmoothSampling = false;
+			bool usesLiveTileRgb = true;
 			std::array<float, 16> constants = {};
 		};
 
@@ -84,6 +85,7 @@ namespace fonthook::vectorfont
 				&& span.atlasPage == range.range.atlasPage
 				&& span.usesSdf == range.range.usesSdf
 				&& span.staticSmoothSampling == range.staticSmoothSampling
+				&& span.usesLiveTileRgb == range.range.usesLiveTileRgb
 				// c0 contains the old per-range color. Native packets carry it in
 				// their FLOAT4 vertex color, so only the remaining immutable constants
 				// split a packet.
@@ -159,6 +161,7 @@ namespace fonthook::vectorfont
 					span.atlasPage = range.atlasPage;
 					span.usesSdf = range.usesSdf;
 					span.staticSmoothSampling = compiled.staticSmoothSampling;
+					span.usesLiveTileRgb = range.usesLiveTileRgb;
 					span.constants = compiled.constants;
 					// Vertex modifiers replace the old uniform color without quantization.
 					span.constants[0] = 1.0f;
@@ -314,6 +317,7 @@ namespace fonthook::vectorfont
 			packet.layer = span.layer;
 			packet.atlasPage = span.atlasPage;
 			packet.staticSmoothSampling = span.staticSmoothSampling;
+			packet.usesLiveTileRgb = span.usesLiveTileRgb;
 			payload->packets.push_back(std::move(packet));
 		}
 		if (payload->gpuVertices.size() != sourceData->m_usVertices)
@@ -369,6 +373,7 @@ namespace fonthook::vectorfont
 			packet.layer = source.layer;
 			packet.atlasPage = source.atlasPage;
 			packet.staticSmoothSampling = source.staticSmoothSampling;
+			packet.usesLiveTileRgb = source.usesLiveTileRgb;
 			payload->packets.push_back(std::move(packet));
 			nextVertex = vertexEnd;
 		}

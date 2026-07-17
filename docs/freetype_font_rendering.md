@@ -91,11 +91,11 @@ fonts continue to use the original `.fnt` and `.tex` files.
       </doubleByte>
 
       <glow enabled="1" inner="0" outer="4" power="2"
-            color="#66FF99" alpha="0.35"/>
+            colorMode="fill" alpha="0.35"/>
       <outline enabled="1" width="1" softness="0.5"
-               color="#000000" alpha="1"/>
+               colorMode="fixed" color="#000000" alpha="1"/>
       <shadow enabled="1" x="1" y="1" blur="2" power="2"
-              color="#000000" alpha="0.65"/>
+              colorMode="fixed" color="#000000" alpha="0.65"/>
     </font>
   </fonts>
 </tNVSE>
@@ -138,9 +138,16 @@ coverage bitmap, while `fillRenderMode="sdf"` selects the hinted outline-to-SDF
 body. Glow uses `inner`, `outer`, and `power`; legacy `width` is accepted as
 an alias for `outer` only when `outer` is absent. Outline accepts a
 non-negative `softness`. Shadow accepts a non-negative `blur` and a positive
-`power`; `blur=0` preserves the exact hinted offset mask. Every configured
-alpha is multiplied by the game text alpha, so visibility and fade animations
-continue to work.
+`power`; `blur=0` preserves the exact hinted offset mask.
+
+Every effect accepts `colorMode="fixed|fill"`. The backward-compatible default
+is `fixed`: the native profile neutralizes the live Tile RGB (`c0.rgb = 1`) and
+the vertex carries the effect's configured `color`. `fill` keeps the live Tile
+RGB and gives the effect vertex the same RGB modifier as the body, including a
+configured `fontColor`; the effect's `color` RGB is then ignored. In either
+mode, the effect's own `alpha` remains independent of `fontAlpha` and is
+multiplied by the game text alpha, so visibility and fade animations continue
+to work.
 
 ## Shaping and fixed-width layout
 

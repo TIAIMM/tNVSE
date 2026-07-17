@@ -77,6 +77,12 @@ namespace fonthook::vectorfont
 		std::vector<FaceConfig> faces;
 	};
 
+	enum class EffectColorMode : UInt8
+	{
+		Fixed = 0,
+		Fill = 1,
+	};
+
 	struct EffectStyle
 	{
 		bool enabled = false;
@@ -89,6 +95,7 @@ namespace fonthook::vectorfont
 		float x = 0.0f;
 		float y = 0.0f;
 		NiColorA color = { 0.0f, 0.0f, 0.0f, 1.0f };
+		EffectColorMode colorMode = EffectColorMode::Fixed;
 	};
 
 	struct FontColorStyle
@@ -187,6 +194,7 @@ namespace fonthook::vectorfont
 		UInt32 layer = 3;
 		UInt16 atlasPage = 0;
 		bool usesSdf = false;
+		bool usesLiveTileRgb = true;
 		NiColorA colorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 	};
 
@@ -219,9 +227,10 @@ namespace fonthook::vectorfont
 
 	struct A8ShapeColorContract
 	{
-		// Fill preserves the stock Tile c0 RGB/alpha contract. Effect ranges use
-		// their configured RGB verbatim while inheriting only the live Tile alpha.
-		static constexpr UInt32 kTileUniformColorAbi = 7;
+		// Fill preserves the stock Tile c0 RGB/alpha contract. Effect ranges select
+		// either fixed vertex RGB with neutral c0 RGB, or the fill modifier with live
+		// c0 RGB. Both modes continue to inherit the live Tile alpha.
+		static constexpr UInt32 kTileUniformColorAbi = 8;
 
 		UInt32 abiVersion = kTileUniformColorAbi;
 		NiColorA minimumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
