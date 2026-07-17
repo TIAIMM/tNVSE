@@ -475,7 +475,7 @@ namespace fonthook::vectorfont
 
 
 		QuadBatchFingerprint BuildQuadBatchFingerprint(
-			const std::vector<PendingQuad>& quads)
+			const std::vector<PendingQuad>& quads, const NiPoint3& origin)
 		{
 			UInt64 hash = 1469598103934665603ull;
 			auto add = [&](const void* data, size_t size)
@@ -489,9 +489,12 @@ namespace fonthook::vectorfont
 			};
 			for (const PendingQuad& quad : quads)
 			{
+				const NiPoint3 relativePen(
+					quad.pen.x - origin.x,
+					quad.pen.y - origin.y,
+					quad.pen.z - origin.z);
 				add(&quad.bitmap->cacheId, sizeof(quad.bitmap->cacheId));
-				add(&quad.pen, sizeof(quad.pen));
-				add(&quad.color, sizeof(quad.color));
+				add(&relativePen, sizeof(relativePen));
 				add(&quad.offsetX, sizeof(quad.offsetX));
 				add(&quad.offsetY, sizeof(quad.offsetY));
 				add(&quad.rasterScale, sizeof(quad.rasterScale));
@@ -537,7 +540,7 @@ namespace fonthook::vectorfont
 		std::shared_ptr<const BatchTemplate> GetBatchTemplate(Font& font,
 			const std::vector<PendingQuad>& quads,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
-			const QuadBatchFingerprint& fingerprint)
+			const QuadBatchFingerprint& fingerprint, const NiPoint3& origin)
 		{
 			AtlasState& state = State();
 			const BatchTemplateKey key = BuildBatchTemplateKey(fingerprint, atlases);
@@ -568,8 +571,9 @@ namespace fonthook::vectorfont
 				const AtlasRect& rect = atlas.placements.at(quad.bitmap->cacheId);
 				const float scale = quad.rasterScale;
 				const float expansion = static_cast<float>(quad.expansionPixels);
-				const float logicalX = quad.pen.x + quad.offsetX;
-				const float logicalZ = quad.pen.z + quad.baselineOffset - quad.offsetY;
+				const float logicalX = quad.pen.x - origin.x + quad.offsetX;
+				const float logicalZ = quad.pen.z - origin.z
+					+ quad.baselineOffset - quad.offsetY;
 				const float bitmapLeft = static_cast<float>(quad.bitmap->left) - expansion;
 				const float bitmapTop = static_cast<float>(quad.bitmap->top) + expansion;
 				// Coverage masks stay aligned to their source-pixel grid. SDF masks are
@@ -600,7 +604,7 @@ namespace fonthook::vectorfont
 							"tnvse_freetype_font: first atlas vertical metrics font=%u scale=%.3f bitmapTop=%.3f logicalTopEdge=%.3f delta=%.3f baselineOffset=%.3f penZ=%.3f quadTop=%.3f positioning=%s",
 							font.iFontNum, scale, bitmapTop, quad.logicalTopEdge,
 							bitmapTop - quad.logicalTopEdge, quad.baselineOffset,
-							quad.pen.z, z0,
+							quad.pen.z, z0 + origin.z,
 							quad.usesSdf ? "sdf-subpixel" : "source-pixel-snapped");
 					}
 				}
@@ -608,7 +612,7 @@ namespace fonthook::vectorfont
 				// the contiguous draw ranges, not by depth offsets. Artificial per-layer
 				// depth can make an effect occlude the fill (or another Tile) on Pip-Boy
 				// render targets whose UI pass has depth testing enabled.
-				const float depth = quad.pen.y;
+				const float depth = quad.pen.y - origin.y;
 				const float u0 = (static_cast<float>(rect.x) - expansion) / atlas.width;
 				const float v0 = (static_cast<float>(rect.y) - expansion) / atlas.height;
 				const float u1 = (static_cast<float>(rect.x + rect.width) + expansion)
@@ -652,7 +656,7 @@ namespace fonthook::vectorfont
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases, bool prepareObject,
 			const NiColorA& tileColor, bool useCustomA8Shader,
 			const A8EffectShapeConfig* effectConfig,
-			const QuadBatchFingerprint& fingerprint)
+			const QuadBatchFingerprint& fingerprint, const NiPoint3& origin)
 		{
 			if (atlases.empty() || !atlases[0] || quads.empty()
 				|| quads.size() > kMaximumQuads)
@@ -676,10 +680,17 @@ namespace fonthook::vectorfont
 
 			NiTriShapeData* data = shape->GetModelData();
 			const std::shared_ptr<const BatchTemplate> batch =
-				GetBatchTemplate(font, quads, atlases, fingerprint);
+				GetBatchTemplate(font, quads, atlases, fingerprint, origin);
 			if (!batch)
 				return nullptr;
-			std::copy(batch->vertices.begin(), batch->vertices.end(), data->m_pkVertex);
+			for (size_t index = 0; index < batch->vertices.size(); ++index)
+			{
+				const NiPoint3& vertex = batch->vertices[index];
+				data->m_pkVertex[index] = NiPoint3(
+					vertex.x + origin.x,
+					vertex.y + origin.y,
+					vertex.z + origin.z);
+			}
 			std::copy(batch->texture.begin(), batch->texture.end(), data->m_pkTexture);
 			std::copy(batch->indices.begin(), batch->indices.end(), data->m_pusTriList);
 			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
@@ -729,6 +740,8 @@ namespace fonthook::vectorfont
 			const NiColorA& tileColor, bool useCustomA8Shader,
 			const A8EffectShapeConfig* effectConfig)
 		{
+			if (quads.empty())
+				return nullptr;
 			if (pixelMode == AtlasPixelMode::A8 && !useCustomA8Shader)
 				return nullptr;
 			const std::vector<PendingQuad>* activeQuads = &quads;
@@ -771,6 +784,7 @@ namespace fonthook::vectorfont
 				return nullptr;
 			thread_local std::vector<PendingQuad> pagedQuads;
 			pagedQuads = *activeQuads;
+			const NiPoint3 batchOrigin = pagedQuads.front().pen;
 			outAtlases.clear();
 			std::vector<UInt16> compactPageIndices(availableAtlases.size(),
 				std::numeric_limits<UInt16>::max());
@@ -811,7 +825,7 @@ namespace fonthook::vectorfont
 				std::stable_sort(pagedQuads.begin(), pagedQuads.end(), batchOrder);
 			}
 			const QuadBatchFingerprint fingerprint =
-				BuildQuadBatchFingerprint(pagedQuads);
+				BuildQuadBatchFingerprint(pagedQuads, batchOrigin);
 			A8EffectShapeConfig resolvedEffect;
 			const A8EffectShapeConfig* resolvedEffectPointer = nullptr;
 			if (effectConfig)
@@ -822,7 +836,8 @@ namespace fonthook::vectorfont
 				resolvedEffectPointer = &resolvedEffect;
 			}
 			NiTriShape* shape = CreateAtlasShape(font, pagedQuads, outAtlases, prepareObject,
-				tileColor, useCustomA8Shader, resolvedEffectPointer, fingerprint);
+				tileColor, useCustomA8Shader, resolvedEffectPointer, fingerprint,
+				batchOrigin);
 			if (shape && outAtlases.size() == 1 && outAtlases[0]->transient
 				&& outAtlases[0]->backend == AtlasBackend::DefaultPool)
 			{
