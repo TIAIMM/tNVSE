@@ -107,7 +107,7 @@ namespace fonthook::vectorfont
 		std::shared_ptr<const CompactAtlasSnapshot> compactSnapshot;
 	};
 
-	constexpr UInt32 kAtlasSnapshotVersion = 7;
+	constexpr UInt32 kAtlasSnapshotVersion = 8;
 	constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 #pragma pack(push, 1)
 	struct AtlasSnapshotHeader

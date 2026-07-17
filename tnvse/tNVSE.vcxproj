@@ -254,6 +254,7 @@
     <ClInclude Include="Src\tnvse.h" />
     <ClInclude Include="Src\globals.h" />
     <ClInclude Include="Src\ui_decode.h" />
+    <ClInclude Include="third_party\stb\stb_rect_pack.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

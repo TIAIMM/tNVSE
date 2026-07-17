@@ -33,6 +33,19 @@ and the built-in Unicode data without adding a runtime DLL.
 - License: MIT-style HarfBuzz license
 - License text: `harfbuzz/COPYING`
 
+## stb_rect_pack 1.01
+
+tNVSE vendors the single-header `stb_rect_pack` skyline implementation for
+deterministic atlas snapshot repacking. Runtime atlas pages retain their live
+placements; complete pure-SDF profiles are repacked only while snapshot files
+are being produced.
+
+- Project: https://github.com/nothings/stb
+- Upstream commit: `31c1ad37456438565541f4919958214b6e762fb4`
+- Header: `stb/stb_rect_pack.h`
+- License selected for tNVSE: MIT
+- The MIT license text is included at the end of the vendored header.
+
 ## Initialize submodules
 
 After cloning or changing revisions, initialize all source trees with:

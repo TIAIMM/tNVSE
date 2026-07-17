@@ -208,12 +208,14 @@ The same directory also contains three startup-oriented cache layers. A
 last-write time still match. A dense 65536-entry `.tnvfmanifest` stores the
 encoded unit's Unicode value, fallback face/glyph identity, and serialized
 `FontLetter` metrics. One `_p<page>.tnvfatlas` snapshot per atlas page stores
-the shelf cursor state and stable glyph-ID placement map. Snapshot v7 repacks a
-complete pure-SDF profile in deterministic height/width/glyph-ID order, can
-reduce the page count, and shrinks the sparse final page to the smallest usable
-power-of-two dimensions. The live atlas is not rearranged, so shapes created in
-the current process keep their original UVs; the compact layout takes effect on
-the next restore. Pure SDF pages store only the placed level-zero rectangles;
+the stable glyph-ID placement map. Snapshot v8 uses `stb_rect_pack` skyline
+packing for a complete pure-SDF profile in deterministic
+height/width/glyph-ID order, can reduce the page count, and shrinks every page
+to the smallest usable power-of-two dimensions. The live atlas is not
+rearranged, so shapes created in the current process keep their original UVs;
+the compact layout takes effect on the next restore. A restored skyline page
+starts runtime shelf appends below its packed extent rather than reusing skyline
+holes. Pure SDF pages store only the placed level-zero rectangles;
 other pages retain their complete mip chain. Each page records and validates
 the total page count. After a successful full prewarm every page is written
 atomically, then the manifest is marked complete. A later launch restores the
@@ -387,7 +389,7 @@ CPU-side caches. When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
-generations are restored after a D3D9 device reset. A pure SDF v7 snapshot is
+generations are restored after a D3D9 device reset. A pure SDF v8 snapshot is
 uploaded directly to this path and keeps its packed placement payload as reset
 backing. Its page-content fingerprint covers dimensions, format, placed
 coordinates, and exact texels. A hash match is followed by byte-for-byte

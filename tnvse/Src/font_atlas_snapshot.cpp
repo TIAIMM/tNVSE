@@ -11,6 +11,10 @@
 #include "NiTriShapeData.hpp"
 #include "Utils/SafeWrite.h"
 
+#define STBRP_STATIC
+#define STB_RECT_PACK_IMPLEMENTATION
+#include "../third_party/stb/stb_rect_pack.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -464,26 +468,6 @@ namespace fonthook::vectorfont
 			return result;
 		}
 
-		bool PlaceSnapshotGlyph(SnapshotPageData& page,
-			const SnapshotGlyphData& glyph, UInt32 maximumSize)
-		{
-			const UInt32 padding = page.header.padding;
-			const UInt32 width = glyph.placement.rect.width;
-			const UInt32 height = glyph.placement.rect.height;
-			if (!width || !height || width + padding * 2 > maximumSize
-				|| height + padding * 2 > maximumSize)
-				return false;
-			if (page.header.cursorX + width + padding > maximumSize)
-			{
-				page.header.cursorX = padding;
-				page.header.cursorY += page.header.shelfHeight;
-				page.header.shelfHeight = 0;
-			}
-			if (page.header.cursorY + height + padding > maximumSize)
-				return false;
-			return true;
-		}
-
 		UInt64 ComputeAtlasPageContentHash(const AtlasSnapshotHeader& header,
 			const std::vector<AtlasSnapshotPlacement>& placements,
 			const std::vector<UInt8>& pixels)
@@ -605,54 +589,82 @@ namespace fonthook::vectorfont
 			});
 
 			const UInt32 maximumSize = std::min(GetMaximumAtlasSize(), kAtlasHardLimit);
-			std::vector<std::vector<SnapshotGlyphData>> pageGlyphs;
-			for (SnapshotGlyphData& glyph : glyphs)
+			const UInt32 padding = baseKey.padding;
+			std::vector<SnapshotGlyphData> remaining = std::move(glyphs);
+			while (!remaining.empty())
 			{
-				if (pages.empty() || !PlaceSnapshotGlyph(pages.back(), glyph, maximumSize))
-				{
-					if (pages.size() >= kMaximumAtlasSnapshotPages)
-						return false;
-					SnapshotPageData page;
-					page.key = baseKey;
-					page.key.pageIndex = static_cast<UInt16>(pages.size());
-					page.header.width = maximumSize;
-					page.header.height = maximumSize;
-					page.header.padding = baseKey.padding;
-					page.header.cursorX = baseKey.padding;
-					page.header.cursorY = baseKey.padding;
-					pages.push_back(std::move(page));
-					pageGlyphs.emplace_back();
-					if (!PlaceSnapshotGlyph(pages.back(), glyph, maximumSize))
-						return false;
-				}
-				glyph.placement.rect.x = pages.back().header.cursorX;
-				glyph.placement.rect.y = pages.back().header.cursorY;
-				pages.back().header.cursorX += glyph.placement.rect.width
-					+ baseKey.padding * 2;
-				pages.back().header.shelfHeight = std::max(
-					pages.back().header.shelfHeight,
-					glyph.placement.rect.height + baseKey.padding * 2);
-				pageGlyphs.back().push_back(std::move(glyph));
-			}
+				if (pages.size() >= kMaximumAtlasSnapshotPages
+					|| maximumSize > static_cast<UInt32>(std::numeric_limits<int>::max()))
+					return false;
 
-			SnapshotPageData& tail = pages.back();
-			tail.header.width = NextSnapshotPowerOfTwo(std::max<UInt32>(64,
-				tail.header.cursorX + tail.header.padding));
-			tail.header.height = NextSnapshotPowerOfTwo(std::max<UInt32>(64,
-				tail.header.cursorY + tail.header.shelfHeight));
-			for (size_t pageIndex = 0; pageIndex < pages.size(); ++pageIndex)
-			{
-				auto& entries = pageGlyphs[pageIndex];
-				std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs)
+				std::vector<stbrp_node> nodes(maximumSize);
+				stbrp_context context = {};
+				stbrp_init_target(&context, static_cast<int>(maximumSize),
+					static_cast<int>(maximumSize), nodes.data(),
+					static_cast<int>(nodes.size()));
+
+				std::vector<SnapshotGlyphData> packed;
+				std::vector<SnapshotGlyphData> nextRemaining;
+				packed.reserve(remaining.size());
+				nextRemaining.reserve(remaining.size());
+				UInt32 usedWidth = 0;
+				UInt32 usedHeight = 0;
+				for (SnapshotGlyphData& glyph : remaining)
+				{
+					const UInt32 glyphWidth = glyph.placement.rect.width;
+					const UInt32 glyphHeight = glyph.placement.rect.height;
+					if (!glyphWidth || !glyphHeight || padding > maximumSize / 2
+						|| glyphWidth > maximumSize - padding * 2
+						|| glyphHeight > maximumSize - padding * 2)
+						return false;
+
+					stbrp_rect rect = {};
+					rect.w = static_cast<stbrp_coord>(glyphWidth + padding * 2);
+					rect.h = static_cast<stbrp_coord>(glyphHeight + padding * 2);
+					// Pack one already-sorted rectangle at a time. This preserves the
+					// cacheId tie-break instead of relying on qsort stability for equal sizes.
+					stbrp_pack_rects(&context, &rect, 1);
+					if (!rect.was_packed)
+					{
+						nextRemaining.push_back(std::move(glyph));
+						continue;
+					}
+					glyph.placement.rect.x = static_cast<UInt32>(rect.x) + padding;
+					glyph.placement.rect.y = static_cast<UInt32>(rect.y) + padding;
+					usedWidth = std::max(usedWidth,
+						static_cast<UInt32>(rect.x + rect.w));
+					usedHeight = std::max(usedHeight,
+						static_cast<UInt32>(rect.y + rect.h));
+					packed.push_back(std::move(glyph));
+				}
+				if (packed.empty())
+					return false;
+
+				SnapshotPageData page;
+				page.key = baseKey;
+				page.key.pageIndex = static_cast<UInt16>(pages.size());
+				page.header.width = NextSnapshotPowerOfTwo(
+					std::max<UInt32>(64, usedWidth));
+				page.header.height = NextSnapshotPowerOfTwo(
+					std::max<UInt32>(64, usedHeight));
+				page.header.padding = padding;
+				// A skyline-packed snapshot cannot resume the runtime shelf cursor.
+				// Close the restored page so later glyphs are placed on a fresh page.
+				page.header.cursorX = padding;
+				page.header.cursorY = page.header.height;
+				page.header.shelfHeight = 0;
+				std::sort(packed.begin(), packed.end(), [](const auto& lhs, const auto& rhs)
 				{
 					return lhs.placement.cacheId < rhs.placement.cacheId;
 				});
-				for (SnapshotGlyphData& glyph : entries)
+				for (SnapshotGlyphData& glyph : packed)
 				{
-					pages[pageIndex].placements.push_back(glyph.placement);
-					pages[pageIndex].pixels.insert(pages[pageIndex].pixels.end(),
+					page.placements.push_back(glyph.placement);
+					page.pixels.insert(page.pixels.end(),
 						glyph.pixels.begin(), glyph.pixels.end());
 				}
+				pages.push_back(std::move(page));
+				remaining = std::move(nextRemaining);
 			}
 			return true;
 		}
@@ -776,7 +788,7 @@ namespace fonthook::vectorfont
 				return false;
 			AtlasSnapshotHeader header;
 			std::memcpy(&header, serialized.data(), sizeof(header));
-			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '7' };
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '8' };
 			const AtlasSnapshotStorage expectedStorage = UsesPlacedLevelZeroSnapshot(pageKey)
 				? AtlasSnapshotStorage::PlacedLevelZeroRects
 				: AtlasSnapshotStorage::FullMipChain;
@@ -858,7 +870,7 @@ namespace fonthook::vectorfont
 					return false;
 				resource->residentBitmaps.emplace(placementList[index].cacheId, bitmap);
 			}
-			// v7 shader pages keep only placed level-zero texels. DEFAULT-pool restore
+			// v8 shader pages keep only placed level-zero texels. DEFAULT-pool restore
 			// regenerates the mip chain directly and retains this compact reset backing.
 			const bool compactDefaultEligible = g_bEnableFreeTypeDefaultPoolAtlas
 				&& !State().defaultPoolShutdown
@@ -992,48 +1004,6 @@ namespace fonthook::vectorfont
 			{
 				if (!BuildRepackedSnapshotPages(key, resources, pages, originalGpuBytes))
 					return false;
-				UInt64 repackedGpuBytes = 0;
-				for (const SnapshotPageData& page : pages)
-				{
-					repackedGpuBytes += GetAtlasStorageBytes(page.header.width,
-						page.header.height, key.pixelMode,
-						GetAtlasMipLevelCount(page.header.width, page.header.height,
-							key.levelZeroOnly));
-				}
-				// Repacking is an optimization, never a reason to grow the resident set.
-				if (pages.size() > resources.size() || repackedGpuBytes > originalGpuBytes)
-				{
-					pages.clear();
-					for (size_t index = 0; index < resources.size(); ++index)
-					{
-						SnapshotPageData page;
-						page.key = resources[index].first;
-						AtlasResource& resource = *resources[index].second;
-						page.header.width = resource.width;
-						page.header.height = resource.height;
-						page.header.cursorX = resource.cursorX;
-						page.header.cursorY = resource.cursorY;
-						page.header.shelfHeight = resource.shelfHeight;
-						page.header.padding = resource.padding;
-						for (const auto& pair : resource.placements)
-						{
-							AtlasSnapshotPlacement placement;
-							if (!MakeSnapshotPlacement(resource, pair.first,
-								pair.second, placement))
-								return false;
-							page.placements.push_back(placement);
-						}
-						std::sort(page.placements.begin(), page.placements.end(),
-							[](const auto& lhs, const auto& rhs)
-							{
-								return lhs.cacheId < rhs.cacheId;
-							});
-						if (!BuildAtlasSnapshotPixels(resource, page.placements,
-							AtlasSnapshotStorage::PlacedLevelZeroRects, page.pixels))
-							return false;
-						pages.push_back(std::move(page));
-					}
-				}
 			}
 			else
 			{
@@ -1086,7 +1056,7 @@ namespace fonthook::vectorfont
 			const AtlasSnapshotStorage storageMode = UsesPlacedLevelZeroSnapshot(page.key)
 				? AtlasSnapshotStorage::PlacedLevelZeroRects
 				: AtlasSnapshotStorage::FullMipChain;
-			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '7' };
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '8' };
 			std::memcpy(page.header.magic, magic, sizeof(magic));
 				page.header.version = kAtlasSnapshotVersion;
 				page.header.headerSize = sizeof(page.header);
