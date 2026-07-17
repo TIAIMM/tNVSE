@@ -99,13 +99,15 @@ namespace fonthook::vectorfont
 		bool levelZeroOnly = false;
 		bool resetPending = false;
 		bool transient = false;
+		bool sharedGpuPage = false;
+		UInt64 pageContentHash = 0;
 		std::vector<UInt8> pixels;
 		std::unordered_map<UInt64, AtlasRect> placements;
 		std::unordered_map<UInt64, std::shared_ptr<const GlyphBitmap>> residentBitmaps;
 		std::shared_ptr<const CompactAtlasSnapshot> compactSnapshot;
 	};
 
-	constexpr UInt32 kAtlasSnapshotVersion = 6;
+	constexpr UInt32 kAtlasSnapshotVersion = 7;
 	constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 #pragma pack(push, 1)
 	struct AtlasSnapshotHeader
@@ -134,6 +136,7 @@ namespace fonthook::vectorfont
 		UInt32 placementCount = 0;
 		UInt64 pixelBytes = 0;
 		UInt64 payloadChecksum = 0;
+		UInt64 pageContentHash = 0;
 		UInt64 checksum = 0;
 	};
 
@@ -331,7 +334,7 @@ namespace fonthook::vectorfont
 		UInt32 padding = kAtlasPadding;
 	};
 
-	static_assert(sizeof(AtlasSnapshotHeader) == 112);
+	static_assert(sizeof(AtlasSnapshotHeader) == 120);
 	static_assert(sizeof(AtlasSnapshotPlacement) == 56);
 
 	struct AtlasState
@@ -341,6 +344,7 @@ namespace fonthook::vectorfont
 			AtlasProfileKeyHash> atlasProfiles;
 		std::unordered_set<AtlasProfileKey, AtlasProfileKeyHash>
 			completeAtlasProfiles;
+		std::unordered_multimap<UInt64, std::weak_ptr<AtlasResource>> atlasPageDedup;
 		std::list<AtlasCacheKey> atlasLru;
 		size_t atlasCacheBytes = 0;
 		std::mutex atlasMutex;
@@ -422,6 +426,10 @@ namespace fonthook::vectorfont
 		AtlasPixelMode destinationMode, const AtlasResource& resource);
 	bool CreateDefaultPoolAtlas(AtlasResource& resource,
 		AtlasPixelMode requestedMode);
+	bool TryReuseDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,
+		UInt64 pageContentHash);
+	void RegisterDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,
+		UInt64 pageContentHash);
 	void CopyBitmapToAtlas(AtlasResource& resource, const GlyphBitmap& bitmap,
 		const AtlasRect& rect);
 

@@ -441,6 +441,222 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		struct SnapshotGlyphData
+		{
+			AtlasSnapshotPlacement placement;
+			std::vector<UInt8> pixels;
+		};
+
+		struct SnapshotPageData
+		{
+			AtlasCacheKey key;
+			AtlasSnapshotHeader header;
+			std::vector<AtlasSnapshotPlacement> placements;
+			std::vector<UInt8> pixels;
+			std::wstring path;
+		};
+
+		UInt32 NextSnapshotPowerOfTwo(UInt32 value)
+		{
+			UInt32 result = 64;
+			while (result < value && result < kAtlasHardLimit)
+				result <<= 1;
+			return result;
+		}
+
+		bool PlaceSnapshotGlyph(SnapshotPageData& page,
+			const SnapshotGlyphData& glyph, UInt32 maximumSize)
+		{
+			const UInt32 padding = page.header.padding;
+			const UInt32 width = glyph.placement.rect.width;
+			const UInt32 height = glyph.placement.rect.height;
+			if (!width || !height || width + padding * 2 > maximumSize
+				|| height + padding * 2 > maximumSize)
+				return false;
+			if (page.header.cursorX + width + padding > maximumSize)
+			{
+				page.header.cursorX = padding;
+				page.header.cursorY += page.header.shelfHeight;
+				page.header.shelfHeight = 0;
+			}
+			if (page.header.cursorY + height + padding > maximumSize)
+				return false;
+			return true;
+		}
+
+		UInt64 ComputeAtlasPageContentHash(const AtlasSnapshotHeader& header,
+			const std::vector<AtlasSnapshotPlacement>& placements,
+			const std::vector<UInt8>& pixels)
+		{
+			struct PageIdentity
+			{
+				UInt32 width;
+				UInt32 height;
+				UInt32 padding;
+				UInt32 mipLevels;
+				UInt8 pixelMode;
+				UInt8 renderMode;
+				UInt8 storageMode;
+				UInt8 levelZeroOnly;
+			} identity = { header.width, header.height, header.padding,
+				header.mipLevels, header.pixelMode, header.renderMode,
+				header.storageMode,
+				static_cast<UInt8>(header.mipLevels == 1 ? 1 : 0) };
+			UInt64 hash = HashAtlasBytes(&identity, sizeof(identity));
+			if (header.storageMode
+				== static_cast<UInt8>(AtlasSnapshotStorage::FullMipChain))
+			{
+				return HashAtlasBytes(pixels.data(), pixels.size(), hash);
+			}
+			struct Slice
+			{
+				AtlasRect rect;
+				size_t offset;
+				size_t bytes;
+			};
+			std::vector<Slice> slices;
+			slices.reserve(placements.size());
+			size_t offset = 0;
+			const size_t bytesPerPixel = AtlasBytesPerPixel(
+				static_cast<AtlasPixelMode>(header.pixelMode));
+			for (const AtlasSnapshotPlacement& placement : placements)
+			{
+				const size_t bytes = static_cast<size_t>(placement.rect.width)
+					* placement.rect.height * bytesPerPixel;
+				if (offset > pixels.size() || bytes > pixels.size() - offset)
+					return 0;
+				slices.push_back({ placement.rect, offset, bytes });
+				offset += bytes;
+			}
+			if (offset != pixels.size())
+				return 0;
+			std::sort(slices.begin(), slices.end(), [](const Slice& a, const Slice& b)
+			{
+				if (a.rect.y != b.rect.y) return a.rect.y < b.rect.y;
+				if (a.rect.x != b.rect.x) return a.rect.x < b.rect.x;
+				if (a.rect.height != b.rect.height) return a.rect.height < b.rect.height;
+				return a.rect.width < b.rect.width;
+			});
+			for (const Slice& slice : slices)
+			{
+				hash = HashAtlasBytes(&slice.rect, sizeof(slice.rect), hash);
+				hash = HashAtlasBytes(pixels.data() + slice.offset, slice.bytes, hash);
+			}
+			return hash;
+		}
+
+		bool BuildRepackedSnapshotPages(const AtlasCacheKey& baseKey,
+			const std::vector<std::pair<AtlasCacheKey,
+				std::shared_ptr<AtlasResource>>>& resources,
+			std::vector<SnapshotPageData>& pages, UInt64& originalGpuBytes)
+		{
+			std::vector<SnapshotGlyphData> glyphs;
+			std::unordered_set<UInt64> cacheIds;
+			originalGpuBytes = 0;
+			for (const auto& item : resources)
+			{
+				const AtlasResource& resource = *item.second;
+				if (resource.pixelMode != AtlasPixelMode::A8
+					|| resource.renderMode != AtlasRenderMode::ShaderEffects)
+					return false;
+				originalGpuBytes += GetAtlasStorageBytes(resource.width, resource.height,
+					resource.pixelMode, resource.mipLevels);
+				std::vector<AtlasSnapshotPlacement> placements;
+				placements.reserve(resource.placements.size());
+				for (const auto& pair : resource.placements)
+				{
+					AtlasSnapshotPlacement placement;
+					if (!MakeSnapshotPlacement(resource, pair.first, pair.second, placement)
+						|| !cacheIds.insert(pair.first).second)
+						return false;
+					placements.push_back(placement);
+				}
+				std::sort(placements.begin(), placements.end(),
+					[](const auto& lhs, const auto& rhs) { return lhs.cacheId < rhs.cacheId; });
+				std::vector<UInt8> packed;
+				if (!BuildAtlasSnapshotPixels(resource, placements,
+					AtlasSnapshotStorage::PlacedLevelZeroRects, packed))
+					return false;
+				size_t offset = 0;
+				for (const AtlasSnapshotPlacement& placement : placements)
+				{
+					const size_t bytes = static_cast<size_t>(placement.rect.width)
+						* placement.rect.height * AtlasBytesPerPixel(resource.pixelMode);
+					if (offset > packed.size() || bytes > packed.size() - offset)
+						return false;
+					SnapshotGlyphData glyph;
+					glyph.placement = placement;
+					glyph.pixels.assign(packed.data() + offset, packed.data() + offset + bytes);
+					glyphs.push_back(std::move(glyph));
+					offset += bytes;
+				}
+				if (offset != packed.size())
+					return false;
+			}
+			if (glyphs.empty())
+				return false;
+			std::sort(glyphs.begin(), glyphs.end(), [](const auto& lhs, const auto& rhs)
+			{
+				if (lhs.placement.rect.height != rhs.placement.rect.height)
+					return lhs.placement.rect.height > rhs.placement.rect.height;
+				if (lhs.placement.rect.width != rhs.placement.rect.width)
+					return lhs.placement.rect.width > rhs.placement.rect.width;
+				return lhs.placement.cacheId < rhs.placement.cacheId;
+			});
+
+			const UInt32 maximumSize = std::min(GetMaximumAtlasSize(), kAtlasHardLimit);
+			std::vector<std::vector<SnapshotGlyphData>> pageGlyphs;
+			for (SnapshotGlyphData& glyph : glyphs)
+			{
+				if (pages.empty() || !PlaceSnapshotGlyph(pages.back(), glyph, maximumSize))
+				{
+					if (pages.size() >= kMaximumAtlasSnapshotPages)
+						return false;
+					SnapshotPageData page;
+					page.key = baseKey;
+					page.key.pageIndex = static_cast<UInt16>(pages.size());
+					page.header.width = maximumSize;
+					page.header.height = maximumSize;
+					page.header.padding = baseKey.padding;
+					page.header.cursorX = baseKey.padding;
+					page.header.cursorY = baseKey.padding;
+					pages.push_back(std::move(page));
+					pageGlyphs.emplace_back();
+					if (!PlaceSnapshotGlyph(pages.back(), glyph, maximumSize))
+						return false;
+				}
+				glyph.placement.rect.x = pages.back().header.cursorX;
+				glyph.placement.rect.y = pages.back().header.cursorY;
+				pages.back().header.cursorX += glyph.placement.rect.width
+					+ baseKey.padding * 2;
+				pages.back().header.shelfHeight = std::max(
+					pages.back().header.shelfHeight,
+					glyph.placement.rect.height + baseKey.padding * 2);
+				pageGlyphs.back().push_back(std::move(glyph));
+			}
+
+			SnapshotPageData& tail = pages.back();
+			tail.header.width = NextSnapshotPowerOfTwo(std::max<UInt32>(64,
+				tail.header.cursorX + tail.header.padding));
+			tail.header.height = NextSnapshotPowerOfTwo(std::max<UInt32>(64,
+				tail.header.cursorY + tail.header.shelfHeight));
+			for (size_t pageIndex = 0; pageIndex < pages.size(); ++pageIndex)
+			{
+				auto& entries = pageGlyphs[pageIndex];
+				std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs)
+				{
+					return lhs.placement.cacheId < rhs.placement.cacheId;
+				});
+				for (SnapshotGlyphData& glyph : entries)
+				{
+					pages[pageIndex].placements.push_back(glyph.placement);
+					pages[pageIndex].pixels.insert(pages[pageIndex].pixels.end(),
+						glyph.pixels.begin(), glyph.pixels.end());
+				}
+			}
+			return true;
+		}
+
 		bool DecodeAtlasSnapshotPixels(const AtlasSnapshotHeader& header,
 			const std::vector<AtlasSnapshotPlacement>& placements,
 			const UInt8* storedPixels, std::vector<UInt8>& pixels)
@@ -535,6 +751,8 @@ namespace fonthook::vectorfont
 		UInt64 totalPlacements = 0;
 		UInt16 pageCount = 0;
 		UInt16 defaultPoolPages = 0;
+		UInt16 deduplicatedPages = 0;
+		UInt64 deduplicatedGpuBytes = 0;
 		for (UInt16 pageIndex = 0; pageIndex == 0 || pageIndex < pageCount; ++pageIndex)
 		{
 			AtlasCacheKey pageKey = key;
@@ -558,7 +776,7 @@ namespace fonthook::vectorfont
 				return false;
 			AtlasSnapshotHeader header;
 			std::memcpy(&header, serialized.data(), sizeof(header));
-			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '6' };
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '7' };
 			const AtlasSnapshotStorage expectedStorage = UsesPlacedLevelZeroSnapshot(pageKey)
 				? AtlasSnapshotStorage::PlacedLevelZeroRects
 				: AtlasSnapshotStorage::FullMipChain;
@@ -595,6 +813,7 @@ namespace fonthook::vectorfont
 				|| header.mipLevels != GetAtlasMipLevelCount(header.width, header.height,
 					pageKey.levelZeroOnly)
 				|| header.pixelBytes > fullPixelBytes
+				|| !header.pageContentHash
 				|| (expectedStorage == AtlasSnapshotStorage::FullMipChain
 					&& header.pixelBytes != fullPixelBytes)
 				|| header.checksum != HashAtlasBytes(&header,
@@ -620,6 +839,12 @@ namespace fonthook::vectorfont
 			const auto* placements = reinterpret_cast<const AtlasSnapshotPlacement*>(payload);
 			std::vector<AtlasSnapshotPlacement> placementList(
 				placements, placements + header.placementCount);
+			const UInt8* pixelData = payload + placementsBytes;
+			std::vector<UInt8> storedPixelVector(pixelData,
+				pixelData + static_cast<size_t>(header.pixelBytes));
+			if (header.pageContentHash != ComputeAtlasPageContentHash(header,
+				placementList, storedPixelVector))
+				return false;
 			for (UInt32 index = 0; index < header.placementCount; ++index)
 			{
 				const AtlasRect& rect = placementList[index].rect;
@@ -633,8 +858,7 @@ namespace fonthook::vectorfont
 					return false;
 				resource->residentBitmaps.emplace(placementList[index].cacheId, bitmap);
 			}
-			const UInt8* pixelData = payload + placementsBytes;
-			// v6 shader pages keep only placed level-zero texels. DEFAULT-pool restore
+			// v7 shader pages keep only placed level-zero texels. DEFAULT-pool restore
 			// regenerates the mip chain directly and retains this compact reset backing.
 			const bool compactDefaultEligible = g_bEnableFreeTypeDefaultPoolAtlas
 				&& !State().defaultPoolShutdown
@@ -654,14 +878,26 @@ namespace fonthook::vectorfont
 				auto compactSnapshot = std::make_shared<CompactAtlasSnapshot>();
 				compactSnapshot->pixelMode = pageKey.pixelMode;
 				compactSnapshot->placements = placementList;
-				compactSnapshot->pixels.assign(pixelData,
-					pixelData + static_cast<size_t>(header.pixelBytes));
+				compactSnapshot->pixels = std::move(storedPixelVector);
 				resource->compactSnapshot = compactSnapshot;
 				resource->backend = AtlasBackend::DefaultPool;
-				restoredToDefaultPool = CreateDefaultPoolAtlas(
+				resource->pageContentHash = header.pageContentHash;
+				const bool deduplicated = TryReuseDefaultPoolAtlasPage(resource,
+					header.pageContentHash);
+				restoredToDefaultPool = deduplicated || CreateDefaultPoolAtlas(
 					*resource, pageKey.pixelMode);
 				if (restoredToDefaultPool)
+				{
 					++defaultPoolPages;
+					if (deduplicated)
+					{
+						++deduplicatedPages;
+						deduplicatedGpuBytes += GetAtlasStorageBytes(resource->width,
+							resource->height, resource->pixelMode, resource->mipLevels);
+					}
+					else
+						RegisterDefaultPoolAtlasPage(resource, header.pageContentHash);
+				}
 			}
 			if (!restoredToDefaultPool)
 			{
@@ -691,8 +927,9 @@ namespace fonthook::vectorfont
 			{
 				if (state.atlasCache.find(page.first) != state.atlasCache.end())
 					continue;
-				const size_t storageBytes = GetAtlasStorageBytes(page.second->width,
-					page.second->height, page.second->pixelMode, page.second->mipLevels);
+				const size_t storageBytes = page.second->sharedGpuPage ? 0
+					: GetAtlasStorageBytes(page.second->width,
+						page.second->height, page.second->pixelMode, page.second->mipLevels);
 				state.atlasLru.push_front(page.first);
 				state.atlasCache.emplace(page.first, AtlasCacheEntry{
 					page.second, storageBytes, state.atlasLru.begin() });
@@ -704,8 +941,9 @@ namespace fonthook::vectorfont
 				state.completeAtlasProfiles.insert(MakeAtlasProfileKey(key));
 		}
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: atlas snapshot restored font=%u pages=%u defaultPoolPages=%u placements=%llu bytes=%llu",
-			key.fontId, pageCount, defaultPoolPages,
+			"tnvse_freetype_font: atlas snapshot restored font=%u pages=%u defaultPoolPages=%u deduplicatedPages=%u deduplicatedGpuBytes=%llu placements=%llu bytes=%llu",
+			key.fontId, pageCount, defaultPoolPages, deduplicatedPages,
+			static_cast<unsigned long long>(deduplicatedGpuBytes),
 			static_cast<unsigned long long>(totalPlacements),
 			static_cast<unsigned long long>(totalBytes));
 		return true;
@@ -721,17 +959,12 @@ namespace fonthook::vectorfont
 		UInt64 maskContentHash = 0;
 		if (GetAtlasSnapshotPath(runtime, key, snapshotHash, maskContentHash).empty())
 			return false;
-		struct SnapshotPage
-		{
-			AtlasCacheKey key;
-			AtlasSnapshotHeader header;
-			std::vector<AtlasSnapshotPlacement> placements;
-			std::vector<UInt8> pixels;
-			std::wstring path;
-		};
+		std::vector<SnapshotPageData> pages;
 		UInt64 totalBytes = 0;
 		UInt64 totalPlacements = 0;
-		UInt32 pageCount = 0;
+		UInt64 originalGpuBytes = 0;
+		UInt64 snapshotGpuBytes = 0;
+		UInt32 sourcePageCount = 0;
 		{
 			std::lock_guard<std::mutex> lock(State().atlasMutex);
 			std::vector<std::pair<AtlasCacheKey, std::shared_ptr<AtlasResource>>> resources;
@@ -749,42 +982,112 @@ namespace fonthook::vectorfont
 			}
 			if (resources.empty() || resources.size() > kMaximumAtlasSnapshotPages)
 				return false;
-			pageCount = static_cast<UInt32>(resources.size());
+			sourcePageCount = static_cast<UInt32>(resources.size());
 			for (size_t index = 0; index < resources.size(); ++index)
 			{
 				if (resources[index].first.pageIndex != index)
 					return false;
-				SnapshotPage page;
-				page.key = resources[index].first;
-				AtlasResource& resource = *resources[index].second;
-				page.placements.reserve(resource.placements.size());
-				for (const auto& pair : resource.placements)
+			}
+			if (UsesPlacedLevelZeroSnapshot(key))
+			{
+				if (!BuildRepackedSnapshotPages(key, resources, pages, originalGpuBytes))
+					return false;
+				UInt64 repackedGpuBytes = 0;
+				for (const SnapshotPageData& page : pages)
 				{
-					AtlasSnapshotPlacement placement;
-					if (!MakeSnapshotPlacement(resource, pair.first,
-						pair.second, placement))
+					repackedGpuBytes += GetAtlasStorageBytes(page.header.width,
+						page.header.height, key.pixelMode,
+						GetAtlasMipLevelCount(page.header.width, page.header.height,
+							key.levelZeroOnly));
+				}
+				// Repacking is an optimization, never a reason to grow the resident set.
+				if (pages.size() > resources.size() || repackedGpuBytes > originalGpuBytes)
+				{
+					pages.clear();
+					for (size_t index = 0; index < resources.size(); ++index)
+					{
+						SnapshotPageData page;
+						page.key = resources[index].first;
+						AtlasResource& resource = *resources[index].second;
+						page.header.width = resource.width;
+						page.header.height = resource.height;
+						page.header.cursorX = resource.cursorX;
+						page.header.cursorY = resource.cursorY;
+						page.header.shelfHeight = resource.shelfHeight;
+						page.header.padding = resource.padding;
+						for (const auto& pair : resource.placements)
+						{
+							AtlasSnapshotPlacement placement;
+							if (!MakeSnapshotPlacement(resource, pair.first,
+								pair.second, placement))
+								return false;
+							page.placements.push_back(placement);
+						}
+						std::sort(page.placements.begin(), page.placements.end(),
+							[](const auto& lhs, const auto& rhs)
+							{
+								return lhs.cacheId < rhs.cacheId;
+							});
+						if (!BuildAtlasSnapshotPixels(resource, page.placements,
+							AtlasSnapshotStorage::PlacedLevelZeroRects, page.pixels))
+							return false;
+						pages.push_back(std::move(page));
+					}
+				}
+			}
+			else
+			{
+				for (size_t index = 0; index < resources.size(); ++index)
+				{
+					SnapshotPageData page;
+					page.key = resources[index].first;
+					AtlasResource& resource = *resources[index].second;
+					originalGpuBytes += GetAtlasStorageBytes(resource.width,
+						resource.height, resource.pixelMode, resource.mipLevels);
+					page.header.width = resource.width;
+					page.header.height = resource.height;
+					page.header.cursorX = resource.cursorX;
+					page.header.cursorY = resource.cursorY;
+					page.header.shelfHeight = resource.shelfHeight;
+					page.header.padding = resource.padding;
+					page.placements.reserve(resource.placements.size());
+					for (const auto& pair : resource.placements)
+					{
+						AtlasSnapshotPlacement placement;
+						if (!MakeSnapshotPlacement(resource, pair.first,
+							pair.second, placement))
+						{
+							return false;
+						}
+						page.placements.push_back(placement);
+					}
+					std::sort(page.placements.begin(), page.placements.end(),
+						[](const AtlasSnapshotPlacement& lhs,
+							const AtlasSnapshotPlacement& rhs)
+						{
+							return lhs.cacheId < rhs.cacheId;
+						});
+					if (!BuildAtlasSnapshotPixels(resource, page.placements,
+						AtlasSnapshotStorage::FullMipChain, page.pixels))
 					{
 						return false;
 					}
-					page.placements.push_back(placement);
+					pages.push_back(std::move(page));
 				}
-				std::sort(page.placements.begin(), page.placements.end(),
-					[](const AtlasSnapshotPlacement& lhs, const AtlasSnapshotPlacement& rhs)
-					{
-						return lhs.cacheId < rhs.cacheId;
-					});
-				const AtlasSnapshotStorage storageMode =
-					resource.pixelMode == AtlasPixelMode::A8
-						&& resource.renderMode == AtlasRenderMode::ShaderEffects
-					? AtlasSnapshotStorage::PlacedLevelZeroRects
-					: AtlasSnapshotStorage::FullMipChain;
-				if (!BuildAtlasSnapshotPixels(resource, page.placements,
-					storageMode, page.pixels))
-				{
-					return false;
-				}
-				const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '6' };
-				std::memcpy(page.header.magic, magic, sizeof(magic));
+			}
+		}
+		if (pages.empty() || pages.size() > kMaximumAtlasSnapshotPages)
+			return false;
+		const UInt32 pageCount = static_cast<UInt32>(pages.size());
+		for (size_t index = 0; index < pages.size(); ++index)
+		{
+			SnapshotPageData& page = pages[index];
+			page.key.pageIndex = static_cast<UInt16>(index);
+			const AtlasSnapshotStorage storageMode = UsesPlacedLevelZeroSnapshot(page.key)
+				? AtlasSnapshotStorage::PlacedLevelZeroRects
+				: AtlasSnapshotStorage::FullMipChain;
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '7' };
+			std::memcpy(page.header.magic, magic, sizeof(magic));
 				page.header.version = kAtlasSnapshotVersion;
 				page.header.headerSize = sizeof(page.header);
 				page.header.snapshotHash = snapshotHash;
@@ -792,18 +1095,13 @@ namespace fonthook::vectorfont
 				page.header.atlasContentHash = page.key.atlasContentHash;
 				page.header.reservedFontId = 0;
 				page.header.scaleMilli = page.key.scaleMilli;
-				page.header.width = resource.width;
-				page.header.height = resource.height;
-				page.header.cursorX = resource.cursorX;
-				page.header.cursorY = resource.cursorY;
-				page.header.shelfHeight = resource.shelfHeight;
-				page.header.padding = resource.padding;
-				page.header.mipLevels = resource.mipLevels;
-				page.header.pixelMode = static_cast<UInt8>(resource.pixelMode);
-				page.header.renderMode = static_cast<UInt8>(resource.renderMode);
+				page.header.mipLevels = GetAtlasMipLevelCount(page.header.width,
+					page.header.height, page.key.levelZeroOnly);
+				page.header.pixelMode = static_cast<UInt8>(page.key.pixelMode);
+				page.header.renderMode = static_cast<UInt8>(page.key.renderMode);
 				page.header.storageMode = static_cast<UInt8>(storageMode);
 				page.header.pageIndex = static_cast<UInt16>(index);
-				page.header.pageCount = static_cast<UInt16>(resources.size());
+				page.header.pageCount = static_cast<UInt16>(pages.size());
 				page.header.placementCount = static_cast<UInt32>(page.placements.size());
 				page.header.pixelBytes = page.pixels.size();
 				UInt64 payloadHash = page.placements.empty() ? 1469598103934665603ull
@@ -811,6 +1109,8 @@ namespace fonthook::vectorfont
 						page.placements.size() * sizeof(page.placements[0]));
 				page.header.payloadChecksum = HashAtlasBytes(page.pixels.data(),
 					page.pixels.size(), payloadHash);
+				page.header.pageContentHash = ComputeAtlasPageContentHash(page.header,
+					page.placements, page.pixels);
 				page.header.checksum = HashAtlasBytes(&page.header,
 					offsetof(AtlasSnapshotHeader, checksum));
 
@@ -844,27 +1144,35 @@ namespace fonthook::vectorfont
 				}
 				totalBytes += page.header.pixelBytes;
 				totalPlacements += page.header.placementCount;
-				if (storageMode == AtlasSnapshotStorage::PlacedLevelZeroRects
-					&& resource.backend == AtlasBackend::DefaultPool)
-				{
-					auto compactSnapshot = std::make_shared<CompactAtlasSnapshot>();
-					compactSnapshot->pixelMode = resource.pixelMode;
-					for (const AtlasSnapshotPlacement& placement : page.placements)
-						resource.residentBitmaps[placement.cacheId] =
-							RestoreResidentBitmap(placement);
-					compactSnapshot->placements = std::move(page.placements);
-					compactSnapshot->pixels = std::move(page.pixels);
-					resource.compactSnapshot = compactSnapshot;
-				}
-			}
+				snapshotGpuBytes += GetAtlasStorageBytes(page.header.width,
+					page.header.height, page.key.pixelMode, page.header.mipLevels);
+		}
+		for (UInt32 stalePage = pageCount; stalePage < sourcePageCount; ++stalePage)
+		{
+			AtlasCacheKey staleKey = key;
+			staleKey.pageIndex = static_cast<UInt16>(stalePage);
+			UInt64 ignoredSnapshotHash = 0;
+			UInt64 ignoredContentHash = 0;
+			const std::wstring stalePath = GetAtlasSnapshotPath(runtime, staleKey,
+				ignoredSnapshotHash, ignoredContentHash);
+			if (!stalePath.empty())
+				DeleteFileW(stalePath.c_str());
+		}
+		{
+			std::lock_guard<std::mutex> lock(State().atlasMutex);
 			if (IsCompleteAtlasProfileResidentLocked(State(), key))
 				State().completeAtlasProfiles.insert(MakeAtlasProfileKey(key));
 		}
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: atlas snapshot saved font=%u pages=%u placements=%llu bytes=%llu",
-			key.fontId, pageCount,
+			"tnvse_freetype_font: atlas snapshot saved font=%u pages=%u->%u placements=%llu bytes=%llu gpuBytes=%llu->%llu saved=%llu tail=%ux%u",
+			key.fontId, sourcePageCount, pageCount,
 			static_cast<unsigned long long>(totalPlacements),
-			static_cast<unsigned long long>(totalBytes));
+			static_cast<unsigned long long>(totalBytes),
+			static_cast<unsigned long long>(originalGpuBytes),
+			static_cast<unsigned long long>(snapshotGpuBytes),
+			static_cast<unsigned long long>(originalGpuBytes > snapshotGpuBytes
+				? originalGpuBytes - snapshotGpuBytes : 0),
+			pages.back().header.width, pages.back().header.height);
 		return true;
 	}
 

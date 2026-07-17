@@ -1093,6 +1093,8 @@ namespace fonthook::vectorfont
 			snapshot->levelZeroOnly = resource.levelZeroOnly;
 			snapshot->padding = resource.padding;
 			snapshot->resetPending = resource.resetPending;
+			snapshot->sharedGpuPage = resource.sharedGpuPage;
+			snapshot->pageContentHash = resource.pageContentHash;
 			snapshot->placements = resource.placements;
 			snapshot->residentBitmaps = resource.residentBitmaps;
 			snapshot->compactSnapshot = resource.compactSnapshot;
@@ -1146,6 +1148,133 @@ namespace fonthook::vectorfont
 			}
 			return result;
 		}
+
+		bool CompactSnapshotsEqual(const AtlasResource& lhs,
+			const AtlasResource& rhs)
+		{
+			if (!lhs.compactSnapshot || !rhs.compactSnapshot
+				|| lhs.width != rhs.width || lhs.height != rhs.height
+				|| lhs.mipLevels != rhs.mipLevels || lhs.pixelMode != rhs.pixelMode
+				|| lhs.renderMode != rhs.renderMode || lhs.padding != rhs.padding
+				|| lhs.levelZeroOnly != rhs.levelZeroOnly)
+			{
+				return false;
+			}
+			const CompactAtlasSnapshot& left = *lhs.compactSnapshot;
+			const CompactAtlasSnapshot& right = *rhs.compactSnapshot;
+			if (left.pixelMode != right.pixelMode
+				|| left.placements.size() != right.placements.size())
+			{
+				return false;
+			}
+			struct Slice
+			{
+				AtlasRect rect;
+				size_t offset;
+				size_t bytes;
+			};
+			auto buildSlices = [](const CompactAtlasSnapshot& snapshot,
+				std::vector<Slice>& slices)
+			{
+				size_t offset = 0;
+				const size_t bytesPerPixel = AtlasBytesPerPixel(snapshot.pixelMode);
+				for (const AtlasSnapshotPlacement& placement : snapshot.placements)
+				{
+					const size_t bytes = static_cast<size_t>(placement.rect.width)
+						* placement.rect.height * bytesPerPixel;
+					if (offset > snapshot.pixels.size()
+						|| bytes > snapshot.pixels.size() - offset)
+						return false;
+					slices.push_back({ placement.rect, offset, bytes });
+					offset += bytes;
+				}
+				std::sort(slices.begin(), slices.end(), [](const Slice& a, const Slice& b)
+				{
+					if (a.rect.y != b.rect.y) return a.rect.y < b.rect.y;
+					if (a.rect.x != b.rect.x) return a.rect.x < b.rect.x;
+					if (a.rect.height != b.rect.height) return a.rect.height < b.rect.height;
+					return a.rect.width < b.rect.width;
+				});
+				return offset == snapshot.pixels.size();
+			};
+			std::vector<Slice> leftSlices;
+			std::vector<Slice> rightSlices;
+			leftSlices.reserve(left.placements.size());
+			rightSlices.reserve(right.placements.size());
+			if (!buildSlices(left, leftSlices) || !buildSlices(right, rightSlices))
+				return false;
+			for (size_t index = 0; index < leftSlices.size(); ++index)
+			{
+				const Slice& a = leftSlices[index];
+				const Slice& b = rightSlices[index];
+				if (std::memcmp(&a.rect, &b.rect, sizeof(a.rect)) != 0
+					|| a.bytes != b.bytes
+					|| (a.bytes && std::memcmp(left.pixels.data() + a.offset,
+						right.pixels.data() + b.offset, a.bytes) != 0))
+					return false;
+			}
+			return true;
+		}
+
+	bool TryReuseDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,
+		UInt64 pageContentHash)
+	{
+		if (!resource || !pageContentHash || !resource->compactSnapshot
+			|| State().defaultPoolShutdown)
+			return false;
+		AtlasState& state = State();
+		std::lock_guard<std::mutex> lock(state.atlasMutex);
+		auto range = state.atlasPageDedup.equal_range(pageContentHash);
+		for (auto it = range.first; it != range.second;)
+		{
+			const std::shared_ptr<AtlasResource> existing = it->second.lock();
+			if (!existing)
+			{
+				it = state.atlasPageDedup.erase(it);
+				continue;
+			}
+			++it;
+			if (existing.get() == resource.get()
+				|| existing->backend != AtlasBackend::DefaultPool
+				|| existing->resetPending || !existing->property
+				|| existing->pageContentHash != pageContentHash
+				|| !CompactSnapshotsEqual(*existing, *resource))
+			{
+				continue;
+			}
+			IDirect3DTexture9* d3dTexture = QueryAtlasD3DTexture(*existing);
+			if (!d3dTexture)
+				continue;
+			NiTexturingProperty* property = CreatePropertyForDefaultTexture(
+				d3dTexture, resource->pixelMode);
+			if (d3dTexture)
+				d3dTexture->Release();
+			if (!property)
+				continue;
+			resource->property = property;
+			resource->pixelData = nullptr;
+			resource->backend = AtlasBackend::DefaultPool;
+			resource->resetPending = false;
+			resource->sharedGpuPage = true;
+			resource->pageContentHash = pageContentHash;
+			++resource->generation;
+			existing->sharedGpuPage = true;
+			state.atlasPageDedup.emplace(pageContentHash, resource);
+			return true;
+		}
+		return false;
+	}
+
+	void RegisterDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,
+		UInt64 pageContentHash)
+	{
+		if (!resource || !pageContentHash
+			|| resource->backend != AtlasBackend::DefaultPool || !resource->property)
+			return;
+		resource->pageContentHash = pageContentHash;
+		std::lock_guard<std::mutex> lock(State().atlasMutex);
+		State().atlasPageDedup.emplace(pageContentHash, resource);
+	}
 
 		struct PendingAtlasPlacement
 		{
@@ -1288,6 +1417,8 @@ namespace fonthook::vectorfont
 			resource.placements = std::move(candidate.placements);
 			resource.residentBitmaps = std::move(candidate.residentBitmaps);
 			resource.compactSnapshot = std::move(candidate.compactSnapshot);
+			resource.sharedGpuPage = candidate.sharedGpuPage;
+			resource.pageContentHash = candidate.pageContentHash;
 			std::vector<UInt8>().swap(resource.pixels);
 		}
 
@@ -1330,6 +1461,29 @@ namespace fonthook::vectorfont
 			}
 			if (pending.empty())
 				return true;
+			if (resource.sharedGpuPage)
+			{
+				AtlasResource detached;
+				detached.width = resource.width;
+				detached.height = resource.height;
+				detached.cursorX = resource.cursorX;
+				detached.cursorY = resource.cursorY;
+				detached.shelfHeight = resource.shelfHeight;
+				detached.padding = resource.padding;
+				detached.generation = resource.generation;
+				detached.mipLevels = resource.mipLevels;
+				detached.pixelMode = resource.pixelMode;
+				detached.backend = AtlasBackend::DefaultPool;
+				detached.renderMode = resource.renderMode;
+				detached.levelZeroOnly = resource.levelZeroOnly;
+				detached.placements = resource.placements;
+				detached.residentBitmaps = resource.residentBitmaps;
+				detached.compactSnapshot = resource.compactSnapshot;
+				if (!CreateDefaultPoolAtlas(detached, resource.pixelMode))
+					return false;
+				CommitDefaultCandidate(resource, detached);
+				resource.sharedGpuPage = false;
+			}
 
 			AtlasResource candidate;
 			candidate.width = layout.width;
@@ -1348,6 +1502,8 @@ namespace fonthook::vectorfont
 			candidate.placements = resource.placements;
 			candidate.residentBitmaps = resource.residentBitmaps;
 			candidate.compactSnapshot = resource.compactSnapshot;
+			candidate.pageContentHash = 0;
+			candidate.sharedGpuPage = false;
 			thread_local std::vector<AtlasRect> rawDirtyRects;
 			thread_local std::vector<AtlasRect> dirtyRects;
 			rawDirtyRects.clear();
@@ -1367,6 +1523,7 @@ namespace fonthook::vectorfont
 				if (resource.property)
 					RecordFreeTypePerf(FreeTypePerfCounter::AtlasGrown);
 				CommitDefaultCandidate(resource, candidate);
+				resource.pageContentHash = 0;
 				return true;
 			}
 			BuildMergedAtlasDirtyRects(rawDirtyRects, resource.width, resource.height,
@@ -1378,11 +1535,13 @@ namespace fonthook::vectorfont
 				resource.shelfHeight = candidate.shelfHeight;
 				resource.placements = std::move(candidate.placements);
 				resource.residentBitmaps = std::move(candidate.residentBitmaps);
+				resource.pageContentHash = 0;
 				return true;
 			}
 			if (!CreateDefaultPoolAtlas(candidate, resource.pixelMode))
 				return false;
 			CommitDefaultCandidate(resource, candidate);
+			resource.pageContentHash = 0;
 			return true;
 		}
 
@@ -1523,6 +1682,8 @@ namespace fonthook::vectorfont
 						resource.pixelMode = mode;
 						resource.mipLevels = d3dTexture->GetLevelCount();
 						resource.resetPending = false;
+						// Each wrapper owns a separate rebuilt D3D texture after reset.
+						resource.sharedGpuPage = false;
 						RecordFreeTypePerf(FreeTypePerfCounter::AtlasUpload);
 						RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadBytes,
 							static_cast<UInt64>(GetAtlasStorageBytes(resource.width,
