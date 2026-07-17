@@ -48,6 +48,9 @@ namespace fonthook
 			}
 
 			State().lastImeCommitTick = GetTickCount();
+			ConfirmImeCommitKey(menu
+				? ImeCommitInputChannel::TextEdit
+				: (jipMenu ? ImeCommitInputChannel::JipTextInput : ImeCommitInputChannel::Stewie));
 			constexpr DWORD kImeEnterPairMs = 250;
 			if (stewieTarget.valid
 				&& State().lastStewieImeEnterKeyTick
@@ -171,6 +174,13 @@ namespace fonthook
 
 		bool HandleCharFallback(WPARAM wParam)
 		{
+			if (ShouldSuppressImeCommitInput(
+				static_cast<UInt32>(wParam),
+				ImeCommitInputChannel::WndProcChar))
+			{
+				return true;
+			}
+
 			if (ShouldSuppressDuplicateImeChar())
 			{
 				if (TextEditMenu* jipMenu = GetActiveJipTextInputMenu())
@@ -197,6 +207,7 @@ namespace fonthook
 					{
 						if (IsImeConsumingAscii())
 						{
+							ObserveImeCommitInput(static_cast<UInt32>(wParam));
 							DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_CHAR action=suppress_composition_ascii_stewie input=0x%08X", static_cast<UInt32>(wParam));
 							return true;
 						}
@@ -217,6 +228,7 @@ namespace fonthook
 
 				if (wParam >= 0x20 && wParam <= 0x7E && HasOverlayInputTarget() && IsImeConsumingAscii())
 				{
+					ObserveImeCommitInput(static_cast<UInt32>(wParam));
 					DebugLogState("WndProc.WM_CHAR", "suppress_overlay_composition_ascii", GetOverlayTextInputMenu(), static_cast<SInt32>(wParam));
 					return true;
 				}
@@ -231,6 +243,7 @@ namespace fonthook
 				{
 					if (IsImeConsumingAscii())
 					{
+						ObserveImeCommitInput(static_cast<UInt32>(wParam));
 						DebugLogJipState("WndProc.WM_CHAR", "suppress_composition_ascii", jipMenu, static_cast<UInt32>(wParam));
 						return true;
 					}
@@ -258,6 +271,7 @@ namespace fonthook
 
 			if (wParam >= 0x20 && wParam <= 0x7E && IsImeConsumingAscii())
 			{
+				ObserveImeCommitInput(static_cast<UInt32>(wParam));
 				DebugLogState("WndProc.WM_CHAR", "suppress_composition_ascii", menu, static_cast<SInt32>(wParam));
 				return true;
 			}
@@ -319,6 +333,8 @@ namespace fonthook
 					SetTextInputSessionActive(false);
 				}
 
+				ObserveImeCommitKeyMessage(msg, wParam, lParam, hasInputTarget);
+
 				if (IsWindowsKeyMessage(msg, wParam))
 				{
 					const bool keyDown = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
@@ -344,6 +360,7 @@ namespace fonthook
 
 				if (msg == WM_INPUTLANGCHANGE && state.textInputSessionActive)
 				{
+					ResetImeCommitKeyState("input_language_change");
 					HKL newLayout = reinterpret_cast<HKL>(lParam);
 					if (state.winSpaceChordArmed || state.winSpaceSwitchPending)
 					{
@@ -459,6 +476,11 @@ namespace fonthook
 
 				if (msg == WM_IME_STARTCOMPOSITION && hasInputTarget)
 				{
+					// A few IMEs can open the next composition before the game has
+					// drained the just-committed physical key. Preserve a confirmed
+					// latch, but discard an unconfirmed key from the old composition.
+					if (!state.commitKey.confirmed)
+						ResetImeCommitKeyState("composition_start");
 					CancelDeferredStewieAscii();
 					if (static_cast<SInt32>(state.inputLanguageSwitchGuardUntilTick
 						- GetTickCount()) > 0)
@@ -699,6 +721,7 @@ namespace fonthook
 			State().winSpaceChordArmed = false;
 			State().winSpaceSwitchPending = false;
 			State().winSpaceLanguageChangeObserved = false;
+			ResetImeCommitKeyState("clear_input_state");
 			s_lastWndProcAsciiTick = 0;
 			s_lastWndProcAsciiChar = 0;
 			ClearJipTextInputHookState();

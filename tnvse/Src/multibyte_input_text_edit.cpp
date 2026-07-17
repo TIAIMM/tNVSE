@@ -456,6 +456,7 @@ namespace fonthook
 			case kInputCode_End:
 			case kInputCode_PageUp:
 			case kInputCode_PageDown:
+			case kInputCode_Enter:
 				return true;
 			default:
 				return false;
@@ -466,12 +467,18 @@ namespace fonthook
 		{
 			if (!LooksLikeJipTextInputStorage(apMenu))
 				return CallJipOriginalInput(apMenu, aiInput);
+			if (ShouldSuppressImeCommitInput(aiInput, ImeCommitInputChannel::JipTextInput))
+			{
+				DebugLogJipState("JipTextInputAdapter::Input", "suppress_ime_commit_key", apMenu, aiInput);
+				return true;
+			}
 
 			const bool editActive = JipIsActiveFlag(apMenu) != 0;
 			if (aiInput >= 0x20 && aiInput <= 0x7E)
 			{
 				if (IsImeConsumingAscii())
 				{
+					ObserveImeCommitInput(aiInput);
 					DebugLogJipState("JipTextInputAdapter::Input", "suppress_composition_ascii", apMenu, aiInput);
 					return true;
 				}
@@ -506,6 +513,7 @@ namespace fonthook
 
 			if (JipInputCompositionControlShouldSuppress(aiInput))
 			{
+				ObserveImeCommitInput(aiInput);
 				DebugLogJipState("JipTextInputAdapter::Input", "suppress_composition_control", apMenu, aiInput);
 				return true;
 			}
@@ -782,11 +790,19 @@ namespace fonthook
 				TextEditMenu* menu = GetActiveTextEditMenu();
 				if (menu && &menu->xEditState != apState)
 					menu = nullptr;
+				if (ShouldSuppressImeCommitInput(
+					static_cast<UInt32>(aiInput),
+					ImeCommitInputChannel::TextEdit))
+				{
+					DebugLogState("TextEditState::Input", "suppress_ime_commit_key", menu, aiInput);
+					return;
+				}
 
 				if (aiInput >= 0x20 && aiInput <= 0x7E)
 				{
 					if (IsImeConsumingAscii())
 					{
+						ObserveImeCommitInput(static_cast<UInt32>(aiInput));
 						DebugLogState("TextEditState::Input", "suppress_composition_ascii", menu, aiInput);
 						return;
 					}
@@ -872,6 +888,16 @@ namespace fonthook
 					}
 					DebugLogState("TextEditState::Input", "move_end", menu, aiInput);
 					MoveCaretEnd(*apState);
+					return;
+				case kTextEditInput_Confirm:
+					if (imeCompositionActive)
+					{
+						ObserveImeCommitInput(static_cast<UInt32>(aiInput));
+						DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
+						return;
+					}
+					DebugLogState("TextEditState::Input", "pass_original", menu, aiInput);
+					apState->InputUnk01(aiInput, aiChar);
 					return;
 				default:
 					DebugLogState("TextEditState::Input", "pass_original", menu, aiInput);

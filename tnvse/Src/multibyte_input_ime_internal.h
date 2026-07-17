@@ -12,6 +12,7 @@ namespace fonthook
 		constexpr DWORD kDuplicateImeCharSuppressMs = 250;
 		constexpr DWORD kNativeImeAsciiGuardMs = 250;
 		constexpr DWORD kInputLanguageSwitchAsciiGuardMs = 500;
+		constexpr DWORD kImeCommitKeyPendingLifetimeMs = 1500;
 		constexpr UInt32 kMaxImeCandidatesToDisplay = 9;
 
 		struct ImeCandidateState
@@ -55,6 +56,21 @@ namespace fonthook
 		using TsfCandidateSinkPtr =
 			std::unique_ptr<TsfCandidateSink, TsfCandidateSinkDeleter>;
 
+		struct ImeCommitKeyState
+		{
+			// A key is only suppressible after a successful IME result confirms a
+			// pending composition-time Space/digit/Enter observation. Keep it across
+			// key-up so delayed game polling and WM_CHAR can both be drained.
+			UINT virtualKey = 0;
+			UInt32 input = 0;
+			DWORD observedTick = 0;
+			UInt8 expectedChannel = 0;
+			UInt8 consumedChannels = 0;
+			bool pending = false;
+			bool confirmed = false;
+			bool released = false;
+		};
+
 		struct ImeState
 		{
 			bool compositionEchoChecked = false;
@@ -67,6 +83,7 @@ namespace fonthook
 			bool winSpaceChordArmed = false;
 			bool winSpaceSwitchPending = false;
 			bool winSpaceLanguageChangeObserved = false;
+			ImeCommitKeyState commitKey;
 
 			ImeCandidateState candidate;
 			CandidateOverlayState overlay;

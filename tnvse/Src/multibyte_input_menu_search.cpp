@@ -839,6 +839,15 @@ namespace fonthook
 				return controlHandled;
 
 			const StewieInputTarget target = FindStewieMenuSearchTarget(menu);
+			if (target.valid
+				&& ShouldSuppressImeCommitInput(input, ImeCommitInputChannel::Stewie))
+			{
+				DebugLog(
+					"tnvse_multibyte_input_event: source=MenuSearch action=suppress_ime_commit_key menu=%u input=0x%08X",
+					MenuID(menu),
+					input);
+				return true;
+			}
 			if (input == kInputCode_Enter
 				&& target.valid
 				&& HandleStewieImeEnter(target))

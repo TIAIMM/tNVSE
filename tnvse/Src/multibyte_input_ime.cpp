@@ -445,6 +445,8 @@ namespace fonthook
 				return;
 
 			State().textInputSessionActive = active;
+			if (!active)
+				ResetImeCommitKeyState("text_input_session_end");
 			if (s_window)
 			{
 				SetGameImeEnabled(s_window, active);
@@ -467,6 +469,7 @@ namespace fonthook
 		{
 			const bool wasActive = State().textInputSessionActive;
 			CancelDeferredStewieAscii();
+			ResetImeCommitKeyState("text_input_target_refresh");
 			s_imeComposing = false;
 			AdvanceTsfCandidateSession();
 			ClearImePreviewState();
@@ -567,6 +570,317 @@ namespace fonthook
 		bool IsVirtualKeyDown(int vk)
 		{
 			return (GetKeyState(vk) & 0x8000) != 0 || (GetAsyncKeyState(vk) & 0x8000) != 0;
+		}
+
+		namespace
+		{
+			bool MapImeCommitVirtualKey(UINT virtualKey, UInt32& input)
+			{
+				if (virtualKey == VK_SPACE)
+				{
+					input = ' ';
+					return true;
+				}
+
+				if (virtualKey >= '0' && virtualKey <= '9')
+				{
+					input = virtualKey;
+					return true;
+				}
+
+				if (virtualKey >= VK_NUMPAD0 && virtualKey <= VK_NUMPAD9)
+				{
+					input = '0' + virtualKey - VK_NUMPAD0;
+					return true;
+				}
+
+				if (virtualKey == VK_RETURN)
+				{
+					input = kInputCode_Enter;
+					return true;
+				}
+
+				return false;
+			}
+
+			UInt32 NormalizeImeCommitInput(UInt32 input)
+			{
+				if (input == ' ' || (input >= '0' && input <= '9'))
+					return input;
+				if (input == '\r' || input == kInputCode_Enter)
+					return kInputCode_Enter;
+				return 0;
+			}
+
+			const char* ImeCommitChannelName(ImeCommitInputChannel channel)
+			{
+				switch (channel)
+				{
+				case ImeCommitInputChannel::WndProcChar:
+					return "wndproc";
+				case ImeCommitInputChannel::TextEdit:
+					return "textedit";
+				case ImeCommitInputChannel::JipTextInput:
+					return "jip";
+				case ImeCommitInputChannel::Stewie:
+					return "stewie";
+				default:
+					return "unknown";
+				}
+			}
+
+			bool ImeCommitModifiersDown()
+			{
+				return IsVirtualKeyDown(VK_SHIFT)
+					|| IsVirtualKeyDown(VK_CONTROL)
+					|| IsVirtualKeyDown(VK_MENU)
+					|| IsVirtualKeyDown(VK_LWIN)
+					|| IsVirtualKeyDown(VK_RWIN);
+			}
+
+			bool CommitKeyStateExpired(const ImeCommitKeyState& key, DWORD now)
+			{
+				if (!key.pending && !key.confirmed)
+					return false;
+
+				if (key.confirmed)
+					return false;
+
+				if (!key.released && key.virtualKey && IsVirtualKeyDown(key.virtualKey))
+					return false;
+				return now - key.observedTick > kImeCommitKeyPendingLifetimeMs;
+			}
+
+			void ExpireImeCommitKeyState()
+			{
+				if (CommitKeyStateExpired(State().commitKey, GetTickCount()))
+					ResetImeCommitKeyState("expired");
+			}
+
+			bool FindPressedImeCommitKey(UINT& virtualKey, UInt32& input, UInt32 requiredInput = 0)
+			{
+				if (ImeCommitModifiersDown())
+					return false;
+
+				constexpr UINT keys[] = {
+					VK_SPACE,
+					'1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
+					VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5,
+					VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_NUMPAD0,
+					VK_RETURN,
+				};
+
+				for (UINT key : keys)
+				{
+					if (!IsVirtualKeyDown(key))
+						continue;
+					if (!MapImeCommitVirtualKey(key, input))
+						continue;
+					if (requiredInput && input != requiredInput)
+						continue;
+
+					virtualKey = key;
+					return true;
+				}
+
+				return false;
+			}
+		}
+
+		void ResetImeCommitKeyState(const char* reason)
+		{
+			const ImeCommitKeyState previous = State().commitKey;
+			State().commitKey = {};
+			if (!previous.pending && !previous.confirmed)
+				return;
+
+			DebugLog(
+				"tnvse_multibyte_input_event: source=ImeCommitKey action=reset reason=%s vk=0x%02X input=0x%08X pending=%u confirmed=%u released=%u consumed=0x%02X",
+				reason ? reason : "unknown",
+				previous.virtualKey,
+				previous.input,
+				previous.pending ? 1 : 0,
+				previous.confirmed ? 1 : 0,
+				previous.released ? 1 : 0,
+				previous.consumedChannels);
+		}
+
+		void ObserveImeCommitKeyMessage(UINT msg, WPARAM wParam, LPARAM lParam, bool hasInputTarget)
+		{
+			const bool keyDown = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+			const bool keyUp = msg == WM_KEYUP || msg == WM_SYSKEYUP;
+			if (!keyDown && !keyUp)
+				return;
+
+			UInt32 input = 0;
+			const UINT virtualKey = static_cast<UINT>(wParam);
+			if (!MapImeCommitVirtualKey(virtualKey, input))
+				return;
+
+			ExpireImeCommitKeyState();
+			ImeCommitKeyState& key = State().commitKey;
+			if (keyUp)
+			{
+				if ((key.pending || key.confirmed) && key.virtualKey == virtualKey)
+				{
+					key.released = true;
+					DebugLog(
+						"tnvse_multibyte_input_event: source=ImeCommitKey action=release vk=0x%02X input=0x%08X confirmed=%u consumed=0x%02X",
+						virtualKey,
+						key.input,
+						key.confirmed ? 1 : 0,
+						key.consumedChannels);
+				}
+				return;
+			}
+
+			const bool repeat = (static_cast<ULONG_PTR>(lParam) & (1UL << 30)) != 0;
+			if ((key.pending || key.confirmed) && key.virtualKey == virtualKey && repeat)
+				return;
+
+			// A non-repeat key-down is a new physical press. It must never inherit a
+			// confirmed latch from the preceding press of the same logical key.
+			if (key.pending || key.confirmed)
+				ResetImeCommitKeyState("new_commit_keydown");
+
+			if (!hasInputTarget || ImeCommitModifiersDown() || !IsImeConsumingAscii())
+				return;
+
+			ImeCommitKeyState& armed = State().commitKey;
+			armed.virtualKey = virtualKey;
+			armed.input = input;
+			armed.observedTick = GetTickCount();
+			armed.pending = true;
+			armed.released = false;
+			DebugLog(
+				"tnvse_multibyte_input_event: source=ImeCommitKey action=arm vk=0x%02X input=0x%08X",
+				virtualKey,
+				input);
+		}
+
+		void ObserveImeCommitInput(UInt32 input)
+		{
+			const UInt32 normalized = NormalizeImeCommitInput(input);
+			if (!normalized)
+				return;
+
+			ExpireImeCommitKeyState();
+			ImeCommitKeyState& key = State().commitKey;
+			if (key.confirmed)
+				return;
+			if (key.pending && key.input == normalized)
+			{
+				UINT refreshedVirtualKey = 0;
+				UInt32 refreshedInput = 0;
+				if (FindPressedImeCommitKey(
+						refreshedVirtualKey,
+						refreshedInput,
+						normalized))
+				{
+					key.virtualKey = refreshedVirtualKey;
+				}
+				key.observedTick = GetTickCount();
+				key.released = false;
+				return;
+			}
+			if (key.pending)
+				ResetImeCommitKeyState("different_composition_commit_input");
+
+			UINT virtualKey = 0;
+			UInt32 mappedInput = 0;
+			const bool foundPressed = FindPressedImeCommitKey(
+				virtualKey,
+				mappedInput,
+				normalized);
+			if (!foundPressed)
+			{
+				virtualKey = normalized == kInputCode_Enter
+					? VK_RETURN
+					: static_cast<UINT>(normalized);
+			}
+
+			ImeCommitKeyState& armed = State().commitKey;
+			armed.virtualKey = virtualKey;
+			armed.input = normalized;
+			armed.observedTick = GetTickCount();
+			armed.pending = true;
+			armed.released = false;
+			DebugLog(
+				"tnvse_multibyte_input_event: source=ImeCommitKey action=arm_from_input vk=0x%02X input=0x%08X pressed=%u",
+				virtualKey,
+				normalized,
+				foundPressed ? 1 : 0);
+		}
+
+		void ConfirmImeCommitKey(ImeCommitInputChannel expectedChannel)
+		{
+			ExpireImeCommitKeyState();
+			ImeCommitKeyState& key = State().commitKey;
+			if (!key.pending)
+			{
+				UINT virtualKey = 0;
+				UInt32 input = 0;
+				if (!FindPressedImeCommitKey(virtualKey, input))
+					return;
+
+				key.virtualKey = virtualKey;
+				key.input = input;
+				key.observedTick = GetTickCount();
+				key.pending = true;
+				key.released = false;
+				DebugLog(
+					"tnvse_multibyte_input_event: source=ImeCommitKey action=infer_pressed vk=0x%02X input=0x%08X",
+					virtualKey,
+					input);
+			}
+
+			key.confirmed = true;
+			key.expectedChannel = static_cast<UInt8>(expectedChannel);
+			DebugLog(
+				"tnvse_multibyte_input_event: source=ImeCommitKey action=confirm vk=0x%02X input=0x%08X released=%u channel=%s",
+				key.virtualKey,
+				key.input,
+				key.released ? 1 : 0,
+				ImeCommitChannelName(expectedChannel));
+		}
+
+		bool ShouldSuppressImeCommitInput(UInt32 input, ImeCommitInputChannel channel)
+		{
+			const UInt32 normalized = NormalizeImeCommitInput(input);
+			if (!normalized)
+				return false;
+
+			ExpireImeCommitKeyState();
+			ImeCommitKeyState& key = State().commitKey;
+			if (!key.confirmed || key.input != normalized)
+				return false;
+			if (key.released && key.virtualKey && IsVirtualKeyDown(key.virtualKey))
+			{
+				// The release was observed and the same physical key is down again.
+				// Treat this as a fresh literal press even if its WM_KEYDOWN was delayed
+				// behind the game's polling callback.
+				ResetImeCommitKeyState("new_press_detected_by_key_state");
+				return false;
+			}
+
+			const UInt8 channelBit = static_cast<UInt8>(channel);
+			key.consumedChannels |= channelBit;
+			if (normalized == kInputCode_Enter
+				&& key.expectedChannel == static_cast<UInt8>(ImeCommitInputChannel::Stewie))
+			{
+				// The lifecycle latch supersedes MenuSearch's older time-based Enter
+				// pairing once either delivery channel has observed the committed key.
+				State().lastStewieImeCommitTick = 0;
+				State().lastStewieImeEnterKeyTick = 0;
+			}
+			DebugLog(
+				"tnvse_multibyte_input_event: source=ImeCommitKey action=suppress input=0x%08X channel=%s expected=0x%02X released=%u consumed=0x%02X",
+				normalized,
+				ImeCommitChannelName(channel),
+				key.expectedChannel,
+				key.released ? 1 : 0,
+				key.consumedChannels);
+			return true;
 		}
 
 		bool IsWinSpaceInputLanguageHotkey(UINT msg, WPARAM wParam)

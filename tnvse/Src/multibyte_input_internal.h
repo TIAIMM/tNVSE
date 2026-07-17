@@ -50,6 +50,14 @@ namespace fonthook
 		constexpr UInt32 kInputCode_PageUp = 0x80000009;
 		constexpr UInt32 kInputCode_PageDown = 0x8000000A;
 
+		enum class ImeCommitInputChannel : UInt8
+		{
+			WndProcChar = 1,
+			TextEdit = 2,
+			JipTextInput = 4,
+			Stewie = 8,
+		};
+
 		extern HWND s_window;
 		extern WNDPROC s_originalWndProc;
 		extern bool s_hooksInstalled;
@@ -178,6 +186,11 @@ namespace fonthook
 		bool IsNativeImeAsciiGuardActive();
 		bool IsImeCompositionActive();
 		bool IsImeConsumingAscii();
+		void ObserveImeCommitKeyMessage(UINT msg, WPARAM wParam, LPARAM lParam, bool hasInputTarget);
+		void ObserveImeCommitInput(UInt32 input);
+		void ConfirmImeCommitKey(ImeCommitInputChannel expectedChannel);
+		bool ShouldSuppressImeCommitInput(UInt32 input, ImeCommitInputChannel channel);
+		void ResetImeCommitKeyState(const char* reason);
 		std::string WideToCurrentCodePage(std::wstring_view value);
 		bool TryInstallWindowProc();
 		void RestoreWindowProc();

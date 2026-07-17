@@ -697,6 +697,15 @@ namespace fonthook
 
 			const DeferredStewieAscii pending = *match;
 			s_deferredStewieAscii.erase(match);
+			if ((pending.adapterSeen && ShouldSuppressImeCommitInput(
+					pending.input,
+					ImeCommitInputChannel::Stewie))
+				|| (pending.wndProcSeen && ShouldSuppressImeCommitInput(
+					pending.input,
+					ImeCommitInputChannel::WndProcChar)))
+			{
+				return true;
+			}
 			if (IsImeCompositionActive())
 				return true;
 
@@ -966,6 +975,14 @@ namespace fonthook
 			}
 
 			EnsureStewieShadow(target);
+			if (ShouldSuppressImeCommitInput(input, ImeCommitInputChannel::Stewie))
+			{
+				DebugLog(
+					"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=suppress_ime_commit_key menu=%u input=0x%08X",
+					MenuID(menu),
+					input);
+				return true;
+			}
 
 			if (IsCtrlKeyDown())
 			{
@@ -976,6 +993,7 @@ namespace fonthook
 
 			if (IsImeCompositionActive())
 			{
+				ObserveImeCommitInput(input);
 				DebugLog(
 					"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=suppress_composition_input menu=%u input=0x%08X",
 					MenuID(menu),
