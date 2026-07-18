@@ -737,6 +737,7 @@ namespace fonthook::vectorfont
 		ResetPrewarmScan(job, 0);
 		job.targetUnitCount = (0x100 - 0x20) + CountPrewarmDoubleByteUnits(job);
 		s_jobs.push_back(std::move(job));
+		SetBitmapCacheReducedAfterPrewarm(false);
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: queued prewarm font=%u mode=%s codePage=%u",
 			fontId, config->prewarm == FontPrewarmMode::CodePage
@@ -1027,6 +1028,14 @@ namespace fonthook::vectorfont
 			static_cast<unsigned long long>(GetTickCount64() - started));
 		FlushGlyphBitmapDiskCache();
 		ReleaseGlyphBitmapDiskCacheMappings();
+		if (completedFonts == queuedFonts)
+			SetBitmapCacheReducedAfterPrewarm(true);
+		else
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: bitmap cache post-prewarm shrink skipped because prewarm did not complete successfully complete=%u queued=%u",
+				completedFonts, queuedFonts);
+		}
 		if (g_bDeleteUnusedFreeTypeFontCache && completedFonts == queuedFonts)
 			DeleteUnusedFreeTypeFontCacheFiles();
 		else if (g_bDeleteUnusedFreeTypeFontCache)

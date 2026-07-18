@@ -88,12 +88,12 @@ namespace fonthook::vectorfont
 		float z = 0.0f;
 		float u = 0.0f;
 		float v = 0.0f;
-		float r = 1.0f;
-		float g = 1.0f;
-		float b = 1.0f;
-		float a = 1.0f;
+		// D3DDECLTYPE_D3DCOLOR expands this packed ARGB value to the shader's
+		// normalized float4 COLOR0 input. The per-packet layer color remains in
+		// c1, so only the glyph's base color is repeated per vertex.
+		UInt32 color = 0xFFFFFFFFu;
 	};
-	static_assert(sizeof(NativeA8GpuVertex) == 9 * sizeof(float));
+	static_assert(sizeof(NativeA8GpuVertex) == 6 * sizeof(float));
 
 	struct NativeA8PacketTemplate
 	{

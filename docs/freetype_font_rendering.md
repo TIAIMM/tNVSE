@@ -503,6 +503,21 @@ last atlas property, texture, and shader; transforms, alpha, scissor state, and
 other live Tile values are still copied each submission, but unchanged
 reference-counted properties and bindings are not assigned again.
 
+Native vertices store `float3` position, `float2` UV, and one packed
+`D3DCOLOR` base color. The D3D declaration expands that 24-byte record to the
+vertex shader's existing normalized `float4 COLOR0`; the packet-uniform layer
+modifier remains in pixel constant `c1`. Compared with the previous four-float
+base color this reduces cached native geometry and dynamic/static VB traffic by
+one third without adding packets or draw calls. The dynamic ring retains its
+two-maximum-payload capacity, while the static VB starts at approximately 4 MiB
+instead of reserving its approximately 12 MiB packed-format maximum. When it is
+full, a safe submission boundary with no other active proxy compacts live weakly
+owned templates into a replacement buffer and doubles capacity up to that fixed
+maximum. Concurrent groups defer optional promotion and continue through the
+dynamic ring; expired static entries are discarded during compaction. Thus the
+normal submission path performs no extra allocation, upload, or draw, and only
+a real long-session static high-water mark grows the DEFAULT-pool reservation.
+
 ## Atlas allocation, mipmaps, and memory
 
 Persistent atlas pages start at 512x512 and grow without moving existing glyphs.

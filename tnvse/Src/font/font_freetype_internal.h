@@ -613,6 +613,7 @@ namespace fonthook::vectorfont
 		UInt32 persistentBitmapFailureLogCount = 0;
 		size_t bitmapCacheBytes = 0;
 		size_t layoutCacheBytes = 0;
+		bool bitmapCacheReducedAfterPrewarm = false;
 		std::recursive_mutex mutex;
 	};
 
@@ -620,6 +621,7 @@ namespace fonthook::vectorfont
 	FreeTypeThreadState& ThreadState();
 
 	size_t GetBitmapCacheLimit();
+	void SetBitmapCacheReducedAfterPrewarm(bool abReduced);
 	size_t GetLayoutCacheLimit();
 	std::wstring NormalizePathKey(std::wstring path);
 	UInt64 HashBytes64(const void* data, size_t size,

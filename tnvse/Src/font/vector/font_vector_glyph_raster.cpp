@@ -31,6 +31,29 @@ namespace fonthook::vectorfont
 			}
 		}
 
+	void SetBitmapCacheReducedAfterPrewarm(bool reduced)
+	{
+		FreeTypeState& state = State();
+		std::lock_guard<std::recursive_mutex> lock(state.mutex);
+		if (state.bitmapCacheReducedAfterPrewarm == reduced)
+			return;
+
+		const size_t previousLimit = GetBitmapCacheLimit();
+		const size_t previousBytes = state.bitmapCacheBytes;
+		const size_t previousEntries = state.bitmapCache.size();
+		state.bitmapCacheReducedAfterPrewarm = reduced;
+		TrimBitmapCache(state);
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: bitmap cache phase=%s limitMiB=%.2f previousLimitMiB=%.2f bytesMiB=%.2f previousBytesMiB=%.2f entries=%u evicted=%u",
+			reduced ? "post-prewarm" : "prewarm",
+			GetBitmapCacheLimit() / (1024.0 * 1024.0),
+			previousLimit / (1024.0 * 1024.0),
+			state.bitmapCacheBytes / (1024.0 * 1024.0),
+			previousBytes / (1024.0 * 1024.0),
+			static_cast<UInt32>(state.bitmapCache.size()),
+			static_cast<UInt32>(previousEntries - state.bitmapCache.size()));
+	}
+
 		bool CopyGrayBitmap(const FT_Bitmap& source, GlyphBitmap& target,
 			bool preserveEncodedValues = false)
 		{

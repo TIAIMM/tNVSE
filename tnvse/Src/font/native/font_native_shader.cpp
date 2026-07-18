@@ -504,7 +504,7 @@ namespace fonthook::vectorfont
 					ParameterType::SPTYPE_FLOAT2, 0)
 				&& declaration->SetEntry(2, 0,
 					Parameter::SHADERPARAM_NI_COLOR,
-					ParameterType::SPTYPE_FLOAT4, 0);
+					ParameterType::SPTYPE_UBYTECOLOR, 0);
 			if (!entriesReady)
 			{
 				failure = "declaration-entries";

@@ -21,6 +21,7 @@
 #include <limits>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 namespace fonthook::vectorfont
 {
@@ -35,6 +36,9 @@ namespace fonthook::vectorfont
 			kNativeA8MaximumQuads * 4u * 2u;
 		inline constexpr UInt32 kStaticTargetVertexCapacity =
 			kRingTargetVertexCapacity * 4u;
+		inline constexpr UInt32 kStaticInitialVertexBytes = 4u * 1024u * 1024u;
+		inline constexpr UInt32 kStaticInitialVertexCapacity =
+			(kStaticInitialVertexBytes / sizeof(NativeA8GpuVertex)) & ~3u;
 		inline constexpr UInt32 kStaticPromotionSubmissionCount = 2;
 		inline constexpr size_t kStaticCandidateLimit = 4096;
 		inline constexpr UInt32 kCanonicalIndexCount =
@@ -386,7 +390,7 @@ namespace fonthook::vectorfont
 			UInt64 desired = std::min<UInt64>(kRingTargetVertexCapacity, capLimit);
 			desired &= ~static_cast<UInt64>(3u);
 			UInt64 staticDesired = std::min<UInt64>(
-				kStaticTargetVertexCapacity, capLimit);
+				kStaticInitialVertexCapacity, capLimit);
 			staticDesired &= ~static_cast<UInt64>(3u);
 			if (desired < requiredVertices || desired > std::numeric_limits<UInt32>::max())
 			{
@@ -482,6 +486,151 @@ namespace fonthook::vectorfont
 			}
 			operation = "none";
 			result = D3D_OK;
+			return true;
+		}
+
+		struct LiveStaticPayload
+		{
+			NativeA8PayloadTemplatePtr owner;
+			UInt32 baseVertex = 0;
+		};
+
+		bool TryGrowStaticVertexBufferLocked(NativeA8RingState& state,
+			UInt32 requiredVertices, bool& permanentFailure)
+		{
+			permanentFailure = false;
+			if (!state.device || !state.staticVertexBuffer || !requiredVertices)
+			{
+				permanentFailure = true;
+				return false;
+			}
+
+			// A different active proxy can still be issuing packets against the old
+			// buffer. Defer the optional promotion instead of invalidating that group.
+			const UInt32 activeProxies = static_cast<UInt32>(std::count_if(
+				state.proxies.begin(), state.proxies.begin() + state.proxyCount,
+				[](const NativeA8Proxy& proxy) { return proxy.inUse; }));
+			if (activeProxies > 1)
+				return false;
+
+			std::vector<LiveStaticPayload> livePayloads;
+			livePayloads.reserve(state.staticPayloads.size());
+			UInt64 liveVertexCount = 0;
+			for (const auto& entry : state.staticPayloads)
+			{
+				NativeA8PayloadTemplatePtr owner = entry.second.owner.lock();
+				if (!owner || owner.get() != entry.first
+					|| owner->gpuVertices.size() != entry.second.vertexCount)
+				{
+					continue;
+				}
+				if (liveVertexCount + owner->gpuVertices.size()
+					> kStaticTargetVertexCapacity)
+				{
+					permanentFailure = true;
+					return false;
+				}
+				livePayloads.push_back({ std::move(owner),
+					static_cast<UInt32>(liveVertexCount) });
+				liveVertexCount += livePayloads.back().owner->gpuVertices.size();
+			}
+
+			const UInt64 requiredCapacity = liveVertexCount + requiredVertices;
+			if (requiredCapacity > kStaticTargetVertexCapacity)
+			{
+				permanentFailure = true;
+				return false;
+			}
+			UInt64 desiredCapacity = state.staticVertexCapacity;
+			while (desiredCapacity < requiredCapacity
+				&& desiredCapacity < kStaticTargetVertexCapacity)
+			{
+				desiredCapacity = std::min<UInt64>(
+					desiredCapacity * 2u, kStaticTargetVertexCapacity);
+			}
+			// Rebuilding at the same size is useful only when expired payloads left
+			// holes behind the bump pointer. It compacts the live prefix in one upload.
+			if (desiredCapacity == state.staticVertexCapacity
+				&& liveVertexCount == state.nextStaticVertex)
+			{
+				permanentFailure = true;
+				return false;
+			}
+
+			IDirect3DVertexBuffer9* replacement = nullptr;
+			HRESULT result = state.device->CreateVertexBuffer(
+				static_cast<UINT>(desiredCapacity) * sizeof(NativeA8GpuVertex),
+				D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT, &replacement, nullptr);
+			if (FAILED(result) || !replacement)
+			{
+				if (replacement)
+					replacement->Release();
+				permanentFailure = true;
+				return false;
+			}
+
+			if (liveVertexCount)
+			{
+				void* destination = nullptr;
+				const UINT liveBytes = static_cast<UINT>(liveVertexCount)
+					* sizeof(NativeA8GpuVertex);
+				result = replacement->Lock(0, liveBytes, &destination, 0);
+				if (FAILED(result) || !destination)
+				{
+					replacement->Release();
+					permanentFailure = true;
+					return false;
+				}
+				for (const LiveStaticPayload& payload : livePayloads)
+				{
+					std::memcpy(static_cast<UInt8*>(destination)
+						+ payload.baseVertex * sizeof(NativeA8GpuVertex),
+						payload.owner->gpuVertices.data(),
+						payload.owner->gpuVertices.size()
+							* sizeof(NativeA8GpuVertex));
+				}
+				result = replacement->Unlock();
+				if (FAILED(result))
+				{
+					replacement->Release();
+					permanentFailure = true;
+					return false;
+				}
+			}
+
+			std::unordered_map<const NativeA8PayloadTemplate*,
+				NativeA8StaticPayload> rebuilt;
+			rebuilt.reserve(livePayloads.size());
+			for (const LiveStaticPayload& payload : livePayloads)
+			{
+				rebuilt.emplace(payload.owner.get(), NativeA8StaticPayload{
+					payload.owner, payload.baseVertex,
+					static_cast<UInt32>(payload.owner->gpuVertices.size()) });
+			}
+			for (UInt32 index = 0; index < state.proxyCount; ++index)
+			{
+				if (state.proxies[index].chip)
+					state.proxies[index].chip->m_pkVB = state.vertexBuffer;
+			}
+			state.staticVertexBuffer->Release();
+			state.staticVertexBuffer = replacement;
+			state.staticVertexCapacity = static_cast<UInt32>(desiredCapacity);
+			state.nextStaticVertex = static_cast<UInt32>(liveVertexCount);
+			state.staticPayloads = std::move(rebuilt);
+			state.resourceSerial.fetch_add(1, std::memory_order_release);
+			s_ringThread.staticPayload = {};
+			s_ringThread.uploadedPayload = {};
+			s_ringThread.staticCandidate = {};
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: static vertex buffer rebuilt capacity=%u bytes=%u liveVertices=%u livePayloads=%u requestedVertices=%u",
+					state.staticVertexCapacity,
+					state.staticVertexCapacity * sizeof(NativeA8GpuVertex),
+					state.nextStaticVertex,
+					static_cast<UInt32>(state.staticPayloads.size()),
+					requiredVertices);
+			}
 			return true;
 		}
 
@@ -750,10 +899,15 @@ namespace fonthook::vectorfont
 				|| vertexCount > state.staticVertexCapacity
 					- state.nextStaticVertex)
 			{
-				candidate->promotionDisabled = true;
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::StaticVertexPromotionFailed);
-				return false;
+				bool permanentFailure = false;
+				if (!TryGrowStaticVertexBufferLocked(state, vertexCount,
+					permanentFailure))
+				{
+					candidate->promotionDisabled = permanentFailure;
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::StaticVertexPromotionFailed);
+					return false;
+				}
 			}
 
 			baseVertex = state.nextStaticVertex;

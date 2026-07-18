@@ -5,6 +5,7 @@
 #include "NiTriShapeData.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <limits>
@@ -15,6 +16,23 @@ namespace fonthook::vectorfont
 {
 	namespace
 	{
+		UInt32 PackNativeBaseColorChannel(float value)
+		{
+			if (!std::isfinite(value))
+				value = 1.0f;
+			value = std::clamp(value, 0.0f, 1.0f);
+			return static_cast<UInt32>(value * 255.0f + 0.5f);
+		}
+
+		UInt32 PackNativeBaseColor(const NiColorA& color)
+		{
+			const UInt32 r = PackNativeBaseColorChannel(color.r);
+			const UInt32 g = PackNativeBaseColorChannel(color.g);
+			const UInt32 b = PackNativeBaseColorChannel(color.b);
+			const UInt32 a = PackNativeBaseColorChannel(color.a);
+			return (a << 24) | (r << 16) | (g << 8) | b;
+		}
+
 		struct PacketSpan
 		{
 			size_t firstRange = 0;
@@ -258,10 +276,7 @@ namespace fonthook::vectorfont
 			output.z = vertex.z - geometryOrigin.z;
 			output.u = texture.x;
 			output.v = texture.y;
-			output.r = color.r;
-			output.g = color.g;
-			output.b = color.b;
-			output.a = color.a;
+			output.color = PackNativeBaseColor(color);
 		}
 
 		for (const PacketSpan& span : spans)

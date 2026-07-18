@@ -24,7 +24,20 @@ namespace fonthook::vectorfont
 
 	size_t GetBitmapCacheLimit()
 	{
-		return static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 4u;
+		const size_t configuredBytes = static_cast<size_t>(
+			g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u;
+		const size_t prewarmLimit = configuredBytes / 4u;
+		if (!State().bitmapCacheReducedAfterPrewarm)
+			return prewarmLimit;
+
+		// Full atlas profiles no longer need a large CPU bitmap working set. Keep
+		// an adaptive 8-16 MiB demand cache for cold misses without reducing the
+		// layout, batch, or packet-template budgets that affect every frame.
+		constexpr size_t kMinimumPostPrewarmBitmapBytes = 8u * 1024u * 1024u;
+		constexpr size_t kMaximumPostPrewarmBitmapBytes = 16u * 1024u * 1024u;
+		const size_t adaptiveLimit = std::clamp(configuredBytes / 16u,
+			kMinimumPostPrewarmBitmapBytes, kMaximumPostPrewarmBitmapBytes);
+		return std::min(prewarmLimit, adaptiveLimit);
 	}
 
 	size_t GetLayoutCacheLimit()
