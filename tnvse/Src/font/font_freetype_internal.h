@@ -545,7 +545,7 @@ namespace fonthook::vectorfont
 		bool manualBaseline = false;
 		bool initialized = false;
 		UInt64 layoutContentHash = 0;
-		UInt64 maskContentHash = 0;
+		std::array<UInt64, 2> maskContentRoleHashes = {};
 		std::shared_ptr<PersistentGlyphManifest> manifest;
 	};
 
@@ -653,7 +653,8 @@ namespace fonthook::vectorfont
 		size_t length, bool allowShaping, FreeTypeLayoutRun& layout,
 		bool finalRun = false);
 
-	UInt64 ComputeRuntimeMaskContentHash(RuntimeFont& runtime);
+	UInt64 ComputeRuntimeMaskContentHash(RuntimeFont& runtime,
+		VectorFontByteClass byteClass);
 	bool LoadGlyphManifest(RuntimeFont& runtime, UInt32 encodedCode,
 		VectorFontByteClass byteClass, VectorEncodedGlyph* glyph,
 		FontLetter* metrics);

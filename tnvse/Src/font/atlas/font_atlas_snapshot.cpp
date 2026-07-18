@@ -104,8 +104,8 @@ namespace fonthook::vectorfont
 			return SetEndOfFile(file) != FALSE;
 		}
 
-		bool ResolvePrewarmAtlasKey(const FontConfig& config, float rasterScale,
-			AtlasCacheKey& key)
+		bool ResolvePrewarmAtlasKey(const FontConfig& config,
+			VectorFontByteClass byteClass, float rasterScale, AtlasCacheKey& key)
 		{
 			if (!IsA8RendererAvailable())
 				return false;
@@ -118,14 +118,15 @@ namespace fonthook::vectorfont
 				&& !ResolveSdfSpread(config, rasterScale, sdfSpread))
 				shaderEffects = false;
 			key = {
-				BuildPrewarmAtlasContentHash(config, rasterScale, shaderEffects),
+				BuildPrewarmAtlasContentHash(config, byteClass, rasterScale, shaderEffects),
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
 				AtlasPixelMode::A8,
 				shaderEffects ? AtlasRenderMode::ShaderEffects
 					: AtlasRenderMode::CpuEffects,
 				kAtlasPadding,
-				shaderEffects && UsesSdfFill(config)
+				shaderEffects && UsesSdfFill(config),
+				byteClass
 			};
 			return true;
 		}
@@ -144,6 +145,7 @@ namespace fonthook::vectorfont
 			hash = HashAtlasBytes(&key.padding, sizeof(key.padding), hash);
 			hash = HashAtlasBytes(&key.levelZeroOnly,
 				sizeof(key.levelZeroOnly), hash);
+			hash = HashAtlasBytes(&key.byteClass, sizeof(key.byteClass), hash);
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			hash = HashAtlasBytes(&codePage, sizeof(codePage), hash);
 			hash = HashAtlasBytes(&config.prewarm, sizeof(config.prewarm), hash);
@@ -169,7 +171,7 @@ namespace fonthook::vectorfont
 			std::wstring directory;
 			if (!GetFreeTypeFontCacheDirectory(directory))
 				return {};
-			maskContentHash = GetRuntimeMaskContentHash(runtime);
+			maskContentHash = GetRuntimeMaskContentHash(runtime, key.byteClass);
 			snapshotHash = GetAtlasSnapshotHash(key, maskContentHash,
 				GetRuntimeConfig(runtime));
 			wchar_t fileName[256] = {};
@@ -353,8 +355,9 @@ namespace fonthook::vectorfont
 			}
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasSnapshotProfileReuse);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: atlas snapshot reused GPU-resident profile font=%u pages=%u placements=%llu",
-				key.fontId, pageCount,
+				"tnvse_freetype_font: atlas snapshot reused GPU-resident profile font=%u role=%s pages=%u placements=%llu",
+				key.fontId, key.byteClass == VectorFontByteClass::DoubleByte
+					? "doubleByte" : "singleByte", pageCount,
 				static_cast<unsigned long long>(placementCount));
 			return true;
 		}
@@ -775,13 +778,12 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	bool TryLoadGlyphAtlasSnapshot(RuntimeFont& runtime, float rasterScale)
+	bool TryLoadGlyphAtlasSnapshotRole(RuntimeFont& runtime,
+		VectorFontByteClass byteClass, float rasterScale)
 	{
 		const FontConfig& config = GetRuntimeConfig(runtime);
-		if (!HasCompleteGlyphManifest(runtime, config.prewarm))
-			return false;
 		AtlasCacheKey key;
-		if (!ResolvePrewarmAtlasKey(config, rasterScale, key))
+		if (!ResolvePrewarmAtlasKey(config, byteClass, rasterScale, key))
 			return false;
 		if (TryReuseCompleteAtlasProfile(key))
 			return true;
@@ -818,7 +820,7 @@ namespace fonthook::vectorfont
 				return false;
 			AtlasSnapshotHeader header;
 			std::memcpy(&header, serialized.data(), sizeof(header));
-			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '8' };
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '9' };
 			const AtlasSnapshotStorage expectedStorage = UsesPlacedLevelZeroSnapshot(pageKey)
 				? AtlasSnapshotStorage::PlacedLevelZeroRects
 				: AtlasSnapshotStorage::FullMipChain;
@@ -846,7 +848,7 @@ namespace fonthook::vectorfont
 				|| header.pixelMode != static_cast<UInt8>(pageKey.pixelMode)
 				|| header.renderMode != static_cast<UInt8>(pageKey.renderMode)
 				|| header.storageMode != static_cast<UInt8>(expectedStorage)
-				|| header.reserved != 0
+				|| header.byteClass != static_cast<UInt8>(pageKey.byteClass)
 				|| header.padding != pageKey.padding || !payloadSizeValid
 				|| header.pageIndex != pageIndex || !header.pageCount
 				|| header.pageCount > kMaximumAtlasSnapshotPages
@@ -998,8 +1000,9 @@ namespace fonthook::vectorfont
 				state.completeAtlasProfiles.insert(MakeAtlasProfileKey(key));
 		}
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: atlas snapshot restored font=%u pages=%u defaultPoolPages=%u deduplicatedPages=%u deduplicatedGpuBytes=%llu placements=%llu bytes=%llu releasedResetPixelBytes=%llu",
-			key.fontId, pageCount, defaultPoolPages, deduplicatedPages,
+			"tnvse_freetype_font: atlas snapshot restored font=%u role=%s pages=%u defaultPoolPages=%u deduplicatedPages=%u deduplicatedGpuBytes=%llu placements=%llu bytes=%llu releasedResetPixelBytes=%llu",
+			key.fontId, key.byteClass == VectorFontByteClass::DoubleByte
+				? "doubleByte" : "singleByte", pageCount, defaultPoolPages, deduplicatedPages,
 			static_cast<unsigned long long>(deduplicatedGpuBytes),
 			static_cast<unsigned long long>(totalPlacements),
 			static_cast<unsigned long long>(totalBytes),
@@ -1007,12 +1010,48 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool SaveGlyphAtlasSnapshot(RuntimeFont& runtime, float rasterScale)
+	bool TryLoadGlyphAtlasSnapshot(RuntimeFont& runtime, float rasterScale)
+	{
+		const bool singleByteReady = TryLoadGlyphAtlasSnapshotRole(runtime,
+			VectorFontByteClass::SingleByte, rasterScale);
+		const bool needsDoubleByte = IsDbcsCodePage(GetFreeTypeTextCodePage());
+		const bool doubleByteReady = !needsDoubleByte
+			|| TryLoadGlyphAtlasSnapshotRole(runtime,
+				VectorFontByteClass::DoubleByte, rasterScale);
+		bool profilesResident = false;
+		AtlasCacheKey singleByteKey;
+		AtlasCacheKey doubleByteKey;
+		const FontConfig& config = GetRuntimeConfig(runtime);
+		if (ResolvePrewarmAtlasKey(config, VectorFontByteClass::SingleByte,
+			rasterScale, singleByteKey)
+			&& (!needsDoubleByte || ResolvePrewarmAtlasKey(config,
+				VectorFontByteClass::DoubleByte, rasterScale, doubleByteKey)))
+		{
+			AtlasState& state = State();
+			std::lock_guard<std::mutex> lock(state.atlasMutex);
+			profilesResident = IsCompleteAtlasProfileResidentLocked(state, singleByteKey)
+				&& (!needsDoubleByte
+					|| IsCompleteAtlasProfileResidentLocked(state, doubleByteKey));
+		}
+		return HasCompleteGlyphManifest(runtime, config.prewarm)
+			&& singleByteReady && doubleByteReady && profilesResident;
+	}
+
+	bool SaveGlyphAtlasSnapshotRole(RuntimeFont& runtime,
+		VectorFontByteClass byteClass, float rasterScale)
 	{
 		const FontConfig& config = GetRuntimeConfig(runtime);
 		AtlasCacheKey key;
-		if (!ResolvePrewarmAtlasKey(config, rasterScale, key))
+		if (!ResolvePrewarmAtlasKey(config, byteClass, rasterScale, key))
 			return false;
+		if (TryReuseCompleteAtlasProfile(key))
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: atlas snapshot retained font=%u role=%s",
+				key.fontId, byteClass == VectorFontByteClass::DoubleByte
+					? "doubleByte" : "singleByte");
+			return true;
+		}
 		UInt64 snapshotHash = 0;
 		UInt64 maskContentHash = 0;
 		if (GetAtlasSnapshotPath(runtime, key, snapshotHash, maskContentHash).empty())
@@ -1102,7 +1141,7 @@ namespace fonthook::vectorfont
 			const AtlasSnapshotStorage storageMode = UsesPlacedLevelZeroSnapshot(page.key)
 				? AtlasSnapshotStorage::PlacedLevelZeroRects
 				: AtlasSnapshotStorage::FullMipChain;
-			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '8' };
+			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '9' };
 			std::memcpy(page.header.magic, magic, sizeof(magic));
 				page.header.version = kAtlasSnapshotVersion;
 				page.header.headerSize = sizeof(page.header);
@@ -1116,6 +1155,7 @@ namespace fonthook::vectorfont
 				page.header.pixelMode = static_cast<UInt8>(page.key.pixelMode);
 				page.header.renderMode = static_cast<UInt8>(page.key.renderMode);
 				page.header.storageMode = static_cast<UInt8>(storageMode);
+				page.header.byteClass = static_cast<UInt8>(page.key.byteClass);
 				page.header.pageIndex = static_cast<UInt16>(index);
 				page.header.pageCount = static_cast<UInt16>(pages.size());
 				page.header.placementCount = static_cast<UInt32>(page.placements.size());
@@ -1179,8 +1219,9 @@ namespace fonthook::vectorfont
 				State().completeAtlasProfiles.insert(MakeAtlasProfileKey(key));
 		}
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: atlas snapshot saved font=%u pages=%u->%u placements=%llu bytes=%llu gpuBytes=%llu->%llu saved=%llu tail=%ux%u",
-			key.fontId, sourcePageCount, pageCount,
+			"tnvse_freetype_font: atlas snapshot saved font=%u role=%s pages=%u->%u placements=%llu bytes=%llu gpuBytes=%llu->%llu saved=%llu tail=%ux%u",
+			key.fontId, key.byteClass == VectorFontByteClass::DoubleByte
+				? "doubleByte" : "singleByte", sourcePageCount, pageCount,
 			static_cast<unsigned long long>(totalPlacements),
 			static_cast<unsigned long long>(totalBytes),
 			static_cast<unsigned long long>(originalGpuBytes),
@@ -1191,7 +1232,72 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
+	bool SaveGlyphAtlasSnapshot(RuntimeFont& runtime, float rasterScale)
+	{
+		if (!SaveGlyphAtlasSnapshotRole(runtime,
+			VectorFontByteClass::SingleByte, rasterScale))
+		{
+			return false;
+		}
+		return !IsDbcsCodePage(GetFreeTypeTextCodePage())
+			|| SaveGlyphAtlasSnapshotRole(runtime,
+				VectorFontByteClass::DoubleByte, rasterScale);
+	}
+
+	bool RebuildGlyphAtlasFromSnapshot(RuntimeFont& runtime, float rasterScale)
+	{
+		const FontConfig& config = GetRuntimeConfig(runtime);
+		const bool needsDoubleByte = IsDbcsCodePage(GetFreeTypeTextCodePage());
+		UInt32 discardedPages = 0;
+		UInt64 discardedBytes = 0;
+		{
+			AtlasState& state = State();
+			std::lock_guard<std::mutex> lock(state.atlasMutex);
+			const size_t roleCount = needsDoubleByte ? 2 : 1;
+			for (size_t roleIndex = 0; roleIndex < roleCount; ++roleIndex)
+			{
+				AtlasCacheKey baseKey;
+				if (!ResolvePrewarmAtlasKey(config,
+					static_cast<VectorFontByteClass>(roleIndex), rasterScale, baseKey))
+				{
+					return false;
+				}
+				const auto profile = state.atlasProfiles.find(
+					MakeAtlasProfileKey(baseKey));
+				if (profile == state.atlasProfiles.end())
+					continue;
+				const std::vector<UInt16> pages = profile->second.pages;
+				for (UInt16 pageIndex : pages)
+				{
+					AtlasCacheKey pageKey = baseKey;
+					pageKey.pageIndex = pageIndex;
+					auto page = state.atlasCache.find(pageKey);
+					if (page == state.atlasCache.end())
+						continue;
+					const auto lru = page->second.lru;
+					if (page->second.resource)
+						RetireDefaultGeneration(*page->second.resource);
+					UnindexAtlasPage(state, pageKey);
+					discardedBytes += page->second.bytes;
+					state.atlasCacheBytes -= page->second.bytes;
+					state.atlasLru.erase(lru);
+					state.atlasCache.erase(page);
+					++discardedPages;
+				}
+			}
+		}
+
+		const bool restored = TryLoadGlyphAtlasSnapshot(runtime, rasterScale);
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: atlas post-prewarm rebuild font=%u discardedPages=%u discardedBytes=%llu result=%s",
+			config.fontId, discardedPages,
+			static_cast<unsigned long long>(discardedBytes),
+			restored ? "complete" : "failed");
+		return restored;
+	}
+
 	bool PrewarmGlyphAtlas(RuntimeFont& runtime,
+		VectorFontByteClass byteClass,
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 		float rasterScale)
 	{
@@ -1227,7 +1333,7 @@ namespace fonthook::vectorfont
 					return lhs->width > rhs->width;
 				return lhs->cacheId < rhs->cacheId;
 			});
-		return !GetAtlasResources(config, rasterScale, packedBitmaps, pixelMode,
+		return !GetAtlasResources(config, byteClass, rasterScale, packedBitmaps, pixelMode,
 			shaderEffects ? AtlasRenderMode::ShaderEffects : AtlasRenderMode::CpuEffects,
 			padding).empty();
 	}

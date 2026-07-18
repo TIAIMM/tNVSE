@@ -161,6 +161,7 @@ namespace fonthook::vectorfont
 		EffectStyle shadow;
 		UInt64 layoutHash = 0;
 		UInt64 maskGenerationHash = 0;
+		std::array<UInt64, 2> maskGenerationRoleHashes = {};
 		UInt64 shaderEffectHash = 0;
 	};
 
@@ -337,7 +338,8 @@ namespace fonthook::vectorfont
 	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& arRuntime, Font& arFont, UInt32 auiEncodedCode);
 	bool DecodeEncodedGlyph(RuntimeFont& arRuntime, Font& arFont, const char* apText, VectorEncodedGlyph& arGlyph);
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
-	UInt64 GetRuntimeMaskContentHash(RuntimeFont& arRuntime);
+	UInt64 GetRuntimeMaskContentHash(RuntimeFont& arRuntime,
+		VectorFontByteClass aeByteClass);
 	bool GetFreeTypeFontCacheDirectory(std::wstring& arDirectory);
 	void MarkFreeTypeFontCacheFileUsed(const std::wstring& arPath);
 	void DeleteUnusedFreeTypeFontCacheFiles();
@@ -370,10 +372,12 @@ namespace fonthook::vectorfont
 	bool ResolvePrewarmGlyph(RuntimeFont& arRuntime, const char* apBytes,
 		size_t auiLength, VectorEncodedGlyph& arGlyph);
 	bool PrewarmGlyphAtlas(RuntimeFont& arRuntime,
+		VectorFontByteClass aeByteClass,
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& arBitmaps,
 		float afRasterScale);
 	bool TryLoadGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool SaveGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
+	bool RebuildGlyphAtlasFromSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	void QueueFontPrewarm(UInt32 auiFontId);
 	void PumpFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,

@@ -303,8 +303,8 @@ namespace fonthook::vectorfont
 			UInt64 snapshotRevision = 0;
 			bool scanningDoubleByte = false;
 			bool snapshotAttempted = false;
-			std::vector<std::shared_ptr<const GlyphBitmap>> atlasBitmaps;
-			std::unordered_set<UInt64> atlasBitmapIds;
+			std::array<std::vector<std::shared_ptr<const GlyphBitmap>>, 2> atlasBitmaps;
+			std::array<std::unordered_set<UInt64>, 2> atlasBitmapIds;
 		};
 
 		std::deque<PrewarmJob> s_jobs;
@@ -628,8 +628,11 @@ namespace fonthook::vectorfont
 			job.snapshotRevision = s_snapshotRevision;
 			job.scanningDoubleByte = false;
 			job.snapshotAttempted = false;
-			job.atlasBitmaps.clear();
-			job.atlasBitmapIds.clear();
+			for (size_t roleIndex = 0; roleIndex < job.atlasBitmaps.size(); ++roleIndex)
+			{
+				job.atlasBitmaps[roleIndex].clear();
+				job.atlasBitmapIds[roleIndex].clear();
+			}
 			if (!IsDbcsCodePage(job.codePage))
 				job.leadByteEnd = 0;
 			ConfigureCommonRange(job);
@@ -786,6 +789,7 @@ namespace fonthook::vectorfont
 		UInt32 completedFonts = 0;
 		UInt32 fullFonts = 0;
 		UInt32 saveFailedFonts = 0;
+		UInt32 rebuildFailedFonts = 0;
 		UInt32 cancelledFonts = 0;
 		UInt32 finishedFonts = 0;
 		gLog.FormattedMessage(
@@ -885,14 +889,16 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			if (job.atlasBitmaps.empty())
+			if (job.atlasBitmaps[0].empty() && job.atlasBitmaps[1].empty())
 			{
 				const size_t expected = std::max<size_t>(4096,
 					static_cast<size_t>(job.targetUnitCount));
 				// Shader effect-only profiles retain the grayscale fill and add one
 				// SDF mask per glyph. Reserve both complete code-page mask sets.
-				job.atlasBitmaps.reserve(expected * 2);
-				job.atlasBitmapIds.reserve(expected * 2);
+				job.atlasBitmaps[0].reserve(512);
+				job.atlasBitmapIds[0].reserve(512);
+				job.atlasBitmaps[1].reserve(expected * 2);
+				job.atlasBitmapIds[1].reserve(expected * 2);
 			}
 			EffectQuality resolvedQuality = config->effectQuality;
 			bool shaderEffects = IsA8RendererAvailable()
@@ -975,8 +981,16 @@ namespace fonthook::vectorfont
 						*bitmapResults[index], rasterScale);
 				}
 			}
-			for (const std::shared_ptr<const GlyphBitmap>& bitmap : bitmapResults)
-				AddBitmap(job.atlasBitmaps, job.atlasBitmapIds, bitmap);
+			for (size_t index = 0; index < bitmapResults.size()
+				&& index < bitmapRequests.size(); ++index)
+			{
+				if (!bitmapRequests[index].glyph)
+					continue;
+				const size_t roleIndex = static_cast<size_t>(
+					bitmapRequests[index].glyph->byteClass);
+				AddBitmap(job.atlasBitmaps[roleIndex], job.atlasBitmapIds[roleIndex],
+					bitmapResults[index]);
+			}
 			const wchar_t* rasterStage = resolvedSdfFill
 				? L"Generating SDF glyphs..."
 				: prewarmSdfMasks ? L"Generating grayscale + SDF glyphs..."
@@ -987,16 +1001,25 @@ namespace fonthook::vectorfont
 			{
 				ReportPrewarmProgress(job, fontOrdinal, queuedFonts, finishedFonts,
 					L"Packing glyph atlas...", 0.99f);
-				if (!job.atlasBitmaps.empty()
-					&& !PrewarmGlyphAtlas(*runtime, job.atlasBitmaps, rasterScale))
+				bool atlasPacked = true;
+				for (size_t roleIndex = 0; roleIndex < job.atlasBitmaps.size(); ++roleIndex)
+				{
+					if (!job.atlasBitmaps[roleIndex].empty()
+						&& !PrewarmGlyphAtlas(*runtime,
+							static_cast<VectorFontByteClass>(roleIndex),
+							job.atlasBitmaps[roleIndex], rasterScale))
+					{
+						atlasPacked = false;
+						break;
+					}
+				}
+				if (!atlasPacked)
 				{
 					FinishJob(job, "atlas-full");
 					++fullFonts;
 					++finishedFonts;
 					continue;
 				}
-				std::vector<std::shared_ptr<const GlyphBitmap>>().swap(job.atlasBitmaps);
-				std::unordered_set<UInt64>().swap(job.atlasBitmapIds);
 				ReportPrewarmProgress(job, fontOrdinal, queuedFonts, finishedFonts,
 					L"Saving atlas snapshot...", 0.995f);
 				if (!SaveGlyphAtlasSnapshot(*runtime, rasterScale))
@@ -1007,11 +1030,41 @@ namespace fonthook::vectorfont
 					continue;
 				}
 				MarkGlyphManifestComplete(*runtime, job.mode);
+				ReportPrewarmProgress(job, fontOrdinal, queuedFonts, finishedFonts,
+					L"Rebuilding compact atlas...", 0.998f);
+				if (!RebuildGlyphAtlasFromSnapshot(*runtime, rasterScale))
+				{
+					bool liveAtlasRecovered = true;
+					for (size_t roleIndex = 0;
+						roleIndex < job.atlasBitmaps.size(); ++roleIndex)
+					{
+						if (!job.atlasBitmaps[roleIndex].empty()
+							&& !PrewarmGlyphAtlas(*runtime,
+								static_cast<VectorFontByteClass>(roleIndex),
+								job.atlasBitmaps[roleIndex], rasterScale))
+						{
+							liveAtlasRecovered = false;
+						}
+					}
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: atlas post-prewarm rebuild recovery font=%u result=%s",
+						job.fontId, liveAtlasRecovered ? "live-atlas" : "failed");
+					FinishJob(job, "atlas-rebuild-failed");
+					++rebuildFailedFonts;
+					++finishedFonts;
+					continue;
+				}
+				for (size_t roleIndex = 0; roleIndex < job.atlasBitmaps.size(); ++roleIndex)
+				{
+					std::vector<std::shared_ptr<const GlyphBitmap>>().swap(
+						job.atlasBitmaps[roleIndex]);
+					std::unordered_set<UInt64>().swap(job.atlasBitmapIds[roleIndex]);
+				}
 				++s_snapshotRevision;
 				FinishJob(job, "complete");
 				++completedFonts;
 				++finishedFonts;
-				UpdatePrewarmProgress(L"Saved font atlas snapshot.",
+				UpdatePrewarmProgress(L"Rebuilt compact font atlas.",
 					L"Preparing the next font...",
 					static_cast<float>(finishedFonts) / queuedFonts);
 				continue;
@@ -1023,8 +1076,9 @@ namespace fonthook::vectorfont
 		}
 
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: blocking prewarm end fonts=%u complete=%u atlasFull=%u saveFailed=%u cancelled=%u batches=%u elapsedMs=%llu",
-			queuedFonts, completedFonts, fullFonts, saveFailedFonts, cancelledFonts, batches,
+			"tnvse_freetype_font: blocking prewarm end fonts=%u complete=%u atlasFull=%u saveFailed=%u rebuildFailed=%u cancelled=%u batches=%u elapsedMs=%llu",
+			queuedFonts, completedFonts, fullFonts, saveFailedFonts, rebuildFailedFonts,
+			cancelledFonts, batches,
 			static_cast<unsigned long long>(GetTickCount64() - started));
 		FlushGlyphBitmapDiskCache();
 		ReleaseGlyphBitmapDiskCacheMappings();

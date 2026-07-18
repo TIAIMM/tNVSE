@@ -296,17 +296,23 @@ double-byte units from the active code page. Lookup uses binary search directly
 in the mapped records. Runtime fonts with the same `manifestHash` share one file
 handle, mapping handle, and mapped view instead of mapping that file once per
 font ID. One `_p<page>.tnvfatlas` snapshot per atlas page stores
-the stable glyph-ID placement map. Snapshot v8 uses `stb_rect_pack` skyline
-packing. A coverage-policy revision participates only in the identity of
+the stable glyph-ID placement map. Snapshot v9 records the byte role explicitly
+and uses `stb_rect_pack` skyline packing. It is a hard format cut: v8 snapshots
+are not read or migrated. A coverage-policy revision participates only in the
+identity of
 code-page shader profiles with grayscale fill and effect-only SDF, invalidating
 older snapshots that could contain only their common-character subset without
 rebuilding already-complete SDF-fill profiles. Pure-SDF profiles are packed in
 deterministic height/width/glyph-ID order, can reduce the page count, and shrink
-every page to the smallest usable power-of-two dimensions. The live atlas is not
-rearranged, so shapes created in the current process keep their original UVs;
-the compact layout takes effect on the next restore. A restored skyline page
-starts runtime shelf appends below its packed extent rather than reusing skyline
-holes. Pure SDF pages store only the placed level-zero rectangles;
+every page to the smallest usable power-of-two dimensions. Immediately after a
+new prewarm snapshot and manifest are committed, startup discards the scan-order
+live pages and restores both byte-role profiles from those files once. The first
+run therefore enters the game with the same compact layout as later cache-hit
+launches instead of waiting for another restart. No text shapes exist at this
+blocking startup point, so replacing the page objects cannot invalidate live
+UVs. A restored skyline page starts runtime shelf appends below its packed extent
+rather than reusing skyline holes. Pure SDF pages store only the placed
+level-zero rectangles;
 other pages retain their complete mip chain. Each page records and validates
 the total page count. After a successful full prewarm every page is written
 atomically, then the manifest is marked complete. A later launch restores the
@@ -353,6 +359,13 @@ stored in atlas pixels rather than supplied only as shader constants.
 When the multibyte hook is active, routing follows the selected DBCS
 `uiEncoding`: valid one-byte units use `singleByte`, while valid pairs use
 `doubleByte`. Shift-JIS half-width katakana therefore use the single-byte font.
+Atlas identity follows that routing boundary: each raster profile has independent
+`singleByte` and `doubleByte` page sets, profile indices, LRU entries, and
+snapshot files. Mixed text can bind pages from both roles in one shape, but a
+`cacheId` lookup never crosses roles. Each role hashes only its own configured
+style/face chain and the content identities of the font files actually loaded
+for that chain. Replacing a double-byte font therefore leaves a compatible
+single-byte atlas resident and its disk snapshot reusable, and vice versa.
 In FreeType-only mode the effective FreeType code page is always 1252, even if
 `uiEncoding=1-4` remains configured, and every byte uses `singleByte`.
 Runtime glyph, layout, kerning, mask, manifest and atlas-snapshot identities all
@@ -551,7 +564,7 @@ When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
-generations are restored after a D3D9 device reset. A pure SDF v8 snapshot is
+generations are restored after a D3D9 device reset. A pure SDF v9 snapshot is
 uploaded directly to this path. Once that upload succeeds, tNVSE releases the
 packed reset pixels and retains only placements plus the validated snapshot
 path/header identity. Device reset, page detachment/growth, and snapshot rewrite

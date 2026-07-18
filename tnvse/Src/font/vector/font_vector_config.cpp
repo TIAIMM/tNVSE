@@ -288,36 +288,40 @@ namespace fonthook::vectorfont
 			}
 		}
 
+		void HashFaceStyle(UInt64& hash, const ByteStyle& style,
+			bool includeLayoutFields)
+		{
+			HashBytes(hash, &style.pixelSize, sizeof(style.pixelSize));
+			HashBytes(hash, &style.scaleX, sizeof(style.scaleX));
+			HashBytes(hash, &style.scaleY, sizeof(style.scaleY));
+			HashBytes(hash, &style.embolden, sizeof(style.embolden));
+			HashBytes(hash, &style.slantDegrees, sizeof(style.slantDegrees));
+			if (includeLayoutFields)
+			{
+				HashBytes(hash, &style.tracking, sizeof(style.tracking));
+				HashBytes(hash, &style.baselineOffset, sizeof(style.baselineOffset));
+				HashBytes(hash, &style.fixedWidth, sizeof(style.fixedWidth));
+			}
+			const UInt32 faceCount = static_cast<UInt32>(style.faces.size());
+			HashBytes(hash, &faceCount, sizeof(faceCount));
+			for (const FaceConfig& face : style.faces)
+			{
+				// Do not hash the game-directory-expanded filesystem path. The
+				// normalized XML identity keeps relative Data paths portable, while
+				// runtime disk identities additionally hash every loaded font's bytes.
+				const UInt32 pathLength = static_cast<UInt32>(face.configuredPath.size());
+				HashBytes(hash, &pathLength, sizeof(pathLength));
+				HashBytes(hash, face.configuredPath.data(),
+					face.configuredPath.size() * sizeof(wchar_t));
+				HashBytes(hash, &face.faceIndex, sizeof(face.faceIndex));
+			}
+		}
+
 		void HashFaceStyles(UInt64& hash, const FontConfig& config,
 			bool includeLayoutFields)
 		{
 			for (const ByteStyle& style : config.styles)
-			{
-				HashBytes(hash, &style.pixelSize, sizeof(style.pixelSize));
-				HashBytes(hash, &style.scaleX, sizeof(style.scaleX));
-				HashBytes(hash, &style.scaleY, sizeof(style.scaleY));
-				HashBytes(hash, &style.embolden, sizeof(style.embolden));
-				HashBytes(hash, &style.slantDegrees, sizeof(style.slantDegrees));
-				if (includeLayoutFields)
-				{
-					HashBytes(hash, &style.tracking, sizeof(style.tracking));
-					HashBytes(hash, &style.baselineOffset, sizeof(style.baselineOffset));
-					HashBytes(hash, &style.fixedWidth, sizeof(style.fixedWidth));
-				}
-				const UInt32 faceCount = static_cast<UInt32>(style.faces.size());
-				HashBytes(hash, &faceCount, sizeof(faceCount));
-				for (const FaceConfig& face : style.faces)
-				{
-					// Do not hash the game-directory-expanded filesystem path. The
-					// normalized XML identity keeps relative Data paths portable, while
-					// runtime disk identities additionally hash every loaded font's bytes.
-					const UInt32 pathLength = static_cast<UInt32>(face.configuredPath.size());
-					HashBytes(hash, &pathLength, sizeof(pathLength));
-					HashBytes(hash, face.configuredPath.data(),
-						face.configuredPath.size() * sizeof(wchar_t));
-					HashBytes(hash, &face.faceIndex, sizeof(face.faceIndex));
-				}
-			}
+				HashFaceStyle(hash, style, includeLayoutFields);
 		}
 
 		UInt64 BuildLayoutHash(const FontConfig& config)
@@ -340,13 +344,21 @@ namespace fonthook::vectorfont
 			return hash;
 		}
 
+		UInt64 BuildMaskGenerationRoleHash(const FontConfig& config, size_t roleIndex)
+		{
+			UInt64 hash = 1469598103934665603ull;
+			HashFaceStyle(hash, config.styles[roleIndex], false);
+			return hash;
+		}
+
 		UInt64 BuildMaskGenerationHash(const FontConfig& config)
 		{
-			// Bitmap/atlas content is independent of the Gamebryo font slot. Atlas cache
-			// keys still include fontId in memory, while disk snapshots use this content
-			// identity together with the resolved font-file hashes.
+			// Keep the combined identity for non-atlas profile scheduling. Atlas profiles
+			// consume the role hashes directly so changing one face chain does not
+			// invalidate the other role's pages.
 			UInt64 hash = 1469598103934665603ull;
-			HashFaceStyles(hash, config, false);
+			for (UInt64 roleHash : config.maskGenerationRoleHashes)
+				HashBytes(hash, &roleHash, sizeof(roleHash));
 			return hash;
 		}
 
@@ -527,6 +539,11 @@ namespace fonthook::vectorfont
 				|| !ReadEffect(node.child("shadow"), EffectKind::Shadow, config.shadow, reason))
 				return false;
 			config.layoutHash = BuildLayoutHash(config);
+			for (size_t roleIndex = 0; roleIndex < config.styles.size(); ++roleIndex)
+			{
+				config.maskGenerationRoleHashes[roleIndex] =
+					BuildMaskGenerationRoleHash(config, roleIndex);
+			}
 			config.maskGenerationHash = BuildMaskGenerationHash(config);
 			config.shaderEffectHash = BuildShaderEffectHash(config);
 			return true;
@@ -571,8 +588,10 @@ namespace fonthook::vectorfont
 			{
 				const ByteStyle& style = config.styles[roleIndex];
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font:   %s size=%.2f tracking=%.2f fixedWidth=%.2f scale=(%.3f,%.3f) embolden=%.2f slant=%.2f baseline=%.2f faces=%u",
-					roleNames[roleIndex], style.pixelSize, style.tracking,
+					"tnvse_freetype_font:   %s mask=%016llX size=%.2f tracking=%.2f fixedWidth=%.2f scale=(%.3f,%.3f) embolden=%.2f slant=%.2f baseline=%.2f faces=%u",
+					roleNames[roleIndex], static_cast<unsigned long long>(
+						config.maskGenerationRoleHashes[roleIndex]),
+					style.pixelSize, style.tracking,
 					style.fixedWidth, style.scaleX, style.scaleY, style.embolden, style.slantDegrees,
 					style.baselineOffset, static_cast<UInt32>(style.faces.size()));
 				for (size_t faceIndex = 0; faceIndex < style.faces.size(); ++faceIndex)

@@ -218,8 +218,7 @@ namespace fonthook::vectorfont
 		}
 
 		void BuildBakedArgbFallback(const std::vector<PendingQuad>& source,
-			std::vector<PendingQuad>& quads,
-			std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps)
+			std::vector<PendingQuad>& quads)
 		{
 			quads = source;
 			std::unordered_map<UInt64, std::shared_ptr<const GlyphBitmap>> unique;
@@ -253,14 +252,6 @@ namespace fonthook::vectorfont
 				quad.layerColorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 				quad.usesLiveTileRgb = true;
 			}
-			bitmaps.clear();
-			bitmaps.reserve(unique.size());
-			for (auto& [id, bitmap] : unique)
-				bitmaps.push_back(std::move(bitmap));
-			std::sort(bitmaps.begin(), bitmaps.end(), [](const auto& lhs, const auto& rhs)
-			{
-				return lhs->cacheId < rhs->cacheId;
-			});
 		}
 
 
@@ -289,6 +280,7 @@ namespace fonthook::vectorfont
 				quad.layer = layer;
 				quad.layerMask = layerMask ? layerMask
 					: static_cast<UInt8>(1u << static_cast<UInt8>(layer));
+				quad.byteClass = instance.glyph.byteClass;
 				quad.usesSdf = usesSdf;
 				quad.usesLiveTileRgb = usesLiveTileRgb;
 				quads.push_back(std::move(quad));
@@ -974,7 +966,6 @@ namespace fonthook::vectorfont
 
 		NiTriShape* TryCreateAtlasShapeForMode(Font& font,
 			const std::vector<PendingQuad>& quads,
-			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 			const FontConfig& config, float rasterScale, bool prepareObject,
 			AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
 			std::vector<std::shared_ptr<AtlasResource>>& outAtlases,
@@ -986,37 +977,81 @@ namespace fonthook::vectorfont
 			if (pixelMode == AtlasPixelMode::A8 && !useCustomA8Shader)
 				return nullptr;
 			const std::vector<PendingQuad>* activeQuads = &quads;
-			const std::vector<std::shared_ptr<const GlyphBitmap>>* activeBitmaps = &bitmaps;
 			thread_local std::vector<PendingQuad> bakedQuads;
-			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bakedBitmaps;
 			if (pixelMode == AtlasPixelMode::Argb32 && !useCustomA8Shader)
 			{
-				BuildBakedArgbFallback(quads, bakedQuads, bakedBitmaps);
+				BuildBakedArgbFallback(quads, bakedQuads);
 				activeQuads = &bakedQuads;
-				activeBitmaps = &bakedBitmaps;
 			}
 
-			thread_local std::vector<UInt16> bitmapPageOrdinals;
-			std::vector<std::shared_ptr<AtlasResource>> availableAtlases =
-				GetAtlasResources(config, rasterScale, *activeBitmaps, pixelMode,
-				renderMode, padding, &bitmapPageOrdinals);
-			if (availableAtlases.empty())
+			thread_local std::array<std::unordered_map<UInt64,
+				std::shared_ptr<const GlyphBitmap>>, 2> roleUnique;
+			thread_local std::array<std::vector<std::shared_ptr<const GlyphBitmap>>, 2>
+				roleBitmaps;
+			thread_local std::array<std::unordered_map<UInt64, UInt16>, 2>
+				placementPages;
+			for (size_t roleIndex = 0; roleIndex < roleUnique.size(); ++roleIndex)
 			{
-				std::shared_ptr<AtlasResource> transient = CreateTransientAtlas(
-					*activeBitmaps, pixelMode, renderMode, padding);
-				if (transient)
+				roleUnique[roleIndex].clear();
+				roleBitmaps[roleIndex].clear();
+				placementPages[roleIndex].clear();
+			}
+			for (const PendingQuad& quad : *activeQuads)
+			{
+				if (quad.bitmap)
 				{
-					availableAtlases.push_back(std::move(transient));
-					bitmapPageOrdinals.assign(activeBitmaps->size(),
-						std::numeric_limits<UInt16>::max());
-					for (size_t bitmapIndex = 0; bitmapIndex < activeBitmaps->size();
-						++bitmapIndex)
+					roleUnique[static_cast<size_t>(quad.byteClass)].emplace(
+						quad.bitmap->cacheId, quad.bitmap);
+				}
+			}
+			std::vector<std::shared_ptr<AtlasResource>> availableAtlases;
+			for (size_t roleIndex = 0; roleIndex < roleBitmaps.size(); ++roleIndex)
+			{
+				auto& bitmaps = roleBitmaps[roleIndex];
+				bitmaps.reserve(roleUnique[roleIndex].size());
+				for (auto& [id, bitmap] : roleUnique[roleIndex])
+					bitmaps.push_back(bitmap);
+				std::sort(bitmaps.begin(), bitmaps.end(), [](const auto& lhs, const auto& rhs)
+				{
+					return lhs->cacheId < rhs->cacheId;
+				});
+				if (bitmaps.empty())
+					continue;
+				thread_local std::vector<UInt16> bitmapPageOrdinals;
+				const VectorFontByteClass byteClass =
+					static_cast<VectorFontByteClass>(roleIndex);
+				std::vector<std::shared_ptr<AtlasResource>> roleAtlases =
+					GetAtlasResources(config, byteClass, rasterScale, bitmaps, pixelMode,
+						renderMode, padding, &bitmapPageOrdinals);
+				if (roleAtlases.empty())
+				{
+					std::shared_ptr<AtlasResource> transient = CreateTransientAtlas(
+						bitmaps, pixelMode, renderMode, padding);
+					if (transient)
 					{
-						const auto& bitmap = (*activeBitmaps)[bitmapIndex];
-						if (bitmap && FindAtlasGlyph(*availableAtlases[0], bitmap->cacheId))
+						roleAtlases.push_back(std::move(transient));
+						bitmapPageOrdinals.assign(bitmaps.size(),
+							std::numeric_limits<UInt16>::max());
+						for (size_t bitmapIndex = 0; bitmapIndex < bitmaps.size(); ++bitmapIndex)
 						{
-							bitmapPageOrdinals[bitmapIndex] = 0;
+							if (bitmaps[bitmapIndex]
+								&& FindAtlasGlyph(*roleAtlases[0], bitmaps[bitmapIndex]->cacheId))
+								bitmapPageOrdinals[bitmapIndex] = 0;
 						}
+					}
+				}
+				if (roleAtlases.empty())
+					return nullptr;
+				const UInt16 rolePageBase = static_cast<UInt16>(availableAtlases.size());
+				availableAtlases.insert(availableAtlases.end(), roleAtlases.begin(),
+					roleAtlases.end());
+				for (size_t bitmapIndex = 0; bitmapIndex < bitmaps.size(); ++bitmapIndex)
+				{
+					const UInt16 page = bitmapPageOrdinals[bitmapIndex];
+					if (page < roleAtlases.size())
+					{
+						placementPages[roleIndex].emplace(bitmaps[bitmapIndex]->cacheId,
+							static_cast<UInt16>(rolePageBase + page));
 					}
 				}
 			}
@@ -1028,22 +1063,12 @@ namespace fonthook::vectorfont
 			outAtlases.clear();
 			std::vector<UInt16> compactPageIndices(availableAtlases.size(),
 				std::numeric_limits<UInt16>::max());
-			thread_local std::unordered_map<UInt64, UInt16> placementPages;
-			placementPages.clear();
-			placementPages.reserve(activeBitmaps->size());
-			for (size_t bitmapIndex = 0; bitmapIndex < activeBitmaps->size(); ++bitmapIndex)
-			{
-				const auto& bitmap = (*activeBitmaps)[bitmapIndex];
-				if (!bitmap || placementPages.find(bitmap->cacheId) != placementPages.end())
-					continue;
-				const UInt16 page = bitmapPageOrdinals[bitmapIndex];
-				if (page < availableAtlases.size())
-					placementPages.emplace(bitmap->cacheId, page);
-			}
 			for (PendingQuad& quad : pagedQuads)
 			{
-				const auto placement = placementPages.find(quad.bitmap->cacheId);
-				if (placement == placementPages.end())
+				const auto& rolePlacements = placementPages[
+					static_cast<size_t>(quad.byteClass)];
+				const auto placement = rolePlacements.find(quad.bitmap->cacheId);
+				if (placement == rolePlacements.end())
 					return nullptr;
 				const UInt16 page = placement->second;
 				UInt16& compactPage = compactPageIndices[page];

@@ -872,16 +872,29 @@ namespace fonthook::vectorfont
 			return runtime.layoutContentHash;
 		}
 
-		UInt64 ComputeRuntimeMaskContentHash(RuntimeFont& runtime)
+		UInt64 ComputeRuntimeMaskContentHash(RuntimeFont& runtime,
+			VectorFontByteClass byteClass)
 		{
-			if (runtime.maskContentHash)
-				return runtime.maskContentHash;
+			const size_t roleIndex = static_cast<size_t>(byteClass);
+			if (runtime.maskContentRoleHashes[roleIndex])
+				return runtime.maskContentRoleHashes[roleIndex];
 			UInt64 hash = HashBytes64(&kPersistentBitmapVersion,
 				sizeof(kPersistentBitmapVersion));
-			hash = HashBytes64(&runtime.config->maskGenerationHash,
-				sizeof(runtime.config->maskGenerationHash));
-			runtime.maskContentHash = HashRuntimeFontFaces(runtime, hash);
-			return runtime.maskContentHash;
+			const UInt64 roleMaskHash = runtime.config->maskGenerationRoleHashes[roleIndex];
+			hash = HashBytes64(&roleMaskHash, sizeof(roleMaskHash), hash);
+			const RuntimeRole& role = runtime.roles[roleIndex];
+			const UInt32 count = static_cast<UInt32>(role.faces.size());
+			hash = HashBytes64(&count, sizeof(count), hash);
+			for (const RuntimeFace& face : role.faces)
+			{
+				const UInt64 contentHash = face.file ? face.file->contentHash : 0;
+				const SInt32 faceIndex = face.face
+					? static_cast<SInt32>(face.face->face_index) : 0;
+				hash = HashBytes64(&contentHash, sizeof(contentHash), hash);
+				hash = HashBytes64(&faceIndex, sizeof(faceIndex), hash);
+			}
+			runtime.maskContentRoleHashes[roleIndex] = hash ? hash : 1;
+			return runtime.maskContentRoleHashes[roleIndex];
 		}
 
 		void BuildGlyphManifestCodeTable(UInt32 codePage,

@@ -119,7 +119,7 @@ namespace fonthook::vectorfont
 		std::shared_ptr<const CompactAtlasSnapshot> compactSnapshot;
 	};
 
-	constexpr UInt32 kAtlasSnapshotVersion = 8;
+	constexpr UInt32 kAtlasSnapshotVersion = 9;
 	// This identity-only revision invalidates the old partial codepage snapshot
 	// without forcing complete SDF-fill or unrelated atlas profiles to rebuild.
 	constexpr UInt32 kCodePageEffectOnlySdfCoverageRevision = 1;
@@ -145,7 +145,7 @@ namespace fonthook::vectorfont
 		UInt8 pixelMode = 0;
 		UInt8 renderMode = 0;
 		UInt8 storageMode = 0;
-		UInt8 reserved = 0;
+		UInt8 byteClass = 0;
 		UInt16 pageIndex = 0;
 		UInt16 pageCount = 0;
 		UInt32 placementCount = 0;
@@ -196,6 +196,7 @@ namespace fonthook::vectorfont
 		AtlasRenderMode renderMode = AtlasRenderMode::CpuEffects;
 		UInt32 padding = kAtlasPadding;
 		bool levelZeroOnly = false;
+		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 		UInt16 pageIndex = 0;
 
 		bool operator==(const AtlasCacheKey& other) const
@@ -204,6 +205,7 @@ namespace fonthook::vectorfont
 				&& scaleMilli == other.scaleMilli && pixelMode == other.pixelMode
 				&& renderMode == other.renderMode && padding == other.padding
 				&& levelZeroOnly == other.levelZeroOnly
+				&& byteClass == other.byteClass
 				&& pageIndex == other.pageIndex;
 		}
 	};
@@ -219,6 +221,7 @@ namespace fonthook::vectorfont
 			result ^= static_cast<size_t>(key.renderMode) << 6;
 			result ^= static_cast<size_t>(key.padding) * 0x27D4EB2Du;
 			result ^= static_cast<size_t>(key.levelZeroOnly) << 11;
+			result ^= static_cast<size_t>(key.byteClass) << 12;
 			result ^= static_cast<size_t>(key.pageIndex) * 0x165667B1u;
 			return result;
 		}
@@ -245,6 +248,7 @@ namespace fonthook::vectorfont
 		UInt32 expansionPixels = 0;
 		AtlasLayer layer = AtlasLayer::Fill;
 		UInt8 layerMask = 1u << static_cast<UInt8>(AtlasLayer::Fill);
+		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 		bool usesSdf = false;
 		bool usesLiveTileRgb = true;
 		UInt16 atlasPage = 0;
@@ -258,13 +262,15 @@ namespace fonthook::vectorfont
 		AtlasRenderMode renderMode = AtlasRenderMode::CpuEffects;
 		UInt32 padding = kAtlasPadding;
 		bool levelZeroOnly = false;
+		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 
 		bool operator==(const AtlasProfileKey& other) const
 		{
 			return atlasContentHash == other.atlasContentHash
 				&& scaleMilli == other.scaleMilli && pixelMode == other.pixelMode
 				&& renderMode == other.renderMode && padding == other.padding
-				&& levelZeroOnly == other.levelZeroOnly;
+				&& levelZeroOnly == other.levelZeroOnly
+				&& byteClass == other.byteClass;
 		}
 	};
 
@@ -279,6 +285,7 @@ namespace fonthook::vectorfont
 			result ^= static_cast<size_t>(key.renderMode) << 6;
 			result ^= static_cast<size_t>(key.padding) * 0x27D4EB2Du;
 			result ^= static_cast<size_t>(key.levelZeroOnly) << 11;
+			result ^= static_cast<size_t>(key.byteClass) << 12;
 			return result;
 		}
 	};
@@ -404,7 +411,6 @@ namespace fonthook::vectorfont
 		std::vector<PendingQuad>& quads, ShaderEffectBuild& build);
 	NiTriShape* TryCreateAtlasShapeForMode(Font& font,
 		const std::vector<PendingQuad>& quads,
-		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 		const FontConfig& config, float rasterScale, bool prepareObject,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
 		std::vector<std::shared_ptr<AtlasResource>>& atlases,
@@ -463,7 +469,7 @@ namespace fonthook::vectorfont
 		UInt32& width, UInt32& height,
 		std::unordered_map<UInt64, AtlasRect>& placements, UInt32 padding);
 	std::vector<std::shared_ptr<AtlasResource>> GetAtlasResources(
-		const FontConfig& config, float rasterScale,
+		const FontConfig& config, VectorFontByteClass byteClass, float rasterScale,
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
 		// When requested, entries align with bitmaps and index the returned pages.
@@ -476,7 +482,7 @@ namespace fonthook::vectorfont
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding);
 	UInt64 BuildPrewarmAtlasContentHash(const FontConfig& config,
-		float rasterScale, bool shaderEffects);
+		VectorFontByteClass byteClass, float rasterScale, bool shaderEffects);
 
 	void InitializeDefaultPoolAtlasLifecycle();
 	void PumpDefaultPoolAtlasLifecycle();

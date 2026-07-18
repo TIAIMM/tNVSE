@@ -1200,10 +1200,11 @@ namespace fonthook::vectorfont
 		return *runtime.config;
 	}
 
-	UInt64 GetRuntimeMaskContentHash(RuntimeFont& runtime)
+	UInt64 GetRuntimeMaskContentHash(RuntimeFont& runtime,
+		VectorFontByteClass byteClass)
 	{
 		std::lock_guard<std::recursive_mutex> lock(State().mutex);
-		return ComputeRuntimeMaskContentHash(runtime);
+		return ComputeRuntimeMaskContentHash(runtime, byteClass);
 	}
 
 

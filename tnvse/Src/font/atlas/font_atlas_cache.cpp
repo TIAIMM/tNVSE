@@ -248,7 +248,8 @@ namespace fonthook::vectorfont
 				key.pixelMode,
 				key.renderMode,
 				key.padding,
-				key.levelZeroOnly
+				key.levelZeroOnly,
+				key.byteClass
 			};
 		}
 
@@ -485,6 +486,7 @@ namespace fonthook::vectorfont
 		}
 
 		UInt64 BuildAtlasContentHash(const FontConfig& config,
+			VectorFontByteClass byteClass,
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 			float rasterScale, AtlasRenderMode renderMode)
 		{
@@ -523,7 +525,8 @@ namespace fonthook::vectorfont
 					bakedColorHash *= 1099511628211ull;
 				}
 			}
-			return BuildAtlasContentHash(config.maskGenerationHash,
+			return BuildAtlasContentHash(
+				config.maskGenerationRoleHashes[static_cast<size_t>(byteClass)],
 				combination, sdfSpread, outlineStroke, glowStroke,
 				renderMode == AtlasRenderMode::CpuEffects
 					? BuildCpuCoverageHash(config, rasterScale) : 0,
@@ -545,7 +548,7 @@ namespace fonthook::vectorfont
 		}
 
 		UInt64 BuildPrewarmAtlasContentHash(const FontConfig& config,
-			float rasterScale, bool shaderEffects)
+			VectorFontByteClass byteClass, float rasterScale, bool shaderEffects)
 		{
 			UInt8 combination = 0;
 			UInt8 sdfSpread = 0;
@@ -585,7 +588,8 @@ namespace fonthook::vectorfont
 						config.outline.width * rasterScale * 64.0f));
 				}
 			}
-			return BuildAtlasContentHash(config.maskGenerationHash,
+			return BuildAtlasContentHash(
+				config.maskGenerationRoleHashes[static_cast<size_t>(byteClass)],
 				combination, sdfSpread, outlineStroke, glowStroke,
 				shaderEffects ? 0 : BuildCpuCoverageHash(config, rasterScale),
 				1469598103934665603ull);
@@ -631,45 +635,52 @@ namespace fonthook::vectorfont
 			UInt64 residentHits = 0;
 			if (found)
 			{
-				const UInt64 atlasContentHash = BuildAtlasContentHash(
-					config.maskGenerationHash, combination, sdfSpread,
-					outlineStroke, glowStroke,
-					renderMode == AtlasRenderMode::CpuEffects
-						? BuildCpuCoverageHash(config, rasterScale) : 0,
-					1469598103934665603ull);
-				const AtlasCacheKey baseKey = {
-					atlasContentHash,
-					config.fontId,
-					static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
-					pixelMode,
-					renderMode,
-					padding,
-					levelZeroOnly
-				};
+				std::array<AtlasCacheKey, 2> baseKeys;
+				for (size_t roleIndex = 0; roleIndex < baseKeys.size(); ++roleIndex)
+				{
+					const VectorFontByteClass byteClass =
+						static_cast<VectorFontByteClass>(roleIndex);
+					baseKeys[roleIndex] = {
+						BuildAtlasContentHash(config.maskGenerationRoleHashes[roleIndex],
+							combination, sdfSpread, outlineStroke, glowStroke,
+							renderMode == AtlasRenderMode::CpuEffects
+								? BuildCpuCoverageHash(config, rasterScale) : 0,
+							1469598103934665603ull),
+						config.fontId,
+						static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
+						pixelMode,
+						renderMode,
+						padding,
+						levelZeroOnly,
+						byteClass
+					};
+				}
 				AtlasState& state = State();
 				std::lock_guard<std::mutex> lock(state.atlasMutex);
-				const auto profile = state.atlasProfiles.find(MakeAtlasProfileKey(baseKey));
-				if (profile != state.atlasProfiles.end())
+				for (size_t index = 0; index < cacheIds.size(); ++index)
 				{
-					for (size_t index = 0; index < cacheIds.size(); ++index)
-					{
-						if (!cacheIds[index])
-							continue;
-						const auto resident = profile->second.residentPages.find(cacheIds[index]);
-						if (resident == profile->second.residentPages.end())
-							continue;
-						AtlasCacheKey pageKey = baseKey;
-						pageKey.pageIndex = resident->second;
-						const auto page = state.atlasCache.find(pageKey);
-						if (page == state.atlasCache.end() || !page->second.resource)
-							continue;
-						std::shared_ptr<const GlyphBitmap> bitmap =
-							GetOrCreateAtlasGlyphBitmap(*page->second.resource, cacheIds[index]);
-						if (!bitmap)
-							continue;
-						results[index] = std::move(bitmap);
-						++residentHits;
-					}
+					if (!cacheIds[index] || !requests[index].glyph)
+						continue;
+					const size_t roleIndex = static_cast<size_t>(
+						requests[index].glyph->byteClass);
+					const AtlasCacheKey& baseKey = baseKeys[roleIndex];
+					const auto profile = state.atlasProfiles.find(MakeAtlasProfileKey(baseKey));
+					if (profile == state.atlasProfiles.end())
+						continue;
+					const auto resident = profile->second.residentPages.find(cacheIds[index]);
+					if (resident == profile->second.residentPages.end())
+						continue;
+					AtlasCacheKey pageKey = baseKey;
+					pageKey.pageIndex = resident->second;
+					const auto page = state.atlasCache.find(pageKey);
+					if (page == state.atlasCache.end() || !page->second.resource)
+						continue;
+					std::shared_ptr<const GlyphBitmap> bitmap =
+						GetOrCreateAtlasGlyphBitmap(*page->second.resource, cacheIds[index]);
+					if (!bitmap)
+						continue;
+					results[index] = std::move(bitmap);
+					++residentHits;
 				}
 			}
 
@@ -698,7 +709,7 @@ namespace fonthook::vectorfont
 		}
 
 		std::vector<std::shared_ptr<AtlasResource>> GetAtlasResources(
-			const FontConfig& config, float rasterScale,
+			const FontConfig& config, VectorFontByteClass byteClass, float rasterScale,
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 			AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
 			UInt32 padding, std::vector<UInt16>* outBitmapPageOrdinals)
@@ -722,13 +733,14 @@ namespace fonthook::vectorfont
 
 			AtlasState& state = State();
 			const AtlasCacheKey baseKey = {
-				BuildAtlasContentHash(config, bitmaps, rasterScale, renderMode),
+				BuildAtlasContentHash(config, byteClass, bitmaps, rasterScale, renderMode),
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
 				pixelMode,
 				renderMode,
 				padding,
-				UsesLevelZeroOnly(bitmaps)
+				UsesLevelZeroOnly(bitmaps),
+				byteClass
 			};
 
 			std::lock_guard<std::mutex> lock(state.atlasMutex);
@@ -887,8 +899,11 @@ namespace fonthook::vectorfont
 				if (g_bEnableFreeTypeFontRenderingLog)
 				{
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: atlas page created font=%u page=%u size=%ux%u pixelMode=%u renderMode=%u",
-						pageKey.fontId, pageKey.pageIndex, resource->width, resource->height,
+						"tnvse_freetype_font: atlas page created font=%u role=%s page=%u size=%ux%u pixelMode=%u renderMode=%u",
+						pageKey.fontId,
+						pageKey.byteClass == VectorFontByteClass::DoubleByte
+							? "doubleByte" : "singleByte",
+						pageKey.pageIndex, resource->width, resource->height,
 						static_cast<UInt32>(resource->pixelMode),
 						static_cast<UInt32>(resource->renderMode));
 				}

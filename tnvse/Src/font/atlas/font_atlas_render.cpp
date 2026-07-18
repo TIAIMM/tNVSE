@@ -150,24 +150,9 @@ namespace fonthook::vectorfont
 			{
 				if (diagnostics)
 					++diagnostics->shaderShapeAttempts;
-				thread_local std::unordered_map<UInt64,
-					std::shared_ptr<const GlyphBitmap>> shaderUnique;
-				shaderUnique.clear();
-				for (const PendingQuad& quad : shaderQuads)
-					shaderUnique.emplace(quad.bitmap->cacheId, quad.bitmap);
-				thread_local std::vector<std::shared_ptr<const GlyphBitmap>> shaderBitmaps;
-				shaderBitmaps.clear();
-				shaderBitmaps.reserve(shaderUnique.size());
-				for (auto& [id, bitmap] : shaderUnique)
-					shaderBitmaps.push_back(std::move(bitmap));
-				std::sort(shaderBitmaps.begin(), shaderBitmaps.end(),
-					[](const auto& lhs, const auto& rhs)
-					{
-						return lhs->cacheId < rhs->cacheId;
-					});
 				std::vector<std::shared_ptr<AtlasResource>> shaderAtlases;
 				NiTriShape* shaderShape = TryCreateAtlasShapeForMode(font,
-					shaderQuads, shaderBitmaps, config, rasterScale, prepareObject,
+					shaderQuads, config, rasterScale, prepareObject,
 					AtlasPixelMode::A8, AtlasRenderMode::ShaderEffects,
 					shaderBuild.padding, shaderAtlases, tileColor, true,
 					&shaderBuild.config);
@@ -289,27 +274,13 @@ namespace fonthook::vectorfont
 			}
 			if (quads.size() <= kMaximumQuads)
 			{
-				thread_local std::unordered_map<UInt64,
-					std::shared_ptr<const GlyphBitmap>> unique;
-				unique.clear();
-				for (const PendingQuad& quad : quads)
-					unique.emplace(quad.bitmap->cacheId, quad.bitmap);
-				thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmaps;
-				bitmaps.clear();
-				bitmaps.reserve(unique.size());
-				for (auto& [id, bitmap] : unique)
-					bitmaps.push_back(std::move(bitmap));
-				std::sort(bitmaps.begin(), bitmaps.end(), [](const auto& lhs, const auto& rhs)
-				{
-					return lhs->cacheId < rhs->cacheId;
-				});
 				bool useCustomA8Shader = IsA8RendererAvailable();
 				AtlasPixelMode pixelMode = useCustomA8Shader
 					? AtlasPixelMode::A8 : AtlasPixelMode::Argb32;
 				std::vector<std::shared_ptr<AtlasResource>> atlases;
 				if (diagnostics)
 					++diagnostics->cpuShapeAttempts;
-				NiTriShape* shape = TryCreateAtlasShapeForMode(font, quads, bitmaps,
+				NiTriShape* shape = TryCreateAtlasShapeForMode(font, quads,
 					config, rasterScale, prepareObject, pixelMode,
 					AtlasRenderMode::CpuEffects, kAtlasPadding, atlases, tileColor,
 					useCustomA8Shader);
@@ -325,7 +296,7 @@ namespace fonthook::vectorfont
 						++diagnostics->argbRetryAttempts;
 						++diagnostics->cpuShapeAttempts;
 					}
-					shape = TryCreateAtlasShapeForMode(font, quads, bitmaps,
+					shape = TryCreateAtlasShapeForMode(font, quads,
 						config, rasterScale, prepareObject, pixelMode,
 						AtlasRenderMode::CpuEffects, kAtlasPadding, atlases, tileColor,
 						useCustomA8Shader);
