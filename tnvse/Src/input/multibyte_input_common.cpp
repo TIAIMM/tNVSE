@@ -6,6 +6,30 @@ namespace fonthook
 {
 	namespace multibyte_input
 	{
+		namespace
+		{
+			constexpr UInt8 FoldAsciiLetter(UInt8 value)
+			{
+				return value >= 'A' && value <= 'Z'
+					? static_cast<UInt8>(value + ('a' - 'A'))
+					: value;
+			}
+
+			constexpr bool SameAsciiKeyIdentity(UInt8 lhs, UInt8 rhs)
+			{
+				return lhs <= 0x7F
+					&& rhs <= 0x7F
+					&& FoldAsciiLetter(lhs) == FoldAsciiLetter(rhs);
+			}
+
+			static_assert(FoldAsciiLetter('A') == 'a');
+			static_assert(FoldAsciiLetter('a') == 'a');
+			static_assert(FoldAsciiLetter('!') == '!');
+			static_assert(SameAsciiKeyIdentity('A', 'a'));
+			static_assert(!SameAsciiKeyIdentity('A', 'b'));
+			static_assert(!SameAsciiKeyIdentity('!', '1'));
+		}
+
 		void DebugLog(const char* fmt, ...)
 		{
 			if (!g_bMultibyteInputLog)
@@ -23,12 +47,40 @@ namespace fonthook
 			return (value >= 0x20 && value <= 0x7E) ? static_cast<char>(value) : '.';
 		}
 
+		bool AsciiEqualsIgnoreCase(UInt8 lhs, UInt8 rhs)
+		{
+			return SameAsciiKeyIdentity(lhs, rhs);
+		}
+
 		bool AsciiEqualsIgnoreCase(UInt8 lhs, wchar_t rhs)
 		{
-			if (lhs > 0x7F || rhs > 0x7F)
-				return false;
+			return rhs >= 0 && rhs <= 0x7F
+				&& AsciiEqualsIgnoreCase(lhs, static_cast<UInt8>(rhs));
+		}
 
-			return std::tolower(lhs) == std::tolower(static_cast<unsigned char>(rhs));
+		UInt8 ResolveAsciiLetterCaseFromKeyboard(UInt8 input)
+		{
+			const UInt8 folded = FoldAsciiLetter(input);
+			if (folded < 'a' || folded > 'z')
+				return input;
+
+			const bool capsLock = (GetKeyState(VK_CAPITAL) & 0x0001) != 0;
+			const bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0
+				|| (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+			const UInt8 resolved = capsLock != shiftDown
+				? static_cast<UInt8>(folded - ('a' - 'A'))
+				: folded;
+
+			if (resolved != input)
+			{
+				DebugLog(
+					"tnvse_multibyte_input_event: source=KeyboardCase action=resolve_ascii_letter raw=0x%02X resolved=0x%02X caps=%u shift=%u",
+					static_cast<UInt32>(input),
+					static_cast<UInt32>(resolved),
+					capsLock ? 1 : 0,
+					shiftDown ? 1 : 0);
+			}
+			return resolved;
 		}
 
 		void DebugLogState(const char* source, const char* action, TextEditMenu* menu, SInt32 input)

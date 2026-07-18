@@ -486,7 +486,8 @@ namespace fonthook
 				if (!editActive)
 					return CallJipOriginalInput(apMenu, aiInput);
 
-				if (s_lastWndProcAsciiChar == static_cast<UInt8>(aiInput)
+				const UInt8 asciiInput = ResolveAsciiLetterCaseFromKeyboard(static_cast<UInt8>(aiInput));
+				if (AsciiEqualsIgnoreCase(s_lastWndProcAsciiChar, asciiInput)
 					&& GetTickCount() - s_lastWndProcAsciiTick <= kDuplicateAsciiSuppressMs)
 				{
 					s_lastWndProcAsciiChar = 0;
@@ -494,14 +495,14 @@ namespace fonthook
 					return true;
 				}
 
-				const char ch = static_cast<char>(aiInput);
+				const char ch = static_cast<char>(asciiInput);
 				if (!InsertJipTextAtCaret(apMenu, std::string_view(&ch, 1)))
 				{
 					DebugLogJipState("JipTextInputAdapter::Input", "reject_ascii_insert", apMenu, aiInput);
 					return false;
 				}
 
-				DebugLogJipState("JipTextInputAdapter::Input", "insert_ascii", apMenu, aiInput);
+				DebugLogJipState("JipTextInputAdapter::Input", "insert_ascii", apMenu, asciiInput);
 				return true;
 			}
 
@@ -807,7 +808,8 @@ namespace fonthook
 						return;
 					}
 
-					if (s_lastWndProcAsciiChar == static_cast<UInt8>(aiInput)
+					const UInt8 asciiInput = ResolveAsciiLetterCaseFromKeyboard(static_cast<UInt8>(aiInput));
+					if (AsciiEqualsIgnoreCase(s_lastWndProcAsciiChar, asciiInput)
 						&& GetTickCount() - s_lastWndProcAsciiTick <= kDuplicateAsciiSuppressMs)
 					{
 						s_lastWndProcAsciiChar = 0;
@@ -815,14 +817,14 @@ namespace fonthook
 						return;
 					}
 
-					const char ch = static_cast<char>(aiInput);
+					const char ch = static_cast<char>(asciiInput);
 					if (!InsertTextAtCaret(*apState, std::string_view(&ch, 1)))
 					{
 						DebugLogState("TextEditState::Input", "reject_ascii_insert", menu, aiInput);
 						return;
 					}
 
-					DebugLogState("TextEditState::Input", "insert_ascii", menu, aiInput);
+					DebugLogState("TextEditState::Input", "insert_ascii", menu, asciiInput);
 					return;
 				}
 

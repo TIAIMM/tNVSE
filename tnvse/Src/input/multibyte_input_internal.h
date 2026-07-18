@@ -108,7 +108,9 @@ namespace fonthook
 		void DebugLog(const char* fmt, ...);
 		void DebugLogState(const char* source, const char* action, TextEditMenu* menu, SInt32 input);
 		char PrintableAscii(UInt32 value);
+		bool AsciiEqualsIgnoreCase(UInt8 lhs, UInt8 rhs);
 		bool AsciiEqualsIgnoreCase(UInt8 lhs, wchar_t rhs);
+		UInt8 ResolveAsciiLetterCaseFromKeyboard(UInt8 input);
 
 		std::string GetText(const TextEditState& state);
 		size_t NextOffset(const std::string& text, size_t offset);

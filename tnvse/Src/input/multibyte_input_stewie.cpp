@@ -24,6 +24,7 @@ namespace fonthook
 
 		struct PendingStewieAscii
 		{
+			StewieInputTarget target;
 			UInt8 input = 0;
 			DWORD tick = 0;
 		};
@@ -510,7 +511,12 @@ namespace fonthook
 			return InsertTextAtCaretStewie(target, converted);
 		}
 
-		bool ConsumePendingStewieAscii(std::vector<PendingStewieAscii>& pending, UInt8 input, DWORD now)
+		bool ConsumePendingStewieAscii(
+			std::vector<PendingStewieAscii>& pending,
+			const StewieInputTarget& target,
+			UInt8 input,
+			DWORD now,
+			UInt8& matchedInput)
 		{
 			pending.erase(
 				std::remove_if(
@@ -525,23 +531,29 @@ namespace fonthook
 			const auto match = std::find_if(
 				pending.begin(),
 				pending.end(),
-				[input](const PendingStewieAscii& value)
+				[&target, input](const PendingStewieAscii& value)
 				{
-					return value.input == input;
+					return SameStewieTarget(value.target, target)
+						&& AsciiEqualsIgnoreCase(value.input, input);
 				});
 			if (match == pending.end())
 				return false;
 
+			matchedInput = match->input;
 			pending.erase(match);
 			return true;
 		}
 
-		void RecordPendingStewieAscii(std::vector<PendingStewieAscii>& pending, UInt8 input, DWORD now)
+		void RecordPendingStewieAscii(
+			std::vector<PendingStewieAscii>& pending,
+			const StewieInputTarget& target,
+			UInt8 input,
+			DWORD now)
 		{
 			constexpr size_t kMaxPendingAscii = 16;
 			if (pending.size() >= kMaxPendingAscii)
 				pending.erase(pending.begin());
-			pending.push_back({ input, now });
+			pending.push_back({ target, input, now });
 		}
 
 		void RecordStewieSpaceCommit(const StewieInputTarget& target, UInt8 input, DWORD now)
@@ -600,14 +612,25 @@ namespace fonthook
 		{
 			for (DeferredStewieAscii& pending : s_deferredStewieAscii)
 			{
-				if (pending.input != input
+				if (!AsciiEqualsIgnoreCase(pending.input, input)
 					|| !SameStewieTarget(pending.target, target)
 					|| DeferredSourceSeen(pending, source))
 				{
 					continue;
 				}
 
+				// WM_CHAR is the authoritative character-producing path for Caps Lock
+				// and Shift. The game adapter can report the same letter normalized to
+				// lowercase, so keep the WndProc spelling when both paths rendezvous.
+				if (source == StewieAsciiSource::WndProc)
+					pending.input = input;
 				MarkDeferredSourceSeen(pending, source);
+				DebugLog(
+					"tnvse_multibyte_input_event: source=StewieAscii action=merge_deferred_ascii input=0x%02X resolved=0x%02X token=%u source=%s",
+					static_cast<UInt32>(input),
+					static_cast<UInt32>(pending.input),
+					pending.token,
+					source == StewieAsciiSource::Adapter ? "adapter" : "wndproc");
 				return true;
 			}
 
@@ -638,7 +661,7 @@ namespace fonthook
 				std::vector<PendingStewieAscii>& own = source == StewieAsciiSource::Adapter
 					? s_pendingStewieAdapterAscii
 					: s_pendingStewieWndProcAscii;
-				RecordPendingStewieAscii(own, input, GetTickCount());
+				RecordPendingStewieAscii(own, target, input, GetTickCount());
 				s_lastDeferredStewieAsciiCommitTick = GetTickCount();
 				s_lastDeferredStewieAsciiCommitChar = input;
 				RecordStewieSpaceCommit(target, input, s_lastDeferredStewieAsciiCommitTick);
@@ -655,26 +678,37 @@ namespace fonthook
 				return false;
 			if (ShouldSuppressInputLanguageSwitchAscii(input))
 				return true;
+			const UInt8 resolvedInput = source == StewieAsciiSource::Adapter
+				? ResolveAsciiLetterCaseFromKeyboard(input)
+				: input;
 
 			const DWORD now = GetTickCount();
 			std::vector<PendingStewieAscii>& opposite = source == StewieAsciiSource::Adapter
 				? s_pendingStewieWndProcAscii
 				: s_pendingStewieAdapterAscii;
-			if (ConsumePendingStewieAscii(opposite, input, now))
+			UInt8 matchedInput = 0;
+			if (ConsumePendingStewieAscii(opposite, target, resolvedInput, now, matchedInput))
+			{
+				DebugLog(
+					"tnvse_multibyte_input_event: source=StewieAscii action=suppress_cross_channel_duplicate input=0x%02X matched=0x%02X source=%s",
+					static_cast<UInt32>(resolvedInput),
+					static_cast<UInt32>(matchedInput),
+					source == StewieAsciiSource::Adapter ? "adapter" : "wndproc");
 				return true;
+			}
 
 			if (ShouldDeferStewieAscii(target))
-				return QueueDeferredStewieAscii(target, input, source);
+				return QueueDeferredStewieAscii(target, resolvedInput, source);
 
-			const char ch = static_cast<char>(input);
+			const char ch = static_cast<char>(resolvedInput);
 			if (!InsertTextAtCaretStewie(target, std::string_view(&ch, 1)))
 				return false;
 
 			std::vector<PendingStewieAscii>& own = source == StewieAsciiSource::Adapter
 				? s_pendingStewieAdapterAscii
 				: s_pendingStewieWndProcAscii;
-			RecordPendingStewieAscii(own, input, now);
-			RecordStewieSpaceCommit(target, input, now);
+			RecordPendingStewieAscii(own, target, resolvedInput, now);
+			RecordStewieSpaceCommit(target, resolvedInput, now);
 			return true;
 		}
 
@@ -725,7 +759,7 @@ namespace fonthook
 				std::vector<PendingStewieAscii>& own = pending.adapterSeen
 					? s_pendingStewieAdapterAscii
 					: s_pendingStewieWndProcAscii;
-				RecordPendingStewieAscii(own, pending.input, s_lastDeferredStewieAsciiCommitTick);
+				RecordPendingStewieAscii(own, target, pending.input, s_lastDeferredStewieAsciiCommitTick);
 			}
 			DebugLog(
 				"tnvse_multibyte_input_event: source=WndProc action=flush_deferred_stewie_ascii input=0x%08X token=%u",
