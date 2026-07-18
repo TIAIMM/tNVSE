@@ -282,6 +282,10 @@ truncated or corrupt record falls back to normal rasterization. Cache names use
 `<game-font-id>_<font-file-name>_<profile-hash>.tnvfmask`. Lookup accepts only
 that numeric-font-ID form and uses the hash suffix, so equivalent masks remain
 shareable across font IDs. Older hash-only names are intentionally ignored.
+Existing profiles may be mapped while blocking prewarm scans them. After the
+prewarm flush, tNVSE unmaps every `.tnvfmask` view and disables new whole-file
+mappings for the rest of the process. Later cache misses use the retained dense
+index and bounded positioned reads, avoiding permanent address-space cost.
 
 The same directory also contains three startup-oriented cache layers. A
 `.tnvfhash` record reuses the font content hash when file identity, size and
@@ -517,13 +521,18 @@ CPU-side caches. When
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
 generations are restored after a D3D9 device reset. A pure SDF v8 snapshot is
-uploaded directly to this path and keeps its packed placement payload as reset
-backing. Its page-content fingerprint covers dimensions, format, placed
+uploaded directly to this path. Once that upload succeeds, tNVSE releases the
+packed reset pixels and retains only placements plus the validated snapshot
+path/header identity. Device reset, page detachment/growth, and snapshot rewrite
+stream the packed rectangles from `_p<page>.tnvfatlas`; the payload checksum is
+verified while it is copied into the locked texture. Its page-content
+fingerprint covers dimensions, format, placed
 coordinates, and exact texels. A hash match is followed by byte-for-byte
-comparison before equivalent pages share one D3D9 texture allocation through
-independent Gamebryo wrappers. A later glyph insertion first detaches that page,
-and a device reset rebuilds each wrapper independently. Glyphs added later
-retain only their individual masks. If direct
+comparison, loading temporary source pixels only during that comparison, before
+equivalent pages share one D3D9 texture allocation through independent Gamebryo
+wrappers. A later glyph insertion first detaches that page, and a device reset
+rebuilds each wrapper independently. Glyphs added later retain only their
+individual masks. If direct
 DEFAULT-pool creation is unavailable, snapshot restore and normal atlas
 creation fall back to the engine-managed implementation.
 

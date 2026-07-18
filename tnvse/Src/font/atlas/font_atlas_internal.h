@@ -13,6 +13,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -166,6 +167,8 @@ namespace fonthook::vectorfont
 		AtlasPixelMode pixelMode = AtlasPixelMode::A8;
 		std::vector<AtlasSnapshotPlacement> placements;
 		std::vector<UInt8> pixels;
+		std::wstring sourcePath;
+		AtlasSnapshotHeader sourceHeader;
 	};
 
 	struct RetiredAtlasGeneration

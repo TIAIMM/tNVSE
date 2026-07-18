@@ -129,7 +129,7 @@ void LoadConfig()
 	g_fFreeTypeFontResolutionScale = std::round(
 		configuredFreeTypeFontResolutionScale * 1000.0f) / 1000.0f;
 	gLog.FormattedMessage(
-		"g_fFreeTypeFontResolutionScale: %.3f (fixed source scale for prewarm and runtime)",
+		"g_fFreeTypeFontResolutionScale: %.3f",
 		g_fFreeTypeFontResolutionScale);
 	g_uiFreeTypeFontMemoryCacheMB = std::clamp<UINT32>(
 		ReadConfigInt(kFreeTypeFontSection, "uiFreeTypeFontMemoryCacheMB", 192,

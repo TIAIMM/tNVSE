@@ -402,6 +402,8 @@ namespace fonthook::vectorfont
 		void MapPersistentBitmapProfile(PersistentBitmapProfile& profile)
 		{
 			UnmapPersistentBitmapProfile(profile);
+			if (!State().persistentBitmapMappingsEnabled)
+				return;
 			UInt64 size = 0;
 			if (!GetFileSize64(profile.file, size) || !size
 				|| size > kMaximumPersistentProfileBytes)
@@ -1358,5 +1360,26 @@ namespace fonthook::vectorfont
 				profileCount, static_cast<unsigned long long>(recordCount),
 				static_cast<unsigned long long>(byteCount));
 		}
+	}
+
+	UInt64 ReleaseGlyphBitmapDiskCacheMappings()
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		State().persistentBitmapMappingsEnabled = false;
+		UInt32 profileCount = 0;
+		UInt64 byteCount = 0;
+		for (auto& pair : State().persistentBitmapProfiles)
+		{
+			PersistentBitmapProfile& profile = *pair.second;
+			if (!profile.mappedData)
+				continue;
+			++profileCount;
+			byteCount += profile.mappedSize;
+			UnmapPersistentBitmapProfile(profile);
+		}
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: persistent bitmap mappings released profiles=%u bytes=%llu",
+			profileCount, static_cast<unsigned long long>(byteCount));
+		return byteCount;
 	}
 }

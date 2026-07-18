@@ -622,6 +622,118 @@ namespace fonthook::vectorfont
 			}
 		}
 
+		namespace
+		{
+			constexpr UInt64 kAtlasByteHashOffset = 1469598103934665603ull;
+
+			UInt64 HashCompactAtlasBytes(const void* data, size_t size,
+				UInt64 hash = kAtlasByteHashOffset)
+			{
+				const UInt8* bytes = static_cast<const UInt8*>(data);
+				for (size_t index = 0; index < size; ++index)
+				{
+					hash ^= bytes[index];
+					hash *= 1099511628211ull;
+				}
+				return hash;
+			}
+
+			bool ReadSnapshotBytesExact(HANDLE file, void* destination, size_t size)
+			{
+				UInt8* output = static_cast<UInt8*>(destination);
+				while (size)
+				{
+					const DWORD requested = static_cast<DWORD>(std::min<size_t>(
+						size, std::numeric_limits<DWORD>::max()));
+					DWORD read = 0;
+					if (!ReadFile(file, output, requested, &read, nullptr)
+						|| read != requested)
+					{
+						return false;
+					}
+					output += read;
+					size -= read;
+				}
+				return true;
+			}
+
+			struct CompactSnapshotFile
+			{
+				HANDLE handle = INVALID_HANDLE_VALUE;
+				~CompactSnapshotFile()
+				{
+					if (handle != INVALID_HANDLE_VALUE)
+						CloseHandle(handle);
+				}
+			};
+
+			bool OpenCompactSnapshotPixels(const CompactAtlasSnapshot& snapshot,
+				CompactSnapshotFile& file)
+			{
+				if (snapshot.sourcePath.empty()
+					|| snapshot.sourceHeader.placementCount != snapshot.placements.size()
+					|| snapshot.sourceHeader.pixelMode != static_cast<UInt8>(snapshot.pixelMode)
+					|| snapshot.sourceHeader.headerSize != sizeof(AtlasSnapshotHeader)
+					|| snapshot.sourceHeader.pixelBytes > std::numeric_limits<size_t>::max())
+				{
+					return false;
+				}
+				const UInt64 placementBytes = static_cast<UInt64>(snapshot.placements.size())
+					* sizeof(AtlasSnapshotPlacement);
+				const UInt64 payloadOffset = sizeof(AtlasSnapshotHeader) + placementBytes;
+				if (payloadOffset < sizeof(AtlasSnapshotHeader)
+					|| snapshot.sourceHeader.pixelBytes
+						> std::numeric_limits<UInt64>::max() - payloadOffset)
+				{
+					return false;
+				}
+				file.handle = CreateFileW(snapshot.sourcePath.c_str(), GENERIC_READ,
+					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+					OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+				if (file.handle == INVALID_HANDLE_VALUE)
+					return false;
+				LARGE_INTEGER size = {};
+				if (!GetFileSizeEx(file.handle, &size) || size.QuadPart < 0
+					|| static_cast<UInt64>(size.QuadPart)
+						!= payloadOffset + snapshot.sourceHeader.pixelBytes)
+				{
+					return false;
+				}
+				AtlasSnapshotHeader currentHeader = {};
+				if (!ReadSnapshotBytesExact(file.handle, &currentHeader, sizeof(currentHeader))
+					|| std::memcmp(&currentHeader, &snapshot.sourceHeader,
+						sizeof(currentHeader)) != 0)
+				{
+					return false;
+				}
+				LARGE_INTEGER position = {};
+				position.QuadPart = payloadOffset;
+				return SetFilePointerEx(file.handle, position, nullptr, FILE_BEGIN) != FALSE;
+			}
+
+			bool LoadCompactSnapshotPixels(const CompactAtlasSnapshot& snapshot,
+				std::vector<UInt8>& pixels)
+			{
+				if (!snapshot.pixels.empty())
+				{
+					pixels = snapshot.pixels;
+					return true;
+				}
+				if (snapshot.sourceHeader.pixelBytes > std::numeric_limits<size_t>::max())
+					return false;
+				CompactSnapshotFile file;
+				if (!OpenCompactSnapshotPixels(snapshot, file))
+					return false;
+				pixels.resize(static_cast<size_t>(snapshot.sourceHeader.pixelBytes));
+				if (!ReadSnapshotBytesExact(file.handle, pixels.data(), pixels.size()))
+					return false;
+				UInt64 hash = HashCompactAtlasBytes(snapshot.placements.data(),
+					snapshot.placements.size() * sizeof(AtlasSnapshotPlacement));
+				hash = HashCompactAtlasBytes(pixels.data(), pixels.size(), hash);
+				return hash == snapshot.sourceHeader.payloadChecksum;
+			}
+		}
+
 		bool WriteCompactSnapshotPixels(UInt8* destination, LONG pitch,
 			AtlasPixelMode destinationMode, const AtlasResource& resource)
 		{
@@ -630,6 +742,16 @@ namespace fonthook::vectorfont
 			const CompactAtlasSnapshot& snapshot = *resource.compactSnapshot;
 			const UInt32 sourceBytesPerPixel = AtlasBytesPerPixel(snapshot.pixelMode);
 			const UInt32 destinationBytesPerPixel = AtlasBytesPerPixel(destinationMode);
+			CompactSnapshotFile sourceFile;
+			const bool streamFromFile = snapshot.pixels.empty();
+			if (streamFromFile && !OpenCompactSnapshotPixels(snapshot, sourceFile))
+				return false;
+			const size_t expectedPixelBytes = streamFromFile
+				? static_cast<size_t>(snapshot.sourceHeader.pixelBytes)
+				: snapshot.pixels.size();
+			UInt64 streamedHash = HashCompactAtlasBytes(snapshot.placements.data(),
+				snapshot.placements.size() * sizeof(AtlasSnapshotPlacement));
+			std::vector<UInt8> sourceRow;
 			size_t sourceOffset = 0;
 			for (const AtlasSnapshotPlacement& placement : snapshot.placements)
 			{
@@ -643,15 +765,31 @@ namespace fonthook::vectorfont
 				const size_t sourceRowBytes = static_cast<size_t>(rect.width)
 					* sourceBytesPerPixel;
 				const size_t rectBytes = sourceRowBytes * rect.height;
-				if (sourceOffset > snapshot.pixels.size()
-					|| rectBytes > snapshot.pixels.size() - sourceOffset)
+				if (sourceOffset > expectedPixelBytes
+					|| rectBytes > expectedPixelBytes - sourceOffset)
 				{
 					return false;
 				}
 				for (UInt32 row = 0; row < rect.height; ++row)
 				{
-					const UInt8* source = snapshot.pixels.data() + sourceOffset
-						+ static_cast<size_t>(row) * sourceRowBytes;
+					const UInt8* source = nullptr;
+					if (streamFromFile)
+					{
+						sourceRow.resize(sourceRowBytes);
+						if (!ReadSnapshotBytesExact(sourceFile.handle,
+							sourceRow.data(), sourceRow.size()))
+						{
+							return false;
+						}
+						source = sourceRow.data();
+						streamedHash = HashCompactAtlasBytes(source,
+							sourceRowBytes, streamedHash);
+					}
+					else
+					{
+						source = snapshot.pixels.data() + sourceOffset
+							+ static_cast<size_t>(row) * sourceRowBytes;
+					}
 					UInt8* target = destination
 						+ static_cast<size_t>(rect.y + row) * pitch
 						+ static_cast<size_t>(rect.x) * destinationBytesPerPixel;
@@ -677,7 +815,9 @@ namespace fonthook::vectorfont
 				}
 				sourceOffset += rectBytes;
 			}
-			return sourceOffset == snapshot.pixels.size();
+			return sourceOffset == expectedPixelBytes
+				&& (!streamFromFile
+					|| streamedHash == snapshot.sourceHeader.payloadChecksum);
 		}
 
 		IDirect3DTexture9* CreateDynamicAtlasTexture(UInt32 width, UInt32 height,
@@ -1167,6 +1307,19 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
+			std::vector<UInt8> leftLoadedPixels;
+			std::vector<UInt8> rightLoadedPixels;
+			if ((left.pixels.empty()
+					&& !LoadCompactSnapshotPixels(left, leftLoadedPixels))
+				|| (right.pixels.empty()
+					&& !LoadCompactSnapshotPixels(right, rightLoadedPixels)))
+			{
+				return false;
+			}
+			const std::vector<UInt8>& leftPixels = left.pixels.empty()
+				? leftLoadedPixels : left.pixels;
+			const std::vector<UInt8>& rightPixels = right.pixels.empty()
+				? rightLoadedPixels : right.pixels;
 			struct Slice
 			{
 				AtlasRect rect;
@@ -1174,7 +1327,7 @@ namespace fonthook::vectorfont
 				size_t bytes;
 			};
 			auto buildSlices = [](const CompactAtlasSnapshot& snapshot,
-				std::vector<Slice>& slices)
+				const std::vector<UInt8>& pixels, std::vector<Slice>& slices)
 			{
 				size_t offset = 0;
 				const size_t bytesPerPixel = AtlasBytesPerPixel(snapshot.pixelMode);
@@ -1182,8 +1335,8 @@ namespace fonthook::vectorfont
 				{
 					const size_t bytes = static_cast<size_t>(placement.rect.width)
 						* placement.rect.height * bytesPerPixel;
-					if (offset > snapshot.pixels.size()
-						|| bytes > snapshot.pixels.size() - offset)
+					if (offset > pixels.size()
+						|| bytes > pixels.size() - offset)
 						return false;
 					slices.push_back({ placement.rect, offset, bytes });
 					offset += bytes;
@@ -1195,13 +1348,14 @@ namespace fonthook::vectorfont
 					if (a.rect.height != b.rect.height) return a.rect.height < b.rect.height;
 					return a.rect.width < b.rect.width;
 				});
-				return offset == snapshot.pixels.size();
+				return offset == pixels.size();
 			};
 			std::vector<Slice> leftSlices;
 			std::vector<Slice> rightSlices;
 			leftSlices.reserve(left.placements.size());
 			rightSlices.reserve(right.placements.size());
-			if (!buildSlices(left, leftSlices) || !buildSlices(right, rightSlices))
+			if (!buildSlices(left, leftPixels, leftSlices)
+				|| !buildSlices(right, rightPixels, rightSlices))
 				return false;
 			for (size_t index = 0; index < leftSlices.size(); ++index)
 			{
@@ -1209,8 +1363,8 @@ namespace fonthook::vectorfont
 				const Slice& b = rightSlices[index];
 				if (std::memcmp(&a.rect, &b.rect, sizeof(a.rect)) != 0
 					|| a.bytes != b.bytes
-					|| (a.bytes && std::memcmp(left.pixels.data() + a.offset,
-						right.pixels.data() + b.offset, a.bytes) != 0))
+					|| (a.bytes && std::memcmp(leftPixels.data() + a.offset,
+						rightPixels.data() + b.offset, a.bytes) != 0))
 					return false;
 			}
 			return true;

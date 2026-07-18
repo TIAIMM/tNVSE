@@ -786,6 +786,7 @@ namespace fonthook::vectorfont
 		UInt16 defaultPoolPages = 0;
 		UInt16 deduplicatedPages = 0;
 		UInt64 deduplicatedGpuBytes = 0;
+		UInt64 releasedResetPixelBytes = 0;
 		for (UInt16 pageIndex = 0; pageIndex == 0 || pageIndex < pageCount; ++pageIndex)
 		{
 			AtlasCacheKey pageKey = key;
@@ -892,7 +893,8 @@ namespace fonthook::vectorfont
 				resource->residentBitmaps.emplace(placementList[index].cacheId, bitmap);
 			}
 			// v8 shader pages keep only placed level-zero texels. DEFAULT-pool restore
-			// regenerates the mip chain directly and retains this compact reset backing.
+			// regenerates the mip chain directly; later resets stream these texels from
+			// the validated snapshot instead of retaining a second CPU pixel copy.
 			const bool compactDefaultEligible = g_bEnableFreeTypeDefaultPoolAtlas
 				&& !State().defaultPoolShutdown
 				&& pageKey.pixelMode == AtlasPixelMode::A8
@@ -912,6 +914,8 @@ namespace fonthook::vectorfont
 				compactSnapshot->pixelMode = pageKey.pixelMode;
 				compactSnapshot->placements = placementList;
 				compactSnapshot->pixels = std::move(storedPixelVector);
+				compactSnapshot->sourcePath = path;
+				compactSnapshot->sourceHeader = header;
 				resource->compactSnapshot = compactSnapshot;
 				resource->backend = AtlasBackend::DefaultPool;
 				resource->pageContentHash = header.pageContentHash;
@@ -930,6 +934,8 @@ namespace fonthook::vectorfont
 					}
 					else
 						RegisterDefaultPoolAtlasPage(resource, header.pageContentHash);
+					releasedResetPixelBytes += compactSnapshot->pixels.size();
+					std::vector<UInt8>().swap(compactSnapshot->pixels);
 				}
 			}
 			if (!restoredToDefaultPool)
@@ -974,11 +980,12 @@ namespace fonthook::vectorfont
 				state.completeAtlasProfiles.insert(MakeAtlasProfileKey(key));
 		}
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: atlas snapshot restored font=%u pages=%u defaultPoolPages=%u deduplicatedPages=%u deduplicatedGpuBytes=%llu placements=%llu bytes=%llu",
+			"tnvse_freetype_font: atlas snapshot restored font=%u pages=%u defaultPoolPages=%u deduplicatedPages=%u deduplicatedGpuBytes=%llu placements=%llu bytes=%llu releasedResetPixelBytes=%llu",
 			key.fontId, pageCount, defaultPoolPages, deduplicatedPages,
 			static_cast<unsigned long long>(deduplicatedGpuBytes),
 			static_cast<unsigned long long>(totalPlacements),
-			static_cast<unsigned long long>(totalBytes));
+			static_cast<unsigned long long>(totalBytes),
+			static_cast<unsigned long long>(releasedResetPixelBytes));
 		return true;
 	}
 

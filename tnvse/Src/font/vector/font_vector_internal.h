@@ -358,6 +358,7 @@ namespace fonthook::vectorfont
 		const VectorEncodedGlyph& arGlyph, const GlyphBitmap& arBitmap,
 		float afRasterScale);
 	void FlushGlyphBitmapDiskCache();
+	UInt64 ReleaseGlyphBitmapDiskCacheMappings();
 	bool UsesSdfFill(const FontConfig& arConfig);
 	bool HardShadowIncludesGlow(const FontConfig& arConfig);
 	bool HardShadowIncludesOutline(const FontConfig& arConfig);

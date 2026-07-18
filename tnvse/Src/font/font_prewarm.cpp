@@ -1026,6 +1026,7 @@ namespace fonthook::vectorfont
 			queuedFonts, completedFonts, fullFonts, saveFailedFonts, cancelledFonts, batches,
 			static_cast<unsigned long long>(GetTickCount64() - started));
 		FlushGlyphBitmapDiskCache();
+		ReleaseGlyphBitmapDiskCacheMappings();
 		if (g_bDeleteUnusedFreeTypeFontCache && completedFonts == queuedFonts)
 			DeleteUnusedFreeTypeFontCacheFiles();
 		else if (g_bDeleteUnusedFreeTypeFontCache)
