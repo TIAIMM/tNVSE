@@ -269,6 +269,15 @@ complete page set directly and skips code-page enumeration, per-glyph mask
 loading, packing, and mip generation.
 Every layer includes its schema/layout/mask/font/code-page inputs in its hash;
 stale files are ignored rather than migrated.
+Configured face chains hash the separator-normalized path written in XML, not
+the filesystem path after a relative `Data\...` value has been expanded with
+the current game directory. Runtime manifest and atlas identities then combine
+that portable configuration identity with the ordered loaded-face count,
+collection face index, and actual font-file content hash. Consequently an
+unchanged relative-path configuration can reuse its cache after the game is
+moved or installed under a different root directory. Absolute paths in XML
+remain explicit configuration identities, and their referenced file contents
+must still match.
 
 `bDeleteUnusedFreeTypeFontCache=1` removes stale `.tnvfmask`, `.tnvfhash`,
 `.tnvfmanifest`, and `.tnvfatlas` files that were not accessed by the current

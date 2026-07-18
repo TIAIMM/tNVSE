@@ -60,6 +60,9 @@ namespace fonthook::vectorfont
 	void ReportFreeTypePerf();
 	struct FaceConfig
 	{
+		// Separator-normalized XML value used for portable configuration hashes.
+		std::wstring configuredPath;
+		// Resolved filesystem path used only to open the font.
 		std::wstring path;
 		long faceIndex = 0;
 	};

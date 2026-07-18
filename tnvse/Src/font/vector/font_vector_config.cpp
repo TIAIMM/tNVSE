@@ -52,14 +52,29 @@ namespace fonthook::vectorfont
 				|| (path.size() >= 2 && path[0] == L'\\' && path[1] == L'\\');
 		}
 
-		std::wstring ResolveFontPath(const char* value)
+		std::wstring NormalizeConfiguredFontPath(const char* value)
 		{
 			std::wstring path = Utf8ToWide(value);
 			std::replace(path.begin(), path.end(), L'/', L'\\');
+			return path;
+		}
+
+		std::wstring ResolveFontPath(const std::wstring& path)
+		{
 			if (path.empty() || IsAbsolutePath(path))
 				return path;
 			const std::wstring gameDirectory = GetGameDirectory();
 			return gameDirectory.empty() ? path : gameDirectory + L"\\" + path;
+		}
+
+		bool ReadFaceConfig(pugi::xml_node node, FaceConfig& face)
+		{
+			face = {};
+			face.configuredPath = NormalizeConfiguredFontPath(
+				node.attribute("path").as_string());
+			face.path = ResolveFontPath(face.configuredPath);
+			face.faceIndex = node.attribute("index").as_int(0);
+			return !face.path.empty() && face.faceIndex >= 0;
 		}
 
 		void ReadStyleAttributes(pugi::xml_node node, ByteStyle& style)
@@ -102,18 +117,14 @@ namespace fonthook::vectorfont
 				return false;
 
 			FaceConfig face;
-			face.path = ResolveFontPath(primary.attribute("path").as_string());
-			face.faceIndex = primary.attribute("index").as_int(0);
-			if (face.path.empty() || face.faceIndex < 0)
+			if (!ReadFaceConfig(primary, face))
 				return false;
 			faces.push_back(std::move(face));
 
 			for (pugi::xml_node fallback : node.children("fallback"))
 			{
 				FaceConfig fallbackFace;
-				fallbackFace.path = ResolveFontPath(fallback.attribute("path").as_string());
-				fallbackFace.faceIndex = fallback.attribute("index").as_int(0);
-				if (!fallbackFace.path.empty() && fallbackFace.faceIndex >= 0)
+				if (ReadFaceConfig(fallback, fallbackFace))
 					faces.push_back(std::move(fallbackFace));
 			}
 			return true;
@@ -293,9 +304,17 @@ namespace fonthook::vectorfont
 					HashBytes(hash, &style.baselineOffset, sizeof(style.baselineOffset));
 					HashBytes(hash, &style.fixedWidth, sizeof(style.fixedWidth));
 				}
+				const UInt32 faceCount = static_cast<UInt32>(style.faces.size());
+				HashBytes(hash, &faceCount, sizeof(faceCount));
 				for (const FaceConfig& face : style.faces)
 				{
-					HashBytes(hash, face.path.data(), face.path.size() * sizeof(wchar_t));
+					// Do not hash the game-directory-expanded filesystem path. The
+					// normalized XML identity keeps relative Data paths portable, while
+					// runtime disk identities additionally hash every loaded font's bytes.
+					const UInt32 pathLength = static_cast<UInt32>(face.configuredPath.size());
+					HashBytes(hash, &pathLength, sizeof(pathLength));
+					HashBytes(hash, face.configuredPath.data(),
+						face.configuredPath.size() * sizeof(wchar_t));
 					HashBytes(hash, &face.faceIndex, sizeof(face.faceIndex));
 				}
 			}
