@@ -262,11 +262,15 @@ namespace fonthook::vectorfont
 
 		bool SetFileSize64(HANDLE file, UInt64 size)
 		{
-			LARGE_INTEGER position = {};
-			position.QuadPart = static_cast<LONGLONG>(size);
-			return file != INVALID_HANDLE_VALUE
-				&& SetFilePointerEx(file, position, nullptr, FILE_BEGIN)
-				&& SetEndOfFile(file);
+			if (file == INVALID_HANDLE_VALUE
+				|| size > static_cast<UInt64>(std::numeric_limits<LONGLONG>::max()))
+			{
+				return false;
+			}
+			FILE_END_OF_FILE_INFO endOfFile = {};
+			endOfFile.EndOfFile.QuadPart = static_cast<LONGLONG>(size);
+			return SetFileInformationByHandle(file, FileEndOfFileInfo,
+				&endOfFile, sizeof(endOfFile)) != FALSE;
 		}
 
 		bool TryEnableSparseFile(HANDLE file)
@@ -282,12 +286,16 @@ namespace fonthook::vectorfont
 		{
 			if (!size)
 				return true;
-			LARGE_INTEGER position = {};
-			position.QuadPart = static_cast<LONGLONG>(offset);
+			if (file == INVALID_HANDLE_VALUE)
+				return false;
+			// All callers use synchronous file handles. Supplying an OVERLAPPED
+			// offset keeps the read synchronous while avoiding a separate seek and
+			// any dependency on the handle's current file pointer.
+			OVERLAPPED operation = {};
+			operation.Offset = static_cast<DWORD>(offset);
+			operation.OffsetHigh = static_cast<DWORD>(offset >> 32);
 			DWORD read = 0;
-			return file != INVALID_HANDLE_VALUE
-				&& SetFilePointerEx(file, position, nullptr, FILE_BEGIN)
-				&& ReadFile(file, data, size, &read, nullptr)
+			return ReadFile(file, data, size, &read, &operation)
 				&& read == size;
 		}
 
@@ -295,12 +303,16 @@ namespace fonthook::vectorfont
 		{
 			if (!size)
 				return true;
-			LARGE_INTEGER position = {};
-			position.QuadPart = static_cast<LONGLONG>(offset);
+			if (file == INVALID_HANDLE_VALUE)
+				return false;
+			// Match ReadFileAt: all callers use synchronous handles, so an explicit
+			// OVERLAPPED offset avoids a separate seek without making the write
+			// asynchronous.
+			OVERLAPPED operation = {};
+			operation.Offset = static_cast<DWORD>(offset);
+			operation.OffsetHigh = static_cast<DWORD>(offset >> 32);
 			DWORD written = 0;
-			return file != INVALID_HANDLE_VALUE
-				&& SetFilePointerEx(file, position, nullptr, FILE_BEGIN)
-				&& WriteFile(file, data, size, &written, nullptr)
+			return WriteFile(file, data, size, &written, &operation)
 				&& written == size;
 		}
 
@@ -665,12 +677,12 @@ namespace fonthook::vectorfont
 			return bitmap;
 		}
 
-		UInt32 StorePersistentGlyphBitmaps(PersistentBitmapProfile& profile,
-			const std::vector<PersistentBitmapStoreRequest>& requests,
+		static UInt32 StorePersistentGlyphBitmapsImpl(PersistentBitmapProfile& profile,
+			const PersistentBitmapStoreRequest* requests, size_t requestCount,
 			UInt64& storedAlphaBytes)
 		{
 			storedAlphaBytes = 0;
-			if (!profile.writable || requests.empty()
+			if (!profile.writable || !requests || !requestCount
 				|| profile.indexEntries.size() != profile.glyphCapacity)
 			{
 				return 0;
@@ -682,11 +694,12 @@ namespace fonthook::vectorfont
 				PersistentBitmapIndexEntry entry;
 			};
 			std::vector<PendingIndex> pending;
-			pending.reserve(requests.size());
+			pending.reserve(requestCount);
 			std::vector<UInt8> serialized;
 			UInt64 estimatedBytes = 0;
-			for (const PersistentBitmapStoreRequest& request : requests)
+			for (size_t requestIndex = 0; requestIndex < requestCount; ++requestIndex)
 			{
+				const PersistentBitmapStoreRequest& request = requests[requestIndex];
 				if (!request.key || !request.bitmap)
 					continue;
 				const BitmapCacheKey& key = *request.key;
@@ -712,8 +725,9 @@ namespace fonthook::vectorfont
 				return 0;
 			}
 			serialized.reserve(static_cast<size_t>(estimatedBytes));
-			for (const PersistentBitmapStoreRequest& request : requests)
+			for (size_t requestIndex = 0; requestIndex < requestCount; ++requestIndex)
 			{
+				const PersistentBitmapStoreRequest& request = requests[requestIndex];
 				if (!request.key || !request.bitmap)
 					continue;
 				const BitmapCacheKey& key = *request.key;
@@ -771,6 +785,7 @@ namespace fonthook::vectorfont
 					return lhs.glyphIndex < rhs.glyphIndex;
 				});
 			UInt32 stored = 0;
+			std::vector<PersistentBitmapIndexEntry> entries;
 			for (size_t first = 0; first < pending.size();)
 			{
 				size_t last = first + 1;
@@ -779,7 +794,7 @@ namespace fonthook::vectorfont
 				{
 					++last;
 				}
-				std::vector<PersistentBitmapIndexEntry> entries;
+				entries.clear();
 				entries.reserve(last - first);
 				for (size_t index = first; index < last; ++index)
 					entries.push_back(pending[index].entry);
@@ -805,14 +820,20 @@ namespace fonthook::vectorfont
 			return stored;
 		}
 
+		UInt32 StorePersistentGlyphBitmaps(PersistentBitmapProfile& profile,
+			const std::vector<PersistentBitmapStoreRequest>& requests,
+			UInt64& storedAlphaBytes)
+		{
+			return StorePersistentGlyphBitmapsImpl(profile, requests.data(),
+				requests.size(), storedAlphaBytes);
+		}
+
 		bool StorePersistentGlyphBitmap(PersistentBitmapProfile& profile,
 			const BitmapCacheKey& key, const GlyphBitmap& bitmap)
 		{
-			const std::vector<PersistentBitmapStoreRequest> requests = {
-				{ &key, &bitmap }
-			};
+			const PersistentBitmapStoreRequest request = { &key, &bitmap };
 			UInt64 storedAlphaBytes = 0;
-			return StorePersistentGlyphBitmaps(profile, requests,
+			return StorePersistentGlyphBitmapsImpl(profile, &request, 1,
 				storedAlphaBytes) == 1;
 		}
 

@@ -66,19 +66,40 @@ namespace fonthook::vectorfont
 			constexpr size_t kSparseChunkBytes = 64u * 1024u;
 			for (size_t offset = 0; offset < size;)
 			{
-				const size_t chunk = std::min(kSparseChunkBytes, size - offset);
-				const bool zero = sparse && std::all_of(data + offset,
-					data + offset + chunk, [](UInt8 value) { return value == 0; });
-				if (zero)
+				const size_t runStart = offset;
+				const size_t firstChunk = std::min(kSparseChunkBytes, size - offset);
+				const bool zeroRun = sparse && std::all_of(data + offset,
+					data + offset + firstChunk, [](UInt8 value) { return value == 0; });
+				offset += firstChunk;
+				while (offset < size)
+				{
+					const size_t chunk = std::min(kSparseChunkBytes, size - offset);
+					const bool zero = sparse && std::all_of(data + offset,
+						data + offset + chunk, [](UInt8 value) { return value == 0; });
+					if (zero != zeroRun)
+						break;
+					offset += chunk;
+				}
+				const size_t runBytes = offset - runStart;
+				if (zeroRun)
 				{
 					LARGE_INTEGER distance = {};
-					distance.QuadPart = static_cast<LONGLONG>(chunk);
+					distance.QuadPart = static_cast<LONGLONG>(runBytes);
 					if (!SetFilePointerEx(file, distance, nullptr, FILE_CURRENT))
 						return false;
 				}
-				else if (!WriteSequentialFileBytes(file, data + offset, chunk))
-					return false;
-				offset += chunk;
+				else
+				{
+					size_t written = 0;
+					while (written < runBytes)
+					{
+						const size_t chunk = std::min(runBytes - written,
+							static_cast<size_t>(std::numeric_limits<DWORD>::max()));
+						if (!WriteSequentialFileBytes(file, data + runStart + written, chunk))
+							return false;
+						written += chunk;
+					}
+				}
 			}
 			return SetEndOfFile(file) != FALSE;
 		}
