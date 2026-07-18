@@ -385,8 +385,8 @@ tNVSE 当前在 `0x8518BB` 替换 sanitizer call site：先捕获原始候选名
 已新增：
 
 ```text
-tnvse/Src/multibyte_input.h
-tnvse/Src/multibyte_input.cpp
+tnvse/Src/input/multibyte_input.h
+tnvse/Src/input/multibyte_input.cpp
 ```
 
 新增配置项：

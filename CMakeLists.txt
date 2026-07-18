@@ -47,12 +47,16 @@ tnvse_add_harfbuzz_target()
 tnvse_add_libunibreak_target()
 tnvse_add_shader_target(TNVSE_SHADER_OUTPUTS)
 
-file(GLOB TNVSE_SOURCES CONFIGURE_DEPENDS
-  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/*.cpp")
-file(GLOB_RECURSE TNVSE_HEADERS CONFIGURE_DEPENDS
-  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/*.h"
+set(TNVSE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src")
+
+file(GLOB_RECURSE TNVSE_SOURCES CONFIGURE_DEPENDS
+  "${TNVSE_SOURCE_ROOT}/*.cpp")
+file(GLOB_RECURSE TNVSE_SOURCE_HEADERS CONFIGURE_DEPENDS
+  "${TNVSE_SOURCE_ROOT}/*.h")
+file(GLOB_RECURSE TNVSE_BUNDLED_HEADERS CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/include/*.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/include/*.hpp")
+set(TNVSE_HEADERS ${TNVSE_SOURCE_HEADERS} ${TNVSE_BUNDLED_HEADERS})
 
 add_library(tnvse SHARED
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/dllmain.cpp"
@@ -60,16 +64,27 @@ add_library(tnvse SHARED
   ${TNVSE_SOURCES}
   ${TNVSE_HEADERS})
 
-source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/tnvse"
-  PREFIX "tNVSE"
-  FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/dllmain.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/exports.def"
-    ${TNVSE_SOURCES}
-    ${TNVSE_HEADERS})
+source_group(TREE "${TNVSE_SOURCE_ROOT}"
+  PREFIX "Source Files"
+  FILES ${TNVSE_SOURCES} ${TNVSE_SOURCE_HEADERS})
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/include"
+  PREFIX "Bundled Headers"
+  FILES ${TNVSE_BUNDLED_HEADERS})
+source_group("tNVSE" FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/dllmain.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/exports.def")
 
 target_include_directories(tnvse PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse"
+  "${TNVSE_SOURCE_ROOT}"
+  "${TNVSE_SOURCE_ROOT}/dictionary"
+  "${TNVSE_SOURCE_ROOT}/font"
+  "${TNVSE_SOURCE_ROOT}/font/a8"
+  "${TNVSE_SOURCE_ROOT}/font/atlas"
+  "${TNVSE_SOURCE_ROOT}/font/native"
+  "${TNVSE_SOURCE_ROOT}/font/vector"
+  "${TNVSE_SOURCE_ROOT}/game"
+  "${TNVSE_SOURCE_ROOT}/input"
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/include")
 
 target_compile_definitions(tnvse PRIVATE

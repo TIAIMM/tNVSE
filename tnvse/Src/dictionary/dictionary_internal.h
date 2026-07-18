@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "../include/pugixml/pugixml.hpp"
+#include <pugixml/pugixml.hpp>
 
 namespace fonthook
 {

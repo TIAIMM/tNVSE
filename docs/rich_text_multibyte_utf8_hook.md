@@ -805,7 +805,7 @@ TileText::MakeNode 0xA21AF0
 
 ## 12. 当前实现进度（2026-07-04 更新）
 
-本节记录相对第 11 节"最小可落地组合"的实际落地情况。代码位于 `tnvse/Src/font_manager.cpp` / `font_engine.cpp` / `game_hooks.cpp`。整体策略已从"完全自建 layout"转向**复用原版 layout + side table + 局部 hook**，其中 `TextPage::AddChar` 已通过 call site wrapper 修正 DBCS 行高，`TextLine::AddChar` 已通过外部 call site wrapper 处理 DBCS overflow。
+本节记录相对第 11 节"最小可落地组合"的实际落地情况。代码位于 `tnvse/Src/font/font_manager.cpp` / `font/font_engine.cpp` / `game/game_hooks.cpp`。整体策略已从"完全自建 layout"转向**复用原版 layout + side table + 局部 hook**，其中 `TextPage::AddChar` 已通过 call site wrapper 修正 DBCS 行高，`TextLine::AddChar` 已通过外部 call site wrapper 处理 DBCS overflow。
 
 ### 12.1 已安装的 Hook
 

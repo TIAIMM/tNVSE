@@ -2,7 +2,7 @@
 
 #include "load_config.h"
 
-#include "../include/pugixml/pugixml.hpp"
+#include <pugixml/pugixml.hpp>
 
 #include <hb.h>
 

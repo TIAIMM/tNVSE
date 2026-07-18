@@ -1,9 +1,9 @@
 # CMake build
 
-The root CMake project is the canonical build entry point for tNVSE. It keeps
-the legacy Visual Studio projects available for comparison, but it no longer
-requires editing those projects when source files are added under `tnvse/Src`
-or `commonlib_nv/Src`.
+The root CMake project is the sole supported build entry point for tNVSE.
+Source files are discovered recursively under `tnvse/Src` and
+`commonlib_nv/Src`; Visual Studio project files are generated into `out/` and
+must not be maintained in the source tree.
 
 ## Requirements
 

@@ -13,7 +13,7 @@
 
 #define STBRP_STATIC
 #define STB_RECT_PACK_IMPLEMENTATION
-#include "../third_party/stb/stb_rect_pack.h"
+#include "third_party/stb/stb_rect_pack.h"
 
 #include <algorithm>
 #include <array>
