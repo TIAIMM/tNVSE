@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <list>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -81,6 +82,15 @@ namespace fonthook::vectorfont
 	};
 
 	struct CompactAtlasSnapshot;
+	inline constexpr UInt32 kNoSnapshotPlacement = std::numeric_limits<UInt32>::max();
+
+	struct AtlasGlyphRecord
+	{
+		UInt64 cacheId = 0;
+		AtlasRect rect;
+		std::shared_ptr<const GlyphBitmap> bitmap;
+		UInt32 snapshotPlacementIndex = kNoSnapshotPlacement;
+	};
 
 	struct AtlasResource
 	{
@@ -103,8 +113,9 @@ namespace fonthook::vectorfont
 		bool sharedGpuPage = false;
 		UInt64 pageContentHash = 0;
 		std::vector<UInt8> pixels;
-		std::unordered_map<UInt64, AtlasRect> placements;
-		std::unordered_map<UInt64, std::shared_ptr<const GlyphBitmap>> residentBitmaps;
+		// Sorted by cacheId. One contiguous allocation replaces the old placement
+		// and resident-bitmap node maps, including restored placeholder objects.
+		std::vector<AtlasGlyphRecord> glyphs;
 		std::shared_ptr<const CompactAtlasSnapshot> compactSnapshot;
 	};
 
@@ -438,6 +449,11 @@ namespace fonthook::vectorfont
 		AtlasPixelMode requestedMode);
 	bool TryReuseDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,
 		UInt64 pageContentHash);
+	std::shared_ptr<const GlyphBitmap> GetOrCreateAtlasGlyphBitmap(
+		AtlasResource& resource, UInt64 cacheId);
+	AtlasGlyphRecord* FindAtlasGlyph(AtlasResource& resource, UInt64 cacheId);
+	const AtlasGlyphRecord* FindAtlasGlyph(const AtlasResource& resource, UInt64 cacheId);
+	void SortAtlasGlyphs(AtlasResource& resource);
 	void RegisterDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,
 		UInt64 pageContentHash);
 	void CopyBitmapToAtlas(AtlasResource& resource, const GlyphBitmap& bitmap,

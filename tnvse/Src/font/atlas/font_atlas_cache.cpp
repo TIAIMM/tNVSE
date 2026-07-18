@@ -274,18 +274,18 @@ namespace fonthook::vectorfont
 				}
 			}
 			pageResidents.clear();
-			pageResidents.reserve(resource.placements.size());
-			for (const auto& placement : resource.placements)
+			pageResidents.reserve(resource.glyphs.size());
+			for (const auto& placement : resource.glyphs)
 			{
-				const auto resident = profile.residentPages.find(placement.first);
+				const auto resident = profile.residentPages.find(placement.cacheId);
 				if (resident == profile.residentPages.end())
 				{
-					profile.residentPages.emplace(placement.first, key.pageIndex);
+					profile.residentPages.emplace(placement.cacheId, key.pageIndex);
 				}
 				else
 				{
 					if (resident->second != key.pageIndex)
-						profile.duplicateResidents.insert(placement.first);
+						profile.duplicateResidents.insert(placement.cacheId);
 					if (key.pageIndex < resident->second)
 					{
 						// Profile pages are consumed in ascending order. Preserve the
@@ -294,7 +294,7 @@ namespace fonthook::vectorfont
 						resident->second = key.pageIndex;
 					}
 				}
-				pageResidents.push_back(placement.first);
+				pageResidents.push_back(placement.cacheId);
 			}
 		}
 
@@ -339,8 +339,7 @@ namespace fonthook::vectorfont
 						const auto candidate = state.atlasCache.find(candidateKey);
 						if (candidate == state.atlasCache.end()
 							|| !candidate->second.resource
-							|| candidate->second.resource->placements.find(cacheId)
-								== candidate->second.resource->placements.end())
+							|| !FindAtlasGlyph(*candidate->second.resource, cacheId))
 						{
 							continue;
 						}
@@ -664,13 +663,11 @@ namespace fonthook::vectorfont
 						const auto page = state.atlasCache.find(pageKey);
 						if (page == state.atlasCache.end() || !page->second.resource)
 							continue;
-						const auto bitmap = page->second.resource->residentBitmaps.find(cacheIds[index]);
-						if (bitmap == page->second.resource->residentBitmaps.end()
-							|| !bitmap->second)
-						{
+						std::shared_ptr<const GlyphBitmap> bitmap =
+							GetOrCreateAtlasGlyphBitmap(*page->second.resource, cacheIds[index]);
+						if (!bitmap)
 							continue;
-						}
-						results[index] = bitmap->second;
+						results[index] = std::move(bitmap);
 						++residentHits;
 					}
 				}
@@ -718,7 +715,7 @@ namespace fonthook::vectorfont
 					const auto& bitmap = bitmaps[bitmapIndex];
 					if (!bitmap || (*outBitmapPageOrdinals)[bitmapIndex] != kUnavailablePage)
 						continue;
-					if (resource.placements.find(bitmap->cacheId) != resource.placements.end())
+					if (FindAtlasGlyph(resource, bitmap->cacheId))
 						(*outBitmapPageOrdinals)[bitmapIndex] = ordinal;
 				}
 			};
@@ -914,8 +911,9 @@ namespace fonthook::vectorfont
 			resource->levelZeroOnly = UsesLevelZeroOnly(bitmaps);
 			resource->padding = padding;
 			resource->transient = true;
+			std::unordered_map<UInt64, AtlasRect> placements;
 			if (!PackAtlas(bitmaps, resource->width, resource->height,
-				resource->placements, padding))
+				placements, padding))
 			{
 				return nullptr;
 			}
@@ -924,8 +922,10 @@ namespace fonthook::vectorfont
 			for (const auto& bitmap : bitmaps)
 			{
 				if (bitmap)
-					resource->residentBitmaps[bitmap->cacheId] = bitmap;
+					resource->glyphs.push_back({ bitmap->cacheId,
+						placements.at(bitmap->cacheId), bitmap, kNoSnapshotPlacement });
 			}
+			SortAtlasGlyphs(*resource);
 			if (resource->backend == AtlasBackend::DefaultPool
 				&& CreateDefaultPoolAtlas(*resource, pixelMode))
 			{
@@ -940,8 +940,12 @@ namespace fonthook::vectorfont
 			for (const auto& bitmap : bitmaps)
 			{
 				if (bitmap)
-					CopyBitmapToAtlas(*resource, *bitmap,
-						resource->placements.at(bitmap->cacheId));
+				{
+					const AtlasGlyphRecord* glyph = FindAtlasGlyph(*resource, bitmap->cacheId);
+					if (!glyph)
+						return nullptr;
+					CopyBitmapToAtlas(*resource, *bitmap, glyph->rect);
+				}
 			}
 			return RecreateManagedAtlasProperty(*resource) ? resource : nullptr;
 		}

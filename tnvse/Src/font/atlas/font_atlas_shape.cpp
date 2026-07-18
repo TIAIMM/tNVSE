@@ -779,7 +779,10 @@ namespace fonthook::vectorfont
 				if (quad.atlasPage >= atlases.size() || !atlases[quad.atlasPage])
 					return nullptr;
 				const AtlasResource& atlas = *atlases[quad.atlasPage];
-				const AtlasRect& rect = atlas.placements.at(quad.bitmap->cacheId);
+				const AtlasGlyphRecord* glyph = FindAtlasGlyph(atlas, quad.bitmap->cacheId);
+				if (!glyph)
+					return nullptr;
+				const AtlasRect& rect = glyph->rect;
 				const float scale = quad.rasterScale;
 				const float expansion = static_cast<float>(quad.expansionPixels);
 				const float logicalX = quad.pen.x - origin.x + quad.offsetX;
@@ -1010,8 +1013,7 @@ namespace fonthook::vectorfont
 						++bitmapIndex)
 					{
 						const auto& bitmap = (*activeBitmaps)[bitmapIndex];
-						if (bitmap && availableAtlases[0]->placements.find(bitmap->cacheId)
-							!= availableAtlases[0]->placements.end())
+						if (bitmap && FindAtlasGlyph(*availableAtlases[0], bitmap->cacheId))
 						{
 							bitmapPageOrdinals[bitmapIndex] = 0;
 						}

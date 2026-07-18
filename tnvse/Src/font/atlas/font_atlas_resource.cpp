@@ -445,10 +445,10 @@ namespace fonthook::vectorfont
 		size_t GetResidentMaskBytes(const AtlasResource& resource)
 		{
 			size_t result = 0;
-			for (const auto& [id, bitmap] : resource.residentBitmaps)
+			for (const AtlasGlyphRecord& glyph : resource.glyphs)
 			{
-				if (bitmap)
-					result += bitmap->alpha.size();
+				if (glyph.bitmap)
+					result += glyph.bitmap->alpha.size();
 			}
 			return result;
 		}
@@ -872,13 +872,12 @@ namespace fonthook::vectorfont
 				texture->UnlockRect(0);
 				return false;
 			}
-			for (const auto& [id, bitmap] : resource.residentBitmaps)
+			for (const AtlasGlyphRecord& glyph : resource.glyphs)
 			{
-				auto placement = resource.placements.find(id);
-				if (!bitmap || bitmap->alpha.empty()
-					|| placement == resource.placements.end())
+				const std::shared_ptr<const GlyphBitmap>& bitmap = glyph.bitmap;
+				if (!bitmap || bitmap->alpha.empty())
 					continue;
-				const AtlasRect& rect = placement->second;
+				const AtlasRect& rect = glyph.rect;
 				WriteBitmapPixels(static_cast<UInt8*>(locked.pBits), locked.Pitch,
 					mode, *bitmap, rect, rect.x, rect.y);
 			}
@@ -1235,8 +1234,7 @@ namespace fonthook::vectorfont
 			snapshot->resetPending = resource.resetPending;
 			snapshot->sharedGpuPage = resource.sharedGpuPage;
 			snapshot->pageContentHash = resource.pageContentHash;
-			snapshot->placements = resource.placements;
-			snapshot->residentBitmaps = resource.residentBitmaps;
+			snapshot->glyphs = resource.glyphs;
 			snapshot->compactSnapshot = resource.compactSnapshot;
 			return snapshot;
 		}
@@ -1369,6 +1367,80 @@ namespace fonthook::vectorfont
 			}
 			return true;
 		}
+
+	AtlasGlyphRecord* FindAtlasGlyph(AtlasResource& resource, UInt64 cacheId)
+	{
+		auto found = std::lower_bound(resource.glyphs.begin(), resource.glyphs.end(),
+			cacheId, [](const AtlasGlyphRecord& glyph, UInt64 id)
+			{
+				return glyph.cacheId < id;
+			});
+		return found != resource.glyphs.end() && found->cacheId == cacheId
+			? &*found : nullptr;
+	}
+
+	const AtlasGlyphRecord* FindAtlasGlyph(const AtlasResource& resource, UInt64 cacheId)
+	{
+		auto found = std::lower_bound(resource.glyphs.begin(), resource.glyphs.end(),
+			cacheId, [](const AtlasGlyphRecord& glyph, UInt64 id)
+			{
+				return glyph.cacheId < id;
+			});
+		return found != resource.glyphs.end() && found->cacheId == cacheId
+			? &*found : nullptr;
+	}
+
+	void SortAtlasGlyphs(AtlasResource& resource)
+	{
+		std::sort(resource.glyphs.begin(), resource.glyphs.end(),
+			[](const AtlasGlyphRecord& lhs, const AtlasGlyphRecord& rhs)
+			{
+				return lhs.cacheId < rhs.cacheId;
+			});
+	}
+
+	std::shared_ptr<const GlyphBitmap> GetOrCreateAtlasGlyphBitmap(
+		AtlasResource& resource, UInt64 cacheId)
+	{
+		AtlasGlyphRecord* found = FindAtlasGlyph(resource, cacheId);
+		if (!found)
+			return nullptr;
+		AtlasGlyphRecord& glyph = *found;
+		if (glyph.bitmap)
+			return glyph.bitmap;
+		if (!resource.compactSnapshot
+			|| glyph.snapshotPlacementIndex
+				>= resource.compactSnapshot->placements.size())
+		{
+			return nullptr;
+		}
+		const AtlasSnapshotPlacement& placement =
+			resource.compactSnapshot->placements[glyph.snapshotPlacementIndex];
+		if (placement.cacheId != cacheId
+			|| std::memcmp(&placement.rect, &glyph.rect, sizeof(glyph.rect)) != 0)
+		{
+			return nullptr;
+		}
+		// Snapshot restore leaves this null for the complete page. Materialize only
+		// glyph metadata that live text actually consumes; alpha stays disk/GPU-backed.
+		auto bitmap = std::make_shared<GlyphBitmap>();
+		bitmap->cacheId = placement.cacheId;
+		bitmap->atlasRgb = placement.atlasRgb;
+		bitmap->width = static_cast<int>(placement.rect.width);
+		bitmap->height = static_cast<int>(placement.rect.height);
+		bitmap->left = placement.left;
+		bitmap->top = placement.top;
+		bitmap->effectiveWidth = placement.effectiveWidth;
+		bitmap->effectiveHeight = placement.effectiveHeight;
+		bitmap->maskType = static_cast<GlyphMaskType>(placement.maskType);
+		bitmap->sdfSpread = placement.sdfSpread;
+		bitmap->strokeWidth26Dot6 = placement.strokeWidth26Dot6;
+		bitmap->colorBaked = placement.colorBaked != 0;
+		bitmap->bakedRgba = placement.bakedRgba;
+		bitmap->bakedLayer = placement.bakedLayer;
+		glyph.bitmap = bitmap;
+		return bitmap;
+	}
 
 	bool TryReuseDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,
 		UInt64 pageContentHash)
@@ -1568,8 +1640,7 @@ namespace fonthook::vectorfont
 			resource.renderMode = candidate.renderMode;
 			resource.levelZeroOnly = candidate.levelZeroOnly;
 			resource.resetPending = false;
-			resource.placements = std::move(candidate.placements);
-			resource.residentBitmaps = std::move(candidate.residentBitmaps);
+			resource.glyphs = std::move(candidate.glyphs);
 			resource.compactSnapshot = std::move(candidate.compactSnapshot);
 			resource.sharedGpuPage = candidate.sharedGpuPage;
 			resource.pageContentHash = candidate.pageContentHash;
@@ -1596,8 +1667,15 @@ namespace fonthook::vectorfont
 				bool placedAll = true;
 				for (const auto& bitmap : bitmaps)
 				{
-					if (!bitmap || resource.placements.count(bitmap->cacheId))
+					if (!bitmap || FindAtlasGlyph(resource, bitmap->cacheId))
 						continue;
+					if (std::any_of(pending.begin(), pending.end(), [&](const auto& entry)
+					{
+						return entry.bitmap->cacheId == bitmap->cacheId;
+					}))
+					{
+						continue;
+					}
 					AtlasRect rect;
 					if (!PlaceBitmap(layout, *bitmap, rect))
 					{
@@ -1630,8 +1708,7 @@ namespace fonthook::vectorfont
 				detached.backend = AtlasBackend::DefaultPool;
 				detached.renderMode = resource.renderMode;
 				detached.levelZeroOnly = resource.levelZeroOnly;
-				detached.placements = resource.placements;
-				detached.residentBitmaps = resource.residentBitmaps;
+				detached.glyphs = resource.glyphs;
 				detached.compactSnapshot = resource.compactSnapshot;
 				if (!CreateDefaultPoolAtlas(detached, resource.pixelMode))
 					return false;
@@ -1653,21 +1730,28 @@ namespace fonthook::vectorfont
 			candidate.generation = resource.generation;
 			candidate.mipLevels = GetAtlasMipLevelCount(
 				candidate.width, candidate.height, candidate.levelZeroOnly);
-			candidate.placements = resource.placements;
-			candidate.residentBitmaps = resource.residentBitmaps;
+			candidate.glyphs = resource.glyphs;
 			candidate.compactSnapshot = resource.compactSnapshot;
 			candidate.pageContentHash = 0;
 			candidate.sharedGpuPage = false;
+			const size_t existingGlyphCount = candidate.glyphs.size();
 			thread_local std::vector<AtlasRect> rawDirtyRects;
 			thread_local std::vector<AtlasRect> dirtyRects;
 			rawDirtyRects.clear();
 			rawDirtyRects.reserve(pending.size());
 			for (const PendingAtlasPlacement& entry : pending)
 			{
-				candidate.placements[entry.bitmap->cacheId] = entry.rect;
-				candidate.residentBitmaps[entry.bitmap->cacheId] = entry.bitmap;
+				candidate.glyphs.push_back({ entry.bitmap->cacheId,
+					entry.rect, entry.bitmap, kNoSnapshotPlacement });
 				rawDirtyRects.push_back(entry.rect);
 			}
+			const auto glyphLess = [](const AtlasGlyphRecord& lhs,
+				const AtlasGlyphRecord& rhs) { return lhs.cacheId < rhs.cacheId; };
+			std::sort(candidate.glyphs.begin() + existingGlyphCount,
+				candidate.glyphs.end(), glyphLess);
+			std::inplace_merge(candidate.glyphs.begin(),
+				candidate.glyphs.begin() + existingGlyphCount,
+				candidate.glyphs.end(), glyphLess);
 			const bool needsRebuild = !resource.property
 				|| resource.width != candidate.width || resource.height != candidate.height;
 			if (needsRebuild)
@@ -1687,8 +1771,7 @@ namespace fonthook::vectorfont
 				resource.cursorX = candidate.cursorX;
 				resource.cursorY = candidate.cursorY;
 				resource.shelfHeight = candidate.shelfHeight;
-				resource.placements = std::move(candidate.placements);
-				resource.residentBitmaps = std::move(candidate.residentBitmaps);
+				resource.glyphs = std::move(candidate.glyphs);
 				resource.pageContentHash = 0;
 				return true;
 			}
@@ -1712,7 +1795,7 @@ namespace fonthook::vectorfont
 			const UInt32 maximum = GetMaximumAtlasSize();
 			for (const auto& bitmap : bitmaps)
 			{
-				if (!bitmap || resource.placements.count(bitmap->cacheId))
+				if (!bitmap || FindAtlasGlyph(resource, bitmap->cacheId))
 					continue;
 				AtlasRect ignored;
 				while (!PlaceBitmap(planned, *bitmap, ignored))
@@ -1730,20 +1813,42 @@ namespace fonthook::vectorfont
 			}
 			thread_local std::vector<AtlasRect> rawDirtyRects;
 			thread_local std::vector<AtlasRect> dirtyRects;
+			thread_local std::vector<PendingAtlasPlacement> pending;
 			rawDirtyRects.clear();
 			rawDirtyRects.reserve(bitmaps.size());
+			pending.clear();
+			pending.reserve(bitmaps.size());
 			for (const auto& bitmap : bitmaps)
 			{
-				if (!bitmap || resource.placements.count(bitmap->cacheId))
+				if (!bitmap || FindAtlasGlyph(resource, bitmap->cacheId))
 					continue;
+				if (std::any_of(pending.begin(), pending.end(), [&](const auto& entry)
+				{
+					return entry.bitmap->cacheId == bitmap->cacheId;
+				}))
+				{
+					continue;
+				}
 				AtlasRect rect;
 				if (!PlaceBitmap(resource, *bitmap, rect))
 					return false;
-				resource.placements[bitmap->cacheId] = rect;
-				resource.residentBitmaps[bitmap->cacheId] = bitmap;
+				pending.push_back({ bitmap, rect });
 				CopyBitmapToAtlas(resource, *bitmap, rect);
 				rawDirtyRects.push_back(rect);
 			}
+			const size_t existingGlyphCount = resource.glyphs.size();
+			for (const PendingAtlasPlacement& entry : pending)
+			{
+				resource.glyphs.push_back({ entry.bitmap->cacheId,
+					entry.rect, entry.bitmap, kNoSnapshotPlacement });
+			}
+			const auto glyphLess = [](const AtlasGlyphRecord& lhs,
+				const AtlasGlyphRecord& rhs) { return lhs.cacheId < rhs.cacheId; };
+			std::sort(resource.glyphs.begin() + existingGlyphCount,
+				resource.glyphs.end(), glyphLess);
+			std::inplace_merge(resource.glyphs.begin(),
+				resource.glyphs.begin() + existingGlyphCount,
+				resource.glyphs.end(), glyphLess);
 			if (rawDirtyRects.empty())
 				return true;
 			if (!resource.property)
@@ -1774,8 +1879,7 @@ namespace fonthook::vectorfont
 					resource.width, resource.height, resource.levelZeroOnly);
 				resource.pixels.assign(static_cast<size_t>(resource.width)
 					* resource.height * AtlasBytesPerPixel(resource.pixelMode), 0u);
-				resource.placements.clear();
-				resource.residentBitmaps.clear();
+				resource.glyphs.clear();
 				resource.cursorX = resource.padding;
 				resource.cursorY = resource.padding;
 				resource.shelfHeight = 0;

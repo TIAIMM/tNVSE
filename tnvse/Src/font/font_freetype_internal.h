@@ -341,11 +341,10 @@ namespace fonthook::vectorfont
 		}
 	};
 
-	// Version 8 stores metrics produced by raster-ink, per-face vertical alignment.
-	// Version 7 rebuilt compact body-contour bands from coverage-signed outline
-	// SDF masks.  The fixed-size entries remain content-addressed across font IDs.
-	constexpr UInt32 kPersistentGlyphManifestVersion = 8;
-	constexpr UInt32 kPersistentGlyphManifestEntries = 65536;
+	// Version 9 stores only encoded units valid for the active code page and shares
+	// one mapped object across every runtime with the same manifest identity.
+	// Version 8 used a fixed 65536-entry array per runtime mapping.
+	constexpr UInt32 kPersistentGlyphManifestVersion = 9;
 	constexpr size_t kGlyphCollisionBandCount = 16;
 
 	struct GlyphCollisionProfile
@@ -398,6 +397,13 @@ namespace fonthook::vectorfont
 		SInt16 collisionRight26Dot6[kGlyphCollisionBandCount] = {};
 		UInt64 checksum = 0;
 	};
+
+	struct PersistentGlyphManifestRecord
+	{
+		UInt16 encodedCode = 0;
+		UInt16 reserved = 0;
+		PersistentGlyphManifestEntry entry;
+	};
 #pragma pack(pop)
 
 	struct PersistentGlyphManifest
@@ -408,6 +414,7 @@ namespace fonthook::vectorfont
 		HANDLE file = INVALID_HANDLE_VALUE;
 		HANDLE mapping = nullptr;
 		UInt8* mappedData = nullptr;
+		UInt32 recordCount = 0;
 		bool writable = false;
 
 		~PersistentGlyphManifest()
@@ -539,7 +546,7 @@ namespace fonthook::vectorfont
 		bool initialized = false;
 		UInt64 layoutContentHash = 0;
 		UInt64 maskContentHash = 0;
-		std::unique_ptr<PersistentGlyphManifest> manifest;
+		std::shared_ptr<PersistentGlyphManifest> manifest;
 	};
 
 	static_assert(sizeof(PersistentFontHashRecord) == 68);
@@ -548,6 +555,7 @@ namespace fonthook::vectorfont
 	static_assert(sizeof(PersistentBitmapRecordHeader) == 40);
 	static_assert(sizeof(PersistentGlyphManifestHeader) == 72);
 	static_assert(sizeof(PersistentGlyphManifestEntry) == 120);
+	static_assert(sizeof(PersistentGlyphManifestRecord) == 124);
 
 	struct ActiveRuntimeCache
 	{
@@ -582,6 +590,10 @@ namespace fonthook::vectorfont
 		std::unordered_map<PersistentBitmapProfileKey,
 			std::unique_ptr<PersistentBitmapProfile>,
 			PersistentBitmapProfileKeyHash> persistentBitmapProfiles;
+		std::unordered_map<UInt64, std::weak_ptr<PersistentGlyphManifest>>
+			persistentGlyphManifests;
+		std::vector<UInt16> persistentGlyphManifestCodes;
+		UInt32 persistentGlyphManifestCodePage = UINT32_MAX;
 		std::unordered_set<std::wstring> usedPersistentCachePaths;
 		std::unordered_map<LayoutCacheKey, LayoutCacheEntry, LayoutCacheKeyHash,
 			LayoutCacheKeyEqual> layoutCache;

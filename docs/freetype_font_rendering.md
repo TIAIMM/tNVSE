@@ -289,9 +289,13 @@ index and bounded positioned reads, avoiding permanent address-space cost.
 
 The same directory also contains three startup-oriented cache layers. A
 `.tnvfhash` record reuses the font content hash when file identity, size and
-last-write time still match. A dense 65536-entry `.tnvfmanifest` stores the
-encoded unit's Unicode value, fallback face/glyph identity, and serialized
-`FontLetter` metrics. One `_p<page>.tnvfatlas` snapshot per atlas page stores
+last-write time still match. A v9 `.tnvfmanifest` stores the encoded unit's
+Unicode value, fallback face/glyph identity, and serialized `FontLetter` metrics
+as a sorted sparse table containing the 256 single-byte values plus only valid
+double-byte units from the active code page. Lookup uses binary search directly
+in the mapped records. Runtime fonts with the same `manifestHash` share one file
+handle, mapping handle, and mapped view instead of mapping that file once per
+font ID. One `_p<page>.tnvfatlas` snapshot per atlas page stores
 the stable glyph-ID placement map. Snapshot v8 uses `stb_rect_pack` skyline
 packing. A coverage-policy revision participates only in the identity of
 code-page shader profiles with grayscale fill and effect-only SDF, invalidating
@@ -535,6 +539,16 @@ rebuilds each wrapper independently. Glyphs added later retain only their
 individual masks. If direct
 DEFAULT-pool creation is unavailable, snapshot restore and normal atlas
 creation fall back to the engine-managed implementation.
+
+A restored page uses one contiguous glyph-record vector sorted by `cacheId`.
+Each record keeps the ID, rectangle, an index into the page's compact snapshot
+metadata, and an optional live bitmap. The profile-level page index remains the
+single hash lookup that chooses a page; lookup inside that page is a binary
+search. Restore therefore performs one contiguous glyph-record allocation per page, does not
+allocate an empty `GlyphBitmap` or hash node per glyph, and does not mirror the
+same IDs in separate placement and resident-bitmap hash tables. Metadata objects
+are materialized lazily only for restored glyphs that text actually requests;
+runtime-added glyphs attach their existing bitmap directly to the same record.
 
 `uiFreeTypeFontGpuAtlasCacheMB` controls the soft GPU atlas budget. A value of
 zero selects one eighth of the available texture memory, rounded to 16 MB and

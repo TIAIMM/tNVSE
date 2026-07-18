@@ -884,8 +884,56 @@ namespace fonthook::vectorfont
 			return runtime.maskContentHash;
 		}
 
+		void BuildGlyphManifestCodeTable(UInt32 codePage,
+			std::vector<UInt16>& encodedCodes)
+		{
+			encodedCodes.clear();
+			encodedCodes.reserve(24576);
+			for (UInt32 value = 0; value <= 0xFF; ++value)
+				encodedCodes.push_back(static_cast<UInt16>(value));
+			if (!IsDbcsCodePage(codePage))
+				return;
+			for (UInt32 lead = 0x80; lead <= 0xFF; ++lead)
+			{
+				for (UInt32 trail = 1; trail <= 0xFF; ++trail)
+				{
+					const char bytes[2] = {
+						static_cast<char>(lead), static_cast<char>(trail)
+					};
+					UInt32 encoded = 0;
+					if (!TryDecodeDoubleByteForCodePage(bytes, codePage, encoded))
+						continue;
+					wchar_t decoded[2] = {};
+					int count = MultiByteToWideChar(codePage, MB_ERR_INVALID_CHARS,
+						bytes, 2, decoded, static_cast<int>(std::size(decoded)));
+					if (!count && GetLastError() == ERROR_INVALID_FLAGS)
+					{
+						count = MultiByteToWideChar(codePage, 0,
+							bytes, 2, decoded, static_cast<int>(std::size(decoded)));
+					}
+					if (count == 1 || (count == 2
+						&& decoded[0] >= 0xD800 && decoded[0] <= 0xDBFF
+						&& decoded[1] >= 0xDC00 && decoded[1] <= 0xDFFF))
+						encodedCodes.push_back(static_cast<UInt16>(encoded));
+				}
+			}
+		}
+
+		const std::vector<UInt16>& GetGlyphManifestCodeTable(UInt32 codePage)
+		{
+			FreeTypeState& state = State();
+			if (state.persistentGlyphManifestCodePage != codePage)
+			{
+				BuildGlyphManifestCodeTable(codePage,
+					state.persistentGlyphManifestCodes);
+				state.persistentGlyphManifestCodePage = codePage;
+			}
+			return state.persistentGlyphManifestCodes;
+		}
+
 		PersistentGlyphManifestHeader MakeGlyphManifestHeader(
-			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 layoutContentHash)
+			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 layoutContentHash,
+			UInt32 recordCount)
 		{
 			PersistentGlyphManifestHeader header;
 			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'G', 'L', 'Y', '1' };
@@ -897,15 +945,16 @@ namespace fonthook::vectorfont
 			header.layoutHash = runtime.config->layoutHash;
 			header.reservedFontId = 0;
 			header.codePage = GetFreeTypeTextCodePage();
-			header.entryCount = kPersistentGlyphManifestEntries;
-			header.entrySize = sizeof(PersistentGlyphManifestEntry);
+			header.entryCount = recordCount;
+			header.entrySize = sizeof(PersistentGlyphManifestRecord);
 			header.checksum = HashBytes64(&header,
 				offsetof(PersistentGlyphManifestHeader, checksum));
 			return header;
 		}
 
 		bool MatchesGlyphManifestHeader(const PersistentGlyphManifestHeader& header,
-			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 layoutContentHash)
+			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 layoutContentHash,
+			UInt32 recordCount)
 		{
 			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'G', 'L', 'Y', '1' };
 			return std::memcmp(header.magic, magic, sizeof(magic)) == 0
@@ -916,29 +965,162 @@ namespace fonthook::vectorfont
 				&& header.layoutHash == runtime.config->layoutHash
 				&& header.reservedFontId == 0
 				&& header.codePage == GetFreeTypeTextCodePage()
-				&& header.entryCount == kPersistentGlyphManifestEntries
-				&& header.entrySize == sizeof(PersistentGlyphManifestEntry)
+				&& header.entryCount == recordCount
+				&& header.entrySize == sizeof(PersistentGlyphManifestRecord)
 				&& header.checksum == HashBytes64(&header,
 					offsetof(PersistentGlyphManifestHeader, checksum));
+		}
+
+		void UnmapGlyphManifest(PersistentGlyphManifest& manifest)
+		{
+			if (manifest.mappedData)
+				UnmapViewOfFile(manifest.mappedData);
+			if (manifest.mapping)
+				CloseHandle(manifest.mapping);
+			manifest.mappedData = nullptr;
+			manifest.mapping = nullptr;
+		}
+
+		bool MapGlyphManifest(PersistentGlyphManifest& manifest)
+		{
+			UnmapGlyphManifest(manifest);
+			manifest.mapping = CreateFileMappingW(manifest.file, nullptr,
+				manifest.writable ? PAGE_READWRITE : PAGE_READONLY, 0, 0, nullptr);
+			if (!manifest.mapping)
+				return false;
+			manifest.mappedData = static_cast<UInt8*>(MapViewOfFile(manifest.mapping,
+				manifest.writable ? FILE_MAP_WRITE | FILE_MAP_READ : FILE_MAP_READ,
+				0, 0, 0));
+			if (!manifest.mappedData)
+			{
+				CloseHandle(manifest.mapping);
+				manifest.mapping = nullptr;
+			}
+			return manifest.mappedData != nullptr;
+		}
+
+		bool WriteGlyphManifestFile(PersistentGlyphManifest& manifest,
+			const PersistentGlyphManifestHeader& header,
+			const std::vector<UInt16>& encodedCodes)
+		{
+			if (!manifest.writable || encodedCodes.size() != header.entryCount)
+				return false;
+			std::vector<PersistentGlyphManifestRecord> records(encodedCodes.size());
+			for (size_t index = 0; index < encodedCodes.size(); ++index)
+				records[index].encodedCode = encodedCodes[index];
+			const UInt64 expectedSize = sizeof(header)
+				+ static_cast<UInt64>(records.size()) * sizeof(records[0]);
+			const size_t recordBytes = records.size() * sizeof(records[0]);
+			return recordBytes <= std::numeric_limits<UInt32>::max()
+				&& SetFileSize64(manifest.file, 0)
+				&& SetFileSize64(manifest.file, expectedSize)
+				&& WriteFileAt(manifest.file, 0, &header, sizeof(header))
+				&& WriteFileAt(manifest.file, sizeof(header), records.data(),
+					static_cast<UInt32>(recordBytes));
+		}
+
+		bool ManifestCodeTableMatches(const PersistentGlyphManifest& manifest,
+			const std::vector<UInt16>& encodedCodes)
+		{
+			if (!manifest.mappedData || encodedCodes.size() != manifest.recordCount)
+				return false;
+			const auto* records = reinterpret_cast<const PersistentGlyphManifestRecord*>(
+				manifest.mappedData + sizeof(PersistentGlyphManifestHeader));
+			for (size_t index = 0; index < encodedCodes.size(); ++index)
+			{
+				if (records[index].encodedCode != encodedCodes[index]
+					|| records[index].reserved != 0)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		bool InitializeGlyphManifest(PersistentGlyphManifest& manifest,
+			RuntimeFont& runtime, const std::vector<UInt16>& encodedCodes)
+		{
+			manifest.recordCount = static_cast<UInt32>(encodedCodes.size());
+			manifest.file = CreateFileW(manifest.path.c_str(),
+				GENERIC_READ | GENERIC_WRITE,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+				nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+			manifest.writable = manifest.file != INVALID_HANDLE_VALUE;
+			if (!manifest.writable)
+			{
+				manifest.file = CreateFileW(manifest.path.c_str(), GENERIC_READ,
+					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+					OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+			}
+			if (manifest.file == INVALID_HANDLE_VALUE)
+				return false;
+
+			const UInt64 expectedSize = sizeof(PersistentGlyphManifestHeader)
+				+ static_cast<UInt64>(manifest.recordCount)
+					* sizeof(PersistentGlyphManifestRecord);
+			UInt64 fileSize = 0;
+			PersistentGlyphManifestHeader header;
+			bool valid = GetFileSize64(manifest.file, fileSize)
+				&& fileSize == expectedSize
+				&& ReadFileAt(manifest.file, 0, &header, sizeof(header))
+				&& MatchesGlyphManifestHeader(header, runtime, manifest.manifestHash,
+					manifest.layoutContentHash, manifest.recordCount);
+			if (!valid)
+			{
+				if (!manifest.writable)
+					return false;
+				header = MakeGlyphManifestHeader(runtime, manifest.manifestHash,
+					manifest.layoutContentHash, manifest.recordCount);
+				if (!WriteGlyphManifestFile(manifest, header, encodedCodes))
+					return false;
+			}
+			if (!MapGlyphManifest(manifest))
+				return false;
+			if (ManifestCodeTableMatches(manifest, encodedCodes))
+				return true;
+			if (!manifest.writable)
+			{
+				UnmapGlyphManifest(manifest);
+				return false;
+			}
+			UnmapGlyphManifest(manifest);
+			header = MakeGlyphManifestHeader(runtime, manifest.manifestHash,
+				manifest.layoutContentHash, manifest.recordCount);
+			return WriteGlyphManifestFile(manifest, header, encodedCodes)
+				&& MapGlyphManifest(manifest)
+				&& ManifestCodeTableMatches(manifest, encodedCodes);
 		}
 
 		PersistentGlyphManifest* GetGlyphManifest(RuntimeFont& runtime)
 		{
 			if (runtime.manifest)
 				return runtime.manifest->mappedData ? runtime.manifest.get() : nullptr;
-			auto manifest = std::make_unique<PersistentGlyphManifest>();
 			const UInt64 layoutContentHash = ComputeRuntimeLayoutContentHash(runtime);
 			UInt64 manifestHash = HashBytes64(&layoutContentHash,
 				sizeof(layoutContentHash));
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			manifestHash = HashBytes64(&codePage,
 				sizeof(codePage), manifestHash);
+			auto pooled = State().persistentGlyphManifests.find(manifestHash);
+			if (pooled != State().persistentGlyphManifests.end())
+			{
+				if (std::shared_ptr<PersistentGlyphManifest> shared = pooled->second.lock())
+				{
+					if (shared->layoutContentHash != layoutContentHash)
+						return nullptr;
+					runtime.manifest = std::move(shared);
+					return runtime.manifest->mappedData ? runtime.manifest.get() : nullptr;
+				}
+				State().persistentGlyphManifests.erase(pooled);
+			}
+			auto manifest = std::make_shared<PersistentGlyphManifest>();
 			manifest->manifestHash = manifestHash;
 			manifest->layoutContentHash = layoutContentHash;
 			std::wstring directory;
 			if (!EnsurePersistentBitmapDirectory(directory))
 			{
-				runtime.manifest = std::move(manifest);
+				runtime.manifest = manifest;
+				State().persistentGlyphManifests[manifestHash] = manifest;
 				return nullptr;
 			}
 			wchar_t fileName[256] = {};
@@ -947,67 +1129,10 @@ namespace fonthook::vectorfont
 				static_cast<unsigned long long>(manifestHash));
 			manifest->path = directory + L"\\" + fileName;
 			State().usedPersistentCachePaths.insert(NormalizePathKey(manifest->path));
-			manifest->file = CreateFileW(manifest->path.c_str(),
-				GENERIC_READ | GENERIC_WRITE,
-				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-				nullptr, OPEN_ALWAYS,
-				FILE_ATTRIBUTE_NORMAL, nullptr);
-			manifest->writable = manifest->file != INVALID_HANDLE_VALUE;
-			if (manifest->writable)
-			{
-				TryEnableSparseFile(manifest->file);
-			}
-			if (!manifest->writable)
-			{
-				manifest->file = CreateFileW(manifest->path.c_str(), GENERIC_READ,
-					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-					OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-			}
-			if (manifest->file == INVALID_HANDLE_VALUE)
-			{
-				runtime.manifest = std::move(manifest);
-				return nullptr;
-			}
-			const UInt64 expectedSize = sizeof(PersistentGlyphManifestHeader)
-				+ static_cast<UInt64>(kPersistentGlyphManifestEntries)
-					* sizeof(PersistentGlyphManifestEntry);
-			UInt64 fileSize = 0;
-			PersistentGlyphManifestHeader header;
-			bool valid = GetFileSize64(manifest->file, fileSize)
-				&& fileSize == expectedSize
-				&& ReadFileAt(manifest->file, 0, &header, sizeof(header))
-				&& MatchesGlyphManifestHeader(header, runtime, manifestHash,
-					layoutContentHash);
-			if (!valid)
-			{
-				if (!manifest->writable)
-				{
-					runtime.manifest = std::move(manifest);
-					return nullptr;
-				}
-				header = MakeGlyphManifestHeader(runtime, manifestHash,
-					layoutContentHash);
-				if (!SetFileSize64(manifest->file, 0))
-				{
-					runtime.manifest = std::move(manifest);
-					return nullptr;
-				}
-				TryEnableSparseFile(manifest->file);
-				if (!SetFileSize64(manifest->file, expectedSize)
-					|| !WriteFileAt(manifest->file, 0, &header, sizeof(header)))
-				{
-					runtime.manifest = std::move(manifest);
-					return nullptr;
-				}
-			}
-			manifest->mapping = CreateFileMappingW(manifest->file, nullptr,
-				manifest->writable ? PAGE_READWRITE : PAGE_READONLY, 0, 0, nullptr);
-			if (manifest->mapping)
-			{
-				manifest->mappedData = static_cast<UInt8*>(MapViewOfFile(manifest->mapping,
-					manifest->writable ? FILE_MAP_WRITE | FILE_MAP_READ : FILE_MAP_READ,
-					0, 0, 0));
-			}
+			const std::vector<UInt16>& encodedCodes =
+				GetGlyphManifestCodeTable(codePage);
+			InitializeGlyphManifest(*manifest, runtime, encodedCodes);
+			State().persistentGlyphManifests[manifestHash] = manifest;
 			runtime.manifest = std::move(manifest);
 			return runtime.manifest->mappedData ? runtime.manifest.get() : nullptr;
 		}
@@ -1015,10 +1140,23 @@ namespace fonthook::vectorfont
 		PersistentGlyphManifestEntry* GetGlyphManifestEntry(
 			PersistentGlyphManifest& manifest, UInt32 encodedCode)
 		{
-			if (!manifest.mappedData || encodedCode >= kPersistentGlyphManifestEntries)
+			if (!manifest.mappedData || encodedCode > 0xFFFF || !manifest.recordCount)
 				return nullptr;
-			return reinterpret_cast<PersistentGlyphManifestEntry*>(
-				manifest.mappedData + sizeof(PersistentGlyphManifestHeader)) + encodedCode;
+			auto* records = reinterpret_cast<PersistentGlyphManifestRecord*>(
+				manifest.mappedData + sizeof(PersistentGlyphManifestHeader));
+			size_t first = 0;
+			size_t last = manifest.recordCount;
+			while (first < last)
+			{
+				const size_t middle = first + (last - first) / 2;
+				if (records[middle].encodedCode < encodedCode)
+					first = middle + 1;
+				else
+					last = middle;
+			}
+			return first < manifest.recordCount
+				&& records[first].encodedCode == encodedCode
+				? &records[first].entry : nullptr;
 		}
 
 		bool LoadGlyphManifest(RuntimeFont& runtime, UInt32 encodedCode,
@@ -1344,10 +1482,13 @@ namespace fonthook::vectorfont
 			recordCount += profile.recordCount;
 			byteCount += profile.validSize;
 		}
+		std::unordered_set<PersistentGlyphManifest*> flushedManifests;
 		for (auto& pair : State().runtimeFonts)
 		{
 			RuntimeFont& runtime = *pair.second;
 			if (!runtime.manifest || !runtime.manifest->mappedData)
+				continue;
+			if (!flushedManifests.insert(runtime.manifest.get()).second)
 				continue;
 			FlushViewOfFile(runtime.manifest->mappedData, 0);
 			if (runtime.manifest->writable)
