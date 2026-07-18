@@ -10,6 +10,8 @@
 #include "BSShaderProperty.hpp"
 
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -32,6 +34,13 @@ namespace fonthook::vectorfont
 	inline constexpr UInt32 kTileRenderPassCallSite = 0xB64FD1;
 	inline constexpr UInt32 kStockTileRenderPassImmediately = 0xB994F0;
 	inline constexpr UInt32 kMaximumShapeValidationFailureLogs = 16;
+	inline constexpr size_t kMetadataGenerationSlotCount = 64;
+
+	inline size_t GetMetadataGenerationSlot(const NiTriShape* shape)
+	{
+		return (reinterpret_cast<uintptr_t>(shape) >> 4)
+			% kMetadataGenerationSlotCount;
+	}
 
 	using RenderImmediateFn = void(__thiscall*)(NiTriShape*, NiRenderer*);
 	using DeleteThisFn = void(__thiscall*)(NiTriShape*);
@@ -113,6 +122,8 @@ namespace fonthook::vectorfont
 
 		std::mutex metadataMutex;
 		std::unordered_map<const NiTriShape*, A8ShapeMetadataPtr> shapeMetadata;
+		std::array<std::atomic<UInt64>, kMetadataGenerationSlotCount>
+			metadataGenerations = {};
 
 		std::mutex packetTemplateMutex;
 		std::unordered_map<NativeA8TemplateCacheKey,

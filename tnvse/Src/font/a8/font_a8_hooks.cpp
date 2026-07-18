@@ -15,6 +15,21 @@ namespace fonthook::vectorfont
 {
 	namespace
 	{
+		struct A8MetadataHotEntry
+		{
+			const NiTriShape* shape = nullptr;
+			UInt64 generation = 0;
+			A8ShapeMetadataPtr metadata;
+		};
+
+		thread_local std::array<A8MetadataHotEntry, 16> s_metadataHotEntries;
+
+		size_t GetMetadataHotSlot(const NiTriShape* shape)
+		{
+			return (reinterpret_cast<uintptr_t>(shape) >> 4)
+				% s_metadataHotEntries.size();
+		}
+
 		class NativePixelConstantScope
 		{
 		public:
@@ -173,6 +188,8 @@ namespace fonthook::vectorfont
 				const auto found = state.shapeMetadata.find(shape);
 				if (found != state.shapeMetadata.end())
 				{
+					state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(1,
+						std::memory_order_release);
 					retiredMetadata = std::move(found->second);
 					state.shapeMetadata.erase(found);
 				}
@@ -186,10 +203,26 @@ namespace fonthook::vectorfont
 	{
 		if (!shape)
 			return {};
-		std::lock_guard<std::mutex> lock(State().metadataMutex);
-		const auto found = State().shapeMetadata.find(shape);
-		return found != State().shapeMetadata.end()
-			? found->second : A8ShapeMetadataPtr{};
+		A8State& state = State();
+		const size_t generationSlot = GetMetadataGenerationSlot(shape);
+		const UInt64 generation = state.metadataGenerations[generationSlot].load(
+			std::memory_order_acquire);
+		A8MetadataHotEntry& hot = s_metadataHotEntries[GetMetadataHotSlot(shape)];
+		if (hot.shape == shape && hot.generation == generation && hot.metadata)
+			return hot.metadata;
+
+		std::lock_guard<std::mutex> lock(state.metadataMutex);
+		const auto found = state.shapeMetadata.find(shape);
+		if (found == state.shapeMetadata.end())
+		{
+			hot = {};
+			return {};
+		}
+		hot.shape = shape;
+		hot.generation = state.metadataGenerations[generationSlot].load(
+			std::memory_order_relaxed);
+		hot.metadata = found->second;
+		return hot.metadata;
 	}
 
 	TileRenderPassFn ReadTileRenderPassCallTarget()

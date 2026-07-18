@@ -402,8 +402,11 @@ namespace fonthook::vectorfont
 		if (!metadata->nativePayload)
 			return false;
 		{
-			std::lock_guard<std::mutex> lock(State().metadataMutex);
-			State().shapeMetadata[shape] = std::move(metadata);
+			A8State& state = State();
+			std::lock_guard<std::mutex> lock(state.metadataMutex);
+			state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(
+				1, std::memory_order_release);
+			state.shapeMetadata[shape] = std::move(metadata);
 		}
 		*reinterpret_cast<void***>(shape) = &State().triShapeVtable[1];
 		return true;

@@ -469,6 +469,16 @@ preflight is cached per shape while the shader generation, scaled-fill sampling
 class, alpha-blending class, and referenced D3D atlas textures remain unchanged.
 Any device reset, sampling/alpha transition, or page-resource replacement falls
 back to full packet and texture validation before the cache is refreshed.
+Per-frame native submission also keeps thread-local hot entries for shape
+metadata, static vertex residency, dynamic ring residency, static-promotion
+candidates, and the preferred proxy slot. Metadata entries are protected by a
+sharded mutation generation, while ring entries require the exact immutable
+payload owner plus the current resource serial and upload epoch. Consequently a
+shape deletion, pointer reuse, ring discard, device reset, or generation change
+cannot reuse stale state. A proxy remembers its stable Tile property and its
+last atlas property, texture, and shader; transforms, alpha, scissor state, and
+other live Tile values are still copied each submission, but unchanged
+reference-counted properties and bindings are not assigned again.
 
 ## Atlas allocation, mipmaps, and memory
 

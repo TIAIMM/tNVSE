@@ -73,6 +73,10 @@ namespace fonthook::vectorfont
 			NiTriShapePtr shape;
 			NiGeometryBufferData* buffer = nullptr;
 			NiVBChip* chip = nullptr;
+			TileShaderPropertyView* tile = nullptr;
+			NiTexturingProperty* atlasProperty = nullptr;
+			NiTexture* atlasTexture = nullptr;
+			BSShader* shader = nullptr;
 			bool inUse = false;
 		};
 
@@ -98,6 +102,43 @@ namespace fonthook::vectorfont
 			bool promotionDisabled = false;
 		};
 
+		struct NativeA8StaticHotEntry
+		{
+			const NativeA8PayloadTemplate* key = nullptr;
+			NativeA8PayloadTemplatePtr owner;
+			UInt32 baseVertex = 0;
+			UInt32 vertexCount = 0;
+			UInt32 resourceSerial = 0;
+		};
+
+		struct NativeA8UploadHotEntry
+		{
+			const NativeA8PayloadTemplate* key = nullptr;
+			NativeA8PayloadTemplatePtr owner;
+			UInt32 baseVertex = 0;
+			UInt32 vertexCount = 0;
+			UInt32 epoch = 0;
+			UInt32 resourceSerial = 0;
+		};
+
+		struct NativeA8CandidateHotEntry
+		{
+			const NativeA8PayloadTemplate* key = nullptr;
+			NativeA8PayloadTemplatePtr owner;
+			std::shared_ptr<NativeA8StaticCandidate> candidate;
+			UInt32 resourceSerial = 0;
+		};
+
+		struct NativeA8RingThreadState
+		{
+			UInt32 preferredProxy = std::numeric_limits<UInt32>::max();
+			NativeA8StaticHotEntry staticPayload;
+			NativeA8UploadHotEntry uploadedPayload;
+			NativeA8CandidateHotEntry staticCandidate;
+		};
+
+		thread_local NativeA8RingThreadState s_ringThread;
+
 		struct NativeA8RingState
 		{
 			std::mutex mutex;
@@ -120,7 +161,7 @@ namespace fonthook::vectorfont
 			std::unordered_map<const NativeA8PayloadTemplate*,
 				NativeA8StaticPayload> staticPayloads;
 			std::unordered_map<const NativeA8PayloadTemplate*,
-				NativeA8StaticCandidate> staticCandidates;
+				std::shared_ptr<NativeA8StaticCandidate>> staticCandidates;
 			std::atomic<UInt32> resourceSerial = 1;
 			bool loggedReady = false;
 		};
@@ -210,6 +251,7 @@ namespace fonthook::vectorfont
 
 		void ClearProxyGpuBindings(NativeA8Proxy& proxy)
 		{
+			proxy.shader = nullptr;
 			if (proxy.chip)
 				proxy.chip->m_pkVB = nullptr;
 			if (!proxy.buffer)
@@ -243,6 +285,9 @@ namespace fonthook::vectorfont
 			state.staticPayloads.clear();
 			state.staticCandidates.clear();
 			state.resourceSerial.fetch_add(1, std::memory_order_release);
+			s_ringThread.staticPayload = {};
+			s_ringThread.uploadedPayload = {};
+			s_ringThread.staticCandidate = {};
 			for (UInt32 index = 0; index < state.proxyCount; ++index)
 				ClearProxyGpuBindings(state.proxies[index]);
 			if (state.indexBuffer)
@@ -440,7 +485,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool BindPacketAtlasPage(NiTriShape& shape,
+		bool BindPacketAtlasPage(NativeA8Proxy& proxy,
 			const A8ShapeMetadata& metadata, UInt16 page)
 		{
 			if (page >= metadata.effects.atlasProperties.size()
@@ -454,18 +499,24 @@ namespace fonthook::vectorfont
 			NiTexturingProperty* desiredProperty =
 				metadata.effects.atlasProperties[page].m_pObject;
 			NiTexture* desiredTexture = metadata.effects.atlasTextures[page].m_pObject;
-			if (shape.GetTexturingProperty() != desiredProperty)
-			{
-				shape.RemoveProperty(NiProperty::TEXTURING);
-				shape.AddProperty(desiredProperty);
-				shape.UpdateProperties();
-			}
-			TileShaderPropertyView* tile = GetTileProperty(&shape);
-			if (!tile)
+			if (!proxy.shape || !proxy.tile)
 				return false;
-			if (tile->sourceTexture.m_pObject != desiredTexture)
-				ThisStdCall(0xBB7A10, tile, desiredTexture);
-			return tile->sourceTexture.m_pObject == desiredTexture;
+			if (proxy.atlasProperty != desiredProperty)
+			{
+				proxy.shape->RemoveProperty(NiProperty::TEXTURING);
+				proxy.shape->AddProperty(desiredProperty);
+				proxy.shape->UpdateProperties();
+				proxy.atlasProperty = proxy.shape->GetTexturingProperty();
+				if (proxy.atlasProperty != desiredProperty)
+					return false;
+			}
+			if (proxy.atlasTexture != desiredTexture
+				|| proxy.tile->sourceTexture.m_pObject != desiredTexture)
+			{
+				ThisStdCall(0xBB7A10, proxy.tile, desiredTexture);
+				proxy.atlasTexture = proxy.tile->sourceTexture.m_pObject;
+			}
+			return proxy.atlasTexture == desiredTexture;
 		}
 
 		void CopyScissorTail(const NiTriShape& source, NiTriShape& destination)
@@ -487,7 +538,8 @@ namespace fonthook::vectorfont
 			destination.fLODFade = source.fLODFade;
 			destination.fDepthBias = source.fDepthBias;
 			destination.uiShaderIndex = source.uiShaderIndex;
-			destination.alphaTexture = source.alphaTexture;
+			if (destination.alphaTexture.m_pObject != source.alphaTexture.m_pObject)
+				destination.alphaTexture = source.alphaTexture;
 			destination.overlayColor = source.overlayColor;
 			destination.tileAlpha = source.tileAlpha;
 			destination.textureTransform = source.textureTransform;
@@ -509,51 +561,70 @@ namespace fonthook::vectorfont
 				destination.m_Translate = source * origin;
 		}
 
-		bool SyncProxyState(const NiTriShape& facade, NiTriShape& proxy,
+		bool SyncProxyState(const NiTriShape& facade, NativeA8Proxy& proxyState,
 			const NiPoint3& geometryOrigin)
 		{
 			const TileShaderPropertyView* sourceTile = GetTileProperty(&facade);
-			TileShaderPropertyView* proxyTile = GetTileProperty(&proxy);
+			NiTriShape* proxy = proxyState.shape.m_pObject;
+			TileShaderPropertyView* proxyTile = proxyState.tile;
 			if (!sourceTile || !proxyTile || !proxyTile->sourceTexture
-				|| !proxy.GetTexturingProperty())
+				|| !proxy || !proxyState.atlasProperty)
 			{
 				return false;
 			}
 
-			ApplyRelativeOrigin(proxy.m_kLocal, facade.m_kLocal, geometryOrigin);
-			ApplyRelativeOrigin(proxy.m_kWorld, facade.m_kWorld, geometryOrigin);
-			CopyScissorTail(facade, proxy);
+			ApplyRelativeOrigin(proxy->m_kLocal, facade.m_kLocal, geometryOrigin);
+			ApplyRelativeOrigin(proxy->m_kWorld, facade.m_kWorld, geometryOrigin);
+			CopyScissorTail(facade, *proxy);
 
 			if (facade.m_pWorldBound)
 			{
-				if (!proxy.m_pWorldBound)
-					proxy.CreateWorldBoundIfMissing();
-				if (!proxy.m_pWorldBound)
+				if (!proxy->m_pWorldBound)
+					proxy->CreateWorldBoundIfMissing();
+				if (!proxy->m_pWorldBound)
 					return false;
-				*proxy.m_pWorldBound = *facade.m_pWorldBound;
+				*proxy->m_pWorldBound = *facade.m_pWorldBound;
 			}
-			proxy.m_uiFlags = facade.m_uiFlags;
-			proxy.m_kProperties.m_spAlphaProperty =
-				facade.m_kProperties.m_spAlphaProperty;
-			proxy.m_kProperties.m_spCullingProperty =
-				facade.m_kProperties.m_spCullingProperty;
-			proxy.m_kProperties.m_spMaterialProperty =
-				facade.m_kProperties.m_spMaterialProperty;
-			proxy.m_kProperties.m_spStencilProperty =
-				facade.m_kProperties.m_spStencilProperty;
-			proxy.m_kProperties.m_spUnknownProperty =
-				facade.m_kProperties.m_spUnknownProperty;
+			proxy->m_uiFlags = facade.m_uiFlags;
+			if (proxy->m_kProperties.m_spAlphaProperty.m_pObject
+				!= facade.m_kProperties.m_spAlphaProperty.m_pObject)
+				proxy->m_kProperties.m_spAlphaProperty =
+					facade.m_kProperties.m_spAlphaProperty;
+			if (proxy->m_kProperties.m_spCullingProperty.m_pObject
+				!= facade.m_kProperties.m_spCullingProperty.m_pObject)
+				proxy->m_kProperties.m_spCullingProperty =
+					facade.m_kProperties.m_spCullingProperty;
+			if (proxy->m_kProperties.m_spMaterialProperty.m_pObject
+				!= facade.m_kProperties.m_spMaterialProperty.m_pObject)
+				proxy->m_kProperties.m_spMaterialProperty =
+					facade.m_kProperties.m_spMaterialProperty;
+			if (proxy->m_kProperties.m_spStencilProperty.m_pObject
+				!= facade.m_kProperties.m_spStencilProperty.m_pObject)
+				proxy->m_kProperties.m_spStencilProperty =
+					facade.m_kProperties.m_spStencilProperty;
+			if (proxy->m_kProperties.m_spUnknownProperty.m_pObject
+				!= facade.m_kProperties.m_spUnknownProperty.m_pObject)
+				proxy->m_kProperties.m_spUnknownProperty =
+					facade.m_kProperties.m_spUnknownProperty;
 			CopyTileDynamicState(*sourceTile, *proxyTile);
 			return true;
 		}
 
-		UInt32 AcquireProxyLocked(NativeA8RingState& state)
+		UInt32 AcquireProxyLocked(NativeA8RingState& state,
+			NativeA8RingThreadState& thread)
 		{
+			if (thread.preferredProxy < state.proxyCount
+				&& !state.proxies[thread.preferredProxy].inUse)
+			{
+				state.proxies[thread.preferredProxy].inUse = true;
+				return thread.preferredProxy;
+			}
 			for (UInt32 index = 0; index < state.proxyCount; ++index)
 			{
 				if (!state.proxies[index].inUse)
 				{
 					state.proxies[index].inUse = true;
+					thread.preferredProxy = index;
 					return index;
 				}
 			}
@@ -566,6 +637,23 @@ namespace fonthook::vectorfont
 		{
 			if (!state.staticVertexBuffer)
 				return false;
+			const UInt32 resourceSerial = state.resourceSerial.load(
+				std::memory_order_relaxed);
+			NativeA8StaticHotEntry& hot = s_ringThread.staticPayload;
+			if (hot.key == payloadTemplate.get()
+				&& hot.resourceSerial == resourceSerial)
+			{
+				if (hot.owner.get() == payloadTemplate.get()
+					&& hot.vertexCount == vertexCount
+					&& hot.baseVertex <= state.staticVertexCapacity
+					&& vertexCount <= state.staticVertexCapacity - hot.baseVertex)
+				{
+					baseVertex = hot.baseVertex;
+					RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexHit);
+					return true;
+				}
+				hot = {};
+			}
 			auto found = state.staticPayloads.find(payloadTemplate.get());
 			if (found == state.staticPayloads.end())
 				return false;
@@ -578,6 +666,11 @@ namespace fonthook::vectorfont
 					- found->second.baseVertex)
 			{
 				baseVertex = found->second.baseVertex;
+				hot.key = payloadTemplate.get();
+				hot.owner = owner;
+				hot.baseVertex = found->second.baseVertex;
+				hot.vertexCount = found->second.vertexCount;
+				hot.resourceSerial = resourceSerial;
 				RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexHit);
 				return true;
 			}
@@ -592,6 +685,16 @@ namespace fonthook::vectorfont
 		{
 			if (!state.staticVertexBuffer || vertexCount > state.staticVertexCapacity)
 				return nullptr;
+			const UInt32 resourceSerial = state.resourceSerial.load(
+				std::memory_order_relaxed);
+			NativeA8CandidateHotEntry& hot = s_ringThread.staticCandidate;
+			if (hot.key == payloadTemplate.get()
+				&& hot.resourceSerial == resourceSerial && hot.candidate)
+			{
+				if (hot.owner.get() == payloadTemplate.get())
+					return hot.candidate.get();
+				hot = {};
+			}
 			auto found = state.staticCandidates.find(payloadTemplate.get());
 			if (found == state.staticCandidates.end())
 			{
@@ -600,7 +703,7 @@ namespace fonthook::vectorfont
 					for (auto current = state.staticCandidates.begin();
 						current != state.staticCandidates.end();)
 					{
-						if (current->second.owner.expired())
+						if (!current->second || current->second->owner.expired())
 							current = state.staticCandidates.erase(current);
 						else
 							++current;
@@ -608,22 +711,26 @@ namespace fonthook::vectorfont
 					if (state.staticCandidates.size() >= kStaticCandidateLimit)
 						return nullptr;
 				}
-				NativeA8StaticCandidate candidate;
-				candidate.owner = payloadTemplate;
+				auto candidate = std::make_shared<NativeA8StaticCandidate>();
+				candidate->owner = payloadTemplate;
 				found = state.staticCandidates.emplace(
 					payloadTemplate.get(), std::move(candidate)).first;
 			}
 			else
 			{
 				const std::shared_ptr<const NativeA8PayloadTemplate> owner =
-					found->second.owner.lock();
+					found->second->owner.lock();
 				if (owner.get() != payloadTemplate.get())
 				{
-					found->second = NativeA8StaticCandidate{};
-					found->second.owner = payloadTemplate;
+					found->second = std::make_shared<NativeA8StaticCandidate>();
+					found->second->owner = payloadTemplate;
 				}
 			}
-			return &found->second;
+			hot.key = payloadTemplate.get();
+			hot.owner = payloadTemplate;
+			hot.candidate = found->second;
+			hot.resourceSerial = resourceSerial;
+			return hot.candidate.get();
 		}
 
 		bool PromoteStaticPayloadLocked(NativeA8RingState& state,
@@ -676,6 +783,11 @@ namespace fonthook::vectorfont
 			state.staticPayloads[payloadTemplate.get()] = {
 				payloadTemplate, baseVertex, vertexCount };
 			state.staticCandidates.erase(payloadTemplate.get());
+			s_ringThread.staticPayload = {
+				payloadTemplate.get(), payloadTemplate, baseVertex, vertexCount,
+				state.resourceSerial.load(std::memory_order_relaxed) };
+			if (s_ringThread.staticCandidate.key == payloadTemplate.get())
+				s_ringThread.staticCandidate = {};
 			RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexUpload);
 			RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexUploadBytes,
 				byteCount);
@@ -716,6 +828,13 @@ namespace fonthook::vectorfont
 				break;
 			}
 			proxy.shape->UpdateProperties();
+			proxy.tile = GetTileProperty(proxy.shape.m_pObject);
+			proxy.atlasProperty = proxy.shape->GetTexturingProperty();
+			proxy.atlasTexture = proxy.tile
+				? proxy.tile->sourceTexture.m_pObject : nullptr;
+			proxy.shader = proxy.shape->GetShader();
+			if (!proxy.tile || !proxy.atlasProperty || !proxy.atlasTexture)
+				break;
 			state.proxies[state.proxyCount++] = std::move(proxy);
 		}
 		return state.proxyCount != 0;
@@ -758,7 +877,7 @@ namespace fonthook::vectorfont
 
 		NativeA8RingState& state = RingState();
 		std::lock_guard<std::mutex> lock(state.mutex);
-		const UInt32 proxyIndex = AcquireProxyLocked(state);
+		const UInt32 proxyIndex = AcquireProxyLocked(state, s_ringThread);
 		if (proxyIndex == std::numeric_limits<UInt32>::max())
 		{
 			payload.packetPrepareFailure.store(
@@ -808,27 +927,56 @@ namespace fonthook::vectorfont
 		if (!staticResident)
 		{
 			bool reusedUpload = false;
-			auto uploaded = state.uploadedPayloads.find(
-				payload.payloadTemplate.get());
-			if (uploaded != state.uploadedPayloads.end())
+			const UInt32 resourceSerial = state.resourceSerial.load(
+				std::memory_order_relaxed);
+			NativeA8UploadHotEntry& hot = s_ringThread.uploadedPayload;
+			if (hot.key == payload.payloadTemplate.get()
+				&& hot.resourceSerial == resourceSerial
+				&& hot.epoch == state.uploadEpoch)
 			{
-				const std::shared_ptr<const NativeA8PayloadTemplate> owner =
-					uploaded->second.owner.lock();
-				if (owner.get() == payload.payloadTemplate.get()
-					&& uploaded->second.epoch == state.uploadEpoch
-					&& uploaded->second.vertexCount == totalVertices
-					&& uploaded->second.baseVertex <= state.vertexCapacity
+				if (hot.owner.get() == payload.payloadTemplate.get()
+					&& hot.vertexCount == totalVertices
+					&& hot.baseVertex <= state.vertexCapacity
 					&& totalVertices <= state.vertexCapacity
-						- uploaded->second.baseVertex)
+						- hot.baseVertex)
 				{
-					startVertex = uploaded->second.baseVertex;
+					startVertex = hot.baseVertex;
 					reusedUpload = true;
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::DynamicVertexReuse);
 				}
 				else
+					hot = {};
+			}
+
+			if (!reusedUpload)
+			{
+				auto uploaded = state.uploadedPayloads.find(
+					payload.payloadTemplate.get());
+				if (uploaded != state.uploadedPayloads.end())
 				{
-					state.uploadedPayloads.erase(uploaded);
+					const std::shared_ptr<const NativeA8PayloadTemplate> owner =
+						uploaded->second.owner.lock();
+					if (owner.get() == payload.payloadTemplate.get()
+						&& uploaded->second.epoch == state.uploadEpoch
+						&& uploaded->second.vertexCount == totalVertices
+						&& uploaded->second.baseVertex <= state.vertexCapacity
+						&& totalVertices <= state.vertexCapacity
+							- uploaded->second.baseVertex)
+					{
+						startVertex = uploaded->second.baseVertex;
+						reusedUpload = true;
+						hot = {
+							payload.payloadTemplate.get(), owner,
+							uploaded->second.baseVertex, uploaded->second.vertexCount,
+							uploaded->second.epoch, resourceSerial };
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::DynamicVertexReuse);
+					}
+					else
+					{
+						state.uploadedPayloads.erase(uploaded);
+					}
 				}
 			}
 
@@ -845,6 +993,7 @@ namespace fonthook::vectorfont
 					if (!state.uploadEpoch)
 						++state.uploadEpoch;
 					state.uploadedPayloads.clear();
+					s_ringThread.uploadedPayload = {};
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::DynamicVertexDiscard);
 				}
@@ -886,6 +1035,10 @@ namespace fonthook::vectorfont
 				state.uploadedPayloads[payload.payloadTemplate.get()] = {
 					payload.payloadTemplate, startVertex, totalVertices,
 					state.uploadEpoch };
+				s_ringThread.uploadedPayload = {
+					payload.payloadTemplate.get(), payload.payloadTemplate,
+					startVertex, totalVertices, state.uploadEpoch,
+					resourceSerial };
 				RecordFreeTypePerf(FreeTypePerfCounter::DynamicVertexUpload);
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::DynamicVertexUploadBytes, byteCount);
@@ -897,7 +1050,7 @@ namespace fonthook::vectorfont
 
 		NativeA8Proxy& proxy = state.proxies[proxyIndex];
 		if (!proxy.shape || !proxy.buffer || !proxy.chip
-			|| !SyncProxyState(*facade, *proxy.shape, payload.geometryOrigin))
+			|| !SyncProxyState(*facade, proxy, payload.geometryOrigin))
 		{
 			proxy.inUse = false;
 			payload.packetPrepareFailure.store(
@@ -981,7 +1134,7 @@ namespace fonthook::vectorfont
 			|| proxy != submission.proxyShape
 			|| buffer != submission.proxyBuffer
 			|| chip != submission.proxyChip
-			|| !BindPacketAtlasPage(*proxy, metadata, packet.atlasPage))
+			|| !BindPacketAtlasPage(reservedProxy, metadata, packet.atlasPage))
 		{
 			payload.packetPrepareFailure.store(
 				NativeA8PacketPrepareFailure::Geometry,
@@ -1005,13 +1158,17 @@ namespace fonthook::vectorfont
 		// null; stock then uses m_uiTriCount for this single draw.
 		buffer->m_uiNumArrays = kCanonicalArrayCount;
 		proxy->GetModelData()->m_kBound = source.bound;
-		proxy->SetShader(packet.shader);
-		if (proxy->GetShader() != packet.shader)
+		if (reservedProxy.shader != packet.shader)
 		{
-			payload.packetPrepareFailure.store(
-				NativeA8PacketPrepareFailure::ShaderBinding,
-				std::memory_order_relaxed);
-			return NativeA8FallbackReason::PacketPrepare;
+			proxy->SetShader(packet.shader);
+			reservedProxy.shader = proxy->GetShader();
+			if (reservedProxy.shader != packet.shader)
+			{
+				payload.packetPrepareFailure.store(
+					NativeA8PacketPrepareFailure::ShaderBinding,
+					std::memory_order_relaxed);
+				return NativeA8FallbackReason::PacketPrepare;
+			}
 		}
 
 		++submission.nextPacket;
