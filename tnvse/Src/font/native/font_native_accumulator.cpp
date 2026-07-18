@@ -39,6 +39,44 @@ namespace fonthook::vectorfont
 				NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
 		}
 
+		void InvalidateNativePreflight(NativeA8ShapePayload& payload)
+		{
+			payload.preparedGeneration = 0;
+			payload.preflightAtlasTextures.clear();
+			for (NativeA8Packet& packet : payload.packets)
+				packet.shader = nullptr;
+		}
+
+		bool IsNativePreflightCacheCurrent(const A8ShapeMetadata& metadata,
+			const NativeA8ShapePayload& payload, UInt32 generation,
+			bool scaledFillSampling, bool alphaBlending)
+		{
+			if (payload.preparedGeneration != generation
+				|| payload.preflightScaledFillSampling != scaledFillSampling
+				|| payload.preflightAlphaBlending != alphaBlending
+				|| payload.preflightAtlasTextures.size()
+					!= metadata.effects.atlasTextures.size())
+			{
+				return false;
+			}
+
+			// Device reset changes the native generation. This page-level identity
+			// check additionally catches an atlas wrapper being rebuilt or replaced
+			// without paying the old per-packet validation and shader lookup cost.
+			for (size_t page = 0; page < payload.preflightAtlasTextures.size(); ++page)
+			{
+				const void* expected = payload.preflightAtlasTextures[page];
+				if (!expected)
+					continue;
+				NiTexture* texture = metadata.effects.atlasTextures[page].m_pObject;
+				NiDX9TextureData* textureData = texture
+					? texture->GetDX9RendererData() : nullptr;
+				if (!textureData || textureData->GetD3DTexture() != expected)
+					return false;
+			}
+			return true;
+		}
+
 		NativeA8FallbackReason PreflightNativeGroupImpl(NiTriShape* facade,
 			const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload)
 		{
@@ -58,14 +96,23 @@ namespace fonthook::vectorfont
 			const UInt32 generation = GetNativeA8ShaderGeneration();
 			if (!generation)
 				return NativeA8FallbackReason::ShaderGeneration;
-			if (payload.preparedGeneration != generation)
+			const bool scaledFillSampling = NeedsScaledFillSampling(facade);
+			const NiAlphaProperty* alpha = facade->GetAlphaProperty();
+			const bool alphaBlending = alpha && alpha->GetAlphaBlending();
+			if (IsNativePreflightCacheCurrent(metadata, payload, generation,
+				scaledFillSampling, alphaBlending))
 			{
-				for (NativeA8Packet& packet : payload.packets)
-					packet.shader = nullptr;
-				payload.preparedGeneration = 0;
+				ClearNativePacketFailure(payload);
+				return NativeA8FallbackReason::None;
 			}
 
-			const bool scaledFillSampling = NeedsScaledFillSampling(facade);
+			InvalidateNativePreflight(payload);
+			payload.preflightScaledFillSampling = scaledFillSampling;
+			payload.preflightAlphaBlending = alphaBlending;
+			payload.preflightAtlasTextures.assign(
+				metadata.effects.atlasTextures.size(), nullptr);
+			std::vector<UInt8> referencedPages(
+				metadata.effects.atlasTextures.size(), 0);
 			for (NativeA8Packet& packet : payload.packets)
 			{
 				if (packet.templateIndex >= payload.payloadTemplate->packets.size()
@@ -84,14 +131,25 @@ namespace fonthook::vectorfont
 				{
 					return NativeA8FallbackReason::PacketBuild;
 				}
+				referencedPages[packet.atlasPage] = 1;
+			}
 
-				NiTexture* texture = metadata.effects.atlasTextures[
-					packet.atlasPage].m_pObject;
+			for (size_t page = 0; page < referencedPages.size(); ++page)
+			{
+				if (!referencedPages[page])
+					continue;
+				NiTexture* texture = metadata.effects.atlasTextures[page].m_pObject;
 				NiDX9TextureData* textureData = texture
 					? texture->GetDX9RendererData() : nullptr;
-				if (!textureData || !textureData->GetD3DTexture())
+				const void* d3dTexture = textureData
+					? textureData->GetD3DTexture() : nullptr;
+				if (!d3dTexture)
 					return NativeA8FallbackReason::PageTexture;
+				payload.preflightAtlasTextures[page] = d3dTexture;
+			}
 
+			for (NativeA8Packet& packet : payload.packets)
+			{
 				packet.shader = ResolveNativeA8PacketShader(packet, facade,
 					scaledFillSampling);
 				if (!packet.shader)

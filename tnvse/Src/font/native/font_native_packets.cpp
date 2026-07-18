@@ -429,6 +429,7 @@ namespace fonthook::vectorfont
 			payload->packetPrepareFailure.store(
 				NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
 			payload->preparedGeneration = 0;
+			payload->preflightAtlasTextures.clear();
 			for (NativeA8Packet& packet : payload->packets)
 				packet.shader = nullptr;
 		}

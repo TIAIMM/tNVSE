@@ -557,9 +557,18 @@ namespace fonthook::vectorfont
 		RuntimeFont* runtime = nullptr;
 	};
 
+	struct FinalLayoutHotCacheEntry
+	{
+		size_t hash = 0;
+		LayoutCacheKey key;
+		FreeTypeLayoutRun layout;
+		bool valid = false;
+	};
+
 	struct FreeTypeThreadState
 	{
 		std::array<ActiveRuntimeCache, 4> activeRuntimes;
+		std::array<FinalLayoutHotCacheEntry, 16> finalLayouts;
 	};
 
 	struct FreeTypeState
@@ -627,7 +636,8 @@ namespace fonthook::vectorfont
 		VectorEncodedGlyph& glyph);
 	RuntimeFont* FindActiveRuntime(const Font* font);
 	bool LayoutRuntimeRun(RuntimeFont& runtime, const char* text,
-		size_t length, bool allowShaping, FreeTypeLayoutRun& layout);
+		size_t length, bool allowShaping, FreeTypeLayoutRun& layout,
+		bool finalRun = false);
 
 	UInt64 ComputeRuntimeMaskContentHash(RuntimeFont& runtime);
 	bool LoadGlyphManifest(RuntimeFont& runtime, UInt32 encodedCode,

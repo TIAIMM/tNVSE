@@ -133,7 +133,13 @@ namespace fonthook::vectorfont
 			NativeA8FallbackReason::None;
 		std::atomic<NativeA8PacketPrepareFailure> packetPrepareFailure =
 			NativeA8PacketPrepareFailure::None;
+		// A successful preflight is reusable while the shader generation, scaled
+		// fill sampling class, and the referenced page textures remain unchanged.
+		// Null entries belong to atlas pages that no packet in this payload uses.
+		std::vector<const void*> preflightAtlasTextures;
 		UInt32 preparedGeneration = 0;
+		bool preflightScaledFillSampling = false;
+		bool preflightAlphaBlending = false;
 		bool buildComplete = false;
 	};
 	using NativeA8ShapePayloadPtr = std::shared_ptr<NativeA8ShapePayload>;

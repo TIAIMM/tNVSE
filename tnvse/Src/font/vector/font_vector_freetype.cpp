@@ -24,6 +24,17 @@ namespace fonthook
 			*runtime, apText, auiLength, abAllowShaping, arLayout);
 	}
 
+	bool LayoutFreeTypeFinalRun(Font* apFont, const char* apText, size_t auiLength,
+		FreeTypeLayoutRun& arLayout, bool abAllowShaping)
+	{
+		arLayout = {};
+		if (!apFont || !apText || !auiLength)
+			return false;
+		vectorfont::RuntimeFont* runtime = vectorfont::FindActiveRuntime(apFont);
+		return runtime && vectorfont::LayoutRuntimeRun(
+			*runtime, apText, auiLength, abAllowShaping, arLayout, true);
+	}
+
 	bool IsFreeTypeFontConfigured(UInt32 auiFontId)
 	{
 		return vectorfont::FindConfig(auiFontId) != nullptr;

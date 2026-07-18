@@ -276,24 +276,11 @@ namespace fonthook::vectorfont
 					faultOperation = "capture-pixel-constants";
 					faultResult = D3DERR_DEVICELOST;
 				}
-				for (UInt32 packetIndex = 0;
-					packetIndex < payload->packets.size(); ++packetIndex)
+				if (!runtimeFault)
 				{
-					if (runtimeFault)
-						break;
-					NiTriShape* proxyShape = nullptr;
-					const NativeA8FallbackReason packetFailure =
-						PrepareNativeA8RingPacket(shape, *metadata, *payload,
-							ringScope.submission, packetIndex, proxyShape);
-					if (packetFailure != NativeA8FallbackReason::None || !proxyShape)
-					{
-						runtimeFault = true;
-						runtimeFailure = packetFailure != NativeA8FallbackReason::None
-							? packetFailure : NativeA8FallbackReason::RuntimeFault;
-						faultOperation = "ring-packet";
-						break;
-					}
-					packetScope.Select(proxyShape);
+					// No unrelated draw can occur while this intercepted Tile group is
+					// expanded. Each native profile overwrites its own c0-c4 values, so
+					// preserve the incoming game state once for the complete packet group.
 					NativePixelConstantScope constants(device);
 					if (!constants.Captured())
 					{
@@ -301,11 +288,33 @@ namespace fonthook::vectorfont
 						constantStateFault = true;
 						faultOperation = constants.Operation();
 						faultResult = constants.Result();
-						break;
 					}
-					state.originalTileRenderPass(pass, currentPass, testAlpha,
-						blendAlpha, setupDrawmode);
-					drewPacket = true;
+					for (UInt32 packetIndex = 0; !runtimeFault
+						&& packetIndex < payload->packets.size(); ++packetIndex)
+					{
+						NiTriShape* proxyShape = nullptr;
+						const NativeA8FallbackReason packetFailure =
+							PrepareNativeA8RingPacket(shape, *metadata, *payload,
+								ringScope.submission, packetIndex, proxyShape);
+						if (packetFailure != NativeA8FallbackReason::None || !proxyShape)
+						{
+							runtimeFault = true;
+							runtimeFailure = packetFailure != NativeA8FallbackReason::None
+								? packetFailure : NativeA8FallbackReason::RuntimeFault;
+							faultOperation = "ring-packet";
+							break;
+						}
+						packetScope.Select(proxyShape);
+						state.originalTileRenderPass(pass, currentPass, testAlpha,
+							blendAlpha, setupDrawmode);
+						drewPacket = true;
+						if (!IsNativeA8ShaderGenerationCurrent(
+							payload->preparedGeneration))
+						{
+							runtimeFault = true;
+							break;
+						}
+					}
 					if (!constants.RestoreAndVerify())
 					{
 						runtimeFault = true;
@@ -313,12 +322,6 @@ namespace fonthook::vectorfont
 						faultOperation = constants.Operation();
 						faultResult = constants.Result();
 						faultRegister = constants.MismatchRegister();
-						break;
-					}
-					if (!IsNativeA8ShaderGenerationCurrent(payload->preparedGeneration))
-					{
-						runtimeFault = true;
-						break;
 					}
 				}
 			}

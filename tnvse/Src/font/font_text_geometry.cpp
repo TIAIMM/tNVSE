@@ -434,7 +434,7 @@ namespace fonthook
 					PreparedTextMeasuredRun measured;
 					measured.byteOffset = static_cast<size_t>(cursor - preparedText);
 					measured.byteLength = static_cast<size_t>(runEnd - cursor);
-					measured.available = LayoutFreeTypeRun(font, cursor,
+					measured.available = LayoutFreeTypeFinalRun(font, cursor,
 						measured.byteLength, measured.layout, true);
 					if (measured.available)
 						width += measured.layout.advance;
@@ -560,7 +560,7 @@ namespace fonthook
 			const FreeTypeLayoutRun* run = runLength
 				? layoutScratch.FindMeasuredRun(static_cast<size_t>(byteIndex),
 					runLength, measuredRunCursor) : nullptr;
-			if (!run && runLength && LayoutFreeTypeRun(font,
+			if (!run && runLength && LayoutFreeTypeFinalRun(font,
 				&textData.xNewText.pString[byteIndex], runLength, fallbackRun, true))
 			{
 				run = &fallbackRun;
@@ -935,7 +935,7 @@ namespace fonthook
 						&apTextString->pString[runEnd], dbcsCode) ? 2 : 1;
 				}
 				FreeTypeLayoutRun run;
-				if (runEnd > byteIndex && LayoutFreeTypeRun(this,
+				if (runEnd > byteIndex && LayoutFreeTypeFinalRun(this,
 					&apTextString->pString[byteIndex], runEnd - byteIndex, run, true))
 				{
 					float runPen = currentX;

@@ -203,6 +203,15 @@ comma-separated `features` attribute uses HarfBuzz feature syntax, for example
 `CharData` per encoded character and therefore uses precise FreeType kerning
 without GSUB substitutions.
 
+The final printable runs produced after prepared-text wrapping and the runs
+consumed by `Font::MakeString` share a small per-thread hot cache. Its key
+contains the font layout identity, active code page, shaping mode, and the exact
+encoded bytes; a hash match is always followed by full key and byte comparison.
+The cached `FreeTypeLayoutRun` owns immutable shared glyph storage, so an exact
+match reuses the same HarfBuzz result without taking the global layout-cache
+lock or changing run boundaries. Pre-wrap measurement is deliberately excluded
+from the hot cache and retains the existing layout behavior.
+
 A positive `fixedWidth` centers each glyph body in a logical cell, disables
 kerning and HarfBuzz shaping for that byte class, and makes its final advance
 `fixedWidth + tracking`. This matches the grid-oriented DCFGCF behavior used by
@@ -452,6 +461,14 @@ separate source-over alpha where the target supports alpha writes, so shadows
 outside the fill survive off-screen UI compositing without reducing existing
 destination alpha. A detected profile, packet, or device-state mismatch marks
 the native generation faulty and suppresses the affected marked submission.
+The incoming pixel constants `c0-c4` are captured once for the complete native
+text group, then restored and verified once after its final packet; individual
+shadow, glow, outline, and fill packets overwrite their complete constant
+contract and do not perform redundant save/restore cycles. Native packet
+preflight is cached per shape while the shader generation, scaled-fill sampling
+class, alpha-blending class, and referenced D3D atlas textures remain unchanged.
+Any device reset, sampling/alpha transition, or page-resource replacement falls
+back to full packet and texture validation before the cache is refreshed.
 
 ## Atlas allocation, mipmaps, and memory
 

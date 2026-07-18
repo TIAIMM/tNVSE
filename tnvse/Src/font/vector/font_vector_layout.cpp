@@ -266,6 +266,38 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		FinalLayoutHotCacheEntry* GetFinalLayoutHotCacheEntry(
+			FreeTypeThreadState& thread, const LayoutCacheLookupKey& lookup,
+			size_t hash)
+		{
+			FinalLayoutHotCacheEntry& entry =
+				thread.finalLayouts[hash % thread.finalLayouts.size()];
+			if (!entry.valid || entry.hash != hash)
+				return nullptr;
+			const LayoutCacheKeyEqual equal;
+			return equal(entry.key, lookup) ? &entry : nullptr;
+		}
+
+		void StoreFinalLayoutHotCacheEntry(FreeTypeThreadState& thread,
+			const LayoutCacheLookupKey& lookup, size_t hash,
+			const FreeTypeLayoutRun& layout)
+		{
+			constexpr size_t kMaximumFinalLayoutHotTextBytes = 65536;
+			if (!layout.glyphs || lookup.text.size() > kMaximumFinalLayoutHotTextBytes)
+				return;
+			FinalLayoutHotCacheEntry& entry =
+				thread.finalLayouts[hash % thread.finalLayouts.size()];
+			entry.hash = hash;
+			entry.key = {
+				lookup.layoutHash,
+				lookup.codePage,
+				lookup.allowShaping,
+				std::string(lookup.text)
+			};
+			entry.layout = layout;
+			entry.valid = true;
+		}
+
 		struct CollisionSpan
 		{
 			float top = 0.0f;
@@ -433,21 +465,38 @@ namespace fonthook::vectorfont
 		}
 
 	bool LayoutRuntimeRun(RuntimeFont& runtime, const char* text,
-		size_t length, bool allowShaping, FreeTypeLayoutRun& layout)
+		size_t length, bool allowShaping, FreeTypeLayoutRun& layout,
+		bool finalRun)
 	{
-		FreeTypeState& state = State();
-		std::lock_guard<std::recursive_mutex> lock(state.mutex);
+		const UInt32 codePage = GetFreeTypeTextCodePage();
 		const LayoutCacheLookupKey lookup = {
 			runtime.config->layoutHash,
-			GetFreeTypeTextCodePage(),
+			codePage,
 			allowShaping,
 			std::string_view(text, length)
 		};
+		const size_t lookupHash = LayoutCacheKeyHash{}(lookup);
+		FreeTypeThreadState& thread = ThreadState();
+		if (finalRun)
+		{
+			if (FinalLayoutHotCacheEntry* hot = GetFinalLayoutHotCacheEntry(
+				thread, lookup, lookupHash))
+			{
+				layout = hot->layout;
+				RecordFreeTypePerf(FreeTypePerfCounter::LayoutHit);
+				return true;
+			}
+		}
+
+		FreeTypeState& state = State();
+		std::lock_guard<std::recursive_mutex> lock(state.mutex);
 		auto existing = state.layoutCache.find(lookup);
 		if (existing != state.layoutCache.end())
 		{
 			TouchLayoutCacheEntry(state, existing->second);
 			layout = existing->second.layout;
+			if (finalRun)
+				StoreFinalLayoutHotCacheEntry(thread, lookup, lookupHash, layout);
 			RecordFreeTypePerf(FreeTypePerfCounter::LayoutHit);
 			return true;
 		}
@@ -458,7 +507,7 @@ namespace fonthook::vectorfont
 		{
 			LayoutCacheKey key = {
 				runtime.config->layoutHash,
-				GetFreeTypeTextCodePage(),
+				codePage,
 				allowShaping,
 				std::string(text, length)
 			};
@@ -471,6 +520,8 @@ namespace fonthook::vectorfont
 			state.layoutCacheBytes += bytes;
 			TrimLayoutCache(state);
 		}
+		if (finalRun)
+			StoreFinalLayoutHotCacheEntry(thread, lookup, lookupHash, layout);
 		return true;
 	}
 }
