@@ -41,6 +41,7 @@ include(TnvseDependencies)
 include(TnvseShaders)
 
 tnvse_add_dxsdk_target()
+tnvse_add_vcltl_target()
 tnvse_add_commonlib_target()
 tnvse_add_freetype_target()
 tnvse_add_harfbuzz_target()

@@ -3,6 +3,39 @@ include_guard(GLOBAL)
 set(TNVSE_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/third_party")
 set(TNVSE_DXSDK_PACKAGE_DIR
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/packages/Microsoft.DXSDK.D3DX.9.29.952.8/build/native")
+set(TNVSE_VCLTL_VERSION "5.3.1")
+set(TNVSE_VCLTL_TARGET_VERSION "6.0.6000.0")
+set(TNVSE_VCLTL_PACKAGE_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/packages/VC-LTL.${TNVSE_VCLTL_VERSION}/build/native")
+
+function(tnvse_add_vcltl_target)
+  set(vcltl_target_root
+    "${TNVSE_VCLTL_PACKAGE_DIR}/TargetPlatform/${TNVSE_VCLTL_TARGET_VERSION}")
+  set(vcltl_library_dir "${vcltl_target_root}/lib/Win32")
+
+  foreach(required_file IN ITEMS
+      "${TNVSE_VCLTL_PACKAGE_DIR}/TargetPlatform/header/corecrt.h"
+      "${vcltl_target_root}/header/vcruntime.h"
+      "${vcltl_library_dir}/libucrt.lib"
+      "${vcltl_library_dir}/libvcruntime.lib")
+    if(NOT EXISTS "${required_file}")
+      message(FATAL_ERROR
+        "VC-LTL ${TNVSE_VCLTL_VERSION} NuGet files are missing. "
+        "Run: nuget restore tnvse/packages.config -PackagesDirectory tnvse/packages")
+    endif()
+  endforeach()
+
+  add_library(tnvse_vcltl INTERFACE)
+  add_library(tnvse::vcltl ALIAS tnvse_vcltl)
+  target_include_directories(tnvse_vcltl BEFORE INTERFACE
+    "${TNVSE_VCLTL_PACKAGE_DIR}/TargetPlatform/header"
+    "${vcltl_target_root}/header")
+  target_link_directories(tnvse_vcltl BEFORE INTERFACE
+    "${vcltl_library_dir}")
+  target_compile_definitions(tnvse_vcltl INTERFACE
+    _Build_By_LTL=1
+    _LTL_Core_Version=5)
+endfunction()
 
 function(tnvse_add_dxsdk_target)
   if(NOT EXISTS "${TNVSE_DXSDK_PACKAGE_DIR}/include/d3dx9.h")
