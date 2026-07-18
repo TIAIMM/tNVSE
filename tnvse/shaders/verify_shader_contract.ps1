@@ -37,6 +37,12 @@ $effectsSource = Get-Content -LiteralPath (
 if ($effectsSource -notmatch 'blur\s*<=\s*0\.001[\s\S]*?return\s+body\s*;') {
     throw 'Native hard SDF shadow does not bypass blur/power shaping at the runtime epsilon'
 }
+if ($effectsSource -notmatch 'NativeFontVanillaGlowFalloff[\s\S]*?exp2\s*\(') {
+    throw 'Native SDF glow does not use the vanilla-style exponential falloff'
+}
+if ($effectsSource -notmatch 'outer\s*-\s*antialiasWidth[\s\S]*?outer\s*\+\s*antialiasWidth') {
+    throw 'Native SDF glow does not feather its outer cutoff by the pixel footprint'
+}
 
 $shaderInputs = @(
     'freetype_native_common.hlsli',

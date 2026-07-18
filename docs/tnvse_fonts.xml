@@ -110,8 +110,10 @@
 
       <glow colorMode="fill" inner="0" outer="4" power="2"/>
         inner: full-intensity distance. Default: 0.
-        outer: maximum distance; must be greater than inner when enabled.
-        power: positive falloff exponent. Default: 2.
+        outer: nominal falloff radius; must be greater than inner when enabled.
+          The shader feathers the final cutoff by the current pixel footprint.
+        power: positive exponential falloff coefficient; larger values fade
+          faster. Default: 2.
         width: legacy alias for outer; do not specify both.
 
       <outline width="1" softness="0.5"/>
