@@ -218,7 +218,8 @@ namespace fonthook::vectorfont
 	{
 		std::shared_ptr<const GlyphBitmap> bitmap;
 		NiPoint3 pen;
-		NiColorA color;
+		NiColorA baseColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+		NiColorA layerColorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 		float offsetX = 0.0f;
 		float offsetY = 0.0f;
 		float rasterScale = 1.0f;
@@ -226,6 +227,7 @@ namespace fonthook::vectorfont
 		float baselineOffset = 0.0f;
 		UInt32 expansionPixels = 0;
 		AtlasLayer layer = AtlasLayer::Fill;
+		UInt8 layerMask = 1u << static_cast<UInt8>(AtlasLayer::Fill);
 		bool usesSdf = false;
 		bool usesLiveTileRgb = true;
 		UInt16 atlasPage = 0;
@@ -333,6 +335,7 @@ namespace fonthook::vectorfont
 	{
 		A8EffectShapeConfig config;
 		UInt32 padding = kAtlasPadding;
+		UInt32 drawQuadCount = 0;
 	};
 
 	static_assert(sizeof(AtlasSnapshotHeader) == 120);

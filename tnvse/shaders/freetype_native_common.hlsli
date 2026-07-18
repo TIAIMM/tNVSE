@@ -1,22 +1,25 @@
 #ifndef TNVSE_FREETYPE_NATIVE_COMMON_HLSLI
 #define TNVSE_FREETYPE_NATIVE_COMMON_HLSLI
 
+float4 LayerColor : register(c1);
+
 struct NativeFontPixelInput
 {
 	float2 atlasUv : TEXCOORD0;
-	float4 layerColor : COLOR0;
+	float4 baseColor : COLOR0;
 };
 
-float4 NativeFontLayerColor(NativeFontPixelInput input)
+float NativeFontUsesBaseRgb(float layerAndFlags)
 {
-	return input.layerColor;
+	return frac(layerAndFlags) < 0.125 ? 1.0 : 0.0;
 }
 
 float4 ComposeNativeFontCoverage(float coverage, float4 tileColor,
-	float4 layerColor)
+	float4 baseColor, float usesBaseRgb)
 {
-	return float4(tileColor.rgb * layerColor.rgb,
-		saturate(coverage * tileColor.a * layerColor.a));
+	const float3 resolvedBaseRgb = lerp(1.0, baseColor.rgb, usesBaseRgb);
+	return float4(tileColor.rgb * resolvedBaseRgb * LayerColor.rgb,
+		saturate(coverage * tileColor.a * baseColor.a * LayerColor.a));
 }
 
 float SampleNativeFontMask(sampler2D atlas, float2 uv)

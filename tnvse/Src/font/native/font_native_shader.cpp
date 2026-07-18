@@ -61,7 +61,7 @@ namespace fonthook::vectorfont
 			NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Original;
 			NativeA8Sampling sampling = NativeA8Sampling::Point;
 			EffectQuality quality = EffectQuality::Balanced;
-			std::array<UInt32, 12> constantBits = {};
+			std::array<UInt32, 16> constantBits = {};
 			bool writeEffectAlpha = false;
 			bool usesLiveTileRgb = true;
 
@@ -115,9 +115,16 @@ namespace fonthook::vectorfont
 
 		struct NativeShaderProfile
 		{
-			NativeShaderGeneration* owner = nullptr;
-			NativeProfileKey key;
-			std::array<float, 16> constants = {};
+			NativeShaderProfile(NativeShaderGeneration& generation,
+				const NativeProfileKey& profileKey,
+				const std::array<float, 16>& packetConstants)
+				: owner(&generation), key(profileKey), constants(packetConstants)
+			{
+			}
+
+			NativeShaderGeneration* const owner;
+			const NativeProfileKey key;
+			const std::array<float, 16> constants;
 			NiPointer<TileShader> shaderOwner;
 			TileShader* shader = nullptr;
 			NativeTileVtableBlock* vtable = nullptr;
@@ -283,9 +290,8 @@ namespace fonthook::vectorfont
 					firstFailure = result;
 			}
 
-			// c1 remains identity because the unquantized layer modifier is carried
-			// by the packet's FLOAT4 vertex color. c2-c4 are the compiled
-			// atlas/effect constants.
+			// c1 is the packet layer modifier. COLOR0 carries only the shared
+			// per-glyph base modifier; c2-c4 retain atlas/effect parameters.
 			const HRESULT constantsResult = device->SetPixelShaderConstantF(1,
 				profile->constants.data(), 4);
 			if (FAILED(constantsResult) && SUCCEEDED(firstFailure))
@@ -304,7 +310,7 @@ namespace fonthook::vectorfont
 			key.quality = packet.quality;
 			key.writeEffectAlpha = writeEffectAlpha;
 			key.usesLiveTileRgb = packet.usesLiveTileRgb;
-			std::memcpy(key.constantBits.data(), packet.constants.data() + 4,
+			std::memcpy(key.constantBits.data(), packet.constants.data(),
 				key.constantBits.size() * sizeof(UInt32));
 			return key;
 		}
@@ -436,14 +442,11 @@ namespace fonthook::vectorfont
 			if (!pass || pass->m_uiStageCount < 1 || !stockVtable)
 				return nullptr;
 
-			auto* profile = new NativeShaderProfile();
-			profile->owner = &generation;
-			profile->key = key;
-			profile->constants = packet.constants;
-			profile->constants[0] = 1.0f;
-			profile->constants[1] = 1.0f;
-			profile->constants[2] = 1.0f;
-			profile->constants[3] = 1.0f;
+			// Preserve the complete immutable c1-c4 packet ABI. COLOR0 now owns
+			// only the shared per-glyph base modifier, so replacing c1 with the
+			// historical identity value would turn every fixed effect layer white.
+			auto* profile = new NativeShaderProfile(generation, key,
+				packet.constants);
 			profile->shader = shader;
 			profile->effectPass = packet.layer != 3;
 

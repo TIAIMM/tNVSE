@@ -22,14 +22,50 @@ foreach ($sourceName in $pixelSources) {
 
 $common = Get-Content -LiteralPath (
     Join-Path $ShaderDirectory 'freetype_native_common.hlsli') -Raw
-if ($common -notmatch 'tileColor\.rgb\s*\*\s*layerColor\.rgb') {
-    throw 'Native FreeType shader ABI does not multiply Tile RGB by layer RGB'
+if ($common -notmatch 'tileColor\.rgb\s*\*\s*resolvedBaseRgb\s*\*\s*LayerColor\.rgb') {
+    throw 'Native FreeType shader ABI does not combine Tile, base-vertex, and packet-layer RGB'
 }
-if ($common -notmatch 'coverage\s*\*\s*tileColor\.a\s*\*\s*layerColor\.a') {
-    throw 'Native FreeType shader ABI does not multiply coverage by both alpha sources'
+if ($common -notmatch 'coverage\s*\*\s*tileColor\.a\s*\*\s*baseColor\.a\s*\*\s*LayerColor\.a') {
+    throw 'Native FreeType shader ABI does not multiply coverage by all three alpha sources'
+}
+if ($common -notmatch 'LayerColor\s*:\s*register\(c1\)') {
+    throw 'Native FreeType shader ABI does not reserve c1 for the packet layer modifier'
+}
+if ($common -notmatch 'frac\(layerAndFlags\)\s*<\s*0\.125') {
+    throw 'Native FreeType shader ABI does not decode the fixed-effect base-RGB flag'
 }
 if ($common -match 'float4\s*\([^,]+\*[^,]*coverage') {
     throw 'Native FreeType shader ABI appears to premultiply RGB by coverage'
+}
+
+# The HLSL contract is only valid if the native TileShader profile preserves
+# the packet's c1 layer modifier. Keep this check beside shader verification so
+# the C++/HLSL ABI cannot drift independently again.
+$resolvedShaderDirectory = (Resolve-Path -LiteralPath $ShaderDirectory).Path
+$nativeShaderSourcePath = Join-Path (
+    Split-Path -Parent $resolvedShaderDirectory) 'Src\font\native\font_native_shader.cpp'
+$nativeShaderSource = Get-Content -LiteralPath $nativeShaderSourcePath -Raw
+if ($nativeShaderSource -notmatch 'std::array<UInt32,\s*16>\s+constantBits') {
+    throw 'Native shader profile key does not cover the complete c1-c4 ABI'
+}
+if ($nativeShaderSource -notmatch
+    'const\s+std::array<float,\s*16>\s+constants\s*;') {
+    throw 'Native TileShader profile c1-c4 block is not immutable'
+}
+if ($nativeShaderSource -notmatch
+    'new\s+NativeShaderProfile\(generation,\s*key,\s*packet\.constants\)') {
+    throw 'Native TileShader profile does not construct from packet c1-c4 constants'
+}
+if ($nativeShaderSource -match 'profile->constants\s*\[\s*[0-3]\s*\]\s*=') {
+    throw 'Native TileShader profile overwrites the packet c1 layer modifier'
+}
+if ($nativeShaderSource -notmatch
+    'key\.constantBits\.data\(\)\s*,\s*packet\.constants\.data\(\)') {
+    throw 'Native shader profile identity does not include packet c1'
+}
+if ($nativeShaderSource -notmatch
+    'SetPixelShaderConstantF\(1,\s*profile->constants\.data\(\),\s*4\)') {
+    throw 'Native TileShader update does not upload packet c1-c4 after stock constants'
 }
 
 $effectsSource = Get-Content -LiteralPath (
@@ -89,7 +125,7 @@ if (-not ($vertexInstructions -match '\bdcl_texcoord')) {
     throw "$vertexShader does not forward TEXCOORD0"
 }
 if (-not ($vertexInstructions -match '\bdcl_color')) {
-    throw "$vertexShader does not forward the per-layer COLOR0 modifier"
+    throw "$vertexShader does not forward the per-glyph base COLOR0 modifier"
 }
 
 foreach ($shaderName in $pixelShaders) {
@@ -104,10 +140,14 @@ foreach ($shaderName in $pixelShaders) {
     $instructions = @($dump | Where-Object { $_ -match '^\s+[a-z]' })
     if ($shaderName -ne 'tnvse_freetype_native_original.pso' -and
         -not ($instructions -match '\bdcl_color')) {
-        throw "$shaderName does not consume the native packet COLOR0 modifier"
+        throw "$shaderName does not consume the per-glyph base COLOR0 modifier"
     }
     if (-not ($instructions -cmatch '\bc0\b')) {
         throw "$shaderName does not read the Tile color c0"
+    }
+    if ($shaderName -ne 'tnvse_freetype_native_original.pso' -and
+        -not ($instructions -cmatch '\bc1\b')) {
+        throw "$shaderName does not read the packet layer color c1"
     }
     if ($shaderName -like 'tnvse_freetype_native_effects_*.pso' -and
         -not ($dump -match '\b0\.001(?:0+\d*)?\b')) {

@@ -364,12 +364,16 @@ concrete `submission-suppressed` reason. Atlas-shape construction failure also
 returns an empty shape instead of rebuilding the text as legacy outline
 geometry, so visible FreeType text must have reached the native packet route.
 
-The native pixel shaders read atlas alpha as coverage and follow the game's
-Tile contract for the fill: RGB is `c0.rgb` multiplied by the per-glyph fill
-modifier. Effect packets use their configured XML RGB directly and inherit the
-live Tile alpha only. All packets output alpha as coverage multiplied by `c0.a`
-and their per-layer alpha. RGB remains straight rather than premultiplied by
-alpha, and tNVSE does not replace the global TileShader.
+The native vertex stream carries one per-glyph base modifier in `COLOR0`.
+Pixel constant `c1` carries the packet's uniform layer modifier, while `c0`
+remains the game's live Tile color. Fill and `colorMode="fill"` packets multiply
+all three RGB sources. Fixed-color effects ignore the base and live Tile RGB,
+but still multiply the base alpha, packet alpha, and live Tile alpha so colored
+text and menu fades retain their previous opacity contract. RGB remains
+straight rather than premultiplied by alpha. Each immutable native shader
+profile preserves the packet's complete `c1-c4` block byte-for-byte; resetting
+`c1` to an identity color would collapse every configured effect color to white.
+tNVSE does not replace the global TileShader.
 
 Native packet buffers are requested at the sorted Tile submission, not while a
 text shape is being produced. When that submission runs on
@@ -431,7 +435,13 @@ The base A8 shader and all effect variants use `ps_3_0`. A `grayscale` body
 uses the hinted grayscale mask. An `sdf` body, glow, outline, and blurred
 shadow share a FreeType distance field generated directly from the hinted
 outline; hard shadow reuses the selected body mask and can analytically copy
-the active glow and outline masks. FreeType overlap handling
+the active glow and outline masks. The native payload stores each unshifted
+body quad only once and lets the glow, outline, and SDF fill packets reference
+the same vertex interval. Shadow owns a second interval only when its configured
+offset is nonzero. Thus SDF `Shadow + Glow + Outline + Fill` uses two geometry
+quads per drawable glyph instead of four, and the same stack without an offset
+shadow uses one. A grayscale fill retains a separate quad because its atlas UV
+and mask differ from the SDF body. FreeType overlap handling
 is enabled only when the loaded outline carries `FT_OUTLINE_OVERLAP`. Both
 masks can occupy the same A8 atlas. Effects
 execute global shadow, glow, outline, and fill passes over one `NiTriShape`,
@@ -486,8 +496,10 @@ Persistent atlas pages start at 512x512 and grow without moving existing glyphs.
 Missing glyphs are rasterized as one batch and uploaded through one dirty
 rectangle. Every atlas allocation has four transparent padding pixels per side,
 which isolates the 1/4 mip's bilinear footprint even when glyph dimensions are
-not multiples of four. Repeated text also reuses cached layout and
-vertex/UV/index templates. A8 and 32-bit profiles use separate cache keys and
+not multiples of four. Repeated text also reuses cached layout and unique
+vertex/UV/index templates. Layer colors and shared draw references are part of
+the packet-template identity, while per-glyph base colors do not force duplicate
+geometry templates. A8 and 32-bit profiles use separate cache keys and
 may coexist when text was created before Shader Loader initialization.
 
 Generated grayscale masks, layouts, and batch templates are cached in process

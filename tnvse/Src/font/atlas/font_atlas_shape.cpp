@@ -61,31 +61,39 @@ namespace fonthook::vectorfont
 			};
 		}
 
-		NiColorA ResolveFillColor(const FontColorStyle& style, const NiColorA& source,
-			const NiColorA& tile)
+		NiColorA ResolveBaseColor(const NiColorA& source, const NiColorA& tile)
 		{
-			NiColorA result = ResolveSourceModifier(source, tile);
+			return SanitizeColor(ResolveSourceModifier(source, tile));
+		}
+
+		NiColorA ResolveFillLayerColor(const FontColorStyle& style)
+		{
+			NiColorA result = { 1.0f, 1.0f, 1.0f, 1.0f };
 			if (style.configured)
-			{
-				result.r *= style.color.r;
-				result.g *= style.color.g;
-				result.b *= style.color.b;
-				result.a *= style.color.a;
-			}
+				result = style.color;
 			return SanitizeColor(result);
 		}
 
-		NiColorA ResolveEffectColor(const EffectStyle& effect,
-			const FontColorStyle& fillStyle, const NiColorA& source,
-			const NiColorA& tile)
+		NiColorA ResolveEffectLayerColor(const EffectStyle& effect,
+			const FontColorStyle& fillStyle)
 		{
 			NiColorA result = effect.colorMode == EffectColorMode::Fill
-				? ResolveFillColor(fillStyle, source, tile)
+				? ResolveFillLayerColor(fillStyle)
 				: SanitizeColor(effect.color);
-			// Effect opacity remains independent from fontAlpha in both color modes.
-			result.a = SanitizeColor(effect.color).a
-				* ResolveModifierChannel(source.a, tile.a);
+			// Effect opacity remains independent from fontAlpha in both color modes;
+			// the per-glyph source alpha remains in the shared base vertex color.
+			result.a = SanitizeColor(effect.color).a;
 			return SanitizeColor(result);
+		}
+
+		NiColorA ComposeQuadColor(const PendingQuad& quad)
+		{
+			const NiColorA base = SanitizeColor(quad.baseColor);
+			const NiColorA layer = SanitizeColor(quad.layerColorModifier);
+			if (!quad.usesLiveTileRgb)
+				return { layer.r, layer.g, layer.b, base.a * layer.a };
+			return { base.r * layer.r, base.g * layer.g,
+				base.b * layer.b, base.a * layer.a };
 		}
 
 		bool EffectUsesLiveTileRgb(const EffectStyle& effect)
@@ -107,11 +115,11 @@ namespace fonthook::vectorfont
 			A8ShapeColorContract result;
 			if (quads.empty())
 				return result;
-			result.minimumModifier = SanitizeColor(quads.front().color);
+			result.minimumModifier = SanitizeColor(quads.front().baseColor);
 			result.maximumModifier = result.minimumModifier;
 			for (const PendingQuad& quad : quads)
 			{
-				const NiColorA color = SanitizeColor(quad.color);
+				const NiColorA color = SanitizeColor(quad.baseColor);
 				result.minimumModifier.r = std::min(result.minimumModifier.r, color.r);
 				result.minimumModifier.g = std::min(result.minimumModifier.g, color.g);
 				result.minimumModifier.b = std::min(result.minimumModifier.b, color.b);
@@ -134,31 +142,46 @@ namespace fonthook::vectorfont
 			A8EffectShapeConfig& config)
 		{
 			config.ranges.clear();
-			for (UInt32 index = 0; index < quads.size(); ++index)
+			for (UInt32 layer = 0; layer < 4; ++layer)
 			{
-				const PendingQuad& quad = quads[index];
-				const NiColorA color = SanitizeColor(quad.color);
-				const UInt32 layer = static_cast<UInt32>(quad.layer);
-				if (config.ranges.empty()
-					|| config.ranges.back().layer != layer
-					|| config.ranges.back().atlasPage != quad.atlasPage
-					|| config.ranges.back().usesSdf != quad.usesSdf
-					|| config.ranges.back().usesLiveTileRgb != quad.usesLiveTileRgb
-					|| !SameColorModifier(config.ranges.back().colorModifier, color))
+				const UInt8 layerBit = static_cast<UInt8>(1u << layer);
+				for (UInt32 index = 0; index < quads.size(); ++index)
 				{
-					A8DrawRange range;
-					range.firstVertex = index * 4;
-					range.startIndex = index * 6;
-					range.layer = layer;
-					range.atlasPage = quad.atlasPage;
-					range.usesSdf = quad.usesSdf;
-					range.usesLiveTileRgb = quad.usesLiveTileRgb;
-					range.colorModifier = color;
-					config.ranges.push_back(range);
+					const PendingQuad& quad = quads[index];
+					if (!(quad.layerMask & layerBit))
+						continue;
+					const NiColorA layerColor = SanitizeColor(config.shaderEffects
+						? config.layerColorModifiers[layer] : quad.layerColorModifier);
+					const bool usesLiveTileRgb = config.shaderEffects
+						? config.layerUsesLiveTileRgb[layer] : quad.usesLiveTileRgb;
+					const UInt32 firstVertex = index * 4;
+					const UInt32 startIndex = index * 6;
+					if (config.ranges.empty()
+						|| config.ranges.back().firstVertex
+							+ config.ranges.back().vertexCount != firstVertex
+						|| config.ranges.back().startIndex
+							+ config.ranges.back().primitiveCount * 3 != startIndex
+						|| config.ranges.back().layer != layer
+						|| config.ranges.back().atlasPage != quad.atlasPage
+						|| config.ranges.back().usesSdf != quad.usesSdf
+						|| config.ranges.back().usesLiveTileRgb != usesLiveTileRgb
+						|| !SameColorModifier(
+							config.ranges.back().layerColorModifier, layerColor))
+					{
+						A8DrawRange range;
+						range.firstVertex = firstVertex;
+						range.startIndex = startIndex;
+						range.layer = layer;
+						range.atlasPage = quad.atlasPage;
+						range.usesSdf = quad.usesSdf;
+						range.usesLiveTileRgb = usesLiveTileRgb;
+						range.layerColorModifier = layerColor;
+						config.ranges.push_back(range);
+					}
+					A8DrawRange& range = config.ranges.back();
+					range.vertexCount += 4;
+					range.primitiveCount += 2;
 				}
-				A8DrawRange& range = config.ranges.back();
-				range.vertexCount += 4;
-				range.primitiveCount += 2;
 			}
 			config.enabled = !config.ranges.empty();
 		}
@@ -204,8 +227,8 @@ namespace fonthook::vectorfont
 			{
 				if (!quad.bitmap)
 					continue;
-				quad.color = SanitizeColor(quad.color);
-				const UInt32 rgba = PackColorModifierRgba(quad.color);
+				const NiColorA compositeColor = ComposeQuadColor(quad);
+				const UInt32 rgba = PackColorModifierRgba(compositeColor);
 				UInt64 bakedId = BuildBakedBitmapId(quad.bitmap->cacheId, rgba);
 				bakedId = BuildBakedBitmapId(bakedId, static_cast<UInt8>(quad.layer));
 				auto found = unique.find(bakedId);
@@ -217,7 +240,7 @@ namespace fonthook::vectorfont
 					baked->colorBaked = true;
 					baked->bakedRgba = rgba;
 					baked->bakedLayer = static_cast<UInt8>(quad.layer);
-					const float alphaModifier = std::clamp(quad.color.a, 0.0f, 1.0f);
+					const float alphaModifier = std::clamp(compositeColor.a, 0.0f, 1.0f);
 					for (UInt8& alpha : baked->alpha)
 					{
 						alpha = static_cast<UInt8>(std::lround(
@@ -226,7 +249,9 @@ namespace fonthook::vectorfont
 					found = unique.emplace(bakedId, std::move(baked)).first;
 				}
 				quad.bitmap = found->second;
-				quad.color = { 1.0f, 1.0f, 1.0f, 1.0f };
+				quad.baseColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+				quad.layerColorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
+				quad.usesLiveTileRgb = true;
 			}
 			bitmaps.clear();
 			bitmaps.reserve(unique.size());
@@ -241,15 +266,33 @@ namespace fonthook::vectorfont
 
 		void AddPendingQuad(std::vector<PendingQuad>& quads,
 			const std::shared_ptr<const GlyphBitmap>& bitmap,
-			const AtlasGlyphInstance& instance, const NiColorA& color,
+			const AtlasGlyphInstance& instance, const NiColorA& baseColor,
+			const NiColorA& layerColorModifier,
 			float offsetX, float offsetY, float rasterScale, float baselineOffset,
 			AtlasLayer layer, bool usesLiveTileRgb,
-			UInt32 expansionPixels = 0, bool usesSdf = false)
+			UInt32 expansionPixels = 0, bool usesSdf = false, UInt8 layerMask = 0)
 		{
 			if (bitmap && bitmap->width > 0 && bitmap->height > 0)
-				quads.push_back({ bitmap, instance.pen, color, offsetX, offsetY,
-					rasterScale, instance.glyph.metrics ? instance.glyph.metrics->fTopEdge : 0.0f,
-					baselineOffset, expansionPixels, layer, usesSdf, usesLiveTileRgb });
+			{
+				PendingQuad quad;
+				quad.bitmap = bitmap;
+				quad.pen = instance.pen;
+				quad.baseColor = SanitizeColor(baseColor);
+				quad.layerColorModifier = SanitizeColor(layerColorModifier);
+				quad.offsetX = offsetX;
+				quad.offsetY = offsetY;
+				quad.rasterScale = rasterScale;
+				quad.logicalTopEdge = instance.glyph.metrics
+					? instance.glyph.metrics->fTopEdge : 0.0f;
+				quad.baselineOffset = baselineOffset;
+				quad.expansionPixels = expansionPixels;
+				quad.layer = layer;
+				quad.layerMask = layerMask ? layerMask
+					: static_cast<UInt8>(1u << static_cast<UInt8>(layer));
+				quad.usesSdf = usesSdf;
+				quad.usesLiveTileRgb = usesLiveTileRgb;
+				quads.push_back(std::move(quad));
+			}
 		}
 
 		bool BuildPendingQuads(RuntimeFont& runtime,
@@ -337,14 +380,17 @@ namespace fonthook::vectorfont
 			{
 				for (const PreparedGlyph& glyph : prepared)
 				{
-					const NiColorA shadowColor = ResolveEffectColor(config.shadow,
-						config.fontColor, glyph.instance->color, tileColor);
+					const NiColorA baseColor = ResolveBaseColor(
+						glyph.instance->color, tileColor);
+					const NiColorA shadowColor = ResolveEffectLayerColor(
+						config.shadow, config.fontColor);
 					if (shadowIncludesGlow && glyph.glow)
 					{
 						NiColorA componentColor = shadowColor;
 						componentColor.a *= config.glow.color.a;
 						AddPendingQuad(quads, glyph.glow, *glyph.instance,
-							componentColor, config.shadow.x, config.shadow.y,
+							baseColor, componentColor,
+							config.shadow.x, config.shadow.y,
 							rasterScale, glyph.baselineOffset, AtlasLayer::Shadow,
 							EffectUsesLiveTileRgb(config.shadow));
 					}
@@ -353,12 +399,13 @@ namespace fonthook::vectorfont
 						NiColorA componentColor = shadowColor;
 						componentColor.a *= config.outline.color.a;
 						AddPendingQuad(quads, glyph.outline, *glyph.instance,
-							componentColor, config.shadow.x, config.shadow.y,
+							baseColor, componentColor,
+							config.shadow.x, config.shadow.y,
 							rasterScale, glyph.baselineOffset, AtlasLayer::Shadow,
 							EffectUsesLiveTileRgb(config.shadow));
 					}
 					AddPendingQuad(quads, glyph.fill, *glyph.instance,
-						shadowColor,
+						baseColor, shadowColor,
 						config.shadow.x, config.shadow.y, rasterScale,
 						glyph.baselineOffset, AtlasLayer::Shadow,
 						EffectUsesLiveTileRgb(config.shadow));
@@ -369,8 +416,8 @@ namespace fonthook::vectorfont
 				for (const PreparedGlyph& glyph : prepared)
 				{
 					AddPendingQuad(quads, glyph.glow, *glyph.instance,
-						ResolveEffectColor(config.glow, config.fontColor,
-							glyph.instance->color, tileColor),
+						ResolveBaseColor(glyph.instance->color, tileColor),
+						ResolveEffectLayerColor(config.glow, config.fontColor),
 						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Glow,
 						EffectUsesLiveTileRgb(config.glow));
 				}
@@ -380,8 +427,8 @@ namespace fonthook::vectorfont
 				for (const PreparedGlyph& glyph : prepared)
 				{
 					AddPendingQuad(quads, glyph.outline, *glyph.instance,
-						ResolveEffectColor(config.outline, config.fontColor,
-							glyph.instance->color, tileColor),
+						ResolveBaseColor(glyph.instance->color, tileColor),
+						ResolveEffectLayerColor(config.outline, config.fontColor),
 						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Outline,
 						EffectUsesLiveTileRgb(config.outline));
 				}
@@ -391,7 +438,8 @@ namespace fonthook::vectorfont
 				for (const PreparedGlyph& glyph : prepared)
 				{
 					AddPendingQuad(quads, glyph.fill, *glyph.instance,
-						ResolveFillColor(config.fontColor, glyph.instance->color, tileColor),
+						ResolveBaseColor(glyph.instance->color, tileColor),
+						ResolveFillLayerColor(config.fontColor),
 						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Fill,
 						true);
 				}
@@ -445,6 +493,20 @@ namespace fonthook::vectorfont
 			build.config.glowPower = config.glow.power;
 			build.config.outlineWidthPixels = config.outline.width * rasterScale;
 			build.config.outlineSoftnessPixels = config.outline.softness * rasterScale;
+			build.config.layerColorModifiers[static_cast<size_t>(AtlasLayer::Shadow)] =
+				ResolveEffectLayerColor(config.shadow, config.fontColor);
+			build.config.layerColorModifiers[static_cast<size_t>(AtlasLayer::Glow)] =
+				ResolveEffectLayerColor(config.glow, config.fontColor);
+			build.config.layerColorModifiers[static_cast<size_t>(AtlasLayer::Outline)] =
+				ResolveEffectLayerColor(config.outline, config.fontColor);
+			build.config.layerColorModifiers[static_cast<size_t>(AtlasLayer::Fill)] =
+				ResolveFillLayerColor(config.fontColor);
+			build.config.layerUsesLiveTileRgb = {{
+				EffectUsesLiveTileRgb(config.shadow),
+				EffectUsesLiveTileRgb(config.glow),
+				EffectUsesLiveTileRgb(config.outline),
+				true
+			}};
 
 			struct PreparedShaderGlyph
 			{
@@ -492,51 +554,80 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			auto addRange = [&](AtlasLayer layer, bool enabled, bool useSdf,
-				float offsetX, float offsetY)
+			const bool drawShadow = !suppressEffects && config.shadow.enabled;
+			const bool drawGlow = !suppressEffects && config.glow.enabled;
+			const bool drawOutline = !suppressEffects && config.outline.enabled;
+			const bool shadowUsesSdf = fillUsesSdf || config.shadow.blur > 0.0f
+				|| HardShadowIncludesGlow(config) || HardShadowIncludesOutline(config);
+			const bool shadowHasOffset = config.shadow.x != 0.0f
+				|| config.shadow.y != 0.0f;
+			const NiColorA identity = { 1.0f, 1.0f, 1.0f, 1.0f };
+			auto firstLayer = [](UInt8 mask)
 			{
-				if (!enabled)
-					return;
-				for (const PreparedShaderGlyph& entry : prepared)
+				for (UInt8 layer = 0; layer < 4; ++layer)
 				{
-					NiColorA layerColor = entry.instance->color;
-					bool usesLiveTileRgb = true;
-					if (layer == AtlasLayer::Shadow)
-					{
-						layerColor = ResolveEffectColor(config.shadow, config.fontColor,
-							entry.instance->color, tileColor);
-						usesLiveTileRgb = EffectUsesLiveTileRgb(config.shadow);
-					}
-					else if (layer == AtlasLayer::Glow)
-					{
-						layerColor = ResolveEffectColor(config.glow, config.fontColor,
-							entry.instance->color, tileColor);
-						usesLiveTileRgb = EffectUsesLiveTileRgb(config.glow);
-					}
-					else if (layer == AtlasLayer::Outline)
-					{
-						layerColor = ResolveEffectColor(config.outline, config.fontColor,
-							entry.instance->color, tileColor);
-						usesLiveTileRgb = EffectUsesLiveTileRgb(config.outline);
-					}
-					else if (layer == AtlasLayer::Fill)
-						layerColor = ResolveFillColor(config.fontColor, entry.instance->color, tileColor);
-					AddPendingQuad(quads, useSdf ? entry.sdf : entry.fill,
-						*entry.instance, layerColor, offsetX, offsetY, rasterScale,
-						entry.baselineOffset, layer, usesLiveTileRgb, 0, useSdf);
+					if (mask & static_cast<UInt8>(1u << layer))
+						return static_cast<AtlasLayer>(layer);
 				}
+				return AtlasLayer::Fill;
 			};
 
-			addRange(AtlasLayer::Shadow, !suppressEffects && config.shadow.enabled,
-				fillUsesSdf || config.shadow.blur > 0.0f
-					|| HardShadowIncludesGlow(config)
-					|| HardShadowIncludesOutline(config),
-				config.shadow.x, config.shadow.y);
-			addRange(AtlasLayer::Glow, !suppressEffects && config.glow.enabled,
-				true, 0.0f, 0.0f);
-			addRange(AtlasLayer::Outline, !suppressEffects && config.outline.enabled,
-				true, 0.0f, 0.0f);
-			addRange(AtlasLayer::Fill, true, fillUsesSdf, 0.0f, 0.0f);
+			for (const PreparedShaderGlyph& entry : prepared)
+			{
+				const NiColorA baseColor = ResolveBaseColor(
+					entry.instance->color, tileColor);
+				UInt8 sdfLayerMask = 0;
+				UInt8 fillLayerMask = 0;
+				if (drawGlow)
+					sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Glow);
+				if (drawOutline)
+					sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Outline);
+				if (fillUsesSdf)
+					sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Fill);
+				else
+					fillLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Fill);
+
+				if (drawShadow)
+				{
+					if (shadowHasOffset)
+					{
+						AddPendingQuad(quads, shadowUsesSdf ? entry.sdf : entry.fill,
+							*entry.instance, baseColor, identity,
+							config.shadow.x, config.shadow.y, rasterScale,
+							entry.baselineOffset, AtlasLayer::Shadow, true, 0,
+							shadowUsesSdf,
+							1u << static_cast<UInt8>(AtlasLayer::Shadow));
+					}
+					else if (shadowUsesSdf)
+						sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Shadow);
+					else
+						fillLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Shadow);
+				}
+
+				if (sdfLayerMask)
+				{
+					AddPendingQuad(quads, entry.sdf, *entry.instance,
+						baseColor, identity, 0.0f, 0.0f, rasterScale,
+						entry.baselineOffset, firstLayer(sdfLayerMask), true, 0,
+						true, sdfLayerMask);
+				}
+				if (fillLayerMask)
+				{
+					AddPendingQuad(quads, entry.fill, *entry.instance,
+						baseColor, identity, 0.0f, 0.0f, rasterScale,
+						entry.baselineOffset, firstLayer(fillLayerMask), true, 0,
+						false, fillLayerMask);
+				}
+			}
+			for (const PendingQuad& quad : quads)
+			{
+				UInt8 mask = quad.layerMask;
+				while (mask)
+				{
+					build.drawQuadCount += mask & 1u;
+					mask >>= 1;
+				}
+			}
 			return true;
 		}
 
@@ -567,7 +658,6 @@ namespace fonthook::vectorfont
 				add(&quad.rasterScale, sizeof(quad.rasterScale));
 				add(&quad.baselineOffset, sizeof(quad.baselineOffset));
 				add(&quad.expansionPixels, sizeof(quad.expansionPixels));
-				add(&quad.layer, sizeof(quad.layer));
 				add(&quad.usesSdf, sizeof(quad.usesSdf));
 				add(&quad.atlasPage, sizeof(quad.atlasPage));
 			}
@@ -605,6 +695,7 @@ namespace fonthook::vectorfont
 		}
 
 		UInt64 BuildPacketTemplateHash(const BatchTemplateKey& geometryKey,
+			const std::vector<PendingQuad>& quads,
 			const A8EffectShapeConfig& effect)
 		{
 			UInt64 hash = 1469598103934665603ull;
@@ -626,6 +717,8 @@ namespace fonthook::vectorfont
 			add(&effect.useOriginalShader, sizeof(effect.useOriginalShader));
 			add(&effect.fillUsesSdf, sizeof(effect.fillUsesSdf));
 			add(&effect.quality, sizeof(effect.quality));
+			for (const PendingQuad& quad : quads)
+				add(&quad.baseColor, sizeof(quad.baseColor));
 			const std::array<float, 12> scalars = {
 				effect.inverseAtlasWidth, effect.inverseAtlasHeight,
 				effect.sdfSpreadPixels, effect.shadowBlurPixels,
@@ -651,7 +744,7 @@ namespace fonthook::vectorfont
 				add(&range.atlasPage, sizeof(range.atlasPage));
 				add(&range.usesSdf, sizeof(range.usesSdf));
 				add(&range.usesLiveTileRgb, sizeof(range.usesLiveTileRgb));
-				add(&range.colorModifier, sizeof(range.colorModifier));
+				add(&range.layerColorModifier, sizeof(range.layerColorModifier));
 			}
 			return hash;
 		}
@@ -707,7 +800,8 @@ namespace fonthook::vectorfont
 					+ expansion * 2.0f) / scale;
 				const float z1 = z0 - (static_cast<float>(quad.bitmap->height)
 					+ expansion * 2.0f) / scale;
-				if (g_bEnableFreeTypeFontRenderingLog && quad.layer == AtlasLayer::Fill)
+				if (g_bEnableFreeTypeFontRenderingLog
+					&& (quad.layerMask & (1u << static_cast<UInt8>(AtlasLayer::Fill))))
 				{
 					bool shouldLog = false;
 					{
@@ -815,12 +909,25 @@ namespace fonthook::vectorfont
 			}
 			std::copy(batch->texture.begin(), batch->texture.end(), data->m_pkTexture);
 			std::copy(batch->indices.begin(), batch->indices.end(), data->m_pusTriList);
+			if (!data->m_pkColor)
+				data->m_pkColor = NiAlloc<NiColorA>(data->m_usVertices);
+			if (!data->m_pkColor)
+				return nullptr;
+			for (size_t quadIndex = 0; quadIndex < quads.size(); ++quadIndex)
+			{
+				const NiColorA baseColor = SanitizeColor(quads[quadIndex].baseColor);
+				std::fill_n(data->m_pkColor + quadIndex * 4, 4, baseColor);
+			}
 			data->m_kBound = batch->bound;
 			data->m_kBound.m_kCenter.x += origin.x;
 			data->m_kBound.m_kCenter.y += origin.y;
 			data->m_kBound.m_kCenter.z += origin.z;
+			const UInt8 fillLayerBit = 1u << static_cast<UInt8>(AtlasLayer::Fill);
 			const bool hasEffectLayer = std::any_of(quads.begin(), quads.end(),
-				[](const PendingQuad& quad) { return quad.layer != AtlasLayer::Fill; });
+				[fillLayerBit](const PendingQuad& quad)
+				{
+					return (quad.layerMask & ~fillLayerBit) != 0;
+				});
 			const bool needsNativeRangeRouting = useCustomA8Shader || hasEffectLayer
 				|| atlases.size() > 1;
 			if (needsNativeRangeRouting)
@@ -844,10 +951,13 @@ namespace fonthook::vectorfont
 				BuildA8DrawRanges(quads, resolvedEffect);
 				const A8ShapeColorContract colorContract = BuildColorContract(quads);
 				const UInt64 packetTemplateHash =
-					BuildPacketTemplateHash(batchKey, resolvedEffect);
+					BuildPacketTemplateHash(batchKey, quads, resolvedEffect);
 				if (!PrepareA8AtlasShape(font, shape, font.iFontNum,
 					static_cast<UInt32>(std::count_if(quads.begin(), quads.end(),
-						[](const PendingQuad& quad) { return quad.layer == AtlasLayer::Fill; })),
+						[fillLayerBit](const PendingQuad& quad)
+						{
+							return (quad.layerMask & fillLayerBit) != 0;
+						})),
 					static_cast<UInt32>(quads.size()), &resolvedEffect, &colorContract,
 					packetTemplateHash, origin))
 				{

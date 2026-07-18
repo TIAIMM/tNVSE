@@ -852,7 +852,9 @@ namespace fonthook::vectorfont
 			return NativeA8FallbackReason::PacketBuild;
 		}
 
-		UInt64 nextVertex = 0;
+		const UInt64 totalVertexCount = payload.payloadTemplate->gpuVertices.size();
+		if (!totalVertexCount || totalVertexCount > std::numeric_limits<UInt32>::max())
+			return NativeA8FallbackReason::PacketBuild;
 		for (const NativeA8Packet& packet : payload.packets)
 		{
 			if (packet.templateIndex >= payload.payloadTemplate->packets.size())
@@ -863,17 +865,12 @@ namespace fonthook::vectorfont
 				+ source.vertexCount;
 			if (!source.vertexCount || (source.vertexCount & 3u)
 				|| source.vertexCount / 4u > kNativeA8MaximumQuads
-				|| source.firstVertex != nextVertex
-				|| vertexEnd > payload.payloadTemplate->gpuVertices.size())
+				|| vertexEnd > totalVertexCount)
 			{
 				return NativeA8FallbackReason::PacketBuild;
 			}
-			nextVertex = vertexEnd;
 		}
-		if (!nextVertex || nextVertex != payload.payloadTemplate->gpuVertices.size()
-			|| nextVertex > std::numeric_limits<UInt32>::max())
-			return NativeA8FallbackReason::PacketBuild;
-		const UInt32 totalVertices = static_cast<UInt32>(nextVertex);
+		const UInt32 totalVertices = static_cast<UInt32>(totalVertexCount);
 
 		NativeA8RingState& state = RingState();
 		std::lock_guard<std::mutex> lock(state.mutex);

@@ -183,14 +183,15 @@ namespace fonthook::vectorfont
 					if (g_bEnableFreeTypeFontRenderingLog)
 					{
 						FreeTypeFontDebugLog(
-							"tnvse_freetype_font: shader batch font=%u requestedFill=%s resolvedFill=%s quality=%u spread=%.0f glyphs=%u quads=%u padding=%u pages=%u texture0=%ux%u abi=%u",
+							"tnvse_freetype_font: shader batch font=%u requestedFill=%s resolvedFill=%s quality=%u spread=%.0f glyphs=%u geometryQuads=%u drawQuads=%u padding=%u pages=%u texture0=%ux%u abi=%u",
 							font.iFontNum,
 							requestsSdfFill ? "sdf" : "grayscale",
 							shaderBuild.config.fillUsesSdf ? "sdf" : "grayscale",
 							static_cast<UInt32>(resolvedQuality),
 							shaderBuild.config.sdfSpreadPixels,
 							static_cast<UInt32>(glyphs.size()),
-							static_cast<UInt32>(shaderQuads.size()), shaderBuild.padding,
+							static_cast<UInt32>(shaderQuads.size()),
+							shaderBuild.drawQuadCount, shaderBuild.padding,
 							static_cast<UInt32>(shaderAtlases.size()),
 							shaderAtlases[0]->width, shaderAtlases[0]->height,
 							A8ShapeColorContract::kTileUniformColorAbi);

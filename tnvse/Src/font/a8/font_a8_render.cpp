@@ -28,7 +28,7 @@ namespace fonthook::vectorfont
 					< kMaximumShapeValidationFailureLogs)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_a8_diag: rejected shape contract=tile-fill-effect-rgb-v8 reason=%s",
+					"tnvse_freetype_a8_diag: rejected shape contract=base-vertex-packet-layer-rgb-v9 reason=%s",
 					reason ? reason : "unknown");
 			}
 			return false;
@@ -57,8 +57,13 @@ namespace fonthook::vectorfont
 			{
 				return RejectA8Shape("missing-geometry-data");
 			}
-			if (data->m_pkColor)
-				return RejectA8Shape("unexpected-vertex-color-stream");
+			if (!data->m_pkColor)
+				return RejectA8Shape("missing-base-vertex-color-stream");
+			for (UInt32 index = 0; index < data->m_usVertices; ++index)
+			{
+				if (!IsFiniteColor(data->m_pkColor[index]))
+					return RejectA8Shape("non-finite-base-vertex-color");
+			}
 			if (!effectConfig || !effectConfig->enabled)
 				return true;
 
@@ -122,7 +127,7 @@ namespace fonthook::vectorfont
 			for (const A8DrawRange& range : effectConfig->ranges)
 			{
 				if (range.layer > 3 || !range.vertexCount || !range.primitiveCount
-					|| !IsFiniteColor(range.colorModifier))
+					|| !IsFiniteColor(range.layerColorModifier))
 				{
 					return RejectA8Shape("invalid-draw-range");
 				}
@@ -140,10 +145,11 @@ namespace fonthook::vectorfont
 				if (vertexEnd > data->m_usVertices || indexEnd > availableIndices)
 					return RejectA8Shape("draw-range-out-of-bounds");
 				if (!firstRange && (layerRank < previousLayerRank
-					|| range.firstVertex < previousVertexEnd
-					|| range.startIndex < previousIndexEnd))
+					|| (layerRank == previousLayerRank
+						&& (range.firstVertex < previousVertexEnd
+							|| range.startIndex < previousIndexEnd))))
 				{
-					return RejectA8Shape("draw-ranges-not-global-and-monotonic");
+					return RejectA8Shape("draw-ranges-not-layer-monotonic");
 				}
 				for (UInt64 index = range.startIndex; index < indexEnd; ++index)
 				{
@@ -217,11 +223,13 @@ namespace fonthook::vectorfont
 
 				A8CompiledRange compiled;
 				compiled.range = range;
+				const float layerAndFlags = static_cast<float>(range.layer)
+					+ (range.usesLiveTileRgb ? 0.0f : 0.25f);
 				compiled.constants = {{
-					range.colorModifier.r, range.colorModifier.g,
-					range.colorModifier.b, range.colorModifier.a,
+					range.layerColorModifier.r, range.layerColorModifier.g,
+					range.layerColorModifier.b, range.layerColorModifier.a,
 					inverseAtlasWidth, inverseAtlasHeight,
-					static_cast<float>(range.layer), metadata.effects.sdfSpreadPixels,
+					layerAndFlags, metadata.effects.sdfSpreadPixels,
 					parameter0, parameter1, parameter2, parameter3,
 					range.usesSdf ? 1.0f : 0.0f, sdfFlag1, sdfFlag2, sdfFlag3
 				}};

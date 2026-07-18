@@ -86,12 +86,10 @@ namespace fonthook::vectorfont
 				&& span.usesSdf == range.range.usesSdf
 				&& span.staticSmoothSampling == range.staticSmoothSampling
 				&& span.usesLiveTileRgb == range.range.usesLiveTileRgb
-				// c0 contains the old per-range color. Native packets carry it in
-				// their FLOAT4 vertex color, so only the remaining immutable constants
-				// split a packet.
-				&& std::memcmp(span.constants.data() + 4,
-					range.constants.data() + 4,
-					12 * sizeof(float)) == 0;
+				// c1 now contains the packet layer modifier; it is part of the
+				// immutable packet profile just like c2-c4.
+				&& std::memcmp(span.constants.data(), range.constants.data(),
+					16 * sizeof(float)) == 0;
 		}
 
 		bool BuildPacketSpans(const A8ShapeMetadata& metadata,
@@ -99,7 +97,8 @@ namespace fonthook::vectorfont
 		{
 			spans.clear();
 			if (metadata.compiledRanges.empty() || !sourceData.m_pkVertex
-				|| !sourceData.m_pkTexture || !sourceData.m_pusTriList)
+				|| !sourceData.m_pkTexture || !sourceData.m_pkColor
+				|| !sourceData.m_pusTriList)
 			{
 				return false;
 			}
@@ -107,9 +106,6 @@ namespace fonthook::vectorfont
 			const UInt32 sourceIndexCount = sourceData.m_uiTriListLength
 				? sourceData.m_uiTriListLength
 				: static_cast<UInt32>(sourceData.m_usTriangles) * 3;
-			UInt64 nextVertex = 0;
-			UInt64 nextIndex = 0;
-			UInt64 totalQuads = 0;
 			for (size_t rangeIndex = 0;
 				rangeIndex < metadata.compiledRanges.size(); ++rangeIndex)
 			{
@@ -118,8 +114,7 @@ namespace fonthook::vectorfont
 				if (!range.vertexCount || !range.primitiveCount
 					|| (range.firstVertex & 3u) || (range.vertexCount & 3u)
 					|| (range.startIndex % 6u) || (range.primitiveCount & 1u)
-					|| range.vertexCount / 4u != range.primitiveCount / 2u
-					|| range.firstVertex != nextVertex || range.startIndex != nextIndex)
+					|| range.vertexCount / 4u != range.primitiveCount / 2u)
 				{
 					return false;
 				}
@@ -163,82 +158,36 @@ namespace fonthook::vectorfont
 					span.staticSmoothSampling = compiled.staticSmoothSampling;
 					span.usesLiveTileRgb = range.usesLiveTileRgb;
 					span.constants = compiled.constants;
-					// Vertex modifiers replace the old uniform color without quantization.
-					span.constants[0] = 1.0f;
-					span.constants[1] = 1.0f;
-					span.constants[2] = 1.0f;
-					span.constants[3] = 1.0f;
 					spans.push_back(span);
 				}
-
-				nextVertex = vertexEnd;
-				nextIndex = indexEnd;
-				totalQuads += range.vertexCount / 4u;
 			}
 
-			return nextVertex == sourceData.m_usVertices
-				&& nextIndex == sourceIndexCount
-				&& totalQuads == metadata.quadCount
-				&& metadata.vertexCount == sourceData.m_usVertices
+			return metadata.vertexCount == sourceData.m_usVertices
 				&& metadata.primitiveCount == sourceData.m_usTriangles
 				&& metadata.indexCount == sourceIndexCount;
 		}
 
 		bool FillPacketTemplate(const PacketSpan& span,
-			const A8ShapeMetadata& metadata, const NiTriShapeData& source,
-			const NiPoint3& geometryOrigin, NativeA8PacketTemplate& destination,
-			std::vector<NativeA8GpuVertex>& gpuVertices)
+			const NiTriShapeData& source,
+			const NiPoint3& geometryOrigin, NativeA8PacketTemplate& destination)
 		{
-			if (gpuVertices.size() > std::numeric_limits<UInt32>::max()
-				|| span.vertexCount > std::numeric_limits<UInt32>::max()
-					- static_cast<UInt32>(gpuVertices.size()))
-			{
+			if (static_cast<UInt64>(span.firstVertex) + span.vertexCount
+				> source.m_usVertices)
 				return false;
-			}
-			destination.firstVertex = static_cast<UInt32>(gpuVertices.size());
+			destination.firstVertex = span.firstVertex;
 			destination.vertexCount = span.vertexCount;
-			gpuVertices.resize(gpuVertices.size() + span.vertexCount);
 			std::vector<NiPoint3> boundVertices(span.vertexCount);
 			for (UInt32 index = 0; index < span.vertexCount; ++index)
 			{
 				const NiPoint3& vertex = source.m_pkVertex[span.firstVertex + index];
-				const NiPoint2& texture = source.m_pkTexture[span.firstVertex + index];
 				const NiPoint3 relative(vertex.x - geometryOrigin.x,
 					vertex.y - geometryOrigin.y, vertex.z - geometryOrigin.z);
 				boundVertices[index] = relative;
-				NativeA8GpuVertex& output = gpuVertices[
-					destination.firstVertex + index];
-				output.x = relative.x;
-				output.y = relative.y;
-				output.z = relative.z;
-				output.u = texture.x;
-				output.v = texture.y;
-			}
-
-			const UInt32 packetVertexEnd = span.firstVertex + span.vertexCount;
-			for (size_t ordinal = 0; ordinal < span.rangeCount; ++ordinal)
-			{
-				const A8DrawRange& range =
-					metadata.compiledRanges[span.firstRange + ordinal].range;
-				if (range.firstVertex < span.firstVertex
-					|| range.firstVertex + range.vertexCount > packetVertexEnd)
-				{
-					return false;
-				}
-				const UInt32 first = range.firstVertex - span.firstVertex;
-				for (UInt32 index = first; index < first + range.vertexCount; ++index)
-				{
-					NativeA8GpuVertex& vertex = gpuVertices[
-						destination.firstVertex + index];
-					vertex.r = range.colorModifier.r;
-					vertex.g = range.colorModifier.g;
-					vertex.b = range.colorModifier.b;
-					vertex.a = range.colorModifier.a;
-				}
 			}
 
 			static constexpr UInt16 kCanonicalQuad[6] = { 0, 2, 1, 0, 3, 2 };
 			const UInt32 quadCount = span.vertexCount / 4u;
+			const UInt32 packetVertexEnd = span.firstVertex + span.vertexCount;
 			if (span.indexCount != quadCount * 6u
 				|| quadCount > kNativeA8MaximumQuads)
 			{
@@ -296,8 +245,24 @@ namespace fonthook::vectorfont
 		payload->pageCount = static_cast<UInt32>(
 			metadata.effects.atlasProperties.size());
 		payload->quadCount = metadata.quadCount;
-		payload->gpuVertices.reserve(sourceData->m_usVertices);
+		payload->gpuVertices.resize(sourceData->m_usVertices);
 		payload->packets.reserve(spans.size());
+		for (UInt32 index = 0; index < sourceData->m_usVertices; ++index)
+		{
+			const NiPoint3& vertex = sourceData->m_pkVertex[index];
+			const NiPoint2& texture = sourceData->m_pkTexture[index];
+			const NiColorA& color = sourceData->m_pkColor[index];
+			NativeA8GpuVertex& output = payload->gpuVertices[index];
+			output.x = vertex.x - geometryOrigin.x;
+			output.y = vertex.y - geometryOrigin.y;
+			output.z = vertex.z - geometryOrigin.z;
+			output.u = texture.x;
+			output.v = texture.y;
+			output.r = color.r;
+			output.g = color.g;
+			output.b = color.b;
+			output.a = color.a;
+		}
 
 		for (const PacketSpan& span : spans)
 		{
@@ -307,8 +272,7 @@ namespace fonthook::vectorfont
 				return {};
 			}
 			NativeA8PacketTemplate packet;
-			if (!FillPacketTemplate(span, metadata, *sourceData,
-				geometryOrigin, packet, payload->gpuVertices))
+			if (!FillPacketTemplate(span, *sourceData, geometryOrigin, packet))
 				return {};
 			packet.constants = span.constants;
 			packet.shaderClass = span.shaderClass;
@@ -347,7 +311,6 @@ namespace fonthook::vectorfont
 		payload->payloadTemplate = std::move(payloadTemplate);
 		payload->geometryOrigin = geometryOrigin;
 		payload->packets.reserve(payload->payloadTemplate->packets.size());
-		UInt64 nextVertex = 0;
 		for (size_t index = 0;
 			index < payload->payloadTemplate->packets.size(); ++index)
 		{
@@ -357,7 +320,6 @@ namespace fonthook::vectorfont
 				+ source.vertexCount;
 			if (!source.vertexCount || (source.vertexCount & 3u)
 				|| source.vertexCount / 4u > kNativeA8MaximumQuads
-				|| source.firstVertex != nextVertex
 				|| vertexEnd > payload->payloadTemplate->gpuVertices.size()
 				|| index > std::numeric_limits<UInt32>::max())
 			{
@@ -375,10 +337,7 @@ namespace fonthook::vectorfont
 			packet.staticSmoothSampling = source.staticSmoothSampling;
 			packet.usesLiveTileRgb = source.usesLiveTileRgb;
 			payload->packets.push_back(std::move(packet));
-			nextVertex = vertexEnd;
 		}
-		if (nextVertex != payload->payloadTemplate->gpuVertices.size())
-			return {};
 
 		payload->preparedGeneration = 0;
 		payload->buildComplete = true;

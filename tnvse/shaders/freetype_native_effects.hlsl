@@ -165,12 +165,12 @@ float SupersampledNativeFontEffect(float2 uv, int layer)
 
 float4 Main(NativeFontPixelInput input) : COLOR0
 {
-	const int layer = (int)(AtlasPass.z + 0.5);
+	const int layer = (int)floor(AtlasPass.z);
 	float coverage;
 	if (SdfFlags.x >= 0.5)
 		coverage = SupersampledNativeFontEffect(input.atlasUv, layer);
 	else
 		coverage = SampleNativeFontMask(FontAtlas, input.atlasUv);
-	return ComposeNativeFontCoverage(coverage, TileColor,
-		NativeFontLayerColor(input));
+	return ComposeNativeFontCoverage(coverage, TileColor, input.baseColor,
+		NativeFontUsesBaseRgb(AtlasPass.z));
 }

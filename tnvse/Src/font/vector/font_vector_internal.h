@@ -214,7 +214,7 @@ namespace fonthook::vectorfont
 		UInt16 atlasPage = 0;
 		bool usesSdf = false;
 		bool usesLiveTileRgb = true;
-		NiColorA colorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
+		NiColorA layerColorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 	};
 
 	struct A8EffectShapeConfig
@@ -236,6 +236,13 @@ namespace fonthook::vectorfont
 		float glowPower = 2.0f;
 		float outlineWidthPixels = 0.0f;
 		float outlineSoftnessPixels = 0.5f;
+		std::array<NiColorA, 4> layerColorModifiers = {{
+			{ 1.0f, 1.0f, 1.0f, 1.0f },
+			{ 1.0f, 1.0f, 1.0f, 1.0f },
+			{ 1.0f, 1.0f, 1.0f, 1.0f },
+			{ 1.0f, 1.0f, 1.0f, 1.0f }
+		}};
+		std::array<bool, 4> layerUsesLiveTileRgb = {{ true, true, true, true }};
 		// Retain every page property for the lifetime of the shape. This is
 		// required by the DEFAULT-pool reset/retirement path; page 0 is already a
 		// shape property, but secondary page textures otherwise have no property
@@ -248,10 +255,10 @@ namespace fonthook::vectorfont
 
 	struct A8ShapeColorContract
 	{
-		// Fill preserves the stock Tile c0 RGB/alpha contract. Effect ranges select
-		// either fixed vertex RGB with neutral c0 RGB, or the fill modifier with live
-		// c0 RGB. Both modes continue to inherit the live Tile alpha.
-		static constexpr UInt32 kTileUniformColorAbi = 8;
+		// COLOR0 carries only the per-glyph base modifier. Packet c1 carries the
+		// layer modifier, while c2.z selects whether fixed effects ignore base RGB.
+		// Every path continues to inherit the live Tile alpha.
+		static constexpr UInt32 kTileUniformColorAbi = 9;
 
 		UInt32 abiVersion = kTileUniformColorAbi;
 		NiColorA minimumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
