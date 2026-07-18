@@ -415,6 +415,10 @@ STATIC_ASSERT(sizeof(PlayerNameEntryMenu) == 0x2C);
 class FontManager
 {
 public:
+	static constexpr UInt32 kVanillaFontCount = 8;
+	static constexpr UInt32 kStockRichTextFontCount = 8;
+	static constexpr UInt32 kJipExtendedFontCount = 80;
+
 	// Rich-text path used by FontManager::PrepText (0xA18A30),
 	// FontManager::PrepHypertext (0xA17390), and TextDoc::Render (0xA19060).
 	// Field names are from the Aug 22, 2010 Xbox Release Beta PDB; offsets are
@@ -496,7 +500,7 @@ public:
 		int iPageWidth;                   // 14
 		int iPageHeight;                  // 18
 		int iLastFontHeight;              // 1C
-		int pCharsPerFont[8];             // 20
+		int pCharsPerFont[kStockRichTextFontCount]; // 20
 		TextDoc* pDoc;                    // 40
 
 		__forceinline int GetCharCountForFont(int aiFont)
@@ -541,10 +545,10 @@ public:
 	FontManager();
 	~FontManager();
 
-	Font* pFont[8]; // 00
+	Font* pFont[kVanillaFontCount]; // 00
 	bool bUseNewFonts; // 20
 	UInt8 pad21[3]; // 21
-	Font* extraFonts[80]; // 24
+	Font* extraFonts[kJipExtendedFontCount]; // 24
 
 	//	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
 	/*NiPoint3* GetStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID, UInt32 maxFlt = 0x7F7FFFFF,
@@ -575,6 +579,8 @@ public:
 		return ThisStdCall<TextDoc*>(0xA18A30, this, &arTextString, &arData);
 	}
 };
+
+STATIC_ASSERT(sizeof(FontManager) == 0x164);
 
 STATIC_ASSERT(sizeof(FontManager::TextData) == 0x40);
 STATIC_ASSERT(sizeof(FontManager::CharData) == 0x38);

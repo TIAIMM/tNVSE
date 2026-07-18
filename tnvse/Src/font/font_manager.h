@@ -7,6 +7,24 @@
 
 namespace fonthook
 {
+	inline constexpr UInt32 kVanillaGameFontCount = FontManager::kVanillaFontCount;
+	inline constexpr UInt32 kFirstJipExtendedFontId = 10;
+	inline constexpr UInt32 kLastJipExtendedFontId = 89;
+	inline constexpr UInt32 kJipExtendedFontCount = FontManager::kJipExtendedFontCount;
+	inline constexpr UInt32 kAddressableGameFontCount =
+		kVanillaGameFontCount + kJipExtendedFontCount;
+	// TextDoc::Render and TextPage::pCharsPerFont are fixed retail ABI arrays.
+	// This is not the size of the JIP font registry.
+	inline constexpr UInt32 kStockRichTextFontCount =
+		FontManager::kStockRichTextFontCount;
+	static_assert(kJipExtendedFontCount
+		== kLastJipExtendedFontId - kFirstJipExtendedFontId + 1);
+
+	bool HasJipExtendedFontManager();
+	bool IsGameFontIdAddressable(UInt32 auiFontId);
+	bool TryResolveGameFontId(float afFontTrait, UInt32& arFontId);
+	Font* ResolveGameFont(FontManager* apManager, UInt32 auiFontId);
+
 	struct RichTextCharExtra
 	{
 		UInt32 dbcsCode;

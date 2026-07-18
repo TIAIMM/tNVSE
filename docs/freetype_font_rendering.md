@@ -56,6 +56,29 @@ Font IDs are configured under `<fonts>` in
 `Data\NVSE\plugins\tnvse_fonts.xml`. Only listed IDs are replaced. Other
 fonts continue to use the original `.fnt` and `.tex` files.
 
+## Base and JIP extended font IDs
+
+The retail `FontManager` exposes IDs `1-8`. When JIP LN NVSE is loaded and its
+`SetFontFile` command is registered, tNVSE also resolves JIP's extended IDs
+`10-89`; ID `9` is deliberately absent because offset `0x20` is the retail
+`bUseNewFonts` field rather than a font pointer. Extended lookup uses JIP's
+separate 80-pointer allocation and never reads beyond the retail manager when
+JIP is absent. Stewie Tweaks' menu font is covered by the same path because it
+registers ID `42` through `SetFontFile` before constructing StewMenu.
+
+This registry resolution is shared by Tile font-trait handling, VUI+ effect
+proxy elimination, configured-font activation, and tNVSE string measurement.
+The requested slot and the resolved `Font::iFontNum` remain distinct: JIP may
+alias an unassigned extended slot to a base font, and tNVSE treats the resolved
+font object as the rendering identity.
+
+The stock rich-text ABI is a separate constraint. `TextPage::pCharsPerFont`
+and `TextDoc::Render` contain fixed eight-element arrays, so rich-text
+`CharData::iFontIndex` remains limited to the retail base fonts. Treating this
+layout field as an 89-font registry index would corrupt the `TextPage` and
+renderer stack; ordinary `TileText` and `CalculateStringDimensions` do support
+registered extended fonts.
+
 ## Configuration model and vertical metrics
 
 ```xml
@@ -383,11 +406,15 @@ ordering difference does not permanently cache a fill-only shape.
 Vanilla UI Plus implements its optional text treatment in
 `Menus/Prefabs/VUI+/outline.xml` by cloning the source text into the named
 `VUI+Shadow` and `VUI+Outline` `TileText` nodes. tNVSE recognizes only those
-two exact proxy names while their `TileText::MakeNode` call is active. Their
-FreeType body and live VUI+ Tile color are retained, but configured tNVSE
-shadow, glow, and outline layers are omitted on all shader, CPU-atlas, and
-native and CPU-atlas routes. The original sibling and every unrelated dark or
-startup text remain unaffected, and no VUI+ XML file is modified.
+two exact proxy names. When the proxy's active FreeType font has any configured
+shadow, glow, or outline effect, its `TileText::MakeNode` hook returns a culled
+empty node before text preparation. The proxy therefore performs no second
+layout, glyph lookup, atlas upload, text geometry construction, or effect pass.
+If no tNVSE effect is enabled, or if the font cannot be resolved reliably, the
+original chained `TileText::MakeNode` path is retained; the unresolved fallback
+still suppresses recursive tNVSE effects. The original sibling and every
+unrelated dark or startup text remain unaffected, and no VUI+ XML file is
+modified.
 
 ## SDF effects and draw-state isolation
 

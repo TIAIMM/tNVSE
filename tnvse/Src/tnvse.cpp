@@ -35,14 +35,6 @@ namespace
 	UInt32 s_configuredGameFontPrepareAttempts = 0;
 	constexpr UInt32 kMaximumConfiguredGameFontPrepareAttempts = 120;
 
-	bool HasJipExtendedFontManager()
-	{
-		if (!hJIP)
-			hJIP = GetModuleHandleA("jip_nvse.dll");
-		return hJIP && g_cmdTableInterface && g_cmdTableInterface->GetByName
-			&& g_cmdTableInterface->GetByName("SetFontFile");
-	}
-
 	void PrepareConfiguredGameFonts()
 	{
 		if (s_configuredGameFontsPrepared)
@@ -57,7 +49,7 @@ namespace
 		FontManager* manager = FontManager::GetSingleton();
 		if (!manager)
 			return;
-		const bool hasExtendedFonts = HasJipExtendedFontManager();
+		const bool hasExtendedFonts = fonthook::HasJipExtendedFontManager();
 		const bool hasConsoleRunner = g_consoleInterface
 			&& g_consoleInterface->version >= NVSEConsoleInterface::kVersion
 			&& g_consoleInterface->RunScriptLine2;
@@ -66,14 +58,13 @@ namespace
 		Font* tweakFont = nullptr;
 		if (prepareTweakFont)
 		{
-			constexpr UInt32 kTweakFontIndex = 42 - 10;
-			tweakFont = manager->extraFonts[kTweakFontIndex];
+			tweakFont = fonthook::ResolveGameFont(manager, 42);
 			if (!tweakFont || tweakFont->iFontNum != 42)
 			{
 				g_consoleInterface->RunScriptLine2(
 					"SetFontFile 42 \"textures\\fonts\\Monofonto_STn.fnt\"",
 					nullptr, true);
-				tweakFont = manager->extraFonts[kTweakFontIndex];
+				tweakFont = fonthook::ResolveGameFont(manager, 42);
 			}
 			// JIP aliases unset extended slots to a base Font object.  Do not treat
 			// that alias as a successfully created font 42 if the command ran too
@@ -82,7 +73,7 @@ namespace
 				tweakFont = nullptr;
 		}
 
-		Font* activated[88] = {};
+		Font* activated[fonthook::kAddressableGameFontCount] = {};
 		size_t activatedCount = 0;
 		bool tweakFontActivated = !prepareTweakFont;
 		auto activate = [&](Font* font)

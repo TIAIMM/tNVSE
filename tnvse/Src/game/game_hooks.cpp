@@ -152,15 +152,43 @@ namespace fonthook
 
 		TileTextMakeNodeFn s_tileTextMakeNode = nullptr;
 		thread_local UInt32 s_effectSuppressionDepth = 0;
-		bool s_loggedVuiShadowSuppression = false;
-		bool s_loggedVuiOutlineSuppression = false;
+		bool s_loggedVuiShadowBypass = false;
+		bool s_loggedVuiOutlineBypass = false;
+		bool s_loggedVuiShadowFallback = false;
+		bool s_loggedVuiOutlineFallback = false;
+
+		Font* ResolveVuiEffectProxyFont(TileText* tile)
+		{
+			if (!tile)
+				return nullptr;
+			UInt32 fontId = 0;
+			if (!TryResolveGameFontId(
+				tile->GetValueFloat(Tile::kTileValue_font), fontId))
+			{
+				return nullptr;
+			}
+			return ResolveGameFont(FontManager::GetSingleton(), fontId);
+		}
+
+		NiNode* MakeCulledVuiEffectProxyNode(TileText* tile)
+		{
+			if (!tile)
+				return nullptr;
+			NiNode* node = NiNode::Create();
+			if (!node)
+				return nullptr;
+			node->SetAppCulled(true);
+			tile->spNiNode = node;
+			return node;
+		}
 
 		bool IsVuiEffectProxy(const TileText* tile, bool& isOutline)
 		{
 			// VUI+'s Prefabs/VUI+/outline.xml implements its original-style dark
 			// shadow/outline by cloning the source text into these two named tiles.
-			// They must keep their fill and Tile color, but must not recursively gain
-			// the configured tNVSE font effects of their own.
+			// An active tNVSE effect replaces both clones before text preparation;
+			// otherwise their original body remains but cannot recursively gain the
+			// configured tNVSE font effects of its own.
 			isOutline = false;
 			if (!tile)
 				return false;
@@ -202,13 +230,27 @@ namespace fonthook
 			const bool suppress = IsVuiEffectProxy(tile, isOutline);
 			if (suppress)
 			{
+				Font* font = ResolveVuiEffectProxyFont(tile);
+				if (HasEnabledFreeTypeFontEffects(font))
+				{
+					bool& logged = isOutline
+						? s_loggedVuiOutlineBypass : s_loggedVuiShadowBypass;
+					if (!logged)
+					{
+						logged = true;
+						gLog.FormattedMessage(
+							"tnvse_freetype_font: bypassing full font pipeline for VUI+ effect proxy tile=%s font=%d",
+							tile->strName.c_str(), font->iFontNum);
+					}
+					return MakeCulledVuiEffectProxyNode(tile);
+				}
 				bool& logged = isOutline
-					? s_loggedVuiOutlineSuppression : s_loggedVuiShadowSuppression;
+					? s_loggedVuiOutlineFallback : s_loggedVuiShadowFallback;
 				if (!logged)
 				{
 					logged = true;
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: suppressing configured effects for VUI+ proxy tile=%s",
+						"tnvse_freetype_font: continuing chained font pipeline with recursive effects suppressed for VUI+ proxy tile=%s",
 						tile->strName.c_str());
 				}
 			}

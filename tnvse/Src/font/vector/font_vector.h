@@ -65,6 +65,7 @@ namespace fonthook
 	bool IsFreeTypeFontConfigured(UInt32 auiFontId);
 	bool ActivateFreeTypeFont(Font* apFont, bool abForce = false);
 	bool IsFreeTypeFontActive(const Font* apFont);
+	bool HasEnabledFreeTypeFontEffects(const Font* apFont);
 	bool GetFreeTypeLayoutIdentity(const Font* apFont, UInt64& arIdentity);
 	bool BuildFreeTypeUnicodeLineBreakMap(const Font* apFont, const char* apText,
 		size_t auiLength, std::vector<UInt8>& arBreakAfter);

@@ -19,6 +19,9 @@
         6 = Glow_Monofonto_VL_dialogs
         7 = Baked-in_Monofonto_Large
         8 = Glow_Futura_Caps_Large
+        With JIP LN NVSE, registered extended slots 10 through 89 are also
+        supported; slot 9 is invalid. Stewie Tweaks registers its menu font in
+        slot 42 through JIP's SetFontFile command.
 
       pixelSize
         Font size in pixels; must be greater than 0.

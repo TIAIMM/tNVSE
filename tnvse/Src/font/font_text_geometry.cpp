@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <unordered_set>
 #include <vector>
 
 namespace fonthook
@@ -209,9 +210,9 @@ namespace fonthook
 		float alignmentOffset,
 		const char* preparedText)
 	{
-		static bool logged[32][3] = {};
+		static std::unordered_set<UInt64> logged;
 		if (!g_bEnableFreeTypeFontRenderingLog
-			|| !font || font->iFontNum < 0 || font->iFontNum >= 32)
+			|| !font || font->iFontNum < 0)
 			return;
 		bool hasVisibleText = false;
 		for (const UInt8* cursor = reinterpret_cast<const UInt8*>(preparedText);
@@ -227,9 +228,11 @@ namespace fonthook
 			return;
 
 		const int alignmentIndex = flags == 2 ? 1 : flags == 4 ? 2 : 0;
-		if (logged[font->iFontNum][alignmentIndex])
+		const UInt64 logKey = (static_cast<UInt64>(
+			static_cast<UInt32>(font->iFontNum)) << 2)
+			| static_cast<UInt32>(alignmentIndex);
+		if (!logged.insert(logKey).second)
 			return;
-		logged[font->iFontNum][alignmentIndex] = true;
 
 		const char* alignmentName = flags == 2 ? "center" : flags == 4 ? "right" : "left";
 		const std::string escaped = EscapeFreeTypeLayoutText(preparedText);

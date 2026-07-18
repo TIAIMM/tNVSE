@@ -85,6 +85,15 @@ namespace fonthook
 		return vectorfont::FindActiveRuntime(apFont) != nullptr;
 	}
 
+	bool HasEnabledFreeTypeFontEffects(const Font* apFont)
+	{
+		const vectorfont::RuntimeFont* runtime = vectorfont::FindActiveRuntime(apFont);
+		if (!runtime || !runtime->config)
+			return false;
+		const vectorfont::FontConfig& config = *runtime->config;
+		return config.shadow.enabled || config.glow.enabled || config.outline.enabled;
+	}
+
 	bool GetFreeTypeLayoutIdentity(const Font* apFont, UInt64& arIdentity)
 	{
 		arIdentity = 0;

@@ -521,7 +521,7 @@ iLeadingEdge = 0;
 渲染阶段需要区分三类 `CharData`：
 
 1. `xFilename` 非空：图片或图标，完全走原版逻辑。
-2. `IsRichDbcsChar(ch)`：使用 `GetRichDbcsCode(ch)`，经 `CharData::iFontIndex -> FontManager::pFont[i]->iFontNum` 映射后调用 `GetExtraGlyphs(fontNum)` / `LookupDBGlyph(extraGlyphs, code)`，再走扩展 glyph 渲染。
+2. `IsRichDbcsChar(ch)`：使用 `GetRichDbcsCode(ch)`，把零基 `CharData::iFontIndex` 转成零保留的原版字体 ID，并经统一 `ResolveGameFont` 解析实际 `Font::iFontNum`，随后调用 `GetExtraGlyphs(fontNum)` / `LookupDBGlyph(extraGlyphs, code)`，再走扩展 glyph 渲染。这里仍只允许原版八个 rich-text shape/count 槽；JIP 的扩展注册表不是这个结构数组。
 3. 其他：ASCII，完全走原版逻辑。
 
 扩展 glyph 渲染应复用普通路径已经使用的正式版 helper：
@@ -1048,7 +1048,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 **已改内容**：
 - 用 IDA 9.3 `idalib` 确认 `TextPage::AddChar 0xA19C00` 的两个 call site 为 `0xA19A6F`（`TextDoc::AddChar`）和 `0xA1BD1C`（`TextPage::TextPage`）。
 - `game_hooks.cpp` 用 `WriteRelCallEx` 将这两处 call site 重定向到 `FontManagerEx::TextPageAddChar`。
-- `FontManagerEx::TextPageAddChar` 先调用原版 `0xA19C00`，再在 `TryGetRichTextCharDbcs(apChar, code)` 命中时，经 `CharData::iFontIndex -> FontManager::pFont[i]->iFontNum` 映射后用 `LookupRichTextDbcsGlyph` 找到扩展 glyph，并调用 `GetGlyphLayoutLineHeight(fontData, glyph)` 写回 `TextPage::iLastFontHeight`。
+- `FontManagerEx::TextPageAddChar` 先调用原版 `0xA19C00`，再在 `TryGetRichTextCharDbcs(apChar, code)` 命中时，经 `CharData::iFontIndex -> ResolveGameFont(baseId) -> Font::iFontNum` 映射后用 `LookupRichTextDbcsGlyph` 找到扩展 glyph，并调用 `GetGlyphLayoutLineHeight(fontData, glyph)` 写回 `TextPage::iLastFontHeight`。
 - 若原版 `TextPage::AddChar` 返回新 page，修正返回的新 page；否则修正当前 page。
 
 **为什么**：
@@ -1075,7 +1075,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 **已改内容**（`font_glyphs.h` + `font_manager.cpp` + `font_engine.cpp` + `text_hooks.cpp`）：
 - 新增 `font_glyphs.h`，集中提供 `ExtraGlyphMap`、`HasAnyExtraGlyphs()`、`GetExtraGlyphs(fontNum)`、`HasExtraGlyphsForFont(fontNum)`、`LookupDBGlyph(extraGlyphs, code)`、`GetGlyphRenderAdvance(glyph)`、`GetGlyphCharDataWidth(glyph)`、`GetGlyphMeasureWidth(glyph)`、`GetGlyphLayoutWidth(glyph)`、`GetGlyphCharDataLayoutWidth(glyph)`、`GetGlyphLineHeight(fontData, glyph)` 和 `GetGlyphLayoutLineHeight(fontData, glyph)`。
 - `font_engine.cpp` 删除文件级 static `GetExtraGlyphs` / `LookupDBGlyph`，改用共享 helper。
-- `font_manager.cpp` 的 `GetExtraGlyphsForChar` 保留，因为富文本需要从 `CharData::iFontIndex` 映射到 `FontManager::pFont[i]->iFontNum`，但内部改为调用共享 `GetExtraGlyphs(font->iFontNum)`；`LookupRichTextDbcsGlyph` 内部改为调用共享 `LookupDBGlyph`。
+- `font_manager.cpp` 的 `GetExtraGlyphsForChar` 保留，因为富文本需要从 `CharData::iFontIndex` 经统一 `ResolveGameFont` 映射到实际 `Font::iFontNum`，内部再调用共享 `GetExtraGlyphs(font->iFontNum)`；`LookupRichTextDbcsGlyph` 内部改为调用共享 `LookupDBGlyph`。固定八槽检查是 `TextPage::pCharsPerFont`/`TextDoc::Render` ABI 防越界，不再被当作整个游戏字体注册表的上限。
 - `text_hooks.cpp` 中针对 font 5 / font 8 的 `gNumberedExtraLetters.find(...) != end` 判断改为 `HasExtraGlyphsForFont(...)`。
 - 普通 `FontEx::PrepText` 的 DBCS 布局宽度调用 `GetGlyphLayoutWidth(glyph)`，复刻 `Font::AddChar` 的分字段推进；富文本 `FontManagerEx` 写 `CharData::iWidth` 时调用 `GetGlyphCharDataLayoutWidth(glyph)`，复刻 `CharData::SetChar` 的折叠写入口径；`FontManagerEx::CalculateStringDimensions` 调用 `GetGlyphMeasureWidth(glyph)`，复刻原版尺寸测量的 `fLeadingEdge + fWidth + fSpacing` 口径。
 - 普通 `FontEx::ComputeGlyphMetrics` 的行高公式改为调用 `GetGlyphLineHeight(fontData, glyph)`；富文本 `FontManagerEx::TextPageAddChar` 修正 `TextPage::AddChar 0xA19C00` 的 `iLastFontHeight` 时复用 `GetGlyphLayoutLineHeight(fontData, glyph)`，不再复制 `fBaseLine - fTopEdge + fHeight` 公式。

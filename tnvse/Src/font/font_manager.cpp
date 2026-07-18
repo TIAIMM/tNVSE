@@ -5,6 +5,7 @@
 #include "font_vector.h"
 #include "game_hooks.h"
 #include "native_calls.h"
+#include "tnvse.h"
 #include <array>
 #include <cstring>
 #include <cmath>
@@ -14,6 +15,61 @@
 
 namespace fonthook
 {
+	bool HasJipExtendedFontManager()
+	{
+		static bool detected = false;
+		if (detected)
+			return true;
+		if (!hJIP)
+			hJIP = GetModuleHandleA("jip_nvse.dll");
+		detected = hJIP && g_cmdTableInterface && g_cmdTableInterface->GetByName
+			&& g_cmdTableInterface->GetByName("SetFontFile");
+		return detected;
+	}
+
+	bool IsGameFontIdAddressable(UInt32 auiFontId)
+	{
+		if (auiFontId >= 1 && auiFontId <= kVanillaGameFontCount)
+			return true;
+		return auiFontId >= kFirstJipExtendedFontId
+			&& auiFontId <= kLastJipExtendedFontId
+			&& HasJipExtendedFontManager();
+	}
+
+	bool TryResolveGameFontId(float afFontTrait, UInt32& arFontId)
+	{
+		arFontId = 0;
+		if (!std::isfinite(afFontTrait)
+			|| afFontTrait > static_cast<float>(kLastJipExtendedFontId))
+		{
+			return false;
+		}
+		const UInt32 fontId = afFontTrait > 1.0f
+			? static_cast<UInt32>(afFontTrait) : 1;
+		if ((afFontTrait > 1.0f && static_cast<float>(fontId) != afFontTrait)
+			|| !IsGameFontIdAddressable(fontId))
+		{
+			return false;
+		}
+		arFontId = fontId;
+		return true;
+	}
+
+	Font* ResolveGameFont(FontManager* apManager, UInt32 auiFontId)
+	{
+		if (!apManager)
+			return nullptr;
+		if (auiFontId >= 1 && auiFontId <= kVanillaGameFontCount)
+			return apManager->pFont[auiFontId - 1];
+		if (auiFontId < kFirstJipExtendedFontId
+			|| auiFontId > kLastJipExtendedFontId
+			|| !HasJipExtendedFontManager())
+		{
+			return nullptr;
+		}
+		return apManager->extraFonts[auiFontId - kFirstJipExtendedFontId];
+	}
+
 	namespace
 	{
 		static constexpr UInt32 kRichTextDbcsFailureLogLimit = 64;
@@ -255,10 +311,16 @@ namespace fonthook
 				return nullptr;
 
 			FontManager* fontManager = FontManager::GetSingleton();
-			if (!fontManager || apChar->iFontIndex < 0 || apChar->iFontIndex >= 8)
+			// The retail rich-text document stores one count/shape slot per base
+			// font. Accepting a JIP index here would overrun TextPage::pCharsPerFont
+			// and TextDoc::Render's two eight-element stack arrays before our AddChar
+			// hook runs.
+			if (!fontManager || apChar->iFontIndex < 0
+				|| static_cast<UInt32>(apChar->iFontIndex) >= kStockRichTextFontCount)
 				return nullptr;
 
-			Font* font = fontManager->pFont[apChar->iFontIndex];
+			Font* font = ResolveGameFont(fontManager,
+				static_cast<UInt32>(apChar->iFontIndex) + 1);
 			if (!font)
 				return nullptr;
 
@@ -937,24 +999,25 @@ namespace fonthook
 
 	NiPoint3* __thiscall FontManagerEx::CalculateStringDimensions(NiPoint3* outDimensions, const char* srcString, UInt32 fontID, float maxWrapWidth, UInt32 startCharIndex)
 	{
+		if (!outDimensions)
+			return nullptr;
+		Font* activeFont = ResolveGameFont(this, fontID);
+		if (!srcString || !activeFont || !activeFont->pFontData)
+		{
+			*outDimensions = StringDefaultDimensions;
+			return outDimensions;
+		}
+
 		if (!g_bEnableMultibyteFontHook)
 		{
-			if (!outDimensions)
-				return nullptr;
-			if (!srcString || fontID < 1 || fontID > 8)
-			{
-				*outDimensions = StringDefaultDimensions;
-				return outDimensions;
-			}
-			Font* font = this->pFont[fontID - 1];
-			if (!IsFreeTypeFontActive(font))
+			if (!IsFreeTypeFontActive(activeFont))
 			{
 				return CallOriginalCalculateStringDimensions(this,
 					outDimensions, srcString, fontID, maxWrapWidth,
 					startCharIndex);
 			}
 			if (!MeasureFreeTypeSingleByteText(
-				reinterpret_cast<FontEx*>(font), srcString, maxWrapWidth,
+				reinterpret_cast<FontEx*>(activeFont), srcString, maxWrapWidth,
 				startCharIndex, *outDimensions))
 			{
 				*outDimensions = StringDefaultDimensions;
@@ -962,13 +1025,7 @@ namespace fonthook
 			return outDimensions;
 		}
 
-		auto* extraGlyphs = GetExtraGlyphs(fontID);
-
-		if (fontID < 1 || !srcString)
-		{
-			*outDimensions = StringDefaultDimensions;
-			return outDimensions;
-		}
+		auto* extraGlyphs = GetExtraGlyphs(activeFont->iFontNum);
 
 		std::string sConvertedStr;
 		ConvertToMultiByte(srcString, sConvertedStr, extraGlyphs != nullptr);
@@ -991,8 +1048,8 @@ namespace fonthook
 
 		NiPoint3 StringDimensions = StringDefaultDimensions;
 		int sourceStringLength = strlen(srcString);
-		FontLetter* fontCharMetrics = this->pFont[fontID - 1]->pFontData->pFontLetters;
-		float fontBaseLine = this->pFont[fontID - 1]->pFontData->fBaseLine;
+		FontLetter* fontCharMetrics = activeFont->pFontData->pFontLetters;
+		float fontBaseLine = activeFont->pFontData->fBaseLine;
 		LayoutWrapState wrapState;
 		float fontVerticalSpacingAdjust = FontManager::GetLinePadding(fontID);
 		int totalLines = 1;
@@ -1005,7 +1062,6 @@ namespace fonthook
 			++totalLines;
 		};
 
-		Font* activeFont = this->pFont[fontID - 1];
 		if (IsFreeTypeFontActive(activeFont))
 		{
 			std::vector<UInt8> unicodeBreaks;
@@ -1119,7 +1175,7 @@ namespace fonthook
 
 			if (bIsDBCharacter)
 			{
-				EnsureFreeTypeDoubleByteMetrics(this->pFont[fontID - 1], uiDoubleByteCode);
+				EnsureFreeTypeDoubleByteMetrics(activeFont, uiDoubleByteCode);
 				if (FontLetter* glyph = LookupDBGlyph(extraGlyphs, uiDoubleByteCode))
 					currentCharTotalWidth = GetGlyphLayoutWidth(glyph);
 				++currentCharIndex;
