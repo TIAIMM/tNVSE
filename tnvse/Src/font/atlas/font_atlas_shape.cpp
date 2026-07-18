@@ -269,6 +269,18 @@ namespace fonthook::vectorfont
 			quads.clear();
 			failure = PendingQuadBuildFailure::None;
 			const FontConfig& config = GetRuntimeConfig(runtime);
+			const bool visibleGlow = included[static_cast<size_t>(AtlasLayer::Glow)]
+				&& config.glow.enabled;
+			const bool visibleOutline = included[static_cast<size_t>(AtlasLayer::Outline)]
+				&& config.outline.enabled;
+			const bool shadowIncludesGlow =
+				included[static_cast<size_t>(AtlasLayer::Shadow)]
+				&& HardShadowIncludesGlow(config);
+			const bool shadowIncludesOutline =
+				included[static_cast<size_t>(AtlasLayer::Shadow)]
+				&& HardShadowIncludesOutline(config);
+			const bool needsGlowMask = visibleGlow || shadowIncludesGlow;
+			const bool needsOutlineMask = visibleOutline || shadowIncludesOutline;
 			thread_local std::vector<PreparedGlyph> prepared;
 			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
 			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
@@ -282,9 +294,9 @@ namespace fonthook::vectorfont
 				glyph.instance = &instance;
 				glyph.baselineOffset = GetGlyphBaselineOffset(runtime, instance.glyph);
 				bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Fill, 0 });
-				if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
+				if (needsGlowMask)
 					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Glow, 0 });
-				if (included[static_cast<size_t>(AtlasLayer::Outline)] && config.outline.enabled)
+				if (needsOutlineMask)
 					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Outline, 0 });
 				prepared.push_back(std::move(glyph));
 			}
@@ -298,19 +310,19 @@ namespace fonthook::vectorfont
 					failure = PendingQuadBuildFailure::Fill;
 					return false;
 				}
-				if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
+				if (needsGlowMask)
 				{
 					glyph.glow = bitmapResults[bitmapIndex++];
-					if (!glyph.glow)
+					if (!glyph.glow && visibleGlow)
 					{
 						failure = PendingQuadBuildFailure::Glow;
 						return false;
 					}
 				}
-				if (included[static_cast<size_t>(AtlasLayer::Outline)] && config.outline.enabled)
+				if (needsOutlineMask)
 				{
 					glyph.outline = bitmapResults[bitmapIndex++];
-					if (!glyph.outline)
+					if (!glyph.outline && visibleOutline)
 					{
 						failure = PendingQuadBuildFailure::Outline;
 						return false;
@@ -319,8 +331,39 @@ namespace fonthook::vectorfont
 			}
 
 			// Tile text does not consistently depth-test effect triangles. Submit each
-			// complete layer before the next one, with glow behind the hard shadow and
+			// complete layer before the next one, with the shadow behind the glow and
 			// every effect behind the fill.
+			if (included[static_cast<size_t>(AtlasLayer::Shadow)] && config.shadow.enabled)
+			{
+				for (const PreparedGlyph& glyph : prepared)
+				{
+					const NiColorA shadowColor = ResolveEffectColor(config.shadow,
+						config.fontColor, glyph.instance->color, tileColor);
+					if (shadowIncludesGlow && glyph.glow)
+					{
+						NiColorA componentColor = shadowColor;
+						componentColor.a *= config.glow.color.a;
+						AddPendingQuad(quads, glyph.glow, *glyph.instance,
+							componentColor, config.shadow.x, config.shadow.y,
+							rasterScale, glyph.baselineOffset, AtlasLayer::Shadow,
+							EffectUsesLiveTileRgb(config.shadow));
+					}
+					if (shadowIncludesOutline && glyph.outline)
+					{
+						NiColorA componentColor = shadowColor;
+						componentColor.a *= config.outline.color.a;
+						AddPendingQuad(quads, glyph.outline, *glyph.instance,
+							componentColor, config.shadow.x, config.shadow.y,
+							rasterScale, glyph.baselineOffset, AtlasLayer::Shadow,
+							EffectUsesLiveTileRgb(config.shadow));
+					}
+					AddPendingQuad(quads, glyph.fill, *glyph.instance,
+						shadowColor,
+						config.shadow.x, config.shadow.y, rasterScale,
+						glyph.baselineOffset, AtlasLayer::Shadow,
+						EffectUsesLiveTileRgb(config.shadow));
+				}
+			}
 			if (included[static_cast<size_t>(AtlasLayer::Glow)] && config.glow.enabled)
 			{
 				for (const PreparedGlyph& glyph : prepared)
@@ -330,18 +373,6 @@ namespace fonthook::vectorfont
 							glyph.instance->color, tileColor),
 						0.0f, 0.0f, rasterScale, glyph.baselineOffset, AtlasLayer::Glow,
 						EffectUsesLiveTileRgb(config.glow));
-				}
-			}
-			if (included[static_cast<size_t>(AtlasLayer::Shadow)] && config.shadow.enabled)
-			{
-				for (const PreparedGlyph& glyph : prepared)
-				{
-					AddPendingQuad(quads, glyph.fill, *glyph.instance,
-						ResolveEffectColor(config.shadow, config.fontColor,
-							glyph.instance->color, tileColor),
-						config.shadow.x, config.shadow.y, rasterScale,
-						glyph.baselineOffset, AtlasLayer::Shadow,
-						EffectUsesLiveTileRgb(config.shadow));
 				}
 			}
 			if (included[static_cast<size_t>(AtlasLayer::Outline)] && config.outline.enabled)
@@ -405,6 +436,10 @@ namespace fonthook::vectorfont
 			build.config.sdfSpreadPixels = static_cast<float>(sdfSpread);
 			build.config.shadowBlurPixels = config.shadow.blur * rasterScale;
 			build.config.shadowPower = config.shadow.power;
+			build.config.shadowGlowAlpha = HardShadowIncludesGlow(config)
+				? config.glow.color.a : 0.0f;
+			build.config.shadowOutlineAlpha = HardShadowIncludesOutline(config)
+				? config.outline.color.a : 0.0f;
 			build.config.glowInnerPixels = config.glow.inner * rasterScale;
 			build.config.glowOuterPixels = config.glow.outer * rasterScale;
 			build.config.glowPower = config.glow.power;
@@ -492,11 +527,13 @@ namespace fonthook::vectorfont
 				}
 			};
 
+			addRange(AtlasLayer::Shadow, !suppressEffects && config.shadow.enabled,
+				fillUsesSdf || config.shadow.blur > 0.0f
+					|| HardShadowIncludesGlow(config)
+					|| HardShadowIncludesOutline(config),
+				config.shadow.x, config.shadow.y);
 			addRange(AtlasLayer::Glow, !suppressEffects && config.glow.enabled,
 				true, 0.0f, 0.0f);
-			addRange(AtlasLayer::Shadow, !suppressEffects && config.shadow.enabled,
-				fillUsesSdf || config.shadow.blur > 0.0f,
-				config.shadow.x, config.shadow.y);
 			addRange(AtlasLayer::Outline, !suppressEffects && config.outline.enabled,
 				true, 0.0f, 0.0f);
 			addRange(AtlasLayer::Fill, true, fillUsesSdf, 0.0f, 0.0f);
@@ -589,10 +626,11 @@ namespace fonthook::vectorfont
 			add(&effect.useOriginalShader, sizeof(effect.useOriginalShader));
 			add(&effect.fillUsesSdf, sizeof(effect.fillUsesSdf));
 			add(&effect.quality, sizeof(effect.quality));
-			const std::array<float, 10> scalars = {
+			const std::array<float, 12> scalars = {
 				effect.inverseAtlasWidth, effect.inverseAtlasHeight,
 				effect.sdfSpreadPixels, effect.shadowBlurPixels,
-				effect.shadowPower, effect.glowInnerPixels,
+				effect.shadowPower, effect.shadowGlowAlpha,
+				effect.shadowOutlineAlpha, effect.glowInnerPixels,
 				effect.glowOuterPixels, effect.glowPower,
 				effect.outlineWidthPixels, effect.outlineSoftnessPixels
 			};

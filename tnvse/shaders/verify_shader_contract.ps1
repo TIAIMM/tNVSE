@@ -43,6 +43,12 @@ if ($effectsSource -notmatch 'NativeFontVanillaGlowFalloff[\s\S]*?exp2\s*\(') {
 if ($effectsSource -notmatch 'outer\s*-\s*antialiasWidth[\s\S]*?outer\s*\+\s*antialiasWidth') {
     throw 'Native SDF glow does not feather its outer cutoff by the pixel footprint'
 }
+if ($effectsSource -notmatch 'SdfFlags\.z\s*>\s*0\.0[\s\S]*?SdfFlags\.w\s*>\s*0\.0') {
+    throw 'Native hard shadow does not consume the copied glow and outline switches'
+}
+if ($effectsSource -notmatch 'outline\s*\+\s*\(1\.0\s*-\s*outline\)\s*\*\s*glow') {
+    throw 'Native hard shadow does not source-over the copied outline and glow masks'
+}
 
 $shaderInputs = @(
     'freetype_native_common.hlsli',
@@ -106,6 +112,14 @@ foreach ($shaderName in $pixelShaders) {
     if ($shaderName -like 'tnvse_freetype_native_effects_*.pso' -and
         -not ($dump -match '\b0\.001(?:0+\d*)?\b')) {
         throw "$shaderName does not contain the hard-shadow epsilon"
+    }
+    if ($shaderName -like 'tnvse_freetype_native_effects_*.pso') {
+        if (-not ($dump -match 'approximately\s+(\d+)\s+instruction slots used')) {
+            throw "$shaderName does not report its instruction-slot count"
+        }
+        if ([int]$Matches[1] -gt 512) {
+            throw "$shaderName exceeds the ps_3_0 512-instruction-slot limit"
+        }
     }
     if ($shaderName -eq 'tnvse_freetype_native_coverage.pso') {
         $textureSamples = @($instructions | Where-Object {

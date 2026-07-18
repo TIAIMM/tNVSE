@@ -378,10 +378,19 @@ namespace fonthook::vectorfont
 			const float stroke = std::max(
 				config.glow.enabled ? std::max(0.0f, config.glow.width) : 0.0f,
 				config.outline.enabled ? std::max(0.0f, config.outline.width) : 0.0f);
+			float shadowRadius = config.shadow.enabled
+				? std::max(0.0f, config.shadow.blur) : 0.0f;
+			if (HardShadowIncludesGlow(config))
+				shadowRadius = std::max(shadowRadius, config.glow.outer);
+			if (HardShadowIncludesOutline(config))
+			{
+				shadowRadius = std::max(shadowRadius,
+					config.outline.width + config.outline.softness);
+			}
 			const float shadowTop = config.shadow.enabled
-				? std::max(0.0f, -config.shadow.y) : 0.0f;
+				? std::max(0.0f, shadowRadius - config.shadow.y) : 0.0f;
 			const float shadowBottom = config.shadow.enabled
-				? std::max(0.0f, config.shadow.y) : 0.0f;
+				? std::max(0.0f, shadowRadius + config.shadow.y) : 0.0f;
 			return { std::max(stroke, shadowTop), std::max(stroke, shadowBottom) };
 		}
 

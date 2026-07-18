@@ -94,7 +94,8 @@ fonts continue to use the original `.fnt` and `.tex` files.
             colorMode="fill" alpha="0.35"/>
       <outline enabled="1" width="1" softness="0.5"
                colorMode="fixed" color="#000000" alpha="1"/>
-      <shadow enabled="1" x="1" y="1" blur="2" power="2"
+      <shadow enabled="1" x="1" y="1" blur="0" power="2"
+              includeGlow="1" includeOutline="1"
               colorMode="fixed" color="#000000" alpha="0.65"/>
     </font>
   </fonts>
@@ -152,7 +153,12 @@ coverage bitmap, while `fillRenderMode="sdf"` selects the hinted outline-to-SDF
 body. Glow uses `inner`, `outer`, and `power`; legacy `width` is accepted as
 an alias for `outer` only when `outer` is absent. Outline accepts a
 non-negative `softness`. Shadow accepts a non-negative `blur` and a positive
-`power`; `blur=0` preserves the exact hinted offset mask.
+`power`; `blur=0` preserves the exact hinted offset mask. On a hard shadow,
+`includeGlow="1"` and `includeOutline="1"` reproduce the currently enabled
+effect coverage in that offset mask. Copied coverage retains the source effect
+alpha, is combined with source-over alpha, and is uniformly tinted by the
+shadow color. Both switches default to `0` and are ignored when blur is
+non-zero.
 
 Every effect accepts `colorMode="fixed|fill"`. The backward-compatible default
 is `fixed`: the native profile neutralizes the live Tile RGB (`c0.rgb = 1`) and
@@ -379,10 +385,11 @@ startup text remain unaffected, and no VUI+ XML file is modified.
 The base A8 shader and all effect variants use `ps_3_0`. A `grayscale` body
 uses the hinted grayscale mask. An `sdf` body, glow, outline, and blurred
 shadow share a FreeType distance field generated directly from the hinted
-outline; hard shadow reuses the selected body mask. FreeType overlap handling
+outline; hard shadow reuses the selected body mask and can analytically copy
+the active glow and outline masks. FreeType overlap handling
 is enabled only when the loaded outline carries `FT_OUTLINE_OVERLAP`. Both
 masks can occupy the same A8 atlas. Effects
-execute global glow, shadow, outline, and fill passes over one `NiTriShape`,
+execute global shadow, glow, outline, and fill passes over one `NiTriShape`,
 which prevents a later glyph effect from covering an earlier glyph fill. SDF
 passes use bilinear MIN/MAG sampling at atlas LOD 0 and derivative-based edge
 antialiasing; they never consume the coverage-averaged atlas mip chain.

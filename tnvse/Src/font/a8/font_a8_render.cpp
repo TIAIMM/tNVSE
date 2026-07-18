@@ -62,22 +62,31 @@ namespace fonthook::vectorfont
 			if (!effectConfig || !effectConfig->enabled)
 				return true;
 
-			const std::array<float, 9> scalarValues = {
+			const std::array<float, 12> scalarValues = {
 				effectConfig->inverseAtlasWidth,
 				effectConfig->inverseAtlasHeight,
 				effectConfig->sdfSpreadPixels,
 				effectConfig->shadowBlurPixels,
 				effectConfig->shadowPower,
+				effectConfig->shadowGlowAlpha,
+				effectConfig->shadowOutlineAlpha,
 				effectConfig->glowInnerPixels,
 				effectConfig->glowOuterPixels,
 				effectConfig->glowPower,
-				effectConfig->outlineWidthPixels
+				effectConfig->outlineWidthPixels,
+				effectConfig->outlineSoftnessPixels
 			};
 			if (!std::all_of(scalarValues.begin(), scalarValues.end(),
-				[](float value) { return std::isfinite(value); })
-				|| !std::isfinite(effectConfig->outlineSoftnessPixels))
+				[](float value) { return std::isfinite(value); }))
 			{
 				return RejectA8Shape("non-finite-effect-configuration");
+			}
+			if (effectConfig->shadowGlowAlpha < 0.0f
+				|| effectConfig->shadowGlowAlpha > 1.0f
+				|| effectConfig->shadowOutlineAlpha < 0.0f
+				|| effectConfig->shadowOutlineAlpha > 1.0f)
+			{
+				return RejectA8Shape("invalid-shadow-component-alpha");
 			}
 			if (static_cast<UInt32>(effectConfig->quality)
 				> static_cast<UInt32>(EffectQuality::High))
@@ -171,6 +180,24 @@ namespace fonthook::vectorfont
 				float parameter0 = metadata.effects.shadowBlurPixels;
 				float parameter1 = metadata.effects.shadowPower;
 				float parameter2 = 0.0f;
+				float parameter3 = 0.0f;
+				float sdfFlag1 = 0.0f;
+				float sdfFlag2 = 0.0f;
+				float sdfFlag3 = 0.0f;
+				const bool hardShadowComposite = range.layer == 0
+					&& metadata.effects.shadowBlurPixels <= 0.001f
+					&& (metadata.effects.shadowGlowAlpha > 0.0f
+						|| metadata.effects.shadowOutlineAlpha > 0.0f);
+				if (hardShadowComposite)
+				{
+					parameter0 = metadata.effects.glowInnerPixels;
+					parameter1 = metadata.effects.glowOuterPixels;
+					parameter2 = metadata.effects.glowPower;
+					parameter3 = metadata.effects.outlineWidthPixels;
+					sdfFlag1 = metadata.effects.outlineSoftnessPixels;
+					sdfFlag2 = metadata.effects.shadowGlowAlpha;
+					sdfFlag3 = metadata.effects.shadowOutlineAlpha;
+				}
 				if (range.layer == 1)
 				{
 					parameter0 = metadata.effects.glowInnerPixels;
@@ -195,8 +222,8 @@ namespace fonthook::vectorfont
 					range.colorModifier.b, range.colorModifier.a,
 					inverseAtlasWidth, inverseAtlasHeight,
 					static_cast<float>(range.layer), metadata.effects.sdfSpreadPixels,
-					parameter0, parameter1, parameter2, 0.0f,
-					range.usesSdf ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f
+					parameter0, parameter1, parameter2, parameter3,
+					range.usesSdf ? 1.0f : 0.0f, sdfFlag1, sdfFlag2, sdfFlag3
 				}};
 				if (metadata.effects.useOriginalShader)
 					compiled.shaderClass = A8CompiledShaderClass::Original;

@@ -120,10 +120,15 @@
         width: positive outline width when enabled.
         softness: non-negative edge transition. Default: 0.5.
 
-      <shadow x="1" y="1" blur="2" power="2"/>
+      <shadow x="1" y="1" blur="0" power="2"
+              includeGlow="1" includeOutline="1"/>
         x / y: signed offsets. Default: 0.
         blur: non-negative blur radius. Default: 0.
         power: positive falloff exponent. Default: 2.
+        includeGlow / includeOutline: when blur is 0, copy the currently
+          enabled glow or outline coverage into the offset shadow mask. The
+          copied coverage keeps the source effect alpha but uses shadow color.
+          Both default to 0 and are ignored for blurred shadows.
     -->
 
     <!-- 1: Glow_Monofonto_Large -->
@@ -141,7 +146,7 @@
       </doubleByte>
       <glow enabled="1" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
       <outline enabled="0" width="0.5" softness="0.5" color="#000000" alpha="1"/>
-      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" colorMode="fixed" color="#000000" alpha="0.75"/>
+      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" includeGlow="1" includeOutline="1" colorMode="fixed" color="#000000" alpha="0.75"/>
     </font>
 
     <!-- 2: Monofonto_Large -->
@@ -159,7 +164,7 @@
       </doubleByte>
       <glow enabled="0" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.5"/>
       <outline enabled="0" width="0" softness="0.5" color="#000000" alpha="1"/>
-      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" colorMode="fixed" color="#000000" alpha="0.75"/>
+      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" includeGlow="1" includeOutline="1" colorMode="fixed" color="#000000" alpha="0.75"/>
     </font>
 
     <!-- 3: Glow_Monofonto_Medium -->
@@ -177,7 +182,7 @@
       </doubleByte>
       <glow enabled="1" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
       <outline enabled="0" width="0.75" softness="0.5" color="#000000" alpha="1"/>
-      <shadow enabled="1" x="1.25" y="1.5" blur="0" power="1.5" colorMode="fixed" color="#000000" alpha="0.75"/>
+      <shadow enabled="1" x="1.25" y="1.5" blur="0" power="1.5" includeGlow="1" includeOutline="1" colorMode="fixed" color="#000000" alpha="0.75"/>
     </font>
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
@@ -195,7 +200,7 @@
       </doubleByte>
       <glow enabled="0" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.5"/>
       <outline enabled="0" width="0" softness="0.5" color="#000000" alpha="1"/>
-      <shadow enabled="1" x="1.75" y="2" blur="0" power="1.5" colorMode="fixed" color="#000000" alpha="0.75"/>
+      <shadow enabled="1" x="1.75" y="2" blur="0" power="1.5" includeGlow="1" includeOutline="1" colorMode="fixed" color="#000000" alpha="0.75"/>
     </font>
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
@@ -213,7 +218,7 @@
       </doubleByte>
       <glow enabled="0" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0"/>
       <outline enabled="0" width="0" softness="0.5" color="#000000" alpha="1"/>
-      <shadow enabled="0" x="0" y="0" blur="0" power="2" colorMode="fixed" color="#000000" alpha="0"/>
+      <shadow enabled="0" x="0" y="0" blur="0" power="2" includeGlow="0" includeOutline="0" colorMode="fixed" color="#000000" alpha="0"/>
     </font>
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
@@ -231,7 +236,7 @@
       </doubleByte>
       <glow enabled="1" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
       <outline enabled="0" width="0.5" softness="0.5" color="#000000" alpha="1"/>
-      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" colorMode="fixed" color="#000000" alpha="0.75"/>
+      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" includeGlow="1" includeOutline="1" colorMode="fixed" color="#000000" alpha="0.75"/>
     </font>
 
     <!-- 7: Baked-in_Monofonto_Large -->
@@ -249,7 +254,7 @@
       </doubleByte>
       <glow enabled="1" inner="0" outer="2.5" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
       <outline enabled="0" width="1.5" softness="0.5" color="#000000" alpha="1"/>
-      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" colorMode="fixed" color="#000000" alpha="0.75"/>
+      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" includeGlow="1" includeOutline="1" colorMode="fixed" color="#000000" alpha="0.75"/>
     </font>
 
     <!-- 8: Glow_Futura_Caps_Large -->
@@ -267,7 +272,7 @@
       </doubleByte>
       <glow enabled="1" inner="0" outer="3" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
       <outline enabled="0" width="1.25" softness="0.5" color="#000000" alpha="1"/>
-      <shadow enabled="1" x="2" y="2.5" blur="0" power="1.5" colorMode="fixed" color="#000000" alpha="0.75"/>
+      <shadow enabled="1" x="2" y="2.5" blur="0" power="1.5" includeGlow="1" includeOutline="1" colorMode="fixed" color="#000000" alpha="0.75"/>
     </font>
 
 	<!-- 42: Monofonto_STn (same as Monofonto_Large) -->
@@ -285,7 +290,7 @@
       </doubleByte>
       <glow enabled="0" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.5"/>
       <outline enabled="0" width="0" softness="0.5" color="#000000" alpha="1"/>
-      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" colorMode="fixed" color="#000000" alpha="0.75"/>
+      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" includeGlow="1" includeOutline="1" colorMode="fixed" color="#000000" alpha="0.75"/>
     </font>
   </fonts>
 </tNVSE>

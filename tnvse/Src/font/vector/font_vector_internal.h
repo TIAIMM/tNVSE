@@ -86,6 +86,8 @@ namespace fonthook::vectorfont
 	struct EffectStyle
 	{
 		bool enabled = false;
+		bool includeGlow = false;
+		bool includeOutline = false;
 		float width = 0.0f;
 		float blur = 0.0f;
 		float inner = 0.0f;
@@ -186,13 +188,13 @@ namespace fonthook::vectorfont
 	};
 
 	// Layer IDs are part of the shader/native-packet ABI. Keep those IDs stable
-	// while defining composition order independently: Glow, Shadow, Outline, Fill.
+	// while defining composition order independently: Shadow, Glow, Outline, Fill.
 	inline constexpr UInt32 GetA8LayerDrawRank(UInt32 layer)
 	{
 		switch (layer)
 		{
-		case 1: return 0; // Glow
-		case 0: return 1; // Shadow
+		case 0: return 0; // Shadow
+		case 1: return 1; // Glow
 		case 2: return 2; // Outline
 		case 3: return 3; // Fill
 		default: return 4;
@@ -224,6 +226,8 @@ namespace fonthook::vectorfont
 		float sdfSpreadPixels = 0.0f;
 		float shadowBlurPixels = 0.0f;
 		float shadowPower = 2.0f;
+		float shadowGlowAlpha = 0.0f;
+		float shadowOutlineAlpha = 0.0f;
 		float glowInnerPixels = 0.0f;
 		float glowOuterPixels = 0.0f;
 		float glowPower = 2.0f;
@@ -345,6 +349,8 @@ namespace fonthook::vectorfont
 		float afRasterScale);
 	void FlushGlyphBitmapDiskCache();
 	bool UsesSdfFill(const FontConfig& arConfig);
+	bool HardShadowIncludesGlow(const FontConfig& arConfig);
+	bool HardShadowIncludesOutline(const FontConfig& arConfig);
 	bool HasSdfEffects(const FontConfig& arConfig);
 	bool NeedsSdfMask(const FontConfig& arConfig);
 	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread,

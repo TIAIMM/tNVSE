@@ -232,6 +232,8 @@ namespace fonthook::vectorfont
 
 			if (kind == EffectKind::Shadow)
 			{
+				result.includeGlow = node.attribute("includeGlow").as_bool(false);
+				result.includeOutline = node.attribute("includeOutline").as_bool(false);
 				result.x = node.attribute("x").as_float(0.0f);
 				result.y = node.attribute("y").as_float(0.0f);
 				result.blur = node.attribute("blur").as_float(0.0f);
@@ -339,6 +341,8 @@ namespace fonthook::vectorfont
 			auto hashEffect = [&](const EffectStyle& effect)
 			{
 				HashBytes(hash, &effect.enabled, sizeof(effect.enabled));
+				HashBytes(hash, &effect.includeGlow, sizeof(effect.includeGlow));
+				HashBytes(hash, &effect.includeOutline, sizeof(effect.includeOutline));
 				HashBytes(hash, &effect.width, sizeof(effect.width));
 				HashBytes(hash, &effect.blur, sizeof(effect.blur));
 				HashBytes(hash, &effect.inner, sizeof(effect.inner));
@@ -514,7 +518,7 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d unicodeLineBreaking=%d features=%u baseline=%.2f fontColor=%d fillRenderMode=%s effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f",
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d unicodeLineBreaking=%d features=%u baseline=%.2f fontColor=%d fillRenderMode=%s effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
 				config.fontId, static_cast<UInt32>(config.prewarm),
 				config.verticalMetrics == VerticalMetricsMode::Original ? "original" : "freetype",
 				config.shaping ? 1 : 0,
@@ -529,7 +533,8 @@ namespace fonthook::vectorfont
 				config.outline.enabled, EffectColorModeName(config.outline.colorMode),
 				config.outline.width, config.outline.softness,
 				config.shadow.enabled, EffectColorModeName(config.shadow.colorMode),
-				config.shadow.blur, config.shadow.power);
+				config.shadow.blur, config.shadow.power,
+				config.shadow.includeGlow, config.shadow.includeOutline);
 			FreeTypeFontDebugLog(
 				"tnvse_freetype_font:   hashes layout=%016llX mask=%016llX shader=%016llX",
 				static_cast<unsigned long long>(config.layoutHash),
@@ -576,11 +581,25 @@ namespace fonthook::vectorfont
 		return arConfig.fillRenderMode == FillRenderMode::Sdf;
 	}
 
+	bool HardShadowIncludesGlow(const FontConfig& arConfig)
+	{
+		return arConfig.shadow.enabled && arConfig.shadow.blur <= 0.001f
+			&& arConfig.shadow.includeGlow && arConfig.glow.enabled;
+	}
+
+	bool HardShadowIncludesOutline(const FontConfig& arConfig)
+	{
+		return arConfig.shadow.enabled && arConfig.shadow.blur <= 0.001f
+			&& arConfig.shadow.includeOutline && arConfig.outline.enabled;
+	}
+
 	bool HasSdfEffects(const FontConfig& arConfig)
 	{
 		return arConfig.glow.enabled
 			|| arConfig.outline.enabled
-			|| (arConfig.shadow.enabled && arConfig.shadow.blur > 0.0f);
+			|| (arConfig.shadow.enabled && arConfig.shadow.blur > 0.0f)
+			|| HardShadowIncludesGlow(arConfig)
+			|| HardShadowIncludesOutline(arConfig);
 	}
 
 	bool NeedsSdfMask(const FontConfig& arConfig)
