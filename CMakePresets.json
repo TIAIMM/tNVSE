@@ -1,0 +1,47 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 3,
+    "patch": 1
+  },
+  "configurePresets": [
+    {
+      "name": "vs2026-win32",
+      "displayName": "Visual Studio 2026 - Win32 - v145",
+      "description": "Canonical tNVSE configuration for Fallout: New Vegas.",
+      "generator": "Visual Studio 18 2026",
+      "architecture": {
+        "value": "Win32",
+        "strategy": "set"
+      },
+      "toolset": {
+        "value": "v145,version=14.52.36530,host=x64",
+        "strategy": "set"
+      },
+      "binaryDir": "${sourceDir}/out/build/vs2026-win32",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/vs2026-win32",
+        "TNVSE_PLUGIN_PATH": "$env{NVSE_PLUGIN_PATH}"
+      },
+      "warnings": {
+        "dev": true,
+        "deprecated": true
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "vs2026-win32-debug",
+      "displayName": "Build tNVSE Debug (Win32/v145)",
+      "configurePreset": "vs2026-win32",
+      "configuration": "Debug"
+    },
+    {
+      "name": "vs2026-win32-release",
+      "displayName": "Build tNVSE Release (Win32/v145)",
+      "configurePreset": "vs2026-win32",
+      "configuration": "Release"
+    }
+  ]
+}
