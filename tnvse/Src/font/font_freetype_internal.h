@@ -621,7 +621,6 @@ namespace fonthook::vectorfont
 	FreeTypeThreadState& ThreadState();
 
 	size_t GetBitmapCacheLimit();
-	void SetBitmapCacheReducedAfterPrewarm(bool abReduced);
 	size_t GetLayoutCacheLimit();
 	std::wstring NormalizePathKey(std::wstring path);
 	UInt64 HashBytes64(const void* data, size_t size,

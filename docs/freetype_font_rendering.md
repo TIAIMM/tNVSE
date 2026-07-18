@@ -535,7 +535,19 @@ memory. Equivalent masks are shared across font IDs when the resolved font
 file/face, glyph, effective raster size, emboldening, slant, stroke or SDF
 parameters, and mask type match. Baseline placement remains per font ID and is
 not baked into the shared mask. `uiFreeTypeFontMemoryCacheMB` controls those
-CPU-side caches. When
+CPU-side caches. During blocking prewarm, the bitmap LRU keeps its original
+one-quarter share of that budget so wide raster batches do not churn. After
+every queued profile finishes successfully from a snapshot or a newly saved
+atlas, tNVSE flushes the persistent bitmap files, releases their large mappings,
+and immediately trims the bitmap LRU to one-sixteenth of the configured memory,
+clamped to 8-16 MiB and never above its original share. With the default 192 MiB
+setting this changes only the bitmap cache from 48 MiB to 12 MiB; layout, batch,
+packet-template, and prepared-text budgets remain unchanged. A later genuine
+prewarm job restores the larger working limit before rasterization. If any
+profile is cancelled, fills its atlas, or fails to save, automatic shrinking is
+skipped because its incomplete atlas may still need the CPU masks.
+
+When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
