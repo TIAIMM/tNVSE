@@ -278,16 +278,6 @@ namespace fonthook::vectorfont
 				nullptr, 0, &bytesReturned, nullptr) != FALSE;
 		}
 
-		bool TryEnableFileCompression(HANDLE file)
-		{
-			if (file == INVALID_HANDLE_VALUE)
-				return false;
-			USHORT format = COMPRESSION_FORMAT_DEFAULT;
-			DWORD bytesReturned = 0;
-			return DeviceIoControl(file, FSCTL_SET_COMPRESSION,
-				&format, sizeof(format), nullptr, 0, &bytesReturned, nullptr) != FALSE;
-		}
-
 		bool ReadFileAt(HANDLE file, UInt64 offset, void* data, UInt32 size)
 		{
 			if (!size)
@@ -453,7 +443,6 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			TryEnableSparseFile(profile.file);
-			TryEnableFileCompression(profile.file);
 			if (!SetFileSize64(profile.file, header.dataOffset)
 				|| !WriteFileAt(profile.file, 0, &header, sizeof(header)))
 			{
@@ -502,7 +491,6 @@ namespace fonthook::vectorfont
 			if (profile.writable)
 			{
 				TryEnableSparseFile(profile.file);
-				TryEnableFileCompression(profile.file);
 			}
 			if (!profile.writable)
 			{
@@ -944,10 +932,7 @@ namespace fonthook::vectorfont
 			manifest->writable = manifest->file != INVALID_HANDLE_VALUE;
 			if (manifest->writable)
 			{
-				// Packed entries rarely leave full sparse clusters. NTFS compression
-				// complements sparse allocation without changing mapped-file access.
 				TryEnableSparseFile(manifest->file);
-				TryEnableFileCompression(manifest->file);
 			}
 			if (!manifest->writable)
 			{
@@ -985,7 +970,6 @@ namespace fonthook::vectorfont
 					return nullptr;
 				}
 				TryEnableSparseFile(manifest->file);
-				TryEnableFileCompression(manifest->file);
 				if (!SetFileSize64(manifest->file, expectedSize)
 					|| !WriteFileAt(manifest->file, 0, &header, sizeof(header)))
 				{

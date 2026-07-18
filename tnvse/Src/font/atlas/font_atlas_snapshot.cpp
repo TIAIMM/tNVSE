@@ -50,16 +50,6 @@ namespace fonthook::vectorfont
 				nullptr, 0, &bytesReturned, nullptr) != FALSE;
 		}
 
-		bool TryEnableFileCompression(HANDLE file)
-		{
-			if (file == INVALID_HANDLE_VALUE)
-				return false;
-			USHORT format = COMPRESSION_FORMAT_DEFAULT;
-			DWORD bytesReturned = 0;
-			return DeviceIoControl(file, FSCTL_SET_COMPRESSION,
-				&format, sizeof(format), nullptr, 0, &bytesReturned, nullptr) != FALSE;
-		}
-
 		bool WriteSequentialFileBytes(HANDLE file, const void* data, size_t size)
 		{
 			if (!size)
@@ -1097,7 +1087,6 @@ namespace fonthook::vectorfont
 				if (file == INVALID_HANDLE_VALUE)
 					return false;
 				const bool sparse = TryEnableSparseFile(file);
-				TryEnableFileCompression(file);
 				const bool written = WriteSequentialFileBytes(file,
 					&page.header, sizeof(page.header))
 					&& WriteSequentialFileBytes(file, page.placements.data(),
