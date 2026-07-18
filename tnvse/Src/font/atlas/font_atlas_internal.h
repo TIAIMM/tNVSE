@@ -108,6 +108,9 @@ namespace fonthook::vectorfont
 	};
 
 	constexpr UInt32 kAtlasSnapshotVersion = 8;
+	// This identity-only revision invalidates the old partial codepage snapshot
+	// without forcing complete SDF-fill or unrelated atlas profiles to rebuild.
+	constexpr UInt32 kCodePageEffectOnlySdfCoverageRevision = 1;
 	constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 #pragma pack(push, 1)
 	struct AtlasSnapshotHeader

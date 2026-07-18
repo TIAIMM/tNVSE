@@ -131,7 +131,7 @@ namespace fonthook::vectorfont
 		}
 
 		UInt64 GetAtlasSnapshotHash(const AtlasCacheKey& key, UInt64 maskContentHash,
-			FontPrewarmMode prewarmMode)
+			const FontConfig& config)
 		{
 			UInt64 hash = HashAtlasBytes(&kAtlasSnapshotVersion,
 				sizeof(kAtlasSnapshotVersion));
@@ -146,11 +146,21 @@ namespace fonthook::vectorfont
 				sizeof(key.levelZeroOnly), hash);
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			hash = HashAtlasBytes(&codePage, sizeof(codePage), hash);
-			hash = HashAtlasBytes(&prewarmMode, sizeof(prewarmMode), hash);
+			hash = HashAtlasBytes(&config.prewarm, sizeof(config.prewarm), hash);
 			hash = HashAtlasBytes(&kMaximumAtlasMipLevels,
 				sizeof(kMaximumAtlasMipLevels), hash);
-			return HashAtlasBytes(&A8ShapeColorContract::kTileUniformColorAbi,
+			hash = HashAtlasBytes(&A8ShapeColorContract::kTileUniformColorAbi,
 				sizeof(A8ShapeColorContract::kTileUniformColorAbi), hash);
+			const bool completeEffectOnlySdf =
+				config.prewarm == FontPrewarmMode::CodePage
+				&& key.renderMode == AtlasRenderMode::ShaderEffects
+				&& !UsesSdfFill(config) && NeedsSdfMask(config);
+			if (completeEffectOnlySdf)
+			{
+				hash = HashAtlasBytes(&kCodePageEffectOnlySdfCoverageRevision,
+					sizeof(kCodePageEffectOnlySdfCoverageRevision), hash);
+			}
+			return hash;
 		}
 
 		std::wstring GetAtlasSnapshotPath(RuntimeFont& runtime,
@@ -161,7 +171,7 @@ namespace fonthook::vectorfont
 				return {};
 			maskContentHash = GetRuntimeMaskContentHash(runtime);
 			snapshotHash = GetAtlasSnapshotHash(key, maskContentHash,
-				GetRuntimeConfig(runtime).prewarm);
+				GetRuntimeConfig(runtime));
 			wchar_t fileName[256] = {};
 			_snwprintf_s(fileName, _countof(fileName), _TRUNCATE,
 				L"shared_%016llX_p%u.tnvfatlas",

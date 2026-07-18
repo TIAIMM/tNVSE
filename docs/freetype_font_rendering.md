@@ -261,10 +261,12 @@ together with the game without a polling timer.
 A font task allocates additional atlas pages when its complete set cannot fit
 one 4096x4096 page. It reports `atlas-full` only if one incoming batch cannot
 fit an empty maximum-size page, the page-count safety limit is reached, or a
-texture allocation/upload fails. Full code-page prewarming generates the selected fill mask for
-every valid unit. Consequently an SDF fill is prewarmed for the complete code
-page and its hard shadow reuses the same mask. SDF masks needed only by effects
-remain limited to single-byte and common double-byte characters.
+texture allocation/upload fails. Full code-page prewarming generates every mask
+that runtime rendering can request for every valid unit. Consequently an SDF
+fill is prewarmed for the complete code page and its hard shadow reuses the same
+mask. When the fill remains grayscale but an enabled effect needs SDF, both the
+grayscale fill and effect-only SDF are prewarmed for the complete code page.
+`common` mode remains limited to its selected common-character profile.
 
 Generated grayscale and SDF masks are persisted under
 `Data\NVSE\plugins\tnvse\fontdata`. Each mask profile begins with a dense
@@ -287,9 +289,12 @@ last-write time still match. A dense 65536-entry `.tnvfmanifest` stores the
 encoded unit's Unicode value, fallback face/glyph identity, and serialized
 `FontLetter` metrics. One `_p<page>.tnvfatlas` snapshot per atlas page stores
 the stable glyph-ID placement map. Snapshot v8 uses `stb_rect_pack` skyline
-packing for a complete pure-SDF profile in deterministic
-height/width/glyph-ID order, can reduce the page count, and shrinks every page
-to the smallest usable power-of-two dimensions. The live atlas is not
+packing. A coverage-policy revision participates only in the identity of
+code-page shader profiles with grayscale fill and effect-only SDF, invalidating
+older snapshots that could contain only their common-character subset without
+rebuilding already-complete SDF-fill profiles. Pure-SDF profiles are packed in
+deterministic height/width/glyph-ID order, can reduce the page count, and shrink
+every page to the smallest usable power-of-two dimensions. The live atlas is not
 rearranged, so shapes created in the current process keep their original UVs;
 the compact layout takes effect on the next restore. A restored skyline page
 starts runtime shelf appends below its packed extent rather than reusing skyline
