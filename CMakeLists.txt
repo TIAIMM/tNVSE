@@ -152,8 +152,37 @@ set_target_properties(tnvse PROPERTIES
 add_dependencies(tnvse tnvse_shaders)
 tnvse_copy_dxsdk_runtime(tnvse)
 
-set(TNVSE_PLUGIN_PATH "$ENV{NVSE_PLUGIN_PATH}" CACHE PATH
+option(TNVSE_BUILD_TESTS "Build focused tNVSE unit tests" OFF)
+if(TNVSE_BUILD_TESTS)
+  enable_testing()
+  add_executable(tnvse_sparse_codepoint_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/font_sparse_codepoint_table_tests.cpp")
+  target_include_directories(tnvse_sparse_codepoint_tests PRIVATE
+    "${TNVSE_SOURCE_ROOT}/font/vector")
+  target_compile_features(tnvse_sparse_codepoint_tests PRIVATE cxx_std_20)
+  tnvse_apply_msvc_defaults(tnvse_sparse_codepoint_tests)
+  set_target_properties(tnvse_sparse_codepoint_tests PROPERTIES
+    FOLDER "tNVSE/Tests")
+  add_test(NAME tnvse_sparse_codepoint_tests
+    COMMAND tnvse_sparse_codepoint_tests)
+endif()
+
+set(_tnvse_plugin_path_help
   "Existing NVSE/plugins directory used for post-build deployment")
+if(DEFINED ENV{NVSE_PLUGIN_PATH} AND NOT "$ENV{NVSE_PLUGIN_PATH}" STREQUAL "")
+  # The Windows environment variable is authoritative on every configure.
+  # FORCE prevents an older CMake cache entry from silently deploying to a
+  # stale MO2 instance after NVSE_PLUGIN_PATH changes.
+  file(TO_CMAKE_PATH "$ENV{NVSE_PLUGIN_PATH}" _tnvse_plugin_path_from_env)
+  set(TNVSE_PLUGIN_PATH "${_tnvse_plugin_path_from_env}" CACHE PATH
+    "${_tnvse_plugin_path_help}" FORCE)
+else()
+  # Without the environment variable, retain support for an explicit
+  # -DTNVSE_PLUGIN_PATH=... cache value.
+  set(TNVSE_PLUGIN_PATH "" CACHE PATH "${_tnvse_plugin_path_help}")
+endif()
+unset(_tnvse_plugin_path_from_env)
+unset(_tnvse_plugin_path_help)
 tnvse_enable_live_deployment(tnvse "${TNVSE_PLUGIN_PATH}" "${TNVSE_SHADER_OUTPUTS}")
 
 install(TARGETS tnvse RUNTIME DESTINATION "NVSE/plugins")

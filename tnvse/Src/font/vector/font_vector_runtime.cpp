@@ -297,20 +297,21 @@ namespace fonthook::vectorfont
 			if (state.codePointCacheCodePage != codePage)
 			{
 				state.singleByteCodePoints.fill(UINT32_MAX);
-				state.doubleByteCodePoints.fill(UINT32_MAX);
+				state.doubleByteCodePoints.Clear();
 				state.codePointCacheCodePage = codePage;
 			}
 			const UInt32 encoded = length == 1
 				? static_cast<UInt8>(bytes[0])
 				: (static_cast<UInt32>(static_cast<UInt8>(bytes[0])) << 8)
 					| static_cast<UInt8>(bytes[1]);
-			UInt32& cached = length == 1
-				? state.singleByteCodePoints[encoded] : state.doubleByteCodePoints[encoded];
-			if (cached != UINT32_MAX)
+			auto* cached = length == 1
+				? &state.singleByteCodePoints[encoded]
+				: state.doubleByteCodePoints.GetOrCreate(static_cast<UInt16>(encoded));
+			if (cached && *cached != UINT32_MAX)
 			{
-				if (cached == UINT32_MAX - 1)
+				if (*cached == UINT32_MAX - 1)
 					return false;
-				codePoint = cached;
+				codePoint = *cached;
 				return true;
 			}
 
@@ -324,16 +325,21 @@ namespace fonthook::vectorfont
 			}
 			if (count == 1)
 			{
-				codePoint = cached = static_cast<UInt16>(wide[0]);
+				codePoint = static_cast<UInt16>(wide[0]);
+				if (cached)
+					*cached = codePoint;
 				return true;
 			}
 			if (count == 2 && wide[0] >= 0xD800 && wide[0] <= 0xDBFF
 				&& wide[1] >= 0xDC00 && wide[1] <= 0xDFFF)
 			{
-				codePoint = cached = 0x10000 + ((wide[0] - 0xD800) << 10) + (wide[1] - 0xDC00);
+				codePoint = 0x10000 + ((wide[0] - 0xD800) << 10) + (wide[1] - 0xDC00);
+				if (cached)
+					*cached = codePoint;
 				return true;
 			}
-			cached = UINT32_MAX - 1;
+			if (cached)
+				*cached = UINT32_MAX - 1;
 			return false;
 		}
 

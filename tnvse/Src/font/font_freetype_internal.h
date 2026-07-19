@@ -3,6 +3,7 @@
 // Private FreeType runtime model shared only by sibling implementation units.
 
 #include "font_vector_internal.h"
+#include "font_sparse_codepoint_table.h"
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -599,7 +600,7 @@ namespace fonthook::vectorfont
 			LayoutCacheKeyEqual> layoutCache;
 		std::list<LayoutCacheKey> layoutLru;
 		std::array<UInt32, 256> singleByteCodePoints = {};
-		std::array<UInt32, 65536> doubleByteCodePoints = {};
+		SparseCodePointTable<UInt32> doubleByteCodePoints;
 		UInt32 codePointCacheCodePage = UINT32_MAX;
 		std::unordered_set<UInt32> loggedUnconfiguredFontIds;
 		std::unordered_set<UInt64> loggedVerticalMetricRoles;

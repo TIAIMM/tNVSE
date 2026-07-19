@@ -60,8 +60,10 @@ The build also:
   contract;
 - compiles all seven native D3D9 shaders and runs the shader ABI verifier;
 - copies the D3DX runtime DLLs next to the build output;
-- copies `tnvse.dll` and the shaders to the live mod when
-  `TNVSE_PLUGIN_PATH` points to its `NVSE/plugins` directory.
+- copies `tnvse.dll` and the shaders to the live mod when the Windows
+  environment variable `NVSE_PLUGIN_PATH` points to its `NVSE/plugins`
+  directory. The value is refreshed on every CMake configure, so changing the
+  system variable does not leave a stale deployment path in `CMakeCache.txt`.
 
 ## Visual Studio folder workflow
 
@@ -82,7 +84,19 @@ The build presets intentionally omit `jobs`. Visual Studio then lets MSBuild
 choose its native parallelism instead of translating a zero job count into
 the invalid command-line argument `--parallel 0`.
 
-To select or change the live deployment directory explicitly:
+The recommended persistent configuration is the Windows user or system
+environment variable:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  'NVSE_PLUGIN_PATH',
+  'E:\NVCNTest\MO2\mods\tNVSE\NVSE\plugins',
+  'User')
+```
+
+Restart Visual Studio after changing the variable so it inherits the new
+environment. If `NVSE_PLUGIN_PATH` is not defined, the CMake cache variable can
+still be supplied explicitly:
 
 ```powershell
 & $cmake --preset vs2026-win32 -DTNVSE_PLUGIN_PATH='E:\NVCNTest\MO2\mods\tNVSE\NVSE\plugins'
