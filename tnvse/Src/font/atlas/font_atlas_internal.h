@@ -3,6 +3,7 @@
 // Private atlas model and sibling-module services.
 
 #include "font_vector_internal.h"
+#include "font_native_internal.h"
 
 #include "NiPixelData.hpp"
 #include "NiTexturingProperty.hpp"
@@ -301,37 +302,28 @@ namespace fonthook::vectorfont
 		std::unordered_set<UInt64> duplicateResidents;
 	};
 
-	struct BatchTemplateKey
+	struct TextArtifactKey
 	{
 		uintptr_t atlasIdentity = 0;
 		UInt64 contentHash = 0;
 		UInt32 generation = 0;
 		UInt32 quadCount = 0;
 
-		bool operator==(const BatchTemplateKey& other) const
+		bool operator==(const TextArtifactKey& other) const
 		{
 			return atlasIdentity == other.atlasIdentity && contentHash == other.contentHash
 				&& generation == other.generation && quadCount == other.quadCount;
 		}
 	};
 
-	struct BatchTemplateKeyHash
+	struct TextArtifactKeyHash
 	{
-		size_t operator()(const BatchTemplateKey& key) const
+		size_t operator()(const TextArtifactKey& key) const
 		{
 			return static_cast<size_t>(key.contentHash ^ (key.contentHash >> 32))
 				^ key.atlasIdentity ^ (static_cast<size_t>(key.generation) << 8)
 				^ key.quadCount;
 		}
-	};
-
-	struct BatchTemplate
-	{
-		CpuMemoryLease cpuMemory;
-		std::vector<NiPoint3> vertices;
-		std::vector<NiPoint2> texture;
-		std::vector<UInt16> indices;
-		NiBound bound;
 	};
 
 	struct QuadBatchFingerprint
@@ -340,11 +332,11 @@ namespace fonthook::vectorfont
 		UInt32 quadCount = 0;
 	};
 
-	struct BatchTemplateEntry
+	struct TextArtifactEntry
 	{
-		std::shared_ptr<const BatchTemplate> data;
+		NativeA8PayloadTemplatePtr data;
 		size_t bytes = 0;
-		std::list<BatchTemplateKey>::iterator lru;
+		std::list<TextArtifactKey>::iterator lru;
 		CpuMemoryLease cpuMemory;
 	};
 
@@ -395,11 +387,11 @@ namespace fonthook::vectorfont
 		std::unordered_set<UInt64> loggedAtlasBatches;
 		std::unordered_set<UInt32> loggedVerticalMetricFonts;
 		std::unordered_set<UInt64> loggedQualityDowngrades;
-		std::unordered_map<BatchTemplateKey, BatchTemplateEntry,
-			BatchTemplateKeyHash> batchCache;
-		std::list<BatchTemplateKey> batchLru;
-		size_t batchCacheBytes = 0;
-		std::mutex batchMutex;
+		std::unordered_map<TextArtifactKey, TextArtifactEntry,
+			TextArtifactKeyHash> textArtifactCache;
+		std::list<TextArtifactKey> textArtifactLru;
+		size_t textArtifactCacheBytes = 0;
+		std::mutex textArtifactMutex;
 	};
 
 	AtlasState& State();
@@ -442,7 +434,7 @@ namespace fonthook::vectorfont
 	void UnindexAtlasPage(AtlasState& state, const AtlasCacheKey& key);
 	AtlasProfileKey MakeAtlasProfileKey(const AtlasCacheKey& key);
 	void TrimAtlasCache(AtlasState& state);
-	void TrimBatchCache(AtlasState& state);
+	void TrimTextArtifactCache(AtlasState& state);
 	void TrimAtlasCpuCachesForTotalBudget();
 	void ResolveGpuAtlasBudget(bool force);
 	size_t GetAtlasCacheLimit();

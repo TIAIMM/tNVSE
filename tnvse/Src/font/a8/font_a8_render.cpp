@@ -21,6 +21,21 @@ namespace fonthook::vectorfont
 				&& std::isfinite(color.b) && std::isfinite(color.a);
 		}
 
+		bool IsFiniteBound(const NiBound& bound)
+		{
+			return std::isfinite(bound.m_kCenter.x)
+				&& std::isfinite(bound.m_kCenter.y)
+				&& std::isfinite(bound.m_kCenter.z)
+				&& std::isfinite(bound.m_fRadius) && bound.m_fRadius >= 0.0f;
+		}
+
+		bool IsFiniteVertex(const NativeA8GpuVertex& vertex)
+		{
+			return std::isfinite(vertex.x) && std::isfinite(vertex.y)
+				&& std::isfinite(vertex.z) && std::isfinite(vertex.u)
+				&& std::isfinite(vertex.v);
+		}
+
 		bool RejectA8Shape(const char* reason)
 		{
 			if (g_bEnableFreeTypeFontRenderingLog
@@ -36,10 +51,11 @@ namespace fonthook::vectorfont
 
 		bool ValidateA8Shape(NiTriShape* shape,
 			const A8EffectShapeConfig* effectConfig,
-			const A8ShapeColorContract* colorContract)
+			const A8ShapeColorContract* colorContract,
+			const NativeA8PayloadTemplate* payloadTemplate)
 		{
-			if (!shape || !colorContract)
-				return RejectA8Shape("missing-shape-or-color-contract");
+			if (!shape || !colorContract || !payloadTemplate)
+				return RejectA8Shape("missing-shape-color-or-text-artifact");
 			if (colorContract->abiVersion
 				!= A8ShapeColorContract::kTileUniformColorAbi)
 			{
@@ -64,8 +80,39 @@ namespace fonthook::vectorfont
 				if (!IsFiniteColor(data->m_pkColor[index]))
 					return RejectA8Shape("non-finite-base-vertex-color");
 			}
+
+			if (!payloadTemplate->quadCount
+				|| payloadTemplate->quadCount > kNativeA8MaximumQuads
+				|| payloadTemplate->gpuVertices.size()
+					!= static_cast<size_t>(payloadTemplate->quadCount) * 4u
+				|| payloadTemplate->packets.empty()
+				|| payloadTemplate->pageCount != payloadTemplate->atlasProperties.size()
+				|| payloadTemplate->pageCount != payloadTemplate->atlasTextures.size()
+				|| !IsFiniteBound(payloadTemplate->bound))
+			{
+				return RejectA8Shape("invalid-text-artifact");
+			}
+			if (!std::all_of(payloadTemplate->gpuVertices.begin(),
+				payloadTemplate->gpuVertices.end(), IsFiniteVertex))
+			{
+				return RejectA8Shape("non-finite-text-artifact-vertex");
+			}
+			for (const NativeA8PacketTemplate& packet : payloadTemplate->packets)
+			{
+				const UInt64 vertexEnd = static_cast<UInt64>(packet.firstVertex)
+					+ packet.vertexCount;
+				if (!packet.vertexCount || (packet.firstVertex & 3u)
+					|| (packet.vertexCount & 3u)
+					|| vertexEnd > payloadTemplate->gpuVertices.size()
+					|| packet.layer > 3 || !IsFiniteBound(packet.bound)
+					|| !std::all_of(packet.constants.begin(), packet.constants.end(),
+						[](float value) { return std::isfinite(value); }))
+				{
+					return RejectA8Shape("invalid-text-artifact-packet");
+				}
+			}
 			if (!effectConfig || !effectConfig->enabled)
-				return true;
+				return RejectA8Shape("native-route-requires-enabled-sdf");
 
 			const std::array<float, 12> scalarValues = {
 				effectConfig->inverseAtlasWidth,
@@ -99,10 +146,9 @@ namespace fonthook::vectorfont
 				return RejectA8Shape("invalid-effect-quality");
 			}
 
-			const UInt64 triangleIndices = static_cast<UInt64>(data->m_usTriangles) * 3;
-			const UInt64 availableIndices = data->m_uiTriListLength
-				? std::min<UInt64>(triangleIndices, data->m_uiTriListLength)
-				: triangleIndices;
+			const UInt64 availableVertices = payloadTemplate->gpuVertices.size();
+			const UInt64 availableIndices =
+				static_cast<UInt64>(payloadTemplate->quadCount) * 6u;
 			UInt64 previousVertexEnd = 0;
 			UInt64 previousIndexEnd = 0;
 			UInt32 previousLayerRank = 0;
@@ -119,6 +165,16 @@ namespace fonthook::vectorfont
 			{
 				return RejectA8Shape("atlas-page-property-size-mismatch");
 			}
+			if (effectConfig->atlasProperties.empty()
+				|| payloadTemplate->pageCount != effectConfig->atlasTextures.size())
+			{
+				return RejectA8Shape("text-artifact-page-count-mismatch");
+			}
+			for (const NativeA8PacketTemplate& packet : payloadTemplate->packets)
+			{
+				if (packet.atlasPage >= effectConfig->atlasTextures.size())
+					return RejectA8Shape("text-artifact-packet-page-out-of-bounds");
+			}
 			for (const NiPoint2& inverseSize : effectConfig->atlasInverseSizes)
 			{
 				if (!std::isfinite(inverseSize.x) || !std::isfinite(inverseSize.y))
@@ -127,6 +183,9 @@ namespace fonthook::vectorfont
 			for (const A8DrawRange& range : effectConfig->ranges)
 			{
 				if (range.layer > 3 || !range.vertexCount || !range.primitiveCount
+					|| (range.firstVertex & 3u) || (range.vertexCount & 3u)
+					|| (range.startIndex % 6u) || (range.primitiveCount & 1u)
+					|| range.vertexCount / 4u != range.primitiveCount / 2u
 					|| !IsFiniteColor(range.layerColorModifier))
 				{
 					return RejectA8Shape("invalid-draw-range");
@@ -142,7 +201,7 @@ namespace fonthook::vectorfont
 				const UInt64 indexEnd = static_cast<UInt64>(range.startIndex)
 					+ static_cast<UInt64>(range.primitiveCount) * 3;
 				const UInt32 layerRank = GetA8LayerDrawRank(range.layer);
-				if (vertexEnd > data->m_usVertices || indexEnd > availableIndices)
+				if (vertexEnd > availableVertices || indexEnd > availableIndices)
 					return RejectA8Shape("draw-range-out-of-bounds");
 				if (!firstRange && (layerRank < previousLayerRank
 					|| (layerRank == previousLayerRank
@@ -150,11 +209,6 @@ namespace fonthook::vectorfont
 							|| range.startIndex < previousIndexEnd))))
 				{
 					return RejectA8Shape("draw-ranges-not-layer-monotonic");
-				}
-				for (UInt64 index = range.startIndex; index < indexEnd; ++index)
-				{
-					if (data->m_pusTriList[index] >= data->m_usVertices)
-						return RejectA8Shape("triangle-index-out-of-bounds");
 				}
 				if (!range.usesSdf)
 					return RejectA8Shape("non-sdf-draw-range");
@@ -169,171 +223,11 @@ namespace fonthook::vectorfont
 			return haveFill || RejectA8Shape("missing-fill-range");
 		}
 
-		void CompileA8DrawRanges(A8ShapeMetadata& metadata)
-		{
-			metadata.compiledRanges.clear();
-			metadata.compiledRanges.reserve(metadata.effects.ranges.size());
-			for (const A8DrawRange& range : metadata.effects.ranges)
-			{
-				float inverseAtlasWidth = metadata.effects.inverseAtlasWidth;
-				float inverseAtlasHeight = metadata.effects.inverseAtlasHeight;
-				if (!metadata.effects.atlasInverseSizes.empty())
-				{
-					const NiPoint2& inverseSize =
-						metadata.effects.atlasInverseSizes[range.atlasPage];
-					inverseAtlasWidth = inverseSize.x;
-					inverseAtlasHeight = inverseSize.y;
-				}
-
-				float parameter0 = metadata.effects.shadowBlurPixels;
-				float parameter1 = metadata.effects.shadowPower;
-				float parameter2 = 0.0f;
-				float parameter3 = 0.0f;
-				float sdfFlag1 = 0.0f;
-				float sdfFlag2 = 0.0f;
-				float sdfFlag3 = 0.0f;
-				const bool hardShadowComposite = range.layer == 0
-					&& metadata.effects.shadowBlurPixels <= 0.001f
-					&& (metadata.effects.shadowGlowAlpha > 0.0f
-						|| metadata.effects.shadowOutlineAlpha > 0.0f);
-				if (hardShadowComposite)
-				{
-					parameter0 = metadata.effects.glowInnerPixels;
-					parameter1 = metadata.effects.glowOuterPixels;
-					parameter2 = metadata.effects.glowPower;
-					parameter3 = metadata.effects.outlineWidthPixels;
-					sdfFlag1 = metadata.effects.outlineSoftnessPixels;
-					sdfFlag2 = metadata.effects.shadowGlowAlpha;
-					sdfFlag3 = metadata.effects.shadowOutlineAlpha;
-				}
-				if (range.layer == 1)
-				{
-					parameter0 = metadata.effects.glowInnerPixels;
-					parameter1 = metadata.effects.glowOuterPixels;
-					parameter2 = metadata.effects.glowPower;
-				}
-				else if (range.layer == 2)
-				{
-					parameter0 = metadata.effects.outlineWidthPixels;
-					parameter1 = metadata.effects.outlineSoftnessPixels;
-				}
-				else if (range.layer == 3)
-				{
-					parameter0 = 0.0f;
-					parameter1 = 0.0f;
-				}
-
-				A8CompiledRange compiled;
-				compiled.range = range;
-				const float layerAndFlags = static_cast<float>(range.layer)
-					+ (range.usesLiveTileRgb ? 0.0f : 0.25f);
-				compiled.constants = {{
-					range.layerColorModifier.r, range.layerColorModifier.g,
-					range.layerColorModifier.b, range.layerColorModifier.a,
-					inverseAtlasWidth, inverseAtlasHeight,
-					layerAndFlags, metadata.effects.sdfSpreadPixels,
-					parameter0, parameter1, parameter2, parameter3,
-					1.0f, sdfFlag1, sdfFlag2, sdfFlag3
-				}};
-				if (metadata.effects.shaderEffects && range.layer != 3)
-					compiled.shaderClass = A8CompiledShaderClass::Effect;
-				else
-					compiled.shaderClass = A8CompiledShaderClass::Body;
-				compiled.staticSmoothSampling = true;
-				metadata.compiledRanges.push_back(std::move(compiled));
-			}
-		}
-
-		void TrimPacketTemplateCache(A8State& state)
-		{
-			const size_t preferred = static_cast<size_t>(
-				g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 12u;
-			const size_t limit = GetCpuMemoryCategoryHeadroom(
-				CpuMemoryCategory::PacketTemplate, preferred);
-			while ((GetCpuMemoryUsage(CpuMemoryCategory::PacketTemplate) > limit
-					|| IsCpuMemoryBudgetExceeded())
-				&& !state.packetTemplateLru.empty())
-			{
-				const NativeA8TemplateCacheKey key = state.packetTemplateLru.back();
-				state.packetTemplateLru.pop_back();
-				const auto existing = state.packetTemplateCache.find(key);
-				if (existing == state.packetTemplateCache.end())
-					continue;
-				state.packetTemplateCacheBytes -= existing->second.bytes;
-				state.packetTemplateCache.erase(existing);
-			}
-		}
-
-		NativeA8PayloadTemplatePtr GetNativeA8PayloadTemplate(
-			NiTriShape* shape, const A8ShapeMetadata& metadata,
-			UInt64 contentHash, const NiPoint3& geometryOrigin)
-		{
-			if (!contentHash)
-				return BuildNativeA8PayloadTemplate(shape, metadata, geometryOrigin);
-			const NativeA8TemplateCacheKey key = {
-				contentHash,
-				metadata.quadCount,
-				static_cast<UInt32>(metadata.effects.atlasProperties.size())
-			};
-			A8State& state = State();
-			{
-				std::lock_guard<std::mutex> lock(state.packetTemplateMutex);
-				const auto existing = state.packetTemplateCache.find(key);
-				if (existing != state.packetTemplateCache.end())
-				{
-					state.packetTemplateLru.splice(state.packetTemplateLru.begin(),
-						state.packetTemplateLru, existing->second.lru);
-					existing->second.lru = state.packetTemplateLru.begin();
-					RecordFreeTypePerf(FreeTypePerfCounter::PacketTemplateHit);
-					return existing->second.data;
-				}
-			}
-			RecordFreeTypePerf(FreeTypePerfCounter::PacketTemplateMiss);
-			NativeA8PayloadTemplatePtr result =
-				BuildNativeA8PayloadTemplate(shape, metadata, geometryOrigin);
-			if (!result)
-				return {};
-			const size_t bytes = GetNativeA8PayloadTemplateBytes(*result);
-			{
-				std::lock_guard<std::mutex> lock(state.packetTemplateMutex);
-				const auto existing = state.packetTemplateCache.find(key);
-				if (existing != state.packetTemplateCache.end())
-				{
-					state.packetTemplateLru.splice(state.packetTemplateLru.begin(),
-						state.packetTemplateLru, existing->second.lru);
-					existing->second.lru = state.packetTemplateLru.begin();
-					return existing->second.data;
-				}
-				state.packetTemplateLru.push_front(key);
-				const auto [inserted, success] = state.packetTemplateCache.emplace(key,
-					NativeA8TemplateCacheEntry{
-					result, bytes, state.packetTemplateLru.begin() });
-				if (!success)
-				{
-					state.packetTemplateLru.pop_front();
-					return inserted->second.data;
-				}
-				inserted->second.cpuMemory.Reset(CpuMemoryCategory::PacketTemplate,
-					sizeof(NativeA8TemplateCacheEntry)
-						+ 2u * sizeof(NativeA8TemplateCacheKey)
-						+ 4u * sizeof(void*));
-				state.packetTemplateCacheBytes += bytes;
-				TrimPacketTemplateCache(state);
-			}
-			return result;
-		}
 	}
 
 	A8State& State()
 	{
 		return s_a8State;
-	}
-
-	void TrimA8PacketCacheForTotalBudget()
-	{
-		A8State& state = State();
-		std::lock_guard<std::mutex> lock(state.packetTemplateMutex);
-		TrimPacketTemplateCache(state);
 	}
 
 	bool NeedsScaledFillSampling(const NiTriShape* shape)
@@ -350,9 +244,11 @@ namespace fonthook::vectorfont
 		const bool tileRouteReady = HookTileRenderPass();
 		const bool shaderReady = InitializeNativeA8Renderer(true, true);
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: initialization nativeReady=%u accumulator=%u tileRoute=%u shader=%u",
+			"tnvse_freetype_native: initialization nativeReady=%u accumulator=%u sortedUpload=%u tileRoute=%u shader=%u",
 			accumulatorReady && tileRouteReady && shaderReady ? 1 : 0,
-			accumulatorReady ? 1 : 0, tileRouteReady ? 1 : 0,
+			accumulatorReady ? 1 : 0,
+			State().sortedTileRenderHookInstalled ? 1 : 0,
+			tileRouteReady ? 1 : 0,
 			shaderReady ? 1 : 0);
 	}
 
@@ -392,11 +288,14 @@ namespace fonthook::vectorfont
 
 	bool PrepareA8AtlasShape(Font& font, NiTriShape* shape, UInt32 fontId,
 		UInt32 glyphCount, UInt32 quadCount, const A8EffectShapeConfig* effectConfig,
-		const A8ShapeColorContract* colorContract, UInt64 packetTemplateHash,
+		const A8ShapeColorContract* colorContract,
+		NativeA8PayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin)
 	{
 		if (!IsA8RendererAvailable()
-			|| !ValidateA8Shape(shape, effectConfig, colorContract)
+			|| !payloadTemplate || payloadTemplate->quadCount != quadCount
+			|| !ValidateA8Shape(shape, effectConfig, colorContract,
+				payloadTemplate.get())
 			|| !InitializeA8TriShapeVtable(shape))
 		{
 			return false;
@@ -405,26 +304,22 @@ namespace fonthook::vectorfont
 		metadata->fontId = fontId;
 		metadata->glyphCount = glyphCount;
 		metadata->quadCount = quadCount;
-		if (NiTriShapeData* data = shape->GetModelData())
-		{
-			metadata->vertexCount = data->m_usVertices;
-			metadata->primitiveCount = data->m_usTriangles;
-			metadata->indexCount = data->m_uiTriListLength
-				? data->m_uiTriListLength : data->m_usTriangles * 3;
-		}
+		metadata->vertexCount = static_cast<UInt32>(
+			payloadTemplate->gpuVertices.size());
+		metadata->primitiveCount = payloadTemplate->quadCount * 2u;
+		metadata->indexCount = payloadTemplate->quadCount * 6u;
 		if (colorContract)
 			metadata->colorContract = *colorContract;
-		if (effectConfig)
-			metadata->effects = *effectConfig;
-		CompileA8DrawRanges(*metadata);
-		const NativeA8PayloadTemplatePtr payloadTemplate = GetNativeA8PayloadTemplate(
-			shape, *metadata, packetTemplateHash, geometryOrigin);
-		metadata->nativePayload = payloadTemplate
-			? InstantiateNativeA8ShapePayload(font, shape, *metadata,
-				payloadTemplate, geometryOrigin)
-			: NativeA8ShapePayloadPtr{};
-		if (!metadata->nativePayload)
+		if (!InitializeNativeA8ShapePayload(font, shape, *metadata,
+			std::move(payloadTemplate), geometryOrigin, metadata->nativePayload))
 			return false;
+		metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+			sizeof(A8ShapeMetadata)
+				+ metadata->nativePayload.packetShaders.capacity()
+					* sizeof(TileShader*)
+				+ metadata->nativePayload.preflightAtlasTextures.capacity()
+					* sizeof(const void*)
+				+ sizeof(A8ShapeMetadataPtr) + 6u * sizeof(void*));
 		{
 			A8State& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);

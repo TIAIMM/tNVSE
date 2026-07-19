@@ -421,32 +421,32 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		void TrimBatchCache(AtlasState& state)
+		void TrimTextArtifactCache(AtlasState& state)
 		{
 			const size_t preferred = static_cast<size_t>(
 				g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 12u;
 			const size_t limit = GetCpuMemoryCategoryHeadroom(
-				CpuMemoryCategory::BatchTemplate, preferred);
-			while ((GetCpuMemoryUsage(CpuMemoryCategory::BatchTemplate) > limit
+				CpuMemoryCategory::TextArtifact, preferred);
+			while ((GetCpuMemoryUsage(CpuMemoryCategory::TextArtifact) > limit
 					|| IsCpuMemoryBudgetExceeded())
-				&& !state.batchLru.empty())
+				&& !state.textArtifactLru.empty())
 			{
-				const BatchTemplateKey key = state.batchLru.back();
-				auto existing = state.batchCache.find(key);
-				if (existing != state.batchCache.end())
+				const TextArtifactKey key = state.textArtifactLru.back();
+				auto existing = state.textArtifactCache.find(key);
+				if (existing != state.textArtifactCache.end())
 				{
-					state.batchCacheBytes -= existing->second.bytes;
-					state.batchCache.erase(existing);
+					state.textArtifactCacheBytes -= existing->second.bytes;
+					state.textArtifactCache.erase(existing);
 				}
-				state.batchLru.pop_back();
+				state.textArtifactLru.pop_back();
 			}
 		}
 
 	void TrimAtlasCpuCachesForTotalBudget()
 	{
 		AtlasState& state = State();
-		std::lock_guard<std::mutex> lock(state.batchMutex);
-		TrimBatchCache(state);
+		std::lock_guard<std::mutex> lock(state.textArtifactMutex);
+		TrimTextArtifactCache(state);
 	}
 
 

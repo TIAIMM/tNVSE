@@ -33,6 +33,8 @@ namespace fonthook::vectorfont
 	inline constexpr UInt32 kShaderRefreshMessage = 0;
 	inline constexpr UInt32 kTileRenderPassCallSite = 0xB64FD1;
 	inline constexpr UInt32 kStockTileRenderPassImmediately = 0xB994F0;
+	inline constexpr UInt32 kSortedTileRenderCallSite = 0xB65EA0;
+	inline constexpr UInt32 kStockSortedTileRender = 0xB64F90;
 	inline constexpr UInt32 kMaximumShapeValidationFailureLogs = 16;
 	inline constexpr size_t kMetadataGenerationSlotCount = 64;
 
@@ -46,6 +48,7 @@ namespace fonthook::vectorfont
 	using DeleteThisFn = void(__thiscall*)(NiTriShape*);
 	using TileRenderPassFn = void(__cdecl*)(BSShaderProperty::RenderPass*,
 		UInt32, bool, bool, bool);
+	using SortedTileRenderFn = int(__thiscall*)(BSShaderAccumulator*);
 
 	enum class A8CompiledShaderClass : UInt8
 	{
@@ -70,41 +73,10 @@ namespace fonthook::vectorfont
 		UInt32 primitiveCount = 0;
 		UInt32 indexCount = 0;
 		A8ShapeColorContract colorContract;
-		A8EffectShapeConfig effects;
-		std::vector<A8CompiledRange> compiledRanges;
-		NativeA8ShapePayloadPtr nativePayload;
+		mutable CpuMemoryLease cpuMemory;
+		mutable NativeA8ShapePayload nativePayload;
 	};
 	using A8ShapeMetadataPtr = std::shared_ptr<const A8ShapeMetadata>;
-
-	struct NativeA8TemplateCacheKey
-	{
-		UInt64 contentHash = 0;
-		UInt32 quadCount = 0;
-		UInt32 pageCount = 0;
-
-		bool operator==(const NativeA8TemplateCacheKey& other) const
-		{
-			return contentHash == other.contentHash
-				&& quadCount == other.quadCount && pageCount == other.pageCount;
-		}
-	};
-
-	struct NativeA8TemplateCacheKeyHash
-	{
-		size_t operator()(const NativeA8TemplateCacheKey& key) const
-		{
-			return static_cast<size_t>(key.contentHash ^ (key.contentHash >> 32))
-				^ (static_cast<size_t>(key.quadCount) << 7) ^ key.pageCount;
-		}
-	};
-
-	struct NativeA8TemplateCacheEntry
-	{
-		NativeA8PayloadTemplatePtr data;
-		size_t bytes = 0;
-		std::list<NativeA8TemplateCacheKey>::iterator lru;
-		CpuMemoryLease cpuMemory;
-	};
 
 	struct A8State
 	{
@@ -114,8 +86,11 @@ namespace fonthook::vectorfont
 		RenderImmediateFn originalRenderImmediateAlt = nullptr;
 		DeleteThisFn originalDeleteThis = nullptr;
 		TileRenderPassFn originalTileRenderPass = nullptr;
+		SortedTileRenderFn originalSortedTileRender = nullptr;
 		bool tileRenderPassHookInstalled = false;
+		bool sortedTileRenderHookInstalled = false;
 		bool loggedTileRenderPassHookConflict = false;
+		bool loggedSortedTileRenderHookConflict = false;
 		bool loggedTileRenderPassHit = false;
 		UInt32 shapeValidationFailureLogCount = 0;
 
@@ -124,16 +99,9 @@ namespace fonthook::vectorfont
 		std::array<std::atomic<UInt64>, kMetadataGenerationSlotCount>
 			metadataGenerations = {};
 
-		std::mutex packetTemplateMutex;
-		std::unordered_map<NativeA8TemplateCacheKey,
-			NativeA8TemplateCacheEntry, NativeA8TemplateCacheKeyHash>
-			packetTemplateCache;
-		std::list<NativeA8TemplateCacheKey> packetTemplateLru;
-		size_t packetTemplateCacheBytes = 0;
 	};
 
 	A8State& State();
-	void TrimA8PacketCacheForTotalBudget();
 	A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape);
 	bool IsA8AtlasShape(const NiTriShape* shape);
 	bool NeedsScaledFillSampling(const NiTriShape* shape);

@@ -297,7 +297,7 @@ namespace fonthook::vectorfont
 					firstFailure);
 		}
 
-		NativeProfileKey MakeProfileKey(const NativeA8Packet& packet,
+		NativeProfileKey MakeProfileKey(const NativeA8PacketTemplate& packet,
 			NativeA8Sampling sampling, bool writeEffectAlpha)
 		{
 			NativeProfileKey key;
@@ -311,7 +311,8 @@ namespace fonthook::vectorfont
 			return key;
 		}
 
-		NativeA8Sampling ResolveEffectiveSampling(const NativeA8Packet& packet,
+		NativeA8Sampling ResolveEffectiveSampling(
+			const NativeA8PacketTemplate& packet,
 			bool scaledFillSampling)
 		{
 			if (packet.sampling == NativeA8Sampling::LinearLod0)
@@ -339,7 +340,8 @@ namespace fonthook::vectorfont
 		}
 
 		NiD3DPixelShader* ResolveProfilePixelShader(
-			NativeShaderGeneration& generation, const NativeA8Packet& packet)
+			NativeShaderGeneration& generation,
+			const NativeA8PacketTemplate& packet)
 		{
 			switch (packet.shaderClass)
 			{
@@ -412,7 +414,7 @@ namespace fonthook::vectorfont
 		}
 
 		NativeShaderProfile* CreateProfile(NativeShaderGeneration& generation,
-			const NativeA8Packet& packet, const NativeProfileKey& key)
+			const NativeA8PacketTemplate& packet, const NativeProfileKey& key)
 		{
 			NiD3DPixelShader* pixelShader = ResolveProfilePixelShader(generation,
 				packet);
@@ -775,7 +777,7 @@ namespace fonthook::vectorfont
 			MarkGenerationFault(current, operation, result);
 	}
 
-	TileShader* ResolveNativeA8PacketShader(const NativeA8Packet& packet,
+	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
 		const NiTriShape* facade, bool scaledFillSampling)
 	{
 		if (!IsNativeA8RendererAvailable())

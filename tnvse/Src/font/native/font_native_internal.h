@@ -65,20 +65,6 @@ namespace fonthook::vectorfont
 		VertexBuffer
 	};
 
-	struct NativeA8Packet
-	{
-		UInt32 templateIndex = 0;
-		std::array<float, 16> constants = {};
-		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
-		NativeA8Sampling sampling = NativeA8Sampling::Point;
-		EffectQuality quality = EffectQuality::Balanced;
-		UInt32 layer = 3;
-		UInt16 atlasPage = 0;
-		TileShader* shader = nullptr;
-		bool staticSmoothSampling = false;
-		bool usesLiveTileRgb = true;
-	};
-
 	struct NativeA8GpuVertex
 	{
 		float x = 0.0f;
@@ -113,6 +99,10 @@ namespace fonthook::vectorfont
 		CpuMemoryLease cpuMemory;
 		UInt32 pageCount = 0;
 		UInt32 quadCount = 0;
+		UInt32 sourceRangeCount = 0;
+		NiBound bound;
+		std::vector<NiTexturingPropertyPtr> atlasProperties;
+		std::vector<NiTexturePtr> atlasTextures;
 		std::vector<NativeA8GpuVertex> gpuVertices;
 		std::vector<NativeA8PacketTemplate> packets;
 	};
@@ -121,12 +111,11 @@ namespace fonthook::vectorfont
 
 	struct NativeA8ShapePayload
 	{
-		UInt32 fontId = 0;
-		UInt32 pageCount = 0;
-		UInt32 quadCount = 0;
 		NativeA8PayloadTemplatePtr payloadTemplate;
 		NiPoint3 geometryOrigin;
-		std::vector<NativeA8Packet> packets;
+		// Packet geometry, constants, page identity, and profile keys live only in
+		// the shared text artifact. A Tile instance retains just resolved shaders.
+		std::vector<TileShader*> packetShaders;
 		std::atomic<bool> suppressNextSubmit = false;
 		std::atomic<NativeA8FallbackReason> stickyReason =
 			NativeA8FallbackReason::None;
@@ -141,21 +130,18 @@ namespace fonthook::vectorfont
 		bool preflightAlphaBlending = false;
 		bool buildComplete = false;
 	};
-	using NativeA8ShapePayloadPtr = std::shared_ptr<NativeA8ShapePayload>;
 
 	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason);
 	const char* NativeA8PacketPrepareFailureName(
 		NativeA8PacketPrepareFailure failure);
 
-	NativeA8ShapePayloadPtr BuildNativeA8ShapePayload(Font& font,
-		NiTriShape* facade, const A8ShapeMetadata& metadata);
 	NativeA8PayloadTemplatePtr BuildNativeA8PayloadTemplate(
-		NiTriShape* facade, const A8ShapeMetadata& metadata,
-		const NiPoint3& geometryOrigin);
-	NativeA8ShapePayloadPtr InstantiateNativeA8ShapePayload(Font& font,
+		std::vector<NativeA8GpuVertex>&& vertices, UInt32 quadCount,
+		const A8EffectShapeConfig& effects, const NiBound& bound);
+	bool InitializeNativeA8ShapePayload(Font& font,
 		NiTriShape* facade, const A8ShapeMetadata& metadata,
 		NativeA8PayloadTemplatePtr payloadTemplate,
-		const NiPoint3& geometryOrigin);
+		const NiPoint3& geometryOrigin, NativeA8ShapePayload& payload);
 	size_t GetNativeA8PayloadTemplateBytes(
 		const NativeA8PayloadTemplate& payloadTemplate);
 	void InvalidateNativeA8RingResources(NativeA8FallbackReason reason);
@@ -178,14 +164,18 @@ namespace fonthook::vectorfont
 
 	bool EnsureNativeA8ProxyPool(Font& font);
 	NativeA8FallbackReason BeginNativeA8RingSubmission(
-		NiTriShape* facade, const A8ShapeMetadata& metadata,
-		NativeA8ShapePayload& payload, NativeA8RingSubmission& submission);
+		NiTriShape* facade, NativeA8ShapePayload& payload,
+		NativeA8RingSubmission& submission);
 	NativeA8FallbackReason PrepareNativeA8RingPacket(
-		NiTriShape* facade, const A8ShapeMetadata& metadata,
-		NativeA8ShapePayload& payload, NativeA8RingSubmission& submission,
-		UInt32 packetIndex, NiTriShape*& proxyShape);
+		NiTriShape* facade, NativeA8ShapePayload& payload,
+		NativeA8RingSubmission& submission, UInt32 packetIndex,
+		NiTriShape*& proxyShape);
 	void EndNativeA8RingSubmission(NativeA8RingSubmission& submission);
 	void ReleaseNativeA8RingResources();
+	void PrepareSortedNativeA8Payloads(
+		std::vector<NativeA8PayloadTemplatePtr>& payloadTemplates,
+		UInt32 generation);
+	void TrimNativeA8CpuCachesForTotalBudget();
 
 	bool InitializeNativeA8Renderer(bool forceAttempt, bool reportFailures);
 	void HandleNativeA8RendererMainLoop();
@@ -196,7 +186,7 @@ namespace fonthook::vectorfont
 	UInt32 GetNativeA8ShaderGeneration();
 	IDirect3DVertexDeclaration9* GetNativeA8D3DDeclaration(UInt32 generation);
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation);
-	TileShader* ResolveNativeA8PacketShader(const NativeA8Packet& packet,
+	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
 		const NiTriShape* facade, bool scaledFillSampling);
 	NativeA8FallbackReason PrepareNativeA8Group(NiTriShape* facade,
 		const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload);
@@ -207,6 +197,7 @@ namespace fonthook::vectorfont
 	void RecordNativeA8Suppression(NiTriShape* shape,
 		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason,
 		const char* phase);
-	void MarkNativeA8RuntimeFault(NativeA8ShapePayload& payload,
+	void MarkNativeA8RuntimeFault(const A8ShapeMetadata& metadata,
+		NativeA8ShapePayload& payload,
 		NativeA8FallbackReason reason);
 }

@@ -107,11 +107,13 @@ namespace fonthook::vectorfont
 		reason = NormalizeFailureReason(reason);
 		NativeA8PacketPrepareFailure packetFailure =
 			NativeA8PacketPrepareFailure::None;
-		if (metadata.nativePayload)
+		if (metadata.nativePayload.buildComplete)
 		{
-			packetFailure = metadata.nativePayload->packetPrepareFailure.load(
+			packetFailure = metadata.nativePayload.packetPrepareFailure.load(
 				std::memory_order_relaxed);
 		}
+		const NativeA8PayloadTemplate* artifact =
+			metadata.nativePayload.payloadTemplate.get();
 		TESMain* main = TESMain::GetSingleton();
 		const UInt32 threadId = GetCurrentThreadId();
 		const UInt32 mainThreadId = main ? main->uiMainThreadID : 0;
@@ -122,12 +124,13 @@ namespace fonthook::vectorfont
 			threadId, mainThreadId,
 			mainThreadId && threadId == mainThreadId ? 1 : 0,
 			shape, metadata.fontId, GetNativeA8ShaderGeneration(),
-			static_cast<UInt32>(metadata.effects.atlasTextures.size()),
-			static_cast<UInt32>(metadata.compiledRanges.size()), metadata.quadCount,
+			artifact ? artifact->pageCount : 0u,
+			artifact ? artifact->sourceRangeCount : 0u, metadata.quadCount,
 			metadata.glyphCount);
 	}
 
-	void MarkNativeA8RuntimeFault(NativeA8ShapePayload& payload,
+	void MarkNativeA8RuntimeFault(const A8ShapeMetadata& metadata,
+		NativeA8ShapePayload& payload,
 		NativeA8FallbackReason reason)
 	{
 		reason = NormalizeFailureReason(reason);
@@ -145,8 +148,9 @@ namespace fonthook::vectorfont
 			"tnvse_freetype_native: runtime-fault fault=%llu reason=%s font=%u preparedGeneration=%u currentGeneration=%u pages=%u packets=%u quads=%u action=suppress-next-submit",
 			static_cast<unsigned long long>(faultId),
 			NativeA8FallbackReasonName(payload.stickyReason.load(
-				std::memory_order_relaxed)), payload.fontId, payload.preparedGeneration,
-			GetNativeA8ShaderGeneration(), payload.pageCount,
-			static_cast<UInt32>(payload.packets.size()), payload.quadCount);
+				std::memory_order_relaxed)), metadata.fontId,
+			payload.preparedGeneration, GetNativeA8ShaderGeneration(),
+			payload.payloadTemplate ? payload.payloadTemplate->pageCount : 0u,
+			static_cast<UInt32>(payload.packetShaders.size()), metadata.quadCount);
 	}
 }

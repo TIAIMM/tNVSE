@@ -36,6 +36,21 @@ namespace fonthook::vectorfont
 			};
 		}
 
+		UInt32 PackNativeColorChannel(float value)
+		{
+			value = std::clamp(SanitizeColorChannel(value), 0.0f, 1.0f);
+			return static_cast<UInt32>(value * 255.0f + 0.5f);
+		}
+
+		UInt32 PackNativeBaseColor(const NiColorA& color)
+		{
+			const NiColorA safe = SanitizeColor(color);
+			return (PackNativeColorChannel(safe.a) << 24)
+				| (PackNativeColorChannel(safe.r) << 16)
+				| (PackNativeColorChannel(safe.g) << 8)
+				| PackNativeColorChannel(safe.b);
+		}
+
 		float ResolveModifierChannel(float source, float tile)
 		{
 			if (!std::isfinite(source) || !std::isfinite(tile))
@@ -637,7 +652,7 @@ namespace fonthook::vectorfont
 			return { hash, static_cast<UInt32>(quads.size()) };
 		}
 
-		BatchTemplateKey BuildBatchTemplateKey(const QuadBatchFingerprint& fingerprint,
+		TextArtifactKey BuildTextArtifactKey(const QuadBatchFingerprint& fingerprint,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases)
 		{
 			UInt64 hash = fingerprint.contentHash;
@@ -667,7 +682,7 @@ namespace fonthook::vectorfont
 				hash, generation, fingerprint.quadCount };
 		}
 
-		UInt64 BuildPacketTemplateHash(const BatchTemplateKey& geometryKey,
+		UInt64 BuildTextArtifactContentHash(const TextArtifactKey& geometryKey,
 			const std::vector<PendingQuad>& quads,
 			const A8EffectShapeConfig& effect)
 		{
@@ -720,30 +735,61 @@ namespace fonthook::vectorfont
 			return hash;
 		}
 
-		std::shared_ptr<const BatchTemplate> GetBatchTemplate(Font& font,
+		bool TextArtifactMatchesAtlases(const NativeA8PayloadTemplate& artifact,
+			const std::vector<std::shared_ptr<AtlasResource>>& atlases)
+		{
+			if (artifact.pageCount != atlases.size()
+				|| artifact.atlasProperties.size() != atlases.size()
+				|| artifact.atlasTextures.size() != atlases.size())
+				return false;
+			for (size_t page = 0; page < atlases.size(); ++page)
+			{
+				if (!atlases[page]
+					|| artifact.atlasProperties[page].m_pObject
+						!= atlases[page]->property.m_pObject
+					|| artifact.atlasTextures[page].m_pObject
+						!= GetAtlasTexture(*atlases[page]))
+					return false;
+			}
+			return true;
+		}
+
+		NativeA8PayloadTemplatePtr GetNativeTextArtifact(Font& font,
 			const std::vector<PendingQuad>& quads,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
-			const BatchTemplateKey& key, const NiPoint3& origin)
+			const TextArtifactKey& key, const NiPoint3& origin,
+			const A8EffectShapeConfig& effects)
 		{
 			AtlasState& state = State();
 			{
-				std::lock_guard<std::mutex> lock(state.batchMutex);
-				auto existing = state.batchCache.find(key);
-				if (existing != state.batchCache.end())
+				std::lock_guard<std::mutex> lock(state.textArtifactMutex);
+				auto existing = state.textArtifactCache.find(key);
+				if (existing != state.textArtifactCache.end())
 				{
-					state.batchLru.splice(state.batchLru.begin(), state.batchLru,
-						existing->second.lru);
-					existing->second.lru = state.batchLru.begin();
-					RecordFreeTypePerf(FreeTypePerfCounter::BatchHit);
-					return existing->second.data;
+					if (existing->second.data
+						&& TextArtifactMatchesAtlases(*existing->second.data, atlases))
+					{
+						state.textArtifactLru.splice(state.textArtifactLru.begin(),
+							state.textArtifactLru,
+							existing->second.lru);
+						existing->second.lru = state.textArtifactLru.begin();
+						RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactHit);
+						return existing->second.data;
+					}
+					state.textArtifactCacheBytes -= std::min(
+						state.textArtifactCacheBytes,
+						existing->second.bytes);
+					state.textArtifactLru.erase(existing->second.lru);
+					state.textArtifactCache.erase(existing);
 				}
 			}
-			RecordFreeTypePerf(FreeTypePerfCounter::BatchMiss);
+			RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactMiss);
 
-			auto result = std::make_shared<BatchTemplate>();
-			result->vertices.resize(quads.size() * 4);
-			result->texture.resize(quads.size() * 4);
-			result->indices.resize(quads.size() * 6);
+			std::vector<NativeA8GpuVertex> vertices(quads.size() * 4);
+			NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
+				std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+			NiPoint3 boundMaximum(std::numeric_limits<float>::lowest(),
+				std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
 			for (UInt32 index = 0; index < quads.size(); ++index)
 			{
 				const PendingQuad& quad = quads[index];
@@ -806,49 +852,88 @@ namespace fonthook::vectorfont
 				const float v1 = (static_cast<float>(rect.y + rect.height) + expansion)
 					/ atlas.height;
 				const UInt32 base = index * 4;
-				result->vertices[base + 0] = NiPoint3(x0, depth, z0);
-				result->vertices[base + 1] = NiPoint3(x1, depth, z0);
-				result->vertices[base + 2] = NiPoint3(x1, depth, z1);
-				result->vertices[base + 3] = NiPoint3(x0, depth, z1);
-				result->texture[base + 0] = NiPoint2(u0, v0);
-				result->texture[base + 1] = NiPoint2(u1, v0);
-				result->texture[base + 2] = NiPoint2(u1, v1);
-				result->texture[base + 3] = NiPoint2(u0, v1);
-				const UInt32 triangle = index * 6;
-				result->indices[triangle + 0] = static_cast<UInt16>(base + 0);
-				result->indices[triangle + 1] = static_cast<UInt16>(base + 2);
-				result->indices[triangle + 2] = static_cast<UInt16>(base + 1);
-				result->indices[triangle + 3] = static_cast<UInt16>(base + 0);
-				result->indices[triangle + 4] = static_cast<UInt16>(base + 3);
-				result->indices[triangle + 5] = static_cast<UInt16>(base + 2);
+				const UInt32 packedColor = PackNativeBaseColor(quad.baseColor);
+				const std::array<NiPoint3, 4> positions = {{
+					NiPoint3(x0, depth, z0), NiPoint3(x1, depth, z0),
+					NiPoint3(x1, depth, z1), NiPoint3(x0, depth, z1)
+				}};
+				const std::array<NiPoint2, 4> texture = {{
+					NiPoint2(u0, v0), NiPoint2(u1, v0),
+					NiPoint2(u1, v1), NiPoint2(u0, v1)
+				}};
+				for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
+				{
+					const NiPoint3& position = positions[ordinal];
+					const NiPoint2& uv = texture[ordinal];
+					NativeA8GpuVertex& output = vertices[base + ordinal];
+					output = { position.x, position.y, position.z,
+						uv.x, uv.y, packedColor };
+					boundMinimum.x = std::min(boundMinimum.x, position.x);
+					boundMinimum.y = std::min(boundMinimum.y, position.y);
+					boundMinimum.z = std::min(boundMinimum.z, position.z);
+					boundMaximum.x = std::max(boundMaximum.x, position.x);
+					boundMaximum.y = std::max(boundMaximum.y, position.y);
+					boundMaximum.z = std::max(boundMaximum.z, position.z);
+				}
 			}
-			ThisStdCall(0xA7EE30, &result->bound,
-				static_cast<UInt16>(result->vertices.size()), result->vertices.data());
-
-
-			const size_t bytes = sizeof(BatchTemplate)
-				+ result->vertices.capacity() * sizeof(NiPoint3)
-				+ result->texture.capacity() * sizeof(NiPoint2)
-				+ result->indices.capacity() * sizeof(UInt16);
-			result->cpuMemory.Reset(CpuMemoryCategory::BatchTemplate, bytes);
+			NiBound bound;
+			bound.m_kCenter = NiPoint3(
+				(boundMinimum.x + boundMaximum.x) * 0.5f,
+				(boundMinimum.y + boundMaximum.y) * 0.5f,
+				(boundMinimum.z + boundMaximum.z) * 0.5f);
+			float radiusSquared = 0.0f;
+			for (const NativeA8GpuVertex& vertex : vertices)
 			{
-				std::lock_guard<std::mutex> lock(state.batchMutex);
-				state.batchLru.push_front(key);
-				const auto [inserted, success] = state.batchCache.emplace(key,
-					BatchTemplateEntry{ result, bytes, state.batchLru.begin() });
+				const float dx = vertex.x - bound.m_kCenter.x;
+				const float dy = vertex.y - bound.m_kCenter.y;
+				const float dz = vertex.z - bound.m_kCenter.z;
+				radiusSquared = std::max(radiusSquared,
+					dx * dx + dy * dy + dz * dz);
+			}
+			bound.m_fRadius = std::sqrt(radiusSquared);
+			NativeA8PayloadTemplatePtr result = BuildNativeA8PayloadTemplate(
+				std::move(vertices), static_cast<UInt32>(quads.size()), effects, bound);
+			if (!result)
+				return {};
+			const size_t bytes = GetNativeA8PayloadTemplateBytes(*result);
+			{
+				std::lock_guard<std::mutex> lock(state.textArtifactMutex);
+				auto existing = state.textArtifactCache.find(key);
+				if (existing != state.textArtifactCache.end())
+				{
+					if (existing->second.data
+						&& TextArtifactMatchesAtlases(*existing->second.data, atlases))
+					{
+						state.textArtifactLru.splice(state.textArtifactLru.begin(),
+							state.textArtifactLru,
+							existing->second.lru);
+						existing->second.lru = state.textArtifactLru.begin();
+						return existing->second.data;
+					}
+					state.textArtifactCacheBytes -= std::min(
+						state.textArtifactCacheBytes,
+						existing->second.bytes);
+					state.textArtifactLru.erase(existing->second.lru);
+					state.textArtifactCache.erase(existing);
+				}
+				state.textArtifactLru.push_front(key);
+				const auto [inserted, success] = state.textArtifactCache.emplace(key,
+					TextArtifactEntry{ result, bytes,
+						state.textArtifactLru.begin() });
 				if (!success)
 				{
-					state.batchLru.pop_front();
-					state.batchLru.splice(state.batchLru.begin(), state.batchLru,
+					state.textArtifactLru.pop_front();
+					state.textArtifactLru.splice(state.textArtifactLru.begin(),
+						state.textArtifactLru,
 						inserted->second.lru);
-					inserted->second.lru = state.batchLru.begin();
+					inserted->second.lru = state.textArtifactLru.begin();
 					return inserted->second.data;
 				}
-				inserted->second.cpuMemory.Reset(CpuMemoryCategory::BatchTemplate,
-					sizeof(BatchTemplateEntry) + 2u * sizeof(BatchTemplateKey)
+				inserted->second.cpuMemory.Reset(CpuMemoryCategory::TextArtifact,
+					sizeof(TextArtifactEntry) + 2u * sizeof(TextArtifactKey)
 						+ 4u * sizeof(void*));
-				state.batchCacheBytes += bytes;
-				TrimBatchCache(state);
+				state.textArtifactCacheBytes += bytes;
+				TrimTextArtifactCache(state);
 			}
 			return result;
 		}
@@ -862,7 +947,36 @@ namespace fonthook::vectorfont
 			if (atlases.empty() || !atlases[0] || quads.empty()
 				|| quads.size() > kMaximumQuads)
 				return nullptr;
-			NiTriShape* shape = font.MakeTriShape(static_cast<int>(quads.size()),
+			const bool needsNativeRangeRouting = useCustomA8Shader || atlases.size() > 1;
+			A8EffectShapeConfig resolvedEffect = effectConfig
+				? *effectConfig : A8EffectShapeConfig{};
+			resolvedEffect.atlasProperties.clear();
+			resolvedEffect.atlasTextures.clear();
+			resolvedEffect.atlasInverseSizes.clear();
+			for (const auto& atlas : atlases)
+			{
+				resolvedEffect.atlasProperties.push_back(
+					atlas ? atlas->property : nullptr);
+				resolvedEffect.atlasTextures.push_back(
+					atlas ? GetAtlasTexture(*atlas) : nullptr);
+				resolvedEffect.atlasInverseSizes.push_back(atlas
+					? NiPoint2(1.0f / atlas->width, 1.0f / atlas->height)
+					: NiPoint2());
+			}
+			BuildA8DrawRanges(quads, resolvedEffect);
+			const TextArtifactKey geometryKey = BuildTextArtifactKey(
+				fingerprint, atlases);
+			const UInt64 artifactHash = BuildTextArtifactContentHash(
+				geometryKey, quads, resolvedEffect);
+			TextArtifactKey artifactKey = geometryKey;
+			artifactKey.contentHash = artifactHash;
+			const NativeA8PayloadTemplatePtr artifact = GetNativeTextArtifact(
+				font, quads, atlases, artifactKey, origin, resolvedEffect);
+			if (!artifact || artifact->gpuVertices.size() != quads.size() * 4u)
+				return nullptr;
+
+			NiTriShape* shape = font.MakeTriShape(
+				static_cast<int>(needsNativeRangeRouting ? 1u : quads.size()),
 				&tileColor, false);
 			if (!shape || !shape->GetModelData())
 				return nullptr;
@@ -880,58 +994,70 @@ namespace fonthook::vectorfont
 			}
 
 			NiTriShapeData* data = shape->GetModelData();
-			const BatchTemplateKey batchKey =
-				BuildBatchTemplateKey(fingerprint, atlases);
-			const std::shared_ptr<const BatchTemplate> batch =
-				GetBatchTemplate(font, quads, atlases, batchKey, origin);
-			if (!batch)
+			if (!data)
 				return nullptr;
-			for (size_t index = 0; index < batch->vertices.size(); ++index)
-			{
-				const NiPoint3& vertex = batch->vertices[index];
-				data->m_pkVertex[index] = NiPoint3(
-					vertex.x + origin.x,
-					vertex.y + origin.y,
-					vertex.z + origin.z);
-			}
-			std::copy(batch->texture.begin(), batch->texture.end(), data->m_pkTexture);
-			std::copy(batch->indices.begin(), batch->indices.end(), data->m_pusTriList);
 			if (!data->m_pkColor)
 				data->m_pkColor = NiAlloc<NiColorA>(data->m_usVertices);
 			if (!data->m_pkColor)
 				return nullptr;
-			for (size_t quadIndex = 0; quadIndex < quads.size(); ++quadIndex)
-			{
-				const NiColorA baseColor = SanitizeColor(quads[quadIndex].baseColor);
-				std::fill_n(data->m_pkColor + quadIndex * 4, 4, baseColor);
-			}
-			data->m_kBound = batch->bound;
+			std::fill_n(data->m_pkColor, data->m_usVertices,
+				SanitizeColor(tileColor));
+			data->m_kBound = artifact->bound;
 			data->m_kBound.m_kCenter.x += origin.x;
 			data->m_kBound.m_kCenter.y += origin.y;
 			data->m_kBound.m_kCenter.z += origin.z;
+			if (!needsNativeRangeRouting)
+			{
+				if (!data->m_pkVertex || !data->m_pkTexture || !data->m_pusTriList)
+					return nullptr;
+				static constexpr UInt16 kCanonicalQuad[6] = { 0, 2, 1, 0, 3, 2 };
+				for (UInt32 quadIndex = 0; quadIndex < quads.size(); ++quadIndex)
+				{
+					const NiColorA baseColor = SanitizeColor(quads[quadIndex].baseColor);
+					for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
+					{
+						const UInt32 index = quadIndex * 4u + ordinal;
+						const NativeA8GpuVertex& vertex = artifact->gpuVertices[index];
+						data->m_pkVertex[index] = NiPoint3(vertex.x + origin.x,
+							vertex.y + origin.y, vertex.z + origin.z);
+						data->m_pkTexture[index] = NiPoint2(vertex.u, vertex.v);
+						data->m_pkColor[index] = baseColor;
+					}
+					for (UInt32 ordinal = 0; ordinal < 6; ++ordinal)
+					{
+						data->m_pusTriList[quadIndex * 6u + ordinal] =
+							static_cast<UInt16>(quadIndex * 4u + kCanonicalQuad[ordinal]);
+					}
+				}
+			}
+			else
+			{
+				// The stock accumulator still validates and prepares this one-quad
+				// facade before the sorted Tile hook substitutes the shared proxy.
+				// Give it a complete, finite quad instead of leaving MakeTriShape's
+				// transient arrays unspecified.
+				if (data->m_usVertices < 4 || !data->m_pkVertex
+					|| !data->m_pkTexture || !data->m_pusTriList)
+				{
+					return nullptr;
+				}
+				static constexpr UInt16 kFacadeQuad[6] = { 0, 2, 1, 0, 3, 2 };
+				const NiColorA baseColor = SanitizeColor(quads.front().baseColor);
+				for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
+				{
+					const NativeA8GpuVertex& vertex = artifact->gpuVertices[ordinal];
+					data->m_pkVertex[ordinal] = NiPoint3(vertex.x + origin.x,
+						vertex.y + origin.y, vertex.z + origin.z);
+					data->m_pkTexture[ordinal] = NiPoint2(vertex.u, vertex.v);
+					data->m_pkColor[ordinal] = baseColor;
+				}
+				std::copy(std::begin(kFacadeQuad), std::end(kFacadeQuad),
+					data->m_pusTriList);
+			}
 			const UInt8 fillLayerBit = 1u << static_cast<UInt8>(AtlasLayer::Fill);
-			const bool needsNativeRangeRouting = useCustomA8Shader || atlases.size() > 1;
 			if (needsNativeRangeRouting)
 			{
-				A8EffectShapeConfig resolvedEffect = effectConfig
-					? *effectConfig : A8EffectShapeConfig{};
-				resolvedEffect.atlasProperties.clear();
-				resolvedEffect.atlasTextures.clear();
-				resolvedEffect.atlasInverseSizes.clear();
-				for (const auto& atlas : atlases)
-				{
-					resolvedEffect.atlasProperties.push_back(
-						atlas ? atlas->property : nullptr);
-					resolvedEffect.atlasTextures.push_back(
-						atlas ? GetAtlasTexture(*atlas) : nullptr);
-					resolvedEffect.atlasInverseSizes.push_back(atlas
-						? NiPoint2(1.0f / atlas->width, 1.0f / atlas->height)
-						: NiPoint2());
-				}
-				BuildA8DrawRanges(quads, resolvedEffect);
 				const A8ShapeColorContract colorContract = BuildColorContract(quads);
-				const UInt64 packetTemplateHash =
-					BuildPacketTemplateHash(batchKey, quads, resolvedEffect);
 				if (!PrepareA8AtlasShape(font, shape, font.iFontNum,
 					static_cast<UInt32>(std::count_if(quads.begin(), quads.end(),
 						[fillLayerBit](const PendingQuad& quad)
@@ -939,13 +1065,28 @@ namespace fonthook::vectorfont
 							return (quad.layerMask & fillLayerBit) != 0;
 						})),
 					static_cast<UInt32>(quads.size()), &resolvedEffect, &colorContract,
-					packetTemplateHash, origin))
+					artifact, origin))
 				{
 					return nullptr;
 				}
 			}
+			// PrepareObject establishes the engine-side submission state even when
+			// native rendering later replaces this facade with a shared proxy.
 			if (prepareObject)
 				shape->PrepareObject();
+			// The facade carries only one dummy quad on the native path. Restore the
+			// immutable artifact bound after stock preparation so culling never sees
+			// the dummy geometry's extent.
+			data->m_kBound = artifact->bound;
+			data->m_kBound.m_kCenter.x += origin.x;
+			data->m_kBound.m_kCenter.y += origin.y;
+			data->m_kBound.m_kCenter.z += origin.z;
+			// PrepareObject may have propagated the one-quad facade bound to the AV
+			// object. Refresh the already-created world bound from the restored full
+			// artifact bound so stock accumulator culling cannot discard the text
+			// before the sorted Tile route gets a chance to substitute its proxy.
+			if (prepareObject && shape->m_pWorldBound)
+				shape->UpdateWorldBound();
 			return shape;
 		}
 
@@ -1042,6 +1183,43 @@ namespace fonthook::vectorfont
 			}
 			if (availableAtlases.empty())
 				return nullptr;
+			if (!useCustomA8Shader && availableAtlases.size() > 1)
+			{
+				// Stock Tile geometry can bind only one texture. The no-loader ARGB
+				// route therefore collapses just this text unit into one transient
+				// atlas instead of accidentally entering the native multi-page route.
+				// This path is both exceptional and potentially large. Keep its merge
+				// list scoped to the collapse operation so a no-loader fallback cannot
+				// leave an unbudgeted thread-local capacity behind.
+				std::vector<std::shared_ptr<const GlyphBitmap>> fallbackBitmaps;
+				fallbackBitmaps.reserve(roleBitmaps[0].size() + roleBitmaps[1].size());
+				for (const auto& role : roleBitmaps)
+					fallbackBitmaps.insert(fallbackBitmaps.end(), role.begin(), role.end());
+				std::sort(fallbackBitmaps.begin(), fallbackBitmaps.end(),
+					[](const auto& left, const auto& right)
+					{
+						return left->cacheId < right->cacheId;
+					});
+				fallbackBitmaps.erase(std::unique(fallbackBitmaps.begin(),
+					fallbackBitmaps.end(), [](const auto& left, const auto& right)
+					{
+						return left->cacheId == right->cacheId;
+					}), fallbackBitmaps.end());
+				std::shared_ptr<AtlasResource> collapsed = CreateTransientAtlas(
+					fallbackBitmaps, pixelMode, renderMode, padding);
+				if (!collapsed)
+					return nullptr;
+				availableAtlases.assign(1, collapsed);
+				for (size_t roleIndex = 0; roleIndex < roleBitmaps.size(); ++roleIndex)
+				{
+					placementPages[roleIndex].clear();
+					for (const auto& bitmap : roleBitmaps[roleIndex])
+					{
+						if (bitmap && FindAtlasGlyph(*collapsed, bitmap->cacheId))
+							placementPages[roleIndex][bitmap->cacheId] = 0;
+					}
+				}
+			}
 			thread_local std::vector<PendingQuad> pagedQuads;
 			pagedQuads = *activeQuads;
 			const NiPoint3 batchOrigin = pagedQuads.front().pen;

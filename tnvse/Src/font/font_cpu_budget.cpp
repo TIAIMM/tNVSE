@@ -11,8 +11,8 @@ namespace fonthook::vectorfont
 {
 	void TrimFreeTypeCpuCachesForTotalBudget();
 	void TrimAtlasCpuCachesForTotalBudget();
-	void TrimA8PacketCacheForTotalBudget();
 	void TrimPreparedTextCpuCacheForTotalBudget();
+	void TrimNativeA8CpuCachesForTotalBudget();
 
 	namespace
 	{
@@ -127,7 +127,7 @@ namespace fonthook::vectorfont
 		// until the real aggregate is below the configured limit or all reclaimable
 		// entries are gone.
 		TrimPreparedTextCpuCacheForTotalBudget();
-		TrimA8PacketCacheForTotalBudget();
+		TrimNativeA8CpuCachesForTotalBudget();
 		TrimAtlasCpuCachesForTotalBudget();
 		TrimFreeTypeCpuCachesForTotalBudget();
 		enforcing.clear(std::memory_order_release);
@@ -148,15 +148,14 @@ namespace fonthook::vectorfont
 		}
 		last.store(total, std::memory_order_relaxed);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_font: CPU budget phase=%s totalMiB=%.2f limitMiB=%.2f result=%s bitmap=%.2f layout=%.2f prepared=%.2f batch=%.2f packet=%.2f atlasMeta=%.2f mappings=%.2f runtime=%.2f",
+			"tnvse_freetype_font: CPU budget phase=%s totalMiB=%.2f limitMiB=%.2f result=%s bitmap=%.2f layout=%.2f prepared=%.2f textArtifact=%.2f atlasMeta=%.2f mappings=%.2f runtime=%.2f",
 			phase ? phase : "unknown", total / (1024.0 * 1024.0),
 			budget / (1024.0 * 1024.0),
 			total <= budget ? "within-budget" : "pinned-overcommit",
 			GetCpuMemoryUsage(CpuMemoryCategory::GlyphBitmap) / (1024.0 * 1024.0),
 			GetCpuMemoryUsage(CpuMemoryCategory::LayoutRun) / (1024.0 * 1024.0),
 			GetCpuMemoryUsage(CpuMemoryCategory::PreparedText) / (1024.0 * 1024.0),
-			GetCpuMemoryUsage(CpuMemoryCategory::BatchTemplate) / (1024.0 * 1024.0),
-			GetCpuMemoryUsage(CpuMemoryCategory::PacketTemplate) / (1024.0 * 1024.0),
+			GetCpuMemoryUsage(CpuMemoryCategory::TextArtifact) / (1024.0 * 1024.0),
 			GetCpuMemoryUsage(CpuMemoryCategory::AtlasMetadata) / (1024.0 * 1024.0),
 			GetCpuMemoryUsage(CpuMemoryCategory::PersistentMapping) / (1024.0 * 1024.0),
 			GetCpuMemoryUsage(CpuMemoryCategory::RuntimeMetadata) / (1024.0 * 1024.0));

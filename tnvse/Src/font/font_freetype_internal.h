@@ -17,10 +17,13 @@
 
 #include <array>
 #include <list>
+#include <limits>
 #include <mutex>
+#include <new>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <Windows.h>
 
 namespace fonthook::vectorfont
@@ -50,6 +53,79 @@ namespace fonthook::vectorfont
 		}
 	};
 
+	struct DirectLayoutGlyphMetric
+	{
+		float advance = 0.0f;
+		float fixedOffset = 0.0f;
+		bool valid = false;
+	};
+
+	class SparseDirectLayoutMetricTable
+	{
+	public:
+		static constexpr size_t kPageEntryCount = 256;
+		using Page = std::array<DirectLayoutGlyphMetric, kPageEntryCount>;
+
+		SparseDirectLayoutMetricTable() = default;
+		SparseDirectLayoutMetricTable(const SparseDirectLayoutMetricTable&) = delete;
+		SparseDirectLayoutMetricTable& operator=(
+			const SparseDirectLayoutMetricTable&) = delete;
+		SparseDirectLayoutMetricTable(SparseDirectLayoutMetricTable&& other) noexcept
+			: pages_(std::move(other.pages_)),
+			allocatedPageCount_(std::exchange(other.allocatedPageCount_, 0))
+		{
+		}
+		SparseDirectLayoutMetricTable& operator=(
+			SparseDirectLayoutMetricTable&& other) noexcept
+		{
+			if (this != &other)
+			{
+				pages_ = std::move(other.pages_);
+				allocatedPageCount_ = std::exchange(other.allocatedPageCount_, 0);
+			}
+			return *this;
+		}
+
+		DirectLayoutGlyphMetric* Find(FT_UInt glyphIndex) noexcept
+		{
+			if (glyphIndex > std::numeric_limits<UInt16>::max())
+				return nullptr;
+			const std::unique_ptr<Page>& page = pages_[glyphIndex >> 8];
+			return page ? &(*page)[glyphIndex & 0xFFu] : nullptr;
+		}
+
+		DirectLayoutGlyphMetric* GetOrCreate(FT_UInt glyphIndex) noexcept
+		{
+			if (glyphIndex > std::numeric_limits<UInt16>::max())
+				return nullptr;
+			std::unique_ptr<Page>& page = pages_[glyphIndex >> 8];
+			if (!page)
+			{
+				std::unique_ptr<Page> allocated(new (std::nothrow) Page{});
+				if (!allocated)
+					return nullptr;
+				page = std::move(allocated);
+				++allocatedPageCount_;
+			}
+			return &(*page)[glyphIndex & 0xFFu];
+		}
+
+		size_t GetAllocatedBytes() const noexcept
+		{
+			return allocatedPageCount_ * sizeof(Page);
+		}
+
+	private:
+		std::array<std::unique_ptr<Page>, kPageEntryCount> pages_ = {};
+		size_t allocatedPageCount_ = 0;
+	};
+
+	struct DirectLayoutKerningEntry
+	{
+		UInt64 key = 0;
+		float value = 0.0f;
+	};
+
 	struct RuntimeFace
 	{
 		std::shared_ptr<MappedFontFile> file;
@@ -61,6 +137,9 @@ namespace fonthook::vectorfont
 		FT_UInt configuredHeight = 0;
 		float resolvedBaselineOffset = 0.0f;
 		float visualCenterCorrection = 0.0f;
+		SparseDirectLayoutMetricTable directLayoutMetrics;
+		CpuMemoryLease directLayoutMetricMemory;
+		std::array<DirectLayoutKerningEntry, 256> directKerning = {};
 
 		RuntimeFace() = default;
 		RuntimeFace(const RuntimeFace&) = delete;
@@ -70,7 +149,10 @@ namespace fonthook::vectorfont
 			configured(other.configured), configuredRaster(other.configuredRaster),
 			configuredWidth(other.configuredWidth), configuredHeight(other.configuredHeight),
 			resolvedBaselineOffset(other.resolvedBaselineOffset),
-			visualCenterCorrection(other.visualCenterCorrection)
+			visualCenterCorrection(other.visualCenterCorrection),
+			directLayoutMetrics(std::move(other.directLayoutMetrics)),
+			directLayoutMetricMemory(std::move(other.directLayoutMetricMemory)),
+			directKerning(other.directKerning)
 		{
 			other.face = nullptr;
 			other.hbFont = nullptr;
@@ -92,6 +174,9 @@ namespace fonthook::vectorfont
 				configuredHeight = other.configuredHeight;
 				resolvedBaselineOffset = other.resolvedBaselineOffset;
 				visualCenterCorrection = other.visualCenterCorrection;
+				directLayoutMetrics = std::move(other.directLayoutMetrics);
+				directLayoutMetricMemory = std::move(other.directLayoutMetricMemory);
+				directKerning = other.directKerning;
 				other.face = nullptr;
 				other.hbFont = nullptr;
 			}

@@ -38,9 +38,11 @@ namespace fonthook
 
 	struct FreeTypeLayoutRun
 	{
-		using GlyphStorage = std::vector<FreeTypeLayoutGlyph>;
+		struct GlyphStorage : std::vector<FreeTypeLayoutGlyph>
+		{
+			vectorfont::CpuMemoryLease cpuMemory;
+		};
 		std::shared_ptr<const GlyphStorage> glyphs;
-		std::shared_ptr<vectorfont::CpuMemoryLease> cpuMemory;
 		float advance = 0.0f;
 		bool shaped = false;
 	};

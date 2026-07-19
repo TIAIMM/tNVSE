@@ -32,7 +32,7 @@ namespace fonthook::vectorfont
 
 		// Full atlas profiles no longer need a large CPU bitmap working set. Keep
 		// an adaptive 8-16 MiB demand cache for cold misses without reducing the
-		// layout, batch, or packet-template budgets that affect every frame.
+		// layout or unified text-artifact budgets that affect every frame.
 		constexpr size_t kMinimumPostPrewarmBitmapBytes = 8u * 1024u * 1024u;
 		constexpr size_t kMaximumPostPrewarmBitmapBytes = 16u * 1024u * 1024u;
 		const size_t adaptiveLimit = std::clamp(configuredBytes / 16u,
@@ -248,6 +248,22 @@ namespace fonthook::vectorfont
 			{
 				const FT_Pos strength = static_cast<FT_Pos>(std::lround(role.style->embolden * 64.0f));
 				FT_Outline_EmboldenXY(&face.face->glyph->outline, strength, strength);
+			}
+			const size_t previousBytes = face.directLayoutMetrics.GetAllocatedBytes();
+			if (DirectLayoutGlyphMetric* metric =
+				face.directLayoutMetrics.GetOrCreate(glyphIndex))
+			{
+				metric->advance = static_cast<float>(face.face->glyph->advance.x) / 64.0f;
+				metric->fixedOffset = GetFixedCellGlyphOffset(
+					*role.style, face.face->glyph);
+				metric->valid = true;
+				const size_t allocatedBytes =
+					face.directLayoutMetrics.GetAllocatedBytes();
+				if (allocatedBytes != previousBytes)
+				{
+					face.directLayoutMetricMemory.Reset(
+						CpuMemoryCategory::RuntimeMetadata, allocatedBytes);
+				}
 			}
 			return true;
 		}
@@ -1218,7 +1234,21 @@ namespace fonthook::vectorfont
 				| static_cast<UInt8>(bytes[1])
 			: static_cast<UInt8>(bytes[0]);
 		if (LoadGlyphManifest(runtime, glyph.encodedCode, glyph.byteClass, &glyph, nullptr))
+		{
+			// A persistent manifest can bypass BuildFontLetter entirely. Still touch
+			// the base-size FreeType slot during prewarm so the no-shaping layout path
+			// starts with a complete advance/fixed-offset metric cache.
+			RuntimeRole& role = runtime.roles[static_cast<size_t>(glyph.byteClass)];
+			if (glyph.faceIndex < role.faces.size())
+			{
+				RuntimeFace& face = role.faces[glyph.faceIndex];
+				const DirectLayoutGlyphMetric* metric =
+					face.directLayoutMetrics.Find(glyph.glyphIndex);
+				if (!metric || !metric->valid)
+					LoadGlyph(role, face, glyph.glyphIndex);
+			}
 			return true;
+		}
 		if (!DecodeCodePoint(bytes, static_cast<int>(length), glyph.codePoint))
 			return false;
 

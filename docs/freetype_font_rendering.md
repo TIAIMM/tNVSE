@@ -203,6 +203,15 @@ comma-separated `features` attribute uses HarfBuzz feature syntax, for example
 `CharData` per encoded character and therefore uses precise FreeType kerning
 without GSUB substitutions.
 
+With shaping disabled, layout decodes and positions each encoded unit in one
+pass instead of first allocating an intermediate layout-input vector. Each
+runtime face keeps sparse glyph-index pages for the base-size advance and
+fixed-cell offset plus a small direct-mapped kerning cache. Code-page prewarm
+also fills these metrics when a persistent manifest already supplies glyph
+identity, so the first visible menu does not repeat hundreds of FreeType metric
+loads. An uncacheable glyph index or allocation failure still reads the live
+FreeType slot for that unit and never substitutes a zero advance.
+
 The final printable runs produced after prepared-text wrapping and the runs
 consumed by `Font::MakeString` share a small per-thread hot cache. Its key
 contains the font layout identity, active code page, shaping mode, and the exact
@@ -344,7 +353,7 @@ CPU fallback stroke widths. Shader colors, offsets, powers, inner thresholds,
 and quality selection use a separate shader-effect hash and do not invalidate
 an SDF atlas. Consequently an effect edit selects a new prewarm snapshot only
 when it changes the final SDF spread or the masks that the atlas must contain.
-The grayscale CPU fallback remains content-sensitive: independently generated
+The ARGB CPU fallback remains content-sensitive: independently generated
 coverage masks include the enabled glow, outline, and shadow parameters after
 physical-pixel quantization (including stroke, blur, softness, and power) in the
 atlas identity. Effect offsets remain draw geometry and do not invalidate mask
@@ -516,15 +525,19 @@ Native vertices store `float3` position, `float2` UV, and one packed
 vertex shader's existing normalized `float4 COLOR0`; the packet-uniform layer
 modifier remains in pixel constant `c1`. Compared with the previous four-float
 base color this reduces cached native geometry and dynamic/static VB traffic by
-one third without adding packets or draw calls. The dynamic ring retains its
-two-maximum-payload capacity, while the static VB starts at approximately 4 MiB
-instead of reserving its approximately 12 MiB packed-format maximum. When it is
-full, a safe submission boundary with no other active proxy compacts live weakly
-owned templates into a replacement buffer and doubles capacity up to that fixed
-maximum. Concurrent groups defer optional promotion and continue through the
-dynamic ring; expired static entries are discarded during compaction. Thus the
-normal submission path performs no extra allocation, upload, or draw, and only
-a real long-session static high-water mark grows the DEFAULT-pool reservation.
+one third without adding packets or draw calls. After the stock Tile list has
+been sorted, tNVSE preflights its FreeType facades, deduplicates their immutable
+text artifacts, and promotes all eligible artifacts with one static-VB
+Lock/copy sequence/Unlock. Tiles are not persistently merged: stock depth/order,
+per-Tile transform, scissor, alpha, and shader constants remain independent.
+The dynamic ring retains its two-maximum-payload capacity, while the static VB
+starts at approximately 4 MiB instead of reserving its approximately 12 MiB
+packed-format maximum. When it is full, a safe submission boundary with no
+other active proxy compacts live weakly owned artifacts into a replacement
+buffer and doubles capacity up to that fixed maximum. If the sorted-call hook is
+unavailable or replaced, the existing per-shape promotion route remains active.
+Concurrent groups defer optional promotion and continue through the dynamic
+ring; expired static entries are discarded during compaction.
 
 ## Atlas allocation, mipmaps, and memory
 
@@ -533,10 +546,14 @@ Missing glyphs are rasterized as one batch and uploaded through one dirty
 rectangle. Every atlas allocation has four transparent padding pixels per side,
 which isolates the 1/4 mip's bilinear footprint even when glyph dimensions are
 not multiples of four. Repeated text also reuses cached layout and unique
-vertex/UV/index templates. Layer colors and shared draw references are part of
-the packet-template identity, while per-glyph base colors do not force duplicate
-geometry templates. A8 and 32-bit profiles use separate cache keys and
-may coexist when text was created before Shader Loader initialization.
+text artifacts. One artifact owns the packed vertices, bound, atlas-page
+property/texture references, and merged contiguous packet descriptors that used
+to live in separate batch and packet-template caches. Geometry, per-glyph base
+colors, layer constants, and referenced page identities therefore form one
+validated cache identity; an atlas wrapper address cannot revive an artifact
+whose retained property or texture differs. SDF A8 storage and 32-bit fallback
+profiles use separate cache keys and may coexist when text was created before
+Shader Loader initialization.
 
 Generated SDF and ARGB-fallback masks and their supporting CPU objects are cached in
 process memory. Equivalent masks are shared across font IDs when the resolved
@@ -545,16 +562,19 @@ parameters, and mask type match. Baseline placement remains per font ID and is
 not baked into the shared mask.
 
 `uiFreeTypeFontMemoryCacheMB` is one aggregate CPU-memory ceiling shared by
-glyph bitmaps, layout runs, prepared text, batch and native packet templates,
-atlas metadata/backing data, persistent file mappings, and runtime font
-metadata. Every owned allocation holds a category lease for its actual
-lifetime. Removing an LRU key therefore does not pretend to reclaim data that a
-live shape still owns, and the old per-cache fractions are only preferred local
-targets constrained by the remaining global headroom, not independent budgets.
-When the total is above the ceiling, tNVSE trims prepared text, native packet
-templates, batch templates, layouts, and glyph bitmaps in that order. Memory
-still referenced by active shapes, atlases, font runtimes, or required mappings
-is reported as `pinned-overcommit` instead of being invalidated silently.
+glyph bitmaps, layout runs, prepared text, unified text artifacts, atlas
+metadata/backing data, persistent file mappings, runtime font metadata, and the
+retained CPU maps/scratch buffers used by native submission. Cached/shared
+objects and static-promotion candidates hold category leases for their actual
+lifetime. Removing an LRU or map key therefore does not pretend to reclaim an
+object that a live shape or thread-local hot entry still owns, and the old
+per-cache fractions are only preferred local targets constrained by the
+remaining global headroom, not independent budgets. When the total is above the
+ceiling, tNVSE trims prepared text, optional native residency/candidate maps,
+unified text artifacts, layouts, and glyph bitmaps in reconstructibility order.
+Memory still referenced by active shapes, atlases, font runtimes, static GPU
+residency, or required mappings is reported as `pinned-overcommit` instead of
+being invalidated silently.
 
 During blocking prewarm, the bitmap LRU keeps a preferred one-quarter working
 target so wide raster batches do not churn, subject to the aggregate ceiling.

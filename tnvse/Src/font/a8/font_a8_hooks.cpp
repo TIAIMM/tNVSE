@@ -174,7 +174,8 @@ namespace fonthook::vectorfont
 				return;
 			}
 			RecordNativeA8Suppression(shape, *metadata,
-				metadata->nativePayload ? NativeA8FallbackReason::DirectImmediate
+				metadata->nativePayload.buildComplete
+					? NativeA8FallbackReason::DirectImmediate
 					: NativeA8FallbackReason::PacketBuild,
 				phase);
 		}
@@ -263,7 +264,8 @@ namespace fonthook::vectorfont
 			LogMissingMetadata(shape, "tile-render-pass");
 			return;
 		}
-		NativeA8ShapePayload* payload = metadata->nativePayload.get();
+		NativeA8ShapePayload* payload = metadata->nativePayload.buildComplete
+			? &metadata->nativePayload : nullptr;
 		NativeA8FallbackReason failure = NativeA8FallbackReason::None;
 		if (!payload)
 			failure = NativeA8FallbackReason::PacketBuild;
@@ -290,7 +292,7 @@ namespace fonthook::vectorfont
 			SInt32 faultRegister = -1;
 			{
 				NativeRingSubmissionScope ringScope;
-				failure = BeginNativeA8RingSubmission(shape, *metadata, *payload,
+				failure = BeginNativeA8RingSubmission(shape, *payload,
 					ringScope.submission);
 				if (failure != NativeA8FallbackReason::None)
 				{
@@ -323,11 +325,11 @@ namespace fonthook::vectorfont
 						faultResult = constants.Result();
 					}
 					for (UInt32 packetIndex = 0; !runtimeFault
-						&& packetIndex < payload->packets.size(); ++packetIndex)
+						&& packetIndex < payload->packetShaders.size(); ++packetIndex)
 					{
 						NiTriShape* proxyShape = nullptr;
 						const NativeA8FallbackReason packetFailure =
-							PrepareNativeA8RingPacket(shape, *metadata, *payload,
+							PrepareNativeA8RingPacket(shape, *payload,
 								ringScope.submission, packetIndex, proxyShape);
 						if (packetFailure != NativeA8FallbackReason::None || !proxyShape)
 						{
@@ -367,8 +369,9 @@ namespace fonthook::vectorfont
 					gLog.FormattedMessage(
 						"tnvse_freetype_native: native Tile group route hit shape=%p font=%u pass=%u packets=%u ranges=%u",
 						shape, metadata->fontId, currentPass,
-						static_cast<UInt32>(payload->packets.size()),
-						static_cast<UInt32>(metadata->compiledRanges.size()));
+						static_cast<UInt32>(payload->packetShaders.size()),
+						payload->payloadTemplate
+							? payload->payloadTemplate->sourceRangeCount : 0u);
 				}
 				return;
 			}
@@ -384,7 +387,7 @@ namespace fonthook::vectorfont
 			}
 			if (drewPacket)
 			{
-				MarkNativeA8RuntimeFault(*payload, runtimeFailure);
+				MarkNativeA8RuntimeFault(*metadata, *payload, runtimeFailure);
 				return;
 			}
 			failure = runtimeFailure;

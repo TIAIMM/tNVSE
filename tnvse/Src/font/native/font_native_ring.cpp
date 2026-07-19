@@ -101,6 +101,7 @@ namespace fonthook::vectorfont
 
 		struct NativeA8StaticCandidate
 		{
+			CpuMemoryLease cpuMemory;
 			std::weak_ptr<const NativeA8PayloadTemplate> owner;
 			UInt32 submissionCount = 0;
 			bool promotionDisabled = false;
@@ -166,6 +167,7 @@ namespace fonthook::vectorfont
 				NativeA8StaticPayload> staticPayloads;
 			std::unordered_map<const NativeA8PayloadTemplate*,
 				std::shared_ptr<NativeA8StaticCandidate>> staticCandidates;
+			CpuMemoryLease cpuMemory;
 			std::atomic<UInt32> resourceSerial = 1;
 			bool loggedReady = false;
 		};
@@ -177,6 +179,32 @@ namespace fonthook::vectorfont
 			// be torn down during late engine shutdown.
 			static NativeA8RingState* state = new NativeA8RingState();
 			return *state;
+		}
+
+		template <class Map>
+		size_t EstimateUnorderedMapBytes(const Map& map)
+		{
+			return map.bucket_count() * sizeof(void*)
+				+ map.size() * (sizeof(typename Map::value_type)
+					+ 3u * sizeof(void*));
+		}
+
+		void RefreshRingCpuMemoryLocked(NativeA8RingState& state)
+		{
+			size_t bytes = EstimateUnorderedMapBytes(state.uploadedPayloads)
+				+ EstimateUnorderedMapBytes(state.staticPayloads)
+				+ EstimateUnorderedMapBytes(state.staticCandidates);
+			state.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata, bytes);
+		}
+
+		std::shared_ptr<NativeA8StaticCandidate> CreateStaticCandidate(
+			const NativeA8PayloadTemplatePtr& payloadTemplate)
+		{
+			auto candidate = std::make_shared<NativeA8StaticCandidate>();
+			candidate->owner = payloadTemplate;
+			candidate->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+				sizeof(NativeA8StaticCandidate) + 2u * sizeof(void*));
+			return candidate;
 		}
 
 		TileShaderPropertyView* GetTileProperty(NiTriShape* shape)
@@ -288,6 +316,7 @@ namespace fonthook::vectorfont
 			state.uploadedPayloads.clear();
 			state.staticPayloads.clear();
 			state.staticCandidates.clear();
+			RefreshRingCpuMemoryLocked(state);
 			state.resourceSerial.fetch_add(1, std::memory_order_release);
 			s_ringThread.staticPayload = {};
 			s_ringThread.uploadedPayload = {};
@@ -347,14 +376,14 @@ namespace fonthook::vectorfont
 		}
 
 		bool EnsureRingResourcesLocked(NativeA8RingState& state,
-			NativeA8ShapePayload& payload, UInt32 requiredVertices,
+			UInt32 preparedGeneration, UInt32 requiredVertices,
 			const char*& operation, HRESULT& result)
 		{
 			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
 			const UInt32 generation = GetNativeA8ShaderGeneration();
 			if (!renderer || !device || !generation
-				|| generation != payload.preparedGeneration)
+				|| generation != preparedGeneration)
 			{
 				operation = "ring-context";
 				result = D3DERR_DEVICELOST;
@@ -514,7 +543,10 @@ namespace fonthook::vectorfont
 				return false;
 
 			std::vector<LiveStaticPayload> livePayloads;
+			CpuMemoryLease rebuildCpuMemory;
 			livePayloads.reserve(state.staticPayloads.size());
+			rebuildCpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+				livePayloads.capacity() * sizeof(LiveStaticPayload));
 			UInt64 liveVertexCount = 0;
 			for (const auto& entry : state.staticPayloads)
 			{
@@ -607,6 +639,9 @@ namespace fonthook::vectorfont
 					payload.owner, payload.baseVertex,
 					static_cast<UInt32>(payload.owner->gpuVertices.size()) });
 			}
+			rebuildCpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+				livePayloads.capacity() * sizeof(LiveStaticPayload)
+					+ EstimateUnorderedMapBytes(rebuilt));
 			for (UInt32 index = 0; index < state.proxyCount; ++index)
 			{
 				if (state.proxies[index].chip)
@@ -617,6 +652,8 @@ namespace fonthook::vectorfont
 			state.staticVertexCapacity = static_cast<UInt32>(desiredCapacity);
 			state.nextStaticVertex = static_cast<UInt32>(liveVertexCount);
 			state.staticPayloads = std::move(rebuilt);
+			rebuildCpuMemory.Release();
+			RefreshRingCpuMemoryLocked(state);
 			state.resourceSerial.fetch_add(1, std::memory_order_release);
 			s_ringThread.staticPayload = {};
 			s_ringThread.uploadedPayload = {};
@@ -635,19 +672,19 @@ namespace fonthook::vectorfont
 		}
 
 		bool BindPacketAtlasPage(NativeA8Proxy& proxy,
-			const A8ShapeMetadata& metadata, UInt16 page)
+			const NativeA8PayloadTemplate& artifact, UInt16 page)
 		{
-			if (page >= metadata.effects.atlasProperties.size()
-				|| page >= metadata.effects.atlasTextures.size()
-				|| !metadata.effects.atlasProperties[page]
-				|| !metadata.effects.atlasTextures[page])
+			if (page >= artifact.atlasProperties.size()
+				|| page >= artifact.atlasTextures.size()
+				|| !artifact.atlasProperties[page]
+				|| !artifact.atlasTextures[page])
 			{
 				return false;
 			}
 
 			NiTexturingProperty* desiredProperty =
-				metadata.effects.atlasProperties[page].m_pObject;
-			NiTexture* desiredTexture = metadata.effects.atlasTextures[page].m_pObject;
+				artifact.atlasProperties[page].m_pObject;
+			NiTexture* desiredTexture = artifact.atlasTextures[page].m_pObject;
 			if (!proxy.shape || !proxy.tile)
 				return false;
 			if (proxy.atlasProperty != desiredProperty)
@@ -824,6 +861,7 @@ namespace fonthook::vectorfont
 				return true;
 			}
 			state.staticPayloads.erase(found);
+			RefreshRingCpuMemoryLocked(state);
 			return false;
 		}
 
@@ -832,7 +870,11 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount)
 		{
-			if (!state.staticVertexBuffer || vertexCount > state.staticVertexCapacity)
+			// Candidate observation must use the strategy's growth ceiling rather
+			// than the current allocation. Otherwise a payload larger than the
+			// initial 4 MiB buffer can never mature and therefore can never trigger
+			// the compaction/growth path that was designed to accommodate it.
+			if (!state.staticVertexBuffer || vertexCount > kStaticTargetVertexCapacity)
 				return nullptr;
 			const UInt32 resourceSerial = state.resourceSerial.load(
 				std::memory_order_relaxed);
@@ -857,11 +899,11 @@ namespace fonthook::vectorfont
 						else
 							++current;
 					}
+					RefreshRingCpuMemoryLocked(state);
 					if (state.staticCandidates.size() >= kStaticCandidateLimit)
 						return nullptr;
 				}
-				auto candidate = std::make_shared<NativeA8StaticCandidate>();
-				candidate->owner = payloadTemplate;
+				auto candidate = CreateStaticCandidate(payloadTemplate);
 				found = state.staticCandidates.emplace(
 					payloadTemplate.get(), std::move(candidate)).first;
 			}
@@ -871,10 +913,10 @@ namespace fonthook::vectorfont
 					found->second->owner.lock();
 				if (owner.get() != payloadTemplate.get())
 				{
-					found->second = std::make_shared<NativeA8StaticCandidate>();
-					found->second->owner = payloadTemplate;
+					found->second = CreateStaticCandidate(payloadTemplate);
 				}
 			}
+			RefreshRingCpuMemoryLocked(state);
 			hot.key = payloadTemplate.get();
 			hot.owner = payloadTemplate;
 			hot.candidate = found->second;
@@ -942,6 +984,7 @@ namespace fonthook::vectorfont
 				state.resourceSerial.load(std::memory_order_relaxed) };
 			if (s_ringThread.staticCandidate.key == payloadTemplate.get())
 				s_ringThread.staticCandidate = {};
+			RefreshRingCpuMemoryLocked(state);
 			RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexUpload);
 			RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexUploadBytes,
 				byteCount);
@@ -952,8 +995,6 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount)
 		{
-			if (state.nextStaticVertex >= state.staticVertexCapacity)
-				return;
 			NativeA8StaticCandidate* candidate = ResolveStaticCandidateLocked(
 				state, payloadTemplate, vertexCount);
 			if (candidate && !candidate->promotionDisabled
@@ -994,14 +1035,241 @@ namespace fonthook::vectorfont
 		return state.proxyCount != 0;
 	}
 
+	void TrimNativeA8CpuCachesForTotalBudget()
+	{
+		NativeA8RingState& state = RingState();
+		std::lock_guard<std::mutex> lock(state.mutex);
+		state.uploadedPayloads.clear();
+		state.staticCandidates.clear();
+		for (auto current = state.staticPayloads.begin();
+			current != state.staticPayloads.end();)
+		{
+			if (current->second.owner.expired())
+				current = state.staticPayloads.erase(current);
+			else
+				++current;
+		}
+		s_ringThread.uploadedPayload = {};
+		s_ringThread.staticCandidate = {};
+		RefreshRingCpuMemoryLocked(state);
+	}
+
+	void PrepareSortedNativeA8Payloads(
+		std::vector<NativeA8PayloadTemplatePtr>& payloadTemplates,
+		UInt32 generation)
+	{
+		if (!generation || payloadTemplates.empty()
+			|| !IsNativeA8ShaderGenerationCurrent(generation))
+		{
+			return;
+		}
+
+		UInt32 maximumVertices = 0;
+		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
+		{
+			if (!payloadTemplate || payloadTemplate->gpuVertices.empty()
+				|| payloadTemplate->gpuVertices.size()
+					> std::numeric_limits<UInt32>::max())
+			{
+				continue;
+			}
+			const UInt32 vertexCount = static_cast<UInt32>(
+				payloadTemplate->gpuVertices.size());
+			if ((vertexCount & 3u) || vertexCount / 4u > kNativeA8MaximumQuads)
+				continue;
+			maximumVertices = std::max(maximumVertices, vertexCount);
+		}
+		if (!maximumVertices)
+			return;
+
+		NativeA8RingState& state = RingState();
+		std::lock_guard<std::mutex> lock(state.mutex);
+		const char* operation = "sorted-static-resource";
+		HRESULT result = D3DERR_DEVICELOST;
+		if (!EnsureRingResourcesLocked(state, generation, maximumVertices,
+			operation, result) || !state.staticVertexBuffer)
+		{
+			return;
+		}
+
+		auto isStaticResident = [&state](
+			const NativeA8PayloadTemplatePtr& payloadTemplate,
+			UInt32 vertexCount)
+		{
+			auto resident = state.staticPayloads.find(payloadTemplate.get());
+			if (resident == state.staticPayloads.end())
+				return false;
+			NativeA8PayloadTemplatePtr owner = resident->second.owner.lock();
+			if (owner.get() == payloadTemplate.get()
+				&& resident->second.vertexCount == vertexCount
+				&& resident->second.baseVertex <= state.staticVertexCapacity
+				&& vertexCount <= state.staticVertexCapacity
+					- resident->second.baseVertex)
+			{
+				return true;
+			}
+			state.staticPayloads.erase(resident);
+			return false;
+		};
+		auto isBatchPromotionReady = [&state](
+			const NativeA8PayloadTemplatePtr& payloadTemplate)
+		{
+			auto found = state.staticCandidates.find(payloadTemplate.get());
+			if (found == state.staticCandidates.end() || !found->second)
+				return false;
+			NativeA8PayloadTemplatePtr owner = found->second->owner.lock();
+			if (owner.get() != payloadTemplate.get())
+			{
+				state.staticCandidates.erase(found);
+				return false;
+			}
+			return !found->second->promotionDisabled
+				&& found->second->submissionCount
+					>= kStaticPromotionSubmissionCount;
+		};
+
+		UInt64 requestedVertices = 0;
+		size_t eligibleCount = 0;
+		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
+		{
+			if (!payloadTemplate || payloadTemplate->gpuVertices.empty()
+				|| payloadTemplate->gpuVertices.size()
+					> std::numeric_limits<UInt32>::max())
+			{
+				continue;
+			}
+			const UInt32 vertexCount = static_cast<UInt32>(
+				payloadTemplate->gpuVertices.size());
+			if ((vertexCount & 3u) || vertexCount / 4u > kNativeA8MaximumQuads
+				|| isStaticResident(payloadTemplate, vertexCount)
+				|| !isBatchPromotionReady(payloadTemplate))
+			{
+				continue;
+			}
+			payloadTemplates[eligibleCount++] = payloadTemplate;
+			requestedVertices += vertexCount;
+		}
+		payloadTemplates.resize(eligibleCount);
+		RefreshRingCpuMemoryLocked(state);
+		if (!requestedVertices)
+			return;
+
+		const UInt64 availableVertices = state.nextStaticVertex
+			<= state.staticVertexCapacity
+			? state.staticVertexCapacity - state.nextStaticVertex : 0;
+		if (requestedVertices > availableVertices
+			&& requestedVertices <= std::numeric_limits<UInt32>::max())
+		{
+			bool permanentFailure = false;
+			TryGrowStaticVertexBufferLocked(state,
+				static_cast<UInt32>(requestedVertices), permanentFailure);
+		}
+
+		UInt32 selectedVertices = 0;
+		size_t selectedPayloads = 0;
+		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
+		{
+			const UInt32 vertexCount = static_cast<UInt32>(
+				payloadTemplate->gpuVertices.size());
+			if (state.nextStaticVertex > state.staticVertexCapacity
+				|| selectedVertices > state.staticVertexCapacity
+					- state.nextStaticVertex
+				|| vertexCount > state.staticVertexCapacity
+					- state.nextStaticVertex - selectedVertices)
+			{
+				continue;
+			}
+			payloadTemplates[selectedPayloads++] = payloadTemplate;
+			selectedVertices += vertexCount;
+		}
+		payloadTemplates.resize(selectedPayloads);
+		if (!selectedPayloads || !selectedVertices)
+			return;
+
+		const UINT byteOffset = state.nextStaticVertex
+			* sizeof(NativeA8GpuVertex);
+		const UINT byteCount = selectedVertices * sizeof(NativeA8GpuVertex);
+		void* destination = nullptr;
+		result = state.staticVertexBuffer->Lock(byteOffset, byteCount,
+			&destination, 0);
+		if (FAILED(result) || !destination)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexPromotionFailed);
+			return;
+		}
+
+		UInt32 copiedVertices = 0;
+		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
+		{
+			const UInt32 vertexCount = static_cast<UInt32>(
+				payloadTemplate->gpuVertices.size());
+			std::memcpy(static_cast<UInt8*>(destination)
+					+ copiedVertices * sizeof(NativeA8GpuVertex),
+				payloadTemplate->gpuVertices.data(),
+				vertexCount * sizeof(NativeA8GpuVertex));
+			copiedVertices += vertexCount;
+		}
+		if (copiedVertices != selectedVertices)
+		{
+			state.staticVertexBuffer->Unlock();
+			RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexPromotionFailed);
+			return;
+		}
+		result = state.staticVertexBuffer->Unlock();
+		if (FAILED(result))
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexPromotionFailed);
+			return;
+		}
+
+		UInt32 mappedVertices = 0;
+		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
+		{
+			const UInt32 vertexCount = static_cast<UInt32>(
+				payloadTemplate->gpuVertices.size());
+			const UInt32 baseVertex = state.nextStaticVertex + mappedVertices;
+			state.staticPayloads[payloadTemplate.get()] = {
+				payloadTemplate, baseVertex, vertexCount };
+			state.staticCandidates.erase(payloadTemplate.get());
+			if (s_ringThread.staticCandidate.key == payloadTemplate.get())
+				s_ringThread.staticCandidate = {};
+			mappedVertices += vertexCount;
+		}
+		RefreshRingCpuMemoryLocked(state);
+		if (mappedVertices != selectedVertices)
+		{
+			// The upload already succeeded. Reserve the complete written interval so
+			// a defensive bookkeeping mismatch can never let a later append overwrite
+			// a payload that was published before the mismatch was detected.
+			state.nextStaticVertex += selectedVertices;
+			RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexPromotionFailed);
+			return;
+		}
+		state.nextStaticVertex += selectedVertices;
+		RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexUpload);
+		RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexUploadBytes, byteCount);
+		RecordFreeTypePerf(FreeTypePerfCounter::SortedStaticBatch);
+		RecordFreeTypePerf(FreeTypePerfCounter::SortedStaticPayload,
+			static_cast<UInt64>(selectedPayloads));
+		RecordFreeTypePerf(FreeTypePerfCounter::SortedStaticBytes, byteCount);
+		if (g_bEnableFreeTypeFontRenderingLog)
+		{
+			FreeTypeFontDebugLog(
+				"tnvse_freetype_native: sorted static batch generation=%u payloads=%u vertices=%u bytes=%u residentVertices=%u capacity=%u",
+				generation, static_cast<UInt32>(selectedPayloads), selectedVertices,
+				byteCount, state.nextStaticVertex, state.staticVertexCapacity);
+		}
+	}
+
 	NativeA8FallbackReason BeginNativeA8RingSubmission(
-		NiTriShape* facade, const A8ShapeMetadata& metadata,
-		NativeA8ShapePayload& payload, NativeA8RingSubmission& submission)
+		NiTriShape* facade, NativeA8ShapePayload& payload,
+		NativeA8RingSubmission& submission)
 	{
 		EndNativeA8RingSubmission(submission);
 		if (!facade || !payload.buildComplete || !payload.payloadTemplate
-			|| payload.packets.empty()
-			|| payload.packets.size() != payload.payloadTemplate->packets.size())
+			|| payload.packetShaders.empty()
+			|| payload.packetShaders.size()
+				!= payload.payloadTemplate->packets.size())
 		{
 			return NativeA8FallbackReason::PacketBuild;
 		}
@@ -1009,12 +1277,9 @@ namespace fonthook::vectorfont
 		const UInt64 totalVertexCount = payload.payloadTemplate->gpuVertices.size();
 		if (!totalVertexCount || totalVertexCount > std::numeric_limits<UInt32>::max())
 			return NativeA8FallbackReason::PacketBuild;
-		for (const NativeA8Packet& packet : payload.packets)
+		for (const NativeA8PacketTemplate& source
+			: payload.payloadTemplate->packets)
 		{
-			if (packet.templateIndex >= payload.payloadTemplate->packets.size())
-				return NativeA8FallbackReason::PacketBuild;
-			const NativeA8PacketTemplate& source =
-				payload.payloadTemplate->packets[packet.templateIndex];
 			const UInt64 vertexEnd = static_cast<UInt64>(source.firstVertex)
 				+ source.vertexCount;
 			if (!source.vertexCount || (source.vertexCount & 3u)
@@ -1039,7 +1304,8 @@ namespace fonthook::vectorfont
 
 		const char* operation = "ring-resource";
 		HRESULT result = D3DERR_DEVICELOST;
-		if (!EnsureRingResourcesLocked(state, payload, totalVertices,
+		if (!EnsureRingResourcesLocked(state, payload.preparedGeneration,
+			totalVertices,
 			operation, result))
 		{
 			state.proxies[proxyIndex].inUse = false;
@@ -1069,7 +1335,7 @@ namespace fonthook::vectorfont
 		UInt32 startVertex = 0;
 		bool staticResident = ResolveStaticPayloadLocked(state,
 			payload.payloadTemplate, totalVertices, startVertex);
-		if (!staticResident)
+		if (!staticResident && !State().sortedTileRenderHookInstalled)
 		{
 			staticResident = PromoteStaticPayloadLocked(state,
 				payload.payloadTemplate, totalVertices, startVertex);
@@ -1127,6 +1393,7 @@ namespace fonthook::vectorfont
 					else
 					{
 						state.uploadedPayloads.erase(uploaded);
+						RefreshRingCpuMemoryLocked(state);
 					}
 				}
 			}
@@ -1144,6 +1411,7 @@ namespace fonthook::vectorfont
 					if (!state.uploadEpoch)
 						++state.uploadEpoch;
 					state.uploadedPayloads.clear();
+					RefreshRingCpuMemoryLocked(state);
 					s_ringThread.uploadedPayload = {};
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::DynamicVertexDiscard);
@@ -1186,6 +1454,7 @@ namespace fonthook::vectorfont
 				state.uploadedPayloads[payload.payloadTemplate.get()] = {
 					payload.payloadTemplate, startVertex, totalVertices,
 					state.uploadEpoch };
+				RefreshRingCpuMemoryLocked(state);
 				s_ringThread.uploadedPayload = {
 					payload.payloadTemplate.get(), payload.payloadTemplate,
 					startVertex, totalVertices, state.uploadEpoch,
@@ -1230,14 +1499,14 @@ namespace fonthook::vectorfont
 	}
 
 	NativeA8FallbackReason PrepareNativeA8RingPacket(
-		NiTriShape* facade, const A8ShapeMetadata& metadata,
-		NativeA8ShapePayload& payload, NativeA8RingSubmission& submission,
-		UInt32 packetIndex, NiTriShape*& proxyShape)
+		NiTriShape* facade, NativeA8ShapePayload& payload,
+		NativeA8RingSubmission& submission, UInt32 packetIndex,
+		NiTriShape*& proxyShape)
 	{
 		proxyShape = nullptr;
 		if (!submission.active || !facade || !submission.proxyShape
 			|| packetIndex != submission.nextPacket
-			|| packetIndex >= payload.packets.size()
+			|| packetIndex >= payload.packetShaders.size()
 			|| submission.generation != payload.preparedGeneration
 			|| !IsNativeA8ShaderGenerationCurrent(submission.generation)
 			|| !payload.payloadTemplate)
@@ -1245,15 +1514,16 @@ namespace fonthook::vectorfont
 			return NativeA8FallbackReason::RuntimeFault;
 		}
 
-		NativeA8Packet& packet = payload.packets[packetIndex];
-		if (!packet.shader || packet.templateIndex
-			>= payload.payloadTemplate->packets.size()
-			|| packet.atlasPage >= metadata.effects.atlasTextures.size())
+		if (packetIndex >= payload.payloadTemplate->packets.size())
+			return NativeA8FallbackReason::PacketBuild;
+		TileShader* shader = payload.packetShaders[packetIndex];
+		const NativeA8PacketTemplate& source =
+			payload.payloadTemplate->packets[packetIndex];
+		if (!shader || source.atlasPage
+			>= payload.payloadTemplate->atlasTextures.size())
 		{
 			return NativeA8FallbackReason::AtlasGeneration;
 		}
-		const NativeA8PacketTemplate& source =
-			payload.payloadTemplate->packets[packet.templateIndex];
 		const UInt32 vertexCount = source.vertexCount;
 		const UInt64 baseVertex = static_cast<UInt64>(
 			submission.payloadBaseVertex) + source.firstVertex;
@@ -1285,7 +1555,8 @@ namespace fonthook::vectorfont
 			|| proxy != submission.proxyShape
 			|| buffer != submission.proxyBuffer
 			|| chip != submission.proxyChip
-			|| !BindPacketAtlasPage(reservedProxy, metadata, packet.atlasPage))
+			|| !BindPacketAtlasPage(reservedProxy, *payload.payloadTemplate,
+				source.atlasPage))
 		{
 			payload.packetPrepareFailure.store(
 				NativeA8PacketPrepareFailure::Geometry,
@@ -1309,11 +1580,11 @@ namespace fonthook::vectorfont
 		// null; stock then uses m_uiTriCount for this single draw.
 		buffer->m_uiNumArrays = kCanonicalArrayCount;
 		proxy->GetModelData()->m_kBound = source.bound;
-		if (reservedProxy.shader != packet.shader)
+		if (reservedProxy.shader != shader)
 		{
-			proxy->SetShader(packet.shader);
+			proxy->SetShader(shader);
 			reservedProxy.shader = proxy->GetShader();
-			if (reservedProxy.shader != packet.shader)
+			if (reservedProxy.shader != shader)
 			{
 				payload.packetPrepareFailure.store(
 					NativeA8PacketPrepareFailure::ShaderBinding,

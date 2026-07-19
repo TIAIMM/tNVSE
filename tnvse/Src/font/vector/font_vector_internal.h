@@ -11,6 +11,7 @@
 
 namespace fonthook::vectorfont
 {
+	struct NativeA8PayloadTemplate;
 	enum class FreeTypePerfCounter : UInt8
 	{
 		LayoutHit,
@@ -34,10 +35,8 @@ namespace fonthook::vectorfont
 		AtlasUpload,
 		AtlasUploadBytes,
 		AtlasUploadRect,
-		BatchHit,
-		BatchMiss,
-		PacketTemplateHit,
-		PacketTemplateMiss,
+		TextArtifactHit,
+		TextArtifactMiss,
 		ShaderEffectBatch,
 		ShaderEffectPass,
 		ShaderEffectSamples,
@@ -53,6 +52,15 @@ namespace fonthook::vectorfont
 		StaticVertexUploadBytes,
 		StaticVertexHit,
 		StaticVertexPromotionFailed,
+		DirectLayoutRun,
+		DirectLayoutMetricHit,
+		DirectLayoutMetricMiss,
+		DirectKerningHit,
+		DirectKerningMiss,
+		SortedStaticBatch,
+		SortedStaticPayload,
+		SortedStaticBytes,
+		MergedPacketRange,
 		Count,
 	};
 
@@ -379,6 +387,6 @@ namespace fonthook::vectorfont
 		UInt32 auiGlyphCount, UInt32 auiQuadCount,
 		const A8EffectShapeConfig* apEffectConfig = nullptr,
 		const A8ShapeColorContract* apColorContract = nullptr,
-		UInt64 auiPacketTemplateHash = 0,
+		std::shared_ptr<const NativeA8PayloadTemplate> apPayloadTemplate = {},
 		const NiPoint3& arGeometryOrigin = NiPoint3());
 }

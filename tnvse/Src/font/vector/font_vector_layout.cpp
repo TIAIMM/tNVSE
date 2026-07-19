@@ -40,7 +40,13 @@ namespace fonthook::vectorfont
 
 		struct LayoutInputScratchPool
 		{
-			std::array<std::vector<LayoutInputGlyph>, 4> slots;
+			struct Slot
+			{
+				std::vector<LayoutInputGlyph> input;
+				CpuMemoryLease cpuMemory;
+			};
+
+			std::array<Slot, 4> slots;
 			size_t depth = 0;
 		};
 
@@ -49,8 +55,15 @@ namespace fonthook::vectorfont
 		public:
 			explicit LayoutInputScratchLease(LayoutInputScratchPool& pool) : m_pool(pool)
 			{
-				m_input = m_pool.depth < m_pool.slots.size()
-					? &m_pool.slots[m_pool.depth] : &m_fallback;
+				if (m_pool.depth < m_pool.slots.size())
+				{
+					m_slot = &m_pool.slots[m_pool.depth];
+					m_input = &m_slot->input;
+				}
+				else
+				{
+					m_input = &m_fallback;
+				}
 				++m_pool.depth;
 				m_input->clear();
 			}
@@ -61,6 +74,11 @@ namespace fonthook::vectorfont
 				m_input->clear();
 				if (m_input->capacity() > kMaximumRetainedLayoutUnits)
 					std::vector<LayoutInputGlyph>().swap(*m_input);
+				if (m_slot)
+				{
+					m_slot->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+						m_input->capacity() * sizeof(LayoutInputGlyph));
+				}
 				--m_pool.depth;
 			}
 
@@ -69,6 +87,7 @@ namespace fonthook::vectorfont
 		private:
 			LayoutInputScratchPool& m_pool;
 			std::vector<LayoutInputGlyph> m_fallback;
+			LayoutInputScratchPool::Slot* m_slot = nullptr;
 			std::vector<LayoutInputGlyph>* m_input = nullptr;
 		};
 
@@ -101,36 +120,125 @@ namespace fonthook::vectorfont
 			return buffer;
 		}
 
+		bool DecodeLayoutUnit(RuntimeFont& runtime, const char* text,
+			size_t length, size_t offset, LayoutInputGlyph& output)
+		{
+			if (!text || offset >= length)
+				return false;
+			const char* encodedText = text + offset;
+			char normalizedSingleByte[2] = { text[offset], 0 };
+			UInt32 dbcsCode = 0;
+			if (!TryDecodeFreeTypeDoubleByte(text + offset, dbcsCode))
+			{
+				UInt8 normalized = static_cast<UInt8>(normalizedSingleByte[0]);
+				ConvertToAsciiQuotes(&normalized);
+				normalizedSingleByte[0] = static_cast<char>(normalized);
+				encodedText = normalizedSingleByte;
+			}
+			VectorEncodedGlyph glyph;
+			if (!DecodeEncodedGlyphIdentity(runtime, encodedText, glyph)
+				|| !glyph.byteLength || offset + glyph.byteLength > length)
+			{
+				return false;
+			}
+			ResolvedGlyph resolved;
+			if (!ResolveVectorGlyph(runtime, glyph, resolved))
+				return false;
+			ApplyResolvedIdentity(glyph, resolved);
+			output = { glyph, resolved, static_cast<UInt32>(offset) };
+			return true;
+		}
+
 		bool DecodeLayoutInput(RuntimeFont& runtime,
 			const char* text, size_t length, std::vector<LayoutInputGlyph>& input)
 		{
 			input.clear();
 			for (size_t offset = 0; offset < length;)
 			{
-				const char* encodedText = text + offset;
-				char normalizedSingleByte[2] = { text[offset], 0 };
-				UInt32 dbcsCode = 0;
-				if (!TryDecodeFreeTypeDoubleByte(text + offset, dbcsCode))
-				{
-					UInt8 normalized = static_cast<UInt8>(normalizedSingleByte[0]);
-					ConvertToAsciiQuotes(&normalized);
-					normalizedSingleByte[0] = static_cast<char>(normalized);
-					encodedText = normalizedSingleByte;
-				}
-				VectorEncodedGlyph glyph;
-				if (!DecodeEncodedGlyphIdentity(runtime, encodedText, glyph)
-					|| !glyph.byteLength || offset + glyph.byteLength > length)
-				{
+				LayoutInputGlyph item;
+				if (!DecodeLayoutUnit(runtime, text, length, offset, item))
 					return false;
-				}
-				ResolvedGlyph resolved;
-				if (!ResolveVectorGlyph(runtime, glyph, resolved))
-					return false;
-				ApplyResolvedIdentity(glyph, resolved);
-				input.push_back({ glyph, resolved, static_cast<UInt32>(offset) });
-				offset += glyph.byteLength;
+				offset += item.glyph.byteLength;
+				input.push_back(std::move(item));
 			}
 			return true;
+		}
+
+		void AppendDirectLayoutGlyph(RuntimeRole& role, RuntimeFace& face,
+			const VectorEncodedGlyph& glyph, FT_UInt glyphIndex, UInt32 byteOffset,
+			FT_UInt previousGlyph, FreeTypeLayoutRun::GlyphStorage& glyphs,
+			FreeTypeLayoutRun& layout)
+		{
+			const bool fixedCell = role.style->fixedWidth > 0.0f;
+			float kerning = 0.0f;
+			if (!fixedCell && previousGlyph && glyphIndex && FT_HAS_KERNING(face.face))
+			{
+				const UInt64 kerningKey = (static_cast<UInt64>(previousGlyph) << 32)
+					| glyphIndex;
+				const UInt64 mixedKey = kerningKey
+					^ ((kerningKey >> 33) * 0x9E3779B185EBCA87ull);
+				DirectLayoutKerningEntry& cached = face.directKerning[
+					static_cast<size_t>(mixedKey & (face.directKerning.size() - 1))];
+				if (cached.key == kerningKey)
+				{
+					kerning = cached.value;
+					RecordFreeTypePerf(FreeTypePerfCounter::DirectKerningHit);
+				}
+				else
+				{
+					FT_Vector delta = {};
+					if (!FT_Get_Kerning(face.face, previousGlyph, glyphIndex,
+						FT_KERNING_DEFAULT, &delta))
+					{
+						kerning = static_cast<float>(delta.x) / 64.0f;
+					}
+					cached = { kerningKey, kerning };
+					RecordFreeTypePerf(FreeTypePerfCounter::DirectKerningMiss);
+				}
+			}
+
+			DirectLayoutGlyphMetric fallbackMetric;
+			DirectLayoutGlyphMetric* metric = face.directLayoutMetrics.Find(glyphIndex);
+			if (metric && metric->valid)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::DirectLayoutMetricHit);
+			}
+			else
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::DirectLayoutMetricMiss);
+				if (LoadGlyph(role, face, glyphIndex))
+				{
+					metric = face.directLayoutMetrics.Find(glyphIndex);
+					if (!metric || !metric->valid)
+					{
+						// Sparse pages intentionally cover the 16-bit OpenType glyph space.
+						// Preserve correct layout for a wider glyph index or an allocation
+						// failure by using the live FreeType slot for this one layout unit.
+						fallbackMetric.advance = static_cast<float>(
+							face.face->glyph->advance.x) / 64.0f;
+						fallbackMetric.fixedOffset = GetFixedCellGlyphOffset(
+							*role.style, face.face->glyph);
+						fallbackMetric.valid = true;
+						metric = &fallbackMetric;
+					}
+				}
+				else
+					metric = nullptr;
+			}
+
+			FreeTypeLayoutGlyph positioned;
+			positioned.glyph = glyph;
+			positioned.cluster = byteOffset;
+			positioned.xOffset = fixedCell
+				? (metric && metric->valid ? metric->fixedOffset : 0.0f)
+				: kerning;
+			positioned.xAdvance = fixedCell
+				? GetFixedCellAdvance(*role.style)
+				: (metric && metric->valid ? metric->advance : 0.0f)
+					+ role.style->tracking + kerning;
+			layout.advance += positioned.xAdvance;
+			positioned.glyph.metrics = nullptr;
+			glyphs.push_back(std::move(positioned));
 		}
 
 		void AppendPreciseLayout(RuntimeFont& runtime,
@@ -141,41 +249,51 @@ namespace fonthook::vectorfont
 				return;
 			RuntimeRole& role = *input[begin].resolved.role;
 			RuntimeFace& face = *input[begin].resolved.runtimeFace;
-			ConfigureRuntimeFace(face, *role.style, 1.0f, false);
-			const bool fixedCell = role.style->fixedWidth > 0.0f;
-			const bool haveKerning = FT_HAS_KERNING(face.face) != 0;
-			const float fixedAdvance = fixedCell
-				? GetFixedCellAdvance(*role.style) : 0.0f;
+			if (!ConfigureRuntimeFace(face, *role.style, 1.0f, false))
+				return;
 			FT_UInt previousGlyph = 0;
 			for (size_t index = begin; index < end; ++index)
 			{
 				const LayoutInputGlyph& item = input[index];
-				float kerning = 0.0f;
-				if (!fixedCell && previousGlyph && item.resolved.glyphIndex
-					&& haveKerning)
-				{
-					FT_Vector delta = {};
-					if (!FT_Get_Kerning(face.face, previousGlyph,
-						item.resolved.glyphIndex, FT_KERNING_DEFAULT, &delta))
-					{
-						kerning = static_cast<float>(delta.x) / 64.0f;
-					}
-				}
-				LoadGlyph(role, face, item.resolved.glyphIndex);
-				const float baseAdvance = static_cast<float>(face.face->glyph->advance.x) / 64.0f;
-				FreeTypeLayoutGlyph positioned;
-				positioned.glyph = item.glyph;
-				positioned.cluster = item.byteOffset;
-				positioned.xOffset = fixedCell
-					? GetFixedCellGlyphOffset(*role.style, face.face->glyph) : kerning;
-				positioned.xAdvance = fixedCell
-					? fixedAdvance
-					: baseAdvance + role.style->tracking + kerning;
-				layout.advance += positioned.xAdvance;
-				positioned.glyph.metrics = nullptr;
-				glyphs.push_back(std::move(positioned));
+				AppendDirectLayoutGlyph(role, face, item.glyph,
+					item.resolved.glyphIndex, item.byteOffset, previousGlyph,
+					glyphs, layout);
 				previousGlyph = item.resolved.glyphIndex;
 			}
+		}
+
+		bool AppendDirectLayout(RuntimeFont& runtime, const char* text, size_t length,
+			FreeTypeLayoutRun::GlyphStorage& glyphs, FreeTypeLayoutRun& layout)
+		{
+			RuntimeRole* previousRole = nullptr;
+			RuntimeFace* previousFace = nullptr;
+			VectorFontByteClass previousByteClass = VectorFontByteClass::SingleByte;
+			FT_UInt previousGlyph = 0;
+			for (size_t offset = 0; offset < length;)
+			{
+				LayoutInputGlyph item;
+				if (!DecodeLayoutUnit(runtime, text, length, offset, item))
+					return false;
+				RuntimeRole& role = *item.resolved.role;
+				RuntimeFace& face = *item.resolved.runtimeFace;
+				if (previousRole != &role || previousFace != &face
+					|| previousByteClass != item.glyph.byteClass)
+				{
+					if (!ConfigureRuntimeFace(face, *role.style, 1.0f, false))
+						return false;
+					previousGlyph = 0;
+				}
+				AppendDirectLayoutGlyph(role, face, item.glyph,
+					item.resolved.glyphIndex, item.byteOffset, previousGlyph,
+					glyphs, layout);
+				previousRole = &role;
+				previousFace = &face;
+				previousByteClass = item.glyph.byteClass;
+				previousGlyph = item.resolved.glyphIndex;
+				offset += item.glyph.byteLength;
+			}
+			RecordFreeTypePerf(FreeTypePerfCounter::DirectLayoutRun);
+			return true;
 		}
 
 		bool AppendHarfBuzzLayout(FreeTypeState& state, RuntimeFont& runtime,
@@ -310,6 +428,15 @@ namespace fonthook::vectorfont
 			float right = 0.0f;
 		};
 
+		struct CollisionScratch
+		{
+			std::vector<CollisionSpan> previous;
+			std::vector<CollisionSpan> current;
+			CpuMemoryLease cpuMemory;
+		};
+
+		thread_local CollisionScratch s_collisionScratch;
+
 		void AppendCollisionSpans(RuntimeFont& runtime,
 			const FreeTypeLayoutGlyph& positioned, float glyphPen,
 			std::vector<CollisionSpan>& spans)
@@ -347,8 +474,10 @@ namespace fonthook::vectorfont
 				return;
 			constexpr float kCollisionClearance = 1.0f / 64.0f;
 			constexpr float kMaximumCollisionCorrection = 1.0f;
-			std::vector<CollisionSpan> previousSpans;
-			std::vector<CollisionSpan> currentSpans;
+			std::vector<CollisionSpan>& previousSpans = s_collisionScratch.previous;
+			std::vector<CollisionSpan>& currentSpans = s_collisionScratch.current;
+			previousSpans.clear();
+			currentSpans.clear();
 			previousSpans.reserve(kGlyphCollisionBandCount * 2);
 			currentSpans.reserve(kGlyphCollisionBandCount * 2);
 			float pen = 0.0f;
@@ -408,6 +537,16 @@ namespace fonthook::vectorfont
 				previousEnd = end;
 				begin = end;
 			}
+			previousSpans.clear();
+			currentSpans.clear();
+			constexpr size_t kMaximumRetainedCollisionSpans = 256;
+			if (previousSpans.capacity() > kMaximumRetainedCollisionSpans)
+				std::vector<CollisionSpan>().swap(previousSpans);
+			if (currentSpans.capacity() > kMaximumRetainedCollisionSpans)
+				std::vector<CollisionSpan>().swap(currentSpans);
+			s_collisionScratch.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+				(previousSpans.capacity() + currentSpans.capacity())
+					* sizeof(CollisionSpan));
 		}
 
 		bool BuildLayoutRun(FreeTypeState& state, RuntimeFont& runtime, const char* text,
@@ -416,6 +555,20 @@ namespace fonthook::vectorfont
 			layout = {};
 			auto glyphs = std::make_shared<FreeTypeLayoutRun::GlyphStorage>();
 			layout.glyphs = glyphs;
+			const bool shape = allowShaping && runtime.config->shaping;
+			if (!shape)
+			{
+				glyphs->reserve(std::min<size_t>(length, 65536));
+				if (!AppendDirectLayout(runtime, text, length, *glyphs, layout))
+					return false;
+				ApplyGlyphCollisionProtection(runtime, *glyphs, layout);
+				glyphs->cpuMemory.Reset(CpuMemoryCategory::LayoutRun,
+					sizeof(FreeTypeLayoutRun::GlyphStorage)
+						+ glyphs->capacity() * sizeof(FreeTypeLayoutGlyph)
+						+ 2u * sizeof(void*));
+				return true;
+			}
+
 			thread_local LayoutInputScratchPool inputScratchPool;
 			LayoutInputScratchLease inputLease(inputScratchPool);
 			std::vector<LayoutInputGlyph>& input = inputLease.Get();
@@ -423,7 +576,6 @@ namespace fonthook::vectorfont
 			if (!DecodeLayoutInput(runtime, text, length, input))
 				return false;
 			glyphs->reserve(input.size());
-			const bool shape = allowShaping && runtime.config->shaping;
 			for (size_t begin = 0; begin < input.size();)
 			{
 				size_t end = begin + 1;
@@ -465,10 +617,10 @@ namespace fonthook::vectorfont
 				begin = end;
 			}
 			ApplyGlyphCollisionProtection(runtime, *glyphs, layout);
-			layout.cpuMemory = std::make_shared<CpuMemoryLease>(
-				CpuMemoryCategory::LayoutRun,
+			glyphs->cpuMemory.Reset(CpuMemoryCategory::LayoutRun,
 				sizeof(FreeTypeLayoutRun::GlyphStorage)
-					+ glyphs->capacity() * sizeof(FreeTypeLayoutGlyph));
+					+ glyphs->capacity() * sizeof(FreeTypeLayoutGlyph)
+					+ 2u * sizeof(void*));
 			return true;
 		}
 
