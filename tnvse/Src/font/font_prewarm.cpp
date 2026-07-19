@@ -1,4 +1,5 @@
 #include "font_vector_internal.h"
+#include "font_render_route.h"
 
 #include "encoding.h"
 #include "load_config.h"
@@ -297,7 +298,6 @@ namespace fonthook::vectorfont
 			UInt32 validDoubleByteCount = 0;
 			UInt32 rasterizedGlyphCount = 0;
 			UInt32 sdfGlyphCount = 0;
-			UInt32 effectOnlySdfGlyphCount = 0;
 			UInt32 targetUnitCount = 0;
 			UInt32 rasterScaleMilli = 0;
 			UInt64 snapshotRevision = 0;
@@ -435,7 +435,7 @@ namespace fonthook::vectorfont
 		}
 
 		static_assert(ShouldPrewarmSdfMask(FontPrewarmMode::CodePage, true),
-			"codepage prewarm must include effect-only SDF masks");
+			"codepage prewarm must include SDF masks");
 
 		bool IsDcfgCodePageUnit(UInt32 codePage, UInt32 lead, UInt32 trail)
 		{
@@ -605,12 +605,12 @@ namespace fonthook::vectorfont
 		void FinishJob(const PrewarmJob& job, const char* status)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm font=%u mode=%s scale=%.3f glyphs=%u doubleByte=%u sdfGlyphs=%u effectOnlySdfGlyphs=%u status=%s",
+				"tnvse_freetype_font: prewarm font=%u mode=%s scale=%.3f glyphs=%u doubleByte=%u sdfGlyphs=%u status=%s",
 				job.fontId,
 				job.mode == FontPrewarmMode::CodePage ? "codepage" : "common",
 				job.rasterScaleMilli ? job.rasterScaleMilli / 1000.0f : 0.0f,
 				job.rasterizedGlyphCount, job.validDoubleByteCount,
-				job.sdfGlyphCount, job.effectOnlySdfGlyphCount, status);
+				job.sdfGlyphCount, status);
 		}
 
 		void ResetPrewarmScan(PrewarmJob& job, UInt32 rasterScaleMilli)
@@ -623,7 +623,6 @@ namespace fonthook::vectorfont
 			job.validDoubleByteCount = 0;
 			job.rasterizedGlyphCount = 0;
 			job.sdfGlyphCount = 0;
-			job.effectOnlySdfGlyphCount = 0;
 			job.rasterScaleMilli = rasterScaleMilli;
 			job.snapshotRevision = s_snapshotRevision;
 			job.scanningDoubleByte = false;
@@ -674,9 +673,8 @@ namespace fonthook::vectorfont
 			float minimumJobProgress = 0.0f)
 		{
 			wchar_t detail[160] = {};
-			const FontConfig* config = FindConfig(job.fontId);
-			const wchar_t* renderMode = config && UsesSdfFill(*config)
-				? L"SDF" : L"grayscale";
+			const wchar_t* renderMode = ResolveFontAtlasRoute(IsA8RendererAvailable())
+				== FontAtlasRoute::ShaderSdf ? L"SDF" : L"ARGB fallback";
 			_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 				L"Font %u of %u  |  ID %u  |  %ls",
 				fontOrdinal, fontCount, job.fontId, renderMode);
@@ -893,31 +891,25 @@ namespace fonthook::vectorfont
 			{
 				const size_t expected = std::max<size_t>(4096,
 					static_cast<size_t>(job.targetUnitCount));
-				// Shader effect-only profiles retain the grayscale fill and add one
-				// SDF mask per glyph. Reserve both complete code-page mask sets.
+				// The Shader Loader route stores one SDF mask per glyph. The ARGB
+				// fallback stores coverage/effect masks only while it is being built.
 				job.atlasBitmaps[0].reserve(512);
 				job.atlasBitmapIds[0].reserve(512);
-				job.atlasBitmaps[1].reserve(expected * 2);
-				job.atlasBitmapIds[1].reserve(expected * 2);
+				job.atlasBitmaps[1].reserve(expected);
+				job.atlasBitmapIds[1].reserve(expected);
 			}
 			EffectQuality resolvedQuality = config->effectQuality;
-			bool shaderEffects = IsA8RendererAvailable()
-				&& (config->shadow.enabled || config->glow.enabled || config->outline.enabled
-					|| UsesSdfFill(*config))
+			bool shaderSdf = ResolveFontAtlasRoute(IsA8RendererAvailable())
+				== FontAtlasRoute::ShaderSdf
 				&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
 			UInt32 sdfSpread = 0;
-			const bool configuredNeedsSdf = NeedsSdfMask(*config);
-			const bool needsSdf = shaderEffects && configuredNeedsSdf;
-			if (needsSdf && !ResolveSdfSpread(*config, rasterScale, sdfSpread))
-				shaderEffects = false;
-			const bool resolvedSdfFill = shaderEffects && UsesSdfFill(*config);
-			const bool prewarmSdfMasks = shaderEffects && configuredNeedsSdf;
+			if (shaderSdf && !ResolveSdfSpread(*config, rasterScale, sdfSpread))
+				shaderSdf = false;
+			const bool prewarmSdfMasks = shaderSdf;
 			const bool hasCommonDoubleByteLimit = HasCommonDoubleByteLimit(job);
-			// The shader path reuses an SDF fill as the exact source for a hard
-			// shadow. Do not prewarm a second grayscale mask that runtime rendering
-			// will never request. Effect-only profiles retain that grayscale fill,
-			// but codepage mode now prewarms their SDF for every selected unit too.
-			const bool needsGrayFill = !resolvedSdfFill;
+			// Shader Loader rendering is SDF-only. Coverage, glow and outline masks
+			// are generated only for the stock-shader ARGB fallback.
+			const bool needsGrayFill = !shaderSdf;
 			requestedGlyphs.clear();
 			bitmapRequests.clear();
 			UInt32 candidates = 0;
@@ -959,12 +951,10 @@ namespace fonthook::vectorfont
 					bitmapRequests.push_back({ requestedGlyph,
 						GlyphMaskType::DistanceField, sdfSpread });
 					++job.sdfGlyphCount;
-					if (!resolvedSdfFill)
-						++job.effectOnlySdfGlyphCount;
 				}
-				if (config->glow.enabled && !shaderEffects)
+				if (config->glow.enabled && !shaderSdf)
 					bitmapRequests.push_back({ requestedGlyph, GlyphMaskType::Glow, 0 });
-				if (config->outline.enabled && !shaderEffects)
+				if (config->outline.enabled && !shaderSdf)
 					bitmapRequests.push_back({ requestedGlyph, GlyphMaskType::Outline, 0 });
 				++glyphs;
 				++job.rasterizedGlyphCount;
@@ -991,10 +981,9 @@ namespace fonthook::vectorfont
 				AddBitmap(job.atlasBitmaps[roleIndex], job.atlasBitmapIds[roleIndex],
 					bitmapResults[index]);
 			}
-			const wchar_t* rasterStage = resolvedSdfFill
+			const wchar_t* rasterStage = shaderSdf
 				? L"Generating SDF glyphs..."
-				: prewarmSdfMasks ? L"Generating grayscale + SDF glyphs..."
-					: L"Generating grayscale glyphs...";
+				: L"Generating ARGB fallback glyphs...";
 			ReportPrewarmProgress(job, fontOrdinal, queuedFonts, finishedFonts,
 				rasterStage);
 			if (exhausted)

@@ -110,22 +110,19 @@ namespace fonthook::vectorfont
 			if (!IsA8RendererAvailable())
 				return false;
 			EffectQuality resolved = config.effectQuality;
-			bool shaderEffects = (config.shadow.enabled || config.glow.enabled
-				|| config.outline.enabled || UsesSdfFill(config))
-				&& ResolveA8EffectQuality(config.effectQuality, resolved);
+			if (!ResolveA8EffectQuality(config.effectQuality, resolved))
+				return false;
 			UInt32 sdfSpread = 0;
-			if (shaderEffects && NeedsSdfMask(config)
-				&& !ResolveSdfSpread(config, rasterScale, sdfSpread))
-				shaderEffects = false;
+			if (!ResolveSdfSpread(config, rasterScale, sdfSpread))
+				return false;
 			key = {
-				BuildPrewarmAtlasContentHash(config, byteClass, rasterScale, shaderEffects),
+				BuildPrewarmAtlasContentHash(config, byteClass, rasterScale, true),
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
 				AtlasPixelMode::A8,
-				shaderEffects ? AtlasRenderMode::ShaderEffects
-					: AtlasRenderMode::CpuEffects,
+				AtlasRenderMode::ShaderEffects,
 				kAtlasPadding,
-				shaderEffects && UsesSdfFill(config),
+				true,
 				byteClass
 			};
 			return true;
@@ -153,15 +150,6 @@ namespace fonthook::vectorfont
 				sizeof(kMaximumAtlasMipLevels), hash);
 			hash = HashAtlasBytes(&A8ShapeColorContract::kTileUniformColorAbi,
 				sizeof(A8ShapeColorContract::kTileUniformColorAbi), hash);
-			const bool completeEffectOnlySdf =
-				config.prewarm == FontPrewarmMode::CodePage
-				&& key.renderMode == AtlasRenderMode::ShaderEffects
-				&& !UsesSdfFill(config) && NeedsSdfMask(config);
-			if (completeEffectOnlySdf)
-			{
-				hash = HashAtlasBytes(&kCodePageEffectOnlySdfCoverageRevision,
-					sizeof(kCodePageEffectOnlySdfCoverageRevision), hash);
-			}
 			return hash;
 		}
 
@@ -1327,14 +1315,11 @@ namespace fonthook::vectorfont
 			return true;
 		const AtlasPixelMode pixelMode = AtlasPixelMode::A8;
 		EffectQuality resolved = config.effectQuality;
-		bool shaderEffects = pixelMode == AtlasPixelMode::A8
-			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled
-				|| UsesSdfFill(config))
-			&& ResolveA8EffectQuality(config.effectQuality, resolved);
+		if (!ResolveA8EffectQuality(config.effectQuality, resolved))
+			return false;
 		UInt32 sdfSpread = 0;
-		if (shaderEffects && NeedsSdfMask(config)
-			&& !ResolveSdfSpread(config, rasterScale, sdfSpread))
-			shaderEffects = false;
+		if (!ResolveSdfSpread(config, rasterScale, sdfSpread))
+			return false;
 		const UInt32 padding = kAtlasPadding;
 		// Height-first shelves make a complete prewarm profile substantially denser
 		// than appending scan-order batches, and let every page be uploaded once.
@@ -1349,7 +1334,7 @@ namespace fonthook::vectorfont
 				return lhs->cacheId < rhs->cacheId;
 			});
 		return !GetAtlasResources(config, byteClass, rasterScale, packedBitmaps, pixelMode,
-			shaderEffects ? AtlasRenderMode::ShaderEffects : AtlasRenderMode::CpuEffects,
+			AtlasRenderMode::ShaderEffects,
 			padding).empty();
 	}
 }

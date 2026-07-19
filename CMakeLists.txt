@@ -157,7 +157,8 @@ if(TNVSE_BUILD_TESTS)
   enable_testing()
   add_executable(tnvse_sparse_codepoint_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/font_sparse_codepoint_table_tests.cpp"
-    "${TNVSE_SOURCE_ROOT}/font/font_cpu_budget.h")
+    "${TNVSE_SOURCE_ROOT}/font/font_cpu_budget.h"
+    "${TNVSE_SOURCE_ROOT}/font/font_render_route.h")
   target_include_directories(tnvse_sparse_codepoint_tests PRIVATE
     "${TNVSE_SOURCE_ROOT}/font"
     "${TNVSE_SOURCE_ROOT}/font/vector")

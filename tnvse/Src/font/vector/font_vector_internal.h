@@ -116,12 +116,6 @@ namespace fonthook::vectorfont
 		High = 2,
 	};
 
-	enum class FillRenderMode : UInt8
-	{
-		Grayscale = 0,
-		Sdf = 1,
-	};
-
 	enum class FontPrewarmMode : UInt8
 	{
 		None = 0,
@@ -154,7 +148,6 @@ namespace fonthook::vectorfont
 		std::vector<std::string> shapingFeatures;
 		float baseline = 0.0f;
 		FontColorStyle fontColor;
-		FillRenderMode fillRenderMode = FillRenderMode::Grayscale;
 		EffectQuality effectQuality = EffectQuality::Balanced;
 		EffectStyle glow;
 		EffectStyle outline;
@@ -223,8 +216,6 @@ namespace fonthook::vectorfont
 	{
 		bool enabled = false;
 		bool shaderEffects = false;
-		bool useOriginalShader = false;
-		bool fillUsesSdf = false;
 		EffectQuality quality = EffectQuality::Balanced;
 		float inverseAtlasWidth = 0.0f;
 		float inverseAtlasHeight = 0.0f;
@@ -309,7 +300,6 @@ namespace fonthook::vectorfont
 		UInt32 degradedLayerCount = 0;
 		UInt32 shaderShapeAttempts = 0;
 		UInt32 cpuShapeAttempts = 0;
-		UInt32 argbRetryAttempts = 0;
 		UInt32 firstEncodedCode = 0;
 		UInt32 firstCodePoint = 0;
 		UInt32 firstGlyphIndex = 0;
@@ -363,11 +353,9 @@ namespace fonthook::vectorfont
 	void FlushGlyphBitmapDiskCache();
 	UInt64 ReleaseGlyphBitmapDiskCacheMappings();
 	void SetBitmapCacheReducedAfterPrewarm(bool abReduced);
-	bool UsesSdfFill(const FontConfig& arConfig);
 	bool HardShadowIncludesGlow(const FontConfig& arConfig);
 	bool HardShadowIncludesOutline(const FontConfig& arConfig);
 	bool HasSdfEffects(const FontConfig& arConfig);
-	bool NeedsSdfMask(const FontConfig& arConfig);
 	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread,
 		bool abIncludeEffects = true);
 	bool ResolvePrewarmGlyph(RuntimeFont& arRuntime, const char* apBytes,

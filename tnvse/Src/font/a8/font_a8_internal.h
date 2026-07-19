@@ -49,8 +49,6 @@ namespace fonthook::vectorfont
 
 	enum class A8CompiledShaderClass : UInt8
 	{
-		Original,
-		Coverage,
 		Body,
 		Effect
 	};
@@ -59,7 +57,7 @@ namespace fonthook::vectorfont
 	{
 		A8DrawRange range;
 		std::array<float, 16> constants = {};
-		A8CompiledShaderClass shaderClass = A8CompiledShaderClass::Original;
+		A8CompiledShaderClass shaderClass = A8CompiledShaderClass::Body;
 		bool staticSmoothSampling = false;
 	};
 

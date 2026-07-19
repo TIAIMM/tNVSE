@@ -468,16 +468,8 @@ namespace fonthook::vectorfont
 			build.config.shaderEffects = true;
 			build.config.quality = quality;
 			const FontConfig& config = GetRuntimeConfig(runtime);
-			const bool fillUsesSdf = UsesSdfFill(config);
-			const bool needsSdf = fillUsesSdf
-				|| (!suppressEffects && HasSdfEffects(config));
-			// An SDF body is also an exact hard-shadow source. Reusing it avoids
-			// inserting a second grayscale copy of every glyph into the atlas when
-			// SDF fill is active.
-			const bool needsGrayFill = !fillUsesSdf;
-			build.config.fillUsesSdf = fillUsesSdf;
 			UInt32 sdfSpread = 0;
-			if (needsSdf && !ResolveSdfSpread(
+			if (!ResolveSdfSpread(
 				config, rasterScale, sdfSpread, !suppressEffects))
 			{
 				if (g_bEnableFreeTypeFontRenderingLog)
@@ -520,7 +512,6 @@ namespace fonthook::vectorfont
 			struct PreparedShaderGlyph
 			{
 				const AtlasGlyphInstance* instance = nullptr;
-				std::shared_ptr<const GlyphBitmap> fill;
 				std::shared_ptr<const GlyphBitmap> sdf;
 				float baselineOffset = 0.0f;
 			};
@@ -530,17 +521,14 @@ namespace fonthook::vectorfont
 			prepared.clear();
 			prepared.reserve(glyphs.size());
 			bitmapRequests.clear();
-			bitmapRequests.reserve(glyphs.size() * 2);
+			bitmapRequests.reserve(glyphs.size());
 			for (const AtlasGlyphInstance& instance : glyphs)
 			{
 				PreparedShaderGlyph glyph;
 				glyph.instance = &instance;
 				glyph.baselineOffset = GetGlyphBaselineOffset(runtime, instance.glyph);
-				if (needsGrayFill)
-					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Fill, 0 });
-				if (needsSdf)
-					bitmapRequests.push_back({ &instance.glyph,
-						GlyphMaskType::DistanceField, sdfSpread });
+				bitmapRequests.push_back({ &instance.glyph,
+					GlyphMaskType::DistanceField, sdfSpread });
 				prepared.push_back(std::move(glyph));
 			}
 			GetAtlasBackedGlyphBitmaps(runtime, bitmapRequests, rasterScale,
@@ -549,25 +537,14 @@ namespace fonthook::vectorfont
 			size_t bitmapIndex = 0;
 			for (PreparedShaderGlyph& glyph : prepared)
 			{
-				if (needsGrayFill)
-				{
-					glyph.fill = bitmapResults[bitmapIndex++];
-					if (!glyph.fill)
-						return false;
-				}
-				if (needsSdf)
-				{
-					glyph.sdf = bitmapResults[bitmapIndex++];
-					if (!glyph.sdf)
-						return false;
-				}
+				glyph.sdf = bitmapResults[bitmapIndex++];
+				if (!glyph.sdf)
+					return false;
 			}
 
 			const bool drawShadow = !suppressEffects && config.shadow.enabled;
 			const bool drawGlow = !suppressEffects && config.glow.enabled;
 			const bool drawOutline = !suppressEffects && config.outline.enabled;
-			const bool shadowUsesSdf = fillUsesSdf || config.shadow.blur > 0.0f
-				|| HardShadowIncludesGlow(config) || HardShadowIncludesOutline(config);
 			const bool shadowHasOffset = config.shadow.x != 0.0f
 				|| config.shadow.y != 0.0f;
 			const NiColorA identity = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -586,31 +563,25 @@ namespace fonthook::vectorfont
 				const NiColorA baseColor = ResolveBaseColor(
 					entry.instance->color, tileColor);
 				UInt8 sdfLayerMask = 0;
-				UInt8 fillLayerMask = 0;
 				if (drawGlow)
 					sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Glow);
 				if (drawOutline)
 					sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Outline);
-				if (fillUsesSdf)
-					sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Fill);
-				else
-					fillLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Fill);
+				sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Fill);
 
 				if (drawShadow)
 				{
 					if (shadowHasOffset)
 					{
-						AddPendingQuad(quads, shadowUsesSdf ? entry.sdf : entry.fill,
+						AddPendingQuad(quads, entry.sdf,
 							*entry.instance, baseColor, identity,
 							config.shadow.x, config.shadow.y, rasterScale,
 							entry.baselineOffset, AtlasLayer::Shadow, true, 0,
-							shadowUsesSdf,
+							true,
 							1u << static_cast<UInt8>(AtlasLayer::Shadow));
 					}
-					else if (shadowUsesSdf)
-						sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Shadow);
 					else
-						fillLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Shadow);
+						sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Shadow);
 				}
 
 				if (sdfLayerMask)
@@ -619,13 +590,6 @@ namespace fonthook::vectorfont
 						baseColor, identity, 0.0f, 0.0f, rasterScale,
 						entry.baselineOffset, firstLayer(sdfLayerMask), true, 0,
 						true, sdfLayerMask);
-				}
-				if (fillLayerMask)
-				{
-					AddPendingQuad(quads, entry.fill, *entry.instance,
-						baseColor, identity, 0.0f, 0.0f, rasterScale,
-						entry.baselineOffset, firstLayer(fillLayerMask), true, 0,
-						false, fillLayerMask);
 				}
 			}
 			for (const PendingQuad& quad : quads)
@@ -723,8 +687,6 @@ namespace fonthook::vectorfont
 			add(&geometryKey.quadCount, sizeof(geometryKey.quadCount));
 			add(&effect.enabled, sizeof(effect.enabled));
 			add(&effect.shaderEffects, sizeof(effect.shaderEffects));
-			add(&effect.useOriginalShader, sizeof(effect.useOriginalShader));
-			add(&effect.fillUsesSdf, sizeof(effect.fillUsesSdf));
 			add(&effect.quality, sizeof(effect.quality));
 			for (const PendingQuad& quad : quads)
 				add(&quad.baseColor, sizeof(quad.baseColor));
@@ -948,18 +910,11 @@ namespace fonthook::vectorfont
 			data->m_kBound.m_kCenter.y += origin.y;
 			data->m_kBound.m_kCenter.z += origin.z;
 			const UInt8 fillLayerBit = 1u << static_cast<UInt8>(AtlasLayer::Fill);
-			const bool hasEffectLayer = std::any_of(quads.begin(), quads.end(),
-				[fillLayerBit](const PendingQuad& quad)
-				{
-					return (quad.layerMask & ~fillLayerBit) != 0;
-				});
-			const bool needsNativeRangeRouting = useCustomA8Shader || hasEffectLayer
-				|| atlases.size() > 1;
+			const bool needsNativeRangeRouting = useCustomA8Shader || atlases.size() > 1;
 			if (needsNativeRangeRouting)
 			{
 				A8EffectShapeConfig resolvedEffect = effectConfig
 					? *effectConfig : A8EffectShapeConfig{};
-				resolvedEffect.useOriginalShader = !useCustomA8Shader;
 				resolvedEffect.atlasProperties.clear();
 				resolvedEffect.atlasTextures.clear();
 				resolvedEffect.atlasInverseSizes.clear();

@@ -367,7 +367,6 @@ namespace fonthook::vectorfont
 			UInt64 hash = 1469598103934665603ull;
 			HashBytes(hash, &config.fontColor.configured, sizeof(config.fontColor.configured));
 			HashBytes(hash, &config.fontColor.color, sizeof(config.fontColor.color));
-			HashBytes(hash, &config.fillRenderMode, sizeof(config.fillRenderMode));
 			HashBytes(hash, &config.effectQuality, sizeof(config.effectQuality));
 			auto hashEffect = [&](const EffectStyle& effect)
 			{
@@ -426,17 +425,6 @@ namespace fonthook::vectorfont
 			}
 
 			const std::string effectQuality = node.attribute("effectQuality").as_string("balanced");
-			const std::string fillRenderMode = node.attribute("fillRenderMode").as_string("grayscale");
-			if (fillRenderMode == "grayscale")
-				config.fillRenderMode = FillRenderMode::Grayscale;
-			else if (fillRenderMode == "sdf")
-				config.fillRenderMode = FillRenderMode::Sdf;
-			else
-			{
-				reason = "fillRenderMode must be grayscale or sdf";
-				return false;
-			}
-
 			if (effectQuality == "fast")
 				config.effectQuality = EffectQuality::Fast;
 			else if (effectQuality == "balanced")
@@ -554,7 +542,7 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d unicodeLineBreaking=%d features=%u baseline=%.2f fontColor=%d fillRenderMode=%s effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d unicodeLineBreaking=%d features=%u baseline=%.2f fontColor=%d shaderFill=sdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
 				config.fontId, static_cast<UInt32>(config.prewarm),
 				config.verticalMetrics == VerticalMetricsMode::Original ? "original" : "freetype",
 				config.shaping ? 1 : 0,
@@ -562,7 +550,6 @@ namespace fonthook::vectorfont
 				static_cast<UInt32>(config.shapingFeatures.size()),
 				config.baseline,
 				config.fontColor.configured,
-				config.fillRenderMode == FillRenderMode::Sdf ? "sdf" : "grayscale",
 				static_cast<UInt32>(config.effectQuality),
 				config.glow.enabled, EffectColorModeName(config.glow.colorMode),
 				config.glow.inner, config.glow.outer, config.glow.power,
@@ -614,11 +601,6 @@ namespace fonthook::vectorfont
 		return it == g_configs.end() ? nullptr : &it->second;
 	}
 
-	bool UsesSdfFill(const FontConfig& arConfig)
-	{
-		return arConfig.fillRenderMode == FillRenderMode::Sdf;
-	}
-
 	bool HardShadowIncludesGlow(const FontConfig& arConfig)
 	{
 		return arConfig.shadow.enabled && arConfig.shadow.blur <= 0.001f
@@ -640,18 +622,11 @@ namespace fonthook::vectorfont
 			|| HardShadowIncludesOutline(arConfig);
 	}
 
-	bool NeedsSdfMask(const FontConfig& arConfig)
-	{
-		return UsesSdfFill(arConfig) || HasSdfEffects(arConfig);
-	}
-
 	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread,
 		bool abIncludeEffects)
 	{
 		arSpread = 0;
-		const bool needsMask = UsesSdfFill(arConfig)
-			|| (abIncludeEffects && HasSdfEffects(arConfig));
-		if (!needsMask || !std::isfinite(afRasterScale) || afRasterScale <= 0.0f)
+		if (!std::isfinite(afRasterScale) || afRasterScale <= 0.0f)
 			return false;
 
 		float radius = 0.0f;
@@ -662,9 +637,8 @@ namespace fonthook::vectorfont
 		if (abIncludeEffects && arConfig.shadow.enabled && arConfig.shadow.blur > 0.0f)
 			radius = std::max(radius, arConfig.shadow.blur);
 
-		float physicalSpread = std::ceil(radius * afRasterScale) + 2.0f;
-		if (UsesSdfFill(arConfig))
-			physicalSpread = std::max(physicalSpread, 4.0f);
+		const float physicalSpread = std::max(
+			std::ceil(radius * afRasterScale) + 2.0f, 4.0f);
 		if (!std::isfinite(physicalSpread) || physicalSpread < 2.0f || physicalSpread > 32.0f)
 			return false;
 		arSpread = static_cast<UInt32>(physicalSpread);

@@ -156,7 +156,9 @@ namespace fonthook::vectorfont
 					if (data->m_pusTriList[index] >= data->m_usVertices)
 						return RejectA8Shape("triangle-index-out-of-bounds");
 				}
-				if (range.usesSdf && effectConfig->sdfSpreadPixels <= 0.0f)
+				if (!range.usesSdf)
+					return RejectA8Shape("non-sdf-draw-range");
+				if (effectConfig->sdfSpreadPixels <= 0.0f)
 					return RejectA8Shape("sdf-range-without-positive-spread");
 				haveFill = haveFill || range.layer == 3;
 				previousLayerRank = layerRank;
@@ -231,20 +233,13 @@ namespace fonthook::vectorfont
 					inverseAtlasWidth, inverseAtlasHeight,
 					layerAndFlags, metadata.effects.sdfSpreadPixels,
 					parameter0, parameter1, parameter2, parameter3,
-					range.usesSdf ? 1.0f : 0.0f, sdfFlag1, sdfFlag2, sdfFlag3
+					1.0f, sdfFlag1, sdfFlag2, sdfFlag3
 				}};
-				if (metadata.effects.useOriginalShader)
-					compiled.shaderClass = A8CompiledShaderClass::Original;
-				else if (!range.usesSdf)
-					compiled.shaderClass = A8CompiledShaderClass::Coverage;
-				else if (metadata.effects.shaderEffects && range.layer != 3)
+				if (metadata.effects.shaderEffects && range.layer != 3)
 					compiled.shaderClass = A8CompiledShaderClass::Effect;
 				else
 					compiled.shaderClass = A8CompiledShaderClass::Body;
-				compiled.staticSmoothSampling = range.layer == 1 || range.layer == 2
-					|| (range.layer == 0
-						&& metadata.effects.shadowBlurPixels > 0.001f)
-					|| range.usesSdf;
+				compiled.staticSmoothSampling = true;
 				metadata.compiledRanges.push_back(std::move(compiled));
 			}
 		}

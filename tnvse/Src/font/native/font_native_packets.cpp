@@ -41,7 +41,7 @@ namespace fonthook::vectorfont
 			UInt32 vertexCount = 0;
 			UInt32 startIndex = 0;
 			UInt32 indexCount = 0;
-			NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Coverage;
+			NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
 			NativeA8Sampling sampling = NativeA8Sampling::Point;
 			UInt32 layer = 3;
 			UInt16 atlasPage = 0;
@@ -62,12 +62,6 @@ namespace fonthook::vectorfont
 		{
 			switch (source)
 			{
-			case A8CompiledShaderClass::Original:
-				result = NativeA8ShaderClass::Original;
-				return true;
-			case A8CompiledShaderClass::Coverage:
-				result = NativeA8ShaderClass::Coverage;
-				return true;
 			case A8CompiledShaderClass::Body:
 				result = NativeA8ShaderClass::Body;
 				return true;
@@ -79,12 +73,9 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		NativeA8Sampling ResolveSampling(const A8CompiledRange& range)
+		NativeA8Sampling ResolveSampling(const A8CompiledRange&)
 		{
-			if (range.range.usesSdf)
-				return NativeA8Sampling::LinearLod0;
-			return range.staticSmoothSampling
-				? NativeA8Sampling::LinearMipmapped : NativeA8Sampling::Point;
+			return NativeA8Sampling::LinearLod0;
 		}
 
 		bool SamePacketTarget(const PacketSpan& span,
@@ -147,7 +138,7 @@ namespace fonthook::vectorfont
 					return false;
 				}
 
-				NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Coverage;
+				NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
 				if (!ResolveNativeShaderClass(compiled.shaderClass, shaderClass))
 					return false;
 				const NativeA8Sampling sampling = ResolveSampling(compiled);

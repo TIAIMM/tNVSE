@@ -6,7 +6,7 @@ sampler2D FontAtlas : register(s0);
 float4 TileColor : register(c0);
 float4 AtlasPass : register(c2);    // invWidth, invHeight, layer, SDF spread
 float4 EffectParams : register(c3); // layer-specific device-pixel parameters
-float4 SdfFlags : register(c4);     // x: SDF; hard shadow y: outline softness,
+float4 SdfFlags : register(c4);     // hard shadow y: outline softness,
                                     // z/w: copied glow/outline alpha
 
 #include "freetype_native_common.hlsli"
@@ -166,11 +166,7 @@ float SupersampledNativeFontEffect(float2 uv, int layer)
 float4 Main(NativeFontPixelInput input) : COLOR0
 {
 	const int layer = (int)floor(AtlasPass.z);
-	float coverage;
-	if (SdfFlags.x >= 0.5)
-		coverage = SupersampledNativeFontEffect(input.atlasUv, layer);
-	else
-		coverage = SampleNativeFontMask(FontAtlas, input.atlasUv);
+	const float coverage = SupersampledNativeFontEffect(input.atlasUv, layer);
 	return ComposeNativeFontCoverage(coverage, TileColor, input.baseColor,
 		NativeFontUsesBaseRgb(AtlasPass.z));
 }

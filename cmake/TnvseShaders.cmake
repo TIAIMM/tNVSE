@@ -5,16 +5,12 @@ function(tnvse_add_shader_target output_variable)
   set(shader_sources
     "${shader_dir}/freetype_native_common.hlsli"
     "${shader_dir}/freetype_native_vs.hlsl"
-    "${shader_dir}/freetype_native_original.hlsl"
-    "${shader_dir}/freetype_native_coverage.hlsl"
     "${shader_dir}/freetype_native_sdf.hlsl"
     "${shader_dir}/freetype_native_effects.hlsl"
     "${shader_dir}/compile_a8_shader.bat"
     "${shader_dir}/verify_shader_contract.ps1")
   set(shader_outputs
     "${shader_dir}/compiled/tnvse_freetype_native_vs.vso"
-    "${shader_dir}/compiled/tnvse_freetype_native_original.pso"
-    "${shader_dir}/compiled/tnvse_freetype_native_coverage.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_effects_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_effects_balanced.pso"
@@ -55,6 +51,9 @@ function(tnvse_enable_live_deployment target plugin_path shader_outputs)
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       "$<TARGET_FILE:${target}>" "${plugin_path}/$<TARGET_FILE_NAME:${target}>"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${shader_path}"
+    COMMAND "${CMAKE_COMMAND}" -E rm -f
+      "${shader_path}/tnvse_freetype_native_original.pso"
+      "${shader_path}/tnvse_freetype_native_coverage.pso"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       ${shader_outputs} "${shader_path}"
     COMMENT "Deploying tNVSE DLL and native shaders"

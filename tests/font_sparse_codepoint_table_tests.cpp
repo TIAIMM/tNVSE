@@ -1,5 +1,6 @@
 #include "font_sparse_codepoint_table.h"
 #include "font_cpu_budget.h"
+#include "font_render_route.h"
 
 #include <array>
 #include <cstdint>
@@ -47,7 +48,14 @@ namespace
 int main()
 {
 	using Table = fonthook::vectorfont::SparseCodePointTable<std::uint32_t>;
+	using fonthook::vectorfont::FontAtlasRoute;
 	using fonthook::vectorfont::ResolveCpuMemoryCategoryHeadroom;
+	using fonthook::vectorfont::ResolveFontAtlasRoute;
+
+	Check(ResolveFontAtlasRoute(true) == FontAtlasRoute::ShaderSdf,
+		"Shader Loader route always selects SDF");
+	Check(ResolveFontAtlasRoute(false) == FontAtlasRoute::ArgbFallback,
+		"missing Shader Loader route selects only the ARGB fallback");
 
 	Check(ResolveCpuMemoryCategoryHeadroom(192, 160, 64, 48) == 48,
 		"category keeps its preferred limit while aggregate headroom permits it");

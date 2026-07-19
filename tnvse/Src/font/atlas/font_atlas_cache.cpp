@@ -590,16 +590,11 @@ namespace fonthook::vectorfont
 			};
 			if (shaderEffects)
 			{
-				if (!UsesSdfFill(config))
-					include(GlyphMaskType::Fill);
-				if (NeedsSdfMask(config))
+				UInt32 resolvedSpread = 0;
+				if (ResolveSdfSpread(config, rasterScale, resolvedSpread))
 				{
-					UInt32 resolvedSpread = 0;
-					if (ResolveSdfSpread(config, rasterScale, resolvedSpread))
-					{
-						include(GlyphMaskType::DistanceField);
-						sdfSpread = static_cast<UInt8>(resolvedSpread);
-					}
+					include(GlyphMaskType::DistanceField);
+					sdfSpread = static_cast<UInt8>(resolvedSpread);
 				}
 			}
 			else

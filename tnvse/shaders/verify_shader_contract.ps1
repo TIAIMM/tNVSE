@@ -8,8 +8,6 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $pixelSources = @(
-    'freetype_native_original.hlsl',
-    'freetype_native_coverage.hlsl',
     'freetype_native_sdf.hlsl',
     'freetype_native_effects.hlsl'
 )
@@ -70,6 +68,11 @@ if ($nativeShaderSource -notmatch
 
 $effectsSource = Get-Content -LiteralPath (
     Join-Path $ShaderDirectory 'freetype_native_effects.hlsl') -Raw
+$sdfSource = Get-Content -LiteralPath (
+    Join-Path $ShaderDirectory 'freetype_native_sdf.hlsl') -Raw
+if ($sdfSource -match 'SdfFlags\.x' -or $effectsSource -match 'SdfFlags\.x') {
+    throw 'Native Shader Loader path still contains a grayscale mask branch'
+}
 if ($effectsSource -notmatch 'blur\s*<=\s*0\.001[\s\S]*?return\s+body\s*;') {
     throw 'Native hard SDF shadow does not bypass blur/power shaping at the runtime epsilon'
 }
@@ -89,8 +92,6 @@ if ($effectsSource -notmatch 'outline\s*\+\s*\(1\.0\s*-\s*outline\)\s*\*\s*glow'
 $shaderInputs = @(
     'freetype_native_common.hlsli',
     'freetype_native_vs.hlsl',
-    'freetype_native_original.hlsl',
-    'freetype_native_coverage.hlsl',
     'freetype_native_sdf.hlsl',
     'freetype_native_effects.hlsl'
 ) | ForEach-Object { Get-Item -LiteralPath (Join-Path $ShaderDirectory $_) }
@@ -101,8 +102,6 @@ $newestShaderSource = ($shaderInputs |
 $compiledDirectory = Join-Path $ShaderDirectory 'compiled'
 $vertexShader = 'tnvse_freetype_native_vs.vso'
 $pixelShaders = @(
-    'tnvse_freetype_native_original.pso',
-    'tnvse_freetype_native_coverage.pso',
     'tnvse_freetype_native_sdf.pso',
     'tnvse_freetype_native_effects_fast.pso',
     'tnvse_freetype_native_effects_balanced.pso',
@@ -138,15 +137,13 @@ foreach ($shaderName in $pixelShaders) {
         throw "$shaderName is not a valid ps_3_0 shader"
     }
     $instructions = @($dump | Where-Object { $_ -match '^\s+[a-z]' })
-    if ($shaderName -ne 'tnvse_freetype_native_original.pso' -and
-        -not ($instructions -match '\bdcl_color')) {
+    if (-not ($instructions -match '\bdcl_color')) {
         throw "$shaderName does not consume the per-glyph base COLOR0 modifier"
     }
     if (-not ($instructions -cmatch '\bc0\b')) {
         throw "$shaderName does not read the Tile color c0"
     }
-    if ($shaderName -ne 'tnvse_freetype_native_original.pso' -and
-        -not ($instructions -cmatch '\bc1\b')) {
+    if (-not ($instructions -cmatch '\bc1\b')) {
         throw "$shaderName does not read the packet layer color c1"
     }
     if ($shaderName -like 'tnvse_freetype_native_effects_*.pso' -and
@@ -159,14 +156,6 @@ foreach ($shaderName in $pixelShaders) {
         }
         if ([int]$Matches[1] -gt 512) {
             throw "$shaderName exceeds the ps_3_0 512-instruction-slot limit"
-        }
-    }
-    if ($shaderName -eq 'tnvse_freetype_native_coverage.pso') {
-        $textureSamples = @($instructions | Where-Object {
-            $_ -match '^\s+texld(?:\s|_)'
-        }).Count
-        if ($textureSamples -ne 1) {
-            throw "$shaderName is not a single-sample coverage shader"
         }
     }
 }

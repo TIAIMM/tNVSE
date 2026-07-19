@@ -1,4 +1,5 @@
 #include "font_atlas_internal.h"
+#include "font_render_route.h"
 
 #include "globals.h"
 #include "load_config.h"
@@ -85,9 +86,10 @@ namespace fonthook::vectorfont
 		const NiColorA tileColor = ResolveSafeTileColor(glyphs, requestedTileColor);
 		const bool hasEffects = !suppressEffects
 			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled);
-		const bool requestsSdfFill = UsesSdfFill(config);
-		const bool wantsShaderPath = hasEffects || requestsSdfFill;
 		const bool a8RendererAvailable = IsA8RendererAvailable();
+		const FontAtlasRoute atlasRoute = ResolveFontAtlasRoute(a8RendererAvailable);
+		const bool requestsSdfFill = atlasRoute == FontAtlasRoute::ShaderSdf;
+		const bool wantsShaderPath = requestsSdfFill;
 		if (diagnostics)
 		{
 			diagnostics->hasEffects = hasEffects;
@@ -98,7 +100,7 @@ namespace fonthook::vectorfont
 			diagnostics->resolvedQuality = diagnostics->requestedQuality;
 		}
 		EffectQuality resolvedQuality = config.effectQuality;
-		if (wantsShaderPath && a8RendererAvailable
+		if (atlasRoute == FontAtlasRoute::ShaderSdf
 			&& ResolveA8EffectQuality(config.effectQuality, resolvedQuality))
 		{
 			if (diagnostics)
@@ -170,8 +172,7 @@ namespace fonthook::vectorfont
 						FreeTypeFontDebugLog(
 							"tnvse_freetype_font: shader batch font=%u requestedFill=%s resolvedFill=%s quality=%u spread=%.0f glyphs=%u geometryQuads=%u drawQuads=%u padding=%u pages=%u texture0=%ux%u abi=%u",
 							font.iFontNum,
-							requestsSdfFill ? "sdf" : "grayscale",
-							shaderBuild.config.fillUsesSdf ? "sdf" : "grayscale",
+							"sdf", "sdf",
 							static_cast<UInt32>(resolvedQuality),
 							shaderBuild.config.sdfSpreadPixels,
 							static_cast<UInt32>(glyphs.size()),
@@ -191,14 +192,13 @@ namespace fonthook::vectorfont
 				&& state.shaderBatchFailureLogCount++ < 32)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: shader batch failed font=%u stage=%s requestedFill=%s resolvedFill=grayscale quads=%u; using CPU masks",
+					"tnvse_freetype_font: shader batch failed font=%u stage=%s requestedFill=sdf resolvedRoute=argb-fallback quads=%u; using CPU masks",
 					font.iFontNum,
 					!shaderQuadsBuilt ? "mask-build"
 						: shaderQuads.empty() ? "empty-batch"
 						: shaderQuads.size() > kMaximumQuads ? "quad-limit"
 						: shaderAtlasOrShapeFailed ? "atlas-or-shape"
 						: "unknown",
-					requestsSdfFill ? "sdf" : "grayscale",
 					static_cast<UInt32>(shaderQuads.size()));
 			}
 		}
@@ -274,9 +274,8 @@ namespace fonthook::vectorfont
 			}
 			if (quads.size() <= kMaximumQuads)
 			{
-				bool useCustomA8Shader = IsA8RendererAvailable();
-				AtlasPixelMode pixelMode = useCustomA8Shader
-					? AtlasPixelMode::A8 : AtlasPixelMode::Argb32;
+				constexpr bool useCustomA8Shader = false;
+				AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
 				std::vector<std::shared_ptr<AtlasResource>> atlases;
 				if (diagnostics)
 					++diagnostics->cpuShapeAttempts;
@@ -284,23 +283,6 @@ namespace fonthook::vectorfont
 					config, rasterScale, prepareObject, pixelMode,
 					AtlasRenderMode::CpuEffects, kAtlasPadding, atlases, tileColor,
 					useCustomA8Shader);
-				if (!shape && pixelMode == AtlasPixelMode::A8)
-				{
-					// A failed A8 attempt may coincide with a device/Shader Loader
-					// transition. Snapshot a fresh, internally consistent route for the
-					// ARGB retry rather than mixing baked colors with a custom shader.
-					useCustomA8Shader = IsA8RendererAvailable();
-					pixelMode = AtlasPixelMode::Argb32;
-					if (diagnostics)
-					{
-						++diagnostics->argbRetryAttempts;
-						++diagnostics->cpuShapeAttempts;
-					}
-					shape = TryCreateAtlasShapeForMode(font, quads,
-						config, rasterScale, prepareObject, pixelMode,
-						AtlasRenderMode::CpuEffects, kAtlasPadding, atlases, tileColor,
-						useCustomA8Shader);
-				}
 				if (shape)
 				{
 					if (diagnostics)

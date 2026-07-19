@@ -10,11 +10,9 @@ if not exist "%FXC%" (
 )
 
 if not exist "%~dp0compiled" mkdir "%~dp0compiled"
+if exist "%~dp0compiled\tnvse_freetype_native_original.pso" del /q "%~dp0compiled\tnvse_freetype_native_original.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_coverage.pso" del /q "%~dp0compiled\tnvse_freetype_native_coverage.pso"
 "%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_vs.vso" "%~dp0freetype_native_vs.hlsl"
-if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_original.pso" "%~dp0freetype_native_original.hlsl"
-if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_coverage.pso" "%~dp0freetype_native_coverage.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_sdf.pso" "%~dp0freetype_native_sdf.hlsl"
 if errorlevel 1 exit /b %errorlevel%

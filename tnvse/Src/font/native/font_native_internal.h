@@ -25,8 +25,6 @@ namespace fonthook::vectorfont
 
 	enum class NativeA8ShaderClass : UInt8
 	{
-		Original,
-		Coverage,
 		Body,
 		Effect
 	};
@@ -71,7 +69,7 @@ namespace fonthook::vectorfont
 	{
 		UInt32 templateIndex = 0;
 		std::array<float, 16> constants = {};
-		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Original;
+		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
 		NativeA8Sampling sampling = NativeA8Sampling::Point;
 		EffectQuality quality = EffectQuality::Balanced;
 		UInt32 layer = 3;
@@ -101,7 +99,7 @@ namespace fonthook::vectorfont
 		UInt32 vertexCount = 0;
 		NiBound bound;
 		std::array<float, 16> constants = {};
-		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Original;
+		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
 		NativeA8Sampling sampling = NativeA8Sampling::Point;
 		EffectQuality quality = EffectQuality::Balanced;
 		UInt32 layer = 3;

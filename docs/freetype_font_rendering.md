@@ -32,7 +32,7 @@ opportunities to either FreeType layout mode.
 ## Raster scale and UIO
 
 `fFreeTypeFontResolutionScale` is the sole source multiplier used by startup
-prewarm, demand-generated glyphs, grayscale and SDF masks, atlas pages, and
+prewarm, demand-generated glyphs, SDF and ARGB-fallback masks, atlas pages, and
 persistent caches. Its default is `1.0`, its valid range is `0.1-10.0`, and it
 is canonicalized to the nearest `0.001`. Output resolution and the UI
 `resolutionconverter` trait do not change the source profile. A display density
@@ -161,7 +161,7 @@ lines. It is not a general glyph Y offset. Use the independently inheritable
 `baselineOffset` on `singleByte` or `doubleByte` to move that byte class within
 the line; positive values move glyphs upward. This configured value is applied
 after automatic visual alignment, so it remains an explicit final adjustment.
-Fractional values are retained by the SDF path; grayscale output remains
+Fractional values are retained by the Shader Loader SDF path; ARGB fallback output remains
 quantized to its source-pixel grid. In manual baseline mode the renderer keeps
 the FreeType body top/drop metrics. The visual-center rule then depends on
 `verticalMetrics` as described above.
@@ -171,9 +171,9 @@ the font ID. When `fontColor` is omitted, fill geometry keeps the color supplied
 by the game. `glow`, `outline`, and `shadow` belong to the font ID and are
 shared by both byte classes. `effectQuality="fast|balanced|high"` selects the
 PS 3.0 SDF sampling preset and defaults to `balanced`; the presets use 1, 4,
-or 8 subpixel samples. `fillRenderMode="grayscale"` uses the hinted FreeType
-coverage bitmap, while `fillRenderMode="sdf"` selects the hinted outline-to-SDF
-body. Glow uses `inner`, `outer`, and `power`; legacy `width` is accepted as
+or 8 subpixel samples. The Shader Loader route always uses an outline-to-SDF
+body; `fillRenderMode` is no longer a configuration option. Glow uses `inner`,
+`outer`, and `power`; legacy `width` is accepted as
 an alias for `outer` only when `outer` is absent. Outline accepts a
 non-negative `softness`. Shadow accepts a non-negative `blur` and a positive
 `power`; `blur=0` preserves the exact hinted offset mask. On a hard shadow,
@@ -252,7 +252,7 @@ scale. The game remains blocked until every queued profile reports `complete`,
 source scale. UIO-derived calls reuse that mask and atlas profile
 instead of generating per-zoom variants.
 While this startup barrier is active, a non-activating English progress window
-runs on a separate UI thread. It shows the current font ID, grayscale/SDF mode,
+runs on a separate UI thread. It shows the current font ID, SDF/ARGB-fallback route,
 the active scan or snapshot stage, and overall progress. The window remains
 responsive while FreeType work blocks the game thread and closes automatically
 before control returns to the game. It is owned by the Fallout window rather
@@ -262,13 +262,13 @@ A font task allocates additional atlas pages when its complete set cannot fit
 one 4096x4096 page. It reports `atlas-full` only if one incoming batch cannot
 fit an empty maximum-size page, the page-count safety limit is reached, or a
 texture allocation/upload fails. Full code-page prewarming generates every mask
-that runtime rendering can request for every valid unit. Consequently an SDF
-fill is prewarmed for the complete code page and its hard shadow reuses the same
-mask. When the fill remains grayscale but an enabled effect needs SDF, both the
-grayscale fill and effect-only SDF are prewarmed for the complete code page.
-`common` mode remains limited to its selected common-character profile.
+that runtime rendering can request for every valid unit. Consequently the SDF
+fill is prewarmed for the complete code page and every SDF effect or hard shadow
+reuses that mask. When Shader Loader is unavailable, prewarm generates only the
+coverage/effect masks needed by the ARGB fallback. `common` mode remains limited
+to its selected common-character profile.
 
-Generated grayscale and SDF masks are persisted under
+Generated SDF and ARGB-fallback masks are persisted under
 `Data\NVSE\plugins\tnvse\fontdata`. Each mask profile begins with a dense
 glyph-index table, so a glyph lookup is one fixed-offset read rather than a
 record scan or hash-table rebuild. On later launches tNVSE validates and loads
@@ -298,11 +298,9 @@ handle, mapping handle, and mapped view instead of mapping that file once per
 font ID. One `_p<page>.tnvfatlas` snapshot per atlas page stores
 the stable glyph-ID placement map. Snapshot v9 records the byte role explicitly
 and uses `stb_rect_pack` skyline packing. It is a hard format cut: v8 snapshots
-are not read or migrated. A coverage-policy revision participates only in the
-identity of
-code-page shader profiles with grayscale fill and effect-only SDF, invalidating
-older snapshots that could contain only their common-character subset without
-rebuilding already-complete SDF-fill profiles. Pure-SDF profiles are packed in
+are not read or migrated. Snapshot version 10 removes the former A8 grayscale
+and mixed grayscale/SDF profiles; version 9 and older snapshots are not restored.
+SDF profiles are packed in
 deterministic height/width/glyph-ID order, can reduce the page count, and shrink
 every page to the smallest usable power-of-two dimensions. Immediately after a
 new prewarm snapshot and manifest are committed, startup discards the scan-order
@@ -311,7 +309,7 @@ run therefore enters the game with the same compact layout as later cache-hit
 launches instead of waiting for another restart. No text shapes exist at this
 blocking startup point, so replacing the page objects cannot invalidate live
 UVs. A restored skyline page starts runtime shelf appends below its packed extent
-rather than reusing skyline holes. Pure SDF pages store only the placed
+rather than reusing skyline holes. SDF pages store only the placed
 level-zero rectangles;
 other pages retain their complete mip chain. Each page records and validates
 the total page count. After a successful full prewarm every page is written
@@ -375,10 +373,12 @@ chain and then tries `U+FFFD`, `?`, and the primary face's `.notdef` glyph.
 
 ## Atlas and Tile shader routing
 
-The normal rendering path rasterizes hinted grayscale glyphs with FreeType at
-the effective display size. When Fallout Shader Loader 1.40 or newer, the
-native FreeType shader set, and a real `D3DFMT_A8` texture are available, each
-font/style/effective-size profile uses a one-byte A8 atlas. The visible text is
+When Fallout Shader Loader 1.40 or newer, the native FreeType shader set, and a
+real `D3DFMT_A8` texture are available, tNVSE always rasterizes an SDF body into
+a one-byte A8 atlas. There is no A8 grayscale or mixed grayscale/SDF route.
+Without that complete Shader Loader route, tNVSE builds hinted coverage and
+effect masks into an `A8R8G8B8` atlas with baked colors and renders it through
+the stock Tile shader. The visible text on the SDF route is
 represented by one facade in the stock Tile alpha list so the game retains its
 normal UI sorting. At the sorted Tile pass tNVSE expands that facade into native
 Gamebryo geometry packets grouped by layer, atlas page, shader class, and
@@ -457,39 +457,34 @@ modified.
 
 ## SDF effects and draw-state isolation
 
-The base A8 shader and all effect variants use `ps_3_0`. A `grayscale` body
-uses the hinted grayscale mask. An `sdf` body, glow, outline, and blurred
-shadow share a FreeType distance field generated directly from the hinted
+The SDF body shader and all effect variants use `ps_3_0`. Body, glow, outline,
+and blurred shadow share a FreeType distance field generated directly from the hinted
 outline; hard shadow reuses the selected body mask and can analytically copy
 the active glow and outline masks. The native payload stores each unshifted
 body quad only once and lets the glow, outline, and SDF fill packets reference
 the same vertex interval. Shadow owns a second interval only when its configured
 offset is nonzero. Thus SDF `Shadow + Glow + Outline + Fill` uses two geometry
 quads per drawable glyph instead of four, and the same stack without an offset
-shadow uses one. A grayscale fill retains a separate quad because its atlas UV
-and mask differ from the SDF body. FreeType overlap handling
-is enabled only when the loaded outline carries `FT_OUTLINE_OVERLAP`. Both
-masks can occupy the same A8 atlas. Effects
+shadow uses one. FreeType overlap handling is enabled only when the loaded
+outline carries `FT_OUTLINE_OVERLAP`. Effects
 execute global shadow, glow, outline, and fill passes over one `NiTriShape`,
 which prevents a later glyph effect from covering an earlier glyph fill. SDF
 passes use bilinear MIN/MAG sampling at atlas LOD 0 and derivative-based edge
 antialiasing; they never consume the coverage-averaged atlas mip chain.
 SDF draw ranges also preserve fractional pen positions, shaped advances, and
-effect offsets in their quad coordinates. Grayscale coverage ranges remain
-snapped to the resolved source-pixel grid so their coverage texels stay aligned.
-Grayscale masks can still use trilinear mip sampling when scene scaling needs
-it. Glow keeps
+effect offsets in their quad coordinates. The separate ARGB fallback remains
+snapped to the resolved source-pixel grid and may use trilinear mip sampling.
+Glow keeps
 full intensity through `inner`, then decays to zero at `outer` according to
 `power`; outline uses `width` plus `softness`; blurred shadow uses `blur` and
 `power`. The physical SDF spread is derived from the largest enabled radius
 and must remain in FreeType's supported 2-32 pixel range. An unsupported
 spread causes the complete text batch to use the CPU effect path rather than
 silently reducing the requested effect.
-Because an SDF body requires the custom A8 shader, failure to establish that
-route resolves the body through the hinted grayscale CPU/atlas path instead of
-sampling SDF with the stock Tile shader.
-When an effect shader is unavailable, the renderer retains the CPU mask path
-with the same global layer order. When `NVSE_PLUGIN_PATH` is defined, an
+Because an SDF body requires the custom A8 shader, failure to establish or
+complete that route rebuilds the batch through the ARGB CPU fallback instead of
+sampling SDF with the stock Tile shader. No failure path creates an A8 coverage
+atlas. When `NVSE_PLUGIN_PATH` is defined, an
 ordinary project build copies the native shader set to `Data\Shaders\Loose`.
 Native packets use immutable `TileShader` profiles and the game's normal render
 submission. Effect passes preserve the live Tile color/alpha contract and use
@@ -543,7 +538,7 @@ the packet-template identity, while per-glyph base colors do not force duplicate
 geometry templates. A8 and 32-bit profiles use separate cache keys and
 may coexist when text was created before Shader Loader initialization.
 
-Generated grayscale masks and their supporting CPU objects are cached in
+Generated SDF and ARGB-fallback masks and their supporting CPU objects are cached in
 process memory. Equivalent masks are shared across font IDs when the resolved
 font file/face, glyph, effective raster size, emboldening, slant, stroke or SDF
 parameters, and mask type match. Baseline placement remains per font ID and is
@@ -576,7 +571,7 @@ When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
-generations are restored after a D3D9 device reset. A pure SDF v9 snapshot is
+generations are restored after a D3D9 device reset. An SDF v10 snapshot is
 uploaded directly to this path. Once that upload succeeds, tNVSE releases the
 packed reset pixels and retains only placements plus the validated snapshot
 path/header identity. Device reset, page detachment/growth, and snapshot rewrite
@@ -608,9 +603,9 @@ clamped to 64-256 MB; 128 MB is used when the device does not report a reliable
 value. A nonzero value is used directly. Atlas generations still referenced by
 visible game shapes cannot be evicted, so live usage may temporarily exceed the
 soft budget. The resolved value is written to `tnvse.log` at initialization and
-when a device reset changes the automatic result. Validated pure SDF snapshots
-restore directly to the DEFAULT pool when enabled; other snapshots use the
-engine-managed path. Non-SDF font atlases contain three mip levels (1x,
+when a device reset changes the automatic result. Validated SDF snapshots
+restore directly to the DEFAULT pool when enabled. ARGB fallback atlases are
+runtime-only and contain three mip levels (1x,
 1/2x, and 1/4x); the cache budget and upload counters include all levels.
 Limiting the chain to three levels together with four-pixel per-side packing
 padding prevents the coarsest bilinear footprint from reaching a neighboring
@@ -629,7 +624,7 @@ quad rendering, while hinted masks are generated once on the CPU.
 When output resolution or UIO 2.30 scales a TileText call, tNVSE keeps the mask
 at the single configured source multiplier and lets the existing world
 transform minify or magnify the atlas. Trilinear sampling is enabled for scaled
-A8 grayscale shapes; SDF ranges retain level-zero derivative-based sampling.
+ARGB fallback shapes; SDF ranges retain level-zero derivative-based sampling.
 Neither case creates a resolution- or zoom-specific profile. If atlas creation
 fails, the affected FreeType shape is empty and the detailed build diagnostic
 identifies the failed stage. HarfBuzz

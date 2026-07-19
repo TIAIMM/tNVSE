@@ -58,7 +58,7 @@ namespace fonthook::vectorfont
 
 		struct NativeProfileKey
 		{
-			NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Original;
+			NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
 			NativeA8Sampling sampling = NativeA8Sampling::Point;
 			EffectQuality quality = EffectQuality::Balanced;
 			std::array<UInt32, 16> constantBits = {};
@@ -142,8 +142,6 @@ namespace fonthook::vectorfont
 			NiDX9ShaderDeclarationPtr declaration;
 			IDirect3DVertexDeclaration9* d3dDeclaration = nullptr;
 			NiD3DVertexShaderPtr vertexShader;
-			NiD3DPixelShaderPtr originalShader;
-			NiD3DPixelShaderPtr coverageShader;
 			NiD3DPixelShaderPtr sdfShader;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
 			bool supportsSeparateAlpha = false;
@@ -183,8 +181,6 @@ namespace fonthook::vectorfont
 				|| generation->runtimeFault.load(std::memory_order_acquire)
 				|| !generation->declaration || !generation->d3dDeclaration
 				|| !HasShaderHandle(generation->vertexShader)
-				|| !HasShaderHandle(generation->originalShader)
-				|| !HasShaderHandle(generation->coverageShader)
 				|| !HasShaderHandle(generation->sdfShader))
 			{
 				return false;
@@ -347,10 +343,6 @@ namespace fonthook::vectorfont
 		{
 			switch (packet.shaderClass)
 			{
-			case NativeA8ShaderClass::Original:
-				return generation.originalShader.m_pObject;
-			case NativeA8ShaderClass::Coverage:
-				return generation.coverageShader.m_pObject;
 			case NativeA8ShaderClass::Body:
 				return generation.sdfShader.m_pObject;
 			case NativeA8ShaderClass::Effect:
@@ -374,28 +366,23 @@ namespace fonthook::vectorfont
 		void ConfigureProfilePass(NativeShaderGeneration& generation,
 			NativeShaderProfile& profile, NiD3DPass& pass)
 		{
-			if (profile.key.shaderClass != NativeA8ShaderClass::Original)
+			const NiTexturingProperty::FilterMode filter =
+				ResolveFilterMode(profile.key.sampling);
+			for (UInt32 stageIndex = 0;
+				stageIndex < std::min<UInt32>(pass.m_uiStageCount, 2); ++stageIndex)
 			{
-				const NiTexturingProperty::FilterMode filter =
-					ResolveFilterMode(profile.key.sampling);
-				for (UInt32 stageIndex = 0;
-					stageIndex < std::min<UInt32>(pass.m_uiStageCount, 2); ++stageIndex)
-				{
-					NiD3DTextureStage* stage = pass.GetStage(stageIndex);
-					if (!stage)
-						continue;
-					CdeclCall<void>(kTextureStageSetProperties, stage, stageIndex,
-						NiTexturingProperty::CLAMP_S_CLAMP_T,
-						static_cast<UInt32>(filter), false);
-					ThisStdCall<void>(kTextureStageSetFilter, stage, filter);
-				}
+				NiD3DTextureStage* stage = pass.GetStage(stageIndex);
+				if (!stage)
+					continue;
+				CdeclCall<void>(kTextureStageSetProperties, stage, stageIndex,
+					NiTexturingProperty::CLAMP_S_CLAMP_T,
+					static_cast<UInt32>(filter), false);
+				ThisStdCall<void>(kTextureStageSetFilter, stage, filter);
 			}
 
 			SetPassRenderState(&pass, D3DRS_ZENABLE, FALSE);
 			SetPassRenderState(&pass, D3DRS_ZWRITEENABLE, FALSE);
-			if (profile.effectPass
-				|| profile.key.shaderClass != NativeA8ShaderClass::Original)
-				SetPassRenderState(&pass, D3DRS_ALPHATESTENABLE, FALSE);
+			SetPassRenderState(&pass, D3DRS_ALPHATESTENABLE, FALSE);
 
 			if (profile.effectPass)
 			{
@@ -541,10 +528,6 @@ namespace fonthook::vectorfont
 					& D3DPMISCCAPS_SEPARATEALPHABLEND) != 0;
 
 			generation->vertexShader = createVS("tnvse_freetype_native_vs.vso");
-			generation->originalShader = createPS(
-				"tnvse_freetype_native_original.pso");
-			generation->coverageShader = createPS(
-				"tnvse_freetype_native_coverage.pso");
 			generation->sdfShader = createPS("tnvse_freetype_native_sdf.pso");
 			const char* effectNames[] = {
 				"tnvse_freetype_native_effects_fast.pso",
@@ -555,8 +538,6 @@ namespace fonthook::vectorfont
 				generation->effectShaders[index] = createPS(effectNames[index]);
 
 			if (!HasShaderHandle(generation->vertexShader)
-				|| !HasShaderHandle(generation->originalShader)
-				|| !HasShaderHandle(generation->coverageShader)
 				|| !HasShaderHandle(generation->sdfShader))
 			{
 				failure = "base-shader-set";
