@@ -31,6 +31,7 @@ namespace fonthook::vectorfont
 
 	struct MappedFontFile
 	{
+		CpuMemoryLease cpuMemory;
 		std::wstring path;
 		HANDLE file = INVALID_HANDLE_VALUE;
 		HANDLE mapping = nullptr;
@@ -130,8 +131,11 @@ namespace fonthook::vectorfont
 		UInt32 renderedCodePoint = 0;
 	};
 
+	struct RuntimeFont;
+
 	struct RuntimeRole
 	{
+		RuntimeFont* owner = nullptr;
 		const ByteStyle* style = nullptr;
 		std::vector<RuntimeFace> faces;
 		std::unordered_map<UInt32, CachedGlyphIdentity> glyphIdentities;
@@ -212,6 +216,7 @@ namespace fonthook::vectorfont
 		size_t bytes = 0;
 		std::list<BitmapCacheKey>::iterator lru;
 		UInt32 sourceFontId = 0;
+		CpuMemoryLease cpuMemory;
 	};
 
 	// Version 10 adds the effective text code page to persistent mask identity.
@@ -316,6 +321,7 @@ namespace fonthook::vectorfont
 
 	struct PersistentBitmapProfile
 	{
+		CpuMemoryLease cpuMemory;
 		PersistentBitmapProfileKey key;
 		UInt64 profileHash = 0;
 		UInt32 fontId = 0;
@@ -409,6 +415,7 @@ namespace fonthook::vectorfont
 
 	struct PersistentGlyphManifest
 	{
+		CpuMemoryLease cpuMemory;
 		UInt64 manifestHash = 0;
 		UInt64 layoutContentHash = 0;
 		std::wstring path;
@@ -511,6 +518,7 @@ namespace fonthook::vectorfont
 		FreeTypeLayoutRun layout;
 		size_t bytes = 0;
 		std::list<LayoutCacheKey>::iterator lru;
+		CpuMemoryLease cpuMemory;
 	};
 
 	struct ActiveFontState
@@ -534,6 +542,7 @@ namespace fonthook::vectorfont
 
 	struct RuntimeFont
 	{
+		CpuMemoryLease cpuMemory;
 		const FontConfig* config = nullptr;
 		std::array<RuntimeRole, 2> roles;
 		std::vector<hb_feature_t> hbFeatures;
@@ -601,6 +610,7 @@ namespace fonthook::vectorfont
 		std::list<LayoutCacheKey> layoutLru;
 		std::array<UInt32, 256> singleByteCodePoints = {};
 		SparseCodePointTable<UInt32> doubleByteCodePoints;
+		CpuMemoryLease codePointCacheMemory;
 		UInt32 codePointCacheCodePage = UINT32_MAX;
 		std::unordered_set<UInt32> loggedUnconfiguredFontIds;
 		std::unordered_set<UInt64> loggedVerticalMetricRoles;
@@ -623,6 +633,9 @@ namespace fonthook::vectorfont
 
 	size_t GetBitmapCacheLimit();
 	size_t GetLayoutCacheLimit();
+	void TrimBitmapCache(FreeTypeState& state);
+	void TrimLayoutCache(FreeTypeState& state);
+	void TrimFreeTypeCpuCachesForTotalBudget();
 	std::wstring NormalizePathKey(std::wstring path);
 	UInt64 HashBytes64(const void* data, size_t size,
 		UInt64 hash = 1469598103934665603ull);

@@ -253,6 +253,22 @@ namespace fonthook::vectorfont
 			};
 		}
 
+		void RefreshAtlasProfileCpuMemory(AtlasProfileIndex& profile)
+		{
+			size_t bytes = sizeof(AtlasProfileIndex)
+				+ profile.pages.capacity() * sizeof(UInt16)
+				+ profile.residentPages.size()
+					* (sizeof(std::pair<const UInt64, UInt16>) + 3u * sizeof(void*))
+				+ profile.pageResidents.size()
+					* (sizeof(std::pair<const UInt16, std::vector<UInt64>>)
+						+ 3u * sizeof(void*))
+				+ profile.duplicateResidents.size()
+					* (sizeof(UInt64) + 2u * sizeof(void*));
+			for (const auto& page : profile.pageResidents)
+				bytes += page.second.capacity() * sizeof(UInt64);
+			profile.cpuMemory.Reset(CpuMemoryCategory::AtlasMetadata, bytes);
+		}
+
 		void IndexAtlasPage(AtlasState& state, const AtlasCacheKey& key,
 			const AtlasResource& resource)
 		{
@@ -297,6 +313,7 @@ namespace fonthook::vectorfont
 				}
 				pageResidents.push_back(placement.cacheId);
 			}
+			RefreshAtlasProfileCpuMemory(profile);
 		}
 
 		void UnindexAtlasPage(AtlasState& state, const AtlasCacheKey& key)
@@ -360,6 +377,8 @@ namespace fonthook::vectorfont
 			}
 			if (profile.pages.empty())
 				state.atlasProfiles.erase(found);
+			else
+				RefreshAtlasProfileCpuMemory(profile);
 		}
 
 		void TrimAtlasCache(AtlasState& state)
@@ -404,9 +423,13 @@ namespace fonthook::vectorfont
 
 		void TrimBatchCache(AtlasState& state)
 		{
-			const size_t limit = static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB)
-				* 1024u * 1024u / 12u;
-			while (state.batchCacheBytes > limit && !state.batchLru.empty())
+			const size_t preferred = static_cast<size_t>(
+				g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 12u;
+			const size_t limit = GetCpuMemoryCategoryHeadroom(
+				CpuMemoryCategory::BatchTemplate, preferred);
+			while ((GetCpuMemoryUsage(CpuMemoryCategory::BatchTemplate) > limit
+					|| IsCpuMemoryBudgetExceeded())
+				&& !state.batchLru.empty())
 			{
 				const BatchTemplateKey key = state.batchLru.back();
 				auto existing = state.batchCache.find(key);
@@ -418,6 +441,13 @@ namespace fonthook::vectorfont
 				state.batchLru.pop_back();
 			}
 		}
+
+	void TrimAtlasCpuCachesForTotalBudget()
+	{
+		AtlasState& state = State();
+		std::lock_guard<std::mutex> lock(state.batchMutex);
+		TrimBatchCache(state);
+	}
 
 
 		UInt64 BuildAtlasContentHash(UInt64 maskGenerationHash,
@@ -892,6 +922,9 @@ namespace fonthook::vectorfont
 					state.atlasLru.pop_front();
 					return {};
 				}
+				inserted.first->second.cpuMemory.Reset(CpuMemoryCategory::AtlasMetadata,
+					sizeof(AtlasCacheEntry) + 2u * sizeof(AtlasCacheKey)
+						+ 4u * sizeof(void*));
 				IndexAtlasPage(state, pageKey, *resource);
 				state.atlasCacheBytes += bytes;
 				pages.push_back(resource);

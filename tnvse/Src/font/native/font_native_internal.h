@@ -112,6 +112,7 @@ namespace fonthook::vectorfont
 
 	struct NativeA8PayloadTemplate
 	{
+		CpuMemoryLease cpuMemory;
 		UInt32 pageCount = 0;
 		UInt32 quadCount = 0;
 		std::vector<NativeA8GpuVertex> gpuVertices;

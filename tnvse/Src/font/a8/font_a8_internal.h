@@ -105,6 +105,7 @@ namespace fonthook::vectorfont
 		NativeA8PayloadTemplatePtr data;
 		size_t bytes = 0;
 		std::list<NativeA8TemplateCacheKey>::iterator lru;
+		CpuMemoryLease cpuMemory;
 	};
 
 	struct A8State
@@ -134,6 +135,7 @@ namespace fonthook::vectorfont
 	};
 
 	A8State& State();
+	void TrimA8PacketCacheForTotalBudget();
 	A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape);
 	bool IsA8AtlasShape(const NiTriShape* shape);
 	bool NeedsScaledFillSampling(const NiTriShape* shape);

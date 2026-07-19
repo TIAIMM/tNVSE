@@ -349,6 +349,7 @@ namespace fonthook
 
 	struct PreparedTextCacheValue
 	{
+		vectorfont::CpuMemoryLease cpuMemory;
 		std::string text;
 		std::vector<int> lineWidths;
 		int width = 0;
@@ -363,6 +364,7 @@ namespace fonthook
 		std::shared_ptr<const PreparedTextCacheValue> value;
 		size_t bytes = 0;
 		std::list<PreparedTextCacheKey>::iterator lru;
+		vectorfont::CpuMemoryLease cpuMemory;
 	};
 
 	struct PreparedTextCacheState
@@ -481,6 +483,9 @@ namespace fonthook
 			if (!line)
 				break;
 		}
+		value->cpuMemory.Reset(vectorfont::CpuMemoryCategory::PreparedText,
+			sizeof(PreparedTextCacheValue) + value->text.capacity()
+				+ value->lineWidths.capacity() * sizeof(int));
 		return value;
 	}
 
@@ -498,9 +503,16 @@ namespace fonthook
 		};
 		const size_t bytes = sizeof(PreparedTextCacheEntry)
 			+ sizeof(PreparedTextCacheValue) + sizeof(PreparedTextCacheKey) * 2
-			+ (key.source.size() + key.resolved.size()) * 2
-			+ value->text.size() + value->lineWidths.size() * sizeof(int);
-		const size_t limit = GetPreparedTextCacheLimit();
+			+ (key.source.capacity() + key.resolved.capacity()) * 2
+			+ value->text.capacity()
+			+ value->lineWidths.capacity() * sizeof(int);
+		const size_t cacheOverhead = sizeof(PreparedTextCacheEntry)
+			+ 2u * sizeof(PreparedTextCacheKey)
+			+ 2u * (key.source.capacity() + key.resolved.capacity())
+			+ 4u * sizeof(void*);
+		const size_t limit = vectorfont::GetCpuMemoryCategoryHeadroom(
+			vectorfont::CpuMemoryCategory::PreparedText,
+			GetPreparedTextCacheLimit());
 		if (!limit || bytes > limit)
 			return;
 
@@ -520,8 +532,13 @@ namespace fonthook
 			state.lru.pop_front();
 			return;
 		}
+		inserted->second.cpuMemory.Reset(
+			vectorfont::CpuMemoryCategory::PreparedText, cacheOverhead);
 		state.bytes += bytes;
-		while (state.bytes > limit && !state.lru.empty())
+		while ((vectorfont::GetCpuMemoryUsage(
+			vectorfont::CpuMemoryCategory::PreparedText) > limit
+			|| vectorfont::IsCpuMemoryBudgetExceeded())
+			&& !state.lru.empty())
 		{
 			const auto oldest = state.entries.find(state.lru.back());
 			if (oldest != state.entries.end())
@@ -530,6 +547,29 @@ namespace fonthook
 				state.entries.erase(oldest);
 			}
 			state.lru.pop_back();
+		}
+	}
+
+	namespace vectorfont
+	{
+		void TrimPreparedTextCpuCacheForTotalBudget()
+		{
+			PreparedTextCacheState& state = GetPreparedTextCacheState();
+			std::lock_guard<std::mutex> lock(state.mutex);
+			const size_t limit = GetCpuMemoryCategoryHeadroom(
+				CpuMemoryCategory::PreparedText, GetPreparedTextCacheLimit());
+			while ((GetCpuMemoryUsage(CpuMemoryCategory::PreparedText) > limit
+					|| IsCpuMemoryBudgetExceeded())
+				&& !state.lru.empty())
+			{
+				const auto oldest = state.entries.find(state.lru.back());
+				if (oldest != state.entries.end())
+				{
+					state.bytes -= oldest->second.bytes;
+					state.entries.erase(oldest);
+				}
+				state.lru.pop_back();
+			}
 		}
 	}
 

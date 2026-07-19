@@ -1,5 +1,6 @@
 #pragma once
 
+#include "font_cpu_budget.h"
 #include "ui_decode.h"
 
 #include <cstddef>
@@ -39,6 +40,7 @@ namespace fonthook
 	{
 		using GlyphStorage = std::vector<FreeTypeLayoutGlyph>;
 		std::shared_ptr<const GlyphStorage> glyphs;
+		std::shared_ptr<vectorfont::CpuMemoryLease> cpuMemory;
 		float advance = 0.0f;
 		bool shaped = false;
 	};

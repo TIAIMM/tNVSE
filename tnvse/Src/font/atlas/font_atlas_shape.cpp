@@ -233,7 +233,22 @@ namespace fonthook::vectorfont
 				auto found = unique.find(bakedId);
 				if (found == unique.end())
 				{
-					auto baked = std::make_shared<GlyphBitmap>(*quad.bitmap);
+					auto baked = std::make_shared<GlyphBitmap>();
+					baked->cacheId = quad.bitmap->cacheId;
+					baked->atlasRgb = quad.bitmap->atlasRgb;
+					baked->width = quad.bitmap->width;
+					baked->height = quad.bitmap->height;
+					baked->left = quad.bitmap->left;
+					baked->top = quad.bitmap->top;
+					baked->effectiveWidth = quad.bitmap->effectiveWidth;
+					baked->effectiveHeight = quad.bitmap->effectiveHeight;
+					baked->maskType = quad.bitmap->maskType;
+					baked->sdfSpread = quad.bitmap->sdfSpread;
+					baked->strokeWidth26Dot6 = quad.bitmap->strokeWidth26Dot6;
+					baked->colorBaked = quad.bitmap->colorBaked;
+					baked->bakedRgba = quad.bitmap->bakedRgba;
+					baked->bakedLayer = quad.bitmap->bakedLayer;
+					baked->alpha = quad.bitmap->alpha;
 					baked->cacheId = bakedId;
 					baked->atlasRgb = rgba & 0x00FFFFFF;
 					baked->colorBaked = true;
@@ -245,6 +260,8 @@ namespace fonthook::vectorfont
 						alpha = static_cast<UInt8>(std::lround(
 							static_cast<float>(alpha) * alphaModifier));
 					}
+					baked->cpuMemory.Reset(CpuMemoryCategory::GlyphBitmap,
+						sizeof(GlyphBitmap) + baked->alpha.capacity());
 					found = unique.emplace(bakedId, std::move(baked)).first;
 				}
 				quad.bitmap = found->second;
@@ -847,14 +864,27 @@ namespace fonthook::vectorfont
 				static_cast<UInt16>(result->vertices.size()), result->vertices.data());
 
 
-			const size_t bytes = result->vertices.size() * sizeof(NiPoint3)
-				+ result->texture.size() * sizeof(NiPoint2)
-				+ result->indices.size() * sizeof(UInt16) + sizeof(result->bound);
+			const size_t bytes = sizeof(BatchTemplate)
+				+ result->vertices.capacity() * sizeof(NiPoint3)
+				+ result->texture.capacity() * sizeof(NiPoint2)
+				+ result->indices.capacity() * sizeof(UInt16);
+			result->cpuMemory.Reset(CpuMemoryCategory::BatchTemplate, bytes);
 			{
 				std::lock_guard<std::mutex> lock(state.batchMutex);
 				state.batchLru.push_front(key);
-				state.batchCache.emplace(key,
+				const auto [inserted, success] = state.batchCache.emplace(key,
 					BatchTemplateEntry{ result, bytes, state.batchLru.begin() });
+				if (!success)
+				{
+					state.batchLru.pop_front();
+					state.batchLru.splice(state.batchLru.begin(), state.batchLru,
+						inserted->second.lru);
+					inserted->second.lru = state.batchLru.begin();
+					return inserted->second.data;
+				}
+				inserted->second.cpuMemory.Reset(CpuMemoryCategory::BatchTemplate,
+					sizeof(BatchTemplateEntry) + 2u * sizeof(BatchTemplateKey)
+						+ 4u * sizeof(void*));
 				state.batchCacheBytes += bytes;
 				TrimBatchCache(state);
 			}

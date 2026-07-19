@@ -94,6 +94,7 @@ namespace fonthook::vectorfont
 
 	struct AtlasResource
 	{
+		CpuMemoryLease cpuMemory;
 		NiTexturingPropertyPtr property;
 		NiPixelDataPtr pixelData;
 		UInt32 width = 0;
@@ -175,6 +176,7 @@ namespace fonthook::vectorfont
 
 	struct CompactAtlasSnapshot
 	{
+		CpuMemoryLease cpuMemory;
 		AtlasPixelMode pixelMode = AtlasPixelMode::A8;
 		std::vector<AtlasSnapshotPlacement> placements;
 		std::vector<UInt8> pixels;
@@ -232,6 +234,7 @@ namespace fonthook::vectorfont
 		std::shared_ptr<AtlasResource> resource;
 		size_t bytes = 0;
 		std::list<AtlasCacheKey>::iterator lru;
+		CpuMemoryLease cpuMemory;
 	};
 
 	struct PendingQuad
@@ -292,6 +295,7 @@ namespace fonthook::vectorfont
 
 	struct AtlasProfileIndex
 	{
+		CpuMemoryLease cpuMemory;
 		std::vector<UInt16> pages;
 		std::unordered_map<UInt64, UInt16> residentPages;
 		std::unordered_map<UInt16, std::vector<UInt64>> pageResidents;
@@ -324,6 +328,7 @@ namespace fonthook::vectorfont
 
 	struct BatchTemplate
 	{
+		CpuMemoryLease cpuMemory;
 		std::vector<NiPoint3> vertices;
 		std::vector<NiPoint2> texture;
 		std::vector<UInt16> indices;
@@ -341,6 +346,7 @@ namespace fonthook::vectorfont
 		std::shared_ptr<const BatchTemplate> data;
 		size_t bytes = 0;
 		std::list<BatchTemplateKey>::iterator lru;
+		CpuMemoryLease cpuMemory;
 	};
 
 	class DefaultAtlasTexture : public NiTexture
@@ -438,6 +444,7 @@ namespace fonthook::vectorfont
 	AtlasProfileKey MakeAtlasProfileKey(const AtlasCacheKey& key);
 	void TrimAtlasCache(AtlasState& state);
 	void TrimBatchCache(AtlasState& state);
+	void TrimAtlasCpuCachesForTotalBudget();
 	void ResolveGpuAtlasBudget(bool force);
 	size_t GetAtlasCacheLimit();
 	UInt32 GetMaximumAtlasSize();
@@ -460,6 +467,7 @@ namespace fonthook::vectorfont
 	AtlasGlyphRecord* FindAtlasGlyph(AtlasResource& resource, UInt64 cacheId);
 	const AtlasGlyphRecord* FindAtlasGlyph(const AtlasResource& resource, UInt64 cacheId);
 	void SortAtlasGlyphs(AtlasResource& resource);
+	void RefreshAtlasResourceCpuMemory(AtlasResource& resource);
 	void RegisterDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,
 		UInt64 pageContentHash);
 	void CopyBitmapToAtlas(AtlasResource& resource, const GlyphBitmap& bitmap,

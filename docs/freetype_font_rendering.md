@@ -543,22 +543,34 @@ the packet-template identity, while per-glyph base colors do not force duplicate
 geometry templates. A8 and 32-bit profiles use separate cache keys and
 may coexist when text was created before Shader Loader initialization.
 
-Generated grayscale masks, layouts, and batch templates are cached in process
-memory. Equivalent masks are shared across font IDs when the resolved font
-file/face, glyph, effective raster size, emboldening, slant, stroke or SDF
+Generated grayscale masks and their supporting CPU objects are cached in
+process memory. Equivalent masks are shared across font IDs when the resolved
+font file/face, glyph, effective raster size, emboldening, slant, stroke or SDF
 parameters, and mask type match. Baseline placement remains per font ID and is
-not baked into the shared mask. `uiFreeTypeFontMemoryCacheMB` controls those
-CPU-side caches. During blocking prewarm, the bitmap LRU keeps its original
-one-quarter share of that budget so wide raster batches do not churn. After
-every queued profile finishes successfully from a snapshot or a newly saved
-atlas, tNVSE flushes the persistent bitmap files, releases their large mappings,
-and immediately trims the bitmap LRU to one-sixteenth of the configured memory,
-clamped to 8-16 MiB and never above its original share. With the default 192 MiB
-setting this changes only the bitmap cache from 48 MiB to 12 MiB; layout, batch,
-packet-template, and prepared-text budgets remain unchanged. A later genuine
-prewarm job restores the larger working limit before rasterization. If any
-profile is cancelled, fills its atlas, or fails to save, automatic shrinking is
-skipped because its incomplete atlas may still need the CPU masks.
+not baked into the shared mask.
+
+`uiFreeTypeFontMemoryCacheMB` is one aggregate CPU-memory ceiling shared by
+glyph bitmaps, layout runs, prepared text, batch and native packet templates,
+atlas metadata/backing data, persistent file mappings, and runtime font
+metadata. Every owned allocation holds a category lease for its actual
+lifetime. Removing an LRU key therefore does not pretend to reclaim data that a
+live shape still owns, and the old per-cache fractions are only preferred local
+targets constrained by the remaining global headroom, not independent budgets.
+When the total is above the ceiling, tNVSE trims prepared text, native packet
+templates, batch templates, layouts, and glyph bitmaps in that order. Memory
+still referenced by active shapes, atlases, font runtimes, or required mappings
+is reported as `pinned-overcommit` instead of being invalidated silently.
+
+During blocking prewarm, the bitmap LRU keeps a preferred one-quarter working
+target so wide raster batches do not churn, subject to the aggregate ceiling.
+After every queued profile finishes successfully from a snapshot or a newly
+saved atlas, tNVSE flushes the persistent bitmap files, releases their large
+mappings, and immediately lowers the bitmap LRU target to one-sixteenth of the
+configured memory, clamped to 8-16 MiB and never above its original share. With
+the default 192 MiB setting this target is 12 MiB. A later genuine prewarm job
+restores the larger working target before rasterization. If any profile is
+cancelled, fills its atlas, or fails to save, automatic shrinking is skipped
+because its incomplete atlas may still need the CPU masks.
 
 When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`

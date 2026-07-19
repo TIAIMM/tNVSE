@@ -156,8 +156,10 @@ option(TNVSE_BUILD_TESTS "Build focused tNVSE unit tests" OFF)
 if(TNVSE_BUILD_TESTS)
   enable_testing()
   add_executable(tnvse_sparse_codepoint_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/font_sparse_codepoint_table_tests.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/font_sparse_codepoint_table_tests.cpp"
+    "${TNVSE_SOURCE_ROOT}/font/font_cpu_budget.h")
   target_include_directories(tnvse_sparse_codepoint_tests PRIVATE
+    "${TNVSE_SOURCE_ROOT}/font"
     "${TNVSE_SOURCE_ROOT}/font/vector")
   target_compile_features(tnvse_sparse_codepoint_tests PRIVATE cxx_std_20)
   tnvse_apply_msvc_defaults(tnvse_sparse_codepoint_tests)

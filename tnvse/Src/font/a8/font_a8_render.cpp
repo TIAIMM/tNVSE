@@ -251,9 +251,12 @@ namespace fonthook::vectorfont
 
 		void TrimPacketTemplateCache(A8State& state)
 		{
-			const size_t limit = static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB)
-				* 1024u * 1024u / 12u;
-			while (state.packetTemplateCacheBytes > limit
+			const size_t preferred = static_cast<size_t>(
+				g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 12u;
+			const size_t limit = GetCpuMemoryCategoryHeadroom(
+				CpuMemoryCategory::PacketTemplate, preferred);
+			while ((GetCpuMemoryUsage(CpuMemoryCategory::PacketTemplate) > limit
+					|| IsCpuMemoryBudgetExceeded())
 				&& !state.packetTemplateLru.empty())
 			{
 				const NativeA8TemplateCacheKey key = state.packetTemplateLru.back();
@@ -307,8 +310,18 @@ namespace fonthook::vectorfont
 					return existing->second.data;
 				}
 				state.packetTemplateLru.push_front(key);
-				state.packetTemplateCache.emplace(key, NativeA8TemplateCacheEntry{
+				const auto [inserted, success] = state.packetTemplateCache.emplace(key,
+					NativeA8TemplateCacheEntry{
 					result, bytes, state.packetTemplateLru.begin() });
+				if (!success)
+				{
+					state.packetTemplateLru.pop_front();
+					return inserted->second.data;
+				}
+				inserted->second.cpuMemory.Reset(CpuMemoryCategory::PacketTemplate,
+					sizeof(NativeA8TemplateCacheEntry)
+						+ 2u * sizeof(NativeA8TemplateCacheKey)
+						+ 4u * sizeof(void*));
 				state.packetTemplateCacheBytes += bytes;
 				TrimPacketTemplateCache(state);
 			}
@@ -319,6 +332,13 @@ namespace fonthook::vectorfont
 	A8State& State()
 	{
 		return s_a8State;
+	}
+
+	void TrimA8PacketCacheForTotalBudget()
+	{
+		A8State& state = State();
+		std::lock_guard<std::mutex> lock(state.packetTemplateMutex);
+		TrimPacketTemplateCache(state);
 	}
 
 	bool NeedsScaledFillSampling(const NiTriShape* shape)
@@ -348,6 +368,7 @@ namespace fonthook::vectorfont
 		HandleNativeA8RendererMainLoop();
 		HookNativeA8Accumulator();
 		HookTileRenderPass();
+		EnforceCpuMemoryBudget("main-loop");
 	}
 
 	void HandleA8ShaderLoaderMessage(UInt32 messageType)

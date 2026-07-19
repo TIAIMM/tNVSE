@@ -301,6 +301,8 @@ namespace fonthook::vectorfont
 		}
 		if (payload->gpuVertices.size() != sourceData->m_usVertices)
 			return {};
+		payload->cpuMemory.Reset(CpuMemoryCategory::PacketTemplate,
+			GetNativeA8PayloadTemplateBytes(*payload));
 		return payload;
 	}
 

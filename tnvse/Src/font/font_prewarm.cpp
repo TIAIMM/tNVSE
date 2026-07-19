@@ -1083,7 +1083,10 @@ namespace fonthook::vectorfont
 		FlushGlyphBitmapDiskCache();
 		ReleaseGlyphBitmapDiskCacheMappings();
 		if (completedFonts == queuedFonts)
+		{
 			SetBitmapCacheReducedAfterPrewarm(true);
+			EnforceCpuMemoryBudget("post-prewarm");
+		}
 		else
 		{
 			gLog.FormattedMessage(

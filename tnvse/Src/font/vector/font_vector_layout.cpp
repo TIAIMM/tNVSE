@@ -14,7 +14,11 @@ namespace fonthook::vectorfont
 
 		void TrimLayoutCache(FreeTypeState& state)
 		{
-			while (state.layoutCacheBytes > GetLayoutCacheLimit() && !state.layoutLru.empty())
+			const size_t limit = GetCpuMemoryCategoryHeadroom(
+				CpuMemoryCategory::LayoutRun, GetLayoutCacheLimit());
+			while ((GetCpuMemoryUsage(CpuMemoryCategory::LayoutRun) > limit
+					|| IsCpuMemoryBudgetExceeded())
+				&& !state.layoutLru.empty())
 			{
 				const LayoutCacheKey& key = state.layoutLru.back();
 				auto it = state.layoutCache.find(key);
@@ -461,6 +465,10 @@ namespace fonthook::vectorfont
 				begin = end;
 			}
 			ApplyGlyphCollisionProtection(runtime, *glyphs, layout);
+			layout.cpuMemory = std::make_shared<CpuMemoryLease>(
+				CpuMemoryCategory::LayoutRun,
+				sizeof(FreeTypeLayoutRun::GlyphStorage)
+					+ glyphs->capacity() * sizeof(FreeTypeLayoutGlyph));
 			return true;
 		}
 
@@ -512,13 +520,25 @@ namespace fonthook::vectorfont
 				std::string(text, length)
 			};
 			FreeTypeLayoutRun cachedLayout = layout;
-			const size_t bytes = sizeof(LayoutCacheEntry) + key.text.size()
-				+ layout.glyphs->size() * sizeof(FreeTypeLayoutGlyph);
+			const size_t bytes = sizeof(LayoutCacheEntry) + key.text.capacity()
+				+ layout.glyphs->capacity() * sizeof(FreeTypeLayoutGlyph);
+			const size_t cacheOverhead = sizeof(LayoutCacheEntry)
+				+ 2u * sizeof(LayoutCacheKey) + 2u * key.text.capacity()
+				+ 4u * sizeof(void*);
 			state.layoutLru.push_front(key);
-			state.layoutCache.emplace(std::move(key),
+			const auto [inserted, success] = state.layoutCache.emplace(std::move(key),
 				LayoutCacheEntry{ std::move(cachedLayout), bytes, state.layoutLru.begin() });
-			state.layoutCacheBytes += bytes;
-			TrimLayoutCache(state);
+			if (!success)
+			{
+				state.layoutLru.pop_front();
+			}
+			else
+			{
+				inserted->second.cpuMemory.Reset(CpuMemoryCategory::LayoutRun,
+					cacheOverhead);
+				state.layoutCacheBytes += bytes;
+				TrimLayoutCache(state);
+			}
 		}
 		if (finalRun)
 			StoreFinalLayoutHotCacheEntry(thread, lookup, lookupHash, layout);

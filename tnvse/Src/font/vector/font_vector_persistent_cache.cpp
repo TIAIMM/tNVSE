@@ -8,6 +8,34 @@
 
 namespace fonthook::vectorfont
 {
+	void RefreshPersistentBitmapProfileCpuMemory(
+		PersistentBitmapProfile& profile)
+	{
+		const size_t mappedBytes = profile.mappedSize
+			<= std::numeric_limits<size_t>::max()
+			? static_cast<size_t>(profile.mappedSize)
+			: std::numeric_limits<size_t>::max();
+		profile.cpuMemory.Reset(CpuMemoryCategory::PersistentMapping,
+			sizeof(PersistentBitmapProfile)
+				+ (profile.fontFileName.capacity() + profile.path.capacity())
+					* sizeof(wchar_t)
+				+ profile.indexEntries.capacity()
+					* sizeof(PersistentBitmapIndexEntry)
+				+ mappedBytes);
+	}
+
+	void RefreshGlyphManifestCpuMemory(PersistentGlyphManifest& manifest)
+	{
+		const size_t mappedBytes = manifest.mappedData
+			? sizeof(PersistentGlyphManifestHeader)
+				+ static_cast<size_t>(manifest.recordCount)
+					* sizeof(PersistentGlyphManifestRecord)
+			: 0;
+		manifest.cpuMemory.Reset(CpuMemoryCategory::PersistentMapping,
+			sizeof(PersistentGlyphManifest)
+				+ manifest.path.capacity() * sizeof(wchar_t) + mappedBytes);
+	}
+
 		UInt64 HashBitmapKey(const BitmapCacheKey& key)
 		{
 			UInt64 hash = 1469598103934665603ull;
@@ -397,6 +425,7 @@ namespace fonthook::vectorfont
 			profile.mappedData = nullptr;
 			profile.mapping = nullptr;
 			profile.mappedSize = 0;
+			RefreshPersistentBitmapProfileCpuMemory(profile);
 		}
 
 		void MapPersistentBitmapProfile(PersistentBitmapProfile& profile)
@@ -408,6 +437,24 @@ namespace fonthook::vectorfont
 			if (!GetFileSize64(profile.file, size) || !size
 				|| size > kMaximumPersistentProfileBytes)
 			{
+				return;
+			}
+			const size_t totalBytes = GetCpuMemoryUsage();
+			const size_t budgetBytes = GetCpuMemoryBudget();
+			if (size > std::numeric_limits<size_t>::max()
+				|| totalBytes >= budgetBytes
+				|| static_cast<size_t>(size) > budgetBytes - totalBytes)
+			{
+				static UInt32 skippedMappingLogs = 0;
+				if (skippedMappingLogs++ < 8)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: persistent bitmap mapping skipped by CPU budget path=%ls bytes=%llu totalMiB=%.2f limitMiB=%.2f",
+						profile.path.c_str(),
+						static_cast<unsigned long long>(size),
+						totalBytes / (1024.0 * 1024.0),
+						budgetBytes / (1024.0 * 1024.0));
+				}
 				return;
 			}
 			profile.mapping = CreateFileMappingW(
@@ -423,6 +470,7 @@ namespace fonthook::vectorfont
 				return;
 			}
 			profile.mappedSize = size;
+			RefreshPersistentBitmapProfileCpuMemory(profile);
 		}
 
 		bool ReadPersistentProfileBytes(const PersistentBitmapProfile& profile,
@@ -676,6 +724,8 @@ namespace fonthook::vectorfont
 			{
 				return nullptr;
 			}
+			bitmap->cpuMemory.Reset(CpuMemoryCategory::GlyphBitmap,
+				sizeof(GlyphBitmap) + bitmap->alpha.capacity());
 			return bitmap;
 		}
 
@@ -992,6 +1042,7 @@ namespace fonthook::vectorfont
 				CloseHandle(manifest.mapping);
 			manifest.mappedData = nullptr;
 			manifest.mapping = nullptr;
+			RefreshGlyphManifestCpuMemory(manifest);
 		}
 
 		bool MapGlyphManifest(PersistentGlyphManifest& manifest)
@@ -1009,6 +1060,7 @@ namespace fonthook::vectorfont
 				CloseHandle(manifest.mapping);
 				manifest.mapping = nullptr;
 			}
+			RefreshGlyphManifestCpuMemory(manifest);
 			return manifest.mappedData != nullptr;
 		}
 
@@ -1207,8 +1259,16 @@ namespace fonthook::vectorfont
 				ApplyEffectExtentsToMetrics(*runtime.config,
 					entry->codePoint, *metrics);
 			}
-			role.glyphIdentities.emplace(entry->codePoint, CachedGlyphIdentity{
-				entry->faceIndex, entry->glyphIndex, entry->renderedCodePoint });
+			const auto inserted = role.glyphIdentities.emplace(entry->codePoint,
+				CachedGlyphIdentity{ entry->faceIndex, entry->glyphIndex,
+					entry->renderedCodePoint });
+			if (inserted.second)
+			{
+				runtime.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+					runtime.cpuMemory.GetBytes()
+						+ sizeof(std::pair<const UInt32, CachedGlyphIdentity>)
+						+ 3u * sizeof(void*));
+			}
 			return true;
 		}
 
@@ -1534,6 +1594,7 @@ namespace fonthook::vectorfont
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: persistent bitmap mappings released profiles=%u bytes=%llu",
 			profileCount, static_cast<unsigned long long>(byteCount));
+		ReportCpuMemoryBudget("persistent-mappings-released", true);
 		return byteCount;
 	}
 }

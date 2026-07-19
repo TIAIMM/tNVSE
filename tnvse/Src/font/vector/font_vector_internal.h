@@ -167,6 +167,7 @@ namespace fonthook::vectorfont
 
 	struct GlyphBitmap
 	{
+		CpuMemoryLease cpuMemory;
 		UInt64 cacheId = 0;
 		UInt32 atlasRgb = 0x00FFFFFF;
 		int width = 0;

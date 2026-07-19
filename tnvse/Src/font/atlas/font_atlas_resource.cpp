@@ -984,6 +984,7 @@ namespace fonthook::vectorfont
 								resource.levelZeroOnly);
 						resource.resetPending = false;
 						++resource.generation;
+						RefreshAtlasResourceCpuMemory(resource);
 						if (g_bEnableFreeTypeFontRenderingLog)
 						{
 							FreeTypeFontDebugLog(
@@ -1085,6 +1086,7 @@ namespace fonthook::vectorfont
 				: 1;
 			std::vector<UInt8>().swap(resource.pixels);
 			++resource.generation;
+			RefreshAtlasResourceCpuMemory(resource);
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasUpload);
 			RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadBytes,
 				static_cast<UInt64>(GetAtlasStorageBytes(resource.width,
@@ -1236,6 +1238,7 @@ namespace fonthook::vectorfont
 			snapshot->pageContentHash = resource.pageContentHash;
 			snapshot->glyphs = resource.glyphs;
 			snapshot->compactSnapshot = resource.compactSnapshot;
+			RefreshAtlasResourceCpuMemory(*snapshot);
 			return snapshot;
 		}
 
@@ -1397,6 +1400,20 @@ namespace fonthook::vectorfont
 			{
 				return lhs.cacheId < rhs.cacheId;
 			});
+		RefreshAtlasResourceCpuMemory(resource);
+	}
+
+	void RefreshAtlasResourceCpuMemory(AtlasResource& resource)
+	{
+		const size_t managedBacking = resource.backend == AtlasBackend::Managed
+			&& resource.pixelData
+			? GetAtlasStorageBytes(resource.width, resource.height,
+				resource.pixelMode, resource.mipLevels)
+			: resource.pixels.capacity();
+		resource.cpuMemory.Reset(CpuMemoryCategory::AtlasMetadata,
+			sizeof(AtlasResource)
+				+ resource.glyphs.capacity() * sizeof(AtlasGlyphRecord)
+				+ managedBacking);
 	}
 
 	std::shared_ptr<const GlyphBitmap> GetOrCreateAtlasGlyphBitmap(
@@ -1438,6 +1455,8 @@ namespace fonthook::vectorfont
 		bitmap->colorBaked = placement.colorBaked != 0;
 		bitmap->bakedRgba = placement.bakedRgba;
 		bitmap->bakedLayer = placement.bakedLayer;
+		bitmap->cpuMemory.Reset(CpuMemoryCategory::GlyphBitmap,
+			sizeof(GlyphBitmap));
 		glyph.bitmap = bitmap;
 		return bitmap;
 	}
@@ -1484,6 +1503,7 @@ namespace fonthook::vectorfont
 			resource->sharedGpuPage = true;
 			resource->pageContentHash = pageContentHash;
 			++resource->generation;
+			RefreshAtlasResourceCpuMemory(*resource);
 			existing->sharedGpuPage = true;
 			state.atlasPageDedup.emplace(pageContentHash, resource);
 			return true;
@@ -1645,6 +1665,7 @@ namespace fonthook::vectorfont
 			resource.sharedGpuPage = candidate.sharedGpuPage;
 			resource.pageContentHash = candidate.pageContentHash;
 			std::vector<UInt8>().swap(resource.pixels);
+			RefreshAtlasResourceCpuMemory(resource);
 		}
 
 		bool AddBitmapsToDefaultAtlas(AtlasResource& resource,
@@ -1773,6 +1794,7 @@ namespace fonthook::vectorfont
 				resource.shelfHeight = candidate.shelfHeight;
 				resource.glyphs = std::move(candidate.glyphs);
 				resource.pageContentHash = 0;
+				RefreshAtlasResourceCpuMemory(resource);
 				return true;
 			}
 			if (!CreateDefaultPoolAtlas(candidate, resource.pixelMode))
@@ -1849,6 +1871,7 @@ namespace fonthook::vectorfont
 			std::inplace_merge(resource.glyphs.begin(),
 				resource.glyphs.begin() + existingGlyphCount,
 				resource.glyphs.end(), glyphLess);
+			RefreshAtlasResourceCpuMemory(resource);
 			if (rawDirtyRects.empty())
 				return true;
 			if (!resource.property)

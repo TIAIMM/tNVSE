@@ -116,6 +116,9 @@ namespace fonthook::vectorfont
 			if (!ResolvePersistentFontContentHash(*mapped, key))
 				mapped->contentHash = HashBytes64(mapped->data,
 					static_cast<size_t>(mapped->size));
+			mapped->cpuMemory.Reset(CpuMemoryCategory::PersistentMapping,
+				sizeof(MappedFontFile) + mapped->path.capacity() * sizeof(wchar_t)
+					+ static_cast<size_t>(mapped->size));
 
 			State().mappedFiles[key] = mapped;
 			return mapped;
@@ -282,8 +285,16 @@ namespace fonthook::vectorfont
 					return false;
 				result = { &role, &role.faces.front(), 0, 0, 0 };
 			}
-			role.glyphIdentities.emplace(codePoint, CachedGlyphIdentity{
-				static_cast<UInt16>(result.faceIndex), result.glyphIndex, result.renderedCodePoint });
+			const auto inserted = role.glyphIdentities.emplace(codePoint,
+				CachedGlyphIdentity{ static_cast<UInt16>(result.faceIndex),
+					result.glyphIndex, result.renderedCodePoint });
+			if (inserted.second && role.owner)
+			{
+				role.owner->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+					role.owner->cpuMemory.GetBytes()
+						+ sizeof(std::pair<const UInt32, CachedGlyphIdentity>)
+						+ 3u * sizeof(void*));
+			}
 			return true;
 		}
 
@@ -298,6 +309,7 @@ namespace fonthook::vectorfont
 			{
 				state.singleByteCodePoints.fill(UINT32_MAX);
 				state.doubleByteCodePoints.Clear();
+				state.codePointCacheMemory.Release();
 				state.codePointCacheCodePage = codePage;
 			}
 			const UInt32 encoded = length == 1
@@ -307,6 +319,16 @@ namespace fonthook::vectorfont
 			auto* cached = length == 1
 				? &state.singleByteCodePoints[encoded]
 				: state.doubleByteCodePoints.GetOrCreate(static_cast<UInt16>(encoded));
+			if (length != 1)
+			{
+				const size_t allocatedBytes =
+					state.doubleByteCodePoints.GetAllocatedBytes();
+				if (state.codePointCacheMemory.GetBytes() != allocatedBytes)
+				{
+					state.codePointCacheMemory.Reset(
+						CpuMemoryCategory::RuntimeMetadata, allocatedBytes);
+				}
+			}
 			if (cached && *cached != UINT32_MAX)
 			{
 				if (*cached == UINT32_MAX - 1)
@@ -787,6 +809,8 @@ namespace fonthook::vectorfont
 				return nullptr;
 			auto runtime = std::make_unique<RuntimeFont>();
 			runtime->config = &config;
+			for (RuntimeRole& role : runtime->roles)
+				role.owner = runtime.get();
 			for (const std::string& featureText : config.shapingFeatures)
 			{
 				hb_feature_t feature = {};
@@ -849,6 +873,17 @@ namespace fonthook::vectorfont
 			runtime->glyphHeight = std::max(0.0f, runtime->glyphTop - runtime->minBottom);
 			runtime->fontHeight = runtime->baseLine - runtime->minBottom;
 			runtime->initialized = true;
+			size_t runtimeBytes = sizeof(RuntimeFont)
+				+ runtime->hbFeatures.capacity() * sizeof(hb_feature_t);
+			for (const RuntimeRole& role : runtime->roles)
+			{
+				runtimeBytes += role.faces.capacity() * sizeof(RuntimeFace);
+				runtimeBytes += role.glyphIdentities.size()
+					* (sizeof(std::pair<const UInt32, CachedGlyphIdentity>)
+						+ 3u * sizeof(void*));
+			}
+			runtime->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+				runtimeBytes);
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
 				FreeTypeFontDebugLog(

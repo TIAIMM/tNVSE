@@ -972,6 +972,13 @@ namespace fonthook::vectorfont
 				releasedResetPixelBytes += compactSnapshot->pixels.size();
 				std::vector<UInt8>().swap(compactSnapshot->pixels);
 			}
+			compactSnapshot->cpuMemory.Reset(CpuMemoryCategory::AtlasMetadata,
+				sizeof(CompactAtlasSnapshot)
+					+ compactSnapshot->placements.capacity()
+						* sizeof(AtlasSnapshotPlacement)
+					+ compactSnapshot->pixels.capacity()
+					+ compactSnapshot->sourcePath.capacity() * sizeof(wchar_t));
+			RefreshAtlasResourceCpuMemory(*resource);
 			resource->generation = 1;
 			totalBytes += header.pixelBytes;
 			totalPlacements += header.placementCount;
@@ -990,8 +997,16 @@ namespace fonthook::vectorfont
 					: GetAtlasStorageBytes(page.second->width,
 						page.second->height, page.second->pixelMode, page.second->mipLevels);
 				state.atlasLru.push_front(page.first);
-				state.atlasCache.emplace(page.first, AtlasCacheEntry{
+				const auto inserted = state.atlasCache.emplace(page.first, AtlasCacheEntry{
 					page.second, storageBytes, state.atlasLru.begin() });
+				if (!inserted.second)
+				{
+					state.atlasLru.pop_front();
+					continue;
+				}
+				inserted.first->second.cpuMemory.Reset(CpuMemoryCategory::AtlasMetadata,
+					sizeof(AtlasCacheEntry) + 2u * sizeof(AtlasCacheKey)
+						+ 4u * sizeof(void*));
 				IndexAtlasPage(state, page.first, *page.second);
 				state.atlasCacheBytes += storageBytes;
 			}

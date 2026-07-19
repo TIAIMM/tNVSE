@@ -18,7 +18,11 @@ namespace fonthook::vectorfont
 
 		void TrimBitmapCache(FreeTypeState& state)
 		{
-			while (state.bitmapCacheBytes > GetBitmapCacheLimit() && !state.bitmapLru.empty())
+			const size_t limit = GetCpuMemoryCategoryHeadroom(
+				CpuMemoryCategory::GlyphBitmap, GetBitmapCacheLimit());
+			while ((GetCpuMemoryUsage(CpuMemoryCategory::GlyphBitmap) > limit
+					|| IsCpuMemoryBudgetExceeded())
+				&& !state.bitmapLru.empty())
 			{
 				const BitmapCacheKey key = state.bitmapLru.back();
 				auto it = state.bitmapCache.find(key);
@@ -29,6 +33,18 @@ namespace fonthook::vectorfont
 				}
 				state.bitmapLru.pop_back();
 			}
+		}
+
+		void RefreshGlyphBitmapCpuMemory(GlyphBitmap& bitmap)
+		{
+			bitmap.cpuMemory.Reset(CpuMemoryCategory::GlyphBitmap,
+				sizeof(GlyphBitmap) + bitmap.alpha.capacity());
+		}
+
+		constexpr size_t GetBitmapCacheEntryCpuBytes()
+		{
+			return sizeof(BitmapCacheEntry) + 2u * sizeof(BitmapCacheKey)
+				+ 4u * sizeof(void*);
 		}
 
 	void SetBitmapCacheReducedAfterPrewarm(bool reduced)
@@ -43,6 +59,7 @@ namespace fonthook::vectorfont
 		const size_t previousEntries = state.bitmapCache.size();
 		state.bitmapCacheReducedAfterPrewarm = reduced;
 		TrimBitmapCache(state);
+		ReportCpuMemoryBudget(reduced ? "post-prewarm" : "prewarm", true);
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: bitmap cache phase=%s limitMiB=%.2f previousLimitMiB=%.2f bytesMiB=%.2f previousBytesMiB=%.2f entries=%u evicted=%u",
 			reduced ? "post-prewarm" : "prewarm",
@@ -191,7 +208,10 @@ namespace fonthook::vectorfont
 				return nullptr;
 			FT_GlyphSlot slot = resolved.runtimeFace->face->glyph;
 			if (slot->format != FT_GLYPH_FORMAT_OUTLINE)
+			{
+				RefreshGlyphBitmapCpuMemory(*bitmap);
 				return bitmap;
+			}
 			if (role.style->embolden > 0.0f && slot->outline.n_points)
 			{
 				const FT_Pos strength = key.embolden26Dot6;
@@ -204,7 +224,10 @@ namespace fonthook::vectorfont
 					return nullptr;
 				bitmap->left = slot->bitmap_left;
 				bitmap->top = slot->bitmap_top;
-				return CopyGrayBitmap(slot->bitmap, *bitmap) ? bitmap : nullptr;
+				if (!CopyGrayBitmap(slot->bitmap, *bitmap))
+					return nullptr;
+				RefreshGlyphBitmapCpuMemory(*bitmap);
+				return bitmap;
 			}
 
 			if (maskType == GlyphMaskType::DistanceField)
@@ -233,13 +256,17 @@ namespace fonthook::vectorfont
 				{
 					return nullptr;
 				}
+				RefreshGlyphBitmapCpuMemory(*bitmap);
 				return bitmap;
 			}
 
 			const EffectStyle& effect = maskType == GlyphMaskType::Glow
 				? runtime.config->glow : runtime.config->outline;
 			if (!effect.enabled || effect.width <= 0.0f || !slot->outline.n_points)
+			{
+				RefreshGlyphBitmapCpuMemory(*bitmap);
 				return bitmap;
+			}
 
 			FT_Glyph strokedGlyph = nullptr;
 			FT_Stroker stroker = nullptr;
@@ -275,7 +302,10 @@ namespace fonthook::vectorfont
 			bitmap->top = bitmapGlyph->top;
 			const bool copied = CopyGrayBitmap(bitmapGlyph->bitmap, *bitmap);
 			FT_Done_Glyph(strokedGlyph);
-			return copied ? bitmap : nullptr;
+			if (!copied)
+				return nullptr;
+			RefreshGlyphBitmapCpuMemory(*bitmap);
+			return bitmap;
 		}
 
 	static float SanitizeBitmapRasterScale(float rasterScale)
@@ -410,10 +440,18 @@ namespace fonthook::vectorfont
 						key.maskType, static_cast<UInt32>(diskBitmap->alpha.size()),
 						persistentProfile->recordCount);
 				}
-				const size_t bytes = sizeof(GlyphBitmap) + diskBitmap->alpha.size();
+				const size_t bytes = sizeof(GlyphBitmap) + diskBitmap->alpha.capacity();
 				state.bitmapLru.push_front(key);
-				state.bitmapCache.emplace(key, BitmapCacheEntry{
+				const auto [inserted, success] = state.bitmapCache.emplace(key,
+					BitmapCacheEntry{
 					diskBitmap, bytes, state.bitmapLru.begin(), runtime.config->fontId });
+				if (!success)
+				{
+					state.bitmapLru.pop_front();
+					return inserted->second.bitmap;
+				}
+				inserted->second.cpuMemory.Reset(CpuMemoryCategory::GlyphBitmap,
+					GetBitmapCacheEntryCpuBytes());
 				state.bitmapCacheBytes += bytes;
 				TrimBitmapCache(state);
 				return diskBitmap;
@@ -429,12 +467,27 @@ namespace fonthook::vectorfont
 	{
 		if (!bitmap)
 			return;
-		const size_t bytes = sizeof(GlyphBitmap) + bitmap->alpha.size();
+		const size_t bytes = sizeof(GlyphBitmap) + bitmap->alpha.capacity();
 		state.bitmapLru.push_front(key);
-		state.bitmapCache.emplace(key,
+		const auto [inserted, success] = state.bitmapCache.emplace(key,
 			BitmapCacheEntry{ bitmap, bytes, state.bitmapLru.begin(),
 				runtime.config->fontId });
+		if (!success)
+		{
+			state.bitmapLru.pop_front();
+			return;
+		}
+		inserted->second.cpuMemory.Reset(CpuMemoryCategory::GlyphBitmap,
+			GetBitmapCacheEntryCpuBytes());
 		state.bitmapCacheBytes += bytes;
+	}
+
+	void TrimFreeTypeCpuCachesForTotalBudget()
+	{
+		FreeTypeState& state = State();
+		std::lock_guard<std::recursive_mutex> lock(state.mutex);
+		TrimLayoutCache(state);
+		TrimBitmapCache(state);
 	}
 
 	static std::shared_ptr<const GlyphBitmap> GetGlyphBitmapLocked(
