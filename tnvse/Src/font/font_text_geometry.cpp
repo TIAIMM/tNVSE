@@ -278,86 +278,6 @@ namespace fonthook
 			escaped.c_str());
 	}
 
-	struct PreparedTextMeasuredRun
-	{
-		size_t byteOffset = 0;
-		size_t byteLength = 0;
-		FreeTypeLayoutRun layout;
-		bool available = false;
-	};
-
-	struct PreparedTextLayoutScratch
-	{
-		std::vector<float> lineWidths;
-		std::vector<PreparedTextMeasuredRun> measuredRuns;
-
-		void Reset()
-		{
-			lineWidths.clear();
-			measuredRuns.clear();
-		}
-
-		void ReleaseLayoutsAndTrim()
-		{
-			constexpr size_t kMaximumRetainedLines = 1024;
-			constexpr size_t kMaximumRetainedRuns = 8192;
-			Reset();
-			if (lineWidths.capacity() > kMaximumRetainedLines)
-				std::vector<float>().swap(lineWidths);
-			if (measuredRuns.capacity() > kMaximumRetainedRuns)
-				std::vector<PreparedTextMeasuredRun>().swap(measuredRuns);
-		}
-
-		const FreeTypeLayoutRun* FindMeasuredRun(size_t byteOffset,
-			size_t byteLength, size_t& cursor) const
-		{
-			while (cursor < measuredRuns.size()
-				&& measuredRuns[cursor].byteOffset < byteOffset)
-			{
-				++cursor;
-			}
-			if (cursor >= measuredRuns.size())
-				return nullptr;
-			const PreparedTextMeasuredRun& measured = measuredRuns[cursor];
-			if (measured.byteOffset != byteOffset || measured.byteLength != byteLength)
-				return nullptr;
-			++cursor;
-			return measured.available ? &measured.layout : nullptr;
-		}
-	};
-
-	struct PreparedTextLayoutScratchPool
-	{
-		std::array<PreparedTextLayoutScratch, 4> slots;
-		size_t depth = 0;
-	};
-
-	class PreparedTextLayoutScratchLease
-	{
-	public:
-		explicit PreparedTextLayoutScratchLease(PreparedTextLayoutScratchPool& pool)
-			: m_pool(pool)
-		{
-			m_scratch = m_pool.depth < m_pool.slots.size()
-				? &m_pool.slots[m_pool.depth] : &m_fallback;
-			++m_pool.depth;
-			m_scratch->Reset();
-		}
-
-		~PreparedTextLayoutScratchLease()
-		{
-			m_scratch->ReleaseLayoutsAndTrim();
-			--m_pool.depth;
-		}
-
-		PreparedTextLayoutScratch& Get() { return *m_scratch; }
-
-	private:
-		PreparedTextLayoutScratchPool& m_pool;
-		PreparedTextLayoutScratch m_fallback;
-		PreparedTextLayoutScratch* m_scratch = nullptr;
-	};
-
 	static UInt32 CreateFreeTypePreparedText(
 		FontEx* font,
 		Font::TextData& textData,
@@ -379,97 +299,13 @@ namespace fonthook
 			return ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&textData));
 		}
 		builder.ReserveGlyphs(static_cast<size_t>(std::max(0, textData.iCharCount)));
-
-		thread_local PreparedTextLayoutScratchPool layoutScratchPool;
-		PreparedTextLayoutScratchLease layoutScratchLease(layoutScratchPool);
-		PreparedTextLayoutScratch& layoutScratch = layoutScratchLease.Get();
-		std::vector<float>& exactLineWidths = layoutScratch.lineWidths;
-		std::vector<PreparedTextMeasuredRun>& measuredRuns = layoutScratch.measuredRuns;
-		const char* const preparedText = textData.xNewText.pString;
-		int measureIconIndex = 0;
-		const char* measureCursor = preparedText;
-		while (measureCursor && *measureCursor)
-		{
-			const char* lineEnd = std::strchr(measureCursor, aiLineBreakChar);
-			const char* end = lineEnd ? lineEnd : measureCursor + std::strlen(measureCursor);
-			float width = 0.0f;
-			for (const char* cursor = measureCursor; cursor < end;)
-			{
-				const UInt8 current = static_cast<UInt8>(*cursor);
-				if (current == 1)
-				{
-					if (font->ButtonIcons.pBuffer
-						&& measureIconIndex < static_cast<int>(font->ButtonIcons.uiSize))
-					{
-						const Font::ButtonIcon& icon = font->ButtonIcons.pBuffer[measureIconIndex];
-						width += icon.fWidth + icon.fSpacing;
-					}
-					++measureIconIndex;
-					++cursor;
-					continue;
-				}
-				if (current == '\t')
-				{
-					const float remainder = std::fmod(width, static_cast<float>(kTabWidth));
-					width += static_cast<float>(kTabWidth) - remainder;
-					++cursor;
-					continue;
-				}
-				if (current < 0x20 || current == kDelChar)
-				{
-					++cursor;
-					continue;
-				}
-				const char* runEnd = cursor;
-				while (runEnd < end)
-				{
-					const UInt8 value = static_cast<UInt8>(*runEnd);
-					if (value < 0x20 || value == kDelChar)
-						break;
-					UInt32 dbcsCode = 0;
-					runEnd += TryDecodeFreeTypeDoubleByte(runEnd, dbcsCode) ? 2 : 1;
-				}
-				if (runEnd > cursor)
-				{
-					PreparedTextMeasuredRun measured;
-					measured.byteOffset = static_cast<size_t>(cursor - preparedText);
-					measured.byteLength = static_cast<size_t>(runEnd - cursor);
-					measured.available = LayoutFreeTypeFinalRun(font, cursor,
-						measured.byteLength, measured.layout, true);
-					if (measured.available)
-						width += measured.layout.advance;
-					measuredRuns.push_back(std::move(measured));
-				}
-				cursor = runEnd > cursor ? runEnd : cursor + 1;
-			}
-			exactLineWidths.push_back(width);
-			if (!lineEnd)
-				break;
-			measureCursor = lineEnd + 1;
-		}
-		if (exactLineWidths.empty())
-			exactLineWidths.push_back(0.0f);
-		int maxExactWidth = 0;
-		BSSimpleList<int>* updateWidthCursor = &textData.xLineWidths;
-		for (float width : exactLineWidths)
-		{
-			const int gameWidth = static_cast<int>(std::ceil(std::max(0.0f, width)));
-			maxExactWidth = MaxInt(maxExactWidth, gameWidth);
-			if (updateWidthCursor)
-			{
-				updateWidthCursor->m_item = gameWidth;
-				updateWidthCursor = updateWidthCursor->m_pkNext;
-			}
-		}
-		textData.iWidth = maxExactWidth;
 		if (outputWidth)
-			*outputWidth = maxExactWidth;
+			*outputWidth = textData.iWidth;
 
 		BSSimpleList<int>* lineWidthCursor = &textData.xLineWidths;
 		int lineWidth = lineWidthCursor ? lineWidthCursor->m_item : 0;
-		float exactLineWidth = exactLineWidths.front();
-		float lineOrigin = aiFlags == 4 ? -exactLineWidth
-			: aiFlags == 2 ? exactLineWidth * -0.5f : 0.0f;
+		float lineOrigin = aiFlags == 4 ? -static_cast<float>(lineWidth)
+			: aiFlags == 2 ? static_cast<float>(lineWidth) * -0.5f : 0.0f;
 		LogFreeTypeOrdinaryAlignmentOnce(
 			font, aiFlags, lineWidth, lineOrigin, textData.xNewText.pString);
 
@@ -497,7 +333,6 @@ namespace fonthook
 		int trailingWhitespaceCount = 0;
 		float trailingWhitespaceWidth = 0.0f;
 		int iconIndex = 0;
-		size_t measuredRunCursor = 0;
 		for (int byteIndex = 0; textData.xNewText.pString[byteIndex]; ++byteIndex)
 		{
 			const UInt8 current = static_cast<UInt8>(textData.xNewText.pString[byteIndex]);
@@ -510,10 +345,8 @@ namespace fonthook
 				if (lineWidthCursor && lineWidthCursor->m_pkNext)
 					lineWidthCursor = lineWidthCursor->m_pkNext;
 				lineWidth = lineWidthCursor ? lineWidthCursor->m_item : 0;
-				exactLineWidth = lineIndex < static_cast<int>(exactLineWidths.size())
-					? exactLineWidths[lineIndex] : static_cast<float>(lineWidth);
-				lineOrigin = aiFlags == 4 ? -exactLineWidth
-					: aiFlags == 2 ? exactLineWidth * -0.5f : 0.0f;
+				lineOrigin = aiFlags == 4 ? -static_cast<float>(lineWidth)
+					: aiFlags == 2 ? static_cast<float>(lineWidth) * -0.5f : 0.0f;
 				position.x = lineOrigin;
 				lineStartX = lineOrigin;
 				trailingWhitespaceCount = 0;
@@ -543,50 +376,26 @@ namespace fonthook
 			if (current < 0x20 || current == kDelChar)
 				continue;
 
-			int runEnd = byteIndex;
-			while (textData.xNewText.pString[runEnd])
+			VectorEncodedGlyph glyph;
+			if (!DecodeFreeTypeGlyph(font,
+				&textData.xNewText.pString[byteIndex], glyph))
 			{
-				const UInt8 value = static_cast<UInt8>(textData.xNewText.pString[runEnd]);
-				if (value == static_cast<UInt8>(aiLineBreakChar)
-					|| value < 0x20 || value == kDelChar)
-					break;
-				UInt32 dbcsCode = 0;
-				runEnd += TryDecodeFreeTypeDoubleByte(
-					&textData.xNewText.pString[runEnd], dbcsCode) ? 2 : 1;
+				continue;
 			}
-			FreeTypeLayoutRun fallbackRun;
-			const size_t runLength = runEnd > byteIndex
-				? static_cast<size_t>(runEnd - byteIndex) : 0;
-			const FreeTypeLayoutRun* run = runLength
-				? layoutScratch.FindMeasuredRun(static_cast<size_t>(byteIndex),
-					runLength, measuredRunCursor) : nullptr;
-			if (!run && runLength && LayoutFreeTypeFinalRun(font,
-				&textData.xNewText.pString[byteIndex], runLength, fallbackRun, true))
+			builder.AddGlyph(glyph, position, fontColor);
+			const float glyphAdvance = GetGlyphRenderAdvance(glyph.metrics);
+			position.x += glyphAdvance;
+			if (glyph.encodedCode == kSpaceChar || glyph.encodedCode == kNBSPChar)
 			{
-				run = &fallbackRun;
+				++trailingWhitespaceCount;
+				trailingWhitespaceWidth += glyphAdvance;
 			}
-			if (run)
+			else
 			{
-				float runPen = position.x;
-				for (const FreeTypeLayoutGlyph& item : *run->glyphs)
-				{
-					NiPoint3 glyphPen(runPen + item.xOffset, position.y,
-						position.z + item.yOffset);
-					VectorEncodedGlyph glyph = item.glyph;
-					if (!glyph.metrics)
-					{
-						glyph.metrics = glyph.byteClass == VectorFontByteClass::DoubleByte
-							? EnsureFreeTypeDoubleByteMetrics(font, glyph.encodedCode)
-							: &font->pFontData->pFontLetters[glyph.encodedCode & 0xFF];
-					}
-					builder.AddGlyph(glyph, glyphPen, fontColor);
-					runPen += item.xAdvance;
-				}
-				position.x += run->advance;
+				trailingWhitespaceCount = 0;
+				trailingWhitespaceWidth = 0.0f;
 			}
-			trailingWhitespaceCount = 0;
-			trailingWhitespaceWidth = 0.0f;
-			byteIndex = runEnd > byteIndex ? runEnd - 1 : byteIndex;
+			byteIndex += glyph.byteLength - 1;
 		}
 		LogFreeTypeLineDrift(font, aiFlags, lineIndex, lineWidth,
 			position.x - lineStartX, trailingWhitespaceCount,
@@ -705,7 +514,6 @@ namespace fonthook
 		int vertexIdx = 0;
 		int iconIdx = 0;
 
-		// Cursor for O(1) linked list traversal per line break (was O(n) from head each time)
 		BSSimpleList<int>* pLineWidthCursor = &textData.xLineWidths;
 
 		UInt32 uiDoubleByteCode;
@@ -717,7 +525,6 @@ namespace fonthook
 				textPosition.x = 0.0;
 				if (aiFlags == 4 || aiFlags == 2)
 				{
-					// Advance cursor by 1 instead of traversing from head (O(n^2) to O(n))
 					if (pLineWidthCursor && pLineWidthCursor->m_pkNext)
 						pLineWidthCursor = pLineWidthCursor->m_pkNext;
 					textPosition.x = (aiFlags == 4)
@@ -728,7 +535,6 @@ namespace fonthook
 			}
 			else if (textData.xNewText.pString[charIdx] == '\t')
 			{
-				// 0xEC9130
 				double tabRemainder = fmod(textPosition.x, 75.0);
 				textPosition.x = (float)(textPosition.x + 75.0 - tabRemainder);
 			}
@@ -747,9 +553,7 @@ namespace fonthook
 			}
 
 			if (!bIsDBCharacter)
-			{
 				ConvertToAsciiQuotes(&currentChar);
-			}
 
 			bool rendered = false;
 
@@ -779,7 +583,6 @@ namespace fonthook
 			*aiWidth = MaxInt(renderedWidth, maxRenderedWidth);
 		}
 
-		// Recompute bounding volumes for text/icon geometry (NiBound::ComputeFromData)
 		auto* pTextGeomData = pTextShape->GetModelData();
 		ThisStdCall(0xA7EE30, &pTextGeomData->m_kBound,
 			pTextGeomData->m_usVertices, pTextGeomData->m_pkVertex);
@@ -851,7 +654,6 @@ namespace fonthook
 			currentY = currentY - (lineBaseOffset + lineBaseOffset);
 		}
 
-		// For sLen==0xFFFF, textLen==strlen so charIdx==textLen; otherwise scan for embedded nulls
 		UInt32 charIdx;
 		if (apTextString->sLen == 0xFFFF)
 			charIdx = textLen;
@@ -924,38 +726,16 @@ namespace fonthook
 				if (current < 0x20 || current == kDelChar)
 					continue;
 
-				int runEnd = byteIndex;
-				while (apTextString->pString[runEnd])
+				VectorEncodedGlyph glyph;
+				if (!DecodeFreeTypeGlyph(this,
+					&apTextString->pString[byteIndex], glyph))
 				{
-					const UInt8 value = static_cast<UInt8>(apTextString->pString[runEnd]);
-					if (value < 0x20 || value == kDelChar)
-						break;
-					UInt32 dbcsCode = 0;
-					runEnd += TryDecodeFreeTypeDoubleByte(
-						&apTextString->pString[runEnd], dbcsCode) ? 2 : 1;
+					continue;
 				}
-				FreeTypeLayoutRun run;
-				if (runEnd > byteIndex && LayoutFreeTypeFinalRun(this,
-					&apTextString->pString[byteIndex], runEnd - byteIndex, run, true))
-				{
-					float runPen = currentX;
-					for (const FreeTypeLayoutGlyph& item : *run.glyphs)
-					{
-						const NiPoint3 pen(runPen + item.xOffset, currentZ,
-							currentY + item.yOffset);
-						VectorEncodedGlyph glyph = item.glyph;
-						if (!glyph.metrics)
-						{
-							glyph.metrics = glyph.byteClass == VectorFontByteClass::DoubleByte
-								? EnsureFreeTypeDoubleByteMetrics(this, glyph.encodedCode)
-								: &pFontData->pFontLetters[glyph.encodedCode & 0xFF];
-						}
-						builder.AddGlyph(glyph, pen, activeColor ? activeColor : arg1C);
-						runPen += item.xAdvance;
-					}
-					currentX += run.advance;
-				}
-				byteIndex = runEnd > byteIndex ? runEnd - 1 : byteIndex;
+				const NiPoint3 pen(currentX, currentZ, currentY);
+				builder.AddGlyph(glyph, pen, activeColor ? activeColor : arg1C);
+				currentX += GetGlyphRenderAdvance(glyph.metrics);
+				byteIndex += glyph.byteLength - 1;
 				*aiWidth = MaxInt(*aiWidth,
 					static_cast<int>(std::ceil(std::max(0.0f, currentX - startX))));
 			}
@@ -990,7 +770,6 @@ namespace fonthook
 			char currentCharValue = apTextString->pString[lineIdx];
 			if (currentCharValue == '\t')
 			{
-				// 0xEC9130
 				double tabRemainder = fmod(currentX, 75.0);
 				currentX += 75.0 - tabRemainder;
 			}
@@ -1018,9 +797,7 @@ namespace fonthook
 			}
 
 			if (!bIsDBCharacter)
-			{
 				ConvertToAsciiQuotes(&currentChar);
-			}
 
 			bool rendered = false;
 			if (extraGlyphs && bIsDBCharacter)
@@ -1048,7 +825,6 @@ namespace fonthook
 				pColor = (NiColorA*)defaultColor;
 		}
 
-		// Recompute bounding volume for text geometry (NiBound::ComputeFromData)
 		auto* pGeomData = pTriShape->GetModelData();
 		ThisStdCall(0xA7EE30, &pGeomData->m_kBound,
 			pGeomData->m_usVertices, pGeomData->m_pkVertex);
