@@ -1,2 +1,2 @@
 One-shot trigger for the FreeType native layout repair workflow.
-Trigger final parity pass after base update.
+Trigger final parity pass after restoring the registered workflow path.
