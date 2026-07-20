@@ -4,11 +4,8 @@
 
 #include <pugixml/pugixml.hpp>
 
-#include <hb.h>
-
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -20,11 +17,11 @@ namespace fonthook::vectorfont
 
 	namespace
 	{
-
 		std::wstring GetGameDirectory()
 		{
 			std::array<wchar_t, MAX_PATH> path = {};
-			const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+			const DWORD length = GetModuleFileNameW(nullptr, path.data(),
+				static_cast<DWORD>(path.size()));
 			if (!length || length >= path.size())
 				return {};
 
@@ -37,11 +34,13 @@ namespace fonthook::vectorfont
 		{
 			if (!value || !*value)
 				return {};
-			const int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1, nullptr, 0);
+			const int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+				value, -1, nullptr, 0);
 			if (required <= 1)
 				return {};
 			std::wstring result(static_cast<size_t>(required), L'\0');
-			MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1, result.data(), required);
+			MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1,
+				result.data(), required);
 			result.pop_back();
 			return result;
 		}
@@ -92,7 +91,8 @@ namespace fonthook::vectorfont
 			if (node.attribute("slant"))
 				style.slantDegrees = node.attribute("slant").as_float(style.slantDegrees);
 			if (node.attribute("baselineOffset"))
-				style.baselineOffset = node.attribute("baselineOffset").as_float(style.baselineOffset);
+				style.baselineOffset = node.attribute("baselineOffset").as_float(
+					style.baselineOffset);
 			if (node.attribute("fixedWidth"))
 				style.fixedWidth = node.attribute("fixedWidth").as_float(style.fixedWidth);
 		}
@@ -185,7 +185,8 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			result.color.a = std::clamp(alpha, 0.0f, 1.0f);
-			if (!ParseHexColor(node.attribute("color").as_string("#000000"), result.color))
+			if (!ParseHexColor(node.attribute("color").as_string("#000000"),
+				result.color))
 			{
 				reason = "effect color must be #RRGGBB";
 				return false;
@@ -306,9 +307,6 @@ namespace fonthook::vectorfont
 			HashBytes(hash, &faceCount, sizeof(faceCount));
 			for (const FaceConfig& face : style.faces)
 			{
-				// Do not hash the game-directory-expanded filesystem path. The
-				// normalized XML identity keeps relative Data paths portable, while
-				// runtime disk identities additionally hash every loaded font's bytes.
 				const UInt32 pathLength = static_cast<UInt32>(face.configuredPath.size());
 				HashBytes(hash, &pathLength, sizeof(pathLength));
 				HashBytes(hash, face.configuredPath.data(),
@@ -326,19 +324,10 @@ namespace fonthook::vectorfont
 
 		UInt64 BuildLayoutHash(const FontConfig& config)
 		{
-			// This is a content hash, not a runtime-font identity. Callers that require
-			// isolation carry fontId separately; excluding it lets identical font nodes
-			// share persistent manifests across Gamebryo font IDs.
 			UInt64 hash = 1469598103934665603ull;
 			HashBytes(hash, &config.verticalMetrics, sizeof(config.verticalMetrics));
-			HashBytes(hash, &config.shaping, sizeof(config.shaping));
-			HashBytes(hash, &config.unicodeLineBreaking, sizeof(config.unicodeLineBreaking));
-			for (const std::string& feature : config.shapingFeatures)
-			{
-				const size_t featureLength = feature.size();
-				HashBytes(hash, &featureLength, sizeof(featureLength));
-				HashBytes(hash, feature.data(), feature.size());
-			}
+			HashBytes(hash, &config.unicodeLineBreaking,
+				sizeof(config.unicodeLineBreaking));
 			HashBytes(hash, &config.baseline, sizeof(config.baseline));
 			HashFaceStyles(hash, config, true);
 			return hash;
@@ -353,9 +342,6 @@ namespace fonthook::vectorfont
 
 		UInt64 BuildMaskGenerationHash(const FontConfig& config)
 		{
-			// Keep the combined identity for non-atlas profile scheduling. Atlas profiles
-			// consume the role hashes directly so changing one face chain does not
-			// invalidate the other role's pages.
 			UInt64 hash = 1469598103934665603ull;
 			for (UInt64 roleHash : config.maskGenerationRoleHashes)
 				HashBytes(hash, &roleHash, sizeof(roleHash));
@@ -365,7 +351,8 @@ namespace fonthook::vectorfont
 		UInt64 BuildShaderEffectHash(const FontConfig& config)
 		{
 			UInt64 hash = 1469598103934665603ull;
-			HashBytes(hash, &config.fontColor.configured, sizeof(config.fontColor.configured));
+			HashBytes(hash, &config.fontColor.configured,
+				sizeof(config.fontColor.configured));
 			HashBytes(hash, &config.fontColor.color, sizeof(config.fontColor.color));
 			HashBytes(hash, &config.effectQuality, sizeof(config.effectQuality));
 			auto hashEffect = [&](const EffectStyle& effect)
@@ -400,6 +387,12 @@ namespace fonthook::vectorfont
 				reason = "missing or zero id";
 				return false;
 			}
+			if (node.attribute("shaping") || node.attribute("features"))
+			{
+				reason = "shaping and features are no longer supported";
+				return false;
+			}
+
 			const std::string prewarm = node.attribute("prewarm").as_string("none");
 			if (prewarm == "none")
 				config.prewarm = FontPrewarmMode::None;
@@ -413,7 +406,8 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			const std::string verticalMetrics = node.attribute("verticalMetrics").as_string("freetype");
+			const std::string verticalMetrics =
+				node.attribute("verticalMetrics").as_string("freetype");
 			if (verticalMetrics == "freetype")
 				config.verticalMetrics = VerticalMetricsMode::FreeType;
 			else if (verticalMetrics == "original")
@@ -424,7 +418,8 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			const std::string effectQuality = node.attribute("effectQuality").as_string("balanced");
+			const std::string effectQuality =
+				node.attribute("effectQuality").as_string("balanced");
 			if (effectQuality == "fast")
 				config.effectQuality = EffectQuality::Fast;
 			else if (effectQuality == "balanced")
@@ -453,7 +448,8 @@ namespace fonthook::vectorfont
 					ReadStyleAttributes(role, style);
 					if (HasFaceChildren(role) && !ReadFaceChain(role, style.faces))
 					{
-						reason = std::string(roleNames[i]) + " requires a valid <face path=... index=...>";
+						reason = std::string(roleNames[i])
+							+ " requires a valid <face path=... index=...>";
 						return false;
 					}
 				}
@@ -478,54 +474,22 @@ namespace fonthook::vectorfont
 				reason = "baseline must be finite and zero or greater";
 				return false;
 			}
-			config.shaping = node.attribute("shaping").as_bool(false);
-			config.unicodeLineBreaking = node.attribute("unicodeLineBreaking").as_bool(false);
-			const std::string features = node.attribute("features").as_string();
-			if (!features.empty())
-			{
-				if (!config.shaping)
-				{
-					reason = "features requires shaping=1";
-					return false;
-				}
-				size_t begin = 0;
-				while (begin < features.size())
-				{
-					const size_t comma = features.find(',', begin);
-					const size_t end = comma == std::string::npos ? features.size() : comma;
-					size_t first = begin;
-					size_t last = end;
-					while (first < last && std::isspace(static_cast<unsigned char>(features[first])))
-						++first;
-					while (last > first && std::isspace(static_cast<unsigned char>(features[last - 1])))
-						--last;
-					if (first == last)
-					{
-						reason = "features contains an empty token";
-						return false;
-					}
-					std::string token = features.substr(first, last - first);
-					hb_feature_t parsed = {};
-					if (!hb_feature_from_string(token.data(), static_cast<int>(token.size()), &parsed))
-					{
-						reason = "invalid HarfBuzz feature: " + token;
-						return false;
-					}
-					config.shapingFeatures.push_back(std::move(token));
-					if (comma == std::string::npos)
-						break;
-					begin = comma + 1;
-				}
-			}
+			config.unicodeLineBreaking =
+				node.attribute("unicodeLineBreaking").as_bool(false);
 			if (!ReadFontColor(node, config.fontColor))
 			{
 				reason = "fontColor must be #RRGGBB and fontAlpha must be finite";
 				return false;
 			}
 			if (!ReadEffect(node.child("glow"), EffectKind::Glow, config.glow, reason)
-				|| !ReadEffect(node.child("outline"), EffectKind::Outline, config.outline, reason)
-				|| !ReadEffect(node.child("shadow"), EffectKind::Shadow, config.shadow, reason))
+				|| !ReadEffect(node.child("outline"), EffectKind::Outline,
+					config.outline, reason)
+				|| !ReadEffect(node.child("shadow"), EffectKind::Shadow,
+					config.shadow, reason))
+			{
 				return false;
+			}
+
 			config.layoutHash = BuildLayoutHash(config);
 			for (size_t roleIndex = 0; roleIndex < config.styles.size(); ++roleIndex)
 			{
@@ -542,12 +506,11 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s shaping=%d unicodeLineBreaking=%d features=%u baseline=%.2f fontColor=%d shaderFill=sdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s unicodeLineBreaking=%d baseline=%.2f fontColor=%d shaderFill=sdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
 				config.fontId, static_cast<UInt32>(config.prewarm),
-				config.verticalMetrics == VerticalMetricsMode::Original ? "original" : "freetype",
-				config.shaping ? 1 : 0,
+				config.verticalMetrics == VerticalMetricsMode::Original
+					? "original" : "freetype",
 				config.unicodeLineBreaking ? 1 : 0,
-				static_cast<UInt32>(config.shapingFeatures.size()),
 				config.baseline,
 				config.fontColor.configured,
 				static_cast<UInt32>(config.effectQuality),
@@ -578,9 +541,10 @@ namespace fonthook::vectorfont
 					"tnvse_freetype_font:   %s mask=%016llX size=%.2f tracking=%.2f fixedWidth=%.2f scale=(%.3f,%.3f) embolden=%.2f slant=%.2f baseline=%.2f faces=%u",
 					roleNames[roleIndex], static_cast<unsigned long long>(
 						config.maskGenerationRoleHashes[roleIndex]),
-					style.pixelSize, style.tracking,
-					style.fixedWidth, style.scaleX, style.scaleY, style.embolden, style.slantDegrees,
-					style.baselineOffset, static_cast<UInt32>(style.faces.size()));
+					style.pixelSize, style.tracking, style.fixedWidth,
+					style.scaleX, style.scaleY, style.embolden,
+					style.slantDegrees, style.baselineOffset,
+					static_cast<UInt32>(style.faces.size()));
 				for (size_t faceIndex = 0; faceIndex < style.faces.size(); ++faceIndex)
 				{
 					const FaceConfig& face = style.faces[faceIndex];
@@ -589,7 +553,8 @@ namespace fonthook::vectorfont
 						&& !(attributes & FILE_ATTRIBUTE_DIRECTORY);
 					FreeTypeFontDebugLog(
 						"tnvse_freetype_font:     face[%u] path=%ls index=%ld exists=%d",
-						static_cast<UInt32>(faceIndex), face.path.c_str(), face.faceIndex, exists);
+						static_cast<UInt32>(faceIndex), face.path.c_str(),
+						face.faceIndex, exists);
 				}
 			}
 		}
@@ -622,8 +587,8 @@ namespace fonthook::vectorfont
 			|| HardShadowIncludesOutline(arConfig);
 	}
 
-	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread,
-		bool abIncludeEffects)
+	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale,
+		UInt32& arSpread, bool abIncludeEffects)
 	{
 		arSpread = 0;
 		if (!std::isfinite(afRasterScale) || afRasterScale <= 0.0f)
@@ -633,14 +598,21 @@ namespace fonthook::vectorfont
 		if (abIncludeEffects && arConfig.glow.enabled)
 			radius = std::max(radius, arConfig.glow.outer);
 		if (abIncludeEffects && arConfig.outline.enabled)
-			radius = std::max(radius, arConfig.outline.width + arConfig.outline.softness);
-		if (abIncludeEffects && arConfig.shadow.enabled && arConfig.shadow.blur > 0.0f)
+			radius = std::max(radius,
+				arConfig.outline.width + arConfig.outline.softness);
+		if (abIncludeEffects && arConfig.shadow.enabled
+			&& arConfig.shadow.blur > 0.0f)
+		{
 			radius = std::max(radius, arConfig.shadow.blur);
+		}
 
 		const float physicalSpread = std::max(
 			std::ceil(radius * afRasterScale) + 2.0f, 4.0f);
-		if (!std::isfinite(physicalSpread) || physicalSpread < 2.0f || physicalSpread > 32.0f)
+		if (!std::isfinite(physicalSpread)
+			|| physicalSpread < 2.0f || physicalSpread > 32.0f)
+		{
 			return false;
+		}
 		arSpread = static_cast<UInt32>(physicalSpread);
 		return true;
 	}
@@ -658,14 +630,19 @@ namespace fonthook
 		}
 
 		std::array<char, MAX_PATH> modulePath = {};
-		GetModuleFileNameA(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+		GetModuleFileNameA(nullptr, modulePath.data(),
+			static_cast<DWORD>(modulePath.size()));
 		char* slash = std::strrchr(modulePath.data(), '\\');
 		if (!slash)
 			return;
-		strcpy_s(slash + 1, modulePath.size() - static_cast<size_t>(slash + 1 - modulePath.data()),
+		strcpy_s(slash + 1,
+			modulePath.size() - static_cast<size_t>(slash + 1 - modulePath.data()),
 			"Data\\nvse\\plugins\\tnvse_fonts.xml");
 		if (g_bEnableFreeTypeFontRenderingLog)
-			FreeTypeFontDebugLog("tnvse_freetype_font: loading config path=%s", modulePath.data());
+		{
+			FreeTypeFontDebugLog(
+				"tnvse_freetype_font: loading config path=%s", modulePath.data());
+		}
 
 		pugi::xml_document document;
 		const pugi::xml_parse_result parsed = document.load_file(modulePath.data());
@@ -673,7 +650,8 @@ namespace fonthook
 		{
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: failed to load config path=%s error=%s offset=%lld",
-				modulePath.data(), parsed.description(), static_cast<long long>(parsed.offset));
+				modulePath.data(), parsed.description(),
+				static_cast<long long>(parsed.offset));
 			return;
 		}
 
@@ -698,7 +676,8 @@ namespace fonthook
 			if (!vectorfont::ParseFontNode(node, config, reason))
 			{
 				++rejected;
-				gLog.FormattedMessage("tnvse_freetype_font: rejected font id=%u reason=%s",
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: rejected font id=%u reason=%s",
 					node.attribute("id").as_uint(0), reason.c_str());
 				continue;
 			}
@@ -706,7 +685,8 @@ namespace fonthook
 			vectorfont::g_configs[config.fontId] = std::move(config);
 		}
 
-		gLog.FormattedMessage("tnvse_freetype_font: loaded %u font configurations, rejected %u",
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: loaded %u font configurations, rejected %u",
 			static_cast<UInt32>(vectorfont::g_configs.size()), rejected);
 	}
 }
