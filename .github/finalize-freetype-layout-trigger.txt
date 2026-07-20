@@ -1,1 +1,2 @@
 One-shot trigger for the final FreeType layout parity workflow.
+Retry after workflow registration.
