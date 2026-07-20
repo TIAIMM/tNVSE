@@ -4,8 +4,6 @@
 #include "globals.h"
 #include "load_config.h"
 
-#include <linebreak.h>
-
 namespace fonthook
 {
 	void FlushFreeTypePersistentFontCache()
@@ -115,72 +113,14 @@ namespace fonthook
 		return true;
 	}
 
-	bool BuildFreeTypeUnicodeLineBreakMap(const Font* apFont, const char* apText,
-		size_t auiLength, std::vector<UInt8>& arBreakAfter)
+	bool BuildFreeTypeUnicodeLineBreakMap(const Font*, const char*, size_t,
+		std::vector<UInt8>& arBreakAfter)
 	{
+		// Kept as a temporary internal compatibility shim for the existing
+		// preparation call sites. Unicode line breaking and its dependency have
+		// been removed; legacy space, '~', and hard-wrap rules remain authoritative.
 		arBreakAfter.clear();
-		if (!apText || !auiLength)
-			return false;
-
-		std::vector<utf32_t> codePoints;
-		std::vector<size_t> codePointEndBytes;
-		UInt32 codePage = kWindows1252CodePage;
-		codePoints.reserve(auiLength);
-		codePointEndBytes.reserve(auiLength);
-		{
-			vectorfont::FreeTypeState& state = vectorfont::State();
-			std::lock_guard<std::recursive_mutex> lock(state.mutex);
-			const vectorfont::RuntimeFont* runtime = vectorfont::FindActiveRuntime(apFont);
-			if (!runtime || !runtime->config || !runtime->config->unicodeLineBreaking)
-				return false;
-			codePage = GetFreeTypeTextCodePage();
-			arBreakAfter.assign(auiLength, 0);
-
-			for (size_t offset = 0; offset < auiLength && apText[offset];)
-			{
-				int byteLength = 1;
-				UInt32 encodedCode = 0;
-				if (offset + 1 < auiLength
-					&& TryDecodeDoubleByteForCodePage(
-						apText + offset, codePage, encodedCode))
-				{
-					byteLength = 2;
-				}
-
-				UInt32 codePoint = 0xFFFD;
-				if (static_cast<UInt8>(apText[offset]) == 1)
-					codePoint = 0xFFFC;
-				else
-					vectorfont::DecodeCodePoint(apText + offset, byteLength, codePoint);
-				codePoints.push_back(static_cast<utf32_t>(codePoint));
-				offset += byteLength;
-				codePointEndBytes.push_back(offset - 1);
-			}
-		}
-
-		if (codePoints.empty())
-			return true;
-		std::vector<char> breaks(codePoints.size(), LINEBREAK_NOBREAK);
-		const char* language = "en";
-		switch (codePage)
-		{
-		case 936: language = "zh"; break;
-		case 950: language = "zh"; break;
-		case 932: language = "ja"; break;
-		case 949: language = "ko"; break;
-		default: break;
-		}
-		set_linebreaks_utf32(codePoints.data(), codePoints.size(), language, breaks.data());
-		for (size_t index = 0; index < breaks.size(); ++index)
-		{
-			// Gamebryo's configured line separator remains the sole mandatory
-			// control.  libunibreak contributes discretionary UAX #14 points.
-			if (breaks[index] == LINEBREAK_ALLOWBREAK)
-			{
-				arBreakAfter[codePointEndBytes[index]] = 1;
-			}
-		}
-		return true;
+		return false;
 	}
 
 	FontLetter* EnsureFreeTypeDoubleByteMetrics(Font* apFont, UInt32 encodedCode)
@@ -194,4 +134,4 @@ namespace fonthook
 		vectorfont::RuntimeFont* runtime = vectorfont::FindActiveRuntime(apFont);
 		return runtime && vectorfont::DecodeEncodedGlyph(*runtime, *apFont, text, glyph);
 	}
-}
+} // namespace fonthook
