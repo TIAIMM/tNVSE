@@ -170,25 +170,13 @@ namespace fonthook
 			return ResolveGameFont(FontManager::GetSingleton(), fontId);
 		}
 
-		NiNode* MakeCulledVuiEffectProxyNode(TileText* tile)
-		{
-			if (!tile)
-				return nullptr;
-			NiNode* node = NiNode::Create();
-			if (!node)
-				return nullptr;
-			node->SetAppCulled(true);
-			tile->spNiNode = node;
-			return node;
-		}
-
 		bool IsVuiEffectProxy(const TileText* tile, bool& isOutline)
 		{
 			// VUI+'s Prefabs/VUI+/outline.xml implements its original-style dark
 			// shadow/outline by cloning the source text into these two named tiles.
-			// An active tNVSE effect replaces both clones before text preparation;
-			// otherwise their original body remains but cannot recursively gain the
-			// configured tNVSE font effects of its own.
+			// Always let those proxy tiles complete text preparation so their width
+			// and height traits remain valid for anonymous sibling expressions.  When
+			// tNVSE already supplies the effect, cull only the finished scene node.
 			isOutline = false;
 			if (!tile)
 				return false;
@@ -228,22 +216,27 @@ namespace fonthook
 		{
 			bool isOutline = false;
 			const bool suppress = IsVuiEffectProxy(tile, isOutline);
-			if (suppress)
+			Font* font = suppress ? ResolveVuiEffectProxyFont(tile) : nullptr;
+			const bool replaceProxy = suppress && HasEnabledFreeTypeFontEffects(font);
+
+			ScopedEffectSuppression scope(suppress);
+			NiNode* node = s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
+
+			if (replaceProxy && node)
 			{
-				Font* font = ResolveVuiEffectProxyFont(tile);
-				if (HasEnabledFreeTypeFontEffects(font))
+				node->SetAppCulled(true);
+				bool& logged = isOutline
+					? s_loggedVuiOutlineBypass : s_loggedVuiShadowBypass;
+				if (!logged)
 				{
-					bool& logged = isOutline
-						? s_loggedVuiOutlineBypass : s_loggedVuiShadowBypass;
-					if (!logged)
-					{
-						logged = true;
-						gLog.FormattedMessage(
-							"tnvse_freetype_font: bypassing full font pipeline for VUI+ effect proxy tile=%s font=%d",
-							tile->strName.c_str(), font->iFontNum);
-					}
-					return MakeCulledVuiEffectProxyNode(tile);
+					logged = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: preserved layout metrics and culled VUI+ effect proxy tile=%s font=%d",
+						tile->strName.c_str(), font->iFontNum);
 				}
+			}
+			else if (suppress)
+			{
 				bool& logged = isOutline
 					? s_loggedVuiOutlineFallback : s_loggedVuiShadowFallback;
 				if (!logged)
@@ -254,8 +247,7 @@ namespace fonthook
 						tile->strName.c_str());
 				}
 			}
-			ScopedEffectSuppression scope(suppress);
-			return s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
+			return node;
 		}
 
 		void InstallVuiEffectProxyCompatibility()
@@ -390,33 +382,16 @@ namespace fonthook
 		if (s_fontHookInstallState.freeType)
 			InstallVuiEffectProxyCompatibility();
 
-		// FontManager::CreateText -> FontManager::PrepText
 		WriteRelCallEx(0xA18F4A, &FontManagerEx::PrepText);
-		// FontManager::CreateText -> TextDoc::Render
 		WriteRelCallEx(0xA18F63, &FontManagerEx::TextDocRender);
-		// TextDoc::Render -> Font::AddChar
 		WriteRelCallEx(0xA19622, &FontEx::TextDocRenderAddChar);
-		// Terminal text needs the custom single-byte FreeType preparation path
-		// even when the global DBCS parser is disabled. Non-FreeType fonts are
-		// delegated by FontEx::PrepTextForTerminal.
 		WriteRelCallEx(0x759281, &FontEx::PrepTextForTerminal);
 		if (s_fontHookInstallState.multibyte)
-		{
-			// AnimatingText::Update normally treats its elapsed-interval count as
-			// a byte count.  Interpret it as encoded units at the single memcpy
-			// call site so a DBCS lead byte is never published on its own.
 			WriteRelCall(0x6FFFEE, &CopyAnimatingTextEncodedUnits);
-		}
-		// Feed final FreeType widths into word wrapping before TextLine chooses
-		// whether to retain the character, move a word, or create another line.
 		WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar);
 
 		if (!s_fontHookInstallState.multibyte)
 		{
-			// TextLine's constructor inserts the first character through a
-			// separate call site. Patch it only for FreeType-only mode so every
-			// line starts with the same final-width contract, while the enabled
-			// multibyte path remains byte-for-byte on its existing hook set.
 			WriteRelCallEx(0xA1BDE2, &FontManagerEx::TextLineAddChar);
 			gLog.FormattedMessage(
 				"tnvse_font_hook: installed mode=freetype-custom-single-byte configuredCodePage=%u freeTypeCodePage=%u",
@@ -425,11 +400,7 @@ namespace fonthook
 		}
 
 		WriteRelJumpEx(0xA12FB0, &FontEx::PrepText);
-
-		// FontManager::PrepText -> FontManager::PrepHypertext
 		WriteRelCallEx(0xA18ACC, &FontManagerEx::PrepHypertext);
-
-		// FontManager::PrepHypertext -> CollectTo
 		WriteRelCall(0xA1772D, &FontManagerEx::CollectTo);
 		WriteRelCall(0xA17835, &FontManagerEx::CollectTo);
 		WriteRelCall(0xA17A1E, &FontManagerEx::CollectTo);
@@ -438,41 +409,21 @@ namespace fonthook
 		WriteRelCall(0xA17CFE, &FontManagerEx::CollectTo);
 		WriteRelCall(0xA17D5D, &FontManagerEx::CollectToAttributeValue);
 		WriteRelCall(0xA17DE9, &FontManagerEx::CollectToAttributeValue);
-
-		// FontManager::CreateText -> TextDoc::Destroy
 		WriteRelCallEx(0xA18F7D, &FontManagerEx::TextDocDestroy);
-
-		// FontManager::PrepHypertext -> TextDoc::AddChar
 		WriteRelCallEx(0xA178A4, &FontManagerEx::TextDocAddChar);
 		WriteRelCallEx(0xA179D9, &FontManagerEx::TextDocAddChar);
 		WriteRelCallEx(0xA17FC2, &FontManagerEx::TextDocAddChar);
-		// FontManager::PrepText -> TextDoc::AddChar
 		WriteRelCallEx(0xA18D7C, &FontManagerEx::TextDocAddChar);
-
-		// TextDoc::AddChar -> TextPage::AddChar
 		WriteRelCallEx(0xA19A6F, &FontManagerEx::TextPageAddChar);
-		// TextPage::TextPage -> TextPage::AddChar
 		WriteRelCallEx(0xA1BD1C, &FontManagerEx::TextPageAddChar);
-
-		// FontManager::PrepHypertext -> CharData::Copy
 		WriteRelCall(0xA17898, &FontManagerEx::CharDataCopy);
 		WriteRelCall(0xA179CD, &FontManagerEx::CharDataCopy);
 		WriteRelCall(0xA17FB6, &FontManagerEx::CharDataCopy);
-		// FontManager::PrepText -> CharData::Copy
 		WriteRelCall(0xA18D73, &FontManagerEx::CharDataCopy);
-
-		// Tile::SetString - Quest Text
 		WriteRelCall(0x77AF4B, &TileSetStringHookForQueueText);
-		// Tile::SetString - Location Text
 		WriteRelCall(0x772B5E, &TileSetStringHookForQueueText);
-
-		// BSStringT<char>::c_str - Terminal UTF8 conversion
 		WriteRelCall(0x7591AC, &BSString_c_strHook);
-
-		// BSStringT<char>::GetCStringOrEmpty - Location Text UTF8 conversion
 		WriteRelCall(0x772B4B, &BSString_GetCStringOrEmptyHook);
-
-		// strcpy_s - Quest Text UTF8 conversion
 		WriteRelCall(0x77ACCC, &strcpy_sHook);
 		WriteRelCall(0x77ACF8, &strcpy_sHook);
 
