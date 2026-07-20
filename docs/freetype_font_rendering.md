@@ -25,9 +25,7 @@ hyphenation, and line limits/control bytes follow the original single-byte
 semantics, but every decision uses final FreeType advances. Rich text feeds
 those advances into `TextLine::AddChar` before line/page topology is selected;
 the final traversal only normalizes positions and aggregate widths. Non-FreeType
-font IDs remain wholly on the original `.fnt`/`.tex` path. A configured font
-can additionally set `unicodeLineBreaking="1"` to add libunibreak UAX #14
-opportunities to either FreeType layout mode.
+font IDs remain wholly on the original `.fnt`/`.tex` path.
 
 ## Raster scale and UIO
 
@@ -86,9 +84,6 @@ registered extended fonts.
   <fonts>
     <font id="1"
           prewarm="none"
-          shaping="1"
-          unicodeLineBreaking="1"
-          features="kern,liga,clig,calt"
           pixelSize="24"
           fontColor="#FFFFFF"
           fontAlpha="1"
@@ -98,7 +93,7 @@ registered extended fonts.
           embolden="0"
           slant="0"
           baselineOffset="0"
-		  baseline="0">
+          baseline="0">
 
       <!-- Optional defaults inherited by both byte classes. -->
       <face path="Data/Fonts/Default.ttf" index="0"/>
@@ -192,56 +187,29 @@ mode, the effect's own `alpha` remains independent of `fontAlpha` and is
 multiplied by the game text alpha, so visibility and fade animations continue
 to work.
 
-## Shaping and fixed-width layout
+## Encoded-unit and fixed-width layout
 
-`shaping="0"` is the default. It uses FreeType 26.6 advances and
-`FT_Get_Kerning()` without rounding every glyph in advance. `shaping="1"`
-enables HarfBuzz GSUB/GPOS for ordinary `Font` text. The optional
-comma-separated `features` attribute uses HarfBuzz feature syntax, for example
-`kern,liga,ss01=1,-dlig`; unspecified features keep HarfBuzz's script defaults.
-`features` is invalid unless shaping is enabled. Rich text keeps one game
-`CharData` per encoded character and therefore uses precise FreeType kerning
-without GSUB substitutions.
-
-With shaping disabled, layout decodes and positions each encoded unit in one
-pass instead of first allocating an intermediate layout-input vector. Each
-runtime face keeps sparse glyph-index pages for the base-size advance and
-fixed-cell offset plus a small direct-mapped kerning cache. Code-page prewarm
-also fills these metrics when a persistent manifest already supplies glyph
-identity, so the first visible menu does not repeat hundreds of FreeType metric
-loads. An uncacheable glyph index or allocation failure still reads the live
-FreeType slot for that unit and never substitutes a zero advance.
+Layout decodes and positions each encoded single-byte or DBCS unit in one pass.
+Each runtime face keeps sparse glyph-index pages for the base-size advance and
+fixed-cell offset. Code-page prewarm also fills these metrics when a persistent
+manifest already supplies glyph identity, so the first visible menu does not
+repeat hundreds of FreeType metric loads. An uncacheable glyph index or
+allocation failure still reads the live FreeType slot for that unit and never
+substitutes a zero advance.
 
 The final printable runs produced after prepared-text wrapping and the runs
 consumed by `Font::MakeString` share a small per-thread hot cache. Its key
-contains the font layout identity, active code page, shaping mode, and the exact
-encoded bytes; a hash match is always followed by full key and byte comparison.
-The cached `FreeTypeLayoutRun` owns immutable shared glyph storage, so an exact
-match reuses the same HarfBuzz result without taking the global layout-cache
+contains the font layout identity, active code page, and the exact encoded
+bytes; a hash match is always followed by full key and byte comparison. The
+cached `FreeTypeLayoutRun` owns immutable shared glyph storage, so an exact
+match reuses the same encoded-unit result without taking the global layout-cache
 lock or changing run boundaries. Pre-wrap measurement is deliberately excluded
 from the hot cache and retains the existing layout behavior.
 
-A positive `fixedWidth` centers each glyph body in a logical cell, disables
-kerning and HarfBuzz shaping for that byte class, and makes its final advance
-`fixedWidth + tracking`. This matches the grid-oriented DCFGCF behavior used by
-interfaces such as the terminal hacking screen. A value of zero retains
-proportional advances.
-
-## Unicode line breaking
-
-`unicodeLineBreaking="0"` is the default and preserves the existing prepared
-text rules. Setting it to `1` on one `<font>` enables libunibreak for that font
-ID only. tNVSE decodes the prepared byte string with the active FreeType text
-code page (Windows-1252, GBK, Big5, Shift-JIS, or UHC), supplies `zh`, `ja`,
-`ko`, or `en` language context as appropriate, and maps the UAX #14 results
-back to encoded-byte boundaries. A break is never inserted inside a DBCS pair
-or HarfBuzz cluster.
-
-The existing explicit line separator, `~` discretionary hyphen, removable
-single-byte space, and hard-wrap fallback remain available. The switch is part
-of the layout identity, so changing it cannot reuse prepared-text or layout
-cache entries made under the other setting. It has no effect on font IDs that
-remain on the original `.fnt`/`.tex` renderer.
+A positive `fixedWidth` centers each glyph body in a logical cell and makes its
+final advance `fixedWidth + tracking`. This matches the grid-oriented DCFGCF
+behavior used by interfaces such as the terminal hacking screen. A value of
+zero retains proportional advances.
 
 ## Blocking prewarm and persistent caches
 
@@ -344,7 +312,7 @@ successfully. Cleanup is skipped if any prewarm job fails or is cancelled, and
 unknown files in `fontdata` are never removed. The option defaults to `0`.
 
 Cache identity is split by responsibility. The layout hash covers font faces,
-metrics, advances, shaping, and fallback identity. Persistent manifests store
+metrics, advances, and fallback identity. Persistent manifests store
 effect-independent body metrics and add the current visual effect extents when
 loaded. The mask-generation hash covers only outline inputs that change glyph
 pixels. The atlas-content hash is resolved at the final raster scale from that
@@ -375,7 +343,7 @@ for that chain. Replacing a double-byte font therefore leaves a compatible
 single-byte atlas resident and its disk snapshot reusable, and vice versa.
 In FreeType-only mode the effective FreeType code page is always 1252, even if
 `uiEncoding=1-4` remains configured, and every byte uses `singleByte`.
-Runtime glyph, layout, kerning, mask, manifest and atlas-snapshot identities all
+Runtime glyph, layout, mask, manifest and atlas-snapshot identities all
 use that effective code page. Code-page-0 font caches are legacy and are never
 restored. Missing glyph lookup stays inside the selected byte-class fallback
 chain and then tries `U+FFFD`, `?`, and the primary face's `.notdef` glyph.
@@ -454,15 +422,15 @@ ordering difference does not permanently cache a fill-only shape.
 Vanilla UI Plus implements its optional text treatment in
 `Menus/Prefabs/VUI+/outline.xml` by cloning the source text into the named
 `VUI+Shadow` and `VUI+Outline` `TileText` nodes. tNVSE recognizes only those
-two exact proxy names. When the proxy's active FreeType font has any configured
-shadow, glow, or outline effect, its `TileText::MakeNode` hook returns a culled
-empty node before text preparation. The proxy therefore performs no second
-layout, glyph lookup, atlas upload, text geometry construction, or effect pass.
-If no tNVSE effect is enabled, or if the font cannot be resolved reliably, the
-original chained `TileText::MakeNode` path is retained; the unresolved fallback
-still suppresses recursive tNVSE effects. The original sibling and every
-unrelated dark or startup text remain unaffected, and no VUI+ XML file is
-modified.
+two exact proxy names. Every recognized proxy completes the chained
+`TileText::MakeNode` path under recursive-effect suppression so its width and
+height traits remain valid for XML sibling expressions. When the proxy's active
+FreeType font already has a configured shadow, glow, or outline effect, tNVSE
+culls the finished proxy scene node after layout; the proxy therefore remains a
+layout participant without being drawn a second time. If no tNVSE effect is
+enabled, or if the font cannot be resolved reliably, the original proxy remains
+visible with recursive tNVSE effects suppressed. Unrelated dark or startup text
+remains unaffected, and no VUI+ XML file is modified.
 
 ## SDF effects and draw-state isolation
 
@@ -480,8 +448,8 @@ execute global shadow, glow, outline, and fill passes over one `NiTriShape`,
 which prevents a later glyph effect from covering an earlier glyph fill. SDF
 passes use bilinear MIN/MAG sampling at atlas LOD 0 and derivative-based edge
 antialiasing; they never consume the coverage-averaged atlas mip chain.
-SDF draw ranges also preserve fractional pen positions, shaped advances, and
-effect offsets in their quad coordinates. The separate ARGB fallback remains
+SDF draw ranges also preserve fractional pen positions, encoded-unit advances,
+and effect offsets in their quad coordinates. The separate ARGB fallback remains
 snapped to the resolved source-pixel grid and may use trilinear mip sampling.
 Glow keeps
 full intensity through `inner`, then decays to zero at `outer` according to
@@ -647,11 +615,8 @@ transform minify or magnify the atlas. Trilinear sampling is enabled for scaled
 ARGB fallback shapes; SDF ranges retain level-zero derivative-based sampling.
 Neither case creates a resolution- or zoom-specific profile. If atlas creation
 fails, the affected FreeType shape is empty and the detailed build diagnostic
-identifies the failed stage. HarfBuzz
-shaping is limited to horizontal LTR text in the active DBCS path; the
-FreeType-only rich-text topology keeps one Windows-1252 byte per `CharData`,
-uses pair layout without GSUB before wrapping/pagination, and then normalizes
-the resulting positions. Bidirectional layout,
-LCD subpixel rendering, color-font rendering, and
+identifies the failed stage. Ordinary and rich-text layout retain one output
+glyph per encoded single-byte or DBCS unit and do not perform OpenType shaping
+or bidirectional reordering. LCD subpixel rendering, color-font rendering, and
 variable-font axis controls are outside this feature. Invalid or unavailable
 configurations leave that entire font ID on the original `.fnt`/`.tex` renderer.
