@@ -1010,17 +1010,50 @@ namespace fonthook
 			if (line + 1 < selectedEnd)
 				output[selectedLength++] = data->cLineSep;
 		}
+
+		bool substitutedEmptyLine = false;
+		int selectedLineCount = selectedEnd - selectedStart;
+
+		// Match the original PrepText contract: an empty selected result is
+		// represented by one space, so BSStringT retains a valid buffer and
+		// downstream CreateText code receives one measurable placeholder glyph.
+		if (!selectedLength)
+		{
+			data->xLineWidths.RemoveAll();
+
+			EnsureTextScratchSize(output, 2);
+			output[0] = ' ';
+			output[1] = 0;
+			selectedLength = 1;
+
+			const int spaceWidth = static_cast<int>(std::ceil(std::max(
+				0.0f,
+				GetGlyphRenderAdvance(&letters[kSpaceChar]))));
+
+			int mutableWidth = spaceWidth;
+			data->xLineWidths.AddTail(mutableWidth);
+
+			maximumLineWidth = spaceWidth;
+			selectedLineCount = 1;
+			substitutedEmptyLine = true;
+		}
+
 		outputLength = selectedLength;
 		output[outputLength] = 0;
-		const int selectedLineCount = selectedEnd - selectedStart;
+
 		data->xNewText.Set(output.data(), 0);
 		data->iWidth = maximumLineWidth;
-		data->iHeight = static_cast<int>(std::max(0.0f, firstLineHeight + std::max(0, selectedLineCount - 1) * lineHeight));
+		data->iHeight = static_cast<int>(std::max(
+			0.0f,
+			firstLineHeight
+			+ std::max(0, selectedLineCount - 1) * lineHeight));
 		data->iLineStart = 0;
 		data->iLineEnd = selectedLineCount;
-		data->iCharCount = isTerminal && selectedStart == 0
-			? static_cast<int>(ranges[selectedEnd - 1].consumed)
-			: static_cast<int>(outputLength);
+		data->iCharCount = substitutedEmptyLine
+			? 1
+			: (isTerminal && selectedStart == 0
+				? static_cast<int>(ranges[selectedEnd - 1].consumed)
+				: static_cast<int>(outputLength));
 	}
 
 	static void PrepTextImpl(FontEx* font, const char* apOrigString,

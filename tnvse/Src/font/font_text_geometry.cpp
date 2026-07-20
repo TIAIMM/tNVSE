@@ -301,13 +301,14 @@ namespace fonthook
 		builder.ReserveGlyphs(static_cast<size_t>(std::max(0, textData.iCharCount)));
 		if (outputWidth)
 			*outputWidth = textData.iWidth;
+		const char* preparedText = textData.xNewText.c_str();
 
 		BSSimpleList<int>* lineWidthCursor = &textData.xLineWidths;
 		int lineWidth = lineWidthCursor ? lineWidthCursor->m_item : 0;
 		float lineOrigin = aiFlags == 4 ? -static_cast<float>(lineWidth)
 			: aiFlags == 2 ? static_cast<float>(lineWidth) * -0.5f : 0.0f;
 		LogFreeTypeOrdinaryAlignmentOnce(
-			font, aiFlags, lineWidth, lineOrigin, textData.xNewText.pString);
+			font, aiFlags, lineWidth, lineOrigin, preparedText);
 
 		NiPoint3 position;
 		position.x = lineOrigin;
@@ -333,14 +334,14 @@ namespace fonthook
 		int trailingWhitespaceCount = 0;
 		float trailingWhitespaceWidth = 0.0f;
 		int iconIndex = 0;
-		for (int byteIndex = 0; textData.xNewText.pString[byteIndex]; ++byteIndex)
+		for (int byteIndex = 0; preparedText[byteIndex]; ++byteIndex)
 		{
-			const UInt8 current = static_cast<UInt8>(textData.xNewText.pString[byteIndex]);
+			const UInt8 current = static_cast<UInt8>(preparedText[byteIndex]);
 			if (current == static_cast<UInt8>(aiLineBreakChar))
 			{
 				LogFreeTypeLineDrift(font, aiFlags, lineIndex, lineWidth,
 					position.x - lineStartX, trailingWhitespaceCount,
-					trailingWhitespaceWidth, textData.xNewText.pString);
+					trailingWhitespaceWidth, preparedText);
 				++lineIndex;
 				if (lineWidthCursor && lineWidthCursor->m_pkNext)
 					lineWidthCursor = lineWidthCursor->m_pkNext;
@@ -381,7 +382,7 @@ namespace fonthook
 
 			VectorEncodedGlyph glyph;
 			if (!DecodeFreeTypeGlyph(font,
-				&textData.xNewText.pString[byteIndex], glyph))
+				&preparedText[byteIndex], glyph))
 			{
 				continue;
 			}
@@ -402,7 +403,7 @@ namespace fonthook
 		}
 		LogFreeTypeLineDrift(font, aiFlags, lineIndex, lineWidth,
 			position.x - lineStartX, trailingWhitespaceCount,
-			trailingWhitespaceWidth, textData.xNewText.pString);
+			trailingWhitespaceWidth, preparedText);
 
 		NiTriShape* textObject = builder.Finish();
 		if (!textObject)
