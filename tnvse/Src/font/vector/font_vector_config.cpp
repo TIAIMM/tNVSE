@@ -326,8 +326,6 @@ namespace fonthook::vectorfont
 		{
 			UInt64 hash = 1469598103934665603ull;
 			HashBytes(hash, &config.verticalMetrics, sizeof(config.verticalMetrics));
-			HashBytes(hash, &config.unicodeLineBreaking,
-				sizeof(config.unicodeLineBreaking));
 			HashBytes(hash, &config.baseline, sizeof(config.baseline));
 			HashFaceStyles(hash, config, true);
 			return hash;
@@ -387,9 +385,10 @@ namespace fonthook::vectorfont
 				reason = "missing or zero id";
 				return false;
 			}
-			if (node.attribute("shaping") || node.attribute("features"))
+			if (node.attribute("shaping") || node.attribute("features")
+				|| node.attribute("unicodeLineBreaking"))
 			{
-				reason = "shaping and features are no longer supported";
+				reason = "shaping, features, and unicodeLineBreaking are no longer supported";
 				return false;
 			}
 
@@ -474,8 +473,6 @@ namespace fonthook::vectorfont
 				reason = "baseline must be finite and zero or greater";
 				return false;
 			}
-			config.unicodeLineBreaking =
-				node.attribute("unicodeLineBreaking").as_bool(false);
 			if (!ReadFontColor(node, config.fontColor))
 			{
 				reason = "fontColor must be #RRGGBB and fontAlpha must be finite";
@@ -506,11 +503,10 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s unicodeLineBreaking=%d baseline=%.2f fontColor=%d shaderFill=sdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
+				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s baseline=%.2f fontColor=%d shaderFill=sdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
 				config.fontId, static_cast<UInt32>(config.prewarm),
 				config.verticalMetrics == VerticalMetricsMode::Original
 					? "original" : "freetype",
-				config.unicodeLineBreaking ? 1 : 0,
 				config.baseline,
 				config.fontColor.configured,
 				static_cast<UInt32>(config.effectQuality),
@@ -689,4 +685,4 @@ namespace fonthook
 			"tnvse_freetype_font: loaded %u font configurations, rejected %u",
 			static_cast<UInt32>(vectorfont::g_configs.size()), rejected);
 	}
-}
+} // namespace fonthook
