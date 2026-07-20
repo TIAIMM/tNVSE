@@ -48,7 +48,7 @@ function(tnvse_add_dxsdk_target)
   target_include_directories(tnvse_dxsdk INTERFACE
     "${TNVSE_DXSDK_PACKAGE_DIR}/include")
   target_compile_definitions(tnvse_dxsdk INTERFACE HAS_DXSDK_D3DX)
-  target_link_directories(tnvse_dxsdk INTERFACE
+  target_link_directories(tnvse_dxsdk BEFORE INTERFACE
     "$<$<CONFIG:Debug>:${TNVSE_DXSDK_PACKAGE_DIR}/debug/lib/x86>"
     "$<$<NOT:$<CONFIG:Debug>>:${TNVSE_DXSDK_PACKAGE_DIR}/release/lib/x86>")
   target_link_libraries(tnvse_dxsdk INTERFACE
@@ -129,27 +129,6 @@ function(tnvse_add_freetype_target)
     /utf-8 /wd4001 /wd4244 /wd4267)
   tnvse_apply_msvc_defaults(freetype_tnvse)
   set_target_properties(freetype_tnvse PROPERTIES FOLDER "tNVSE/Dependencies")
-endfunction()
-
-function(tnvse_add_harfbuzz_target)
-  set(hb "${TNVSE_THIRD_PARTY_DIR}/harfbuzz")
-  add_library(harfbuzz_tnvse STATIC
-    "${hb}/src/harfbuzz.cc"
-    "${hb}/src/hb.h"
-    "${hb}/src/hb-ft.h")
-  target_include_directories(harfbuzz_tnvse PUBLIC "${hb}/src")
-  target_compile_definitions(harfbuzz_tnvse PRIVATE
-    WIN32 _LIB _CRT_SECURE_NO_WARNINGS HAVE_FREETYPE
-    HB_NO_PRAGMA_GCC_DIAGNOSTIC
-    "$<$<CONFIG:Debug>:_DEBUG>"
-    "$<$<CONFIG:Release>:NDEBUG>")
-  target_compile_options(harfbuzz_tnvse PRIVATE
-    /std:c++latest /bigobj /utf-8
-    /wd4005 /wd4068 /wd4244 /wd4267 /wd4305
-    /wd4456 /wd4457 /wd4458 /wd4459 /wd4996)
-  target_link_libraries(harfbuzz_tnvse PUBLIC freetype_tnvse)
-  tnvse_apply_msvc_defaults(harfbuzz_tnvse)
-  set_target_properties(harfbuzz_tnvse PROPERTIES FOLDER "tNVSE/Dependencies")
 endfunction()
 
 function(tnvse_add_libunibreak_target)
