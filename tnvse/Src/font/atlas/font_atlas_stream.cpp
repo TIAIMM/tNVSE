@@ -2,6 +2,7 @@
 
 #include "font_atlas_internal.h"
 #include "encoding.h"
+#include "load_config.h"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -271,8 +273,6 @@ namespace fonthook::vectorfont
 			header.width = NextPowerOfTwo(std::max<UInt32>(64, page.usedWidth));
 			header.height = NextPowerOfTwo(std::max<UInt32>(64, page.usedHeight));
 			header.cursorX = key.padding;
-			// Stream-packed pages are closed. Runtime additions start on a new page,
-			// so later glyphs cannot invalidate the persisted placement set.
 			header.cursorY = header.height;
 			header.shelfHeight = 0;
 			header.padding = key.padding;
@@ -283,7 +283,7 @@ namespace fonthook::vectorfont
 				AtlasSnapshotStorage::PlacedLevelZeroRects);
 			header.byteClass = static_cast<UInt8>(key.byteClass);
 			header.pageIndex = key.pageIndex;
-			header.pageCount = 1; // Patched atomically after the role is complete.
+			header.pageCount = 1;
 			header.placementCount = static_cast<UInt32>(page.placements.size());
 			header.pixelBytes = page.pixels.size();
 			UInt64 payloadHash = HashBytes(page.placements.data(),
@@ -327,9 +327,7 @@ namespace fonthook::vectorfont
 		{
 			if (!bitmap || !bitmap->cacheId || bitmap->width <= 0 || bitmap->height <= 0
 				|| bitmap->maskType != GlyphMaskType::DistanceField)
-			{
 				return true;
-			}
 			const size_t requiredBytes = static_cast<size_t>(bitmap->width)
 				* static_cast<size_t>(bitmap->height);
 			if (bitmap->alpha.size() < requiredBytes)
@@ -342,9 +340,7 @@ namespace fonthook::vectorfont
 			const UInt32 height = static_cast<UInt32>(bitmap->height);
 			if (maximum < 64 || width + kAtlasPadding * 2 > maximum
 				|| height + kAtlasPadding * 2 > maximum)
-			{
 				return false;
-			}
 
 			for (UInt32 attempt = 0; attempt < 2; ++attempt)
 			{
@@ -362,9 +358,7 @@ namespace fonthook::vectorfont
 				{
 					if (page.placements.empty()
 						|| !WriteCurrentPage(runtime, role, rasterScale))
-					{
 						return false;
-					}
 					continue;
 				}
 
@@ -490,7 +484,6 @@ namespace fonthook::vectorfont
 				page.temporaryPath.clear();
 			}
 
-			// Remove stale tail pages left by an older profile with a larger page count.
 			for (UInt16 pageIndex = pageCount;
 				pageIndex < kMaximumAtlasSnapshotPages; ++pageIndex)
 			{
@@ -533,9 +526,7 @@ namespace fonthook::vectorfont
 				const auto& bitmap = results[index];
 				if (!request.glyph || request.maskType != GlyphMaskType::DistanceField
 					|| !bitmap || bitmap->alpha.empty())
-				{
 					continue;
-				}
 				grouped[static_cast<size_t>(request.glyph->byteClass)].push_back(bitmap);
 			}
 			for (size_t roleIndex = 0; roleIndex < grouped.size(); ++roleIndex)
@@ -598,7 +589,14 @@ namespace fonthook::vectorfont
 			s_streams.erase(&runtime);
 		}
 
-		const bool restored = TryLoadGlyphAtlasSnapshot(runtime, rasterScale);
+		// Snapshot validation intentionally requires the persistent manifest to be
+		// complete. Publish every page first, mark that matching manifest complete,
+		// then restore only through the DEFAULT-pool route. Bulk managed restoration
+		// would retain one full CPU atlas backing per page and defeat the 32-bit
+		// address-space guarantees of the streaming writer.
+		MarkGlyphManifestComplete(runtime, GetRuntimeConfig(runtime).prewarm);
+		const bool restored = !g_bEnableFreeTypeDefaultPoolAtlas
+			|| TryLoadGlyphAtlasSnapshot(runtime, rasterScale);
 		UInt64 pages = 0;
 		UInt64 placements = 0;
 		UInt64 bytes = 0;
@@ -609,11 +607,13 @@ namespace fonthook::vectorfont
 			bytes += role.totalPixelBytes;
 		}
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: streamed prewarm finalized font=%u scale=%.3f pages=%llu placements=%llu packedBytes=%llu restored=%u",
+			"tnvse_freetype_font: streamed prewarm finalized font=%u scale=%.3f pages=%llu placements=%llu packedBytes=%llu restore=%s",
 			completed->fontId, rasterScale,
 			static_cast<unsigned long long>(pages),
 			static_cast<unsigned long long>(placements),
-			static_cast<unsigned long long>(bytes), restored ? 1u : 0u);
+			static_cast<unsigned long long>(bytes),
+			g_bEnableFreeTypeDefaultPoolAtlas
+				? (restored ? "default-pool" : "failed") : "deferred-managed");
 		return restored;
 	}
 
