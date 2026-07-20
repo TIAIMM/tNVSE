@@ -1,6 +1,9 @@
 name: Finalize FreeType layout parity
 
 on:
+  push:
+    branches:
+      - develop_unstable
   pull_request:
     branches:
       - develop_unstable
