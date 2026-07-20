@@ -131,29 +131,6 @@ function(tnvse_add_freetype_target)
   set_target_properties(freetype_tnvse PROPERTIES FOLDER "tNVSE/Dependencies")
 endfunction()
 
-function(tnvse_add_libunibreak_target)
-  set(ub "${TNVSE_THIRD_PARTY_DIR}/libunibreak/src")
-  set(ub_sources
-    "${ub}/linebreak.c"
-    "${ub}/linebreakdata.c"
-    "${ub}/linebreakdef.c"
-    "${ub}/wordbreak.c"
-    "${ub}/graphemebreak.c"
-    "${ub}/eastasianwidthdef.c"
-    "${ub}/emojidef.c"
-    "${ub}/unibreakbase.c"
-    "${ub}/unibreakdef.c")
-  add_library(libunibreak_tnvse STATIC ${ub_sources})
-  target_include_directories(libunibreak_tnvse PUBLIC "${ub}")
-  target_compile_definitions(libunibreak_tnvse PRIVATE
-    WIN32 _LIB
-    "$<$<CONFIG:Debug>:_DEBUG>"
-    "$<$<CONFIG:Release>:NDEBUG>")
-  target_compile_options(libunibreak_tnvse PRIVATE /utf-8 /bigobj)
-  tnvse_apply_msvc_defaults(libunibreak_tnvse)
-  set_target_properties(libunibreak_tnvse PROPERTIES FOLDER "tNVSE/Dependencies")
-endfunction()
-
 function(tnvse_copy_dxsdk_runtime target)
   set(debug_bin "${TNVSE_DXSDK_PACKAGE_DIR}/debug/bin/x86")
   set(release_bin "${TNVSE_DXSDK_PACKAGE_DIR}/release/bin/x86")
