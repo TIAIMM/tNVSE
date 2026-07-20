@@ -48,16 +48,10 @@
       baseline
         Fallout line rise/ascent in pixels. 0 derives or inherits it according
         to verticalMetrics; a positive value overrides it. Default: 0.
-      shaping
-        0 selects FreeType advances/kerning. 1 enables HarfBuzz shaping.
-        Default: 0.
       unicodeLineBreaking
         0 preserves the legacy space, ~, and hard-wrap rules. 1 decodes the
         current font text code page and adds libunibreak UAX #14 opportunities
-        without splitting DBCS units or shaped clusters. Default: 0.
-      features
-        Optional comma-separated HarfBuzz features, for example
-        "kern,liga,clig,calt,ss01=1,-dlig". Requires shaping="1".
+        without splitting DBCS units. Default: 0.
       prewarm
         "none" disables startup prewarming and is the default. "common"
         prepares all valid single-byte units plus the complete GB2312
@@ -132,7 +126,7 @@
     -->
 
     <!-- 1: Glow_Monofonto_Large -->
-    <font id="1" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="0" unicodeLineBreaking="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="1" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" unicodeLineBreaking="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -150,7 +144,7 @@
     </font>
 
     <!-- 2: Monofonto_Large -->
-    <font id="2" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="0" unicodeLineBreaking="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="2" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" unicodeLineBreaking="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -168,7 +162,7 @@
     </font>
 
     <!-- 3: Glow_Monofonto_Medium -->
-    <font id="3" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="0" unicodeLineBreaking="1" features="" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="3" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" unicodeLineBreaking="1" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="26" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -186,7 +180,7 @@
     </font>
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
-    <font id="4" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="0" unicodeLineBreaking="1" features="" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="4" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" unicodeLineBreaking="1" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="32" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -204,7 +198,7 @@
     </font>
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
-    <font id="5" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="0" unicodeLineBreaking="1" features="" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="5" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" unicodeLineBreaking="1" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="32" tracking="0" fixedWidth="17" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -222,7 +216,7 @@
     </font>
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
-    <font id="6" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="0" unicodeLineBreaking="1" features="" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="6" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" unicodeLineBreaking="1" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="30" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -240,7 +234,7 @@
     </font>
 
     <!-- 7: Baked-in_Monofonto_Large -->
-    <font id="7" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="0" unicodeLineBreaking="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="7" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" unicodeLineBreaking="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -258,7 +252,7 @@
     </font>
 
     <!-- 8: Glow_Futura_Caps_Large -->
-    <font id="8" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="0" unicodeLineBreaking="1" features="" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="8" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" unicodeLineBreaking="1" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="52" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -275,8 +269,8 @@
       <shadow enabled="1" x="2" y="2.5" blur="0" power="1.5" includeGlow="1" includeOutline="1" colorMode="fixed" color="#000000" alpha="0.75"/>
     </font>
 
-	<!-- 42: Monofonto_STn (same as Monofonto_Large) -->
-    <font id="42" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" shaping="0" unicodeLineBreaking="1" features="" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <!-- 42: Monofonto_STn (same as Monofonto_Large) -->
+    <font id="42" effectQuality="balanced" prewarm="codepage" verticalMetrics="original" unicodeLineBreaking="1" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-1" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
