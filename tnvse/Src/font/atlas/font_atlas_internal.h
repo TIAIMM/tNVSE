@@ -82,6 +82,22 @@ namespace fonthook::vectorfont
 		UInt32 height = 0;
 	};
 
+	struct AtlasGlyphPlacement
+	{
+		uintptr_t atlasIdentity = 0;
+		UInt32 atlasGeneration = 0;
+		UInt32 atlasWidth = 0;
+		UInt32 atlasHeight = 0;
+		UInt16 pageIndex = std::numeric_limits<UInt16>::max();
+		UInt16 reserved = 0;
+		float inverseWidth = 0.0f;
+		float inverseHeight = 0.0f;
+		float u0 = 0.0f;
+		float v0 = 0.0f;
+		float u1 = 0.0f;
+		float v1 = 0.0f;
+	};
+
 	struct CompactAtlasSnapshot;
 	inline constexpr UInt32 kNoSnapshotPlacement = std::numeric_limits<UInt32>::max();
 
@@ -91,6 +107,10 @@ namespace fonthook::vectorfont
 		AtlasRect rect;
 		std::shared_ptr<const GlyphBitmap> bitmap;
 		UInt32 snapshotPlacementIndex = kNoSnapshotPlacement;
+		// Cache the page and normalized texture coordinates beside the glyph rect.
+		// Text compilation copies this immutable value into PendingQuad, eliminating
+		// its former per-quad page search, rect lookup, and UV division.
+		AtlasGlyphPlacement placement;
 	};
 
 	struct AtlasResource
@@ -120,6 +140,43 @@ namespace fonthook::vectorfont
 		std::vector<AtlasGlyphRecord> glyphs;
 		std::shared_ptr<const CompactAtlasSnapshot> compactSnapshot;
 	};
+
+	inline bool IsAtlasGlyphPlacementCurrent(const AtlasGlyphPlacement& placement,
+		const AtlasResource& atlas, UInt16 pageIndex)
+	{
+		return placement.atlasIdentity == reinterpret_cast<uintptr_t>(&atlas)
+			&& placement.atlasGeneration == atlas.generation
+			&& placement.atlasWidth == atlas.width
+			&& placement.atlasHeight == atlas.height
+			&& placement.pageIndex == pageIndex
+			&& placement.inverseWidth > 0.0f
+			&& placement.inverseHeight > 0.0f;
+	}
+
+	inline bool CacheAtlasGlyphPlacement(AtlasGlyphRecord& glyph,
+		const AtlasResource& atlas, UInt16 pageIndex)
+	{
+		if (!atlas.width || !atlas.height || !glyph.rect.width || !glyph.rect.height)
+			return false;
+		if (IsAtlasGlyphPlacementCurrent(glyph.placement, atlas, pageIndex))
+			return true;
+		AtlasGlyphPlacement placement;
+		placement.atlasIdentity = reinterpret_cast<uintptr_t>(&atlas);
+		placement.atlasGeneration = atlas.generation;
+		placement.atlasWidth = atlas.width;
+		placement.atlasHeight = atlas.height;
+		placement.pageIndex = pageIndex;
+		placement.inverseWidth = 1.0f / static_cast<float>(atlas.width);
+		placement.inverseHeight = 1.0f / static_cast<float>(atlas.height);
+		placement.u0 = static_cast<float>(glyph.rect.x) * placement.inverseWidth;
+		placement.v0 = static_cast<float>(glyph.rect.y) * placement.inverseHeight;
+		placement.u1 = static_cast<float>(glyph.rect.x + glyph.rect.width)
+			* placement.inverseWidth;
+		placement.v1 = static_cast<float>(glyph.rect.y + glyph.rect.height)
+			* placement.inverseHeight;
+		glyph.placement = placement;
+		return true;
+	}
 
 	constexpr UInt32 kAtlasSnapshotVersion = 10;
 	// This identity-only revision invalidates the old partial codepage snapshot
@@ -255,6 +312,7 @@ namespace fonthook::vectorfont
 		bool usesSdf = false;
 		bool usesLiveTileRgb = true;
 		UInt16 atlasPage = 0;
+		AtlasGlyphPlacement atlasPlacement;
 	};
 
 	struct AtlasProfileKey
