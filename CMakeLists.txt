@@ -44,7 +44,6 @@ tnvse_add_dxsdk_target()
 tnvse_add_vcltl_target()
 tnvse_add_commonlib_target()
 tnvse_add_freetype_target()
-tnvse_add_libunibreak_target()
 tnvse_add_shader_target(TNVSE_SHADER_OUTPUTS)
 
 set(TNVSE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src")
@@ -121,7 +120,6 @@ target_compile_options(tnvse PRIVATE
 target_link_libraries(tnvse PRIVATE
   commonlib_nv
   freetype_tnvse
-  libunibreak_tnvse
   tnvse::dxsdk
   dxguid
   imm32
