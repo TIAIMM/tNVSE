@@ -1,0 +1,129 @@
+name: Run FreeType layout repair
+
+on:
+  pull_request:
+    branches:
+      - develop_unstable
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop_unstable
+          fetch-depth: 0
+
+      - name: Apply final layout parity corrections
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected one match, found {count}')
+              file.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          layout = 'tnvse/Src/font/font_text_layout.cpp'
+          geometry = 'tnvse/Src/font/font_text_geometry.cpp'
+
+          replace_once(layout,
+              '''\t\tconst int requestedLineStart = std::max(0, data->iLineStart);
+\t\tconst int requestedLineEnd = data->iLineEnd;
+\t\tconst int requestedHeight = data->iHeight;
+''',
+              '''\t\tconst int requestedLineStart = std::max(0, data->iLineStart);
+\t\tconst int requestedLineEnd = data->iLineEnd;
+''')
+          replace_once(layout,
+              '''\t\tif (requestedHeight < kSentinelMax && selectedEnd > selectedStart)
+\t\t{
+\t\t\tint visibleLines = 1;
+\t\t\tif (lineHeight > 0.0f && requestedHeight > firstLineHeight)
+\t\t\t{
+\t\t\t\tvisibleLines += static_cast<int>(std::floor(
+\t\t\t\t\t(static_cast<float>(requestedHeight) - firstLineHeight)
+\t\t\t\t\t/ lineHeight));
+\t\t\t}
+\t\t\tselectedEnd = std::min(selectedEnd, selectedStart + std::max(1, visibleLines));
+\t\t}
+
+''', '')
+          replace_once(layout,
+              '''\t\t\tdata->iHeight = static_cast<int>(std::ceil(std::max(0.0f, firstLineHeight)));
+''',
+              '''\t\t\tdata->iHeight = static_cast<int>(std::max(0.0f, firstLineHeight));
+''')
+          replace_once(layout,
+              '''\t\tdata->iHeight = static_cast<int>(std::ceil(std::max(0.0f,
+\t\t\tfirstLineHeight + std::max(0, selectedLineCount - 1) * lineHeight)));
+''',
+              '''\t\tdata->iHeight = static_cast<int>(std::max(0.0f,
+\t\t\tfirstLineHeight + std::max(0, selectedLineCount - 1) * lineHeight));
+''')
+          replace_once(layout,
+              '''\t\tint wrapWidth = 1;
+\t\tif (!std::isfinite(maxWrapWidth)
+\t\t\t|| maxWrapWidth >= static_cast<float>(std::numeric_limits<int>::max()))
+\t\t{
+\t\t\twrapWidth = std::numeric_limits<int>::max();
+\t\t}
+\t\telse if (maxWrapWidth > 1.0f)
+\t\t{
+\t\t\twrapWidth = static_cast<int>(std::floor(maxWrapWidth));
+\t\t}
+''',
+              '''\t\tint wrapWidth = std::numeric_limits<int>::max();
+\t\tif (std::isfinite(maxWrapWidth) && maxWrapWidth > 0.0f
+\t\t\t&& maxWrapWidth < static_cast<float>(std::numeric_limits<int>::max()))
+\t\t{
+\t\t\twrapWidth = std::max(1, static_cast<int>(std::floor(maxWrapWidth)));
+\t\t}
+''')
+          replace_once(geometry,
+              '''\t\tif (!g_bEnableMultibyteFontHook && freeTypeActive)
+\t\t{
+\t\t\ttextXOffset = GetFreeTypeLineOffset(this, apTextString->pString,
+''',
+              '''\t\tif (freeTypeActive)
+\t\t{
+\t\t\ttextXOffset = GetFreeTypeLineOffset(this, apTextString->pString,
+''')
+          replace_once(geometry,
+              '''\t\t\t\t\tif (!g_bEnableMultibyteFontHook)
+\t\t\t\t\t{
+\t\t\t\t\t\tnextLineX = GetFreeTypeLineOffset(this,
+''',
+              '''\t\t\t\t\tif (freeTypeActive)
+\t\t\t\t\t{
+\t\t\t\t\t\tnextLineX = GetFreeTypeLineOffset(this,
+''')
+
+          layout_text = Path(layout).read_text(encoding='utf-8')
+          geometry_text = Path(geometry).read_text(encoding='utf-8')
+          assert 'requestedHeight' not in layout_text[layout_text.index('PrepDirectFreeTypeText'):layout_text.index('static void PrepTextImpl')]
+          assert 'int wrapWidth = std::numeric_limits<int>::max();' in layout_text
+          assert geometry_text.count('if (freeTypeActive)') >= 3
+          PY
+          git diff --check
+
+      - name: Commit final layout parity corrections
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/finalize-freetype-layout.yml
+          rm -f .github/workflows/run-repair-freetype-layout.yml
+          git add tnvse/Src/font/font_text_layout.cpp \
+                  tnvse/Src/font/font_text_geometry.cpp \
+                  .github/workflows/finalize-freetype-layout.yml \
+                  .github/workflows/run-repair-freetype-layout.yml
+          git commit -m "Finalize FreeType layout parity"
+          git push origin HEAD:develop_unstable
