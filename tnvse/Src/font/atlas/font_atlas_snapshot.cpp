@@ -884,7 +884,9 @@ namespace fonthook::vectorfont
 				if (!placementList[index].cacheId || !rect.width || !rect.height
 					|| rect.x > header.width || rect.width > header.width - rect.x
 					|| rect.y > header.height || rect.height > header.height - rect.y
-					|| !IsValidSnapshotPlacement(placementList[index]))
+					|| !IsValidSnapshotPlacement(placementList[index])
+					|| !IsValidAtlasSnapshotGlyphPlacement(placementList[index],
+						header.width, header.height, header.pageIndex))
 					return false;
 				resource->glyphs.push_back({ placementList[index].cacheId,
 					rect, nullptr, index });
@@ -968,6 +970,17 @@ namespace fonthook::vectorfont
 					+ compactSnapshot->sourcePath.capacity() * sizeof(wchar_t));
 			RefreshAtlasResourceCpuMemory(*resource);
 			resource->generation = 1;
+			for (AtlasGlyphRecord& glyph : resource->glyphs)
+			{
+				if (glyph.snapshotPlacementIndex >= compactSnapshot->placements.size()
+					|| !RestoreAtlasSnapshotGlyphPlacement(
+						compactSnapshot->placements[glyph.snapshotPlacementIndex],
+						*resource, header.pageIndex, header.pageIndex,
+						glyph.placement))
+				{
+					return false;
+				}
+			}
 			totalBytes += header.pixelBytes;
 			totalPlacements += header.placementCount;
 			pages.push_back({ pageKey, resource });
@@ -1163,6 +1176,12 @@ namespace fonthook::vectorfont
 				page.header.pageCount = static_cast<UInt16>(pages.size());
 				page.header.placementCount = static_cast<UInt32>(page.placements.size());
 				page.header.pixelBytes = page.pixels.size();
+				for (AtlasSnapshotPlacement& placement : page.placements)
+				{
+					if (!CacheAtlasSnapshotGlyphPlacement(placement,
+						page.header.width, page.header.height, page.header.pageIndex))
+						return false;
+				}
 				UInt64 payloadHash = page.placements.empty() ? 1469598103934665603ull
 					: HashAtlasBytes(page.placements.data(),
 						page.placements.size() * sizeof(page.placements[0]));
