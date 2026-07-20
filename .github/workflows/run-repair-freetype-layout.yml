@@ -1,0 +1,50 @@
+name: Run FreeType layout repair
+
+on:
+  pull_request:
+    branches:
+      - develop_unstable
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop_unstable
+          fetch-depth: 0
+
+      - name: Extract and apply repair
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/repair-freetype-layout.yml').read_text(encoding='utf-8')
+          begin = workflow.index("          python3 <<'PY'\n") + len("          python3 <<'PY'\n")
+          end = workflow.index("\n          PY\n", begin)
+          lines = workflow[begin:end].splitlines()
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          Path('/tmp/repair_freetype_layout.py').write_text(script, encoding='utf-8')
+          PY
+          python3 /tmp/repair_freetype_layout.py
+          git diff --check
+
+      - name: Commit repaired layout
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/repair-freetype-layout.yml
+          rm -f .github/workflows/run-repair-freetype-layout.yml
+          git add tnvse/Src/font/font_text_layout.cpp \
+                  tnvse/Src/font/font_manager.cpp \
+                  tnvse/Src/font/font_text_geometry.cpp \
+                  tnvse/Src/font/font_engine.h \
+                  .github/workflows/repair-freetype-layout.yml \
+                  .github/workflows/run-repair-freetype-layout.yml
+          git commit -m "Restore FreeType native layout and wrapping"
+          git push origin HEAD:develop_unstable
