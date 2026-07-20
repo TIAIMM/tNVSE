@@ -283,6 +283,7 @@ namespace fonthook::vectorfont
 				quad.baseColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 				quad.layerColorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 				quad.usesLiveTileRgb = true;
+				quad.atlasPlacement = {};
 			}
 		}
 
@@ -648,6 +649,14 @@ namespace fonthook::vectorfont
 				add(&quad.expansionPixels, sizeof(quad.expansionPixels));
 				add(&quad.usesSdf, sizeof(quad.usesSdf));
 				add(&quad.atlasPage, sizeof(quad.atlasPage));
+				add(&quad.atlasPlacement.atlasIdentity,
+					sizeof(quad.atlasPlacement.atlasIdentity));
+				add(&quad.atlasPlacement.atlasGeneration,
+					sizeof(quad.atlasPlacement.atlasGeneration));
+				add(&quad.atlasPlacement.u0, sizeof(quad.atlasPlacement.u0));
+				add(&quad.atlasPlacement.v0, sizeof(quad.atlasPlacement.v0));
+				add(&quad.atlasPlacement.u1, sizeof(quad.atlasPlacement.u1));
+				add(&quad.atlasPlacement.v1, sizeof(quad.atlasPlacement.v1));
 			}
 			return { hash, static_cast<UInt32>(quads.size()) };
 		}
@@ -796,10 +805,11 @@ namespace fonthook::vectorfont
 				if (quad.atlasPage >= atlases.size() || !atlases[quad.atlasPage])
 					return nullptr;
 				const AtlasResource& atlas = *atlases[quad.atlasPage];
-				const AtlasGlyphRecord* glyph = FindAtlasGlyph(atlas, quad.bitmap->cacheId);
-				if (!glyph)
+				if (!IsAtlasGlyphPlacementCurrent(
+					quad.atlasPlacement, atlas, quad.atlasPage))
+				{
 					return nullptr;
-				const AtlasRect& rect = glyph->rect;
+				}
 				const float scale = quad.rasterScale;
 				const float expansion = static_cast<float>(quad.expansionPixels);
 				const float logicalX = quad.pen.x - origin.x + quad.offsetX;
@@ -845,12 +855,14 @@ namespace fonthook::vectorfont
 				// depth can make an effect occlude the fill (or another Tile) on Pip-Boy
 				// render targets whose UI pass has depth testing enabled.
 				const float depth = quad.pen.y - origin.y;
-				const float u0 = (static_cast<float>(rect.x) - expansion) / atlas.width;
-				const float v0 = (static_cast<float>(rect.y) - expansion) / atlas.height;
-				const float u1 = (static_cast<float>(rect.x + rect.width) + expansion)
-					/ atlas.width;
-				const float v1 = (static_cast<float>(rect.y + rect.height) + expansion)
-					/ atlas.height;
+				const float u0 = quad.atlasPlacement.u0
+					- expansion * quad.atlasPlacement.inverseWidth;
+				const float v0 = quad.atlasPlacement.v0
+					- expansion * quad.atlasPlacement.inverseHeight;
+				const float u1 = quad.atlasPlacement.u1
+					+ expansion * quad.atlasPlacement.inverseWidth;
+				const float v1 = quad.atlasPlacement.v1
+					+ expansion * quad.atlasPlacement.inverseHeight;
 				const UInt32 base = index * 4;
 				const UInt32 packedColor = PackNativeBaseColor(quad.baseColor);
 				const std::array<NiPoint3, 4> positions = {{
@@ -1110,17 +1122,22 @@ namespace fonthook::vectorfont
 				activeQuads = &bakedQuads;
 			}
 
+			struct ResolvedPlacement
+			{
+				UInt16 page = std::numeric_limits<UInt16>::max();
+				AtlasGlyphPlacement placement;
+			};
 			thread_local std::array<std::unordered_map<UInt64,
 				std::shared_ptr<const GlyphBitmap>>, 2> roleUnique;
 			thread_local std::array<std::vector<std::shared_ptr<const GlyphBitmap>>, 2>
 				roleBitmaps;
-			thread_local std::array<std::unordered_map<UInt64, UInt16>, 2>
-				placementPages;
+			thread_local std::array<std::unordered_map<UInt64, ResolvedPlacement>, 2>
+				placementRecords;
 			for (size_t roleIndex = 0; roleIndex < roleUnique.size(); ++roleIndex)
 			{
 				roleUnique[roleIndex].clear();
 				roleBitmaps[roleIndex].clear();
-				placementPages[roleIndex].clear();
+				placementRecords[roleIndex].clear();
 			}
 			for (const PendingQuad& quad : *activeQuads)
 			{
@@ -1161,8 +1178,11 @@ namespace fonthook::vectorfont
 						for (size_t bitmapIndex = 0; bitmapIndex < bitmaps.size(); ++bitmapIndex)
 						{
 							if (bitmaps[bitmapIndex]
-								&& FindAtlasGlyph(*roleAtlases[0], bitmaps[bitmapIndex]->cacheId))
+								&& FindAtlasGlyph(*roleAtlases[0],
+									bitmaps[bitmapIndex]->cacheId))
+							{
 								bitmapPageOrdinals[bitmapIndex] = 0;
+							}
 						}
 					}
 				}
@@ -1174,11 +1194,18 @@ namespace fonthook::vectorfont
 				for (size_t bitmapIndex = 0; bitmapIndex < bitmaps.size(); ++bitmapIndex)
 				{
 					const UInt16 page = bitmapPageOrdinals[bitmapIndex];
-					if (page < roleAtlases.size())
+					if (page >= roleAtlases.size() || !bitmaps[bitmapIndex])
+						continue;
+					const UInt16 resolvedPage = static_cast<UInt16>(rolePageBase + page);
+					AtlasGlyphRecord* glyph = FindAtlasGlyph(*roleAtlases[page],
+						bitmaps[bitmapIndex]->cacheId);
+					if (!glyph || !CacheAtlasGlyphPlacement(
+						*glyph, *roleAtlases[page], resolvedPage))
 					{
-						placementPages[roleIndex].emplace(bitmaps[bitmapIndex]->cacheId,
-							static_cast<UInt16>(rolePageBase + page));
+						return nullptr;
 					}
+					placementRecords[roleIndex].emplace(bitmaps[bitmapIndex]->cacheId,
+						ResolvedPlacement{ resolvedPage, glyph->placement });
 				}
 			}
 			if (availableAtlases.empty())
@@ -1212,11 +1239,16 @@ namespace fonthook::vectorfont
 				availableAtlases.assign(1, collapsed);
 				for (size_t roleIndex = 0; roleIndex < roleBitmaps.size(); ++roleIndex)
 				{
-					placementPages[roleIndex].clear();
+					placementRecords[roleIndex].clear();
 					for (const auto& bitmap : roleBitmaps[roleIndex])
 					{
-						if (bitmap && FindAtlasGlyph(*collapsed, bitmap->cacheId))
-							placementPages[roleIndex][bitmap->cacheId] = 0;
+						if (!bitmap)
+							continue;
+						AtlasGlyphRecord* glyph = FindAtlasGlyph(*collapsed, bitmap->cacheId);
+						if (!glyph || !CacheAtlasGlyphPlacement(*glyph, *collapsed, 0))
+							return nullptr;
+						placementRecords[roleIndex][bitmap->cacheId] =
+							ResolvedPlacement{ 0, glyph->placement };
 					}
 				}
 			}
@@ -1228,12 +1260,12 @@ namespace fonthook::vectorfont
 				std::numeric_limits<UInt16>::max());
 			for (PendingQuad& quad : pagedQuads)
 			{
-				const auto& rolePlacements = placementPages[
+				const auto& rolePlacements = placementRecords[
 					static_cast<size_t>(quad.byteClass)];
 				const auto placement = rolePlacements.find(quad.bitmap->cacheId);
 				if (placement == rolePlacements.end())
 					return nullptr;
-				const UInt16 page = placement->second;
+				const UInt16 page = placement->second.page;
 				UInt16& compactPage = compactPageIndices[page];
 				if (compactPage == std::numeric_limits<UInt16>::max())
 				{
@@ -1241,6 +1273,8 @@ namespace fonthook::vectorfont
 					outAtlases.push_back(availableAtlases[page]);
 				}
 				quad.atlasPage = compactPage;
+				quad.atlasPlacement = placement->second.placement;
+				quad.atlasPlacement.pageIndex = compactPage;
 			}
 			const auto batchOrder = [](const PendingQuad& lhs, const PendingQuad& rhs)
 			{
