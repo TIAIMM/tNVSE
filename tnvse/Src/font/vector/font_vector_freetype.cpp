@@ -15,11 +15,20 @@ namespace fonthook
 		FreeTypeLayoutRun& arLayout, bool abAllowShaping)
 	{
 		arLayout = {};
-		if (!apFont || !apText || !auiLength)
-			return false;
-		vectorfont::RuntimeFont* runtime = vectorfont::FindActiveRuntime(apFont);
-		return runtime && vectorfont::LayoutRuntimeRun(
-			*runtime, apText, auiLength, abAllowShaping, arLayout);
+		(void)apFont;
+		(void)apText;
+		(void)auiLength;
+		(void)abAllowShaping;
+
+		// PrepText used this non-final entry to build a complete temporary layout
+		// run solely to recover per-encoded-unit advances. HarfBuzz, kerning, and
+		// multi-unit clusters are no longer part of the layout contract, while the
+		// activated font's FontLetter tables already contain the final FreeType
+		// advance for every single-byte unit and every materialized DBCS unit.
+		// Returning false deliberately selects the existing direct FontLetter
+		// fallback in PrepText, avoiding the run hash, global layout-cache lock,
+		// GlyphStorage allocation, and second full encoded-text traversal.
+		return false;
 	}
 
 	bool LayoutFreeTypeFinalRun(Font* apFont, const char* apText, size_t auiLength,
