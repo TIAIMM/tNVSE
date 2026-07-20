@@ -541,62 +541,23 @@ namespace fonthook
 				return;
 			Font* font = nullptr;
 			GetExtraGlyphsForChar(character, &font);
-			if (!font || !IsFreeTypeFontActive(font))
+			if (!font || !font->pFontData || !IsFreeTypeFontActive(font))
 				return;
-			char currentBytes[3] = {};
-			size_t currentLength = 0;
-			if (!EncodeRichTextChar(character, currentBytes, currentLength))
-				return;
-			FreeTypeLayoutRun currentLayout;
-			if (!LayoutFreeTypeRun(font, currentBytes, currentLength,
-				currentLayout, false))
-			{
-				return;
-			}
 
-			float pairKerning = 0.0f;
-			FontManager::CharData* previous = line->xChars.m_pkTail
-				? line->xChars.m_pkTail->m_element : nullptr;
-			Font* previousFont = nullptr;
-			GetExtraGlyphsForChar(previous, &previousFont);
-			if (previous && previousFont == font
-				&& previous->iJustification == character->iJustification
-				&& std::memcmp(&previous->xColor, &character->xColor, sizeof(NiColorA)) == 0)
-			{
-				char previousBytes[3] = {};
-				size_t previousLength = 0;
-				if (EncodeRichTextChar(previous, previousBytes, previousLength))
-				{
-					FreeTypeLayoutRun previousLayout;
-					std::array<char, 5> pairBytes = {};
-					std::memcpy(pairBytes.data(), previousBytes, previousLength);
-					std::memcpy(pairBytes.data() + previousLength,
-						currentBytes, currentLength);
-					FreeTypeLayoutRun pairLayout;
-					if (LayoutFreeTypeRun(font, previousBytes, previousLength,
-						previousLayout, false)
-						&& LayoutFreeTypeRun(font, pairBytes.data(),
-							previousLength + currentLength, pairLayout, false))
-					{
-						pairKerning = pairLayout.advance
-							- previousLayout.advance - currentLayout.advance;
-					}
-				}
-			}
-			double exactLineEnd = static_cast<double>(line->iWidth)
-				+ currentLayout.advance + pairKerning;
-			const bool startsNewLine = line->iWidth > 0 && line->iPageWidth > 0
-				&& exactLineEnd > line->iPageWidth;
-			if (startsNewLine)
-			{
-				character->iWidth = static_cast<int>(std::ceil(
-					std::max(0.0f, currentLayout.advance)));
-				character->iLeadingEdge = 0;
+			FontLetter* glyph = nullptr;
+			UInt32 dbcsCode = 0;
+			if (TryGetRichTextCharDbcs(character, dbcsCode))
+				glyph = LookupRichTextDbcsGlyph(character, dbcsCode, &font);
+			else if (character->cChar >= 0x20 && character->cChar != kDelChar)
+				glyph = &font->pFontData->pFontLetters[character->cChar];
+			if (!glyph)
 				return;
-			}
-			const int quantizedEnd = static_cast<int>(std::ceil(std::max(0.0, exactLineEnd)));
-			character->iWidth = std::max(0, quantizedEnd - line->iWidth);
-			character->iLeadingEdge = static_cast<int>(std::floor(pairKerning));
+
+			// No shaping or pair kerning remains in the FreeType contract. Feed the
+			// original TextLine topology code the same direct FontLetter advance used
+			// by PrepText and final geometry before it makes a wrapping decision.
+			character->iWidth = GetGlyphCharDataLayoutWidth(glyph);
+			character->iLeadingEdge = 0;
 		}
 
 		void FinalizeFreeTypeRichTextLayout(FontManager::TextDoc* doc,
@@ -617,83 +578,39 @@ namespace fonthook
 					FontManager::TextLine* line = lineNode->m_element;
 					if (!line)
 						continue;
-					int quantizedWidth = 0;
-					FontManager::CharData* previous = nullptr;
-					Font* previousFont = nullptr;
-					float previousAdvance = 0.0f;
+					int lineWidth = 0;
 					for (auto* charNode = line->xChars.m_pkHead; charNode;
 						charNode = charNode->m_pkNext)
 					{
 						FontManager::CharData* character = charNode->m_element;
 						if (!character)
 							continue;
-						Font* font = nullptr;
-						GetExtraGlyphsForChar(character, &font);
-						const bool ordinaryGlyph = !HasRichTextFilename(character)
-							&& character->cChar >= 0x20
-							&& character->cChar != kDelChar
-							&& character->cChar != 1;
-						if (!ordinaryGlyph || !font || !IsFreeTypeFontActive(font))
+						if (!HasRichTextFilename(character))
 						{
-							character->iX = HasRichTextFilename(character)
-								? quantizedWidth
-								: quantizedWidth + character->iLeadingEdge;
-							quantizedWidth += std::max(0, character->iWidth);
-							previous = nullptr;
-							previousFont = nullptr;
-							previousAdvance = 0.0f;
-							continue;
-						}
-
-						const char currentBytes[2] = {
-							static_cast<char>(character->cChar), 0
-						};
-						FreeTypeLayoutRun currentLayout;
-						if (!LayoutFreeTypeRun(font, currentBytes, 1,
-							currentLayout, false))
-						{
-							character->iX = quantizedWidth + character->iLeadingEdge;
-							quantizedWidth += std::max(0, character->iWidth);
-							previous = nullptr;
-							previousFont = nullptr;
-							previousAdvance = 0.0f;
-							continue;
-						}
-
-						float pairAdjustment = 0.0f;
-						if (previous && previousFont == font
-							&& previous->iJustification == character->iJustification
-							&& std::memcmp(&previous->xColor, &character->xColor,
-								sizeof(NiColorA)) == 0)
-						{
-							const char pairBytes[3] = {
-								static_cast<char>(previous->cChar),
-								static_cast<char>(character->cChar), 0
-							};
-							FreeTypeLayoutRun pairLayout;
-							if (LayoutFreeTypeRun(font, pairBytes, 2,
-								pairLayout, false))
+							Font* font = nullptr;
+							GetExtraGlyphsForChar(character, &font);
+							if (font && font->pFontData && IsFreeTypeFontActive(font))
 							{
-								pairAdjustment = pairLayout.advance
-									- previousAdvance - currentLayout.advance;
+								FontLetter* glyph = nullptr;
+								UInt32 dbcsCode = 0;
+								if (TryGetRichTextCharDbcs(character, dbcsCode))
+									glyph = LookupRichTextDbcsGlyph(character, dbcsCode, &font);
+								else if (character->cChar >= 0x20
+									&& character->cChar != kDelChar && character->cChar != 1)
+									glyph = &font->pFontData->pFontLetters[character->cChar];
+								if (glyph)
+								{
+									character->iWidth = GetGlyphCharDataLayoutWidth(glyph);
+									character->iLeadingEdge = 0;
+								}
 							}
 						}
-
-						const double exactEnd = static_cast<double>(quantizedWidth)
-							+ currentLayout.advance + pairAdjustment;
-						const int quantizedEnd = static_cast<int>(std::ceil(
-							std::max(0.0, exactEnd)));
-						character->iLeadingEdge = static_cast<int>(
-							std::floor(pairAdjustment));
-						character->iX = quantizedWidth + character->iLeadingEdge;
-						character->iWidth = std::max(0, quantizedEnd - quantizedWidth);
-						quantizedWidth += character->iWidth;
-						previous = character;
-						previousFont = font;
-						previousAdvance = currentLayout.advance;
+						character->iX = HasRichTextFilename(character)
+							? lineWidth : lineWidth + character->iLeadingEdge;
+						lineWidth += std::max(0, character->iWidth);
 					}
-					line->iWidth = quantizedWidth;
-					widestLine = std::max(widestLine, quantizedWidth);
+					line->iWidth = lineWidth;
+					widestLine = std::max(widestLine, lineWidth);
 				}
 				page->iWidth = widestLine;
 			}
@@ -1064,87 +981,24 @@ namespace fonthook
 
 		if (IsFreeTypeFontActive(activeFont))
 		{
-			std::vector<UInt8> unicodeBreaks;
-			BuildFreeTypeUnicodeLineBreakMap(activeFont, srcString,
-				static_cast<size_t>(sourceStringLength), unicodeBreaks);
-			for (int offset = startCharIndex; offset < sourceStringLength;)
+			const UInt32 sourceLength = static_cast<UInt32>(sourceStringLength);
+			const UInt32 requestedStart = std::min(startCharIndex, sourceLength);
+			UInt32 alignedStart = 0;
+			while (alignedStart < requestedStart)
 			{
-				const UInt8 current = static_cast<UInt8>(srcString[offset]);
-				if (current == '\t')
-				{
-					wrapState.AdvanceTab(75);
-					++offset;
-					continue;
-				}
-				if (current == '\n')
-				{
-					finishLine(static_cast<float>(wrapState.currentLineWidth));
-					wrapState.ResetLine();
-					++offset;
-					continue;
-				}
-				if (current == '~')
-				{
-					wrapState.MarkSoftWrap();
-					++offset;
-					continue;
-				}
-				if (current < 0x20 || current == 0x7F)
-				{
-					++offset;
-					continue;
-				}
-
-				int runEnd = offset;
-				while (runEnd < sourceStringLength)
-				{
-					const UInt8 value = static_cast<UInt8>(srcString[runEnd]);
-					if (value < 0x20 || value == 0x7F || value == '~')
-						break;
-					UInt32 dbcsCode = 0;
-					runEnd += TryDecodeDoubleByte(srcString + runEnd, dbcsCode) ? 2 : 1;
-				}
-				FreeTypeLayoutRun layout;
-				if (runEnd > offset && LayoutFreeTypeRun(activeFont,
-					srcString + offset, runEnd - offset, layout, true))
-				{
-					UInt32 cluster = std::numeric_limits<UInt32>::max();
-					double clusterAdvance = 0.0;
-					auto flushCluster = [&](UInt32 clusterEnd)
-					{
-						if (cluster == std::numeric_limits<UInt32>::max())
-							return;
-						const LayoutWrapResult result = wrapState.AddUnit(clusterAdvance, maxWrapWidth);
-						if (result.kind != LayoutWrapKind::None)
-							finishLine(static_cast<float>(result.completedWidth));
-						const size_t breakByte = static_cast<size_t>(offset)
-							+ clusterEnd - 1;
-						if (clusterEnd && breakByte < unicodeBreaks.size()
-							&& unicodeBreaks[breakByte])
-						{
-							wrapState.MarkSoftWrap();
-						}
-					};
-					for (const FreeTypeLayoutGlyph& glyph : *layout.glyphs)
-					{
-						if (cluster != glyph.cluster)
-						{
-							flushCluster(glyph.cluster);
-							cluster = glyph.cluster;
-							clusterAdvance = 0.0;
-						}
-						clusterAdvance += glyph.xAdvance;
-					}
-					flushCluster(static_cast<UInt32>(runEnd - offset));
-				}
-				offset = runEnd > offset ? runEnd : offset + 1;
+				UInt32 dbcsCode = 0;
+				const UInt32 unitLength = alignedStart + 1 < sourceLength
+					&& TryDecodeDoubleByte(srcString + alignedStart, dbcsCode) ? 2u : 1u;
+				if (alignedStart + unitLength > requestedStart)
+					break;
+				alignedStart += unitLength;
 			}
-
-			const double finalWidth = std::max(wrapState.currentLineWidth,
-				static_cast<double>(StringDimensions.x));
-			outDimensions->x = static_cast<float>(std::ceil(std::max(0.0, finalWidth)));
-			outDimensions->y = StringDimensions.y;
-			outDimensions->z = static_cast<float>(totalLines);
+			if (!MeasureFreeTypeSingleByteText(
+				reinterpret_cast<FontEx*>(activeFont), srcString, maxWrapWidth,
+				alignedStart, *outDimensions))
+			{
+				*outDimensions = StringDefaultDimensions;
+			}
 			return outDimensions;
 		}
 
@@ -1353,6 +1207,7 @@ namespace fonthook
 			textDoc = FontManager::PrepHypertext(arTextString, arData);
 
 		FlushPendingRichTextLead(textDoc, "prep-hypertext-leave");
+		FinalizeFreeTypeRichTextLayout(textDoc, arData);
 		return textDoc;
 	}
 
@@ -1382,6 +1237,7 @@ namespace fonthook
 				ScopedRichTextPrepTextParse prepTextParseScope(true);
 				FontManager::TextDoc* textDoc = FontManager::PrepText(preparedText, arData);
 				FlushPendingRichTextLead(textDoc, "prep-text-leave");
+				FinalizeFreeTypeRichTextLayout(textDoc, arData);
 				return textDoc;
 			}
 		}
@@ -1389,6 +1245,7 @@ namespace fonthook
 		ScopedRichTextPrepTextParse prepTextParseScope(true);
 		FontManager::TextDoc* textDoc = FontManager::PrepText(arTextString, arData);
 		FlushPendingRichTextLead(textDoc, "prep-text-leave");
+		FinalizeFreeTypeRichTextLayout(textDoc, arData);
 		return textDoc;
 	}
 

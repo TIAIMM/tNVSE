@@ -75,9 +75,9 @@ namespace fonthook
 		bool LoadFontTextures(UInt32* textureMarkers, int& stringRefFlag);
 	};
 
-	// Runs the same custom Windows-1252 layout used by FreeType-only
-	// CreateText without calling the game's single-byte measurement routine.
-	// startCharIndex is a byte index, matching the original API contract.
+	// Runs the same direct encoded-unit layout used by FreeType CreateText
+	// without calling the game's FontLetter measurement routine. It supports both
+	// Windows-1252 and complete DBCS units. startCharIndex remains a byte index.
 	bool MeasureFreeTypeSingleByteText(
 		FontEx* font,
 		const char* text,

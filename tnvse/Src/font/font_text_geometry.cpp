@@ -357,7 +357,10 @@ namespace fonthook
 			if (current == '\t')
 			{
 				const float beforeTab = position.x;
-				const float remainder = fmodf(position.x, static_cast<float>(kTabWidth));
+				float remainder = fmodf(position.x - lineStartX,
+					static_cast<float>(kTabWidth));
+				if (remainder < 0.0f)
+					remainder += static_cast<float>(kTabWidth);
 				position.x += static_cast<float>(kTabWidth) - remainder;
 				++trailingWhitespaceCount;
 				trailingWhitespaceWidth += position.x - beforeTab;
@@ -680,7 +683,7 @@ namespace fonthook
 			builder.ReserveGlyphs(charIdx);
 
 			const float startY = currentY;
-			const float startX = currentX;
+			float lineStartX = currentX;
 			NiColorA* activeColor = nullptr;
 			NiColorA defaultColor = { 0.0f, 0.0f, 1.0f, 1.0f };
 			*aiWidth = 0;
@@ -699,8 +702,13 @@ namespace fonthook
 				}
 				if (current == '\t')
 				{
-					const double remainder = fmod(currentX, static_cast<double>(kTabWidth));
+					double remainder = fmod(currentX - lineStartX,
+						static_cast<double>(kTabWidth));
+					if (remainder < 0.0)
+						remainder += static_cast<double>(kTabWidth);
 					currentX = static_cast<float>(currentX + kTabWidth - remainder);
+					*aiWidth = MaxInt(*aiWidth, static_cast<int>(std::ceil(
+						std::max(0.0f, currentX - lineStartX))));
 					continue;
 				}
 				if (current == '\n')
@@ -719,7 +727,10 @@ namespace fonthook
 							&nextLineX, escapeBuffer, abPrepareObject,
 							byteIndex + 1);
 					}
+					*aiWidth = MaxInt(*aiWidth, static_cast<int>(std::ceil(
+						std::max(0.0f, currentX - lineStartX))));
 					currentX = nextLineX;
+					lineStartX = currentX;
 					currentY -= this->pFontData->fBaseLine;
 					continue;
 				}
@@ -737,7 +748,7 @@ namespace fonthook
 				currentX += GetGlyphRenderAdvance(glyph.metrics);
 				byteIndex += glyph.byteLength - 1;
 				*aiWidth = MaxInt(*aiWidth,
-					static_cast<int>(std::ceil(std::max(0.0f, currentX - startX))));
+					static_cast<int>(std::ceil(std::max(0.0f, currentX - lineStartX))));
 			}
 
 			NiTriShape* textObject = builder.Finish();
