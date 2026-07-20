@@ -11,6 +11,7 @@
 #include "NiTriShape.hpp"
 
 #include <atomic>
+#include <cmath>
 #include <list>
 #include <limits>
 #include <memory>
@@ -141,16 +142,22 @@ namespace fonthook::vectorfont
 		std::shared_ptr<const CompactAtlasSnapshot> compactSnapshot;
 	};
 
-	inline bool IsAtlasGlyphPlacementCurrent(const AtlasGlyphPlacement& placement,
-		const AtlasResource& atlas, UInt16 pageIndex)
+	inline bool IsAtlasGlyphPlacementForAtlas(
+		const AtlasGlyphPlacement& placement, const AtlasResource& atlas)
 	{
 		return placement.atlasIdentity == reinterpret_cast<uintptr_t>(&atlas)
 			&& placement.atlasGeneration == atlas.generation
 			&& placement.atlasWidth == atlas.width
 			&& placement.atlasHeight == atlas.height
-			&& placement.pageIndex == pageIndex
 			&& placement.inverseWidth > 0.0f
 			&& placement.inverseHeight > 0.0f;
+	}
+
+	inline bool IsAtlasGlyphPlacementCurrent(const AtlasGlyphPlacement& placement,
+		const AtlasResource& atlas, UInt16 pageIndex)
+	{
+		return IsAtlasGlyphPlacementForAtlas(placement, atlas)
+			&& placement.pageIndex == pageIndex;
 	}
 
 	inline bool CacheAtlasGlyphPlacement(AtlasGlyphRecord& glyph,
@@ -160,6 +167,14 @@ namespace fonthook::vectorfont
 			return false;
 		if (IsAtlasGlyphPlacementCurrent(glyph.placement, atlas, pageIndex))
 			return true;
+		// Snapshot records store profile-local page numbers. Text batches compact the
+		// pages from both byte roles into one list, so only the runtime page ordinal
+		// needs rebinding when the same atlas object and generation are still active.
+		if (IsAtlasGlyphPlacementForAtlas(glyph.placement, atlas))
+		{
+			glyph.placement.pageIndex = pageIndex;
+			return true;
+		}
 		AtlasGlyphPlacement placement;
 		placement.atlasIdentity = reinterpret_cast<uintptr_t>(&atlas);
 		placement.atlasGeneration = atlas.generation;
@@ -178,9 +193,10 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 10;
-	// This identity-only revision invalidates the old partial codepage snapshot
-	// without forcing complete SDF-fill or unrelated atlas profiles to rebuild.
+	constexpr UInt32 kAtlasSnapshotVersion = 11;
+	// Version 11 persists the stable page, inverse-size, and normalized UV subset
+	// of AtlasGlyphPlacement. Runtime-only atlas identity and generation are rebound
+	// after the validated prewarm snapshot has created its current AtlasResource.
 	constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 #pragma pack(push, 1)
 	struct AtlasSnapshotHeader
@@ -213,6 +229,20 @@ namespace fonthook::vectorfont
 		UInt64 checksum = 0;
 	};
 
+	struct AtlasSnapshotGlyphPlacement
+	{
+		UInt32 atlasWidth = 0;
+		UInt32 atlasHeight = 0;
+		UInt16 pageIndex = std::numeric_limits<UInt16>::max();
+		UInt16 reserved = 0;
+		float inverseWidth = 0.0f;
+		float inverseHeight = 0.0f;
+		float u0 = 0.0f;
+		float v0 = 0.0f;
+		float u1 = 0.0f;
+		float v1 = 0.0f;
+	};
+
 	struct AtlasSnapshotPlacement
 	{
 		UInt64 cacheId = 0;
@@ -228,8 +258,89 @@ namespace fonthook::vectorfont
 		UInt8 sdfSpread = 0;
 		UInt8 colorBaked = 0;
 		UInt8 bakedLayer = 0;
+		AtlasSnapshotGlyphPlacement glyphPlacement;
 	};
 #pragma pack(pop)
+
+	inline bool CacheAtlasSnapshotGlyphPlacement(
+		AtlasSnapshotPlacement& snapshot, UInt32 atlasWidth, UInt32 atlasHeight,
+		UInt16 pageIndex)
+	{
+		const AtlasRect& rect = snapshot.rect;
+		if (!atlasWidth || !atlasHeight || !rect.width || !rect.height
+			|| rect.x > atlasWidth || rect.width > atlasWidth - rect.x
+			|| rect.y > atlasHeight || rect.height > atlasHeight - rect.y)
+			return false;
+		AtlasSnapshotGlyphPlacement placement;
+		placement.atlasWidth = atlasWidth;
+		placement.atlasHeight = atlasHeight;
+		placement.pageIndex = pageIndex;
+		placement.inverseWidth = 1.0f / static_cast<float>(atlasWidth);
+		placement.inverseHeight = 1.0f / static_cast<float>(atlasHeight);
+		placement.u0 = static_cast<float>(rect.x) * placement.inverseWidth;
+		placement.v0 = static_cast<float>(rect.y) * placement.inverseHeight;
+		placement.u1 = static_cast<float>(rect.x + rect.width)
+			* placement.inverseWidth;
+		placement.v1 = static_cast<float>(rect.y + rect.height)
+			* placement.inverseHeight;
+		snapshot.glyphPlacement = placement;
+		return true;
+	}
+
+	inline bool IsValidAtlasSnapshotGlyphPlacement(
+		const AtlasSnapshotPlacement& snapshot, UInt32 atlasWidth,
+		UInt32 atlasHeight, UInt16 pageIndex)
+	{
+		const AtlasSnapshotGlyphPlacement& cached = snapshot.glyphPlacement;
+		if (cached.atlasWidth != atlasWidth || cached.atlasHeight != atlasHeight
+			|| cached.pageIndex != pageIndex || !std::isfinite(cached.inverseWidth)
+			|| !std::isfinite(cached.inverseHeight) || !std::isfinite(cached.u0)
+			|| !std::isfinite(cached.v0) || !std::isfinite(cached.u1)
+			|| !std::isfinite(cached.v1) || cached.inverseWidth <= 0.0f
+			|| cached.inverseHeight <= 0.0f || cached.u0 < 0.0f
+			|| cached.v0 < 0.0f || cached.u1 <= cached.u0
+			|| cached.v1 <= cached.v0 || cached.u1 > 1.0f || cached.v1 > 1.0f)
+			return false;
+		const float inverseWidth = 1.0f / static_cast<float>(atlasWidth);
+		const float inverseHeight = 1.0f / static_cast<float>(atlasHeight);
+		const AtlasRect& rect = snapshot.rect;
+		constexpr float epsilon = 1.0e-6f;
+		auto matches = [epsilon](float left, float right)
+		{
+			return std::fabs(left - right) <= epsilon;
+		};
+		return matches(cached.inverseWidth, inverseWidth)
+			&& matches(cached.inverseHeight, inverseHeight)
+			&& matches(cached.u0, static_cast<float>(rect.x) * inverseWidth)
+			&& matches(cached.v0, static_cast<float>(rect.y) * inverseHeight)
+			&& matches(cached.u1,
+				static_cast<float>(rect.x + rect.width) * inverseWidth)
+			&& matches(cached.v1,
+				static_cast<float>(rect.y + rect.height) * inverseHeight);
+	}
+
+	inline bool RestoreAtlasSnapshotGlyphPlacement(
+		const AtlasSnapshotPlacement& snapshot, const AtlasResource& atlas,
+		UInt16 snapshotPageIndex, UInt16 runtimePageIndex,
+		AtlasGlyphPlacement& placement)
+	{
+		if (!IsValidAtlasSnapshotGlyphPlacement(snapshot, atlas.width, atlas.height,
+			snapshotPageIndex))
+			return false;
+		const AtlasSnapshotGlyphPlacement& cached = snapshot.glyphPlacement;
+		placement.atlasIdentity = reinterpret_cast<uintptr_t>(&atlas);
+		placement.atlasGeneration = atlas.generation;
+		placement.atlasWidth = atlas.width;
+		placement.atlasHeight = atlas.height;
+		placement.pageIndex = runtimePageIndex;
+		placement.inverseWidth = cached.inverseWidth;
+		placement.inverseHeight = cached.inverseHeight;
+		placement.u0 = cached.u0;
+		placement.v0 = cached.v0;
+		placement.u1 = cached.u1;
+		placement.v1 = cached.v1;
+		return true;
+	}
 
 	struct CompactAtlasSnapshot
 	{
@@ -418,7 +529,8 @@ namespace fonthook::vectorfont
 	};
 
 	static_assert(sizeof(AtlasSnapshotHeader) == 120);
-	static_assert(sizeof(AtlasSnapshotPlacement) == 56);
+	static_assert(sizeof(AtlasSnapshotGlyphPlacement) == 36);
+	static_assert(sizeof(AtlasSnapshotPlacement) == 92);
 
 	struct AtlasState
 	{

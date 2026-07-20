@@ -286,6 +286,12 @@ namespace fonthook::vectorfont
 			header.pageCount = 1;
 			header.placementCount = static_cast<UInt32>(page.placements.size());
 			header.pixelBytes = page.pixels.size();
+			for (AtlasSnapshotPlacement& placement : page.placements)
+			{
+				if (!CacheAtlasSnapshotGlyphPlacement(
+					placement, header.width, header.height, header.pageIndex))
+					return false;
+			}
 			UInt64 payloadHash = HashBytes(page.placements.data(),
 				page.placements.size() * sizeof(page.placements[0]));
 			header.payloadChecksum = HashBytes(page.pixels.data(),
