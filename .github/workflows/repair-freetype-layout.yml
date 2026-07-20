@@ -1,0 +1,747 @@
+name: Repair FreeType layout parity
+
+on:
+  push:
+    branches:
+      - develop_unstable
+    paths:
+      - .github/workflows/repair-freetype-layout.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop_unstable
+          fetch-depth: 0
+
+      - name: Repair FreeType wrapping and layout
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{path}: expected one literal match, found {count}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def replace_regex_once(path: str, pattern: str, replacement: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise RuntimeError(f"{path}: expected one regex match, found {count}")
+              file.write_text(updated, encoding="utf-8")
+
+          layout = "tnvse/Src/font/font_text_layout.cpp"
+          manager = "tnvse/Src/font/font_manager.cpp"
+          geometry = "tnvse/Src/font/font_text_geometry.cpp"
+          engine_header = "tnvse/Src/font/font_engine.h"
+
+          replace_once(layout, '#include <array>\n', '#include <algorithm>\n#include <array>\n')
+
+          direct_layout_block = r'''	enum class FreeTypeBreakKind : UInt8
+	{
+		None,
+		Whitespace,
+		SoftHyphen
+	};
+
+	struct FreeTypeBreakOpportunity
+	{
+		FreeTypeBreakKind kind = FreeTypeBreakKind::None;
+		UInt32 outputPosition = 0;
+		double prefixWidth = 0.0;
+		double consumedWidth = 0.0;
+
+		void Clear()
+		{
+			kind = FreeTypeBreakKind::None;
+			outputPosition = 0;
+			prefixWidth = 0.0;
+			consumedWidth = 0.0;
+		}
+	};
+
+	struct PreparedLineRange
+	{
+		UInt32 begin = 0;
+		UInt32 end = 0;
+		int width = 0;
+		UInt32 consumed = 0;
+	};
+
+	static void InsertPreparedBytes(std::vector<char>& output,
+		UInt32& outputLength, UInt32 position, const char* bytes, UInt32 count)
+	{
+		if (!bytes || !count || position > outputLength)
+			return;
+		EnsureTextScratchSize(output,
+			static_cast<size_t>(outputLength) + count + 1);
+		memmove(output.data() + position + count, output.data() + position,
+			static_cast<size_t>(outputLength - position) + 1);
+		memcpy(output.data() + position, bytes, count);
+		outputLength += count;
+	}
+
+	static double GetFreeTypeHyphenAdvance(FontEx* font)
+	{
+		return font && font->pFontData
+			? GetGlyphRenderAdvance(&font->pFontData->pFontLetters['-']) : 0.0;
+	}
+
+	static double GetNextTabAdvance(double lineWidth)
+	{
+		double remainder = std::fmod(lineWidth, static_cast<double>(kTabWidth));
+		if (remainder < 0.0)
+			remainder += static_cast<double>(kTabWidth);
+		return static_cast<double>(kTabWidth) - remainder;
+	}
+
+	static bool IsAsciiWordGlyph(const VectorEncodedGlyph& glyph)
+	{
+		if (glyph.byteLength != 1 || glyph.encodedCode > 0x7F)
+			return false;
+		const UInt8 value = static_cast<UInt8>(glyph.encodedCode);
+		return (value >= '0' && value <= '9')
+			|| (value >= 'A' && value <= 'Z')
+			|| (value >= 'a' && value <= 'z');
+	}
+
+	// FreeType no longer performs shaping or cluster substitution. Match the
+	// native PrepText contract directly at encoded-unit granularity so wrapping,
+	// measurement, line selection, tabs, and final geometry all consume the same
+	// FontLetter advances. A DBCS pair is always emitted and moved as one unit.
+	static void PrepDirectFreeTypeText(
+		FontEx* font,
+		char* source,
+		UInt32 sourceLength,
+		Font::TextData* data,
+		bool isTerminal,
+		UInt32 initialConsumed,
+		PrepTextScratch& scratch)
+	{
+		if (!font || !font->pFontData || !source || !data)
+			return;
+
+		data->xLineWidths.RemoveAll();
+		std::vector<char>& output = scratch.processed;
+		EnsureTextScratchSize(output, static_cast<size_t>(sourceLength) + 8);
+		output[0] = 0;
+
+		FontLetter* letters = font->pFontData->pFontLetters;
+		const float lineHeight = font->pFontData->fBaseLine
+			+ FontManager::GetLinePadding(font->iFontNum);
+		const float firstLineHeight = letters[kSpaceChar].fHeight;
+		const double hyphenAdvance = GetFreeTypeHyphenAdvance(font);
+		const double maxWidth = static_cast<double>(data->iWidth);
+		const bool boundedWidth = data->iWidth < kSentinelMax;
+		const int requestedLineStart = std::max(0, data->iLineStart);
+		const int requestedLineEnd = data->iLineEnd;
+		const int requestedHeight = data->iHeight;
+
+		UInt32 outputLength = 0;
+		UInt32 consumed = initialConsumed;
+		UInt32 iconIndex = 0;
+		double lineWidth = 0.0;
+		bool lastUnitWasAsciiWord = false;
+		FreeTypeBreakOpportunity breakOpportunity;
+		std::vector<int> lineWidths;
+		std::vector<UInt32> lineConsumed;
+		lineWidths.reserve(8);
+		lineConsumed.reserve(8);
+
+		auto appendByte = [&](char value)
+		{
+			EnsureTextScratchSize(output,
+				static_cast<size_t>(outputLength) + 2);
+			output[outputLength++] = value;
+			output[outputLength] = 0;
+		};
+		auto appendBytes = [&](const char* bytes, UInt32 count)
+		{
+			if (!bytes || !count)
+				return;
+			EnsureTextScratchSize(output,
+				static_cast<size_t>(outputLength) + count + 1);
+			memcpy(output.data() + outputLength, bytes, count);
+			outputLength += count;
+			output[outputLength] = 0;
+		};
+		auto finishLine = [&](double width)
+		{
+			lineWidths.push_back(static_cast<int>(std::ceil(std::max(0.0, width))));
+			lineConsumed.push_back(consumed);
+		};
+
+		auto emitUnit = [&](const char* bytes, UInt32 byteCount, double unitWidth,
+			bool breakableWhitespace, bool removableSpace, bool asciiWord)
+		{
+			bool wrappedBeforeCurrent = false;
+			while (boundedWidth && lineWidth > 0.0
+				&& lineWidth + unitWidth > maxWidth)
+			{
+				if (breakOpportunity.kind == FreeTypeBreakKind::Whitespace
+					&& breakOpportunity.outputPosition < outputLength)
+				{
+					output[breakOpportunity.outputPosition] = data->cLineSep;
+					finishLine(breakOpportunity.prefixWidth);
+					lineWidth = std::max(0.0,
+						lineWidth - breakOpportunity.consumedWidth);
+					breakOpportunity.Clear();
+					lastUnitWasAsciiWord = false;
+					wrappedBeforeCurrent = true;
+					continue;
+				}
+				if (breakOpportunity.kind == FreeTypeBreakKind::SoftHyphen)
+				{
+					const char inserted[2] = { '-', data->cLineSep };
+					InsertPreparedBytes(output, outputLength,
+						breakOpportunity.outputPosition, inserted,
+						static_cast<UInt32>(sizeof(inserted)));
+					finishLine(breakOpportunity.prefixWidth + hyphenAdvance);
+					lineWidth = std::max(0.0,
+						lineWidth - breakOpportunity.consumedWidth);
+					breakOpportunity.Clear();
+					lastUnitWasAsciiWord = false;
+					wrappedBeforeCurrent = true;
+					continue;
+				}
+
+				double completedWidth = lineWidth;
+				if (lastUnitWasAsciiWord && asciiWord && hyphenAdvance > 0.0
+					&& completedWidth + hyphenAdvance <= maxWidth)
+				{
+					appendByte('-');
+					completedWidth += hyphenAdvance;
+				}
+				appendByte(data->cLineSep);
+				finishLine(completedWidth);
+				lineWidth = 0.0;
+				breakOpportunity.Clear();
+				lastUnitWasAsciiWord = false;
+				wrappedBeforeCurrent = true;
+			}
+
+			// A space that itself forced a wrap is the discarded delimiter, not an
+			// indentation byte on the new line. Explicit leading spaces remain intact.
+			if (removableSpace && wrappedBeforeCurrent && lineWidth == 0.0)
+				return;
+
+			const double prefixWidth = lineWidth;
+			const UInt32 unitOutputStart = outputLength;
+			appendBytes(bytes, byteCount);
+			lineWidth += unitWidth;
+			if (breakableWhitespace && prefixWidth > 0.0)
+			{
+				breakOpportunity.kind = FreeTypeBreakKind::Whitespace;
+				breakOpportunity.outputPosition = unitOutputStart;
+				breakOpportunity.prefixWidth = prefixWidth;
+				breakOpportunity.consumedWidth = lineWidth;
+			}
+			lastUnitWasAsciiWord = asciiWord;
+		};
+
+		for (UInt32 sourceOffset = 0;
+			sourceOffset < sourceLength && source[sourceOffset];)
+		{
+			UInt8 current = static_cast<UInt8>(source[sourceOffset]);
+			if (current == static_cast<UInt8>(data->cLineSep))
+			{
+				++consumed;
+				appendByte(data->cLineSep);
+				finishLine(lineWidth);
+				lineWidth = 0.0;
+				breakOpportunity.Clear();
+				lastUnitWasAsciiWord = false;
+				++sourceOffset;
+				continue;
+			}
+			if (current == '~')
+			{
+				++consumed;
+				if (lineWidth > 0.0)
+				{
+					breakOpportunity.kind = FreeTypeBreakKind::SoftHyphen;
+					breakOpportunity.outputPosition = outputLength;
+					breakOpportunity.prefixWidth = lineWidth;
+					breakOpportunity.consumedWidth = lineWidth;
+				}
+				++sourceOffset;
+				continue;
+			}
+			if (current == '\t')
+			{
+				++consumed;
+				const double tabAdvance = GetNextTabAdvance(lineWidth);
+				emitUnit(source + sourceOffset, 1, tabAdvance, true, false, false);
+				++sourceOffset;
+				continue;
+			}
+			if (current == 1)
+			{
+				++consumed;
+				FontLetter iconMetrics = letters[1];
+				if (font->ButtonIcons.pBuffer && iconIndex < font->ButtonIcons.uiSize)
+				{
+					iconMetrics.fWidth = font->ButtonIcons.pBuffer[iconIndex].fWidth;
+					iconMetrics.fSpacing = font->ButtonIcons.pBuffer[iconIndex].fSpacing;
+				}
+				++iconIndex;
+				const char iconByte = 1;
+				emitUnit(&iconByte, 1, GetGlyphRenderAdvance(&iconMetrics),
+					false, false, false);
+				++sourceOffset;
+				continue;
+			}
+			if (current == kDelChar)
+			{
+				++consumed;
+				++sourceOffset;
+				continue;
+			}
+			if (current < 0x20)
+			{
+				++consumed;
+				appendByte(static_cast<char>(current));
+				++sourceOffset;
+				continue;
+			}
+
+			UInt32 dbcsCode = 0;
+			const bool isDbcs = sourceOffset + 1 < sourceLength
+				&& source[sourceOffset + 1]
+				&& TryDecodeDoubleByte(source + sourceOffset, dbcsCode);
+			if (!isDbcs)
+			{
+				ConvertToAsciiQuotes(&current);
+				source[sourceOffset] = static_cast<char>(current);
+			}
+
+			VectorEncodedGlyph glyph;
+			if (!DecodeFreeTypeGlyph(font, source + sourceOffset, glyph)
+				|| !glyph.byteLength)
+			{
+				const UInt32 fallbackLength = isDbcs ? 2u : 1u;
+				consumed += fallbackLength;
+				emitUnit(source + sourceOffset, fallbackLength, 0.0,
+					false, false, false);
+				sourceOffset += fallbackLength;
+				continue;
+			}
+
+			const double unitWidth = GetGlyphRenderAdvance(glyph.metrics);
+			const bool isSpace = glyph.byteLength == 1
+				&& glyph.encodedCode == kSpaceChar;
+			emitUnit(source + sourceOffset, glyph.byteLength, unitWidth,
+				isSpace, isSpace, IsAsciiWordGlyph(glyph));
+			consumed += glyph.byteLength;
+			sourceOffset += glyph.byteLength;
+		}
+
+		finishLine(lineWidth);
+		output[outputLength] = 0;
+
+		std::vector<PreparedLineRange> ranges;
+		ranges.reserve(lineWidths.size());
+		UInt32 lineBegin = 0;
+		size_t lineOrdinal = 0;
+		for (UInt32 index = 0; index < outputLength; ++index)
+		{
+			if (output[index] != data->cLineSep)
+				continue;
+			PreparedLineRange range;
+			range.begin = lineBegin;
+			range.end = index;
+			range.width = lineOrdinal < lineWidths.size()
+				? lineWidths[lineOrdinal] : 0;
+			range.consumed = lineOrdinal < lineConsumed.size()
+				? lineConsumed[lineOrdinal] : consumed;
+			ranges.push_back(range);
+			lineBegin = index + 1;
+			++lineOrdinal;
+		}
+		PreparedLineRange finalRange;
+		finalRange.begin = lineBegin;
+		finalRange.end = outputLength;
+		finalRange.width = lineOrdinal < lineWidths.size()
+			? lineWidths[lineOrdinal] : 0;
+		finalRange.consumed = lineOrdinal < lineConsumed.size()
+			? lineConsumed[lineOrdinal] : consumed;
+		ranges.push_back(finalRange);
+
+		const int totalLines = static_cast<int>(ranges.size());
+		int selectedStart = std::clamp(requestedLineStart, 0, totalLines);
+		int selectedEnd = requestedLineEnd >= kSentinelMax
+			? totalLines : std::clamp(requestedLineEnd, selectedStart, totalLines);
+		if (requestedHeight < kSentinelMax && selectedEnd > selectedStart)
+		{
+			int visibleLines = 1;
+			if (lineHeight > 0.0f && requestedHeight > firstLineHeight)
+			{
+				visibleLines += static_cast<int>(std::floor(
+					(static_cast<float>(requestedHeight) - firstLineHeight)
+					/ lineHeight));
+			}
+			selectedEnd = std::min(selectedEnd, selectedStart + std::max(1, visibleLines));
+		}
+
+		if (selectedStart >= selectedEnd)
+		{
+			outputLength = 1;
+			output[0] = ' ';
+			output[1] = 0;
+			const int width = static_cast<int>(std::ceil(std::max(0.0f,
+				GetGlyphRenderAdvance(&letters[kSpaceChar]))));
+			int mutableWidth = width;
+			data->xLineWidths.AddTail(mutableWidth);
+			data->xNewText.Set(output.data(), 0);
+			data->iWidth = width;
+			data->iHeight = static_cast<int>(std::ceil(std::max(0.0f, firstLineHeight)));
+			data->iLineStart = 0;
+			data->iLineEnd = 1;
+			data->iCharCount = 1;
+			return;
+		}
+
+		UInt32 selectedLength = 0;
+		int maximumLineWidth = 0;
+		for (int line = selectedStart; line < selectedEnd; ++line)
+		{
+			const PreparedLineRange& range = ranges[line];
+			const UInt32 count = range.end - range.begin;
+			if (count)
+			{
+				memmove(output.data() + selectedLength,
+					output.data() + range.begin, count);
+				selectedLength += count;
+			}
+			int mutableWidth = range.width;
+			data->xLineWidths.AddTail(mutableWidth);
+			maximumLineWidth = MaxInt(maximumLineWidth, range.width);
+			if (line + 1 < selectedEnd)
+				output[selectedLength++] = data->cLineSep;
+		}
+		outputLength = selectedLength;
+		output[outputLength] = 0;
+		const int selectedLineCount = selectedEnd - selectedStart;
+		data->xNewText.Set(output.data(), 0);
+		data->iWidth = maximumLineWidth;
+		data->iHeight = static_cast<int>(std::ceil(std::max(0.0f,
+			firstLineHeight + std::max(0, selectedLineCount - 1) * lineHeight)));
+		data->iLineStart = 0;
+		data->iLineEnd = selectedLineCount;
+		data->iCharCount = isTerminal && selectedStart == 0
+			? static_cast<int>(ranges[selectedEnd - 1].consumed)
+			: static_cast<int>(outputLength);
+	}
+'''
+
+          replace_regex_once(
+              layout,
+              r'\tenum class SingleByteBreakKind : UInt8\n\t\{.*?\n\tstatic void PrepTextImpl',
+              direct_layout_block + '\n\tstatic void PrepTextImpl')
+
+          replace_once(
+              layout,
+              '''\t\tif (!g_bEnableMultibyteFontHook && IsFreeTypeFontActive(font))
+\t\t{
+\t\t\tPrepSingleByteFreeTypeText(font, processedOriginalText,
+\t\t\t\tsourceTextLen, axData, isTerminal, origConsumed, scratch);
+''',
+              '''\t\tif (IsFreeTypeFontActive(font))
+\t\t{
+\t\t\tPrepDirectFreeTypeText(font, processedOriginalText,
+\t\t\t\tsourceTextLen, axData, isTerminal, origConsumed, scratch);
+''')
+
+          direct_rich_width = r'''		void ApplyPreciseRichTextWidth(FontManager::TextLine* line,
+			FontManager::CharData* character, bool addHead)
+		{
+			if (!line || !character || addHead || HasRichTextFilename(character))
+				return;
+			Font* font = nullptr;
+			GetExtraGlyphsForChar(character, &font);
+			if (!font || !font->pFontData || !IsFreeTypeFontActive(font))
+				return;
+
+			FontLetter* glyph = nullptr;
+			UInt32 dbcsCode = 0;
+			if (TryGetRichTextCharDbcs(character, dbcsCode))
+				glyph = LookupRichTextDbcsGlyph(character, dbcsCode, &font);
+			else if (character->cChar >= 0x20 && character->cChar != kDelChar)
+				glyph = &font->pFontData->pFontLetters[character->cChar];
+			if (!glyph)
+				return;
+
+			// No shaping or pair kerning remains in the FreeType contract. Feed the
+			// original TextLine topology code the same direct FontLetter advance used
+			// by PrepText and final geometry before it makes a wrapping decision.
+			character->iWidth = GetGlyphCharDataLayoutWidth(glyph);
+			character->iLeadingEdge = 0;
+		}
+'''
+          replace_regex_once(
+              manager,
+              r'\t\tvoid ApplyPreciseRichTextWidth\(FontManager::TextLine\* line,.*?\n\t\tvoid FinalizeFreeTypeRichTextLayout',
+              direct_rich_width + '\n\t\tvoid FinalizeFreeTypeRichTextLayout')
+
+          direct_rich_finalize = r'''		void FinalizeFreeTypeRichTextLayout(FontManager::TextDoc* doc,
+			FontManager::TextData& data)
+		{
+			if (!doc)
+				return;
+			for (auto* pageNode = doc->xPages.m_pkHead; pageNode;
+				pageNode = pageNode->m_pkNext)
+			{
+				FontManager::TextPage* page = pageNode->m_element;
+				if (!page)
+					continue;
+				int widestLine = 0;
+				for (auto* lineNode = page->xLines.m_pkHead; lineNode;
+					lineNode = lineNode->m_pkNext)
+				{
+					FontManager::TextLine* line = lineNode->m_element;
+					if (!line)
+						continue;
+					int lineWidth = 0;
+					for (auto* charNode = line->xChars.m_pkHead; charNode;
+						charNode = charNode->m_pkNext)
+					{
+						FontManager::CharData* character = charNode->m_element;
+						if (!character)
+							continue;
+						if (!HasRichTextFilename(character))
+						{
+							Font* font = nullptr;
+							GetExtraGlyphsForChar(character, &font);
+							if (font && font->pFontData && IsFreeTypeFontActive(font))
+							{
+								FontLetter* glyph = nullptr;
+								UInt32 dbcsCode = 0;
+								if (TryGetRichTextCharDbcs(character, dbcsCode))
+									glyph = LookupRichTextDbcsGlyph(character, dbcsCode, &font);
+								else if (character->cChar >= 0x20
+									&& character->cChar != kDelChar && character->cChar != 1)
+									glyph = &font->pFontData->pFontLetters[character->cChar];
+								if (glyph)
+								{
+									character->iWidth = GetGlyphCharDataLayoutWidth(glyph);
+									character->iLeadingEdge = 0;
+								}
+							}
+						}
+						character->iX = HasRichTextFilename(character)
+							? lineWidth : lineWidth + character->iLeadingEdge;
+						lineWidth += std::max(0, character->iWidth);
+					}
+					line->iWidth = lineWidth;
+					widestLine = std::max(widestLine, lineWidth);
+				}
+				page->iWidth = widestLine;
+			}
+
+			int selectedPage = doc->iPageNum;
+			for (auto* pageNode = doc->xPages.m_pkHead; pageNode;
+				pageNode = pageNode->m_pkNext)
+			{
+				if (selectedPage-- > 0)
+					continue;
+				if (pageNode->m_element)
+					data.iWidth = std::max(0, pageNode->m_element->iWidth);
+				break;
+			}
+		}
+'''
+          replace_regex_once(
+              manager,
+              r'\t\tvoid FinalizeFreeTypeRichTextLayout\(FontManager::TextDoc\* doc,.*?\n\t\tvoid HandleTextDocAddChar',
+              direct_rich_finalize + '\n\t\tvoid HandleTextDocAddChar')
+
+          direct_dimensions = r'''		if (IsFreeTypeFontActive(activeFont))
+		{
+			const UInt32 sourceLength = static_cast<UInt32>(sourceStringLength);
+			const UInt32 requestedStart = std::min(startCharIndex, sourceLength);
+			UInt32 alignedStart = 0;
+			while (alignedStart < requestedStart)
+			{
+				UInt32 dbcsCode = 0;
+				const UInt32 unitLength = alignedStart + 1 < sourceLength
+					&& TryDecodeDoubleByte(srcString + alignedStart, dbcsCode) ? 2u : 1u;
+				if (alignedStart + unitLength > requestedStart)
+					break;
+				alignedStart += unitLength;
+			}
+			if (!MeasureFreeTypeSingleByteText(
+				reinterpret_cast<FontEx*>(activeFont), srcString, maxWrapWidth,
+				alignedStart, *outDimensions))
+			{
+				*outDimensions = StringDefaultDimensions;
+			}
+			return outDimensions;
+		}
+'''
+          replace_regex_once(
+              manager,
+              r'\t\tif \(IsFreeTypeFontActive\(activeFont\)\)\n\t\t\{\n\t\t\tstd::vector<UInt8> unicodeBreaks;.*?\n\t\t\treturn outDimensions;\n\t\t\}\n\n\t\tUInt32 uiDoubleByteCode;',
+              direct_dimensions + '\n\t\tUInt32 uiDoubleByteCode;')
+
+          replace_once(
+              manager,
+              '''\t\tFlushPendingRichTextLead(textDoc, "prep-hypertext-leave");
+\t\treturn textDoc;
+''',
+              '''\t\tFlushPendingRichTextLead(textDoc, "prep-hypertext-leave");
+\t\tFinalizeFreeTypeRichTextLayout(textDoc, arData);
+\t\treturn textDoc;
+''')
+
+          replace_once(
+              manager,
+              '''\t\t\t\tFontManager::TextDoc* textDoc = FontManager::PrepText(preparedText, arData);
+\t\t\t\tFlushPendingRichTextLead(textDoc, "prep-text-leave");
+\t\t\t\treturn textDoc;
+''',
+              '''\t\t\t\tFontManager::TextDoc* textDoc = FontManager::PrepText(preparedText, arData);
+\t\t\t\tFlushPendingRichTextLead(textDoc, "prep-text-leave");
+\t\t\t\tFinalizeFreeTypeRichTextLayout(textDoc, arData);
+\t\t\t\treturn textDoc;
+''')
+
+          replace_once(
+              manager,
+              '''\t\tFontManager::TextDoc* textDoc = FontManager::PrepText(arTextString, arData);
+\t\tFlushPendingRichTextLead(textDoc, "prep-text-leave");
+\t\treturn textDoc;
+''',
+              '''\t\tFontManager::TextDoc* textDoc = FontManager::PrepText(arTextString, arData);
+\t\tFlushPendingRichTextLead(textDoc, "prep-text-leave");
+\t\tFinalizeFreeTypeRichTextLayout(textDoc, arData);
+\t\treturn textDoc;
+''')
+
+          replace_once(
+              geometry,
+              '''\t\t\tif (current == '\\t')
+\t\t\t{
+\t\t\t\tconst float beforeTab = position.x;
+\t\t\t\tconst float remainder = fmodf(position.x, static_cast<float>(kTabWidth));
+\t\t\t\tposition.x += static_cast<float>(kTabWidth) - remainder;
+\t\t\t\t++trailingWhitespaceCount;
+\t\t\t\ttrailingWhitespaceWidth += position.x - beforeTab;
+\t\t\t\tcontinue;
+\t\t\t}
+''',
+              '''\t\t\tif (current == '\\t')
+\t\t\t{
+\t\t\t\tconst float beforeTab = position.x;
+\t\t\t\tfloat remainder = fmodf(position.x - lineStartX,
+\t\t\t\t\tstatic_cast<float>(kTabWidth));
+\t\t\t\tif (remainder < 0.0f)
+\t\t\t\t\tremainder += static_cast<float>(kTabWidth);
+\t\t\t\tposition.x += static_cast<float>(kTabWidth) - remainder;
+\t\t\t\t++trailingWhitespaceCount;
+\t\t\t\ttrailingWhitespaceWidth += position.x - beforeTab;
+\t\t\t\tcontinue;
+\t\t\t}
+''')
+
+          replace_once(
+              geometry,
+              '''\t\t\tconst float startY = currentY;
+\t\t\tconst float startX = currentX;
+''',
+              '''\t\t\tconst float startY = currentY;
+\t\t\tfloat lineStartX = currentX;
+''')
+
+          replace_once(
+              geometry,
+              '''\t\t\t\tif (current == '\\t')
+\t\t\t\t{
+\t\t\t\t\tconst double remainder = fmod(currentX, static_cast<double>(kTabWidth));
+\t\t\t\t\tcurrentX = static_cast<float>(currentX + kTabWidth - remainder);
+\t\t\t\t\tcontinue;
+\t\t\t\t}
+''',
+              '''\t\t\t\tif (current == '\\t')
+\t\t\t\t{
+\t\t\t\t\tdouble remainder = fmod(currentX - lineStartX,
+\t\t\t\t\t\tstatic_cast<double>(kTabWidth));
+\t\t\t\t\tif (remainder < 0.0)
+\t\t\t\t\t\tremainder += static_cast<double>(kTabWidth);
+\t\t\t\t\tcurrentX = static_cast<float>(currentX + kTabWidth - remainder);
+\t\t\t\t\t*aiWidth = MaxInt(*aiWidth, static_cast<int>(std::ceil(
+\t\t\t\t\t\tstd::max(0.0f, currentX - lineStartX))));
+\t\t\t\t\tcontinue;
+\t\t\t\t}
+''')
+
+          replace_once(
+              geometry,
+              '''\t\t\t\t\tcurrentX = nextLineX;
+\t\t\t\t\tcurrentY -= this->pFontData->fBaseLine;
+''',
+              '''\t\t\t\t\t*aiWidth = MaxInt(*aiWidth, static_cast<int>(std::ceil(
+\t\t\t\t\t\tstd::max(0.0f, currentX - lineStartX))));
+\t\t\t\t\tcurrentX = nextLineX;
+\t\t\t\t\tlineStartX = currentX;
+\t\t\t\t\tcurrentY -= this->pFontData->fBaseLine;
+''')
+
+          replace_once(
+              geometry,
+              '''\t\t\t\t*aiWidth = MaxInt(*aiWidth,
+\t\t\t\t\tstatic_cast<int>(std::ceil(std::max(0.0f, currentX - startX))));
+''',
+              '''\t\t\t\t*aiWidth = MaxInt(*aiWidth,
+\t\t\t\t\tstatic_cast<int>(std::ceil(std::max(0.0f, currentX - lineStartX))));
+''')
+
+          replace_once(
+              engine_header,
+              '''\t// Runs the same custom Windows-1252 layout used by FreeType-only
+\t// CreateText without calling the game's single-byte measurement routine.
+\t// startCharIndex is a byte index, matching the original API contract.
+''',
+              '''\t// Runs the same direct encoded-unit layout used by FreeType CreateText
+\t// without calling the game's FontLetter measurement routine. It supports both
+\t// Windows-1252 and complete DBCS units. startCharIndex remains a byte index.
+''')
+
+          # Static source checks for the regression that prompted this repair.
+          layout_text = Path(layout).read_text(encoding="utf-8")
+          manager_text = Path(manager).read_text(encoding="utf-8")
+          geometry_text = Path(geometry).read_text(encoding="utf-8")
+          assert "PrepDirectFreeTypeText" in layout_text
+          assert "PrepSingleByteFreeTypeText" not in layout_text
+          assert "if (IsFreeTypeFontActive(font))" in layout_text
+          assert "std::vector<UInt8> unicodeBreaks;" not in manager_text[manager_text.index("CalculateStringDimensions"):manager_text.index("CollectToImpl")]
+          assert "MeasureFreeTypeSingleByteText" in manager_text
+          assert "currentX - lineStartX" in geometry_text
+          PY
+
+          git diff --check
+
+      - name: Commit repaired layout
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/repair-freetype-layout.yml
+          git add tnvse/Src/font/font_text_layout.cpp \
+                  tnvse/Src/font/font_manager.cpp \
+                  tnvse/Src/font/font_text_geometry.cpp \
+                  tnvse/Src/font/font_engine.h \
+                  .github/workflows/repair-freetype-layout.yml
+          git commit -m "Restore FreeType native layout and wrapping"
+          git push origin HEAD:develop_unstable
