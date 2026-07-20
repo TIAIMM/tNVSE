@@ -55,7 +55,7 @@ out/build/vs2026-win32/bin/Release/tnvse.dll
 
 The build also:
 
-- builds the reduced FreeType, libunibreak, and commonlib targets;
+- builds the reduced FreeType and commonlib targets;
 - compiles all of those targets and `tnvse.dll` against the same VC-LTL CRT
   contract;
 - compiles all seven native D3D9 shaders and runs the shader ABI verifier;
