@@ -63,15 +63,14 @@ add_library(tnvse SHARED
   ${TNVSE_SOURCES}
   ${TNVSE_HEADERS})
 
-source_group(TREE "${TNVSE_SOURCE_ROOT}"
-  PREFIX "Source Files"
-  FILES ${TNVSE_SOURCES} ${TNVSE_SOURCE_HEADERS})
+source_group("Source Files" FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/dllmain.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/exports.def"
+  ${TNVSE_SOURCES}
+  ${TNVSE_SOURCE_HEADERS})
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/include"
   PREFIX "Bundled Headers"
   FILES ${TNVSE_BUNDLED_HEADERS})
-source_group("tNVSE" FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/dllmain.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/exports.def")
 
 target_include_directories(tnvse PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse"
