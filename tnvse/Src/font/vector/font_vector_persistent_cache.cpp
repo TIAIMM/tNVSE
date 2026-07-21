@@ -33,7 +33,9 @@ namespace fonthook::vectorfont
 			: 0;
 		manifest.cpuMemory.Reset(CpuMemoryCategory::PersistentMapping,
 			sizeof(PersistentGlyphManifest)
-				+ manifest.path.capacity() * sizeof(wchar_t) + mappedBytes);
+				+ manifest.path.capacity() * sizeof(wchar_t)
+				+ manifest.validatedRecordIndex.capacity() * sizeof(UInt16)
+				+ mappedBytes);
 	}
 
 		UInt64 HashBitmapKey(const BitmapCacheKey& key)
@@ -1036,6 +1038,8 @@ namespace fonthook::vectorfont
 
 		void UnmapGlyphManifest(PersistentGlyphManifest& manifest)
 		{
+			manifest.validatedRecordIndexReady = false;
+			manifest.validatedRecordIndex.clear();
 			if (manifest.mappedData)
 				UnmapViewOfFile(manifest.mappedData);
 			if (manifest.mapping)
@@ -1102,6 +1106,67 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		bool BuildValidatedGlyphManifestIndex(PersistentGlyphManifest& manifest,
+			const RuntimeFont& runtime)
+		{
+			manifest.validatedRecordIndexReady = false;
+			manifest.validatedRecordIndex.clear();
+			if (!manifest.mappedData || !manifest.recordCount
+				|| manifest.recordCount > std::numeric_limits<UInt16>::max())
+			{
+				RefreshGlyphManifestCpuMemory(manifest);
+				return false;
+			}
+
+			const auto* header = reinterpret_cast<const PersistentGlyphManifestHeader*>(
+				manifest.mappedData);
+			if (header->completeMode == static_cast<UInt8>(FontPrewarmMode::None))
+			{
+				RefreshGlyphManifestCpuMemory(manifest);
+				return false;
+			}
+
+			constexpr UInt16 invalidRecordIndex =
+				std::numeric_limits<UInt16>::max();
+			std::vector<UInt16> validatedIndex;
+			try
+			{
+				validatedIndex.assign(0x10000u, invalidRecordIndex);
+			}
+			catch (const std::bad_alloc&)
+			{
+				RefreshGlyphManifestCpuMemory(manifest);
+				return false;
+			}
+
+			const auto* records = reinterpret_cast<const PersistentGlyphManifestRecord*>(
+				manifest.mappedData + sizeof(PersistentGlyphManifestHeader));
+			for (UInt32 index = 0; index < manifest.recordCount; ++index)
+			{
+				const PersistentGlyphManifestRecord& record = records[index];
+				const PersistentGlyphManifestEntry& entry = record.entry;
+				if (!entry.valid)
+					continue;
+				const VectorFontByteClass byteClass = record.encodedCode > 0xFF
+					? VectorFontByteClass::DoubleByte
+					: VectorFontByteClass::SingleByte;
+				const RuntimeRole& role = runtime.roles[static_cast<size_t>(byteClass)];
+				if (entry.byteClass != static_cast<UInt8>(byteClass)
+					|| entry.faceIndex >= role.faces.size()
+					|| entry.checksum != HashBytes64(&entry,
+						offsetof(PersistentGlyphManifestEntry, checksum)))
+				{
+					continue;
+				}
+				validatedIndex[record.encodedCode] = static_cast<UInt16>(index);
+			}
+
+			manifest.validatedRecordIndex.swap(validatedIndex);
+			manifest.validatedRecordIndexReady = true;
+			RefreshGlyphManifestCpuMemory(manifest);
+			return true;
+		}
+
 		bool InitializeGlyphManifest(PersistentGlyphManifest& manifest,
 			RuntimeFont& runtime, const std::vector<UInt16>& encodedCodes)
 		{
@@ -1142,7 +1207,10 @@ namespace fonthook::vectorfont
 			if (!MapGlyphManifest(manifest))
 				return false;
 			if (ManifestCodeTableMatches(manifest, encodedCodes))
+			{
+				BuildValidatedGlyphManifestIndex(manifest, runtime);
 				return true;
+			}
 			if (!manifest.writable)
 			{
 				UnmapGlyphManifest(manifest);
@@ -1151,9 +1219,12 @@ namespace fonthook::vectorfont
 			UnmapGlyphManifest(manifest);
 			header = MakeGlyphManifestHeader(runtime, manifest.manifestHash,
 				manifest.layoutContentHash, manifest.recordCount);
-			return WriteGlyphManifestFile(manifest, header, encodedCodes)
+			const bool initialized = WriteGlyphManifestFile(manifest, header, encodedCodes)
 				&& MapGlyphManifest(manifest)
 				&& ManifestCodeTableMatches(manifest, encodedCodes);
+			if (initialized)
+				BuildValidatedGlyphManifestIndex(manifest, runtime);
+			return initialized;
 		}
 
 		PersistentGlyphManifest* GetGlyphManifest(RuntimeFont& runtime)
@@ -1202,7 +1273,7 @@ namespace fonthook::vectorfont
 			return runtime.manifest->mappedData ? runtime.manifest.get() : nullptr;
 		}
 
-		PersistentGlyphManifestEntry* GetGlyphManifestEntry(
+		PersistentGlyphManifestRecord* GetGlyphManifestRecord(
 			PersistentGlyphManifest& manifest, UInt32 encodedCode)
 		{
 			if (!manifest.mappedData || encodedCode > 0xFFFF || !manifest.recordCount)
@@ -1221,19 +1292,117 @@ namespace fonthook::vectorfont
 			}
 			return first < manifest.recordCount
 				&& records[first].encodedCode == encodedCode
-				? &records[first].entry : nullptr;
+				? &records[first] : nullptr;
 		}
+
+		PersistentGlyphManifestRecord* GetIndexedGlyphManifestRecord(
+			PersistentGlyphManifest& manifest, UInt32 encodedCode)
+		{
+			if (!manifest.mappedData || !manifest.validatedRecordIndexReady
+				|| encodedCode > 0xFFFF
+				|| manifest.validatedRecordIndex.size() != 0x10000u)
+			{
+				return nullptr;
+			}
+			const UInt16 recordIndex = manifest.validatedRecordIndex[encodedCode];
+			if (recordIndex == std::numeric_limits<UInt16>::max()
+				|| recordIndex >= manifest.recordCount)
+			{
+				return nullptr;
+			}
+			auto* records = reinterpret_cast<PersistentGlyphManifestRecord*>(
+				manifest.mappedData + sizeof(PersistentGlyphManifestHeader));
+			return &records[recordIndex];
+		}
+
+	bool EnsureCompleteCodePageMetricTable(RuntimeFont& runtime)
+	{
+		if (runtime.codePageMetrics)
+			return true;
+		PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
+		if (!manifest || !manifest->mappedData
+			|| !manifest->validatedRecordIndexReady)
+		{
+			return false;
+		}
+		const auto* header = reinterpret_cast<const PersistentGlyphManifestHeader*>(
+			manifest->mappedData);
+		if (header->completeMode < static_cast<UInt8>(FontPrewarmMode::CodePage))
+			return false;
+
+		std::shared_ptr<DirectExtraGlyphTable> table;
+		try
+		{
+			table = std::make_shared<DirectExtraGlyphTable>();
+		}
+		catch (const std::bad_alloc&)
+		{
+			return false;
+		}
+		if (!table->Initialize(manifest->recordCount))
+			return false;
+		for (UInt32 lead = DirectExtraGlyphTable::kFirstLeadByte;
+			lead <= DirectExtraGlyphTable::kLastLeadByte; ++lead)
+		{
+			for (UInt32 trail = DirectExtraGlyphTable::kFirstTrailByte;
+				trail <= DirectExtraGlyphTable::kLastTrailByte; ++trail)
+			{
+				const UInt32 encodedCode = (lead << 8) | trail;
+				PersistentGlyphManifestRecord* record =
+					GetIndexedGlyphManifestRecord(*manifest, encodedCode);
+				if (!record || record->entry.byteClass
+					!= static_cast<UInt8>(VectorFontByteClass::DoubleByte))
+				{
+					continue;
+				}
+				const PersistentGlyphManifestEntry& entry = record->entry;
+				FontLetter metrics = {};
+				metrics.iTextureIndex = entry.textureIndex;
+				metrics.fWidth = entry.width;
+				metrics.fLeadingEdge = entry.leadingEdge;
+				metrics.fHeight = entry.height;
+				metrics.fTopEdge = entry.topEdge;
+				metrics.fSpacing = entry.spacing;
+				ApplyEffectExtentsToMetrics(*runtime.config,
+					entry.codePoint, metrics);
+				if (!table->Insert(encodedCode, metrics))
+					return false;
+			}
+		}
+		if (table->metrics.empty())
+			return false;
+
+		const size_t allocatedBytes = table->GetAllocatedBytes();
+		runtime.codePageMetrics = std::move(table);
+		runtime.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+			runtime.cpuMemory.GetBytes() + allocatedBytes);
+		if (g_bEnableFreeTypeFontRenderingLog)
+		{
+			FreeTypeFontDebugLog(
+				"tnvse_freetype_font: materialized codepage metrics font=%u glyphs=%u bytes=%llu",
+				runtime.config->fontId,
+				static_cast<UInt32>(runtime.codePageMetrics->metrics.size()),
+				static_cast<unsigned long long>(allocatedBytes));
+		}
+		return true;
+	}
 
 		bool LoadGlyphManifest(RuntimeFont& runtime, UInt32 encodedCode,
 			VectorFontByteClass byteClass, VectorEncodedGlyph* glyph, FontLetter* metrics)
 		{
 			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
-			PersistentGlyphManifestEntry* entry = manifest
-				? GetGlyphManifestEntry(*manifest, encodedCode) : nullptr;
+			const bool validatedIndex = manifest
+				&& manifest->validatedRecordIndexReady;
+			PersistentGlyphManifestRecord* record = manifest
+				? (validatedIndex
+					? GetIndexedGlyphManifestRecord(*manifest, encodedCode)
+					: GetGlyphManifestRecord(*manifest, encodedCode))
+				: nullptr;
+			PersistentGlyphManifestEntry* entry = record ? &record->entry : nullptr;
 			if (!entry || !entry->valid
 				|| entry->byteClass != static_cast<UInt8>(byteClass)
-				|| entry->checksum != HashBytes64(entry,
-					offsetof(PersistentGlyphManifestEntry, checksum)))
+				|| (!validatedIndex && entry->checksum != HashBytes64(entry,
+					offsetof(PersistentGlyphManifestEntry, checksum))))
 				return false;
 			RuntimeRole& role = runtime.roles[static_cast<size_t>(byteClass)];
 			if (entry->faceIndex >= role.faces.size())
@@ -1276,8 +1445,9 @@ namespace fonthook::vectorfont
 			const ResolvedGlyph& resolved, const FontLetter& metrics)
 		{
 			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
-			PersistentGlyphManifestEntry* destination = manifest
-				? GetGlyphManifestEntry(*manifest, glyph.encodedCode) : nullptr;
+			PersistentGlyphManifestRecord* record = manifest
+				? GetGlyphManifestRecord(*manifest, glyph.encodedCode) : nullptr;
+			PersistentGlyphManifestEntry* destination = record ? &record->entry : nullptr;
 			if (!destination || !manifest->writable || destination->valid)
 				return;
 			PersistentGlyphManifestEntry entry;
@@ -1299,6 +1469,19 @@ namespace fonthook::vectorfont
 			entry.checksum = HashBytes64(&entry,
 				offsetof(PersistentGlyphManifestEntry, checksum));
 			std::memcpy(destination, &entry, sizeof(entry));
+			if (manifest->validatedRecordIndexReady
+				&& glyph.encodedCode <= 0xFFFF
+				&& manifest->validatedRecordIndex.size() == 0x10000u)
+			{
+				auto* records = reinterpret_cast<PersistentGlyphManifestRecord*>(
+					manifest->mappedData + sizeof(PersistentGlyphManifestHeader));
+				const size_t recordIndex = static_cast<size_t>(record - records);
+				if (recordIndex < std::numeric_limits<UInt16>::max())
+				{
+					manifest->validatedRecordIndex[glyph.encodedCode] =
+						static_cast<UInt16>(recordIndex);
+				}
+			}
 		}
 
 		SInt16 QuantizeCollisionCoordinate(float value)
@@ -1314,8 +1497,12 @@ namespace fonthook::vectorfont
 		{
 			profile = {};
 			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
-			PersistentGlyphManifestEntry* entry = manifest
-				? GetGlyphManifestEntry(*manifest, glyph.encodedCode) : nullptr;
+			PersistentGlyphManifestRecord* record = manifest
+				? (manifest->validatedRecordIndexReady
+					? GetIndexedGlyphManifestRecord(*manifest, glyph.encodedCode)
+					: GetGlyphManifestRecord(*manifest, glyph.encodedCode))
+				: nullptr;
+			PersistentGlyphManifestEntry* entry = record ? &record->entry : nullptr;
 			if (!entry || !entry->valid || !entry->collisionValid
 				|| entry->byteClass != static_cast<UInt8>(glyph.byteClass)
 				|| entry->faceIndex != glyph.faceIndex
@@ -1356,8 +1543,9 @@ namespace fonthook::vectorfont
 
 			std::lock_guard<std::recursive_mutex> lock(State().mutex);
 			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
-			PersistentGlyphManifestEntry* destination = manifest
-				? GetGlyphManifestEntry(*manifest, glyph.encodedCode) : nullptr;
+			PersistentGlyphManifestRecord* record = manifest
+				? GetGlyphManifestRecord(*manifest, glyph.encodedCode) : nullptr;
+			PersistentGlyphManifestEntry* destination = record ? &record->entry : nullptr;
 			if (!destination || !manifest->writable || !destination->valid
 				|| destination->collisionValid
 				|| destination->byteClass != static_cast<UInt8>(glyph.byteClass)
@@ -1531,11 +1719,32 @@ namespace fonthook::vectorfont
 		auto* header = reinterpret_cast<PersistentGlyphManifestHeader*>(
 			manifest->mappedData);
 		if (header->completeMode >= static_cast<UInt8>(mode))
+		{
+			if (!manifest->validatedRecordIndexReady)
+				BuildValidatedGlyphManifestIndex(*manifest, runtime);
+			if (header->completeMode
+				>= static_cast<UInt8>(FontPrewarmMode::CodePage)
+				&& EnsureCompleteCodePageMetricTable(runtime))
+			{
+				auto extra = gNumberedExtraLetters.find(runtime.config->fontId);
+				if (extra != gNumberedExtraLetters.end())
+					extra->second.generatedCodePage = runtime.codePageMetrics;
+			}
 			return;
+		}
 		header->completeMode = static_cast<UInt8>(mode);
 		header->checksum = HashBytes64(header,
 			offsetof(PersistentGlyphManifestHeader, checksum));
 		FlushViewOfFile(header, sizeof(*header));
+		BuildValidatedGlyphManifestIndex(*manifest, runtime);
+		if (header->completeMode
+			>= static_cast<UInt8>(FontPrewarmMode::CodePage)
+			&& EnsureCompleteCodePageMetricTable(runtime))
+		{
+			auto extra = gNumberedExtraLetters.find(runtime.config->fontId);
+			if (extra != gNumberedExtraLetters.end())
+				extra->second.generatedCodePage = runtime.codePageMetrics;
+		}
 	}
 
 	void FlushGlyphBitmapDiskCache()

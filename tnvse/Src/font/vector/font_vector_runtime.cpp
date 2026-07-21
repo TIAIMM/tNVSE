@@ -1104,16 +1104,36 @@ namespace fonthook::vectorfont
 
 		ExtraGlyphStore& extraStore = gNumberedExtraLetters[font.iFontNum];
 		extraStore.serialized.clear();
+		extraStore.generatedCodePage.reset();
 		extraStore.generated.clear();
-		extraStore.generated.reserve(SerializedExtraGlyphTable::kGlyphCount);
+		if (EnsureCompleteCodePageMetricTable(runtime))
+		{
+			extraStore.generatedCodePage = runtime.codePageMetrics;
+			ExtraGlyphMap().swap(extraStore.generated);
+		}
+		else
+		{
+			extraStore.generated.reserve(SerializedExtraGlyphTable::kGlyphCount);
+		}
 		State().activeFonts[&font] = activeState;
 		return true;
 	}
 
 	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& runtime, Font& font, UInt32 encodedCode)
 	{
+		if (runtime.codePageMetrics)
+		{
+			if (FontLetter* direct = runtime.codePageMetrics->find(encodedCode))
+				return direct;
+		}
 		std::lock_guard<std::recursive_mutex> lock(State().mutex);
-		ExtraGlyphMap& extra = gNumberedExtraLetters[font.iFontNum].generated;
+		ExtraGlyphStore& extraStore = gNumberedExtraLetters[font.iFontNum];
+		if (extraStore.generatedCodePage)
+		{
+			if (FontLetter* direct = extraStore.generatedCodePage->find(encodedCode))
+				return direct;
+		}
+		ExtraGlyphMap& extra = extraStore.generated;
 		auto existing = extra.find(encodedCode);
 		if (existing != extra.end())
 			return &existing->second;

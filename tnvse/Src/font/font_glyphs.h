@@ -125,6 +125,11 @@ namespace fonthook
 		if (!extraGlyphs)
 			return nullptr;
 
+		if (extraGlyphs->generatedCodePage)
+		{
+			if (FontLetter* direct = extraGlyphs->generatedCodePage->find(code))
+				return direct;
+		}
 		auto generated = extraGlyphs->generated.find(code);
 		if (generated != extraGlyphs->generated.end())
 			return &generated->second;

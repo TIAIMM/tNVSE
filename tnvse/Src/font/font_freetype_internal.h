@@ -22,6 +22,11 @@
 #include <utility>
 #include <Windows.h>
 
+namespace fonthook
+{
+	struct DirectExtraGlyphTable;
+}
+
 namespace fonthook::vectorfont
 {
 	inline constexpr FT_Int32 kGlyphLoadFlags =
@@ -487,6 +492,8 @@ namespace fonthook::vectorfont
 		HANDLE mapping = nullptr;
 		UInt8* mappedData = nullptr;
 		UInt32 recordCount = 0;
+		std::vector<UInt16> validatedRecordIndex;
+		bool validatedRecordIndexReady = false;
 		bool writable = false;
 
 		~PersistentGlyphManifest()
@@ -535,6 +542,7 @@ namespace fonthook::vectorfont
 		UInt64 layoutContentHash = 0;
 		std::array<UInt64, 2> maskContentRoleHashes = {};
 		std::shared_ptr<PersistentGlyphManifest> manifest;
+		std::shared_ptr<DirectExtraGlyphTable> codePageMetrics;
 	};
 
 	static_assert(sizeof(PersistentFontHashRecord) == 68);
@@ -630,6 +638,7 @@ namespace fonthook::vectorfont
 	bool LoadGlyphManifest(RuntimeFont& runtime, UInt32 encodedCode,
 		VectorFontByteClass byteClass, VectorEncodedGlyph* glyph,
 		FontLetter* metrics);
+	bool EnsureCompleteCodePageMetricTable(RuntimeFont& runtime);
 	void StoreGlyphManifest(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
 		const ResolvedGlyph& resolved, const FontLetter& metrics);
 	bool LoadGlyphCollisionProfile(RuntimeFont& runtime,
