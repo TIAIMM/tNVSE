@@ -1,6 +1,7 @@
 #include "font_engine.h"
 #include "dictionary.h"
 #include "font_glyphs.h"
+#include "font_layout_contract.h"
 #include "game_hooks.h"
 #include "font_manager.h"
 #include "font_vector.h"
@@ -358,11 +359,8 @@ namespace fonthook
 			if (current == '\t')
 			{
 				const float beforeTab = position.x;
-				float remainder = fmodf(position.x - lineStartX,
-					static_cast<float>(kTabWidth));
-				if (remainder < 0.0f)
-					remainder += static_cast<float>(kTabWidth);
-				position.x += static_cast<float>(kTabWidth) - remainder;
+				position.x = static_cast<float>(GetOriginalAbsoluteTabStop(
+					position.x, static_cast<double>(kTabWidth)));
 				++trailingWhitespaceCount;
 				trailingWhitespaceWidth += position.x - beforeTab;
 				continue;
@@ -707,11 +705,8 @@ namespace fonthook
 				}
 				if (current == '\t')
 				{
-					double remainder = fmod(currentX - lineStartX,
-						static_cast<double>(kTabWidth));
-					if (remainder < 0.0)
-						remainder += static_cast<double>(kTabWidth);
-					currentX = static_cast<float>(currentX + kTabWidth - remainder);
+					currentX = static_cast<float>(GetOriginalAbsoluteTabStop(
+						currentX, static_cast<double>(kTabWidth)));
 					*aiWidth = MaxInt(*aiWidth, static_cast<int>(std::ceil(
 						std::max(0.0f, currentX - lineStartX))));
 					continue;

@@ -1,5 +1,6 @@
 #include "font_sparse_codepoint_table.h"
 #include "font_cpu_budget.h"
+#include "font_layout_contract.h"
 #include "font_render_route.h"
 
 #include <array>
@@ -51,6 +52,24 @@ int main()
 	using fonthook::vectorfont::FontAtlasRoute;
 	using fonthook::vectorfont::ResolveCpuMemoryCategoryHeadroom;
 	using fonthook::vectorfont::ResolveFontAtlasRoute;
+	using fonthook::FreeTypeBreakKind;
+	using fonthook::FreeTypeBreakOpportunity;
+	using fonthook::GetOriginalAbsoluteTabStop;
+
+	FreeTypeBreakOpportunity whitespaceBreak;
+	whitespaceBreak.kind = FreeTypeBreakKind::Whitespace;
+	whitespaceBreak.sourceConsumedEnd = 3;
+	Check(whitespaceBreak.GetCompletedLineSourceEnd(5) == 3,
+		"backtracked wrapping keeps carried source bytes for the next terminal page");
+	whitespaceBreak.Clear();
+	Check(whitespaceBreak.GetCompletedLineSourceEnd(5) == 5,
+		"a hard wrap consumes every source byte scanned for the completed line");
+	Check(GetOriginalAbsoluteTabStop(10.0, 75.0) == 75.0,
+		"positive tabs use the original absolute X coordinate");
+	Check(GetOriginalAbsoluteTabStop(85.0, 75.0) == 150.0,
+		"tabs advance to the next absolute stop");
+	Check(GetOriginalAbsoluteTabStop(-10.0, 75.0) == 75.0,
+		"negative aligned origins preserve the original signed fmod behaviour");
 
 	Check(ResolveFontAtlasRoute(true) == FontAtlasRoute::ShaderSdf,
 		"Shader Loader route always selects SDF");

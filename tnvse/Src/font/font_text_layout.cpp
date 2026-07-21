@@ -1,6 +1,7 @@
 #include "font_engine.h"
 #include "dictionary.h"
 #include "font_glyphs.h"
+#include "font_layout_contract.h"
 #include "font_manager.h"
 #include "font_vector.h"
 #include "native_calls.h"
@@ -640,29 +641,6 @@ namespace fonthook
 		}
 	}
 
-	enum class FreeTypeBreakKind : UInt8
-	{
-		None,
-		Whitespace,
-		SoftHyphen
-	};
-
-	struct FreeTypeBreakOpportunity
-	{
-		FreeTypeBreakKind kind = FreeTypeBreakKind::None;
-		UInt32 outputPosition = 0;
-		double prefixWidth = 0.0;
-		double consumedWidth = 0.0;
-
-		void Clear()
-		{
-			kind = FreeTypeBreakKind::None;
-			outputPosition = 0;
-			prefixWidth = 0.0;
-			consumedWidth = 0.0;
-		}
-	};
-
 	struct PreparedLineRange
 	{
 		UInt32 begin = 0;
@@ -767,14 +745,15 @@ namespace fonthook
 			outputLength += count;
 			output[outputLength] = 0;
 		};
-		auto finishLine = [&](double width)
+		auto finishLine = [&](double width, UInt32 sourceConsumedEnd)
 		{
 			lineWidths.push_back(static_cast<int>(std::ceil(std::max(0.0, width))));
-			lineConsumed.push_back(consumed);
+			lineConsumed.push_back(sourceConsumedEnd);
 		};
 
 		auto emitUnit = [&](const char* bytes, UInt32 byteCount, double unitWidth,
-			bool breakableWhitespace, bool removableSpace, bool asciiWord)
+			UInt32 unitSourceEnd, bool breakableWhitespace,
+			bool removableSpace, bool asciiWord)
 		{
 			bool wrappedBeforeCurrent = false;
 			while (boundedWidth && lineWidth > 0.0
@@ -784,7 +763,8 @@ namespace fonthook
 					&& breakOpportunity.outputPosition < outputLength)
 				{
 					output[breakOpportunity.outputPosition] = data->cLineSep;
-					finishLine(breakOpportunity.prefixWidth);
+					finishLine(breakOpportunity.prefixWidth,
+						breakOpportunity.GetCompletedLineSourceEnd(consumed));
 					lineWidth = std::max(0.0,
 						lineWidth - breakOpportunity.consumedWidth);
 					breakOpportunity.Clear();
@@ -798,7 +778,8 @@ namespace fonthook
 					InsertPreparedBytes(output, outputLength,
 						breakOpportunity.outputPosition, inserted,
 						static_cast<UInt32>(sizeof(inserted)));
-					finishLine(breakOpportunity.prefixWidth + hyphenAdvance);
+					finishLine(breakOpportunity.prefixWidth + hyphenAdvance,
+						breakOpportunity.GetCompletedLineSourceEnd(consumed));
 					lineWidth = std::max(0.0,
 						lineWidth - breakOpportunity.consumedWidth);
 					breakOpportunity.Clear();
@@ -815,7 +796,7 @@ namespace fonthook
 					completedWidth += hyphenAdvance;
 				}
 				appendByte(data->cLineSep);
-				finishLine(completedWidth);
+				finishLine(completedWidth, consumed);
 				lineWidth = 0.0;
 				breakOpportunity.Clear();
 				lastUnitWasAsciiWord = false;
@@ -835,6 +816,7 @@ namespace fonthook
 			{
 				breakOpportunity.kind = FreeTypeBreakKind::Whitespace;
 				breakOpportunity.outputPosition = unitOutputStart;
+				breakOpportunity.sourceConsumedEnd = unitSourceEnd;
 				breakOpportunity.prefixWidth = prefixWidth;
 				breakOpportunity.consumedWidth = lineWidth;
 			}
@@ -849,7 +831,7 @@ namespace fonthook
 			{
 				++consumed;
 				appendByte(data->cLineSep);
-				finishLine(lineWidth);
+				finishLine(lineWidth, consumed);
 				lineWidth = 0.0;
 				breakOpportunity.Clear();
 				lastUnitWasAsciiWord = false;
@@ -863,6 +845,7 @@ namespace fonthook
 				{
 					breakOpportunity.kind = FreeTypeBreakKind::SoftHyphen;
 					breakOpportunity.outputPosition = outputLength;
+					breakOpportunity.sourceConsumedEnd = consumed;
 					breakOpportunity.prefixWidth = lineWidth;
 					breakOpportunity.consumedWidth = lineWidth;
 				}
@@ -873,7 +856,8 @@ namespace fonthook
 			{
 				++consumed;
 				const double tabAdvance = GetNextTabAdvance(lineWidth);
-				emitUnit(source + sourceOffset, 1, tabAdvance, true, false, false);
+				emitUnit(source + sourceOffset, 1, tabAdvance, consumed,
+					true, false, false);
 				++sourceOffset;
 				continue;
 			}
@@ -889,7 +873,7 @@ namespace fonthook
 				++iconIndex;
 				const char iconByte = 1;
 				emitUnit(&iconByte, 1, GetGlyphRenderAdvance(&iconMetrics),
-					false, false, false);
+					consumed, false, false, false);
 				++sourceOffset;
 				continue;
 			}
@@ -924,7 +908,7 @@ namespace fonthook
 				const UInt32 fallbackLength = isDbcs ? 2u : 1u;
 				consumed += fallbackLength;
 				emitUnit(source + sourceOffset, fallbackLength, 0.0,
-					false, false, false);
+					consumed, false, false, false);
 				sourceOffset += fallbackLength;
 				continue;
 			}
@@ -933,12 +917,13 @@ namespace fonthook
 			const bool isSpace = glyph.byteLength == 1
 				&& glyph.encodedCode == kSpaceChar;
 			emitUnit(source + sourceOffset, glyph.byteLength, unitWidth,
-				isSpace, isSpace, IsAsciiWordGlyph(glyph));
+				consumed + glyph.byteLength, isSpace, isSpace,
+				IsAsciiWordGlyph(glyph));
 			consumed += glyph.byteLength;
 			sourceOffset += glyph.byteLength;
 		}
 
-		finishLine(lineWidth);
+		finishLine(lineWidth, consumed);
 		output[outputLength] = 0;
 
 		std::vector<PreparedLineRange> ranges;
