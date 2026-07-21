@@ -32,17 +32,12 @@ namespace fonthook::vectorfont
 
 		// Full atlas profiles no longer need a large CPU bitmap working set. Keep
 		// an adaptive 8-16 MiB demand cache for cold misses without reducing the
-		// layout or unified text-artifact budgets that affect every frame.
+		// prepared-text or unified text-artifact budgets that affect every frame.
 		constexpr size_t kMinimumPostPrewarmBitmapBytes = 8u * 1024u * 1024u;
 		constexpr size_t kMaximumPostPrewarmBitmapBytes = 16u * 1024u * 1024u;
 		const size_t adaptiveLimit = std::clamp(configuredBytes / 16u,
 			kMinimumPostPrewarmBitmapBytes, kMaximumPostPrewarmBitmapBytes);
 		return std::min(prewarmLimit, adaptiveLimit);
-	}
-
-	size_t GetLayoutCacheLimit()
-	{
-		return static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 8u;
 	}
 
 		std::wstring NormalizePathKey(std::wstring path)
@@ -192,8 +187,6 @@ namespace fonthook::vectorfont
 			runtimeFace.configuredRaster = raster;
 			runtimeFace.configuredWidth = width;
 			runtimeFace.configuredHeight = height;
-			if (runtimeFace.hbFont)
-				hb_ft_font_changed(runtimeFace.hbFont);
 			return true;
 		}
 
@@ -827,15 +820,6 @@ namespace fonthook::vectorfont
 			runtime->config = &config;
 			for (RuntimeRole& role : runtime->roles)
 				role.owner = runtime.get();
-			for (const std::string& featureText : config.shapingFeatures)
-			{
-				hb_feature_t feature = {};
-				if (hb_feature_from_string(featureText.data(),
-					static_cast<int>(featureText.size()), &feature))
-				{
-					runtime->hbFeatures.push_back(feature);
-				}
-			}
 
 			for (size_t i = 0; i < runtime->roles.size(); ++i)
 			{
@@ -889,8 +873,7 @@ namespace fonthook::vectorfont
 			runtime->glyphHeight = std::max(0.0f, runtime->glyphTop - runtime->minBottom);
 			runtime->fontHeight = runtime->baseLine - runtime->minBottom;
 			runtime->initialized = true;
-			size_t runtimeBytes = sizeof(RuntimeFont)
-				+ runtime->hbFeatures.capacity() * sizeof(hb_feature_t);
+			size_t runtimeBytes = sizeof(RuntimeFont);
 			for (const RuntimeRole& role : runtime->roles)
 			{
 				runtimeBytes += role.faces.capacity() * sizeof(RuntimeFace);

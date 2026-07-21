@@ -197,15 +197,6 @@ repeat hundreds of FreeType metric loads. An uncacheable glyph index or
 allocation failure still reads the live FreeType slot for that unit and never
 substitutes a zero advance.
 
-The final printable runs produced after prepared-text wrapping and the runs
-consumed by `Font::MakeString` share a small per-thread hot cache. Its key
-contains the font layout identity, active code page, and the exact encoded
-bytes; a hash match is always followed by full key and byte comparison. The
-cached `FreeTypeLayoutRun` owns immutable shared glyph storage, so an exact
-match reuses the same encoded-unit result without taking the global layout-cache
-lock or changing run boundaries. Pre-wrap measurement is deliberately excluded
-from the hot cache and retains the existing layout behavior.
-
 A positive `fixedWidth` centers each glyph body in a logical cell and makes its
 final advance `fixedWidth + tracking`. This matches the grid-oriented DCFGCF
 behavior used by interfaces such as the terminal hacking screen. A value of

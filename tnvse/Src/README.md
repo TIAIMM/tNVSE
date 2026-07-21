@@ -10,7 +10,7 @@ configuration, dependency checks, globals, and native-call helpers stay at the
   - `a8`: native A8 render hooks.
   - `atlas`: atlas packing, caching, resources, shaping, and snapshots.
   - `native`: native shader packets, rings, accumulation, and fallback.
-  - `vector`: FreeType/HarfBuzz configuration, shaping, rasterization, and caches.
+  - `vector`: FreeType configuration, direct encoded-unit layout, rasterization, and caches.
 - `game`: game-facing hooks and save-name handling.
 - `input`: multibyte input, IME/TSF, menu integration, and candidate overlays.
 - `nvse`: the NVSE plugin API declaration.

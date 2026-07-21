@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <memory>
-#include <vector>
 
 namespace fonthook
 {
@@ -25,26 +24,6 @@ namespace fonthook
 		UInt8 byteLength = 0;
 		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 		FontLetter* metrics = nullptr;
-	};
-
-	struct FreeTypeLayoutGlyph
-	{
-		VectorEncodedGlyph glyph;
-		UInt32 cluster = 0;
-		float xAdvance = 0.0f;
-		float xOffset = 0.0f;
-		float yOffset = 0.0f;
-	};
-
-	struct FreeTypeLayoutRun
-	{
-		struct GlyphStorage : std::vector<FreeTypeLayoutGlyph>
-		{
-			vectorfont::CpuMemoryLease cpuMemory;
-		};
-		std::shared_ptr<const GlyphStorage> glyphs;
-		float advance = 0.0f;
-		bool shaped = false;
 	};
 
 	void LoadFreeTypeFontConfig();
@@ -71,14 +50,8 @@ namespace fonthook
 	bool IsFreeTypeFontActive(const Font* apFont);
 	bool HasEnabledFreeTypeFontEffects(const Font* apFont);
 	bool GetFreeTypeLayoutIdentity(const Font* apFont, UInt64& arIdentity);
-	bool BuildFreeTypeUnicodeLineBreakMap(const Font* apFont, const char* apText,
-		size_t auiLength, std::vector<UInt8>& arBreakAfter);
 	FontLetter* EnsureFreeTypeDoubleByteMetrics(Font* apFont, UInt32 auiEncodedCode);
 	bool DecodeFreeTypeGlyph(Font* apFont, const char* apText, VectorEncodedGlyph& arGlyph);
-	bool LayoutFreeTypeRun(Font* apFont, const char* apText, size_t auiLength,
-		FreeTypeLayoutRun& arLayout, bool abAllowShaping = true);
-	bool LayoutFreeTypeFinalRun(Font* apFont, const char* apText, size_t auiLength,
-		FreeTypeLayoutRun& arLayout, bool abAllowShaping = true);
 	NiTriShape* CreateEmptyFreeTypeTextShape(Font* apFont, bool abPrepareObject);
 
 	class VectorTextBuilder

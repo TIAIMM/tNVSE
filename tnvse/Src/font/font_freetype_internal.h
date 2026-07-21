@@ -12,15 +12,11 @@
 #include FT_OUTLINE_H
 #include FT_STROKER_H
 
-#include <hb-ft.h>
-#include <hb.h>
-
 #include <array>
 #include <list>
 #include <limits>
 #include <mutex>
 #include <new>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -120,17 +116,10 @@ namespace fonthook::vectorfont
 		size_t allocatedPageCount_ = 0;
 	};
 
-	struct DirectLayoutKerningEntry
-	{
-		UInt64 key = 0;
-		float value = 0.0f;
-	};
-
 	struct RuntimeFace
 	{
 		std::shared_ptr<MappedFontFile> file;
 		FT_Face face = nullptr;
-		hb_font_t* hbFont = nullptr;
 		bool configured = false;
 		bool configuredRaster = false;
 		FT_UInt configuredWidth = 0;
@@ -139,35 +128,29 @@ namespace fonthook::vectorfont
 		float visualCenterCorrection = 0.0f;
 		SparseDirectLayoutMetricTable directLayoutMetrics;
 		CpuMemoryLease directLayoutMetricMemory;
-		std::array<DirectLayoutKerningEntry, 256> directKerning = {};
 
 		RuntimeFace() = default;
 		RuntimeFace(const RuntimeFace&) = delete;
 		RuntimeFace& operator=(const RuntimeFace&) = delete;
 		RuntimeFace(RuntimeFace&& other) noexcept
-			: file(std::move(other.file)), face(other.face), hbFont(other.hbFont),
+			: file(std::move(other.file)), face(other.face),
 			configured(other.configured), configuredRaster(other.configuredRaster),
 			configuredWidth(other.configuredWidth), configuredHeight(other.configuredHeight),
 			resolvedBaselineOffset(other.resolvedBaselineOffset),
 			visualCenterCorrection(other.visualCenterCorrection),
 			directLayoutMetrics(std::move(other.directLayoutMetrics)),
-			directLayoutMetricMemory(std::move(other.directLayoutMetricMemory)),
-			directKerning(other.directKerning)
+			directLayoutMetricMemory(std::move(other.directLayoutMetricMemory))
 		{
 			other.face = nullptr;
-			other.hbFont = nullptr;
 		}
 		RuntimeFace& operator=(RuntimeFace&& other) noexcept
 		{
 			if (this != &other)
 			{
-				if (hbFont)
-					hb_font_destroy(hbFont);
 				if (face)
 					FT_Done_Face(face);
 				file = std::move(other.file);
 				face = other.face;
-				hbFont = other.hbFont;
 				configured = other.configured;
 				configuredRaster = other.configuredRaster;
 				configuredWidth = other.configuredWidth;
@@ -176,16 +159,12 @@ namespace fonthook::vectorfont
 				visualCenterCorrection = other.visualCenterCorrection;
 				directLayoutMetrics = std::move(other.directLayoutMetrics);
 				directLayoutMetricMemory = std::move(other.directLayoutMetricMemory);
-				directKerning = other.directKerning;
 				other.face = nullptr;
-				other.hbFont = nullptr;
 			}
 			return *this;
 		}
 		~RuntimeFace()
 		{
-			if (hbFont)
-				hb_font_destroy(hbFont);
 			if (face)
 				FT_Done_Face(face);
 		}
@@ -521,91 +500,6 @@ namespace fonthook::vectorfont
 		}
 	};
 
-	struct LayoutCacheKey
-	{
-		UInt64 layoutHash = 0;
-		UInt32 codePage = 0;
-		bool allowShaping = false;
-		std::string text;
-
-		bool operator==(const LayoutCacheKey& other) const
-		{
-			return layoutHash == other.layoutHash && codePage == other.codePage
-				&& allowShaping == other.allowShaping
-				&& text == other.text;
-		}
-	};
-
-	struct LayoutCacheLookupKey
-	{
-		UInt64 layoutHash = 0;
-		UInt32 codePage = 0;
-		bool allowShaping = false;
-		std::string_view text;
-	};
-
-	struct LayoutCacheKeyHash
-	{
-		using is_transparent = void;
-
-		size_t operator()(const LayoutCacheKey& key) const
-		{
-			return Hash(key.layoutHash, key.codePage,
-				key.allowShaping, key.text);
-		}
-
-		size_t operator()(const LayoutCacheLookupKey& key) const
-		{
-			return Hash(key.layoutHash, key.codePage,
-				key.allowShaping, key.text);
-		}
-
-	private:
-		static size_t Hash(UInt64 layoutHash, UInt32 codePage,
-			bool allowShaping, std::string_view text)
-		{
-			size_t result = static_cast<size_t>(layoutHash ^ (layoutHash >> 32));
-			result ^= static_cast<size_t>(codePage) * 0x85EBCA77u;
-			result ^= static_cast<size_t>(allowShaping) << 7;
-			for (char value : text)
-				result = (result ^ static_cast<UInt8>(value))
-					* static_cast<size_t>(16777619u);
-			return result;
-		}
-	};
-
-	struct LayoutCacheKeyEqual
-	{
-		using is_transparent = void;
-
-		bool operator()(const LayoutCacheKey& lhs,
-			const LayoutCacheKey& rhs) const
-		{
-			return lhs == rhs;
-		}
-
-		bool operator()(const LayoutCacheKey& lhs,
-			const LayoutCacheLookupKey& rhs) const
-		{
-			return lhs.layoutHash == rhs.layoutHash && lhs.codePage == rhs.codePage
-				&& lhs.allowShaping == rhs.allowShaping && lhs.text == rhs.text;
-		}
-
-		bool operator()(const LayoutCacheLookupKey& lhs,
-			const LayoutCacheKey& rhs) const
-		{
-			return (*this)(rhs, lhs);
-		}
-	};
-
-	struct LayoutCacheEntry
-	{
-		FreeTypeLayoutRun layout;
-		size_t bytes = 0;
-		std::list<LayoutCacheKey>::iterator lru;
-		CpuMemoryLease cpuMemory;
-	};
-
 	struct ActiveFontState
 	{
 		struct OriginalVerticalMetrics
@@ -630,7 +524,6 @@ namespace fonthook::vectorfont
 		CpuMemoryLease cpuMemory;
 		const FontConfig* config = nullptr;
 		std::array<RuntimeRole, 2> roles;
-		std::vector<hb_feature_t> hbFeatures;
 		float baseLine = 0.0f;
 		float glyphTop = 0.0f;
 		float minBottom = 0.0f;
@@ -660,18 +553,9 @@ namespace fonthook::vectorfont
 		RuntimeFont* runtime = nullptr;
 	};
 
-	struct FinalLayoutHotCacheEntry
-	{
-		size_t hash = 0;
-		LayoutCacheKey key;
-		FreeTypeLayoutRun layout;
-		bool valid = false;
-	};
-
 	struct FreeTypeThreadState
 	{
 		std::array<ActiveRuntimeCache, 4> activeRuntimes;
-		std::array<FinalLayoutHotCacheEntry, 16> finalLayouts;
 	};
 
 	struct FreeTypeState
@@ -690,17 +574,12 @@ namespace fonthook::vectorfont
 		std::vector<UInt16> persistentGlyphManifestCodes;
 		UInt32 persistentGlyphManifestCodePage = UINT32_MAX;
 		std::unordered_set<std::wstring> usedPersistentCachePaths;
-		std::unordered_map<LayoutCacheKey, LayoutCacheEntry, LayoutCacheKeyHash,
-			LayoutCacheKeyEqual> layoutCache;
-		std::list<LayoutCacheKey> layoutLru;
 		std::array<UInt32, 256> singleByteCodePoints = {};
 		SparseCodePointTable<UInt32> doubleByteCodePoints;
 		CpuMemoryLease codePointCacheMemory;
 		UInt32 codePointCacheCodePage = UINT32_MAX;
 		std::unordered_set<UInt32> loggedUnconfiguredFontIds;
 		std::unordered_set<UInt64> loggedVerticalMetricRoles;
-		std::unordered_set<UInt64> loggedHarfBuzzVerticalRoles;
-		UInt32 shapingFallbackLogCount = 0;
 		bool loggedCrossFontBitmapShare = false;
 		bool loggedPersistentBitmapDirectory = false;
 		bool loggedPersistentBitmapHit = false;
@@ -708,7 +587,6 @@ namespace fonthook::vectorfont
 		bool persistentBitmapMappingsEnabled = true;
 		UInt32 persistentBitmapFailureLogCount = 0;
 		size_t bitmapCacheBytes = 0;
-		size_t layoutCacheBytes = 0;
 		bool bitmapCacheReducedAfterPrewarm = false;
 		std::recursive_mutex mutex;
 	};
@@ -717,9 +595,7 @@ namespace fonthook::vectorfont
 	FreeTypeThreadState& ThreadState();
 
 	size_t GetBitmapCacheLimit();
-	size_t GetLayoutCacheLimit();
 	void TrimBitmapCache(FreeTypeState& state);
-	void TrimLayoutCache(FreeTypeState& state);
 	void TrimFreeTypeCpuCachesForTotalBudget();
 	std::wstring NormalizePathKey(std::wstring path);
 	UInt64 HashBytes64(const void* data, size_t size,
@@ -748,9 +624,6 @@ namespace fonthook::vectorfont
 	bool DecodeEncodedGlyphIdentity(RuntimeFont& runtime, const char* text,
 		VectorEncodedGlyph& glyph);
 	RuntimeFont* FindActiveRuntime(const Font* font);
-	bool LayoutRuntimeRun(RuntimeFont& runtime, const char* text,
-		size_t length, bool allowShaping, FreeTypeLayoutRun& layout,
-		bool finalRun = false);
 
 	UInt64 ComputeRuntimeMaskContentHash(RuntimeFont& runtime,
 		VectorFontByteClass byteClass);

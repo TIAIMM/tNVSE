@@ -1,7 +1,6 @@
 #include "font_engine.h"
 #include "dictionary.h"
 #include "font_glyphs.h"
-#include "font_layout_contract.h"
 #include "font_manager.h"
 #include "font_vector.h"
 #include "native_calls.h"
@@ -141,38 +140,10 @@ namespace fonthook
 		return hasEscapeSequence;
 	}
 
-	struct FreeTypeClusterAdvanceMap
-	{
-		static constexpr UInt32 kNoOwner = UINT32_MAX;
-		std::vector<float> advances;
-		std::vector<UInt32> owners;
-		std::vector<std::pair<UInt32, float>> clusters;
-
-		void Reset(UInt32 length)
-		{
-			advances.assign(length, 0.0f);
-			owners.assign(length, kNoOwner);
-			clusters.clear();
-		}
-
-		void TrimRetainedCapacity()
-		{
-			constexpr size_t kMaximumRetainedUnits = 65536;
-			if (advances.capacity() > kMaximumRetainedUnits)
-				std::vector<float>().swap(advances);
-			if (owners.capacity() > kMaximumRetainedUnits)
-				std::vector<UInt32>().swap(owners);
-			if (clusters.capacity() > kMaximumRetainedUnits)
-				std::vector<std::pair<UInt32, float>>().swap(clusters);
-		}
-	};
-
 	struct PrepTextScratch
 	{
 		std::vector<char> original;
 		std::vector<char> processed;
-		std::vector<UInt8> unicodeBreaks;
-		FreeTypeClusterAdvanceMap clusterAdvances;
 
 		void Prepare(const char* source, size_t length)
 		{
@@ -190,9 +161,6 @@ namespace fonthook
 				std::vector<char>().swap(original);
 			if (processed.capacity() > kMaximumRetainedTextBytes)
 				std::vector<char>().swap(processed);
-			if (unicodeBreaks.capacity() > kMaximumRetainedTextBytes)
-				std::vector<UInt8>().swap(unicodeBreaks);
-			clusterAdvances.TrimRetainedCapacity();
 		}
 	};
 
@@ -575,71 +543,30 @@ namespace fonthook
 		}
 	}
 
-	static void BuildFreeTypeClusterAdvanceMap(FontEx* font, const char* text,
-		UInt32 length, FreeTypeClusterAdvanceMap& result)
+	enum class FreeTypeBreakKind : UInt8
 	{
-		if (!font || !text || !IsFreeTypeFontActive(font))
+		None,
+		Whitespace,
+		SoftHyphen
+	};
+
+	struct FreeTypeBreakOpportunity
+	{
+		FreeTypeBreakKind kind = FreeTypeBreakKind::None;
+		UInt32 outputPosition = 0;
+		UInt32 sourceConsumedEnd = 0;
+		double prefixWidth = 0.0;
+		double consumedWidth = 0.0;
+
+		void Clear()
 		{
-			result.Reset(0);
-			return;
+			kind = FreeTypeBreakKind::None;
+			outputPosition = 0;
+			sourceConsumedEnd = 0;
+			prefixWidth = 0.0;
+			consumedWidth = 0.0;
 		}
-		result.Reset(length);
-		for (UInt32 runStart = 0; runStart < length;)
-		{
-			const UInt8 current = static_cast<UInt8>(text[runStart]);
-			if (!current)
-				break;
-			if (current < 0x20 || current == kDelChar || current == '~')
-			{
-				++runStart;
-				continue;
-			}
-			UInt32 runEnd = runStart;
-			while (runEnd < length && text[runEnd])
-			{
-				const UInt8 value = static_cast<UInt8>(text[runEnd]);
-				if (value < 0x20 || value == kDelChar || value == '~')
-					break;
-				UInt32 dbcsCode = 0;
-				runEnd += TryDecodeDoubleByte(text + runEnd, dbcsCode) ? 2 : 1;
-			}
-			FreeTypeLayoutRun layout;
-			if (!LayoutFreeTypeRun(font, text + runStart, runEnd - runStart, layout, true))
-			{
-				runStart = runEnd > runStart ? runEnd : runStart + 1;
-				continue;
-			}
-			result.clusters.clear();
-			for (const FreeTypeLayoutGlyph& glyph : *layout.glyphs)
-			{
-				if (result.clusters.empty()
-					|| result.clusters.back().first != glyph.cluster)
-				{
-					result.clusters.emplace_back(glyph.cluster, 0.0f);
-				}
-				result.clusters.back().second += glyph.xAdvance;
-			}
-			for (size_t clusterIndex = 0;
-				clusterIndex < result.clusters.size(); ++clusterIndex)
-			{
-				const UInt32 clusterStart = runStart
-					+ result.clusters[clusterIndex].first;
-				const UInt32 clusterEnd = std::min<UInt32>(length,
-					clusterIndex + 1 < result.clusters.size()
-						? runStart + result.clusters[clusterIndex + 1].first : runEnd);
-				if (clusterStart >= length || clusterStart >= clusterEnd)
-					continue;
-				result.advances[clusterStart] = result.clusters[clusterIndex].second;
-				for (UInt32 unitOffset = clusterStart; unitOffset < clusterEnd;)
-				{
-					result.owners[unitOffset] = clusterStart;
-					UInt32 dbcsCode = 0;
-					unitOffset += TryDecodeDoubleByte(text + unitOffset, dbcsCode) ? 2 : 1;
-				}
-			}
-			runStart = runEnd > runStart ? runEnd : runStart + 1;
-		}
-	}
+	};
 
 	struct PreparedLineRange
 	{
@@ -764,7 +691,7 @@ namespace fonthook
 				{
 					output[breakOpportunity.outputPosition] = data->cLineSep;
 					finishLine(breakOpportunity.prefixWidth,
-						breakOpportunity.GetCompletedLineSourceEnd(consumed));
+						breakOpportunity.sourceConsumedEnd);
 					lineWidth = std::max(0.0,
 						lineWidth - breakOpportunity.consumedWidth);
 					breakOpportunity.Clear();
@@ -779,7 +706,7 @@ namespace fonthook
 						breakOpportunity.outputPosition, inserted,
 						static_cast<UInt32>(sizeof(inserted)));
 					finishLine(breakOpportunity.prefixWidth + hyphenAdvance,
-						breakOpportunity.GetCompletedLineSourceEnd(consumed));
+						breakOpportunity.sourceConsumedEnd);
 					lineWidth = std::max(0.0,
 						lineWidth - breakOpportunity.consumedWidth);
 					breakOpportunity.Clear();
@@ -1135,14 +1062,8 @@ namespace fonthook
 		}
 
 		UInt32 buttonIconIndex = 0;
-		FreeTypeClusterAdvanceMap& freeTypeAdvances = scratch.clusterAdvances;
-		BuildFreeTypeClusterAdvanceMap(font, processedOriginalText,
-			sourceTextLen, freeTypeAdvances);
-		std::vector<UInt8>& unicodeBreaks = scratch.unicodeBreaks;
-		BuildFreeTypeUnicodeLineBreakMap(font, processedOriginalText,
-			sourceTextLen, unicodeBreaks);
-		UInt32 previousClusterOutputStart = 0;
-		bool hasPreviousClusterOutput = false;
+		UInt32 previousUnitOutputStart = 0;
+		bool hasPreviousUnitOutput = false;
 
 		// ---- Pass 2: Text layout with wrapping ----
 		bool bIsDBCharacter;
@@ -1166,12 +1087,11 @@ namespace fonthook
 				maxLineWidth = MaxInt(maxLineWidth, completedLineWidth);
 				wrapState.ResetLine();
 				softWrapPosition = 0;
-				hasPreviousClusterOutput = false;
+				hasPreviousUnitOutput = false;
 				++currentLineCount;
 			}
 			else
 			{
-				const UInt32 sourceUnitStart = charIndex;
 				bIsDBCharacter = false;
 				if (extraGlyphs && (charIndex + 1) <= sourceTextLen)
 				{
@@ -1189,10 +1109,6 @@ namespace fonthook
 				FontLetter* pCurrentGlyph = nullptr;
 				double unitWidth = 0.0;
 				bool isSoftMarker = false;
-				bool isClusterContinuation = false;
-				const UInt32 layoutClusterOwner = charIndex < freeTypeAdvances.owners.size()
-					? freeTypeAdvances.owners[charIndex]
-					: FreeTypeClusterAdvanceMap::kNoOwner;
 
 				if (!bIsDBCharacter)
 				{
@@ -1222,27 +1138,16 @@ namespace fonthook
 				else
 				{
 					origConsumed += 2;
-					if (layoutClusterOwner == FreeTypeClusterAdvanceMap::kNoOwner)
+					FontLetter* glyph = LookupDBGlyph(extraGlyphs, uiDoubleByteCode);
+					if (glyph)
 					{
-						EnsureFreeTypeDoubleByteMetrics(font, uiDoubleByteCode);
-						FontLetter* glyph = LookupDBGlyph(extraGlyphs, uiDoubleByteCode);
-						if (glyph)
-						{
-							pCurrentGlyph = glyph;
-							unitWidth = GetGlyphRenderAdvance(pCurrentGlyph);
-						}
+						pCurrentGlyph = glyph;
+						unitWidth = GetGlyphRenderAdvance(pCurrentGlyph);
 					}
-				}
-				if (!isSoftMarker
-					&& layoutClusterOwner != FreeTypeClusterAdvanceMap::kNoOwner)
-				{
-					isClusterContinuation = layoutClusterOwner != charIndex;
-					if (!isClusterContinuation)
-						unitWidth = freeTypeAdvances.advances[charIndex];
 				}
 
 				LayoutWrapResult wrapResult;
-				if (!isSoftMarker && !isClusterContinuation)
+				if (!isSoftMarker)
 					wrapResult = wrapState.AddUnit(unitWidth, static_cast<float>(axData->iWidth));
 
 				if (wrapResult.kind != LayoutWrapKind::None)
@@ -1264,10 +1169,10 @@ namespace fonthook
 					}
 					else
 					{
-						UInt32 tailStart = hasPreviousClusterOutput
-							? previousClusterOutputStart : processedTextLen - 1;
+						UInt32 tailStart = hasPreviousUnitOutput
+							? previousUnitOutputStart : processedTextLen - 1;
 						UInt32 tailBytes = processedTextLen - tailStart;
-						if (!hasPreviousClusterOutput && processedTextLen >= 2)
+						if (!hasPreviousUnitOutput && processedTextLen >= 2)
 						{
 							UInt32 dbStart = processedTextLen - 2;
 							if (extraGlyphs && TryGetDoubleByteAt(dynamicTextBuffer, dbStart, processedTextLen))
@@ -1289,7 +1194,7 @@ namespace fonthook
 					softWrapPosition = 0;
 					++currentLineCount;
 				}
-				const UInt32 currentClusterOutputStart = processedTextLen;
+				const UInt32 currentUnitOutputStart = processedTextLen;
 
 				if (bIsDBCharacter)
 				{
@@ -1318,25 +1223,10 @@ namespace fonthook
 						dynamicTextBuffer[processedTextLen] = 0;
 					}
 				}
-				if (!isSoftMarker && !isClusterContinuation)
+				if (!isSoftMarker)
 				{
-					previousClusterOutputStart = currentClusterOutputStart;
-					hasPreviousClusterOutput = true;
-				}
-				const UInt32 sourceUnitEnd = sourceUnitStart
-					+ (bIsDBCharacter ? 2u : 1u);
-				const bool isLayoutClusterBoundary =
-					layoutClusterOwner == FreeTypeClusterAdvanceMap::kNoOwner
-					|| sourceUnitEnd >= freeTypeAdvances.owners.size()
-					|| freeTypeAdvances.owners[sourceUnitEnd] != layoutClusterOwner;
-				if (!isSoftMarker && sourceUnitEnd
-					&& sourceUnitEnd - 1 < unicodeBreaks.size()
-					&& unicodeBreaks[sourceUnitEnd - 1]
-					&& isLayoutClusterBoundary)
-				{
-					wrapState.MarkSoftWrap();
-					if (wrapState.hasSoftWrap)
-						softWrapPosition = processedTextLen;
+					previousUnitOutputStart = currentUnitOutputStart;
+					hasPreviousUnitOutput = true;
 				}
 
 				if (processedTextLen >= textBufferSize)

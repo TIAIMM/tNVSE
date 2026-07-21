@@ -486,7 +486,6 @@ namespace fonthook::vectorfont
 	{
 		FreeTypeState& state = State();
 		std::lock_guard<std::recursive_mutex> lock(state.mutex);
-		TrimLayoutCache(state);
 		TrimBitmapCache(state);
 	}
 

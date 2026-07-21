@@ -148,12 +148,11 @@ namespace fonthook::vectorfont
 		}
 		last.store(total, std::memory_order_relaxed);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_font: CPU budget phase=%s totalMiB=%.2f limitMiB=%.2f result=%s bitmap=%.2f layout=%.2f prepared=%.2f textArtifact=%.2f atlasMeta=%.2f mappings=%.2f runtime=%.2f",
+			"tnvse_freetype_font: CPU budget phase=%s totalMiB=%.2f limitMiB=%.2f result=%s bitmap=%.2f prepared=%.2f textArtifact=%.2f atlasMeta=%.2f mappings=%.2f runtime=%.2f",
 			phase ? phase : "unknown", total / (1024.0 * 1024.0),
 			budget / (1024.0 * 1024.0),
 			total <= budget ? "within-budget" : "pinned-overcommit",
 			GetCpuMemoryUsage(CpuMemoryCategory::GlyphBitmap) / (1024.0 * 1024.0),
-			GetCpuMemoryUsage(CpuMemoryCategory::LayoutRun) / (1024.0 * 1024.0),
 			GetCpuMemoryUsage(CpuMemoryCategory::PreparedText) / (1024.0 * 1024.0),
 			GetCpuMemoryUsage(CpuMemoryCategory::TextArtifact) / (1024.0 * 1024.0),
 			GetCpuMemoryUsage(CpuMemoryCategory::AtlasMetadata) / (1024.0 * 1024.0),

@@ -14,9 +14,6 @@ namespace fonthook::vectorfont
 	struct NativeA8PayloadTemplate;
 	enum class FreeTypePerfCounter : UInt8
 	{
-		LayoutHit,
-		LayoutMiss,
-		HarfBuzzShape,
 		BitmapMemoryHit,
 		BitmapCrossFontHit,
 		BitmapDiskHit,
@@ -38,8 +35,6 @@ namespace fonthook::vectorfont
 		TextArtifactHit,
 		TextArtifactMiss,
 		ShaderEffectBatch,
-		ShaderEffectPass,
-		ShaderEffectSamples,
 		CpuEffectMasksAvoided,
 		GpuResidentGlyphHit,
 		GpuResidentGlyphMiss,
@@ -52,11 +47,6 @@ namespace fonthook::vectorfont
 		StaticVertexUploadBytes,
 		StaticVertexHit,
 		StaticVertexPromotionFailed,
-		DirectLayoutRun,
-		DirectLayoutMetricHit,
-		DirectLayoutMetricMiss,
-		DirectKerningHit,
-		DirectKerningMiss,
 		SortedStaticBatch,
 		SortedStaticPayload,
 		SortedStaticBytes,
@@ -151,9 +141,6 @@ namespace fonthook::vectorfont
 		std::array<ByteStyle, 2> styles;
 		FontPrewarmMode prewarm = FontPrewarmMode::None;
 		VerticalMetricsMode verticalMetrics = VerticalMetricsMode::FreeType;
-		bool shaping = false;
-		bool unicodeLineBreaking = false;
-		std::vector<std::string> shapingFeatures;
 		float baseline = 0.0f;
 		FontColorStyle fontColor;
 		EffectQuality effectQuality = EffectQuality::Balanced;

@@ -32,10 +32,7 @@ namespace fonthook::vectorfont
 		for (size_t i = 0; i < values.size(); ++i)
 			values[i] = s_counters[i].exchange(0, std::memory_order_relaxed);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: layout_hit=%llu miss=%llu hb=%llu bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu text_artifact_hit=%llu miss=%llu shader_batches=%llu passes=%llu estimated_samples=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu direct_layout_runs=%llu metric_hit=%llu miss=%llu kerning_hit=%llu miss=%llu sorted_static_batches=%llu payloads=%llu bytes=%llu merged_packet_ranges=%llu",
-			values[static_cast<size_t>(FreeTypePerfCounter::LayoutHit)],
-			values[static_cast<size_t>(FreeTypePerfCounter::LayoutMiss)],
-			values[static_cast<size_t>(FreeTypePerfCounter::HarfBuzzShape)],
+			"tnvse_freetype_perf: bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu text_artifact_hit=%llu miss=%llu shader_batches=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu sorted_static_batches=%llu payloads=%llu bytes=%llu merged_packet_ranges=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapMemoryHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapCrossFontHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskHit)],
@@ -57,8 +54,6 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::TextArtifactHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::TextArtifactMiss)],
 			values[static_cast<size_t>(FreeTypePerfCounter::ShaderEffectBatch)],
-			values[static_cast<size_t>(FreeTypePerfCounter::ShaderEffectPass)],
-			values[static_cast<size_t>(FreeTypePerfCounter::ShaderEffectSamples)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CpuEffectMasksAvoided)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GpuResidentGlyphHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GpuResidentGlyphMiss)],
@@ -71,11 +66,6 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::StaticVertexUploadBytes)],
 			values[static_cast<size_t>(FreeTypePerfCounter::StaticVertexHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::StaticVertexPromotionFailed)],
-			values[static_cast<size_t>(FreeTypePerfCounter::DirectLayoutRun)],
-			values[static_cast<size_t>(FreeTypePerfCounter::DirectLayoutMetricHit)],
-			values[static_cast<size_t>(FreeTypePerfCounter::DirectLayoutMetricMiss)],
-			values[static_cast<size_t>(FreeTypePerfCounter::DirectKerningHit)],
-			values[static_cast<size_t>(FreeTypePerfCounter::DirectKerningMiss)],
 			values[static_cast<size_t>(FreeTypePerfCounter::SortedStaticBatch)],
 			values[static_cast<size_t>(FreeTypePerfCounter::SortedStaticPayload)],
 			values[static_cast<size_t>(FreeTypePerfCounter::SortedStaticBytes)],
