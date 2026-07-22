@@ -549,7 +549,7 @@ namespace fonthook::vectorfont
 			}
 			GetAtlasBackedGlyphBitmaps(runtime, bitmapRequests, rasterScale,
 				AtlasPixelMode::A8, AtlasRenderMode::ShaderEffects,
-				kAtlasPadding, bitmapResults);
+				kSdfAtlasPadding, bitmapResults);
 			size_t bitmapIndex = 0;
 			for (PreparedShaderGlyph& glyph : prepared)
 			{

@@ -29,6 +29,184 @@ namespace fonthook::vectorfont
 {
 	namespace
 	{
+		void AppendUInt32(std::vector<UInt8>& output, UInt32 value)
+		{
+			output.push_back(static_cast<UInt8>(value));
+			output.push_back(static_cast<UInt8>(value >> 8));
+			output.push_back(static_cast<UInt8>(value >> 16));
+			output.push_back(static_cast<UInt8>(value >> 24));
+		}
+
+		bool ReadUInt32(const UInt8*& input, const UInt8* end, UInt32& value)
+		{
+			if (static_cast<size_t>(end - input) < sizeof(UInt32))
+				return false;
+			value = static_cast<UInt32>(input[0])
+				| (static_cast<UInt32>(input[1]) << 8)
+				| (static_cast<UInt32>(input[2]) << 16)
+				| (static_cast<UInt32>(input[3]) << 24);
+			input += sizeof(UInt32);
+			return true;
+		}
+
+		void EncodePackBitsBlock(const UInt8* input, size_t size,
+			std::vector<UInt8>& output)
+		{
+			size_t offset = 0;
+			while (offset < size)
+			{
+				size_t runEnd = offset + 1;
+				while (runEnd < size && input[runEnd] == input[offset]
+					&& runEnd - offset < 130)
+				{
+					++runEnd;
+				}
+				if (runEnd - offset >= 3)
+				{
+					output.push_back(static_cast<UInt8>(
+						0x80u | static_cast<UInt8>(runEnd - offset - 3)));
+					output.push_back(input[offset]);
+					offset = runEnd;
+					continue;
+				}
+
+				const size_t literalStart = offset;
+				offset = runEnd;
+				while (offset < size && offset - literalStart < 128)
+				{
+					runEnd = offset + 1;
+					while (runEnd < size && input[runEnd] == input[offset]
+						&& runEnd - offset < 130)
+					{
+						++runEnd;
+					}
+					if (runEnd - offset >= 3)
+						break;
+					const size_t remainingLiteralBytes = 128
+						- (offset - literalStart);
+					offset += std::min(runEnd - offset, remainingLiteralBytes);
+				}
+				const size_t literalBytes = offset - literalStart;
+				output.push_back(static_cast<UInt8>(literalBytes - 1));
+				output.insert(output.end(), input + literalStart,
+					input + literalStart + literalBytes);
+			}
+		}
+
+		bool DecodePackBitsBlock(const UInt8* input, size_t inputBytes,
+			UInt8* output, size_t outputBytes)
+		{
+			const UInt8* current = input;
+			const UInt8* end = input + inputBytes;
+			size_t written = 0;
+			while (current < end)
+			{
+				const UInt8 token = *current++;
+				if (token & 0x80u)
+				{
+					const size_t runBytes = static_cast<size_t>(token & 0x7Fu) + 3u;
+					if (current == end || runBytes > outputBytes - written)
+						return false;
+					std::memset(output + written, *current++, runBytes);
+					written += runBytes;
+				}
+				else
+				{
+					const size_t literalBytes = static_cast<size_t>(token) + 1u;
+					if (literalBytes > static_cast<size_t>(end - current)
+						|| literalBytes > outputBytes - written)
+					{
+						return false;
+					}
+					std::memcpy(output + written, current, literalBytes);
+					current += literalBytes;
+					written += literalBytes;
+				}
+			}
+			return written == outputBytes;
+		}
+	}
+
+	bool EncodePlacedAtlasSnapshotPixels(
+		const std::vector<AtlasSnapshotPlacement>& placements,
+		AtlasPixelMode pixelMode, const std::vector<UInt8>& pixels,
+		std::vector<UInt8>& encoded)
+	{
+		encoded.clear();
+		const size_t bytesPerPixel = AtlasBytesPerPixel(pixelMode);
+		size_t sourceOffset = 0;
+		for (const AtlasSnapshotPlacement& placement : placements)
+		{
+			const size_t width = placement.rect.width;
+			const size_t height = placement.rect.height;
+			if (!width || !height || width > std::numeric_limits<size_t>::max()
+				/ height || width * height > std::numeric_limits<size_t>::max()
+				/ bytesPerPixel)
+			{
+				return false;
+			}
+			const size_t blockBytes = width * height * bytesPerPixel;
+			if (sourceOffset > pixels.size() || blockBytes > pixels.size() - sourceOffset)
+				return false;
+			const size_t lengthOffset = encoded.size();
+			AppendUInt32(encoded, 0);
+			EncodePackBitsBlock(pixels.data() + sourceOffset, blockBytes, encoded);
+			const size_t encodedBytes = encoded.size() - lengthOffset - sizeof(UInt32);
+			if (encodedBytes > std::numeric_limits<UInt32>::max())
+				return false;
+			const UInt32 stored = static_cast<UInt32>(encodedBytes);
+			encoded[lengthOffset + 0] = static_cast<UInt8>(stored);
+			encoded[lengthOffset + 1] = static_cast<UInt8>(stored >> 8);
+			encoded[lengthOffset + 2] = static_cast<UInt8>(stored >> 16);
+			encoded[lengthOffset + 3] = static_cast<UInt8>(stored >> 24);
+			sourceOffset += blockBytes;
+		}
+		return sourceOffset == pixels.size();
+	}
+
+	bool DecodePlacedAtlasSnapshotPixels(
+		const std::vector<AtlasSnapshotPlacement>& placements,
+		AtlasPixelMode pixelMode, const UInt8* encoded, size_t encodedBytes,
+		size_t expectedPixelBytes, std::vector<UInt8>& pixels)
+	{
+		pixels.clear();
+		if ((!encoded && (encodedBytes || expectedPixelBytes || !placements.empty()))
+			|| expectedPixelBytes > pixels.max_size())
+			return false;
+		pixels.resize(expectedPixelBytes);
+		const UInt8* current = encoded;
+		const UInt8* end = encoded + encodedBytes;
+		const size_t bytesPerPixel = AtlasBytesPerPixel(pixelMode);
+		size_t destinationOffset = 0;
+		for (const AtlasSnapshotPlacement& placement : placements)
+		{
+			const size_t width = placement.rect.width;
+			const size_t height = placement.rect.height;
+			if (!width || !height || width > std::numeric_limits<size_t>::max()
+				/ height || width * height > std::numeric_limits<size_t>::max()
+				/ bytesPerPixel)
+			{
+				return false;
+			}
+			const size_t blockBytes = width * height * bytesPerPixel;
+			UInt32 storedBlockBytes = 0;
+			if (!ReadUInt32(current, end, storedBlockBytes)
+				|| storedBlockBytes > static_cast<size_t>(end - current)
+				|| destinationOffset > pixels.size()
+				|| blockBytes > pixels.size() - destinationOffset
+				|| !DecodePackBitsBlock(current, storedBlockBytes,
+					pixels.data() + destinationOffset, blockBytes))
+			{
+				return false;
+			}
+			current += storedBlockBytes;
+			destinationOffset += blockBytes;
+		}
+		return current == end && destinationOffset == pixels.size();
+	}
+
+	namespace
+	{
 		UInt64 HashAtlasBytes(const void* data, size_t size,
 			UInt64 hash = 1469598103934665603ull)
 		{
@@ -126,7 +304,7 @@ namespace fonthook::vectorfont
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
 				AtlasPixelMode::A8,
 				AtlasRenderMode::ShaderEffects,
-				kAtlasPadding,
+				kSdfAtlasPadding,
 				true,
 				byteClass
 			};
@@ -563,9 +741,14 @@ namespace fonthook::vectorfont
 				UInt8 renderMode;
 				UInt8 storageMode;
 				UInt8 levelZeroOnly;
-			} identity = { header.width, header.height, header.padding,
+			};
+			const UInt8 contentStorageMode = header.storageMode
+				== static_cast<UInt8>(AtlasSnapshotStorage::PlacedLevelZeroRectsRle)
+				? static_cast<UInt8>(AtlasSnapshotStorage::PlacedLevelZeroRects)
+				: header.storageMode;
+			const PageIdentity identity = { header.width, header.height, header.padding,
 				header.mipLevels, header.pixelMode, header.renderMode,
-				header.storageMode,
+				contentStorageMode,
 				static_cast<UInt8>(header.mipLevels == 1 ? 1 : 0) };
 			UInt64 hash = HashAtlasBytes(&identity, sizeof(identity));
 			if (header.storageMode
@@ -774,7 +957,9 @@ namespace fonthook::vectorfont
 			const std::vector<AtlasSnapshotPlacement>& placements,
 			const UInt8* storedPixels, std::vector<UInt8>& pixels)
 		{
-			if (!storedPixels && header.pixelBytes)
+			if ((!storedPixels && header.storedPixelBytes)
+				|| header.pixelBytes > std::numeric_limits<size_t>::max()
+				|| header.storedPixelBytes > std::numeric_limits<size_t>::max())
 				return false;
 			const AtlasPixelMode pixelMode = static_cast<AtlasPixelMode>(header.pixelMode);
 			const AtlasSnapshotStorage storageMode =
@@ -783,12 +968,14 @@ namespace fonthook::vectorfont
 				pixelMode, header.mipLevels);
 			if (storageMode == AtlasSnapshotStorage::FullMipChain)
 			{
-				if (header.pixelBytes != fullBytes)
+				if (header.pixelBytes != fullBytes
+					|| header.storedPixelBytes != header.pixelBytes)
 					return false;
 				pixels.assign(storedPixels, storedPixels + fullBytes);
 				return true;
 			}
-			if (storageMode != AtlasSnapshotStorage::PlacedLevelZeroRects)
+			if (storageMode != AtlasSnapshotStorage::PlacedLevelZeroRects
+				&& storageMode != AtlasSnapshotStorage::PlacedLevelZeroRectsRle)
 			{
 				return false;
 			}
@@ -796,6 +983,21 @@ namespace fonthook::vectorfont
 			if (!GetPlacedLevelZeroSnapshotBytes(placements,
 				header.width, header.height, pixelMode, packedBytes)
 				|| header.pixelBytes != packedBytes)
+			{
+				return false;
+			}
+			std::vector<UInt8> decodedPackedPixels;
+			if (storageMode == AtlasSnapshotStorage::PlacedLevelZeroRectsRle)
+			{
+				if (!DecodePlacedAtlasSnapshotPixels(placements, pixelMode,
+					storedPixels, static_cast<size_t>(header.storedPixelBytes),
+					packedBytes, decodedPackedPixels))
+				{
+					return false;
+				}
+				storedPixels = decodedPackedPixels.data();
+			}
+			else if (header.storedPixelBytes != header.pixelBytes)
 			{
 				return false;
 			}
@@ -890,15 +1092,20 @@ namespace fonthook::vectorfont
 			AtlasSnapshotHeader header;
 			std::memcpy(&header, serialized.data(), sizeof(header));
 			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '9' };
-			const AtlasSnapshotStorage expectedStorage = UsesPlacedLevelZeroSnapshot(pageKey)
-				? AtlasSnapshotStorage::PlacedLevelZeroRects
-				: AtlasSnapshotStorage::FullMipChain;
+			const bool expectsPlacedLevelZero = UsesPlacedLevelZeroSnapshot(pageKey);
+			const AtlasSnapshotStorage storageMode =
+				static_cast<AtlasSnapshotStorage>(header.storageMode);
+			const bool storageModeValid = expectsPlacedLevelZero
+				? (storageMode == AtlasSnapshotStorage::PlacedLevelZeroRects
+					|| storageMode == AtlasSnapshotStorage::PlacedLevelZeroRectsRle)
+				: storageMode == AtlasSnapshotStorage::FullMipChain;
 			const UInt64 placementsBytes = static_cast<UInt64>(header.placementCount)
 				* sizeof(AtlasSnapshotPlacement);
 			const UInt64 payloadOffset = sizeof(header) + placementsBytes;
 			const bool payloadSizeValid = payloadOffset >= sizeof(header)
-				&& header.pixelBytes <= std::numeric_limits<UInt64>::max() - payloadOffset
-				&& payloadOffset + header.pixelBytes == serialized.size();
+				&& header.storedPixelBytes
+					<= std::numeric_limits<UInt64>::max() - payloadOffset
+				&& payloadOffset + header.storedPixelBytes == serialized.size();
 			const bool shapeValid = header.width >= 64 && header.height >= 64
 				&& header.width <= kAtlasHardLimit && header.height <= kAtlasHardLimit
 				&& header.mipLevels >= 1 && header.mipLevels <= kMaximumAtlasMipLevels;
@@ -916,7 +1123,7 @@ namespace fonthook::vectorfont
 				|| header.scaleMilli != pageKey.scaleMilli
 				|| header.pixelMode != static_cast<UInt8>(pageKey.pixelMode)
 				|| header.renderMode != static_cast<UInt8>(pageKey.renderMode)
-				|| header.storageMode != static_cast<UInt8>(expectedStorage)
+				|| !storageModeValid
 				|| header.byteClass != static_cast<UInt8>(pageKey.byteClass)
 				|| header.padding != pageKey.padding || !payloadSizeValid
 				|| header.pageIndex != pageIndex || !header.pageCount
@@ -926,18 +1133,17 @@ namespace fonthook::vectorfont
 				|| header.mipLevels != GetAtlasMipLevelCount(header.width, header.height,
 					pageKey.levelZeroOnly)
 				|| header.pixelBytes > fullPixelBytes
+				|| header.pixelBytes > std::numeric_limits<size_t>::max()
+				|| header.storedPixelBytes > std::numeric_limits<size_t>::max()
 				|| !header.pageContentHash
-				|| (expectedStorage == AtlasSnapshotStorage::FullMipChain
-					&& header.pixelBytes != fullPixelBytes)
+				|| (!expectsPlacedLevelZero && (header.pixelBytes != fullPixelBytes
+					|| header.storedPixelBytes != header.pixelBytes))
 				|| header.checksum != HashAtlasBytes(&header,
 					offsetof(AtlasSnapshotHeader, checksum)))
 				return false;
 			if (!pageIndex)
 				pageCount = header.pageCount;
 			const UInt8* payload = serialized.data() + sizeof(header);
-			if (header.payloadChecksum != HashAtlasBytes(payload,
-				static_cast<size_t>(placementsBytes + header.pixelBytes)))
-				return false;
 			auto resource = std::make_shared<AtlasResource>();
 			resource->width = header.width;
 			resource->height = header.height;
@@ -953,8 +1159,31 @@ namespace fonthook::vectorfont
 			std::vector<AtlasSnapshotPlacement> placementList(
 				placements, placements + header.placementCount);
 			const UInt8* pixelData = payload + placementsBytes;
-			std::vector<UInt8> storedPixelVector(pixelData,
-				pixelData + static_cast<size_t>(header.pixelBytes));
+			std::vector<UInt8> storedPixelVector;
+			if (storageMode == AtlasSnapshotStorage::PlacedLevelZeroRectsRle)
+			{
+				if (!DecodePlacedAtlasSnapshotPixels(placementList, pageKey.pixelMode,
+					pixelData, static_cast<size_t>(header.storedPixelBytes),
+					static_cast<size_t>(header.pixelBytes), storedPixelVector))
+				{
+					return false;
+				}
+			}
+			else
+			{
+				if (header.storedPixelBytes != header.pixelBytes)
+					return false;
+				storedPixelVector.assign(pixelData,
+					pixelData + static_cast<size_t>(header.pixelBytes));
+			}
+			UInt64 payloadHash = placementList.empty() ? 1469598103934665603ull
+				: HashAtlasBytes(placementList.data(),
+					placementList.size() * sizeof(placementList[0]));
+			if (header.payloadChecksum != HashAtlasBytes(storedPixelVector.data(),
+				storedPixelVector.size(), payloadHash))
+			{
+				return false;
+			}
 			if (header.pageContentHash != ComputeAtlasPageContentHash(header,
 				placementList, storedPixelVector))
 				return false;
@@ -994,7 +1223,7 @@ namespace fonthook::vectorfont
 				&& !State().defaultPoolShutdown
 				&& pageKey.pixelMode == AtlasPixelMode::A8
 				&& pageKey.renderMode == AtlasRenderMode::ShaderEffects
-				&& expectedStorage == AtlasSnapshotStorage::PlacedLevelZeroRects;
+				&& expectsPlacedLevelZero;
 			bool restoredToDefaultPool = false;
 			if (compactDefaultEligible)
 			{
@@ -1364,6 +1593,7 @@ namespace fonthook::vectorfont
 			return false;
 		std::vector<SnapshotPageData> pages;
 		UInt64 totalBytes = 0;
+		UInt64 totalRawBytes = 0;
 		UInt64 totalPlacements = 0;
 		UInt64 originalGpuBytes = 0;
 		UInt64 snapshotGpuBytes = 0;
@@ -1458,9 +1688,10 @@ namespace fonthook::vectorfont
 				break;
 			}
 			page.key.pageIndex = static_cast<UInt16>(index);
-			const AtlasSnapshotStorage storageMode = UsesPlacedLevelZeroSnapshot(page.key)
+			AtlasSnapshotStorage storageMode = UsesPlacedLevelZeroSnapshot(page.key)
 				? AtlasSnapshotStorage::PlacedLevelZeroRects
 				: AtlasSnapshotStorage::FullMipChain;
+			std::vector<UInt8> encodedPixels;
 			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '9' };
 			std::memcpy(page.header.magic, magic, sizeof(magic));
 				page.header.version = kAtlasSnapshotVersion;
@@ -1474,7 +1705,6 @@ namespace fonthook::vectorfont
 					page.header.height, page.key.levelZeroOnly);
 				page.header.pixelMode = static_cast<UInt8>(page.key.pixelMode);
 				page.header.renderMode = static_cast<UInt8>(page.key.renderMode);
-				page.header.storageMode = static_cast<UInt8>(storageMode);
 				page.header.byteClass = static_cast<UInt8>(page.key.byteClass);
 				page.header.pageIndex = static_cast<UInt16>(index);
 				page.header.pageCount = static_cast<UInt16>(pages.size());
@@ -1491,6 +1721,17 @@ namespace fonthook::vectorfont
 				}
 				if (!prepared)
 					break;
+				const std::vector<UInt8>* diskPixels = &page.pixels;
+				if (storageMode == AtlasSnapshotStorage::PlacedLevelZeroRects
+					&& EncodePlacedAtlasSnapshotPixels(page.placements,
+						page.key.pixelMode, page.pixels, encodedPixels)
+					&& encodedPixels.size() < page.pixels.size())
+				{
+					storageMode = AtlasSnapshotStorage::PlacedLevelZeroRectsRle;
+					diskPixels = &encodedPixels;
+				}
+				page.header.storageMode = static_cast<UInt8>(storageMode);
+				page.header.storedPixelBytes = diskPixels->size();
 				UInt64 payloadHash = page.placements.empty() ? 1469598103934665603ull
 					: HashAtlasBytes(page.placements.data(),
 						page.placements.size() * sizeof(page.placements[0]));
@@ -1519,21 +1760,28 @@ namespace fonthook::vectorfont
 					prepared = false;
 					break;
 				}
-				const bool sparse = TryEnableSparseFile(file);
-				const bool written = WriteSequentialFileBytes(file,
+				const bool compressed = storageMode
+					== AtlasSnapshotStorage::PlacedLevelZeroRectsRle;
+				const bool sparse = !compressed && TryEnableSparseFile(file);
+				bool written = WriteSequentialFileBytes(file,
 					&page.header, sizeof(page.header))
 					&& WriteSequentialFileBytes(file, page.placements.data(),
-						page.placements.size() * sizeof(page.placements[0]))
-					&& WriteSparseFileBytes(file, page.pixels.data(),
-						page.pixels.size(), sparse)
-					&& FlushFileBuffers(file);
+						page.placements.size() * sizeof(page.placements[0]));
+				if (written)
+				{
+					written = compressed
+						? WriteSequentialFileBytes(file, diskPixels->data(), diskPixels->size())
+						: WriteSparseFileBytes(file, diskPixels->data(), diskPixels->size(), sparse);
+				}
+				written = written && FlushFileBuffers(file);
 				CloseHandle(file);
 				if (!written)
 				{
 					prepared = false;
 					break;
 				}
-				totalBytes += page.header.pixelBytes;
+				totalBytes += page.header.storedPixelBytes;
+				totalRawBytes += page.header.pixelBytes;
 				totalPlacements += page.header.placementCount;
 				snapshotGpuBytes += GetAtlasStorageBytes(page.header.width,
 					page.header.height, page.key.pixelMode, page.header.mipLevels);
@@ -1573,11 +1821,12 @@ namespace fonthook::vectorfont
 				DeleteFileW(stalePath.c_str());
 		}
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: atlas snapshot saved font=%u role=%s pages=%u->%u placements=%llu bytes=%llu gpuBytes=%llu->%llu saved=%llu tail=%ux%u",
+			"tnvse_freetype_font: atlas snapshot saved font=%u role=%s pages=%u->%u placements=%llu storedBytes=%llu rawBytes=%llu gpuBytes=%llu->%llu saved=%llu tail=%ux%u",
 			key.fontId, key.byteClass == VectorFontByteClass::DoubleByte
 				? "doubleByte" : "singleByte", sourcePageCount, pageCount,
 			static_cast<unsigned long long>(totalPlacements),
 			static_cast<unsigned long long>(totalBytes),
+			static_cast<unsigned long long>(totalRawBytes),
 			static_cast<unsigned long long>(originalGpuBytes),
 			static_cast<unsigned long long>(snapshotGpuBytes),
 			static_cast<unsigned long long>(originalGpuBytes > snapshotGpuBytes
@@ -1671,7 +1920,7 @@ namespace fonthook::vectorfont
 		UInt32 sdfSpread = 0;
 		if (!ResolveSdfSpread(config, rasterScale, sdfSpread))
 			return false;
-		const UInt32 padding = kAtlasPadding;
+		const UInt32 padding = kSdfAtlasPadding;
 		// Height-first shelves make a complete prewarm profile substantially denser
 		// than appending scan-order batches, and let every page be uploaded once.
 		std::vector<std::shared_ptr<const GlyphBitmap>> packedBitmaps = bitmaps;

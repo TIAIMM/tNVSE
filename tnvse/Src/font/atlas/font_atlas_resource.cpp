@@ -674,7 +674,9 @@ namespace fonthook::vectorfont
 					|| snapshot.sourceHeader.placementCount != snapshot.placements.size()
 					|| snapshot.sourceHeader.pixelMode != static_cast<UInt8>(snapshot.pixelMode)
 					|| snapshot.sourceHeader.headerSize != sizeof(AtlasSnapshotHeader)
-					|| snapshot.sourceHeader.pixelBytes > std::numeric_limits<size_t>::max())
+					|| snapshot.sourceHeader.pixelBytes > std::numeric_limits<size_t>::max()
+					|| snapshot.sourceHeader.storedPixelBytes
+						> std::numeric_limits<size_t>::max())
 				{
 					return false;
 				}
@@ -682,7 +684,7 @@ namespace fonthook::vectorfont
 					* sizeof(AtlasSnapshotPlacement);
 				const UInt64 payloadOffset = sizeof(AtlasSnapshotHeader) + placementBytes;
 				if (payloadOffset < sizeof(AtlasSnapshotHeader)
-					|| snapshot.sourceHeader.pixelBytes
+					|| snapshot.sourceHeader.storedPixelBytes
 						> std::numeric_limits<UInt64>::max() - payloadOffset)
 				{
 					return false;
@@ -695,7 +697,7 @@ namespace fonthook::vectorfont
 				LARGE_INTEGER size = {};
 				if (!GetFileSizeEx(file.handle, &size) || size.QuadPart < 0
 					|| static_cast<UInt64>(size.QuadPart)
-						!= payloadOffset + snapshot.sourceHeader.pixelBytes)
+						!= payloadOffset + snapshot.sourceHeader.storedPixelBytes)
 				{
 					return false;
 				}
@@ -719,14 +721,39 @@ namespace fonthook::vectorfont
 					pixels = snapshot.pixels;
 					return true;
 				}
-				if (snapshot.sourceHeader.pixelBytes > std::numeric_limits<size_t>::max())
+				if (snapshot.sourceHeader.pixelBytes > std::numeric_limits<size_t>::max()
+					|| snapshot.sourceHeader.storedPixelBytes
+						> std::numeric_limits<size_t>::max())
 					return false;
 				CompactSnapshotFile file;
 				if (!OpenCompactSnapshotPixels(snapshot, file))
 					return false;
-				pixels.resize(static_cast<size_t>(snapshot.sourceHeader.pixelBytes));
-				if (!ReadSnapshotBytesExact(file.handle, pixels.data(), pixels.size()))
+				std::vector<UInt8> storedPixels(
+					static_cast<size_t>(snapshot.sourceHeader.storedPixelBytes));
+				if (!ReadSnapshotBytesExact(file.handle,
+					storedPixels.data(), storedPixels.size()))
 					return false;
+				const AtlasSnapshotStorage storageMode =
+					static_cast<AtlasSnapshotStorage>(snapshot.sourceHeader.storageMode);
+				if (storageMode == AtlasSnapshotStorage::PlacedLevelZeroRectsRle)
+				{
+					if (!DecodePlacedAtlasSnapshotPixels(snapshot.placements,
+						snapshot.pixelMode, storedPixels.data(), storedPixels.size(),
+						static_cast<size_t>(snapshot.sourceHeader.pixelBytes), pixels))
+					{
+						return false;
+					}
+				}
+				else if (storageMode == AtlasSnapshotStorage::PlacedLevelZeroRects
+					&& snapshot.sourceHeader.storedPixelBytes
+						== snapshot.sourceHeader.pixelBytes)
+				{
+					pixels = std::move(storedPixels);
+				}
+				else
+				{
+					return false;
+				}
 				UInt64 hash = HashCompactAtlasBytes(snapshot.placements.data(),
 					snapshot.placements.size() * sizeof(AtlasSnapshotPlacement));
 				hash = HashCompactAtlasBytes(pixels.data(), pixels.size(), hash);
@@ -749,12 +776,21 @@ namespace fonthook::vectorfont
 			const UInt32 sourceBytesPerPixel = AtlasBytesPerPixel(snapshot.pixelMode);
 			const UInt32 destinationBytesPerPixel = AtlasBytesPerPixel(destinationMode);
 			CompactSnapshotFile sourceFile;
-			const bool streamFromFile = snapshot.pixels.empty();
+			std::vector<UInt8> decodedPixels;
+			const AtlasSnapshotStorage storageMode =
+				static_cast<AtlasSnapshotStorage>(snapshot.sourceHeader.storageMode);
+			const bool compressedFile = snapshot.pixels.empty()
+				&& storageMode == AtlasSnapshotStorage::PlacedLevelZeroRectsRle;
+			if (compressedFile && !LoadCompactSnapshotPixels(snapshot, decodedPixels))
+				return false;
+			const bool streamFromFile = snapshot.pixels.empty() && !compressedFile;
 			if (streamFromFile && !OpenCompactSnapshotPixels(snapshot, sourceFile))
 				return false;
+			const std::vector<UInt8>& memoryPixels = compressedFile
+				? decodedPixels : snapshot.pixels;
 			const size_t expectedPixelBytes = streamFromFile
 				? static_cast<size_t>(snapshot.sourceHeader.pixelBytes)
-				: snapshot.pixels.size();
+				: memoryPixels.size();
 			UInt64 streamedHash = HashCompactAtlasBytes(snapshot.placements.data(),
 				snapshot.placements.size() * sizeof(AtlasSnapshotPlacement));
 			std::vector<UInt8> sourceRow;
@@ -793,7 +829,7 @@ namespace fonthook::vectorfont
 					}
 					else
 					{
-						source = snapshot.pixels.data() + sourceOffset
+						source = memoryPixels.data() + sourceOffset
 							+ static_cast<size_t>(row) * sourceRowBytes;
 					}
 					UInt8* target = destination

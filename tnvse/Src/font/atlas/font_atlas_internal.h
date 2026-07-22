@@ -25,8 +25,13 @@
 
 namespace fonthook::vectorfont
 {
-	// The coarsest 1/4 mip needs four transparent texels on each edge.
-	inline constexpr UInt32 kAtlasPadding = 4;
+	// Shader SDF atlases are level-zero-only. One transparent texel on each edge
+	// isolates bilinear samples; the distance-field spread is already part of the
+	// glyph bitmap and must not be counted again as atlas padding.
+	inline constexpr UInt32 kSdfAtlasPadding = 1;
+	// CPU-baked ARGB atlases retain up to three mip levels. Four transparent
+	// level-zero texels leave one transparent texel at the coarsest 1/4 mip.
+	inline constexpr UInt32 kArgbAtlasPadding = 4;
 	inline constexpr UInt32 kMaximumAtlasMipLevels = 3;
 	inline constexpr UInt32 kAtlasHardLimit = 4096;
 	inline constexpr UInt32 kMaximumQuads = 16383;
@@ -73,6 +78,7 @@ namespace fonthook::vectorfont
 	{
 		FullMipChain = 0,
 		PlacedLevelZeroRects = 1,
+		PlacedLevelZeroRectsRle = 2,
 	};
 
 	struct AtlasRect
@@ -121,10 +127,10 @@ namespace fonthook::vectorfont
 		NiPixelDataPtr pixelData;
 		UInt32 width = 0;
 		UInt32 height = 0;
-		UInt32 cursorX = kAtlasPadding;
-		UInt32 cursorY = kAtlasPadding;
+		UInt32 cursorX = kArgbAtlasPadding;
+		UInt32 cursorY = kArgbAtlasPadding;
 		UInt32 shelfHeight = 0;
-		UInt32 padding = kAtlasPadding;
+		UInt32 padding = kArgbAtlasPadding;
 		UInt32 generation = 0;
 		UInt32 mipLevels = 1;
 		AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
@@ -193,12 +199,13 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 11;
+	constexpr UInt32 kAtlasSnapshotVersion = 12;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
 	constexpr UInt32 kAtlasSnapshotKnownFlags = kAtlasSnapshotFlagGloballyRepacked;
-	// Version 11 persists the stable page, inverse-size, and normalized UV subset
-	// of AtlasGlyphPlacement. Runtime-only atlas identity and generation are rebound
-	// after the validated prewarm snapshot has created its current AtlasResource.
+	// Version 12 stores the compact placed-rectangle payload with optional lossless
+	// per-glyph PackBits blocks. pixelBytes remains the decoded byte count while
+	// storedPixelBytes describes the on-disk payload. Version 11 introduced the
+	// stable page, inverse-size, and normalized UV placement subset.
 	constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 #pragma pack(push, 1)
 	struct AtlasSnapshotHeader
@@ -226,6 +233,7 @@ namespace fonthook::vectorfont
 		UInt16 pageCount = 0;
 		UInt32 placementCount = 0;
 		UInt64 pixelBytes = 0;
+		UInt64 storedPixelBytes = 0;
 		UInt64 payloadChecksum = 0;
 		UInt64 pageContentHash = 0;
 		UInt64 checksum = 0;
@@ -366,7 +374,7 @@ namespace fonthook::vectorfont
 		UInt32 scaleMilli = 1000;
 		AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
 		AtlasRenderMode renderMode = AtlasRenderMode::CpuEffects;
-		UInt32 padding = kAtlasPadding;
+		UInt32 padding = kArgbAtlasPadding;
 		bool levelZeroOnly = false;
 		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 		UInt16 pageIndex = 0;
@@ -434,7 +442,7 @@ namespace fonthook::vectorfont
 		UInt32 scaleMilli = 1000;
 		AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
 		AtlasRenderMode renderMode = AtlasRenderMode::CpuEffects;
-		UInt32 padding = kAtlasPadding;
+		UInt32 padding = kArgbAtlasPadding;
 		bool levelZeroOnly = false;
 		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 
@@ -526,11 +534,11 @@ namespace fonthook::vectorfont
 	struct ShaderEffectBuild
 	{
 		A8EffectShapeConfig config;
-		UInt32 padding = kAtlasPadding;
+		UInt32 padding = kSdfAtlasPadding;
 		UInt32 drawQuadCount = 0;
 	};
 
-	static_assert(sizeof(AtlasSnapshotHeader) == 120);
+	static_assert(sizeof(AtlasSnapshotHeader) == 128);
 	static_assert(sizeof(AtlasSnapshotGlyphPlacement) == 36);
 	static_assert(sizeof(AtlasSnapshotPlacement) == 92);
 
@@ -595,6 +603,14 @@ namespace fonthook::vectorfont
 	size_t GetCompactSnapshotBytes(const AtlasResource& resource);
 	bool LoadCompactAtlasSnapshotPixels(const CompactAtlasSnapshot& snapshot,
 		std::vector<UInt8>& pixels);
+	bool EncodePlacedAtlasSnapshotPixels(
+		const std::vector<AtlasSnapshotPlacement>& placements,
+		AtlasPixelMode pixelMode, const std::vector<UInt8>& pixels,
+		std::vector<UInt8>& encoded);
+	bool DecodePlacedAtlasSnapshotPixels(
+		const std::vector<AtlasSnapshotPlacement>& placements,
+		AtlasPixelMode pixelMode, const UInt8* encoded, size_t encodedBytes,
+		size_t expectedPixelBytes, std::vector<UInt8>& pixels);
 	NiTexture* GetAtlasTexture(const AtlasResource& resource);
 	NiTexturingProperty* CreateManagedAtlasProperty(UInt32 width, UInt32 height,
 		AtlasPixelMode mode, UInt32 mipLevels, const std::vector<UInt8>& source,

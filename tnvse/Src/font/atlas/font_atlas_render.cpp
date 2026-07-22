@@ -281,7 +281,7 @@ namespace fonthook::vectorfont
 					++diagnostics->cpuShapeAttempts;
 				NiTriShape* shape = TryCreateAtlasShapeForMode(font, quads,
 					config, rasterScale, prepareObject, pixelMode,
-					AtlasRenderMode::CpuEffects, kAtlasPadding, atlases, tileColor,
+					AtlasRenderMode::CpuEffects, kArgbAtlasPadding, atlases, tileColor,
 					useCustomA8Shader);
 				if (shape)
 				{
