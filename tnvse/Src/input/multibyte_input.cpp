@@ -79,7 +79,11 @@ namespace fonthook
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_DeferredInit)
 		{
 			if (s_hooksInstalled)
+			{
 				TryInstallJipKeyEventSuppressionHook();
+				InitializeMcmExtenderInputBridge();
+				InitializeDialogueHistoryInputBridge();
+			}
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 		{
@@ -90,6 +94,8 @@ namespace fonthook
 			{
 				ProcessStewieTweaksInputTargetState();
 				ProcessStewieMenuSearchPendingStateSync();
+				ProcessMcmExtenderInputTargetState();
+				ProcessDialogueHistoryInputTargetState();
 			}
 
 			if (s_hooksInstalled && s_window)
@@ -97,11 +103,15 @@ namespace fonthook
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitGame)
 		{
+			ResetMcmExtenderInputState();
+			ResetDialogueHistoryInputState();
 			RestoreWindowProc();
 			ShutdownCandidateOverlayRenderer();
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitToMainMenu)
 		{
+			ResetMcmExtenderInputState();
+			ResetDialogueHistoryInputState();
 			RestoreWindowProc();
 		}
 	}

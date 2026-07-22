@@ -172,6 +172,11 @@ namespace fonthook::multibyte_input
 		s_captureActive = active;
 	}
 
+	bool IsJipKeyEventSuppressionHookInstalled()
+	{
+		return s_hookInstalled;
+	}
+
 	void TryInstallJipKeyEventSuppressionHook()
 	{
 		if (s_hookInstalled || s_installAttempted

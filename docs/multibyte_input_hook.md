@@ -399,6 +399,8 @@ bMultibyteInputCompositionPreview = 0
 bMultibyteInputHideSystemCandidateWindow = 1
 bMultibyteInputUseTSFCandidates = 1
 bMultibyteInputStewieTweaks = 1
+bMultibyteInputMCMExtender = 1
+bMultibyteInputDialogueHistory = 1
 bSuppressJIPKeyEventsDuringMultibyteInput = 1
 ```
 
@@ -416,7 +418,9 @@ bSuppressJIPKeyEventsDuringMultibyteInput = 1
 - `bMultibyteInput=0` 时不 subclass WndProc，不安装 `TextEditMenu` hook。
 - `bMultibyteInput=1` 但多字节字体能力未实际安装，或 `uiEncoding=0` 时打印一次日志并跳过初始化；FreeType 能力不满足这个依赖。
 - `bMultibyteInputStewieTweaks=0` 时不检测或 hook Stewie Tweaks 输入框；该开关仍受 `bMultibyteInput` 总开关约束。
-- `bSuppressJIPKeyEventsDuringMultibyteInput=1` 时，仅在 tNVSE 已确认的多字节文本输入会话内屏蔽 JIP 57.30 的键盘 `OnKeyDown/OnKeyUp` 派发；鼠标、手柄以及 MCM Extender 等未由 tNVSE 接管的脚本输入不受影响。
+- `bMultibyteInputMCMExtender=1` 时，只有 JIP 57.30 键盘事件隔离已经成功安装、xNVSE event/console interface 可用、且 MCM Extender 的三个既有 UDF 均存在时才启用 MCM 搜索适配；不会修改 MCM Extender 文件。
+- `bMultibyteInputDialogueHistory=1` 时，只有上述 JIP 隔离、xNVSE event/console interface 和 Dialogue History 的三个原 UDF 均可用时才启用搜索适配；不会修改 Dialogue History 文件。
+- `bSuppressJIPKeyEventsDuringMultibyteInput=1` 时，仅在 tNVSE 已确认的多字节文本输入会话内屏蔽 JIP 57.30 的键盘 `OnKeyDown/OnKeyUp` 派发；鼠标、手柄以及尚未由 tNVSE 接管的脚本输入不受影响。
 
 ### 2. WndProc / IME 捕获
 
@@ -655,7 +659,34 @@ JIP LN 57.30 的 `LN_ProcessEvents` 不读取菜单 handler 的返回值，而�
 - 会话结束时快照仍按下的键，并持续静默同步到物理松开，避免关闭输入框的按键变成延迟 `OnKeyDown`，或只产生没有对应按下事件的 `OnKeyUp`。
 - 只过滤 DirectInput 键码 `<256` 的键盘项；JIP 鼠标和控制器事件保持原样。
 
-这个 hook 屏蔽的是 JIP 的全局键盘事件观察点，不修改具体模组脚本。MCM Extender 的搜索框本身使用 JIP 键事件，但它不是当前 tNVSE 多字节输入 target，因此其会话不会打开此过滤条件。
+这个 hook 屏蔽的是 JIP 的全局键盘事件观察点，不修改具体模组脚本。启用 MCM Extender 或 Dialogue History 适配后，对应搜索会话也会打开此过滤条件，由独立 target 接管键盘文本编辑；鼠标和手柄仍由原模组脚本处理。
+
+### 3.4 MCM Extender 搜索适配
+
+`bMultibyteInputMCMExtender=1` 增加第四类独立 target，完全由 tNVSE 运行时接入：
+
+- target guard 与 MCM Extender 原 `MenuSearchInput.gek` 对齐：控制台未打开、JIP 语义的顶部活动菜单为 `StartMenu`（1013），并且 `_MCMExt+Search == 1`。顶部菜单判定同时检查 `pActiveMenu` 和 `InterfaceManager::menuStack`，不会在 StartMenu 可见但 `pActiveMenu == nullptr` 时错误结束会话。
+- 不再把 `_MCMExt+Open`、`MCM/_TargetMain` 或 `MCM/MCM_Search` 的瞬时可见性当作输入存活条件；`MenuSearch.gek` 重建列表和重置 MCM 内部状态时会短暂改变这些值，原 MCM 输入 guard 也没有依赖它们。
+- 激活前要求固定版本 JIP 57.30 键盘事件隔离成功安装，避免 MCM 原 `SetOnKeyDownEventHandler` 与 tNVSE 同时写入；不满足条件时保留 MCM 原输入路径。
+- tNVSE 维护当前 codepage byte buffer 和 byte caret；Backspace、Delete、Left、Right、Home、End 均通过 `PrevCharBoundary` / `NextCharBoundary`，不会拆分 DBCS lead+trail。
+- `WM_CHAR` 负责普通 ASCII，`GCS_RESULTSTR` 负责 IME 提交；composition ASCII、重复 `WM_IME_CHAR` 和输入法切换热键 Space 继续走统一抑制逻辑。
+- `_search_text_1`、`_search_cursor_1`、`_search_cursor_2` 由 tNVSE 更新。WndProc/IME 回调只修改本地 shadow 并排队；tile 写入、`MenuSearch.gek` 及 Esc/Tab/Ctrl-F/Enter UDF 调用统一在下一次 `kMessage_MainGameLoop` 执行，避免在 Windows 消息回调中重入 MCM 的列表重建和 quest-stage 状态重置。
+- StartMenu 键盘处理链会在 MCM target 活动时消费同一物理键对应的 DirectInput 文本和编辑副本，避免 Stewie MenuSearch 或原版 StartMenu 再处理一次。`WM_KEYDOWN` 是 Backspace、Delete、Left、Right、Home、End 和 Enter 的唯一键盘编辑来源，Windows 的重复 `WM_KEYDOWN` 负责按住连发；不再用时间窗把延迟到达的 DirectInput 副本误判为第二次编辑。上下翻页等无关输入以及鼠标、手柄路径仍保留给原处理器。
+- Esc、Tab、Ctrl-F 和 Enter 通过另外两个私有 runtime event 调用原 `OnKeyDown.gek` / `MenuSearchInput.gek`；不会复制这些控制键的脚本语义。
+- 不安装 `Sv_Find` hook。匹配仍是 xNVSE/MCM Extender 原有的 byte substring 行为；该适配保证输入和编辑的 DBCS 完整性，但不改变高位 byte 的大小写折叠或 trail-byte 起点匹配语义。
+- 不写入、替换或生成 MCM Extender 的 `.gek`、XML、ESP 或其他文件。
+
+### 3.5 Dialogue History 搜索适配
+
+`bMultibyteInputDialogueHistory=1` 为 Dialogue History 的 NPC 名称搜索增加独立 target：
+
+- 仅在控制台关闭、JIP 语义的顶部菜单为 `StartMenu`（1013）、`_DiaHist+Visible == 1` 且 `_DiaHist+Search == 1` 时激活；要求 `DialogueHistory/Search` 的 `_search_text_1`、`_search_cursor_1` 和 `_search_cursor_2` traits 存在。
+- 激活前要求 JIP 57.30 键盘事件隔离和 Dialogue History 原 `Search.gek`、`SearchInput.gek`、`OnKeyDown.gek` 均可用；缺少任一条件时不安装部分适配，保留 mod 原输入路径。
+- 输入缓冲区使用当前 `uiEncoding` 对应的 Windows codepage，光标移动、Backspace 和 Delete 只落在完整 DBCS 字符边界上。`WM_CHAR`、IME commit、composition echo 与输入法切换 Space 使用和 MCM target 相同的统一输入规则。
+- WndProc 只更新 shadow。tile 文本和光标在主循环刷新；最后一次文字变更后等待 500 ms，再通过私有 runtime event 调用原 `DialogueHistory\Search.gek`，保留 `*DiaHist_Search` 的防抖语义。Enter、Tab、Ctrl-F 会先强制提交待处理搜索，再分别调用原 `SearchInput.gek` / `OnKeyDown.gek`。
+- StartMenu DirectInput 文本与编辑副本仅被消费，键盘编辑及按住连发只由 `WM_KEYDOWN` 驱动；鼠标、控制器和无关 StartMenu 输入继续交给原处理器。
+- 复用已经过 handler 稳定期安装的 StartMenu 链，不为 Dialogue History 安装新的固定地址 hook；不会形成 tNVSE 与 Stewie handler 互为前驱的递归链。
+- 不安装 `Sv_Find` hook，NPC 名称过滤仍由 Dialogue History 原 `Search.gek` 完成；不修改该 mod 的 `.gek`、XML、JSON 或其他文件。
 
 ### 4. DBCS-aware 编辑层
 
@@ -769,10 +800,10 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 ### 扩展字段
 
-原版 `TextEditMenu`、JIP `ShowTextInputMenu`、Stewie Tweaks StewMenu/MenuSearch 已由各自独立 target 覆盖。后续扩展应继续按“每种输入框单独 adapter”的方式处理，不要把不同字段布局强行合并：
+原版 `TextEditMenu`、JIP `ShowTextInputMenu`、Stewie Tweaks StewMenu/MenuSearch、MCM Extender 搜索、Dialogue History 搜索已由各自独立 target 覆盖。后续扩展应继续按“每种输入框单独 adapter”的方式处理，不要把不同字段布局强行合并：
 
 - Console 输入只在明确需要时处理，因为命令解析和普通 UI 文本不同。
-- MCM Extender / 其他 XML 菜单搜索如果不是 Stewie target，需要先确认 tile、handler 和内部 buffer，再决定是否做单独 adapter。
+- 其他 XML 菜单搜索如果不是现有 target，需要先确认 tile、handler 和内部 buffer，再决定是否做单独 adapter。
 - Rime 后端、Console 输入属于后续扩展；当前独立 DX9 overlay 和 TSF/IMM32 候选读取不影响 commit-only 写入层。
 
 每个字段都要单独确认提交路径是否会 sanitize、是否写入存档、是否要求 ASCII。
@@ -842,6 +873,26 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - Inventory、Stats、Map、Container、Barter、LevelUp、Recipe、Save/Load 的 Stewie MenuSearch 搜索框能输入当前 codepage 多字节文本，关闭搜索和刷新列表行为保持 Stewie 原样。
 - 英文 ASCII 输入不出现 WndProc + Stewie handler 双插入，Win+Space 切换输入法后仍能在 Stewie 搜索框中 commit 多字节字符。
 
+### MCM Extender
+
+- 启动日志出现 `MCM Extender runtime input bridge installed`；JIP 版本或签名不匹配时明确记录适配禁用，并保留 MCM 原输入。
+- `Ctrl-F` 或搜索按钮打开 MCM mod-list 搜索后，中文/日文/韩文 IME commit 能写入 `_search_text_1`，预编辑字母不会残留。
+- Backspace、Delete、Left、Right、Home、End 在 DBCS 字符边界操作；按住编辑键时 Windows repeat 不产生半字符。
+- 文本变化后仍由原 `MenuSearch.gek` 刷新 `MCMMods`；Esc、Tab、Ctrl-F、Enter 保持原脚本行为。
+- Item Inspect Menu 等注册 JIP 键事件的 mod 在 MCM 搜索输入期间不响应键盘快捷键，关闭输入后也不出现延迟 key-down 或孤立 key-up。
+- 鼠标点击、滚轮和控制器事件不受隔离；关闭 `bMultibyteInputMCMExtender` 时完全回到 MCM 原输入路径。
+- 验证普通中文搜索结果；同时确认没有 `Sv_Find` hook，含特殊 trail byte 的严格匹配限制仍按原 xNVSE 行为记录，而不误报为已修复。
+
+### Dialogue History
+
+- 启动日志出现 `Dialogue History runtime input bridge installed`；关闭配置、缺少原 UDF 或 JIP 版本/签名不匹配时不建立部分接管状态。
+- 在 StartMenu 打开 Dialogue History 的搜索框后，中文/日文/韩文 IME commit 能写入搜索栏，预编辑字母不残留。
+- Backspace、Delete、Left、Right、Home、End 按 DBCS 字符边界编辑；单次 Backspace 不删除两个汉字，按住时只按 Windows repeat 连发。
+- 连续输入期间不逐键重建列表；停止输入约 500 ms 后由原 `Search.gek` 刷新 NPC 名称过滤结果。
+- Enter、Tab、Ctrl-F 会先提交待处理搜索，再走原 `SearchInput.gek` / `OnKeyDown.gek` 的结束或关闭语义。
+- 输入期间其他 JIP 键盘快捷键不触发，关闭搜索后没有延迟 key-down 或孤立 key-up；鼠标、滚轮和控制器路径不受影响。
+- 关闭 `bMultibyteInputDialogueHistory` 时回到 Dialogue History 原输入路径；确认 mod 目录内容未被修改且没有安装 `Sv_Find` hook。
+
 ### 保存名
 
 - 使用中文玩家名后创建手动存档。
@@ -882,6 +933,8 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - 编辑框打字期间能正确显示当前 `uiEncoding` 对应字符。
 - Backspace/delete/left/right 不拆 DBCS。
 - Stewie Tweaks 9.90+ 的 StewMenu 搜索、string 子设置输入和常见 MenuSearch 搜索框不残留预编辑串，编辑键不拆多字节字符。
+- MCM Extender 搜索由纯 tNVSE target 接管编辑并复用原 UDF，且没有修改 mod 文件或 hook `Sv_Find`。
+- Dialogue History 搜索保留 500 ms 防抖并复用原 UDF，且没有修改 mod 文件或 hook `Sv_Find`。
 - 实际 `.fos` 文件名仍由原版 sanitizer 生成。
 - 载入/保存列表继续走原版 save header 摘要显示。
 - 没有正常构建中的全局 `Tile::SetString` 或 WndProc 调试日志。

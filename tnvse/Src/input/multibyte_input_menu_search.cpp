@@ -834,6 +834,18 @@ namespace fonthook
 
 		bool HandleMenuSearchInput(Menu* menu, UInt32 input)
 		{
+			if (MenuID(menu) == Pause && HandleDialogueHistoryMenuInput(menu, input))
+				return true;
+
+			// MCM Extender registers its own JIP key handlers on StartMenu.  When
+			// tNVSE owns that search field, consume the matching menu-keyboard
+			// event before Stewie's StartMenu search adapter or the vanilla menu
+			// can interpret the same physical key a second time.
+			if (MenuID(menu) == Pause && HandleMcmExtenderMenuInput(menu, input))
+				return true;
+			if (!IsStewieTweaksAvailable())
+				return CallStewieOriginalInput(menu, input);
+
 			bool controlHandled = false;
 			if (HandleMenuSearchControlInput(menu, input, controlHandled))
 				return controlHandled;

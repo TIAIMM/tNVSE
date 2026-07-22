@@ -24,6 +24,8 @@ bool g_bMultibyteInputCompositionPreview;
 bool g_bMultibyteInputHideSystemCandidateWindow;
 bool g_bMultibyteInputUseTSFCandidates;
 bool g_bMultibyteInputStewieTweaks;
+bool g_bMultibyteInputMCMExtender;
+bool g_bMultibyteInputDialogueHistory;
 bool g_bSuppressJIPKeyEventsDuringMultibyteInput;
 std::wstring g_sMultibyteInputOverlayFontPath;
 bool g_bChangeJIPBigGunDesc;
@@ -189,6 +191,16 @@ void LoadConfig()
 	g_bMultibyteInputStewieTweaks = ReadConfigInt(kMultibyteInputSection,
 		"bMultibyteInputStewieTweaks", 1, filename);
 	gLog.FormattedMessage("g_bMultibyteInputStewieTweaks: %d", g_bMultibyteInputStewieTweaks);
+
+	g_bMultibyteInputMCMExtender = ReadConfigInt(kMultibyteInputSection,
+		"bMultibyteInputMCMExtender", 1, filename) != 0;
+	gLog.FormattedMessage("g_bMultibyteInputMCMExtender: %d", g_bMultibyteInputMCMExtender);
+
+	g_bMultibyteInputDialogueHistory = ReadConfigInt(kMultibyteInputSection,
+		"bMultibyteInputDialogueHistory", 1, filename) != 0;
+	gLog.FormattedMessage(
+		"g_bMultibyteInputDialogueHistory: %d",
+		g_bMultibyteInputDialogueHistory);
 
 	g_bSuppressJIPKeyEventsDuringMultibyteInput = ReadConfigInt(
 		kMultibyteInputSection,

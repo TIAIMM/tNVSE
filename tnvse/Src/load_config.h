@@ -21,6 +21,8 @@ extern bool g_bMultibyteInputCompositionPreview;
 extern bool g_bMultibyteInputHideSystemCandidateWindow;
 extern bool g_bMultibyteInputUseTSFCandidates;
 extern bool g_bMultibyteInputStewieTweaks;
+extern bool g_bMultibyteInputMCMExtender;
+extern bool g_bMultibyteInputDialogueHistory;
 extern bool g_bSuppressJIPKeyEventsDuringMultibyteInput;
 extern std::wstring g_sMultibyteInputOverlayFontPath;
 extern bool g_bChangeJIPBigGunDesc;

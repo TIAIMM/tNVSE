@@ -4,6 +4,8 @@
 extern HMODULE hJIP;
 extern PluginHandle g_pluginHandle;
 extern NVSEMessagingInterface* g_messagingInterface;
+extern NVSEEventManagerInterface* g_eventInterface;
+extern NVSEConsoleInterface* g_consoleInterface;
 
 static size_t __fastcall GetJIPAddress(size_t aiAddress)
 {

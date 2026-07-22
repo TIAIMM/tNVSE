@@ -56,6 +56,8 @@ namespace fonthook
 			TextEdit = 2,
 			JipTextInput = 4,
 			Stewie = 8,
+			McmExtender = 16,
+			DialogueHistory = 32,
 		};
 
 		extern HWND s_window;
@@ -79,6 +81,24 @@ namespace fonthook
 			Menu* menu = nullptr;
 			Tile* tile = nullptr;
 			bool inputField = false;
+			bool valid = false;
+		};
+
+		struct McmExtenderInputTarget
+		{
+			Menu* menu = nullptr;
+			Tile* root = nullptr;
+			Tile* mcm = nullptr;
+			Tile* search = nullptr;
+			bool valid = false;
+		};
+
+		struct DialogueHistoryInputTarget
+		{
+			Menu* menu = nullptr;
+			Tile* root = nullptr;
+			Tile* dialogueHistory = nullptr;
+			Tile* search = nullptr;
 			bool valid = false;
 		};
 
@@ -159,6 +179,42 @@ namespace fonthook
 		void CancelDeferredStewieAscii();
 		bool RemovePreviousStewieAsciiCompositionEcho(wchar_t compositionLead);
 
+		bool InitializeMcmExtenderInputBridge();
+		McmExtenderInputTarget GetActiveMcmExtenderInputTarget();
+		McmExtenderInputTarget GetOverlayMcmExtenderInputTarget();
+		void ProcessMcmExtenderInputTargetState();
+		void ResetMcmExtenderInputState();
+		bool InsertWideTextMcmExtender(
+			const McmExtenderInputTarget& target,
+			std::wstring_view text);
+		bool HandleMcmExtenderWndProcChar(
+			const McmExtenderInputTarget& target,
+			WPARAM input);
+		bool HandleMcmExtenderKeyDown(
+			const McmExtenderInputTarget& target,
+			WPARAM virtualKey);
+		bool HandleMcmExtenderMenuInput(Menu* menu, UInt32 input);
+		bool ShouldSuppressMcmExtenderControlChar(WPARAM input);
+		bool RemovePreviousMcmExtenderAsciiCompositionEcho(wchar_t compositionLead);
+
+		bool InitializeDialogueHistoryInputBridge();
+		DialogueHistoryInputTarget GetActiveDialogueHistoryInputTarget();
+		DialogueHistoryInputTarget GetOverlayDialogueHistoryInputTarget();
+		void ProcessDialogueHistoryInputTargetState();
+		void ResetDialogueHistoryInputState();
+		bool InsertWideTextDialogueHistory(
+			const DialogueHistoryInputTarget& target,
+			std::wstring_view text);
+		bool HandleDialogueHistoryWndProcChar(
+			const DialogueHistoryInputTarget& target,
+			WPARAM input);
+		bool HandleDialogueHistoryKeyDown(
+			const DialogueHistoryInputTarget& target,
+			WPARAM virtualKey);
+		bool HandleDialogueHistoryMenuInput(Menu* menu, UInt32 input);
+		bool ShouldSuppressDialogueHistoryControlChar(WPARAM input);
+		bool RemovePreviousDialogueHistoryAsciiCompositionEcho(wchar_t compositionLead);
+
 		bool HasOverlayInputTarget();
 		bool InitializeCandidateOverlayRenderer();
 		bool IsCandidateOverlayRendererAvailable();
@@ -175,6 +231,7 @@ namespace fonthook
 		void HideCandidateOverlay();
 		void ClearImeCandidates();
 		void TryInstallJipKeyEventSuppressionHook();
+		bool IsJipKeyEventSuppressionHookInstalled();
 		void SetJipKeyEventSuppressionCaptureActive(bool active);
 		void HideSystemImeWindows(HWND hwnd);
 		void SetTextInputSessionActive(bool active);

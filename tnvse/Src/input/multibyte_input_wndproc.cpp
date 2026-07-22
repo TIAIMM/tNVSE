@@ -14,7 +14,16 @@ namespace fonthook
 			if (!menu && !jipMenu)
 				jipMenu = GetCurrentJipTextInputMenu();
 			StewieInputTarget stewieTarget = (!menu && !jipMenu) ? GetOverlayStewieInputTarget() : StewieInputTarget();
-			if (!menu && !jipMenu && !stewieTarget.valid)
+			DialogueHistoryInputTarget dialogueHistoryTarget =
+				(!menu && !jipMenu && !stewieTarget.valid)
+					? GetOverlayDialogueHistoryInputTarget()
+					: DialogueHistoryInputTarget();
+			McmExtenderInputTarget mcmTarget =
+				(!menu && !jipMenu && !stewieTarget.valid && !dialogueHistoryTarget.valid)
+				? GetOverlayMcmExtenderInputTarget()
+				: McmExtenderInputTarget();
+			if (!menu && !jipMenu && !stewieTarget.valid
+				&& !dialogueHistoryTarget.valid && !mcmTarget.valid)
 			{
 				DebugLogState("WndProc.WM_IME_COMPOSITION", "result_no_active_target", nullptr, static_cast<SInt32>(lParam));
 				return false;
@@ -27,6 +36,10 @@ namespace fonthook
 					DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_empty", jipMenu, static_cast<UInt32>(lParam));
 				else if (stewieTarget.valid)
 					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_empty_stewie input=0x%08X", static_cast<UInt32>(lParam));
+				else if (dialogueHistoryTarget.valid)
+					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_empty_dialogue_history input=0x%08X", static_cast<UInt32>(lParam));
+				else if (mcmTarget.valid)
+					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_empty_mcm_extender input=0x%08X", static_cast<UInt32>(lParam));
 				else
 					DebugLogState("WndProc.WM_IME_COMPOSITION", "result_empty", menu, static_cast<SInt32>(lParam));
 				return false;
@@ -34,13 +47,23 @@ namespace fonthook
 
 			const bool inserted = menu
 				? InsertWideText(menu, result)
-				: (jipMenu ? InsertWideTextJip(jipMenu, result) : InsertWideTextStewie(stewieTarget, result));
+				: (jipMenu
+					? InsertWideTextJip(jipMenu, result)
+					: (stewieTarget.valid
+						? InsertWideTextStewie(stewieTarget, result)
+						: (dialogueHistoryTarget.valid
+							? InsertWideTextDialogueHistory(dialogueHistoryTarget, result)
+							: InsertWideTextMcmExtender(mcmTarget, result))));
 			if (!inserted)
 			{
 				if (jipMenu)
 					DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_rejected", jipMenu, static_cast<UInt32>(lParam));
 				else if (stewieTarget.valid)
 					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_rejected_stewie input=0x%08X", static_cast<UInt32>(lParam));
+				else if (dialogueHistoryTarget.valid)
+					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_rejected_dialogue_history input=0x%08X", static_cast<UInt32>(lParam));
+				else if (mcmTarget.valid)
+					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_rejected_mcm_extender input=0x%08X", static_cast<UInt32>(lParam));
 				else
 					DebugLogState("WndProc.WM_IME_COMPOSITION", "result_rejected", menu, static_cast<SInt32>(lParam));
 				DebugLog("tnvse_multibyte_input: rejected IME result length=%u", static_cast<UInt32>(result.size()));
@@ -50,7 +73,13 @@ namespace fonthook
 			State().lastImeCommitTick = GetTickCount();
 			ConfirmImeCommitKey(menu
 				? ImeCommitInputChannel::TextEdit
-				: (jipMenu ? ImeCommitInputChannel::JipTextInput : ImeCommitInputChannel::Stewie));
+				: (jipMenu
+					? ImeCommitInputChannel::JipTextInput
+					: (stewieTarget.valid
+						? ImeCommitInputChannel::Stewie
+						: (dialogueHistoryTarget.valid
+							? ImeCommitInputChannel::DialogueHistory
+							: ImeCommitInputChannel::McmExtender))));
 			constexpr DWORD kImeEnterPairMs = 250;
 			if (stewieTarget.valid
 				&& State().lastStewieImeEnterKeyTick
@@ -67,6 +96,10 @@ namespace fonthook
 				DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_inserted", jipMenu, static_cast<UInt32>(lParam));
 			else if (stewieTarget.valid)
 				DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_inserted_stewie input=0x%08X", static_cast<UInt32>(lParam));
+			else if (dialogueHistoryTarget.valid)
+				DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_inserted_dialogue_history input=0x%08X", static_cast<UInt32>(lParam));
+			else if (mcmTarget.valid)
+				DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_inserted_mcm_extender input=0x%08X", static_cast<UInt32>(lParam));
 			else
 				DebugLogState("WndProc.WM_IME_COMPOSITION", "result_inserted", menu, static_cast<SInt32>(lParam));
 			DebugLog("tnvse_multibyte_input: committed IME result chars=%u", State().suppressedImeCharCount);
@@ -174,6 +207,11 @@ namespace fonthook
 
 		bool HandleCharFallback(WPARAM wParam)
 		{
+			if (ShouldSuppressDialogueHistoryControlChar(wParam))
+				return true;
+			if (ShouldSuppressMcmExtenderControlChar(wParam))
+				return true;
+
 			if (ShouldSuppressImeCommitInput(
 				static_cast<UInt32>(wParam),
 				ImeCommitInputChannel::WndProcChar))
@@ -199,8 +237,22 @@ namespace fonthook
 			TextEditMenu* menu = GetActiveTextEditMenu();
 			TextEditMenu* jipMenu = menu ? nullptr : GetActiveJipTextInputMenu();
 			StewieInputTarget stewieTarget = (!menu && !jipMenu) ? GetActiveStewieInputTarget() : StewieInputTarget();
+			DialogueHistoryInputTarget dialogueHistoryTarget =
+				(!menu && !jipMenu && !stewieTarget.valid)
+					? GetActiveDialogueHistoryInputTarget()
+					: DialogueHistoryInputTarget();
+			McmExtenderInputTarget mcmTarget =
+				(!menu && !jipMenu && !stewieTarget.valid && !dialogueHistoryTarget.valid)
+				? GetActiveMcmExtenderInputTarget()
+				: McmExtenderInputTarget();
 			if (!menu && !jipMenu)
 			{
+				if (dialogueHistoryTarget.valid)
+					return HandleDialogueHistoryWndProcChar(dialogueHistoryTarget, wParam);
+
+				if (mcmTarget.valid)
+					return HandleMcmExtenderWndProcChar(mcmTarget, wParam);
+
 				if (stewieTarget.valid)
 				{
 					if (wParam >= 0x20 && wParam <= 0x7E)
@@ -316,7 +368,19 @@ namespace fonthook
 				ProcessStewieMenuSearchPendingStateSync();
 				TextEditMenu* inputTarget = GetOverlayTextInputMenu();
 				StewieInputTarget stewieOverlayTarget = GetOverlayStewieInputTarget();
-				const bool hasInputTarget = inputTarget || stewieOverlayTarget.valid;
+				DialogueHistoryInputTarget dialogueHistoryOverlayTarget =
+					(!inputTarget && !stewieOverlayTarget.valid)
+						? GetOverlayDialogueHistoryInputTarget()
+						: DialogueHistoryInputTarget();
+				McmExtenderInputTarget mcmOverlayTarget =
+					(!inputTarget && !stewieOverlayTarget.valid
+						&& !dialogueHistoryOverlayTarget.valid)
+					? GetOverlayMcmExtenderInputTarget()
+					: McmExtenderInputTarget();
+				const bool hasInputTarget = inputTarget
+					|| stewieOverlayTarget.valid
+					|| dialogueHistoryOverlayTarget.valid
+					|| mcmOverlayTarget.valid;
 				if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
 					&& wParam == VK_RETURN
 					&& stewieOverlayTarget.valid
@@ -334,6 +398,20 @@ namespace fonthook
 				}
 
 				ObserveImeCommitKeyMessage(msg, wParam, lParam, hasInputTarget);
+
+				if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+					&& dialogueHistoryOverlayTarget.valid
+					&& HandleDialogueHistoryKeyDown(dialogueHistoryOverlayTarget, wParam))
+				{
+					return 0;
+				}
+
+				if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+					&& mcmOverlayTarget.valid
+					&& HandleMcmExtenderKeyDown(mcmOverlayTarget, wParam))
+				{
+					return 0;
+				}
 
 				if (IsWindowsKeyMessage(msg, wParam))
 				{
@@ -552,14 +630,16 @@ namespace fonthook
 					if (hasInputTarget)
 						HideSystemImeWindows(hwnd);
 					DebugLog(
-						"tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION lParam=0x%08X hasResult=%u hasComp=%u composingBefore=%u active=0x%08X overlay=0x%08X stewie=%u",
+						"tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION lParam=0x%08X hasResult=%u hasComp=%u composingBefore=%u active=0x%08X overlay=0x%08X stewie=%u dialogueHistory=%u mcm=%u",
 						static_cast<UInt32>(lParam),
 						(lParam & GCS_RESULTSTR) ? 1 : 0,
 						(lParam & GCS_COMPSTR) ? 1 : 0,
 						s_imeComposing ? 1 : 0,
 						reinterpret_cast<UInt32>(activeTarget),
 						reinterpret_cast<UInt32>(overlayTarget),
-						stewieOverlayTarget.valid ? 1 : 0);
+						stewieOverlayTarget.valid ? 1 : 0,
+						dialogueHistoryOverlayTarget.valid ? 1 : 0,
+						mcmOverlayTarget.valid ? 1 : 0);
 
 					if (HandleImeResult(hwnd, lParam))
 					{

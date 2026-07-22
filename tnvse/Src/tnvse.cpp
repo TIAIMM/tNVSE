@@ -22,7 +22,7 @@ IDebugLog gLog("tnvse.log");
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;
 NVSEMessagingInterface* g_messagingInterface{};
 NVSEInterface* g_nvseInterface{};
-NVSEEventManagerInterface* g_eventInterface;
+NVSEEventManagerInterface* g_eventInterface{};
 NVSEConsoleInterface* g_consoleInterface{};
 HMODULE hJIP = 0;
 NVSECommandTableInterface* g_cmdTableInterface = NULL;
@@ -176,6 +176,7 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 	g_pluginHandle = nvse->GetPluginHandle();
 	g_messagingInterface = static_cast<NVSEMessagingInterface*>(nvse->QueryInterface(kInterface_Messaging));
 	g_consoleInterface = static_cast<NVSEConsoleInterface*>(nvse->QueryInterface(kInterface_Console));
+	g_eventInterface = static_cast<NVSEEventManagerInterface*>(nvse->QueryInterface(kInterface_EventManager));
 	if (g_messagingInterface)
 	{
 		g_messagingInterface->RegisterListener(g_pluginHandle, "NVSE", MessageHandler);

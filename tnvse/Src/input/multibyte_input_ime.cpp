@@ -16,7 +16,10 @@ namespace fonthook
 
 		bool HasOverlayInputTarget()
 		{
-			return GetOverlayTextInputMenu() || GetOverlayStewieInputTarget().valid;
+			return GetOverlayTextInputMenu()
+				|| GetOverlayStewieInputTarget().valid
+				|| GetOverlayDialogueHistoryInputTarget().valid
+				|| GetOverlayMcmExtenderInputTarget().valid;
 		}
 
 		void TryRemoveCompositionEcho()
@@ -47,7 +50,19 @@ namespace fonthook
 			}
 
 			if (RemovePreviousStewieAsciiCompositionEcho(compositionLead))
+			{
 				DebugLog("tnvse_multibyte_input_event: source=IMECompositionEcho action=remove_ascii_echo_stewie input=0x%08X", static_cast<UInt32>(compositionLead));
+				return;
+			}
+
+			if (RemovePreviousDialogueHistoryAsciiCompositionEcho(compositionLead))
+			{
+				DebugLog("tnvse_multibyte_input_event: source=IMECompositionEcho action=remove_ascii_echo_dialogue_history input=0x%08X", static_cast<UInt32>(compositionLead));
+				return;
+			}
+
+			if (RemovePreviousMcmExtenderAsciiCompositionEcho(compositionLead))
+				DebugLog("tnvse_multibyte_input_event: source=IMECompositionEcho action=remove_ascii_echo_mcm_extender input=0x%08X", static_cast<UInt32>(compositionLead));
 		}
 
 
@@ -501,7 +516,11 @@ namespace fonthook
 			if (!s_window)
 				return;
 
-			SetTextInputSessionActive(GetCurrentTextEditMenuObject() != nullptr || GetOverlayStewieInputTarget().valid);
+			SetTextInputSessionActive(
+				GetCurrentTextEditMenuObject() != nullptr
+					|| GetOverlayStewieInputTarget().valid
+					|| GetOverlayDialogueHistoryInputTarget().valid
+					|| GetOverlayMcmExtenderInputTarget().valid);
 		}
 
 		void PumpImeStatusWatchdog()
@@ -626,6 +645,10 @@ namespace fonthook
 					return "jip";
 				case ImeCommitInputChannel::Stewie:
 					return "stewie";
+				case ImeCommitInputChannel::DialogueHistory:
+					return "dialogue_history";
+				case ImeCommitInputChannel::McmExtender:
+					return "mcm_extender";
 				default:
 					return "unknown";
 				}
