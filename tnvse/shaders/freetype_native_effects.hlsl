@@ -168,5 +168,5 @@ float4 Main(NativeFontPixelInput input) : COLOR0
 	const int layer = (int)floor(AtlasPass.z);
 	const float coverage = SupersampledNativeFontEffect(input.atlasUv, layer);
 	return ComposeNativeFontCoverage(coverage, TileColor, input.baseColor,
-		NativeFontUsesBaseRgb(AtlasPass.z));
+		NativeFontUsesLiveTileRgb(AtlasPass.z));
 }

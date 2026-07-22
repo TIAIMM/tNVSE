@@ -33,8 +33,11 @@ namespace fonthook::vectorfont
 		class NativePixelConstantScope
 		{
 		public:
-			static constexpr UINT kFirstRegister = 0;
-			static constexpr UINT kRegisterCount = 5;
+			// The native profile mirrors the stock Tile value into c0 for its final
+			// packet and deliberately leaves it there, matching an ordinary Tile
+			// draw. Only tNVSE-owned c1-c4 need isolation from the next shader.
+			static constexpr UINT kFirstRegister = 1;
+			static constexpr UINT kRegisterCount = 4;
 			static constexpr size_t kFloatCount = kRegisterCount * 4;
 
 			explicit NativePixelConstantScope(IDirect3DDevice9* device)
@@ -88,7 +91,8 @@ namespace fonthook::vectorfont
 						sizeof(float)) != 0)
 					{
 						m_operation = "pixel-constant-mismatch";
-						m_mismatchRegister = static_cast<SInt32>(index / 4);
+						m_mismatchRegister = static_cast<SInt32>(
+							kFirstRegister + index / 4);
 						m_result = E_FAIL;
 						return false;
 					}
@@ -314,8 +318,9 @@ namespace fonthook::vectorfont
 				if (!runtimeFault)
 				{
 					// No unrelated draw can occur while this intercepted Tile group is
-					// expanded. Each native profile overwrites its own c0-c4 values, so
-					// preserve the incoming game state once for the complete packet group.
+					// expanded. Every native profile writes the stock-equivalent c0 and
+					// its own c1-c4; preserve only the custom range so c0 remains coherent
+					// with the last submitted Tile.
 					NativePixelConstantScope constants(device);
 					if (!constants.Captured())
 					{

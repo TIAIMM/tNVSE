@@ -20,8 +20,16 @@ foreach ($sourceName in $pixelSources) {
 
 $common = Get-Content -LiteralPath (
     Join-Path $ShaderDirectory 'freetype_native_common.hlsli') -Raw
-if ($common -notmatch 'tileColor\.rgb\s*\*\s*resolvedBaseRgb\s*\*\s*LayerColor\.rgb') {
-    throw 'Native FreeType shader ABI does not combine Tile, base-vertex, and packet-layer RGB'
+if ($common -notmatch 'resolvedTileRgb\s*\*\s*resolvedBaseRgb\s*\*\s*LayerColor\.rgb') {
+    throw 'Native FreeType shader ABI does not combine resolved Tile, base-vertex, and packet-layer RGB'
+}
+if ($common -notmatch
+    'resolvedTileRgb\s*=\s*lerp\([\s\S]*?tileColor\.rgb\s*,\s*usesLiveTileRgb\s*\)') {
+    throw 'Native FreeType shader ABI does not select identity Tile RGB for fixed effects'
+}
+if ($common -notmatch
+    'resolvedBaseRgb\s*=\s*lerp\([\s\S]*?baseColor\.rgb\s*,\s*usesLiveTileRgb\s*\)') {
+    throw 'Native FreeType shader ABI does not select identity base RGB for fixed effects'
 }
 if ($common -notmatch 'coverage\s*\*\s*tileColor\.a\s*\*\s*baseColor\.a\s*\*\s*LayerColor\.a') {
     throw 'Native FreeType shader ABI does not multiply coverage by all three alpha sources'
@@ -29,8 +37,8 @@ if ($common -notmatch 'coverage\s*\*\s*tileColor\.a\s*\*\s*baseColor\.a\s*\*\s*L
 if ($common -notmatch 'LayerColor\s*:\s*register\(c1\)') {
     throw 'Native FreeType shader ABI does not reserve c1 for the packet layer modifier'
 }
-if ($common -notmatch 'frac\(layerAndFlags\)\s*<\s*0\.125') {
-    throw 'Native FreeType shader ABI does not decode the fixed-effect base-RGB flag'
+if ($common -notmatch 'NativeFontUsesLiveTileRgb[\s\S]*?frac\(layerAndFlags\)\s*<\s*0\.125') {
+    throw 'Native FreeType shader ABI does not decode the fixed-effect live-RGB flag'
 }
 if ($common -match 'float4\s*\([^,]+\*[^,]*coverage') {
     throw 'Native FreeType shader ABI appears to premultiply RGB by coverage'
@@ -61,9 +69,48 @@ if ($nativeShaderSource -notmatch
     'key\.constantBits\.data\(\)\s*,\s*packet\.constants\.data\(\)') {
     throw 'Native shader profile identity does not include packet c1'
 }
+if ($nativeShaderSource -match '0x1202188') {
+    throw 'Native TileShader update reads the retail global c0 scratch address directly'
+}
 if ($nativeShaderSource -notmatch
-    'SetPixelShaderConstantF\(1,\s*profile->constants\.data\(\),\s*4\)') {
-    throw 'Native TileShader update does not upload packet c1-c4 after stock constants'
+    'ResolveStockTilePixelConstant[\s\S]*?output\[0\]\s*=\s*tile->overlayColor\.r[\s\S]*?output\[1\]\s*=\s*tile->overlayColor\.g[\s\S]*?output\[2\]\s*=\s*tile->overlayColor\.b[\s\S]*?output\[3\]\s*=\s*tile->tileAlpha\s*\*\s*materialAlpha') {
+    throw 'Native TileShader update does not mirror the retail c0 RGB/alpha definition'
+}
+if ($nativeShaderSource -notmatch
+    'std::array<float,\s*20>\s+constants[\s\S]*?constants\.begin\(\)\s*\+\s*4[\s\S]*?SetPixelShaderConstantF\(0,\s*constants\.data\(\),\s*5\)') {
+    throw 'Native TileShader update does not atomically upload the complete c0-c4 packet'
+}
+if ($nativeShaderSource -notmatch
+    'stockUpdate\(shader,\s*properties\);[\s\S]*?ResolveStockTilePixelConstant\(properties,[\s\S]*?SetPixelShaderConstantF\(0,') {
+    throw 'Native TileShader update does not refresh stock maps before publishing c0-c4'
+}
+
+$nativeHookSourcePath = Join-Path (
+    Split-Path -Parent $resolvedShaderDirectory) 'Src\font\a8\font_a8_hooks.cpp'
+$nativeHookSource = Get-Content -LiteralPath $nativeHookSourcePath -Raw
+if ($nativeHookSource -notmatch 'kFirstRegister\s*=\s*1\s*;' -or
+    $nativeHookSource -notmatch 'kRegisterCount\s*=\s*4\s*;') {
+    throw 'Native packet isolation must preserve only tNVSE-owned pixel c1-c4'
+}
+
+$nativeRingSourcePath = Join-Path (
+    Split-Path -Parent $resolvedShaderDirectory) 'Src\font\native\font_native_ring.cpp'
+$nativeRingSource = Get-Content -LiteralPath $nativeRingSourcePath -Raw
+if ($nativeRingSource -notmatch
+    'offsetof\(TileShaderPropertyView,\s*overlayColor\)\s*==\s*0x68' -or
+    $nativeRingSource -notmatch
+    'offsetof\(TileShaderPropertyView,\s*tileAlpha\)\s*==\s*0x78') {
+    throw 'Native proxy does not pin the retail Tile RGB/alpha property offsets'
+}
+if ($nativeRingSource -notmatch
+    'destination\.overlayColor\s*=\s*source\.overlayColor' -or
+    $nativeRingSource -notmatch
+    'destination\.tileAlpha\s*=\s*source\.tileAlpha') {
+    throw 'Native proxy does not copy the live Tile RGB/alpha for each submission'
+}
+if ($nativeRingSource -notmatch
+    'm_spMaterialProperty\s*=\s*\r?\n?\s*facade\.m_kProperties\.m_spMaterialProperty') {
+    throw 'Native proxy does not preserve the retail material-alpha source for c0.a'
 }
 
 $effectsSource = Get-Content -LiteralPath (
@@ -125,6 +172,11 @@ if (-not ($vertexInstructions -match '\bdcl_texcoord')) {
 }
 if (-not ($vertexInstructions -match '\bdcl_color')) {
     throw "$vertexShader does not forward the per-glyph base COLOR0 modifier"
+}
+foreach ($matrixRegister in 0..3) {
+    if (-not ($vertexInstructions -cmatch "\bc$matrixRegister\b")) {
+        throw "$vertexShader does not consume stock Tile WVP register c$matrixRegister"
+    }
 }
 
 foreach ($shaderName in $pixelShaders) {

@@ -71,6 +71,16 @@ namespace fonthook::vectorfont
 		static_assert(kScissorTailOffset + kScissorTailSize
 			== kScissorTriShapeSize);
 		static_assert(sizeof(TileShaderPropertyView) == 0xB0);
+		// Retail TileShader::UpdateConstants reads the live color at +0x68 and
+		// tile alpha at +0x78. Keep the proxy view tied to that executable ABI;
+		// a layout drift here would silently turn every shader-side color fix into
+		// reads from the wrong fields.
+		static_assert(offsetof(TileShaderPropertyView, overlayColor) == 0x68);
+		static_assert(offsetof(TileShaderPropertyView, tileAlpha) == 0x78);
+		static_assert(offsetof(TileShaderPropertyView, textureTransform) == 0x7C);
+		static_assert(offsetof(TileShaderPropertyView, clampMode) == 0x8C);
+		static_assert(offsetof(TileShaderPropertyView, rotates) == 0x91);
+		static_assert(offsetof(TileShaderPropertyView, hasVertexColors) == 0x92);
 
 		struct NativeA8Proxy
 		{

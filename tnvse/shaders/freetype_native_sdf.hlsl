@@ -11,5 +11,5 @@ float4 Main(NativeFontPixelInput input) : COLOR0
 	const float coverage = NativeFontSdfBody(distance,
 		NativeFontSdfAntialiasWidth(distance));
 	return ComposeNativeFontCoverage(coverage, TileColor, input.baseColor,
-		NativeFontUsesBaseRgb(AtlasPass.z));
+		NativeFontUsesLiveTileRgb(AtlasPass.z));
 }

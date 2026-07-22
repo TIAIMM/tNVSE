@@ -12,6 +12,7 @@
 #include "NiDX9Renderer.hpp"
 #include "NiDX9ShaderDeclaration.hpp"
 #include "NiGeometryBufferData.hpp"
+#include "NiMaterialProperty.hpp"
 #include "NiTriShapeData.hpp"
 #include "NiPropertyState.hpp"
 #include "NiTexturingProperty.hpp"
@@ -35,6 +36,16 @@ namespace fonthook::vectorfont
 	{
 		static_assert(sizeof(void*) == 4,
 			"The native FreeType TileShader path is a Win32 ABI implementation");
+
+		struct TilePixelConstantView
+		{
+			std::array<UInt8, 0x68> prefix;
+			NiColorA overlayColor;
+			float tileAlpha = 1.0f;
+		};
+
+		static_assert(offsetof(TilePixelConstantView, overlayColor) == 0x68);
+		static_assert(offsetof(TilePixelConstantView, tileAlpha) == 0x78);
 
 		inline constexpr UInt32 kTileShaderCreate = 0xBCAE90;
 		inline constexpr UInt32 kTileShaderUpdateConstants = 0xBCA980;
@@ -234,6 +245,26 @@ namespace fonthook::vectorfont
 			return block->magic == kNativeVtableMagic ? block : nullptr;
 		}
 
+		bool ResolveStockTilePixelConstant(const NiPropertyState* properties,
+			float* output)
+		{
+			if (!properties || !output)
+				return false;
+			const NiShadeProperty* shade = properties->m_spShadeProperty.m_pObject;
+			if (!shade || shade->m_eShaderType != NiShadeProperty::PROP_Tile)
+				return false;
+
+			const auto* tile = reinterpret_cast<const TilePixelConstantView*>(shade);
+			const NiMaterialProperty* material =
+				properties->m_spMaterialProperty.m_pObject;
+			const float materialAlpha = material ? material->m_fAlpha : 1.0f;
+			output[0] = tile->overlayColor.r;
+			output[1] = tile->overlayColor.g;
+			output[2] = tile->overlayColor.b;
+			output[3] = tile->tileAlpha * materialAlpha;
+			return true;
+		}
+
 		void __fastcall NativeUpdateConstants(TileShader* shader, void*,
 			const NiPropertyState* properties)
 		{
@@ -271,30 +302,25 @@ namespace fonthook::vectorfont
 				return;
 			}
 
-			HRESULT firstFailure = D3D_OK;
-			if (profile->effectPass && !profile->key.usesLiveTileRgb)
+			// Stock UpdateConstants refreshes Gamebryo's CPU-side constant maps, but
+			// the native profiles bind different pixel programs and upload c1-c4
+			// directly. Mirror the retail c0 definition from this submission's actual
+			// property state and publish the complete c0-c4 device packet atomically.
+			// This prevents constant-map change tracking from leaving a stale Tile RGB
+			// in a custom profile while preserving the exact stock alpha contract.
+			std::array<float, 20> constants = {};
+			if (!ResolveStockTilePixelConstant(properties, constants.data()))
 			{
-				// Fixed effects own their configured vertex RGB. Neutralize only the
-				// stock Tile RGB while retaining its live alpha for menu fades.
-				const float* stockTileColor = reinterpret_cast<const float*>(0x1202188);
-				const float effectTileColor[4] = {
-					1.0f, 1.0f, 1.0f, stockTileColor[3]
-				};
-				const HRESULT result = device->SetPixelShaderConstantF(0,
-					effectTileColor, 1);
-				if (FAILED(result))
-					firstFailure = result;
+				MarkGenerationFault(generation, "ResolveStockTilePixelConstant", E_FAIL);
+				return;
 			}
-
-			// c1 is the packet layer modifier. COLOR0 carries only the shared
-			// per-glyph base modifier; c2-c4 retain atlas/effect parameters.
-			const HRESULT constantsResult = device->SetPixelShaderConstantF(1,
-				profile->constants.data(), 4);
-			if (FAILED(constantsResult) && SUCCEEDED(firstFailure))
-				firstFailure = constantsResult;
-			if (FAILED(firstFailure))
-				MarkGenerationFault(generation, "SetPixelShaderConstantF",
-					firstFailure);
+			std::copy(profile->constants.begin(), profile->constants.end(),
+				constants.begin() + 4);
+			const HRESULT constantsResult = device->SetPixelShaderConstantF(0,
+				constants.data(), 5);
+			if (FAILED(constantsResult))
+				MarkGenerationFault(generation, "SetPixelShaderConstantF(c0-c4)",
+					constantsResult);
 		}
 
 		NativeProfileKey MakeProfileKey(const NativeA8PacketTemplate& packet,

@@ -9,16 +9,22 @@ struct NativeFontPixelInput
 	float4 baseColor : COLOR0;
 };
 
-float NativeFontUsesBaseRgb(float layerAndFlags)
+float NativeFontUsesLiveTileRgb(float layerAndFlags)
 {
 	return frac(layerAndFlags) < 0.125 ? 1.0 : 0.0;
 }
 
 float4 ComposeNativeFontCoverage(float coverage, float4 tileColor,
-	float4 baseColor, float usesBaseRgb)
+	float4 baseColor, float usesLiveTileRgb)
 {
-	const float3 resolvedBaseRgb = lerp(1.0, baseColor.rgb, usesBaseRgb);
-	return float4(tileColor.rgb * resolvedBaseRgb * LayerColor.rgb,
+	// c0 is owned by the stock TileShader constant map. Fixed-color effects
+	// select RGB identity here instead of rewriting c0 behind Gamebryo's back.
+	const float3 identityRgb = float3(1.0, 1.0, 1.0);
+	const float3 resolvedTileRgb = lerp(identityRgb, tileColor.rgb,
+		usesLiveTileRgb);
+	const float3 resolvedBaseRgb = lerp(identityRgb, baseColor.rgb,
+		usesLiveTileRgb);
+	return float4(resolvedTileRgb * resolvedBaseRgb * LayerColor.rgb,
 		saturate(coverage * tileColor.a * baseColor.a * LayerColor.a));
 }
 

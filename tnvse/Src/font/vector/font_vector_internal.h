@@ -242,8 +242,8 @@ namespace fonthook::vectorfont
 	struct A8ShapeColorContract
 	{
 		// COLOR0 carries only the per-glyph base modifier. Packet c1 carries the
-		// layer modifier, while c2.z selects whether fixed effects ignore base RGB.
-		// Every path continues to inherit the live Tile alpha.
+		// layer modifier, while c2.z selects whether fixed effects ignore both the
+		// base and live Tile RGB. Every path continues to inherit live Tile alpha.
 		static constexpr UInt32 kTileUniformColorAbi = 9;
 
 		UInt32 abiVersion = kTileUniformColorAbi;

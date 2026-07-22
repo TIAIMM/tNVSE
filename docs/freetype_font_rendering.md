@@ -178,10 +178,10 @@ shadow color. Both switches default to `0` and are ignored when blur is
 non-zero.
 
 Every effect accepts `colorMode="fixed|fill"`. The backward-compatible default
-is `fixed`: the native profile neutralizes the live Tile RGB (`c0.rgb = 1`) and
-the vertex carries the effect's configured `color`. `fill` keeps the live Tile
-RGB and gives the effect vertex the same RGB modifier as the body, including a
-configured `fontColor`; the effect's `color` RGB is then ignored. In either
+is `fixed`: the pixel shader selects identity for the live Tile and per-glyph
+base RGB, then applies the effect's configured packet color. `fill` keeps the
+live Tile RGB and gives the effect the same RGB modifier as the body, including
+a configured `fontColor`; the effect's `color` RGB is then ignored. In either
 mode, the effect's own `alpha` remains independent of `fontAlpha` and is
 multiplied by the game text alpha, so visibility and fade animations continue
 to work.
@@ -491,10 +491,16 @@ separate source-over alpha where the target supports alpha writes, so shadows
 outside the fill survive off-screen UI compositing without reducing existing
 destination alpha. A detected profile, packet, or device-state mismatch marks
 the native generation faulty and suppresses the affected marked submission.
-The incoming pixel constants `c0-c4` are captured once for the complete native
-text group, then restored and verified once after its final packet; individual
-shadow, glow, outline, and fill packets overwrite their complete constant
-contract and do not perform redundant save/restore cycles. Native packet
+The tNVSE-owned pixel constants `c1-c4` are captured once for the complete
+native text group, then restored and verified once after its final packet.
+After stock `TileShader::UpdateConstants` refreshes Gamebryo's maps, each native
+profile mirrors the retail `c0` definition from the current proxy property state
+and uploads `c0-c4` in one device call. This is required because the native pixel
+programs and `c1-c4` bypass the stock constant-map upload path; relying on its
+change tracking alone can leave a stale RGB register. Fixed effects ignore c0
+RGB in HLSL, and group cleanup deliberately leaves c0 at the final Tile value.
+Individual shadow, glow, outline, and fill packets therefore do not perform
+redundant save/restore cycles. Native packet
 preflight is cached per shape while the shader generation, scaled-fill sampling
 class, alpha-blending class, and referenced D3D atlas textures remain unchanged.
 Any device reset, sampling/alpha transition, or page-resource replacement falls
