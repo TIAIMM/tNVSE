@@ -292,12 +292,11 @@ are copied into the runtime direct table. Runtime fonts with the same
 `manifestHash` share one file
 handle, mapping handle, and mapped view instead of mapping that file once per
 font ID. One `_p<page>.tnvfatlas` snapshot per atlas page stores
-the stable glyph-ID placement map. Snapshot v12 records the byte role and the
+the stable glyph-ID placement map. Snapshot v13 records the byte role and the
 validated runtime UV subset explicitly and uses `stb_rect_pack` skyline packing.
-Its placed level-zero payload is split into per-glyph PackBits blocks and uses
-that lossless representation only when it is smaller than the raw texels.
-Payload checksums and page-content identities remain based on the decoded raw
-texels, so compression cannot change texture contents or hide damaged data.
+Its placed level-zero payload stores the raw per-glyph rectangle texels directly;
+`storedPixelBytes` must equal `pixelBytes`. Payload checksums and page-content
+identities are calculated from those same raw texels.
 Older snapshot layouts are not read or migrated.
 SDF profiles are packed in
 deterministic height/width/glyph-ID order, can reduce the page count, and shrink
@@ -596,14 +595,13 @@ When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
-generations are restored after a D3D9 device reset. An SDF v12 snapshot is
+generations are restored after a D3D9 device reset. An SDF v13 snapshot is
 uploaded directly to this path. Once that upload succeeds, tNVSE releases the
 packed reset pixels and retains only placements plus the validated snapshot
 path/header identity. Device reset, page detachment/growth, and snapshot rewrite
-read the packed rectangles from `_p<page>.tnvfatlas`. Raw payloads can be
-streamed by row; compressed payloads are decoded into one bounded page buffer.
-In both cases the decoded payload checksum is verified before the texels are
-accepted into the locked texture. Its page-content
+read the raw packed rectangles from `_p<page>.tnvfatlas` and stream them by row.
+The payload checksum is verified before the texels are accepted into the locked
+texture. Its page-content
 fingerprint covers dimensions, format, placed
 coordinates, and exact texels. A hash match is followed by byte-for-byte
 comparison, loading temporary source pixels only during that comparison, before

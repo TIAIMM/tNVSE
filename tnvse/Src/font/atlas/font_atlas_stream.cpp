@@ -50,7 +50,6 @@ namespace fonthook::vectorfont
 			std::unordered_set<UInt64> cacheIds;
 			UInt64 totalPlacements = 0;
 			UInt64 totalPixelBytes = 0;
-			UInt64 totalRawPixelBytes = 0;
 		};
 
 		struct StreamingPrewarmState
@@ -191,13 +190,9 @@ namespace fonthook::vectorfont
 				UInt8 storageMode;
 				UInt8 levelZeroOnly;
 			};
-			const UInt8 contentStorageMode = header.storageMode
-				== static_cast<UInt8>(AtlasSnapshotStorage::PlacedLevelZeroRectsRle)
-				? static_cast<UInt8>(AtlasSnapshotStorage::PlacedLevelZeroRects)
-				: header.storageMode;
 			const PageIdentity identity = { header.width, header.height, header.padding,
 				header.mipLevels, header.pixelMode, header.renderMode,
-				contentStorageMode,
+				header.storageMode,
 				static_cast<UInt8>(header.mipLevels == 1 ? 1 : 0) };
 			UInt64 hash = HashBytes(&identity, sizeof(identity));
 			struct Slice
@@ -297,17 +292,9 @@ namespace fonthook::vectorfont
 					placement, header.width, header.height, header.pageIndex))
 					return false;
 			}
-			std::vector<UInt8> encodedPixels;
-			const std::vector<UInt8>* diskPixels = &page.pixels;
-			AtlasSnapshotStorage storageMode = AtlasSnapshotStorage::PlacedLevelZeroRects;
-			if (EncodePlacedAtlasSnapshotPixels(page.placements, key.pixelMode,
-				page.pixels, encodedPixels) && encodedPixels.size() < page.pixels.size())
-			{
-				storageMode = AtlasSnapshotStorage::PlacedLevelZeroRectsRle;
-				diskPixels = &encodedPixels;
-			}
-			header.storageMode = static_cast<UInt8>(storageMode);
-			header.storedPixelBytes = diskPixels->size();
+			header.storageMode = static_cast<UInt8>(
+				AtlasSnapshotStorage::PlacedLevelZeroRects);
+			header.storedPixelBytes = page.pixels.size();
 			UInt64 payloadHash = HashBytes(page.placements.data(),
 				page.placements.size() * sizeof(page.placements[0]));
 			header.payloadChecksum = HashBytes(page.pixels.data(),
@@ -327,7 +314,7 @@ namespace fonthook::vectorfont
 			const bool written = WriteExact(file, &header, sizeof(header))
 				&& WriteExact(file, page.placements.data(),
 					page.placements.size() * sizeof(page.placements[0]))
-				&& WriteExact(file, diskPixels->data(), diskPixels->size())
+				&& WriteExact(file, page.pixels.data(), page.pixels.size())
 				&& FlushFileBuffers(file);
 			CloseHandle(file);
 			if (!written)
@@ -340,7 +327,6 @@ namespace fonthook::vectorfont
 				header.placementCount, header.storedPixelBytes });
 			role.totalPlacements += header.placementCount;
 			role.totalPixelBytes += header.storedPixelBytes;
-			role.totalRawPixelBytes += header.pixelBytes;
 			ResetPage(page);
 			return true;
 		}
@@ -660,21 +646,18 @@ namespace fonthook::vectorfont
 		UInt64 pages = 0;
 		UInt64 placements = 0;
 		UInt64 bytes = 0;
-		UInt64 rawBytes = 0;
 		for (const StreamingRole& role : completed->roles)
 		{
 			pages += role.pages.size();
 			placements += role.totalPlacements;
 			bytes += role.totalPixelBytes;
-			rawBytes += role.totalRawPixelBytes;
 		}
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: streamed prewarm finalized font=%u scale=%.3f pages=%llu placements=%llu storedBytes=%llu rawBytes=%llu restore=%s",
+			"tnvse_freetype_font: streamed prewarm finalized font=%u scale=%.3f pages=%llu placements=%llu rawBytes=%llu restore=%s",
 			completed->fontId, rasterScale,
 			static_cast<unsigned long long>(pages),
 			static_cast<unsigned long long>(placements),
 			static_cast<unsigned long long>(bytes),
-			static_cast<unsigned long long>(rawBytes),
 			g_bEnableFreeTypeDefaultPoolAtlas
 				? (restored ? (repacked ? "repacked-default-pool" : "default-pool")
 					: "failed")

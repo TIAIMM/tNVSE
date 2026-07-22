@@ -735,16 +735,7 @@ namespace fonthook::vectorfont
 					return false;
 				const AtlasSnapshotStorage storageMode =
 					static_cast<AtlasSnapshotStorage>(snapshot.sourceHeader.storageMode);
-				if (storageMode == AtlasSnapshotStorage::PlacedLevelZeroRectsRle)
-				{
-					if (!DecodePlacedAtlasSnapshotPixels(snapshot.placements,
-						snapshot.pixelMode, storedPixels.data(), storedPixels.size(),
-						static_cast<size_t>(snapshot.sourceHeader.pixelBytes), pixels))
-					{
-						return false;
-					}
-				}
-				else if (storageMode == AtlasSnapshotStorage::PlacedLevelZeroRects
+				if (storageMode == AtlasSnapshotStorage::PlacedLevelZeroRects
 					&& snapshot.sourceHeader.storedPixelBytes
 						== snapshot.sourceHeader.pixelBytes)
 				{
@@ -776,18 +767,10 @@ namespace fonthook::vectorfont
 			const UInt32 sourceBytesPerPixel = AtlasBytesPerPixel(snapshot.pixelMode);
 			const UInt32 destinationBytesPerPixel = AtlasBytesPerPixel(destinationMode);
 			CompactSnapshotFile sourceFile;
-			std::vector<UInt8> decodedPixels;
-			const AtlasSnapshotStorage storageMode =
-				static_cast<AtlasSnapshotStorage>(snapshot.sourceHeader.storageMode);
-			const bool compressedFile = snapshot.pixels.empty()
-				&& storageMode == AtlasSnapshotStorage::PlacedLevelZeroRectsRle;
-			if (compressedFile && !LoadCompactSnapshotPixels(snapshot, decodedPixels))
-				return false;
-			const bool streamFromFile = snapshot.pixels.empty() && !compressedFile;
+			const bool streamFromFile = snapshot.pixels.empty();
 			if (streamFromFile && !OpenCompactSnapshotPixels(snapshot, sourceFile))
 				return false;
-			const std::vector<UInt8>& memoryPixels = compressedFile
-				? decodedPixels : snapshot.pixels;
+			const std::vector<UInt8>& memoryPixels = snapshot.pixels;
 			const size_t expectedPixelBytes = streamFromFile
 				? static_cast<size_t>(snapshot.sourceHeader.pixelBytes)
 				: memoryPixels.size();

@@ -78,7 +78,6 @@ namespace fonthook::vectorfont
 	{
 		FullMipChain = 0,
 		PlacedLevelZeroRects = 1,
-		PlacedLevelZeroRectsRle = 2,
 	};
 
 	struct AtlasRect
@@ -199,13 +198,12 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 12;
+	constexpr UInt32 kAtlasSnapshotVersion = 13;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
 	constexpr UInt32 kAtlasSnapshotKnownFlags = kAtlasSnapshotFlagGloballyRepacked;
-	// Version 12 stores the compact placed-rectangle payload with optional lossless
-	// per-glyph PackBits blocks. pixelBytes remains the decoded byte count while
-	// storedPixelBytes describes the on-disk payload. Version 11 introduced the
-	// stable page, inverse-size, and normalized UV placement subset.
+	// Version 13 removes PackBits and requires raw placed-rectangle payloads, so
+	// storedPixelBytes always equals pixelBytes. Version 11 introduced the stable
+	// page, inverse-size, and normalized UV placement subset.
 	constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 #pragma pack(push, 1)
 	struct AtlasSnapshotHeader
@@ -603,14 +601,6 @@ namespace fonthook::vectorfont
 	size_t GetCompactSnapshotBytes(const AtlasResource& resource);
 	bool LoadCompactAtlasSnapshotPixels(const CompactAtlasSnapshot& snapshot,
 		std::vector<UInt8>& pixels);
-	bool EncodePlacedAtlasSnapshotPixels(
-		const std::vector<AtlasSnapshotPlacement>& placements,
-		AtlasPixelMode pixelMode, const std::vector<UInt8>& pixels,
-		std::vector<UInt8>& encoded);
-	bool DecodePlacedAtlasSnapshotPixels(
-		const std::vector<AtlasSnapshotPlacement>& placements,
-		AtlasPixelMode pixelMode, const UInt8* encoded, size_t encodedBytes,
-		size_t expectedPixelBytes, std::vector<UInt8>& pixels);
 	NiTexture* GetAtlasTexture(const AtlasResource& resource);
 	NiTexturingProperty* CreateManagedAtlasProperty(UInt32 width, UInt32 height,
 		AtlasPixelMode mode, UInt32 mipLevels, const std::vector<UInt8>& source,
