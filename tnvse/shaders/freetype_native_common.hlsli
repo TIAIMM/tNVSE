@@ -28,25 +28,36 @@ float4 ComposeNativeFontCoverage(float coverage, float4 tileColor,
 		saturate(coverage * tileColor.a * baseColor.a * LayerColor.a));
 }
 
-float SampleNativeFontMask(sampler2D atlas, float2 uv)
+float4 SampleNativeFontMtsdf(sampler2D atlas, float2 uv)
 {
-	return tex2D(atlas, uv).a;
+	return tex2D(atlas, uv);
 }
 
-float DecodeNativeFontSdf(float encodedDistance, float spread)
+float MedianNativeFontMtsdf(float3 value)
 {
-	// FreeType's zero-distance contour is byte 128, rather than exactly 0.5.
-	return (encodedDistance * (255.0 / 128.0) - 1.0) * spread;
+	return max(min(value.r, value.g), min(max(value.r, value.g), value.b));
 }
 
-float NativeFontSdfAntialiasWidth(float distance)
+float DecodeNativeFontMtsdfDistance(float encodedDistance, float spread)
 {
-	return max(0.35, 0.5 * (abs(ddx(distance)) + abs(ddy(distance))));
+	// The generator maps the symmetric [-spread, +spread] range to [0, 1].
+	return (encodedDistance - 0.5) * (2.0 * spread);
 }
 
-float NativeFontSdfBody(float distance, float antialiasWidth)
+float NativeFontMtsdfAntialiasWidth(float alphaDistance)
 {
-	return smoothstep(-antialiasWidth, antialiasWidth, distance);
+	// Alpha is the continuous true SDF. Its Euclidean derivative remains stable
+	// where the RGB median changes channel at sharp corners.
+	const float2 gradient = float2(ddx(alphaDistance), ddy(alphaDistance));
+	return max(0.0001, 0.5 * length(gradient));
+}
+
+float NativeFontMtsdfBody(float rgbDistance, float antialiasWidth)
+{
+	// msdfgen-style one-screen-pixel reconstruction. RGB median owns body
+	// topology; Alpha contributes only the stable screen-space footprint.
+	return saturate(0.5 + rgbDistance
+		/ max(2.0 * antialiasWidth, 0.0002));
 }
 
 #endif

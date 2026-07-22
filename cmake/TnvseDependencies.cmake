@@ -107,7 +107,6 @@ function(tnvse_add_freetype_target)
     "${ft}/src/pshinter/pshinter.c"
     "${ft}/src/psnames/psmodule.c"
     "${ft}/src/sfnt/sfnt.c"
-    "${ft}/src/sdf/sdf.c"
     "${ft}/src/smooth/smooth.c"
     "${ft}/src/truetype/truetype.c"
     "${ft}/builds/windows/ftdebug.c"
@@ -129,6 +128,46 @@ function(tnvse_add_freetype_target)
     /utf-8 /wd4001 /wd4244 /wd4267)
   tnvse_apply_msvc_defaults(freetype_tnvse)
   set_target_properties(freetype_tnvse PROPERTIES FOLDER "tNVSE/Dependencies")
+  if(NOT TARGET Freetype::Freetype)
+    add_library(Freetype::Freetype ALIAS freetype_tnvse)
+  endif()
+endfunction()
+
+function(tnvse_add_msdfgen_target)
+  set(msdfgen_dir "${TNVSE_THIRD_PARTY_DIR}/msdfgen")
+  if(NOT EXISTS "${msdfgen_dir}/CMakeLists.txt")
+    message(FATAL_ERROR
+      "msdfgen v1.13 submodule is missing. Run: git submodule update --init --recursive")
+  endif()
+
+  # Only the FreeType outline bridge and the core MTSDF generator are needed.
+  # Disable the standalone tool and image/SVG/Skia dependencies so the shipping
+  # plug-in retains the same self-contained static-runtime contract.
+  set(MSDFGEN_CORE_ONLY OFF CACHE BOOL "" FORCE)
+  set(MSDFGEN_BUILD_STANDALONE OFF CACHE BOOL "" FORCE)
+  set(MSDFGEN_USE_VCPKG OFF CACHE BOOL "" FORCE)
+  set(MSDFGEN_USE_OPENMP OFF CACHE BOOL "" FORCE)
+  set(MSDFGEN_USE_CPP11 ON CACHE BOOL "" FORCE)
+  set(MSDFGEN_USE_SKIA OFF CACHE BOOL "" FORCE)
+  set(MSDFGEN_DISABLE_SVG ON CACHE BOOL "" FORCE)
+  set(MSDFGEN_DISABLE_PNG ON CACHE BOOL "" FORCE)
+  set(MSDFGEN_INSTALL OFF CACHE BOOL "" FORCE)
+  set(MSDFGEN_DYNAMIC_RUNTIME OFF CACHE BOOL "" FORCE)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+  add_subdirectory("${msdfgen_dir}" "${CMAKE_BINARY_DIR}/third_party/msdfgen"
+    EXCLUDE_FROM_ALL)
+
+  foreach(msdfgen_target IN ITEMS msdfgen-core msdfgen-ext)
+    if(TARGET ${msdfgen_target})
+      tnvse_apply_msvc_defaults(${msdfgen_target})
+      target_compile_definitions(${msdfgen_target} PRIVATE
+        _CRT_SECURE_NO_WARNINGS)
+      target_compile_options(${msdfgen_target} PRIVATE
+        /utf-8 /wd4244 /wd4267 /wd4456 /wd4457 /wd4458 /wd4459)
+      set_target_properties(${msdfgen_target} PROPERTIES
+        FOLDER "tNVSE/Dependencies/msdfgen")
+    endif()
+  endforeach()
 endfunction()
 
 function(tnvse_copy_dxsdk_runtime target)

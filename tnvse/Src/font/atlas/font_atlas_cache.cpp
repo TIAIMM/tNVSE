@@ -467,6 +467,11 @@ namespace fonthook::vectorfont
 			};
 			add(&maskGenerationHash, sizeof(maskGenerationHash));
 			add(&maskCombination, sizeof(maskCombination));
+			if (maskCombination & (1u
+				<< static_cast<UInt8>(GlyphMaskType::DistanceField)))
+			{
+				add(&kMtsdfGeneratorRevision, sizeof(kMtsdfGeneratorRevision));
+			}
 			add(&sdfSpread, sizeof(sdfSpread));
 			add(&outlineStroke, sizeof(outlineStroke));
 			add(&glowStroke, sizeof(glowStroke));
@@ -975,7 +980,8 @@ namespace fonthook::vectorfont
 				return resource;
 			}
 			resource->backend = AtlasBackend::Managed;
-			resource->pixelMode = AtlasPixelMode::Argb32;
+			if (resource->pixelMode == AtlasPixelMode::A8)
+				resource->pixelMode = AtlasPixelMode::Argb32;
 			resource->mipLevels = GetAtlasMipLevelCount(
 				resource->width, resource->height, resource->levelZeroOnly);
 			resource->pixels.assign(static_cast<size_t>(resource->width)

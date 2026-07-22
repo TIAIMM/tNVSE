@@ -1,6 +1,7 @@
 #pragma once
 
 #include "font_vector.h"
+#include "font_mtsdf_contract.h"
 
 #include <array>
 #include <list>
@@ -168,14 +169,49 @@ namespace fonthook::vectorfont
 		bool colorBaked = false;
 		UInt32 bakedRgba = 0;
 		UInt8 bakedLayer = 0;
+		// Single-channel coverage for CPU masks; D3D-native BGRA MTSDF for
+		// DistanceField requests. The request type is part of every cache key.
 		std::vector<UInt8> alpha;
 	};
+
+	inline constexpr UInt32 GlyphBitmapBytesPerPixel(GlyphMaskType maskType)
+	{
+		return maskType == GlyphMaskType::DistanceField ? 4u : 1u;
+	}
+
+	inline size_t ExpectedGlyphBitmapBytes(const GlyphBitmap& bitmap)
+	{
+		if (bitmap.width <= 0 || bitmap.height <= 0)
+			return 0;
+		return static_cast<size_t>(bitmap.width) * bitmap.height
+			* GlyphBitmapBytesPerPixel(bitmap.maskType);
+	}
+
+	inline UInt8 SampleGlyphBodyDistanceByte(
+		const GlyphBitmap& bitmap, size_t pixelIndex)
+	{
+		if (bitmap.maskType != GlyphMaskType::DistanceField)
+			return pixelIndex < bitmap.alpha.size() ? bitmap.alpha[pixelIndex] : 0;
+		const size_t offset = pixelIndex * 4u;
+		return offset + 3u < bitmap.alpha.size()
+			? MedianMtsdfRgb(bitmap.alpha.data() + offset) : 0;
+	}
 
 	struct GlyphBitmapRequest
 	{
 		const VectorEncodedGlyph* glyph = nullptr;
 		GlyphMaskType maskType = GlyphMaskType::Fill;
 		UInt32 sdfSpread = 0;
+	};
+
+	inline constexpr size_t kGlyphCollisionBandCount = 16;
+	struct GlyphCollisionProfile
+	{
+		float top = 0.0f;
+		float bottom = 0.0f;
+		UInt16 bandMask = 0;
+		std::array<float, kGlyphCollisionBandCount> left = {};
+		std::array<float, kGlyphCollisionBandCount> right = {};
 	};
 
 	// Layer IDs are part of the shader/native-packet ABI. Keep those IDs stable
@@ -244,7 +280,7 @@ namespace fonthook::vectorfont
 		// COLOR0 carries only the per-glyph base modifier. Packet c1 carries the
 		// layer modifier, while c2.z selects whether fixed effects ignore both the
 		// base and live Tile RGB. Every path continues to inherit live Tile alpha.
-		static constexpr UInt32 kTileUniformColorAbi = 9;
+		static constexpr UInt32 kTileUniformColorAbi = 10;
 
 		UInt32 abiVersion = kTileUniformColorAbi;
 		NiColorA minimumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -303,7 +339,7 @@ namespace fonthook::vectorfont
 		bool expectedEmpty = false;
 		bool wantsShaderPath = false;
 		bool hasEffects = false;
-		bool requestsSdfFill = false;
+		bool requestsMtsdfFill = false;
 		bool a8RendererAvailable = false;
 		bool shaderQuadsBuilt = false;
 		bool shaderAtlasOrShapeFailed = false;
@@ -338,12 +374,18 @@ namespace fonthook::vectorfont
 	void ResolveGlyphBitmapCacheIds(RuntimeFont& arRuntime,
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
 		std::vector<UInt64>& arCacheIds);
+	bool LoadGlyphCollisionProfile(RuntimeFont& arRuntime,
+		const VectorEncodedGlyph& arGlyph, GlyphCollisionProfile& arProfile);
 	void GetPrewarmGlyphBitmaps(RuntimeFont& arRuntime,
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults);
 	void StoreGlyphCollisionProfile(RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph, const GlyphBitmap& arBitmap,
 		float afRasterScale);
+	bool StoreGlyphCollisionProfile(RuntimeFont& arRuntime,
+		const VectorEncodedGlyph& arGlyph, const GlyphCollisionProfile& arProfile);
+	void BeginCompleteCodePageAtlasOnlyPrewarm();
+	void EndCompleteCodePageAtlasOnlyPrewarm();
 	void FlushGlyphBitmapDiskCache();
 	UInt64 ReleaseGlyphBitmapDiskCacheMappings();
 	bool ResetPersistentFontCachesForRegeneration(RuntimeFont& arRuntime);

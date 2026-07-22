@@ -112,7 +112,7 @@ namespace fonthook::vectorfont
 				}
 			}
 			if (!effectConfig || !effectConfig->enabled)
-				return RejectA8Shape("native-route-requires-enabled-sdf");
+				return RejectA8Shape("native-route-requires-enabled-mtsdf");
 
 			const std::array<float, 12> scalarValues = {
 				effectConfig->inverseAtlasWidth,
@@ -211,9 +211,9 @@ namespace fonthook::vectorfont
 					return RejectA8Shape("draw-ranges-not-layer-monotonic");
 				}
 				if (!range.usesSdf)
-					return RejectA8Shape("non-sdf-draw-range");
+					return RejectA8Shape("non-mtsdf-draw-range");
 				if (effectConfig->sdfSpreadPixels <= 0.0f)
-					return RejectA8Shape("sdf-range-without-positive-spread");
+					return RejectA8Shape("mtsdf-range-without-positive-spread");
 				haveFill = haveFill || range.layer == 3;
 				previousLayerRank = layerRank;
 				previousVertexEnd = vertexEnd;

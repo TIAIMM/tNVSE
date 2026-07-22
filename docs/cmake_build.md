@@ -55,10 +55,11 @@ out/build/vs2026-win32/bin/Release/tnvse.dll
 
 The build also:
 
-- builds the reduced FreeType and commonlib targets;
+- builds the reduced FreeType, pinned msdfgen 1.13, and commonlib targets;
 - compiles all of those targets and `tnvse.dll` against the same VC-LTL CRT
   contract;
-- compiles all seven native D3D9 shaders and runs the shader ABI verifier;
+- compiles the five native D3D9 MTSDF shader objects and runs the shader ABI
+  verifier;
 - copies the D3DX runtime DLLs next to the build output;
 - copies `tnvse.dll` and the shaders to the live mod when the Windows
   environment variable `NVSE_PLUGIN_PATH` points to its `NVSE/plugins`

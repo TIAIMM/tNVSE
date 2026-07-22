@@ -14,6 +14,7 @@
 #include <mutex>
 #include <new>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -291,14 +292,39 @@ namespace fonthook::vectorfont
 			size_t encodedUnitStart = 0;
 			UInt32 validDoubleByteCount = 0;
 			UInt32 rasterizedGlyphCount = 0;
-			UInt32 sdfGlyphCount = 0;
+			UInt32 mtsdfGlyphCount = 0;
 			UInt32 targetUnitCount = 0;
 			UInt32 rasterScaleMilli = 0;
+		};
+
+		struct SessionMaskProfile
+		{
+			UInt32 ownerFontId = 0;
+			bool atlasReady = false;
+			std::unordered_map<UInt64, GlyphCollisionProfile> collisions;
+		};
+
+		struct CompleteCodePageAtlasOnlyScope
+		{
+			bool active = false;
+
+			explicit CompleteCodePageAtlasOnlyScope(bool enable) : active(enable)
+			{
+				if (active)
+					BeginCompleteCodePageAtlasOnlyPrewarm();
+			}
+
+			~CompleteCodePageAtlasOnlyScope()
+			{
+				if (active)
+					EndCompleteCodePageAtlasOnlyPrewarm();
+			}
 		};
 
 		std::deque<PrewarmJob> s_jobs;
 		std::unordered_set<UInt64> s_scheduledProfiles;
 		bool s_configuredFontsQueued = false;
+		bool s_atlasOnlyPrewarmPending = false;
 
 		UInt64 BuildProfileKey(const FontConfig& config)
 		{
@@ -319,6 +345,30 @@ namespace fonthook::vectorfont
 				sizeof(kCompleteCodePagePrewarmIdentity));
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			add(&codePage, sizeof(codePage));
+			return hash;
+		}
+
+		UInt64 BuildSessionMaskProfileKey(const FontConfig& config,
+			UInt32 rasterScaleMilli, UInt32 sdfSpread)
+		{
+			UInt64 hash = 1469598103934665603ull;
+			auto add = [&](const void* data, size_t size)
+			{
+				const UInt8* bytes = static_cast<const UInt8*>(data);
+				for (size_t index = 0; index < size; ++index)
+				{
+					hash ^= bytes[index];
+					hash *= 1099511628211ull;
+				}
+			};
+			add(&config.maskGenerationHash, sizeof(config.maskGenerationHash));
+			add(&rasterScaleMilli, sizeof(rasterScaleMilli));
+			add(&sdfSpread, sizeof(sdfSpread));
+			const UInt32 codePage = GetFreeTypeTextCodePage();
+			add(&codePage, sizeof(codePage));
+			add(&kCompleteCodePagePrewarmIdentity,
+				sizeof(kCompleteCodePagePrewarmIdentity));
+			add(&kMtsdfGeneratorRevision, sizeof(kMtsdfGeneratorRevision));
 			return hash;
 		}
 
@@ -355,7 +405,7 @@ namespace fonthook::vectorfont
 			job.encodedUnitIndex = job.encodedUnitStart;
 			job.validDoubleByteCount = 0;
 			job.rasterizedGlyphCount = 0;
-			job.sdfGlyphCount = 0;
+			job.mtsdfGlyphCount = 0;
 			job.rasterScaleMilli = rasterScaleMilli;
 			job.targetUnitCount = static_cast<UInt32>(
 				units.size() - job.encodedUnitStart);
@@ -368,7 +418,7 @@ namespace fonthook::vectorfont
 		}
 
 		UInt32 ResolvePrewarmGlyphBatchLimit(const FontConfig& config,
-			float rasterScale, bool shaderSdf, UInt32 sdfSpread)
+			float rasterScale, bool shaderMtsdf, UInt32 sdfSpread)
 		{
 			size_t worstBytes = 1;
 			for (const ByteStyle& style : config.styles)
@@ -378,7 +428,7 @@ namespace fonthook::vectorfont
 				const size_t bodyHeight = static_cast<size_t>(std::max(1.0f,
 					std::ceil(style.pixelSize * style.scaleY * rasterScale)));
 				float effectRadius = 2.0f;
-				if (shaderSdf)
+				if (shaderMtsdf)
 					effectRadius += static_cast<float>(sdfSpread);
 				else
 				{
@@ -393,8 +443,11 @@ namespace fonthook::vectorfont
 				const size_t expansion = static_cast<size_t>(std::ceil(effectRadius)) * 2u + 2u;
 				const size_t width = bodyWidth + expansion;
 				const size_t height = bodyHeight + expansion;
-				size_t masks = 1;
-				if (!shaderSdf)
+				// MTSDF has one logical mask but four resident bytes per texel.
+				// Keep the batch limiter tied to actual bitmap memory so a full
+				// code-page prewarm cannot overshoot its target by roughly 4x.
+				size_t masks = shaderMtsdf ? 4u : 1u;
+				if (!shaderMtsdf)
 					masks += (config.glow.enabled ? 1u : 0u)
 						+ (config.outline.enabled ? 1u : 0u);
 				worstBytes = std::max(worstBytes,
@@ -423,7 +476,7 @@ namespace fonthook::vectorfont
 		{
 			wchar_t detail[160] = {};
 			const wchar_t* renderMode = ResolveFontAtlasRoute(IsA8RendererAvailable())
-				== FontAtlasRoute::ShaderSdf ? L"SDF" : L"ARGB fallback";
+				== FontAtlasRoute::ShaderMtsdf ? L"MTSDF" : L"ARGB fallback";
 			_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 				L"Font %u of %u  |  ID %u  |  %ls",
 				fontOrdinal, fontCount, job.fontId, renderMode);
@@ -438,11 +491,80 @@ namespace fonthook::vectorfont
 		void FinishJob(const PrewarmJob& job, const char* status)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm font=%u coverage=full-codepage scale=%.3f glyphs=%u doubleByte=%u sdfGlyphs=%u status=%s",
+				"tnvse_freetype_font: prewarm font=%u coverage=full-codepage scale=%.3f glyphs=%u doubleByte=%u mtsdfGlyphs=%u status=%s",
 				job.fontId,
 				job.rasterScaleMilli ? job.rasterScaleMilli / 1000.0f : 0.0f,
 				job.rasterizedGlyphCount, job.validDoubleByteCount,
-				job.sdfGlyphCount, status);
+				job.mtsdfGlyphCount, status);
+		}
+
+		bool TryReuseSessionMaskProfile(PrewarmJob& job, RuntimeFont& runtime,
+			const SessionMaskProfile& profile, float rasterScale,
+			UInt32 rasterScaleMilli, UInt32 sdfSpread, UInt32 batchGlyphLimit,
+			UInt32 candidateLimit,
+			UInt32 fontOrdinal, UInt32 fontCount, UInt32 finishedFonts)
+		{
+			if (!profile.atlasReady || profile.collisions.empty())
+				return false;
+
+			ResetPrewarmScan(job, rasterScaleMilli);
+			std::vector<VectorEncodedGlyph> glyphs;
+			std::vector<GlyphBitmapRequest> requests;
+			std::vector<UInt64> cacheIds;
+			bool exhausted = false;
+			while (!exhausted)
+			{
+				glyphs.clear();
+				requests.clear();
+				glyphs.reserve(batchGlyphLimit);
+				requests.reserve(batchGlyphLimit);
+				UInt32 candidates = 0;
+				while (candidates < candidateLimit
+					&& requests.size() < batchGlyphLimit)
+				{
+					std::array<char, 2> bytes = {};
+					size_t length = 0;
+					if (!NextEncodedUnit(job, bytes, length))
+					{
+						exhausted = true;
+						break;
+					}
+					++candidates;
+					VectorEncodedGlyph glyph;
+					if (!ResolvePrewarmGlyph(runtime, bytes.data(), length, glyph))
+						continue;
+					if (length == 2)
+						++job.validDoubleByteCount;
+					glyphs.push_back(glyph);
+					requests.push_back({ &glyphs.back(),
+						GlyphMaskType::DistanceField,
+						static_cast<UInt8>(sdfSpread) });
+					++job.rasterizedGlyphCount;
+					++job.mtsdfGlyphCount;
+				}
+
+				if (requests.empty())
+					continue;
+				ResolveGlyphBitmapCacheIds(runtime, requests, rasterScale, cacheIds);
+				if (cacheIds.size() != requests.size())
+					return false;
+				for (size_t index = 0; index < requests.size(); ++index)
+				{
+					const auto collision = profile.collisions.find(cacheIds[index]);
+					if (!cacheIds[index] || collision == profile.collisions.end()
+						|| !requests[index].glyph
+						|| !StoreGlyphCollisionProfile(runtime,
+							*requests[index].glyph, collision->second))
+					{
+						return false;
+					}
+				}
+				ReportPrewarmProgress(job, fontOrdinal, fontCount, finishedFonts,
+					L"Reusing streamed MTSDF profile...");
+			}
+
+			MarkGlyphManifestComplete(runtime);
+			return TryLoadGloballyRepackedGlyphAtlasSnapshot(runtime, rasterScale);
 		}
 	}
 
@@ -485,6 +607,14 @@ namespace fonthook::vectorfont
 		ResetPrewarmScan(job, 0);
 		const UInt32 targetUnitCount = job.targetUnitCount;
 		s_jobs.push_back(std::move(job));
+		if (!s_atlasOnlyPrewarmPending)
+		{
+			// Fonts can be asked to draw between activation and the first game-loop
+			// prewarm pump. Start the MTSDF atlas-only policy at queue time so those
+			// early requests cannot create a short-lived .tnvfmask first.
+			BeginCompleteCodePageAtlasOnlyPrewarm();
+			s_atlasOnlyPrewarmPending = true;
+		}
 		SetBitmapCacheReducedAfterPrewarm(false);
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: queued prewarm font=%u coverage=full-codepage codePage=%u units=%u",
@@ -508,7 +638,14 @@ namespace fonthook::vectorfont
 	void PumpFontPrewarm()
 	{
 		if (!g_bEnableFreeTypeFontRendering)
+		{
+			if (s_atlasOnlyPrewarmPending)
+			{
+				EndCompleteCodePageAtlasOnlyPrewarm();
+				s_atlasOnlyPrewarmPending = false;
+			}
 			return;
+		}
 		QueueConfiguredFontPrewarms();
 		if (s_jobs.empty())
 			return;
@@ -525,6 +662,7 @@ namespace fonthook::vectorfont
 		UInt32 streamFailedFonts = 0;
 		UInt32 cancelledFonts = 0;
 		UInt32 finishedFonts = 0;
+		bool everyGeneratedProfileUsedMtsdfAtlas = true;
 
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: blocking streamed prewarm begin fonts=%u scale=%.3f batchTargetMiB=%.2f",
@@ -591,6 +729,55 @@ namespace fonthook::vectorfont
 				static_cast<float>(finishedFonts) / queuedFonts);
 		}
 
+		// Streamed full-codepage construction is the durable bitmap tier. Disable
+		// MTSDF .tnvfmask lookup and creation only for this transaction; normal demand
+		// rendering regains the persistent bitmap policy when the scope exits.
+		CompleteCodePageAtlasOnlyScope atlasOnlyScope(
+			s_atlasOnlyPrewarmPending || !s_jobs.empty());
+		s_atlasOnlyPrewarmPending = false;
+		std::unordered_map<UInt64, SessionMaskProfile> sessionMaskProfiles;
+		std::unordered_map<UInt64, UInt32> sessionMaskProfileRemainingUses;
+		for (const PrewarmJob& queued : s_jobs)
+		{
+			const FontConfig* queuedConfig = FindConfig(queued.fontId);
+			if (!queuedConfig)
+				continue;
+			EffectQuality queuedQuality = queuedConfig->effectQuality;
+			const bool queuedMtsdf = ResolveFontAtlasRoute(IsA8RendererAvailable())
+				== FontAtlasRoute::ShaderMtsdf
+				&& ResolveA8EffectQuality(queuedConfig->effectQuality, queuedQuality);
+			UInt32 queuedSpread = 0;
+			if (!queuedMtsdf
+				|| !ResolveSdfSpread(*queuedConfig, rasterScale, queuedSpread))
+			{
+				continue;
+			}
+			++sessionMaskProfileRemainingUses[BuildSessionMaskProfileKey(
+				*queuedConfig, rasterScaleMilli, queuedSpread)];
+		}
+		UInt32 sharedSessionProfiles = 0;
+		for (const auto& usage : sessionMaskProfileRemainingUses)
+			sharedSessionProfiles += usage.second > 1 ? 1u : 0u;
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: session MTSDF reuse plan generatedProfiles=%u sharedProfiles=%u",
+			static_cast<UInt32>(sessionMaskProfileRemainingUses.size()),
+			sharedSessionProfiles);
+		auto consumeSessionMaskProfile = [&](UInt64 key)
+		{
+			if (!key)
+				return;
+			const auto remaining = sessionMaskProfileRemainingUses.find(key);
+			if (remaining == sessionMaskProfileRemainingUses.end())
+				return;
+			if (remaining->second > 1)
+			{
+				--remaining->second;
+				return;
+			}
+			sessionMaskProfileRemainingUses.erase(remaining);
+			sessionMaskProfiles.erase(key);
+		};
+
 		std::vector<VectorEncodedGlyph> requestedGlyphs;
 		std::vector<GlyphBitmapRequest> bitmapRequests;
 		std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
@@ -615,18 +802,64 @@ namespace fonthook::vectorfont
 				continue;
 			}
 
+			// A preceding font may have reduced the bitmap LRU to reserve address
+			// space for atlas publication. Restore the bounded prewarm working target
+			// while this font rasterizes; it will be reduced again before publishing.
+			SetBitmapCacheReducedAfterPrewarm(false);
 			EffectQuality resolvedQuality = config->effectQuality;
-			bool shaderSdf = ResolveFontAtlasRoute(IsA8RendererAvailable())
-				== FontAtlasRoute::ShaderSdf
+			bool shaderMtsdf = ResolveFontAtlasRoute(IsA8RendererAvailable())
+				== FontAtlasRoute::ShaderMtsdf
 				&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
 			UInt32 sdfSpread = 0;
-			if (shaderSdf && !ResolveSdfSpread(*config, rasterScale, sdfSpread))
-				shaderSdf = false;
+			if (shaderMtsdf && !ResolveSdfSpread(*config, rasterScale, sdfSpread))
+				shaderMtsdf = false;
+			if (!shaderMtsdf)
+				everyGeneratedProfileUsedMtsdfAtlas = false;
 			const UInt32 batchGlyphLimit = ResolvePrewarmGlyphBatchLimit(
-				*config, rasterScale, shaderSdf, sdfSpread);
+				*config, rasterScale, shaderMtsdf, sdfSpread);
 			const UInt32 candidateLimit = std::min(kMaximumCandidatesPerBatch,
 				std::max<UInt32>(256, batchGlyphLimit * 8u));
-			const bool needsGrayFill = !shaderSdf;
+			const UInt64 sessionMaskProfileKey = shaderMtsdf
+				? BuildSessionMaskProfileKey(*config, rasterScaleMilli, sdfSpread) : 0;
+			const auto remainingSessionUses = sessionMaskProfileRemainingUses.find(
+				sessionMaskProfileKey);
+			const bool retainSessionCollisions = shaderMtsdf
+				&& remainingSessionUses != sessionMaskProfileRemainingUses.end()
+				&& remainingSessionUses->second > 1;
+			if (shaderMtsdf)
+			{
+				const auto reusable = sessionMaskProfiles.find(sessionMaskProfileKey);
+				if (reusable != sessionMaskProfiles.end() && reusable->second.atlasReady)
+				{
+					if (TryReuseSessionMaskProfile(job, *runtime, reusable->second,
+						rasterScale, rasterScaleMilli, sdfSpread, batchGlyphLimit,
+						candidateLimit, fontOrdinal, queuedFonts, finishedFonts))
+					{
+						gLog.FormattedMessage(
+							"tnvse_freetype_font: session MTSDF profile reused font=%u owner=%u collisions=%u",
+							job.fontId, reusable->second.ownerFontId,
+							static_cast<UInt32>(reusable->second.collisions.size()));
+						verifiedCodePageFonts.push_back(job.fontId);
+						FinishJob(job, "session-atlas");
+						++completedFonts;
+						++finishedFonts;
+						consumeSessionMaskProfile(sessionMaskProfileKey);
+						continue;
+					}
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: session MTSDF profile reuse incomplete font=%u owner=%u; falling back to streamed generation",
+						job.fontId, reusable->second.ownerFontId);
+					ResetPrewarmScan(job, rasterScaleMilli);
+				}
+				if (retainSessionCollisions)
+				{
+					SessionMaskProfile& session =
+						sessionMaskProfiles[sessionMaskProfileKey];
+					if (!session.ownerFontId)
+						session.ownerFontId = job.fontId;
+				}
+			}
+			const bool needsGrayFill = !shaderMtsdf;
 			bool exhausted = false;
 			bool failed = false;
 
@@ -659,16 +892,16 @@ namespace fonthook::vectorfont
 					if (needsGrayFill)
 						bitmapRequests.push_back({ requestedGlyph,
 							GlyphMaskType::Fill, 0 });
-					if (shaderSdf)
+					if (shaderMtsdf)
 					{
 						bitmapRequests.push_back({ requestedGlyph,
 							GlyphMaskType::DistanceField, sdfSpread });
-						++job.sdfGlyphCount;
+						++job.mtsdfGlyphCount;
 					}
-					if (config->glow.enabled && !shaderSdf)
+					if (config->glow.enabled && !shaderMtsdf)
 						bitmapRequests.push_back({ requestedGlyph,
 							GlyphMaskType::Glow, 0 });
-					if (config->outline.enabled && !shaderSdf)
+					if (config->outline.enabled && !shaderMtsdf)
 						bitmapRequests.push_back({ requestedGlyph,
 							GlyphMaskType::Outline, 0 });
 					++glyphCount;
@@ -712,6 +945,18 @@ namespace fonthook::vectorfont
 							StoreGlyphCollisionProfile(*runtime,
 								*bitmapRequests[index].glyph, *bitmapResults[index],
 								rasterScale);
+							if (retainSessionCollisions
+								&& bitmapRequests[index].maskType
+									== GlyphMaskType::DistanceField)
+							{
+								GlyphCollisionProfile collision;
+								if (LoadGlyphCollisionProfile(*runtime,
+									*bitmapRequests[index].glyph, collision))
+								{
+									sessionMaskProfiles[sessionMaskProfileKey].collisions
+										.emplace(bitmapResults[index]->cacheId, collision);
+								}
+							}
 						}
 					}
 					failed = !AppendStreamingPrewarmAtlas(*runtime,
@@ -719,7 +964,7 @@ namespace fonthook::vectorfont
 				}
 
 				// Release every strong bitmap reference before the next batch. The stream
-				// owns only one packed A8 page and its placement metadata; the bitmap LRU
+				// owns only one packed MTSDF page and its placement metadata; the bitmap LRU
 				// is then free to obey the aggregate CPU budget.
 				bitmapResults.clear();
 				bitmapRequests.clear();
@@ -727,7 +972,7 @@ namespace fonthook::vectorfont
 				EnforceCpuMemoryBudget("prewarm-stream-batch");
 				++batches;
 				ReportPrewarmProgress(job, fontOrdinal, queuedFonts, finishedFonts,
-					shaderSdf ? L"Streaming SDF glyphs to disk..."
+					shaderMtsdf ? L"Streaming MTSDF glyphs to disk..."
 						: L"Generating bounded fallback masks...");
 			}
 
@@ -736,6 +981,8 @@ namespace fonthook::vectorfont
 				CancelStreamingPrewarmAtlas(*runtime);
 				DiscardGlyphAtlasSnapshot(*runtime, rasterScale);
 				ResetPersistentFontCachesForRegeneration(*runtime);
+				sessionMaskProfiles.erase(sessionMaskProfileKey);
+				consumeSessionMaskProfile(sessionMaskProfileKey);
 				FinishJob(job, "stream-failed");
 				++streamFailedFonts;
 				++finishedFonts;
@@ -744,33 +991,64 @@ namespace fonthook::vectorfont
 
 			ReportPrewarmProgress(job, fontOrdinal, queuedFonts, finishedFonts,
 				L"Publishing streamed atlas pages...", 0.995f);
-			if (!FinalizeStreamingPrewarmAtlas(*runtime, rasterScale))
+			// MTSDF publishing temporarily needs both the compact placed-rectangle
+			// payload and an upload/repack buffer. Atlas-only mode prevents new mask
+			// profiles, while this release also removes mappings that may predate the
+			// transaction before the 32-bit address-space peak.
+			const UInt64 releasedMappingBytes = ReleaseGlyphBitmapDiskCacheMappings();
+			SetBitmapCacheReducedAfterPrewarm(true);
+			EnforceCpuMemoryBudget("prewarm-before-atlas-publish");
+			if (releasedMappingBytes)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: atlas publish address-space reserve font=%u releasedMaskMappings=%llu",
+					job.fontId,
+					static_cast<unsigned long long>(releasedMappingBytes));
+			}
+			bool finalized = false;
+			try
+			{
+				finalized = FinalizeStreamingPrewarmAtlas(*runtime, rasterScale);
+			}
+			catch (const std::bad_alloc&)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: streamed atlas publish allocation failed font=%u scale=%.3f",
+					job.fontId, rasterScale);
+			}
+			catch (...)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: streamed atlas publish raised an unexpected exception font=%u",
+					job.fontId);
+			}
+			if (!finalized)
 			{
 				CancelStreamingPrewarmAtlas(*runtime);
 				DiscardGlyphAtlasSnapshot(*runtime, rasterScale);
 				ResetPersistentFontCachesForRegeneration(*runtime);
+				sessionMaskProfiles.erase(sessionMaskProfileKey);
+				consumeSessionMaskProfile(sessionMaskProfileKey);
 				FinishJob(job, "stream-finalize-failed");
 				++streamFailedFonts;
 				++finishedFonts;
 				continue;
 			}
-			MarkGlyphManifestComplete(*runtime);
 			if (g_bEnableFreeTypeDefaultPoolAtlas)
-			{
-				if (!EnsureGloballyRepackedGlyphAtlasSnapshot(*runtime, rasterScale))
-				{
-					DiscardGlyphAtlasSnapshot(*runtime, rasterScale);
-					ResetPersistentFontCachesForRegeneration(*runtime);
-					FinishJob(job, "post-finalize-validation-failed");
-					++streamFailedFonts;
-					++finishedFonts;
-					continue;
-				}
 				verifiedCodePageFonts.push_back(job.fontId);
+			if (retainSessionCollisions)
+			{
+				SessionMaskProfile& session =
+					sessionMaskProfiles[sessionMaskProfileKey];
+				session.atlasReady = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: session MTSDF profile published font=%u collisions=%u",
+					job.fontId, static_cast<UInt32>(session.collisions.size()));
 			}
 			FinishJob(job, "complete");
 			++completedFonts;
 			++finishedFonts;
+			consumeSessionMaskProfile(sessionMaskProfileKey);
 			UpdatePrewarmProgress(L"Streamed font atlas is ready.",
 				L"Preparing the next font...",
 				static_cast<float>(finishedFonts) / queuedFonts);
@@ -810,7 +1088,7 @@ namespace fonthook::vectorfont
 		const bool everyConfiguredProfileVerified = everyConfiguredJobCompleted
 			&& verifiedCodePageFonts.size() == queuedFonts
 			&& verifiedProfileKeys.size() == configuredProfileKeys.size();
-		if (everyConfiguredProfileVerified)
+		if (everyConfiguredProfileVerified && everyGeneratedProfileUsedMtsdfAtlas)
 		{
 			if (!DeleteCompleteCodePageGlyphBitmapDiskCaches(atlasOnlyFontIds))
 			{
@@ -818,14 +1096,19 @@ namespace fonthook::vectorfont
 					"tnvse_freetype_font: complete codepage mask cleanup incomplete; residual files will not be reused in this process");
 			}
 		}
-		else
+		else if (!everyConfiguredProfileVerified)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: complete codepage mask retention required complete=%u verifiedAtlas=%u queued=%u verifiedProfiles=%u configuredProfiles=%u readyRuntimes=%u configuredFonts=%u",
+				"tnvse_freetype_font: complete codepage atlas-only transaction incomplete complete=%u verifiedAtlas=%u queued=%u verifiedProfiles=%u configuredProfiles=%u readyRuntimes=%u configuredFonts=%u; runtime persistent-mask policy will resume",
 				completedFonts, static_cast<UInt32>(verifiedCodePageFonts.size()),
 				queuedFonts, static_cast<UInt32>(verifiedProfileKeys.size()),
 				static_cast<UInt32>(configuredProfileKeys.size()),
 				readyConfiguredRuntimes, static_cast<UInt32>(g_configs.size()));
+		}
+		else
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: persistent fallback masks retained because at least one completed profile used the ARGB route");
 		}
 		if (everyConfiguredJobCompleted)
 		{

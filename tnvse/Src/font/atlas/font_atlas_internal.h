@@ -25,10 +25,10 @@
 
 namespace fonthook::vectorfont
 {
-	// Shader SDF atlases are level-zero-only. One transparent texel on each edge
+	// Shader MTSDF atlases are level-zero-only. One outside-distance texel on each edge
 	// isolates bilinear samples; the distance-field spread is already part of the
 	// glyph bitmap and must not be counted again as atlas padding.
-	inline constexpr UInt32 kSdfAtlasPadding = 1;
+	inline constexpr UInt32 kMtsdfAtlasPadding = 1;
 	// CPU-baked ARGB atlases retain up to three mip levels. Four transparent
 	// level-zero texels leave one transparent texel at the coarsest 1/4 mip.
 	inline constexpr UInt32 kArgbAtlasPadding = 4;
@@ -60,6 +60,7 @@ namespace fonthook::vectorfont
 	{
 		Argb32 = 0,
 		A8 = 1,
+		Mtsdf32 = 2,
 	};
 
 	enum class AtlasBackend : UInt8
@@ -199,10 +200,11 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 12;
+	constexpr UInt32 kAtlasSnapshotVersion = 13;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
 	constexpr UInt32 kAtlasSnapshotKnownFlags = kAtlasSnapshotFlagGloballyRepacked;
-	// Version 12 stores the compact placed-rectangle payload with optional lossless
+	// Version 13 replaces single-channel shader SDF pages with BGRA MTSDF pages.
+	// Version 12 stored the compact placed-rectangle payload with optional lossless
 	// per-glyph PackBits blocks. pixelBytes remains the decoded byte count while
 	// storedPixelBytes describes the on-disk payload. Version 11 introduced the
 	// stable page, inverse-size, and normalized UV placement subset.
@@ -355,7 +357,7 @@ namespace fonthook::vectorfont
 	struct CompactAtlasSnapshot
 	{
 		CpuMemoryLease cpuMemory;
-		AtlasPixelMode pixelMode = AtlasPixelMode::A8;
+		AtlasPixelMode pixelMode = AtlasPixelMode::Mtsdf32;
 		std::vector<AtlasSnapshotPlacement> placements;
 		std::vector<UInt8> pixels;
 		std::wstring sourcePath;
@@ -534,7 +536,7 @@ namespace fonthook::vectorfont
 	struct ShaderEffectBuild
 	{
 		A8EffectShapeConfig config;
-		UInt32 padding = kSdfAtlasPadding;
+		UInt32 padding = kMtsdfAtlasPadding;
 		UInt32 drawQuadCount = 0;
 	};
 

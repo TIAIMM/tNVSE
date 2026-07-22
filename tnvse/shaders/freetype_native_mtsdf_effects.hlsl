@@ -4,9 +4,9 @@
 
 sampler2D FontAtlas : register(s0);
 float4 TileColor : register(c0);
-float4 AtlasPass : register(c2);    // invWidth, invHeight, layer, SDF spread
+float4 AtlasPass : register(c2);    // invWidth, invHeight, layer, MTSDF spread
 float4 EffectParams : register(c3); // layer-specific device-pixel parameters
-float4 SdfFlags : register(c4);     // hard shadow y: outline softness,
+float4 MtsdfFlags : register(c4);   // hard shadow y: outline softness,
                                     // z/w: copied glow/outline alpha
 
 #include "freetype_native_common.hlsli"
@@ -14,86 +14,85 @@ float4 SdfFlags : register(c4);     // hard shadow y: outline softness,
 float NativeFontVanillaGlowFalloff(float normalizedDistance, float power)
 {
 	// The baked vanilla glow atlases use an approximately exponential alpha
-	// tail.  With the default power of 2 this preserves the old shader's 0.25
+	// tail. With the default power of 2 this preserves the old shader's 0.25
 	// midpoint while retaining a low-intensity tail near the configured radius.
 	return exp2(-2.0 * power * saturate(normalizedDistance));
 }
 
-float EvaluateNativeFontGlowMask(float distance, float antialiasWidth,
-	float body, float inner, float outer, float power)
+float EvaluateNativeFontGlowMask(float alphaDistance, float antialiasWidth,
+	float rgbBody, float inner, float outer, float power)
 {
-	const float outsideDistance = max(-distance, 0.0);
+	const float outsideDistance = max(-alphaDistance, 0.0);
 	const float normalizedDistance = (outsideDistance - inner) / (outer - inner);
 	const float fade = outsideDistance <= inner
 		? 1.0
 		: NativeFontVanillaGlowFalloff(normalizedDistance, power);
-	return saturate((1.0 - body) * fade);
+	return saturate((1.0 - rgbBody) * fade);
 }
 
-float EvaluateNativeFontOutlineMask(float distance, float antialiasWidth,
-	float body, float width, float softness)
+float EvaluateNativeFontOutlineMask(float alphaDistance, float antialiasWidth,
+	float rgbBody, float width, float softness)
 {
-	// VUI+ draws a dark copy of the original text behind the fill instead of
-	// cutting a solid ring out of an expanded glyph.  Keep that overlap here:
-	// the later fill pass hides the opaque interior and leaves the filtered edge.
-	// Width adds a small outside reach; softness broadens the proxy coverage ramp.
+	// VUI+ draws a filtered dark copy behind the fill, not a cut-out solid ring.
+	// Preserve its overlap so the later fill pass hides the opaque interior and
+	// only the softly filtered outer edge remains visible.
 	const float proxyAntialiasWidth = antialiasWidth + max(softness, 0.0);
 	const float vuiProxy = smoothstep(-max(width, 0.0) - proxyAntialiasWidth,
-		proxyAntialiasWidth, distance);
-	return saturate(max(body, vuiProxy));
+		proxyAntialiasWidth, alphaDistance);
+	return saturate(max(rgbBody, vuiProxy));
 }
 
-float NativeFontGlowOuterFeather(float centerDistance, float antialiasWidth,
+float NativeFontGlowOuterFeather(float alphaDistance, float antialiasWidth,
 	float outer)
 {
-	const float outsideDistance = max(-centerDistance, 0.0);
+	const float outsideDistance = max(-alphaDistance, 0.0);
 	return 1.0 - smoothstep(
 		outer - antialiasWidth, outer + antialiasWidth, outsideDistance);
 }
 
-float ApplyNativeFontHardShadowComposite(float distance, float antialiasWidth,
-	float body)
+float ApplyNativeFontHardShadowComposite(float alphaDistance,
+	float antialiasWidth, float rgbBody)
 {
 	float glow = 0.0;
-	if (SdfFlags.z > 0.0)
+	if (MtsdfFlags.z > 0.0)
 	{
 		const float inner = max(EffectParams.x, 0.0);
 		const float outer = max(EffectParams.y, inner + 0.0001);
 		const float power = max(EffectParams.z, 0.0001);
-		glow = EvaluateNativeFontGlowMask(distance, antialiasWidth,
-			body, inner, outer, power);
-		glow *= NativeFontGlowOuterFeather(distance, antialiasWidth, outer)
-			* saturate(SdfFlags.z);
+		glow = EvaluateNativeFontGlowMask(alphaDistance, antialiasWidth,
+			rgbBody, inner, outer, power);
+		glow *= NativeFontGlowOuterFeather(alphaDistance, antialiasWidth, outer)
+			* saturate(MtsdfFlags.z);
 	}
 
 	float outline = 0.0;
-	if (SdfFlags.w > 0.0)
+	if (MtsdfFlags.w > 0.0)
 	{
 		const float width = max(EffectParams.w, 0.0);
-		const float softness = max(SdfFlags.y, 0.0);
-		outline = EvaluateNativeFontOutlineMask(distance, antialiasWidth,
-			body, width, softness) * saturate(SdfFlags.w);
+		const float softness = max(MtsdfFlags.y, 0.0);
+		outline = EvaluateNativeFontOutlineMask(alphaDistance, antialiasWidth,
+			rgbBody, width, softness) * saturate(MtsdfFlags.w);
 	}
 
-	// Reproduce the source text stack in one shadow-colored mask. Source-over
-	// union avoids over-darkening where the copied glow and outline overlap.
+	// Source-over union avoids over-darkening where copied glow and outline
+	// overlap. The RGB-median body keeps MTSDF corner topology intact.
 	const float outside = outline + (1.0 - outline) * glow;
-	return saturate(body + (1.0 - body) * outside);
+	return saturate(rgbBody + (1.0 - rgbBody) * outside);
 }
 
-float EvaluateNativeFontEffect(float distance, float antialiasWidth, int layer)
+float EvaluateNativeFontEffect(float alphaDistance, float antialiasWidth,
+	float rgbBody, int layer)
 {
-	const float body = NativeFontSdfBody(distance, antialiasWidth);
 	if (layer == 0)
 	{
-		if (SdfFlags.z > 0.0 || SdfFlags.w > 0.0)
-			return body;
+		if (MtsdfFlags.z > 0.0 || MtsdfFlags.w > 0.0)
+			return rgbBody;
 		const float blur = max(EffectParams.x, 0.0);
 		if (blur <= 0.001)
-			return body;
+			return rgbBody;
 		const float power = max(EffectParams.y, 0.0001);
 		const float blurred = smoothstep(-blur - antialiasWidth,
-			blur + antialiasWidth, distance);
+			blur + antialiasWidth, alphaDistance);
 		return pow(saturate(blurred), power);
 	}
 	if (layer == 1)
@@ -101,43 +100,54 @@ float EvaluateNativeFontEffect(float distance, float antialiasWidth, int layer)
 		const float inner = max(EffectParams.x, 0.0);
 		const float outer = max(EffectParams.y, inner + 0.0001);
 		const float power = max(EffectParams.z, 0.0001);
-		return EvaluateNativeFontGlowMask(distance, antialiasWidth,
-			body, inner, outer, power);
+		return EvaluateNativeFontGlowMask(alphaDistance, antialiasWidth,
+			rgbBody, inner, outer, power);
 	}
 	if (layer == 2)
 	{
 		const float width = max(EffectParams.x, 0.0);
 		const float softness = max(EffectParams.y, 0.0);
-		return EvaluateNativeFontOutlineMask(distance, antialiasWidth,
-			body, width, softness);
+		return EvaluateNativeFontOutlineMask(alphaDistance, antialiasWidth,
+			rgbBody, width, softness);
 	}
-	return body;
+	return rgbBody;
 }
 
-float ApplyNativeFontGlowOuterFeather(float coverage, float centerDistance,
+float ApplyNativeFontGlowOuterFeather(float coverage, float alphaDistance,
 	float antialiasWidth, int layer)
 {
 	if (layer != 1)
 		return coverage;
 	const float outer = max(EffectParams.y, EffectParams.x + 0.0001);
 	return coverage * NativeFontGlowOuterFeather(
-		centerDistance, antialiasWidth, outer);
+		alphaDistance, antialiasWidth, outer);
 }
 
 float EvaluateNativeFontEffectAt(float2 uv, float antialiasWidth, int layer)
 {
-	return EvaluateNativeFontEffect(DecodeNativeFontSdf(
-		SampleNativeFontMask(FontAtlas, uv), AtlasPass.w), antialiasWidth, layer);
+	const float4 mtsdf = SampleNativeFontMtsdf(FontAtlas, uv);
+	const float alphaDistance = DecodeNativeFontMtsdfDistance(
+		mtsdf.a, AtlasPass.w);
+	const float rgbDistance = DecodeNativeFontMtsdfDistance(
+		MedianNativeFontMtsdf(mtsdf.rgb), AtlasPass.w);
+	const float rgbBody = NativeFontMtsdfBody(rgbDistance, antialiasWidth);
+	return EvaluateNativeFontEffect(alphaDistance, antialiasWidth,
+		rgbBody, layer);
 }
 
 float SupersampledNativeFontEffect(float2 uv, int layer)
 {
-	const float centerDistance = DecodeNativeFontSdf(
-		SampleNativeFontMask(FontAtlas, uv), AtlasPass.w);
-	const float antialiasWidth = NativeFontSdfAntialiasWidth(centerDistance);
+	const float4 center = SampleNativeFontMtsdf(FontAtlas, uv);
+	const float centerAlphaDistance = DecodeNativeFontMtsdfDistance(
+		center.a, AtlasPass.w);
+	const float centerRgbDistance = DecodeNativeFontMtsdfDistance(
+		MedianNativeFontMtsdf(center.rgb), AtlasPass.w);
+	const float antialiasWidth =
+		NativeFontMtsdfAntialiasWidth(centerAlphaDistance);
 	float coverage;
 #if EFFECT_QUALITY == 0
-	coverage = EvaluateNativeFontEffect(centerDistance, antialiasWidth, layer);
+	coverage = EvaluateNativeFontEffect(centerAlphaDistance, antialiasWidth,
+		NativeFontMtsdfBody(centerRgbDistance, antialiasWidth), layer);
 #elif EFFECT_QUALITY == 1
 	const float2 quarter = AtlasPass.xy * 0.25;
 	float sum = 0.0;
@@ -149,23 +159,22 @@ float SupersampledNativeFontEffect(float2 uv, int layer)
 #else
 	const float2 texel = AtlasPass.xy;
 	float sum = 0.0;
+	// A four-sample rotated grid improves directional coverage over the balanced
+	// axis-aligned box while staying below the ps_3_0 512-slot limit after the
+	// complete runtime-layer shader is expanded by fxc.
 	sum += EvaluateNativeFontEffectAt(uv + texel * float2(-0.375, -0.125), antialiasWidth, layer);
 	sum += EvaluateNativeFontEffectAt(uv + texel * float2(-0.125,  0.375), antialiasWidth, layer);
 	sum += EvaluateNativeFontEffectAt(uv + texel * float2( 0.125, -0.375), antialiasWidth, layer);
 	sum += EvaluateNativeFontEffectAt(uv + texel * float2( 0.375,  0.125), antialiasWidth, layer);
-	sum += EvaluateNativeFontEffectAt(uv + texel * float2(-0.375,  0.375), antialiasWidth, layer);
-	sum += EvaluateNativeFontEffectAt(uv + texel * float2( 0.375, -0.375), antialiasWidth, layer);
-	sum += EvaluateNativeFontEffectAt(uv + texel * float2(-0.125, -0.125), antialiasWidth, layer);
-	sum += EvaluateNativeFontEffectAt(uv + texel * float2( 0.125,  0.125), antialiasWidth, layer);
-	coverage = sum * 0.125;
+	coverage = sum * 0.25;
 #endif
-	if (layer == 0 && (SdfFlags.z > 0.0 || SdfFlags.w > 0.0))
+	if (layer == 0 && (MtsdfFlags.z > 0.0 || MtsdfFlags.w > 0.0))
 	{
 		coverage = ApplyNativeFontHardShadowComposite(
-			centerDistance, antialiasWidth, coverage);
+			centerAlphaDistance, antialiasWidth, coverage);
 	}
 	return ApplyNativeFontGlowOuterFeather(
-		coverage, centerDistance, antialiasWidth, layer);
+		coverage, centerAlphaDistance, antialiasWidth, layer);
 }
 
 float4 Main(NativeFontPixelInput input) : COLOR0
