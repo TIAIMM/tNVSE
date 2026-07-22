@@ -594,6 +594,7 @@ namespace fonthook::vectorfont
 		bool loggedPersistentBitmapHit = false;
 		bool persistentBitmapUnavailable = false;
 		bool persistentBitmapMappingsEnabled = true;
+		bool completeCodePageAtlasOnlyPrewarm = false;
 		UInt32 persistentBitmapFailureLogCount = 0;
 		size_t bitmapCacheBytes = 0;
 		bool bitmapCacheReducedAfterPrewarm = false;

@@ -299,6 +299,24 @@ namespace fonthook::vectorfont
 		std::deque<PrewarmJob> s_jobs;
 		std::unordered_set<UInt64> s_scheduledProfiles;
 		bool s_configuredFontsQueued = false;
+		bool s_atlasOnlyPrewarmPending = false;
+
+		struct CompleteCodePageAtlasOnlyScope
+		{
+			bool active = false;
+
+			explicit CompleteCodePageAtlasOnlyScope(bool enable) : active(enable)
+			{
+				if (active)
+					BeginCompleteCodePageAtlasOnlyPrewarm();
+			}
+
+			~CompleteCodePageAtlasOnlyScope()
+			{
+				if (active)
+					EndCompleteCodePageAtlasOnlyPrewarm();
+			}
+		};
 
 		UInt64 BuildProfileKey(const FontConfig& config)
 		{
@@ -485,6 +503,14 @@ namespace fonthook::vectorfont
 		ResetPrewarmScan(job, 0);
 		const UInt32 targetUnitCount = job.targetUnitCount;
 		s_jobs.push_back(std::move(job));
+		if (!s_atlasOnlyPrewarmPending)
+		{
+			// Fonts may draw between activation and the first game-loop prewarm pump.
+			// Begin the atlas-only policy at queue time so those early requests cannot
+			// create a short-lived .tnvfmask before the complete code-page pass.
+			BeginCompleteCodePageAtlasOnlyPrewarm();
+			s_atlasOnlyPrewarmPending = true;
+		}
 		SetBitmapCacheReducedAfterPrewarm(false);
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: queued prewarm font=%u coverage=full-codepage codePage=%u units=%u",
@@ -508,7 +534,14 @@ namespace fonthook::vectorfont
 	void PumpFontPrewarm()
 	{
 		if (!g_bEnableFreeTypeFontRendering)
+		{
+			if (s_atlasOnlyPrewarmPending)
+			{
+				EndCompleteCodePageAtlasOnlyPrewarm();
+				s_atlasOnlyPrewarmPending = false;
+			}
 			return;
+		}
 		QueueConfiguredFontPrewarms();
 		if (s_jobs.empty())
 			return;
@@ -582,6 +615,14 @@ namespace fonthook::vectorfont
 			cacheMisses.push_back(std::move(job));
 		}
 		s_jobs.swap(cacheMisses);
+
+		// Full-code-page construction writes its final glyph pixels directly into the
+		// streamed atlas snapshots. Suppress .tnvfmask lookup and creation for the
+		// complete transaction; ordinary demand rendering regains the persistent
+		// bitmap policy when this scope exits.
+		CompleteCodePageAtlasOnlyScope atlasOnlyScope(
+			s_atlasOnlyPrewarmPending || !s_jobs.empty());
+		s_atlasOnlyPrewarmPending = false;
 
 		if (!s_jobs.empty())
 		{

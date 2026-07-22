@@ -241,34 +241,25 @@ fill is prewarmed for the complete code page and every SDF effect or hard shadow
 reuses that mask. When Shader Loader is unavailable, prewarm generates only the
 coverage/effect masks needed by the ARGB fallback.
 
-Generated SDF and ARGB-fallback masks are staged under
-`Data\NVSE\plugins\tnvse\fontdata`. Each mask profile begins with a dense
-glyph-index table, so a glyph lookup is one fixed-offset read rather than a
-record scan or hash-table rebuild. On later launches tNVSE validates and loads
-those CPU mask records instead of rasterizing the same glyphs with FreeType. A
-persistent profile is keyed by the font file's content hash, actual collection
-face, effective pixel dimensions, embolden, slant, stroke width, SDF spread,
-and mask type. It can therefore be shared safely across equivalent font IDs,
-while any font or rendering change selects a different profile automatically.
-Files are versioned and record-checksummed; an invalid header is rebuilt and a
-truncated or corrupt record falls back to normal rasterization. Cache names use
-`<game-font-id>_<font-file-name>_<profile-hash>.tnvfmask`. Lookup accepts only
-that numeric-font-ID form and uses the hash suffix, so equivalent masks remain
-shareable across font IDs. Older hash-only names are intentionally ignored.
-Existing profiles may be mapped while blocking prewarm scans them. After the
-prewarm flush, tNVSE unmaps every `.tnvfmask` view and disables new whole-file
-mappings for the rest of the process. If every configured profile completed the
-mandatory full-code-page pass, every configured runtime (including font-ID
-aliases of a shared profile) is ready, both byte-role atlas profiles were reread
-from disk after the final global repack, and the complete manifest is valid,
-tNVSE closes all open bitmap profiles and deletes every managed `.tnvfmask` file
-immediately. Persistent bitmap creation is then disabled for every covered font
-ID, including aliases, for the rest of the process. A managed-pool fallback,
-unavailable configured runtime, or cancelled job may retain its masks. This
-makes `.tnvfmask` a transactional construction cache for complete code-page
-atlases rather than a second permanent copy of their glyph pixels. A later
-demand-only font that was not part of that complete set may create its own mask
-profile normally.
+Full-code-page construction does not create or read `.tnvfmask`. The atlas-only
+transaction begins as soon as the first configured font is queued, so an early
+draw between activation and the blocking prewarm pump cannot create a
+short-lived persistent mask profile. SDF and ARGB-fallback masks are rasterized
+into the bounded in-memory batch and written directly into streamed
+`_p<page>.tnvfatlas` snapshots. The transaction scope restores the ordinary
+persistent-mask policy automatically after success, cancellation, or failure.
+
+The `.tnvfmask` format remains available for demand-only rendering outside that
+transaction. A persistent profile is keyed by the font file's content hash,
+actual collection face, effective pixel dimensions, embolden, slant, stroke
+width, SDF spread, and mask type. If every configured profile completes the
+mandatory pass, every runtime is ready, both byte-role atlas profiles survive
+the final reread/repack, and the manifest is complete, tNVSE closes any legacy
+bitmap profiles and deletes every managed `.tnvfmask` left by older versions.
+Persistent bitmap creation is then disabled for every covered font ID and its
+aliases for the rest of the process. An incomplete transaction leaves legacy
+files available to the restored demand-rendering policy, but the failed prewarm
+does not publish a newly generated `.tnvfmask`.
 
 If startup validation finds an incomplete manifest, a missing or corrupt atlas
 page, a snapshot without the final global-repack marker, or a failed
@@ -583,13 +574,13 @@ being invalidated silently.
 During blocking prewarm, the bitmap LRU keeps a preferred one-quarter working
 target so wide raster batches do not churn, subject to the aggregate ceiling.
 After every queued profile finishes successfully from a snapshot or a newly
-saved atlas, tNVSE flushes the persistent bitmap files, releases their large
-mappings, and immediately lowers the bitmap LRU target to one-sixteenth of the
-configured memory, clamped to 8-16 MiB and never above its original share. With
-the default 192 MiB setting this target is 12 MiB. A later genuine prewarm job
-restores the larger working target before rasterization. If any profile is
-cancelled, fills its atlas, or fails to save, automatic shrinking is skipped
-because its incomplete atlas may still need the CPU masks.
+saved atlas, tNVSE releases any legacy persistent-mask mappings and immediately
+lowers the bitmap LRU target to one-sixteenth of the configured memory, clamped
+to 8-16 MiB and never above its original share. With the default 192 MiB setting
+this target is 12 MiB. A later genuine prewarm job restores the larger working
+target before rasterization. If any profile is cancelled, fills its atlas, or
+fails to save, automatic shrinking is skipped because demand rendering may need
+the in-memory masks while its normal persistent policy resumes.
 
 When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`

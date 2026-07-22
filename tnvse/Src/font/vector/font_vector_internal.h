@@ -344,6 +344,8 @@ namespace fonthook::vectorfont
 	void StoreGlyphCollisionProfile(RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph, const GlyphBitmap& arBitmap,
 		float afRasterScale);
+	void BeginCompleteCodePageAtlasOnlyPrewarm();
+	void EndCompleteCodePageAtlasOnlyPrewarm();
 	void FlushGlyphBitmapDiskCache();
 	UInt64 ReleaseGlyphBitmapDiskCacheMappings();
 	bool ResetPersistentFontCachesForRegeneration(RuntimeFont& arRuntime);

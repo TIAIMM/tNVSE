@@ -663,7 +663,8 @@ namespace fonthook::vectorfont
 			const PersistentBitmapProfileKey& key,
 			const std::wstring& fontPath, UInt32 fontId, UInt32 glyphCapacity)
 		{
-			if (State().atlasOnlyCodePageFontIds.count(fontId))
+			if (State().completeCodePageAtlasOnlyPrewarm
+				|| State().atlasOnlyCodePageFontIds.count(fontId))
 				return nullptr;
 			auto existing = State().persistentBitmapProfiles.find(key);
 			if (existing != State().persistentBitmapProfiles.end())
@@ -1752,6 +1753,26 @@ namespace fonthook::vectorfont
 			if (extra != gNumberedExtraLetters.end())
 				extra->second.generatedCodePage = runtime.codePageMetrics;
 		}
+	}
+
+	void BeginCompleteCodePageAtlasOnlyPrewarm()
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		if (State().completeCodePageAtlasOnlyPrewarm)
+			return;
+		State().completeCodePageAtlasOnlyPrewarm = true;
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: complete codepage atlas-only transaction begin persistentMasks=disabled");
+	}
+
+	void EndCompleteCodePageAtlasOnlyPrewarm()
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		if (!State().completeCodePageAtlasOnlyPrewarm)
+			return;
+		State().completeCodePageAtlasOnlyPrewarm = false;
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: complete codepage atlas-only transaction end persistentMasks=runtime-policy");
 	}
 
 	void FlushGlyphBitmapDiskCache()
