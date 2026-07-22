@@ -399,6 +399,7 @@ bMultibyteInputCompositionPreview = 0
 bMultibyteInputHideSystemCandidateWindow = 1
 bMultibyteInputUseTSFCandidates = 1
 bMultibyteInputStewieTweaks = 1
+bSuppressJIPKeyEventsDuringMultibyteInput = 1
 ```
 
 默认关闭更安全。启用条件：
@@ -415,6 +416,7 @@ bMultibyteInputStewieTweaks = 1
 - `bMultibyteInput=0` 时不 subclass WndProc，不安装 `TextEditMenu` hook。
 - `bMultibyteInput=1` 但多字节字体能力未实际安装，或 `uiEncoding=0` 时打印一次日志并跳过初始化；FreeType 能力不满足这个依赖。
 - `bMultibyteInputStewieTweaks=0` 时不检测或 hook Stewie Tweaks 输入框；该开关仍受 `bMultibyteInput` 总开关约束。
+- `bSuppressJIPKeyEventsDuringMultibyteInput=1` 时，仅在 tNVSE 已确认的多字节文本输入会话内屏蔽 JIP 57.30 的键盘 `OnKeyDown/OnKeyUp` 派发；鼠标、手柄以及 MCM Extender 等未由 tNVSE 接管的脚本输入不受影响。
 
 ### 2. WndProc / IME 捕获
 
@@ -640,6 +642,20 @@ struct InputField
 - 独立 DX9 candidate overlay 的 target gate 也包含 Stewie target，因此候选窗可以跟随 StewMenu / MenuSearch 搜索框显示。
 
 这个 adapter 的边界是：不修改 Stewie DLL，不改 Stewie 菜单 XML，不接管搜索匹配语义。Stewie 仍然按它自己的 codepage byte substring 逻辑过滤列表；tNVSE 只保证输入框里的多字节文本不会被按单 byte 删除、移动或被 IME 预编辑串污染。
+
+### 3.3 JIP OnKeyDown/OnKeyUp 隔离
+
+JIP LN 57.30 的 `LN_ProcessEvents` 不读取菜单 handler 的返回值，而是直接轮询 xNVSE `DIHookControl::rawState`。因此 Stewie、原版 `TextEditMenu` 或 JIP `ShowTextInputMenu` 已经消费文本按键时，其他脚本注册的 JIP `OnKeyDown` 仍可能同时收到同一个物理键。
+
+`bSuppressJIPKeyEventsDuringMultibyteInput=1` 使用固定版本兼容 hook：
+
+- 只接受插件表版本 `5730`，并校验 JIP `.text` RVA `0x13C59` 开始的固定操作码以及按实际模块基址重定位后的 `lastKeyState` 操作数；任一条件不符都不修改 JIP。
+- 把五字节 `cmp byte ptr [ecx+eax+4], 0` 替换为相对调用，保留原寄存器，并为后续 `JE` 恢复等价零标志。
+- 文本输入会话激活时，读取真实 `rawState`，同时把同一状态写入 JIP RVA `0x772E0` 的 `lastKeyState[key]`。JIP 后续比较因此看不到需要派发的边沿，但游戏、Stewie 和其他 DirectInput 读取者仍看到真实状态。
+- 会话结束时快照仍按下的键，并持续静默同步到物理松开，避免关闭输入框的按键变成延迟 `OnKeyDown`，或只产生没有对应按下事件的 `OnKeyUp`。
+- 只过滤 DirectInput 键码 `<256` 的键盘项；JIP 鼠标和控制器事件保持原样。
+
+这个 hook 屏蔽的是 JIP 的全局键盘事件观察点，不修改具体模组脚本。MCM Extender 的搜索框本身使用 JIP 键事件，但它不是当前 tNVSE 多字节输入 target，因此其会话不会打开此过滤条件。
 
 ### 4. DBCS-aware 编辑层
 

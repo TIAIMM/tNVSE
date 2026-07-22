@@ -76,6 +76,11 @@ namespace fonthook
 			if (s_hooksInstalled && s_window && g_bMultibyteInputCompositionPreview)
 				DrawCandidateOverlay();
 		}
+		else if (apMessage->type == NVSEMessagingInterface::kMessage_DeferredInit)
+		{
+			if (s_hooksInstalled)
+				TryInstallJipKeyEventSuppressionHook();
+		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 		{
 			if (s_hooksInstalled && !s_originalWndProc)

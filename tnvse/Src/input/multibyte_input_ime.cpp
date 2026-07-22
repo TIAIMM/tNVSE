@@ -445,6 +445,7 @@ namespace fonthook
 				return;
 
 			State().textInputSessionActive = active;
+			SetJipKeyEventSuppressionCaptureActive(active);
 			if (!active)
 				ResetImeCommitKeyState("text_input_session_end");
 			if (s_window)
@@ -475,6 +476,7 @@ namespace fonthook
 			ClearImePreviewState();
 			HideCandidateOverlay();
 			State().textInputSessionActive = true;
+			SetJipKeyEventSuppressionCaptureActive(true);
 			if (s_window)
 			{
 				if (State().gameImeEnabled)

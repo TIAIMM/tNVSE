@@ -174,6 +174,8 @@ namespace fonthook
 		void ReleaseCandidateOverlayTexture();
 		void HideCandidateOverlay();
 		void ClearImeCandidates();
+		void TryInstallJipKeyEventSuppressionHook();
+		void SetJipKeyEventSuppressionCaptureActive(bool active);
 		void HideSystemImeWindows(HWND hwnd);
 		void SetTextInputSessionActive(bool active);
 		void RefreshTextInputSessionForActiveTarget(const char* reason);

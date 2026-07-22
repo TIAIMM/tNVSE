@@ -24,6 +24,7 @@ bool g_bMultibyteInputCompositionPreview;
 bool g_bMultibyteInputHideSystemCandidateWindow;
 bool g_bMultibyteInputUseTSFCandidates;
 bool g_bMultibyteInputStewieTweaks;
+bool g_bSuppressJIPKeyEventsDuringMultibyteInput;
 std::wstring g_sMultibyteInputOverlayFontPath;
 bool g_bChangeJIPBigGunDesc;
 std::string g_sNewBigGunsDesc;
@@ -188,6 +189,13 @@ void LoadConfig()
 	g_bMultibyteInputStewieTweaks = ReadConfigInt(kMultibyteInputSection,
 		"bMultibyteInputStewieTweaks", 1, filename);
 	gLog.FormattedMessage("g_bMultibyteInputStewieTweaks: %d", g_bMultibyteInputStewieTweaks);
+
+	g_bSuppressJIPKeyEventsDuringMultibyteInput = ReadConfigInt(
+		kMultibyteInputSection,
+		"bSuppressJIPKeyEventsDuringMultibyteInput", 1, filename) != 0;
+	gLog.FormattedMessage(
+		"g_bSuppressJIPKeyEventsDuringMultibyteInput: %d",
+		g_bSuppressJIPKeyEventsDuringMultibyteInput);
 
 	wchar_t wideFilename[MAX_PATH] = { 0 };
 	wchar_t sTempOverlayFontPath[MAX_PATH] = { 0 };

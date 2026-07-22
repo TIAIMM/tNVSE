@@ -65,6 +65,24 @@ namespace fonthook::dependencies
 			}
 		}
 
+		if (g_bMultibyteInput && g_bSuppressJIPKeyEventsDuringMultibyteInput)
+		{
+			const PluginInfo* info = g_cmdTableInterface->GetPluginInfoByName
+				? g_cmdTableInterface->GetPluginInfoByName(kJipPluginName) : nullptr;
+			if (!IsPluginInfoValid(info))
+			{
+				AddMissingIssue(issues,
+					"bSuppressJIPKeyEventsDuringMultibyteInput",
+					kJipPluginName, "version 57.30");
+			}
+			else if (info->version != kJipKeyEventFilterVersion)
+			{
+				AddVersionIssue(issues,
+					"bSuppressJIPKeyEventsDuringMultibyteInput",
+					kJipPluginName, info->version, "version 57.30");
+			}
+		}
+
 		if (g_bMultibyteInput && AreMultibyteFontHooksInstalled()
 			&& IsEastAsianUiMode() && g_bMultibyteInputStewieTweaks)
 		{

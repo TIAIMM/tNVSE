@@ -705,6 +705,7 @@ namespace fonthook
 
 		void ClearInputState()
 		{
+			SetJipKeyEventSuppressionCaptureActive(false);
 			State().textInputSessionActive = false;
 			s_imeComposing = false;
 			State().tsfSessionGeneration = 1;
