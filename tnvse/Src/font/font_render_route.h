@@ -6,14 +6,14 @@ namespace fonthook::vectorfont
 {
 	enum class FontAtlasRoute : std::uint8_t
 	{
-		ShaderMtsdf,
+		ShaderSdf,
 		ArgbFallback
 	};
 
 	constexpr FontAtlasRoute ResolveFontAtlasRoute(bool shaderLoaderRouteAvailable)
 	{
 		return shaderLoaderRouteAvailable
-			? FontAtlasRoute::ShaderMtsdf
+			? FontAtlasRoute::ShaderSdf
 			: FontAtlasRoute::ArgbFallback;
 	}
 }

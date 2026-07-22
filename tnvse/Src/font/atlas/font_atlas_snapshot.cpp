@@ -302,9 +302,9 @@ namespace fonthook::vectorfont
 				BuildPrewarmAtlasContentHash(config, byteClass, rasterScale, true),
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
-				AtlasPixelMode::Mtsdf32,
+				AtlasPixelMode::A8,
 				AtlasRenderMode::ShaderEffects,
-				kMtsdfAtlasPadding,
+				kSdfAtlasPadding,
 				true,
 				byteClass
 			};
@@ -334,8 +334,6 @@ namespace fonthook::vectorfont
 				sizeof(kMaximumAtlasMipLevels), hash);
 			hash = HashAtlasBytes(&A8ShapeColorContract::kTileUniformColorAbi,
 				sizeof(A8ShapeColorContract::kTileUniformColorAbi), hash);
-			hash = HashAtlasBytes(&kMtsdfGeneratorRevision,
-				sizeof(kMtsdfGeneratorRevision), hash);
 			return hash;
 		}
 
@@ -386,7 +384,7 @@ namespace fonthook::vectorfont
 
 		bool UsesPlacedLevelZeroSnapshot(const AtlasCacheKey& key)
 		{
-			return key.pixelMode == AtlasPixelMode::Mtsdf32
+			return key.pixelMode == AtlasPixelMode::A8
 				&& key.renderMode == AtlasRenderMode::ShaderEffects;
 		}
 
@@ -414,8 +412,8 @@ namespace fonthook::vectorfont
 			const GlyphBitmap& bitmap = *found->bitmap;
 			if (bitmap.cacheId != cacheId || bitmap.width != static_cast<int>(rect.width)
 				|| bitmap.height != static_cast<int>(rect.height)
-				|| (!bitmap.alpha.empty()
-					&& bitmap.alpha.size() < ExpectedGlyphBitmapBytes(bitmap)))
+				|| (!bitmap.alpha.empty() && bitmap.alpha.size()
+					< static_cast<size_t>(rect.width) * rect.height))
 			{
 				return false;
 			}
@@ -806,7 +804,7 @@ namespace fonthook::vectorfont
 			for (const auto& item : resources)
 			{
 				const AtlasResource& resource = *item.second;
-				if (resource.pixelMode != AtlasPixelMode::Mtsdf32
+				if (resource.pixelMode != AtlasPixelMode::A8
 					|| resource.renderMode != AtlasRenderMode::ShaderEffects)
 					return false;
 				originalGpuBytes += GetAtlasStorageBytes(resource.width, resource.height,
@@ -1217,27 +1215,13 @@ namespace fonthook::vectorfont
 			compactSnapshot->placements = std::move(placementList);
 			compactSnapshot->sourcePath = path;
 			compactSnapshot->sourceHeader = header;
-			// The file may contain a PackBits payload almost as large as the decoded
-			// MTSDF rectangles. Keep only the decoded compact representation during
-			// texture creation; otherwise a 32-bit process can hold both 80-100 MiB
-			// buffers at once for a CJK atlas page. A raw header lets the managed
-			// fallback expand the same decoded bytes without retaining serialized.
-			compactSnapshot->pixels = std::move(storedPixelVector);
-			AtlasSnapshotHeader decodedHeader = header;
-			decodedHeader.storedPixelBytes = decodedHeader.pixelBytes;
-			if (expectsPlacedLevelZero)
-			{
-				decodedHeader.storageMode = static_cast<UInt8>(
-					AtlasSnapshotStorage::PlacedLevelZeroRects);
-			}
-			std::vector<UInt8>().swap(serialized);
 			resource->compactSnapshot = compactSnapshot;
-			// v13 MTSDF pages keep only placed level-zero texels. DEFAULT-pool restore
-			// streams these texels from the validated snapshot instead of retaining a
-			// second CPU pixel copy; this route deliberately has no mip chain.
+			// v8 shader pages keep only placed level-zero texels. DEFAULT-pool restore
+			// regenerates the mip chain directly; later resets stream these texels from
+			// the validated snapshot instead of retaining a second CPU pixel copy.
 			const bool compactDefaultEligible = g_bEnableFreeTypeDefaultPoolAtlas
 				&& !State().defaultPoolShutdown
-				&& pageKey.pixelMode == AtlasPixelMode::Mtsdf32
+				&& pageKey.pixelMode == AtlasPixelMode::A8
 				&& pageKey.renderMode == AtlasRenderMode::ShaderEffects
 				&& expectsPlacedLevelZero;
 			bool restoredToDefaultPool = false;
@@ -1250,6 +1234,7 @@ namespace fonthook::vectorfont
 				{
 					return false;
 				}
+				compactSnapshot->pixels = std::move(storedPixelVector);
 				resource->backend = AtlasBackend::DefaultPool;
 				resource->pageContentHash = header.pageContentHash;
 				const bool deduplicated = TryReuseDefaultPoolAtlasPage(resource,
@@ -1275,8 +1260,8 @@ namespace fonthook::vectorfont
 			{
 				resource->backend = AtlasBackend::Managed;
 				std::vector<UInt8> pixels;
-				if (!DecodeAtlasSnapshotPixels(decodedHeader,
-					compactSnapshot->placements, compactSnapshot->pixels.data(), pixels))
+				if (!DecodeAtlasSnapshotPixels(header, compactSnapshot->placements,
+					pixelData, pixels))
 					return false;
 				NiTexturingProperty* property = CreateManagedAtlasProperty(header.width,
 					header.height, pageKey.pixelMode, header.mipLevels,
@@ -1925,17 +1910,17 @@ namespace fonthook::vectorfont
 		const bool useCustomA8Shader = IsA8RendererAvailable();
 		// Original-shader ARGB glyphs bake a per-range color into distinct bitmap
 		// cache IDs at shape-build time. A raw ARGB prewarm atlas cannot be reused
-		// and would only evict useful MTSDF generations.
+		// and would only evict useful A8 generations.
 		if (!useCustomA8Shader)
 			return true;
-		const AtlasPixelMode pixelMode = AtlasPixelMode::Mtsdf32;
+		const AtlasPixelMode pixelMode = AtlasPixelMode::A8;
 		EffectQuality resolved = config.effectQuality;
 		if (!ResolveA8EffectQuality(config.effectQuality, resolved))
 			return false;
 		UInt32 sdfSpread = 0;
 		if (!ResolveSdfSpread(config, rasterScale, sdfSpread))
 			return false;
-		const UInt32 padding = kMtsdfAtlasPadding;
+		const UInt32 padding = kSdfAtlasPadding;
 		// Height-first shelves make a complete prewarm profile substantially denser
 		// than appending scan-order batches, and let every page be uploaded once.
 		std::vector<std::shared_ptr<const GlyphBitmap>> packedBitmaps = bitmaps;

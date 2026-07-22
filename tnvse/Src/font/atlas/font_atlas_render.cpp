@@ -88,19 +88,19 @@ namespace fonthook::vectorfont
 			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled);
 		const bool a8RendererAvailable = IsA8RendererAvailable();
 		const FontAtlasRoute atlasRoute = ResolveFontAtlasRoute(a8RendererAvailable);
-		const bool requestsMtsdfFill = atlasRoute == FontAtlasRoute::ShaderMtsdf;
-		const bool wantsShaderPath = requestsMtsdfFill;
+		const bool requestsSdfFill = atlasRoute == FontAtlasRoute::ShaderSdf;
+		const bool wantsShaderPath = requestsSdfFill;
 		if (diagnostics)
 		{
 			diagnostics->hasEffects = hasEffects;
-			diagnostics->requestsMtsdfFill = requestsMtsdfFill;
+			diagnostics->requestsSdfFill = requestsSdfFill;
 			diagnostics->wantsShaderPath = wantsShaderPath;
 			diagnostics->a8RendererAvailable = a8RendererAvailable;
 			diagnostics->requestedQuality = static_cast<UInt8>(config.effectQuality);
 			diagnostics->resolvedQuality = diagnostics->requestedQuality;
 		}
 		EffectQuality resolvedQuality = config.effectQuality;
-		if (atlasRoute == FontAtlasRoute::ShaderMtsdf
+		if (atlasRoute == FontAtlasRoute::ShaderSdf
 			&& ResolveA8EffectQuality(config.effectQuality, resolvedQuality))
 		{
 			if (diagnostics)
@@ -155,7 +155,7 @@ namespace fonthook::vectorfont
 				std::vector<std::shared_ptr<AtlasResource>> shaderAtlases;
 				NiTriShape* shaderShape = TryCreateAtlasShapeForMode(font,
 					shaderQuads, config, rasterScale, prepareObject,
-					AtlasPixelMode::Mtsdf32, AtlasRenderMode::ShaderEffects,
+					AtlasPixelMode::A8, AtlasRenderMode::ShaderEffects,
 					shaderBuild.padding, shaderAtlases, tileColor, true,
 					&shaderBuild.config);
 				if (shaderShape)
@@ -172,7 +172,7 @@ namespace fonthook::vectorfont
 						FreeTypeFontDebugLog(
 							"tnvse_freetype_font: shader batch font=%u requestedFill=%s resolvedFill=%s quality=%u spread=%.0f glyphs=%u geometryQuads=%u drawQuads=%u padding=%u pages=%u texture0=%ux%u abi=%u",
 							font.iFontNum,
-							"mtsdf", "mtsdf",
+							"sdf", "sdf",
 							static_cast<UInt32>(resolvedQuality),
 							shaderBuild.config.sdfSpreadPixels,
 							static_cast<UInt32>(glyphs.size()),
@@ -192,7 +192,7 @@ namespace fonthook::vectorfont
 				&& state.shaderBatchFailureLogCount++ < 32)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: shader batch failed font=%u stage=%s requestedFill=mtsdf resolvedRoute=argb-fallback quads=%u; using CPU masks",
+					"tnvse_freetype_font: shader batch failed font=%u stage=%s requestedFill=sdf resolvedRoute=argb-fallback quads=%u; using CPU masks",
 					font.iFontNum,
 					!shaderQuadsBuilt ? "mask-build"
 						: shaderQuads.empty() ? "empty-batch"
@@ -315,8 +315,7 @@ namespace fonthook::vectorfont
 						FreeTypeFontDebugLog(
 							"tnvse_freetype_font: atlas batch font=%u sourceScale=%.3f mode=%s backend=%s glyphs=%u quads=%u pages=%u texture0=%ux%u levels=%u generation=%u gpuBytes=%llu residentMaskBytes=%llu compactSnapshotBytes=%llu",
 							font.iFontNum, rasterScale,
-							pixelMode == AtlasPixelMode::A8 ? "a8"
-								: pixelMode == AtlasPixelMode::Mtsdf32 ? "mtsdf32" : "argb32",
+							pixelMode == AtlasPixelMode::A8 ? "a8" : "argb32",
 							atlas.backend == AtlasBackend::DefaultPool
 								? "default" : "managed",
 							static_cast<UInt32>(glyphs.size()),

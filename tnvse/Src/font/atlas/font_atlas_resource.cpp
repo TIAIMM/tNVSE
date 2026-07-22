@@ -592,29 +592,19 @@ namespace fonthook::vectorfont
 			const GlyphBitmap& bitmap, const AtlasRect& rect,
 			UInt32 destinationX, UInt32 destinationY)
 		{
-			const UInt32 bitmapBytesPerPixel = GlyphBitmapBytesPerPixel(bitmap.maskType);
-			const size_t requiredBitmapBytes = static_cast<size_t>(rect.width)
-				* rect.height * bitmapBytesPerPixel;
-			if (!destination || bitmap.alpha.size() < requiredBitmapBytes
-				|| (mode == AtlasPixelMode::Mtsdf32
-					&& bitmap.maskType != GlyphMaskType::DistanceField)
-				|| (mode != AtlasPixelMode::Mtsdf32
-					&& bitmap.maskType == GlyphMaskType::DistanceField))
+			const size_t requiredAlphaBytes = static_cast<size_t>(rect.width) * rect.height;
+			if (!destination || bitmap.alpha.size() < requiredAlphaBytes)
 				return;
 			const UInt32 bytesPerPixel = AtlasBytesPerPixel(mode);
 			for (UInt32 y = 0; y < rect.height; ++y)
 			{
 				UInt8* row = destination + static_cast<size_t>(destinationY + y) * pitch
 					+ static_cast<size_t>(destinationX) * bytesPerPixel;
-				const UInt8* source = bitmap.alpha.data()
-					+ static_cast<size_t>(y) * rect.width * bitmapBytesPerPixel;
-				if (mode == AtlasPixelMode::Mtsdf32)
+				const UInt8* alpha = bitmap.alpha.data()
+					+ static_cast<size_t>(y) * rect.width;
+				if (mode == AtlasPixelMode::A8)
 				{
-					std::memcpy(row, source, static_cast<size_t>(rect.width) * 4u);
-				}
-				else if (mode == AtlasPixelMode::A8)
-				{
-					std::memcpy(row, source, rect.width);
+					std::memcpy(row, alpha, rect.width);
 				}
 				else
 				{
@@ -626,7 +616,7 @@ namespace fonthook::vectorfont
 						row[x * 4 + 0] = blue;
 						row[x * 4 + 1] = green;
 						row[x * 4 + 2] = red;
-						row[x * 4 + 3] = source[x];
+						row[x * 4 + 3] = alpha[x];
 					}
 				}
 			}
@@ -785,12 +775,6 @@ namespace fonthook::vectorfont
 			const CompactAtlasSnapshot& snapshot = *resource.compactSnapshot;
 			const UInt32 sourceBytesPerPixel = AtlasBytesPerPixel(snapshot.pixelMode);
 			const UInt32 destinationBytesPerPixel = AtlasBytesPerPixel(destinationMode);
-			if (snapshot.pixelMode != destinationMode
-				&& (snapshot.pixelMode == AtlasPixelMode::Mtsdf32
-					|| destinationMode == AtlasPixelMode::Mtsdf32))
-			{
-				return false;
-			}
 			CompactSnapshotFile sourceFile;
 			std::vector<UInt8> decodedPixels;
 			const AtlasSnapshotStorage storageMode =
@@ -1049,8 +1033,7 @@ namespace fonthook::vectorfont
 								"tnvse_freetype_font: default atlas created size=%ux%u levels=%u format=%s pool=default usage=dynamic gpuBytes=%llu residentMaskBytes=%llu compactSnapshotBytes=%llu fullCpuBacking=0 bytes",
 								resource.width, resource.height,
 								resource.mipLevels,
-								mode == AtlasPixelMode::A8 ? "a8"
-									: mode == AtlasPixelMode::Mtsdf32 ? "mtsdf32" : "argb32",
+								mode == AtlasPixelMode::A8 ? "a8" : "argb32",
 								static_cast<unsigned long long>(GetAtlasStorageBytes(
 									resource.width, resource.height, mode, resource.mipLevels)),
 								static_cast<unsigned long long>(GetResidentMaskBytes(resource)),
@@ -1061,7 +1044,7 @@ namespace fonthook::vectorfont
 				}
 				if (d3dTexture)
 					d3dTexture->Release();
-				if (mode != AtlasPixelMode::A8)
+				if (mode == AtlasPixelMode::Argb32)
 					break;
 				mode = AtlasPixelMode::Argb32;
 			}
@@ -1090,29 +1073,18 @@ namespace fonthook::vectorfont
 			const AtlasRect& rect)
 		{
 			UInt8* pixels = GetAtlasBacking(resource);
-			const UInt32 bitmapBytesPerPixel = GlyphBitmapBytesPerPixel(bitmap.maskType);
-			if (!pixels || bitmap.alpha.size() < static_cast<size_t>(rect.width)
-				* rect.height * bitmapBytesPerPixel
-				|| (resource.pixelMode == AtlasPixelMode::Mtsdf32
-					&& bitmap.maskType != GlyphMaskType::DistanceField)
-				|| (resource.pixelMode != AtlasPixelMode::Mtsdf32
-					&& bitmap.maskType == GlyphMaskType::DistanceField))
+			if (!pixels)
 				return;
 			for (UInt32 y = 0; y < rect.height; ++y)
 			{
 				for (UInt32 x = 0; x < rect.width; ++x)
 				{
-					const size_t sourcePixel = static_cast<size_t>(y) * rect.width + x;
+					const UInt8 alpha = bitmap.alpha[static_cast<size_t>(y) * rect.width + x];
 					const size_t pixelIndex = static_cast<size_t>(rect.y + y)
 						* resource.width + rect.x + x;
-					if (resource.pixelMode == AtlasPixelMode::Mtsdf32)
+					if (resource.pixelMode == AtlasPixelMode::A8)
 					{
-						std::memcpy(pixels + pixelIndex * 4u,
-							bitmap.alpha.data() + sourcePixel * 4u, 4u);
-					}
-					else if (resource.pixelMode == AtlasPixelMode::A8)
-					{
-						pixels[pixelIndex] = bitmap.alpha[sourcePixel];
+						pixels[pixelIndex] = alpha;
 					}
 					else
 					{
@@ -1120,7 +1092,7 @@ namespace fonthook::vectorfont
 						destination[0] = static_cast<UInt8>(bitmap.atlasRgb & 0xFF);
 						destination[1] = static_cast<UInt8>((bitmap.atlasRgb >> 8) & 0xFF);
 						destination[2] = static_cast<UInt8>((bitmap.atlasRgb >> 16) & 0xFF);
-						destination[3] = bitmap.alpha[sourcePixel];
+						destination[3] = alpha;
 					}
 				}
 			}
@@ -1965,8 +1937,7 @@ namespace fonthook::vectorfont
 				if (resource.property)
 					return false;
 				resource.backend = AtlasBackend::Managed;
-				if (resource.pixelMode == AtlasPixelMode::A8)
-					resource.pixelMode = AtlasPixelMode::Argb32;
+				resource.pixelMode = AtlasPixelMode::Argb32;
 				resource.property = nullptr;
 				resource.pixelData = nullptr;
 				resource.mipLevels = GetAtlasMipLevelCount(
@@ -2046,7 +2017,7 @@ namespace fonthook::vectorfont
 				}
 				if (d3dTexture)
 					d3dTexture->Release();
-				if (mode != AtlasPixelMode::A8)
+				if (mode == AtlasPixelMode::Argb32)
 					break;
 				mode = AtlasPixelMode::Argb32;
 			}

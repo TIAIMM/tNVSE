@@ -277,8 +277,8 @@ namespace fonthook
 				++logCount;
 				gLog.FormattedMessage(
 					actualFailure
-						? "tnvse_freetype_native: submission-suppressed reason=atlas-shape-build phase=shape-build classification=%s outcome=%s expectedEmpty=%u font=%u fontObject=%p runtime=%p emptyShape=%p glyphs=%u missingMetrics=%u zeroByteLength=%u controls=%u spaces=%u firstCodepoint=U+%04X firstEncoded=0x%04X firstGlyph=%u firstBytes=%u firstRole=%s scale=%.3f prepare=%u suppressEffects=%u wantsShader=%u hasEffects=%u mtsdfFill=%u a8Renderer=%u requestedQuality=%u resolvedQuality=%u shaderBuilt=%u shaderQuads=%u shaderShapeAttempts=%u shaderShapeFailed=%u cpuBuilt=%u cpuQuads=%u cpuAttempts=%u cpuMaskFailure=%s degradedLayers=%u cpuShapeAttempts=%u nativeReady=%u nativeGeneration=%u thread=%u"
-						: "tnvse_freetype_native: empty-shape reason=atlas-shape-build phase=shape-build classification=%s outcome=%s expectedEmpty=%u font=%u fontObject=%p runtime=%p emptyShape=%p glyphs=%u missingMetrics=%u zeroByteLength=%u controls=%u spaces=%u firstCodepoint=U+%04X firstEncoded=0x%04X firstGlyph=%u firstBytes=%u firstRole=%s scale=%.3f prepare=%u suppressEffects=%u wantsShader=%u hasEffects=%u mtsdfFill=%u a8Renderer=%u requestedQuality=%u resolvedQuality=%u shaderBuilt=%u shaderQuads=%u shaderShapeAttempts=%u shaderShapeFailed=%u cpuBuilt=%u cpuQuads=%u cpuAttempts=%u cpuMaskFailure=%s degradedLayers=%u cpuShapeAttempts=%u nativeReady=%u nativeGeneration=%u thread=%u",
+						? "tnvse_freetype_native: submission-suppressed reason=atlas-shape-build phase=shape-build classification=%s outcome=%s expectedEmpty=%u font=%u fontObject=%p runtime=%p emptyShape=%p glyphs=%u missingMetrics=%u zeroByteLength=%u controls=%u spaces=%u firstCodepoint=U+%04X firstEncoded=0x%04X firstGlyph=%u firstBytes=%u firstRole=%s scale=%.3f prepare=%u suppressEffects=%u wantsShader=%u hasEffects=%u sdfFill=%u a8Renderer=%u requestedQuality=%u resolvedQuality=%u shaderBuilt=%u shaderQuads=%u shaderShapeAttempts=%u shaderShapeFailed=%u cpuBuilt=%u cpuQuads=%u cpuAttempts=%u cpuMaskFailure=%s degradedLayers=%u cpuShapeAttempts=%u nativeReady=%u nativeGeneration=%u thread=%u"
+						: "tnvse_freetype_native: empty-shape reason=atlas-shape-build phase=shape-build classification=%s outcome=%s expectedEmpty=%u font=%u fontObject=%p runtime=%p emptyShape=%p glyphs=%u missingMetrics=%u zeroByteLength=%u controls=%u spaces=%u firstCodepoint=U+%04X firstEncoded=0x%04X firstGlyph=%u firstBytes=%u firstRole=%s scale=%.3f prepare=%u suppressEffects=%u wantsShader=%u hasEffects=%u sdfFill=%u a8Renderer=%u requestedQuality=%u resolvedQuality=%u shaderBuilt=%u shaderQuads=%u shaderShapeAttempts=%u shaderShapeFailed=%u cpuBuilt=%u cpuQuads=%u cpuAttempts=%u cpuMaskFailure=%s degradedLayers=%u cpuShapeAttempts=%u nativeReady=%u nativeGeneration=%u thread=%u",
 						actualFailure ? "failure" : "expected-empty",
 						GlyphAtlasBuildOutcomeName(atlasDiagnostics.outcome),
 						atlasDiagnostics.expectedEmpty ? 1 : 0,
@@ -301,7 +301,7 @@ namespace fonthook
 						m_impl->suppressEffects ? 1 : 0,
 						atlasDiagnostics.wantsShaderPath ? 1 : 0,
 						atlasDiagnostics.hasEffects ? 1 : 0,
-						atlasDiagnostics.requestsMtsdfFill ? 1 : 0,
+						atlasDiagnostics.requestsSdfFill ? 1 : 0,
 						atlasDiagnostics.a8RendererAvailable ? 1 : 0,
 						static_cast<UInt32>(atlasDiagnostics.requestedQuality),
 						static_cast<UInt32>(atlasDiagnostics.resolvedQuality),

@@ -13,20 +13,6 @@ namespace fonthook::vectorfont
 		return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
 	}
 
-	static UInt64 MaximumPersistentProfileBytes(GlyphMaskType maskType)
-	{
-		return maskType == GlyphMaskType::DistanceField
-			? kMaximumPersistentMtsdfProfileBytes
-			: kMaximumPersistentSingleChannelProfileBytes;
-	}
-
-	static UInt32 MaximumPersistentBitmapBytes(GlyphMaskType maskType)
-	{
-		return maskType == GlyphMaskType::DistanceField
-			? kMaximumPersistentMtsdfBitmapBytes
-			: kMaximumPersistentSingleChannelBitmapBytes;
-	}
-
 	void RefreshPersistentBitmapProfileCpuMemory(
 		PersistentBitmapProfile& profile)
 	{
@@ -80,8 +66,6 @@ namespace fonthook::vectorfont
 			add(&key.slant16Dot16, sizeof(key.slant16Dot16));
 			add(&key.sdfSpread, sizeof(key.sdfSpread));
 			add(&key.maskType, sizeof(key.maskType));
-			if (key.maskType == static_cast<UInt8>(GlyphMaskType::DistanceField))
-				add(&kMtsdfGeneratorRevision, sizeof(kMtsdfGeneratorRevision));
 			return hash;
 		}
 
@@ -99,13 +83,7 @@ namespace fonthook::vectorfont
 			hash = HashBytes64(&key.strokeWidth26Dot6, sizeof(key.strokeWidth26Dot6), hash);
 			hash = HashBytes64(&key.slant16Dot16, sizeof(key.slant16Dot16), hash);
 			hash = HashBytes64(&key.sdfSpread, sizeof(key.sdfSpread), hash);
-			hash = HashBytes64(&key.maskType, sizeof(key.maskType), hash);
-			if (key.maskType == static_cast<UInt8>(GlyphMaskType::DistanceField))
-			{
-				hash = HashBytes64(&kMtsdfGeneratorRevision,
-					sizeof(kMtsdfGeneratorRevision), hash);
-			}
-			return hash;
+			return HashBytes64(&key.maskType, sizeof(key.maskType), hash);
 		}
 
 		PersistentBitmapProfileKey MakePersistentBitmapProfileKey(
@@ -464,8 +442,7 @@ namespace fonthook::vectorfont
 				return;
 			UInt64 size = 0;
 			if (!GetFileSize64(profile.file, size) || !size
-				|| size > MaximumPersistentProfileBytes(
-					static_cast<GlyphMaskType>(profile.key.maskType)))
+				|| size > kMaximumPersistentProfileBytes)
 			{
 				return;
 			}
@@ -548,19 +525,18 @@ namespace fonthook::vectorfont
 		}
 
 		bool IsValidPersistentRecordHeader(
-			const PersistentBitmapRecordHeader& record, GlyphMaskType maskType)
+			const PersistentBitmapRecordHeader& record)
 		{
 			if (record.magic != kPersistentBitmapRecordMagic
 				|| record.headerSize != sizeof(record)
 				|| record.width <= 0 || record.height <= 0
 				|| !record.alphaSize
-				|| record.alphaSize > MaximumPersistentBitmapBytes(maskType))
+				|| record.alphaSize > kMaximumPersistentBitmapBytes)
 			{
 				return false;
 			}
 			return static_cast<UInt64>(record.width)
-				* static_cast<UInt64>(record.height)
-				* GlyphBitmapBytesPerPixel(maskType) == record.alphaSize;
+				* static_cast<UInt64>(record.height) == record.alphaSize;
 		}
 
 		bool InitializePersistentBitmapProfile(PersistentBitmapProfile& profile)
@@ -598,8 +574,7 @@ namespace fonthook::vectorfont
 			if (!GetFileSize64(profile.file, fileSize))
 				return false;
 			profile.validSize = fileSize;
-			if (!fileSize || fileSize > MaximumPersistentProfileBytes(
-					static_cast<GlyphMaskType>(profile.key.maskType)))
+			if (!fileSize || fileSize > kMaximumPersistentProfileBytes)
 			{
 				if (!ResetPersistentBitmapProfile(profile))
 					return false;
@@ -688,10 +663,7 @@ namespace fonthook::vectorfont
 			const PersistentBitmapProfileKey& key,
 			const std::wstring& fontPath, UInt32 fontId, UInt32 glyphCapacity)
 		{
-			if ((State().completeCodePageAtlasOnlyPrewarm
-					&& key.maskType
-						== static_cast<UInt8>(GlyphMaskType::DistanceField))
-				|| State().atlasOnlyCodePageFontIds.count(fontId))
+			if (State().atlasOnlyCodePageFontIds.count(fontId))
 				return nullptr;
 			auto existing = State().persistentBitmapProfiles.find(key);
 			if (existing != State().persistentBitmapProfiles.end())
@@ -737,8 +709,7 @@ namespace fonthook::vectorfont
 			PersistentBitmapRecordHeader record;
 			if (!ReadPersistentProfileBytes(profile, entry.offset,
 					&record, sizeof(record))
-				|| !IsValidPersistentRecordHeader(record,
-					static_cast<GlyphMaskType>(key.maskType))
+				|| !IsValidPersistentRecordHeader(record)
 				|| record.glyphIndex != key.glyphIndex
 				|| entry.size != sizeof(record) + record.alphaSize)
 				return nullptr;
@@ -799,19 +770,17 @@ namespace fonthook::vectorfont
 					|| profile.indexEntries[key.glyphIndex].size
 					|| bitmap.width <= 0 || bitmap.height <= 0
 					|| bitmap.alpha.empty()
-					|| bitmap.alpha.size() > MaximumPersistentBitmapBytes(
-						bitmap.maskType)
-					|| ExpectedGlyphBitmapBytes(bitmap) != bitmap.alpha.size())
+					|| bitmap.alpha.size() > kMaximumPersistentBitmapBytes
+					|| static_cast<UInt64>(bitmap.width) * bitmap.height
+						!= bitmap.alpha.size())
 				{
 					continue;
 				}
 				estimatedBytes += sizeof(PersistentBitmapRecordHeader)
 					+ bitmap.alpha.size();
 			}
-			const UInt64 maximumProfileBytes = MaximumPersistentProfileBytes(
-				static_cast<GlyphMaskType>(profile.key.maskType));
-			if (!estimatedBytes || profile.validSize > maximumProfileBytes
-				|| estimatedBytes > maximumProfileBytes - profile.validSize
+			if (!estimatedBytes
+				|| estimatedBytes > kMaximumPersistentProfileBytes - profile.validSize
 				|| estimatedBytes > std::numeric_limits<UInt32>::max())
 			{
 				return 0;
@@ -829,9 +798,9 @@ namespace fonthook::vectorfont
 					|| profile.indexEntries[key.glyphIndex].size
 					|| bitmap.width <= 0 || bitmap.height <= 0
 					|| bitmap.alpha.empty()
-					|| bitmap.alpha.size() > MaximumPersistentBitmapBytes(
-						bitmap.maskType)
-					|| ExpectedGlyphBitmapBytes(bitmap) != bitmap.alpha.size())
+					|| bitmap.alpha.size() > kMaximumPersistentBitmapBytes
+					|| static_cast<UInt64>(bitmap.width) * bitmap.height
+						!= bitmap.alpha.size())
 				{
 					continue;
 				}
@@ -1277,10 +1246,6 @@ namespace fonthook::vectorfont
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			manifestHash = HashBytes64(&codePage,
 				sizeof(codePage), manifestHash);
-			// Collision profiles are derived from the generated MTSDF body. Keep
-			// their mapped manifest out of the reuse set when that contract changes.
-			manifestHash = HashBytes64(&kMtsdfGeneratorRevision,
-				sizeof(kMtsdfGeneratorRevision), manifestHash);
 			auto pooled = State().persistentGlyphManifests.find(manifestHash);
 			if (pooled != State().persistentGlyphManifests.end())
 			{
@@ -1539,7 +1504,6 @@ namespace fonthook::vectorfont
 		bool LoadGlyphCollisionProfile(RuntimeFont& runtime,
 			const VectorEncodedGlyph& glyph, GlyphCollisionProfile& profile)
 		{
-			std::lock_guard<std::recursive_mutex> lock(State().mutex);
 			profile = {};
 			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
 			PersistentGlyphManifestRecord* record = manifest
@@ -1580,7 +1544,8 @@ namespace fonthook::vectorfont
 			}
 			if (!std::isfinite(rasterScale) || rasterScale < 0.1f
 				|| bitmap.width < 0 || bitmap.height < 0
-				|| bitmap.alpha.size() != ExpectedGlyphBitmapBytes(bitmap))
+				|| bitmap.alpha.size() != static_cast<size_t>(bitmap.width)
+					* static_cast<size_t>(bitmap.height))
 			{
 				return;
 			}
@@ -1606,12 +1571,11 @@ namespace fonthook::vectorfont
 			int lastRow = -1;
 			for (int y = 0; y < bitmap.height; ++y)
 			{
-				const size_t rowStart = static_cast<size_t>(y) * bitmap.width;
-				bool visible = false;
-				for (int x = 0; x < bitmap.width && !visible; ++x)
-					visible = SampleGlyphBodyDistanceByte(bitmap, rowStart + x)
-						>= kBodyThreshold;
-				if (visible)
+				const UInt8* row = bitmap.alpha.data()
+					+ static_cast<size_t>(y) * bitmap.width;
+				if (std::find_if(row, row + bitmap.width,
+					[](UInt8 value) { return value >= kBodyThreshold; })
+					!= row + bitmap.width)
 				{
 					firstRow = std::min(firstRow, y);
 					lastRow = y;
@@ -1634,27 +1598,24 @@ namespace fonthook::vectorfont
 				const int visibleRows = lastRow - firstRow + 1;
 				for (int y = firstRow; y <= lastRow; ++y)
 				{
-					const size_t rowStart = static_cast<size_t>(y) * bitmap.width;
-					auto sample = [&](int x)
-					{
-						return SampleGlyphBodyDistanceByte(bitmap, rowStart + x);
-					};
+					const UInt8* row = bitmap.alpha.data()
+						+ static_cast<size_t>(y) * bitmap.width;
 					int first = 0;
-					while (first < bitmap.width && sample(first) < kBodyThreshold)
+					while (first < bitmap.width && row[first] < kBodyThreshold)
 						++first;
 					if (first == bitmap.width)
 						continue;
 					int last = bitmap.width - 1;
-					while (last > first && sample(last) < kBodyThreshold)
+					while (last > first && row[last] < kBodyThreshold)
 						--last;
 
-					const float previous = first > 0 ? sample(first - 1) : 0.0f;
-					const float currentLeft = sample(first);
+					const float previous = first > 0 ? row[first - 1] : 0.0f;
+					const float currentLeft = row[first];
 					const float leftMix = currentLeft > previous
 						? (kBodyThreshold - previous) / (currentLeft - previous) : 1.0f;
 					const float leftPixel = static_cast<float>(first) - 0.5f + leftMix;
-					const float currentRight = sample(last);
-					const float next = last + 1 < bitmap.width ? sample(last + 1) : 0.0f;
+					const float currentRight = row[last];
+					const float next = last + 1 < bitmap.width ? row[last + 1] : 0.0f;
 					const float rightMix = currentRight > next
 						? (currentRight - kBodyThreshold) / (currentRight - next) : 0.0f;
 					const float rightPixel = static_cast<float>(last) + 0.5f + rightMix;
@@ -1678,62 +1639,6 @@ namespace fonthook::vectorfont
 			entry.checksum = HashBytes64(&entry,
 				offsetof(PersistentGlyphManifestEntry, checksum));
 			std::memcpy(destination, &entry, sizeof(entry));
-		}
-
-		bool StoreGlyphCollisionProfile(RuntimeFont& runtime,
-			const VectorEncodedGlyph& glyph, const GlyphCollisionProfile& profile)
-		{
-			if (!std::isfinite(profile.top) || !std::isfinite(profile.bottom))
-				return false;
-			for (size_t band = 0; band < kGlyphCollisionBandCount; ++band)
-			{
-				if ((profile.bandMask & static_cast<UInt16>(1u << band))
-					&& (!std::isfinite(profile.left[band])
-						|| !std::isfinite(profile.right[band])))
-				{
-					return false;
-				}
-			}
-
-			std::lock_guard<std::recursive_mutex> lock(State().mutex);
-			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
-			PersistentGlyphManifestRecord* record = manifest
-				? GetGlyphManifestRecord(*manifest, glyph.encodedCode) : nullptr;
-			PersistentGlyphManifestEntry* destination = record ? &record->entry : nullptr;
-			if (!destination || !manifest->writable || !destination->valid
-				|| destination->byteClass != static_cast<UInt8>(glyph.byteClass)
-				|| destination->faceIndex != glyph.faceIndex
-				|| destination->glyphIndex != glyph.glyphIndex
-				|| destination->checksum != HashBytes64(destination,
-					offsetof(PersistentGlyphManifestEntry, checksum)))
-			{
-				return false;
-			}
-			if (destination->collisionValid)
-				return true;
-
-			PersistentGlyphManifestEntry entry = *destination;
-			entry.collisionValid = 1;
-			entry.collisionTop26Dot6 = QuantizeCollisionCoordinate(profile.top);
-			entry.collisionBottom26Dot6 = QuantizeCollisionCoordinate(profile.bottom);
-			entry.collisionBandMask = profile.bandMask;
-			for (size_t band = 0; band < kGlyphCollisionBandCount; ++band)
-			{
-				if ((profile.bandMask & static_cast<UInt16>(1u << band)) == 0)
-				{
-					entry.collisionLeft26Dot6[band] = 0;
-					entry.collisionRight26Dot6[band] = 0;
-					continue;
-				}
-				entry.collisionLeft26Dot6[band] =
-					QuantizeCollisionCoordinate(profile.left[band]);
-				entry.collisionRight26Dot6[band] =
-					QuantizeCollisionCoordinate(profile.right[band]);
-			}
-			entry.checksum = HashBytes64(&entry,
-				offsetof(PersistentGlyphManifestEntry, checksum));
-			std::memcpy(destination, &entry, sizeof(entry));
-			return true;
 		}
 
 
@@ -1847,26 +1752,6 @@ namespace fonthook::vectorfont
 			if (extra != gNumberedExtraLetters.end())
 				extra->second.generatedCodePage = runtime.codePageMetrics;
 		}
-	}
-
-	void BeginCompleteCodePageAtlasOnlyPrewarm()
-	{
-		std::lock_guard<std::recursive_mutex> lock(State().mutex);
-		if (State().completeCodePageAtlasOnlyPrewarm)
-			return;
-		State().completeCodePageAtlasOnlyPrewarm = true;
-		gLog.FormattedMessage(
-			"tnvse_freetype_font: complete codepage atlas-only transaction begin persistentMtsdfMasks=disabled");
-	}
-
-	void EndCompleteCodePageAtlasOnlyPrewarm()
-	{
-		std::lock_guard<std::recursive_mutex> lock(State().mutex);
-		if (!State().completeCodePageAtlasOnlyPrewarm)
-			return;
-		State().completeCodePageAtlasOnlyPrewarm = false;
-		gLog.FormattedMessage(
-			"tnvse_freetype_font: complete codepage atlas-only transaction end persistentMtsdfMasks=runtime-policy");
 	}
 
 	void FlushGlyphBitmapDiskCache()

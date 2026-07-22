@@ -491,7 +491,7 @@ namespace fonthook::vectorfont
 				if (g_bEnableFreeTypeFontRenderingLog)
 				{
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: MTSDF spread unsupported font=%u scale=%.3f glowOuter=%.3f outline=%.3f softness=%.3f shadowBlur=%.3f; using CPU effects",
+						"tnvse_freetype_font: SDF spread unsupported font=%u scale=%.3f glowOuter=%.3f outline=%.3f softness=%.3f shadowBlur=%.3f; using CPU effects",
 						config.fontId, rasterScale, config.glow.outer,
 						config.outline.width, config.outline.softness,
 						config.shadow.blur);
@@ -548,8 +548,8 @@ namespace fonthook::vectorfont
 				prepared.push_back(std::move(glyph));
 			}
 			GetAtlasBackedGlyphBitmaps(runtime, bitmapRequests, rasterScale,
-				AtlasPixelMode::Mtsdf32, AtlasRenderMode::ShaderEffects,
-				kMtsdfAtlasPadding, bitmapResults);
+				AtlasPixelMode::A8, AtlasRenderMode::ShaderEffects,
+				kSdfAtlasPadding, bitmapResults);
 			size_t bitmapIndex = 0;
 			for (PreparedShaderGlyph& glyph : prepared)
 			{
@@ -847,7 +847,7 @@ namespace fonthook::vectorfont
 							font.iFontNum, scale, bitmapTop, quad.logicalTopEdge,
 							bitmapTop - quad.logicalTopEdge, quad.baselineOffset,
 							quad.pen.z, z0 + origin.z,
-							quad.usesSdf ? "mtsdf-subpixel" : "source-pixel-snapped");
+							quad.usesSdf ? "sdf-subpixel" : "source-pixel-snapped");
 					}
 				}
 				// All layers belong to the same logical Tile text. Ordering is provided by
@@ -1112,8 +1112,7 @@ namespace fonthook::vectorfont
 		{
 			if (quads.empty())
 				return nullptr;
-			if ((pixelMode == AtlasPixelMode::A8
-				|| pixelMode == AtlasPixelMode::Mtsdf32) && !useCustomA8Shader)
+			if (pixelMode == AtlasPixelMode::A8 && !useCustomA8Shader)
 				return nullptr;
 			const std::vector<PendingQuad>* activeQuads = &quads;
 			thread_local std::vector<PendingQuad> bakedQuads;

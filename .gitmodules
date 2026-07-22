@@ -1,6 +1,3 @@
 [submodule "tnvse/third_party/freetype-2.14.3"]
 	path = tnvse/third_party/freetype-2.14.3
 	url = https://github.com/freetype/freetype.git
-[submodule "tnvse/third_party/msdfgen"]
-	path = tnvse/third_party/msdfgen
-	url = https://github.com/Chlumsky/msdfgen.git

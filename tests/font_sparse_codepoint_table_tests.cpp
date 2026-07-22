@@ -52,8 +52,8 @@ int main()
 	using fonthook::vectorfont::ResolveCpuMemoryCategoryHeadroom;
 	using fonthook::vectorfont::ResolveFontAtlasRoute;
 
-	Check(ResolveFontAtlasRoute(true) == FontAtlasRoute::ShaderMtsdf,
-		"Shader Loader route always selects MTSDF");
+	Check(ResolveFontAtlasRoute(true) == FontAtlasRoute::ShaderSdf,
+		"Shader Loader route always selects SDF");
 	Check(ResolveFontAtlasRoute(false) == FontAtlasRoute::ArgbFallback,
 		"missing Shader Loader route selects only the ARGB fallback");
 

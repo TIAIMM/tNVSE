@@ -55,7 +55,7 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kPassSetRenderState = 0xB71A10;
 		inline constexpr UInt32 kCopiedTileShaderVtableEntries = 84;
 		inline constexpr UInt32 kUpdateConstantsVtableSlot = 31;
-		inline constexpr UInt32 kNativeVtableMagic = 0x34544D4E; // "NMT4"
+		inline constexpr UInt32 kNativeVtableMagic = 0x3841544E; // "NTA8"
 		inline constexpr UInt32 kShaderRefreshMessage = 0;
 		inline constexpr DWORD kInitializationRetryMilliseconds = 1000;
 
@@ -153,7 +153,7 @@ namespace fonthook::vectorfont
 			NiDX9ShaderDeclarationPtr declaration;
 			IDirect3DVertexDeclaration9* d3dDeclaration = nullptr;
 			NiD3DVertexShaderPtr vertexShader;
-			NiD3DPixelShaderPtr mtsdfFillShader;
+			NiD3DPixelShaderPtr sdfShader;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
 			bool supportsSeparateAlpha = false;
 			std::atomic<bool> runtimeFault = false;
@@ -192,7 +192,7 @@ namespace fonthook::vectorfont
 				|| generation->runtimeFault.load(std::memory_order_acquire)
 				|| !generation->declaration || !generation->d3dDeclaration
 				|| !HasShaderHandle(generation->vertexShader)
-				|| !HasShaderHandle(generation->mtsdfFillShader))
+				|| !HasShaderHandle(generation->sdfShader))
 			{
 				return false;
 			}
@@ -319,29 +319,8 @@ namespace fonthook::vectorfont
 			const HRESULT constantsResult = device->SetPixelShaderConstantF(0,
 				constants.data(), 5);
 			if (FAILED(constantsResult))
-			{
 				MarkGenerationFault(generation, "SetPixelShaderConstantF(c0-c4)",
 					constantsResult);
-				return;
-			}
-
-			// Gamebryo may inherit both states from the preceding stock pass. MTSDF
-			// channels are linear data and these atlases intentionally contain only
-			// level zero, so reassert the two states that the texture-stage wrapper
-			// cannot encode in its immutable profile.
-			const HRESULT srgbResult = device->SetSamplerState(0,
-				D3DSAMP_SRGBTEXTURE, FALSE);
-			if (FAILED(srgbResult))
-			{
-				MarkGenerationFault(generation, "SetSamplerState(SRGBTEXTURE)",
-					srgbResult);
-				return;
-			}
-			const HRESULT mipResult = device->SetSamplerState(0,
-				D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-			if (FAILED(mipResult))
-				MarkGenerationFault(generation, "SetSamplerState(MIPFILTER)",
-					mipResult);
 		}
 
 		NativeProfileKey MakeProfileKey(const NativeA8PacketTemplate& packet,
@@ -362,11 +341,14 @@ namespace fonthook::vectorfont
 			const NativeA8PacketTemplate& packet,
 			bool scaledFillSampling)
 		{
-			static_cast<void>(packet);
-			static_cast<void>(scaledFillSampling);
-			// Median reconstruction requires bilinear channel interpolation. MTSDF
-			// pages are level-zero-only, so point and trilinear are never valid.
-			return NativeA8Sampling::LinearLod0;
+			if (packet.sampling == NativeA8Sampling::LinearLod0)
+				return NativeA8Sampling::LinearLod0;
+			if (packet.sampling == NativeA8Sampling::LinearMipmapped
+				|| scaledFillSampling || packet.staticSmoothSampling)
+			{
+				return NativeA8Sampling::LinearMipmapped;
+			}
+			return NativeA8Sampling::Point;
 		}
 
 		NiTexturingProperty::FilterMode ResolveFilterMode(
@@ -390,7 +372,7 @@ namespace fonthook::vectorfont
 			switch (packet.shaderClass)
 			{
 			case NativeA8ShaderClass::Body:
-				return generation.mtsdfFillShader.m_pObject;
+				return generation.sdfShader.m_pObject;
 			case NativeA8ShaderClass::Effect:
 			{
 				const size_t index = static_cast<size_t>(packet.quality);
@@ -574,18 +556,17 @@ namespace fonthook::vectorfont
 					& D3DPMISCCAPS_SEPARATEALPHABLEND) != 0;
 
 			generation->vertexShader = createVS("tnvse_freetype_native_vs.vso");
-			generation->mtsdfFillShader = createPS(
-				"tnvse_freetype_native_mtsdf_fill.pso");
+			generation->sdfShader = createPS("tnvse_freetype_native_sdf.pso");
 			const char* effectNames[] = {
-				"tnvse_freetype_native_mtsdf_effects_fast.pso",
-				"tnvse_freetype_native_mtsdf_effects_balanced.pso",
-				"tnvse_freetype_native_mtsdf_effects_high.pso"
+				"tnvse_freetype_native_effects_fast.pso",
+				"tnvse_freetype_native_effects_balanced.pso",
+				"tnvse_freetype_native_effects_high.pso"
 			};
 			for (size_t index = 0; index < generation->effectShaders.size(); ++index)
 				generation->effectShaders[index] = createPS(effectNames[index]);
 
 			if (!HasShaderHandle(generation->vertexShader)
-				|| !HasShaderHandle(generation->mtsdfFillShader))
+				|| !HasShaderHandle(generation->sdfShader))
 			{
 				failure = "base-shader-set";
 				return nullptr;

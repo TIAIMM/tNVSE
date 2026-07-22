@@ -26,8 +26,8 @@ namespace fonthook::vectorfont
 		{
 			std::vector<AtlasSnapshotPlacement> placements;
 			std::vector<UInt8> pixels;
-			UInt32 cursorX = kMtsdfAtlasPadding;
-			UInt32 cursorY = kMtsdfAtlasPadding;
+			UInt32 cursorX = kSdfAtlasPadding;
+			UInt32 cursorY = kSdfAtlasPadding;
 			UInt32 shelfHeight = 0;
 			UInt32 usedWidth = 0;
 			UInt32 usedHeight = 0;
@@ -115,9 +115,9 @@ namespace fonthook::vectorfont
 				BuildPrewarmAtlasContentHash(config, byteClass, rasterScale, true),
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
-				AtlasPixelMode::Mtsdf32,
+				AtlasPixelMode::A8,
 				AtlasRenderMode::ShaderEffects,
-				kMtsdfAtlasPadding,
+				kSdfAtlasPadding,
 				true,
 				byteClass
 			};
@@ -146,8 +146,6 @@ namespace fonthook::vectorfont
 				sizeof(kMaximumAtlasMipLevels), hash);
 			hash = HashBytes(&A8ShapeColorContract::kTileUniformColorAbi,
 				sizeof(A8ShapeColorContract::kTileUniformColorAbi), hash);
-			hash = HashBytes(&kMtsdfGeneratorRevision,
-				sizeof(kMtsdfGeneratorRevision), hash);
 			return hash;
 		}
 
@@ -214,8 +212,7 @@ namespace fonthook::vectorfont
 			for (const AtlasSnapshotPlacement& placement : placements)
 			{
 				const size_t bytes = static_cast<size_t>(placement.rect.width)
-					* placement.rect.height * AtlasBytesPerPixel(
-						static_cast<AtlasPixelMode>(header.pixelMode));
+					* placement.rect.height;
 				if (offset > pixels.size() || bytes > pixels.size() - offset)
 					return 0;
 				slices.push_back({ placement.rect, offset, bytes });
@@ -244,8 +241,8 @@ namespace fonthook::vectorfont
 		{
 			std::vector<AtlasSnapshotPlacement>().swap(page.placements);
 			std::vector<UInt8>().swap(page.pixels);
-			page.cursorX = kMtsdfAtlasPadding;
-			page.cursorY = kMtsdfAtlasPadding;
+			page.cursorX = kSdfAtlasPadding;
+			page.cursorY = kSdfAtlasPadding;
 			page.shelfHeight = 0;
 			page.usedWidth = 0;
 			page.usedHeight = 0;
@@ -354,7 +351,8 @@ namespace fonthook::vectorfont
 			if (!bitmap || !bitmap->cacheId || bitmap->width <= 0 || bitmap->height <= 0
 				|| bitmap->maskType != GlyphMaskType::DistanceField)
 				return true;
-			const size_t requiredBytes = ExpectedGlyphBitmapBytes(*bitmap);
+			const size_t requiredBytes = static_cast<size_t>(bitmap->width)
+				* static_cast<size_t>(bitmap->height);
 			if (bitmap->alpha.size() < requiredBytes)
 				return false;
 			if (role.cacheIds.find(bitmap->cacheId) != role.cacheIds.end())
@@ -363,8 +361,8 @@ namespace fonthook::vectorfont
 			const UInt32 maximum = std::min(GetMaximumAtlasSize(), kAtlasHardLimit);
 			const UInt32 width = static_cast<UInt32>(bitmap->width);
 			const UInt32 height = static_cast<UInt32>(bitmap->height);
-			if (maximum < 64 || width + kMtsdfAtlasPadding * 2 > maximum
-				|| height + kMtsdfAtlasPadding * 2 > maximum)
+			if (maximum < 64 || width + kSdfAtlasPadding * 2 > maximum
+				|| height + kSdfAtlasPadding * 2 > maximum)
 				return false;
 
 			for (UInt32 attempt = 0; attempt < 2; ++attempt)
@@ -373,13 +371,13 @@ namespace fonthook::vectorfont
 				UInt32 x = page.cursorX;
 				UInt32 y = page.cursorY;
 				UInt32 shelfHeight = page.shelfHeight;
-				if (x + width + kMtsdfAtlasPadding > maximum)
+				if (x + width + kSdfAtlasPadding > maximum)
 				{
-					x = kMtsdfAtlasPadding;
+					x = kSdfAtlasPadding;
 					y += shelfHeight;
 					shelfHeight = 0;
 				}
-				if (y + height + kMtsdfAtlasPadding > maximum)
+				if (y + height + kSdfAtlasPadding > maximum)
 				{
 					if (page.placements.empty()
 						|| !WriteCurrentPage(runtime, role, rasterScale))
@@ -404,14 +402,14 @@ namespace fonthook::vectorfont
 				page.placements.push_back(placement);
 				page.pixels.insert(page.pixels.end(), bitmap->alpha.begin(),
 					bitmap->alpha.begin() + requiredBytes);
-				page.cursorX = x + width + kMtsdfAtlasPadding * 2;
+				page.cursorX = x + width + kSdfAtlasPadding * 2;
 				page.cursorY = y;
 				page.shelfHeight = std::max(shelfHeight,
-					height + kMtsdfAtlasPadding * 2);
+					height + kSdfAtlasPadding * 2);
 				page.usedWidth = std::max(page.usedWidth,
-					x + width + kMtsdfAtlasPadding);
+					x + width + kSdfAtlasPadding);
 				page.usedHeight = std::max(page.usedHeight,
-					y + height + kMtsdfAtlasPadding);
+					y + height + kSdfAtlasPadding);
 				role.cacheIds.insert(bitmap->cacheId);
 				return true;
 			}

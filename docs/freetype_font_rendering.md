@@ -30,7 +30,7 @@ font IDs remain wholly on the original `.fnt`/`.tex` path.
 ## Raster scale and UIO
 
 `fFreeTypeFontResolutionScale` is the sole source multiplier used by startup
-prewarm, demand-generated glyphs, MTSDF and ARGB-fallback masks, atlas pages, and
+prewarm, demand-generated glyphs, SDF and ARGB-fallback masks, atlas pages, and
 persistent caches. Its default is `1.0`, its valid range is `0.1-10.0`, and it
 is canonicalized to the nearest `0.001`. Output resolution and the UI
 `resolutionconverter` trait do not change the source profile. A display density
@@ -155,7 +155,7 @@ lines. It is not a general glyph Y offset. Use the independently inheritable
 `baselineOffset` on `singleByte` or `doubleByte` to move that byte class within
 the line; positive values move glyphs upward. This configured value is applied
 after automatic visual alignment, so it remains an explicit final adjustment.
-Fractional values are retained by the Shader Loader MTSDF path; ARGB fallback output remains
+Fractional values are retained by the Shader Loader SDF path; ARGB fallback output remains
 quantized to its source-pixel grid. In manual baseline mode the renderer keeps
 the FreeType body top/drop metrics. The visual-center rule then depends on
 `verticalMetrics` as described above.
@@ -164,10 +164,9 @@ the FreeType body top/drop metrics. The visual-center rule then depends on
 the font ID. When `fontColor` is omitted, fill geometry keeps the color supplied
 by the game. `glow`, `outline`, and `shadow` belong to the font ID and are
 shared by both byte classes. `effectQuality="fast|balanced|high"` selects the
-PS 3.0 MTSDF sampling preset and defaults to `balanced`; Fast uses one sample,
-Balanced uses a four-sample axis-aligned box, and High uses a four-sample
-rotated grid. The Shader Loader route always converts the hinted outline to an
-MTSDF body; `fillRenderMode` is no longer a configuration option. Glow uses `inner`,
+PS 3.0 SDF sampling preset and defaults to `balanced`; the presets use 1, 4,
+or 8 subpixel samples. The Shader Loader route always uses an outline-to-SDF
+body; `fillRenderMode` is no longer a configuration option. Glow uses `inner`,
 `outer`, and `power`; legacy `width` is accepted as
 an alias for `outer` only when `outer` is absent. Outline is a VUI+-style dark
 proxy drawn behind the fill: `width` gives it a small outside reach and a
@@ -227,7 +226,7 @@ mode-2 manifests and their DCFG-range atlas snapshots cannot satisfy it, so the
 first launch after this change discards those construction artifacts and builds
 the complete table once.
 While this startup barrier is active, a non-activating English progress window
-runs on a separate UI thread. It shows the current font ID, MTSDF/ARGB-fallback route,
+runs on a separate UI thread. It shows the current font ID, SDF/ARGB-fallback route,
 the active scan or snapshot stage, and overall progress. The window remains
 responsive while FreeType work blocks the game thread and closes automatically
 before control returns to the game. It is owned by the Fallout window rather
@@ -237,35 +236,39 @@ A font task allocates additional atlas pages when its complete set cannot fit
 one 4096x4096 page. It reports `atlas-full` only if one incoming batch cannot
 fit an empty maximum-size page, the page-count safety limit is reached, or a
 texture allocation/upload fails. Full code-page prewarming generates every mask
-that runtime rendering can request for every valid unit. Consequently the MTSDF
-fill is prewarmed for the complete code page and every effect or hard shadow
+that runtime rendering can request for every valid unit. Consequently the SDF
+fill is prewarmed for the complete code page and every SDF effect or hard shadow
 reuses that mask. When Shader Loader is unavailable, prewarm generates only the
 coverage/effect masks needed by the ARGB fallback.
 
-MTSDF full-code-page construction does not create or read `.tnvfmask`. Once an old
-snapshot has failed completeness validation, every generated BGRA MTSDF is
-copied directly into the bounded streamed `.tnvfatlas` writer and its bitmap is
-released after the batch. The transaction retains only compact collision
-profiles, keyed by the same layout-independent MTSDF generation identity. If a
-later configured font uses the same single-byte and double-byte mask profile,
-tNVSE rebuilds that font's metrics/manifest from the code-page table, copies the
-compact collision records, and attaches the already published atlas without
-calling msdfgen again. The queue is counted before generation: collision records
-are retained only for profiles with a later consumer and are released as soon as
-the final consumer finishes. Unique CJK profiles therefore cannot accumulate
-several per-glyph maps and exhaust the 32-bit address space before the last font.
-Shader colors, outline parameters, tracking, and baseline changes do not require
-a second pixel cache when their actual mask profile is unchanged.
-
-The persistent bitmap format and `.tnvfmask` cleanup remain available for
-demand-generated fonts and runtime fallback outside the startup transaction.
-Such a profile is keyed by font content, collection face, effective pixel
-dimensions, embolden, slant, stroke width, MTSDF spread, and mask type. Full
-prewarm suppresses this layer with a scoped atlas-only policy; successful
-completion also removes legacy `.tnvfmask` files left by older versions. If
-prewarm fails, the scope ends before control returns to the game and normal
-demand-cache policy resumes, while incomplete manifest and atlas artifacts are
-still discarded rather than resumed.
+Generated SDF and ARGB-fallback masks are staged under
+`Data\NVSE\plugins\tnvse\fontdata`. Each mask profile begins with a dense
+glyph-index table, so a glyph lookup is one fixed-offset read rather than a
+record scan or hash-table rebuild. On later launches tNVSE validates and loads
+those CPU mask records instead of rasterizing the same glyphs with FreeType. A
+persistent profile is keyed by the font file's content hash, actual collection
+face, effective pixel dimensions, embolden, slant, stroke width, SDF spread,
+and mask type. It can therefore be shared safely across equivalent font IDs,
+while any font or rendering change selects a different profile automatically.
+Files are versioned and record-checksummed; an invalid header is rebuilt and a
+truncated or corrupt record falls back to normal rasterization. Cache names use
+`<game-font-id>_<font-file-name>_<profile-hash>.tnvfmask`. Lookup accepts only
+that numeric-font-ID form and uses the hash suffix, so equivalent masks remain
+shareable across font IDs. Older hash-only names are intentionally ignored.
+Existing profiles may be mapped while blocking prewarm scans them. After the
+prewarm flush, tNVSE unmaps every `.tnvfmask` view and disables new whole-file
+mappings for the rest of the process. If every configured profile completed the
+mandatory full-code-page pass, every configured runtime (including font-ID
+aliases of a shared profile) is ready, both byte-role atlas profiles were reread
+from disk after the final global repack, and the complete manifest is valid,
+tNVSE closes all open bitmap profiles and deletes every managed `.tnvfmask` file
+immediately. Persistent bitmap creation is then disabled for every covered font
+ID, including aliases, for the rest of the process. A managed-pool fallback,
+unavailable configured runtime, or cancelled job may retain its masks. This
+makes `.tnvfmask` a transactional construction cache for complete code-page
+atlases rather than a second permanent copy of their glyph pixels. A later
+demand-only font that was not part of that complete set may create its own mask
+profile normally.
 
 If startup validation finds an incomplete manifest, a missing or corrupt atlas
 page, a snapshot without the final global-repack marker, or a failed
@@ -280,7 +283,7 @@ published.
 
 The same directory also contains three startup-oriented cache layers. A
 `.tnvfhash` record reuses the font content hash when file identity, size and
-last-write time still match. A v10 `.tnvfmanifest` stores the encoded unit's
+last-write time still match. A v9 `.tnvfmanifest` stores the encoded unit's
 Unicode value, fallback face/glyph identity, and serialized `FontLetter` metrics
 as a sorted sparse table containing the 256 single-byte values plus only valid
 double-byte units from the active code page. A complete manifest is validated
@@ -289,15 +292,14 @@ are copied into the runtime direct table. Runtime fonts with the same
 `manifestHash` share one file
 handle, mapping handle, and mapped view instead of mapping that file once per
 font ID. One `_p<page>.tnvfatlas` snapshot per atlas page stores
-the stable glyph-ID placement map. Snapshot v13 records the byte role, MTSDF
-pixel mode, and validated runtime UV subset explicitly, and incorporates the
-generator revision into its identity. It uses `stb_rect_pack` skyline packing.
+the stable glyph-ID placement map. Snapshot v12 records the byte role and the
+validated runtime UV subset explicitly and uses `stb_rect_pack` skyline packing.
 Its placed level-zero payload is split into per-glyph PackBits blocks and uses
 that lossless representation only when it is smaller than the raw texels.
 Payload checksums and page-content identities remain based on the decoded raw
 texels, so compression cannot change texture contents or hide damaged data.
 Older snapshot layouts are not read or migrated.
-MTSDF profiles are packed in
+SDF profiles are packed in
 deterministic height/width/glyph-ID order, can reduce the page count, and shrink
 every page to the smallest usable power-of-two dimensions. Immediately after a
 new streamed prewarm snapshot and manifest are committed, startup invalidates
@@ -311,13 +313,13 @@ run therefore enters the game with the same compact layout as later cache-hit
 launches instead of waiting for another restart. No text shapes exist at this
 blocking startup point, so replacing the page objects cannot invalidate live
 UVs. A restored skyline page starts runtime shelf appends below its packed extent
-rather than reusing skyline holes. MTSDF pages store only the placed
+rather than reusing skyline holes. SDF pages store only the placed
 level-zero rectangles;
 other pages retain their complete mip chain. Each page records and validates
 the total page count. After a successful full prewarm every page is written
 through temporary files, then the manifest is marked complete. Only after the
-compact page set has been reread and both roles are resident is the atlas-only
-transaction considered complete. A later launch restores the
+compact page set has been reread and both roles are resident may complete
+code-page mask files be deleted. A later launch restores the
 complete page set directly and skips code-page enumeration, per-glyph mask
 loading, packing, and mip generation.
 Every layer includes its schema/layout/mask/font/code-page inputs in its hash;
@@ -343,11 +345,11 @@ metrics, advances, and fallback identity. Persistent manifests store
 effect-independent body metrics and add the current visual effect extents when
 loaded. The mask-generation hash covers only outline inputs that change glyph
 pixels. The atlas-content hash is resolved at the final raster scale from that
-mask identity, the actual mask-type combination, the quantized MTSDF spread, and
+mask identity, the actual mask-type combination, the quantized SDF spread, and
 CPU fallback stroke widths. Shader colors, offsets, powers, inner thresholds,
 and quality selection use a separate shader-effect hash and do not invalidate
-an MTSDF atlas. Consequently an effect edit selects a new prewarm snapshot only
-when it changes the final MTSDF spread or the masks that the atlas must contain.
+an SDF atlas. Consequently an effect edit selects a new prewarm snapshot only
+when it changes the final SDF spread or the masks that the atlas must contain.
 The ARGB CPU fallback remains content-sensitive: independently generated
 coverage masks include the enabled glow, outline, and shadow parameters after
 physical-pixel quantization (including stroke, blur, softness, and power) in the
@@ -377,15 +379,12 @@ chain and then tries `U+FFFD`, `?`, and the primary face's `.notdef` glyph.
 
 ## Atlas and Tile shader routing
 
-When Fallout Shader Loader 1.40 or newer and the native FreeType shader set are
-available, tNVSE converts each hinted FreeType outline to a four-channel MTSDF
-and stores it in a linear `D3DFMT_A8R8G8B8` level-zero atlas. RGB contains the
-multi-channel distance used for sharp body topology; Alpha contains msdfgen's
-8-bit true signed-distance channel for derivatives and analytic effects. There is
-no single-channel A8 SDF or mixed grayscale/MTSDF route. Without that complete
-Shader Loader route, tNVSE builds hinted coverage and effect masks into an
-`A8R8G8B8` atlas with baked colors and renders it through the stock Tile shader.
-The visible text on the MTSDF route is
+When Fallout Shader Loader 1.40 or newer, the native FreeType shader set, and a
+real `D3DFMT_A8` texture are available, tNVSE always rasterizes an SDF body into
+a one-byte A8 atlas. There is no A8 grayscale or mixed grayscale/SDF route.
+Without that complete Shader Loader route, tNVSE builds hinted coverage and
+effect masks into an `A8R8G8B8` atlas with baked colors and renders it through
+the stock Tile shader. The visible text on the SDF route is
 represented by one facade in the stock Tile alpha list so the game retains its
 normal UI sorting. At the sorted Tile pass tNVSE expands that facade into native
 Gamebryo geometry packets grouped by layer, atlas page, shader class, and
@@ -462,40 +461,35 @@ enabled, or if the font cannot be resolved reliably, the original proxy remains
 visible with recursive tNVSE effects suppressed. Unrelated dark or startup text
 remains unaffected, and no VUI+ XML file is modified.
 
-## MTSDF effects and draw-state isolation
+## SDF effects and draw-state isolation
 
-The MTSDF body shader and all effect variants use `ps_3_0`. The generator reads
-the already scaled, hinted FreeType outline through msdfgen 1.13, normalizes it,
-applies deterministic ink-trap edge coloring, enables overlap-aware generation,
-corrects signs with the outline's FreeType non-zero or even-odd fill rule,
-performs edge-priority error correction, and
-quantizes the result to D3D-native BGRA bytes. Body, glow, outline, and blurred
-shadow share that result; hard shadow reuses the selected body mask and can analytically copy
+The SDF body shader and all effect variants use `ps_3_0`. Body, glow, outline,
+and blurred shadow share a FreeType distance field generated directly from the hinted
+outline; hard shadow reuses the selected body mask and can analytically copy
 the active glow and outline masks. The native payload stores each unshifted
-body quad only once and lets the glow, outline, and MTSDF fill packets reference
+body quad only once and lets the glow, outline, and SDF fill packets reference
 the same vertex interval. Shadow owns a second interval only when its configured
-offset is nonzero. Thus MTSDF `Shadow + Glow + Outline + Fill` uses two geometry
+offset is nonzero. Thus SDF `Shadow + Glow + Outline + Fill` uses two geometry
 quads per drawable glyph instead of four, and the same stack without an offset
-shadow uses one. Effects
+shadow uses one. FreeType overlap handling is enabled only when the loaded
+outline carries `FT_OUTLINE_OVERLAP`. Effects
 execute global shadow, glow, outline, and fill passes over one `NiTriShape`,
-which prevents a later glyph effect from covering an earlier glyph fill. MTSDF
-passes force linear-space bilinear MIN/MAG sampling at atlas LOD 0 and derive
-the antialias footprint only from the bilinearly reconstructed Alpha distance. The RGB median
-alone determines body topology, so true-SDF Alpha cannot round off sharp MTSDF
-corners. The route never consumes the coverage-averaged atlas mip chain.
-MTSDF draw ranges also preserve fractional pen positions, encoded-unit advances,
+which prevents a later glyph effect from covering an earlier glyph fill. SDF
+passes use bilinear MIN/MAG sampling at atlas LOD 0 and derivative-based edge
+antialiasing; they never consume the coverage-averaged atlas mip chain.
+SDF draw ranges also preserve fractional pen positions, encoded-unit advances,
 and effect offsets in their quad coordinates. The separate ARGB fallback remains
 snapped to the resolved source-pixel grid and may use trilinear mip sampling.
 Glow keeps
 full intensity through `inner`, then decays to zero at `outer` according to
 `power`; outline uses `width` plus `softness`; blurred shadow uses `blur` and
-`power`. The physical MTSDF spread is derived from the largest enabled radius
-and must remain in tNVSE's supported 2-32 pixel range. An unsupported
+`power`. The physical SDF spread is derived from the largest enabled radius
+and must remain in FreeType's supported 2-32 pixel range. An unsupported
 spread causes the complete text batch to use the CPU effect path rather than
 silently reducing the requested effect.
-Because an MTSDF body requires the custom native shader, failure to establish or
+Because an SDF body requires the custom A8 shader, failure to establish or
 complete that route rebuilds the batch through the ARGB CPU fallback instead of
-sampling MTSDF with the stock Tile shader. No failure path creates an A8 coverage
+sampling SDF with the stock Tile shader. No failure path creates an A8 coverage
 atlas. When `NVSE_PLUGIN_PATH` is defined, an
 ordinary project build copies the native shader set to `Data\Shaders\Loose`.
 Native packets use immutable `TileShader` profiles and the game's normal render
@@ -552,8 +546,8 @@ ring; expired static entries are discarded during compaction.
 
 Persistent atlas pages start at 512x512 and grow without moving existing glyphs.
 Missing glyphs are rasterized as one batch and uploaded through one dirty
-rectangle. Level-zero-only MTSDF pages use one outside-distance padding pixel
-per side, which is sufficient to isolate their bilinear footprint because the MTSDF
+rectangle. Level-zero-only SDF/A8 pages use one transparent padding pixel per
+side, which is sufficient to isolate their bilinear footprint because the SDF
 spread is already inside each glyph bitmap. ARGB fallback pages retain four
 transparent pixels per side, isolating the 1/4 mip even when glyph dimensions
 are not multiples of four. Repeated text also reuses cached layout and unique
@@ -562,23 +556,13 @@ property/texture references, and merged contiguous packet descriptors that used
 to live in separate batch and packet-template caches. Geometry, per-glyph base
 colors, layer constants, and referenced page identities therefore form one
 validated cache identity; an atlas wrapper address cannot revive an artifact
-whose retained property or texture differs. MTSDF and 32-bit fallback
+whose retained property or texture differs. SDF A8 storage and 32-bit fallback
 profiles use separate cache keys and may coexist when text was created before
 Shader Loader initialization.
 
-MTSDF stores four bytes per placed texel instead of the former one-byte SDF,
-so an equally sized live distance-field page consumes four times the raw GPU
-and decoded snapshot bytes. The MTSDF/ARGB padding split remains intact: MTSDF
-uses one texel per side and ARGB retains four, avoiding a second spread-sized
-packing margin. Complete snapshots keep only placed level-zero rectangles and
-apply per-glyph PackBits when it is smaller, so empty page area and compressible
-distance plateaus do not become permanent disk payload. Compression is decoded
-only during snapshot restore or device recovery and does not affect per-frame
-sampling.
-
-Generated MTSDF and ARGB-fallback masks and their supporting CPU objects are cached in
+Generated SDF and ARGB-fallback masks and their supporting CPU objects are cached in
 process memory. Equivalent masks are shared across font IDs when the resolved
-font file/face, glyph, effective raster size, emboldening, slant, stroke or MTSDF
+font file/face, glyph, effective raster size, emboldening, slant, stroke or SDF
 parameters, and mask type match. Baseline placement remains per font ID and is
 not baked into the shared mask.
 
@@ -597,28 +581,22 @@ Memory still referenced by active shapes, atlases, font runtimes, static GPU
 residency, or required mappings is reported as `pinned-overcommit` instead of
 being invalidated silently.
 
-During blocking prewarm, the bitmap LRU initially keeps a preferred one-quarter
-working target so wide raster batches do not churn, subject to the aggregate
-ceiling. The atlas-only transaction prevents new `.tnvfmask` mappings and also
-releases any mapping that predates the transaction before publication. It lowers
-the bitmap LRU target to one-sixteenth of configured memory, clamped to 8-16 MiB
-and never above its original share. With the default 192 MiB setting this target
-is 12 MiB. This reserves 32-bit address space for the compact-payload,
-global-repack, and texture-upload buffers. Each subsequent font temporarily
-restores the larger bitmap LRU target while rasterizing, then reduces it again
-before its own publication. Snapshot loading
-validates and decodes the payload, then releases
-the serialized PackBits/file buffer before texture creation or managed fallback,
-so the compressed and decoded 80-100 MiB CJK payloads are not retained together.
-A later genuine prewarm transaction follows the same raster/publish phase
-transition. A failed transaction restores the generation state before the next
-font and repeats the same publication reserve step.
+During blocking prewarm, the bitmap LRU keeps a preferred one-quarter working
+target so wide raster batches do not churn, subject to the aggregate ceiling.
+After every queued profile finishes successfully from a snapshot or a newly
+saved atlas, tNVSE flushes the persistent bitmap files, releases their large
+mappings, and immediately lowers the bitmap LRU target to one-sixteenth of the
+configured memory, clamped to 8-16 MiB and never above its original share. With
+the default 192 MiB setting this target is 12 MiB. A later genuine prewarm job
+restores the larger working target before rasterization. If any profile is
+cancelled, fills its atlas, or fails to save, automatic shrinking is skipped
+because its incomplete atlas may still need the CPU masks.
 
 When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
-generations are restored after a D3D9 device reset. An MTSDF v13 snapshot is
+generations are restored after a D3D9 device reset. An SDF v12 snapshot is
 uploaded directly to this path. Once that upload succeeds, tNVSE releases the
 packed reset pixels and retains only placements plus the validated snapshot
 path/header identity. Device reset, page detachment/growth, and snapshot rewrite
@@ -652,14 +630,14 @@ clamped to 64-256 MB; 128 MB is used when the device does not report a reliable
 value. A nonzero value is used directly. Atlas generations still referenced by
 visible game shapes cannot be evicted, so live usage may temporarily exceed the
 soft budget. The resolved value is written to `tnvse.log` at initialization and
-when a device reset changes the automatic result. Validated MTSDF snapshots
+when a device reset changes the automatic result. Validated SDF snapshots
 restore directly to the DEFAULT pool when enabled. ARGB fallback atlases are
 runtime-only and contain three mip levels (1x,
 1/2x, and 1/4x); the cache budget and upload counters include all levels.
 Limiting the chain to three levels together with four-pixel per-side packing
 padding prevents the coarsest bilinear footprint from reaching a neighboring
 glyph. Text spanning pages is sorted into contiguous layer/page native packets;
-each packet owns the corresponding atlas property and texture. MTSDF packets use
+each packet owns the corresponding atlas property and texture. SDF packets use
 mip level zero and a zero LOD bias through their immutable shader profile.
 
 ## Scope and fallbacks
@@ -673,7 +651,7 @@ quad rendering, while hinted masks are generated once on the CPU.
 When output resolution or UIO 2.30 scales a TileText call, tNVSE keeps the mask
 at the single configured source multiplier and lets the existing world
 transform minify or magnify the atlas. Trilinear sampling is enabled for scaled
-ARGB fallback shapes; MTSDF ranges retain level-zero derivative-based sampling.
+ARGB fallback shapes; SDF ranges retain level-zero derivative-based sampling.
 Neither case creates a resolution- or zoom-specific profile. If atlas creation
 fails, the affected FreeType shape is empty and the detailed build diagnostic
 identifies the failed stage. Ordinary and rich-text layout retain one output
