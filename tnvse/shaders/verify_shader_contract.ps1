@@ -132,6 +132,13 @@ if ($effectsSource -notmatch 'outer\s*-\s*antialiasWidth[\s\S]*?outer\s*\+\s*ant
 if ($effectsSource -notmatch 'SdfFlags\.z\s*>\s*0\.0[\s\S]*?SdfFlags\.w\s*>\s*0\.0') {
     throw 'Native hard shadow does not consume the copied glow and outline switches'
 }
+if ($effectsSource -notmatch
+    'proxyAntialiasWidth[\s\S]*?vuiProxy\s*=\s*smoothstep[\s\S]*?max\s*\(\s*body\s*,\s*vuiProxy\s*\)') {
+    throw 'Native SDF outline does not retain VUI-style dark-proxy overlap beneath the fill'
+}
+if ($effectsSource -match 'expanded\s*-\s*body') {
+    throw 'Native SDF outline regressed to a hard hollow-ring mask'
+}
 if ($effectsSource -notmatch 'outline\s*\+\s*\(1\.0\s*-\s*outline\)\s*\*\s*glow') {
     throw 'Native hard shadow does not source-over the copied outline and glow masks'
 }

@@ -33,9 +33,14 @@ float EvaluateNativeFontGlowMask(float distance, float antialiasWidth,
 float EvaluateNativeFontOutlineMask(float distance, float antialiasWidth,
 	float body, float width, float softness)
 {
-	const float expanded = smoothstep(-width - softness - antialiasWidth,
-		-width + antialiasWidth, distance);
-	return saturate(expanded - body);
+	// VUI+ draws a dark copy of the original text behind the fill instead of
+	// cutting a solid ring out of an expanded glyph.  Keep that overlap here:
+	// the later fill pass hides the opaque interior and leaves the filtered edge.
+	// Width adds a small outside reach; softness broadens the proxy coverage ramp.
+	const float proxyAntialiasWidth = antialiasWidth + max(softness, 0.0);
+	const float vuiProxy = smoothstep(-max(width, 0.0) - proxyAntialiasWidth,
+		proxyAntialiasWidth, distance);
+	return saturate(max(body, vuiProxy));
 }
 
 float NativeFontGlowOuterFeather(float centerDistance, float antialiasWidth,

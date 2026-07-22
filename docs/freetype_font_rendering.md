@@ -109,11 +109,11 @@ registered extended fonts.
 
       <glow enabled="1" inner="0" outer="4" power="2"
             colorMode="fill" alpha="0.35"/>
-      <outline enabled="1" width="1" softness="0.5"
-               colorMode="fixed" color="#000000" alpha="1"/>
+      <outline enabled="1" width="0.2" softness="0.7"
+               colorMode="fixed" color="#333333" alpha="0.7"/>
       <shadow enabled="1" x="1" y="1" blur="0" power="2"
-              includeGlow="1" includeOutline="1"
-              colorMode="fixed" color="#000000" alpha="0.65"/>
+              includeGlow="0" includeOutline="0"
+              colorMode="fixed" color="#1A1A1A" alpha="0.55"/>
     </font>
   </fonts>
 </tNVSE>
@@ -168,8 +168,11 @@ PS 3.0 SDF sampling preset and defaults to `balanced`; the presets use 1, 4,
 or 8 subpixel samples. The Shader Loader route always uses an outline-to-SDF
 body; `fillRenderMode` is no longer a configuration option. Glow uses `inner`,
 `outer`, and `power`; legacy `width` is accepted as
-an alias for `outer` only when `outer` is absent. Outline accepts a
-non-negative `softness`. Shadow accepts a non-negative `blur` and a positive
+an alias for `outer` only when `outer` is absent. Outline is a VUI+-style dark
+proxy drawn behind the fill: `width` gives it a small outside reach and a
+non-negative `softness` adds feather without cutting the proxy into a solid
+hollow ring. The later fill pass covers the proxy interior, leaving its
+filtered edge. Shadow accepts a non-negative `blur` and a positive
 `power`; `blur=0` preserves the exact hinted offset mask. On a hard shadow,
 `includeGlow="1"` and `includeOutline="1"` reproduce the currently enabled
 effect coverage in that offset mask. Copied coverage retains the source effect
