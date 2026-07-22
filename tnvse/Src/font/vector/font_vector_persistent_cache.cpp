@@ -8,6 +8,11 @@
 
 namespace fonthook::vectorfont
 {
+	static bool IsMissingPersistentCacheFileError(DWORD error)
+	{
+		return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+	}
+
 	void RefreshPersistentBitmapProfileCpuMemory(
 		PersistentBitmapProfile& profile)
 	{
@@ -658,6 +663,8 @@ namespace fonthook::vectorfont
 			const PersistentBitmapProfileKey& key,
 			const std::wstring& fontPath, UInt32 fontId, UInt32 glyphCapacity)
 		{
+			if (State().atlasOnlyCodePageFontIds.count(fontId))
+				return nullptr;
 			auto existing = State().persistentBitmapProfiles.find(key);
 			if (existing != State().persistentBitmapProfiles.end())
 				return existing->second->initialized ? existing->second.get() : nullptr;
@@ -984,8 +991,10 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		const std::vector<UInt16>& GetGlyphManifestCodeTable(UInt32 codePage)
+	const std::vector<UInt16>& GetCompleteCodePageEncodedUnits()
 		{
+			std::lock_guard<std::recursive_mutex> lock(State().mutex);
+			const UInt32 codePage = GetFreeTypeTextCodePage();
 			FreeTypeState& state = State();
 			if (state.persistentGlyphManifestCodePage != codePage)
 			{
@@ -1120,7 +1129,7 @@ namespace fonthook::vectorfont
 
 			const auto* header = reinterpret_cast<const PersistentGlyphManifestHeader*>(
 				manifest.mappedData);
-			if (header->completeMode == static_cast<UInt8>(FontPrewarmMode::None))
+			if (header->completeMode < kCompleteCodePagePrewarmIdentity)
 			{
 				RefreshGlyphManifestCpuMemory(manifest);
 				return false;
@@ -1266,7 +1275,7 @@ namespace fonthook::vectorfont
 			manifest->path = directory + L"\\" + fileName;
 			State().usedPersistentCachePaths.insert(NormalizePathKey(manifest->path));
 			const std::vector<UInt16>& encodedCodes =
-				GetGlyphManifestCodeTable(codePage);
+				GetCompleteCodePageEncodedUnits();
 			InitializeGlyphManifest(*manifest, runtime, encodedCodes);
 			State().persistentGlyphManifests[manifestHash] = manifest;
 			runtime.manifest = std::move(manifest);
@@ -1327,7 +1336,7 @@ namespace fonthook::vectorfont
 		}
 		const auto* header = reinterpret_cast<const PersistentGlyphManifestHeader*>(
 			manifest->mappedData);
-		if (header->completeMode < static_cast<UInt8>(FontPrewarmMode::CodePage))
+		if (header->completeMode < kCompleteCodePagePrewarmIdentity)
 			return false;
 
 		std::shared_ptr<DirectExtraGlyphTable> table;
@@ -1699,7 +1708,7 @@ namespace fonthook::vectorfont
 			static_cast<unsigned long long>(State().usedPersistentCachePaths.size()));
 	}
 
-	bool HasCompleteGlyphManifest(RuntimeFont& runtime, FontPrewarmMode mode)
+	bool HasCompleteGlyphManifest(RuntimeFont& runtime)
 	{
 		std::lock_guard<std::recursive_mutex> lock(State().mutex);
 		PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
@@ -1707,10 +1716,10 @@ namespace fonthook::vectorfont
 			return false;
 		const auto* header = reinterpret_cast<const PersistentGlyphManifestHeader*>(
 			manifest->mappedData);
-		return header->completeMode >= static_cast<UInt8>(mode);
+		return header->completeMode >= kCompleteCodePagePrewarmIdentity;
 	}
 
-	void MarkGlyphManifestComplete(RuntimeFont& runtime, FontPrewarmMode mode)
+	void MarkGlyphManifestComplete(RuntimeFont& runtime)
 	{
 		std::lock_guard<std::recursive_mutex> lock(State().mutex);
 		PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
@@ -1718,12 +1727,11 @@ namespace fonthook::vectorfont
 			return;
 		auto* header = reinterpret_cast<PersistentGlyphManifestHeader*>(
 			manifest->mappedData);
-		if (header->completeMode >= static_cast<UInt8>(mode))
+		if (header->completeMode >= kCompleteCodePagePrewarmIdentity)
 		{
 			if (!manifest->validatedRecordIndexReady)
 				BuildValidatedGlyphManifestIndex(*manifest, runtime);
-			if (header->completeMode
-				>= static_cast<UInt8>(FontPrewarmMode::CodePage)
+			if (header->completeMode >= kCompleteCodePagePrewarmIdentity
 				&& EnsureCompleteCodePageMetricTable(runtime))
 			{
 				auto extra = gNumberedExtraLetters.find(runtime.config->fontId);
@@ -1732,13 +1740,12 @@ namespace fonthook::vectorfont
 			}
 			return;
 		}
-		header->completeMode = static_cast<UInt8>(mode);
+		header->completeMode = kCompleteCodePagePrewarmIdentity;
 		header->checksum = HashBytes64(header,
 			offsetof(PersistentGlyphManifestHeader, checksum));
 		FlushViewOfFile(header, sizeof(*header));
 		BuildValidatedGlyphManifestIndex(*manifest, runtime);
-		if (header->completeMode
-			>= static_cast<UInt8>(FontPrewarmMode::CodePage)
+		if (header->completeMode >= kCompleteCodePagePrewarmIdentity
 			&& EnsureCompleteCodePageMetricTable(runtime))
 		{
 			auto extra = gNumberedExtraLetters.find(runtime.config->fontId);
@@ -1805,5 +1812,205 @@ namespace fonthook::vectorfont
 			profileCount, static_cast<unsigned long long>(byteCount));
 		ReportCpuMemoryBudget("persistent-mappings-released", true);
 		return byteCount;
+	}
+
+	bool ResetPersistentFontCachesForRegeneration(RuntimeFont& runtime)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		std::shared_ptr<PersistentGlyphManifest> manifest = runtime.manifest;
+		if (!manifest)
+		{
+			GetGlyphManifest(runtime);
+			manifest = runtime.manifest;
+		}
+
+		std::wstring manifestPath;
+		UInt64 manifestHash = 0;
+		bool manifestInvalidated = true;
+		UInt32 detachedRuntimes = 0;
+		if (manifest)
+		{
+			manifestPath = manifest->path;
+			manifestHash = manifest->manifestHash;
+			manifestInvalidated = manifestPath.empty();
+			for (auto& pair : State().runtimeFonts)
+			{
+				RuntimeFont& candidate = *pair.second;
+				if (candidate.manifest != manifest)
+					continue;
+				candidate.manifest.reset();
+				candidate.codePageMetrics.reset();
+				size_t runtimeBytes = sizeof(RuntimeFont);
+				for (RuntimeRole& role : candidate.roles)
+				{
+					role.glyphIdentities.clear();
+					runtimeBytes += role.faces.capacity() * sizeof(RuntimeFace);
+				}
+				candidate.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+					runtimeBytes);
+				auto extra = gNumberedExtraLetters.find(pair.first);
+				if (extra != gNumberedExtraLetters.end())
+					extra->second.generatedCodePage.reset();
+				++detachedRuntimes;
+			}
+			State().persistentGlyphManifests.erase(manifestHash);
+			UnmapGlyphManifest(*manifest);
+			if (manifest->file != INVALID_HANDLE_VALUE)
+			{
+				// Truncate before closing so a failed DeleteFile cannot leave a valid
+				// incomplete manifest available to the next GetGlyphManifest call.
+				manifestInvalidated = manifestInvalidated || (manifest->writable
+					&& SetFileSize64(manifest->file, 0)
+					&& FlushFileBuffers(manifest->file));
+				CloseHandle(manifest->file);
+				manifest->file = INVALID_HANDLE_VALUE;
+			}
+			manifest->writable = false;
+			if (!manifestPath.empty())
+			{
+				const bool deleted = DeleteFileW(manifestPath.c_str())
+					|| IsMissingPersistentCacheFileError(GetLastError());
+				manifestInvalidated = manifestInvalidated || deleted;
+				State().usedPersistentCachePaths.erase(
+					NormalizePathKey(manifestPath));
+			}
+		}
+
+		// A code-page rebuild is an all-or-nothing transaction. Mask profiles are
+		// content-addressed and can be shared by font aliases, so clear the complete
+		// construction tier instead of risking a mixture of old and fresh records.
+		State().bitmapCache.clear();
+		State().bitmapLru.clear();
+		State().bitmapCacheBytes = 0;
+		State().persistentBitmapProfiles.clear();
+		State().atlasOnlyCodePageFontIds.clear();
+		State().persistentBitmapMappingsEnabled = true;
+		State().bitmapCacheReducedAfterPrewarm = false;
+
+		UInt32 deletedMasks = 0;
+		UInt32 failedMasks = 0;
+		UInt64 deletedMaskBytes = 0;
+		std::wstring directory;
+		if (EnsurePersistentBitmapDirectory(directory))
+		{
+			const std::wstring pattern = directory + L"\\*.tnvfmask";
+			WIN32_FIND_DATAW found = {};
+			HANDLE search = FindFirstFileW(pattern.c_str(), &found);
+			if (search != INVALID_HANDLE_VALUE)
+			{
+				do
+				{
+					if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+						continue;
+					const std::wstring path = directory + L"\\" + found.cFileName;
+					const UInt64 bytes = (static_cast<UInt64>(found.nFileSizeHigh) << 32)
+						| found.nFileSizeLow;
+					if (DeleteFileW(path.c_str())
+						|| IsMissingPersistentCacheFileError(GetLastError()))
+					{
+						++deletedMasks;
+						deletedMaskBytes += bytes;
+						State().usedPersistentCachePaths.erase(NormalizePathKey(path));
+					}
+					else
+					{
+						++failedMasks;
+					}
+				} while (FindNextFileW(search, &found));
+				FindClose(search);
+			}
+		}
+		if (failedMasks)
+		{
+			// Do not reopen a residual mask that Windows refused to remove. The
+			// current rebuild can still rasterize directly into the streamed atlas.
+			State().persistentBitmapUnavailable = true;
+		}
+		else
+		{
+			State().persistentBitmapUnavailable = false;
+		}
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: incomplete persistent cache reset font=%u detachedRuntimes=%u manifest=%s masksDeleted=%u maskBytes=%llu masksFailed=%u diskMasks=%s",
+			GetRuntimeConfig(runtime).fontId, detachedRuntimes,
+			manifestInvalidated ? "discarded" : "failed",
+			deletedMasks, static_cast<unsigned long long>(deletedMaskBytes),
+			failedMasks, failedMasks ? "disabled" : "fresh");
+		return manifestInvalidated;
+	}
+
+	bool DeleteCompleteCodePageGlyphBitmapDiskCaches(
+		const std::vector<UInt32>& fontIds)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		if (fontIds.empty())
+			return false;
+		const std::unordered_set<UInt32> completed(fontIds.begin(), fontIds.end());
+		State().atlasOnlyCodePageFontIds.insert(completed.begin(), completed.end());
+
+		std::unordered_map<std::wstring, std::wstring> candidates;
+		for (auto profile = State().persistentBitmapProfiles.begin();
+			profile != State().persistentBitmapProfiles.end();)
+		{
+			PersistentBitmapProfile& value = *profile->second;
+			if (!value.path.empty())
+				candidates.emplace(NormalizePathKey(value.path), value.path);
+			UnmapPersistentBitmapProfile(value);
+			if (value.file != INVALID_HANDLE_VALUE)
+			{
+				CloseHandle(value.file);
+				value.file = INVALID_HANDLE_VALUE;
+			}
+			profile = State().persistentBitmapProfiles.erase(profile);
+		}
+
+		std::wstring directory;
+		if (EnsurePersistentBitmapDirectory(directory))
+		{
+			const std::wstring pattern = directory + L"\\*.tnvfmask";
+			WIN32_FIND_DATAW found = {};
+			HANDLE search = FindFirstFileW(pattern.c_str(), &found);
+			if (search != INVALID_HANDLE_VALUE)
+				{
+					do
+					{
+						if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+							continue;
+						const std::wstring path = directory + L"\\" + found.cFileName;
+					candidates.emplace(NormalizePathKey(path), path);
+				} while (FindNextFileW(search, &found));
+				FindClose(search);
+			}
+		}
+
+		UInt32 deleted = 0;
+		UInt32 failed = 0;
+		UInt64 deletedBytes = 0;
+		for (const auto& [normalized, path] : candidates)
+		{
+			WIN32_FILE_ATTRIBUTE_DATA attributes = {};
+			UInt64 bytes = 0;
+			if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attributes))
+			{
+				bytes = (static_cast<UInt64>(attributes.nFileSizeHigh) << 32)
+					| attributes.nFileSizeLow;
+			}
+			if (DeleteFileW(path.c_str())
+				|| IsMissingPersistentCacheFileError(GetLastError()))
+			{
+				++deleted;
+				deletedBytes += bytes;
+				State().usedPersistentCachePaths.erase(normalized);
+			}
+			else
+			{
+				++failed;
+			}
+		}
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: complete codepage atlas-only mask cleanup fonts=%u deleted=%u bytes=%llu failed=%u",
+			static_cast<UInt32>(completed.size()), deleted,
+			static_cast<unsigned long long>(deletedBytes), failed);
+		return failed == 0;
 	}
 }

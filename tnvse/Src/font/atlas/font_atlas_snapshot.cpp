@@ -60,6 +60,11 @@ namespace fonthook::vectorfont
 				&& written == size;
 		}
 
+		bool IsMissingFileError(DWORD error)
+		{
+			return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+		}
+
 		bool WriteSparseFileBytes(HANDLE file, const UInt8* data, size_t size,
 			bool sparse)
 		{
@@ -145,7 +150,8 @@ namespace fonthook::vectorfont
 			hash = HashAtlasBytes(&key.byteClass, sizeof(key.byteClass), hash);
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			hash = HashAtlasBytes(&codePage, sizeof(codePage), hash);
-			hash = HashAtlasBytes(&config.prewarm, sizeof(config.prewarm), hash);
+			hash = HashAtlasBytes(&kCompleteCodePagePrewarmIdentity,
+				sizeof(kCompleteCodePagePrewarmIdentity), hash);
 			hash = HashAtlasBytes(&kMaximumAtlasMipLevels,
 				sizeof(kMaximumAtlasMipLevels), hash);
 			hash = HashAtlasBytes(&A8ShapeColorContract::kTileUniformColorAbi,
@@ -468,7 +474,17 @@ namespace fonthook::vectorfont
 		struct SnapshotGlyphData
 		{
 			AtlasSnapshotPlacement placement;
-			std::vector<UInt8> pixels;
+			std::shared_ptr<const CompactAtlasSnapshot> sourceSnapshot;
+			size_t sourceOffset = 0;
+			size_t sourceBytes = 0;
+		};
+
+		struct SnapshotPixelSource
+		{
+			std::shared_ptr<const CompactAtlasSnapshot> snapshot;
+			size_t sourceOffset = 0;
+			size_t destinationOffset = 0;
+			size_t bytes = 0;
 		};
 
 		struct SnapshotPageData
@@ -477,8 +493,53 @@ namespace fonthook::vectorfont
 			AtlasSnapshotHeader header;
 			std::vector<AtlasSnapshotPlacement> placements;
 			std::vector<UInt8> pixels;
+			std::vector<SnapshotPixelSource> pixelSources;
 			std::wstring path;
 		};
+
+		bool MaterializeRepackedSnapshotPixels(SnapshotPageData& page)
+		{
+			if (page.pixelSources.empty())
+				return true;
+			size_t totalBytes = 0;
+			for (const SnapshotPixelSource& source : page.pixelSources)
+			{
+				if (!source.snapshot || source.destinationOffset != totalBytes
+					|| source.bytes > std::numeric_limits<size_t>::max() - totalBytes)
+				{
+					return false;
+				}
+				totalBytes += source.bytes;
+			}
+			page.pixels.assign(totalBytes, 0);
+			std::unordered_set<const CompactAtlasSnapshot*> loaded;
+			std::vector<UInt8> sourcePixels;
+			for (const SnapshotPixelSource& source : page.pixelSources)
+			{
+				const CompactAtlasSnapshot* identity = source.snapshot.get();
+				if (!loaded.insert(identity).second)
+					continue;
+				if (!LoadCompactAtlasSnapshotPixels(*source.snapshot, sourcePixels))
+					return false;
+				for (const SnapshotPixelSource& copy : page.pixelSources)
+				{
+					if (copy.snapshot.get() != identity
+						|| copy.sourceOffset > sourcePixels.size()
+						|| copy.bytes > sourcePixels.size() - copy.sourceOffset
+						|| copy.destinationOffset > page.pixels.size()
+						|| copy.bytes > page.pixels.size() - copy.destinationOffset)
+					{
+						if (copy.snapshot.get() == identity)
+							return false;
+						continue;
+					}
+					std::memcpy(page.pixels.data() + copy.destinationOffset,
+						sourcePixels.data() + copy.sourceOffset, copy.bytes);
+				}
+				sourcePixels.clear();
+			}
+			return true;
+		}
 
 		UInt32 NextSnapshotPowerOfTwo(UInt32 value)
 		{
@@ -565,37 +626,50 @@ namespace fonthook::vectorfont
 					return false;
 				originalGpuBytes += GetAtlasStorageBytes(resource.width, resource.height,
 					resource.pixelMode, resource.mipLevels);
-				std::vector<AtlasSnapshotPlacement> placements;
-				placements.reserve(resource.glyphs.size());
+				const std::shared_ptr<const CompactAtlasSnapshot> sourceSnapshot =
+					resource.compactSnapshot;
+				if (!sourceSnapshot || sourceSnapshot->placements.empty())
+					return false;
+				std::vector<size_t> sourceOffsets(sourceSnapshot->placements.size());
+				size_t sourceBytes = 0;
+				for (size_t index = 0; index < sourceSnapshot->placements.size(); ++index)
+				{
+					sourceOffsets[index] = sourceBytes;
+					const AtlasRect& rect = sourceSnapshot->placements[index].rect;
+					const size_t bytes = static_cast<size_t>(rect.width) * rect.height
+						* AtlasBytesPerPixel(resource.pixelMode);
+					if (!rect.width || !rect.height
+						|| bytes > std::numeric_limits<size_t>::max() - sourceBytes)
+					{
+						return false;
+					}
+					sourceBytes += bytes;
+				}
+				const size_t expectedSourceBytes = sourceSnapshot->pixels.empty()
+					? static_cast<size_t>(sourceSnapshot->sourceHeader.pixelBytes)
+					: sourceSnapshot->pixels.size();
+				if (sourceBytes != expectedSourceBytes)
+					return false;
 				for (const AtlasGlyphRecord& record : resource.glyphs)
 				{
-					AtlasSnapshotPlacement placement;
-					if (!MakeSnapshotPlacement(resource, record.cacheId, record.rect, placement)
-						|| !cacheIds.insert(record.cacheId).second)
+					if (record.snapshotPlacementIndex >= sourceSnapshot->placements.size())
 						return false;
-					placements.push_back(placement);
-				}
-				std::sort(placements.begin(), placements.end(),
-					[](const auto& lhs, const auto& rhs) { return lhs.cacheId < rhs.cacheId; });
-				std::vector<UInt8> packed;
-				if (!BuildAtlasSnapshotPixels(resource, placements,
-					AtlasSnapshotStorage::PlacedLevelZeroRects, packed))
-					return false;
-				size_t offset = 0;
-				for (const AtlasSnapshotPlacement& placement : placements)
-				{
+					const size_t placementIndex = record.snapshotPlacementIndex;
+					const AtlasSnapshotPlacement& placement =
+						sourceSnapshot->placements[placementIndex];
 					const size_t bytes = static_cast<size_t>(placement.rect.width)
 						* placement.rect.height * AtlasBytesPerPixel(resource.pixelMode);
-					if (offset > packed.size() || bytes > packed.size() - offset)
+					if (placement.cacheId != record.cacheId
+						|| std::memcmp(&placement.rect, &record.rect, sizeof(record.rect)) != 0
+						|| !cacheIds.insert(record.cacheId).second)
 						return false;
 					SnapshotGlyphData glyph;
 					glyph.placement = placement;
-					glyph.pixels.assign(packed.data() + offset, packed.data() + offset + bytes);
+					glyph.sourceSnapshot = sourceSnapshot;
+					glyph.sourceOffset = sourceOffsets[placementIndex];
+					glyph.sourceBytes = bytes;
 					glyphs.push_back(std::move(glyph));
-					offset += bytes;
 				}
-				if (offset != packed.size())
-					return false;
 			}
 			if (glyphs.empty())
 				return false;
@@ -677,11 +751,18 @@ namespace fonthook::vectorfont
 				{
 					return lhs.placement.cacheId < rhs.placement.cacheId;
 				});
+				size_t destinationBytes = 0;
 				for (SnapshotGlyphData& glyph : packed)
 				{
 					page.placements.push_back(glyph.placement);
-					page.pixels.insert(page.pixels.end(),
-						glyph.pixels.begin(), glyph.pixels.end());
+					page.pixelSources.push_back({ glyph.sourceSnapshot,
+						glyph.sourceOffset, destinationBytes, glyph.sourceBytes });
+					if (glyph.sourceBytes > std::numeric_limits<size_t>::max()
+						- destinationBytes)
+					{
+						return false;
+					}
+					destinationBytes += glyph.sourceBytes;
 				}
 				pages.push_back(std::move(page));
 				remaining = std::move(nextRemaining);
@@ -831,7 +912,7 @@ namespace fonthook::vectorfont
 				|| header.snapshotHash != snapshotHash
 				|| header.maskContentHash != maskContentHash
 				|| header.atlasContentHash != pageKey.atlasContentHash
-				|| header.reservedFontId != 0
+				|| (header.flags & ~kAtlasSnapshotKnownFlags) != 0
 				|| header.scaleMilli != pageKey.scaleMilli
 				|| header.pixelMode != static_cast<UInt8>(pageKey.pixelMode)
 				|| header.renderMode != static_cast<UInt8>(pageKey.renderMode)
@@ -987,13 +1068,42 @@ namespace fonthook::vectorfont
 		}
 		if (pages.empty() || pages.size() != pageCount)
 			return false;
+		UInt32 replacedPages = 0;
+		bool insertedAllPages = true;
 		{
 			AtlasState& state = State();
 			std::lock_guard<std::mutex> lock(state.atlasMutex);
+			// Blocking prewarm can encounter demand-created pages for the same profile
+			// before the validated snapshot is restored. Keeping those entries would
+			// discard the full resources built above, then incorrectly mark the partial
+			// profile complete. No text shapes exist at this startup barrier, so replace
+			// the whole profile generation atomically and retire any externally-held
+			// DEFAULT wrappers through the normal lifetime path.
+			const AtlasProfileKey profileKey = MakeAtlasProfileKey(key);
+			const auto existingProfile = state.atlasProfiles.find(profileKey);
+			const std::vector<UInt16> existingPages = existingProfile
+				!= state.atlasProfiles.end() ? existingProfile->second.pages
+				: std::vector<UInt16>();
+			for (UInt16 existingPageIndex : existingPages)
+			{
+				AtlasCacheKey existingKey = key;
+				existingKey.pageIndex = existingPageIndex;
+				const auto existing = state.atlasCache.find(existingKey);
+				if (existing == state.atlasCache.end())
+				{
+					UnindexAtlasPage(state, existingKey);
+					continue;
+				}
+				if (existing->second.resource)
+					RetireDefaultGeneration(*existing->second.resource);
+				UnindexAtlasPage(state, existingKey);
+				state.atlasCacheBytes -= existing->second.bytes;
+				state.atlasLru.erase(existing->second.lru);
+				state.atlasCache.erase(existing);
+				++replacedPages;
+			}
 			for (const auto& page : pages)
 			{
-				if (state.atlasCache.find(page.first) != state.atlasCache.end())
-					continue;
 				const size_t storageBytes = page.second->sharedGpuPage ? 0
 					: GetAtlasStorageBytes(page.second->width,
 						page.second->height, page.second->pixelMode, page.second->mipLevels);
@@ -1003,7 +1113,8 @@ namespace fonthook::vectorfont
 				if (!inserted.second)
 				{
 					state.atlasLru.pop_front();
-					continue;
+					insertedAllPages = false;
+					break;
 				}
 				inserted.first->second.cpuMemory.Reset(CpuMemoryCategory::AtlasMetadata,
 					sizeof(AtlasCacheEntry) + 2u * sizeof(AtlasCacheKey)
@@ -1012,13 +1123,18 @@ namespace fonthook::vectorfont
 				state.atlasCacheBytes += storageBytes;
 			}
 			TrimAtlasCache(state);
-			if (IsCompleteAtlasProfileResidentLocked(state, key))
+			if (insertedAllPages && IsCompleteAtlasProfileResidentLocked(state, key))
 				state.completeAtlasProfiles.insert(MakeAtlasProfileKey(key));
+			else
+				insertedAllPages = false;
 		}
+		if (!insertedAllPages)
+			return false;
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: atlas snapshot restored font=%u role=%s pages=%u defaultPoolPages=%u deduplicatedPages=%u deduplicatedGpuBytes=%llu placements=%llu bytes=%llu releasedResetPixelBytes=%llu",
+			"tnvse_freetype_font: atlas snapshot restored font=%u role=%s pages=%u replacedPages=%u defaultPoolPages=%u deduplicatedPages=%u deduplicatedGpuBytes=%llu placements=%llu bytes=%llu releasedResetPixelBytes=%llu",
 			key.fontId, key.byteClass == VectorFontByteClass::DoubleByte
-				? "doubleByte" : "singleByte", pageCount, defaultPoolPages, deduplicatedPages,
+				? "doubleByte" : "singleByte", pageCount, replacedPages,
+			defaultPoolPages, deduplicatedPages,
 			static_cast<unsigned long long>(deduplicatedGpuBytes),
 			static_cast<unsigned long long>(totalPlacements),
 			static_cast<unsigned long long>(totalBytes),
@@ -1049,8 +1165,190 @@ namespace fonthook::vectorfont
 				&& (!needsDoubleByte
 					|| IsCompleteAtlasProfileResidentLocked(state, doubleByteKey));
 		}
-		return HasCompleteGlyphManifest(runtime, config.prewarm)
+		return HasCompleteGlyphManifest(runtime)
 			&& singleByteReady && doubleByteReady && profilesResident;
+	}
+
+	bool HasGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& runtime,
+		float rasterScale)
+	{
+		const FontConfig& config = GetRuntimeConfig(runtime);
+		const size_t roleCount = IsDbcsCodePage(GetFreeTypeTextCodePage()) ? 2 : 1;
+		AtlasState& state = State();
+		std::lock_guard<std::mutex> lock(state.atlasMutex);
+		for (size_t roleIndex = 0; roleIndex < roleCount; ++roleIndex)
+		{
+			AtlasCacheKey key;
+			if (!ResolvePrewarmAtlasKey(config,
+				static_cast<VectorFontByteClass>(roleIndex), rasterScale, key)
+				|| !IsCompleteAtlasProfileResidentLocked(state, key))
+			{
+				return false;
+			}
+			const auto profile = state.atlasProfiles.find(MakeAtlasProfileKey(key));
+			if (profile == state.atlasProfiles.end() || profile->second.pages.empty())
+				return false;
+			for (UInt16 pageIndex : profile->second.pages)
+			{
+				AtlasCacheKey pageKey = key;
+				pageKey.pageIndex = pageIndex;
+				const auto page = state.atlasCache.find(pageKey);
+				if (page == state.atlasCache.end() || !page->second.resource
+					|| !page->second.resource->compactSnapshot
+					|| (page->second.resource->compactSnapshot->sourceHeader.flags
+						& kAtlasSnapshotFlagGloballyRepacked) == 0)
+				{
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	bool TryLoadGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& runtime,
+		float rasterScale)
+	{
+		if (!TryLoadGlyphAtlasSnapshot(runtime, rasterScale))
+			return false;
+		if (HasGloballyRepackedGlyphAtlasSnapshot(runtime, rasterScale))
+			return true;
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: atlas snapshot rejected font=%u reason=not-globally-repacked",
+			GetRuntimeConfig(runtime).fontId);
+		return false;
+	}
+
+	bool EnsureGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& runtime,
+		float rasterScale, bool* repacked)
+	{
+		if (repacked)
+			*repacked = false;
+		if (!TryLoadGlyphAtlasSnapshot(runtime, rasterScale))
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: global atlas repack unavailable font=%u stage=initial-restore",
+				GetRuntimeConfig(runtime).fontId);
+			return false;
+		}
+		if (HasGloballyRepackedGlyphAtlasSnapshot(runtime, rasterScale))
+			return true;
+		if (!SaveGlyphAtlasSnapshot(runtime, rasterScale))
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: global atlas repack unavailable font=%u stage=repack-write",
+				GetRuntimeConfig(runtime).fontId);
+			return false;
+		}
+		if (!RebuildGlyphAtlasFromSnapshot(runtime, rasterScale))
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: global atlas repack unavailable font=%u stage=post-repack-restore",
+				GetRuntimeConfig(runtime).fontId);
+			return false;
+		}
+		if (!HasGloballyRepackedGlyphAtlasSnapshot(runtime, rasterScale))
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: global atlas repack unavailable font=%u stage=repacked-flag-validation",
+				GetRuntimeConfig(runtime).fontId);
+			return false;
+		}
+		if (repacked)
+			*repacked = true;
+		return true;
+	}
+
+	bool DiscardGlyphAtlasSnapshot(RuntimeFont& runtime, float rasterScale)
+	{
+		const FontConfig& config = GetRuntimeConfig(runtime);
+		const size_t roleCount = IsDbcsCodePage(GetFreeTypeTextCodePage()) ? 2 : 1;
+		UInt32 discardedPages = 0;
+		UInt64 discardedBytes = 0;
+		{
+			AtlasState& state = State();
+			std::lock_guard<std::mutex> lock(state.atlasMutex);
+			for (size_t roleIndex = 0; roleIndex < roleCount; ++roleIndex)
+			{
+				AtlasCacheKey baseKey;
+				if (!ResolvePrewarmAtlasKey(config,
+					static_cast<VectorFontByteClass>(roleIndex), rasterScale, baseKey))
+				{
+					continue;
+				}
+				const AtlasProfileKey profileKey = MakeAtlasProfileKey(baseKey);
+				std::vector<AtlasCacheKey> keys;
+				for (const auto& entry : state.atlasCache)
+				{
+					if (MakeAtlasProfileKey(entry.first) == profileKey)
+						keys.push_back(entry.first);
+				}
+				for (const AtlasCacheKey& key : keys)
+				{
+					auto page = state.atlasCache.find(key);
+					if (page == state.atlasCache.end())
+						continue;
+					if (page->second.resource)
+						RetireDefaultGeneration(*page->second.resource);
+					UnindexAtlasPage(state, key);
+					discardedBytes += page->second.bytes;
+					state.atlasCacheBytes -= page->second.bytes;
+					state.atlasLru.erase(page->second.lru);
+					state.atlasCache.erase(page);
+					++discardedPages;
+				}
+				state.completeAtlasProfiles.erase(profileKey);
+			}
+		}
+
+		UInt32 deletedFiles = 0;
+		UInt32 failedFiles = 0;
+		DWORD firstDeleteError = ERROR_SUCCESS;
+		for (size_t roleIndex = 0; roleIndex < roleCount; ++roleIndex)
+		{
+			AtlasCacheKey key;
+			if (!ResolvePrewarmAtlasKey(config,
+				static_cast<VectorFontByteClass>(roleIndex), rasterScale, key))
+			{
+				continue;
+			}
+			for (UInt16 pageIndex = 0; pageIndex < kMaximumAtlasSnapshotPages;
+				++pageIndex)
+			{
+				key.pageIndex = pageIndex;
+				UInt64 ignoredSnapshotHash = 0;
+				UInt64 ignoredMaskContentHash = 0;
+				const std::wstring path = GetAtlasSnapshotPath(runtime, key,
+					ignoredSnapshotHash, ignoredMaskContentHash);
+				if (path.empty())
+					continue;
+				const std::array<std::wstring, 3> candidates = {
+					path, path + L".tmp", path + L".stream.tmp"
+				};
+				for (const std::wstring& candidate : candidates)
+				{
+					if (DeleteFileW(candidate.c_str()))
+					{
+						++deletedFiles;
+					}
+					else
+					{
+						const DWORD error = GetLastError();
+						if (!IsMissingFileError(error))
+						{
+							++failedFiles;
+							if (firstDeleteError == ERROR_SUCCESS)
+								firstDeleteError = error;
+						}
+					}
+				}
+			}
+		}
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: incomplete atlas cache reset font=%u residentPages=%u residentBytes=%llu filesDeleted=%u filesFailed=%u firstDeleteError=%lu",
+			config.fontId, discardedPages,
+			static_cast<unsigned long long>(discardedBytes), deletedFiles, failedFiles,
+			static_cast<unsigned long>(firstDeleteError));
+		return failedFiles == 0;
 	}
 
 	bool SaveGlyphAtlasSnapshotRole(RuntimeFont& runtime,
@@ -1060,14 +1358,6 @@ namespace fonthook::vectorfont
 		AtlasCacheKey key;
 		if (!ResolvePrewarmAtlasKey(config, byteClass, rasterScale, key))
 			return false;
-		if (TryReuseCompleteAtlasProfile(key))
-		{
-			gLog.FormattedMessage(
-				"tnvse_freetype_font: atlas snapshot retained font=%u role=%s",
-				key.fontId, byteClass == VectorFontByteClass::DoubleByte
-					? "doubleByte" : "singleByte");
-			return true;
-		}
 		UInt64 snapshotHash = 0;
 		UInt64 maskContentHash = 0;
 		if (GetAtlasSnapshotPath(runtime, key, snapshotHash, maskContentHash).empty())
@@ -1150,9 +1440,23 @@ namespace fonthook::vectorfont
 		if (pages.empty() || pages.size() > kMaximumAtlasSnapshotPages)
 			return false;
 		const UInt32 pageCount = static_cast<UInt32>(pages.size());
+		auto deleteTemporaryPages = [&]()
+		{
+			for (const SnapshotPageData& page : pages)
+			{
+				if (!page.path.empty())
+					DeleteFileW((page.path + L".tmp").c_str());
+			}
+		};
+		bool prepared = true;
 		for (size_t index = 0; index < pages.size(); ++index)
 		{
 			SnapshotPageData& page = pages[index];
+			if (!MaterializeRepackedSnapshotPixels(page))
+			{
+				prepared = false;
+				break;
+			}
 			page.key.pageIndex = static_cast<UInt16>(index);
 			const AtlasSnapshotStorage storageMode = UsesPlacedLevelZeroSnapshot(page.key)
 				? AtlasSnapshotStorage::PlacedLevelZeroRects
@@ -1164,7 +1468,7 @@ namespace fonthook::vectorfont
 				page.header.snapshotHash = snapshotHash;
 				page.header.maskContentHash = maskContentHash;
 				page.header.atlasContentHash = page.key.atlasContentHash;
-				page.header.reservedFontId = 0;
+				page.header.flags = kAtlasSnapshotFlagGloballyRepacked;
 				page.header.scaleMilli = page.key.scaleMilli;
 				page.header.mipLevels = GetAtlasMipLevelCount(page.header.width,
 					page.header.height, page.key.levelZeroOnly);
@@ -1180,8 +1484,13 @@ namespace fonthook::vectorfont
 				{
 					if (!CacheAtlasSnapshotGlyphPlacement(placement,
 						page.header.width, page.header.height, page.header.pageIndex))
-						return false;
+					{
+						prepared = false;
+						break;
+					}
 				}
+				if (!prepared)
+					break;
 				UInt64 payloadHash = page.placements.empty() ? 1469598103934665603ull
 					: HashAtlasBytes(page.placements.data(),
 						page.placements.size() * sizeof(page.placements[0]));
@@ -1198,12 +1507,18 @@ namespace fonthook::vectorfont
 					ignoredSnapshotHash, ignoredContentHash);
 				if (page.path.empty() || ignoredSnapshotHash != snapshotHash
 					|| ignoredContentHash != maskContentHash)
-					return false;
+				{
+					prepared = false;
+					break;
+				}
 				const std::wstring temporary = page.path + L".tmp";
 				HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr,
 					CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
 				if (file == INVALID_HANDLE_VALUE)
-					return false;
+				{
+					prepared = false;
+					break;
+				}
 				const bool sparse = TryEnableSparseFile(file);
 				const bool written = WriteSequentialFileBytes(file,
 					&page.header, sizeof(page.header))
@@ -1213,16 +1528,38 @@ namespace fonthook::vectorfont
 						page.pixels.size(), sparse)
 					&& FlushFileBuffers(file);
 				CloseHandle(file);
-				if (!written || !MoveFileExW(temporary.c_str(), page.path.c_str(),
-					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+				if (!written)
 				{
-					DeleteFileW(temporary.c_str());
-					return false;
+					prepared = false;
+					break;
 				}
 				totalBytes += page.header.pixelBytes;
 				totalPlacements += page.header.placementCount;
 				snapshotGpuBytes += GetAtlasStorageBytes(page.header.width,
 					page.header.height, page.key.pixelMode, page.header.mipLevels);
+				std::vector<UInt8>().swap(page.pixels);
+		}
+		if (!prepared)
+		{
+			deleteTemporaryPages();
+			return false;
+		}
+		{
+			std::lock_guard<std::mutex> lock(State().atlasMutex);
+			// Committing any page changes the disk generation that the resident
+			// CompactAtlasSnapshot objects describe. Invalidate before the first
+			// replacement so a partial publication can never remain reusable.
+			State().completeAtlasProfiles.erase(MakeAtlasProfileKey(key));
+		}
+		for (const SnapshotPageData& page : pages)
+		{
+			const std::wstring temporary = page.path + L".tmp";
+			if (!MoveFileExW(temporary.c_str(), page.path.c_str(),
+				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+			{
+				deleteTemporaryPages();
+				return false;
+			}
 		}
 		for (UInt32 stalePage = pageCount; stalePage < sourcePageCount; ++stalePage)
 		{
@@ -1234,11 +1571,6 @@ namespace fonthook::vectorfont
 				ignoredSnapshotHash, ignoredContentHash);
 			if (!stalePath.empty())
 				DeleteFileW(stalePath.c_str());
-		}
-		{
-			std::lock_guard<std::mutex> lock(State().atlasMutex);
-			if (IsCompleteAtlasProfileResidentLocked(State(), key))
-				State().completeAtlasProfiles.insert(MakeAtlasProfileKey(key));
 		}
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: atlas snapshot saved font=%u role=%s pages=%u->%u placements=%llu bytes=%llu gpuBytes=%llu->%llu saved=%llu tail=%ux%u",

@@ -734,6 +734,12 @@ namespace fonthook::vectorfont
 			}
 		}
 
+		bool LoadCompactAtlasSnapshotPixels(const CompactAtlasSnapshot& snapshot,
+			std::vector<UInt8>& pixels)
+		{
+			return LoadCompactSnapshotPixels(snapshot, pixels);
+		}
+
 		bool WriteCompactSnapshotPixels(UInt8* destination, LONG pitch,
 			AtlasPixelMode destinationMode, const AtlasResource& resource)
 		{

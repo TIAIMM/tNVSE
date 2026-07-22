@@ -194,6 +194,8 @@ namespace fonthook::vectorfont
 	}
 
 	constexpr UInt32 kAtlasSnapshotVersion = 11;
+	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
+	constexpr UInt32 kAtlasSnapshotKnownFlags = kAtlasSnapshotFlagGloballyRepacked;
 	// Version 11 persists the stable page, inverse-size, and normalized UV subset
 	// of AtlasGlyphPlacement. Runtime-only atlas identity and generation are rebound
 	// after the validated prewarm snapshot has created its current AtlasResource.
@@ -207,7 +209,7 @@ namespace fonthook::vectorfont
 		UInt64 snapshotHash = 0;
 		UInt64 maskContentHash = 0;
 		UInt64 atlasContentHash = 0;
-		UInt32 reservedFontId = 0;
+		UInt32 flags = 0;
 		UInt32 scaleMilli = 0;
 		UInt32 width = 0;
 		UInt32 height = 0;
@@ -591,6 +593,8 @@ namespace fonthook::vectorfont
 		AtlasPixelMode mode, UInt32 mipLevels);
 	size_t GetResidentMaskBytes(const AtlasResource& resource);
 	size_t GetCompactSnapshotBytes(const AtlasResource& resource);
+	bool LoadCompactAtlasSnapshotPixels(const CompactAtlasSnapshot& snapshot,
+		std::vector<UInt8>& pixels);
 	NiTexture* GetAtlasTexture(const AtlasResource& resource);
 	NiTexturingProperty* CreateManagedAtlasProperty(UInt32 width, UInt32 height,
 		AtlasPixelMode mode, UInt32 mipLevels, const std::vector<UInt8>& source,

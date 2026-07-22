@@ -114,12 +114,11 @@ namespace fonthook::vectorfont
 		High = 2,
 	};
 
-	enum class FontPrewarmMode : UInt8
-	{
-		None = 0,
-		Common = 1,
-		CodePage = 2,
-	};
+	// Coverage revision 3 means every Windows-decodable unit in the active code
+	// page. The former codepage mode used value 2 and covered only DCFGCF ranges,
+	// so it must not satisfy the new completion contract. Zero remains the
+	// in-progress manifest state.
+	inline constexpr UInt8 kCompleteCodePagePrewarmIdentity = 3;
 
 	enum class VerticalMetricsMode : UInt8
 	{
@@ -139,7 +138,6 @@ namespace fonthook::vectorfont
 	{
 		UInt32 fontId = 0;
 		std::array<ByteStyle, 2> styles;
-		FontPrewarmMode prewarm = FontPrewarmMode::None;
 		VerticalMetricsMode verticalMetrics = VerticalMetricsMode::FreeType;
 		float baseline = 0.0f;
 		FontColorStyle fontColor;
@@ -329,8 +327,9 @@ namespace fonthook::vectorfont
 	bool GetFreeTypeFontCacheDirectory(std::wstring& arDirectory);
 	void MarkFreeTypeFontCacheFileUsed(const std::wstring& arPath);
 	void DeleteUnusedFreeTypeFontCacheFiles();
-	bool HasCompleteGlyphManifest(RuntimeFont& arRuntime, FontPrewarmMode aeMode);
-	void MarkGlyphManifestComplete(RuntimeFont& arRuntime, FontPrewarmMode aeMode);
+	bool HasCompleteGlyphManifest(RuntimeFont& arRuntime);
+	void MarkGlyphManifestComplete(RuntimeFont& arRuntime);
+	const std::vector<UInt16>& GetCompleteCodePageEncodedUnits();
 	float GetGlyphBaselineOffset(const RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph);
 	void GetGlyphBitmaps(RuntimeFont& arRuntime,
@@ -347,6 +346,9 @@ namespace fonthook::vectorfont
 		float afRasterScale);
 	void FlushGlyphBitmapDiskCache();
 	UInt64 ReleaseGlyphBitmapDiskCacheMappings();
+	bool ResetPersistentFontCachesForRegeneration(RuntimeFont& arRuntime);
+	bool DeleteCompleteCodePageGlyphBitmapDiskCaches(
+		const std::vector<UInt32>& arFontIds);
 	void SetBitmapCacheReducedAfterPrewarm(bool abReduced);
 	bool HardShadowIncludesGlow(const FontConfig& arConfig);
 	bool HardShadowIncludesOutline(const FontConfig& arConfig);
@@ -360,6 +362,11 @@ namespace fonthook::vectorfont
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& arBitmaps,
 		float afRasterScale);
 	bool TryLoadGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
+	bool TryLoadGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& arRuntime,
+		float afRasterScale);
+	bool EnsureGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& arRuntime,
+		float afRasterScale, bool* apRepacked = nullptr);
+	bool DiscardGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool SaveGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool RebuildGlyphAtlasFromSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	void QueueFontPrewarm(UInt32 auiFontId);

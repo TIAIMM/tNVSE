@@ -83,7 +83,6 @@ registered extended fonts.
 <tNVSE>
   <fonts>
     <font id="1"
-          prewarm="none"
           pixelSize="24"
           fontColor="#FFFFFF"
           fontAlpha="1"
@@ -204,21 +203,25 @@ zero retains proportional advances.
 
 ## Blocking prewarm and persistent caches
 
-`prewarm="none"` is the default and preserves fully demand-driven atlas
-generation. In FreeType-only mode, both `prewarm="common"` and
-`prewarm="codepage"` enumerate exactly the 224 Windows-1252 byte units
-`0x20-0xFF`; no double-byte scan is performed. With the multibyte hook active,
-`common` prepares the valid single-byte units and a common double-byte
-repertoire. Under CP936 that repertoire is the complete GB2312 set; other
-supported DBCS code pages retain their limit of up to 7000 valid double-byte
-units. `codepage` follows DCFGCF's explicit encoding ranges, with CP936 using
-the complete GBK profile. Prewarming begins after the configured fonts are activated. On
+Startup prewarming is mandatory for every configured FreeType font and has no
+XML mode switch. In FreeType-only mode it enumerates the 224 visible
+Windows-1252 byte units `0x20-0xFF`; no double-byte scan is performed. With the
+multibyte hook active, it walks the same complete, validated encoded-unit table
+used by the persistent manifest. This includes every Windows-decodable pair in
+the active CP936, CP950, CP932, or CP949 code page rather than a GB2312/common
+subset or DCFGCF range approximation. Each unit resolves through its complete
+single-byte or double-byte face/fallback chain. Prewarming begins after the
+configured fonts are activated. On
 the first game-loop callback, tNVSE synchronously drains the complete queue at
 `fFreeTypeFontResolutionScale`; it does not wait for a menu root or device
 scale. The game remains blocked until every queued profile reports `complete`,
 `atlas-full`, or `cancelled`. Prewarm and demand rendering share one canonical
 source scale. UIO-derived calls reuse that mask and atlas profile
 instead of generating per-zoom variants.
+The full-table coverage contract uses persistent completion identity 3. Older
+mode-2 manifests and their DCFG-range atlas snapshots cannot satisfy it, so the
+first launch after this change discards those construction artifacts and builds
+the complete table once.
 While this startup barrier is active, a non-activating English progress window
 runs on a separate UI thread. It shows the current font ID, SDF/ARGB-fallback route,
 the active scan or snapshot stage, and overall progress. The window remains
@@ -233,10 +236,9 @@ texture allocation/upload fails. Full code-page prewarming generates every mask
 that runtime rendering can request for every valid unit. Consequently the SDF
 fill is prewarmed for the complete code page and every SDF effect or hard shadow
 reuses that mask. When Shader Loader is unavailable, prewarm generates only the
-coverage/effect masks needed by the ARGB fallback. `common` mode remains limited
-to its selected common-character profile.
+coverage/effect masks needed by the ARGB fallback.
 
-Generated SDF and ARGB-fallback masks are persisted under
+Generated SDF and ARGB-fallback masks are staged under
 `Data\NVSE\plugins\tnvse\fontdata`. Each mask profile begins with a dense
 glyph-index table, so a glyph lookup is one fixed-offset read rather than a
 record scan or hash-table rebuild. On later launches tNVSE validates and loads
@@ -252,27 +254,54 @@ that numeric-font-ID form and uses the hash suffix, so equivalent masks remain
 shareable across font IDs. Older hash-only names are intentionally ignored.
 Existing profiles may be mapped while blocking prewarm scans them. After the
 prewarm flush, tNVSE unmaps every `.tnvfmask` view and disables new whole-file
-mappings for the rest of the process. Later cache misses use the retained dense
-index and bounded positioned reads, avoiding permanent address-space cost.
+mappings for the rest of the process. If every configured profile completed the
+mandatory full-code-page pass, every configured runtime (including font-ID
+aliases of a shared profile) is ready, both byte-role atlas profiles were reread
+from disk after the final global repack, and the complete manifest is valid,
+tNVSE closes all open bitmap profiles and deletes every managed `.tnvfmask` file
+immediately. Persistent bitmap creation is then disabled for every covered font
+ID, including aliases, for the rest of the process. A managed-pool fallback,
+unavailable configured runtime, or cancelled job may retain its masks. This
+makes `.tnvfmask` a transactional construction cache for complete code-page
+atlases rather than a second permanent copy of their glyph pixels. A later
+demand-only font that was not part of that complete set may create its own mask
+profile normally.
+
+If startup validation finds an incomplete manifest, a missing or corrupt atlas
+page, a snapshot without the final global-repack marker, or a failed
+global-repack generation, tNVSE does not resume or repair that partial
+transaction. It first evicts the affected resident atlas generation, deletes
+its manifest and atlas snapshots, clears all shared construction-mask profiles,
+and then performs a new code-page pass from an empty cache state. A stream or
+finalization failure applies the same cleanup immediately, so half-published
+files are not candidates on the next launch. Global repacking is allowed only
+inside the current generation transaction after all streamed pages have been
+published.
 
 The same directory also contains three startup-oriented cache layers. A
 `.tnvfhash` record reuses the font content hash when file identity, size and
 last-write time still match. A v9 `.tnvfmanifest` stores the encoded unit's
 Unicode value, fallback face/glyph identity, and serialized `FontLetter` metrics
 as a sorted sparse table containing the 256 single-byte values plus only valid
-double-byte units from the active code page. Lookup uses binary search directly
-in the mapped records. Runtime fonts with the same `manifestHash` share one file
+double-byte units from the active code page. A complete manifest is validated
+once into a direct encoded-unit index, and its double-byte `FontLetter` metrics
+are copied into the runtime direct table. Runtime fonts with the same
+`manifestHash` share one file
 handle, mapping handle, and mapped view instead of mapping that file once per
 font ID. One `_p<page>.tnvfatlas` snapshot per atlas page stores
-the stable glyph-ID placement map. Snapshot v9 records the byte role explicitly
-and uses `stb_rect_pack` skyline packing. It is a hard format cut: v8 snapshots
-are not read or migrated. Snapshot version 10 removes the former A8 grayscale
-and mixed grayscale/SDF profiles; version 9 and older snapshots are not restored.
+the stable glyph-ID placement map. Snapshot v11 records the byte role and the
+validated runtime UV subset explicitly and uses `stb_rect_pack` skyline packing.
+Older snapshot layouts are not read or migrated.
 SDF profiles are packed in
 deterministic height/width/glyph-ID order, can reduce the page count, and shrink
 every page to the smallest usable power-of-two dimensions. Immediately after a
-new prewarm snapshot and manifest are committed, startup discards the scan-order
-live pages and restores both byte-role profiles from those files once. The first
+new streamed prewarm snapshot and manifest are committed, startup invalidates
+any complete resident profile whose content-addressed backing files were just
+replaced, then restores the bounded shelf pages and globally repacks their
+metadata while rereading source pixels one page at a time, writes the complete
+compact page set to temporary files, and publishes it. It then discards the
+shelf generation and restores both
+byte-role profiles from the compact files once. The first
 run therefore enters the game with the same compact layout as later cache-hit
 launches instead of waiting for another restart. No text shapes exist at this
 blocking startup point, so replacing the page objects cannot invalidate live
@@ -281,7 +310,9 @@ rather than reusing skyline holes. SDF pages store only the placed
 level-zero rectangles;
 other pages retain their complete mip chain. Each page records and validates
 the total page count. After a successful full prewarm every page is written
-atomically, then the manifest is marked complete. A later launch restores the
+through temporary files, then the manifest is marked complete. Only after the
+compact page set has been reread and both roles are resident may complete
+code-page mask files be deleted. A later launch restores the
 complete page set directly and skips code-page enumeration, per-glyph mask
 loading, packing, and mip generation.
 Every layer includes its schema/layout/mask/font/code-page inputs in its hash;
@@ -298,7 +329,7 @@ must still match.
 
 `bDeleteUnusedFreeTypeFontCache=1` removes stale `.tnvfmask`, `.tnvfhash`,
 `.tnvfmanifest`, and `.tnvfatlas` files that were not accessed by the current
-run after every configured prewarm atlas has been generated or restored
+run after every configured font atlas has been generated or restored
 successfully. Cleanup is skipped if any prewarm job fails or is cancelled, and
 unknown files in `fontdata` are never removed. The option defaults to `0`.
 

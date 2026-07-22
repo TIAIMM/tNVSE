@@ -21,7 +21,6 @@ namespace fonthook::vectorfont
 {
 	namespace
 	{
-		constexpr UInt32 kCommonDoubleByteLimit = 7000;
 		constexpr UInt32 kMaximumCandidatesPerBatch = 32768;
 		constexpr UInt32 kMaximumGlyphsPerBatch = 4096;
 		constexpr size_t kMaximumPrewarmBatchBytes = 24u * 1024u * 1024u;
@@ -287,18 +286,14 @@ namespace fonthook::vectorfont
 			UInt64 maskGenerationHash = 0;
 			UInt64 shaderEffectHash = 0;
 			UInt32 codePage = 0;
-			FontPrewarmMode mode = FontPrewarmMode::None;
-			UInt32 singleByte = 0x20;
-			UInt32 leadByte = 0x81;
-			UInt32 leadByteEnd = 0xFE;
-			UInt32 trailByte = 0x40;
-			UInt32 trailByteStart = 0x40;
+			const std::vector<UInt16>* encodedUnits = nullptr;
+			size_t encodedUnitIndex = 0;
+			size_t encodedUnitStart = 0;
 			UInt32 validDoubleByteCount = 0;
 			UInt32 rasterizedGlyphCount = 0;
 			UInt32 sdfGlyphCount = 0;
 			UInt32 targetUnitCount = 0;
 			UInt32 rasterScaleMilli = 0;
-			bool scanningDoubleByte = false;
 		};
 
 		std::deque<PrewarmJob> s_jobs;
@@ -320,7 +315,8 @@ namespace fonthook::vectorfont
 			add(&config.layoutHash, sizeof(config.layoutHash));
 			add(&config.maskGenerationHash, sizeof(config.maskGenerationHash));
 			add(&config.shaderEffectHash, sizeof(config.shaderEffectHash));
-			add(&config.prewarm, sizeof(config.prewarm));
+			add(&kCompleteCodePagePrewarmIdentity,
+				sizeof(kCompleteCodePagePrewarmIdentity));
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			add(&codePage, sizeof(codePage));
 			return hash;
@@ -331,273 +327,38 @@ namespace fonthook::vectorfont
 			return job.layoutHash == config.layoutHash
 				&& job.maskGenerationHash == config.maskGenerationHash
 				&& job.shaderEffectHash == config.shaderEffectHash
-				&& job.codePage == GetFreeTypeTextCodePage()
-				&& job.mode == config.prewarm;
-		}
-
-		bool IsInRange(UInt32 value, UInt32 first, UInt32 last)
-		{
-			return value >= first && value <= last;
-		}
-
-		bool IsGb2312DoubleByteUnit(UInt32 lead, UInt32 trail)
-		{
-			if (lead == 0xA1 || lead == 0xA3)
-				return IsInRange(trail, 0xA1, 0xFE);
-			if (lead == 0xA2)
-				return IsInRange(trail, 0xB1, 0xE2)
-					|| IsInRange(trail, 0xE5, 0xEE)
-					|| IsInRange(trail, 0xF1, 0xFC);
-			if (lead == 0xA4)
-				return IsInRange(trail, 0xA1, 0xF3);
-			if (lead == 0xA5)
-				return IsInRange(trail, 0xA1, 0xF6);
-			if (lead == 0xA6)
-				return IsInRange(trail, 0xA1, 0xB8)
-					|| IsInRange(trail, 0xC1, 0xD8);
-			if (lead == 0xA7)
-				return IsInRange(trail, 0xA1, 0xC1)
-					|| IsInRange(trail, 0xD1, 0xF1);
-			if (lead == 0xA8)
-				return IsInRange(trail, 0xA1, 0xBA)
-					|| IsInRange(trail, 0xC5, 0xE9);
-			if (lead == 0xA9)
-				return IsInRange(trail, 0xA4, 0xEF);
-			if (IsInRange(lead, 0xB0, 0xD6)
-				|| IsInRange(lead, 0xD8, 0xF7))
-			{
-				return IsInRange(trail, 0xA1, 0xFE);
-			}
-			return lead == 0xD7 && IsInRange(trail, 0xA1, 0xF9);
-		}
-
-		bool IsCommonCodePageUnit(UInt32 codePage, UInt32 lead, UInt32 trail)
-		{
-			if (codePage == 936)
-				return IsGb2312DoubleByteUnit(lead, trail);
-			const char bytes[2] = {
-				static_cast<char>(lead), static_cast<char>(trail)
-			};
-			UInt32 decoded = 0;
-			return TryDecodeDoubleByteForCodePage(bytes, codePage, decoded);
-		}
-
-		bool IsDcfgCodePageUnit(UInt32 codePage, UInt32 lead, UInt32 trail)
-		{
-			const UInt32 encoded = (lead << 8) | trail;
-			switch (codePage)
-			{
-			case 936:
-				if (IsInRange(lead, 0x81, 0xA0)
-					&& IsInRange(trail, 0x40, 0xFE) && trail != 0x7F)
-					return true;
-				if (IsInRange(encoded, 0xA6A1, 0xA6B8)
-					|| IsInRange(encoded, 0xA6C1, 0xA6D8)
-					|| IsInRange(encoded, 0xA6E0, 0xA6EB)
-					|| IsInRange(encoded, 0xA6EE, 0xA6F2)
-					|| IsInRange(encoded, 0xA6F4, 0xA6F5)
-					|| IsInRange(encoded, 0xA7A1, 0xA7C1)
-					|| IsInRange(encoded, 0xA7D1, 0xA7F1)
-					|| IsInRange(encoded, 0xA840, 0xA895)
-					|| IsInRange(encoded, 0xA8A1, 0xA8BB)
-					|| IsInRange(encoded, 0xA8BD, 0xA8BE)
-					|| encoded == 0xA8C1
-					|| IsInRange(encoded, 0xA8C5, 0xA8E9)
-					|| IsInRange(encoded, 0xA940, 0xA957)
-					|| IsInRange(encoded, 0xA959, 0xA95A)
-					|| encoded == 0xA95C
-					|| IsInRange(encoded, 0xA960, 0xA988)
-					|| encoded == 0xA996)
-					return trail != 0x7F;
-				if (IsInRange(lead, 0xAA, 0xFC)
-					&& IsInRange(trail, 0x40, 0xA0) && trail != 0x7F)
-					return true;
-				if (IsInRange(encoded, 0xFE40, 0xFE4F))
-					return true;
-				if (lead == 0xA1 && IsInRange(trail, 0xA1, 0xFE))
-					return true;
-				if (lead == 0xA3 && IsInRange(trail, 0xA1, 0xFE))
-					return true;
-				if (lead == 0xA4 && IsInRange(trail, 0xA1, 0xF3))
-					return true;
-				if (lead == 0xA5 && IsInRange(trail, 0xA1, 0xF6))
-					return true;
-				return IsInRange(lead, 0xB0, 0xF7)
-					&& IsInRange(trail, 0xA1, 0xFE);
-			case 950:
-				if (IsInRange(lead, 0xA1, 0xA2))
-					return IsInRange(trail, 0x40, 0x7E)
-						|| IsInRange(trail, 0xA1, 0xFE);
-				if (lead == 0xA3)
-					return IsInRange(trail, 0x40, 0x7E)
-						|| IsInRange(trail, 0xA1, 0xBF) || trail == 0xE1;
-				if (IsInRange(lead, 0xA4, 0xC5)
-					|| IsInRange(lead, 0xC9, 0xF9))
-					return IsInRange(trail, 0x40, 0x7E)
-						|| IsInRange(trail, 0xA1, 0xFE);
-				return lead == 0xC6 && IsInRange(trail, 0x40, 0x7E);
-			case 932:
-				if (lead == 0x81)
-					return IsInRange(encoded, 0x8140, 0x81AC)
-						|| IsInRange(encoded, 0x81B8, 0x81BF)
-						|| IsInRange(encoded, 0x81C8, 0x81CE)
-						|| IsInRange(encoded, 0x81DA, 0x81E8)
-						|| IsInRange(encoded, 0x81F0, 0x81F7)
-						|| encoded == 0x81FC;
-				if (lead == 0x82)
-					return IsInRange(encoded, 0x824F, 0x8258)
-						|| IsInRange(encoded, 0x8260, 0x8279)
-						|| IsInRange(encoded, 0x8281, 0x829A)
-						|| IsInRange(encoded, 0x829F, 0x82F1);
-				if (lead == 0x83)
-					return IsInRange(encoded, 0x8340, 0x8396)
-						|| IsInRange(encoded, 0x839F, 0x83B6)
-						|| IsInRange(encoded, 0x83BF, 0x83D6);
-				if (lead == 0x84)
-					return IsInRange(encoded, 0x8440, 0x8460)
-						|| IsInRange(encoded, 0x8470, 0x8491)
-						|| IsInRange(encoded, 0x849F, 0x84BE);
-				if (lead == 0x87)
-					return IsInRange(encoded, 0x8740, 0x875D)
-						|| IsInRange(encoded, 0x875F, 0x8775)
-						|| encoded == 0x877E
-						|| IsInRange(encoded, 0x8780, 0x879C);
-				if (lead == 0x88)
-					return IsInRange(encoded, 0x889F, 0x88FC);
-				if (IsInRange(lead, 0x89, 0x9F)
-					|| IsInRange(lead, 0xE0, 0xE9)
-					|| IsInRange(lead, 0xFA, 0xFB))
-					return IsInRange(trail, 0x40, 0x7E)
-						|| IsInRange(trail, 0x80, 0xFC);
-				if (lead == 0xEA)
-					return IsInRange(trail, 0x40, 0x7E)
-						|| IsInRange(trail, 0x80, 0xA4);
-				if (lead == 0xED)
-					return IsInRange(trail, 0x40, 0x7E)
-						|| IsInRange(trail, 0x80, 0xEC)
-						|| IsInRange(trail, 0xEF, 0xFC);
-				if (lead == 0xEE)
-					return IsInRange(trail, 0x40, 0x7E)
-						|| IsInRange(trail, 0x80, 0xFC);
-				return lead == 0xFC && IsInRange(trail, 0x40, 0x4B);
-			case 949:
-				if (IsInRange(lead, 0x81, 0xC5))
-					return IsInRange(trail, 0x41, 0x5A)
-						|| IsInRange(trail, 0x60, 0x7A)
-						|| IsInRange(trail, 0x81, 0xFE);
-				if (lead == 0xC6)
-					return IsInRange(trail, 0x41, 0x52)
-						|| IsInRange(trail, 0xA1, 0xFE);
-				return IsInRange(lead, 0xC7, 0xC8)
-					&& IsInRange(trail, 0xA1, 0xFE);
-			default:
-				return false;
-			}
-		}
-
-		void ConfigureCommonRange(PrewarmJob& job)
-		{
-			if (job.mode != FontPrewarmMode::Common)
-				return;
-			switch (job.codePage)
-			{
-			case 936:
-				job.leadByte = 0xA1;
-				job.leadByteEnd = 0xF7;
-				job.trailByte = job.trailByteStart = 0xA1;
-				break;
-			case 950:
-				job.leadByte = 0xA1;
-				job.leadByteEnd = 0xC6;
-				break;
-			case 932:
-				job.leadByte = 0x81;
-				job.leadByteEnd = 0xEA;
-				break;
-			case 949:
-				job.leadByte = 0xA1;
-				job.leadByteEnd = 0xC8;
-				job.trailByte = job.trailByteStart = 0xA1;
-				break;
-			default:
-				job.leadByteEnd = 0;
-				break;
-			}
-		}
-
-		bool HasCommonDoubleByteLimit(const PrewarmJob& job)
-		{
-			return job.mode == FontPrewarmMode::Common && job.codePage != 936;
+				&& job.codePage == GetFreeTypeTextCodePage();
 		}
 
 		bool NextEncodedUnit(PrewarmJob& job, std::array<char, 2>& bytes,
 			size_t& length)
 		{
-			while (!job.scanningDoubleByte)
-			{
-				if (job.singleByte <= 0xFF)
-				{
-					bytes[0] = static_cast<char>(job.singleByte++);
-					length = 1;
-					return true;
-				}
-				job.scanningDoubleByte = true;
-			}
-			while (job.leadByte <= job.leadByteEnd)
-			{
-				while (job.trailByte <= 0xFE)
-				{
-					const UInt32 trail = job.trailByte++;
-					bytes[0] = static_cast<char>(job.leadByte);
-					bytes[1] = static_cast<char>(trail);
-					const bool selected = job.mode == FontPrewarmMode::CodePage
-						? IsDcfgCodePageUnit(job.codePage, job.leadByte, trail)
-						: IsCommonCodePageUnit(job.codePage, job.leadByte, trail);
-					if (selected)
-					{
-						length = 2;
-						return true;
-					}
-				}
-				++job.leadByte;
-				job.trailByte = job.trailByteStart;
-			}
-			return false;
+			if (!job.encodedUnits)
+				return false;
+			const std::vector<UInt16>& units = *job.encodedUnits;
+			if (job.encodedUnitIndex >= units.size())
+				return false;
+			const UInt16 encoded = units[job.encodedUnitIndex++];
+			bytes[0] = static_cast<char>(encoded > 0xFF
+				? encoded >> 8 : encoded);
+			bytes[1] = static_cast<char>(encoded & 0xFF);
+			length = encoded > 0xFF ? 2 : 1;
+			return true;
 		}
 
 		void ResetPrewarmScan(PrewarmJob& job, UInt32 rasterScaleMilli)
 		{
-			job.singleByte = 0x20;
-			job.leadByte = 0x81;
-			job.leadByteEnd = 0xFE;
-			job.trailByte = 0x40;
-			job.trailByteStart = 0x40;
+			const std::vector<UInt16>& units = GetCompleteCodePageEncodedUnits();
+			job.encodedUnits = &units;
+			job.encodedUnitStart = static_cast<size_t>(std::lower_bound(
+				units.begin(), units.end(), static_cast<UInt16>(0x20)) - units.begin());
+			job.encodedUnitIndex = job.encodedUnitStart;
 			job.validDoubleByteCount = 0;
 			job.rasterizedGlyphCount = 0;
 			job.sdfGlyphCount = 0;
 			job.rasterScaleMilli = rasterScaleMilli;
-			job.scanningDoubleByte = false;
-			if (!IsDbcsCodePage(job.codePage))
-				job.leadByteEnd = 0;
-			ConfigureCommonRange(job);
-		}
-
-		UInt32 CountPrewarmDoubleByteUnits(const PrewarmJob& job)
-		{
-			UInt32 count = 0;
-			for (UInt32 lead = job.leadByte; lead <= job.leadByteEnd; ++lead)
-			{
-				for (UInt32 trail = job.trailByteStart; trail <= 0xFE; ++trail)
-				{
-					const bool selected = job.mode == FontPrewarmMode::CodePage
-						? IsDcfgCodePageUnit(job.codePage, lead, trail)
-						: IsCommonCodePageUnit(job.codePage, lead, trail);
-					if (selected && ++count >= kCommonDoubleByteLimit
-						&& HasCommonDoubleByteLimit(job))
-						return count;
-				}
-			}
-			return count;
+			job.targetUnitCount = static_cast<UInt32>(
+				units.size() - job.encodedUnitStart);
 		}
 
 		size_t SaturatingMultiply(size_t left, size_t right)
@@ -649,12 +410,8 @@ namespace fonthook::vectorfont
 
 		float GetPrewarmJobProgress(const PrewarmJob& job)
 		{
-			constexpr UInt32 singleByteUnits = 0x100 - 0x20;
-			const UInt32 completedSingle = job.scanningDoubleByte
-				? singleByteUnits
-				: std::min(singleByteUnits,
-					job.singleByte > 0x20 ? job.singleByte - 0x20 : 0);
-			const UInt32 completed = completedSingle + job.validDoubleByteCount;
+			const size_t completed = job.encodedUnitIndex >= job.encodedUnitStart
+				? job.encodedUnitIndex - job.encodedUnitStart : 0;
 			return job.targetUnitCount
 				? std::min(1.0f, static_cast<float>(completed) / job.targetUnitCount)
 				: 0.0f;
@@ -681,9 +438,8 @@ namespace fonthook::vectorfont
 		void FinishJob(const PrewarmJob& job, const char* status)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm font=%u mode=%s scale=%.3f glyphs=%u doubleByte=%u sdfGlyphs=%u status=%s",
+				"tnvse_freetype_font: prewarm font=%u coverage=full-codepage scale=%.3f glyphs=%u doubleByte=%u sdfGlyphs=%u status=%s",
 				job.fontId,
-				job.mode == FontPrewarmMode::CodePage ? "codepage" : "common",
 				job.rasterScaleMilli ? job.rasterScaleMilli / 1000.0f : 0.0f,
 				job.rasterizedGlyphCount, job.validDoubleByteCount,
 				job.sdfGlyphCount, status);
@@ -693,7 +449,7 @@ namespace fonthook::vectorfont
 	void QueueFontPrewarm(UInt32 fontId)
 	{
 		const FontConfig* config = FindConfig(fontId);
-		if (!config || config->prewarm == FontPrewarmMode::None)
+		if (!config)
 			return;
 		if (!EnsureRuntimeFont(fontId))
 		{
@@ -726,15 +482,13 @@ namespace fonthook::vectorfont
 		job.maskGenerationHash = config->maskGenerationHash;
 		job.shaderEffectHash = config->shaderEffectHash;
 		job.codePage = GetFreeTypeTextCodePage();
-		job.mode = config->prewarm;
 		ResetPrewarmScan(job, 0);
-		job.targetUnitCount = (0x100 - 0x20) + CountPrewarmDoubleByteUnits(job);
+		const UInt32 targetUnitCount = job.targetUnitCount;
 		s_jobs.push_back(std::move(job));
 		SetBitmapCacheReducedAfterPrewarm(false);
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: queued prewarm font=%u mode=%s codePage=%u",
-			fontId, config->prewarm == FontPrewarmMode::CodePage
-				? "codepage" : "common", GetFreeTypeTextCodePage());
+			"tnvse_freetype_font: queued prewarm font=%u coverage=full-codepage codePage=%u units=%u",
+			fontId, GetFreeTypeTextCodePage(), targetUnitCount);
 	}
 
 	void QueueConfiguredFontPrewarms()
@@ -745,10 +499,7 @@ namespace fonthook::vectorfont
 		std::vector<UInt32> fontIds;
 		fontIds.reserve(g_configs.size());
 		for (const auto& entry : g_configs)
-		{
-			if (entry.second.prewarm != FontPrewarmMode::None)
-				fontIds.push_back(entry.first);
-		}
+			fontIds.push_back(entry.first);
 		std::sort(fontIds.begin(), fontIds.end());
 		for (UInt32 fontId : fontIds)
 			QueueFontPrewarm(fontId);
@@ -766,6 +517,8 @@ namespace fonthook::vectorfont
 		const UInt32 rasterScaleMilli = static_cast<UInt32>(std::lround(
 			rasterScale * 1000.0f));
 		const UInt32 queuedFonts = static_cast<UInt32>(s_jobs.size());
+		std::vector<UInt32> verifiedCodePageFonts;
+		verifiedCodePageFonts.reserve(queuedFonts);
 		const ULONGLONG started = GetTickCount64();
 		UInt32 batches = 0;
 		UInt32 completedFonts = 0;
@@ -804,13 +557,28 @@ namespace fonthook::vectorfont
 				continue;
 			}
 			if (g_bEnableFreeTypeDefaultPoolAtlas
-				&& TryLoadGlyphAtlasSnapshot(*runtime, rasterScale))
+				&& TryLoadGloballyRepackedGlyphAtlasSnapshot(*runtime, rasterScale))
 			{
 				FinishJob(job, "snapshot");
+				verifiedCodePageFonts.push_back(job.fontId);
 				++completedFonts;
 				++finishedFonts;
 				continue;
 			}
+			// Any failed completeness check makes the old construction transaction
+			// unusable. Discard every dependent artifact before this job enters the
+			// generator; partial manifests, masks and atlas pages are never mixed with
+			// the fresh code-page pass.
+			CancelStreamingPrewarmAtlas(*runtime);
+			const bool atlasDiscarded = DiscardGlyphAtlasSnapshot(*runtime,
+				rasterScale);
+			const bool persistentDiscarded =
+				ResetPersistentFontCachesForRegeneration(*runtime);
+			ResetPrewarmScan(job, rasterScaleMilli);
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: cache miss regenerated from empty state font=%u atlas=%s persistent=%s",
+				job.fontId, atlasDiscarded ? "discarded" : "delete-failed",
+				persistentDiscarded ? "discarded" : "invalidate-failed");
 			cacheMisses.push_back(std::move(job));
 		}
 		s_jobs.swap(cacheMisses);
@@ -859,7 +627,6 @@ namespace fonthook::vectorfont
 			const UInt32 candidateLimit = std::min(kMaximumCandidatesPerBatch,
 				std::max<UInt32>(256, batchGlyphLimit * 8u));
 			const bool needsGrayFill = !shaderSdf;
-			const bool hasCommonDoubleByteLimit = HasCommonDoubleByteLimit(job);
 			bool exhausted = false;
 			bool failed = false;
 
@@ -886,15 +653,7 @@ namespace fonthook::vectorfont
 					if (!ResolvePrewarmGlyph(*runtime, bytes.data(), length, glyph))
 						continue;
 					if (length == 2)
-					{
-						if (hasCommonDoubleByteLimit
-							&& job.validDoubleByteCount >= kCommonDoubleByteLimit)
-						{
-							exhausted = true;
-							break;
-						}
 						++job.validDoubleByteCount;
-					}
 					requestedGlyphs.push_back(glyph);
 					const VectorEncodedGlyph* requestedGlyph = &requestedGlyphs.back();
 					if (needsGrayFill)
@@ -975,6 +734,8 @@ namespace fonthook::vectorfont
 			if (failed)
 			{
 				CancelStreamingPrewarmAtlas(*runtime);
+				DiscardGlyphAtlasSnapshot(*runtime, rasterScale);
+				ResetPersistentFontCachesForRegeneration(*runtime);
 				FinishJob(job, "stream-failed");
 				++streamFailedFonts;
 				++finishedFonts;
@@ -986,12 +747,27 @@ namespace fonthook::vectorfont
 			if (!FinalizeStreamingPrewarmAtlas(*runtime, rasterScale))
 			{
 				CancelStreamingPrewarmAtlas(*runtime);
+				DiscardGlyphAtlasSnapshot(*runtime, rasterScale);
+				ResetPersistentFontCachesForRegeneration(*runtime);
 				FinishJob(job, "stream-finalize-failed");
 				++streamFailedFonts;
 				++finishedFonts;
 				continue;
 			}
-			MarkGlyphManifestComplete(*runtime, job.mode);
+			MarkGlyphManifestComplete(*runtime);
+			if (g_bEnableFreeTypeDefaultPoolAtlas)
+			{
+				if (!EnsureGloballyRepackedGlyphAtlasSnapshot(*runtime, rasterScale))
+				{
+					DiscardGlyphAtlasSnapshot(*runtime, rasterScale);
+					ResetPersistentFontCachesForRegeneration(*runtime);
+					FinishJob(job, "post-finalize-validation-failed");
+					++streamFailedFonts;
+					++finishedFonts;
+					continue;
+				}
+				verifiedCodePageFonts.push_back(job.fontId);
+			}
 			FinishJob(job, "complete");
 			++completedFonts;
 			++finishedFonts;
@@ -1006,7 +782,52 @@ namespace fonthook::vectorfont
 			static_cast<unsigned long long>(GetTickCount64() - started));
 		FlushGlyphBitmapDiskCache();
 		ReleaseGlyphBitmapDiskCacheMappings();
-		if (completedFonts == queuedFonts)
+		std::unordered_set<UInt64> verifiedProfileKeys;
+		for (UInt32 fontId : verifiedCodePageFonts)
+		{
+			if (const FontConfig* config = FindConfig(fontId))
+				verifiedProfileKeys.insert(BuildProfileKey(*config));
+		}
+		std::unordered_set<UInt64> configuredProfileKeys;
+		std::vector<UInt32> atlasOnlyFontIds;
+		atlasOnlyFontIds.reserve(g_configs.size());
+		UInt32 readyConfiguredRuntimes = 0;
+		for (const auto& entry : g_configs)
+		{
+			const UInt64 profileKey = BuildProfileKey(entry.second);
+			configuredProfileKeys.insert(profileKey);
+			if (FindRuntimeFont(entry.first))
+			{
+				++readyConfiguredRuntimes;
+				if (verifiedProfileKeys.count(profileKey))
+					atlasOnlyFontIds.push_back(entry.first);
+			}
+		}
+		std::sort(atlasOnlyFontIds.begin(), atlasOnlyFontIds.end());
+		const bool everyConfiguredJobCompleted = completedFonts == queuedFonts
+			&& queuedFonts == static_cast<UInt32>(configuredProfileKeys.size())
+			&& readyConfiguredRuntimes == static_cast<UInt32>(g_configs.size());
+		const bool everyConfiguredProfileVerified = everyConfiguredJobCompleted
+			&& verifiedCodePageFonts.size() == queuedFonts
+			&& verifiedProfileKeys.size() == configuredProfileKeys.size();
+		if (everyConfiguredProfileVerified)
+		{
+			if (!DeleteCompleteCodePageGlyphBitmapDiskCaches(atlasOnlyFontIds))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: complete codepage mask cleanup incomplete; residual files will not be reused in this process");
+			}
+		}
+		else
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: complete codepage mask retention required complete=%u verifiedAtlas=%u queued=%u verifiedProfiles=%u configuredProfiles=%u readyRuntimes=%u configuredFonts=%u",
+				completedFonts, static_cast<UInt32>(verifiedCodePageFonts.size()),
+				queuedFonts, static_cast<UInt32>(verifiedProfileKeys.size()),
+				static_cast<UInt32>(configuredProfileKeys.size()),
+				readyConfiguredRuntimes, static_cast<UInt32>(g_configs.size()));
+		}
+		if (everyConfiguredJobCompleted)
 		{
 			SetBitmapCacheReducedAfterPrewarm(true);
 			EnforceCpuMemoryBudget("post-prewarm");
@@ -1017,7 +838,7 @@ namespace fonthook::vectorfont
 				"tnvse_freetype_font: bitmap cache post-prewarm shrink skipped because streamed prewarm did not complete successfully complete=%u queued=%u",
 				completedFonts, queuedFonts);
 		}
-		if (g_bDeleteUnusedFreeTypeFontCache && completedFonts == queuedFonts)
+		if (g_bDeleteUnusedFreeTypeFontCache && everyConfiguredJobCompleted)
 			DeleteUnusedFreeTypeFontCacheFiles();
 		else if (g_bDeleteUnusedFreeTypeFontCache)
 		{
@@ -1026,8 +847,12 @@ namespace fonthook::vectorfont
 		}
 		if (s_progressThread)
 		{
-			UpdatePrewarmProgress(L"Font cache is ready.",
-				L"Starting the game...", 1.0f);
+			UpdatePrewarmProgress(everyConfiguredJobCompleted
+					? L"Font cache is ready."
+					: L"Font cache generation was incomplete.",
+				everyConfiguredJobCompleted
+					? L"Starting the game..."
+					: L"Starting with runtime fallback...", 1.0f);
 			StopPrewarmProgress();
 		}
 	}

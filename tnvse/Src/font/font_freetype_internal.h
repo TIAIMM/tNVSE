@@ -577,6 +577,7 @@ namespace fonthook::vectorfont
 		std::unordered_map<PersistentBitmapProfileKey,
 			std::unique_ptr<PersistentBitmapProfile>,
 			PersistentBitmapProfileKeyHash> persistentBitmapProfiles;
+		std::unordered_set<UInt32> atlasOnlyCodePageFontIds;
 		std::unordered_map<UInt64, std::weak_ptr<PersistentGlyphManifest>>
 			persistentGlyphManifests;
 		std::vector<UInt16> persistentGlyphManifestCodes;

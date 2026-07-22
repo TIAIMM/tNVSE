@@ -392,19 +392,6 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			const std::string prewarm = node.attribute("prewarm").as_string("none");
-			if (prewarm == "none")
-				config.prewarm = FontPrewarmMode::None;
-			else if (prewarm == "common")
-				config.prewarm = FontPrewarmMode::Common;
-			else if (prewarm == "codepage")
-				config.prewarm = FontPrewarmMode::CodePage;
-			else
-			{
-				reason = "prewarm must be none, common, or codepage";
-				return false;
-			}
-
 			const std::string verticalMetrics =
 				node.attribute("verticalMetrics").as_string("freetype");
 			if (verticalMetrics == "freetype")
@@ -503,8 +490,8 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=%u verticalMetrics=%s baseline=%.2f fontColor=%d shaderFill=sdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
-				config.fontId, static_cast<UInt32>(config.prewarm),
+				"tnvse_freetype_font: config font id=%u prewarm=full-codepage verticalMetrics=%s baseline=%.2f fontColor=%d shaderFill=sdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
+				config.fontId,
 				config.verticalMetrics == VerticalMetricsMode::Original
 					? "original" : "freetype",
 				config.baseline,

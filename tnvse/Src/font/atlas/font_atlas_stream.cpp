@@ -139,7 +139,8 @@ namespace fonthook::vectorfont
 			hash = HashBytes(&key.byteClass, sizeof(key.byteClass), hash);
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			hash = HashBytes(&codePage, sizeof(codePage), hash);
-			hash = HashBytes(&config.prewarm, sizeof(config.prewarm), hash);
+			hash = HashBytes(&kCompleteCodePagePrewarmIdentity,
+				sizeof(kCompleteCodePagePrewarmIdentity), hash);
 			hash = HashBytes(&kMaximumAtlasMipLevels,
 				sizeof(kMaximumAtlasMipLevels), hash);
 			hash = HashBytes(&A8ShapeColorContract::kTileUniformColorAbi,
@@ -268,7 +269,7 @@ namespace fonthook::vectorfont
 			header.snapshotHash = snapshotHash;
 			header.maskContentHash = maskContentHash;
 			header.atlasContentHash = key.atlasContentHash;
-			header.reservedFontId = 0;
+			header.flags = 0;
 			header.scaleMilli = key.scaleMilli;
 			header.width = NextPowerOfTwo(std::max<UInt32>(64, page.usedWidth));
 			header.height = NextPowerOfTwo(std::max<UInt32>(64, page.usedHeight));
@@ -595,14 +596,51 @@ namespace fonthook::vectorfont
 			s_streams.erase(&runtime);
 		}
 
+		// Publishing a streamed role replaces the content-addressed snapshot files.
+		// An equivalent font ID can already have the same atlas profile resident, but
+		// its CompactAtlasSnapshot still describes the files from before this commit.
+		// Invalidate the reuse marker before restoring so TryLoadGlyphAtlasSnapshotRole
+		// must read the just-published generation instead of accepting stale backing
+		// metadata. The resources themselves are replaced atomically by that loader.
+		{
+			AtlasState& atlasState = State();
+			std::lock_guard<std::mutex> lock(atlasState.atlasMutex);
+			const FontConfig& config = GetRuntimeConfig(runtime);
+			const size_t roleCount = IsDbcsCodePage(completed->codePage) ? 2 : 1;
+			UInt32 invalidatedProfiles = 0;
+			for (size_t roleIndex = 0; roleIndex < roleCount; ++roleIndex)
+			{
+				const AtlasCacheKey key = BuildBaseKey(config,
+					static_cast<VectorFontByteClass>(roleIndex), rasterScale);
+				invalidatedProfiles += static_cast<UInt32>(
+					atlasState.completeAtlasProfiles.erase(MakeAtlasProfileKey(key)));
+			}
+			if (invalidatedProfiles)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: streamed atlas backing replaced font=%u invalidatedResidentProfiles=%u",
+					config.fontId, invalidatedProfiles);
+			}
+		}
+
 		// Snapshot validation intentionally requires the persistent manifest to be
 		// complete. Publish every page first, mark that matching manifest complete,
 		// then restore only through the DEFAULT-pool route. Bulk managed restoration
 		// would retain one full CPU atlas backing per page and defeat the 32-bit
 		// address-space guarantees of the streaming writer.
-		MarkGlyphManifestComplete(runtime, GetRuntimeConfig(runtime).prewarm);
-		const bool restored = !g_bEnableFreeTypeDefaultPoolAtlas
-			|| TryLoadGlyphAtlasSnapshot(runtime, rasterScale);
+		MarkGlyphManifestComplete(runtime);
+		bool restored = !g_bEnableFreeTypeDefaultPoolAtlas;
+		bool repacked = false;
+		if (g_bEnableFreeTypeDefaultPoolAtlas)
+		{
+			// The bounded streaming writer deliberately keeps only one shelf page in
+			// memory. Once every page is durable, read those pages back, perform the
+			// global skyline repack, publish the compact set, then discard and restore
+			// the generation once more. Only this final restored generation is eligible
+			// for code-page mask-cache deletion.
+			restored = EnsureGloballyRepackedGlyphAtlasSnapshot(runtime,
+				rasterScale, &repacked);
+		}
 		UInt64 pages = 0;
 		UInt64 placements = 0;
 		UInt64 bytes = 0;
@@ -619,7 +657,9 @@ namespace fonthook::vectorfont
 			static_cast<unsigned long long>(placements),
 			static_cast<unsigned long long>(bytes),
 			g_bEnableFreeTypeDefaultPoolAtlas
-				? (restored ? "default-pool" : "failed") : "deferred-managed");
+				? (restored ? (repacked ? "repacked-default-pool" : "default-pool")
+					: "failed")
+				: "deferred-managed");
 		return restored;
 	}
 
