@@ -161,7 +161,7 @@ namespace fonthook::vectorfont
 			IDirect3DVertexDeclaration9* d3dDeclaration = nullptr;
 			NiD3DVertexShaderPtr vertexShader;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
-			std::array<NiD3DPixelShaderPtr, 3> mtsdfSubpixelFillShaders;
+			std::array<NiD3DPixelShaderPtr, 3> subpixelFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
 			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
 			bool subpixelShadersReady = false;
@@ -415,7 +415,7 @@ namespace fonthook::vectorfont
 					|| packet.subpixelChannel == NativeA8SubpixelChannel::Blue;
 				if (sideSubpixelChannel && generation.subpixelShadersReady)
 				{
-					return generation.mtsdfSubpixelFillShaders[index].m_pObject;
+					return generation.subpixelFillShaders[index].m_pObject;
 				}
 				// Green is the exact center coverage and therefore reuses the
 				// ordinary quality-selected Fill shader. A subpixel payload can
@@ -643,8 +643,8 @@ namespace fonthook::vectorfont
 			{
 				generation->mtsdfFillShaders[index] = createPS(fillNames[index]);
 			}
-			if (g_uiFreeTypeMTSDFSubpixelRendering != 0
-				&& g_fFreeTypeMTSDFSubpixelStrength > 0.0f)
+			if (g_uiFreeTypeFontSubpixelRendering != 0
+				&& g_fFreeTypeFontSubpixelStrength > 0.0f)
 			{
 				const char* mtsdfSubpixelFillNames[] = {
 					"tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso",
@@ -661,14 +661,14 @@ namespace fonthook::vectorfont
 						? mtsdfSubpixelFillNames : trueSdfSubpixelFillNames;
 				generation->subpixelShadersReady = true;
 				for (size_t index = 0;
-					index < generation->mtsdfSubpixelFillShaders.size(); ++index)
+					index < generation->subpixelFillShaders.size(); ++index)
 				{
-					generation->mtsdfSubpixelFillShaders[index] =
+					generation->subpixelFillShaders[index] =
 						createPS(subpixelFillNames[index]);
 					generation->subpixelShadersReady =
 						generation->subpixelShadersReady
 						&& HasShaderHandle(
-							generation->mtsdfSubpixelFillShaders[index]);
+							generation->subpixelFillShaders[index]);
 				}
 				if (!generation->subpixelShadersReady)
 				{
@@ -858,8 +858,8 @@ namespace fonthook::vectorfont
 			"tnvse_freetype_native: published complete TileShader generation=%u device=%p distanceField=%s subpixelMode=%u subpixelStrength=%.3f subpixelReady=%u",
 			candidate->id, candidate->device,
 			GetConfiguredDistanceFieldMethodName(),
-			g_uiFreeTypeMTSDFSubpixelRendering,
-			g_fFreeTypeMTSDFSubpixelStrength,
+			g_uiFreeTypeFontSubpixelRendering,
+			g_fFreeTypeFontSubpixelStrength,
 			candidate->subpixelShadersReady ? 1u : 0u);
 		return true;
 	}
@@ -910,11 +910,11 @@ namespace fonthook::vectorfont
 
 	NativeA8SubpixelOrder GetNativeA8SubpixelOrder()
 	{
-		if (g_fFreeTypeMTSDFSubpixelStrength <= 0.0f)
+		if (g_fFreeTypeFontSubpixelStrength <= 0.0f)
 			return NativeA8SubpixelOrder::Disabled;
 		NativeA8SubpixelOrder configuredOrder =
 			NativeA8SubpixelOrder::Disabled;
-		switch (g_uiFreeTypeMTSDFSubpixelRendering)
+		switch (g_uiFreeTypeFontSubpixelRendering)
 		{
 		case 1:
 			configuredOrder = NativeA8SubpixelOrder::RGB;

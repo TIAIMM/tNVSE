@@ -14,8 +14,8 @@ bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
 fFreeTypeFontResolutionScale=1.0
 uiFreeTypeFontDistanceFieldMode=1
-uiFreeTypeMTSDFSubpixelRendering=0
-fFreeTypeMTSDFSubpixelStrength=0.75
+uiFreeTypeFontSubpixelRendering=0
+fFreeTypeFontSubpixelStrength=0.75
 ```
 
 With `[Multibyte] bEnableMultibyteFontHook=1`, FreeType uses the configured
@@ -516,7 +516,7 @@ Distance-field draw ranges also preserve fractional pen positions, encoded-unit
 advances, and effect offsets in their quad coordinates. The separate ARGB fallback remains
 snapped to the resolved source-pixel grid and may use trilinear mip sampling.
 
-`[FreeTypeFont] uiFreeTypeMTSDFSubpixelRendering` optionally replaces each
+`[FreeTypeFont] uiFreeTypeFontSubpixelRendering` optionally replaces each
 distance-field Fill packet with three packets that reuse the same geometry and
 atlas. The key keeps its historical name; it applies to true SDF and MTSDF.
 `1` selects a horizontal RGB stripe: Red, Green, and Blue sample the selected
@@ -531,7 +531,7 @@ Shadow, glow, and outline remain ordinary grayscale Alpha-TSDF passes.
 The Red and Blue profiles each take one additional center distance-field
 sample. Their shifted coverage is measured against that center, limited symmetrically to
 `0.125` in fully inside/outside pixels and `0.25` at the actual edge, then
-scaled by `[FreeTypeFont] fFreeTypeMTSDFSubpixelStrength`. This suppresses
+scaled by `[FreeTypeFont] fFreeTypeFontSubpixelStrength`. This suppresses
 colored outer halos and isolated corner errors without moving the luminance
 edge. Green is already centered and reuses the ordinary quality-selected Fill
 shader rather than paying for the extra sample. Strength is clamped to `0-1`,

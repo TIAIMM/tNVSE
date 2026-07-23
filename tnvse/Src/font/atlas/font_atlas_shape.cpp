@@ -1012,7 +1012,7 @@ namespace fonthook::vectorfont
 				: NativeA8SubpixelOrder::Disabled;
 			const float subpixelStrength =
 				subpixelOrder != NativeA8SubpixelOrder::Disabled
-				? g_fFreeTypeMTSDFSubpixelStrength : 0.0f;
+				? g_fFreeTypeFontSubpixelStrength : 0.0f;
 			A8EffectShapeConfig resolvedEffect = effectConfig
 				? *effectConfig : A8EffectShapeConfig{};
 			resolvedEffect.atlasProperties.clear();

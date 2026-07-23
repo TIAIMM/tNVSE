@@ -17,8 +17,8 @@ bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = 1;
-UINT32 g_uiFreeTypeMTSDFSubpixelRendering;
-float g_fFreeTypeMTSDFSubpixelStrength = 0.75f;
+UINT32 g_uiFreeTypeFontSubpixelRendering;
+float g_fFreeTypeFontSubpixelStrength = 0.75f;
 bool g_bEnableFreeTypeGlyphCollisionProtection;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bMultibyteInput;
@@ -172,27 +172,27 @@ void LoadConfig()
 		g_uiFreeTypeFontDistanceFieldMode,
 		g_uiFreeTypeFontDistanceFieldMode ? "MTSDF" : "true SDF");
 
-	g_uiFreeTypeMTSDFSubpixelRendering = ReadConfigInt(
-		kFreeTypeFontSection, "uiFreeTypeMTSDFSubpixelRendering", 0,
+	g_uiFreeTypeFontSubpixelRendering = ReadConfigInt(
+		kFreeTypeFontSection, "uiFreeTypeFontSubpixelRendering", 0,
 		filename);
-	if (g_uiFreeTypeMTSDFSubpixelRendering > 2)
+	if (g_uiFreeTypeFontSubpixelRendering > 2)
 	{
 		gLog.FormattedMessage(
-			"g_uiFreeTypeMTSDFSubpixelRendering: invalid value %u; disabling",
-			g_uiFreeTypeMTSDFSubpixelRendering);
-		g_uiFreeTypeMTSDFSubpixelRendering = 0;
+			"g_uiFreeTypeFontSubpixelRendering: invalid value %u; disabling",
+			g_uiFreeTypeFontSubpixelRendering);
+		g_uiFreeTypeFontSubpixelRendering = 0;
 	}
-	gLog.FormattedMessage("g_uiFreeTypeMTSDFSubpixelRendering: %u",
-		g_uiFreeTypeMTSDFSubpixelRendering);
+	gLog.FormattedMessage("g_uiFreeTypeFontSubpixelRendering: %u",
+		g_uiFreeTypeFontSubpixelRendering);
 
-	const float configuredFreeTypeMTSDFSubpixelStrength = std::clamp(
+	const float configuredFreeTypeFontSubpixelStrength = std::clamp(
 		ReadConfigFloat(kFreeTypeFontSection,
-			"fFreeTypeMTSDFSubpixelStrength", 0.75f, filename),
+			"fFreeTypeFontSubpixelStrength", 0.75f, filename),
 		0.0f, 1.0f);
-	g_fFreeTypeMTSDFSubpixelStrength = std::round(
-		configuredFreeTypeMTSDFSubpixelStrength * 1000.0f) / 1000.0f;
-	gLog.FormattedMessage("g_fFreeTypeMTSDFSubpixelStrength: %.3f",
-		g_fFreeTypeMTSDFSubpixelStrength);
+	g_fFreeTypeFontSubpixelStrength = std::round(
+		configuredFreeTypeFontSubpixelStrength * 1000.0f) / 1000.0f;
+	gLog.FormattedMessage("g_fFreeTypeFontSubpixelStrength: %.3f",
+		g_fFreeTypeFontSubpixelStrength);
 
 	g_bEnableFreeTypeGlyphCollisionProtection = ReadConfigInt(
 		kFreeTypeFontSection, "bEnableFreeTypeGlyphCollisionProtection", 1,

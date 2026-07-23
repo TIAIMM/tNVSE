@@ -172,11 +172,11 @@ if ($loadConfigSource -notmatch
     throw 'Native distance-field configuration does not validate true-SDF/MTSDF mode'
 }
 if ($loadConfigSource -notmatch
-    '"uiFreeTypeMTSDFSubpixelRendering"' -or
+    '"uiFreeTypeFontSubpixelRendering"' -or
     $loadConfigSource -notmatch
-    'g_uiFreeTypeMTSDFSubpixelRendering\s*>\s*2[\s\S]*?g_uiFreeTypeMTSDFSubpixelRendering\s*=\s*0' -or
+    'g_uiFreeTypeFontSubpixelRendering\s*>\s*2[\s\S]*?g_uiFreeTypeFontSubpixelRendering\s*=\s*0' -or
     $loadConfigSource -notmatch
-    '"fFreeTypeMTSDFSubpixelStrength"[\s\S]*?0\.0f,\s*1\.0f') {
+    '"fFreeTypeFontSubpixelStrength"[\s\S]*?0\.0f,\s*1\.0f') {
     throw 'Native subpixel configuration does not validate mode and chroma strength'
 }
 if ($nativeShaderSource -match '0x1202188') {
