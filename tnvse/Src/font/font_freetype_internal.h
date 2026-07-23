@@ -454,7 +454,9 @@ namespace fonthook::vectorfont
 		UInt32 entryCount = 0;
 		UInt32 entrySize = 0;
 		UInt8 completeMode = 0;
-		UInt8 reserved[7] = {};
+		UInt8 distanceFieldMethod = 0;
+		UInt8 distanceFieldIdentityVersion = 0;
+		UInt8 reserved[5] = {};
 		UInt64 checksum = 0;
 	};
 

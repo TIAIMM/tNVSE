@@ -1933,4 +1933,49 @@ namespace fonthook::vectorfont
 			AtlasRenderMode::ShaderEffects,
 			padding).empty();
 	}
+
+	PersistentCacheCleanupClass ClassifyAtlasSnapshotCacheForCleanup(
+		const std::wstring& path)
+	{
+		AtlasSnapshotHeader header;
+		HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+			OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (file == INVALID_HANDLE_VALUE)
+			return PersistentCacheCleanupClass::Invalid;
+		DWORD read = 0;
+		const bool readHeader = ReadFile(file, &header, sizeof(header),
+			&read, nullptr) && read == sizeof(header);
+		CloseHandle(file);
+
+		const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'A', 'T', 'L', '9' };
+		if (!readHeader
+			|| std::memcmp(header.magic, magic, sizeof(magic)) != 0
+			|| header.version != kAtlasSnapshotVersion
+			|| header.headerSize != sizeof(header)
+			|| header.renderMode
+				> static_cast<UInt8>(AtlasRenderMode::ShaderEffects)
+			|| header.pixelMode > static_cast<UInt8>(AtlasPixelMode::Mtsdf32)
+			|| header.checksum != HashAtlasBytes(&header,
+				offsetof(AtlasSnapshotHeader, checksum)))
+		{
+			return PersistentCacheCleanupClass::Invalid;
+		}
+		if (header.renderMode != static_cast<UInt8>(
+			AtlasRenderMode::ShaderEffects))
+		{
+			return PersistentCacheCleanupClass::Neutral;
+		}
+
+		DistanceFieldMethod method;
+		if (header.pixelMode == static_cast<UInt8>(AtlasPixelMode::A8))
+			method = DistanceFieldMethod::TrueSdf;
+		else if (header.pixelMode == static_cast<UInt8>(AtlasPixelMode::Mtsdf32))
+			method = DistanceFieldMethod::Mtsdf;
+		else
+			return PersistentCacheCleanupClass::Invalid;
+		return method == GetConfiguredDistanceFieldMethod()
+			? PersistentCacheCleanupClass::CurrentDistanceField
+			: PersistentCacheCleanupClass::InactiveDistanceField;
+	}
 }

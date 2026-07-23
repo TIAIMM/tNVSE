@@ -72,6 +72,8 @@
       the same face chain, face indices, scaleX/scaleY, embolden, and slant.
       Tracking, fixedWidth, baseline, and all other layout metrics remain
       specific to each logical font. Larger size gaps start a separate group.
+      True-SDF mode disables this sharing and generates each font at its own
+      configured pixelSize.
 
       Font files
 

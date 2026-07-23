@@ -36,6 +36,9 @@ namespace fonthook::vectorfont
 	// true-SDF body. Atlas snapshot identity also consumes this ABI because a
 	// restored atlas is usable only with its matching complete manifest.
 	constexpr UInt32 kPersistentGlyphManifestVersion = 10;
+	// Versioned inside the reserved manifest-header bytes so mode ownership can
+	// be classified for safe partial cleanup without changing the record layout.
+	constexpr UInt8 kPersistentGlyphManifestDistanceFieldIdentityVersion = 1;
 
 	struct NativeA8PayloadTemplate;
 	enum class FreeTypePerfCounter : UInt8
@@ -175,9 +178,10 @@ namespace fonthook::vectorfont
 		UInt64 maskGenerationHash = 0;
 		std::array<UInt64, 2> maskGenerationRoleHashes = {};
 		UInt64 shaderEffectHash = 0;
-		// Distance-field double-byte atlases may be shared only by raster-compatible
+		// MTSDF double-byte atlases may be shared only by raster-compatible
 		// configurations whose complete pixel-size span is at most eight pixels.
-		// Layout metrics remain local to every logical font.
+		// True SDF always keeps one atlas profile per font. Layout metrics remain
+		// local to every logical font.
 		UInt32 mtsdfDoubleByteOwnerFontId = 0;
 		UInt32 mtsdfDoubleByteGroupSize = 1;
 	};
@@ -406,7 +410,16 @@ namespace fonthook::vectorfont
 		VectorFontByteClass aeByteClass);
 	bool GetFreeTypeFontCacheDirectory(std::wstring& arDirectory);
 	void MarkFreeTypeFontCacheFileUsed(const std::wstring& arPath);
-	void DeleteUnusedFreeTypeFontCacheFiles();
+	enum class PersistentCacheCleanupClass : UInt8
+	{
+		Neutral,
+		CurrentDistanceField,
+		InactiveDistanceField,
+		Invalid,
+	};
+	PersistentCacheCleanupClass ClassifyAtlasSnapshotCacheForCleanup(
+		const std::wstring& arPath);
+	void DeleteUnusedFreeTypeFontCacheFiles(bool abDeleteAllUnused);
 	bool HasCompleteGlyphManifest(RuntimeFont& arRuntime);
 	void MarkGlyphManifestComplete(RuntimeFont& arRuntime);
 	const std::vector<UInt16>& GetCompleteCodePageEncodedUnits();

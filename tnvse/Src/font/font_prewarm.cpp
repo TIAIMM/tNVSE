@@ -1044,12 +1044,14 @@ namespace fonthook::vectorfont
 				"tnvse_freetype_font: bitmap cache post-prewarm shrink skipped because streamed prewarm did not complete successfully complete=%u queued=%u",
 				completedFonts, queuedFonts);
 		}
-		if (g_bDeleteUnusedFreeTypeFontCache && everyConfiguredJobCompleted)
-			DeleteUnusedFreeTypeFontCacheFiles();
-		else if (g_bDeleteUnusedFreeTypeFontCache)
+		if (g_bDeleteUnusedFreeTypeFontCache)
 		{
-			gLog.FormattedMessage(
-				"tnvse_freetype_font: unused persistent cache cleanup skipped because streamed prewarm did not complete successfully");
+			DeleteUnusedFreeTypeFontCacheFiles(everyConfiguredJobCompleted);
+			if (!everyConfiguredJobCompleted)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: incomplete prewarm retained current-mode and mode-neutral caches; inactive distance-field, invalid, and temporary caches were still cleaned");
+			}
 		}
 		if (s_progressThread)
 		{

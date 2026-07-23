@@ -57,14 +57,15 @@ Font IDs are configured under `<fonts>` in
 `Data\NVSE\plugins\tnvse_fonts.xml`. Only listed IDs are replaced. Other
 fonts continue to use the original `.fnt` and `.tex` files.
 
-For native distance-field rendering, compatible `doubleByte` styles are grouped
-automatically. When the largest and smallest `pixelSize` in a compatible group
-differ by no more than 8 pixels, only the largest style is rasterized and
-stored in the double-byte atlas. Smaller logical fonts scale that source atlas
-at draw time, including distance/effect units, while retaining their own
-advance, tracking, fixed-width, baseline, and line metrics. Face chain and
-indices, `scaleX`, `scaleY`, `embolden`, and `slant` must match; a larger size
-span is split into independent atlas groups.
+In MTSDF mode, compatible `doubleByte` styles are grouped automatically. When
+the largest and smallest `pixelSize` in a compatible group differ by no more
+than 8 pixels, only the largest style is rasterized and stored in the
+double-byte atlas. Smaller logical fonts scale that source atlas at draw time,
+including distance/effect units, while retaining their own advance, tracking,
+fixed-width, baseline, and line metrics. Face chain and indices, `scaleX`,
+`scaleY`, `embolden`, and `slant` must match; a larger size span is split into
+independent atlas groups. True-SDF mode disables this sharing and generates an
+independent double-byte atlas profile at each configured font's own pixel size.
 
 ## Base and JIP extended font IDs
 
@@ -338,8 +339,13 @@ must still match.
 `bDeleteUnusedFreeTypeFontCache=1` removes stale `.tnvfmask`, `.tnvfhash`,
 `.tnvfmanifest`, and `.tnvfatlas` files that were not accessed by the current
 run after every configured font atlas has been generated or restored
-successfully. Cleanup is skipped if any prewarm job fails or is cancelled, and
-unknown files in `fontdata` are never removed. The option defaults to `0`.
+successfully. If a prewarm job fails or is cancelled, cleanup switches to a
+safe partial scope: caches identified as the inactive true-SDF/MTSDF method,
+unreadable managed cache headers, and orphaned `.tmp`/`.stream.tmp` transaction
+files are removed, while current-method and mode-neutral caches are retained.
+Manifest headers carry an explicit distance-field identity so the partial
+cleanup does not infer their method from an opaque filename hash. Unknown files
+in `fontdata` are never removed. The option defaults to `0`.
 
 Cache identity is split by responsibility. The layout hash covers font faces,
 metrics, advances, and fallback identity. Persistent manifests store

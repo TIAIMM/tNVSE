@@ -1063,6 +1063,10 @@ namespace fonthook::vectorfont
 			header.codePage = GetFreeTypeTextCodePage();
 			header.entryCount = recordCount;
 			header.entrySize = sizeof(PersistentGlyphManifestRecord);
+			header.distanceFieldMethod = static_cast<UInt8>(
+				GetConfiguredDistanceFieldMethod());
+			header.distanceFieldIdentityVersion =
+				kPersistentGlyphManifestDistanceFieldIdentityVersion;
 			header.checksum = HashBytes64(&header,
 				offsetof(PersistentGlyphManifestHeader, checksum));
 			return header;
@@ -1083,6 +1087,10 @@ namespace fonthook::vectorfont
 				&& header.codePage == GetFreeTypeTextCodePage()
 				&& header.entryCount == recordCount
 				&& header.entrySize == sizeof(PersistentGlyphManifestRecord)
+				&& header.distanceFieldMethod == static_cast<UInt8>(
+					GetConfiguredDistanceFieldMethod())
+				&& header.distanceFieldIdentityVersion
+					== kPersistentGlyphManifestDistanceFieldIdentityVersion
 				&& header.checksum == HashBytes64(&header,
 					offsetof(PersistentGlyphManifestHeader, checksum));
 		}
@@ -1713,7 +1721,74 @@ namespace fonthook::vectorfont
 		State().usedPersistentCachePaths.insert(NormalizePathKey(path));
 	}
 
-	void DeleteUnusedFreeTypeFontCacheFiles()
+	template <class Header>
+	static bool ReadPersistentCacheHeader(const std::wstring& path, Header& header)
+	{
+		header = {};
+		HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+			OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (file == INVALID_HANDLE_VALUE)
+			return false;
+		DWORD read = 0;
+		const bool result = ReadFile(file, &header, sizeof(header), &read, nullptr)
+			&& read == sizeof(header);
+		CloseHandle(file);
+		return result;
+	}
+
+	static PersistentCacheCleanupClass ClassifyPersistentBitmapCache(
+		const std::wstring& path)
+	{
+		PersistentBitmapFileHeader header;
+		const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'M', 'S', 'K', '1' };
+		if (!ReadPersistentCacheHeader(path, header)
+			|| std::memcmp(header.magic, magic, sizeof(magic)) != 0
+			|| header.version != kPersistentBitmapVersion
+			|| header.headerSize != sizeof(header)
+			|| header.checksum != HashBytes64(&header,
+				offsetof(PersistentBitmapFileHeader, checksum)))
+		{
+			return PersistentCacheCleanupClass::Invalid;
+		}
+		if (header.maskType != static_cast<UInt8>(GlyphMaskType::DistanceField))
+			return PersistentCacheCleanupClass::Neutral;
+		if (header.distanceFieldMethod
+			> static_cast<UInt8>(DistanceFieldMethod::Mtsdf))
+		{
+			return PersistentCacheCleanupClass::Invalid;
+		}
+		return header.distanceFieldMethod == static_cast<UInt8>(
+			GetConfiguredDistanceFieldMethod())
+			? PersistentCacheCleanupClass::CurrentDistanceField
+			: PersistentCacheCleanupClass::InactiveDistanceField;
+	}
+
+	static PersistentCacheCleanupClass ClassifyPersistentGlyphManifestCache(
+		const std::wstring& path)
+	{
+		PersistentGlyphManifestHeader header;
+		const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'G', 'L', 'Y', '1' };
+		if (!ReadPersistentCacheHeader(path, header)
+			|| std::memcmp(header.magic, magic, sizeof(magic)) != 0
+			|| header.version != kPersistentGlyphManifestVersion
+			|| header.headerSize != sizeof(header)
+			|| header.distanceFieldIdentityVersion
+				!= kPersistentGlyphManifestDistanceFieldIdentityVersion
+			|| header.distanceFieldMethod
+				> static_cast<UInt8>(DistanceFieldMethod::Mtsdf)
+			|| header.checksum != HashBytes64(&header,
+				offsetof(PersistentGlyphManifestHeader, checksum)))
+		{
+			return PersistentCacheCleanupClass::Invalid;
+		}
+		return header.distanceFieldMethod == static_cast<UInt8>(
+			GetConfiguredDistanceFieldMethod())
+			? PersistentCacheCleanupClass::CurrentDistanceField
+			: PersistentCacheCleanupClass::InactiveDistanceField;
+	}
+
+	void DeleteUnusedFreeTypeFontCacheFiles(bool deleteAllUnused)
 	{
 		std::lock_guard<std::recursive_mutex> lock(State().mutex);
 		std::wstring directory;
@@ -1726,6 +1801,10 @@ namespace fonthook::vectorfont
 			return;
 		UInt32 deleted = 0;
 		UInt32 failed = 0;
+		UInt32 staleMode = 0;
+		UInt32 invalid = 0;
+		UInt32 temporary = 0;
+		UInt32 deferred = 0;
 		UInt64 deletedBytes = 0;
 		auto hasSuffix = [](const std::wstring& value, const wchar_t* suffix)
 		{
@@ -1739,13 +1818,46 @@ namespace fonthook::vectorfont
 				continue;
 			const std::wstring path = directory + L"\\" + found.cFileName;
 			const std::wstring normalized = NormalizePathKey(path);
-			const bool managed = hasSuffix(normalized, L".tnvfmask")
-				|| hasSuffix(normalized, L".tnvfhash")
-				|| hasSuffix(normalized, L".tnvfmanifest")
-				|| hasSuffix(normalized, L".tnvfatlas")
-				|| hasSuffix(normalized, L".tnvfatlas.tmp");
+			const bool bitmap = hasSuffix(normalized, L".tnvfmask");
+			const bool fontHash = hasSuffix(normalized, L".tnvfhash");
+			const bool manifest = hasSuffix(normalized, L".tnvfmanifest");
+			const bool atlas = hasSuffix(normalized, L".tnvfatlas");
+			const bool temporaryFile =
+				hasSuffix(normalized, L".tnvfmask.tmp")
+				|| hasSuffix(normalized, L".tnvfhash.tmp")
+				|| hasSuffix(normalized, L".tnvfmanifest.tmp")
+				|| hasSuffix(normalized, L".tnvfatlas.tmp")
+				|| hasSuffix(normalized, L".tnvfatlas.stream.tmp");
+			const bool managed = bitmap || fontHash || manifest || atlas
+				|| temporaryFile;
 			if (!managed || State().usedPersistentCachePaths.count(normalized))
 				continue;
+			PersistentCacheCleanupClass cleanupClass =
+				PersistentCacheCleanupClass::Neutral;
+			if (!deleteAllUnused && !temporaryFile)
+			{
+				if (bitmap)
+					cleanupClass = ClassifyPersistentBitmapCache(path);
+				else if (manifest)
+					cleanupClass = ClassifyPersistentGlyphManifestCache(path);
+				else if (atlas)
+					cleanupClass =
+						ClassifyAtlasSnapshotCacheForCleanup(path);
+				if (cleanupClass == PersistentCacheCleanupClass::Neutral
+					|| cleanupClass
+						== PersistentCacheCleanupClass::CurrentDistanceField)
+				{
+					++deferred;
+					continue;
+				}
+			}
+			if (temporaryFile)
+				++temporary;
+			else if (cleanupClass
+				== PersistentCacheCleanupClass::InactiveDistanceField)
+				++staleMode;
+			else if (cleanupClass == PersistentCacheCleanupClass::Invalid)
+				++invalid;
 			const UInt64 size = (static_cast<UInt64>(found.nFileSizeHigh) << 32)
 				| found.nFileSizeLow;
 			if (DeleteFileW(path.c_str()))
@@ -1760,8 +1872,10 @@ namespace fonthook::vectorfont
 		} while (FindNextFileW(search, &found));
 		FindClose(search);
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: unused persistent cache cleanup deleted=%u bytes=%llu failed=%u retained=%llu",
+			"tnvse_freetype_font: unused persistent cache cleanup scope=%s deleted=%u bytes=%llu failed=%u staleMode=%u invalid=%u temporary=%u deferred=%u used=%llu",
+			deleteAllUnused ? "full" : "inactive-only",
 			deleted, static_cast<unsigned long long>(deletedBytes), failed,
+			staleMode, invalid, temporary, deferred,
 			static_cast<unsigned long long>(State().usedPersistentCachePaths.size()));
 	}
 

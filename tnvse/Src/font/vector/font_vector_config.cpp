@@ -136,14 +136,19 @@ namespace fonthook::vectorfont
 		void ConfigureMtsdfSharedRasterGroups()
 		{
 			constexpr float kMaximumSharedPixelSizeSpan = 8.0f;
+			const bool enableSharing = UsesMtsdfDistanceField();
 			std::vector<FontConfig*> configs;
-			configs.reserve(g_configs.size());
+			if (enableSharing)
+				configs.reserve(g_configs.size());
 			for (auto& entry : g_configs)
 			{
 				entry.second.mtsdfDoubleByteOwnerFontId = entry.second.fontId;
 				entry.second.mtsdfDoubleByteGroupSize = 1;
-				configs.push_back(&entry.second);
+				if (enableSharing)
+					configs.push_back(&entry.second);
 			}
+			if (!enableSharing)
+				return;
 			std::sort(configs.begin(), configs.end(),
 				[](const FontConfig* left, const FontConfig* right)
 				{
@@ -702,7 +707,8 @@ namespace fonthook::vectorfont
 	const FontConfig& GetMtsdfAtlasConfig(const FontConfig& config,
 		VectorFontByteClass byteClass)
 	{
-		if (byteClass != VectorFontByteClass::DoubleByte
+		if (!UsesMtsdfDistanceField()
+			|| byteClass != VectorFontByteClass::DoubleByte
 			|| !config.mtsdfDoubleByteOwnerFontId)
 		{
 			return config;
@@ -715,7 +721,8 @@ namespace fonthook::vectorfont
 	bool IsMtsdfAtlasAlias(const FontConfig& config,
 		VectorFontByteClass byteClass)
 	{
-		return byteClass == VectorFontByteClass::DoubleByte
+		return UsesMtsdfDistanceField()
+			&& byteClass == VectorFontByteClass::DoubleByte
 			&& GetMtsdfAtlasConfig(config, byteClass).fontId != config.fontId;
 	}
 
@@ -748,10 +755,13 @@ namespace fonthook::vectorfont
 		for (const auto& entry : g_configs)
 		{
 			const FontConfig& member = entry.second;
-			if (byteClass == VectorFontByteClass::DoubleByte
-				&& member.mtsdfDoubleByteOwnerFontId != owner.fontId)
+			if (byteClass == VectorFontByteClass::DoubleByte)
 			{
-				continue;
+				const bool memberMatches = UsesMtsdfDistanceField()
+					? member.mtsdfDoubleByteOwnerFontId == owner.fontId
+					: member.fontId == config.fontId;
+				if (!memberMatches)
+					continue;
 			}
 			if (byteClass != VectorFontByteClass::DoubleByte
 				&& member.fontId != config.fontId)
@@ -862,12 +872,21 @@ namespace fonthook
 			const vectorfont::FontConfig& owner =
 				vectorfont::GetMtsdfAtlasConfig(config,
 					VectorFontByteClass::DoubleByte);
-			gLog.FormattedMessage(
-				"tnvse_freetype_font: %s doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f group=%u spanLimit=8",
-				vectorfont::GetConfiguredDistanceFieldMethodName(),
-				config.fontId, owner.fontId, config.styles[1].pixelSize,
-				owner.styles[1].pixelSize,
-				config.mtsdfDoubleByteGroupSize);
+			if (vectorfont::UsesMtsdfDistanceField())
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: MTSDF doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f group=%u spanLimit=8",
+					config.fontId, owner.fontId, config.styles[1].pixelSize,
+					owner.styles[1].pixelSize,
+					config.mtsdfDoubleByteGroupSize);
+			}
+			else
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: true SDF doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f sharing=disabled",
+					config.fontId, owner.fontId, config.styles[1].pixelSize,
+					owner.styles[1].pixelSize);
+			}
 		}
 
 		gLog.FormattedMessage(
