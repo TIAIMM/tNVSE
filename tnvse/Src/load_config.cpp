@@ -16,6 +16,8 @@ UINT32 g_uiFreeTypeFontMemoryCacheMB;
 bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
+UINT32 g_uiFreeTypeMTSDFSubpixelRendering;
+float g_fFreeTypeMTSDFSubpixelStrength = 0.75f;
 bool g_bEnableFreeTypeGlyphCollisionProtection;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bMultibyteInput;
@@ -153,6 +155,28 @@ void LoadConfig()
 		kFreeTypeFontSection, "bEnableFreeTypeA8Atlas", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableFreeTypeA8Atlas: %d",
 		g_bEnableFreeTypeA8Atlas);
+
+	g_uiFreeTypeMTSDFSubpixelRendering = ReadConfigInt(
+		kFreeTypeFontSection, "uiFreeTypeMTSDFSubpixelRendering", 0,
+		filename);
+	if (g_uiFreeTypeMTSDFSubpixelRendering > 2)
+	{
+		gLog.FormattedMessage(
+			"g_uiFreeTypeMTSDFSubpixelRendering: invalid value %u; disabling",
+			g_uiFreeTypeMTSDFSubpixelRendering);
+		g_uiFreeTypeMTSDFSubpixelRendering = 0;
+	}
+	gLog.FormattedMessage("g_uiFreeTypeMTSDFSubpixelRendering: %u",
+		g_uiFreeTypeMTSDFSubpixelRendering);
+
+	const float configuredFreeTypeMTSDFSubpixelStrength = std::clamp(
+		ReadConfigFloat(kFreeTypeFontSection,
+			"fFreeTypeMTSDFSubpixelStrength", 0.75f, filename),
+		0.0f, 1.0f);
+	g_fFreeTypeMTSDFSubpixelStrength = std::round(
+		configuredFreeTypeMTSDFSubpixelStrength * 1000.0f) / 1000.0f;
+	gLog.FormattedMessage("g_fFreeTypeMTSDFSubpixelStrength: %.3f",
+		g_fFreeTypeMTSDFSubpixelStrength);
 
 	g_bEnableFreeTypeGlyphCollisionProtection = ReadConfigInt(
 		kFreeTypeFontSection, "bEnableFreeTypeGlyphCollisionProtection", 1,

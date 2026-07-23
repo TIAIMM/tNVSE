@@ -217,16 +217,25 @@ namespace fonthook::vectorfont
 
 	NativeA8PayloadTemplatePtr BuildNativeA8PayloadTemplate(
 		std::vector<NativeA8GpuVertex>&& vertices, UInt32 quadCount,
-		const A8EffectShapeConfig& effects, const NiBound& bound)
+		const A8EffectShapeConfig& effects, const NiBound& bound,
+		NativeA8SubpixelOrder subpixelOrder, float subpixelStrength)
 	{
 		if (!quadCount || quadCount > kNativeA8MaximumQuads
 			|| vertices.size() != static_cast<size_t>(quadCount) * 4u
 			|| effects.atlasProperties.empty()
 			|| effects.atlasProperties.size() != effects.atlasTextures.size()
-			|| effects.atlasProperties.size() > std::numeric_limits<UInt32>::max())
+			|| effects.atlasProperties.size() > std::numeric_limits<UInt32>::max()
+			|| static_cast<UInt32>(subpixelOrder)
+				> static_cast<UInt32>(NativeA8SubpixelOrder::BGR)
+			|| !std::isfinite(subpixelStrength)
+			|| subpixelStrength < 0.0f || subpixelStrength > 1.0f
+			|| ((subpixelOrder == NativeA8SubpixelOrder::Disabled)
+				!= (subpixelStrength == 0.0f)))
 		{
 			return {};
 		}
+		const bool subpixelRendering =
+			subpixelOrder != NativeA8SubpixelOrder::Disabled;
 
 		std::vector<PacketSpan> spans;
 		if (!BuildPacketSpans(effects, static_cast<UInt32>(vertices.size()), spans))
@@ -236,11 +245,25 @@ namespace fonthook::vectorfont
 		payload->pageCount = static_cast<UInt32>(effects.atlasProperties.size());
 		payload->quadCount = quadCount;
 		payload->sourceRangeCount = static_cast<UInt32>(effects.ranges.size());
+		payload->subpixelOrder = subpixelOrder;
+		payload->subpixelStrength = subpixelStrength;
 		payload->bound = bound;
 		payload->atlasProperties = effects.atlasProperties;
 		payload->atlasTextures = effects.atlasTextures;
 		payload->gpuVertices = std::move(vertices);
-		payload->packets.reserve(spans.size());
+		const size_t fillSpanCount = static_cast<size_t>(std::count_if(
+			spans.begin(), spans.end(), [](const PacketSpan& span)
+			{
+				return span.layer == 3;
+			}));
+		if (subpixelRendering
+			&& fillSpanCount > (std::numeric_limits<size_t>::max()
+				- spans.size()) / 2u)
+		{
+			return {};
+		}
+		payload->packets.reserve(spans.size()
+			+ (subpixelRendering ? fillSpanCount * 2u : 0u));
 
 		for (const PacketSpan& span : spans)
 		{
@@ -249,19 +272,46 @@ namespace fonthook::vectorfont
 			{
 				return {};
 			}
-			NativeA8PacketTemplate packet;
-			packet.firstVertex = span.firstVertex;
-			packet.vertexCount = span.vertexCount;
-			packet.bound = bound;
-			packet.constants = span.constants;
-			packet.shaderClass = span.shaderClass;
-			packet.sampling = span.sampling;
-			packet.quality = effects.quality;
-			packet.layer = span.layer;
-			packet.atlasPage = span.atlasPage;
-			packet.staticSmoothSampling = span.staticSmoothSampling;
-			packet.usesLiveTileRgb = span.usesLiveTileRgb;
-			payload->packets.push_back(std::move(packet));
+			auto appendPacket = [&](NativeA8SubpixelChannel channel,
+				float horizontalPixelOffset)
+			{
+				NativeA8PacketTemplate packet;
+				packet.firstVertex = span.firstVertex;
+				packet.vertexCount = span.vertexCount;
+				packet.bound = bound;
+				packet.constants = span.constants;
+				packet.shaderClass = span.shaderClass;
+				packet.sampling = span.sampling;
+				packet.quality = effects.quality;
+				packet.layer = span.layer;
+				packet.atlasPage = span.atlasPage;
+				packet.staticSmoothSampling = span.staticSmoothSampling;
+				packet.usesLiveTileRgb = span.usesLiveTileRgb;
+				packet.subpixelChannel = channel;
+				if (channel != NativeA8SubpixelChannel::None)
+				{
+					// c4.x is unused by Fill in the grayscale ABI. The optional
+					// subpixel shader interprets it as a horizontal output-pixel
+					// offset and c4.y as its center-referenced chroma strength.
+					packet.constants[12] = horizontalPixelOffset;
+					packet.constants[13] = subpixelStrength;
+				}
+				payload->packets.push_back(std::move(packet));
+			};
+			if (subpixelRendering && span.layer == 3)
+			{
+				const bool bgr =
+					subpixelOrder == NativeA8SubpixelOrder::BGR;
+				const float redOffset = bgr ? 1.0f / 3.0f : -1.0f / 3.0f;
+				const float blueOffset = bgr ? -1.0f / 3.0f : 1.0f / 3.0f;
+				appendPacket(NativeA8SubpixelChannel::Red, redOffset);
+				appendPacket(NativeA8SubpixelChannel::Green, 0.0f);
+				appendPacket(NativeA8SubpixelChannel::Blue, blueOffset);
+			}
+			else
+			{
+				appendPacket(NativeA8SubpixelChannel::None, 0.0f);
+			}
 		}
 		payload->cpuMemory.Reset(CpuMemoryCategory::TextArtifact,
 			GetNativeA8PayloadTemplateBytes(*payload));
@@ -288,10 +338,27 @@ namespace fonthook::vectorfont
 		{
 			const UInt64 vertexEnd = static_cast<UInt64>(source.firstVertex)
 				+ source.vertexCount;
+			const bool hasSubpixelChannel =
+				source.subpixelChannel != NativeA8SubpixelChannel::None;
+			const bool subpixelRendering = payloadTemplate->subpixelOrder
+				!= NativeA8SubpixelOrder::Disabled;
 			if (!source.vertexCount || (source.vertexCount & 3u)
 				|| source.vertexCount / 4u > kNativeA8MaximumQuads
 				|| vertexEnd > payloadTemplate->gpuVertices.size()
-				|| source.atlasPage >= payloadTemplate->pageCount)
+				|| source.atlasPage >= payloadTemplate->pageCount
+				|| static_cast<UInt32>(payloadTemplate->subpixelOrder)
+					> static_cast<UInt32>(NativeA8SubpixelOrder::BGR)
+				|| !std::isfinite(payloadTemplate->subpixelStrength)
+				|| payloadTemplate->subpixelStrength < 0.0f
+				|| payloadTemplate->subpixelStrength > 1.0f
+				|| (subpixelRendering
+					!= (payloadTemplate->subpixelStrength > 0.0f))
+				|| (source.layer != 3 && hasSubpixelChannel)
+				|| (source.layer == 3
+					&& subpixelRendering != hasSubpixelChannel)
+				|| (hasSubpixelChannel
+					&& source.constants[13]
+						!= payloadTemplate->subpixelStrength))
 			{
 				return false;
 			}

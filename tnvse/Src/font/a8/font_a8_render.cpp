@@ -43,7 +43,7 @@ namespace fonthook::vectorfont
 					< kMaximumShapeValidationFailureLogs)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_a8_diag: rejected shape contract=base-vertex-packet-layer-rgb-v9 reason=%s",
+					"tnvse_freetype_a8_diag: rejected shape contract=base-vertex-packet-layer-rgb-subpixel-v10 reason=%s",
 					reason ? reason : "unknown");
 			}
 			return false;
@@ -88,6 +88,12 @@ namespace fonthook::vectorfont
 				|| payloadTemplate->packets.empty()
 				|| payloadTemplate->pageCount != payloadTemplate->atlasProperties.size()
 				|| payloadTemplate->pageCount != payloadTemplate->atlasTextures.size()
+				|| !std::isfinite(payloadTemplate->subpixelStrength)
+				|| payloadTemplate->subpixelStrength < 0.0f
+				|| payloadTemplate->subpixelStrength > 1.0f
+				|| ((payloadTemplate->subpixelOrder
+						== NativeA8SubpixelOrder::Disabled)
+					!= (payloadTemplate->subpixelStrength == 0.0f))
 				|| !IsFiniteBound(payloadTemplate->bound))
 			{
 				return RejectA8Shape("invalid-text-artifact");
@@ -101,10 +107,24 @@ namespace fonthook::vectorfont
 			{
 				const UInt64 vertexEnd = static_cast<UInt64>(packet.firstVertex)
 					+ packet.vertexCount;
+				const bool hasSubpixelChannel =
+					packet.subpixelChannel != NativeA8SubpixelChannel::None;
+				const bool subpixelRendering = payloadTemplate->subpixelOrder
+					!= NativeA8SubpixelOrder::Disabled;
 				if (!packet.vertexCount || (packet.firstVertex & 3u)
 					|| (packet.vertexCount & 3u)
 					|| vertexEnd > payloadTemplate->gpuVertices.size()
 					|| packet.layer > 3 || !IsFiniteBound(packet.bound)
+					|| static_cast<UInt32>(packet.subpixelChannel)
+						> static_cast<UInt32>(NativeA8SubpixelChannel::Blue)
+					|| static_cast<UInt32>(payloadTemplate->subpixelOrder)
+						> static_cast<UInt32>(NativeA8SubpixelOrder::BGR)
+					|| (packet.layer != 3 && hasSubpixelChannel)
+					|| (packet.layer == 3
+						&& subpixelRendering != hasSubpixelChannel)
+					|| (hasSubpixelChannel
+						&& packet.constants[13]
+							!= payloadTemplate->subpixelStrength)
 					|| !std::all_of(packet.constants.begin(), packet.constants.end(),
 						[](float value) { return std::isfinite(value); }))
 				{

@@ -67,6 +67,19 @@ if ($fillSource -notmatch 'MedianNativeFontMtsdf' -or
     $fillSource -notmatch 'FILL_QUALITY\s*==\s*0') {
     throw 'Native MTSDF fill must use quality-selected RGB median reconstruction only'
 }
+if ($fillSource -notmatch 'FILL_SUBPIXEL' -or
+    $fillSource -notmatch 'SubpixelPass\s*:\s*register\(c4\)' -or
+    $fillSource -notmatch
+    'input\.atlasUv\s*\+\s*ddx\(input\.atlasUv\)\s*\*\s*SubpixelPass\.x' -or
+    $fillSource -notmatch
+    'centerCoverage\s*=\s*EvaluateNativeFontMtsdfFillAt\(input\.atlasUv,\s*antialiasWidth\)' -or
+    $fillSource -notmatch
+    'maxChromaDelta\s*=\s*lerp\(0\.125,\s*0\.25,\s*edgeProximity\)' -or
+    $fillSource -notmatch
+    'limitedDelta\s*=\s*clamp\(' -or
+    $fillSource -notmatch 'limitedDelta\s*\*\s*saturate\(SubpixelPass\.y\)') {
+    throw 'Native MTSDF side-channel Fill lacks center-referenced chroma limiting'
+}
 
 # The HLSL contract is only valid if the native TileShader profile preserves
 # the packet's c1 layer modifier. Keep this check beside shader verification so
@@ -92,6 +105,69 @@ if ($nativeShaderSource -match 'profile->constants\s*\[\s*[0-3]\s*\]\s*=') {
 if ($nativeShaderSource -notmatch
     'key\.constantBits\.data\(\)\s*,\s*packet\.constants\.data\(\)') {
     throw 'Native shader profile identity does not include packet c1'
+}
+if ($nativeShaderSource -notmatch
+    'key\.subpixelChannel\s*=\s*packet\.subpixelChannel' -or
+    $nativeShaderSource -notmatch
+    'sideSubpixelChannel[\s\S]*?NativeA8SubpixelChannel::Red[\s\S]*?NativeA8SubpixelChannel::Blue' -or
+    $nativeShaderSource -notmatch
+    'case\s+1:[\s\S]*?NativeA8SubpixelOrder::RGB' -or
+    $nativeShaderSource -notmatch
+    'case\s+2:[\s\S]*?NativeA8SubpixelOrder::BGR' -or
+    $nativeShaderSource -notmatch
+    'NativeA8SubpixelChannel::Red[\s\S]*?D3DCOLORWRITEENABLE_RED' -or
+    $nativeShaderSource -notmatch
+    'NativeA8SubpixelChannel::Green[\s\S]*?D3DCOLORWRITEENABLE_GREEN[\s\S]*?D3DCOLORWRITEENABLE_ALPHA' -or
+    $nativeShaderSource -notmatch
+    'NativeA8SubpixelChannel::Blue[\s\S]*?D3DCOLORWRITEENABLE_BLUE') {
+    throw 'Native TileShader profiles do not isolate RGB subpixel packets and single-write target alpha'
+}
+$nativePacketSourcePath = Join-Path (
+    Split-Path -Parent $resolvedShaderDirectory) 'Src\font\native\font_native_packets.cpp'
+$nativePacketSource = Get-Content -LiteralPath $nativePacketSourcePath -Raw
+if ($nativePacketSource -notmatch
+    'subpixelRendering\s*&&\s*span\.layer\s*==\s*3' -or
+    $nativePacketSource -notmatch
+    'subpixelOrder\s*==\s*NativeA8SubpixelOrder::BGR' -or
+    $nativePacketSource -notmatch
+    'redOffset\s*=\s*bgr\s*\?\s*1\.0f\s*/\s*3\.0f\s*:\s*-1\.0f\s*/\s*3\.0f' -or
+    $nativePacketSource -notmatch
+    'NativeA8SubpixelChannel::Green,\s*0\.0f' -or
+    $nativePacketSource -notmatch
+    'blueOffset\s*=\s*bgr\s*\?\s*-1\.0f\s*/\s*3\.0f\s*:\s*1\.0f\s*/\s*3\.0f' -or
+    $nativePacketSource -notmatch
+    'NativeA8SubpixelChannel::Red,\s*redOffset' -or
+    $nativePacketSource -notmatch
+    'NativeA8SubpixelChannel::Blue,\s*blueOffset' -or
+    $nativePacketSource -notmatch
+    'packet\.constants\[12\]\s*=\s*horizontalPixelOffset' -or
+    $nativePacketSource -notmatch
+    'packet\.constants\[13\]\s*=\s*subpixelStrength') {
+    throw 'Native packet builder does not emit RGB/BGR offsets and chroma strength through c4'
+}
+$nativeAtlasSourcePath = Join-Path (
+    Split-Path -Parent $resolvedShaderDirectory) 'Src\font\atlas\font_atlas_shape.cpp'
+$nativeAtlasSource = Get-Content -LiteralPath $nativeAtlasSourcePath -Raw
+if ($nativeAtlasSource -notmatch
+    'add\(&subpixelOrder,\s*sizeof\(subpixelOrder\)\)' -or
+    $nativeAtlasSource -notmatch
+    'add\(&subpixelStrength,\s*sizeof\(subpixelStrength\)\)' -or
+    $nativeAtlasSource -notmatch
+    'artifact\.subpixelOrder\s*!=\s*subpixelOrder' -or
+    $nativeAtlasSource -notmatch
+    'artifact\.subpixelStrength\s*!=\s*subpixelStrength') {
+    throw 'Native text-artifact identity does not isolate subpixel order and strength'
+}
+$loadConfigSourcePath = Join-Path (
+    Split-Path -Parent $resolvedShaderDirectory) 'Src\load_config.cpp'
+$loadConfigSource = Get-Content -LiteralPath $loadConfigSourcePath -Raw
+if ($loadConfigSource -notmatch
+    '"uiFreeTypeMTSDFSubpixelRendering"' -or
+    $loadConfigSource -notmatch
+    'g_uiFreeTypeMTSDFSubpixelRendering\s*>\s*2[\s\S]*?g_uiFreeTypeMTSDFSubpixelRendering\s*=\s*0' -or
+    $loadConfigSource -notmatch
+    '"fFreeTypeMTSDFSubpixelStrength"[\s\S]*?0\.0f,\s*1\.0f') {
+    throw 'Native subpixel configuration does not validate mode and chroma strength'
 }
 if ($nativeShaderSource -match '0x1202188') {
     throw 'Native TileShader update reads the retail global c0 scratch address directly'
@@ -204,10 +280,18 @@ $pixelShaders = @(
     'tnvse_freetype_native_mtsdf_fill_fast.pso',
     'tnvse_freetype_native_mtsdf_fill_balanced.pso',
     'tnvse_freetype_native_mtsdf_fill_high.pso',
+    'tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso',
+    'tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso',
+    'tnvse_freetype_native_mtsdf_fill_subpixel_high.pso',
     'tnvse_freetype_native_mtsdf_effects_fast.pso',
     'tnvse_freetype_native_mtsdf_effects_balanced.pso',
     'tnvse_freetype_native_mtsdf_effects_high.pso'
 )
+$subpixelTextureSampleBudgets = @{
+    'tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso' = 2
+    'tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso' = 5
+    'tnvse_freetype_native_mtsdf_fill_subpixel_high.pso' = 9
+}
 
 $vertexPath = Join-Path $compiledDirectory $vertexShader
 if ((Get-Item -LiteralPath $vertexPath).LastWriteTimeUtc -lt $newestShaderSource) {
@@ -251,6 +335,17 @@ foreach ($shaderName in $pixelShaders) {
     }
     if (-not ($instructions -cmatch '\bc1\b')) {
         throw "$shaderName does not read the packet layer color c1"
+    }
+    if ($shaderName -like 'tnvse_freetype_native_mtsdf_fill_subpixel_*.pso' -and
+        -not ($instructions -cmatch '\bc4\b')) {
+        throw "$shaderName does not read the screen-space subpixel offset from c4"
+    }
+    if ($subpixelTextureSampleBudgets.ContainsKey($shaderName)) {
+        $textureSamples = @($instructions |
+            Where-Object { $_ -match '^\s+texld' }).Count
+        if ($textureSamples -ne $subpixelTextureSampleBudgets[$shaderName]) {
+            throw "$shaderName uses $textureSamples texture samples; expected $($subpixelTextureSampleBudgets[$shaderName])"
+        }
     }
     if ($shaderName -like 'tnvse_freetype_native_mtsdf_effects_*.pso' -and
         -not ($dump -match '\b0\.001(?:0+\d*)?\b')) {

@@ -13,6 +13,8 @@ font hook:
 bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
 fFreeTypeFontResolutionScale=1.0
+uiFreeTypeMTSDFSubpixelRendering=0
+fFreeTypeMTSDFSubpixelStrength=0.75
 ```
 
 With `[Multibyte] bEnableMultibyteFontHook=1`, FreeType uses the configured
@@ -497,6 +499,45 @@ antialiasing; they never consume the coverage-averaged atlas mip chain.
 MTSDF draw ranges also preserve fractional pen positions, encoded-unit advances,
 and effect offsets in their quad coordinates. The separate ARGB fallback remains
 snapped to the resolved source-pixel grid and may use trilinear mip sampling.
+
+`[FreeTypeFont] uiFreeTypeMTSDFSubpixelRendering` optionally replaces each
+MTSDF Fill packet with three packets that reuse the same geometry and atlas.
+`1` selects a horizontal RGB stripe: Red, Green, and Blue sample the
+reconstructed RGB-median body at screen-horizontal offsets of `-1/3`, `0`, and
+`+1/3` output pixels. `2` selects horizontal BGR and reverses the Red/Blue
+offsets to `+1/3`, `0`, and `-1/3`. `0` disables subpixel rendering. The
+TileShader profiles use `D3DRS_COLORWRITEENABLE` to update only the matching
+target channel. The Green packet also writes target Alpha, so the stock target
+alpha contract executes exactly once rather than accumulating three times.
+Shadow, glow, and outline remain ordinary grayscale Alpha-TSDF passes.
+
+The Red and Blue profiles each take one additional center MTSDF sample. Their
+shifted coverage is measured against that center, limited symmetrically to
+`0.125` in fully inside/outside pixels and `0.25` at the actual edge, then
+scaled by `[FreeTypeFont] fFreeTypeMTSDFSubpixelStrength`. This suppresses
+colored outer halos and isolated corner errors without moving the luminance
+edge. Green is already centered and reuses the ordinary quality-selected Fill
+shader rather than paying for the extra sample. Strength is clamped to `0-1`,
+defaults to `0.75`, and a value of `0` disables the three-pass route.
+
+The additional texture-sampling cost is confined to the two side channels:
+Fast uses `2 + 1 + 2 = 5` Fill samples instead of `3`, Balanced uses
+`5 + 4 + 5 = 14` instead of `12`, and High uses `9 + 8 + 9 = 26` instead of
+`24`. The Balanced default therefore adds about 16.7 percent to subpixel Fill
+texture samples, with no new draw calls, atlas pages, glyph generation, or
+effect-pass work.
+
+This setting defaults to `0` and does not detect the physical panel layout.
+Both enabled modes assume a horizontal stripe panel with native 1:1
+presentation; PenTile geometry is unsupported. Render-to-texture UI, later
+scaling, capture resampling, or post-processing can turn the physical subpixel
+signal into visible color fringes. The mode changes neither glyph generation
+nor MTSDF atlas/snapshot identity: only immutable Fill packets, shader profiles,
+and GPU draw count differ. RGB and BGR use distinct text-artifact cache
+identities, and strength is part of that identity, so incompatible packets
+cannot be reused. If the optional subpixel shader set cannot be loaded, new
+text artifacts retain the ordinary one-pass grayscale MTSDF Fill.
+
 Glow keeps
 full intensity through `inner`, then decays to zero at `outer` according to
 `power`; outline uses `width` plus `softness`; blurred shadow uses `blur` and
@@ -706,6 +747,7 @@ Neither case creates a resolution- or zoom-specific profile. If atlas creation
 fails, the affected FreeType shape is empty and the detailed build diagnostic
 identifies the failed stage. Ordinary and rich-text layout retain one output
 glyph per encoded single-byte or DBCS unit and do not perform OpenType shaping
-or bidirectional reordering. LCD subpixel rendering, color-font rendering, and
-variable-font axis controls are outside this feature. Invalid or unavailable
+or bidirectional reordering. Vertical/PenTile subpixel geometry,
+color-font rendering, and variable-font axis controls are outside this feature.
+Invalid or unavailable
 configurations leave that entire font ID on the original `.fnt`/`.tex` renderer.

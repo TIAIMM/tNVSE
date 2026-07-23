@@ -14,6 +14,9 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_balanced.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_high.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_subpixel_high.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_effects_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_effects_balanced.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_effects_high.pso")

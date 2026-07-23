@@ -75,6 +75,8 @@ namespace fonthook::vectorfont
 			std::array<UInt32, 16> constantBits = {};
 			bool writeEffectAlpha = false;
 			bool usesLiveTileRgb = true;
+			NativeA8SubpixelChannel subpixelChannel =
+				NativeA8SubpixelChannel::None;
 
 			bool operator==(const NativeProfileKey& other) const
 			{
@@ -83,6 +85,7 @@ namespace fonthook::vectorfont
 					&& quality == other.quality
 					&& writeEffectAlpha == other.writeEffectAlpha
 					&& usesLiveTileRgb == other.usesLiveTileRgb
+					&& subpixelChannel == other.subpixelChannel
 					&& constantBits == other.constantBits;
 			}
 		};
@@ -104,6 +107,7 @@ namespace fonthook::vectorfont
 				mix(static_cast<UInt32>(key.quality));
 				mix(key.writeEffectAlpha ? 1u : 0u);
 				mix(key.usesLiveTileRgb ? 1u : 0u);
+				mix(static_cast<UInt32>(key.subpixelChannel));
 				for (UInt32 value : key.constantBits)
 					mix(value);
 				return hash;
@@ -154,7 +158,9 @@ namespace fonthook::vectorfont
 			IDirect3DVertexDeclaration9* d3dDeclaration = nullptr;
 			NiD3DVertexShaderPtr vertexShader;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
+			std::array<NiD3DPixelShaderPtr, 3> mtsdfSubpixelFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
+			bool subpixelShadersReady = false;
 			bool supportsSeparateAlpha = false;
 			std::atomic<bool> runtimeFault = false;
 			std::atomic<bool> runtimeFaultLogged = false;
@@ -356,6 +362,7 @@ namespace fonthook::vectorfont
 			key.quality = packet.quality;
 			key.writeEffectAlpha = writeEffectAlpha;
 			key.usesLiveTileRgb = packet.usesLiveTileRgb;
+			key.subpixelChannel = packet.subpixelChannel;
 			std::memcpy(key.constantBits.data(), packet.constants.data(),
 				key.constantBits.size() * sizeof(UInt32));
 			return key;
@@ -395,8 +402,20 @@ namespace fonthook::vectorfont
 			case NativeA8ShaderClass::Body:
 			{
 				const size_t index = static_cast<size_t>(packet.quality);
-				return index < generation.mtsdfFillShaders.size()
-					? generation.mtsdfFillShaders[index].m_pObject : nullptr;
+				if (index >= generation.mtsdfFillShaders.size())
+					return nullptr;
+				const bool sideSubpixelChannel =
+					packet.subpixelChannel == NativeA8SubpixelChannel::Red
+					|| packet.subpixelChannel == NativeA8SubpixelChannel::Blue;
+				if (sideSubpixelChannel && generation.subpixelShadersReady)
+				{
+					return generation.mtsdfSubpixelFillShaders[index].m_pObject;
+				}
+				// Green is the exact center coverage and therefore reuses the
+				// ordinary quality-selected Fill shader. A subpixel payload can
+				// also outlive a shader refresh; three masked ordinary Fill draws
+				// then reproduce grayscale coverage safely.
+				return generation.mtsdfFillShaders[index].m_pObject;
 			}
 			case NativeA8ShaderClass::Effect:
 			{
@@ -458,9 +477,26 @@ namespace fonthook::vectorfont
 			}
 			else
 			{
-				SetPassRenderState(&pass, D3DRS_COLORWRITEENABLE,
-					D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN
-					| D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
+				DWORD colorWrite = D3DCOLORWRITEENABLE_RED
+					| D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE
+					| D3DCOLORWRITEENABLE_ALPHA;
+				switch (profile.key.subpixelChannel)
+				{
+				case NativeA8SubpixelChannel::Red:
+					colorWrite = D3DCOLORWRITEENABLE_RED;
+					break;
+				case NativeA8SubpixelChannel::Green:
+					// Preserve the stock target-alpha contract exactly once.
+					colorWrite = D3DCOLORWRITEENABLE_GREEN
+						| D3DCOLORWRITEENABLE_ALPHA;
+					break;
+				case NativeA8SubpixelChannel::Blue:
+					colorWrite = D3DCOLORWRITEENABLE_BLUE;
+					break;
+				default:
+					break;
+				}
+				SetPassRenderState(&pass, D3DRS_COLORWRITEENABLE, colorWrite);
 			}
 		}
 
@@ -590,6 +626,31 @@ namespace fonthook::vectorfont
 				index < generation->mtsdfFillShaders.size(); ++index)
 			{
 				generation->mtsdfFillShaders[index] = createPS(fillNames[index]);
+			}
+			if (g_uiFreeTypeMTSDFSubpixelRendering != 0
+				&& g_fFreeTypeMTSDFSubpixelStrength > 0.0f)
+			{
+				const char* subpixelFillNames[] = {
+					"tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso",
+					"tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso",
+					"tnvse_freetype_native_mtsdf_fill_subpixel_high.pso"
+				};
+				generation->subpixelShadersReady = true;
+				for (size_t index = 0;
+					index < generation->mtsdfSubpixelFillShaders.size(); ++index)
+				{
+					generation->mtsdfSubpixelFillShaders[index] =
+						createPS(subpixelFillNames[index]);
+					generation->subpixelShadersReady =
+						generation->subpixelShadersReady
+						&& HasShaderHandle(
+							generation->mtsdfSubpixelFillShaders[index]);
+				}
+				if (!generation->subpixelShadersReady)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_native: optional subpixel Fill shader set unavailable; retaining grayscale MTSDF Fill");
+				}
 			}
 			const char* effectNames[] = {
 				"tnvse_freetype_native_mtsdf_effects_fast.pso",
@@ -761,8 +822,11 @@ namespace fonthook::vectorfont
 		s_processGenerations.push_back(candidate);
 		s_publishedGeneration.store(candidate, std::memory_order_release);
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p",
-			candidate->id, candidate->device);
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p subpixelMode=%u subpixelStrength=%.3f subpixelReady=%u",
+			candidate->id, candidate->device,
+			g_uiFreeTypeMTSDFSubpixelRendering,
+			g_fFreeTypeMTSDFSubpixelStrength,
+			candidate->subpixelShadersReady ? 1u : 0u);
 		return true;
 	}
 
@@ -808,6 +872,36 @@ namespace fonthook::vectorfont
 			return false;
 		return GenerationMatchesCurrentDevice(s_publishedGeneration.load(
 			std::memory_order_acquire));
+	}
+
+	NativeA8SubpixelOrder GetNativeA8SubpixelOrder()
+	{
+		if (g_fFreeTypeMTSDFSubpixelStrength <= 0.0f)
+			return NativeA8SubpixelOrder::Disabled;
+		NativeA8SubpixelOrder configuredOrder =
+			NativeA8SubpixelOrder::Disabled;
+		switch (g_uiFreeTypeMTSDFSubpixelRendering)
+		{
+		case 1:
+			configuredOrder = NativeA8SubpixelOrder::RGB;
+			break;
+		case 2:
+			configuredOrder = NativeA8SubpixelOrder::BGR;
+			break;
+		default:
+			return NativeA8SubpixelOrder::Disabled;
+		}
+		NativeShaderGeneration* generation = s_publishedGeneration.load(
+			std::memory_order_acquire);
+		if (!GenerationMatchesCurrentDevice(generation))
+		{
+			if (!InitializeNativeA8Renderer(false, false))
+				return NativeA8SubpixelOrder::Disabled;
+			generation = s_publishedGeneration.load(std::memory_order_acquire);
+		}
+		return GenerationMatchesCurrentDevice(generation)
+			&& generation->subpixelShadersReady
+			? configuredOrder : NativeA8SubpixelOrder::Disabled;
 	}
 
 	UInt32 GetNativeA8ShaderGeneration()
