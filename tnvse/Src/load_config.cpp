@@ -16,6 +16,7 @@ UINT32 g_uiFreeTypeFontMemoryCacheMB;
 bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
+UINT32 g_uiFreeTypeFontDistanceFieldMode = 1;
 UINT32 g_uiFreeTypeMTSDFSubpixelRendering;
 float g_fFreeTypeMTSDFSubpixelStrength = 0.75f;
 bool g_bEnableFreeTypeGlyphCollisionProtection;
@@ -155,6 +156,21 @@ void LoadConfig()
 		kFreeTypeFontSection, "bEnableFreeTypeA8Atlas", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableFreeTypeA8Atlas: %d",
 		g_bEnableFreeTypeA8Atlas);
+
+	g_uiFreeTypeFontDistanceFieldMode = ReadConfigInt(
+		kFreeTypeFontSection, "uiFreeTypeFontDistanceFieldMode", 1,
+		filename);
+	if (g_uiFreeTypeFontDistanceFieldMode > 1)
+	{
+		gLog.FormattedMessage(
+			"g_uiFreeTypeFontDistanceFieldMode: invalid value %u; using MTSDF",
+			g_uiFreeTypeFontDistanceFieldMode);
+		g_uiFreeTypeFontDistanceFieldMode = 1;
+	}
+	gLog.FormattedMessage(
+		"g_uiFreeTypeFontDistanceFieldMode: %u (%s)",
+		g_uiFreeTypeFontDistanceFieldMode,
+		g_uiFreeTypeFontDistanceFieldMode ? "MTSDF" : "true SDF");
 
 	g_uiFreeTypeMTSDFSubpixelRendering = ReadConfigInt(
 		kFreeTypeFontSection, "uiFreeTypeMTSDFSubpixelRendering", 0,

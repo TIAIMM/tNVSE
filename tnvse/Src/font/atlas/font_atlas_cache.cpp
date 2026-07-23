@@ -483,7 +483,11 @@ namespace fonthook::vectorfont
 			if (maskCombination & (1u
 				<< static_cast<UInt8>(GlyphMaskType::DistanceField)))
 			{
-				add(&kMtsdfGeneratorRevision, sizeof(kMtsdfGeneratorRevision));
+				const DistanceFieldMethod method =
+					GetConfiguredDistanceFieldMethod();
+				const UInt32 revision = DistanceFieldGeneratorRevision(method);
+				add(&method, sizeof(method));
+				add(&revision, sizeof(revision));
 			}
 			add(&sdfSpread, sizeof(sdfSpread));
 			add(&outlineStroke, sizeof(outlineStroke));

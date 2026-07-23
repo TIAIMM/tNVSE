@@ -43,6 +43,29 @@ float DecodeNativeFontMtsdfDistance(float encodedDistance, float spread)
 	return (encodedDistance - 0.5) * (2.0 * spread);
 }
 
+#ifndef DISTANCE_FIELD_TRUE_SDF
+#define DISTANCE_FIELD_TRUE_SDF 0
+#endif
+
+float NativeFontBodyEncodedDistance(float4 distanceSample)
+{
+#if DISTANCE_FIELD_TRUE_SDF
+	return distanceSample.a;
+#else
+	return MedianNativeFontMtsdf(distanceSample.rgb);
+#endif
+}
+
+float DecodeNativeFontSelectedDistance(float encodedDistance, float spread)
+{
+#if DISTANCE_FIELD_TRUE_SDF
+	// The quantized true-SDF contour is byte 128. Preserve that exact zero.
+	return (encodedDistance * (255.0 / 128.0) - 1.0) * spread;
+#else
+	return DecodeNativeFontMtsdfDistance(encodedDistance, spread);
+#endif
+}
+
 float NativeFontMtsdfScreenPxRange(float2 uv, float2 inverseAtlasSize,
 	float spread)
 {

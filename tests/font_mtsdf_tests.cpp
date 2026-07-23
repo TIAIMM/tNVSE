@@ -70,6 +70,34 @@ namespace
 		return result;
 	}
 
+	float SampleTrueSdf(
+		const fonthook::vectorfont::MsdfgenSdfBitmap& bitmap,
+		double shapeX, double shapeY)
+	{
+		const int bottom = bitmap.top - bitmap.height;
+		const double sampleX = shapeX - bitmap.left - 0.5;
+		const double sampleY = shapeY - bottom - 0.5;
+		const int x0 = std::clamp(static_cast<int>(std::floor(sampleX)),
+			0, bitmap.width - 1);
+		const int y0 = std::clamp(static_cast<int>(std::floor(sampleY)),
+			0, bitmap.height - 1);
+		const int x1 = std::min(x0 + 1, bitmap.width - 1);
+		const int y1 = std::min(y0 + 1, bitmap.height - 1);
+		const float tx = static_cast<float>(sampleX - std::floor(sampleX));
+		const float ty = static_cast<float>(sampleY - std::floor(sampleY));
+		auto texel = [&](int x, int y)
+		{
+			const int storedY = bitmap.height - 1 - y;
+			return bitmap.pixels[static_cast<std::size_t>(storedY)
+				* bitmap.width + x] / 255.0f;
+		};
+		const float bottomValue =
+			texel(x0, y0) + (texel(x1, y0) - texel(x0, y0)) * tx;
+		const float topValue =
+			texel(x0, y1) + (texel(x1, y1) - texel(x0, y1)) * tx;
+		return bottomValue + (topValue - bottomValue) * ty;
+	}
+
 	bool BuildNormalizedShape(FT_Outline& outline, msdfgen::Shape& shape)
 	{
 		if (msdfgen::readFreetypeOutline(shape, &outline, 1.0 / 64.0)
@@ -186,6 +214,16 @@ int main()
 	using namespace fonthook::vectorfont;
 	Check(kMtsdfGeneratorRevision == 4,
 		"unexpected MTSDF generator/cache revision");
+	Check(kTrueSdfGeneratorRevision == 2,
+		"unexpected true-SDF generator/cache revision");
+	Check(DistanceFieldBytesPerPixel(DistanceFieldMethod::TrueSdf) == 1
+		&& DistanceFieldBytesPerPixel(DistanceFieldMethod::Mtsdf) == 4,
+		"distance-field storage selection is incorrect");
+	Check(DistanceFieldGeneratorRevision(DistanceFieldMethod::TrueSdf)
+			== kTrueSdfGeneratorRevision
+		&& DistanceFieldGeneratorRevision(DistanceFieldMethod::Mtsdf)
+			== kMtsdfGeneratorRevision,
+		"distance-field revision selection is incorrect");
 
 	std::array<FT_Vector, 10> nPoints = {{
 		{ 0, 0 }, { 2 * 64, 0 }, { 8 * 64, 9 * 64 },
@@ -238,6 +276,26 @@ int main()
 	Check(!GenerateMsdfgenMtsdf(nOutline, 4, repeated, 100),
 		"four-channel byte budget was not enforced");
 
+	MsdfgenSdfBitmap trueSdf;
+	Check(GenerateMsdfgenTrueSdf(nOutline, 4, trueSdf),
+		"synthetic N true-SDF generation failed");
+	Check(trueSdf.width == bitmap.width && trueSdf.height == bitmap.height
+		&& trueSdf.left == bitmap.left && trueSdf.top == bitmap.top,
+		"true-SDF and MTSDF field bounds diverged");
+	Check(trueSdf.pixels.size() == static_cast<std::size_t>(trueSdf.width)
+		* trueSdf.height, "true SDF is not one byte per texel");
+	Check(std::any_of(trueSdf.pixels.begin(), trueSdf.pixels.end(),
+			[](std::uint8_t value) { return value < 128; })
+		&& std::any_of(trueSdf.pixels.begin(), trueSdf.pixels.end(),
+			[](std::uint8_t value) { return value > 128; }),
+		"true SDF does not contain signed interior and exterior distances");
+	MsdfgenSdfBitmap repeatedTrueSdf;
+	Check(GenerateMsdfgenTrueSdf(nOutline, 4, repeatedTrueSdf)
+		&& repeatedTrueSdf.pixels == trueSdf.pixels,
+		"true-SDF generation is not deterministic");
+	Check(!GenerateMsdfgenTrueSdf(nOutline, 4, repeatedTrueSdf, 100),
+		"single-channel byte budget was not enforced");
+
 	// Equally oriented contours require FreeType's even-odd fill rule for a hole.
 	std::array<FT_Vector, 8> ringPoints = {{
 		{ 0, 0 }, { 12 * 64, 0 }, { 12 * 64, 12 * 64 }, { 0, 12 * 64 },
@@ -263,6 +321,13 @@ int main()
 		"ring body was classified as exterior");
 	Check(Median(hole[0], hole[1], hole[2]) < 0.5f && hole[3] < 0.5f,
 		"even-odd hole was classified as interior");
+	MsdfgenSdfBitmap ringTrueSdf;
+	Check(GenerateMsdfgenTrueSdf(ring, 4, ringTrueSdf),
+		"even-odd ring true-SDF generation failed");
+	Check(SampleTrueSdf(ringTrueSdf, 1.5, 6.0) > 0.5f,
+		"true-SDF ring body was classified as exterior");
+	Check(SampleTrueSdf(ringTrueSdf, 6.0, 6.0) < 0.5f,
+		"true-SDF even-odd hole was classified as interior");
 
 	ProbeFuturaNIfAvailable();
 	return 0;

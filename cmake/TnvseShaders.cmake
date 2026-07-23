@@ -19,7 +19,16 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_subpixel_high.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_effects_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_effects_balanced.pso"
-    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_effects_high.pso")
+    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_effects_high.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_fast.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_balanced.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_high.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_subpixel_fast.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_subpixel_balanced.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_subpixel_high.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_effects_fast.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_effects_balanced.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_effects_high.pso")
 
   # Keep HLSL visible in the generated Visual Studio solution without letting
   # VS invoke its generic FxCompile rule. The batch file is the authoritative
@@ -33,7 +42,7 @@ function(tnvse_add_shader_target output_variable)
     WORKING_DIRECTORY "${shader_dir}"
     BYPRODUCTS ${shader_outputs}
     SOURCES ${shader_sources}
-    COMMENT "Compiling and verifying native FreeType MTSDF shaders"
+    COMMENT "Compiling and verifying native FreeType true-SDF and MTSDF shaders"
     VERBATIM)
   set_target_properties(tnvse_shaders PROPERTIES FOLDER "tNVSE/Shaders")
   set(${output_variable} "${shader_outputs}" PARENT_SCOPE)

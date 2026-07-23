@@ -225,6 +225,8 @@ namespace fonthook::vectorfont
 			|| effects.atlasProperties.empty()
 			|| effects.atlasProperties.size() != effects.atlasTextures.size()
 			|| effects.atlasProperties.size() > std::numeric_limits<UInt32>::max()
+			|| static_cast<UInt32>(effects.distanceFieldMethod)
+				> static_cast<UInt32>(DistanceFieldMethod::Mtsdf)
 			|| static_cast<UInt32>(subpixelOrder)
 				> static_cast<UInt32>(NativeA8SubpixelOrder::BGR)
 			|| !std::isfinite(subpixelStrength)
@@ -283,6 +285,7 @@ namespace fonthook::vectorfont
 				packet.shaderClass = span.shaderClass;
 				packet.sampling = span.sampling;
 				packet.quality = effects.quality;
+				packet.distanceFieldMethod = effects.distanceFieldMethod;
 				packet.layer = span.layer;
 				packet.atlasPage = span.atlasPage;
 				packet.staticSmoothSampling = span.staticSmoothSampling;

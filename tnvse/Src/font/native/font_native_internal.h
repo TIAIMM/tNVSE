@@ -103,6 +103,8 @@ namespace fonthook::vectorfont
 		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
 		NativeA8Sampling sampling = NativeA8Sampling::Point;
 		EffectQuality quality = EffectQuality::Balanced;
+		DistanceFieldMethod distanceFieldMethod =
+			GetConfiguredDistanceFieldMethod();
 		UInt32 layer = 3;
 		UInt16 atlasPage = 0;
 		bool staticSmoothSampling = false;

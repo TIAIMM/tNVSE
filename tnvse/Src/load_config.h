@@ -13,6 +13,7 @@ extern UINT32 g_uiFreeTypeFontMemoryCacheMB;
 extern bool g_bDeleteUnusedFreeTypeFontCache;
 extern bool g_bEnableFreeTypeDefaultPoolAtlas;
 extern bool g_bEnableFreeTypeA8Atlas;
+extern UINT32 g_uiFreeTypeFontDistanceFieldMode;
 extern UINT32 g_uiFreeTypeMTSDFSubpixelRendering;
 extern float g_fFreeTypeMTSDFSubpixelStrength;
 extern bool g_bEnableFreeTypeGlyphCollisionProtection;

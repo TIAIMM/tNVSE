@@ -336,7 +336,12 @@ namespace fonthook::vectorfont
 			if (ResolveFontAtlasRoute(IsA8RendererAvailable())
 				== FontAtlasRoute::ShaderMtsdf)
 			{
-				// RGB/Alpha MTSDF pixels depend on the largest physical effect
+				const DistanceFieldMethod method =
+					GetConfiguredDistanceFieldMethod();
+				const UInt32 revision = DistanceFieldGeneratorRevision(method);
+				add(&method, sizeof(method));
+				add(&revision, sizeof(revision));
+				// Distance-field pixels depend on the largest physical effect
 				// radius, not colors, offsets, powers, or shader sampling quality.
 				// Hash the exact unscaled maximum so equal values remain equal at
 				// every raster scale while effect-only variants share one prewarm.
@@ -438,7 +443,9 @@ namespace fonthook::vectorfont
 				size_t bytes = SaturatingMultiply(
 					SaturatingMultiply(width, height), masks);
 				if (shaderSdf)
-					bytes = SaturatingMultiply(bytes, 4u);
+					bytes = SaturatingMultiply(bytes,
+						DistanceFieldBytesPerPixel(
+							GetConfiguredDistanceFieldMethod()));
 				worstBytes = std::max(worstBytes, bytes);
 			}
 			const size_t configuredBudget = GetCpuMemoryBudget();
@@ -464,7 +471,9 @@ namespace fonthook::vectorfont
 		{
 			wchar_t detail[160] = {};
 			const wchar_t* renderMode = ResolveFontAtlasRoute(IsA8RendererAvailable())
-				== FontAtlasRoute::ShaderMtsdf ? L"MTSDF" : L"ARGB fallback";
+				== FontAtlasRoute::ShaderMtsdf
+				? (UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF")
+				: L"ARGB fallback";
 			_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 				L"Font %u of %u  |  ID %u  |  %ls",
 				fontOrdinal, fontCount, job.fontId, renderMode);
@@ -479,10 +488,11 @@ namespace fonthook::vectorfont
 		void FinishJob(const PrewarmJob& job, const char* status)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm font=%u coverage=full-codepage scale=%.3f glyphs=%u doubleByte=%u mtsdfGlyphs=%u status=%s",
+				"tnvse_freetype_font: prewarm font=%u coverage=full-codepage scale=%.3f glyphs=%u doubleByte=%u distanceField=%s distanceFieldGlyphs=%u status=%s",
 				job.fontId,
 				job.rasterScaleMilli ? job.rasterScaleMilli / 1000.0f : 0.0f,
 				job.rasterizedGlyphCount, job.validDoubleByteCount,
+				GetConfiguredDistanceFieldMethodName(),
 				job.sdfGlyphCount, status);
 		}
 	}
@@ -729,7 +739,7 @@ namespace fonthook::vectorfont
 					*owner, rasterScale))
 				{
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: shared MTSDF owner unavailable font=%u owner=%u; deferring alias atlas",
+						"tnvse_freetype_font: shared distance-field owner unavailable font=%u owner=%u; deferring alias atlas",
 						job.fontId, config->mtsdfDoubleByteOwnerFontId);
 					FinishJob(job, "shared-owner-unavailable");
 					++streamFailedFonts;
@@ -889,7 +899,7 @@ namespace fonthook::vectorfont
 					}
 
 					// Release every strong bitmap reference before the next batch. The
-					// stream owns only one bounded packed MTSDF page and its placement
+					// stream owns only one bounded packed distance-field page and its placement
 					// metadata; the bitmap LRU can obey the aggregate CPU budget.
 					bitmapResults.clear();
 					bitmapRequests.clear();
@@ -900,7 +910,10 @@ namespace fonthook::vectorfont
 					ReportPrewarmProgress(job, fontOrdinal, queuedFonts, finishedFonts,
 						retrySmallerBatch
 							? L"Reducing batch size after memory pressure..."
-							: shaderSdf ? L"Streaming MTSDF glyphs to disk..."
+							: shaderSdf
+								? (UsesMtsdfDistanceField()
+									? L"Streaming MTSDF glyphs to disk..."
+									: L"Streaming true-SDF glyphs to disk...")
 								: L"Generating bounded fallback masks...");
 					if (retrySmallerBatch)
 						continue;
@@ -921,8 +934,9 @@ namespace fonthook::vectorfont
 			{
 				wchar_t detail[160] = {};
 				_snwprintf_s(detail, _countof(detail), _TRUNCATE,
-					L"Font %u of %u  |  ID %u  |  MTSDF",
-					fontOrdinal, queuedFonts, job.fontId);
+					L"Font %u of %u  |  ID %u  |  %ls",
+					fontOrdinal, queuedFonts, job.fontId,
+					UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF");
 				const float overall = queuedFonts
 					? (static_cast<float>(finishedFonts) + 0.95f) / queuedFonts
 					: 0.95f;

@@ -266,6 +266,8 @@ namespace fonthook::vectorfont
 					baked->effectiveWidth = quad.bitmap->effectiveWidth;
 					baked->effectiveHeight = quad.bitmap->effectiveHeight;
 					baked->maskType = quad.bitmap->maskType;
+					baked->distanceFieldMethod =
+						quad.bitmap->distanceFieldMethod;
 					baked->sdfSpread = quad.bitmap->sdfSpread;
 					baked->strokeWidth26Dot6 = quad.bitmap->strokeWidth26Dot6;
 					baked->colorBaked = quad.bitmap->colorBaked;
@@ -492,6 +494,8 @@ namespace fonthook::vectorfont
 			build = {};
 			build.config.enabled = true;
 			build.config.shaderEffects = true;
+			build.config.distanceFieldMethod =
+				GetConfiguredDistanceFieldMethod();
 			build.config.quality = quality;
 			const FontConfig& config = GetRuntimeConfig(runtime);
 			UInt32 sdfSpread = 0;
@@ -501,7 +505,8 @@ namespace fonthook::vectorfont
 				if (g_bEnableFreeTypeFontRenderingLog)
 				{
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: MTSDF spread unsupported font=%u scale=%.3f glowOuter=%.3f outline=%.3f softness=%.3f shadowBlur=%.3f; using CPU effects",
+						"tnvse_freetype_font: %s spread unsupported font=%u scale=%.3f glowOuter=%.3f outline=%.3f softness=%.3f shadowBlur=%.3f; using CPU effects",
+						GetConfiguredDistanceFieldMethodName(),
 						config.fontId, rasterScale, config.glow.outer,
 						config.outline.width, config.outline.softness,
 						config.shadow.blur);
@@ -566,8 +571,9 @@ namespace fonthook::vectorfont
 				prepared.push_back(std::move(glyph));
 			}
 			GetAtlasBackedGlyphBitmaps(runtime, bitmapRequests, rasterScale,
-				AtlasPixelMode::Mtsdf32, AtlasRenderMode::ShaderEffects,
-				kMtsdfAtlasPadding, bitmapResults);
+				GetConfiguredDistanceFieldAtlasPixelMode(),
+				AtlasRenderMode::ShaderEffects,
+				kDistanceFieldAtlasPadding, bitmapResults);
 			size_t bitmapIndex = 0;
 			for (PreparedShaderGlyph& glyph : prepared)
 			{
@@ -733,6 +739,8 @@ namespace fonthook::vectorfont
 			add(&geometryKey.quadCount, sizeof(geometryKey.quadCount));
 			add(&effect.enabled, sizeof(effect.enabled));
 			add(&effect.shaderEffects, sizeof(effect.shaderEffects));
+			add(&effect.distanceFieldMethod,
+				sizeof(effect.distanceFieldMethod));
 			add(&effect.quality, sizeof(effect.quality));
 			add(&subpixelOrder, sizeof(subpixelOrder));
 			add(&subpixelStrength, sizeof(subpixelStrength));

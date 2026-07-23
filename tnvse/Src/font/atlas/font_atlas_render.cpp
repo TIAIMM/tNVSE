@@ -155,7 +155,8 @@ namespace fonthook::vectorfont
 				std::vector<std::shared_ptr<AtlasResource>> shaderAtlases;
 				NiTriShape* shaderShape = TryCreateAtlasShapeForMode(font,
 					shaderQuads, config, rasterScale, prepareObject,
-					AtlasPixelMode::Mtsdf32, AtlasRenderMode::ShaderEffects,
+					GetConfiguredDistanceFieldAtlasPixelMode(),
+					AtlasRenderMode::ShaderEffects,
 					shaderBuild.padding, shaderAtlases, tileColor, true,
 					&shaderBuild.config);
 				if (shaderShape)
@@ -172,7 +173,8 @@ namespace fonthook::vectorfont
 						FreeTypeFontDebugLog(
 							"tnvse_freetype_font: shader batch font=%u requestedFill=%s resolvedFill=%s quality=%u spread=%.0f glyphs=%u geometryQuads=%u drawQuads=%u padding=%u pages=%u texture0=%ux%u abi=%u",
 							font.iFontNum,
-							"mtsdf-rgb", "mtsdf-rgb",
+							GetConfiguredDistanceFieldMethodName(),
+							GetConfiguredDistanceFieldMethodName(),
 							static_cast<UInt32>(resolvedQuality),
 							shaderBuild.config.sdfSpreadPixels,
 							static_cast<UInt32>(glyphs.size()),
@@ -192,13 +194,14 @@ namespace fonthook::vectorfont
 				&& state.shaderBatchFailureLogCount++ < 32)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: shader batch failed font=%u stage=%s requestedFill=mtsdf-rgb resolvedRoute=argb-fallback quads=%u; using CPU masks",
+					"tnvse_freetype_font: shader batch failed font=%u stage=%s requestedFill=%s resolvedRoute=argb-fallback quads=%u; using CPU masks",
 					font.iFontNum,
 					!shaderQuadsBuilt ? "mask-build"
 						: shaderQuads.empty() ? "empty-batch"
 						: shaderQuads.size() > kMaximumQuads ? "quad-limit"
 						: shaderAtlasOrShapeFailed ? "atlas-or-shape"
 						: "unknown",
+					GetConfiguredDistanceFieldMethodName(),
 					static_cast<UInt32>(shaderQuads.size()));
 			}
 		}

@@ -124,9 +124,9 @@ namespace fonthook::vectorfont
 				BuildPrewarmAtlasContentHash(config, byteClass, rasterScale, true),
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
-				AtlasPixelMode::Mtsdf32,
+				GetConfiguredDistanceFieldAtlasPixelMode(),
 				AtlasRenderMode::ShaderEffects,
-				kMtsdfAtlasPadding,
+				kDistanceFieldAtlasPadding,
 				true,
 				byteClass
 			};
@@ -156,8 +156,11 @@ namespace fonthook::vectorfont
 				sizeof(kMaximumAtlasMipLevels), hash);
 			hash = HashAtlasBytes(&A8ShapeColorContract::kTileUniformColorAbi,
 				sizeof(A8ShapeColorContract::kTileUniformColorAbi), hash);
-			hash = HashAtlasBytes(&kMtsdfGeneratorRevision,
-				sizeof(kMtsdfGeneratorRevision), hash);
+			const DistanceFieldMethod method =
+				GetConfiguredDistanceFieldMethod();
+			const UInt32 revision = DistanceFieldGeneratorRevision(method);
+			hash = HashAtlasBytes(&method, sizeof(method), hash);
+			hash = HashAtlasBytes(&revision, sizeof(revision), hash);
 			// Atlas restore also requires the matching complete glyph manifest.
 			hash = HashAtlasBytes(&kPersistentGlyphManifestVersion,
 				sizeof(kPersistentGlyphManifestVersion), hash);
@@ -216,7 +219,7 @@ namespace fonthook::vectorfont
 
 		bool UsesPlacedLevelZeroSnapshot(const AtlasCacheKey& key)
 		{
-			return key.pixelMode == AtlasPixelMode::Mtsdf32
+			return IsDistanceFieldAtlasPixelMode(key.pixelMode)
 				&& key.renderMode == AtlasRenderMode::ShaderEffects;
 		}
 
@@ -632,7 +635,7 @@ namespace fonthook::vectorfont
 			for (const auto& item : resources)
 			{
 				const AtlasResource& resource = *item.second;
-				if (resource.pixelMode != AtlasPixelMode::Mtsdf32
+				if (resource.pixelMode != baseKey.pixelMode
 					|| resource.renderMode != AtlasRenderMode::ShaderEffects)
 					return false;
 				originalGpuBytes += GetAtlasStorageBytes(resource.width, resource.height,
@@ -1127,12 +1130,12 @@ namespace fonthook::vectorfont
 			}
 			else
 			{
-				// MTSDF shader pages keep only placed level-zero texels. DEFAULT-pool
+				// Distance-field pages keep only placed level-zero texels. DEFAULT-pool
 				// restore streams these texels directly; later resets reuse the
 				// validated snapshot instead of retaining a second CPU pixel copy.
 				const bool compactDefaultEligible = g_bEnableFreeTypeDefaultPoolAtlas
 					&& !State().defaultPoolShutdown
-					&& pageKey.pixelMode == AtlasPixelMode::Mtsdf32
+					&& IsDistanceFieldAtlasPixelMode(pageKey.pixelMode)
 					&& pageKey.renderMode == AtlasRenderMode::ShaderEffects
 					&& expectsPlacedLevelZero;
 				if (compactDefaultEligible)
@@ -1902,17 +1905,18 @@ namespace fonthook::vectorfont
 		const bool useCustomA8Shader = IsA8RendererAvailable();
 		// Original-shader ARGB glyphs bake a per-range color into distinct bitmap
 		// cache IDs at shape-build time. A raw ARGB prewarm atlas cannot be reused
-		// and would only evict useful MTSDF generations.
+		// and would only evict useful distance-field generations.
 		if (!useCustomA8Shader)
 			return true;
-		const AtlasPixelMode pixelMode = AtlasPixelMode::Mtsdf32;
+		const AtlasPixelMode pixelMode =
+			GetConfiguredDistanceFieldAtlasPixelMode();
 		EffectQuality resolved = config.effectQuality;
 		if (!ResolveA8EffectQuality(config.effectQuality, resolved))
 			return false;
 		UInt32 sdfSpread = 0;
 		if (!ResolveSdfSpread(config, rasterScale, sdfSpread))
 			return false;
-		const UInt32 padding = kMtsdfAtlasPadding;
+		const UInt32 padding = kDistanceFieldAtlasPadding;
 		// Height-first shelves make a complete prewarm profile substantially denser
 		// than appending scan-order batches, and let every page be uploaded once.
 		std::vector<std::shared_ptr<const GlyphBitmap>> packedBitmaps = bitmaps;

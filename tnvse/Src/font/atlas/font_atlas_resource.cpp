@@ -593,14 +593,12 @@ namespace fonthook::vectorfont
 			UInt32 destinationX, UInt32 destinationY)
 		{
 			const UInt32 bitmapBytesPerPixel =
-				GlyphBitmapBytesPerPixel(bitmap.maskType);
+				GlyphBitmapBytesPerPixel(
+					bitmap.maskType, bitmap.distanceFieldMethod);
 			const size_t requiredBitmapBytes = static_cast<size_t>(rect.width)
 				* rect.height * bitmapBytesPerPixel;
 			if (!destination || bitmap.alpha.size() < requiredBitmapBytes
-				|| (mode == AtlasPixelMode::Mtsdf32
-					&& bitmap.maskType != GlyphMaskType::DistanceField)
-				|| (mode != AtlasPixelMode::Mtsdf32
-					&& bitmap.maskType == GlyphMaskType::DistanceField))
+				|| !IsCompatibleDistanceFieldBitmap(mode, bitmap))
 				return;
 			const UInt32 bytesPerPixel = AtlasBytesPerPixel(mode);
 			for (UInt32 y = 0; y < rect.height; ++y)
@@ -1060,13 +1058,11 @@ namespace fonthook::vectorfont
 		{
 			UInt8* pixels = GetAtlasBacking(resource);
 			const UInt32 bitmapBytesPerPixel =
-				GlyphBitmapBytesPerPixel(bitmap.maskType);
+				GlyphBitmapBytesPerPixel(
+					bitmap.maskType, bitmap.distanceFieldMethod);
 			if (!pixels || bitmap.alpha.size() < static_cast<size_t>(rect.width)
 				* rect.height * bitmapBytesPerPixel
-				|| (resource.pixelMode == AtlasPixelMode::Mtsdf32
-					&& bitmap.maskType != GlyphMaskType::DistanceField)
-				|| (resource.pixelMode != AtlasPixelMode::Mtsdf32
-					&& bitmap.maskType == GlyphMaskType::DistanceField))
+				|| !IsCompatibleDistanceFieldBitmap(resource.pixelMode, bitmap))
 				return;
 			for (UInt32 y = 0; y < rect.height; ++y)
 			{
@@ -1491,6 +1487,8 @@ namespace fonthook::vectorfont
 		bitmap->effectiveWidth = placement.effectiveWidth;
 		bitmap->effectiveHeight = placement.effectiveHeight;
 		bitmap->maskType = static_cast<GlyphMaskType>(placement.maskType);
+		bitmap->distanceFieldMethod = resource.pixelMode == AtlasPixelMode::Mtsdf32
+			? DistanceFieldMethod::Mtsdf : DistanceFieldMethod::TrueSdf;
 		bitmap->sdfSpread = placement.sdfSpread;
 		bitmap->strokeWidth26Dot6 = placement.strokeWidth26Dot6;
 		bitmap->colorBaked = placement.colorBaked != 0;

@@ -107,10 +107,10 @@ float EvaluateNativeFontEffect(float alphaDistance, float antialiasWidth,
 float EvaluateNativeFontEffectAt(float2 uv, float antialiasWidth, int layer)
 {
 	const float4 mtsdf = SampleNativeFontMtsdf(FontAtlas, uv);
-	const float alphaDistance = DecodeNativeFontMtsdfDistance(
+	const float alphaDistance = DecodeNativeFontSelectedDistance(
 		mtsdf.a, AtlasPass.w);
-	const float rgbDistance = DecodeNativeFontMtsdfDistance(
-		MedianNativeFontMtsdf(mtsdf.rgb), AtlasPass.w);
+	const float rgbDistance = DecodeNativeFontSelectedDistance(
+		NativeFontBodyEncodedDistance(mtsdf), AtlasPass.w);
 	const float rgbBody = NativeFontMtsdfBody(
 		rgbDistance, antialiasWidth);
 	return EvaluateNativeFontEffect(
@@ -120,10 +120,10 @@ float EvaluateNativeFontEffectAt(float2 uv, float antialiasWidth, int layer)
 float SupersampledNativeFontEffect(float2 uv, int layer)
 {
 	const float4 center = SampleNativeFontMtsdf(FontAtlas, uv);
-	const float centerAlphaDistance = DecodeNativeFontMtsdfDistance(
+	const float centerAlphaDistance = DecodeNativeFontSelectedDistance(
 		center.a, AtlasPass.w);
-	const float centerRgbDistance = DecodeNativeFontMtsdfDistance(
-		MedianNativeFontMtsdf(center.rgb), AtlasPass.w);
+	const float centerRgbDistance = DecodeNativeFontSelectedDistance(
+		NativeFontBodyEncodedDistance(center), AtlasPass.w);
 	const float screenPxRange = NativeFontMtsdfScreenPxRange(
 		uv, AtlasPass.xy, AtlasPass.w);
 	const float antialiasWidth = NativeFontMtsdfAntialiasWidth(

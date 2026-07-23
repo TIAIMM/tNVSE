@@ -345,7 +345,7 @@ namespace fonthook::vectorfont
 							break;
 						}
 						packetScope.Select(proxyShape);
-						// The MTSDF shader already produces continuous coverage.
+						// The distance-field shader already produces continuous coverage.
 						// The stock Tile call enables alpha testing for UI items,
 						// which would threshold and discard those edge samples.
 						state.originalTileRenderPass(pass, currentPass, false,

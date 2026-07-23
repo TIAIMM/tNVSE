@@ -72,6 +72,7 @@ namespace fonthook::vectorfont
 			NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
 			NativeA8Sampling sampling = NativeA8Sampling::Point;
 			EffectQuality quality = EffectQuality::Balanced;
+			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
 			std::array<UInt32, 16> constantBits = {};
 			bool writeEffectAlpha = false;
 			bool usesLiveTileRgb = true;
@@ -83,6 +84,7 @@ namespace fonthook::vectorfont
 				return shaderClass == other.shaderClass
 					&& sampling == other.sampling
 					&& quality == other.quality
+					&& distanceFieldMethod == other.distanceFieldMethod
 					&& writeEffectAlpha == other.writeEffectAlpha
 					&& usesLiveTileRgb == other.usesLiveTileRgb
 					&& subpixelChannel == other.subpixelChannel
@@ -105,6 +107,7 @@ namespace fonthook::vectorfont
 				mix(static_cast<UInt32>(key.shaderClass));
 				mix(static_cast<UInt32>(key.sampling));
 				mix(static_cast<UInt32>(key.quality));
+				mix(static_cast<UInt32>(key.distanceFieldMethod));
 				mix(key.writeEffectAlpha ? 1u : 0u);
 				mix(key.usesLiveTileRgb ? 1u : 0u);
 				mix(static_cast<UInt32>(key.subpixelChannel));
@@ -160,6 +163,7 @@ namespace fonthook::vectorfont
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfSubpixelFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
+			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
 			bool subpixelShadersReady = false;
 			bool supportsSeparateAlpha = false;
 			std::atomic<bool> runtimeFault = false;
@@ -335,7 +339,7 @@ namespace fonthook::vectorfont
 				return;
 			}
 
-			// MTSDF channels are numeric linear data and pages contain only level
+			// Distance-field channels are numeric linear data and pages contain only level
 			// zero. Reassert both states after the stock Tile update, which can
 			// inherit them from an unrelated preceding pass.
 			const HRESULT srgbResult = device->SetSamplerState(
@@ -360,6 +364,7 @@ namespace fonthook::vectorfont
 			key.shaderClass = packet.shaderClass;
 			key.sampling = sampling;
 			key.quality = packet.quality;
+			key.distanceFieldMethod = packet.distanceFieldMethod;
 			key.writeEffectAlpha = writeEffectAlpha;
 			key.usesLiveTileRgb = packet.usesLiveTileRgb;
 			key.subpixelChannel = packet.subpixelChannel;
@@ -374,8 +379,7 @@ namespace fonthook::vectorfont
 		{
 			static_cast<void>(packet);
 			static_cast<void>(scaledFillSampling);
-			// Channel interpolation is part of MSDF reconstruction. MTSDF atlas
-			// pages are explicitly level-zero-only.
+			// Distance-field atlas pages are explicitly level-zero-only.
 			return NativeA8Sampling::LinearLod0;
 		}
 
@@ -397,6 +401,8 @@ namespace fonthook::vectorfont
 			NativeShaderGeneration& generation,
 			const NativeA8PacketTemplate& packet)
 		{
+			if (packet.distanceFieldMethod != generation.distanceFieldMethod)
+				return nullptr;
 			switch (packet.shaderClass)
 			{
 			case NativeA8ShaderClass::Body:
@@ -615,13 +621,23 @@ namespace fonthook::vectorfont
 			generation->supportsSeparateAlpha =
 				(renderer->m_kD3DCaps9.PrimitiveMiscCaps
 					& D3DPMISCCAPS_SEPARATEALPHABLEND) != 0;
+			generation->distanceFieldMethod =
+				GetConfiguredDistanceFieldMethod();
 
 			generation->vertexShader = createVS("tnvse_freetype_native_vs.vso");
-			const char* fillNames[] = {
+			const char* mtsdfFillNames[] = {
 				"tnvse_freetype_native_mtsdf_fill_fast.pso",
 				"tnvse_freetype_native_mtsdf_fill_balanced.pso",
 				"tnvse_freetype_native_mtsdf_fill_high.pso"
 			};
+			const char* trueSdfFillNames[] = {
+				"tnvse_freetype_native_sdf_fill_fast.pso",
+				"tnvse_freetype_native_sdf_fill_balanced.pso",
+				"tnvse_freetype_native_sdf_fill_high.pso"
+			};
+			const char* const* fillNames =
+				generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
+				? mtsdfFillNames : trueSdfFillNames;
 			for (size_t index = 0;
 				index < generation->mtsdfFillShaders.size(); ++index)
 			{
@@ -630,11 +646,19 @@ namespace fonthook::vectorfont
 			if (g_uiFreeTypeMTSDFSubpixelRendering != 0
 				&& g_fFreeTypeMTSDFSubpixelStrength > 0.0f)
 			{
-				const char* subpixelFillNames[] = {
+				const char* mtsdfSubpixelFillNames[] = {
 					"tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso",
 					"tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso",
 					"tnvse_freetype_native_mtsdf_fill_subpixel_high.pso"
 				};
+				const char* trueSdfSubpixelFillNames[] = {
+					"tnvse_freetype_native_sdf_fill_subpixel_fast.pso",
+					"tnvse_freetype_native_sdf_fill_subpixel_balanced.pso",
+					"tnvse_freetype_native_sdf_fill_subpixel_high.pso"
+				};
+				const char* const* subpixelFillNames =
+					generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
+						? mtsdfSubpixelFillNames : trueSdfSubpixelFillNames;
 				generation->subpixelShadersReady = true;
 				for (size_t index = 0;
 					index < generation->mtsdfSubpixelFillShaders.size(); ++index)
@@ -649,14 +673,23 @@ namespace fonthook::vectorfont
 				if (!generation->subpixelShadersReady)
 				{
 					gLog.FormattedMessage(
-						"tnvse_freetype_native: optional subpixel Fill shader set unavailable; retaining grayscale MTSDF Fill");
+						"tnvse_freetype_native: optional subpixel Fill shader set unavailable; retaining grayscale %s Fill",
+						GetConfiguredDistanceFieldMethodName());
 				}
 			}
-			const char* effectNames[] = {
+			const char* mtsdfEffectNames[] = {
 				"tnvse_freetype_native_mtsdf_effects_fast.pso",
 				"tnvse_freetype_native_mtsdf_effects_balanced.pso",
 				"tnvse_freetype_native_mtsdf_effects_high.pso"
 			};
+			const char* trueSdfEffectNames[] = {
+				"tnvse_freetype_native_sdf_effects_fast.pso",
+				"tnvse_freetype_native_sdf_effects_balanced.pso",
+				"tnvse_freetype_native_sdf_effects_high.pso"
+			};
+			const char* const* effectNames =
+				generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
+					? mtsdfEffectNames : trueSdfEffectNames;
 			for (size_t index = 0; index < generation->effectShaders.size(); ++index)
 				generation->effectShaders[index] = createPS(effectNames[index]);
 
@@ -822,8 +855,9 @@ namespace fonthook::vectorfont
 		s_processGenerations.push_back(candidate);
 		s_publishedGeneration.store(candidate, std::memory_order_release);
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p subpixelMode=%u subpixelStrength=%.3f subpixelReady=%u",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p distanceField=%s subpixelMode=%u subpixelStrength=%.3f subpixelReady=%u",
 			candidate->id, candidate->device,
+			GetConfiguredDistanceFieldMethodName(),
 			g_uiFreeTypeMTSDFSubpixelRendering,
 			g_fFreeTypeMTSDFSubpixelStrength,
 			candidate->subpixelShadersReady ? 1u : 0u);

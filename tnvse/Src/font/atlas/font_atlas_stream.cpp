@@ -26,8 +26,8 @@ namespace fonthook::vectorfont
 		{
 			std::vector<AtlasSnapshotPlacement> placements;
 			std::vector<UInt8> pixels;
-			UInt32 cursorX = kMtsdfAtlasPadding;
-			UInt32 cursorY = kMtsdfAtlasPadding;
+			UInt32 cursorX = kDistanceFieldAtlasPadding;
+			UInt32 cursorY = kDistanceFieldAtlasPadding;
 			UInt32 shelfHeight = 0;
 			UInt32 usedWidth = 0;
 			UInt32 usedHeight = 0;
@@ -114,9 +114,9 @@ namespace fonthook::vectorfont
 				BuildPrewarmAtlasContentHash(config, byteClass, rasterScale, true),
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
-				AtlasPixelMode::Mtsdf32,
+				GetConfiguredDistanceFieldAtlasPixelMode(),
 				AtlasRenderMode::ShaderEffects,
-				kMtsdfAtlasPadding,
+				kDistanceFieldAtlasPadding,
 				true,
 				byteClass
 			};
@@ -145,8 +145,11 @@ namespace fonthook::vectorfont
 				sizeof(kMaximumAtlasMipLevels), hash);
 			hash = HashBytes(&A8ShapeColorContract::kTileUniformColorAbi,
 				sizeof(A8ShapeColorContract::kTileUniformColorAbi), hash);
-			hash = HashBytes(&kMtsdfGeneratorRevision,
-				sizeof(kMtsdfGeneratorRevision), hash);
+			const DistanceFieldMethod method =
+				GetConfiguredDistanceFieldMethod();
+			const UInt32 revision = DistanceFieldGeneratorRevision(method);
+			hash = HashBytes(&method, sizeof(method), hash);
+			hash = HashBytes(&revision, sizeof(revision), hash);
 			// A snapshot is usable only together with a complete glyph manifest.
 			// Couple their ABIs so a manifest format change cannot leave an
 			// apparently valid atlas that is restored and then discarded.
@@ -250,11 +253,11 @@ namespace fonthook::vectorfont
 		{
 			// Reuse one fixed-capacity page buffer across the whole font. This avoids
 			// vector doubling peaks and repeated large heap allocations while keeping
-			// the live stream bounded to one 16 MiB page per byte role.
+			// the live stream bounded to one 4 MiB or 16 MiB page per byte role.
 			page.placements.clear();
 			page.pixels.clear();
-			page.cursorX = kMtsdfAtlasPadding;
-			page.cursorY = kMtsdfAtlasPadding;
+			page.cursorX = kDistanceFieldAtlasPadding;
+			page.cursorY = kDistanceFieldAtlasPadding;
 			page.shelfHeight = 0;
 			page.usedWidth = 0;
 			page.usedHeight = 0;
@@ -355,21 +358,28 @@ namespace fonthook::vectorfont
 			if (!bitmap || !bitmap->cacheId || bitmap->width <= 0 || bitmap->height <= 0
 				|| bitmap->maskType != GlyphMaskType::DistanceField)
 				return true;
+			if (bitmap->distanceFieldMethod != GetConfiguredDistanceFieldMethod())
+				return false;
 			const size_t requiredBytes = ExpectedGlyphBitmapBytes(*bitmap);
 			if (bitmap->alpha.size() < requiredBytes)
 				return false;
 			if (role.cacheIds.find(bitmap->cacheId) != role.cacheIds.end())
 				return true;
-			if (role.current.pixels.capacity() < kMaximumMtsdfPrewarmPageBytes)
-				role.current.pixels.reserve(kMaximumMtsdfPrewarmPageBytes);
+			const size_t maximumPageBytes =
+				static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
+				* kMaximumMtsdfPrewarmAtlasSize
+				* DistanceFieldBytesPerPixel(
+					GetConfiguredDistanceFieldMethod());
+			if (role.current.pixels.capacity() < maximumPageBytes)
+				role.current.pixels.reserve(maximumPageBytes);
 
 			const UInt32 maximum = std::min(
 				std::min(GetMaximumAtlasSize(), kAtlasHardLimit),
 				kMaximumMtsdfPrewarmAtlasSize);
 			const UInt32 width = static_cast<UInt32>(bitmap->width);
 			const UInt32 height = static_cast<UInt32>(bitmap->height);
-			if (maximum < 64 || width + kMtsdfAtlasPadding * 2 > maximum
-				|| height + kMtsdfAtlasPadding * 2 > maximum)
+			if (maximum < 64 || width + kDistanceFieldAtlasPadding * 2 > maximum
+				|| height + kDistanceFieldAtlasPadding * 2 > maximum)
 				return false;
 
 			for (UInt32 attempt = 0; attempt < 2; ++attempt)
@@ -378,13 +388,13 @@ namespace fonthook::vectorfont
 				UInt32 x = page.cursorX;
 				UInt32 y = page.cursorY;
 				UInt32 shelfHeight = page.shelfHeight;
-				if (x + width + kMtsdfAtlasPadding > maximum)
+				if (x + width + kDistanceFieldAtlasPadding > maximum)
 				{
-					x = kMtsdfAtlasPadding;
+					x = kDistanceFieldAtlasPadding;
 					y += shelfHeight;
 					shelfHeight = 0;
 				}
-				if (y + height + kMtsdfAtlasPadding > maximum)
+				if (y + height + kDistanceFieldAtlasPadding > maximum)
 				{
 					if (page.placements.empty()
 						|| !WriteCurrentPage(runtime, role, rasterScale))
@@ -409,14 +419,14 @@ namespace fonthook::vectorfont
 				page.placements.push_back(placement);
 				page.pixels.insert(page.pixels.end(), bitmap->alpha.begin(),
 					bitmap->alpha.begin() + requiredBytes);
-				page.cursorX = x + width + kMtsdfAtlasPadding * 2;
+				page.cursorX = x + width + kDistanceFieldAtlasPadding * 2;
 				page.cursorY = y;
 				page.shelfHeight = std::max(shelfHeight,
-					height + kMtsdfAtlasPadding * 2);
+					height + kDistanceFieldAtlasPadding * 2);
 				page.usedWidth = std::max(page.usedWidth,
-					x + width + kMtsdfAtlasPadding);
+					x + width + kDistanceFieldAtlasPadding);
 				page.usedHeight = std::max(page.usedHeight,
-					y + height + kMtsdfAtlasPadding);
+					y + height + kDistanceFieldAtlasPadding);
 				role.cacheIds.insert(bitmap->cacheId);
 				return true;
 			}

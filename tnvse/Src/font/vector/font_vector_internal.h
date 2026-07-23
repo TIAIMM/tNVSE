@@ -2,6 +2,7 @@
 
 #include "font_vector.h"
 #include "font_vector_msdfgen.h"
+#include "load_config.h"
 
 #include <array>
 #include <list>
@@ -12,6 +13,22 @@
 
 namespace fonthook::vectorfont
 {
+	inline DistanceFieldMethod GetConfiguredDistanceFieldMethod()
+	{
+		return g_uiFreeTypeFontDistanceFieldMode == 0
+			? DistanceFieldMethod::TrueSdf : DistanceFieldMethod::Mtsdf;
+	}
+
+	inline bool UsesMtsdfDistanceField()
+	{
+		return GetConfiguredDistanceFieldMethod() == DistanceFieldMethod::Mtsdf;
+	}
+
+	inline const char* GetConfiguredDistanceFieldMethodName()
+	{
+		return UsesMtsdfDistanceField() ? "MTSDF" : "true SDF";
+	}
+
 	// Bump whenever glyph pixels change without a configuration change. This is
 	// part of atlas snapshot and prewarm job identity.
 	constexpr UInt32 kGlyphMaskGeneratorVersion = 13;
@@ -158,7 +175,7 @@ namespace fonthook::vectorfont
 		UInt64 maskGenerationHash = 0;
 		std::array<UInt64, 2> maskGenerationRoleHashes = {};
 		UInt64 shaderEffectHash = 0;
-		// MTSDF double-byte atlases may be shared only by raster-compatible
+		// Distance-field double-byte atlases may be shared only by raster-compatible
 		// configurations whose complete pixel-size span is at most eight pixels.
 		// Layout metrics remain local to every logical font.
 		UInt32 mtsdfDoubleByteOwnerFontId = 0;
@@ -184,19 +201,28 @@ namespace fonthook::vectorfont
 		int effectiveWidth = 0;
 		int effectiveHeight = 0;
 		GlyphMaskType maskType = GlyphMaskType::Fill;
+		DistanceFieldMethod distanceFieldMethod = GetConfiguredDistanceFieldMethod();
 		UInt8 sdfSpread = 0;
 		SInt32 strokeWidth26Dot6 = 0;
 		bool colorBaked = false;
 		UInt32 bakedRgba = 0;
 		UInt8 bakedLayer = 0;
-		// Single-channel coverage for CPU masks; D3D-native BGRA MTSDF for
-		// DistanceField requests.
+		// Single-channel coverage/true SDF or D3D-native BGRA MTSDF, according
+		// to distanceFieldMethod.
 		std::vector<UInt8> alpha;
 	};
 
-	inline constexpr UInt32 GlyphBitmapBytesPerPixel(GlyphMaskType maskType)
+	inline constexpr UInt32 GlyphBitmapBytesPerPixel(GlyphMaskType maskType,
+		DistanceFieldMethod distanceFieldMethod)
 	{
-		return maskType == GlyphMaskType::DistanceField ? 4u : 1u;
+		return maskType == GlyphMaskType::DistanceField
+			? DistanceFieldBytesPerPixel(distanceFieldMethod) : 1u;
+	}
+
+	inline UInt32 GlyphBitmapBytesPerPixel(GlyphMaskType maskType)
+	{
+		return GlyphBitmapBytesPerPixel(
+			maskType, GetConfiguredDistanceFieldMethod());
 	}
 
 	inline size_t ExpectedGlyphBitmapBytes(const GlyphBitmap& bitmap)
@@ -204,13 +230,16 @@ namespace fonthook::vectorfont
 		if (bitmap.width <= 0 || bitmap.height <= 0)
 			return 0;
 		return static_cast<size_t>(bitmap.width) * bitmap.height
-			* GlyphBitmapBytesPerPixel(bitmap.maskType);
+			* GlyphBitmapBytesPerPixel(
+				bitmap.maskType, bitmap.distanceFieldMethod);
 	}
 
 	inline UInt8 SampleGlyphBodyDistanceByte(
 		const GlyphBitmap& bitmap, size_t pixelIndex)
 	{
 		if (bitmap.maskType != GlyphMaskType::DistanceField)
+			return pixelIndex < bitmap.alpha.size() ? bitmap.alpha[pixelIndex] : 0;
+		if (bitmap.distanceFieldMethod == DistanceFieldMethod::TrueSdf)
 			return pixelIndex < bitmap.alpha.size() ? bitmap.alpha[pixelIndex] : 0;
 		const size_t offset = pixelIndex * 4u;
 		return offset + 3u < bitmap.alpha.size()
@@ -257,6 +286,8 @@ namespace fonthook::vectorfont
 	{
 		bool enabled = false;
 		bool shaderEffects = false;
+		DistanceFieldMethod distanceFieldMethod =
+			GetConfiguredDistanceFieldMethod();
 		EffectQuality quality = EffectQuality::Balanced;
 		float inverseAtlasWidth = 0.0f;
 		float inverseAtlasHeight = 0.0f;

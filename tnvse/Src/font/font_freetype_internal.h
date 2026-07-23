@@ -242,6 +242,7 @@ namespace fonthook::vectorfont
 		SInt32 slant16Dot16 = 0;
 		UInt8 sdfSpread = 0;
 		UInt8 maskType = 0;
+		UInt8 distanceFieldMethod = 0;
 
 		bool operator==(const BitmapCacheKey& other) const
 		{
@@ -255,7 +256,8 @@ namespace fonthook::vectorfont
 				&& strokeWidth26Dot6 == other.strokeWidth26Dot6
 				&& slant16Dot16 == other.slant16Dot16
 				&& sdfSpread == other.sdfSpread
-				&& maskType == other.maskType;
+				&& maskType == other.maskType
+				&& distanceFieldMethod == other.distanceFieldMethod;
 		}
 	};
 
@@ -275,6 +277,7 @@ namespace fonthook::vectorfont
 			result ^= static_cast<size_t>(key.slant16Dot16) * 0x165667B1u;
 			result ^= static_cast<size_t>(key.sdfSpread) * 0x165667B1u;
 			result ^= key.maskType;
+			result ^= static_cast<size_t>(key.distanceFieldMethod) << 24;
 			return result;
 		}
 	};
@@ -288,9 +291,8 @@ namespace fonthook::vectorfont
 		CpuMemoryLease cpuMemory;
 	};
 
-	// Version 12 replaces the single-channel true-SDF record with msdfgen v1.13
-	// BGRA MTSDF: RGB body distance and Alpha true distance.
-	constexpr UInt32 kPersistentBitmapVersion = 12;
+	// Version 13 identifies the selectable true-SDF A8 and BGRA MTSDF payloads.
+	constexpr UInt32 kPersistentBitmapVersion = 13;
 	constexpr UInt32 kPersistentBitmapRecordMagic = 0x4B534D47u; // GMSK
 	constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
 	constexpr UInt32 kMaximumPersistentSingleChannelBitmapBytes =
@@ -310,6 +312,7 @@ namespace fonthook::vectorfont
 		SInt32 slant16Dot16 = 0;
 		UInt8 sdfSpread = 0;
 		UInt8 maskType = 0;
+		UInt8 distanceFieldMethod = 0;
 
 		bool operator==(const PersistentBitmapProfileKey& other) const
 		{
@@ -322,7 +325,8 @@ namespace fonthook::vectorfont
 				&& strokeWidth26Dot6 == other.strokeWidth26Dot6
 				&& slant16Dot16 == other.slant16Dot16
 				&& sdfSpread == other.sdfSpread
-				&& maskType == other.maskType;
+				&& maskType == other.maskType
+				&& distanceFieldMethod == other.distanceFieldMethod;
 		}
 	};
 
@@ -341,6 +345,7 @@ namespace fonthook::vectorfont
 			result ^= static_cast<size_t>(key.slant16Dot16) * 0x27D4EB2Du;
 			result ^= static_cast<size_t>(key.sdfSpread) << 8;
 			result ^= key.maskType;
+			result ^= static_cast<size_t>(key.distanceFieldMethod) << 24;
 			return result;
 		}
 	};
@@ -362,7 +367,8 @@ namespace fonthook::vectorfont
 		SInt32 slant16Dot16 = 0;
 		UInt8 sdfSpread = 0;
 		UInt8 maskType = 0;
-		UInt16 reserved = 0;
+		UInt8 distanceFieldMethod = 0;
+		UInt8 reserved = 0;
 		UInt32 glyphCapacity = 0;
 		UInt32 indexEntrySize = 0;
 		UInt64 dataOffset = 0;

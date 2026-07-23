@@ -127,9 +127,10 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool BuildMsdfgenMtsdf(
+		bool BuildMsdfgenDistanceField(
 			FT_GlyphSlot slot,
 			UInt8 spread,
+			DistanceFieldMethod method,
 			GlyphBitmap& target)
 		{
 			if (!slot || slot->format != FT_GLYPH_FORMAT_OUTLINE
@@ -137,14 +138,29 @@ namespace fonthook::vectorfont
 				|| spread > kMtsdfMaximumSpread)
 				return false;
 
-			MsdfgenMtsdfBitmap generated;
-			if (!GenerateMsdfgenMtsdf(slot->outline, spread, generated))
-				return false;
-			target.width = generated.width;
-			target.height = generated.height;
-			target.left = generated.left;
-			target.top = generated.top;
-			target.alpha = std::move(generated.bgra);
+			target.distanceFieldMethod = method;
+			if (method == DistanceFieldMethod::TrueSdf)
+			{
+				MsdfgenSdfBitmap generated;
+				if (!GenerateMsdfgenTrueSdf(slot->outline, spread, generated))
+					return false;
+				target.width = generated.width;
+				target.height = generated.height;
+				target.left = generated.left;
+				target.top = generated.top;
+				target.alpha = std::move(generated.pixels);
+			}
+			else
+			{
+				MsdfgenMtsdfBitmap generated;
+				if (!GenerateMsdfgenMtsdf(slot->outline, spread, generated))
+					return false;
+				target.width = generated.width;
+				target.height = generated.height;
+				target.left = generated.left;
+				target.top = generated.top;
+				target.alpha = std::move(generated.bgra);
+			}
 			return true;
 		}
 
@@ -159,6 +175,8 @@ namespace fonthook::vectorfont
 			bitmap->effectiveWidth = key.effectiveWidth;
 			bitmap->effectiveHeight = key.effectiveHeight;
 			bitmap->maskType = maskType;
+			bitmap->distanceFieldMethod = static_cast<DistanceFieldMethod>(
+				key.distanceFieldMethod);
 			bitmap->sdfSpread = key.sdfSpread;
 			bitmap->strokeWidth26Dot6 = key.strokeWidth26Dot6;
 			RuntimeRole& role = *resolved.role;
@@ -169,7 +187,7 @@ namespace fonthook::vectorfont
 			if (maskType == GlyphMaskType::DistanceField)
 			{
 				// Grid fitting bakes a size-specific staircase into diagonal
-				// outlines. MTSDF must retain the scalable vector outline; the
+				// outlines. Distance fields must retain the scalable vector outline; the
 				// configured FreeType transform, embolden, and slant still apply.
 				loadFlags |= FT_LOAD_NO_HINTING;
 			}
@@ -208,7 +226,8 @@ namespace fonthook::vectorfont
 				if (key.sdfSpread < kMtsdfMinimumSpread
 					|| key.sdfSpread > kMtsdfMaximumSpread)
 					return nullptr;
-				if (!BuildMsdfgenMtsdf(slot, key.sdfSpread, *bitmap))
+				if (!BuildMsdfgenDistanceField(slot, key.sdfSpread,
+					bitmap->distanceFieldMethod, *bitmap))
 					return nullptr;
 				RefreshGlyphBitmapCpuMemory(*bitmap);
 				return bitmap;
@@ -313,6 +332,9 @@ namespace fonthook::vectorfont
 			? static_cast<UInt8>(resolvedSpread) : 0;
 		if (maskType == GlyphMaskType::DistanceField && !resolvedSdfSpread)
 			return false;
+		const UInt8 distanceFieldMethod =
+			maskType == GlyphMaskType::DistanceField
+			? static_cast<UInt8>(GetConfiguredDistanceFieldMethod()) : 0;
 		const float slant = std::tan(style.slantDegrees
 			* 3.14159265358979323846f / 180.0f);
 		key = {
@@ -326,7 +348,8 @@ namespace fonthook::vectorfont
 			strokeWidth,
 			static_cast<SInt32>(std::lround(slant * kFixedScale)),
 			resolvedSdfSpread,
-			static_cast<UInt8>(maskType)
+			static_cast<UInt8>(maskType),
+			distanceFieldMethod
 		};
 		return true;
 	}

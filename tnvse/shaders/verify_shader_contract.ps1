@@ -61,11 +61,15 @@ if ($common -notmatch 'NativeFontMtsdfScreenPxRange' -or
 
 $fillSource = Get-Content -LiteralPath (
     Join-Path $ShaderDirectory 'freetype_native_mtsdf_fill.hlsl') -Raw
-if ($fillSource -notmatch 'MedianNativeFontMtsdf' -or
-    $fillSource -match '\.a\s*[,;)]' -or
+if ($common -notmatch 'NativeFontBodyEncodedDistance' -or
+    $common -notmatch '#if\s+DISTANCE_FIELD_TRUE_SDF[\s\S]*?distanceSample\.a[\s\S]*?#else[\s\S]*?MedianNativeFontMtsdf' -or
+    $common -notmatch 'DecodeNativeFontSelectedDistance' -or
+    $common -notmatch '255\.0\s*/\s*128\.0' -or
+    $fillSource -notmatch 'NativeFontBodyEncodedDistance' -or
+    $fillSource -notmatch 'DecodeNativeFontSelectedDistance' -or
     $fillSource -notmatch 'FILL_QUALITY\s*==\s*1' -or
     $fillSource -notmatch 'FILL_QUALITY\s*==\s*0') {
-    throw 'Native MTSDF fill must use quality-selected RGB median reconstruction only'
+    throw 'Native Fill does not select true-SDF Alpha or MTSDF RGB reconstruction correctly'
 }
 if ($fillSource -notmatch 'FILL_SUBPIXEL' -or
     $fillSource -notmatch 'SubpixelPass\s*:\s*register\(c4\)' -or
@@ -161,6 +165,12 @@ if ($nativeAtlasSource -notmatch
 $loadConfigSourcePath = Join-Path (
     Split-Path -Parent $resolvedShaderDirectory) 'Src\load_config.cpp'
 $loadConfigSource = Get-Content -LiteralPath $loadConfigSourcePath -Raw
+if ($loadConfigSource -notmatch
+    '"uiFreeTypeFontDistanceFieldMode"' -or
+    $loadConfigSource -notmatch
+    'g_uiFreeTypeFontDistanceFieldMode\s*>\s*1[\s\S]*?g_uiFreeTypeFontDistanceFieldMode\s*=\s*1') {
+    throw 'Native distance-field configuration does not validate true-SDF/MTSDF mode'
+}
 if ($loadConfigSource -notmatch
     '"uiFreeTypeMTSDFSubpixelRendering"' -or
     $loadConfigSource -notmatch
@@ -258,9 +268,9 @@ if ($effectsSource -notmatch 'outline\s*\+\s*\(1\.0\s*-\s*outline\)\s*\*\s*glow'
     throw 'Native hard shadow does not source-over the copied outline and glow masks'
 }
 if ($effectsSource -notmatch
-    'alphaDistance\s*=\s*DecodeNativeFontMtsdfDistance\([\s\S]*?mtsdf\.a' -or
+    'alphaDistance\s*=\s*DecodeNativeFontSelectedDistance\([\s\S]*?mtsdf\.a' -or
     $effectsSource -notmatch
-    'rgbDistance\s*=\s*DecodeNativeFontMtsdfDistance\([\s\S]*?MedianNativeFontMtsdf\(mtsdf\.rgb\)') {
+    'rgbDistance\s*=\s*DecodeNativeFontSelectedDistance\([\s\S]*?NativeFontBodyEncodedDistance\(mtsdf\)') {
     throw 'Native effects do not separate Alpha TSDF geometry from RGB body topology'
 }
 
@@ -285,12 +295,24 @@ $pixelShaders = @(
     'tnvse_freetype_native_mtsdf_fill_subpixel_high.pso',
     'tnvse_freetype_native_mtsdf_effects_fast.pso',
     'tnvse_freetype_native_mtsdf_effects_balanced.pso',
-    'tnvse_freetype_native_mtsdf_effects_high.pso'
+    'tnvse_freetype_native_mtsdf_effects_high.pso',
+    'tnvse_freetype_native_sdf_fill_fast.pso',
+    'tnvse_freetype_native_sdf_fill_balanced.pso',
+    'tnvse_freetype_native_sdf_fill_high.pso',
+    'tnvse_freetype_native_sdf_fill_subpixel_fast.pso',
+    'tnvse_freetype_native_sdf_fill_subpixel_balanced.pso',
+    'tnvse_freetype_native_sdf_fill_subpixel_high.pso',
+    'tnvse_freetype_native_sdf_effects_fast.pso',
+    'tnvse_freetype_native_sdf_effects_balanced.pso',
+    'tnvse_freetype_native_sdf_effects_high.pso'
 )
 $subpixelTextureSampleBudgets = @{
     'tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso' = 2
     'tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso' = 5
     'tnvse_freetype_native_mtsdf_fill_subpixel_high.pso' = 9
+    'tnvse_freetype_native_sdf_fill_subpixel_fast.pso' = 2
+    'tnvse_freetype_native_sdf_fill_subpixel_balanced.pso' = 5
+    'tnvse_freetype_native_sdf_fill_subpixel_high.pso' = 9
 }
 
 $vertexPath = Join-Path $compiledDirectory $vertexShader
@@ -336,7 +358,7 @@ foreach ($shaderName in $pixelShaders) {
     if (-not ($instructions -cmatch '\bc1\b')) {
         throw "$shaderName does not read the packet layer color c1"
     }
-    if ($shaderName -like 'tnvse_freetype_native_mtsdf_fill_subpixel_*.pso' -and
+    if ($shaderName -like 'tnvse_freetype_native_*_fill_subpixel_*.pso' -and
         -not ($instructions -cmatch '\bc4\b')) {
         throw "$shaderName does not read the screen-space subpixel offset from c4"
     }
@@ -347,11 +369,12 @@ foreach ($shaderName in $pixelShaders) {
             throw "$shaderName uses $textureSamples texture samples; expected $($subpixelTextureSampleBudgets[$shaderName])"
         }
     }
-    if ($shaderName -like 'tnvse_freetype_native_mtsdf_effects_*.pso' -and
+    if ($shaderName -like 'tnvse_freetype_native_*_effects_*.pso' -and
         -not ($dump -match '\b0\.001(?:0+\d*)?\b')) {
         throw "$shaderName does not contain the hard-shadow epsilon"
     }
-    if ($shaderName -like 'tnvse_freetype_native_mtsdf_*.pso') {
+    if ($shaderName -like 'tnvse_freetype_native_mtsdf_*.pso' -or
+        $shaderName -like 'tnvse_freetype_native_sdf_*.pso') {
         if (-not ($dump -match 'approximately\s+(\d+)\s+instruction slots used')) {
             throw "$shaderName does not report its instruction-slot count"
         }

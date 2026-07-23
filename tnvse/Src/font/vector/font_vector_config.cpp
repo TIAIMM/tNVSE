@@ -863,7 +863,8 @@ namespace fonthook
 				vectorfont::GetMtsdfAtlasConfig(config,
 					VectorFontByteClass::DoubleByte);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: MTSDF doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f group=%u spanLimit=8",
+				"tnvse_freetype_font: %s doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f group=%u spanLimit=8",
+				vectorfont::GetConfiguredDistanceFieldMethodName(),
 				config.fontId, owner.fontId, config.styles[1].pixelSize,
 				owner.styles[1].pixelSize,
 				config.mtsdfDoubleByteGroupSize);

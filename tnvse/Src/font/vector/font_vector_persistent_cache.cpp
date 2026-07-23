@@ -13,10 +13,13 @@ namespace fonthook::vectorfont
 		return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
 	}
 
-	static UInt32 MaximumPersistentBitmapBytes(GlyphMaskType maskType)
+	static UInt32 MaximumPersistentBitmapBytes(GlyphMaskType maskType,
+		DistanceFieldMethod distanceFieldMethod)
 	{
 		return maskType == GlyphMaskType::DistanceField
-			? kMaximumPersistentMtsdfBitmapBytes
+			? (distanceFieldMethod == DistanceFieldMethod::Mtsdf
+				? kMaximumPersistentMtsdfBitmapBytes
+				: kMaximumPersistentSingleChannelBitmapBytes)
 			: kMaximumPersistentSingleChannelBitmapBytes;
 	}
 
@@ -74,7 +77,12 @@ namespace fonthook::vectorfont
 			add(&key.sdfSpread, sizeof(key.sdfSpread));
 			add(&key.maskType, sizeof(key.maskType));
 			if (key.maskType == static_cast<UInt8>(GlyphMaskType::DistanceField))
-				add(&kMtsdfGeneratorRevision, sizeof(kMtsdfGeneratorRevision));
+			{
+				add(&key.distanceFieldMethod, sizeof(key.distanceFieldMethod));
+				const UInt32 revision = DistanceFieldGeneratorRevision(
+					static_cast<DistanceFieldMethod>(key.distanceFieldMethod));
+				add(&revision, sizeof(revision));
+			}
 			return hash;
 		}
 
@@ -95,8 +103,11 @@ namespace fonthook::vectorfont
 			hash = HashBytes64(&key.maskType, sizeof(key.maskType), hash);
 			if (key.maskType == static_cast<UInt8>(GlyphMaskType::DistanceField))
 			{
-				hash = HashBytes64(&kMtsdfGeneratorRevision,
-					sizeof(kMtsdfGeneratorRevision), hash);
+				hash = HashBytes64(&key.distanceFieldMethod,
+					sizeof(key.distanceFieldMethod), hash);
+				const UInt32 revision = DistanceFieldGeneratorRevision(
+					static_cast<DistanceFieldMethod>(key.distanceFieldMethod));
+				hash = HashBytes64(&revision, sizeof(revision), hash);
 			}
 			return hash;
 		}
@@ -114,7 +125,8 @@ namespace fonthook::vectorfont
 				key.strokeWidth26Dot6,
 				key.slant16Dot16,
 				key.sdfSpread,
-				key.maskType
+				key.maskType,
+				key.distanceFieldMethod
 			};
 		}
 
@@ -138,6 +150,7 @@ namespace fonthook::vectorfont
 			header.slant16Dot16 = key.slant16Dot16;
 			header.sdfSpread = key.sdfSpread;
 			header.maskType = key.maskType;
+			header.distanceFieldMethod = key.distanceFieldMethod;
 			header.glyphCapacity = glyphCapacity;
 			header.indexEntrySize = sizeof(PersistentBitmapIndexEntry);
 			header.dataOffset = sizeof(PersistentBitmapFileHeader)
@@ -167,6 +180,7 @@ namespace fonthook::vectorfont
 				&& header.slant16Dot16 == key.slant16Dot16
 				&& header.sdfSpread == key.sdfSpread
 				&& header.maskType == key.maskType
+				&& header.distanceFieldMethod == key.distanceFieldMethod
 				&& header.glyphCapacity == glyphCapacity
 				&& header.indexEntrySize == sizeof(PersistentBitmapIndexEntry)
 				&& header.dataOffset == sizeof(PersistentBitmapFileHeader)
@@ -540,19 +554,22 @@ namespace fonthook::vectorfont
 		}
 
 		bool IsValidPersistentRecordHeader(
-			const PersistentBitmapRecordHeader& record, GlyphMaskType maskType)
+			const PersistentBitmapRecordHeader& record, GlyphMaskType maskType,
+			DistanceFieldMethod distanceFieldMethod)
 		{
 			if (record.magic != kPersistentBitmapRecordMagic
 				|| record.headerSize != sizeof(record)
 				|| record.width <= 0 || record.height <= 0
 				|| !record.alphaSize
-				|| record.alphaSize > MaximumPersistentBitmapBytes(maskType))
+				|| record.alphaSize > MaximumPersistentBitmapBytes(
+					maskType, distanceFieldMethod))
 			{
 				return false;
 			}
 			return static_cast<UInt64>(record.width)
 				* static_cast<UInt64>(record.height)
-				* GlyphBitmapBytesPerPixel(maskType) == record.alphaSize;
+				* GlyphBitmapBytesPerPixel(
+					maskType, distanceFieldMethod) == record.alphaSize;
 		}
 
 		bool InitializePersistentBitmapProfile(PersistentBitmapProfile& profile)
@@ -727,7 +744,8 @@ namespace fonthook::vectorfont
 			if (!ReadPersistentProfileBytes(profile, entry.offset,
 					&record, sizeof(record))
 				|| !IsValidPersistentRecordHeader(record,
-					static_cast<GlyphMaskType>(key.maskType))
+					static_cast<GlyphMaskType>(key.maskType),
+					static_cast<DistanceFieldMethod>(key.distanceFieldMethod))
 				|| record.glyphIndex != key.glyphIndex
 				|| entry.size != sizeof(record) + record.alphaSize)
 				return nullptr;
@@ -740,6 +758,8 @@ namespace fonthook::vectorfont
 			bitmap->effectiveWidth = key.effectiveWidth;
 			bitmap->effectiveHeight = key.effectiveHeight;
 			bitmap->maskType = static_cast<GlyphMaskType>(key.maskType);
+			bitmap->distanceFieldMethod =
+				static_cast<DistanceFieldMethod>(key.distanceFieldMethod);
 			bitmap->sdfSpread = key.sdfSpread;
 			bitmap->strokeWidth26Dot6 = key.strokeWidth26Dot6;
 			bitmap->alpha.resize(record.alphaSize);
@@ -789,7 +809,9 @@ namespace fonthook::vectorfont
 					|| bitmap.width <= 0 || bitmap.height <= 0
 					|| bitmap.alpha.empty()
 					|| bitmap.alpha.size() > MaximumPersistentBitmapBytes(
-						bitmap.maskType)
+						bitmap.maskType, bitmap.distanceFieldMethod)
+					|| key.distanceFieldMethod
+						!= static_cast<UInt8>(bitmap.distanceFieldMethod)
 					|| ExpectedGlyphBitmapBytes(bitmap) != bitmap.alpha.size())
 				{
 					continue;
@@ -817,7 +839,9 @@ namespace fonthook::vectorfont
 					|| bitmap.width <= 0 || bitmap.height <= 0
 					|| bitmap.alpha.empty()
 					|| bitmap.alpha.size() > MaximumPersistentBitmapBytes(
-						bitmap.maskType)
+						bitmap.maskType, bitmap.distanceFieldMethod)
+					|| key.distanceFieldMethod
+						!= static_cast<UInt8>(bitmap.distanceFieldMethod)
 					|| ExpectedGlyphBitmapBytes(bitmap) != bitmap.alpha.size())
 				{
 					continue;
@@ -1264,8 +1288,14 @@ namespace fonthook::vectorfont
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			manifestHash = HashBytes64(&codePage,
 				sizeof(codePage), manifestHash);
-			manifestHash = HashBytes64(&kMtsdfGeneratorRevision,
-				sizeof(kMtsdfGeneratorRevision), manifestHash);
+			const DistanceFieldMethod distanceFieldMethod =
+				GetConfiguredDistanceFieldMethod();
+			const UInt32 distanceFieldRevision =
+				DistanceFieldGeneratorRevision(distanceFieldMethod);
+			manifestHash = HashBytes64(&distanceFieldMethod,
+				sizeof(distanceFieldMethod), manifestHash);
+			manifestHash = HashBytes64(&distanceFieldRevision,
+				sizeof(distanceFieldRevision), manifestHash);
 			auto pooled = State().persistentGlyphManifests.find(manifestHash);
 			if (pooled != State().persistentGlyphManifests.end())
 			{

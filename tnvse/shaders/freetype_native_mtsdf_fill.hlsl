@@ -17,9 +17,9 @@ float4 SubpixelPass : register(c4); // x: channel offset, y: chroma strength
 
 float EvaluateNativeFontMtsdfFillAt(float2 uv, float antialiasWidth)
 {
-	const float3 rgb = SampleNativeFontMtsdf(FontAtlas, uv).rgb;
-	const float distance = DecodeNativeFontMtsdfDistance(
-		MedianNativeFontMtsdf(rgb), AtlasPass.w);
+	const float4 distanceSample = SampleNativeFontMtsdf(FontAtlas, uv);
+	const float distance = DecodeNativeFontSelectedDistance(
+		NativeFontBodyEncodedDistance(distanceSample), AtlasPass.w);
 	return NativeFontMtsdfBody(distance, antialiasWidth);
 }
 

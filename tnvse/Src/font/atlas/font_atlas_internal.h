@@ -25,18 +25,19 @@
 
 namespace fonthook::vectorfont
 {
-	// Shader MTSDF atlases are level-zero-only. One outside-distance texel on
+	// Shader distance-field atlases are level-zero-only. One outside-distance texel on
 	// each edge isolates bilinear samples; the field already contains its spread.
-	inline constexpr UInt32 kMtsdfAtlasPadding = 1;
+	inline constexpr UInt32 kDistanceFieldAtlasPadding = 1;
+	inline constexpr UInt32 kMtsdfAtlasPadding = kDistanceFieldAtlasPadding;
 	// Compatibility alias for internal structures whose field name is still SDF.
 	// CPU-baked ARGB atlases retain up to three mip levels. Four transparent
 	// level-zero texels leave one transparent texel at the coarsest 1/4 mip.
 	inline constexpr UInt32 kArgbAtlasPadding = 4;
 	inline constexpr UInt32 kMaximumAtlasMipLevels = 3;
 	inline constexpr UInt32 kAtlasHardLimit = 4096;
-	// Keep a streamed/repacked MTSDF page within the old 4096x4096 A8 storage
-	// envelope. In the 32-bit game a 4096x4096 BGRA page needs 64 MiB before
-	// vector growth and repack scratch space, which can fail late in prewarm.
+	// Keep a streamed/repacked distance-field page within the old 4096x4096 A8
+	// storage envelope. In MTSDF mode a 4096x4096 BGRA page needs 64 MiB before
+	// vector growth and repack scratch space, which can fail late in the 32-bit prewarm.
 	inline constexpr UInt32 kMaximumMtsdfPrewarmAtlasSize = 2048;
 	inline constexpr size_t kMaximumMtsdfPrewarmPageBytes =
 		static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
@@ -70,6 +71,28 @@ namespace fonthook::vectorfont
 		A8 = 1,
 		Mtsdf32 = 2,
 	};
+
+	inline AtlasPixelMode GetConfiguredDistanceFieldAtlasPixelMode()
+	{
+		return UsesMtsdfDistanceField()
+			? AtlasPixelMode::Mtsdf32 : AtlasPixelMode::A8;
+	}
+
+	inline bool IsDistanceFieldAtlasPixelMode(AtlasPixelMode mode)
+	{
+		return mode == AtlasPixelMode::A8 || mode == AtlasPixelMode::Mtsdf32;
+	}
+
+	inline bool IsCompatibleDistanceFieldBitmap(
+		AtlasPixelMode mode, const GlyphBitmap& bitmap)
+	{
+		if (bitmap.maskType != GlyphMaskType::DistanceField)
+			return mode != AtlasPixelMode::Mtsdf32;
+		return (mode == AtlasPixelMode::Mtsdf32
+				&& bitmap.distanceFieldMethod == DistanceFieldMethod::Mtsdf)
+			|| (mode != AtlasPixelMode::Mtsdf32
+				&& bitmap.distanceFieldMethod == DistanceFieldMethod::TrueSdf);
+	}
 
 	enum class AtlasBackend : UInt8
 	{
@@ -207,10 +230,11 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 15;
+	constexpr UInt32 kAtlasSnapshotVersion = 16;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
 	constexpr UInt32 kAtlasSnapshotKnownFlags =
 		kAtlasSnapshotFlagGloballyRepacked;
+	// Version 16 identifies selectable A8 true-SDF and BGRA MTSDF pages.
 	// Version 15 adds largest-compatible-size double-byte MTSDF atlas sharing.
 	// Version 14 replaced single-channel shader pages with BGRA MTSDF.
 	constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
@@ -362,7 +386,7 @@ namespace fonthook::vectorfont
 	struct CompactAtlasSnapshot
 	{
 		CpuMemoryLease cpuMemory;
-		AtlasPixelMode pixelMode = AtlasPixelMode::Mtsdf32;
+		AtlasPixelMode pixelMode = GetConfiguredDistanceFieldAtlasPixelMode();
 		std::vector<AtlasSnapshotPlacement> placements;
 		std::vector<UInt8> pixels;
 		std::wstring sourcePath;
@@ -542,7 +566,7 @@ namespace fonthook::vectorfont
 	struct ShaderEffectBuild
 	{
 		A8EffectShapeConfig config;
-		UInt32 padding = kMtsdfAtlasPadding;
+		UInt32 padding = kDistanceFieldAtlasPadding;
 		UInt32 drawQuadCount = 0;
 	};
 
