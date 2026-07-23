@@ -16,7 +16,7 @@
         "strategy": "set"
       },
       "toolset": {
-        "value": "v145,version=14.52.36530,host=x64",
+        "value": "v145,host=x64",
         "strategy": "set"
       },
       "binaryDir": "${sourceDir}/out/build/vs2026-win32",
