@@ -55,7 +55,9 @@ out/build/vs2026-win32/bin/Release/tnvse.dll
 
 The build also:
 
-- builds the reduced FreeType and commonlib targets;
+- builds the reduced FreeType, msdfgen core, and commonlib targets;
+- statically links msdfgen's dependency-free core plus its FreeType outline
+  adapter; PNG, SVG, Skia, OpenMP, vcpkg, and the standalone tool are disabled;
 - compiles all of those targets and `tnvse.dll` against the same VC-LTL CRT
   contract;
 - compiles all seven native D3D9 shaders and runs the shader ABI verifier;

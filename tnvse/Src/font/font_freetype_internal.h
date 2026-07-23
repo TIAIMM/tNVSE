@@ -288,10 +288,9 @@ namespace fonthook::vectorfont
 		CpuMemoryLease cpuMemory;
 	};
 
-	// Version 10 adds the effective text code page to persistent mask identity.
-	// Version 9 introduced coverage-signed outline SDF masks; all older profiles
-	// are intentionally incompatible.
-	constexpr UInt32 kPersistentBitmapVersion = 10;
+	// Version 11 replaces FreeType's coverage-signed outline SDF with msdfgen's
+	// overlap-aware true SDF. All older persistent masks are incompatible.
+	constexpr UInt32 kPersistentBitmapVersion = 11;
 	constexpr UInt32 kPersistentBitmapRecordMagic = 0x4B534D47u; // GMSK
 	constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
 	constexpr UInt32 kMaximumPersistentBitmapBytes = 16u * 1024u * 1024u;

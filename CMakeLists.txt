@@ -44,6 +44,7 @@ tnvse_add_dxsdk_target()
 tnvse_add_vcltl_target()
 tnvse_add_commonlib_target()
 tnvse_add_freetype_target()
+tnvse_add_msdfgen_target()
 tnvse_add_shader_target(TNVSE_SHADER_OUTPUTS)
 
 set(TNVSE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src")
@@ -119,6 +120,7 @@ target_compile_options(tnvse PRIVATE
 target_link_libraries(tnvse PRIVATE
   commonlib_nv
   freetype_tnvse
+  msdfgen_freetype_tnvse
   tnvse::dxsdk
   dxguid
   imm32
@@ -163,6 +165,21 @@ if(TNVSE_BUILD_TESTS)
     FOLDER "tNVSE/Tests")
   add_test(NAME tnvse_sparse_codepoint_tests
     COMMAND tnvse_sparse_codepoint_tests)
+
+  add_executable(tnvse_msdfgen_sdf_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/font_msdfgen_sdf_tests.cpp"
+    "${TNVSE_SOURCE_ROOT}/font/vector/font_vector_msdfgen.cpp"
+    "${TNVSE_SOURCE_ROOT}/font/vector/font_vector_msdfgen.h")
+  target_include_directories(tnvse_msdfgen_sdf_tests PRIVATE
+    "${TNVSE_SOURCE_ROOT}/font/vector")
+  target_compile_features(tnvse_msdfgen_sdf_tests PRIVATE cxx_std_20)
+  target_link_libraries(tnvse_msdfgen_sdf_tests PRIVATE
+    msdfgen_freetype_tnvse)
+  tnvse_apply_msvc_defaults(tnvse_msdfgen_sdf_tests)
+  set_target_properties(tnvse_msdfgen_sdf_tests PROPERTIES
+    FOLDER "tNVSE/Tests")
+  add_test(NAME tnvse_msdfgen_sdf_tests
+    COMMAND tnvse_msdfgen_sdf_tests)
 endif()
 
 set(_tnvse_plugin_path_help

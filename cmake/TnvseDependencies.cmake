@@ -131,6 +131,48 @@ function(tnvse_add_freetype_target)
   set_target_properties(freetype_tnvse PROPERTIES FOLDER "tNVSE/Dependencies")
 endfunction()
 
+function(tnvse_add_msdfgen_target)
+  set(msdfgen_dir "${TNVSE_THIRD_PARTY_DIR}/msdfgen")
+  if(NOT EXISTS "${msdfgen_dir}/msdfgen.h")
+    message(FATAL_ERROR
+      "msdfgen sources are missing. Run: git submodule update --init --recursive")
+  endif()
+
+  # tNVSE supplies its own FreeType build and only needs the dependency-free
+  # distance-field core. The small adapter target below compiles msdfgen's
+  # official FT_Outline converter without pulling in PNG, SVG, Skia, or vcpkg.
+  set(MSDFGEN_CORE_ONLY ON CACHE BOOL "" FORCE)
+  set(MSDFGEN_BUILD_STANDALONE OFF CACHE BOOL "" FORCE)
+  set(MSDFGEN_USE_VCPKG OFF CACHE BOOL "" FORCE)
+  set(MSDFGEN_USE_OPENMP OFF CACHE BOOL "" FORCE)
+  set(MSDFGEN_USE_SKIA OFF CACHE BOOL "" FORCE)
+  set(MSDFGEN_INSTALL OFF CACHE BOOL "" FORCE)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+  add_subdirectory("${msdfgen_dir}" "${CMAKE_BINARY_DIR}/msdfgen"
+    EXCLUDE_FROM_ALL)
+
+  tnvse_apply_msvc_defaults(msdfgen-core)
+  target_compile_options(msdfgen-core PRIVATE /wd4244 /wd4267 /wd4996)
+  set_target_properties(msdfgen-core PROPERTIES
+    FOLDER "tNVSE/Dependencies")
+
+  add_library(msdfgen_freetype_tnvse STATIC
+    "${msdfgen_dir}/ext/import-font.cpp"
+    "${msdfgen_dir}/ext/import-font.h")
+  target_include_directories(msdfgen_freetype_tnvse PUBLIC
+    "${msdfgen_dir}")
+  target_compile_definitions(msdfgen_freetype_tnvse PRIVATE
+    MSDFGEN_DISABLE_VARIABLE_FONTS)
+  target_compile_options(msdfgen_freetype_tnvse PRIVATE
+    /wd4244 /wd4267 /wd4996)
+  target_link_libraries(msdfgen_freetype_tnvse PUBLIC
+    msdfgen::msdfgen-core
+    freetype_tnvse)
+  tnvse_apply_msvc_defaults(msdfgen_freetype_tnvse)
+  set_target_properties(msdfgen_freetype_tnvse PROPERTIES
+    FOLDER "tNVSE/Dependencies")
+endfunction()
+
 function(tnvse_copy_dxsdk_runtime target)
   set(debug_bin "${TNVSE_DXSDK_PACKAGE_DIR}/debug/bin/x86")
   set(release_bin "${TNVSE_DXSDK_PACKAGE_DIR}/release/bin/x86")

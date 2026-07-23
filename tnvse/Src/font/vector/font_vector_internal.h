@@ -11,6 +11,10 @@
 
 namespace fonthook::vectorfont
 {
+	// Bump whenever glyph pixels change without a configuration change. This is
+	// part of atlas snapshot and prewarm job identity.
+	constexpr UInt32 kGlyphMaskGeneratorVersion = 11;
+
 	struct NativeA8PayloadTemplate;
 	enum class FreeTypePerfCounter : UInt8
 	{

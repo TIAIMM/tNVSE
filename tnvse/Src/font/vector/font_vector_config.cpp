@@ -341,6 +341,8 @@ namespace fonthook::vectorfont
 		UInt64 BuildMaskGenerationHash(const FontConfig& config)
 		{
 			UInt64 hash = 1469598103934665603ull;
+			HashBytes(hash, &kGlyphMaskGeneratorVersion,
+				sizeof(kGlyphMaskGeneratorVersion));
 			for (UInt64 roleHash : config.maskGenerationRoleHashes)
 				HashBytes(hash, &roleHash, sizeof(roleHash));
 			return hash;
