@@ -116,6 +116,18 @@ namespace fonthook
 			return menu;
 		}
 
+		Tile* FindStewMenuSearchTile(Tile* root)
+		{
+			if (!root)
+				return nullptr;
+
+			// The search field has a stable named path in Stewie Tweaks 9.90+.
+			// Following four direct child links avoids recursively walking the
+			// live Tile tree while StewMenu is performing mouse hit-testing.
+			return root->GetTileByPath(
+				std::string("STW_MainRect/SearchParent/InputClipper/STW_SearchBar"));
+		}
+
 		Tile* FindTileByID(Tile* tile, UInt32 id)
 		{
 			if (!tile)
@@ -127,23 +139,6 @@ namespace fonthook
 			for (Tile* child : tile->GetChildren())
 			{
 				if (Tile* result = FindTileByID(child, id))
-					return result;
-			}
-
-			return nullptr;
-		}
-
-		Tile* FindStewieActiveInputTile(Tile* tile, UInt32 id)
-		{
-			if (!tile)
-				return nullptr;
-
-			if (TileID(tile) == id && TileTraitFloat(tile, s_tileTraitIsActive) > 0.5f)
-				return tile;
-
-			for (Tile* child : tile->GetChildren())
-			{
-				if (Tile* result = FindStewieActiveInputTile(child, id))
 					return result;
 			}
 
@@ -261,9 +256,14 @@ namespace fonthook
 			return target;
 		}
 
-		bool TryGetStewieInputFieldType(Menu* menu, Tile* tile, UInt8& inputType)
+		bool TryGetActiveStewieInputFieldAtOffset(
+			Menu* menu,
+			UInt32 offset,
+			UInt32 id,
+			Tile*& tile,
+			UInt8& inputType)
 		{
-			if (!menu || !tile)
+			if (!menu)
 				return false;
 
 			static constexpr UInt32 kInputFieldStringLengthOffset = 0x08;
@@ -275,26 +275,29 @@ namespace fonthook
 			__try
 			{
 				auto* base = reinterpret_cast<UInt8*>(menu);
-				for (UInt32 offset = 0; offset < 0x2000; offset += sizeof(void*))
+				Tile* candidate = *reinterpret_cast<Tile**>(base + offset);
+				const bool isActive = *reinterpret_cast<bool*>(
+					base + offset + kInputFieldActiveOffset);
+				const UInt16 length = *reinterpret_cast<UInt16*>(
+					base + offset + kInputFieldStringLengthOffset);
+				const UInt16 capacity = *reinterpret_cast<UInt16*>(
+					base + offset + kInputFieldStringCapacityOffset);
+				const SInt16 caret = *reinterpret_cast<SInt16*>(
+					base + offset + kInputFieldCaretOffset);
+				const UInt8 candidateType = *reinterpret_cast<UInt8*>(
+					base + offset + kInputFieldTypeOffset);
+				if (candidate
+					&& isActive
+					&& candidateType <= 3
+					&& capacity < 0x10000
+					&& length <= capacity
+					&& caret >= 0
+					&& static_cast<UInt16>(caret) <= length
+					&& TileID(candidate) == id)
 				{
-					if (*reinterpret_cast<Tile**>(base + offset) != tile)
-						continue;
-
-					const bool isActive = *reinterpret_cast<bool*>(base + offset + kInputFieldActiveOffset);
-					const UInt16 length = *reinterpret_cast<UInt16*>(base + offset + kInputFieldStringLengthOffset);
-					const UInt16 capacity = *reinterpret_cast<UInt16*>(base + offset + kInputFieldStringCapacityOffset);
-					const SInt16 caret = *reinterpret_cast<SInt16*>(base + offset + kInputFieldCaretOffset);
-					const UInt8 candidateType = *reinterpret_cast<UInt8*>(base + offset + kInputFieldTypeOffset);
-					if (isActive
-						&& candidateType <= 3
-						&& capacity < 0x10000
-						&& length <= capacity
-						&& caret >= 0
-						&& static_cast<UInt16>(caret) <= length)
-					{
-						inputType = candidateType;
-						return true;
-					}
+					tile = candidate;
+					inputType = candidateType;
+					return true;
 				}
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -305,18 +308,23 @@ namespace fonthook
 			return false;
 		}
 
-		Tile* FindStewieInputFieldTile(Menu* menu, Tile* tile, UInt32 id, UInt8& inputType)
+		Tile* FindActiveStewieInputFieldTile(Menu* menu, UInt32 id, UInt8& inputType)
 		{
-			if (!tile)
+			if (!menu)
 				return nullptr;
 
-			if (TileID(tile) == id && TryGetStewieInputFieldType(menu, tile, inputType))
-				return tile;
-
-			for (Tile* child : tile->GetChildren())
+			// InputField instances are embedded in the StewMenu object. Scan the
+			// small object once and validate only active candidates, instead of
+			// recursively traversing every rendered Tile and rescanning the menu
+			// object for each matching ID.
+			for (UInt32 offset = 0; offset < 0x2000; offset += sizeof(void*))
 			{
-				if (Tile* result = FindStewieInputFieldTile(menu, child, id, inputType))
-					return result;
+				Tile* tile = nullptr;
+				if (TryGetActiveStewieInputFieldAtOffset(
+					menu, offset, id, tile, inputType))
+				{
+					return tile;
+				}
 			}
 
 			return nullptr;
@@ -332,11 +340,12 @@ namespace fonthook
 				return {};
 
 			UInt8 searchInputType = 0xFF;
-			if (Tile* searchInputTile = FindStewieInputFieldTile(menu, root, kStewMenu_SearchBar, searchInputType);
+			if (Tile* searchInputTile = FindActiveStewieInputFieldTile(
+				menu, kStewMenu_SearchBar, searchInputType);
 				searchInputTile && searchInputType == 0)
 				return MakeStewieTarget(StewieInputKind::StewMenuSearch, menu, searchInputTile, true);
 
-			Tile* searchTile = FindTileByID(root, kStewMenu_SearchBar);
+			Tile* searchTile = FindStewMenuSearchTile(root);
 			const float searchRootActive = TileTraitFloat(root, s_tileTraitIsSearchActive);
 			const float searchTileActive = TileTraitFloat(searchTile, s_tileTraitIsActive);
 			if (searchTile
@@ -345,7 +354,8 @@ namespace fonthook
 				return MakeStewieTarget(StewieInputKind::StewMenuSearch, menu, searchTile, true);
 
 			UInt8 inputType = 0xFF;
-			Tile* subsettingTile = FindStewieInputFieldTile(menu, root, kStewMenu_SubsettingInputFieldText, inputType);
+			Tile* subsettingTile = FindActiveStewieInputFieldTile(
+				menu, kStewMenu_SubsettingInputFieldText, inputType);
 			if (subsettingTile && inputType == 0)
 				return MakeStewieTarget(StewieInputKind::StewMenuStringSubsetting, menu, subsettingTile, true);
 
@@ -972,11 +982,13 @@ namespace fonthook
 				if (MenuID(menu) == kMenuType_StewMenu)
 				{
 					Tile* root = MenuRoot(menu);
-					Tile* searchTile = FindTileByID(root, kStewMenu_SearchBar);
+					Tile* searchTile = FindStewMenuSearchTile(root);
 					UInt8 searchInputType = 0xFF;
-					Tile* searchInputTile = FindStewieInputFieldTile(menu, root, kStewMenu_SearchBar, searchInputType);
+					Tile* searchInputTile = FindActiveStewieInputFieldTile(
+						menu, kStewMenu_SearchBar, searchInputType);
 					UInt8 subsettingInputType = 0xFF;
-					Tile* subsettingTile = FindStewieInputFieldTile(menu, root, kStewMenu_SubsettingInputFieldText, subsettingInputType);
+					Tile* subsettingTile = FindActiveStewieInputFieldTile(
+						menu, kStewMenu_SubsettingInputFieldText, subsettingInputType);
 					DebugLog(
 						"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=target_miss_stewmenu root=0x%08X search=0x%08X searchInput=0x%08X searchType=%u searchRootActive=%.1f searchTileActive=%.1f subsetting=0x%08X subsettingType=%u",
 						reinterpret_cast<UInt32>(root),
@@ -1105,6 +1117,13 @@ namespace fonthook
 
 		void ProcessStewieTweaksInputTargetState()
 		{
+			if (!g_bMultibyteInputStewieTweaks)
+			{
+				s_lastStewTargetPollTick = 0;
+				s_observedStewTarget = {};
+				return;
+			}
+
 			// StewMenu can activate an InputField entirely through its game-menu
 			// update path, without producing another Win32 input message. Install and
 			// observe it from the main loop, but only while that menu actually exists.
