@@ -107,7 +107,6 @@ function(tnvse_add_freetype_target)
     "${ft}/src/pshinter/pshinter.c"
     "${ft}/src/psnames/psmodule.c"
     "${ft}/src/sfnt/sfnt.c"
-    "${ft}/src/sdf/sdf.c"
     "${ft}/src/smooth/smooth.c"
     "${ft}/src/truetype/truetype.c"
     "${ft}/builds/windows/ftdebug.c"

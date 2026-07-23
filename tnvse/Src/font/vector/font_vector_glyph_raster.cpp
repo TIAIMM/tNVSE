@@ -6,6 +6,7 @@
 #include "globals.h"
 
 #include <atomic>
+#include <stdexcept>
 #include <thread>
 
 namespace fonthook::vectorfont
@@ -126,23 +127,24 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool BuildMsdfgenTrueSdf(
+		bool BuildMsdfgenMtsdf(
 			FT_GlyphSlot slot,
 			UInt8 spread,
 			GlyphBitmap& target)
 		{
 			if (!slot || slot->format != FT_GLYPH_FORMAT_OUTLINE
-				|| spread < 2 || spread > 32)
+				|| spread < kMtsdfMinimumSpread
+				|| spread > kMtsdfMaximumSpread)
 				return false;
 
-			MsdfgenSdfBitmap generated;
-			if (!GenerateMsdfgenTrueSdf(slot->outline, spread, generated))
+			MsdfgenMtsdfBitmap generated;
+			if (!GenerateMsdfgenMtsdf(slot->outline, spread, generated))
 				return false;
 			target.width = generated.width;
 			target.height = generated.height;
 			target.left = generated.left;
 			target.top = generated.top;
-			target.alpha = std::move(generated.pixels);
+			target.alpha = std::move(generated.bgra);
 			return true;
 		}
 
@@ -163,8 +165,18 @@ namespace fonthook::vectorfont
 			if (!ConfigureRuntimeFace(*resolved.runtimeFace, *role.style, rasterScale, true))
 				return nullptr;
 
-			const FT_Int32 loadFlags = FT_LOAD_DEFAULT | FT_LOAD_TARGET_NORMAL
-				| FT_LOAD_NO_BITMAP | FT_LOAD_NO_SVG;
+			FT_Int32 loadFlags = FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP | FT_LOAD_NO_SVG;
+			if (maskType == GlyphMaskType::DistanceField)
+			{
+				// Grid fitting bakes a size-specific staircase into diagonal
+				// outlines. MTSDF must retain the scalable vector outline; the
+				// configured FreeType transform, embolden, and slant still apply.
+				loadFlags |= FT_LOAD_NO_HINTING;
+			}
+			else
+			{
+				loadFlags |= FT_LOAD_TARGET_NORMAL;
+			}
 			if (FT_Load_Glyph(resolved.runtimeFace->face, resolved.glyphIndex, loadFlags))
 				return nullptr;
 			FT_GlyphSlot slot = resolved.runtimeFace->face->glyph;
@@ -193,9 +205,10 @@ namespace fonthook::vectorfont
 
 			if (maskType == GlyphMaskType::DistanceField)
 			{
-				if (key.sdfSpread < 2 || key.sdfSpread > 32)
+				if (key.sdfSpread < kMtsdfMinimumSpread
+					|| key.sdfSpread > kMtsdfMaximumSpread)
 					return nullptr;
-				if (!BuildMsdfgenTrueSdf(slot, key.sdfSpread, *bitmap))
+				if (!BuildMsdfgenMtsdf(slot, key.sdfSpread, *bitmap))
 					return nullptr;
 				RefreshGlyphBitmapCpuMemory(*bitmap);
 				return bitmap;
@@ -257,9 +270,25 @@ namespace fonthook::vectorfont
 
 	static bool ResolveBitmapCacheKey(RuntimeFont& runtime,
 		const VectorEncodedGlyph& glyph, GlyphMaskType maskType, float safeScale,
-		UInt32 sdfSpread, ResolvedGlyph& resolved, BitmapCacheKey& key)
+		UInt32 sdfSpread, RuntimeFont*& rasterRuntime,
+		ResolvedGlyph& resolved, BitmapCacheKey& key)
 	{
-		if (!ResolveVectorGlyph(runtime, glyph, resolved) || !resolved.role
+		rasterRuntime = &runtime;
+		UInt32 resolvedSpread = sdfSpread;
+		if (maskType == GlyphMaskType::DistanceField)
+		{
+			MtsdfSharedRasterProfile profile;
+			if (!ResolveMtsdfSharedRasterProfile(*runtime.config,
+				glyph.byteClass, safeScale, true, profile))
+			{
+				return false;
+			}
+			rasterRuntime = GetMtsdfAtlasRuntime(runtime, glyph.byteClass);
+			if (!rasterRuntime)
+				return false;
+			resolvedSpread = profile.sdfSpread;
+		}
+		if (!ResolveVectorGlyph(*rasterRuntime, glyph, resolved) || !resolved.role
 			|| !resolved.role->style || !resolved.runtimeFace
 			|| !resolved.runtimeFace->face || !resolved.runtimeFace->file)
 		{
@@ -271,15 +300,17 @@ namespace fonthook::vectorfont
 		const int effectiveHeight = std::clamp(static_cast<int>(std::lround(
 			style.pixelSize * style.scaleY * safeScale)), 1, 65535);
 		const EffectStyle* effect = maskType == GlyphMaskType::Glow
-			? &runtime.config->glow
-			: maskType == GlyphMaskType::Outline ? &runtime.config->outline : nullptr;
+			? &rasterRuntime->config->glow
+			: maskType == GlyphMaskType::Outline
+				? &rasterRuntime->config->outline : nullptr;
 		const SInt32 strokeWidth = effect && effect->enabled
 			? static_cast<SInt32>(std::lround(effect->width * safeScale * 64.0f)) : 0;
 		const SInt32 embolden = static_cast<SInt32>(std::lround(
 			style.embolden * safeScale * 64.0f));
 		const UInt8 resolvedSdfSpread = maskType == GlyphMaskType::DistanceField
-			&& sdfSpread >= 2 && sdfSpread <= 32
-			? static_cast<UInt8>(sdfSpread) : 0;
+			&& resolvedSpread >= kMtsdfMinimumSpread
+			&& resolvedSpread <= kMtsdfMaximumSpread
+			? static_cast<UInt8>(resolvedSpread) : 0;
 		if (maskType == GlyphMaskType::DistanceField && !resolvedSdfSpread)
 			return false;
 		const float slant = std::tan(style.slantDegrees
@@ -317,8 +348,9 @@ namespace fonthook::vectorfont
 				continue;
 			ResolvedGlyph resolved;
 			BitmapCacheKey key;
+			RuntimeFont* rasterRuntime = nullptr;
 			if (ResolveBitmapCacheKey(runtime, *request.glyph, request.maskType,
-				safeScale, request.sdfSpread, resolved, key))
+				safeScale, request.sdfSpread, rasterRuntime, resolved, key))
 			{
 				cacheIds[index] = HashBitmapKey(key);
 			}
@@ -510,8 +542,10 @@ namespace fonthook::vectorfont
 				continue;
 			ResolvedGlyph resolved;
 			BitmapCacheKey key;
+			RuntimeFont* rasterRuntime = nullptr;
 			if (!ResolveBitmapCacheKey(runtime, *request.glyph, request.maskType,
-				safeScale, request.sdfSpread, resolved, key))
+				safeScale, request.sdfSpread, rasterRuntime, resolved, key)
+				|| !rasterRuntime)
 			{
 				continue;
 			}
@@ -525,7 +559,7 @@ namespace fonthook::vectorfont
 					slot.generation = scratch.generation;
 					slot.key = key;
 					slot.resultIndex = requestIndex;
-					results[requestIndex] = GetGlyphBitmapLocked(state, runtime,
+					results[requestIndex] = GetGlyphBitmapLocked(state, *rasterRuntime,
 						resolved, request.maskType, safeScale, key);
 					break;
 				}
@@ -547,6 +581,7 @@ namespace fonthook::vectorfont
 	struct PrewarmBitmapWorkItem
 	{
 		size_t requestIndex = 0;
+		RuntimeFont* rasterRuntime = nullptr;
 		ResolvedGlyph resolved;
 		BitmapCacheKey key;
 		GlyphMaskType maskType = GlyphMaskType::Fill;
@@ -632,8 +667,10 @@ namespace fonthook::vectorfont
 					continue;
 				ResolvedGlyph resolved;
 				BitmapCacheKey key;
+				RuntimeFont* rasterRuntime = nullptr;
 				if (!ResolveBitmapCacheKey(runtime, *request.glyph,
-					request.maskType, safeScale, request.sdfSpread, resolved, key))
+					request.maskType, safeScale, request.sdfSpread,
+					rasterRuntime, resolved, key) || !rasterRuntime)
 				{
 					continue;
 				}
@@ -648,7 +685,7 @@ namespace fonthook::vectorfont
 						slot.resultIndex = requestIndex;
 						PersistentBitmapProfile* persistentProfile = nullptr;
 						if (std::shared_ptr<const GlyphBitmap> cached =
-							FindCachedGlyphBitmapLocked(state, runtime, resolved,
+							FindCachedGlyphBitmapLocked(state, *rasterRuntime, resolved,
 								key, persistentProfile))
 						{
 							results[requestIndex] = std::move(cached);
@@ -657,6 +694,7 @@ namespace fonthook::vectorfont
 						{
 							PrewarmBitmapWorkItem item;
 							item.requestIndex = requestIndex;
+							item.rasterRuntime = rasterRuntime;
 							item.resolved = resolved;
 							item.key = key;
 							item.maskType = request.maskType;
@@ -688,15 +726,19 @@ namespace fonthook::vectorfont
 					workerCount, static_cast<UInt32>(workItems.size()));
 			}
 			std::atomic<size_t> nextWork{ 0 };
+			std::atomic<bool> abortWorkers{ false };
+			std::atomic<bool> workerAllocationFailed{ false };
+			std::atomic<bool> workerUnexpectedFailure{ false };
 			auto worker = [&]()
 			{
 				FreeTypeState workerState;
-				if (FT_Init_FreeType(&workerState.library))
-					return;
+				try
 				{
+					if (FT_Init_FreeType(&workerState.library))
+						return;
 					std::vector<PrewarmWorkerFace> faces;
 					faces.reserve(8);
-					for (;;)
+					while (!abortWorkers.load(std::memory_order_relaxed))
 					{
 						const size_t index = nextWork.fetch_add(1,
 							std::memory_order_relaxed);
@@ -710,20 +752,46 @@ namespace fonthook::vectorfont
 							continue;
 						ResolvedGlyph workerResolved = item.resolved;
 						workerResolved.runtimeFace = face;
-						item.bitmap = BuildGlyphBitmap(workerState, runtime,
+						item.bitmap = BuildGlyphBitmap(workerState,
+							*item.rasterRuntime,
 							workerResolved, item.maskType, safeScale, item.key);
 					}
 				}
-				FT_Done_FreeType(workerState.library);
+				catch (const std::bad_alloc&)
+				{
+					workerAllocationFailed.store(true, std::memory_order_relaxed);
+					abortWorkers.store(true, std::memory_order_relaxed);
+				}
+				catch (...)
+				{
+					workerUnexpectedFailure.store(true, std::memory_order_relaxed);
+					abortWorkers.store(true, std::memory_order_relaxed);
+				}
+				if (workerState.library)
+					FT_Done_FreeType(workerState.library);
 				workerState.library = nullptr;
 			};
 			std::vector<std::thread> workers;
 			workers.reserve(workerCount > 0 ? workerCount - 1 : 0);
-			for (UInt32 index = 1; index < workerCount; ++index)
-				workers.emplace_back(worker);
+			try
+			{
+				for (UInt32 index = 1; index < workerCount; ++index)
+					workers.emplace_back(worker);
+			}
+			catch (...)
+			{
+				abortWorkers.store(true, std::memory_order_relaxed);
+				for (std::thread& thread : workers)
+					thread.join();
+				throw;
+			}
 			worker();
 			for (std::thread& thread : workers)
 				thread.join();
+			if (workerAllocationFailed.load(std::memory_order_relaxed))
+				throw std::bad_alloc();
+			if (workerUnexpectedFailure.load(std::memory_order_relaxed))
+				throw std::runtime_error("parallel prewarm raster worker failed");
 
 			std::lock_guard<std::recursive_mutex> lock(state.mutex);
 			RecordFreeTypePerf(FreeTypePerfCounter::BitmapRasterized,
@@ -734,7 +802,8 @@ namespace fonthook::vectorfont
 			{
 				if (!item.bitmap)
 				{
-					item.bitmap = BuildGlyphBitmap(state, runtime, item.resolved,
+					item.bitmap = BuildGlyphBitmap(state, *item.rasterRuntime,
+						item.resolved,
 						item.maskType, safeScale, item.key);
 				}
 			}
@@ -770,7 +839,8 @@ namespace fonthook::vectorfont
 					results[item.requestIndex] = existing->second.bitmap;
 					continue;
 				}
-				InsertGlyphBitmapCacheLocked(state, runtime, item.key, item.bitmap);
+				InsertGlyphBitmapCacheLocked(state, *item.rasterRuntime,
+					item.key, item.bitmap);
 				results[item.requestIndex] = item.bitmap;
 			}
 			TrimBitmapCache(state);

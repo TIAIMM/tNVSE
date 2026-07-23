@@ -1,6 +1,7 @@
 #pragma once
 
 #include "font_vector.h"
+#include "font_vector_msdfgen.h"
 
 #include <array>
 #include <list>
@@ -13,7 +14,11 @@ namespace fonthook::vectorfont
 {
 	// Bump whenever glyph pixels change without a configuration change. This is
 	// part of atlas snapshot and prewarm job identity.
-	constexpr UInt32 kGlyphMaskGeneratorVersion = 11;
+	constexpr UInt32 kGlyphMaskGeneratorVersion = 13;
+	// Version 10 invalidates collision bands derived from the former one-channel
+	// true-SDF body. Atlas snapshot identity also consumes this ABI because a
+	// restored atlas is usable only with its matching complete manifest.
+	constexpr UInt32 kPersistentGlyphManifestVersion = 10;
 
 	struct NativeA8PayloadTemplate;
 	enum class FreeTypePerfCounter : UInt8
@@ -153,6 +158,18 @@ namespace fonthook::vectorfont
 		UInt64 maskGenerationHash = 0;
 		std::array<UInt64, 2> maskGenerationRoleHashes = {};
 		UInt64 shaderEffectHash = 0;
+		// MTSDF double-byte atlases may be shared only by raster-compatible
+		// configurations whose complete pixel-size span is at most eight pixels.
+		// Layout metrics remain local to every logical font.
+		UInt32 mtsdfDoubleByteOwnerFontId = 0;
+		UInt32 mtsdfDoubleByteGroupSize = 1;
+	};
+
+	struct MtsdfSharedRasterProfile
+	{
+		const FontConfig* ownerConfig = nullptr;
+		float sourceToLogicalScale = 1.0f;
+		UInt32 sdfSpread = 0;
 	};
 
 	struct GlyphBitmap
@@ -172,8 +189,33 @@ namespace fonthook::vectorfont
 		bool colorBaked = false;
 		UInt32 bakedRgba = 0;
 		UInt8 bakedLayer = 0;
+		// Single-channel coverage for CPU masks; D3D-native BGRA MTSDF for
+		// DistanceField requests.
 		std::vector<UInt8> alpha;
 	};
+
+	inline constexpr UInt32 GlyphBitmapBytesPerPixel(GlyphMaskType maskType)
+	{
+		return maskType == GlyphMaskType::DistanceField ? 4u : 1u;
+	}
+
+	inline size_t ExpectedGlyphBitmapBytes(const GlyphBitmap& bitmap)
+	{
+		if (bitmap.width <= 0 || bitmap.height <= 0)
+			return 0;
+		return static_cast<size_t>(bitmap.width) * bitmap.height
+			* GlyphBitmapBytesPerPixel(bitmap.maskType);
+	}
+
+	inline UInt8 SampleGlyphBodyDistanceByte(
+		const GlyphBitmap& bitmap, size_t pixelIndex)
+	{
+		if (bitmap.maskType != GlyphMaskType::DistanceField)
+			return pixelIndex < bitmap.alpha.size() ? bitmap.alpha[pixelIndex] : 0;
+		const size_t offset = pixelIndex * 4u;
+		return offset + 3u < bitmap.alpha.size()
+			? MedianMtsdfRgb(bitmap.alpha.data() + offset) : 0;
+	}
 
 	struct GlyphBitmapRequest
 	{
@@ -206,6 +248,8 @@ namespace fonthook::vectorfont
 		UInt16 atlasPage = 0;
 		bool usesSdf = false;
 		bool usesLiveTileRgb = true;
+		float sdfSpreadPixels = 0.0f;
+		float sourceToLogicalScale = 1.0f;
 		NiColorA layerColorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 	};
 
@@ -248,7 +292,8 @@ namespace fonthook::vectorfont
 		// COLOR0 carries only the per-glyph base modifier. Packet c1 carries the
 		// layer modifier, while c2.z selects whether fixed effects ignore both the
 		// base and live Tile RGB. Every path continues to inherit live Tile alpha.
-		static constexpr UInt32 kTileUniformColorAbi = 9;
+		// ABI 11 adds per-range MTSDF source/logical distance scaling.
+		static constexpr UInt32 kTileUniformColorAbi = 11;
 
 		UInt32 abiVersion = kTileUniformColorAbi;
 		NiColorA minimumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -361,6 +406,15 @@ namespace fonthook::vectorfont
 	bool HasSdfEffects(const FontConfig& arConfig);
 	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread,
 		bool abIncludeEffects = true);
+	bool ResolveMtsdfSharedRasterProfile(const FontConfig& arConfig,
+		VectorFontByteClass aeByteClass, float afRasterScale,
+		bool abIncludeEffects, MtsdfSharedRasterProfile& arProfile);
+	const FontConfig& GetMtsdfAtlasConfig(const FontConfig& arConfig,
+		VectorFontByteClass aeByteClass);
+	RuntimeFont* GetMtsdfAtlasRuntime(RuntimeFont& arRuntime,
+		VectorFontByteClass aeByteClass);
+	bool IsMtsdfAtlasAlias(const FontConfig& arConfig,
+		VectorFontByteClass aeByteClass);
 	bool ResolvePrewarmGlyph(RuntimeFont& arRuntime, const char* apBytes,
 		size_t auiLength, VectorEncodedGlyph& arGlyph);
 	bool PrewarmGlyphAtlas(RuntimeFont& arRuntime,
@@ -368,6 +422,10 @@ namespace fonthook::vectorfont
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& arBitmaps,
 		float afRasterScale);
 	bool TryLoadGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
+	bool StageGlyphAtlasSnapshotMetadata(RuntimeFont& arRuntime,
+		float afRasterScale);
+	bool HasGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& arRuntime,
+		float afRasterScale);
 	bool TryLoadGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& arRuntime,
 		float afRasterScale);
 	bool EnsureGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& arRuntime,

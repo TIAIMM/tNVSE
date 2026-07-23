@@ -5,6 +5,7 @@
 #include "tnvse.h"
 
 #include "BSShaderProperty.hpp"
+#include "NiAlphaProperty.hpp"
 #include "NiDX9Renderer.hpp"
 #include "NiDX9ShaderDeclaration.hpp"
 #include "NiGeometryBufferData.hpp"
@@ -85,6 +86,7 @@ namespace fonthook::vectorfont
 		struct NativeA8Proxy
 		{
 			NiTriShapePtr shape;
+			NiAlphaPropertyPtr alphaProperty;
 			NiGeometryBufferData* buffer = nullptr;
 			NiVBChip* chip = nullptr;
 			TileShaderPropertyView* tile = nullptr;
@@ -761,10 +763,13 @@ namespace fonthook::vectorfont
 			const NiPoint3& geometryOrigin)
 		{
 			const TileShaderPropertyView* sourceTile = GetTileProperty(&facade);
+			const NiAlphaProperty* sourceAlpha = facade.GetAlphaProperty();
 			NiTriShape* proxy = proxyState.shape.m_pObject;
+			NiAlphaProperty* proxyAlpha = proxyState.alphaProperty.m_pObject;
 			TileShaderPropertyView* proxyTile = proxyState.tile;
 			if (!sourceTile || !proxyTile || !proxyTile->sourceTexture
-				|| !proxy || !proxyState.atlasProperty)
+				|| !sourceAlpha || !proxyAlpha || !proxy
+				|| !proxyState.atlasProperty)
 			{
 				return false;
 			}
@@ -782,10 +787,14 @@ namespace fonthook::vectorfont
 				*proxy->m_pWorldBound = *facade.m_pWorldBound;
 			}
 			proxy->m_uiFlags = facade.m_uiFlags;
+			// Keep the blend/sort contract but clear only alpha testing. Aliasing
+			// the facade property lets the stock pass re-enable the threshold.
+			proxyAlpha->m_usFlags = sourceAlpha->m_usFlags;
+			proxyAlpha->m_ucAlphaTestRef = sourceAlpha->m_ucAlphaTestRef;
+			proxyAlpha->SetAlphaTesting(false);
 			if (proxy->m_kProperties.m_spAlphaProperty.m_pObject
-				!= facade.m_kProperties.m_spAlphaProperty.m_pObject)
-				proxy->m_kProperties.m_spAlphaProperty =
-					facade.m_kProperties.m_spAlphaProperty;
+				!= proxyAlpha)
+				proxy->m_kProperties.m_spAlphaProperty = proxyAlpha;
 			if (proxy->m_kProperties.m_spCullingProperty.m_pObject
 				!= facade.m_kProperties.m_spCullingProperty.m_pObject)
 				proxy->m_kProperties.m_spCullingProperty =
@@ -1033,13 +1042,16 @@ namespace fonthook::vectorfont
 				break;
 			}
 			proxy.shape->UpdateProperties();
+			proxy.alphaProperty = proxy.shape->GetAlphaProperty();
 			proxy.tile = GetTileProperty(proxy.shape.m_pObject);
 			proxy.atlasProperty = proxy.shape->GetTexturingProperty();
 			proxy.atlasTexture = proxy.tile
 				? proxy.tile->sourceTexture.m_pObject : nullptr;
 			proxy.shader = proxy.shape->GetShader();
-			if (!proxy.tile || !proxy.atlasProperty || !proxy.atlasTexture)
+			if (!proxy.alphaProperty || !proxy.tile || !proxy.atlasProperty
+				|| !proxy.atlasTexture)
 				break;
+			proxy.alphaProperty->SetAlphaTesting(false);
 			state.proxies[state.proxyCount++] = std::move(proxy);
 		}
 		return state.proxyCount != 0;

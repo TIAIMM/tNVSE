@@ -166,20 +166,22 @@ if(TNVSE_BUILD_TESTS)
   add_test(NAME tnvse_sparse_codepoint_tests
     COMMAND tnvse_sparse_codepoint_tests)
 
-  add_executable(tnvse_msdfgen_sdf_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/font_msdfgen_sdf_tests.cpp"
+  add_executable(tnvse_font_mtsdf_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/font_mtsdf_tests.cpp"
     "${TNVSE_SOURCE_ROOT}/font/vector/font_vector_msdfgen.cpp"
     "${TNVSE_SOURCE_ROOT}/font/vector/font_vector_msdfgen.h")
-  target_include_directories(tnvse_msdfgen_sdf_tests PRIVATE
+  target_include_directories(tnvse_font_mtsdf_tests PRIVATE
     "${TNVSE_SOURCE_ROOT}/font/vector")
-  target_compile_features(tnvse_msdfgen_sdf_tests PRIVATE cxx_std_20)
-  target_link_libraries(tnvse_msdfgen_sdf_tests PRIVATE
+  target_compile_features(tnvse_font_mtsdf_tests PRIVATE cxx_std_20)
+  target_compile_definitions(tnvse_font_mtsdf_tests PRIVATE
+    _CRT_SECURE_NO_WARNINGS)
+  target_link_libraries(tnvse_font_mtsdf_tests PRIVATE
     msdfgen_freetype_tnvse)
-  tnvse_apply_msvc_defaults(tnvse_msdfgen_sdf_tests)
-  set_target_properties(tnvse_msdfgen_sdf_tests PROPERTIES
+  tnvse_apply_msvc_defaults(tnvse_font_mtsdf_tests)
+  set_target_properties(tnvse_font_mtsdf_tests PROPERTIES
     FOLDER "tNVSE/Tests")
-  add_test(NAME tnvse_msdfgen_sdf_tests
-    COMMAND tnvse_msdfgen_sdf_tests)
+  add_test(NAME tnvse_font_mtsdf_tests
+    COMMAND tnvse_font_mtsdf_tests)
 endif()
 
 set(_tnvse_plugin_path_help

@@ -109,6 +109,103 @@ namespace fonthook::vectorfont
 				&& std::isfinite(style.fixedWidth) && style.fixedWidth >= 0.0f;
 		}
 
+		bool SameMtsdfRasterStyle(const ByteStyle& left,
+			const ByteStyle& right)
+		{
+			if (left.scaleX != right.scaleX || left.scaleY != right.scaleY
+				|| left.embolden != right.embolden
+				|| left.slantDegrees != right.slantDegrees
+				|| left.faces.size() != right.faces.size())
+			{
+				return false;
+			}
+			for (size_t index = 0; index < left.faces.size(); ++index)
+			{
+				const FaceConfig& leftFace = left.faces[index];
+				const FaceConfig& rightFace = right.faces[index];
+				if (leftFace.faceIndex != rightFace.faceIndex
+					|| _wcsicmp(leftFace.configuredPath.c_str(),
+						rightFace.configuredPath.c_str()) != 0)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		void ConfigureMtsdfSharedRasterGroups()
+		{
+			constexpr float kMaximumSharedPixelSizeSpan = 8.0f;
+			std::vector<FontConfig*> configs;
+			configs.reserve(g_configs.size());
+			for (auto& entry : g_configs)
+			{
+				entry.second.mtsdfDoubleByteOwnerFontId = entry.second.fontId;
+				entry.second.mtsdfDoubleByteGroupSize = 1;
+				configs.push_back(&entry.second);
+			}
+			std::sort(configs.begin(), configs.end(),
+				[](const FontConfig* left, const FontConfig* right)
+				{
+					return left->fontId < right->fontId;
+				});
+
+			std::vector<bool> assigned(configs.size(), false);
+			for (size_t familyStart = 0; familyStart < configs.size(); ++familyStart)
+			{
+				if (assigned[familyStart])
+					continue;
+				std::vector<FontConfig*> family;
+				for (size_t candidate = familyStart; candidate < configs.size();
+					++candidate)
+				{
+					if (!assigned[candidate]
+						&& SameMtsdfRasterStyle(configs[familyStart]->styles[1],
+							configs[candidate]->styles[1]))
+					{
+						assigned[candidate] = true;
+						family.push_back(configs[candidate]);
+					}
+				}
+				std::sort(family.begin(), family.end(),
+					[](const FontConfig* left, const FontConfig* right)
+					{
+						const float leftSize = left->styles[1].pixelSize;
+						const float rightSize = right->styles[1].pixelSize;
+						return leftSize != rightSize
+							? leftSize < rightSize : left->fontId < right->fontId;
+					});
+				for (size_t clusterStart = 0; clusterStart < family.size();)
+				{
+					size_t clusterEnd = clusterStart + 1;
+					while (clusterEnd < family.size()
+						&& family[clusterEnd]->styles[1].pixelSize
+							- family[clusterStart]->styles[1].pixelSize
+								<= kMaximumSharedPixelSizeSpan)
+					{
+						++clusterEnd;
+					}
+					FontConfig* owner = family[clusterEnd - 1];
+					for (size_t index = clusterEnd; index-- > clusterStart;)
+					{
+						if (family[index]->styles[1].pixelSize
+								!= owner->styles[1].pixelSize)
+							break;
+						if (family[index]->fontId < owner->fontId)
+							owner = family[index];
+					}
+					const UInt32 groupSize =
+						static_cast<UInt32>(clusterEnd - clusterStart);
+					for (size_t index = clusterStart; index < clusterEnd; ++index)
+					{
+						family[index]->mtsdfDoubleByteOwnerFontId = owner->fontId;
+						family[index]->mtsdfDoubleByteGroupSize = groupSize;
+					}
+					clusterStart = clusterEnd;
+				}
+			}
+		}
+
 		bool ReadFaceChain(pugi::xml_node node, std::vector<FaceConfig>& faces)
 		{
 			faces.clear();
@@ -492,7 +589,7 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=full-codepage verticalMetrics=%s baseline=%.2f fontColor=%d shaderFill=sdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
+				"tnvse_freetype_font: config font id=%u prewarm=full-codepage verticalMetrics=%s baseline=%.2f fontColor=%d shaderFill=mtsdf-rgb effectDistance=alpha-tsdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
 				config.fontId,
 				config.verticalMetrics == VerticalMetricsMode::Original
 					? "original" : "freetype",
@@ -601,6 +698,94 @@ namespace fonthook::vectorfont
 		arSpread = static_cast<UInt32>(physicalSpread);
 		return true;
 	}
+
+	const FontConfig& GetMtsdfAtlasConfig(const FontConfig& config,
+		VectorFontByteClass byteClass)
+	{
+		if (byteClass != VectorFontByteClass::DoubleByte
+			|| !config.mtsdfDoubleByteOwnerFontId)
+		{
+			return config;
+		}
+		const FontConfig* owner = FindConfig(
+			config.mtsdfDoubleByteOwnerFontId);
+		return owner ? *owner : config;
+	}
+
+	bool IsMtsdfAtlasAlias(const FontConfig& config,
+		VectorFontByteClass byteClass)
+	{
+		return byteClass == VectorFontByteClass::DoubleByte
+			&& GetMtsdfAtlasConfig(config, byteClass).fontId != config.fontId;
+	}
+
+	RuntimeFont* GetMtsdfAtlasRuntime(RuntimeFont& runtime,
+		VectorFontByteClass byteClass)
+	{
+		const FontConfig& owner = GetMtsdfAtlasConfig(
+			GetRuntimeConfig(runtime), byteClass);
+		return owner.fontId == GetRuntimeConfig(runtime).fontId
+			? &runtime : EnsureRuntimeFont(owner.fontId);
+	}
+
+	bool ResolveMtsdfSharedRasterProfile(const FontConfig& config,
+		VectorFontByteClass byteClass, float rasterScale,
+		bool includeEffects, MtsdfSharedRasterProfile& profile)
+	{
+		profile = {};
+		const FontConfig& owner = GetMtsdfAtlasConfig(config, byteClass);
+		const ByteStyle& consumerStyle =
+			config.styles[static_cast<size_t>(byteClass)];
+		const ByteStyle& ownerStyle =
+			owner.styles[static_cast<size_t>(byteClass)];
+		if (consumerStyle.pixelSize <= 0.0f || ownerStyle.pixelSize <= 0.0f)
+			return false;
+		profile.ownerConfig = &owner;
+		profile.sourceToLogicalScale =
+			consumerStyle.pixelSize / ownerStyle.pixelSize;
+
+		UInt32 maximumSpread = 0;
+		for (const auto& entry : g_configs)
+		{
+			const FontConfig& member = entry.second;
+			if (byteClass == VectorFontByteClass::DoubleByte
+				&& member.mtsdfDoubleByteOwnerFontId != owner.fontId)
+			{
+				continue;
+			}
+			if (byteClass != VectorFontByteClass::DoubleByte
+				&& member.fontId != config.fontId)
+			{
+				continue;
+			}
+			UInt32 memberSpread = 0;
+			if (!ResolveSdfSpread(member, rasterScale,
+				memberSpread, includeEffects))
+			{
+				return false;
+			}
+			const float memberSize =
+				member.styles[static_cast<size_t>(byteClass)].pixelSize;
+			if (memberSize <= 0.0f)
+				return false;
+			const float sourceSpread = std::ceil(
+				memberSpread * ownerStyle.pixelSize / memberSize);
+			if (!std::isfinite(sourceSpread)
+				|| sourceSpread > static_cast<float>(kMtsdfMaximumSpread))
+			{
+				return false;
+			}
+			maximumSpread = std::max(maximumSpread,
+				static_cast<UInt32>(sourceSpread));
+		}
+		if (maximumSpread < kMtsdfMinimumSpread
+			|| maximumSpread > kMtsdfMaximumSpread)
+		{
+			return false;
+		}
+		profile.sdfSpread = maximumSpread;
+		return true;
+	}
 }
 
 namespace fonthook
@@ -666,8 +851,22 @@ namespace fonthook
 					node.attribute("id").as_uint(0), reason.c_str());
 				continue;
 			}
-			vectorfont::LogFontConfig(config);
 			vectorfont::g_configs[config.fontId] = std::move(config);
+		}
+
+		vectorfont::ConfigureMtsdfSharedRasterGroups();
+		for (const auto& entry : vectorfont::g_configs)
+		{
+			vectorfont::LogFontConfig(entry.second);
+			const vectorfont::FontConfig& config = entry.second;
+			const vectorfont::FontConfig& owner =
+				vectorfont::GetMtsdfAtlasConfig(config,
+					VectorFontByteClass::DoubleByte);
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: MTSDF doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f group=%u spanLimit=8",
+				config.fontId, owner.fontId, config.styles[1].pixelSize,
+				owner.styles[1].pixelSize,
+				config.mtsdfDoubleByteGroupSize);
 		}
 
 		gLog.FormattedMessage(

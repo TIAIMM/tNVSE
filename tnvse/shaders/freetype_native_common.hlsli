@@ -28,25 +28,46 @@ float4 ComposeNativeFontCoverage(float coverage, float4 tileColor,
 		saturate(coverage * tileColor.a * baseColor.a * LayerColor.a));
 }
 
-float SampleNativeFontMask(sampler2D atlas, float2 uv)
+float4 SampleNativeFontMtsdf(sampler2D atlas, float2 uv)
 {
-	return tex2D(atlas, uv).a;
+	return tex2D(atlas, uv);
 }
 
-float DecodeNativeFontSdf(float encodedDistance, float spread)
+float MedianNativeFontMtsdf(float3 value)
 {
-	// FreeType's zero-distance contour is byte 128, rather than exactly 0.5.
-	return (encodedDistance * (255.0 / 128.0) - 1.0) * spread;
+	return max(min(value.r, value.g), min(max(value.r, value.g), value.b));
 }
 
-float NativeFontSdfAntialiasWidth(float distance)
+float DecodeNativeFontMtsdfDistance(float encodedDistance, float spread)
 {
-	return max(0.35, 0.5 * (abs(ddx(distance)) + abs(ddy(distance))));
+	return (encodedDistance - 0.5) * (2.0 * spread);
 }
 
-float NativeFontSdfBody(float distance, float antialiasWidth)
+float NativeFontMtsdfScreenPxRange(float2 uv, float2 inverseAtlasSize,
+	float spread)
 {
-	return smoothstep(-antialiasWidth, antialiasWidth, distance);
+	// Canonical msdfgen screenPxRange. RGB and Alpha are linear data; this
+	// footprint depends only on the atlas-to-screen transform, never on a
+	// shape-dependent sampled-distance derivative.
+	const float2 dx = ddx(uv);
+	const float2 dy = ddy(uv);
+	const float2 screenTextureSize =
+		1.0 / sqrt(max(dx * dx + dy * dy, 1.0e-14));
+	const float2 unitRange = (2.0 * spread) * inverseAtlasSize;
+	return max(0.5 * dot(unitRange, screenTextureSize), 1.0);
+}
+
+float NativeFontMtsdfAntialiasWidth(float screenPxRange, float spread)
+{
+	// Half of one output pixel expressed in source-distance units.
+	return spread / max(screenPxRange, 1.0);
+}
+
+float NativeFontMtsdfBody(float rgbDistance, float antialiasWidth)
+{
+	// The official median reconstruction is linear across one screen pixel.
+	return saturate(0.5 + rgbDistance
+		/ max(2.0 * antialiasWidth, 0.0002));
 }
 
 #endif

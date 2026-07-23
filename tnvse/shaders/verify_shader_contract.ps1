@@ -8,8 +8,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $pixelSources = @(
-    'freetype_native_sdf.hlsl',
-    'freetype_native_effects.hlsl'
+    'freetype_native_mtsdf_fill.hlsl',
+    'freetype_native_mtsdf_effects.hlsl'
 )
 foreach ($sourceName in $pixelSources) {
     $source = Get-Content -LiteralPath (Join-Path $ShaderDirectory $sourceName) -Raw
@@ -42,6 +42,30 @@ if ($common -notmatch 'NativeFontUsesLiveTileRgb[\s\S]*?frac\(layerAndFlags\)\s*
 }
 if ($common -match 'float4\s*\([^,]+\*[^,]*coverage') {
     throw 'Native FreeType shader ABI appears to premultiply RGB by coverage'
+}
+if ($common -notmatch 'MedianNativeFontMtsdf' -or
+    $common -notmatch
+    '\(encodedDistance\s*-\s*0\.5\)\s*\*\s*\(2\.0\s*\*\s*spread\)') {
+    throw 'Native FreeType shader ABI does not decode msdfgen MTSDF distances'
+}
+if ($common -notmatch 'NativeFontMtsdfScreenPxRange' -or
+    $common -notmatch 'const\s+float2\s+dx\s*=\s*ddx\(uv\)' -or
+    $common -notmatch 'const\s+float2\s+dy\s*=\s*ddy\(uv\)' -or
+    $common -notmatch
+    '\(2\.0\s*\*\s*spread\)\s*\*\s*inverseAtlasSize' -or
+    $common -notmatch
+    '0\.5\s*\*\s*dot\(unitRange,\s*screenTextureSize\)' -or
+    $common -notmatch 'screenTextureSize\),\s*1\.0\)') {
+    throw 'Native MTSDF AA does not follow msdfgen screenPxRange'
+}
+
+$fillSource = Get-Content -LiteralPath (
+    Join-Path $ShaderDirectory 'freetype_native_mtsdf_fill.hlsl') -Raw
+if ($fillSource -notmatch 'MedianNativeFontMtsdf' -or
+    $fillSource -match '\.a\s*[,;)]' -or
+    $fillSource -notmatch 'FILL_QUALITY\s*==\s*1' -or
+    $fillSource -notmatch 'FILL_QUALITY\s*==\s*0') {
+    throw 'Native MTSDF fill must use quality-selected RGB median reconstruction only'
 }
 
 # The HLSL contract is only valid if the native TileShader profile preserves
@@ -84,6 +108,10 @@ if ($nativeShaderSource -notmatch
     'stockUpdate\(shader,\s*properties\);[\s\S]*?ResolveStockTilePixelConstant\(properties,[\s\S]*?SetPixelShaderConstantF\(0,') {
     throw 'Native TileShader update does not refresh stock maps before publishing c0-c4'
 }
+if ($nativeShaderSource -notmatch 'D3DSAMP_SRGBTEXTURE,\s*FALSE' -or
+    $nativeShaderSource -notmatch 'D3DSAMP_MIPFILTER,\s*D3DTEXF_NONE') {
+    throw 'Native MTSDF sampler must force linear-space level-zero sampling'
+}
 
 $nativeHookSourcePath = Join-Path (
     Split-Path -Parent $resolvedShaderDirectory) 'Src\font\a8\font_a8_hooks.cpp'
@@ -91,6 +119,10 @@ $nativeHookSource = Get-Content -LiteralPath $nativeHookSourcePath -Raw
 if ($nativeHookSource -notmatch 'kFirstRegister\s*=\s*1\s*;' -or
     $nativeHookSource -notmatch 'kRegisterCount\s*=\s*4\s*;') {
     throw 'Native packet isolation must preserve only tNVSE-owned pixel c1-c4'
+}
+if ($nativeHookSource -notmatch
+    'packetScope\.Select\(proxyShape\);[\s\S]*?originalTileRenderPass\(pass,\s*currentPass,\s*false,\s*true,\s*setupDrawmode\)') {
+    throw 'Native MTSDF packets must disable stock Alpha Test and retain Alpha Blend'
 }
 
 $nativeRingSourcePath = Join-Path (
@@ -112,42 +144,55 @@ if ($nativeRingSource -notmatch
     'm_spMaterialProperty\s*=\s*\r?\n?\s*facade\.m_kProperties\.m_spMaterialProperty') {
     throw 'Native proxy does not preserve the retail material-alpha source for c0.a'
 }
+if ($nativeRingSource -notmatch 'NiAlphaPropertyPtr\s+alphaProperty' -or
+    $nativeRingSource -notmatch
+    'proxyAlpha->m_usFlags\s*=\s*sourceAlpha->m_usFlags' -or
+    $nativeRingSource -notmatch 'proxyAlpha->SetAlphaTesting\(false\)') {
+    throw 'Native proxy does not preserve blending in an owned no-test alpha property'
+}
 
 $effectsSource = Get-Content -LiteralPath (
-    Join-Path $ShaderDirectory 'freetype_native_effects.hlsl') -Raw
-$sdfSource = Get-Content -LiteralPath (
-    Join-Path $ShaderDirectory 'freetype_native_sdf.hlsl') -Raw
-if ($sdfSource -match 'SdfFlags\.x' -or $effectsSource -match 'SdfFlags\.x') {
+    Join-Path $ShaderDirectory 'freetype_native_mtsdf_effects.hlsl') -Raw
+if ($fillSource -match 'MtsdfFlags\.x' -or
+    $effectsSource -match 'MtsdfFlags\.x') {
     throw 'Native Shader Loader path still contains a grayscale mask branch'
 }
-if ($effectsSource -notmatch 'blur\s*<=\s*0\.001[\s\S]*?return\s+body\s*;') {
-    throw 'Native hard SDF shadow does not bypass blur/power shaping at the runtime epsilon'
+if ($effectsSource -notmatch
+    'blur\s*<=\s*0\.001[\s\S]*?return\s+rgbBody\s*;') {
+    throw 'Native hard MTSDF shadow does not bypass blur/power shaping'
 }
 if ($effectsSource -notmatch 'NativeFontVanillaGlowFalloff[\s\S]*?exp2\s*\(') {
-    throw 'Native SDF glow does not use the vanilla-style exponential falloff'
+    throw 'Native MTSDF glow does not use the vanilla-style exponential falloff'
 }
 if ($effectsSource -notmatch 'outer\s*-\s*antialiasWidth[\s\S]*?outer\s*\+\s*antialiasWidth') {
-    throw 'Native SDF glow does not feather its outer cutoff by the pixel footprint'
+    throw 'Native MTSDF glow does not feather its outer cutoff by the pixel footprint'
 }
-if ($effectsSource -notmatch 'SdfFlags\.z\s*>\s*0\.0[\s\S]*?SdfFlags\.w\s*>\s*0\.0') {
+if ($effectsSource -notmatch
+    'MtsdfFlags\.z\s*>\s*0\.0[\s\S]*?MtsdfFlags\.w\s*>\s*0\.0') {
     throw 'Native hard shadow does not consume the copied glow and outline switches'
 }
 if ($effectsSource -notmatch
-    'proxyAntialiasWidth[\s\S]*?vuiProxy\s*=\s*smoothstep[\s\S]*?max\s*\(\s*body\s*,\s*vuiProxy\s*\)') {
-    throw 'Native SDF outline does not retain VUI-style dark-proxy overlap beneath the fill'
+    'proxyAntialiasWidth[\s\S]*?vuiProxy\s*=\s*smoothstep[\s\S]*?max\s*\(\s*rgbBody\s*,\s*vuiProxy\s*\)') {
+    throw 'Native MTSDF outline does not retain VUI-style dark-proxy overlap beneath the fill'
 }
 if ($effectsSource -match 'expanded\s*-\s*body') {
-    throw 'Native SDF outline regressed to a hard hollow-ring mask'
+    throw 'Native MTSDF outline regressed to a hard hollow-ring mask'
 }
 if ($effectsSource -notmatch 'outline\s*\+\s*\(1\.0\s*-\s*outline\)\s*\*\s*glow') {
     throw 'Native hard shadow does not source-over the copied outline and glow masks'
+}
+if ($effectsSource -notmatch
+    'alphaDistance\s*=\s*DecodeNativeFontMtsdfDistance\([\s\S]*?mtsdf\.a' -or
+    $effectsSource -notmatch
+    'rgbDistance\s*=\s*DecodeNativeFontMtsdfDistance\([\s\S]*?MedianNativeFontMtsdf\(mtsdf\.rgb\)') {
+    throw 'Native effects do not separate Alpha TSDF geometry from RGB body topology'
 }
 
 $shaderInputs = @(
     'freetype_native_common.hlsli',
     'freetype_native_vs.hlsl',
-    'freetype_native_sdf.hlsl',
-    'freetype_native_effects.hlsl'
+    'freetype_native_mtsdf_fill.hlsl',
+    'freetype_native_mtsdf_effects.hlsl'
 ) | ForEach-Object { Get-Item -LiteralPath (Join-Path $ShaderDirectory $_) }
 $newestShaderSource = ($shaderInputs |
     Sort-Object LastWriteTimeUtc -Descending |
@@ -156,10 +201,12 @@ $newestShaderSource = ($shaderInputs |
 $compiledDirectory = Join-Path $ShaderDirectory 'compiled'
 $vertexShader = 'tnvse_freetype_native_vs.vso'
 $pixelShaders = @(
-    'tnvse_freetype_native_sdf.pso',
-    'tnvse_freetype_native_effects_fast.pso',
-    'tnvse_freetype_native_effects_balanced.pso',
-    'tnvse_freetype_native_effects_high.pso'
+    'tnvse_freetype_native_mtsdf_fill_fast.pso',
+    'tnvse_freetype_native_mtsdf_fill_balanced.pso',
+    'tnvse_freetype_native_mtsdf_fill_high.pso',
+    'tnvse_freetype_native_mtsdf_effects_fast.pso',
+    'tnvse_freetype_native_mtsdf_effects_balanced.pso',
+    'tnvse_freetype_native_mtsdf_effects_high.pso'
 )
 
 $vertexPath = Join-Path $compiledDirectory $vertexShader
@@ -205,11 +252,11 @@ foreach ($shaderName in $pixelShaders) {
     if (-not ($instructions -cmatch '\bc1\b')) {
         throw "$shaderName does not read the packet layer color c1"
     }
-    if ($shaderName -like 'tnvse_freetype_native_effects_*.pso' -and
+    if ($shaderName -like 'tnvse_freetype_native_mtsdf_effects_*.pso' -and
         -not ($dump -match '\b0\.001(?:0+\d*)?\b')) {
         throw "$shaderName does not contain the hard-shadow epsilon"
     }
-    if ($shaderName -like 'tnvse_freetype_native_effects_*.pso') {
+    if ($shaderName -like 'tnvse_freetype_native_mtsdf_*.pso') {
         if (-not ($dump -match 'approximately\s+(\d+)\s+instruction slots used')) {
             throw "$shaderName does not report its instruction-slot count"
         }

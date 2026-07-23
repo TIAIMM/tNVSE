@@ -288,12 +288,15 @@ namespace fonthook::vectorfont
 		CpuMemoryLease cpuMemory;
 	};
 
-	// Version 11 replaces FreeType's coverage-signed outline SDF with msdfgen's
-	// overlap-aware true SDF. All older persistent masks are incompatible.
-	constexpr UInt32 kPersistentBitmapVersion = 11;
+	// Version 12 replaces the single-channel true-SDF record with msdfgen v1.13
+	// BGRA MTSDF: RGB body distance and Alpha true distance.
+	constexpr UInt32 kPersistentBitmapVersion = 12;
 	constexpr UInt32 kPersistentBitmapRecordMagic = 0x4B534D47u; // GMSK
 	constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
-	constexpr UInt32 kMaximumPersistentBitmapBytes = 16u * 1024u * 1024u;
+	constexpr UInt32 kMaximumPersistentSingleChannelBitmapBytes =
+		16u * 1024u * 1024u;
+	constexpr UInt32 kMaximumPersistentMtsdfBitmapBytes =
+		4u * kMaximumPersistentSingleChannelBitmapBytes;
 
 	struct PersistentBitmapProfileKey
 	{
@@ -416,10 +419,10 @@ namespace fonthook::vectorfont
 		}
 	};
 
-	// Version 9 stores only encoded units valid for the active code page and shares
-	// one mapped object across every runtime with the same manifest identity.
-	// Version 8 used a fixed 65536-entry array per runtime mapping.
-	constexpr UInt32 kPersistentGlyphManifestVersion = 9;
+	// The manifest version is shared with atlas snapshot identity in
+	// font_vector_internal.h. Version 9 stores only encoded units valid for the
+	// active code page and shares one mapped object across equivalent runtimes;
+	// version 8 used a fixed 65536-entry array per runtime mapping.
 	constexpr size_t kGlyphCollisionBandCount = 16;
 
 	struct GlyphCollisionProfile

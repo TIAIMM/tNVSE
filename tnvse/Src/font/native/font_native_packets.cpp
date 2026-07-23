@@ -84,6 +84,9 @@ namespace fonthook::vectorfont
 		A8CompiledRange CompileRange(const A8EffectShapeConfig& effects,
 			const A8DrawRange& range)
 		{
+			const float distanceParameterScale =
+				range.sourceToLogicalScale > 0.0f
+				? 1.0f / range.sourceToLogicalScale : 1.0f;
 			float inverseAtlasWidth = effects.inverseAtlasWidth;
 			float inverseAtlasHeight = effects.inverseAtlasHeight;
 			if (range.atlasPage < effects.atlasInverseSizes.size())
@@ -105,24 +108,28 @@ namespace fonthook::vectorfont
 					|| effects.shadowOutlineAlpha > 0.0f);
 			if (hardShadowComposite)
 			{
-				parameter0 = effects.glowInnerPixels;
-				parameter1 = effects.glowOuterPixels;
+				parameter0 = effects.glowInnerPixels * distanceParameterScale;
+				parameter1 = effects.glowOuterPixels * distanceParameterScale;
 				parameter2 = effects.glowPower;
-				parameter3 = effects.outlineWidthPixels;
-				sdfFlag1 = effects.outlineSoftnessPixels;
+				parameter3 = effects.outlineWidthPixels * distanceParameterScale;
+				sdfFlag1 = effects.outlineSoftnessPixels * distanceParameterScale;
 				sdfFlag2 = effects.shadowGlowAlpha;
 				sdfFlag3 = effects.shadowOutlineAlpha;
 			}
 			if (range.layer == 1)
 			{
-				parameter0 = effects.glowInnerPixels;
-				parameter1 = effects.glowOuterPixels;
+				parameter0 = effects.glowInnerPixels * distanceParameterScale;
+				parameter1 = effects.glowOuterPixels * distanceParameterScale;
 				parameter2 = effects.glowPower;
 			}
 			else if (range.layer == 2)
 			{
-				parameter0 = effects.outlineWidthPixels;
-				parameter1 = effects.outlineSoftnessPixels;
+				parameter0 = effects.outlineWidthPixels * distanceParameterScale;
+				parameter1 = effects.outlineSoftnessPixels * distanceParameterScale;
+			}
+			else if (range.layer == 0 && !hardShadowComposite)
+			{
+				parameter0 = effects.shadowBlurPixels * distanceParameterScale;
 			}
 			else if (range.layer == 3)
 			{
@@ -138,7 +145,7 @@ namespace fonthook::vectorfont
 				range.layerColorModifier.r, range.layerColorModifier.g,
 				range.layerColorModifier.b, range.layerColorModifier.a,
 				inverseAtlasWidth, inverseAtlasHeight,
-				layerAndFlags, effects.sdfSpreadPixels,
+				layerAndFlags, range.sdfSpreadPixels,
 				parameter0, parameter1, parameter2, parameter3,
 				1.0f, sdfFlag1, sdfFlag2, sdfFlag3
 			}};

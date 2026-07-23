@@ -13,6 +13,13 @@ namespace fonthook::vectorfont
 		return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
 	}
 
+	static UInt32 MaximumPersistentBitmapBytes(GlyphMaskType maskType)
+	{
+		return maskType == GlyphMaskType::DistanceField
+			? kMaximumPersistentMtsdfBitmapBytes
+			: kMaximumPersistentSingleChannelBitmapBytes;
+	}
+
 	void RefreshPersistentBitmapProfileCpuMemory(
 		PersistentBitmapProfile& profile)
 	{
@@ -66,6 +73,8 @@ namespace fonthook::vectorfont
 			add(&key.slant16Dot16, sizeof(key.slant16Dot16));
 			add(&key.sdfSpread, sizeof(key.sdfSpread));
 			add(&key.maskType, sizeof(key.maskType));
+			if (key.maskType == static_cast<UInt8>(GlyphMaskType::DistanceField))
+				add(&kMtsdfGeneratorRevision, sizeof(kMtsdfGeneratorRevision));
 			return hash;
 		}
 
@@ -83,7 +92,13 @@ namespace fonthook::vectorfont
 			hash = HashBytes64(&key.strokeWidth26Dot6, sizeof(key.strokeWidth26Dot6), hash);
 			hash = HashBytes64(&key.slant16Dot16, sizeof(key.slant16Dot16), hash);
 			hash = HashBytes64(&key.sdfSpread, sizeof(key.sdfSpread), hash);
-			return HashBytes64(&key.maskType, sizeof(key.maskType), hash);
+			hash = HashBytes64(&key.maskType, sizeof(key.maskType), hash);
+			if (key.maskType == static_cast<UInt8>(GlyphMaskType::DistanceField))
+			{
+				hash = HashBytes64(&kMtsdfGeneratorRevision,
+					sizeof(kMtsdfGeneratorRevision), hash);
+			}
+			return hash;
 		}
 
 		PersistentBitmapProfileKey MakePersistentBitmapProfileKey(
@@ -525,18 +540,19 @@ namespace fonthook::vectorfont
 		}
 
 		bool IsValidPersistentRecordHeader(
-			const PersistentBitmapRecordHeader& record)
+			const PersistentBitmapRecordHeader& record, GlyphMaskType maskType)
 		{
 			if (record.magic != kPersistentBitmapRecordMagic
 				|| record.headerSize != sizeof(record)
 				|| record.width <= 0 || record.height <= 0
 				|| !record.alphaSize
-				|| record.alphaSize > kMaximumPersistentBitmapBytes)
+				|| record.alphaSize > MaximumPersistentBitmapBytes(maskType))
 			{
 				return false;
 			}
 			return static_cast<UInt64>(record.width)
-				* static_cast<UInt64>(record.height) == record.alphaSize;
+				* static_cast<UInt64>(record.height)
+				* GlyphBitmapBytesPerPixel(maskType) == record.alphaSize;
 		}
 
 		bool InitializePersistentBitmapProfile(PersistentBitmapProfile& profile)
@@ -710,7 +726,8 @@ namespace fonthook::vectorfont
 			PersistentBitmapRecordHeader record;
 			if (!ReadPersistentProfileBytes(profile, entry.offset,
 					&record, sizeof(record))
-				|| !IsValidPersistentRecordHeader(record)
+				|| !IsValidPersistentRecordHeader(record,
+					static_cast<GlyphMaskType>(key.maskType))
 				|| record.glyphIndex != key.glyphIndex
 				|| entry.size != sizeof(record) + record.alphaSize)
 				return nullptr;
@@ -771,9 +788,9 @@ namespace fonthook::vectorfont
 					|| profile.indexEntries[key.glyphIndex].size
 					|| bitmap.width <= 0 || bitmap.height <= 0
 					|| bitmap.alpha.empty()
-					|| bitmap.alpha.size() > kMaximumPersistentBitmapBytes
-					|| static_cast<UInt64>(bitmap.width) * bitmap.height
-						!= bitmap.alpha.size())
+					|| bitmap.alpha.size() > MaximumPersistentBitmapBytes(
+						bitmap.maskType)
+					|| ExpectedGlyphBitmapBytes(bitmap) != bitmap.alpha.size())
 				{
 					continue;
 				}
@@ -799,9 +816,9 @@ namespace fonthook::vectorfont
 					|| profile.indexEntries[key.glyphIndex].size
 					|| bitmap.width <= 0 || bitmap.height <= 0
 					|| bitmap.alpha.empty()
-					|| bitmap.alpha.size() > kMaximumPersistentBitmapBytes
-					|| static_cast<UInt64>(bitmap.width) * bitmap.height
-						!= bitmap.alpha.size())
+					|| bitmap.alpha.size() > MaximumPersistentBitmapBytes(
+						bitmap.maskType)
+					|| ExpectedGlyphBitmapBytes(bitmap) != bitmap.alpha.size())
 				{
 					continue;
 				}
@@ -1247,6 +1264,8 @@ namespace fonthook::vectorfont
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			manifestHash = HashBytes64(&codePage,
 				sizeof(codePage), manifestHash);
+			manifestHash = HashBytes64(&kMtsdfGeneratorRevision,
+				sizeof(kMtsdfGeneratorRevision), manifestHash);
 			auto pooled = State().persistentGlyphManifests.find(manifestHash);
 			if (pooled != State().persistentGlyphManifests.end())
 			{
@@ -1545,8 +1564,7 @@ namespace fonthook::vectorfont
 			}
 			if (!std::isfinite(rasterScale) || rasterScale < 0.1f
 				|| bitmap.width < 0 || bitmap.height < 0
-				|| bitmap.alpha.size() != static_cast<size_t>(bitmap.width)
-					* static_cast<size_t>(bitmap.height))
+				|| bitmap.alpha.size() != ExpectedGlyphBitmapBytes(bitmap))
 			{
 				return;
 			}
@@ -1572,11 +1590,14 @@ namespace fonthook::vectorfont
 			int lastRow = -1;
 			for (int y = 0; y < bitmap.height; ++y)
 			{
-				const UInt8* row = bitmap.alpha.data()
-					+ static_cast<size_t>(y) * bitmap.width;
-				if (std::find_if(row, row + bitmap.width,
-					[](UInt8 value) { return value >= kBodyThreshold; })
-					!= row + bitmap.width)
+				const size_t rowStart = static_cast<size_t>(y) * bitmap.width;
+				bool visible = false;
+				for (int x = 0; x < bitmap.width && !visible; ++x)
+				{
+					visible = SampleGlyphBodyDistanceByte(
+						bitmap, rowStart + x) >= kBodyThreshold;
+				}
+				if (visible)
 				{
 					firstRow = std::min(firstRow, y);
 					lastRow = y;
@@ -1599,24 +1620,29 @@ namespace fonthook::vectorfont
 				const int visibleRows = lastRow - firstRow + 1;
 				for (int y = firstRow; y <= lastRow; ++y)
 				{
-					const UInt8* row = bitmap.alpha.data()
-						+ static_cast<size_t>(y) * bitmap.width;
+					const size_t rowStart = static_cast<size_t>(y) * bitmap.width;
+					auto sample = [&](int x)
+					{
+						return SampleGlyphBodyDistanceByte(
+							bitmap, rowStart + x);
+					};
 					int first = 0;
-					while (first < bitmap.width && row[first] < kBodyThreshold)
+					while (first < bitmap.width && sample(first) < kBodyThreshold)
 						++first;
 					if (first == bitmap.width)
 						continue;
 					int last = bitmap.width - 1;
-					while (last > first && row[last] < kBodyThreshold)
+					while (last > first && sample(last) < kBodyThreshold)
 						--last;
 
-					const float previous = first > 0 ? row[first - 1] : 0.0f;
-					const float currentLeft = row[first];
+					const float previous = first > 0 ? sample(first - 1) : 0.0f;
+					const float currentLeft = sample(first);
 					const float leftMix = currentLeft > previous
 						? (kBodyThreshold - previous) / (currentLeft - previous) : 1.0f;
 					const float leftPixel = static_cast<float>(first) - 0.5f + leftMix;
-					const float currentRight = row[last];
-					const float next = last + 1 < bitmap.width ? row[last + 1] : 0.0f;
+					const float currentRight = sample(last);
+					const float next = last + 1 < bitmap.width
+						? sample(last + 1) : 0.0f;
 					const float rightMix = currentRight > next
 						? (currentRight - kBodyThreshold) / (currentRight - next) : 0.0f;
 					const float rightPixel = static_cast<float>(last) + 0.5f + rightMix;

@@ -26,8 +26,8 @@ namespace fonthook::vectorfont
 		{
 			std::vector<AtlasSnapshotPlacement> placements;
 			std::vector<UInt8> pixels;
-			UInt32 cursorX = kSdfAtlasPadding;
-			UInt32 cursorY = kSdfAtlasPadding;
+			UInt32 cursorX = kMtsdfAtlasPadding;
+			UInt32 cursorY = kMtsdfAtlasPadding;
 			UInt32 shelfHeight = 0;
 			UInt32 usedWidth = 0;
 			UInt32 usedHeight = 0;
@@ -114,9 +114,9 @@ namespace fonthook::vectorfont
 				BuildPrewarmAtlasContentHash(config, byteClass, rasterScale, true),
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
-				AtlasPixelMode::A8,
+				AtlasPixelMode::Mtsdf32,
 				AtlasRenderMode::ShaderEffects,
-				kSdfAtlasPadding,
+				kMtsdfAtlasPadding,
 				true,
 				byteClass
 			};
@@ -145,6 +145,13 @@ namespace fonthook::vectorfont
 				sizeof(kMaximumAtlasMipLevels), hash);
 			hash = HashBytes(&A8ShapeColorContract::kTileUniformColorAbi,
 				sizeof(A8ShapeColorContract::kTileUniformColorAbi), hash);
+			hash = HashBytes(&kMtsdfGeneratorRevision,
+				sizeof(kMtsdfGeneratorRevision), hash);
+			// A snapshot is usable only together with a complete glyph manifest.
+			// Couple their ABIs so a manifest format change cannot leave an
+			// apparently valid atlas that is restored and then discarded.
+			hash = HashBytes(&kPersistentGlyphManifestVersion,
+				sizeof(kPersistentGlyphManifestVersion), hash);
 			return hash;
 		}
 
@@ -159,8 +166,14 @@ namespace fonthook::vectorfont
 			const FontConfig& config = GetRuntimeConfig(runtime);
 			AtlasCacheKey key = BuildBaseKey(config, byteClass, rasterScale);
 			key.pageIndex = pageIndex;
-			const UInt64 maskContentHash = GetRuntimeMaskContentHash(runtime, byteClass);
-			const UInt64 snapshotHash = BuildSnapshotHash(key, maskContentHash, config);
+			RuntimeFont* atlasRuntime =
+				GetMtsdfAtlasRuntime(runtime, byteClass);
+			if (!atlasRuntime)
+				return {};
+			const UInt64 maskContentHash = GetRuntimeMaskContentHash(
+				*atlasRuntime, byteClass);
+			const UInt64 snapshotHash = BuildSnapshotHash(key,
+				maskContentHash, GetRuntimeConfig(*atlasRuntime));
 			if (outSnapshotHash)
 				*outSnapshotHash = snapshotHash;
 			if (outMaskContentHash)
@@ -207,7 +220,8 @@ namespace fonthook::vectorfont
 			for (const AtlasSnapshotPlacement& placement : placements)
 			{
 				const size_t bytes = static_cast<size_t>(placement.rect.width)
-					* placement.rect.height;
+					* placement.rect.height * AtlasBytesPerPixel(
+						static_cast<AtlasPixelMode>(header.pixelMode));
 				if (offset > pixels.size() || bytes > pixels.size() - offset)
 					return 0;
 				slices.push_back({ placement.rect, offset, bytes });
@@ -234,10 +248,13 @@ namespace fonthook::vectorfont
 
 		void ResetPage(StreamingPage& page)
 		{
-			std::vector<AtlasSnapshotPlacement>().swap(page.placements);
-			std::vector<UInt8>().swap(page.pixels);
-			page.cursorX = kSdfAtlasPadding;
-			page.cursorY = kSdfAtlasPadding;
+			// Reuse one fixed-capacity page buffer across the whole font. This avoids
+			// vector doubling peaks and repeated large heap allocations while keeping
+			// the live stream bounded to one 16 MiB page per byte role.
+			page.placements.clear();
+			page.pixels.clear();
+			page.cursorX = kMtsdfAtlasPadding;
+			page.cursorY = kMtsdfAtlasPadding;
 			page.shelfHeight = 0;
 			page.usedWidth = 0;
 			page.usedHeight = 0;
@@ -270,6 +287,8 @@ namespace fonthook::vectorfont
 			header.snapshotHash = snapshotHash;
 			header.maskContentHash = maskContentHash;
 			header.atlasContentHash = key.atlasContentHash;
+			// Streaming pages are an intermediate transaction generation. The
+			// finalizer globally repacks them before the manifest is committed.
 			header.flags = 0;
 			header.scaleMilli = key.scaleMilli;
 			header.width = NextPowerOfTwo(std::max<UInt32>(64, page.usedWidth));
@@ -314,8 +333,7 @@ namespace fonthook::vectorfont
 			const bool written = WriteExact(file, &header, sizeof(header))
 				&& WriteExact(file, page.placements.data(),
 					page.placements.size() * sizeof(page.placements[0]))
-				&& WriteExact(file, page.pixels.data(), page.pixels.size())
-				&& FlushFileBuffers(file);
+				&& WriteExact(file, page.pixels.data(), page.pixels.size());
 			CloseHandle(file);
 			if (!written)
 			{
@@ -337,18 +355,21 @@ namespace fonthook::vectorfont
 			if (!bitmap || !bitmap->cacheId || bitmap->width <= 0 || bitmap->height <= 0
 				|| bitmap->maskType != GlyphMaskType::DistanceField)
 				return true;
-			const size_t requiredBytes = static_cast<size_t>(bitmap->width)
-				* static_cast<size_t>(bitmap->height);
+			const size_t requiredBytes = ExpectedGlyphBitmapBytes(*bitmap);
 			if (bitmap->alpha.size() < requiredBytes)
 				return false;
 			if (role.cacheIds.find(bitmap->cacheId) != role.cacheIds.end())
 				return true;
+			if (role.current.pixels.capacity() < kMaximumMtsdfPrewarmPageBytes)
+				role.current.pixels.reserve(kMaximumMtsdfPrewarmPageBytes);
 
-			const UInt32 maximum = std::min(GetMaximumAtlasSize(), kAtlasHardLimit);
+			const UInt32 maximum = std::min(
+				std::min(GetMaximumAtlasSize(), kAtlasHardLimit),
+				kMaximumMtsdfPrewarmAtlasSize);
 			const UInt32 width = static_cast<UInt32>(bitmap->width);
 			const UInt32 height = static_cast<UInt32>(bitmap->height);
-			if (maximum < 64 || width + kSdfAtlasPadding * 2 > maximum
-				|| height + kSdfAtlasPadding * 2 > maximum)
+			if (maximum < 64 || width + kMtsdfAtlasPadding * 2 > maximum
+				|| height + kMtsdfAtlasPadding * 2 > maximum)
 				return false;
 
 			for (UInt32 attempt = 0; attempt < 2; ++attempt)
@@ -357,13 +378,13 @@ namespace fonthook::vectorfont
 				UInt32 x = page.cursorX;
 				UInt32 y = page.cursorY;
 				UInt32 shelfHeight = page.shelfHeight;
-				if (x + width + kSdfAtlasPadding > maximum)
+				if (x + width + kMtsdfAtlasPadding > maximum)
 				{
-					x = kSdfAtlasPadding;
+					x = kMtsdfAtlasPadding;
 					y += shelfHeight;
 					shelfHeight = 0;
 				}
-				if (y + height + kSdfAtlasPadding > maximum)
+				if (y + height + kMtsdfAtlasPadding > maximum)
 				{
 					if (page.placements.empty()
 						|| !WriteCurrentPage(runtime, role, rasterScale))
@@ -388,14 +409,14 @@ namespace fonthook::vectorfont
 				page.placements.push_back(placement);
 				page.pixels.insert(page.pixels.end(), bitmap->alpha.begin(),
 					bitmap->alpha.begin() + requiredBytes);
-				page.cursorX = x + width + kSdfAtlasPadding * 2;
+				page.cursorX = x + width + kMtsdfAtlasPadding * 2;
 				page.cursorY = y;
 				page.shelfHeight = std::max(shelfHeight,
-					height + kSdfAtlasPadding * 2);
+					height + kMtsdfAtlasPadding * 2);
 				page.usedWidth = std::max(page.usedWidth,
-					x + width + kSdfAtlasPadding);
+					x + width + kMtsdfAtlasPadding);
 				page.usedHeight = std::max(page.usedHeight,
-					y + height + kSdfAtlasPadding);
+					y + height + kMtsdfAtlasPadding);
 				role.cacheIds.insert(bitmap->cacheId);
 				return true;
 			}
@@ -481,12 +502,10 @@ namespace fonthook::vectorfont
 					return false;
 				LARGE_INTEGER beginning = {};
 				const bool patched = SetFilePointerEx(file, beginning, nullptr, FILE_BEGIN)
-					&& WriteExact(file, &page.header, sizeof(page.header))
-					&& FlushFileBuffers(file);
+					&& WriteExact(file, &page.header, sizeof(page.header));
 				CloseHandle(file);
 				if (!patched || !MoveFileExW(page.temporaryPath.c_str(),
-					page.finalPath.c_str(), MOVEFILE_REPLACE_EXISTING
-						| MOVEFILE_WRITE_THROUGH))
+					page.finalPath.c_str(), MOVEFILE_REPLACE_EXISTING))
 				{
 					return false;
 				}
@@ -562,9 +581,18 @@ namespace fonthook::vectorfont
 		catch (const std::bad_alloc&)
 		{
 			state->failed = true;
+			size_t retainedBytes = 0;
+			size_t completedPages = 0;
+			for (const StreamingRole& role : state->roles)
+			{
+				retainedBytes += role.current.pixels.size();
+				completedPages += role.pages.size();
+			}
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: streamed prewarm allocation failed font=%u scale=%.3f",
-				state->fontId, rasterScale);
+				"tnvse_freetype_font: streamed prewarm allocation failed font=%u scale=%.3f pageLimit=%u completedPages=%llu retainedMiB=%.2f",
+				state->fontId, rasterScale, kMaximumMtsdfPrewarmAtlasSize,
+				static_cast<unsigned long long>(completedPages),
+				retainedBytes / (1024.0 * 1024.0));
 			return false;
 		}
 		return true;
@@ -572,6 +600,7 @@ namespace fonthook::vectorfont
 
 	bool FinalizeStreamingPrewarmAtlas(RuntimeFont& runtime, float rasterScale)
 	{
+		const ULONGLONG finalizeStarted = GetTickCount64();
 		std::unique_ptr<StreamingPrewarmState> completed;
 		{
 			std::lock_guard<std::mutex> lock(s_streamMutex);
@@ -587,6 +616,11 @@ namespace fonthook::vectorfont
 			for (size_t roleIndex = 0; roleIndex < roleCount; ++roleIndex)
 			{
 				StreamingRole& role = state->roles[roleIndex];
+				if (IsMtsdfAtlasAlias(GetRuntimeConfig(runtime),
+					role.byteClass))
+				{
+					continue;
+				}
 				if (!WriteCurrentPage(runtime, role, rasterScale)
 					|| !PatchAndPublishRole(runtime, role, rasterScale))
 				{
@@ -597,12 +631,19 @@ namespace fonthook::vectorfont
 			completed = std::move(s_streams[&runtime]);
 			s_streams.erase(&runtime);
 		}
+		for (StreamingRole& role : completed->roles)
+		{
+			// The reusable raster buffers are no longer needed. Release them before
+			// snapshot validation and D3D9 allocation begin.
+			std::vector<AtlasSnapshotPlacement>().swap(role.current.placements);
+			std::vector<UInt8>().swap(role.current.pixels);
+		}
 
 		// Publishing a streamed role replaces the content-addressed snapshot files.
 		// An equivalent font ID can already have the same atlas profile resident, but
 		// its CompactAtlasSnapshot still describes the files from before this commit.
-		// Invalidate the reuse marker before restoring so TryLoadGlyphAtlasSnapshotRole
-		// must read the just-published generation instead of accepting stale backing
+		// Invalidate the reuse marker before staging so the snapshot loader must
+		// read the just-published generation instead of accepting stale backing
 		// metadata. The resources themselves are replaced atomically by that loader.
 		{
 			AtlasState& atlasState = State();
@@ -612,8 +653,12 @@ namespace fonthook::vectorfont
 			UInt32 invalidatedProfiles = 0;
 			for (size_t roleIndex = 0; roleIndex < roleCount; ++roleIndex)
 			{
+				const VectorFontByteClass byteClass =
+					static_cast<VectorFontByteClass>(roleIndex);
+				if (IsMtsdfAtlasAlias(config, byteClass))
+					continue;
 				const AtlasCacheKey key = BuildBaseKey(config,
-					static_cast<VectorFontByteClass>(roleIndex), rasterScale);
+					byteClass, rasterScale);
 				invalidatedProfiles += static_cast<UInt32>(
 					atlasState.completeAtlasProfiles.erase(MakeAtlasProfileKey(key)));
 			}
@@ -625,23 +670,24 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		// Snapshot validation intentionally requires the persistent manifest to be
-		// complete. Publish every page first, mark that matching manifest complete,
-		// then restore only through the DEFAULT-pool route. Bulk managed restoration
-		// would retain one full CPU atlas backing per page and defeat the 32-bit
-		// address-space guarantees of the streaming writer.
-		MarkGlyphManifestComplete(runtime);
-		bool restored = !g_bEnableFreeTypeDefaultPoolAtlas;
-		bool repacked = false;
-		if (g_bEnableFreeTypeDefaultPoolAtlas)
+		const ULONGLONG publishedAt = GetTickCount64();
+		// Preserve the global skyline repack, but stage only source headers and
+		// placements in the atlas index. SaveGlyphAtlasSnapshot then reads one
+		// bounded source page at a time from disk and writes the globally repacked
+		// destination pages. No intermediate streamed generation is uploaded.
+		const bool staged = StageGlyphAtlasSnapshotMetadata(runtime, rasterScale);
+		const ULONGLONG stagedAt = GetTickCount64();
+		const bool repacked = staged
+			&& SaveGlyphAtlasSnapshot(runtime, rasterScale);
+		const ULONGLONG repackedAt = GetTickCount64();
+		bool restored = false;
+		if (repacked)
 		{
-			// The bounded streaming writer deliberately keeps only one shelf page in
-			// memory. Once every page is durable, read those pages back, perform the
-			// global skyline repack, publish the compact set, then discard and restore
-			// the generation once more. Only this final restored generation is eligible
-			// for code-page mask-cache deletion.
-			restored = EnsureGloballyRepackedGlyphAtlasSnapshot(runtime,
-				rasterScale, &repacked);
+			// The manifest is the transaction commit marker. Do not make the
+			// generation restorable until both byte roles have been repacked.
+			MarkGlyphManifestComplete(runtime);
+			restored = RebuildGlyphAtlasFromSnapshot(runtime, rasterScale)
+				&& HasGloballyRepackedGlyphAtlasSnapshot(runtime, rasterScale);
 		}
 		UInt64 pages = 0;
 		UInt64 placements = 0;
@@ -653,15 +699,19 @@ namespace fonthook::vectorfont
 			bytes += role.totalPixelBytes;
 		}
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: streamed prewarm finalized font=%u scale=%.3f pages=%llu placements=%llu rawBytes=%llu restore=%s",
+			"tnvse_freetype_font: streamed prewarm finalized font=%u scale=%.3f pages=%llu placements=%llu rawBytes=%llu publishMs=%llu metadataStageMs=%llu repackMs=%llu restoreMs=%llu stage=%s repack=%s restore=%s",
 			completed->fontId, rasterScale,
 			static_cast<unsigned long long>(pages),
 			static_cast<unsigned long long>(placements),
 			static_cast<unsigned long long>(bytes),
-			g_bEnableFreeTypeDefaultPoolAtlas
-				? (restored ? (repacked ? "repacked-default-pool" : "default-pool")
-					: "failed")
-				: "deferred-managed");
+			static_cast<unsigned long long>(publishedAt - finalizeStarted),
+			static_cast<unsigned long long>(stagedAt - publishedAt),
+			static_cast<unsigned long long>(repackedAt - stagedAt),
+			static_cast<unsigned long long>(GetTickCount64() - repackedAt),
+			staged ? "complete" : "failed",
+			repacked ? "complete" : "failed",
+			restored ? (g_bEnableFreeTypeDefaultPoolAtlas
+				? "repacked-default-pool" : "repacked-managed") : "failed");
 		return restored;
 	}
 

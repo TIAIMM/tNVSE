@@ -25,15 +25,23 @@
 
 namespace fonthook::vectorfont
 {
-	// Shader SDF atlases are level-zero-only. One transparent texel on each edge
-	// isolates bilinear samples; the distance-field spread is already part of the
-	// glyph bitmap and must not be counted again as atlas padding.
-	inline constexpr UInt32 kSdfAtlasPadding = 1;
+	// Shader MTSDF atlases are level-zero-only. One outside-distance texel on
+	// each edge isolates bilinear samples; the field already contains its spread.
+	inline constexpr UInt32 kMtsdfAtlasPadding = 1;
+	// Compatibility alias for internal structures whose field name is still SDF.
 	// CPU-baked ARGB atlases retain up to three mip levels. Four transparent
 	// level-zero texels leave one transparent texel at the coarsest 1/4 mip.
 	inline constexpr UInt32 kArgbAtlasPadding = 4;
 	inline constexpr UInt32 kMaximumAtlasMipLevels = 3;
 	inline constexpr UInt32 kAtlasHardLimit = 4096;
+	// Keep a streamed/repacked MTSDF page within the old 4096x4096 A8 storage
+	// envelope. In the 32-bit game a 4096x4096 BGRA page needs 64 MiB before
+	// vector growth and repack scratch space, which can fail late in prewarm.
+	inline constexpr UInt32 kMaximumMtsdfPrewarmAtlasSize = 2048;
+	inline constexpr size_t kMaximumMtsdfPrewarmPageBytes =
+		static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
+			* kMaximumMtsdfPrewarmAtlasSize * 4u;
+	static_assert(kMaximumMtsdfPrewarmPageBytes == 16u * 1024u * 1024u);
 	inline constexpr UInt32 kMaximumQuads = 16383;
 	inline constexpr UInt32 kAutomaticAtlasBudgetFallbackMB = 128;
 	inline constexpr UInt32 kAutomaticAtlasBudgetMinimumMB = 64;
@@ -60,6 +68,7 @@ namespace fonthook::vectorfont
 	{
 		Argb32 = 0,
 		A8 = 1,
+		Mtsdf32 = 2,
 	};
 
 	enum class AtlasBackend : UInt8
@@ -198,12 +207,12 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 13;
+	constexpr UInt32 kAtlasSnapshotVersion = 15;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
-	constexpr UInt32 kAtlasSnapshotKnownFlags = kAtlasSnapshotFlagGloballyRepacked;
-	// Version 13 removes PackBits and requires raw placed-rectangle payloads, so
-	// storedPixelBytes always equals pixelBytes. Version 11 introduced the stable
-	// page, inverse-size, and normalized UV placement subset.
+	constexpr UInt32 kAtlasSnapshotKnownFlags =
+		kAtlasSnapshotFlagGloballyRepacked;
+	// Version 15 adds largest-compatible-size double-byte MTSDF atlas sharing.
+	// Version 14 replaced single-channel shader pages with BGRA MTSDF.
 	constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 #pragma pack(push, 1)
 	struct AtlasSnapshotHeader
@@ -353,7 +362,7 @@ namespace fonthook::vectorfont
 	struct CompactAtlasSnapshot
 	{
 		CpuMemoryLease cpuMemory;
-		AtlasPixelMode pixelMode = AtlasPixelMode::A8;
+		AtlasPixelMode pixelMode = AtlasPixelMode::Mtsdf32;
 		std::vector<AtlasSnapshotPlacement> placements;
 		std::vector<UInt8> pixels;
 		std::wstring sourcePath;
@@ -422,6 +431,7 @@ namespace fonthook::vectorfont
 		float offsetX = 0.0f;
 		float offsetY = 0.0f;
 		float rasterScale = 1.0f;
+		float sourceToLogicalScale = 1.0f;
 		float logicalTopEdge = 0.0f;
 		float baselineOffset = 0.0f;
 		UInt32 expansionPixels = 0;
@@ -532,7 +542,7 @@ namespace fonthook::vectorfont
 	struct ShaderEffectBuild
 	{
 		A8EffectShapeConfig config;
-		UInt32 padding = kSdfAtlasPadding;
+		UInt32 padding = kMtsdfAtlasPadding;
 		UInt32 drawQuadCount = 0;
 	};
 
@@ -614,6 +624,8 @@ namespace fonthook::vectorfont
 	void UnindexAtlasPage(AtlasState& state, const AtlasCacheKey& key);
 	AtlasProfileKey MakeAtlasProfileKey(const AtlasCacheKey& key);
 	void TrimAtlasCache(AtlasState& state);
+	void TrimAtlasCacheForIncomingBytes(AtlasState& state, size_t incomingBytes);
+	void PruneRetiredAtlasGenerations();
 	void TrimTextArtifactCache(AtlasState& state);
 	void TrimAtlasCpuCachesForTotalBudget();
 	void ResolveGpuAtlasBudget(bool force);

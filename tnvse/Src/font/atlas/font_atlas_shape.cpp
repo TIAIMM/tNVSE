@@ -180,6 +180,10 @@ namespace fonthook::vectorfont
 						|| config.ranges.back().atlasPage != quad.atlasPage
 						|| config.ranges.back().usesSdf != quad.usesSdf
 						|| config.ranges.back().usesLiveTileRgb != usesLiveTileRgb
+						|| config.ranges.back().sdfSpreadPixels
+							!= static_cast<float>(quad.bitmap->sdfSpread)
+						|| config.ranges.back().sourceToLogicalScale
+							!= quad.sourceToLogicalScale
 						|| !SameColorModifier(
 							config.ranges.back().layerColorModifier, layerColor))
 					{
@@ -190,6 +194,10 @@ namespace fonthook::vectorfont
 						range.atlasPage = quad.atlasPage;
 						range.usesSdf = quad.usesSdf;
 						range.usesLiveTileRgb = usesLiveTileRgb;
+						range.sdfSpreadPixels =
+							static_cast<float>(quad.bitmap->sdfSpread);
+						range.sourceToLogicalScale =
+							quad.sourceToLogicalScale;
 						range.layerColorModifier = layerColor;
 						config.ranges.push_back(range);
 					}
@@ -294,7 +302,8 @@ namespace fonthook::vectorfont
 			const NiColorA& layerColorModifier,
 			float offsetX, float offsetY, float rasterScale, float baselineOffset,
 			AtlasLayer layer, bool usesLiveTileRgb,
-			UInt32 expansionPixels = 0, bool usesSdf = false, UInt8 layerMask = 0)
+			UInt32 expansionPixels = 0, bool usesSdf = false, UInt8 layerMask = 0,
+			float sourceToLogicalScale = 1.0f)
 		{
 			if (bitmap && bitmap->width > 0 && bitmap->height > 0)
 			{
@@ -306,6 +315,7 @@ namespace fonthook::vectorfont
 				quad.offsetX = offsetX;
 				quad.offsetY = offsetY;
 				quad.rasterScale = rasterScale;
+				quad.sourceToLogicalScale = sourceToLogicalScale;
 				quad.logicalTopEdge = instance.glyph.metrics
 					? instance.glyph.metrics->fTopEdge : 0.0f;
 				quad.baselineOffset = baselineOffset;
@@ -491,7 +501,7 @@ namespace fonthook::vectorfont
 				if (g_bEnableFreeTypeFontRenderingLog)
 				{
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: SDF spread unsupported font=%u scale=%.3f glowOuter=%.3f outline=%.3f softness=%.3f shadowBlur=%.3f; using CPU effects",
+						"tnvse_freetype_font: MTSDF spread unsupported font=%u scale=%.3f glowOuter=%.3f outline=%.3f softness=%.3f shadowBlur=%.3f; using CPU effects",
 						config.fontId, rasterScale, config.glow.outer,
 						config.outline.width, config.outline.softness,
 						config.shadow.blur);
@@ -530,6 +540,7 @@ namespace fonthook::vectorfont
 				const AtlasGlyphInstance* instance = nullptr;
 				std::shared_ptr<const GlyphBitmap> sdf;
 				float baselineOffset = 0.0f;
+				float sourceToLogicalScale = 1.0f;
 			};
 			thread_local std::vector<PreparedShaderGlyph> prepared;
 			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
@@ -543,13 +554,20 @@ namespace fonthook::vectorfont
 				PreparedShaderGlyph glyph;
 				glyph.instance = &instance;
 				glyph.baselineOffset = GetGlyphBaselineOffset(runtime, instance.glyph);
+				MtsdfSharedRasterProfile profile;
+				if (!ResolveMtsdfSharedRasterProfile(config,
+					instance.glyph.byteClass, rasterScale, true, profile))
+				{
+					return false;
+				}
+				glyph.sourceToLogicalScale = profile.sourceToLogicalScale;
 				bitmapRequests.push_back({ &instance.glyph,
-					GlyphMaskType::DistanceField, sdfSpread });
+					GlyphMaskType::DistanceField, profile.sdfSpread });
 				prepared.push_back(std::move(glyph));
 			}
 			GetAtlasBackedGlyphBitmaps(runtime, bitmapRequests, rasterScale,
-				AtlasPixelMode::A8, AtlasRenderMode::ShaderEffects,
-				kSdfAtlasPadding, bitmapResults);
+				AtlasPixelMode::Mtsdf32, AtlasRenderMode::ShaderEffects,
+				kMtsdfAtlasPadding, bitmapResults);
 			size_t bitmapIndex = 0;
 			for (PreparedShaderGlyph& glyph : prepared)
 			{
@@ -594,7 +612,8 @@ namespace fonthook::vectorfont
 							config.shadow.x, config.shadow.y, rasterScale,
 							entry.baselineOffset, AtlasLayer::Shadow, true, 0,
 							true,
-							1u << static_cast<UInt8>(AtlasLayer::Shadow));
+							1u << static_cast<UInt8>(AtlasLayer::Shadow),
+							entry.sourceToLogicalScale);
 					}
 					else
 						sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Shadow);
@@ -605,7 +624,7 @@ namespace fonthook::vectorfont
 					AddPendingQuad(quads, entry.sdf, *entry.instance,
 						baseColor, identity, 0.0f, 0.0f, rasterScale,
 						entry.baselineOffset, firstLayer(sdfLayerMask), true, 0,
-						true, sdfLayerMask);
+						true, sdfLayerMask, entry.sourceToLogicalScale);
 				}
 			}
 			for (const PendingQuad& quad : quads)
@@ -645,6 +664,8 @@ namespace fonthook::vectorfont
 				add(&quad.offsetX, sizeof(quad.offsetX));
 				add(&quad.offsetY, sizeof(quad.offsetY));
 				add(&quad.rasterScale, sizeof(quad.rasterScale));
+				add(&quad.sourceToLogicalScale,
+					sizeof(quad.sourceToLogicalScale));
 				add(&quad.baselineOffset, sizeof(quad.baselineOffset));
 				add(&quad.expansionPixels, sizeof(quad.expansionPixels));
 				add(&quad.usesSdf, sizeof(quad.usesSdf));
@@ -739,6 +760,9 @@ namespace fonthook::vectorfont
 				add(&range.atlasPage, sizeof(range.atlasPage));
 				add(&range.usesSdf, sizeof(range.usesSdf));
 				add(&range.usesLiveTileRgb, sizeof(range.usesLiveTileRgb));
+				add(&range.sdfSpreadPixels, sizeof(range.sdfSpreadPixels));
+				add(&range.sourceToLogicalScale,
+					sizeof(range.sourceToLogicalScale));
 				add(&range.layerColorModifier, sizeof(range.layerColorModifier));
 			}
 			return hash;
@@ -811,6 +835,8 @@ namespace fonthook::vectorfont
 					return nullptr;
 				}
 				const float scale = quad.rasterScale;
+				const float sourcePixelToLogical =
+					quad.sourceToLogicalScale / scale;
 				const float expansion = static_cast<float>(quad.expansionPixels);
 				const float logicalX = quad.pen.x - origin.x + quad.offsetX;
 				const float logicalZ = quad.pen.z - origin.z
@@ -821,15 +847,17 @@ namespace fonthook::vectorfont
 				// reconstructed analytically by the shader, so snapping their logical
 				// origin would discard shaped fractional advances and effect offsets.
 				const float x0 = quad.usesSdf
-					? logicalX + bitmapLeft / scale
+					? logicalX + bitmapLeft * sourcePixelToLogical
 					: std::round(logicalX * scale + bitmapLeft) / scale;
 				const float z0 = quad.usesSdf
-					? logicalZ + bitmapTop / scale
+					? logicalZ + bitmapTop * sourcePixelToLogical
 					: std::round(logicalZ * scale + bitmapTop) / scale;
 				const float x1 = x0 + (static_cast<float>(quad.bitmap->width)
-					+ expansion * 2.0f) / scale;
+					+ expansion * 2.0f) * (quad.usesSdf
+						? sourcePixelToLogical : 1.0f / scale);
 				const float z1 = z0 - (static_cast<float>(quad.bitmap->height)
-					+ expansion * 2.0f) / scale;
+					+ expansion * 2.0f) * (quad.usesSdf
+						? sourcePixelToLogical : 1.0f / scale);
 				if (g_bEnableFreeTypeFontRenderingLog
 					&& (quad.layerMask & (1u << static_cast<UInt8>(AtlasLayer::Fill))))
 				{
@@ -840,14 +868,15 @@ namespace fonthook::vectorfont
 					}
 					if (shouldLog)
 					{
-						const float bitmapTop = static_cast<float>(quad.bitmap->top) / scale
+						const float bitmapTop = static_cast<float>(quad.bitmap->top)
+							* (quad.usesSdf ? sourcePixelToLogical : 1.0f / scale)
 							+ quad.baselineOffset;
 						FreeTypeFontDebugLog(
 							"tnvse_freetype_font: first atlas vertical metrics font=%u scale=%.3f bitmapTop=%.3f logicalTopEdge=%.3f delta=%.3f baselineOffset=%.3f penZ=%.3f quadTop=%.3f positioning=%s",
 							font.iFontNum, scale, bitmapTop, quad.logicalTopEdge,
 							bitmapTop - quad.logicalTopEdge, quad.baselineOffset,
 							quad.pen.z, z0 + origin.z,
-							quad.usesSdf ? "sdf-subpixel" : "source-pixel-snapped");
+							quad.usesSdf ? "mtsdf-subpixel" : "source-pixel-snapped");
 					}
 				}
 				// All layers belong to the same logical Tile text. Ordering is provided by
@@ -1112,7 +1141,8 @@ namespace fonthook::vectorfont
 		{
 			if (quads.empty())
 				return nullptr;
-			if (pixelMode == AtlasPixelMode::A8 && !useCustomA8Shader)
+			if ((pixelMode == AtlasPixelMode::A8
+				|| pixelMode == AtlasPixelMode::Mtsdf32) && !useCustomA8Shader)
 				return nullptr;
 			const std::vector<PendingQuad>* activeQuads = &quads;
 			thread_local std::vector<PendingQuad> bakedQuads;

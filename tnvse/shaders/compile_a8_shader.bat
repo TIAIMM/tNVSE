@@ -12,15 +12,24 @@ if not exist "%FXC%" (
 if not exist "%~dp0compiled" mkdir "%~dp0compiled"
 if exist "%~dp0compiled\tnvse_freetype_native_original.pso" del /q "%~dp0compiled\tnvse_freetype_native_original.pso"
 if exist "%~dp0compiled\tnvse_freetype_native_coverage.pso" del /q "%~dp0compiled\tnvse_freetype_native_coverage.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_sdf.pso" del /q "%~dp0compiled\tnvse_freetype_native_sdf.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_effects_fast.pso" del /q "%~dp0compiled\tnvse_freetype_native_effects_fast.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_effects_balanced.pso" del /q "%~dp0compiled\tnvse_freetype_native_effects_balanced.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_effects_high.pso" del /q "%~dp0compiled\tnvse_freetype_native_effects_high.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_mtsdf_fill.pso" del /q "%~dp0compiled\tnvse_freetype_native_mtsdf_fill.pso"
 "%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_vs.vso" "%~dp0freetype_native_vs.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_sdf.pso" "%~dp0freetype_native_sdf.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_fast.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_effects_fast.pso" "%~dp0freetype_native_effects.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_balanced.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_effects_balanced.pso" "%~dp0freetype_native_effects.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_high.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_effects_high.pso" "%~dp0freetype_native_effects.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_effects_fast.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_effects_balanced.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_effects_high.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0verify_shader_contract.ps1" -Fxc "%FXC%" -ShaderDirectory "%~dp0."
 exit /b %errorlevel%

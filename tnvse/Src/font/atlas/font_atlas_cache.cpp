@@ -381,9 +381,9 @@ namespace fonthook::vectorfont
 				RefreshAtlasProfileCpuMemory(profile);
 		}
 
-		void TrimAtlasCache(AtlasState& state)
+		void TrimAtlasCacheToTarget(AtlasState& state, size_t targetBytes)
 		{
-			while (state.atlasCacheBytes > GetAtlasCacheLimit() && !state.atlasLru.empty())
+			while (state.atlasCacheBytes > targetBytes && !state.atlasLru.empty())
 			{
 				const AtlasCacheKey key = state.atlasLru.back();
 				auto it = state.atlasCache.find(key);
@@ -396,6 +396,19 @@ namespace fonthook::vectorfont
 				}
 				state.atlasLru.pop_back();
 			}
+			PruneRetiredAtlasGenerations();
+		}
+
+		void TrimAtlasCache(AtlasState& state)
+		{
+			TrimAtlasCacheToTarget(state, GetAtlasCacheLimit());
+		}
+
+		void TrimAtlasCacheForIncomingBytes(AtlasState& state, size_t incomingBytes)
+		{
+			const size_t limit = GetAtlasCacheLimit();
+			TrimAtlasCacheToTarget(state,
+				incomingBytes < limit ? limit - incomingBytes : 0);
 		}
 
 		bool PlaceBitmap(AtlasResource& resource, const GlyphBitmap& bitmap, AtlasRect& rect)
@@ -467,6 +480,11 @@ namespace fonthook::vectorfont
 			};
 			add(&maskGenerationHash, sizeof(maskGenerationHash));
 			add(&maskCombination, sizeof(maskCombination));
+			if (maskCombination & (1u
+				<< static_cast<UInt8>(GlyphMaskType::DistanceField)))
+			{
+				add(&kMtsdfGeneratorRevision, sizeof(kMtsdfGeneratorRevision));
+			}
 			add(&sdfSpread, sizeof(sdfSpread));
 			add(&outlineStroke, sizeof(outlineStroke));
 			add(&glowStroke, sizeof(glowStroke));
@@ -555,8 +573,12 @@ namespace fonthook::vectorfont
 					bakedColorHash *= 1099511628211ull;
 				}
 			}
+			const FontConfig& rasterConfig =
+				renderMode == AtlasRenderMode::ShaderEffects
+				? GetMtsdfAtlasConfig(config, byteClass) : config;
 			return BuildAtlasContentHash(
-				config.maskGenerationRoleHashes[static_cast<size_t>(byteClass)],
+				rasterConfig.maskGenerationRoleHashes[
+					static_cast<size_t>(byteClass)],
 				combination, sdfSpread, outlineStroke, glowStroke,
 				renderMode == AtlasRenderMode::CpuEffects
 					? BuildCpuCoverageHash(config, rasterScale) : 0,
@@ -590,11 +612,12 @@ namespace fonthook::vectorfont
 			};
 			if (shaderEffects)
 			{
-				UInt32 resolvedSpread = 0;
-				if (ResolveSdfSpread(config, rasterScale, resolvedSpread))
+				MtsdfSharedRasterProfile profile;
+				if (ResolveMtsdfSharedRasterProfile(config, byteClass,
+					rasterScale, true, profile))
 				{
 					include(GlyphMaskType::DistanceField);
-					sdfSpread = static_cast<UInt8>(resolvedSpread);
+					sdfSpread = static_cast<UInt8>(profile.sdfSpread);
 				}
 			}
 			else
@@ -613,8 +636,11 @@ namespace fonthook::vectorfont
 						config.outline.width * rasterScale * 64.0f));
 				}
 			}
+			const FontConfig& rasterConfig = shaderEffects
+				? GetMtsdfAtlasConfig(config, byteClass) : config;
 			return BuildAtlasContentHash(
-				config.maskGenerationRoleHashes[static_cast<size_t>(byteClass)],
+				rasterConfig.maskGenerationRoleHashes[
+					static_cast<size_t>(byteClass)],
 				combination, sdfSpread, outlineStroke, glowStroke,
 				shaderEffects ? 0 : BuildCpuCoverageHash(config, rasterScale),
 				1469598103934665603ull);
@@ -632,8 +658,8 @@ namespace fonthook::vectorfont
 			std::vector<UInt64> cacheIds;
 			ResolveGlyphBitmapCacheIds(runtime, requests, rasterScale, cacheIds);
 			const FontConfig& config = GetRuntimeConfig(runtime);
-			UInt8 combination = 0;
-			UInt8 sdfSpread = 0;
+			std::array<UInt8, 2> combinations = {};
+			std::array<UInt8, 2> sdfSpreads = {};
 			SInt32 outlineStroke = 0;
 			SInt32 glowStroke = 0;
 			bool found = false;
@@ -644,11 +670,24 @@ namespace fonthook::vectorfont
 					continue;
 				found = true;
 				const GlyphMaskType type = requests[index].maskType;
-				combination |= static_cast<UInt8>(1u << static_cast<UInt8>(type));
+				const size_t roleIndex = requests[index].glyph
+					? static_cast<size_t>(requests[index].glyph->byteClass) : 0;
+				combinations[roleIndex] |= static_cast<UInt8>(
+					1u << static_cast<UInt8>(type));
 				levelZeroOnly = levelZeroOnly && type == GlyphMaskType::DistanceField;
 				if (type == GlyphMaskType::DistanceField)
-					sdfSpread = std::max(sdfSpread,
-						static_cast<UInt8>(requests[index].sdfSpread));
+				{
+					MtsdfSharedRasterProfile profile;
+					if (requests[index].glyph
+						&& ResolveMtsdfSharedRasterProfile(config,
+							requests[index].glyph->byteClass, rasterScale,
+							true, profile))
+					{
+						sdfSpreads[roleIndex] = std::max(
+							sdfSpreads[roleIndex],
+							static_cast<UInt8>(profile.sdfSpread));
+					}
+				}
 				else if (type == GlyphMaskType::Outline)
 					outlineStroke = static_cast<SInt32>(std::lround(
 						config.outline.width * rasterScale * 64.0f));
@@ -665,9 +704,13 @@ namespace fonthook::vectorfont
 				{
 					const VectorFontByteClass byteClass =
 						static_cast<VectorFontByteClass>(roleIndex);
+					const FontConfig& rasterConfig =
+						GetMtsdfAtlasConfig(config, byteClass);
 					baseKeys[roleIndex] = {
-						BuildAtlasContentHash(config.maskGenerationRoleHashes[roleIndex],
-							combination, sdfSpread, outlineStroke, glowStroke,
+						BuildAtlasContentHash(
+							rasterConfig.maskGenerationRoleHashes[roleIndex],
+							combinations[roleIndex], sdfSpreads[roleIndex],
+							outlineStroke, glowStroke,
 							renderMode == AtlasRenderMode::CpuEffects
 								? BuildCpuCoverageHash(config, rasterScale) : 0,
 							1469598103934665603ull),
@@ -975,7 +1018,8 @@ namespace fonthook::vectorfont
 				return resource;
 			}
 			resource->backend = AtlasBackend::Managed;
-			resource->pixelMode = AtlasPixelMode::Argb32;
+			if (resource->pixelMode == AtlasPixelMode::A8)
+				resource->pixelMode = AtlasPixelMode::Argb32;
 			resource->mipLevels = GetAtlasMipLevelCount(
 				resource->width, resource->height, resource->levelZeroOnly);
 			resource->pixels.assign(static_cast<size_t>(resource->width)

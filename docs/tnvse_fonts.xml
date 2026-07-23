@@ -66,6 +66,13 @@
       Unspecified values inherit from <font>. Other <font> attributes and all
       effect nodes apply to the complete font ID.
 
+      In the native MTSDF route, raster-compatible doubleByte styles
+      automatically share the largest style's atlas when the complete
+      pixelSize span of the group is at most 8 pixels. Compatibility requires
+      the same face chain, face indices, scaleX/scaleY, embolden, and slant.
+      Tracking, fixedWidth, baseline, and all other layout metrics remain
+      specific to each logical font. Larger size gaps start a separate group.
+
       Font files
 
       <face path="..." index="0"/>
@@ -124,7 +131,7 @@
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-SemiBold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
         <fallback path="" index="0"/>
       </doubleByte>
       <glow enabled="1" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
@@ -142,7 +149,7 @@
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-SemiBold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
         <fallback path="" index="0"/>
       </doubleByte>
       <glow enabled="0" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.5"/>
@@ -160,7 +167,7 @@
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-SemiBold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
         <fallback path="" index="0"/>
       </doubleByte>
       <glow enabled="1" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
@@ -232,7 +239,7 @@
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-SemiBold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
         <fallback path="" index="0"/>
       </doubleByte>
       <glow enabled="1" inner="0" outer="2.5" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
@@ -250,7 +257,7 @@
       </singleByte>
       <doubleByte pixelSize="43" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SourceHanMonoSC-Heavy.otf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
         <fallback path="" index="0"/>
       </doubleByte>
       <glow enabled="1" inner="0" outer="3" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
@@ -268,7 +275,7 @@
       </singleByte>
       <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-SemiBold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
         <fallback path="" index="0"/>
       </doubleByte>
       <glow enabled="0" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.5"/>
