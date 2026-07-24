@@ -259,7 +259,7 @@
       </singleByte>
       <doubleByte pixelSize="43" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
+        <face path="Data\NVSE\plugins\fonts\HarmonyOS_Sans_SC_Black.ttf" index="0"/>
         <fallback path="" index="0"/>
       </doubleByte>
       <glow enabled="1" inner="0" outer="3" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
