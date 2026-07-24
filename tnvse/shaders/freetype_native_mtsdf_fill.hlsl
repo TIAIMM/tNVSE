@@ -2,16 +2,9 @@
 #define FILL_QUALITY 1
 #endif
 
-#ifndef FILL_SUBPIXEL
-#define FILL_SUBPIXEL 0
-#endif
-
 sampler2D FontAtlas : register(s0);
 float4 TileColor : register(c0);
 float4 AtlasPass : register(c2); // invWidth, invHeight, layer, MTSDF spread
-#if FILL_SUBPIXEL
-float4 SubpixelPass : register(c4); // x: channel offset, y: chroma strength
-#endif
 
 #include "freetype_native_common.hlsli"
 
@@ -74,32 +67,8 @@ float4 Main(NativeFontPixelInput input) : COLOR0
 {
 	const float antialiasWidth =
 		ResolveNativeFontMtsdfAntialiasWidth(input.atlasUv);
-#if FILL_SUBPIXEL
-	// ddx maps one horizontal pixel of the active render target into atlas UV.
-	// Red and Blue evaluate the physical +/-1/3 channel position. Green uses
-	// the ordinary center Fill shader. One extra center sample gives each side
-	// pass a stable luminance reference without repeating its quality sample
-	// set. A symmetric, edge-aware delta limit suppresses colored outer halos
-	// and MTSDF corner outliers while retaining most vertical-stem resolution.
-	const float2 sampleUv =
-		input.atlasUv + ddx(input.atlasUv) * SubpixelPass.x;
-	const float shiftedCoverage =
-		SupersampledNativeFontMtsdfFill(sampleUv, antialiasWidth);
-	const float centerCoverage =
-		EvaluateNativeFontMtsdfFillAt(input.atlasUv, antialiasWidth);
-	const float edgeProximity =
-		1.0 - abs(centerCoverage * 2.0 - 1.0);
-	const float maxChromaDelta =
-		lerp(0.125, 0.25, edgeProximity);
-	const float limitedDelta = clamp(
-		shiftedCoverage - centerCoverage,
-		-maxChromaDelta, maxChromaDelta);
-	const float coverage = saturate(centerCoverage
-		+ limitedDelta * saturate(SubpixelPass.y));
-#else
 	const float coverage =
 		SupersampledNativeFontMtsdfFill(input.atlasUv, antialiasWidth);
-#endif
 	return ComposeNativeFontCoverage(coverage, TileColor, input.baseColor,
 		NativeFontUsesLiveTileRgb(AtlasPass.z));
 }

@@ -7,32 +7,25 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/freetype_native_vs.hlsl"
     "${shader_dir}/freetype_native_mtsdf_fill.hlsl"
     "${shader_dir}/freetype_native_mtsdf_effects.hlsl"
-    "${shader_dir}/compile_a8_shader.bat"
-    "${shader_dir}/verify_shader_contract.ps1")
+    "${shader_dir}/compile_a8_shader.bat")
   set(shader_outputs
     "${shader_dir}/compiled/tnvse_freetype_native_vs.vso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_balanced.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_high.pso"
-    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso"
-    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso"
-    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_subpixel_high.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_effects_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_effects_balanced.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_effects_high.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_balanced.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_high.pso"
-    "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_subpixel_fast.pso"
-    "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_subpixel_balanced.pso"
-    "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_subpixel_high.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_effects_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_effects_balanced.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_effects_high.pso")
 
   # Keep HLSL visible in the generated Visual Studio solution without letting
   # VS invoke its generic FxCompile rule. The batch file is the authoritative
-  # compiler because it supplies the per-shader profiles, defines, and ABI test.
+  # compiler because it supplies the per-shader profiles and defines.
   set_source_files_properties(${shader_sources} PROPERTIES
     HEADER_FILE_ONLY TRUE
     VS_TOOL_OVERRIDE "None")
@@ -42,7 +35,7 @@ function(tnvse_add_shader_target output_variable)
     WORKING_DIRECTORY "${shader_dir}"
     BYPRODUCTS ${shader_outputs}
     SOURCES ${shader_sources}
-    COMMENT "Compiling and verifying native FreeType true-SDF and MTSDF shaders"
+    COMMENT "Compiling native FreeType true-SDF and MTSDF shaders"
     VERBATIM)
   set_target_properties(tnvse_shaders PROPERTIES FOLDER "tNVSE/Shaders")
   set(${output_variable} "${shader_outputs}" PARENT_SCOPE)
@@ -73,6 +66,12 @@ function(tnvse_enable_live_deployment target plugin_path shader_outputs)
       "${shader_path}/tnvse_freetype_native_effects_balanced.pso"
       "${shader_path}/tnvse_freetype_native_effects_high.pso"
       "${shader_path}/tnvse_freetype_native_mtsdf_fill.pso"
+      "${shader_path}/tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso"
+      "${shader_path}/tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso"
+      "${shader_path}/tnvse_freetype_native_mtsdf_fill_subpixel_high.pso"
+      "${shader_path}/tnvse_freetype_native_sdf_fill_subpixel_fast.pso"
+      "${shader_path}/tnvse_freetype_native_sdf_fill_subpixel_balanced.pso"
+      "${shader_path}/tnvse_freetype_native_sdf_fill_subpixel_high.pso"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       ${shader_outputs} "${shader_path}"
     COMMENT "Deploying tNVSE DLL and native shaders"

@@ -36,21 +36,6 @@ namespace fonthook::vectorfont
 		LinearLod0
 	};
 
-	enum class NativeA8SubpixelChannel : UInt8
-	{
-		None,
-		Red,
-		Green,
-		Blue
-	};
-
-	enum class NativeA8SubpixelOrder : UInt8
-	{
-		Disabled,
-		RGB,
-		BGR
-	};
-
 	enum class NativeA8FallbackReason : UInt8
 	{
 		None,
@@ -109,8 +94,6 @@ namespace fonthook::vectorfont
 		UInt16 atlasPage = 0;
 		bool staticSmoothSampling = false;
 		bool usesLiveTileRgb = true;
-		NativeA8SubpixelChannel subpixelChannel =
-			NativeA8SubpixelChannel::None;
 	};
 
 	struct NativeA8PayloadTemplate
@@ -119,9 +102,6 @@ namespace fonthook::vectorfont
 		UInt32 pageCount = 0;
 		UInt32 quadCount = 0;
 		UInt32 sourceRangeCount = 0;
-		NativeA8SubpixelOrder subpixelOrder =
-			NativeA8SubpixelOrder::Disabled;
-		float subpixelStrength = 0.0f;
 		NiBound bound;
 		std::vector<NiTexturingPropertyPtr> atlasProperties;
 		std::vector<NiTexturePtr> atlasTextures;
@@ -159,8 +139,7 @@ namespace fonthook::vectorfont
 
 	NativeA8PayloadTemplatePtr BuildNativeA8PayloadTemplate(
 		std::vector<NativeA8GpuVertex>&& vertices, UInt32 quadCount,
-		const A8EffectShapeConfig& effects, const NiBound& bound,
-		NativeA8SubpixelOrder subpixelOrder, float subpixelStrength);
+		const A8EffectShapeConfig& effects, const NiBound& bound);
 	bool InitializeNativeA8ShapePayload(Font& font,
 		NiTriShape* facade, const A8ShapeMetadata& metadata,
 		NativeA8PayloadTemplatePtr payloadTemplate,
@@ -204,7 +183,6 @@ namespace fonthook::vectorfont
 	void HandleNativeA8RendererMainLoop();
 	void HandleNativeA8ShaderLoaderMessage(UInt32 messageType);
 	bool IsNativeA8RendererAvailable();
-	NativeA8SubpixelOrder GetNativeA8SubpixelOrder();
 	void MarkNativeA8GenerationFault(UInt32 generation,
 		const char* operation, HRESULT result);
 	UInt32 GetNativeA8ShaderGeneration();

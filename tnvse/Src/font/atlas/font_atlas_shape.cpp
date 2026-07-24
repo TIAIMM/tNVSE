@@ -720,8 +720,7 @@ namespace fonthook::vectorfont
 
 		UInt64 BuildTextArtifactContentHash(const TextArtifactKey& geometryKey,
 			const std::vector<PendingQuad>& quads,
-			const A8EffectShapeConfig& effect,
-			NativeA8SubpixelOrder subpixelOrder, float subpixelStrength)
+			const A8EffectShapeConfig& effect)
 		{
 			UInt64 hash = 1469598103934665603ull;
 			auto add = [&](const void* data, size_t size)
@@ -742,8 +741,6 @@ namespace fonthook::vectorfont
 			add(&effect.distanceFieldMethod,
 				sizeof(effect.distanceFieldMethod));
 			add(&effect.quality, sizeof(effect.quality));
-			add(&subpixelOrder, sizeof(subpixelOrder));
-			add(&subpixelStrength, sizeof(subpixelStrength));
 			for (const PendingQuad& quad : quads)
 				add(&quad.baseColor, sizeof(quad.baseColor));
 			const std::array<float, 12> scalars = {
@@ -780,12 +777,9 @@ namespace fonthook::vectorfont
 		}
 
 		bool TextArtifactMatchesAtlases(const NativeA8PayloadTemplate& artifact,
-			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
-			NativeA8SubpixelOrder subpixelOrder, float subpixelStrength)
+			const std::vector<std::shared_ptr<AtlasResource>>& atlases)
 		{
-			if (artifact.subpixelOrder != subpixelOrder
-				|| artifact.subpixelStrength != subpixelStrength
-				|| artifact.pageCount != atlases.size()
+			if (artifact.pageCount != atlases.size()
 				|| artifact.atlasProperties.size() != atlases.size()
 				|| artifact.atlasTextures.size() != atlases.size())
 				return false;
@@ -805,8 +799,7 @@ namespace fonthook::vectorfont
 			const std::vector<PendingQuad>& quads,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
 			const TextArtifactKey& key, const NiPoint3& origin,
-			const A8EffectShapeConfig& effects,
-			NativeA8SubpixelOrder subpixelOrder, float subpixelStrength)
+			const A8EffectShapeConfig& effects)
 		{
 			AtlasState& state = State();
 			{
@@ -816,7 +809,7 @@ namespace fonthook::vectorfont
 				{
 					if (existing->second.data
 						&& TextArtifactMatchesAtlases(*existing->second.data,
-							atlases, subpixelOrder, subpixelStrength))
+							atlases))
 					{
 						state.textArtifactLru.splice(state.textArtifactLru.begin(),
 							state.textArtifactLru,
@@ -892,7 +885,8 @@ namespace fonthook::vectorfont
 							font.iFontNum, scale, bitmapTop, quad.logicalTopEdge,
 							bitmapTop - quad.logicalTopEdge, quad.baselineOffset,
 							quad.pen.z, z0 + origin.z,
-							quad.usesSdf ? "mtsdf-subpixel" : "source-pixel-snapped");
+							quad.usesSdf ? "distance-field-fractional"
+								: "source-pixel-snapped");
 					}
 				}
 				// All layers belong to the same logical Tile text. Ordering is provided by
@@ -950,7 +944,7 @@ namespace fonthook::vectorfont
 			bound.m_fRadius = std::sqrt(radiusSquared);
 			NativeA8PayloadTemplatePtr result = BuildNativeA8PayloadTemplate(
 				std::move(vertices), static_cast<UInt32>(quads.size()), effects,
-				bound, subpixelOrder, subpixelStrength);
+				bound);
 			if (!result)
 				return {};
 			const size_t bytes = GetNativeA8PayloadTemplateBytes(*result);
@@ -961,7 +955,7 @@ namespace fonthook::vectorfont
 				{
 					if (existing->second.data
 						&& TextArtifactMatchesAtlases(*existing->second.data,
-							atlases, subpixelOrder, subpixelStrength))
+							atlases))
 					{
 						state.textArtifactLru.splice(state.textArtifactLru.begin(),
 							state.textArtifactLru,
@@ -1007,12 +1001,6 @@ namespace fonthook::vectorfont
 				|| quads.size() > kMaximumQuads)
 				return nullptr;
 			const bool needsNativeRangeRouting = useCustomA8Shader || atlases.size() > 1;
-			const NativeA8SubpixelOrder subpixelOrder = useCustomA8Shader
-				? GetNativeA8SubpixelOrder()
-				: NativeA8SubpixelOrder::Disabled;
-			const float subpixelStrength =
-				subpixelOrder != NativeA8SubpixelOrder::Disabled
-				? g_fFreeTypeFontSubpixelStrength : 0.0f;
 			A8EffectShapeConfig resolvedEffect = effectConfig
 				? *effectConfig : A8EffectShapeConfig{};
 			resolvedEffect.atlasProperties.clear();
@@ -1032,13 +1020,11 @@ namespace fonthook::vectorfont
 			const TextArtifactKey geometryKey = BuildTextArtifactKey(
 				fingerprint, atlases);
 			const UInt64 artifactHash = BuildTextArtifactContentHash(
-				geometryKey, quads, resolvedEffect, subpixelOrder,
-				subpixelStrength);
+				geometryKey, quads, resolvedEffect);
 			TextArtifactKey artifactKey = geometryKey;
 			artifactKey.contentHash = artifactHash;
 			const NativeA8PayloadTemplatePtr artifact = GetNativeTextArtifact(
-				font, quads, atlases, artifactKey, origin, resolvedEffect,
-				subpixelOrder, subpixelStrength);
+				font, quads, atlases, artifactKey, origin, resolvedEffect);
 			if (!artifact || artifact->gpuVertices.size() != quads.size() * 4u)
 				return nullptr;
 

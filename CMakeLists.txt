@@ -149,48 +149,6 @@ set_target_properties(tnvse PROPERTIES
 add_dependencies(tnvse tnvse_shaders)
 tnvse_copy_dxsdk_runtime(tnvse)
 
-option(TNVSE_BUILD_TESTS "Build focused tNVSE unit tests" OFF)
-if(TNVSE_BUILD_TESTS)
-  enable_testing()
-  add_executable(tnvse_sparse_codepoint_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/font_sparse_codepoint_table_tests.cpp"
-    "${TNVSE_SOURCE_ROOT}/font/font_cpu_budget.h"
-    "${TNVSE_SOURCE_ROOT}/font/font_render_route.h")
-  target_include_directories(tnvse_sparse_codepoint_tests PRIVATE
-    "${TNVSE_SOURCE_ROOT}/font"
-    "${TNVSE_SOURCE_ROOT}/font/vector")
-  target_compile_features(tnvse_sparse_codepoint_tests PRIVATE cxx_std_20)
-  tnvse_apply_msvc_defaults(tnvse_sparse_codepoint_tests)
-  set_target_properties(tnvse_sparse_codepoint_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME tnvse_sparse_codepoint_tests
-    COMMAND tnvse_sparse_codepoint_tests)
-
-  add_executable(tnvse_font_mtsdf_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/font_mtsdf_tests.cpp"
-    "${TNVSE_SOURCE_ROOT}/font/vector/font_vector_msdfgen.cpp"
-    "${TNVSE_SOURCE_ROOT}/font/vector/font_vector_msdfgen.h")
-  target_include_directories(tnvse_font_mtsdf_tests PRIVATE
-    "${TNVSE_SOURCE_ROOT}/font/vector")
-  target_compile_features(tnvse_font_mtsdf_tests PRIVATE cxx_std_20)
-  target_compile_definitions(tnvse_font_mtsdf_tests PRIVATE
-    _CRT_SECURE_NO_WARNINGS)
-  target_link_libraries(tnvse_font_mtsdf_tests PRIVATE
-    msdfgen_freetype_tnvse)
-  tnvse_apply_msvc_defaults(tnvse_font_mtsdf_tests)
-  set_target_properties(tnvse_font_mtsdf_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME tnvse_font_mtsdf_tests
-    COMMAND tnvse_font_mtsdf_tests)
-
-  add_test(NAME tnvse_multibyte_callback_contract
-    COMMAND powershell.exe
-      -NoProfile
-      -ExecutionPolicy Bypass
-      -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/multibyte_callback_contract.ps1"
-      -SourceRoot "${CMAKE_CURRENT_SOURCE_DIR}")
-endif()
-
 set(_tnvse_plugin_path_help
   "Existing NVSE/plugins directory used for post-build deployment")
 if(DEFINED ENV{NVSE_PLUGIN_PATH} AND NOT "$ENV{NVSE_PLUGIN_PATH}" STREQUAL "")

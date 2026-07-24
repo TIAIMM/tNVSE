@@ -76,8 +76,6 @@ namespace fonthook::vectorfont
 			std::array<UInt32, 16> constantBits = {};
 			bool writeEffectAlpha = false;
 			bool usesLiveTileRgb = true;
-			NativeA8SubpixelChannel subpixelChannel =
-				NativeA8SubpixelChannel::None;
 
 			bool operator==(const NativeProfileKey& other) const
 			{
@@ -87,7 +85,6 @@ namespace fonthook::vectorfont
 					&& distanceFieldMethod == other.distanceFieldMethod
 					&& writeEffectAlpha == other.writeEffectAlpha
 					&& usesLiveTileRgb == other.usesLiveTileRgb
-					&& subpixelChannel == other.subpixelChannel
 					&& constantBits == other.constantBits;
 			}
 		};
@@ -110,7 +107,6 @@ namespace fonthook::vectorfont
 				mix(static_cast<UInt32>(key.distanceFieldMethod));
 				mix(key.writeEffectAlpha ? 1u : 0u);
 				mix(key.usesLiveTileRgb ? 1u : 0u);
-				mix(static_cast<UInt32>(key.subpixelChannel));
 				for (UInt32 value : key.constantBits)
 					mix(value);
 				return hash;
@@ -161,10 +157,8 @@ namespace fonthook::vectorfont
 			IDirect3DVertexDeclaration9* d3dDeclaration = nullptr;
 			NiD3DVertexShaderPtr vertexShader;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
-			std::array<NiD3DPixelShaderPtr, 3> subpixelFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
 			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
-			bool subpixelShadersReady = false;
 			bool supportsSeparateAlpha = false;
 			std::atomic<bool> runtimeFault = false;
 			std::atomic<bool> runtimeFaultLogged = false;
@@ -367,7 +361,6 @@ namespace fonthook::vectorfont
 			key.distanceFieldMethod = packet.distanceFieldMethod;
 			key.writeEffectAlpha = writeEffectAlpha;
 			key.usesLiveTileRgb = packet.usesLiveTileRgb;
-			key.subpixelChannel = packet.subpixelChannel;
 			std::memcpy(key.constantBits.data(), packet.constants.data(),
 				key.constantBits.size() * sizeof(UInt32));
 			return key;
@@ -408,20 +401,8 @@ namespace fonthook::vectorfont
 			case NativeA8ShaderClass::Body:
 			{
 				const size_t index = static_cast<size_t>(packet.quality);
-				if (index >= generation.mtsdfFillShaders.size())
-					return nullptr;
-				const bool sideSubpixelChannel =
-					packet.subpixelChannel == NativeA8SubpixelChannel::Red
-					|| packet.subpixelChannel == NativeA8SubpixelChannel::Blue;
-				if (sideSubpixelChannel && generation.subpixelShadersReady)
-				{
-					return generation.subpixelFillShaders[index].m_pObject;
-				}
-				// Green is the exact center coverage and therefore reuses the
-				// ordinary quality-selected Fill shader. A subpixel payload can
-				// also outlive a shader refresh; three masked ordinary Fill draws
-				// then reproduce grayscale coverage safely.
-				return generation.mtsdfFillShaders[index].m_pObject;
+				return index < generation.mtsdfFillShaders.size()
+					? generation.mtsdfFillShaders[index].m_pObject : nullptr;
 			}
 			case NativeA8ShaderClass::Effect:
 			{
@@ -483,25 +464,9 @@ namespace fonthook::vectorfont
 			}
 			else
 			{
-				DWORD colorWrite = D3DCOLORWRITEENABLE_RED
+				const DWORD colorWrite = D3DCOLORWRITEENABLE_RED
 					| D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE
 					| D3DCOLORWRITEENABLE_ALPHA;
-				switch (profile.key.subpixelChannel)
-				{
-				case NativeA8SubpixelChannel::Red:
-					colorWrite = D3DCOLORWRITEENABLE_RED;
-					break;
-				case NativeA8SubpixelChannel::Green:
-					// Preserve the stock target-alpha contract exactly once.
-					colorWrite = D3DCOLORWRITEENABLE_GREEN
-						| D3DCOLORWRITEENABLE_ALPHA;
-					break;
-				case NativeA8SubpixelChannel::Blue:
-					colorWrite = D3DCOLORWRITEENABLE_BLUE;
-					break;
-				default:
-					break;
-				}
 				SetPassRenderState(&pass, D3DRS_COLORWRITEENABLE, colorWrite);
 			}
 		}
@@ -642,40 +607,6 @@ namespace fonthook::vectorfont
 				index < generation->mtsdfFillShaders.size(); ++index)
 			{
 				generation->mtsdfFillShaders[index] = createPS(fillNames[index]);
-			}
-			if (g_uiFreeTypeFontSubpixelRendering != 0
-				&& g_fFreeTypeFontSubpixelStrength > 0.0f)
-			{
-				const char* mtsdfSubpixelFillNames[] = {
-					"tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso",
-					"tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso",
-					"tnvse_freetype_native_mtsdf_fill_subpixel_high.pso"
-				};
-				const char* trueSdfSubpixelFillNames[] = {
-					"tnvse_freetype_native_sdf_fill_subpixel_fast.pso",
-					"tnvse_freetype_native_sdf_fill_subpixel_balanced.pso",
-					"tnvse_freetype_native_sdf_fill_subpixel_high.pso"
-				};
-				const char* const* subpixelFillNames =
-					generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
-						? mtsdfSubpixelFillNames : trueSdfSubpixelFillNames;
-				generation->subpixelShadersReady = true;
-				for (size_t index = 0;
-					index < generation->subpixelFillShaders.size(); ++index)
-				{
-					generation->subpixelFillShaders[index] =
-						createPS(subpixelFillNames[index]);
-					generation->subpixelShadersReady =
-						generation->subpixelShadersReady
-						&& HasShaderHandle(
-							generation->subpixelFillShaders[index]);
-				}
-				if (!generation->subpixelShadersReady)
-				{
-					gLog.FormattedMessage(
-						"tnvse_freetype_native: optional subpixel Fill shader set unavailable; retaining grayscale %s Fill",
-						GetConfiguredDistanceFieldMethodName());
-				}
 			}
 			const char* mtsdfEffectNames[] = {
 				"tnvse_freetype_native_mtsdf_effects_fast.pso",
@@ -855,12 +786,9 @@ namespace fonthook::vectorfont
 		s_processGenerations.push_back(candidate);
 		s_publishedGeneration.store(candidate, std::memory_order_release);
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p distanceField=%s subpixelMode=%u subpixelStrength=%.3f subpixelReady=%u",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p distanceField=%s",
 			candidate->id, candidate->device,
-			GetConfiguredDistanceFieldMethodName(),
-			g_uiFreeTypeFontSubpixelRendering,
-			g_fFreeTypeFontSubpixelStrength,
-			candidate->subpixelShadersReady ? 1u : 0u);
+			GetConfiguredDistanceFieldMethodName());
 		return true;
 	}
 
@@ -906,36 +834,6 @@ namespace fonthook::vectorfont
 			return false;
 		return GenerationMatchesCurrentDevice(s_publishedGeneration.load(
 			std::memory_order_acquire));
-	}
-
-	NativeA8SubpixelOrder GetNativeA8SubpixelOrder()
-	{
-		if (g_fFreeTypeFontSubpixelStrength <= 0.0f)
-			return NativeA8SubpixelOrder::Disabled;
-		NativeA8SubpixelOrder configuredOrder =
-			NativeA8SubpixelOrder::Disabled;
-		switch (g_uiFreeTypeFontSubpixelRendering)
-		{
-		case 1:
-			configuredOrder = NativeA8SubpixelOrder::RGB;
-			break;
-		case 2:
-			configuredOrder = NativeA8SubpixelOrder::BGR;
-			break;
-		default:
-			return NativeA8SubpixelOrder::Disabled;
-		}
-		NativeShaderGeneration* generation = s_publishedGeneration.load(
-			std::memory_order_acquire);
-		if (!GenerationMatchesCurrentDevice(generation))
-		{
-			if (!InitializeNativeA8Renderer(false, false))
-				return NativeA8SubpixelOrder::Disabled;
-			generation = s_publishedGeneration.load(std::memory_order_acquire);
-		}
-		return GenerationMatchesCurrentDevice(generation)
-			&& generation->subpixelShadersReady
-			? configuredOrder : NativeA8SubpixelOrder::Disabled;
 	}
 
 	UInt32 GetNativeA8ShaderGeneration()

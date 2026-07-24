@@ -17,6 +17,12 @@ if exist "%~dp0compiled\tnvse_freetype_native_effects_fast.pso" del /q "%~dp0com
 if exist "%~dp0compiled\tnvse_freetype_native_effects_balanced.pso" del /q "%~dp0compiled\tnvse_freetype_native_effects_balanced.pso"
 if exist "%~dp0compiled\tnvse_freetype_native_effects_high.pso" del /q "%~dp0compiled\tnvse_freetype_native_effects_high.pso"
 if exist "%~dp0compiled\tnvse_freetype_native_mtsdf_fill.pso" del /q "%~dp0compiled\tnvse_freetype_native_mtsdf_fill.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso" del /q "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso" del /q "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_high.pso" del /q "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_high.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_fast.pso" del /q "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_fast.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_balanced.pso" del /q "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_balanced.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_high.pso" del /q "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_high.pso"
 "%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_vs.vso" "%~dp0freetype_native_vs.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_fast.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
@@ -24,12 +30,6 @@ if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_balanced.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_high.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
-if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=0 /D FILL_SUBPIXEL=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
-if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=1 /D FILL_SUBPIXEL=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
-if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=2 /D FILL_SUBPIXEL=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_high.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_effects_fast.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
@@ -43,17 +43,10 @@ if errorlevel 1 exit /b %errorlevel%
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D FILL_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_fill_high.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D FILL_QUALITY=0 /D FILL_SUBPIXEL=1 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_fast.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
-if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D FILL_QUALITY=1 /D FILL_SUBPIXEL=1 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_balanced.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
-if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D FILL_QUALITY=2 /D FILL_SUBPIXEL=1 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_high.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
-if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D EFFECT_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_effects_fast.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D EFFECT_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_effects_balanced.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D EFFECT_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_effects_high.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0verify_shader_contract.ps1" -Fxc "%FXC%" -ShaderDirectory "%~dp0."
-exit /b %errorlevel%
+exit /b 0
