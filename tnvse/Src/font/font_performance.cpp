@@ -32,7 +32,7 @@ namespace fonthook::vectorfont
 		for (size_t i = 0; i < values.size(); ++i)
 			values[i] = s_counters[i].exchange(0, std::memory_order_relaxed);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu text_artifact_hit=%llu miss=%llu shader_batches=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu sorted_static_batches=%llu payloads=%llu bytes=%llu merged_packet_ranges=%llu",
+			"tnvse_freetype_perf: bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu text_artifact_hit=%llu miss=%llu shader_batches=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu sorted_static_batches=%llu payloads=%llu bytes=%llu merged_packet_ranges=%llu metadata_hot=%llu locked=%llu sorted_facades=%llu unique_payloads=%llu frame_lookup_hits=%llu preflight_fast=%llu full=%llu direct_static=%llu direct_dynamic=%llu sorted_dynamic_batches=%llu payloads=%llu bytes=%llu lockless_packets=%llu constant_captures=%llu reuses=%llu flushes=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapMemoryHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapCrossFontHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskHit)],
@@ -69,7 +69,23 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::SortedStaticBatch)],
 			values[static_cast<size_t>(FreeTypePerfCounter::SortedStaticPayload)],
 			values[static_cast<size_t>(FreeTypePerfCounter::SortedStaticBytes)],
-			values[static_cast<size_t>(FreeTypePerfCounter::MergedPacketRange)]);
+			values[static_cast<size_t>(FreeTypePerfCounter::MergedPacketRange)],
+			values[static_cast<size_t>(FreeTypePerfCounter::MetadataHotHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::MetadataLockedLookup)],
+			values[static_cast<size_t>(FreeTypePerfCounter::SortedFrameFacade)],
+			values[static_cast<size_t>(FreeTypePerfCounter::SortedFramePayload)],
+			values[static_cast<size_t>(FreeTypePerfCounter::SortedFrameLookupHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::PreflightFastHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::PreflightFullValidation)],
+			values[static_cast<size_t>(FreeTypePerfCounter::DirectStaticResidencyHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::DirectDynamicResidencyHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::SortedDynamicBatch)],
+			values[static_cast<size_t>(FreeTypePerfCounter::SortedDynamicPayload)],
+			values[static_cast<size_t>(FreeTypePerfCounter::SortedDynamicBytes)],
+			values[static_cast<size_t>(FreeTypePerfCounter::LocklessPacketPrepare)],
+			values[static_cast<size_t>(FreeTypePerfCounter::ConstantBatchCapture)],
+			values[static_cast<size_t>(FreeTypePerfCounter::ConstantBatchReuse)],
+			values[static_cast<size_t>(FreeTypePerfCounter::ConstantBatchFlush)]);
 	}
 }
 

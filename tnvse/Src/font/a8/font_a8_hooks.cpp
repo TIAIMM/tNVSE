@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <optional>
 
 namespace fonthook::vectorfont
 {
@@ -19,10 +20,12 @@ namespace fonthook::vectorfont
 		{
 			const NiTriShape* shape = nullptr;
 			UInt64 generation = 0;
-			A8ShapeMetadataPtr metadata;
+			std::weak_ptr<const A8ShapeMetadata> metadata;
 		};
 
-		thread_local std::array<A8MetadataHotEntry, 16> s_metadataHotEntries;
+		// A menu commonly submits far more than 16 text facades. A larger weak
+		// table avoids direct-map thrashing without retaining deleted menu payloads.
+		thread_local std::array<A8MetadataHotEntry, 256> s_metadataHotEntries;
 
 		size_t GetMetadataHotSlot(const NiTriShape* shape)
 		{
@@ -78,6 +81,15 @@ namespace fonthook::vectorfont
 					m_operation = "restore-pixel-constants";
 					return false;
 				}
+				// SetPixelShaderConstantF already reports a failed restore. The readback
+				// is useful for diagnostics but forces another driver round trip for
+				// every text facade, so retain it only in the detailed logging mode.
+				if (!g_bEnableFreeTypeFontRenderingLog)
+				{
+					m_operation = "none";
+					m_result = D3D_OK;
+					return true;
+				}
 				m_result = m_device->GetPixelShaderConstantF(kFirstRegister,
 					m_verify.data(), kRegisterCount);
 				if (FAILED(m_result))
@@ -112,6 +124,148 @@ namespace fonthook::vectorfont
 			bool m_captured = false;
 			bool m_finished = false;
 		};
+
+		class NativePixelConstantBatch
+		{
+		public:
+			void BeginFrame()
+			{
+				m_frameActive = true;
+			}
+
+			bool FrameActive() const
+			{
+				return m_frameActive;
+			}
+
+			bool EnsureCaptured(IDirect3DDevice9* device)
+			{
+				if (!m_frameActive || !device)
+					return SetFailure("capture-pixel-constants",
+						D3DERR_INVALIDCALL);
+				if (m_captured)
+				{
+					if (m_device == device)
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::ConstantBatchReuse);
+						return true;
+					}
+					if (!Flush())
+						return false;
+				}
+				return Capture(device);
+			}
+
+			bool Flush()
+			{
+				if (!m_captured)
+					return true;
+				m_captured = false;
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ConstantBatchFlush);
+				m_result = m_device->SetPixelShaderConstantF(
+					NativePixelConstantScope::kFirstRegister,
+					m_original.data(),
+					NativePixelConstantScope::kRegisterCount);
+				if (FAILED(m_result))
+					return SetFailure("restore-pixel-constants", m_result);
+				if (g_bEnableFreeTypeFontRenderingLog)
+				{
+					m_result = m_device->GetPixelShaderConstantF(
+						NativePixelConstantScope::kFirstRegister,
+						m_verify.data(),
+						NativePixelConstantScope::kRegisterCount);
+					if (FAILED(m_result))
+						return SetFailure("verify-pixel-constants", m_result);
+					for (size_t index = 0;
+						index < NativePixelConstantScope::kFloatCount; ++index)
+					{
+						if (std::memcmp(&m_original[index], &m_verify[index],
+							sizeof(float)) != 0)
+						{
+							m_mismatchRegister = static_cast<SInt32>(
+								NativePixelConstantScope::kFirstRegister
+									+ index / 4);
+							return SetFailure(
+								"pixel-constant-mismatch", E_FAIL);
+						}
+					}
+				}
+				m_device = nullptr;
+				m_operation = "none";
+				m_result = D3D_OK;
+				m_mismatchRegister = -1;
+				return true;
+			}
+
+			void EndFrame()
+			{
+				m_frameActive = false;
+			}
+
+			HRESULT Result() const { return m_result; }
+			const char* Operation() const { return m_operation; }
+			SInt32 MismatchRegister() const { return m_mismatchRegister; }
+			UInt32 Generation() const { return m_generation; }
+
+		private:
+			bool Capture(IDirect3DDevice9* device)
+			{
+				m_device = device;
+				m_generation = GetNativeA8ShaderGeneration();
+				m_mismatchRegister = -1;
+				m_result = device->GetPixelShaderConstantF(
+					NativePixelConstantScope::kFirstRegister,
+					m_original.data(),
+					NativePixelConstantScope::kRegisterCount);
+				m_captured = SUCCEEDED(m_result);
+				if (!m_captured)
+					return SetFailure("capture-pixel-constants", m_result);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ConstantBatchCapture);
+				m_operation = "none";
+				return true;
+			}
+
+			bool SetFailure(const char* operation, HRESULT result)
+			{
+				m_operation = operation;
+				m_result = result;
+				m_device = nullptr;
+				m_captured = false;
+				return false;
+			}
+
+			IDirect3DDevice9* m_device = nullptr;
+			std::array<float, NativePixelConstantScope::kFloatCount> m_original = {};
+			std::array<float, NativePixelConstantScope::kFloatCount> m_verify = {};
+			HRESULT m_result = D3D_OK;
+			const char* m_operation = "none";
+			SInt32 m_mismatchRegister = -1;
+			UInt32 m_generation = 0;
+			bool m_frameActive = false;
+			bool m_captured = false;
+		};
+
+		thread_local NativePixelConstantBatch s_pixelConstantBatch;
+
+		bool FlushNativePixelConstantBatch(const char* phase)
+		{
+			if (s_pixelConstantBatch.Flush())
+				return true;
+			MarkNativeA8GenerationFault(s_pixelConstantBatch.Generation(),
+				s_pixelConstantBatch.Operation(),
+				s_pixelConstantBatch.Result());
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: batched pixel-constant isolation fault phase=%s operation=%s hr=0x%08X register=%d generation=%u",
+				phase ? phase : "unknown",
+				s_pixelConstantBatch.Operation(),
+				static_cast<UInt32>(s_pixelConstantBatch.Result()),
+				s_pixelConstantBatch.MismatchRegister(),
+				s_pixelConstantBatch.Generation());
+			return false;
+		}
 
 		class NativeTilePacketScope
 		{
@@ -204,6 +358,17 @@ namespace fonthook::vectorfont
 		}
 	}
 
+	void BeginA8SortedTileConstantBatch()
+	{
+		s_pixelConstantBatch.BeginFrame();
+	}
+
+	void EndA8SortedTileConstantBatch()
+	{
+		FlushNativePixelConstantBatch("sorted-frame-end");
+		s_pixelConstantBatch.EndFrame();
+	}
+
 	A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape)
 	{
 		if (!shape)
@@ -213,9 +378,18 @@ namespace fonthook::vectorfont
 		const UInt64 generation = state.metadataGenerations[generationSlot].load(
 			std::memory_order_acquire);
 		A8MetadataHotEntry& hot = s_metadataHotEntries[GetMetadataHotSlot(shape)];
-		if (hot.shape == shape && hot.generation == generation && hot.metadata)
-			return hot.metadata;
+		if (hot.shape == shape && hot.generation == generation)
+		{
+			A8ShapeMetadataPtr metadata = hot.metadata.lock();
+			if (metadata)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::MetadataHotHit);
+				return metadata;
+			}
+			hot = {};
+		}
 
+		RecordFreeTypePerf(FreeTypePerfCounter::MetadataLockedLookup);
 		std::lock_guard<std::mutex> lock(state.metadataMutex);
 		const auto found = state.shapeMetadata.find(shape);
 		if (found == state.shapeMetadata.end())
@@ -227,7 +401,7 @@ namespace fonthook::vectorfont
 		hot.generation = state.metadataGenerations[generationSlot].load(
 			std::memory_order_relaxed);
 		hot.metadata = found->second;
-		return hot.metadata;
+		return found->second;
 	}
 
 	TileRenderPassFn ReadTileRenderPassCallTarget()
@@ -257,19 +431,39 @@ namespace fonthook::vectorfont
 			? reinterpret_cast<NiTriShape*>(pass->pGeometry) : nullptr;
 		if (!IsA8AtlasShape(shape))
 		{
+			if (s_pixelConstantBatch.FrameActive())
+				FlushNativePixelConstantBatch("before-stock-tile");
 			state.originalTileRenderPass(pass, currentPass, testAlpha,
 				blendAlpha, setupDrawmode);
 			return;
 		}
 
-		const A8ShapeMetadataPtr metadata = FindA8ShapeMetadata(shape);
+		NativeA8SortedFrameEntryView frameEntry;
+		const bool sortedFrameHit =
+			FindNativeA8SortedFrameEntry(shape, frameEntry);
+		A8ShapeMetadataPtr metadataOwner;
+		const A8ShapeMetadata* metadata = nullptr;
+		NativeA8ShapePayload* payload = nullptr;
+		if (sortedFrameHit)
+		{
+			metadata = frameEntry.metadata;
+			payload = frameEntry.payload;
+		}
+		else
+		{
+			metadataOwner = FindA8ShapeMetadata(shape);
+			metadata = metadataOwner.get();
+			if (metadata && metadata->nativePayload.buildComplete)
+				payload = &metadata->nativePayload;
+		}
 		if (!metadata)
 		{
 			LogMissingMetadata(shape, "tile-render-pass");
 			return;
 		}
-		NativeA8ShapePayload* payload = metadata->nativePayload.buildComplete
-			? &metadata->nativePayload : nullptr;
+		const NiAlphaProperty* liveAlpha = shape->GetAlphaProperty();
+		const bool liveAlphaBlending =
+			liveAlpha && liveAlpha->GetAlphaBlending();
 		NativeA8FallbackReason failure = NativeA8FallbackReason::None;
 		if (!payload)
 			failure = NativeA8FallbackReason::PacketBuild;
@@ -280,6 +474,23 @@ namespace fonthook::vectorfont
 				NativeA8FallbackReason::None, std::memory_order_acq_rel);
 			if (failure == NativeA8FallbackReason::None)
 				failure = NativeA8FallbackReason::RuntimeFault;
+		}
+		else if (sortedFrameHit
+			&& frameEntry.preflightResult == NativeA8FallbackReason::None
+			&& frameEntry.generation == payload->preparedGeneration
+			&& frameEntry.generation == GetNativeA8ShaderGeneration()
+			&& payload->preflightAtlasTextureEpoch
+				== GetNativeA8AtlasTextureEpoch()
+			&& payload->preflightScaledFillSampling
+				== NeedsScaledFillSampling(shape)
+			&& payload->preflightAlphaBlending
+				== liveAlphaBlending
+			&& IsNativeA8AccumulatorHookCurrent()
+			&& IsA8TileRenderPassHookCurrent())
+		{
+			// NativeA8RenderSorted retained the metadata owner and validated this
+			// exact payload immediately before the stock sorted Tile traversal.
+			failure = NativeA8FallbackReason::None;
 		}
 		else
 			failure = PrepareNativeA8Group(shape, *metadata, *payload);
@@ -315,19 +526,38 @@ namespace fonthook::vectorfont
 					faultOperation = "capture-pixel-constants";
 					faultResult = D3DERR_DEVICELOST;
 				}
+				const bool batchedConstants =
+					s_pixelConstantBatch.FrameActive();
+				std::optional<NativePixelConstantScope> localConstants;
 				if (!runtimeFault)
 				{
-					// No unrelated draw can occur while this intercepted Tile group is
-					// expanded. Every native profile writes the stock-equivalent c0 and
-					// its own c1-c4; preserve only the custom range so c0 remains coherent
-					// with the last submitted Tile.
-					NativePixelConstantScope constants(device);
-					if (!constants.Captured())
+					// Retail 0xB64F90 calls 0xB994F0 once per sorted item with no
+					// intervening draw; this hook is that call boundary. Consecutive
+					// native facades therefore share one c1-c4 capture, while every
+					// stock/non-native item and the frame end flush first.
+					if (batchedConstants)
 					{
-						runtimeFault = true;
-						constantStateFault = true;
-						faultOperation = constants.Operation();
-						faultResult = constants.Result();
+						if (!s_pixelConstantBatch.EnsureCaptured(device))
+						{
+							runtimeFault = true;
+							constantStateFault = true;
+							faultOperation =
+								s_pixelConstantBatch.Operation();
+							faultResult = s_pixelConstantBatch.Result();
+							faultRegister =
+								s_pixelConstantBatch.MismatchRegister();
+						}
+					}
+					else
+					{
+						localConstants.emplace(device);
+						if (!localConstants->Captured())
+						{
+							runtimeFault = true;
+							constantStateFault = true;
+							faultOperation = localConstants->Operation();
+							faultResult = localConstants->Result();
+						}
 					}
 					for (UInt32 packetIndex = 0; !runtimeFault
 						&& packetIndex < payload->packetShaders.size(); ++packetIndex)
@@ -358,14 +588,26 @@ namespace fonthook::vectorfont
 							break;
 						}
 					}
-					if (!constants.RestoreAndVerify())
+					if (!batchedConstants && localConstants
+						&& !localConstants->RestoreAndVerify())
 					{
 						runtimeFault = true;
 						constantStateFault = true;
-						faultOperation = constants.Operation();
-						faultResult = constants.Result();
-						faultRegister = constants.MismatchRegister();
+						faultOperation = localConstants->Operation();
+						faultResult = localConstants->Result();
+						faultRegister =
+							localConstants->MismatchRegister();
 					}
+				}
+				if (batchedConstants && runtimeFault
+					&& !FlushNativePixelConstantBatch(
+						"native-runtime-fault"))
+				{
+					constantStateFault = true;
+					faultOperation = s_pixelConstantBatch.Operation();
+					faultResult = s_pixelConstantBatch.Result();
+					faultRegister =
+						s_pixelConstantBatch.MismatchRegister();
 				}
 			}
 			if (!runtimeFault)

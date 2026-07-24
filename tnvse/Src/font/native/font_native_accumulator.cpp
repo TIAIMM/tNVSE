@@ -9,8 +9,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <vector>
 
 namespace fonthook::vectorfont
@@ -28,14 +30,194 @@ namespace fonthook::vectorfont
 		RegisterObjectFn s_originalRegisterObject = nullptr;
 		bool s_hookAttempted = false;
 		std::atomic<UInt32> s_missingMetadataLogCount = 0;
+		std::atomic<UInt32> s_atlasTextureEpoch = 1;
+
+		int __fastcall NativeA8RenderSorted(
+			BSShaderAccumulator* accumulator, void*);
+
+		struct RegisteredFacade
+		{
+			NiTriShape* facade = nullptr;
+			A8ShapeMetadataPtr metadata;
+		};
+
+		struct SortedFrameEntry
+		{
+			NiTriShape* facade = nullptr;
+			A8ShapeMetadataPtr metadata;
+			NativeA8ShapePayload* payload = nullptr;
+			NativeA8FallbackReason preflightResult =
+				NativeA8FallbackReason::RuntimeFault;
+			UInt32 generation = 0;
+		};
+
+		struct NativePreflightFrameContext
+		{
+			UInt32 generation = 0;
+			UInt32 atlasTextureEpoch = 0;
+			bool accumulatorCurrent = false;
+			bool tileRouteCurrent = false;
+			bool rendererAvailable = false;
+		};
 
 		struct SortedPayloadScratch
 		{
+			BSShaderAccumulator* pendingAccumulator = nullptr;
+			std::vector<RegisteredFacade> pendingRegistrations;
+			std::vector<UInt32> registrationLookup;
+			std::vector<SortedFrameEntry> frameEntries;
+			std::vector<UInt32> facadeLookup;
 			std::vector<NativeA8PayloadTemplatePtr> payloadTemplates;
+			std::vector<UInt32> payloadLookup;
 			CpuMemoryLease cpuMemory;
+			UInt32 nestedBypassDepth = 0;
+			bool active = false;
 		};
 
 		thread_local SortedPayloadScratch s_sortedPayloadScratch;
+
+		size_t HashPointer(const void* pointer)
+		{
+			size_t value = reinterpret_cast<size_t>(pointer) >> 4;
+			value ^= value >> 16;
+			value *= static_cast<size_t>(0x45D9F3Bu);
+			value ^= value >> 16;
+			return value;
+		}
+
+		size_t GetLookupCapacity(size_t expectedEntries)
+		{
+			size_t capacity = 8;
+			const size_t required = std::max<size_t>(8, expectedEntries * 2u);
+			while (capacity < required)
+				capacity <<= 1;
+			return capacity;
+		}
+
+		void PrepareLookup(std::vector<UInt32>& lookup, size_t expectedEntries)
+		{
+			const size_t capacity = GetLookupCapacity(expectedEntries);
+			if (lookup.size() != capacity)
+				lookup.assign(capacity, 0);
+			else
+				std::fill(lookup.begin(), lookup.end(), 0);
+		}
+
+		size_t LookupSortedFacade(const SortedPayloadScratch& scratch,
+			const NiTriShape* facade)
+		{
+			if (!facade || scratch.facadeLookup.empty())
+				return std::numeric_limits<size_t>::max();
+			const size_t mask = scratch.facadeLookup.size() - 1u;
+			size_t slot = HashPointer(facade) & mask;
+			for (size_t probe = 0; probe < scratch.facadeLookup.size(); ++probe)
+			{
+				const UInt32 stored = scratch.facadeLookup[slot];
+				if (!stored)
+					return std::numeric_limits<size_t>::max();
+				const size_t index = static_cast<size_t>(stored - 1u);
+				if (index < scratch.frameEntries.size()
+					&& scratch.frameEntries[index].facade == facade)
+				{
+					return index;
+				}
+				slot = (slot + 1u) & mask;
+			}
+			return std::numeric_limits<size_t>::max();
+		}
+
+		void InsertSortedFacade(SortedPayloadScratch& scratch,
+			NiTriShape* facade, size_t entryIndex)
+		{
+			const size_t mask = scratch.facadeLookup.size() - 1u;
+			size_t slot = HashPointer(facade) & mask;
+			while (scratch.facadeLookup[slot])
+				slot = (slot + 1u) & mask;
+			scratch.facadeLookup[slot] = static_cast<UInt32>(entryIndex + 1u);
+		}
+
+		bool InsertUniquePayload(SortedPayloadScratch& scratch,
+			const NativeA8PayloadTemplatePtr& payloadTemplate)
+		{
+			if (!payloadTemplate || scratch.payloadLookup.empty())
+				return false;
+			const size_t mask = scratch.payloadLookup.size() - 1u;
+			size_t slot = HashPointer(payloadTemplate.get()) & mask;
+			for (size_t probe = 0; probe < scratch.payloadLookup.size(); ++probe)
+			{
+				const UInt32 stored = scratch.payloadLookup[slot];
+				if (!stored)
+				{
+					scratch.payloadTemplates.push_back(payloadTemplate);
+					scratch.payloadLookup[slot] = static_cast<UInt32>(
+						scratch.payloadTemplates.size());
+					return true;
+				}
+				const size_t index = static_cast<size_t>(stored - 1u);
+				if (index < scratch.payloadTemplates.size()
+					&& scratch.payloadTemplates[index].get()
+						== payloadTemplate.get())
+				{
+					return false;
+				}
+				slot = (slot + 1u) & mask;
+			}
+			return false;
+		}
+
+		void RefreshSortedScratchMemory(SortedPayloadScratch& scratch)
+		{
+			const size_t bytes =
+				scratch.pendingRegistrations.capacity()
+					* sizeof(RegisteredFacade)
+				+ scratch.registrationLookup.capacity() * sizeof(UInt32)
+				+ scratch.frameEntries.capacity() * sizeof(SortedFrameEntry)
+				+ scratch.facadeLookup.capacity() * sizeof(UInt32)
+				+ scratch.payloadTemplates.capacity()
+					* sizeof(NativeA8PayloadTemplatePtr)
+				+ scratch.payloadLookup.capacity() * sizeof(UInt32);
+			scratch.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata, bytes);
+		}
+
+		void ClearSortedFrame(SortedPayloadScratch& scratch)
+		{
+			scratch.active = false;
+			scratch.frameEntries.clear();
+			scratch.payloadTemplates.clear();
+			scratch.pendingAccumulator = nullptr;
+			scratch.pendingRegistrations.clear();
+			if (scratch.pendingRegistrations.capacity() > 8192)
+			{
+				std::vector<RegisteredFacade>().swap(
+					scratch.pendingRegistrations);
+			}
+			if (scratch.registrationLookup.capacity() > 16384)
+				std::vector<UInt32>().swap(scratch.registrationLookup);
+			if (scratch.frameEntries.capacity() > 8192)
+				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
+			if (scratch.facadeLookup.capacity() > 16384)
+				std::vector<UInt32>().swap(scratch.facadeLookup);
+			if (scratch.payloadTemplates.capacity() > 8192)
+			{
+				std::vector<NativeA8PayloadTemplatePtr>().swap(
+					scratch.payloadTemplates);
+			}
+			if (scratch.payloadLookup.capacity() > 16384)
+				std::vector<UInt32>().swap(scratch.payloadLookup);
+			RefreshSortedScratchMemory(scratch);
+			if (IsCpuMemoryBudgetExceeded())
+			{
+				std::vector<RegisteredFacade>().swap(
+					scratch.pendingRegistrations);
+				std::vector<UInt32>().swap(scratch.registrationLookup);
+				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
+				std::vector<UInt32>().swap(scratch.facadeLookup);
+				std::vector<NativeA8PayloadTemplatePtr>().swap(
+					scratch.payloadTemplates);
+				std::vector<UInt32>().swap(scratch.payloadLookup);
+				scratch.cpuMemory.Release();
+			}
+		}
 
 		SortedTileRenderFn ReadSortedTileRenderCallTarget()
 		{
@@ -47,6 +229,99 @@ namespace fonthook::vectorfont
 			std::memcpy(&displacement, call + 1, sizeof(displacement));
 			return reinterpret_cast<SortedTileRenderFn>(
 				kSortedTileRenderCallSite + 5 + displacement);
+		}
+
+		void ClearPendingRegistrations(SortedPayloadScratch& scratch)
+		{
+			scratch.pendingAccumulator = nullptr;
+			scratch.pendingRegistrations.clear();
+		}
+
+		void RecordSortedRegistration(BSShaderAccumulator* accumulator,
+			NiTriShape* facade, const A8ShapeMetadataPtr& metadata)
+		{
+			SortedPayloadScratch& scratch = s_sortedPayloadScratch;
+			const bool hookCurrent = ReadSortedTileRenderCallTarget()
+				== reinterpret_cast<SortedTileRenderFn>(
+					&NativeA8RenderSorted);
+			if (!accumulator || !facade || !metadata || scratch.active
+				|| scratch.nestedBypassDepth
+				|| !hookCurrent)
+			{
+				if (!scratch.active && !scratch.nestedBypassDepth
+					&& !hookCurrent)
+				{
+					ClearPendingRegistrations(scratch);
+				}
+				return;
+			}
+			if (scratch.pendingAccumulator != accumulator)
+			{
+				ClearPendingRegistrations(scratch);
+				scratch.pendingAccumulator = accumulator;
+			}
+			scratch.pendingRegistrations.push_back({ facade, metadata });
+		}
+
+		void PrepareRegistrationLookup(SortedPayloadScratch& scratch)
+		{
+			PrepareLookup(scratch.registrationLookup,
+				scratch.pendingRegistrations.size());
+			const size_t mask = scratch.registrationLookup.size() - 1u;
+			for (size_t index = 0;
+				index < scratch.pendingRegistrations.size(); ++index)
+			{
+				const NiTriShape* facade =
+					scratch.pendingRegistrations[index].facade;
+				size_t slot = HashPointer(facade) & mask;
+				for (;;)
+				{
+					const UInt32 stored = scratch.registrationLookup[slot];
+					if (!stored)
+					{
+						scratch.registrationLookup[slot] =
+							static_cast<UInt32>(index + 1u);
+						break;
+					}
+					const size_t storedIndex =
+						static_cast<size_t>(stored - 1u);
+					if (storedIndex < scratch.pendingRegistrations.size()
+						&& scratch.pendingRegistrations[storedIndex].facade
+							== facade)
+					{
+						// The newest registration is the one represented in the
+						// accumulator if a facade was submitted more than once.
+						scratch.registrationLookup[slot] =
+							static_cast<UInt32>(index + 1u);
+						break;
+					}
+					slot = (slot + 1u) & mask;
+				}
+			}
+		}
+
+		const A8ShapeMetadataPtr* FindRegisteredMetadata(
+			const SortedPayloadScratch& scratch, const NiTriShape* facade)
+		{
+			if (!facade || scratch.registrationLookup.empty())
+				return nullptr;
+			const size_t mask = scratch.registrationLookup.size() - 1u;
+			size_t slot = HashPointer(facade) & mask;
+			for (size_t probe = 0;
+				probe < scratch.registrationLookup.size(); ++probe)
+			{
+				const UInt32 stored = scratch.registrationLookup[slot];
+				if (!stored)
+					return nullptr;
+				const size_t index = static_cast<size_t>(stored - 1u);
+				if (index < scratch.pendingRegistrations.size()
+					&& scratch.pendingRegistrations[index].facade == facade)
+				{
+					return &scratch.pendingRegistrations[index].metadata;
+				}
+				slot = (slot + 1u) & mask;
+			}
+			return nullptr;
 		}
 
 		bool IsFreeTypeFacade(const NiGeometry* geometry)
@@ -66,6 +341,7 @@ namespace fonthook::vectorfont
 		void InvalidateNativePreflight(NativeA8ShapePayload& payload)
 		{
 			payload.preparedGeneration = 0;
+			payload.preflightAtlasTextureEpoch = 0;
 			std::fill(payload.preflightAtlasTextures.begin(),
 				payload.preflightAtlasTextures.end(), nullptr);
 			std::fill(payload.packetShaders.begin(),
@@ -74,12 +350,14 @@ namespace fonthook::vectorfont
 
 		bool IsNativePreflightCacheCurrent(const NativeA8ShapePayload& payload,
 			UInt32 generation,
-			bool scaledFillSampling, bool alphaBlending)
+			UInt32 atlasTextureEpoch, bool scaledFillSampling,
+			bool alphaBlending)
 		{
 			if (!payload.payloadTemplate)
 				return false;
 			const NativeA8PayloadTemplate& artifact = *payload.payloadTemplate;
 			if (payload.preparedGeneration != generation
+				|| payload.preflightAtlasTextureEpoch != atlasTextureEpoch
 				|| payload.preflightScaledFillSampling != scaledFillSampling
 				|| payload.preflightAlphaBlending != alphaBlending
 				|| payload.preflightAtlasTextures.size()
@@ -88,26 +366,12 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
-
-			// Device reset changes the native generation. This page-level identity
-			// check additionally catches an atlas wrapper being rebuilt or replaced
-			// without paying the old per-packet validation and shader lookup cost.
-			for (size_t page = 0; page < payload.preflightAtlasTextures.size(); ++page)
-			{
-				const void* expected = payload.preflightAtlasTextures[page];
-				if (!expected)
-					continue;
-				NiTexture* texture = artifact.atlasTextures[page].m_pObject;
-				NiDX9TextureData* textureData = texture
-					? texture->GetDX9RendererData() : nullptr;
-				if (!textureData || textureData->GetD3DTexture() != expected)
-					return false;
-			}
 			return true;
 		}
 
 		NativeA8FallbackReason PreflightNativeGroupImpl(NiTriShape* facade,
-			const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload)
+			const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload,
+			const NativePreflightFrameContext* frameContext = nullptr)
 		{
 			if (!facade || !payload.buildComplete || !payload.payloadTemplate
 				|| payload.packetShaders.empty()
@@ -117,26 +381,38 @@ namespace fonthook::vectorfont
 				return NativeA8FallbackReason::PacketBuild;
 			}
 			const NativeA8PayloadTemplate& artifact = *payload.payloadTemplate;
-			if (!IsNativeA8AccumulatorHookCurrent())
+			if (!(frameContext
+				? frameContext->accumulatorCurrent
+				: IsNativeA8AccumulatorHookCurrent()))
 				return NativeA8FallbackReason::AccumulatorConflict;
-			if (!IsA8TileRenderPassHookCurrent())
+			if (!(frameContext
+				? frameContext->tileRouteCurrent
+				: IsA8TileRenderPassHookCurrent()))
 				return NativeA8FallbackReason::TileRouteConflict;
-			if (!IsNativeA8RendererAvailable())
+			if (!(frameContext
+				? frameContext->rendererAvailable
+				: IsNativeA8RendererAvailable()))
 				return NativeA8FallbackReason::ShaderGeneration;
 
-			const UInt32 generation = GetNativeA8ShaderGeneration();
+			const UInt32 generation = frameContext
+				? frameContext->generation : GetNativeA8ShaderGeneration();
 			if (!generation)
 				return NativeA8FallbackReason::ShaderGeneration;
 			const bool scaledFillSampling = NeedsScaledFillSampling(facade);
 			const NiAlphaProperty* alpha = facade->GetAlphaProperty();
 			const bool alphaBlending = alpha && alpha->GetAlphaBlending();
+			const UInt32 atlasTextureEpoch = frameContext
+				? frameContext->atlasTextureEpoch
+				: GetNativeA8AtlasTextureEpoch();
 			if (IsNativePreflightCacheCurrent(payload, generation,
-				scaledFillSampling, alphaBlending))
+				atlasTextureEpoch, scaledFillSampling, alphaBlending))
 			{
+				RecordFreeTypePerf(FreeTypePerfCounter::PreflightFastHit);
 				ClearNativePacketFailure(payload);
 				return NativeA8FallbackReason::None;
 			}
 
+			RecordFreeTypePerf(FreeTypePerfCounter::PreflightFullValidation);
 			InvalidateNativePreflight(payload);
 			payload.preflightScaledFillSampling = scaledFillSampling;
 			payload.preflightAlphaBlending = alphaBlending;
@@ -174,8 +450,14 @@ namespace fonthook::vectorfont
 				if (!payload.packetShaders[index])
 					return NativeA8FallbackReason::ShaderGeneration;
 			}
+			if (GetNativeA8AtlasTextureEpoch() != atlasTextureEpoch)
+			{
+				InvalidateNativePreflight(payload);
+				return NativeA8FallbackReason::AtlasGeneration;
+			}
 
 			payload.preparedGeneration = generation;
+			payload.preflightAtlasTextureEpoch = atlasTextureEpoch;
 			ClearNativePacketFailure(payload);
 			return NativeA8FallbackReason::None;
 		}
@@ -234,6 +516,7 @@ namespace fonthook::vectorfont
 			if (!IsA8TileRenderPassHookCurrent())
 				return SuppressNativeGroup(facade, *metadata,
 					NativeA8FallbackReason::TileRouteConflict, "register-object");
+			RecordSortedRegistration(accumulator, facade, metadata);
 			return s_originalRegisterObject(accumulator, facade);
 		}
 
@@ -243,20 +526,50 @@ namespace fonthook::vectorfont
 			if (!state.originalSortedTileRender)
 				return 0;
 
+			SortedPayloadScratch& scratch = s_sortedPayloadScratch;
+			if (scratch.active || scratch.nestedBypassDepth)
+			{
+				// A nested stock Tile pass must not see facade entries from the outer
+				// accumulator. It retains the fully validated map/preflight fallback.
+				const bool restoreActive = scratch.active;
+				scratch.active = false;
+				++scratch.nestedBypassDepth;
+				const int result = state.originalSortedTileRender(accumulator);
+				--scratch.nestedBypassDepth;
+				scratch.active = restoreActive;
+				return result;
+			}
+
 			if (accumulator
 				&& accumulator->eRenderMode == BSShaderManager::BSSM_RENDER_TILES
 				&& accumulator->m_iNumItems > 0 && accumulator->m_ppkItems)
 			{
-				std::vector<NativeA8PayloadTemplatePtr>& payloadTemplates =
-					s_sortedPayloadScratch.payloadTemplates;
-				payloadTemplates.clear();
-				if (payloadTemplates.capacity()
-					< static_cast<size_t>(accumulator->m_iNumItems))
-				{
-					payloadTemplates.reserve(static_cast<size_t>(
-						accumulator->m_iNumItems));
-				}
-				UInt32 generation = GetNativeA8ShaderGeneration();
+				const size_t itemCount = static_cast<size_t>(
+					accumulator->m_iNumItems);
+				scratch.frameEntries.clear();
+				scratch.payloadTemplates.clear();
+				scratch.frameEntries.reserve(itemCount);
+				scratch.payloadTemplates.reserve(itemCount);
+				PrepareLookup(scratch.facadeLookup, itemCount);
+				PrepareLookup(scratch.payloadLookup, itemCount);
+				const bool haveRegisteredMetadata =
+					scratch.pendingAccumulator == accumulator;
+				if (haveRegisteredMetadata)
+					PrepareRegistrationLookup(scratch);
+				else
+					ClearPendingRegistrations(scratch);
+				NativePreflightFrameContext preflightContext;
+				preflightContext.accumulatorCurrent =
+					IsNativeA8AccumulatorHookCurrent();
+				preflightContext.tileRouteCurrent =
+					IsA8TileRenderPassHookCurrent();
+				preflightContext.rendererAvailable =
+					IsNativeA8RendererAvailable();
+				preflightContext.generation =
+					GetNativeA8ShaderGeneration();
+				preflightContext.atlasTextureEpoch =
+					GetNativeA8AtlasTextureEpoch();
+				const UInt32 generation = preflightContext.generation;
 				for (SInt32 index = accumulator->m_iNumItems - 1;
 					index >= 0; --index)
 				{
@@ -264,48 +577,68 @@ namespace fonthook::vectorfont
 					if (!IsFreeTypeFacade(geometry))
 						continue;
 					NiTriShape* facade = static_cast<NiTriShape*>(geometry);
-					const A8ShapeMetadataPtr metadata = FindA8ShapeMetadata(facade);
-					if (!metadata || !metadata->nativePayload.buildComplete)
-						continue;
-					NativeA8ShapePayload& payload = metadata->nativePayload;
-					if (PreflightNativeGroupImpl(facade, *metadata, payload)
-						!= NativeA8FallbackReason::None
-						|| !payload.payloadTemplate
-						|| payload.preparedGeneration != generation)
+					if (LookupSortedFacade(scratch, facade)
+						!= std::numeric_limits<size_t>::max())
 					{
 						continue;
 					}
-					payloadTemplates.push_back(payload.payloadTemplate);
-				}
-				std::sort(payloadTemplates.begin(), payloadTemplates.end(),
-					[](const NativeA8PayloadTemplatePtr& left,
-						const NativeA8PayloadTemplatePtr& right)
+
+					SortedFrameEntry entry;
+					entry.facade = facade;
+					const A8ShapeMetadataPtr* registeredMetadata =
+						haveRegisteredMetadata
+							? FindRegisteredMetadata(scratch, facade) : nullptr;
+					entry.metadata = registeredMetadata
+						? *registeredMetadata : FindA8ShapeMetadata(facade);
+					entry.generation = generation;
+					if (entry.metadata
+						&& entry.metadata->nativePayload.buildComplete)
 					{
-						return std::less<const NativeA8PayloadTemplate*>{}(
-							left.get(), right.get());
-					});
-				payloadTemplates.erase(std::unique(payloadTemplates.begin(),
-					payloadTemplates.end(),
-					[](const NativeA8PayloadTemplatePtr& left,
-						const NativeA8PayloadTemplatePtr& right)
+						entry.payload = &entry.metadata->nativePayload;
+						entry.preflightResult = PreflightNativeGroupImpl(
+							facade, *entry.metadata, *entry.payload,
+							&preflightContext);
+						if (entry.preflightResult == NativeA8FallbackReason::None)
+							entry.generation = entry.payload->preparedGeneration;
+					}
+					else
 					{
-						return left.get() == right.get();
-					}), payloadTemplates.end());
-				PrepareSortedNativeA8Payloads(payloadTemplates, generation);
-				payloadTemplates.clear();
-				if (payloadTemplates.capacity() > 8192)
-					std::vector<NativeA8PayloadTemplatePtr>().swap(payloadTemplates);
-				s_sortedPayloadScratch.cpuMemory.Reset(
-					CpuMemoryCategory::RuntimeMetadata,
-					payloadTemplates.capacity()
-						* sizeof(NativeA8PayloadTemplatePtr));
-				if (IsCpuMemoryBudgetExceeded())
-				{
-					std::vector<NativeA8PayloadTemplatePtr>().swap(payloadTemplates);
-					s_sortedPayloadScratch.cpuMemory.Release();
+						entry.preflightResult =
+							NativeA8FallbackReason::PacketBuild;
+					}
+
+					const size_t entryIndex = scratch.frameEntries.size();
+					scratch.frameEntries.push_back(std::move(entry));
+					InsertSortedFacade(scratch, facade, entryIndex);
+					RecordFreeTypePerf(FreeTypePerfCounter::SortedFrameFacade);
+					const SortedFrameEntry& stored =
+						scratch.frameEntries.back();
+					if (stored.preflightResult == NativeA8FallbackReason::None
+						&& stored.payload && stored.payload->payloadTemplate
+						&& stored.generation == generation
+						&& InsertUniquePayload(scratch,
+							stored.payload->payloadTemplate))
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::SortedFramePayload);
+					}
 				}
+				PrepareSortedNativeA8Payloads(
+					scratch.payloadTemplates, generation);
+				RefreshSortedScratchMemory(scratch);
+				BeginA8SortedTileConstantBatch();
+				scratch.active = true;
+				const int result = state.originalSortedTileRender(accumulator);
+				EndA8SortedTileConstantBatch();
+				ClearSortedFrame(scratch);
+				return result;
 			}
 
+			if (scratch.pendingAccumulator == accumulator)
+			{
+				ClearPendingRegistrations(scratch);
+				RefreshSortedScratchMemory(scratch);
+			}
 			return state.originalSortedTileRender(accumulator);
 		}
 
@@ -370,6 +703,49 @@ namespace fonthook::vectorfont
 					current);
 			}
 			return true;
+		}
+	}
+
+	bool FindNativeA8SortedFrameEntry(NiTriShape* facade,
+		NativeA8SortedFrameEntryView& view)
+	{
+		view = {};
+		const SortedPayloadScratch& scratch = s_sortedPayloadScratch;
+		if (!scratch.active || !facade)
+			return false;
+		const size_t index = LookupSortedFacade(scratch, facade);
+		if (index == std::numeric_limits<size_t>::max()
+			|| index >= scratch.frameEntries.size())
+		{
+			return false;
+		}
+		const SortedFrameEntry& entry = scratch.frameEntries[index];
+		view.metadata = entry.metadata.get();
+		view.payload = entry.payload;
+		view.preflightResult = entry.preflightResult;
+		view.generation = entry.generation;
+		RecordFreeTypePerf(FreeTypePerfCounter::SortedFrameLookupHit);
+		return true;
+	}
+
+	UInt32 GetNativeA8AtlasTextureEpoch()
+	{
+		return s_atlasTextureEpoch.load(std::memory_order_acquire);
+	}
+
+	void NotifyNativeA8AtlasTextureMutation()
+	{
+		UInt32 current = s_atlasTextureEpoch.load(std::memory_order_relaxed);
+		for (;;)
+		{
+			UInt32 next = current + 1u;
+			if (!next)
+				next = 1u;
+			if (s_atlasTextureEpoch.compare_exchange_weak(current, next,
+				std::memory_order_release, std::memory_order_relaxed))
+			{
+				return;
+			}
 		}
 	}
 

@@ -108,6 +108,8 @@ namespace fonthook::vectorfont
 	bool HookTileRenderPass();
 	bool IsA8TileRenderPassHookCurrent();
 	TileRenderPassFn ReadTileRenderPassCallTarget();
+	void BeginA8SortedTileConstantBatch();
+	void EndA8SortedTileConstantBatch();
 	void __cdecl A8TileRenderPass(BSShaderProperty::RenderPass* pass,
 		UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupDrawmode);
 	void __fastcall A8RenderImmediate(NiTriShape* shape, void*, NiRenderer* renderer);

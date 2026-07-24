@@ -1977,6 +1977,7 @@ namespace fonthook::vectorfont
 				data->m_pkD3DTexture->Release();
 				data->m_pkD3DTexture = nullptr;
 				data->m_uiLevels = 0;
+				NotifyNativeA8AtlasTextureMutation();
 			}
 			resource.resetPending = true;
 			State().defaultPoolMaintenancePending.store(true, std::memory_order_release);
@@ -2010,6 +2011,7 @@ namespace fonthook::vectorfont
 						resource.resetPending = false;
 						// Each wrapper owns a separate rebuilt D3D texture after reset.
 						resource.sharedGpuPage = false;
+						NotifyNativeA8AtlasTextureMutation();
 						RecordFreeTypePerf(FreeTypePerfCounter::AtlasUpload);
 						RecordFreeTypePerf(FreeTypePerfCounter::AtlasUploadBytes,
 							static_cast<UInt64>(GetAtlasStorageBytes(resource.width,

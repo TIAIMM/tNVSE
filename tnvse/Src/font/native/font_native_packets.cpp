@@ -304,6 +304,7 @@ namespace fonthook::vectorfont
 		payload.packetShaders.assign(payload.payloadTemplate->packets.size(), nullptr);
 		payload.preflightAtlasTextures.assign(payload.payloadTemplate->pageCount, nullptr);
 		payload.preparedGeneration = 0;
+		payload.preflightAtlasTextureEpoch = 0;
 		payload.preflightScaledFillSampling = false;
 		payload.preflightAlphaBlending = false;
 		payload.packetPrepareFailure.store(
@@ -360,6 +361,7 @@ namespace fonthook::vectorfont
 			payload.packetPrepareFailure.store(
 				NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
 			payload.preparedGeneration = 0;
+			payload.preflightAtlasTextureEpoch = 0;
 			std::fill(payload.preflightAtlasTextures.begin(),
 				payload.preflightAtlasTextures.end(), nullptr);
 			std::fill(payload.packetShaders.begin(),

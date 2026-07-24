@@ -96,6 +96,20 @@ namespace fonthook::vectorfont
 		bool usesLiveTileRgb = true;
 	};
 
+	// Renderer-owned VB locations are mutable cache data attached to the immutable
+	// text artifact. Every read is protected by the ring mutex and validated
+	// against the current resource serial/epoch before the location is used.
+	struct NativeA8PayloadResidencyCache
+	{
+		UInt32 staticResourceSerial = 0;
+		UInt32 staticBaseVertex = 0;
+		UInt32 staticVertexCount = 0;
+		UInt32 dynamicResourceSerial = 0;
+		UInt32 dynamicUploadEpoch = 0;
+		UInt32 dynamicBaseVertex = 0;
+		UInt32 dynamicVertexCount = 0;
+	};
+
 	struct NativeA8PayloadTemplate
 	{
 		CpuMemoryLease cpuMemory;
@@ -107,6 +121,7 @@ namespace fonthook::vectorfont
 		std::vector<NiTexturePtr> atlasTextures;
 		std::vector<NativeA8GpuVertex> gpuVertices;
 		std::vector<NativeA8PacketTemplate> packets;
+		mutable NativeA8PayloadResidencyCache residency;
 	};
 	using NativeA8PayloadTemplatePtr =
 		std::shared_ptr<const NativeA8PayloadTemplate>;
@@ -128,9 +143,19 @@ namespace fonthook::vectorfont
 		// Null entries belong to atlas pages that no packet in this payload uses.
 		std::vector<const void*> preflightAtlasTextures;
 		UInt32 preparedGeneration = 0;
+		UInt32 preflightAtlasTextureEpoch = 0;
 		bool preflightScaledFillSampling = false;
 		bool preflightAlphaBlending = false;
 		bool buildComplete = false;
+	};
+
+	struct NativeA8SortedFrameEntryView
+	{
+		const A8ShapeMetadata* metadata = nullptr;
+		NativeA8ShapePayload* payload = nullptr;
+		NativeA8FallbackReason preflightResult =
+			NativeA8FallbackReason::RuntimeFault;
+		UInt32 generation = 0;
 	};
 
 	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason);
@@ -178,6 +203,10 @@ namespace fonthook::vectorfont
 		std::vector<NativeA8PayloadTemplatePtr>& payloadTemplates,
 		UInt32 generation);
 	void TrimNativeA8CpuCachesForTotalBudget();
+	bool FindNativeA8SortedFrameEntry(NiTriShape* facade,
+		NativeA8SortedFrameEntryView& view);
+	UInt32 GetNativeA8AtlasTextureEpoch();
+	void NotifyNativeA8AtlasTextureMutation();
 
 	bool InitializeNativeA8Renderer(bool forceAttempt, bool reportFailures);
 	void HandleNativeA8RendererMainLoop();
