@@ -44,9 +44,6 @@ namespace fonthook
 		s_hooksInstalled = true;
 		TryInstallWindowProc();
 
-		if (g_bMultibyteInputStewieTweaks)
-			TryInstallTileReadXMLHook();
-
 		if (g_bMultibyteInputCompositionPreview)
 		{
 			if (InitializeCandidateOverlayRenderer())
@@ -92,10 +89,15 @@ namespace fonthook
 
 			if (s_hooksInstalled)
 			{
+				// All menu discovery and handler publication is owned by the game
+				// loop. The window/TSF callbacks only enqueue captured input data.
+				TryInstallJipTextInputHook();
+				TryInstallStewieTweaksInputHooks();
 				ProcessStewieTweaksInputTargetState();
 				ProcessStewieMenuSearchPendingStateSync();
 				ProcessMcmExtenderInputTargetState();
 				ProcessDialogueHistoryInputTargetState();
+				PumpCapturedInputEvents();
 			}
 
 			if (s_hooksInstalled && s_window)

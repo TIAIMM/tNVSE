@@ -522,11 +522,12 @@ namespace fonthook::multibyte_input
 
 	bool HandleMcmExtenderWndProcChar(
 		const McmExtenderInputTarget& target,
-		WPARAM input)
+		WPARAM input,
+		bool controlDown)
 	{
 		if (!target.valid)
 			return false;
-		if (input < 0x20 || input == 0x7F || IsCtrlKeyDown())
+		if (input < 0x20 || input == 0x7F || controlDown)
 			return true;
 		if (input > 0xFFFF)
 			return false;
@@ -564,7 +565,8 @@ namespace fonthook::multibyte_input
 
 	bool HandleMcmExtenderKeyDown(
 		const McmExtenderInputTarget& target,
-		WPARAM virtualKey)
+		WPARAM virtualKey,
+		bool controlDown)
 	{
 		if (!target.valid)
 			return false;
@@ -609,7 +611,7 @@ namespace fonthook::multibyte_input
 			QueueAction(PendingMcmAction::KeyDownTab);
 			break;
 		case 'F':
-			if (IsCtrlKeyDown())
+			if (controlDown)
 			{
 				s_suppressedControlChar = 0x06;
 				s_suppressedControlCharTick = GetTickCount();

@@ -91,6 +91,7 @@ namespace fonthook
 			bool hidingSystemImeWindows = false;
 			bool gameImeEnabled = false;
 			bool textInputSessionActive = false;
+			bool overlayRefreshPending = false;
 			DWORD nativeImeAsciiGuardUntilTick = 0;
 			DWORD lastImeWatchdogTick = 0;
 
@@ -113,7 +114,6 @@ namespace fonthook
 		void CancelGameImeComposition(HWND hwnd);
 		bool IsImeWindowMessage(UINT msg);
 		bool IsVirtualKeyDown(int vk);
-		bool IsWinSpaceInputLanguageHotkey(UINT msg, WPARAM wParam);
 		bool IsPendingWinSpaceRelease(UINT msg, WPARAM wParam);
 		bool IsWindowsKeyMessage(UINT msg, WPARAM wParam);
 		HKL GetGameKeyboardLayout(HWND hwnd);

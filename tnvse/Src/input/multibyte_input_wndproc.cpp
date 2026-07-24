@@ -4,7 +4,9 @@ namespace fonthook
 {
 	namespace multibyte_input
 	{
-		bool HandleImeResult(HWND hwnd, LPARAM lParam)
+		bool ApplyCapturedImeResult(
+			const std::wstring& result,
+			LPARAM lParam)
 		{
 			if (!(lParam & GCS_RESULTSTR))
 				return false;
@@ -29,7 +31,6 @@ namespace fonthook
 				return false;
 			}
 
-			std::wstring result = GetImeCompositionString(hwnd, GCS_RESULTSTR);
 			if (result.empty())
 			{
 				if (jipMenu)
@@ -90,7 +91,7 @@ namespace fonthook
 			}
 			State().suppressedImeCharCount = static_cast<UInt32>(result.size());
 			ClearImePreviewState();
-			RefreshImeStatus(hwnd);
+			RefreshImeStatus(s_window);
 			UpdateCandidateOverlay();
 			if (jipMenu)
 				DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_inserted", jipMenu, static_cast<UInt32>(lParam));
@@ -205,7 +206,7 @@ namespace fonthook
 			return true;
 		}
 
-		bool HandleCharFallback(WPARAM wParam)
+		bool HandleCharFallback(WPARAM wParam, bool controlDown)
 		{
 			if (ShouldSuppressDialogueHistoryControlChar(wParam))
 				return true;
@@ -248,10 +249,12 @@ namespace fonthook
 			if (!menu && !jipMenu)
 			{
 				if (dialogueHistoryTarget.valid)
-					return HandleDialogueHistoryWndProcChar(dialogueHistoryTarget, wParam);
+					return HandleDialogueHistoryWndProcChar(
+						dialogueHistoryTarget, wParam, controlDown);
 
 				if (mcmTarget.valid)
-					return HandleMcmExtenderWndProcChar(mcmTarget, wParam);
+					return HandleMcmExtenderWndProcChar(
+						mcmTarget, wParam, controlDown);
 
 				if (stewieTarget.valid)
 				{
@@ -351,8 +354,176 @@ namespace fonthook
 			return true;
 		}
 
-		LRESULT CALLBACK MultibyteInputWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+		namespace
 		{
+			constexpr size_t kCapturedInputEventCapacity = 128;
+
+			struct CapturedInputEvent
+			{
+				UINT message = 0;
+				WPARAM wParam = 0;
+				LPARAM lParam = 0;
+				bool controlDown = false;
+				bool winDown = false;
+				std::wstring result;
+				std::wstring composition;
+			};
+
+			std::array<CapturedInputEvent, kCapturedInputEventCapacity>
+				s_capturedInputEvents;
+			size_t s_capturedInputRead = 0;
+			size_t s_capturedInputWrite = 0;
+			size_t s_capturedInputCount = 0;
+			UInt32 s_droppedCapturedInputEvents = 0;
+
+			bool EnqueueCapturedInputEvent(CapturedInputEvent event)
+			{
+				if (s_capturedInputCount == s_capturedInputEvents.size())
+				{
+					++s_droppedCapturedInputEvents;
+					return false;
+				}
+
+				s_capturedInputEvents[s_capturedInputWrite] = std::move(event);
+				s_capturedInputWrite =
+					(s_capturedInputWrite + 1) % s_capturedInputEvents.size();
+				++s_capturedInputCount;
+				return true;
+			}
+
+			bool DequeueCapturedInputEvent(CapturedInputEvent& event)
+			{
+				if (!s_capturedInputCount)
+					return false;
+
+				event = std::move(s_capturedInputEvents[s_capturedInputRead]);
+				s_capturedInputEvents[s_capturedInputRead] = {};
+				s_capturedInputRead =
+					(s_capturedInputRead + 1) % s_capturedInputEvents.size();
+				--s_capturedInputCount;
+				return true;
+			}
+
+			bool IsMouseRoutingMessage(UINT message)
+			{
+				if ((message >= WM_NCMOUSEMOVE
+						&& message <= WM_NCXBUTTONDBLCLK)
+					|| (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST))
+				{
+					return true;
+				}
+
+				switch (message)
+				{
+				case WM_NCHITTEST:
+				case WM_SETCURSOR:
+				case WM_CAPTURECHANGED:
+				case WM_NCMOUSEHOVER:
+				case WM_MOUSEHOVER:
+				case WM_NCMOUSELEAVE:
+				case WM_MOUSELEAVE:
+					return true;
+				default:
+					return false;
+				}
+			}
+
+			bool IsKeyboardMessage(UINT message)
+			{
+				return message == WM_KEYDOWN
+					|| message == WM_SYSKEYDOWN
+					|| message == WM_KEYUP
+					|| message == WM_SYSKEYUP;
+			}
+
+			bool IsFocusCaptureMessage(UINT message)
+			{
+				return message == WM_SETFOCUS
+					|| message == WM_ACTIVATEAPP
+					|| message == WM_ACTIVATE;
+			}
+
+			bool IsDeferredEditorKey(WPARAM key, bool controlDown)
+			{
+				switch (key)
+				{
+				case VK_BACK:
+				case VK_DELETE:
+				case VK_LEFT:
+				case VK_RIGHT:
+				case VK_HOME:
+				case VK_END:
+				case VK_RETURN:
+				case VK_ESCAPE:
+				case VK_TAB:
+					return true;
+				default:
+					return key == 'F' && controlDown;
+				}
+			}
+
+			bool ShouldCaptureWindowMessage(
+				UINT message,
+				WPARAM wParam,
+				bool sessionActive,
+				bool controlDown)
+			{
+				if (message == kMessage_FlushDeferredStewieAscii
+					|| IsImeWindowMessage(message)
+					|| message == WM_INPUTLANGCHANGE
+					|| IsFocusCaptureMessage(message))
+				{
+					return true;
+				}
+
+				if (message == WM_CHAR)
+				{
+					return sessionActive
+						|| wParam == 0x06
+						|| wParam == 0x12;
+				}
+
+				if (!IsKeyboardMessage(message))
+					return false;
+				if (sessionActive
+					|| wParam == VK_LWIN
+					|| wParam == VK_RWIN)
+				{
+					return true;
+				}
+				return (wParam == 'F' || wParam == 'R') && controlDown;
+			}
+
+			bool IsPotentialInputCaptureMessage(UINT message)
+			{
+				return message == kMessage_FlushDeferredStewieAscii
+					|| IsImeWindowMessage(message)
+					|| message == WM_INPUTLANGCHANGE
+					|| message == WM_CHAR
+					|| IsKeyboardMessage(message)
+					|| IsFocusCaptureMessage(message);
+			}
+
+			LRESULT ForwardWindowMessage(
+				HWND hwnd,
+				UINT message,
+				WPARAM wParam,
+				LPARAM lParam)
+			{
+				WNDPROC original = s_originalWndProc;
+				return original
+					? CallWindowProcA(original, hwnd, message, wParam, lParam)
+					: DefWindowProcA(hwnd, message, wParam, lParam);
+			}
+		}
+
+		LRESULT ProcessCapturedInputMessage(
+			HWND hwnd,
+			const CapturedInputEvent& event)
+		{
+			const UINT msg = event.message;
+			const WPARAM wParam = event.wParam;
+			const LPARAM lParam = event.lParam;
 			ImeState& state = State();
 			if (s_hooksInstalled)
 			{
@@ -362,10 +533,8 @@ namespace fonthook
 					return 0;
 				}
 
-				TryInstallJipTextInputHook();
-				TryInstallStewieTweaksInputHooks();
-				ObserveStewieMenuSearchHotkeyMessage(msg, wParam, lParam);
-				ProcessStewieMenuSearchPendingStateSync();
+				ObserveStewieMenuSearchHotkeyMessage(
+					msg, wParam, lParam, event.controlDown);
 				TextEditMenu* inputTarget = GetOverlayTextInputMenu();
 				StewieInputTarget stewieOverlayTarget = GetOverlayStewieInputTarget();
 				DialogueHistoryInputTarget dialogueHistoryOverlayTarget =
@@ -401,14 +570,16 @@ namespace fonthook
 
 				if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
 					&& dialogueHistoryOverlayTarget.valid
-					&& HandleDialogueHistoryKeyDown(dialogueHistoryOverlayTarget, wParam))
+					&& HandleDialogueHistoryKeyDown(
+						dialogueHistoryOverlayTarget, wParam, event.controlDown))
 				{
 					return 0;
 				}
 
 				if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
 					&& mcmOverlayTarget.valid
-					&& HandleMcmExtenderKeyDown(mcmOverlayTarget, wParam))
+					&& HandleMcmExtenderKeyDown(
+						mcmOverlayTarget, wParam, event.controlDown))
 				{
 					return 0;
 				}
@@ -491,7 +662,7 @@ namespace fonthook
 					RestoreDefaultGameImeContext(hwnd, "winspace_complete", currentLayout);
 					ClearImeCandidates();
 					UpdateCandidateOverlay();
-					if (IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN))
+					if (event.winDown)
 					{
 						// Keep the original layout for the next Space press while Win
 						// remains held, matching the shell's multi-layout cycling UI.
@@ -513,7 +684,10 @@ namespace fonthook
 					return 0;
 				}
 
-				if (state.textInputSessionActive && IsWinSpaceInputLanguageHotkey(msg, wParam))
+				if (state.textInputSessionActive
+					&& (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+					&& wParam == VK_SPACE
+					&& event.winDown)
 				{
 					state.inputLanguageSwitchGuardUntilTick = GetTickCount()
 						+ kInputLanguageSwitchAsciiGuardMs;
@@ -574,7 +748,7 @@ namespace fonthook
 					state.compositionEchoChecked = false;
 					state.candidate.composing = true;
 					RefreshImeStatus(hwnd);
-					RefreshImeComposition(hwnd);
+					state.candidate.composition = event.composition;
 					TryRemoveCompositionEcho();
 					// Candidate data is not valid until TSF or IMN_OPENCANDIDATE /
 					// IMN_CHANGECANDIDATE publishes it for this composition. Reading
@@ -595,7 +769,6 @@ namespace fonthook
 						// Candidate list updates are driven by WM_IME_NOTIFY and the TSF
 						// UI element sink. Do not poll IMM during composition text updates;
 						// some IMEs retain the previous list until the open/change notify.
-						UpdateCandidateOverlay();
 						DebugLog(
 							"tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=refresh_candidates notify=0x%08X count=%u selection=%u pageStart=%u pageSize=%u",
 							static_cast<UInt32>(wParam),
@@ -606,13 +779,11 @@ namespace fonthook
 						return 0;
 					case IMN_CLOSECANDIDATE:
 						ClearImeCandidates();
-						UpdateCandidateOverlay();
 						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=close_candidates");
 						return 0;
 					case IMN_SETOPENSTATUS:
 					case IMN_SETCONVERSIONMODE:
 					case IMN_SETSENTENCEMODE:
-						UpdateCandidateOverlay();
 						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=refresh_ime_status");
 						break;
 					default:
@@ -641,7 +812,7 @@ namespace fonthook
 						dialogueHistoryOverlayTarget.valid ? 1 : 0,
 						mcmOverlayTarget.valid ? 1 : 0);
 
-					if (HandleImeResult(hwnd, lParam))
+					if (ApplyCapturedImeResult(event.result, lParam))
 					{
 						s_imeComposing = false;
 						DebugLogState("WndProc.WM_IME_COMPOSITION", "composition_result_consumed", GetAnyActiveTextInputMenu(), static_cast<SInt32>(lParam));
@@ -663,7 +834,7 @@ namespace fonthook
 						RefreshImeStatus(hwnd);
 						if (lParam & GCS_COMPSTR)
 						{
-							RefreshImeComposition(hwnd);
+							state.candidate.composition = event.composition;
 							TryRemoveCompositionEcho();
 						}
 						RefreshImeCandidates(hwnd);
@@ -699,21 +870,198 @@ namespace fonthook
 					return 0;
 				}
 
-				if (msg == WM_CHAR && HandleCharFallback(wParam))
+				if (msg == WM_CHAR
+					&& HandleCharFallback(wParam, event.controlDown))
 					return 0;
 			}
 
-			if (msg == WM_NCDESTROY && hwnd == s_window && s_originalWndProc)
+			return 0;
+		}
+
+		LRESULT CALLBACK MultibyteInputWndProc(
+			HWND hwnd,
+			UINT msg,
+			WPARAM wParam,
+			LPARAM lParam)
+		{
+			// Mouse routing is deliberately the first branch. No tNVSE state,
+			// menu object, Tile, IME context, hook slot, or log is touched before
+			// forwarding mouse/hit-test/capture traffic to the existing chain.
+			if (IsMouseRoutingMessage(msg))
+				return ForwardWindowMessage(hwnd, msg, wParam, lParam);
+
+			if (msg == WM_NCDESTROY && hwnd == s_window)
 			{
-				WNDPROC original = s_originalWndProc;
-				SetGameImeEnabled(hwnd, true);
-				SetWindowLongPtrA(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(original));
+				const LRESULT result =
+					ForwardWindowMessage(hwnd, msg, wParam, lParam);
+				ClearCapturedInputEvents();
+				State().overlayRefreshPending = false;
 				s_originalWndProc = nullptr;
 				s_window = nullptr;
-				return CallWindowProcA(original, hwnd, msg, wParam, lParam);
+				return result;
 			}
 
-			return CallWindowProcA(s_originalWndProc, hwnd, msg, wParam, lParam);
+			if (!s_hooksInstalled)
+				return ForwardWindowMessage(hwnd, msg, wParam, lParam);
+
+			// The allowlist makes raw-input, pointer, touch, gesture and any future
+			// mouse-related messages unconditional pass-through even if they are
+			// outside the legacy WM_MOUSE/WM_NCMOUSE numeric ranges above.
+			if (!IsPotentialInputCaptureMessage(msg))
+				return ForwardWindowMessage(hwnd, msg, wParam, lParam);
+
+			ImeState& state = State();
+			const bool sessionActive = state.textInputSessionActive;
+			const bool keyboardStateRelevant =
+				IsKeyboardMessage(msg) || msg == WM_CHAR;
+			const bool controlDown =
+				keyboardStateRelevant && IsCtrlKeyDown();
+			const bool winDown =
+				keyboardStateRelevant
+				&& (IsVirtualKeyDown(VK_LWIN)
+					|| IsVirtualKeyDown(VK_RWIN));
+
+			// Suppressing the default IME windows requires changing only the
+			// parameters passed to DefWindowProc. No game UI is queried here.
+			if (msg == WM_IME_SETCONTEXT)
+			{
+				if (sessionActive
+					&& g_bMultibyteInputHideSystemCandidateWindow
+					&& IsCandidateOverlayRendererAvailable())
+				{
+					return DefWindowProcA(
+						hwnd, WM_IME_SETCONTEXT, wParam, 0);
+				}
+				return ForwardWindowMessage(hwnd, msg, wParam, lParam);
+			}
+
+			if (!ShouldCaptureWindowMessage(
+					msg, wParam, sessionActive, controlDown))
+				return ForwardWindowMessage(hwnd, msg, wParam, lParam);
+
+			CapturedInputEvent event;
+			event.message = msg;
+			event.wParam = wParam;
+			event.lParam = lParam;
+			event.controlDown = controlDown;
+			event.winDown = winDown;
+
+			if (msg == WM_IME_STARTCOMPOSITION && sessionActive)
+			{
+				s_imeComposing = true;
+				state.candidate.composing = true;
+				event.composition =
+					GetImeCompositionString(hwnd, GCS_COMPSTR);
+			}
+			else if (msg == WM_IME_COMPOSITION && sessionActive)
+			{
+				if (lParam & GCS_RESULTSTR)
+					event.result =
+						GetImeCompositionString(hwnd, GCS_RESULTSTR);
+				if (lParam & GCS_COMPSTR)
+				{
+					event.composition =
+						GetImeCompositionString(hwnd, GCS_COMPSTR);
+					s_imeComposing = true;
+					state.candidate.composing = true;
+				}
+				else if (lParam & GCS_RESULTSTR)
+				{
+					s_imeComposing = false;
+				}
+			}
+			else if (msg == WM_IME_ENDCOMPOSITION && sessionActive)
+			{
+				s_imeComposing = false;
+			}
+			else if (msg == WM_IME_NOTIFY && sessionActive)
+			{
+				// Candidate lists are transient IME data, so copy them while the
+				// notification is live. This function touches IMM state only.
+				switch (wParam)
+				{
+				case IMN_OPENCANDIDATE:
+				case IMN_SETCANDIDATEPOS:
+				case IMN_CHANGECANDIDATE:
+					RefreshImeCandidates(hwnd);
+					break;
+				case IMN_CLOSECANDIDATE:
+					ClearImeCandidates();
+					break;
+				default:
+					break;
+				}
+				state.overlayRefreshPending = true;
+			}
+
+			// Preserve the normal consume/forward contract even if the bounded
+			// queue is saturated. Forwarding an uncaptured IME commit into the
+			// byte-oriented game path would be more damaging than dropping it;
+			// the main loop reports the overflow on its next pass.
+			EnqueueCapturedInputEvent(std::move(event));
+
+			if (msg == kMessage_FlushDeferredStewieAscii)
+				return 0;
+			if (msg == WM_CHAR && sessionActive)
+				return 0;
+			if (msg == WM_IME_COMPOSITION
+				|| msg == WM_IME_ENDCOMPOSITION
+				|| msg == WM_IME_CHAR)
+			{
+				return sessionActive
+					? 0
+					: ForwardWindowMessage(hwnd, msg, wParam, lParam);
+			}
+			if (msg == WM_IME_NOTIFY
+				&& sessionActive
+				&& (wParam == IMN_OPENCANDIDATE
+					|| wParam == IMN_SETCANDIDATEPOS
+					|| wParam == IMN_CHANGECANDIDATE
+					|| wParam == IMN_CLOSECANDIDATE))
+			{
+				return 0;
+			}
+			if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+				&& sessionActive
+				&& (IsDeferredEditorKey(wParam, event.controlDown)
+					|| (wParam == VK_SPACE
+						&& event.winDown)))
+			{
+				return 0;
+			}
+
+			return ForwardWindowMessage(hwnd, msg, wParam, lParam);
+		}
+
+		void PumpCapturedInputEvents()
+		{
+			if (s_droppedCapturedInputEvents)
+			{
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: captured input queue overflow dropped=%u",
+					s_droppedCapturedInputEvents);
+				s_droppedCapturedInputEvents = 0;
+			}
+
+			CapturedInputEvent event;
+			while (DequeueCapturedInputEvent(event))
+				ProcessCapturedInputMessage(s_window, event);
+
+			if (State().overlayRefreshPending)
+			{
+				State().overlayRefreshPending = false;
+				UpdateCandidateOverlay();
+			}
+		}
+
+		void ClearCapturedInputEvents()
+		{
+			for (CapturedInputEvent& event : s_capturedInputEvents)
+				event = {};
+			s_capturedInputRead = 0;
+			s_capturedInputWrite = 0;
+			s_capturedInputCount = 0;
+			s_droppedCapturedInputEvents = 0;
 		}
 
 		struct WindowSearch
@@ -785,8 +1133,10 @@ namespace fonthook
 
 		void ClearInputState()
 		{
+			ClearCapturedInputEvents();
 			SetJipKeyEventSuppressionCaptureActive(false);
 			State().textInputSessionActive = false;
+			State().overlayRefreshPending = false;
 			s_imeComposing = false;
 			State().tsfSessionGeneration = 1;
 			State().tsfUiElementSessions.clear();
@@ -813,16 +1163,39 @@ namespace fonthook
 		{
 			RestoreTextEditInputHook();
 
+			bool detached = true;
 			if (s_window && s_originalWndProc)
 			{
 				SetGameImeEnabled(s_window, true);
-				SetWindowLongPtrA(s_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(s_originalWndProc));
+				const WNDPROC current = reinterpret_cast<WNDPROC>(
+					GetWindowLongPtrA(s_window, GWLP_WNDPROC));
+				if (current == &MultibyteInputWndProc)
+				{
+					detached = SetWindowLongPtrA(
+						s_window,
+						GWLP_WNDPROC,
+						reinterpret_cast<LONG_PTR>(s_originalWndProc)) != 0;
+				}
+				else if (current != s_originalWndProc)
+				{
+					// Another plugin installed above tNVSE. Replacing the top of
+					// that chain would strand its saved predecessor and can freeze
+					// input dispatch. Leave this node connected until window
+					// destruction instead.
+					detached = false;
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: deferred WndProc detach because a later subclass is active current=0x%08X",
+						reinterpret_cast<UInt32>(current));
+				}
 			}
 
-			s_window = nullptr;
-			s_originalWndProc = nullptr;
-			ShutdownTsfCandidateSupport();
 			ClearInputState();
+			if (detached)
+			{
+				s_window = nullptr;
+				s_originalWndProc = nullptr;
+				ShutdownTsfCandidateSupport();
+			}
 		}
 	}
 }

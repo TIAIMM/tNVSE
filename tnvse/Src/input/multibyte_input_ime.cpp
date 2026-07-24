@@ -908,17 +908,6 @@ namespace fonthook
 			return true;
 		}
 
-		bool IsWinSpaceInputLanguageHotkey(UINT msg, WPARAM wParam)
-		{
-			if (msg != WM_KEYDOWN && msg != WM_SYSKEYDOWN)
-				return false;
-
-			if (wParam != VK_SPACE)
-				return false;
-
-			return IsVirtualKeyDown(VK_LWIN) || IsVirtualKeyDown(VK_RWIN);
-		}
-
 		bool IsPendingWinSpaceRelease(UINT msg, WPARAM wParam)
 		{
 			return State().winSpaceSwitchPending

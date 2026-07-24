@@ -501,11 +501,12 @@ namespace fonthook::multibyte_input
 
 	bool HandleDialogueHistoryWndProcChar(
 		const DialogueHistoryInputTarget& target,
-		WPARAM input)
+		WPARAM input,
+		bool controlDown)
 	{
 		if (!target.valid)
 			return false;
-		if (input < 0x20 || input == 0x7F || IsCtrlKeyDown())
+		if (input < 0x20 || input == 0x7F || controlDown)
 			return true;
 		if (input > 0xFFFF)
 			return false;
@@ -540,7 +541,8 @@ namespace fonthook::multibyte_input
 
 	bool HandleDialogueHistoryKeyDown(
 		const DialogueHistoryInputTarget& target,
-		WPARAM virtualKey)
+		WPARAM virtualKey,
+		bool controlDown)
 	{
 		if (!target.valid)
 			return false;
@@ -572,7 +574,7 @@ namespace fonthook::multibyte_input
 			QueueAction(PendingAction::KeyDownTab);
 			return true;
 		case 'F':
-			if (IsCtrlKeyDown())
+			if (controlDown)
 			{
 				s_suppressedControlChar = 0x06;
 				s_suppressedControlCharTick = GetTickCount();

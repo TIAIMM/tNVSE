@@ -14,6 +14,7 @@
 #include "ui_decode.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdarg>
 #include <cstdio>
@@ -165,11 +166,14 @@ namespace fonthook
 		StewieInputTarget GetOverlayStewieInputTarget();
 		void TryInstallStewieTweaksInputHooks();
 		void ProcessStewieTweaksInputTargetState();
-		void TryInstallTileReadXMLHook();
 		void ClearStewieInputState();
 		void ResetStewieInputState();
 		void ProcessStewieMenuSearchPendingStateSync();
-		bool ObserveStewieMenuSearchHotkeyMessage(UINT msg, WPARAM wParam, LPARAM lParam);
+		bool ObserveStewieMenuSearchHotkeyMessage(
+			UINT msg,
+			WPARAM wParam,
+			LPARAM lParam,
+			bool controlDown);
 		bool InsertWideTextStewie(const StewieInputTarget& target, std::wstring_view text);
 		bool HandleStewieWndProcAscii(const StewieInputTarget& target, UInt8 input);
 		bool HandleStewieImeEnter(const StewieInputTarget& target);
@@ -189,10 +193,12 @@ namespace fonthook
 			std::wstring_view text);
 		bool HandleMcmExtenderWndProcChar(
 			const McmExtenderInputTarget& target,
-			WPARAM input);
+			WPARAM input,
+			bool controlDown);
 		bool HandleMcmExtenderKeyDown(
 			const McmExtenderInputTarget& target,
-			WPARAM virtualKey);
+			WPARAM virtualKey,
+			bool controlDown);
 		bool HandleMcmExtenderMenuInput(Menu* menu, UInt32 input);
 		bool ShouldSuppressMcmExtenderControlChar(WPARAM input);
 		bool RemovePreviousMcmExtenderAsciiCompositionEcho(wchar_t compositionLead);
@@ -207,10 +213,12 @@ namespace fonthook
 			std::wstring_view text);
 		bool HandleDialogueHistoryWndProcChar(
 			const DialogueHistoryInputTarget& target,
-			WPARAM input);
+			WPARAM input,
+			bool controlDown);
 		bool HandleDialogueHistoryKeyDown(
 			const DialogueHistoryInputTarget& target,
-			WPARAM virtualKey);
+			WPARAM virtualKey,
+			bool controlDown);
 		bool HandleDialogueHistoryMenuInput(Menu* menu, UInt32 input);
 		bool ShouldSuppressDialogueHistoryControlChar(WPARAM input);
 		bool RemovePreviousDialogueHistoryAsciiCompositionEcho(wchar_t compositionLead);
@@ -253,6 +261,8 @@ namespace fonthook
 		bool ShouldSuppressImeCommitInput(UInt32 input, ImeCommitInputChannel channel);
 		void ResetImeCommitKeyState(const char* reason);
 		std::string WideToCurrentCodePage(std::wstring_view value);
+		void PumpCapturedInputEvents();
+		void ClearCapturedInputEvents();
 		bool TryInstallWindowProc();
 		void RestoreWindowProc();
 	}

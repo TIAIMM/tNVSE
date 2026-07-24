@@ -109,7 +109,10 @@ namespace fonthook
 
 			STDMETHODIMP BeginUIElement(DWORD dwUIElementId, BOOL* pbShow) override
 			{
-				const bool hasOverlayTarget = HasOverlayInputTarget();
+				// TSF invokes this as a COM callback. Only capture candidate data
+				// here; game-menu discovery and overlay updates belong to the main
+				// loop so a text-service callback can never re-enter Gamebryo UI.
+				const bool hasOverlayTarget = State().textInputSessionActive;
 				const bool acceptsCandidates = s_imeComposing
 					&& hasOverlayTarget
 					&& RegisterTsfUiElement(dwUIElementId);
@@ -122,28 +125,28 @@ namespace fonthook
 				if (!acceptsCandidates)
 				{
 					ClearImeCandidates();
-					UpdateCandidateOverlay();
+					State().overlayRefreshPending = true;
 					return S_OK;
 				}
 
 				ReadCandidateElement(dwUIElementId);
-				UpdateCandidateOverlay();
+				State().overlayRefreshPending = true;
 				return S_OK;
 			}
 
 			STDMETHODIMP UpdateUIElement(DWORD dwUIElementId) override
 			{
 				if (!s_imeComposing
-					|| !HasOverlayInputTarget()
+					|| !State().textInputSessionActive
 					|| !IsCurrentTsfUiElement(dwUIElementId))
 				{
 					ClearImeCandidates();
-					UpdateCandidateOverlay();
+					State().overlayRefreshPending = true;
 					return S_OK;
 				}
 
 				ReadCandidateElement(dwUIElementId);
-				UpdateCandidateOverlay();
+				State().overlayRefreshPending = true;
 				return S_OK;
 			}
 
@@ -155,7 +158,7 @@ namespace fonthook
 				State().tsfCandidateActive = false;
 				if (State().candidate.candidatesFromTsf)
 					ClearImeCandidates();
-				UpdateCandidateOverlay();
+				State().overlayRefreshPending = true;
 				return S_OK;
 			}
 

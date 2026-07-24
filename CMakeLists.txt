@@ -182,6 +182,13 @@ if(TNVSE_BUILD_TESTS)
     FOLDER "tNVSE/Tests")
   add_test(NAME tnvse_font_mtsdf_tests
     COMMAND tnvse_font_mtsdf_tests)
+
+  add_test(NAME tnvse_multibyte_callback_contract
+    COMMAND powershell.exe
+      -NoProfile
+      -ExecutionPolicy Bypass
+      -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/multibyte_callback_contract.ps1"
+      -SourceRoot "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 set(_tnvse_plugin_path_help

@@ -430,18 +430,25 @@ bSuppressJIPKeyEventsDuringMultibyteInput = 1
 SetWindowLongPtrA(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(MultibyteInputWndProc));
 ```
 
-不要在 `DllMain` 中安装。所有未消费消息必须转发给原 WndProc。
+不要在 `DllMain` 中安装。所有未消费消息必须转发给原 WndProc。当前
+WndProc 是捕获层，不是菜单适配层：
+
+- 鼠标、非客户区鼠标、hit-test、cursor、capture 消息在第一条分支无条件调用前驱 WndProc；raw input、pointer、touch、gesture 等不在输入捕获 allowlist 中的消息也会在读取 tNVSE 输入状态前直接转发。
+- 回调只复制消息参数、Ctrl/Win 修饰键快照以及必须在消息存活期读取的 `GCS_RESULTSTR`、`GCS_COMPSTR`、IMM candidate list，并把这些数据写入固定容量队列。回调中不查找 Menu，不遍历 Tile，不安装 hook，不写 vtable，不更新游戏 UI，也不写诊断日志。
+- `WM_IME_SETCONTEXT` 是唯一同步策略分支；它只依据主循环已经发布的 input-session latch 决定是否调用 `DefWindowProc(..., lParam=0)`，不查询游戏 UI。
+- 主循环先安装/维护各 keyboard-input adapter、轮询 target 状态，再排空捕获队列。目标解析、DBCS shadow 编辑、IME commit、Tile/UDF 写回、IME association 和 candidate overlay 更新都在这里完成。
+- TSF `BeginUIElement` / `UpdateUIElement` / `EndUIElement` 同样只镜像 candidate 数据并设置待刷新标志；独立 DX9 overlay 由下一次主循环刷新，TSF COM 回调不会重入 Gamebryo 菜单。
 
 当前实际处理的消息：
 
-- `WM_IME_COMPOSITION`：读取 `GCS_COMPSTR` 更新游戏内预览；有 overlay target 时该消息由 tNVSE 消费，不再落回系统默认 composition UI；只有 `GCS_RESULTSTR` 提交成功后才写入真实 edit buffer。
-- `WM_IME_STARTCOMPOSITION` / `WM_IME_ENDCOMPOSITION`：维护 composition 状态。
+- `WM_IME_COMPOSITION`：回调立即复制 `GCS_COMPSTR` / `GCS_RESULTSTR`；主循环更新预览并仅在目标仍有效时提交真实 edit buffer。有 input-session latch 时该消息由 tNVSE 消费，不再落回系统默认 composition UI。
+- `WM_IME_STARTCOMPOSITION` / `WM_IME_ENDCOMPOSITION`：回调只维护必要的 composition 捕获标志并排队，完整状态清理由主循环完成。
 - `WM_IME_NOTIFY`：在 `IMN_OPENCANDIDATE` / `IMN_CHANGECANDIDATE` / `IMN_SETCANDIDATEPOS` 时只通过 `ImmGetCandidateListW` 镜像旧式候选列表；现代 IME 的候选优先由 TSF `ITfCandidateListUIElement` sink 更新；`IMN_CLOSECANDIDATE` 清空 IMM32 fallback 候选。这里不能调用 `ImmSetCandidateWindow`，否则会再次触发 `IMN_SETCANDIDATEPOS` 并形成 notify 循环。
-- `WM_INPUTLANGCHANGEREQUEST`：输入菜单会话中直接交给 `DefWindowProc`，让 `Win+Space` / 输入法热键真正切换当前窗口的输入语言。
-- `WM_INPUTLANGCHANGE`：刷新当前键盘布局 / IME 名称。
-- `WM_IME_SETCONTEXT`：当存在输入菜单对象时，清除系统 composition/candidate UI flags，避免系统候选窗和游戏内预览同时显示；没有输入菜单对象时直接禁用窗口 IME context 并消费 IME 消息。
-- `WM_CHAR`：未组字时在 active `TextEditMenu` 下接管可打印 ASCII 和非 ASCII fallback；组字期间吞掉拼音等 ASCII `WM_CHAR`，避免预编辑串写入真实 buffer。
-- `WM_NCDESTROY`：恢复原 WndProc。
+- `WM_INPUTLANGCHANGEREQUEST`：不进入捕获队列，直接交给既有 WndProc 链，让 `Win+Space` / 输入法热键切换窗口输入语言。
+- `WM_INPUTLANGCHANGE`：排队到主循环刷新当前键盘布局、IME 名称和 context。
+- `WM_IME_SETCONTEXT`：只使用缓存的 input-session latch；启用游戏内候选窗替代时调用 `DefWindowProc(..., lParam=0)`，否则直接转发。
+- `WM_CHAR`：回调只排队并按缓存会话决定是否消费；未组字 ASCII、非 ASCII fallback、composition ASCII 抑制和真实 target 写入都在主循环处理。
+- `WM_NCDESTROY`：先转发给前驱 WndProc，再丢弃待处理捕获数据并清除窗口链指针。
 - `WM_PASTE`：后续可选，必须走同一套 DBCS 边界、宽度限制和 byte 上限检查。
 
 IME 结果用 Unicode API 读取：
@@ -464,10 +471,10 @@ UTF-16 -> WideCharToMultiByte(g_usingWinEncoding)
 
 消息消费规则：
 
-- 正常游玩、没有 `TextEditMenu` / JIP `ShowTextInputMenu` 当前对象时，tNVSE 取消当前 composition，并用 `ImmAssociateContext(hwnd, nullptr)` 解绑游戏窗口的 HIMC。此时收到 `WM_IME_STARTCOMPOSITION` / `WM_IME_COMPOSITION` / `WM_IME_NOTIFY` / `WM_IME_CHAR` 等消息都会直接消费，不转发给原 WndProc。
+- 正常游玩、没有任何已适配输入目标时，主循环结束 input session、取消当前 composition，并用 `ImmAssociateContext(hwnd, nullptr)` 解绑游戏窗口的 HIMC。WndProc 只读取这个缓存会话状态；它不会为判定目标而扫描菜单。
 - 进入输入菜单时启动 input session latch，并用 `ImmAssociateContextEx(hwnd, nullptr, IACE_DEFAULT)` 重新绑定当前 HKL 的默认 IME context；不要恢复之前解绑时返回的旧 `HIMC`，否则 Alt-Tab 或输入法切换后可能继续使用旧输入法状态。输入会话开始时必须显式重建一次 context，即使当前窗口看起来尚未解绑，也要刷新 open/native 状态和首键 guard。
 - 输入菜单会话中收到 `WM_INPUTLANGCHANGEREQUEST` 时必须交给 `DefWindowProc`，否则 `Win+Space` / 输入法热键可能不会真正切换当前窗口的输入语言；收到 `WM_INPUTLANGCHANGE` 后用该消息携带的新 `HKL` 重建默认 IME context，并刷新 overlay 的输入法名称和模式。这个新 `HKL` 只用于本次重建，不能保存为长期 fallback。
-- 部分全屏/插件组合下 `Win+Space` 可能不会向游戏窗口投递 `WM_INPUTLANGCHANGEREQUEST`。当前实现额外在输入菜单会话中捕获 `VK_LWIN/VK_RWIN + VK_SPACE`，调用 `ActivateKeyboardLayout(HKL_NEXT, KLF_SETFORPROCESS)`，随后立即读取当前窗口线程 `HKL` 并重建默认 IME context，作为窗口消息缺失时的兜底。
+- 部分全屏/插件组合下 `Win+Space` 可能不会向游戏窗口投递 `WM_INPUTLANGCHANGEREQUEST`。当前实现额外捕获 `VK_LWIN/VK_RWIN + VK_SPACE` 及当时的 Win 键快照，在主循环确认系统没有完成切换后才调用 `ActivateKeyboardLayout(HKL_NEXT, KLF_SETFORPROCESS)` 并重建默认 IME context，避免延迟处理时读取已经松开的修饰键。
 - 输入菜单会话中收到 `WM_SETFOCUS`、`WM_ACTIVATEAPP`、`WM_ACTIVATE` 回到激活状态时，也重建默认 IME context。这样 Alt-Tab 到外部程序切换输入法再回游戏时，不会继续沿用离焦前的 stale context。
 - 某些 IME 在 Alt-Tab、输入法切换或刚打开输入菜单后，会先让第一个拼音字母经过游戏输入路径，然后才投递 `WM_IME_STARTCOMPOSITION` / `GCS_COMPSTR`。当前实现对与 `uiEncoding` 匹配的输入语言 layout 调用 `ImmSetOpenStatus(TRUE)`，必要时补 `IME_CMODE_NATIVE`；只要最终状态是 open/native，就刷新约 1 秒的 ASCII guard，直到 composition 正常接管。若首字母仍已经抢先进入真实 buffer，则在本次 composition 的第一条非空 `GCS_COMPSTR` 到达时，只检查一次 caret 前一字节：它必须是单字节 ASCII 且与 composition 首字符一致，才会被删除。这里按 `LANG_CHINESE` / `LANG_JAPANESE` / `LANG_KOREAN` 与 `uiEncoding` 匹配判定，不依赖 `ImmIsIME()`，因为 Windows 10/11 的 TSF 输入法不一定稳定通过该 API 表现为 legacy IME。
 - `IsConfiguredImeLayout` 只能按当前窗口线程 `HKL`，或 `WM_INPUTLANGCHANGE` 本次传入的 `HKL`，判断是否匹配当前 `uiEncoding`。不能用“最近一次中文/日文/韩文 HKL”兜底；否则切到系统英文 `00000409` 后仍会继承中文 IME 的 open/native 状态，导致 overlay 显示 `00000409 ON 中文 半角`，并把普通 ASCII 当作拼音吞掉。
@@ -615,6 +622,8 @@ Stewie Tweaks 的搜索框不是原版 `TextEditMenu`，也不是 JIP 的 `ShowT
 hook 策略：
 
 - MenuSearch 使用 Stewie 已经写入的菜单 keyboard handler 入口做链式 hook；tNVSE 保存当前 handler 作为 original，再写入自己的 wrapper。
+- MenuSearch Tile 只从 `kMessage_MainGameLoop` 中已打开的菜单树按 id 发现；不再 hook `Tile::ReadXML`，也不从 XML 解析、WndProc 或 TSF 回调中遍历 Tile。
+- 菜单相关写入点仅为 `HandleKeyboardInput` 槽：八个 MenuSearch 菜单使用其固定 keyboard vtable entry，StewMenu 使用菜单实例 vtable `+0x30`。安装与稳定性检测全部在主循环。
 - StewMenu 是自定义菜单，目标校验使用虚函数 `Menu::GetID()` 返回的 `1069`，不要用原版菜单常用的 `uiID` 字段假设。
 - StewMenu 的 handler 由菜单实例 vtable `+0x30` 动态定位，菜单打开后链式替换；不是写死一个全局原版地址。
 - StewMenu 搜索框和字符串子设置都优先从菜单对象内的 `InputField` 反查 active 状态和 `inputType`。搜索框 id `5` 反查失败时才回退到 root `_IsSearchActive` / tile `_IsActive`；字符串子设置 id `103` 会在列表项模板中重复出现，必须反查到 active `InputField` 且 `inputType == 0` 才接管。
@@ -670,7 +679,7 @@ JIP LN 57.30 的 `LN_ProcessEvents` 不读取菜单 handler 的返回值，而�
 - 激活前要求固定版本 JIP 57.30 键盘事件隔离成功安装，避免 MCM 原 `SetOnKeyDownEventHandler` 与 tNVSE 同时写入；不满足条件时保留 MCM 原输入路径。
 - tNVSE 维护当前 codepage byte buffer 和 byte caret；Backspace、Delete、Left、Right、Home、End 均通过 `PrevCharBoundary` / `NextCharBoundary`，不会拆分 DBCS lead+trail。
 - `WM_CHAR` 负责普通 ASCII，`GCS_RESULTSTR` 负责 IME 提交；composition ASCII、重复 `WM_IME_CHAR` 和输入法切换热键 Space 继续走统一抑制逻辑。
-- `_search_text_1`、`_search_cursor_1`、`_search_cursor_2` 由 tNVSE 更新。WndProc/IME 回调只修改本地 shadow 并排队；tile 写入、`MenuSearch.gek` 及 Esc/Tab/Ctrl-F/Enter UDF 调用统一在下一次 `kMessage_MainGameLoop` 执行，避免在 Windows 消息回调中重入 MCM 的列表重建和 quest-stage 状态重置。
+- `_search_text_1`、`_search_cursor_1`、`_search_cursor_2` 由 tNVSE 更新。WndProc/IME 回调只复制输入数据；主循环排空事件时修改本地 shadow 并排队，Tile 写入、`MenuSearch.gek` 及 Esc/Tab/Ctrl-F/Enter UDF 调用也只在主循环执行，避免在 Windows/TSF 回调中重入 MCM 的列表重建和 quest-stage 状态重置。
 - StartMenu 键盘处理链会在 MCM target 活动时消费同一物理键对应的 DirectInput 文本和编辑副本，避免 Stewie MenuSearch 或原版 StartMenu 再处理一次。`WM_KEYDOWN` 是 Backspace、Delete、Left、Right、Home、End 和 Enter 的唯一键盘编辑来源，Windows 的重复 `WM_KEYDOWN` 负责按住连发；不再用时间窗把延迟到达的 DirectInput 副本误判为第二次编辑。上下翻页等无关输入以及鼠标、手柄路径仍保留给原处理器。
 - Esc、Tab、Ctrl-F 和 Enter 通过另外两个私有 runtime event 调用原 `OnKeyDown.gek` / `MenuSearchInput.gek`；不会复制这些控制键的脚本语义。
 - 不安装 `Sv_Find` hook。匹配仍是 xNVSE/MCM Extender 原有的 byte substring 行为；该适配保证输入和编辑的 DBCS 完整性，但不改变高位 byte 的大小写折叠或 trail-byte 起点匹配语义。
@@ -683,7 +692,7 @@ JIP LN 57.30 的 `LN_ProcessEvents` 不读取菜单 handler 的返回值，而�
 - 仅在控制台关闭、JIP 语义的顶部菜单为 `StartMenu`（1013）、`_DiaHist+Visible == 1` 且 `_DiaHist+Search == 1` 时激活；要求 `DialogueHistory/Search` 的 `_search_text_1`、`_search_cursor_1` 和 `_search_cursor_2` traits 存在。
 - 激活前要求 JIP 57.30 键盘事件隔离和 Dialogue History 原 `Search.gek`、`SearchInput.gek`、`OnKeyDown.gek` 均可用；缺少任一条件时不安装部分适配，保留 mod 原输入路径。
 - 输入缓冲区使用当前 `uiEncoding` 对应的 Windows codepage，光标移动、Backspace 和 Delete 只落在完整 DBCS 字符边界上。`WM_CHAR`、IME commit、composition echo 与输入法切换 Space 使用和 MCM target 相同的统一输入规则。
-- WndProc 只更新 shadow。tile 文本和光标在主循环刷新；最后一次文字变更后等待 500 ms，再通过私有 runtime event 调用原 `DialogueHistory\Search.gek`，保留 `*DiaHist_Search` 的防抖语义。Enter、Tab、Ctrl-F 会先强制提交待处理搜索，再分别调用原 `SearchInput.gek` / `OnKeyDown.gek`。
+- WndProc 只捕获输入数据，shadow、Tile 文本和光标均在主循环更新；最后一次文字变更后等待 500 ms，再通过私有 runtime event 调用原 `DialogueHistory\Search.gek`，保留 `*DiaHist_Search` 的防抖语义。Enter、Tab、Ctrl-F 会先强制提交待处理搜索，再分别调用原 `SearchInput.gek` / `OnKeyDown.gek`。
 - StartMenu DirectInput 文本与编辑副本仅被消费，键盘编辑及按住连发只由 `WM_KEYDOWN` 驱动；鼠标、控制器和无关 StartMenu 输入继续交给原处理器。
 - 复用已经过 handler 稳定期安装的 StartMenu 链，不为 Dialogue History 安装新的固定地址 hook；不会形成 tNVSE 与 Stewie handler 互为前驱的递归链。
 - 不安装 `Sv_Find` hook，NPC 名称过滤仍由 Dialogue History 原 `Search.gek` 完成；不修改该 mod 的 `.gek`、XML、JSON 或其他文件。
@@ -830,7 +839,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - 有些输入字段可能用 byte length 当字符数，最大长度要实测。
 - `0x7170A0` 和 `InputUnk01` 使用 1024/1028 bytes 级栈缓冲，tNVSE 不能写入超长文本后再交给原版刷新。
 - 剪贴板粘贴会一次插入大量文本，必须和 IME result 使用同一套 byte 上限、宽度限制和 DBCS 边界检查。
-- WndProc subclass 可能和 overlay、输入法增强、其他 NVSE 插件冲突。没有输入菜单对象时只消费 IME 系列消息并禁用 HIMC，普通键鼠消息仍交回原 WndProc；有输入菜单对象时才消费 composition/commit。
+- WndProc subclass 仍可能和 overlay、输入法增强、其他 NVSE 插件冲突，因此卸载时只在 tNVSE 仍是最上层 subclass 时恢复前驱；如果后装插件位于其上，则保留链节点直到窗口销毁，避免截断后装插件保存的前驱。鼠标、hit-test、capture、raw-input、pointer/touch/gesture 和所有非捕获消息始终在任何菜单/Tile/IME/UI 操作前直接交回原 WndProc。
 
 ## 测试计划
 
