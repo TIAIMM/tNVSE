@@ -356,13 +356,23 @@ namespace fonthook::vectorfont
 			if (!payload.payloadTemplate)
 				return false;
 			const NativeA8PayloadTemplate& artifact = *payload.payloadTemplate;
+			const bool compositeDesired =
+				g_bEnableFreeTypeFontCompositePass
+				&& !artifact.compositePackets.empty()
+				&& artifact.compositeRejectedGeneration.load(
+					std::memory_order_acquire) != generation
+				&& !(payload.compositeUnavailable
+					&& payload.compositeAttemptGeneration == generation);
+			const std::vector<NativeA8PacketTemplate>& packets =
+				GetNativeA8Packets(artifact, payload.useCompositePackets);
 			if (payload.preparedGeneration != generation
 				|| payload.preflightAtlasTextureEpoch != atlasTextureEpoch
 				|| payload.preflightScaledFillSampling != scaledFillSampling
 				|| payload.preflightAlphaBlending != alphaBlending
+				|| payload.useCompositePackets != compositeDesired
 				|| payload.preflightAtlasTextures.size()
 					!= artifact.atlasTextures.size()
-				|| payload.packetShaders.size() != artifact.packets.size())
+				|| payload.packetShaders.size() != packets.size())
 			{
 				return false;
 			}
@@ -374,9 +384,7 @@ namespace fonthook::vectorfont
 			const NativePreflightFrameContext* frameContext = nullptr)
 		{
 			if (!facade || !payload.buildComplete || !payload.payloadTemplate
-				|| payload.packetShaders.empty()
-				|| payload.packetShaders.size()
-					!= payload.payloadTemplate->packets.size())
+				|| payload.payloadTemplate->packets.empty())
 			{
 				return NativeA8FallbackReason::PacketBuild;
 			}
@@ -416,9 +424,20 @@ namespace fonthook::vectorfont
 			InvalidateNativePreflight(payload);
 			payload.preflightScaledFillSampling = scaledFillSampling;
 			payload.preflightAlphaBlending = alphaBlending;
+			const bool attemptComposite =
+				g_bEnableFreeTypeFontCompositePass
+				&& !artifact.compositePackets.empty()
+				&& artifact.compositeRejectedGeneration.load(
+					std::memory_order_acquire) != generation
+				&& !(payload.compositeUnavailable
+					&& payload.compositeAttemptGeneration == generation);
+			payload.useCompositePackets = attemptComposite;
+			const std::vector<NativeA8PacketTemplate>* packets =
+				&GetNativeA8Packets(artifact, payload.useCompositePackets);
+			payload.packetShaders.assign(packets->size(), nullptr);
 			if (payload.preflightAtlasTextures.size() != artifact.atlasTextures.size())
 				return NativeA8FallbackReason::PacketBuild;
-			for (const NativeA8PacketTemplate& packetTemplate : artifact.packets)
+			for (const NativeA8PacketTemplate& packetTemplate : *packets)
 			{
 				const UInt64 vertexEnd = static_cast<UInt64>(
 					packetTemplate.firstVertex) + packetTemplate.vertexCount;
@@ -442,13 +461,48 @@ namespace fonthook::vectorfont
 				payload.preflightAtlasTextures[page] = d3dTexture;
 			}
 
-			for (size_t index = 0; index < artifact.packets.size(); ++index)
+			bool shaderSetReady = true;
+			for (size_t index = 0; index < packets->size(); ++index)
 			{
 				payload.packetShaders[index] = ResolveNativeA8PacketShader(
-					artifact.packets[index],
+					(*packets)[index],
 					facade, scaledFillSampling);
 				if (!payload.packetShaders[index])
-					return NativeA8FallbackReason::ShaderGeneration;
+				{
+					shaderSetReady = false;
+					break;
+				}
+			}
+			if (!shaderSetReady && attemptComposite)
+			{
+				// Composite shaders are optional generation members.  Reject only
+				// this optimization for the current generation and immediately
+				// resolve the ordinary quality-equivalent packet set.
+				payload.compositeAttemptGeneration = generation;
+				payload.compositeUnavailable = true;
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CompositeShaderFallback);
+				payload.useCompositePackets = false;
+				packets = &artifact.packets;
+				payload.packetShaders.assign(packets->size(), nullptr);
+				shaderSetReady = true;
+				for (size_t index = 0; index < packets->size(); ++index)
+				{
+					payload.packetShaders[index] = ResolveNativeA8PacketShader(
+						(*packets)[index], facade, scaledFillSampling);
+					if (!payload.packetShaders[index])
+					{
+						shaderSetReady = false;
+						break;
+					}
+				}
+			}
+			if (!shaderSetReady)
+				return NativeA8FallbackReason::ShaderGeneration;
+			if (attemptComposite && payload.useCompositePackets)
+			{
+				payload.compositeAttemptGeneration = generation;
+				payload.compositeUnavailable = false;
 			}
 			if (GetNativeA8AtlasTextureEpoch() != atlasTextureEpoch)
 			{
@@ -615,21 +669,36 @@ namespace fonthook::vectorfont
 						scratch.frameEntries.back();
 					if (stored.preflightResult == NativeA8FallbackReason::None
 						&& stored.payload && stored.payload->payloadTemplate
-						&& stored.generation == generation
-						&& InsertUniquePayload(scratch,
-							stored.payload->payloadTemplate))
+						&& stored.generation == generation)
 					{
-						RecordFreeTypePerf(
-							FreeTypePerfCounter::SortedFramePayload);
+						if (InsertUniquePayload(scratch,
+							stored.payload->payloadTemplate))
+						{
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::SortedFramePayload);
+						}
+						const NativeA8PayloadTemplatePtr cachedArtifact =
+							GetNativeA8CompositeCacheArtifact(*stored.payload);
+						if (cachedArtifact
+							&& InsertUniquePayload(scratch, cachedArtifact))
+						{
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::SortedFramePayload);
+						}
 					}
 				}
 				PrepareSortedNativeA8Payloads(
 					scratch.payloadTemplates, generation);
 				RefreshSortedScratchMemory(scratch);
+				BeginNativeA8CompositeCacheFrame();
+				BeginNativeA8SortedShaderBatch();
 				BeginA8SortedTileConstantBatch();
 				scratch.active = true;
 				const int result = state.originalSortedTileRender(accumulator);
 				EndA8SortedTileConstantBatch();
+				EndNativeA8SortedShaderBatch();
+				EndNativeA8SortedRingFrame();
+				EndNativeA8CompositeCacheFrame();
 				ClearSortedFrame(scratch);
 				return result;
 			}

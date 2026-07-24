@@ -32,7 +32,7 @@ namespace fonthook::vectorfont
 		for (size_t i = 0; i < values.size(); ++i)
 			values[i] = s_counters[i].exchange(0, std::memory_order_relaxed);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu text_artifact_hit=%llu miss=%llu shader_batches=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu sorted_static_batches=%llu payloads=%llu bytes=%llu merged_packet_ranges=%llu metadata_hot=%llu locked=%llu sorted_facades=%llu unique_payloads=%llu frame_lookup_hits=%llu preflight_fast=%llu full=%llu direct_static=%llu direct_dynamic=%llu sorted_dynamic_batches=%llu payloads=%llu bytes=%llu lockless_packets=%llu constant_captures=%llu reuses=%llu flushes=%llu",
+			"tnvse_freetype_perf: bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu text_artifact_hit=%llu miss=%llu shader_batches=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu sorted_static_batches=%llu payloads=%llu bytes=%llu merged_packet_ranges=%llu metadata_hot=%llu locked=%llu sorted_facades=%llu unique_payloads=%llu frame_lookup_hits=%llu preflight_fast=%llu full=%llu direct_static=%llu direct_dynamic=%llu sorted_dynamic_batches=%llu payloads=%llu bytes=%llu lockless_packets=%llu constant_captures=%llu reuses=%llu flushes=%llu stock_constant_updates=%llu reuses=%llu sampler_sets=%llu reuses=%llu composite_fused=%llu ordered=%llu overlap_fallback=%llu multipage_fallback=%llu shader_fallback=%llu composite_draws=%llu tile_passes=%llu cache_hit=%llu miss=%llu state_changes=%llu generated=%llu evicted=%llu cache_bytes=%llu budget_reject=%llu rtt_fail=%llu restore_fail=%llu visual_validated=%llu rejected=%llu inconclusive=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapMemoryHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapCrossFontHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskHit)],
@@ -85,7 +85,30 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::LocklessPacketPrepare)],
 			values[static_cast<size_t>(FreeTypePerfCounter::ConstantBatchCapture)],
 			values[static_cast<size_t>(FreeTypePerfCounter::ConstantBatchReuse)],
-			values[static_cast<size_t>(FreeTypePerfCounter::ConstantBatchFlush)]);
+			values[static_cast<size_t>(FreeTypePerfCounter::ConstantBatchFlush)],
+			values[static_cast<size_t>(FreeTypePerfCounter::StockConstantUpdate)],
+			values[static_cast<size_t>(FreeTypePerfCounter::StockConstantReuse)],
+			values[static_cast<size_t>(FreeTypePerfCounter::SamplerStateSet)],
+			values[static_cast<size_t>(FreeTypePerfCounter::SamplerStateReuse)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeFusedEligible)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeOrderedEligible)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeOverlapFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeMultiPageFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeShaderFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeDraw)],
+			values[static_cast<size_t>(FreeTypePerfCounter::TilePass)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeCacheHit)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeCacheMiss)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeCacheStateChange)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeCacheGenerated)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeCacheEvicted)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeCacheBytes)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeCacheBudgetReject)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeCacheRttFailure)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeCacheRestoreFailure)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualValidated)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
+			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 	}
 }
 

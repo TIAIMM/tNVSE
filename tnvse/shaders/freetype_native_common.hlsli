@@ -7,6 +7,9 @@ struct NativeFontPixelInput
 {
 	float2 atlasUv : TEXCOORD0;
 	float4 baseColor : COLOR0;
+	// x: source SDF spread, y: 1/sourceToLogicalScale,
+	// z: exact Shadow/Glow/Outline/Fill bit mask.
+	float3 glyphParams : TEXCOORD1;
 };
 
 float NativeFontUsesLiveTileRgb(float layerAndFlags)

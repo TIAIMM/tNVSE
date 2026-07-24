@@ -17,6 +17,9 @@ namespace fonthook
 		constexpr UInt32 kJipEnterAcceptsOkFlag = 2;
 
 		SIZE_T s_jipOriginalInputHandler = 0;
+		SIZE_T s_jipObservedSuccessor = 0;
+		bool s_jipAdapterPublished = false;
+		thread_local UInt32 s_jipOriginalCallDepth = 0;
 
 		class JipTextInputAdapterEx
 		{
@@ -182,13 +185,28 @@ namespace fonthook
 		void ClearJipTextInputHookState()
 		{
 			s_jipOriginalInputHandler = 0;
+			s_jipObservedSuccessor = 0;
+			s_jipAdapterPublished = false;
 		}
 
 		bool CallJipOriginalInput(TextEditMenu* menu, UInt32 input)
 		{
-			if (!menu || !s_jipOriginalInputHandler || s_jipOriginalInputHandler == JipTextInputHandlerAddress())
+			if (!menu || !s_jipOriginalInputHandler
+				|| s_jipOriginalInputHandler == JipTextInputHandlerAddress()
+				|| s_jipOriginalCallDepth)
 				return false;
 
+			struct OriginalCallGuard
+			{
+				OriginalCallGuard()
+				{
+					++s_jipOriginalCallDepth;
+				}
+				~OriginalCallGuard()
+				{
+					--s_jipOriginalCallDepth;
+				}
+			} guard;
 			using InputHandler = bool(__thiscall*)(TextEditMenu*, UInt32);
 			return reinterpret_cast<InputHandler>(s_jipOriginalInputHandler)(menu, input);
 		}
@@ -205,7 +223,26 @@ namespace fonthook
 			}
 
 			if (currentHandler == hookHandler)
+			{
+				s_jipAdapterPublished = true;
 				return;
+			}
+
+			if (s_jipAdapterPublished)
+			{
+				// Another adapter was published after ours.  Replacing it while
+				// it still chains to tNVSE would create a two-node recursive
+				// vtable loop.  Keep our saved predecessor and stay below the
+				// later owner until the slot returns to the stock handler.
+				if (currentHandler != s_jipObservedSuccessor)
+				{
+					s_jipObservedSuccessor = currentHandler;
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: JIP TextInput adapter left below later handler=0x%08X",
+						static_cast<UInt32>(currentHandler));
+				}
+				return;
+			}
 
 			TextEditMenu* current = TextEditMenu::GetCurrent();
 			if (!LooksLikeJipTextInput(current))
@@ -213,6 +250,12 @@ namespace fonthook
 
 			s_jipOriginalInputHandler = currentHandler;
 			SafeWrite32(kTextEditMenuInputVTableEntry, hookHandler);
+			if (CurrentTextEditInputHandler() != hookHandler)
+			{
+				ClearJipTextInputHookState();
+				return;
+			}
+			s_jipAdapterPublished = true;
 			DebugLog(
 				"tnvse_multibyte_input: chained JIP TextInput handler=0x%08X menu=0x%08X",
 				static_cast<UInt32>(currentHandler),
@@ -918,7 +961,13 @@ namespace fonthook
 		void RestoreTextEditInputHook()
 		{
 			if (CurrentTextEditInputHandler() == JipTextInputHandlerAddress())
-				SafeWrite32(kTextEditMenuInputVTableEntry, kTextEditMenuHandleKeyboardInput);
+			{
+				const SIZE_T predecessor = s_jipOriginalInputHandler
+					&& s_jipOriginalInputHandler != JipTextInputHandlerAddress()
+					? s_jipOriginalInputHandler
+					: kTextEditMenuHandleKeyboardInput;
+				SafeWrite32(kTextEditMenuInputVTableEntry, predecessor);
+			}
 
 			ClearJipTextInputHookState();
 		}

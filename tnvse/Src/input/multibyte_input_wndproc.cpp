@@ -375,6 +375,7 @@ namespace fonthook
 			size_t s_capturedInputWrite = 0;
 			size_t s_capturedInputCount = 0;
 			UInt32 s_droppedCapturedInputEvents = 0;
+			bool s_pumpingCapturedInputEvents = false;
 
 			bool EnqueueCapturedInputEvent(CapturedInputEvent event)
 			{
@@ -1035,6 +1036,20 @@ namespace fonthook
 
 		void PumpCapturedInputEvents()
 		{
+			if (s_pumpingCapturedInputEvents)
+				return;
+			struct PumpGuard
+			{
+				PumpGuard()
+				{
+					s_pumpingCapturedInputEvents = true;
+				}
+				~PumpGuard()
+				{
+					s_pumpingCapturedInputEvents = false;
+				}
+			} guard;
+
 			if (s_droppedCapturedInputEvents)
 			{
 				gLog.FormattedMessage(
@@ -1044,8 +1059,18 @@ namespace fonthook
 			}
 
 			CapturedInputEvent event;
-			while (DequeueCapturedInputEvent(event))
+			// Process only the snapshot that existed at frame entry.  Menu/IME
+			// work can synchronously dispatch more window messages; draining those
+			// recursively in the same pass can otherwise starve the game loop
+			// indefinitely.  Newly captured messages remain ordered for the next
+			// frame, and the fixed queue still bounds memory.
+			const size_t frameEventCount = std::min(
+				s_capturedInputCount, kCapturedInputEventCapacity);
+			for (size_t index = 0; index < frameEventCount
+				&& DequeueCapturedInputEvent(event); ++index)
+			{
 				ProcessCapturedInputMessage(s_window, event);
+			}
 
 			if (State().overlayRefreshPending)
 			{

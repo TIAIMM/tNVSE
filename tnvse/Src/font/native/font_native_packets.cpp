@@ -27,7 +27,7 @@ namespace fonthook::vectorfont
 			bool usesSdf = false;
 			bool staticSmoothSampling = false;
 			bool usesLiveTileRgb = true;
-			std::array<float, 16> constants = {};
+			std::array<float, kNativeA8PacketConstantFloatCount> constants = {};
 		};
 
 		bool HasTileProperty(const NiTriShape* shape)
@@ -77,15 +77,12 @@ namespace fonthook::vectorfont
 				// c1 now contains the packet layer modifier; it is part of the
 				// immutable packet profile just like c2-c4.
 				&& std::memcmp(span.constants.data(), range.constants.data(),
-					16 * sizeof(float)) == 0;
+					kNativeA8PacketConstantFloatCount * sizeof(float)) == 0;
 		}
 
 		A8CompiledRange CompileRange(const A8EffectShapeConfig& effects,
 			const A8DrawRange& range)
 		{
-			const float distanceParameterScale =
-				range.sourceToLogicalScale > 0.0f
-				? 1.0f / range.sourceToLogicalScale : 1.0f;
 			float inverseAtlasWidth = effects.inverseAtlasWidth;
 			float inverseAtlasHeight = effects.inverseAtlasHeight;
 			if (range.atlasPage < effects.atlasInverseSizes.size())
@@ -107,28 +104,28 @@ namespace fonthook::vectorfont
 					|| effects.shadowOutlineAlpha > 0.0f);
 			if (hardShadowComposite)
 			{
-				parameter0 = effects.glowInnerPixels * distanceParameterScale;
-				parameter1 = effects.glowOuterPixels * distanceParameterScale;
+				parameter0 = effects.glowInnerPixels;
+				parameter1 = effects.glowOuterPixels;
 				parameter2 = effects.glowPower;
-				parameter3 = effects.outlineWidthPixels * distanceParameterScale;
-				sdfFlag1 = effects.outlineSoftnessPixels * distanceParameterScale;
+				parameter3 = effects.outlineWidthPixels;
+				sdfFlag1 = effects.outlineSoftnessPixels;
 				sdfFlag2 = effects.shadowGlowAlpha;
 				sdfFlag3 = effects.shadowOutlineAlpha;
 			}
 			if (range.layer == 1)
 			{
-				parameter0 = effects.glowInnerPixels * distanceParameterScale;
-				parameter1 = effects.glowOuterPixels * distanceParameterScale;
+				parameter0 = effects.glowInnerPixels;
+				parameter1 = effects.glowOuterPixels;
 				parameter2 = effects.glowPower;
 			}
 			else if (range.layer == 2)
 			{
-				parameter0 = effects.outlineWidthPixels * distanceParameterScale;
-				parameter1 = effects.outlineSoftnessPixels * distanceParameterScale;
+				parameter0 = effects.outlineWidthPixels;
+				parameter1 = effects.outlineSoftnessPixels;
 			}
 			else if (range.layer == 0 && !hardShadowComposite)
 			{
-				parameter0 = effects.shadowBlurPixels * distanceParameterScale;
+				parameter0 = effects.shadowBlurPixels;
 			}
 			else if (range.layer == 3)
 			{
@@ -144,7 +141,7 @@ namespace fonthook::vectorfont
 				range.layerColorModifier.r, range.layerColorModifier.g,
 				range.layerColorModifier.b, range.layerColorModifier.a,
 				inverseAtlasWidth, inverseAtlasHeight,
-				layerAndFlags, range.sdfSpreadPixels,
+				layerAndFlags, 0.0f,
 				parameter0, parameter1, parameter2, parameter3,
 				1.0f, sdfFlag1, sdfFlag2, sdfFlag3
 			}};
@@ -212,14 +209,71 @@ namespace fonthook::vectorfont
 			}
 			return !spans.empty();
 		}
+
+		NativeA8PacketTemplate BuildCompositePacket(
+			const A8EffectShapeConfig& effects,
+			const NativeA8CompositeSpan& span, const NiBound& bound)
+		{
+			NativeA8PacketTemplate packet;
+			packet.firstVertex = span.firstVertex;
+			packet.vertexCount = span.vertexCount;
+			packet.bound = bound;
+			packet.shaderClass = NativeA8ShaderClass::Composite;
+			packet.sampling = NativeA8Sampling::LinearLod0;
+			packet.quality = effects.quality;
+			packet.distanceFieldMethod = effects.distanceFieldMethod;
+			packet.layer = 3;
+			packet.atlasPage = span.atlasPage;
+			packet.staticSmoothSampling = true;
+			packet.usesLiveTileRgb = true;
+
+			auto writeColor = [&](size_t offset, const NiColorA& color)
+			{
+				packet.constants[offset + 0] = color.r;
+				packet.constants[offset + 1] = color.g;
+				packet.constants[offset + 2] = color.b;
+				packet.constants[offset + 3] = color.a;
+			};
+			writeColor(0, effects.layerColorModifiers[0]);
+			const NiPoint2 inverseSize =
+				span.atlasPage < effects.atlasInverseSizes.size()
+					? effects.atlasInverseSizes[span.atlasPage]
+					: NiPoint2(effects.inverseAtlasWidth,
+						effects.inverseAtlasHeight);
+			packet.constants[4] = inverseSize.x;
+			packet.constants[5] = inverseSize.y;
+			packet.constants[8] = effects.shadowBlurPixels;
+			packet.constants[9] = effects.shadowPower;
+			packet.constants[10] = effects.glowInnerPixels;
+			packet.constants[11] = effects.glowOuterPixels;
+			packet.constants[12] = effects.glowPower;
+			packet.constants[13] = effects.outlineWidthPixels;
+			packet.constants[14] = effects.outlineSoftnessPixels;
+			packet.constants[15] = effects.shadowGlowAlpha;
+			writeColor(16, effects.layerColorModifiers[1]);
+			writeColor(20, effects.layerColorModifiers[2]);
+			writeColor(24, effects.layerColorModifiers[3]);
+			packet.constants[28] = effects.shadowOutlineAlpha;
+			UInt32 liveTileRgbMask = 0;
+			for (UInt32 layer = 0; layer < 4; ++layer)
+			{
+				if (effects.layerUsesLiveTileRgb[layer])
+					liveTileRgbMask |= 1u << layer;
+			}
+			packet.constants[29] = static_cast<float>(liveTileRgbMask);
+			return packet;
+		}
 	}
 
 	NativeA8PayloadTemplatePtr BuildNativeA8PayloadTemplate(
 		std::vector<NativeA8GpuVertex>&& vertices, UInt32 quadCount,
-		const A8EffectShapeConfig& effects, const NiBound& bound)
+		const A8EffectShapeConfig& effects, const NiBound& bound,
+		std::vector<NativeA8CompositeSpan>&& compositeSpans)
 	{
 		if (!quadCount || quadCount > kNativeA8MaximumQuads
-			|| vertices.size() != static_cast<size_t>(quadCount) * 4u
+			|| vertices.size() < static_cast<size_t>(quadCount) * 4u
+			|| (vertices.size() & 3u)
+			|| vertices.size() / 4u > kNativeA8MaximumQuads
 			|| effects.atlasProperties.empty()
 			|| effects.atlasProperties.size() != effects.atlasTextures.size()
 			|| effects.atlasProperties.size() > std::numeric_limits<UInt32>::max()
@@ -265,6 +319,26 @@ namespace fonthook::vectorfont
 			packet.usesLiveTileRgb = span.usesLiveTileRgb;
 			payload->packets.push_back(std::move(packet));
 		}
+		if (effects.shaderEffects && !compositeSpans.empty())
+		{
+			payload->compositePackets.reserve(compositeSpans.size());
+			for (const NativeA8CompositeSpan& span : compositeSpans)
+			{
+				const UInt64 end = static_cast<UInt64>(span.firstVertex)
+					+ span.vertexCount;
+				if (!span.vertexCount || (span.firstVertex & 3u)
+					|| (span.vertexCount & 3u)
+					|| span.vertexCount / 4u > kNativeA8MaximumQuads
+					|| end > payload->gpuVertices.size()
+					|| span.atlasPage >= payload->pageCount)
+				{
+					payload->compositePackets.clear();
+					break;
+				}
+				payload->compositePackets.push_back(
+					BuildCompositePacket(effects, span, bound));
+			}
+		}
 		payload->cpuMemory.Reset(CpuMemoryCategory::TextArtifact,
 			GetNativeA8PayloadTemplateBytes(*payload));
 		return payload;
@@ -286,27 +360,38 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		for (const NativeA8PacketTemplate& source : payloadTemplate->packets)
+		auto validatePackets = [&](const std::vector<NativeA8PacketTemplate>& packets)
 		{
-			const UInt64 vertexEnd = static_cast<UInt64>(source.firstVertex)
-				+ source.vertexCount;
-			if (!source.vertexCount || (source.vertexCount & 3u)
-				|| source.vertexCount / 4u > kNativeA8MaximumQuads
-				|| vertexEnd > payloadTemplate->gpuVertices.size()
-				|| source.atlasPage >= payloadTemplate->pageCount)
+			for (const NativeA8PacketTemplate& source : packets)
 			{
-				return false;
+				const UInt64 vertexEnd = static_cast<UInt64>(source.firstVertex)
+					+ source.vertexCount;
+				if (!source.vertexCount || (source.vertexCount & 3u)
+					|| source.vertexCount / 4u > kNativeA8MaximumQuads
+					|| vertexEnd > payloadTemplate->gpuVertices.size()
+					|| source.atlasPage >= payloadTemplate->pageCount)
+				{
+					return false;
+				}
 			}
-		}
+			return true;
+		};
+		if (!validatePackets(payloadTemplate->packets)
+			|| (!payloadTemplate->compositePackets.empty()
+				&& !validatePackets(payloadTemplate->compositePackets)))
+			return false;
 
 		payload.payloadTemplate = std::move(payloadTemplate);
 		payload.geometryOrigin = geometryOrigin;
 		payload.packetShaders.assign(payload.payloadTemplate->packets.size(), nullptr);
 		payload.preflightAtlasTextures.assign(payload.payloadTemplate->pageCount, nullptr);
 		payload.preparedGeneration = 0;
+		payload.compositeAttemptGeneration = 0;
 		payload.preflightAtlasTextureEpoch = 0;
 		payload.preflightScaledFillSampling = false;
 		payload.preflightAlphaBlending = false;
+		payload.useCompositePackets = false;
+		payload.compositeUnavailable = false;
 		payload.packetPrepareFailure.store(
 			NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
 		payload.stickyReason.store(
@@ -324,6 +409,8 @@ namespace fonthook::vectorfont
 				* sizeof(NiTexturingPropertyPtr)
 			+ payloadTemplate.atlasTextures.capacity() * sizeof(NiTexturePtr)
 			+ payloadTemplate.packets.capacity() * sizeof(NativeA8PacketTemplate)
+			+ payloadTemplate.compositePackets.capacity()
+				* sizeof(NativeA8PacketTemplate)
 			+ payloadTemplate.gpuVertices.capacity() * sizeof(NativeA8GpuVertex);
 		return bytes;
 	}

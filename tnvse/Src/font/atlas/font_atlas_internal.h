@@ -464,6 +464,11 @@ namespace fonthook::vectorfont
 		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 		bool usesSdf = false;
 		bool usesLiveTileRgb = true;
+		// Shader-effect quads that originate from the same shaped glyph share this
+		// ordinal (for example, an offset shadow quad and its body quad).  It lets
+		// the composite route distinguish intentional intra-glyph overlap from
+		// overlap whose global layer order must remain on the stock multi-pass path.
+		UInt32 glyphOrdinal = std::numeric_limits<UInt32>::max();
 		UInt16 atlasPage = 0;
 		AtlasGlyphPlacement atlasPlacement;
 	};
@@ -639,6 +644,11 @@ namespace fonthook::vectorfont
 	NiTexturingProperty* CreateManagedAtlasProperty(UInt32 width, UInt32 height,
 		AtlasPixelMode mode, UInt32 mipLevels, const std::vector<UInt8>& source,
 		NiPixelDataPtr& outPixelData);
+	// Takes ownership of d3dTexture on success and sets it to null.  Composite
+	// cache RTTs use the same renderer-data wrapper and Tile property contract as
+	// DEFAULT-pool glyph atlas pages.
+	NiTexturingProperty* CreateDefaultTextureProperty(
+		IDirect3DTexture9*& d3dTexture, AtlasPixelMode mode);
 	void RetireDefaultGeneration(const AtlasResource& resource);
 	bool AddBitmapsToAtlas(AtlasResource& resource,
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps);

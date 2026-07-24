@@ -7,6 +7,10 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/freetype_native_vs.hlsl"
     "${shader_dir}/freetype_native_mtsdf_fill.hlsl"
     "${shader_dir}/freetype_native_mtsdf_effects.hlsl"
+    "${shader_dir}/freetype_native_mtsdf_composite.hlsl"
+    "${shader_dir}/freetype_native_composite_validate.hlsl"
+    "${shader_dir}/freetype_native_cache_vs.hlsl"
+    "${shader_dir}/freetype_native_cache_ps.hlsl"
     "${shader_dir}/compile_a8_shader.bat")
   set(shader_outputs
     "${shader_dir}/compiled/tnvse_freetype_native_vs.vso"
@@ -21,7 +25,16 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_fill_high.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_effects_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_effects_balanced.pso"
-    "${shader_dir}/compiled/tnvse_freetype_native_sdf_effects_high.pso")
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_effects_high.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_fast.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_balanced.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_high.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_composite_fast.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_composite_balanced.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_sdf_composite_high.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_composite_validate.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_cache.vso"
+    "${shader_dir}/compiled/tnvse_freetype_native_cache.pso")
 
   # Keep HLSL visible in the generated Visual Studio solution without letting
   # VS invoke its generic FxCompile rule. The batch file is the authoritative

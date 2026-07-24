@@ -33,7 +33,12 @@ namespace fonthook::vectorfont
 		{
 			return std::isfinite(vertex.x) && std::isfinite(vertex.y)
 				&& std::isfinite(vertex.z) && std::isfinite(vertex.u)
-				&& std::isfinite(vertex.v);
+				&& std::isfinite(vertex.v)
+				&& std::isfinite(vertex.sdfSpread) && vertex.sdfSpread > 0.0f
+				&& std::isfinite(vertex.distanceParameterScale)
+				&& vertex.distanceParameterScale >= 1.0f
+				&& std::isfinite(vertex.layerMask)
+				&& vertex.layerMask >= 1.0f && vertex.layerMask <= 15.0f;
 		}
 
 		bool RejectA8Shape(const char* reason)
@@ -43,7 +48,7 @@ namespace fonthook::vectorfont
 					< kMaximumShapeValidationFailureLogs)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_a8_diag: rejected shape contract=base-vertex-packet-layer-rgb-v11 reason=%s",
+					"tnvse_freetype_a8_diag: rejected shape contract=glyph-params-packet-layer-rgb-v12 reason=%s",
 					reason ? reason : "unknown");
 			}
 			return false;
@@ -84,7 +89,10 @@ namespace fonthook::vectorfont
 			if (!payloadTemplate->quadCount
 				|| payloadTemplate->quadCount > kNativeA8MaximumQuads
 				|| payloadTemplate->gpuVertices.size()
-					!= static_cast<size_t>(payloadTemplate->quadCount) * 4u
+					< static_cast<size_t>(payloadTemplate->quadCount) * 4u
+				|| (payloadTemplate->gpuVertices.size() & 3u)
+				|| payloadTemplate->gpuVertices.size() / 4u
+					> kNativeA8MaximumQuads
 				|| payloadTemplate->packets.empty()
 				|| payloadTemplate->pageCount != payloadTemplate->atlasProperties.size()
 				|| payloadTemplate->pageCount != payloadTemplate->atlasTextures.size()
@@ -109,6 +117,22 @@ namespace fonthook::vectorfont
 						[](float value) { return std::isfinite(value); }))
 				{
 					return RejectA8Shape("invalid-text-artifact-packet");
+				}
+			}
+			for (const NativeA8PacketTemplate& packet
+				: payloadTemplate->compositePackets)
+			{
+				const UInt64 vertexEnd = static_cast<UInt64>(packet.firstVertex)
+					+ packet.vertexCount;
+				if (!packet.vertexCount || (packet.firstVertex & 3u)
+					|| (packet.vertexCount & 3u)
+					|| vertexEnd > payloadTemplate->gpuVertices.size()
+					|| packet.layer > 3 || !IsFiniteBound(packet.bound)
+					|| packet.shaderClass != NativeA8ShaderClass::Composite
+					|| !std::all_of(packet.constants.begin(), packet.constants.end(),
+						[](float value) { return std::isfinite(value); }))
+				{
+					return RejectA8Shape("invalid-composite-packet");
 				}
 			}
 			if (!effectConfig || !effectConfig->enabled)
@@ -174,6 +198,13 @@ namespace fonthook::vectorfont
 			{
 				if (packet.atlasPage >= effectConfig->atlasTextures.size())
 					return RejectA8Shape("text-artifact-packet-page-out-of-bounds");
+			}
+			for (const NativeA8PacketTemplate& packet
+				: payloadTemplate->compositePackets)
+			{
+				if (packet.atlasPage >= effectConfig->atlasTextures.size())
+					return RejectA8Shape(
+						"composite-packet-page-out-of-bounds");
 			}
 			for (const NiPoint2& inverseSize : effectConfig->atlasInverseSizes)
 			{

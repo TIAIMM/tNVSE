@@ -19,6 +19,8 @@ bool g_bEnableFreeTypeA8Atlas;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = 1;
 bool g_bEnableFreeTypeGlyphCollisionProtection;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
+bool g_bEnableFreeTypeFontCompositePass = true;
+UINT32 g_uiFreeTypeFontCompositeCacheMB = 32;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputLog;
 bool g_bMultibyteInputCompositionPreview;
@@ -182,6 +184,18 @@ void LoadConfig()
 		g_uiFreeTypeFontGpuAtlasCacheMB = 4095;
 	gLog.FormattedMessage("g_uiFreeTypeFontGpuAtlasCacheMB: %u",
 		g_uiFreeTypeFontGpuAtlasCacheMB);
+
+	g_bEnableFreeTypeFontCompositePass = ReadConfigInt(
+		kFreeTypeFontSection, "bEnableFreeTypeFontCompositePass", 1,
+		filename) != 0;
+	gLog.FormattedMessage("g_bEnableFreeTypeFontCompositePass: %d",
+		g_bEnableFreeTypeFontCompositePass);
+
+	g_uiFreeTypeFontCompositeCacheMB = std::clamp<UINT32>(
+		ReadConfigInt(kFreeTypeFontSection, "uiFreeTypeFontCompositeCacheMB",
+			32, filename), 0, 512);
+	gLog.FormattedMessage("g_uiFreeTypeFontCompositeCacheMB: %u",
+		g_uiFreeTypeFontCompositeCacheMB);
 
 	g_bMultibyteInput = ReadConfigInt(kMultibyteInputSection,
 		"bMultibyteInput", 0, filename);

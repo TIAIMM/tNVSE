@@ -298,6 +298,21 @@ namespace fonthook
 
 			void ReadCandidateElement(DWORD id)
 			{
+				if (m_readingCandidateElement)
+					return;
+				struct ReadGuard
+				{
+					explicit ReadGuard(bool& active) : m_active(active)
+					{
+						m_active = true;
+					}
+					~ReadGuard()
+					{
+						m_active = false;
+					}
+					bool& m_active;
+				} guard(m_readingCandidateElement);
+
 				ITfUIElement* element = GetUIElement(id);
 				if (!element)
 					return;
@@ -376,6 +391,7 @@ namespace fonthook
 			DWORD m_uiElementSinkCookie = TF_INVALID_COOKIE;
 			ITfThreadMgrEx* m_threadMgrEx = nullptr;
 			ITfInputProcessorProfileMgr* m_profileMgr = nullptr;
+			bool m_readingCandidateElement = false;
 		};
 
 		bool InitializeTsfCandidateSupport()

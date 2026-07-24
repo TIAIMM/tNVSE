@@ -96,6 +96,29 @@ namespace fonthook::vectorfont
 		ConstantBatchCapture,
 		ConstantBatchReuse,
 		ConstantBatchFlush,
+		StockConstantUpdate,
+		StockConstantReuse,
+		SamplerStateSet,
+		SamplerStateReuse,
+		CompositeFusedEligible,
+		CompositeOrderedEligible,
+		CompositeOverlapFallback,
+		CompositeMultiPageFallback,
+		CompositeShaderFallback,
+		CompositeDraw,
+		TilePass,
+		CompositeCacheHit,
+		CompositeCacheMiss,
+		CompositeCacheStateChange,
+		CompositeCacheGenerated,
+		CompositeCacheEvicted,
+		CompositeCacheBytes,
+		CompositeCacheBudgetReject,
+		CompositeCacheRttFailure,
+		CompositeCacheRestoreFailure,
+		CompositeVisualValidated,
+		CompositeVisualRejected,
+		CompositeVisualInconclusive,
 		Count,
 	};
 
@@ -343,8 +366,9 @@ namespace fonthook::vectorfont
 		// COLOR0 carries only the per-glyph base modifier. Packet c1 carries the
 		// layer modifier, while c2.z selects whether fixed effects ignore both the
 		// base and live Tile RGB. Every path continues to inherit live Tile alpha.
-		// ABI 11 adds per-range MTSDF source/logical distance scaling.
-		static constexpr UInt32 kTileUniformColorAbi = 11;
+		// ABI 12 moves per-glyph MTSDF spread/source scaling and the layer mask
+		// into TEXCOORD1 so mixed shared-atlas glyphs do not split packets.
+		static constexpr UInt32 kTileUniformColorAbi = 12;
 
 		UInt32 abiVersion = kTileUniformColorAbi;
 		NiColorA minimumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };

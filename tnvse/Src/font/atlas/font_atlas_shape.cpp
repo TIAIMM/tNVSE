@@ -305,7 +305,8 @@ namespace fonthook::vectorfont
 			float offsetX, float offsetY, float rasterScale, float baselineOffset,
 			AtlasLayer layer, bool usesLiveTileRgb,
 			UInt32 expansionPixels = 0, bool usesSdf = false, UInt8 layerMask = 0,
-			float sourceToLogicalScale = 1.0f)
+			float sourceToLogicalScale = 1.0f,
+			UInt32 glyphOrdinal = std::numeric_limits<UInt32>::max())
 		{
 			if (bitmap && bitmap->width > 0 && bitmap->height > 0)
 			{
@@ -328,6 +329,7 @@ namespace fonthook::vectorfont
 				quad.byteClass = instance.glyph.byteClass;
 				quad.usesSdf = usesSdf;
 				quad.usesLiveTileRgb = usesLiveTileRgb;
+				quad.glyphOrdinal = glyphOrdinal;
 				quads.push_back(std::move(quad));
 			}
 		}
@@ -546,6 +548,7 @@ namespace fonthook::vectorfont
 				std::shared_ptr<const GlyphBitmap> sdf;
 				float baselineOffset = 0.0f;
 				float sourceToLogicalScale = 1.0f;
+				UInt32 glyphOrdinal = 0;
 			};
 			thread_local std::vector<PreparedShaderGlyph> prepared;
 			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
@@ -554,10 +557,14 @@ namespace fonthook::vectorfont
 			prepared.reserve(glyphs.size());
 			bitmapRequests.clear();
 			bitmapRequests.reserve(glyphs.size());
-			for (const AtlasGlyphInstance& instance : glyphs)
+			for (UInt32 glyphOrdinal = 0;
+				glyphOrdinal < static_cast<UInt32>(glyphs.size());
+				++glyphOrdinal)
 			{
+				const AtlasGlyphInstance& instance = glyphs[glyphOrdinal];
 				PreparedShaderGlyph glyph;
 				glyph.instance = &instance;
+				glyph.glyphOrdinal = glyphOrdinal;
 				glyph.baselineOffset = GetGlyphBaselineOffset(runtime, instance.glyph);
 				MtsdfSharedRasterProfile profile;
 				if (!ResolveMtsdfSharedRasterProfile(config,
@@ -619,7 +626,7 @@ namespace fonthook::vectorfont
 							entry.baselineOffset, AtlasLayer::Shadow, true, 0,
 							true,
 							1u << static_cast<UInt8>(AtlasLayer::Shadow),
-							entry.sourceToLogicalScale);
+							entry.sourceToLogicalScale, entry.glyphOrdinal);
 					}
 					else
 						sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Shadow);
@@ -630,7 +637,8 @@ namespace fonthook::vectorfont
 					AddPendingQuad(quads, entry.sdf, *entry.instance,
 						baseColor, identity, 0.0f, 0.0f, rasterScale,
 						entry.baselineOffset, firstLayer(sdfLayerMask), true, 0,
-						true, sdfLayerMask, entry.sourceToLogicalScale);
+						true, sdfLayerMask, entry.sourceToLogicalScale,
+						entry.glyphOrdinal);
 				}
 			}
 			for (const PendingQuad& quad : quads)
@@ -675,6 +683,7 @@ namespace fonthook::vectorfont
 				add(&quad.baselineOffset, sizeof(quad.baselineOffset));
 				add(&quad.expansionPixels, sizeof(quad.expansionPixels));
 				add(&quad.usesSdf, sizeof(quad.usesSdf));
+				add(&quad.glyphOrdinal, sizeof(quad.glyphOrdinal));
 				add(&quad.atlasPage, sizeof(quad.atlasPage));
 				add(&quad.atlasPlacement.atlasIdentity,
 					sizeof(quad.atlasPlacement.atlasIdentity));
@@ -828,6 +837,18 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactMiss);
 
 			std::vector<NativeA8GpuVertex> vertices(quads.size() * 4);
+			struct CompositeSupportBounds
+			{
+				float minimumX = std::numeric_limits<float>::max();
+				float minimumZ = std::numeric_limits<float>::max();
+				float maximumX = std::numeric_limits<float>::lowest();
+				float maximumZ = std::numeric_limits<float>::lowest();
+				bool valid = false;
+			};
+			std::vector<CompositeSupportBounds> compositeGlyphs(quads.size());
+			std::vector<UInt16> compositeGlyphPages(quads.size(),
+				std::numeric_limits<UInt16>::max());
+			bool compositeCandidate = effects.shaderEffects;
 			NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
 				std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
 			NiPoint3 boundMaximum(std::numeric_limits<float>::lowest(),
@@ -867,6 +888,36 @@ namespace fonthook::vectorfont
 				const float z1 = z0 - (static_cast<float>(quad.bitmap->height)
 					+ expansion * 2.0f) * (quad.usesSdf
 						? sourcePixelToLogical : 1.0f / scale);
+				if (compositeCandidate)
+				{
+					if (!quad.usesSdf
+						|| quad.glyphOrdinal >= compositeGlyphs.size())
+					{
+						compositeCandidate = false;
+					}
+					else
+					{
+						CompositeSupportBounds& glyph =
+							compositeGlyphs[quad.glyphOrdinal];
+						UInt16& glyphPage =
+							compositeGlyphPages[quad.glyphOrdinal];
+						if (glyphPage != std::numeric_limits<UInt16>::max()
+							&& glyphPage != quad.atlasPage)
+						{
+							compositeCandidate = false;
+						}
+						glyphPage = quad.atlasPage;
+						glyph.minimumX = std::min(glyph.minimumX,
+							std::min(x0, x1));
+						glyph.minimumZ = std::min(glyph.minimumZ,
+							std::min(z0, z1));
+						glyph.maximumX = std::max(glyph.maximumX,
+							std::max(x0, x1));
+						glyph.maximumZ = std::max(glyph.maximumZ,
+							std::max(z0, z1));
+						glyph.valid = true;
+					}
+				}
 				if (g_bEnableFreeTypeFontRenderingLog
 					&& (quad.layerMask & (1u << static_cast<UInt8>(AtlasLayer::Fill))))
 				{
@@ -918,7 +969,11 @@ namespace fonthook::vectorfont
 					const NiPoint2& uv = texture[ordinal];
 					NativeA8GpuVertex& output = vertices[base + ordinal];
 					output = { position.x, position.y, position.z,
-						uv.x, uv.y, packedColor };
+						uv.x, uv.y, packedColor,
+						static_cast<float>(quad.bitmap->sdfSpread),
+						quad.sourceToLogicalScale > 0.0f
+							? 1.0f / quad.sourceToLogicalScale : 1.0f,
+						static_cast<float>(quad.layerMask) };
 					boundMinimum.x = std::min(boundMinimum.x, position.x);
 					boundMinimum.y = std::min(boundMinimum.y, position.y);
 					boundMinimum.z = std::min(boundMinimum.z, position.z);
@@ -926,6 +981,143 @@ namespace fonthook::vectorfont
 					boundMaximum.y = std::max(boundMaximum.y, position.y);
 					boundMaximum.z = std::max(boundMaximum.z, position.z);
 				}
+			}
+			auto supportsOverlap = [](const CompositeSupportBounds& left,
+				const CompositeSupportBounds& right)
+			{
+				return std::min(left.maximumX, right.maximumX)
+						> std::max(left.minimumX, right.minimumX)
+					&& std::min(left.maximumZ, right.maximumZ)
+						> std::max(left.minimumZ, right.minimumZ);
+			};
+			auto hasOverlappingSupports = [&](bool crossPageOnly)
+			{
+				std::vector<size_t> ordered;
+				ordered.reserve(compositeGlyphs.size());
+				for (size_t index = 0; index < compositeGlyphs.size(); ++index)
+				{
+					if (compositeGlyphs[index].valid)
+						ordered.push_back(index);
+				}
+				std::sort(ordered.begin(), ordered.end(),
+					[&](size_t left, size_t right)
+					{
+						return compositeGlyphs[left].minimumX
+							< compositeGlyphs[right].minimumX;
+					});
+				for (size_t leftIndex = 0; leftIndex < ordered.size();
+					++leftIndex)
+				{
+					const size_t left = ordered[leftIndex];
+					for (size_t rightIndex = leftIndex + 1;
+						rightIndex < ordered.size(); ++rightIndex)
+					{
+						const size_t right = ordered[rightIndex];
+						if (compositeGlyphs[right].minimumX
+							>= compositeGlyphs[left].maximumX)
+						{
+							break;
+						}
+						if ((!crossPageOnly
+							|| compositeGlyphPages[left]
+								!= compositeGlyphPages[right])
+							&& supportsOverlap(compositeGlyphs[left],
+								compositeGlyphs[right]))
+						{
+							return true;
+						}
+					}
+				}
+				return false;
+			};
+			const bool glyphOverlap = compositeCandidate
+				&& atlases.size() == 1 && hasOverlappingSupports(false);
+			const bool pagesOverlap = compositeCandidate
+				&& atlases.size() > 1 && hasOverlappingSupports(true);
+
+			std::vector<NativeA8CompositeSpan> compositeSpans;
+			const UInt32 sourceVertexCount =
+				static_cast<UInt32>(vertices.size());
+			if (compositeCandidate && atlases.size() == 1 && !glyphOverlap)
+			{
+				compositeSpans.push_back({
+					0, sourceVertexCount, 0, true
+				});
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CompositeFusedEligible);
+			}
+			else if (compositeCandidate && !pagesOverlap)
+			{
+				UInt64 orderedVertexCount = 0;
+				for (const PendingQuad& quad : quads)
+				{
+					UInt8 mask = quad.layerMask;
+					while (mask)
+					{
+						orderedVertexCount += (mask & 1u) ? 4u : 0u;
+						mask >>= 1;
+					}
+				}
+				const UInt64 totalVertexCount =
+					static_cast<UInt64>(sourceVertexCount)
+						+ orderedVertexCount;
+				if (orderedVertexCount
+					&& totalVertexCount
+						<= static_cast<UInt64>(kNativeA8MaximumQuads) * 4u)
+				{
+					vertices.reserve(static_cast<size_t>(totalVertexCount));
+					for (UInt16 page = 0;
+						page < static_cast<UInt16>(atlases.size()); ++page)
+					{
+						const UInt32 firstVertex =
+							static_cast<UInt32>(vertices.size());
+						for (UInt8 layer = 0; layer < 4; ++layer)
+						{
+							const UInt8 layerBit =
+								static_cast<UInt8>(1u << layer);
+							for (UInt32 quadIndex = 0;
+								quadIndex < quads.size(); ++quadIndex)
+							{
+								if (quads[quadIndex].atlasPage != page
+									|| !(quads[quadIndex].layerMask
+										& layerBit))
+								{
+									continue;
+								}
+								for (UInt32 ordinal = 0;
+									ordinal < 4; ++ordinal)
+								{
+									NativeA8GpuVertex vertex =
+										vertices[quadIndex * 4u + ordinal];
+									vertex.layerMask =
+										static_cast<float>(layerBit);
+									vertices.push_back(vertex);
+								}
+							}
+						}
+						const UInt32 vertexCount =
+							static_cast<UInt32>(vertices.size())
+								- firstVertex;
+						if (vertexCount)
+						{
+							compositeSpans.push_back({
+								firstVertex, vertexCount, page, false
+							});
+						}
+					}
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::CompositeOrderedEligible);
+				}
+				else
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::CompositeOverlapFallback);
+				}
+			}
+			else if (compositeCandidate && pagesOverlap)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CompositeMultiPageFallback);
 			}
 			NiBound bound;
 			bound.m_kCenter = NiPoint3(
@@ -944,7 +1136,7 @@ namespace fonthook::vectorfont
 			bound.m_fRadius = std::sqrt(radiusSquared);
 			NativeA8PayloadTemplatePtr result = BuildNativeA8PayloadTemplate(
 				std::move(vertices), static_cast<UInt32>(quads.size()), effects,
-				bound);
+				bound, std::move(compositeSpans));
 			if (!result)
 				return {};
 			const size_t bytes = GetNativeA8PayloadTemplateBytes(*result);
@@ -1025,7 +1217,7 @@ namespace fonthook::vectorfont
 			artifactKey.contentHash = artifactHash;
 			const NativeA8PayloadTemplatePtr artifact = GetNativeTextArtifact(
 				font, quads, atlases, artifactKey, origin, resolvedEffect);
-			if (!artifact || artifact->gpuVertices.size() != quads.size() * 4u)
+			if (!artifact || artifact->gpuVertices.size() < quads.size() * 4u)
 				return nullptr;
 
 			NiTriShape* shape = font.MakeTriShape(

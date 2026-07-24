@@ -181,10 +181,26 @@ namespace fonthook::vectorfont
 				std::shared_ptr<NativeA8StaticCandidate>> staticCandidates;
 			CpuMemoryLease cpuMemory;
 			std::atomic<UInt32> resourceSerial = 1;
-			UInt32 activeSubmissions = 0;
-			bool releasePending = false;
+			std::atomic<UInt32> sortedFrameLeases = 0;
+			std::atomic<UInt32> activeSubmissions = 0;
+			std::atomic<bool> releasePending = false;
 			bool loggedReady = false;
 		};
+
+		struct NativeA8SortedRingLease
+		{
+			NativeA8RingState* state = nullptr;
+			IDirect3DVertexBuffer9* dynamicVertexBuffer = nullptr;
+			IDirect3DVertexBuffer9* staticVertexBuffer = nullptr;
+			IDirect3DIndexBuffer9* indexBuffer = nullptr;
+			IDirect3DVertexDeclaration9* declaration = nullptr;
+			UInt32 generation = 0;
+			UInt32 resourceSerial = 0;
+			UInt32 uploadEpoch = 0;
+			bool active = false;
+		};
+
+		thread_local NativeA8SortedRingLease s_sortedRingLease;
 
 		NativeA8RingState& RingState()
 		{
@@ -336,7 +352,7 @@ namespace fonthook::vectorfont
 
 		void ReleaseRingResourcesLocked(NativeA8RingState& state)
 		{
-			state.releasePending = false;
+			state.releasePending.store(false, std::memory_order_release);
 			++state.uploadEpoch;
 			if (!state.uploadEpoch)
 				++state.uploadEpoch;
@@ -406,9 +422,10 @@ namespace fonthook::vectorfont
 			UInt32 preparedGeneration, UInt32 requiredVertices,
 			const char*& operation, HRESULT& result)
 		{
-			if (state.releasePending)
+			if (state.releasePending.load(std::memory_order_acquire))
 			{
-				if (state.activeSubmissions)
+				if (state.sortedFrameLeases.load(std::memory_order_acquire)
+					|| state.activeSubmissions.load(std::memory_order_acquire))
 				{
 					operation = "ring-busy";
 					result = D3DERR_WASSTILLDRAWING;
@@ -438,7 +455,8 @@ namespace fonthook::vectorfont
 			if (state.device != device || state.renderer != renderer
 				|| state.generation != generation || state.declaration != declaration)
 			{
-				if (state.activeSubmissions)
+				if (state.sortedFrameLeases.load(std::memory_order_acquire)
+					|| state.activeSubmissions.load(std::memory_order_acquire))
 				{
 					operation = "ring-busy";
 					result = D3DERR_WASSTILLDRAWING;
@@ -456,7 +474,8 @@ namespace fonthook::vectorfont
 			}
 			if (state.vertexBuffer || state.staticVertexBuffer || state.indexBuffer)
 			{
-				if (state.activeSubmissions)
+				if (state.sortedFrameLeases.load(std::memory_order_acquire)
+					|| state.activeSubmissions.load(std::memory_order_acquire))
 				{
 					operation = "ring-busy";
 					result = D3DERR_WASSTILLDRAWING;
@@ -1217,6 +1236,182 @@ namespace fonthook::vectorfont
 				payloadTemplate.get(), payloadTemplate, baseVertex, vertexCount,
 				state.uploadEpoch, resourceSerial };
 		}
+
+		bool ResolveSortedLeaseResidency(
+			const NativeA8RingState& state,
+			const NativeA8PayloadTemplate& artifact, UInt32 vertexCount,
+			UInt32 resourceSerial, UInt32 uploadEpoch,
+			UInt32& baseVertex, bool& staticResident)
+		{
+			const NativeA8PayloadResidencyCache& residency =
+				artifact.residency;
+			if (state.staticVertexBuffer
+				&& residency.staticResourceSerial == resourceSerial
+				&& residency.staticVertexCount == vertexCount
+				&& residency.staticBaseVertex <= state.staticVertexCapacity
+				&& vertexCount <= state.staticVertexCapacity
+					- residency.staticBaseVertex)
+			{
+				baseVertex = residency.staticBaseVertex;
+				staticResident = true;
+				return true;
+			}
+			if (state.vertexBuffer
+				&& residency.dynamicResourceSerial == resourceSerial
+				&& residency.dynamicUploadEpoch == uploadEpoch
+				&& residency.dynamicVertexCount == vertexCount
+				&& residency.dynamicBaseVertex <= state.vertexCapacity
+				&& vertexCount <= state.vertexCapacity
+					- residency.dynamicBaseVertex)
+			{
+				baseVertex = residency.dynamicBaseVertex;
+				staticResident = false;
+				return true;
+			}
+			return false;
+		}
+
+		bool PublishSortedRingLeaseLocked(NativeA8RingState& state,
+			const std::vector<NativeA8PayloadTemplatePtr>& payloadTemplates,
+			UInt32 generation)
+		{
+			if (s_sortedRingLease.active || !generation
+				|| state.generation != generation || !state.vertexBuffer
+				|| !state.indexBuffer || !state.declaration
+				|| state.releasePending.load(std::memory_order_acquire)
+				|| state.sortedFrameLeases.load(std::memory_order_acquire)
+				|| state.activeSubmissions.load(std::memory_order_acquire))
+			{
+				return false;
+			}
+			const UInt32 resourceSerial = state.resourceSerial.load(
+				std::memory_order_acquire);
+			const UInt32 uploadEpoch = state.uploadEpoch;
+			for (const NativeA8PayloadTemplatePtr& payloadTemplate
+				: payloadTemplates)
+			{
+				if (!payloadTemplate || payloadTemplate->gpuVertices.empty()
+					|| payloadTemplate->gpuVertices.size()
+						> std::numeric_limits<UInt32>::max())
+				{
+					return false;
+				}
+				const UInt32 vertexCount = static_cast<UInt32>(
+					payloadTemplate->gpuVertices.size());
+				UInt32 baseVertex = 0;
+				bool staticResident = false;
+				if (!ResolveSortedLeaseResidency(state, *payloadTemplate,
+					vertexCount, resourceSerial, uploadEpoch,
+					baseVertex, staticResident))
+				{
+					return false;
+				}
+				if (!staticResident)
+					ObserveStaticCandidateLocked(state, payloadTemplate,
+						vertexCount);
+			}
+			RefreshRingCpuMemoryLocked(state);
+			state.sortedFrameLeases.fetch_add(1,
+				std::memory_order_release);
+			s_sortedRingLease.state = &state;
+			s_sortedRingLease.dynamicVertexBuffer = state.vertexBuffer;
+			s_sortedRingLease.staticVertexBuffer = state.staticVertexBuffer;
+			s_sortedRingLease.indexBuffer = state.indexBuffer;
+			s_sortedRingLease.declaration = state.declaration;
+			s_sortedRingLease.generation = generation;
+			s_sortedRingLease.resourceSerial = resourceSerial;
+			s_sortedRingLease.uploadEpoch = uploadEpoch;
+			s_sortedRingLease.active = true;
+			return true;
+		}
+
+		bool TryBeginSortedRingSubmission(NiTriShape* facade,
+			NativeA8ShapePayload& payload,
+			NativeA8RingSubmission& submission,
+			NativeA8FallbackReason& result)
+		{
+			if (!s_sortedRingLease.active)
+				return false;
+			result = NativeA8FallbackReason::RuntimeFault;
+			NativeA8SortedRingLease& lease = s_sortedRingLease;
+			NativeA8RingState* state = lease.state;
+			if (!state || !facade || !payload.payloadTemplate
+				|| payload.preparedGeneration != lease.generation
+				|| !IsNativeA8ShaderGenerationCurrent(lease.generation)
+				|| state->generation != lease.generation
+				|| state->resourceSerial.load(std::memory_order_acquire)
+					!= lease.resourceSerial
+				|| state->uploadEpoch != lease.uploadEpoch
+				|| state->vertexBuffer != lease.dynamicVertexBuffer
+				|| state->staticVertexBuffer != lease.staticVertexBuffer
+				|| state->indexBuffer != lease.indexBuffer
+				|| state->declaration != lease.declaration)
+			{
+				return true;
+			}
+			const UInt64 vertexCount64 =
+				payload.payloadTemplate->gpuVertices.size();
+			if (!vertexCount64
+				|| vertexCount64 > std::numeric_limits<UInt32>::max())
+			{
+				result = NativeA8FallbackReason::PacketBuild;
+				return true;
+			}
+			const UInt32 vertexCount = static_cast<UInt32>(vertexCount64);
+			UInt32 baseVertex = 0;
+			bool staticResident = false;
+			if (!ResolveSortedLeaseResidency(*state,
+				*payload.payloadTemplate, vertexCount,
+				lease.resourceSerial, lease.uploadEpoch,
+				baseVertex, staticResident))
+			{
+				result = NativeA8FallbackReason::PacketPrepare;
+				return true;
+			}
+
+			const UInt32 proxyIndex =
+				AcquireProxyLocked(*state, s_ringThread);
+			if (proxyIndex == std::numeric_limits<UInt32>::max())
+			{
+				payload.packetPrepareFailure.store(
+					NativeA8PacketPrepareFailure::ProxyUnavailable,
+					std::memory_order_relaxed);
+				result = NativeA8FallbackReason::PacketPrepare;
+				return true;
+			}
+			NativeA8Proxy& proxy = state->proxies[proxyIndex];
+			if (!proxy.shape || !proxy.buffer || !proxy.chip
+				|| !SyncProxyState(*facade, proxy,
+					payload.geometryOrigin))
+			{
+				proxy.inUse = false;
+				payload.packetPrepareFailure.store(
+					NativeA8PacketPrepareFailure::Geometry,
+					std::memory_order_relaxed);
+				result = NativeA8FallbackReason::PropertySync;
+				return true;
+			}
+
+			submission.proxyShape = proxy.shape.m_pObject;
+			submission.proxyBuffer = proxy.buffer;
+			submission.proxyChip = proxy.chip;
+			submission.vertexBuffer = staticResident
+				? state->staticVertexBuffer : state->vertexBuffer;
+			submission.proxyIndex = proxyIndex;
+			submission.generation = lease.generation;
+			submission.resourceSerial = lease.resourceSerial;
+			submission.nextPacket = 0;
+			submission.payloadBaseVertex = baseVertex;
+			submission.endVertex = baseVertex + vertexCount;
+			submission.staticResident = staticResident;
+			submission.active = true;
+			state->activeSubmissions.fetch_add(1, std::memory_order_release);
+			payload.packetPrepareFailure.store(
+				NativeA8PacketPrepareFailure::None,
+				std::memory_order_relaxed);
+			result = NativeA8FallbackReason::None;
+			return true;
+		}
 	}
 
 	bool EnsureNativeA8ProxyPool(Font& font)
@@ -1274,6 +1469,7 @@ namespace fonthook::vectorfont
 		std::vector<NativeA8PayloadTemplatePtr>& payloadTemplates,
 		UInt32 generation)
 	{
+		EndNativeA8SortedRingFrame();
 		if (!generation || payloadTemplates.empty()
 			|| !IsNativeA8ShaderGenerationCurrent(generation))
 		{
@@ -1539,7 +1735,11 @@ namespace fonthook::vectorfont
 			}
 		}
 		if (!missingDynamicVertices)
+		{
+			PublishSortedRingLeaseLocked(state, payloadTemplates,
+				generation);
 			return;
+		}
 
 		const UInt64 appendCapacity = state.nextVertex <= state.vertexCapacity
 			? state.vertexCapacity - state.nextVertex : 0;
@@ -1554,7 +1754,8 @@ namespace fonthook::vectorfont
 		{
 			return;
 		}
-		if (discard && state.activeSubmissions)
+		if (discard
+			&& state.activeSubmissions.load(std::memory_order_acquire))
 			return;
 
 		UInt32 startVertex = state.nextVertex;
@@ -1633,6 +1834,8 @@ namespace fonthook::vectorfont
 			// remain reserved before falling back to per-shape preparation.
 			state.nextVertex = startVertex + uploadVertices;
 			RefreshRingCpuMemoryLocked(state);
+			PublishSortedRingLeaseLocked(state, payloadTemplates,
+				generation);
 			return;
 		}
 
@@ -1654,6 +1857,8 @@ namespace fonthook::vectorfont
 				uploadVertices, byteCount, discard ? 1u : 0u,
 				state.nextVertex, state.vertexCapacity);
 		}
+		PublishSortedRingLeaseLocked(state, payloadTemplates,
+			generation);
 	}
 
 	NativeA8FallbackReason BeginNativeA8RingSubmission(
@@ -1662,11 +1867,35 @@ namespace fonthook::vectorfont
 	{
 		EndNativeA8RingSubmission(submission);
 		if (!facade || !payload.buildComplete || !payload.payloadTemplate
-			|| payload.packetShaders.empty()
-			|| payload.packetShaders.size()
-				!= payload.payloadTemplate->packets.size())
+			|| payload.packetShaders.empty())
 		{
 			return NativeA8FallbackReason::PacketBuild;
+		}
+		const std::vector<NativeA8PacketTemplate>& activePackets =
+			GetNativeA8Packets(*payload.payloadTemplate,
+				payload.useCompositePackets);
+		if (payload.packetShaders.size() != activePackets.size())
+			return NativeA8FallbackReason::PacketBuild;
+		NativeA8FallbackReason leaseResult =
+			NativeA8FallbackReason::RuntimeFault;
+		if (TryBeginSortedRingSubmission(facade, payload, submission,
+			leaseResult))
+		{
+			if (leaseResult == NativeA8FallbackReason::None)
+				return leaseResult;
+			// A generation/resource/range mismatch invalidates the complete frame
+			// snapshot. Drop its lease, then run the existing locked per-facade
+			// path so the affected text still has a correctness-preserving fallback.
+			// A recursive draw can still own a proxy from this lease; in that case
+			// retaining the lease is mandatory because proxy inUse state is
+			// render-thread confined until the final lockless submission ends.
+			if (s_sortedRingLease.state
+				&& s_sortedRingLease.state->activeSubmissions.load(
+					std::memory_order_acquire))
+			{
+				return leaseResult;
+			}
+			EndNativeA8SortedRingFrame();
 		}
 
 		const UInt64 totalVertexCount = payload.payloadTemplate->gpuVertices.size();
@@ -1679,6 +1908,13 @@ namespace fonthook::vectorfont
 
 		NativeA8RingState& state = RingState();
 		std::lock_guard<std::mutex> lock(state.mutex);
+		if (state.sortedFrameLeases.load(std::memory_order_acquire))
+		{
+			payload.packetPrepareFailure.store(
+				NativeA8PacketPrepareFailure::ProxyUnavailable,
+				std::memory_order_relaxed);
+			return NativeA8FallbackReason::PacketPrepare;
+		}
 		const UInt32 proxyIndex = AcquireProxyLocked(state, s_ringThread);
 		if (proxyIndex == std::numeric_limits<UInt32>::max())
 		{
@@ -1742,7 +1978,8 @@ namespace fonthook::vectorfont
 				if (!startVertex || startVertex > state.vertexCapacity
 					|| totalVertices > state.vertexCapacity - startVertex)
 				{
-					if (state.activeSubmissions)
+					if (state.activeSubmissions.load(
+						std::memory_order_acquire))
 					{
 						state.proxies[proxyIndex].inUse = false;
 						payload.packetPrepareFailure.store(
@@ -1833,7 +2070,7 @@ namespace fonthook::vectorfont
 		submission.endVertex = startVertex + totalVertices;
 		submission.staticResident = staticResident;
 		submission.active = true;
-		++state.activeSubmissions;
+		state.activeSubmissions.fetch_add(1, std::memory_order_release);
 		payload.packetPrepareFailure.store(
 			NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
 		return NativeA8FallbackReason::None;
@@ -1855,11 +2092,14 @@ namespace fonthook::vectorfont
 			return NativeA8FallbackReason::RuntimeFault;
 		}
 
-		if (packetIndex >= payload.payloadTemplate->packets.size())
+		const std::vector<NativeA8PacketTemplate>& activePackets =
+			GetNativeA8Packets(*payload.payloadTemplate,
+				payload.useCompositePackets);
+		if (packetIndex >= activePackets.size())
 			return NativeA8FallbackReason::PacketBuild;
 		TileShader* shader = payload.packetShaders[packetIndex];
 		const NativeA8PacketTemplate& source =
-			payload.payloadTemplate->packets[packetIndex];
+			activePackets[packetIndex];
 		if (!shader || source.atlasPage
 			>= payload.payloadTemplate->atlasTextures.size())
 		{
@@ -1875,9 +2115,10 @@ namespace fonthook::vectorfont
 		}
 
 		NativeA8RingState& state = RingState();
-		// Begin reserved this proxy and increments activeSubmissions while holding
-		// the ring mutex. Resource replacement/release is deferred until End, so
-		// packet-local property and buffer updates need no global lock.
+		// Begin reserved this proxy under either the ring mutex or the validated
+		// sorted-frame lease, then incremented activeSubmissions. Resource
+		// replacement/release is deferred until End, so packet-local property and
+		// buffer updates need no global lock.
 		IDirect3DVertexBuffer9* expectedVertexBuffer =
 			submission.staticResident
 			? state.staticVertexBuffer : state.vertexBuffer;
@@ -1947,26 +2188,68 @@ namespace fonthook::vectorfont
 		if (submission.active)
 		{
 			NativeA8RingState& state = RingState();
-			std::lock_guard<std::mutex> lock(state.mutex);
-			if (submission.proxyIndex < state.proxyCount)
-				state.proxies[submission.proxyIndex].inUse = false;
-			if (state.activeSubmissions)
-				--state.activeSubmissions;
-			if (!state.activeSubmissions && state.releasePending)
-				ReleaseRingResourcesLocked(state);
+			if (s_sortedRingLease.active
+				&& s_sortedRingLease.state == &state)
+			{
+				if (submission.proxyIndex < state.proxyCount)
+					state.proxies[submission.proxyIndex].inUse = false;
+				state.activeSubmissions.fetch_sub(
+					1, std::memory_order_acq_rel);
+			}
+			else
+			{
+				std::lock_guard<std::mutex> lock(state.mutex);
+				if (submission.proxyIndex < state.proxyCount)
+					state.proxies[submission.proxyIndex].inUse = false;
+				state.activeSubmissions.fetch_sub(
+					1, std::memory_order_acq_rel);
+				if (!state.activeSubmissions.load(std::memory_order_acquire)
+					&& state.releasePending.load(
+						std::memory_order_acquire))
+				{
+					ReleaseRingResourcesLocked(state);
+				}
+			}
 		}
 		submission = NativeA8RingSubmission{};
+	}
+
+	void EndNativeA8SortedRingFrame()
+	{
+		if (!s_sortedRingLease.active)
+			return;
+		NativeA8RingState* state = s_sortedRingLease.state;
+		if (state && state->activeSubmissions.load(std::memory_order_acquire))
+			return;
+		s_sortedRingLease = {};
+		if (!state)
+			return;
+		const UInt32 previous = state->sortedFrameLeases.fetch_sub(
+			1, std::memory_order_acq_rel);
+		if (previous <= 1
+			&& state->releasePending.load(std::memory_order_acquire))
+		{
+			std::lock_guard<std::mutex> lock(state->mutex);
+			if (!state->sortedFrameLeases.load(std::memory_order_acquire)
+				&& !state->activeSubmissions.load(std::memory_order_acquire)
+				&& state->releasePending.load(
+					std::memory_order_acquire))
+			{
+				ReleaseRingResourcesLocked(*state);
+			}
+		}
 	}
 
 	void ReleaseNativeA8RingResources()
 	{
 		NativeA8RingState& state = RingState();
 		std::lock_guard<std::mutex> lock(state.mutex);
-		if (state.activeSubmissions)
+		if (state.sortedFrameLeases.load(std::memory_order_acquire)
+			|| state.activeSubmissions.load(std::memory_order_acquire))
 		{
-			if (!state.releasePending)
+			if (!state.releasePending.exchange(true,
+				std::memory_order_acq_rel))
 				AdvanceResourceSerialLocked(state);
-			state.releasePending = true;
 			return;
 		}
 		ReleaseRingResourcesLocked(state);

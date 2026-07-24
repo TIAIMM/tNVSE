@@ -59,7 +59,7 @@ namespace fonthook::vectorfont
 	struct A8CompiledRange
 	{
 		A8DrawRange range;
-		std::array<float, 16> constants = {};
+		std::array<float, kNativeA8PacketConstantFloatCount> constants = {};
 		A8CompiledShaderClass shaderClass = A8CompiledShaderClass::Body;
 		bool staticSmoothSampling = false;
 	};

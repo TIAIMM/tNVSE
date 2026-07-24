@@ -954,7 +954,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		NiTexturingProperty* CreatePropertyForDefaultTexture(
+		NiTexturingProperty* CreateDefaultTextureProperty(
 			IDirect3DTexture9*& d3dTexture, AtlasPixelMode mode)
 		{
 			DefaultAtlasTexture* texture = DefaultAtlasTexture::Create(d3dTexture, mode);
@@ -993,7 +993,7 @@ namespace fonthook::vectorfont
 					resource.width, resource.height, mode, resource.mipLevels);
 				if (d3dTexture && PopulateDefaultTexture(d3dTexture, resource, mode))
 				{
-					NiTexturingProperty* property = CreatePropertyForDefaultTexture(
+					NiTexturingProperty* property = CreateDefaultTextureProperty(
 						d3dTexture, mode);
 					if (property)
 					{
@@ -1529,7 +1529,7 @@ namespace fonthook::vectorfont
 			IDirect3DTexture9* d3dTexture = QueryAtlasD3DTexture(*existing);
 			if (!d3dTexture)
 				continue;
-			NiTexturingProperty* property = CreatePropertyForDefaultTexture(
+			NiTexturingProperty* property = CreateDefaultTextureProperty(
 				d3dTexture, resource->pixelMode);
 			if (d3dTexture)
 				d3dTexture->Release();

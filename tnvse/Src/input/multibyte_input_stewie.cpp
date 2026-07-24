@@ -12,6 +12,13 @@ namespace fonthook
 		constexpr UInt32 kStewMenu_SubsettingInputFieldText = 103;
 		constexpr UInt32 kStewieMaxShadowBytes = 1023;
 		constexpr UInt32 kMenuHandleKeyboardInputVTableOffset = 0x30;
+		// Stewie Tweaks 9.90-9.95 keeps the two editable InputField members at
+		// these offsets.  The 9.95 private symbols describe a 0x190-byte
+		// StewMenu with subSettingInput at 0xE8 and searchBar at 0x118.
+		// Accessing the two validated locations is both faster and safer than
+		// probing arbitrary pointer-aligned words beyond the live object.
+		constexpr UInt32 kStewMenuSubsettingInputOffset = 0xE8;
+		constexpr UInt32 kStewMenuSearchInputOffset = 0x118;
 
 		struct StewieShadowState
 		{
@@ -60,6 +67,8 @@ namespace fonthook
 		bool s_stewieReplay = false;
 		SIZE_T s_stewMenuOriginalInputHandler = 0;
 		SIZE_T s_stewMenuHookedEntry = 0;
+		SIZE_T s_stewMenuObservedSuccessor = 0;
+		thread_local UInt32 s_stewieOriginalCallDepth = 0;
 		UInt32 s_tileTraitIsActive = 0;
 		UInt32 s_tileTraitIsSearchActive = 0;
 		UInt32 s_tileTraitCaretIndex = 0;
@@ -313,21 +322,23 @@ namespace fonthook
 			if (!menu)
 				return nullptr;
 
-			// InputField instances are embedded in the StewMenu object. Scan the
-			// small object once and validate only active candidates, instead of
-			// recursively traversing every rendered Tile and rescanning the menu
-			// object for each matching ID.
-			for (UInt32 offset = 0; offset < 0x2000; offset += sizeof(void*))
+			UInt32 offset = 0;
+			switch (id)
 			{
-				Tile* tile = nullptr;
-				if (TryGetActiveStewieInputFieldAtOffset(
-					menu, offset, id, tile, inputType))
-				{
-					return tile;
-				}
+			case kStewMenu_SearchBar:
+				offset = kStewMenuSearchInputOffset;
+				break;
+			case kStewMenu_SubsettingInputFieldText:
+				offset = kStewMenuSubsettingInputOffset;
+				break;
+			default:
+				return nullptr;
 			}
 
-			return nullptr;
+			Tile* tile = nullptr;
+			return TryGetActiveStewieInputFieldAtOffset(
+				menu, offset, id, tile, inputType)
+				? tile : nullptr;
 		}
 
 		StewieInputTarget FindStewMenuTarget(Menu* menu)
@@ -437,9 +448,22 @@ namespace fonthook
 		bool CallStewieOriginalInput(Menu* menu, UInt32 input)
 		{
 			const SIZE_T original = OriginalStewieHandlerForMenu(menu);
-			if (!original)
+			const SIZE_T hook = reinterpret_cast<SIZE_T>(
+				&StewieTweaksInputTargetEx::StewMenuKeyboardInput);
+			if (!original || original == hook || s_stewieOriginalCallDepth)
 				return false;
 
+			struct OriginalCallGuard
+			{
+				OriginalCallGuard()
+				{
+					++s_stewieOriginalCallDepth;
+				}
+				~OriginalCallGuard()
+				{
+					--s_stewieOriginalCallDepth;
+				}
+			} guard;
 			return reinterpret_cast<StewieKeyboardHandler>(original)(menu, input);
 		}
 
@@ -1102,15 +1126,40 @@ namespace fonthook
 				SIZE_T entry = *reinterpret_cast<SIZE_T*>(stewMenu) + kMenuHandleKeyboardInputVTableOffset;
 				SIZE_T current = *reinterpret_cast<SIZE_T*>(entry);
 				const SIZE_T hook = reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::StewMenuKeyboardInput);
-				if (current != hook)
+				if (!s_stewMenuHookedEntry)
 				{
+					if (!current || current == hook)
+						return;
 					s_stewMenuOriginalInputHandler = current;
 					s_stewMenuHookedEntry = entry;
 					SafeWrite32(entry, hook);
+					if (*reinterpret_cast<SIZE_T*>(entry) != hook)
+					{
+						s_stewMenuOriginalInputHandler = 0;
+						s_stewMenuHookedEntry = 0;
+						return;
+					}
 					DebugLog(
 						"tnvse_multibyte_input: chained StewMenu handler=0x%08X",
 						static_cast<UInt32>(current));
 					gLog.FormattedMessage("tnvse_multibyte_input: Stewie Tweaks StewMenu input adapter installed");
+					return;
+				}
+
+				if (entry != s_stewMenuHookedEntry || current == hook)
+					return;
+
+				// A later plugin now owns the vtable slot.  It may already keep
+				// this adapter as its predecessor, so writing ourselves back on
+				// top can form tNVSE -> successor -> tNVSE and recurse forever.
+				// Leave the later hook in place and retain our original
+				// predecessor for calls that still reach this adapter.
+				if (current != s_stewMenuObservedSuccessor)
+				{
+					s_stewMenuObservedSuccessor = current;
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: StewMenu adapter left below later handler=0x%08X",
+						static_cast<UInt32>(current));
 				}
 			}
 		}
@@ -1177,6 +1226,7 @@ namespace fonthook
 			s_stewieReplay = false;
 			s_lastStewTargetPollTick = 0;
 			s_observedStewTarget = {};
+			s_stewMenuObservedSuccessor = 0;
 		}
 
 		bool __fastcall StewieTweaksInputTargetEx::StewMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)

@@ -38,9 +38,10 @@ namespace fonthook::vectorfont
 		public:
 			// The native profile mirrors the stock Tile value into c0 for its final
 			// packet and deliberately leaves it there, matching an ordinary Tile
-			// draw. Only tNVSE-owned c1-c4 need isolation from the next shader.
+			// draw. Only tNVSE-owned c1-c8 need isolation from the next shader.
 			static constexpr UINT kFirstRegister = 1;
-			static constexpr UINT kRegisterCount = 4;
+			static constexpr UINT kRegisterCount =
+				static_cast<UINT>(kNativeA8PacketConstantRegisterCount);
 			static constexpr size_t kFloatCount = kRegisterCount * 4;
 
 			explicit NativePixelConstantScope(IDirect3DDevice9* device)
@@ -302,6 +303,208 @@ namespace fonthook::vectorfont
 			NativeA8RingSubmission submission;
 		};
 
+		class NativeFacadeShaderBatchScope
+		{
+		public:
+			NativeFacadeShaderBatchScope()
+			{
+				BeginNativeA8FacadeShaderBatch();
+			}
+
+			~NativeFacadeShaderBatchScope()
+			{
+				EndNativeA8FacadeShaderBatch();
+			}
+		};
+
+		struct NativePacketDrawResult
+		{
+			bool runtimeFault = false;
+			bool drewPacket = false;
+			bool constantStateFault = false;
+			NativeA8FallbackReason failure =
+				NativeA8FallbackReason::RuntimeFault;
+			const char* operation = "generation-changed-after-packet";
+			HRESULT result = D3DERR_DEVICELOST;
+			SInt32 mismatchRegister = -1;
+		};
+
+		NativePacketDrawResult DrawNativePacketSet(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			bool setupDrawmode, NiTriShape* facade,
+			NativeA8ShapePayload& payload)
+		{
+			NativePacketDrawResult draw;
+			NativeRingSubmissionScope ringScope;
+			NativeA8FallbackReason failure = BeginNativeA8RingSubmission(
+				facade, payload, ringScope.submission);
+			if (failure != NativeA8FallbackReason::None)
+			{
+				draw.runtimeFault = true;
+				draw.failure = failure;
+				draw.operation = "ring-submission";
+			}
+			NativeTilePacketScope packetScope(pass);
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			IDirect3DDevice9* device = renderer
+				? renderer->GetD3DDevice() : nullptr;
+			if (!device)
+			{
+				draw.runtimeFault = true;
+				draw.constantStateFault = true;
+				draw.operation = "capture-pixel-constants";
+				draw.result = D3DERR_DEVICELOST;
+			}
+			const bool batchedConstants =
+				s_pixelConstantBatch.FrameActive();
+			std::optional<NativePixelConstantScope> localConstants;
+			if (!draw.runtimeFault)
+			{
+				NativeFacadeShaderBatchScope shaderBatchScope;
+				// Retail 0xB64F90 calls 0xB994F0 once per sorted item with no
+				// intervening draw. Capture c1-c8 once for that sorted batch and
+				// preserve the local scope for direct/non-sorted submissions.
+				if (batchedConstants)
+				{
+					if (!s_pixelConstantBatch.EnsureCaptured(device))
+					{
+						draw.runtimeFault = true;
+						draw.constantStateFault = true;
+						draw.operation = s_pixelConstantBatch.Operation();
+						draw.result = s_pixelConstantBatch.Result();
+						draw.mismatchRegister =
+							s_pixelConstantBatch.MismatchRegister();
+					}
+				}
+				else
+				{
+					localConstants.emplace(device);
+					if (!localConstants->Captured())
+					{
+						draw.runtimeFault = true;
+						draw.constantStateFault = true;
+						draw.operation = localConstants->Operation();
+						draw.result = localConstants->Result();
+					}
+				}
+				for (UInt32 packetIndex = 0; !draw.runtimeFault
+					&& packetIndex < payload.packetShaders.size(); ++packetIndex)
+				{
+					NiTriShape* proxyShape = nullptr;
+					const NativeA8FallbackReason packetFailure =
+						PrepareNativeA8RingPacket(facade, payload,
+							ringScope.submission, packetIndex, proxyShape);
+					if (packetFailure != NativeA8FallbackReason::None
+						|| !proxyShape)
+					{
+						draw.runtimeFault = true;
+						draw.failure =
+							packetFailure != NativeA8FallbackReason::None
+								? packetFailure
+								: NativeA8FallbackReason::RuntimeFault;
+						draw.operation = "ring-packet";
+						break;
+					}
+					packetScope.Select(proxyShape);
+					State().originalTileRenderPass(pass, currentPass, false,
+						true, setupDrawmode);
+					draw.drewPacket = true;
+					RecordFreeTypePerf(FreeTypePerfCounter::TilePass);
+					const std::vector<NativeA8PacketTemplate>& activePackets =
+						GetNativeA8Packets(*payload.payloadTemplate,
+							payload.useCompositePackets);
+					if (packetIndex < activePackets.size()
+						&& activePackets[packetIndex].shaderClass
+							== NativeA8ShaderClass::Composite)
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::CompositeDraw);
+					}
+					if (!IsNativeA8ShaderGenerationCurrent(
+						payload.preparedGeneration))
+					{
+						draw.runtimeFault = true;
+						break;
+					}
+				}
+				if (!batchedConstants && localConstants
+					&& !localConstants->RestoreAndVerify())
+				{
+					draw.runtimeFault = true;
+					draw.constantStateFault = true;
+					draw.operation = localConstants->Operation();
+					draw.result = localConstants->Result();
+					draw.mismatchRegister =
+						localConstants->MismatchRegister();
+				}
+			}
+			if (batchedConstants && draw.runtimeFault
+				&& !FlushNativePixelConstantBatch("native-runtime-fault"))
+			{
+				draw.constantStateFault = true;
+				draw.operation = s_pixelConstantBatch.Operation();
+				draw.result = s_pixelConstantBatch.Result();
+				draw.mismatchRegister =
+					s_pixelConstantBatch.MismatchRegister();
+			}
+			return draw;
+		}
+
+		struct CompositeBakeDrawContext
+		{
+			BSShaderProperty::RenderPass* pass = nullptr;
+			UInt32 currentPass = 0;
+			bool setupDrawmode = false;
+			NiTriShape* facade = nullptr;
+			const A8ShapeMetadata* metadata = nullptr;
+			NativeA8ShapePayload* payload = nullptr;
+			NativeA8ShapePayload fallbackPayload;
+			bool fallbackPrepared = false;
+		};
+
+		bool DrawCompositeBake(void* context, bool fallback)
+		{
+			CompositeBakeDrawContext* bake =
+				static_cast<CompositeBakeDrawContext*>(context);
+			if (!bake || !bake->pass || !bake->facade || !bake->metadata
+				|| !bake->payload || !bake->payload->payloadTemplate)
+				return false;
+
+			NativeA8ShapePayload* drawPayload = bake->payload;
+			if (fallback)
+			{
+				if (!bake->fallbackPrepared)
+				{
+					const NativeA8PayloadTemplate& artifact =
+						*bake->payload->payloadTemplate;
+					bake->fallbackPayload.payloadTemplate =
+						bake->payload->payloadTemplate;
+					bake->fallbackPayload.geometryOrigin =
+						bake->payload->geometryOrigin;
+					bake->fallbackPayload.packetShaders.assign(
+						artifact.packets.size(), nullptr);
+					bake->fallbackPayload.preflightAtlasTextures.assign(
+						artifact.atlasTextures.size(), nullptr);
+					bake->fallbackPayload.compositeAttemptGeneration =
+						GetNativeA8ShaderGeneration();
+					bake->fallbackPayload.compositeUnavailable = true;
+					bake->fallbackPayload.buildComplete = true;
+					if (PrepareNativeA8Group(bake->facade, *bake->metadata,
+						bake->fallbackPayload) != NativeA8FallbackReason::None
+						|| bake->fallbackPayload.useCompositePackets)
+					{
+						return false;
+					}
+					bake->fallbackPrepared = true;
+				}
+				drawPayload = &bake->fallbackPayload;
+			}
+			const NativePacketDrawResult result = DrawNativePacketSet(
+				bake->pass, bake->currentPass, bake->setupDrawmode,
+				bake->facade, *drawPayload);
+			return !result.runtimeFault && result.drewPacket;
+		}
+
 		void LogMissingMetadata(NiTriShape* shape, const char* phase)
 		{
 			if (!g_bEnableFreeTypeFontRenderingLog)
@@ -433,6 +636,7 @@ namespace fonthook::vectorfont
 		{
 			if (s_pixelConstantBatch.FrameActive())
 				FlushNativePixelConstantBatch("before-stock-tile");
+			InvalidateNativeA8SortedShaderState();
 			state.originalTileRenderPass(pass, currentPass, testAlpha,
 				blendAlpha, setupDrawmode);
 			return;
@@ -497,121 +701,51 @@ namespace fonthook::vectorfont
 
 		if (failure == NativeA8FallbackReason::None)
 		{
-			bool runtimeFault = false;
-			bool drewPacket = false;
-			bool constantStateFault = false;
-			NativeA8FallbackReason runtimeFailure =
-				NativeA8FallbackReason::RuntimeFault;
-			const char* faultOperation = "generation-changed-after-packet";
-			HRESULT faultResult = D3DERR_DEVICELOST;
-			SInt32 faultRegister = -1;
+			NativeA8ShapePayload* const sourcePayload = payload;
+			NativeA8ShapePayload* drawPayload = sourcePayload;
+			bool cacheHit = false;
+			if (NativeA8ShapePayload* cachedPayload =
+				ProbeNativeA8CompositeCache(shape, *metadata, *sourcePayload))
 			{
-				NativeRingSubmissionScope ringScope;
-				failure = BeginNativeA8RingSubmission(shape, *payload,
-					ringScope.submission);
-				if (failure != NativeA8FallbackReason::None)
+				const NativeA8FallbackReason cachePreflight =
+					PrepareNativeA8Group(shape, *metadata, *cachedPayload);
+				if (cachePreflight == NativeA8FallbackReason::None)
 				{
-					runtimeFault = true;
-					runtimeFailure = failure;
-					faultOperation = "ring-submission";
+					drawPayload = cachedPayload;
+					cacheHit = true;
 				}
-				NativeTilePacketScope packetScope(pass);
-				NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-				IDirect3DDevice9* device = renderer
-					? renderer->GetD3DDevice() : nullptr;
-				if (!device)
+				else
 				{
-					runtimeFault = true;
-					constantStateFault = true;
-					faultOperation = "capture-pixel-constants";
-					faultResult = D3DERR_DEVICELOST;
-				}
-				const bool batchedConstants =
-					s_pixelConstantBatch.FrameActive();
-				std::optional<NativePixelConstantScope> localConstants;
-				if (!runtimeFault)
-				{
-					// Retail 0xB64F90 calls 0xB994F0 once per sorted item with no
-					// intervening draw; this hook is that call boundary. Consecutive
-					// native facades therefore share one c1-c4 capture, while every
-					// stock/non-native item and the frame end flush first.
-					if (batchedConstants)
-					{
-						if (!s_pixelConstantBatch.EnsureCaptured(device))
-						{
-							runtimeFault = true;
-							constantStateFault = true;
-							faultOperation =
-								s_pixelConstantBatch.Operation();
-							faultResult = s_pixelConstantBatch.Result();
-							faultRegister =
-								s_pixelConstantBatch.MismatchRegister();
-						}
-					}
-					else
-					{
-						localConstants.emplace(device);
-						if (!localConstants->Captured())
-						{
-							runtimeFault = true;
-							constantStateFault = true;
-							faultOperation = localConstants->Operation();
-							faultResult = localConstants->Result();
-						}
-					}
-					for (UInt32 packetIndex = 0; !runtimeFault
-						&& packetIndex < payload->packetShaders.size(); ++packetIndex)
-					{
-						NiTriShape* proxyShape = nullptr;
-						const NativeA8FallbackReason packetFailure =
-							PrepareNativeA8RingPacket(shape, *payload,
-								ringScope.submission, packetIndex, proxyShape);
-						if (packetFailure != NativeA8FallbackReason::None || !proxyShape)
-						{
-							runtimeFault = true;
-							runtimeFailure = packetFailure != NativeA8FallbackReason::None
-								? packetFailure : NativeA8FallbackReason::RuntimeFault;
-							faultOperation = "ring-packet";
-							break;
-						}
-						packetScope.Select(proxyShape);
-						// The distance-field shader already produces continuous coverage.
-						// The stock Tile call enables alpha testing for UI items,
-						// which would threshold and discard those edge samples.
-						state.originalTileRenderPass(pass, currentPass, false,
-							true, setupDrawmode);
-						drewPacket = true;
-						if (!IsNativeA8ShaderGenerationCurrent(
-							payload->preparedGeneration))
-						{
-							runtimeFault = true;
-							break;
-						}
-					}
-					if (!batchedConstants && localConstants
-						&& !localConstants->RestoreAndVerify())
-					{
-						runtimeFault = true;
-						constantStateFault = true;
-						faultOperation = localConstants->Operation();
-						faultResult = localConstants->Result();
-						faultRegister =
-							localConstants->MismatchRegister();
-					}
-				}
-				if (batchedConstants && runtimeFault
-					&& !FlushNativePixelConstantBatch(
-						"native-runtime-fault"))
-				{
-					constantStateFault = true;
-					faultOperation = s_pixelConstantBatch.Operation();
-					faultResult = s_pixelConstantBatch.Result();
-					faultRegister =
-						s_pixelConstantBatch.MismatchRegister();
+					InvalidateNativeA8CompositeCacheHit(*sourcePayload);
 				}
 			}
-			if (!runtimeFault)
+
+			NativePacketDrawResult draw = DrawNativePacketSet(pass,
+				currentPass, setupDrawmode, shape, *drawPayload);
+			if (cacheHit && draw.runtimeFault && !draw.drewPacket)
 			{
+				// A cache-only profile/resource failure must not suppress text. The
+				// already validated source payload remains the immediate fallback.
+				InvalidateNativeA8CompositeCacheHit(*sourcePayload);
+				drawPayload = sourcePayload;
+				cacheHit = false;
+				draw = DrawNativePacketSet(pass, currentPass,
+					setupDrawmode, shape, *drawPayload);
+			}
+			if (!draw.runtimeFault)
+			{
+				if (!cacheHit)
+				{
+					CompositeBakeDrawContext bake;
+					bake.pass = pass;
+					bake.currentPass = currentPass;
+					bake.setupDrawmode = setupDrawmode;
+					bake.facade = shape;
+					bake.metadata = metadata;
+					bake.payload = sourcePayload;
+					TryGenerateNativeA8CompositeCache(shape, *metadata,
+						*sourcePayload, &DrawCompositeBake, &bake);
+				}
 				if (g_bEnableFreeTypeFontRenderingLog
 					&& !state.loggedTileRenderPassHit)
 				{
@@ -619,28 +753,37 @@ namespace fonthook::vectorfont
 					gLog.FormattedMessage(
 						"tnvse_freetype_native: native Tile group route hit shape=%p font=%u pass=%u packets=%u ranges=%u",
 						shape, metadata->fontId, currentPass,
-						static_cast<UInt32>(payload->packetShaders.size()),
-						payload->payloadTemplate
-							? payload->payloadTemplate->sourceRangeCount : 0u);
+						static_cast<UInt32>(drawPayload->packetShaders.size()),
+						sourcePayload->payloadTemplate
+							? sourcePayload->payloadTemplate->sourceRangeCount
+							: 0u);
 				}
 				return;
 			}
-			if (constantStateFault)
+			if (cacheHit)
+				InvalidateNativeA8CompositeCacheHit(*sourcePayload);
+			InvalidateNativeA8SortedShaderState();
+			if (draw.constantStateFault)
 			{
-				MarkNativeA8GenerationFault(payload->preparedGeneration,
-					faultOperation, faultResult);
+				MarkNativeA8GenerationFault(drawPayload->preparedGeneration,
+					draw.operation, draw.result);
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: pixel-constant isolation fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-native-group",
-					faultOperation, static_cast<UInt32>(faultResult), faultRegister,
-					shape, metadata->fontId, payload->preparedGeneration,
-					drewPacket ? 1 : 0);
+					draw.operation, static_cast<UInt32>(draw.result),
+					draw.mismatchRegister, shape, metadata->fontId,
+					drawPayload->preparedGeneration,
+					draw.drewPacket ? 1 : 0);
 			}
-			if (drewPacket)
+			if (draw.drewPacket)
 			{
-				MarkNativeA8RuntimeFault(*metadata, *payload, runtimeFailure);
+				if (!cacheHit)
+				{
+					MarkNativeA8RuntimeFault(*metadata, *sourcePayload,
+						draw.failure);
+				}
 				return;
 			}
-			failure = runtimeFailure;
+			failure = draw.failure;
 		}
 
 		RecordNativeA8Suppression(shape, *metadata, failure, "tile-render-pass");

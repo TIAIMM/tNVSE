@@ -67,13 +67,23 @@ namespace fonthook::vectorfont
 		struct NativeShaderGeneration;
 		struct NativeShaderProfile;
 
+		struct NativeSortedShaderBatch
+		{
+			IDirect3DDevice9* device = nullptr;
+			UInt32 generation = 0;
+			UInt32 depth = 0;
+			bool samplerReady = false;
+		};
+
+		thread_local NativeSortedShaderBatch s_sortedShaderBatch;
+
 		struct NativeProfileKey
 		{
 			NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
 			NativeA8Sampling sampling = NativeA8Sampling::Point;
 			EffectQuality quality = EffectQuality::Balanced;
 			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
-			std::array<UInt32, 16> constantBits = {};
+			std::array<UInt32, kNativeA8PacketConstantFloatCount> constantBits = {};
 			bool writeEffectAlpha = false;
 			bool usesLiveTileRgb = true;
 
@@ -131,14 +141,16 @@ namespace fonthook::vectorfont
 		{
 			NativeShaderProfile(NativeShaderGeneration& generation,
 				const NativeProfileKey& profileKey,
-				const std::array<float, 16>& packetConstants)
+				const std::array<float,
+					kNativeA8PacketConstantFloatCount>& packetConstants)
 				: owner(&generation), key(profileKey), constants(packetConstants)
 			{
 			}
 
 			NativeShaderGeneration* const owner;
 			const NativeProfileKey key;
-			const std::array<float, 16> constants;
+			const std::array<float,
+				kNativeA8PacketConstantFloatCount> constants;
 			NiPointer<TileShader> shaderOwner;
 			TileShader* shader = nullptr;
 			NativeTileVtableBlock* vtable = nullptr;
@@ -156,8 +168,12 @@ namespace fonthook::vectorfont
 			NiDX9ShaderDeclarationPtr declaration;
 			IDirect3DVertexDeclaration9* d3dDeclaration = nullptr;
 			NiD3DVertexShaderPtr vertexShader;
+			NiD3DVertexShaderPtr cacheVertexShader;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
+			std::array<NiD3DPixelShaderPtr, 3> compositeShaders;
+			NiD3DPixelShaderPtr compositeValidationShader;
+			NiD3DPixelShaderPtr cachePixelShader;
 			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
 			bool supportsSeparateAlpha = false;
 			std::atomic<bool> runtimeFault = false;
@@ -179,6 +195,19 @@ namespace fonthook::vectorfont
 		std::atomic<bool> s_invalidVtableLogged = false;
 		std::atomic<bool> s_resetInProgress = false;
 		NiDX9Renderer* s_resetRenderer = nullptr;
+
+		struct NativeFacadeShaderBatch
+		{
+			std::array<float, 4> tileColor = {};
+			std::array<float, kNativeA8PacketConstantFloatCount>
+				packetConstants = {};
+			UInt32 depth = 0;
+			bool stockConstantsReady = false;
+			bool packetConstantsReady = false;
+			bool samplerReady = false;
+		};
+
+		thread_local NativeFacadeShaderBatch s_facadeShaderBatch;
 
 		bool HasShaderHandle(const NiD3DVertexShaderPtr& shader)
 		{
@@ -281,7 +310,21 @@ namespace fonthook::vectorfont
 			StockUpdateConstantsFn stockUpdate = block && block->stockUpdateConstants
 				? block->stockUpdateConstants
 				: reinterpret_cast<StockUpdateConstantsFn>(kTileShaderUpdateConstants);
-			stockUpdate(shader, properties);
+			NativeFacadeShaderBatch& batch = s_facadeShaderBatch;
+			const bool batchActive = batch.depth != 0;
+			const bool reuseStockConstants = batchActive
+				&& batch.stockConstantsReady;
+			if (!reuseStockConstants)
+			{
+				stockUpdate(shader, properties);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StockConstantUpdate);
+			}
+			else
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StockConstantReuse);
+			}
 			NativeShaderProfile* profile = block ? block->profile : nullptr;
 			if (!profile || profile->shader != shader || !profile->owner)
 			{
@@ -309,46 +352,154 @@ namespace fonthook::vectorfont
 					D3DERR_DEVICELOST);
 				return;
 			}
+			std::array<float, 16> bakeWvp = {};
+			if (GetNativeA8BakeWvp(bakeWvp))
+			{
+				const HRESULT wvpResult = device->SetVertexShaderConstantF(
+					0, bakeWvp.data(), 4);
+				if (FAILED(wvpResult))
+				{
+					MarkGenerationFault(generation,
+						"SetVertexShaderConstantF(cache-bake)", wvpResult);
+					return;
+				}
+				const HRESULT separateResult = device->SetRenderState(
+					D3DRS_SEPARATEALPHABLENDENABLE, TRUE);
+				const HRESULT sourceAlphaResult = device->SetRenderState(
+					D3DRS_SRCBLENDALPHA, D3DBLEND_ONE);
+				const HRESULT destinationAlphaResult = device->SetRenderState(
+					D3DRS_DESTBLENDALPHA, D3DBLEND_INVSRCALPHA);
+				const HRESULT alphaOperationResult = device->SetRenderState(
+					D3DRS_BLENDOPALPHA, D3DBLENDOP_ADD);
+				if (FAILED(separateResult) || FAILED(sourceAlphaResult)
+					|| FAILED(destinationAlphaResult)
+					|| FAILED(alphaOperationResult))
+				{
+					MarkGenerationFault(generation,
+						"SetRenderState(cache-premultiplied-alpha)", E_FAIL);
+					return;
+				}
+			}
 
 			// Stock UpdateConstants refreshes Gamebryo's CPU-side constant maps, but
-			// the native profiles bind different pixel programs and upload c1-c4
+			// the native profiles bind different pixel programs and upload c1-c8
 			// directly. Mirror the retail c0 definition from this submission's actual
-			// property state and publish the complete c0-c4 device packet atomically.
+			// property state and publish the complete c0-c8 device packet atomically.
 			// This prevents constant-map change tracking from leaving a stale Tile RGB
 			// in a custom profile while preserving the exact stock alpha contract.
-			std::array<float, 20> constants = {};
-			if (!ResolveStockTilePixelConstant(properties, constants.data()))
+			std::array<float,
+				(kNativeA8PacketConstantRegisterCount + 1) * 4> constants = {};
+			if (reuseStockConstants)
+			{
+				std::copy(batch.tileColor.begin(), batch.tileColor.end(),
+					constants.begin());
+			}
+			else if (!ResolveStockTilePixelConstant(properties, constants.data()))
 			{
 				MarkGenerationFault(generation, "ResolveStockTilePixelConstant", E_FAIL);
 				return;
 			}
+			else if (batchActive)
+			{
+				std::copy_n(constants.begin(), batch.tileColor.size(),
+					batch.tileColor.begin());
+				batch.stockConstantsReady = true;
+			}
 			std::copy(profile->constants.begin(), profile->constants.end(),
 				constants.begin() + 4);
-			const HRESULT constantsResult = device->SetPixelShaderConstantF(0,
-				constants.data(), 5);
+			HRESULT constantsResult = D3D_OK;
+			if (!reuseStockConstants || !batch.packetConstantsReady)
+			{
+				constantsResult = device->SetPixelShaderConstantF(
+					0, constants.data(), static_cast<UINT>(
+						kNativeA8PacketConstantRegisterCount + 1));
+			}
+			else
+			{
+				size_t firstChanged =
+					kNativeA8PacketConstantRegisterCount;
+				size_t lastChanged = 0;
+				for (size_t packetRegister = 0;
+					packetRegister < kNativeA8PacketConstantRegisterCount;
+					++packetRegister)
+				{
+					const size_t firstFloat = packetRegister * 4u;
+					if (std::memcmp(
+						profile->constants.data() + firstFloat,
+						batch.packetConstants.data() + firstFloat,
+						4u * sizeof(float)) != 0)
+					{
+						firstChanged = std::min(
+							firstChanged, packetRegister);
+						lastChanged = packetRegister;
+					}
+				}
+				if (firstChanged < kNativeA8PacketConstantRegisterCount)
+				{
+					constantsResult = device->SetPixelShaderConstantF(
+						static_cast<UINT>(1u + firstChanged),
+						profile->constants.data() + firstChanged * 4u,
+						static_cast<UINT>(
+							lastChanged - firstChanged + 1u));
+				}
+			}
 			if (FAILED(constantsResult))
 			{
-				MarkGenerationFault(generation, "SetPixelShaderConstantF(c0-c4)",
+				MarkGenerationFault(generation, "SetPixelShaderConstantF(c0-c8)",
 					constantsResult);
 				return;
+			}
+			if (batchActive)
+			{
+				batch.packetConstants = profile->constants;
+				batch.packetConstantsReady = true;
 			}
 
 			// Distance-field channels are numeric linear data and pages contain only level
 			// zero. Reassert both states after the stock Tile update, which can
 			// inherit them from an unrelated preceding pass.
-			const HRESULT srgbResult = device->SetSamplerState(
-				0, D3DSAMP_SRGBTEXTURE, FALSE);
-			if (FAILED(srgbResult))
+			NativeSortedShaderBatch& sortedBatch = s_sortedShaderBatch;
+			const bool sortedSamplerReady = sortedBatch.depth
+				&& sortedBatch.samplerReady
+				&& sortedBatch.device == device
+				&& sortedBatch.generation == generation->id;
+			if ((!batchActive || !batch.samplerReady)
+				&& !sortedSamplerReady)
 			{
-				MarkGenerationFault(generation,
-					"SetSamplerState(SRGBTEXTURE)", srgbResult);
-				return;
+				const HRESULT srgbResult = device->SetSamplerState(
+					0, D3DSAMP_SRGBTEXTURE, FALSE);
+				if (FAILED(srgbResult))
+				{
+					MarkGenerationFault(generation,
+						"SetSamplerState(SRGBTEXTURE)", srgbResult);
+					return;
+				}
+				const HRESULT mipResult = device->SetSamplerState(
+					0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+				if (FAILED(mipResult))
+				{
+					MarkGenerationFault(generation,
+						"SetSamplerState(MIPFILTER)", mipResult);
+					return;
+				}
+				if (batchActive)
+					batch.samplerReady = true;
+				if (sortedBatch.depth)
+				{
+					sortedBatch.device = device;
+					sortedBatch.generation = generation->id;
+					sortedBatch.samplerReady = true;
+				}
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SamplerStateSet);
 			}
-			const HRESULT mipResult = device->SetSamplerState(
-				0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-			if (FAILED(mipResult))
-				MarkGenerationFault(generation,
-					"SetSamplerState(MIPFILTER)", mipResult);
+			else
+			{
+				if (batchActive)
+					batch.samplerReady = true;
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SamplerStateReuse);
+			}
 		}
 
 		NativeProfileKey MakeProfileKey(const NativeA8PacketTemplate& packet,
@@ -370,8 +521,9 @@ namespace fonthook::vectorfont
 			const NativeA8PacketTemplate& packet,
 			bool scaledFillSampling)
 		{
-			static_cast<void>(packet);
 			static_cast<void>(scaledFillSampling);
+			if (packet.shaderClass == NativeA8ShaderClass::CachedImage)
+				return NativeA8Sampling::Point;
 			// Distance-field atlas pages are explicitly level-zero-only.
 			return NativeA8Sampling::LinearLod0;
 		}
@@ -394,7 +546,8 @@ namespace fonthook::vectorfont
 			NativeShaderGeneration& generation,
 			const NativeA8PacketTemplate& packet)
 		{
-			if (packet.distanceFieldMethod != generation.distanceFieldMethod)
+			if (packet.shaderClass != NativeA8ShaderClass::CachedImage
+				&& packet.distanceFieldMethod != generation.distanceFieldMethod)
 				return nullptr;
 			switch (packet.shaderClass)
 			{
@@ -410,6 +563,14 @@ namespace fonthook::vectorfont
 				return index < generation.effectShaders.size()
 					? generation.effectShaders[index].m_pObject : nullptr;
 			}
+			case NativeA8ShaderClass::Composite:
+			{
+				const size_t index = static_cast<size_t>(packet.quality);
+				return index < generation.compositeShaders.size()
+					? generation.compositeShaders[index].m_pObject : nullptr;
+			}
+			case NativeA8ShaderClass::CachedImage:
+				return generation.cachePixelShader.m_pObject;
 			default:
 				return nullptr;
 			}
@@ -442,6 +603,25 @@ namespace fonthook::vectorfont
 			SetPassRenderState(&pass, D3DRS_ZENABLE, FALSE);
 			SetPassRenderState(&pass, D3DRS_ZWRITEENABLE, FALSE);
 			SetPassRenderState(&pass, D3DRS_ALPHATESTENABLE, FALSE);
+			if (profile.key.shaderClass == NativeA8ShaderClass::CachedImage)
+			{
+				SetPassRenderState(&pass, D3DRS_ALPHABLENDENABLE, TRUE);
+				SetPassRenderState(&pass, D3DRS_SRCBLEND, D3DBLEND_ONE);
+				SetPassRenderState(&pass, D3DRS_DESTBLEND,
+					D3DBLEND_INVSRCALPHA);
+				SetPassRenderState(&pass, D3DRS_BLENDOP, D3DBLENDOP_ADD);
+				if (generation.supportsSeparateAlpha)
+				{
+					SetPassRenderState(&pass,
+						D3DRS_SEPARATEALPHABLENDENABLE, TRUE);
+					SetPassRenderState(&pass, D3DRS_SRCBLENDALPHA,
+						D3DBLEND_ONE);
+					SetPassRenderState(&pass, D3DRS_DESTBLENDALPHA,
+						D3DBLEND_INVSRCALPHA);
+					SetPassRenderState(&pass, D3DRS_BLENDOPALPHA,
+						D3DBLENDOP_ADD);
+				}
+			}
 
 			if (profile.effectPass)
 			{
@@ -478,6 +658,12 @@ namespace fonthook::vectorfont
 				packet);
 			if (!pixelShader || !pixelShader->GetShaderHandle())
 				return nullptr;
+			NiD3DVertexShader* vertexShader =
+				packet.shaderClass == NativeA8ShaderClass::CachedImage
+					? generation.cacheVertexShader.m_pObject
+					: generation.vertexShader.m_pObject;
+			if (!vertexShader || !vertexShader->GetShaderHandle())
+				return nullptr;
 
 			NiPointer<TileShader> shaderGuard =
 				StdCall<TileShader*>(kTileShaderCreate);
@@ -489,23 +675,26 @@ namespace fonthook::vectorfont
 			if (!pass || pass->m_uiStageCount < 1 || !stockVtable)
 				return nullptr;
 
-			// Preserve the complete immutable c1-c4 packet ABI. COLOR0 now owns
+			// Preserve the complete immutable c1-c8 packet ABI. COLOR0 now owns
 			// only the shared per-glyph base modifier, so replacing c1 with the
 			// historical identity value would turn every fixed effect layer white.
 			auto* profile = new NativeShaderProfile(generation, key,
 				packet.constants);
 			profile->shader = shader;
-			profile->effectPass = packet.layer != 3;
+			profile->effectPass =
+				packet.shaderClass != NativeA8ShaderClass::Composite
+				&& packet.shaderClass != NativeA8ShaderClass::CachedImage
+				&& packet.layer != 3;
 
 			profile->shaderOwner = shaderGuard;
 			shader->m_spShaderDecl = generation.declaration.m_pObject;
 			shader->spShaderDeclarations[0] = generation.declaration.m_pObject;
 			shader->spShaderDeclarations[1] = generation.declaration.m_pObject;
 			for (NiD3DVertexShaderPtr& slot : shader->spVertexShaders)
-				slot = generation.vertexShader.m_pObject;
+				slot = vertexShader;
 			for (NiD3DPixelShaderPtr& slot : shader->spPixelShaders)
 				slot = pixelShader;
-			pass->m_spVertexShader = generation.vertexShader.m_pObject;
+			pass->m_spVertexShader = vertexShader;
 			pass->m_spPixelShader = pixelShader;
 			// The TileShader factory already pairs the base pass with spPasses[0].
 			// Avoid an unnecessary NiD3DPass smart-pointer ref-count transition;
@@ -534,7 +723,7 @@ namespace fonthook::vectorfont
 			// static lookup tables incorrectly; never allocate/copy it with sizeof.
 			NiDX9ShaderDeclarationPtr declaration =
 				CdeclCall<NiDX9ShaderDeclaration*>(kShaderDeclarationCreate,
-					generation.renderer, 3u, 1u);
+					generation.renderer, 4u, 1u);
 			if (!declaration)
 			{
 				failure = "declaration-factory";
@@ -551,7 +740,10 @@ namespace fonthook::vectorfont
 					ParameterType::SPTYPE_FLOAT2, 0)
 				&& declaration->SetEntry(2, 0,
 					Parameter::SHADERPARAM_NI_COLOR,
-					ParameterType::SPTYPE_UBYTECOLOR, 0);
+					ParameterType::SPTYPE_UBYTECOLOR, 0)
+				&& declaration->SetEntry(3, 0,
+					Parameter::SHADERPARAM_NI_TEXCOORD1,
+					ParameterType::SPTYPE_FLOAT3, 0);
 			if (!entriesReady)
 			{
 				failure = "declaration-entries";
@@ -590,6 +782,10 @@ namespace fonthook::vectorfont
 				GetConfiguredDistanceFieldMethod();
 
 			generation->vertexShader = createVS("tnvse_freetype_native_vs.vso");
+			generation->cacheVertexShader =
+				createVS("tnvse_freetype_native_cache.vso");
+			generation->cachePixelShader =
+				createPS("tnvse_freetype_native_cache.pso");
 			const char* mtsdfFillNames[] = {
 				"tnvse_freetype_native_mtsdf_fill_fast.pso",
 				"tnvse_freetype_native_mtsdf_fill_balanced.pso",
@@ -623,6 +819,27 @@ namespace fonthook::vectorfont
 					? mtsdfEffectNames : trueSdfEffectNames;
 			for (size_t index = 0; index < generation->effectShaders.size(); ++index)
 				generation->effectShaders[index] = createPS(effectNames[index]);
+			const char* mtsdfCompositeNames[] = {
+				"tnvse_freetype_native_mtsdf_composite_fast.pso",
+				"tnvse_freetype_native_mtsdf_composite_balanced.pso",
+				"tnvse_freetype_native_mtsdf_composite_high.pso"
+			};
+			const char* trueSdfCompositeNames[] = {
+				"tnvse_freetype_native_sdf_composite_fast.pso",
+				"tnvse_freetype_native_sdf_composite_balanced.pso",
+				"tnvse_freetype_native_sdf_composite_high.pso"
+			};
+			const char* const* compositeNames =
+				generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
+					? mtsdfCompositeNames : trueSdfCompositeNames;
+			for (size_t index = 0;
+				index < generation->compositeShaders.size(); ++index)
+			{
+				generation->compositeShaders[index] =
+					createPS(compositeNames[index]);
+			}
+			generation->compositeValidationShader =
+				createPS("tnvse_freetype_native_composite_validate.pso");
 
 			if (!HasShaderHandle(generation->vertexShader))
 			{
@@ -694,6 +911,7 @@ namespace fonthook::vectorfont
 			if (beforeReset)
 			{
 				s_resetInProgress.store(true, std::memory_order_release);
+				ClearNativeA8CompositeCache();
 				InvalidateNativeA8RingResources(
 					NativeA8FallbackReason::DeviceReset);
 				NativeShaderGeneration* current = s_publishedGeneration.load(
@@ -852,6 +1070,27 @@ namespace fonthook::vectorfont
 			? current->d3dDeclaration : nullptr;
 	}
 
+	IDirect3DVertexShader9* GetNativeA8CacheD3DVertexShader(UInt32 generation)
+	{
+		NativeShaderGeneration* current = s_publishedGeneration.load(
+			std::memory_order_acquire);
+		return current && current->id == generation
+			&& GenerationMatchesCurrentDevice(current)
+			&& HasShaderHandle(current->cacheVertexShader)
+			? current->cacheVertexShader->GetShaderHandle() : nullptr;
+	}
+
+	IDirect3DPixelShader9* GetNativeA8CompositeValidationD3DPixelShader(
+		UInt32 generation)
+	{
+		NativeShaderGeneration* current = s_publishedGeneration.load(
+			std::memory_order_acquire);
+		return current && current->id == generation
+			&& GenerationMatchesCurrentDevice(current)
+			&& HasShaderHandle(current->compositeValidationShader)
+			? current->compositeValidationShader->GetShaderHandle() : nullptr;
+	}
+
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation)
 	{
 		NativeShaderGeneration* current = s_publishedGeneration.load(
@@ -859,6 +1098,65 @@ namespace fonthook::vectorfont
 		return current && current->id == generation
 			&& !s_resetInProgress.load(std::memory_order_acquire)
 			&& !current->runtimeFault.load(std::memory_order_acquire);
+	}
+
+	void BeginNativeA8SortedShaderBatch()
+	{
+		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
+		if (!batch.depth++)
+		{
+			batch.device = nullptr;
+			batch.generation = 0;
+			batch.samplerReady = false;
+		}
+	}
+
+	void EndNativeA8SortedShaderBatch()
+	{
+		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
+		if (!batch.depth)
+			return;
+		if (!--batch.depth)
+		{
+			batch.device = nullptr;
+			batch.generation = 0;
+			batch.samplerReady = false;
+		}
+	}
+
+	void InvalidateNativeA8SortedShaderState()
+	{
+		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
+		batch.device = nullptr;
+		batch.generation = 0;
+		batch.samplerReady = false;
+	}
+
+	void BeginNativeA8FacadeShaderBatch()
+	{
+		NativeFacadeShaderBatch& batch = s_facadeShaderBatch;
+		++batch.depth;
+		// Each scope owns one facade. A recursive scope deliberately discards the
+		// parent's cached constants; End invalidates the parent again so its next
+		// packet performs one full stock refresh before reuse resumes.
+		batch.tileColor = {};
+		batch.packetConstants = {};
+		batch.stockConstantsReady = false;
+		batch.packetConstantsReady = false;
+		batch.samplerReady = false;
+	}
+
+	void EndNativeA8FacadeShaderBatch()
+	{
+		NativeFacadeShaderBatch& batch = s_facadeShaderBatch;
+		if (!batch.depth)
+			return;
+		--batch.depth;
+		batch.tileColor = {};
+		batch.packetConstants = {};
+		batch.stockConstantsReady = false;
+		batch.packetConstantsReady = false;
+		batch.samplerReady = false;
 	}
 
 	void MarkNativeA8GenerationFault(UInt32 generation,
@@ -906,6 +1204,9 @@ namespace fonthook::vectorfont
 		NativeShaderProfile* profile = CreateProfile(*generation, packet, key);
 		if (!profile)
 		{
+			if (packet.shaderClass == NativeA8ShaderClass::Composite
+				|| packet.shaderClass == NativeA8ShaderClass::CachedImage)
+				return nullptr;
 			MarkGenerationFault(generation, "profile-create",
 				D3DERR_NOTAVAILABLE);
 			return nullptr;

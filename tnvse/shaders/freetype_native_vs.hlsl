@@ -5,6 +5,7 @@ struct NativeFontVertexInput
 	float3 position : POSITION0;
 	float2 atlasUv : TEXCOORD0;
 	float4 baseColor : COLOR0;
+	float3 glyphParams : TEXCOORD1;
 };
 
 struct NativeFontVertexOutput
@@ -12,6 +13,7 @@ struct NativeFontVertexOutput
 	float4 position : POSITION0;
 	float2 atlasUv : TEXCOORD0;
 	float4 baseColor : COLOR0;
+	float3 glyphParams : TEXCOORD1;
 };
 
 NativeFontVertexOutput Main(NativeFontVertexInput input)
@@ -22,5 +24,6 @@ NativeFontVertexOutput Main(NativeFontVertexInput input)
 	output.position = mul(float4(input.position, 1.0), WorldViewProjection);
 	output.atlasUv = input.atlasUv;
 	output.baseColor = input.baseColor;
+	output.glyphParams = input.glyphParams;
 	return output;
 }
