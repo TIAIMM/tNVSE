@@ -198,11 +198,9 @@ namespace fonthook::vectorfont
 
 		struct NativeFacadeShaderBatch
 		{
-			std::array<float, 4> tileColor = {};
 			std::array<float, kNativeA8PacketConstantFloatCount>
 				packetConstants = {};
 			UInt32 depth = 0;
-			bool stockConstantsReady = false;
 			bool packetConstantsReady = false;
 			bool samplerReady = false;
 		};
@@ -312,19 +310,16 @@ namespace fonthook::vectorfont
 				: reinterpret_cast<StockUpdateConstantsFn>(kTileShaderUpdateConstants);
 			NativeFacadeShaderBatch& batch = s_facadeShaderBatch;
 			const bool batchActive = batch.depth != 0;
-			const bool reuseStockConstants = batchActive
-				&& batch.stockConstantsReady;
-			if (!reuseStockConstants)
-			{
-				stockUpdate(shader, properties);
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::StockConstantUpdate);
-			}
-			else
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::StockConstantReuse);
-			}
+			// Retail TileShader::UpdateConstants is also a live render-state
+			// synchronization point: it reapplies Tile scissor and alpha state.
+			// Every native packet invokes a separate stock Tile render pass, so a
+			// preceding effect pass may invalidate those states before the next
+			// packet. Never reuse or skip the stock call across packets. Retail
+			// slot 35 cleanup runs after that pass and releases the paired scissor
+			// and alpha state; do not duplicate that cleanup here.
+			stockUpdate(shader, properties);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::StockConstantUpdate);
 			NativeShaderProfile* profile = block ? block->profile : nullptr;
 			if (!profile || profile->shader != shader || !profile->owner)
 			{
@@ -355,6 +350,13 @@ namespace fonthook::vectorfont
 			std::array<float, 16> bakeWvp = {};
 			if (GetNativeA8BakeWvp(bakeWvp))
 			{
+				// The cache texture deliberately excludes live scissor state; the
+				// final cached-image Tile draw applies it in screen space. Retail
+				// UpdateConstants just re-enabled the facade's screen-space rect,
+				// which cannot be used against this small, origin-local RTT. Disable
+				// it after every stock update so each bake packet reaches the RTT.
+				const HRESULT scissorResult = device->SetRenderState(
+					D3DRS_SCISSORTESTENABLE, FALSE);
 				const HRESULT wvpResult = device->SetVertexShaderConstantF(
 					0, bakeWvp.data(), 4);
 				if (FAILED(wvpResult))
@@ -371,44 +373,32 @@ namespace fonthook::vectorfont
 					D3DRS_DESTBLENDALPHA, D3DBLEND_INVSRCALPHA);
 				const HRESULT alphaOperationResult = device->SetRenderState(
 					D3DRS_BLENDOPALPHA, D3DBLENDOP_ADD);
-				if (FAILED(separateResult) || FAILED(sourceAlphaResult)
+				if (FAILED(scissorResult) || FAILED(separateResult)
+					|| FAILED(sourceAlphaResult)
 					|| FAILED(destinationAlphaResult)
 					|| FAILED(alphaOperationResult))
 				{
 					MarkGenerationFault(generation,
-						"SetRenderState(cache-premultiplied-alpha)", E_FAIL);
+						"SetRenderState(cache-bake)", E_FAIL);
 					return;
 				}
 			}
 
-			// Stock UpdateConstants refreshes Gamebryo's CPU-side constant maps, but
-			// the native profiles bind different pixel programs and upload c1-c8
-			// directly. Mirror the retail c0 definition from this submission's actual
-			// property state and publish the complete c0-c8 device packet atomically.
-			// This prevents constant-map change tracking from leaving a stale Tile RGB
-			// in a custom profile while preserving the exact stock alpha contract.
+			// The native profiles bind different pixel programs and upload c0-c8
+			// directly. The stock update refreshes Tile's color/alpha constant map
+			// on every packet, so c0 must be republished after every stock call even
+			// when its value is unchanged. Only tNVSE-owned c1-c8 may be reused.
 			std::array<float,
 				(kNativeA8PacketConstantRegisterCount + 1) * 4> constants = {};
-			if (reuseStockConstants)
-			{
-				std::copy(batch.tileColor.begin(), batch.tileColor.end(),
-					constants.begin());
-			}
-			else if (!ResolveStockTilePixelConstant(properties, constants.data()))
+			if (!ResolveStockTilePixelConstant(properties, constants.data()))
 			{
 				MarkGenerationFault(generation, "ResolveStockTilePixelConstant", E_FAIL);
 				return;
 			}
-			else if (batchActive)
-			{
-				std::copy_n(constants.begin(), batch.tileColor.size(),
-					batch.tileColor.begin());
-				batch.stockConstantsReady = true;
-			}
 			std::copy(profile->constants.begin(), profile->constants.end(),
 				constants.begin() + 4);
 			HRESULT constantsResult = D3D_OK;
-			if (!reuseStockConstants || !batch.packetConstantsReady)
+			if (!batchActive || !batch.packetConstantsReady)
 			{
 				constantsResult = device->SetPixelShaderConstantF(
 					0, constants.data(), static_cast<UINT>(
@@ -416,6 +406,17 @@ namespace fonthook::vectorfont
 			}
 			else
 			{
+				// c0 is owned by the live Tile submission and may have been touched
+				// by the stock update above. Publish it before applying the minimal
+				// changed c1-c8 interval for this native profile.
+				constantsResult = device->SetPixelShaderConstantF(
+					0, constants.data(), 1);
+				if (FAILED(constantsResult))
+				{
+					MarkGenerationFault(generation,
+						"SetPixelShaderConstantF(c0)", constantsResult);
+					return;
+				}
 				size_t firstChanged =
 					kNativeA8PacketConstantRegisterCount;
 				size_t lastChanged = 0;
@@ -1138,10 +1139,8 @@ namespace fonthook::vectorfont
 		++batch.depth;
 		// Each scope owns one facade. A recursive scope deliberately discards the
 		// parent's cached constants; End invalidates the parent again so its next
-		// packet performs one full stock refresh before reuse resumes.
-		batch.tileColor = {};
+		// packet performs one full native pixel-constant upload.
 		batch.packetConstants = {};
-		batch.stockConstantsReady = false;
 		batch.packetConstantsReady = false;
 		batch.samplerReady = false;
 	}
@@ -1152,9 +1151,7 @@ namespace fonthook::vectorfont
 		if (!batch.depth)
 			return;
 		--batch.depth;
-		batch.tileColor = {};
 		batch.packetConstants = {};
-		batch.stockConstantsReady = false;
 		batch.packetConstantsReady = false;
 		batch.samplerReady = false;
 	}
