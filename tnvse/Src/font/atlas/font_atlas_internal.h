@@ -45,10 +45,6 @@ namespace fonthook::vectorfont
 			* kMaximumMtsdfPrewarmAtlasSize * 4u;
 	static_assert(kMaximumMtsdfPrewarmPageBytes == 16u * 1024u * 1024u);
 	inline constexpr UInt32 kMaximumQuads = 16383;
-	inline constexpr UInt32 kAutomaticAtlasBudgetFallbackMB = 128;
-	inline constexpr UInt32 kAutomaticAtlasBudgetMinimumMB = 64;
-	inline constexpr UInt32 kAutomaticAtlasBudgetMaximumMB = 256;
-	inline constexpr UInt32 kAutomaticAtlasBudgetQuantumMB = 16;
 
 	enum class AtlasLayer : UInt8
 	{
@@ -600,7 +596,6 @@ namespace fonthook::vectorfont
 		std::atomic<bool> defaultPoolMaintenancePending = false;
 		bool budgetResolved = false;
 		size_t resolvedGpuBudgetBytes = 0;
-		UInt32 lastAvailableTextureMemoryMB = 0;
 		UInt32 defaultPoolFailureLogCount = 0;
 		UInt32 atlasFailureLogCount = 0;
 		UInt32 shaderBatchFailureLogCount = 0;
@@ -667,6 +662,7 @@ namespace fonthook::vectorfont
 	void TrimTextArtifactCache(AtlasState& state);
 	void TrimAtlasCpuCachesForTotalBudget();
 	void ResolveGpuAtlasBudget(bool force);
+	bool IsGpuAtlasCacheUnlimited();
 	size_t GetAtlasCacheLimit();
 	UInt32 GetMaximumAtlasSize();
 	bool PlaceBitmap(AtlasResource& resource, const GlyphBitmap& bitmap,

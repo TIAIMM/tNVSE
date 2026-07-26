@@ -752,13 +752,14 @@ are materialized lazily only for restored glyphs that text actually requests;
 runtime-added glyphs attach their existing bitmap directly to the same record.
 
 `uiFreeTypeFontGpuAtlasCacheMB` controls the soft GPU atlas budget. A value of
-zero selects one eighth of the available texture memory, rounded to 16 MB and
-clamped to 64-256 MB; 128 MB is used when the device does not report a reliable
-value. A nonzero value is used directly. Atlas generations still referenced by
-visible game shapes cannot be evicted, so live usage may temporarily exceed the
-soft budget. The resolved value is written to `tnvse.log` at initialization and
-when a device reset changes the automatic result. Validated distance-field
-snapshots restore directly to the DEFAULT pool when enabled. ARGB fallback atlases are
+zero selects full-resident mode: every configured font snapshot is restored
+during the blocking prewarm transaction, and GPU atlas pages are not evicted to
+satisfy a software budget. Obsolete generations that are no longer referenced
+are still reclaimed. A nonzero value is used directly as the soft budget.
+Atlas generations still referenced by visible game shapes cannot be evicted,
+so live usage may temporarily exceed a nonzero soft budget. The selected policy
+is written to `tnvse.log` at initialization. Validated distance-field snapshots
+restore directly to the DEFAULT pool when enabled. ARGB fallback atlases are
 runtime-only and contain three mip levels (1x,
 1/2x, and 1/4x); the cache budget and upload counters include all levels.
 Limiting the chain to three levels together with four-pixel per-side packing

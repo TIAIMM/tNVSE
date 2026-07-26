@@ -1379,12 +1379,23 @@ namespace fonthook::vectorfont
 			TrimAtlasCacheForIncomingBytes(state, incomingStorageBytes);
 			cacheAfter = state.atlasCacheBytes;
 		}
-		gLog.FormattedMessage(
-			"tnvse_freetype_font: atlas restore reservation font=%u incomingMiB=%.2f cacheMiB=%.2f->%.2f budgetMiB=%.2f",
-			config.fontId, incomingStorageBytes / (1024.0 * 1024.0),
-			cacheBefore / (1024.0 * 1024.0),
-			cacheAfter / (1024.0 * 1024.0),
-			GetAtlasCacheLimit() / (1024.0 * 1024.0));
+		if (IsGpuAtlasCacheUnlimited())
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: atlas restore reservation font=%u incomingMiB=%.2f cacheMiB=%.2f->%.2f budget=unlimited",
+				config.fontId, incomingStorageBytes / (1024.0 * 1024.0),
+				cacheBefore / (1024.0 * 1024.0),
+				cacheAfter / (1024.0 * 1024.0));
+		}
+		else
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: atlas restore reservation font=%u incomingMiB=%.2f cacheMiB=%.2f->%.2f budgetMiB=%.2f",
+				config.fontId, incomingStorageBytes / (1024.0 * 1024.0),
+				cacheBefore / (1024.0 * 1024.0),
+				cacheAfter / (1024.0 * 1024.0),
+				GetAtlasCacheLimit() / (1024.0 * 1024.0));
+		}
 
 		const bool singleByteReady = LoadGlyphAtlasSnapshotRole(runtime,
 			VectorFontByteClass::SingleByte, rasterScale, false);
@@ -1456,15 +1467,29 @@ namespace fonthook::vectorfont
 			TrimAtlasCacheForIncomingBytes(state, incomingStorageBytes);
 			cacheAfter = state.atlasCacheBytes;
 		}
-		gLog.FormattedMessage(
-			"tnvse_freetype_font: shared atlas role restore reservation font=%u role=%s incomingMiB=%.2f cacheMiB=%.2f->%.2f budgetMiB=%.2f",
-			GetRuntimeConfig(runtime).fontId,
-			byteClass == VectorFontByteClass::DoubleByte
-				? "doubleByte" : "singleByte",
-			incomingStorageBytes / (1024.0 * 1024.0),
-			cacheBefore / (1024.0 * 1024.0),
-			cacheAfter / (1024.0 * 1024.0),
-			GetAtlasCacheLimit() / (1024.0 * 1024.0));
+		if (IsGpuAtlasCacheUnlimited())
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: shared atlas role restore reservation font=%u role=%s incomingMiB=%.2f cacheMiB=%.2f->%.2f budget=unlimited",
+				GetRuntimeConfig(runtime).fontId,
+				byteClass == VectorFontByteClass::DoubleByte
+					? "doubleByte" : "singleByte",
+				incomingStorageBytes / (1024.0 * 1024.0),
+				cacheBefore / (1024.0 * 1024.0),
+				cacheAfter / (1024.0 * 1024.0));
+		}
+		else
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: shared atlas role restore reservation font=%u role=%s incomingMiB=%.2f cacheMiB=%.2f->%.2f budgetMiB=%.2f",
+				GetRuntimeConfig(runtime).fontId,
+				byteClass == VectorFontByteClass::DoubleByte
+					? "doubleByte" : "singleByte",
+				incomingStorageBytes / (1024.0 * 1024.0),
+				cacheBefore / (1024.0 * 1024.0),
+				cacheAfter / (1024.0 * 1024.0),
+				GetAtlasCacheLimit() / (1024.0 * 1024.0));
+		}
 		if (!LoadGlyphAtlasSnapshotRole(runtime, byteClass, rasterScale, false))
 			return false;
 		AtlasState& state = State();

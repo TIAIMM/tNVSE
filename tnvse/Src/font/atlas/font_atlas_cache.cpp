@@ -55,59 +55,53 @@ namespace fonthook::vectorfont
 			return std::max<UInt32>(64, result);
 		}
 
-		UInt32 ResolveAutomaticGpuBudgetMB(UInt32& availableMB)
-		{
-			availableMB = 0;
-			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
-			if (!device)
-				return kAutomaticAtlasBudgetFallbackMB;
-			availableMB = device->GetAvailableTextureMem() / (1024u * 1024u);
-			if (availableMB < 64 || availableMB > 4096)
-				return kAutomaticAtlasBudgetFallbackMB;
-			UInt32 budget = availableMB / 8u;
-			budget = (budget / kAutomaticAtlasBudgetQuantumMB)
-				* kAutomaticAtlasBudgetQuantumMB;
-			return std::clamp(budget, kAutomaticAtlasBudgetMinimumMB,
-				kAutomaticAtlasBudgetMaximumMB);
-		}
-
 		void ResolveGpuAtlasBudget(bool force)
 		{
 			if (State().budgetResolved && !force)
 				return;
+			const bool wasResolved = State().budgetResolved;
 			const size_t previous = State().resolvedGpuBudgetBytes;
-			UInt32 availableMB = 0;
-			UInt32 resolvedMB = g_uiFreeTypeFontGpuAtlasCacheMB;
-			const bool automatic = resolvedMB == 0;
-			if (automatic)
-				resolvedMB = ResolveAutomaticGpuBudgetMB(availableMB);
-			State().lastAvailableTextureMemoryMB = availableMB;
-			State().resolvedGpuBudgetBytes = static_cast<size_t>(resolvedMB)
-				* 1024u * 1024u;
+			const bool unlimited = g_uiFreeTypeFontGpuAtlasCacheMB == 0;
+			State().resolvedGpuBudgetBytes = unlimited ? 0
+				: static_cast<size_t>(g_uiFreeTypeFontGpuAtlasCacheMB)
+					* 1024u * 1024u;
 			State().budgetResolved = true;
-			if (!previous)
+			if (!wasResolved)
 			{
-				if (automatic)
+				if (unlimited)
 				{
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: GPU atlas cache budget configured=0 resolved=%uMB source=automatic availableTextureMem=%uMB",
-						resolvedMB, availableMB);
+						"tnvse_freetype_font: GPU atlas cache budget configured=0 resolved=unlimited policy=full-resident");
 				}
 				else
 				{
 					gLog.FormattedMessage(
 						"tnvse_freetype_font: GPU atlas cache budget configured=%u resolved=%uMB source=configured",
-						g_uiFreeTypeFontGpuAtlasCacheMB, resolvedMB);
+						g_uiFreeTypeFontGpuAtlasCacheMB,
+						g_uiFreeTypeFontGpuAtlasCacheMB);
 				}
 			}
 			else if (previous != State().resolvedGpuBudgetBytes)
 			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_font: GPU atlas cache budget changed old=%uMB new=%uMB availableTextureMem=%uMB",
-					static_cast<UInt32>(previous / (1024u * 1024u)), resolvedMB,
-					availableMB);
+				if (unlimited)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: GPU atlas cache budget changed old=%uMB new=unlimited policy=full-resident",
+						static_cast<UInt32>(previous / (1024u * 1024u)));
+				}
+				else
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: GPU atlas cache budget changed old=unlimited new=%uMB source=configured",
+						g_uiFreeTypeFontGpuAtlasCacheMB);
+				}
 			}
+		}
+
+		bool IsGpuAtlasCacheUnlimited()
+		{
+			return g_bEnableFreeTypeDefaultPoolAtlas
+				&& g_uiFreeTypeFontGpuAtlasCacheMB == 0;
 		}
 
 		size_t GetAtlasCacheLimit()
@@ -118,9 +112,9 @@ namespace fonthook::vectorfont
 					* 1024u * 1024u / 2u;
 			}
 			ResolveGpuAtlasBudget(false);
-			return State().resolvedGpuBudgetBytes
-				? State().resolvedGpuBudgetBytes
-				: static_cast<size_t>(kAutomaticAtlasBudgetFallbackMB) * 1024u * 1024u;
+			return IsGpuAtlasCacheUnlimited()
+				? std::numeric_limits<size_t>::max()
+				: State().resolvedGpuBudgetBytes;
 		}
 
 
@@ -401,11 +395,21 @@ namespace fonthook::vectorfont
 
 		void TrimAtlasCache(AtlasState& state)
 		{
+			if (IsGpuAtlasCacheUnlimited())
+			{
+				PruneRetiredAtlasGenerations();
+				return;
+			}
 			TrimAtlasCacheToTarget(state, GetAtlasCacheLimit());
 		}
 
 		void TrimAtlasCacheForIncomingBytes(AtlasState& state, size_t incomingBytes)
 		{
+			if (IsGpuAtlasCacheUnlimited())
+			{
+				PruneRetiredAtlasGenerations();
+				return;
+			}
 			const size_t limit = GetAtlasCacheLimit();
 			TrimAtlasCacheToTarget(state,
 				incomingBytes < limit ? limit - incomingBytes : 0);
