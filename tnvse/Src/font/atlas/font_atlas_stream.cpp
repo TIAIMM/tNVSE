@@ -60,6 +60,7 @@ namespace fonthook::vectorfont
 			UInt64 layoutHash = 0;
 			UInt64 maskGenerationHash = 0;
 			UInt64 shaderEffectHash = 0;
+			AtlasRenderMode renderMode = AtlasRenderMode::CpuEffects;
 			bool enabled = false;
 			bool failed = false;
 			std::array<StreamingRole, 2> roles;
@@ -107,19 +108,10 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		AtlasCacheKey BuildBaseKey(const FontConfig& config,
-			VectorFontByteClass byteClass, float rasterScale)
+		bool BuildBaseKey(const FontConfig& config,
+			VectorFontByteClass byteClass, float rasterScale, AtlasCacheKey& key)
 		{
-			return {
-				BuildPrewarmAtlasContentHash(config, byteClass, rasterScale, true),
-				config.fontId,
-				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
-				GetConfiguredDistanceFieldAtlasPixelMode(),
-				AtlasRenderMode::ShaderEffects,
-				kDistanceFieldAtlasPadding,
-				true,
-				byteClass
-			};
+			return ResolvePrewarmAtlasKey(config, byteClass, rasterScale, key);
 		}
 
 		UInt64 BuildSnapshotHash(const AtlasCacheKey& key, UInt64 maskContentHash,
@@ -145,11 +137,14 @@ namespace fonthook::vectorfont
 				sizeof(kMaximumAtlasMipLevels), hash);
 			hash = HashBytes(&A8ShapeColorContract::kTileUniformColorAbi,
 				sizeof(A8ShapeColorContract::kTileUniformColorAbi), hash);
-			const DistanceFieldMethod method =
-				GetConfiguredDistanceFieldMethod();
-			const UInt32 revision = DistanceFieldGeneratorRevision(method);
-			hash = HashBytes(&method, sizeof(method), hash);
-			hash = HashBytes(&revision, sizeof(revision), hash);
+			if (key.renderMode == AtlasRenderMode::ShaderEffects)
+			{
+				const DistanceFieldMethod method =
+					GetConfiguredDistanceFieldMethod();
+				const UInt32 revision = DistanceFieldGeneratorRevision(method);
+				hash = HashBytes(&method, sizeof(method), hash);
+				hash = HashBytes(&revision, sizeof(revision), hash);
+			}
 			// A snapshot is usable only together with a complete glyph manifest.
 			// Couple their ABIs so a manifest format change cannot leave an
 			// apparently valid atlas that is restored and then discarded.
@@ -170,10 +165,11 @@ namespace fonthook::vectorfont
 			if (!GetFreeTypeFontCacheDirectory(directory))
 				return {};
 			const FontConfig& config = GetRuntimeConfig(runtime);
-			AtlasCacheKey key = BuildBaseKey(config, byteClass, rasterScale);
+			AtlasCacheKey key;
+			if (!BuildBaseKey(config, byteClass, rasterScale, key))
+				return {};
 			key.pageIndex = pageIndex;
-			RuntimeFont* atlasRuntime =
-				GetMtsdfAtlasRuntime(runtime, byteClass);
+			RuntimeFont* atlasRuntime = GetPrewarmAtlasRuntime(runtime, key);
 			if (!atlasRuntime)
 				return {};
 			const UInt64 maskContentHash = GetRuntimeMaskContentHash(
@@ -256,7 +252,8 @@ namespace fonthook::vectorfont
 		{
 			// Reuse one fixed-capacity page buffer across the whole font. This avoids
 			// vector doubling peaks and repeated large heap allocations while keeping
-			// the live stream bounded to one 4 MiB or 16 MiB page per byte role.
+			// the live stream bounded to one A8 (4 MiB) or MTSDF (16 MiB) page per
+			// byte role.
 			page.placements.clear();
 			page.pixels.clear();
 			page.cursorX = kDistanceFieldAtlasPadding;
@@ -276,7 +273,9 @@ namespace fonthook::vectorfont
 				return false;
 
 			const FontConfig& config = GetRuntimeConfig(runtime);
-			AtlasCacheKey key = BuildBaseKey(config, role.byteClass, rasterScale);
+			AtlasCacheKey key;
+			if (!BuildBaseKey(config, role.byteClass, rasterScale, key))
+				return false;
 			key.pageIndex = static_cast<UInt16>(role.pages.size());
 			UInt64 snapshotHash = 0;
 			UInt64 maskContentHash = 0;
@@ -355,13 +354,25 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool AppendBitmap(RuntimeFont& runtime, StreamingRole& role,
-			const std::shared_ptr<const GlyphBitmap>& bitmap, float rasterScale)
+		bool AppendBitmap(RuntimeFont& runtime, const StreamingPrewarmState& state,
+			StreamingRole& role, const std::shared_ptr<const GlyphBitmap>& bitmap,
+			float rasterScale)
 		{
+			AtlasCacheKey key;
+			if (!BuildBaseKey(GetRuntimeConfig(runtime), role.byteClass,
+				rasterScale, key))
+			{
+				return false;
+			}
+			const bool shaderEffects =
+				state.renderMode == AtlasRenderMode::ShaderEffects;
 			if (!bitmap || !bitmap->cacheId || bitmap->width <= 0 || bitmap->height <= 0
-				|| bitmap->maskType != GlyphMaskType::DistanceField)
+				|| (shaderEffects
+					? bitmap->maskType != GlyphMaskType::DistanceField
+					: bitmap->maskType == GlyphMaskType::DistanceField))
 				return true;
-			if (bitmap->distanceFieldMethod != GetConfiguredDistanceFieldMethod())
+			if (shaderEffects
+				&& bitmap->distanceFieldMethod != GetConfiguredDistanceFieldMethod())
 				return false;
 			const size_t requiredBytes = ExpectedGlyphBitmapBytes(*bitmap);
 			if (bitmap->alpha.size() < requiredBytes)
@@ -371,8 +382,7 @@ namespace fonthook::vectorfont
 			const size_t maximumPageBytes =
 				static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
 				* kMaximumMtsdfPrewarmAtlasSize
-				* DistanceFieldBytesPerPixel(
-					GetConfiguredDistanceFieldMethod());
+				* AtlasBytesPerPixel(key.pixelMode);
 			if (role.current.pixels.capacity() < maximumPageBytes)
 				role.current.pixels.reserve(maximumPageBytes);
 
@@ -484,12 +494,11 @@ namespace fonthook::vectorfont
 			state->layoutHash = config.layoutHash;
 			state->maskGenerationHash = config.maskGenerationHash;
 			state->shaderEffectHash = config.shaderEffectHash;
-			EffectQuality resolvedQuality = config.effectQuality;
-			UInt32 sdfSpread = 0;
-			state->enabled = !g_bEnableFreeTypeFontAggressivePerformanceMode
-				&& IsA8RendererAvailable()
-				&& ResolveA8EffectQuality(config.effectQuality, resolvedQuality)
-				&& ResolveSdfSpread(config, rasterScale, sdfSpread);
+			AtlasCacheKey key;
+			state->enabled = BuildBaseKey(config,
+				VectorFontByteClass::SingleByte, rasterScale, key);
+			if (state->enabled)
+				state->renderMode = key.renderMode;
 			state->roles[0].byteClass = VectorFontByteClass::SingleByte;
 			state->roles[1].byteClass = VectorFontByteClass::DoubleByte;
 			StreamingPrewarmState* result = state.get();
@@ -566,7 +575,12 @@ namespace fonthook::vectorfont
 			{
 				const GlyphBitmapRequest& request = requests[index];
 				const auto& bitmap = results[index];
-				if (!request.glyph || request.maskType != GlyphMaskType::DistanceField
+				const bool shaderEffects =
+					state->renderMode == AtlasRenderMode::ShaderEffects;
+				if (!request.glyph
+					|| (shaderEffects
+						? request.maskType != GlyphMaskType::DistanceField
+						: request.maskType == GlyphMaskType::DistanceField)
 					|| !bitmap || bitmap->alpha.empty())
 					continue;
 				grouped[static_cast<size_t>(request.glyph->byteClass)].push_back(bitmap);
@@ -583,8 +597,8 @@ namespace fonthook::vectorfont
 				});
 				for (const auto& bitmap : bitmaps)
 				{
-					if (!AppendBitmap(runtime, state->roles[roleIndex], bitmap,
-						rasterScale))
+					if (!AppendBitmap(runtime, *state,
+						state->roles[roleIndex], bitmap, rasterScale))
 					{
 						state->failed = true;
 						return false;
@@ -630,7 +644,7 @@ namespace fonthook::vectorfont
 			for (size_t roleIndex = 0; roleIndex < roleCount; ++roleIndex)
 			{
 				StreamingRole& role = state->roles[roleIndex];
-				if (IsMtsdfAtlasAlias(GetRuntimeConfig(runtime),
+				if (IsPrewarmAtlasAlias(GetRuntimeConfig(runtime),
 					role.byteClass))
 				{
 					continue;
@@ -669,10 +683,11 @@ namespace fonthook::vectorfont
 			{
 				const VectorFontByteClass byteClass =
 					static_cast<VectorFontByteClass>(roleIndex);
-				if (IsMtsdfAtlasAlias(config, byteClass))
+				if (IsPrewarmAtlasAlias(config, byteClass))
 					continue;
-				const AtlasCacheKey key = BuildBaseKey(config,
-					byteClass, rasterScale);
+				AtlasCacheKey key;
+				if (!BuildBaseKey(config, byteClass, rasterScale, key))
+					continue;
 				invalidatedProfiles += static_cast<UInt32>(
 					atlasState.completeAtlasProfiles.erase(MakeAtlasProfileKey(key)));
 			}

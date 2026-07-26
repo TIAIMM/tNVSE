@@ -256,10 +256,12 @@ coverage/effect masks needed by the ARGB fallback.
 Full-code-page construction does not create or read `.tnvfmask`. The atlas-only
 transaction begins as soon as the first configured font is queued, so an early
 draw between activation and the blocking prewarm pump cannot create a
-short-lived persistent mask profile. SDF and ARGB-fallback masks are rasterized
-into the bounded in-memory batch and written directly into streamed
-`_p<page>.tnvfatlas` snapshots. The transaction scope restores the ordinary
-persistent-mask policy automatically after success, cancellation, or failure.
+short-lived persistent mask profile. Distance-field pixels and aggressive A8
+Fill/Glow/Outline/Shadow coverage are rasterized into bounded in-memory batches
+and written directly into streamed `_p<page>.tnvfatlas` snapshots. Aggressive
+coverage uses its `A8 + CpuEffects` atlas identity and never aliases an MTSDF
+double-byte owner. The transaction scope restores the ordinary persistent-mask
+policy automatically after success, cancellation, or failure.
 
 The `.tnvfmask` format remains available for demand-only rendering outside that
 transaction. A persistent profile is keyed by the font file's content hash,
@@ -429,6 +431,10 @@ uses one packet and one draw. This mode intentionally gives up distance-field
 magnification quality in exchange for stock-like sampling, packet, and atlas
 cost; it no longer substitutes opaque FreeType strokes for configured effect
 coverage.
+The startup prewarm publishes those generated coverage masks as globally
+repacked `.tnvfatlas` pages. A later launch validates and restores that atlas
+profile directly, so aggressive mode does not need `.tnvfmask` restoration to
+avoid rerasterizing the complete code page.
 
 The aggressive mode never removes the fallback boundary. Without Fallout
 Shader Loader, with an old Loader version, with missing Loader exports, with a

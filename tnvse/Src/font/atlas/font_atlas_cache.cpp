@@ -672,6 +672,65 @@ namespace fonthook::vectorfont
 				1469598103934665603ull);
 		}
 
+	bool ResolvePrewarmAtlasKey(const FontConfig& config,
+		VectorFontByteClass byteClass, float rasterScale, AtlasCacheKey& key)
+	{
+		// The complete-code-page transaction follows the same route contract as
+		// demand rendering. Aggressive mode persists the CPU-baked coverage masks
+		// in a level-zero A8 profile rather than disabling atlas publication.
+		const FontAtlasRoute route = ResolveFontAtlasRoute(
+			IsA8RendererAvailable(),
+			g_bEnableFreeTypeFontAggressivePerformanceMode);
+		if (route == FontAtlasRoute::ArgbFallback)
+			return false;
+
+		const bool shaderEffects =
+			route == FontAtlasRoute::ShaderDistanceField;
+		if (shaderEffects)
+		{
+			EffectQuality resolved = config.effectQuality;
+			UInt32 sdfSpread = 0;
+			if (!ResolveA8EffectQuality(config.effectQuality, resolved)
+				|| !ResolveSdfSpread(config, rasterScale, sdfSpread))
+			{
+				return false;
+			}
+		}
+
+		key = {
+			BuildPrewarmAtlasContentHash(config, byteClass, rasterScale,
+				shaderEffects),
+			config.fontId,
+			static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
+			shaderEffects
+				? GetConfiguredDistanceFieldAtlasPixelMode()
+				: AtlasPixelMode::A8,
+			shaderEffects
+				? AtlasRenderMode::ShaderEffects
+				: AtlasRenderMode::CpuEffects,
+			kDistanceFieldAtlasPadding,
+			true,
+			byteClass
+		};
+		return true;
+	}
+
+	bool IsPrewarmAtlasAlias(const FontConfig& config,
+		VectorFontByteClass byteClass)
+	{
+		return ResolveFontAtlasRoute(IsA8RendererAvailable(),
+			g_bEnableFreeTypeFontAggressivePerformanceMode)
+				== FontAtlasRoute::ShaderDistanceField
+			&& IsMtsdfAtlasAlias(config, byteClass);
+	}
+
+	RuntimeFont* GetPrewarmAtlasRuntime(RuntimeFont& runtime,
+		const AtlasCacheKey& key)
+	{
+		return key.renderMode == AtlasRenderMode::ShaderEffects
+			? GetMtsdfAtlasRuntime(runtime, key.byteClass) : &runtime;
+	}
+
 		void GetAtlasBackedGlyphBitmaps(RuntimeFont& runtime,
 			const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
 			AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,

@@ -760,11 +760,13 @@ namespace fonthook::vectorfont
 			}
 
 			EffectQuality resolvedQuality = config->effectQuality;
-			bool shaderSdf = ResolveFontAtlasRoute(
+			const FontAtlasRoute atlasRoute = ResolveFontAtlasRoute(
 				IsA8RendererAvailable(),
-				g_bEnableFreeTypeFontAggressivePerformanceMode)
-				== FontAtlasRoute::ShaderDistanceField
+				g_bEnableFreeTypeFontAggressivePerformanceMode);
+			bool shaderSdf = atlasRoute == FontAtlasRoute::ShaderDistanceField
 				&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
+			const bool aggressiveCoverage =
+				atlasRoute == FontAtlasRoute::ShaderA8Coverage;
 			UInt32 sdfSpread = 0;
 			if (shaderSdf && !ResolveSdfSpread(*config, rasterScale, sdfSpread))
 				shaderSdf = false;
@@ -959,7 +961,9 @@ namespace fonthook::vectorfont
 								? (UsesMtsdfDistanceField()
 									? L"Streaming MTSDF glyphs to disk..."
 									: L"Streaming true-SDF glyphs to disk...")
-								: L"Generating bounded fallback masks...");
+								: aggressiveCoverage
+									? L"Streaming aggressive A8 coverage to disk..."
+									: L"Generating bounded fallback masks...");
 					if (retrySmallerBatch)
 						continue;
 				}
@@ -981,7 +985,10 @@ namespace fonthook::vectorfont
 				_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 					L"Font %u of %u  |  ID %u  |  %ls",
 					fontOrdinal, queuedFonts, job.fontId,
-					UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF");
+					aggressiveCoverage ? L"A8 baked coverage"
+						: shaderSdf
+							? (UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF")
+							: L"ARGB fallback");
 				const float overall = queuedFonts
 					? (static_cast<float>(finishedFonts) + 0.95f) / queuedFonts
 					: 0.95f;

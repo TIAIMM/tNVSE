@@ -35,9 +35,10 @@ namespace fonthook::vectorfont
 	inline constexpr UInt32 kArgbAtlasPadding = 4;
 	inline constexpr UInt32 kMaximumAtlasMipLevels = 3;
 	inline constexpr UInt32 kAtlasHardLimit = 4096;
-	// Keep a streamed/repacked distance-field page within the old 4096x4096 A8
-	// storage envelope. In MTSDF mode a 4096x4096 BGRA page needs 64 MiB before
-	// vector growth and repack scratch space, which can fail late in the 32-bit prewarm.
+	// Keep a streamed/repacked distance-field or aggressive coverage page within
+	// the old 4096x4096 A8 storage envelope. In MTSDF mode a 4096x4096 BGRA page
+	// needs 64 MiB before vector growth and repack scratch space, which can fail
+	// late in the 32-bit prewarm.
 	inline constexpr UInt32 kMaximumMtsdfPrewarmAtlasSize = 2048;
 	inline constexpr size_t kMaximumMtsdfPrewarmPageBytes =
 		static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
@@ -711,6 +712,12 @@ namespace fonthook::vectorfont
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding);
 	UInt64 BuildPrewarmAtlasContentHash(const FontConfig& config,
 		VectorFontByteClass byteClass, float rasterScale, bool shaderEffects);
+	bool ResolvePrewarmAtlasKey(const FontConfig& config,
+		VectorFontByteClass byteClass, float rasterScale, AtlasCacheKey& key);
+	bool IsPrewarmAtlasAlias(const FontConfig& config,
+		VectorFontByteClass byteClass);
+	RuntimeFont* GetPrewarmAtlasRuntime(RuntimeFont& runtime,
+		const AtlasCacheKey& key);
 
 	void InitializeDefaultPoolAtlasLifecycle();
 	void PumpDefaultPoolAtlasLifecycle();
