@@ -616,7 +616,7 @@ Stewie Tweaks 的搜索框不是原版 `TextEditMenu`，也不是 JIP 的 `ShowT
 
 - StewMenu `MENU_ID=1069` 的 `STW_SearchBar`，tile id `5`。
 - StewMenu 字符串子设置输入，文本 tile id `103`，并额外扫描 Stewie `InputField` 的 `inputType`，只在 `inputType == 0` 的 string 输入项接管。
-- Stewie MenuSearch 的搜索 tile id `87698483`，当前 hook 的菜单包括 Inventory、Stats、Map、Container、Barter、LevelUp、Recipe、Save/Load `StartMenu`。
+- Stewie MenuSearch XML 的搜索 tile id 为 `87698483`，但 Gamebryo 把数值 trait 保存为单精度 `float`，其运行时整数值为 `87698480`。所有按 id 查找都先执行相同的 float 规范化；直接比较 XML 整数会导致搜索 Tile 永远无法被发现。当前 hook 的菜单包括 Inventory、Stats、Map、Container、Barter、LevelUp、Recipe、Save/Load `StartMenu`。
 - 数字、浮点、十六进制、Hotkey 输入不接管；RaceMenu preset 文件名输入也不在本轮范围内。
 
 hook 策略：

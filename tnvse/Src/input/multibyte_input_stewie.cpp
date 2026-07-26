@@ -97,6 +97,17 @@ namespace fonthook
 			return static_cast<UInt32>(tile->GetValueFloat(Tile::kTileValue_id));
 		}
 
+		constexpr UInt32 CanonicalTileTraitID(UInt32 id)
+		{
+			// Gamebryo stores numeric Tile traits as IEEE-754 single-precision
+			// floats. XML integer IDs above 2^24 therefore have to be rounded to
+			// the same float value before comparing them with a live Tile.
+			return static_cast<UInt32>(static_cast<float>(id));
+		}
+		static_assert(
+			CanonicalTileTraitID(87698483) == 87698480,
+			"MenuSearch XML id must match the live float-backed Tile trait");
+
 		float TileTraitFloat(Tile* tile, UInt32 trait)
 		{
 			return tile && trait ? tile->GetValueFloat(trait) : 0.0f;
@@ -137,21 +148,26 @@ namespace fonthook
 				std::string("STW_MainRect/SearchParent/InputClipper/STW_SearchBar"));
 		}
 
-		Tile* FindTileByID(Tile* tile, UInt32 id)
+		Tile* FindTileByCanonicalID(Tile* tile, UInt32 canonicalID)
 		{
 			if (!tile)
 				return nullptr;
 
-			if (TileID(tile) == id)
+			if (TileID(tile) == canonicalID)
 				return tile;
 
 			for (Tile* child : tile->GetChildren())
 			{
-				if (Tile* result = FindTileByID(child, id))
+				if (Tile* result = FindTileByCanonicalID(child, canonicalID))
 					return result;
 			}
 
 			return nullptr;
+		}
+
+		Tile* FindTileByID(Tile* tile, UInt32 id)
+		{
+			return FindTileByCanonicalID(tile, CanonicalTileTraitID(id));
 		}
 
 		bool UsesUTF8StewieEncoding(const StewieInputTarget& target)
