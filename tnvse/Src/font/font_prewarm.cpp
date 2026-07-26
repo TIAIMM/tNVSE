@@ -773,15 +773,17 @@ namespace fonthook::vectorfont
 					VectorFontByteClass::DoubleByte);
 			if (sharedDoubleAlias)
 			{
-				RuntimeFont* owner = GetMtsdfAtlasRuntime(*runtime,
-					VectorFontByteClass::DoubleByte);
-				if (!owner || !HasGloballyRepackedGlyphAtlasSnapshot(
-					*owner, rasterScale))
+				// An alias consumes only the owner's double-byte atlas. The owner's
+				// unrelated single-byte page may have been evicted while the shared
+				// double-byte profile remains resident; requiring both roles here
+				// makes alias manifests permanently incomplete under the GPU budget.
+				if (!TryLoadGloballyRepackedGlyphAtlasSnapshotRole(*runtime,
+					VectorFontByteClass::DoubleByte, rasterScale))
 				{
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: shared distance-field owner unavailable font=%u owner=%u; deferring alias atlas",
+						"tnvse_freetype_font: shared distance-field double-byte role unavailable font=%u owner=%u; deferring alias atlas",
 						job.fontId, config->mtsdfDoubleByteOwnerFontId);
-					FinishJob(job, "shared-owner-unavailable");
+					FinishJob(job, "shared-role-unavailable");
 					++streamFailedFonts;
 					++finishedFonts;
 					continue;

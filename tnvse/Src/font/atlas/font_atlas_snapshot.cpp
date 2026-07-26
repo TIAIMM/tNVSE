@@ -336,6 +336,31 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		bool IsGloballyRepackedAtlasProfileResidentLocked(AtlasState& state,
+			const AtlasCacheKey& baseKey)
+		{
+			if (!IsCompleteAtlasProfileResidentLocked(state, baseKey))
+				return false;
+			const auto profile = state.atlasProfiles.find(
+				MakeAtlasProfileKey(baseKey));
+			if (profile == state.atlasProfiles.end() || profile->second.pages.empty())
+				return false;
+			for (UInt16 pageIndex : profile->second.pages)
+			{
+				AtlasCacheKey pageKey = baseKey;
+				pageKey.pageIndex = pageIndex;
+				const auto page = state.atlasCache.find(pageKey);
+				if (page == state.atlasCache.end() || !page->second.resource
+					|| !page->second.resource->compactSnapshot
+					|| !(page->second.resource->compactSnapshot->sourceHeader.flags
+						& kAtlasSnapshotFlagGloballyRepacked))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
 		bool TryReuseCompleteAtlasProfile(const AtlasCacheKey& key)
 		{
 			AtlasState& state = State();
@@ -1414,28 +1439,61 @@ namespace fonthook::vectorfont
 			AtlasCacheKey key;
 			if (!ResolvePrewarmAtlasKey(config,
 				static_cast<VectorFontByteClass>(roleIndex), rasterScale, key)
-				|| !IsCompleteAtlasProfileResidentLocked(state, key))
+				|| !IsGloballyRepackedAtlasProfileResidentLocked(state, key))
 			{
 				return false;
-			}
-			const auto profile = state.atlasProfiles.find(MakeAtlasProfileKey(key));
-			if (profile == state.atlasProfiles.end() || profile->second.pages.empty())
-				return false;
-			for (UInt16 pageIndex : profile->second.pages)
-			{
-				AtlasCacheKey pageKey = key;
-				pageKey.pageIndex = pageIndex;
-				const auto page = state.atlasCache.find(pageKey);
-				if (page == state.atlasCache.end() || !page->second.resource
-					|| !page->second.resource->compactSnapshot
-					|| !(page->second.resource->compactSnapshot->sourceHeader.flags
-						& kAtlasSnapshotFlagGloballyRepacked))
-				{
-					return false;
-				}
 			}
 		}
 		return true;
+	}
+
+	bool TryLoadGloballyRepackedGlyphAtlasSnapshotRole(RuntimeFont& runtime,
+		VectorFontByteClass byteClass, float rasterScale)
+	{
+		AtlasCacheKey key;
+		if (!ResolvePrewarmAtlasKey(GetRuntimeConfig(runtime), byteClass,
+			rasterScale, key))
+		{
+			return false;
+		}
+		if (TryReuseCompleteAtlasProfile(key))
+		{
+			AtlasState& state = State();
+			std::lock_guard<std::mutex> lock(state.atlasMutex);
+			if (IsGloballyRepackedAtlasProfileResidentLocked(state, key))
+				return true;
+			// A complete resident profile can still belong to the pre-repack
+			// generation. Force the role loader to replace it from the validated
+			// globally repacked snapshot instead of accepting the reuse marker.
+			state.completeAtlasProfiles.erase(MakeAtlasProfileKey(key));
+		}
+
+		size_t incomingStorageBytes = 0;
+		if (!InspectSnapshotRoleStorage(runtime, key, incomingStorageBytes))
+			return false;
+		size_t cacheBefore = 0;
+		size_t cacheAfter = 0;
+		{
+			AtlasState& state = State();
+			std::lock_guard<std::mutex> lock(state.atlasMutex);
+			cacheBefore = state.atlasCacheBytes;
+			TrimAtlasCacheForIncomingBytes(state, incomingStorageBytes);
+			cacheAfter = state.atlasCacheBytes;
+		}
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: shared atlas role restore reservation font=%u role=%s incomingMiB=%.2f cacheMiB=%.2f->%.2f budgetMiB=%.2f",
+			GetRuntimeConfig(runtime).fontId,
+			byteClass == VectorFontByteClass::DoubleByte
+				? "doubleByte" : "singleByte",
+			incomingStorageBytes / (1024.0 * 1024.0),
+			cacheBefore / (1024.0 * 1024.0),
+			cacheAfter / (1024.0 * 1024.0),
+			GetAtlasCacheLimit() / (1024.0 * 1024.0));
+		if (!LoadGlyphAtlasSnapshotRole(runtime, byteClass, rasterScale, false))
+			return false;
+		AtlasState& state = State();
+		std::lock_guard<std::mutex> lock(state.atlasMutex);
+		return IsGloballyRepackedAtlasProfileResidentLocked(state, key);
 	}
 
 	bool TryLoadGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& runtime,

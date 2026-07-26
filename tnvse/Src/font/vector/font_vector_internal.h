@@ -528,6 +528,8 @@ namespace fonthook::vectorfont
 		float afRasterScale);
 	bool HasGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& arRuntime,
 		float afRasterScale);
+	bool TryLoadGloballyRepackedGlyphAtlasSnapshotRole(RuntimeFont& arRuntime,
+		VectorFontByteClass aeByteClass, float afRasterScale);
 	bool TryLoadGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& arRuntime,
 		float afRasterScale);
 	bool EnsureGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& arRuntime,

@@ -325,6 +325,12 @@ resident may complete
 code-page mask files be deleted. A later launch restores the
 complete page set directly and skips code-page enumeration, per-glyph mask
 loading, packing, and mip generation.
+An MTSDF byte-role alias validates and, if necessary, restores only the shared
+double-byte role that it consumes. The owner's unrelated single-byte profile may
+be evicted by the GPU LRU without making the alias transaction incomplete. This
+allows every alias manifest to commit under the configured atlas budget, so a
+later unchanged launch remains on the snapshot path instead of repeating its
+single-byte construction.
 Every layer includes its schema/layout/mask/font/code-page inputs in its hash;
 stale files are ignored rather than migrated.
 Configured face chains hash the separator-normalized path written in XML, not
