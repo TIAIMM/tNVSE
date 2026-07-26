@@ -27,6 +27,8 @@ namespace fonthook::vectorfont
 			{
 			case PendingQuadBuildFailure::Fill:
 				return GlyphAtlasMaskFailure::Fill;
+			case PendingQuadBuildFailure::Shadow:
+				return GlyphAtlasMaskFailure::Shadow;
 			case PendingQuadBuildFailure::Glow:
 				return GlyphAtlasMaskFailure::Glow;
 			case PendingQuadBuildFailure::Outline:
@@ -237,7 +239,9 @@ namespace fonthook::vectorfont
 					diagnostics->cpuMaskFailure = ToDiagnosticMaskFailure(buildFailure);
 				}
 				AtlasLayer failedLayer = AtlasLayer::Fill;
-				if (buildFailure == PendingQuadBuildFailure::Glow)
+				if (buildFailure == PendingQuadBuildFailure::Shadow)
+					failedLayer = AtlasLayer::Shadow;
+				else if (buildFailure == PendingQuadBuildFailure::Glow)
 					failedLayer = AtlasLayer::Glow;
 				else if (buildFailure == PendingQuadBuildFailure::Outline)
 					failedLayer = AtlasLayer::Outline;
@@ -250,9 +254,11 @@ namespace fonthook::vectorfont
 						"tnvse_freetype_font: CPU mask batch failure font=%u layer=%s action=%s",
 						font.iFontNum,
 						buildFailure == PendingQuadBuildFailure::Fill ? "fill"
-							: buildFailure == PendingQuadBuildFailure::Glow ? "glow"
-							: buildFailure == PendingQuadBuildFailure::Outline ? "outline"
-							: "unknown",
+							: buildFailure == PendingQuadBuildFailure::Shadow
+								? "shadow"
+								: buildFailure == PendingQuadBuildFailure::Glow ? "glow"
+								: buildFailure == PendingQuadBuildFailure::Outline
+									? "outline" : "unknown",
 						optionalFailure ? "disable-layer-and-retry" : "shape-build-failed");
 				}
 				if (optionalFailure)

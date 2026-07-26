@@ -1,5 +1,6 @@
 #pragma once
 
+#include "font_render_route.h"
 #include "font_vector.h"
 #include "font_vector_msdfgen.h"
 #include "load_config.h"
@@ -29,16 +30,22 @@ namespace fonthook::vectorfont
 		return UsesMtsdfDistanceField() ? "MTSDF" : "true SDF";
 	}
 
-	// Bump whenever glyph pixels change without a configuration change. This is
-	// part of atlas snapshot and prewarm job identity.
+	// Base Fill/distance-field generator revision. Route-specific pixel changes
+	// may use a narrower revision below to preserve unrelated caches.
 	constexpr UInt32 kGlyphMaskGeneratorVersion = 13;
+	// CPU coverage revision 1 evaluates glow, outline and shadow from the
+	// hinted body distance instead of treating a FreeType stroke as an opaque
+	// effect. It is included in every CPU-effect bitmap/cache identity.
+	constexpr UInt32 kCpuEffectCoverageVersion = 1;
 	// Version 10 invalidates collision bands derived from the former one-channel
 	// true-SDF body. Atlas snapshot identity also consumes this ABI because a
 	// restored atlas is usable only with its matching complete manifest.
 	constexpr UInt32 kPersistentGlyphManifestVersion = 10;
-	// Versioned inside the reserved manifest-header bytes so mode ownership can
-	// be classified for safe partial cleanup without changing the record layout.
-	constexpr UInt8 kPersistentGlyphManifestDistanceFieldIdentityVersion = 1;
+	// Version 2 assigns every manifest to either the normal distance-field cache
+	// domain or the CPU-coverage domain. This prevents aggressive/native-A8 and
+	// stock-shader fallback prewarm from retaining or reopening MTSDF/true-SDF
+	// manifests after the distance-field cache set has been invalidated.
+	constexpr UInt8 kPersistentGlyphManifestCacheIdentityVersion = 2;
 
 	struct NativeA8PayloadTemplate;
 	enum class FreeTypePerfCounter : UInt8
@@ -200,6 +207,7 @@ namespace fonthook::vectorfont
 		Outline = 1,
 		Glow = 2,
 		DistanceField = 3,
+		Shadow = 4,
 	};
 
 	struct FontConfig
@@ -403,6 +411,7 @@ namespace fonthook::vectorfont
 	{
 		None = 0,
 		Fill,
+		Shadow,
 		Glow,
 		Outline,
 	};
@@ -462,6 +471,8 @@ namespace fonthook::vectorfont
 		InactiveDistanceField,
 		Invalid,
 	};
+	PersistentFontCacheDomain GetPersistentFontCacheDomain();
+	void SynchronizePersistentFontCacheRoute(FontAtlasRoute aeRoute);
 	PersistentCacheCleanupClass ClassifyAtlasSnapshotCacheForCleanup(
 		const std::wstring& arPath);
 	void DeleteUnusedFreeTypeFontCacheFiles(bool abDeleteAllUnused);
@@ -493,6 +504,8 @@ namespace fonthook::vectorfont
 	bool HardShadowIncludesGlow(const FontConfig& arConfig);
 	bool HardShadowIncludesOutline(const FontConfig& arConfig);
 	bool HasSdfEffects(const FontConfig& arConfig);
+	SInt32 ResolveCpuEffectMaskIdentity(const FontConfig& arConfig,
+		GlyphMaskType aeMaskType, float afRasterScale);
 	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread,
 		bool abIncludeEffects = true);
 	bool ResolveMtsdfSharedRasterProfile(const FontConfig& arConfig,

@@ -61,6 +61,7 @@ namespace fonthook::vectorfont
 	{
 		None = 0,
 		Fill,
+		Shadow,
 		Glow,
 		Outline,
 	};
@@ -234,6 +235,8 @@ namespace fonthook::vectorfont
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
 	constexpr UInt32 kAtlasSnapshotKnownFlags =
 		kAtlasSnapshotFlagGloballyRepacked;
+	// CPU-effect revisions are part of the atlas content identity. Keeping the
+	// container version stable preserves unrelated true-SDF/MTSDF snapshots.
 	// Version 16 identifies selectable A8 true-SDF and BGRA MTSDF pages.
 	// Version 15 adds largest-compatible-size double-byte MTSDF atlas sharing.
 	// Version 14 replaced single-channel shader pages with BGRA MTSDF.

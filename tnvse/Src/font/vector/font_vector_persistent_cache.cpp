@@ -13,6 +13,16 @@ namespace fonthook::vectorfont
 		return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
 	}
 
+	PersistentFontCacheDomain GetPersistentFontCacheDomain()
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		if (State().persistentCacheRouteSynchronized)
+			return State().persistentCacheDomain;
+		return ResolvePersistentFontCacheDomain(ResolveFontAtlasRoute(
+			IsA8RendererAvailable(),
+			g_bEnableFreeTypeFontAggressivePerformanceMode));
+	}
+
 	static UInt32 MaximumPersistentBitmapBytes(GlyphMaskType maskType,
 		DistanceFieldMethod distanceFieldMethod)
 	{
@@ -1063,10 +1073,14 @@ namespace fonthook::vectorfont
 			header.codePage = GetFreeTypeTextCodePage();
 			header.entryCount = recordCount;
 			header.entrySize = sizeof(PersistentGlyphManifestRecord);
-			header.distanceFieldMethod = static_cast<UInt8>(
-				GetConfiguredDistanceFieldMethod());
-			header.distanceFieldIdentityVersion =
-				kPersistentGlyphManifestDistanceFieldIdentityVersion;
+			const PersistentFontCacheDomain cacheDomain =
+				GetPersistentFontCacheDomain();
+			header.distanceFieldMethod = cacheDomain
+				== PersistentFontCacheDomain::DistanceField
+				? static_cast<UInt8>(GetConfiguredDistanceFieldMethod()) : 0;
+			header.cacheIdentityVersion =
+				kPersistentGlyphManifestCacheIdentityVersion;
+			header.cacheDomain = static_cast<UInt8>(cacheDomain);
 			header.checksum = HashBytes64(&header,
 				offsetof(PersistentGlyphManifestHeader, checksum));
 			return header;
@@ -1077,6 +1091,11 @@ namespace fonthook::vectorfont
 			UInt32 recordCount)
 		{
 			const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'G', 'L', 'Y', '1' };
+			const PersistentFontCacheDomain cacheDomain =
+				GetPersistentFontCacheDomain();
+			const UInt8 distanceFieldMethod = cacheDomain
+				== PersistentFontCacheDomain::DistanceField
+				? static_cast<UInt8>(GetConfiguredDistanceFieldMethod()) : 0;
 			return std::memcmp(header.magic, magic, sizeof(magic)) == 0
 				&& header.version == kPersistentGlyphManifestVersion
 				&& header.headerSize == sizeof(header)
@@ -1087,10 +1106,10 @@ namespace fonthook::vectorfont
 				&& header.codePage == GetFreeTypeTextCodePage()
 				&& header.entryCount == recordCount
 				&& header.entrySize == sizeof(PersistentGlyphManifestRecord)
-				&& header.distanceFieldMethod == static_cast<UInt8>(
-					GetConfiguredDistanceFieldMethod())
-				&& header.distanceFieldIdentityVersion
-					== kPersistentGlyphManifestDistanceFieldIdentityVersion
+				&& header.distanceFieldMethod == distanceFieldMethod
+				&& header.cacheIdentityVersion
+					== kPersistentGlyphManifestCacheIdentityVersion
+				&& header.cacheDomain == static_cast<UInt8>(cacheDomain)
 				&& header.checksum == HashBytes64(&header,
 					offsetof(PersistentGlyphManifestHeader, checksum));
 		}
@@ -1296,14 +1315,30 @@ namespace fonthook::vectorfont
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			manifestHash = HashBytes64(&codePage,
 				sizeof(codePage), manifestHash);
-			const DistanceFieldMethod distanceFieldMethod =
-				GetConfiguredDistanceFieldMethod();
-			const UInt32 distanceFieldRevision =
-				DistanceFieldGeneratorRevision(distanceFieldMethod);
-			manifestHash = HashBytes64(&distanceFieldMethod,
-				sizeof(distanceFieldMethod), manifestHash);
-			manifestHash = HashBytes64(&distanceFieldRevision,
-				sizeof(distanceFieldRevision), manifestHash);
+			const PersistentFontCacheDomain cacheDomain =
+				GetPersistentFontCacheDomain();
+			manifestHash = HashBytes64(&cacheDomain,
+				sizeof(cacheDomain), manifestHash);
+			manifestHash = HashBytes64(
+				&kPersistentGlyphManifestCacheIdentityVersion,
+				sizeof(kPersistentGlyphManifestCacheIdentityVersion),
+				manifestHash);
+			if (cacheDomain == PersistentFontCacheDomain::DistanceField)
+			{
+				const DistanceFieldMethod distanceFieldMethod =
+					GetConfiguredDistanceFieldMethod();
+				const UInt32 distanceFieldRevision =
+					DistanceFieldGeneratorRevision(distanceFieldMethod);
+				manifestHash = HashBytes64(&distanceFieldMethod,
+					sizeof(distanceFieldMethod), manifestHash);
+				manifestHash = HashBytes64(&distanceFieldRevision,
+					sizeof(distanceFieldRevision), manifestHash);
+			}
+			else
+			{
+				manifestHash = HashBytes64(&kCpuEffectCoverageVersion,
+					sizeof(kCpuEffectCoverageVersion), manifestHash);
+			}
 			auto pooled = State().persistentGlyphManifests.find(manifestHash);
 			if (pooled != State().persistentGlyphManifests.end())
 			{
@@ -1737,6 +1772,135 @@ namespace fonthook::vectorfont
 		return result;
 	}
 
+	static bool PersistentManifestBelongsToDomain(
+		const PersistentGlyphManifest& manifest,
+		PersistentFontCacheDomain cacheDomain)
+	{
+		if (!manifest.mappedData)
+			return false;
+		const auto* header = reinterpret_cast<
+			const PersistentGlyphManifestHeader*>(manifest.mappedData);
+		const UInt8 magic[8] = { 'T', 'N', 'V', 'F', 'G', 'L', 'Y', '1' };
+		return std::memcmp(header->magic, magic, sizeof(magic)) == 0
+			&& header->version == kPersistentGlyphManifestVersion
+			&& header->headerSize == sizeof(*header)
+			&& header->cacheIdentityVersion
+				== kPersistentGlyphManifestCacheIdentityVersion
+			&& header->cacheDomain == static_cast<UInt8>(cacheDomain)
+			&& header->checksum == HashBytes64(header,
+				offsetof(PersistentGlyphManifestHeader, checksum));
+	}
+
+	static void DetachPersistentManifestsOutsideDomain(
+		PersistentFontCacheDomain cacheDomain)
+	{
+		FreeTypeState& state = State();
+		std::vector<std::shared_ptr<PersistentGlyphManifest>> detached;
+		std::unordered_set<PersistentGlyphManifest*> seen;
+		UInt32 detachedRuntimes = 0;
+		for (auto& pair : state.runtimeFonts)
+		{
+			RuntimeFont& runtime = *pair.second;
+			if (!runtime.manifest
+				|| PersistentManifestBelongsToDomain(
+					*runtime.manifest, cacheDomain))
+			{
+				continue;
+			}
+			if (seen.insert(runtime.manifest.get()).second)
+				detached.push_back(runtime.manifest);
+			runtime.manifest.reset();
+			runtime.codePageMetrics.reset();
+			size_t runtimeBytes = sizeof(RuntimeFont);
+			for (RuntimeRole& role : runtime.roles)
+			{
+				role.glyphIdentities.clear();
+				runtimeBytes += role.faces.capacity() * sizeof(RuntimeFace);
+			}
+			runtime.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+				runtimeBytes);
+			auto extra = gNumberedExtraLetters.find(pair.first);
+			if (extra != gNumberedExtraLetters.end())
+				extra->second.generatedCodePage.reset();
+			++detachedRuntimes;
+		}
+
+		for (auto pooled = state.persistentGlyphManifests.begin();
+			pooled != state.persistentGlyphManifests.end();)
+		{
+			std::shared_ptr<PersistentGlyphManifest> manifest =
+				pooled->second.lock();
+			if (!manifest
+				|| !PersistentManifestBelongsToDomain(*manifest, cacheDomain))
+			{
+				pooled = state.persistentGlyphManifests.erase(pooled);
+			}
+			else
+			{
+				++pooled;
+			}
+		}
+
+		for (const std::shared_ptr<PersistentGlyphManifest>& manifest : detached)
+		{
+			UnmapGlyphManifest(*manifest);
+			if (manifest->file != INVALID_HANDLE_VALUE)
+			{
+				CloseHandle(manifest->file);
+				manifest->file = INVALID_HANDLE_VALUE;
+			}
+			manifest->writable = false;
+			if (!manifest->path.empty())
+			{
+				state.usedPersistentCachePaths.erase(
+					NormalizePathKey(manifest->path));
+			}
+		}
+		if (detachedRuntimes)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: persistent manifest route detach domain=%s runtimes=%u mappings=%u",
+				cacheDomain == PersistentFontCacheDomain::DistanceField
+					? "distance-field" : "cpu-coverage",
+				detachedRuntimes, static_cast<UInt32>(detached.size()));
+		}
+	}
+
+	static void ReleaseDistanceFieldBitmapCaches()
+	{
+		FreeTypeState& state = State();
+		for (auto entry = state.bitmapCache.begin();
+			entry != state.bitmapCache.end();)
+		{
+			if (entry->first.maskType != static_cast<UInt8>(
+				GlyphMaskType::DistanceField))
+			{
+				++entry;
+				continue;
+			}
+			state.bitmapCacheBytes -= std::min(
+				state.bitmapCacheBytes, entry->second.bytes);
+			state.bitmapLru.erase(entry->second.lru);
+			entry = state.bitmapCache.erase(entry);
+		}
+		for (auto profile = state.persistentBitmapProfiles.begin();
+			profile != state.persistentBitmapProfiles.end();)
+		{
+			if (profile->first.maskType != static_cast<UInt8>(
+				GlyphMaskType::DistanceField))
+			{
+				++profile;
+				continue;
+			}
+			if (!profile->second->path.empty())
+			{
+				state.usedPersistentCachePaths.erase(
+					NormalizePathKey(profile->second->path));
+			}
+			profile = state.persistentBitmapProfiles.erase(profile);
+		}
+	}
+
 	static PersistentCacheCleanupClass ClassifyPersistentBitmapCache(
 		const std::wstring& path)
 	{
@@ -1758,7 +1922,8 @@ namespace fonthook::vectorfont
 		{
 			return PersistentCacheCleanupClass::Invalid;
 		}
-		if (g_bEnableFreeTypeFontAggressivePerformanceMode)
+		if (GetPersistentFontCacheDomain()
+			== PersistentFontCacheDomain::CpuCoverage)
 			return PersistentCacheCleanupClass::InactiveDistanceField;
 		return header.distanceFieldMethod == static_cast<UInt8>(
 			GetConfiguredDistanceFieldMethod())
@@ -1775,21 +1940,175 @@ namespace fonthook::vectorfont
 			|| std::memcmp(header.magic, magic, sizeof(magic)) != 0
 			|| header.version != kPersistentGlyphManifestVersion
 			|| header.headerSize != sizeof(header)
-			|| header.distanceFieldIdentityVersion
-				!= kPersistentGlyphManifestDistanceFieldIdentityVersion
-			|| header.distanceFieldMethod
-				> static_cast<UInt8>(DistanceFieldMethod::Mtsdf)
+			|| header.cacheIdentityVersion
+				!= kPersistentGlyphManifestCacheIdentityVersion
+			|| header.cacheDomain
+				> static_cast<UInt8>(PersistentFontCacheDomain::CpuCoverage)
 			|| header.checksum != HashBytes64(&header,
 				offsetof(PersistentGlyphManifestHeader, checksum)))
 		{
 			return PersistentCacheCleanupClass::Invalid;
 		}
-		if (g_bEnableFreeTypeFontAggressivePerformanceMode)
+		const PersistentFontCacheDomain cacheDomain =
+			static_cast<PersistentFontCacheDomain>(header.cacheDomain);
+		if (cacheDomain == PersistentFontCacheDomain::CpuCoverage)
+			return PersistentCacheCleanupClass::Neutral;
+		if (header.distanceFieldMethod
+			> static_cast<UInt8>(DistanceFieldMethod::Mtsdf))
+			return PersistentCacheCleanupClass::Invalid;
+		if (GetPersistentFontCacheDomain()
+			== PersistentFontCacheDomain::CpuCoverage)
 			return PersistentCacheCleanupClass::InactiveDistanceField;
 		return header.distanceFieldMethod == static_cast<UInt8>(
 			GetConfiguredDistanceFieldMethod())
 			? PersistentCacheCleanupClass::CurrentDistanceField
 			: PersistentCacheCleanupClass::InactiveDistanceField;
+	}
+
+	void SynchronizePersistentFontCacheRoute(FontAtlasRoute route)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		const PersistentFontCacheDomain cacheDomain =
+			ResolvePersistentFontCacheDomain(route);
+		FreeTypeState& state = State();
+		if (state.persistentCacheRouteSynchronized
+			&& state.persistentCacheDomain == cacheDomain)
+		{
+			return;
+		}
+
+		const bool wasSynchronized = state.persistentCacheRouteSynchronized;
+		const PersistentFontCacheDomain previousDomain =
+			state.persistentCacheDomain;
+		state.persistentCacheRouteSynchronized = true;
+		state.persistentCacheDomain = cacheDomain;
+		DetachPersistentManifestsOutsideDomain(cacheDomain);
+
+		if (cacheDomain != PersistentFontCacheDomain::CpuCoverage)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: persistent cache route synchronized previous=%s current=distance-field invalidation=none",
+				wasSynchronized
+					? (previousDomain == PersistentFontCacheDomain::DistanceField
+						? "distance-field" : "cpu-coverage")
+					: "unresolved");
+			return;
+		}
+
+		ReleaseDistanceFieldBitmapCaches();
+		std::wstring directory;
+		if (!EnsurePersistentBitmapDirectory(directory))
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: distance-field cache invalidation unavailable reason=cache-directory");
+			return;
+		}
+
+		UInt32 deletedMasks = 0;
+		UInt32 deletedManifests = 0;
+		UInt32 deletedAtlases = 0;
+		UInt32 deletedTemporary = 0;
+		UInt32 failed = 0;
+		UInt64 deletedBytes = 0;
+		auto hasSuffix = [](const std::wstring& value, const wchar_t* suffix)
+		{
+			const size_t length = std::wcslen(suffix);
+			return value.size() >= length
+				&& value.compare(value.size() - length, length, suffix) == 0;
+		};
+		const std::wstring pattern = directory + L"\\*";
+		WIN32_FIND_DATAW found = {};
+		HANDLE search = FindFirstFileW(pattern.c_str(), &found);
+		if (search != INVALID_HANDLE_VALUE)
+		{
+			do
+			{
+				if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+					continue;
+				const std::wstring path = directory + L"\\" + found.cFileName;
+				const std::wstring normalized = NormalizePathKey(path);
+				const bool bitmap = hasSuffix(normalized, L".tnvfmask");
+				const bool manifest = hasSuffix(normalized, L".tnvfmanifest");
+				const bool atlas = hasSuffix(normalized, L".tnvfatlas");
+				const bool temporary =
+					hasSuffix(normalized, L".tnvfmask.tmp")
+					|| hasSuffix(normalized, L".tnvfmanifest.tmp")
+					|| hasSuffix(normalized, L".tnvfatlas.tmp")
+					|| hasSuffix(normalized, L".tnvfatlas.stream.tmp");
+				bool remove = temporary;
+				if (bitmap)
+				{
+					const PersistentCacheCleanupClass cleanupClass =
+						ClassifyPersistentBitmapCache(path);
+					remove = cleanupClass
+							== PersistentCacheCleanupClass::InactiveDistanceField
+						|| cleanupClass == PersistentCacheCleanupClass::Invalid;
+				}
+				else if (manifest)
+				{
+					const PersistentCacheCleanupClass cleanupClass =
+						ClassifyPersistentGlyphManifestCache(path);
+					remove = cleanupClass
+							== PersistentCacheCleanupClass::InactiveDistanceField
+						|| cleanupClass == PersistentCacheCleanupClass::Invalid;
+				}
+				else if (atlas)
+				{
+					const PersistentCacheCleanupClass cleanupClass =
+						ClassifyAtlasSnapshotCacheForCleanup(path);
+					remove = cleanupClass
+							== PersistentCacheCleanupClass::InactiveDistanceField
+						|| cleanupClass == PersistentCacheCleanupClass::Invalid;
+				}
+				if (!remove)
+					continue;
+
+				const UInt64 bytes =
+					(static_cast<UInt64>(found.nFileSizeHigh) << 32)
+					| found.nFileSizeLow;
+				if (DeleteFileW(path.c_str())
+					|| IsMissingPersistentCacheFileError(GetLastError()))
+				{
+					deletedBytes += bytes;
+					state.usedPersistentCachePaths.erase(normalized);
+					if (temporary)
+						++deletedTemporary;
+					else if (bitmap)
+						++deletedMasks;
+					else if (manifest)
+						++deletedManifests;
+					else if (atlas)
+						++deletedAtlases;
+				}
+				else
+				{
+					// A failed unlink must not leave a reusable distance-field
+					// header. Truncation preserves the logical invalidation even
+					// when antivirus or another reader briefly holds the name.
+					HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE,
+						FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+						nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+					const bool invalidated = file != INVALID_HANDLE_VALUE
+						&& SetFileSize64(file, 0) && FlushFileBuffers(file);
+					if (file != INVALID_HANDLE_VALUE)
+						CloseHandle(file);
+					if (!invalidated)
+						++failed;
+				}
+			} while (FindNextFileW(search, &found));
+			FindClose(search);
+		}
+
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: distance-field cache invalidated route=%s previous=%s masks=%u manifests=%u atlases=%u temporary=%u bytes=%llu failed=%u",
+			route == FontAtlasRoute::ShaderA8Coverage
+				? "a8-baked-coverage" : "argb-fallback",
+			wasSynchronized
+				? (previousDomain == PersistentFontCacheDomain::DistanceField
+					? "distance-field" : "cpu-coverage")
+				: "unresolved",
+			deletedMasks, deletedManifests, deletedAtlases, deletedTemporary,
+			static_cast<unsigned long long>(deletedBytes), failed);
 	}
 
 	void DeleteUnusedFreeTypeFontCacheFiles(bool deleteAllUnused)

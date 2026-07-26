@@ -413,6 +413,12 @@ namespace fonthook::vectorfont
 				? left * right : std::numeric_limits<size_t>::max();
 		}
 
+		size_t SaturatingAdd(size_t left, size_t right)
+		{
+			return right <= std::numeric_limits<size_t>::max() - left
+				? left + right : std::numeric_limits<size_t>::max();
+		}
+
 		UInt32 ResolvePrewarmGlyphBatchLimit(const FontConfig& config,
 			float rasterScale, bool shaderSdf, UInt32 sdfSpread)
 		{
@@ -435,16 +441,39 @@ namespace fonthook::vectorfont
 						effectRadius = std::max(effectRadius,
 							(config.outline.width + config.outline.softness)
 							* rasterScale + 3.0f);
+					if (config.shadow.enabled)
+					{
+						float shadowRadius = config.shadow.blur;
+						if (HardShadowIncludesGlow(config))
+							shadowRadius = std::max(
+								shadowRadius, config.glow.outer);
+						if (HardShadowIncludesOutline(config))
+						{
+							shadowRadius = std::max(shadowRadius,
+								config.outline.width
+								+ config.outline.softness);
+						}
+						effectRadius = std::max(effectRadius,
+							shadowRadius * rasterScale + 3.0f);
+					}
 				}
 				const size_t expansion = static_cast<size_t>(std::ceil(effectRadius)) * 2u + 2u;
 				const size_t width = bodyWidth + expansion;
 				const size_t height = bodyHeight + expansion;
 				size_t masks = 1;
 				if (!shaderSdf)
-					masks += (config.glow.enabled ? 1u : 0u)
+					masks += (config.shadow.enabled ? 1u : 0u)
+						+ (config.glow.enabled ? 1u : 0u)
 						+ (config.outline.enabled ? 1u : 0u);
 				size_t bytes = SaturatingMultiply(
 					SaturatingMultiply(width, height), masks);
+				if (!shaderSdf && masks > 1)
+				{
+					// Distance-aware CPU effects use one transient float
+					// chamfer field while retaining the result masks.
+					bytes = SaturatingAdd(bytes, SaturatingMultiply(
+						SaturatingMultiply(width, height), 4u));
+				}
 				if (shaderSdf)
 					bytes = SaturatingMultiply(bytes,
 						DistanceFieldBytesPerPixel(
@@ -632,6 +661,7 @@ namespace fonthook::vectorfont
 			if (!config || !runtime || config->layoutHash != job.layoutHash
 				|| config->maskGenerationHash != job.maskGenerationHash
 				|| config->shaderEffectHash != job.shaderEffectHash
+				|| !MatchesPrewarmProfile(job, *config)
 				|| job.codePage != GetFreeTypeTextCodePage())
 			{
 				if (runtime)
@@ -718,6 +748,7 @@ namespace fonthook::vectorfont
 			if (!config || !runtime || config->layoutHash != job.layoutHash
 				|| config->maskGenerationHash != job.maskGenerationHash
 				|| config->shaderEffectHash != job.shaderEffectHash
+				|| !MatchesPrewarmProfile(job, *config)
 				|| job.codePage != GetFreeTypeTextCodePage())
 			{
 				if (runtime)
@@ -777,7 +808,7 @@ namespace fonthook::vectorfont
 				try
 				{
 					requestedGlyphs.reserve(batchGlyphLimit);
-					bitmapRequests.reserve(static_cast<size_t>(batchGlyphLimit) * 3u);
+					bitmapRequests.reserve(static_cast<size_t>(batchGlyphLimit) * 4u);
 				}
 				catch (const std::bad_alloc&)
 				{
@@ -838,6 +869,9 @@ namespace fonthook::vectorfont
 					if (config->outline.enabled && !shaderSdf)
 						bitmapRequests.push_back({ requestedGlyph,
 							GlyphMaskType::Outline, 0 });
+					if (config->shadow.enabled && !shaderSdf)
+						bitmapRequests.push_back({ requestedGlyph,
+							GlyphMaskType::Shadow, 0 });
 					++glyphCount;
 					++job.rasterizedGlyphCount;
 				}

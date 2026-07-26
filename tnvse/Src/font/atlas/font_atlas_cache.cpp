@@ -531,9 +531,19 @@ namespace fonthook::vectorfont
 				add(&softness, sizeof(softness));
 				add(&effect.power, sizeof(effect.power));
 			};
+			add(&kCpuEffectCoverageVersion,
+				sizeof(kCpuEffectCoverageVersion));
 			addEffect(config.glow);
 			addEffect(config.outline);
 			addEffect(config.shadow);
+			add(&config.shadow.includeGlow,
+				sizeof(config.shadow.includeGlow));
+			add(&config.shadow.includeOutline,
+				sizeof(config.shadow.includeOutline));
+			if (HardShadowIncludesGlow(config))
+				add(&config.glow.color.a, sizeof(config.glow.color.a));
+			if (HardShadowIncludesOutline(config))
+				add(&config.outline.color.a, sizeof(config.outline.color.a));
 			return hash;
 		}
 
@@ -640,15 +650,17 @@ namespace fonthook::vectorfont
 				if (config.glow.enabled)
 				{
 					include(GlyphMaskType::Glow);
-					glowStroke = static_cast<SInt32>(std::lround(
-						config.glow.width * rasterScale * 64.0f));
+					glowStroke = ResolveCpuEffectMaskIdentity(
+						config, GlyphMaskType::Glow, rasterScale);
 				}
 				if (config.outline.enabled)
 				{
 					include(GlyphMaskType::Outline);
-					outlineStroke = static_cast<SInt32>(std::lround(
-						config.outline.width * rasterScale * 64.0f));
+					outlineStroke = ResolveCpuEffectMaskIdentity(
+						config, GlyphMaskType::Outline, rasterScale);
 				}
+				if (config.shadow.enabled)
+					include(GlyphMaskType::Shadow);
 			}
 			const FontConfig& rasterConfig = shaderEffects
 				? GetMtsdfAtlasConfig(config, byteClass) : config;
@@ -703,11 +715,11 @@ namespace fonthook::vectorfont
 					}
 				}
 				else if (type == GlyphMaskType::Outline)
-					outlineStroke = static_cast<SInt32>(std::lround(
-						config.outline.width * rasterScale * 64.0f));
+					outlineStroke = ResolveCpuEffectMaskIdentity(
+						config, GlyphMaskType::Outline, rasterScale);
 				else if (type == GlyphMaskType::Glow)
-					glowStroke = static_cast<SInt32>(std::lround(
-						config.glow.width * rasterScale * 64.0f));
+					glowStroke = ResolveCpuEffectMaskIdentity(
+						config, GlyphMaskType::Glow, rasterScale);
 			}
 
 			UInt64 residentHits = 0;
@@ -719,7 +731,8 @@ namespace fonthook::vectorfont
 					const VectorFontByteClass byteClass =
 						static_cast<VectorFontByteClass>(roleIndex);
 					const FontConfig& rasterConfig =
-						GetMtsdfAtlasConfig(config, byteClass);
+						renderMode == AtlasRenderMode::ShaderEffects
+						? GetMtsdfAtlasConfig(config, byteClass) : config;
 					baseKeys[roleIndex] = {
 						BuildAtlasContentHash(
 							rasterConfig.maskGenerationRoleHashes[roleIndex],

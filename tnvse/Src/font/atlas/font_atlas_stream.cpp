@@ -155,6 +155,9 @@ namespace fonthook::vectorfont
 			// apparently valid atlas that is restored and then discarded.
 			hash = HashBytes(&kPersistentGlyphManifestVersion,
 				sizeof(kPersistentGlyphManifestVersion), hash);
+			hash = HashBytes(
+				&kPersistentGlyphManifestCacheIdentityVersion,
+				sizeof(kPersistentGlyphManifestCacheIdentityVersion), hash);
 			return hash;
 		}
 

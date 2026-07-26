@@ -292,6 +292,8 @@ namespace fonthook::vectorfont
 	};
 
 	// Version 13 identifies the selectable true-SDF A8 and BGRA MTSDF payloads.
+	// CPU-effect revisions are scoped through their mask identity so unchanged
+	// Fill and distance-field caches do not require regeneration.
 	constexpr UInt32 kPersistentBitmapVersion = 13;
 	constexpr UInt32 kPersistentBitmapRecordMagic = 0x4B534D47u; // GMSK
 	constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
@@ -455,8 +457,9 @@ namespace fonthook::vectorfont
 		UInt32 entrySize = 0;
 		UInt8 completeMode = 0;
 		UInt8 distanceFieldMethod = 0;
-		UInt8 distanceFieldIdentityVersion = 0;
-		UInt8 reserved[5] = {};
+		UInt8 cacheIdentityVersion = 0;
+		UInt8 cacheDomain = 0;
+		UInt8 reserved[4] = {};
 		UInt64 checksum = 0;
 	};
 
@@ -605,6 +608,9 @@ namespace fonthook::vectorfont
 		bool persistentBitmapUnavailable = false;
 		bool persistentBitmapMappingsEnabled = true;
 		bool completeCodePageAtlasOnlyPrewarm = false;
+		bool persistentCacheRouteSynchronized = false;
+		PersistentFontCacheDomain persistentCacheDomain =
+			PersistentFontCacheDomain::DistanceField;
 		UInt32 persistentBitmapFailureLogCount = 0;
 		size_t bitmapCacheBytes = 0;
 		bool bitmapCacheReducedAfterPrewarm = false;

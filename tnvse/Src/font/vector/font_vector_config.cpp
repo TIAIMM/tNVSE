@@ -674,6 +674,83 @@ namespace fonthook::vectorfont
 			|| HardShadowIncludesOutline(arConfig);
 	}
 
+	SInt32 ResolveCpuEffectMaskIdentity(const FontConfig& config,
+		GlyphMaskType maskType, float rasterScale)
+	{
+		if (maskType != GlyphMaskType::Glow
+			&& maskType != GlyphMaskType::Outline
+			&& maskType != GlyphMaskType::Shadow)
+		{
+			return 0;
+		}
+
+		UInt64 hash = 1469598103934665603ull;
+		auto add = [&](const void* data, size_t size)
+		{
+			const UInt8* bytes = static_cast<const UInt8*>(data);
+			for (size_t index = 0; index < size; ++index)
+			{
+				hash ^= bytes[index];
+				hash *= 1099511628211ull;
+			}
+		};
+		auto addPhysical = [&](float value)
+		{
+			const SInt32 fixed = static_cast<SInt32>(std::lround(
+				value * rasterScale * 64.0f));
+			add(&fixed, sizeof(fixed));
+		};
+		auto addGlow = [&]()
+		{
+			add(&config.glow.enabled, sizeof(config.glow.enabled));
+			addPhysical(config.glow.inner);
+			addPhysical(config.glow.outer);
+			add(&config.glow.power, sizeof(config.glow.power));
+			add(&config.glow.color.a, sizeof(config.glow.color.a));
+		};
+		auto addOutline = [&]()
+		{
+			add(&config.outline.enabled, sizeof(config.outline.enabled));
+			addPhysical(config.outline.width);
+			addPhysical(config.outline.softness);
+			add(&config.outline.color.a, sizeof(config.outline.color.a));
+		};
+
+		add(&kCpuEffectCoverageVersion, sizeof(kCpuEffectCoverageVersion));
+		add(&maskType, sizeof(maskType));
+		switch (maskType)
+		{
+		case GlyphMaskType::Glow:
+			addGlow();
+			break;
+		case GlyphMaskType::Outline:
+			addOutline();
+			break;
+		case GlyphMaskType::Shadow:
+			add(&config.shadow.enabled, sizeof(config.shadow.enabled));
+			addPhysical(config.shadow.blur);
+			add(&config.shadow.power, sizeof(config.shadow.power));
+			add(&config.shadow.includeGlow,
+				sizeof(config.shadow.includeGlow));
+			add(&config.shadow.includeOutline,
+				sizeof(config.shadow.includeOutline));
+			if (HardShadowIncludesGlow(config))
+				addGlow();
+			if (HardShadowIncludesOutline(config))
+				addOutline();
+			break;
+		default:
+			break;
+		}
+
+		// Legacy CPU masks stored a non-negative 26.6 FreeType stroke width in
+		// this field. Reserve the sign bit for the revised identity so no old
+		// opaque-stroke cache can alias the new distance-aware coverage.
+		UInt32 folded = static_cast<UInt32>(hash ^ (hash >> 32));
+		folded |= 0x80000000u;
+		return static_cast<SInt32>(folded);
+	}
+
 	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale,
 		UInt32& arSpread, bool abIncludeEffects)
 	{

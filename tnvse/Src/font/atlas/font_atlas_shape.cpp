@@ -241,7 +241,7 @@ namespace fonthook::vectorfont
 		}
 
 		void BuildBakedArgbFallback(const std::vector<PendingQuad>& source,
-			std::vector<PendingQuad>& quads)
+			const NiColorA& tileColor, std::vector<PendingQuad>& quads)
 		{
 			quads = source;
 			std::unordered_map<UInt64, std::shared_ptr<const GlyphBitmap>> unique;
@@ -249,7 +249,19 @@ namespace fonthook::vectorfont
 			{
 				if (!quad.bitmap)
 					continue;
-				const NiColorA compositeColor = ComposeQuadColor(quad);
+				NiColorA compositeColor = ComposeQuadColor(quad);
+				if (!quad.usesLiveTileRgb)
+				{
+					// TILE1000 unconditionally multiplies the sampled texture by
+					// live c0. Pre-compensate fixed effect RGB so the stock fallback
+					// resolves to the same configured color as the native shader.
+					compositeColor.r = ResolveModifierChannel(
+						compositeColor.r, tileColor.r);
+					compositeColor.g = ResolveModifierChannel(
+						compositeColor.g, tileColor.g);
+					compositeColor.b = ResolveModifierChannel(
+						compositeColor.b, tileColor.b);
+				}
 				const UInt32 rgba = PackColorModifierRgba(compositeColor);
 				UInt64 bakedId = BuildBakedBitmapId(quad.bitmap->cacheId, rgba);
 				bakedId = BuildBakedBitmapId(bakedId, static_cast<UInt8>(quad.layer));
@@ -343,6 +355,7 @@ namespace fonthook::vectorfont
 			{
 				const AtlasGlyphInstance* instance = nullptr;
 				std::shared_ptr<const GlyphBitmap> fill;
+				std::shared_ptr<const GlyphBitmap> shadow;
 				std::shared_ptr<const GlyphBitmap> glow;
 				std::shared_ptr<const GlyphBitmap> outline;
 				float baselineOffset = 0.0f;
@@ -355,14 +368,11 @@ namespace fonthook::vectorfont
 				&& config.glow.enabled;
 			const bool visibleOutline = included[static_cast<size_t>(AtlasLayer::Outline)]
 				&& config.outline.enabled;
-			const bool shadowIncludesGlow =
+			const bool visibleShadow =
 				included[static_cast<size_t>(AtlasLayer::Shadow)]
-				&& HardShadowIncludesGlow(config);
-			const bool shadowIncludesOutline =
-				included[static_cast<size_t>(AtlasLayer::Shadow)]
-				&& HardShadowIncludesOutline(config);
-			const bool needsGlowMask = visibleGlow || shadowIncludesGlow;
-			const bool needsOutlineMask = visibleOutline || shadowIncludesOutline;
+				&& config.shadow.enabled;
+			const bool needsGlowMask = visibleGlow;
+			const bool needsOutlineMask = visibleOutline;
 			thread_local std::vector<PreparedGlyph> prepared;
 			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
 			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
@@ -376,6 +386,8 @@ namespace fonthook::vectorfont
 				glyph.instance = &instance;
 				glyph.baselineOffset = GetGlyphBaselineOffset(runtime, instance.glyph);
 				bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Fill, 0 });
+				if (visibleShadow)
+					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Shadow, 0 });
 				if (needsGlowMask)
 					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Glow, 0 });
 				if (needsOutlineMask)
@@ -391,6 +403,15 @@ namespace fonthook::vectorfont
 				{
 					failure = PendingQuadBuildFailure::Fill;
 					return false;
+				}
+				if (visibleShadow)
+				{
+					glyph.shadow = bitmapResults[bitmapIndex++];
+					if (!glyph.shadow)
+					{
+						failure = PendingQuadBuildFailure::Shadow;
+						return false;
+					}
 				}
 				if (needsGlowMask)
 				{
@@ -415,7 +436,7 @@ namespace fonthook::vectorfont
 			// Tile text does not consistently depth-test effect triangles. Submit each
 			// complete layer before the next one, with the shadow behind the glow and
 			// every effect behind the fill.
-			if (included[static_cast<size_t>(AtlasLayer::Shadow)] && config.shadow.enabled)
+			if (visibleShadow)
 			{
 				for (const PreparedGlyph& glyph : prepared)
 				{
@@ -423,27 +444,7 @@ namespace fonthook::vectorfont
 						glyph.instance->color, tileColor);
 					const NiColorA shadowColor = ResolveEffectLayerColor(
 						config.shadow, config.fontColor);
-					if (shadowIncludesGlow && glyph.glow)
-					{
-						NiColorA componentColor = shadowColor;
-						componentColor.a *= config.glow.color.a;
-						AddPendingQuad(quads, glyph.glow, *glyph.instance,
-							baseColor, componentColor,
-							config.shadow.x, config.shadow.y,
-							rasterScale, glyph.baselineOffset, AtlasLayer::Shadow,
-							EffectUsesLiveTileRgb(config.shadow));
-					}
-					if (shadowIncludesOutline && glyph.outline)
-					{
-						NiColorA componentColor = shadowColor;
-						componentColor.a *= config.outline.color.a;
-						AddPendingQuad(quads, glyph.outline, *glyph.instance,
-							baseColor, componentColor,
-							config.shadow.x, config.shadow.y,
-							rasterScale, glyph.baselineOffset, AtlasLayer::Shadow,
-							EffectUsesLiveTileRgb(config.shadow));
-					}
-					AddPendingQuad(quads, glyph.fill, *glyph.instance,
+					AddPendingQuad(quads, glyph.shadow, *glyph.instance,
 						baseColor, shadowColor,
 						config.shadow.x, config.shadow.y, rasterScale,
 						glyph.baselineOffset, AtlasLayer::Shadow,
@@ -1357,7 +1358,7 @@ namespace fonthook::vectorfont
 			thread_local std::vector<PendingQuad> bakedQuads;
 			if (pixelMode == AtlasPixelMode::Argb32 && !useCustomA8Shader)
 			{
-				BuildBakedArgbFallback(quads, bakedQuads);
+				BuildBakedArgbFallback(quads, tileColor, bakedQuads);
 				activeQuads = &bakedQuads;
 			}
 

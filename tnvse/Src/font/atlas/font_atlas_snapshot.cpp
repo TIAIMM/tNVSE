@@ -165,6 +165,9 @@ namespace fonthook::vectorfont
 			// Atlas restore also requires the matching complete glyph manifest.
 			hash = HashAtlasBytes(&kPersistentGlyphManifestVersion,
 				sizeof(kPersistentGlyphManifestVersion), hash);
+			hash = HashAtlasBytes(
+				&kPersistentGlyphManifestCacheIdentityVersion,
+				sizeof(kPersistentGlyphManifestCacheIdentityVersion), hash);
 			return hash;
 		}
 
@@ -274,7 +277,7 @@ namespace fonthook::vectorfont
 			if (!placement.cacheId || !placement.rect.width || !placement.rect.height
 				|| placement.rect.width > kAtlasHardLimit
 				|| placement.rect.height > kAtlasHardLimit
-				|| placement.maskType > static_cast<UInt8>(GlyphMaskType::DistanceField)
+				|| placement.maskType > static_cast<UInt8>(GlyphMaskType::Shadow)
 				|| placement.colorBaked > 1 || placement.bakedLayer > 3
 				|| placement.effectiveWidth <= 0 || placement.effectiveWidth > 65535
 				|| placement.effectiveHeight <= 0 || placement.effectiveHeight > 65535
@@ -1975,7 +1978,8 @@ namespace fonthook::vectorfont
 			method = DistanceFieldMethod::Mtsdf;
 		else
 			return PersistentCacheCleanupClass::Invalid;
-		if (g_bEnableFreeTypeFontAggressivePerformanceMode)
+		if (GetPersistentFontCacheDomain()
+			== PersistentFontCacheDomain::CpuCoverage)
 			return PersistentCacheCleanupClass::InactiveDistanceField;
 		return method == GetConfiguredDistanceFieldMethod()
 			? PersistentCacheCleanupClass::CurrentDistanceField

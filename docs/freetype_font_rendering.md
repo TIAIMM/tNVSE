@@ -297,7 +297,9 @@ handle, mapping handle, and mapped view instead of mapping that file once per
 font ID. One `_p<page>.tnvfatlas` snapshot per atlas page stores
 the stable glyph-ID placement map. Snapshot v16 records the byte role, the
 selected distance-field method, and the validated runtime UV subset explicitly,
-and stores either A8 true-SDF or BGRA MTSDF rectangle payloads.
+and stores A8 true-SDF, BGRA MTSDF, or CPU-effect rectangle payloads. The
+CPU-effect coverage revision is scoped into the page-content identity, so
+revised effects do not invalidate unrelated true-SDF/MTSDF snapshots.
 Its placed level-zero payload stores the raw per-glyph rectangle texels directly;
 `storedPixelBytes` must equal `pixelBytes`. Payload checksums and page-content
 identities are calculated from those same raw texels.
@@ -342,9 +344,22 @@ successfully. If a prewarm job fails or is cancelled, cleanup switches to a
 safe partial scope: caches identified as the inactive true-SDF/MTSDF method,
 unreadable managed cache headers, and orphaned `.tmp`/`.stream.tmp` transaction
 files are removed, while current-method and mode-neutral caches are retained.
-Manifest headers carry an explicit distance-field identity so the partial
-cleanup does not infer their method from an opaque filename hash. Unknown files
-in `fontdata` are never removed. The option defaults to `0`.
+Manifest headers carry an explicit cache-domain and distance-field identity so
+the partial cleanup does not infer their route or method from an opaque filename
+hash. Unknown files in `fontdata` are never removed. The option defaults to `0`.
+
+The final native route is synchronized during deferred initialization, before
+configured game fonts enter blocking prewarm. Aggressive A8 coverage and the
+stock-shader ARGB fallback both select the CPU-coverage cache domain. Selecting
+that domain forcibly closes in-process distance-field bitmap/manifest mappings
+and invalidates every normal true-SDF/MTSDF `.tnvfmask`, manifest, atlas
+snapshot, and incomplete atlas transaction, independently of
+`bDeleteUnusedFreeTypeFontCache`. CPU-coverage manifests have a separate domain
+identity and are retained on later CPU-route launches. If a font was activated
+before Shader Loader initialization, a manifest from the provisional route is
+detached when the final route is synchronized, and a queued prewarm job whose
+route identity is stale is cancelled rather than being executed under the new
+route.
 
 Cache identity is split by responsibility. The layout hash covers font faces,
 metrics, advances, and fallback identity. Persistent manifests store
@@ -395,22 +410,28 @@ multi-channel Fill field, and sampled Alpha carries true signed distance for
 effects.
 
 `bEnableFreeTypeFontAggressivePerformanceMode=1` overrides that selection.
-FreeType hinting rasterizes Fill, Shadow, Glow, and Outline coverage once, the
-resulting masks remain in level-zero `D3DFMT_A8` atlas pages, and a dedicated
-`ps_3_0` coverage shader performs one texture instruction. Effect RGB, opacity,
-and the fixed-versus-live Tile RGB selector are carried in the vertex stream,
-so adjacent same-page layer and color ranges merge without changing their
+FreeType hinting rasterizes Fill once. A bounded CPU distance transform then
+evaluates Glow falloff and outer feather, Outline softness, blurred Shadow
+power, and hard-Shadow Glow/Outline source-over composition with the same
+configured parameters as the distance-field shaders. The resulting masks
+remain in level-zero `D3DFMT_A8` atlas pages, and a dedicated `ps_3_0` coverage
+shader performs one texture instruction. Effect RGB, opacity, and the
+fixed-versus-live Tile RGB selector are carried in the vertex stream, so
+adjacent same-page layer and color ranges merge without changing their
 Shadow/Glow/Outline/Fill order. A common single-page text facade consequently
 uses one packet and one draw. This mode intentionally gives up distance-field
 magnification quality in exchange for stock-like sampling, packet, and atlas
-cost.
+cost; it no longer substitutes opaque FreeType strokes for configured effect
+coverage.
 
 The aggressive mode never removes the fallback boundary. Without Fallout
 Shader Loader, with an old Loader version, with missing Loader exports, with a
 missing coverage shader, or when native initialization is unavailable, route
-selection occurs before shape construction and tNVSE builds hinted coverage
-and effect masks into an `A8R8G8B8` atlas with baked colors for the stock Tile
-shader. No A8 native facade is created in that state.
+selection occurs before shape construction and tNVSE builds the same
+distance-aware hinted coverage and effect masks into an `A8R8G8B8` atlas with
+baked colors for the stock Tile shader. Fixed effect RGB is compensated for the
+stock shader's live Tile-color multiplication at shape construction. No A8
+native facade is created in that state.
 
 The visible text on a native route is
 represented by one facade in the stock Tile alpha list so the game retains its
@@ -618,8 +639,9 @@ profiles use separate cache keys; aggressive A8 coverage additionally has a
 distinct pixel/render profile and prewarm identity. Changing
 `uiFreeTypeFontDistanceFieldMode`
 therefore selects new bitmap, manifest, snapshot, and shader identities without
-requiring manual cache deletion. Native and fallback profiles may coexist when
-text was created before Shader Loader initialization.
+requiring manual cache deletion. CPU coverage and distance-field manifests
+cannot alias, and final CPU-route selection removes normal distance-field cache
+files instead of retaining a provisional native/fallback mixture.
 
 Generated distance fields and ARGB-fallback masks and their supporting CPU
 objects are cached in process memory. Equivalent masks are shared across font
@@ -665,7 +687,8 @@ When
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
 generations are restored after a D3D9 device reset. A version-16 snapshot
-records either A8 true SDF or BGRA MTSDF and is uploaded directly to this path.
+records A8 true SDF, BGRA MTSDF, or CPU-effect coverage and is uploaded
+directly to this path.
 Its cache identity includes the persistent
 glyph-manifest ABI, so an incompatible or newly revised manifest cannot make an
 old atlas look restorable and then force a shared-font regeneration. Streamed

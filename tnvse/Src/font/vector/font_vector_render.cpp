@@ -62,6 +62,8 @@ namespace fonthook
 			{
 			case vectorfont::GlyphAtlasMaskFailure::Fill:
 				return "fill";
+			case vectorfont::GlyphAtlasMaskFailure::Shadow:
+				return "shadow";
 			case vectorfont::GlyphAtlasMaskFailure::Glow:
 				return "glow";
 			case vectorfont::GlyphAtlasMaskFailure::Outline:

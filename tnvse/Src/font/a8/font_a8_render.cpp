@@ -288,9 +288,13 @@ namespace fonthook::vectorfont
 		const bool accumulatorReady = HookNativeA8Accumulator();
 		const bool tileRouteReady = HookTileRenderPass();
 		const bool shaderReady = InitializeNativeA8Renderer(true, true);
+		const bool nativeReady =
+			accumulatorReady && tileRouteReady && shaderReady;
+		SynchronizePersistentFontCacheRoute(ResolveFontAtlasRoute(
+			nativeReady, g_bEnableFreeTypeFontAggressivePerformanceMode));
 		gLog.FormattedMessage(
 			"tnvse_freetype_native: initialization nativeReady=%u accumulator=%u sortedUpload=%u tileRoute=%u shader=%u",
-			accumulatorReady && tileRouteReady && shaderReady ? 1 : 0,
+			nativeReady ? 1 : 0,
 			accumulatorReady ? 1 : 0,
 			State().sortedTileRenderHookInstalled ? 1 : 0,
 			tileRouteReady ? 1 : 0,

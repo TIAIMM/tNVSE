@@ -5,7 +5,10 @@
 #include "font_vector_msdfgen.h"
 #include "globals.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <thread>
 
@@ -164,7 +167,315 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(FreeTypeState& state,
+		float SmoothStep(float edge0, float edge1, float value)
+		{
+			if (!(edge1 > edge0))
+				return value >= edge1 ? 1.0f : 0.0f;
+			const float normalized = std::clamp(
+				(value - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+			return normalized * normalized * (3.0f - 2.0f * normalized);
+		}
+
+		float EvaluateCpuGlowCoverage(const FontConfig& config,
+			float rasterScale, float signedDistance, float bodyCoverage)
+		{
+			if (!config.glow.enabled)
+				return 0.0f;
+			const float inner = std::max(config.glow.inner * rasterScale, 0.0f);
+			const float outer = std::max(config.glow.outer * rasterScale,
+				inner + 0.0001f);
+			const float outsideDistance = std::max(-signedDistance, 0.0f);
+			const float normalizedDistance =
+				(outsideDistance - inner) / (outer - inner);
+			const float fade = outsideDistance <= inner
+				? 1.0f
+				: std::exp2(-2.0f * std::max(config.glow.power, 0.0001f)
+					* std::clamp(normalizedDistance, 0.0f, 1.0f));
+			const float outerFeather = 1.0f - SmoothStep(
+				outer - 0.5f, outer + 0.5f, outsideDistance);
+			return std::clamp((1.0f - bodyCoverage) * fade * outerFeather,
+				0.0f, 1.0f);
+		}
+
+		float EvaluateCpuOutlineCoverage(const FontConfig& config,
+			float rasterScale, float signedDistance, float bodyCoverage)
+		{
+			if (!config.outline.enabled)
+				return 0.0f;
+			const float width = std::max(
+				config.outline.width * rasterScale, 0.0f);
+			const float softness = std::max(
+				config.outline.softness * rasterScale, 0.0f);
+			const float proxyAntialiasWidth = 0.5f + softness;
+			const float proxy = SmoothStep(-width - proxyAntialiasWidth,
+				proxyAntialiasWidth, signedDistance);
+			return std::clamp(std::max(bodyCoverage, proxy), 0.0f, 1.0f);
+		}
+
+		float EvaluateCpuEffectCoverage(const FontConfig& config,
+			GlyphMaskType maskType, float rasterScale, float signedDistance,
+			float bodyCoverage)
+		{
+			switch (maskType)
+			{
+			case GlyphMaskType::Glow:
+				return EvaluateCpuGlowCoverage(config, rasterScale,
+					signedDistance, bodyCoverage);
+			case GlyphMaskType::Outline:
+				return EvaluateCpuOutlineCoverage(config, rasterScale,
+					signedDistance, bodyCoverage);
+			case GlyphMaskType::Shadow:
+			{
+				if (!config.shadow.enabled)
+					return 0.0f;
+				const float blur = std::max(
+					config.shadow.blur * rasterScale, 0.0f);
+				if (blur > 0.001f)
+				{
+					const float blurred = SmoothStep(-blur - 0.5f,
+						blur + 0.5f, signedDistance);
+					return std::pow(std::clamp(blurred, 0.0f, 1.0f),
+						std::max(config.shadow.power, 0.0001f));
+				}
+
+				float glow = 0.0f;
+				if (HardShadowIncludesGlow(config))
+				{
+					glow = EvaluateCpuGlowCoverage(config, rasterScale,
+						signedDistance, bodyCoverage)
+						* std::clamp(config.glow.color.a, 0.0f, 1.0f);
+				}
+				float outline = 0.0f;
+				if (HardShadowIncludesOutline(config))
+				{
+					outline = EvaluateCpuOutlineCoverage(config, rasterScale,
+						signedDistance, bodyCoverage)
+						* std::clamp(config.outline.color.a, 0.0f, 1.0f);
+				}
+				const float outside = outline + (1.0f - outline) * glow;
+				return std::clamp(bodyCoverage
+					+ (1.0f - bodyCoverage) * outside, 0.0f, 1.0f);
+			}
+			default:
+				return bodyCoverage;
+			}
+		}
+
+		float ResolveCpuEffectRadius(const FontConfig& config,
+			GlyphMaskType maskType, float rasterScale)
+		{
+			float radius = 0.0f;
+			if (maskType == GlyphMaskType::Glow)
+				radius = config.glow.outer;
+			else if (maskType == GlyphMaskType::Outline)
+				radius = config.outline.width + config.outline.softness;
+			else if (maskType == GlyphMaskType::Shadow)
+			{
+				radius = config.shadow.blur;
+				if (HardShadowIncludesGlow(config))
+					radius = std::max(radius, config.glow.outer);
+				if (HardShadowIncludesOutline(config))
+				{
+					radius = std::max(radius,
+						config.outline.width + config.outline.softness);
+				}
+			}
+			return std::max(radius * rasterScale, 0.0f);
+		}
+
+		void RunChamferDistanceTransform(std::vector<float>& distance,
+			int width, int height)
+		{
+			constexpr float kDiagonal = 1.4142135623730950488f;
+			for (int y = 0; y < height; ++y)
+			{
+				for (int x = 0; x < width; ++x)
+				{
+					float& value = distance[
+						static_cast<size_t>(y) * width + x];
+					if (x > 0)
+						value = std::min(value, distance[
+							static_cast<size_t>(y) * width + x - 1] + 1.0f);
+					if (y > 0)
+					{
+						value = std::min(value, distance[
+							static_cast<size_t>(y - 1) * width + x] + 1.0f);
+						if (x > 0)
+							value = std::min(value, distance[
+								static_cast<size_t>(y - 1) * width + x - 1]
+								+ kDiagonal);
+						if (x + 1 < width)
+							value = std::min(value, distance[
+								static_cast<size_t>(y - 1) * width + x + 1]
+								+ kDiagonal);
+					}
+				}
+			}
+			for (int y = height - 1; y >= 0; --y)
+			{
+				for (int x = width - 1; x >= 0; --x)
+				{
+					float& value = distance[
+						static_cast<size_t>(y) * width + x];
+					if (x + 1 < width)
+						value = std::min(value, distance[
+							static_cast<size_t>(y) * width + x + 1] + 1.0f);
+					if (y + 1 < height)
+					{
+						value = std::min(value, distance[
+							static_cast<size_t>(y + 1) * width + x] + 1.0f);
+						if (x > 0)
+							value = std::min(value, distance[
+								static_cast<size_t>(y + 1) * width + x - 1]
+								+ kDiagonal);
+						if (x + 1 < width)
+							value = std::min(value, distance[
+								static_cast<size_t>(y + 1) * width + x + 1]
+								+ kDiagonal);
+					}
+				}
+			}
+		}
+
+		bool BuildCpuEffectBitmap(const FontConfig& config,
+			GlyphMaskType maskType, float rasterScale,
+			const GlyphBitmap& body, GlyphBitmap& target)
+		{
+			if (body.width <= 0 || body.height <= 0 || body.alpha.empty())
+			{
+				target.width = 0;
+				target.height = 0;
+				target.alpha.clear();
+				return true;
+			}
+			const float radius = ResolveCpuEffectRadius(
+				config, maskType, rasterScale);
+			if (!std::isfinite(radius)
+				|| radius > static_cast<float>(std::numeric_limits<int>::max() / 4))
+			{
+				return false;
+			}
+			const int padding = std::max(2,
+				static_cast<int>(std::ceil(radius + 1.5f)));
+			if (body.width > 4096 - padding * 2
+				|| body.height > 4096 - padding * 2)
+			{
+				return false;
+			}
+			target.width = body.width + padding * 2;
+			target.height = body.height + padding * 2;
+			target.left = body.left - padding;
+			target.top = body.top + padding;
+			const size_t pixelCount =
+				static_cast<size_t>(target.width) * target.height;
+			if (!pixelCount
+				|| pixelCount > kMaximumPersistentSingleChannelBitmapBytes)
+			{
+				return false;
+			}
+			target.alpha.assign(pixelCount, 0);
+			std::vector<float> distance(pixelCount);
+			constexpr float kInfinity = 1.0e20f;
+			auto bodyAt = [&](int x, int y) -> UInt8
+			{
+				const int sourceX = x - padding;
+				const int sourceY = y - padding;
+				if (sourceX < 0 || sourceY < 0
+					|| sourceX >= body.width || sourceY >= body.height)
+				{
+					return 0;
+				}
+				return body.alpha[
+					static_cast<size_t>(sourceY) * body.width + sourceX];
+			};
+
+			bool hasInside = false;
+			for (int y = 0; y < target.height; ++y)
+			{
+				for (int x = 0; x < target.width; ++x)
+				{
+					const bool inside = bodyAt(x, y) >= 128;
+					hasInside = hasInside || inside;
+					distance[static_cast<size_t>(y) * target.width + x] =
+						inside ? 0.0f : kInfinity;
+				}
+			}
+			if (!hasInside)
+			{
+				// Preserve very small hinted glyphs without manufacturing an
+				// effect around an empty 0.5 coverage contour.
+				if (maskType == GlyphMaskType::Outline
+					|| maskType == GlyphMaskType::Shadow)
+				{
+					for (int y = 0; y < target.height; ++y)
+					{
+						for (int x = 0; x < target.width; ++x)
+						{
+							target.alpha[
+								static_cast<size_t>(y) * target.width + x] =
+								bodyAt(x, y);
+						}
+					}
+				}
+				return true;
+			}
+
+			RunChamferDistanceTransform(distance, target.width, target.height);
+			for (int y = 0; y < target.height; ++y)
+			{
+				for (int x = 0; x < target.width; ++x)
+				{
+					const size_t index =
+						static_cast<size_t>(y) * target.width + x;
+					const UInt8 bodyAlpha = bodyAt(x, y);
+					if (bodyAlpha >= 128)
+						continue;
+					const float bodyCoverage = bodyAlpha / 255.0f;
+					const float signedDistance = bodyAlpha > 0
+						? bodyCoverage - 0.5f
+						: 0.5f - distance[index];
+					const float coverage = EvaluateCpuEffectCoverage(
+						config, maskType, rasterScale,
+						signedDistance, bodyCoverage);
+					target.alpha[index] = static_cast<UInt8>(std::lround(
+						std::clamp(coverage, 0.0f, 1.0f) * 255.0f));
+				}
+			}
+
+			for (int y = 0; y < target.height; ++y)
+			{
+				for (int x = 0; x < target.width; ++x)
+				{
+					const bool outside = bodyAt(x, y) < 128;
+					distance[static_cast<size_t>(y) * target.width + x] =
+						outside ? 0.0f : kInfinity;
+				}
+			}
+			RunChamferDistanceTransform(distance, target.width, target.height);
+			for (int y = 0; y < target.height; ++y)
+			{
+				for (int x = 0; x < target.width; ++x)
+				{
+					const size_t index =
+						static_cast<size_t>(y) * target.width + x;
+					const UInt8 bodyAlpha = bodyAt(x, y);
+					if (bodyAlpha < 128)
+						continue;
+					const float bodyCoverage = bodyAlpha / 255.0f;
+					const float signedDistance = bodyAlpha < 255
+						? bodyCoverage - 0.5f
+						: distance[index] - 0.5f;
+					const float coverage = EvaluateCpuEffectCoverage(
+						config, maskType, rasterScale,
+						signedDistance, bodyCoverage);
+					target.alpha[index] = static_cast<UInt8>(std::lround(
+						std::clamp(coverage, 0.0f, 1.0f) * 255.0f));
+				}
+			}
+			return true;
+		}
+
+		std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(FreeTypeState&,
 			RuntimeFont& runtime,
 			const ResolvedGlyph& resolved,
 			GlyphMaskType maskType,
@@ -233,50 +544,34 @@ namespace fonthook::vectorfont
 				return bitmap;
 			}
 
-			const EffectStyle& effect = maskType == GlyphMaskType::Glow
-				? runtime.config->glow : runtime.config->outline;
-			if (!effect.enabled || effect.width <= 0.0f || !slot->outline.n_points)
+			const bool supportedCpuEffect =
+				maskType == GlyphMaskType::Glow
+				|| maskType == GlyphMaskType::Outline
+				|| maskType == GlyphMaskType::Shadow;
+			const bool enabledCpuEffect =
+				maskType == GlyphMaskType::Glow
+					? runtime.config->glow.enabled
+					: maskType == GlyphMaskType::Outline
+						? runtime.config->outline.enabled
+						: maskType == GlyphMaskType::Shadow
+							? runtime.config->shadow.enabled : false;
+			if (!supportedCpuEffect || !enabledCpuEffect || !slot->outline.n_points)
 			{
 				RefreshGlyphBitmapCpuMemory(*bitmap);
 				return bitmap;
 			}
 
-			FT_Glyph strokedGlyph = nullptr;
-			FT_Stroker stroker = nullptr;
-			if (FT_Get_Glyph(slot, &strokedGlyph)
-				|| FT_Stroker_New(state.library, &stroker))
+			if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL))
+				return nullptr;
+			GlyphBitmap body;
+			body.left = slot->bitmap_left;
+			body.top = slot->bitmap_top;
+			if (!CopyGrayBitmap(slot->bitmap, body)
+				|| !BuildCpuEffectBitmap(*runtime.config, maskType,
+					rasterScale, body, *bitmap))
 			{
-				if (strokedGlyph)
-					FT_Done_Glyph(strokedGlyph);
 				return nullptr;
 			}
-			FT_Stroker_Set(stroker, key.strokeWidth26Dot6,
-				FT_STROKER_LINECAP_ROUND, FT_STROKER_LINEJOIN_ROUND, 0);
-			const FT_Error strokeError = FT_Glyph_StrokeBorder(
-				&strokedGlyph, stroker, false, true);
-			FT_Stroker_Done(stroker);
-			if (strokeError || !strokedGlyph)
-			{
-				if (strokedGlyph)
-					FT_Done_Glyph(strokedGlyph);
-				return nullptr;
-			}
-
-			const FT_Error bitmapError = FT_Glyph_To_Bitmap(
-				&strokedGlyph, FT_RENDER_MODE_NORMAL, nullptr, true);
-			if (bitmapError || !strokedGlyph || strokedGlyph->format != FT_GLYPH_FORMAT_BITMAP)
-			{
-				if (strokedGlyph)
-					FT_Done_Glyph(strokedGlyph);
-				return nullptr;
-			}
-			const FT_BitmapGlyph bitmapGlyph = reinterpret_cast<FT_BitmapGlyph>(strokedGlyph);
-			bitmap->left = bitmapGlyph->left;
-			bitmap->top = bitmapGlyph->top;
-			const bool copied = CopyGrayBitmap(bitmapGlyph->bitmap, *bitmap);
-			FT_Done_Glyph(strokedGlyph);
-			if (!copied)
-				return nullptr;
 			RefreshGlyphBitmapCpuMemory(*bitmap);
 			return bitmap;
 		}
@@ -318,12 +613,8 @@ namespace fonthook::vectorfont
 			style.pixelSize * style.scaleX * safeScale)), 1, 65535);
 		const int effectiveHeight = std::clamp(static_cast<int>(std::lround(
 			style.pixelSize * style.scaleY * safeScale)), 1, 65535);
-		const EffectStyle* effect = maskType == GlyphMaskType::Glow
-			? &rasterRuntime->config->glow
-			: maskType == GlyphMaskType::Outline
-				? &rasterRuntime->config->outline : nullptr;
-		const SInt32 strokeWidth = effect && effect->enabled
-			? static_cast<SInt32>(std::lround(effect->width * safeScale * 64.0f)) : 0;
+		const SInt32 strokeWidth = ResolveCpuEffectMaskIdentity(
+			*rasterRuntime->config, maskType, safeScale);
 		const SInt32 embolden = static_cast<SInt32>(std::lround(
 			style.embolden * safeScale * 64.0f));
 		const UInt8 resolvedSdfSpread = maskType == GlyphMaskType::DistanceField
