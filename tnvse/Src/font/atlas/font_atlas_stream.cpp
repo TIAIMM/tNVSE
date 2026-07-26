@@ -391,23 +391,29 @@ namespace fonthook::vectorfont
 				kMaximumMtsdfPrewarmAtlasSize);
 			const UInt32 width = static_cast<UInt32>(bitmap->width);
 			const UInt32 height = static_cast<UInt32>(bitmap->height);
-			if (maximum < 64 || width + kDistanceFieldAtlasPadding * 2 > maximum
-				|| height + kDistanceFieldAtlasPadding * 2 > maximum)
+			const UInt32 pagePadding = key.padding;
+			if (maximum < 64 || width + pagePadding * 2 > maximum
+				|| height + pagePadding * 2 > maximum)
 				return false;
 
 			for (UInt32 attempt = 0; attempt < 2; ++attempt)
 			{
 				StreamingPage& page = role.current;
+				if (page.placements.empty() && page.pixels.empty())
+				{
+					page.cursorX = pagePadding;
+					page.cursorY = pagePadding;
+				}
 				UInt32 x = page.cursorX;
 				UInt32 y = page.cursorY;
 				UInt32 shelfHeight = page.shelfHeight;
-				if (x + width + kDistanceFieldAtlasPadding > maximum)
+				if (x + width + pagePadding > maximum)
 				{
-					x = kDistanceFieldAtlasPadding;
+					x = pagePadding;
 					y += shelfHeight;
 					shelfHeight = 0;
 				}
-				if (y + height + kDistanceFieldAtlasPadding > maximum)
+				if (y + height + pagePadding > maximum)
 				{
 					if (page.placements.empty()
 						|| !WriteCurrentPage(runtime, role, rasterScale))
@@ -432,14 +438,14 @@ namespace fonthook::vectorfont
 				page.placements.push_back(placement);
 				page.pixels.insert(page.pixels.end(), bitmap->alpha.begin(),
 					bitmap->alpha.begin() + requiredBytes);
-				page.cursorX = x + width + kDistanceFieldAtlasPadding * 2;
+				page.cursorX = x + width + pagePadding * 2;
 				page.cursorY = y;
 				page.shelfHeight = std::max(shelfHeight,
-					height + kDistanceFieldAtlasPadding * 2);
+					height + pagePadding * 2);
 				page.usedWidth = std::max(page.usedWidth,
-					x + width + kDistanceFieldAtlasPadding);
+					x + width + pagePadding);
 				page.usedHeight = std::max(page.usedHeight,
-					y + height + kDistanceFieldAtlasPadding);
+					y + height + pagePadding);
 				role.cacheIds.insert(bitmap->cacheId);
 				return true;
 			}
@@ -689,7 +695,8 @@ namespace fonthook::vectorfont
 				if (!BuildBaseKey(config, byteClass, rasterScale, key))
 					continue;
 				invalidatedProfiles += static_cast<UInt32>(
-					atlasState.completeAtlasProfiles.erase(MakeAtlasProfileKey(key)));
+					InvalidateCompleteAtlasProfileLocked(atlasState,
+						MakeAtlasProfileKey(key)));
 			}
 			if (invalidatedProfiles)
 			{

@@ -154,9 +154,14 @@ namespace fonthook
 
 		struct RichTextVectorContext
 		{
+			static constexpr size_t kDirectFontSlots = 64;
 			NiNode* parent = nullptr;
 			float rasterScale = 1.0f;
-			std::unordered_map<Font*, std::unique_ptr<VectorTextBuilder>> builders;
+			std::array<Font*, kDirectFontSlots> fonts = {};
+			std::array<std::unique_ptr<VectorTextBuilder>,
+				kDirectFontSlots> builders;
+			std::unordered_map<Font*, std::unique_ptr<VectorTextBuilder>>
+				fallbackBuilders;
 		};
 
 		thread_local std::unique_ptr<RichTextVectorContext> s_richTextContext;
@@ -344,8 +349,18 @@ namespace fonthook
 			return;
 		if (s_richTextContext->parent)
 		{
-			for (auto& [font, builder] : s_richTextContext->builders)
+			for (auto& builder : s_richTextContext->builders)
 			{
+				if (builder)
+				{
+					if (NiTriShape* shape = builder->Finish())
+						s_richTextContext->parent->AttachChild(shape, true);
+				}
+			}
+			for (auto& [font, builder] :
+				s_richTextContext->fallbackBuilders)
+			{
+				if (builder)
 				if (NiTriShape* shape = builder->Finish())
 					s_richTextContext->parent->AttachChild(shape, true);
 			}
@@ -375,10 +390,23 @@ namespace fonthook
 		if (!DecodeFreeTypeGlyph(font, encoded, glyph))
 			return false;
 
-		auto& builder = s_richTextContext->builders[font];
-		if (!builder)
-			builder = std::make_unique<VectorTextBuilder>(font, true,
+		std::unique_ptr<VectorTextBuilder>* builder = nullptr;
+		const UInt32 fontId = font->iFontNum;
+		if (fontId < RichTextVectorContext::kDirectFontSlots
+			&& (!s_richTextContext->fonts[fontId]
+				|| s_richTextContext->fonts[fontId] == font))
+		{
+			s_richTextContext->fonts[fontId] = font;
+			builder = &s_richTextContext->builders[fontId];
+		}
+		else
+		{
+			builder = &s_richTextContext->fallbackBuilders[font];
+		}
+		if (!*builder)
+			*builder = std::make_unique<VectorTextBuilder>(font, true,
 				s_richTextContext->rasterScale, color);
-		return builder->IsAvailable() && builder->AddGlyph(glyph, pen, color);
+		return (*builder)->IsAvailable()
+			&& (*builder)->AddGlyph(glyph, pen, color);
 	}
 }

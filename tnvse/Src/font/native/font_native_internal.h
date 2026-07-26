@@ -33,7 +33,8 @@ namespace fonthook::vectorfont
 		Effect,
 		Composite,
 		CachedImage,
-		Coverage
+		Coverage,
+		Argb
 	};
 
 	enum class NativeA8Sampling : UInt8

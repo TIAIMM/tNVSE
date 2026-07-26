@@ -475,6 +475,183 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		NiColorA ResolveCompositeFillColor(const FontConfig& config)
+		{
+			return config.fontColor.configured
+				? config.fontColor.color
+				: NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f };
+		}
+
+		NiColorA ResolveCompositeEffectColor(const EffectStyle& effect,
+			const FontConfig& config)
+		{
+			NiColorA color = effect.colorMode == EffectColorMode::Fill
+				? ResolveCompositeFillColor(config) : effect.color;
+			// Effect alpha is independent from the configured fill alpha.
+			color.a = effect.color.a;
+			return color;
+		}
+
+		UInt8 CompositeColorByte(float value)
+		{
+			return static_cast<UInt8>(std::lround(
+				std::clamp(std::isfinite(value) ? value : 1.0f,
+					0.0f, 1.0f) * 255.0f));
+		}
+
+		bool BuildCpuCompositeBitmap(const FontConfig& config,
+			float rasterScale, const GlyphBitmap& body, GlyphBitmap& target)
+		{
+			if (body.width <= 0 || body.height <= 0 || body.alpha.empty())
+			{
+				target.width = 0;
+				target.height = 0;
+				target.alpha.clear();
+				return true;
+			}
+
+			struct CompositeLayer
+			{
+				GlyphBitmap bitmap;
+				NiColorA color;
+				int offsetX = 0;
+				int offsetY = 0;
+				bool enabled = false;
+			};
+			std::array<CompositeLayer, 4> layers;
+			auto prepareEffect = [&](size_t index, GlyphMaskType mask,
+				const EffectStyle& effect)
+			{
+				CompositeLayer& layer = layers[index];
+				layer.enabled = effect.enabled;
+				if (!layer.enabled)
+					return true;
+				layer.bitmap.maskType = mask;
+				layer.color = ResolveCompositeEffectColor(effect, config);
+				return BuildCpuEffectBitmap(config, mask, rasterScale,
+					body, layer.bitmap);
+			};
+			if (!prepareEffect(0, GlyphMaskType::Shadow, config.shadow)
+				|| !prepareEffect(1, GlyphMaskType::Glow, config.glow)
+				|| !prepareEffect(2, GlyphMaskType::Outline, config.outline))
+			{
+				return false;
+			}
+			layers[0].offsetX = static_cast<int>(std::lround(
+				config.shadow.x * rasterScale));
+			layers[0].offsetY = static_cast<int>(std::lround(
+				config.shadow.y * rasterScale));
+			layers[3].bitmap.width = body.width;
+			layers[3].bitmap.height = body.height;
+			layers[3].bitmap.left = body.left;
+			layers[3].bitmap.top = body.top;
+			layers[3].bitmap.alpha = body.alpha;
+			layers[3].color = ResolveCompositeFillColor(config);
+			layers[3].enabled = true;
+
+			int left = std::numeric_limits<int>::max();
+			int right = std::numeric_limits<int>::lowest();
+			int top = std::numeric_limits<int>::lowest();
+			int bottom = std::numeric_limits<int>::max();
+			for (const CompositeLayer& layer : layers)
+			{
+				if (!layer.enabled || layer.bitmap.width <= 0
+					|| layer.bitmap.height <= 0)
+				{
+					continue;
+				}
+				const int layerLeft = layer.bitmap.left + layer.offsetX;
+				const int layerTop = layer.bitmap.top - layer.offsetY;
+				left = std::min(left, layerLeft);
+				right = std::max(right, layerLeft + layer.bitmap.width);
+				top = std::max(top, layerTop);
+				bottom = std::min(bottom, layerTop - layer.bitmap.height);
+			}
+			if (left >= right || bottom >= top
+				|| right - left > 4096 || top - bottom > 4096)
+			{
+				return false;
+			}
+			target.left = left;
+			target.top = top;
+			target.width = right - left;
+			target.height = top - bottom;
+			const size_t pixelCount = static_cast<size_t>(target.width)
+				* target.height;
+			if (!pixelCount
+				|| pixelCount > kMaximumPersistentMtsdfBitmapBytes / 4u)
+			{
+				return false;
+			}
+			target.alpha.assign(pixelCount * 4u, 0);
+
+			// Store straight-alpha BGRA, but perform layer composition in
+			// premultiplied form to preserve the configured layer order.
+			for (const CompositeLayer& layer : layers)
+			{
+				if (!layer.enabled || layer.bitmap.width <= 0
+					|| layer.bitmap.height <= 0)
+				{
+					continue;
+				}
+				const float colorR = std::clamp(
+					std::isfinite(layer.color.r) ? layer.color.r : 1.0f,
+					0.0f, 1.0f);
+				const float colorG = std::clamp(
+					std::isfinite(layer.color.g) ? layer.color.g : 1.0f,
+					0.0f, 1.0f);
+				const float colorB = std::clamp(
+					std::isfinite(layer.color.b) ? layer.color.b : 1.0f,
+					0.0f, 1.0f);
+				const float colorA = std::clamp(
+					std::isfinite(layer.color.a) ? layer.color.a : 1.0f,
+					0.0f, 1.0f);
+				const int layerLeft = layer.bitmap.left + layer.offsetX;
+				const int layerTop = layer.bitmap.top - layer.offsetY;
+				for (int y = 0; y < layer.bitmap.height; ++y)
+				{
+					const int targetY = top - layerTop + y;
+					for (int x = 0; x < layer.bitmap.width; ++x)
+					{
+						const UInt8 coverage = layer.bitmap.alpha[
+							static_cast<size_t>(y) * layer.bitmap.width + x];
+						if (!coverage)
+							continue;
+						const int targetX = layerLeft - left + x;
+						const size_t targetIndex = (static_cast<size_t>(targetY)
+							* target.width + targetX) * 4u;
+						UInt8* destination = target.alpha.data() + targetIndex;
+						const float sourceAlpha =
+							(coverage / 255.0f) * colorA;
+						const float destinationAlpha = destination[3] / 255.0f;
+						const float outputAlpha = sourceAlpha
+							+ destinationAlpha * (1.0f - sourceAlpha);
+						const float destinationR = destination[2] / 255.0f;
+						const float destinationG = destination[1] / 255.0f;
+						const float destinationB = destination[0] / 255.0f;
+						const float inverse = 1.0f - sourceAlpha;
+						const float outputR = outputAlpha > 0.0f
+							? (colorR * sourceAlpha
+								+ destinationR * destinationAlpha * inverse)
+								/ outputAlpha : 0.0f;
+						const float outputG = outputAlpha > 0.0f
+							? (colorG * sourceAlpha
+								+ destinationG * destinationAlpha * inverse)
+								/ outputAlpha : 0.0f;
+						const float outputB = outputAlpha > 0.0f
+							? (colorB * sourceAlpha
+								+ destinationB * destinationAlpha * inverse)
+								/ outputAlpha : 0.0f;
+						destination[0] = CompositeColorByte(outputB);
+						destination[1] = CompositeColorByte(outputG);
+						destination[2] = CompositeColorByte(outputR);
+						destination[3] = CompositeColorByte(outputAlpha);
+					}
+				}
+			}
+			return true;
+		}
+
 		std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(FreeTypeState&,
 			RuntimeFont& runtime,
 			const ResolvedGlyph& resolved,
@@ -540,6 +717,23 @@ namespace fonthook::vectorfont
 				if (!BuildMsdfgenDistanceField(slot, key.sdfSpread,
 					bitmap->distanceFieldMethod, *bitmap))
 					return nullptr;
+				RefreshGlyphBitmapCpuMemory(*bitmap);
+				return bitmap;
+			}
+
+			if (maskType == GlyphMaskType::Composite)
+			{
+				if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL))
+					return nullptr;
+				GlyphBitmap body;
+				body.left = slot->bitmap_left;
+				body.top = slot->bitmap_top;
+				if (!CopyGrayBitmap(slot->bitmap, body)
+					|| !BuildCpuCompositeBitmap(*runtime.config,
+						rasterScale, body, *bitmap))
+				{
+					return nullptr;
+				}
 				RefreshGlyphBitmapCpuMemory(*bitmap);
 				return bitmap;
 			}

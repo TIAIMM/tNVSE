@@ -12,6 +12,7 @@ if not exist "%FXC%" (
 if not exist "%~dp0compiled" mkdir "%~dp0compiled"
 if exist "%~dp0compiled\tnvse_freetype_native_original.pso" del /q "%~dp0compiled\tnvse_freetype_native_original.pso"
 if exist "%~dp0compiled\tnvse_freetype_native_coverage.pso" del /q "%~dp0compiled\tnvse_freetype_native_coverage.pso"
+if exist "%~dp0compiled\tnvse_freetype_native_argb.pso" del /q "%~dp0compiled\tnvse_freetype_native_argb.pso"
 if exist "%~dp0compiled\tnvse_freetype_native_sdf.pso" del /q "%~dp0compiled\tnvse_freetype_native_sdf.pso"
 if exist "%~dp0compiled\tnvse_freetype_native_effects_fast.pso" del /q "%~dp0compiled\tnvse_freetype_native_effects_fast.pso"
 if exist "%~dp0compiled\tnvse_freetype_native_effects_balanced.pso" del /q "%~dp0compiled\tnvse_freetype_native_effects_balanced.pso"
@@ -26,6 +27,8 @@ if exist "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_high.pso" del /q
 "%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_vs.vso" "%~dp0freetype_native_vs.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_coverage.pso" "%~dp0freetype_native_coverage.hlsl"
+if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_argb.pso" "%~dp0freetype_native_argb.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_fast.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%

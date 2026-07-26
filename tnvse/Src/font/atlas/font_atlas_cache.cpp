@@ -31,6 +31,17 @@ namespace fonthook::vectorfont
 		return s_atlasState;
 	}
 
+	bool InvalidateCompleteAtlasProfileLocked(AtlasState& state,
+		const AtlasProfileKey& profileKey)
+	{
+		const bool wasComplete =
+			state.completeAtlasProfiles.erase(profileKey) != 0;
+		const auto profile = state.atlasProfiles.find(profileKey);
+		if (profile != state.atlasProfiles.end())
+			profile->second.directGlyphs.reset();
+		return wasComplete;
+	}
+
 		UInt32 NextPowerOfTwo(UInt32 value)
 		{
 			if (value <= 1)
@@ -267,6 +278,10 @@ namespace fonthook::vectorfont
 			const AtlasResource& resource)
 		{
 			AtlasProfileIndex& profile = state.atlasProfiles[MakeAtlasProfileKey(key)];
+			// A direct table stores page slots and page-local glyph indices. Any page
+			// insertion or replacement invalidates that immutable view; complete
+			// prewarm republishes it after the profile generation is finalized.
+			profile.directGlyphs.reset();
 			const auto page = std::lower_bound(profile.pages.begin(), profile.pages.end(),
 				key.pageIndex);
 			if (page == profile.pages.end() || *page != key.pageIndex)
@@ -313,7 +328,7 @@ namespace fonthook::vectorfont
 		void UnindexAtlasPage(AtlasState& state, const AtlasCacheKey& key)
 		{
 			const AtlasProfileKey profileKey = MakeAtlasProfileKey(key);
-			state.completeAtlasProfiles.erase(profileKey);
+			InvalidateCompleteAtlasProfileLocked(state, profileKey);
 			auto found = state.atlasProfiles.find(profileKey);
 			if (found == state.atlasProfiles.end())
 				return;
@@ -534,9 +549,16 @@ namespace fonthook::vectorfont
 				add(&outer, sizeof(outer));
 				add(&softness, sizeof(softness));
 				add(&effect.power, sizeof(effect.power));
+				add(&effect.x, sizeof(effect.x));
+				add(&effect.y, sizeof(effect.y));
+				add(&effect.colorMode, sizeof(effect.colorMode));
+				add(&effect.color, sizeof(effect.color));
 			};
 			add(&kCpuEffectCoverageVersion,
 				sizeof(kCpuEffectCoverageVersion));
+			add(&config.fontColor.configured,
+				sizeof(config.fontColor.configured));
+			add(&config.fontColor.color, sizeof(config.fontColor.color));
 			addEffect(config.glow);
 			addEffect(config.outline);
 			addEffect(config.shadow);
@@ -573,6 +595,8 @@ namespace fonthook::vectorfont
 					outlineStroke = bitmap->strokeWidth26Dot6;
 				else if (bitmap->maskType == GlyphMaskType::Glow)
 					glowStroke = bitmap->strokeWidth26Dot6;
+				else if (bitmap->maskType == GlyphMaskType::Composite)
+					outlineStroke = bitmap->strokeWidth26Dot6;
 				if (bitmap->colorBaked)
 				{
 					bakedVariants.push_back((static_cast<UInt64>(bitmap->bakedLayer) << 32)
@@ -607,13 +631,28 @@ namespace fonthook::vectorfont
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 			AtlasPixelMode pixelMode, AtlasRenderMode renderMode)
 		{
-			// The aggressive A8 route deliberately trades distance-field scaling
-			// for stock-like one-sample coverage. It never samples mip levels, so
-			// retaining or generating them would only add upload, disk and VRAM cost.
+			// Native true-SDF A8 and aggressive BGRA composite profiles deliberately
+			// sample level zero. Retaining or generating mips would only add upload,
+			// disk and VRAM cost.
 			if (pixelMode == AtlasPixelMode::A8
 				&& renderMode == AtlasRenderMode::CpuEffects)
 			{
 				return true;
+			}
+			if (pixelMode == AtlasPixelMode::Argb32
+				&& renderMode == AtlasRenderMode::CpuEffects)
+			{
+				bool foundComposite = false;
+				for (const auto& bitmap : bitmaps)
+				{
+					if (!bitmap)
+						continue;
+					if (bitmap->maskType != GlyphMaskType::Composite)
+						return false;
+					foundComposite = true;
+				}
+				if (foundComposite)
+					return true;
 			}
 			bool found = false;
 			for (const auto& bitmap : bitmaps)
@@ -647,6 +686,12 @@ namespace fonthook::vectorfont
 					include(GlyphMaskType::DistanceField);
 					sdfSpread = static_cast<UInt8>(profile.sdfSpread);
 				}
+			}
+			else if (g_bEnableFreeTypeFontAggressivePerformanceMode)
+			{
+				include(GlyphMaskType::Composite);
+				outlineStroke = ResolveCpuEffectMaskIdentity(
+					config, GlyphMaskType::Composite, rasterScale);
 			}
 			else
 			{
@@ -701,6 +746,8 @@ namespace fonthook::vectorfont
 			}
 		}
 
+		const bool aggressiveComposite =
+			route == FontAtlasRoute::ShaderA8Coverage;
 		key = {
 			BuildPrewarmAtlasContentHash(config, byteClass, rasterScale,
 				shaderEffects),
@@ -708,11 +755,13 @@ namespace fonthook::vectorfont
 			static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
 			shaderEffects
 				? GetConfiguredDistanceFieldAtlasPixelMode()
-				: AtlasPixelMode::A8,
+				: aggressiveComposite
+					? AtlasPixelMode::Argb32 : AtlasPixelMode::A8,
 			shaderEffects
 				? AtlasRenderMode::ShaderEffects
 				: AtlasRenderMode::CpuEffects,
-			kDistanceFieldAtlasPadding,
+			aggressiveComposite ? kArgbAtlasPadding
+				: kDistanceFieldAtlasPadding,
 			true,
 			byteClass
 		};
@@ -763,7 +812,9 @@ namespace fonthook::vectorfont
 					? static_cast<size_t>(requests[index].glyph->byteClass) : 0;
 				combinations[roleIndex] |= static_cast<UInt8>(
 					1u << static_cast<UInt8>(type));
-				levelZeroOnly = levelZeroOnly && type == GlyphMaskType::DistanceField;
+				levelZeroOnly = levelZeroOnly
+					&& (type == GlyphMaskType::DistanceField
+						|| type == GlyphMaskType::Composite);
 				if (type == GlyphMaskType::DistanceField)
 				{
 					MtsdfSharedRasterProfile profile;
@@ -783,6 +834,9 @@ namespace fonthook::vectorfont
 				else if (type == GlyphMaskType::Glow)
 					glowStroke = ResolveCpuEffectMaskIdentity(
 						config, GlyphMaskType::Glow, rasterScale);
+				else if (type == GlyphMaskType::Composite)
+					outlineStroke = ResolveCpuEffectMaskIdentity(
+						config, GlyphMaskType::Composite, rasterScale);
 			}
 
 			UInt64 residentHits = 0;

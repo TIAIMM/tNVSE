@@ -84,6 +84,8 @@ namespace fonthook::vectorfont
 	inline bool IsCompatibleDistanceFieldBitmap(
 		AtlasPixelMode mode, const GlyphBitmap& bitmap)
 	{
+		if (bitmap.maskType == GlyphMaskType::Composite)
+			return mode == AtlasPixelMode::Argb32;
 		if (bitmap.maskType != GlyphMaskType::DistanceField)
 			return mode != AtlasPixelMode::Mtsdf32;
 		return (mode == AtlasPixelMode::Mtsdf32
@@ -177,6 +179,64 @@ namespace fonthook::vectorfont
 		std::shared_ptr<const CompactAtlasSnapshot> compactSnapshot;
 	};
 
+	inline constexpr UInt16 kInvalidDirectAtlasPageSlot =
+		std::numeric_limits<UInt16>::max();
+	inline constexpr UInt32 kInvalidDirectAtlasPlacementIndex =
+		std::numeric_limits<UInt32>::max();
+	inline constexpr size_t kDirectAtlasMaskCount =
+		static_cast<size_t>(GlyphMaskType::Composite) + 1u;
+
+	struct DirectAtlasGlyphLayer
+	{
+		UInt16 pageSlot = kInvalidDirectAtlasPageSlot;
+		UInt8 maskType = 0;
+		UInt8 sdfSpread = 0;
+		UInt32 snapshotPlacementIndex = kInvalidDirectAtlasPlacementIndex;
+		UInt64 cacheId = 0;
+		UInt64 pageContentHash = 0;
+		SInt32 width = 0;
+		SInt32 height = 0;
+		SInt32 left = 0;
+		SInt32 top = 0;
+		float u0 = 0.0f;
+		float v0 = 0.0f;
+		float u1 = 0.0f;
+		float v1 = 0.0f;
+
+		bool valid() const
+		{
+			return pageSlot != kInvalidDirectAtlasPageSlot
+				&& snapshotPlacementIndex
+					!= kInvalidDirectAtlasPlacementIndex
+				&& cacheId && width > 0 && height > 0
+				&& u1 > u0 && v1 > v0;
+		}
+	};
+
+	struct DirectCachedLetter
+	{
+		UInt16 encodedCode = 0;
+		UInt8 flags = 0;
+		UInt8 byteClass = 0;
+		float width = 0.0f;
+		float leadingEdge = 0.0f;
+		float height = 0.0f;
+		float topEdge = 0.0f;
+		float spacing = 0.0f;
+		std::array<DirectAtlasGlyphLayer, kDirectAtlasMaskCount> layers;
+	};
+	using DirectAtlasGlyphRecord = DirectCachedLetter;
+
+	struct DirectAtlasGlyphTable
+	{
+		CpuMemoryLease cpuMemory;
+		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
+		std::vector<std::weak_ptr<AtlasResource>> pages;
+		std::vector<DirectAtlasGlyphRecord> glyphs;
+		UInt32 resolvedGlyphs = 0;
+		UInt32 resolvedLayers = 0;
+	};
+
 	inline bool IsAtlasGlyphPlacementForAtlas(
 		const AtlasGlyphPlacement& placement, const AtlasResource& atlas)
 	{
@@ -228,7 +288,7 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 16;
+	constexpr UInt32 kAtlasSnapshotVersion = 17;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
 	constexpr UInt32 kAtlasSnapshotKnownFlags =
 		kAtlasSnapshotFlagGloballyRepacked;
@@ -448,7 +508,84 @@ namespace fonthook::vectorfont
 
 	struct PendingQuad
 	{
-		std::shared_ptr<const GlyphBitmap> bitmap;
+		struct GlyphSource
+		{
+			std::shared_ptr<const GlyphBitmap> bitmap;
+			std::shared_ptr<AtlasResource> atlas;
+			AtlasGlyphPlacement placement;
+			UInt64 directCacheId = 0;
+			SInt32 directWidth = 0;
+			SInt32 directHeight = 0;
+			SInt32 directLeft = 0;
+			SInt32 directTop = 0;
+			UInt8 directMaskType = 0;
+			UInt8 directSdfSpread = 0;
+			bool knownEmpty = false;
+
+			bool IsDirect() const
+			{
+				return atlas && directCacheId;
+			}
+
+			bool IsDrawable() const
+			{
+				if (knownEmpty)
+					return false;
+				return IsDirect()
+					? directWidth > 0 && directHeight > 0
+					: bitmap && bitmap->width > 0 && bitmap->height > 0;
+			}
+
+			bool IsAvailable() const
+			{
+				return knownEmpty || IsDirect() || bitmap != nullptr;
+			}
+
+			bool IsPrecomposedArgb() const
+			{
+				return IsDirect()
+					? directMaskType
+						== static_cast<UInt8>(GlyphMaskType::Composite)
+					: bitmap
+						&& bitmap->maskType == GlyphMaskType::Composite;
+			}
+
+			UInt64 CacheId() const
+			{
+				return IsDirect() ? directCacheId
+					: (bitmap ? bitmap->cacheId : 0);
+			}
+
+			int Width() const
+			{
+				return IsDirect() ? directWidth
+					: (bitmap ? bitmap->width : 0);
+			}
+
+			int Height() const
+			{
+				return IsDirect() ? directHeight
+					: (bitmap ? bitmap->height : 0);
+			}
+
+			int Left() const
+			{
+				return IsDirect() ? directLeft : (bitmap ? bitmap->left : 0);
+			}
+
+			int Top() const
+			{
+				return IsDirect() ? directTop : (bitmap ? bitmap->top : 0);
+			}
+
+			UInt8 SdfSpread() const
+			{
+				return IsDirect() ? directSdfSpread
+					: (bitmap ? bitmap->sdfSpread : 0);
+			}
+		};
+
+		GlyphSource source;
 		NiPoint3 pen;
 		NiColorA baseColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 		NiColorA layerColorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -516,6 +653,7 @@ namespace fonthook::vectorfont
 		std::unordered_map<UInt64, UInt16> residentPages;
 		std::unordered_map<UInt16, std::vector<UInt64>> pageResidents;
 		std::unordered_set<UInt64> duplicateResidents;
+		std::shared_ptr<const DirectAtlasGlyphTable> directGlyphs;
 	};
 
 	struct TextArtifactKey
@@ -578,6 +716,8 @@ namespace fonthook::vectorfont
 	static_assert(sizeof(AtlasSnapshotHeader) == 128);
 	static_assert(sizeof(AtlasSnapshotGlyphPlacement) == 36);
 	static_assert(sizeof(AtlasSnapshotPlacement) == 92);
+	static_assert(sizeof(DirectAtlasGlyphLayer) == 56);
+	static_assert(sizeof(DirectAtlasGlyphRecord) == 360);
 
 	struct AtlasState
 	{
@@ -600,7 +740,9 @@ namespace fonthook::vectorfont
 		UInt32 atlasFailureLogCount = 0;
 		UInt32 shaderBatchFailureLogCount = 0;
 		UInt32 cpuMaskFailureLogCount = 0;
+		UInt32 aggressiveCompositeShapeFailureLogCount = 0;
 		std::unordered_set<UInt64> loggedAtlasBatches;
+		std::unordered_set<UInt64> loggedDirectGlyphBatches;
 		std::unordered_set<UInt32> loggedVerticalMetricFonts;
 		std::unordered_set<UInt64> loggedQualityDowngrades;
 		std::unordered_map<TextArtifactKey, TextArtifactEntry,
@@ -611,13 +753,16 @@ namespace fonthook::vectorfont
 	};
 
 	AtlasState& State();
+	bool InvalidateCompleteAtlasProfileLocked(AtlasState& state,
+		const AtlasProfileKey& profileKey);
 
 	NiColorA ResolveSafeTileColor(const std::vector<AtlasGlyphInstance>& glyphs,
 		const NiColorA& requested);
 	bool BuildPendingQuads(RuntimeFont& runtime,
 		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
 		const std::array<bool, 4>& included, const NiColorA& tileColor,
-		std::vector<PendingQuad>& quads, PendingQuadBuildFailure& failure);
+		bool preferDirectAtlas, std::vector<PendingQuad>& quads,
+		PendingQuadBuildFailure& failure);
 	bool BuildShaderEffectQuads(RuntimeFont& runtime,
 		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
 		EffectQuality quality, const NiColorA& tileColor, bool suppressEffects,
@@ -703,6 +848,16 @@ namespace fonthook::vectorfont
 		const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& results);
+	bool BuildDirectGlyphAtlasTables(RuntimeFont& runtime, float rasterScale);
+	bool GetDirectAtlasGlyphSources(RuntimeFont& runtime,
+		const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
+		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
+		std::vector<PendingQuad::GlyphSource>& results);
+	bool GetDirectAtlasGlyphSources(RuntimeFont& runtime,
+		const std::vector<AtlasGlyphInstance>& glyphs, GlyphMaskType maskType,
+		float rasterScale, AtlasPixelMode pixelMode,
+		AtlasRenderMode renderMode, UInt32 padding,
+		std::vector<PendingQuad::GlyphSource>& results);
 	std::shared_ptr<AtlasResource> CreateTransientAtlas(
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding);

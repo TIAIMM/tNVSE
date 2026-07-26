@@ -54,7 +54,8 @@ namespace fonthook::vectorfont
 	{
 		Body,
 		Effect,
-		Coverage
+		Coverage,
+		Argb
 	};
 
 	struct A8CompiledRange

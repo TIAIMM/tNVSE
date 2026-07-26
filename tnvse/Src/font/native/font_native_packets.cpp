@@ -50,6 +50,9 @@ namespace fonthook::vectorfont
 			case A8CompiledShaderClass::Coverage:
 				result = NativeA8ShaderClass::Coverage;
 				return true;
+			case A8CompiledShaderClass::Argb:
+				result = NativeA8ShaderClass::Argb;
+				return true;
 			default:
 				return false;
 			}
@@ -86,6 +89,21 @@ namespace fonthook::vectorfont
 		A8CompiledRange CompileRange(const A8EffectShapeConfig& effects,
 			const A8DrawRange& range)
 		{
+			if (effects.precomposedArgb)
+			{
+				A8CompiledRange compiled;
+				compiled.range = range;
+				compiled.range.layer = 3;
+				compiled.range.usesSdf = false;
+				compiled.range.usesLiveTileRgb = true;
+				compiled.range.sdfSpreadPixels = 0.0f;
+				compiled.range.sourceToLogicalScale = 1.0f;
+				compiled.range.layerColorModifier =
+					{ 1.0f, 1.0f, 1.0f, 1.0f };
+				compiled.shaderClass = A8CompiledShaderClass::Argb;
+				compiled.staticSmoothSampling = true;
+				return compiled;
+			}
 			if (effects.bakedCoverage)
 			{
 				A8CompiledRange compiled;

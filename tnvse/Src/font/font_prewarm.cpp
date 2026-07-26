@@ -509,7 +509,7 @@ namespace fonthook::vectorfont
 				route == FontAtlasRoute::ShaderDistanceField
 					? (UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF")
 					: route == FontAtlasRoute::ShaderA8Coverage
-						? L"A8 baked coverage" : L"ARGB fallback";
+						? L"BGRA composite" : L"ARGB fallback";
 			_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 				L"Font %u of %u  |  ID %u  |  %ls",
 				fontOrdinal, fontCount, job.fontId, renderMode);
@@ -694,6 +694,12 @@ namespace fonthook::vectorfont
 			}
 			if (snapshotReady)
 			{
+				if (!BuildDirectGlyphAtlasTables(*runtime, rasterScale))
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: direct atlas glyph table unavailable font=%u after snapshot restore; retaining compatibility lookup",
+						job.fontId);
+				}
 				FinishJob(job, "snapshot");
 				verifiedCodePageFonts.push_back(job.fontId);
 				++completedFonts;
@@ -765,7 +771,7 @@ namespace fonthook::vectorfont
 				g_bEnableFreeTypeFontAggressivePerformanceMode);
 			bool shaderSdf = atlasRoute == FontAtlasRoute::ShaderDistanceField
 				&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
-			const bool aggressiveCoverage =
+			const bool aggressiveComposite =
 				atlasRoute == FontAtlasRoute::ShaderA8Coverage;
 			UInt32 sdfSpread = 0;
 			if (shaderSdf && !ResolveSdfSpread(*config, rasterScale, sdfSpread))
@@ -793,7 +799,7 @@ namespace fonthook::vectorfont
 			}
 			UInt32 batchGlyphLimit = ResolvePrewarmGlyphBatchLimit(
 				*config, rasterScale, shaderSdf, sdfSpread);
-			const bool needsGrayFill = !shaderSdf;
+			const bool needsGrayFill = !shaderSdf && !aggressiveComposite;
 			bool exhausted = false;
 			bool failed = false;
 			UInt32 allocationRetries = 0;
@@ -860,6 +866,9 @@ namespace fonthook::vectorfont
 					if (needsGrayFill)
 						bitmapRequests.push_back({ requestedGlyph,
 							GlyphMaskType::Fill, 0 });
+					if (aggressiveComposite)
+						bitmapRequests.push_back({ requestedGlyph,
+							GlyphMaskType::Composite, 0 });
 					if (shaderSdf
 						&& (length == 1 || !sharedDoubleAlias))
 					{
@@ -867,13 +876,16 @@ namespace fonthook::vectorfont
 							GlyphMaskType::DistanceField, sdfSpread });
 						++job.sdfGlyphCount;
 					}
-					if (config->glow.enabled && !shaderSdf)
+					if (config->glow.enabled && !shaderSdf
+						&& !aggressiveComposite)
 						bitmapRequests.push_back({ requestedGlyph,
 							GlyphMaskType::Glow, 0 });
-					if (config->outline.enabled && !shaderSdf)
+					if (config->outline.enabled && !shaderSdf
+						&& !aggressiveComposite)
 						bitmapRequests.push_back({ requestedGlyph,
 							GlyphMaskType::Outline, 0 });
-					if (config->shadow.enabled && !shaderSdf)
+					if (config->shadow.enabled && !shaderSdf
+						&& !aggressiveComposite)
 						bitmapRequests.push_back({ requestedGlyph,
 							GlyphMaskType::Shadow, 0 });
 					++glyphCount;
@@ -961,8 +973,8 @@ namespace fonthook::vectorfont
 								? (UsesMtsdfDistanceField()
 									? L"Streaming MTSDF glyphs to disk..."
 									: L"Streaming true-SDF glyphs to disk...")
-								: aggressiveCoverage
-									? L"Streaming aggressive A8 coverage to disk..."
+								: aggressiveComposite
+									? L"Streaming aggressive BGRA composite glyphs to disk..."
 									: L"Generating bounded fallback masks...");
 					if (retrySmallerBatch)
 						continue;
@@ -985,7 +997,7 @@ namespace fonthook::vectorfont
 				_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 					L"Font %u of %u  |  ID %u  |  %ls",
 					fontOrdinal, queuedFonts, job.fontId,
-					aggressiveCoverage ? L"A8 baked coverage"
+					aggressiveComposite ? L"BGRA composite"
 						: shaderSdf
 							? (UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF")
 							: L"ARGB fallback");
@@ -1021,6 +1033,12 @@ namespace fonthook::vectorfont
 				++streamFailedFonts;
 				++finishedFonts;
 				continue;
+			}
+			if (!BuildDirectGlyphAtlasTables(*runtime, rasterScale))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: direct atlas glyph table unavailable font=%u after streamed finalization; retaining compatibility lookup",
+					job.fontId);
 			}
 			if (g_bEnableFreeTypeDefaultPoolAtlas)
 			{

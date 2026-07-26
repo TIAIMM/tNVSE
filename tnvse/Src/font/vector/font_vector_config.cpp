@@ -679,7 +679,8 @@ namespace fonthook::vectorfont
 	{
 		if (maskType != GlyphMaskType::Glow
 			&& maskType != GlyphMaskType::Outline
-			&& maskType != GlyphMaskType::Shadow)
+			&& maskType != GlyphMaskType::Shadow
+			&& maskType != GlyphMaskType::Composite)
 		{
 			return 0;
 		}
@@ -707,6 +708,11 @@ namespace fonthook::vectorfont
 			addPhysical(config.glow.outer);
 			add(&config.glow.power, sizeof(config.glow.power));
 			add(&config.glow.color.a, sizeof(config.glow.color.a));
+			if (maskType == GlyphMaskType::Composite)
+			{
+				add(&config.glow.colorMode, sizeof(config.glow.colorMode));
+				add(&config.glow.color, sizeof(config.glow.color));
+			}
 		};
 		auto addOutline = [&]()
 		{
@@ -714,6 +720,12 @@ namespace fonthook::vectorfont
 			addPhysical(config.outline.width);
 			addPhysical(config.outline.softness);
 			add(&config.outline.color.a, sizeof(config.outline.color.a));
+			if (maskType == GlyphMaskType::Composite)
+			{
+				add(&config.outline.colorMode,
+					sizeof(config.outline.colorMode));
+				add(&config.outline.color, sizeof(config.outline.color));
+			}
 		};
 
 		add(&kCpuEffectCoverageVersion, sizeof(kCpuEffectCoverageVersion));
@@ -738,6 +750,25 @@ namespace fonthook::vectorfont
 				addGlow();
 			if (HardShadowIncludesOutline(config))
 				addOutline();
+			break;
+		case GlyphMaskType::Composite:
+			add(&config.fontColor.configured,
+				sizeof(config.fontColor.configured));
+			add(&config.fontColor.color, sizeof(config.fontColor.color));
+			addGlow();
+			addOutline();
+			add(&config.shadow.enabled, sizeof(config.shadow.enabled));
+			addPhysical(config.shadow.blur);
+			addPhysical(config.shadow.x);
+			addPhysical(config.shadow.y);
+			add(&config.shadow.power, sizeof(config.shadow.power));
+			add(&config.shadow.includeGlow,
+				sizeof(config.shadow.includeGlow));
+			add(&config.shadow.includeOutline,
+				sizeof(config.shadow.includeOutline));
+			add(&config.shadow.colorMode,
+				sizeof(config.shadow.colorMode));
+			add(&config.shadow.color, sizeof(config.shadow.color));
 			break;
 		default:
 			break;

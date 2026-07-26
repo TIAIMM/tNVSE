@@ -34,7 +34,10 @@ namespace fonthook::vectorfont
 			return std::isfinite(vertex.x) && std::isfinite(vertex.y)
 				&& std::isfinite(vertex.z) && std::isfinite(vertex.u)
 				&& std::isfinite(vertex.v)
-				&& std::isfinite(vertex.sdfSpread) && vertex.sdfSpread > 0.0f
+				// Coverage and precomposed ARGB profiles do not carry a distance
+				// field, so zero is their canonical spread. Profile-specific
+				// validation below still requires a positive spread for MTSDF.
+				&& std::isfinite(vertex.sdfSpread) && vertex.sdfSpread >= 0.0f
 				&& std::isfinite(vertex.distanceParameterScale)
 				&& vertex.distanceParameterScale >= 1.0f
 				&& std::isfinite(vertex.layerMask)
@@ -137,8 +140,13 @@ namespace fonthook::vectorfont
 			}
 			if (!effectConfig || !effectConfig->enabled)
 				return RejectA8Shape("native-route-requires-enabled-profile");
-			if (effectConfig->shaderEffects == effectConfig->bakedCoverage)
+			const UInt32 profileKinds =
+				(effectConfig->shaderEffects ? 1u : 0u)
+				+ (effectConfig->bakedCoverage ? 1u : 0u)
+				+ (effectConfig->precomposedArgb ? 1u : 0u);
+			if (profileKinds != 1u)
 				return RejectA8Shape("native-route-profile-kind-conflict");
+			const bool distanceFieldProfile = effectConfig->shaderEffects;
 
 			const std::array<float, 12> scalarValues = {
 				effectConfig->inverseAtlasWidth,
@@ -221,8 +229,10 @@ namespace fonthook::vectorfont
 					|| range.vertexCount / 4u != range.primitiveCount / 2u
 					|| !IsFiniteColor(range.layerColorModifier)
 					|| !std::isfinite(range.sdfSpreadPixels)
-					|| (!effectConfig->bakedCoverage
+					|| (distanceFieldProfile
 						&& range.sdfSpreadPixels <= 0.0f)
+					|| (!distanceFieldProfile
+						&& range.sdfSpreadPixels < 0.0f)
 					|| !std::isfinite(range.sourceToLogicalScale)
 					|| range.sourceToLogicalScale <= 0.0f
 					|| range.sourceToLogicalScale > 1.0f)
@@ -249,11 +259,13 @@ namespace fonthook::vectorfont
 				{
 					return RejectA8Shape("draw-ranges-not-layer-monotonic");
 				}
-				if (effectConfig->bakedCoverage == range.usesSdf)
-					return RejectA8Shape(effectConfig->bakedCoverage
-						? "coverage-range-marked-as-sdf"
-						: "distance-field-range-without-sdf");
-				if (!effectConfig->bakedCoverage
+				if (distanceFieldProfile != range.usesSdf)
+					return RejectA8Shape(distanceFieldProfile
+						? "distance-field-range-without-sdf"
+						: effectConfig->precomposedArgb
+							? "argb-range-marked-as-sdf"
+							: "coverage-range-marked-as-sdf");
+				if (distanceFieldProfile
 					&& range.sdfSpreadPixels <= 0.0f)
 				{
 					return RejectA8Shape(

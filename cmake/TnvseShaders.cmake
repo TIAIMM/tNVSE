@@ -6,6 +6,7 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/freetype_native_common.hlsli"
     "${shader_dir}/freetype_native_vs.hlsl"
     "${shader_dir}/freetype_native_coverage.hlsl"
+    "${shader_dir}/freetype_native_argb.hlsl"
     "${shader_dir}/freetype_native_mtsdf_fill.hlsl"
     "${shader_dir}/freetype_native_mtsdf_effects.hlsl"
     "${shader_dir}/freetype_native_mtsdf_composite.hlsl"
@@ -16,6 +17,7 @@ function(tnvse_add_shader_target output_variable)
   set(shader_outputs
     "${shader_dir}/compiled/tnvse_freetype_native_vs.vso"
     "${shader_dir}/compiled/tnvse_freetype_native_coverage.pso"
+    "${shader_dir}/compiled/tnvse_freetype_native_argb.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_balanced.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_high.pso"
@@ -76,6 +78,7 @@ function(tnvse_enable_live_deployment target plugin_path shader_outputs)
     COMMAND "${CMAKE_COMMAND}" -E rm -f
       "${shader_path}/tnvse_freetype_native_original.pso"
       "${shader_path}/tnvse_freetype_native_coverage.pso"
+      "${shader_path}/tnvse_freetype_native_argb.pso"
       "${shader_path}/tnvse_freetype_native_sdf.pso"
       "${shader_path}/tnvse_freetype_native_effects_fast.pso"
       "${shader_path}/tnvse_freetype_native_effects_balanced.pso"

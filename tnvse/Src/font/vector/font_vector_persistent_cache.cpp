@@ -26,7 +26,9 @@ namespace fonthook::vectorfont
 	static UInt32 MaximumPersistentBitmapBytes(GlyphMaskType maskType,
 		DistanceFieldMethod distanceFieldMethod)
 	{
-		return maskType == GlyphMaskType::DistanceField
+		return maskType == GlyphMaskType::Composite
+			? kMaximumPersistentMtsdfBitmapBytes
+			: maskType == GlyphMaskType::DistanceField
 			? (distanceFieldMethod == DistanceFieldMethod::Mtsdf
 				? kMaximumPersistentMtsdfBitmapBytes
 				: kMaximumPersistentSingleChannelBitmapBytes)
@@ -1543,6 +1545,40 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		bool LoadGlyphManifestIdentity(RuntimeFont& runtime, UInt32 encodedCode,
+			VectorFontByteClass byteClass, VectorEncodedGlyph& glyph)
+		{
+			PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
+			const bool validatedIndex = manifest
+				&& manifest->validatedRecordIndexReady;
+			PersistentGlyphManifestRecord* record = manifest
+				? (validatedIndex
+					? GetIndexedGlyphManifestRecord(*manifest, encodedCode)
+					: GetGlyphManifestRecord(*manifest, encodedCode))
+				: nullptr;
+			const PersistentGlyphManifestEntry* entry = record ? &record->entry : nullptr;
+			if (!entry || !entry->valid
+				|| entry->byteClass != static_cast<UInt8>(byteClass)
+				|| entry->faceIndex
+					>= runtime.roles[static_cast<size_t>(byteClass)].faces.size()
+				|| (!validatedIndex && entry->checksum != HashBytes64(entry,
+					offsetof(PersistentGlyphManifestEntry, checksum))))
+			{
+				return false;
+			}
+
+			glyph = {};
+			glyph.encodedCode = encodedCode;
+			glyph.byteClass = byteClass;
+			glyph.byteLength =
+				byteClass == VectorFontByteClass::DoubleByte ? 2 : 1;
+			glyph.codePoint = entry->codePoint;
+			glyph.faceIndex = entry->faceIndex;
+			glyph.glyphIndex = entry->glyphIndex;
+			glyph.hasGlyphIdentity = true;
+			return true;
+		}
+
 		void StoreGlyphManifest(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
 			const ResolvedGlyph& resolved, const FontLetter& metrics)
 		{
@@ -2034,7 +2070,8 @@ namespace fonthook::vectorfont
 					hasSuffix(normalized, L".tnvfmask.tmp")
 					|| hasSuffix(normalized, L".tnvfmanifest.tmp")
 					|| hasSuffix(normalized, L".tnvfatlas.tmp")
-					|| hasSuffix(normalized, L".tnvfatlas.stream.tmp");
+					|| hasSuffix(normalized, L".tnvfatlas.stream.tmp")
+					|| hasSuffix(normalized, L".tnvfdirect.tmp");
 				bool remove = temporary;
 				if (bitmap)
 				{
@@ -2102,7 +2139,7 @@ namespace fonthook::vectorfont
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: distance-field cache invalidated route=%s previous=%s masks=%u manifests=%u atlases=%u temporary=%u bytes=%llu failed=%u",
 			route == FontAtlasRoute::ShaderA8Coverage
-				? "a8-baked-coverage" : "argb-fallback",
+				? "argb-composite" : "argb-fallback",
 			wasSynchronized
 				? (previousDomain == PersistentFontCacheDomain::DistanceField
 					? "distance-field" : "cpu-coverage")
@@ -2145,13 +2182,15 @@ namespace fonthook::vectorfont
 			const bool fontHash = hasSuffix(normalized, L".tnvfhash");
 			const bool manifest = hasSuffix(normalized, L".tnvfmanifest");
 			const bool atlas = hasSuffix(normalized, L".tnvfatlas");
+			const bool direct = hasSuffix(normalized, L".tnvfdirect");
 			const bool temporaryFile =
 				hasSuffix(normalized, L".tnvfmask.tmp")
 				|| hasSuffix(normalized, L".tnvfhash.tmp")
 				|| hasSuffix(normalized, L".tnvfmanifest.tmp")
 				|| hasSuffix(normalized, L".tnvfatlas.tmp")
-				|| hasSuffix(normalized, L".tnvfatlas.stream.tmp");
-			const bool managed = bitmap || fontHash || manifest || atlas
+				|| hasSuffix(normalized, L".tnvfatlas.stream.tmp")
+				|| hasSuffix(normalized, L".tnvfdirect.tmp");
+			const bool managed = bitmap || fontHash || manifest || atlas || direct
 				|| temporaryFile;
 			if (!managed || State().usedPersistentCachePaths.count(normalized))
 				continue;
@@ -2166,6 +2205,8 @@ namespace fonthook::vectorfont
 				else if (atlas)
 					cleanupClass =
 						ClassifyAtlasSnapshotCacheForCleanup(path);
+				else if (direct)
+					cleanupClass = PersistentCacheCleanupClass::Invalid;
 				if (cleanupClass == PersistentCacheCleanupClass::Neutral
 					|| cleanupClass
 						== PersistentCacheCleanupClass::CurrentDistanceField)

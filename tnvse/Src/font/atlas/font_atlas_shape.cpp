@@ -181,7 +181,7 @@ namespace fonthook::vectorfont
 						|| config.ranges.back().usesSdf != quad.usesSdf
 						|| config.ranges.back().usesLiveTileRgb != usesLiveTileRgb
 						|| config.ranges.back().sdfSpreadPixels
-							!= static_cast<float>(quad.bitmap->sdfSpread)
+							!= static_cast<float>(quad.source.SdfSpread())
 						|| config.ranges.back().sourceToLogicalScale
 							!= quad.sourceToLogicalScale
 						|| !SameColorModifier(
@@ -195,7 +195,7 @@ namespace fonthook::vectorfont
 						range.usesSdf = quad.usesSdf;
 						range.usesLiveTileRgb = usesLiveTileRgb;
 						range.sdfSpreadPixels =
-							static_cast<float>(quad.bitmap->sdfSpread);
+							static_cast<float>(quad.source.SdfSpread());
 						range.sourceToLogicalScale =
 							quad.sourceToLogicalScale;
 						range.layerColorModifier = layerColor;
@@ -247,8 +247,10 @@ namespace fonthook::vectorfont
 			std::unordered_map<UInt64, std::shared_ptr<const GlyphBitmap>> unique;
 			for (PendingQuad& quad : quads)
 			{
-				if (!quad.bitmap)
+				if (!quad.source.bitmap)
 					continue;
+				const std::shared_ptr<const GlyphBitmap>& sourceBitmap =
+					quad.source.bitmap;
 				NiColorA compositeColor = ComposeQuadColor(quad);
 				if (!quad.usesLiveTileRgb)
 				{
@@ -263,29 +265,29 @@ namespace fonthook::vectorfont
 						compositeColor.b, tileColor.b);
 				}
 				const UInt32 rgba = PackColorModifierRgba(compositeColor);
-				UInt64 bakedId = BuildBakedBitmapId(quad.bitmap->cacheId, rgba);
+				UInt64 bakedId = BuildBakedBitmapId(sourceBitmap->cacheId, rgba);
 				bakedId = BuildBakedBitmapId(bakedId, static_cast<UInt8>(quad.layer));
 				auto found = unique.find(bakedId);
 				if (found == unique.end())
 				{
 					auto baked = std::make_shared<GlyphBitmap>();
-					baked->cacheId = quad.bitmap->cacheId;
-					baked->atlasRgb = quad.bitmap->atlasRgb;
-					baked->width = quad.bitmap->width;
-					baked->height = quad.bitmap->height;
-					baked->left = quad.bitmap->left;
-					baked->top = quad.bitmap->top;
-					baked->effectiveWidth = quad.bitmap->effectiveWidth;
-					baked->effectiveHeight = quad.bitmap->effectiveHeight;
-					baked->maskType = quad.bitmap->maskType;
+					baked->cacheId = sourceBitmap->cacheId;
+					baked->atlasRgb = sourceBitmap->atlasRgb;
+					baked->width = sourceBitmap->width;
+					baked->height = sourceBitmap->height;
+					baked->left = sourceBitmap->left;
+					baked->top = sourceBitmap->top;
+					baked->effectiveWidth = sourceBitmap->effectiveWidth;
+					baked->effectiveHeight = sourceBitmap->effectiveHeight;
+					baked->maskType = sourceBitmap->maskType;
 					baked->distanceFieldMethod =
-						quad.bitmap->distanceFieldMethod;
-					baked->sdfSpread = quad.bitmap->sdfSpread;
-					baked->strokeWidth26Dot6 = quad.bitmap->strokeWidth26Dot6;
-					baked->colorBaked = quad.bitmap->colorBaked;
-					baked->bakedRgba = quad.bitmap->bakedRgba;
-					baked->bakedLayer = quad.bitmap->bakedLayer;
-					baked->alpha = quad.bitmap->alpha;
+						sourceBitmap->distanceFieldMethod;
+					baked->sdfSpread = sourceBitmap->sdfSpread;
+					baked->strokeWidth26Dot6 = sourceBitmap->strokeWidth26Dot6;
+					baked->colorBaked = sourceBitmap->colorBaked;
+					baked->bakedRgba = sourceBitmap->bakedRgba;
+					baked->bakedLayer = sourceBitmap->bakedLayer;
+					baked->alpha = sourceBitmap->alpha;
 					baked->cacheId = bakedId;
 					baked->atlasRgb = rgba & 0x00FFFFFF;
 					baked->colorBaked = true;
@@ -301,7 +303,8 @@ namespace fonthook::vectorfont
 						sizeof(GlyphBitmap) + baked->alpha.capacity());
 					found = unique.emplace(bakedId, std::move(baked)).first;
 				}
-				quad.bitmap = found->second;
+				quad.source = {};
+				quad.source.bitmap = found->second;
 				quad.baseColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 				quad.layerColorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 				quad.usesLiveTileRgb = true;
@@ -311,7 +314,7 @@ namespace fonthook::vectorfont
 
 
 		void AddPendingQuad(std::vector<PendingQuad>& quads,
-			const std::shared_ptr<const GlyphBitmap>& bitmap,
+			const PendingQuad::GlyphSource& source,
 			const AtlasGlyphInstance& instance, const NiColorA& baseColor,
 			const NiColorA& layerColorModifier,
 			float offsetX, float offsetY, float rasterScale, float baselineOffset,
@@ -320,10 +323,10 @@ namespace fonthook::vectorfont
 			float sourceToLogicalScale = 1.0f,
 			UInt32 glyphOrdinal = std::numeric_limits<UInt32>::max())
 		{
-			if (bitmap && bitmap->width > 0 && bitmap->height > 0)
+			if (source.IsDrawable())
 			{
 				PendingQuad quad;
-				quad.bitmap = bitmap;
+				quad.source = source;
 				quad.pen = instance.pen;
 				quad.baseColor = SanitizeColor(baseColor);
 				quad.layerColorModifier = SanitizeColor(layerColorModifier);
@@ -346,36 +349,190 @@ namespace fonthook::vectorfont
 			}
 		}
 
+		void AddPendingQuad(std::vector<PendingQuad>& quads,
+			const std::shared_ptr<const GlyphBitmap>& bitmap,
+			const AtlasGlyphInstance& instance, const NiColorA& baseColor,
+			const NiColorA& layerColorModifier,
+			float offsetX, float offsetY, float rasterScale, float baselineOffset,
+			AtlasLayer layer, bool usesLiveTileRgb,
+			UInt32 expansionPixels = 0, bool usesSdf = false, UInt8 layerMask = 0,
+			float sourceToLogicalScale = 1.0f,
+			UInt32 glyphOrdinal = std::numeric_limits<UInt32>::max())
+		{
+			PendingQuad::GlyphSource source;
+			source.bitmap = bitmap;
+			AddPendingQuad(quads, source, instance, baseColor,
+				layerColorModifier, offsetX, offsetY, rasterScale,
+				baselineOffset, layer, usesLiveTileRgb, expansionPixels,
+				usesSdf, layerMask, sourceToLogicalScale, glyphOrdinal);
+		}
+
 		bool BuildPendingQuads(RuntimeFont& runtime,
 			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
 			const std::array<bool, 4>& included, const NiColorA& tileColor,
-			std::vector<PendingQuad>& quads, PendingQuadBuildFailure& failure)
+			bool preferDirectAtlas, std::vector<PendingQuad>& quads,
+			PendingQuadBuildFailure& failure)
 		{
 			struct PreparedGlyph
 			{
 				const AtlasGlyphInstance* instance = nullptr;
-				std::shared_ptr<const GlyphBitmap> fill;
-				std::shared_ptr<const GlyphBitmap> shadow;
-				std::shared_ptr<const GlyphBitmap> glow;
-				std::shared_ptr<const GlyphBitmap> outline;
+				PendingQuad::GlyphSource fill;
+				PendingQuad::GlyphSource shadow;
+				PendingQuad::GlyphSource glow;
+				PendingQuad::GlyphSource outline;
 				float baselineOffset = 0.0f;
 			};
 
 			quads.clear();
 			failure = PendingQuadBuildFailure::None;
 			const FontConfig& config = GetRuntimeConfig(runtime);
-			const bool visibleGlow = included[static_cast<size_t>(AtlasLayer::Glow)]
+			const bool visibleGlow =
+				included[static_cast<size_t>(AtlasLayer::Glow)]
 				&& config.glow.enabled;
-			const bool visibleOutline = included[static_cast<size_t>(AtlasLayer::Outline)]
+			const bool visibleOutline =
+				included[static_cast<size_t>(AtlasLayer::Outline)]
 				&& config.outline.enabled;
 			const bool visibleShadow =
 				included[static_cast<size_t>(AtlasLayer::Shadow)]
 				&& config.shadow.enabled;
+			const bool visibleFill =
+				included[static_cast<size_t>(AtlasLayer::Fill)];
+			if (preferDirectAtlas
+				&& g_bEnableFreeTypeFontAggressivePerformanceMode)
+			{
+				thread_local std::vector<GlyphBitmapRequest> compositeRequests;
+				thread_local std::vector<std::shared_ptr<const GlyphBitmap>>
+					compositeBitmaps;
+				thread_local std::vector<PendingQuad::GlyphSource>
+					compositeSources;
+				compositeRequests.clear();
+				const bool direct = GetDirectAtlasGlyphSources(runtime,
+					glyphs, GlyphMaskType::Composite, rasterScale,
+					AtlasPixelMode::Argb32, AtlasRenderMode::CpuEffects,
+					kArgbAtlasPadding, compositeSources);
+				if (!direct)
+				{
+					compositeRequests.reserve(glyphs.size());
+					for (const AtlasGlyphInstance& instance : glyphs)
+					{
+						compositeRequests.push_back({
+							&instance.glyph, GlyphMaskType::Composite, 0
+						});
+					}
+					GetGlyphBitmaps(runtime, compositeRequests, rasterScale,
+						compositeBitmaps);
+					compositeSources.assign(compositeBitmaps.size(), {});
+					for (size_t index = 0;
+						index < compositeBitmaps.size(); ++index)
+					{
+						compositeSources[index].bitmap =
+							compositeBitmaps[index];
+					}
+				}
+				if (compositeSources.size() != glyphs.size())
+				{
+					failure = PendingQuadBuildFailure::Fill;
+					return false;
+				}
+				quads.reserve(glyphs.size());
+				for (size_t index = 0; index < glyphs.size(); ++index)
+				{
+					const PendingQuad::GlyphSource& source =
+						compositeSources[index];
+					if (!source.IsAvailable()
+						|| (!source.knownEmpty
+							&& !source.IsPrecomposedArgb()))
+					{
+						failure = PendingQuadBuildFailure::Fill;
+						return false;
+					}
+					const AtlasGlyphInstance& instance = glyphs[index];
+					AddPendingQuad(quads, source, instance,
+						ResolveBaseColor(instance.color, tileColor),
+						NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f },
+						0.0f, 0.0f, rasterScale,
+						GetGlyphBaselineOffset(runtime, instance.glyph),
+						AtlasLayer::Fill, true, 0, false,
+						1u << static_cast<UInt8>(AtlasLayer::Fill),
+						1.0f, static_cast<UInt32>(index));
+				}
+				return true;
+			}
+			if (preferDirectAtlas
+				&& !g_bEnableFreeTypeFontAggressivePerformanceMode)
+			{
+				thread_local std::array<
+					std::vector<PendingQuad::GlyphSource>, 4> directLayers;
+				auto loadLayer = [&](AtlasLayer layer, GlyphMaskType mask,
+					bool needed)
+				{
+					std::vector<PendingQuad::GlyphSource>& sources =
+						directLayers[static_cast<size_t>(layer)];
+					sources.clear();
+					return !needed || GetDirectAtlasGlyphSources(runtime,
+						glyphs, mask, rasterScale, AtlasPixelMode::A8,
+						AtlasRenderMode::CpuEffects,
+						kDistanceFieldAtlasPadding, sources);
+				};
+				const bool direct = loadLayer(AtlasLayer::Shadow,
+						GlyphMaskType::Shadow, visibleShadow)
+					&& loadLayer(AtlasLayer::Glow,
+						GlyphMaskType::Glow, visibleGlow)
+					&& loadLayer(AtlasLayer::Outline,
+						GlyphMaskType::Outline, visibleOutline)
+					&& loadLayer(AtlasLayer::Fill,
+						GlyphMaskType::Fill, visibleFill);
+				if (direct)
+				{
+					const UInt32 layerCount =
+						static_cast<UInt32>(visibleShadow)
+						+ static_cast<UInt32>(visibleGlow)
+						+ static_cast<UInt32>(visibleOutline)
+						+ static_cast<UInt32>(visibleFill);
+					quads.reserve(glyphs.size() * layerCount);
+					auto emitLayer = [&](AtlasLayer layer, bool needed,
+						float offsetX, float offsetY,
+						const NiColorA& layerColor, bool usesLiveTileRgb)
+					{
+						if (!needed)
+							return;
+						const auto& sources =
+							directLayers[static_cast<size_t>(layer)];
+						for (size_t index = 0; index < glyphs.size(); ++index)
+						{
+							const AtlasGlyphInstance& instance = glyphs[index];
+							AddPendingQuad(quads, sources[index], instance,
+								ResolveBaseColor(instance.color, tileColor),
+								layerColor, offsetX, offsetY, rasterScale,
+								GetGlyphBaselineOffset(runtime, instance.glyph),
+								layer, usesLiveTileRgb);
+						}
+					};
+					emitLayer(AtlasLayer::Shadow, visibleShadow,
+						config.shadow.x, config.shadow.y,
+						ResolveEffectLayerColor(config.shadow,
+							config.fontColor),
+						EffectUsesLiveTileRgb(config.shadow));
+					emitLayer(AtlasLayer::Glow, visibleGlow, 0.0f, 0.0f,
+						ResolveEffectLayerColor(config.glow,
+							config.fontColor),
+						EffectUsesLiveTileRgb(config.glow));
+					emitLayer(AtlasLayer::Outline, visibleOutline,
+						0.0f, 0.0f,
+						ResolveEffectLayerColor(config.outline,
+							config.fontColor),
+						EffectUsesLiveTileRgb(config.outline));
+					emitLayer(AtlasLayer::Fill, visibleFill, 0.0f, 0.0f,
+						ResolveFillLayerColor(config.fontColor), true);
+					return true;
+				}
+			}
 			const bool needsGlowMask = visibleGlow;
 			const bool needsOutlineMask = visibleOutline;
 			thread_local std::vector<PreparedGlyph> prepared;
 			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
 			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
+			thread_local std::vector<PendingQuad::GlyphSource> sourceResults;
 			prepared.clear();
 			prepared.reserve(glyphs.size());
 			bitmapRequests.clear();
@@ -394,20 +551,30 @@ namespace fonthook::vectorfont
 					bitmapRequests.push_back({ &instance.glyph, GlyphMaskType::Outline, 0 });
 				prepared.push_back(std::move(glyph));
 			}
-			GetGlyphBitmaps(runtime, bitmapRequests, rasterScale, bitmapResults);
+			bool direct = preferDirectAtlas
+				&& GetDirectAtlasGlyphSources(runtime, bitmapRequests, rasterScale,
+					AtlasPixelMode::A8, AtlasRenderMode::CpuEffects,
+					kDistanceFieldAtlasPadding, sourceResults);
+			if (!direct)
+			{
+				GetGlyphBitmaps(runtime, bitmapRequests, rasterScale, bitmapResults);
+				sourceResults.assign(bitmapResults.size(), {});
+				for (size_t index = 0; index < bitmapResults.size(); ++index)
+					sourceResults[index].bitmap = bitmapResults[index];
+			}
 			size_t bitmapIndex = 0;
 			for (PreparedGlyph& glyph : prepared)
 			{
-				glyph.fill = bitmapResults[bitmapIndex++];
-				if (!glyph.fill)
+				glyph.fill = sourceResults[bitmapIndex++];
+				if (!glyph.fill.IsAvailable())
 				{
 					failure = PendingQuadBuildFailure::Fill;
 					return false;
 				}
 				if (visibleShadow)
 				{
-					glyph.shadow = bitmapResults[bitmapIndex++];
-					if (!glyph.shadow)
+					glyph.shadow = sourceResults[bitmapIndex++];
+					if (!glyph.shadow.IsAvailable())
 					{
 						failure = PendingQuadBuildFailure::Shadow;
 						return false;
@@ -415,8 +582,8 @@ namespace fonthook::vectorfont
 				}
 				if (needsGlowMask)
 				{
-					glyph.glow = bitmapResults[bitmapIndex++];
-					if (!glyph.glow && visibleGlow)
+					glyph.glow = sourceResults[bitmapIndex++];
+					if (!glyph.glow.IsAvailable() && visibleGlow)
 					{
 						failure = PendingQuadBuildFailure::Glow;
 						return false;
@@ -424,8 +591,8 @@ namespace fonthook::vectorfont
 				}
 				if (needsOutlineMask)
 				{
-					glyph.outline = bitmapResults[bitmapIndex++];
-					if (!glyph.outline && visibleOutline)
+					glyph.outline = sourceResults[bitmapIndex++];
+					if (!glyph.outline.IsAvailable() && visibleOutline)
 					{
 						failure = PendingQuadBuildFailure::Outline;
 						return false;
@@ -543,52 +710,44 @@ namespace fonthook::vectorfont
 				true
 			}};
 
-			struct PreparedShaderGlyph
-			{
-				const AtlasGlyphInstance* instance = nullptr;
-				std::shared_ptr<const GlyphBitmap> sdf;
-				float baselineOffset = 0.0f;
-				float sourceToLogicalScale = 1.0f;
-				UInt32 glyphOrdinal = 0;
-			};
-			thread_local std::vector<PreparedShaderGlyph> prepared;
 			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
 			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
-			prepared.clear();
-			prepared.reserve(glyphs.size());
-			bitmapRequests.clear();
-			bitmapRequests.reserve(glyphs.size());
-			for (UInt32 glyphOrdinal = 0;
-				glyphOrdinal < static_cast<UInt32>(glyphs.size());
-				++glyphOrdinal)
-			{
-				const AtlasGlyphInstance& instance = glyphs[glyphOrdinal];
-				PreparedShaderGlyph glyph;
-				glyph.instance = &instance;
-				glyph.glyphOrdinal = glyphOrdinal;
-				glyph.baselineOffset = GetGlyphBaselineOffset(runtime, instance.glyph);
-				MtsdfSharedRasterProfile profile;
-				if (!ResolveMtsdfSharedRasterProfile(config,
-					instance.glyph.byteClass, rasterScale, true, profile))
-				{
-					return false;
-				}
-				glyph.sourceToLogicalScale = profile.sourceToLogicalScale;
-				bitmapRequests.push_back({ &instance.glyph,
-					GlyphMaskType::DistanceField, profile.sdfSpread });
-				prepared.push_back(std::move(glyph));
-			}
-			GetAtlasBackedGlyphBitmaps(runtime, bitmapRequests, rasterScale,
+			thread_local std::vector<PendingQuad::GlyphSource> sourceResults;
+			const bool direct = GetDirectAtlasGlyphSources(runtime,
+				glyphs, GlyphMaskType::DistanceField, rasterScale,
 				GetConfiguredDistanceFieldAtlasPixelMode(),
 				AtlasRenderMode::ShaderEffects,
-				kDistanceFieldAtlasPadding, bitmapResults);
-			size_t bitmapIndex = 0;
-			for (PreparedShaderGlyph& glyph : prepared)
+				kDistanceFieldAtlasPadding, sourceResults);
+			if (!direct)
 			{
-				glyph.sdf = bitmapResults[bitmapIndex++];
-				if (!glyph.sdf)
-					return false;
+				bitmapRequests.clear();
+				bitmapRequests.reserve(glyphs.size());
+				for (const AtlasGlyphInstance& instance : glyphs)
+				{
+					MtsdfSharedRasterProfile profile;
+					if (!ResolveMtsdfSharedRasterProfile(config,
+							instance.glyph.byteClass, rasterScale,
+							true, profile))
+						return false;
+					bitmapRequests.push_back({ &instance.glyph,
+						GlyphMaskType::DistanceField,
+						profile.sdfSpread });
+				}
+				GetAtlasBackedGlyphBitmaps(runtime, bitmapRequests, rasterScale,
+					GetConfiguredDistanceFieldAtlasPixelMode(),
+					AtlasRenderMode::ShaderEffects,
+					kDistanceFieldAtlasPadding, bitmapResults);
+				sourceResults.assign(bitmapResults.size(), {});
+				for (size_t index = 0; index < bitmapResults.size(); ++index)
+					sourceResults[index].bitmap = bitmapResults[index];
 			}
+			if (sourceResults.size() != glyphs.size()
+				|| std::any_of(sourceResults.begin(), sourceResults.end(),
+					[](const PendingQuad::GlyphSource& source)
+					{
+						return !source.IsAvailable();
+					}))
+				return false;
 
 			const bool drawShadow = !suppressEffects && config.shadow.enabled;
 			const bool drawGlow = !suppressEffects && config.glow.enabled;
@@ -606,10 +765,21 @@ namespace fonthook::vectorfont
 				return AtlasLayer::Fill;
 			};
 
-			for (const PreparedShaderGlyph& entry : prepared)
+			for (UInt32 glyphOrdinal = 0;
+				glyphOrdinal < static_cast<UInt32>(glyphs.size());
+				++glyphOrdinal)
 			{
+				const AtlasGlyphInstance& instance = glyphs[glyphOrdinal];
+				const PendingQuad::GlyphSource& source =
+					sourceResults[glyphOrdinal];
+				MtsdfSharedRasterProfile profile;
+				if (!ResolveMtsdfSharedRasterProfile(config,
+					instance.glyph.byteClass, rasterScale, true, profile))
+					return false;
+				const float baselineOffset =
+					GetGlyphBaselineOffset(runtime, instance.glyph);
 				const NiColorA baseColor = ResolveBaseColor(
-					entry.instance->color, tileColor);
+					instance.color, tileColor);
 				UInt8 sdfLayerMask = 0;
 				if (drawGlow)
 					sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Glow);
@@ -621,13 +791,13 @@ namespace fonthook::vectorfont
 				{
 					if (shadowHasOffset)
 					{
-						AddPendingQuad(quads, entry.sdf,
-							*entry.instance, baseColor, identity,
+						AddPendingQuad(quads, source,
+							instance, baseColor, identity,
 							config.shadow.x, config.shadow.y, rasterScale,
-							entry.baselineOffset, AtlasLayer::Shadow, true, 0,
+							baselineOffset, AtlasLayer::Shadow, true, 0,
 							true,
 							1u << static_cast<UInt8>(AtlasLayer::Shadow),
-							entry.sourceToLogicalScale, entry.glyphOrdinal);
+							profile.sourceToLogicalScale, glyphOrdinal);
 					}
 					else
 						sdfLayerMask |= 1u << static_cast<UInt8>(AtlasLayer::Shadow);
@@ -635,11 +805,11 @@ namespace fonthook::vectorfont
 
 				if (sdfLayerMask)
 				{
-					AddPendingQuad(quads, entry.sdf, *entry.instance,
+					AddPendingQuad(quads, source, instance,
 						baseColor, identity, 0.0f, 0.0f, rasterScale,
-						entry.baselineOffset, firstLayer(sdfLayerMask), true, 0,
-						true, sdfLayerMask, entry.sourceToLogicalScale,
-						entry.glyphOrdinal);
+						baselineOffset, firstLayer(sdfLayerMask), true, 0,
+						true, sdfLayerMask, profile.sourceToLogicalScale,
+						glyphOrdinal);
 				}
 			}
 			for (const PendingQuad& quad : quads)
@@ -670,11 +840,12 @@ namespace fonthook::vectorfont
 			};
 			for (const PendingQuad& quad : quads)
 			{
+				const UInt64 cacheId = quad.source.CacheId();
 				const NiPoint3 relativePen(
 					quad.pen.x - origin.x,
 					quad.pen.y - origin.y,
 					quad.pen.z - origin.z);
-				add(&quad.bitmap->cacheId, sizeof(quad.bitmap->cacheId));
+				add(&cacheId, sizeof(cacheId));
 				add(&relativePen, sizeof(relativePen));
 				add(&quad.offsetX, sizeof(quad.offsetX));
 				add(&quad.offsetY, sizeof(quad.offsetY));
@@ -749,6 +920,8 @@ namespace fonthook::vectorfont
 			add(&effect.enabled, sizeof(effect.enabled));
 			add(&effect.shaderEffects, sizeof(effect.shaderEffects));
 			add(&effect.bakedCoverage, sizeof(effect.bakedCoverage));
+			add(&effect.precomposedArgb,
+				sizeof(effect.precomposedArgb));
 			add(&effect.distanceFieldMethod,
 				sizeof(effect.distanceFieldMethod));
 			add(&effect.quality, sizeof(effect.quality));
@@ -873,8 +1046,10 @@ namespace fonthook::vectorfont
 				const float logicalX = quad.pen.x - origin.x + quad.offsetX;
 				const float logicalZ = quad.pen.z - origin.z
 					+ quad.baselineOffset - quad.offsetY;
-				const float bitmapLeft = static_cast<float>(quad.bitmap->left) - expansion;
-				const float bitmapTop = static_cast<float>(quad.bitmap->top) + expansion;
+				const float bitmapLeft =
+					static_cast<float>(quad.source.Left()) - expansion;
+				const float bitmapTop =
+					static_cast<float>(quad.source.Top()) + expansion;
 				// Coverage masks stay aligned to their source-pixel grid. SDF masks are
 				// reconstructed analytically by the shader, so snapping their logical
 				// origin would discard shaped fractional advances and effect offsets.
@@ -884,10 +1059,10 @@ namespace fonthook::vectorfont
 				const float z0 = quad.usesSdf
 					? logicalZ + bitmapTop * sourcePixelToLogical
 					: std::round(logicalZ * scale + bitmapTop) / scale;
-				const float x1 = x0 + (static_cast<float>(quad.bitmap->width)
+				const float x1 = x0 + (static_cast<float>(quad.source.Width())
 					+ expansion * 2.0f) * (quad.usesSdf
 						? sourcePixelToLogical : 1.0f / scale);
-				const float z1 = z0 - (static_cast<float>(quad.bitmap->height)
+				const float z1 = z0 - (static_cast<float>(quad.source.Height())
 					+ expansion * 2.0f) * (quad.usesSdf
 						? sourcePixelToLogical : 1.0f / scale);
 				if (compositeCandidate)
@@ -930,7 +1105,8 @@ namespace fonthook::vectorfont
 					}
 					if (shouldLog)
 					{
-						const float bitmapTop = static_cast<float>(quad.bitmap->top)
+						const float bitmapTop =
+							static_cast<float>(quad.source.Top())
 							* (quad.usesSdf ? sourcePixelToLogical : 1.0f / scale)
 							+ quad.baselineOffset;
 						FreeTypeFontDebugLog(
@@ -974,7 +1150,7 @@ namespace fonthook::vectorfont
 					NativeA8GpuVertex& output = vertices[base + ordinal];
 					output = { position.x, position.y, position.z,
 						uv.x, uv.y, packedColor,
-						static_cast<float>(quad.bitmap->sdfSpread),
+						static_cast<float>(quad.source.SdfSpread()),
 						quad.sourceToLogicalScale > 0.0f
 							? 1.0f / quad.sourceToLogicalScale : 1.0f,
 						effects.bakedCoverage
@@ -1198,7 +1374,8 @@ namespace fonthook::vectorfont
 			if (atlases.empty() || !atlases[0] || quads.empty()
 				|| quads.size() > kMaximumQuads)
 				return nullptr;
-			const bool needsNativeRangeRouting = useCustomA8Shader || atlases.size() > 1;
+			const bool needsNativeRangeRouting = useCustomA8Shader
+				|| atlases.size() > 1;
 			A8EffectShapeConfig resolvedEffect = effectConfig
 				? *effectConfig : A8EffectShapeConfig{};
 			resolvedEffect.atlasProperties.clear();
@@ -1356,10 +1533,30 @@ namespace fonthook::vectorfont
 				return nullptr;
 			const std::vector<PendingQuad>* activeQuads = &quads;
 			thread_local std::vector<PendingQuad> bakedQuads;
-			if (pixelMode == AtlasPixelMode::Argb32 && !useCustomA8Shader)
+			const bool precomposedArgb = pixelMode == AtlasPixelMode::Argb32
+				&& std::all_of(quads.begin(), quads.end(),
+					[](const PendingQuad& quad)
+					{
+						return quad.source.IsPrecomposedArgb();
+					});
+			if (pixelMode == AtlasPixelMode::Argb32 && !useCustomA8Shader
+				&& !precomposedArgb)
 			{
 				BuildBakedArgbFallback(quads, tileColor, bakedQuads);
 				activeQuads = &bakedQuads;
+				// Direct atlas sources deliberately carry no CPU alpha payload.
+				// They cannot be color-baked for the stock ARGB TileShader route.
+				// The caller must first rebuild this batch through the compatibility
+				// GlyphBitmap path; otherwise an A8 page could be submitted as ARGB
+				// and render as dark, missing, or unrelated glyph rectangles.
+				if (std::any_of(activeQuads->begin(), activeQuads->end(),
+					[](const PendingQuad& quad)
+					{
+						return !quad.source.bitmap;
+					}))
+				{
+					return nullptr;
+				}
 			}
 
 			struct ResolvedPlacement
@@ -1379,16 +1576,89 @@ namespace fonthook::vectorfont
 				roleBitmaps[roleIndex].clear();
 				placementRecords[roleIndex].clear();
 			}
+			const bool directSources = std::all_of(activeQuads->begin(),
+				activeQuads->end(), [](const PendingQuad& quad)
+				{
+					return quad.source.IsDirect();
+				});
+			std::array<std::array<std::shared_ptr<AtlasResource>,
+				kMaximumAtlasSnapshotPages>, 2> directRolePages;
+			std::array<std::array<UInt16, kMaximumAtlasSnapshotPages>, 2>
+				directPageOrdinals;
+			for (auto& role : directPageOrdinals)
+				role.fill(std::numeric_limits<UInt16>::max());
 			for (const PendingQuad& quad : *activeQuads)
 			{
-				if (quad.bitmap)
+				if (quad.source.bitmap)
 				{
 					roleUnique[static_cast<size_t>(quad.byteClass)].emplace(
-						quad.bitmap->cacheId, quad.bitmap);
+						quad.source.bitmap->cacheId, quad.source.bitmap);
 				}
 			}
 			std::vector<std::shared_ptr<AtlasResource>> availableAtlases;
-			for (size_t roleIndex = 0; roleIndex < roleBitmaps.size(); ++roleIndex)
+			if (directSources)
+			{
+				for (const PendingQuad& quad : *activeQuads)
+				{
+					if (!quad.source.atlas
+						|| !IsAtlasGlyphPlacementForAtlas(
+							quad.source.placement, *quad.source.atlas))
+					{
+						return nullptr;
+					}
+					const size_t roleIndex =
+						static_cast<size_t>(quad.byteClass);
+					const UInt16 rolePage = quad.source.placement.pageIndex;
+					if (roleIndex >= directRolePages.size()
+						|| rolePage >= kMaximumAtlasSnapshotPages)
+					{
+						return nullptr;
+					}
+					std::shared_ptr<AtlasResource>& known =
+						directRolePages[roleIndex][rolePage];
+					if (known && known.get() != quad.source.atlas.get())
+						return nullptr;
+					known = quad.source.atlas;
+				}
+				for (size_t roleIndex = 0;
+					roleIndex < directRolePages.size(); ++roleIndex)
+				{
+					for (UInt16 rolePage = 0;
+						rolePage < kMaximumAtlasSnapshotPages; ++rolePage)
+					{
+						const std::shared_ptr<AtlasResource>& page =
+							directRolePages[roleIndex][rolePage];
+						if (!page)
+							continue;
+						UInt16 ordinal =
+							std::numeric_limits<UInt16>::max();
+						for (UInt16 candidate = 0;
+							candidate < availableAtlases.size(); ++candidate)
+						{
+							if (availableAtlases[candidate].get()
+								== page.get())
+							{
+								ordinal = candidate;
+								break;
+							}
+						}
+						if (ordinal == std::numeric_limits<UInt16>::max())
+						{
+							if (availableAtlases.size()
+								>= kMaximumAtlasSnapshotPages)
+							{
+								return nullptr;
+							}
+							ordinal = static_cast<UInt16>(
+								availableAtlases.size());
+							availableAtlases.push_back(page);
+						}
+						directPageOrdinals[roleIndex][rolePage] =
+							ordinal;
+					}
+				}
+			}
+			else for (size_t roleIndex = 0; roleIndex < roleBitmaps.size(); ++roleIndex)
 			{
 				auto& bitmaps = roleBitmaps[roleIndex];
 				bitmaps.reserve(roleUnique[roleIndex].size());
@@ -1463,7 +1733,8 @@ namespace fonthook::vectorfont
 				// same CPU masks through the stock ARGB32 TileShader fallback.
 				return nullptr;
 			}
-			if (!useCustomA8Shader && availableAtlases.size() > 1)
+			if (!useCustomA8Shader && !precomposedArgb
+				&& availableAtlases.size() > 1)
 			{
 				// Stock Tile geometry can bind only one texture. The no-loader ARGB
 				// route therefore collapses just this text unit into one transient
@@ -1509,39 +1780,99 @@ namespace fonthook::vectorfont
 			pagedQuads = *activeQuads;
 			const NiPoint3 batchOrigin = pagedQuads.front().pen;
 			outAtlases.clear();
-			std::vector<UInt16> compactPageIndices(availableAtlases.size(),
-				std::numeric_limits<UInt16>::max());
-			for (PendingQuad& quad : pagedQuads)
+			if (directSources)
 			{
-				const auto& rolePlacements = placementRecords[
-					static_cast<size_t>(quad.byteClass)];
-				const auto placement = rolePlacements.find(quad.bitmap->cacheId);
-				if (placement == rolePlacements.end())
-					return nullptr;
-				const UInt16 page = placement->second.page;
-				UInt16& compactPage = compactPageIndices[page];
-				if (compactPage == std::numeric_limits<UInt16>::max())
+				outAtlases = availableAtlases;
+				std::array<std::array<UInt32,
+					kMaximumAtlasSnapshotPages>, 4> counts = {};
+				for (PendingQuad& quad : pagedQuads)
 				{
-					compactPage = static_cast<UInt16>(outAtlases.size());
-					outAtlases.push_back(availableAtlases[page]);
+					const size_t roleIndex =
+						static_cast<size_t>(quad.byteClass);
+					const UInt16 rolePage =
+						quad.source.placement.pageIndex;
+					if (roleIndex >= directPageOrdinals.size()
+						|| rolePage >= kMaximumAtlasSnapshotPages)
+						return nullptr;
+					const UInt16 page =
+						directPageOrdinals[roleIndex][rolePage];
+					if (page >= outAtlases.size()
+						|| !outAtlases[page])
+						return nullptr;
+					quad.atlasPage = page;
+					quad.atlasPlacement = quad.source.placement;
+					quad.atlasPlacement.pageIndex = page;
+					const UInt32 rank = GetA8LayerDrawRank(
+						static_cast<UInt32>(quad.layer));
+					if (rank >= counts.size())
+						return nullptr;
+					++counts[rank][page];
 				}
-				quad.atlasPage = compactPage;
-				quad.atlasPlacement = placement->second.placement;
-				quad.atlasPlacement.pageIndex = compactPage;
+				std::array<std::array<UInt32,
+					kMaximumAtlasSnapshotPages>, 4> cursors = {};
+				UInt32 offset = 0;
+				for (size_t layer = 0; layer < counts.size(); ++layer)
+				{
+					for (size_t page = 0; page < counts[layer].size();
+						++page)
+					{
+						cursors[layer][page] = offset;
+						offset += counts[layer][page];
+					}
+				}
+				thread_local std::vector<PendingQuad> orderedDirectQuads;
+				orderedDirectQuads.resize(pagedQuads.size());
+				for (const PendingQuad& quad : pagedQuads)
+				{
+					const UInt32 rank = GetA8LayerDrawRank(
+						static_cast<UInt32>(quad.layer));
+					orderedDirectQuads[
+						cursors[rank][quad.atlasPage]++] = quad;
+				}
+				pagedQuads.swap(orderedDirectQuads);
 			}
-			const auto batchOrder = [](const PendingQuad& lhs, const PendingQuad& rhs)
+			else
 			{
-				const UInt32 lhsRank = GetA8LayerDrawRank(
-					static_cast<UInt32>(lhs.layer));
-				const UInt32 rhsRank = GetA8LayerDrawRank(
-					static_cast<UInt32>(rhs.layer));
-				if (lhsRank != rhsRank)
-					return lhsRank < rhsRank;
-				return lhs.atlasPage < rhs.atlasPage;
-			};
-			if (!std::is_sorted(pagedQuads.begin(), pagedQuads.end(), batchOrder))
-			{
-				std::stable_sort(pagedQuads.begin(), pagedQuads.end(), batchOrder);
+				std::vector<UInt16> compactPageIndices(
+					availableAtlases.size(),
+					std::numeric_limits<UInt16>::max());
+				for (PendingQuad& quad : pagedQuads)
+				{
+					const auto& rolePlacements = placementRecords[
+						static_cast<size_t>(quad.byteClass)];
+					const auto placement =
+						rolePlacements.find(quad.source.CacheId());
+					if (placement == rolePlacements.end())
+						return nullptr;
+					const UInt16 page = placement->second.page;
+					UInt16& compactPage = compactPageIndices[page];
+					if (compactPage == std::numeric_limits<UInt16>::max())
+					{
+						compactPage = static_cast<UInt16>(
+							outAtlases.size());
+						outAtlases.push_back(availableAtlases[page]);
+					}
+					quad.atlasPage = compactPage;
+					quad.atlasPlacement = placement->second.placement;
+					quad.atlasPlacement.pageIndex = compactPage;
+				}
+				const auto batchOrder = [](const PendingQuad& lhs,
+					const PendingQuad& rhs)
+				{
+					const UInt32 lhsRank = GetA8LayerDrawRank(
+						static_cast<UInt32>(lhs.layer));
+					const UInt32 rhsRank = GetA8LayerDrawRank(
+						static_cast<UInt32>(rhs.layer));
+					if (lhsRank != rhsRank)
+						return lhsRank < rhsRank;
+					return lhs.atlasPage < rhs.atlasPage;
+				};
+				if (!std::is_sorted(pagedQuads.begin(),
+					pagedQuads.end(), batchOrder))
+				{
+					std::stable_sort(pagedQuads.begin(),
+						pagedQuads.end(), batchOrder);
+				}
 			}
 			const QuadBatchFingerprint fingerprint =
 				BuildQuadBatchFingerprint(pagedQuads, batchOrigin);

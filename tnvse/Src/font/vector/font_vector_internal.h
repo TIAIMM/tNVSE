@@ -32,20 +32,18 @@ namespace fonthook::vectorfont
 
 	// Base Fill/distance-field generator revision. Route-specific pixel changes
 	// may use a narrower revision below to preserve unrelated caches.
-	constexpr UInt32 kGlyphMaskGeneratorVersion = 13;
+	constexpr UInt32 kGlyphMaskGeneratorVersion = 14;
 	// CPU coverage revision 1 evaluates glow, outline and shadow from the
 	// hinted body distance instead of treating a FreeType stroke as an opaque
 	// effect. It is included in every CPU-effect bitmap/cache identity.
-	constexpr UInt32 kCpuEffectCoverageVersion = 1;
-	// Version 10 invalidates collision bands derived from the former one-channel
-	// true-SDF body. Atlas snapshot identity also consumes this ABI because a
-	// restored atlas is usable only with its matching complete manifest.
-	constexpr UInt32 kPersistentGlyphManifestVersion = 10;
-	// Version 2 assigns every manifest to either the normal distance-field cache
-	// domain or the CPU-coverage domain. This prevents aggressive/native-A8 and
-	// stock-shader fallback prewarm from retaining or reopening MTSDF/true-SDF
-	// manifests after the distance-field cache set has been invalidated.
-	constexpr UInt8 kPersistentGlyphManifestCacheIdentityVersion = 2;
+	constexpr UInt32 kCpuEffectCoverageVersion = 2;
+	// Version 11 adds the final direct cached-letter/composite profile contract.
+	// Atlas snapshot identity also consumes this ABI because a restored atlas is
+	// usable only with its matching complete manifest.
+	constexpr UInt32 kPersistentGlyphManifestVersion = 11;
+	// Version 3 separates the final BGRA-composite profile from the former
+	// aggressive coverage representation while retaining cache-domain routing.
+	constexpr UInt8 kPersistentGlyphManifestCacheIdentityVersion = 3;
 
 	struct NativeA8PayloadTemplate;
 	enum class FreeTypePerfCounter : UInt8
@@ -208,6 +206,9 @@ namespace fonthook::vectorfont
 		Glow = 2,
 		DistanceField = 3,
 		Shadow = 4,
+		// Aggressive profiles bake Shadow -> Glow -> Outline -> Fill into one
+		// D3D-native BGRA rectangle with a distinct persistent identity.
+		Composite = 5,
 	};
 
 	struct FontConfig
@@ -258,16 +259,17 @@ namespace fonthook::vectorfont
 		bool colorBaked = false;
 		UInt32 bakedRgba = 0;
 		UInt8 bakedLayer = 0;
-		// Single-channel coverage/true SDF or D3D-native BGRA MTSDF, according
-		// to distanceFieldMethod.
+		// Single-channel coverage/true SDF, D3D-native BGRA MTSDF, or a
+		// precomposed BGRA glyph, according to maskType/distanceFieldMethod.
 		std::vector<UInt8> alpha;
 	};
 
 	inline constexpr UInt32 GlyphBitmapBytesPerPixel(GlyphMaskType maskType,
 		DistanceFieldMethod distanceFieldMethod)
 	{
-		return maskType == GlyphMaskType::DistanceField
-			? DistanceFieldBytesPerPixel(distanceFieldMethod) : 1u;
+		return maskType == GlyphMaskType::Composite ? 4u
+			: maskType == GlyphMaskType::DistanceField
+				? DistanceFieldBytesPerPixel(distanceFieldMethod) : 1u;
 	}
 
 	inline UInt32 GlyphBitmapBytesPerPixel(GlyphMaskType maskType)
@@ -288,6 +290,12 @@ namespace fonthook::vectorfont
 	inline UInt8 SampleGlyphBodyDistanceByte(
 		const GlyphBitmap& bitmap, size_t pixelIndex)
 	{
+		if (bitmap.maskType == GlyphMaskType::Composite)
+		{
+			const size_t offset = pixelIndex * 4u;
+			return offset + 3u < bitmap.alpha.size()
+				? bitmap.alpha[offset + 3u] : 0;
+		}
 		if (bitmap.maskType != GlyphMaskType::DistanceField)
 			return pixelIndex < bitmap.alpha.size() ? bitmap.alpha[pixelIndex] : 0;
 		if (bitmap.distanceFieldMethod == DistanceFieldMethod::TrueSdf)
@@ -342,6 +350,10 @@ namespace fonthook::vectorfont
 		// can share one native coverage packet without baking text-specific RGB
 		// into the atlas.
 		bool bakedCoverage = false;
+		// Aggressive profiles store the final configured BGRA glyph. Single-page
+		// batches use the stock Tile shader; multi-page batches use the native
+		// ARGB packet shader without reconstructing effect layers.
+		bool precomposedArgb = false;
 		DistanceFieldMethod distanceFieldMethod =
 			GetConfiguredDistanceFieldMethod();
 		EffectQuality quality = EffectQuality::Balanced;
@@ -457,6 +469,11 @@ namespace fonthook::vectorfont
 	RuntimeFont* FindActiveRuntime(const Font* apFont);
 	RuntimeFont* EnsureRuntimeFont(UInt32 auiFontId);
 	bool ApplyRuntimeMetrics(RuntimeFont& arRuntime, Font& arFont);
+	bool LoadGlyphManifestIdentity(RuntimeFont& arRuntime, UInt32 auiEncodedCode,
+		VectorFontByteClass aeByteClass, VectorEncodedGlyph& arGlyph);
+	bool LoadGlyphManifest(RuntimeFont& arRuntime, UInt32 auiEncodedCode,
+		VectorFontByteClass aeByteClass, VectorEncodedGlyph* apGlyph,
+		FontLetter* apMetrics);
 	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& arRuntime, Font& arFont, UInt32 auiEncodedCode);
 	bool DecodeEncodedGlyph(RuntimeFont& arRuntime, Font& arFont, const char* apText, VectorEncodedGlyph& arGlyph);
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
@@ -537,6 +554,7 @@ namespace fonthook::vectorfont
 	bool DiscardGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool SaveGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool RebuildGlyphAtlasFromSnapshot(RuntimeFont& arRuntime, float afRasterScale);
+	bool BuildDirectGlyphAtlasTables(RuntimeFont& arRuntime, float afRasterScale);
 	void QueueFontPrewarm(UInt32 auiFontId);
 	void PumpFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,

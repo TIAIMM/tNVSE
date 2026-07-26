@@ -230,7 +230,7 @@ namespace fonthook::vectorfont
 			quads.clear();
 			PendingQuadBuildFailure buildFailure = PendingQuadBuildFailure::None;
 			if (!BuildPendingQuads(runtime, glyphs, rasterScale, included,
-				tileColor, quads, buildFailure))
+				tileColor, requestsBakedCoverage, quads, buildFailure))
 			{
 				if (diagnostics)
 				{
@@ -291,17 +291,19 @@ namespace fonthook::vectorfont
 			{
 				if (requestsBakedCoverage)
 				{
-					A8EffectShapeConfig coverageConfig;
-					coverageConfig.bakedCoverage = true;
-					std::vector<std::shared_ptr<AtlasResource>> coverageAtlases;
 					if (diagnostics)
 						++diagnostics->cpuShapeAttempts;
-					NiTriShape* coverageShape = TryCreateAtlasShapeForMode(
+					std::vector<std::shared_ptr<AtlasResource>>
+						compositeAtlases;
+					A8EffectShapeConfig compositeConfig;
+					compositeConfig.enabled = true;
+					compositeConfig.precomposedArgb = true;
+					NiTriShape* compositeShape = TryCreateAtlasShapeForMode(
 						font, quads, config, rasterScale, prepareObject,
-						AtlasPixelMode::A8, AtlasRenderMode::CpuEffects,
-						kDistanceFieldAtlasPadding, coverageAtlases, tileColor,
-						true, &coverageConfig);
-					if (coverageShape)
+						AtlasPixelMode::Argb32, AtlasRenderMode::CpuEffects,
+						kArgbAtlasPadding, compositeAtlases, tileColor, false,
+						&compositeConfig);
+					if (compositeShape)
 					{
 						if (diagnostics)
 							diagnostics->outcome =
@@ -313,33 +315,35 @@ namespace fonthook::vectorfont
 								(static_cast<UInt64>(font.iFontNum) << 32)
 								| (static_cast<UInt32>(std::lround(
 									rasterScale * 1000.0f)) << 1)
-								| static_cast<UInt32>(AtlasPixelMode::A8);
+								| static_cast<UInt32>(AtlasPixelMode::Argb32);
 							std::lock_guard<std::mutex> lock(state.atlasMutex);
 							shouldLog =
 								state.loggedAtlasBatches.insert(logKey).second;
 						}
 						if (shouldLog)
 						{
-							const AtlasResource& first = *coverageAtlases[0];
+							const AtlasResource& first = *compositeAtlases[0];
 							FreeTypeFontDebugLog(
-								"tnvse_freetype_font: aggressive A8 baked-coverage batch font=%u sourceScale=%.3f glyphs=%u quads=%u pages=%u texture0=%ux%u levels=%u backend=%s; distance-field sampling disabled",
+								"tnvse_freetype_font: aggressive BGRA composite batch font=%u sourceScale=%.3f glyphs=%u quads=%u pages=%u texture0=%ux%u levels=%u backend=%s singleQuad=1",
 								font.iFontNum, rasterScale,
 								static_cast<UInt32>(glyphs.size()),
 								static_cast<UInt32>(quads.size()),
-								static_cast<UInt32>(coverageAtlases.size()),
+								static_cast<UInt32>(compositeAtlases.size()),
 								first.width, first.height, first.mipLevels,
 								first.backend == AtlasBackend::DefaultPool
 									? "default" : "managed");
 						}
-						return coverageShape;
+						return compositeShape;
 					}
-					if (g_bEnableFreeTypeFontRenderingLog
-						&& state.shaderBatchFailureLogCount++ < 32)
-					{
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_font: aggressive A8 baked-coverage shape failed font=%u; using stock TileShader ARGB fallback",
-							font.iFontNum);
-					}
+					if (state.aggressiveCompositeShapeFailureLogCount++ < 32)
+						gLog.FormattedMessage(
+							"tnvse_freetype_font: aggressive BGRA composite shape failed font=%u quads=%u; batch rejected",
+							font.iFontNum,
+							static_cast<UInt32>(quads.size()));
+					if (diagnostics)
+						diagnostics->outcome =
+							GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
+					return nullptr;
 				}
 
 				constexpr bool useCustomA8Shader = false;

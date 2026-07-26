@@ -170,6 +170,7 @@ namespace fonthook::vectorfont
 			NiD3DVertexShaderPtr vertexShader;
 			NiD3DVertexShaderPtr cacheVertexShader;
 			NiD3DPixelShaderPtr coverageShader;
+			NiD3DPixelShaderPtr argbShader;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
 			std::array<NiD3DPixelShaderPtr, 3> compositeShaders;
@@ -225,7 +226,8 @@ namespace fonthook::vectorfont
 				|| !generation->declaration || !generation->d3dDeclaration
 				|| !HasShaderHandle(generation->vertexShader)
 				|| (g_bEnableFreeTypeFontAggressivePerformanceMode
-					&& !HasShaderHandle(generation->coverageShader)))
+					&& (!HasShaderHandle(generation->coverageShader)
+						|| !HasShaderHandle(generation->argbShader))))
 			{
 				return false;
 			}
@@ -348,6 +350,8 @@ namespace fonthook::vectorfont
 			NativeShaderGeneration* generation = profile->owner;
 			const bool coverageProfile =
 				profile->key.shaderClass == NativeA8ShaderClass::Coverage;
+			const bool simpleColorProfile = coverageProfile
+				|| profile->key.shaderClass == NativeA8ShaderClass::Argb;
 			IDirect3DDevice9* device = shader->m_pkD3DDevice;
 			if (!device)
 				device = generation->device;
@@ -405,13 +409,13 @@ namespace fonthook::vectorfont
 				MarkGenerationFault(generation, "ResolveStockTilePixelConstant", E_FAIL);
 				return;
 			}
-			if (!coverageProfile)
+			if (!simpleColorProfile)
 			{
 				std::copy(profile->constants.begin(), profile->constants.end(),
 					constants.begin() + 4);
 			}
 			HRESULT constantsResult = D3D_OK;
-			if (coverageProfile)
+			if (simpleColorProfile)
 			{
 				// The baked-coverage program consumes only live Tile c0. Avoid the
 				// eight distance/effect registers that make no contribution to this
@@ -471,7 +475,7 @@ namespace fonthook::vectorfont
 					constantsResult);
 				return;
 			}
-			if (batchActive && !coverageProfile)
+			if (batchActive && !simpleColorProfile)
 			{
 				batch.packetConstants = profile->constants;
 				batch.packetConstantsReady = true;
@@ -482,7 +486,7 @@ namespace fonthook::vectorfont
 			// pass's ordinary bilinear setup is sufficient without extra device
 			// calls. Distance-field channels remain numeric linear data and require
 			// the explicit state below.
-			if (coverageProfile)
+			if (simpleColorProfile)
 				return;
 
 			NativeSortedShaderBatch& sortedBatch = s_sortedShaderBatch;
@@ -575,6 +579,7 @@ namespace fonthook::vectorfont
 		{
 			if (packet.shaderClass != NativeA8ShaderClass::CachedImage
 				&& packet.shaderClass != NativeA8ShaderClass::Coverage
+				&& packet.shaderClass != NativeA8ShaderClass::Argb
 				&& packet.distanceFieldMethod != generation.distanceFieldMethod)
 				return nullptr;
 			switch (packet.shaderClass)
@@ -601,6 +606,8 @@ namespace fonthook::vectorfont
 				return generation.cachePixelShader.m_pObject;
 			case NativeA8ShaderClass::Coverage:
 				return generation.coverageShader.m_pObject;
+			case NativeA8ShaderClass::Argb:
+				return generation.argbShader.m_pObject;
 			default:
 				return nullptr;
 			}
@@ -820,6 +827,8 @@ namespace fonthook::vectorfont
 			{
 				generation->coverageShader =
 					createPS("tnvse_freetype_native_coverage.pso");
+				generation->argbShader =
+					createPS("tnvse_freetype_native_argb.pso");
 			}
 			else
 			{
@@ -890,13 +899,14 @@ namespace fonthook::vectorfont
 				return nullptr;
 			}
 			if (g_bEnableFreeTypeFontAggressivePerformanceMode
-				&& !HasShaderHandle(generation->coverageShader))
+				&& (!HasShaderHandle(generation->coverageShader)
+					|| !HasShaderHandle(generation->argbShader)))
 			{
 				// Treat an incomplete aggressive deployment exactly like a missing
 				// Shader Loader. No A8 coverage facade may be published unless its
 				// pixel program is present, so shape routing remains on the stock
 				// ARGB32 TileShader fallback.
-				failure = "coverage-shader-set";
+				failure = "aggressive-shader-set";
 				return nullptr;
 			}
 			if (!g_bEnableFreeTypeFontAggressivePerformanceMode)
@@ -1065,7 +1075,7 @@ namespace fonthook::vectorfont
 			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s",
 			candidate->id, candidate->device,
 			g_bEnableFreeTypeFontAggressivePerformanceMode
-				? "a8-baked-coverage" : "distance-field",
+				? "argb-composite" : "distance-field",
 			g_bEnableFreeTypeFontAggressivePerformanceMode
 				? "disabled" : GetConfiguredDistanceFieldMethodName());
 		return true;

@@ -6,6 +6,7 @@
 #include "native_calls.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -340,6 +341,7 @@ namespace fonthook
 	struct PreparedTextCacheState
 	{
 		std::mutex mutex;
+		std::atomic<UInt64> generation{ 1 };
 		std::unordered_map<PreparedTextCacheKey, PreparedTextCacheEntry,
 			PreparedTextCacheKeyHash, PreparedTextCacheKeyEqual> entries;
 		std::list<PreparedTextCacheKey> lru;
@@ -351,6 +353,17 @@ namespace fonthook
 		static PreparedTextCacheState state;
 		return state;
 	}
+
+	struct PreparedTextTlsEntry
+	{
+		PreparedTextCacheKey key;
+		std::shared_ptr<const PreparedTextCacheValue> value;
+		UInt64 generation = 0;
+	};
+
+	thread_local std::array<PreparedTextTlsEntry, 4>
+		s_preparedTextTlsFront;
+	thread_local size_t s_preparedTextTlsNext = 0;
 
 	static size_t GetPreparedTextCacheLimit()
 	{
@@ -423,6 +436,22 @@ namespace fonthook
 		const PreparedTextCacheLookupKey& lookup)
 	{
 		PreparedTextCacheState& state = GetPreparedTextCacheState();
+		const UInt64 generation =
+			state.generation.load(std::memory_order_acquire);
+		for (PreparedTextTlsEntry& entry : s_preparedTextTlsFront)
+		{
+			if (entry.generation != generation)
+			{
+				entry = {};
+				continue;
+			}
+			if (entry.value
+				&& EqualPreparedTextCacheKey(entry.key, lookup))
+			{
+				RecordFreeTypePreparedTextCacheResult(true);
+				return entry.value;
+			}
+		}
 		std::lock_guard<std::mutex> lock(state.mutex);
 		const auto found = state.entries.find(lookup);
 		if (found == state.entries.end())
@@ -431,6 +460,12 @@ namespace fonthook
 			return nullptr;
 		}
 		state.lru.splice(state.lru.begin(), state.lru, found->second.lru);
+		PreparedTextTlsEntry& front =
+			s_preparedTextTlsFront[s_preparedTextTlsNext++
+				% s_preparedTextTlsFront.size()];
+		front.key = found->first;
+		front.value = found->second.value;
+		front.generation = generation;
 		RecordFreeTypePreparedTextCacheResult(true);
 		return found->second.value;
 	}
@@ -515,6 +550,8 @@ namespace fonthook
 			{
 				state.bytes -= oldest->second.bytes;
 				state.entries.erase(oldest);
+				state.generation.fetch_add(1,
+					std::memory_order_acq_rel);
 			}
 			state.lru.pop_back();
 		}
@@ -537,6 +574,8 @@ namespace fonthook
 				{
 					state.bytes -= oldest->second.bytes;
 					state.entries.erase(oldest);
+					state.generation.fetch_add(1,
+						std::memory_order_acq_rel);
 				}
 				state.lru.pop_back();
 			}

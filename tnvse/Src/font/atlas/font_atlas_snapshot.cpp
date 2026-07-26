@@ -253,7 +253,8 @@ namespace fonthook::vectorfont
 			if (!placement.cacheId || !placement.rect.width || !placement.rect.height
 				|| placement.rect.width > kAtlasHardLimit
 				|| placement.rect.height > kAtlasHardLimit
-				|| placement.maskType > static_cast<UInt8>(GlyphMaskType::Shadow)
+				|| placement.maskType > static_cast<UInt8>(
+					GlyphMaskType::Composite)
 				|| placement.colorBaked > 1 || placement.bakedLayer > 3
 				|| placement.effectiveWidth <= 0 || placement.effectiveWidth > 65535
 				|| placement.effectiveHeight <= 0 || placement.effectiveHeight > 65535
@@ -352,7 +353,7 @@ namespace fonthook::vectorfont
 			if (!IsCompleteAtlasProfileResidentLocked(state, key,
 				&pageCount, &placementCount))
 			{
-				state.completeAtlasProfiles.erase(profileKey);
+				InvalidateCompleteAtlasProfileLocked(state, profileKey);
 				return false;
 			}
 			const auto profile = state.atlasProfiles.find(profileKey);
@@ -1234,7 +1235,7 @@ namespace fonthook::vectorfont
 			// DEFAULT wrappers through the normal lifetime path.
 			const AtlasProfileKey profileKey = MakeAtlasProfileKey(key);
 			if (metadataOnly)
-				state.completeAtlasProfiles.erase(profileKey);
+				InvalidateCompleteAtlasProfileLocked(state, profileKey);
 			const auto existingProfile = state.atlasProfiles.find(profileKey);
 			const std::vector<UInt16> existingPages = existingProfile
 				!= state.atlasProfiles.end() ? existingProfile->second.pages
@@ -1452,7 +1453,8 @@ namespace fonthook::vectorfont
 			// A complete resident profile can still belong to the pre-repack
 			// generation. Force the role loader to replace it from the validated
 			// globally repacked snapshot instead of accepting the reuse marker.
-			state.completeAtlasProfiles.erase(MakeAtlasProfileKey(key));
+			InvalidateCompleteAtlasProfileLocked(state,
+				MakeAtlasProfileKey(key));
 		}
 
 		size_t incomingStorageBytes = 0;
@@ -1592,7 +1594,7 @@ namespace fonthook::vectorfont
 					state.atlasCache.erase(page);
 					++discardedPages;
 				}
-				state.completeAtlasProfiles.erase(profileKey);
+				InvalidateCompleteAtlasProfileLocked(state, profileKey);
 			}
 		}
 
@@ -1850,7 +1852,8 @@ namespace fonthook::vectorfont
 			// Committing any page changes the disk generation that the resident
 			// CompactAtlasSnapshot objects describe. Invalidate before the first
 			// replacement so a partial publication can never remain reusable.
-			State().completeAtlasProfiles.erase(MakeAtlasProfileKey(key));
+			InvalidateCompleteAtlasProfileLocked(State(),
+				MakeAtlasProfileKey(key));
 		}
 		for (const SnapshotPageData& page : pages)
 		{

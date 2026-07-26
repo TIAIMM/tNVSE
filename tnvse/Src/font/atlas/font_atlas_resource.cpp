@@ -607,7 +607,13 @@ namespace fonthook::vectorfont
 					+ static_cast<size_t>(destinationX) * bytesPerPixel;
 				const UInt8* source = bitmap.alpha.data()
 					+ static_cast<size_t>(y) * rect.width * bitmapBytesPerPixel;
-				if (mode == AtlasPixelMode::Mtsdf32)
+				if (mode == AtlasPixelMode::Argb32
+					&& bitmap.maskType == GlyphMaskType::Composite)
+				{
+					std::memcpy(row, source,
+						static_cast<size_t>(rect.width) * 4u);
+				}
+				else if (mode == AtlasPixelMode::Mtsdf32)
 				{
 					std::memcpy(row, source, static_cast<size_t>(rect.width) * 4u);
 				}
@@ -1072,7 +1078,13 @@ namespace fonthook::vectorfont
 						static_cast<size_t>(y) * rect.width + x;
 					const size_t pixelIndex = static_cast<size_t>(rect.y + y)
 						* resource.width + rect.x + x;
-					if (resource.pixelMode == AtlasPixelMode::Mtsdf32)
+					if (resource.pixelMode == AtlasPixelMode::Argb32
+						&& bitmap.maskType == GlyphMaskType::Composite)
+					{
+						std::memcpy(pixels + pixelIndex * 4u,
+							bitmap.alpha.data() + sourcePixel * 4u, 4u);
+					}
+					else if (resource.pixelMode == AtlasPixelMode::Mtsdf32)
 					{
 						std::memcpy(pixels + pixelIndex * 4u,
 							bitmap.alpha.data() + sourcePixel * 4u, 4u);

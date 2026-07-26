@@ -216,6 +216,20 @@ final advance `fixedWidth + tracking`. This matches the grid-oriented DCFGCF
 behavior used by interfaces such as the terminal hacking screen. A value of
 zero retains proportional advances.
 
+After a complete manifest has populated the generated code-page metric table,
+ordinary layout, measurement, wrapping, `MakeString`, and `CreateText` resolve
+single-byte entries directly and DBCS entries through the dense generated table.
+Decoded render glyphs retain their encoded unit, so atlas compilation does not
+repeat code-page decoding or derive a second glyph identity.
+
+Rich-text rendering uses fixed font-ID builder slots for the normal retail and
+registered-font range. Pointer-keyed builders remain only for an out-of-range
+font, slot collision, or another ambiguous lifetime case. Prepared-text lookup
+has a four-entry TLS front cache keyed by the already computed text/config
+signature. A TLS hit avoids the global mutex; a global miss does not allocate an
+additional TLS string key, while cache-generation changes invalidate old TLS
+entries.
+
 ## Blocking prewarm and persistent caches
 
 Startup prewarming is mandatory for every configured FreeType font and has no
@@ -256,12 +270,13 @@ coverage/effect masks needed by the ARGB fallback.
 Full-code-page construction does not create or read `.tnvfmask`. The atlas-only
 transaction begins as soon as the first configured font is queued, so an early
 draw between activation and the blocking prewarm pump cannot create a
-short-lived persistent mask profile. Distance-field pixels and aggressive A8
-Fill/Glow/Outline/Shadow coverage are rasterized into bounded in-memory batches
-and written directly into streamed `_p<page>.tnvfatlas` snapshots. Aggressive
-coverage uses its `A8 + CpuEffects` atlas identity and never aliases an MTSDF
-double-byte owner. The transaction scope restores the ordinary persistent-mask
-policy automatically after success, cancellation, or failure.
+short-lived persistent mask profile. Distance-field pixels and aggressive BGRA
+composite glyphs are rasterized into bounded in-memory batches and written
+directly into streamed `_p<page>.tnvfatlas` snapshots. An aggressive composite
+contains the final Shadow, Glow, Outline, and Fill source-over result in one
+rectangle and uses its `ARGB32 + CpuEffects` atlas identity; it never aliases an
+MTSDF double-byte owner. The transaction scope restores the ordinary
+persistent-mask policy automatically after success, cancellation, or failure.
 
 The `.tnvfmask` format remains available for demand-only rendering outside that
 transaction. A persistent profile is keyed by the font file's content hash,
@@ -286,9 +301,9 @@ files are not candidates on the next launch. Global repacking is allowed only
 inside the current generation transaction after all streamed pages have been
 published.
 
-The same directory also contains three startup-oriented cache layers. A
+The same directory also contains four startup-oriented cache layers. A
 `.tnvfhash` record reuses the font content hash when file identity, size and
-last-write time still match. A v9 `.tnvfmanifest` stores the encoded unit's
+last-write time still match. A v11 `.tnvfmanifest` stores the encoded unit's
 Unicode value, fallback face/glyph identity, and serialized `FontLetter` metrics
 as a sorted sparse table containing the 256 single-byte values plus only valid
 double-byte units from the active code page. A complete manifest is validated
@@ -297,9 +312,9 @@ are copied into the runtime direct table. Runtime fonts with the same
 `manifestHash` share one file
 handle, mapping handle, and mapped view instead of mapping that file once per
 font ID. One `_p<page>.tnvfatlas` snapshot per atlas page stores
-the stable glyph-ID placement map. Snapshot v16 records the byte role, the
+the stable glyph-ID placement map. Snapshot v17 records the byte role, the
 selected distance-field method, and the validated runtime UV subset explicitly,
-and stores A8 true-SDF, BGRA MTSDF, or CPU-effect rectangle payloads. The
+and stores A8 true-SDF, BGRA MTSDF, or BGRA composite rectangle payloads. The
 CPU-effect coverage revision is scoped into the page-content identity, so
 revised effects do not invalidate unrelated true-SDF/MTSDF snapshots.
 Its placed level-zero payload stores the raw per-glyph rectangle texels directly;
@@ -346,7 +361,8 @@ remain explicit configuration identities, and their referenced file contents
 must still match.
 
 `bDeleteUnusedFreeTypeFontCache=1` removes stale `.tnvfmask`, `.tnvfhash`,
-`.tnvfmanifest`, and `.tnvfatlas` files that were not accessed by the current
+`.tnvfmanifest`, `.tnvfatlas`, and `.tnvfdirect` files that were not accessed by
+the current
 run after every configured font atlas has been generated or restored
 successfully. If a prewarm job fails or is cancelled, cleanup switches to a
 safe partial scope: caches identified as the inactive true-SDF/MTSDF method,
@@ -357,8 +373,8 @@ the partial cleanup does not infer their route or method from an opaque filename
 hash. Unknown files in `fontdata` are never removed. The option defaults to `0`.
 
 The final native route is synchronized during deferred initialization, before
-configured game fonts enter blocking prewarm. Aggressive A8 coverage and the
-stock-shader ARGB fallback both select the CPU-coverage cache domain. Selecting
+configured game fonts enter blocking prewarm. Aggressive BGRA composite glyphs
+and the stock-shader ARGB fallback both select the CPU-coverage cache domain. Selecting
 that domain forcibly closes in-process distance-field bitmap/manifest mappings
 and invalidates every normal true-SDF/MTSDF `.tnvfmask`, manifest, atlas
 snapshot, and incomplete atlas transaction, independently of
@@ -380,13 +396,11 @@ and quality selection use a separate shader-effect hash and do not invalidate
 a distance-field atlas. Consequently an effect edit selects a new prewarm
 snapshot only when it changes the final distance-field spread or the masks that the atlas
 must contain.
-The ARGB CPU fallback remains content-sensitive: independently generated
-coverage masks include the enabled glow, outline, and shadow parameters after
-physical-pixel quantization (including stroke, blur, softness, and power) in the
-atlas identity. Effect offsets remain draw geometry and do not invalidate mask
-pixels. Disabled-effect values are ignored. The ARGB fallback additionally
-hashes every baked layer/color variant because its RGB and alpha modifiers are
-stored in atlas pixels rather than supplied only as shader constants.
+The ARGB CPU routes remain content-sensitive. In aggressive mode the composite
+identity includes every enabled effect's quantized shape, offset, fixed/fill
+color mode, RGB, and alpha because all four layers are precomposed into atlas
+pixels. The non-aggressive ARGB fallback continues to hash every independently
+baked layer/color variant.
 
 ## Encoding and fallback routing
 
@@ -418,32 +432,33 @@ multi-channel Fill field, and sampled Alpha carries true signed distance for
 effects.
 
 `bEnableFreeTypeFontAggressivePerformanceMode=1` overrides that selection.
-FreeType hinting rasterizes Fill once. A bounded CPU distance transform then
-evaluates Glow falloff and outer feather, Outline softness, blurred Shadow
-power, and hard-Shadow Glow/Outline source-over composition with the same
-configured parameters as the distance-field shaders. The resulting masks
-remain in level-zero `D3DFMT_A8` atlas pages, and a dedicated `ps_3_0` coverage
-shader performs one texture instruction. Effect RGB, opacity, and the
-fixed-versus-live Tile RGB selector are carried in the vertex stream, so
-adjacent same-page layer and color ranges merge without changing their
-Shadow/Glow/Outline/Fill order. A common single-page text facade consequently
-uses one packet and one draw. This mode intentionally gives up distance-field
-magnification quality in exchange for stock-like sampling, packet, and atlas
-cost; it no longer substitutes opaque FreeType strokes for configured effect
-coverage.
-The startup prewarm publishes those generated coverage masks as globally
+FreeType hinting rasterizes Fill once. A bounded CPU distance transform evaluates
+Glow falloff, Outline softness, blurred Shadow power, and hard-Shadow
+Glow/Outline inclusion, then composites Shadow, Glow, Outline, and Fill into one
+straight-alpha BGRA rectangle in that order. Effect colors and alpha are baked
+into the rectangle. Runtime Tile transform, scissor, total alpha, and whole-text
+RGB modulation remain live, but the individual effect and fill colors can no
+longer be changed independently after the profile is built.
+
+Each visible aggressive glyph therefore contributes exactly one quad. A
+single-page batch can use the stock Tile shader; a multi-page batch uses the
+dedicated native ARGB sampler and fixed page ranges. No four-mask A8 geometry,
+per-layer packet construction, or page sorting remains in a complete aggressive
+profile. This mode intentionally gives up distance-field magnification quality
+and separately dynamic effect colors in exchange for `.fnt`-like CPU and
+geometry cost.
+The startup prewarm publishes those generated composite glyphs as globally
 repacked `.tnvfatlas` pages. A later launch validates and restores that atlas
 profile directly, so aggressive mode does not need `.tnvfmask` restoration to
 avoid rerasterizing the complete code page.
 
 The aggressive mode never removes the fallback boundary. Without Fallout
 Shader Loader, with an old Loader version, with missing Loader exports, with a
-missing coverage shader, or when native initialization is unavailable, route
-selection occurs before shape construction and tNVSE builds the same
-distance-aware hinted coverage and effect masks into an `A8R8G8B8` atlas with
-baked colors for the stock Tile shader. Fixed effect RGB is compensated for the
-stock shader's live Tile-color multiplication at shape construction. No A8
-native facade is created in that state.
+missing ARGB shader, or when native initialization is unavailable, no complete
+aggressive direct profile is published and the whole text batch enters the
+existing compatibility path. A missing direct record, page replacement,
+generation mismatch, or invalid snapshot identity applies the same batch-wide
+fallback; direct and bitmap records are never mixed in one submission.
 
 The visible text on a native route is
 represented by one facade in the stock Tile alpha list so the game retains its
@@ -632,22 +647,21 @@ ring; expired static entries are discarded during compaction.
 
 Persistent atlas pages start at 512x512 and grow without moving existing glyphs.
 Missing glyphs are rasterized as one batch and uploaded through one dirty
-rectangle. Level-zero-only true-SDF/A8, aggressive hinted-coverage A8, and
-MTSDF/BGRA pages use one
+rectangle. Level-zero-only true-SDF/A8 and MTSDF/BGRA pages use one
 outside-distance padding pixel per side, which is sufficient to isolate their
 bilinear footprint because
 the distance spread and an additional guard texel are already inside each glyph
-bitmap. ARGB fallback pages retain four
+bitmap. Aggressive composite and ARGB fallback pages retain four
 transparent pixels per side, isolating the 1/4 mip even when glyph dimensions
 are not multiples of four. Repeated text also reuses cached layout and unique
 text artifacts. One artifact owns the packed vertices, bound, atlas-page
 property/texture references, and merged contiguous packet descriptors that used
 to live in separate batch and packet-template caches. Geometry, per-glyph base
-colors, layer constants, baked-coverage mode, and referenced page identities
+colors, layer constants, composite mode, and referenced page identities
 therefore form one
 validated cache identity; an atlas wrapper address cannot revive an artifact
 whose retained property or texture differs. True SDF, MTSDF, and 32-bit fallback
-profiles use separate cache keys; aggressive A8 coverage additionally has a
+profiles use separate cache keys; aggressive BGRA composite additionally has a
 distinct pixel/render profile and prewarm identity. Changing
 `uiFreeTypeFontDistanceFieldMode`
 therefore selects new bitmap, manifest, snapshot, and shader identities without
@@ -698,8 +712,8 @@ When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
-generations are restored after a D3D9 device reset. A version-16 snapshot
-records A8 true SDF, BGRA MTSDF, or CPU-effect coverage and is uploaded
+generations are restored after a D3D9 device reset. A version-17 snapshot
+records A8 true SDF, BGRA MTSDF, or BGRA composite glyphs and is uploaded
 directly to this path.
 Its cache identity includes the persistent
 glyph-manifest ABI, so an incompatible or newly revised manifest cannot make an
@@ -743,13 +757,43 @@ fallback profiles continue to include the complete effect hash.
 
 A restored page uses one contiguous glyph-record vector sorted by `cacheId`.
 Each record keeps the ID, rectangle, an index into the page's compact snapshot
-metadata, and an optional live bitmap. The profile-level page index remains the
-single hash lookup that chooses a page; lookup inside that page is a binary
-search. Restore therefore performs one contiguous glyph-record allocation per page, does not
-allocate an empty `GlyphBitmap` or hash node per glyph, and does not mirror the
-same IDs in separate placement and resident-bitmap hash tables. Metadata objects
-are materialized lazily only for restored glyphs that text actually requests;
-runtime-added glyphs attach their existing bitmap directly to the same record.
+metadata, and an optional live bitmap. After a complete code-page profile is
+published, tNVSE builds and atomically saves an `.fnt`-style `.tnvfdirect` table
+for each byte role. The single-byte table has 256 fixed records; the DBCS table
+has 24,066 fixed records covering lead bytes `0x81-0xFE` and trail bytes
+`0x40-0xFE`. Invalid encoding slots use a fixed invalid flag. Each valid
+`DirectCachedLetter` contains its `FontLetter` metrics and, for every required
+mask, the page slot, cache/content identity, final rectangle, bearings, spread,
+snapshot-placement index, and UVs. Spaces are marked known-empty.
+
+The direct file is written through a flushed temporary file and atomic replace.
+Its header and record block have independent checksums and include the manifest,
+snapshot, render-route, scale, padding, page-count, and page-content identity.
+On an unchanged second launch the complete fixed table is read contiguously
+after page validation; atlas mapping does not re-traverse the manifest,
+recompute every cache ID, or reconstruct an encoded-code placement map.
+Equivalent profile
+owners share the same table and atlas pages rather than saving one copy per font
+alias.
+
+Complete direct batches use fixed `[layer][64 pages]` count and cursor arrays.
+The first pass validates every source and counts the final ranges; the second
+pass scatters quads directly in Shadow, Glow, Outline, Fill and ascending-page
+order. It does not create a `GlyphBitmapRequest`, build a cache-ID page map, or
+sort the batch. The distance-field route shares the body quad across Fill, Glow,
+Outline, and an unshifted Shadow; an offset Shadow adds at most one second quad.
+The aggressive route always has one composite quad per visible glyph.
+
+The placement index never depends on the mutable/sorted live glyph vector.
+Batch construction copies the final geometry and UV fields only after checking
+the current page content hash and immutable snapshot placement. The direct table
+holds weak page references so a nonzero GPU budget can still evict unused pages.
+Page insertion, replacement, eviction, snapshot publication, or removal of the
+complete-profile marker clears the table atomically. A direct batch also retains
+its resolved pages and validates page generation, texture dimensions, artifact
+owner, resource serial, upload epoch, and vertex/index ranges through the native
+submission path. A missing/expired entry makes the complete batch use the
+compatibility lookup; no raw snapshot pointer survives table lookup.
 
 `uiFreeTypeFontGpuAtlasCacheMB` controls the soft GPU atlas budget. A value of
 zero selects full-resident mode: every configured font snapshot is restored

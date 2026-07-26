@@ -291,10 +291,11 @@ namespace fonthook::vectorfont
 		CpuMemoryLease cpuMemory;
 	};
 
-	// Version 13 identifies the selectable true-SDF A8 and BGRA MTSDF payloads.
+	// Version 14 adds persistent BGRA composite glyph payloads for the
+	// deterministic aggressive single-quad route.
 	// CPU-effect revisions are scoped through their mask identity so unchanged
 	// Fill and distance-field caches do not require regeneration.
-	constexpr UInt32 kPersistentBitmapVersion = 13;
+	constexpr UInt32 kPersistentBitmapVersion = 14;
 	constexpr UInt32 kPersistentBitmapRecordMagic = 0x4B534D47u; // GMSK
 	constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
 	constexpr UInt32 kMaximumPersistentSingleChannelBitmapBytes =
@@ -656,6 +657,8 @@ namespace fonthook::vectorfont
 	bool LoadGlyphManifest(RuntimeFont& runtime, UInt32 encodedCode,
 		VectorFontByteClass byteClass, VectorEncodedGlyph* glyph,
 		FontLetter* metrics);
+	bool LoadGlyphManifestIdentity(RuntimeFont& runtime, UInt32 encodedCode,
+		VectorFontByteClass byteClass, VectorEncodedGlyph& glyph);
 	bool EnsureCompleteCodePageMetricTable(RuntimeFont& runtime);
 	void StoreGlyphManifest(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
 		const ResolvedGlyph& resolved, const FontLetter& metrics);
