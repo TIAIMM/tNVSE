@@ -47,6 +47,9 @@ namespace fonthook::vectorfont
 			case A8CompiledShaderClass::Effect:
 				result = NativeA8ShaderClass::Effect;
 				return true;
+			case A8CompiledShaderClass::Coverage:
+				result = NativeA8ShaderClass::Coverage;
+				return true;
 			default:
 				return false;
 			}
@@ -83,6 +86,26 @@ namespace fonthook::vectorfont
 		A8CompiledRange CompileRange(const A8EffectShapeConfig& effects,
 			const A8DrawRange& range)
 		{
+			if (effects.bakedCoverage)
+			{
+				A8CompiledRange compiled;
+				compiled.range = range;
+				// Coverage, effect color and effect opacity already live in the A8
+				// mask plus COLOR0. Normalize all packet-owned state so contiguous
+				// Shadow/Glow/Outline/Fill ranges on one atlas page collapse into a
+				// single draw while retaining their original vertex order.
+				compiled.range.layer = 3;
+				compiled.range.usesSdf = false;
+				compiled.range.usesLiveTileRgb = true;
+				compiled.range.sdfSpreadPixels = 0.0f;
+				compiled.range.sourceToLogicalScale = 1.0f;
+				compiled.range.layerColorModifier =
+					{ 1.0f, 1.0f, 1.0f, 1.0f };
+				compiled.shaderClass = A8CompiledShaderClass::Coverage;
+				compiled.staticSmoothSampling = true;
+				return compiled;
+			}
+
 			float inverseAtlasWidth = effects.inverseAtlasWidth;
 			float inverseAtlasHeight = effects.inverseAtlasHeight;
 			if (range.atlasPage < effects.atlasInverseSizes.size())

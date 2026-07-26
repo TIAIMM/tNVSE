@@ -87,20 +87,26 @@ namespace fonthook::vectorfont
 		const bool hasEffects = !suppressEffects
 			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled);
 		const bool a8RendererAvailable = IsA8RendererAvailable();
-		const FontAtlasRoute atlasRoute = ResolveFontAtlasRoute(a8RendererAvailable);
-		const bool requestsMtsdfFill = atlasRoute == FontAtlasRoute::ShaderMtsdf;
-		const bool wantsShaderPath = requestsMtsdfFill;
+		const FontAtlasRoute atlasRoute = ResolveFontAtlasRoute(
+			a8RendererAvailable,
+			g_bEnableFreeTypeFontAggressivePerformanceMode);
+		const bool requestsDistanceField =
+			atlasRoute == FontAtlasRoute::ShaderDistanceField;
+		const bool requestsBakedCoverage =
+			atlasRoute == FontAtlasRoute::ShaderA8Coverage;
+		const bool wantsShaderPath =
+			atlasRoute != FontAtlasRoute::ArgbFallback;
 		if (diagnostics)
 		{
 			diagnostics->hasEffects = hasEffects;
-			diagnostics->requestsSdfFill = requestsMtsdfFill;
+			diagnostics->requestsSdfFill = requestsDistanceField;
 			diagnostics->wantsShaderPath = wantsShaderPath;
 			diagnostics->a8RendererAvailable = a8RendererAvailable;
 			diagnostics->requestedQuality = static_cast<UInt8>(config.effectQuality);
 			diagnostics->resolvedQuality = diagnostics->requestedQuality;
 		}
 		EffectQuality resolvedQuality = config.effectQuality;
-		if (atlasRoute == FontAtlasRoute::ShaderMtsdf
+		if (atlasRoute == FontAtlasRoute::ShaderDistanceField
 			&& ResolveA8EffectQuality(config.effectQuality, resolvedQuality))
 		{
 			if (diagnostics)
@@ -277,6 +283,59 @@ namespace fonthook::vectorfont
 			}
 			if (quads.size() <= kMaximumQuads)
 			{
+				if (requestsBakedCoverage)
+				{
+					A8EffectShapeConfig coverageConfig;
+					coverageConfig.bakedCoverage = true;
+					std::vector<std::shared_ptr<AtlasResource>> coverageAtlases;
+					if (diagnostics)
+						++diagnostics->cpuShapeAttempts;
+					NiTriShape* coverageShape = TryCreateAtlasShapeForMode(
+						font, quads, config, rasterScale, prepareObject,
+						AtlasPixelMode::A8, AtlasRenderMode::CpuEffects,
+						kDistanceFieldAtlasPadding, coverageAtlases, tileColor,
+						true, &coverageConfig);
+					if (coverageShape)
+					{
+						if (diagnostics)
+							diagnostics->outcome =
+								GlyphAtlasBuildOutcome::Created;
+						bool shouldLog = false;
+						if (g_bEnableFreeTypeFontRenderingLog)
+						{
+							const UInt64 logKey =
+								(static_cast<UInt64>(font.iFontNum) << 32)
+								| (static_cast<UInt32>(std::lround(
+									rasterScale * 1000.0f)) << 1)
+								| static_cast<UInt32>(AtlasPixelMode::A8);
+							std::lock_guard<std::mutex> lock(state.atlasMutex);
+							shouldLog =
+								state.loggedAtlasBatches.insert(logKey).second;
+						}
+						if (shouldLog)
+						{
+							const AtlasResource& first = *coverageAtlases[0];
+							FreeTypeFontDebugLog(
+								"tnvse_freetype_font: aggressive A8 baked-coverage batch font=%u sourceScale=%.3f glyphs=%u quads=%u pages=%u texture0=%ux%u levels=%u backend=%s; distance-field sampling disabled",
+								font.iFontNum, rasterScale,
+								static_cast<UInt32>(glyphs.size()),
+								static_cast<UInt32>(quads.size()),
+								static_cast<UInt32>(coverageAtlases.size()),
+								first.width, first.height, first.mipLevels,
+								first.backend == AtlasBackend::DefaultPool
+									? "default" : "managed");
+						}
+						return coverageShape;
+					}
+					if (g_bEnableFreeTypeFontRenderingLog
+						&& state.shaderBatchFailureLogCount++ < 32)
+					{
+						FreeTypeFontDebugLog(
+							"tnvse_freetype_font: aggressive A8 baked-coverage shape failed font=%u; using stock TileShader ARGB fallback",
+							font.iFontNum);
+					}
+				}
+
 				constexpr bool useCustomA8Shader = false;
 				AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
 				std::vector<std::shared_ptr<AtlasResource>> atlases;

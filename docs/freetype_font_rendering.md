@@ -13,6 +13,7 @@ font hook:
 bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
 fFreeTypeFontResolutionScale=1.0
+bEnableFreeTypeFontAggressivePerformanceMode=0
 uiFreeTypeFontDistanceFieldMode=1
 ```
 
@@ -391,9 +392,27 @@ distance-field representation. `0` generates msdfgen true SDF into a
 level-zero `D3DFMT_A8` atlas. `1` (the default) generates MTSDF into
 `D3DFMT_A8R8G8B8`; D3D9 memory is BGRA, sampled RGB carries the
 multi-channel Fill field, and sampled Alpha carries true signed distance for
-effects. Without the complete Shader Loader route, tNVSE builds hinted coverage and
-effect masks into an `A8R8G8B8` atlas with baked colors and renders it through
-the stock Tile shader. The visible text on the native distance-field route is
+effects.
+
+`bEnableFreeTypeFontAggressivePerformanceMode=1` overrides that selection.
+FreeType hinting rasterizes Fill, Shadow, Glow, and Outline coverage once, the
+resulting masks remain in level-zero `D3DFMT_A8` atlas pages, and a dedicated
+`ps_3_0` coverage shader performs one texture instruction. Effect RGB, opacity,
+and the fixed-versus-live Tile RGB selector are carried in the vertex stream,
+so adjacent same-page layer and color ranges merge without changing their
+Shadow/Glow/Outline/Fill order. A common single-page text facade consequently
+uses one packet and one draw. This mode intentionally gives up distance-field
+magnification quality in exchange for stock-like sampling, packet, and atlas
+cost.
+
+The aggressive mode never removes the fallback boundary. Without Fallout
+Shader Loader, with an old Loader version, with missing Loader exports, with a
+missing coverage shader, or when native initialization is unavailable, route
+selection occurs before shape construction and tNVSE builds hinted coverage
+and effect masks into an `A8R8G8B8` atlas with baked colors for the stock Tile
+shader. No A8 native facade is created in that state.
+
+The visible text on a native route is
 represented by one facade in the stock Tile alpha list so the game retains its
 normal UI sorting. At the sorted Tile pass tNVSE expands that facade into native
 Gamebryo geometry packets grouped by layer, atlas page, shader class, and
@@ -580,7 +599,8 @@ ring; expired static entries are discarded during compaction.
 
 Persistent atlas pages start at 512x512 and grow without moving existing glyphs.
 Missing glyphs are rasterized as one batch and uploaded through one dirty
-rectangle. Level-zero-only true-SDF/A8 and MTSDF/BGRA pages use one
+rectangle. Level-zero-only true-SDF/A8, aggressive hinted-coverage A8, and
+MTSDF/BGRA pages use one
 outside-distance padding pixel per side, which is sufficient to isolate their
 bilinear footprint because
 the distance spread and an additional guard texel are already inside each glyph
@@ -590,10 +610,13 @@ are not multiples of four. Repeated text also reuses cached layout and unique
 text artifacts. One artifact owns the packed vertices, bound, atlas-page
 property/texture references, and merged contiguous packet descriptors that used
 to live in separate batch and packet-template caches. Geometry, per-glyph base
-colors, layer constants, and referenced page identities therefore form one
+colors, layer constants, baked-coverage mode, and referenced page identities
+therefore form one
 validated cache identity; an atlas wrapper address cannot revive an artifact
 whose retained property or texture differs. True SDF, MTSDF, and 32-bit fallback
-profiles use separate cache keys. Changing `uiFreeTypeFontDistanceFieldMode`
+profiles use separate cache keys; aggressive A8 coverage additionally has a
+distinct pixel/render profile and prewarm identity. Changing
+`uiFreeTypeFontDistanceFieldMode`
 therefore selects new bitmap, manifest, snapshot, and shader identities without
 requiring manual cache deletion. Native and fallback profiles may coexist when
 text was created before Shader Loader initialization.

@@ -136,7 +136,9 @@ namespace fonthook::vectorfont
 				}
 			}
 			if (!effectConfig || !effectConfig->enabled)
-				return RejectA8Shape("native-route-requires-enabled-mtsdf");
+				return RejectA8Shape("native-route-requires-enabled-profile");
+			if (effectConfig->shaderEffects == effectConfig->bakedCoverage)
+				return RejectA8Shape("native-route-profile-kind-conflict");
 
 			const std::array<float, 12> scalarValues = {
 				effectConfig->inverseAtlasWidth,
@@ -219,7 +221,8 @@ namespace fonthook::vectorfont
 					|| range.vertexCount / 4u != range.primitiveCount / 2u
 					|| !IsFiniteColor(range.layerColorModifier)
 					|| !std::isfinite(range.sdfSpreadPixels)
-					|| range.sdfSpreadPixels <= 0.0f
+					|| (!effectConfig->bakedCoverage
+						&& range.sdfSpreadPixels <= 0.0f)
 					|| !std::isfinite(range.sourceToLogicalScale)
 					|| range.sourceToLogicalScale <= 0.0f
 					|| range.sourceToLogicalScale > 1.0f)
@@ -246,10 +249,16 @@ namespace fonthook::vectorfont
 				{
 					return RejectA8Shape("draw-ranges-not-layer-monotonic");
 				}
-				if (!range.usesSdf)
-					return RejectA8Shape("non-mtsdf-draw-range");
-				if (range.sdfSpreadPixels <= 0.0f)
-					return RejectA8Shape("mtsdf-range-without-positive-spread");
+				if (effectConfig->bakedCoverage == range.usesSdf)
+					return RejectA8Shape(effectConfig->bakedCoverage
+						? "coverage-range-marked-as-sdf"
+						: "distance-field-range-without-sdf");
+				if (!effectConfig->bakedCoverage
+					&& range.sdfSpreadPixels <= 0.0f)
+				{
+					return RejectA8Shape(
+						"distance-field-range-without-positive-spread");
+				}
 				haveFill = haveFill || range.layer == 3;
 				previousLayerRank = layerRank;
 				previousVertexEnd = vertexEnd;

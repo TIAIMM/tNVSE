@@ -32,7 +32,8 @@ namespace fonthook::vectorfont
 		Body,
 		Effect,
 		Composite,
-		CachedImage
+		CachedImage,
+		Coverage
 	};
 
 	enum class NativeA8Sampling : UInt8
@@ -79,8 +80,9 @@ namespace fonthook::vectorfont
 		float u = 0.0f;
 		float v = 0.0f;
 		// D3DDECLTYPE_D3DCOLOR expands this packed ARGB value to the shader's
-		// normalized float4 COLOR0 input. The per-packet layer color remains in
-		// c1, so only the glyph's base color is repeated per vertex.
+		// normalized float4 COLOR0 input. Distance-field profiles retain their
+		// per-packet layer color in c1; baked coverage instead places the complete
+		// base/layer modifier here so different effects can share one packet.
 		UInt32 color = 0xFFFFFFFFu;
 		// Per-glyph distance-field data must not participate in packet identity.
 		// Shared MTSDF double-byte atlases can mix source sizes in one text run;
@@ -88,8 +90,9 @@ namespace fonthook::vectorfont
 		// layer/page packet without changing their reconstruction parameters.
 		float sdfSpread = 0.0f;
 		float distanceParameterScale = 1.0f;
-		// Exact integer mask (bits 0..3: Shadow/Glow/Outline/Fill).  Existing
-		// shaders ignore it; native composite profiles consume it.
+		// Exact integer mask (bits 0..3: Shadow/Glow/Outline/Fill) for distance
+		// fields. Baked A8 coverage profiles instead store their per-quad live
+		// Tile RGB selector here (0=fixed RGB, 1=live Tile RGB).
 		float layerMask = 8.0f;
 	};
 	static_assert(sizeof(NativeA8GpuVertex) == 9 * sizeof(float));

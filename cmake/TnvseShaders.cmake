@@ -5,6 +5,7 @@ function(tnvse_add_shader_target output_variable)
   set(shader_sources
     "${shader_dir}/freetype_native_common.hlsli"
     "${shader_dir}/freetype_native_vs.hlsl"
+    "${shader_dir}/freetype_native_coverage.hlsl"
     "${shader_dir}/freetype_native_mtsdf_fill.hlsl"
     "${shader_dir}/freetype_native_mtsdf_effects.hlsl"
     "${shader_dir}/freetype_native_mtsdf_composite.hlsl"
@@ -14,6 +15,7 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/compile_a8_shader.bat")
   set(shader_outputs
     "${shader_dir}/compiled/tnvse_freetype_native_vs.vso"
+    "${shader_dir}/compiled/tnvse_freetype_native_coverage.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_balanced.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_high.pso"
@@ -48,7 +50,7 @@ function(tnvse_add_shader_target output_variable)
     WORKING_DIRECTORY "${shader_dir}"
     BYPRODUCTS ${shader_outputs}
     SOURCES ${shader_sources}
-    COMMENT "Compiling native FreeType true-SDF and MTSDF shaders"
+    COMMENT "Compiling native FreeType A8 coverage, true-SDF and MTSDF shaders"
     VERBATIM)
   set_target_properties(tnvse_shaders PROPERTIES FOLDER "tNVSE/Shaders")
   set(${output_variable} "${shader_outputs}" PARENT_SCOPE)

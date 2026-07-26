@@ -589,8 +589,18 @@ namespace fonthook::vectorfont
 				bakedColorHash);
 		}
 
-		bool UsesLevelZeroOnly(const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps)
+		bool UsesLevelZeroOnly(
+			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
+			AtlasPixelMode pixelMode, AtlasRenderMode renderMode)
 		{
+			// The aggressive A8 route deliberately trades distance-field scaling
+			// for stock-like one-sample coverage. It never samples mip levels, so
+			// retaining or generating them would only add upload, disk and VRAM cost.
+			if (pixelMode == AtlasPixelMode::A8
+				&& renderMode == AtlasRenderMode::CpuEffects)
+			{
+				return true;
+			}
 			bool found = false;
 			for (const auto& bitmap : bitmaps)
 			{
@@ -811,7 +821,7 @@ namespace fonthook::vectorfont
 				pixelMode,
 				renderMode,
 				padding,
-				UsesLevelZeroOnly(bitmaps),
+				UsesLevelZeroOnly(bitmaps, pixelMode, renderMode),
 				byteClass
 			};
 
@@ -998,7 +1008,8 @@ namespace fonthook::vectorfont
 			resource->backend = g_bEnableFreeTypeDefaultPoolAtlas
 				? AtlasBackend::DefaultPool : AtlasBackend::Managed;
 			resource->renderMode = renderMode;
-			resource->levelZeroOnly = UsesLevelZeroOnly(bitmaps);
+			resource->levelZeroOnly =
+				UsesLevelZeroOnly(bitmaps, pixelMode, renderMode);
 			resource->padding = padding;
 			resource->transient = true;
 			std::unordered_map<UInt64, AtlasRect> placements;

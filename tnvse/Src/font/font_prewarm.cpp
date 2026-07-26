@@ -333,8 +333,11 @@ namespace fonthook::vectorfont
 			};
 			add(&config.layoutHash, sizeof(config.layoutHash));
 			add(&config.maskGenerationHash, sizeof(config.maskGenerationHash));
-			if (ResolveFontAtlasRoute(IsA8RendererAvailable())
-				== FontAtlasRoute::ShaderMtsdf)
+			const FontAtlasRoute route = ResolveFontAtlasRoute(
+				IsA8RendererAvailable(),
+				g_bEnableFreeTypeFontAggressivePerformanceMode);
+			add(&route, sizeof(route));
+			if (route == FontAtlasRoute::ShaderDistanceField)
 			{
 				const DistanceFieldMethod method =
 					GetConfiguredDistanceFieldMethod();
@@ -470,10 +473,14 @@ namespace fonthook::vectorfont
 			float minimumJobProgress = 0.0f)
 		{
 			wchar_t detail[160] = {};
-			const wchar_t* renderMode = ResolveFontAtlasRoute(IsA8RendererAvailable())
-				== FontAtlasRoute::ShaderMtsdf
-				? (UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF")
-				: L"ARGB fallback";
+			const FontAtlasRoute route = ResolveFontAtlasRoute(
+				IsA8RendererAvailable(),
+				g_bEnableFreeTypeFontAggressivePerformanceMode);
+			const wchar_t* renderMode =
+				route == FontAtlasRoute::ShaderDistanceField
+					? (UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF")
+					: route == FontAtlasRoute::ShaderA8Coverage
+						? L"A8 baked coverage" : L"ARGB fallback";
 			_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 				L"Font %u of %u  |  ID %u  |  %ls",
 				fontOrdinal, fontCount, job.fontId, renderMode);
@@ -722,8 +729,10 @@ namespace fonthook::vectorfont
 			}
 
 			EffectQuality resolvedQuality = config->effectQuality;
-			bool shaderSdf = ResolveFontAtlasRoute(IsA8RendererAvailable())
-				== FontAtlasRoute::ShaderMtsdf
+			bool shaderSdf = ResolveFontAtlasRoute(
+				IsA8RendererAvailable(),
+				g_bEnableFreeTypeFontAggressivePerformanceMode)
+				== FontAtlasRoute::ShaderDistanceField
 				&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
 			UInt32 sdfSpread = 0;
 			if (shaderSdf && !ResolveSdfSpread(*config, rasterScale, sdfSpread))

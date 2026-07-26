@@ -112,7 +112,8 @@ namespace fonthook::vectorfont
 		bool ResolvePrewarmAtlasKey(const FontConfig& config,
 			VectorFontByteClass byteClass, float rasterScale, AtlasCacheKey& key)
 		{
-			if (!IsA8RendererAvailable())
+			if (g_bEnableFreeTypeFontAggressivePerformanceMode
+				|| !IsA8RendererAvailable())
 				return false;
 			EffectQuality resolved = config.effectQuality;
 			if (!ResolveA8EffectQuality(config.effectQuality, resolved))
@@ -1974,6 +1975,8 @@ namespace fonthook::vectorfont
 			method = DistanceFieldMethod::Mtsdf;
 		else
 			return PersistentCacheCleanupClass::Invalid;
+		if (g_bEnableFreeTypeFontAggressivePerformanceMode)
+			return PersistentCacheCleanupClass::InactiveDistanceField;
 		return method == GetConfiguredDistanceFieldMethod()
 			? PersistentCacheCleanupClass::CurrentDistanceField
 			: PersistentCacheCleanupClass::InactiveDistanceField;

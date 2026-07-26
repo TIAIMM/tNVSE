@@ -169,6 +169,7 @@ namespace fonthook::vectorfont
 			IDirect3DVertexDeclaration9* d3dDeclaration = nullptr;
 			NiD3DVertexShaderPtr vertexShader;
 			NiD3DVertexShaderPtr cacheVertexShader;
+			NiD3DPixelShaderPtr coverageShader;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
 			std::array<NiD3DPixelShaderPtr, 3> compositeShaders;
@@ -222,19 +223,26 @@ namespace fonthook::vectorfont
 			if (!generation || !generation->renderer || !generation->device
 				|| generation->runtimeFault.load(std::memory_order_acquire)
 				|| !generation->declaration || !generation->d3dDeclaration
-				|| !HasShaderHandle(generation->vertexShader))
+				|| !HasShaderHandle(generation->vertexShader)
+				|| (g_bEnableFreeTypeFontAggressivePerformanceMode
+					&& !HasShaderHandle(generation->coverageShader)))
 			{
 				return false;
 			}
-			for (const NiD3DPixelShaderPtr& shader : generation->mtsdfFillShaders)
+			if (!g_bEnableFreeTypeFontAggressivePerformanceMode)
 			{
-				if (!HasShaderHandle(shader))
-					return false;
-			}
-			for (const NiD3DPixelShaderPtr& shader : generation->effectShaders)
-			{
-				if (!HasShaderHandle(shader))
-					return false;
+				for (const NiD3DPixelShaderPtr& shader
+					: generation->mtsdfFillShaders)
+				{
+					if (!HasShaderHandle(shader))
+						return false;
+				}
+				for (const NiD3DPixelShaderPtr& shader
+					: generation->effectShaders)
+				{
+					if (!HasShaderHandle(shader))
+						return false;
+				}
 			}
 			return true;
 		}
@@ -338,6 +346,8 @@ namespace fonthook::vectorfont
 			}
 
 			NativeShaderGeneration* generation = profile->owner;
+			const bool coverageProfile =
+				profile->key.shaderClass == NativeA8ShaderClass::Coverage;
 			IDirect3DDevice9* device = shader->m_pkD3DDevice;
 			if (!device)
 				device = generation->device;
@@ -384,10 +394,10 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			// The native profiles bind different pixel programs and upload c0-c8
-			// directly. The stock update refreshes Tile's color/alpha constant map
-			// on every packet, so c0 must be republished after every stock call even
-			// when its value is unchanged. Only tNVSE-owned c1-c8 may be reused.
+			// Distance-field profiles bind different pixel programs and upload
+			// c0-c8 directly. The stock update refreshes Tile's color/alpha constant
+			// map on every packet, so c0 must be republished after every stock call
+			// even when its value is unchanged. Only tNVSE-owned c1-c8 may be reused.
 			std::array<float,
 				(kNativeA8PacketConstantRegisterCount + 1) * 4> constants = {};
 			if (!ResolveStockTilePixelConstant(properties, constants.data()))
@@ -395,10 +405,21 @@ namespace fonthook::vectorfont
 				MarkGenerationFault(generation, "ResolveStockTilePixelConstant", E_FAIL);
 				return;
 			}
-			std::copy(profile->constants.begin(), profile->constants.end(),
-				constants.begin() + 4);
+			if (!coverageProfile)
+			{
+				std::copy(profile->constants.begin(), profile->constants.end(),
+					constants.begin() + 4);
+			}
 			HRESULT constantsResult = D3D_OK;
-			if (!batchActive || !batch.packetConstantsReady)
+			if (coverageProfile)
+			{
+				// The baked-coverage program consumes only live Tile c0. Avoid the
+				// eight distance/effect registers that make no contribution to this
+				// stock-like one-sample path.
+				constantsResult = device->SetPixelShaderConstantF(
+					0, constants.data(), 1);
+			}
+			else if (!batchActive || !batch.packetConstantsReady)
 			{
 				constantsResult = device->SetPixelShaderConstantF(
 					0, constants.data(), static_cast<UINT>(
@@ -450,15 +471,20 @@ namespace fonthook::vectorfont
 					constantsResult);
 				return;
 			}
-			if (batchActive)
+			if (batchActive && !coverageProfile)
 			{
 				batch.packetConstants = profile->constants;
 				batch.packetConstantsReady = true;
 			}
 
-			// Distance-field channels are numeric linear data and pages contain only level
-			// zero. Reassert both states after the stock Tile update, which can
-			// inherit them from an unrelated preceding pass.
+			// Coverage reads only Alpha from a one-level A8 texture. sRGB sampling
+			// cannot modify Alpha and no mip state can select another level, so the
+			// pass's ordinary bilinear setup is sufficient without extra device
+			// calls. Distance-field channels remain numeric linear data and require
+			// the explicit state below.
+			if (coverageProfile)
+				return;
+
 			NativeSortedShaderBatch& sortedBatch = s_sortedShaderBatch;
 			const bool sortedSamplerReady = sortedBatch.depth
 				&& sortedBatch.samplerReady
@@ -548,6 +574,7 @@ namespace fonthook::vectorfont
 			const NativeA8PacketTemplate& packet)
 		{
 			if (packet.shaderClass != NativeA8ShaderClass::CachedImage
+				&& packet.shaderClass != NativeA8ShaderClass::Coverage
 				&& packet.distanceFieldMethod != generation.distanceFieldMethod)
 				return nullptr;
 			switch (packet.shaderClass)
@@ -572,6 +599,8 @@ namespace fonthook::vectorfont
 			}
 			case NativeA8ShaderClass::CachedImage:
 				return generation.cachePixelShader.m_pObject;
+			case NativeA8ShaderClass::Coverage:
+				return generation.coverageShader.m_pObject;
 			default:
 				return nullptr;
 			}
@@ -787,80 +816,108 @@ namespace fonthook::vectorfont
 				createVS("tnvse_freetype_native_cache.vso");
 			generation->cachePixelShader =
 				createPS("tnvse_freetype_native_cache.pso");
-			const char* mtsdfFillNames[] = {
-				"tnvse_freetype_native_mtsdf_fill_fast.pso",
-				"tnvse_freetype_native_mtsdf_fill_balanced.pso",
-				"tnvse_freetype_native_mtsdf_fill_high.pso"
-			};
-			const char* trueSdfFillNames[] = {
-				"tnvse_freetype_native_sdf_fill_fast.pso",
-				"tnvse_freetype_native_sdf_fill_balanced.pso",
-				"tnvse_freetype_native_sdf_fill_high.pso"
-			};
-			const char* const* fillNames =
-				generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
-				? mtsdfFillNames : trueSdfFillNames;
-			for (size_t index = 0;
-				index < generation->mtsdfFillShaders.size(); ++index)
+			if (g_bEnableFreeTypeFontAggressivePerformanceMode)
 			{
-				generation->mtsdfFillShaders[index] = createPS(fillNames[index]);
+				generation->coverageShader =
+					createPS("tnvse_freetype_native_coverage.pso");
 			}
-			const char* mtsdfEffectNames[] = {
-				"tnvse_freetype_native_mtsdf_effects_fast.pso",
-				"tnvse_freetype_native_mtsdf_effects_balanced.pso",
-				"tnvse_freetype_native_mtsdf_effects_high.pso"
-			};
-			const char* trueSdfEffectNames[] = {
-				"tnvse_freetype_native_sdf_effects_fast.pso",
-				"tnvse_freetype_native_sdf_effects_balanced.pso",
-				"tnvse_freetype_native_sdf_effects_high.pso"
-			};
-			const char* const* effectNames =
-				generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
-					? mtsdfEffectNames : trueSdfEffectNames;
-			for (size_t index = 0; index < generation->effectShaders.size(); ++index)
-				generation->effectShaders[index] = createPS(effectNames[index]);
-			const char* mtsdfCompositeNames[] = {
-				"tnvse_freetype_native_mtsdf_composite_fast.pso",
-				"tnvse_freetype_native_mtsdf_composite_balanced.pso",
-				"tnvse_freetype_native_mtsdf_composite_high.pso"
-			};
-			const char* trueSdfCompositeNames[] = {
-				"tnvse_freetype_native_sdf_composite_fast.pso",
-				"tnvse_freetype_native_sdf_composite_balanced.pso",
-				"tnvse_freetype_native_sdf_composite_high.pso"
-			};
-			const char* const* compositeNames =
-				generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
-					? mtsdfCompositeNames : trueSdfCompositeNames;
-			for (size_t index = 0;
-				index < generation->compositeShaders.size(); ++index)
+			else
 			{
-				generation->compositeShaders[index] =
-					createPS(compositeNames[index]);
+				const char* mtsdfFillNames[] = {
+					"tnvse_freetype_native_mtsdf_fill_fast.pso",
+					"tnvse_freetype_native_mtsdf_fill_balanced.pso",
+					"tnvse_freetype_native_mtsdf_fill_high.pso"
+				};
+				const char* trueSdfFillNames[] = {
+					"tnvse_freetype_native_sdf_fill_fast.pso",
+					"tnvse_freetype_native_sdf_fill_balanced.pso",
+					"tnvse_freetype_native_sdf_fill_high.pso"
+				};
+				const char* const* fillNames =
+					generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
+						? mtsdfFillNames : trueSdfFillNames;
+				for (size_t index = 0;
+					index < generation->mtsdfFillShaders.size(); ++index)
+				{
+					generation->mtsdfFillShaders[index] =
+						createPS(fillNames[index]);
+				}
+				const char* mtsdfEffectNames[] = {
+					"tnvse_freetype_native_mtsdf_effects_fast.pso",
+					"tnvse_freetype_native_mtsdf_effects_balanced.pso",
+					"tnvse_freetype_native_mtsdf_effects_high.pso"
+				};
+				const char* trueSdfEffectNames[] = {
+					"tnvse_freetype_native_sdf_effects_fast.pso",
+					"tnvse_freetype_native_sdf_effects_balanced.pso",
+					"tnvse_freetype_native_sdf_effects_high.pso"
+				};
+				const char* const* effectNames =
+					generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
+						? mtsdfEffectNames : trueSdfEffectNames;
+				for (size_t index = 0;
+					index < generation->effectShaders.size(); ++index)
+				{
+					generation->effectShaders[index] =
+						createPS(effectNames[index]);
+				}
+				const char* mtsdfCompositeNames[] = {
+					"tnvse_freetype_native_mtsdf_composite_fast.pso",
+					"tnvse_freetype_native_mtsdf_composite_balanced.pso",
+					"tnvse_freetype_native_mtsdf_composite_high.pso"
+				};
+				const char* trueSdfCompositeNames[] = {
+					"tnvse_freetype_native_sdf_composite_fast.pso",
+					"tnvse_freetype_native_sdf_composite_balanced.pso",
+					"tnvse_freetype_native_sdf_composite_high.pso"
+				};
+				const char* const* compositeNames =
+					generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
+						? mtsdfCompositeNames : trueSdfCompositeNames;
+				for (size_t index = 0;
+					index < generation->compositeShaders.size(); ++index)
+				{
+					generation->compositeShaders[index] =
+						createPS(compositeNames[index]);
+				}
+				generation->compositeValidationShader =
+					createPS("tnvse_freetype_native_composite_validate.pso");
 			}
-			generation->compositeValidationShader =
-				createPS("tnvse_freetype_native_composite_validate.pso");
 
 			if (!HasShaderHandle(generation->vertexShader))
 			{
 				failure = "base-shader-set";
 				return nullptr;
 			}
-			for (const NiD3DPixelShaderPtr& shader : generation->mtsdfFillShaders)
+			if (g_bEnableFreeTypeFontAggressivePerformanceMode
+				&& !HasShaderHandle(generation->coverageShader))
 			{
-				if (!HasShaderHandle(shader))
-				{
-					failure = "fill-shader-set";
-					return nullptr;
-				}
+				// Treat an incomplete aggressive deployment exactly like a missing
+				// Shader Loader. No A8 coverage facade may be published unless its
+				// pixel program is present, so shape routing remains on the stock
+				// ARGB32 TileShader fallback.
+				failure = "coverage-shader-set";
+				return nullptr;
 			}
-			for (const NiD3DPixelShaderPtr& shader : generation->effectShaders)
+			if (!g_bEnableFreeTypeFontAggressivePerformanceMode)
 			{
-				if (!HasShaderHandle(shader))
+				for (const NiD3DPixelShaderPtr& shader
+					: generation->mtsdfFillShaders)
 				{
-					failure = "effect-shader-set";
-					return nullptr;
+					if (!HasShaderHandle(shader))
+					{
+						failure = "fill-shader-set";
+						return nullptr;
+					}
+				}
+				for (const NiD3DPixelShaderPtr& shader
+					: generation->effectShaders)
+				{
+					if (!HasShaderHandle(shader))
+					{
+						failure = "effect-shader-set";
+						return nullptr;
+					}
 				}
 			}
 
@@ -995,7 +1052,7 @@ namespace fonthook::vectorfont
 			if (reportFailures)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: initialization failed reason=%s; retaining generation=%u when valid; incomplete native submissions will be suppressed",
+					"tnvse_freetype_native: initialization failed reason=%s; retaining generation=%u when valid; new text uses the stock ARGB TileShader fallback when no complete native generation is available",
 					failure, current ? current->id : 0);
 			}
 			return GenerationMatchesCurrentDevice(current);
@@ -1005,9 +1062,12 @@ namespace fonthook::vectorfont
 		s_processGenerations.push_back(candidate);
 		s_publishedGeneration.store(candidate, std::memory_order_release);
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p distanceField=%s",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s",
 			candidate->id, candidate->device,
-			GetConfiguredDistanceFieldMethodName());
+			g_bEnableFreeTypeFontAggressivePerformanceMode
+				? "a8-baked-coverage" : "distance-field",
+			g_bEnableFreeTypeFontAggressivePerformanceMode
+				? "disabled" : GetConfiguredDistanceFieldMethodName());
 		return true;
 	}
 

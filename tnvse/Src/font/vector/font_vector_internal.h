@@ -329,6 +329,11 @@ namespace fonthook::vectorfont
 	{
 		bool enabled = false;
 		bool shaderEffects = false;
+		// CPU-rasterized Fill/effect coverage remains in an A8 atlas. Colors and
+		// live-Tile RGB selection are carried by each vertex so adjacent layers
+		// can share one native coverage packet without baking text-specific RGB
+		// into the atlas.
+		bool bakedCoverage = false;
 		DistanceFieldMethod distanceFieldMethod =
 			GetConfiguredDistanceFieldMethod();
 		EffectQuality quality = EffectQuality::Balanced;

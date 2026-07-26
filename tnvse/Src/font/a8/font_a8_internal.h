@@ -53,7 +53,8 @@ namespace fonthook::vectorfont
 	enum class A8CompiledShaderClass : UInt8
 	{
 		Body,
-		Effect
+		Effect,
+		Coverage
 	};
 
 	struct A8CompiledRange

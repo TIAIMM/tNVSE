@@ -747,6 +747,7 @@ namespace fonthook::vectorfont
 			add(&geometryKey.quadCount, sizeof(geometryKey.quadCount));
 			add(&effect.enabled, sizeof(effect.enabled));
 			add(&effect.shaderEffects, sizeof(effect.shaderEffects));
+			add(&effect.bakedCoverage, sizeof(effect.bakedCoverage));
 			add(&effect.distanceFieldMethod,
 				sizeof(effect.distanceFieldMethod));
 			add(&effect.quality, sizeof(effect.quality));
@@ -954,7 +955,9 @@ namespace fonthook::vectorfont
 				const float v1 = quad.atlasPlacement.v1
 					+ expansion * quad.atlasPlacement.inverseHeight;
 				const UInt32 base = index * 4;
-				const UInt32 packedColor = PackNativeBaseColor(quad.baseColor);
+				const UInt32 packedColor = PackNativeBaseColor(
+					effects.bakedCoverage
+						? ComposeQuadColor(quad) : quad.baseColor);
 				const std::array<NiPoint3, 4> positions = {{
 					NiPoint3(x0, depth, z0), NiPoint3(x1, depth, z0),
 					NiPoint3(x1, depth, z1), NiPoint3(x0, depth, z1)
@@ -973,7 +976,9 @@ namespace fonthook::vectorfont
 						static_cast<float>(quad.bitmap->sdfSpread),
 						quad.sourceToLogicalScale > 0.0f
 							? 1.0f / quad.sourceToLogicalScale : 1.0f,
-						static_cast<float>(quad.layerMask) };
+						effects.bakedCoverage
+							? (quad.usesLiveTileRgb ? 1.0f : 0.0f)
+							: static_cast<float>(quad.layerMask) };
 					boundMinimum.x = std::min(boundMinimum.x, position.x);
 					boundMinimum.y = std::min(boundMinimum.y, position.y);
 					boundMinimum.z = std::min(boundMinimum.z, position.z);
@@ -1444,6 +1449,19 @@ namespace fonthook::vectorfont
 			}
 			if (availableAtlases.empty())
 				return nullptr;
+			if (effectConfig && effectConfig->bakedCoverage
+				&& std::any_of(availableAtlases.begin(), availableAtlases.end(),
+					[](const std::shared_ptr<AtlasResource>& atlas)
+					{
+						return !atlas
+							|| atlas->pixelMode != AtlasPixelMode::A8;
+					}))
+			{
+				// The aggressive contract is specifically one-byte A8. If the
+				// renderer cannot realize that format, let the caller rebuild the
+				// same CPU masks through the stock ARGB32 TileShader fallback.
+				return nullptr;
+			}
 			if (!useCustomA8Shader && availableAtlases.size() > 1)
 			{
 				// Stock Tile geometry can bind only one texture. The no-loader ARGB

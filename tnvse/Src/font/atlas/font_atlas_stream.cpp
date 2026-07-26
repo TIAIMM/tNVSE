@@ -483,7 +483,8 @@ namespace fonthook::vectorfont
 			state->shaderEffectHash = config.shaderEffectHash;
 			EffectQuality resolvedQuality = config.effectQuality;
 			UInt32 sdfSpread = 0;
-			state->enabled = IsA8RendererAvailable()
+			state->enabled = !g_bEnableFreeTypeFontAggressivePerformanceMode
+				&& IsA8RendererAvailable()
 				&& ResolveA8EffectQuality(config.effectQuality, resolvedQuality)
 				&& ResolveSdfSpread(config, rasterScale, sdfSpread);
 			state->roles[0].byteClass = VectorFontByteClass::SingleByte;

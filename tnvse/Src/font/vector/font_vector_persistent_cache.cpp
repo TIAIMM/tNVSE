@@ -1758,6 +1758,8 @@ namespace fonthook::vectorfont
 		{
 			return PersistentCacheCleanupClass::Invalid;
 		}
+		if (g_bEnableFreeTypeFontAggressivePerformanceMode)
+			return PersistentCacheCleanupClass::InactiveDistanceField;
 		return header.distanceFieldMethod == static_cast<UInt8>(
 			GetConfiguredDistanceFieldMethod())
 			? PersistentCacheCleanupClass::CurrentDistanceField
@@ -1782,6 +1784,8 @@ namespace fonthook::vectorfont
 		{
 			return PersistentCacheCleanupClass::Invalid;
 		}
+		if (g_bEnableFreeTypeFontAggressivePerformanceMode)
+			return PersistentCacheCleanupClass::InactiveDistanceField;
 		return header.distanceFieldMethod == static_cast<UInt8>(
 			GetConfiguredDistanceFieldMethod())
 			? PersistentCacheCleanupClass::CurrentDistanceField
