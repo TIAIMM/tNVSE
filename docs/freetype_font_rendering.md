@@ -779,24 +779,39 @@ Equivalent profile
 owners share the same table and atlas pages rather than saving one copy per font
 alias.
 
-Complete direct batches use fixed `[layer][64 pages]` count and cursor arrays.
-The first pass validates every source and counts the final ranges; the second
-pass scatters quads directly in Shadow, Glow, Outline, Fill and ascending-page
-order. It does not create a `GlyphBitmapRequest`, build a cache-ID page map, or
-sort the batch. The distance-field route shares the body quad across Fill, Glow,
-Outline, and an unshifted Shadow; an offset Shadow adds at most one second quad.
-The aggressive route always has one composite quad per visible glyph.
+Complete direct batches first acquire one batch-lifetime view of the dense
+tables. Each used weak page reference is locked and checked once; glyph entries
+then retain only a direct-layer pointer and compact page ordinal. Fixed
+`[kind][64 pages]` count and cursor arrays determine the final allocation. The
+second pass writes `NativeA8GpuVertex` records straight into their final
+page-contiguous locations and emits ranges in Shadow, Glow, Outline, Fill order.
+It does not create a `GlyphBitmapRequest`, `GlyphSource`, `PreparedGlyph`, or
+`PendingQuad`, build a cache-ID page map, hash the completed quads, or sort the
+batch. The distance-field route shares the body quad across Fill, Glow, Outline,
+and an unshifted Shadow; an offset Shadow adds at most one second quad. Its
+shared MTSDF raster profile is resolved at most once for each byte role, rather
+than once or twice per glyph. The same role-level reuse also applies when an
+incomplete direct profile enters the compatibility compiler.
+
+The aggressive route always has one composite quad per visible glyph. A
+single-page batch follows the original `.fnt` geometry pattern: it allocates the
+final `NiTriShape` once and writes positions, UVs, colors, and canonical indices
+directly. A multi-page batch writes the final native vertex/range payload once
+and keeps only the one-quad engine facade required by the sorted Tile hook.
 
 The placement index never depends on the mutable/sorted live glyph vector.
-Batch construction copies the final geometry and UV fields only after checking
-the current page content hash and immutable snapshot placement. The direct table
-holds weak page references so a nonzero GPU budget can still evict unused pages.
-Page insertion, replacement, eviction, snapshot publication, or removal of the
-complete-profile marker clears the table atomically. A direct batch also retains
-its resolved pages and validates page generation, texture dimensions, artifact
-owner, resource serial, upload epoch, and vertex/index ranges through the native
-submission path. A missing/expired entry makes the complete batch use the
-compatibility lookup; no raw snapshot pointer survives table lookup.
+Direct-table creation or contiguous-file loading validates every stored
+snapshot placement. A later text batch therefore checks the complete-profile
+marker, current page-content identity, format, dimensions, texture, and table
+owner once per used page instead of reopening snapshot metadata for every
+glyph. The direct table holds weak page references so a nonzero GPU budget can
+still evict unused pages. Page insertion, replacement, eviction, snapshot
+publication, or removal of the complete-profile marker clears the table
+atomically. The resolved page owners stay alive through geometry compilation;
+the native payload then retains the properties and textures and validates
+resource serial, upload epoch, and vertex/index ranges during submission. A
+missing or expired entry makes the complete batch use the compatibility lookup;
+no raw snapshot pointer survives table lookup.
 
 `uiFreeTypeFontGpuAtlasCacheMB` controls the soft GPU atlas budget. A value of
 zero selects full-resident mode: every configured font snapshot is restored

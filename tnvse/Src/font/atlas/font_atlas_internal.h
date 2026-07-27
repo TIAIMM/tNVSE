@@ -237,6 +237,53 @@ namespace fonthook::vectorfont
 		UInt32 resolvedLayers = 0;
 	};
 
+	// Compact, batch-lifetime view of the immutable direct letter tables.  The
+	// layer pointer replaces the much larger GlyphSource/PendingQuad chain; the
+	// table owners keep that pointer stable until geometry compilation finishes.
+	struct DirectAtlasBatchGlyph
+	{
+		const DirectAtlasGlyphLayer* layer = nullptr;
+		UInt16 atlasPage = kInvalidDirectAtlasPageSlot;
+		UInt8 byteClass = 0;
+		bool knownEmpty = false;
+	};
+
+	struct DirectAtlasGlyphBatch
+	{
+		std::array<std::shared_ptr<const DirectAtlasGlyphTable>, 2> tables;
+		std::vector<std::shared_ptr<AtlasResource>> atlases;
+		std::vector<DirectAtlasBatchGlyph> glyphs;
+
+		void Clear()
+		{
+			tables = {};
+			atlases.clear();
+			glyphs.clear();
+		}
+	};
+
+	enum class DirectAtlasShapeOutcome : UInt8
+	{
+		Unavailable = 0,
+		Created,
+		Empty,
+		Failed,
+	};
+
+	struct DirectAtlasShapeBuildResult
+	{
+		DirectAtlasShapeOutcome outcome =
+			DirectAtlasShapeOutcome::Unavailable;
+		NiTriShape* shape = nullptr;
+		UInt32 glyphCount = 0;
+		UInt32 geometryQuadCount = 0;
+		UInt32 drawQuadCount = 0;
+		UInt32 pageCount = 0;
+		UInt32 firstAtlasWidth = 0;
+		UInt32 firstAtlasHeight = 0;
+		float sdfSpreadPixels = 0.0f;
+	};
+
 	inline bool IsAtlasGlyphPlacementForAtlas(
 		const AtlasGlyphPlacement& placement, const AtlasResource& atlas)
 	{
@@ -718,6 +765,7 @@ namespace fonthook::vectorfont
 	static_assert(sizeof(AtlasSnapshotPlacement) == 92);
 	static_assert(sizeof(DirectAtlasGlyphLayer) == 56);
 	static_assert(sizeof(DirectAtlasGlyphRecord) == 360);
+	static_assert(sizeof(DirectAtlasBatchGlyph) <= 16);
 
 	struct AtlasState
 	{
@@ -767,6 +815,16 @@ namespace fonthook::vectorfont
 		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
 		EffectQuality quality, const NiColorA& tileColor, bool suppressEffects,
 		std::vector<PendingQuad>& quads, ShaderEffectBuild& build);
+	bool GetDirectAtlasGlyphBatch(RuntimeFont& runtime,
+		const std::vector<AtlasGlyphInstance>& glyphs,
+		GlyphMaskType maskType, float rasterScale,
+		AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
+		UInt32 padding, DirectAtlasGlyphBatch& result);
+	DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
+		Font& font, RuntimeFont& runtime,
+		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+		bool prepareObject, const NiColorA& tileColor, bool suppressEffects,
+		GlyphMaskType maskType, EffectQuality quality);
 	NiTriShape* TryCreateAtlasShapeForMode(Font& font,
 		const std::vector<PendingQuad>& quads,
 		const FontConfig& config, float rasterScale, bool prepareObject,

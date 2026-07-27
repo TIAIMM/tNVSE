@@ -820,6 +820,243 @@ namespace fonthook::vectorfont
 		return single && doubleByte;
 	}
 
+	bool GetDirectAtlasGlyphBatch(RuntimeFont& runtime,
+		const std::vector<AtlasGlyphInstance>& glyphs,
+		GlyphMaskType maskType, float rasterScale,
+		AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
+		UInt32 padding, DirectAtlasGlyphBatch& result)
+	{
+		result.Clear();
+		if (glyphs.empty())
+			return true;
+		const size_t maskIndex = static_cast<size_t>(maskType);
+		if (maskIndex >= kDirectAtlasMaskCount)
+			return false;
+
+		std::array<bool, 2> roleUsed = {};
+		for (const AtlasGlyphInstance& instance : glyphs)
+		{
+			const size_t roleIndex =
+				static_cast<size_t>(instance.glyph.byteClass);
+			if (roleIndex >= roleUsed.size())
+				return false;
+			roleUsed[roleIndex] = true;
+		}
+
+		const FontConfig& config = GetRuntimeConfig(runtime);
+		std::array<AtlasCacheKey, 2> baseKeys;
+		std::array<std::array<bool, kMaximumAtlasSnapshotPages>, 2>
+			usedPages = {};
+		std::array<std::array<UInt64, kMaximumAtlasSnapshotPages>, 2>
+			pageContentHashes = {};
+		std::array<std::array<UInt16, kMaximumAtlasSnapshotPages>, 2>
+			pageOrdinals;
+		for (auto& role : pageOrdinals)
+			role.fill(kInvalidDirectAtlasPageSlot);
+
+		AtlasState& state = State();
+		std::lock_guard<std::mutex> lock(state.atlasMutex);
+		auto fail = [&](const char* stage)
+		{
+			result.Clear();
+			const UInt64 logKey = 0x4000000000000000ull
+				^ (static_cast<UInt64>(config.fontId) << 32)
+				^ (static_cast<UInt64>(std::lround(
+					rasterScale * 1000.0f)) << 8)
+				^ (static_cast<UInt64>(pixelMode) << 4)
+				^ static_cast<UInt64>(renderMode);
+			if (g_bEnableFreeTypeFontRenderingLog
+				&& state.loggedDirectGlyphBatches.insert(logKey).second)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: direct atlas geometry batch unavailable font=%u sourceScale=%.3f mode=%u render=%u stage=%s",
+					config.fontId, rasterScale,
+					static_cast<UInt32>(pixelMode),
+					static_cast<UInt32>(renderMode), stage);
+			}
+			return false;
+		};
+
+		for (size_t roleIndex = 0; roleIndex < roleUsed.size(); ++roleIndex)
+		{
+			if (!roleUsed[roleIndex])
+				continue;
+			const VectorFontByteClass byteClass =
+				static_cast<VectorFontByteClass>(roleIndex);
+			if (!ResolvePrewarmAtlasKey(config, byteClass,
+					rasterScale, baseKeys[roleIndex])
+				|| baseKeys[roleIndex].pixelMode != pixelMode
+				|| baseKeys[roleIndex].renderMode != renderMode
+				|| baseKeys[roleIndex].padding != padding)
+			{
+				return fail("profile-key");
+			}
+			const AtlasProfileKey profileKey =
+				MakeAtlasProfileKey(baseKeys[roleIndex]);
+			const auto profile = state.atlasProfiles.find(profileKey);
+			if (profile == state.atlasProfiles.end()
+				|| state.completeAtlasProfiles.find(profileKey)
+					== state.completeAtlasProfiles.end()
+				|| !profile->second.directGlyphs)
+			{
+				return fail("profile-table");
+			}
+			result.tables[roleIndex] = profile->second.directGlyphs;
+		}
+
+		result.glyphs.resize(glyphs.size());
+		for (size_t glyphIndex = 0; glyphIndex < glyphs.size(); ++glyphIndex)
+		{
+			const VectorEncodedGlyph& glyph = glyphs[glyphIndex].glyph;
+			const size_t roleIndex = static_cast<size_t>(glyph.byteClass);
+			if (roleIndex >= result.tables.size()
+				|| !result.tables[roleIndex])
+			{
+				return fail("table-role");
+			}
+			const DirectAtlasGlyphTable& table =
+				*result.tables[roleIndex];
+			size_t glyphSlot = 0;
+			if (!ResolveDirectGlyphSlot(glyph.byteClass,
+					glyph.encodedCode, glyphSlot)
+				|| glyphSlot >= table.glyphs.size())
+			{
+				return fail("encoded-slot");
+			}
+			const DirectCachedLetter& letter = table.glyphs[glyphSlot];
+			if (!(letter.flags & kDirectLetterValid)
+				|| letter.encodedCode != glyph.encodedCode
+				|| letter.byteClass != static_cast<UInt8>(glyph.byteClass))
+			{
+				return fail("letter-identity");
+			}
+
+			DirectAtlasBatchGlyph& output = result.glyphs[glyphIndex];
+			output.byteClass = static_cast<UInt8>(glyph.byteClass);
+			if (letter.flags & kDirectLetterKnownEmpty)
+			{
+				if (!IsSpaceCodePoint(glyph.codePoint))
+					return fail("known-empty");
+				output.knownEmpty = true;
+				continue;
+			}
+
+			const DirectAtlasGlyphLayer& layer =
+				letter.layers[maskIndex];
+			if (!layer.valid() || layer.maskType != static_cast<UInt8>(maskType)
+				|| layer.pageSlot >= table.pages.size()
+				|| layer.pageSlot >= kMaximumAtlasSnapshotPages
+				|| !layer.pageContentHash
+				|| !std::isfinite(layer.u0) || !std::isfinite(layer.v0)
+				|| !std::isfinite(layer.u1) || !std::isfinite(layer.v1))
+			{
+				return fail("direct-layer");
+			}
+			bool& pageUsed = usedPages[roleIndex][layer.pageSlot];
+			UInt64& pageHash =
+				pageContentHashes[roleIndex][layer.pageSlot];
+			if (pageUsed && pageHash != layer.pageContentHash)
+				return fail("page-content-alias");
+			pageUsed = true;
+			pageHash = layer.pageContentHash;
+			output.layer = &layer;
+			// This is a role-local page until the deterministic page pass below.
+			output.atlasPage = layer.pageSlot;
+		}
+
+		for (size_t roleIndex = 0; roleIndex < roleUsed.size(); ++roleIndex)
+		{
+			if (!roleUsed[roleIndex])
+				continue;
+			const DirectAtlasGlyphTable& table =
+				*result.tables[roleIndex];
+			for (UInt16 pageSlot = 0;
+				pageSlot < kMaximumAtlasSnapshotPages; ++pageSlot)
+			{
+				if (!usedPages[roleIndex][pageSlot])
+					continue;
+				if (pageSlot >= table.pages.size())
+					return fail("page-slot");
+				std::shared_ptr<AtlasResource> page =
+					table.pages[pageSlot].lock();
+				const AtlasCacheKey& key = baseKeys[roleIndex];
+				if (!page || !page->compactSnapshot
+					|| page->pageContentHash
+						!= pageContentHashes[roleIndex][pageSlot]
+					|| page->pixelMode != key.pixelMode
+					|| page->renderMode != key.renderMode
+					|| page->padding != key.padding
+					|| page->levelZeroOnly != key.levelZeroOnly
+					|| !page->width || !page->height || !page->property
+					|| !GetAtlasTexture(*page))
+				{
+					return fail("page-resource");
+				}
+
+				UInt16 ordinal = kInvalidDirectAtlasPageSlot;
+				for (UInt16 candidate = 0;
+					candidate < result.atlases.size(); ++candidate)
+				{
+					if (result.atlases[candidate].get() == page.get())
+					{
+						ordinal = candidate;
+						break;
+					}
+				}
+				if (ordinal == kInvalidDirectAtlasPageSlot)
+				{
+					if (result.atlases.size()
+						>= kMaximumAtlasSnapshotPages)
+					{
+						return fail("page-limit");
+					}
+					ordinal = static_cast<UInt16>(
+						result.atlases.size());
+					result.atlases.push_back(std::move(page));
+				}
+				pageOrdinals[roleIndex][pageSlot] = ordinal;
+			}
+		}
+
+		for (DirectAtlasBatchGlyph& glyph : result.glyphs)
+		{
+			if (glyph.knownEmpty)
+				continue;
+			const size_t roleIndex = glyph.byteClass;
+			if (!glyph.layer || roleIndex >= pageOrdinals.size()
+				|| glyph.atlasPage >= kMaximumAtlasSnapshotPages)
+			{
+				return fail("page-remap-source");
+			}
+			const UInt16 ordinal =
+				pageOrdinals[roleIndex][glyph.atlasPage];
+			if (ordinal >= result.atlases.size())
+				return fail("page-remap-target");
+			glyph.atlasPage = ordinal;
+		}
+
+		RecordFreeTypePerf(FreeTypePerfCounter::GpuResidentGlyphHit,
+			static_cast<UInt64>(glyphs.size()));
+		const UInt64 logKey = 0x8000000000000000ull
+			^ (static_cast<UInt64>(config.fontId) << 32)
+			^ (static_cast<UInt64>(std::lround(
+				rasterScale * 1000.0f)) << 8)
+			^ (static_cast<UInt64>(pixelMode) << 4)
+			^ static_cast<UInt64>(renderMode);
+		if (!result.atlases.empty()
+			&& state.loggedDirectGlyphBatches.insert(logKey).second)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: direct atlas geometry batch font=%u sourceScale=%.3f mode=%u render=%u glyphs=%u pages=%u source=dense-cached-letter",
+				config.fontId, rasterScale,
+				static_cast<UInt32>(pixelMode),
+				static_cast<UInt32>(renderMode),
+				static_cast<UInt32>(glyphs.size()),
+				static_cast<UInt32>(result.atlases.size()));
+		}
+		return true;
+	}
+
 	bool GetDirectAtlasGlyphSources(RuntimeFont& runtime,
 		const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,

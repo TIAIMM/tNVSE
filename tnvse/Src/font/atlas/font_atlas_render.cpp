@@ -131,6 +131,59 @@ namespace fonthook::vectorfont
 						static_cast<UInt32>(resolvedQuality));
 				}
 			}
+			DirectAtlasShapeBuildResult directShape =
+				TryCreateDirectCachedLetterShape(font, runtime, glyphs,
+					rasterScale, prepareObject, tileColor, suppressEffects,
+					GlyphMaskType::DistanceField, resolvedQuality);
+			if (directShape.outcome == DirectAtlasShapeOutcome::Empty)
+			{
+				if (diagnostics)
+				{
+					diagnostics->shaderQuadsBuilt = true;
+					diagnostics->shaderQuadCount = 0;
+					diagnostics->outcome =
+						GlyphAtlasBuildOutcome::NoDrawableShaderQuads;
+					diagnostics->expectedEmpty = true;
+				}
+				return nullptr;
+			}
+			if (directShape.outcome == DirectAtlasShapeOutcome::Created)
+			{
+				if (diagnostics)
+				{
+					diagnostics->shaderQuadsBuilt = true;
+					diagnostics->shaderQuadCount =
+						directShape.geometryQuadCount;
+					++diagnostics->shaderShapeAttempts;
+					diagnostics->outcome =
+						GlyphAtlasBuildOutcome::Created;
+				}
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ShaderEffectBatch);
+				const UInt64 avoided =
+					static_cast<UInt64>(glyphs.size())
+					* static_cast<UInt64>(
+						(config.glow.enabled ? 1 : 0)
+						+ (config.outline.enabled ? 1 : 0));
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CpuEffectMasksAvoided, avoided);
+				if (g_bEnableFreeTypeFontRenderingLog)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: direct shader batch font=%u fill=%s quality=%u spread=%.0f glyphs=%u geometryQuads=%u drawQuads=%u pages=%u texture0=%ux%u compiler=dense-cached-letter",
+						font.iFontNum,
+						GetConfiguredDistanceFieldMethodName(),
+						static_cast<UInt32>(resolvedQuality),
+						directShape.sdfSpreadPixels,
+						static_cast<UInt32>(glyphs.size()),
+						directShape.geometryQuadCount,
+						directShape.drawQuadCount,
+						directShape.pageCount,
+						directShape.firstAtlasWidth,
+						directShape.firstAtlasHeight);
+				}
+				return directShape.shape;
+			}
 			thread_local std::vector<PendingQuad> shaderQuads;
 			ShaderEffectBuild shaderBuild;
 			const bool shaderQuadsBuilt = BuildShaderEffectQuads(runtime, glyphs,
@@ -211,6 +264,72 @@ namespace fonthook::vectorfont
 						: "unknown",
 					GetConfiguredDistanceFieldMethodName(),
 					static_cast<UInt32>(shaderQuads.size()));
+			}
+		}
+		if (requestsBakedCoverage)
+		{
+			DirectAtlasShapeBuildResult directShape =
+				TryCreateDirectCachedLetterShape(font, runtime, glyphs,
+					rasterScale, prepareObject, tileColor, suppressEffects,
+					GlyphMaskType::Composite, resolvedQuality);
+			if (directShape.outcome == DirectAtlasShapeOutcome::Empty)
+			{
+				if (diagnostics)
+				{
+					diagnostics->cpuQuadsBuilt = true;
+					diagnostics->cpuQuadCount = 0;
+					diagnostics->outcome =
+						GlyphAtlasBuildOutcome::NoDrawableCpuQuads;
+					diagnostics->expectedEmpty = true;
+				}
+				return nullptr;
+			}
+			if (directShape.outcome == DirectAtlasShapeOutcome::Created)
+			{
+				if (diagnostics)
+				{
+					++diagnostics->cpuAttempts;
+					++diagnostics->cpuShapeAttempts;
+					diagnostics->cpuQuadsBuilt = true;
+					diagnostics->cpuQuadCount =
+						directShape.geometryQuadCount;
+					diagnostics->outcome =
+						GlyphAtlasBuildOutcome::Created;
+				}
+				if (g_bEnableFreeTypeFontRenderingLog)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: direct aggressive composite batch font=%u sourceScale=%.3f glyphs=%u quads=%u pages=%u texture0=%ux%u compiler=dense-cached-letter",
+						font.iFontNum, rasterScale,
+						static_cast<UInt32>(glyphs.size()),
+						directShape.geometryQuadCount,
+						directShape.pageCount,
+						directShape.firstAtlasWidth,
+						directShape.firstAtlasHeight);
+				}
+				return directShape.shape;
+			}
+			if (directShape.outcome == DirectAtlasShapeOutcome::Failed)
+			{
+				if (state.aggressiveCompositeShapeFailureLogCount++ < 32)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: direct aggressive composite shape failed font=%u glyphs=%u quads=%u pages=%u; batch rejected",
+						font.iFontNum,
+						static_cast<UInt32>(glyphs.size()),
+						directShape.geometryQuadCount,
+						directShape.pageCount);
+				}
+				if (diagnostics)
+				{
+					diagnostics->cpuQuadsBuilt =
+						directShape.geometryQuadCount != 0;
+					diagnostics->cpuQuadCount =
+						directShape.geometryQuadCount;
+					diagnostics->outcome =
+						GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
+				}
+				return nullptr;
 			}
 		}
 		std::array<bool, 4> included = {

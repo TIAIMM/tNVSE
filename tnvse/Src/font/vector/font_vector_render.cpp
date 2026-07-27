@@ -232,9 +232,10 @@ namespace fonthook
 	{
 		if (!IsAvailable() || !glyph.metrics || !glyph.byteLength)
 			return false;
-		const vectorfont::FontConfig& config = vectorfont::GetRuntimeConfig(*m_impl->runtime);
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
+			const vectorfont::FontConfig& config =
+				vectorfont::GetRuntimeConfig(*m_impl->runtime);
 			const UInt64 routeKey = (static_cast<UInt64>(config.fontId) << 8)
 				| static_cast<UInt8>(glyph.byteClass);
 			std::lock_guard<std::mutex> lock(s_routeLogMutex);

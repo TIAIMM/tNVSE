@@ -654,20 +654,16 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool BuildShaderEffectQuads(RuntimeFont& runtime,
-			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
-			EffectQuality quality, const NiColorA& tileColor, bool suppressEffects,
-			std::vector<PendingQuad>& quads,
+		bool ConfigureShaderEffectBuild(const FontConfig& config,
+			float rasterScale, EffectQuality quality, bool suppressEffects,
 			ShaderEffectBuild& build)
 		{
-			quads.clear();
 			build = {};
 			build.config.enabled = true;
 			build.config.shaderEffects = true;
 			build.config.distanceFieldMethod =
 				GetConfiguredDistanceFieldMethod();
 			build.config.quality = quality;
-			const FontConfig& config = GetRuntimeConfig(runtime);
 			UInt32 sdfSpread = 0;
 			if (!ResolveSdfSpread(
 				config, rasterScale, sdfSpread, !suppressEffects))
@@ -709,10 +705,44 @@ namespace fonthook::vectorfont
 				EffectUsesLiveTileRgb(config.outline),
 				true
 			}};
+			return true;
+		}
+
+		bool BuildShaderEffectQuads(RuntimeFont& runtime,
+			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+			EffectQuality quality, const NiColorA& tileColor, bool suppressEffects,
+			std::vector<PendingQuad>& quads,
+			ShaderEffectBuild& build)
+		{
+			quads.clear();
+			const FontConfig& config = GetRuntimeConfig(runtime);
+			if (!ConfigureShaderEffectBuild(config, rasterScale, quality,
+				suppressEffects, build))
+			{
+				return false;
+			}
 
 			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
 			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
 			thread_local std::vector<PendingQuad::GlyphSource> sourceResults;
+			std::array<MtsdfSharedRasterProfile, 2> rasterProfiles;
+			std::array<bool, 2> rasterProfileReady = {};
+			for (const AtlasGlyphInstance& instance : glyphs)
+			{
+				const size_t roleIndex =
+					static_cast<size_t>(instance.glyph.byteClass);
+				if (roleIndex >= rasterProfiles.size())
+					return false;
+				if (rasterProfileReady[roleIndex])
+					continue;
+				if (!ResolveMtsdfSharedRasterProfile(config,
+					instance.glyph.byteClass, rasterScale, true,
+					rasterProfiles[roleIndex]))
+				{
+					return false;
+				}
+				rasterProfileReady[roleIndex] = true;
+			}
 			const bool direct = GetDirectAtlasGlyphSources(runtime,
 				glyphs, GlyphMaskType::DistanceField, rasterScale,
 				GetConfiguredDistanceFieldAtlasPixelMode(),
@@ -724,14 +754,14 @@ namespace fonthook::vectorfont
 				bitmapRequests.reserve(glyphs.size());
 				for (const AtlasGlyphInstance& instance : glyphs)
 				{
-					MtsdfSharedRasterProfile profile;
-					if (!ResolveMtsdfSharedRasterProfile(config,
-							instance.glyph.byteClass, rasterScale,
-							true, profile))
+					const size_t roleIndex =
+						static_cast<size_t>(instance.glyph.byteClass);
+					if (roleIndex >= rasterProfiles.size()
+						|| !rasterProfileReady[roleIndex])
 						return false;
 					bitmapRequests.push_back({ &instance.glyph,
 						GlyphMaskType::DistanceField,
-						profile.sdfSpread });
+						rasterProfiles[roleIndex].sdfSpread });
 				}
 				GetAtlasBackedGlyphBitmaps(runtime, bitmapRequests, rasterScale,
 					GetConfiguredDistanceFieldAtlasPixelMode(),
@@ -772,10 +802,13 @@ namespace fonthook::vectorfont
 				const AtlasGlyphInstance& instance = glyphs[glyphOrdinal];
 				const PendingQuad::GlyphSource& source =
 					sourceResults[glyphOrdinal];
-				MtsdfSharedRasterProfile profile;
-				if (!ResolveMtsdfSharedRasterProfile(config,
-					instance.glyph.byteClass, rasterScale, true, profile))
+				const size_t roleIndex =
+					static_cast<size_t>(instance.glyph.byteClass);
+				if (roleIndex >= rasterProfiles.size()
+					|| !rasterProfileReady[roleIndex])
 					return false;
+				const MtsdfSharedRasterProfile& profile =
+					rasterProfiles[roleIndex];
 				const float baselineOffset =
 					GetGlyphBaselineOffset(runtime, instance.glyph);
 				const NiColorA baseColor = ResolveBaseColor(
@@ -822,6 +855,736 @@ namespace fonthook::vectorfont
 				}
 			}
 			return true;
+		}
+
+		bool WriteDirectQuadVertices(const DirectAtlasGlyphLayer& source,
+			const AtlasGlyphInstance& instance, const NiPoint3& origin,
+			float offsetX, float offsetY, float rasterScale,
+			float baselineOffset, float sourceToLogicalScale, bool usesSdf,
+			UInt32 packedColor, UInt8 layerMask,
+			NativeA8GpuVertex* output, NiPoint3& boundMinimum,
+			NiPoint3& boundMaximum)
+		{
+			if (!output || !source.valid()
+				|| !std::isfinite(rasterScale) || rasterScale <= 0.0f
+				|| !std::isfinite(sourceToLogicalScale)
+				|| sourceToLogicalScale <= 0.0f)
+			{
+				return false;
+			}
+			const float sourcePixelToLogical =
+				sourceToLogicalScale / rasterScale;
+			const float logicalX = instance.pen.x - origin.x + offsetX;
+			const float logicalZ = instance.pen.z - origin.z
+				+ baselineOffset - offsetY;
+			const float bitmapLeft = static_cast<float>(source.left);
+			const float bitmapTop = static_cast<float>(source.top);
+			const float x0 = usesSdf
+				? logicalX + bitmapLeft * sourcePixelToLogical
+				: std::round(logicalX * rasterScale + bitmapLeft)
+					/ rasterScale;
+			const float z0 = usesSdf
+				? logicalZ + bitmapTop * sourcePixelToLogical
+				: std::round(logicalZ * rasterScale + bitmapTop)
+					/ rasterScale;
+			const float pixelScale = usesSdf
+				? sourcePixelToLogical : 1.0f / rasterScale;
+			const float x1 = x0
+				+ static_cast<float>(source.width) * pixelScale;
+			const float z1 = z0
+				- static_cast<float>(source.height) * pixelScale;
+			const float depth = instance.pen.y - origin.y;
+			const std::array<NiPoint3, 4> positions = {{
+				NiPoint3(x0, depth, z0), NiPoint3(x1, depth, z0),
+				NiPoint3(x1, depth, z1), NiPoint3(x0, depth, z1)
+			}};
+			const std::array<NiPoint2, 4> texture = {{
+				NiPoint2(source.u0, source.v0),
+				NiPoint2(source.u1, source.v0),
+				NiPoint2(source.u1, source.v1),
+				NiPoint2(source.u0, source.v1)
+			}};
+			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
+			{
+				const NiPoint3& position = positions[ordinal];
+				const NiPoint2& uv = texture[ordinal];
+				if (!std::isfinite(position.x)
+					|| !std::isfinite(position.y)
+					|| !std::isfinite(position.z)
+					|| !std::isfinite(uv.x) || !std::isfinite(uv.y))
+				{
+					return false;
+				}
+				output[ordinal] = {
+					position.x, position.y, position.z, uv.x, uv.y,
+					packedColor, static_cast<float>(source.sdfSpread),
+					1.0f / sourceToLogicalScale,
+					static_cast<float>(layerMask)
+				};
+				boundMinimum.x = std::min(boundMinimum.x, position.x);
+				boundMinimum.y = std::min(boundMinimum.y, position.y);
+				boundMinimum.z = std::min(boundMinimum.z, position.z);
+				boundMaximum.x = std::max(boundMaximum.x, position.x);
+				boundMaximum.y = std::max(boundMaximum.y, position.y);
+				boundMaximum.z = std::max(boundMaximum.z, position.z);
+			}
+			return true;
+		}
+
+		void ExtendDirectColorContract(A8ShapeColorContract& contract,
+			bool& initialized, const NiColorA& source)
+		{
+			const NiColorA color = SanitizeColor(source);
+			if (!initialized)
+			{
+				contract.minimumModifier = color;
+				contract.maximumModifier = color;
+				initialized = true;
+				return;
+			}
+			contract.minimumModifier.r =
+				std::min(contract.minimumModifier.r, color.r);
+			contract.minimumModifier.g =
+				std::min(contract.minimumModifier.g, color.g);
+			contract.minimumModifier.b =
+				std::min(contract.minimumModifier.b, color.b);
+			contract.minimumModifier.a =
+				std::min(contract.minimumModifier.a, color.a);
+			contract.maximumModifier.r =
+				std::max(contract.maximumModifier.r, color.r);
+			contract.maximumModifier.g =
+				std::max(contract.maximumModifier.g, color.g);
+			contract.maximumModifier.b =
+				std::max(contract.maximumModifier.b, color.b);
+			contract.maximumModifier.a =
+				std::max(contract.maximumModifier.a, color.a);
+		}
+
+		bool BuildDirectVertexBound(
+			const std::vector<NativeA8GpuVertex>& vertices,
+			const NiPoint3& minimum, const NiPoint3& maximum,
+			NiBound& bound)
+		{
+			if (vertices.empty()
+				|| !std::isfinite(minimum.x)
+				|| !std::isfinite(minimum.y)
+				|| !std::isfinite(minimum.z)
+				|| !std::isfinite(maximum.x)
+				|| !std::isfinite(maximum.y)
+				|| !std::isfinite(maximum.z))
+			{
+				return false;
+			}
+			bound.m_kCenter = NiPoint3(
+				(minimum.x + maximum.x) * 0.5f,
+				(minimum.y + maximum.y) * 0.5f,
+				(minimum.z + maximum.z) * 0.5f);
+			float radiusSquared = 0.0f;
+			for (const NativeA8GpuVertex& vertex : vertices)
+			{
+				const float dx = vertex.x - bound.m_kCenter.x;
+				const float dy = vertex.y - bound.m_kCenter.y;
+				const float dz = vertex.z - bound.m_kCenter.z;
+				radiusSquared = std::max(radiusSquared,
+					dx * dx + dy * dy + dz * dz);
+			}
+			bound.m_fRadius = std::sqrt(radiusSquared);
+			return std::isfinite(bound.m_fRadius);
+		}
+
+		bool PopulateDirectAtlasEffectPages(
+			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
+			A8EffectShapeConfig& effects)
+		{
+			if (atlases.empty())
+				return false;
+			effects.atlasProperties.clear();
+			effects.atlasTextures.clear();
+			effects.atlasInverseSizes.clear();
+			effects.atlasProperties.reserve(atlases.size());
+			effects.atlasTextures.reserve(atlases.size());
+			effects.atlasInverseSizes.reserve(atlases.size());
+			for (const std::shared_ptr<AtlasResource>& atlas : atlases)
+			{
+				if (!atlas || !atlas->property || !atlas->width
+					|| !atlas->height)
+				{
+					return false;
+				}
+				NiTexture* texture = GetAtlasTexture(*atlas);
+				if (!texture)
+					return false;
+				effects.atlasProperties.push_back(atlas->property);
+				effects.atlasTextures.push_back(texture);
+				effects.atlasInverseSizes.push_back(NiPoint2(
+					1.0f / static_cast<float>(atlas->width),
+					1.0f / static_cast<float>(atlas->height)));
+			}
+			effects.inverseAtlasWidth = effects.atlasInverseSizes[0].x;
+			effects.inverseAtlasHeight = effects.atlasInverseSizes[0].y;
+			return true;
+		}
+
+		bool BindDirectAtlasShape(NiTriShape* shape,
+			const std::shared_ptr<AtlasResource>& atlas)
+		{
+			if (!shape || !atlas || !atlas->property)
+				return false;
+			shape->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f, 0.0f);
+			shape->RemoveProperty(NiProperty::TEXTURING);
+			shape->AddProperty(atlas->property);
+			shape->UpdateProperties();
+			if (NiShadeProperty* shade = shape->GetShadeProperty())
+			{
+				if (shade->m_eShaderType == NiShadeProperty::PROP_Tile)
+				{
+					if (NiTexture* texture = GetAtlasTexture(*atlas))
+						ThisStdCall(0xBB7A10, shade, texture);
+				}
+			}
+			return true;
+		}
+
+		NiTriShape* CreateDirectNativeShape(Font& font,
+			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
+			std::vector<NativeA8GpuVertex>&& vertices,
+			UInt32 glyphCount, UInt32 quadCount,
+			A8EffectShapeConfig& effects,
+			const A8ShapeColorContract& colorContract,
+			const NiColorA& facadeColor, const NiColorA& tileColor,
+			const NiPoint3& origin, const NiPoint3& boundMinimum,
+			const NiPoint3& boundMaximum, bool prepareObject)
+		{
+			if (!quadCount || vertices.size() < quadCount * 4u
+				|| !PopulateDirectAtlasEffectPages(atlases, effects))
+			{
+				return nullptr;
+			}
+			NiBound bound;
+			if (!BuildDirectVertexBound(
+				vertices, boundMinimum, boundMaximum, bound))
+			{
+				return nullptr;
+			}
+			NativeA8PayloadTemplatePtr payload =
+				BuildNativeA8PayloadTemplate(std::move(vertices),
+					quadCount, effects, bound, {});
+			if (!payload || payload->gpuVertices.size() < 4)
+				return nullptr;
+
+			NiTriShape* shape = font.MakeTriShape(1, &tileColor, false);
+			if (!shape || !shape->GetModelData()
+				|| !BindDirectAtlasShape(shape, atlases[0]))
+			{
+				return nullptr;
+			}
+			NiTriShapeData* data = shape->GetModelData();
+			if (data->m_usVertices < 4 || !data->m_pkVertex
+				|| !data->m_pkTexture || !data->m_pusTriList)
+			{
+				return nullptr;
+			}
+			if (!data->m_pkColor)
+				data->m_pkColor = NiAlloc<NiColorA>(data->m_usVertices);
+			if (!data->m_pkColor)
+				return nullptr;
+			static constexpr UInt16 kFacadeQuad[6] =
+				{ 0, 2, 1, 0, 3, 2 };
+			const NiColorA safeFacadeColor = SanitizeColor(facadeColor);
+			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
+			{
+				const NativeA8GpuVertex& vertex =
+					payload->gpuVertices[ordinal];
+				data->m_pkVertex[ordinal] = NiPoint3(
+					vertex.x + origin.x,
+					vertex.y + origin.y,
+					vertex.z + origin.z);
+				data->m_pkTexture[ordinal] =
+					NiPoint2(vertex.u, vertex.v);
+				data->m_pkColor[ordinal] = safeFacadeColor;
+			}
+			std::copy(std::begin(kFacadeQuad), std::end(kFacadeQuad),
+				data->m_pusTriList);
+			data->m_kBound = bound;
+			data->m_kBound.m_kCenter.x += origin.x;
+			data->m_kBound.m_kCenter.y += origin.y;
+			data->m_kBound.m_kCenter.z += origin.z;
+			if (!PrepareA8AtlasShape(font, shape, font.iFontNum,
+				glyphCount, quadCount, &effects, &colorContract,
+				payload, origin))
+			{
+				return nullptr;
+			}
+			if (prepareObject)
+				shape->PrepareObject();
+			data->m_kBound = bound;
+			data->m_kBound.m_kCenter.x += origin.x;
+			data->m_kBound.m_kCenter.y += origin.y;
+			data->m_kBound.m_kCenter.z += origin.z;
+			if (prepareObject && shape->m_pWorldBound)
+				shape->UpdateWorldBound();
+			return shape;
+		}
+
+		NiTriShape* CreateDirectSinglePageArgbShape(Font& font,
+			RuntimeFont& runtime,
+			const std::vector<AtlasGlyphInstance>& glyphs,
+			const DirectAtlasGlyphBatch& batch, float rasterScale,
+			const NiColorA& tileColor, bool prepareObject,
+			UInt32 drawableGlyphs)
+		{
+			if (!drawableGlyphs || batch.atlases.size() != 1
+				|| batch.glyphs.size() != glyphs.size())
+			{
+				return nullptr;
+			}
+			NiTriShape* shape = font.MakeTriShape(
+				static_cast<int>(drawableGlyphs), &tileColor, false);
+			if (!shape || !shape->GetModelData()
+				|| !BindDirectAtlasShape(shape, batch.atlases[0]))
+			{
+				return nullptr;
+			}
+			NiTriShapeData* data = shape->GetModelData();
+			const UInt32 vertexCount = drawableGlyphs * 4u;
+			if (data->m_usVertices < vertexCount || !data->m_pkVertex
+				|| !data->m_pkTexture || !data->m_pusTriList)
+			{
+				return nullptr;
+			}
+			if (!data->m_pkColor)
+				data->m_pkColor = NiAlloc<NiColorA>(data->m_usVertices);
+			if (!data->m_pkColor)
+				return nullptr;
+
+			size_t firstDrawable = 0;
+			while (firstDrawable < batch.glyphs.size()
+				&& batch.glyphs[firstDrawable].knownEmpty)
+			{
+				++firstDrawable;
+			}
+			if (firstDrawable >= glyphs.size())
+				return nullptr;
+			const NiPoint3 origin = glyphs[firstDrawable].pen;
+			NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
+				std::numeric_limits<float>::max(),
+				std::numeric_limits<float>::max());
+			NiPoint3 boundMaximum(std::numeric_limits<float>::lowest(),
+				std::numeric_limits<float>::lowest(),
+				std::numeric_limits<float>::lowest());
+			static constexpr UInt16 kCanonicalQuad[6] =
+				{ 0, 2, 1, 0, 3, 2 };
+			UInt32 outputQuad = 0;
+			for (size_t glyphIndex = 0;
+				glyphIndex < glyphs.size(); ++glyphIndex)
+			{
+				const DirectAtlasBatchGlyph& source =
+					batch.glyphs[glyphIndex];
+				if (source.knownEmpty)
+					continue;
+				if (!source.layer || source.atlasPage != 0)
+					return nullptr;
+				const AtlasGlyphInstance& instance = glyphs[glyphIndex];
+				const NiColorA baseColor =
+					ResolveBaseColor(instance.color, tileColor);
+				std::array<NativeA8GpuVertex, 4> vertices;
+				if (!WriteDirectQuadVertices(*source.layer, instance,
+					origin, 0.0f, 0.0f, rasterScale,
+					GetGlyphBaselineOffset(runtime, instance.glyph),
+					1.0f, false, PackNativeBaseColor(baseColor),
+					1u << static_cast<UInt8>(AtlasLayer::Fill),
+					vertices.data(), boundMinimum, boundMaximum))
+				{
+					return nullptr;
+				}
+				for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
+				{
+					const UInt32 output = outputQuad * 4u + ordinal;
+					data->m_pkVertex[output] = NiPoint3(
+						vertices[ordinal].x + origin.x,
+						vertices[ordinal].y + origin.y,
+						vertices[ordinal].z + origin.z);
+					data->m_pkTexture[output] = NiPoint2(
+						vertices[ordinal].u, vertices[ordinal].v);
+					data->m_pkColor[output] = SanitizeColor(baseColor);
+				}
+				for (UInt32 ordinal = 0; ordinal < 6; ++ordinal)
+				{
+					data->m_pusTriList[outputQuad * 6u + ordinal] =
+						static_cast<UInt16>(outputQuad * 4u
+							+ kCanonicalQuad[ordinal]);
+				}
+				++outputQuad;
+			}
+			if (outputQuad != drawableGlyphs)
+				return nullptr;
+			ThisStdCall(0xA7EE30, &data->m_kBound,
+				data->m_usVertices, data->m_pkVertex);
+			if (prepareObject)
+				shape->PrepareObject();
+			return shape;
+		}
+
+		DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
+			Font& font, RuntimeFont& runtime,
+			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+			bool prepareObject, const NiColorA& tileColor,
+			bool suppressEffects, GlyphMaskType maskType,
+			EffectQuality quality)
+		{
+			DirectAtlasShapeBuildResult result;
+			const bool precomposed =
+				maskType == GlyphMaskType::Composite;
+			const bool distanceField =
+				maskType == GlyphMaskType::DistanceField;
+			if (!precomposed && !distanceField)
+				return result;
+
+			thread_local DirectAtlasGlyphBatch batch;
+			batch.Clear();
+			struct BatchReset
+			{
+				DirectAtlasGlyphBatch& batch;
+				~BatchReset() { batch.Clear(); }
+			} reset{ batch };
+			const AtlasPixelMode pixelMode = precomposed
+				? AtlasPixelMode::Argb32
+				: GetConfiguredDistanceFieldAtlasPixelMode();
+			const AtlasRenderMode renderMode = precomposed
+				? AtlasRenderMode::CpuEffects
+				: AtlasRenderMode::ShaderEffects;
+			const UInt32 padding = precomposed
+				? kArgbAtlasPadding : kDistanceFieldAtlasPadding;
+			if (!GetDirectAtlasGlyphBatch(runtime, glyphs, maskType,
+				rasterScale, pixelMode, renderMode, padding, batch))
+			{
+				return result;
+			}
+
+			result.pageCount =
+				static_cast<UInt32>(batch.atlases.size());
+			if (!batch.atlases.empty() && batch.atlases[0])
+			{
+				result.firstAtlasWidth = batch.atlases[0]->width;
+				result.firstAtlasHeight = batch.atlases[0]->height;
+			}
+			size_t firstDrawable = 0;
+			while (firstDrawable < batch.glyphs.size()
+				&& batch.glyphs[firstDrawable].knownEmpty)
+			{
+				++firstDrawable;
+			}
+			if (firstDrawable >= batch.glyphs.size())
+			{
+				result.outcome = DirectAtlasShapeOutcome::Empty;
+				return result;
+			}
+			if (batch.atlases.empty()
+				|| batch.glyphs.size() != glyphs.size())
+			{
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+			result.glyphCount = static_cast<UInt32>(std::count_if(
+				batch.glyphs.begin(), batch.glyphs.end(),
+				[](const DirectAtlasBatchGlyph& glyph)
+				{
+					return !glyph.knownEmpty && glyph.layer;
+				}));
+			if (!result.glyphCount || result.glyphCount > kMaximumQuads)
+			{
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+
+			if (precomposed && batch.atlases.size() == 1)
+			{
+				result.geometryQuadCount = result.glyphCount;
+				result.drawQuadCount = result.glyphCount;
+				result.shape = CreateDirectSinglePageArgbShape(
+					font, runtime, glyphs, batch, rasterScale,
+					tileColor, prepareObject, result.glyphCount);
+				result.outcome = result.shape
+					? DirectAtlasShapeOutcome::Created
+					: DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+
+			const FontConfig& config = GetRuntimeConfig(runtime);
+			A8EffectShapeConfig effects;
+			std::array<MtsdfSharedRasterProfile, 2> rasterProfiles;
+			std::array<bool, 2> rasterProfileReady = {};
+			bool drawShadow = false;
+			bool shadowHasOffset = false;
+			UInt8 bodyLayerMask =
+				1u << static_cast<UInt8>(AtlasLayer::Fill);
+			if (distanceField)
+			{
+				ShaderEffectBuild shaderBuild;
+				if (!ConfigureShaderEffectBuild(config, rasterScale,
+					quality, suppressEffects, shaderBuild))
+				{
+					return result;
+				}
+				effects = std::move(shaderBuild.config);
+				drawShadow =
+					!suppressEffects && config.shadow.enabled;
+				const bool drawGlow =
+					!suppressEffects && config.glow.enabled;
+				const bool drawOutline =
+					!suppressEffects && config.outline.enabled;
+				shadowHasOffset = drawShadow
+					&& (config.shadow.x != 0.0f
+						|| config.shadow.y != 0.0f);
+				if (drawGlow)
+					bodyLayerMask |=
+						1u << static_cast<UInt8>(AtlasLayer::Glow);
+				if (drawOutline)
+					bodyLayerMask |=
+						1u << static_cast<UInt8>(AtlasLayer::Outline);
+				if (drawShadow && !shadowHasOffset)
+					bodyLayerMask |=
+						1u << static_cast<UInt8>(AtlasLayer::Shadow);
+				for (const AtlasGlyphInstance& instance : glyphs)
+				{
+					const size_t roleIndex =
+						static_cast<size_t>(instance.glyph.byteClass);
+					if (roleIndex >= rasterProfiles.size())
+					{
+						result.outcome =
+							DirectAtlasShapeOutcome::Failed;
+						return result;
+					}
+					if (rasterProfileReady[roleIndex])
+						continue;
+					if (!ResolveMtsdfSharedRasterProfile(config,
+						instance.glyph.byteClass, rasterScale, true,
+						rasterProfiles[roleIndex]))
+					{
+						return result;
+					}
+					rasterProfileReady[roleIndex] = true;
+				}
+				result.sdfSpreadPixels =
+					effects.sdfSpreadPixels;
+			}
+			else
+			{
+				effects.enabled = true;
+				effects.precomposedArgb = true;
+			}
+
+			std::array<std::array<UInt32,
+				kMaximumAtlasSnapshotPages>, 2> counts = {};
+			for (const DirectAtlasBatchGlyph& glyph : batch.glyphs)
+			{
+				if (glyph.knownEmpty)
+					continue;
+				if (!glyph.layer
+					|| glyph.atlasPage >= batch.atlases.size()
+					|| glyph.atlasPage >= kMaximumAtlasSnapshotPages)
+				{
+					result.outcome = DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+				if (distanceField && shadowHasOffset)
+					++counts[0][glyph.atlasPage];
+				++counts[1][glyph.atlasPage];
+			}
+			std::array<std::array<UInt32,
+				kMaximumAtlasSnapshotPages>, 2> offsets = {};
+			std::array<std::array<UInt32,
+				kMaximumAtlasSnapshotPages>, 2> cursors = {};
+			UInt32 physicalQuads = 0;
+			for (size_t kind = 0; kind < counts.size(); ++kind)
+			{
+				for (size_t page = 0; page < batch.atlases.size(); ++page)
+				{
+					offsets[kind][page] = physicalQuads;
+					cursors[kind][page] = physicalQuads;
+					physicalQuads += counts[kind][page];
+				}
+			}
+			if (!physicalQuads || physicalQuads > kMaximumQuads)
+			{
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+			result.geometryQuadCount = physicalQuads;
+
+			std::vector<NativeA8GpuVertex> vertices(
+				static_cast<size_t>(physicalQuads) * 4u);
+			const NiPoint3 origin = glyphs[firstDrawable].pen;
+			NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
+				std::numeric_limits<float>::max(),
+				std::numeric_limits<float>::max());
+			NiPoint3 boundMaximum(std::numeric_limits<float>::lowest(),
+				std::numeric_limits<float>::lowest(),
+				std::numeric_limits<float>::lowest());
+			A8ShapeColorContract colorContract;
+			bool colorContractInitialized = false;
+			NiColorA facadeColor = tileColor;
+			bool facadeColorInitialized = false;
+			std::array<float, kMaximumAtlasSnapshotPages>
+				pageSourceScales = {};
+			std::array<UInt8, kMaximumAtlasSnapshotPages>
+				pageSdfSpreads = {};
+			std::array<bool, kMaximumAtlasSnapshotPages>
+				pageProfileReady = {};
+
+			for (size_t glyphIndex = 0;
+				glyphIndex < glyphs.size(); ++glyphIndex)
+			{
+				const DirectAtlasBatchGlyph& source =
+					batch.glyphs[glyphIndex];
+				if (source.knownEmpty)
+					continue;
+				const AtlasGlyphInstance& instance = glyphs[glyphIndex];
+				const UInt16 page = source.atlasPage;
+				float sourceToLogicalScale = 1.0f;
+				if (distanceField)
+				{
+					const size_t roleIndex =
+						static_cast<size_t>(instance.glyph.byteClass);
+					if (roleIndex >= rasterProfiles.size()
+						|| !rasterProfileReady[roleIndex])
+					{
+						result.outcome =
+							DirectAtlasShapeOutcome::Failed;
+						return result;
+					}
+					sourceToLogicalScale =
+						rasterProfiles[roleIndex].sourceToLogicalScale;
+					if (pageProfileReady[page]
+						&& (pageSourceScales[page]
+								!= sourceToLogicalScale
+							|| pageSdfSpreads[page]
+								!= source.layer->sdfSpread))
+					{
+						// Direct ranges are page-contiguous. A profile that mixes
+						// distance parameters within one page remains on the
+						// existing compatibility compiler.
+						return result;
+					}
+					pageProfileReady[page] = true;
+					pageSourceScales[page] = sourceToLogicalScale;
+					pageSdfSpreads[page] = source.layer->sdfSpread;
+				}
+				const NiColorA baseColor =
+					ResolveBaseColor(instance.color, tileColor);
+				ExtendDirectColorContract(
+					colorContract, colorContractInitialized, baseColor);
+				const float baselineOffset =
+					GetGlyphBaselineOffset(runtime, instance.glyph);
+				auto writeQuad = [&](size_t kind, float offsetX,
+					float offsetY, UInt8 layerMask)
+				{
+					const UInt32 quadIndex = cursors[kind][page]++;
+					if (quadIndex >= physicalQuads)
+						return false;
+					if (quadIndex == 0)
+					{
+						facadeColor = baseColor;
+						facadeColorInitialized = true;
+					}
+					return WriteDirectQuadVertices(*source.layer,
+						instance, origin, offsetX, offsetY, rasterScale,
+						baselineOffset, sourceToLogicalScale,
+						distanceField, PackNativeBaseColor(baseColor),
+						layerMask, &vertices[quadIndex * 4u],
+						boundMinimum, boundMaximum);
+				};
+				if (distanceField && shadowHasOffset
+					&& !writeQuad(0, config.shadow.x, config.shadow.y,
+						1u << static_cast<UInt8>(AtlasLayer::Shadow)))
+				{
+					result.outcome = DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+				if (!writeQuad(1, 0.0f, 0.0f,
+					distanceField ? bodyLayerMask
+						: 1u << static_cast<UInt8>(AtlasLayer::Fill)))
+				{
+					result.outcome = DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+			}
+			if (!facadeColorInitialized || !colorContractInitialized)
+			{
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+
+			auto appendRanges = [&](size_t kind, UInt32 layer,
+				bool enabled)
+			{
+				if (!enabled)
+					return;
+				for (UInt16 page = 0;
+					page < batch.atlases.size(); ++page)
+				{
+					const UInt32 quadCount = counts[kind][page];
+					if (!quadCount)
+						continue;
+					A8DrawRange range;
+					range.firstVertex = offsets[kind][page] * 4u;
+					range.vertexCount = quadCount * 4u;
+					range.startIndex = offsets[kind][page] * 6u;
+					range.primitiveCount = quadCount * 2u;
+					range.layer = layer;
+					range.atlasPage = page;
+					range.usesSdf = distanceField;
+					range.usesLiveTileRgb = distanceField
+						? effects.layerUsesLiveTileRgb[layer] : true;
+					range.sdfSpreadPixels = distanceField
+						? static_cast<float>(pageSdfSpreads[page])
+						: 0.0f;
+					range.sourceToLogicalScale = distanceField
+						? pageSourceScales[page] : 1.0f;
+					range.layerColorModifier = distanceField
+						? effects.layerColorModifiers[layer]
+						: NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f };
+					effects.ranges.push_back(range);
+					result.drawQuadCount += quadCount;
+				}
+			};
+			if (distanceField)
+			{
+				appendRanges(shadowHasOffset ? 0u : 1u,
+					static_cast<UInt32>(AtlasLayer::Shadow),
+					drawShadow);
+				appendRanges(1,
+					static_cast<UInt32>(AtlasLayer::Glow),
+					(bodyLayerMask
+						& (1u << static_cast<UInt8>(AtlasLayer::Glow)))
+						!= 0);
+				appendRanges(1,
+					static_cast<UInt32>(AtlasLayer::Outline),
+					(bodyLayerMask
+						& (1u << static_cast<UInt8>(AtlasLayer::Outline)))
+						!= 0);
+				appendRanges(1,
+					static_cast<UInt32>(AtlasLayer::Fill), true);
+			}
+			else
+			{
+				appendRanges(1,
+					static_cast<UInt32>(AtlasLayer::Fill), true);
+			}
+			effects.enabled = !effects.ranges.empty();
+			if (!effects.enabled)
+			{
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+			result.shape = CreateDirectNativeShape(font, batch.atlases,
+				std::move(vertices), result.glyphCount, physicalQuads,
+				effects, colorContract, facadeColor, tileColor, origin,
+				boundMinimum, boundMaximum, prepareObject);
+			result.outcome = result.shape
+				? DirectAtlasShapeOutcome::Created
+				: DirectAtlasShapeOutcome::Failed;
+			return result;
 		}
 
 
