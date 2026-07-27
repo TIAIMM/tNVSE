@@ -38,7 +38,15 @@ namespace fonthook::vectorfont
 			state.completeAtlasProfiles.erase(profileKey) != 0;
 		const auto profile = state.atlasProfiles.find(profileKey);
 		if (profile != state.atlasProfiles.end())
+		{
+			if (profile->second.directGlyphs
+				&& profile->second.directGlyphs->validity)
+			{
+				profile->second.directGlyphs->validity->store(
+					false, std::memory_order_release);
+			}
 			profile->second.directGlyphs.reset();
+		}
 		return wasComplete;
 	}
 
@@ -274,13 +282,107 @@ namespace fonthook::vectorfont
 			profile.cpuMemory.Reset(CpuMemoryCategory::AtlasMetadata, bytes);
 		}
 
+		bool EnsureAtlasProfileIndexLocked(AtlasState& state,
+			const AtlasCacheKey& baseKey, AtlasProfileIndex& profile)
+		{
+			if (!profile.compactResidentIndexReleased)
+				return true;
+			profile.residentPages.clear();
+			profile.pageResidents.clear();
+			profile.duplicateResidents.clear();
+			for (UInt16 pageIndex : profile.pages)
+			{
+				AtlasCacheKey pageKey = baseKey;
+				pageKey.pageIndex = pageIndex;
+				const auto page = state.atlasCache.find(pageKey);
+				if (page == state.atlasCache.end()
+					|| !page->second.resource
+					|| !EnsureAtlasGlyphIndex(
+						*page->second.resource))
+				{
+					return false;
+				}
+				std::vector<UInt64>& residents =
+					profile.pageResidents[pageIndex];
+				residents.reserve(
+					page->second.resource->glyphs.size());
+				for (const AtlasGlyphRecord& glyph :
+					page->second.resource->glyphs)
+				{
+					const auto [resident, inserted] =
+						profile.residentPages.emplace(
+							glyph.cacheId, pageIndex);
+					if (!inserted
+						&& resident->second != pageIndex)
+					{
+						profile.duplicateResidents.insert(
+							glyph.cacheId);
+						resident->second = std::min(
+							resident->second, pageIndex);
+					}
+					residents.push_back(glyph.cacheId);
+				}
+			}
+			profile.compactResidentIndexReleased = false;
+			RefreshAtlasProfileCpuMemory(profile);
+			return true;
+		}
+
+		void ReleaseSealedAtlasCpuIndexesLocked(AtlasState& state,
+			const SealedDirectFontProfile& sealed)
+		{
+			for (auto& [key, profile] : state.atlasProfiles)
+			{
+				bool ownedBySealed = false;
+				for (const auto& table : sealed.tables)
+				{
+					if (table
+						&& profile.directGlyphs.get()
+							== table.get())
+					{
+						ownedBySealed = true;
+						break;
+					}
+				}
+				if (!ownedBySealed)
+					continue;
+				std::unordered_map<UInt64, UInt16>().swap(
+					profile.residentPages);
+				std::unordered_map<UInt16,
+					std::vector<UInt64>>().swap(
+						profile.pageResidents);
+				std::unordered_set<UInt64>().swap(
+					profile.duplicateResidents);
+				profile.compactResidentIndexReleased = true;
+				RefreshAtlasProfileCpuMemory(profile);
+			}
+			for (const auto& atlas : sealed.atlases)
+			{
+				if (!atlas || !atlas->compactSnapshot)
+					continue;
+				std::vector<AtlasGlyphRecord>().swap(
+					atlas->glyphs);
+				atlas->compactGlyphIndexReleased = true;
+				if (atlas->backend == AtlasBackend::DefaultPool)
+					std::vector<UInt8>().swap(atlas->pixels);
+				RefreshAtlasResourceCpuMemory(*atlas);
+			}
+		}
+
 		void IndexAtlasPage(AtlasState& state, const AtlasCacheKey& key,
 			const AtlasResource& resource)
 		{
 			AtlasProfileIndex& profile = state.atlasProfiles[MakeAtlasProfileKey(key)];
+			EnsureAtlasProfileIndexLocked(state, key, profile);
 			// A direct table stores page slots and page-local glyph indices. Any page
 			// insertion or replacement invalidates that immutable view; complete
 			// prewarm republishes it after the profile generation is finalized.
+			if (profile.directGlyphs
+				&& profile.directGlyphs->validity)
+			{
+				profile.directGlyphs->validity->store(
+					false, std::memory_order_release);
+			}
 			profile.directGlyphs.reset();
 			const auto page = std::lower_bound(profile.pages.begin(), profile.pages.end(),
 				key.pageIndex);
@@ -333,6 +435,7 @@ namespace fonthook::vectorfont
 			if (found == state.atlasProfiles.end())
 				return;
 			AtlasProfileIndex& profile = found->second;
+			EnsureAtlasProfileIndexLocked(state, key, profile);
 			const auto page = std::lower_bound(profile.pages.begin(), profile.pages.end(),
 				key.pageIndex);
 			if (page != profile.pages.end() && *page == key.pageIndex)
@@ -725,8 +828,8 @@ namespace fonthook::vectorfont
 		VectorFontByteClass byteClass, float rasterScale, AtlasCacheKey& key)
 	{
 		// The complete-code-page transaction follows the same route contract as
-		// demand rendering. Aggressive mode persists the CPU-baked coverage masks
-		// in a level-zero A8 profile rather than disabling atlas publication.
+		// demand rendering. Aggressive mode persists one CPU-precomposed BGRA
+		// rectangle per glyph; the ordinary CPU-effects route keeps its A8 layers.
 		const FontAtlasRoute route = ResolveFontAtlasRoute(
 			IsA8RendererAvailable(),
 			g_bEnableFreeTypeFontAggressivePerformanceMode);
@@ -876,9 +979,15 @@ namespace fonthook::vectorfont
 					const size_t roleIndex = static_cast<size_t>(
 						requests[index].glyph->byteClass);
 					const AtlasCacheKey& baseKey = baseKeys[roleIndex];
-					const auto profile = state.atlasProfiles.find(MakeAtlasProfileKey(baseKey));
+					const auto profile = state.atlasProfiles.find(
+						MakeAtlasProfileKey(baseKey));
 					if (profile == state.atlasProfiles.end())
 						continue;
+					if (!EnsureAtlasProfileIndexLocked(
+						state, baseKey, profile->second))
+					{
+						continue;
+					}
 					const auto resident = profile->second.residentPages.find(cacheIds[index]);
 					if (resident == profile->second.residentPages.end())
 						continue;
@@ -961,6 +1070,8 @@ namespace fonthook::vectorfont
 			auto profile = state.atlasProfiles.find(profileKey);
 			if (profile != state.atlasProfiles.end())
 			{
+				EnsureAtlasProfileIndexLocked(
+					state, baseKey, profile->second);
 				entries.reserve(profile->second.pages.size());
 				for (UInt16 pageIndex : profile->second.pages)
 				{

@@ -195,7 +195,8 @@ void LoadConfig()
 	g_uiFreeTypeFontCompositeCacheMB = std::clamp<UINT32>(
 		ReadConfigInt(kFreeTypeFontSection, "uiFreeTypeFontCompositeCacheMB",
 			32, filename), 0, 512);
-	gLog.FormattedMessage("g_uiFreeTypeFontCompositeCacheMB: %u",
+	gLog.FormattedMessage(
+		"g_uiFreeTypeFontCompositeCacheMB: %u (deprecated; whole-text RTT cache disabled)",
 		g_uiFreeTypeFontCompositeCacheMB);
 
 	g_bMultibyteInput = ReadConfigInt(kMultibyteInputSection,

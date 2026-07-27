@@ -1425,8 +1425,52 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+	bool EnsureAtlasGlyphIndex(AtlasResource& resource)
+	{
+		if (!resource.compactGlyphIndexReleased)
+			return true;
+		if (!resource.compactSnapshot)
+			return false;
+		std::vector<AtlasGlyphRecord> restored;
+		restored.reserve(
+			resource.compactSnapshot->placements.size());
+		for (UInt32 index = 0;
+			index < resource.compactSnapshot->placements.size();
+			++index)
+		{
+			const AtlasSnapshotPlacement& snapshot =
+				resource.compactSnapshot->placements[index];
+			const UInt16 pageIndex =
+				snapshot.glyphPlacement.pageIndex;
+			AtlasGlyphRecord glyph;
+			glyph.cacheId = snapshot.cacheId;
+			glyph.rect = snapshot.rect;
+			glyph.snapshotPlacementIndex = index;
+			if (!glyph.cacheId
+				|| !RestoreAtlasSnapshotGlyphPlacement(
+					snapshot, resource, pageIndex,
+					pageIndex, glyph.placement))
+			{
+				return false;
+			}
+			restored.push_back(std::move(glyph));
+		}
+		std::sort(restored.begin(), restored.end(),
+			[](const AtlasGlyphRecord& left,
+				const AtlasGlyphRecord& right)
+			{
+				return left.cacheId < right.cacheId;
+			});
+		resource.glyphs.swap(restored);
+		resource.compactGlyphIndexReleased = false;
+		RefreshAtlasResourceCpuMemory(resource);
+		return true;
+	}
+
 	AtlasGlyphRecord* FindAtlasGlyph(AtlasResource& resource, UInt64 cacheId)
 	{
+		if (!EnsureAtlasGlyphIndex(resource))
+			return nullptr;
 		auto found = std::lower_bound(resource.glyphs.begin(), resource.glyphs.end(),
 			cacheId, [](const AtlasGlyphRecord& glyph, UInt64 id)
 			{
@@ -1438,6 +1482,10 @@ namespace fonthook::vectorfont
 
 	const AtlasGlyphRecord* FindAtlasGlyph(const AtlasResource& resource, UInt64 cacheId)
 	{
+		AtlasResource& mutableResource =
+			const_cast<AtlasResource&>(resource);
+		if (!EnsureAtlasGlyphIndex(mutableResource))
+			return nullptr;
 		auto found = std::lower_bound(resource.glyphs.begin(), resource.glyphs.end(),
 			cacheId, [](const AtlasGlyphRecord& glyph, UInt64 id)
 			{
@@ -2065,6 +2113,11 @@ namespace fonthook::vectorfont
 			UInt32 failed = 0;
 			{
 				std::lock_guard<std::mutex> lock(state.atlasMutex);
+				if (beforeReset)
+				{
+					state.directProfilesAvailable.store(
+						false, std::memory_order_release);
+				}
 				if (!beforeReset)
 					ResolveGpuAtlasBudget(true);
 				auto process = [&](AtlasResource& resource)
@@ -2104,6 +2157,61 @@ namespace fonthook::vectorfont
 				}
 				state.defaultPoolMaintenancePending.store(
 					HasDefaultPoolMaintenanceLocked(), std::memory_order_release);
+				if (!beforeReset)
+				{
+					for (auto profile =
+						state.sealedDirectProfiles.begin();
+						profile
+							!= state.sealedDirectProfiles.end();)
+					{
+						const auto sealed =
+							profile->second.lock();
+						if (!sealed)
+						{
+							profile = state.sealedDirectProfiles.erase(
+								profile);
+							continue;
+						}
+						const bool invalidPage = std::any_of(
+							sealed->atlases.begin(),
+							sealed->atlases.end(),
+							[&](const auto& atlas)
+							{
+								return !atlas
+									|| atlas->resetPending
+									|| !atlas->property
+									|| !GetAtlasTexture(*atlas)
+									|| atlas->pixelMode
+										!= sealed->pixelMode
+									|| atlas->renderMode
+										!= sealed->renderMode
+									|| atlas->padding
+										!= sealed->padding;
+							});
+						if (!invalidPage)
+						{
+							++profile;
+							continue;
+						}
+						for (const auto& table : sealed->tables)
+						{
+							if (table && table->validity)
+							{
+								table->validity->store(
+									false,
+									std::memory_order_release);
+							}
+						}
+						profile =
+							state.sealedDirectProfiles.erase(
+								profile);
+					}
+					// Profiles whose pages rebuilt successfully are usable
+					// immediately. Failed profiles carry a false per-table
+					// token and therefore reopen compatibility state lazily.
+					state.directProfilesAvailable.store(
+						true, std::memory_order_release);
+				}
 			}
 			if (logResetTiming)
 			{

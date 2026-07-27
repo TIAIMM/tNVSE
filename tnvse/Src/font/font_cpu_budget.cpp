@@ -20,6 +20,12 @@ namespace fonthook::vectorfont
 		{
 			std::array<std::atomic<std::size_t>,
 				static_cast<std::size_t>(CpuMemoryCategory::Count)> bytes = {};
+			std::atomic<std::size_t> totalBytes = 0;
+			std::atomic<UInt64> allocationGeneration = 1;
+			std::atomic<UInt64> lastEnforcedGeneration = 0;
+			std::atomic<std::size_t> lastEnforcedTotal = 0;
+			std::atomic<std::size_t> lastEnforcedBudget =
+				std::numeric_limits<std::size_t>::max();
 			std::atomic<std::size_t> lastLoggedTotal = 0;
 		};
 
@@ -50,6 +56,21 @@ namespace fonthook::vectorfont
 			if (value.compare_exchange_weak(current, desired,
 				std::memory_order_relaxed, std::memory_order_relaxed))
 			{
+				const std::size_t added = desired - current;
+				if (added)
+				{
+					auto& total = BudgetState().totalBytes;
+					std::size_t aggregate =
+						total.load(std::memory_order_relaxed);
+					while (!total.compare_exchange_weak(aggregate,
+						SaturatingAdd(aggregate, added),
+						std::memory_order_relaxed,
+						std::memory_order_relaxed))
+					{
+					}
+					BudgetState().allocationGeneration.fetch_add(
+						1, std::memory_order_relaxed);
+				}
 				break;
 			}
 		}
@@ -67,6 +88,27 @@ namespace fonthook::vectorfont
 			if (value.compare_exchange_weak(current, desired,
 				std::memory_order_relaxed, std::memory_order_relaxed))
 			{
+				const std::size_t removed = current - desired;
+				if (removed)
+				{
+					auto& total = BudgetState().totalBytes;
+					std::size_t aggregate =
+						total.load(std::memory_order_relaxed);
+					for (;;)
+					{
+						const std::size_t next =
+							removed <= aggregate
+								? aggregate - removed : 0;
+						if (total.compare_exchange_weak(aggregate,
+							next, std::memory_order_relaxed,
+							std::memory_order_relaxed))
+						{
+							break;
+						}
+					}
+					BudgetState().allocationGeneration.fetch_add(
+						1, std::memory_order_relaxed);
+				}
 				break;
 			}
 		}
@@ -81,14 +123,8 @@ namespace fonthook::vectorfont
 
 	std::size_t GetCpuMemoryUsage()
 	{
-		std::size_t total = 0;
-		for (std::size_t index = 0;
-			index < static_cast<std::size_t>(CpuMemoryCategory::Count); ++index)
-		{
-			total = SaturatingAdd(total,
-				BudgetState().bytes[index].load(std::memory_order_relaxed));
-		}
-		return total;
+		return BudgetState().totalBytes.load(
+			std::memory_order_relaxed);
 	}
 
 	std::size_t GetCpuMemoryBudget()
@@ -116,9 +152,43 @@ namespace fonthook::vectorfont
 	void EnforceCpuMemoryBudget(const char* phase)
 	{
 		static std::atomic_flag enforcing = ATOMIC_FLAG_INIT;
-		if (!IsCpuMemoryBudgetExceeded()
-			|| enforcing.test_and_set(std::memory_order_acquire))
+		CpuBudgetState& state = BudgetState();
+		const std::size_t total = state.totalBytes.load(
+			std::memory_order_relaxed);
+		const std::size_t budget = GetCpuMemoryBudget();
+		if (total <= budget)
+			{
+				return;
+			}
+		const UInt64 generation = state.allocationGeneration.load(
+			std::memory_order_relaxed);
+		if (state.lastEnforcedGeneration.load(
+				std::memory_order_relaxed) == generation
+			&& state.lastEnforcedTotal.load(
+				std::memory_order_relaxed) == total
+			&& state.lastEnforcedBudget.load(
+				std::memory_order_relaxed) == budget)
 		{
+			return;
+		}
+		if (enforcing.test_and_set(std::memory_order_acquire))
+			return;
+		const std::size_t currentTotal = state.totalBytes.load(
+			std::memory_order_relaxed);
+		const std::size_t currentBudget = GetCpuMemoryBudget();
+		const UInt64 currentGeneration =
+			state.allocationGeneration.load(
+				std::memory_order_relaxed);
+		if (currentTotal <= currentBudget
+			|| (state.lastEnforcedGeneration.load(
+					std::memory_order_relaxed)
+						== currentGeneration
+				&& state.lastEnforcedTotal.load(
+					std::memory_order_relaxed) == currentTotal
+				&& state.lastEnforcedBudget.load(
+					std::memory_order_relaxed) == currentBudget))
+		{
+			enforcing.clear(std::memory_order_release);
 			return;
 		}
 
@@ -130,6 +200,15 @@ namespace fonthook::vectorfont
 		TrimNativeA8CpuCachesForTotalBudget();
 		TrimAtlasCpuCachesForTotalBudget();
 		TrimFreeTypeCpuCachesForTotalBudget();
+		state.lastEnforcedGeneration.store(
+			state.allocationGeneration.load(
+				std::memory_order_relaxed),
+			std::memory_order_relaxed);
+		state.lastEnforcedTotal.store(
+			state.totalBytes.load(std::memory_order_relaxed),
+			std::memory_order_relaxed);
+		state.lastEnforcedBudget.store(currentBudget,
+			std::memory_order_relaxed);
 		enforcing.clear(std::memory_order_release);
 		ReportCpuMemoryBudget(phase, true);
 	}

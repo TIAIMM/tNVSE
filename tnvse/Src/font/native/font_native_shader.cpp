@@ -168,14 +168,11 @@ namespace fonthook::vectorfont
 			NiDX9ShaderDeclarationPtr declaration;
 			IDirect3DVertexDeclaration9* d3dDeclaration = nullptr;
 			NiD3DVertexShaderPtr vertexShader;
-			NiD3DVertexShaderPtr cacheVertexShader;
 			NiD3DPixelShaderPtr coverageShader;
 			NiD3DPixelShaderPtr argbShader;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
 			std::array<NiD3DPixelShaderPtr, 3> compositeShaders;
-			NiD3DPixelShaderPtr compositeValidationShader;
-			NiD3DPixelShaderPtr cachePixelShader;
 			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
 			bool supportsSeparateAlpha = false;
 			std::atomic<bool> runtimeFault = false;
@@ -361,43 +358,6 @@ namespace fonthook::vectorfont
 					D3DERR_DEVICELOST);
 				return;
 			}
-			std::array<float, 16> bakeWvp = {};
-			if (GetNativeA8BakeWvp(bakeWvp))
-			{
-				// The cache texture deliberately excludes live scissor state; the
-				// final cached-image Tile draw applies it in screen space. Retail
-				// UpdateConstants just re-enabled the facade's screen-space rect,
-				// which cannot be used against this small, origin-local RTT. Disable
-				// it after every stock update so each bake packet reaches the RTT.
-				const HRESULT scissorResult = device->SetRenderState(
-					D3DRS_SCISSORTESTENABLE, FALSE);
-				const HRESULT wvpResult = device->SetVertexShaderConstantF(
-					0, bakeWvp.data(), 4);
-				if (FAILED(wvpResult))
-				{
-					MarkGenerationFault(generation,
-						"SetVertexShaderConstantF(cache-bake)", wvpResult);
-					return;
-				}
-				const HRESULT separateResult = device->SetRenderState(
-					D3DRS_SEPARATEALPHABLENDENABLE, TRUE);
-				const HRESULT sourceAlphaResult = device->SetRenderState(
-					D3DRS_SRCBLENDALPHA, D3DBLEND_ONE);
-				const HRESULT destinationAlphaResult = device->SetRenderState(
-					D3DRS_DESTBLENDALPHA, D3DBLEND_INVSRCALPHA);
-				const HRESULT alphaOperationResult = device->SetRenderState(
-					D3DRS_BLENDOPALPHA, D3DBLENDOP_ADD);
-				if (FAILED(scissorResult) || FAILED(separateResult)
-					|| FAILED(sourceAlphaResult)
-					|| FAILED(destinationAlphaResult)
-					|| FAILED(alphaOperationResult))
-				{
-					MarkGenerationFault(generation,
-						"SetRenderState(cache-bake)", E_FAIL);
-					return;
-				}
-			}
-
 			// Distance-field profiles bind different pixel programs and upload
 			// c0-c8 directly. The stock update refreshes Tile's color/alpha constant
 			// map on every packet, so c0 must be republished after every stock call
@@ -553,8 +513,6 @@ namespace fonthook::vectorfont
 			bool scaledFillSampling)
 		{
 			static_cast<void>(scaledFillSampling);
-			if (packet.shaderClass == NativeA8ShaderClass::CachedImage)
-				return NativeA8Sampling::Point;
 			// Distance-field atlas pages are explicitly level-zero-only.
 			return NativeA8Sampling::LinearLod0;
 		}
@@ -577,8 +535,7 @@ namespace fonthook::vectorfont
 			NativeShaderGeneration& generation,
 			const NativeA8PacketTemplate& packet)
 		{
-			if (packet.shaderClass != NativeA8ShaderClass::CachedImage
-				&& packet.shaderClass != NativeA8ShaderClass::Coverage
+			if (packet.shaderClass != NativeA8ShaderClass::Coverage
 				&& packet.shaderClass != NativeA8ShaderClass::Argb
 				&& packet.distanceFieldMethod != generation.distanceFieldMethod)
 				return nullptr;
@@ -602,8 +559,6 @@ namespace fonthook::vectorfont
 				return index < generation.compositeShaders.size()
 					? generation.compositeShaders[index].m_pObject : nullptr;
 			}
-			case NativeA8ShaderClass::CachedImage:
-				return generation.cachePixelShader.m_pObject;
 			case NativeA8ShaderClass::Coverage:
 				return generation.coverageShader.m_pObject;
 			case NativeA8ShaderClass::Argb:
@@ -640,26 +595,6 @@ namespace fonthook::vectorfont
 			SetPassRenderState(&pass, D3DRS_ZENABLE, FALSE);
 			SetPassRenderState(&pass, D3DRS_ZWRITEENABLE, FALSE);
 			SetPassRenderState(&pass, D3DRS_ALPHATESTENABLE, FALSE);
-			if (profile.key.shaderClass == NativeA8ShaderClass::CachedImage)
-			{
-				SetPassRenderState(&pass, D3DRS_ALPHABLENDENABLE, TRUE);
-				SetPassRenderState(&pass, D3DRS_SRCBLEND, D3DBLEND_ONE);
-				SetPassRenderState(&pass, D3DRS_DESTBLEND,
-					D3DBLEND_INVSRCALPHA);
-				SetPassRenderState(&pass, D3DRS_BLENDOP, D3DBLENDOP_ADD);
-				if (generation.supportsSeparateAlpha)
-				{
-					SetPassRenderState(&pass,
-						D3DRS_SEPARATEALPHABLENDENABLE, TRUE);
-					SetPassRenderState(&pass, D3DRS_SRCBLENDALPHA,
-						D3DBLEND_ONE);
-					SetPassRenderState(&pass, D3DRS_DESTBLENDALPHA,
-						D3DBLEND_INVSRCALPHA);
-					SetPassRenderState(&pass, D3DRS_BLENDOPALPHA,
-						D3DBLENDOP_ADD);
-				}
-			}
-
 			if (profile.effectPass)
 			{
 				SetPassRenderState(&pass, D3DRS_STENCILWRITEMASK, 0);
@@ -696,9 +631,7 @@ namespace fonthook::vectorfont
 			if (!pixelShader || !pixelShader->GetShaderHandle())
 				return nullptr;
 			NiD3DVertexShader* vertexShader =
-				packet.shaderClass == NativeA8ShaderClass::CachedImage
-					? generation.cacheVertexShader.m_pObject
-					: generation.vertexShader.m_pObject;
+				generation.vertexShader.m_pObject;
 			if (!vertexShader || !vertexShader->GetShaderHandle())
 				return nullptr;
 
@@ -720,7 +653,6 @@ namespace fonthook::vectorfont
 			profile->shader = shader;
 			profile->effectPass =
 				packet.shaderClass != NativeA8ShaderClass::Composite
-				&& packet.shaderClass != NativeA8ShaderClass::CachedImage
 				&& packet.layer != 3;
 
 			profile->shaderOwner = shaderGuard;
@@ -819,10 +751,6 @@ namespace fonthook::vectorfont
 				GetConfiguredDistanceFieldMethod();
 
 			generation->vertexShader = createVS("tnvse_freetype_native_vs.vso");
-			generation->cacheVertexShader =
-				createVS("tnvse_freetype_native_cache.vso");
-			generation->cachePixelShader =
-				createPS("tnvse_freetype_native_cache.pso");
 			if (g_bEnableFreeTypeFontAggressivePerformanceMode)
 			{
 				generation->coverageShader =
@@ -889,8 +817,6 @@ namespace fonthook::vectorfont
 					generation->compositeShaders[index] =
 						createPS(compositeNames[index]);
 				}
-				generation->compositeValidationShader =
-					createPS("tnvse_freetype_native_composite_validate.pso");
 			}
 
 			if (!HasShaderHandle(generation->vertexShader))
@@ -979,7 +905,6 @@ namespace fonthook::vectorfont
 			if (beforeReset)
 			{
 				s_resetInProgress.store(true, std::memory_order_release);
-				ClearNativeA8CompositeCache();
 				InvalidateNativeA8RingResources(
 					NativeA8FallbackReason::DeviceReset);
 				NativeShaderGeneration* current = s_publishedGeneration.load(
@@ -1141,27 +1066,6 @@ namespace fonthook::vectorfont
 			? current->d3dDeclaration : nullptr;
 	}
 
-	IDirect3DVertexShader9* GetNativeA8CacheD3DVertexShader(UInt32 generation)
-	{
-		NativeShaderGeneration* current = s_publishedGeneration.load(
-			std::memory_order_acquire);
-		return current && current->id == generation
-			&& GenerationMatchesCurrentDevice(current)
-			&& HasShaderHandle(current->cacheVertexShader)
-			? current->cacheVertexShader->GetShaderHandle() : nullptr;
-	}
-
-	IDirect3DPixelShader9* GetNativeA8CompositeValidationD3DPixelShader(
-		UInt32 generation)
-	{
-		NativeShaderGeneration* current = s_publishedGeneration.load(
-			std::memory_order_acquire);
-		return current && current->id == generation
-			&& GenerationMatchesCurrentDevice(current)
-			&& HasShaderHandle(current->compositeValidationShader)
-			? current->compositeValidationShader->GetShaderHandle() : nullptr;
-	}
-
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation)
 	{
 		NativeShaderGeneration* current = s_publishedGeneration.load(
@@ -1271,8 +1175,7 @@ namespace fonthook::vectorfont
 		NativeShaderProfile* profile = CreateProfile(*generation, packet, key);
 		if (!profile)
 		{
-			if (packet.shaderClass == NativeA8ShaderClass::Composite
-				|| packet.shaderClass == NativeA8ShaderClass::CachedImage)
+			if (packet.shaderClass == NativeA8ShaderClass::Composite)
 				return nullptr;
 			MarkGenerationFault(generation, "profile-create",
 				D3DERR_NOTAVAILABLE);

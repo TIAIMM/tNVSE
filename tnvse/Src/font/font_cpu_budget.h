@@ -76,6 +76,8 @@ namespace fonthook::vectorfont
 
 		void Reset(CpuMemoryCategory category, std::size_t bytes)
 		{
+			if (category_ == category && bytes_ == bytes)
+				return;
 			Release();
 			category_ = category;
 			bytes_ = bytes;

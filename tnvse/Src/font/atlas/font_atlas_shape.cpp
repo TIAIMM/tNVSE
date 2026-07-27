@@ -334,8 +334,8 @@ namespace fonthook::vectorfont
 				quad.offsetY = offsetY;
 				quad.rasterScale = rasterScale;
 				quad.sourceToLogicalScale = sourceToLogicalScale;
-				quad.logicalTopEdge = instance.glyph.metrics
-					? instance.glyph.metrics->fTopEdge : 0.0f;
+				quad.logicalTopEdge =
+					GetVectorGlyphTopEdge(instance.glyph);
 				quad.baselineOffset = baselineOffset;
 				quad.expansionPixels = expansionPixels;
 				quad.layer = layer;
@@ -858,7 +858,7 @@ namespace fonthook::vectorfont
 		}
 
 		bool WriteDirectQuadVertices(const AtlasSnapshotPlacement& source,
-			const AtlasGlyphInstance& instance, const NiPoint3& origin,
+			const NiPoint3& pen, const NiPoint3& origin,
 			float offsetX, float offsetY, float rasterScale,
 			float baselineOffset, float sourceToLogicalScale, bool usesSdf,
 			UInt32 packedColor, UInt8 layerMask,
@@ -875,8 +875,8 @@ namespace fonthook::vectorfont
 			}
 			const float sourcePixelToLogical =
 				sourceToLogicalScale / rasterScale;
-			const float logicalX = instance.pen.x - origin.x + offsetX;
-			const float logicalZ = instance.pen.z - origin.z
+			const float logicalX = pen.x - origin.x + offsetX;
+			const float logicalZ = pen.z - origin.z
 				+ baselineOffset - offsetY;
 			const float bitmapLeft = static_cast<float>(source.left);
 			const float bitmapTop = static_cast<float>(source.top);
@@ -894,7 +894,7 @@ namespace fonthook::vectorfont
 				+ static_cast<float>(source.rect.width) * pixelScale;
 			const float z1 = z0
 				- static_cast<float>(source.rect.height) * pixelScale;
-			const float depth = instance.pen.y - origin.y;
+			const float depth = pen.y - origin.y;
 			const std::array<NiPoint3, 4> positions = {{
 				NiPoint3(x0, depth, z0), NiPoint3(x1, depth, z0),
 				NiPoint3(x1, depth, z1), NiPoint3(x0, depth, z1)
@@ -932,6 +932,64 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		bool WriteStockDirectQuadVertices(const FontLetter& letter,
+			const NiPoint3& pen, const NiPoint3& origin,
+			float baselineOffset, UInt32 packedColor, UInt8 layerMask,
+			NativeA8GpuVertex* output, NiPoint3& boundMinimum,
+			NiPoint3& boundMaximum)
+		{
+			if (!output || letter.iTextureIndex < 0
+				|| !std::isfinite(letter.fWidth)
+				|| !std::isfinite(letter.fHeight)
+				|| !std::isfinite(letter.fLeadingEdge)
+				|| !std::isfinite(letter.fTopEdge))
+			{
+				return false;
+			}
+			const float x0 = pen.x - origin.x
+				+ letter.fLeadingEdge;
+			const float z0 = pen.z - origin.z
+				+ baselineOffset + letter.fTopEdge;
+			const float x1 = x0 + letter.fWidth;
+			const float z1 = z0 - letter.fHeight;
+			const float depth = pen.y - origin.y;
+			const std::array<NiPoint3, 4> positions = {{
+				NiPoint3(x0, depth, z0), NiPoint3(x1, depth, z0),
+				NiPoint3(x1, depth, z1), NiPoint3(x0, depth, z1)
+			}};
+			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
+			{
+				const UVMap& uv = letter.pMapping[ordinal];
+				const NiPoint3& position = positions[ordinal];
+				if (!std::isfinite(position.x)
+					|| !std::isfinite(position.y)
+					|| !std::isfinite(position.z)
+					|| !std::isfinite(uv.fU)
+					|| !std::isfinite(uv.fV))
+				{
+					return false;
+				}
+				output[ordinal] = {
+					position.x, position.y, position.z,
+					uv.fU, uv.fV, packedColor, 0.0f, 1.0f,
+					static_cast<float>(layerMask)
+				};
+				boundMinimum.x =
+					std::min(boundMinimum.x, position.x);
+				boundMinimum.y =
+					std::min(boundMinimum.y, position.y);
+				boundMinimum.z =
+					std::min(boundMinimum.z, position.z);
+				boundMaximum.x =
+					std::max(boundMaximum.x, position.x);
+				boundMaximum.y =
+					std::max(boundMaximum.y, position.y);
+				boundMaximum.z =
+					std::max(boundMaximum.z, position.z);
+			}
+			return true;
+		}
+
 		void ExtendDirectColorContract(A8ShapeColorContract& contract,
 			bool& initialized, const NiColorA& source)
 		{
@@ -962,11 +1020,11 @@ namespace fonthook::vectorfont
 		}
 
 		bool BuildDirectVertexBound(
-			const std::vector<NativeA8GpuVertex>& vertices,
+			size_t vertexCount,
 			const NiPoint3& minimum, const NiPoint3& maximum,
 			NiBound& bound)
 		{
-			if (vertices.empty()
+			if (!vertexCount
 				|| !std::isfinite(minimum.x)
 				|| !std::isfinite(minimum.y)
 				|| !std::isfinite(minimum.z)
@@ -980,15 +1038,11 @@ namespace fonthook::vectorfont
 				(minimum.x + maximum.x) * 0.5f,
 				(minimum.y + maximum.y) * 0.5f,
 				(minimum.z + maximum.z) * 0.5f);
-			float radiusSquared = 0.0f;
-			for (const NativeA8GpuVertex& vertex : vertices)
-			{
-				const float dx = vertex.x - bound.m_kCenter.x;
-				const float dy = vertex.y - bound.m_kCenter.y;
-				const float dz = vertex.z - bound.m_kCenter.z;
-				radiusSquared = std::max(radiusSquared,
-					dx * dx + dy * dy + dz * dz);
-			}
+			const float dx = (maximum.x - minimum.x) * 0.5f;
+			const float dy = (maximum.y - minimum.y) * 0.5f;
+			const float dz = (maximum.z - minimum.z) * 0.5f;
+			const float radiusSquared =
+				dx * dx + dy * dy + dz * dz;
 			bound.m_fRadius = std::sqrt(radiusSquared);
 			return std::isfinite(bound.m_fRadius);
 		}
@@ -1063,7 +1117,7 @@ namespace fonthook::vectorfont
 			}
 			NiBound bound;
 			if (!BuildDirectVertexBound(
-				vertices, boundMinimum, boundMaximum, bound))
+				vertices.size(), boundMinimum, boundMaximum, bound))
 			{
 				return nullptr;
 			}
@@ -1127,14 +1181,473 @@ namespace fonthook::vectorfont
 			return shape;
 		}
 
+		NiColorA UnpackNativeBaseColor(UInt32 color)
+		{
+			constexpr float inverse = 1.0f / 255.0f;
+			return {
+				static_cast<float>((color >> 16) & 0xFFu) * inverse,
+				static_cast<float>((color >> 8) & 0xFFu) * inverse,
+				static_cast<float>(color & 0xFFu) * inverse,
+				static_cast<float>((color >> 24) & 0xFFu) * inverse
+			};
+		}
+
+		const NiPoint3& GetDirectGlyphPen(
+			const AtlasGlyphInstance& glyph)
+		{
+			return glyph.pen;
+		}
+
+		const NiPoint3& GetDirectGlyphPen(
+			const DirectGlyphCommand& glyph)
+		{
+			return glyph.pen;
+		}
+
+		NiColorA GetDirectGlyphSourceColor(
+			const AtlasGlyphInstance& glyph)
+		{
+			return glyph.color;
+		}
+
+		NiColorA GetDirectGlyphSourceColor(
+			const DirectGlyphCommand& glyph)
+		{
+			return UnpackNativeBaseColor(glyph.packedColor);
+		}
+
+		VectorFontByteClass GetDirectGlyphByteClass(
+			const AtlasGlyphInstance& glyph)
+		{
+			return glyph.glyph.byteClass;
+		}
+
+		VectorFontByteClass GetDirectGlyphByteClass(
+			const DirectGlyphCommand& glyph)
+		{
+			return static_cast<VectorFontByteClass>(glyph.byteClass);
+		}
+
+		float GetDirectGlyphBaselineOffset(RuntimeFont& runtime,
+			const DirectAtlasGlyphBatch&,
+			const AtlasGlyphInstance& glyph)
+		{
+			return GetGlyphBaselineOffset(runtime, glyph.glyph);
+		}
+
+		float GetDirectGlyphBaselineOffset(RuntimeFont&,
+			const DirectAtlasGlyphBatch& batch,
+			const DirectGlyphCommand& glyph)
+		{
+			if (!batch.sealed)
+				return 0.0f;
+			const size_t roleIndex = glyph.byteClass;
+			if (roleIndex >= batch.sealed->tables.size()
+				|| !batch.sealed->tables[roleIndex])
+			{
+				return 0.0f;
+			}
+			const DirectAtlasGlyphTable& table =
+				*batch.sealed->tables[roleIndex];
+			if (glyph.directSlot >= table.faceIndices.size())
+				return batch.sealed->roleBaselineOffsets[roleIndex];
+			const UInt8 faceIndex =
+				table.faceIndices[glyph.directSlot];
+			const auto& offsets =
+				batch.sealed->faceBaselineOffsets[roleIndex];
+			return faceIndex < offsets.size()
+				? offsets[faceIndex]
+				: batch.sealed->roleBaselineOffsets[roleIndex];
+		}
+
+	DirectAtlasShapeBuildResult TryCreateSealedCpuEffectShape(
+		Font& font, RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
+		const std::vector<DirectGlyphCommand>& glyphs, float rasterScale,
+		bool prepareObject, const NiColorA& tileColor,
+		bool suppressEffects)
+	{
+		DirectAtlasShapeBuildResult result;
+		if (!sealed)
+		{
+			result.outcome = DirectAtlasShapeOutcome::Failed;
+			return result;
+		}
+		if (glyphs.empty())
+		{
+			result.outcome = DirectAtlasShapeOutcome::Empty;
+			return result;
+		}
+		const std::shared_ptr<const SealedDirectFontProfile> published =
+			AcquireSealedDirectFontProfile(runtime, rasterScale);
+		if (published.get() != sealed.get()
+			|| sealed->recordKind
+				!= DirectCachedLetterKind::EffectLayers
+			|| sealed->renderMode != AtlasRenderMode::CpuEffects
+			|| sealed->pixelMode != AtlasPixelMode::A8
+			|| sealed->padding != kDistanceFieldAtlasPadding
+			|| sealed->atlases.empty()
+			|| sealed->atlases.size() > kMaximumAtlasSnapshotPages)
+		{
+			result.outcome = DirectAtlasShapeOutcome::Failed;
+			return result;
+		}
+
+		const FontConfig& config = GetRuntimeConfig(runtime);
+		const std::array<GlyphMaskType, 4> masks = {{
+			GlyphMaskType::Shadow,
+			GlyphMaskType::Glow,
+			GlyphMaskType::Outline,
+			GlyphMaskType::Fill
+		}};
+		const std::array<bool, 4> enabled = {{
+			!suppressEffects && config.shadow.enabled,
+			!suppressEffects && config.glow.enabled,
+			!suppressEffects && config.outline.enabled,
+			true
+		}};
+		const std::array<float, 4> offsetsX = {{
+			config.shadow.x, 0.0f, 0.0f, 0.0f
+		}};
+		const std::array<float, 4> offsetsY = {{
+			config.shadow.y, 0.0f, 0.0f, 0.0f
+		}};
+		const std::array<NiColorA, 4> layerColors = {{
+			ResolveEffectLayerColor(config.shadow, config.fontColor),
+			ResolveEffectLayerColor(config.glow, config.fontColor),
+			ResolveEffectLayerColor(config.outline, config.fontColor),
+			ResolveFillLayerColor(config.fontColor)
+		}};
+		const std::array<bool, 4> usesLiveTileRgb = {{
+			EffectUsesLiveTileRgb(config.shadow),
+			EffectUsesLiveTileRgb(config.glow),
+			EffectUsesLiveTileRgb(config.outline),
+			true
+		}};
+		for (size_t layer = 0; layer < enabled.size(); ++layer)
+		{
+			const UInt8 maskBit = static_cast<UInt8>(
+				1u << static_cast<UInt8>(masks[layer]));
+			if (enabled[layer]
+				&& !(sealed->effectLayerMask & maskBit))
+			{
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+		}
+
+		auto resolve = [&](const DirectGlyphCommand& command,
+			size_t layer, const AtlasSnapshotPlacement*& placement,
+			UInt16& pageOrdinal, float& baselineOffset,
+			bool& knownEmpty)
+		{
+			placement = nullptr;
+			pageOrdinal = kInvalidDirectAtlasPageSlot;
+			baselineOffset = 0.0f;
+			knownEmpty = false;
+			const size_t roleIndex = command.byteClass;
+			if (roleIndex >= sealed->tables.size()
+				|| !sealed->tables[roleIndex]
+				|| !command.byteLength)
+			{
+				return false;
+			}
+			const DirectAtlasGlyphTable& table =
+				*sealed->tables[roleIndex];
+			if (table.recordKind
+					!= DirectCachedLetterKind::EffectLayers
+				|| command.directSlot >= table.glyphs.size()
+				|| command.directSlot >= table.faceIndices.size())
+			{
+				return false;
+			}
+			const DirectCachedLetter& letter =
+				table.glyphs[command.directSlot];
+			if ((letter.flags & ~kDirectCachedLetterKnownFlags)
+				|| !(letter.flags & kDirectCachedLetterValid)
+				|| letter.encodedCode != command.encodedCode
+				|| letter.byteClass != command.byteClass)
+			{
+				return false;
+			}
+			if (letter.flags & kDirectCachedLetterKnownEmpty)
+			{
+				knownEmpty = true;
+				return true;
+			}
+			const UInt8 maskType =
+				static_cast<UInt8>(masks[layer]);
+			const DirectAtlasGlyphLayer* direct = nullptr;
+			for (const DirectAtlasGlyphLayer& candidate :
+				letter.layers)
+			{
+				if (candidate.valid()
+					&& candidate.maskType == maskType)
+				{
+					direct = &candidate;
+					break;
+				}
+			}
+			if (!direct || direct->reserved
+				|| direct->pageSlot >= kMaximumAtlasSnapshotPages)
+			{
+				return false;
+			}
+			pageOrdinal =
+				sealed->pageOrdinals[roleIndex][direct->pageSlot];
+			if (pageOrdinal >= sealed->atlases.size()
+				|| pageOrdinal >= kMaximumAtlasSnapshotPages)
+			{
+				return false;
+			}
+			const std::shared_ptr<AtlasResource>& atlas =
+				sealed->atlases[pageOrdinal];
+			if (!atlas || !atlas->compactSnapshot
+				|| !atlas->pageContentHash
+				|| atlas->compactSnapshot->sourceHeader.pageContentHash
+					!= atlas->pageContentHash
+				|| direct->snapshotPlacementIndex
+					>= atlas->compactSnapshot->placements.size())
+			{
+				return false;
+			}
+			const AtlasSnapshotPlacement& source =
+				atlas->compactSnapshot->placements[
+					direct->snapshotPlacementIndex];
+			if (!source.cacheId || source.maskType != maskType
+				|| !source.rect.width || !source.rect.height)
+			{
+				return false;
+			}
+			placement = &source;
+			const UInt8 faceIndex =
+				table.faceIndices[command.directSlot];
+			const auto& baselines =
+				sealed->faceBaselineOffsets[roleIndex];
+			baselineOffset = faceIndex < baselines.size()
+				? baselines[faceIndex]
+				: sealed->roleBaselineOffsets[roleIndex];
+			return true;
+		};
+
+		std::array<std::array<UInt32,
+			kMaximumAtlasSnapshotPages>, 4> counts = {};
+		NiPoint3 origin;
+		bool originInitialized = false;
+		for (const DirectGlyphCommand& command : glyphs)
+		{
+			for (size_t layer = 0; layer < enabled.size(); ++layer)
+			{
+				if (!enabled[layer])
+					continue;
+				const AtlasSnapshotPlacement* placement = nullptr;
+				UInt16 page = kInvalidDirectAtlasPageSlot;
+				float baselineOffset = 0.0f;
+				bool knownEmpty = false;
+				if (!resolve(command, layer, placement, page,
+					baselineOffset, knownEmpty))
+				{
+					result.outcome =
+						DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+				if (knownEmpty)
+					continue;
+				if (!placement || page >= sealed->atlases.size())
+				{
+					result.outcome =
+						DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+				++counts[layer][page];
+				if (layer
+					== static_cast<size_t>(AtlasLayer::Fill))
+				{
+					++result.glyphCount;
+					if (!originInitialized)
+					{
+						origin = command.pen;
+						originInitialized = true;
+					}
+				}
+			}
+		}
+		if (!result.glyphCount)
+		{
+			result.outcome = DirectAtlasShapeOutcome::Empty;
+			return result;
+		}
+
+		std::array<std::array<UInt32,
+			kMaximumAtlasSnapshotPages>, 4> offsets = {};
+		std::array<std::array<UInt32,
+			kMaximumAtlasSnapshotPages>, 4> cursors = {};
+		UInt32 quadCount = 0;
+		for (size_t layer = 0; layer < counts.size(); ++layer)
+		{
+			for (size_t page = 0;
+				page < sealed->atlases.size(); ++page)
+			{
+				offsets[layer][page] = quadCount;
+				cursors[layer][page] = quadCount;
+				if (counts[layer][page]
+					> kMaximumQuads - quadCount)
+				{
+					result.outcome =
+						DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+				quadCount += counts[layer][page];
+			}
+		}
+		if (!quadCount || quadCount > kMaximumQuads)
+		{
+			result.outcome = DirectAtlasShapeOutcome::Failed;
+			return result;
+		}
+
+		std::vector<NativeA8GpuVertex> vertices(
+			static_cast<size_t>(quadCount) * 4u);
+		NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
+			std::numeric_limits<float>::max(),
+			std::numeric_limits<float>::max());
+		NiPoint3 boundMaximum(std::numeric_limits<float>::lowest(),
+			std::numeric_limits<float>::lowest(),
+			std::numeric_limits<float>::lowest());
+		A8ShapeColorContract colorContract;
+		bool colorContractInitialized = false;
+		NiColorA facadeColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+		for (size_t layer = 0; layer < enabled.size(); ++layer)
+		{
+			if (!enabled[layer])
+				continue;
+			const NiColorA layerColor =
+				SanitizeColor(layerColors[layer]);
+			for (const DirectGlyphCommand& command : glyphs)
+			{
+				const AtlasSnapshotPlacement* placement = nullptr;
+				UInt16 page = kInvalidDirectAtlasPageSlot;
+				float baselineOffset = 0.0f;
+				bool knownEmpty = false;
+				if (!resolve(command, layer, placement, page,
+					baselineOffset, knownEmpty))
+				{
+					result.outcome =
+						DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+				if (knownEmpty)
+					continue;
+				if (!placement || page >= sealed->atlases.size())
+				{
+					result.outcome =
+						DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+				const UInt32 quadIndex = cursors[layer][page]++;
+				if (quadIndex >= quadCount)
+				{
+					result.outcome =
+						DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+				const NiColorA baseColor = ResolveBaseColor(
+					UnpackNativeBaseColor(command.packedColor),
+					tileColor);
+				const NiColorA bakedColor = usesLiveTileRgb[layer]
+					? NiColorA{
+						baseColor.r * layerColor.r,
+						baseColor.g * layerColor.g,
+						baseColor.b * layerColor.b,
+						baseColor.a * layerColor.a }
+					: NiColorA{
+						layerColor.r, layerColor.g, layerColor.b,
+						baseColor.a * layerColor.a };
+				if (quadIndex == 0)
+					facadeColor = bakedColor;
+				ExtendDirectColorContract(colorContract,
+					colorContractInitialized, bakedColor);
+				if (!WriteDirectQuadVertices(*placement,
+					command.pen, origin, offsetsX[layer],
+					offsetsY[layer], rasterScale, baselineOffset,
+					1.0f, false,
+					PackNativeBaseColor(bakedColor),
+					static_cast<UInt8>(
+						usesLiveTileRgb[layer] ? 1u : 0u),
+					&vertices[quadIndex * 4u],
+					boundMinimum, boundMaximum))
+				{
+					result.outcome =
+						DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+			}
+		}
+		if (!colorContractInitialized)
+		{
+			result.outcome = DirectAtlasShapeOutcome::Failed;
+			return result;
+		}
+
+		A8EffectShapeConfig effects;
+		effects.enabled = true;
+		effects.bakedCoverage = true;
+		effects.quality = config.effectQuality;
+		for (size_t layer = 0; layer < counts.size(); ++layer)
+		{
+			if (!enabled[layer])
+				continue;
+			for (UInt16 page = 0;
+				page < sealed->atlases.size(); ++page)
+			{
+				const UInt32 count = counts[layer][page];
+				if (!count)
+					continue;
+				A8DrawRange range;
+				range.firstVertex = offsets[layer][page] * 4u;
+				range.vertexCount = count * 4u;
+				range.startIndex = offsets[layer][page] * 6u;
+				range.primitiveCount = count * 2u;
+				range.layer = static_cast<UInt32>(layer);
+				range.atlasPage = page;
+				range.usesSdf = false;
+				range.usesLiveTileRgb =
+					usesLiveTileRgb[layer];
+				range.layerColorModifier =
+					{ 1.0f, 1.0f, 1.0f, 1.0f };
+				effects.ranges.push_back(range);
+			}
+		}
+		result.geometryQuadCount = quadCount;
+		result.drawQuadCount = quadCount;
+		result.pageCount =
+			static_cast<UInt32>(sealed->atlases.size());
+		if (!sealed->atlases.empty() && sealed->atlases[0])
+		{
+			result.firstAtlasWidth = sealed->atlases[0]->width;
+			result.firstAtlasHeight = sealed->atlases[0]->height;
+		}
+		result.shape = CreateDirectNativeShape(font,
+			sealed->atlases, std::move(vertices),
+			result.glyphCount, quadCount, effects,
+			colorContract, facadeColor, tileColor, origin,
+			boundMinimum, boundMaximum, prepareObject);
+		result.outcome = result.shape
+			? DirectAtlasShapeOutcome::Created
+			: DirectAtlasShapeOutcome::Failed;
+		return result;
+	}
+
+		template <class GlyphInstance>
 		NiTriShape* CreateDirectSinglePageArgbShape(Font& font,
 			RuntimeFont& runtime,
-			const std::vector<AtlasGlyphInstance>& glyphs,
+			const std::vector<GlyphInstance>& glyphs,
 			const DirectAtlasGlyphBatch& batch, float rasterScale,
 			const NiColorA& tileColor, bool prepareObject,
 			UInt32 drawableGlyphs)
 		{
-			if (!drawableGlyphs || batch.atlases.size() != 1
+			const auto& atlases = batch.Atlases();
+			if (!drawableGlyphs || atlases.size() != 1
 				|| batch.glyphs.size() != glyphs.size())
 			{
 				return nullptr;
@@ -1142,7 +1655,7 @@ namespace fonthook::vectorfont
 			NiTriShape* shape = font.MakeTriShape(
 				static_cast<int>(drawableGlyphs), &tileColor, false);
 			if (!shape || !shape->GetModelData()
-				|| !BindDirectAtlasShape(shape, batch.atlases[0]))
+				|| !BindDirectAtlasShape(shape, atlases[0]))
 			{
 				return nullptr;
 			}
@@ -1166,7 +1679,8 @@ namespace fonthook::vectorfont
 			}
 			if (firstDrawable >= glyphs.size())
 				return nullptr;
-			const NiPoint3 origin = glyphs[firstDrawable].pen;
+			const NiPoint3 origin =
+				GetDirectGlyphPen(glyphs[firstDrawable]);
 			NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
 				std::numeric_limits<float>::max(),
 				std::numeric_limits<float>::max());
@@ -1183,18 +1697,39 @@ namespace fonthook::vectorfont
 					batch.glyphs[glyphIndex];
 				if (source.knownEmpty)
 					continue;
-				if (!source.placement || source.atlasPage != 0)
+				if ((!source.placement && !source.stockLetter)
+					|| source.atlasPage != 0)
 					return nullptr;
-				const AtlasGlyphInstance& instance = glyphs[glyphIndex];
+				const GlyphInstance& instance = glyphs[glyphIndex];
 				const NiColorA baseColor =
-					ResolveBaseColor(instance.color, tileColor);
+					ResolveBaseColor(
+						GetDirectGlyphSourceColor(instance),
+						tileColor);
+				const NiPoint3& pen =
+					GetDirectGlyphPen(instance);
+				const float baselineOffset =
+					GetDirectGlyphBaselineOffset(
+						runtime, batch, instance);
 				std::array<NativeA8GpuVertex, 4> vertices;
-				if (!WriteDirectQuadVertices(*source.placement, instance,
-					origin, 0.0f, 0.0f, rasterScale,
-					GetGlyphBaselineOffset(runtime, instance.glyph),
-					1.0f, false, PackNativeBaseColor(baseColor),
-					1u << static_cast<UInt8>(AtlasLayer::Fill),
-					vertices.data(), boundMinimum, boundMaximum))
+				const bool written = source.stockLetter
+					? WriteStockDirectQuadVertices(
+						*source.stockLetter, pen, origin,
+						baselineOffset,
+						PackNativeBaseColor(baseColor),
+						1u << static_cast<UInt8>(
+							AtlasLayer::Fill),
+						vertices.data(), boundMinimum,
+						boundMaximum)
+					: WriteDirectQuadVertices(*source.placement,
+						pen, origin, 0.0f, 0.0f,
+						rasterScale, baselineOffset,
+						1.0f, false,
+						PackNativeBaseColor(baseColor),
+						1u << static_cast<UInt8>(
+							AtlasLayer::Fill),
+						vertices.data(), boundMinimum,
+						boundMaximum);
+				if (!written)
 				{
 					return nullptr;
 				}
@@ -1219,16 +1754,33 @@ namespace fonthook::vectorfont
 			}
 			if (outputQuad != drawableGlyphs)
 				return nullptr;
-			ThisStdCall(0xA7EE30, &data->m_kBound,
-				data->m_usVertices, data->m_pkVertex);
+			NiBound bound;
+			if (!BuildDirectVertexBound(
+				static_cast<size_t>(outputQuad) * 4u,
+				boundMinimum, boundMaximum, bound))
+			{
+				return nullptr;
+			}
+			data->m_kBound = bound;
+			data->m_kBound.m_kCenter.x += origin.x;
+			data->m_kBound.m_kCenter.y += origin.y;
+			data->m_kBound.m_kCenter.z += origin.z;
 			if (prepareObject)
 				shape->PrepareObject();
+			data->m_kBound = bound;
+			data->m_kBound.m_kCenter.x += origin.x;
+			data->m_kBound.m_kCenter.y += origin.y;
+			data->m_kBound.m_kCenter.z += origin.z;
+			if (prepareObject && shape->m_pWorldBound)
+				shape->UpdateWorldBound();
 			return shape;
 		}
 
-		DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
+		template <class GlyphInstance>
+		DirectAtlasShapeBuildResult CreateDirectCachedLetterShapeFromBatch(
 			Font& font, RuntimeFont& runtime,
-			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+			const std::vector<GlyphInstance>& glyphs,
+			const DirectAtlasGlyphBatch& batch, float rasterScale,
 			bool prepareObject, const NiColorA& tileColor,
 			bool suppressEffects, GlyphMaskType maskType,
 			EffectQuality quality)
@@ -1241,33 +1793,13 @@ namespace fonthook::vectorfont
 			if (!precomposed && !distanceField)
 				return result;
 
-			thread_local DirectAtlasGlyphBatch batch;
-			batch.Clear();
-			struct BatchReset
-			{
-				DirectAtlasGlyphBatch& batch;
-				~BatchReset() { batch.Clear(); }
-			} reset{ batch };
-			const AtlasPixelMode pixelMode = precomposed
-				? AtlasPixelMode::Argb32
-				: GetConfiguredDistanceFieldAtlasPixelMode();
-			const AtlasRenderMode renderMode = precomposed
-				? AtlasRenderMode::CpuEffects
-				: AtlasRenderMode::ShaderEffects;
-			const UInt32 padding = precomposed
-				? kArgbAtlasPadding : kDistanceFieldAtlasPadding;
-			if (!GetDirectAtlasGlyphBatch(runtime, glyphs, maskType,
-				rasterScale, pixelMode, renderMode, padding, batch))
-			{
-				return result;
-			}
-
+			const auto& atlases = batch.Atlases();
 			result.pageCount =
-				static_cast<UInt32>(batch.atlases.size());
-			if (!batch.atlases.empty() && batch.atlases[0])
+				static_cast<UInt32>(atlases.size());
+			if (!atlases.empty() && atlases[0])
 			{
-				result.firstAtlasWidth = batch.atlases[0]->width;
-				result.firstAtlasHeight = batch.atlases[0]->height;
+				result.firstAtlasWidth = atlases[0]->width;
+				result.firstAtlasHeight = atlases[0]->height;
 			}
 			size_t firstDrawable = 0;
 			while (firstDrawable < batch.glyphs.size()
@@ -1280,7 +1812,7 @@ namespace fonthook::vectorfont
 				result.outcome = DirectAtlasShapeOutcome::Empty;
 				return result;
 			}
-			if (batch.atlases.empty()
+			if (atlases.empty()
 				|| batch.glyphs.size() != glyphs.size())
 			{
 				result.outcome = DirectAtlasShapeOutcome::Failed;
@@ -1290,7 +1822,8 @@ namespace fonthook::vectorfont
 				batch.glyphs.begin(), batch.glyphs.end(),
 				[](const DirectAtlasBatchGlyph& glyph)
 				{
-					return !glyph.knownEmpty && glyph.placement;
+					return !glyph.knownEmpty
+						&& (glyph.placement || glyph.stockLetter);
 				}));
 			if (!result.glyphCount || result.glyphCount > kMaximumQuads)
 			{
@@ -1298,7 +1831,7 @@ namespace fonthook::vectorfont
 				return result;
 			}
 
-			if (precomposed && batch.atlases.size() == 1)
+			if (precomposed && atlases.size() == 1)
 			{
 				result.geometryQuadCount = result.glyphCount;
 				result.drawQuadCount = result.glyphCount;
@@ -1346,10 +1879,11 @@ namespace fonthook::vectorfont
 				if (drawShadow && !shadowHasOffset)
 					bodyLayerMask |=
 						1u << static_cast<UInt8>(AtlasLayer::Shadow);
-				for (const AtlasGlyphInstance& instance : glyphs)
+				for (const GlyphInstance& instance : glyphs)
 				{
 					const size_t roleIndex =
-						static_cast<size_t>(instance.glyph.byteClass);
+						static_cast<size_t>(
+							GetDirectGlyphByteClass(instance));
 					if (roleIndex >= rasterProfiles.size())
 					{
 						result.outcome =
@@ -1359,7 +1893,8 @@ namespace fonthook::vectorfont
 					if (rasterProfileReady[roleIndex])
 						continue;
 					if (!ResolveMtsdfSharedRasterProfile(config,
-						instance.glyph.byteClass, rasterScale, true,
+						GetDirectGlyphByteClass(instance),
+						rasterScale, true,
 						rasterProfiles[roleIndex]))
 					{
 						return result;
@@ -1381,8 +1916,8 @@ namespace fonthook::vectorfont
 			{
 				if (glyph.knownEmpty)
 					continue;
-				if (!glyph.placement
-					|| glyph.atlasPage >= batch.atlases.size()
+				if ((!glyph.placement && !glyph.stockLetter)
+					|| glyph.atlasPage >= atlases.size()
 					|| glyph.atlasPage >= kMaximumAtlasSnapshotPages)
 				{
 					result.outcome = DirectAtlasShapeOutcome::Failed;
@@ -1399,7 +1934,7 @@ namespace fonthook::vectorfont
 			UInt32 physicalQuads = 0;
 			for (size_t kind = 0; kind < counts.size(); ++kind)
 			{
-				for (size_t page = 0; page < batch.atlases.size(); ++page)
+				for (size_t page = 0; page < atlases.size(); ++page)
 				{
 					offsets[kind][page] = physicalQuads;
 					cursors[kind][page] = physicalQuads;
@@ -1415,7 +1950,8 @@ namespace fonthook::vectorfont
 
 			std::vector<NativeA8GpuVertex> vertices(
 				static_cast<size_t>(physicalQuads) * 4u);
-			const NiPoint3 origin = glyphs[firstDrawable].pen;
+			const NiPoint3 origin =
+				GetDirectGlyphPen(glyphs[firstDrawable]);
 			NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
 				std::numeric_limits<float>::max(),
 				std::numeric_limits<float>::max());
@@ -1440,13 +1976,14 @@ namespace fonthook::vectorfont
 					batch.glyphs[glyphIndex];
 				if (source.knownEmpty)
 					continue;
-				const AtlasGlyphInstance& instance = glyphs[glyphIndex];
+				const GlyphInstance& instance = glyphs[glyphIndex];
 				const UInt16 page = source.atlasPage;
 				float sourceToLogicalScale = 1.0f;
 				if (distanceField)
 				{
 					const size_t roleIndex =
-						static_cast<size_t>(instance.glyph.byteClass);
+						static_cast<size_t>(
+							GetDirectGlyphByteClass(instance));
 					if (roleIndex >= rasterProfiles.size()
 						|| !rasterProfileReady[roleIndex])
 					{
@@ -1472,11 +2009,16 @@ namespace fonthook::vectorfont
 					pageSdfSpreads[page] = source.placement->sdfSpread;
 				}
 				const NiColorA baseColor =
-					ResolveBaseColor(instance.color, tileColor);
+					ResolveBaseColor(
+						GetDirectGlyphSourceColor(instance),
+						tileColor);
 				ExtendDirectColorContract(
 					colorContract, colorContractInitialized, baseColor);
 				const float baselineOffset =
-					GetGlyphBaselineOffset(runtime, instance.glyph);
+					GetDirectGlyphBaselineOffset(
+						runtime, batch, instance);
+				const NiPoint3& pen =
+					GetDirectGlyphPen(instance);
 				auto writeQuad = [&](size_t kind, float offsetX,
 					float offsetY, UInt8 layerMask)
 				{
@@ -1488,10 +2030,27 @@ namespace fonthook::vectorfont
 						facadeColor = baseColor;
 						facadeColorInitialized = true;
 					}
-					return WriteDirectQuadVertices(*source.placement,
-						instance, origin, offsetX, offsetY, rasterScale,
+					if (source.stockLetter)
+					{
+						if (distanceField || offsetX != 0.0f
+							|| offsetY != 0.0f)
+						{
+							return false;
+						}
+						return WriteStockDirectQuadVertices(
+							*source.stockLetter, pen, origin,
+							baselineOffset,
+							PackNativeBaseColor(baseColor),
+							layerMask,
+							&vertices[quadIndex * 4u],
+							boundMinimum, boundMaximum);
+					}
+					return WriteDirectQuadVertices(
+						*source.placement, pen, origin,
+						offsetX, offsetY, rasterScale,
 						baselineOffset, sourceToLogicalScale,
-						distanceField, PackNativeBaseColor(baseColor),
+						distanceField,
+						PackNativeBaseColor(baseColor),
 						layerMask, &vertices[quadIndex * 4u],
 						boundMinimum, boundMaximum);
 				};
@@ -1522,7 +2081,7 @@ namespace fonthook::vectorfont
 				if (!enabled)
 					return;
 				for (UInt16 page = 0;
-					page < batch.atlases.size(); ++page)
+					page < atlases.size(); ++page)
 				{
 					const UInt32 quadCount = counts[kind][page];
 					if (!quadCount)
@@ -1578,13 +2137,140 @@ namespace fonthook::vectorfont
 				result.outcome = DirectAtlasShapeOutcome::Failed;
 				return result;
 			}
-			result.shape = CreateDirectNativeShape(font, batch.atlases,
+			result.shape = CreateDirectNativeShape(font, atlases,
 				std::move(vertices), result.glyphCount, physicalQuads,
 				effects, colorContract, facadeColor, tileColor, origin,
 				boundMinimum, boundMaximum, prepareObject);
 			result.outcome = result.shape
 				? DirectAtlasShapeOutcome::Created
 				: DirectAtlasShapeOutcome::Failed;
+			return result;
+		}
+
+		DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
+			Font& font, RuntimeFont& runtime,
+			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+			bool prepareObject, const NiColorA& tileColor,
+			bool suppressEffects, GlyphMaskType maskType,
+			EffectQuality quality)
+		{
+			DirectAtlasShapeBuildResult result;
+			const bool precomposed =
+				maskType == GlyphMaskType::Composite;
+			const bool distanceField =
+				maskType == GlyphMaskType::DistanceField;
+			if (!precomposed && !distanceField)
+				return result;
+			const AtlasPixelMode pixelMode = precomposed
+				? AtlasPixelMode::Argb32
+				: GetConfiguredDistanceFieldAtlasPixelMode();
+			const AtlasRenderMode renderMode = precomposed
+				? AtlasRenderMode::CpuEffects
+				: AtlasRenderMode::ShaderEffects;
+			const UInt32 padding = precomposed
+				? kArgbAtlasPadding : kDistanceFieldAtlasPadding;
+			const std::shared_ptr<const SealedDirectFontProfile>
+				sealedBeforeBuild =
+					LoadRuntimeSealedDirectProfile(runtime);
+			const bool sealedBatchExpected = sealedBeforeBuild
+				&& sealedBeforeBuild->validityEpoch
+					== State().directProfileEpoch.load(
+						std::memory_order_acquire)
+				&& sealedBeforeBuild->scaleMilli
+					== static_cast<UInt32>(std::lround(
+						rasterScale * 1000.0f))
+				&& sealedBeforeBuild->pixelMode == pixelMode
+				&& sealedBeforeBuild->renderMode == renderMode
+				&& sealedBeforeBuild->padding == padding;
+
+			thread_local DirectAtlasGlyphBatch batch;
+			batch.Clear();
+			struct BatchReset
+			{
+				DirectAtlasGlyphBatch& batch;
+				~BatchReset() { batch.Clear(); }
+			} reset{ batch };
+			if (!GetDirectAtlasGlyphBatch(runtime, glyphs, maskType,
+				rasterScale, pixelMode, renderMode, padding, batch))
+			{
+				if (sealedBatchExpected)
+				{
+					InvalidateSealedDirectFontProfile(runtime);
+					result.outcome =
+						DirectAtlasShapeOutcome::Failed;
+				}
+				return result;
+			}
+			result = CreateDirectCachedLetterShapeFromBatch(
+				font, runtime, glyphs, batch, rasterScale,
+				prepareObject, tileColor, suppressEffects,
+				maskType, quality);
+			if (sealedBatchExpected
+				&& result.outcome
+					== DirectAtlasShapeOutcome::Unavailable)
+			{
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+			}
+			if (sealedBatchExpected
+				&& result.outcome == DirectAtlasShapeOutcome::Failed)
+			{
+				InvalidateSealedDirectFontProfile(runtime);
+			}
+			return result;
+		}
+
+		DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
+			Font& font, RuntimeFont& runtime,
+			const std::shared_ptr<const SealedDirectFontProfile>& sealed,
+			const std::vector<DirectGlyphCommand>& glyphs,
+			float rasterScale, bool prepareObject,
+			const NiColorA& tileColor, bool suppressEffects,
+			GlyphMaskType maskType, EffectQuality quality)
+		{
+			DirectAtlasShapeBuildResult result;
+			const bool precomposed =
+				maskType == GlyphMaskType::Composite;
+			const bool distanceField =
+				maskType == GlyphMaskType::DistanceField;
+			if (!sealed || (!precomposed && !distanceField))
+			{
+				result.outcome = sealed
+					? DirectAtlasShapeOutcome::Unavailable
+					: DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+			const AtlasPixelMode pixelMode = precomposed
+				? AtlasPixelMode::Argb32
+				: GetConfiguredDistanceFieldAtlasPixelMode();
+			const AtlasRenderMode renderMode = precomposed
+				? AtlasRenderMode::CpuEffects
+				: AtlasRenderMode::ShaderEffects;
+			const UInt32 padding = precomposed
+				? kArgbAtlasPadding : kDistanceFieldAtlasPadding;
+
+			thread_local DirectAtlasGlyphBatch batch;
+			batch.Clear();
+			struct BatchReset
+			{
+				DirectAtlasGlyphBatch& batch;
+				~BatchReset() { batch.Clear(); }
+			} reset{ batch };
+			if (!GetSealedDirectAtlasGlyphBatch(runtime, sealed,
+				glyphs, maskType, rasterScale, pixelMode,
+				renderMode, padding, batch))
+			{
+				InvalidateSealedDirectFontProfile(runtime);
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+			result = CreateDirectCachedLetterShapeFromBatch(
+				font, runtime, glyphs, batch, rasterScale,
+				prepareObject, tileColor, suppressEffects,
+				maskType, quality);
+			if (result.outcome == DirectAtlasShapeOutcome::Unavailable)
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+			if (result.outcome == DirectAtlasShapeOutcome::Failed)
+				InvalidateSealedDirectFontProfile(runtime);
 			return result;
 		}
 

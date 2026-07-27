@@ -2087,17 +2087,6 @@ namespace fonthook::vectorfont
 			static_cast<unsigned long long>(State().usedPersistentCachePaths.size()));
 	}
 
-	bool HasCompleteGlyphManifest(RuntimeFont& runtime)
-	{
-		std::lock_guard<std::recursive_mutex> lock(State().mutex);
-		PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
-		if (!manifest || !manifest->mappedData)
-			return false;
-		const auto* header = reinterpret_cast<const PersistentGlyphManifestHeader*>(
-			manifest->mappedData);
-		return header->completeMode >= kCompleteCodePagePrewarmIdentity;
-	}
-
 	void MarkGlyphManifestComplete(RuntimeFont& runtime)
 	{
 		std::lock_guard<std::recursive_mutex> lock(State().mutex);
@@ -2110,13 +2099,6 @@ namespace fonthook::vectorfont
 		{
 			if (!manifest->validatedRecordIndexReady)
 				BuildValidatedGlyphManifestIndex(*manifest, runtime);
-			if (header->completeMode >= kCompleteCodePagePrewarmIdentity
-				&& EnsureCompleteCodePageMetricTable(runtime))
-			{
-				auto extra = gNumberedExtraLetters.find(runtime.config->fontId);
-				if (extra != gNumberedExtraLetters.end())
-					extra->second.generatedCodePage = runtime.codePageMetrics;
-			}
 			return;
 		}
 		header->completeMode = kCompleteCodePagePrewarmIdentity;
@@ -2124,13 +2106,6 @@ namespace fonthook::vectorfont
 			offsetof(PersistentGlyphManifestHeader, checksum));
 		FlushViewOfFile(header, sizeof(*header));
 		BuildValidatedGlyphManifestIndex(*manifest, runtime);
-		if (header->completeMode >= kCompleteCodePagePrewarmIdentity
-			&& EnsureCompleteCodePageMetricTable(runtime))
-		{
-			auto extra = gNumberedExtraLetters.find(runtime.config->fontId);
-			if (extra != gNumberedExtraLetters.end())
-				extra->second.generatedCodePage = runtime.codePageMetrics;
-		}
 	}
 
 	void BeginCompleteCodePageAtlasOnlyPrewarm()

@@ -231,8 +231,41 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		bool EnsureRuntimeFaceLoaded(RuntimeRole& role,
+			RuntimeFace& runtimeFace)
+		{
+			if (runtimeFace.face && runtimeFace.file)
+				return true;
+			if (!role.style
+				|| runtimeFace.sourceConfigIndex
+					>= role.style->faces.size()
+				|| !InitializeLibrary())
+			{
+				return false;
+			}
+			const float baseline =
+				runtimeFace.resolvedBaselineOffset;
+			const float visualCorrection =
+				runtimeFace.visualCenterCorrection;
+			const UInt16 sourceIndex =
+				runtimeFace.sourceConfigIndex;
+			RuntimeFace loaded;
+			loaded.sourceConfigIndex = sourceIndex;
+			if (!CreateRuntimeFace(
+				role.style->faces[sourceIndex], *role.style, loaded))
+			{
+				return false;
+			}
+			loaded.resolvedBaselineOffset = baseline;
+			loaded.visualCenterCorrection = visualCorrection;
+			runtimeFace = std::move(loaded);
+			return true;
+		}
+
 		bool LoadGlyph(RuntimeRole& role, RuntimeFace& face, FT_UInt glyphIndex)
 		{
+			if (!EnsureRuntimeFaceLoaded(role, face))
+				return false;
 			if (!ConfigureRuntimeFace(face, *role.style, 1.0f, false))
 				return false;
 			if (FT_Load_Glyph(face.face, glyphIndex, kGlyphLoadFlags))
@@ -266,6 +299,8 @@ namespace fonthook::vectorfont
 			for (UInt32 i = 0; i < role.faces.size(); ++i)
 			{
 				RuntimeFace& face = role.faces[i];
+				if (!EnsureRuntimeFaceLoaded(role, face))
+					continue;
 				const FT_UInt glyphIndex = FT_Get_Char_Index(face.face, codePoint);
 				if (!glyphIndex)
 					continue;
@@ -806,6 +841,8 @@ namespace fonthook::vectorfont
 		if (glyph.hasGlyphIdentity && glyph.faceIndex < role.faces.size())
 		{
 			RuntimeFace& face = role.faces[glyph.faceIndex];
+			if (!EnsureRuntimeFaceLoaded(role, face))
+				return false;
 			result = { &role, &face, glyph.faceIndex, glyph.glyphIndex, glyph.codePoint };
 			return true;
 		}
@@ -826,9 +863,15 @@ namespace fonthook::vectorfont
 				RuntimeRole& role = runtime->roles[i];
 				role.style = &config.styles[i];
 				role.resolvedBaselineOffset = role.style->baselineOffset;
-				for (const FaceConfig& faceConfig : role.style->faces)
+				for (size_t sourceFaceIndex = 0;
+					sourceFaceIndex < role.style->faces.size();
+					++sourceFaceIndex)
 				{
+					const FaceConfig& faceConfig =
+						role.style->faces[sourceFaceIndex];
 					RuntimeFace face;
+					face.sourceConfigIndex =
+						static_cast<UInt16>(sourceFaceIndex);
 					if (CreateRuntimeFace(faceConfig, *role.style, face))
 					{
 						face.resolvedBaselineOffset = role.style->baselineOffset;
@@ -873,6 +916,7 @@ namespace fonthook::vectorfont
 			runtime->glyphHeight = std::max(0.0f, runtime->glyphTop - runtime->minBottom);
 			runtime->fontHeight = runtime->baseLine - runtime->minBottom;
 			runtime->initialized = true;
+			ComputeRuntimeLayoutContentHash(*runtime);
 			size_t runtimeBytes = sizeof(RuntimeFont);
 			for (const RuntimeRole& role : runtime->roles)
 			{
@@ -1021,30 +1065,53 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		for (UInt32 value = 0x20; value <= 0xFF; ++value)
+		std::shared_ptr<DirectExtraGlyphTable> directCodePageMetrics;
+		const bool directLayoutReady =
+			TryApplyDirectCachedLayoutMetrics(runtime, font,
+				GetCanonicalFreeTypeRasterScale(),
+				directCodePageMetrics);
+		if (directLayoutReady && directCodePageMetrics)
 		{
-			if (value == 0x7F)
-				continue;
-			if (LoadGlyphManifest(runtime, value,
-				VectorFontByteClass::SingleByte, nullptr,
-				&font.pFontData->pFontLetters[value]))
-				continue;
-			char byte = static_cast<char>(value);
-			UInt32 codePoint = 0xFFFD;
-			DecodeCodePoint(&byte, 1, codePoint);
-			FontLetter metrics = BuildFontLetter(
-				runtime.roles[0], *runtime.config,
-				VectorFontByteClass::SingleByte, codePoint);
-			font.pFontData->pFontLetters[value] = metrics;
-			ResolvedGlyph resolved;
-			if (ResolveGlyph(runtime.roles[0], codePoint, resolved))
+			size_t runtimeBytes = runtime.cpuMemory.GetBytes();
+			if (runtime.codePageMetrics)
 			{
-				VectorEncodedGlyph glyph;
-				glyph.encodedCode = value;
-				glyph.byteClass = VectorFontByteClass::SingleByte;
-				glyph.byteLength = 1;
-				glyph.codePoint = codePoint;
-				StoreGlyphManifest(runtime, glyph, resolved, metrics);
+				const size_t previous =
+					runtime.codePageMetrics->GetAllocatedBytes();
+				runtimeBytes -= std::min(runtimeBytes, previous);
+			}
+			runtimeBytes += directCodePageMetrics->GetAllocatedBytes();
+			runtime.codePageMetrics =
+				std::move(directCodePageMetrics);
+			runtime.cpuMemory.Reset(
+				CpuMemoryCategory::RuntimeMetadata, runtimeBytes);
+		}
+		if (!directLayoutReady)
+		{
+			for (UInt32 value = 0x20; value <= 0xFF; ++value)
+			{
+				if (value == 0x7F)
+					continue;
+				if (LoadGlyphManifest(runtime, value,
+					VectorFontByteClass::SingleByte, nullptr,
+					&font.pFontData->pFontLetters[value]))
+					continue;
+				char byte = static_cast<char>(value);
+				UInt32 codePoint = 0xFFFD;
+				DecodeCodePoint(&byte, 1, codePoint);
+				FontLetter metrics = BuildFontLetter(
+					runtime.roles[0], *runtime.config,
+					VectorFontByteClass::SingleByte, codePoint);
+				font.pFontData->pFontLetters[value] = metrics;
+				ResolvedGlyph resolved;
+				if (ResolveGlyph(runtime.roles[0], codePoint, resolved))
+				{
+					VectorEncodedGlyph glyph;
+					glyph.encodedCode = value;
+					glyph.byteClass = VectorFontByteClass::SingleByte;
+					glyph.byteLength = 1;
+					glyph.codePoint = codePoint;
+					StoreGlyphManifest(runtime, glyph, resolved, metrics);
+				}
 			}
 		}
 
@@ -1079,9 +1146,12 @@ namespace fonthook::vectorfont
 		font.fFontHeight = resolvedFontHeight;
 		font.iLineOverlap = 0;
 		FontLetter& space = font.pFontData->pFontLetters[' '];
-		const float serializedSpaceWidth = space.fWidth;
-		space.fWidth = space.fSpacing;
-		space.fSpacing = serializedSpaceWidth;
+		if (space.fWidth <= 0.0f && space.fSpacing > 0.0f)
+		{
+			const float serializedSpaceWidth = space.fWidth;
+			space.fWidth = space.fSpacing;
+			space.fSpacing = serializedSpaceWidth;
+		}
 		space.fHeight = resolvedSpaceHeight;
 		space.fTopEdge = resolvedSpaceTop;
 		font.pFontData->pFontLetters[160] = space;
@@ -1106,12 +1176,14 @@ namespace fonthook::vectorfont
 		extraStore.serialized.clear();
 		extraStore.generatedCodePage.reset();
 		extraStore.generated.clear();
-		if (EnsureCompleteCodePageMetricTable(runtime))
+		if (runtime.codePageMetrics
+			|| (UsesDbcsTextLayout()
+				&& EnsureCompleteCodePageMetricTable(runtime)))
 		{
 			extraStore.generatedCodePage = runtime.codePageMetrics;
 			ExtraGlyphMap().swap(extraStore.generated);
 		}
-		else
+		else if (UsesDbcsTextLayout())
 		{
 			extraStore.generated.reserve(SerializedExtraGlyphTable::kGlyphCount);
 		}
@@ -1121,6 +1193,36 @@ namespace fonthook::vectorfont
 
 	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& runtime, Font& font, UInt32 encodedCode)
 	{
+		const char encodedBytes[3] = {
+			static_cast<char>((encodedCode >> 8) & 0xFF),
+			static_cast<char>(encodedCode & 0xFF),
+			0
+		};
+		VectorEncodedGlyph directGlyph;
+		switch (DecodeSealedDirectGlyph(runtime, encodedBytes, directGlyph))
+		{
+		case SealedDirectGlyphLookup::Resolved:
+		{
+			// Rich-text layout still consumes the stock FontLetter metric
+			// interface.  Serve it from one TLS view of the immutable direct
+			// record instead of recreating the released DBCS metrics map.
+			thread_local FontLetter directMetrics = {};
+			directMetrics = {};
+			directMetrics.iTextureIndex = -1;
+			directMetrics.fWidth = directGlyph.directWidth;
+			directMetrics.fHeight = directGlyph.directHeight;
+			directMetrics.fLeadingEdge = directGlyph.directLeadingEdge;
+			directMetrics.fSpacing = directGlyph.directSpacing;
+			directMetrics.fTopEdge = directGlyph.directTopEdge;
+			return &directMetrics;
+		}
+		case SealedDirectGlyphLookup::Invalid:
+			// A reset or corrupt direct record rejects this layout request.  It
+			// must not reopen FreeType while sealed GPU publication is revoked.
+			return nullptr;
+		default:
+			break;
+		}
 		if (runtime.codePageMetrics)
 		{
 			if (FontLetter* direct = runtime.codePageMetrics->find(encodedCode))
@@ -1213,6 +1315,15 @@ namespace fonthook::vectorfont
 	bool DecodeEncodedGlyph(RuntimeFont& runtime, Font& font, const char* text,
 		VectorEncodedGlyph& glyph)
 	{
+		switch (DecodeSealedDirectGlyph(runtime, text, glyph))
+		{
+		case SealedDirectGlyphLookup::Resolved:
+			return true;
+		case SealedDirectGlyphLookup::Invalid:
+			return false;
+		default:
+			break;
+		}
 		if (!DecodeEncodedGlyphIdentity(runtime, text, glyph))
 			return false;
 		glyph.metrics = glyph.byteClass == VectorFontByteClass::DoubleByte
@@ -1274,6 +1385,162 @@ namespace fonthook::vectorfont
 		return *runtime.config;
 	}
 
+	UInt64 GetRuntimeDirectLayoutIdentity(const RuntimeFont& runtime)
+	{
+		return runtime.layoutContentHash;
+	}
+
+	size_t GetRuntimeDirectFaceCount(const RuntimeFont& runtime,
+		VectorFontByteClass byteClass)
+	{
+		const size_t roleIndex = static_cast<size_t>(byteClass);
+		return roleIndex < runtime.roles.size()
+			? runtime.roles[roleIndex].faces.size() : 0;
+	}
+
+	void GetRuntimeDirectBaselineOffsets(const RuntimeFont& runtime,
+		VectorFontByteClass byteClass, float& roleBaseline,
+		std::vector<float>& faceBaselines)
+	{
+		const size_t roleIndex = static_cast<size_t>(byteClass);
+		roleBaseline = 0.0f;
+		faceBaselines.clear();
+		if (roleIndex >= runtime.roles.size())
+			return;
+		const RuntimeRole& role = runtime.roles[roleIndex];
+		roleBaseline = role.resolvedBaselineOffset;
+		faceBaselines.reserve(role.faces.size());
+		for (const RuntimeFace& face : role.faces)
+			faceBaselines.push_back(face.resolvedBaselineOffset);
+	}
+
+	std::shared_ptr<const SealedDirectFontProfile>
+		LoadRuntimeSealedDirectProfile(const RuntimeFont& runtime)
+	{
+		return runtime.sealedDirectProfile.load(
+			std::memory_order_acquire);
+	}
+
+	void StoreRuntimeSealedDirectProfile(RuntimeFont& runtime,
+		std::shared_ptr<const SealedDirectFontProfile> profile)
+	{
+		runtime.sealedDirectProfile.store(
+			std::move(profile), std::memory_order_release);
+	}
+
+	void ReleaseSealedRuntimeFreeTypeState(RuntimeFont& runtime)
+	{
+		FreeTypeState& state = State();
+		std::lock_guard<std::recursive_mutex> lock(state.mutex);
+		runtime.manifest.reset();
+		runtime.codePageMetrics.reset();
+		if (runtime.config)
+		{
+			const auto extra =
+				gNumberedExtraLetters.find(runtime.config->fontId);
+			if (extra != gNumberedExtraLetters.end())
+			{
+				extra->second.generated.clear();
+				extra->second.generatedCodePage.reset();
+			}
+		}
+		size_t releasedFaces = 0;
+		for (RuntimeRole& role : runtime.roles)
+		{
+			std::unordered_map<UInt32, CachedGlyphIdentity>().swap(
+				role.glyphIdentities);
+			for (RuntimeFace& face : role.faces)
+			{
+				face.directLayoutMetrics.Clear();
+				face.directLayoutMetricMemory.Release();
+				if (face.face)
+				{
+					FT_Done_Face(face.face);
+					face.face = nullptr;
+					++releasedFaces;
+				}
+				face.file.reset();
+				face.configured = false;
+				face.configuredRaster = false;
+				face.configuredWidth = 0;
+				face.configuredHeight = 0;
+			}
+		}
+		for (auto it = state.mappedFiles.begin();
+			it != state.mappedFiles.end();)
+		{
+			if (it->second.expired())
+				it = state.mappedFiles.erase(it);
+			else
+				++it;
+		}
+		for (auto it = state.persistentGlyphManifests.begin();
+			it != state.persistentGlyphManifests.end();)
+		{
+			if (it->second.expired())
+				it = state.persistentGlyphManifests.erase(it);
+			else
+				++it;
+		}
+		size_t runtimeBytes = sizeof(RuntimeFont);
+		for (const RuntimeRole& role : runtime.roles)
+			runtimeBytes += role.faces.capacity()
+				* sizeof(RuntimeFace);
+		runtime.cpuMemory.Reset(
+			CpuMemoryCategory::RuntimeMetadata, runtimeBytes);
+
+		bool hasLiveFaces = false;
+		for (const auto& entry : state.runtimeFonts)
+		{
+			if (!entry.second)
+				continue;
+			for (const RuntimeRole& role : entry.second->roles)
+			{
+				for (const RuntimeFace& face : role.faces)
+				{
+					if (face.face)
+					{
+						hasLiveFaces = true;
+						break;
+					}
+				}
+				if (hasLiveFaces)
+					break;
+			}
+			if (hasLiveFaces)
+				break;
+		}
+		if (!hasLiveFaces && state.library)
+		{
+			FT_Done_FreeType(state.library);
+			state.library = nullptr;
+			state.singleByteCodePoints.fill(UINT32_MAX);
+			state.doubleByteCodePoints.Clear();
+			state.codePointCacheMemory.Release();
+			state.codePointCacheCodePage = UINT32_MAX;
+		}
+		if (!hasLiveFaces)
+		{
+			ReleaseGlyphBitmapDiskCacheMappings();
+			state.bitmapCache.clear();
+			state.bitmapCache.rehash(0);
+			state.bitmapLru.clear();
+			state.bitmapCacheBytes = 0;
+			state.persistentBitmapProfiles.clear();
+			state.persistentBitmapProfiles.rehash(0);
+			state.mappedFiles.rehash(0);
+			state.persistentGlyphManifests.rehash(0);
+		}
+		if (releasedFaces || g_bEnableFreeTypeFontRenderingLog)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: sealed runtime released font=%u faces=%u manifest=released layoutMaps=released library=%s",
+				runtime.config ? runtime.config->fontId : 0,
+				static_cast<UInt32>(releasedFaces),
+				state.library ? "retained" : "released");
+		}
+	}
+
 	UInt64 GetRuntimeMaskContentHash(RuntimeFont& runtime,
 		VectorFontByteClass byteClass)
 	{
@@ -1285,6 +1552,8 @@ namespace fonthook::vectorfont
 	float GetGlyphBaselineOffset(const RuntimeFont& runtime,
 		const VectorEncodedGlyph& glyph)
 	{
+		if (glyph.hasDirectMetrics)
+			return glyph.directBaselineOffset;
 		const RuntimeRole& role = runtime.roles[static_cast<size_t>(glyph.byteClass)];
 		return glyph.hasGlyphIdentity && glyph.faceIndex < role.faces.size()
 			? role.faces[glyph.faceIndex].resolvedBaselineOffset

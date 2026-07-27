@@ -14,8 +14,10 @@
 #include "NiTriShape.hpp"
 #include "NiTriShapeData.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -30,6 +32,33 @@ namespace fonthook
 		std::unordered_set<UInt64> s_loggedGlyphRoutes;
 		UInt32 s_atlasEmptyLogCount = 0;
 		UInt32 s_atlasFailureLogCount = 0;
+
+		UInt32 PackDirectCommandColor(const NiColorA& color)
+		{
+			auto channel = [](float value)
+			{
+				if (!std::isfinite(value))
+					value = 1.0f;
+				return static_cast<UInt32>(
+					std::clamp(value, 0.0f, 1.0f)
+					* 255.0f + 0.5f);
+			};
+			return (channel(color.a) << 24)
+				| (channel(color.r) << 16)
+				| (channel(color.g) << 8)
+				| channel(color.b);
+		}
+
+		NiColorA UnpackDirectCommandColor(UInt32 color)
+		{
+			constexpr float inverse = 1.0f / 255.0f;
+			return {
+				static_cast<float>((color >> 16) & 0xFFu) * inverse,
+				static_cast<float>((color >> 8) & 0xFFu) * inverse,
+				static_cast<float>(color & 0xFFu) * inverse,
+				static_cast<float>((color >> 24) & 0xFFu) * inverse
+			};
+		}
 
 		const char* GlyphAtlasBuildOutcomeName(
 			vectorfont::GlyphAtlasBuildOutcome outcome)
@@ -158,13 +187,14 @@ namespace fonthook
 			NiNode* parent = nullptr;
 			float rasterScale = 1.0f;
 			std::array<Font*, kDirectFontSlots> fonts = {};
-			std::array<std::unique_ptr<VectorTextBuilder>,
+			std::array<std::optional<VectorTextBuilder>,
 				kDirectFontSlots> builders;
 			std::unordered_map<Font*, std::unique_ptr<VectorTextBuilder>>
 				fallbackBuilders;
 		};
 
-		thread_local std::unique_ptr<RichTextVectorContext> s_richTextContext;
+		thread_local std::optional<RichTextVectorContext>
+			s_richTextContext;
 	}
 
 	struct VectorTextBuilder::Impl
@@ -175,8 +205,12 @@ namespace fonthook
 		bool available = false;
 		bool finished = false;
 		bool suppressEffects = false;
+		bool sealedBatchInvalid = false;
 		float rasterScale = 1.0f;
 		NiColorA tileColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+		std::shared_ptr<const vectorfont::SealedDirectFontProfile>
+			sealedProfile;
+		std::vector<vectorfont::DirectGlyphCommand> directGlyphs;
 		std::vector<vectorfont::AtlasGlyphInstance> glyphs;
 
 		Impl(Font* apFont, bool abPrepareObject, float afRasterScale,
@@ -193,6 +227,9 @@ namespace fonthook
 			runtime = vectorfont::FindActiveRuntime(font);
 			if (!runtime || !InitializeWhiteTexture())
 				return;
+			sealedProfile =
+				vectorfont::AcquireSealedDirectFontProfile(
+					*runtime, rasterScale);
 			available = true;
 		}
 	};
@@ -221,16 +258,27 @@ namespace fonthook
 		return m_impl && m_impl->available;
 	}
 
+	bool VectorTextBuilder::UsesSealedDirectProfile() const
+	{
+		return IsAvailable() && m_impl->sealedProfile != nullptr;
+	}
+
 	void VectorTextBuilder::ReserveGlyphs(size_t auiCount)
 	{
 		if (m_impl && m_impl->available)
-			m_impl->glyphs.reserve(auiCount);
+		{
+			if (m_impl->sealedProfile)
+				m_impl->directGlyphs.reserve(auiCount);
+			else
+				m_impl->glyphs.reserve(auiCount);
+		}
 	}
 
 	bool VectorTextBuilder::AddGlyph(const VectorEncodedGlyph& glyph,
 		const NiPoint3& pen, const NiColorA* color)
 	{
-		if (!IsAvailable() || !glyph.metrics || !glyph.byteLength)
+		if (!IsAvailable() || !HasVectorGlyphMetrics(glyph)
+			|| !glyph.byteLength)
 			return false;
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
@@ -249,8 +297,109 @@ namespace fonthook
 			}
 		}
 		const NiColorA sourceColor = color ? *color : m_impl->tileColor;
-		m_impl->glyphs.push_back({ glyph, pen, sourceColor });
+		if (m_impl->sealedProfile)
+		{
+			if (!glyph.hasDirectMetrics
+				|| glyph.directSlot
+					== std::numeric_limits<UInt16>::max()
+				|| static_cast<size_t>(glyph.byteClass) >= 2)
+			{
+				m_impl->sealedBatchInvalid = true;
+				return false;
+			}
+			vectorfont::DirectGlyphCommand command;
+			command.pen = pen;
+			command.packedColor =
+				PackDirectCommandColor(sourceColor);
+			command.directSlot = glyph.directSlot;
+			command.encodedCode =
+				static_cast<UInt16>(glyph.encodedCode);
+			command.byteClass =
+				static_cast<UInt8>(glyph.byteClass);
+			command.byteLength = glyph.byteLength;
+			m_impl->directGlyphs.push_back(command);
+		}
+		else
+		{
+			m_impl->glyphs.push_back({ glyph, pen, sourceColor });
+		}
 		return true;
+	}
+
+	bool VectorTextBuilder::AddEncodedGlyph(
+		const char* encodedText, const NiPoint3& pen,
+		const NiColorA* color, VectorEncodedGlyph* decodedGlyph)
+	{
+		if (!IsAvailable() || !encodedText || !*encodedText)
+			return false;
+		VectorEncodedGlyph glyph;
+		if (m_impl->sealedProfile)
+		{
+			const vectorfont::SealedDirectGlyphLookup lookup =
+				vectorfont::DecodeSealedDirectGlyph(
+					*m_impl->sealedProfile,
+					encodedText, glyph);
+			if (lookup
+				== vectorfont::SealedDirectGlyphLookup::Unavailable)
+			{
+				vectorfont::InvalidateSealedDirectFontProfile(
+					*m_impl->runtime);
+				m_impl->glyphs.reserve(
+					m_impl->directGlyphs.size() + 1u);
+				for (const vectorfont::DirectGlyphCommand& command :
+					m_impl->directGlyphs)
+				{
+					char replay[3] = {};
+					if (command.byteLength == 2)
+					{
+						replay[0] = static_cast<char>(
+							command.encodedCode >> 8);
+						replay[1] = static_cast<char>(
+							command.encodedCode & 0xFF);
+					}
+					else
+						replay[0] = static_cast<char>(
+							command.encodedCode & 0xFF);
+					VectorEncodedGlyph replayGlyph;
+					if (!DecodeFreeTypeGlyph(
+						m_impl->font, replay, replayGlyph))
+					{
+						m_impl->sealedBatchInvalid = true;
+						m_impl->glyphs.clear();
+						m_impl->sealedProfile.reset();
+						return false;
+					}
+					m_impl->glyphs.push_back({
+						replayGlyph, command.pen,
+						UnpackDirectCommandColor(
+							command.packedColor) });
+				}
+				m_impl->directGlyphs.clear();
+				m_impl->sealedProfile.reset();
+				m_impl->sealedBatchInvalid = false;
+				if (!DecodeFreeTypeGlyph(
+					m_impl->font, encodedText, glyph))
+				{
+					return false;
+				}
+			}
+			else if (lookup
+				!= vectorfont::SealedDirectGlyphLookup::Resolved)
+			{
+				m_impl->sealedBatchInvalid = true;
+				vectorfont::InvalidateSealedDirectFontProfile(
+					*m_impl->runtime);
+				return false;
+			}
+		}
+		else if (!DecodeFreeTypeGlyph(
+			m_impl->font, encodedText, glyph))
+		{
+			return false;
+		}
+		if (decodedGlyph)
+			*decodedGlyph = glyph;
+		return AddGlyph(glyph, pen, color);
 	}
 
 	NiTriShape* VectorTextBuilder::Finish()
@@ -263,18 +412,62 @@ namespace fonthook
 		if (!m_impl->available)
 			return CreateEmptyVectorShape(m_impl->font, m_impl->prepareObject);
 
-		vectorfont::GlyphAtlasBuildDiagnostics atlasDiagnostics;
-		if (NiTriShape* atlasShape = vectorfont::TryCreateGlyphAtlasShape(
-			*m_impl->font, *m_impl->runtime, m_impl->glyphs,
-			m_impl->rasterScale, m_impl->prepareObject, m_impl->tileColor,
-			m_impl->suppressEffects, &atlasDiagnostics))
+		std::optional<vectorfont::GlyphAtlasBuildDiagnostics>
+			atlasDiagnosticsStorage;
+		if (g_bEnableFreeTypeFontRenderingLog)
+			atlasDiagnosticsStorage.emplace();
+		vectorfont::GlyphAtlasBuildDiagnostics* diagnostics =
+			atlasDiagnosticsStorage
+				? &*atlasDiagnosticsStorage : nullptr;
+		NiTriShape* atlasShape = nullptr;
+		if (m_impl->sealedProfile)
+		{
+			if (!m_impl->sealedBatchInvalid)
+			{
+				atlasShape =
+					vectorfont::TryCreateSealedGlyphAtlasShape(
+						*m_impl->font, *m_impl->runtime,
+						m_impl->sealedProfile,
+						m_impl->directGlyphs,
+						m_impl->rasterScale,
+						m_impl->prepareObject,
+						m_impl->tileColor,
+						m_impl->suppressEffects,
+						diagnostics);
+			}
+			else
+			{
+				vectorfont::InvalidateSealedDirectFontProfile(
+					*m_impl->runtime);
+				if (diagnostics)
+				{
+					diagnostics->inputGlyphCount =
+						static_cast<UInt32>(
+							m_impl->directGlyphs.size());
+					diagnostics->outcome =
+						vectorfont::GlyphAtlasBuildOutcome::
+							AtlasOrShapeFailure;
+				}
+			}
+		}
+		else
+		{
+			atlasShape = vectorfont::TryCreateGlyphAtlasShape(
+				*m_impl->font, *m_impl->runtime, m_impl->glyphs,
+				m_impl->rasterScale, m_impl->prepareObject,
+				m_impl->tileColor, m_impl->suppressEffects,
+				diagnostics);
+		}
+		if (atlasShape)
 		{
 			return atlasShape;
 		}
 		NiTriShape* emptyShape = CreateEmptyVectorShape(
 			m_impl->font, m_impl->prepareObject);
-		if (g_bEnableFreeTypeFontRenderingLog)
+		if (g_bEnableFreeTypeFontRenderingLog && diagnostics)
 		{
+			const vectorfont::GlyphAtlasBuildDiagnostics&
+				atlasDiagnostics = *diagnostics;
 			std::lock_guard<std::mutex> lock(s_routeLogMutex);
 			const bool actualFailure = !atlasDiagnostics.expectedEmpty || !emptyShape;
 			UInt32& logCount = actualFailure
@@ -339,7 +532,7 @@ namespace fonthook
 
 	void BeginFreeTypeRichTextRender(NiNode* parent)
 	{
-		s_richTextContext = std::make_unique<RichTextVectorContext>();
+		s_richTextContext.emplace();
 		s_richTextContext->parent = parent;
 		s_richTextContext->rasterScale = GetCanonicalFreeTypeRasterScale();
 	}
@@ -387,27 +580,28 @@ namespace fonthook
 			encoded[1] = static_cast<char>(dbcsCode & 0xFF);
 		}
 
-		VectorEncodedGlyph glyph;
-		if (!DecodeFreeTypeGlyph(font, encoded, glyph))
-			return false;
-
-		std::unique_ptr<VectorTextBuilder>* builder = nullptr;
 		const UInt32 fontId = font->iFontNum;
 		if (fontId < RichTextVectorContext::kDirectFontSlots
 			&& (!s_richTextContext->fonts[fontId]
 				|| s_richTextContext->fonts[fontId] == font))
 		{
 			s_richTextContext->fonts[fontId] = font;
-			builder = &s_richTextContext->builders[fontId];
+			std::optional<VectorTextBuilder>& builder =
+				s_richTextContext->builders[fontId];
+			if (!builder)
+				builder.emplace(font, true,
+					s_richTextContext->rasterScale, color);
+			return builder->IsAvailable()
+				&& builder->AddEncodedGlyph(
+					encoded, pen, color);
 		}
-		else
-		{
-			builder = &s_richTextContext->fallbackBuilders[font];
-		}
-		if (!*builder)
-			*builder = std::make_unique<VectorTextBuilder>(font, true,
+		std::unique_ptr<VectorTextBuilder>& builder =
+			s_richTextContext->fallbackBuilders[font];
+		if (!builder)
+			builder = std::make_unique<VectorTextBuilder>(font, true,
 				s_richTextContext->rasterScale, color);
-		return (*builder)->IsAvailable()
-			&& (*builder)->AddGlyph(glyph, pen, color);
+		return builder->IsAvailable()
+			&& builder->AddEncodedGlyph(
+				encoded, pen, color);
 	}
 }

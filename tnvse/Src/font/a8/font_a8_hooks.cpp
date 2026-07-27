@@ -334,6 +334,8 @@ namespace fonthook::vectorfont
 			bool setupDrawmode, NiTriShape* facade,
 			NativeA8ShapePayload& payload)
 		{
+			FreeTypePerfScope perf(
+				FreeTypePerfPhase::Submit);
 			NativePacketDrawResult draw;
 			NativeRingSubmissionScope ringScope;
 			NativeA8FallbackReason failure = BeginNativeA8RingSubmission(
@@ -448,61 +450,6 @@ namespace fonthook::vectorfont
 					s_pixelConstantBatch.MismatchRegister();
 			}
 			return draw;
-		}
-
-		struct CompositeBakeDrawContext
-		{
-			BSShaderProperty::RenderPass* pass = nullptr;
-			UInt32 currentPass = 0;
-			bool setupDrawmode = false;
-			NiTriShape* facade = nullptr;
-			const A8ShapeMetadata* metadata = nullptr;
-			NativeA8ShapePayload* payload = nullptr;
-			NativeA8ShapePayload fallbackPayload;
-			bool fallbackPrepared = false;
-		};
-
-		bool DrawCompositeBake(void* context, bool fallback)
-		{
-			CompositeBakeDrawContext* bake =
-				static_cast<CompositeBakeDrawContext*>(context);
-			if (!bake || !bake->pass || !bake->facade || !bake->metadata
-				|| !bake->payload || !bake->payload->payloadTemplate)
-				return false;
-
-			NativeA8ShapePayload* drawPayload = bake->payload;
-			if (fallback)
-			{
-				if (!bake->fallbackPrepared)
-				{
-					const NativeA8PayloadTemplate& artifact =
-						*bake->payload->payloadTemplate;
-					bake->fallbackPayload.payloadTemplate =
-						bake->payload->payloadTemplate;
-					bake->fallbackPayload.geometryOrigin =
-						bake->payload->geometryOrigin;
-					bake->fallbackPayload.packetShaders.assign(
-						artifact.packets.size(), nullptr);
-					bake->fallbackPayload.preflightAtlasTextures.assign(
-						artifact.atlasTextures.size(), nullptr);
-					bake->fallbackPayload.compositeAttemptGeneration =
-						GetNativeA8ShaderGeneration();
-					bake->fallbackPayload.compositeUnavailable = true;
-					bake->fallbackPayload.buildComplete = true;
-					if (PrepareNativeA8Group(bake->facade, *bake->metadata,
-						bake->fallbackPayload) != NativeA8FallbackReason::None
-						|| bake->fallbackPayload.useCompositePackets)
-					{
-						return false;
-					}
-					bake->fallbackPrepared = true;
-				}
-				drawPayload = &bake->fallbackPayload;
-			}
-			const NativePacketDrawResult result = DrawNativePacketSet(
-				bake->pass, bake->currentPass, bake->setupDrawmode,
-				bake->facade, *drawPayload);
-			return !result.runtimeFault && result.drewPacket;
 		}
 
 		void LogMissingMetadata(NiTriShape* shape, const char* phase)
@@ -665,9 +612,6 @@ namespace fonthook::vectorfont
 			LogMissingMetadata(shape, "tile-render-pass");
 			return;
 		}
-		const NiAlphaProperty* liveAlpha = shape->GetAlphaProperty();
-		const bool liveAlphaBlending =
-			liveAlpha && liveAlpha->GetAlphaBlending();
 		NativeA8FallbackReason failure = NativeA8FallbackReason::None;
 		if (!payload)
 			failure = NativeA8FallbackReason::PacketBuild;
@@ -681,16 +625,9 @@ namespace fonthook::vectorfont
 		}
 		else if (sortedFrameHit
 			&& frameEntry.preflightResult == NativeA8FallbackReason::None
+			&& frameEntry.validationToken
 			&& frameEntry.generation == payload->preparedGeneration
-			&& frameEntry.generation == GetNativeA8ShaderGeneration()
-			&& payload->preflightAtlasTextureEpoch
-				== GetNativeA8AtlasTextureEpoch()
-			&& payload->preflightScaledFillSampling
-				== NeedsScaledFillSampling(shape)
-			&& payload->preflightAlphaBlending
-				== liveAlphaBlending
-			&& IsNativeA8AccumulatorHookCurrent()
-			&& IsA8TileRenderPassHookCurrent())
+			)
 		{
 			// NativeA8RenderSorted retained the metadata owner and validated this
 			// exact payload immediately before the stock sorted Tile traversal.
@@ -702,50 +639,10 @@ namespace fonthook::vectorfont
 		if (failure == NativeA8FallbackReason::None)
 		{
 			NativeA8ShapePayload* const sourcePayload = payload;
-			NativeA8ShapePayload* drawPayload = sourcePayload;
-			bool cacheHit = false;
-			if (NativeA8ShapePayload* cachedPayload =
-				ProbeNativeA8CompositeCache(shape, *metadata, *sourcePayload))
-			{
-				const NativeA8FallbackReason cachePreflight =
-					PrepareNativeA8Group(shape, *metadata, *cachedPayload);
-				if (cachePreflight == NativeA8FallbackReason::None)
-				{
-					drawPayload = cachedPayload;
-					cacheHit = true;
-				}
-				else
-				{
-					InvalidateNativeA8CompositeCacheHit(*sourcePayload);
-				}
-			}
-
 			NativePacketDrawResult draw = DrawNativePacketSet(pass,
-				currentPass, setupDrawmode, shape, *drawPayload);
-			if (cacheHit && draw.runtimeFault && !draw.drewPacket)
-			{
-				// A cache-only profile/resource failure must not suppress text. The
-				// already validated source payload remains the immediate fallback.
-				InvalidateNativeA8CompositeCacheHit(*sourcePayload);
-				drawPayload = sourcePayload;
-				cacheHit = false;
-				draw = DrawNativePacketSet(pass, currentPass,
-					setupDrawmode, shape, *drawPayload);
-			}
+				currentPass, setupDrawmode, shape, *sourcePayload);
 			if (!draw.runtimeFault)
 			{
-				if (!cacheHit)
-				{
-					CompositeBakeDrawContext bake;
-					bake.pass = pass;
-					bake.currentPass = currentPass;
-					bake.setupDrawmode = setupDrawmode;
-					bake.facade = shape;
-					bake.metadata = metadata;
-					bake.payload = sourcePayload;
-					TryGenerateNativeA8CompositeCache(shape, *metadata,
-						*sourcePayload, &DrawCompositeBake, &bake);
-				}
 				if (g_bEnableFreeTypeFontRenderingLog
 					&& !state.loggedTileRenderPassHit)
 				{
@@ -753,34 +650,31 @@ namespace fonthook::vectorfont
 					gLog.FormattedMessage(
 						"tnvse_freetype_native: native Tile group route hit shape=%p font=%u pass=%u packets=%u ranges=%u",
 						shape, metadata->fontId, currentPass,
-						static_cast<UInt32>(drawPayload->packetShaders.size()),
+						static_cast<UInt32>(
+							sourcePayload->packetShaders.size()),
 						sourcePayload->payloadTemplate
 							? sourcePayload->payloadTemplate->sourceRangeCount
 							: 0u);
 				}
 				return;
 			}
-			if (cacheHit)
-				InvalidateNativeA8CompositeCacheHit(*sourcePayload);
 			InvalidateNativeA8SortedShaderState();
 			if (draw.constantStateFault)
 			{
-				MarkNativeA8GenerationFault(drawPayload->preparedGeneration,
+				MarkNativeA8GenerationFault(
+					sourcePayload->preparedGeneration,
 					draw.operation, draw.result);
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: pixel-constant isolation fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-native-group",
 					draw.operation, static_cast<UInt32>(draw.result),
 					draw.mismatchRegister, shape, metadata->fontId,
-					drawPayload->preparedGeneration,
+					sourcePayload->preparedGeneration,
 					draw.drewPacket ? 1 : 0);
 			}
 			if (draw.drewPacket)
 			{
-				if (!cacheHit)
-				{
-					MarkNativeA8RuntimeFault(*metadata, *sourcePayload,
-						draw.failure);
-				}
+				MarkNativeA8RuntimeFault(*metadata, *sourcePayload,
+					draw.failure);
 				return;
 			}
 			failure = draw.failure;

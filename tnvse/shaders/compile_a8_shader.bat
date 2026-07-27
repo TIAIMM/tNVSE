@@ -66,10 +66,4 @@ if errorlevel 1 exit /b %errorlevel%
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_composite_high.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_composite_validate.pso" "%~dp0freetype_native_composite_validate.hlsl"
-if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_cache.vso" "%~dp0freetype_native_cache_vs.hlsl"
-if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_cache.pso" "%~dp0freetype_native_cache_ps.hlsl"
-if errorlevel 1 exit /b %errorlevel%
 exit /b 0

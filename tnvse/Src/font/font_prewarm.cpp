@@ -394,15 +394,25 @@ namespace fonthook::vectorfont
 
 		void ResetPrewarmScan(PrewarmJob& job, UInt32 rasterScaleMilli)
 		{
+			job.encodedUnits = nullptr;
+			job.encodedUnitStart = 0;
+			job.encodedUnitIndex = 0;
+			job.validDoubleByteCount = 0;
+			job.rasterizedGlyphCount = 0;
+			job.sdfGlyphCount = 0;
+			job.rasterScaleMilli = rasterScaleMilli;
+			job.targetUnitCount = 0;
+		}
+
+		void PreparePrewarmScanForGeneration(PrewarmJob& job,
+			UInt32 rasterScaleMilli)
+		{
+			ResetPrewarmScan(job, rasterScaleMilli);
 			const std::vector<UInt16>& units = GetCompleteCodePageEncodedUnits();
 			job.encodedUnits = &units;
 			job.encodedUnitStart = static_cast<size_t>(std::lower_bound(
 				units.begin(), units.end(), static_cast<UInt16>(0x20)) - units.begin());
 			job.encodedUnitIndex = job.encodedUnitStart;
-			job.validDoubleByteCount = 0;
-			job.rasterizedGlyphCount = 0;
-			job.sdfGlyphCount = 0;
-			job.rasterScaleMilli = rasterScaleMilli;
 			job.targetUnitCount = static_cast<UInt32>(
 				units.size() - job.encodedUnitStart);
 		}
@@ -531,6 +541,35 @@ namespace fonthook::vectorfont
 				GetConfiguredDistanceFieldMethodName(),
 				job.sdfGlyphCount, status);
 		}
+
+		bool PublishSealedProfileAliases(UInt32 ownerFontId,
+			float rasterScale)
+		{
+			const FontConfig* owner = FindConfig(ownerFontId);
+			if (!owner)
+				return false;
+			const UInt64 profileKey = BuildProfileKey(*owner);
+			bool complete = true;
+			for (const auto& entry : g_configs)
+			{
+				if (entry.first == ownerFontId
+					|| BuildProfileKey(entry.second) != profileKey)
+				{
+					continue;
+				}
+				RuntimeFont* runtime = FindRuntimeFont(entry.first);
+				if (!runtime
+					|| !BuildDirectGlyphAtlasTables(
+						*runtime, rasterScale))
+				{
+					complete = false;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: sealed direct alias publication failed font=%u owner=%u",
+						entry.first, ownerFontId);
+				}
+			}
+			return complete;
+		}
 	}
 
 	void QueueFontPrewarm(UInt32 fontId)
@@ -571,7 +610,6 @@ namespace fonthook::vectorfont
 		job.shaderEffectHash = config->shaderEffectHash;
 		job.codePage = GetFreeTypeTextCodePage();
 		ResetPrewarmScan(job, 0);
-		const UInt32 targetUnitCount = job.targetUnitCount;
 		s_jobs.push_back(std::move(job));
 		if (!s_atlasOnlyPrewarmPending)
 		{
@@ -583,8 +621,8 @@ namespace fonthook::vectorfont
 		}
 		SetBitmapCacheReducedAfterPrewarm(false);
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: queued prewarm font=%u coverage=full-codepage codePage=%u units=%u",
-			fontId, GetFreeTypeTextCodePage(), targetUnitCount);
+			"tnvse_freetype_font: queued prewarm font=%u coverage=direct-first codePage=%u",
+			fontId, GetFreeTypeTextCodePage());
 	}
 
 	void QueueConfiguredFontPrewarms()
@@ -694,15 +732,22 @@ namespace fonthook::vectorfont
 			}
 			if (snapshotReady)
 			{
-				if (!BuildDirectGlyphAtlasTables(*runtime, rasterScale))
+				if (BuildDirectGlyphAtlasTables(*runtime, rasterScale)
+					&& PublishSealedProfileAliases(
+						job.fontId, rasterScale))
+				{
+					FinishJob(job, "snapshot");
+					verifiedCodePageFonts.push_back(job.fontId);
+					++completedFonts;
+				}
+				else
 				{
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: direct atlas glyph table unavailable font=%u after snapshot restore; retaining compatibility lookup",
+						"tnvse_freetype_font: direct v4 profile unavailable font=%u after validated snapshot restore; preserving atlas and leaving compatibility route incomplete",
 						job.fontId);
+					FinishJob(job, "snapshot-direct-failed");
+					++streamFailedFonts;
 				}
-				FinishJob(job, "snapshot");
-				verifiedCodePageFonts.push_back(job.fontId);
-				++completedFonts;
 				++finishedFonts;
 				continue;
 			}
@@ -715,7 +760,7 @@ namespace fonthook::vectorfont
 				rasterScale);
 			const bool persistentDiscarded =
 				ResetPersistentFontCachesForRegeneration(*runtime);
-			ResetPrewarmScan(job, rasterScaleMilli);
+			PreparePrewarmScanForGeneration(job, rasterScaleMilli);
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: cache miss regenerated from empty state font=%u atlas=%s persistent=%s",
 				job.fontId, atlasDiscarded ? "discarded" : "delete-failed",
@@ -1019,11 +1064,17 @@ namespace fonthook::vectorfont
 				++finishedFonts;
 				continue;
 			}
-			if (!BuildDirectGlyphAtlasTables(*runtime, rasterScale))
+			if (!BuildDirectGlyphAtlasTables(*runtime, rasterScale)
+				|| !PublishSealedProfileAliases(
+					job.fontId, rasterScale))
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: direct atlas glyph table unavailable font=%u after streamed finalization; retaining compatibility lookup",
+					"tnvse_freetype_font: direct v4 profile unavailable font=%u after streamed finalization; preserving validated atlas for a later direct retry",
 					job.fontId);
+				FinishJob(job, "complete-direct-failed");
+				++streamFailedFonts;
+				++finishedFonts;
+				continue;
 			}
 			if (g_bEnableFreeTypeDefaultPoolAtlas)
 			{

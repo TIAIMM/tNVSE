@@ -3,6 +3,7 @@
 #include "font_glyphs.h"
 #include "font_manager.h"
 #include "font_vector.h"
+#include "font_vector_internal.h"
 #include "native_calls.h"
 #include <algorithm>
 #include <array>
@@ -211,6 +212,7 @@ namespace fonthook
 		bool terminal = false;
 		std::string_view source;
 		std::string_view resolved;
+		size_t precomputedHash = 0;
 	};
 
 	struct PreparedTextCacheKey
@@ -229,11 +231,14 @@ namespace fonthook
 		bool terminal = false;
 		std::string source;
 		std::string resolved;
+		size_t precomputedHash = 0;
 	};
 
 	template <class Key>
 	static size_t HashPreparedTextCacheKey(const Key& key)
 	{
+		if (key.precomputedHash)
+			return key.precomputedHash;
 		UInt64 hash = 1469598103934665603ull;
 		auto addBytes = [&](const void* data, size_t size)
 		{
@@ -284,12 +289,18 @@ namespace fonthook
 	{
 		using is_transparent = void;
 
-		size_t operator()(const PreparedTextCacheKey& key) const
+		size_t operator()(
+			const std::shared_ptr<const PreparedTextCacheKey>& key) const
+		{
+			return key ? HashPreparedTextCacheKey(*key) : 0;
+		}
+
+		size_t operator()(const PreparedTextCacheLookupKey& key) const
 		{
 			return HashPreparedTextCacheKey(key);
 		}
 
-		size_t operator()(const PreparedTextCacheLookupKey& key) const
+		size_t operator()(const PreparedTextCacheKey& key) const
 		{
 			return HashPreparedTextCacheKey(key);
 		}
@@ -299,30 +310,54 @@ namespace fonthook
 	{
 		using is_transparent = void;
 
-		bool operator()(const PreparedTextCacheKey& left,
-			const PreparedTextCacheKey& right) const
+		bool operator()(
+			const std::shared_ptr<const PreparedTextCacheKey>& left,
+			const std::shared_ptr<const PreparedTextCacheKey>& right) const
 		{
-			return EqualPreparedTextCacheKey(left, right);
+			return left && right
+				&& EqualPreparedTextCacheKey(*left, *right);
 		}
 
-		bool operator()(const PreparedTextCacheKey& left,
+		bool operator()(
+			const std::shared_ptr<const PreparedTextCacheKey>& left,
 			const PreparedTextCacheLookupKey& right) const
 		{
-			return EqualPreparedTextCacheKey(left, right);
+			return left
+				&& EqualPreparedTextCacheKey(*left, right);
 		}
 
 		bool operator()(const PreparedTextCacheLookupKey& left,
+			const std::shared_ptr<const PreparedTextCacheKey>& right) const
+		{
+			return right
+				&& EqualPreparedTextCacheKey(left, *right);
+		}
+
+		bool operator()(
+			const std::shared_ptr<const PreparedTextCacheKey>& left,
 			const PreparedTextCacheKey& right) const
 		{
-			return EqualPreparedTextCacheKey(left, right);
+			return left
+				&& EqualPreparedTextCacheKey(*left, right);
+		}
+
+		bool operator()(const PreparedTextCacheKey& left,
+			const std::shared_ptr<const PreparedTextCacheKey>& right) const
+		{
+			return right
+				&& EqualPreparedTextCacheKey(left, *right);
 		}
 	};
+
+	using PreparedTextCacheKeyPtr =
+		std::shared_ptr<const PreparedTextCacheKey>;
 
 	struct PreparedTextCacheValue
 	{
 		vectorfont::CpuMemoryLease cpuMemory;
 		std::string text;
 		std::vector<int> lineWidths;
+		std::shared_ptr<const PreparedDirectTextSidecar> directSidecar;
 		int width = 0;
 		int height = 0;
 		int lineStart = 0;
@@ -334,7 +369,7 @@ namespace fonthook
 	{
 		std::shared_ptr<const PreparedTextCacheValue> value;
 		size_t bytes = 0;
-		std::list<PreparedTextCacheKey>::iterator lru;
+		std::list<PreparedTextCacheKeyPtr>::iterator lru;
 		vectorfont::CpuMemoryLease cpuMemory;
 	};
 
@@ -342,9 +377,9 @@ namespace fonthook
 	{
 		std::mutex mutex;
 		std::atomic<UInt64> generation{ 1 };
-		std::unordered_map<PreparedTextCacheKey, PreparedTextCacheEntry,
+		std::unordered_map<PreparedTextCacheKeyPtr, PreparedTextCacheEntry,
 			PreparedTextCacheKeyHash, PreparedTextCacheKeyEqual> entries;
-		std::list<PreparedTextCacheKey> lru;
+		std::list<PreparedTextCacheKeyPtr> lru;
 		size_t bytes = 0;
 	};
 
@@ -356,7 +391,7 @@ namespace fonthook
 
 	struct PreparedTextTlsEntry
 	{
-		PreparedTextCacheKey key;
+		PreparedTextCacheKeyPtr key;
 		std::shared_ptr<const PreparedTextCacheValue> value;
 		UInt64 generation = 0;
 	};
@@ -364,6 +399,82 @@ namespace fonthook
 	thread_local std::array<PreparedTextTlsEntry, 4>
 		s_preparedTextTlsFront;
 	thread_local size_t s_preparedTextTlsNext = 0;
+	thread_local std::array<size_t, 256>
+		s_preparedTextAdmissionHashes = {};
+	thread_local std::array<UInt8, 256>
+		s_preparedTextAdmissionCounts = {};
+
+	struct PreparedTextSidecarHandoff
+	{
+		const Font::TextData* data = nullptr;
+		const Font* font = nullptr;
+		const char* preparedText = nullptr;
+		std::shared_ptr<const PreparedDirectTextSidecar> sidecar;
+	};
+
+	thread_local std::array<PreparedTextSidecarHandoff, 4>
+		s_preparedTextSidecarHandoffs;
+	thread_local size_t s_preparedTextSidecarHandoffNext = 0;
+
+	static UInt64 HashPreparedTextContent(const char* text, size_t length)
+	{
+		UInt64 hash = 1469598103934665603ull;
+		const UInt8* bytes =
+			reinterpret_cast<const UInt8*>(text);
+		for (size_t index = 0; index < length; ++index)
+		{
+			hash ^= bytes[index];
+			hash *= 1099511628211ull;
+		}
+		return hash;
+	}
+
+	static void PublishPreparedTextSidecar(const Font::TextData* data,
+		const Font* font,
+		std::shared_ptr<const PreparedDirectTextSidecar> sidecar)
+	{
+		if (!data || !font || !sidecar)
+			return;
+		PreparedTextSidecarHandoff& handoff =
+			s_preparedTextSidecarHandoffs[
+				s_preparedTextSidecarHandoffNext++
+					% s_preparedTextSidecarHandoffs.size()];
+		handoff.data = data;
+		handoff.font = font;
+		handoff.preparedText = data->xNewText.c_str();
+		handoff.sidecar = std::move(sidecar);
+	}
+
+	std::shared_ptr<const PreparedDirectTextSidecar>
+		ConsumeFreeTypePreparedTextSidecar(
+			const Font::TextData* data, const Font* font,
+			const char* preparedText)
+	{
+		if (!data || !font || !preparedText)
+			return {};
+		UInt64 layoutIdentity = 0;
+		if (!GetFreeTypeLayoutIdentity(font, layoutIdentity))
+			return {};
+		for (PreparedTextSidecarHandoff& handoff :
+			s_preparedTextSidecarHandoffs)
+		{
+			if (handoff.data != data || handoff.font != font
+				|| handoff.preparedText != preparedText
+				|| !handoff.sidecar)
+			{
+				continue;
+			}
+			std::shared_ptr<const PreparedDirectTextSidecar>
+				sidecar = std::move(handoff.sidecar);
+			handoff = {};
+			if (sidecar->layoutIdentity != layoutIdentity)
+			{
+				return {};
+			}
+			return sidecar;
+		}
+		return {};
+	}
 
 	static size_t GetPreparedTextCacheLimit()
 	{
@@ -380,6 +491,43 @@ namespace fonthook
 			hash *= 1099511628211ull;
 		}
 		return hash;
+	}
+
+	static void RefreshPreparedTextLookupHash(
+		PreparedTextCacheLookupKey& lookup)
+	{
+		lookup.precomputedHash = 0;
+		lookup.precomputedHash =
+			HashPreparedTextCacheKey(lookup);
+		if (!lookup.precomputedHash)
+			lookup.precomputedHash = 1;
+	}
+
+	static bool TouchPreparedTextAdmission(size_t hash)
+	{
+		if (!hash)
+			return false;
+		const size_t index =
+			hash % s_preparedTextAdmissionHashes.size();
+		size_t& slot = s_preparedTextAdmissionHashes[index];
+		if (slot != hash)
+		{
+			slot = hash;
+			s_preparedTextAdmissionCounts[index] = 1;
+			return false;
+		}
+		s_preparedTextAdmissionCounts[index] = 2;
+		return true;
+	}
+
+	static bool IsPreparedTextAdmissionCandidate(size_t hash)
+	{
+		if (!hash)
+			return false;
+		const size_t index =
+			hash % s_preparedTextAdmissionHashes.size();
+		return s_preparedTextAdmissionHashes[index] == hash
+			&& s_preparedTextAdmissionCounts[index] >= 2;
 	}
 
 	static UInt64 GetPreparedTextMetricSignature(const FontEx* font,
@@ -416,7 +564,7 @@ namespace fonthook
 	}
 
 	static void ApplyPreparedTextCacheValue(const PreparedTextCacheValue& value,
-		Font::TextData& data)
+		Font::TextData& data, const Font* font)
 	{
 		data.xNewText.Set(value.text.c_str(), 0);
 		data.iWidth = value.width;
@@ -430,6 +578,8 @@ namespace fonthook
 			int mutableWidth = width;
 			data.xLineWidths.AddTail(mutableWidth);
 		}
+		PublishPreparedTextSidecar(
+			&data, font, value.directSidecar);
 	}
 
 	static std::shared_ptr<const PreparedTextCacheValue> FindPreparedTextCacheValue(
@@ -446,11 +596,20 @@ namespace fonthook
 				continue;
 			}
 			if (entry.value
-				&& EqualPreparedTextCacheKey(entry.key, lookup))
+				&& entry.key
+				&& EqualPreparedTextCacheKey(*entry.key, lookup))
 			{
 				RecordFreeTypePreparedTextCacheResult(true);
 				return entry.value;
 			}
+		}
+		if (!TouchPreparedTextAdmission(
+			lookup.precomputedHash
+				? lookup.precomputedHash
+				: HashPreparedTextCacheKey(lookup)))
+		{
+			RecordFreeTypePreparedTextCacheResult(false);
+			return nullptr;
 		}
 		std::lock_guard<std::mutex> lock(state.mutex);
 		const auto found = state.entries.find(lookup);
@@ -471,7 +630,8 @@ namespace fonthook
 	}
 
 	static std::shared_ptr<const PreparedTextCacheValue> CapturePreparedTextCacheValue(
-		const Font::TextData& data)
+		const Font::TextData& data,
+		std::shared_ptr<const PreparedDirectTextSidecar> directSidecar = {})
 	{
 		auto value = std::make_shared<PreparedTextCacheValue>();
 		value->text = data.xNewText.pString ? data.xNewText.pString : "";
@@ -480,6 +640,7 @@ namespace fonthook
 		value->lineStart = data.iLineStart;
 		value->lineEnd = data.iLineEnd;
 		value->charCount = data.iCharCount;
+		value->directSidecar = std::move(directSidecar);
 		const BSSimpleList<int>* line = &data.xLineWidths;
 		for (;;)
 		{
@@ -490,7 +651,12 @@ namespace fonthook
 		}
 		value->cpuMemory.Reset(vectorfont::CpuMemoryCategory::PreparedText,
 			sizeof(PreparedTextCacheValue) + value->text.capacity()
-				+ value->lineWidths.capacity() * sizeof(int));
+				+ value->lineWidths.capacity() * sizeof(int)
+				+ (value->directSidecar
+					? sizeof(PreparedDirectTextSidecar)
+						+ value->directSidecar->units.capacity()
+							* sizeof(DirectTextUnit)
+					: 0));
 		return value;
 	}
 
@@ -499,38 +665,56 @@ namespace fonthook
 	{
 		if (!value)
 			return;
-		PreparedTextCacheKey key = {
-			lookup.font, lookup.fontData, lookup.layoutIdentity,
-			lookup.metricSignature, lookup.iconSignature, lookup.codePage,
-			lookup.width, lookup.height, lookup.lineStart, lookup.lineEnd,
-			lookup.lineSeparator, lookup.terminal,
-			std::string(lookup.source), std::string(lookup.resolved)
-		};
-		const size_t bytes = sizeof(PreparedTextCacheEntry)
-			+ sizeof(PreparedTextCacheValue) + sizeof(PreparedTextCacheKey) * 2
-			+ (key.source.capacity() + key.resolved.capacity()) * 2
-			+ value->text.capacity()
-			+ value->lineWidths.capacity() * sizeof(int);
-		const size_t cacheOverhead = sizeof(PreparedTextCacheEntry)
-			+ 2u * sizeof(PreparedTextCacheKey)
-			+ 2u * (key.source.capacity() + key.resolved.capacity())
-			+ 4u * sizeof(void*);
 		const size_t limit = vectorfont::GetCpuMemoryCategoryHeadroom(
 			vectorfont::CpuMemoryCategory::PreparedText,
 			GetPreparedTextCacheLimit());
-		if (!limit || bytes > limit)
+		if (!limit)
 			return;
 
 		PreparedTextCacheState& state = GetPreparedTextCacheState();
 		std::lock_guard<std::mutex> lock(state.mutex);
-		const auto existing = state.entries.find(key);
+		const auto existing = state.entries.find(lookup);
 		if (existing != state.entries.end())
 		{
 			state.lru.splice(state.lru.begin(), state.lru, existing->second.lru);
 			return;
 		}
-		state.lru.push_front(key);
-		const auto [inserted, success] = state.entries.emplace(std::move(key),
+		size_t lookupHash = lookup.precomputedHash
+			? lookup.precomputedHash
+			: HashPreparedTextCacheKey(lookup);
+		if (!lookupHash)
+			lookupHash = 1;
+
+		PreparedTextCacheKey key = {
+			lookup.font, lookup.fontData, lookup.layoutIdentity,
+			lookup.metricSignature, lookup.iconSignature, lookup.codePage,
+			lookup.width, lookup.height, lookup.lineStart, lookup.lineEnd,
+			lookup.lineSeparator, lookup.terminal,
+			std::string(lookup.source), std::string(lookup.resolved),
+			lookupHash
+		};
+		auto keyOwner =
+			std::make_shared<const PreparedTextCacheKey>(
+				std::move(key));
+		const size_t keyBytes = sizeof(PreparedTextCacheKey)
+			+ keyOwner->source.capacity()
+			+ keyOwner->resolved.capacity();
+		const size_t bytes = sizeof(PreparedTextCacheEntry)
+			+ sizeof(PreparedTextCacheValue) + keyBytes
+			+ value->text.capacity()
+			+ value->lineWidths.capacity() * sizeof(int)
+			+ (value->directSidecar
+				? sizeof(PreparedDirectTextSidecar)
+					+ value->directSidecar->units.capacity()
+						* sizeof(DirectTextUnit)
+				: 0);
+		const size_t cacheOverhead = sizeof(PreparedTextCacheEntry)
+			+ keyBytes + 2u * sizeof(PreparedTextCacheKeyPtr)
+			+ 4u * sizeof(void*);
+		if (bytes > limit)
+			return;
+		state.lru.push_front(keyOwner);
+		const auto [inserted, success] = state.entries.emplace(keyOwner,
 			PreparedTextCacheEntry{ value, bytes, state.lru.begin() });
 		if (!success)
 		{
@@ -593,6 +777,7 @@ namespace fonthook
 	{
 		FreeTypeBreakKind kind = FreeTypeBreakKind::None;
 		UInt32 outputPosition = 0;
+		size_t directUnitPosition = std::numeric_limits<size_t>::max();
 		UInt32 sourceConsumedEnd = 0;
 		double prefixWidth = 0.0;
 		double consumedWidth = 0.0;
@@ -601,6 +786,7 @@ namespace fonthook
 		{
 			kind = FreeTypeBreakKind::None;
 			outputPosition = 0;
+			directUnitPosition = std::numeric_limits<size_t>::max();
 			sourceConsumedEnd = 0;
 			prefixWidth = 0.0;
 			consumedWidth = 0.0;
@@ -652,11 +838,102 @@ namespace fonthook
 			|| (value >= 'a' && value <= 'z');
 	}
 
+	static std::shared_ptr<const PreparedDirectTextSidecar>
+		BuildPreparedDirectTextSidecar(
+			FontEx* font, const Font::TextData& data,
+			std::vector<DirectTextUnit>&& units)
+	{
+		vectorfont::FreeTypePerfScope perf(
+			vectorfont::FreeTypePerfPhase::Sidecar);
+		const char* text = data.xNewText.c_str();
+		if (!font || !text)
+			return {};
+		UInt64 layoutIdentity = 0;
+		if (!GetFreeTypeLayoutIdentity(font, layoutIdentity))
+			return {};
+		const size_t textLength = strlen(text);
+		UInt32 previousEnd = 0;
+		for (const DirectTextUnit& unit : units)
+		{
+			const UInt32 end = unit.byteOffset + unit.byteLength;
+			if (!unit.byteLength || unit.byteOffset != previousEnd
+				|| end > textLength)
+			{
+				return {};
+			}
+			const UInt8 first = static_cast<UInt8>(
+				text[unit.byteOffset]);
+			if (unit.kind == DirectTextUnitKind::Glyph
+				&& (unit.directSlot
+						== std::numeric_limits<UInt16>::max()
+					|| unit.byteClass >= 2))
+			{
+				return {};
+			}
+			if (unit.kind == DirectTextUnitKind::Glyph)
+			{
+				const UInt16 encoded = unit.byteLength == 2
+					? static_cast<UInt16>(
+						(static_cast<UInt16>(first) << 8)
+						| static_cast<UInt8>(
+							text[unit.byteOffset + 1]))
+					: first;
+				if (encoded != unit.encodedCode)
+					return {};
+			}
+			else if ((unit.kind == DirectTextUnitKind::LineBreak
+						&& first
+							!= static_cast<UInt8>(data.cLineSep))
+				|| (unit.kind == DirectTextUnitKind::Tab
+					&& first != '\t')
+				|| (unit.kind == DirectTextUnitKind::Icon
+					&& first != 1))
+			{
+				return {};
+			}
+			previousEnd = end;
+		}
+		if (previousEnd != textLength)
+			return {};
+		auto sidecar =
+			std::make_shared<PreparedDirectTextSidecar>();
+		sidecar->layoutIdentity = layoutIdentity;
+		sidecar->textLength = textLength;
+		sidecar->textHash =
+			HashPreparedTextContent(text, textLength);
+		sidecar->units = std::move(units);
+		return sidecar;
+	}
+
+	static std::shared_ptr<const PreparedDirectTextSidecar>
+		BuildRejectedPreparedDirectTextSidecar(
+			FontEx* font, const Font::TextData& data)
+	{
+		if (!font)
+			return {};
+		UInt64 layoutIdentity = 0;
+		if (!GetFreeTypeLayoutIdentity(font, layoutIdentity))
+			return {};
+		const char* text = data.xNewText.c_str();
+		if (!text)
+			return {};
+		const size_t textLength = strlen(text);
+		auto sidecar =
+			std::make_shared<PreparedDirectTextSidecar>();
+		sidecar->layoutIdentity = layoutIdentity;
+		sidecar->textLength = textLength;
+		sidecar->textHash =
+			HashPreparedTextContent(text, textLength);
+		sidecar->rejectBatch = true;
+		return sidecar;
+	}
+
 	// FreeType no longer performs shaping or cluster substitution. Match the
 	// native PrepText contract directly at encoded-unit granularity so wrapping,
 	// measurement, line selection, tabs, and final geometry all consume the same
 	// FontLetter advances. A DBCS pair is always emitted and moved as one unit.
-	static void PrepDirectFreeTypeText(
+	static std::shared_ptr<const PreparedDirectTextSidecar>
+		PrepDirectFreeTypeText(
 		FontEx* font,
 		char* source,
 		UInt32 sourceLength,
@@ -665,8 +942,10 @@ namespace fonthook
 		UInt32 initialConsumed,
 		PrepTextScratch& scratch)
 	{
+		vectorfont::FreeTypePerfScope perf(
+			vectorfont::FreeTypePerfPhase::Layout);
 		if (!font || !font->pFontData || !source || !data)
-			return;
+			return {};
 
 		data->xLineWidths.RemoveAll();
 		std::vector<char>& output = scratch.processed;
@@ -682,6 +961,21 @@ namespace fonthook
 		const bool boundedWidth = data->iWidth < kSentinelMax;
 		const int requestedLineStart = std::max(0, data->iLineStart);
 		const int requestedLineEnd = data->iLineEnd;
+		vectorfont::RuntimeFont* directRuntime =
+			vectorfont::FindActiveRuntime(font);
+		std::shared_ptr<const
+			vectorfont::SealedDirectFontProfile> directProfile =
+				directRuntime
+					? vectorfont::AcquireSealedDirectLayoutProfile(
+						*directRuntime)
+					: nullptr;
+		bool directRecordInvalid = false;
+		std::vector<DirectTextUnit> directUnits;
+		if (directProfile)
+			directUnits.reserve(sourceLength);
+		VectorEncodedGlyph directHyphen;
+		bool directHyphenResolved = false;
+		bool directHyphenAttempted = false;
 
 		UInt32 outputLength = 0;
 		UInt32 consumed = initialConsumed;
@@ -711,6 +1005,60 @@ namespace fonthook
 			outputLength += count;
 			output[outputLength] = 0;
 		};
+		auto appendDirectUnit = [&](DirectTextUnitKind kind,
+			UInt32 byteOffset, UInt32 byteLength, UInt16 encodedCode,
+			double advance, const VectorEncodedGlyph* glyph)
+		{
+			if (!directProfile || !byteLength
+				|| byteLength > std::numeric_limits<UInt8>::max())
+			{
+				return;
+			}
+			DirectTextUnit unit;
+			unit.byteOffset = byteOffset;
+			unit.byteLength = static_cast<UInt8>(byteLength);
+			unit.encodedCode = encodedCode;
+			unit.kind = kind;
+			unit.advance = static_cast<float>(advance);
+			if (glyph)
+			{
+				unit.directSlot = glyph->directSlot;
+				unit.byteClass =
+					static_cast<UInt8>(glyph->byteClass);
+			}
+			directUnits.push_back(unit);
+		};
+		auto resolveDirectHyphen = [&]() -> const VectorEncodedGlyph*
+		{
+			if (!directProfile)
+				return nullptr;
+			if (!directHyphenAttempted)
+			{
+				directHyphenAttempted = true;
+				const vectorfont::SealedDirectGlyphLookup lookup =
+					vectorfont::DecodeSealedDirectGlyph(
+						*directProfile, "-", directHyphen);
+				directHyphenResolved = lookup
+					== vectorfont::SealedDirectGlyphLookup::Resolved
+					&& directHyphen.hasDirectMetrics
+					&& directHyphen.byteLength == 1
+					&& directHyphen.directSlot
+						!= std::numeric_limits<UInt16>::max();
+				if (!directHyphenResolved)
+				{
+					vectorfont::InvalidateSealedDirectFontProfile(
+						*directRuntime);
+					directProfile.reset();
+					directUnits.clear();
+					if (lookup
+						== vectorfont::SealedDirectGlyphLookup::Invalid)
+					{
+						directRecordInvalid = true;
+					}
+				}
+			}
+			return directHyphenResolved ? &directHyphen : nullptr;
+		};
 		auto finishLine = [&](double width, UInt32 sourceConsumedEnd)
 		{
 			lineWidths.push_back(static_cast<int>(std::ceil(std::max(0.0, width))));
@@ -719,7 +1067,9 @@ namespace fonthook
 
 		auto emitUnit = [&](const char* bytes, UInt32 byteCount, double unitWidth,
 			UInt32 unitSourceEnd, bool breakableWhitespace,
-			bool removableSpace, bool asciiWord)
+			bool removableSpace, bool asciiWord,
+			DirectTextUnitKind unitKind,
+			const VectorEncodedGlyph* directGlyph)
 		{
 			bool wrappedBeforeCurrent = false;
 			while (boundedWidth && lineWidth > 0.0
@@ -729,6 +1079,22 @@ namespace fonthook
 					&& breakOpportunity.outputPosition < outputLength)
 				{
 					output[breakOpportunity.outputPosition] = data->cLineSep;
+					if (directProfile
+						&& breakOpportunity.directUnitPosition
+							< directUnits.size())
+					{
+						DirectTextUnit& unit =
+							directUnits[
+								breakOpportunity.directUnitPosition];
+						unit.advance = 0.0f;
+						unit.directSlot =
+							std::numeric_limits<UInt16>::max();
+						unit.encodedCode = static_cast<UInt8>(
+							data->cLineSep);
+						unit.byteLength = 1;
+						unit.byteClass = 0;
+						unit.kind = DirectTextUnitKind::LineBreak;
+					}
 					finishLine(breakOpportunity.prefixWidth,
 						breakOpportunity.sourceConsumedEnd);
 					lineWidth = std::max(0.0,
@@ -741,6 +1107,50 @@ namespace fonthook
 				if (breakOpportunity.kind == FreeTypeBreakKind::SoftHyphen)
 				{
 					const char inserted[2] = { '-', data->cLineSep };
+					const VectorEncodedGlyph* hyphen =
+						resolveDirectHyphen();
+					if (directProfile
+						&& breakOpportunity.directUnitPosition
+							<= directUnits.size()
+						&& hyphen)
+					{
+						for (size_t unitIndex =
+								breakOpportunity.directUnitPosition;
+							unitIndex < directUnits.size();
+							++unitIndex)
+						{
+							directUnits[unitIndex].byteOffset += 2;
+						}
+						DirectTextUnit hyphenUnit;
+						hyphenUnit.byteOffset =
+							breakOpportunity.outputPosition;
+						hyphenUnit.advance =
+							static_cast<float>(hyphenAdvance);
+						hyphenUnit.directSlot =
+							hyphen->directSlot;
+						hyphenUnit.encodedCode = '-';
+						hyphenUnit.byteLength = 1;
+						hyphenUnit.byteClass =
+							static_cast<UInt8>(
+								hyphen->byteClass);
+						hyphenUnit.kind =
+							DirectTextUnitKind::Glyph;
+						DirectTextUnit lineBreakUnit;
+						lineBreakUnit.byteOffset =
+							breakOpportunity.outputPosition + 1;
+						lineBreakUnit.encodedCode =
+							static_cast<UInt8>(
+								data->cLineSep);
+						lineBreakUnit.byteLength = 1;
+						lineBreakUnit.kind =
+							DirectTextUnitKind::LineBreak;
+						const auto insertion =
+							directUnits.begin()
+								+ breakOpportunity
+									.directUnitPosition;
+						directUnits.insert(insertion,
+							{ hyphenUnit, lineBreakUnit });
+					}
 					InsertPreparedBytes(output, outputLength,
 						breakOpportunity.outputPosition, inserted,
 						static_cast<UInt32>(sizeof(inserted)));
@@ -758,10 +1168,24 @@ namespace fonthook
 				if (lastUnitWasAsciiWord && asciiWord && hyphenAdvance > 0.0
 					&& completedWidth + hyphenAdvance <= maxWidth)
 				{
+					const UInt32 hyphenOffset = outputLength;
 					appendByte('-');
+					if (const VectorEncodedGlyph* hyphen =
+							resolveDirectHyphen())
+					{
+						appendDirectUnit(
+							DirectTextUnitKind::Glyph,
+							hyphenOffset, 1, '-',
+							hyphenAdvance, hyphen);
+					}
 					completedWidth += hyphenAdvance;
 				}
+				const UInt32 lineBreakOffset = outputLength;
 				appendByte(data->cLineSep);
+				appendDirectUnit(DirectTextUnitKind::LineBreak,
+					lineBreakOffset, 1,
+					static_cast<UInt8>(data->cLineSep),
+					0.0, nullptr);
 				finishLine(completedWidth, consumed);
 				lineWidth = 0.0;
 				breakOpportunity.Clear();
@@ -777,11 +1201,23 @@ namespace fonthook
 			const double prefixWidth = lineWidth;
 			const UInt32 unitOutputStart = outputLength;
 			appendBytes(bytes, byteCount);
+			UInt16 encodedCode = byteCount == 2
+				? static_cast<UInt16>(
+					(static_cast<UInt16>(
+						static_cast<UInt8>(bytes[0])) << 8)
+					| static_cast<UInt8>(bytes[1]))
+				: static_cast<UInt8>(bytes[0]);
+			appendDirectUnit(unitKind, unitOutputStart,
+				byteCount, encodedCode, unitWidth, directGlyph);
 			lineWidth += unitWidth;
 			if (breakableWhitespace && prefixWidth > 0.0)
 			{
 				breakOpportunity.kind = FreeTypeBreakKind::Whitespace;
 				breakOpportunity.outputPosition = unitOutputStart;
+				breakOpportunity.directUnitPosition =
+					directProfile && !directUnits.empty()
+						? directUnits.size() - 1
+						: std::numeric_limits<size_t>::max();
 				breakOpportunity.sourceConsumedEnd = unitSourceEnd;
 				breakOpportunity.prefixWidth = prefixWidth;
 				breakOpportunity.consumedWidth = lineWidth;
@@ -796,7 +1232,12 @@ namespace fonthook
 			if (current == static_cast<UInt8>(data->cLineSep))
 			{
 				++consumed;
+				const UInt32 lineBreakOffset = outputLength;
 				appendByte(data->cLineSep);
+				appendDirectUnit(DirectTextUnitKind::LineBreak,
+					lineBreakOffset, 1,
+					static_cast<UInt8>(data->cLineSep),
+					0.0, nullptr);
 				finishLine(lineWidth, consumed);
 				lineWidth = 0.0;
 				breakOpportunity.Clear();
@@ -811,6 +1252,10 @@ namespace fonthook
 				{
 					breakOpportunity.kind = FreeTypeBreakKind::SoftHyphen;
 					breakOpportunity.outputPosition = outputLength;
+					breakOpportunity.directUnitPosition =
+						directProfile
+							? directUnits.size()
+							: std::numeric_limits<size_t>::max();
 					breakOpportunity.sourceConsumedEnd = consumed;
 					breakOpportunity.prefixWidth = lineWidth;
 					breakOpportunity.consumedWidth = lineWidth;
@@ -823,7 +1268,8 @@ namespace fonthook
 				++consumed;
 				const double tabAdvance = GetNextTabAdvance(lineWidth);
 				emitUnit(source + sourceOffset, 1, tabAdvance, consumed,
-					true, false, false);
+					true, false, false,
+					DirectTextUnitKind::Tab, nullptr);
 				++sourceOffset;
 				continue;
 			}
@@ -839,7 +1285,8 @@ namespace fonthook
 				++iconIndex;
 				const char iconByte = 1;
 				emitUnit(&iconByte, 1, GetGlyphRenderAdvance(&iconMetrics),
-					consumed, false, false, false);
+					consumed, false, false, false,
+					DirectTextUnitKind::Icon, nullptr);
 				++sourceOffset;
 				continue;
 			}
@@ -852,7 +1299,10 @@ namespace fonthook
 			if (current < 0x20)
 			{
 				++consumed;
+				const UInt32 controlOffset = outputLength;
 				appendByte(static_cast<char>(current));
+				appendDirectUnit(DirectTextUnitKind::Control,
+					controlOffset, 1, current, 0.0, nullptr);
 				++sourceOffset;
 				continue;
 			}
@@ -868,23 +1318,56 @@ namespace fonthook
 			}
 
 			VectorEncodedGlyph glyph;
-			if (!DecodeFreeTypeGlyph(font, source + sourceOffset, glyph)
+			bool decoded = false;
+			if (directProfile)
+			{
+				const vectorfont::SealedDirectGlyphLookup lookup =
+					vectorfont::DecodeSealedDirectGlyph(
+						*directProfile,
+						source + sourceOffset, glyph);
+				decoded = lookup
+					== vectorfont::SealedDirectGlyphLookup::Resolved;
+				if (!decoded)
+				{
+					vectorfont::InvalidateSealedDirectFontProfile(
+						*directRuntime);
+					directProfile.reset();
+					directUnits.clear();
+					if (lookup
+						== vectorfont::SealedDirectGlyphLookup::
+							Unavailable)
+					{
+						decoded = DecodeFreeTypeGlyph(font,
+							source + sourceOffset, glyph);
+					}
+					else
+						directRecordInvalid = true;
+				}
+			}
+			else
+			{
+				decoded = DecodeFreeTypeGlyph(
+					font, source + sourceOffset, glyph);
+			}
+			if (!decoded
 				|| !glyph.byteLength)
 			{
 				const UInt32 fallbackLength = isDbcs ? 2u : 1u;
 				consumed += fallbackLength;
 				emitUnit(source + sourceOffset, fallbackLength, 0.0,
-					consumed, false, false, false);
+					consumed, false, false, false,
+					DirectTextUnitKind::Control, nullptr);
 				sourceOffset += fallbackLength;
 				continue;
 			}
 
-			const double unitWidth = GetGlyphRenderAdvance(glyph.metrics);
+			const double unitWidth = GetVectorGlyphRenderAdvance(glyph);
 			const bool isSpace = glyph.byteLength == 1
 				&& glyph.encodedCode == kSpaceChar;
 			emitUnit(source + sourceOffset, glyph.byteLength, unitWidth,
 				consumed + glyph.byteLength, isSpace, isSpace,
-				IsAsciiWordGlyph(glyph));
+				IsAsciiWordGlyph(glyph),
+				DirectTextUnitKind::Glyph, &glyph);
 			consumed += glyph.byteLength;
 			sourceOffset += glyph.byteLength;
 		}
@@ -924,6 +1407,37 @@ namespace fonthook
 		int selectedStart = std::clamp(requestedLineStart, 0, totalLines);
 		int selectedEnd = requestedLineEnd >= kSentinelMax
 			? totalLines : std::clamp(requestedLineEnd, selectedStart, totalLines);
+		auto setDirectSpaceUnit = [&]()
+		{
+			directUnits.clear();
+			if (!directProfile)
+				return;
+			VectorEncodedGlyph space;
+			const vectorfont::SealedDirectGlyphLookup lookup =
+				vectorfont::DecodeSealedDirectGlyph(
+					*directProfile, " ", space);
+			if (lookup
+					== vectorfont::SealedDirectGlyphLookup::Resolved
+				&& space.hasDirectMetrics
+				&& space.byteLength == 1
+				&& space.directSlot
+					!= std::numeric_limits<UInt16>::max())
+			{
+				appendDirectUnit(DirectTextUnitKind::Glyph,
+					0, 1, kSpaceChar,
+					GetVectorGlyphRenderAdvance(space), &space);
+				return;
+			}
+			vectorfont::InvalidateSealedDirectFontProfile(
+				*directRuntime);
+			directProfile.reset();
+			directUnits.clear();
+			if (lookup
+				== vectorfont::SealedDirectGlyphLookup::Invalid)
+			{
+				directRecordInvalid = true;
+			}
+		};
 
 		if (selectedStart >= selectedEnd)
 		{
@@ -940,15 +1454,60 @@ namespace fonthook
 			data->iLineStart = 0;
 			data->iLineEnd = 1;
 			data->iCharCount = 1;
-			return;
+			setDirectSpaceUnit();
+			return directRecordInvalid
+				? BuildRejectedPreparedDirectTextSidecar(
+					font, *data)
+				: directProfile
+					? BuildPreparedDirectTextSidecar(
+						font, *data, std::move(directUnits))
+					: std::shared_ptr<const
+						PreparedDirectTextSidecar>();
 		}
 
 		UInt32 selectedLength = 0;
 		int maximumLineWidth = 0;
+		std::vector<DirectTextUnit> selectedDirectUnits;
+		size_t directUnitCursor = 0;
+		if (directProfile)
+			selectedDirectUnits.reserve(directUnits.size());
 		for (int line = selectedStart; line < selectedEnd; ++line)
 		{
 			const PreparedLineRange& range = ranges[line];
 			const UInt32 count = range.end - range.begin;
+			const UInt32 selectedLineOffset = selectedLength;
+			if (directProfile)
+			{
+				while (directUnitCursor < directUnits.size()
+					&& directUnits[directUnitCursor].byteOffset
+							+ directUnits[directUnitCursor].byteLength
+						<= range.begin)
+				{
+					++directUnitCursor;
+				}
+				size_t scan = directUnitCursor;
+				while (scan < directUnits.size()
+					&& directUnits[scan].byteOffset < range.end)
+				{
+					const DirectTextUnit& sourceUnit =
+						directUnits[scan];
+					if (sourceUnit.byteOffset >= range.begin
+						&& sourceUnit.byteOffset
+								+ sourceUnit.byteLength
+							<= range.end)
+					{
+						DirectTextUnit selectedUnit = sourceUnit;
+						selectedUnit.byteOffset =
+							selectedLineOffset
+							+ sourceUnit.byteOffset
+							- range.begin;
+						selectedDirectUnits.push_back(
+							selectedUnit);
+					}
+					++scan;
+				}
+				directUnitCursor = scan;
+			}
 			if (count)
 			{
 				memmove(output.data() + selectedLength,
@@ -959,8 +1518,23 @@ namespace fonthook
 			data->xLineWidths.AddTail(mutableWidth);
 			maximumLineWidth = MaxInt(maximumLineWidth, range.width);
 			if (line + 1 < selectedEnd)
+			{
+				if (directProfile)
+				{
+					DirectTextUnit lineBreak;
+					lineBreak.byteOffset = selectedLength;
+					lineBreak.encodedCode =
+						static_cast<UInt8>(data->cLineSep);
+					lineBreak.byteLength = 1;
+					lineBreak.kind =
+						DirectTextUnitKind::LineBreak;
+					selectedDirectUnits.push_back(lineBreak);
+				}
 				output[selectedLength++] = data->cLineSep;
+			}
 		}
+		if (directProfile)
+			directUnits = std::move(selectedDirectUnits);
 
 		bool substitutedEmptyLine = false;
 		int selectedLineCount = selectedEnd - selectedStart;
@@ -987,6 +1561,7 @@ namespace fonthook
 			maximumLineWidth = spaceWidth;
 			selectedLineCount = 1;
 			substitutedEmptyLine = true;
+			setDirectSpaceUnit();
 		}
 
 		outputLength = selectedLength;
@@ -1005,6 +1580,12 @@ namespace fonthook
 			: (isTerminal && selectedStart == 0
 				? static_cast<int>(ranges[selectedEnd - 1].consumed)
 				: static_cast<int>(outputLength));
+		return directRecordInvalid
+			? BuildRejectedPreparedDirectTextSidecar(font, *data)
+			: directProfile
+				? BuildPreparedDirectTextSidecar(
+					font, *data, std::move(directUnits))
+				: std::shared_ptr<const PreparedDirectTextSidecar>();
 	}
 
 	static void PrepTextImpl(FontEx* font, const char* apOrigString,
@@ -1035,12 +1616,14 @@ namespace fonthook
 				axData->iLineEnd, axData->cLineSep, isTerminal,
 				std::string_view(apOrigString, originalTextLen), {}
 			};
+			RefreshPreparedTextLookupHash(cacheLookup);
 			if (!std::memchr(apOrigString, '&', originalTextLen))
 			{
 				if (const std::shared_ptr<const PreparedTextCacheValue> cached =
 					FindPreparedTextCacheValue(cacheLookup))
 				{
-					ApplyPreparedTextCacheValue(*cached, *axData);
+					ApplyPreparedTextCacheValue(
+						*cached, *axData, font);
 					return;
 				}
 			}
@@ -1082,21 +1665,31 @@ namespace fonthook
 		{
 			cacheLookup.iconSignature = GetPreparedTextIconSignature(font);
 			cacheLookup.resolved = std::string_view(processedOriginalText, sourceTextLen);
+			RefreshPreparedTextLookupHash(cacheLookup);
 			if (const std::shared_ptr<const PreparedTextCacheValue> cached =
 				FindPreparedTextCacheValue(cacheLookup))
 			{
-				ApplyPreparedTextCacheValue(*cached, *axData);
+				ApplyPreparedTextCacheValue(
+					*cached, *axData, font);
 				return;
 			}
 		}
 
 		if (IsFreeTypeFontActive(font))
 		{
-			PrepDirectFreeTypeText(font, processedOriginalText,
+			std::shared_ptr<const PreparedDirectTextSidecar>
+				directSidecar = PrepDirectFreeTypeText(
+					font, processedOriginalText,
 				sourceTextLen, axData, isTerminal, origConsumed, scratch);
-			if (cacheable)
+			PublishPreparedTextSidecar(
+				axData, font, directSidecar);
+			if (cacheable && directSidecar
+				&& !directSidecar->rejectBatch
+				&& IsPreparedTextAdmissionCandidate(
+					cacheLookup.precomputedHash))
 				StorePreparedTextCacheValue(cacheLookup,
-					CapturePreparedTextCacheValue(*axData));
+					CapturePreparedTextCacheValue(
+						*axData, std::move(directSidecar)));
 			return;
 		}
 

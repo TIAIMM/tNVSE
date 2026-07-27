@@ -131,6 +131,33 @@ namespace fonthook::vectorfont
 
 	void RecordFreeTypePerf(FreeTypePerfCounter aeCounter, UInt64 auiAmount = 1);
 	void ReportFreeTypePerf();
+
+	enum class FreeTypePerfPhase : UInt8
+	{
+		Layout = 0,
+		Sidecar,
+		DirectCompile,
+		NativeRegistration,
+		Preflight,
+		Submit,
+		ExtendedFntGeometry,
+		Count,
+	};
+
+	class FreeTypePerfScope
+	{
+	public:
+		explicit FreeTypePerfScope(FreeTypePerfPhase aePhase);
+		~FreeTypePerfScope();
+
+		FreeTypePerfScope(const FreeTypePerfScope&) = delete;
+		FreeTypePerfScope& operator=(const FreeTypePerfScope&) = delete;
+
+	private:
+		FreeTypePerfPhase m_phase;
+		SInt64 m_start = 0;
+		bool m_active = false;
+	};
 	struct FaceConfig
 	{
 		// Separator-normalized XML value used for portable configuration hashes.
@@ -391,6 +418,20 @@ namespace fonthook::vectorfont
 		NiColorA color;
 	};
 
+	// Sealed profiles use the same encoded-slot contract as the extended .fnt
+	// path. Keep only the data that survives into final geometry; the immutable
+	// profile owns metrics, placements, page references, and baseline metadata.
+	struct DirectGlyphCommand
+	{
+		NiPoint3 pen;
+		UInt32 packedColor = 0xFFFFFFFFu;
+		UInt16 directSlot = std::numeric_limits<UInt16>::max();
+		UInt16 encodedCode = 0;
+		UInt8 byteClass = 0;
+		UInt8 byteLength = 0;
+	};
+	static_assert(sizeof(DirectGlyphCommand) <= 24);
+
 	enum class GlyphAtlasBuildOutcome : UInt8
 	{
 		Unknown = 0,
@@ -445,6 +486,7 @@ namespace fonthook::vectorfont
 	};
 
 	struct RuntimeFont;
+	struct SealedDirectFontProfile;
 
 	extern std::unordered_map<UInt32, FontConfig> g_configs;
 
@@ -460,8 +502,36 @@ namespace fonthook::vectorfont
 		FontLetter* apMetrics);
 	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& arRuntime, Font& arFont, UInt32 auiEncodedCode);
 	bool DecodeEncodedGlyph(RuntimeFont& arRuntime, Font& arFont, const char* apText, VectorEncodedGlyph& arGlyph);
+	enum class SealedDirectGlyphLookup : UInt8
+	{
+		Unavailable = 0,
+		Resolved,
+		Invalid,
+	};
+	SealedDirectGlyphLookup DecodeSealedDirectGlyph(RuntimeFont& arRuntime,
+		const char* apText, VectorEncodedGlyph& arGlyph);
+	SealedDirectGlyphLookup DecodeSealedDirectGlyph(
+		const SealedDirectFontProfile& arProfile,
+		const char* apText, VectorEncodedGlyph& arGlyph);
+	void InvalidateSealedDirectFontProfile(RuntimeFont& arRuntime);
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
+	UInt64 GetRuntimeDirectLayoutIdentity(const RuntimeFont& arRuntime);
+	void GetRuntimeDirectBaselineOffsets(const RuntimeFont& arRuntime,
+		VectorFontByteClass aeByteClass, float& arRoleBaseline,
+		std::vector<float>& arFaceBaselines);
+	std::shared_ptr<const SealedDirectFontProfile>
+		LoadRuntimeSealedDirectProfile(const RuntimeFont& arRuntime);
+	std::shared_ptr<const SealedDirectFontProfile>
+		AcquireSealedDirectFontProfile(RuntimeFont& arRuntime,
+			float afRasterScale);
+	std::shared_ptr<const SealedDirectFontProfile>
+		AcquireSealedDirectLayoutProfile(RuntimeFont& arRuntime);
+	void StoreRuntimeSealedDirectProfile(RuntimeFont& arRuntime,
+		std::shared_ptr<const SealedDirectFontProfile> apProfile);
+	void ReleaseSealedRuntimeFreeTypeState(RuntimeFont& arRuntime);
 	UInt64 GetRuntimeMaskContentHash(RuntimeFont& arRuntime,
+		VectorFontByteClass aeByteClass);
+	size_t GetRuntimeDirectFaceCount(const RuntimeFont& arRuntime,
 		VectorFontByteClass aeByteClass);
 	bool GetFreeTypeFontCacheDirectory(std::wstring& arDirectory);
 	void MarkFreeTypeFontCacheFileUsed(const std::wstring& arPath);
@@ -477,7 +547,6 @@ namespace fonthook::vectorfont
 	PersistentCacheCleanupClass ClassifyAtlasSnapshotCacheForCleanup(
 		const std::wstring& arPath);
 	void DeleteUnusedFreeTypeFontCacheFiles(bool abDeleteAllUnused);
-	bool HasCompleteGlyphManifest(RuntimeFont& arRuntime);
 	void MarkGlyphManifestComplete(RuntimeFont& arRuntime);
 	const std::vector<UInt16>& GetCompleteCodePageEncodedUnits();
 	float GetGlyphBaselineOffset(const RuntimeFont& arRuntime,
@@ -541,6 +610,13 @@ namespace fonthook::vectorfont
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
 		bool abPrepareObject, const NiColorA& arTileColor, bool abSuppressEffects,
+		GlyphAtlasBuildDiagnostics* apDiagnostics = nullptr);
+	NiTriShape* TryCreateSealedGlyphAtlasShape(Font& arFont,
+		RuntimeFont& arRuntime,
+		const std::shared_ptr<const SealedDirectFontProfile>& apProfile,
+		const std::vector<DirectGlyphCommand>& arGlyphs, float afRasterScale,
+		bool abPrepareObject, const NiColorA& arTileColor,
+		bool abSuppressEffects,
 		GlyphAtlasBuildDiagnostics* apDiagnostics = nullptr);
 	bool IsA8RendererAvailable();
 	bool ResolveA8EffectQuality(EffectQuality aeRequested, EffectQuality& arResolved);

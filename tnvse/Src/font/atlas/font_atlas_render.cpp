@@ -56,7 +56,7 @@ namespace fonthook::vectorfont
 			}
 			for (const AtlasGlyphInstance& instance : glyphs)
 			{
-				if (!instance.glyph.metrics)
+				if (!HasVectorGlyphMetrics(instance.glyph))
 					++diagnostics->missingMetricsCount;
 				if (!instance.glyph.byteLength)
 					++diagnostics->zeroByteLengthCount;
@@ -65,6 +65,201 @@ namespace fonthook::vectorfont
 				else if (IsSpaceCodePoint(instance.glyph.codePoint))
 					++diagnostics->spaceGlyphCount;
 			}
+		}
+	}
+
+	NiTriShape* TryCreateSealedGlyphAtlasShape(Font& font,
+		RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& profile,
+		const std::vector<DirectGlyphCommand>& glyphs, float rasterScale,
+		bool prepareObject, const NiColorA& tileColor,
+		bool suppressEffects, GlyphAtlasBuildDiagnostics* diagnostics)
+	{
+		if (diagnostics)
+		{
+			*diagnostics = {};
+			diagnostics->inputGlyphCount =
+				static_cast<UInt32>(glyphs.size());
+			if (!glyphs.empty())
+			{
+				diagnostics->firstEncodedCode =
+					glyphs.front().encodedCode;
+				diagnostics->firstByteLength =
+					glyphs.front().byteLength;
+				diagnostics->firstByteClass =
+					glyphs.front().byteClass;
+			}
+			for (const DirectGlyphCommand& glyph : glyphs)
+			{
+				if (glyph.encodedCode < 0x20
+					|| (glyph.encodedCode >= 0x7F
+						&& glyph.encodedCode <= 0x9F))
+				{
+					++diagnostics->controlGlyphCount;
+				}
+				else if (glyph.encodedCode == 0x20
+					|| glyph.encodedCode == 0xA0)
+				{
+					++diagnostics->spaceGlyphCount;
+				}
+			}
+		}
+		if (!profile)
+		{
+			if (diagnostics)
+				diagnostics->outcome =
+					GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
+			return nullptr;
+		}
+		if (glyphs.empty())
+		{
+			if (diagnostics)
+			{
+				diagnostics->outcome =
+					GlyphAtlasBuildOutcome::EmptyInput;
+				diagnostics->expectedEmpty = true;
+			}
+			return nullptr;
+		}
+		if (!State().directProfilesAvailable.load(
+			std::memory_order_acquire))
+		{
+			// A DEFAULT-pool reset revokes GPU publication without discarding
+			// immutable metrics or reopening FreeType. Reject only this shape;
+			// the same profile becomes usable again after page restoration.
+			if (diagnostics)
+				diagnostics->outcome =
+					GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
+			return nullptr;
+		}
+
+		const bool precomposed =
+			profile->recordKind
+				== DirectCachedLetterKind::StockFontLetter
+			&& profile->renderMode == AtlasRenderMode::CpuEffects
+			&& profile->pixelMode == AtlasPixelMode::Argb32;
+		const bool distanceField =
+			profile->recordKind
+				== DirectCachedLetterKind::EffectLayers
+			&& profile->renderMode == AtlasRenderMode::ShaderEffects;
+		const bool cpuEffects =
+			profile->recordKind
+				== DirectCachedLetterKind::EffectLayers
+			&& profile->renderMode == AtlasRenderMode::CpuEffects
+			&& profile->pixelMode == AtlasPixelMode::A8;
+		if (!precomposed && !distanceField && !cpuEffects)
+		{
+			InvalidateSealedDirectFontProfile(runtime);
+			if (diagnostics)
+				diagnostics->outcome =
+					GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
+			return nullptr;
+		}
+
+		EffectQuality quality = GetRuntimeConfig(runtime).effectQuality;
+		if (distanceField)
+			ResolveA8EffectQuality(quality, quality);
+		if (diagnostics)
+		{
+			const FontConfig& config = GetRuntimeConfig(runtime);
+			diagnostics->hasEffects = !suppressEffects
+				&& (config.shadow.enabled || config.glow.enabled
+					|| config.outline.enabled);
+			diagnostics->requestsSdfFill = distanceField;
+			diagnostics->wantsShaderPath = true;
+			diagnostics->a8RendererAvailable =
+				IsA8RendererAvailable();
+			diagnostics->requestedQuality =
+				static_cast<UInt8>(config.effectQuality);
+			diagnostics->resolvedQuality =
+				static_cast<UInt8>(quality);
+		}
+
+		DirectAtlasShapeBuildResult direct;
+		{
+			FreeTypePerfScope perf(
+				FreeTypePerfPhase::DirectCompile);
+			direct = cpuEffects
+				? TryCreateSealedCpuEffectShape(
+					font, runtime, profile, glyphs, rasterScale,
+					prepareObject, tileColor, suppressEffects)
+				: TryCreateDirectCachedLetterShape(
+					font, runtime, profile, glyphs, rasterScale,
+					prepareObject, tileColor, suppressEffects,
+					precomposed ? GlyphMaskType::Composite
+						: GlyphMaskType::DistanceField,
+					quality);
+		}
+		switch (direct.outcome)
+		{
+		case DirectAtlasShapeOutcome::Created:
+			if (diagnostics)
+			{
+				diagnostics->outcome =
+					GlyphAtlasBuildOutcome::Created;
+				if (distanceField)
+				{
+					diagnostics->shaderQuadsBuilt = true;
+					diagnostics->shaderQuadCount =
+						direct.geometryQuadCount;
+					++diagnostics->shaderShapeAttempts;
+				}
+				else
+				{
+					diagnostics->cpuQuadsBuilt = true;
+					diagnostics->cpuQuadCount =
+						direct.geometryQuadCount;
+					++diagnostics->cpuAttempts;
+					++diagnostics->cpuShapeAttempts;
+				}
+			}
+			if (distanceField)
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ShaderEffectBatch);
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				if (precomposed)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: sealed direct aggressive batch font=%u glyphs=%u geometryQuads=%u pages=%u compiler=compact-slot",
+						font.iFontNum,
+						static_cast<UInt32>(glyphs.size()),
+						direct.geometryQuadCount,
+						direct.pageCount);
+				}
+				else
+				{
+					FreeTypeFontDebugLog(
+						cpuEffects
+							? "tnvse_freetype_font: sealed direct CPU-effects batch font=%u glyphs=%u geometryQuads=%u drawQuads=%u pages=%u compiler=fixed-layer-page"
+							: "tnvse_freetype_font: sealed direct distance batch font=%u glyphs=%u geometryQuads=%u drawQuads=%u pages=%u compiler=compact-slot",
+						font.iFontNum,
+						static_cast<UInt32>(glyphs.size()),
+						direct.geometryQuadCount,
+						direct.drawQuadCount,
+						direct.pageCount);
+				}
+			}
+			return direct.shape;
+		case DirectAtlasShapeOutcome::Empty:
+			if (diagnostics)
+			{
+				diagnostics->outcome = distanceField
+					? GlyphAtlasBuildOutcome::NoDrawableShaderQuads
+					: GlyphAtlasBuildOutcome::NoDrawableCpuQuads;
+				diagnostics->expectedEmpty = true;
+			}
+			return nullptr;
+		default:
+			InvalidateSealedDirectFontProfile(runtime);
+			if (diagnostics)
+			{
+				diagnostics->outcome =
+					GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
+				diagnostics->shaderAtlasOrShapeFailed =
+					distanceField;
+			}
+			return nullptr;
 		}
 	}
 
@@ -183,6 +378,16 @@ namespace fonthook::vectorfont
 						directShape.firstAtlasHeight);
 				}
 				return directShape.shape;
+			}
+			if (directShape.outcome == DirectAtlasShapeOutcome::Failed)
+			{
+				if (diagnostics)
+				{
+					diagnostics->shaderAtlasOrShapeFailed = true;
+					diagnostics->outcome =
+						GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
+				}
+				return nullptr;
 			}
 			thread_local std::vector<PendingQuad> shaderQuads;
 			ShaderEffectBuild shaderBuild;

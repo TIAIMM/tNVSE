@@ -4,6 +4,7 @@
 #include "game_hooks.h"
 #include "font_manager.h"
 #include "font_vector.h"
+#include "font_vector_internal.h"
 #include "native_calls.h"
 #include <array>
 #include <cmath>
@@ -334,57 +335,44 @@ namespace fonthook
 		int trailingWhitespaceCount = 0;
 		float trailingWhitespaceWidth = 0.0f;
 		int iconIndex = 0;
-		for (int byteIndex = 0; preparedText[byteIndex]; ++byteIndex)
+		auto advanceLine = [&]()
 		{
-			const UInt8 current = static_cast<UInt8>(preparedText[byteIndex]);
-			if (current == static_cast<UInt8>(aiLineBreakChar))
-			{
-				LogFreeTypeLineDrift(font, aiFlags, lineIndex, lineWidth,
-					position.x - lineStartX, trailingWhitespaceCount,
-					trailingWhitespaceWidth, preparedText);
-				++lineIndex;
-				if (lineWidthCursor && lineWidthCursor->m_pkNext)
-					lineWidthCursor = lineWidthCursor->m_pkNext;
-				lineWidth = lineWidthCursor ? lineWidthCursor->m_item : 0;
-				lineOrigin = aiFlags == 4 ? -static_cast<float>(lineWidth)
-					: aiFlags == 2 ? static_cast<float>(lineWidth) * -0.5f : 0.0f;
-				position.x = lineOrigin;
-				lineStartX = lineOrigin;
-				trailingWhitespaceCount = 0;
-				trailingWhitespaceWidth = 0.0f;
-				position.z -= font->pFontData->fBaseLine + linePadding;
-				continue;
-			}
-			if (current == '\t')
-			{
-				const float beforeTab = position.x;
-				position.x += static_cast<float>(kTabWidth)
-					- fmodf(position.x, static_cast<float>(kTabWidth));
-				++trailingWhitespaceCount;
-				trailingWhitespaceWidth += position.x - beforeTab;
-				continue;
-			}
-			if (current == 1)
-			{
-				if (icons && font->ButtonIcons.pBuffer)
-					font->AddIcon(iconIndex++, icons, &position);
-				else
-					++iconIndex;
-				trailingWhitespaceCount = 0;
-				trailingWhitespaceWidth = 0.0f;
-				continue;
-			}
-			if (current < 0x20 || current == kDelChar)
-				continue;
-
-			VectorEncodedGlyph glyph;
-			if (!DecodeFreeTypeGlyph(font,
-				&preparedText[byteIndex], glyph))
-			{
-				continue;
-			}
+			LogFreeTypeLineDrift(font, aiFlags, lineIndex, lineWidth,
+				position.x - lineStartX, trailingWhitespaceCount,
+				trailingWhitespaceWidth, preparedText);
+			++lineIndex;
+			if (lineWidthCursor && lineWidthCursor->m_pkNext)
+				lineWidthCursor = lineWidthCursor->m_pkNext;
+			lineWidth = lineWidthCursor ? lineWidthCursor->m_item : 0;
+			lineOrigin = aiFlags == 4 ? -static_cast<float>(lineWidth)
+				: aiFlags == 2 ? static_cast<float>(lineWidth) * -0.5f : 0.0f;
+			position.x = lineOrigin;
+			lineStartX = lineOrigin;
+			trailingWhitespaceCount = 0;
+			trailingWhitespaceWidth = 0.0f;
+			position.z -= font->pFontData->fBaseLine + linePadding;
+		};
+		auto advanceTab = [&]()
+		{
+			const float beforeTab = position.x;
+			position.x += static_cast<float>(kTabWidth)
+				- fmodf(position.x, static_cast<float>(kTabWidth));
+			++trailingWhitespaceCount;
+			trailingWhitespaceWidth += position.x - beforeTab;
+		};
+		auto addIcon = [&]()
+		{
+			if (icons && font->ButtonIcons.pBuffer)
+				font->AddIcon(iconIndex++, icons, &position);
+			else
+				++iconIndex;
+			trailingWhitespaceCount = 0;
+			trailingWhitespaceWidth = 0.0f;
+		};
+		auto addGlyph = [&](const VectorEncodedGlyph& glyph,
+			float glyphAdvance)
+		{
 			builder.AddGlyph(glyph, position, fontColor);
-			const float glyphAdvance = GetGlyphRenderAdvance(glyph.metrics);
 			position.x += glyphAdvance;
 			if (glyph.encodedCode == kSpaceChar || glyph.encodedCode == kNBSPChar)
 			{
@@ -396,7 +384,105 @@ namespace fonthook
 				trailingWhitespaceCount = 0;
 				trailingWhitespaceWidth = 0.0f;
 			}
-			byteIndex += glyph.byteLength - 1;
+		};
+
+		const std::shared_ptr<const PreparedDirectTextSidecar>
+			preparedSidecar = ConsumeFreeTypePreparedTextSidecar(
+				&textData, font, preparedText);
+		if (preparedSidecar && preparedSidecar->rejectBatch)
+		{
+			*textShape = CreateEmptyFreeTypeTextShape(font, true);
+			font->ButtonIcons.Clear(1);
+			return ThisStdCall<UInt32>(0x7593E0,
+				reinterpret_cast<char*>(&textData));
+		}
+		const std::shared_ptr<const PreparedDirectTextSidecar>
+			directSidecar = builder.UsesSealedDirectProfile()
+				? preparedSidecar
+				: std::shared_ptr<const PreparedDirectTextSidecar>();
+		if (directSidecar)
+		{
+			for (const DirectTextUnit& unit :
+				directSidecar->units)
+			{
+				switch (unit.kind)
+				{
+				case DirectTextUnitKind::LineBreak:
+					advanceLine();
+					break;
+				case DirectTextUnitKind::Tab:
+					advanceTab();
+					break;
+				case DirectTextUnitKind::Icon:
+					addIcon();
+					break;
+				case DirectTextUnitKind::Glyph:
+				{
+					VectorEncodedGlyph glyph;
+					glyph.encodedCode = unit.encodedCode;
+					glyph.directSlot = unit.directSlot;
+					glyph.hasDirectMetrics = true;
+					glyph.byteLength = unit.byteLength;
+					glyph.byteClass =
+						static_cast<VectorFontByteClass>(
+							unit.byteClass);
+					addGlyph(glyph, unit.advance);
+					break;
+				}
+				default:
+					break;
+				}
+			}
+		}
+		else
+		{
+			for (int byteIndex = 0;
+				preparedText[byteIndex]; ++byteIndex)
+			{
+				const UInt8 current =
+					static_cast<UInt8>(preparedText[byteIndex]);
+				if (current
+					== static_cast<UInt8>(aiLineBreakChar))
+				{
+					advanceLine();
+					continue;
+				}
+				if (current == '\t')
+				{
+					advanceTab();
+					continue;
+				}
+				if (current == 1)
+				{
+					addIcon();
+					continue;
+				}
+				if (current < 0x20 || current == kDelChar)
+					continue;
+
+				VectorEncodedGlyph glyph;
+				if (!builder.AddEncodedGlyph(
+					&preparedText[byteIndex],
+					position, fontColor, &glyph))
+				{
+					continue;
+				}
+				const float glyphAdvance =
+					GetVectorGlyphRenderAdvance(glyph);
+				position.x += glyphAdvance;
+				if (glyph.encodedCode == kSpaceChar
+					|| glyph.encodedCode == kNBSPChar)
+				{
+					++trailingWhitespaceCount;
+					trailingWhitespaceWidth += glyphAdvance;
+				}
+				else
+				{
+					trailingWhitespaceCount = 0;
+					trailingWhitespaceWidth = 0.0f;
+				}
+				byteIndex += glyph.byteLength - 1;
+			}
 		}
 		LogFreeTypeLineDrift(font, aiFlags, lineIndex, lineWidth,
 			position.x - lineStartX, trailingWhitespaceCount,
@@ -481,6 +567,8 @@ namespace fonthook
 				aiFlags, aiLineBreakChar, axFontColor, apTextShape, apIconShape,
 				rasterScale);
 		}
+		vectorfont::FreeTypePerfScope extendedFntPerf(
+			vectorfont::FreeTypePerfPhase::ExtendedFntGeometry);
 
 		int alignmentOffset = 0;
 		if (aiFlags == 4)
@@ -738,14 +826,14 @@ namespace fonthook
 					continue;
 
 				VectorEncodedGlyph glyph;
-				if (!DecodeFreeTypeGlyph(this,
-					&apTextString->pString[byteIndex], glyph))
+				const NiPoint3 pen(currentX, currentZ, currentY);
+				if (!builder.AddEncodedGlyph(
+					&apTextString->pString[byteIndex],
+					pen, activeColor ? activeColor : arg1C, &glyph))
 				{
 					continue;
 				}
-				const NiPoint3 pen(currentX, currentZ, currentY);
-				builder.AddGlyph(glyph, pen, activeColor ? activeColor : arg1C);
-				currentX += GetGlyphRenderAdvance(glyph.metrics);
+				currentX += GetVectorGlyphRenderAdvance(glyph);
 				byteIndex += glyph.byteLength - 1;
 				*aiWidth = MaxInt(*aiWidth,
 					static_cast<int>(std::ceil(std::max(0.0f, currentX - lineStartX))));
@@ -758,6 +846,8 @@ namespace fonthook
 				textObject->m_kLocal.m_Translate = NiPoint3(afStartX, currentZ, startY);
 			return textObject;
 		}
+		vectorfont::FreeTypePerfScope extendedFntPerf(
+			vectorfont::FreeTypePerfPhase::ExtendedFntGeometry);
 
 		int iActualCharCount = AdjustCharCountForDB(
 			apTextString->pString, charIdx, extraGlyphs, textLen);

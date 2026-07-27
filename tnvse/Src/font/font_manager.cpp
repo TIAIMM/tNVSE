@@ -348,7 +348,13 @@ namespace fonthook
 			ExtraGlyphStore* extraGlyphs = GetExtraGlyphsForChar(apChar, apOutFont);
 			Font* font = apOutFont ? *apOutFont : nullptr;
 			if (font)
-				EnsureFreeTypeDoubleByteMetrics(font, auiDbcsCode);
+			{
+				if (FontLetter* direct =
+					EnsureFreeTypeDoubleByteMetrics(font, auiDbcsCode))
+				{
+					return direct;
+				}
+			}
 			return LookupDBGlyph(extraGlyphs, auiDbcsCode);
 		}
 

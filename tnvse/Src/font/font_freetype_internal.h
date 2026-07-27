@@ -13,6 +13,7 @@
 #include FT_STROKER_H
 
 #include <array>
+#include <atomic>
 #include <list>
 #include <limits>
 #include <mutex>
@@ -29,6 +30,8 @@ namespace fonthook
 
 namespace fonthook::vectorfont
 {
+	struct SealedDirectFontProfile;
+
 	inline constexpr FT_Int32 kGlyphLoadFlags =
 		FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP | FT_LOAD_NO_SVG;
 	inline constexpr float kFixedScale = 65536.0f;
@@ -116,6 +119,13 @@ namespace fonthook::vectorfont
 			return allocatedPageCount_ * sizeof(Page);
 		}
 
+		void Clear() noexcept
+		{
+			for (std::unique_ptr<Page>& page : pages_)
+				page.reset();
+			allocatedPageCount_ = 0;
+		}
+
 	private:
 		std::array<std::unique_ptr<Page>, kPageEntryCount> pages_ = {};
 		size_t allocatedPageCount_ = 0;
@@ -129,6 +139,7 @@ namespace fonthook::vectorfont
 		bool configuredRaster = false;
 		FT_UInt configuredWidth = 0;
 		FT_UInt configuredHeight = 0;
+		UInt16 sourceConfigIndex = 0;
 		float resolvedBaselineOffset = 0.0f;
 		float visualCenterCorrection = 0.0f;
 		SparseDirectLayoutMetricTable directLayoutMetrics;
@@ -141,6 +152,7 @@ namespace fonthook::vectorfont
 			: file(std::move(other.file)), face(other.face),
 			configured(other.configured), configuredRaster(other.configuredRaster),
 			configuredWidth(other.configuredWidth), configuredHeight(other.configuredHeight),
+			sourceConfigIndex(other.sourceConfigIndex),
 			resolvedBaselineOffset(other.resolvedBaselineOffset),
 			visualCenterCorrection(other.visualCenterCorrection),
 			directLayoutMetrics(std::move(other.directLayoutMetrics)),
@@ -160,6 +172,7 @@ namespace fonthook::vectorfont
 				configuredRaster = other.configuredRaster;
 				configuredWidth = other.configuredWidth;
 				configuredHeight = other.configuredHeight;
+				sourceConfigIndex = other.sourceConfigIndex;
 				resolvedBaselineOffset = other.resolvedBaselineOffset;
 				visualCenterCorrection = other.visualCenterCorrection;
 				directLayoutMetrics = std::move(other.directLayoutMetrics);
@@ -535,6 +548,10 @@ namespace fonthook::vectorfont
 		std::array<UInt64, 2> maskContentRoleHashes = {};
 		std::shared_ptr<PersistentGlyphManifest> manifest;
 		std::shared_ptr<DirectExtraGlyphTable> codePageMetrics;
+		// Published only after both fixed encoded-slot tables and all referenced
+		// atlas pages have been validated as one immutable generation.
+		std::atomic<std::shared_ptr<const SealedDirectFontProfile>>
+			sealedDirectProfile;
 	};
 
 	static_assert(sizeof(PersistentFontHashRecord) == 68);
@@ -610,6 +627,7 @@ namespace fonthook::vectorfont
 	bool InitializeLibrary();
 	bool ConfigureRuntimeFace(RuntimeFace& runtimeFace, const ByteStyle& style,
 		float rasterScale, bool raster);
+	void ReleaseSealedRuntimeFreeTypeState(RuntimeFont& runtime);
 	bool LoadGlyph(RuntimeRole& role, RuntimeFace& face, FT_UInt glyphIndex);
 	bool ResolveGlyph(RuntimeRole& role, UInt32 codePoint, ResolvedGlyph& result);
 	bool DecodeCodePoint(const char* bytes, int length, UInt32& codePoint);
@@ -632,12 +650,16 @@ namespace fonthook::vectorfont
 
 	UInt64 ComputeRuntimeMaskContentHash(RuntimeFont& runtime,
 		VectorFontByteClass byteClass);
+	UInt64 ComputeRuntimeLayoutContentHash(RuntimeFont& runtime);
 	bool LoadGlyphManifest(RuntimeFont& runtime, UInt32 encodedCode,
 		VectorFontByteClass byteClass, VectorEncodedGlyph* glyph,
 		FontLetter* metrics);
 	bool LoadGlyphManifestIdentity(RuntimeFont& runtime, UInt32 encodedCode,
 		VectorFontByteClass byteClass, VectorEncodedGlyph& glyph);
 	bool EnsureCompleteCodePageMetricTable(RuntimeFont& runtime);
+	bool TryApplyDirectCachedLayoutMetrics(RuntimeFont& runtime, Font& font,
+		float rasterScale,
+		std::shared_ptr<DirectExtraGlyphTable>& codePageMetrics);
 	void StoreGlyphManifest(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
 		const ResolvedGlyph& resolved, const FontLetter& metrics);
 	PersistentBitmapProfileKey MakePersistentBitmapProfileKey(

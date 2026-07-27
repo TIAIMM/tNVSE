@@ -1351,7 +1351,7 @@ namespace fonthook::vectorfont
 		if (TryReuseCompleteAtlasProfile(singleByteKey)
 			&& (!needsDoubleByte || TryReuseCompleteAtlasProfile(doubleByteKey)))
 		{
-			return HasCompleteGlyphManifest(runtime);
+			return true;
 		}
 
 		size_t incomingStorageBytes = 0;
@@ -1412,8 +1412,7 @@ namespace fonthook::vectorfont
 				&& (!needsDoubleByte
 					|| IsCompleteAtlasProfileResidentLocked(state, doubleByteKey));
 		}
-		return HasCompleteGlyphManifest(runtime)
-			&& singleByteReady && doubleByteReady && profilesResident;
+		return singleByteReady && doubleByteReady && profilesResident;
 	}
 
 	bool HasGloballyRepackedGlyphAtlasSnapshot(RuntimeFont& runtime,

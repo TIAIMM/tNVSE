@@ -49,6 +49,7 @@ namespace fonthook::vectorfont
 			NativeA8FallbackReason preflightResult =
 				NativeA8FallbackReason::RuntimeFault;
 			UInt32 generation = 0;
+			UInt64 validationToken = 0;
 		};
 
 		struct NativePreflightFrameContext
@@ -71,6 +72,7 @@ namespace fonthook::vectorfont
 			std::vector<UInt32> payloadLookup;
 			CpuMemoryLease cpuMemory;
 			UInt32 nestedBypassDepth = 0;
+			UInt64 nextValidationToken = 0;
 			bool active = false;
 		};
 
@@ -359,8 +361,6 @@ namespace fonthook::vectorfont
 			const bool compositeDesired =
 				g_bEnableFreeTypeFontCompositePass
 				&& !artifact.compositePackets.empty()
-				&& artifact.compositeRejectedGeneration.load(
-					std::memory_order_acquire) != generation
 				&& !(payload.compositeUnavailable
 					&& payload.compositeAttemptGeneration == generation);
 			const std::vector<NativeA8PacketTemplate>& packets =
@@ -383,6 +383,8 @@ namespace fonthook::vectorfont
 			const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload,
 			const NativePreflightFrameContext* frameContext = nullptr)
 		{
+			FreeTypePerfScope perf(
+				FreeTypePerfPhase::Preflight);
 			if (!facade || !payload.buildComplete || !payload.payloadTemplate
 				|| payload.payloadTemplate->packets.empty())
 			{
@@ -427,8 +429,6 @@ namespace fonthook::vectorfont
 			const bool attemptComposite =
 				g_bEnableFreeTypeFontCompositePass
 				&& !artifact.compositePackets.empty()
-				&& artifact.compositeRejectedGeneration.load(
-					std::memory_order_acquire) != generation
 				&& !(payload.compositeUnavailable
 					&& payload.compositeAttemptGeneration == generation);
 			payload.useCompositePackets = attemptComposite;
@@ -624,6 +624,11 @@ namespace fonthook::vectorfont
 				preflightContext.atlasTextureEpoch =
 					GetNativeA8AtlasTextureEpoch();
 				const UInt32 generation = preflightContext.generation;
+				UInt64 frameValidationToken =
+					++scratch.nextValidationToken;
+				if (!frameValidationToken)
+					frameValidationToken =
+						++scratch.nextValidationToken;
 				for (SInt32 index = accumulator->m_iNumItems - 1;
 					index >= 0; --index)
 				{
@@ -653,7 +658,11 @@ namespace fonthook::vectorfont
 							facade, *entry.metadata, *entry.payload,
 							&preflightContext);
 						if (entry.preflightResult == NativeA8FallbackReason::None)
+						{
 							entry.generation = entry.payload->preparedGeneration;
+							entry.validationToken =
+								frameValidationToken;
+						}
 					}
 					else
 					{
@@ -677,20 +686,11 @@ namespace fonthook::vectorfont
 							RecordFreeTypePerf(
 								FreeTypePerfCounter::SortedFramePayload);
 						}
-						const NativeA8PayloadTemplatePtr cachedArtifact =
-							GetNativeA8CompositeCacheArtifact(*stored.payload);
-						if (cachedArtifact
-							&& InsertUniquePayload(scratch, cachedArtifact))
-						{
-							RecordFreeTypePerf(
-								FreeTypePerfCounter::SortedFramePayload);
-						}
 					}
 				}
 				PrepareSortedNativeA8Payloads(
 					scratch.payloadTemplates, generation);
 				RefreshSortedScratchMemory(scratch);
-				BeginNativeA8CompositeCacheFrame();
 				BeginNativeA8SortedShaderBatch();
 				BeginA8SortedTileConstantBatch();
 				scratch.active = true;
@@ -698,7 +698,6 @@ namespace fonthook::vectorfont
 				EndA8SortedTileConstantBatch();
 				EndNativeA8SortedShaderBatch();
 				EndNativeA8SortedRingFrame();
-				EndNativeA8CompositeCacheFrame();
 				ClearSortedFrame(scratch);
 				return result;
 			}
@@ -793,6 +792,7 @@ namespace fonthook::vectorfont
 		view.payload = entry.payload;
 		view.preflightResult = entry.preflightResult;
 		view.generation = entry.generation;
+		view.validationToken = entry.validationToken;
 		RecordFreeTypePerf(FreeTypePerfCounter::SortedFrameLookupHit);
 		return true;
 	}

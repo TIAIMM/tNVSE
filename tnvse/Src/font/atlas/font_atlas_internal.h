@@ -171,6 +171,7 @@ namespace fonthook::vectorfont
 		bool resetPending = false;
 		bool transient = false;
 		bool sharedGpuPage = false;
+		bool compactGlyphIndexReleased = false;
 		UInt64 pageContentHash = 0;
 		std::vector<UInt8> pixels;
 		// Sorted by cacheId. One contiguous allocation replaces the old placement
@@ -183,10 +184,21 @@ namespace fonthook::vectorfont
 		std::numeric_limits<UInt16>::max();
 	inline constexpr UInt32 kInvalidDirectAtlasPlacementIndex =
 		std::numeric_limits<UInt32>::max();
+	inline constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 	struct AtlasSnapshotPlacement;
 	inline constexpr size_t kDirectAtlasMaskCount =
 		static_cast<size_t>(GlyphMaskType::Composite) + 1u;
 	inline constexpr size_t kDirectAtlasLayerSlots = 4;
+
+	enum class DirectCachedLetterKind : UInt8
+	{
+		EffectLayers = 0,
+		StockFontLetter = 1,
+	};
+	inline constexpr UInt8 kDirectCachedLetterValid = 1u << 0;
+	inline constexpr UInt8 kDirectCachedLetterKnownEmpty = 1u << 1;
+	inline constexpr UInt8 kDirectCachedLetterKnownFlags =
+		kDirectCachedLetterValid | kDirectCachedLetterKnownEmpty;
 
 	struct DirectAtlasGlyphLayer
 	{
@@ -215,16 +227,66 @@ namespace fonthook::vectorfont
 		float spacing = 0.0f;
 		std::array<DirectAtlasGlyphLayer, kDirectAtlasLayerSlots> layers;
 	};
+	static_assert(sizeof(DirectCachedLetter) == 56);
+	static_assert(sizeof(FontLetter) == 56);
+	static_assert(sizeof(DirectCachedLetter) == sizeof(FontLetter));
 	using DirectAtlasGlyphRecord = DirectCachedLetter;
 
 	struct DirectAtlasGlyphTable
 	{
 		CpuMemoryLease cpuMemory;
 		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
+		DirectCachedLetterKind recordKind =
+			DirectCachedLetterKind::EffectLayers;
+		UInt8 effectLayerMask = 0;
+		UInt32 codePage = 0;
+		UInt64 profileIdentity = 0;
+		UInt64 layoutIdentity = 0;
+		UInt64 effectIdentity = 0;
+		UInt64 atlasIdentity = 0;
+		UInt64 pageIdentityChecksum = 0;
+		std::shared_ptr<std::atomic<bool>> validity =
+			std::make_shared<std::atomic<bool>>(true);
 		std::vector<std::weak_ptr<AtlasResource>> pages;
 		std::vector<DirectAtlasGlyphRecord> glyphs;
+		std::vector<FontLetter> stockGlyphs;
+		std::vector<UInt8> faceIndices;
 		UInt32 resolvedGlyphs = 0;
 		UInt32 resolvedLayers = 0;
+
+		size_t SlotCount() const
+		{
+			return recordKind == DirectCachedLetterKind::StockFontLetter
+				? stockGlyphs.size() : glyphs.size();
+		}
+	};
+
+	struct SealedDirectFontProfile
+	{
+		CpuMemoryLease cpuMemory;
+		UInt64 identity = 0;
+		UInt64 layoutIdentity = 0;
+		UInt32 validityEpoch = 0;
+		UInt32 scaleMilli = 1000;
+		UInt32 padding = 0;
+		UInt32 codePage = 0;
+		AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
+		AtlasRenderMode renderMode = AtlasRenderMode::CpuEffects;
+		DirectCachedLetterKind recordKind =
+			DirectCachedLetterKind::EffectLayers;
+		UInt8 effectLayerMask = 0;
+		std::array<std::shared_ptr<const DirectAtlasGlyphTable>, 2> tables;
+		std::vector<std::shared_ptr<AtlasResource>> atlases;
+		std::array<std::array<UInt16, kMaximumAtlasSnapshotPages>, 2>
+			pageOrdinals;
+		std::array<std::vector<float>, 2> faceBaselineOffsets;
+		std::array<float, 2> roleBaselineOffsets = {};
+
+		SealedDirectFontProfile()
+		{
+			for (auto& ordinals : pageOrdinals)
+				ordinals.fill(kInvalidDirectAtlasPageSlot);
+		}
 	};
 
 	// Compact, batch-lifetime view of the immutable direct letter tables. The
@@ -233,6 +295,7 @@ namespace fonthook::vectorfont
 	struct DirectAtlasBatchGlyph
 	{
 		const AtlasSnapshotPlacement* placement = nullptr;
+		const FontLetter* stockLetter = nullptr;
 		UInt32 snapshotPlacementIndex = kInvalidDirectAtlasPlacementIndex;
 		UInt16 atlasPage = kInvalidDirectAtlasPageSlot;
 		UInt8 byteClass = 0;
@@ -241,12 +304,19 @@ namespace fonthook::vectorfont
 
 	struct DirectAtlasGlyphBatch
 	{
+		std::shared_ptr<const SealedDirectFontProfile> sealed;
 		std::array<std::shared_ptr<const DirectAtlasGlyphTable>, 2> tables;
 		std::vector<std::shared_ptr<AtlasResource>> atlases;
 		std::vector<DirectAtlasBatchGlyph> glyphs;
 
+		const std::vector<std::shared_ptr<AtlasResource>>& Atlases() const
+		{
+			return sealed ? sealed->atlases : atlases;
+		}
+
 		void Clear()
 		{
+			sealed.reset();
 			tables = {};
 			atlases.clear();
 			glyphs.clear();
@@ -335,7 +405,6 @@ namespace fonthook::vectorfont
 	// Version 16 identifies selectable A8 true-SDF and BGRA MTSDF pages.
 	// Version 15 adds largest-compatible-size double-byte MTSDF atlas sharing.
 	// Version 14 replaced single-channel shader pages with BGRA MTSDF.
-	constexpr UInt16 kMaximumAtlasSnapshotPages = 64;
 #pragma pack(push, 1)
 	struct AtlasSnapshotHeader
 	{
@@ -692,6 +761,7 @@ namespace fonthook::vectorfont
 		std::unordered_map<UInt16, std::vector<UInt64>> pageResidents;
 		std::unordered_set<UInt64> duplicateResidents;
 		std::shared_ptr<const DirectAtlasGlyphTable> directGlyphs;
+		bool compactResidentIndexReleased = false;
 	};
 
 	struct TextArtifactKey
@@ -756,7 +826,7 @@ namespace fonthook::vectorfont
 	static_assert(sizeof(AtlasSnapshotPlacement) == 92);
 	static_assert(sizeof(DirectAtlasGlyphLayer) == 8);
 	static_assert(sizeof(DirectAtlasGlyphRecord) == sizeof(FontLetter));
-	static_assert(sizeof(DirectAtlasBatchGlyph) <= 16);
+	static_assert(sizeof(DirectAtlasBatchGlyph) <= 24);
 
 	struct AtlasState
 	{
@@ -784,6 +854,11 @@ namespace fonthook::vectorfont
 		std::unordered_set<UInt64> loggedDirectGlyphBatches;
 		std::unordered_set<UInt32> loggedVerticalMetricFonts;
 		std::unordered_set<UInt64> loggedQualityDowngrades;
+		std::atomic<UInt32> directProfileEpoch = 1;
+		std::atomic<bool> directProfilesAvailable = true;
+		std::unordered_map<UInt64,
+			std::weak_ptr<const SealedDirectFontProfile>>
+			sealedDirectProfiles;
 		std::unordered_map<TextArtifactKey, TextArtifactEntry,
 			TextArtifactKeyHash> textArtifactCache;
 		std::list<TextArtifactKey> textArtifactLru;
@@ -794,6 +869,10 @@ namespace fonthook::vectorfont
 	AtlasState& State();
 	bool InvalidateCompleteAtlasProfileLocked(AtlasState& state,
 		const AtlasProfileKey& profileKey);
+	bool EnsureAtlasProfileIndexLocked(AtlasState& state,
+		const AtlasCacheKey& baseKey, AtlasProfileIndex& profile);
+	void ReleaseSealedAtlasCpuIndexesLocked(AtlasState& state,
+		const SealedDirectFontProfile& sealed);
 
 	NiColorA ResolveSafeTileColor(const std::vector<AtlasGlyphInstance>& glyphs,
 		const NiColorA& requested);
@@ -811,11 +890,32 @@ namespace fonthook::vectorfont
 		GlyphMaskType maskType, float rasterScale,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
 		UInt32 padding, DirectAtlasGlyphBatch& result);
+	bool GetSealedDirectAtlasGlyphBatch(RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
+		const std::vector<DirectGlyphCommand>& glyphs,
+		GlyphMaskType maskType, float rasterScale,
+		AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
+		UInt32 padding, DirectAtlasGlyphBatch& result);
+	SealedDirectGlyphLookup DecodeSealedDirectGlyph(RuntimeFont& runtime,
+		const char* text, VectorEncodedGlyph& glyph);
+	void InvalidateSealedDirectFontProfile(RuntimeFont& runtime);
 	DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
 		Font& font, RuntimeFont& runtime,
 		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
 		bool prepareObject, const NiColorA& tileColor, bool suppressEffects,
 		GlyphMaskType maskType, EffectQuality quality);
+	DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
+		Font& font, RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
+		const std::vector<DirectGlyphCommand>& glyphs, float rasterScale,
+		bool prepareObject, const NiColorA& tileColor, bool suppressEffects,
+		GlyphMaskType maskType, EffectQuality quality);
+	DirectAtlasShapeBuildResult TryCreateSealedCpuEffectShape(
+		Font& font, RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
+		const std::vector<DirectGlyphCommand>& glyphs, float rasterScale,
+		bool prepareObject, const NiColorA& tileColor,
+		bool suppressEffects);
 	NiTriShape* TryCreateAtlasShapeForMode(Font& font,
 		const std::vector<PendingQuad>& quads,
 		const FontConfig& config, float rasterScale, bool prepareObject,
@@ -837,9 +937,7 @@ namespace fonthook::vectorfont
 	NiTexturingProperty* CreateManagedAtlasProperty(UInt32 width, UInt32 height,
 		AtlasPixelMode mode, UInt32 mipLevels, const std::vector<UInt8>& source,
 		NiPixelDataPtr& outPixelData);
-	// Takes ownership of d3dTexture on success and sets it to null.  Composite
-	// cache RTTs use the same renderer-data wrapper and Tile property contract as
-	// DEFAULT-pool glyph atlas pages.
+	// Takes ownership of d3dTexture on success and sets it to null.
 	NiTexturingProperty* CreateDefaultTextureProperty(
 		IDirect3DTexture9*& d3dTexture, AtlasPixelMode mode);
 	void RetireDefaultGeneration(const AtlasResource& resource);
@@ -877,6 +975,7 @@ namespace fonthook::vectorfont
 		AtlasResource& resource, UInt64 cacheId);
 	AtlasGlyphRecord* FindAtlasGlyph(AtlasResource& resource, UInt64 cacheId);
 	const AtlasGlyphRecord* FindAtlasGlyph(const AtlasResource& resource, UInt64 cacheId);
+	bool EnsureAtlasGlyphIndex(AtlasResource& resource);
 	void SortAtlasGlyphs(AtlasResource& resource);
 	void RefreshAtlasResourceCpuMemory(AtlasResource& resource);
 	void RegisterDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,

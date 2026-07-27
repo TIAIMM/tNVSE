@@ -353,6 +353,8 @@ namespace fonthook::vectorfont
 		NativeA8PayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin)
 	{
+		FreeTypePerfScope perf(
+			FreeTypePerfPhase::NativeRegistration);
 		if (!IsA8RendererAvailable()
 			|| !payloadTemplate || payloadTemplate->quadCount != quadCount
 			|| !ValidateA8Shape(shape, effectConfig, colorContract,

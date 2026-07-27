@@ -20,7 +20,6 @@ class NiVBChip;
 namespace fonthook::vectorfont
 {
 	struct A8ShapeMetadata;
-	struct NativeA8CompositeCacheTracker;
 	inline constexpr UInt32 kNativeA8MaximumQuads =
 		std::numeric_limits<UInt16>::max() / 4u;
 	inline constexpr size_t kNativeA8PacketConstantRegisterCount = 8;
@@ -32,7 +31,6 @@ namespace fonthook::vectorfont
 		Body,
 		Effect,
 		Composite,
-		CachedImage,
 		Coverage,
 		Argb
 	};
@@ -148,21 +146,10 @@ namespace fonthook::vectorfont
 		std::vector<NiTexturePtr> atlasTextures;
 		std::vector<NativeA8GpuVertex> gpuVertices;
 		std::vector<NativeA8PacketTemplate> packets;
-		// Optional one-draw representation.  The ordinary packet list is always
-		// retained so a missing shader, unsafe state, or disabled configuration can
-		// fall back without rebuilding the immutable text artifact.
+		// Optional single-pass distance-field representation. The ordinary packet
+		// list remains available if that shader class is unavailable.
 		std::vector<NativeA8PacketTemplate> compositePackets;
 		mutable NativeA8PayloadResidencyCache residency;
-		// A/B validation is generation-specific because shader refresh can replace
-		// one quality variant independently. Rejected artifacts immediately select
-		// their ordinary packet list; validated artifacts skip further RTT compares.
-		mutable std::atomic<UInt32> compositeValidatedGeneration = 0;
-		mutable std::atomic<UInt32> compositeRejectedGeneration = 0;
-		// Visual validation is issued as an asynchronous D3D9 occlusion query.
-		// Recording its generation prevents another facade sharing this immutable
-		// artifact from submitting duplicate validation work while the GPU catches
-		// up; the render thread never flush-polls the query.
-		mutable std::atomic<UInt32> compositeValidationPendingGeneration = 0;
 	};
 	using NativeA8PayloadTemplatePtr =
 		std::shared_ptr<const NativeA8PayloadTemplate>;
@@ -190,10 +177,6 @@ namespace fonthook::vectorfont
 		bool preflightAlphaBlending = false;
 		bool useCompositePackets = false;
 		bool compositeUnavailable = false;
-		// Opaque per-facade stability observation.  The cache implementation owns
-		// the exact state key and any shared LRU entry; keeping it behind a shared
-		// pointer avoids exposing D3D DEFAULT-pool resources in this hot ABI header.
-		std::shared_ptr<NativeA8CompositeCacheTracker> compositeCacheTracker;
 		bool buildComplete = false;
 	};
 
@@ -211,6 +194,7 @@ namespace fonthook::vectorfont
 		NativeA8FallbackReason preflightResult =
 			NativeA8FallbackReason::RuntimeFault;
 		UInt32 generation = 0;
+		UInt64 validationToken = 0;
 	};
 
 	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason);
@@ -273,11 +257,7 @@ namespace fonthook::vectorfont
 		const char* operation, HRESULT result);
 	UInt32 GetNativeA8ShaderGeneration();
 	IDirect3DVertexDeclaration9* GetNativeA8D3DDeclaration(UInt32 generation);
-	IDirect3DVertexShader9* GetNativeA8CacheD3DVertexShader(UInt32 generation);
-	IDirect3DPixelShader9* GetNativeA8CompositeValidationD3DPixelShader(
-		UInt32 generation);
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation);
-	bool GetNativeA8BakeWvp(std::array<float, 16>& wvp);
 	void BeginNativeA8SortedShaderBatch();
 	void EndNativeA8SortedShaderBatch();
 	void InvalidateNativeA8SortedShaderState();
@@ -298,19 +278,4 @@ namespace fonthook::vectorfont
 		NativeA8ShapePayload& payload,
 		NativeA8FallbackReason reason);
 
-	using NativeA8CompositeBakeDrawFn = bool(*)(void* context, bool fallback);
-	void BeginNativeA8CompositeCacheFrame();
-	void EndNativeA8CompositeCacheFrame();
-	NativeA8ShapePayload* ProbeNativeA8CompositeCache(
-		NiTriShape* facade, const A8ShapeMetadata& metadata,
-		NativeA8ShapePayload& sourcePayload);
-	bool TryGenerateNativeA8CompositeCache(
-		NiTriShape* facade, const A8ShapeMetadata& metadata,
-		NativeA8ShapePayload& sourcePayload,
-		NativeA8CompositeBakeDrawFn draw, void* context);
-	void InvalidateNativeA8CompositeCacheHit(
-		NativeA8ShapePayload& sourcePayload);
-	NativeA8PayloadTemplatePtr GetNativeA8CompositeCacheArtifact(
-		const NativeA8ShapePayload& sourcePayload);
-	void ClearNativeA8CompositeCache();
 }
