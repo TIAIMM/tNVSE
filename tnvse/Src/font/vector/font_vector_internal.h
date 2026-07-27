@@ -10,10 +10,33 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace fonthook::vectorfont
 {
+	template <class T>
+	class ExtendedCacheScratchGuard
+	{
+	public:
+		explicit ExtendedCacheScratchGuard(T& scratch) : scratch_(scratch) {}
+		~ExtendedCacheScratchGuard()
+		{
+			if (!g_bDisableFreeTypeExtendedCaches)
+				return;
+			T empty;
+			using std::swap;
+			swap(scratch_, empty);
+		}
+
+		ExtendedCacheScratchGuard(const ExtendedCacheScratchGuard&) = delete;
+		ExtendedCacheScratchGuard& operator=(
+			const ExtendedCacheScratchGuard&) = delete;
+
+	private:
+		T& scratch_;
+	};
+
 	inline DistanceFieldMethod GetConfiguredDistanceFieldMethod()
 	{
 		return g_uiFreeTypeFontDistanceFieldMode == 0

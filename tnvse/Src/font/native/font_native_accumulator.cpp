@@ -219,6 +219,18 @@ namespace fonthook::vectorfont
 				std::vector<UInt32>().swap(scratch.payloadLookup);
 				scratch.cpuMemory.Release();
 			}
+			else if (g_bDisableFreeTypeExtendedCaches)
+			{
+				std::vector<RegisteredFacade>().swap(
+					scratch.pendingRegistrations);
+				std::vector<UInt32>().swap(scratch.registrationLookup);
+				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
+				std::vector<UInt32>().swap(scratch.facadeLookup);
+				std::vector<NativeA8PayloadTemplatePtr>().swap(
+					scratch.payloadTemplates);
+				std::vector<UInt32>().swap(scratch.payloadLookup);
+				scratch.cpuMemory.Release();
+			}
 		}
 
 		SortedTileRenderFn ReadSortedTileRenderCallTarget()
@@ -415,7 +427,8 @@ namespace fonthook::vectorfont
 			const UInt32 atlasTextureEpoch = frameContext
 				? frameContext->atlasTextureEpoch
 				: GetNativeA8AtlasTextureEpoch();
-			if (IsNativePreflightCacheCurrent(payload, generation,
+			if (!g_bDisableFreeTypeExtendedCaches
+				&& IsNativePreflightCacheCurrent(payload, generation,
 				atlasTextureEpoch, scaledFillSampling, alphaBlending))
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::PreflightFastHit);

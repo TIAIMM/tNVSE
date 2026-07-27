@@ -2035,6 +2035,8 @@ namespace fonthook::vectorfont
 			const size_t existingGlyphCount = candidate.glyphs.size();
 			thread_local std::vector<AtlasRect> rawDirtyRects;
 			thread_local std::vector<AtlasRect> dirtyRects;
+			ExtendedCacheScratchGuard rawDirtyRectsGuard(rawDirtyRects);
+			ExtendedCacheScratchGuard dirtyRectsGuard(dirtyRects);
 			rawDirtyRects.clear();
 			rawDirtyRects.reserve(pending.size());
 			for (const PendingAtlasPlacement& entry : pending)
@@ -2116,6 +2118,9 @@ namespace fonthook::vectorfont
 			thread_local std::vector<AtlasRect> rawDirtyRects;
 			thread_local std::vector<AtlasRect> dirtyRects;
 			thread_local std::vector<PendingAtlasPlacement> pending;
+			ExtendedCacheScratchGuard rawDirtyRectsGuard(rawDirtyRects);
+			ExtendedCacheScratchGuard dirtyRectsGuard(dirtyRects);
+			ExtendedCacheScratchGuard pendingGuard(pending);
 			rawDirtyRects.clear();
 			rawDirtyRects.reserve(bitmaps.size());
 			pending.clear();

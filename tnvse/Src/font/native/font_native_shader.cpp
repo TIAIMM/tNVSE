@@ -316,7 +316,8 @@ namespace fonthook::vectorfont
 				? block->stockUpdateConstants
 				: reinterpret_cast<StockUpdateConstantsFn>(kTileShaderUpdateConstants);
 			NativeFacadeShaderBatch& batch = s_facadeShaderBatch;
-			const bool batchActive = batch.depth != 0;
+			const bool batchActive = !g_bDisableFreeTypeExtendedCaches
+				&& batch.depth != 0;
 			// Retail TileShader::UpdateConstants is also a live render-state
 			// synchronization point: it reapplies Tile scissor and alpha state.
 			// Every native packet invokes a separate stock Tile render pass, so a
@@ -450,7 +451,8 @@ namespace fonthook::vectorfont
 				return;
 
 			NativeSortedShaderBatch& sortedBatch = s_sortedShaderBatch;
-			const bool sortedSamplerReady = sortedBatch.depth
+			const bool sortedSamplerReady = !g_bDisableFreeTypeExtendedCaches
+				&& sortedBatch.depth
 				&& sortedBatch.samplerReady
 				&& sortedBatch.device == device
 				&& sortedBatch.generation == generation->id;

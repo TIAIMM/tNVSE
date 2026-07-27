@@ -12,6 +12,7 @@ font hook:
 [FreeTypeFont]
 bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
+bDisableFreeTypeExtendedCaches=1
 fFreeTypeFontResolutionScale=1.0
 bEnableFreeTypeFontAggressivePerformanceMode=0
 uiFreeTypeFontDistanceFieldMode=1
@@ -51,6 +52,31 @@ configured multiplier intentionally selects one new compatible cache profile.
 Set `bEnableFreeTypeFontRenderingLog=1` while diagnosing configuration or font
 loading. The log records the XML path, resolved face paths, FreeType errors,
 font-ID activation, and the first atlas-rendered glyph for each byte class.
+
+`bDisableFreeTypeExtendedCaches=1` is a temporary diagnostic mode and is the
+default in the current diagnostic build. It prevents cross-call reuse from the
+prepared-text cache, runtime glyph-bitmap memory/disk path, unified text-artifact
+cache, metadata/runtime-identity hot paths, native preflight cache, static and
+cross-frame vertex residency, native constant/sampler state tracking, and
+retained thread-local scratch capacity. The
+switch intentionally does not destroy live render inputs: current atlas textures
+and glyph placement tables, shape metadata ownership, shader generations,
+proxy/upload resources, and the frame-local sorted upload map remain required
+for correct rendering. Persistent atlas snapshots and the temporary glyph-mask
+files used to construct them also remain enabled because they are generated
+font backing data analogous to retail `.fnt`/`.tex`, rather than optional
+page-switch memoization. Set the option to `0` to restore the optimized path.
+This mode is expected to increase CPU work, lock traffic, rasterization, and
+dynamic vertex uploads.
+
+In steady runtime diagnostics, the periodic `tnvse_freetype_perf` line should
+report zero for prepared-text hits, text-artifact hits, metadata hot hits,
+preflight fast hits, dynamic-VB reuse, static-VB uploads/hits, constant-batch
+reuse, and sampler-state reuse. `atlas_hit` and snapshot/direct-profile activity
+may remain nonzero: they refer to the currently loaded generated font texture
+and glyph table, not a page-switch result cache. Bitmap disk activity may also
+appear while a missing persistent atlas is being constructed, but the completed
+runtime route does not promote those masks into the process bitmap LRU.
 
 Font IDs are configured under `<fonts>` in
 `Data\NVSE\plugins\tnvse_fonts.xml`. Only listed IDs are replaced. Other
@@ -630,21 +656,25 @@ programs and `c1-c4` bypass the stock constant-map upload path; relying on its
 change tracking alone can leave a stale RGB register. Fixed effects ignore c0
 RGB in HLSL, and group cleanup deliberately leaves c0 at the final Tile value.
 Individual shadow, glow, outline, and fill packets therefore do not perform
-redundant save/restore cycles. Native packet
+redundant save/restore cycles. With extended caches enabled, native packet
 preflight is cached per shape while the shader generation, scaled-fill sampling
 class, alpha-blending class, and referenced D3D atlas textures remain unchanged.
 Any device reset, sampling/alpha transition, or page-resource replacement falls
 back to full packet and texture validation before the cache is refreshed.
 Per-frame native submission also keeps thread-local hot entries for shape
 metadata, static vertex residency, dynamic ring residency, static-promotion
-candidates, and the preferred proxy slot. Metadata entries are protected by a
-sharded mutation generation, while ring entries require the exact immutable
-payload owner plus the current resource serial and upload epoch. Consequently a
-shape deletion, pointer reuse, ring discard, device reset, or generation change
-cannot reuse stale state. A proxy remembers its stable Tile property and its
-last atlas property, texture, and shader; transforms, alpha, scissor state, and
-other live Tile values are still copied each submission, but unchanged
-reference-counted properties and bindings are not assigned again.
+candidates, and the preferred proxy slot. Shape metadata uses a 16384-entry,
+eight-way set-associative weak TLS cache. Its pointer hash is shared with 16384
+sharded mutation generations so allocator-neighbouring facade addresses do not
+continually evict or invalidate one another. The weak owner and generation check
+still reject deletion, pointer reuse, and re-registration without retaining menu
+payloads. Ring entries require the exact immutable payload owner plus the current
+resource serial and upload epoch. Consequently a shape deletion, pointer reuse,
+ring discard, device reset, or generation change cannot reuse stale state. A
+proxy remembers its stable Tile property and its last atlas property, texture,
+and shader; transforms, alpha, scissor state, and other live Tile values are
+still copied each submission, but unchanged reference-counted properties and
+bindings are not assigned again.
 
 Native vertices store `float3` position, `float2` UV, and one packed
 `D3DCOLOR` base color. The D3D declaration expands that 24-byte record to the
@@ -663,7 +693,11 @@ other active proxy compacts live weakly owned artifacts into a replacement
 buffer and doubles capacity up to that fixed maximum. If the sorted-call hook is
 unavailable or replaced, the existing per-shape promotion route remains active.
 Concurrent groups defer optional promotion and continue through the dynamic
-ring; expired static entries are discarded during compaction.
+ring; expired static entries are discarded during compaction. Diagnostic
+extended-cache disablement skips these hot/residency paths, omits the static VB,
+and starts each sorted frame with a new dynamic upload epoch. The map published
+after that frame's batch upload is retained only until its packets finish,
+because those packet submissions need stable vertex ranges.
 
 ## Atlas allocation, mipmaps, and memory
 
@@ -675,8 +709,9 @@ bilinear footprint because
 the distance spread and an additional guard texel are already inside each glyph
 bitmap. Aggressive composite and ARGB fallback pages retain four
 transparent pixels per side, isolating the 1/4 mip even when glyph dimensions
-are not multiples of four. Repeated text also reuses cached layout and unique
-text artifacts. One artifact owns the packed vertices, bound, atlas-page
+are not multiples of four. With extended caches enabled, repeated text also
+reuses cached layout and unique text artifacts. One artifact owns the packed
+vertices, bound, atlas-page
 property/texture references, and merged contiguous packet descriptors that used
 to live in separate batch and packet-template caches. Geometry, per-glyph base
 colors, layer constants, composite mode, and referenced page identities

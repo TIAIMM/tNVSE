@@ -36,12 +36,32 @@ namespace fonthook::vectorfont
 	inline constexpr UInt32 kSortedTileRenderCallSite = 0xB65EA0;
 	inline constexpr UInt32 kStockSortedTileRender = 0xB64F90;
 	inline constexpr UInt32 kMaximumShapeValidationFailureLogs = 16;
-	inline constexpr size_t kMetadataGenerationSlotCount = 64;
+	// Metadata generation slots are deliberately much larger than the live TLS
+	// hot-cache set count. Shape allocators commonly return addresses with
+	// repeating low bits; a small modulo table lets unrelated menu facades
+	// continuously invalidate one another even when their hot entries do not
+	// collide.
+	inline constexpr size_t kMetadataGenerationSlotCount = 16384;
+	static_assert((kMetadataGenerationSlotCount
+			& (kMetadataGenerationSlotCount - 1)) == 0,
+		"metadata generation slot count must remain a power of two");
+
+	inline UInt32 HashMetadataShapeAddress(const NiTriShape* shape)
+	{
+		UInt32 value = static_cast<UInt32>(
+			reinterpret_cast<uintptr_t>(shape) >> 4);
+		value ^= value >> 16;
+		value *= 0x7FEB352Du;
+		value ^= value >> 15;
+		value *= 0x846CA68Bu;
+		value ^= value >> 16;
+		return value;
+	}
 
 	inline size_t GetMetadataGenerationSlot(const NiTriShape* shape)
 	{
-		return (reinterpret_cast<uintptr_t>(shape) >> 4)
-			% kMetadataGenerationSlotCount;
+		return HashMetadataShapeAddress(shape)
+			& (kMetadataGenerationSlotCount - 1);
 	}
 
 	using RenderImmediateFn = void(__thiscall*)(NiTriShape*, NiRenderer*);

@@ -23,14 +23,58 @@ namespace fonthook::vectorfont
 			std::weak_ptr<const A8ShapeMetadata> metadata;
 		};
 
-		// A menu commonly submits far more than 16 text facades. A larger weak
-		// table avoids direct-map thrashing without retaining deleted menu payloads.
-		thread_local std::array<A8MetadataHotEntry, 256> s_metadataHotEntries;
+		inline constexpr size_t kMetadataHotWayCount = 8;
+		inline constexpr size_t kMetadataHotSetCount = 2048;
+		static_assert((kMetadataHotSetCount & (kMetadataHotSetCount - 1)) == 0,
+			"metadata hot-cache set count must remain a power of two");
 
-		size_t GetMetadataHotSlot(const NiTriShape* shape)
+		struct A8MetadataHotSet
 		{
-			return (reinterpret_cast<uintptr_t>(shape) >> 4)
-				% s_metadataHotEntries.size();
+			std::array<A8MetadataHotEntry, kMetadataHotWayCount> ways;
+			UInt8 nextVictim = 0;
+		};
+
+		// Eight ways keep allocator-neighbouring facades from evicting one another,
+		// while weak ownership preserves menu/shape destruction semantics. 16384
+		// entries cover the observed multi-page Pip-Boy working set without adding
+		// any process-wide locks to the render path.
+		thread_local std::unique_ptr<
+			std::array<A8MetadataHotSet, kMetadataHotSetCount>>
+			s_metadataHotSets;
+
+		A8MetadataHotSet& GetMetadataHotSet(const NiTriShape* shape)
+		{
+			if (!s_metadataHotSets)
+			{
+				s_metadataHotSets = std::make_unique<
+					std::array<A8MetadataHotSet, kMetadataHotSetCount>>();
+			}
+			const size_t index = HashMetadataShapeAddress(shape)
+				& (kMetadataHotSetCount - 1);
+			return (*s_metadataHotSets)[index];
+		}
+
+		A8MetadataHotEntry& SelectMetadataHotVictim(A8MetadataHotSet& set)
+		{
+			for (A8MetadataHotEntry& entry : set.ways)
+			{
+				if (!entry.shape)
+					return entry;
+			}
+			for (A8MetadataHotEntry& entry : set.ways)
+			{
+				if (entry.metadata.expired())
+				{
+					entry = {};
+					return entry;
+				}
+			}
+			A8MetadataHotEntry& victim =
+				set.ways[set.nextVictim % kMetadataHotWayCount];
+			set.nextVictim = static_cast<UInt8>(
+				(set.nextVictim + 1) % kMetadataHotWayCount);
+			victim = {};
+			return victim;
 		}
 
 		class NativePixelConstantScope
@@ -375,6 +419,7 @@ namespace fonthook::vectorfont
 			const bool isolatePacketConstants =
 				!draw.stockLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
+				&& !g_bDisableFreeTypeExtendedCaches
 				&& s_pixelConstantBatch.FrameActive();
 			std::optional<NativePixelConstantScope> localConstants;
 			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
@@ -544,29 +589,43 @@ namespace fonthook::vectorfont
 		if (!shape)
 			return {};
 		A8State& state = State();
+		if (g_bDisableFreeTypeExtendedCaches)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::MetadataLockedLookup);
+			std::lock_guard<std::mutex> lock(state.metadataMutex);
+			const auto found = state.shapeMetadata.find(shape);
+			return found == state.shapeMetadata.end()
+				? A8ShapeMetadataPtr{} : found->second;
+		}
 		const size_t generationSlot = GetMetadataGenerationSlot(shape);
 		const UInt64 generation = state.metadataGenerations[generationSlot].load(
 			std::memory_order_acquire);
-		A8MetadataHotEntry& hot = s_metadataHotEntries[GetMetadataHotSlot(shape)];
-		if (hot.shape == shape && hot.generation == generation)
+		A8MetadataHotSet& hotSet = GetMetadataHotSet(shape);
+		A8MetadataHotEntry* replacement = nullptr;
+		for (A8MetadataHotEntry& hot : hotSet.ways)
 		{
-			A8ShapeMetadataPtr metadata = hot.metadata.lock();
-			if (metadata)
+			if (hot.shape != shape)
+				continue;
+			if (hot.generation == generation)
 			{
-				RecordFreeTypePerf(FreeTypePerfCounter::MetadataHotHit);
-				return metadata;
+				A8ShapeMetadataPtr metadata = hot.metadata.lock();
+				if (metadata)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::MetadataHotHit);
+					return metadata;
+				}
 			}
 			hot = {};
+			replacement = &hot;
 		}
 
 		RecordFreeTypePerf(FreeTypePerfCounter::MetadataLockedLookup);
 		std::lock_guard<std::mutex> lock(state.metadataMutex);
 		const auto found = state.shapeMetadata.find(shape);
 		if (found == state.shapeMetadata.end())
-		{
-			hot = {};
 			return {};
-		}
+		A8MetadataHotEntry& hot = replacement
+			? *replacement : SelectMetadataHotVictim(hotSet);
 		hot.shape = shape;
 		hot.generation = state.metadataGenerations[generationSlot].load(
 			std::memory_order_relaxed);

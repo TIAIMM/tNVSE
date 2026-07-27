@@ -312,8 +312,11 @@ namespace fonthook::vectorfont
 
 		bool ResolveGlyph(RuntimeRole& role, UInt32 codePoint, ResolvedGlyph& result)
 		{
-			auto cached = role.glyphIdentities.find(codePoint);
-			if (cached != role.glyphIdentities.end() && cached->second.faceIndex < role.faces.size())
+			auto cached = role.glyphIdentities.end();
+			if (!g_bDisableFreeTypeExtendedCaches)
+				cached = role.glyphIdentities.find(codePoint);
+			if (cached != role.glyphIdentities.end()
+				&& cached->second.faceIndex < role.faces.size())
 			{
 				const CachedGlyphIdentity& identity = cached->second;
 				result = { &role, &role.faces[identity.faceIndex], identity.faceIndex,
@@ -329,15 +332,18 @@ namespace fonthook::vectorfont
 					return false;
 				result = { &role, &role.faces.front(), 0, 0, 0 };
 			}
-			const auto inserted = role.glyphIdentities.emplace(codePoint,
-				CachedGlyphIdentity{ static_cast<UInt16>(result.faceIndex),
-					result.glyphIndex, result.renderedCodePoint });
-			if (inserted.second && role.owner)
+			if (!g_bDisableFreeTypeExtendedCaches)
 			{
-				role.owner->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-					role.owner->cpuMemory.GetBytes()
-						+ sizeof(std::pair<const UInt32, CachedGlyphIdentity>)
-						+ 3u * sizeof(void*));
+				const auto inserted = role.glyphIdentities.emplace(codePoint,
+					CachedGlyphIdentity{ static_cast<UInt16>(result.faceIndex),
+						result.glyphIndex, result.renderedCodePoint });
+				if (inserted.second && role.owner)
+				{
+					role.owner->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+						role.owner->cpuMemory.GetBytes()
+							+ sizeof(std::pair<const UInt32, CachedGlyphIdentity>)
+							+ 3u * sizeof(void*));
+				}
 			}
 			return true;
 		}
@@ -349,7 +355,8 @@ namespace fonthook::vectorfont
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 
 			FreeTypeState& state = State();
-			if (state.codePointCacheCodePage != codePage)
+			if (!g_bDisableFreeTypeExtendedCaches
+				&& state.codePointCacheCodePage != codePage)
 			{
 				state.singleByteCodePoints.fill(UINT32_MAX);
 				state.doubleByteCodePoints.Clear();
@@ -360,10 +367,15 @@ namespace fonthook::vectorfont
 				? static_cast<UInt8>(bytes[0])
 				: (static_cast<UInt32>(static_cast<UInt8>(bytes[0])) << 8)
 					| static_cast<UInt8>(bytes[1]);
-			auto* cached = length == 1
-				? &state.singleByteCodePoints[encoded]
-				: state.doubleByteCodePoints.GetOrCreate(static_cast<UInt16>(encoded));
-			if (length != 1)
+			UInt32* cached = nullptr;
+			if (!g_bDisableFreeTypeExtendedCaches)
+			{
+				cached = length == 1
+					? &state.singleByteCodePoints[encoded]
+					: state.doubleByteCodePoints.GetOrCreate(
+						static_cast<UInt16>(encoded));
+			}
+			if (cached && length != 1)
 			{
 				const size_t allocatedBytes =
 					state.doubleByteCodePoints.GetAllocatedBytes();
@@ -953,23 +965,27 @@ namespace fonthook::vectorfont
 		FreeTypeState& state = State();
 		FreeTypeThreadState& thread = ThreadState();
 		const UInt32 fontId = static_cast<UInt32>(apFont->iFontNum);
-		for (size_t index = 0; index < thread.activeRuntimes.size(); ++index)
+		if (!g_bDisableFreeTypeExtendedCaches)
 		{
-			const ActiveRuntimeCache& cached = thread.activeRuntimes[index];
-			if (cached.font != apFont || cached.data != apFont->pFontData
-				|| cached.fontId != fontId || !cached.runtime)
+			for (size_t index = 0; index < thread.activeRuntimes.size(); ++index)
 			{
-				continue;
+				const ActiveRuntimeCache& cached = thread.activeRuntimes[index];
+				if (cached.font != apFont || cached.data != apFont->pFontData
+					|| cached.fontId != fontId || !cached.runtime)
+				{
+					continue;
+				}
+				RuntimeFont* runtime = cached.runtime;
+				if (index)
+				{
+					const ActiveRuntimeCache hit = cached;
+					for (size_t position = index; position > 0; --position)
+						thread.activeRuntimes[position] =
+							thread.activeRuntimes[position - 1];
+					thread.activeRuntimes[0] = hit;
+				}
+				return runtime;
 			}
-			RuntimeFont* runtime = cached.runtime;
-			if (index)
-			{
-				const ActiveRuntimeCache hit = cached;
-				for (size_t position = index; position > 0; --position)
-					thread.activeRuntimes[position] = thread.activeRuntimes[position - 1];
-				thread.activeRuntimes[0] = hit;
-			}
-			return runtime;
 		}
 
 		std::lock_guard<std::recursive_mutex> lock(state.mutex);
@@ -982,6 +998,8 @@ namespace fonthook::vectorfont
 		const auto runtime = state.runtimeFonts.find(fontId);
 		if (runtime == state.runtimeFonts.end())
 			return nullptr;
+		if (g_bDisableFreeTypeExtendedCaches)
+			return runtime->second.get();
 		for (size_t index = thread.activeRuntimes.size() - 1; index > 0; --index)
 			thread.activeRuntimes[index] = thread.activeRuntimes[index - 1];
 		thread.activeRuntimes[0] = {

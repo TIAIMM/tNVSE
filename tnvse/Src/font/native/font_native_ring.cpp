@@ -488,8 +488,8 @@ namespace fonthook::vectorfont
 				renderer->m_kD3DCaps9.MaxVertexIndex) + 1u;
 			UInt64 desired = std::min<UInt64>(kRingTargetVertexCapacity, capLimit);
 			desired &= ~static_cast<UInt64>(3u);
-			UInt64 staticDesired = std::min<UInt64>(
-				kStaticInitialVertexCapacity, capLimit);
+			UInt64 staticDesired = g_bDisableFreeTypeExtendedCaches
+				? 0 : std::min<UInt64>(kStaticInitialVertexCapacity, capLimit);
 			staticDesired &= ~static_cast<UInt64>(3u);
 			if (desired < requiredVertices || desired > std::numeric_limits<UInt32>::max())
 			{
@@ -885,7 +885,8 @@ namespace fonthook::vectorfont
 		UInt32 AcquireProxyLocked(NativeA8RingState& state,
 			NativeA8RingThreadState& thread)
 		{
-			if (thread.preferredProxy < state.proxyCount
+			if (!g_bDisableFreeTypeExtendedCaches
+				&& thread.preferredProxy < state.proxyCount
 				&& !state.proxies[thread.preferredProxy].inUse)
 			{
 				state.proxies[thread.preferredProxy].inUse = true;
@@ -896,7 +897,8 @@ namespace fonthook::vectorfont
 				if (!state.proxies[index].inUse)
 				{
 					state.proxies[index].inUse = true;
-					thread.preferredProxy = index;
+					if (!g_bDisableFreeTypeExtendedCaches)
+						thread.preferredProxy = index;
 					return index;
 				}
 			}
@@ -907,6 +909,8 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount, UInt32& baseVertex)
 		{
+			if (g_bDisableFreeTypeExtendedCaches)
+				return false;
 			if (!state.staticVertexBuffer)
 				return false;
 			const UInt32 resourceSerial = state.resourceSerial.load(
@@ -976,6 +980,8 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount)
 		{
+			if (g_bDisableFreeTypeExtendedCaches)
+				return nullptr;
 			// Candidate observation must use the strategy's growth ceiling rather
 			// than the current allocation. Otherwise a payload larger than the
 			// initial 4 MiB buffer can never mature and therefore can never trigger
@@ -1121,6 +1127,8 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount, UInt32& baseVertex)
 		{
+			if (g_bDisableFreeTypeExtendedCaches)
+				return false;
 			const UInt32 resourceSerial = state.resourceSerial.load(
 				std::memory_order_relaxed);
 			NativeA8PayloadResidencyCache& residency =
@@ -1193,6 +1201,8 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplate& payloadTemplate,
 			UInt32 vertexCount)
 		{
+			if (g_bDisableFreeTypeExtendedCaches)
+				return false;
 			const NativeA8PayloadResidencyCache& residency =
 				payloadTemplate.residency;
 			return residency.staticResourceSerial
@@ -1502,6 +1512,19 @@ namespace fonthook::vectorfont
 			operation, result))
 		{
 			return;
+		}
+		if (g_bDisableFreeTypeExtendedCaches)
+		{
+			if (state.activeSubmissions.load(std::memory_order_acquire))
+				return;
+			state.nextVertex = 0;
+			state.uploadedPayloads.clear();
+			state.uploadedPayloads.rehash(0);
+			state.staticCandidates.clear();
+			state.staticPayloads.clear();
+			s_ringThread.uploadedPayload = {};
+			s_ringThread.staticCandidate = {};
+			s_ringThread.staticPayload = {};
 		}
 
 		auto isValidPayload = [](
@@ -2033,8 +2056,11 @@ namespace fonthook::vectorfont
 				}
 
 				state.nextVertex = startVertex + totalVertices;
-				PublishUploadedPayloadLocked(state, payload.payloadTemplate,
-					startVertex, totalVertices);
+				if (!g_bDisableFreeTypeExtendedCaches)
+				{
+					PublishUploadedPayloadLocked(state, payload.payloadTemplate,
+						startVertex, totalVertices);
+				}
 				RefreshRingCpuMemoryLocked(state);
 				RecordFreeTypePerf(FreeTypePerfCounter::DynamicVertexUpload);
 				RecordFreeTypePerf(
@@ -2227,15 +2253,22 @@ namespace fonthook::vectorfont
 		const UInt32 previous = state->sortedFrameLeases.fetch_sub(
 			1, std::memory_order_acq_rel);
 		if (previous <= 1
-			&& state->releasePending.load(std::memory_order_acquire))
+			&& (g_bDisableFreeTypeExtendedCaches
+				|| state->releasePending.load(std::memory_order_acquire)))
 		{
 			std::lock_guard<std::mutex> lock(state->mutex);
 			if (!state->sortedFrameLeases.load(std::memory_order_acquire)
-				&& !state->activeSubmissions.load(std::memory_order_acquire)
-				&& state->releasePending.load(
-					std::memory_order_acquire))
+				&& !state->activeSubmissions.load(std::memory_order_acquire))
 			{
-				ReleaseRingResourcesLocked(*state);
+				if (g_bDisableFreeTypeExtendedCaches)
+				{
+					state->uploadedPayloads.clear();
+					state->uploadedPayloads.rehash(0);
+					state->nextVertex = 0;
+					s_ringThread.uploadedPayload = {};
+				}
+				if (state->releasePending.load(std::memory_order_acquire))
+					ReleaseRingResourcesLocked(*state);
 			}
 		}
 	}
