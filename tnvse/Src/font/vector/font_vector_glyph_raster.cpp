@@ -738,18 +738,14 @@ namespace fonthook::vectorfont
 			if (!ConfigureRuntimeFace(*resolved.runtimeFace, *role.style, rasterScale, true))
 				return nullptr;
 
-			FT_Int32 loadFlags = FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP | FT_LOAD_NO_SVG;
-			if (maskType == GlyphMaskType::DistanceField)
-			{
-				// Grid fitting bakes a size-specific staircase into diagonal
-				// outlines. Distance fields must retain the scalable vector outline; the
-				// configured FreeType transform, embolden, and slant still apply.
-				loadFlags |= FT_LOAD_NO_HINTING;
-			}
-			else
-			{
-				loadFlags |= FT_LOAD_TARGET_NORMAL;
-			}
+			// Use one contour source for every rendering route. Grid fitting changes
+			// stem widths before Fill is rasterized; glow, outline, shadow and the
+			// aggressive composite then inherit that heavier body. The SDF route
+			// already consumes the unhinted scalable outline, so CPU coverage must
+			// do the same to keep its body/effect footprint visually comparable.
+			// The configured transform, embolden and slant still apply below.
+			constexpr FT_Int32 loadFlags = FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP
+				| FT_LOAD_NO_SVG | FT_LOAD_NO_HINTING;
 			if (FT_Load_Glyph(resolved.runtimeFace->face, resolved.glyphIndex, loadFlags))
 				return nullptr;
 			FT_GlyphSlot slot = resolved.runtimeFace->face->glyph;

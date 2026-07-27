@@ -443,21 +443,32 @@ multi-channel Fill field, and sampled Alpha carries true signed distance for
 effects.
 
 `bEnableFreeTypeFontAggressivePerformanceMode=1` overrides that selection.
-FreeType hinting rasterizes Fill once. A bounded CPU distance transform evaluates
-Glow falloff, Outline softness, blurred Shadow power, and hard-Shadow
-Glow/Outline inclusion, then composites Shadow, Glow, Outline, and Fill into one
-straight-alpha BGRA rectangle in that order. Effect colors and alpha are baked
-into the rectangle. Runtime Tile transform, scissor, total alpha, and whole-text
-RGB modulation remain live, but the individual effect and fill colors can no
-longer be changed independently after the profile is built.
+FreeType rasterizes Fill once from the same unhinted scalable outline used to
+generate the distance field. A bounded CPU distance transform mirrors the SDF
+formulas for Glow falloff, Outline softness, blurred Shadow power, and
+hard-Shadow Glow/Outline inclusion, then composites Shadow, Glow, Outline, and
+Fill into one straight-alpha BGRA rectangle in that order. The ARGB fallback
+derives its separate masks from that same unhinted Fill. This keeps CPU body and
+effect weight close to SDF instead of inheriting a heavier grid-fitted contour.
+Effect colors and alpha are baked into the aggressive rectangle. Runtime Tile
+transform, scissor, total alpha, and whole-text RGB modulation remain live, but
+the individual effect and fill colors can no longer be changed independently
+after the profile is built.
 
 Each visible aggressive glyph therefore contributes exactly one quad. A
-single-page batch can use the stock Tile shader; a multi-page batch uses the
-dedicated native ARGB sampler and fixed page ranges. No four-mask A8 geometry,
-per-layer packet construction, or page sorting remains in a complete aggressive
-profile. This mode intentionally gives up distance-field magnification quality
-and separately dynamic effect colors in exchange for `.fnt`-like CPU and
-geometry cost.
+single-page batch uses one stock `NiTriShape`; a multi-page batch uses one stock
+shape per physical atlas page under the same destination `NiNode`. Companion
+page shapes inherit the primary shape's final transform, scissor, Tile
+color/alpha/fade, alpha/material, and object flags after the stock caller has
+configured it; only each page's Tile shade object, source texture, texture path,
+and texturing property remain page-specific. No four-mask A8 geometry,
+per-layer packet construction, or custom ARGB facade remains in a complete
+aggressive profile. Per-glyph precomposition cannot reproduce SDF's global
+effect-before-Fill ordering where neighbouring glyph effect rectangles overlap,
+and stock one-texture modulation cannot independently preserve live Fill RGB
+and fixed effect RGB in the same pixel rectangle. These are retained one-quad
+limitations. The mode also gives up distance-field magnification quality in
+exchange for `.fnt`-like CPU and geometry cost.
 The startup prewarm publishes those generated composite glyphs as globally
 repacked `.tnvfatlas` pages. A later launch validates and restores that atlas
 profile directly, so aggressive mode does not need `.tnvfmask` restoration to
@@ -853,9 +864,13 @@ packets use mip level zero and a zero LOD bias through their immutable shader pr
 
 ## Scope and fallbacks
 
-Glyph rasterization remains CPU based: FreeType produces hinted fallback
-coverage and unhinted vector outlines, while the statically linked msdfgen core
-converts native-route outlines to true SDF or MTSDF.
+Glyph rasterization remains CPU based. FreeType produces fallback coverage and
+the native-route vector outline from the same unhinted scalable outline; this
+prevents grid fitting from thickening the aggressive/fallback body before glow,
+outline, and shadow are derived. The statically linked msdfgen core converts the
+same outline basis to true SDF or MTSDF. The CPU rasterizer and distance-field
+shader still use different sampling representations, so exact subpixel equality
+is not guaranteed.
 Adding Skia, D3D11, or D3D12 would require a readback or cross-API copy before
 Fallout New Vegas can consume the result through D3D9, increasing
 synchronization cost and reducing DXVK/Wine compatibility. The GPU is therefore

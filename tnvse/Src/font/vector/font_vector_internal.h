@@ -33,10 +33,13 @@ namespace fonthook::vectorfont
 	// Base Fill/distance-field generator revision. Route-specific pixel changes
 	// may use a narrower revision below to preserve unrelated caches.
 	constexpr UInt32 kGlyphMaskGeneratorVersion = 14;
-	// CPU coverage revision 1 evaluates glow, outline and shadow from the
-	// hinted body distance instead of treating a FreeType stroke as an opaque
-	// effect. It is included in every CPU-effect bitmap/cache identity.
-	constexpr UInt32 kCpuEffectCoverageVersion = 2;
+	// CPU coverage revision 3 rasterizes Fill and every derived CPU effect from
+	// the same unhinted scalable outline used by the distance-field route.
+	// Earlier revisions started from grid-fitted coverage, which made small
+	// aggressive/fallback text and all effects derived from it visibly heavier
+	// than the SDF result. This revision is included in every CPU-effect
+	// bitmap/cache identity.
+	constexpr UInt32 kCpuEffectCoverageVersion = 3;
 	// Version 12 removes the unused 16-band glyph-collision profile from every
 	// manifest record. Version 11 added the final direct cached-letter/composite
 	// profile contract.
@@ -302,11 +305,11 @@ namespace fonthook::vectorfont
 		std::vector<UInt8> alpha;
 	};
 
-	// Composite raster ABI. Revision 2 removes transparent outer rows/columns
-	// after the final four-layer BGRA composition and stores the corrected
-	// bearing rectangle. Include this in every composite cache identity so an
-	// older, conservatively bounded bitmap cannot be restored as current data.
-	inline constexpr UInt32 kCpuCompositeRasterRevision = 2;
+	// Composite raster ABI. Revision 3 uses the unhinted CPU coverage contour
+	// shared with the fallback masks and the distance-field source outline.
+	// Revision 2 removed transparent outer rows/columns after the final
+	// four-layer BGRA composition and stored the corrected bearing rectangle.
+	inline constexpr UInt32 kCpuCompositeRasterRevision = 3;
 
 	inline constexpr UInt32 GlyphBitmapBytesPerPixel(GlyphMaskType maskType,
 		DistanceFieldMethod distanceFieldMethod)

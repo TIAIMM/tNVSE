@@ -708,7 +708,8 @@ namespace fonthook::vectorfont
 	SInt32 ResolveCpuEffectMaskIdentity(const FontConfig& config,
 		GlyphMaskType maskType, float rasterScale)
 	{
-		if (maskType != GlyphMaskType::Glow
+		if (maskType != GlyphMaskType::Fill
+			&& maskType != GlyphMaskType::Glow
 			&& maskType != GlyphMaskType::Outline
 			&& maskType != GlyphMaskType::Shadow
 			&& maskType != GlyphMaskType::Composite)
@@ -806,8 +807,10 @@ namespace fonthook::vectorfont
 		}
 
 		// Legacy CPU masks stored a non-negative 26.6 FreeType stroke width in
-		// this field. Reserve the sign bit for the revised identity so no old
-		// opaque-stroke cache can alias the new distance-aware coverage.
+		// this field. Fill also uses the folded CPU raster identity now, so a
+		// pre-revision hinted body cannot seed newly generated effects or enter
+		// the ARGB fallback. Reserve the sign bit so no old coverage cache can
+		// alias the current unhinted representation.
 		UInt32 folded = static_cast<UInt32>(hash ^ (hash >> 32));
 		folded |= 0x80000000u;
 		return static_cast<SInt32>(folded);
