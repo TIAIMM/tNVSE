@@ -1639,15 +1639,15 @@ namespace fonthook::vectorfont
 	}
 
 		template <class GlyphInstance>
-		NiTriShape* CreateDirectSinglePageArgbShape(Font& font,
+		NiTriShape* CreateDirectArgbPageShape(Font& font,
 			RuntimeFont& runtime,
 			const std::vector<GlyphInstance>& glyphs,
 			const DirectAtlasGlyphBatch& batch, float rasterScale,
 			const NiColorA& tileColor, bool prepareObject,
-			UInt32 drawableGlyphs)
+			UInt16 atlasPage, UInt32 drawableGlyphs)
 		{
 			const auto& atlases = batch.Atlases();
-			if (!drawableGlyphs || atlases.size() != 1
+			if (!drawableGlyphs || atlasPage >= atlases.size()
 				|| batch.glyphs.size() != glyphs.size())
 			{
 				return nullptr;
@@ -1655,7 +1655,7 @@ namespace fonthook::vectorfont
 			NiTriShape* shape = font.MakeTriShape(
 				static_cast<int>(drawableGlyphs), &tileColor, false);
 			if (!shape || !shape->GetModelData()
-				|| !BindDirectAtlasShape(shape, atlases[0]))
+				|| !BindDirectAtlasShape(shape, atlases[atlasPage]))
 			{
 				return nullptr;
 			}
@@ -1673,7 +1673,8 @@ namespace fonthook::vectorfont
 
 			size_t firstDrawable = 0;
 			while (firstDrawable < batch.glyphs.size()
-				&& batch.glyphs[firstDrawable].knownEmpty)
+				&& (batch.glyphs[firstDrawable].knownEmpty
+					|| batch.glyphs[firstDrawable].atlasPage != atlasPage))
 			{
 				++firstDrawable;
 			}
@@ -1695,10 +1696,10 @@ namespace fonthook::vectorfont
 			{
 				const DirectAtlasBatchGlyph& source =
 					batch.glyphs[glyphIndex];
-				if (source.knownEmpty)
+				if (source.knownEmpty || source.atlasPage != atlasPage)
 					continue;
 				if ((!source.placement && !source.stockLetter)
-					|| source.atlasPage != 0)
+					|| source.atlasPage != atlasPage)
 					return nullptr;
 				const GlyphInstance& instance = glyphs[glyphIndex];
 				const NiColorA baseColor =
@@ -1831,17 +1832,87 @@ namespace fonthook::vectorfont
 				return result;
 			}
 
-			if (precomposed && atlases.size() == 1)
+			if (precomposed)
 			{
-				result.geometryQuadCount = result.glyphCount;
-				result.drawQuadCount = result.glyphCount;
-				result.shape = CreateDirectSinglePageArgbShape(
-					font, runtime, glyphs, batch, rasterScale,
-					tileColor, prepareObject, result.glyphCount);
-				result.outcome = result.shape
-					? DirectAtlasShapeOutcome::Created
-					: DirectAtlasShapeOutcome::Failed;
-				return result;
+				std::array<UInt32, kMaximumAtlasSnapshotPages>
+					pageGlyphCounts = {};
+				UInt32 usedPageCount = 0;
+				for (const DirectAtlasBatchGlyph& glyph : batch.glyphs)
+				{
+					if (glyph.knownEmpty)
+						continue;
+					if ((!glyph.placement && !glyph.stockLetter)
+						|| glyph.atlasPage >= atlases.size()
+						|| glyph.atlasPage >= pageGlyphCounts.size())
+					{
+						result.outcome =
+							DirectAtlasShapeOutcome::Failed;
+						return result;
+					}
+					if (pageGlyphCounts[glyph.atlasPage]++ == 0)
+						++usedPageCount;
+				}
+
+				// A stock NiTriShape has one texturing property. Keep the
+				// ordinary single-shape ABI on the first used page and publish
+				// each remaining physical ARGB page as an adjacent stock shape
+				// whenever the caller exposes its destination NiNode.
+				if (usedPageCount == 1
+					|| CanUseFreeTypeStockPageShapes())
+				{
+					std::vector<NiTriShape*> pageShapes;
+					pageShapes.reserve(usedPageCount);
+					for (UInt16 page = 0; page < atlases.size(); ++page)
+					{
+						const UInt32 pageGlyphCount =
+							pageGlyphCounts[page];
+						if (!pageGlyphCount)
+							continue;
+						NiTriShape* pageShape =
+							CreateDirectArgbPageShape(
+								font, runtime, glyphs, batch,
+								rasterScale, tileColor,
+								prepareObject, page,
+								pageGlyphCount);
+						if (!pageShape)
+						{
+							for (NiTriShape* created : pageShapes)
+								created->DeleteThis();
+							result.outcome =
+								DirectAtlasShapeOutcome::Failed;
+							return result;
+						}
+						pageShapes.push_back(pageShape);
+					}
+					if (pageShapes.empty())
+					{
+						result.outcome =
+							DirectAtlasShapeOutcome::Failed;
+						return result;
+					}
+
+					result.shape = pageShapes.front();
+					if (pageShapes.size() > 1)
+					{
+						std::vector<NiTriShape*> additionalShapes(
+							pageShapes.begin() + 1, pageShapes.end());
+						if (!RegisterFreeTypeStockPageShapes(
+							result.shape, additionalShapes))
+						{
+							for (NiTriShape* created : pageShapes)
+								created->DeleteThis();
+							result.shape = nullptr;
+							result.outcome =
+								DirectAtlasShapeOutcome::Failed;
+							return result;
+						}
+					}
+					result.geometryQuadCount = result.glyphCount;
+					result.drawQuadCount = result.glyphCount;
+					result.outcome =
+						DirectAtlasShapeOutcome::Created;
+					return result;
+				}
 			}
 
 			const FontConfig& config = GetRuntimeConfig(runtime);

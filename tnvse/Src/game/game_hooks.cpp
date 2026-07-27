@@ -220,7 +220,9 @@ namespace fonthook
 			const bool replaceProxy = suppress && HasEnabledFreeTypeFontEffects(font);
 
 			ScopedEffectSuppression scope(suppress);
+			BeginFreeTypeStockPageShapeCapture();
 			NiNode* node = s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
+			EndFreeTypeStockPageShapeCapture(node);
 
 			if (replaceProxy && node)
 			{

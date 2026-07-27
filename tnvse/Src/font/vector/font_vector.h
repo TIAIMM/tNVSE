@@ -121,6 +121,12 @@ namespace fonthook
 		ConsumeFreeTypePreparedTextSidecar(const Font::TextData* apData,
 			const Font* apFont, const char* apPreparedText);
 	NiTriShape* CreateEmptyFreeTypeTextShape(Font* apFont, bool abPrepareObject);
+	void BeginFreeTypeStockPageShapeCapture();
+	void EndFreeTypeStockPageShapeCapture(NiNode* apFallbackParent);
+	bool CanUseFreeTypeStockPageShapes();
+	bool RegisterFreeTypeStockPageShapes(
+		NiTriShape* apPrimaryShape,
+		const std::vector<NiTriShape*>& arAdditionalShapes);
 
 	class VectorTextBuilder
 	{

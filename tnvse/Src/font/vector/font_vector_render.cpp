@@ -181,6 +181,17 @@ namespace fonthook
 			return shape;
 		}
 
+		struct StockPageShapeBatch
+		{
+			NiTriShape* primary = nullptr;
+			std::vector<NiTriShapePtr> additionalShapes;
+		};
+
+		struct StockPageShapeCapture
+		{
+			std::vector<StockPageShapeBatch> batches;
+		};
+
 		struct RichTextVectorContext
 		{
 			static constexpr size_t kDirectFontSlots = 64;
@@ -191,10 +202,42 @@ namespace fonthook
 				kDirectFontSlots> builders;
 			std::unordered_map<Font*, std::unique_ptr<VectorTextBuilder>>
 				fallbackBuilders;
+			std::vector<StockPageShapeBatch> stockPageBatches;
 		};
 
 		thread_local std::optional<RichTextVectorContext>
 			s_richTextContext;
+		thread_local std::vector<StockPageShapeCapture>
+			s_stockPageShapeCaptures;
+
+		void AttachStockPageShapeBatches(
+			std::vector<StockPageShapeBatch>& batches,
+			NiNode* fallbackParent)
+		{
+			for (StockPageShapeBatch& batch : batches)
+			{
+				NiNode* parent = batch.primary
+					? batch.primary->m_pkParent : nullptr;
+				if (!parent)
+					parent = fallbackParent;
+				if (!parent || !batch.primary)
+					continue;
+
+				// Font::CreateText/MakeString can return only one shape. The
+				// first atlas page remains that ABI object; once the game has
+				// attached it, put every other stock page beside it and mirror
+				// the caller-applied object state.
+				for (NiTriShapePtr& pageShape : batch.additionalShapes)
+				{
+					if (!pageShape)
+						continue;
+					pageShape->m_kLocal = batch.primary->m_kLocal;
+					pageShape->m_uiFlags = batch.primary->m_uiFlags;
+					parent->AttachChild(pageShape, true);
+				}
+			}
+			batches.clear();
+		}
 	}
 
 	struct VectorTextBuilder::Impl
@@ -242,6 +285,65 @@ namespace fonthook
 	NiTriShape* CreateEmptyFreeTypeTextShape(Font* font, bool prepareObject)
 	{
 		return CreateEmptyVectorShape(font, prepareObject);
+	}
+
+	void BeginFreeTypeStockPageShapeCapture()
+	{
+		s_stockPageShapeCaptures.emplace_back();
+	}
+
+	void EndFreeTypeStockPageShapeCapture(NiNode* fallbackParent)
+	{
+		if (s_stockPageShapeCaptures.empty())
+			return;
+		StockPageShapeCapture capture =
+			std::move(s_stockPageShapeCaptures.back());
+		s_stockPageShapeCaptures.pop_back();
+		AttachStockPageShapeBatches(capture.batches, fallbackParent);
+	}
+
+	bool CanUseFreeTypeStockPageShapes()
+	{
+		return s_richTextContext.has_value()
+			|| !s_stockPageShapeCaptures.empty();
+	}
+
+	bool RegisterFreeTypeStockPageShapes(NiTriShape* primaryShape,
+		const std::vector<NiTriShape*>& additionalShapes)
+	{
+		if (!primaryShape || additionalShapes.empty())
+			return false;
+		if (!s_richTextContext && s_stockPageShapeCaptures.empty())
+			return false;
+
+		StockPageShapeBatch batch;
+		batch.primary = primaryShape;
+		batch.additionalShapes.reserve(additionalShapes.size());
+		for (NiTriShape* shape : additionalShapes)
+		{
+			if (!shape || shape == primaryShape)
+				return false;
+		}
+		for (NiTriShape* shape : additionalShapes)
+		{
+			batch.additionalShapes.emplace_back(shape);
+		}
+		if (batch.additionalShapes.empty())
+			return false;
+
+		if (s_richTextContext)
+		{
+			s_richTextContext->stockPageBatches.push_back(
+				std::move(batch));
+			return true;
+		}
+		if (!s_stockPageShapeCaptures.empty())
+		{
+			s_stockPageShapeCaptures.back().batches.push_back(
+				std::move(batch));
+			return true;
+		}
+		return false;
 	}
 
 	VectorTextBuilder::VectorTextBuilder(Font* apFont, bool abPrepareObject,
@@ -556,6 +658,9 @@ namespace fonthook
 				if (NiTriShape* shape = builder->Finish())
 					s_richTextContext->parent->AttachChild(shape, true);
 			}
+			AttachStockPageShapeBatches(
+				s_richTextContext->stockPageBatches,
+				s_richTextContext->parent);
 		}
 		s_richTextContext.reset();
 	}
