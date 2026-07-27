@@ -1142,7 +1142,6 @@ namespace fonthook::vectorfont
 				// instead of retaining a second CPU pixel copy.
 				const bool compactDefaultEligible = g_bEnableFreeTypeDefaultPoolAtlas
 					&& !State().defaultPoolShutdown
-					&& IsDistanceFieldAtlasPixelMode(pageKey.pixelMode)
 					&& expectsPlacedLevelZero;
 				if (compactDefaultEligible)
 				{
@@ -1175,6 +1174,8 @@ namespace fonthook::vectorfont
 				}
 				if (!restoredToDefaultPool)
 				{
+					if (g_bEnableFreeTypeDefaultPoolAtlas)
+						return false;
 					resource->backend = AtlasBackend::Managed;
 					std::vector<UInt8> storedPixelVector;
 					if (!LoadCompactAtlasSnapshotPixels(*compactSnapshot,

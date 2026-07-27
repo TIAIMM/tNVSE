@@ -1162,6 +1162,8 @@ namespace fonthook::vectorfont
 			{
 				return resource;
 			}
+			if (g_bEnableFreeTypeDefaultPoolAtlas)
+				return nullptr;
 			resource->backend = AtlasBackend::Managed;
 			if (resource->pixelMode == AtlasPixelMode::A8)
 				resource->pixelMode = AtlasPixelMode::Argb32;

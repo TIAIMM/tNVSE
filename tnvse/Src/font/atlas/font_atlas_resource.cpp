@@ -1041,7 +1041,7 @@ namespace fonthook::vectorfont
 			if (State().defaultPoolFailureLogCount++ < 8)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: DEFAULT atlas creation failed; using engine-managed atlas fallback");
+					"tnvse_freetype_font: DEFAULT atlas creation failed; managed fallback is disabled while bEnableFreeTypeDefaultPoolAtlas=1");
 			}
 			return false;
 
@@ -1107,6 +1107,11 @@ namespace fonthook::vectorfont
 
 		bool RecreateManagedAtlasProperty(AtlasResource& resource)
 		{
+			// A managed 1x1 bootstrap property is still used transiently while
+			// wrapping a native DEFAULT texture, but a live atlas generation must
+			// never acquire engine-managed backing when the DEFAULT policy is on.
+			if (g_bEnableFreeTypeDefaultPoolAtlas)
+				return false;
 			const size_t byteCount = static_cast<size_t>(resource.width) * resource.height
 				* AtlasBytesPerPixel(resource.pixelMode);
 			std::vector<UInt8> source;
@@ -1863,6 +1868,8 @@ namespace fonthook::vectorfont
 		bool AddBitmapsToManagedAtlas(AtlasResource& resource,
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps)
 		{
+			if (g_bEnableFreeTypeDefaultPoolAtlas)
+				return false;
 			AtlasResource planned;
 			planned.width = resource.width;
 			planned.height = resource.height;
@@ -1949,6 +1956,8 @@ namespace fonthook::vectorfont
 				// Keep an established DEFAULT generation intact. The caller can use a
 				// transient atlas for this text without invalidating existing shapes.
 				if (resource.property)
+					return false;
+				if (g_bEnableFreeTypeDefaultPoolAtlas)
 					return false;
 				resource.backend = AtlasBackend::Managed;
 				if (resource.pixelMode == AtlasPixelMode::A8)

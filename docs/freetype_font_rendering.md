@@ -820,10 +820,14 @@ satisfy a software budget. Obsolete generations that are no longer referenced
 are still reclaimed. A nonzero value is used directly as the soft budget.
 Atlas generations still referenced by visible game shapes cannot be evicted,
 so live usage may temporarily exceed a nonzero soft budget. The selected policy
-is written to `tnvse.log` at initialization. Validated distance-field snapshots
-restore directly to the DEFAULT pool when enabled. ARGB fallback atlases are
-runtime-only and contain three mip levels (1x,
-1/2x, and 1/4x); the cache budget and upload counters include all levels.
+is written to `tnvse.log` at initialization. When
+`bEnableFreeTypeDefaultPoolAtlas=1`, validated level-zero distance-field,
+coverage, and aggressive BGRA composite snapshots all restore directly to the
+DEFAULT pool. Runtime atlas creation follows the same rule for every pixel and
+render mode. A DEFAULT-pool creation failure rejects that atlas generation
+instead of silently retaining a full engine-managed CPU backing. ARGB fallback
+atlases that use a mip chain remain runtime-only and contain three mip levels
+(1x, 1/2x, and 1/4x); the cache budget and upload counters include all levels.
 Limiting the chain to three levels together with four-pixel per-side packing
 padding prevents the coarsest bilinear footprint from reaching a neighboring
 glyph. Text spanning pages is sorted into contiguous layer/page native packets;
