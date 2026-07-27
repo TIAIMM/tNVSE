@@ -2080,14 +2080,7 @@ namespace fonthook::vectorfont
 		}
 		const SealedDirectGlyphLookup result =
 			DecodeSealedDirectGlyph(*sealed, text, glyph);
-		if (result == SealedDirectGlyphLookup::Unavailable)
-		{
-			// A fixed invalid slot is a dynamic glyph request. Revoke this
-			// runtime publication before geometry selection so the complete
-			// text takes the compatibility route.
-			InvalidateSealedDirectFontProfile(runtime);
-		}
-		else if (result == SealedDirectGlyphLookup::Invalid)
+		if (result == SealedDirectGlyphLookup::Invalid)
 		{
 			InvalidateSealedDirectFontProfile(runtime);
 		}

@@ -590,6 +590,7 @@ namespace fonthook::vectorfont
 		std::unordered_map<UInt64, std::weak_ptr<PersistentGlyphManifest>>
 			persistentGlyphManifests;
 		std::vector<UInt16> persistentGlyphManifestCodes;
+		std::vector<UInt16> persistentGlyphManifestGb2312Codes;
 		UInt32 persistentGlyphManifestCodePage = UINT32_MAX;
 		std::unordered_set<std::wstring> usedPersistentCachePaths;
 		std::array<UInt32, 256> singleByteCodePoints = {};

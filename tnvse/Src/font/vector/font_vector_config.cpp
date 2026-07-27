@@ -1,5 +1,6 @@
 #include "font_vector_internal.h"
 
+#include "encoding.h"
 #include "load_config.h"
 
 #include <pugixml/pugixml.hpp>
@@ -165,6 +166,8 @@ namespace fonthook::vectorfont
 					++candidate)
 				{
 					if (!assigned[candidate]
+						&& ResolveFontPrewarmRange(*configs[familyStart])
+							== ResolveFontPrewarmRange(*configs[candidate])
 						&& SameMtsdfRasterStyle(configs[familyStart]->styles[1],
 							configs[candidate]->styles[1]))
 					{
@@ -508,6 +511,18 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
+			const std::string prewarmEncoding =
+				node.attribute("prewarmEncoding").as_string("gbk");
+			if (prewarmEncoding == "gbk")
+				config.prewarmRange = FontPrewarmRange::CompleteCodePage;
+			else if (prewarmEncoding == "gb2312")
+				config.prewarmRange = FontPrewarmRange::GB2312;
+			else
+			{
+				reason = "prewarmEncoding must be gbk or gb2312";
+				return false;
+			}
+
 			const std::string effectQuality =
 				node.attribute("effectQuality").as_string("balanced");
 			if (effectQuality == "fast")
@@ -594,8 +609,10 @@ namespace fonthook::vectorfont
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarm=full-codepage verticalMetrics=%s baseline=%.2f fontColor=%d shaderFill=mtsdf-rgb effectDistance=alpha-tsdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
+				"tnvse_freetype_font: config font id=%u prewarmEncoding=%s verticalMetrics=%s baseline=%.2f fontColor=%d shaderFill=mtsdf-rgb effectDistance=alpha-tsdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
 				config.fontId,
+				GetFontPrewarmRangeName(
+					ResolveFontPrewarmRange(config), GetFreeTypeTextCodePage()),
 				config.verticalMetrics == VerticalMetricsMode::Original
 					? "original" : "freetype",
 				config.baseline,
@@ -651,6 +668,20 @@ namespace fonthook::vectorfont
 	{
 		auto it = g_configs.find(auiFontId);
 		return it == g_configs.end() ? nullptr : &it->second;
+	}
+
+	FontPrewarmRange ResolveFontPrewarmRange(const FontConfig& config)
+	{
+		return GetFreeTypeTextCodePage() == 936
+			? config.prewarmRange : FontPrewarmRange::CompleteCodePage;
+	}
+
+	const char* GetFontPrewarmRangeName(FontPrewarmRange range,
+		UInt32 codePage)
+	{
+		if (codePage == 936 && range == FontPrewarmRange::GB2312)
+			return "gb2312";
+		return codePage == 936 ? "gbk" : "full-codepage";
 	}
 
 	bool HardShadowIncludesGlow(const FontConfig& arConfig)

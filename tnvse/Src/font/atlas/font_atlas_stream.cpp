@@ -57,6 +57,8 @@ namespace fonthook::vectorfont
 			UInt32 fontId = 0;
 			UInt32 scaleMilli = 0;
 			UInt32 codePage = 0;
+			FontPrewarmRange prewarmRange =
+				FontPrewarmRange::CompleteCodePage;
 			UInt64 layoutHash = 0;
 			UInt64 maskGenerationHash = 0;
 			UInt64 shaderEffectHash = 0;
@@ -129,6 +131,12 @@ namespace fonthook::vectorfont
 			hash = HashBytes(&key.levelZeroOnly,
 				sizeof(key.levelZeroOnly), hash);
 			hash = HashBytes(&key.byteClass, sizeof(key.byteClass), hash);
+			const bool forceSingleAtlas =
+				g_bEnableFreeTypeDefaultPoolAtlas;
+			hash = HashBytes(&forceSingleAtlas,
+				sizeof(forceSingleAtlas), hash);
+			hash = HashBytes(&kAtlasHardLimit,
+				sizeof(kAtlasHardLimit), hash);
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			hash = HashBytes(&codePage, sizeof(codePage), hash);
 			hash = HashBytes(&kCompleteCodePagePrewarmIdentity,
@@ -144,6 +152,13 @@ namespace fonthook::vectorfont
 				const UInt32 revision = DistanceFieldGeneratorRevision(method);
 				hash = HashBytes(&method, sizeof(method), hash);
 				hash = HashBytes(&revision, sizeof(revision), hash);
+			}
+			else if (key.renderMode == AtlasRenderMode::CpuEffects
+				&& key.pixelMode == AtlasPixelMode::Argb32
+				&& key.levelZeroOnly)
+			{
+				hash = HashBytes(&kCpuCompositeRasterRevision,
+					sizeof(kCpuCompositeRasterRevision), hash);
 			}
 			// A snapshot is usable only together with a complete glyph manifest.
 			// Couple their ABIs so a manifest format change cannot leave an
@@ -210,14 +225,6 @@ namespace fonthook::vectorfont
 				header.storageMode,
 				static_cast<UInt8>(header.mipLevels == 1 ? 1 : 0) };
 			UInt64 hash = HashBytes(&identity, sizeof(identity));
-			struct Slice
-			{
-				AtlasRect rect;
-				size_t offset;
-				size_t bytes;
-			};
-			std::vector<Slice> slices;
-			slices.reserve(placements.size());
 			size_t offset = 0;
 			for (const AtlasSnapshotPlacement& placement : placements)
 			{
@@ -226,26 +233,12 @@ namespace fonthook::vectorfont
 						static_cast<AtlasPixelMode>(header.pixelMode));
 				if (offset > pixels.size() || bytes > pixels.size() - offset)
 					return 0;
-				slices.push_back({ placement.rect, offset, bytes });
+				hash = HashBytes(&placement.rect,
+					sizeof(placement.rect), hash);
+				hash = HashBytes(pixels.data() + offset, bytes, hash);
 				offset += bytes;
 			}
-			if (offset != pixels.size())
-				return 0;
-			std::sort(slices.begin(), slices.end(), [](const Slice& left,
-				const Slice& right)
-			{
-				if (left.rect.y != right.rect.y) return left.rect.y < right.rect.y;
-				if (left.rect.x != right.rect.x) return left.rect.x < right.rect.x;
-				if (left.rect.height != right.rect.height)
-					return left.rect.height < right.rect.height;
-				return left.rect.width < right.rect.width;
-			});
-			for (const Slice& slice : slices)
-			{
-				hash = HashBytes(&slice.rect, sizeof(slice.rect), hash);
-				hash = HashBytes(pixels.data() + slice.offset, slice.bytes, hash);
-			}
-			return hash;
+			return offset == pixels.size() ? hash : 0;
 		}
 
 		void ResetPage(StreamingPage& page)
@@ -457,6 +450,7 @@ namespace fonthook::vectorfont
 		{
 			return state.fontId == config.fontId && state.scaleMilli == scaleMilli
 				&& state.codePage == GetFreeTypeTextCodePage()
+				&& state.prewarmRange == ResolveFontPrewarmRange(config)
 				&& state.layoutHash == config.layoutHash
 				&& state.maskGenerationHash == config.maskGenerationHash
 				&& state.shaderEffectHash == config.shaderEffectHash;
@@ -497,6 +491,7 @@ namespace fonthook::vectorfont
 			state->fontId = config.fontId;
 			state->scaleMilli = scaleMilli;
 			state->codePage = GetFreeTypeTextCodePage();
+			state->prewarmRange = ResolveFontPrewarmRange(config);
 			state->layoutHash = config.layoutHash;
 			state->maskGenerationHash = config.maskGenerationHash;
 			state->shaderEffectHash = config.shaderEffectHash;

@@ -95,6 +95,12 @@ namespace fonthook::vectorfont
 					static_cast<DistanceFieldMethod>(key.distanceFieldMethod));
 				add(&revision, sizeof(revision));
 			}
+			else if (key.maskType
+				== static_cast<UInt8>(GlyphMaskType::Composite))
+			{
+				add(&kCpuCompositeRasterRevision,
+					sizeof(kCpuCompositeRasterRevision));
+			}
 			return hash;
 		}
 
@@ -120,6 +126,12 @@ namespace fonthook::vectorfont
 				const UInt32 revision = DistanceFieldGeneratorRevision(
 					static_cast<DistanceFieldMethod>(key.distanceFieldMethod));
 				hash = HashBytes64(&revision, sizeof(revision), hash);
+			}
+			else if (key.maskType
+				== static_cast<UInt8>(GlyphMaskType::Composite))
+			{
+				hash = HashBytes64(&kCpuCompositeRasterRevision,
+					sizeof(kCpuCompositeRasterRevision), hash);
 			}
 			return hash;
 		}
@@ -1010,22 +1022,67 @@ namespace fonthook::vectorfont
 			return runtime.maskContentRoleHashes[roleIndex];
 		}
 
+		bool IsGb2312RoundTrip(const char bytes[2])
+		{
+			constexpr UInt32 kGb2312CodePage = 20936;
+			wchar_t decoded[2] = {};
+			int decodedCount = MultiByteToWideChar(kGb2312CodePage,
+				MB_ERR_INVALID_CHARS, bytes, 2, decoded,
+				static_cast<int>(std::size(decoded)));
+			if (!decodedCount && GetLastError() == ERROR_INVALID_FLAGS)
+			{
+				decodedCount = MultiByteToWideChar(kGb2312CodePage, 0,
+					bytes, 2, decoded, static_cast<int>(std::size(decoded)));
+			}
+			if (decodedCount != 1)
+				return false;
+
+			char encoded[2] = {};
+			BOOL usedDefault = FALSE;
+			int encodedCount = WideCharToMultiByte(kGb2312CodePage,
+				WC_NO_BEST_FIT_CHARS, decoded, decodedCount, encoded,
+				static_cast<int>(std::size(encoded)), nullptr, &usedDefault);
+			if (!encodedCount && GetLastError() == ERROR_INVALID_FLAGS)
+			{
+				usedDefault = FALSE;
+				encodedCount = WideCharToMultiByte(kGb2312CodePage, 0,
+					decoded, decodedCount, encoded,
+					static_cast<int>(std::size(encoded)), nullptr, &usedDefault);
+			}
+			return encodedCount == 2 && !usedDefault
+				&& encoded[0] == bytes[0] && encoded[1] == bytes[1];
+		}
+
 		void BuildGlyphManifestCodeTable(UInt32 codePage,
+			FontPrewarmRange prewarmRange,
 			std::vector<UInt16>& encodedCodes)
 		{
 			encodedCodes.clear();
-			encodedCodes.reserve(24576);
+			const bool gb2312 = codePage == 936
+				&& prewarmRange == FontPrewarmRange::GB2312;
+			encodedCodes.reserve(gb2312 ? 8448 : 24576);
 			for (UInt32 value = 0; value <= 0xFF; ++value)
 				encodedCodes.push_back(static_cast<UInt16>(value));
 			if (!IsDbcsCodePage(codePage))
 				return;
-			for (UInt32 lead = 0x80; lead <= 0xFF; ++lead)
+			const UInt32 firstLead = gb2312 ? 0xA1 : 0x80;
+			const UInt32 lastLead = gb2312 ? 0xF7 : 0xFF;
+			const UInt32 firstTrail = gb2312 ? 0xA1 : 1;
+			const UInt32 lastTrail = gb2312 ? 0xFE : 0xFF;
+			const bool validateGb2312Assignments =
+				gb2312 && IsValidCodePage(20936);
+			for (UInt32 lead = firstLead; lead <= lastLead; ++lead)
 			{
-				for (UInt32 trail = 1; trail <= 0xFF; ++trail)
+				for (UInt32 trail = firstTrail; trail <= lastTrail; ++trail)
 				{
 					const char bytes[2] = {
 						static_cast<char>(lead), static_cast<char>(trail)
 					};
+					if (validateGb2312Assignments
+						&& !IsGb2312RoundTrip(bytes))
+					{
+						continue;
+					}
 					UInt32 encoded = 0;
 					if (!TryDecodeDoubleByteForCodePage(bytes, codePage, encoded))
 						continue;
@@ -1053,11 +1110,38 @@ namespace fonthook::vectorfont
 			if (state.persistentGlyphManifestCodePage != codePage)
 			{
 				BuildGlyphManifestCodeTable(codePage,
+					FontPrewarmRange::CompleteCodePage,
 					state.persistentGlyphManifestCodes);
 				state.persistentGlyphManifestCodePage = codePage;
 			}
 			return state.persistentGlyphManifestCodes;
 		}
+
+	const std::vector<UInt16>& GetFontPrewarmEncodedUnits(
+		const FontConfig& config)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		const UInt32 codePage = GetFreeTypeTextCodePage();
+		FreeTypeState& state = State();
+		const FontPrewarmRange range = ResolveFontPrewarmRange(config);
+		if (range == FontPrewarmRange::GB2312)
+		{
+			if (state.persistentGlyphManifestGb2312Codes.empty())
+			{
+				BuildGlyphManifestCodeTable(936, FontPrewarmRange::GB2312,
+					state.persistentGlyphManifestGb2312Codes);
+			}
+			return state.persistentGlyphManifestGb2312Codes;
+		}
+		if (state.persistentGlyphManifestCodePage != codePage)
+		{
+			BuildGlyphManifestCodeTable(codePage,
+				FontPrewarmRange::CompleteCodePage,
+				state.persistentGlyphManifestCodes);
+			state.persistentGlyphManifestCodePage = codePage;
+		}
+		return state.persistentGlyphManifestCodes;
+	}
 
 		PersistentGlyphManifestHeader MakeGlyphManifestHeader(
 			const RuntimeFont& runtime, UInt64 manifestHash, UInt64 layoutContentHash,
@@ -1317,6 +1401,10 @@ namespace fonthook::vectorfont
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			manifestHash = HashBytes64(&codePage,
 				sizeof(codePage), manifestHash);
+			const FontPrewarmRange prewarmRange =
+				ResolveFontPrewarmRange(GetRuntimeConfig(runtime));
+			manifestHash = HashBytes64(&prewarmRange,
+				sizeof(prewarmRange), manifestHash);
 			const PersistentFontCacheDomain cacheDomain =
 				GetPersistentFontCacheDomain();
 			manifestHash = HashBytes64(&cacheDomain,
@@ -1370,7 +1458,7 @@ namespace fonthook::vectorfont
 			manifest->path = directory + L"\\" + fileName;
 			State().usedPersistentCachePaths.insert(NormalizePathKey(manifest->path));
 			const std::vector<UInt16>& encodedCodes =
-				GetCompleteCodePageEncodedUnits();
+				GetFontPrewarmEncodedUnits(GetRuntimeConfig(runtime));
 			InitializeGlyphManifest(*manifest, runtime, encodedCodes);
 			State().persistentGlyphManifests[manifestHash] = manifest;
 			runtime.manifest = std::move(manifest);

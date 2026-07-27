@@ -287,6 +287,8 @@ namespace fonthook::vectorfont
 			UInt64 maskGenerationHash = 0;
 			UInt64 shaderEffectHash = 0;
 			UInt32 codePage = 0;
+			FontPrewarmRange prewarmRange =
+				FontPrewarmRange::CompleteCodePage;
 			const std::vector<UInt16>* encodedUnits = nullptr;
 			size_t encodedUnitIndex = 0;
 			size_t encodedUnitStart = 0;
@@ -367,6 +369,9 @@ namespace fonthook::vectorfont
 				sizeof(kCompleteCodePagePrewarmIdentity));
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			add(&codePage, sizeof(codePage));
+			const FontPrewarmRange prewarmRange =
+				ResolveFontPrewarmRange(config);
+			add(&prewarmRange, sizeof(prewarmRange));
 			return hash;
 		}
 
@@ -405,10 +410,12 @@ namespace fonthook::vectorfont
 		}
 
 		void PreparePrewarmScanForGeneration(PrewarmJob& job,
+			const FontConfig& config,
 			UInt32 rasterScaleMilli)
 		{
 			ResetPrewarmScan(job, rasterScaleMilli);
-			const std::vector<UInt16>& units = GetCompleteCodePageEncodedUnits();
+			const std::vector<UInt16>& units =
+				GetFontPrewarmEncodedUnits(config);
 			job.encodedUnits = &units;
 			job.encodedUnitStart = static_cast<size_t>(std::lower_bound(
 				units.begin(), units.end(), static_cast<UInt16>(0x20)) - units.begin());
@@ -534,8 +541,9 @@ namespace fonthook::vectorfont
 		void FinishJob(const PrewarmJob& job, const char* status)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm font=%u coverage=full-codepage scale=%.3f glyphs=%u doubleByte=%u distanceField=%s distanceFieldGlyphs=%u status=%s",
+				"tnvse_freetype_font: prewarm font=%u prewarmEncoding=%s scale=%.3f glyphs=%u doubleByte=%u distanceField=%s distanceFieldGlyphs=%u status=%s",
 				job.fontId,
+				GetFontPrewarmRangeName(job.prewarmRange, job.codePage),
 				job.rasterScaleMilli ? job.rasterScaleMilli / 1000.0f : 0.0f,
 				job.rasterizedGlyphCount, job.validDoubleByteCount,
 				GetConfiguredDistanceFieldMethodName(),
@@ -609,6 +617,9 @@ namespace fonthook::vectorfont
 		job.maskGenerationHash = config->maskGenerationHash;
 		job.shaderEffectHash = config->shaderEffectHash;
 		job.codePage = GetFreeTypeTextCodePage();
+		job.prewarmRange = ResolveFontPrewarmRange(*config);
+		const FontPrewarmRange prewarmRange = job.prewarmRange;
+		const UInt32 codePage = job.codePage;
 		ResetPrewarmScan(job, 0);
 		s_jobs.push_back(std::move(job));
 		if (!s_atlasOnlyPrewarmPending)
@@ -621,8 +632,9 @@ namespace fonthook::vectorfont
 		}
 		SetBitmapCacheReducedAfterPrewarm(false);
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: queued prewarm font=%u coverage=direct-first codePage=%u",
-			fontId, GetFreeTypeTextCodePage());
+			"tnvse_freetype_font: queued prewarm font=%u coverage=direct-first codePage=%u prewarmEncoding=%s",
+			fontId, codePage,
+			GetFontPrewarmRangeName(prewarmRange, codePage));
 	}
 
 	void QueueConfiguredFontPrewarms()
@@ -760,7 +772,7 @@ namespace fonthook::vectorfont
 				rasterScale);
 			const bool persistentDiscarded =
 				ResetPersistentFontCachesForRegeneration(*runtime);
-			PreparePrewarmScanForGeneration(job, rasterScaleMilli);
+			PreparePrewarmScanForGeneration(job, *config, rasterScaleMilli);
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: cache miss regenerated from empty state font=%u atlas=%s persistent=%s",
 				job.fontId, atlasDiscarded ? "discarded" : "delete-failed",

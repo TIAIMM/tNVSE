@@ -816,12 +816,22 @@ namespace fonthook::vectorfont
 			}
 			const FontConfig& rasterConfig = shaderEffects
 				? GetMtsdfAtlasConfig(config, byteClass) : config;
-			return BuildAtlasContentHash(
+			UInt64 hash = BuildAtlasContentHash(
 				rasterConfig.maskGenerationRoleHashes[
 					static_cast<size_t>(byteClass)],
 				combination, sdfSpread, outlineStroke, glowStroke,
 				shaderEffects ? 0 : BuildCpuCoverageHash(config, rasterScale),
 				1469598103934665603ull);
+			const FontPrewarmRange prewarmRange =
+				ResolveFontPrewarmRange(config);
+			const UInt8* bytes =
+				reinterpret_cast<const UInt8*>(&prewarmRange);
+			for (size_t index = 0; index < sizeof(prewarmRange); ++index)
+			{
+				hash ^= bytes[index];
+				hash *= 1099511628211ull;
+			}
+			return hash;
 		}
 
 	bool ResolvePrewarmAtlasKey(const FontConfig& config,

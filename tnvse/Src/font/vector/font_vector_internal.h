@@ -228,6 +228,12 @@ namespace fonthook::vectorfont
 		Original = 1,
 	};
 
+	enum class FontPrewarmRange : UInt8
+	{
+		CompleteCodePage = 0,
+		GB2312 = 1,
+	};
+
 	enum class GlyphMaskType : UInt8
 	{
 		Fill = 0,
@@ -244,6 +250,9 @@ namespace fonthook::vectorfont
 	{
 		UInt32 fontId = 0;
 		std::array<ByteStyle, 2> styles;
+		// CP936 may prewarm either the complete GBK table or the smaller GB2312
+		// byte zone. Other code pages always resolve to CompleteCodePage.
+		FontPrewarmRange prewarmRange = FontPrewarmRange::CompleteCodePage;
 		VerticalMetricsMode verticalMetrics = VerticalMetricsMode::FreeType;
 		float baseline = 0.0f;
 		FontColorStyle fontColor;
@@ -292,6 +301,12 @@ namespace fonthook::vectorfont
 		// precomposed BGRA glyph, according to maskType/distanceFieldMethod.
 		std::vector<UInt8> alpha;
 	};
+
+	// Composite raster ABI. Revision 2 removes transparent outer rows/columns
+	// after the final four-layer BGRA composition and stores the corrected
+	// bearing rectangle. Include this in every composite cache identity so an
+	// older, conservatively bounded bitmap cannot be restored as current data.
+	inline constexpr UInt32 kCpuCompositeRasterRevision = 2;
 
 	inline constexpr UInt32 GlyphBitmapBytesPerPixel(GlyphMaskType maskType,
 		DistanceFieldMethod distanceFieldMethod)
@@ -549,6 +564,11 @@ namespace fonthook::vectorfont
 	void DeleteUnusedFreeTypeFontCacheFiles(bool abDeleteAllUnused);
 	void MarkGlyphManifestComplete(RuntimeFont& arRuntime);
 	const std::vector<UInt16>& GetCompleteCodePageEncodedUnits();
+	const std::vector<UInt16>& GetFontPrewarmEncodedUnits(
+		const FontConfig& arConfig);
+	FontPrewarmRange ResolveFontPrewarmRange(const FontConfig& arConfig);
+	const char* GetFontPrewarmRangeName(FontPrewarmRange aeRange,
+		UInt32 aCodePage);
 	float GetGlyphBaselineOffset(const RuntimeFont& arRuntime,
 		const VectorEncodedGlyph& arGlyph);
 	void GetGlyphBitmaps(RuntimeFont& arRuntime,

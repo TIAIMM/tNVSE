@@ -342,8 +342,6 @@ namespace fonthook
 			if (lookup
 				== vectorfont::SealedDirectGlyphLookup::Unavailable)
 			{
-				vectorfont::InvalidateSealedDirectFontProfile(
-					*m_impl->runtime);
 				m_impl->glyphs.reserve(
 					m_impl->directGlyphs.size() + 1u);
 				for (const vectorfont::DirectGlyphCommand& command :

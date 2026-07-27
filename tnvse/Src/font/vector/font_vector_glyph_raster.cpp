@@ -499,6 +499,73 @@ namespace fonthook::vectorfont
 					0.0f, 1.0f) * 255.0f));
 		}
 
+		bool TightenCompositeAlphaBounds(GlyphBitmap& target)
+		{
+			if (target.width <= 0 || target.height <= 0)
+				return true;
+			const size_t expectedBytes = static_cast<size_t>(target.width)
+				* target.height * 4u;
+			if (target.alpha.size() != expectedBytes)
+				return false;
+
+			int minX = target.width;
+			int minY = target.height;
+			int maxX = -1;
+			int maxY = -1;
+			for (int y = 0; y < target.height; ++y)
+			{
+				const UInt8* row = target.alpha.data()
+					+ static_cast<size_t>(y) * target.width * 4u;
+				for (int x = 0; x < target.width; ++x)
+				{
+					if (!row[static_cast<size_t>(x) * 4u + 3u])
+						continue;
+					minX = std::min(minX, x);
+					minY = std::min(minY, y);
+					maxX = std::max(maxX, x);
+					maxY = std::max(maxY, y);
+				}
+			}
+
+			// A completely transparent configured glyph still needs to remain a
+			// structurally valid non-space record. Do not turn it into the
+			// reserved known-empty representation here.
+			if (maxX < minX || maxY < minY)
+				return true;
+			if (!minX && !minY
+				&& maxX == target.width - 1
+				&& maxY == target.height - 1)
+			{
+				return true;
+			}
+
+			const int sourceWidth = target.width;
+			const int croppedWidth = maxX - minX + 1;
+			const int croppedHeight = maxY - minY + 1;
+			std::vector<UInt8> cropped(
+				static_cast<size_t>(croppedWidth) * croppedHeight * 4u);
+			for (int y = 0; y < croppedHeight; ++y)
+			{
+				const UInt8* source = target.alpha.data()
+					+ (static_cast<size_t>(minY + y) * sourceWidth + minX) * 4u;
+				UInt8* destination = cropped.data()
+					+ static_cast<size_t>(y) * croppedWidth * 4u;
+				std::copy_n(source, static_cast<size_t>(croppedWidth) * 4u,
+					destination);
+			}
+
+			// Bitmap rows run downwards while top is measured upwards from the
+			// baseline. Preserve the logical advance; direct FontLetter
+			// conversion derives the compensating spacing from these corrected
+			// bounds, so pen position and whitespace remain unchanged.
+			target.left += minX;
+			target.top -= minY;
+			target.width = croppedWidth;
+			target.height = croppedHeight;
+			target.alpha.swap(cropped);
+			return true;
+		}
+
 		bool BuildCpuCompositeBitmap(const FontConfig& config,
 			float rasterScale, const GlyphBitmap& body, GlyphBitmap& target)
 		{
@@ -649,7 +716,7 @@ namespace fonthook::vectorfont
 					}
 				}
 			}
-			return true;
+			return TightenCompositeAlphaBounds(target);
 		}
 
 		std::shared_ptr<GlyphBitmap> BuildGlyphBitmap(FreeTypeState&,

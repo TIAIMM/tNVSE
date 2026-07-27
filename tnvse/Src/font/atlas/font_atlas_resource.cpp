@@ -765,6 +765,146 @@ namespace fonthook::vectorfont
 				hash = HashCompactAtlasBytes(pixels.data(), pixels.size(), hash);
 				return hash == snapshot.sourceHeader.payloadChecksum;
 			}
+
+			class BufferedSnapshotReader
+			{
+			public:
+				explicit BufferedSnapshotReader(HANDLE file)
+					: m_file(file), m_buffer(1024u * 1024u)
+				{
+				}
+
+				bool ReadExact(void* destination, size_t size)
+				{
+					UInt8* output = static_cast<UInt8*>(destination);
+					while (size)
+					{
+						if (m_offset == m_size)
+						{
+							DWORD read = 0;
+							if (!ReadFile(m_file, m_buffer.data(),
+								static_cast<DWORD>(m_buffer.size()),
+								&read, nullptr)
+								|| !read)
+							{
+								return false;
+							}
+							m_offset = 0;
+							m_size = read;
+						}
+						const size_t copied = std::min(
+							size, m_size - m_offset);
+						std::memcpy(output,
+							m_buffer.data() + m_offset, copied);
+						output += copied;
+						size -= copied;
+						m_offset += copied;
+					}
+					return true;
+				}
+
+			private:
+				HANDLE m_file = INVALID_HANDLE_VALUE;
+				std::vector<UInt8> m_buffer;
+				size_t m_offset = 0;
+				size_t m_size = 0;
+			};
+
+			bool StreamCompactSnapshotPixels(UInt8* destination,
+				LONG pitch, AtlasPixelMode destinationMode,
+				const AtlasResource& resource,
+				const CompactAtlasSnapshot& snapshot)
+			{
+				if (!destination || pitch <= 0
+					|| static_cast<AtlasSnapshotStorage>(
+						snapshot.sourceHeader.storageMode)
+						!= AtlasSnapshotStorage::PlacedLevelZeroRects
+					|| snapshot.sourceHeader.storedPixelBytes
+						!= snapshot.sourceHeader.pixelBytes)
+				{
+					return false;
+				}
+				CompactSnapshotFile file;
+				if (!OpenCompactSnapshotPixels(snapshot, file))
+					return false;
+				BufferedSnapshotReader reader(file.handle);
+				const UInt32 sourceBytesPerPixel =
+					AtlasBytesPerPixel(snapshot.pixelMode);
+				const UInt32 destinationBytesPerPixel =
+					AtlasBytesPerPixel(destinationMode);
+				UInt64 payloadHash = HashCompactAtlasBytes(
+					snapshot.placements.data(),
+					snapshot.placements.size()
+						* sizeof(AtlasSnapshotPlacement));
+				size_t sourceBytes = 0;
+				std::vector<UInt8> sourceRow;
+				for (const AtlasSnapshotPlacement& placement :
+					snapshot.placements)
+				{
+					const AtlasRect& rect = placement.rect;
+					if (!placement.cacheId || !rect.width
+						|| !rect.height || rect.x > resource.width
+						|| rect.width > resource.width - rect.x
+						|| rect.y > resource.height
+						|| rect.height > resource.height - rect.y)
+					{
+						return false;
+					}
+					const size_t sourceRowBytes =
+						static_cast<size_t>(rect.width)
+							* sourceBytesPerPixel;
+					if (sourceRowBytes
+						> std::numeric_limits<size_t>::max()
+							- sourceBytes)
+					{
+						return false;
+					}
+					sourceRow.resize(sourceRowBytes);
+					for (UInt32 row = 0; row < rect.height; ++row)
+					{
+						UInt8* target = destination
+							+ static_cast<size_t>(rect.y + row)
+								* pitch
+							+ static_cast<size_t>(rect.x)
+								* destinationBytesPerPixel;
+						UInt8* source = sourceRow.data();
+						if (!reader.ReadExact(source,
+							sourceRowBytes))
+						{
+							return false;
+						}
+						payloadHash = HashCompactAtlasBytes(
+							source, sourceRowBytes, payloadHash);
+						if (snapshot.pixelMode
+							== destinationMode)
+						{
+							std::memcpy(target, source,
+								sourceRowBytes);
+						}
+						else if (snapshot.pixelMode
+							== AtlasPixelMode::A8)
+						{
+							for (UInt32 x = 0; x < rect.width; ++x)
+							{
+								target[x * 4 + 0] = 0xFF;
+								target[x * 4 + 1] = 0xFF;
+								target[x * 4 + 2] = 0xFF;
+								target[x * 4 + 3] = source[x];
+							}
+						}
+						else
+						{
+							for (UInt32 x = 0; x < rect.width; ++x)
+								target[x] = source[x * 4 + 3];
+						}
+						sourceBytes += sourceRowBytes;
+					}
+				}
+				return sourceBytes
+						== snapshot.sourceHeader.storedPixelBytes
+					&& payloadHash
+						== snapshot.sourceHeader.payloadChecksum;
+			}
 		}
 
 		bool LoadCompactAtlasSnapshotPixels(const CompactAtlasSnapshot& snapshot,
@@ -787,18 +927,15 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
-			// Snapshot pages are capped at 16 MiB. Read and checksum one complete
-			// page at a time instead of issuing one ReadFile call per glyph row
-			// (millions of kernel calls for a full CJK profile). The bounded page
-			// buffer is released before the next D3D9 texture is created.
-			std::vector<UInt8> loadedPixels;
-			if (snapshot.pixels.empty()
-				&& !LoadCompactSnapshotPixels(snapshot, loadedPixels))
+			// A forced complete-code-page atlas can exceed 200 MiB. Stream the
+			// compact payload through a bounded reader directly into the locked
+			// DEFAULT texture instead of recreating a full CPU texture copy.
+			if (snapshot.pixels.empty())
 			{
-				return false;
+				return StreamCompactSnapshotPixels(destination,
+					pitch, destinationMode, resource, snapshot);
 			}
-			const std::vector<UInt8>& memoryPixels = snapshot.pixels.empty()
-				? loadedPixels : snapshot.pixels;
+			const std::vector<UInt8>& memoryPixels = snapshot.pixels;
 			const size_t expectedPixelBytes = memoryPixels.size();
 			size_t sourceOffset = 0;
 			for (const AtlasSnapshotPlacement& placement : snapshot.placements)

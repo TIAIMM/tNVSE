@@ -48,6 +48,13 @@
       baseline
         Fallout line rise/ascent in pixels. 0 derives or inherits it according
         to verticalMetrics; a positive value overrides it. Default: 0.
+      prewarmEncoding
+        Per-font CP936 startup coverage: "gbk" (default) prewarms every valid
+        GBK/CP936 unit; "gb2312" prewarms only assigned, round-trippable
+        GB2312 units in the A1-F7/A1-FE byte zone. Runtime decoding remains
+        CP936. A GBK extension outside a
+        GB2312-prewarmed profile is generated on demand for the current text.
+        This attribute has no effect under other code pages.
       effectQuality
         "fast", "balanced", or "high". Default: "balanced".
       fontColor
@@ -124,7 +131,7 @@
     -->
 
     <!-- 1: Glow_Monofonto_Large -->
-    <font id="1" effectQuality="balanced" verticalMetrics="original" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="1" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="original" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -142,7 +149,7 @@
     </font>
 
     <!-- 2: Monofonto_Large -->
-    <font id="2" effectQuality="balanced" verticalMetrics="original" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="2" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="original" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -160,7 +167,7 @@
     </font>
 
     <!-- 3: Glow_Monofonto_Medium -->
-    <font id="3" effectQuality="balanced" verticalMetrics="original" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="3" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="original" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="26" tracking="-0.5" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -178,7 +185,7 @@
     </font>
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
-    <font id="4" effectQuality="balanced" verticalMetrics="original" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="4" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="original" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="32" tracking="-0.5" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -196,7 +203,7 @@
     </font>
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
-    <font id="5" effectQuality="balanced" verticalMetrics="original" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="5" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="original" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="32" tracking="0" fixedWidth="17" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -214,7 +221,7 @@
     </font>
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
-    <font id="6" effectQuality="balanced" verticalMetrics="original" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="6" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="original" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="30" tracking="-0.5" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -232,7 +239,7 @@
     </font>
 
     <!-- 7: Baked-in_Monofonto_Large -->
-    <font id="7" effectQuality="balanced" verticalMetrics="original" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="7" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="original" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -250,7 +257,7 @@
     </font>
 
     <!-- 8: Glow_Futura_Caps_Large -->
-    <font id="8" effectQuality="balanced" verticalMetrics="original" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="8" prewarmEncoding="gb2312" effectQuality="balanced" verticalMetrics="original" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="52" tracking="0" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">
@@ -268,7 +275,7 @@
     </font>
 
     <!-- 42: Monofonto_STn (same as Monofonto_Large) -->
-    <font id="42" effectQuality="balanced" verticalMetrics="original" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="42" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="original" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
                   embolden="0" slant="0" baselineOffset="0">

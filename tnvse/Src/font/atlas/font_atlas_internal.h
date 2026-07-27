@@ -34,11 +34,14 @@ namespace fonthook::vectorfont
 	// level-zero texels leave one transparent texel at the coarsest 1/4 mip.
 	inline constexpr UInt32 kArgbAtlasPadding = 4;
 	inline constexpr UInt32 kMaximumAtlasMipLevels = 3;
+	// Keep every physical atlas inside the original 4096 texture envelope. A
+	// complete profile may still globally repack several streamed source pages
+	// into one 4096 page, but it must not raise the limit to the device's 16384
+	// capability: one power-of-two ARGB allocation can otherwise consume
+	// hundreds of MiB in FalloutNV's 32-bit address space.
 	inline constexpr UInt32 kAtlasHardLimit = 4096;
-	// Keep a streamed/repacked distance-field or aggressive coverage page within
-	// the old 4096x4096 A8 storage envelope. In MTSDF mode a 4096x4096 BGRA page
-	// needs 64 MiB before vector growth and repack scratch space, which can fail
-	// late in the 32-bit prewarm.
+	// Keep each intermediate streamed page bounded. Complete DEFAULT-pool
+	// publication retains the minimum number of 4096 overflow pages.
 	inline constexpr UInt32 kMaximumMtsdfPrewarmAtlasSize = 2048;
 	inline constexpr size_t kMaximumMtsdfPrewarmPageBytes =
 		static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
@@ -396,12 +399,19 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 17;
+	constexpr UInt32 kAtlasSnapshotVersion = 18;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
+	constexpr UInt32 kAtlasSnapshotFlagSingleAtlas = 1u << 1;
+	constexpr UInt32 kAtlasSnapshotFlagSingleAtlasOverflow = 1u << 2;
 	constexpr UInt32 kAtlasSnapshotKnownFlags =
-		kAtlasSnapshotFlagGloballyRepacked;
-	// CPU-effect revisions are part of the atlas content identity. Keeping the
-	// container version stable preserves unrelated true-SDF/MTSDF snapshots.
+		kAtlasSnapshotFlagGloballyRepacked
+		| kAtlasSnapshotFlagSingleAtlas
+		| kAtlasSnapshotFlagSingleAtlasOverflow;
+	// Version 18 adds forced single-atlas publication and streaming large-page
+	// snapshot I/O. The overflow flag is a compatible v18 policy marker: it
+	// records that global repacking reached the live physical texture limit, so
+	// a valid minimum-page result remains reusable across launches.
+	// CPU-effect revisions remain part of the atlas content identity.
 	// Version 16 identifies selectable A8 true-SDF and BGRA MTSDF pages.
 	// Version 15 adds largest-compatible-size double-byte MTSDF atlas sharing.
 	// Version 14 replaced single-channel shader pages with BGRA MTSDF.

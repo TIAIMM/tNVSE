@@ -1046,15 +1046,15 @@ namespace fonthook
 						!= std::numeric_limits<UInt16>::max();
 				if (!directHyphenResolved)
 				{
-					vectorfont::InvalidateSealedDirectFontProfile(
-						*directRuntime);
-					directProfile.reset();
-					directUnits.clear();
 					if (lookup
 						== vectorfont::SealedDirectGlyphLookup::Invalid)
 					{
+						vectorfont::InvalidateSealedDirectFontProfile(
+							*directRuntime);
 						directRecordInvalid = true;
 					}
+					directProfile.reset();
+					directUnits.clear();
 				}
 			}
 			return directHyphenResolved ? &directHyphen : nullptr;
@@ -1329,8 +1329,6 @@ namespace fonthook
 					== vectorfont::SealedDirectGlyphLookup::Resolved;
 				if (!decoded)
 				{
-					vectorfont::InvalidateSealedDirectFontProfile(
-						*directRuntime);
 					directProfile.reset();
 					directUnits.clear();
 					if (lookup
@@ -1341,7 +1339,11 @@ namespace fonthook
 							source + sourceOffset, glyph);
 					}
 					else
+					{
+						vectorfont::InvalidateSealedDirectFontProfile(
+							*directRuntime);
 						directRecordInvalid = true;
+					}
 				}
 			}
 			else
@@ -1428,15 +1430,15 @@ namespace fonthook
 					GetVectorGlyphRenderAdvance(space), &space);
 				return;
 			}
-			vectorfont::InvalidateSealedDirectFontProfile(
-				*directRuntime);
-			directProfile.reset();
-			directUnits.clear();
 			if (lookup
 				== vectorfont::SealedDirectGlyphLookup::Invalid)
 			{
+				vectorfont::InvalidateSealedDirectFontProfile(
+					*directRuntime);
 				directRecordInvalid = true;
 			}
+			directProfile.reset();
+			directUnits.clear();
 		};
 
 		if (selectedStart >= selectedEnd)

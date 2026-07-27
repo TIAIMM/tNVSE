@@ -96,6 +96,7 @@ registered extended fonts.
   <fonts>
     <font id="1"
           pixelSize="24"
+          prewarmEncoding="gbk"
           fontColor="#FFFFFF"
           fontAlpha="1"
           tracking="0"
@@ -232,25 +233,31 @@ entries.
 
 ## Blocking prewarm and persistent caches
 
-Startup prewarming is mandatory for every configured FreeType font and has no
-XML mode switch. In FreeType-only mode it enumerates the 224 visible
-Windows-1252 byte units `0x20-0xFF`; no double-byte scan is performed. With the
-multibyte hook active, it walks the same complete, validated encoded-unit table
-used by the persistent manifest. This includes every Windows-decodable pair in
-the active CP936, CP950, CP932, or CP949 code page rather than a GB2312/common
-subset or DCFGCF range approximation. Each unit resolves through its complete
-single-byte or double-byte face/fallback chain. Prewarming begins after the
-configured fonts are activated. On
+Startup prewarming is mandatory for every configured FreeType font. In
+FreeType-only mode it enumerates the 224 visible Windows-1252 byte units
+`0x20-0xFF`; no double-byte scan is performed. With the multibyte hook active,
+each font normally walks the complete validated encoded-unit table used by its
+persistent manifest. Under CP936, the per-font
+`prewarmEncoding="gb2312"` setting restricts startup generation to the
+assigned, round-trippable GB2312 units in the A1-F7/A1-FE byte zone;
+`prewarmEncoding="gbk"` is the default and enumerates every Windows-decodable
+CP936 pair. This setting changes only
+startup coverage: text is still decoded as CP936, and an encountered GBK
+extension outside a GB2312 profile takes the demand-generation route for that
+text without invalidating the font's sealed GB2312 profile. CP950, CP932, and
+CP949 always use their complete code-page tables. Each unit resolves through
+its complete single-byte or double-byte face/fallback chain. Prewarming begins
+after the configured fonts are activated. On
 the first game-loop callback, tNVSE synchronously drains the complete queue at
 `fFreeTypeFontResolutionScale`; it does not wait for a menu root or device
 scale. The game remains blocked until every queued profile reports `complete`,
 `atlas-full`, or `cancelled`. Prewarm and demand rendering share one canonical
 source scale. UIO-derived calls reuse that mask and atlas profile
 instead of generating per-zoom variants.
-The full-table coverage contract uses persistent completion identity 3. Older
+The selected-table coverage contract uses persistent completion identity 3. Older
 mode-2 manifests and their DCFG-range atlas snapshots cannot satisfy it, so the
 first launch after this change discards those construction artifacts and builds
-the complete table once.
+the selected table once.
 While this startup barrier is active, a non-activating English progress window
 runs on a separate UI thread. It shows the current font ID, SDF/ARGB-fallback route,
 the active scan or snapshot stage, and overall progress. The window remains
@@ -258,16 +265,17 @@ responsive while FreeType work blocks the game thread and closes automatically
 before control returns to the game. It is owned by the Fallout window rather
 than being system-topmost, so Windows manages its minimize and Z-order behavior
 together with the game without a polling timer.
-A font task allocates additional atlas pages when its complete set cannot fit
+A font task allocates additional atlas pages when its selected set cannot fit
 one 4096x4096 page. It reports `atlas-full` only if one incoming batch cannot
 fit an empty maximum-size page, the page-count safety limit is reached, or a
-texture allocation/upload fails. Full code-page prewarming generates every mask
-that runtime rendering can request for every valid unit. Consequently the SDF
-fill is prewarmed for the complete code page and every SDF effect or hard shadow
-reuses that mask. When Shader Loader is unavailable, prewarm generates only the
-coverage/effect masks needed by the ARGB fallback.
+texture allocation/upload fails. GBK and non-936 full-code-page profiles
+generate every mask that runtime rendering can request for every valid unit.
+GB2312 profiles generate the same masks for their selected byte zone and leave
+GBK extensions for demand generation. Every SDF effect or hard shadow reuses
+the generated fill mask. When Shader Loader is unavailable, prewarm generates
+only the coverage/effect masks needed by the ARGB fallback.
 
-Full-code-page construction does not create or read `.tnvfmask`. The atlas-only
+Selected-table construction does not create or read `.tnvfmask`. The atlas-only
 transaction begins as soon as the first configured font is queued, so an early
 draw between activation and the blocking prewarm pump cannot create a
 short-lived persistent mask profile. Distance-field pixels and aggressive BGRA
