@@ -558,10 +558,15 @@ namespace fonthook::vectorfont
 		Invalid,
 	};
 	PersistentFontCacheDomain GetPersistentFontCacheDomain();
+	FontAtlasRoute GetPersistentFontCacheRoute();
 	void SynchronizePersistentFontCacheRoute(FontAtlasRoute aeRoute);
 	PersistentCacheCleanupClass ClassifyAtlasSnapshotCacheForCleanup(
 		const std::wstring& arPath);
+	PersistentCacheCleanupClass ClassifyDirectCachedLetterCacheForCleanup(
+		const std::wstring& arPath);
 	void DeleteUnusedFreeTypeFontCacheFiles(bool abDeleteAllUnused);
+	bool MarkCurrentFallbackBitmapProfilesUsed(RuntimeFont& arRuntime,
+		float afRasterScale);
 	void MarkGlyphManifestComplete(RuntimeFont& arRuntime);
 	const std::vector<UInt16>& GetCompleteCodePageEncodedUnits();
 	const std::vector<UInt16>& GetFontPrewarmEncodedUnits(

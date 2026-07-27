@@ -433,6 +433,8 @@ namespace fonthook::vectorfont
 		payload.preflightAlphaBlending = false;
 		payload.useCompositePackets = false;
 		payload.compositeUnavailable = false;
+		payload.stockLikeBitmapPackets =
+			UsesOnlyStockLikeBitmapPackets(payload.payloadTemplate->packets);
 		payload.packetPrepareFailure.store(
 			NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
 		payload.stickyReason.store(

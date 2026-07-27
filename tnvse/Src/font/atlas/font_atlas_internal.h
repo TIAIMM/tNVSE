@@ -34,14 +34,20 @@ namespace fonthook::vectorfont
 	// level-zero texels leave one transparent texel at the coarsest 1/4 mip.
 	inline constexpr UInt32 kArgbAtlasPadding = 4;
 	inline constexpr UInt32 kMaximumAtlasMipLevels = 3;
-	// Keep every physical atlas inside the original 4096 texture envelope. A
-	// complete profile may still globally repack several streamed source pages
-	// into one 4096 page, but it must not raise the limit to the device's 16384
-	// capability: one power-of-two ARGB allocation can otherwise consume
-	// hundreds of MiB in FalloutNV's 32-bit address space.
-	inline constexpr UInt32 kAtlasHardLimit = 4096;
+	// Single-byte pages retain the original 4096 texture envelope. Complete
+	// double-byte profiles may use an 8192 page when the D3D9 device supports it,
+	// reducing the GBK/GB2312 page count without exposing the device's 16384
+	// capability to either role.
+	inline constexpr UInt32 kSingleByteAtlasHardLimit = 4096;
+	inline constexpr UInt32 kDoubleByteAtlasHardLimit = 8192;
+	inline constexpr UInt32 kAtlasHardLimit = kDoubleByteAtlasHardLimit;
+	inline constexpr UInt32 GetAtlasHardLimit(VectorFontByteClass byteClass)
+	{
+		return byteClass == VectorFontByteClass::DoubleByte
+			? kDoubleByteAtlasHardLimit : kSingleByteAtlasHardLimit;
+	}
 	// Keep each intermediate streamed page bounded. Complete DEFAULT-pool
-	// publication retains the minimum number of 4096 overflow pages.
+	// publication repacks those pages against the role-specific physical limit.
 	inline constexpr UInt32 kMaximumMtsdfPrewarmAtlasSize = 2048;
 	inline constexpr size_t kMaximumMtsdfPrewarmPageBytes =
 		static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
@@ -170,6 +176,7 @@ namespace fonthook::vectorfont
 		AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
 		AtlasBackend backend = AtlasBackend::Managed;
 		AtlasRenderMode renderMode = AtlasRenderMode::CpuEffects;
+		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 		bool levelZeroOnly = false;
 		bool resetPending = false;
 		bool transient = false;
@@ -399,14 +406,19 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 18;
+	constexpr UInt32 kAtlasSnapshotVersion = 20;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
 	constexpr UInt32 kAtlasSnapshotFlagSingleAtlas = 1u << 1;
 	constexpr UInt32 kAtlasSnapshotFlagSingleAtlasOverflow = 1u << 2;
+	constexpr UInt32 kAtlasSnapshotFlagJointByteRoles = 1u << 3;
 	constexpr UInt32 kAtlasSnapshotKnownFlags =
 		kAtlasSnapshotFlagGloballyRepacked
 		| kAtlasSnapshotFlagSingleAtlas
-		| kAtlasSnapshotFlagSingleAtlasOverflow;
+		| kAtlasSnapshotFlagSingleAtlasOverflow
+		| kAtlasSnapshotFlagJointByteRoles;
+	// Version 20 jointly repacks compatible single- and double-byte roles so
+	// both direct tables can address the same physical DEFAULT-pool texture.
+	// Version 19 raises only the double-byte physical page envelope to 8192.
 	// Version 18 adds forced single-atlas publication and streaming large-page
 	// snapshot I/O. The overflow flag is a compatible v18 policy marker: it
 	// records that global repacking reached the live physical texture limit, so
@@ -966,7 +978,8 @@ namespace fonthook::vectorfont
 	void ResolveGpuAtlasBudget(bool force);
 	bool IsGpuAtlasCacheUnlimited();
 	size_t GetAtlasCacheLimit();
-	UInt32 GetMaximumAtlasSize();
+	UInt32 GetMaximumAtlasSize(
+		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte);
 	bool PlaceBitmap(AtlasResource& resource, const GlyphBitmap& bitmap,
 		AtlasRect& rect);
 	bool BuildNextMipLevel(const UInt8* source, UInt32 sourceWidth,
@@ -981,6 +994,8 @@ namespace fonthook::vectorfont
 		AtlasPixelMode requestedMode);
 	bool TryReuseDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,
 		UInt64 pageContentHash);
+	bool AreAtlasResourcesBackedBySameTexture(const AtlasResource& left,
+		const AtlasResource& right);
 	std::shared_ptr<const GlyphBitmap> GetOrCreateAtlasGlyphBitmap(
 		AtlasResource& resource, UInt64 cacheId);
 	AtlasGlyphRecord* FindAtlasGlyph(AtlasResource& resource, UInt64 cacheId);
@@ -995,7 +1010,8 @@ namespace fonthook::vectorfont
 
 	bool PackAtlas(const std::vector<std::shared_ptr<const GlyphBitmap>>& source,
 		UInt32& width, UInt32& height,
-		std::unordered_map<UInt64, AtlasRect>& placements, UInt32 padding);
+		std::unordered_map<UInt64, AtlasRect>& placements, UInt32 padding,
+		VectorFontByteClass byteClass);
 	std::vector<std::shared_ptr<AtlasResource>> GetAtlasResources(
 		const FontConfig& config, VectorFontByteClass byteClass, float rasterScale,
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
@@ -1018,7 +1034,8 @@ namespace fonthook::vectorfont
 		std::vector<PendingQuad::GlyphSource>& results);
 	std::shared_ptr<AtlasResource> CreateTransientAtlas(
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
-		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding);
+		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
+		VectorFontByteClass byteClass);
 	UInt64 BuildPrewarmAtlasContentHash(const FontConfig& config,
 		VectorFontByteClass byteClass, float rasterScale, bool shaderEffects);
 	bool ResolvePrewarmAtlasKey(const FontConfig& config,

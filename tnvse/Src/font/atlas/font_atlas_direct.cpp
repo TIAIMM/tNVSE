@@ -1701,7 +1701,9 @@ namespace fonthook::vectorfont
 							++candidate)
 						{
 							if (sealed->atlases[candidate].get()
-								== page.get())
+									== page.get()
+								|| AreAtlasResourcesBackedBySameTexture(
+									*sealed->atlases[candidate], *page))
 							{
 								ordinal = candidate;
 								break;
@@ -2867,5 +2869,68 @@ namespace fonthook::vectorfont
 				static_cast<UInt32>(glyphs.size()));
 		}
 		return true;
+	}
+
+	PersistentCacheCleanupClass ClassifyDirectCachedLetterCacheForCleanup(
+		const std::wstring& path)
+	{
+		HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (file == INVALID_HANDLE_VALUE)
+			return PersistentCacheCleanupClass::Invalid;
+		DirectCachedLetterFileHeader header;
+		const bool read = ReadDirectFile(file, &header, sizeof(header));
+		CloseHandle(file);
+		const UInt8 magic[8] =
+			{ 'T', 'N', 'V', 'F', 'D', 'I', 'R', '1' };
+		if (!read
+			|| std::memcmp(header.magic, magic, sizeof(magic)) != 0
+			|| header.version != kDirectCachedLetterVersion
+			|| header.headerSize != sizeof(header)
+			|| header.atlasSnapshotVersion != kAtlasSnapshotVersion
+			|| header.manifestVersion != kPersistentGlyphManifestVersion
+			|| header.manifestIdentityVersion
+				!= kPersistentGlyphManifestCacheIdentityVersion
+			|| header.pixelMode
+				> static_cast<UInt8>(AtlasPixelMode::Mtsdf32)
+			|| header.renderMode
+				> static_cast<UInt8>(AtlasRenderMode::ShaderEffects)
+			|| header.checksum != HashDirectBytes(&header,
+				offsetof(DirectCachedLetterFileHeader, checksum)))
+		{
+			return PersistentCacheCleanupClass::Invalid;
+		}
+
+		const FontAtlasRoute route = GetPersistentFontCacheRoute();
+		if (header.renderMode == static_cast<UInt8>(
+			AtlasRenderMode::CpuEffects))
+		{
+			const bool aggressive = header.pixelMode
+				== static_cast<UInt8>(AtlasPixelMode::Argb32);
+			const bool fallback = header.pixelMode
+				== static_cast<UInt8>(AtlasPixelMode::A8);
+			if (!aggressive && !fallback)
+				return PersistentCacheCleanupClass::Invalid;
+			return (aggressive
+						&& route == FontAtlasRoute::ShaderA8Coverage)
+					|| (fallback
+						&& route == FontAtlasRoute::ArgbFallback)
+				? PersistentCacheCleanupClass::Neutral
+				: PersistentCacheCleanupClass::InactiveDistanceField;
+		}
+
+		DistanceFieldMethod method;
+		if (header.pixelMode == static_cast<UInt8>(AtlasPixelMode::A8))
+			method = DistanceFieldMethod::TrueSdf;
+		else if (header.pixelMode
+			== static_cast<UInt8>(AtlasPixelMode::Mtsdf32))
+			method = DistanceFieldMethod::Mtsdf;
+		else
+			return PersistentCacheCleanupClass::Invalid;
+		return route == FontAtlasRoute::ShaderDistanceField
+				&& method == GetConfiguredDistanceFieldMethod()
+			? PersistentCacheCleanupClass::CurrentDistanceField
+			: PersistentCacheCleanupClass::InactiveDistanceField;
 	}
 }

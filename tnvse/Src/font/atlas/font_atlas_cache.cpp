@@ -63,9 +63,9 @@ namespace fonthook::vectorfont
 			return value + 1;
 		}
 
-		UInt32 GetMaximumAtlasSize()
+		UInt32 GetMaximumAtlasSize(VectorFontByteClass byteClass)
 		{
-			UInt32 result = kAtlasHardLimit;
+			UInt32 result = GetAtlasHardLimit(byteClass);
 			if (NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton())
 			{
 				result = std::min(result, std::min(renderer->m_kD3DCaps9.MaxTextureWidth,
@@ -170,7 +170,8 @@ namespace fonthook::vectorfont
 
 		bool PackAtlas(const std::vector<std::shared_ptr<const GlyphBitmap>>& source,
 			UInt32& atlasWidth, UInt32& atlasHeight,
-			std::unordered_map<UInt64, AtlasRect>& placements, UInt32 padding)
+			std::unordered_map<UInt64, AtlasRect>& placements, UInt32 padding,
+			VectorFontByteClass byteClass)
 		{
 			std::vector<std::shared_ptr<const GlyphBitmap>> bitmaps = source;
 			std::sort(bitmaps.begin(), bitmaps.end(), [](const auto& lhs, const auto& rhs)
@@ -182,7 +183,7 @@ namespace fonthook::vectorfont
 				return lhs->cacheId < rhs->cacheId;
 			});
 
-			const UInt32 maximumSize = GetMaximumAtlasSize();
+			const UInt32 maximumSize = GetMaximumAtlasSize(byteClass);
 			UInt64 bestArea = UINT64_MAX;
 			std::unordered_map<UInt64, AtlasRect> candidate;
 			for (UInt32 width = 64; width <= maximumSize; width <<= 1)
@@ -211,7 +212,7 @@ namespace fonthook::vectorfont
 			remaining.clear();
 			accepted.reserve(source.size());
 			remaining.reserve(source.size());
-			const UInt32 maximum = GetMaximumAtlasSize();
+			const UInt32 maximum = GetMaximumAtlasSize(resource.byteClass);
 			const UInt32 padding = resource.padding;
 			UInt32 cursorX = resource.cursorX;
 			UInt32 cursorY = resource.cursorY;
@@ -356,16 +357,24 @@ namespace fonthook::vectorfont
 				profile.compactResidentIndexReleased = true;
 				RefreshAtlasProfileCpuMemory(profile);
 			}
-			for (const auto& atlas : sealed.atlases)
+			std::unordered_set<AtlasResource*> releasedAtlases;
+			for (const auto& table : sealed.tables)
 			{
-				if (!atlas || !atlas->compactSnapshot)
+				if (!table)
 					continue;
-				std::vector<AtlasGlyphRecord>().swap(
-					atlas->glyphs);
-				atlas->compactGlyphIndexReleased = true;
-				if (atlas->backend == AtlasBackend::DefaultPool)
-					std::vector<UInt8>().swap(atlas->pixels);
-				RefreshAtlasResourceCpuMemory(*atlas);
+				for (const auto& weakAtlas : table->pages)
+				{
+					std::shared_ptr<AtlasResource> atlas = weakAtlas.lock();
+					if (!atlas || !atlas->compactSnapshot
+						|| !releasedAtlases.insert(atlas.get()).second)
+						continue;
+					std::vector<AtlasGlyphRecord>().swap(
+						atlas->glyphs);
+					atlas->compactGlyphIndexReleased = true;
+					if (atlas->backend == AtlasBackend::DefaultPool)
+						std::vector<UInt8>().swap(atlas->pixels);
+					RefreshAtlasResourceCpuMemory(*atlas);
+				}
 			}
 		}
 
@@ -840,11 +849,7 @@ namespace fonthook::vectorfont
 		// The complete-code-page transaction follows the same route contract as
 		// demand rendering. Aggressive mode persists one CPU-precomposed BGRA
 		// rectangle per glyph; the ordinary CPU-effects route keeps its A8 layers.
-		const FontAtlasRoute route = ResolveFontAtlasRoute(
-			IsA8RendererAvailable(),
-			g_bEnableFreeTypeFontAggressivePerformanceMode);
-		if (route == FontAtlasRoute::ArgbFallback)
-			return false;
+		const FontAtlasRoute route = GetPersistentFontCacheRoute();
 
 		const bool shaderEffects =
 			route == FontAtlasRoute::ShaderDistanceField;
@@ -884,8 +889,7 @@ namespace fonthook::vectorfont
 	bool IsPrewarmAtlasAlias(const FontConfig& config,
 		VectorFontByteClass byteClass)
 	{
-		return ResolveFontAtlasRoute(IsA8RendererAvailable(),
-			g_bEnableFreeTypeFontAggressivePerformanceMode)
+		return GetPersistentFontCacheRoute()
 				== FontAtlasRoute::ShaderDistanceField
 			&& IsMtsdfAtlasAlias(config, byteClass);
 	}
@@ -1197,9 +1201,11 @@ namespace fonthook::vectorfont
 				resource->backend = g_bEnableFreeTypeDefaultPoolAtlas
 					? AtlasBackend::DefaultPool : AtlasBackend::Managed;
 				resource->renderMode = renderMode;
+				resource->byteClass = baseKey.byteClass;
 				resource->levelZeroOnly = baseKey.levelZeroOnly;
 				resource->padding = padding;
-				resource->width = std::min<UInt32>(512, GetMaximumAtlasSize());
+				resource->width = std::min<UInt32>(512,
+					GetMaximumAtlasSize(resource->byteClass));
 				resource->height = resource->width;
 				resource->mipLevels = GetAtlasMipLevelCount(
 					resource->width, resource->height, resource->levelZeroOnly);
@@ -1252,20 +1258,21 @@ namespace fonthook::vectorfont
 		std::shared_ptr<AtlasResource> CreateTransientAtlas(
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 			AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
-			UInt32 padding)
+			UInt32 padding, VectorFontByteClass byteClass)
 		{
 			auto resource = std::make_shared<AtlasResource>();
 			resource->pixelMode = pixelMode;
 			resource->backend = g_bEnableFreeTypeDefaultPoolAtlas
 				? AtlasBackend::DefaultPool : AtlasBackend::Managed;
 			resource->renderMode = renderMode;
+			resource->byteClass = byteClass;
 			resource->levelZeroOnly =
 				UsesLevelZeroOnly(bitmaps, pixelMode, renderMode);
 			resource->padding = padding;
 			resource->transient = true;
 			std::unordered_map<UInt64, AtlasRect> placements;
 			if (!PackAtlas(bitmaps, resource->width, resource->height,
-				placements, padding))
+				placements, padding, byteClass))
 			{
 				return nullptr;
 			}

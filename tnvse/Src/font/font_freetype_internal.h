@@ -606,6 +606,8 @@ namespace fonthook::vectorfont
 		bool persistentBitmapMappingsEnabled = true;
 		bool completeCodePageAtlasOnlyPrewarm = false;
 		bool persistentCacheRouteSynchronized = false;
+		FontAtlasRoute persistentCacheRoute =
+			FontAtlasRoute::ShaderDistanceField;
 		PersistentFontCacheDomain persistentCacheDomain =
 			PersistentFontCacheDomain::DistanceField;
 		UInt32 persistentBitmapFailureLogCount = 0;

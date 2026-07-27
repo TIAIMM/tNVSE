@@ -1287,7 +1287,7 @@ namespace fonthook::vectorfont
 
 		bool GrowManagedAtlas(AtlasResource& resource)
 		{
-			const UInt32 maximum = GetMaximumAtlasSize();
+			const UInt32 maximum = GetMaximumAtlasSize(resource.byteClass);
 			if (resource.width >= maximum || resource.height >= maximum)
 				return false;
 			const UInt32 newWidth = std::min(maximum, resource.width * 2);
@@ -1422,6 +1422,7 @@ namespace fonthook::vectorfont
 			snapshot->pixelMode = resource.pixelMode;
 			snapshot->backend = resource.backend;
 			snapshot->renderMode = resource.renderMode;
+			snapshot->byteClass = resource.byteClass;
 			snapshot->levelZeroOnly = resource.levelZeroOnly;
 			snapshot->padding = resource.padding;
 			snapshot->resetPending = resource.resetPending;
@@ -1480,6 +1481,32 @@ namespace fonthook::vectorfont
 			}
 			return result;
 		}
+
+	bool AreAtlasResourcesBackedBySameTexture(const AtlasResource& left,
+		const AtlasResource& right)
+	{
+		if (&left == &right)
+			return true;
+		if (!left.property || !right.property || left.resetPending
+			|| right.resetPending || left.width != right.width
+			|| left.height != right.height || left.pixelMode != right.pixelMode
+			|| left.renderMode != right.renderMode
+			|| left.levelZeroOnly != right.levelZeroOnly)
+		{
+			return false;
+		}
+		NiTexture* leftTexture = GetAtlasTexture(left);
+		NiTexture* rightTexture = GetAtlasTexture(right);
+		NiDX9TextureData* leftData =
+			leftTexture ? leftTexture->GetDX9RendererData() : nullptr;
+		NiDX9TextureData* rightData =
+			rightTexture ? rightTexture->GetDX9RendererData() : nullptr;
+		LPDIRECT3DBASETEXTURE9 leftD3D =
+			leftData ? leftData->GetD3DTexture() : nullptr;
+		LPDIRECT3DBASETEXTURE9 rightD3D =
+			rightData ? rightData->GetD3DTexture() : nullptr;
+		return leftD3D && leftD3D == rightD3D;
+	}
 
 		bool CompactSnapshotsEqual(const AtlasResource& lhs,
 			const AtlasResource& rhs)
@@ -1904,6 +1931,7 @@ namespace fonthook::vectorfont
 			resource.pixelMode = candidate.pixelMode;
 			resource.backend = AtlasBackend::DefaultPool;
 			resource.renderMode = candidate.renderMode;
+			resource.byteClass = candidate.byteClass;
 			resource.levelZeroOnly = candidate.levelZeroOnly;
 			resource.resetPending = false;
 			resource.glyphs = std::move(candidate.glyphs);
@@ -1917,7 +1945,7 @@ namespace fonthook::vectorfont
 		bool AddBitmapsToDefaultAtlas(AtlasResource& resource,
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps)
 		{
-			const UInt32 maximum = GetMaximumAtlasSize();
+			const UInt32 maximum = GetMaximumAtlasSize(resource.byteClass);
 			UInt32 targetWidth = resource.width;
 			UInt32 targetHeight = resource.height;
 			AtlasResource layout;
@@ -1930,6 +1958,7 @@ namespace fonthook::vectorfont
 				layout.cursorY = resource.cursorY;
 				layout.shelfHeight = resource.shelfHeight;
 				layout.padding = resource.padding;
+				layout.byteClass = resource.byteClass;
 				pending.clear();
 				bool placedAll = true;
 				for (const auto& bitmap : bitmaps)
@@ -1974,6 +2003,7 @@ namespace fonthook::vectorfont
 				detached.pixelMode = resource.pixelMode;
 				detached.backend = AtlasBackend::DefaultPool;
 				detached.renderMode = resource.renderMode;
+				detached.byteClass = resource.byteClass;
 				detached.levelZeroOnly = resource.levelZeroOnly;
 				detached.glyphs = resource.glyphs;
 				detached.compactSnapshot = resource.compactSnapshot;
@@ -1993,6 +2023,7 @@ namespace fonthook::vectorfont
 			candidate.pixelMode = resource.pixelMode;
 			candidate.backend = AtlasBackend::DefaultPool;
 			candidate.renderMode = resource.renderMode;
+			candidate.byteClass = resource.byteClass;
 			candidate.levelZeroOnly = resource.levelZeroOnly;
 			candidate.generation = resource.generation;
 			candidate.mipLevels = GetAtlasMipLevelCount(
@@ -2062,7 +2093,8 @@ namespace fonthook::vectorfont
 			planned.cursorY = resource.cursorY;
 			planned.shelfHeight = resource.shelfHeight;
 			planned.padding = resource.padding;
-			const UInt32 maximum = GetMaximumAtlasSize();
+			planned.byteClass = resource.byteClass;
+			const UInt32 maximum = GetMaximumAtlasSize(resource.byteClass);
 			for (const auto& bitmap : bitmaps)
 			{
 				if (!bitmap || FindAtlasGlyph(resource, bitmap->cacheId))

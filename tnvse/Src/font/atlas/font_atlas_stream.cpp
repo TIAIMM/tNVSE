@@ -135,8 +135,9 @@ namespace fonthook::vectorfont
 				g_bEnableFreeTypeDefaultPoolAtlas;
 			hash = HashBytes(&forceSingleAtlas,
 				sizeof(forceSingleAtlas), hash);
-			hash = HashBytes(&kAtlasHardLimit,
-				sizeof(kAtlasHardLimit), hash);
+			const UInt32 atlasHardLimit = GetAtlasHardLimit(key.byteClass);
+			hash = HashBytes(&atlasHardLimit,
+				sizeof(atlasHardLimit), hash);
 			const UInt32 codePage = GetFreeTypeTextCodePage();
 			hash = HashBytes(&codePage, sizeof(codePage), hash);
 			hash = HashBytes(&kCompleteCodePagePrewarmIdentity,
@@ -380,7 +381,7 @@ namespace fonthook::vectorfont
 				role.current.pixels.reserve(maximumPageBytes);
 
 			const UInt32 maximum = std::min(
-				std::min(GetMaximumAtlasSize(), kAtlasHardLimit),
+				GetMaximumAtlasSize(key.byteClass),
 				kMaximumMtsdfPrewarmAtlasSize);
 			const UInt32 width = static_cast<UInt32>(bitmap->width);
 			const UInt32 height = static_cast<UInt32>(bitmap->height);

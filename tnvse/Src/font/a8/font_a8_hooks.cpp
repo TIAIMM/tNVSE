@@ -321,6 +321,7 @@ namespace fonthook::vectorfont
 		{
 			bool runtimeFault = false;
 			bool drewPacket = false;
+			bool stockLikeBitmapRoute = false;
 			bool constantStateFault = false;
 			NativeA8FallbackReason failure =
 				NativeA8FallbackReason::RuntimeFault;
@@ -347,22 +348,40 @@ namespace fonthook::vectorfont
 				draw.operation = "ring-submission";
 			}
 			NativeTilePacketScope packetScope(pass);
-			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			draw.stockLikeBitmapRoute =
+				payload.stockLikeBitmapPackets;
+			NiDX9Renderer* renderer = draw.stockLikeBitmapRoute
+				? nullptr : NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer
 				? renderer->GetD3DDevice() : nullptr;
-			if (!device)
+			if (!draw.stockLikeBitmapRoute && !device)
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
 				draw.operation = "capture-pixel-constants";
 				draw.result = D3DERR_DEVICELOST;
 			}
-			const bool batchedConstants =
-				s_pixelConstantBatch.FrameActive();
+			// Retail NiDX9Renderer's indexed-array loop cannot express
+			// triangle-list page boundaries: m_pusArrayLengths is interpreted as
+			// strip lengths (primitiveCount = length - 2). Keep the page split at
+			// the one stock sorted Tile callsite instead. Each packet selects a
+			// Font::MakeTriShape proxy and then executes the untouched
+			// TileRenderPass -> NiTriShape::RenderImmediate renderer path.
+			//
+			// Final ARGB and baked-coverage bitmaps use only c0. Skipping the
+			// distance-field c1-c8 isolation and facade batch bookkeeping removes
+			// the only per-facade driver readback/writeback from this stock-like
+			// multipage route.
+			const bool isolatePacketConstants =
+				!draw.stockLikeBitmapRoute;
+			const bool batchedConstants = isolatePacketConstants
+				&& s_pixelConstantBatch.FrameActive();
 			std::optional<NativePixelConstantScope> localConstants;
+			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
 			if (!draw.runtimeFault)
 			{
-				NativeFacadeShaderBatchScope shaderBatchScope;
+				if (isolatePacketConstants)
+					shaderBatch.emplace();
 				// Retail 0xB64F90 calls 0xB994F0 once per sorted item with no
 				// intervening draw. Capture c1-c8 once for that sorted batch and
 				// preserve the local scope for direct/non-sorted submissions.
@@ -378,7 +397,7 @@ namespace fonthook::vectorfont
 							s_pixelConstantBatch.MismatchRegister();
 					}
 				}
-				else
+				else if (isolatePacketConstants)
 				{
 					localConstants.emplace(device);
 					if (!localConstants->Captured())
@@ -429,7 +448,8 @@ namespace fonthook::vectorfont
 						break;
 					}
 				}
-				if (!batchedConstants && localConstants
+				if (isolatePacketConstants && !batchedConstants
+					&& localConstants
 					&& !localConstants->RestoreAndVerify())
 				{
 					draw.runtimeFault = true;
@@ -440,7 +460,7 @@ namespace fonthook::vectorfont
 						localConstants->MismatchRegister();
 				}
 			}
-			if (batchedConstants && draw.runtimeFault
+			if (isolatePacketConstants && batchedConstants && draw.runtimeFault
 				&& !FlushNativePixelConstantBatch("native-runtime-fault"))
 			{
 				draw.constantStateFault = true;
@@ -648,13 +668,16 @@ namespace fonthook::vectorfont
 				{
 					state.loggedTileRenderPassHit = true;
 					gLog.FormattedMessage(
-						"tnvse_freetype_native: native Tile group route hit shape=%p font=%u pass=%u packets=%u ranges=%u",
+						"tnvse_freetype_native: native Tile group route hit shape=%p font=%u pass=%u packets=%u ranges=%u route=%s",
 						shape, metadata->fontId, currentPass,
 						static_cast<UInt32>(
 							sourcePayload->packetShaders.size()),
 						sourcePayload->payloadTemplate
 							? sourcePayload->payloadTemplate->sourceRangeCount
-							: 0u);
+							: 0u,
+						draw.stockLikeBitmapRoute
+							? "stock-like-bitmap-pages"
+							: "effect-packets");
 				}
 				return;
 			}

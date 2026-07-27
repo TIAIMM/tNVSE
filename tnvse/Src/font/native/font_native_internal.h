@@ -177,6 +177,7 @@ namespace fonthook::vectorfont
 		bool preflightAlphaBlending = false;
 		bool useCompositePackets = false;
 		bool compositeUnavailable = false;
+		bool stockLikeBitmapPackets = false;
 		bool buildComplete = false;
 	};
 
@@ -185,6 +186,22 @@ namespace fonthook::vectorfont
 	{
 		return useComposite && !payloadTemplate.compositePackets.empty()
 			? payloadTemplate.compositePackets : payloadTemplate.packets;
+	}
+
+	inline bool UsesOnlyStockLikeBitmapPackets(
+		const std::vector<NativeA8PacketTemplate>& packets)
+	{
+		if (packets.empty())
+			return false;
+		for (const NativeA8PacketTemplate& packet : packets)
+		{
+			if (packet.shaderClass != NativeA8ShaderClass::Argb
+				&& packet.shaderClass != NativeA8ShaderClass::Coverage)
+			{
+				return false;
+			}
+		}
+		return true;
 	}
 
 	struct NativeA8SortedFrameEntryView

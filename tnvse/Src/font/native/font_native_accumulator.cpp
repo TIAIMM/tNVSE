@@ -344,6 +344,7 @@ namespace fonthook::vectorfont
 		{
 			payload.preparedGeneration = 0;
 			payload.preflightAtlasTextureEpoch = 0;
+			payload.stockLikeBitmapPackets = false;
 			std::fill(payload.preflightAtlasTextures.begin(),
 				payload.preflightAtlasTextures.end(), nullptr);
 			std::fill(payload.packetShaders.begin(),
@@ -434,6 +435,8 @@ namespace fonthook::vectorfont
 			payload.useCompositePackets = attemptComposite;
 			const std::vector<NativeA8PacketTemplate>* packets =
 				&GetNativeA8Packets(artifact, payload.useCompositePackets);
+			payload.stockLikeBitmapPackets =
+				UsesOnlyStockLikeBitmapPackets(*packets);
 			payload.packetShaders.assign(packets->size(), nullptr);
 			if (payload.preflightAtlasTextures.size() != artifact.atlasTextures.size())
 				return NativeA8FallbackReason::PacketBuild;
@@ -484,6 +487,8 @@ namespace fonthook::vectorfont
 					FreeTypePerfCounter::CompositeShaderFallback);
 				payload.useCompositePackets = false;
 				packets = &artifact.packets;
+				payload.stockLikeBitmapPackets =
+					UsesOnlyStockLikeBitmapPackets(*packets);
 				payload.packetShaders.assign(packets->size(), nullptr);
 				shaderSetReady = true;
 				for (size_t index = 0; index < packets->size(); ++index)

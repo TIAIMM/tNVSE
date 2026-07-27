@@ -287,6 +287,7 @@ namespace fonthook::vectorfont
 			UInt64 maskGenerationHash = 0;
 			UInt64 shaderEffectHash = 0;
 			UInt32 codePage = 0;
+			FontAtlasRoute route = FontAtlasRoute::ArgbFallback;
 			FontPrewarmRange prewarmRange =
 				FontPrewarmRange::CompleteCodePage;
 			const std::vector<UInt16>* encodedUnits = nullptr;
@@ -321,7 +322,8 @@ namespace fonthook::vectorfont
 			}
 		};
 
-		UInt64 BuildProfileKey(const FontConfig& config)
+		UInt64 BuildProfileKey(const FontConfig& config,
+			FontAtlasRoute route)
 		{
 			UInt64 hash = 1469598103934665603ull;
 			auto add = [&](const void* data, size_t size)
@@ -335,9 +337,6 @@ namespace fonthook::vectorfont
 			};
 			add(&config.layoutHash, sizeof(config.layoutHash));
 			add(&config.maskGenerationHash, sizeof(config.maskGenerationHash));
-			const FontAtlasRoute route = ResolveFontAtlasRoute(
-				IsA8RendererAvailable(),
-				g_bEnableFreeTypeFontAggressivePerformanceMode);
 			add(&route, sizeof(route));
 			if (route == FontAtlasRoute::ShaderDistanceField)
 			{
@@ -377,7 +376,8 @@ namespace fonthook::vectorfont
 
 		bool MatchesPrewarmProfile(const PrewarmJob& job, const FontConfig& config)
 		{
-			return job.profileKey == BuildProfileKey(config)
+			return job.route == GetPersistentFontCacheRoute()
+				&& job.profileKey == BuildProfileKey(config, job.route)
 				&& job.codePage == GetFreeTypeTextCodePage();
 		}
 
@@ -519,13 +519,10 @@ namespace fonthook::vectorfont
 			float minimumJobProgress = 0.0f)
 		{
 			wchar_t detail[160] = {};
-			const FontAtlasRoute route = ResolveFontAtlasRoute(
-				IsA8RendererAvailable(),
-				g_bEnableFreeTypeFontAggressivePerformanceMode);
 			const wchar_t* renderMode =
-				route == FontAtlasRoute::ShaderDistanceField
+				job.route == FontAtlasRoute::ShaderDistanceField
 					? (UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF")
-					: route == FontAtlasRoute::ShaderA8Coverage
+					: job.route == FontAtlasRoute::ShaderA8Coverage
 						? L"BGRA composite" : L"ARGB fallback";
 			_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 				L"Font %u of %u  |  ID %u  |  %ls",
@@ -556,12 +553,13 @@ namespace fonthook::vectorfont
 			const FontConfig* owner = FindConfig(ownerFontId);
 			if (!owner)
 				return false;
-			const UInt64 profileKey = BuildProfileKey(*owner);
+			const FontAtlasRoute route = GetPersistentFontCacheRoute();
+			const UInt64 profileKey = BuildProfileKey(*owner, route);
 			bool complete = true;
 			for (const auto& entry : g_configs)
 			{
 				if (entry.first == ownerFontId
-					|| BuildProfileKey(entry.second) != profileKey)
+					|| BuildProfileKey(entry.second, route) != profileKey)
 				{
 					continue;
 				}
@@ -593,7 +591,8 @@ namespace fonthook::vectorfont
 			return;
 		}
 
-		const UInt64 key = BuildProfileKey(*config);
+		const FontAtlasRoute route = GetPersistentFontCacheRoute();
+		const UInt64 key = BuildProfileKey(*config, route);
 		if (!s_scheduledProfiles.insert(key).second)
 		{
 			const auto shared = std::find_if(s_jobs.begin(), s_jobs.end(),
@@ -617,12 +616,14 @@ namespace fonthook::vectorfont
 		job.maskGenerationHash = config->maskGenerationHash;
 		job.shaderEffectHash = config->shaderEffectHash;
 		job.codePage = GetFreeTypeTextCodePage();
+		job.route = route;
 		job.prewarmRange = ResolveFontPrewarmRange(*config);
 		const FontPrewarmRange prewarmRange = job.prewarmRange;
 		const UInt32 codePage = job.codePage;
 		ResetPrewarmScan(job, 0);
 		s_jobs.push_back(std::move(job));
-		if (!s_atlasOnlyPrewarmPending)
+		if (route != FontAtlasRoute::ArgbFallback
+			&& !s_atlasOnlyPrewarmPending)
 		{
 			// Fonts may draw between activation and the first game-loop prewarm pump.
 			// Begin the atlas-only policy at queue time so those early requests cannot
@@ -676,6 +677,43 @@ namespace fonthook::vectorfont
 		QueueConfiguredFontPrewarms();
 		if (s_jobs.empty())
 			return;
+
+		// Font activation can queue work before DeferredInit finishes the native
+		// renderer probe. Rebind every queued profile to the one synchronized
+		// final route immediately before the blocking transaction starts. This
+		// prevents a provisional fallback/A8 identity from being cancelled after
+		// the queue has already been permanently deduplicated.
+		const FontAtlasRoute finalRoute = GetPersistentFontCacheRoute();
+		std::unordered_set<UInt64> reboundProfiles;
+		std::deque<PrewarmJob> reboundJobs;
+		while (!s_jobs.empty())
+		{
+			PrewarmJob job = std::move(s_jobs.front());
+			s_jobs.pop_front();
+			const FontConfig* config = FindConfig(job.fontId);
+			if (!config)
+				continue;
+			job.route = finalRoute;
+			job.profileKey = BuildProfileKey(*config, finalRoute);
+			if (!reboundProfiles.insert(job.profileKey).second)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: final-route prewarm alias font=%u route=%u",
+					job.fontId, static_cast<UInt32>(finalRoute));
+				continue;
+			}
+			reboundJobs.push_back(std::move(job));
+		}
+		s_jobs.swap(reboundJobs);
+		s_scheduledProfiles = std::move(reboundProfiles);
+		if (s_jobs.empty())
+			return;
+		if (finalRoute == FontAtlasRoute::ArgbFallback
+			&& s_atlasOnlyPrewarmPending)
+		{
+			EndCompleteCodePageAtlasOnlyPrewarm();
+			s_atlasOnlyPrewarmPending = false;
+		}
 
 		const float rasterScale = GetCanonicalFreeTypeRasterScale();
 		const UInt32 rasterScaleMilli = static_cast<UInt32>(std::lround(
@@ -742,6 +780,16 @@ namespace fonthook::vectorfont
 						job.fontId);
 				}
 			}
+			if (snapshotReady
+				&& job.route == FontAtlasRoute::ArgbFallback
+				&& !MarkCurrentFallbackBitmapProfilesUsed(
+					*runtime, rasterScale))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: fallback snapshot rejected font=%u reason=incomplete-persistent-mask-set",
+					job.fontId);
+				snapshotReady = false;
+			}
 			if (snapshotReady)
 			{
 				if (BuildDirectGlyphAtlasTables(*runtime, rasterScale)
@@ -770,13 +818,10 @@ namespace fonthook::vectorfont
 			CancelStreamingPrewarmAtlas(*runtime);
 			const bool atlasDiscarded = DiscardGlyphAtlasSnapshot(*runtime,
 				rasterScale);
-			const bool persistentDiscarded =
-				ResetPersistentFontCachesForRegeneration(*runtime);
 			PreparePrewarmScanForGeneration(job, *config, rasterScaleMilli);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: cache miss regenerated from empty state font=%u atlas=%s persistent=%s",
-				job.fontId, atlasDiscarded ? "discarded" : "delete-failed",
-				persistentDiscarded ? "discarded" : "invalidate-failed");
+				"tnvse_freetype_font: cache miss rebuilding atlas font=%u atlas=%s persistent=preserved",
+				job.fontId, atlasDiscarded ? "discarded" : "delete-failed");
 			cacheMisses.push_back(std::move(job));
 		}
 		s_jobs.swap(cacheMisses);
@@ -786,7 +831,9 @@ namespace fonthook::vectorfont
 		// complete transaction; ordinary demand rendering regains the persistent
 		// bitmap policy when this scope exits.
 		CompleteCodePageAtlasOnlyScope atlasOnlyScope(
-			s_atlasOnlyPrewarmPending || !s_jobs.empty());
+			GetPersistentFontCacheRoute()
+					!= FontAtlasRoute::ArgbFallback
+				&& (s_atlasOnlyPrewarmPending || !s_jobs.empty()));
 		s_atlasOnlyPrewarmPending = false;
 
 		if (!s_jobs.empty())
@@ -823,9 +870,7 @@ namespace fonthook::vectorfont
 			}
 
 			EffectQuality resolvedQuality = config->effectQuality;
-			const FontAtlasRoute atlasRoute = ResolveFontAtlasRoute(
-				IsA8RendererAvailable(),
-				g_bEnableFreeTypeFontAggressivePerformanceMode);
+			const FontAtlasRoute atlasRoute = job.route;
 			bool shaderSdf = atlasRoute == FontAtlasRoute::ShaderDistanceField
 				&& ResolveA8EffectQuality(config->effectQuality, resolvedQuality);
 			const bool aggressiveComposite =
@@ -1027,7 +1072,6 @@ namespace fonthook::vectorfont
 			{
 				CancelStreamingPrewarmAtlas(*runtime);
 				DiscardGlyphAtlasSnapshot(*runtime, rasterScale);
-				ResetPersistentFontCachesForRegeneration(*runtime);
 				FinishJob(job, "stream-failed");
 				++streamFailedFonts;
 				++finishedFonts;
@@ -1066,11 +1110,20 @@ namespace fonthook::vectorfont
 					"tnvse_freetype_font: streamed prewarm finalization raised an unexpected exception font=%u",
 					job.fontId);
 			}
+			if (finalized
+				&& job.route == FontAtlasRoute::ArgbFallback
+				&& !MarkCurrentFallbackBitmapProfilesUsed(
+					*runtime, rasterScale))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: fallback prewarm validation failed font=%u reason=incomplete-persistent-mask-set",
+					job.fontId);
+				finalized = false;
+			}
 			if (!finalized)
 			{
 				CancelStreamingPrewarmAtlas(*runtime);
 				DiscardGlyphAtlasSnapshot(*runtime, rasterScale);
-				ResetPersistentFontCachesForRegeneration(*runtime);
 				FinishJob(job, "stream-finalize-failed");
 				++streamFailedFonts;
 				++finishedFonts;
@@ -1110,7 +1163,8 @@ namespace fonthook::vectorfont
 		for (UInt32 fontId : verifiedCodePageFonts)
 		{
 			if (const FontConfig* config = FindConfig(fontId))
-				verifiedProfileKeys.insert(BuildProfileKey(*config));
+				verifiedProfileKeys.insert(BuildProfileKey(
+					*config, GetPersistentFontCacheRoute()));
 		}
 		std::unordered_set<UInt64> configuredProfileKeys;
 		std::vector<UInt32> atlasOnlyFontIds;
@@ -1118,7 +1172,8 @@ namespace fonthook::vectorfont
 		UInt32 readyConfiguredRuntimes = 0;
 		for (const auto& entry : g_configs)
 		{
-			const UInt64 profileKey = BuildProfileKey(entry.second);
+			const UInt64 profileKey = BuildProfileKey(
+				entry.second, GetPersistentFontCacheRoute());
 			configuredProfileKeys.insert(profileKey);
 			if (FindRuntimeFont(entry.first))
 			{
@@ -1134,7 +1189,9 @@ namespace fonthook::vectorfont
 		const bool everyConfiguredProfileVerified = everyConfiguredJobCompleted
 			&& verifiedCodePageFonts.size() == queuedFonts
 			&& verifiedProfileKeys.size() == configuredProfileKeys.size();
-		if (everyConfiguredProfileVerified)
+		if (everyConfiguredProfileVerified
+			&& GetPersistentFontCacheRoute()
+				!= FontAtlasRoute::ArgbFallback)
 		{
 			if (!DeleteCompleteCodePageGlyphBitmapDiskCaches(atlasOnlyFontIds))
 			{
@@ -1142,7 +1199,7 @@ namespace fonthook::vectorfont
 					"tnvse_freetype_font: complete codepage mask cleanup incomplete; residual files will not be reused in this process");
 			}
 		}
-		else
+		else if (!everyConfiguredProfileVerified)
 		{
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: complete codepage mask retention required complete=%u verifiedAtlas=%u queued=%u verifiedProfiles=%u configuredProfiles=%u readyRuntimes=%u configuredFonts=%u",

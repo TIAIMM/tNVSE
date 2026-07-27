@@ -3086,7 +3086,9 @@ namespace fonthook::vectorfont
 							candidate < availableAtlases.size(); ++candidate)
 						{
 							if (availableAtlases[candidate].get()
-								== page.get())
+									== page.get()
+								|| AreAtlasResourcesBackedBySameTexture(
+									*availableAtlases[candidate], *page))
 							{
 								ordinal = candidate;
 								break;
@@ -3129,7 +3131,7 @@ namespace fonthook::vectorfont
 				if (roleAtlases.empty())
 				{
 					std::shared_ptr<AtlasResource> transient = CreateTransientAtlas(
-						bitmaps, pixelMode, renderMode, padding);
+						bitmaps, pixelMode, renderMode, padding, byteClass);
 					if (transient)
 					{
 						roleAtlases.push_back(std::move(transient));
@@ -3148,15 +3150,42 @@ namespace fonthook::vectorfont
 				}
 				if (roleAtlases.empty())
 					return nullptr;
-				const UInt16 rolePageBase = static_cast<UInt16>(availableAtlases.size());
-				availableAtlases.insert(availableAtlases.end(), roleAtlases.begin(),
-					roleAtlases.end());
+				std::vector<UInt16> rolePageOrdinals(roleAtlases.size(),
+					std::numeric_limits<UInt16>::max());
+				for (size_t rolePage = 0; rolePage < roleAtlases.size(); ++rolePage)
+				{
+					if (!roleAtlases[rolePage])
+						return nullptr;
+					for (UInt16 candidate = 0;
+						candidate < availableAtlases.size(); ++candidate)
+					{
+						if (availableAtlases[candidate].get()
+								== roleAtlases[rolePage].get()
+							|| AreAtlasResourcesBackedBySameTexture(
+								*availableAtlases[candidate],
+								*roleAtlases[rolePage]))
+						{
+							rolePageOrdinals[rolePage] = candidate;
+							break;
+						}
+					}
+					if (rolePageOrdinals[rolePage]
+						== std::numeric_limits<UInt16>::max())
+					{
+						if (availableAtlases.size()
+							>= kMaximumAtlasSnapshotPages)
+							return nullptr;
+						rolePageOrdinals[rolePage] = static_cast<UInt16>(
+							availableAtlases.size());
+						availableAtlases.push_back(roleAtlases[rolePage]);
+					}
+				}
 				for (size_t bitmapIndex = 0; bitmapIndex < bitmaps.size(); ++bitmapIndex)
 				{
 					const UInt16 page = bitmapPageOrdinals[bitmapIndex];
 					if (page >= roleAtlases.size() || !bitmaps[bitmapIndex])
 						continue;
-					const UInt16 resolvedPage = static_cast<UInt16>(rolePageBase + page);
+					const UInt16 resolvedPage = rolePageOrdinals[page];
 					AtlasGlyphRecord* glyph = FindAtlasGlyph(*roleAtlases[page],
 						bitmaps[bitmapIndex]->cacheId);
 					if (!glyph || !CacheAtlasGlyphPlacement(
@@ -3164,8 +3193,16 @@ namespace fonthook::vectorfont
 					{
 						return nullptr;
 					}
+					AtlasGlyphPlacement placement = glyph->placement;
+					const std::shared_ptr<AtlasResource>& physical =
+						availableAtlases[resolvedPage];
+					placement.atlasIdentity =
+						reinterpret_cast<uintptr_t>(physical.get());
+					placement.atlasGeneration = physical->generation;
+					placement.atlasWidth = physical->width;
+					placement.atlasHeight = physical->height;
 					placementRecords[roleIndex].emplace(bitmaps[bitmapIndex]->cacheId,
-						ResolvedPlacement{ resolvedPage, glyph->placement });
+						ResolvedPlacement{ resolvedPage, placement });
 				}
 			}
 			if (availableAtlases.empty())
@@ -3207,7 +3244,9 @@ namespace fonthook::vectorfont
 						return left->cacheId == right->cacheId;
 					}), fallbackBitmaps.end());
 				std::shared_ptr<AtlasResource> collapsed = CreateTransientAtlas(
-					fallbackBitmaps, pixelMode, renderMode, padding);
+					fallbackBitmaps, pixelMode, renderMode, padding,
+					roleBitmaps[1].empty() ? VectorFontByteClass::SingleByte
+						: VectorFontByteClass::DoubleByte);
 				if (!collapsed)
 					return nullptr;
 				availableAtlases.assign(1, collapsed);
@@ -3251,6 +3290,14 @@ namespace fonthook::vectorfont
 						return nullptr;
 					quad.atlasPage = page;
 					quad.atlasPlacement = quad.source.placement;
+					quad.atlasPlacement.atlasIdentity =
+						reinterpret_cast<uintptr_t>(outAtlases[page].get());
+					quad.atlasPlacement.atlasGeneration =
+						outAtlases[page]->generation;
+					quad.atlasPlacement.atlasWidth =
+						outAtlases[page]->width;
+					quad.atlasPlacement.atlasHeight =
+						outAtlases[page]->height;
 					quad.atlasPlacement.pageIndex = page;
 					const UInt32 rank = GetA8LayerDrawRank(
 						static_cast<UInt32>(quad.layer));

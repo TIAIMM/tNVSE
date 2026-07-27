@@ -23,6 +23,15 @@ namespace fonthook::vectorfont
 			g_bEnableFreeTypeFontAggressivePerformanceMode));
 	}
 
+	FontAtlasRoute GetPersistentFontCacheRoute()
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		if (State().persistentCacheRouteSynchronized)
+			return State().persistentCacheRoute;
+		return ResolveFontAtlasRoute(IsA8RendererAvailable(),
+			g_bEnableFreeTypeFontAggressivePerformanceMode);
+	}
+
 	static UInt32 MaximumPersistentBitmapBytes(GlyphMaskType maskType,
 		DistanceFieldMethod distanceFieldMethod)
 	{
@@ -1834,14 +1843,32 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	static void ReleaseDistanceFieldBitmapCaches()
+	static bool BitmapCacheKeyBelongsToRoute(UInt8 maskType,
+		UInt8 distanceFieldMethod, FontAtlasRoute route)
+	{
+		const UInt8 distance = static_cast<UInt8>(
+			GlyphMaskType::DistanceField);
+		const UInt8 composite = static_cast<UInt8>(
+			GlyphMaskType::Composite);
+		if (route == FontAtlasRoute::ShaderDistanceField)
+		{
+			return maskType == distance
+				&& distanceFieldMethod == static_cast<UInt8>(
+					GetConfiguredDistanceFieldMethod());
+		}
+		if (route == FontAtlasRoute::ShaderA8Coverage)
+			return maskType == composite;
+		return maskType != distance && maskType != composite;
+	}
+
+	static void ReleaseBitmapCachesOutsideRoute(FontAtlasRoute route)
 	{
 		FreeTypeState& state = State();
 		for (auto entry = state.bitmapCache.begin();
 			entry != state.bitmapCache.end();)
 		{
-			if (entry->first.maskType != static_cast<UInt8>(
-				GlyphMaskType::DistanceField))
+			if (BitmapCacheKeyBelongsToRoute(entry->first.maskType,
+				entry->first.distanceFieldMethod, route))
 			{
 				++entry;
 				continue;
@@ -1854,8 +1881,8 @@ namespace fonthook::vectorfont
 		for (auto profile = state.persistentBitmapProfiles.begin();
 			profile != state.persistentBitmapProfiles.end();)
 		{
-			if (profile->first.maskType != static_cast<UInt8>(
-				GlyphMaskType::DistanceField))
+			if (BitmapCacheKeyBelongsToRoute(profile->first.maskType,
+				profile->first.distanceFieldMethod, route))
 			{
 				++profile;
 				continue;
@@ -1883,19 +1910,31 @@ namespace fonthook::vectorfont
 		{
 			return PersistentCacheCleanupClass::Invalid;
 		}
-		if (header.maskType != static_cast<UInt8>(GlyphMaskType::DistanceField))
-			return PersistentCacheCleanupClass::Neutral;
-		if (header.distanceFieldMethod
-			> static_cast<UInt8>(DistanceFieldMethod::Mtsdf))
+		const FontAtlasRoute route = GetPersistentFontCacheRoute();
+		const UInt8 maskType = header.maskType;
+		if (maskType == static_cast<UInt8>(GlyphMaskType::DistanceField))
 		{
-			return PersistentCacheCleanupClass::Invalid;
+			if (header.distanceFieldMethod
+				> static_cast<UInt8>(DistanceFieldMethod::Mtsdf))
+			{
+				return PersistentCacheCleanupClass::Invalid;
+			}
+			return route == FontAtlasRoute::ShaderDistanceField
+					&& header.distanceFieldMethod == static_cast<UInt8>(
+						GetConfiguredDistanceFieldMethod())
+				? PersistentCacheCleanupClass::CurrentDistanceField
+				: PersistentCacheCleanupClass::InactiveDistanceField;
 		}
-		if (GetPersistentFontCacheDomain()
-			== PersistentFontCacheDomain::CpuCoverage)
-			return PersistentCacheCleanupClass::InactiveDistanceField;
-		return header.distanceFieldMethod == static_cast<UInt8>(
-			GetConfiguredDistanceFieldMethod())
-			? PersistentCacheCleanupClass::CurrentDistanceField
+		if (maskType == static_cast<UInt8>(GlyphMaskType::Composite))
+		{
+			return route == FontAtlasRoute::ShaderA8Coverage
+				? PersistentCacheCleanupClass::Neutral
+				: PersistentCacheCleanupClass::InactiveDistanceField;
+		}
+		if (maskType > static_cast<UInt8>(GlyphMaskType::Composite))
+			return PersistentCacheCleanupClass::Invalid;
+		return route == FontAtlasRoute::ArgbFallback
+			? PersistentCacheCleanupClass::Neutral
 			: PersistentCacheCleanupClass::InactiveDistanceField;
 	}
 
@@ -1940,16 +1979,17 @@ namespace fonthook::vectorfont
 			ResolvePersistentFontCacheDomain(route);
 		FreeTypeState& state = State();
 		if (state.persistentCacheRouteSynchronized
-			&& state.persistentCacheDomain == cacheDomain)
+			&& state.persistentCacheRoute == route)
 		{
 			return;
 		}
 
 		const bool wasSynchronized = state.persistentCacheRouteSynchronized;
-		const PersistentFontCacheDomain previousDomain =
-			state.persistentCacheDomain;
+		const FontAtlasRoute previousRoute = state.persistentCacheRoute;
 		state.persistentCacheRouteSynchronized = true;
+		state.persistentCacheRoute = route;
 		state.persistentCacheDomain = cacheDomain;
+		ReleaseBitmapCachesOutsideRoute(route);
 		DetachPersistentManifestsOutsideDomain(cacheDomain);
 
 		if (cacheDomain != PersistentFontCacheDomain::CpuCoverage)
@@ -1957,13 +1997,14 @@ namespace fonthook::vectorfont
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: persistent cache route synchronized previous=%s current=distance-field invalidation=none",
 				wasSynchronized
-					? (previousDomain == PersistentFontCacheDomain::DistanceField
-						? "distance-field" : "cpu-coverage")
+					? (previousRoute == FontAtlasRoute::ShaderDistanceField
+						? "distance-field"
+						: previousRoute == FontAtlasRoute::ShaderA8Coverage
+							? "argb-composite" : "argb-fallback")
 					: "unresolved");
 			return;
 		}
 
-		ReleaseDistanceFieldBitmapCaches();
 		std::wstring directory;
 		if (!EnsurePersistentBitmapDirectory(directory))
 		{
@@ -1975,6 +2016,7 @@ namespace fonthook::vectorfont
 		UInt32 deletedMasks = 0;
 		UInt32 deletedManifests = 0;
 		UInt32 deletedAtlases = 0;
+		UInt32 deletedDirect = 0;
 		UInt32 deletedTemporary = 0;
 		UInt32 failed = 0;
 		UInt64 deletedBytes = 0;
@@ -1998,6 +2040,7 @@ namespace fonthook::vectorfont
 				const bool bitmap = hasSuffix(normalized, L".tnvfmask");
 				const bool manifest = hasSuffix(normalized, L".tnvfmanifest");
 				const bool atlas = hasSuffix(normalized, L".tnvfatlas");
+				const bool direct = hasSuffix(normalized, L".tnvfdirect");
 				const bool temporary =
 					hasSuffix(normalized, L".tnvfmask.tmp")
 					|| hasSuffix(normalized, L".tnvfmanifest.tmp")
@@ -2029,6 +2072,14 @@ namespace fonthook::vectorfont
 							== PersistentCacheCleanupClass::InactiveDistanceField
 						|| cleanupClass == PersistentCacheCleanupClass::Invalid;
 				}
+				else if (direct)
+				{
+					const PersistentCacheCleanupClass cleanupClass =
+						ClassifyDirectCachedLetterCacheForCleanup(path);
+					remove = cleanupClass
+							== PersistentCacheCleanupClass::InactiveDistanceField
+						|| cleanupClass == PersistentCacheCleanupClass::Invalid;
+				}
 				if (!remove)
 					continue;
 
@@ -2048,6 +2099,8 @@ namespace fonthook::vectorfont
 						++deletedManifests;
 					else if (atlas)
 						++deletedAtlases;
+					else if (direct)
+						++deletedDirect;
 				}
 				else
 				{
@@ -2069,14 +2122,17 @@ namespace fonthook::vectorfont
 		}
 
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: distance-field cache invalidated route=%s previous=%s masks=%u manifests=%u atlases=%u temporary=%u bytes=%llu failed=%u",
+			"tnvse_freetype_font: inactive cache invalidated route=%s previous=%s masks=%u manifests=%u atlases=%u direct=%u temporary=%u bytes=%llu failed=%u",
 			route == FontAtlasRoute::ShaderA8Coverage
 				? "argb-composite" : "argb-fallback",
 			wasSynchronized
-				? (previousDomain == PersistentFontCacheDomain::DistanceField
-					? "distance-field" : "cpu-coverage")
+				? (previousRoute == FontAtlasRoute::ShaderDistanceField
+					? "distance-field"
+					: previousRoute == FontAtlasRoute::ShaderA8Coverage
+						? "argb-composite" : "argb-fallback")
 				: "unresolved",
-			deletedMasks, deletedManifests, deletedAtlases, deletedTemporary,
+			deletedMasks, deletedManifests, deletedAtlases, deletedDirect,
+			deletedTemporary,
 			static_cast<unsigned long long>(deletedBytes), failed);
 	}
 
@@ -2124,11 +2180,11 @@ namespace fonthook::vectorfont
 				|| hasSuffix(normalized, L".tnvfdirect.tmp");
 			const bool managed = bitmap || fontHash || manifest || atlas || direct
 				|| temporaryFile;
-			if (!managed || State().usedPersistentCachePaths.count(normalized))
+			if (!managed)
 				continue;
 			PersistentCacheCleanupClass cleanupClass =
 				PersistentCacheCleanupClass::Neutral;
-			if (!deleteAllUnused && !temporaryFile)
+			if (!temporaryFile)
 			{
 				if (bitmap)
 					cleanupClass = ClassifyPersistentBitmapCache(path);
@@ -2138,7 +2194,21 @@ namespace fonthook::vectorfont
 					cleanupClass =
 						ClassifyAtlasSnapshotCacheForCleanup(path);
 				else if (direct)
-					cleanupClass = PersistentCacheCleanupClass::Invalid;
+					cleanupClass =
+						ClassifyDirectCachedLetterCacheForCleanup(path);
+			}
+			const bool used =
+				State().usedPersistentCachePaths.count(normalized) != 0;
+			if (used
+				&& cleanupClass !=
+					PersistentCacheCleanupClass::InactiveDistanceField
+				&& cleanupClass != PersistentCacheCleanupClass::Invalid
+				&& !temporaryFile)
+			{
+				continue;
+			}
+			if (!deleteAllUnused && !temporaryFile)
+			{
 				if (cleanupClass == PersistentCacheCleanupClass::Neutral
 					|| cleanupClass
 						== PersistentCacheCleanupClass::CurrentDistanceField)
@@ -2160,6 +2230,7 @@ namespace fonthook::vectorfont
 			{
 				++deleted;
 				deletedBytes += size;
+				State().usedPersistentCachePaths.erase(normalized);
 			}
 			else
 			{
@@ -2194,6 +2265,123 @@ namespace fonthook::vectorfont
 			offsetof(PersistentGlyphManifestHeader, checksum));
 		FlushViewOfFile(header, sizeof(*header));
 		BuildValidatedGlyphManifestIndex(*manifest, runtime);
+	}
+
+	bool MarkCurrentFallbackBitmapProfilesUsed(RuntimeFont& runtime,
+		float rasterScale)
+	{
+		std::lock_guard<std::recursive_mutex> lock(State().mutex);
+		if (GetPersistentFontCacheRoute() != FontAtlasRoute::ArgbFallback)
+			return true;
+		PersistentGlyphManifest* manifest = GetGlyphManifest(runtime);
+		if (!manifest || !manifest->mappedData
+			|| !manifest->validatedRecordIndexReady)
+		{
+			return false;
+		}
+		const auto* header = reinterpret_cast<
+			const PersistentGlyphManifestHeader*>(manifest->mappedData);
+		if (header->completeMode < kCompleteCodePagePrewarmIdentity)
+			return false;
+
+		std::array<std::vector<bool>, 2> usedFaces;
+		for (size_t roleIndex = 0; roleIndex < usedFaces.size(); ++roleIndex)
+			usedFaces[roleIndex].assign(runtime.roles[roleIndex].faces.size(), false);
+		const auto* records = reinterpret_cast<
+			const PersistentGlyphManifestRecord*>(manifest->mappedData
+				+ sizeof(PersistentGlyphManifestHeader));
+		for (UInt32 index = 0; index < manifest->recordCount; ++index)
+		{
+			const PersistentGlyphManifestEntry& entry = records[index].entry;
+			const size_t roleIndex = entry.byteClass;
+			if (!entry.valid || roleIndex >= usedFaces.size()
+				|| entry.faceIndex >= usedFaces[roleIndex].size())
+			{
+				continue;
+			}
+			usedFaces[roleIndex][entry.faceIndex] = true;
+		}
+
+		const FontConfig& config = GetRuntimeConfig(runtime);
+		std::array<GlyphMaskType, 4> masks = {
+			GlyphMaskType::Fill,
+			GlyphMaskType::Shadow,
+			GlyphMaskType::Glow,
+			GlyphMaskType::Outline
+		};
+		const float safeScale = std::isfinite(rasterScale)
+				&& rasterScale >= 0.1f && rasterScale <= 10.0f
+			? rasterScale : 1.0f;
+		UInt32 requiredProfiles = 0;
+		for (size_t roleIndex = 0; roleIndex < runtime.roles.size(); ++roleIndex)
+		{
+			RuntimeRole& role = runtime.roles[roleIndex];
+			if (!role.style)
+				return false;
+			const ByteStyle& style = *role.style;
+			const UInt16 effectiveWidth = static_cast<UInt16>(std::clamp(
+				static_cast<int>(std::lround(
+					style.pixelSize * style.scaleX * safeScale)), 1, 65535));
+			const UInt16 effectiveHeight = static_cast<UInt16>(std::clamp(
+				static_cast<int>(std::lround(
+					style.pixelSize * style.scaleY * safeScale)), 1, 65535));
+			const SInt32 embolden = static_cast<SInt32>(std::lround(
+				style.embolden * safeScale * 64.0f));
+			const float slant = std::tan(style.slantDegrees
+				* 3.14159265358979323846f / 180.0f);
+			const SInt32 slant16Dot16 = static_cast<SInt32>(std::lround(
+				slant * 65536.0f));
+			for (size_t faceIndex = 0; faceIndex < role.faces.size(); ++faceIndex)
+			{
+				if (!usedFaces[roleIndex][faceIndex])
+					continue;
+				RuntimeFace& face = role.faces[faceIndex];
+				if (!face.file || !face.face)
+					return false;
+				for (GlyphMaskType mask : masks)
+				{
+					if ((mask == GlyphMaskType::Shadow
+							&& !config.shadow.enabled)
+						|| (mask == GlyphMaskType::Glow
+							&& !config.glow.enabled)
+						|| (mask == GlyphMaskType::Outline
+							&& !config.outline.enabled))
+					{
+						continue;
+					}
+					const PersistentBitmapProfileKey key = {
+						face.file->contentHash,
+						static_cast<SInt32>(face.face->face_index),
+						GetFreeTypeTextCodePage(),
+						effectiveWidth,
+						effectiveHeight,
+						embolden,
+						ResolveCpuEffectMaskIdentity(config, mask, safeScale),
+						slant16Dot16,
+						0,
+						static_cast<UInt8>(mask),
+						0
+					};
+					PersistentBitmapProfile* profile =
+						GetPersistentBitmapProfile(key, face.file->path,
+							config.fontId, static_cast<UInt32>(
+								std::max<FT_Long>(1, face.face->num_glyphs)));
+					if (!profile || !profile->initialized
+						|| !profile->recordCount || profile->path.empty())
+					{
+						return false;
+					}
+					MarkFreeTypeFontCacheFileUsed(profile->path);
+					++requiredProfiles;
+				}
+			}
+		}
+		if (!requiredProfiles)
+			return false;
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: fallback persistent masks retained font=%u profiles=%u",
+			config.fontId, requiredProfiles);
+		return true;
 	}
 
 	void BeginCompleteCodePageAtlasOnlyPrewarm()
