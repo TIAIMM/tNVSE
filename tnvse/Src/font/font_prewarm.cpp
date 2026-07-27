@@ -939,23 +939,8 @@ namespace fonthook::vectorfont
 						&& bitmapResults.size() != bitmapRequests.size())
 						failed = true;
 					if (!failed && !retrySmallerBatch)
-					{
-						for (size_t index = 0; index < bitmapRequests.size(); ++index)
-						{
-							if (bitmapRequests[index].glyph && bitmapResults[index]
-								&& (bitmapRequests[index].maskType
-									== GlyphMaskType::Fill
-									|| bitmapRequests[index].maskType
-										== GlyphMaskType::DistanceField))
-							{
-								StoreGlyphCollisionProfile(*runtime,
-									*bitmapRequests[index].glyph,
-									*bitmapResults[index], rasterScale);
-							}
-						}
 						failed = !AppendStreamingPrewarmAtlas(*runtime,
 							bitmapRequests, bitmapResults, rasterScale);
-					}
 
 					// Release every strong bitmap reference before the next batch. The
 					// stream owns only one bounded packed distance-field page and its placement

@@ -303,7 +303,7 @@ published.
 
 The same directory also contains four startup-oriented cache layers. A
 `.tnvfhash` record reuses the font content hash when file identity, size and
-last-write time still match. A v11 `.tnvfmanifest` stores the encoded unit's
+last-write time still match. A v12 `.tnvfmanifest` stores the encoded unit's
 Unicode value, fallback face/glyph identity, and serialized `FontLetter` metrics
 as a sorted sparse table containing the 256 single-byte values plus only valid
 double-byte units from the active code page. A complete manifest is validated
@@ -311,7 +311,10 @@ once into a direct encoded-unit index, and its double-byte `FontLetter` metrics
 are copied into the runtime direct table. Runtime fonts with the same
 `manifestHash` share one file
 handle, mapping handle, and mapped view instead of mapping that file once per
-font ID. One `_p<page>.tnvfatlas` snapshot per atlas page stores
+font ID. Version 12 removes the unused per-glyph 16-band collision profile, so
+prewarm no longer scans every Fill/distance-field texel a second time and each
+manifest record is 52 bytes instead of 124 bytes. One `_p<page>.tnvfatlas`
+snapshot per atlas page stores
 the stable glyph-ID placement map. Snapshot v17 records the byte role, the
 selected distance-field method, and the validated runtime UV subset explicitly,
 and stores A8 true-SDF, BGRA MTSDF, or BGRA composite rectangle payloads. The

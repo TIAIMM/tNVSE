@@ -37,10 +37,12 @@ namespace fonthook::vectorfont
 	// hinted body distance instead of treating a FreeType stroke as an opaque
 	// effect. It is included in every CPU-effect bitmap/cache identity.
 	constexpr UInt32 kCpuEffectCoverageVersion = 2;
-	// Version 11 adds the final direct cached-letter/composite profile contract.
+	// Version 12 removes the unused 16-band glyph-collision profile from every
+	// manifest record. Version 11 added the final direct cached-letter/composite
+	// profile contract.
 	// Atlas snapshot identity also consumes this ABI because a restored atlas is
 	// usable only with its matching complete manifest.
-	constexpr UInt32 kPersistentGlyphManifestVersion = 11;
+	constexpr UInt32 kPersistentGlyphManifestVersion = 12;
 	// Version 3 separates the final BGRA-composite profile from the former
 	// aggressive coverage representation while retaining cache-domain routing.
 	constexpr UInt8 kPersistentGlyphManifestCacheIdentityVersion = 3;
@@ -287,24 +289,6 @@ namespace fonthook::vectorfont
 				bitmap.maskType, bitmap.distanceFieldMethod);
 	}
 
-	inline UInt8 SampleGlyphBodyDistanceByte(
-		const GlyphBitmap& bitmap, size_t pixelIndex)
-	{
-		if (bitmap.maskType == GlyphMaskType::Composite)
-		{
-			const size_t offset = pixelIndex * 4u;
-			return offset + 3u < bitmap.alpha.size()
-				? bitmap.alpha[offset + 3u] : 0;
-		}
-		if (bitmap.maskType != GlyphMaskType::DistanceField)
-			return pixelIndex < bitmap.alpha.size() ? bitmap.alpha[pixelIndex] : 0;
-		if (bitmap.distanceFieldMethod == DistanceFieldMethod::TrueSdf)
-			return pixelIndex < bitmap.alpha.size() ? bitmap.alpha[pixelIndex] : 0;
-		const size_t offset = pixelIndex * 4u;
-		return offset + 3u < bitmap.alpha.size()
-			? MedianMtsdfRgb(bitmap.alpha.data() + offset) : 0;
-	}
-
 	struct GlyphBitmapRequest
 	{
 		const VectorEncodedGlyph* glyph = nullptr;
@@ -507,9 +491,6 @@ namespace fonthook::vectorfont
 	void GetPrewarmGlyphBitmaps(RuntimeFont& arRuntime,
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults);
-	void StoreGlyphCollisionProfile(RuntimeFont& arRuntime,
-		const VectorEncodedGlyph& arGlyph, const GlyphBitmap& arBitmap,
-		float afRasterScale);
 	void BeginCompleteCodePageAtlasOnlyPrewarm();
 	void EndCompleteCodePageAtlasOnlyPrewarm();
 	void FlushGlyphBitmapDiskCache();

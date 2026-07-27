@@ -428,21 +428,6 @@ namespace fonthook::vectorfont
 		}
 	};
 
-	// The manifest version is shared with atlas snapshot identity in
-	// font_vector_internal.h. Version 9 stores only encoded units valid for the
-	// active code page and shares one mapped object across equivalent runtimes;
-	// version 8 used a fixed 65536-entry array per runtime mapping.
-	constexpr size_t kGlyphCollisionBandCount = 16;
-
-	struct GlyphCollisionProfile
-	{
-		float top = 0.0f;
-		float bottom = 0.0f;
-		UInt16 bandMask = 0;
-		std::array<float, kGlyphCollisionBandCount> left = {};
-		std::array<float, kGlyphCollisionBandCount> right = {};
-	};
-
 #pragma pack(push, 1)
 	struct PersistentGlyphManifestHeader
 	{
@@ -478,13 +463,6 @@ namespace fonthook::vectorfont
 		float height = 0.0f;
 		float topEdge = 0.0f;
 		float spacing = 0.0f;
-		UInt8 collisionValid = 0;
-		UInt8 collisionReserved = 0;
-		UInt16 collisionBandMask = 0;
-		SInt16 collisionTop26Dot6 = 0;
-		SInt16 collisionBottom26Dot6 = 0;
-		SInt16 collisionLeft26Dot6[kGlyphCollisionBandCount] = {};
-		SInt16 collisionRight26Dot6[kGlyphCollisionBandCount] = {};
 		UInt64 checksum = 0;
 	};
 
@@ -564,8 +542,8 @@ namespace fonthook::vectorfont
 	static_assert(sizeof(PersistentBitmapIndexEntry) == 16);
 	static_assert(sizeof(PersistentBitmapRecordHeader) == 40);
 	static_assert(sizeof(PersistentGlyphManifestHeader) == 72);
-	static_assert(sizeof(PersistentGlyphManifestEntry) == 120);
-	static_assert(sizeof(PersistentGlyphManifestRecord) == 124);
+	static_assert(sizeof(PersistentGlyphManifestEntry) == 48);
+	static_assert(sizeof(PersistentGlyphManifestRecord) == 52);
 
 	struct ActiveRuntimeCache
 	{
@@ -662,10 +640,6 @@ namespace fonthook::vectorfont
 	bool EnsureCompleteCodePageMetricTable(RuntimeFont& runtime);
 	void StoreGlyphManifest(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
 		const ResolvedGlyph& resolved, const FontLetter& metrics);
-	bool LoadGlyphCollisionProfile(RuntimeFont& runtime,
-		const VectorEncodedGlyph& glyph, GlyphCollisionProfile& profile);
-	void StoreGlyphCollisionProfile(RuntimeFont& runtime,
-		const VectorEncodedGlyph& glyph, const GlyphBitmap& bitmap, float rasterScale);
 	PersistentBitmapProfileKey MakePersistentBitmapProfileKey(
 		const BitmapCacheKey& key, UInt64 fontContentHash);
 	UInt64 HashBitmapKey(const BitmapCacheKey& key);

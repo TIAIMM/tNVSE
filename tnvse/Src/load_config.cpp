@@ -18,7 +18,6 @@ bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
 bool g_bEnableFreeTypeFontAggressivePerformanceMode = false;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = 1;
-bool g_bEnableFreeTypeGlyphCollisionProtection;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bEnableFreeTypeFontCompositePass = true;
 UINT32 g_uiFreeTypeFontCompositeCacheMB = 32;
@@ -179,12 +178,6 @@ void LoadConfig()
 		"g_uiFreeTypeFontDistanceFieldMode: %u (%s)",
 		g_uiFreeTypeFontDistanceFieldMode,
 		g_uiFreeTypeFontDistanceFieldMode ? "MTSDF" : "true SDF");
-
-	g_bEnableFreeTypeGlyphCollisionProtection = ReadConfigInt(
-		kFreeTypeFontSection, "bEnableFreeTypeGlyphCollisionProtection", 1,
-		filename) != 0;
-	gLog.FormattedMessage("g_bEnableFreeTypeGlyphCollisionProtection: %d",
-		g_bEnableFreeTypeGlyphCollisionProtection);
 
 	g_uiFreeTypeFontGpuAtlasCacheMB = ReadConfigInt(
 		kFreeTypeFontSection, "uiFreeTypeFontGpuAtlasCacheMB", 0, filename);
