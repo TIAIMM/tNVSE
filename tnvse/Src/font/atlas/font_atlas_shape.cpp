@@ -857,7 +857,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool WriteDirectQuadVertices(const DirectAtlasGlyphLayer& source,
+		bool WriteDirectQuadVertices(const AtlasSnapshotPlacement& source,
 			const AtlasGlyphInstance& instance, const NiPoint3& origin,
 			float offsetX, float offsetY, float rasterScale,
 			float baselineOffset, float sourceToLogicalScale, bool usesSdf,
@@ -865,7 +865,8 @@ namespace fonthook::vectorfont
 			NativeA8GpuVertex* output, NiPoint3& boundMinimum,
 			NiPoint3& boundMaximum)
 		{
-			if (!output || !source.valid()
+			if (!output || !source.cacheId
+				|| !source.rect.width || !source.rect.height
 				|| !std::isfinite(rasterScale) || rasterScale <= 0.0f
 				|| !std::isfinite(sourceToLogicalScale)
 				|| sourceToLogicalScale <= 0.0f)
@@ -890,19 +891,19 @@ namespace fonthook::vectorfont
 			const float pixelScale = usesSdf
 				? sourcePixelToLogical : 1.0f / rasterScale;
 			const float x1 = x0
-				+ static_cast<float>(source.width) * pixelScale;
+				+ static_cast<float>(source.rect.width) * pixelScale;
 			const float z1 = z0
-				- static_cast<float>(source.height) * pixelScale;
+				- static_cast<float>(source.rect.height) * pixelScale;
 			const float depth = instance.pen.y - origin.y;
 			const std::array<NiPoint3, 4> positions = {{
 				NiPoint3(x0, depth, z0), NiPoint3(x1, depth, z0),
 				NiPoint3(x1, depth, z1), NiPoint3(x0, depth, z1)
 			}};
 			const std::array<NiPoint2, 4> texture = {{
-				NiPoint2(source.u0, source.v0),
-				NiPoint2(source.u1, source.v0),
-				NiPoint2(source.u1, source.v1),
-				NiPoint2(source.u0, source.v1)
+				NiPoint2(source.glyphPlacement.u0, source.glyphPlacement.v0),
+				NiPoint2(source.glyphPlacement.u1, source.glyphPlacement.v0),
+				NiPoint2(source.glyphPlacement.u1, source.glyphPlacement.v1),
+				NiPoint2(source.glyphPlacement.u0, source.glyphPlacement.v1)
 			}};
 			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
 			{
@@ -1182,13 +1183,13 @@ namespace fonthook::vectorfont
 					batch.glyphs[glyphIndex];
 				if (source.knownEmpty)
 					continue;
-				if (!source.layer || source.atlasPage != 0)
+				if (!source.placement || source.atlasPage != 0)
 					return nullptr;
 				const AtlasGlyphInstance& instance = glyphs[glyphIndex];
 				const NiColorA baseColor =
 					ResolveBaseColor(instance.color, tileColor);
 				std::array<NativeA8GpuVertex, 4> vertices;
-				if (!WriteDirectQuadVertices(*source.layer, instance,
+				if (!WriteDirectQuadVertices(*source.placement, instance,
 					origin, 0.0f, 0.0f, rasterScale,
 					GetGlyphBaselineOffset(runtime, instance.glyph),
 					1.0f, false, PackNativeBaseColor(baseColor),
@@ -1289,7 +1290,7 @@ namespace fonthook::vectorfont
 				batch.glyphs.begin(), batch.glyphs.end(),
 				[](const DirectAtlasBatchGlyph& glyph)
 				{
-					return !glyph.knownEmpty && glyph.layer;
+					return !glyph.knownEmpty && glyph.placement;
 				}));
 			if (!result.glyphCount || result.glyphCount > kMaximumQuads)
 			{
@@ -1380,7 +1381,7 @@ namespace fonthook::vectorfont
 			{
 				if (glyph.knownEmpty)
 					continue;
-				if (!glyph.layer
+				if (!glyph.placement
 					|| glyph.atlasPage >= batch.atlases.size()
 					|| glyph.atlasPage >= kMaximumAtlasSnapshotPages)
 				{
@@ -1459,7 +1460,7 @@ namespace fonthook::vectorfont
 						&& (pageSourceScales[page]
 								!= sourceToLogicalScale
 							|| pageSdfSpreads[page]
-								!= source.layer->sdfSpread))
+								!= source.placement->sdfSpread))
 					{
 						// Direct ranges are page-contiguous. A profile that mixes
 						// distance parameters within one page remains on the
@@ -1468,7 +1469,7 @@ namespace fonthook::vectorfont
 					}
 					pageProfileReady[page] = true;
 					pageSourceScales[page] = sourceToLogicalScale;
-					pageSdfSpreads[page] = source.layer->sdfSpread;
+					pageSdfSpreads[page] = source.placement->sdfSpread;
 				}
 				const NiColorA baseColor =
 					ResolveBaseColor(instance.color, tileColor);
@@ -1487,7 +1488,7 @@ namespace fonthook::vectorfont
 						facadeColor = baseColor;
 						facadeColorInitialized = true;
 					}
-					return WriteDirectQuadVertices(*source.layer,
+					return WriteDirectQuadVertices(*source.placement,
 						instance, origin, offsetX, offsetY, rasterScale,
 						baselineOffset, sourceToLogicalScale,
 						distanceField, PackNativeBaseColor(baseColor),

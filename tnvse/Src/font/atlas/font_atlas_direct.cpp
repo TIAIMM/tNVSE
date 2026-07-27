@@ -25,7 +25,7 @@ namespace fonthook::vectorfont
 		constexpr UInt32 kDoubleByteGlyphSlots =
 			(kLastLeadByte - kFirstLeadByte + 1) * kGlyphsPerDoubleByteRow;
 		constexpr size_t kDirectBuildBatchGlyphs = 512;
-		constexpr UInt32 kDirectCachedLetterVersion = 2;
+		constexpr UInt32 kDirectCachedLetterVersion = 3;
 		constexpr UInt8 kDirectLetterValid = 1u << 0;
 		constexpr UInt8 kDirectLetterKnownEmpty = 1u << 1;
 		constexpr UInt8 kDirectLetterKnownFlags =
@@ -33,6 +33,38 @@ namespace fonthook::vectorfont
 
 		UInt32 EncodeDirectGlyphSlot(VectorFontByteClass byteClass,
 			size_t slot);
+
+		const DirectAtlasGlyphLayer* FindDirectLayer(
+			const DirectCachedLetter& letter, GlyphMaskType mask)
+		{
+			const UInt8 maskValue = static_cast<UInt8>(mask);
+			for (const DirectAtlasGlyphLayer& layer : letter.layers)
+			{
+				if (layer.valid() && layer.maskType == maskValue)
+					return &layer;
+			}
+			return nullptr;
+		}
+
+		DirectAtlasGlyphLayer* FindOrCreateDirectLayer(
+			DirectCachedLetter& letter, GlyphMaskType mask)
+		{
+			if (const DirectAtlasGlyphLayer* existing =
+					FindDirectLayer(letter, mask))
+			{
+				return const_cast<DirectAtlasGlyphLayer*>(existing);
+			}
+			for (DirectAtlasGlyphLayer& layer : letter.layers)
+			{
+				if (!layer.valid())
+				{
+					layer = {};
+					layer.maskType = static_cast<UInt8>(mask);
+					return &layer;
+				}
+			}
+			return nullptr;
+		}
 
 #pragma pack(push, 1)
 		struct DirectCachedLetterFileHeader
@@ -170,33 +202,24 @@ namespace fonthook::vectorfont
 			const std::vector<std::shared_ptr<AtlasResource>>& pages)
 		{
 			if (!layer.valid() || layer.maskType != static_cast<UInt8>(mask)
-				|| layer.pageSlot >= pages.size())
+				|| layer.reserved || layer.pageSlot >= pages.size())
 				return false;
 			const std::shared_ptr<AtlasResource>& page =
 				pages[layer.pageSlot];
-			if (!page || page->pageContentHash != layer.pageContentHash
-				|| !page->compactSnapshot
+			if (!page || !page->pageContentHash || !page->compactSnapshot
 				|| layer.snapshotPlacementIndex
 					>= page->compactSnapshot->placements.size())
 				return false;
 			const AtlasSnapshotPlacement& snapshot =
 				page->compactSnapshot->placements[
 					layer.snapshotPlacementIndex];
-			constexpr float epsilon = 1.0e-6f;
-			auto same = [epsilon](float left, float right)
-			{
-				return std::fabs(left - right) <= epsilon;
-			};
-			return snapshot.cacheId == layer.cacheId
+			return snapshot.cacheId
 				&& snapshot.maskType == layer.maskType
-				&& snapshot.sdfSpread == layer.sdfSpread
-				&& static_cast<SInt32>(snapshot.rect.width) == layer.width
-				&& static_cast<SInt32>(snapshot.rect.height) == layer.height
-				&& snapshot.left == layer.left && snapshot.top == layer.top
-				&& same(snapshot.glyphPlacement.u0, layer.u0)
-				&& same(snapshot.glyphPlacement.v0, layer.v0)
-				&& same(snapshot.glyphPlacement.u1, layer.u1)
-				&& same(snapshot.glyphPlacement.v1, layer.v1);
+				&& page->compactSnapshot->sourceHeader.pageContentHash
+					== page->pageContentHash
+				&& IsValidAtlasSnapshotGlyphPlacement(snapshot,
+					page->width, page->height,
+					page->compactSnapshot->sourceHeader.pageIndex);
 		}
 
 		bool TryLoadDirectCachedLetters(const std::wstring& path,
@@ -275,18 +298,39 @@ namespace fonthook::vectorfont
 					(record.flags & kDirectLetterKnownEmpty) != 0;
 				bool complete = true;
 				UInt32 layers = 0;
-				for (GlyphMaskType mask : masks)
+				std::array<bool, kDirectAtlasMaskCount> seenMasks = {};
+				for (const DirectAtlasGlyphLayer& layer : record.layers)
 				{
-					if (knownEmpty)
-						break;
-					if (!ValidateDirectLayer(record.layers[
-							static_cast<size_t>(mask)], mask, pages))
+					if (!layer.valid())
+						continue;
+					const size_t maskIndex =
+						static_cast<size_t>(layer.maskType);
+					if (layer.reserved || maskIndex >= seenMasks.size()
+						|| seenMasks[maskIndex]
+						|| std::find(masks.begin(), masks.end(),
+							static_cast<GlyphMaskType>(layer.maskType))
+								== masks.end()
+						|| !ValidateDirectLayer(layer,
+							static_cast<GlyphMaskType>(layer.maskType), pages))
 					{
 						complete = false;
 						break;
 					}
+					seenMasks[maskIndex] = true;
 					++layers;
 				}
+				for (GlyphMaskType mask : masks)
+				{
+					if (knownEmpty)
+						break;
+					if (!FindDirectLayer(record, mask))
+					{
+						complete = false;
+						break;
+					}
+				}
+				if (knownEmpty && layers)
+					complete = false;
 				if (complete)
 				{
 					++resolvedGlyphs;
@@ -473,19 +517,8 @@ namespace fonthook::vectorfont
 			layer.pageSlot = static_cast<UInt16>(
 				pageSlot - pageIndices.begin());
 			layer.maskType = snapshot.maskType;
-			layer.sdfSpread = snapshot.sdfSpread;
+			layer.reserved = 0;
 			layer.snapshotPlacementIndex = glyph->snapshotPlacementIndex;
-			layer.cacheId = snapshot.cacheId;
-			layer.pageContentHash =
-				page->second.resource->pageContentHash;
-			layer.width = static_cast<SInt32>(snapshot.rect.width);
-			layer.height = static_cast<SInt32>(snapshot.rect.height);
-			layer.left = snapshot.left;
-			layer.top = snapshot.top;
-			layer.u0 = snapshot.glyphPlacement.u0;
-			layer.v0 = snapshot.glyphPlacement.v0;
-			layer.u1 = snapshot.glyphPlacement.u1;
-			layer.v1 = snapshot.glyphPlacement.v1;
 			return true;
 		}
 
@@ -499,62 +532,57 @@ namespace fonthook::vectorfont
 				glyph.encodedCode, glyphSlot)
 				|| glyphSlot >= table.glyphs.size())
 				return false;
-			const size_t maskIndex = static_cast<size_t>(maskType);
-			if (maskIndex >= kDirectAtlasMaskCount)
-				return false;
 			const DirectCachedLetter& letter = table.glyphs[glyphSlot];
 			if (!(letter.flags & kDirectLetterValid)
 				|| (letter.flags & kDirectLetterKnownEmpty)
 				|| letter.encodedCode != glyph.encodedCode
 				|| letter.byteClass != static_cast<UInt8>(glyph.byteClass))
 				return false;
-			const DirectAtlasGlyphLayer& direct =
-				letter.layers[maskIndex];
-			if (!direct.valid() || direct.pageSlot >= table.pages.size())
+			const DirectAtlasGlyphLayer* direct =
+				FindDirectLayer(letter, maskType);
+			if (!direct || direct->pageSlot >= table.pages.size())
 				return false;
 			std::shared_ptr<AtlasResource> page =
-				table.pages[direct.pageSlot].lock();
+				table.pages[direct->pageSlot].lock();
 			if (!page || !page->compactSnapshot
-				|| direct.snapshotPlacementIndex
+				|| direct->snapshotPlacementIndex
 					>= page->compactSnapshot->placements.size())
 				return false;
 			const AtlasSnapshotPlacement& snapshot =
 				page->compactSnapshot->placements[
-					direct.snapshotPlacementIndex];
-			if (direct.maskType != static_cast<UInt8>(maskType)
-				|| snapshot.maskType != direct.maskType
-				|| snapshot.cacheId != direct.cacheId
-				|| page->pageContentHash != direct.pageContentHash
-				|| static_cast<SInt32>(snapshot.rect.width) != direct.width
-				|| static_cast<SInt32>(snapshot.rect.height) != direct.height
-				|| snapshot.left != direct.left || snapshot.top != direct.top
-				|| !snapshot.rect.width || !snapshot.rect.height
-				|| !page->width || !page->height)
+					direct->snapshotPlacementIndex];
+			if (snapshot.maskType != direct->maskType
+				|| !page->pageContentHash
+				|| page->compactSnapshot->sourceHeader.pageContentHash
+					!= page->pageContentHash
+				|| !IsValidAtlasSnapshotGlyphPlacement(snapshot,
+					page->width, page->height,
+					page->compactSnapshot->sourceHeader.pageIndex))
 				return false;
 
 			result = {};
 			result.atlas = std::move(page);
-			result.directCacheId = direct.cacheId;
-			result.directWidth = direct.width;
-			result.directHeight = direct.height;
-			result.directLeft = direct.left;
-			result.directTop = direct.top;
-			result.directMaskType = direct.maskType;
-			result.directSdfSpread = direct.sdfSpread;
+			result.directCacheId = snapshot.cacheId;
+			result.directWidth = static_cast<SInt32>(snapshot.rect.width);
+			result.directHeight = static_cast<SInt32>(snapshot.rect.height);
+			result.directLeft = snapshot.left;
+			result.directTop = snapshot.top;
+			result.directMaskType = snapshot.maskType;
+			result.directSdfSpread = snapshot.sdfSpread;
 			result.placement.atlasIdentity =
 				reinterpret_cast<uintptr_t>(result.atlas.get());
 			result.placement.atlasGeneration = result.atlas->generation;
 			result.placement.atlasWidth = result.atlas->width;
 			result.placement.atlasHeight = result.atlas->height;
-			result.placement.pageIndex = direct.pageSlot;
+			result.placement.pageIndex = direct->pageSlot;
 			result.placement.inverseWidth =
 				1.0f / static_cast<float>(result.atlas->width);
 			result.placement.inverseHeight =
 				1.0f / static_cast<float>(result.atlas->height);
-			result.placement.u0 = direct.u0;
-			result.placement.v0 = direct.v0;
-			result.placement.u1 = direct.u1;
-			result.placement.v1 = direct.v1;
+			result.placement.u0 = snapshot.glyphPlacement.u0;
+			result.placement.v0 = snapshot.glyphPlacement.v0;
+			result.placement.u1 = snapshot.glyphPlacement.u1;
+			result.placement.v1 = snapshot.glyphPlacement.v1;
 			return true;
 		}
 
@@ -730,13 +758,14 @@ namespace fonthook::vectorfont
 					{
 						continue;
 					}
-					const size_t maskIndex =
-						static_cast<size_t>(request.maskType);
-					if (maskIndex >= kDirectAtlasMaskCount)
+					DirectAtlasGlyphLayer* layer =
+						FindOrCreateDirectLayer(
+							table->glyphs[glyphSlot], request.maskType);
+					if (!layer)
 						continue;
 					ResolveDirectLayerLocked(state, baseKey, profile->second,
 						pageIndices, cacheIds[requestIndex],
-						table->glyphs[glyphSlot].layers[maskIndex]);
+						*layer);
 				}
 			}
 
@@ -752,9 +781,9 @@ namespace fonthook::vectorfont
 				{
 					if (knownEmpty)
 						break;
-					const DirectAtlasGlyphLayer& layer =
-						glyph.layers[static_cast<size_t>(mask)];
-					if (!layer.valid())
+					const DirectAtlasGlyphLayer* layer =
+						FindDirectLayer(glyph, mask);
+					if (!layer)
 					{
 						complete = false;
 						break;
@@ -847,8 +876,6 @@ namespace fonthook::vectorfont
 		std::array<AtlasCacheKey, 2> baseKeys;
 		std::array<std::array<bool, kMaximumAtlasSnapshotPages>, 2>
 			usedPages = {};
-		std::array<std::array<UInt64, kMaximumAtlasSnapshotPages>, 2>
-			pageContentHashes = {};
 		std::array<std::array<UInt16, kMaximumAtlasSnapshotPages>, 2>
 			pageOrdinals;
 		for (auto& role : pageOrdinals)
@@ -941,27 +968,19 @@ namespace fonthook::vectorfont
 				continue;
 			}
 
-			const DirectAtlasGlyphLayer& layer =
-				letter.layers[maskIndex];
-			if (!layer.valid() || layer.maskType != static_cast<UInt8>(maskType)
-				|| layer.pageSlot >= table.pages.size()
-				|| layer.pageSlot >= kMaximumAtlasSnapshotPages
-				|| !layer.pageContentHash
-				|| !std::isfinite(layer.u0) || !std::isfinite(layer.v0)
-				|| !std::isfinite(layer.u1) || !std::isfinite(layer.v1))
+			const DirectAtlasGlyphLayer* layer =
+				FindDirectLayer(letter, maskType);
+			if (!layer || layer->reserved
+				|| layer->pageSlot >= table.pages.size()
+				|| layer->pageSlot >= kMaximumAtlasSnapshotPages)
 			{
 				return fail("direct-layer");
 			}
-			bool& pageUsed = usedPages[roleIndex][layer.pageSlot];
-			UInt64& pageHash =
-				pageContentHashes[roleIndex][layer.pageSlot];
-			if (pageUsed && pageHash != layer.pageContentHash)
-				return fail("page-content-alias");
-			pageUsed = true;
-			pageHash = layer.pageContentHash;
-			output.layer = &layer;
+			usedPages[roleIndex][layer->pageSlot] = true;
+			output.snapshotPlacementIndex =
+				layer->snapshotPlacementIndex;
 			// This is a role-local page until the deterministic page pass below.
-			output.atlasPage = layer.pageSlot;
+			output.atlasPage = layer->pageSlot;
 		}
 
 		for (size_t roleIndex = 0; roleIndex < roleUsed.size(); ++roleIndex)
@@ -981,8 +1000,9 @@ namespace fonthook::vectorfont
 					table.pages[pageSlot].lock();
 				const AtlasCacheKey& key = baseKeys[roleIndex];
 				if (!page || !page->compactSnapshot
-					|| page->pageContentHash
-						!= pageContentHashes[roleIndex][pageSlot]
+					|| !page->pageContentHash
+					|| page->compactSnapshot->sourceHeader.pageContentHash
+						!= page->pageContentHash
 					|| page->pixelMode != key.pixelMode
 					|| page->renderMode != key.renderMode
 					|| page->padding != key.padding
@@ -1023,7 +1043,7 @@ namespace fonthook::vectorfont
 			if (glyph.knownEmpty)
 				continue;
 			const size_t roleIndex = glyph.byteClass;
-			if (!glyph.layer || roleIndex >= pageOrdinals.size()
+			if (roleIndex >= pageOrdinals.size()
 				|| glyph.atlasPage >= kMaximumAtlasSnapshotPages)
 			{
 				return fail("page-remap-source");
@@ -1032,7 +1052,26 @@ namespace fonthook::vectorfont
 				pageOrdinals[roleIndex][glyph.atlasPage];
 			if (ordinal >= result.atlases.size())
 				return fail("page-remap-target");
+			const std::shared_ptr<AtlasResource>& page =
+				result.atlases[ordinal];
+			if (!page || !page->compactSnapshot
+				|| glyph.snapshotPlacementIndex
+					>= page->compactSnapshot->placements.size())
+			{
+				return fail("placement-remap-source");
+			}
+			const AtlasSnapshotPlacement& placement =
+				page->compactSnapshot->placements[
+					glyph.snapshotPlacementIndex];
+			if (placement.maskType != static_cast<UInt8>(maskType)
+				|| !IsValidAtlasSnapshotGlyphPlacement(placement,
+					page->width, page->height,
+					page->compactSnapshot->sourceHeader.pageIndex))
+			{
+				return fail("placement-remap-target");
+			}
 			glyph.atlasPage = ordinal;
+			glyph.placement = &placement;
 		}
 
 		RecordFreeTypePerf(FreeTypePerfCounter::GpuResidentGlyphHit,
@@ -1111,8 +1150,8 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
-			const size_t maskIndex = static_cast<size_t>(request.maskType);
-			if (maskIndex >= kDirectAtlasMaskCount)
+			if (static_cast<size_t>(request.maskType)
+				>= kDirectAtlasMaskCount)
 				return false;
 			const DirectCachedLetter& letter =
 				table->glyphs[glyphSlot];

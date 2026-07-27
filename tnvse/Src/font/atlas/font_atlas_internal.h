@@ -183,33 +183,23 @@ namespace fonthook::vectorfont
 		std::numeric_limits<UInt16>::max();
 	inline constexpr UInt32 kInvalidDirectAtlasPlacementIndex =
 		std::numeric_limits<UInt32>::max();
+	struct AtlasSnapshotPlacement;
 	inline constexpr size_t kDirectAtlasMaskCount =
 		static_cast<size_t>(GlyphMaskType::Composite) + 1u;
+	inline constexpr size_t kDirectAtlasLayerSlots = 4;
 
 	struct DirectAtlasGlyphLayer
 	{
 		UInt16 pageSlot = kInvalidDirectAtlasPageSlot;
 		UInt8 maskType = 0;
-		UInt8 sdfSpread = 0;
+		UInt8 reserved = 0;
 		UInt32 snapshotPlacementIndex = kInvalidDirectAtlasPlacementIndex;
-		UInt64 cacheId = 0;
-		UInt64 pageContentHash = 0;
-		SInt32 width = 0;
-		SInt32 height = 0;
-		SInt32 left = 0;
-		SInt32 top = 0;
-		float u0 = 0.0f;
-		float v0 = 0.0f;
-		float u1 = 0.0f;
-		float v1 = 0.0f;
 
 		bool valid() const
 		{
 			return pageSlot != kInvalidDirectAtlasPageSlot
 				&& snapshotPlacementIndex
-					!= kInvalidDirectAtlasPlacementIndex
-				&& cacheId && width > 0 && height > 0
-				&& u1 > u0 && v1 > v0;
+					!= kInvalidDirectAtlasPlacementIndex;
 		}
 	};
 
@@ -223,7 +213,7 @@ namespace fonthook::vectorfont
 		float height = 0.0f;
 		float topEdge = 0.0f;
 		float spacing = 0.0f;
-		std::array<DirectAtlasGlyphLayer, kDirectAtlasMaskCount> layers;
+		std::array<DirectAtlasGlyphLayer, kDirectAtlasLayerSlots> layers;
 	};
 	using DirectAtlasGlyphRecord = DirectCachedLetter;
 
@@ -237,12 +227,13 @@ namespace fonthook::vectorfont
 		UInt32 resolvedLayers = 0;
 	};
 
-	// Compact, batch-lifetime view of the immutable direct letter tables.  The
-	// layer pointer replaces the much larger GlyphSource/PendingQuad chain; the
-	// table owners keep that pointer stable until geometry compilation finishes.
+	// Compact, batch-lifetime view of the immutable direct letter tables. The
+	// resolved snapshot placement replaces the much larger GlyphSource/PendingQuad
+	// chain; atlas owners keep that pointer stable until compilation finishes.
 	struct DirectAtlasBatchGlyph
 	{
-		const DirectAtlasGlyphLayer* layer = nullptr;
+		const AtlasSnapshotPlacement* placement = nullptr;
+		UInt32 snapshotPlacementIndex = kInvalidDirectAtlasPlacementIndex;
 		UInt16 atlasPage = kInvalidDirectAtlasPageSlot;
 		UInt8 byteClass = 0;
 		bool knownEmpty = false;
@@ -763,8 +754,8 @@ namespace fonthook::vectorfont
 	static_assert(sizeof(AtlasSnapshotHeader) == 128);
 	static_assert(sizeof(AtlasSnapshotGlyphPlacement) == 36);
 	static_assert(sizeof(AtlasSnapshotPlacement) == 92);
-	static_assert(sizeof(DirectAtlasGlyphLayer) == 56);
-	static_assert(sizeof(DirectAtlasGlyphRecord) == 360);
+	static_assert(sizeof(DirectAtlasGlyphLayer) == 8);
+	static_assert(sizeof(DirectAtlasGlyphRecord) == sizeof(FontLetter));
 	static_assert(sizeof(DirectAtlasBatchGlyph) <= 16);
 
 	struct AtlasState

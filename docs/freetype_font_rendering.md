@@ -765,9 +765,16 @@ published, tNVSE builds and atomically saves an `.fnt`-style `.tnvfdirect` table
 for each byte role. The single-byte table has 256 fixed records; the DBCS table
 has 24,066 fixed records covering lead bytes `0x81-0xFE` and trail bytes
 `0x40-0xFE`. Invalid encoding slots use a fixed invalid flag. Each valid
-`DirectCachedLetter` contains its `FontLetter` metrics and, for every required
-mask, the page slot, cache/content identity, final rectangle, bearings, spread,
-snapshot-placement index, and UVs. Spaces are marked known-empty.
+`DirectCachedLetter` is deliberately the same 56 bytes as an original
+`FontLetter`: 24 bytes hold the encoded slot, flags, and layout metrics, while
+four fixed 8-byte layer references hold only a page slot, mask type, and
+snapshot-placement index. Four slots cover Fill, Outline, Glow, and Shadow;
+aggressive composite and distance-field profiles use one. Rectangle, bearing,
+spread, cache/content identity, and UV data remain in the immutable compact
+snapshot and are not duplicated for every font/byte-role table. Spaces are
+marked known-empty. Direct-cache format version 3 identifies this compact
+layout, so version-2 `.tnvfdirect` files are rebuilt once without invalidating
+the atlas bitmap snapshots.
 
 The direct file is written through a flushed temporary file and atomic replace.
 Its header and record block have independent checksums and include the manifest,
@@ -780,8 +787,9 @@ owners share the same table and atlas pages rather than saving one copy per font
 alias.
 
 Complete direct batches first acquire one batch-lifetime view of the dense
-tables. Each used weak page reference is locked and checked once; glyph entries
-then retain only a direct-layer pointer and compact page ordinal. Fixed
+tables. Each used weak page reference is locked and checked once; compact layer
+references are resolved to immutable snapshot placements and compact page
+ordinals for that batch. Fixed
 `[kind][64 pages]` count and cursor arrays determine the final allocation. The
 second pass writes `NativeA8GpuVertex` records straight into their final
 page-contiguous locations and emits ranges in Shadow, Glow, Outline, Fill order.
@@ -803,15 +811,16 @@ The placement index never depends on the mutable/sorted live glyph vector.
 Direct-table creation or contiguous-file loading validates every stored
 snapshot placement. A later text batch therefore checks the complete-profile
 marker, current page-content identity, format, dimensions, texture, and table
-owner once per used page instead of reopening snapshot metadata for every
-glyph. The direct table holds weak page references so a nonzero GPU budget can
-still evict unused pages. Page insertion, replacement, eviction, snapshot
+owner once per used page instead of duplicating snapshot metadata in every
+glyph record. The direct table holds weak page references so a nonzero GPU
+budget can still evict unused pages. Page insertion, replacement, eviction, snapshot
 publication, or removal of the complete-profile marker clears the table
 atomically. The resolved page owners stay alive through geometry compilation;
 the native payload then retains the properties and textures and validates
 resource serial, upload epoch, and vertex/index ranges during submission. A
 missing or expired entry makes the complete batch use the compatibility lookup;
-no raw snapshot pointer survives table lookup.
+snapshot placement pointers exist only during the owner-retaining geometry
+batch and are never stored in a persistent table or native payload.
 
 `uiFreeTypeFontGpuAtlasCacheMB` controls the soft GPU atlas budget. A value of
 zero selects full-resident mode: every configured font snapshot is restored
