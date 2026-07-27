@@ -36,9 +36,7 @@ namespace fonthook::vectorfont
 	inline constexpr UInt32 kMaximumAtlasMipLevels = 3;
 	// Single-byte pages retain the original 4096 texture envelope. Complete
 	// double-byte profiles may use an 
-	// page when the D3D9 device supports it,
-	// reducing the GBK/GB2312 page count without exposing the device's 16384
-	// capability to either role.
+	// 8192x8192 texture when the D3D9 device supports it
 	inline constexpr UInt32 kSingleByteAtlasHardLimit = 4096;
 	inline constexpr UInt32 kDoubleByteAtlasHardLimit = 8192;
 	inline constexpr UInt32 kAtlasHardLimit = kDoubleByteAtlasHardLimit;
