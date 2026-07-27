@@ -11,21 +11,8 @@ namespace fonthook
 			if (!(lParam & GCS_RESULTSTR))
 				return false;
 
-			TextEditMenu* menu = GetActiveTextEditMenu();
-			TextEditMenu* jipMenu = menu ? nullptr : GetActiveJipTextInputMenu();
-			if (!menu && !jipMenu)
-				jipMenu = GetCurrentJipTextInputMenu();
-			StewieInputTarget stewieTarget = (!menu && !jipMenu) ? GetOverlayStewieInputTarget() : StewieInputTarget();
-			DialogueHistoryInputTarget dialogueHistoryTarget =
-				(!menu && !jipMenu && !stewieTarget.valid)
-					? GetOverlayDialogueHistoryInputTarget()
-					: DialogueHistoryInputTarget();
-			McmExtenderInputTarget mcmTarget =
-				(!menu && !jipMenu && !stewieTarget.valid && !dialogueHistoryTarget.valid)
-				? GetOverlayMcmExtenderInputTarget()
-				: McmExtenderInputTarget();
-			if (!menu && !jipMenu && !stewieTarget.valid
-				&& !dialogueHistoryTarget.valid && !mcmTarget.valid)
+			const TextInputTarget target = GetCachedTextInputTarget();
+			if (target.token.kind == TextInputTargetKind::None)
 			{
 				DebugLogState("WndProc.WM_IME_COMPOSITION", "result_no_active_target", nullptr, static_cast<SInt32>(lParam));
 				return false;
@@ -33,56 +20,27 @@ namespace fonthook
 
 			if (result.empty())
 			{
-				if (jipMenu)
-					DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_empty", jipMenu, static_cast<UInt32>(lParam));
-				else if (stewieTarget.valid)
-					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_empty_stewie input=0x%08X", static_cast<UInt32>(lParam));
-				else if (dialogueHistoryTarget.valid)
-					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_empty_dialogue_history input=0x%08X", static_cast<UInt32>(lParam));
-				else if (mcmTarget.valid)
-					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_empty_mcm_extender input=0x%08X", static_cast<UInt32>(lParam));
-				else
-					DebugLogState("WndProc.WM_IME_COMPOSITION", "result_empty", menu, static_cast<SInt32>(lParam));
+				DebugLog(
+					"tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_empty target=%s input=0x%08X",
+					TextInputTargetKindName(target.token.kind),
+					static_cast<UInt32>(lParam));
 				return false;
 			}
 
-			const bool inserted = menu
-				? InsertWideText(menu, result)
-				: (jipMenu
-					? InsertWideTextJip(jipMenu, result)
-					: (stewieTarget.valid
-						? InsertWideTextStewie(stewieTarget, result)
-						: (dialogueHistoryTarget.valid
-							? InsertWideTextDialogueHistory(dialogueHistoryTarget, result)
-							: InsertWideTextMcmExtender(mcmTarget, result))));
+			const bool inserted = InsertWideTextIntoTarget(target, result);
 			if (!inserted)
 			{
-				if (jipMenu)
-					DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_rejected", jipMenu, static_cast<UInt32>(lParam));
-				else if (stewieTarget.valid)
-					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_rejected_stewie input=0x%08X", static_cast<UInt32>(lParam));
-				else if (dialogueHistoryTarget.valid)
-					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_rejected_dialogue_history input=0x%08X", static_cast<UInt32>(lParam));
-				else if (mcmTarget.valid)
-					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_rejected_mcm_extender input=0x%08X", static_cast<UInt32>(lParam));
-				else
-					DebugLogState("WndProc.WM_IME_COMPOSITION", "result_rejected", menu, static_cast<SInt32>(lParam));
-				DebugLog("tnvse_multibyte_input: rejected IME result length=%u", static_cast<UInt32>(result.size()));
+				DebugLog(
+					"tnvse_multibyte_input: rejected IME result target=%s length=%u",
+					TextInputTargetKindName(target.token.kind),
+					static_cast<UInt32>(result.size()));
 				return false;
 			}
 
 			State().lastImeCommitTick = GetTickCount();
-			ConfirmImeCommitKey(menu
-				? ImeCommitInputChannel::TextEdit
-				: (jipMenu
-					? ImeCommitInputChannel::JipTextInput
-					: (stewieTarget.valid
-						? ImeCommitInputChannel::Stewie
-						: (dialogueHistoryTarget.valid
-							? ImeCommitInputChannel::DialogueHistory
-							: ImeCommitInputChannel::McmExtender))));
+			ConfirmImeCommitKey(TextInputTargetCommitChannel(target));
 			constexpr DWORD kImeEnterPairMs = 250;
-			if (stewieTarget.valid
+			if (target.token.kind == TextInputTargetKind::Stewie
 				&& State().lastStewieImeEnterKeyTick
 				&& State().lastImeCommitTick - State().lastStewieImeEnterKeyTick <= kImeEnterPairMs)
 			{
@@ -93,17 +51,10 @@ namespace fonthook
 			ClearImePreviewState();
 			RefreshImeStatus(s_window);
 			UpdateCandidateOverlay();
-			if (jipMenu)
-				DebugLogJipState("WndProc.WM_IME_COMPOSITION", "result_inserted", jipMenu, static_cast<UInt32>(lParam));
-			else if (stewieTarget.valid)
-				DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_inserted_stewie input=0x%08X", static_cast<UInt32>(lParam));
-			else if (dialogueHistoryTarget.valid)
-				DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_inserted_dialogue_history input=0x%08X", static_cast<UInt32>(lParam));
-			else if (mcmTarget.valid)
-				DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION action=result_inserted_mcm_extender input=0x%08X", static_cast<UInt32>(lParam));
-			else
-				DebugLogState("WndProc.WM_IME_COMPOSITION", "result_inserted", menu, static_cast<SInt32>(lParam));
-			DebugLog("tnvse_multibyte_input: committed IME result chars=%u", State().suppressedImeCharCount);
+			DebugLog(
+				"tnvse_multibyte_input: committed IME result target=%s chars=%u",
+				TextInputTargetKindName(target.token.kind),
+				State().suppressedImeCharCount);
 			return true;
 		}
 
@@ -213,9 +164,11 @@ namespace fonthook
 			if (ShouldSuppressMcmExtenderControlChar(wParam))
 				return true;
 
-			if (ShouldSuppressImeCommitInput(
-				static_cast<UInt32>(wParam),
-				ImeCommitInputChannel::WndProcChar))
+			if (FilterGameInput(
+					static_cast<UInt32>(wParam),
+					ImeCommitInputChannel::WndProcChar,
+					GameInputFilterClass::None)
+				== GameInputFilterResult::SuppressImeCommit)
 			{
 				return true;
 			}
@@ -235,123 +188,140 @@ namespace fonthook
 				return false;
 			}
 
-			TextEditMenu* menu = GetActiveTextEditMenu();
-			TextEditMenu* jipMenu = menu ? nullptr : GetActiveJipTextInputMenu();
-			StewieInputTarget stewieTarget = (!menu && !jipMenu) ? GetActiveStewieInputTarget() : StewieInputTarget();
-			DialogueHistoryInputTarget dialogueHistoryTarget =
-				(!menu && !jipMenu && !stewieTarget.valid)
-					? GetActiveDialogueHistoryInputTarget()
-					: DialogueHistoryInputTarget();
-			McmExtenderInputTarget mcmTarget =
-				(!menu && !jipMenu && !stewieTarget.valid && !dialogueHistoryTarget.valid)
-				? GetActiveMcmExtenderInputTarget()
-				: McmExtenderInputTarget();
-			if (!menu && !jipMenu)
-			{
-				if (dialogueHistoryTarget.valid)
-					return HandleDialogueHistoryWndProcChar(
-						dialogueHistoryTarget, wParam, controlDown);
+			const TextInputTarget target = GetCachedTextInputTarget();
+			if (target.token.kind == TextInputTargetKind::DialogueHistory)
+				return HandleDialogueHistoryWndProcChar(
+					target.dialogueHistory, wParam, controlDown);
+			if (target.token.kind == TextInputTargetKind::McmExtender)
+				return HandleMcmExtenderWndProcChar(
+					target.mcmExtender, wParam, controlDown);
 
-				if (mcmTarget.valid)
-					return HandleMcmExtenderWndProcChar(
-						mcmTarget, wParam, controlDown);
-
-				if (stewieTarget.valid)
-				{
-					if (wParam >= 0x20 && wParam <= 0x7E)
-					{
-						if (IsImeConsumingAscii())
-						{
-							ObserveImeCommitInput(static_cast<UInt32>(wParam));
-							DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_CHAR action=suppress_composition_ascii_stewie input=0x%08X", static_cast<UInt32>(wParam));
-							return true;
-						}
-
-						return HandleStewieWndProcAscii(stewieTarget, static_cast<UInt8>(wParam));
-					}
-
-					if (wParam < 0x80)
-						return false;
-
-					const wchar_t ch = static_cast<wchar_t>(wParam);
-					if (!InsertWideTextStewie(stewieTarget, std::wstring_view(&ch, 1)))
-						return false;
-
-					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_CHAR action=insert_nonascii_stewie input=0x%08X", static_cast<UInt32>(wParam));
-					return true;
-				}
-
-				if (wParam >= 0x20 && wParam <= 0x7E && HasOverlayInputTarget() && IsImeConsumingAscii())
-				{
-					ObserveImeCommitInput(static_cast<UInt32>(wParam));
-					DebugLogState("WndProc.WM_CHAR", "suppress_overlay_composition_ascii", GetOverlayTextInputMenu(), static_cast<SInt32>(wParam));
-					return true;
-				}
-
-				DebugLogState("WndProc.WM_CHAR", "pass_no_active_target", nullptr, static_cast<SInt32>(wParam));
-				return false;
-			}
-
-			if (jipMenu)
+			if (target.token.kind == TextInputTargetKind::Stewie)
 			{
 				if (wParam >= 0x20 && wParam <= 0x7E)
 				{
 					if (IsImeConsumingAscii())
 					{
 						ObserveImeCommitInput(static_cast<UInt32>(wParam));
-						DebugLogJipState("WndProc.WM_CHAR", "suppress_composition_ascii", jipMenu, static_cast<UInt32>(wParam));
+						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_CHAR action=suppress_composition_ascii_stewie input=0x%08X", static_cast<UInt32>(wParam));
 						return true;
 					}
 
-					DebugLogJipState("WndProc.WM_CHAR", "consume_ascii_handled_by_jip_adapter", jipMenu, static_cast<UInt32>(wParam));
+					return HandleStewieWndProcAscii(
+						target.stewie, static_cast<UInt8>(wParam));
+				}
+
+				if (wParam < 0x80)
+					return false;
+
+				const wchar_t ch = static_cast<wchar_t>(wParam);
+				if (!InsertWideTextIntoTarget(
+						target, std::wstring_view(&ch, 1)))
+					return false;
+
+				DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_CHAR action=insert_nonascii_stewie input=0x%08X", static_cast<UInt32>(wParam));
+				return true;
+			}
+
+			if ((target.token.kind == TextInputTargetKind::TextEdit
+					|| target.token.kind
+						== TextInputTargetKind::JipTextInput)
+				&& !target.token.active)
+			{
+				if (wParam >= 0x20 && wParam <= 0x7E
+					&& IsImeConsumingAscii())
+				{
+					ObserveImeCommitInput(static_cast<UInt32>(wParam));
+					DebugLog(
+						"tnvse_multibyte_input_event: source=WndProc.WM_CHAR action=suppress_inactive_target_composition_ascii target=%s input=0x%08X",
+						TextInputTargetKindName(target.token.kind),
+						static_cast<UInt32>(wParam));
+					return true;
+				}
+				return false;
+			}
+
+			if (target.token.kind == TextInputTargetKind::JipTextInput)
+			{
+				if (wParam >= 0x20 && wParam <= 0x7E)
+				{
+					if (IsImeConsumingAscii())
+					{
+						ObserveImeCommitInput(static_cast<UInt32>(wParam));
+						DebugLogJipState("WndProc.WM_CHAR", "suppress_composition_ascii", target.textEdit, static_cast<UInt32>(wParam));
+						return true;
+					}
+
+					DebugLogJipState("WndProc.WM_CHAR", "consume_ascii_handled_by_jip_adapter", target.textEdit, static_cast<UInt32>(wParam));
 					return true;
 				}
 
 				if (wParam < 0x80)
 				{
-					DebugLogJipState("WndProc.WM_CHAR", "pass_control_char", jipMenu, static_cast<UInt32>(wParam));
+					DebugLogJipState("WndProc.WM_CHAR", "pass_control_char", target.textEdit, static_cast<UInt32>(wParam));
 					return false;
 				}
 
 				const wchar_t ch = static_cast<wchar_t>(wParam);
-				if (!InsertWideTextJip(jipMenu, std::wstring_view(&ch, 1)))
+				if (!InsertWideTextIntoTarget(
+						target, std::wstring_view(&ch, 1)))
 				{
-					DebugLogJipState("WndProc.WM_CHAR", "reject_nonascii_insert", jipMenu, static_cast<UInt32>(wParam));
+					DebugLogJipState("WndProc.WM_CHAR", "reject_nonascii_insert", target.textEdit, static_cast<UInt32>(wParam));
 					return false;
 				}
 
-				DebugLogJipState("WndProc.WM_CHAR", "insert_nonascii", jipMenu, static_cast<UInt32>(wParam));
+				DebugLogJipState("WndProc.WM_CHAR", "insert_nonascii", target.textEdit, static_cast<UInt32>(wParam));
 				return true;
 			}
 
-			if (wParam >= 0x20 && wParam <= 0x7E && IsImeConsumingAscii())
+			if (target.token.kind == TextInputTargetKind::TextEdit
+				&& wParam >= 0x20 && wParam <= 0x7E
+				&& IsImeConsumingAscii())
 			{
 				ObserveImeCommitInput(static_cast<UInt32>(wParam));
-				DebugLogState("WndProc.WM_CHAR", "suppress_composition_ascii", menu, static_cast<SInt32>(wParam));
+				DebugLogState("WndProc.WM_CHAR", "suppress_composition_ascii", target.textEdit, static_cast<SInt32>(wParam));
 				return true;
 			}
 
-			if (wParam >= 0x20 && wParam <= 0x7E)
+			if (target.token.kind == TextInputTargetKind::TextEdit
+				&& wParam >= 0x20 && wParam <= 0x7E)
 			{
-				DebugLogState("WndProc.WM_CHAR", "consume_ascii_handled_by_textedit", menu, static_cast<SInt32>(wParam));
+				DebugLogState("WndProc.WM_CHAR", "consume_ascii_handled_by_textedit", target.textEdit, static_cast<SInt32>(wParam));
 				return true;
 			}
 
-			if (wParam < 0x80)
+			if (target.token.kind == TextInputTargetKind::TextEdit
+				&& wParam < 0x80)
 			{
-				DebugLogState("WndProc.WM_CHAR", "pass_control_char", menu, static_cast<SInt32>(wParam));
+				DebugLogState("WndProc.WM_CHAR", "pass_control_char", target.textEdit, static_cast<SInt32>(wParam));
 				return false;
 			}
 
-			const wchar_t ch = static_cast<wchar_t>(wParam);
-			if (!InsertWideText(menu, std::wstring_view(&ch, 1)))
+			if (target.token.kind == TextInputTargetKind::TextEdit)
 			{
-				DebugLogState("WndProc.WM_CHAR", "reject_nonascii_insert", menu, static_cast<SInt32>(wParam));
-				return false;
+				const wchar_t ch = static_cast<wchar_t>(wParam);
+				if (!InsertWideTextIntoTarget(
+						target, std::wstring_view(&ch, 1)))
+				{
+					DebugLogState("WndProc.WM_CHAR", "reject_nonascii_insert", target.textEdit, static_cast<SInt32>(wParam));
+					return false;
+				}
+
+				DebugLogState("WndProc.WM_CHAR", "insert_nonascii", target.textEdit, static_cast<SInt32>(wParam));
+				return true;
 			}
 
-			DebugLogState("WndProc.WM_CHAR", "insert_nonascii", menu, static_cast<SInt32>(wParam));
-			return true;
+			if (wParam >= 0x20 && wParam <= 0x7E
+				&& HasOverlayInputTarget()
+				&& IsImeConsumingAscii())
+			{
+				ObserveImeCommitInput(static_cast<UInt32>(wParam));
+				DebugLogState("WndProc.WM_CHAR", "suppress_overlay_composition_ascii", GetOverlayTextInputMenu(), static_cast<SInt32>(wParam));
+				return true;
+			}
+
+			DebugLogState("WndProc.WM_CHAR", "pass_no_active_target", nullptr, static_cast<SInt32>(wParam));
+			return false;
 		}
 
 		namespace
@@ -365,6 +335,8 @@ namespace fonthook
 				LPARAM lParam = 0;
 				bool controlDown = false;
 				bool winDown = false;
+				bool targetBound = false;
+				TextInputTargetToken targetToken;
 				std::wstring result;
 				std::wstring composition;
 			};
@@ -505,6 +477,24 @@ namespace fonthook
 					|| IsFocusCaptureMessage(message);
 			}
 
+			bool IsTargetBoundCapturedMessage(
+				UINT message,
+				WPARAM wParam,
+				bool sessionActive,
+				bool controlDown)
+			{
+				if (!sessionActive)
+					return false;
+				if (message == WM_CHAR
+					|| IsImeWindowMessage(message))
+				{
+					return true;
+				}
+				return (message == WM_KEYDOWN
+						|| message == WM_SYSKEYDOWN)
+					&& IsDeferredEditorKey(wParam, controlDown);
+			}
+
 			LRESULT ForwardWindowMessage(
 				HWND hwnd,
 				UINT message,
@@ -526,6 +516,17 @@ namespace fonthook
 			const WPARAM wParam = event.wParam;
 			const LPARAM lParam = event.lParam;
 			ImeState& state = State();
+			if (event.targetBound
+				&& !IsCurrentTextInputTargetToken(event.targetToken))
+			{
+				DebugLog(
+					"tnvse_multibyte_input: discarded stale captured input msg=0x%04X target=%s generation=%u currentGeneration=%u",
+					msg,
+					TextInputTargetKindName(event.targetToken.kind),
+					event.targetToken.generation,
+					state.textInputSessionGeneration);
+				return 0;
+			}
 			if (s_hooksInstalled)
 			{
 				if (msg == kMessage_FlushDeferredStewieAscii)
@@ -536,21 +537,27 @@ namespace fonthook
 
 				ObserveStewieMenuSearchHotkeyMessage(
 					msg, wParam, lParam, event.controlDown);
-				TextEditMenu* inputTarget = GetOverlayTextInputMenu();
-				StewieInputTarget stewieOverlayTarget = GetOverlayStewieInputTarget();
-				DialogueHistoryInputTarget dialogueHistoryOverlayTarget =
-					(!inputTarget && !stewieOverlayTarget.valid)
-						? GetOverlayDialogueHistoryInputTarget()
+				const TextInputTarget brokerTarget =
+					GetCachedTextInputTarget();
+				TextEditMenu* inputTarget =
+					(brokerTarget.token.kind == TextInputTargetKind::TextEdit
+						|| brokerTarget.token.kind == TextInputTargetKind::JipTextInput)
+						? brokerTarget.textEdit
+						: nullptr;
+				const StewieInputTarget stewieOverlayTarget =
+					brokerTarget.token.kind == TextInputTargetKind::Stewie
+						? brokerTarget.stewie
+						: StewieInputTarget();
+				const DialogueHistoryInputTarget dialogueHistoryOverlayTarget =
+					brokerTarget.token.kind == TextInputTargetKind::DialogueHistory
+						? brokerTarget.dialogueHistory
 						: DialogueHistoryInputTarget();
-				McmExtenderInputTarget mcmOverlayTarget =
-					(!inputTarget && !stewieOverlayTarget.valid
-						&& !dialogueHistoryOverlayTarget.valid)
-					? GetOverlayMcmExtenderInputTarget()
-					: McmExtenderInputTarget();
-				const bool hasInputTarget = inputTarget
-					|| stewieOverlayTarget.valid
-					|| dialogueHistoryOverlayTarget.valid
-					|| mcmOverlayTarget.valid;
+				const McmExtenderInputTarget mcmOverlayTarget =
+					brokerTarget.token.kind == TextInputTargetKind::McmExtender
+						? brokerTarget.mcmExtender
+						: McmExtenderInputTarget();
+				const bool hasInputTarget =
+					brokerTarget.token.kind != TextInputTargetKind::None;
 				if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
 					&& wParam == VK_RETURN
 					&& stewieOverlayTarget.valid
@@ -750,6 +757,8 @@ namespace fonthook
 					state.candidate.composing = true;
 					RefreshImeStatus(hwnd);
 					state.candidate.composition = event.composition;
+					if (!event.composition.empty())
+						state.tsfCompositionFallbackActive = false;
 					TryRemoveCompositionEcho();
 					// Candidate data is not valid until TSF or IMN_OPENCANDIDATE /
 					// IMN_CHANGECANDIDATE publishes it for this composition. Reading
@@ -836,6 +845,8 @@ namespace fonthook
 						if (lParam & GCS_COMPSTR)
 						{
 							state.candidate.composition = event.composition;
+							if (!event.composition.empty())
+								state.tsfCompositionFallbackActive = false;
 							TryRemoveCompositionEcho();
 						}
 						RefreshImeCandidates(hwnd);
@@ -946,6 +957,9 @@ namespace fonthook
 			event.lParam = lParam;
 			event.controlDown = controlDown;
 			event.winDown = winDown;
+			event.targetBound = IsTargetBoundCapturedMessage(
+				msg, wParam, sessionActive, controlDown);
+			event.targetToken = CaptureTextInputTargetToken();
 
 			if (msg == WM_IME_STARTCOMPOSITION && sessionActive)
 			{
@@ -1161,6 +1175,7 @@ namespace fonthook
 			ClearCapturedInputEvents();
 			SetJipKeyEventSuppressionCaptureActive(false);
 			State().textInputSessionActive = false;
+			ResetTextInputBroker();
 			State().overlayRefreshPending = false;
 			s_imeComposing = false;
 			State().tsfSessionGeneration = 1;

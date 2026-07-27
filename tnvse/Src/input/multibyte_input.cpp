@@ -97,6 +97,8 @@ namespace fonthook
 				ProcessStewieMenuSearchPendingStateSync();
 				ProcessMcmExtenderInputTargetState();
 				ProcessDialogueHistoryInputTargetState();
+				SynchronizeTextInputTarget("main_game_loop");
+				PumpTsfInputUpdates();
 				PumpCapturedInputEvents();
 			}
 

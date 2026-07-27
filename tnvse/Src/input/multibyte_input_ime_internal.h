@@ -91,7 +91,10 @@ namespace fonthook
 			bool hidingSystemImeWindows = false;
 			bool gameImeEnabled = false;
 			bool textInputSessionActive = false;
+			UInt32 textInputSessionGeneration = 1;
+			TextInputTarget currentTextInputTarget;
 			bool overlayRefreshPending = false;
+			bool tsfCompositionFallbackActive = false;
 			DWORD nativeImeAsciiGuardUntilTick = 0;
 			DWORD lastImeWatchdogTick = 0;
 

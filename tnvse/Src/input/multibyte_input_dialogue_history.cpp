@@ -513,9 +513,12 @@ namespace fonthook::multibyte_input
 
 		if (input <= 0x7E)
 		{
-			if (IsImeConsumingAscii())
+			if (FilterGameInput(
+					static_cast<UInt32>(input),
+					ImeCommitInputChannel::WndProcChar,
+					GameInputFilterClass::PrintableAscii)
+				!= GameInputFilterResult::Pass)
 			{
-				ObserveImeCommitInput(static_cast<UInt32>(input));
 				return true;
 			}
 			if (ShouldSuppressInputLanguageSwitchAscii(static_cast<UInt8>(input)))
@@ -546,8 +549,25 @@ namespace fonthook::multibyte_input
 	{
 		if (!target.valid)
 			return false;
-		if (IsImeCompositionActive())
-			return false;
+		const bool compositionControl =
+			virtualKey == VK_BACK
+			|| virtualKey == VK_DELETE
+			|| virtualKey == VK_LEFT
+			|| virtualKey == VK_RIGHT
+			|| virtualKey == VK_HOME
+			|| virtualKey == VK_END
+			|| virtualKey == VK_RETURN
+			|| virtualKey == VK_ESCAPE
+			|| virtualKey == VK_TAB;
+		if (compositionControl
+			&& FilterGameInput(
+				static_cast<UInt32>(virtualKey),
+				ImeCommitInputChannel::DialogueHistory,
+				GameInputFilterClass::CompositionControl)
+			!= GameInputFilterResult::Pass)
+		{
+			return true;
+		}
 		EnsureShadow(target);
 		switch (virtualKey)
 		{

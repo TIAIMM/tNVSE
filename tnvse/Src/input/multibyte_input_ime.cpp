@@ -220,6 +220,8 @@ namespace fonthook
 		void RefreshImeComposition(HWND hwnd)
 		{
 			State().candidate.composition = GetImeCompositionString(hwnd, GCS_COMPSTR);
+			if (!State().candidate.composition.empty())
+				State().tsfCompositionFallbackActive = false;
 		}
 
 		void ClearImeCandidates()
@@ -300,6 +302,7 @@ namespace fonthook
 		{
 			State().candidate.composing = false;
 			State().candidate.composition.clear();
+			State().tsfCompositionFallbackActive = false;
 			State().compositionEchoChecked = false;
 			ClearImeCandidates();
 		}
@@ -459,7 +462,11 @@ namespace fonthook
 			if (State().textInputSessionActive == active)
 				return;
 
+			SynchronizeTextInputTarget(
+				active ? "session_activate_sync" : "session_deactivate_sync");
 			State().textInputSessionActive = active;
+			AdvanceTextInputSessionGeneration(
+				active ? "text_input_session_start" : "text_input_session_end");
 			SetJipKeyEventSuppressionCaptureActive(active);
 			if (!active)
 				ResetImeCommitKeyState("text_input_session_end");
@@ -484,6 +491,10 @@ namespace fonthook
 		void RefreshTextInputSessionForActiveTarget(const char* reason)
 		{
 			const bool wasActive = State().textInputSessionActive;
+			SynchronizeTextInputTarget(
+				reason ? reason : "target_refresh_sync");
+			AdvanceTextInputSessionGeneration(
+				reason ? reason : "text_input_target_refresh");
 			CancelDeferredStewieAscii();
 			ResetImeCommitKeyState("text_input_target_refresh");
 			s_imeComposing = false;
@@ -516,11 +527,8 @@ namespace fonthook
 			if (!s_window)
 				return;
 
-			SetTextInputSessionActive(
-				GetCurrentTextEditMenuObject() != nullptr
-					|| GetOverlayStewieInputTarget().valid
-					|| GetOverlayDialogueHistoryInputTarget().valid
-					|| GetOverlayMcmExtenderInputTarget().valid);
+			SynchronizeTextInputTarget("update_game_ime_association");
+			SetTextInputSessionActive(HasCurrentTextInputTarget());
 		}
 
 		void PumpImeStatusWatchdog()

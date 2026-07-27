@@ -484,11 +484,8 @@ namespace fonthook
 			return InsertJipTextAtCaret(menu, converted);
 		}
 
-		bool JipInputCompositionControlShouldSuppress(UInt32 input)
+		bool IsJipCompositionControl(UInt32 input)
 		{
-			if (!IsImeCompositionActive())
-				return false;
-
 			switch (input)
 			{
 			case kInputCode_Backspace:
@@ -510,22 +507,35 @@ namespace fonthook
 		{
 			if (!LooksLikeJipTextInputStorage(apMenu))
 				return CallJipOriginalInput(apMenu, aiInput);
-			if (ShouldSuppressImeCommitInput(aiInput, ImeCommitInputChannel::JipTextInput))
+
+			GameInputFilterClass inputClass = GameInputFilterClass::None;
+			if (aiInput >= 0x20 && aiInput <= 0x7E)
+				inputClass = GameInputFilterClass::PrintableAscii;
+			else if (IsJipCompositionControl(aiInput))
+				inputClass = GameInputFilterClass::CompositionControl;
+			const GameInputFilterResult filterResult = FilterGameInput(
+				aiInput,
+				ImeCommitInputChannel::JipTextInput,
+				inputClass);
+			if (filterResult != GameInputFilterResult::Pass)
 			{
-				DebugLogJipState("JipTextInputAdapter::Input", "suppress_ime_commit_key", apMenu, aiInput);
+				const char* action =
+					filterResult == GameInputFilterResult::SuppressImeCommit
+						? "suppress_ime_commit_key"
+						: (filterResult == GameInputFilterResult::SuppressCompositionAscii
+							? "suppress_composition_ascii"
+							: "suppress_composition_control");
+				DebugLogJipState(
+					"JipTextInputAdapter::Input",
+					action,
+					apMenu,
+					aiInput);
 				return true;
 			}
 
 			const bool editActive = JipIsActiveFlag(apMenu) != 0;
 			if (aiInput >= 0x20 && aiInput <= 0x7E)
 			{
-				if (IsImeConsumingAscii())
-				{
-					ObserveImeCommitInput(aiInput);
-					DebugLogJipState("JipTextInputAdapter::Input", "suppress_composition_ascii", apMenu, aiInput);
-					return true;
-				}
-
 				if (!editActive)
 					return CallJipOriginalInput(apMenu, aiInput);
 
@@ -552,13 +562,6 @@ namespace fonthook
 			if (aiInput > 0x7F && aiInput < kInputCode_Backspace)
 			{
 				DebugLogJipState("JipTextInputAdapter::Input", "swallow_high_byte", apMenu, aiInput);
-				return true;
-			}
-
-			if (JipInputCompositionControlShouldSuppress(aiInput))
-			{
-				ObserveImeCommitInput(aiInput);
-				DebugLogJipState("JipTextInputAdapter::Input", "suppress_composition_control", apMenu, aiInput);
 				return true;
 			}
 
@@ -823,6 +826,23 @@ namespace fonthook
 			}
 		};
 
+		bool IsTextEditCompositionControl(SInt32 input)
+		{
+			switch (input)
+			{
+			case kTextEditInput_Backspace:
+			case kTextEditInput_Delete:
+			case kTextEditInput_Left:
+			case kTextEditInput_Right:
+			case kTextEditInput_Home:
+			case kTextEditInput_End:
+			case kTextEditInput_Confirm:
+				return true;
+			default:
+				return false;
+			}
+		}
+
 		class TextEditStateEx : public TextEditState
 		{
 		public:
@@ -834,23 +854,34 @@ namespace fonthook
 				TextEditMenu* menu = GetActiveTextEditMenu();
 				if (menu && &menu->xEditState != apState)
 					menu = nullptr;
-				if (ShouldSuppressImeCommitInput(
+
+				GameInputFilterClass inputClass = GameInputFilterClass::None;
+				if (aiInput >= 0x20 && aiInput <= 0x7E)
+					inputClass = GameInputFilterClass::PrintableAscii;
+				else if (IsTextEditCompositionControl(aiInput))
+					inputClass = GameInputFilterClass::CompositionControl;
+				const GameInputFilterResult filterResult = FilterGameInput(
 					static_cast<UInt32>(aiInput),
-					ImeCommitInputChannel::TextEdit))
+					ImeCommitInputChannel::TextEdit,
+					inputClass);
+				if (filterResult != GameInputFilterResult::Pass)
 				{
-					DebugLogState("TextEditState::Input", "suppress_ime_commit_key", menu, aiInput);
+					const char* action =
+						filterResult == GameInputFilterResult::SuppressImeCommit
+							? "suppress_ime_commit_key"
+							: (filterResult == GameInputFilterResult::SuppressCompositionAscii
+								? "suppress_composition_ascii"
+								: "suppress_composition_control");
+					DebugLogState(
+						"TextEditState::Input",
+						action,
+						menu,
+						aiInput);
 					return;
 				}
 
 				if (aiInput >= 0x20 && aiInput <= 0x7E)
 				{
-					if (IsImeConsumingAscii())
-					{
-						ObserveImeCommitInput(static_cast<UInt32>(aiInput));
-						DebugLogState("TextEditState::Input", "suppress_composition_ascii", menu, aiInput);
-						return;
-					}
-
 					const UInt8 asciiInput = ResolveAsciiLetterCaseFromKeyboard(static_cast<UInt8>(aiInput));
 					if (AsciiEqualsIgnoreCase(s_lastWndProcAsciiChar, asciiInput)
 						&& GetTickCount() - s_lastWndProcAsciiTick <= kDuplicateAsciiSuppressMs)
@@ -877,70 +908,33 @@ namespace fonthook
 					return;
 				}
 
-				const bool imeCompositionActive = IsImeCompositionActive();
 				switch (aiInput)
 				{
 				case kTextEditInput_Backspace:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
-						return;
-					}
 					DebugLogState("TextEditState::Input", "delete_previous", menu, aiInput);
 					DeletePreviousChar(*apState);
 					return;
 				case kTextEditInput_Delete:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
-						return;
-					}
 					DebugLogState("TextEditState::Input", "delete_next", menu, aiInput);
 					DeleteNextChar(*apState);
 					return;
 				case kTextEditInput_Left:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
-						return;
-					}
 					DebugLogState("TextEditState::Input", "move_left", menu, aiInput);
 					MoveCaretPrevious(*apState);
 					return;
 				case kTextEditInput_Right:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
-						return;
-					}
 					DebugLogState("TextEditState::Input", "move_right", menu, aiInput);
 					MoveCaretNext(*apState);
 					return;
 				case kTextEditInput_Home:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
-						return;
-					}
 					DebugLogState("TextEditState::Input", "move_home", menu, aiInput);
 					MoveCaretHome(*apState);
 					return;
 				case kTextEditInput_End:
-					if (imeCompositionActive)
-					{
-						DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
-						return;
-					}
 					DebugLogState("TextEditState::Input", "move_end", menu, aiInput);
 					MoveCaretEnd(*apState);
 					return;
 				case kTextEditInput_Confirm:
-					if (imeCompositionActive)
-					{
-						ObserveImeCommitInput(static_cast<UInt32>(aiInput));
-						DebugLogState("TextEditState::Input", "suppress_composition_control", menu, aiInput);
-						return;
-					}
 					DebugLogState("TextEditState::Input", "pass_original", menu, aiInput);
 					apState->InputUnk01(aiInput, aiChar);
 					return;

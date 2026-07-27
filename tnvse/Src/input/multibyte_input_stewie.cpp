@@ -1061,7 +1061,11 @@ namespace fonthook
 			}
 
 			EnsureStewieShadow(target);
-			if (ShouldSuppressImeCommitInput(input, ImeCommitInputChannel::Stewie))
+			if (FilterGameInput(
+					input,
+					ImeCommitInputChannel::Stewie,
+					GameInputFilterClass::None)
+				== GameInputFilterResult::SuppressImeCommit)
 			{
 				DebugLog(
 					"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=suppress_ime_commit_key menu=%u input=0x%08X",
@@ -1077,11 +1081,22 @@ namespace fonthook
 				return handled;
 			}
 
-			if (IsImeCompositionActive())
+			const GameInputFilterClass inputClass =
+				input >= 0x20 && input <= 0x7E
+					? GameInputFilterClass::AllDuringComposition
+						| GameInputFilterClass::PrintableAscii
+					: GameInputFilterClass::AllDuringComposition;
+			const GameInputFilterResult filterResult = FilterGameInput(
+				input,
+				ImeCommitInputChannel::Stewie,
+				inputClass);
+			if (filterResult != GameInputFilterResult::Pass)
 			{
-				ObserveImeCommitInput(input);
 				DebugLog(
-					"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=suppress_composition_input menu=%u input=0x%08X",
+					"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=%s menu=%u input=0x%08X",
+					filterResult == GameInputFilterResult::SuppressCompositionAscii
+						? "suppress_composition_ascii"
+						: "suppress_composition_input",
 					MenuID(menu),
 					input);
 				return true;
@@ -1089,9 +1104,6 @@ namespace fonthook
 
 			if (input >= 0x20 && input <= 0x7E)
 			{
-				if (IsImeConsumingAscii())
-					return true;
-
 				return HandleStewieAscii(
 					target,
 					static_cast<UInt8>(input),

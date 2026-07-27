@@ -755,7 +755,11 @@ namespace fonthook
 
 			const StewieInputTarget target = FindStewieMenuSearchTarget(menu);
 			if (target.valid
-				&& ShouldSuppressImeCommitInput(input, ImeCommitInputChannel::Stewie))
+				&& FilterGameInput(
+						input,
+						ImeCommitInputChannel::Stewie,
+						GameInputFilterClass::None)
+					== GameInputFilterResult::SuppressImeCommit)
 			{
 				DebugLog(
 					"tnvse_multibyte_input_event: source=MenuSearch action=suppress_ime_commit_key menu=%u input=0x%08X",

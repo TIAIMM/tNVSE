@@ -84,6 +84,35 @@ F4SE 项目的主要路径是“Windows IME/TSF + FO4 Unicode char event 注入�
 - FO4 的 `ProcessCharEvent` 是 Unicode 输入事件；FNV 的 `TextEditMenu` 是 `char` / codepage / byte-offset 编辑模型。
 - F4SE 的 D3D11/FW1FontWrapper overlay 不能直接用于 FNV。
 
+### ChineseInput-F4SE 后续结构化改进
+
+当前实现进一步吸收了 ChineseInput-F4SE 的统一 text-input gate 和 TSF
+观察模型，但没有复制它的 `WM_INPUT` 接管、延迟候选查询线程或 Unicode
+`ProcessCharEvent` 注入：
+
+- `multibyte_input_broker.cpp` 统一解析原版 `TextEditMenu`、JIP
+  `ShowTextInputMenu`、Stewie、Dialogue History 和 MCM Extender target。
+  WndProc 捕获事件保存 target kind、对象身份和 session generation；主循环
+  处理前必须仍匹配当前 token。输入框关闭或切换后排队中的旧
+  composition/result 因此不会写入新的输入框。
+- broker 只缓存主循环验证过的 target。WndProc 读取缓存 token，不为了
+  target 判定扫描 Menu/Tile。原版/JIP/Stewie 等仍保留独立数据 adapter，
+  UTF-16 到当前 codepage、DBCS caret 和容量检查没有被统一入口绕过。
+- `FilterGameInput` 统一处理已确认 IME commit key、composition ASCII 和
+  composition control 三类抑制。原版 TextEdit、JIP、Stewie、MCM 和
+  Dialogue History adapter 使用同一状态机；没有接管或重放 FNV 的
+  `WM_INPUT`。
+- TSF sink 除 `ITfUIElementSink` 外，还实现
+  `ITfInputProcessorProfileActivationSink`。profile callback 只发布
+  pending flag，当前输入法名称和 overlay 状态由下一次主循环刷新。
+- TSF sink 通过 `ITfThreadMgrEventSink` 跟随 focused document context，
+  并用 `ITfTextEditSink::OnEndEdit` 镜像 composition range。该文本仅在
+  IMM `GCS_COMPSTR` 为空时作为 preview fallback；真实 edit buffer 仍然
+  只接受 `WM_IME_COMPOSITION + GCS_RESULTSTR`。
+- TSF composition update 携带 text-input session generation。过期
+  document/context 的回调会在主循环被丢弃；target/session 变化也会推进
+  TSF candidate generation、清除预览和 commit-key latch。
+
 ## 反编译依据
 
 本节基于正式版 `FalloutNV.exe` IDB 反编译核对。2026-07-06 追加用 IDA 9.3 `idalib` 对 `D:\Codex\NV逆向\Official Version\FalloutNV.exe.i64` 做只读导出，重点验证 `0x7E6320`、`0x7E6620`、`0x716B00`、`0x7170A0`、`0x7E6700` 和相关 helper 的伪代码/反汇编。

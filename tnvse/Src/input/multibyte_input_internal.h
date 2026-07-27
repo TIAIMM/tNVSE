@@ -103,6 +103,59 @@ namespace fonthook
 			bool valid = false;
 		};
 
+		enum class TextInputTargetKind : UInt8
+		{
+			None,
+			TextEdit,
+			JipTextInput,
+			Stewie,
+			DialogueHistory,
+			McmExtender,
+		};
+
+		struct TextInputTargetToken
+		{
+			TextInputTargetKind kind = TextInputTargetKind::None;
+			const void* identity = nullptr;
+			const void* secondaryIdentity = nullptr;
+			UInt32 generation = 0;
+			bool writable = false;
+			bool active = false;
+		};
+
+		struct TextInputTarget
+		{
+			TextInputTargetToken token;
+			TextEditMenu* textEdit = nullptr;
+			StewieInputTarget stewie;
+			DialogueHistoryInputTarget dialogueHistory;
+			McmExtenderInputTarget mcmExtender;
+		};
+
+		enum class GameInputFilterClass : UInt8
+		{
+			None = 0,
+			PrintableAscii = 1,
+			CompositionControl = 2,
+			AllDuringComposition = 4,
+		};
+
+		enum class GameInputFilterResult : UInt8
+		{
+			Pass,
+			SuppressImeCommit,
+			SuppressCompositionAscii,
+			SuppressCompositionControl,
+		};
+
+		constexpr GameInputFilterClass operator|(
+			GameInputFilterClass lhs,
+			GameInputFilterClass rhs)
+		{
+			return static_cast<GameInputFilterClass>(
+				static_cast<UInt8>(lhs) | static_cast<UInt8>(rhs));
+		}
+
 		struct CandidateOverlayLine
 		{
 			std::wstring text;
@@ -223,6 +276,25 @@ namespace fonthook
 		bool ShouldSuppressDialogueHistoryControlChar(WPARAM input);
 		bool RemovePreviousDialogueHistoryAsciiCompositionEcho(wchar_t compositionLead);
 
+		TextInputTarget ResolveCurrentTextInputTarget();
+		void SynchronizeTextInputTarget(const char* reason);
+		void AdvanceTextInputSessionGeneration(const char* reason);
+		void ResetTextInputBroker();
+		TextInputTarget GetCachedTextInputTarget();
+		TextInputTargetToken CaptureTextInputTargetToken();
+		bool IsCurrentTextInputTargetToken(const TextInputTargetToken& token);
+		bool HasCurrentTextInputTarget();
+		const char* TextInputTargetKindName(TextInputTargetKind kind);
+		ImeCommitInputChannel TextInputTargetCommitChannel(
+			const TextInputTarget& target);
+		bool InsertWideTextIntoTarget(
+			const TextInputTarget& target,
+			std::wstring_view text);
+		GameInputFilterResult FilterGameInput(
+			UInt32 input,
+			ImeCommitInputChannel channel,
+			GameInputFilterClass inputClass);
+
 		bool HasOverlayInputTarget();
 		bool InitializeCandidateOverlayRenderer();
 		bool IsCandidateOverlayRendererAvailable();
@@ -233,6 +305,7 @@ namespace fonthook
 			UInt32& height);
 		void ShutdownCandidateOverlayRenderer();
 		bool InitializeTsfCandidateSupport();
+		void PumpTsfInputUpdates();
 		void UpdateCandidateOverlay();
 		void DrawCandidateOverlay();
 		void ReleaseCandidateOverlayTexture();
