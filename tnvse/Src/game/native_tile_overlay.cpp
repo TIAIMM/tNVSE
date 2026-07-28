@@ -1,6 +1,8 @@
 #include "native_tile_overlay.h"
 
 #include "BSMemory.hpp"
+#include "font_glyphs.h"
+#include "font_manager.h"
 #include "InterfaceManager.hpp"
 #include "Menu.hpp"
 #include "SafeWrite.h"
@@ -13,6 +15,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <limits>
 #include <string_view>
 #include <vector>
 
@@ -32,6 +35,7 @@ namespace fonthook
 		constexpr float kImeMinimumWidth = 320.0f;
 		constexpr float kImeMaximumWidth = 620.0f;
 		constexpr float kImeHorizontalPadding = 20.0f;
+		constexpr UInt32 kImeVisualBoundsLogLimit = 64;
 		constexpr float kPrewarmMinimumTextHeight = 24.0f;
 		constexpr float kPrewarmMaximumPanelWidth = 620.0f;
 		constexpr float kPrewarmMinimumPanelWidth = 320.0f;
@@ -109,6 +113,7 @@ namespace fonthook
 		bool s_pipboyRenderHookInstallFailed = false;
 		bool s_loggedPipboyRttExclusion = false;
 		bool s_creatingImeMenu = false;
+		UInt32 s_imeVisualBoundsLogCount = 0;
 
 		UInt32 __fastcall ImeMenuGetId(Menu*, void*)
 		{
@@ -362,6 +367,114 @@ namespace fonthook
 				nullptr);
 			if (written <= 0)
 				return {};
+			return result;
+		}
+
+		struct ImeTextVisualBounds
+		{
+			float top = 0.0f;
+			float height = 0.0f;
+			bool valid = false;
+		};
+
+		ImeTextVisualBounds MeasureImeTextVisualBounds(
+			std::string_view encoded,
+			float measuredTextHeight)
+		{
+			ImeTextVisualBounds result;
+			if (encoded.empty()
+				|| !std::isfinite(measuredTextHeight)
+				|| measuredTextHeight <= 0.0f)
+			{
+				return result;
+			}
+
+			Font* font = ResolveGameFont(FontManager::GetSingleton(), 1);
+			if (!font || !font->pFontData)
+				return result;
+
+			const float sourceLineHeight =
+				font->pFontData->pFontLetters[' '].fHeight;
+			if (!std::isfinite(sourceLineHeight)
+				|| sourceLineHeight <= 0.0f)
+			{
+				return result;
+			}
+
+			float visualTop = std::numeric_limits<float>::infinity();
+			float visualBottom = -std::numeric_limits<float>::infinity();
+			const float lineOriginZ = 2.0f
+				* (font->pFontData->fBaseLine - font->fFontHeight);
+			ExtraGlyphStore* extraGlyphs =
+				GetExtraGlyphs(font->iFontNum);
+			for (size_t offset = 0; offset < encoded.size();)
+			{
+				const UInt8 current =
+					static_cast<UInt8>(encoded[offset]);
+				FontLetter* glyph = nullptr;
+				size_t unitLength = 1;
+				UInt32 dbcsCode = 0;
+				if (offset + 1 < encoded.size()
+					&& TryDecodeDoubleByte(
+						encoded.data() + offset,
+						dbcsCode))
+				{
+					glyph = LookupDBGlyph(extraGlyphs, dbcsCode);
+					unitLength = 2;
+				}
+				else if (current >= 0x20 && current != 0x7F
+					&& current != static_cast<UInt8>(' '))
+				{
+					glyph =
+						&font->pFontData->pFontLetters[current];
+				}
+
+				if (glyph
+					&& std::isfinite(glyph->fTopEdge)
+					&& std::isfinite(glyph->fHeight)
+					&& glyph->fHeight > 0.0f)
+				{
+					// Font::CreateText starts the first line at
+					// 2 * (baseline - fontHeight). FontLetter::fTopEdge
+					// is then added in Z, while screen-space Y is -Z.
+					// Convert that exact geometry convention to a
+					// downward-positive offset from TileText::y.
+					const float glyphTop =
+						-(lineOriginZ + glyph->fTopEdge);
+					const float glyphBottom =
+						glyphTop + glyph->fHeight;
+					if (std::isfinite(glyphTop)
+						&& std::isfinite(glyphBottom)
+						&& glyphBottom > glyphTop)
+					{
+						visualTop =
+							std::min(visualTop, glyphTop);
+						visualBottom =
+							std::max(visualBottom, glyphBottom);
+					}
+				}
+				offset += unitLength;
+			}
+
+			if (!std::isfinite(visualTop)
+				|| !std::isfinite(visualBottom)
+				|| visualBottom <= visualTop)
+			{
+				return result;
+			}
+
+			// TileText::height is the post-UIO height returned to the Tile.
+			// Relate the raw FontLetter coordinates to that value instead of
+			// assuming that the optional TileText zoom patch is installed.
+			const float scale = measuredTextHeight / sourceLineHeight;
+			if (!std::isfinite(scale) || scale <= 0.0f)
+				return result;
+
+			result.top = visualTop * scale;
+			result.height = (visualBottom - visualTop) * scale;
+			result.valid = std::isfinite(result.top)
+				&& std::isfinite(result.height)
+				&& result.height > 0.0f;
 			return result;
 		}
 
@@ -1160,6 +1273,7 @@ namespace fonthook
 
 		float lineHeight = kImeMinimumLineHeight;
 		float contentWidth = kImeMinimumWidth;
+		std::array<ImeTextVisualBounds, kImeLineCount> visualBounds = {};
 		for (size_t i = 0; i < visibleCount; ++i)
 		{
 			const float measuredHeight =
@@ -1169,6 +1283,8 @@ namespace fonthook
 				lineHeight = std::max(lineHeight, measuredHeight);
 
 			const std::string encoded = WideToUiText(lines[i].text);
+			visualBounds[i] =
+				MeasureImeTextVisualBounds(encoded, measuredHeight);
 			const float estimatedWidth =
 				static_cast<float>(encoded.size()) * 12.0f
 				+ kImeHorizontalPadding;
@@ -1216,7 +1332,51 @@ namespace fonthook
 				s_state.imeLines[i]->SetValueFloat(
 					Tile::kTileValue_x, left + 10.0f, true);
 				s_state.imeLines[i]->SetValueFloat(
-					Tile::kTileValue_y, lineY, true);
+					Tile::kTileValue_user0,
+					lineY,
+					true);
+				s_state.imeLines[i]->SetValueFloat(
+					Tile::kTileValue_user1,
+					lineHeight,
+					true);
+				const float measuredHeight =
+					s_state.imeLines[i]->GetValueFloat(
+						Tile::kTileValue_height);
+				s_state.imeLines[i]->SetValueFloat(
+					Tile::kTileValue_user2,
+					visualBounds[i].valid
+						? visualBounds[i].top : 0.0f,
+					true);
+				s_state.imeLines[i]->SetValueFloat(
+					Tile::kTileValue_user3,
+					visualBounds[i].valid
+						? visualBounds[i].height
+						: std::max(0.0f, measuredHeight),
+					true);
+				if (g_bEnableFreeTypeFontRenderingLog
+					&& s_imeVisualBoundsLogCount
+						< kImeVisualBoundsLogLimit)
+				{
+					++s_imeVisualBoundsLogCount;
+					gLog.FormattedMessage(
+						"tnvse_native_overlay: IME visual center line=%u rowTop=%.2f rowHeight=%.2f tileHeight=%.2f glyphTop=%.2f glyphHeight=%.2f xmlOffset=%.2f valid=%d",
+						static_cast<UInt32>(i),
+						lineY,
+						lineHeight,
+						measuredHeight,
+						visualBounds[i].valid
+							? visualBounds[i].top : 0.0f,
+						visualBounds[i].valid
+							? visualBounds[i].height
+							: std::max(0.0f, measuredHeight),
+						visualBounds[i].valid
+							? (lineHeight - visualBounds[i].height)
+								* 0.5f - visualBounds[i].top
+							: (lineHeight
+								- std::max(0.0f, measuredHeight))
+								* 0.5f,
+						visualBounds[i].valid ? 1 : 0);
+				}
 				s_state.imeLines[i]->SetValueFloat(
 					Tile::kTileValue_wrapwidth,
 					std::max(1.0f,
