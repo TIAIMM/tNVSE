@@ -1,14 +1,14 @@
 <!--
 	tNVSE native IME display menu.
 
-	Class 5525078 (0x544E56, "TNV") is supplied by tNVSE's chained Menu
-	factory while this XML is being parsed.  The large float-exact code lies
-	outside the vanilla Menu table.  The non-stacking, non-targetable Menu is
-	isolated by the original renderer and does not inherit HUDMainMenu/Pip-Boy
-	visibility changes.
+	Class 1079 is the high unused gap in the engine's valid 1001-1084 Menu
+	table and is supplied by tNVSE's chained Menu factory while this XML is
+	being parsed.  The non-stacking, non-targetable Menu keeps native
+	TileMenu ownership; tNVSE excludes its scene node only from the Pip-Boy
+	render-to-texture pass and restores it for normal screen composition.
 -->
 <menu name="tNVSE_IME">
-	<class> 5525078 </class>
+	<class> 1079 </class>
 	<stackingtype> &does_not_stack; </stackingtype>
 	<visible> &false; </visible>
 	<target> &false; </target>

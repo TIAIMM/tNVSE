@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cmath>
 #include <string_view>
+#include <vector>
 
 namespace fonthook
 {
@@ -36,22 +37,30 @@ namespace fonthook
 		constexpr float kPrewarmMinimumPanelWidth = 320.0f;
 		constexpr UInt32 kReadTileXml = 0xA01B00;
 		constexpr UInt32 kReleaseTileTree = 0x9FF690;
+		constexpr UInt32 kRegisterMenuTile = 0xA1DC70;
 		constexpr SIZE_T kLoadingMenuSingleton = 0x11DA0C0;
-		// "TNV" remains exactly representable in the float-backed XML trait
-		// while staying far outside the vanilla 1001-1084 Menu Code range.
-		// This non-stacking Menu is intentionally not registered in xMenuList.
-		constexpr UInt32 kImeMenuClass = 0x00544E56;
-		static_assert(kImeMenuClass > 1084);
-		static_assert(kImeMenuClass <= (1u << 24));
+		// TileMenu::PostParse and the stock visibility table only accept
+		// Menu Codes 1001-1084. 1079 is the highest unused gap immediately
+		// below SlotMachineMenu (1080), and keeps the overlay inside the
+		// engine's native menu ownership without colliding with stock menus.
+		constexpr UInt32 kImeMenuClass = 1079;
+		static_assert(kImeMenuClass >= 1001 && kImeMenuClass <= 1084);
 		constexpr SIZE_T kCreateMenuByClassCall = 0x7079A3;
 		constexpr SIZE_T kMenuConstructor = 0xA1C4A0;
 		constexpr SIZE_T kMenuBaseVtable = 0x1095484;
 		constexpr size_t kMenuBaseVtableEntryCount = 18;
 		constexpr size_t kMenuGetIdVtableIndex = 13;
 		constexpr SInt32 kImeMenuDepthContribution = -1000000;
+		// FOPipboyManager vtable slot 3 is FORenderedMenu::Render
+		// (FalloutNV.exe 0x7FBA00). It captures the UI into the Pip-Boy's
+		// 1280x960 render target before the ordinary screen-space UI pass.
+		constexpr SIZE_T kPipboyRenderVtableEntry = 0x10780B8;
+		constexpr SIZE_T kVanillaRenderedMenuRender = 0x7FBA00;
 
 		using CreateMenuByClassFn =
 			Menu* (__thiscall*)(void*, UInt32);
+		using RenderedMenuRenderFn =
+			char* (__thiscall*)(void*, int, int, int);
 
 		struct NativeTileOverlayState
 		{
@@ -93,8 +102,12 @@ namespace fonthook
 		std::array<SIZE_T, kMenuBaseVtableEntryCount + 1>
 			s_imeMenuVtable = {};
 		CreateMenuByClassFn s_originalCreateMenuByClass = nullptr;
+		RenderedMenuRenderFn s_originalPipboyRender = nullptr;
 		bool s_imeMenuFactoryInstalled = false;
 		bool s_imeMenuFactoryInstallFailed = false;
+		bool s_pipboyRenderHookInstalled = false;
+		bool s_pipboyRenderHookInstallFailed = false;
+		bool s_loggedPipboyRttExclusion = false;
 		bool s_creatingImeMenu = false;
 
 		UInt32 __fastcall ImeMenuGetId(Menu*, void*)
@@ -138,8 +151,96 @@ namespace fonthook
 				: nullptr;
 		}
 
+		char* __fastcall PipboyRenderedMenuRenderHook(
+			void* renderedMenu,
+			void*,
+			int arg2,
+			int arg3,
+			int arg4)
+		{
+			// The dedicated IME Menu is a normal pMenuRoot child, so the
+			// Pip-Boy's rendered-menu pass would otherwise capture it and the
+			// later screen-space UI pass would draw the same node a second
+			// time. App-cull only for this RTT call, preserving its prior state
+			// and restoring it before normal UI composition.
+			NiNode* imeNode = nullptr;
+			bool wasAppCulled = false;
+			if (s_imeReady.load(std::memory_order_acquire)
+				&& s_state.imeVisible
+				&& s_state.imeRoot)
+			{
+				imeNode = s_state.imeRoot->spNiNode;
+				if (imeNode)
+				{
+					wasAppCulled = imeNode->GetAppCulled();
+					if (!wasAppCulled)
+						imeNode->SetAppCulled(true);
+				}
+			}
+
+			char* result = s_originalPipboyRender
+				? s_originalPipboyRender(
+					renderedMenu, arg2, arg3, arg4)
+				: nullptr;
+
+			if (imeNode && !wasAppCulled)
+			{
+				imeNode->SetAppCulled(false);
+				if (!s_loggedPipboyRttExclusion)
+				{
+					s_loggedPipboyRttExclusion = true;
+					gLog.FormattedMessage(
+						"tnvse_native_overlay: excluded IME Menu node=%p from Pip-Boy rendered-menu RTT; screen-space pass remains enabled",
+						imeNode);
+				}
+			}
+			return result;
+		}
+
+		bool EnsurePipboyRenderExclusionHook()
+		{
+			if (s_pipboyRenderHookInstalled)
+				return true;
+			if (s_pipboyRenderHookInstallFailed)
+				return false;
+
+			const SIZE_T currentTarget =
+				*reinterpret_cast<const SIZE_T*>(
+					kPipboyRenderVtableEntry);
+			if (currentTarget == reinterpret_cast<SIZE_T>(
+					&PipboyRenderedMenuRenderHook))
+			{
+				s_pipboyRenderHookInstalled =
+					s_originalPipboyRender != nullptr;
+				return s_pipboyRenderHookInstalled;
+			}
+			if (!currentTarget)
+			{
+				s_pipboyRenderHookInstallFailed = true;
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: cannot install Pip-Boy RTT exclusion hook; empty vtable entry at 0x%08X",
+					static_cast<UInt32>(kPipboyRenderVtableEntry));
+				return false;
+			}
+
+			s_originalPipboyRender =
+				reinterpret_cast<RenderedMenuRenderFn>(currentTarget);
+			SafeWrite32(
+				kPipboyRenderVtableEntry,
+				reinterpret_cast<SIZE_T>(
+					&PipboyRenderedMenuRenderHook));
+			s_pipboyRenderHookInstalled = true;
+			gLog.FormattedMessage(
+				"tnvse_native_overlay: installed Pip-Boy RTT exclusion hook chainedTarget=0x%08X vanilla=%d",
+				static_cast<UInt32>(currentTarget),
+				currentTarget == kVanillaRenderedMenuRender ? 1 : 0);
+			return true;
+		}
+
 		bool EnsureImeMenuFactory()
 		{
+			if (!EnsurePipboyRenderExclusionHook())
+				return false;
 			if (s_imeMenuFactoryInstalled)
 				return true;
 			if (s_imeMenuFactoryInstallFailed)
@@ -396,9 +497,9 @@ namespace fonthook
 		Tile* SynchronizeImeParent()
 		{
 			InterfaceManager* manager = InterfaceManager::GetSingleton();
-			// The IME tree is a dedicated non-stacking Menu. As a direct
-			// pMenuRoot child it participates in the engine's menu isolation
-			// exactly once and is independent of HUDMainMenu/Pip-Boy culling.
+			// The IME tree is a dedicated non-stacking Menu and a direct
+			// pMenuRoot child. The Pip-Boy RTT hook temporarily culls its
+			// NiNode while that root is captured, then restores screen drawing.
 			Tile* parent = manager ? manager->pMenuRoot : nullptr;
 			if (s_state.imeParent != parent)
 				ResetImeForParent(parent);
@@ -425,13 +526,87 @@ namespace fonthook
 			return parent;
 		}
 
-		void DestroyAttachedRoot(
+		void ReleaseAndDestroyAttachedRoot(
 			Tile* parent,
 			Tile* root,
 			const char* expectedName)
 		{
 			if (IsNamedDirectChild(parent, root, expectedName))
+			{
+				SetVisible(root, false);
+				ThisStdCall<void>(kReleaseTileTree, root);
 				delete root;
+			}
+		}
+
+		bool IsImeMenuRegistered(Tile* root)
+		{
+			Menu* menu = root ? root->GetMenu() : nullptr;
+			return menu
+				&& menu->GetID() == kImeMenuClass
+				&& menu->uiID == kImeMenuClass
+				&& menu->pRootTile == static_cast<TileMenu*>(root)
+				&& InterfaceManager::GetMenuByType(kImeMenuClass) == root;
+		}
+
+		bool RegisterImeMenuRoot(Tile* root)
+		{
+			Menu* menu = root ? root->GetMenu() : nullptr;
+			if (!menu || menu->GetID() != kImeMenuClass)
+				return false;
+
+			// TileMenu::PostParse binds once when it encounters <class>,
+			// before the remaining root traits have been parsed. Repeat the
+			// stock Create() finalization after ReadXML completes, matching
+			// built-in menus and Stewie Tweaks' injected menu lifecycle.
+			menu->uiID = kImeMenuClass;
+			ThisStdCall<void>(
+				kRegisterMenuTile,
+				menu,
+				static_cast<TileMenu*>(root),
+				false);
+			return IsImeMenuRegistered(root);
+		}
+
+		Tile* NormalizeOwnedImeRoots(Tile* parent)
+		{
+			if (!parent)
+				return nullptr;
+
+			std::vector<Tile*> ownedRoots;
+			for (Tile* child : parent->kChildren)
+			{
+				if (child
+					&& !_stricmp(
+						child->strName.c_str(), "tNVSE_IME"))
+				{
+					ownedRoots.push_back(child);
+				}
+			}
+
+			Tile* selected = nullptr;
+			for (Tile* root : ownedRoots)
+			{
+				Menu* menu = root->GetMenu();
+				if (!selected
+					&& menu
+					&& menu->GetID() == kImeMenuClass)
+				{
+					selected = root;
+					continue;
+				}
+				ReleaseAndDestroyAttachedRoot(
+					parent, root, "tNVSE_IME");
+			}
+
+			if (ownedRoots.size() > (selected ? 1u : 0u))
+			{
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: removed %u stale or duplicate IME Menu root(s) before singleton bind",
+					static_cast<UInt32>(
+						ownedRoots.size() - (selected ? 1u : 0u)));
+			}
+			return selected;
 		}
 
 		bool ResolveImeTiles(Tile* root)
@@ -601,10 +776,16 @@ namespace fonthook
 				Tile* root = s_state.imeRoot;
 				if (IsResolvedImeTreeAttached(parent))
 				{
-					s_imeReady.store(true, std::memory_order_release);
-					return true;
+					if (IsImeMenuRegistered(root)
+						|| RegisterImeMenuRoot(root))
+					{
+						s_imeReady.store(true, std::memory_order_release);
+						return true;
+					}
 				}
-				if (IsDirectChild(parent, root) && ResolveImeTiles(root))
+				if (IsDirectChild(parent, root)
+					&& ResolveImeTiles(root)
+					&& RegisterImeMenuRoot(root))
 				{
 					ResetImePresentationState();
 					SetVisible(root, false);
@@ -616,16 +797,18 @@ namespace fonthook
 				}
 				ClearImeResolvedTiles();
 				s_state.imeLoadFailed = false;
-				DestroyAttachedRoot(parent, root, "tNVSE_IME");
+				ReleaseAndDestroyAttachedRoot(
+					parent, root, "tNVSE_IME");
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: IME Menu was detached or malformed; reloading");
+					"tnvse_native_overlay: IME Menu was detached, malformed, or lost its native registration; reloading");
 			}
 			if (s_state.imeLoadFailed)
 				return false;
-			if (Tile* existing =
-					FindDirectMenuByClass(parent, kImeMenuClass))
+
+			if (Tile* existing = NormalizeOwnedImeRoots(parent))
 			{
-				if (ResolveImeTiles(existing))
+				if (ResolveImeTiles(existing)
+					&& RegisterImeMenuRoot(existing))
 				{
 					ResetImePresentationState();
 					SetVisible(existing, false);
@@ -638,11 +821,30 @@ namespace fonthook
 					return true;
 				}
 
+				ClearImeResolvedTiles();
+				ReleaseAndDestroyAttachedRoot(
+					parent, existing, "tNVSE_IME");
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: discarded malformed owned IME Menu class=%u before reloading",
+					kImeMenuClass);
+			}
+
+			Tile* foreign =
+				FindDirectMenuByClass(parent, kImeMenuClass);
+			if (!foreign)
+				foreign =
+					InterfaceManager::GetMenuByType(kImeMenuClass);
+			if (foreign)
+			{
+				const bool attached = IsDirectChild(parent, foreign);
 				s_state.imeLoadFailed = true;
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: IME Menu class=%u is already owned by Tile '%s'; system IME UI remains enabled for this UI root",
+					"tnvse_native_overlay: Menu Code %u is already owned by foreign Tile host=%p name='%s'; system IME UI remains enabled for this UI root",
 					kImeMenuClass,
-					existing->strName.c_str());
+					foreign,
+					attached
+						? foreign->strName.c_str()
+						: "<registered outside current pMenuRoot>");
 				return false;
 			}
 			if (!EnsureImeMenuFactory())
@@ -658,13 +860,15 @@ namespace fonthook
 				kReadTileXml, parent, kImeOverlayXmlPath);
 			s_creatingImeMenu = false;
 			if (!root || !IsDirectChild(parent, root)
-				|| !ResolveImeTiles(root))
+				|| !ResolveImeTiles(root)
+				|| !RegisterImeMenuRoot(root))
 			{
 				ClearImeResolvedTiles();
-				DestroyAttachedRoot(parent, root, "tNVSE_IME");
+				ReleaseAndDestroyAttachedRoot(
+					parent, root, "tNVSE_IME");
 				s_state.imeLoadFailed = true;
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: failed to load or resolve IME Menu path='%s'; system IME UI remains enabled for this UI root",
+					"tnvse_native_overlay: failed to load, resolve, or register IME Menu path='%s'; system IME UI remains enabled for this UI root",
 					kImeOverlayXmlPath);
 				return false;
 			}
@@ -708,7 +912,8 @@ namespace fonthook
 				}
 				ClearPrewarmResolvedTiles();
 				s_state.prewarmLoadFailed = false;
-				DestroyAttachedRoot(parent, root, "tNVSE_Prewarm");
+				ReleaseAndDestroyAttachedRoot(
+					parent, root, "tNVSE_Prewarm");
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: prewarm Tile component was detached or malformed; reloading component");
 			}
@@ -721,7 +926,8 @@ namespace fonthook
 				|| !ResolvePrewarmTiles(root))
 			{
 				ClearPrewarmResolvedTiles();
-				DestroyAttachedRoot(parent, root, "tNVSE_Prewarm");
+				ReleaseAndDestroyAttachedRoot(
+					parent, root, "tNVSE_Prewarm");
 				s_state.prewarmLoadFailed = true;
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: failed to load or resolve prewarm component path='%s'; font prewarm continues without Tile progress UI",
@@ -1141,8 +1347,8 @@ namespace fonthook
 		{
 			// Match the stock/Cell Offset component teardown: release the
 			// imported Tile tree under the UI lock, then destroy its root.
-			ThisStdCall<void>(kReleaseTileTree, root);
-			delete root;
+			ReleaseAndDestroyAttachedRoot(
+				parent, root, "tNVSE_Prewarm");
 		}
 		ClearPrewarmResolvedTiles();
 	}
@@ -1168,26 +1374,18 @@ namespace fonthook
 		if (currentImeParent
 			&& currentImeParent == s_state.imeParent)
 		{
-			Tile* imeRoot = s_state.imeRoot;
-			if (IsNamedDirectChild(
-					currentImeParent, imeRoot, "tNVSE_IME"))
-			{
-				SetVisible(imeRoot, false);
-				delete imeRoot;
-			}
+			ReleaseAndDestroyAttachedRoot(
+				currentImeParent,
+				s_state.imeRoot,
+				"tNVSE_IME");
 		}
 		if (currentPrewarmParent
 			&& currentPrewarmParent == s_state.prewarmParent)
 		{
-			Tile* prewarmRoot = s_state.prewarmRoot;
-			if (IsNamedDirectChild(
-					currentPrewarmParent,
-					prewarmRoot,
-					"tNVSE_Prewarm"))
-			{
-				SetVisible(prewarmRoot, false);
-				delete prewarmRoot;
-			}
+			ReleaseAndDestroyAttachedRoot(
+				currentPrewarmParent,
+				s_state.prewarmRoot,
+				"tNVSE_Prewarm");
 		}
 		ResetImeForParent(nullptr);
 		ResetPrewarmForParent(nullptr);
