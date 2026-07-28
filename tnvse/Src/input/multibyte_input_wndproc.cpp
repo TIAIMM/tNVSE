@@ -898,6 +898,9 @@ namespace fonthook
 				State().tsfCandidateActive = false;
 				s_imeComposing = false;
 				AdvanceTsfCandidateSession();
+				State().gameImeEnabled = false;
+				State().gameImeContextDetached = false;
+				State().detachedGameImeWindow = nullptr;
 				s_window = nullptr;
 				const LRESULT result =
 					ForwardWindowMessage(hwnd, msg, wParam, lParam);
@@ -1168,6 +1171,12 @@ namespace fonthook
 
 			s_window = hwnd;
 			s_originalWndProc = reinterpret_cast<WNDPROC>(original);
+			State().gameImeEnabled = false;
+			if (State().detachedGameImeWindow != hwnd)
+			{
+				State().gameImeContextDetached = false;
+				State().detachedGameImeWindow = nullptr;
+			}
 			State().tsfInputWindow.store(
 				reinterpret_cast<ULONG_PTR>(hwnd),
 				std::memory_order_release);
@@ -1213,7 +1222,6 @@ namespace fonthook
 			bool detached = true;
 			if (s_window && s_originalWndProc)
 			{
-				SetGameImeEnabled(s_window, true);
 				const WNDPROC current = reinterpret_cast<WNDPROC>(
 					GetWindowLongPtrA(s_window, GWLP_WNDPROC));
 				if (current == &MultibyteInputWndProc)

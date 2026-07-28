@@ -500,7 +500,7 @@ UTF-16 -> WideCharToMultiByte(g_usingWinEncoding)
 
 消息消费规则：
 
-- 正常游玩、没有任何已适配输入目标时，主循环结束 input session、取消当前 composition，并用 `ImmAssociateContext(hwnd, nullptr)` 解绑游戏窗口的 HIMC。WndProc 只读取这个缓存会话状态；它不会为判定目标而扫描菜单。
+- 正常游玩、没有任何已适配输入目标时，主循环结束 input session、取消当前 composition，并用 `ImmAssociateContext(hwnd, nullptr)` 解绑游戏窗口的 HIMC。首次安装 WndProc 时即执行一次真实解绑，不能因 `gameImeEnabled` 的初始值已经为 false 而提前返回；否则 MAPMO 中用于打开 MCM 的 `M` 等菜单热键会在目标建立前先进入仍关联的系统 IME。WndProc 只读取缓存会话状态；它不会为判定目标而扫描菜单。
 - 进入输入菜单时启动 input session latch，并用 `ImmAssociateContextEx(hwnd, nullptr, IACE_DEFAULT)` 重新绑定当前 HKL 的默认 IME context；不要恢复之前解绑时返回的旧 `HIMC`，否则 Alt-Tab 或输入法切换后可能继续使用旧输入法状态。输入会话开始时必须显式重建一次 context，即使当前窗口看起来尚未解绑，也要刷新 open/native 状态和首键 guard。
 - 输入菜单会话中收到 `WM_INPUTLANGCHANGEREQUEST` 时必须交给 `DefWindowProc`，否则 `Win+Space` / 输入法热键可能不会真正切换当前窗口的输入语言；收到 `WM_INPUTLANGCHANGE` 后用该消息携带的新 `HKL` 重建默认 IME context，并刷新 overlay 的输入法名称和模式。这个新 `HKL` 只用于本次重建，不能保存为长期 fallback。
 - 部分全屏/插件组合下 `Win+Space` 可能不会向游戏窗口投递 `WM_INPUTLANGCHANGEREQUEST`。当前实现额外捕获 `VK_LWIN/VK_RWIN + VK_SPACE` 及当时的 Win 键快照，在主循环确认系统没有完成切换后才调用 `ActivateKeyboardLayout(HKL_NEXT, KLF_SETFORPROCESS)` 并重建默认 IME context，避免延迟处理时读取已经松开的修饰键。
@@ -556,7 +556,7 @@ std::vector<std::wstring> candidates;
 - 文本使用原生字体槽 1，由当前 tNVSE 字体配置接管；候选层不再持有独立 FreeType library、D3D texture、state block 或屏幕空间 quad。
 - 正常游玩期没有输入菜单对象时，tNVSE 不只是隐藏系统 IME UI，而是解绑游戏窗口 IME context；这会阻止系统在左上角绘制 composition 小窗，也避免拼音预编辑串干扰快捷键/普通游玩。输入菜单对象存在时用 input session latch 保持 IME context enabled，并在输入语言变化后重建默认 context，因此 `Win+Space` / Alt-Tab 后切换输入法不会继续沿用旧 `HIMC`。
 - `WM_IME_SETCONTEXT` 无条件以 `lParam=0` 交给 `DefWindowProc`；composition 事件排到主循环后把 IMM32 composition 及全部四个 candidate form 移到屏幕外。WndProc 同步分支不调用 `ImmSetCandidateWindow`，避免位置通知重入。代码不再保存原始 form，因此不存在输入会话结束、语言切换、宿主失败或 WndProc 清理时把位置恢复回来的路径。
-- TSF `ITfUIElementSink::BeginUIElement` 先以 `ITfCandidateListUIElement` 确认元素类型；只要它属于游戏线程的候选列表，就把 `*pbShow` 设为 `FALSE`，与 composition preview、当前输入目标和原生 Tile 宿主状态无关。代码不再调用 `ITfUIElement::Show(TRUE)`。
+- TSF `ITfUIElementSink::BeginUIElement` 对输入服务发布的全部 UI element 一律把 `*pbShow` 设为 `FALSE`，与 composition preview、当前输入目标和原生 Tile 宿主状态无关。不能先要求 `ITfCandidateListUIElement`：部分现代 IME 在 MCM Extender 这类脚本搜索框上会把候选/reading 界面只暴露为通用 `ITfUIElement`。接口识别现在只决定能否读取候选数据；识别失败时由 IMM32 提供 Tile 候选数据，绝不放行系统界面。代码不再调用 `ITfUIElement::Show(TRUE)`。
 - overlay 的显示 gate 只要求当前 `TextEditMenu` 对象仍存在并且 IME 处于 open 状态，不要求 `TextEditState::IsActive()` 为 true。这样用户把编辑文本删空、validator 暂时禁用 OK 按钮、或原版 edit state 短暂切换状态时，composition/candidate overlay 不会被误隐藏。
 - 当前菜单对象丢失、IME 关闭或预览配置关闭时只隐藏共享候选根，不修改 active text input 自身的 Tile。
 
@@ -969,6 +969,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 - `bMultibyteInputCompositionPreview=1` 时，composition、候选项和当前输入法名称显示在共享原生 Tile overlay，不修改 active text input 自身的 Tile。
 - 系统 candidate/composition UI 在多字节输入 hook 安装后始终隐藏。分别删除或破坏 `ImeOverlay.xml`、制造 Menu Code 冲突、关闭 `bMultibyteInputCompositionPreview`，均应确认系统候选窗不会出现；前两种情况只允许记录原生候选层不可用，提交结果仍应正常写入。
+- 在 MAPMO 中以 `M` 打开 MCM、再进入或退出 MCM Extender 搜索框：打开菜单的热键必须在 HIMC 已解绑状态下交给游戏，不能启动 composition 或系统候选窗；只有搜索目标被主循环确认后才能以当前 HKL 的默认 HIMC 开始新的输入会话。
 - `bMultibyteInputUseTSFCandidates=1` 时，优先测试 Microsoft Pinyin / Sogou / Japanese IME / Korean IME 下 TSF candidate UI 是否能返回候选；关闭该配置时再验证 `ImmGetCandidateListW` fallback。
 - Rime 后端如作为可选项，应测试组字期间吞键、commit-only 写入、候选翻页和 ASCII mode 切换。
 

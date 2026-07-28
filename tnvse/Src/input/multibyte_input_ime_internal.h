@@ -86,6 +86,8 @@ namespace fonthook
 			bool hidingSystemImeWindows = false;
 			std::atomic<ULONG_PTR> tsfInputWindow = 0;
 			bool gameImeEnabled = false;
+			bool gameImeContextDetached = false;
+			HWND detachedGameImeWindow = nullptr;
 			std::atomic_bool textInputSessionActive = false;
 			UInt32 textInputSessionGeneration = 1;
 			TextInputTarget currentTextInputTarget;

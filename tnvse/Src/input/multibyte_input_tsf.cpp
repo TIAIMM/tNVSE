@@ -166,12 +166,14 @@ namespace fonthook
 				const bool acceptsCandidates = s_imeComposing
 					&& hasOverlayTarget
 					&& candidateRegistered;
-				if (pbShow
-					&& *pbShow != FALSE
-					&& isCandidateElement)
-				{
+				// A text service is allowed to expose candidate/reading UI as a
+				// generic ITfUIElement without ITfCandidateListUIElement. MCM
+				// Extender's script-backed search triggers that path with some
+				// modern IMEs. Suppress every TSF-owned UI element; the interface
+				// test below is only for deciding whether candidate data can be
+				// mirrored into the native Tile overlay.
+				if (pbShow && *pbShow != FALSE)
 					*pbShow = FALSE;
-				}
 
 				if (!captureCandidates)
 					return S_OK;

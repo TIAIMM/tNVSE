@@ -434,25 +434,72 @@ namespace fonthook
 		{
 			if (!hwnd)
 				return;
-			if (State().gameImeEnabled == enable)
-				return;
-
-			// Change the state before calling IMM. Cancel can synchronously deliver
-			// IME messages, and those messages must observe the disabled state.
-			State().gameImeEnabled = enable;
 
 			if (enable)
 			{
+				ImeState& state = State();
+				// Never reuse the HIMC detached from a previous session. The
+				// keyboard layout may have changed while no target was active.
+				ImmAssociateContextEx(hwnd, nullptr, IACE_DEFAULT);
+				HIMC context = ImmGetContext(hwnd);
+				if (context)
+					ImmReleaseContext(hwnd, context);
+
+				if (!context)
+				{
+					state.gameImeEnabled = false;
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: failed to associate game IME context for active text target");
+					return;
+				}
+
+				state.gameImeEnabled = true;
+				state.gameImeContextDetached = false;
+				state.detachedGameImeWindow = nullptr;
 				RestoreDefaultGameImeContext(hwnd, "enable");
 				DebugLog("tnvse_multibyte_input: game IME context enabled");
 				return;
 			}
 
+			ImeState& state = State();
+			if (state.gameImeContextDetached
+				&& state.detachedGameImeWindow == hwnd)
+			{
+				HIMC context = ImmGetContext(hwnd);
+				if (!context)
+				{
+					state.gameImeEnabled = false;
+					return;
+				}
+				ImmReleaseContext(hwnd, context);
+				state.gameImeContextDetached = false;
+			}
+
+			// Publish the disabled state before IMM cancellation/association.
+			// Both operations can synchronously deliver IME messages.
+			state.gameImeEnabled = false;
 			CancelGameImeComposition(hwnd);
 			s_imeComposing = false;
 			ClearImePreviewState();
 			HideCandidateOverlay();
-			DebugLog("tnvse_multibyte_input: game IME input disabled; context retained");
+
+			ImmAssociateContext(hwnd, nullptr);
+			HIMC remaining = ImmGetContext(hwnd);
+			if (remaining)
+				ImmReleaseContext(hwnd, remaining);
+			if (remaining)
+			{
+				state.gameImeContextDetached = false;
+				state.detachedGameImeWindow = nullptr;
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: failed to detach game IME context while no text target is active");
+				return;
+			}
+
+			state.gameImeContextDetached = true;
+			state.detachedGameImeWindow = hwnd;
+			DebugLog(
+				"tnvse_multibyte_input: game IME input disabled; context detached");
 		}
 
 		void SetTextInputSessionActive(bool active)
@@ -486,7 +533,7 @@ namespace fonthook
 				SetGameImeEnabled(s_window, active);
 				if (active)
 				{
-					// Enabling the retained IMM context does not guarantee an
+					// Associating the current default IMM context does not guarantee an
 					// IMN_SETOPENSTATUS notification. Read it explicitly so a newly
 					// focused Stewie input shows the current IME status before typing.
 					RefreshImeStatus(s_window);
