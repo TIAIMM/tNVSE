@@ -28,6 +28,10 @@ namespace fonthook
 		constexpr SIZE_T kLevelUpMenuHandleKeyboardInputEntry = 0x1073D0C;
 		constexpr SIZE_T kRecipeMenuHandleKeyboardInputEntry = 0x10704BC;
 		constexpr SIZE_T kStartMenuHandleKeyboardInputEntry = 0x1076D4C;
+		// StartMenu::savesList is at +0x174; ListBox::parentTile is +0x0C.
+		// Stewie's SaveLoad search handler gates all input on
+		// savesList.IsEnabled(), which reads this Tile's _enabled trait.
+		constexpr UInt32 kStartMenuSavesListParentTileOffset = 0x180;
 
 		struct StewieMenuSearchHook
 		{
@@ -90,16 +94,70 @@ namespace fonthook
 			return menuID == Inventory || menuID == Stats || menuID == PipboyData;
 		}
 
-		bool IsAnyPipboySearchMenuVisible()
-		{
-			return IsGameMenuVisible(Inventory)
-				|| IsGameMenuVisible(Stats)
-				|| IsGameMenuVisible(PipboyData);
-		}
-
 		bool MenuSearchUsesInputField(UInt32 menuID)
 		{
 			return IsPipboySearchMenu(menuID);
+		}
+
+		UInt32 MenuSearchInputActiveTrait()
+		{
+			static const UInt32 trait = Tile::TraitNameToID("_IsActive");
+			return trait;
+		}
+
+		UInt32 MenuSearchEnabledTrait()
+		{
+			static const UInt32 trait = Tile::TraitNameToID("_enabled");
+			return trait;
+		}
+
+		bool TileTreeContains(Tile* root, Tile* target, UInt32 depth = 0);
+
+		bool IsStartMenuSaveListEnabled(Menu* menu)
+		{
+			if (!menu || MenuID(menu) != Pause)
+				return false;
+
+			__try
+			{
+				Tile* parent = *reinterpret_cast<Tile**>(
+					reinterpret_cast<UInt8*>(menu)
+					+ kStartMenuSavesListParentTileOffset);
+				Tile* root = MenuRoot(menu);
+				const UInt32 enabledTrait = MenuSearchEnabledTrait();
+				return parent
+					&& root
+					&& enabledTrait
+					&& TileTreeContains(root, parent)
+					&& parent->GetValueFloat(enabledTrait) > 0.5f;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		bool MenuSearchOwnerReportsActive(
+			const StewieMenuSearchHook& hook,
+			Menu* menu,
+			Tile* tile)
+		{
+			if (!tile)
+				return false;
+
+			if (MenuSearchUsesInputField(hook.menuID))
+			{
+				const UInt32 activeTrait = MenuSearchInputActiveTrait();
+				return activeTrait
+					&& tile->GetValueFloat(activeTrait) > 0.5f;
+			}
+
+			if (hook.menuID == Pause)
+				return IsStartMenuSaveListEnabled(menu);
+
+			// Plain SearchBar has no stable active trait. Its Ctrl+F/Ctrl+R
+			// handler plus the exact owning-menu lifetime remain authoritative.
+			return true;
 		}
 
 		StewieMenuSearchHook* FindMenuSearchHookByMenuID(UInt32 menuID)
@@ -127,7 +185,7 @@ namespace fonthook
 			hook.stateSyncDueTick = 0;
 		}
 
-		bool TileTreeContains(Tile* root, Tile* target, UInt32 depth = 0)
+		bool TileTreeContains(Tile* root, Tile* target, UInt32 depth)
 		{
 			if (!root || !target || depth > 64)
 				return false;
@@ -166,9 +224,7 @@ namespace fonthook
 			hook->root = nullptr;
 			hook->tile = nullptr;
 			hook->seenTick = 0;
-			hook->keyboardActive = false;
 			hook->targetReported = false;
-			ResetMenuSearchStateSync(*hook);
 			return nullptr;
 		}
 
@@ -191,6 +247,8 @@ namespace fonthook
 			const SInt32 dueInMs = hook.stateSyncPending
 				? static_cast<SInt32>(hook.stateSyncDueTick - GetTickCount())
 				: 0;
+			const bool ownerActive = MenuSearchOwnerReportsActive(
+				hook, menu, resolvedTile);
 			const SIZE_T currentHandler = hook.entry
 				? *reinterpret_cast<SIZE_T*>(hook.entry)
 				: 0;
@@ -200,7 +258,7 @@ namespace fonthook
 				"gameVisible=%u pipVisible=%u/%u/%u menu=0x%08X activeMenu=0x%08X activeMenuID=%u "
 				"root=0x%08X trackedRaw=0x%08X tracked=0x%08X fallback=0x%08X resolved=0x%08X "
 				"tileID=%u tileVisible=%.1f tileAlpha=%.1f keyboardActive=%u pending=%u action=%u "
-				"wasActive=%u dueInMs=%d installed=%u currentHandler=0x%08X expectedHandler=0x%08X "
+				"wasActive=%u dueInMs=%d ownerActive=%u installed=%u currentHandler=0x%08X expectedHandler=0x%08X "
 				"originalHandler=0x%08X string=\"%s\"",
 				stage ? stage : "unknown",
 				hook.name,
@@ -226,6 +284,7 @@ namespace fonthook
 				static_cast<UInt32>(hook.stateSyncAction),
 				hook.stateSyncWasActive ? 1 : 0,
 				dueInMs,
+				ownerActive ? 1 : 0,
 				hook.installed ? 1 : 0,
 				static_cast<UInt32>(currentHandler),
 				static_cast<UInt32>(hook.hook),
@@ -258,6 +317,12 @@ namespace fonthook
 		{
 			if (!tile)
 				return;
+
+			if ((hook.keyboardActive || hook.stateSyncPending)
+				&& (hook.root != root || hook.tile != tile))
+			{
+				DeactivateMenuSearch(hook, "tile_replaced", hook.tile);
+			}
 
 			hook.root = root;
 			hook.tile = tile;
@@ -560,6 +625,40 @@ namespace fonthook
 
 		void ProcessStewieMenuSearchPendingStateSync()
 		{
+			// The three Pip-Boy searches use Stewie's InputField. Its _IsActive
+			// trait is written only by InputField::SetActive(), so it is a stable
+			// lifecycle signal rather than a render-pass visibility detail. This
+			// also restores ownership if a still-active search tab becomes visible
+			// again after another Pip-Boy tab temporarily hid its menu object.
+			for (StewieMenuSearchHook& hook : s_menuSearchHooks)
+			{
+				if (!hook.installed
+					|| hook.stateSyncPending
+					|| hook.keyboardActive
+					|| !MenuSearchUsesInputField(hook.menuID)
+					|| !IsGameMenuVisible(hook.menuID))
+				{
+					continue;
+				}
+
+				Menu* menu = GetOpenMenu(hook.menuID);
+				Tile* searchTile = menu ? GetTrackedMenuSearchTile(menu) : nullptr;
+				if (!searchTile && menu)
+					searchTile = FindTileByID(MenuRoot(menu), kStewieMenuSearch_TextTile);
+				if (!MenuSearchOwnerReportsActive(hook, menu, searchTile))
+					continue;
+
+				hook.keyboardActive = true;
+				hook.targetReported = false;
+				ClearStewieInputState();
+				RefreshTextInputSessionForActiveTarget(
+					"menusearch_input_field_reactivate");
+				DebugLog(
+					"tnvse_multibyte_input_event: source=MainLoop action=menusearch_input_field_reactivate menu=%u tile=0x%08X",
+					hook.menuID,
+					reinterpret_cast<UInt32>(searchTile));
+			}
+
 			const bool needsMaintenance = std::any_of(std::begin(s_menuSearchHooks),
 				std::end(s_menuSearchHooks), [](const StewieMenuSearchHook& hook)
 				{
@@ -609,24 +708,35 @@ namespace fonthook
 					continue;
 				}
 
-				const bool hasSearchTile = HasMenuSearchTileForHotkey(menu);
-				if (!hasSearchTile
+				Tile* searchTile = GetTrackedMenuSearchTile(menu);
+				if (!searchTile)
+					searchTile = FindTileByID(MenuRoot(menu), kStewieMenuSearch_TextTile);
+				const bool hasSearchTile = searchTile != nullptr;
+				const bool ownerReportsActive =
+					MenuSearchOwnerReportsActive(hook, menu, searchTile);
+				if ((!hasSearchTile
+						|| (!hook.stateSyncWasActive && !ownerReportsActive))
 					&& static_cast<SInt32>(now - hook.stateSyncStartTick)
 						< static_cast<SInt32>(kStewieMenuSearchStateSyncTimeoutMs))
 				{
 					hook.stateSyncDueTick = now + kStewieMenuSearchStateSyncRetryMs;
 					DebugLog(
-						"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_retry_no_tile menu=%u retryInMs=%u",
+						"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_retry menu=%u hasTile=%u ownerActive=%u retryInMs=%u",
 						hook.menuID,
+						hasSearchTile ? 1 : 0,
+						ownerReportsActive ? 1 : 0,
 						static_cast<UInt32>(kStewieMenuSearchStateSyncRetryMs));
 					continue;
 				}
 
-				hook.keyboardActive = !hook.stateSyncWasActive && hasSearchTile;
+				hook.keyboardActive = !hook.stateSyncWasActive
+					&& hasSearchTile
+					&& ownerReportsActive;
 				DebugLog(
-					"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_apply menu=%u hasTile=%u activeAfter=%u",
+					"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_apply menu=%u hasTile=%u ownerActive=%u activeAfter=%u",
 					hook.menuID,
 					hasSearchTile ? 1 : 0,
+					ownerReportsActive ? 1 : 0,
 					hook.keyboardActive ? 1 : 0);
 				DebugLogMenuSearchState("sync_applied", hook, menu);
 				ResetMenuSearchStateSync(hook);
@@ -642,10 +752,6 @@ namespace fonthook
 
 				if (!IsGameMenuVisible(hook.menuID))
 				{
-					// Pip-Boy menu objects remain allocated while tabs change.
-					if (IsPipboySearchMenu(hook.menuID) && IsAnyPipboySearchMenuVisible())
-						continue;
-
 					DeactivateMenuSearch(hook, "menu_hidden");
 					continue;
 				}
@@ -665,10 +771,31 @@ namespace fonthook
 					DeactivateMenuSearch(hook, "tile_missing");
 					continue;
 				}
-				// SearchBar::SetVisible is a render/update detail. Stewie's
-				// Ctrl+F/Ctrl+R handler and menu lifetime own IsSearchMode;
-				// treating a transient visible/alpha value as deactivation
-				// makes the IME session alternate on consecutive frames.
+
+				if (MenuSearchOwnerReportsActive(hook, menu, searchTile))
+				{
+					continue;
+				}
+
+				if (MenuSearchUsesInputField(hook.menuID))
+				{
+					// _IsActive comes from InputField::SetActive(), including
+					// Enter and Pip-Boy-close paths, and does not participate in
+					// the visibility flicker that affected the old implementation.
+					DeactivateMenuSearch(hook, "input_field_inactive", searchTile);
+					continue;
+				}
+
+				if (hook.menuID == Pause)
+				{
+					// StartMenu remains visible after leaving Save/Load. The
+					// saves-list _enabled trait is the same source Stewie checks
+					// before accepting search input, so close the IME as soon as
+					// that owning subpage is no longer active.
+					DeactivateMenuSearch(
+						hook, "startmenu_save_list_inactive", searchTile);
+					continue;
+				}
 			}
 		}
 

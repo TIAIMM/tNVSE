@@ -236,6 +236,38 @@ namespace fonthook
 				&& lhs.inputField == rhs.inputField;
 		}
 
+		bool IsStewMenuTextTarget(const StewieInputTarget& target)
+		{
+			return target.valid
+				&& (target.kind == StewieInputKind::StewMenuSearch
+					|| target.kind == StewieInputKind::StewMenuStringSubsetting);
+		}
+
+		void DeactivateObservedStewMenuTarget(const char* reason)
+		{
+			const StewieInputTarget observedTarget = s_observedStewTarget;
+			const StewieInputTarget oldTarget = IsStewMenuTextTarget(observedTarget)
+				? observedTarget
+				: s_stewieShadow.target;
+			const bool hadActiveTarget = IsStewMenuTextTarget(observedTarget)
+				|| (s_stewieShadow.initialized
+					&& IsStewMenuTextTarget(s_stewieShadow.target));
+
+			s_lastStewTargetPollTick = 0;
+			s_observedStewTarget = {};
+			if (!hadActiveTarget)
+				return;
+
+			ClearStewieInputState();
+			EndStewieTextInputSession(reason);
+			DebugLog(
+				"tnvse_multibyte_input_event: source=MainLoop action=stewmenu_deactivate reason=%s kind=%u menu=0x%08X tile=0x%08X",
+				reason ? reason : "unknown",
+				static_cast<UInt32>(oldTarget.kind),
+				reinterpret_cast<UInt32>(oldTarget.menu),
+				reinterpret_cast<UInt32>(oldTarget.tile));
+		}
+
 		bool IsStewieTweaksAvailable()
 		{
 			if (!g_bMultibyteInputStewieTweaks || !g_cmdTableInterface)
@@ -1048,6 +1080,7 @@ namespace fonthook
 					if (StewieInputTarget activatedTarget = FindStewMenuTarget(menu);
 						activatedTarget.valid)
 					{
+						s_observedStewTarget = activatedTarget;
 						EnsureStewieShadow(activatedTarget);
 						RefreshTextInputSessionForActiveTarget("stewmenu_target_activated");
 						DebugLog(
@@ -1058,6 +1091,8 @@ namespace fonthook
 				return handled;
 			}
 
+			if (MenuID(menu) == kMenuType_StewMenu)
+				s_observedStewTarget = target;
 			EnsureStewieShadow(target);
 			if (FilterGameInput(
 					input,
@@ -1194,8 +1229,7 @@ namespace fonthook
 		{
 			if (!g_bMultibyteInputStewieTweaks)
 			{
-				s_lastStewTargetPollTick = 0;
-				s_observedStewTarget = {};
+				DeactivateObservedStewMenuTarget("stewmenu_adapter_disabled");
 				return;
 			}
 
@@ -1205,8 +1239,7 @@ namespace fonthook
 			Menu* stewMenu = GetOpenMenu(kMenuType_StewMenu);
 			if (!stewMenu)
 			{
-				s_lastStewTargetPollTick = 0;
-				s_observedStewTarget = {};
+				DeactivateObservedStewMenuTarget("stewmenu_closed");
 				return;
 			}
 
@@ -1226,7 +1259,7 @@ namespace fonthook
 			const StewieInputTarget target = FindStewMenuTarget(stewMenu);
 			if (!target.valid)
 			{
-				s_observedStewTarget = {};
+				DeactivateObservedStewMenuTarget("stewmenu_target_inactive");
 				return;
 			}
 

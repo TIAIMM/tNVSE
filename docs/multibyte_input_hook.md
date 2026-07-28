@@ -663,8 +663,10 @@ hook 策略：
 - StewMenu 是自定义菜单，目标校验使用虚函数 `Menu::GetID()` 返回的 `1069`，不要用原版菜单常用的 `uiID` 字段假设。
 - StewMenu 的 handler 由菜单实例 vtable `+0x30` 动态定位，菜单打开后链式替换；不是写死一个全局原版地址。
 - StewMenu 搜索框和字符串子设置都优先从菜单对象内的 `InputField` 反查 active 状态和 `inputType`。搜索框 id `5` 反查失败时才回退到 root `_IsSearchActive` / tile `_IsActive`；字符串子设置 id `103` 会在列表项模板中重复出现，必须反查到 active `InputField` 且 `inputType == 0` 才接管。
+- 主循环以 50 ms 间隔观察 StewMenu 的真实 `InputField` 状态；菜单对象消失，或搜索/字符串子设置的 active 状态关闭时，会同时清除 shadow、composition/candidate 快照、输入会话和原生 Tile 候选层，而不是只丢弃观察指针。由键盘 handler 刚激活的目标也会立即写入观察状态，因此在下一次轮询前关闭菜单不会留下悬空 IME 会话。
 - `Ctrl` 组合键直接链回 Stewie original，并清掉 tNVSE shadow，保留 `Ctrl-F`、`Ctrl-R` 等 Stewie 原行为。
-- MenuSearch 的会话状态以已经链回 Stewie 且返回 handled 的 `Ctrl-F`/`Ctrl-R` 结果为准，并在菜单关闭、菜单对象消失或搜索 Tile 被真正替换时结束。搜索 Tile 的 `visible`/`alpha` 是 Stewie 刷新筛选和 Gamebryo pass 可能瞬时改写的渲染 trait，只用于诊断，不能作为每帧输入会话存活条件；否则 composition 开始后一次瞬时 `visible=0` 就会触发 target 丢失、候选层隐藏和下一帧重新激活，形成高频闪烁。
+- MenuSearch 的会话状态以已经链回 Stewie 且返回 handled 的 `Ctrl-F`/`Ctrl-R` 结果为准，并在菜单关闭、菜单对象消失或搜索 Tile 被真正替换时结束。Inventory、Stats、Map 使用 Stewie `InputField::SetActive()` 写入的 `_IsActive` 作为稳定关闭判据；Pip-Boy 页切走时按该页自身的菜单可见性结束，返回仍处于 active 的搜索页时再从 `_IsActive` 恢复接管。
+- Save/Load 搜索属于仍常驻的 `StartMenu (1013)`，离开保存/读取子页后不能用 StartMenu 可见性判断。tNVSE 按 Stewie 9.90+ 的同一布局读取 `StartMenu::savesList`（`+0x174`）的 `ListBox::parentTile`（合计 `+0x180`），并使用 Stewie `savesList.IsEnabled()` 等价的 `_enabled` trait 结束会话。搜索 Tile 的 `visible`/`alpha` 仍只用于诊断，不参与存活判定；这样列表刷新时的瞬时渲染 trait 改写不会重新引入候选层高频闪烁。
 
 `StewMenu::subSettingInput` 使用 Stewie 自己的 `InputField`，当前按 Stewie 9.90+ 源码布局只读判断：
 
@@ -916,7 +918,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - StewMenu 中 `Ctrl-F` 打开搜索，输入中文后候选选择只提交汉字，拼音/假名预编辑串不残留。
 - StewMenu 搜索框中 Backspace/Delete/Left/Right/Home/End 不拆分多字节字符，`Ctrl-R` 清空仍走 Stewie 原逻辑。
 - StewMenu 字符串子设置输入只在 string 输入项启用；数字、浮点、十六进制、Hotkey 子设置仍由 Stewie 原逻辑处理。
-- Inventory、Stats、Map、Container、Barter、LevelUp、Recipe、Save/Load 的 Stewie MenuSearch 搜索框能输入当前 codepage 多字节文本，关闭搜索和刷新列表行为保持 Stewie 原样。
+- Inventory、Stats、Map、Container、Barter、LevelUp、Recipe、Save/Load 的 Stewie MenuSearch 搜索框能输入当前 codepage 多字节文本；关闭 Tweak 搜索/字符串设置、切走 Pip-Boy 搜索页、关闭普通搜索菜单或离开 StartMenu 保存/读取子页后，状态行、composition 和候选项在同一主循环收尾中隐藏，且 IME context 不再保持输入态。
 - 英文 ASCII 输入不出现 WndProc + Stewie handler 双插入，Win+Space 切换输入法后仍能在 Stewie 搜索框中 commit 多字节字符。
 
 ### MCM Extender
