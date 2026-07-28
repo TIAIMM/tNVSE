@@ -23,10 +23,16 @@ namespace fonthook::vectorfont
 	{
 		constexpr UInt32 kMaximumCandidatesPerBatch = 32768;
 		constexpr UInt32 kMaximumGlyphsPerBatch = 4096;
-		constexpr UInt32 kMaximumIncrementalGlyphsPerBatch = 512;
-		constexpr UInt32 kMinimumIncrementalGlyphsPerBatch = 32;
-		constexpr ULONGLONG kTargetPrewarmStepMs = 8;
+		constexpr UInt32 kMaximumIncrementalGlyphsPerBatch = 1024;
+		constexpr UInt32 kInitialIncrementalGlyphsPerBatch = 128;
+		constexpr UInt32 kParallelGlyphBatchFloor =
+			kFillPrewarmParallelThreshold;
+		constexpr ULONGLONG kTargetPrewarmBatchMs = 250;
+		constexpr ULONGLONG kMinimumProgressUpdateIntervalMs = 100;
+		constexpr size_t kMinimumPrewarmBatchBytes = 1u * 1024u * 1024u;
 		constexpr size_t kMaximumPrewarmBatchBytes = 24u * 1024u * 1024u;
+		constexpr size_t kPrewarmPerGlyphMetadataBytes = 512u;
+		constexpr size_t kPrewarmPerWorkerFixedBytes = 256u * 1024u;
 		void UpdatePrewarmProgress(const std::wstring& detail,
 			const std::wstring& stage, float progress)
 		{
@@ -52,6 +58,7 @@ namespace fonthook::vectorfont
 			UInt32 sdfGlyphCount = 0;
 			UInt32 targetUnitCount = 0;
 			UInt32 rasterScaleMilli = 0;
+			UInt8 dependencyDeferrals = 0;
 		};
 
 		std::deque<PrewarmJob> s_jobs;
@@ -82,8 +89,14 @@ namespace fonthook::vectorfont
 			bool aggressiveComposite = false;
 			bool sharedDoubleAlias = false;
 			UInt32 sdfSpread = 0;
-			UInt32 batchGlyphLimit = kMinimumIncrementalGlyphsPerBatch;
+			UInt32 batchGlyphLimit = kInitialIncrementalGlyphsPerBatch;
 			UInt32 maximumBatchGlyphLimit = kMaximumIncrementalGlyphsPerBatch;
+			UInt32 parallelBatchFloor = kParallelGlyphBatchFloor;
+			UInt32 metricsOnlyBatchGlyphLimit = kMaximumGlyphsPerBatch;
+			size_t estimatedRetainedBytesPerGlyph = 1;
+			size_t estimatedTransientBytesPerWorker = 1;
+			size_t estimatedPeakBatchBytes = 1;
+			size_t targetBatchBytes = kMinimumPrewarmBatchBytes;
 			UInt32 allocationRetries = 0;
 			bool exhausted = false;
 			bool failed = false;
@@ -114,6 +127,11 @@ namespace fonthook::vectorfont
 			UInt32 readyConfiguredRuntimes = 0;
 			ULONGLONG started = 0;
 			ULONGLONG maximumStepMs = 0;
+			ULONGLONG scanMs = 0;
+			ULONGLONG rasterMs = 0;
+			ULONGLONG streamMs = 0;
+			ULONGLONG lastProgressUpdate = 0;
+			UInt32 peakBatchGlyphs = 0;
 			bool everyConfiguredJobCompleted = false;
 			bool everyConfiguredProfileVerified = false;
 			bool atlasOnlyTransactionStarted = false;
@@ -181,6 +199,53 @@ namespace fonthook::vectorfont
 				&& job.codePage == GetFreeTypeTextCodePage();
 		}
 
+		bool IsPrewarmJobDoubleByteAlias(const PrewarmJob& job)
+		{
+			const FontConfig* config = FindConfig(job.fontId);
+			return config
+				&& job.route == FontAtlasRoute::ShaderDistanceField
+				&& IsMtsdfAtlasAlias(
+					*config, VectorFontByteClass::DoubleByte);
+		}
+
+		void SortPrewarmJobsByDependencies(std::deque<PrewarmJob>& jobs)
+		{
+			if (jobs.size() < 2)
+				return;
+			std::vector<PrewarmJob> ordered;
+			ordered.reserve(jobs.size());
+			while (!jobs.empty())
+			{
+				ordered.push_back(std::move(jobs.front()));
+				jobs.pop_front();
+			}
+			std::stable_sort(ordered.begin(), ordered.end(),
+				[](const PrewarmJob& left, const PrewarmJob& right)
+				{
+					const bool leftAlias =
+						IsPrewarmJobDoubleByteAlias(left);
+					const bool rightAlias =
+						IsPrewarmJobDoubleByteAlias(right);
+					if (leftAlias != rightAlias)
+						return !leftAlias;
+					const FontConfig* leftConfig =
+						FindConfig(left.fontId);
+					const FontConfig* rightConfig =
+						FindConfig(right.fontId);
+					const UInt32 leftOwner = leftAlias && leftConfig
+						? leftConfig->mtsdfDoubleByteOwnerFontId
+						: left.fontId;
+					const UInt32 rightOwner = rightAlias && rightConfig
+						? rightConfig->mtsdfDoubleByteOwnerFontId
+						: right.fontId;
+					return leftOwner != rightOwner
+						? leftOwner < rightOwner
+						: left.fontId < right.fontId;
+				});
+			for (PrewarmJob& job : ordered)
+				jobs.push_back(std::move(job));
+		}
+
 		bool NextEncodedUnit(PrewarmJob& job, std::array<char, 2>& bytes,
 			size_t& length)
 		{
@@ -207,6 +272,22 @@ namespace fonthook::vectorfont
 			job.sdfGlyphCount = 0;
 			job.rasterScaleMilli = rasterScaleMilli;
 			job.targetUnitCount = 0;
+		}
+
+		PrewarmJob BuildQueuedPrewarmJob(UInt32 fontId,
+			const FontConfig& config, FontAtlasRoute route, UInt64 profileKey)
+		{
+			PrewarmJob job;
+			job.fontId = fontId;
+			job.profileKey = profileKey;
+			job.layoutHash = config.layoutHash;
+			job.maskGenerationHash = config.maskGenerationHash;
+			job.shaderEffectHash = config.shaderEffectHash;
+			job.codePage = GetFreeTypeTextCodePage();
+			job.route = route;
+			job.prewarmRange = ResolveFontPrewarmRange(config);
+			ResetPrewarmScan(job, 0);
+			return job;
 		}
 
 		void PreparePrewarmScanForGeneration(PrewarmJob& job,
@@ -236,10 +317,70 @@ namespace fonthook::vectorfont
 				? left + right : std::numeric_limits<size_t>::max();
 		}
 
-		UInt32 ResolvePrewarmGlyphBatchLimit(const FontConfig& config,
-			float rasterScale, bool shaderSdf, UInt32 sdfSpread)
+		struct PrewarmBatchPolicy
 		{
-			size_t worstBytes = 1;
+			UInt32 initialGlyphs = 1;
+			UInt32 maximumGlyphs = 1;
+			UInt32 parallelFloor = 1;
+			size_t estimatedRetainedBytesPerGlyph = 1;
+			size_t estimatedTransientBytesPerWorker = 1;
+			size_t estimatedPeakBytes = 1;
+			size_t targetBytes = kMinimumPrewarmBatchBytes;
+		};
+
+		size_t EstimatePrewarmBatchBytes(UInt32 glyphs,
+			UInt32 workItemsPerGlyph, bool expensiveWork,
+			size_t retainedBytesPerGlyph,
+			size_t transientBytesPerWorker)
+		{
+			const size_t workItems = SaturatingMultiply(
+				glyphs, std::max<UInt32>(1, workItemsPerGlyph));
+			const size_t parallelThreshold =
+				expensiveWork
+					? kExpensivePrewarmParallelThreshold
+					: kFillPrewarmParallelThreshold;
+			const size_t usefulWorkers = expensiveWork
+				? workItems
+				: (workItems + kFillPrewarmWorkChunk - 1u)
+					/ kFillPrewarmWorkChunk;
+			const size_t workers = workItems < parallelThreshold
+				? 1u : std::min<size_t>(
+					usefulWorkers, kMaximumPrewarmRasterWorkers);
+			return SaturatingAdd(
+				SaturatingMultiply(glyphs, retainedBytesPerGlyph),
+				SaturatingMultiply(workers,
+					transientBytesPerWorker));
+		}
+
+		UInt32 ResolveMemoryBoundedGlyphLimit(size_t targetBytes,
+			UInt32 workItemsPerGlyph, bool expensiveWork,
+			size_t retainedBytesPerGlyph,
+			size_t transientBytesPerWorker)
+		{
+			UInt32 resolved = 1;
+			for (UInt32 glyphs = 1;
+				glyphs <= kMaximumIncrementalGlyphsPerBatch; ++glyphs)
+			{
+				if (EstimatePrewarmBatchBytes(
+						glyphs, workItemsPerGlyph, expensiveWork,
+						retainedBytesPerGlyph,
+						transientBytesPerWorker) > targetBytes)
+				{
+					break;
+				}
+				resolved = glyphs;
+			}
+			return resolved;
+		}
+
+		PrewarmBatchPolicy ResolvePrewarmBatchPolicy(
+			const FontConfig& config, float rasterScale, bool shaderSdf,
+			bool aggressiveComposite, UInt32 sdfSpread)
+		{
+			size_t worstRetainedBytes = 1;
+			size_t worstTransientBytes = 1;
+			UInt32 workItemsPerGlyph = 1;
+			bool expensiveWork = shaderSdf || aggressiveComposite;
 			for (const ByteStyle& style : config.styles)
 			{
 				const size_t bodyWidth = static_cast<size_t>(std::max(1.0f,
@@ -277,32 +418,134 @@ namespace fonthook::vectorfont
 				const size_t expansion = static_cast<size_t>(std::ceil(effectRadius)) * 2u + 2u;
 				const size_t width = bodyWidth + expansion;
 				const size_t height = bodyHeight + expansion;
-				size_t masks = 1;
-				if (!shaderSdf)
-					masks += (config.shadow.enabled ? 1u : 0u)
-						+ (config.glow.enabled ? 1u : 0u)
-						+ (config.outline.enabled ? 1u : 0u);
-				size_t bytes = SaturatingMultiply(
-					SaturatingMultiply(width, height), masks);
-				if (!shaderSdf && masks > 1)
-				{
-					// Distance-aware CPU effects use one transient float
-					// chamfer field while retaining the result masks.
-					bytes = SaturatingAdd(bytes, SaturatingMultiply(
-						SaturatingMultiply(width, height), 4u));
-				}
+				const size_t effectCount =
+					(config.shadow.enabled ? 1u : 0u)
+					+ (config.glow.enabled ? 1u : 0u)
+					+ (config.outline.enabled ? 1u : 0u);
+				size_t retainedBytesPerPixel = 1;
+				size_t transientBytesPerPixel = 1;
+				size_t estimatedWidth = width;
+				size_t estimatedHeight = height;
 				if (shaderSdf)
-					bytes = SaturatingMultiply(bytes,
-						DistanceFieldBytesPerPixel(
-							GetConfiguredDistanceFieldMethod()));
-				worstBytes = std::max(worstBytes, bytes);
+				{
+					// The whole batch retains only the quantized result. At most
+					// one float field per active worker coexists with those results.
+					const size_t channels = DistanceFieldBytesPerPixel(
+						GetConfiguredDistanceFieldMethod());
+					retainedBytesPerPixel = channels;
+					transientBytesPerPixel =
+						channels * sizeof(float);
+				}
+				else if (aggressiveComposite)
+				{
+					// One BGRA result survives per glyph. A worker can also hold
+					// body/effect masks plus the other BGRA target while tight
+					// alpha-bound cropping swaps the final result into place.
+					retainedBytesPerPixel = 4u;
+					transientBytesPerPixel =
+						1u + effectCount + 4u;
+					if (config.shadow.enabled)
+					{
+						estimatedWidth = SaturatingAdd(estimatedWidth,
+							static_cast<size_t>(std::ceil(
+								std::abs(config.shadow.x) * rasterScale)));
+						estimatedHeight = SaturatingAdd(estimatedHeight,
+							static_cast<size_t>(std::ceil(
+								std::abs(config.shadow.y) * rasterScale)));
+					}
+				}
+				else
+				{
+					// Fill and enabled effect results remain live for the batch.
+					// Only the currently executing effect in each worker owns an
+					// extra rendered body and four-byte chamfer field.
+					retainedBytesPerPixel = 1u + effectCount;
+					transientBytesPerPixel =
+						effectCount ? 1u + sizeof(float) : 1u;
+					workItemsPerGlyph = std::max<UInt32>(
+						workItemsPerGlyph,
+						static_cast<UInt32>(1u + effectCount));
+					expensiveWork = expensiveWork || effectCount != 0;
+				}
+				const size_t pixels = SaturatingMultiply(
+					estimatedWidth, estimatedHeight);
+				const size_t retainedBytes = SaturatingAdd(
+					SaturatingMultiply(pixels,
+						retainedBytesPerPixel),
+					kPrewarmPerGlyphMetadataBytes);
+				const size_t transientBytes = SaturatingAdd(
+					SaturatingMultiply(pixels,
+						transientBytesPerPixel),
+					kPrewarmPerWorkerFixedBytes);
+				worstRetainedBytes = std::max(
+					worstRetainedBytes, retainedBytes);
+				worstTransientBytes = std::max(
+					worstTransientBytes, transientBytes);
 			}
 			const size_t configuredBudget = GetCpuMemoryBudget();
-			const size_t targetBytes = std::max<size_t>(4u * 1024u * 1024u,
+			const size_t configuredTarget = std::max(
+				kMinimumPrewarmBatchBytes,
 				std::min(kMaximumPrewarmBatchBytes, configuredBudget / 8u));
-			const size_t resolved = worstBytes ? targetBytes / worstBytes : 1;
-			return static_cast<UInt32>(std::clamp<size_t>(resolved, 1,
-				kMaximumGlyphsPerBatch));
+			const size_t currentUsage = GetCpuMemoryUsage();
+			const size_t currentHeadroom = currentUsage < configuredBudget
+				? configuredBudget - currentUsage : 0;
+			// The batch policy is resolved before its first streamed role page is
+			// allocated. Reserve that future address-space footprint before
+			// assigning half of the remaining headroom to raster outputs.
+			const size_t streamingBytesPerPixel =
+				(shaderSdf && UsesMtsdfDistanceField())
+					|| aggressiveComposite ? 4u : 1u;
+			const size_t streamingReserve = SaturatingMultiply(
+				2048u * 2048u, streamingBytesPerPixel);
+			const size_t usableHeadroom = currentHeadroom > streamingReserve
+				? currentHeadroom - streamingReserve : currentHeadroom / 4u;
+			const size_t headroomTarget = std::max(
+				kMinimumPrewarmBatchBytes, usableHeadroom / 2u);
+			const size_t targetBytes = std::min(
+				configuredTarget, headroomTarget);
+			PrewarmBatchPolicy policy;
+			policy.maximumGlyphs = ResolveMemoryBoundedGlyphLimit(
+				targetBytes, workItemsPerGlyph, expensiveWork,
+				worstRetainedBytes, worstTransientBytes);
+			policy.parallelFloor = std::min(
+				policy.maximumGlyphs, kParallelGlyphBatchFloor);
+			policy.initialGlyphs = std::min(
+				policy.maximumGlyphs,
+				std::max(policy.parallelFloor,
+					kInitialIncrementalGlyphsPerBatch));
+			policy.estimatedRetainedBytesPerGlyph =
+				worstRetainedBytes;
+			policy.estimatedTransientBytesPerWorker =
+				worstTransientBytes;
+			policy.estimatedPeakBytes = EstimatePrewarmBatchBytes(
+				policy.maximumGlyphs, workItemsPerGlyph,
+				expensiveWork, worstRetainedBytes,
+				worstTransientBytes);
+			policy.targetBytes = targetBytes;
+			return policy;
+		}
+
+		UInt32 ResolveNextPrewarmBatchLimit(UInt32 current, UInt32 maximum,
+			UInt32 parallelFloor, UInt32 completedGlyphs, ULONGLONG elapsedMs)
+		{
+			if (!current || !maximum)
+				return 1;
+			const UInt32 lower = std::min(maximum,
+				std::max(parallelFloor, std::max<UInt32>(1, current / 2u)));
+			const UInt32 upper = std::min(maximum,
+				current > maximum / 2u ? maximum : current * 2u);
+			UInt32 desired = upper;
+			if (elapsedMs && completedGlyphs)
+			{
+				const double scaled =
+					static_cast<double>(completedGlyphs)
+					* static_cast<double>(kTargetPrewarmBatchMs)
+					/ static_cast<double>(elapsedMs);
+				desired = static_cast<UInt32>(std::clamp<double>(
+					std::round(scaled), 1.0,
+					static_cast<double>(maximum)));
+			}
+			return std::clamp(desired, lower, std::max(lower, upper));
 		}
 
 		float GetPrewarmJobProgress(const PrewarmJob& job)
@@ -316,7 +559,7 @@ namespace fonthook::vectorfont
 
 		void ReportPrewarmProgress(const PrewarmJob& job, UInt32 fontOrdinal,
 			UInt32 fontCount, UInt32 finishedFonts, const wchar_t* stage,
-			float minimumJobProgress = 0.0f)
+			float minimumJobProgress = 0.0f, bool force = false)
 		{
 			wchar_t detail[160] = {};
 			const wchar_t* renderMode =
@@ -332,6 +575,14 @@ namespace fonthook::vectorfont
 			const float overall = fontCount
 				? (static_cast<float>(finishedFonts) + jobProgress) / fontCount
 				: 1.0f;
+			const ULONGLONG now = GetTickCount64();
+			if (!force && s_session.lastProgressUpdate
+				&& now - s_session.lastProgressUpdate
+					< kMinimumProgressUpdateIntervalMs)
+			{
+				return;
+			}
+			s_session.lastProgressUpdate = now;
 			UpdatePrewarmProgress(detail, stage ? stage : L"Preparing glyphs...", overall);
 		}
 
@@ -393,6 +644,8 @@ namespace fonthook::vectorfont
 
 		const FontAtlasRoute route = GetPersistentFontCacheRoute();
 		const UInt64 key = BuildProfileKey(*config, route);
+		PrewarmJob job = BuildQueuedPrewarmJob(
+			fontId, *config, route, key);
 		if (!s_scheduledProfiles.insert(key).second)
 		{
 			const auto shared = std::find_if(s_jobs.begin(), s_jobs.end(),
@@ -402,25 +655,27 @@ namespace fonthook::vectorfont
 				});
 			if (shared != s_jobs.end())
 			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm profile alias font=%u owner=%u",
-					fontId, shared->fontId);
+				if (IsPrewarmJobDoubleByteAlias(*shared)
+					&& !IsPrewarmJobDoubleByteAlias(job))
+				{
+					const UInt32 replacedFontId = shared->fontId;
+					*shared = std::move(job);
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: prewarm profile owner preferred font=%u replacedAlias=%u",
+						fontId, replacedFontId);
+				}
+				else
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: prewarm profile alias font=%u owner=%u",
+						fontId, shared->fontId);
+				}
 			}
 			return;
 		}
 
-		PrewarmJob job;
-		job.fontId = fontId;
-		job.profileKey = key;
-		job.layoutHash = config->layoutHash;
-		job.maskGenerationHash = config->maskGenerationHash;
-		job.shaderEffectHash = config->shaderEffectHash;
-		job.codePage = GetFreeTypeTextCodePage();
-		job.route = route;
-		job.prewarmRange = ResolveFontPrewarmRange(*config);
 		const FontPrewarmRange prewarmRange = job.prewarmRange;
 		const UInt32 codePage = job.codePage;
-		ResetPrewarmScan(job, 0);
 		s_jobs.push_back(std::move(job));
 		SetBitmapCacheReducedAfterPrewarm(false);
 		gLog.FormattedMessage(
@@ -528,7 +783,7 @@ namespace fonthook::vectorfont
 		void PrepareIncrementalSession()
 		{
 			const FontAtlasRoute finalRoute = GetPersistentFontCacheRoute();
-			std::unordered_set<UInt64> reboundProfiles;
+			std::deque<PrewarmJob> reboundJobs;
 			while (!s_jobs.empty())
 			{
 				PrewarmJob job = std::move(s_jobs.front());
@@ -538,6 +793,17 @@ namespace fonthook::vectorfont
 					continue;
 				job.route = finalRoute;
 				job.profileKey = BuildProfileKey(*config, finalRoute);
+				reboundJobs.push_back(std::move(job));
+			}
+			// The final render route can merge profiles that were distinct when
+			// first queued. Sort before deduplication so a physical MTSDF owner is
+			// never discarded in favor of one of its dependent aliases.
+			SortPrewarmJobsByDependencies(reboundJobs);
+			std::unordered_set<UInt64> reboundProfiles;
+			while (!reboundJobs.empty())
+			{
+				PrewarmJob job = std::move(reboundJobs.front());
+				reboundJobs.pop_front();
 				if (!reboundProfiles.insert(job.profileKey).second)
 				{
 					gLog.FormattedMessage(
@@ -547,6 +813,7 @@ namespace fonthook::vectorfont
 				}
 				s_session.restoreJobs.push_back(std::move(job));
 			}
+			SortPrewarmJobsByDependencies(s_session.restoreJobs);
 			s_scheduledProfiles = reboundProfiles;
 			if (s_session.restoreJobs.empty())
 			{
@@ -567,10 +834,10 @@ namespace fonthook::vectorfont
 			s_session.maximumStepMs = 0;
 
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: incremental streamed prewarm begin fonts=%u scale=%.3f batchTargetMiB=%.2f targetStepMs=%llu",
+				"tnvse_freetype_font: incremental streamed prewarm begin fonts=%u scale=%.3f maximumBatchMiB=%.2f targetBatchMs=%llu strategy=bounded-throughput",
 				s_session.queuedFonts, s_session.rasterScale,
 				kMaximumPrewarmBatchBytes / (1024.0 * 1024.0),
-				static_cast<unsigned long long>(kTargetPrewarmStepMs));
+				static_cast<unsigned long long>(kTargetPrewarmBatchMs));
 			TransitionPrewarmPhase(PrewarmPhase::RestoreSnapshots);
 		}
 
@@ -578,6 +845,8 @@ namespace fonthook::vectorfont
 		{
 			if (s_session.restoreJobs.empty())
 			{
+				SortPrewarmJobsByDependencies(
+					s_session.generationJobs);
 				TransitionPrewarmPhase(s_session.generationJobs.empty()
 					? PrewarmPhase::CleanupFlush
 					: PrewarmPhase::BeginFont);
@@ -604,26 +873,23 @@ namespace fonthook::vectorfont
 			}
 
 			bool snapshotReady = false;
-			if (g_bEnableFreeTypeDefaultPoolAtlas)
+			try
 			{
-				try
-				{
-					snapshotReady =
-						TryLoadGloballyRepackedGlyphAtlasSnapshot(
-							*runtime, s_session.rasterScale);
-				}
-				catch (const std::bad_alloc&)
-				{
-					gLog.FormattedMessage(
-						"tnvse_freetype_font: snapshot restore allocation failed font=%u scale=%.3f; regenerating with bounded batches",
-						job.fontId, s_session.rasterScale);
-				}
-				catch (...)
-				{
-					gLog.FormattedMessage(
-						"tnvse_freetype_font: snapshot restore raised an unexpected exception font=%u; regenerating",
-						job.fontId);
-				}
+				snapshotReady =
+					TryLoadGloballyRepackedGlyphAtlasSnapshot(
+						*runtime, s_session.rasterScale);
+			}
+			catch (const std::bad_alloc&)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: snapshot restore allocation failed font=%u scale=%.3f; regenerating with bounded batches",
+					job.fontId, s_session.rasterScale);
+			}
+			catch (...)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: snapshot restore raised an unexpected exception font=%u; regenerating",
+					job.fontId);
 			}
 			if (snapshotReady
 				&& job.route == FontAtlasRoute::ArgbFallback
@@ -712,13 +978,50 @@ namespace fonthook::vectorfont
 			active.sharedDoubleAlias = active.shaderSdf
 				&& IsMtsdfAtlasAlias(
 					*config, VectorFontByteClass::DoubleByte);
+			if (active.sharedDoubleAlias)
+			{
+				ReportPrewarmProgress(
+					active.job,
+					std::min(s_session.queuedFonts,
+						s_session.finishedFonts + 1),
+					s_session.queuedFonts,
+					s_session.finishedFonts,
+					L"Reusing shared MTSDF double-byte atlas...",
+					0.0f, true);
+			}
 			if (active.sharedDoubleAlias
 				&& !TryLoadGloballyRepackedGlyphAtlasSnapshotRole(
 					*runtime, VectorFontByteClass::DoubleByte,
 					s_session.rasterScale))
 			{
+				const FontConfig* owner = FindConfig(
+					config->mtsdfDoubleByteOwnerFontId);
+				const UInt64 ownerProfileKey = owner
+					? BuildProfileKey(*owner, active.job.route) : 0;
+				const bool ownerPending = ownerProfileKey
+					&& std::any_of(
+						s_session.generationJobs.begin(),
+						s_session.generationJobs.end(),
+						[&](const PrewarmJob& pending)
+						{
+							return pending.profileKey
+								== ownerProfileKey;
+						});
+				if (ownerPending
+					&& active.job.dependencyDeferrals < 2)
+				{
+					++active.job.dependencyDeferrals;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: shared distance-field double-byte role unavailable font=%u owner=%u; requeued behind pending owner attempt=%u",
+						active.job.fontId,
+						config->mtsdfDoubleByteOwnerFontId,
+						active.job.dependencyDeferrals);
+					s_session.generationJobs.push_back(
+						std::move(active.job));
+					return;
+				}
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: shared distance-field double-byte role unavailable font=%u owner=%u; deferring alias atlas",
+					"tnvse_freetype_font: shared distance-field double-byte role unavailable font=%u owner=%u; owner is not pending",
 					active.job.fontId,
 					config->mtsdfDoubleByteOwnerFontId);
 				FinishJob(active.job, "shared-role-unavailable");
@@ -727,15 +1030,40 @@ namespace fonthook::vectorfont
 				return;
 			}
 
-			const UInt32 memoryLimit = ResolvePrewarmGlyphBatchLimit(
-				*config, s_session.rasterScale, active.shaderSdf,
-				active.sdfSpread);
-			active.maximumBatchGlyphLimit = std::max<UInt32>(
-				1, std::min(memoryLimit,
-					kMaximumIncrementalGlyphsPerBatch));
-			active.batchGlyphLimit = std::min(
+			EnforceCpuMemoryBudget("prewarm-font-begin");
+			const PrewarmBatchPolicy batchPolicy =
+				ResolvePrewarmBatchPolicy(
+					*config, s_session.rasterScale,
+					active.shaderSdf, active.aggressiveComposite,
+					active.sdfSpread);
+			active.maximumBatchGlyphLimit =
+				batchPolicy.maximumGlyphs;
+			active.batchGlyphLimit = batchPolicy.initialGlyphs;
+			active.parallelBatchFloor =
+				batchPolicy.parallelFloor;
+			active.estimatedRetainedBytesPerGlyph =
+				batchPolicy.estimatedRetainedBytesPerGlyph;
+			active.estimatedTransientBytesPerWorker =
+				batchPolicy.estimatedTransientBytesPerWorker;
+			active.estimatedPeakBatchBytes =
+				batchPolicy.estimatedPeakBytes;
+			active.targetBatchBytes = batchPolicy.targetBytes;
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: prewarm batch policy font=%u initial=%u parallelFloor=%u maximum=%u metricsOnlyMaximum=%u retainedBytesPerGlyph=%llu transientBytesPerWorker=%llu estimatedPeakMiB=%.2f targetMiB=%.2f memoryMiB=%.2f/%.2f",
+				active.job.fontId,
+				active.batchGlyphLimit,
+				active.parallelBatchFloor,
 				active.maximumBatchGlyphLimit,
-				kMinimumIncrementalGlyphsPerBatch);
+				active.metricsOnlyBatchGlyphLimit,
+				static_cast<unsigned long long>(
+					active.estimatedRetainedBytesPerGlyph),
+				static_cast<unsigned long long>(
+					active.estimatedTransientBytesPerWorker),
+				active.estimatedPeakBatchBytes
+					/ (1024.0 * 1024.0),
+				active.targetBatchBytes / (1024.0 * 1024.0),
+				GetCpuMemoryUsage() / (1024.0 * 1024.0),
+				GetCpuMemoryBudget() / (1024.0 * 1024.0));
 			if (active.job.route != FontAtlasRoute::ArgbFallback
 				&& !s_atlasOnlyPrewarmPending)
 			{
@@ -756,7 +1084,8 @@ namespace fonthook::vectorfont
 					s_session.finishedFonts + 1),
 				s_session.queuedFonts,
 				s_session.finishedFonts,
-				L"Preparing streamed glyph batches...");
+				L"Preparing streamed glyph batches...",
+				0.0f, true);
 			TransitionPrewarmPhase(PrewarmPhase::GenerateBatch);
 		}
 
@@ -785,10 +1114,53 @@ namespace fonthook::vectorfont
 			const UInt32 rasterizedStart =
 				active.job.rasterizedGlyphCount;
 			const UInt32 sdfStart = active.job.sdfGlyphCount;
+			const bool metricsOnlyDoubleByte =
+				active.sharedDoubleAlias
+				&& active.job.encodedUnits
+				&& active.job.encodedUnitIndex
+					< active.job.encodedUnits->size()
+				&& (*active.job.encodedUnits)[
+					active.job.encodedUnitIndex] > 0xFF;
+			UInt32& selectedBatchLimit = metricsOnlyDoubleByte
+				? active.metricsOnlyBatchGlyphLimit
+				: active.batchGlyphLimit;
+			const UInt32 requestedBatchLimit =
+				std::max<UInt32>(1, selectedBatchLimit);
 			const UInt32 candidateLimit = std::min(
 				kMaximumCandidatesPerBatch,
 				std::max<UInt32>(
-					256, active.batchGlyphLimit * 8u));
+					256, requestedBatchLimit * 8u));
+
+			auto rollbackBatch = [&]()
+			{
+				active.job.encodedUnitIndex = encodedUnitStart;
+				active.job.validDoubleByteCount = doubleByteStart;
+				active.job.rasterizedGlyphCount = rasterizedStart;
+				active.job.sdfGlyphCount = sdfStart;
+				active.exhausted = false;
+			};
+			auto reduceBatchAfterMemoryPressure = [&]() -> bool
+			{
+				if (selectedBatchLimit <= 1
+					|| active.allocationRetries >= 6)
+				{
+					return false;
+				}
+				selectedBatchLimit = std::max<UInt32>(
+					1, selectedBatchLimit / 2u);
+				if (!metricsOnlyDoubleByte)
+				{
+					active.maximumBatchGlyphLimit = std::min(
+						active.maximumBatchGlyphLimit,
+						selectedBatchLimit);
+					active.parallelBatchFloor = std::min(
+						active.parallelBatchFloor,
+						active.maximumBatchGlyphLimit);
+				}
+				++active.allocationRetries;
+				rollbackBatch();
+				return true;
+			};
 
 			s_session.requestedGlyphs.clear();
 			s_session.bitmapRequests.clear();
@@ -796,41 +1168,40 @@ namespace fonthook::vectorfont
 			try
 			{
 				s_session.requestedGlyphs.reserve(
-					active.batchGlyphLimit);
-				s_session.bitmapRequests.reserve(
-					static_cast<size_t>(
-						active.batchGlyphLimit) * 4u);
+					requestedBatchLimit);
+				if (!metricsOnlyDoubleByte)
+				{
+					s_session.bitmapRequests.reserve(
+						static_cast<size_t>(
+							requestedBatchLimit) * 4u);
+				}
 			}
 			catch (const std::bad_alloc&)
 			{
-				if (active.batchGlyphLimit <= 1
-					|| active.allocationRetries >= 6)
+				const UInt32 previous = selectedBatchLimit;
+				if (!reduceBatchAfterMemoryPressure())
 				{
 					active.failed = true;
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: prewarm request-buffer allocation failed font=%u limit=%u retries=%u",
+						"tnvse_freetype_font: prewarm request-buffer allocation failed font=%u limit=%u metricsOnly=%u retries=%u",
 						active.job.fontId,
-						active.batchGlyphLimit,
+						previous,
+						metricsOnlyDoubleByte ? 1u : 0u,
 						active.allocationRetries);
 					TransitionPrewarmPhase(
 						PrewarmPhase::FinalizeFont);
 				}
 				else
 				{
-					const UInt32 previous =
-						active.batchGlyphLimit;
-					active.batchGlyphLimit =
-						std::max<UInt32>(
-							1, active.batchGlyphLimit / 2);
-					++active.allocationRetries;
-					ReleasePrewarmBatchReferences(
-						"prewarm-request-allocation-retry");
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: prewarm request-buffer retry font=%u limit=%u->%u retry=%u",
+						"tnvse_freetype_font: prewarm request-buffer retry font=%u limit=%u->%u metricsOnly=%u retry=%u",
 						active.job.fontId, previous,
-						active.batchGlyphLimit,
+						selectedBatchLimit,
+						metricsOnlyDoubleByte ? 1u : 0u,
 						active.allocationRetries);
 				}
+				ReleasePrewarmBatchReferences(
+					"prewarm-request-allocation-retry");
 				RecordPrewarmStep(stepStarted);
 				return;
 			}
@@ -840,75 +1211,127 @@ namespace fonthook::vectorfont
 				&& !active.aggressiveComposite;
 			UInt32 candidates = 0;
 			UInt32 glyphCount = 0;
-			while (candidates < candidateLimit
-				&& glyphCount < active.batchGlyphLimit)
+			const ULONGLONG scanStarted = GetTickCount64();
+			try
 			{
-				std::array<char, 2> bytes = {};
-				size_t length = 0;
-				if (!NextEncodedUnit(active.job, bytes, length))
+				while (candidates < candidateLimit
+					&& glyphCount < requestedBatchLimit)
 				{
-					active.exhausted = true;
-					break;
+					std::array<char, 2> bytes = {};
+					size_t length = 0;
+					if (!NextEncodedUnit(active.job, bytes, length))
+					{
+						active.exhausted = true;
+						break;
+					}
+					++candidates;
+					VectorEncodedGlyph glyph;
+					if (!ResolvePrewarmGlyph(
+							*runtime, bytes.data(), length, glyph))
+					{
+						continue;
+					}
+					if (length == 2)
+						++active.job.validDoubleByteCount;
+					s_session.requestedGlyphs.push_back(glyph);
+					const VectorEncodedGlyph* requested =
+						&s_session.requestedGlyphs.back();
+					if (needsGrayFill)
+					{
+						s_session.bitmapRequests.push_back({
+							requested, GlyphMaskType::Fill, 0
+						});
+					}
+					if (active.aggressiveComposite)
+					{
+						s_session.bitmapRequests.push_back({
+							requested, GlyphMaskType::Composite, 0
+						});
+					}
+					if (active.shaderSdf
+						&& (length == 1
+							|| !active.sharedDoubleAlias))
+					{
+						s_session.bitmapRequests.push_back({
+							requested, GlyphMaskType::DistanceField,
+							active.sdfSpread
+						});
+						++active.job.sdfGlyphCount;
+					}
+					if (config->glow.enabled && needsGrayFill)
+					{
+						s_session.bitmapRequests.push_back({
+							requested, GlyphMaskType::Glow, 0
+						});
+					}
+					if (config->outline.enabled && needsGrayFill)
+					{
+						s_session.bitmapRequests.push_back({
+							requested, GlyphMaskType::Outline, 0
+						});
+					}
+					if (config->shadow.enabled && needsGrayFill)
+					{
+						s_session.bitmapRequests.push_back({
+							requested, GlyphMaskType::Shadow, 0
+						});
+					}
+					++glyphCount;
+					++active.job.rasterizedGlyphCount;
 				}
-				++candidates;
-				VectorEncodedGlyph glyph;
-				if (!ResolvePrewarmGlyph(
-						*runtime, bytes.data(), length, glyph))
-				{
-					continue;
-				}
-				if (length == 2)
-					++active.job.validDoubleByteCount;
-				s_session.requestedGlyphs.push_back(glyph);
-				const VectorEncodedGlyph* requested =
-					&s_session.requestedGlyphs.back();
-				if (needsGrayFill)
-				{
-					s_session.bitmapRequests.push_back({
-						requested, GlyphMaskType::Fill, 0
-					});
-				}
-				if (active.aggressiveComposite)
-				{
-					s_session.bitmapRequests.push_back({
-						requested, GlyphMaskType::Composite, 0
-					});
-				}
-				if (active.shaderSdf
-					&& (length == 1
-						|| !active.sharedDoubleAlias))
-				{
-					s_session.bitmapRequests.push_back({
-						requested, GlyphMaskType::DistanceField,
-						active.sdfSpread
-					});
-					++active.job.sdfGlyphCount;
-				}
-				if (config->glow.enabled && needsGrayFill)
-				{
-					s_session.bitmapRequests.push_back({
-						requested, GlyphMaskType::Glow, 0
-					});
-				}
-				if (config->outline.enabled && needsGrayFill)
-				{
-					s_session.bitmapRequests.push_back({
-						requested, GlyphMaskType::Outline, 0
-					});
-				}
-				if (config->shadow.enabled && needsGrayFill)
-				{
-					s_session.bitmapRequests.push_back({
-						requested, GlyphMaskType::Shadow, 0
-					});
-				}
-				++glyphCount;
-				++active.job.rasterizedGlyphCount;
 			}
+			catch (const std::bad_alloc&)
+			{
+				s_session.scanMs += GetTickCount64() - scanStarted;
+				const UInt32 previous = selectedBatchLimit;
+				if (reduceBatchAfterMemoryPressure())
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: prewarm scan allocation retry font=%u limit=%u->%u metricsOnly=%u retry=%u",
+						active.job.fontId, previous,
+						selectedBatchLimit,
+						metricsOnlyDoubleByte ? 1u : 0u,
+						active.allocationRetries);
+				}
+				else
+				{
+					active.failed = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: prewarm scan allocation failed font=%u limit=%u metricsOnly=%u retries=%u",
+						active.job.fontId, previous,
+						metricsOnlyDoubleByte ? 1u : 0u,
+						active.allocationRetries);
+					TransitionPrewarmPhase(
+						PrewarmPhase::FinalizeFont);
+				}
+				ReleasePrewarmBatchReferences(
+					"prewarm-scan-allocation-retry");
+				RecordPrewarmStep(stepStarted);
+				return;
+			}
+			catch (...)
+			{
+				s_session.scanMs += GetTickCount64() - scanStarted;
+				rollbackBatch();
+				active.failed = true;
+				ReleasePrewarmBatchReferences(
+					"prewarm-scan-unexpected-failure");
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm glyph scan raised an unexpected exception font=%u",
+					active.job.fontId);
+				TransitionPrewarmPhase(
+					PrewarmPhase::FinalizeFont);
+				RecordPrewarmStep(stepStarted);
+				return;
+			}
+			s_session.scanMs += GetTickCount64() - scanStarted;
+			s_session.peakBatchGlyphs = std::max(
+				s_session.peakBatchGlyphs, glyphCount);
 
 			bool retrySmallerBatch = false;
 			if (!s_session.bitmapRequests.empty())
 			{
+				const ULONGLONG rasterStarted = GetTickCount64();
 				try
 				{
 					GetPrewarmGlyphBitmaps(
@@ -919,31 +1342,16 @@ namespace fonthook::vectorfont
 				}
 				catch (const std::bad_alloc&)
 				{
-					if (active.batchGlyphLimit > 1
-						&& active.allocationRetries < 6)
+					const UInt32 previous = selectedBatchLimit;
+					if (reduceBatchAfterMemoryPressure())
 					{
-						const UInt32 previous =
-							active.batchGlyphLimit;
-						active.batchGlyphLimit =
-							std::max<UInt32>(
-								1,
-								active.batchGlyphLimit / 2);
-						++active.allocationRetries;
-						active.job.encodedUnitIndex =
-							encodedUnitStart;
-						active.job.validDoubleByteCount =
-							doubleByteStart;
-						active.job.rasterizedGlyphCount =
-							rasterizedStart;
-						active.job.sdfGlyphCount = sdfStart;
-						active.exhausted = false;
 						retrySmallerBatch = true;
 						gLog.FormattedMessage(
 							"tnvse_freetype_font: prewarm allocation retry font=%u scale=%.3f batchGlyphs=%u limit=%u->%u retry=%u",
 							active.job.fontId,
 							s_session.rasterScale,
 							glyphCount, previous,
-							active.batchGlyphLimit,
+							selectedBatchLimit,
 							active.allocationRetries);
 					}
 					else
@@ -964,6 +1372,8 @@ namespace fonthook::vectorfont
 						"tnvse_freetype_font: streamed prewarm batch raised an unexpected exception font=%u",
 						active.job.fontId);
 				}
+				s_session.rasterMs +=
+					GetTickCount64() - rasterStarted;
 
 				if (!active.failed && !retrySmallerBatch
 					&& s_session.bitmapResults.size()
@@ -973,11 +1383,15 @@ namespace fonthook::vectorfont
 				}
 				if (!active.failed && !retrySmallerBatch)
 				{
+					const ULONGLONG streamStarted =
+						GetTickCount64();
 					active.failed = !AppendStreamingPrewarmAtlas(
 						*runtime,
 						s_session.bitmapRequests,
 						s_session.bitmapResults,
 						s_session.rasterScale);
+					s_session.streamMs +=
+						GetTickCount64() - streamStarted;
 				}
 			}
 
@@ -992,24 +1406,14 @@ namespace fonthook::vectorfont
 				std::max(s_session.maximumStepMs, elapsed);
 			if (!retrySmallerBatch && !active.failed)
 			{
-				if (elapsed > kTargetPrewarmStepMs + 4
-					&& active.batchGlyphLimit > 1)
+				if (!metricsOnlyDoubleByte && glyphCount)
 				{
 					active.batchGlyphLimit =
-						std::max<UInt32>(
-							1,
-							active.batchGlyphLimit / 2);
-				}
-				else if (elapsed < kTargetPrewarmStepMs / 2
-					&& active.batchGlyphLimit
-						< active.maximumBatchGlyphLimit)
-				{
-					active.batchGlyphLimit = std::min(
-						active.maximumBatchGlyphLimit,
-						active.batchGlyphLimit
-							+ std::max<UInt32>(
-								8,
-								active.batchGlyphLimit / 4));
+						ResolveNextPrewarmBatchLimit(
+							active.batchGlyphLimit,
+							active.maximumBatchGlyphLimit,
+							active.parallelBatchFloor,
+							glyphCount, elapsed);
 				}
 			}
 
@@ -1021,13 +1425,16 @@ namespace fonthook::vectorfont
 				s_session.finishedFonts,
 				retrySmallerBatch
 					? L"Reducing batch size after memory pressure..."
-					: active.shaderSdf
+					: metricsOnlyDoubleByte
+						? L"Indexing shared MTSDF double-byte metrics..."
+						: active.shaderSdf
 						? (UsesMtsdfDistanceField()
 							? L"Streaming MTSDF glyphs to disk..."
 							: L"Streaming true-SDF glyphs to disk...")
 						: active.aggressiveComposite
 							? L"Streaming aggressive BGRA composite glyphs to disk..."
-							: L"Generating bounded fallback masks...");
+							: L"Generating bounded fallback masks...",
+				0.0f, retrySmallerBatch);
 
 			if (active.failed || active.exhausted)
 				TransitionPrewarmPhase(
@@ -1075,7 +1482,7 @@ namespace fonthook::vectorfont
 					s_session.queuedFonts,
 					s_session.finishedFonts,
 					L"Publishing and globally repacking atlas pages...",
-					0.95f);
+					0.95f, true);
 				bool finalized = false;
 				try
 				{
@@ -1127,11 +1534,8 @@ namespace fonthook::vectorfont
 				}
 				else
 				{
-					if (g_bEnableFreeTypeDefaultPoolAtlas)
-					{
-						s_session.verifiedCodePageFonts.push_back(
-							active.job.fontId);
-					}
+					s_session.verifiedCodePageFonts.push_back(
+						active.job.fontId);
 					FinishJob(active.job, "complete");
 					++s_session.completedFonts;
 				}
@@ -1197,16 +1601,23 @@ namespace fonthook::vectorfont
 			s_session.success =
 				s_session.everyConfiguredJobCompleted;
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: incremental streamed prewarm end fonts=%u complete=%u streamFailed=%u cancelled=%u batches=%u elapsedMs=%llu maxStepMs=%llu atlasOnlyTransaction=%s",
+				"tnvse_freetype_font: incremental streamed prewarm end fonts=%u complete=%u streamFailed=%u cancelled=%u batches=%u peakBatchGlyphs=%u elapsedMs=%llu maxStepMs=%llu scanMs=%llu rasterMs=%llu streamMs=%llu atlasOnlyTransaction=%s",
 				s_session.queuedFonts,
 				s_session.completedFonts,
 				s_session.streamFailedFonts,
 				s_session.cancelledFonts,
 				s_session.batches,
+				s_session.peakBatchGlyphs,
 				static_cast<unsigned long long>(
 					GetTickCount64() - s_session.started),
 				static_cast<unsigned long long>(
 					s_session.maximumStepMs),
+				static_cast<unsigned long long>(
+					s_session.scanMs),
+				static_cast<unsigned long long>(
+					s_session.rasterMs),
+				static_cast<unsigned long long>(
+					s_session.streamMs),
 				!s_session.atlasOnlyTransactionStarted
 					? "not-started"
 					: s_session.success ? "complete" : "incomplete");

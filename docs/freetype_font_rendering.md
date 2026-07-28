@@ -257,7 +257,7 @@ signature. A TLS hit avoids the global mutex; a global miss does not allocate an
 additional TLS string key, while cache-generation changes invalidate old TLS
 entries.
 
-## Frame-sliced prewarm and persistent caches
+## Bounded-throughput prewarm and persistent caches
 
 Startup prewarming is mandatory for every configured FreeType font. In
 FreeType-only mode it enumerates the 224 visible Windows-1252 byte units
@@ -285,7 +285,7 @@ first launch after this change discards those construction artifacts and builds
 the selected table once.
 Prewarm is advanced by the persistent state machine while tNVSE remains inside
 the NVSE `kMessage_DeferredInit` callback. Each loop iteration performs at most
-one snapshot restore/validation, one adaptive glyph batch, one font publication
+one snapshot restore/validation, one adaptive throughput batch, one font publication
 step, or one cleanup step. The game main thread therefore does not return from
 deferred initialization until the state reaches `Completed` or the queue is
 empty. No `StartMenu::Create` detour, replay, timeout, synthetic Menu ID, or
@@ -309,7 +309,10 @@ by Tile target or stacking traits.
 Fallout's existing LoadingMenu update/render thread continues its
 `Update`/`ShowChanges` work while the game thread advances bounded prewarm
 steps. tNVSE yields with `Sleep(0)` between active steps so the loading thread
-can consume current Tile traits. After the final generation/publication step,
+can consume current Tile traits. Generation batches target approximately
+250 ms and progress-trait writes are rate-limited to 10 Hz; this keeps the
+LoadingMenu responsive without paying Tile rebuild and worker-startup overhead
+for thousands of one-glyph steps. After the final generation/publication step,
 the component is hidden and deleted from the LoadingMenu tree; any remaining
 verification and cleanup finish invisibly before `DeferredInit` returns.
 Subsequent `kMessage_MainGameLoop` callbacks perform normal A8, DEFAULT-pool,
@@ -433,7 +436,21 @@ double-byte role that it consumes. The owner's unrelated single-byte profile may
 be evicted by the GPU LRU without making the alias transaction incomplete. This
 allows every alias manifest to commit under the configured atlas budget, so a
 later unchanged launch remains on the snapshot path instead of repeating its
-single-byte construction.
+single-byte construction. Owner profiles are ordered before their aliases in
+both snapshot validation and generation queues, and route-time profile
+deduplication retains the physical owner when an owner and alias become
+equivalent. If a dependency is still
+pending, the alias is requeued behind it rather than being marked failed.
+Once the owner role is resident, an alias still builds its own layout manifest
+and direct table, but its double-byte metric-only scan advances in batches of
+up to 4096 encoded units without issuing duplicate bitmap work. Sealing a
+direct table releases the large per-placement CPU lookup index, but that sealed
+table remains sufficient proof that the shared GPU profile is complete.
+Subsequent aliases therefore reuse the resident double-byte texture without
+reloading its physical payload or reserving its full GPU size again. A direct
+table is reused only when its layout, effect, atlas, code-page, and role
+identities match; aliases with a different logical size build a new compact
+table while retaining the same physical atlas.
 Every layer includes its schema/layout/mask/font/code-page inputs in its hash;
 stale files are ignored rather than migrated.
 Configured face chains hash the separator-normalized path written in XML, not
@@ -459,7 +476,7 @@ the partial cleanup does not infer their route or method from an opaque filename
 hash. Unknown files in `fontdata` are never removed. The option defaults to `0`.
 
 The final native route is synchronized during deferred initialization, before
-configured game fonts enter frame-sliced prewarm. Aggressive BGRA composite glyphs
+configured game fonts enter bounded-throughput prewarm. Aggressive BGRA composite glyphs
 and the stock-shader ARGB fallback both select the CPU-coverage cache domain. Selecting
 that domain forcibly closes in-process distance-field bitmap/manifest mappings
 and invalidates every normal true-SDF/MTSDF `.tnvfmask`, manifest, atlas
@@ -849,7 +866,7 @@ Memory still referenced by active shapes, atlases, font runtimes, static GPU
 residency, or required mappings is reported as `pinned-overcommit` instead of
 being invalidated silently.
 
-During frame-sliced prewarm, the bitmap LRU keeps a preferred one-quarter working
+During bounded-throughput prewarm, the bitmap LRU keeps a preferred one-quarter working
 target so wide raster batches do not churn, subject to the aggregate ceiling.
 After every queued profile finishes successfully from a snapshot or a newly
 saved atlas, tNVSE releases any legacy persistent-mask mappings and immediately
@@ -864,7 +881,7 @@ When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
-generations are restored after a D3D9 device reset. A version-22 snapshot
+generations are restored after a D3D9 device reset. A version-23 snapshot
 records A8 true SDF, BGRA MTSDF, or BGRA composite glyphs and is uploaded
 directly to this path.
 Its cache identity includes the persistent
@@ -894,15 +911,43 @@ rebuilds each wrapper independently. Glyphs added later retain only their
 individual masks. If direct
 DEFAULT-pool creation is unavailable, snapshot restore and normal atlas
 creation fall back to the engine-managed implementation.
+Complete globally repacked snapshots are also validated and restored directly
+when DEFAULT-pool atlases are disabled. The backend choice participates in the
+snapshot identity, so a managed profile cannot accidentally reuse a
+single-atlas DEFAULT-pool layout. The managed route therefore pays a bounded
+snapshot restore on an unchanged launch instead of rerasterizing the code page.
 
-The prewarm batch estimator counts one byte per true-SDF texel or four bytes per
-MTSDF texel. The writer reuses one preallocated 4 MiB or 16 MiB page buffer per
-byte role, eliminating
-vector-growth peaks and repeated large allocations, then releases those buffers
-before D3D9 restore. Each glyph step targets about 8 ms and adapts between
-32 and 512 glyphs while still respecting the 24 MiB estimate. Under memory
-pressure the current scan position and counters are rolled back and the batch is
-retried at half size, down to the one-glyph emergency limit.
+The prewarm batch estimator separates memory retained for every glyph in the
+batch from scratch memory live only in an active worker. True SDF therefore
+retains one byte per texel and reserves a four-byte float field per worker;
+MTSDF retains four bytes and reserves a sixteen-byte float field. The fallback
+route retains Fill plus each enabled A8 effect but reserves only one rendered
+body and chamfer field per worker. Aggressive composite retains one BGRA result
+while reserving the body/effect masks and the second BGRA target used by
+tight-bound cropping. Per-glyph request/result metadata and a fixed worker-local
+FreeType/shape allowance are included as well. The estimated peak is bounded by
+24 MiB, one eighth of the configured aggregate budget, or half the currently
+available headroom after reserving one streamed page, whichever is smallest
+(with a one-glyph emergency path when even that estimate cannot fit).
+The writer reuses one preallocated 4 MiB or 16 MiB page buffer for the active
+byte role, accounts its real capacity in the CPU budget, seals the single-byte
+role before double-byte pixels begin, and releases that first buffer
+immediately. This prevents two role buffers from remaining live during the
+large DBCS pass while still avoiding vector-growth peaks.
+
+A raster batch starts at up to 128 glyphs, adapts toward approximately 250 ms,
+and can grow to 1024 glyphs when the memory estimate permits. Time-based
+adaptation never reduces a normal batch below 64 glyphs; only an allocation
+failure can lower that parallel floor. Distance-field, composite, glow,
+outline, and shadow work begins parallel execution at eight cache misses,
+while inexpensive Fill-only work retains a 64-miss threshold and processes
+small chunks to reduce atomic scheduling overhead. Parallel raster work remains
+capped at twelve workers so high-core-count hosts cannot silently expand the
+32-bit address-space peak. Worker creation failure
+falls back to the threads that did start plus the caller thread. Under memory
+pressure the scan position and counters are rolled back, the memory-derived
+maximum is reduced, and the batch is retried at half size down to the
+one-glyph emergency limit.
 Configurations with identical layout/mask inputs and the same maximum effect
 radius share one distance-field prewarm even when their colors, offsets, powers,
 or shader sampling quality differ; those properties do not alter atlas texels. CPU-baked
@@ -974,7 +1019,7 @@ batch and are never stored in a persistent table or native payload.
 
 `uiFreeTypeFontGpuAtlasCacheMB` controls the soft GPU atlas budget. A value of
 zero selects full-resident mode: every configured font snapshot is restored
-during the frame-sliced prewarm transaction, and GPU atlas pages are not evicted to
+during the bounded-throughput prewarm transaction, and GPU atlas pages are not evicted to
 satisfy a software budget. Obsolete generations that are no longer referenced
 are still reclaimed. A nonzero value is used directly as the soft budget.
 Atlas generations still referenced by visible game shapes cannot be evicted,

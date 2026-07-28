@@ -654,6 +654,15 @@ namespace fonthook::vectorfont
 			const auto profile = state.atlasProfiles.find(profileKey);
 			if (profile == state.atlasProfiles.end() || profile->second.pages.empty())
 				return false;
+			const std::shared_ptr<const DirectAtlasGlyphTable>& direct =
+				profile->second.directGlyphs;
+			const bool sealedCompactProfile =
+				profile->second.compactResidentIndexReleased
+				&& direct && direct->validity
+				&& direct->validity->load(std::memory_order_acquire)
+				&& direct->byteClass == baseKey.byteClass
+				&& direct->atlasIdentity == baseKey.atlasContentHash
+				&& direct->pages.size() == profile->second.pages.size();
 			UInt16 expectedPage = 0;
 			UInt64 placements = 0;
 			for (UInt16 pageIndex : profile->second.pages)
@@ -664,10 +673,29 @@ namespace fonthook::vectorfont
 				pageKey.pageIndex = pageIndex;
 				const auto page = state.atlasCache.find(pageKey);
 				if (page == state.atlasCache.end() || !page->second.resource
-					|| !page->second.resource->property
-					|| page->second.resource->glyphs.empty())
+					|| !page->second.resource->property)
 				{
 					return false;
+				}
+				if (page->second.resource->glyphs.empty())
+				{
+					const size_t pageSlot =
+						static_cast<size_t>(expectedPage - 1u);
+					const std::shared_ptr<AtlasResource> directPage =
+						sealedCompactProfile
+						? direct->pages[pageSlot].lock() : nullptr;
+					if (!directPage
+						|| directPage.get()
+							!= page->second.resource.get()
+						|| !page->second.resource->compactSnapshot
+						|| page->second.resource->compactSnapshot
+							->placements.empty())
+					{
+						return false;
+					}
+					placements += page->second.resource
+						->compactSnapshot->placements.size();
+					continue;
 				}
 				for (const AtlasGlyphRecord& glyph : page->second.resource->glyphs)
 				{
@@ -2304,18 +2332,25 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
-		if (TryReuseCompleteAtlasProfile(singleByteKey)
-			&& (!needsDoubleByte || TryReuseCompleteAtlasProfile(doubleByteKey)))
+		const bool singleByteResident =
+			TryReuseCompleteAtlasProfile(singleByteKey);
+		const bool doubleByteResident = !needsDoubleByte
+			|| TryReuseCompleteAtlasProfile(doubleByteKey);
+		if (singleByteResident && doubleByteResident)
 		{
 			return true;
 		}
 
 		size_t incomingStorageBytes = 0;
 		size_t roleStorageBytes = 0;
-		if (!InspectSnapshotRoleStorage(runtime, singleByteKey, roleStorageBytes))
-			return false;
-		incomingStorageBytes = roleStorageBytes;
-		if (needsDoubleByte)
+		if (!singleByteResident)
+		{
+			if (!InspectSnapshotRoleStorage(
+					runtime, singleByteKey, roleStorageBytes))
+				return false;
+			incomingStorageBytes = roleStorageBytes;
+		}
+		if (needsDoubleByte && !doubleByteResident)
 		{
 			if (!InspectSnapshotRoleStorage(runtime, doubleByteKey, roleStorageBytes)
 				|| roleStorageBytes > std::numeric_limits<size_t>::max()
@@ -2355,9 +2390,11 @@ namespace fonthook::vectorfont
 				GetAtlasCacheLimit() / (1024.0 * 1024.0));
 		}
 
-		const bool singleByteReady = LoadGlyphAtlasSnapshotRole(runtime,
-			VectorFontByteClass::SingleByte, rasterScale, false);
+		const bool singleByteReady = singleByteResident
+			|| LoadGlyphAtlasSnapshotRole(runtime,
+				VectorFontByteClass::SingleByte, rasterScale, false);
 		const bool doubleByteReady = !needsDoubleByte
+			|| doubleByteResident
 			|| LoadGlyphAtlasSnapshotRole(runtime,
 				VectorFontByteClass::DoubleByte, rasterScale, false);
 		bool profilesResident = false;

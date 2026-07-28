@@ -1209,9 +1209,25 @@ namespace fonthook::vectorfont
 		return &faces.back().runtimeFace;
 	}
 
-	static UInt32 ResolvePrewarmWorkerCount(size_t workCount)
+	static bool IsExpensivePrewarmWork(
+		const std::vector<PrewarmBitmapWorkItem>& workItems)
 	{
-		if (workCount < 64)
+		return std::any_of(workItems.begin(), workItems.end(),
+			[](const PrewarmBitmapWorkItem& item)
+			{
+				return item.maskType != GlyphMaskType::Fill;
+			});
+	}
+
+	static UInt32 ResolvePrewarmWorkerCount(
+		const std::vector<PrewarmBitmapWorkItem>& workItems,
+		bool expensiveWork)
+	{
+		const size_t workCount = workItems.size();
+		const size_t parallelThreshold = expensiveWork
+			? kExpensivePrewarmParallelThreshold
+			: kFillPrewarmParallelThreshold;
+		if (workCount < parallelThreshold)
 			return 1;
 		UInt32 processors = std::thread::hardware_concurrency();
 		if (!processors)
@@ -1224,15 +1240,30 @@ namespace fonthook::vectorfont
 		// system services while the main thread waits for this bounded batch.
 		// The x86 process also caps worker-local FreeType heaps at a predictable level.
 		const UInt32 workers = processors > 2 ? processors - 1 : processors;
-		return static_cast<UInt32>(std::min<size_t>(workCount,
-			std::clamp<UInt32>(workers, 1, 12)));
+		const size_t usefulWorkers = expensiveWork
+			? workCount
+			: (workCount + kFillPrewarmWorkChunk - 1u)
+				/ kFillPrewarmWorkChunk;
+		return static_cast<UInt32>(std::min<size_t>(usefulWorkers,
+			std::clamp<UInt32>(
+				workers, 1, kMaximumPrewarmRasterWorkers)));
 	}
 
 	void GetPrewarmGlyphBitmaps(RuntimeFont& runtime,
 		const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& results)
 	{
-		if (requests.size() < 64 && !g_bDisableFreeTypeExtendedCaches)
+		const bool expensiveRequests = std::any_of(
+			requests.begin(), requests.end(),
+			[](const GlyphBitmapRequest& request)
+			{
+				return request.maskType != GlyphMaskType::Fill;
+			});
+		const size_t parallelThreshold =
+			expensiveRequests
+				? kExpensivePrewarmParallelThreshold
+				: kFillPrewarmParallelThreshold;
+		if (requests.size() < parallelThreshold)
 		{
 			GetGlyphBitmaps(runtime, requests, rasterScale, results);
 			return;
@@ -1309,19 +1340,28 @@ namespace fonthook::vectorfont
 
 		if (!workItems.empty())
 		{
-			const UInt32 workerCount = ResolvePrewarmWorkerCount(workItems.size());
-			static bool loggedWorkers = false;
-			if (!loggedWorkers)
+			const bool expensiveWork =
+				IsExpensivePrewarmWork(workItems);
+			const UInt32 workerCount = ResolvePrewarmWorkerCount(
+				workItems, expensiveWork);
+			static UInt32 loggedMaximumWorkers = 0;
+			if (workerCount > loggedMaximumWorkers)
 			{
-				loggedWorkers = true;
+				loggedMaximumWorkers = workerCount;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: parallel prewarm raster workers=%u batchMisses=%u",
-					workerCount, static_cast<UInt32>(workItems.size()));
+					"tnvse_freetype_font: parallel prewarm raster workers=%u batchMisses=%u workload=%s threshold=%u",
+					workerCount, static_cast<UInt32>(workItems.size()),
+					expensiveWork ? "distance-effect" : "fill",
+					expensiveWork
+						? kExpensivePrewarmParallelThreshold
+						: kFillPrewarmParallelThreshold);
 			}
 			std::atomic<size_t> nextWork{ 0 };
 			std::atomic<bool> abortWorkers{ false };
 			std::atomic<bool> workerAllocationFailed{ false };
 			std::atomic<bool> workerUnexpectedFailure{ false };
+			const size_t workChunk = expensiveWork
+				? 1u : kFillPrewarmWorkChunk;
 			auto worker = [&]()
 			{
 				FreeTypeState workerState;
@@ -1333,21 +1373,32 @@ namespace fonthook::vectorfont
 					faces.reserve(8);
 					while (!abortWorkers.load(std::memory_order_relaxed))
 					{
-						const size_t index = nextWork.fetch_add(1,
+						const size_t first = nextWork.fetch_add(workChunk,
 							std::memory_order_relaxed);
-						if (index >= workItems.size())
+						if (first >= workItems.size())
 							break;
-						PrewarmBitmapWorkItem& item = workItems[index];
-						RuntimeFace* face = GetPrewarmWorkerFace(workerState.library,
-							faces, item.resolved.runtimeFace->file,
-							item.key.fontFaceIndex);
-						if (!face)
-							continue;
-						ResolvedGlyph workerResolved = item.resolved;
-						workerResolved.runtimeFace = face;
-						item.bitmap = BuildGlyphBitmap(workerState,
-							*item.rasterRuntime,
-							workerResolved, item.maskType, safeScale, item.key);
+						const size_t end = std::min(
+							workItems.size(), first + workChunk);
+						for (size_t index = first; index < end; ++index)
+						{
+							if (abortWorkers.load(
+								std::memory_order_relaxed))
+								break;
+							PrewarmBitmapWorkItem& item =
+								workItems[index];
+							RuntimeFace* face = GetPrewarmWorkerFace(
+								workerState.library, faces,
+								item.resolved.runtimeFace->file,
+								item.key.fontFaceIndex);
+							if (!face)
+								continue;
+							ResolvedGlyph workerResolved = item.resolved;
+							workerResolved.runtimeFace = face;
+							item.bitmap = BuildGlyphBitmap(workerState,
+								*item.rasterRuntime,
+								workerResolved, item.maskType,
+								safeScale, item.key);
+						}
 					}
 				}
 				catch (const std::bad_alloc&)
@@ -1373,10 +1424,13 @@ namespace fonthook::vectorfont
 			}
 			catch (...)
 			{
-				abortWorkers.store(true, std::memory_order_relaxed);
-				for (std::thread& thread : workers)
-					thread.join();
-				throw;
+				// A constrained x86 process may refuse another thread stack.
+				// Keep the workers that did start and let the caller thread
+				// consume the same atomic queue instead of failing the font.
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm worker creation limited requested=%u active=%u; continuing with reduced parallelism",
+					workerCount,
+					static_cast<UInt32>(workers.size() + 1u));
 			}
 			worker();
 			for (std::thread& thread : workers)

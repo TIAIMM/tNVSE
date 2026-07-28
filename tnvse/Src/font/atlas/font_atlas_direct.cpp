@@ -1246,6 +1246,11 @@ namespace fonthook::vectorfont
 			if (!ResolvePrewarmAtlasKey(config, byteClass, rasterScale, baseKey))
 				return false;
 			const AtlasProfileKey profileKey = MakeAtlasProfileKey(baseKey);
+			const UInt32 directCodePage = GetFreeTypeTextCodePage();
+			const UInt64 directLayoutIdentity =
+				GetRuntimeDirectRoleLayoutIdentity(runtime, byteClass);
+			const UInt64 directEffectIdentity =
+				GetRuntimeMaskContentHash(runtime, byteClass);
 
 			std::vector<UInt16> pageIndices;
 			std::vector<std::shared_ptr<AtlasResource>> pages;
@@ -1259,8 +1264,22 @@ namespace fonthook::vectorfont
 				{
 					return false;
 				}
-				if (profile->second.directGlyphs)
+				const std::shared_ptr<const DirectAtlasGlyphTable>& existing =
+					profile->second.directGlyphs;
+				if (existing && existing->validity
+					&& existing->validity->load(
+						std::memory_order_acquire)
+					&& existing->byteClass == byteClass
+					&& existing->codePage == directCodePage
+					&& existing->layoutIdentity
+						== directLayoutIdentity
+					&& existing->effectIdentity
+						== directEffectIdentity
+					&& existing->atlasIdentity
+						== baseKey.atlasContentHash)
+				{
 					return true;
+				}
 				pageIndices = profile->second.pages;
 				pages.reserve(pageIndices.size());
 				for (UInt16 pageIndex : pageIndices)
@@ -1289,11 +1308,9 @@ namespace fonthook::vectorfont
 				: DirectCachedLetterKind::EffectLayers;
 			table->effectLayerMask =
 				BuildDirectEffectLayerMask(masks);
-			table->codePage = GetFreeTypeTextCodePage();
-			table->layoutIdentity =
-				GetRuntimeDirectRoleLayoutIdentity(runtime, byteClass);
-			table->effectIdentity =
-				GetRuntimeMaskContentHash(runtime, byteClass);
+			table->codePage = directCodePage;
+			table->layoutIdentity = directLayoutIdentity;
+			table->effectIdentity = directEffectIdentity;
 			table->atlasIdentity = baseKey.atlasContentHash;
 			table->pageIdentityChecksum =
 				BuildDirectPageIdentityChecksum(pages);

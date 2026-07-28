@@ -24,6 +24,7 @@ namespace fonthook::vectorfont
 	{
 		struct StreamingPage
 		{
+			CpuMemoryLease cpuMemory;
 			std::vector<AtlasSnapshotPlacement> placements;
 			std::vector<UInt8> pixels;
 			UInt32 cursorX = kDistanceFieldAtlasPadding;
@@ -50,6 +51,7 @@ namespace fonthook::vectorfont
 			std::unordered_set<UInt64> cacheIds;
 			UInt64 totalPlacements = 0;
 			UInt64 totalPixelBytes = 0;
+			bool sealed = false;
 		};
 
 		struct StreamingPrewarmState
@@ -186,6 +188,24 @@ namespace fonthook::vectorfont
 			return offset == pixels.size() ? hash : 0;
 		}
 
+		void RefreshPageCpuMemory(StreamingPage& page)
+		{
+			const size_t placementBytes =
+				page.placements.capacity()
+					<= std::numeric_limits<size_t>::max()
+						/ sizeof(AtlasSnapshotPlacement)
+				? page.placements.capacity()
+					* sizeof(AtlasSnapshotPlacement)
+				: std::numeric_limits<size_t>::max();
+			const size_t bytes = page.pixels.capacity()
+					<= std::numeric_limits<size_t>::max()
+						- placementBytes
+				? placementBytes + page.pixels.capacity()
+				: std::numeric_limits<size_t>::max();
+			page.cpuMemory.Reset(
+				CpuMemoryCategory::AtlasMetadata, bytes);
+		}
+
 		void ResetPage(StreamingPage& page)
 		{
 			// Reuse one fixed-capacity page buffer across the whole font. This avoids
@@ -199,6 +219,15 @@ namespace fonthook::vectorfont
 			page.shelfHeight = 0;
 			page.usedWidth = 0;
 			page.usedHeight = 0;
+		}
+
+		void ReleasePageStorage(StreamingPage& page)
+		{
+			std::vector<AtlasSnapshotPlacement>().swap(
+				page.placements);
+			std::vector<UInt8>().swap(page.pixels);
+			ResetPage(page);
+			page.cpuMemory.Release();
 		}
 
 		bool WriteCurrentPage(RuntimeFont& runtime, StreamingRole& role,
@@ -296,6 +325,8 @@ namespace fonthook::vectorfont
 			StreamingRole& role, const std::shared_ptr<const GlyphBitmap>& bitmap,
 			float rasterScale)
 		{
+			if (role.sealed)
+				return false;
 			AtlasCacheKey key;
 			if (!BuildBaseKey(GetRuntimeConfig(runtime), role.byteClass,
 				rasterScale, key))
@@ -322,7 +353,10 @@ namespace fonthook::vectorfont
 				* kMaximumMtsdfPrewarmAtlasSize
 				* AtlasBytesPerPixel(key.pixelMode);
 			if (role.current.pixels.capacity() < maximumPageBytes)
+			{
 				role.current.pixels.reserve(maximumPageBytes);
+				RefreshPageCpuMemory(role.current);
+			}
 
 			const UInt32 maximum = std::min(
 				GetMaximumAtlasSize(key.byteClass),
@@ -373,9 +407,16 @@ namespace fonthook::vectorfont
 				placement.sdfSpread = bitmap->sdfSpread;
 				placement.colorBaked = bitmap->colorBaked ? 1 : 0;
 				placement.bakedLayer = bitmap->bakedLayer;
+				const size_t previousPlacementCapacity =
+					page.placements.capacity();
 				page.placements.push_back(placement);
 				page.pixels.insert(page.pixels.end(), bitmap->alpha.begin(),
 					bitmap->alpha.begin() + requiredBytes);
+				if (page.placements.capacity()
+					!= previousPlacementCapacity)
+				{
+					RefreshPageCpuMemory(page);
+				}
 				page.cursorX = x + width + pagePadding * 2;
 				page.cursorY = y;
 				page.shelfHeight = std::max(shelfHeight,
@@ -388,6 +429,28 @@ namespace fonthook::vectorfont
 				return true;
 			}
 			return false;
+		}
+
+		bool SealStreamingRole(RuntimeFont& runtime,
+			StreamingRole& role, float rasterScale)
+		{
+			if (role.sealed)
+				return true;
+			if (!WriteCurrentPage(runtime, role, rasterScale))
+				return false;
+			ReleasePageStorage(role.current);
+			std::unordered_set<UInt64>().swap(role.cacheIds);
+			role.sealed = true;
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: streamed prewarm role sealed font=%u role=%s pages=%u placements=%llu rawMiB=%.2f releasedWorkingBuffer=1",
+				GetRuntimeConfig(runtime).fontId,
+				role.byteClass == VectorFontByteClass::DoubleByte
+					? "doubleByte" : "singleByte",
+				static_cast<UInt32>(role.pages.size()),
+				static_cast<unsigned long long>(
+					role.totalPlacements),
+				role.totalPixelBytes / (1024.0 * 1024.0));
+			return true;
 		}
 
 		bool StreamIdentityMatches(const StreamingPrewarmState& state,
@@ -533,6 +596,17 @@ namespace fonthook::vectorfont
 			}
 			for (size_t roleIndex = 0; roleIndex < grouped.size(); ++roleIndex)
 			{
+				if (roleIndex == static_cast<size_t>(
+						VectorFontByteClass::DoubleByte)
+					&& !grouped[roleIndex].empty()
+					&& !SealStreamingRole(runtime,
+						state->roles[static_cast<size_t>(
+							VectorFontByteClass::SingleByte)],
+						rasterScale))
+				{
+					state->failed = true;
+					return false;
+				}
 				auto& bitmaps = grouped[roleIndex];
 				std::sort(bitmaps.begin(), bitmaps.end(), [](const auto& left,
 					const auto& right)
@@ -595,7 +669,8 @@ namespace fonthook::vectorfont
 				{
 					continue;
 				}
-				if (!WriteCurrentPage(runtime, role, rasterScale)
+				if ((!role.sealed
+						&& !WriteCurrentPage(runtime, role, rasterScale))
 					|| !PatchAndPublishRole(runtime, role, rasterScale))
 				{
 					state->failed = true;
@@ -609,8 +684,8 @@ namespace fonthook::vectorfont
 		{
 			// The reusable raster buffers are no longer needed. Release them before
 			// snapshot validation and D3D9 allocation begin.
-			std::vector<AtlasSnapshotPlacement>().swap(role.current.placements);
-			std::vector<UInt8>().swap(role.current.pixels);
+			ReleasePageStorage(role.current);
+			std::unordered_set<UInt64>().swap(role.cacheIds);
 		}
 
 		// Publishing a streamed role replaces the content-addressed snapshot files.

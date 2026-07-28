@@ -72,6 +72,13 @@ namespace fonthook::vectorfont
 	// Version 3 separates the final BGRA-composite profile from the former
 	// aggressive coverage representation while retaining cache-domain routing.
 	constexpr UInt8 kPersistentGlyphManifestCacheIdentityVersion = 3;
+	// Prewarm creates worker-local FreeType faces and distance/effect scratch
+	// storage. Keep this shared cap in the scheduler and its memory model so a
+	// larger host CPU cannot silently increase the x86 address-space peak.
+	constexpr UInt32 kMaximumPrewarmRasterWorkers = 12;
+	constexpr UInt32 kExpensivePrewarmParallelThreshold = 8;
+	constexpr UInt32 kFillPrewarmParallelThreshold = 64;
+	constexpr UInt32 kFillPrewarmWorkChunk = 8;
 
 	struct NativeA8PayloadTemplate;
 	enum class FreeTypePerfCounter : UInt8
