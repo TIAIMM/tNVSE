@@ -152,24 +152,29 @@ namespace fonthook
 					overlayWindow
 					&& State().textInputSessionActive.load(
 						std::memory_order_acquire);
+				const bool isCandidateElement =
+					IsCandidateElement(dwUIElementId);
+				const bool captureCandidates =
+					g_bMultibyteInputCompositionPreview
+					&& g_bMultibyteInputUseTSFCandidates;
+				const bool candidateRegistered =
+					captureCandidates
+					&& s_imeComposing
+					&& hasOverlayTarget
+					&& isCandidateElement
+					&& RegisterTsfUiElement(dwUIElementId);
 				const bool acceptsCandidates = s_imeComposing
 					&& hasOverlayTarget
-					&& RegisterTsfUiElement(dwUIElementId);
+					&& candidateRegistered;
 				if (pbShow
 					&& *pbShow != FALSE
-					&& g_bMultibyteInputHideSystemCandidateWindow
-					&& IsCandidateOverlayRendererAvailable()
-					&& hasOverlayTarget
-					&& acceptsCandidates)
+					&& isCandidateElement)
 				{
-					if (MarkSystemTsfCandidateUiSuppressed(
-							overlayWindow))
-					{
-						MarkUiElementSuppressed(dwUIElementId);
-						*pbShow = FALSE;
-					}
+					*pbShow = FALSE;
 				}
 
+				if (!captureCandidates)
+					return S_OK;
 				if (!acceptsCandidates)
 				{
 					ClearImeCandidates();
@@ -184,6 +189,11 @@ namespace fonthook
 
 			STDMETHODIMP UpdateUIElement(DWORD dwUIElementId) override
 			{
+				if (!g_bMultibyteInputCompositionPreview
+					|| !g_bMultibyteInputUseTSFCandidates)
+				{
+					return S_OK;
+				}
 				if (!s_imeComposing
 					|| !State().textInputSessionActive
 					|| !IsCurrentTsfUiElement(dwUIElementId))
@@ -488,57 +498,7 @@ namespace fonthook
 				return result;
 			}
 
-			bool RestoreSuppressedUiElements()
-			{
-				std::vector<DWORD> suppressedIds;
-				for (const TsfUiElementSession& session :
-					State().tsfUiElementSessions)
-				{
-					if (session.systemUiSuppressed)
-						suppressedIds.push_back(session.id);
-				}
-
-				bool allRestored = true;
-				for (DWORD id : suppressedIds)
-				{
-					ITfUIElement* element = GetUIElement(id);
-					const bool restored =
-						!element || SUCCEEDED(element->Show(TRUE));
-					SafeRelease(element);
-
-					const auto session = std::find_if(
-						State().tsfUiElementSessions.begin(),
-						State().tsfUiElementSessions.end(),
-						[id](const TsfUiElementSession& value)
-						{
-							return value.id == id;
-						});
-					if (session
-						!= State().tsfUiElementSessions.end())
-					{
-						if (restored)
-							session->systemUiSuppressed = false;
-						else
-							allRestored = false;
-					}
-				}
-				return allRestored;
-			}
-
 		private:
-			void MarkUiElementSuppressed(DWORD id)
-			{
-				const auto session = std::find_if(
-					State().tsfUiElementSessions.begin(),
-					State().tsfUiElementSessions.end(),
-					[id](const TsfUiElementSession& value)
-					{
-						return value.id == id;
-					});
-				if (session != State().tsfUiElementSessions.end())
-					session->systemUiSuppressed = true;
-			}
-
 			void PublishProfileChanged()
 			{
 				AcquireSRWLockExclusive(&m_pendingLock);
@@ -705,6 +665,23 @@ namespace fonthook
 				return element;
 			}
 
+			bool IsCandidateElement(DWORD id) const
+			{
+				ITfUIElement* element = GetUIElement(id);
+				if (!element)
+					return false;
+
+				ITfCandidateListUIElement* candidate = nullptr;
+				const bool isCandidate =
+					SUCCEEDED(element->QueryInterface(
+						__uuidof(ITfCandidateListUIElement),
+						reinterpret_cast<void**>(&candidate)))
+					&& candidate;
+				SafeRelease(candidate);
+				SafeRelease(element);
+				return isCandidate;
+			}
+
 			void ReadCandidateElement(DWORD id)
 			{
 				if (m_readingCandidateElement)
@@ -836,13 +813,6 @@ namespace fonthook
 			return state.tsfCandidateSink
 				? state.tsfCandidateSink->GetCurrentInputMethodName()
 				: std::wstring();
-		}
-
-		bool RestoreSuppressedTsfCandidateUiElements()
-		{
-			ImeState& state = State();
-			return !state.tsfCandidateSink
-				|| state.tsfCandidateSink->RestoreSuppressedUiElements();
 		}
 
 		void PumpTsfInputUpdates()

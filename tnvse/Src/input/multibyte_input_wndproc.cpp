@@ -611,8 +611,6 @@ namespace fonthook
 
 				if (msg == WM_INPUTLANGCHANGE)
 				{
-					PrepareSystemImeForInputLanguageChange(
-						hwnd, "input_language_change_observed");
 					if (!state.textInputSessionActive)
 						return 0;
 					ResetImeCommitKeyState("input_language_change");
@@ -659,9 +657,6 @@ namespace fonthook
 						// thread by key release. Only compensate when the shell did
 						// not change anything; switching on key-down races the shell
 						// and can advance twice back to the original layout.
-						PrepareSystemImeForInputLanguageChange(
-							hwnd,
-							"winspace_fallback_before_activate");
 						previousLayout = ActivateKeyboardLayout(
 							reinterpret_cast<HKL>(HKL_NEXT),
 							KLF_SETFORPROCESS);
@@ -868,17 +863,6 @@ namespace fonthook
 						return 0;
 				}
 
-				if (msg == WM_IME_SETCONTEXT
-					&& g_bMultibyteInputHideSystemCandidateWindow
-					&& IsCandidateOverlayRendererAvailable()
-					&& hasInputTarget)
-				{
-					HideSystemImeWindows(hwnd);
-					if (MarkSystemImeContextUiSuppressed(hwnd))
-						return DefWindowProcA(
-							hwnd, WM_IME_SETCONTEXT, wParam, 0);
-				}
-
 				if (msg == WM_IME_CHAR && hasInputTarget)
 				{
 					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_CHAR action=suppress_ime_char input=0x%08X", static_cast<UInt32>(wParam));
@@ -914,7 +898,6 @@ namespace fonthook
 				State().tsfCandidateActive = false;
 				s_imeComposing = false;
 				AdvanceTsfCandidateSession();
-				ForgetSystemImeWindowSuppression();
 				s_window = nullptr;
 				const LRESULT result =
 					ForwardWindowMessage(hwnd, msg, wParam, lParam);
@@ -929,10 +912,8 @@ namespace fonthook
 
 			if (msg == WM_INPUTLANGCHANGEREQUEST)
 			{
-				PrepareSystemImeForInputLanguageChange(
-					hwnd, "input_language_change_request");
 				DebugLog(
-					"tnvse_multibyte_input_event: source=WndProc.WM_INPUTLANGCHANGEREQUEST action=restore_then_forward");
+					"tnvse_multibyte_input_event: source=WndProc.WM_INPUTLANGCHANGEREQUEST action=forward_without_system_ui_restore");
 				return ForwardWindowMessage(
 					hwnd, msg, wParam, lParam);
 			}
@@ -954,21 +935,13 @@ namespace fonthook
 				&& (IsVirtualKeyDown(VK_LWIN)
 					|| IsVirtualKeyDown(VK_RWIN));
 
-			// Suppressing the default IME windows requires changing only the
-			// parameters passed to DefWindowProc. No game UI is queried here.
+			// System IME composition/candidate UI is never handed back to the
+			// default window procedure. This policy is independent of the native
+			// Tile host, the current target and composition-preview availability.
 			if (msg == WM_IME_SETCONTEXT)
 			{
-				if (sessionActive
-					&& g_bMultibyteInputHideSystemCandidateWindow
-					&& IsCandidateOverlayRendererAvailable())
-				{
-					if (MarkSystemImeContextUiSuppressed(hwnd))
-					{
-						return DefWindowProcA(
-							hwnd, WM_IME_SETCONTEXT, wParam, 0);
-					}
-				}
-				return ForwardWindowMessage(hwnd, msg, wParam, lParam);
+				return DefWindowProcA(
+					hwnd, WM_IME_SETCONTEXT, wParam, 0);
 			}
 
 			if (!ShouldCaptureWindowMessage(
@@ -1240,7 +1213,6 @@ namespace fonthook
 			bool detached = true;
 			if (s_window && s_originalWndProc)
 			{
-				RestoreSystemImeWindows(s_window, "wndproc_restore");
 				SetGameImeEnabled(s_window, true);
 				const WNDPROC current = reinterpret_cast<WNDPROC>(
 					GetWindowLongPtrA(s_window, GWLP_WNDPROC));
@@ -1267,7 +1239,6 @@ namespace fonthook
 			ClearInputState();
 			if (detached)
 			{
-				ForgetSystemImeWindowSuppression();
 				s_window = nullptr;
 				s_originalWndProc = nullptr;
 				ShutdownTsfCandidateSupport();

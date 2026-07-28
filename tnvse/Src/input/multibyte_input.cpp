@@ -44,15 +44,21 @@ namespace fonthook
 		s_hooksInstalled = true;
 		TryInstallWindowProc();
 
+		if (InitializeTsfCandidateSupport())
+		{
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: TSF system candidate UI suppression enabled");
+		}
+		else
+		{
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: TSF UI element sink unavailable; WM_IME_SETCONTEXT and IMM32 offscreen suppression remain active");
+		}
+
 		if (g_bMultibyteInputCompositionPreview)
 		{
 			if (g_bMultibyteInputUseTSFCandidates)
-			{
-				if (InitializeTsfCandidateSupport())
-					gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink enabled");
-				else
-					gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink unavailable; using IMM32 fallback");
-			}
+				gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate data capture enabled with IMM32 fallback");
 			gLog.FormattedMessage(
 				"tnvse_multibyte_input: native Tile composition preview enabled; host will be resolved on the main loop");
 		}

@@ -952,7 +952,7 @@ namespace fonthook
 				const bool attached = IsDirectChild(parent, foreign);
 				s_state.imeLoadFailed = true;
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: Menu Code %u is already owned by foreign Tile host=%p name='%s'; system IME UI remains enabled for this UI root",
+					"tnvse_native_overlay: Menu Code %u is already owned by foreign Tile host=%p name='%s'; native IME overlay unavailable and system candidate UI remains suppressed",
 					kImeMenuClass,
 					foreign,
 					attached
@@ -964,7 +964,7 @@ namespace fonthook
 			{
 				s_state.imeLoadFailed = true;
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: IME Menu factory unavailable; system IME UI remains enabled for this UI root");
+					"tnvse_native_overlay: IME Menu factory unavailable; native IME overlay unavailable and system candidate UI remains suppressed");
 				return false;
 			}
 
@@ -981,7 +981,7 @@ namespace fonthook
 					parent, root, "tNVSE_IME");
 				s_state.imeLoadFailed = true;
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: failed to load, resolve, or register IME Menu path='%s'; system IME UI remains enabled for this UI root",
+					"tnvse_native_overlay: failed to load, resolve, or register IME Menu path='%s'; native IME overlay unavailable and system candidate UI remains suppressed",
 					kImeOverlayXmlPath);
 				return false;
 			}
@@ -1520,9 +1520,9 @@ namespace fonthook
 
 	void ShutdownNativeTileOverlayHost()
 	{
-		// Publish fail-open before deleting either tree. TSF callbacks only
-		// inspect these atomics and must never hide system UI while destruction
-		// is in progress.
+		// Stop publishing either Tile tree before destruction. System candidate
+		// UI suppression is owned by the IME hooks and deliberately does not
+		// depend on these readiness atomics.
 		s_imeReady.store(false, std::memory_order_release);
 		s_prewarmReady.store(false, std::memory_order_release);
 		s_prewarmActive.store(false, std::memory_order_release);

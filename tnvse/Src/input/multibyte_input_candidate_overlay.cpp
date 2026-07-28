@@ -110,11 +110,6 @@ namespace fonthook
 			ImeState& state = State();
 			if (g_bMultibyteInputCompositionPreview)
 				EnsureNativeImeOverlayHost();
-			if (!g_bMultibyteInputHideSystemCandidateWindow
-				|| !IsCandidateOverlayRendererAvailable()
-				|| !HasOverlayInputTarget())
-				RestoreSystemImeWindows(
-					s_window, "native_tile_host_unavailable");
 			state.overlayRefreshPending = false;
 
 			if (!g_bMultibyteInputCompositionPreview

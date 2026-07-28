@@ -307,359 +307,10 @@ namespace fonthook
 			ClearImeCandidates();
 		}
 
-		bool HasSuppressedSystemImeWindowForms()
-		{
-			const ImeState& state = State();
-			return state.systemCompositionWindowSuppressed
-				|| std::any_of(
-					state.systemCandidateWindowsSuppressed.begin(),
-					state.systemCandidateWindowsSuppressed.end(),
-					[](bool value) { return value; });
-		}
-
-		void ClearSavedSystemImeWindowForms()
-		{
-			ImeState& state = State();
-			state.suppressedSystemImeHwnd = nullptr;
-			state.suppressedSystemImeContext = nullptr;
-			state.suppressedSystemImeLayout = nullptr;
-			state.systemCompositionWindowSuppressed = false;
-			state.systemCandidateWindowsSuppressed.fill(false);
-			state.savedSystemCompositionFormValid = false;
-			state.savedSystemCompositionForm = {};
-			state.savedSystemCandidateForms.fill(CANDIDATEFORM{});
-			state.savedSystemCandidateFormValid.fill(false);
-		}
-
-		void ClearSystemImeUiSuppression()
-		{
-			ImeState& state = State();
-			state.systemImeContextUiSuppressedHwnd.store(
-				0, std::memory_order_release);
-			state.systemTsfCandidateUiSuppressedHwnd.store(
-				0, std::memory_order_release);
-		}
-
-		void ForgetSystemImeWindowSuppression()
-		{
-			ClearSavedSystemImeWindowForms();
-			ClearSystemImeUiSuppression();
-		}
-
-		bool MarkSystemImeContextUiSuppressed(HWND hwnd)
-		{
-			if (!hwnd)
-				return false;
-			ImeState& state = State();
-			const ULONG_PTR window = reinterpret_cast<ULONG_PTR>(hwnd);
-			if (state.tsfInputWindow.load(std::memory_order_acquire)
-				!= window)
-			{
-				return false;
-			}
-			state.systemImeContextUiSuppressedHwnd.store(
-				window,
-				std::memory_order_release);
-			if (state.tsfInputWindow.load(std::memory_order_acquire)
-				== window)
-			{
-				return true;
-			}
-			ULONG_PTR expected = window;
-			state.systemImeContextUiSuppressedHwnd.compare_exchange_strong(
-				expected, 0, std::memory_order_acq_rel);
-			return false;
-		}
-
-		bool MarkSystemTsfCandidateUiSuppressed(HWND hwnd)
-		{
-			if (!hwnd)
-				return false;
-			ImeState& state = State();
-			const ULONG_PTR window = reinterpret_cast<ULONG_PTR>(hwnd);
-			if (state.tsfInputWindow.load(std::memory_order_acquire)
-				!= window)
-			{
-				return false;
-			}
-			state.systemTsfCandidateUiSuppressedHwnd.store(
-				window,
-				std::memory_order_release);
-			if (state.tsfInputWindow.load(std::memory_order_acquire)
-				== window)
-			{
-				return true;
-			}
-			ULONG_PTR expected = window;
-			state.systemTsfCandidateUiSuppressedHwnd.compare_exchange_strong(
-				expected, 0, std::memory_order_acq_rel);
-			return false;
-		}
-
-		void PrepareSystemImeForInputLanguageChange(
-			HWND hwnd,
-			const char* reason)
-		{
-			ImeState& state = State();
-			if (!HasSuppressedSystemImeWindowForms())
-				return;
-			if (!hwnd
-				|| state.suppressedSystemImeHwnd != hwnd)
-			{
-				// The saved IMM forms belong to a different window and cannot be
-				// restored safely. Keep the HWND-level context/TSF suppression
-				// latches intact so the normal fail-open path can still release
-				// any UI that tNVSE hid.
-				ClearSavedSystemImeWindowForms();
-				return;
-			}
-			if (state.hidingSystemImeWindows)
-				return;
-
-			HIMC currentContext = ImmGetContext(hwnd);
-			HIMC restoreContext = state.suppressedSystemImeContext;
-			UInt32 restored = 0;
-			UInt32 failed = 0;
-			state.hidingSystemImeWindows = true;
-			if (restoreContext && currentContext == restoreContext)
-			{
-				if (state.systemCompositionWindowSuppressed)
-				{
-					COMPOSITIONFORM form = {};
-					if (state.savedSystemCompositionFormValid)
-						form = state.savedSystemCompositionForm;
-					else
-						form.dwStyle = CFS_DEFAULT;
-					if (ImmSetCompositionWindow(restoreContext, &form))
-					{
-						state.systemCompositionWindowSuppressed = false;
-						state.savedSystemCompositionFormValid = false;
-						state.savedSystemCompositionForm = {};
-						++restored;
-					}
-					else
-						++failed;
-				}
-				for (DWORD i = 0; i < 4; ++i)
-				{
-					if (!state.systemCandidateWindowsSuppressed[i]
-						|| !state.savedSystemCandidateFormValid[i])
-					{
-						continue;
-					}
-					CANDIDATEFORM form =
-						state.savedSystemCandidateForms[i];
-					form.dwIndex = i;
-					if (ImmSetCandidateWindow(restoreContext, &form))
-					{
-						state.systemCandidateWindowsSuppressed[i] = false;
-						state.savedSystemCandidateFormValid[i] = false;
-						state.savedSystemCandidateForms[i] = {};
-						++restored;
-					}
-					else
-						++failed;
-				}
-			}
-			else
-			{
-				++failed;
-			}
-			state.hidingSystemImeWindows = false;
-			if (currentContext)
-				ImmReleaseContext(hwnd, currentContext);
-			const bool contextChanged = currentContext != restoreContext;
-			if (contextChanged || !HasSuppressedSystemImeWindowForms())
-				ClearSavedSystemImeWindowForms();
-			gLog.FormattedMessage(
-				"tnvse_multibyte_input: prepared system IME for language change reason=%s restored=%u failed=%u pending=%u contextChanged=%u",
-				reason ? reason : "unknown",
-				restored,
-				failed,
-				HasSuppressedSystemImeWindowForms() ? 1 : 0,
-				contextChanged ? 1 : 0);
-		}
-
-		void RestoreSystemImeWindows(HWND hwnd, const char* reason)
-		{
-			ImeState& state = State();
-			const bool hasWindowForms =
-				HasSuppressedSystemImeWindowForms();
-			const bool hasContextSuppression =
-				state.systemImeContextUiSuppressedHwnd.load(
-					std::memory_order_acquire) != 0;
-			const bool hasTsfSuppression =
-				state.systemTsfCandidateUiSuppressedHwnd.load(
-					std::memory_order_acquire) != 0;
-			if (!hasWindowForms
-				&& !hasContextSuppression
-				&& !hasTsfSuppression)
-			{
-				return;
-			}
-			if (!hwnd)
-			{
-				ForgetSystemImeWindowSuppression();
-				return;
-			}
-			if (state.hidingSystemImeWindows)
-				return;
-
-			bool restoredAnyForm = false;
-			bool droppedStaleForms = false;
-			bool formsStillPending = hasWindowForms;
-			if (hasWindowForms)
-			{
-				HIMC context = ImmGetContext(hwnd);
-				if (context)
-				{
-					const HKL layout = GetGameKeyboardLayout(hwnd);
-					const bool layoutChangeObserved =
-						reason
-						&& !_stricmp(
-							reason,
-							"input_language_change_observed");
-					const bool identityMatches =
-						state.suppressedSystemImeHwnd == hwnd
-						&& state.suppressedSystemImeContext == context
-						&& (state.suppressedSystemImeLayout == layout
-							|| layoutChangeObserved);
-					if (!identityMatches)
-					{
-						ClearSavedSystemImeWindowForms();
-						droppedStaleForms = true;
-						formsStillPending = false;
-					}
-					else
-					{
-						state.hidingSystemImeWindows = true;
-						if (state.systemCompositionWindowSuppressed)
-						{
-							COMPOSITIONFORM form = {};
-							if (state.savedSystemCompositionFormValid)
-								form = state.savedSystemCompositionForm;
-							else
-								form.dwStyle = CFS_DEFAULT;
-							if (ImmSetCompositionWindow(context, &form))
-							{
-								state.systemCompositionWindowSuppressed = false;
-								state.savedSystemCompositionFormValid = false;
-								state.savedSystemCompositionForm = {};
-								restoredAnyForm = true;
-							}
-						}
-						for (DWORD i = 0; i < 4; ++i)
-						{
-							if (!state.systemCandidateWindowsSuppressed[i]
-								|| !state.savedSystemCandidateFormValid[i])
-							{
-								continue;
-							}
-							CANDIDATEFORM form =
-								state.savedSystemCandidateForms[i];
-							form.dwIndex = i;
-							if (ImmSetCandidateWindow(context, &form))
-							{
-								state.systemCandidateWindowsSuppressed[i] =
-									false;
-								state.savedSystemCandidateFormValid[i] = false;
-								state.savedSystemCandidateForms[i] = {};
-								restoredAnyForm = true;
-							}
-						}
-						state.hidingSystemImeWindows = false;
-						formsStillPending =
-							HasSuppressedSystemImeWindowForms();
-						if (!formsStillPending)
-							ClearSavedSystemImeWindowForms();
-					}
-					ImmReleaseContext(hwnd, context);
-				}
-			}
-
-			const bool forceFailOpen =
-				reason && !_stricmp(reason, "wndproc_restore");
-			const bool rendererUnavailable =
-				!g_bMultibyteInputHideSystemCandidateWindow
-				|| !IsCandidateOverlayRendererAvailable()
-				|| !HasOverlayInputTarget();
-			const bool recoverSystemUi =
-				forceFailOpen || rendererUnavailable;
-			bool recoveredContextUi = false;
-			bool releasedTsfSuppression = false;
-			bool tsfRestorePending = false;
-			if (recoverSystemUi)
-			{
-				const ULONG_PTR currentHwnd =
-					reinterpret_cast<ULONG_PTR>(hwnd);
-				const ULONG_PTR contextHwnd =
-					state.systemImeContextUiSuppressedHwnd.exchange(
-						0, std::memory_order_acq_rel);
-				if (contextHwnd == currentHwnd
-					&& state.textInputSessionActive
-					&& HasOverlayInputTarget()
-					&& GetForegroundWindow() == hwnd)
-				{
-					// Call the default handler directly. Sending this message
-					// through the subclass chain would synchronously re-enter
-					// tNVSE and any later WndProc hooks during teardown/fail-open.
-					DefWindowProcA(
-						hwnd,
-						WM_IME_SETCONTEXT,
-						TRUE,
-						ISC_SHOWUICOMPOSITIONWINDOW
-							| ISC_SHOWUIALLCANDIDATEWINDOW);
-					recoveredContextUi = true;
-				}
-
-				const ULONG_PTR tsfHwnd =
-					state.systemTsfCandidateUiSuppressedHwnd.exchange(
-						0, std::memory_order_acq_rel);
-				if (tsfHwnd)
-				{
-					releasedTsfSuppression =
-						RestoreSuppressedTsfCandidateUiElements();
-					tsfRestorePending = !releasedTsfSuppression;
-					if (tsfRestorePending)
-					{
-						ULONG_PTR expected = 0;
-						state.systemTsfCandidateUiSuppressedHwnd
-							.compare_exchange_strong(
-								expected,
-								tsfHwnd,
-								std::memory_order_acq_rel);
-					}
-				}
-			}
-
-			if (restoredAnyForm
-				|| droppedStaleForms
-				|| recoveredContextUi
-				|| releasedTsfSuppression
-				|| tsfRestorePending)
-			{
-				gLog.FormattedMessage(
-					"tnvse_multibyte_input: restored system IME UI reason=%s forms=%s stale=%u context=%u tsf=%s",
-					reason ? reason : "unknown",
-					formsStillPending ? "pending" : "complete",
-					droppedStaleForms ? 1 : 0,
-					recoveredContextUi ? 1 : 0,
-					tsfRestorePending
-						? "pending"
-						: releasedTsfSuppression
-							? "complete"
-							: "none");
-			}
-		}
-
 		void HideSystemImeWindows(HWND hwnd)
 		{
-			if (!g_bMultibyteInputHideSystemCandidateWindow
-				|| !IsCandidateOverlayRendererAvailable()
-				|| !hwnd)
-			{
+			if (!hwnd)
 				return;
-			}
 
 			ImeState& state = State();
 			if (state.hidingSystemImeWindows)
@@ -668,76 +319,26 @@ namespace fonthook
 			HIMC context = ImmGetContext(hwnd);
 			if (!context)
 				return;
-			const HKL layout = GetGameKeyboardLayout(hwnd);
-
-			if (HasSuppressedSystemImeWindowForms()
-				&& (state.suppressedSystemImeHwnd != hwnd
-					|| state.suppressedSystemImeContext != context
-					|| state.suppressedSystemImeLayout != layout))
-			{
-				// The old HIMC/HKL can no longer be restored safely through
-				// this window. Do not write stale forms into the replacement
-				// context; the language-change path restores before switching.
-				ClearSavedSystemImeWindowForms();
-				gLog.FormattedMessage(
-					"tnvse_multibyte_input: discarded stale system IME form snapshot after context/layout replacement");
-			}
-
-			if (!HasSuppressedSystemImeWindowForms())
-			{
-				state.suppressedSystemImeHwnd = hwnd;
-				state.suppressedSystemImeContext = context;
-				state.suppressedSystemImeLayout = layout;
-			}
 
 			state.hidingSystemImeWindows = true;
-			if (!state.systemCompositionWindowSuppressed)
-			{
-				state.savedSystemCompositionForm = {};
-				state.savedSystemCompositionFormValid =
-					ImmGetCompositionWindow(
-						context,
-						&state.savedSystemCompositionForm) != FALSE;
-				COMPOSITIONFORM offscreen = {};
-				offscreen.dwStyle = CFS_FORCE_POSITION;
-				offscreen.ptCurrentPos.x = -32000;
-				offscreen.ptCurrentPos.y = -32000;
-				state.systemCompositionWindowSuppressed =
-					ImmSetCompositionWindow(context, &offscreen) != FALSE;
-				if (!state.systemCompositionWindowSuppressed)
-				{
-					state.savedSystemCompositionFormValid = false;
-					state.savedSystemCompositionForm = {};
-				}
-			}
+			COMPOSITIONFORM composition = {};
+			composition.dwStyle = CFS_FORCE_POSITION;
+			composition.ptCurrentPos.x = -32000;
+			composition.ptCurrentPos.y = -32000;
+			ImmSetCompositionWindow(context, &composition);
 
 			for (DWORD i = 0; i < 4; ++i)
 			{
-				if (state.systemCandidateWindowsSuppressed[i])
-					continue;
-
-				CANDIDATEFORM saved = {};
-				saved.dwIndex = i;
-				if (!ImmGetCandidateWindow(context, i, &saved))
-					continue;
-
 				CANDIDATEFORM offscreen = {};
 				offscreen.dwIndex = i;
 				offscreen.dwStyle = CFS_CANDIDATEPOS;
 				offscreen.ptCurrentPos.x = -32000;
 				offscreen.ptCurrentPos.y = -32000;
-				if (ImmSetCandidateWindow(context, &offscreen))
-				{
-					state.savedSystemCandidateForms[i] = saved;
-					state.savedSystemCandidateFormValid[i] = true;
-					state.systemCandidateWindowsSuppressed[i] = true;
-				}
+				ImmSetCandidateWindow(context, &offscreen);
 			}
 
 			state.hidingSystemImeWindows = false;
 			ImmReleaseContext(hwnd, context);
-			if (!HasSuppressedSystemImeWindowForms())
-				ClearSavedSystemImeWindowForms();
 		}
 
 		void CancelGameImeComposition(HWND hwnd)
@@ -863,16 +464,8 @@ namespace fonthook
 
 			if (!active)
 			{
-				// Publish the closed gate before releasing any hidden system UI.
-				// A concurrent TSF BeginUIElement must not be able to suppress a
-				// fresh element after the restore pass has already completed.
 				state.textInputSessionActive.store(
 					false, std::memory_order_release);
-				if (s_window)
-				{
-					RestoreSystemImeWindows(
-						s_window, "text_input_session_end");
-				}
 				SynchronizeTextInputTarget("session_deactivate_sync");
 			}
 			else

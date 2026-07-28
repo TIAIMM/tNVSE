@@ -306,13 +306,6 @@ namespace fonthook
 		bool IsJipKeyEventSuppressionHookInstalled();
 		void SetJipKeyEventSuppressionCaptureActive(bool active);
 		void HideSystemImeWindows(HWND hwnd);
-		void RestoreSystemImeWindows(HWND hwnd, const char* reason);
-		void PrepareSystemImeForInputLanguageChange(
-			HWND hwnd,
-			const char* reason);
-		void ForgetSystemImeWindowSuppression();
-		bool MarkSystemImeContextUiSuppressed(HWND hwnd);
-		bool MarkSystemTsfCandidateUiSuppressed(HWND hwnd);
 		void SetTextInputSessionActive(bool active);
 		void RefreshTextInputSessionForActiveTarget(const char* reason);
 		void EndStewieTextInputSession(const char* reason);

@@ -22,7 +22,6 @@ extern UINT32 g_uiFreeTypeFontCompositeCacheMB;
 extern bool g_bMultibyteInput;
 extern bool g_bMultibyteInputLog;
 extern bool g_bMultibyteInputCompositionPreview;
-extern bool g_bMultibyteInputHideSystemCandidateWindow;
 extern bool g_bMultibyteInputUseTSFCandidates;
 extern bool g_bMultibyteInputStewieTweaks;
 extern bool g_bMultibyteInputMCMExtender;

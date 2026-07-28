@@ -25,7 +25,6 @@ UINT32 g_uiFreeTypeFontCompositeCacheMB = 32;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputLog;
 bool g_bMultibyteInputCompositionPreview;
-bool g_bMultibyteInputHideSystemCandidateWindow;
 bool g_bMultibyteInputUseTSFCandidates;
 bool g_bMultibyteInputStewieTweaks;
 bool g_bMultibyteInputMCMExtender;
@@ -216,11 +215,6 @@ void LoadConfig()
 	g_bMultibyteInputCompositionPreview = ReadConfigInt(kMultibyteInputSection,
 		"bMultibyteInputCompositionPreview", 0, filename);
 	gLog.FormattedMessage("g_bMultibyteInputCompositionPreview: %d", g_bMultibyteInputCompositionPreview);
-
-	g_bMultibyteInputHideSystemCandidateWindow = ReadConfigInt(
-		kMultibyteInputSection,
-		"bMultibyteInputHideSystemCandidateWindow", 1, filename);
-	gLog.FormattedMessage("g_bMultibyteInputHideSystemCandidateWindow: %d", g_bMultibyteInputHideSystemCandidateWindow);
 
 	g_bMultibyteInputUseTSFCandidates = ReadConfigInt(kMultibyteInputSection,
 		"bMultibyteInputUseTSFCandidates", 1, filename);
