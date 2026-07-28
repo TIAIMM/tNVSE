@@ -41,7 +41,9 @@ namespace fonthook::vectorfont
 				&& std::isfinite(vertex.distanceParameterScale)
 				&& vertex.distanceParameterScale >= 1.0f
 				&& std::isfinite(vertex.layerMask)
-				&& vertex.layerMask >= 1.0f && vertex.layerMask <= 15.0f;
+				&& vertex.layerMask >= 1.0f && vertex.layerMask <= 15.0f
+				&& vertex.glyphU0 <= vertex.glyphU1
+				&& vertex.glyphV0 <= vertex.glyphV1;
 		}
 
 		bool RejectA8Shape(const char* reason)
@@ -51,7 +53,7 @@ namespace fonthook::vectorfont
 					< kMaximumShapeValidationFailureLogs)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_a8_diag: rejected shape contract=glyph-params-packet-layer-rgb-v12 reason=%s",
+					"tnvse_freetype_a8_diag: rejected shape contract=one-glyph-composite-quad-v13 reason=%s",
 					reason ? reason : "unknown");
 			}
 			return false;
@@ -148,7 +150,7 @@ namespace fonthook::vectorfont
 				return RejectA8Shape("native-route-profile-kind-conflict");
 			const bool distanceFieldProfile = effectConfig->shaderEffects;
 
-			const std::array<float, 12> scalarValues = {
+			const std::array<float, 15> scalarValues = {
 				effectConfig->inverseAtlasWidth,
 				effectConfig->inverseAtlasHeight,
 				effectConfig->sdfSpreadPixels,
@@ -156,6 +158,9 @@ namespace fonthook::vectorfont
 				effectConfig->shadowPower,
 				effectConfig->shadowGlowAlpha,
 				effectConfig->shadowOutlineAlpha,
+				effectConfig->shadowOffsetX,
+				effectConfig->shadowOffsetY,
+				effectConfig->shadowOffsetRasterScale,
 				effectConfig->glowInnerPixels,
 				effectConfig->glowOuterPixels,
 				effectConfig->glowPower,

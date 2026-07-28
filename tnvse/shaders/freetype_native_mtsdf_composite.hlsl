@@ -13,7 +13,8 @@ float4 GlowColor : register(c5);
 float4 OutlineColor : register(c6);
 float4 FillColor : register(c7);
 float4 CompositeFlags : register(c8);// hard-shadow outline alpha,
-                                     // live-Tile-RGB layer mask
+                                     // live-Tile-RGB layer mask,
+                                     // shadow x/y in source pixels
 
 #include "freetype_native_common.hlsli"
 
@@ -21,17 +22,25 @@ struct NativeCompositeSample
 {
 	float alphaDistance;
 	float rgbBody;
+	float valid;
 };
 
-NativeCompositeSample SampleNativeComposite(float2 uv, float spread,
-	float antialiasWidth)
+NativeCompositeSample SampleNativeComposite(float2 uv, float4 glyphBounds,
+	float spread, float antialiasWidth)
 {
-	const float4 value = SampleNativeFontMtsdf(FontAtlas, uv);
+	const float2 boundedUv = clamp(uv, glyphBounds.xy, glyphBounds.zw);
+	const float inside = step(glyphBounds.x, uv.x)
+		* step(glyphBounds.y, uv.y)
+		* step(uv.x, glyphBounds.z)
+		* step(uv.y, glyphBounds.w);
+	const float4 value = SampleNativeFontMtsdf(FontAtlas, boundedUv);
 	NativeCompositeSample result;
-	result.alphaDistance = DecodeNativeFontSelectedDistance(value.a, spread);
+	result.alphaDistance = lerp(-spread,
+		DecodeNativeFontSelectedDistance(value.a, spread), inside);
 	const float rgbDistance = DecodeNativeFontSelectedDistance(
 		NativeFontBodyEncodedDistance(value), spread);
-	result.rgbBody = NativeFontMtsdfBody(rgbDistance, antialiasWidth);
+	result.rgbBody = NativeFontMtsdfBody(rgbDistance, antialiasWidth) * inside;
+	result.valid = inside;
 	return result;
 }
 
@@ -137,16 +146,30 @@ float4 Main(NativeFontPixelInput input) : COLOR0
 	const float spread = max(input.glyphParams.x, 0.0001);
 	const float distanceScale = max(input.glyphParams.y, 0.0001);
 	const int layerMask = (int)floor(input.glyphParams.z + 0.5);
+	const bool hasShadow = NativeCompositeHasLayer(layerMask, 1);
+	const float2 shadowSourceOffset =
+		CompositeFlags.zw * input.glyphParams.y;
+	const bool shiftedShadow = hasShadow
+		&& (abs(shadowSourceOffset.x) + abs(shadowSourceOffset.y) > 0.0001);
+	const float2 shadowUv = input.atlasUv
+		- shadowSourceOffset * AtlasPass.xy;
 	const float screenPxRange = NativeFontMtsdfScreenPxRange(
 		input.atlasUv, AtlasPass.xy, spread);
 	const float antialiasWidth = NativeFontMtsdfAntialiasWidth(
 		screenPxRange, spread);
 	const NativeCompositeSample center = SampleNativeComposite(
-		input.atlasUv, spread, antialiasWidth);
+		input.atlasUv, input.glyphBounds, spread, antialiasWidth);
+	NativeCompositeSample shadowCenter = center;
+	if (shiftedShadow)
+	{
+		shadowCenter = SampleNativeComposite(shadowUv, input.glyphBounds,
+			spread, antialiasWidth);
+	}
 
 	float fillCoverage = center.rgbBody;
-	float shadowCoverage = NativeCompositeShadowSample(center.alphaDistance,
-		center.rgbBody, antialiasWidth, distanceScale);
+	float shadowCoverage = NativeCompositeShadowSample(
+		shadowCenter.alphaDistance, shadowCenter.rgbBody,
+		antialiasWidth, distanceScale);
 	float glowCoverage = NativeCompositeGlowMask(center.alphaDistance,
 		center.rgbBody, antialiasWidth, distanceScale);
 	float outlineCoverage = NativeCompositeOutline(center.alphaDistance,
@@ -177,9 +200,18 @@ float4 Main(NativeFontPixelInput input) : COLOR0
 	for (int tap = 0; tap < 4; ++tap)
 	{
 		const NativeCompositeSample sample = SampleNativeComposite(
-			input.atlasUv + effectOffsets[tap], spread, antialiasWidth);
-		shadowCoverage += NativeCompositeShadowSample(sample.alphaDistance,
-			sample.rgbBody, antialiasWidth, distanceScale);
+			input.atlasUv + effectOffsets[tap], input.glyphBounds,
+			spread, antialiasWidth);
+		NativeCompositeSample shadowSample = sample;
+		if (shiftedShadow)
+		{
+			shadowSample = SampleNativeComposite(
+				shadowUv + effectOffsets[tap], input.glyphBounds,
+				spread, antialiasWidth);
+		}
+		shadowCoverage += NativeCompositeShadowSample(
+			shadowSample.alphaDistance, shadowSample.rgbBody,
+			antialiasWidth, distanceScale);
 		glowCoverage += NativeCompositeGlowMask(sample.alphaDistance,
 			sample.rgbBody, antialiasWidth, distanceScale);
 		outlineCoverage += NativeCompositeOutline(sample.alphaDistance,
@@ -198,7 +230,7 @@ float4 Main(NativeFontPixelInput input) : COLOR0
 		&& (EffectSecondary.w > 0.0 || CompositeFlags.x > 0.0))
 	{
 		shadowCoverage = ApplyNativeCompositeHardShadow(
-			center.alphaDistance, shadowCoverage,
+			shadowCenter.alphaDistance, shadowCoverage,
 			antialiasWidth, distanceScale);
 	}
 
@@ -215,7 +247,7 @@ float4 Main(NativeFontPixelInput input) : COLOR0
 	{
 		extraFill += SampleNativeComposite(
 			input.atlasUv + extraOffsets[extraTap],
-			spread, antialiasWidth).rgbBody;
+			input.glyphBounds, spread, antialiasWidth).rgbBody;
 	}
 	fillCoverage = fillCoverage * 0.5 + extraFill * 0.125;
 #endif

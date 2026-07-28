@@ -424,6 +424,12 @@ namespace fonthook::vectorfont
 		float shadowPower = 2.0f;
 		float shadowGlowAlpha = 0.0f;
 		float shadowOutlineAlpha = 0.0f;
+		// Composite packets keep the shadow inside the glyph's single submitted
+		// quad. Geometry uses logical offsets; the shader converts the same offset
+		// to source pixels with the raster scale and each glyph's distance scale.
+		float shadowOffsetX = 0.0f;
+		float shadowOffsetY = 0.0f;
+		float shadowOffsetRasterScale = 1.0f;
 		float glowInnerPixels = 0.0f;
 		float glowOuterPixels = 0.0f;
 		float glowPower = 2.0f;
@@ -451,9 +457,10 @@ namespace fonthook::vectorfont
 		// COLOR0 carries only the per-glyph base modifier. Packet c1 carries the
 		// layer modifier, while c2.z selects whether fixed effects ignore both the
 		// base and live Tile RGB. Every path continues to inherit live Tile alpha.
-		// ABI 12 moves per-glyph MTSDF spread/source scaling and the layer mask
-		// into TEXCOORD1 so mixed shared-atlas glyphs do not split packets.
-		static constexpr UInt32 kTileUniformColorAbi = 12;
+		// ABI 13 adds the exact glyph UV rectangle in TEXCOORD2. Composite
+		// one-glyph quads may extend to cover an offset shadow without sampling
+		// adjacent glyphs in the physical atlas.
+		static constexpr UInt32 kTileUniformColorAbi = 13;
 
 		UInt32 abiVersion = kTileUniformColorAbi;
 		NiColorA minimumModifier = { 1.0f, 1.0f, 1.0f, 1.0f };

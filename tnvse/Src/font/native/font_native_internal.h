@@ -93,8 +93,17 @@ namespace fonthook::vectorfont
 		// fields. Baked A8 coverage profiles instead store their per-quad live
 		// Tile RGB selector here (0=fixed RGB, 1=live Tile RGB).
 		float layerMask = 8.0f;
+		// Exact physical glyph rectangle. The composite quad can extrapolate its
+		// UVs to cover an offset shadow; the pixel shader bounds every sample to
+		// this rectangle so atlas neighbours never bleed into that union.
+		// Normalized USHORT4 keeps the ABI compact in the 32-bit process while
+		// retaining substantially finer precision than any supported POT atlas.
+		UInt16 glyphU0 = 0;
+		UInt16 glyphV0 = 0;
+		UInt16 glyphU1 = 0;
+		UInt16 glyphV1 = 0;
 	};
-	static_assert(sizeof(NativeA8GpuVertex) == 9 * sizeof(float));
+	static_assert(sizeof(NativeA8GpuVertex) == 11 * sizeof(float));
 
 	struct NativeA8PacketTemplate
 	{

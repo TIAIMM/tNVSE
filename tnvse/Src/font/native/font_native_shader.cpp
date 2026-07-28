@@ -55,7 +55,7 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kPassSetRenderState = 0xB71A10;
 		inline constexpr UInt32 kCopiedTileShaderVtableEntries = 84;
 		inline constexpr UInt32 kUpdateConstantsVtableSlot = 31;
-		inline constexpr UInt32 kNativeVtableMagic = 0x34544D4E; // "NMT4"
+		inline constexpr UInt32 kNativeVtableMagic = 0x35544D4E; // "NMT5"
 		inline constexpr UInt32 kShaderRefreshMessage = 0;
 		inline constexpr DWORD kInitializationRetryMilliseconds = 1000;
 
@@ -694,7 +694,7 @@ namespace fonthook::vectorfont
 			// static lookup tables incorrectly; never allocate/copy it with sizeof.
 			NiDX9ShaderDeclarationPtr declaration =
 				CdeclCall<NiDX9ShaderDeclaration*>(kShaderDeclarationCreate,
-					generation.renderer, 4u, 1u);
+					generation.renderer, 5u, 1u);
 			if (!declaration)
 			{
 				failure = "declaration-factory";
@@ -714,7 +714,10 @@ namespace fonthook::vectorfont
 					ParameterType::SPTYPE_UBYTECOLOR, 0)
 				&& declaration->SetEntry(3, 0,
 					Parameter::SHADERPARAM_NI_TEXCOORD1,
-					ParameterType::SPTYPE_FLOAT3, 0);
+					ParameterType::SPTYPE_FLOAT3, 0)
+				&& declaration->SetEntry(4, 0,
+					Parameter::SHADERPARAM_NI_TEXCOORD2,
+					ParameterType::SPTYPE_NORMUSHORT4, 0);
 			if (!entriesReady)
 			{
 				failure = "declaration-entries";

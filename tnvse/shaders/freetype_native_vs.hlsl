@@ -6,6 +6,7 @@ struct NativeFontVertexInput
 	float2 atlasUv : TEXCOORD0;
 	float4 baseColor : COLOR0;
 	float3 glyphParams : TEXCOORD1;
+	float4 glyphBounds : TEXCOORD2;
 };
 
 struct NativeFontVertexOutput
@@ -14,6 +15,7 @@ struct NativeFontVertexOutput
 	float2 atlasUv : TEXCOORD0;
 	float4 baseColor : COLOR0;
 	float3 glyphParams : TEXCOORD1;
+	float4 glyphBounds : TEXCOORD2;
 };
 
 NativeFontVertexOutput Main(NativeFontVertexInput input)
@@ -25,5 +27,6 @@ NativeFontVertexOutput Main(NativeFontVertexInput input)
 	output.atlasUv = input.atlasUv;
 	output.baseColor = input.baseColor;
 	output.glyphParams = input.glyphParams;
+	output.glyphBounds = input.glyphBounds;
 	return output;
 }

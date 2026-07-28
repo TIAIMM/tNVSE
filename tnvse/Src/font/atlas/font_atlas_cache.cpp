@@ -514,6 +514,7 @@ namespace fonthook::vectorfont
 					UnindexAtlasPage(state, key);
 					state.atlasCacheBytes -= it->second.bytes;
 					state.atlasCache.erase(it);
+					RefreshAtlasCacheGpuAccountingLocked(state);
 				}
 				state.atlasLru.pop_back();
 			}
@@ -1253,6 +1254,7 @@ namespace fonthook::vectorfont
 				}
 				missing.swap(remaining);
 			}
+			RefreshAtlasCacheGpuAccountingLocked(state);
 			TrimAtlasCache(state);
 			return pages;
 		}

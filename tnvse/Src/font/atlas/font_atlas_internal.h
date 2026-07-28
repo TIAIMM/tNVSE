@@ -1039,6 +1039,9 @@ namespace fonthook::vectorfont
 		UInt64 pageContentHash);
 	bool AreAtlasResourcesBackedBySameTexture(const AtlasResource& left,
 		const AtlasResource& right);
+	// Recompute resident GPU bytes from unique physical texture identities.
+	// The caller must hold AtlasState::atlasMutex.
+	void RefreshAtlasCacheGpuAccountingLocked(AtlasState& state);
 	std::shared_ptr<const GlyphBitmap> GetOrCreateAtlasGlyphBitmap(
 		AtlasResource& resource, UInt64 cacheId);
 	AtlasGlyphRecord* FindAtlasGlyph(AtlasResource& resource, UInt64 cacheId);

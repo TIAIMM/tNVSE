@@ -547,14 +547,18 @@ double-byte glyph set once, and removes duplicate content IDs.
 If that complete union fits one device-supported power-of-two page, the same
 placed snapshot payload is published for every member role. Content-addressed
 DEFAULT-pool page reuse then gives all wrappers the same D3D9 texture, and the
-sealed renderer collapses both byte roles to one physical page ordinal. Mixed
-single-/double-byte text therefore keeps the one-page draw path without a
-texture switch. This feature never enables NPOT dimensions. If the union needs
-more than one page or its POT allocation would exceed the group's current
-de-duplicated physical GPU storage, the original per-font profiles remain
-active. That fallback decision is recorded in their current snapshot generation
-so later launches do not repeat the expensive group repack. Whole-font-identical
-profiles continue to use the existing exact-page de-duplication path instead.
+sealed, dynamic-direct, and compatibility compilers all collapse logical
+wrappers by their underlying D3D9 texture identity. Mixed single-/double-byte
+text therefore keeps one physical page ordinal and the one-page draw path even
+after a sealed direct profile is invalidated and rebuilt lazily. Runtime group
+validation checks complete logical profiles, the physical-group snapshot marker,
+snapshot content identity, and the actual shared D3D9 texture. This feature
+never enables NPOT dimensions. If the union needs more than one page or its POT
+allocation would exceed the group's current de-duplicated physical GPU storage,
+the original per-font profiles remain active. That fallback decision is
+recorded in their current snapshot generation so later launches do not repeat
+the expensive group repack. Whole-font-identical profiles continue to use the
+existing exact-page de-duplication path instead.
 
 For CPU-precomposed ARGB profiles, double-byte compatibility includes the
 baked effect geometry and colors because those values alter final texels.
@@ -913,9 +917,11 @@ fingerprint covers dimensions, format, placed
 coordinates, and exact texels. A hash match is followed by byte-for-byte
 comparison, loading temporary source pixels only during that comparison, before
 equivalent pages share one D3D9 texture allocation through independent Gamebryo
-wrappers. A later glyph insertion first detaches that page, and a device reset
-rebuilds each wrapper independently. Glyphs added later retain only their
-individual masks. If direct
+wrappers. A later glyph insertion first detaches that page. Device reset rebuilds
+each unique immutable payload once and reattaches the other logical wrappers to
+that physical D3D9 texture; GPU-budget accounting likewise counts unique texture
+identities rather than wrappers. Glyphs added later retain only their individual
+masks. If direct
 DEFAULT-pool creation is unavailable, snapshot restore and normal atlas
 creation fall back to the engine-managed implementation.
 Complete globally repacked snapshots are also validated and restored directly

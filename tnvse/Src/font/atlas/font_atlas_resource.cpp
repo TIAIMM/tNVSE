@@ -1508,6 +1508,55 @@ namespace fonthook::vectorfont
 		return leftD3D && leftD3D == rightD3D;
 	}
 
+	void RefreshAtlasCacheGpuAccountingLocked(AtlasState& state)
+	{
+		state.atlasCacheBytes = 0;
+		std::unordered_set<const void*> defaultPoolTextures;
+		std::unordered_set<const void*> managedTextures;
+		for (auto& [key, entry] : state.atlasCache)
+		{
+			AtlasResource* resource = entry.resource.get();
+			if (!resource || !resource->property || resource->resetPending)
+			{
+				entry.bytes = 0;
+				continue;
+			}
+
+			size_t bytes = GetAtlasStorageBytes(resource->width,
+				resource->height, resource->pixelMode,
+				resource->mipLevels);
+			NiTexture* texture = GetAtlasTexture(*resource);
+			if (resource->backend == AtlasBackend::DefaultPool)
+			{
+				NiDX9TextureData* data =
+					texture ? texture->GetDX9RendererData() : nullptr;
+				LPDIRECT3DBASETEXTURE9 d3dTexture =
+					data ? data->GetD3DTexture() : nullptr;
+				if (!d3dTexture
+					|| !defaultPoolTextures.insert(d3dTexture).second)
+				{
+					bytes = 0;
+				}
+			}
+			else if (texture
+				&& !managedTextures.insert(texture).second)
+			{
+				bytes = 0;
+			}
+			entry.bytes = bytes;
+			if (bytes <= std::numeric_limits<size_t>::max()
+					- state.atlasCacheBytes)
+			{
+				state.atlasCacheBytes += bytes;
+			}
+			else
+			{
+				state.atlasCacheBytes =
+					std::numeric_limits<size_t>::max();
+			}
+		}
+	}
+
 		bool CompactSnapshotsEqual(const AtlasResource& lhs,
 			const AtlasResource& rhs)
 		{
@@ -2209,6 +2258,88 @@ namespace fonthook::vectorfont
 
 	namespace
 	{
+		bool CanAliasRebuiltDefaultPoolTexture(
+			const AtlasResource& target,
+			const AtlasResource& source)
+		{
+			if (&target == &source
+				|| target.backend != AtlasBackend::DefaultPool
+				|| source.backend != AtlasBackend::DefaultPool
+				|| !target.property || !source.property
+				|| !target.compactSnapshot || !source.compactSnapshot
+				|| !target.pageContentHash
+				|| target.pageContentHash != source.pageContentHash
+				|| target.width != source.width
+				|| target.height != source.height
+				|| target.renderMode != source.renderMode
+				|| target.padding != source.padding
+				|| target.levelZeroOnly != source.levelZeroOnly)
+			{
+				return false;
+			}
+			const CompactAtlasSnapshot& targetSnapshot =
+				*target.compactSnapshot;
+			const CompactAtlasSnapshot& sourceSnapshot =
+				*source.compactSnapshot;
+			const AtlasSnapshotHeader& targetHeader =
+				targetSnapshot.sourceHeader;
+			const AtlasSnapshotHeader& sourceHeader =
+				sourceSnapshot.sourceHeader;
+			return !targetSnapshot.sourcePath.empty()
+				&& !sourceSnapshot.sourcePath.empty()
+				&& _wcsicmp(targetSnapshot.sourcePath.c_str(),
+					sourceSnapshot.sourcePath.c_str()) == 0
+				&& targetSnapshot.pixelMode == sourceSnapshot.pixelMode
+				&& targetHeader.snapshotHash == sourceHeader.snapshotHash
+				&& targetHeader.pageContentHash
+					== sourceHeader.pageContentHash
+				&& targetHeader.payloadChecksum
+					== sourceHeader.payloadChecksum
+				&& targetHeader.pixelBytes == sourceHeader.pixelBytes
+				&& targetHeader.placementCount
+					== sourceHeader.placementCount;
+		}
+
+		bool AttachRebuiltDefaultPoolTexture(
+			AtlasResource& target, AtlasResource& source)
+		{
+			if (!CanAliasRebuiltDefaultPoolTexture(target, source))
+				return false;
+			NiTexture* targetTexture = GetAtlasTexture(target);
+			NiTexture* sourceTexture = GetAtlasTexture(source);
+			NiDX9TextureData* targetData =
+				targetTexture ? targetTexture->GetDX9RendererData() : nullptr;
+			IDirect3DTexture9* sharedTexture =
+				QueryAtlasD3DTexture(source);
+			if (!targetTexture || !sourceTexture || !targetData
+				|| !sharedTexture)
+			{
+				if (sharedTexture)
+					sharedTexture->Release();
+				return false;
+			}
+			if (targetData->m_pkD3DTexture)
+			{
+				targetData->m_pkD3DTexture->Release();
+				targetData->m_pkD3DTexture = nullptr;
+			}
+			targetData->m_pkD3DTexture = sharedTexture;
+			if (!targetData->InitializeFromD3DTexture(sharedTexture))
+			{
+				targetData->m_pkD3DTexture = nullptr;
+				sharedTexture->Release();
+				return false;
+			}
+			targetTexture->m_kFormatPrefs = sourceTexture->m_kFormatPrefs;
+			target.pixelMode = source.pixelMode;
+			target.mipLevels = source.mipLevels;
+			target.resetPending = false;
+			target.sharedGpuPage = true;
+			source.sharedGpuPage = true;
+			NotifyNativeA8AtlasTextureMutation();
+			return true;
+		}
+
 		void ReleaseDefaultPoolTexture(AtlasResource& resource)
 		{
 			if (resource.backend != AtlasBackend::DefaultPool)
@@ -2285,6 +2416,7 @@ namespace fonthook::vectorfont
 				: std::chrono::steady_clock::time_point{};
 			UInt32 processed = 0;
 			UInt32 failed = 0;
+			UInt32 shared = 0;
 			{
 				std::lock_guard<std::mutex> lock(state.atlasMutex);
 				if (beforeReset)
@@ -2294,15 +2426,48 @@ namespace fonthook::vectorfont
 				}
 				if (!beforeReset)
 					ResolveGpuAtlasBudget(true);
+				std::unordered_set<AtlasResource*> visited;
+				std::vector<AtlasResource*> rebuiltPages;
 				auto process = [&](AtlasResource& resource)
 				{
 					if (resource.backend != AtlasBackend::DefaultPool)
 						return;
+					if (!visited.insert(&resource).second)
+						return;
 					++processed;
 					if (beforeReset)
 						ReleaseDefaultPoolTexture(resource);
-					else if (!RebuildDefaultPoolTexture(resource))
-						++failed;
+					else
+					{
+						AtlasResource* physical = nullptr;
+						for (AtlasResource* candidate : rebuiltPages)
+						{
+							if (candidate
+								&& CanAliasRebuiltDefaultPoolTexture(
+									resource, *candidate))
+							{
+								physical = candidate;
+								break;
+							}
+						}
+						if (physical
+							&& AttachRebuiltDefaultPoolTexture(
+								resource, *physical))
+						{
+							++shared;
+							return;
+						}
+						if (!RebuildDefaultPoolTexture(resource))
+						{
+							++failed;
+							return;
+						}
+						if (resource.pageContentHash
+							&& resource.compactSnapshot)
+						{
+							rebuiltPages.push_back(&resource);
+						}
+					}
 				};
 				for (auto& [key, entry] : state.atlasCache)
 				{
@@ -2316,16 +2481,7 @@ namespace fonthook::vectorfont
 				}
 				if (!beforeReset)
 				{
-					state.atlasCacheBytes = 0;
-					for (auto& [key, entry] : state.atlasCache)
-					{
-						if (!entry.resource)
-							continue;
-						entry.bytes = GetAtlasStorageBytes(entry.resource->width,
-							entry.resource->height, entry.resource->pixelMode,
-							entry.resource->mipLevels);
-						state.atlasCacheBytes += entry.bytes;
-					}
+					RefreshAtlasCacheGpuAccountingLocked(state);
 					PruneRetiredAtlases();
 					TrimAtlasCache(state);
 				}
@@ -2392,8 +2548,9 @@ namespace fonthook::vectorfont
 				const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now() - started).count();
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: DEFAULT atlas reset phase=%s generations=%u failed=%u timeUs=%lld",
-					beforeReset ? "release" : "rebuild", processed, failed,
+					"tnvse_freetype_font: DEFAULT atlas reset phase=%s generations=%u shared=%u failed=%u timeUs=%lld",
+					beforeReset ? "release" : "rebuild",
+					processed, shared, failed,
 					static_cast<long long>(elapsed));
 			}
 			return true;

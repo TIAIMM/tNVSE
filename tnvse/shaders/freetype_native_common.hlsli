@@ -10,6 +10,9 @@ struct NativeFontPixelInput
 	// x: source SDF spread, y: 1/sourceToLogicalScale,
 	// z: exact Shadow/Glow/Outline/Fill bit mask.
 	float3 glyphParams : TEXCOORD1;
+	// Exact u0/v0/u1/v1 source rectangle. Composite geometry may extrapolate
+	// atlasUv to include an offset shadow, but samples remain glyph-local.
+	float4 glyphBounds : TEXCOORD2;
 };
 
 float NativeFontUsesLiveTileRgb(float layerAndFlags)

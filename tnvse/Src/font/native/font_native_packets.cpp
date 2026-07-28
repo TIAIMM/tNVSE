@@ -302,6 +302,10 @@ namespace fonthook::vectorfont
 					liveTileRgbMask |= 1u << layer;
 			}
 			packet.constants[29] = static_cast<float>(liveTileRgbMask);
+			packet.constants[30] =
+				effects.shadowOffsetX * effects.shadowOffsetRasterScale;
+			packet.constants[31] =
+				effects.shadowOffsetY * effects.shadowOffsetRasterScale;
 			return packet;
 		}
 	}

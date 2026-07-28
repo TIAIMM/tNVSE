@@ -217,12 +217,21 @@ namespace fonthook::vectorfont
 
 		bool IsPhysicalAtlasGroupResidentLocked(
 			const PhysicalAtlasGroup& group,
-			std::shared_ptr<AtlasResource>* sharedResource = nullptr)
+			std::shared_ptr<AtlasResource>* sharedResource = nullptr,
+			const char** failureReason = nullptr)
 		{
 			if (sharedResource)
 				sharedResource->reset();
-			if (group.members.empty())
+			if (failureReason)
+				*failureReason = "none";
+			const auto fail = [&](const char* reason)
+			{
+				if (failureReason)
+					*failureReason = reason;
 				return false;
+			};
+			if (group.members.empty())
+				return fail("empty-group");
 
 			std::vector<AtlasCacheKey> roleKeys;
 			std::unordered_set<AtlasProfileKey, AtlasProfileKeyHash>
@@ -253,7 +262,7 @@ namespace fonthook::vectorfont
 					|| profile->second.pages.size() != 1
 					|| profile->second.pages.front() != 0)
 				{
-					return false;
+					return fail("incomplete-profile");
 				}
 				roleKey.pageIndex = 0;
 				const auto page = state.atlasCache.find(roleKey);
@@ -265,7 +274,13 @@ namespace fonthook::vectorfont
 						& kAtlasSnapshotFlagPhysicalFontGroup)
 					|| !page->second.resource->pageContentHash)
 				{
-					return false;
+					return fail("missing-page-resource");
+				}
+				const AtlasResource& resource = *page->second.resource;
+				if (resource.compactSnapshot->sourceHeader.pageContentHash
+					!= resource.pageContentHash)
+				{
+					return fail("snapshot-content-mismatch");
 				}
 				if (!first)
 				{
@@ -273,16 +288,21 @@ namespace fonthook::vectorfont
 					pageContentHash = first->pageContentHash;
 				}
 				else if (page->second.resource->pageContentHash
-						!= pageContentHash
-					|| !AreAtlasResourcesBackedBySameTexture(
-						*first, *page->second.resource))
+						!= pageContentHash)
 				{
-					return false;
+					return fail("page-content-mismatch");
+				}
+				else if (!AreAtlasResourcesBackedBySameTexture(
+					*first, *page->second.resource))
+				{
+					return fail("physical-texture-mismatch");
 				}
 			}
+			if (!first)
+				return fail("missing-shared-resource");
 			if (sharedResource)
-				*sharedResource = std::move(first);
-			return first != nullptr;
+				*sharedResource = first;
+			return true;
 		}
 
 		bool IsPhysicalAtlasGroupFallbackMarkedLocked(
@@ -2276,6 +2296,8 @@ namespace fonthook::vectorfont
 				else
 					insertedAllPages = false;
 			}
+			if (!metadataOnly)
+				RefreshAtlasCacheGpuAccountingLocked(state);
 		}
 		if (!insertedAllPages)
 			return false;
@@ -2589,6 +2611,7 @@ namespace fonthook::vectorfont
 				}
 				InvalidateCompleteAtlasProfileLocked(state, profileKey);
 			}
+			RefreshAtlasCacheGpuAccountingLocked(state);
 		}
 
 		UInt32 deletedFiles = 0;
@@ -3845,20 +3868,23 @@ namespace fonthook::vectorfont
 
 			std::shared_ptr<AtlasResource> shared;
 			bool physicallyShared = false;
+			const char* validationFailure = "not-rebuilt";
 			if (rebuilt)
 			{
 				std::lock_guard<std::mutex> lock(State().atlasMutex);
 				physicallyShared =
-					IsPhysicalAtlasGroupResidentLocked(group, &shared);
+					IsPhysicalAtlasGroupResidentLocked(
+						group, &shared, &validationFailure);
 			}
 			if (!rebuilt || !physicallyShared || !shared)
 			{
 				success = false;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: physical atlas group restore validation failed owner=%u members=%u rebuilt=%u physicallyShared=%u",
+					"tnvse_freetype_font: physical atlas group restore validation failed owner=%u members=%u rebuilt=%u physicallyShared=%u reason=%s",
 					group.ownerFontId,
 					static_cast<UInt32>(group.members.size()),
-					rebuilt ? 1u : 0u, physicallyShared ? 1u : 0u);
+					rebuilt ? 1u : 0u, physicallyShared ? 1u : 0u,
+					validationFailure);
 				continue;
 			}
 
@@ -3922,6 +3948,7 @@ namespace fonthook::vectorfont
 					++discardedPages;
 				}
 			}
+			RefreshAtlasCacheGpuAccountingLocked(state);
 		}
 
 		const bool restored = TryLoadGlyphAtlasSnapshot(runtime, rasterScale);

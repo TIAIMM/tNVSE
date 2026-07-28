@@ -2626,7 +2626,9 @@ namespace fonthook::vectorfont
 				for (UInt16 candidate = 0;
 					candidate < result.atlases.size(); ++candidate)
 				{
-					if (result.atlases[candidate].get() == page.get())
+					if (result.atlases[candidate].get() == page.get()
+						|| AreAtlasResourcesBackedBySameTexture(
+							*result.atlases[candidate], *page))
 					{
 						ordinal = candidate;
 						break;
