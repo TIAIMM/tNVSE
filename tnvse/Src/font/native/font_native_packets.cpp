@@ -253,7 +253,8 @@ namespace fonthook::vectorfont
 
 		NativeA8PacketTemplate BuildCompositePacket(
 			const A8EffectShapeConfig& effects,
-			const NativeA8CompositeSpan& span, const NiBound& bound)
+			const NativeA8CompositeSpan& span, const NiBound& bound,
+			UInt8 staticLayerMask)
 		{
 			NativeA8PacketTemplate packet;
 			packet.firstVertex = span.firstVertex;
@@ -265,6 +266,10 @@ namespace fonthook::vectorfont
 			packet.distanceFieldMethod = effects.distanceFieldMethod;
 			packet.layer = 3;
 			packet.atlasPage = span.atlasPage;
+			packet.staticCompositeLayerMask = staticLayerMask;
+			packet.compositeShiftedShadow = (staticLayerMask & 1u)
+				&& (effects.shadowOffsetX != 0.0f
+					|| effects.shadowOffsetY != 0.0f);
 			packet.staticSmoothSampling = true;
 			packet.usesLiveTileRgb = true;
 
@@ -283,6 +288,7 @@ namespace fonthook::vectorfont
 						effects.inverseAtlasHeight);
 			packet.constants[4] = inverseSize.x;
 			packet.constants[5] = inverseSize.y;
+			packet.constants[7] = effects.rasterScale;
 			packet.constants[8] = effects.shadowBlurPixels;
 			packet.constants[9] = effects.shadowPower;
 			packet.constants[10] = effects.glowInnerPixels;
@@ -307,6 +313,32 @@ namespace fonthook::vectorfont
 			packet.constants[31] =
 				effects.shadowOffsetY * effects.shadowOffsetRasterScale;
 			return packet;
+		}
+
+		UInt8 ResolveStaticCompositeLayerMask(
+			const std::vector<NativeA8GpuVertex>& vertices,
+			const NativeA8CompositeSpan& span)
+		{
+			const size_t end = static_cast<size_t>(span.firstVertex)
+				+ span.vertexCount;
+			if (!span.vertexCount || end > vertices.size())
+				return 0;
+			UInt8 resolved = 0;
+			for (size_t index = span.firstVertex; index < end; ++index)
+			{
+				const float encoded = vertices[index].layerMask;
+				const UInt32 mask = static_cast<UInt32>(encoded);
+				if (mask < 1u || mask > 15u
+					|| encoded != static_cast<float>(mask))
+				{
+					return 0;
+				}
+				if (!resolved)
+					resolved = static_cast<UInt8>(mask);
+				else if (resolved != mask)
+					return 0;
+			}
+			return resolved;
 		}
 	}
 
@@ -354,6 +386,8 @@ namespace fonthook::vectorfont
 			packet.vertexCount = span.vertexCount;
 			packet.bound = bound;
 			packet.constants = span.constants;
+			if (effects.shaderEffects)
+				packet.constants[7] = effects.rasterScale;
 			packet.shaderClass = span.shaderClass;
 			packet.sampling = span.sampling;
 			packet.quality = effects.quality;
@@ -380,8 +414,12 @@ namespace fonthook::vectorfont
 					payload->compositePackets.clear();
 					break;
 				}
+				const UInt8 staticLayerMask =
+					ResolveStaticCompositeLayerMask(
+						payload->gpuVertices, span);
 				payload->compositePackets.push_back(
-					BuildCompositePacket(effects, span, bound));
+					BuildCompositePacket(effects, span, bound,
+						staticLayerMask));
 			}
 		}
 		payload->cpuMemory.Reset(CpuMemoryCategory::TextArtifact,

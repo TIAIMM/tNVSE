@@ -82,22 +82,42 @@ namespace fonthook::vectorfont
 		public:
 			// The native profile mirrors the stock Tile value into c0 for its final
 			// packet and deliberately leaves it there, matching an ordinary Tile
-			// draw. Only tNVSE-owned c1-c8 need isolation from the next shader.
+			// draw. tNVSE-owned pixel c1-c8 and vertex c4 need isolation from the
+			// next shader; VS c4 carries viewport/raster data for analytic AA.
 			static constexpr UINT kFirstRegister = 1;
 			static constexpr UINT kRegisterCount =
 				static_cast<UINT>(kNativeA8PacketConstantRegisterCount);
 			static constexpr size_t kFloatCount = kRegisterCount * 4;
+			static constexpr UINT kVertexRegister =
+				static_cast<UINT>(kNativeA8VertexAaConstantRegister);
+			static constexpr UINT kVertexRegisterCount = 1;
+			static constexpr size_t kVertexFloatCount = 4;
 
 			explicit NativePixelConstantScope(IDirect3DDevice9* device)
 				: m_device(device)
 			{
-				m_result = m_device
-					? m_device->GetPixelShaderConstantF(kFirstRegister,
-						m_original.data(), kRegisterCount)
-					: D3DERR_INVALIDCALL;
-				m_captured = SUCCEEDED(m_result);
-				if (!m_captured)
+				if (!m_device)
+				{
+					m_result = D3DERR_INVALIDCALL;
 					m_operation = "capture-pixel-constants";
+					return;
+				}
+				m_result = m_device->GetPixelShaderConstantF(kFirstRegister,
+					m_original.data(), kRegisterCount);
+				if (FAILED(m_result))
+				{
+					m_operation = "capture-pixel-constants";
+					return;
+				}
+				m_result = m_device->GetVertexShaderConstantF(kVertexRegister,
+					m_originalVertex.data(), kVertexRegisterCount);
+				if (FAILED(m_result))
+				{
+					m_operation = "capture-vertex-aa-constant";
+					return;
+				}
+				m_captured = true;
+				m_operation = "none";
 			}
 
 			~NativePixelConstantScope()
@@ -126,9 +146,16 @@ namespace fonthook::vectorfont
 					m_operation = "restore-pixel-constants";
 					return false;
 				}
-				// SetPixelShaderConstantF already reports a failed restore. The readback
-				// is useful for diagnostics but forces another driver round trip for
-				// every text facade, so retain it only in the detailed logging mode.
+				m_result = m_device->SetVertexShaderConstantF(kVertexRegister,
+					m_originalVertex.data(), kVertexRegisterCount);
+				if (FAILED(m_result))
+				{
+					m_operation = "restore-vertex-aa-constant";
+					return false;
+				}
+				// The Set calls already report a failed restore. Readback is useful
+				// for diagnostics but forces driver round trips, so retain it only
+				// in detailed logging mode.
 				if (!g_bEnableFreeTypeFontRenderingLog)
 				{
 					m_operation = "none";
@@ -154,6 +181,25 @@ namespace fonthook::vectorfont
 						return false;
 					}
 				}
+				m_result = m_device->GetVertexShaderConstantF(kVertexRegister,
+					m_verifyVertex.data(), kVertexRegisterCount);
+				if (FAILED(m_result))
+				{
+					m_operation = "verify-vertex-aa-constant";
+					return false;
+				}
+				for (size_t index = 0; index < kVertexFloatCount; ++index)
+				{
+					if (std::memcmp(&m_originalVertex[index],
+						&m_verifyVertex[index], sizeof(float)) != 0)
+					{
+						m_operation = "vertex-aa-constant-mismatch";
+						m_mismatchRegister =
+							static_cast<SInt32>(kVertexRegister);
+						m_result = E_FAIL;
+						return false;
+					}
+				}
 				m_operation = "none";
 				m_result = D3D_OK;
 				return true;
@@ -163,6 +209,8 @@ namespace fonthook::vectorfont
 			IDirect3DDevice9* m_device = nullptr;
 			std::array<float, kFloatCount> m_original = {};
 			std::array<float, kFloatCount> m_verify = {};
+			std::array<float, kVertexFloatCount> m_originalVertex = {};
+			std::array<float, kVertexFloatCount> m_verifyVertex = {};
 			HRESULT m_result = D3DERR_INVALIDCALL;
 			const char* m_operation = "capture-pixel-constants";
 			SInt32 m_mismatchRegister = -1;
@@ -215,6 +263,13 @@ namespace fonthook::vectorfont
 					NativePixelConstantScope::kRegisterCount);
 				if (FAILED(m_result))
 					return SetFailure("restore-pixel-constants", m_result);
+				m_result = m_device->SetVertexShaderConstantF(
+					NativePixelConstantScope::kVertexRegister,
+					m_originalVertex.data(),
+					NativePixelConstantScope::kVertexRegisterCount);
+				if (FAILED(m_result))
+					return SetFailure(
+						"restore-vertex-aa-constant", m_result);
 				if (g_bEnableFreeTypeFontRenderingLog)
 				{
 					m_result = m_device->GetPixelShaderConstantF(
@@ -234,6 +289,26 @@ namespace fonthook::vectorfont
 									+ index / 4);
 							return SetFailure(
 								"pixel-constant-mismatch", E_FAIL);
+						}
+					}
+					m_result = m_device->GetVertexShaderConstantF(
+						NativePixelConstantScope::kVertexRegister,
+						m_verifyVertex.data(),
+						NativePixelConstantScope::kVertexRegisterCount);
+					if (FAILED(m_result))
+						return SetFailure(
+							"verify-vertex-aa-constant", m_result);
+					for (size_t index = 0;
+						index < NativePixelConstantScope::kVertexFloatCount;
+						++index)
+					{
+						if (std::memcmp(&m_originalVertex[index],
+							&m_verifyVertex[index], sizeof(float)) != 0)
+						{
+							m_mismatchRegister = static_cast<SInt32>(
+								NativePixelConstantScope::kVertexRegister);
+							return SetFailure(
+								"vertex-aa-constant-mismatch", E_FAIL);
 						}
 					}
 				}
@@ -264,9 +339,16 @@ namespace fonthook::vectorfont
 					NativePixelConstantScope::kFirstRegister,
 					m_original.data(),
 					NativePixelConstantScope::kRegisterCount);
-				m_captured = SUCCEEDED(m_result);
-				if (!m_captured)
+				if (FAILED(m_result))
 					return SetFailure("capture-pixel-constants", m_result);
+				m_result = device->GetVertexShaderConstantF(
+					NativePixelConstantScope::kVertexRegister,
+					m_originalVertex.data(),
+					NativePixelConstantScope::kVertexRegisterCount);
+				if (FAILED(m_result))
+					return SetFailure(
+						"capture-vertex-aa-constant", m_result);
+				m_captured = true;
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::ConstantBatchCapture);
 				m_operation = "none";
@@ -285,6 +367,12 @@ namespace fonthook::vectorfont
 			IDirect3DDevice9* m_device = nullptr;
 			std::array<float, NativePixelConstantScope::kFloatCount> m_original = {};
 			std::array<float, NativePixelConstantScope::kFloatCount> m_verify = {};
+			std::array<float,
+				NativePixelConstantScope::kVertexFloatCount>
+				m_originalVertex = {};
+			std::array<float,
+				NativePixelConstantScope::kVertexFloatCount>
+				m_verifyVertex = {};
 			HRESULT m_result = D3D_OK;
 			const char* m_operation = "none";
 			SInt32 m_mismatchRegister = -1;
@@ -303,7 +391,7 @@ namespace fonthook::vectorfont
 				s_pixelConstantBatch.Operation(),
 				s_pixelConstantBatch.Result());
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: batched pixel-constant isolation fault phase=%s operation=%s hr=0x%08X register=%d generation=%u",
+				"tnvse_freetype_native: batched shader-constant isolation fault phase=%s operation=%s hr=0x%08X register=%d generation=%u",
 				phase ? phase : "unknown",
 				s_pixelConstantBatch.Operation(),
 				static_cast<UInt32>(s_pixelConstantBatch.Result()),
@@ -413,7 +501,7 @@ namespace fonthook::vectorfont
 			// TileRenderPass -> NiTriShape::RenderImmediate renderer path.
 			//
 			// Final ARGB and baked-coverage bitmaps use only c0. Skipping the
-			// distance-field c1-c8 isolation and facade batch bookkeeping removes
+			// distance-field c1-c8/VS-c4 isolation and facade bookkeeping removes
 			// the only per-facade driver readback/writeback from this stock-like
 			// multipage route.
 			const bool isolatePacketConstants =
@@ -428,7 +516,7 @@ namespace fonthook::vectorfont
 				if (isolatePacketConstants)
 					shaderBatch.emplace();
 				// Retail 0xB64F90 calls 0xB994F0 once per sorted item with no
-				// intervening draw. Capture c1-c8 once for that sorted batch and
+				// intervening draw. Capture PS c1-c8 and VS c4 once for that batch and
 				// preserve the local scope for direct/non-sorted submissions.
 				if (batchedConstants)
 				{
@@ -747,7 +835,7 @@ namespace fonthook::vectorfont
 					sourcePayload->preparedGeneration,
 					draw.operation, draw.result);
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: pixel-constant isolation fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-native-group",
+					"tnvse_freetype_native: shader-constant isolation fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-native-group",
 					draw.operation, static_cast<UInt32>(draw.result),
 					draw.mismatchRegister, shape, metadata->fontId,
 					sourcePayload->preparedGeneration,

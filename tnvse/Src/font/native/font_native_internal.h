@@ -25,6 +25,10 @@ namespace fonthook::vectorfont
 	inline constexpr size_t kNativeA8PacketConstantRegisterCount = 8;
 	inline constexpr size_t kNativeA8PacketConstantFloatCount =
 		kNativeA8PacketConstantRegisterCount * 4;
+	// c0-c3 retain the stock Tile WVP matrix. c4 is tNVSE-owned while a native
+	// distance-field packet is active and carries viewport/raster information
+	// used to compute the analytic AA footprint in the vertex shader.
+	inline constexpr UInt32 kNativeA8VertexAaConstantRegister = 4;
 
 	enum class NativeA8ShaderClass : UInt8
 	{
@@ -118,6 +122,11 @@ namespace fonthook::vectorfont
 			GetConfiguredDistanceFieldMethod();
 		UInt32 layer = 3;
 		UInt16 atlasPage = 0;
+		// Zero keeps the generic per-glyph mask shader. A non-zero value proves
+		// that every quad in this composite packet carries the same exact mask
+		// and permits an immutable MTSDF pixel-shader profile.
+		UInt8 staticCompositeLayerMask = 0;
+		bool compositeShiftedShadow = false;
 		bool staticSmoothSampling = false;
 		bool usesLiveTileRgb = true;
 	};

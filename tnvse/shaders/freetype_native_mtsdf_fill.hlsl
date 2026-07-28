@@ -4,7 +4,7 @@
 
 sampler2D FontAtlas : register(s0);
 float4 TileColor : register(c0);
-float4 AtlasPass : register(c2); // invWidth, invHeight, layer, MTSDF spread
+float4 AtlasPass : register(c2); // invWidth, invHeight, layer, raster scale
 
 #include "freetype_native_common.hlsli"
 
@@ -15,14 +15,6 @@ float EvaluateNativeFontMtsdfFillAt(float2 uv, float antialiasWidth,
 	const float distance = DecodeNativeFontSelectedDistance(
 		NativeFontBodyEncodedDistance(distanceSample), spread);
 	return NativeFontMtsdfBody(distance, antialiasWidth);
-}
-
-float ResolveNativeFontMtsdfAntialiasWidth(float2 derivativeUv, float spread)
-{
-	const float screenPxRange = NativeFontMtsdfScreenPxRange(
-		derivativeUv, AtlasPass.xy, spread);
-	return NativeFontMtsdfAntialiasWidth(
-		screenPxRange, spread);
 }
 
 float SupersampledNativeFontMtsdfFill(float2 uv, float antialiasWidth,
@@ -69,7 +61,7 @@ float4 Main(NativeFontPixelInput input) : COLOR0
 {
 	const float spread = max(input.glyphParams.x, 0.0001);
 	const float antialiasWidth =
-		ResolveNativeFontMtsdfAntialiasWidth(input.atlasUv, spread);
+		ResolveNativeFontMtsdfAntialiasWidth(input, spread);
 	const float coverage =
 		SupersampledNativeFontMtsdfFill(
 			input.atlasUv, antialiasWidth, spread);

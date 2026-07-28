@@ -420,6 +420,10 @@ namespace fonthook::vectorfont
 		DistanceFieldMethod distanceFieldMethod =
 			GetConfiguredDistanceFieldMethod();
 		EffectQuality quality = EffectQuality::Balanced;
+		// Source pixels per configured logical pixel. Packet c2.w mirrors this
+		// value so the native vertex shader can derive the MTSDF AA footprint
+		// without per-pixel ddx/ddy instructions.
+		float rasterScale = 1.0f;
 		float inverseAtlasWidth = 0.0f;
 		float inverseAtlasHeight = 0.0f;
 		float sdfSpreadPixels = 0.0f;

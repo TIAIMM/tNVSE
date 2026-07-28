@@ -684,6 +684,7 @@ namespace fonthook::vectorfont
 			build.config.distanceFieldMethod =
 				GetConfiguredDistanceFieldMethod();
 			build.config.quality = quality;
+			build.config.rasterScale = rasterScale;
 			UInt32 sdfSpread = 0;
 			if (!ResolveSdfSpread(
 				config, rasterScale, sdfSpread, !suppressEffects))
@@ -2695,7 +2696,8 @@ namespace fonthook::vectorfont
 			add(&effect.quality, sizeof(effect.quality));
 			for (const PendingQuad& quad : quads)
 				add(&quad.baseColor, sizeof(quad.baseColor));
-			const std::array<float, 15> scalars = {
+			const std::array<float, 16> scalars = {
+				effect.rasterScale,
 				effect.inverseAtlasWidth, effect.inverseAtlasHeight,
 				effect.sdfSpreadPixels, effect.shadowBlurPixels,
 				effect.shadowPower, effect.shadowGlowAlpha,

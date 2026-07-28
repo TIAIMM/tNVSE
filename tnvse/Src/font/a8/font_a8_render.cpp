@@ -134,6 +134,7 @@ namespace fonthook::vectorfont
 					|| vertexEnd > payloadTemplate->gpuVertices.size()
 					|| packet.layer > 3 || !IsFiniteBound(packet.bound)
 					|| packet.shaderClass != NativeA8ShaderClass::Composite
+					|| packet.staticCompositeLayerMask > 15u
 					|| !std::all_of(packet.constants.begin(), packet.constants.end(),
 						[](float value) { return std::isfinite(value); }))
 				{
@@ -150,7 +151,8 @@ namespace fonthook::vectorfont
 				return RejectA8Shape("native-route-profile-kind-conflict");
 			const bool distanceFieldProfile = effectConfig->shaderEffects;
 
-			const std::array<float, 15> scalarValues = {
+			const std::array<float, 16> scalarValues = {
+				effectConfig->rasterScale,
 				effectConfig->inverseAtlasWidth,
 				effectConfig->inverseAtlasHeight,
 				effectConfig->sdfSpreadPixels,
@@ -172,6 +174,8 @@ namespace fonthook::vectorfont
 			{
 				return RejectA8Shape("non-finite-effect-configuration");
 			}
+			if (effectConfig->rasterScale <= 0.0f)
+				return RejectA8Shape("invalid-effect-raster-scale");
 			if (effectConfig->shadowGlowAlpha < 0.0f
 				|| effectConfig->shadowGlowAlpha > 1.0f
 				|| effectConfig->shadowOutlineAlpha < 0.0f

@@ -33,6 +33,16 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_composite_fast.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_composite_balanced.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_sdf_composite_high.pso")
+  foreach(quality IN ITEMS fast balanced high)
+    foreach(mask IN ITEMS 8 9 10 11 12 13 14 15)
+      list(APPEND shader_outputs
+        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_${quality}_m${mask}.pso")
+    endforeach()
+    foreach(mask IN ITEMS 9 11 13 15)
+      list(APPEND shader_outputs
+        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_${quality}_m${mask}_shift.pso")
+    endforeach()
+  endforeach()
 
   # Keep HLSL visible in the generated Visual Studio solution without letting
   # VS invoke its generic FxCompile rule. The batch file is the authoritative

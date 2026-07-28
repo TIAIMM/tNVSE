@@ -23,7 +23,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -58,6 +60,9 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kNativeVtableMagic = 0x35544D4E; // "NMT5"
 		inline constexpr UInt32 kShaderRefreshMessage = 0;
 		inline constexpr DWORD kInitializationRetryMilliseconds = 1000;
+		inline constexpr UInt8 kStaticCompositeLayerMaskFirst = 8;
+		inline constexpr size_t kStaticCompositeLayerMaskCount = 8;
+		inline constexpr size_t kStaticCompositeShiftCount = 2;
 
 		using CreateVertexShaderFn = NiD3DVertexShader* (__cdecl*)(const char*);
 		using CreatePixelShaderFn = NiD3DPixelShader* (__cdecl*)(const char*);
@@ -67,6 +72,12 @@ namespace fonthook::vectorfont
 		struct NativeShaderGeneration;
 		struct NativeShaderProfile;
 
+		struct NativeVertexAaState
+		{
+			D3DVIEWPORT9 viewport = {};
+			bool viewportReady = false;
+		};
+
 		struct NativeSortedShaderBatch
 		{
 			IDirect3DDevice9* device = nullptr;
@@ -75,6 +86,7 @@ namespace fonthook::vectorfont
 			std::array<float, kNativeA8PacketConstantFloatCount>
 				packetConstants = {};
 			UInt32 depth = 0;
+			NativeVertexAaState vertexAa;
 			bool packetConstantsReady = false;
 			bool samplerReady = false;
 		};
@@ -88,6 +100,8 @@ namespace fonthook::vectorfont
 			EffectQuality quality = EffectQuality::Balanced;
 			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
 			std::array<UInt32, kNativeA8PacketConstantFloatCount> constantBits = {};
+			UInt8 staticCompositeLayerMask = 0;
+			bool compositeShiftedShadow = false;
 			bool writeEffectAlpha = false;
 			bool usesLiveTileRgb = true;
 
@@ -97,6 +111,10 @@ namespace fonthook::vectorfont
 					&& sampling == other.sampling
 					&& quality == other.quality
 					&& distanceFieldMethod == other.distanceFieldMethod
+					&& staticCompositeLayerMask
+						== other.staticCompositeLayerMask
+					&& compositeShiftedShadow
+						== other.compositeShiftedShadow
 					&& writeEffectAlpha == other.writeEffectAlpha
 					&& usesLiveTileRgb == other.usesLiveTileRgb
 					&& constantBits == other.constantBits;
@@ -119,6 +137,8 @@ namespace fonthook::vectorfont
 				mix(static_cast<UInt32>(key.sampling));
 				mix(static_cast<UInt32>(key.quality));
 				mix(static_cast<UInt32>(key.distanceFieldMethod));
+				mix(key.staticCompositeLayerMask);
+				mix(key.compositeShiftedShadow ? 1u : 0u);
 				mix(key.writeEffectAlpha ? 1u : 0u);
 				mix(key.usesLiveTileRgb ? 1u : 0u);
 				for (UInt32 value : key.constantBits)
@@ -177,6 +197,15 @@ namespace fonthook::vectorfont
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
 			std::array<NiD3DPixelShaderPtr, 3> compositeShaders;
+			std::array<std::array<std::array<NiD3DPixelShaderPtr,
+				kStaticCompositeShiftCount>,
+				kStaticCompositeLayerMaskCount>, 3>
+				mtsdfCompositeProfileShaders;
+			std::array<std::array<std::array<bool,
+				kStaticCompositeShiftCount>,
+				kStaticCompositeLayerMaskCount>, 3>
+				mtsdfCompositeProfileAttempts = {};
+			CreatePixelShaderFn createPixelShader = nullptr;
 			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
 			bool supportsSeparateAlpha = false;
 			std::atomic<bool> runtimeFault = false;
@@ -196,6 +225,7 @@ namespace fonthook::vectorfont
 		UInt32 s_nextGeneration = 1;
 		DWORD s_lastInitializationAttempt = 0;
 		std::atomic<bool> s_invalidVtableLogged = false;
+		std::atomic<UInt32> s_compositeProfileLogCount = 0;
 		std::atomic<bool> s_resetInProgress = false;
 		NiDX9Renderer* s_resetRenderer = nullptr;
 
@@ -204,6 +234,7 @@ namespace fonthook::vectorfont
 			std::array<float, kNativeA8PacketConstantFloatCount>
 				packetConstants = {};
 			UInt32 depth = 0;
+			NativeVertexAaState vertexAa;
 			bool packetConstantsReady = false;
 			bool samplerReady = false;
 		};
@@ -311,6 +342,63 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		HRESULT PublishNativeVertexAaConstant(IDirect3DDevice9* device,
+			float rasterScale, NativeVertexAaState* cache,
+			const char*& operation)
+		{
+			operation = "none";
+			if (!device || !std::isfinite(rasterScale) || rasterScale <= 0.0f)
+			{
+				operation = "resolve-vertex-aa-profile";
+				return D3DERR_INVALIDCALL;
+			}
+
+			D3DVIEWPORT9 viewport = {};
+			if (cache && cache->viewportReady)
+			{
+				viewport = cache->viewport;
+			}
+			else
+			{
+				const HRESULT viewportResult = device->GetViewport(&viewport);
+				if (FAILED(viewportResult))
+				{
+					operation = "GetViewport(vertex-aa)";
+					return viewportResult;
+				}
+				if (!viewport.Width || !viewport.Height)
+				{
+					operation = "validate-viewport(vertex-aa)";
+					return D3DERR_INVALIDCALL;
+				}
+				if (cache)
+				{
+					cache->viewport = viewport;
+					cache->viewportReady = true;
+				}
+			}
+
+			const std::array<float, 4> aaProfile = {
+				static_cast<float>(viewport.Width) * 0.5f,
+				static_cast<float>(viewport.Height) * 0.5f,
+				rasterScale, 1.0f
+			};
+			// Stock TileShader::UpdateConstants runs immediately before this call.
+			// Its reflected vertex-constant map is free to rewrite c4 for every
+			// packet, including consecutive native facades. Cache only the stable
+			// viewport query; the tNVSE-owned AA register must always be republished
+			// after the stock update or later glyphs can inherit a zero/stale AA
+			// footprint and become visibly aliased.
+			const HRESULT constantResult = device->SetVertexShaderConstantF(
+				kNativeA8VertexAaConstantRegister, aaProfile.data(), 1);
+			if (FAILED(constantResult))
+			{
+				operation = "SetVertexShaderConstantF(c4-aa)";
+				return constantResult;
+			}
+			return D3D_OK;
+		}
+
 		void __fastcall NativeUpdateConstants(TileShader* shader, void*,
 			const NiPropertyState* properties)
 		{
@@ -376,6 +464,7 @@ namespace fonthook::vectorfont
 				sortedBatch.device = device;
 				sortedBatch.generation = generation->id;
 				sortedBatch.packetProfile = nullptr;
+				sortedBatch.vertexAa = {};
 				sortedBatch.packetConstantsReady = false;
 				sortedBatch.samplerReady = false;
 			}
@@ -391,6 +480,22 @@ namespace fonthook::vectorfont
 				return;
 			}
 			HRESULT constantsResult = D3D_OK;
+			if (!simpleColorProfile)
+			{
+				NativeVertexAaState* vertexAaCache = sortedBatchActive
+					? &sortedBatch.vertexAa
+					: batchActive ? &batch.vertexAa : nullptr;
+				const char* vertexAaOperation = "none";
+				const HRESULT vertexAaResult = PublishNativeVertexAaConstant(
+					device, profile->constants[7], vertexAaCache,
+					vertexAaOperation);
+				if (FAILED(vertexAaResult))
+				{
+					MarkGenerationFault(generation, vertexAaOperation,
+						vertexAaResult);
+					return;
+				}
+			}
 			if (simpleColorProfile)
 			{
 				// The baked-coverage program consumes only live Tile c0. Avoid the
@@ -569,6 +674,10 @@ namespace fonthook::vectorfont
 			key.sampling = sampling;
 			key.quality = packet.quality;
 			key.distanceFieldMethod = packet.distanceFieldMethod;
+			key.staticCompositeLayerMask =
+				packet.staticCompositeLayerMask;
+			key.compositeShiftedShadow =
+				packet.compositeShiftedShadow;
 			key.writeEffectAlpha = writeEffectAlpha;
 			key.usesLiveTileRgb = packet.usesLiveTileRgb;
 			std::memcpy(key.constantBits.data(), packet.constants.data(),
@@ -624,6 +733,53 @@ namespace fonthook::vectorfont
 			case NativeA8ShaderClass::Composite:
 			{
 				const size_t index = static_cast<size_t>(packet.quality);
+				if (generation.distanceFieldMethod
+						== DistanceFieldMethod::Mtsdf
+					&& index
+						< generation.mtsdfCompositeProfileShaders.size()
+					&& packet.staticCompositeLayerMask
+						>= kStaticCompositeLayerMaskFirst
+					&& packet.staticCompositeLayerMask
+						< kStaticCompositeLayerMaskFirst
+							+ kStaticCompositeLayerMaskCount)
+				{
+					const size_t maskIndex =
+						packet.staticCompositeLayerMask
+							- kStaticCompositeLayerMaskFirst;
+					const size_t shiftIndex =
+						packet.compositeShiftedShadow ? 1u : 0u;
+					NiD3DPixelShaderPtr& specializedSlot =
+						generation.mtsdfCompositeProfileShaders[index]
+							[maskIndex][shiftIndex];
+					bool& attempted =
+						generation.mtsdfCompositeProfileAttempts[index]
+							[maskIndex][shiftIndex];
+					if (!HasShaderHandle(specializedSlot) && !attempted
+						&& generation.createPixelShader)
+					{
+						// ResolveNativeA8PacketShader serializes profile creation
+						// with profileMutex, so optional shader publication needs no
+						// second lock and allocates only profiles actually observed.
+						attempted = true;
+						const char* qualityNames[] = {
+							"fast", "balanced", "high"
+						};
+						char shaderName[128] = {};
+						sprintf_s(shaderName,
+							"tnvse_freetype_native_mtsdf_composite_%s_m%u%s.pso",
+							qualityNames[index],
+							static_cast<UInt32>(
+								packet.staticCompositeLayerMask),
+							packet.compositeShiftedShadow
+								? "_shift" : "");
+						specializedSlot =
+							generation.createPixelShader(shaderName);
+					}
+					NiD3DPixelShader* specialized =
+						specializedSlot.m_pObject;
+					if (specialized && specialized->GetShaderHandle())
+						return specialized;
+				}
 				return index < generation.compositeShaders.size()
 					? generation.compositeShaders[index].m_pObject : nullptr;
 			}
@@ -698,6 +854,30 @@ namespace fonthook::vectorfont
 				packet);
 			if (!pixelShader || !pixelShader->GetShaderHandle())
 				return nullptr;
+			if (packet.shaderClass == NativeA8ShaderClass::Composite
+				&& g_bEnableFreeTypeFontRenderingLog)
+			{
+				const size_t qualityIndex =
+					static_cast<size_t>(packet.quality);
+				const bool specialized = qualityIndex
+						< generation.compositeShaders.size()
+					&& pixelShader
+						!= generation.compositeShaders[
+							qualityIndex].m_pObject;
+				const UInt32 ordinal =
+					s_compositeProfileLogCount.fetch_add(
+						1, std::memory_order_relaxed);
+				if (ordinal < 16u)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_native: composite pixel profile quality=%u layerMask=%u shiftedShadow=%u specialized=%u",
+						static_cast<UInt32>(packet.quality),
+						static_cast<UInt32>(
+							packet.staticCompositeLayerMask),
+						packet.compositeShiftedShadow ? 1u : 0u,
+						specialized ? 1u : 0u);
+				}
+			}
 			NiD3DVertexShader* vertexShader =
 				generation.vertexShader.m_pObject;
 			if (!vertexShader || !vertexShader->GetShaderHandle())
@@ -815,6 +995,7 @@ namespace fonthook::vectorfont
 			auto generation = std::make_unique<NativeShaderGeneration>();
 			generation->renderer = renderer;
 			generation->device = device;
+			generation->createPixelShader = createPS;
 			generation->supportsSeparateAlpha =
 				(renderer->m_kD3DCaps9.PrimitiveMiscCaps
 					& D3DPMISCCAPS_SEPARATEALPHABLEND) != 0;
@@ -1067,13 +1248,19 @@ namespace fonthook::vectorfont
 		candidate->id = s_nextGeneration++;
 		s_processGenerations.push_back(candidate);
 		s_publishedGeneration.store(candidate, std::memory_order_release);
+		const char* compositeProfileMode =
+			!g_bEnableFreeTypeFontAggressivePerformanceMode
+				&& candidate->distanceFieldMethod
+					== DistanceFieldMethod::Mtsdf
+				? "lazy-36" : "disabled";
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s vertexAa=analytic-c4-per-packet",
 			candidate->id, candidate->device,
 			g_bEnableFreeTypeFontAggressivePerformanceMode
 				? "argb-composite" : "distance-field",
 			g_bEnableFreeTypeFontAggressivePerformanceMode
-				? "disabled" : GetConfiguredDistanceFieldMethodName());
+				? "disabled" : GetConfiguredDistanceFieldMethodName(),
+			compositeProfileMode);
 		return true;
 	}
 
@@ -1154,6 +1341,7 @@ namespace fonthook::vectorfont
 			batch.device = nullptr;
 			batch.generation = 0;
 			batch.packetProfile = nullptr;
+			batch.vertexAa = {};
 			batch.packetConstantsReady = false;
 			batch.samplerReady = false;
 		}
@@ -1169,6 +1357,7 @@ namespace fonthook::vectorfont
 			batch.device = nullptr;
 			batch.generation = 0;
 			batch.packetProfile = nullptr;
+			batch.vertexAa = {};
 			batch.packetConstantsReady = false;
 			batch.samplerReady = false;
 		}
@@ -1180,11 +1369,13 @@ namespace fonthook::vectorfont
 		batch.device = nullptr;
 		batch.generation = 0;
 		batch.packetProfile = nullptr;
+		batch.vertexAa = {};
 		batch.packetConstantsReady = false;
 		batch.samplerReady = false;
 		// If invalidation happens during a nested pass inside one facade, its
 		// per-facade fallback must not resurrect constants from before that pass.
 		NativeFacadeShaderBatch& facadeBatch = s_facadeShaderBatch;
+		facadeBatch.vertexAa = {};
 		facadeBatch.packetConstantsReady = false;
 		facadeBatch.samplerReady = false;
 	}
@@ -1196,6 +1387,7 @@ namespace fonthook::vectorfont
 		// Each scope owns one facade. A recursive scope deliberately discards the
 		// parent's cached constants; End invalidates the parent again so its next
 		// packet performs one full native pixel-constant upload.
+		batch.vertexAa = {};
 		batch.packetConstantsReady = false;
 		batch.samplerReady = false;
 	}
@@ -1206,6 +1398,7 @@ namespace fonthook::vectorfont
 		if (!batch.depth)
 			return;
 		--batch.depth;
+		batch.vertexAa = {};
 		batch.packetConstantsReady = false;
 		batch.samplerReady = false;
 	}

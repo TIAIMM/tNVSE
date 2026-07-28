@@ -13,6 +13,9 @@ struct NativeFontPixelInput
 	// Exact u0/v0/u1/v1 source rectangle. Composite geometry may extrapolate
 	// atlasUv to include an offset shadow, but samples remain glyph-local.
 	float4 glyphBounds : TEXCOORD2;
+	// Analytic source-distance footprint computed once per vertex from the
+	// stock Tile WVP matrix, current viewport and packet raster scale.
+	float antialiasWidth : TEXCOORD3;
 };
 
 float NativeFontUsesLiveTileRgb(float layerAndFlags)
@@ -34,9 +37,20 @@ float4 ComposeNativeFontCoverage(float coverage, float4 tileColor,
 		saturate(coverage * tileColor.a * baseColor.a * LayerColor.a));
 }
 
+#ifndef NATIVE_FONT_EXPLICIT_LOD
+#define NATIVE_FONT_EXPLICIT_LOD 0
+#endif
+
 float4 SampleNativeFontMtsdf(sampler2D atlas, float2 uv)
 {
+#if NATIVE_FONT_EXPLICIT_LOD
+	// Native distance-field pages are sealed level-zero-only atlases. Explicit
+	// LOD permits the composite shader to put every fetch behind its
+	// transparent-union branch.
+	return tex2Dlod(atlas, float4(uv, 0.0, 0.0));
+#else
 	return tex2D(atlas, uv);
+#endif
 }
 
 float MedianNativeFontMtsdf(float3 value)
@@ -90,6 +104,12 @@ float NativeFontMtsdfAntialiasWidth(float screenPxRange, float spread)
 {
 	// Half of one output pixel expressed in source-distance units.
 	return spread / max(screenPxRange, 1.0);
+}
+
+float ResolveNativeFontMtsdfAntialiasWidth(
+	NativeFontPixelInput input, float spread)
+{
+	return min(max(input.antialiasWidth, 0.0001), spread);
 }
 
 float NativeFontMtsdfBody(float rgbDistance, float antialiasWidth)
