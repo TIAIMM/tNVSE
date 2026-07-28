@@ -1,10 +1,10 @@
 <!--
 	tNVSE native font-prewarm display component.
 
-	This is injected beneath InterfaceManager::pMenuRoot as a Tile component.
-	It is intentionally non-interactive.  Do not add target/hotrect or a
-	stackingtype trait here: reliable input blocking requires a registered
-	Menu class, a Menu factory entry, and menu-level input handlers.
+	This is injected beneath the stock LoadingMenu root as a Tile component.
+	It is intentionally non-interactive: the game thread remains inside the
+	NVSE DeferredInit callback until prewarm completes, so StartMenu and its
+	input controls cannot be created while this component is visible.
 -->
 <rect name="tNVSE_Prewarm">
 	<visible> &false; </visible>

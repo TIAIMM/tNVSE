@@ -273,45 +273,45 @@ extension outside a GB2312 profile takes the demand-generation route for that
 text without invalidating the font's sealed GB2312 profile. CP950, CP932, and
 CP949 always use their complete code-page tables. Each unit resolves through
 its complete single-byte or double-byte face/fallback chain. Prewarming begins
-after the configured fonts are activated. Successive game-loop callbacks advance
-the persistent queue at `fFreeTypeFontResolutionScale`; generation does not wait
-for a menu root or device scale. The prewarm transaction remains active until
-every queued profile reports `complete`, `atlas-full`, or `cancelled`, but the
-loop returns after each bounded step so the Tile progress component can render.
+after the configured fonts are activated and the final native rendering/cache
+route has been synchronized. The persistent queue uses
+`fFreeTypeFontResolutionScale` and remains active until every queued profile
+reports `complete`, `atlas-full`, or `cancelled`.
 Prewarm and demand rendering share one canonical source scale. UIO-derived calls
 reuse that mask and atlas profile instead of generating per-zoom variants.
 The selected-table coverage contract uses persistent completion identity 3. Older
 mode-2 manifests and their DCFG-range atlas snapshots cannot satisfy it, so the
 first launch after this change discards those construction artifacts and builds
 the selected table once.
-Prewarm is advanced by a persistent main-loop state machine. Each
-`kMessage_MainGameLoop` performs at most one
-snapshot restore/validation, one adaptive glyph batch, one font publication
-step, or one cleanup step, and then returns so the game can render the current
-progress. `Data\Menus\prefabs\tNVSE\FontPrewarmOverlay.xml` supplies the native
-full-screen shade, current font/route text, stage text, progress bar, and
-percentage. It is an intentionally non-interactive, single-root `rect`
-component loaded under the current `InterfaceManager::pMenuRoot`, not a
-fabricated standalone Menu. `stackingtype/no_click_past` and a targetable
-full-screen hotrect are only safe when the XML is backed by a registered Menu
-class, a collision-free Menu ID, a factory entry, `Menu::RegisterTile`, and
-menu-level input handlers. tNVSE does not currently claim such a global Menu
-slot, so this progress component is visual and does not block mouse, keyboard,
-controller, Escape, console, or other global input paths. The prewarm state
-machine still gates tNVSE's post-prewarm work and suppresses the IME component;
-it is not an input-modal game barrier.
+Prewarm is advanced by the persistent state machine while tNVSE remains inside
+the NVSE `kMessage_DeferredInit` callback. Each loop iteration performs at most
+one snapshot restore/validation, one adaptive glyph batch, one font publication
+step, or one cleanup step. The game main thread therefore does not return from
+deferred initialization until the state reaches `Completed` or the queue is
+empty. No `StartMenu::Create` detour, replay, timeout, synthetic Menu ID, or
+input handler is needed: the normal startup sequence cannot create an operable
+main menu while NVSE is still dispatching `DeferredInit`.
 
-The service dynamically raises the component to the current top menu depth by
-read-only scanning the direct Menu children under `pMenuRoot` and reproducing
-the stock `menu depth + Menu::iMenuThickness + 2` result. It deliberately does
-not call FalloutNV.exe `0xA1DFB0 Menu::GetMaxDepth`: that routine also rewrites
-the cursor Tile depth and cursor NiNode translation and is used by the stock
-game only at Menu lifecycle boundaries. The component depth trait is written
-only when the computed value actually changes. If `pMenuRoot` is rebuilt, stale
-Tile pointers are discarded and the component is loaded again; if the component
-or any required named child is detached or replaced under the same root,
-liveness validation re-resolves or reloads it.
-Missing or invalid XML is logged once and does not cancel cache generation.
+`Data\Menus\prefabs\tNVSE\FontPrewarmOverlay.xml` supplies the native full-screen
+shade, current font/route text, stage text, progress bar, and percentage. Like
+Cell Offset Generator, tNVSE loads this single-root `rect` directly beneath the
+stock `LoadingMenu::pRootTile` obtained from the retail LoadingMenu singleton at
+`0x11DA0C0`. The component is not a standalone Menu and does not attempt to
+capture input. Startup is blocked by the `DeferredInit` call boundary itself,
+not by Tile target or stacking traits.
+
+Fallout's existing LoadingMenu update/render thread continues its
+`Update`/`ShowChanges` work while the game thread advances bounded prewarm
+steps. tNVSE yields with `Sleep(0)` between active steps so the loading thread
+can consume current Tile traits. After completion, the component is hidden,
+deleted from the LoadingMenu tree, and only then does `DeferredInit` return.
+Subsequent `kMessage_MainGameLoop` callbacks perform normal A8, DEFAULT-pool,
+and performance-cache maintenance; they no longer drive startup prewarm.
+
+If the LoadingMenu root is unavailable, or the XML/component tree is missing or
+invalid, tNVSE logs the condition once and completes the same blocking cache
+transaction without a visual progress component. It never falls back to
+`InterfaceManager::pMenuRoot`, a StartMenu hook, or a Win32/GDI window.
 Snapshot restore or final publication can replace the atlas generation used by
 font slot 1, so the service invalidates and rebuilds all prewarm `TileText`
 geometry after those steps. It also reads the live title/detail/stage/percentage

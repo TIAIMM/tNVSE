@@ -5,6 +5,7 @@
 #include "Menu.hpp"
 #include "SafeWrite.h"
 #include "Tile.hpp"
+#include "TileMenu.hpp"
 #include "load_config.h"
 #include "tnvse.h"
 
@@ -34,6 +35,8 @@ namespace fonthook
 		constexpr float kPrewarmMaximumPanelWidth = 620.0f;
 		constexpr float kPrewarmMinimumPanelWidth = 320.0f;
 		constexpr UInt32 kReadTileXml = 0xA01B00;
+		constexpr UInt32 kReleaseTileTree = 0x9FF690;
+		constexpr SIZE_T kLoadingMenuSingleton = 0x11DA0C0;
 		// "TNV" remains exactly representable in the float-backed XML trait
 		// while staying far outside the vanilla 1001-1084 Menu Code range.
 		// This non-stacking Menu is intentionally not registered in xMenuList.
@@ -77,6 +80,7 @@ namespace fonthook
 			std::array<float, 6> prewarmLayoutSignature = {};
 			float prewarmProgressWidth = 520.0f;
 			bool prewarmLoadFailed = false;
+			bool prewarmParentUnavailableLogged = false;
 			bool prewarmTileVisible = false;
 		};
 
@@ -382,9 +386,8 @@ namespace fonthook
 
 		void ResetPrewarmForParent(Tile* parent)
 		{
-			// Prewarm remains attached to pMenuRoot so it can be shown before
-			// HUDMainMenu is available. The startup-only component is never
-			// active while the Pip-Boy input overlay is in use.
+			// A changed LoadingMenu root means the engine may already have
+			// released the old Tile tree. Never dereference the stale pointers.
 			ClearPrewarmResolvedTiles();
 			s_state.prewarmParent = parent;
 			s_state.prewarmLoadFailed = false;
@@ -402,10 +405,21 @@ namespace fonthook
 			return parent;
 		}
 
+		Tile* GetLoadingMenuRoot()
+		{
+			Menu* loadingMenu =
+				*reinterpret_cast<Menu**>(kLoadingMenuSingleton);
+			return loadingMenu && loadingMenu->pRootTile
+				? static_cast<Tile*>(loadingMenu->pRootTile)
+				: nullptr;
+		}
+
 		Tile* SynchronizePrewarmParent()
 		{
-			InterfaceManager* manager = InterfaceManager::GetSingleton();
-			Tile* parent = manager ? manager->pMenuRoot : nullptr;
+			// Match Cell Offset Generator: the prewarm component belongs to the
+			// stock LoadingMenu tree, whose own thread continues Update and
+			// ShowChanges while the game thread remains inside DeferredInit.
+			Tile* parent = GetLoadingMenuRoot();
 			if (s_state.prewarmParent != parent)
 				ResetPrewarmForParent(parent);
 			return parent;
@@ -882,7 +896,16 @@ namespace fonthook
 	{
 		Tile* parent = SynchronizePrewarmParent();
 		if (!parent)
+		{
+			if (!s_state.prewarmParentUnavailableLogged)
+			{
+				s_state.prewarmParentUnavailableLogged = true;
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: LoadingMenu root unavailable; font prewarm continues without Tile progress UI");
+			}
 			return false;
+		}
+		s_state.prewarmParentUnavailableLogged = false;
 		return EnsurePrewarmHost(parent);
 	}
 
@@ -1057,7 +1080,6 @@ namespace fonthook
 		HideNativeImeOverlay();
 		if (!IsNativePrewarmOverlayHostReady())
 			return;
-		SynchronizeOverlayDepth(s_state.prewarmRoot);
 		if (!s_state.prewarmTileVisible)
 		{
 			SetVisible(s_state.prewarmRoot, true);
@@ -1107,16 +1129,22 @@ namespace fonthook
 	{
 		s_prewarmActive.store(false, std::memory_order_release);
 		Tile* parent = SynchronizePrewarmParent();
+		Tile* root = s_state.prewarmRoot;
 		const bool attached =
 			IsNamedDirectChild(
-				parent, s_state.prewarmRoot, "tNVSE_Prewarm");
+				parent, root, "tNVSE_Prewarm");
 		if (s_state.prewarmTileVisible
 			&& IsNativePrewarmOverlayHostReady()
 			&& attached)
-			SetVisible(s_state.prewarmRoot, false);
-		if (s_state.prewarmRoot && !attached)
-			ClearPrewarmResolvedTiles();
-		s_state.prewarmTileVisible = false;
+			SetVisible(root, false);
+		if (root && attached)
+		{
+			// Match the stock/Cell Offset component teardown: release the
+			// imported Tile tree under the UI lock, then destroy its root.
+			ThisStdCall<void>(kReleaseTileTree, root);
+			delete root;
+		}
+		ClearPrewarmResolvedTiles();
 	}
 
 	bool IsNativePrewarmOverlayActive()
@@ -1135,8 +1163,8 @@ namespace fonthook
 		InterfaceManager* manager = InterfaceManager::GetSingleton();
 		Tile* currentImeParent =
 			manager ? manager->pMenuRoot : nullptr;
-		Tile* currentPrewarmParent =
-			manager ? manager->pMenuRoot : nullptr;
+		Tile* currentPrewarmParent = s_state.prewarmRoot
+			? GetLoadingMenuRoot() : nullptr;
 		if (currentImeParent
 			&& currentImeParent == s_state.imeParent)
 		{

@@ -36,6 +36,22 @@ namespace
 	UInt32 s_configuredGameFontPrepareAttempts = 0;
 	constexpr UInt32 kMaximumConfiguredGameFontPrepareAttempts = 120;
 
+	const char* FontPrewarmPumpStatusName(
+		fonthook::FontPrewarmPumpStatus status)
+	{
+		switch (status)
+		{
+		case fonthook::FontPrewarmPumpStatus::Idle:
+			return "idle";
+		case fonthook::FontPrewarmPumpStatus::Active:
+			return "active";
+		case fonthook::FontPrewarmPumpStatus::Completed:
+			return "completed";
+		default:
+			return "unknown";
+		}
+	}
+
 	void PrepareConfiguredGameFonts()
 	{
 		if (s_configuredGameFontsPrepared)
@@ -105,6 +121,42 @@ namespace
 			|| s_configuredGameFontPrepareAttempts
 				>= kMaximumConfiguredGameFontPrepareAttempts;
 	}
+
+	void RunConfiguredGameFontPrewarmLoadingBarrier()
+	{
+		const ULONGLONG started = GetTickCount64();
+		UInt32 steps = 0;
+		fonthook::FontPrewarmPumpStatus status =
+			fonthook::PumpFreeTypeFontPrewarm();
+		++steps;
+		if (status == fonthook::FontPrewarmPumpStatus::Idle)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: DeferredInit LoadingMenu prewarm barrier skipped status=idle steps=%u",
+				steps);
+			return;
+		}
+
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: DeferredInit LoadingMenu prewarm barrier begin status=%s",
+			FontPrewarmPumpStatusName(status));
+		while (status == fonthook::FontPrewarmPumpStatus::Active)
+		{
+			// Fallout's LoadingMenu owns a separate update/render thread. Yield
+			// between bounded prewarm steps so it can consume the Tile trait
+			// changes while this DeferredInit callback keeps startup blocked.
+			Sleep(0);
+			status = fonthook::PumpFreeTypeFontPrewarm();
+			++steps;
+			if ((steps & 0x3F) == 0)
+				fonthook::FlushFreeTypeFontDebugLog();
+		}
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: DeferredInit LoadingMenu prewarm barrier end status=%s steps=%u elapsedMs=%llu",
+			FontPrewarmPumpStatusName(status),
+			steps,
+			static_cast<unsigned long long>(GetTickCount64() - started));
+	}
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
@@ -125,6 +177,7 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 			fonthook::FinalizeFreeTypeA8Detection();
 			fonthook::InitializeFreeTypeDefaultPoolAtlas();
 			PrepareConfiguredGameFonts();
+			RunConfiguredGameFontPrewarmLoadingBarrier();
 		}
 	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
@@ -134,10 +187,7 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 			PrepareConfiguredGameFonts();
 			fonthook::HandleFreeTypeA8MainLoop();
 			fonthook::HandleFreeTypeDefaultPoolAtlasMainLoop();
-			const fonthook::FontPrewarmPumpStatus prewarmStatus =
-				fonthook::PumpFreeTypeFontPrewarm();
-			if (prewarmStatus != fonthook::FontPrewarmPumpStatus::Active)
-				fonthook::PumpFreeTypeFontPerformance();
+			fonthook::PumpFreeTypeFontPerformance();
 		}
 	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_ExitGame

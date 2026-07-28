@@ -47,8 +47,8 @@ tnvse_add_freetype_target()
 tnvse_add_msdfgen_target()
 tnvse_add_shader_target(TNVSE_SHADER_OUTPUTS)
 set(TNVSE_NATIVE_OVERLAY_XMLS
-  "${CMAKE_CURRENT_SOURCE_DIR}/Data/Menus/prefabs/tNVSE/ImeOverlay.xml"
-  "${CMAKE_CURRENT_SOURCE_DIR}/Data/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")
 set_source_files_properties(${TNVSE_NATIVE_OVERLAY_XMLS} PROPERTIES
   HEADER_FILE_ONLY TRUE
   VS_TOOL_OVERRIDE "None")
