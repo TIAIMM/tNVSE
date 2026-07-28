@@ -257,7 +257,7 @@ signature. A TLS hit avoids the global mutex; a global miss does not allocate an
 additional TLS string key, while cache-generation changes invalidate old TLS
 entries.
 
-## Blocking prewarm and persistent caches
+## Frame-sliced prewarm and persistent caches
 
 Startup prewarming is mandatory for every configured FreeType font. In
 FreeType-only mode it enumerates the 224 visible Windows-1252 byte units
@@ -273,24 +273,51 @@ extension outside a GB2312 profile takes the demand-generation route for that
 text without invalidating the font's sealed GB2312 profile. CP950, CP932, and
 CP949 always use their complete code-page tables. Each unit resolves through
 its complete single-byte or double-byte face/fallback chain. Prewarming begins
-after the configured fonts are activated. On
-the first game-loop callback, tNVSE synchronously drains the complete queue at
-`fFreeTypeFontResolutionScale`; it does not wait for a menu root or device
-scale. The game remains blocked until every queued profile reports `complete`,
-`atlas-full`, or `cancelled`. Prewarm and demand rendering share one canonical
-source scale. UIO-derived calls reuse that mask and atlas profile
-instead of generating per-zoom variants.
+after the configured fonts are activated. Successive game-loop callbacks advance
+the persistent queue at `fFreeTypeFontResolutionScale`; generation does not wait
+for a menu root or device scale. The prewarm transaction remains active until
+every queued profile reports `complete`, `atlas-full`, or `cancelled`, but the
+loop returns after each bounded step so the Tile progress component can render.
+Prewarm and demand rendering share one canonical source scale. UIO-derived calls
+reuse that mask and atlas profile instead of generating per-zoom variants.
 The selected-table coverage contract uses persistent completion identity 3. Older
 mode-2 manifests and their DCFG-range atlas snapshots cannot satisfy it, so the
 first launch after this change discards those construction artifacts and builds
 the selected table once.
-While this startup barrier is active, a non-activating English progress window
-runs on a separate UI thread. It shows the current font ID, SDF/ARGB-fallback route,
-the active scan or snapshot stage, and overall progress. The window remains
-responsive while FreeType work blocks the game thread and closes automatically
-before control returns to the game. It is owned by the Fallout window rather
-than being system-topmost, so Windows manages its minimize and Z-order behavior
-together with the game without a polling timer.
+Prewarm is advanced by a persistent main-loop state machine. Each
+`kMessage_MainGameLoop` performs at most one
+snapshot restore/validation, one adaptive glyph batch, one font publication
+step, or one cleanup step, and then returns so the game can render the current
+progress. `Data\Menus\prefabs\tNVSE\FontPrewarmOverlay.xml` supplies the native
+full-screen shade, current font/route text, stage text, progress bar, and
+percentage. It is an intentionally non-interactive, single-root `rect`
+component loaded under the current `InterfaceManager::pMenuRoot`, not a
+fabricated standalone Menu. `stackingtype/no_click_past` and a targetable
+full-screen hotrect are only safe when the XML is backed by a registered Menu
+class, a collision-free Menu ID, a factory entry, `Menu::RegisterTile`, and
+menu-level input handlers. tNVSE does not currently claim such a global Menu
+slot, so this progress component is visual and does not block mouse, keyboard,
+controller, Escape, console, or other global input paths. The prewarm state
+machine still gates tNVSE's post-prewarm work and suppresses the IME component;
+it is not an input-modal game barrier.
+
+The service dynamically raises the component to the current top menu depth by
+read-only scanning the direct Menu children under `pMenuRoot` and reproducing
+the stock `menu depth + Menu::iMenuThickness + 2` result. It deliberately does
+not call FalloutNV.exe `0xA1DFB0 Menu::GetMaxDepth`: that routine also rewrites
+the cursor Tile depth and cursor NiNode translation and is used by the stock
+game only at Menu lifecycle boundaries. The component depth trait is written
+only when the computed value actually changes. If `pMenuRoot` is rebuilt, stale
+Tile pointers are discarded and the component is loaded again; if the component
+or any required named child is detached or replaced under the same root,
+liveness validation re-resolves or reloads it.
+Missing or invalid XML is logged once and does not cancel cache generation.
+Snapshot restore or final publication can replace the atlas generation used by
+font slot 1, so the service invalidates and rebuilds all prewarm `TileText`
+geometry after those steps. It also reads the live title/detail/stage/percentage
+heights and reflows the panel, progress bar, and labels, rather than assuming a
+24-pixel font slot. There is no auxiliary Win32 window, prewarm UI thread, GDI
+renderer, event, mutex, or window-message pump.
 A font task allocates additional atlas pages when its selected set cannot fit
 one 4096x4096 page. It reports `atlas-full` only if one incoming batch cannot
 fit an empty maximum-size page, the page-count safety limit is reached, or a
@@ -302,9 +329,9 @@ the generated fill mask. When Shader Loader is unavailable, prewarm generates
 only the coverage/effect masks needed by the ARGB fallback.
 
 Selected-table construction does not create or read `.tnvfmask`. The atlas-only
-transaction begins as soon as the first configured font is queued, so an early
-draw between activation and the blocking prewarm pump cannot create a
-short-lived persistent mask profile. Distance-field pixels and aggressive BGRA
+transaction begins when the first cache-miss font enters its generation step
+and ends on completion, cancellation, shutdown, or failure. Distance-field
+pixels and aggressive BGRA
 composite glyphs are rasterized into bounded in-memory batches and written
 directly into streamed `_p<page>.tnvfatlas` snapshots. An aggressive composite
 contains the final Shadow, Glow, Outline, and Fill source-over result in one
@@ -410,7 +437,7 @@ the partial cleanup does not infer their route or method from an opaque filename
 hash. Unknown files in `fontdata` are never removed. The option defaults to `0`.
 
 The final native route is synchronized during deferred initialization, before
-configured game fonts enter blocking prewarm. Aggressive BGRA composite glyphs
+configured game fonts enter frame-sliced prewarm. Aggressive BGRA composite glyphs
 and the stock-shader ARGB fallback both select the CPU-coverage cache domain. Selecting
 that domain forcibly closes in-process distance-field bitmap/manifest mappings
 and invalidates every normal true-SDF/MTSDF `.tnvfmask`, manifest, atlas
@@ -754,7 +781,7 @@ Memory still referenced by active shapes, atlases, font runtimes, static GPU
 residency, or required mappings is reported as `pinned-overcommit` instead of
 being invalidated silently.
 
-During blocking prewarm, the bitmap LRU keeps a preferred one-quarter working
+During frame-sliced prewarm, the bitmap LRU keeps a preferred one-quarter working
 target so wide raster batches do not churn, subject to the aggregate ceiling.
 After every queued profile finishes successfully from a snapshot or a newly
 saved atlas, tNVSE releases any legacy persistent-mask mappings and immediately
@@ -804,9 +831,10 @@ The prewarm batch estimator counts one byte per true-SDF texel or four bytes per
 MTSDF texel. The writer reuses one preallocated 4 MiB or 16 MiB page buffer per
 byte role, eliminating
 vector-growth peaks and repeated large allocations, then releases those buffers
-before D3D9 restore. A worker-thread allocation exception is returned to the
-main prewarm transaction instead of terminating the process; the current batch
-is rolled back and retried at half size, up to the one-glyph limit.
+before D3D9 restore. Each glyph step targets about 8 ms and adapts between
+32 and 512 glyphs while still respecting the 24 MiB estimate. Under memory
+pressure the current scan position and counters are rolled back and the batch is
+retried at half size, down to the one-glyph emergency limit.
 Configurations with identical layout/mask inputs and the same maximum effect
 radius share one distance-field prewarm even when their colors, offsets, powers,
 or shader sampling quality differ; those properties do not alter atlas texels. CPU-baked
@@ -878,7 +906,7 @@ batch and are never stored in a persistent table or native payload.
 
 `uiFreeTypeFontGpuAtlasCacheMB` controls the soft GPU atlas budget. A value of
 zero selects full-resident mode: every configured font snapshot is restored
-during the blocking prewarm transaction, and GPU atlas pages are not evicted to
+during the frame-sliced prewarm transaction, and GPU atlas pages are not evicted to
 satisfy a software budget. Obsolete generations that are no longer referenced
 are still reclaimed. A nonzero value is used directly as the soft budget.
 Atlas generations still referenced by visible game shapes cannot be evicted,

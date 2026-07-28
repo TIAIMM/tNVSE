@@ -7,7 +7,6 @@
 #include "encoding.h"
 #include "InterfaceManager.hpp"
 #include "load_config.h"
-#include "NiDX9Renderer.hpp"
 #include "SafeWrite.h"
 #include "tnvse.h"
 #include "Tile.hpp"
@@ -15,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdarg>
 #include <cstdio>
@@ -27,7 +27,6 @@
 #include <utility>
 #include <vector>
 #include <Windows.h>
-#include <d3d9.h>
 #include <Imm.h>
 #include <msctf.h>
 #include <OleAuto.h>
@@ -296,25 +295,24 @@ namespace fonthook
 			GameInputFilterClass inputClass);
 
 		bool HasOverlayInputTarget();
-		bool InitializeCandidateOverlayRenderer();
 		bool IsCandidateOverlayRendererAvailable();
-		bool RasterizeCandidateOverlay(
-			const std::vector<CandidateOverlayLine>& lines,
-			std::vector<UInt32>& pixels,
-			UInt32& width,
-			UInt32& height);
-		void ShutdownCandidateOverlayRenderer();
 		bool InitializeTsfCandidateSupport();
 		void PumpTsfInputUpdates();
 		void UpdateCandidateOverlay();
-		void DrawCandidateOverlay();
-		void ReleaseCandidateOverlayTexture();
+		void PumpCandidateOverlay();
 		void HideCandidateOverlay();
 		void ClearImeCandidates();
 		void TryInstallJipKeyEventSuppressionHook();
 		bool IsJipKeyEventSuppressionHookInstalled();
 		void SetJipKeyEventSuppressionCaptureActive(bool active);
 		void HideSystemImeWindows(HWND hwnd);
+		void RestoreSystemImeWindows(HWND hwnd, const char* reason);
+		void PrepareSystemImeForInputLanguageChange(
+			HWND hwnd,
+			const char* reason);
+		void ForgetSystemImeWindowSuppression();
+		bool MarkSystemImeContextUiSuppressed(HWND hwnd);
+		bool MarkSystemTsfCandidateUiSuppressed(HWND hwnd);
 		void SetTextInputSessionActive(bool active);
 		void RefreshTextInputSessionForActiveTarget(const char* reason);
 		void EndStewieTextInputSession(const char* reason);

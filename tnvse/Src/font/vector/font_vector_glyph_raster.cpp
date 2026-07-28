@@ -1220,7 +1220,8 @@ namespace fonthook::vectorfont
 			GetSystemInfo(&info);
 			processors = std::max<DWORD>(1, info.dwNumberOfProcessors);
 		}
-		// Leave one logical processor for the progress window and system services.
+		// Leave one logical processor for game rendering, Tile progress, and
+		// system services while the main thread waits for this bounded batch.
 		// The x86 process also caps worker-local FreeType heaps at a predictable level.
 		const UInt32 workers = processors > 2 ? processors - 1 : processors;
 		return static_cast<UInt32>(std::min<size_t>(workCount,

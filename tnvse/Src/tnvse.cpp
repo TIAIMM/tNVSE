@@ -15,6 +15,7 @@
 #include "font_vector.h"
 #include "dictionary.h"
 #include "multibyte_input.h"
+#include "native_tile_overlay.h"
 #include "plugin_dependencies.h"
 #include "save_display_name.h"
 
@@ -133,15 +134,19 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 			PrepareConfiguredGameFonts();
 			fonthook::HandleFreeTypeA8MainLoop();
 			fonthook::HandleFreeTypeDefaultPoolAtlasMainLoop();
-			fonthook::PumpFreeTypeFontPrewarm();
-			fonthook::PumpFreeTypeFontPerformance();
+			const fonthook::FontPrewarmPumpStatus prewarmStatus =
+				fonthook::PumpFreeTypeFontPrewarm();
+			if (prewarmStatus != fonthook::FontPrewarmPumpStatus::Active)
+				fonthook::PumpFreeTypeFontPerformance();
 		}
 	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_ExitGame
 		|| g_msg->type == NVSEMessagingInterface::kMessage_ExitGame_Console))
 	{
+		fonthook::ShutdownFreeTypeFontPrewarm();
 		fonthook::FlushFreeTypePersistentFontCache();
 		fonthook::ShutdownFreeTypeDefaultPoolAtlas();
+		fonthook::ShutdownNativeTileOverlayHost();
 	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit
 		|| g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop))

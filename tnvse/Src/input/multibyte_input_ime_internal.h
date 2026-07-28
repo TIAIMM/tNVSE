@@ -32,11 +32,6 @@ namespace fonthook
 
 		struct CandidateOverlayState
 		{
-			LPDIRECT3DTEXTURE9 texture = nullptr;
-			UInt32 textureWidth = 0;
-			UInt32 textureHeight = 0;
-			std::wstring lastKey;
-			bool dirty = true;
 			bool visible = false;
 		};
 
@@ -44,6 +39,7 @@ namespace fonthook
 		{
 			DWORD id = 0;
 			UInt32 generation = 0;
+			bool systemUiSuppressed = false;
 		};
 
 		class TsfCandidateSink;
@@ -89,8 +85,20 @@ namespace fonthook
 			CandidateOverlayState overlay;
 			bool tsfCandidateActive = false;
 			bool hidingSystemImeWindows = false;
+			HWND suppressedSystemImeHwnd = nullptr;
+			HIMC suppressedSystemImeContext = nullptr;
+			HKL suppressedSystemImeLayout = nullptr;
+			bool systemCompositionWindowSuppressed = false;
+			std::array<bool, 4> systemCandidateWindowsSuppressed = {};
+			bool savedSystemCompositionFormValid = false;
+			COMPOSITIONFORM savedSystemCompositionForm = {};
+			std::array<CANDIDATEFORM, 4> savedSystemCandidateForms = {};
+			std::array<bool, 4> savedSystemCandidateFormValid = {};
+			std::atomic<ULONG_PTR> tsfInputWindow = 0;
+			std::atomic<ULONG_PTR> systemImeContextUiSuppressedHwnd = 0;
+			std::atomic<ULONG_PTR> systemTsfCandidateUiSuppressedHwnd = 0;
 			bool gameImeEnabled = false;
-			bool textInputSessionActive = false;
+			std::atomic_bool textInputSessionActive = false;
 			UInt32 textInputSessionGeneration = 1;
 			TextInputTarget currentTextInputTarget;
 			bool overlayRefreshPending = false;
@@ -107,6 +115,7 @@ namespace fonthook
 
 		void AdvanceTsfCandidateSession();
 		std::wstring GetCurrentTsfInputMethodName();
+		bool RestoreSuppressedTsfCandidateUiElements();
 		void ShutdownTsfCandidateSupport();
 
 		void TryRemoveCompositionEcho();

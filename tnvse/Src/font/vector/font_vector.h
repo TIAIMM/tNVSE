@@ -101,7 +101,15 @@ namespace fonthook
 	void InitializeFreeTypeDefaultPoolAtlas();
 	void HandleFreeTypeDefaultPoolAtlasMainLoop();
 	void ShutdownFreeTypeDefaultPoolAtlas();
-	void PumpFreeTypeFontPrewarm();
+	enum class FontPrewarmPumpStatus : UInt8
+	{
+		Idle,
+		Active,
+		Completed,
+	};
+	FontPrewarmPumpStatus PumpFreeTypeFontPrewarm();
+	bool IsFreeTypeFontPrewarmActive();
+	void ShutdownFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
 	void RecordFreeTypePreparedTextCacheResult(bool abHit);
 	void FlushFreeTypePersistentFontCache();

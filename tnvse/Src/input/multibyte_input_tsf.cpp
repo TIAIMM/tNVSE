@@ -144,15 +144,31 @@ namespace fonthook
 				// TSF invokes this as a COM callback. Only capture candidate data
 				// here; game-menu discovery and overlay updates belong to the main
 				// loop so a text-service callback can never re-enter Gamebryo UI.
-				const bool hasOverlayTarget = State().textInputSessionActive;
+				const ULONG_PTR publishedWindow =
+					State().tsfInputWindow.load(std::memory_order_acquire);
+				HWND overlayWindow =
+					reinterpret_cast<HWND>(publishedWindow);
+				const bool hasOverlayTarget =
+					overlayWindow
+					&& State().textInputSessionActive.load(
+						std::memory_order_acquire);
 				const bool acceptsCandidates = s_imeComposing
 					&& hasOverlayTarget
 					&& RegisterTsfUiElement(dwUIElementId);
 				if (pbShow
+					&& *pbShow != FALSE
 					&& g_bMultibyteInputHideSystemCandidateWindow
 					&& IsCandidateOverlayRendererAvailable()
-					&& hasOverlayTarget)
-					*pbShow = FALSE;
+					&& hasOverlayTarget
+					&& acceptsCandidates)
+				{
+					if (MarkSystemTsfCandidateUiSuppressed(
+							overlayWindow))
+					{
+						MarkUiElementSuppressed(dwUIElementId);
+						*pbShow = FALSE;
+					}
+				}
 
 				if (!acceptsCandidates)
 				{
@@ -472,7 +488,57 @@ namespace fonthook
 				return result;
 			}
 
+			bool RestoreSuppressedUiElements()
+			{
+				std::vector<DWORD> suppressedIds;
+				for (const TsfUiElementSession& session :
+					State().tsfUiElementSessions)
+				{
+					if (session.systemUiSuppressed)
+						suppressedIds.push_back(session.id);
+				}
+
+				bool allRestored = true;
+				for (DWORD id : suppressedIds)
+				{
+					ITfUIElement* element = GetUIElement(id);
+					const bool restored =
+						!element || SUCCEEDED(element->Show(TRUE));
+					SafeRelease(element);
+
+					const auto session = std::find_if(
+						State().tsfUiElementSessions.begin(),
+						State().tsfUiElementSessions.end(),
+						[id](const TsfUiElementSession& value)
+						{
+							return value.id == id;
+						});
+					if (session
+						!= State().tsfUiElementSessions.end())
+					{
+						if (restored)
+							session->systemUiSuppressed = false;
+						else
+							allRestored = false;
+					}
+				}
+				return allRestored;
+			}
+
 		private:
+			void MarkUiElementSuppressed(DWORD id)
+			{
+				const auto session = std::find_if(
+					State().tsfUiElementSessions.begin(),
+					State().tsfUiElementSessions.end(),
+					[id](const TsfUiElementSession& value)
+					{
+						return value.id == id;
+					});
+				if (session != State().tsfUiElementSessions.end())
+					session->systemUiSuppressed = true;
+			}
+
 			void PublishProfileChanged()
 			{
 				AcquireSRWLockExclusive(&m_pendingLock);
@@ -770,6 +836,13 @@ namespace fonthook
 			return state.tsfCandidateSink
 				? state.tsfCandidateSink->GetCurrentInputMethodName()
 				: std::wstring();
+		}
+
+		bool RestoreSuppressedTsfCandidateUiElements()
+		{
+			ImeState& state = State();
+			return !state.tsfCandidateSink
+				|| state.tsfCandidateSink->RestoreSuppressedUiElements();
 		}
 
 		void PumpTsfInputUpdates()

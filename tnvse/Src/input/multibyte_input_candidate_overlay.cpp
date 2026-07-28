@@ -1,5 +1,7 @@
 #include "multibyte_input_ime_internal.h"
 
+#include "native_tile_overlay.h"
+
 namespace fonthook
 {
 	namespace multibyte_input
@@ -7,7 +9,8 @@ namespace fonthook
 		const wchar_t* GetNativeModeLabel()
 		{
 			const ImeState& state = State();
-			const bool native = (state.candidate.conversionMode & IME_CMODE_NATIVE) != 0;
+			const bool native = (state.candidate.conversionMode
+				& IME_CMODE_NATIVE) != 0;
 			switch (g_uiEncoding)
 			{
 			case 3:
@@ -41,8 +44,11 @@ namespace fonthook
 		{
 			const ImeState& state = State();
 			std::vector<CandidateOverlayLine> lines;
-			if (!g_bMultibyteInputCompositionPreview || !state.candidate.imeOpen)
+			if (!g_bMultibyteInputCompositionPreview
+				|| !state.candidate.imeOpen)
+			{
 				return lines;
+			}
 
 			if (!HasOverlayInputTarget())
 			{
@@ -51,7 +57,6 @@ namespace fonthook
 			}
 
 			lines.push_back({ BuildImeStatusLineWide(), false });
-
 			if (!state.candidate.composition.empty())
 			{
 				std::wstring composition = L"> ";
@@ -59,228 +64,91 @@ namespace fonthook
 				lines.push_back({ std::move(composition), false });
 			}
 
-			for (size_t i = 0; i < state.candidate.candidates.size(); ++i)
+			const size_t candidateCount = std::min<size_t>(
+				state.candidate.candidates.size(), 9);
+			for (size_t i = 0; i < candidateCount; ++i)
 			{
 				if (state.candidate.candidates[i].empty())
 					continue;
-
-				const DWORD globalIndex = state.candidate.pageStart + static_cast<DWORD>(i);
+				const DWORD globalIndex =
+					state.candidate.pageStart + static_cast<DWORD>(i);
 				wchar_t prefix[8] = {};
-				std::swprintf(prefix, ARRAYSIZE(prefix), L"%u. ", static_cast<UInt32>(i + 1));
+				std::swprintf(prefix, ARRAYSIZE(prefix), L"%u. ",
+					static_cast<UInt32>(i + 1));
 				std::wstring line = prefix;
 				line += state.candidate.candidates[i];
-				lines.push_back({ std::move(line), globalIndex == state.candidate.selection });
+				lines.push_back({
+					std::move(line),
+					globalIndex == state.candidate.selection
+				});
 			}
-
 			return lines;
 		}
 
-		std::wstring BuildCandidateOverlayKey(const std::vector<CandidateOverlayLine>& lines)
+		bool IsCandidateOverlayRendererAvailable()
 		{
-			std::wstring key;
-			for (const CandidateOverlayLine& line : lines)
-			{
-				key += line.highlighted ? L"\x0001" : L"\x0000";
-				key += line.text;
-				key += L"\n";
-			}
-			return key;
-		}
-
-		void ReleaseCandidateOverlayTexture()
-		{
-			ImeState& state = State();
-			if (state.overlay.texture)
-			{
-				state.overlay.texture->Release();
-				state.overlay.texture = nullptr;
-			}
-			state.overlay.textureWidth = 0;
-			state.overlay.textureHeight = 0;
+			return g_bMultibyteInputCompositionPreview
+				&& IsNativeImeOverlayHostReady()
+				&& !IsNativePrewarmOverlayActive();
 		}
 
 		void HideCandidateOverlay()
 		{
 			ImeState& state = State();
 			state.overlay.visible = false;
-			state.overlay.dirty = true;
-			state.overlay.lastKey.clear();
+			state.overlayRefreshPending = true;
 		}
 
 		void UpdateCandidateOverlay()
 		{
 			ImeState& state = State();
-			if (!g_bMultibyteInputCompositionPreview || !IsCandidateOverlayRendererAvailable())
-			{
-				HideCandidateOverlay();
-				return;
-			}
-
-			if (!state.candidate.imeOpen)
-			{
-				HideCandidateOverlay();
-				return;
-			}
-
-			if (!HasOverlayInputTarget())
-			{
-				ClearStewieInputState();
-				HideCandidateOverlay();
-				return;
-			}
-
-			state.overlay.visible = true;
+			state.overlayRefreshPending = true;
 		}
 
-		bool RenderOverlayTexture(
-			LPDIRECT3DDEVICE9 device,
-			const std::vector<CandidateOverlayLine>& lines)
+		void PumpCandidateOverlay()
 		{
 			ImeState& state = State();
-			if (!device || lines.empty() || !IsCandidateOverlayRendererAvailable())
-				return false;
-
-			std::vector<UInt32> pixels;
-			UInt32 width = 0;
-			UInt32 height = 0;
-			if (!RasterizeCandidateOverlay(lines, pixels, width, height)
-				|| !width
-				|| !height
-				|| pixels.size() != static_cast<size_t>(width) * height)
-			{
-				return false;
-			}
-
-			if (!state.overlay.texture
-				|| state.overlay.textureWidth != width
-				|| state.overlay.textureHeight != height)
-			{
-				ReleaseCandidateOverlayTexture();
-				if (FAILED(device->CreateTexture(
-					width,
-					height,
-					1,
-					0,
-					D3DFMT_A8R8G8B8,
-					D3DPOOL_MANAGED,
-					&state.overlay.texture,
-					nullptr)))
-				{
-					return false;
-				}
-
-				state.overlay.textureWidth = width;
-				state.overlay.textureHeight = height;
-			}
-
-			D3DLOCKED_RECT locked = {};
-			if (FAILED(state.overlay.texture->LockRect(0, &locked, nullptr, 0)))
-				return false;
-
-			for (UInt32 y = 0; y < height; ++y)
-			{
-				std::memcpy(
-					static_cast<UInt8*>(locked.pBits) + y * locked.Pitch,
-					pixels.data() + static_cast<size_t>(y) * width,
-					width * sizeof(UInt32));
-			}
-			state.overlay.texture->UnlockRect(0);
-			return true;
-		}
-		struct OverlayVertex
-		{
-			float x;
-			float y;
-			float z;
-			float rhw;
-			D3DCOLOR color;
-			float u;
-			float v;
-		};
-
-		void DrawCandidateOverlay()
-		{
-			ImeState& state = State();
-			if (!g_bMultibyteInputCompositionPreview
+			if (g_bMultibyteInputCompositionPreview)
+				EnsureNativeImeOverlayHost();
+			if (!g_bMultibyteInputHideSystemCandidateWindow
 				|| !IsCandidateOverlayRendererAvailable()
-				|| !state.overlay.visible)
-				return;
+				|| !HasOverlayInputTarget())
+				RestoreSystemImeWindows(
+					s_window, "native_tile_host_unavailable");
+			state.overlayRefreshPending = false;
 
-			std::vector<CandidateOverlayLine> lines = BuildCandidateOverlayLines();
+			if (!g_bMultibyteInputCompositionPreview
+				|| IsNativePrewarmOverlayActive()
+				|| !IsCandidateOverlayRendererAvailable()
+				|| !state.candidate.imeOpen)
+			{
+				state.overlay.visible = false;
+				HideNativeImeOverlay();
+				return;
+			}
+
+			std::vector<CandidateOverlayLine> lines =
+				BuildCandidateOverlayLines();
 			if (lines.empty())
 			{
-				HideCandidateOverlay();
+				state.overlay.visible = false;
+				HideNativeImeOverlay();
 				return;
 			}
 
-			std::wstring key = BuildCandidateOverlayKey(lines);
-			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-			LPDIRECT3DDEVICE9 device = renderer ? renderer->GetD3DDevice() : nullptr;
-			if (!device)
-				return;
-
-			if (state.overlay.dirty || key != state.overlay.lastKey || !state.overlay.texture)
+			std::vector<NativeTileOverlayLine> nativeLines;
+			nativeLines.reserve(lines.size());
+			for (CandidateOverlayLine& line : lines)
 			{
-				if (!RenderOverlayTexture(device, lines))
-				{
-					state.overlay.dirty = true;
-					return;
-				}
-
-				state.overlay.lastKey = std::move(key);
-				state.overlay.dirty = false;
+				nativeLines.push_back({
+					std::move(line.text), line.highlighted
+				});
 			}
-
-			if (!state.overlay.texture)
-				return;
-
-			D3DVIEWPORT9 viewport = {};
-			if (FAILED(device->GetViewport(&viewport)))
-				return;
-
-			const float x = std::max<float>(
-				12.0f,
-				(static_cast<float>(viewport.Width) - static_cast<float>(state.overlay.textureWidth)) * 0.5f);
-			const float y = std::min<float>(
-				static_cast<float>(viewport.Height) - static_cast<float>(state.overlay.textureHeight) - 12.0f,
-				static_cast<float>(viewport.Height) * 0.58f);
-			const float right = x + static_cast<float>(state.overlay.textureWidth);
-			const float bottom = y + static_cast<float>(state.overlay.textureHeight);
-
-			OverlayVertex vertices[4] = {
-				{ x - 0.5f, y - 0.5f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 0.0f },
-				{ right - 0.5f, y - 0.5f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 0.0f },
-				{ x - 0.5f, bottom - 0.5f, 0.0f, 1.0f, 0xFFFFFFFF, 0.0f, 1.0f },
-				{ right - 0.5f, bottom - 0.5f, 0.0f, 1.0f, 0xFFFFFFFF, 1.0f, 1.0f },
-			};
-
-			IDirect3DStateBlock9* stateBlock = nullptr;
-			if (SUCCEEDED(device->CreateStateBlock(D3DSBT_ALL, &stateBlock)) && stateBlock)
-				stateBlock->Capture();
-
-			device->SetTexture(0, state.overlay.texture);
-			device->SetPixelShader(nullptr);
-			device->SetVertexShader(nullptr);
-			device->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1);
-			device->SetRenderState(D3DRS_ZENABLE, FALSE);
-			device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
-			device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-			device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-			device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-			device->SetRenderState(D3DRS_LIGHTING, FALSE);
-			device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
-			device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-			device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-			device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
-			device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
-			device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
-			device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(OverlayVertex));
-
-			if (stateBlock)
-			{
-				stateBlock->Apply();
-				stateBlock->Release();
-			}
+			// Always enter the service so a pMenuRoot/IME Menu rebuild can
+			// repopulate and show its fresh, XML-default-hidden Tile tree. The
+			// service still compares its own content key before mutating traits.
+			UpdateNativeImeOverlay(nativeLines);
+			state.overlay.visible = true;
 		}
 	}
 }

@@ -1368,12 +1368,14 @@ namespace fonthook::vectorfont
 		{
 			AtlasState& state = State();
 			std::lock_guard<std::mutex> lock(state.atlasMutex);
-			// Blocking prewarm can encounter demand-created pages for the same profile
+			// Incremental prewarm can encounter demand-created pages for the same
+			// profile, including pages used by the native Tile progress component,
 			// before the validated snapshot is restored. Keeping those entries would
-			// discard the full resources built above, then incorrectly mark the partial
-			// profile complete. No text shapes exist at this startup barrier, so replace
-			// the whole profile generation atomically and retire any externally-held
-			// DEFAULT wrappers through the normal lifetime path.
+			// discard the full resources built above, then incorrectly mark the
+			// partial profile complete. Replace the whole profile generation
+			// atomically, retire externally-held DEFAULT wrappers through the normal
+			// lifetime path, and let the prewarm host rebuild its text geometry after
+			// this restore step.
 			const AtlasProfileKey profileKey = MakeAtlasProfileKey(key);
 			if (metadataOnly)
 				InvalidateCompleteAtlasProfileLocked(state, profileKey);

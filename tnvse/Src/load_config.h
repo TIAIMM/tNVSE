@@ -28,7 +28,6 @@ extern bool g_bMultibyteInputStewieTweaks;
 extern bool g_bMultibyteInputMCMExtender;
 extern bool g_bMultibyteInputDialogueHistory;
 extern bool g_bSuppressJIPKeyEventsDuringMultibyteInput;
-extern std::wstring g_sMultibyteInputOverlayFontPath;
 extern bool g_bChangeJIPBigGunDesc;
 extern std::string g_sNewBigGunsDesc;
 extern UINT32 g_uiReorderDoorPrompt;  // 0=off, 1=CHS order, 2=KOR order

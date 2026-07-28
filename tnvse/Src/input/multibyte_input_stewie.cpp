@@ -425,8 +425,6 @@ namespace fonthook
 			}
 
 			case StewieInputKind::MenuSearch:
-				if (StewieInputTarget target = GetActiveStewieMenuSearchTarget(); target.valid)
-					return target;
 				break;
 
 			default:

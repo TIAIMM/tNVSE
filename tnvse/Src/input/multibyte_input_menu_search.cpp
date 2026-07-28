@@ -254,20 +254,6 @@ namespace fonthook
 				tile ? tile->GetValueFloat(Tile::kTileValue_alpha) : 0.0f);
 		}
 
-		bool IsMenuSearchTileActive(const StewieMenuSearchHook& hook, Tile* tile)
-		{
-			if (!tile)
-				return false;
-
-			// These three XML files use a namespace-level InputField and do not
-			// declare _IsActive on the tracked MenuSearch tile.
-			if (MenuSearchUsesInputField(hook.menuID))
-				return true;
-
-			return tile->GetValueFloat(Tile::kTileValue_visible) > 0.5f
-				&& tile->GetValueFloat(Tile::kTileValue_alpha) > 200.0f;
-		}
-
 		void TrackMenuSearchTile(StewieMenuSearchHook& hook, Tile* root, Tile* tile)
 		{
 			if (!tile)
@@ -337,7 +323,8 @@ namespace fonthook
 			if (!searchTile)
 			{
 				// Fallback for the short interval before main-loop discovery refreshes
-				// its cached tile. Traits only reject a target, never activate one.
+				// its cached tile. Tile presence identifies the edit target;
+				// keyboardActive remains the input-session source of truth.
 				searchTile = FindTileByID(root, kStewieMenuSearch_TextTile);
 			}
 
@@ -349,12 +336,6 @@ namespace fonthook
 					MenuID(menu),
 					reinterpret_cast<UInt32>(root),
 					kStewieMenuSearch_TextTile);
-				return {};
-			}
-
-			if (!IsMenuSearchTileActive(*hook, searchTile))
-			{
-				DeactivateMenuSearch(*hook, "tile_inactive", searchTile);
 				return {};
 			}
 
@@ -684,8 +665,10 @@ namespace fonthook
 					DeactivateMenuSearch(hook, "tile_missing");
 					continue;
 				}
-				if (!IsMenuSearchTileActive(hook, searchTile))
-					DeactivateMenuSearch(hook, "tile_inactive", searchTile);
+				// SearchBar::SetVisible is a render/update detail. Stewie's
+				// Ctrl+F/Ctrl+R handler and menu lifetime own IsSearchMode;
+				// treating a transient visible/alpha value as deactivation
+				// makes the IME session alternate on consecutive frames.
 			}
 		}
 

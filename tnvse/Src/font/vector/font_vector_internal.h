@@ -657,7 +657,9 @@ namespace fonthook::vectorfont
 	bool RebuildGlyphAtlasFromSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool BuildDirectGlyphAtlasTables(RuntimeFont& arRuntime, float afRasterScale);
 	void QueueFontPrewarm(UInt32 auiFontId);
-	void PumpFontPrewarm();
+	FontPrewarmPumpStatus PumpFontPrewarm();
+	bool IsFontPrewarmActive();
+	void ShutdownFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
 		bool abPrepareObject, const NiColorA& arTileColor, bool abSuppressEffects,

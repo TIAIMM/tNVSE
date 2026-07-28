@@ -46,6 +46,12 @@ tnvse_add_commonlib_target()
 tnvse_add_freetype_target()
 tnvse_add_msdfgen_target()
 tnvse_add_shader_target(TNVSE_SHADER_OUTPUTS)
+set(TNVSE_NATIVE_OVERLAY_XMLS
+  "${CMAKE_CURRENT_SOURCE_DIR}/Data/Menus/prefabs/tNVSE/ImeOverlay.xml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/Data/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")
+set_source_files_properties(${TNVSE_NATIVE_OVERLAY_XMLS} PROPERTIES
+  HEADER_FILE_ONLY TRUE
+  VS_TOOL_OVERRIDE "None")
 
 set(TNVSE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src")
 
@@ -62,7 +68,8 @@ add_library(tnvse SHARED
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/dllmain.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/exports.def"
   ${TNVSE_SOURCES}
-  ${TNVSE_HEADERS})
+  ${TNVSE_HEADERS}
+  ${TNVSE_NATIVE_OVERLAY_XMLS})
 
 source_group("Source Files" FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/dllmain.cpp"
@@ -72,6 +79,7 @@ source_group("Source Files" FILES
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/include"
   PREFIX "Bundled Headers"
   FILES ${TNVSE_BUNDLED_HEADERS})
+source_group("UI Overlays" FILES ${TNVSE_NATIVE_OVERLAY_XMLS})
 
 target_include_directories(tnvse PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse"
@@ -165,10 +173,17 @@ else()
 endif()
 unset(_tnvse_plugin_path_from_env)
 unset(_tnvse_plugin_path_help)
-tnvse_enable_live_deployment(tnvse "${TNVSE_PLUGIN_PATH}" "${TNVSE_SHADER_OUTPUTS}")
+tnvse_enable_live_deployment(tnvse "${TNVSE_PLUGIN_PATH}"
+  "${TNVSE_SHADER_OUTPUTS}" "${TNVSE_NATIVE_OVERLAY_XMLS}")
 
 install(TARGETS tnvse RUNTIME DESTINATION "NVSE/plugins")
 install(FILES ${TNVSE_SHADER_OUTPUTS} DESTINATION "Shaders/Loose")
+install(CODE [[
+  file(REMOVE
+    "${CMAKE_INSTALL_PREFIX}/Menus/prefabs/tNVSE/NativeOverlays.xml")
+]])
+install(FILES ${TNVSE_NATIVE_OVERLAY_XMLS}
+  DESTINATION "Menus/prefabs/tNVSE")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/docs/tnvse_fonts.xml"
   DESTINATION "NVSE/plugins")
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs/fonts/"

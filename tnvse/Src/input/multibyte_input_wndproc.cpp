@@ -609,14 +609,12 @@ namespace fonthook
 					}
 				}
 
-				if (msg == WM_INPUTLANGCHANGEREQUEST && state.textInputSessionActive)
+				if (msg == WM_INPUTLANGCHANGE)
 				{
-					DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_INPUTLANGCHANGEREQUEST action=def_window_proc");
-					return DefWindowProcA(hwnd, msg, wParam, lParam);
-				}
-
-				if (msg == WM_INPUTLANGCHANGE && state.textInputSessionActive)
-				{
+					PrepareSystemImeForInputLanguageChange(
+						hwnd, "input_language_change_observed");
+					if (!state.textInputSessionActive)
+						return 0;
 					ResetImeCommitKeyState("input_language_change");
 					HKL newLayout = reinterpret_cast<HKL>(lParam);
 					if (state.winSpaceChordArmed || state.winSpaceSwitchPending)
@@ -661,6 +659,9 @@ namespace fonthook
 						// thread by key release. Only compensate when the shell did
 						// not change anything; switching on key-down races the shell
 						// and can advance twice back to the original layout.
+						PrepareSystemImeForInputLanguageChange(
+							hwnd,
+							"winspace_fallback_before_activate");
 						previousLayout = ActivateKeyboardLayout(
 							reinterpret_cast<HKL>(HKL_NEXT),
 							KLF_SETFORPROCESS);
@@ -873,7 +874,9 @@ namespace fonthook
 					&& hasInputTarget)
 				{
 					HideSystemImeWindows(hwnd);
-					return DefWindowProcA(hwnd, WM_IME_SETCONTEXT, wParam, 0);
+					if (MarkSystemImeContextUiSuppressed(hwnd))
+						return DefWindowProcA(
+							hwnd, WM_IME_SETCONTEXT, wParam, 0);
 				}
 
 				if (msg == WM_IME_CHAR && hasInputTarget)
@@ -904,17 +907,35 @@ namespace fonthook
 
 			if (msg == WM_NCDESTROY && hwnd == s_window)
 			{
+				State().tsfInputWindow.store(
+					0, std::memory_order_release);
+				State().textInputSessionActive.store(
+					false, std::memory_order_release);
+				State().tsfCandidateActive = false;
+				s_imeComposing = false;
+				AdvanceTsfCandidateSession();
+				ForgetSystemImeWindowSuppression();
+				s_window = nullptr;
 				const LRESULT result =
 					ForwardWindowMessage(hwnd, msg, wParam, lParam);
 				ClearCapturedInputEvents();
 				State().overlayRefreshPending = false;
 				s_originalWndProc = nullptr;
-				s_window = nullptr;
 				return result;
 			}
 
 			if (!s_hooksInstalled)
 				return ForwardWindowMessage(hwnd, msg, wParam, lParam);
+
+			if (msg == WM_INPUTLANGCHANGEREQUEST)
+			{
+				PrepareSystemImeForInputLanguageChange(
+					hwnd, "input_language_change_request");
+				DebugLog(
+					"tnvse_multibyte_input_event: source=WndProc.WM_INPUTLANGCHANGEREQUEST action=restore_then_forward");
+				return ForwardWindowMessage(
+					hwnd, msg, wParam, lParam);
+			}
 
 			// The allowlist makes raw-input, pointer, touch, gesture and any future
 			// mouse-related messages unconditional pass-through even if they are
@@ -941,8 +962,11 @@ namespace fonthook
 					&& g_bMultibyteInputHideSystemCandidateWindow
 					&& IsCandidateOverlayRendererAvailable())
 				{
-					return DefWindowProcA(
-						hwnd, WM_IME_SETCONTEXT, wParam, 0);
+					if (MarkSystemImeContextUiSuppressed(hwnd))
+					{
+						return DefWindowProcA(
+							hwnd, WM_IME_SETCONTEXT, wParam, 0);
+					}
 				}
 				return ForwardWindowMessage(hwnd, msg, wParam, lParam);
 			}
@@ -1150,7 +1174,13 @@ namespace fonthook
 		bool TryInstallWindowProc()
 		{
 			if (s_originalWndProc)
+			{
+				if (s_window)
+				State().tsfInputWindow.store(
+					reinterpret_cast<ULONG_PTR>(s_window),
+					std::memory_order_release);
 				return true;
+			}
 
 			HWND hwnd = FindGameWindow();
 			if (!hwnd)
@@ -1165,6 +1195,9 @@ namespace fonthook
 
 			s_window = hwnd;
 			s_originalWndProc = reinterpret_cast<WNDPROC>(original);
+			State().tsfInputWindow.store(
+				reinterpret_cast<ULONG_PTR>(hwnd),
+				std::memory_order_release);
 			SetGameImeEnabled(hwnd, false);
 			DebugLog("tnvse_multibyte_input: subclassed hwnd=0x%08X", reinterpret_cast<UInt32>(hwnd));
 			return true;
@@ -1182,7 +1215,6 @@ namespace fonthook
 			State().tsfUiElementSessions.clear();
 			ClearImePreviewState();
 			HideCandidateOverlay();
-			ReleaseCandidateOverlayTexture();
 			State().suppressedImeCharCount = 0;
 			State().lastImeCommitTick = 0;
 			State().lastStewieImeCommitTick = 0;
@@ -1202,10 +1234,13 @@ namespace fonthook
 		void RestoreWindowProc()
 		{
 			RestoreTextEditInputHook();
+			State().tsfInputWindow.store(
+				0, std::memory_order_release);
 
 			bool detached = true;
 			if (s_window && s_originalWndProc)
 			{
+				RestoreSystemImeWindows(s_window, "wndproc_restore");
 				SetGameImeEnabled(s_window, true);
 				const WNDPROC current = reinterpret_cast<WNDPROC>(
 					GetWindowLongPtrA(s_window, GWLP_WNDPROC));
@@ -1232,6 +1267,7 @@ namespace fonthook
 			ClearInputState();
 			if (detached)
 			{
+				ForgetSystemImeWindowSuppression();
 				s_window = nullptr;
 				s_originalWndProc = nullptr;
 				ShutdownTsfCandidateSupport();

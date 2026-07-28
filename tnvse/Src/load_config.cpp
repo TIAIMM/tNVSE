@@ -31,7 +31,6 @@ bool g_bMultibyteInputStewieTweaks;
 bool g_bMultibyteInputMCMExtender;
 bool g_bMultibyteInputDialogueHistory;
 bool g_bSuppressJIPKeyEventsDuringMultibyteInput;
-std::wstring g_sMultibyteInputOverlayFontPath;
 bool g_bChangeJIPBigGunDesc;
 std::string g_sNewBigGunsDesc;
 UINT32 g_uiReorderDoorPrompt;
@@ -247,20 +246,6 @@ void LoadConfig()
 	gLog.FormattedMessage(
 		"g_bSuppressJIPKeyEventsDuringMultibyteInput: %d",
 		g_bSuppressJIPKeyEventsDuringMultibyteInput);
-
-	wchar_t wideFilename[MAX_PATH] = { 0 };
-	wchar_t sTempOverlayFontPath[MAX_PATH] = { 0 };
-	GetModuleFileNameW(nullptr, wideFilename, ARRAYSIZE(wideFilename));
-	if (wchar_t* wideLastSlash = wcsrchr(wideFilename, L'\\'))
-		wcscpy_s(wideLastSlash + 1, ARRAYSIZE(wideFilename) - (wideLastSlash + 1 - wideFilename), L"Data\\nvse\\plugins\\tnvse.ini");
-	GetPrivateProfileStringW(
-		L"MultibyteInput",
-		L"sMultibyteInputOverlayFontPath", L"",
-		sTempOverlayFontPath,
-		ARRAYSIZE(sTempOverlayFontPath),
-		wideFilename);
-	g_sMultibyteInputOverlayFontPath = sTempOverlayFontPath;
-	gLog.FormattedMessage("g_sMultibyteInputOverlayFontPath: %ls", g_sMultibyteInputOverlayFontPath.c_str());
 
 	g_bChangeJIPBigGunDesc = ReadConfigInt(
 		kMultibyteSection, "bChangeJIPBigGunDesc", 1, filename);

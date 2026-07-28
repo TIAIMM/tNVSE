@@ -52,7 +52,7 @@ function(tnvse_add_shader_target output_variable)
   set(${output_variable} "${shader_outputs}" PARENT_SCOPE)
 endfunction()
 
-function(tnvse_enable_live_deployment target plugin_path shader_outputs)
+function(tnvse_enable_live_deployment target plugin_path shader_outputs overlay_xmls)
   if(NOT plugin_path)
     message(STATUS "TNVSE_PLUGIN_PATH is empty; live MO2 deployment is disabled.")
     return()
@@ -61,8 +61,27 @@ function(tnvse_enable_live_deployment target plugin_path shader_outputs)
   get_filename_component(plugin_path "${plugin_path}" ABSOLUTE)
   get_filename_component(mod_root "${plugin_path}/../.." ABSOLUTE)
   set(shader_path "${mod_root}/Shaders/Loose")
+  set(overlay_path "${mod_root}/Menus/prefabs/tNVSE")
   message(STATUS "Live tNVSE DLL deployment: ${plugin_path}")
   message(STATUS "Live tNVSE shader deployment: ${shader_path}")
+  message(STATUS "Live tNVSE native overlay deployment: ${overlay_path}")
+
+  # Keep XML deployment independent from the DLL link. A plain XML edit must
+  # reach the live MO2 tree even when Visual Studio considers tnvse.dll
+  # otherwise up to date.
+  set(overlay_target "${target}_live_overlays")
+  add_custom_target(${overlay_target}
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${overlay_path}"
+    COMMAND "${CMAKE_COMMAND}" -E rm -f
+      "${overlay_path}/NativeOverlays.xml"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      ${overlay_xmls} "${overlay_path}"
+    DEPENDS ${overlay_xmls}
+    COMMENT "Deploying tNVSE native Tile overlay XML"
+    VERBATIM)
+  set_target_properties(${overlay_target} PROPERTIES
+    FOLDER "tNVSE/Deployment")
+  add_dependencies(${target} ${overlay_target})
 
   add_custom_command(TARGET ${target} POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${plugin_path}"

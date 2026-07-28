@@ -1,5 +1,6 @@
 #include "multibyte_input_internal.h"
 #include "game_hooks.h"
+#include "native_tile_overlay.h"
 
 // Public lifecycle and frame-message integration for multibyte input.
 
@@ -7,7 +8,6 @@ namespace fonthook
 {
 	namespace
 	{
-		constexpr UInt32 kMessage_OnFramePresent = NVSEMessagingInterface::kMessage_PostQueryPlugins + 1;
 		bool s_initialized = false;
 	}
 
@@ -46,17 +46,15 @@ namespace fonthook
 
 		if (g_bMultibyteInputCompositionPreview)
 		{
-			if (InitializeCandidateOverlayRenderer())
+			if (g_bMultibyteInputUseTSFCandidates)
 			{
-				if (g_bMultibyteInputUseTSFCandidates)
-				{
-					if (InitializeTsfCandidateSupport())
-						gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink enabled");
-					else
-						gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink unavailable; using IMM32 fallback");
-				}
-				gLog.FormattedMessage("tnvse_multibyte_input: composition preview overlay enabled");
+				if (InitializeTsfCandidateSupport())
+					gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink enabled");
+				else
+					gLog.FormattedMessage("tnvse_multibyte_input: TSF candidate sink unavailable; using IMM32 fallback");
 			}
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: native Tile composition preview enabled; host will be resolved on the main loop");
 		}
 		gLog.FormattedMessage("tnvse_multibyte_input: hooks installed");
 	}
@@ -68,12 +66,7 @@ namespace fonthook
 		if (!s_initialized || !g_bMultibyteInput || !apMessage)
 			return;
 
-		if (apMessage->type == kMessage_OnFramePresent)
-		{
-			if (s_hooksInstalled && s_window && g_bMultibyteInputCompositionPreview)
-				DrawCandidateOverlay();
-		}
-		else if (apMessage->type == NVSEMessagingInterface::kMessage_DeferredInit)
+		if (apMessage->type == NVSEMessagingInterface::kMessage_DeferredInit)
 		{
 			if (s_hooksInstalled)
 			{
@@ -100,22 +93,27 @@ namespace fonthook
 				SynchronizeTextInputTarget("main_game_loop");
 				PumpTsfInputUpdates();
 				PumpCapturedInputEvents();
+				PumpCandidateOverlay();
 			}
 
 			if (s_hooksInstalled && s_window)
 				PumpImeStatusWatchdog();
 		}
-		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitGame)
+		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitGame
+			|| apMessage->type
+				== NVSEMessagingInterface::kMessage_ExitGame_Console)
 		{
 			ResetMcmExtenderInputState();
 			ResetDialogueHistoryInputState();
+			ShutdownNativeTileOverlayHost();
 			RestoreWindowProc();
-			ShutdownCandidateOverlayRenderer();
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitToMainMenu)
 		{
 			ResetMcmExtenderInputState();
 			ResetDialogueHistoryInputState();
+			HideCandidateOverlay();
+			ShutdownNativeTileOverlayHost();
 			RestoreWindowProc();
 		}
 	}

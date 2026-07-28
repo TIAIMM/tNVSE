@@ -1,0 +1,35 @@
+#pragma once
+
+#include "ITypes.h"
+
+#include <string>
+#include <vector>
+
+namespace fonthook
+{
+	struct NativeTileOverlayLine
+	{
+		std::wstring text;
+		bool highlighted = false;
+	};
+
+	bool EnsureNativeImeOverlayHost();
+	bool EnsureNativePrewarmOverlayHost();
+	bool IsNativeImeOverlayHostReady();
+	bool IsNativePrewarmOverlayHostReady();
+
+	void UpdateNativeImeOverlay(
+		const std::vector<NativeTileOverlayLine>& lines);
+	void HideNativeImeOverlay();
+
+	void ShowNativePrewarmOverlay();
+	void UpdateNativePrewarmOverlay(
+		const std::wstring& detail,
+		const std::wstring& stage,
+		float progress);
+	void RefreshNativePrewarmOverlayTextGeometry();
+	void HideNativePrewarmOverlay();
+	bool IsNativePrewarmOverlayActive();
+
+	void ShutdownNativeTileOverlayHost();
+}

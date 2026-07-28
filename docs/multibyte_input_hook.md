@@ -466,7 +466,7 @@ WndProc 是捕获层，不是菜单适配层：
 - 回调只复制消息参数、Ctrl/Win 修饰键快照以及必须在消息存活期读取的 `GCS_RESULTSTR`、`GCS_COMPSTR`、IMM candidate list，并把这些数据写入固定容量队列。回调中不查找 Menu，不遍历 Tile，不安装 hook，不写 vtable，不更新游戏 UI，也不写诊断日志。
 - `WM_IME_SETCONTEXT` 是唯一同步策略分支；它只依据主循环已经发布的 input-session latch 决定是否调用 `DefWindowProc(..., lParam=0)`，不查询游戏 UI。
 - 主循环先安装/维护各 keyboard-input adapter、轮询 target 状态，再排空捕获队列。目标解析、DBCS shadow 编辑、IME commit、Tile/UDF 写回、IME association 和 candidate overlay 更新都在这里完成。
-- TSF `BeginUIElement` / `UpdateUIElement` / `EndUIElement` 同样只镜像 candidate 数据并设置待刷新标志；独立 DX9 overlay 由下一次主循环刷新，TSF COM 回调不会重入 Gamebryo 菜单。
+- TSF `BeginUIElement` / `UpdateUIElement` / `EndUIElement` 同样只镜像 candidate 数据并设置待刷新标志；共享原生 Tile overlay 由下一次主循环刷新，TSF COM 回调不会重入 Gamebryo 菜单。
 
 当前实际处理的消息：
 
@@ -507,7 +507,7 @@ UTF-16 -> WideCharToMultiByte(g_usingWinEncoding)
 - 输入菜单会话中收到 `WM_SETFOCUS`、`WM_ACTIVATEAPP`、`WM_ACTIVATE` 回到激活状态时，也重建默认 IME context。这样 Alt-Tab 到外部程序切换输入法再回游戏时，不会继续沿用离焦前的 stale context。
 - 某些 IME 在 Alt-Tab、输入法切换或刚打开输入菜单后，会先让第一个拼音字母经过游戏输入路径，然后才投递 `WM_IME_STARTCOMPOSITION` / `GCS_COMPSTR`。当前实现对与 `uiEncoding` 匹配的输入语言 layout 调用 `ImmSetOpenStatus(TRUE)`，必要时补 `IME_CMODE_NATIVE`；只要最终状态是 open/native，就刷新约 1 秒的 ASCII guard，直到 composition 正常接管。若首字母仍已经抢先进入真实 buffer，则在本次 composition 的第一条非空 `GCS_COMPSTR` 到达时，只检查一次 caret 前一字节：它必须是单字节 ASCII 且与 composition 首字符一致，才会被删除。这里按 `LANG_CHINESE` / `LANG_JAPANESE` / `LANG_KOREAN` 与 `uiEncoding` 匹配判定，不依赖 `ImmIsIME()`，因为 Windows 10/11 的 TSF 输入法不一定稳定通过该 API 表现为 legacy IME。
 - `IsConfiguredImeLayout` 只能按当前窗口线程 `HKL`，或 `WM_INPUTLANGCHANGE` 本次传入的 `HKL`，判断是否匹配当前 `uiEncoding`。不能用“最近一次中文/日文/韩文 HKL”兜底；否则切到系统英文 `00000409` 后仍会继承中文 IME 的 open/native 状态，导致 overlay 显示 `00000409 ON 中文 半角`，并把普通 ASCII 当作拼音吞掉。
-- 有 overlay target 时，`WM_IME_COMPOSITION` 总是返回已处理，避免系统默认预编辑小窗绘制；只有 `GCS_RESULTSTR` 成功转换且目标仍可写时才修改真实文本。
+- 有 overlay target 且原生 Tile 宿主已经就绪时，`WM_IME_COMPOSITION` 总是返回已处理，避免系统默认预编辑小窗绘制；只有 `GCS_RESULTSTR` 成功转换且目标仍可写时才修改真实文本。
 - `GCS_COMPSTR` 不写 edit buffer；`bMultibyteInputCompositionPreview=1` 时只写入游戏内预览。
 - `WM_CHAR` 在 active `TextEditMenu` 下直接处理可打印 ASCII；若游戏输入管线随后又发出同一 ASCII input，`0x7E6620` 内部输入 hook 会用短期 suppress 防止双插入。`WM_IME_CHAR` 在输入菜单存在时直接消费，避免 IME result 又走一次系统字符路径。
 - IME composition active，或 IMM context 处于 open/native 且存在预编辑串时，ASCII `WM_CHAR` 视为拼音/假名等预编辑输入并直接消费，不进入真实 edit buffer。
@@ -540,18 +540,25 @@ std::vector<std::wstring> candidates;
 - `candidates` 优先来自 TSF `ITfCandidateListUIElement`；TSF 初始化失败、关闭或未返回候选时，再用 `ImmGetCandidateListW` 作为 fallback，最多显示 9 项。
 - `imeName` 优先通过 TSF active profile description；失败时退回当前 `HKL` 的 `ImmGetDescriptionW`；再失败退回 `GetKeyboardLayoutNameW` / `IME`。
 - `imeOpen/conversionMode/sentenceMode` 来自 `ImmGetOpenStatus` 和 `ImmGetConversionStatus`，但只有当前 `HKL` 匹配 `uiEncoding` 时才采信；系统英文等不匹配布局即使旧 HIMC 仍报告 open/native，也按 `OFF` 处理。
-- 独立 overlay 直接绘制 UTF-16 预览文本；只有 `GCS_RESULTSTR` 的真实提交结果才用 `WideCharToMultiByte(g_usingWinEncoding, WC_NO_BEST_FIT_CHARS, ...)` 转成当前 UI codepage 写入 edit buffer。
+- composition、候选和状态文本在主循环中转换为当前 UI codepage 后写入原生 `TileText`；只有 `GCS_RESULTSTR` 的真实提交结果才以 `WC_NO_BEST_FIT_CHARS` 转码后写入 edit buffer。
 
-当前预览实现不复用任何菜单 tile：
+当前预览实现使用共享原生 Tile 宿主：
 
-- `bMultibyteInputCompositionPreview=1` 时，tNVSE 在 `kMessage_OnFramePresent` 中从 `NiDX9Renderer::GetSingleton()->GetD3DDevice()` 取得 DX9 device。
-- GDI `DrawTextW` 先把输入法名称、语言模式、全角/半角、composition 和候选列表画到 32-bit DIB，再上传为 `D3DFMT_A8R8G8B8` texture。
-- DX9 屏幕空间 quad 在帧提交前绘制该 texture；不依赖 D3DXFont、菜单 XML、`pTitle`、`pEditText` 或 JIP XML 字段。
+- `FontPrewarmOverlay.xml` 仍是启动期挂到 `pMenuRoot` 的单根 `rect` 组件；`ImeOverlay.xml` 则是 code `0x544E56`（十进制 `5525078`，ASCII “TNV”）的独立原生 `<menu>`。该值远离原版及常见插件使用的 `1001-1084` 区间，同时小于 `2^24`，经 XML 的单精度 `float` trait 传递后仍能精确还原为整数。tNVSE 链式包装 `Interface::CreateMenuByClass` 的唯一调用点，只在解析自身 IME XML 的动态作用域内为该 code 创建一个由原版 `Menu` 构造函数初始化的最小对象，其他 class 和作用域全部交给当时的前驱工厂。该对象复制原版 Menu vtable，只覆盖 `GetID()`，析构、Tile 绑定和父根注册仍走原版生命周期。
+- 逆向确认 `Menu::SetMenuByClass`、`TileMenu::PostParse` 的 `pMenusVisible` 写入和 `Menu::~Menu` 清理都先检查 `1001-1084`/`xMenuList` 容量；超范围 code 只是不进入原版按 code 索引的全局表，不会越界。IME 服务始终从 `pMenuRoot` 直接持有并验证自己的根，不调用 `GetMenuByType`，因此不依赖该全局表。运行时仍扫描直接 Menu 子节点；若已有同 code 的非 tNVSE 根则 fail-open，保留系统候选窗。
+- IME Menu 使用 `&does_not_stack;`、根及全部子节点 `target=false`。它是 `pMenuRoot` 的直接 Menu 子节点，因此由 `Interface::IsolateMenuElements` 按原版屏幕/Pip-Boy pass 隔离，不继承 `HUDMainMenu` 在菜单、哔哔小子 render-to-texture 或 glow/noglow pass 中的临时裁剪状态，也不会进入活动菜单栈或接管鼠标。
+- 两棵树分别维护宿主身份和 ready/fail 状态；预热 XML 失败不会禁用 IME，IME XML/工厂安装失败也不会取消字体预热。只有 IME Menu 完整解析且 `GetID()==0x544E56` 时才允许隐藏系统候选窗。
+- 根身份变化时只丢弃旧指针并在新根上重新加载，绝不接触可能已经释放的旧树；同一根下每次主循环还验证组件及全部固定命名子节点的父子身份，若被其他 UI reload 替换则重新解析或重载。成功加载但节点不完整的组件立即销毁，正常 shutdown 也在确认父子身份后销毁组件。
+- XML 预先定义状态行、composition 行、9 个候选槽和 9 个高亮槽。未使用槽只切换 `visible`，运行期间不反复创建或销毁 Tile。`TileText` 的 `<height>` 不用于强制缩放字体；服务在写入文本后读取字体槽 1 回写的真实高度，以可见行最大高度加间距重排文本、高亮和根背景，因此大字号/VUI+ 字体配置不会按固定 24 像素行距重叠。
+- 所有字符串、选择状态、尺寸和可见性 trait 只在 `kMessage_MainGameLoop` 更新，并位于 TSF/IMM 状态泵和输入目标同步之后。WndProc 与 TSF callback 只更新受保护的候选快照及 dirty 标志。
+- 候选根通过只读扫描 `pMenuRoot` 的其他直接 Menu 子节点，按原版 `menu root depth + Menu::iMenuThickness + 2` 规则抬到前景；扫描排除 IME Menu 自身，不会调用 `0xA1DFB0 Menu::GetMaxDepth`。逆向确认该函数同时改写 cursor Tile 的 `depth` 和 cursor NiNode 的 Y 平移，原版只在 Menu 创建/显示生命周期边界调用，不能把它当作普通查询用于候选内容刷新。IME Menu 的 `iMenuThickness` 设为负值，使原版以后创建菜单时也不会把 overlay 深度反向计入最大菜单深度。服务每帧可重新计算目标深度，但只有数值实际变化时才写入根 trait。
+- 服务是 IME 根 `visible` 的唯一状态源。渲染隔离或其他 pass 暂时裁剪 NiNode 时，不会反读根 trait 并清空 `imeVisible`/内容 key；只有输入目标、IME open 状态、预热屏障、树身份或显式隐藏请求能够结束显示。
+- 文本使用原生字体槽 1，由当前 tNVSE 字体配置接管；候选层不再持有独立 FreeType library、D3D texture、state block 或屏幕空间 quad。
 - 正常游玩期没有输入菜单对象时，tNVSE 不只是隐藏系统 IME UI，而是解绑游戏窗口 IME context；这会阻止系统在左上角绘制 composition 小窗，也避免拼音预编辑串干扰快捷键/普通游玩。输入菜单对象存在时用 input session latch 保持 IME context enabled，并在输入语言变化后重建默认 context，因此 `Win+Space` / Alt-Tab 后切换输入法不会继续沿用旧 `HIMC`。
-- `WM_IME_SETCONTEXT` 在输入菜单对象存在时不再转交原 WndProc，而是调用 `DefWindowProc(..., lParam=0)`；同时在 composition/setcontext 入口用 `ImmSetCompositionWindow(CFS_FORCE_POSITION)` 和 `ImmSetCandidateWindow(CFS_CANDIDATEPOS)` 把 IMM32 composition/candidate window 移到屏幕外，避免微软拼音等 IME 在左上角绘制系统预编辑小窗。`WM_IME_COMPOSITION` 有 overlay target 时也必须 `return 0`，否则系统默认窗口仍可能绘制预编辑框。
-- TSF `ITfUIElementSink::BeginUIElement` 在同一配置开启时设置 `*pbShow = FALSE`，隐藏现代 IME 自带候选 UI。
+- 只有原生 Tile 宿主就绪时，`WM_IME_SETCONTEXT` 才以 `lParam=0` 交给 `DefWindowProc`，并在 composition/setcontext 入口把 IMM32 composition/candidate window 移到屏幕外；`WM_IME_COMPOSITION` 也在这一条件下返回 0。
+- TSF `ITfUIElementSink::BeginUIElement` 只有在调用链传入的 `*pbShow` 原本为真、同一配置开启、原生宿主就绪且当前输入目标仍有效时，才记录该 UI element 并设置 `*pbShow = FALSE`。XML 缺失或解析失败时，系统候选窗保持可见，且只记录一次明确错误。
 - overlay 的显示 gate 只要求当前 `TextEditMenu` 对象仍存在并且 IME 处于 open 状态，不要求 `TextEditState::IsActive()` 为 true。这样用户把编辑文本删空、validator 暂时禁用 OK 按钮、或原版 edit state 短暂切换状态时，composition/candidate overlay 不会被误隐藏。
-- 当前菜单对象丢失、IME 关闭或预览配置关闭时只隐藏独立 overlay，不写回或恢复任何菜单 tile。
+- 当前菜单对象丢失、IME 关闭或预览配置关闭时只隐藏共享候选根，不修改 active text input 自身的 Tile。
 
 ### 3. Active target 追踪
 
@@ -657,6 +664,7 @@ hook 策略：
 - StewMenu 的 handler 由菜单实例 vtable `+0x30` 动态定位，菜单打开后链式替换；不是写死一个全局原版地址。
 - StewMenu 搜索框和字符串子设置都优先从菜单对象内的 `InputField` 反查 active 状态和 `inputType`。搜索框 id `5` 反查失败时才回退到 root `_IsSearchActive` / tile `_IsActive`；字符串子设置 id `103` 会在列表项模板中重复出现，必须反查到 active `InputField` 且 `inputType == 0` 才接管。
 - `Ctrl` 组合键直接链回 Stewie original，并清掉 tNVSE shadow，保留 `Ctrl-F`、`Ctrl-R` 等 Stewie 原行为。
+- MenuSearch 的会话状态以已经链回 Stewie 且返回 handled 的 `Ctrl-F`/`Ctrl-R` 结果为准，并在菜单关闭、菜单对象消失或搜索 Tile 被真正替换时结束。搜索 Tile 的 `visible`/`alpha` 是 Stewie 刷新筛选和 Gamebryo pass 可能瞬时改写的渲染 trait，只用于诊断，不能作为每帧输入会话存活条件；否则 composition 开始后一次瞬时 `visible=0` 就会触发 target 丢失、候选层隐藏和下一帧重新激活，形成高频闪烁。
 
 `StewMenu::subSettingInput` 使用 Stewie 自己的 `InputField`，当前按 Stewie 9.90+ 源码布局只读判断：
 
@@ -681,7 +689,7 @@ struct InputField
 - ASCII、IME commit、Backspace、Delete、Left、Right、Home、End 都先修改 shadow。
 - shadow 修改后，tNVSE 用 Stewie original handler 清空当前 Stewie 输入框，再按 byte 重放完整 shadow，最后把 caret 左移回目标位置。这样 Stewie 自己的刷新、过滤、确认逻辑仍由原 DLL 执行，tNVSE 不复制它的搜索实现。
 - 组合输入期间，拼音/假名 ASCII 和候选选择键由 Stewie target 吞掉；只有 `GCS_RESULTSTR` 成功转成当前 `uiEncoding` codepage 后才写入 shadow。
-- 独立 DX9 candidate overlay 的 target gate 也包含 Stewie target，因此候选窗可以跟随 StewMenu / MenuSearch 搜索框显示。
+- 原生 Tile candidate overlay 的 target gate 也包含 Stewie target，因此候选窗可以跟随 StewMenu / MenuSearch 搜索框显示。
 
 这个 adapter 的边界是：不修改 Stewie DLL，不改 Stewie 菜单 XML，不接管搜索匹配语义。Stewie 仍然按它自己的 codepage byte substring 逻辑过滤列表；tNVSE 只保证输入框里的多字节文本不会被按单 byte 删除、移动或被 IME 预编辑串污染。
 
@@ -842,7 +850,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 - Console 输入只在明确需要时处理，因为命令解析和普通 UI 文本不同。
 - 其他 XML 菜单搜索如果不是现有 target，需要先确认 tile、handler 和内部 buffer，再决定是否做单独 adapter。
-- Rime 后端、Console 输入属于后续扩展；当前独立 DX9 overlay 和 TSF/IMM32 候选读取不影响 commit-only 写入层。
+- Rime 后端、Console 输入属于后续扩展；当前原生 Tile overlay 和 TSF/IMM32 候选读取不影响 commit-only 写入层。
 
 每个字段都要单独确认提交路径是否会 sanitize、是否写入存档、是否要求 ASCII。
 
@@ -863,7 +871,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 ## 风险
 
 - 全屏/窗口化下系统 IME candidate/composition window 行为不同；当前主路径是在没有输入菜单对象时解绑游戏窗口 HIMC，输入期再恢复 HIMC。输入期仍通过 `WM_IME_SETCONTEXT -> DefWindowProc(lParam=0)`、IMM32 offscreen composition/candidate forms、以及 TSF `BeginUIElement(*pbShow=FALSE)` 隐藏系统 IME UI。注意 IMM32 offscreen 设置不能放在 `WM_IME_NOTIFY/IMN_SETCANDIDATEPOS` 路径内，否则 `ImmSetCandidateWindow` 会反复触发候选位置通知。
-- 独立 DX9 overlay 使用 GDI-to-texture；设备丢失、分辨率变化或 device 不可用时必须安全跳过并在下一帧重建纹理。
+- 原生宿主依赖 code `0x544E56` 工厂 hook、`pMenuRoot` 和 IME XML 都成功建立；宿主暂时不可用、code 已被不兼容菜单占用、XML 缺失或 UI 重建破坏树身份时必须保留系统候选窗，不能静默隐藏系统回退。IMM form 快照绑定到当时的 `HWND/HIMC/HKL`，且候选槽只有在成功取得原始 form 后才会移到屏幕外。恢复逐槽检查 `ImmSet*` 的结果，失败项保留到下一主循环重试；上下文或布局身份已变化时丢弃旧快照，绝不把旧 IME 的位置写进新 IME。`WM_INPUTLANGCHANGEREQUEST` 在切换前先恢复 IMM form，但不会提前清除仍受抑制的 TSF/context 记录；切换请求被下游拒绝时，后续 fail-open 仍能找到这些记录。`WM_NCDESTROY` 只清状态，不在窗口销毁中同步发送消息。宿主失效但窗口仍处于前台输入会话时，代码直接调用默认窗口过程恢复当前 IMM UI；它不会用 `SendMessage(WM_IME_SETCONTEXT)` 重入完整 subclass 链。对 tNVSE 实际改成隐藏的 TSF UI element，恢复路径通过 `ITfUIElementMgr::GetUIElement` 取得当前对象并调用 `Show(TRUE)`；成功后才清除该 element 的 suppression 标记，失败则保留到后续主循环重试。输入会话关闭时先原子发布关闭 gate，再执行恢复，从而阻止并发 `BeginUIElement` 在恢复完成后重新隐藏候选窗。
 - 原版 `TextEditMenu` caret marker 是单 byte 插入；如果 caret byte offset 错误，会破坏 DBCS。
 - 有些输入字段可能用 byte length 当字符数，最大长度要实测。
 - `0x7170A0` 和 `InputUnk01` 使用 1024/1028 bytes 级栈缓冲，tNVSE 不能写入超长文本后再交给原版刷新。
@@ -957,8 +965,8 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 
 ### 候选窗 / 输入法后端
 
-- `bMultibyteInputCompositionPreview=1` 时，composition、候选项和当前输入法名称显示在独立 DX9 overlay，不修改 active text input 的任何 tile。
-- `bMultibyteInputHideSystemCandidateWindow=1` 时，系统候选窗应默认隐藏。
+- `bMultibyteInputCompositionPreview=1` 时，composition、候选项和当前输入法名称显示在共享原生 Tile overlay，不修改 active text input 自身的 Tile。
+- `bMultibyteInputHideSystemCandidateWindow=1` 时，只有 XML 宿主成功加载才隐藏系统候选窗；删除或破坏 XML 后应明确回退为系统窗口。
 - `bMultibyteInputUseTSFCandidates=1` 时，优先测试 Microsoft Pinyin / Sogou / Japanese IME / Korean IME 下 TSF candidate UI 是否能返回候选；关闭该配置时再验证 `ImmGetCandidateListW` fallback。
 - Rime 后端如作为可选项，应测试组字期间吞键、commit-only 写入、候选翻页和 ASCII mode 切换。
 
