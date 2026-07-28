@@ -111,7 +111,6 @@ namespace fonthook::vectorfont
 			UInt32 cancelledFonts = 0;
 			UInt32 finishedFonts = 0;
 			UInt32 batches = 0;
-			UInt32 completionFramesRemaining = 0;
 			UInt32 readyConfiguredRuntimes = 0;
 			ULONGLONG started = 0;
 			ULONGLONG maximumStepMs = 0;
@@ -572,11 +571,6 @@ namespace fonthook::vectorfont
 				s_session.queuedFonts, s_session.rasterScale,
 				kMaximumPrewarmBatchBytes / (1024.0 * 1024.0),
 				static_cast<unsigned long long>(kTargetPrewarmStepMs));
-			ShowNativePrewarmOverlay();
-			UpdatePrewarmProgress(
-				L"Validating persistent font cache...",
-				L"Checking streamed atlas snapshots...",
-				0.0f);
 			TransitionPrewarmPhase(PrewarmPhase::RestoreSnapshots);
 		}
 
@@ -608,17 +602,6 @@ namespace fonthook::vectorfont
 				RecordPrewarmStep(stepStarted);
 				return;
 			}
-
-			wchar_t detail[160] = {};
-			_snwprintf_s(detail, _countof(detail), _TRUNCATE,
-				L"Font %u of %u  |  ID %u",
-				std::min(s_session.queuedFonts, s_session.finishedFonts + 1),
-				s_session.queuedFonts, job.fontId);
-			UpdatePrewarmProgress(detail, L"Restoring validated atlas snapshot...",
-				s_session.queuedFonts
-					? static_cast<float>(s_session.finishedFonts)
-						/ s_session.queuedFonts
-					: 0.0f);
 
 			bool snapshotReady = false;
 			if (g_bEnableFreeTypeDefaultPoolAtlas)
@@ -693,6 +676,7 @@ namespace fonthook::vectorfont
 		{
 			if (s_session.generationJobs.empty())
 			{
+				HideNativePrewarmOverlay();
 				TransitionPrewarmPhase(PrewarmPhase::CleanupFlush);
 				return;
 			}
@@ -763,6 +747,9 @@ namespace fonthook::vectorfont
 					active.job.fontId);
 			}
 			s_session.activeFont = std::move(active);
+			// The progress component is generation-only. A complete cache-hit
+			// startup performs snapshot validation and restoration without ever
+			// loading or displaying the Tile tree.
 			ReportPrewarmProgress(
 				s_session.activeFont->job,
 				std::min(s_session.queuedFonts,
@@ -1150,16 +1137,10 @@ namespace fonthook::vectorfont
 				}
 			}
 			++s_session.finishedFonts;
-			UpdatePrewarmProgress(
-				L"Streamed font atlas is ready.",
-				L"Preparing the next font...",
-				s_session.queuedFonts
-					? static_cast<float>(
-						s_session.finishedFonts)
-						/ s_session.queuedFonts
-					: 1.0f);
 			RefreshNativePrewarmOverlayTextGeometry();
 			s_session.activeFont.reset();
+			if (s_session.generationJobs.empty())
+				HideNativePrewarmOverlay();
 			RecordPrewarmStep(stepStarted);
 			TransitionPrewarmPhase(PrewarmPhase::BeginFont);
 		}
@@ -1229,15 +1210,6 @@ namespace fonthook::vectorfont
 				!s_session.atlasOnlyTransactionStarted
 					? "not-started"
 					: s_session.success ? "complete" : "incomplete");
-			UpdatePrewarmProgress(
-				s_session.success
-					? L"Font cache is ready."
-					: L"Font cache generation was incomplete.",
-				s_session.success
-					? L"Starting the game..."
-					: L"Starting with runtime fallback...",
-				1.0f);
-			s_session.completionFramesRemaining = 1;
 			TransitionPrewarmPhase(PrewarmPhase::Complete);
 		}
 	}
@@ -1371,11 +1343,6 @@ namespace fonthook::vectorfont
 			break;
 		}
 		case PrewarmPhase::Complete:
-			if (s_session.completionFramesRemaining)
-			{
-				--s_session.completionFramesRemaining;
-				return FontPrewarmPumpStatus::Active;
-			}
 			HideNativePrewarmOverlay();
 			s_session = {};
 			return FontPrewarmPumpStatus::Completed;

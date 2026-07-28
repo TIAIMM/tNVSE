@@ -293,18 +293,25 @@ input handler is needed: the normal startup sequence cannot create an operable
 main menu while NVSE is still dispatching `DeferredInit`.
 
 `Data\Menus\prefabs\tNVSE\FontPrewarmOverlay.xml` supplies the native full-screen
-shade, current font/route text, stage text, progress bar, and percentage. Like
-Cell Offset Generator, tNVSE loads this single-root `rect` directly beneath the
-stock `LoadingMenu::pRootTile` obtained from the retail LoadingMenu singleton at
+shade, current font/route text, stage text, progress bar, and percentage. The
+component is generation-only: snapshot validation and successful persistent
+cache reads/restores do not load or display it. tNVSE creates it only after a
+cache miss has been confirmed and the first streamed glyph-generation job is
+ready to begin, then destroys it immediately after the last generated font is
+published, before cache verification and cleanup continue. Like Cell Offset
+Generator, tNVSE loads this single-root `rect` directly beneath the stock
+`LoadingMenu::pRootTile` obtained from the retail LoadingMenu singleton at
 `0x11DA0C0`. The component is not a standalone Menu and does not attempt to
-capture input. Startup is blocked by the `DeferredInit` call boundary itself,
-not by Tile target or stacking traits.
+capture input. Startup remains blocked by the `DeferredInit` call boundary
+during both visible generation and invisible cache validation/restoration, not
+by Tile target or stacking traits.
 
 Fallout's existing LoadingMenu update/render thread continues its
 `Update`/`ShowChanges` work while the game thread advances bounded prewarm
 steps. tNVSE yields with `Sleep(0)` between active steps so the loading thread
-can consume current Tile traits. After completion, the component is hidden,
-deleted from the LoadingMenu tree, and only then does `DeferredInit` return.
+can consume current Tile traits. After the final generation/publication step,
+the component is hidden and deleted from the LoadingMenu tree; any remaining
+verification and cleanup finish invisibly before `DeferredInit` returns.
 Subsequent `kMessage_MainGameLoop` callbacks perform normal A8, DEFAULT-pool,
 and performance-cache maintenance; they no longer drive startup prewarm.
 
