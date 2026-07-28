@@ -316,8 +316,10 @@ Snapshot restore or final publication can replace the atlas generation used by
 font slot 1, so the service invalidates and rebuilds all prewarm `TileText`
 geometry after those steps. It also reads the live title/detail/stage/percentage
 heights and reflows the panel, progress bar, and labels, rather than assuming a
-24-pixel font slot. There is no auxiliary Win32 window, prewarm UI thread, GDI
-renderer, event, mutex, or window-message pump.
+24-pixel font slot. All four prewarm `TileText` nodes use numeric `zoom=80`, so
+UIO applies the same compact font-slot scaling as the IME overlay before those
+live metrics are measured. There is no auxiliary Win32 window, prewarm UI
+thread, GDI renderer, event, mutex, or window-message pump.
 A font task allocates additional atlas pages when its selected set cannot fit
 one 4096x4096 page. It reports `atlas-full` only if one incoming batch cannot
 fit an empty maximum-size page, the page-count safety limit is reached, or a
