@@ -71,7 +71,11 @@ namespace fonthook::vectorfont
 		{
 			IDirect3DDevice9* device = nullptr;
 			UInt32 generation = 0;
+			NativeShaderProfile* packetProfile = nullptr;
+			std::array<float, kNativeA8PacketConstantFloatCount>
+				packetConstants = {};
 			UInt32 depth = 0;
+			bool packetConstantsReady = false;
 			bool samplerReady = false;
 		};
 
@@ -359,21 +363,32 @@ namespace fonthook::vectorfont
 					D3DERR_DEVICELOST);
 				return;
 			}
+			NativeSortedShaderBatch& sortedBatch = s_sortedShaderBatch;
+			const bool sortedBatchActive =
+				!g_bDisableFreeTypeExtendedCaches && sortedBatch.depth != 0;
+			if (sortedBatchActive
+				&& (sortedBatch.device != device
+					|| sortedBatch.generation != generation->id))
+			{
+				// Device/generation identity is shared by the sampler and c1-c8
+				// caches. A change invalidates both before this submission can
+				// publish a new identity.
+				sortedBatch.device = device;
+				sortedBatch.generation = generation->id;
+				sortedBatch.packetProfile = nullptr;
+				sortedBatch.packetConstantsReady = false;
+				sortedBatch.samplerReady = false;
+			}
 			// Distance-field profiles bind different pixel programs and upload
 			// c0-c8 directly. The stock update refreshes Tile's color/alpha constant
 			// map on every packet, so c0 must be republished after every stock call
 			// even when its value is unchanged. Only tNVSE-owned c1-c8 may be reused.
-			std::array<float,
-				(kNativeA8PacketConstantRegisterCount + 1) * 4> constants = {};
-			if (!ResolveStockTilePixelConstant(properties, constants.data()))
+			std::array<float, 4> tileConstant;
+			if (!ResolveStockTilePixelConstant(
+				properties, tileConstant.data()))
 			{
 				MarkGenerationFault(generation, "ResolveStockTilePixelConstant", E_FAIL);
 				return;
-			}
-			if (!simpleColorProfile)
-			{
-				std::copy(profile->constants.begin(), profile->constants.end(),
-					constants.begin() + 4);
 			}
 			HRESULT constantsResult = D3D_OK;
 			if (simpleColorProfile)
@@ -382,52 +397,98 @@ namespace fonthook::vectorfont
 				// eight distance/effect registers that make no contribution to this
 				// stock-like one-sample path.
 				constantsResult = device->SetPixelShaderConstantF(
-					0, constants.data(), 1);
-			}
-			else if (!batchActive || !batch.packetConstantsReady)
-			{
-				constantsResult = device->SetPixelShaderConstantF(
-					0, constants.data(), static_cast<UINT>(
-						kNativeA8PacketConstantRegisterCount + 1));
+					0, tileConstant.data(), 1);
 			}
 			else
 			{
-				// c0 is owned by the live Tile submission and may have been touched
-				// by the stock update above. Publish it before applying the minimal
-				// changed c1-c8 interval for this native profile.
-				constantsResult = device->SetPixelShaderConstantF(
-					0, constants.data(), 1);
-				if (FAILED(constantsResult))
+				const NativeShaderProfile* cachedProfile = nullptr;
+				const std::array<float,
+					kNativeA8PacketConstantFloatCount>* cachedConstants = nullptr;
+				if (sortedBatchActive && sortedBatch.packetConstantsReady)
 				{
-					MarkGenerationFault(generation,
-						"SetPixelShaderConstantF(c0)", constantsResult);
-					return;
+					cachedProfile = sortedBatch.packetProfile;
+					cachedConstants = &sortedBatch.packetConstants;
 				}
-				size_t firstChanged =
-					kNativeA8PacketConstantRegisterCount;
-				size_t lastChanged = 0;
-				for (size_t packetRegister = 0;
-					packetRegister < kNativeA8PacketConstantRegisterCount;
-					++packetRegister)
+				else if (batchActive && batch.packetConstantsReady)
 				{
-					const size_t firstFloat = packetRegister * 4u;
-					if (std::memcmp(
-						profile->constants.data() + firstFloat,
-						batch.packetConstants.data() + firstFloat,
-						4u * sizeof(float)) != 0)
+					cachedConstants = &batch.packetConstants;
+				}
+
+				if (!cachedConstants)
+				{
+					std::array<float,
+						(kNativeA8PacketConstantRegisterCount + 1) * 4>
+						fullConstants;
+					std::copy(tileConstant.begin(), tileConstant.end(),
+						fullConstants.begin());
+					std::copy(profile->constants.begin(),
+						profile->constants.end(), fullConstants.begin() + 4);
+					constantsResult = device->SetPixelShaderConstantF(
+						0, fullConstants.data(), static_cast<UINT>(
+							kNativeA8PacketConstantRegisterCount + 1));
+					if (SUCCEEDED(constantsResult))
 					{
-						firstChanged = std::min(
-							firstChanged, packetRegister);
-						lastChanged = packetRegister;
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::CompositeConstantFullUpload);
 					}
 				}
-				if (firstChanged < kNativeA8PacketConstantRegisterCount)
+				else
 				{
+					// c0 is owned by the live Tile submission and may have been
+					// touched by the stock update above. c1-c8 remain tNVSE-owned
+					// across consecutive native facades in the sorted Tile run.
 					constantsResult = device->SetPixelShaderConstantF(
-						static_cast<UINT>(1u + firstChanged),
-						profile->constants.data() + firstChanged * 4u,
-						static_cast<UINT>(
-							lastChanged - firstChanged + 1u));
+						0, tileConstant.data(), 1);
+					if (FAILED(constantsResult))
+					{
+						MarkGenerationFault(generation,
+							"SetPixelShaderConstantF(c0)", constantsResult);
+						return;
+					}
+
+					size_t firstChanged =
+						kNativeA8PacketConstantRegisterCount;
+					size_t lastChanged = 0;
+					// A profile is immutable and interned by its exact key, so pointer
+					// identity proves all eight packet registers are unchanged.
+					if (cachedProfile != profile)
+					{
+						for (size_t packetRegister = 0;
+							packetRegister
+								< kNativeA8PacketConstantRegisterCount;
+							++packetRegister)
+						{
+							const size_t firstFloat = packetRegister * 4u;
+							if (std::memcmp(
+								profile->constants.data() + firstFloat,
+								cachedConstants->data() + firstFloat,
+								4u * sizeof(float)) != 0)
+							{
+								firstChanged = std::min(
+									firstChanged, packetRegister);
+								lastChanged = packetRegister;
+							}
+						}
+					}
+					if (firstChanged < kNativeA8PacketConstantRegisterCount)
+					{
+						constantsResult = device->SetPixelShaderConstantF(
+							static_cast<UINT>(1u + firstChanged),
+							profile->constants.data() + firstChanged * 4u,
+							static_cast<UINT>(
+								lastChanged - firstChanged + 1u));
+						if (SUCCEEDED(constantsResult))
+						{
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::
+									CompositeConstantPartialUpload);
+						}
+					}
+					else
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::CompositeConstantC0Only);
+					}
 				}
 			}
 			if (FAILED(constantsResult))
@@ -441,6 +502,12 @@ namespace fonthook::vectorfont
 				batch.packetConstants = profile->constants;
 				batch.packetConstantsReady = true;
 			}
+			if (sortedBatchActive && !simpleColorProfile)
+			{
+				sortedBatch.packetProfile = profile;
+				sortedBatch.packetConstants = profile->constants;
+				sortedBatch.packetConstantsReady = true;
+			}
 
 			// Coverage reads only Alpha from a one-level A8 texture. sRGB sampling
 			// cannot modify Alpha and no mip state can select another level, so the
@@ -450,7 +517,6 @@ namespace fonthook::vectorfont
 			if (simpleColorProfile)
 				return;
 
-			NativeSortedShaderBatch& sortedBatch = s_sortedShaderBatch;
 			const bool sortedSamplerReady = !g_bDisableFreeTypeExtendedCaches
 				&& sortedBatch.depth
 				&& sortedBatch.samplerReady
@@ -1087,6 +1153,8 @@ namespace fonthook::vectorfont
 		{
 			batch.device = nullptr;
 			batch.generation = 0;
+			batch.packetProfile = nullptr;
+			batch.packetConstantsReady = false;
 			batch.samplerReady = false;
 		}
 	}
@@ -1100,6 +1168,8 @@ namespace fonthook::vectorfont
 		{
 			batch.device = nullptr;
 			batch.generation = 0;
+			batch.packetProfile = nullptr;
+			batch.packetConstantsReady = false;
 			batch.samplerReady = false;
 		}
 	}
@@ -1109,7 +1179,14 @@ namespace fonthook::vectorfont
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 		batch.device = nullptr;
 		batch.generation = 0;
+		batch.packetProfile = nullptr;
+		batch.packetConstantsReady = false;
 		batch.samplerReady = false;
+		// If invalidation happens during a nested pass inside one facade, its
+		// per-facade fallback must not resurrect constants from before that pass.
+		NativeFacadeShaderBatch& facadeBatch = s_facadeShaderBatch;
+		facadeBatch.packetConstantsReady = false;
+		facadeBatch.samplerReady = false;
 	}
 
 	void BeginNativeA8FacadeShaderBatch()
@@ -1119,7 +1196,6 @@ namespace fonthook::vectorfont
 		// Each scope owns one facade. A recursive scope deliberately discards the
 		// parent's cached constants; End invalidates the parent again so its next
 		// packet performs one full native pixel-constant upload.
-		batch.packetConstants = {};
 		batch.packetConstantsReady = false;
 		batch.samplerReady = false;
 	}
@@ -1130,7 +1206,6 @@ namespace fonthook::vectorfont
 		if (!batch.depth)
 			return;
 		--batch.depth;
-		batch.packetConstants = {};
 		batch.packetConstantsReady = false;
 		batch.samplerReady = false;
 	}

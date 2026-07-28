@@ -44,7 +44,10 @@ namespace fonthook::vectorfont
 		struct SortedFrameEntry
 		{
 			NiTriShape* facade = nullptr;
-			A8ShapeMetadataPtr metadata;
+			// pendingRegistrations owns metadata for the normal sorted route.
+			// Entries only need a stable non-owning view during the stock traversal;
+			// fallbackMetadataOwners covers the uncommon map-lookup fallback.
+			const A8ShapeMetadata* metadata = nullptr;
 			NativeA8ShapePayload* payload = nullptr;
 			NativeA8FallbackReason preflightResult =
 				NativeA8FallbackReason::RuntimeFault;
@@ -68,6 +71,7 @@ namespace fonthook::vectorfont
 			std::vector<UInt32> registrationLookup;
 			std::vector<SortedFrameEntry> frameEntries;
 			std::vector<UInt32> facadeLookup;
+			std::vector<A8ShapeMetadataPtr> fallbackMetadataOwners;
 			std::vector<NativeA8PayloadTemplatePtr> payloadTemplates;
 			std::vector<UInt32> payloadLookup;
 			CpuMemoryLease cpuMemory;
@@ -175,6 +179,8 @@ namespace fonthook::vectorfont
 				+ scratch.registrationLookup.capacity() * sizeof(UInt32)
 				+ scratch.frameEntries.capacity() * sizeof(SortedFrameEntry)
 				+ scratch.facadeLookup.capacity() * sizeof(UInt32)
+				+ scratch.fallbackMetadataOwners.capacity()
+					* sizeof(A8ShapeMetadataPtr)
 				+ scratch.payloadTemplates.capacity()
 					* sizeof(NativeA8PayloadTemplatePtr)
 				+ scratch.payloadLookup.capacity() * sizeof(UInt32);
@@ -185,6 +191,7 @@ namespace fonthook::vectorfont
 		{
 			scratch.active = false;
 			scratch.frameEntries.clear();
+			scratch.fallbackMetadataOwners.clear();
 			scratch.payloadTemplates.clear();
 			scratch.pendingAccumulator = nullptr;
 			scratch.pendingRegistrations.clear();
@@ -199,6 +206,11 @@ namespace fonthook::vectorfont
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
 			if (scratch.facadeLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.facadeLookup);
+			if (scratch.fallbackMetadataOwners.capacity() > 8192)
+			{
+				std::vector<A8ShapeMetadataPtr>().swap(
+					scratch.fallbackMetadataOwners);
+			}
 			if (scratch.payloadTemplates.capacity() > 8192)
 			{
 				std::vector<NativeA8PayloadTemplatePtr>().swap(
@@ -214,6 +226,8 @@ namespace fonthook::vectorfont
 				std::vector<UInt32>().swap(scratch.registrationLookup);
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
 				std::vector<UInt32>().swap(scratch.facadeLookup);
+				std::vector<A8ShapeMetadataPtr>().swap(
+					scratch.fallbackMetadataOwners);
 				std::vector<NativeA8PayloadTemplatePtr>().swap(
 					scratch.payloadTemplates);
 				std::vector<UInt32>().swap(scratch.payloadLookup);
@@ -226,6 +240,8 @@ namespace fonthook::vectorfont
 				std::vector<UInt32>().swap(scratch.registrationLookup);
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
 				std::vector<UInt32>().swap(scratch.facadeLookup);
+				std::vector<A8ShapeMetadataPtr>().swap(
+					scratch.fallbackMetadataOwners);
 				std::vector<NativeA8PayloadTemplatePtr>().swap(
 					scratch.payloadTemplates);
 				std::vector<UInt32>().swap(scratch.payloadLookup);
@@ -314,7 +330,7 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		const A8ShapeMetadataPtr* FindRegisteredMetadata(
+		const A8ShapeMetadata* FindRegisteredMetadata(
 			const SortedPayloadScratch& scratch, const NiTriShape* facade)
 		{
 			if (!facade || scratch.registrationLookup.empty())
@@ -331,7 +347,7 @@ namespace fonthook::vectorfont
 				if (index < scratch.pendingRegistrations.size()
 					&& scratch.pendingRegistrations[index].facade == facade)
 				{
-					return &scratch.pendingRegistrations[index].metadata;
+					return scratch.pendingRegistrations[index].metadata.get();
 				}
 				slot = (slot + 1u) & mask;
 			}
@@ -603,10 +619,14 @@ namespace fonthook::vectorfont
 			{
 				// A nested stock Tile pass must not see facade entries from the outer
 				// accumulator. It retains the fully validated map/preflight fallback.
+				// Its draws may also change sampler and c1-c8 state outside the outer
+				// traversal, so neither side may inherit the other's sorted cache.
 				const bool restoreActive = scratch.active;
 				scratch.active = false;
 				++scratch.nestedBypassDepth;
+				InvalidateNativeA8SortedShaderState();
 				const int result = state.originalSortedTileRender(accumulator);
+				InvalidateNativeA8SortedShaderState();
 				--scratch.nestedBypassDepth;
 				scratch.active = restoreActive;
 				return result;
@@ -619,6 +639,7 @@ namespace fonthook::vectorfont
 				const size_t itemCount = static_cast<size_t>(
 					accumulator->m_iNumItems);
 				scratch.frameEntries.clear();
+				scratch.fallbackMetadataOwners.clear();
 				scratch.payloadTemplates.clear();
 				scratch.frameEntries.reserve(itemCount);
 				scratch.payloadTemplates.reserve(itemCount);
@@ -662,11 +683,21 @@ namespace fonthook::vectorfont
 
 					SortedFrameEntry entry;
 					entry.facade = facade;
-					const A8ShapeMetadataPtr* registeredMetadata =
+					const A8ShapeMetadata* registeredMetadata =
 						haveRegisteredMetadata
 							? FindRegisteredMetadata(scratch, facade) : nullptr;
-					entry.metadata = registeredMetadata
-						? *registeredMetadata : FindA8ShapeMetadata(facade);
+					entry.metadata = registeredMetadata;
+					if (!entry.metadata)
+					{
+						A8ShapeMetadataPtr fallbackOwner =
+							FindA8ShapeMetadata(facade);
+						entry.metadata = fallbackOwner.get();
+						if (fallbackOwner)
+						{
+							scratch.fallbackMetadataOwners.push_back(
+								std::move(fallbackOwner));
+						}
+					}
 					entry.generation = generation;
 					if (entry.metadata
 						&& entry.metadata->nativePayload.buildComplete)
@@ -806,7 +837,7 @@ namespace fonthook::vectorfont
 			return false;
 		}
 		const SortedFrameEntry& entry = scratch.frameEntries[index];
-		view.metadata = entry.metadata.get();
+		view.metadata = entry.metadata;
 		view.payload = entry.payload;
 		view.preflightResult = entry.preflightResult;
 		view.generation = entry.generation;
