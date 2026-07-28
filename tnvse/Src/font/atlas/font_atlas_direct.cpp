@@ -120,8 +120,9 @@ namespace fonthook::vectorfont
 		{
 			UInt64 hash = HashDirectBytes(&kDirectCachedLetterVersion,
 				sizeof(kDirectCachedLetterVersion));
-			hash = HashDirectBytes(&kAtlasSnapshotVersion,
-				sizeof(kAtlasSnapshotVersion), hash);
+			hash = HashDirectBytes(
+				&kAtlasSnapshotPayloadIdentityVersion,
+				sizeof(kAtlasSnapshotPayloadIdentityVersion), hash);
 			hash = HashDirectBytes(&kPersistentGlyphManifestVersion,
 				sizeof(kPersistentGlyphManifestVersion), hash);
 			hash = HashDirectBytes(
@@ -600,7 +601,7 @@ namespace fonthook::vectorfont
 				recordKind == DirectCachedLetterKind::StockFontLetter
 				? sizeof(FontLetter) : sizeof(DirectCachedLetter);
 			const UInt64 layoutIdentity =
-				GetRuntimeDirectLayoutIdentity(runtime);
+				GetRuntimeDirectRoleLayoutIdentity(runtime, byteClass);
 			const UInt64 effectIdentity =
 				GetRuntimeMaskContentHash(runtime, byteClass);
 			const UInt8 effectLayerMask =
@@ -1290,7 +1291,7 @@ namespace fonthook::vectorfont
 				BuildDirectEffectLayerMask(masks);
 			table->codePage = GetFreeTypeTextCodePage();
 			table->layoutIdentity =
-				GetRuntimeDirectLayoutIdentity(runtime);
+				GetRuntimeDirectRoleLayoutIdentity(runtime, byteClass);
 			table->effectIdentity =
 				GetRuntimeMaskContentHash(runtime, byteClass);
 			table->atlasIdentity = baseKey.atlasContentHash;
@@ -1645,7 +1646,8 @@ namespace fonthook::vectorfont
 					const auto& table = profile->second.directGlyphs;
 					if (table->codePage != sealed->codePage
 						|| table->layoutIdentity
-							!= sealed->layoutIdentity
+							!= GetRuntimeDirectRoleLayoutIdentity(
+								runtime, byteClass)
 						|| table->byteClass != byteClass
 						|| table->pages.size()
 							!= profile->second.pages.size()

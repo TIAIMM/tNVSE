@@ -545,6 +545,7 @@ namespace fonthook::vectorfont
 		bool manualBaseline = false;
 		bool initialized = false;
 		UInt64 layoutContentHash = 0;
+		std::array<UInt64, 2> layoutContentRoleHashes = {};
 		std::array<UInt64, 2> maskContentRoleHashes = {};
 		std::shared_ptr<PersistentGlyphManifest> manifest;
 		std::shared_ptr<DirectExtraGlyphTable> codePageMetrics;

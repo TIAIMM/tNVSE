@@ -287,6 +287,7 @@ namespace fonthook::vectorfont
 		EffectStyle outline;
 		EffectStyle shadow;
 		UInt64 layoutHash = 0;
+		std::array<UInt64, 2> layoutRoleHashes = {};
 		UInt64 maskGenerationHash = 0;
 		std::array<UInt64, 2> maskGenerationRoleHashes = {};
 		UInt64 shaderEffectHash = 0;
@@ -557,6 +558,8 @@ namespace fonthook::vectorfont
 	void InvalidateSealedDirectFontProfile(RuntimeFont& arRuntime);
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
 	UInt64 GetRuntimeDirectLayoutIdentity(const RuntimeFont& arRuntime);
+	UInt64 GetRuntimeDirectRoleLayoutIdentity(RuntimeFont& arRuntime,
+		VectorFontByteClass aeByteClass);
 	void GetRuntimeDirectBaselineOffsets(const RuntimeFont& arRuntime,
 		VectorFontByteClass aeByteClass, float& arRoleBaseline,
 		std::vector<float>& arFaceBaselines);
@@ -655,6 +658,7 @@ namespace fonthook::vectorfont
 	bool DiscardGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool SaveGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool RebuildGlyphAtlasFromSnapshot(RuntimeFont& arRuntime, float afRasterScale);
+	bool ConsolidatePhysicalFontAtlasGroups(float afRasterScale);
 	bool BuildDirectGlyphAtlasTables(RuntimeFont& arRuntime, float afRasterScale);
 	void QueueFontPrewarm(UInt32 auiFontId);
 	FontPrewarmPumpStatus PumpFontPrewarm();

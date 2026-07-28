@@ -385,7 +385,7 @@ font ID. Version 12 removes the unused per-glyph 16-band collision profile, so
 prewarm no longer scans every Fill/distance-field texel a second time and each
 manifest record is 52 bytes instead of 124 bytes. One `_p<page>.tnvfatlas`
 snapshot per atlas page stores
-the stable glyph-ID placement map. Snapshot v17 records the byte role, the
+the stable glyph-ID placement map. Snapshot v23 records the byte role, the
 selected distance-field method, and the validated runtime UV subset explicitly,
 and stores A8 true-SDF, BGRA MTSDF, or BGRA composite rectangle payloads. The
 CPU-effect coverage revision is scoped into the page-content identity, so
@@ -400,13 +400,26 @@ batches, closes pages at 2048x2048, shrinks the tail to the smallest usable
 power-of-two dimensions, and publishes that layout as an intermediate
 transaction generation. Finalization stages only its headers, placements, and
 source-file identities in the atlas index, with zero temporary GPU bytes. The
-global skyline repacker is retained: it reads one bounded source page at a time
-from disk, materializes one destination page at a time, and rewrites the
-globally repacked snapshots before the manifest is committed. Only the final
-repacked generation is uploaded. This preserves the page-count and tail-page
-VRAM/disk savings of global repacking while removing the former
-upload-repack-discard-upload peak. Distance-field pages store only the placed
-level-zero rectangles;
+global skyline repacker is retained: it evaluates every supported power-of-two
+target width with both deterministic bottom-left and best-fit skyline
+heuristics. Complete plans are compared lexicographically: the fewest physical
+pages wins, then the smallest total GPU storage, then the smallest maximum page
+edge. Thus a complete font remains on one texture whenever either evaluated
+skyline heuristic finds a legal one-page layout, while that one page may be
+`8192x4096`, `4096x8192`, or a smaller power-of-two rectangle instead of
+inheriting the role's square upper bound.
+NPOT dimensions are deliberately not used. The selected plan still reads one
+bounded source page at a time from disk, materializes one destination page at a
+time, and rewrites the globally repacked snapshots before the manifest is
+committed. Only the final repacked generation is uploaded. This preserves the
+page-count and tail-page VRAM/disk savings of global repacking while removing
+the former upload-repack-discard-upload peak. The packing revision, effective
+device limits, and aspect-ratio capability participate in snapshot identity;
+the intermediate streaming writer and the final snapshot loader use the same
+identity builder so the staged filenames cannot drift from the restore paths.
+v22 atlases and their dependent direct tables are rebuilt, while source-font
+hashes and glyph masks remain reusable. Distance-field pages store only the
+placed level-zero rectangles;
 other pages retain their complete mip chain. Each page records and validates
 the total page count. After a successful full prewarm every page is written
 through temporary files, globally repacked, and then the manifest is marked
@@ -487,6 +500,52 @@ snapshot files. Mixed text can bind pages from both roles in one shape, but a
 style/face chain and the content identities of the font files actually loaded
 for that chain. Replacing a double-byte font therefore leaves a compatible
 single-byte atlas resident and its disk snapshot reusable, and vice versa.
+
+When jointly packed single-/double-byte roles or physical-font-group roles use
+the same placements and texels, v23 keeps one complete physical `.tnvfatlas`
+and writes each other logical role as a checked 200-byte alias. The alias keeps
+that role's independent snapshot, mask, atlas-content, and byte-class identity,
+but points to the physical file by its content-addressed snapshot hash and page
+index. Restore validates both headers, the alias record, the complete payload
+contract, placement count, sizes, payload checksum, and page-content hash
+before streaming pixels from the physical file. Alias chains and external paths
+are rejected. This removes duplicate disk payloads without changing atlas
+dimensions, page count, texture bindings, or draw calls; NPOT remains disabled.
+The `atlas snapshot saved` log reports `physicalAliasFiles` and
+`diskBytesSaved`. The v23 format causes one rebuild after upgrading, while an
+unchanged following launch restores the aliases directly. Because this is an
+ownership-container change rather than a glyph-payload change, v23 retains the
+v22 payload path identity and replaces each configured v22 file in place. The
+old full copies therefore do not remain beside the aliases when
+`bDeleteUnusedFreeTypeFontCache=0`; dependent direct-table files follow the
+same in-place replacement rule while still validating the v23 header version.
+
+After every configured profile has been verified, snapshot v23 also considers
+physical font groups. A group requires at least two distinct single-byte atlas
+profiles plus one exactly matching double-byte pixel profile and double-byte
+layout profile. The repacker filters already joint role snapshots back to
+their logical contents, keeps every unique single-byte glyph set, keeps the
+double-byte glyph set once, and removes duplicate content IDs.
+
+If that complete union fits one device-supported power-of-two page, the same
+placed snapshot payload is published for every member role. Content-addressed
+DEFAULT-pool page reuse then gives all wrappers the same D3D9 texture, and the
+sealed renderer collapses both byte roles to one physical page ordinal. Mixed
+single-/double-byte text therefore keeps the one-page draw path without a
+texture switch. This feature never enables NPOT dimensions. If the union needs
+more than one page or its POT allocation would exceed the group's current
+de-duplicated physical GPU storage, the original per-font profiles remain
+active. That fallback decision is recorded in their current snapshot generation
+so later launches do not repeat the expensive group repack. Whole-font-identical
+profiles continue to use the existing exact-page de-duplication path instead.
+
+For CPU-precomposed ARGB profiles, double-byte compatibility includes the
+baked effect geometry and colors because those values alter final texels.
+Distance-field profiles can share when their raster identities match even
+when live shader colors differ. The log reports `physical atlas group active`
+or `reused` with the single physical page's `size`, `gpuBytes`, and
+`pageContentHash`; `fallback reused` confirms the persistent safe fallback.
+
 In FreeType-only mode the effective FreeType code page is always 1252, even if
 `uiEncoding=1-4` remains configured, and every byte uses `singleByte`.
 Runtime glyph, layout, mask, manifest and atlas-snapshot identities all
@@ -805,7 +864,7 @@ When
 `bEnableFreeTypeDefaultPoolAtlas=1`, tNVSE creates dynamic `D3DPOOL_DEFAULT`
 atlas textures and retains only the masks used by each live atlas generation;
 it does not retain a complete CPU copy of the atlas. The current and retired
-generations are restored after a D3D9 device reset. A version-17 snapshot
+generations are restored after a D3D9 device reset. A version-22 snapshot
 records A8 true SDF, BGRA MTSDF, or BGRA composite glyphs and is uploaded
 directly to this path.
 Its cache identity includes the persistent

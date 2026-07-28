@@ -116,62 +116,6 @@ namespace fonthook::vectorfont
 			return ResolvePrewarmAtlasKey(config, byteClass, rasterScale, key);
 		}
 
-		UInt64 BuildSnapshotHash(const AtlasCacheKey& key, UInt64 maskContentHash,
-			const FontConfig& config)
-		{
-			UInt64 hash = HashBytes(&kAtlasSnapshotVersion,
-				sizeof(kAtlasSnapshotVersion));
-			hash = HashBytes(&maskContentHash, sizeof(maskContentHash), hash);
-			hash = HashBytes(&key.atlasContentHash,
-				sizeof(key.atlasContentHash), hash);
-			hash = HashBytes(&key.scaleMilli, sizeof(key.scaleMilli), hash);
-			hash = HashBytes(&key.pixelMode, sizeof(key.pixelMode), hash);
-			hash = HashBytes(&key.renderMode, sizeof(key.renderMode), hash);
-			hash = HashBytes(&key.padding, sizeof(key.padding), hash);
-			hash = HashBytes(&key.levelZeroOnly,
-				sizeof(key.levelZeroOnly), hash);
-			hash = HashBytes(&key.byteClass, sizeof(key.byteClass), hash);
-			const bool forceSingleAtlas =
-				g_bEnableFreeTypeDefaultPoolAtlas;
-			hash = HashBytes(&forceSingleAtlas,
-				sizeof(forceSingleAtlas), hash);
-			const UInt32 atlasHardLimit = GetAtlasHardLimit(key.byteClass);
-			hash = HashBytes(&atlasHardLimit,
-				sizeof(atlasHardLimit), hash);
-			const UInt32 codePage = GetFreeTypeTextCodePage();
-			hash = HashBytes(&codePage, sizeof(codePage), hash);
-			hash = HashBytes(&kCompleteCodePagePrewarmIdentity,
-				sizeof(kCompleteCodePagePrewarmIdentity), hash);
-			hash = HashBytes(&kMaximumAtlasMipLevels,
-				sizeof(kMaximumAtlasMipLevels), hash);
-			hash = HashBytes(&A8ShapeColorContract::kTileUniformColorAbi,
-				sizeof(A8ShapeColorContract::kTileUniformColorAbi), hash);
-			if (key.renderMode == AtlasRenderMode::ShaderEffects)
-			{
-				const DistanceFieldMethod method =
-					GetConfiguredDistanceFieldMethod();
-				const UInt32 revision = DistanceFieldGeneratorRevision(method);
-				hash = HashBytes(&method, sizeof(method), hash);
-				hash = HashBytes(&revision, sizeof(revision), hash);
-			}
-			else if (key.renderMode == AtlasRenderMode::CpuEffects
-				&& key.pixelMode == AtlasPixelMode::Argb32
-				&& key.levelZeroOnly)
-			{
-				hash = HashBytes(&kCpuCompositeRasterRevision,
-					sizeof(kCpuCompositeRasterRevision), hash);
-			}
-			// A snapshot is usable only together with a complete glyph manifest.
-			// Couple their ABIs so a manifest format change cannot leave an
-			// apparently valid atlas that is restored and then discarded.
-			hash = HashBytes(&kPersistentGlyphManifestVersion,
-				sizeof(kPersistentGlyphManifestVersion), hash);
-			hash = HashBytes(
-				&kPersistentGlyphManifestCacheIdentityVersion,
-				sizeof(kPersistentGlyphManifestCacheIdentityVersion), hash);
-			return hash;
-		}
-
 		std::wstring BuildSnapshotPath(RuntimeFont& runtime,
 			VectorFontByteClass byteClass, float rasterScale, UInt16 pageIndex,
 			bool markUsed, UInt64* outSnapshotHash = nullptr,
@@ -190,7 +134,7 @@ namespace fonthook::vectorfont
 				return {};
 			const UInt64 maskContentHash = GetRuntimeMaskContentHash(
 				*atlasRuntime, byteClass);
-			const UInt64 snapshotHash = BuildSnapshotHash(key,
+			const UInt64 snapshotHash = BuildAtlasSnapshotIdentityHash(key,
 				maskContentHash, GetRuntimeConfig(*atlasRuntime));
 			if (outSnapshotHash)
 				*outSnapshotHash = snapshotHash;

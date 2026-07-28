@@ -1408,6 +1408,39 @@ namespace fonthook::vectorfont
 		return runtime.layoutContentHash;
 	}
 
+	UInt64 GetRuntimeDirectRoleLayoutIdentity(RuntimeFont& runtime,
+		VectorFontByteClass byteClass)
+	{
+		const size_t roleIndex = static_cast<size_t>(byteClass);
+		if (roleIndex >= runtime.roles.size() || !runtime.config)
+			return 0;
+		UInt64& cached = runtime.layoutContentRoleHashes[roleIndex];
+		if (cached)
+			return cached;
+
+		constexpr UInt32 kDirectRoleLayoutIdentityRevision = 1;
+		UInt64 hash = HashBytes64(&kDirectRoleLayoutIdentityRevision,
+			sizeof(kDirectRoleLayoutIdentityRevision),
+			1469598103934665603ull);
+		hash = HashBytes64(&runtime.config->layoutRoleHashes[roleIndex],
+			sizeof(runtime.config->layoutRoleHashes[roleIndex]), hash);
+		hash = HashBytes64(&runtime.verticalAlignmentRasterScale,
+			sizeof(runtime.verticalAlignmentRasterScale), hash);
+		const RuntimeRole& role = runtime.roles[roleIndex];
+		const UInt32 count = static_cast<UInt32>(role.faces.size());
+		hash = HashBytes64(&count, sizeof(count), hash);
+		for (const RuntimeFace& face : role.faces)
+		{
+			const UInt64 contentHash = face.file ? face.file->contentHash : 0;
+			const SInt32 faceIndex = face.face
+				? static_cast<SInt32>(face.face->face_index) : 0;
+			hash = HashBytes64(&contentHash, sizeof(contentHash), hash);
+			hash = HashBytes64(&faceIndex, sizeof(faceIndex), hash);
+		}
+		cached = hash ? hash : 1;
+		return cached;
+	}
+
 	size_t GetRuntimeDirectFaceCount(const RuntimeFont& runtime,
 		VectorFontByteClass byteClass)
 	{

@@ -436,6 +436,15 @@ namespace fonthook::vectorfont
 			return hash;
 		}
 
+		UInt64 BuildLayoutRoleHash(const FontConfig& config, size_t roleIndex)
+		{
+			UInt64 hash = 1469598103934665603ull;
+			HashBytes(hash, &config.verticalMetrics, sizeof(config.verticalMetrics));
+			HashBytes(hash, &config.baseline, sizeof(config.baseline));
+			HashFaceStyle(hash, config.styles[roleIndex], true);
+			return hash;
+		}
+
 		UInt64 BuildMaskGenerationRoleHash(const FontConfig& config, size_t roleIndex)
 		{
 			UInt64 hash = 1469598103934665603ull;
@@ -596,6 +605,8 @@ namespace fonthook::vectorfont
 			config.layoutHash = BuildLayoutHash(config);
 			for (size_t roleIndex = 0; roleIndex < config.styles.size(); ++roleIndex)
 			{
+				config.layoutRoleHashes[roleIndex] =
+					BuildLayoutRoleHash(config, roleIndex);
 				config.maskGenerationRoleHashes[roleIndex] =
 					BuildMaskGenerationRoleHash(config, roleIndex);
 			}

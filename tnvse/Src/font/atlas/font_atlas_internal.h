@@ -52,6 +52,9 @@ namespace fonthook::vectorfont
 		static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
 			* kMaximumMtsdfPrewarmAtlasSize * 4u;
 	static_assert(kMaximumMtsdfPrewarmPageBytes == 16u * 1024u * 1024u);
+	// Complete level-zero snapshots search deterministic power-of-two physical
+	// layouts without changing glyph padding or intermediate stream pages.
+	inline constexpr UInt32 kAtlasPackingRevision = 3;
 	inline constexpr UInt32 kMaximumQuads = 16383;
 
 	enum class AtlasLayer : UInt8
@@ -405,16 +408,40 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 20;
+	constexpr UInt32 kAtlasSnapshotVersion = 23;
+	// v23 changes only the on-disk ownership container. Keep the v22 payload
+	// identity so each configured v22 path is replaced in place instead of
+	// leaving a second full generation when unused-cache deletion is disabled.
+	constexpr UInt32 kAtlasSnapshotPayloadIdentityVersion = 22;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
 	constexpr UInt32 kAtlasSnapshotFlagSingleAtlas = 1u << 1;
 	constexpr UInt32 kAtlasSnapshotFlagSingleAtlasOverflow = 1u << 2;
 	constexpr UInt32 kAtlasSnapshotFlagJointByteRoles = 1u << 3;
+	constexpr UInt32 kAtlasSnapshotFlagPhysicalFontGroup = 1u << 4;
+	constexpr UInt32 kAtlasSnapshotFlagPhysicalFontGroupFallback = 1u << 5;
+	constexpr UInt32 kAtlasSnapshotFlagPhysicalPayloadAlias = 1u << 6;
 	constexpr UInt32 kAtlasSnapshotKnownFlags =
 		kAtlasSnapshotFlagGloballyRepacked
 		| kAtlasSnapshotFlagSingleAtlas
 		| kAtlasSnapshotFlagSingleAtlasOverflow
-		| kAtlasSnapshotFlagJointByteRoles;
+		| kAtlasSnapshotFlagJointByteRoles
+		| kAtlasSnapshotFlagPhysicalFontGroup
+		| kAtlasSnapshotFlagPhysicalFontGroupFallback
+		| kAtlasSnapshotFlagPhysicalPayloadAlias;
+	constexpr UInt32 kAtlasSnapshotAliasVersion = 1;
+	// Version 23 stores jointly packed logical roles as validated aliases to one
+	// full physical snapshot. Placements and pixels are no longer duplicated on
+	// disk, while every role retains its own snapshot identity header.
+	// Version 22 can jointly pack the unique single-byte profiles of a compatible
+	// font group with its one shared double-byte profile. Every logical role gets
+	// the same placed snapshot, so exact page de-duplication restores one physical
+	// DEFAULT-pool texture and the sealed renderer still sees one atlas page. A
+	// group that cannot fit one POT page without increasing physical GPU storage
+	// records a persistent fallback marker on the unchanged per-font snapshot
+	// generation instead of retrying every launch.
+	// Version 21 searches deterministic candidate widths with page count as the
+	// primary objective and physical storage bytes as the secondary objective.
+	// Physical page dimensions remain power-of-two for D3D9 compatibility.
 	// Version 20 jointly repacks compatible single- and double-byte roles so
 	// both direct tables can address the same physical DEFAULT-pool texture.
 	// Version 19 raises only the double-byte physical page envelope to 8192.
@@ -455,6 +482,22 @@ namespace fonthook::vectorfont
 		UInt64 storedPixelBytes = 0;
 		UInt64 payloadChecksum = 0;
 		UInt64 pageContentHash = 0;
+		UInt64 checksum = 0;
+	};
+
+	struct AtlasSnapshotAliasRecord
+	{
+		UInt8 magic[8] = {};
+		UInt32 version = 0;
+		UInt32 recordSize = 0;
+		UInt64 physicalSnapshotHash = 0;
+		UInt64 physicalPixelBytes = 0;
+		UInt64 physicalPayloadChecksum = 0;
+		UInt64 physicalPageContentHash = 0;
+		UInt64 physicalStoredPixelBytes = 0;
+		UInt32 physicalPlacementCount = 0;
+		UInt16 physicalPageIndex = 0;
+		UInt16 reserved = 0;
 		UInt64 checksum = 0;
 	};
 
@@ -843,6 +886,7 @@ namespace fonthook::vectorfont
 	};
 
 	static_assert(sizeof(AtlasSnapshotHeader) == 128);
+	static_assert(sizeof(AtlasSnapshotAliasRecord) == 72);
 	static_assert(sizeof(AtlasSnapshotGlyphPlacement) == 36);
 	static_assert(sizeof(AtlasSnapshotPlacement) == 92);
 	static_assert(sizeof(DirectAtlasGlyphLayer) == 8);
@@ -1037,6 +1081,8 @@ namespace fonthook::vectorfont
 		VectorFontByteClass byteClass);
 	UInt64 BuildPrewarmAtlasContentHash(const FontConfig& config,
 		VectorFontByteClass byteClass, float rasterScale, bool shaderEffects);
+	UInt64 BuildAtlasSnapshotIdentityHash(const AtlasCacheKey& key,
+		UInt64 maskContentHash, const FontConfig& config);
 	bool ResolvePrewarmAtlasKey(const FontConfig& config,
 		VectorFontByteClass byteClass, float rasterScale, AtlasCacheKey& key);
 	bool IsPrewarmAtlasAlias(const FontConfig& config,

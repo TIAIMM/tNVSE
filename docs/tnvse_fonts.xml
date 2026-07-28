@@ -82,6 +82,20 @@
       True-SDF mode disables this sharing and generates each font at its own
       configured pixelSize.
 
+      With the native DEFAULT-pool atlas enabled, a separate automatic
+      physical-group pass can combine fonts whose doubleByte pixel and layout
+      profiles are exactly identical but whose singleByte profiles differ. It
+      stores every unique singleByte set and the common doubleByte set once,
+      then publishes one shared physical texture only when the union fits one
+      device-supported power-of-two page without increasing the group's current
+      de-duplicated physical GPU storage. NPOT textures are never used. A
+      fallback keeps the original per-font atlases and is persisted so later
+      launches do not repeat the rejected group repack.
+      Joint byte roles and accepted physical groups also share one complete
+      on-disk snapshot payload. Other logical .tnvfatlas files are validated
+      200-byte aliases to that content-addressed physical file; they preserve
+      role-specific identities without duplicating placements or pixels.
+
       Font files
 
       <face path="..." index="0"/>

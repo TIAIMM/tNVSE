@@ -1271,6 +1271,16 @@ namespace fonthook::vectorfont
 		{
 			const ULONGLONG started = GetTickCount64();
 			CollectPrewarmProfileResults();
+			if (s_session.everyConfiguredProfileVerified)
+			{
+				const bool groupsReady =
+					ConsolidatePhysicalFontAtlasGroups(
+						s_session.rasterScale);
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: physical atlas group consolidation status=%s",
+					groupsReady ? "complete" : "partial-fallback");
+				RefreshNativePrewarmOverlayTextGeometry();
+			}
 			if (!s_session.everyConfiguredProfileVerified)
 			{
 				gLog.FormattedMessage(
