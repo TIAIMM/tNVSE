@@ -561,6 +561,32 @@ namespace fonthook
 		*aiWidth = textData.iWidth;
 		*aiHeight = textData.iHeight;
 
+		if (freeTypeActive && IsFreeTypeVuiProxyMeasureOnlyActive())
+		{
+			NiTriShape* emptyProxy = CreateEmptyFreeTypeTextShape(this, true);
+			if (emptyProxy)
+			{
+				*apTextShape = emptyProxy;
+				*apIconShape = nullptr;
+				ConsumeFreeTypePreparedTextSidecar(
+					&textData, this, textData.xNewText.c_str());
+				this->ButtonIcons.Clear(1);
+				if (g_bEnableFreeTypeFontRenderingLog)
+				{
+					static bool loggedVuiProxyMeasureOnly = false;
+					if (!loggedVuiProxyMeasureOnly)
+					{
+						loggedVuiProxyMeasureOnly = true;
+						FreeTypeFontDebugLog(
+							"tnvse_freetype_font: VUI+ ordinary proxy retained layout and bypassed glyph geometry font=%d",
+							this->iFontNum);
+					}
+				}
+				return ThisStdCall<UInt32>(0x7593E0,
+					reinterpret_cast<char*>(&textData));
+			}
+		}
+
 		if (freeTypeActive)
 		{
 			return CreateFreeTypePreparedText(this, textData, aiWidth,

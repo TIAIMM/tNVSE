@@ -688,14 +688,21 @@ Vanilla UI Plus implements its optional text treatment in
 `Menus/Prefabs/VUI+/outline.xml` by cloning the source text into the named
 `VUI+Shadow` and `VUI+Outline` `TileText` nodes. tNVSE recognizes only those
 two exact proxy names. Every recognized proxy completes the chained
-`TileText::MakeNode` path under recursive-effect suppression so its width and
-height traits remain valid for XML sibling expressions. When the proxy's active
-FreeType font already has a configured shadow, glow, or outline effect, tNVSE
-culls the finished proxy scene node after layout; the proxy therefore remains a
-layout participant without being drawn a second time. If no tNVSE effect is
-enabled, or if the font cannot be resolved reliably, the original proxy remains
-visible with recursive tNVSE effects suppressed. Unrelated dark or startup text
-remains unaffected, and no VUI+ XML file is modified.
+`TileText::MakeNode` path under recursive-effect suppression so its XML traits
+and sibling position remain valid. When the proxy's active FreeType font already
+has a configured shadow, glow, or outline effect, tNVSE also enters a
+measurement-only scope. The ordinary `Font::CreateText` path still prepares the
+text and publishes its final width and height, but returns a degenerate empty
+shape without compiling glyph geometry. The rich-text path still prepares its
+`TextDoc` layout but skips `TextDoc::Render` glyph emission. The finished proxy
+node is app-culled as a final safeguard, so it remains a layout participant
+without atlas lookup, effect geometry, or a second text draw. If no tNVSE effect
+is enabled, or if the font cannot be resolved reliably, the original proxy
+remains visible with recursive tNVSE effects suppressed. `GLOW_BRANCH`,
+`NOGLOW_BRANCH`, `_glow`, and image-outline prefabs are not proxy matches because
+they also control menu content, font selection, alignment, or image decoration.
+Unrelated dark or startup text remains unaffected, and no VUI+ XML file is
+modified.
 
 ## True-SDF/MTSDF fill, effects, and draw-state isolation
 

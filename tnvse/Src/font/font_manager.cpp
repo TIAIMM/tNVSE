@@ -4,6 +4,7 @@
 #include "font_glyphs.h"
 #include "font_vector.h"
 #include "game_hooks.h"
+#include "load_config.h"
 #include "native_calls.h"
 #include "tnvse.h"
 #include <array>
@@ -1257,6 +1258,20 @@ namespace fonthook
 
 	void __thiscall FontManagerEx::TextDocRender(NiNode* apNode, FontManager::TextData* apData)
 	{
+		if (IsFreeTypeVuiProxyMeasureOnlyActive())
+		{
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				static bool loggedVuiProxyRichMeasureOnly = false;
+				if (!loggedVuiProxyRichMeasureOnly)
+				{
+					loggedVuiProxyRichMeasureOnly = true;
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: VUI+ rich proxy retained layout and bypassed TextDoc glyph emission");
+				}
+			}
+			return;
+		}
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
 		ScopedRichTextRenderContext renderContext(doc, apData);
 		BeginFreeTypeRichTextRender(apNode);

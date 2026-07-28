@@ -117,6 +117,7 @@ namespace fonthook
 	float ConsumeFreeTypeCreateTextScale();
 	void FreeTypeCreateTextEntryHook();
 	bool IsFreeTypeEffectSuppressionActive();
+	bool IsFreeTypeVuiProxyMeasureOnlyActive();
 	bool InitializeFreeTypeVectorRenderer();
 	bool IsFreeTypeFontConfigured(UInt32 auiFontId);
 	bool ActivateFreeTypeFont(Font* apFont, bool abForce = false);

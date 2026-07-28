@@ -152,6 +152,7 @@ namespace fonthook
 
 		TileTextMakeNodeFn s_tileTextMakeNode = nullptr;
 		thread_local UInt32 s_effectSuppressionDepth = 0;
+		thread_local UInt32 s_vuiProxyMeasureOnlyDepth = 0;
 		bool s_loggedVuiShadowBypass = false;
 		bool s_loggedVuiOutlineBypass = false;
 		bool s_loggedVuiShadowFallback = false;
@@ -176,7 +177,8 @@ namespace fonthook
 			// shadow/outline by cloning the source text into these two named tiles.
 			// Always let those proxy tiles complete text preparation so their width
 			// and height traits remain valid for anonymous sibling expressions.  When
-			// tNVSE already supplies the effect, cull only the finished scene node.
+			// tNVSE already supplies the effect, skip their glyph emission and cull
+			// only the finished scene node.
 			isOutline = false;
 			if (!tile)
 				return false;
@@ -212,6 +214,25 @@ namespace fonthook
 			bool m_suppress;
 		};
 
+		class ScopedVuiProxyMeasureOnly
+		{
+		public:
+			explicit ScopedVuiProxyMeasureOnly(bool enabled) : m_enabled(enabled)
+			{
+				if (m_enabled)
+					++s_vuiProxyMeasureOnlyDepth;
+			}
+
+			~ScopedVuiProxyMeasureOnly()
+			{
+				if (m_enabled)
+					--s_vuiProxyMeasureOnlyDepth;
+			}
+
+		private:
+			bool m_enabled;
+		};
+
 		NiNode* __fastcall TileTextMakeNodeHook(TileText* tile, void*)
 		{
 			bool isOutline = false;
@@ -220,6 +241,7 @@ namespace fonthook
 			const bool replaceProxy = suppress && HasEnabledFreeTypeFontEffects(font);
 
 			ScopedEffectSuppression scope(suppress);
+			ScopedVuiProxyMeasureOnly measureOnly(replaceProxy);
 			BeginFreeTypeStockPageShapeCapture();
 			NiNode* node = s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
 			EndFreeTypeStockPageShapeCapture(node);
@@ -328,6 +350,11 @@ namespace fonthook
 	bool IsFreeTypeEffectSuppressionActive()
 	{
 		return s_effectSuppressionDepth != 0;
+	}
+
+	bool IsFreeTypeVuiProxyMeasureOnlyActive()
+	{
+		return s_vuiProxyMeasureOnlyDepth != 0;
 	}
 
 	void InitBigGunsDescHooks()
