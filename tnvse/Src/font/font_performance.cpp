@@ -281,6 +281,60 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualValidated)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_perf: virtual_stock_candidates=%llu virtual_stock_groups=%llu virtual_stock_shapes=%llu virtual_stock_draws=%llu virtual_stock_static_hits=%llu virtual_stock_rebinds=%llu virtual_stock_revokes=%llu facade_fallbacks=%llu followers_skipped=%llu sorted_preflight_saved=%llu proxy_packets_saved=%llu fallback_no_parent=%llu packet_limit=%llu cpu_budget=%llu static_not_ready=%llu topology=%llu shader=%llu generation=%llu atlas=%llu resource=%llu noncontiguous=%llu registration_resolved=%llu register_rejected=%llu registration_missing=%llu registration_duplicate=%llu registration_order_mismatch=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockCandidate)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockGroup)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockShape)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockDraw)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockStaticHit)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockRebind)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockRevoke)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFacadeFallback)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFollowerSkipped)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockSortedPreflightSaved)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockProxyPacketSaved)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFallbackNoParent)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFallbackPacketLimit)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFallbackCpuBudget)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFallbackStaticNotReady)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFallbackTopology)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFallbackShader)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFallbackGeneration)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFallbackAtlas)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFallbackResource)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockFallbackNoncontiguous)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockRegistrationResolved)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockRegistrationRejected)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockRegistrationMissing)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockRegistrationDuplicate)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockRegistrationOrderMismatch)]);
 		const DurationSummary layout =
 			ConsumeDurationSummary(FreeTypePerfPhase::Layout);
 		const DurationSummary sidecar =

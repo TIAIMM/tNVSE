@@ -1303,6 +1303,75 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		NiTriShape* CreateDirectNativePacketShell(Font& font,
+			const std::shared_ptr<AtlasResource>& atlas,
+			const NativeA8PayloadTemplate& payload,
+			const NativeA8PacketTemplate& packet,
+			const NiColorA& facadeColor, const NiColorA& tileColor,
+			const NiPoint3& origin, bool prepareObject)
+		{
+			const UInt64 vertexEnd = static_cast<UInt64>(packet.firstVertex)
+				+ packet.vertexCount;
+			if (!atlas || !packet.vertexCount
+				|| vertexEnd > payload.gpuVertices.size())
+			{
+				return nullptr;
+			}
+
+			NiTriShape* shape = font.MakeTriShape(1, &tileColor, false);
+			if (!shape || !shape->GetModelData()
+				|| !BindDirectAtlasShape(shape, atlas))
+			{
+				if (shape)
+					shape->DeleteThis();
+				return nullptr;
+			}
+			NiTriShapeData* data = shape->GetModelData();
+			if (data->m_usVertices < 4 || !data->m_pkVertex
+				|| !data->m_pkTexture || !data->m_pusTriList)
+			{
+				shape->DeleteThis();
+				return nullptr;
+			}
+			if (!data->m_pkColor)
+				data->m_pkColor = NiAlloc<NiColorA>(data->m_usVertices);
+			if (!data->m_pkColor)
+			{
+				shape->DeleteThis();
+				return nullptr;
+			}
+
+			static constexpr UInt16 kFacadeQuad[6] =
+				{ 0, 2, 1, 0, 3, 2 };
+			const NiColorA safeFacadeColor = SanitizeColor(facadeColor);
+			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
+			{
+				const NativeA8GpuVertex& vertex =
+					payload.gpuVertices[packet.firstVertex + ordinal];
+				data->m_pkVertex[ordinal] = NiPoint3(
+					vertex.x + origin.x,
+					vertex.y + origin.y,
+					vertex.z + origin.z);
+				data->m_pkTexture[ordinal] = NiPoint2(vertex.u, vertex.v);
+				data->m_pkColor[ordinal] = safeFacadeColor;
+			}
+			std::copy(std::begin(kFacadeQuad), std::end(kFacadeQuad),
+				data->m_pusTriList);
+			data->m_kBound = payload.bound;
+			data->m_kBound.m_kCenter.x += origin.x;
+			data->m_kBound.m_kCenter.y += origin.y;
+			data->m_kBound.m_kCenter.z += origin.z;
+			if (prepareObject)
+				shape->PrepareObject();
+			data->m_kBound = payload.bound;
+			data->m_kBound.m_kCenter.x += origin.x;
+			data->m_kBound.m_kCenter.y += origin.y;
+			data->m_kBound.m_kCenter.z += origin.z;
+			if (prepareObject && shape->m_pWorldBound)
+				shape->UpdateWorldBound();
+			return shape;
+		}
+
 		NiTriShape* CreateDirectNativeShape(Font& font,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
 			std::vector<NativeA8GpuVertex>&& vertices,
@@ -1328,54 +1397,149 @@ namespace fonthook::vectorfont
 			NativeA8PayloadTemplatePtr payload =
 				BuildNativeA8PayloadTemplate(std::move(vertices),
 					quadCount, effects, bound, std::move(compositeSpans));
-			if (!payload || payload->gpuVertices.size() < 4)
+			if (!payload || payload->gpuVertices.size() < 4
+				|| payload->packets.empty())
 				return nullptr;
 
-			NiTriShape* shape = font.MakeTriShape(1, &tileColor, false);
-			if (!shape || !shape->GetModelData()
-				|| !BindDirectAtlasShape(shape, atlases[0]))
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VirtualStockCandidate);
+			bool useCompositeTopology =
+				g_bEnableFreeTypeFontCompositePass
+				&& !payload->compositePackets.empty();
+
+			for (UInt32 topologyAttempt = 0;
+				topologyAttempt < 2; ++topologyAttempt)
 			{
-				return nullptr;
+				const std::vector<NativeA8PacketTemplate>& topology =
+					GetNativeA8Packets(*payload, useCompositeTopology);
+				if (topology.empty())
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							VirtualStockFallbackTopology);
+					break;
+				}
+				if (topology.size() > kMaximumVirtualStockShapes)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							VirtualStockFallbackPacketLimit);
+					break;
+				}
+				if (topology.size() > 1
+					&& !CanUseFreeTypeStockPageShapes())
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							VirtualStockFallbackNoParent);
+					break;
+				}
+
+				std::vector<NiTriShape*> packetShapes;
+				packetShapes.reserve(topology.size());
+				for (const NativeA8PacketTemplate& packet : topology)
+				{
+					NiTriShape* packetShape =
+						packet.atlasPage < atlases.size()
+							? CreateDirectNativePacketShell(font,
+								atlases[packet.atlasPage], *payload, packet,
+								facadeColor, tileColor, origin, prepareObject)
+							: nullptr;
+					if (!packetShape)
+					{
+						for (NiTriShape* created : packetShapes)
+							created->DeleteThis();
+						packetShapes.clear();
+						break;
+					}
+					packetShapes.push_back(packetShape);
+				}
+
+				if (packetShapes.size() != topology.size())
+					break;
+
+				if (useCompositeTopology)
+				{
+					bool compositeProfilesReady =
+						GetNativeA8ShaderGeneration() != 0;
+					for (const NativeA8PacketTemplate& packet : topology)
+					{
+						if (compositeProfilesReady
+							&& !ResolveNativeA8PacketShader(packet,
+								packetShapes.back(), false))
+						{
+							compositeProfilesReady = false;
+						}
+					}
+					if (!compositeProfilesReady)
+					{
+						for (NiTriShape* created : packetShapes)
+							created->DeleteThis();
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::
+								CompositeShaderFallback);
+						useCompositeTopology = false;
+						continue;
+					}
+				}
+
+				const UInt32 primarySlot = static_cast<UInt32>(
+					packetShapes.size() - 1u);
+				if (PrepareVirtualStockA8ShapeGroup(font,
+					packetShapes, primarySlot, font.iFontNum,
+					glyphCount, quadCount, &effects, &colorContract,
+					payload, origin, useCompositeTopology))
+				{
+					NiTriShape* primaryShape =
+						packetShapes[primarySlot];
+					if (packetShapes.size() == 1)
+						return primaryShape;
+
+					std::vector<NiTriShape*> additionalShapes;
+					additionalShapes.reserve(packetShapes.size() - 1u);
+					for (size_t index = packetShapes.size() - 1u;
+						index-- > 0;)
+					{
+						additionalShapes.push_back(
+							packetShapes[index]);
+					}
+					if (RegisterFreeTypeStockPageShapes(
+						primaryShape, additionalShapes))
+					{
+						return primaryShape;
+					}
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							VirtualStockFallbackNoParent);
+				}
+				for (NiTriShape* created : packetShapes)
+					created->DeleteThis();
+				break;
 			}
-			NiTriShapeData* data = shape->GetModelData();
-			if (data->m_usVertices < 4 || !data->m_pkVertex
-				|| !data->m_pkTexture || !data->m_pusTriList)
-			{
+
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VirtualStockFacadeFallback);
+			const NativeA8PacketTemplate& facadePacket =
+				payload->packets.front();
+			NiTriShape* shape =
+				facadePacket.atlasPage < atlases.size()
+					? CreateDirectNativePacketShell(font,
+						atlases[facadePacket.atlasPage], *payload,
+						facadePacket,
+						facadeColor, tileColor, origin, false)
+					: nullptr;
+			if (!shape)
 				return nullptr;
-			}
-			if (!data->m_pkColor)
-				data->m_pkColor = NiAlloc<NiColorA>(data->m_usVertices);
-			if (!data->m_pkColor)
-				return nullptr;
-			static constexpr UInt16 kFacadeQuad[6] =
-				{ 0, 2, 1, 0, 3, 2 };
-			const NiColorA safeFacadeColor = SanitizeColor(facadeColor);
-			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
-			{
-				const NativeA8GpuVertex& vertex =
-					payload->gpuVertices[ordinal];
-				data->m_pkVertex[ordinal] = NiPoint3(
-					vertex.x + origin.x,
-					vertex.y + origin.y,
-					vertex.z + origin.z);
-				data->m_pkTexture[ordinal] =
-					NiPoint2(vertex.u, vertex.v);
-				data->m_pkColor[ordinal] = safeFacadeColor;
-			}
-			std::copy(std::begin(kFacadeQuad), std::end(kFacadeQuad),
-				data->m_pusTriList);
-			data->m_kBound = bound;
-			data->m_kBound.m_kCenter.x += origin.x;
-			data->m_kBound.m_kCenter.y += origin.y;
-			data->m_kBound.m_kCenter.z += origin.z;
 			if (!PrepareA8AtlasShape(font, shape, font.iFontNum,
 				glyphCount, quadCount, &effects, &colorContract,
 				payload, origin))
 			{
+				shape->DeleteThis();
 				return nullptr;
 			}
 			if (prepareObject)
 				shape->PrepareObject();
+			NiTriShapeData* data = shape->GetModelData();
 			data->m_kBound = bound;
 			data->m_kBound.m_kCenter.x += origin.x;
 			data->m_kBound.m_kCenter.y += origin.y;

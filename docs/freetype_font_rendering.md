@@ -603,17 +603,24 @@ existing compatibility path. A missing direct record, page replacement,
 generation mismatch, or invalid snapshot identity applies the same batch-wide
 fallback; direct and bitmap records are never mixed in one submission.
 
-The visible text on a native route is
-represented by one facade in the stock Tile alpha list so the game retains its
-normal UI sorting. At the sorted Tile pass tNVSE expands that facade into native
-Gamebryo geometry packets grouped by layer, atlas page, shader class, and
-sampling contract. Those packets use `TileShader`, the renderer-owned shader
-declaration, and the renderer's `NiGeometryBufferData`. There is no private
-D3D draw path or whole-shape range fallback. If a marked facade cannot complete
+Every native text artifact still defines packets grouped by layer, atlas page,
+shader class, and sampling contract. A compatibility submission represents the
+complete artifact with one facade in the stock Tile alpha list and expands it
+after UI sorting. Once the artifact is sealed in the static vertex arena, the
+virtual-stock backend can instead represent every frozen packet with a real
+`NiTriShape`. Those shapes enter the original accumulator, original Tile
+ordering, original `TileShader::UpdateConstants`, and original
+`RenderImmediate`; the plugin no longer replaces a complete facade descriptor
+or selects a proxy shape for each such packet.
+
+Both forms use `TileShader`, the renderer-owned native declaration, and
+Gamebryo `NiGeometryBufferData`. There is no private D3D draw path or
+whole-shape range fallback. If a marked compatibility facade cannot complete
 through the native route, that submission is suppressed and logged with a
 concrete `submission-suppressed` reason. Atlas-shape construction failure also
 returns an empty shape instead of rebuilding the text as legacy outline
-geometry, so visible FreeType text must have reached the native packet route.
+geometry, so visible FreeType text must have reached one of the validated
+native forms.
 
 The native vertex stream carries one per-glyph base modifier in `COLOR0`.
 Pixel constant `c1` carries the packet's uniform layer modifier, while `c0`
@@ -784,12 +791,13 @@ bounds in a 44-byte record. The D3D declaration expands `D3DCOLOR` to the
 vertex shader's normalized `float4 COLOR0`; packet-uniform layer modifiers
 remain in pixel constants. Compared with a four-float base color, the packed
 field saves twelve bytes per vertex without adding packets or draw calls. After
-the stock Tile list has
-been sorted, tNVSE preflights its FreeType facades, deduplicates their immutable
-text artifacts, and promotes all eligible artifacts with one static-VB
-Lock/copy sequence/Unlock. Tiles are not persistently merged: stock depth/order,
+the stock Tile list has been prepared, tNVSE preflights compatibility facades
+and virtual-stock primaries, deduplicates their immutable text artifacts, and
+promotes all eligible artifacts with one static-VB Lock/copy
+sequence/Unlock. Tiles are not persistently merged: stock depth/order,
 per-Tile transform, scissor, alpha, and shader constants remain independent.
-Before that preflight/upload work, each complete native facade receives a
+Before that preflight/upload work, each complete compatibility facade or
+virtual-stock group receives a
 read-only state test for exact zero Tile/material alpha under a provably no-op
 alpha blend. This test does not consult the renderer's current view-projection,
 viewport, hardware scissor, or the facade's app-cull bit. Those values are not
@@ -871,6 +879,81 @@ per-facade D3D allocation, changes no atlas or cache format, and does not enable
 NPOT textures. The periodic performance line reports
 `direct_shape_candidates`, `direct_shape_draws`, `direct_shape_vertices`, and
 `direct_shape_fallback`.
+
+### Virtual-stock FreeType shapes
+
+The virtual-stock backend freezes the ordinary or Composite packet topology
+when the text shape is created. Composite is selected only when every required
+profile resolves in the current shader generation; otherwise the ordinary
+topology is frozen. A one-packet artifact returns one real shape.
+For a multi-packet artifact, TileText capture and RichText rendering expose the
+destination `NiNode`; tNVSE returns the last packet as the ABI primary and
+inserts the remaining shapes immediately after its actual child index in
+reverse packet order. This avoids first-available child holes and keeps
+multiple captured text groups contiguous without reordering unrelated children.
+Every shape has the complete text bound and the same sort state. The retail
+sorted Tile routine at `0xB64F90` traverses its already prepared item array
+from the last entry to the first, so a contiguous group is
+drawn as packet 0 through packet N without changing primitive order. Unknown
+callers, more than 64 packets, a missing parent, insufficient CPU budget, or a
+different topology selected by shader preflight retain the one-facade route.
+There is no global `NiNode::AttachChild` hook.
+
+The group primary owns the immutable payload, atlas references, and complete
+facade fallback. Followers hold only a non-owning group/slot identity. Before
+registration the primary copies its current transform, object flags, hardware
+scissor, overlay RGB, Tile and material alpha, and blend/cull/stencil properties
+and full world bound to the page-specific siblings, then performs the
+conservative whole-group visibility test once. All slots must be registered
+into the same accumulator in descending slot order at consecutive final item
+positions. The per-shape registration hook records submission order only:
+stock's Tiles registration function may insert at a sorted position rather
+than append after the previous item. Immediately before the stock sorted
+traversal, tNVSE therefore scans the completed accumulator once with a
+pointer-only lookup and resolves every virtual slot's unique final position. A
+missing, duplicate, reordered, or non-contiguous slot prevents direct
+publication: only the primary executes the compatibility packet set and every
+follower is skipped. This final-layout scan does not build facade frame
+entries, acquire per-item metadata ownership, or run compatibility preflight
+for frames whose tracked FreeType objects are all virtual-stock primaries.
+
+Each direct slot owns a small `NiGeometryBufferData`/`NiVBChip` descriptor but
+does not own its D3D buffers. The descriptor points at
+`staticBaseVertex + packet.firstVertex` in the shared immutable 44-byte vertex
+arena and at the canonical INDEX16 buffer. Dynamic-ring locations are never
+published as persistent bindings. The sorted lease resolves every slot first
+and publishes the group only after all textures, shaders, generations, atlas
+epochs, item positions, and static ranges agree. During its Tile callback the
+shape changes only its packet bound, folds the artifact origin into its live
+transform, and temporarily disables alpha test; descriptor, declaration,
+shader, texture, scissor, color, alpha, blend, cull, and stencil state remain
+the real shape's state. The normal pixel shaders and constant isolation remain
+unchanged. A stable slot is fully validated and reused without rewriting its
+descriptor; only an actual resource, atlas, shader, or descriptor change
+performs a rebind. Atlas validation includes both the texturing-property wrapper
+and the Tile shade property's page-specific source texture.
+
+Static-buffer replacement, device reset, shader reload, and atlas epoch changes
+revoke every borrowed descriptor before the underlying resource can be
+released. Shape destruction restores the original shell buffer and shader
+before deleting the plugin-owned descriptor. A primary destroyed early retires
+the group so surviving followers cannot submit it. A virtual backend failure
+falls back or suppresses that group and does not fault the complete FreeType
+shader generation; failure to restore shared shader constants retains the
+existing generation-fault rule.
+If validation fails before any packet in the group has drawn, the descriptors
+are restored and the primary executes the complete facade in that same
+traversal. Once any packet has reached `RenderImmediate`, the group is never
+replayed because doing so could duplicate already drawn layers.
+
+This backend removes facade expansion, per-packet proxy selection, repeated
+descriptor replacement, and unnecessary full-list preflight work. It does not
+merge packets or facades: one packet still produces one
+`DrawIndexedPrimitive`. It adds no shader file, cache-format field, INI option,
+NPOT texture, or external API. The diagnostic line beginning
+`tnvse_freetype_perf: virtual_stock_` reports candidates, groups, shapes,
+draws, static hits, rebinds, revokes, facade fallbacks, skipped followers,
+saved preflight/proxy work, and categorized fallback reasons.
 
 ## Atlas allocation, mipmaps, and memory
 

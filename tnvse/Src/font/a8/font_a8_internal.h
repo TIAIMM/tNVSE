@@ -78,6 +78,24 @@ namespace fonthook::vectorfont
 		Argb
 	};
 
+	enum class FreeTypeShapeBackend : UInt8
+	{
+		CompatibilityFacade = 0,
+		VirtualStockNative,
+		StockArgb
+	};
+
+	enum class VirtualStockFrameMode : UInt8
+	{
+		Facade = 0,
+		Direct,
+		Culled,
+		Fault,
+		Retired
+	};
+
+	struct VirtualStockShapeGroup;
+
 	struct A8CompiledRange
 	{
 		A8DrawRange range;
@@ -97,8 +115,57 @@ namespace fonthook::vectorfont
 		A8ShapeColorContract colorContract;
 		mutable CpuMemoryLease cpuMemory;
 		mutable NativeA8ShapePayload nativePayload;
+		FreeTypeShapeBackend backend =
+			FreeTypeShapeBackend::CompatibilityFacade;
+		VirtualStockShapeGroup* virtualStockGroup = nullptr;
+		UInt16 virtualStockSlot = 0;
+		bool virtualStockPrimary = false;
 	};
 	using A8ShapeMetadataPtr = std::shared_ptr<const A8ShapeMetadata>;
+
+	struct VirtualStockSlotBinding
+	{
+		NiTriShape* shape = nullptr;
+		NiGeometryBufferData* shellBuffer = nullptr;
+		NiGeometryBufferData* bindingBuffer = nullptr;
+		NiVBChip* bindingChip = nullptr;
+		UInt32* bindingStride = nullptr;
+		void* bindingChipMemory = nullptr;
+		BSShader* shellShader = nullptr;
+		UInt32 packetIndex = 0;
+		UInt32 generation = 0;
+		UInt32 resourceSerial = 0;
+		UInt32 atlasTextureEpoch = 0;
+		UInt32 baseVertex = 0;
+		UInt32 vertexCount = 0;
+		bool bound = false;
+	};
+
+	struct VirtualStockShapeGroup
+	{
+		std::mutex mutex;
+		NativeA8PayloadTemplatePtr payloadTemplate;
+		A8ShapeMetadataPtr primaryMetadataOwner;
+		NiTriShape* primaryShape = nullptr;
+		std::vector<VirtualStockSlotBinding> slots;
+		CpuMemoryLease cpuMemory;
+		BSShaderAccumulator* registrationAccumulator = nullptr;
+		std::vector<SInt32> registrationItemIndices;
+		UInt64 registrationCycle = 0;
+		UInt64 preflightValidationToken = 0;
+		UInt64 preparedValidationToken = 0;
+		UInt32 preparedGeneration = 0;
+		UInt32 preparedAtlasTextureEpoch = 0;
+		UInt32 primarySlot = 0;
+		UInt32 registeredSlotCount = 0;
+		UInt32 liveSlotCount = 0;
+		bool useCompositeTopology = false;
+		bool registrationContiguous = true;
+		bool duplicateRegistration = false;
+		std::atomic<UInt32> directDrawCount = 0;
+		std::atomic<VirtualStockFrameMode> frameMode =
+			VirtualStockFrameMode::Facade;
+	};
 
 	struct A8State
 	{
@@ -118,6 +185,8 @@ namespace fonthook::vectorfont
 
 		std::mutex metadataMutex;
 		std::unordered_map<const NiTriShape*, A8ShapeMetadataPtr> shapeMetadata;
+		std::unordered_map<VirtualStockShapeGroup*,
+			std::shared_ptr<VirtualStockShapeGroup>> virtualStockGroups;
 		std::array<std::atomic<UInt64>, kMetadataGenerationSlotCount>
 			metadataGenerations = {};
 
@@ -125,6 +194,8 @@ namespace fonthook::vectorfont
 
 	A8State& State();
 	A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape);
+	std::shared_ptr<VirtualStockShapeGroup>
+		AcquireVirtualStockShapeGroup(const A8ShapeMetadata& metadata);
 	bool IsA8AtlasShape(const NiTriShape* shape);
 	bool NeedsScaledFillSampling(const NiTriShape* shape);
 	bool HookTileRenderPass();
@@ -137,4 +208,21 @@ namespace fonthook::vectorfont
 	void __fastcall A8RenderImmediate(NiTriShape* shape, void*, NiRenderer* renderer);
 	void __fastcall A8RenderImmediateAlt(NiTriShape* shape, void*, NiRenderer* renderer);
 	bool InitializeA8TriShapeVtable(NiTriShape* shape);
+	bool PrepareVirtualStockA8ShapeGroup(Font& font,
+		const std::vector<NiTriShape*>& shapes, UInt32 primarySlot,
+		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
+		const A8EffectShapeConfig* effectConfig,
+		const A8ShapeColorContract* colorContract,
+		NativeA8PayloadTemplatePtr payloadTemplate,
+		const NiPoint3& geometryOrigin, bool useCompositeTopology);
+	bool PrepareVirtualStockGroupForSortedFrame(
+		const std::shared_ptr<VirtualStockShapeGroup>& group,
+		UInt32 generation, UInt32 atlasTextureEpoch,
+		UInt64 validationToken);
+	void RestoreVirtualStockGroupToFacade(
+		const std::shared_ptr<VirtualStockShapeGroup>& group,
+		NativeA8FallbackReason reason);
+	void InvalidateAllVirtualStockBindings();
+	void ReleaseVirtualStockShapeBinding(
+		NiTriShape* shape, const A8ShapeMetadata& metadata);
 }

@@ -143,6 +143,10 @@ namespace fonthook
 			// The Tile shade property and texturing property must remain unique:
 			// they carry this physical page's atlas texture.
 			CopyStockTileDynamicState(*sourceTile, *pageTile);
+			if (primary.m_pWorldBound && pageShape.m_pWorldBound)
+				*pageShape.m_pWorldBound = *primary.m_pWorldBound;
+			else if (pageShape.m_pWorldBound)
+				pageShape.UpdateWorldBound();
 			return true;
 		}
 
@@ -336,24 +340,60 @@ namespace fonthook
 				if (!parent || !batch.primary)
 					continue;
 
-				// Font::CreateText/MakeString can return only one shape. The
-				// first atlas page remains that ABI object; once the game has
-				// attached it, put every other stock page beside it and mirror
-				// the caller-applied object state.
+				UInt32 insertionIndex = parent->GetArrayCount();
+				bool foundPrimary = false;
+				for (UInt32 index = 0;
+					index < parent->GetArrayCount(); ++index)
+				{
+					if (parent->GetAt(index) == batch.primary)
+					{
+						insertionIndex = index + 1u;
+						foundPrimary = true;
+						break;
+					}
+				}
+
+				// Font::CreateText/MakeString can return only one shape. Once the
+				// game has attached that ABI primary, insert every packet sibling
+				// immediately after it. Inserting at the actual child index avoids
+				// AttachChild(firstAvail) filling an older hole and keeps multiple
+				// captured text groups contiguous without changing the relative
+				// order of unrelated children.
 				for (NiTriShapePtr& pageShape : batch.additionalShapes)
 				{
 					if (!pageShape)
 						continue;
 					pageShape->m_kLocal = batch.primary->m_kLocal;
 					pageShape->m_uiFlags = batch.primary->m_uiFlags;
-					parent->AttachChild(pageShape, true);
+					if (foundPrimary)
+						parent->InsertChildAt(insertionIndex++, pageShape);
+					else
+						parent->AttachChild(pageShape, false);
 					SynchronizeStockPageShapeState(
 						*batch.primary, *pageShape);
-					if (pageShape->m_pWorldBound)
-						pageShape->UpdateWorldBound();
 				}
 			}
 			batches.clear();
+		}
+
+		void AttachStockPageShapeBatchForPrimary(
+			std::vector<StockPageShapeBatch>& batches,
+			NiTriShape* primary, NiNode* fallbackParent)
+		{
+			if (!primary)
+				return;
+			const auto found = std::find_if(
+				batches.begin(), batches.end(),
+				[primary](const StockPageShapeBatch& batch)
+				{
+					return batch.primary == primary;
+				});
+			if (found == batches.end())
+				return;
+			std::vector<StockPageShapeBatch> selected;
+			selected.push_back(std::move(*found));
+			batches.erase(found);
+			AttachStockPageShapeBatches(selected, fallbackParent);
 		}
 	}
 
@@ -461,6 +501,12 @@ namespace fonthook
 			return true;
 		}
 		return false;
+	}
+
+	bool SynchronizeFreeTypeStockPageShapeState(
+		const NiTriShape& primaryShape, NiTriShape& pageShape)
+	{
+		return SynchronizeStockPageShapeState(primaryShape, pageShape);
 	}
 
 	VectorTextBuilder::VectorTextBuilder(Font* apFont, bool abPrepareObject,
@@ -765,15 +811,25 @@ namespace fonthook
 				if (builder)
 				{
 					if (NiTriShape* shape = builder->Finish())
+					{
 						s_richTextContext->parent->AttachChild(shape, true);
+						AttachStockPageShapeBatchForPrimary(
+							s_richTextContext->stockPageBatches,
+							shape, s_richTextContext->parent);
+					}
 				}
 			}
 			for (auto& [font, builder] :
 				s_richTextContext->fallbackBuilders)
 			{
 				if (builder)
-				if (NiTriShape* shape = builder->Finish())
-					s_richTextContext->parent->AttachChild(shape, true);
+					if (NiTriShape* shape = builder->Finish())
+					{
+						s_richTextContext->parent->AttachChild(shape, true);
+						AttachStockPageShapeBatchForPrimary(
+							s_richTextContext->stockPageBatches,
+							shape, s_richTextContext->parent);
+					}
 			}
 			AttachStockPageShapeBatches(
 				s_richTextContext->stockPageBatches,

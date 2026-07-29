@@ -23,6 +23,7 @@ namespace fonthook::vectorfont
 	struct A8ShapeMetadata;
 	inline constexpr UInt32 kNativeA8MaximumQuads =
 		std::numeric_limits<UInt16>::max() / 4u;
+	inline constexpr UInt32 kMaximumVirtualStockShapes = 64;
 	inline constexpr size_t kNativeA8PacketConstantRegisterCount = 8;
 	inline constexpr size_t kNativeA8PacketConstantFloatCount =
 		kNativeA8PacketConstantRegisterCount * 4;
@@ -295,12 +296,38 @@ namespace fonthook::vectorfont
 		bool active = false;
 	};
 
+	// A virtual-stock shape keeps a plugin-owned geometry descriptor and borrows
+	// the immutable static arena for the complete sorted Tile traversal. The
+	// sorted-frame lease owns the D3D resources; this value is a validated
+	// non-owning view and must never outlive that traversal.
+	struct NativeA8VirtualStockPacketBinding
+	{
+		IDirect3DVertexBuffer9* vertexBuffer = nullptr;
+		IDirect3DIndexBuffer9* indexBuffer = nullptr;
+		IDirect3DVertexDeclaration9* declaration = nullptr;
+		UInt32 baseVertex = 0;
+		UInt32 vertexCount = 0;
+		UInt32 indexBytes = 0;
+		UInt32 generation = 0;
+		UInt32 resourceSerial = 0;
+		UInt32 atlasTextureEpoch = 0;
+		bool active = false;
+	};
+
 	bool EnsureNativeA8ProxyPool(Font& font);
 	NativeA8FallbackReason BeginNativeA8DirectShapeSubmission(
 		NiTriShape* facade, NativeA8ShapePayload& payload,
 		NativeA8DirectShapeSubmission& submission);
 	void EndNativeA8DirectShapeSubmission(
 		NativeA8DirectShapeSubmission& submission);
+	NativeA8FallbackReason ResolveNativeA8VirtualStockPacketBinding(
+		NativeA8ShapePayload& payload, UInt32 packetIndex,
+		NativeA8VirtualStockPacketBinding& binding);
+	bool IsNativeA8VirtualStockPacketBindingCurrent(
+		const NativeA8VirtualStockPacketBinding& binding);
+	bool IsNativeA8VirtualStockPacketAtlasCurrent(
+		const NiTriShape* shape, const NativeA8ShapePayload& payload,
+		UInt32 packetIndex);
 	NativeA8FallbackReason BeginNativeA8RingSubmission(
 		NiTriShape* facade, NativeA8ShapePayload& payload,
 		NativeA8RingSubmission& submission);
@@ -320,6 +347,7 @@ namespace fonthook::vectorfont
 	void TrimNativeA8CpuCachesForTotalBudget();
 	bool FindNativeA8SortedFrameEntry(NiTriShape* facade,
 		NativeA8SortedFrameEntryView& view);
+	UInt64 GetNativeA8SortedFrameValidationToken();
 	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload);
 	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,

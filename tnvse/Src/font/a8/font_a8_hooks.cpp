@@ -714,6 +714,60 @@ namespace fonthook::vectorfont
 			bool m_active = false;
 		};
 
+		class VirtualStockTileStateScope
+		{
+		public:
+			VirtualStockTileStateScope(NiTriShape* shape,
+				const NativeA8ShapePayload& payload,
+				const NativeA8PacketTemplate& packet)
+				: m_shape(shape)
+			{
+				m_data = m_shape ? m_shape->GetModelData() : nullptr;
+				m_alpha = m_shape ? m_shape->GetAlphaProperty() : nullptr;
+				if (!m_shape || !m_data || !m_alpha)
+					return;
+				m_local = m_shape->m_kLocal;
+				m_world = m_shape->m_kWorld;
+				m_bound = m_data->m_kBound;
+				m_alphaFlags = m_alpha->m_usFlags;
+				m_alphaTestRef = m_alpha->m_ucAlphaTestRef;
+				ApplyNativeGeometryOrigin(
+					m_shape->m_kLocal, m_local, payload.geometryOrigin);
+				ApplyNativeGeometryOrigin(
+					m_shape->m_kWorld, m_world, payload.geometryOrigin);
+				m_data->m_kBound = packet.bound;
+				m_alpha->SetAlphaTesting(false);
+				m_active = true;
+			}
+
+			~VirtualStockTileStateScope()
+			{
+				if (!m_active)
+					return;
+				m_alpha->m_usFlags = m_alphaFlags;
+				m_alpha->m_ucAlphaTestRef = m_alphaTestRef;
+				m_data->m_kBound = m_bound;
+				m_shape->m_kLocal = m_local;
+				m_shape->m_kWorld = m_world;
+			}
+
+			bool Active() const
+			{
+				return m_active;
+			}
+
+		private:
+			NiTriShape* m_shape = nullptr;
+			NiTriShapeData* m_data = nullptr;
+			NiAlphaProperty* m_alpha = nullptr;
+			NiTransform m_local;
+			NiTransform m_world;
+			NiBound m_bound;
+			Bitfield16 m_alphaFlags;
+			UInt8 m_alphaTestRef = 0;
+			bool m_active = false;
+		};
+
 		struct NativePacketDrawResult
 		{
 			bool runtimeFault = false;
@@ -727,6 +781,286 @@ namespace fonthook::vectorfont
 			HRESULT result = D3DERR_DEVICELOST;
 			SInt32 mismatchRegister = -1;
 		};
+
+		bool TryDrawVirtualStockPacket(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			bool setupDrawmode, NiTriShape* shape,
+			const A8ShapeMetadata& metadata, UInt64 validationToken,
+			NativePacketDrawResult& draw)
+		{
+			VirtualStockShapeGroup* group =
+				metadata.virtualStockGroup;
+			if (!pass || !shape || !group || !validationToken)
+			{
+				return false;
+			}
+			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
+
+			NativeA8ShapePayload* payload = nullptr;
+			A8ShapeMetadataPtr primaryMetadataOwner;
+			NativeA8PacketTemplate packet;
+			NativeA8VirtualStockPacketBinding binding;
+			NiGeometryBufferData* expectedBuffer = nullptr;
+			NiVBChip* expectedChip = nullptr;
+			TileShader* expectedShader = nullptr;
+			UInt32 packetIndex = 0;
+			{
+				std::lock_guard<std::mutex> lock(group->mutex);
+				if (!group->primaryMetadataOwner
+					|| metadata.virtualStockSlot >= group->slots.size()
+					|| group->preparedValidationToken != validationToken
+					|| group->frameMode.load(std::memory_order_acquire)
+						!= VirtualStockFrameMode::Direct)
+				{
+					return false;
+				}
+				primaryMetadataOwner = group->primaryMetadataOwner;
+				payload = &primaryMetadataOwner->nativePayload;
+				if (!payload->buildComplete || !payload->payloadTemplate)
+					return false;
+				const std::vector<NativeA8PacketTemplate>& packets =
+					GetNativeA8Packets(*payload->payloadTemplate,
+						payload->useCompositePackets);
+				const VirtualStockSlotBinding& slot =
+					group->slots[metadata.virtualStockSlot];
+				if (slot.shape != shape || slot.packetIndex >= packets.size()
+					|| slot.packetIndex >= payload->packetShaders.size())
+				{
+					return false;
+				}
+				packet = packets[slot.packetIndex];
+				packetIndex = slot.packetIndex;
+				expectedBuffer = slot.bindingBuffer;
+				expectedChip = slot.bindingChip;
+				expectedShader = payload->packetShaders[slot.packetIndex];
+				binding.vertexBuffer = slot.bindingChip
+					? slot.bindingChip->m_pkVB : nullptr;
+				binding.indexBuffer = slot.bindingBuffer
+					? slot.bindingBuffer->m_pkIB : nullptr;
+				binding.declaration = slot.bindingBuffer
+					? static_cast<IDirect3DVertexDeclaration9*>(
+						slot.bindingBuffer->m_hDeclaration) : nullptr;
+				binding.baseVertex = slot.baseVertex;
+				binding.vertexCount = slot.vertexCount;
+				binding.indexBytes = slot.bindingBuffer
+					? slot.bindingBuffer->m_uiIBSize : 0;
+				binding.generation = slot.generation;
+				binding.resourceSerial = slot.resourceSerial;
+				binding.atlasTextureEpoch = slot.atlasTextureEpoch;
+				binding.active = slot.bound;
+			}
+
+			draw.directShapeRoute = true;
+			draw.stockLikeBitmapRoute = payload->stockLikeBitmapPackets;
+			NiTriShapeData* data = shape->GetModelData();
+			const bool bindingCurrent =
+				validationToken
+					== GetNativeA8SortedFrameValidationToken()
+				&& data && data->m_pkBuffData == expectedBuffer
+				&& shape->GetShader() == expectedShader
+				&& expectedBuffer && expectedChip
+				&& expectedBuffer->m_hDeclaration == binding.declaration
+				&& expectedBuffer->m_pkIB == binding.indexBuffer
+				&& expectedBuffer->m_uiBaseVertexIndex
+					== binding.baseVertex
+				&& expectedBuffer->m_uiVertCount
+					== binding.vertexCount
+				&& expectedBuffer->m_uiMaxVertCount
+					== binding.vertexCount
+				&& expectedBuffer->m_uiStreamCount == 1
+				&& expectedBuffer->m_puiVertexStride
+				&& expectedBuffer->m_puiVertexStride[0]
+					== sizeof(NativeA8GpuVertex)
+				&& expectedBuffer->m_ppkVBChip
+				&& expectedBuffer->m_ppkVBChip[0] == expectedChip
+				&& expectedBuffer->m_uiIndexCount
+					== packet.vertexCount / 4u * 6u
+				&& expectedBuffer->m_uiIBSize == binding.indexBytes
+				&& expectedBuffer->m_eType == D3DPT_TRIANGLELIST
+				&& expectedBuffer->m_uiTriCount
+					== packet.vertexCount / 4u * 2u
+				&& expectedBuffer->m_uiMaxTriCount
+					== packet.vertexCount / 4u * 2u
+				&& expectedBuffer->m_uiNumArrays == 1
+				&& expectedChip->m_pkVB == binding.vertexBuffer
+				&& expectedChip->m_uiOffset == 0
+				&& expectedChip->m_uiSize
+					== binding.vertexCount
+						* sizeof(NativeA8GpuVertex)
+				&& binding.vertexCount == packet.vertexCount
+				&& IsNativeA8VirtualStockPacketAtlasCurrent(
+					shape, *payload, packetIndex)
+				&& IsNativeA8VirtualStockPacketBindingCurrent(binding);
+			if (!bindingCurrent)
+			{
+				draw.runtimeFault = true;
+				draw.failure = NativeA8FallbackReason::PacketPrepare;
+				draw.operation = "virtual-stock-binding";
+				draw.result = E_FAIL;
+			}
+
+			NiDX9Renderer* renderer = draw.stockLikeBitmapRoute
+				? nullptr : NiDX9Renderer::GetSingleton();
+			IDirect3DDevice9* device = renderer
+				? renderer->GetD3DDevice() : nullptr;
+			if (!draw.runtimeFault && !draw.stockLikeBitmapRoute && !device)
+			{
+				draw.runtimeFault = true;
+				draw.constantStateFault = true;
+				draw.operation = "capture-pixel-constants";
+				draw.result = D3DERR_DEVICELOST;
+			}
+
+			const bool isolatePacketConstants =
+				!draw.stockLikeBitmapRoute;
+			const bool batchedConstants = isolatePacketConstants
+				&& s_pixelConstantBatch.FrameActive();
+			std::optional<NativePixelConstantScope> localConstants;
+			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
+			if (!draw.runtimeFault)
+			{
+				if (isolatePacketConstants)
+					shaderBatch.emplace();
+				if (batchedConstants)
+				{
+					if (!s_pixelConstantBatch.EnsureCaptured(device))
+					{
+						draw.runtimeFault = true;
+						draw.constantStateFault = true;
+						draw.operation = s_pixelConstantBatch.Operation();
+						draw.result = s_pixelConstantBatch.Result();
+						draw.mismatchRegister =
+							s_pixelConstantBatch.MismatchRegister();
+					}
+				}
+				else if (isolatePacketConstants)
+				{
+					localConstants.emplace(device);
+					if (!localConstants->Captured())
+					{
+						draw.runtimeFault = true;
+						draw.constantStateFault = true;
+						draw.operation = localConstants->Operation();
+						draw.result = localConstants->Result();
+					}
+				}
+			}
+
+			if (!draw.runtimeFault)
+			{
+				VirtualStockTileStateScope tileState(
+					shape, *payload, packet);
+				if (!tileState.Active())
+				{
+					draw.runtimeFault = true;
+					draw.failure = NativeA8FallbackReason::PropertySync;
+					draw.operation = "virtual-stock-tile-state";
+					draw.result = E_FAIL;
+				}
+				else
+				{
+					NativeDirectImmediateScope immediateScope(shape);
+					State().originalTileRenderPass(pass, currentPass, false,
+						true, setupDrawmode);
+					if (immediateScope.Invoked())
+					{
+						draw.drewPacket = true;
+						group->directDrawCount.fetch_add(
+							1, std::memory_order_acq_rel);
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::VirtualStockDraw);
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::TilePass);
+						if (packet.shaderClass
+							== NativeA8ShaderClass::Composite)
+						{
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::CompositeDraw);
+						}
+					}
+					else
+					{
+						draw.runtimeFault = true;
+						draw.failure =
+							NativeA8FallbackReason::RuntimeFault;
+						draw.operation =
+							"virtual-stock-immediate-not-invoked";
+						draw.result = E_FAIL;
+					}
+				}
+				if (!IsNativeA8ShaderGenerationCurrent(
+					payload->preparedGeneration))
+				{
+					draw.runtimeFault = true;
+					draw.failure = NativeA8FallbackReason::DeviceReset;
+					draw.operation =
+						"generation-changed-after-virtual-stock";
+					draw.result = D3DERR_DEVICELOST;
+				}
+			}
+
+			if (isolatePacketConstants && !batchedConstants
+				&& localConstants
+				&& !localConstants->RestoreAndVerify())
+			{
+				draw.runtimeFault = true;
+				draw.constantStateFault = true;
+				draw.operation = localConstants->Operation();
+				draw.result = localConstants->Result();
+				draw.mismatchRegister =
+					localConstants->MismatchRegister();
+			}
+			if (isolatePacketConstants && batchedConstants
+				&& draw.runtimeFault
+				&& !FlushNativePixelConstantBatch(
+					"virtual-stock-runtime-fault"))
+			{
+				draw.constantStateFault = true;
+				draw.operation = s_pixelConstantBatch.Operation();
+				draw.result = s_pixelConstantBatch.Result();
+				draw.mismatchRegister =
+					s_pixelConstantBatch.MismatchRegister();
+			}
+			if (draw.runtimeFault)
+			{
+				const bool facadeFallbackSafe =
+					!draw.drewPacket && !draw.constantStateFault
+					&& group->directDrawCount.load(
+						std::memory_order_acquire) == 0;
+				if (facadeFallbackSafe)
+				{
+					std::shared_ptr<VirtualStockShapeGroup> groupOwner =
+						AcquireVirtualStockShapeGroup(metadata);
+					if (groupOwner)
+					{
+						RestoreVirtualStockGroupToFacade(
+							groupOwner, draw.failure);
+					}
+					else
+					{
+						group->frameMode.store(
+							VirtualStockFrameMode::Fault,
+							std::memory_order_release);
+					}
+				}
+				else
+				{
+					std::lock_guard<std::mutex> lock(group->mutex);
+					if (group->frameMode.load(
+						std::memory_order_acquire)
+						!= VirtualStockFrameMode::Retired)
+					{
+						group->frameMode.store(
+							VirtualStockFrameMode::Fault,
+							std::memory_order_release);
+					}
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							VirtualStockFallbackResource);
+				}
+			}
+			return true;
+		}
 
 		NativePacketDrawResult DrawNativePacketSet(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
@@ -1090,6 +1424,13 @@ namespace fonthook::vectorfont
 					state.shapeMetadata.erase(found);
 				}
 			}
+			if (retiredMetadata
+				&& retiredMetadata->backend
+					== FreeTypeShapeBackend::VirtualStockNative)
+			{
+				ReleaseVirtualStockShapeBinding(
+					shape, *retiredMetadata);
+			}
 			retiredMetadata.reset();
 			state.originalDeleteThis(shape);
 		}
@@ -1145,6 +1486,20 @@ namespace fonthook::vectorfont
 			std::memory_order_relaxed);
 		hot.metadata = found->second;
 		return found->second;
+	}
+
+	std::shared_ptr<VirtualStockShapeGroup>
+		AcquireVirtualStockShapeGroup(const A8ShapeMetadata& metadata)
+	{
+		VirtualStockShapeGroup* group = metadata.virtualStockGroup;
+		if (!group)
+			return {};
+		A8State& state = State();
+		std::lock_guard<std::mutex> lock(state.metadataMutex);
+		const auto found = state.virtualStockGroups.find(group);
+		return found != state.virtualStockGroups.end()
+			? found->second
+			: std::shared_ptr<VirtualStockShapeGroup>{};
 	}
 
 	TileRenderPassFn ReadTileRenderPassCallTarget()
@@ -1205,6 +1560,145 @@ namespace fonthook::vectorfont
 			LogMissingMetadata(shape, "tile-render-pass");
 			return;
 		}
+		if (metadata->backend
+			== FreeTypeShapeBackend::VirtualStockNative)
+		{
+			VirtualStockShapeGroup* group =
+				metadata->virtualStockGroup;
+			if (!group)
+			{
+				RecordNativeA8Suppression(shape, *metadata,
+					NativeA8FallbackReason::PacketBuild,
+					"virtual-stock-tile");
+				return;
+			}
+			const VirtualStockFrameMode mode =
+				group->frameMode.load(std::memory_order_acquire);
+			if (mode == VirtualStockFrameMode::Culled
+				|| mode == VirtualStockFrameMode::Fault
+				|| mode == VirtualStockFrameMode::Retired)
+			{
+				if (!metadata->virtualStockPrimary)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							VirtualStockFollowerSkipped);
+				}
+				return;
+			}
+
+			const UInt64 validationToken =
+				GetNativeA8SortedFrameValidationToken();
+			if (mode == VirtualStockFrameMode::Direct)
+			{
+				NativePacketDrawResult draw;
+				const bool handled = TryDrawVirtualStockPacket(
+					pass, currentPass, setupDrawmode, shape,
+					*metadata, validationToken, draw);
+				if (!handled)
+				{
+					if (validationToken)
+					{
+						if (group->directDrawCount.load(
+							std::memory_order_acquire) == 0)
+						{
+							std::shared_ptr<VirtualStockShapeGroup>
+								groupOwner =
+									AcquireVirtualStockShapeGroup(
+										*metadata);
+							if (groupOwner)
+							{
+								RestoreVirtualStockGroupToFacade(
+									groupOwner,
+									NativeA8FallbackReason::
+										PacketPrepare);
+							}
+							else
+							{
+								group->frameMode.store(
+									VirtualStockFrameMode::Fault,
+									std::memory_order_release);
+							}
+						}
+						else
+						{
+							std::lock_guard<std::mutex> lock(
+								group->mutex);
+							if (group->frameMode.load(
+								std::memory_order_acquire)
+								!= VirtualStockFrameMode::Retired)
+							{
+								group->frameMode.store(
+									VirtualStockFrameMode::Fault,
+									std::memory_order_release);
+							}
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::
+									VirtualStockFallbackResource);
+						}
+						if (group->frameMode.load(
+							std::memory_order_acquire)
+							!= VirtualStockFrameMode::Facade)
+						{
+							return;
+						}
+					}
+				}
+				else if (!draw.runtimeFault)
+					return;
+				else
+				{
+					InvalidateNativeA8SortedShaderState();
+					A8ShapeMetadataPtr primaryMetadata;
+					{
+						std::lock_guard<std::mutex> lock(group->mutex);
+						primaryMetadata = group->primaryMetadataOwner;
+					}
+					NativeA8ShapePayload* primaryPayload =
+						primaryMetadata
+							? &primaryMetadata->nativePayload : nullptr;
+					if (draw.constantStateFault && primaryPayload)
+					{
+						MarkNativeA8GenerationFault(
+							primaryPayload->preparedGeneration,
+							draw.operation, draw.result);
+						gLog.FormattedMessage(
+							"tnvse_freetype_native: virtual-stock constant isolation fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-group",
+							draw.operation,
+							static_cast<UInt32>(draw.result),
+							draw.mismatchRegister, shape,
+							metadata->fontId,
+							primaryPayload->preparedGeneration,
+							draw.drewPacket ? 1 : 0);
+					}
+					if (draw.drewPacket && primaryPayload)
+					{
+						MarkNativeA8RuntimeFault(
+							*metadata, *primaryPayload,
+							draw.failure);
+					}
+					if (draw.drewPacket || draw.constantStateFault
+						|| group->frameMode.load(
+							std::memory_order_acquire)
+							!= VirtualStockFrameMode::Facade)
+					{
+						return;
+					}
+				}
+			}
+
+			if (!metadata->virtualStockPrimary)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						VirtualStockFollowerSkipped);
+				return;
+			}
+			// The primary owns the complete payload and therefore remains the
+			// sole compatibility facade whenever the frozen real-shape topology
+			// is not ready for this traversal.
+			payload = &metadata->nativePayload;
+		}
 		if (payload)
 		{
 			const bool needsVisibilityCheck = !sortedFrameHit
@@ -1237,6 +1731,8 @@ namespace fonthook::vectorfont
 			&& frameEntry.preflightResult == NativeA8FallbackReason::None
 			&& frameEntry.validationToken
 			&& frameEntry.generation == payload->preparedGeneration
+			&& payload->preflightAtlasTextureEpoch
+				== GetNativeA8AtlasTextureEpoch()
 			)
 		{
 			// NativeA8RenderSorted retained the metadata owner and validated this
@@ -1316,6 +1812,11 @@ namespace fonthook::vectorfont
 		}
 		if (!current)
 		{
+			if (State().tileRenderPassHookInstalled)
+			{
+				State().tileRenderPassHookInstalled = false;
+				InvalidateAllVirtualStockBindings();
+			}
 			if (!State().loggedTileRenderPassHookConflict)
 			{
 				State().loggedTileRenderPassHookConflict = true;
@@ -1326,6 +1827,8 @@ namespace fonthook::vectorfont
 		}
 		if (State().tileRenderPassHookInstalled)
 		{
+			State().tileRenderPassHookInstalled = false;
+			InvalidateAllVirtualStockBindings();
 			if (!State().loggedTileRenderPassHookConflict)
 			{
 				State().loggedTileRenderPassHookConflict = true;

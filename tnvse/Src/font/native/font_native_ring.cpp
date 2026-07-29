@@ -352,6 +352,10 @@ namespace fonthook::vectorfont
 
 		void ReleaseRingResourcesLocked(NativeA8RingState& state)
 		{
+			// Virtual-stock descriptors borrow the ring's COM resources without
+			// owning references. Restore every live shape to its stock shell before
+			// any buffer or declaration can be released.
+			InvalidateAllVirtualStockBindings();
 			state.releasePending.store(false, std::memory_order_release);
 			++state.uploadEpoch;
 			if (!state.uploadEpoch)
@@ -604,12 +608,15 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			// A different active proxy can still be issuing packets against the old
-			// buffer. Defer the optional promotion instead of invalidating that group.
+			// A published submission can still be issuing packets against the old
+			// buffer. The one permitted in-use proxy is only the caller's reserved,
+			// not-yet-published proxy; any other proxy or active submission makes
+			// replacement unsafe.
 			const UInt32 activeProxies = static_cast<UInt32>(std::count_if(
 				state.proxies.begin(), state.proxies.begin() + state.proxyCount,
 				[](const NativeA8Proxy& proxy) { return proxy.inUse; }));
-			if (activeProxies > 1)
+			if (state.activeSubmissions.load(std::memory_order_acquire)
+				|| activeProxies > 1)
 				return false;
 
 			std::vector<LiveStaticPayload> livePayloads;
@@ -717,6 +724,7 @@ namespace fonthook::vectorfont
 				if (state.proxies[index].chip)
 					state.proxies[index].chip->m_pkVB = state.vertexBuffer;
 			}
+			InvalidateAllVirtualStockBindings();
 			state.staticVertexBuffer->Release();
 			state.staticVertexBuffer = replacement;
 			state.staticVertexCapacity = static_cast<UInt32>(desiredCapacity);
@@ -1977,6 +1985,138 @@ namespace fonthook::vectorfont
 		payload.packetPrepareFailure.store(
 			NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
 		return NativeA8FallbackReason::None;
+	}
+
+	NativeA8FallbackReason ResolveNativeA8VirtualStockPacketBinding(
+		NativeA8ShapePayload& payload, UInt32 packetIndex,
+		NativeA8VirtualStockPacketBinding& binding)
+	{
+		binding = {};
+		if (!payload.buildComplete || !payload.payloadTemplate
+			|| payload.preparedGeneration == 0)
+		{
+			return NativeA8FallbackReason::PacketBuild;
+		}
+		const NativeA8PayloadTemplate& artifact =
+			*payload.payloadTemplate;
+		const std::vector<NativeA8PacketTemplate>& packets =
+			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		if (packetIndex >= packets.size()
+			|| packetIndex >= payload.packetShaders.size()
+			|| !payload.packetShaders[packetIndex]
+			|| artifact.gpuVertices.empty()
+			|| artifact.gpuVertices.size()
+				> std::numeric_limits<UInt32>::max())
+		{
+			return NativeA8FallbackReason::PacketBuild;
+		}
+		const NativeA8PacketTemplate& packet = packets[packetIndex];
+		const UInt32 artifactVertexCount = static_cast<UInt32>(
+			artifact.gpuVertices.size());
+		const UInt64 vertexEnd = static_cast<UInt64>(packet.firstVertex)
+			+ packet.vertexCount;
+		if (!packet.vertexCount || (packet.firstVertex & 3u)
+			|| (packet.vertexCount & 3u)
+			|| vertexEnd > artifactVertexCount)
+		{
+			return NativeA8FallbackReason::PacketBuild;
+		}
+
+		if (!s_sortedRingLease.active)
+			return NativeA8FallbackReason::PacketPrepare;
+		const NativeA8SortedRingLease& lease = s_sortedRingLease;
+		NativeA8RingState* state = lease.state;
+		if (!state || payload.preparedGeneration != lease.generation
+			|| !IsNativeA8ShaderGenerationCurrent(lease.generation)
+			|| state->generation != lease.generation
+			|| state->resourceSerial.load(std::memory_order_acquire)
+				!= lease.resourceSerial
+			|| state->uploadEpoch != lease.uploadEpoch
+			|| state->staticVertexBuffer != lease.staticVertexBuffer
+			|| state->indexBuffer != lease.indexBuffer
+			|| state->declaration != lease.declaration
+			|| !lease.staticVertexBuffer || !lease.indexBuffer
+			|| !lease.declaration)
+		{
+			return NativeA8FallbackReason::PacketPrepare;
+		}
+
+		UInt32 payloadBaseVertex = 0;
+		bool staticResident = false;
+		if (!ResolveSortedLeaseResidency(*state, artifact,
+			artifactVertexCount, lease.resourceSerial, lease.uploadEpoch,
+			payloadBaseVertex, staticResident)
+			|| !staticResident
+			|| packet.firstVertex
+				> std::numeric_limits<UInt32>::max() - payloadBaseVertex)
+		{
+			return NativeA8FallbackReason::PacketPrepare;
+		}
+
+		binding.vertexBuffer = lease.staticVertexBuffer;
+		binding.indexBuffer = lease.indexBuffer;
+		binding.declaration = lease.declaration;
+		binding.baseVertex = payloadBaseVertex + packet.firstVertex;
+		binding.vertexCount = packet.vertexCount;
+		binding.indexBytes = kCanonicalIndexBytes;
+		binding.generation = lease.generation;
+		binding.resourceSerial = lease.resourceSerial;
+		binding.atlasTextureEpoch = payload.preflightAtlasTextureEpoch;
+		binding.active = true;
+		return NativeA8FallbackReason::None;
+	}
+
+	bool IsNativeA8VirtualStockPacketBindingCurrent(
+		const NativeA8VirtualStockPacketBinding& binding)
+	{
+		if (!binding.active || !s_sortedRingLease.active)
+			return false;
+		const NativeA8SortedRingLease& lease = s_sortedRingLease;
+		const NativeA8RingState* state = lease.state;
+		return state
+			&& binding.vertexBuffer == lease.staticVertexBuffer
+			&& binding.indexBuffer == lease.indexBuffer
+			&& binding.declaration == lease.declaration
+			&& binding.generation == lease.generation
+			&& binding.resourceSerial == lease.resourceSerial
+			&& binding.atlasTextureEpoch == GetNativeA8AtlasTextureEpoch()
+			&& state->generation == lease.generation
+			&& state->resourceSerial.load(std::memory_order_acquire)
+				== lease.resourceSerial
+			&& state->staticVertexBuffer == lease.staticVertexBuffer
+			&& state->indexBuffer == lease.indexBuffer
+			&& state->declaration == lease.declaration;
+	}
+
+	bool IsNativeA8VirtualStockPacketAtlasCurrent(
+		const NiTriShape* shape, const NativeA8ShapePayload& payload,
+		UInt32 packetIndex)
+	{
+		if (!shape || !payload.buildComplete
+			|| !payload.payloadTemplate)
+		{
+			return false;
+		}
+		const NativeA8PayloadTemplate& artifact =
+			*payload.payloadTemplate;
+		const std::vector<NativeA8PacketTemplate>& packets =
+			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		if (packetIndex >= packets.size())
+			return false;
+		const UInt16 page = packets[packetIndex].atlasPage;
+		if (page >= artifact.atlasProperties.size()
+			|| page >= artifact.atlasTextures.size()
+			|| !artifact.atlasProperties[page]
+			|| !artifact.atlasTextures[page])
+		{
+			return false;
+		}
+		const TileShaderPropertyView* tile = GetTileProperty(shape);
+		return tile
+			&& shape->GetTexturingProperty()
+				== artifact.atlasProperties[page].m_pObject
+			&& tile->sourceTexture.m_pObject
+				== artifact.atlasTextures[page].m_pObject;
 	}
 
 	NativeA8FallbackReason BeginNativeA8RingSubmission(

@@ -138,6 +138,8 @@ namespace fonthook
 	bool RegisterFreeTypeStockPageShapes(
 		NiTriShape* apPrimaryShape,
 		const std::vector<NiTriShape*>& arAdditionalShapes);
+	bool SynchronizeFreeTypeStockPageShapeState(
+		const NiTriShape& arPrimaryShape, NiTriShape& arPageShape);
 
 	class VectorTextBuilder
 	{
