@@ -102,14 +102,19 @@ namespace fonthook::vectorfont
 		// Exact physical glyph rectangle. The composite quad can extrapolate its
 		// UVs to cover an offset shadow; the pixel shader bounds every sample to
 		// this rectangle so atlas neighbours never bleed into that union.
-		// Normalized USHORT4 keeps the ABI compact in the 32-bit process while
-		// retaining substantially finer precision than any supported POT atlas.
-		UInt16 glyphU0 = 0;
-		UInt16 glyphV0 = 0;
-		UInt16 glyphU1 = 0;
-		UInt16 glyphV1 = 0;
+		// Use an ordinary FLOAT4 declaration for compatibility with native D3D9
+		// drivers and wrappers that reject the optional USHORT4N declaration
+		// type. The HLSL input remains an exact normalized atlas rectangle.
+		float glyphU0 = 0.0f;
+		float glyphV0 = 0.0f;
+		float glyphU1 = 0.0f;
+		float glyphV1 = 0.0f;
 	};
-	static_assert(sizeof(NativeA8GpuVertex) == 11 * sizeof(float));
+	static_assert(offsetof(NativeA8GpuVertex, u) == 3 * sizeof(float));
+	static_assert(offsetof(NativeA8GpuVertex, color) == 5 * sizeof(float));
+	static_assert(offsetof(NativeA8GpuVertex, sdfSpread) == 6 * sizeof(float));
+	static_assert(offsetof(NativeA8GpuVertex, glyphU0) == 9 * sizeof(float));
+	static_assert(sizeof(NativeA8GpuVertex) == 13 * sizeof(float));
 
 	struct NativeA8PacketTemplate
 	{

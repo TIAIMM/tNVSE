@@ -351,6 +351,8 @@ namespace fonthook::vectorfont
 		UInt32 glyphCount = 0;
 		UInt32 geometryQuadCount = 0;
 		UInt32 drawQuadCount = 0;
+		// Distinct physical atlas ordinals referenced by drawable glyphs in
+		// this batch, not the total number retained by its sealed profile.
 		UInt32 pageCount = 0;
 		UInt32 firstAtlasWidth = 0;
 		UInt32 firstAtlasHeight = 0;

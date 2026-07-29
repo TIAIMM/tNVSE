@@ -531,8 +531,14 @@ wrappers by their underlying D3D9 texture identity. Mixed single-/double-byte
 text therefore keeps one physical page ordinal and the one-page draw path even
 after a sealed direct profile is invalidated and rebuilt lazily. Runtime group
 validation checks complete logical profiles, the physical-group snapshot marker,
-snapshot content identity, and the actual shared D3D9 texture. This feature
-never enables NPOT dimensions. If the union needs more than one page or its POT
+snapshot content identity, and the actual shared D3D9 texture.
+
+Direct-batch diagnostics report `pages` as the number of distinct physical
+atlas ordinals referenced by drawable glyphs in that batch, rather than the
+total atlas-owner count retained by the sealed font profile.
+
+This feature never enables NPOT dimensions. If the union needs more than one
+page or its POT
 allocation would exceed the group's current de-duplicated physical GPU storage,
 the original per-font profiles remain active. That fallback decision is
 recorded in their current snapshot generation so later launches do not repeat
@@ -786,11 +792,13 @@ still copied each submission, but unchanged reference-counted properties and
 bindings are not assigned again.
 
 Native vertices store `float3` position, `float2` UV, one packed `D3DCOLOR`
-base color, per-glyph distance parameters, and normalized physical glyph
-bounds in a 44-byte record. The D3D declaration expands `D3DCOLOR` to the
-vertex shader's normalized `float4 COLOR0`; packet-uniform layer modifiers
-remain in pixel constants. Compared with a four-float base color, the packed
-field saves twelve bytes per vertex without adding packets or draw calls. After
+base color, per-glyph distance parameters, and physical glyph bounds as an
+ordinary `FLOAT4` in a 52-byte record. The universal float declaration avoids
+the optional `D3DDECLTYPE_USHORT4N` capability, which some native D3D9 drivers
+and wrappers reject. The D3D declaration expands `D3DCOLOR` to the vertex
+shader's normalized `float4 COLOR0`; packet-uniform layer modifiers remain in
+pixel constants. Compared with a four-float base color, the packed color field
+still saves twelve bytes per vertex without adding packets or draw calls. After
 the stock Tile list has been prepared, tNVSE preflights compatibility facades
 and virtual-stock primaries, deduplicates their immutable text artifacts, and
 promotes all eligible artifacts with one static-VB Lock/copy
@@ -919,7 +927,7 @@ for frames whose tracked FreeType objects are all virtual-stock primaries.
 
 Each direct slot owns a small `NiGeometryBufferData`/`NiVBChip` descriptor but
 does not own its D3D buffers. The descriptor points at
-`staticBaseVertex + packet.firstVertex` in the shared immutable 44-byte vertex
+`staticBaseVertex + packet.firstVertex` in the shared immutable 52-byte vertex
 arena and at the canonical INDEX16 buffer. Dynamic-ring locations are never
 published as persistent bindings. The sorted lease resolves every slot first
 and publishes the group only after all textures, shaders, generations, atlas

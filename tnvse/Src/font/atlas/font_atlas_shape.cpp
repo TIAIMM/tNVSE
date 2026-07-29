@@ -51,13 +51,33 @@ namespace fonthook::vectorfont
 				| PackNativeColorChannel(safe.b);
 		}
 
-		UInt16 PackNativeUvBound(float value, bool upper)
+		float SanitizeNativeUvBound(float value)
 		{
-			const float scaled = std::clamp(
-				std::isfinite(value) ? value : 0.0f, 0.0f, 1.0f)
-				* static_cast<float>(std::numeric_limits<UInt16>::max());
-			return static_cast<UInt16>(upper
-				? std::ceil(scaled) : std::floor(scaled));
+			return std::clamp(
+				std::isfinite(value) ? value : 0.0f, 0.0f, 1.0f);
+		}
+
+		template <size_t LayerCount>
+		UInt32 CountUsedDirectAtlasPages(
+			const std::array<std::array<UInt32,
+				kMaximumAtlasSnapshotPages>, LayerCount>& counts,
+			size_t availablePageCount)
+		{
+			const size_t pageLimit = std::min(
+				availablePageCount,
+				static_cast<size_t>(kMaximumAtlasSnapshotPages));
+			UInt32 usedPageCount = 0;
+			for (size_t page = 0; page < pageLimit; ++page)
+			{
+				for (size_t layer = 0; layer < LayerCount; ++layer)
+				{
+					if (!counts[layer][page])
+						continue;
+					++usedPageCount;
+					break;
+				}
+			}
+			return usedPageCount;
 		}
 
 		float ResolveModifierChannel(float source, float tile)
@@ -937,10 +957,10 @@ namespace fonthook::vectorfont
 					packedColor, static_cast<float>(source.sdfSpread),
 					1.0f / sourceToLogicalScale,
 					static_cast<float>(layerMask),
-					PackNativeUvBound(source.glyphPlacement.u0, false),
-					PackNativeUvBound(source.glyphPlacement.v0, false),
-					PackNativeUvBound(source.glyphPlacement.u1, true),
-					PackNativeUvBound(source.glyphPlacement.v1, true)
+					SanitizeNativeUvBound(source.glyphPlacement.u0),
+					SanitizeNativeUvBound(source.glyphPlacement.v0),
+					SanitizeNativeUvBound(source.glyphPlacement.u1),
+					SanitizeNativeUvBound(source.glyphPlacement.v1)
 				};
 				boundMinimum.x = std::min(boundMinimum.x, position.x);
 				boundMinimum.y = std::min(boundMinimum.y, position.y);
@@ -1004,10 +1024,10 @@ namespace fonthook::vectorfont
 					position.x, position.y, position.z,
 					uv.fU, uv.fV, packedColor, 0.0f, 1.0f,
 					static_cast<float>(layerMask),
-					PackNativeUvBound(glyphU0, false),
-					PackNativeUvBound(glyphV0, false),
-					PackNativeUvBound(glyphU1, true),
-					PackNativeUvBound(glyphV1, true)
+					SanitizeNativeUvBound(glyphU0),
+					SanitizeNativeUvBound(glyphV0),
+					SanitizeNativeUvBound(glyphU1),
+					SanitizeNativeUvBound(glyphV1)
 				};
 				boundMinimum.x =
 					std::min(boundMinimum.x, position.x);
@@ -1988,8 +2008,8 @@ namespace fonthook::vectorfont
 		}
 		result.geometryQuadCount = quadCount;
 		result.drawQuadCount = quadCount;
-		result.pageCount =
-			static_cast<UInt32>(sealed->atlases.size());
+		result.pageCount = CountUsedDirectAtlasPages(
+			counts, sealed->atlases.size());
 		if (!sealed->atlases.empty() && sealed->atlases[0])
 		{
 			result.firstAtlasWidth = sealed->atlases[0]->width;
@@ -2163,8 +2183,6 @@ namespace fonthook::vectorfont
 				return result;
 
 			const auto& atlases = batch.Atlases();
-			result.pageCount =
-				static_cast<UInt32>(atlases.size());
 			if (!atlases.empty() && atlases[0])
 			{
 				result.firstAtlasWidth = atlases[0]->width;
@@ -2277,6 +2295,7 @@ namespace fonthook::vectorfont
 					}
 					result.geometryQuadCount = result.glyphCount;
 					result.drawQuadCount = result.glyphCount;
+					result.pageCount = usedPageCount;
 					result.outcome =
 						DirectAtlasShapeOutcome::Created;
 					return result;
@@ -2386,6 +2405,8 @@ namespace fonthook::vectorfont
 				return result;
 			}
 			result.geometryQuadCount = physicalQuads;
+			result.pageCount = CountUsedDirectAtlasPages(
+				counts, atlases.size());
 
 			std::vector<NativeA8GpuVertex> vertices(
 				static_cast<size_t>(physicalQuads) * 4u);
@@ -3062,10 +3083,10 @@ namespace fonthook::vectorfont
 						effects.bakedCoverage
 							? (quad.usesLiveTileRgb ? 1.0f : 0.0f)
 							: static_cast<float>(quad.layerMask),
-						PackNativeUvBound(u0, false),
-						PackNativeUvBound(v0, false),
-						PackNativeUvBound(u1, true),
-						PackNativeUvBound(v1, true) };
+						SanitizeNativeUvBound(u0),
+						SanitizeNativeUvBound(v0),
+						SanitizeNativeUvBound(u1),
+						SanitizeNativeUvBound(v1) };
 					boundMinimum.x = std::min(boundMinimum.x, position.x);
 					boundMinimum.y = std::min(boundMinimum.y, position.y);
 					boundMinimum.z = std::min(boundMinimum.z, position.z);

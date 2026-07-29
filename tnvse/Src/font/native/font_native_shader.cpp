@@ -963,7 +963,7 @@ namespace fonthook::vectorfont
 					ParameterType::SPTYPE_FLOAT3, 0)
 				&& declaration->SetEntry(4, 0,
 					Parameter::SHADERPARAM_NI_TEXCOORD2,
-					ParameterType::SPTYPE_NORMUSHORT4, 0);
+					ParameterType::SPTYPE_FLOAT4, 0);
 			if (!entriesReady)
 			{
 				failure = "declaration-entries";
@@ -974,8 +974,59 @@ namespace fonthook::vectorfont
 				declaration->GetD3DDeclaration();
 			if (!d3dDeclaration)
 			{
-				failure = "d3d-declaration";
-				return false;
+				D3DCAPS9 caps = {};
+				const HRESULT capsResult = generation.device
+					? generation.device->GetDeviceCaps(&caps) : E_POINTER;
+				IDirect3DVertexDeclaration9* retryDeclaration = nullptr;
+				const HRESULT retryResult = generation.device
+					&& declaration->m_pkElements
+					? generation.device->CreateVertexDeclaration(
+						declaration->m_pkElements, &retryDeclaration)
+					: E_POINTER;
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: vertex declaration creation failed format=float4 stride=%u capsHr=0x%08X declTypes=0x%08X retryHr=0x%08X elements=%p",
+					static_cast<UInt32>(sizeof(NativeA8GpuVertex)),
+					static_cast<UInt32>(capsResult), caps.DeclTypes,
+					static_cast<UInt32>(retryResult),
+					declaration->m_pkElements);
+				if (declaration->m_pkElements)
+				{
+					const D3DVERTEXELEMENT9* elements =
+						declaration->m_pkElements;
+					gLog.FormattedMessage(
+						"tnvse_freetype_native: declaration elements e0=%u/%u/%u/%u/%u/%u e1=%u/%u/%u/%u/%u/%u e2=%u/%u/%u/%u/%u/%u e3=%u/%u/%u/%u/%u/%u e4=%u/%u/%u/%u/%u/%u",
+						elements[0].Stream, elements[0].Offset,
+						elements[0].Type, elements[0].Method,
+						elements[0].Usage, elements[0].UsageIndex,
+						elements[1].Stream, elements[1].Offset,
+						elements[1].Type, elements[1].Method,
+						elements[1].Usage, elements[1].UsageIndex,
+						elements[2].Stream, elements[2].Offset,
+						elements[2].Type, elements[2].Method,
+						elements[2].Usage, elements[2].UsageIndex,
+						elements[3].Stream, elements[3].Offset,
+						elements[3].Type, elements[3].Method,
+						elements[3].Usage, elements[3].UsageIndex,
+						elements[4].Stream, elements[4].Offset,
+						elements[4].Type, elements[4].Method,
+						elements[4].Usage, elements[4].UsageIndex);
+				}
+				if (SUCCEEDED(retryResult) && retryDeclaration)
+				{
+					// GetD3DDeclaration hides the original HRESULT. A direct retry
+					// with its generated element table can recover a transient
+					// device failure while preserving Gamebryo ownership.
+					declaration->m_hVertexDecl = retryDeclaration;
+					declaration->m_bModified = false;
+					d3dDeclaration = retryDeclaration;
+				}
+				else
+				{
+					if (retryDeclaration)
+						retryDeclaration->Release();
+					failure = "d3d-declaration";
+					return false;
+				}
 			}
 			generation.declaration = declaration;
 			generation.d3dDeclaration = d3dDeclaration;
@@ -1254,13 +1305,15 @@ namespace fonthook::vectorfont
 					== DistanceFieldMethod::Mtsdf
 				? "lazy-36" : "disabled";
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s vertexAa=analytic-c4-per-packet",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s vertexAa=analytic-c4-per-packet vertexFormat=float4 vertexStride=%u declTypes=0x%08X",
 			candidate->id, candidate->device,
 			g_bEnableFreeTypeFontAggressivePerformanceMode
 				? "argb-composite" : "distance-field",
 			g_bEnableFreeTypeFontAggressivePerformanceMode
 				? "disabled" : GetConfiguredDistanceFieldMethodName(),
-			compositeProfileMode);
+			compositeProfileMode,
+			static_cast<UInt32>(sizeof(NativeA8GpuVertex)),
+			candidate->renderer->m_kD3DCaps9.DeclTypes);
 		return true;
 	}
 
