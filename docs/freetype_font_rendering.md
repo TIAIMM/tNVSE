@@ -753,8 +753,8 @@ programs and `c1-c4` bypass the stock constant-map upload path; relying on its
 change tracking alone can leave a stale RGB register. Fixed effects ignore c0
 RGB in HLSL, and group cleanup deliberately leaves c0 at the final Tile value.
 Individual shadow, glow, outline, and fill packets therefore do not perform
-redundant save/restore cycles. With extended caches enabled, native packet
-preflight is cached per shape while the shader generation, scaled-fill sampling
+redundant save/restore cycles. Native packet preflight is cached per shape
+while the shader generation, scaled-fill sampling
 class, alpha-blending class, and referenced D3D atlas textures remain unchanged.
 Any device reset, sampling/alpha transition, or page-resource replacement falls
 back to full packet and texture validation before the cache is refreshed.
@@ -791,13 +791,11 @@ other active proxy compacts live weakly owned artifacts into a replacement
 buffer and doubles capacity up to that fixed maximum. If the sorted-call hook is
 unavailable or replaced, the existing per-shape promotion route remains active.
 Concurrent groups defer optional promotion and continue through the dynamic
-ring; expired static entries are discarded during compaction. Diagnostic
-extended-cache disablement skips these hot/residency paths, omits the static VB,
-and starts each sorted frame with a new dynamic upload epoch. The map published
-after that frame's batch upload is retained only until its packets finish,
+ring; expired static entries are discarded during compaction. The map published
+after a sorted frame's batch upload is retained only until its packets finish,
 because those packet submissions need stable vertex ranges.
 
-With extended caches enabled, the sorted traversal also builds a frame-local
+The sorted traversal also builds a frame-local
 packet command stream in the exact reverse order used by the retail Tile
 renderer. Consecutive FreeType facades may be submitted as one real indexed
 draw when their native shader profile and `c1-c8`, physical atlas texture and
@@ -826,27 +824,45 @@ through the unchanged packet path. Roles are published only after the complete
 descriptor build and upload succeed. The first facade executes the command
 stream and later facade callbacks skip duplicate submission; nested sorted
 passes suspend that dispatch map. Device reset, shader-generation replacement,
-or diagnostic cache disablement releases the optional batch resources without
-invalidating the normal native route. This changes neither atlas allocation nor
-the persistent cache format and does not enable NPOT textures.
+or renderer shutdown releases the optional batch resources without invalidating
+the normal native route. This changes neither atlas allocation nor the
+persistent cache format and does not enable NPOT textures.
 
 Candidate publication is additionally guarded by a conservative render-thread
 cost model. Every avoided source packet is valued against per-candidate
 descriptor work, per-packet inspection, two CPU passes over each 60-byte batch
-vertex, and one shared `D3DLOCK_DISCARD` lock/unlock for the traversal. A
-candidate must be individually profitable, and the selected set must remain
-profitable after the shared upload cost. A rejected range never becomes a batch
-command and retains the ordinary static/dynamic packet path; if no range passes
-the gate, no leader/follower roles are published. This is particularly
-important for inventory lists: short unique labels are often already resident
-in the static VB, so reducing their draw count may not justify rebuilding and
-uploading all their vertices every frame.
+vertex, the measured descriptor/gate preparation allowance, and one shared
+`D3DLOCK_DISCARD` lock/unlock for the traversal. Before dynamic Tile color,
+effective-world transform, D3D texture, or batch shader resolution, an
+optimistic gate assumes every compatible fixed-state packet shares one target.
+If even that maximum possible saving cannot repay preparation and upload, the
+traversal stays on the ordinary static/dynamic packet path without materializing
+full packet descriptors. Candidates that pass this cheap gate are then checked
+against their exact shader/texture runs. A candidate must be individually
+profitable, and the selected set must remain profitable after both shared fixed
+costs.
+
+Repeated `NoCandidate` or cost rejection results use bounded adaptive probing.
+The key includes accumulator identity, shader generation, atlas texture epoch,
+coarse item/facade counts, and the visible list-menu class. Inventory,
+container, barter, repair, item-mod, and recipe menus enter exponential
+backoff after two consecutive negative probes, up to 64 skipped traversals;
+other workloads begin after four negatives and cap at 16. A skipped traversal
+clears the optional cross-facade frame and uses the normal packet renderer.
+Generation, atlas, workload bucket, or menu-class changes probe immediately,
+and successful publication clears the history. Thus the optimization cannot
+alter text, ordering, scissor, alpha, or fallback correctness; it can only
+temporarily decline an optional batch. This targets short, static-VB-resident
+inventory labels without permanently disabling profitable title or detail-text
+batches.
 
 `tnvse_freetype_cross_facade_perf` reports candidate groups, executed leader
 groups and facades, source and resulting draws, saved draws, vertices and upload
 bytes, skipped followers, cost-eligible/selected/rejected candidates, accepted
-estimated saved/merge nanoseconds, and state/capacity/resource fallbacks. For a
-completed report interval, `followers_skipped` should equal
+estimated saved/merge nanoseconds, optimistic prechecks/rejections and their
+estimated totals, adaptive/list-menu skips and probes, materialized packets,
+and state/capacity/resource fallbacks. For a completed report interval,
+`followers_skipped` should equal
 `facades - groups`; `saved` must be positive to establish that true batching
 occurred. `estimated_saved_ns` must be greater than `estimated_merge_ns` for
 every published traversal. The timing line separately reports
@@ -863,8 +879,8 @@ bilinear footprint because
 the distance spread and an additional guard texel are already inside each glyph
 bitmap. Aggressive composite and ARGB fallback pages retain four
 transparent pixels per side, isolating the 1/4 mip even when glyph dimensions
-are not multiples of four. With extended caches enabled, repeated text also
-reuses cached layout and unique text artifacts. One artifact owns the packed
+are not multiples of four. Repeated text also reuses cached layout and unique
+text artifacts. One artifact owns the packed
 vertices, bound, atlas-page
 property/texture references, and merged contiguous packet descriptors that used
 to live in separate batch and packet-template caches. Geometry, per-glyph base

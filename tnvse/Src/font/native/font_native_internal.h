@@ -268,6 +268,14 @@ namespace fonthook::vectorfont
 		FollowerSuppressed
 	};
 
+	enum class NativeA8CrossFacadePrepareResult : UInt8
+	{
+		NoCandidate,
+		CostRejected,
+		Prepared,
+		Unavailable
+	};
+
 	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason);
 	const char* NativeA8PacketPrepareFailureName(
 		NativeA8PacketPrepareFailure failure);
@@ -347,9 +355,10 @@ namespace fonthook::vectorfont
 	NativeA8FallbackReason PrepareNativeA8Group(NiTriShape* facade,
 		const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload);
 
-	void PrepareNativeA8CrossFacadeFrame(
+	NativeA8CrossFacadePrepareResult PrepareNativeA8CrossFacadeFrame(
 		const std::vector<NativeA8CrossFacadeFrameItem>& items,
 		UInt32 generation);
+	void ResetNativeA8CrossFacadeFrame();
 	void BeginNativeA8CrossFacadeFrameDispatch();
 	void SuspendNativeA8CrossFacadeFrameDispatch();
 	void ResumeNativeA8CrossFacadeFrameDispatch();

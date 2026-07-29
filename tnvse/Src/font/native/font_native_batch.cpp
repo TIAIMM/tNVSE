@@ -43,6 +43,11 @@ namespace fonthook::vectorfont
 		inline constexpr UInt64 kEstimatedBatchCandidateNanoseconds = 2048;
 		inline constexpr UInt64 kEstimatedBatchPacketNanoseconds = 128;
 		inline constexpr UInt64 kEstimatedBatchVertexNanoseconds = 64;
+		// The rejected inventory traversals measured a 16.384 us histogram
+		// ceiling before any upload. Charge half of that as unavoidable
+		// descriptor/gate work in addition to the existing DISCARD cost so a
+		// candidate must repay both preparing and publishing a batch.
+		inline constexpr UInt64 kEstimatedBatchDecisionNanoseconds = 8192;
 		inline constexpr UInt64 kEstimatedBatchFrameUploadNanoseconds = 8192;
 
 		struct TileShaderPropertyView : BSShaderProperty
@@ -110,6 +115,8 @@ namespace fonthook::vectorfont
 
 		struct CrossFacadeSegment
 		{
+			size_t firstItem = 0;
+			size_t itemCount = 0;
 			size_t firstFacade = 0;
 			size_t facadeCount = 0;
 			size_t firstPacket = 0;
@@ -472,6 +479,199 @@ namespace fonthook::vectorfont
 				&& packets.size() == item.payload->packetShaders.size();
 		}
 
+		struct CrossFacadeOptimisticCost
+		{
+			UInt64 savedNanoseconds = 0;
+			UInt64 mergeNanoseconds = 0;
+			UInt64 candidateCount = 0;
+		};
+
+		enum class CrossFacadeOptimisticGate : UInt8
+		{
+			NoCandidate,
+			CostRejected,
+			Pass
+		};
+
+		void AddOptimisticChunk(CrossFacadeOptimisticCost& cost,
+			UInt32 packetCount, UInt32 facadeCount, UInt32 vertexCount)
+		{
+			if (packetCount < 2 || facadeCount < 2 || !vertexCount)
+				return;
+			const UInt64 saved =
+				static_cast<UInt64>(packetCount - 1u)
+					* kEstimatedSavedDrawNanoseconds;
+			const UInt64 merge =
+				kEstimatedBatchCandidateNanoseconds
+				+ static_cast<UInt64>(packetCount)
+					* kEstimatedBatchPacketNanoseconds
+				+ static_cast<UInt64>(vertexCount)
+					* kEstimatedBatchVertexNanoseconds;
+			if (saved <= merge)
+				return;
+			cost.savedNanoseconds += saved;
+			cost.mergeNanoseconds += merge;
+			++cost.candidateCount;
+		}
+
+		bool EstimateOptimisticSegment(
+			const std::vector<NativeA8CrossFacadeFrameItem>& items,
+			size_t firstItem, size_t itemCount,
+			CrossFacadeOptimisticCost& cost)
+		{
+			UInt32 chunkPackets = 0;
+			UInt32 chunkFacades = 0;
+			UInt32 chunkVertices = 0;
+			NiTriShape* lastFacade = nullptr;
+			const size_t endItem = firstItem + itemCount;
+			for (size_t itemIndex = firstItem;
+				itemIndex < endItem; ++itemIndex)
+			{
+				const NativeA8CrossFacadeFrameItem& item =
+					items[itemIndex];
+				const NativeA8PayloadTemplate& artifact =
+					*item.payload->payloadTemplate;
+				const std::vector<NativeA8PacketTemplate>& packets =
+					GetNativeA8Packets(artifact,
+						item.payload->useCompositePackets);
+				for (const NativeA8PacketTemplate& packet : packets)
+				{
+					const UInt64 endVertex =
+						static_cast<UInt64>(packet.firstVertex)
+							+ packet.vertexCount;
+					if (!packet.vertexCount
+						|| (packet.vertexCount & 3u)
+						|| endVertex > artifact.gpuVertices.size()
+						|| packet.atlasPage
+							>= item.payload
+								->preflightAtlasTextures.size())
+					{
+						return false;
+					}
+					if (chunkPackets && packet.vertexCount
+						> kNativeA8MaximumQuads * 4u
+							- chunkVertices)
+					{
+						AddOptimisticChunk(cost, chunkPackets,
+							chunkFacades, chunkVertices);
+						chunkPackets = 0;
+						chunkFacades = 0;
+						chunkVertices = 0;
+						lastFacade = nullptr;
+					}
+					if (packet.vertexCount
+						> kNativeA8MaximumQuads * 4u)
+					{
+						lastFacade = nullptr;
+						continue;
+					}
+					if (item.facade != lastFacade)
+					{
+						++chunkFacades;
+						lastFacade = item.facade;
+					}
+					++chunkPackets;
+					chunkVertices += packet.vertexCount;
+				}
+			}
+			AddOptimisticChunk(cost, chunkPackets,
+				chunkFacades, chunkVertices);
+			return true;
+		}
+
+		CrossFacadeOptimisticGate BuildOptimisticSegments(
+			const std::vector<NativeA8CrossFacadeFrameItem>& items,
+			CrossFacadeFrameState& frame)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CrossFacadeCostPrecheck);
+			CrossFacadeOptimisticCost total;
+			size_t cursor = 0;
+			while (cursor < items.size())
+			{
+				if (!ValidFrameItem(items[cursor],
+						frame.duplicateItems[cursor] != 0))
+				{
+					++cursor;
+					continue;
+				}
+				const size_t firstItem = cursor;
+				const NiTriShape* leaderFacade = items[cursor].facade;
+				while (cursor < items.size()
+					&& ValidFrameItem(items[cursor],
+						frame.duplicateItems[cursor] != 0)
+					&& EqualFacadeFixedState(
+						leaderFacade, items[cursor].facade))
+				{
+					++cursor;
+				}
+				if (cursor < items.size()
+					&& ValidFrameItem(items[cursor],
+						frame.duplicateItems[cursor] != 0))
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::CrossFacadeStateFallback);
+				}
+				const size_t itemCount = cursor - firstItem;
+				if (itemCount < 2)
+					continue;
+
+				CrossFacadeOptimisticCost segmentCost;
+				if (!EstimateOptimisticSegment(items, firstItem,
+						itemCount, segmentCost))
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							CrossFacadeResourceFallback);
+					continue;
+				}
+				if (!segmentCost.candidateCount)
+					continue;
+				CrossFacadeSegment segment;
+				segment.firstItem = firstItem;
+				segment.itemCount = itemCount;
+				frame.segments.push_back(segment);
+				total.savedNanoseconds +=
+					segmentCost.savedNanoseconds;
+				total.mergeNanoseconds +=
+					segmentCost.mergeNanoseconds;
+				total.candidateCount +=
+					segmentCost.candidateCount;
+			}
+
+			const UInt64 fixedMergeNanoseconds =
+				kEstimatedBatchDecisionNanoseconds
+					+ kEstimatedBatchFrameUploadNanoseconds;
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::
+					CrossFacadePrecheckEstimatedSavedNanoseconds,
+				total.savedNanoseconds);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::
+					CrossFacadePrecheckEstimatedMergeNanoseconds,
+				total.mergeNanoseconds + fixedMergeNanoseconds);
+			if (!total.candidateCount)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						CrossFacadeCostPrecheckReject);
+				return CrossFacadeOptimisticGate::NoCandidate;
+			}
+			if (total.savedNanoseconds
+				<= total.mergeNanoseconds + fixedMergeNanoseconds)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						CrossFacadeCostPrecheckReject);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CrossFacadeCostFallback,
+					total.candidateCount);
+				frame.segments.clear();
+				return CrossFacadeOptimisticGate::CostRejected;
+			}
+			return CrossFacadeOptimisticGate::Pass;
+		}
+
 		bool BuildPacketRef(const NativeA8CrossFacadeFrameItem& item,
 			UInt32 packetIndex, CrossFacadePacketRef& output)
 		{
@@ -509,6 +709,8 @@ namespace fonthook::vectorfont
 			output.batchShader = ResolveNativeA8CrossFacadePacketShader(
 				packet, item.facade,
 				item.payload->preflightScaledFillSampling);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CrossFacadePacketMaterialized);
 			return true;
 		}
 
@@ -776,7 +978,7 @@ namespace fonthook::vectorfont
 			{
 				state.loggedReady = true;
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: cross-facade geometry ready generation=%u vertexCapacity=%u vertexStride=%u vertexBytes=%u canonicalIndexBytes=%u costDrawNs=%llu costCandidateNs=%llu costPacketNs=%llu costVertexNs=%llu costFrameNs=%llu",
+					"tnvse_freetype_native: cross-facade geometry ready generation=%u vertexCapacity=%u vertexStride=%u vertexBytes=%u canonicalIndexBytes=%u costDrawNs=%llu costCandidateNs=%llu costPacketNs=%llu costVertexNs=%llu costDecisionNs=%llu costFrameNs=%llu",
 					generation, vertexCapacity,
 					static_cast<UInt32>(
 						sizeof(NativeA8CrossFacadeGpuVertex)),
@@ -787,6 +989,7 @@ namespace fonthook::vectorfont
 					kEstimatedBatchCandidateNanoseconds,
 					kEstimatedBatchPacketNanoseconds,
 					kEstimatedBatchVertexNanoseconds,
+					kEstimatedBatchDecisionNanoseconds,
 					kEstimatedBatchFrameUploadNanoseconds);
 			}
 			return true;
@@ -829,46 +1032,29 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		void BuildSegments(
+		void MaterializeSegments(
 			const std::vector<NativeA8CrossFacadeFrameItem>& items,
 			CrossFacadeFrameState& frame)
 		{
-			size_t cursor = 0;
-			while (cursor < items.size())
+			for (size_t segmentIndex = 0;
+				segmentIndex < frame.segments.size(); ++segmentIndex)
 			{
-				if (!ValidFrameItem(items[cursor],
-						frame.duplicateItems[cursor] != 0))
+				CrossFacadeSegment& segment =
+					frame.segments[segmentIndex];
+				if (!segment.itemCount
+					|| segment.firstItem >= items.size()
+					|| segment.itemCount
+						> items.size() - segment.firstItem)
 				{
-					++cursor;
 					continue;
 				}
-				const size_t firstItem = cursor;
-				const NiTriShape* leaderFacade = items[cursor].facade;
-				while (cursor < items.size()
-					&& ValidFrameItem(items[cursor],
-						frame.duplicateItems[cursor] != 0)
-					&& EqualFacadeFixedState(
-						leaderFacade, items[cursor].facade))
-				{
-					++cursor;
-				}
-				if (cursor < items.size()
-					&& ValidFrameItem(items[cursor],
-						frame.duplicateItems[cursor] != 0))
-				{
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::CrossFacadeStateFallback);
-				}
-				const size_t itemCount = cursor - firstItem;
-				if (itemCount < 2)
-					continue;
-
-				CrossFacadeSegment segment;
 				segment.firstFacade = frame.facades.size();
 				segment.firstPacket = frame.packets.size();
 				bool complete = true;
-				for (size_t itemIndex = firstItem;
-					itemIndex < cursor; ++itemIndex)
+				const size_t endItem =
+					segment.firstItem + segment.itemCount;
+				for (size_t itemIndex = segment.firstItem;
+					itemIndex < endItem; ++itemIndex)
 				{
 					const NativeA8CrossFacadeFrameItem& item =
 						items[itemIndex];
@@ -896,6 +1082,8 @@ namespace fonthook::vectorfont
 				{
 					frame.facades.resize(segment.firstFacade);
 					frame.packets.resize(segment.firstPacket);
+					segment.facadeCount = 0;
+					segment.packetCount = 0;
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::CrossFacadeResourceFallback);
 					continue;
@@ -908,10 +1096,10 @@ namespace fonthook::vectorfont
 				{
 					frame.facades.resize(segment.firstFacade);
 					frame.packets.resize(segment.firstPacket);
+					segment.facadeCount = 0;
+					segment.packetCount = 0;
 					continue;
 				}
-				const size_t segmentIndex = frame.segments.size();
-				frame.segments.push_back(segment);
 				BuildCandidatesForSegment(frame, segmentIndex);
 			}
 		}
@@ -939,7 +1127,8 @@ namespace fonthook::vectorfont
 		{
 			UInt64 estimatedSavedNanoseconds = 0;
 			UInt64 estimatedMergeNanoseconds =
-				kEstimatedBatchFrameUploadNanoseconds;
+				kEstimatedBatchDecisionNanoseconds
+					+ kEstimatedBatchFrameUploadNanoseconds;
 			for (const CrossFacadeCandidate& candidate : frame.candidates)
 			{
 				estimatedSavedNanoseconds +=
@@ -961,6 +1150,15 @@ namespace fonthook::vectorfont
 			frame.candidateOrder.resize(frame.candidates.size());
 			std::iota(frame.candidateOrder.begin(),
 				frame.candidateOrder.end(), size_t{ 0 });
+			UInt64 allVertices = 0;
+			for (const CrossFacadeCandidate& candidate : frame.candidates)
+				allVertices += candidate.vertexCount;
+			if (allVertices <= capacity)
+			{
+				for (CrossFacadeCandidate& candidate : frame.candidates)
+					candidate.selected = true;
+				return static_cast<UInt32>(allVertices);
+			}
 			std::stable_sort(frame.candidateOrder.begin(),
 				frame.candidateOrder.end(),
 				[&](size_t left, size_t right)
@@ -972,7 +1170,8 @@ namespace fonthook::vectorfont
 			UInt32 selectedVertices = 0;
 			UInt64 estimatedSavedNanoseconds = 0;
 			UInt64 estimatedMergeNanoseconds =
-				kEstimatedBatchFrameUploadNanoseconds;
+				kEstimatedBatchDecisionNanoseconds
+					+ kEstimatedBatchFrameUploadNanoseconds;
 			UInt64 selectedCandidates = 0;
 			for (size_t index : frame.candidateOrder)
 			{
@@ -1016,7 +1215,8 @@ namespace fonthook::vectorfont
 			UInt64 selectedCandidates = 0;
 			UInt64 estimatedSavedNanoseconds = 0;
 			UInt64 estimatedMergeNanoseconds =
-				kEstimatedBatchFrameUploadNanoseconds;
+				kEstimatedBatchDecisionNanoseconds
+					+ kEstimatedBatchFrameUploadNanoseconds;
 			for (const CrossFacadeCandidate& candidate : frame.candidates)
 			{
 				if (!candidate.selected)
@@ -1156,13 +1356,18 @@ namespace fonthook::vectorfont
 							|| !frame.candidates[index].selected;
 					}),
 				frame.candidateOrder.end());
-			std::sort(frame.candidateOrder.begin(),
-				frame.candidateOrder.end(),
+			const auto packetOrder =
 				[&](size_t left, size_t right)
 				{
 					return frame.candidates[left].firstPacket
 						< frame.candidates[right].firstPacket;
-				});
+				};
+			if (!std::is_sorted(frame.candidateOrder.begin(),
+					frame.candidateOrder.end(), packetOrder))
+			{
+				std::sort(frame.candidateOrder.begin(),
+					frame.candidateOrder.end(), packetOrder);
+			}
 
 			const UINT byteCount = totalVertices
 				* sizeof(NativeA8CrossFacadeGpuVertex);
@@ -1691,23 +1896,23 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	void PrepareNativeA8CrossFacadeFrame(
+	NativeA8CrossFacadePrepareResult PrepareNativeA8CrossFacadeFrame(
 		const std::vector<NativeA8CrossFacadeFrameItem>& items,
 		UInt32 generation)
 	{
 		CrossFacadeFrameState& frame = s_frame;
 		FreeTypePerfScope perf(FreeTypePerfPhase::CrossFacadePrepare);
 		ClearFrame(frame, false);
-		if (!generation || items.size() < 2
+		if (items.size() < 2)
+			return NativeA8CrossFacadePrepareResult::NoCandidate;
+		if (!generation
 			|| !IsNativeA8ShaderGenerationCurrent(generation))
-		{
-			return;
-		}
+			return NativeA8CrossFacadePrepareResult::Unavailable;
 		{
 			CrossFacadeGpuState& gpu = GpuState();
 			std::lock_guard<std::mutex> lock(gpu.mutex);
 			if (gpu.faultGeneration == generation)
-				return;
+				return NativeA8CrossFacadePrepareResult::Unavailable;
 		}
 		if (!GetNativeA8CrossFacadeD3DDeclaration(generation))
 		{
@@ -1720,11 +1925,12 @@ namespace fonthook::vectorfont
 			}
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CrossFacadeResourceFallback);
-			return;
+			return NativeA8CrossFacadePrepareResult::Unavailable;
 		}
 
 		MarkDuplicateItems(items, frame);
-		BuildSegments(items, frame);
+		const CrossFacadeOptimisticGate optimisticGate =
+			BuildOptimisticSegments(items, frame);
 		RefreshFrameMemory(frame);
 		EnforceCpuMemoryBudget("cross-facade-descriptors");
 		if (IsCpuMemoryBudgetExceeded())
@@ -1732,14 +1938,29 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CrossFacadeCapacityFallback);
 			ClearFrame(frame, true);
-			return;
+			return NativeA8CrossFacadePrepareResult::Unavailable;
+		}
+		if (optimisticGate == CrossFacadeOptimisticGate::NoCandidate)
+			return NativeA8CrossFacadePrepareResult::NoCandidate;
+		if (optimisticGate == CrossFacadeOptimisticGate::CostRejected)
+			return NativeA8CrossFacadePrepareResult::CostRejected;
+
+		MaterializeSegments(items, frame);
+		RefreshFrameMemory(frame);
+		EnforceCpuMemoryBudget("cross-facade-materialized");
+		if (IsCpuMemoryBudgetExceeded())
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CrossFacadeCapacityFallback);
+			ClearFrame(frame, true);
+			return NativeA8CrossFacadePrepareResult::Unavailable;
 		}
 		if (frame.candidates.empty())
-			return;
+			return NativeA8CrossFacadePrepareResult::NoCandidate;
 		if (!HasProfitableCandidateSet(frame))
 		{
 			RefreshFrameMemory(frame);
-			return;
+			return NativeA8CrossFacadePrepareResult::CostRejected;
 		}
 
 		CrossFacadeGpuState& gpu = GpuState();
@@ -1749,7 +1970,7 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CrossFacadeResourceFallback);
 			RefreshFrameMemory(frame);
-			return;
+			return NativeA8CrossFacadePrepareResult::Unavailable;
 		}
 		const UInt32 selectedVertices =
 			SelectCandidates(frame, gpu.vertexCapacity);
@@ -1758,7 +1979,7 @@ namespace fonthook::vectorfont
 			for (CrossFacadeCandidate& candidate : frame.candidates)
 				candidate.selected = false;
 			RefreshFrameMemory(frame);
-			return;
+			return NativeA8CrossFacadePrepareResult::CostRejected;
 		}
 		if (!UploadSelectedCandidates(frame, gpu, selectedVertices))
 		{
@@ -1769,7 +1990,7 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CrossFacadeResourceFallback);
 			RefreshFrameMemory(frame);
-			return;
+			return NativeA8CrossFacadePrepareResult::Unavailable;
 		}
 		RecordSelectedCandidateCost(frame);
 
@@ -1783,7 +2004,16 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CrossFacadeCapacityFallback);
 			ClearFrame(frame, true);
+			return NativeA8CrossFacadePrepareResult::Unavailable;
 		}
+		return frame.prepared
+			? NativeA8CrossFacadePrepareResult::Prepared
+			: NativeA8CrossFacadePrepareResult::NoCandidate;
+	}
+
+	void ResetNativeA8CrossFacadeFrame()
+	{
+		ClearFrame(s_frame, false);
 	}
 
 	void BeginNativeA8CrossFacadeFrameDispatch()

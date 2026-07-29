@@ -252,7 +252,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_cross_facade_perf: cross_facade_groups=%llu facades=%llu source_draws=%llu draws=%llu saved=%llu vertices=%llu upload_bytes=%llu followers_skipped=%llu candidates=%llu state_fallback=%llu cost_eligible=%llu cost_selected=%llu cost_fallback=%llu estimated_saved_ns=%llu estimated_merge_ns=%llu capacity_fallback=%llu resource_fallback=%llu",
+			"tnvse_freetype_cross_facade_perf: cross_facade_groups=%llu facades=%llu source_draws=%llu draws=%llu saved=%llu vertices=%llu upload_bytes=%llu followers_skipped=%llu candidates=%llu state_fallback=%llu cost_eligible=%llu cost_selected=%llu cost_fallback=%llu estimated_saved_ns=%llu estimated_merge_ns=%llu prechecks=%llu precheck_rejected=%llu precheck_saved_ns=%llu precheck_merge_ns=%llu backoff_skips=%llu list_backoff_skips=%llu backoff_probes=%llu materialized_packets=%llu capacity_fallback=%llu resource_fallback=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CrossFacadeGroup)],
 			values[static_cast<size_t>(
@@ -285,6 +285,24 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
 					CrossFacadeEstimatedMergeNanoseconds)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeCostPrecheck)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeCostPrecheckReject)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CrossFacadePrecheckEstimatedSavedNanoseconds)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CrossFacadePrecheckEstimatedMergeNanoseconds)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeBackoffSkip)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeListBackoffSkip)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeBackoffProbe)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadePacketMaterialized)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CrossFacadeCapacityFallback)],
 			values[static_cast<size_t>(
