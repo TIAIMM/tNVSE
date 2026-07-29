@@ -795,79 +795,29 @@ ring; expired static entries are discarded during compaction. The map published
 after a sorted frame's batch upload is retained only until its packets finish,
 because those packet submissions need stable vertex ranges.
 
-The sorted traversal also builds a frame-local
-packet command stream in the exact reverse order used by the retail Tile
-renderer. Consecutive FreeType facades may be submitted as one real indexed
-draw when their native shader profile and `c1-c8`, physical atlas texture and
-sampling, scissor, alpha/blend, cull/stencil, fixed Tile state, and world
-rotation/scale match. A stock item, failed preflight, repeated facade, profile
-change, atlas-page change, scissor change, or incompatible fixed state is a
-barrier. Translation, live overlay RGB, Tile alpha, and material alpha remain
-per facade.
+When a sorted FreeType facade has exactly one active packet covering one
+physical page and the complete immutable payload, it skips the packet proxy
+entirely. For the duration of that one stock Tile pass, the facade's existing
+geometry-buffer descriptor is rebound directly to the sealed static/dynamic
+vertex range, canonical INDEX16 buffer, native declaration, and resolved
+shader. The facade itself remains `RenderPass::pGeometry`, so the retail
+`TileShader::UpdateConstants` reads its live scissor, overlay color, Tile and
+material alpha, blend, cull, and stencil state without a proxy-state copy.
+The payload origin is temporarily folded into the facade transform and its
+model bound, alpha-test flag, shader, transform, and every modified buffer/chip
+field are restored synchronously after `RenderImmediate`.
 
-Cross-facade upload uses a separate 60-byte vertex. Its final `float4` carries
-the exact live Tile color multiplier, while CPU preparation expresses every
-member position in the leader's effective-world space. The batch vertex shader
-applies that color and preserves the ordinary pixel-shader ABI. The leader
-therefore performs one stock `TileShader::UpdateConstants` for the combined
-draw, publishes identity `c0`, retains the normal cross-facade `c1-c8` cache,
-and reuses the Coverage, ARGB, SDF, MTSDF, and Composite pixel shaders. Matching
-linear transforms keep the analytic vertex-shader AA scale identical; only
-translation is folded into vertex positions.
-
-The batch dynamic VB is created lazily, is limited to 131,064 vertices
-(approximately 7.5 MiB), and receives at most one `D3DLOCK_DISCARD` upload per
-sorted traversal. Each INDEX16 draw is capped at 16,383 quads and uses a
-canonical immutable index buffer. Eligible groups are selected by saved draws
-per uploaded vertex; groups outside the capacity or CPU metadata budget execute
-through the unchanged packet path. Roles are published only after the complete
-descriptor build and upload succeed. The first facade executes the command
-stream and later facade callbacks skip duplicate submission; nested sorted
-passes suspend that dispatch map. Device reset, shader-generation replacement,
-or renderer shutdown releases the optional batch resources without invalidating
-the normal native route. This changes neither atlas allocation nor the
-persistent cache format and does not enable NPOT textures.
-
-Candidate publication is additionally guarded by a conservative render-thread
-cost model. Every avoided source packet is valued against per-candidate
-descriptor work, per-packet inspection, two CPU passes over each 60-byte batch
-vertex, the measured descriptor/gate preparation allowance, and one shared
-`D3DLOCK_DISCARD` lock/unlock for the traversal. Before dynamic Tile color,
-effective-world transform, D3D texture, or batch shader resolution, an
-optimistic gate assumes every compatible fixed-state packet shares one target.
-If even that maximum possible saving cannot repay preparation and upload, the
-traversal stays on the ordinary static/dynamic packet path without materializing
-full packet descriptors. Candidates that pass this cheap gate are then checked
-against their exact shader/texture runs. A candidate must be individually
-profitable, and the selected set must remain profitable after both shared fixed
-costs.
-
-Repeated `NoCandidate` or cost rejection results use bounded adaptive probing.
-The key includes accumulator identity, shader generation, atlas texture epoch,
-coarse item/facade counts, and the visible list-menu class. Inventory,
-container, barter, repair, item-mod, and recipe menus enter exponential
-backoff after two consecutive negative probes, up to 64 skipped traversals;
-other workloads begin after four negatives and cap at 16. A skipped traversal
-clears the optional cross-facade frame and uses the normal packet renderer.
-Generation, atlas, workload bucket, or menu-class changes probe immediately,
-and successful publication clears the history. Thus the optimization cannot
-alter text, ordering, scissor, alpha, or fallback correctness; it can only
-temporarily decline an optional batch. This targets short, static-VB-resident
-inventory labels without permanently disabling profitable title or detail-text
-batches.
-
-`tnvse_freetype_cross_facade_perf` reports candidate groups, executed leader
-groups and facades, source and resulting draws, saved draws, vertices and upload
-bytes, skipped followers, cost-eligible/selected/rejected candidates, accepted
-estimated saved/merge nanoseconds, optimistic prechecks/rejections and their
-estimated totals, adaptive/list-menu skips and probes, materialized packets,
-and state/capacity/resource fallbacks. For a completed report interval,
-`followers_skipped` should equal
-`facades - groups`; `saved` must be positive to establish that true batching
-occurred. `estimated_saved_ns` must be greater than `estimated_merge_ns` for
-every published traversal. The timing line separately reports
-`cross_facade_prepare_n`, median, and p95 so the descriptor/gate/upload work is
-not hidden inside the ordinary `preflight` or `submit` measurements.
+This direct-shape route is published only inside the validated sorted-frame
+ring lease. It requires exact generation, resource serial/upload epoch,
+page-zero texturing property and source-texture identity, a prepared geometry
+buffer, and a full-range packet. A failed check occurs before the retail pass
+and falls back to the unchanged packet/proxy path; once the retail pass has
+started it is never replayed. Device reset and shader-generation replacement
+therefore invalidate it through the existing lease rules. It creates no
+per-facade D3D allocation, changes no atlas or cache format, and does not enable
+NPOT textures. The periodic performance line reports
+`direct_shape_candidates`, `direct_shape_draws`, `direct_shape_vertices`, and
+`direct_shape_fallback`.
 
 ## Atlas allocation, mipmaps, and memory
 

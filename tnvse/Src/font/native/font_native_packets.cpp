@@ -502,7 +502,6 @@ namespace fonthook::vectorfont
 
 	void InvalidateNativeA8RingResources(NativeA8FallbackReason reason)
 	{
-		ReleaseNativeA8CrossFacadeResources();
 		ReleaseNativeA8RingResources();
 		std::vector<A8ShapeMetadataPtr> metadataEntries;
 		{

@@ -4,12 +4,10 @@
 #include "tnvse.h"
 
 #include "BSShaderManager.hpp"
-#include "InterfaceManager.hpp"
 #include "NiDX9TextureData.hpp"
 #include "Utils/SafeWrite.h"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -26,13 +24,6 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kRegisterObjectVtableEntry =
 			kBSShaderAccumulatorVtable + kRegisterObjectVtableSlot * sizeof(void*);
 		inline constexpr UInt32 kMaximumMissingMetadataLogs = 8;
-		inline constexpr SIZE_T kMenuVisibility = 0x011F308F;
-		inline constexpr UInt32 kCrossFacadeListFailureThreshold = 2;
-		inline constexpr UInt32 kCrossFacadeGeneralFailureThreshold = 4;
-		inline constexpr UInt32 kCrossFacadeListInitialSkip = 4;
-		inline constexpr UInt32 kCrossFacadeGeneralInitialSkip = 2;
-		inline constexpr UInt32 kCrossFacadeListMaximumSkip = 64;
-		inline constexpr UInt32 kCrossFacadeGeneralMaximumSkip = 16;
 
 		using RegisterObjectFn = bool(__thiscall*)(BSShaderAccumulator*, NiGeometry*);
 
@@ -73,18 +64,6 @@ namespace fonthook::vectorfont
 			bool rendererAvailable = false;
 		};
 
-		struct CrossFacadeAdaptiveState
-		{
-			BSShaderAccumulator* accumulator = nullptr;
-			UInt32 generation = 0;
-			UInt32 atlasTextureEpoch = 0;
-			UInt32 itemCountBucket = 0;
-			UInt32 facadeCountBucket = 0;
-			UInt32 listMenuMask = 0;
-			UInt32 rejectionStreak = 0;
-			UInt32 skipRemaining = 0;
-		};
-
 		struct SortedPayloadScratch
 		{
 			BSShaderAccumulator* pendingAccumulator = nullptr;
@@ -95,137 +74,13 @@ namespace fonthook::vectorfont
 			std::vector<A8ShapeMetadataPtr> fallbackMetadataOwners;
 			std::vector<NativeA8PayloadTemplatePtr> payloadTemplates;
 			std::vector<UInt32> payloadLookup;
-			std::vector<NativeA8CrossFacadeFrameItem> crossFacadeItems;
 			CpuMemoryLease cpuMemory;
 			UInt32 nestedBypassDepth = 0;
 			UInt64 nextValidationToken = 0;
-			CrossFacadeAdaptiveState crossFacadeAdaptive;
 			bool active = false;
 		};
 
 		thread_local SortedPayloadScratch s_sortedPayloadScratch;
-
-		UInt32 WorkloadBucket(size_t count)
-		{
-			if (!count)
-				return 0;
-			constexpr size_t kBucketWidth = 8;
-			return static_cast<UInt32>(std::min<size_t>(
-				std::numeric_limits<UInt32>::max(),
-				(count + kBucketWidth - 1u) / kBucketWidth));
-		}
-
-		UInt32 GetCrossFacadeListMenuMask()
-		{
-			static constexpr std::array<UInt32, 7> kListMenus = {
-				Inventory,
-				Container,
-				Barter,
-				PipboyRepair,
-				VendorRepair,
-				ItemModMenu,
-				Recipe
-			};
-			const volatile UInt8* visibility =
-				reinterpret_cast<const volatile UInt8*>(
-					kMenuVisibility);
-			UInt32 mask = 0;
-			for (size_t index = 0; index < kListMenus.size(); ++index)
-			{
-				if (visibility[kListMenus[index]])
-					mask |= 1u << static_cast<UInt32>(index);
-			}
-			return mask;
-		}
-
-		void UpdateCrossFacadeAdaptiveKey(
-			CrossFacadeAdaptiveState& state,
-			BSShaderAccumulator* accumulator, UInt32 generation,
-			UInt32 atlasTextureEpoch, size_t itemCount,
-			size_t facadeCount, UInt32 listMenuMask)
-		{
-			const UInt32 itemCountBucket =
-				WorkloadBucket(itemCount);
-			const UInt32 facadeCountBucket =
-				WorkloadBucket(facadeCount);
-			if (state.accumulator == accumulator
-				&& state.generation == generation
-				&& state.atlasTextureEpoch == atlasTextureEpoch
-				&& state.itemCountBucket == itemCountBucket
-				&& state.facadeCountBucket == facadeCountBucket
-				&& state.listMenuMask == listMenuMask)
-			{
-				return;
-			}
-			state = {};
-			state.accumulator = accumulator;
-			state.generation = generation;
-			state.atlasTextureEpoch = atlasTextureEpoch;
-			state.itemCountBucket = itemCountBucket;
-			state.facadeCountBucket = facadeCountBucket;
-			state.listMenuMask = listMenuMask;
-		}
-
-		bool ShouldSkipCrossFacadeProbe(
-			CrossFacadeAdaptiveState& state)
-		{
-			if (!state.skipRemaining)
-			{
-				if (state.rejectionStreak)
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::CrossFacadeBackoffProbe);
-				return false;
-			}
-			--state.skipRemaining;
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::CrossFacadeBackoffSkip);
-			if (state.listMenuMask)
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::CrossFacadeListBackoffSkip);
-			}
-			return true;
-		}
-
-		void UpdateCrossFacadeAdaptiveResult(
-			CrossFacadeAdaptiveState& state,
-			NativeA8CrossFacadePrepareResult result)
-		{
-			if (result == NativeA8CrossFacadePrepareResult::Prepared)
-			{
-				state.rejectionStreak = 0;
-				state.skipRemaining = 0;
-				return;
-			}
-			if (result != NativeA8CrossFacadePrepareResult::NoCandidate
-				&& result
-					!= NativeA8CrossFacadePrepareResult::CostRejected)
-			{
-				state.skipRemaining = 0;
-				return;
-			}
-			if (state.rejectionStreak
-				< std::numeric_limits<UInt32>::max())
-			{
-				++state.rejectionStreak;
-			}
-			const bool listMenu = state.listMenuMask != 0;
-			const UInt32 threshold = listMenu
-				? kCrossFacadeListFailureThreshold
-				: kCrossFacadeGeneralFailureThreshold;
-			if (state.rejectionStreak < threshold)
-				return;
-			const UInt32 initialSkip = listMenu
-				? kCrossFacadeListInitialSkip
-				: kCrossFacadeGeneralInitialSkip;
-			const UInt32 maximumSkip = listMenu
-				? kCrossFacadeListMaximumSkip
-				: kCrossFacadeGeneralMaximumSkip;
-			const UInt32 exponent = std::min<UInt32>(
-				state.rejectionStreak - threshold, 4u);
-			state.skipRemaining = std::min<UInt32>(
-				maximumSkip, initialSkip << exponent);
-		}
 
 		size_t HashPointer(const void* pointer)
 		{
@@ -328,9 +183,7 @@ namespace fonthook::vectorfont
 					* sizeof(A8ShapeMetadataPtr)
 				+ scratch.payloadTemplates.capacity()
 					* sizeof(NativeA8PayloadTemplatePtr)
-				+ scratch.payloadLookup.capacity() * sizeof(UInt32)
-				+ scratch.crossFacadeItems.capacity()
-					* sizeof(NativeA8CrossFacadeFrameItem);
+				+ scratch.payloadLookup.capacity() * sizeof(UInt32);
 			scratch.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata, bytes);
 		}
 
@@ -340,7 +193,6 @@ namespace fonthook::vectorfont
 			scratch.frameEntries.clear();
 			scratch.fallbackMetadataOwners.clear();
 			scratch.payloadTemplates.clear();
-			scratch.crossFacadeItems.clear();
 			scratch.pendingAccumulator = nullptr;
 			scratch.pendingRegistrations.clear();
 			if (scratch.pendingRegistrations.capacity() > 8192)
@@ -366,11 +218,6 @@ namespace fonthook::vectorfont
 			}
 			if (scratch.payloadLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.payloadLookup);
-			if (scratch.crossFacadeItems.capacity() > 8192)
-			{
-				std::vector<NativeA8CrossFacadeFrameItem>().swap(
-					scratch.crossFacadeItems);
-			}
 			RefreshSortedScratchMemory(scratch);
 			if (IsCpuMemoryBudgetExceeded())
 			{
@@ -384,8 +231,6 @@ namespace fonthook::vectorfont
 				std::vector<NativeA8PayloadTemplatePtr>().swap(
 					scratch.payloadTemplates);
 				std::vector<UInt32>().swap(scratch.payloadLookup);
-				std::vector<NativeA8CrossFacadeFrameItem>().swap(
-					scratch.crossFacadeItems);
 				scratch.cpuMemory.Release();
 			}
 		}
@@ -764,11 +609,9 @@ namespace fonthook::vectorfont
 				const bool restoreActive = scratch.active;
 				scratch.active = false;
 				++scratch.nestedBypassDepth;
-				SuspendNativeA8CrossFacadeFrameDispatch();
 				InvalidateNativeA8SortedShaderState();
 				const int result = state.originalSortedTileRender(accumulator);
 				InvalidateNativeA8SortedShaderState();
-				ResumeNativeA8CrossFacadeFrameDispatch();
 				--scratch.nestedBypassDepth;
 				scratch.active = restoreActive;
 				return result;
@@ -783,7 +626,6 @@ namespace fonthook::vectorfont
 				scratch.frameEntries.clear();
 				scratch.fallbackMetadataOwners.clear();
 				scratch.payloadTemplates.clear();
-				scratch.crossFacadeItems.clear();
 				scratch.frameEntries.reserve(itemCount);
 				scratch.payloadTemplates.reserve(itemCount);
 				PrepareLookup(scratch.facadeLookup, itemCount);
@@ -882,93 +724,11 @@ namespace fonthook::vectorfont
 				}
 				PrepareSortedNativeA8Payloads(
 					scratch.payloadTemplates, generation);
-				if (scratch.frameEntries.size() < 2)
-				{
-					ResetNativeA8CrossFacadeFrame();
-				}
-				else
-				{
-					const UInt32 listMenuMask =
-						GetCrossFacadeListMenuMask();
-					UpdateCrossFacadeAdaptiveKey(
-						scratch.crossFacadeAdaptive,
-						accumulator, generation,
-						preflightContext.atlasTextureEpoch,
-						itemCount, scratch.frameEntries.size(),
-						listMenuMask);
-					if (ShouldSkipCrossFacadeProbe(
-							scratch.crossFacadeAdaptive))
-					{
-						ResetNativeA8CrossFacadeFrame();
-					}
-					else
-					{
-						scratch.crossFacadeItems.reserve(itemCount);
-						for (SInt32 index =
-								accumulator->m_iNumItems - 1;
-							index >= 0; --index)
-						{
-							NativeA8CrossFacadeFrameItem item;
-							NiGeometry* geometry =
-								accumulator->m_ppkItems[index];
-							if (IsFreeTypeFacade(geometry))
-							{
-								item.facade =
-									static_cast<NiTriShape*>(
-										geometry);
-								const size_t entryIndex =
-									LookupSortedFacade(
-										scratch, item.facade);
-								if (entryIndex
-										!= std::numeric_limits<
-											size_t>::max()
-									&& entryIndex
-										< scratch.frameEntries.size())
-								{
-									const SortedFrameEntry& entry =
-										scratch.frameEntries[
-											entryIndex];
-									item.metadata = entry.metadata;
-									item.payload = entry.payload;
-									item.preflightResult =
-										entry.preflightResult;
-									item.generation =
-										entry.generation;
-									item.barrier = false;
-								}
-							}
-							scratch.crossFacadeItems.push_back(item);
-						}
-						RefreshSortedScratchMemory(scratch);
-						EnforceCpuMemoryBudget(
-							"cross-facade-traversal");
-						if (IsCpuMemoryBudgetExceeded())
-						{
-							RecordFreeTypePerf(
-								FreeTypePerfCounter::
-									CrossFacadeCapacityFallback);
-							scratch.crossFacadeItems.clear();
-							ResetNativeA8CrossFacadeFrame();
-						}
-						else
-						{
-							const NativeA8CrossFacadePrepareResult
-								prepareResult =
-									PrepareNativeA8CrossFacadeFrame(
-										scratch.crossFacadeItems,
-										generation);
-							UpdateCrossFacadeAdaptiveResult(
-								scratch.crossFacadeAdaptive,
-								prepareResult);
-						}
-					}
-				}
+				RefreshSortedScratchMemory(scratch);
 				BeginNativeA8SortedShaderBatch();
 				BeginA8SortedTileConstantBatch();
 				scratch.active = true;
-				BeginNativeA8CrossFacadeFrameDispatch();
 				const int result = state.originalSortedTileRender(accumulator);
-				EndNativeA8CrossFacadeFrameDispatch();
 				EndA8SortedTileConstantBatch();
 				EndNativeA8SortedShaderBatch();
 				EndNativeA8SortedRingFrame();

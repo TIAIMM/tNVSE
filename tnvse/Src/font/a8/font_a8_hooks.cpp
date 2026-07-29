@@ -3,7 +3,10 @@
 #include "load_config.h"
 #include "tnvse.h"
 
+#include "NiGeometryBufferData.hpp"
 #include "NiRenderer.hpp"
+#include "NiTriShapeData.hpp"
+#include "NiVBChip.hpp"
 #include "Utils/SafeWrite.h"
 
 #include <algorithm>
@@ -435,6 +438,51 @@ namespace fonthook::vectorfont
 			NativeA8RingSubmission submission;
 		};
 
+		class NativeDirectShapeSubmissionScope
+		{
+		public:
+			~NativeDirectShapeSubmissionScope()
+			{
+				EndNativeA8DirectShapeSubmission(submission);
+			}
+
+			NativeA8DirectShapeSubmission submission;
+		};
+
+		struct NativeDirectImmediateContext
+		{
+			NiTriShape* shape = nullptr;
+			bool invoked = false;
+		};
+
+		thread_local NativeDirectImmediateContext*
+			s_nativeDirectImmediateContext = nullptr;
+
+		class NativeDirectImmediateScope
+		{
+		public:
+			explicit NativeDirectImmediateScope(NiTriShape* shape)
+				: m_previous(s_nativeDirectImmediateContext)
+			{
+				m_context.shape = shape;
+				s_nativeDirectImmediateContext = &m_context;
+			}
+
+			~NativeDirectImmediateScope()
+			{
+				s_nativeDirectImmediateContext = m_previous;
+			}
+
+			bool Invoked() const
+			{
+				return m_context.invoked;
+			}
+
+		private:
+			NativeDirectImmediateContext m_context;
+			NativeDirectImmediateContext* m_previous = nullptr;
+		};
+
 		class NativeFacadeShaderBatchScope
 		{
 		public:
@@ -449,10 +497,228 @@ namespace fonthook::vectorfont
 			}
 		};
 
+		void ApplyNativeGeometryOrigin(NiTransform& destination,
+			const NiTransform& source, const NiPoint3& origin)
+		{
+			destination = source;
+			if (origin.x != 0.0f || origin.y != 0.0f || origin.z != 0.0f)
+				destination.m_Translate = source * origin;
+		}
+
+		class NativeDirectShapeBinding
+		{
+		public:
+			NativeDirectShapeBinding(NiTriShape* shape,
+				NativeA8ShapePayload& payload,
+				const NativeA8DirectShapeSubmission& submission)
+				: m_shape(shape)
+			{
+				if (!m_shape || m_shape->GetSkinInstance()
+					|| !payload.payloadTemplate
+					|| payload.packetShaders.size() != 1
+					|| !payload.packetShaders[0]
+					|| !submission.vertexBuffer || !submission.indexBuffer
+					|| !submission.declaration || !submission.vertexCount
+					|| (submission.vertexCount & 3u))
+				{
+					return;
+				}
+				const std::vector<NativeA8PacketTemplate>& packets =
+					GetNativeA8Packets(*payload.payloadTemplate,
+						payload.useCompositePackets);
+				if (packets.size() != 1
+					|| packets[0].vertexCount != submission.vertexCount)
+				{
+					return;
+				}
+
+				m_data = m_shape->GetModelData();
+				m_alpha = m_shape->GetAlphaProperty();
+				m_buffer = m_data ? m_data->m_pkBuffData : nullptr;
+				if (!m_data || !m_alpha || !m_buffer
+					|| !m_buffer->m_uiStreamCount
+					|| !m_buffer->m_puiVertexStride
+					|| !m_buffer->m_ppkVBChip
+					|| !m_buffer->m_ppkVBChip[0])
+				{
+					return;
+				}
+				m_chip = m_buffer->m_ppkVBChip[0];
+
+				m_local = m_shape->m_kLocal;
+				m_world = m_shape->m_kWorld;
+				m_bound = m_data->m_kBound;
+				m_shader = m_shape->GetShader();
+				m_alphaFlags = m_alpha->m_usFlags;
+				m_alphaTestRef = m_alpha->m_ucAlphaTestRef;
+
+				m_bufferFlags = m_buffer->m_uiFlags;
+				m_geometryGroup = m_buffer->m_pkGeometryGroup;
+				m_fvf = m_buffer->m_uiFVF;
+				m_declaration = m_buffer->m_hDeclaration;
+				m_softwareVertexProcessing =
+					m_buffer->m_bSoftwareVP;
+				m_vertexCount = m_buffer->m_uiVertCount;
+				m_maxVertexCount = m_buffer->m_uiMaxVertCount;
+				m_streamCount = m_buffer->m_uiStreamCount;
+				m_stride = m_buffer->m_puiVertexStride[0];
+				m_indexCount = m_buffer->m_uiIndexCount;
+				m_indexBytes = m_buffer->m_uiIBSize;
+				m_indexBuffer = m_buffer->m_pkIB;
+				m_baseVertex = m_buffer->m_uiBaseVertexIndex;
+				m_primitiveType = m_buffer->m_eType;
+				m_triangleCount = m_buffer->m_uiTriCount;
+				m_maxTriangleCount = m_buffer->m_uiMaxTriCount;
+				m_arrayCount = m_buffer->m_uiNumArrays;
+				m_arrayLengths = m_buffer->m_pusArrayLengths;
+				m_indexArray = m_buffer->m_pusIndexArray;
+
+				m_chipIndex = m_chip->m_uiIndex;
+				m_vertexBuffer = m_chip->m_pkVB;
+				m_chipOffset = m_chip->m_uiOffset;
+				m_chipLockFlags = m_chip->m_uiLockFlags;
+				m_chipSize = m_chip->m_uiSize;
+
+				const UInt32 quadCount = submission.vertexCount / 4u;
+				ApplyNativeGeometryOrigin(m_shape->m_kLocal, m_local,
+					payload.geometryOrigin);
+				ApplyNativeGeometryOrigin(m_shape->m_kWorld, m_world,
+					payload.geometryOrigin);
+				m_data->m_kBound = packets[0].bound;
+				m_alpha->SetAlphaTesting(false);
+				m_shape->SetShader(payload.packetShaders[0]);
+
+				m_buffer->m_uiFlags = 0;
+				m_buffer->m_pkGeometryGroup = nullptr;
+				m_buffer->m_uiFVF = 0;
+				m_buffer->m_hDeclaration = submission.declaration;
+				m_buffer->m_bSoftwareVP = false;
+				m_buffer->m_uiVertCount = submission.vertexCount;
+				m_buffer->m_uiMaxVertCount = submission.vertexCount;
+				m_buffer->m_uiStreamCount = 1;
+				m_buffer->m_puiVertexStride[0] =
+					sizeof(NativeA8GpuVertex);
+				m_buffer->m_uiIndexCount = quadCount * 6u;
+				m_buffer->m_uiIBSize = submission.indexBytes;
+				m_buffer->m_pkIB = submission.indexBuffer;
+				m_buffer->m_uiBaseVertexIndex = submission.baseVertex;
+				m_buffer->m_eType = D3DPT_TRIANGLELIST;
+				m_buffer->m_uiTriCount = quadCount * 2u;
+				m_buffer->m_uiMaxTriCount = quadCount * 2u;
+				m_buffer->m_uiNumArrays = 1;
+				m_buffer->m_pusArrayLengths = nullptr;
+				m_buffer->m_pusIndexArray = nullptr;
+
+				m_chip->m_uiIndex = 0;
+				m_chip->m_pkVB = submission.vertexBuffer;
+				m_chip->m_uiOffset = 0;
+				m_chip->m_uiLockFlags = 0;
+				m_chip->m_uiSize = submission.vertexCount
+					* sizeof(NativeA8GpuVertex);
+
+				if (m_shape->GetShader() != payload.packetShaders[0])
+				{
+					Restore();
+					return;
+				}
+				m_active = true;
+			}
+
+			~NativeDirectShapeBinding()
+			{
+				if (m_active)
+					Restore();
+			}
+
+			bool Active() const
+			{
+				return m_active;
+			}
+
+		private:
+			void Restore()
+			{
+				if (!m_shape || !m_data || !m_alpha || !m_buffer || !m_chip)
+					return;
+				m_chip->m_uiIndex = m_chipIndex;
+				m_chip->m_pkVB = m_vertexBuffer;
+				m_chip->m_uiOffset = m_chipOffset;
+				m_chip->m_uiLockFlags = m_chipLockFlags;
+				m_chip->m_uiSize = m_chipSize;
+
+				m_buffer->m_uiFlags = m_bufferFlags;
+				m_buffer->m_pkGeometryGroup = m_geometryGroup;
+				m_buffer->m_uiFVF = m_fvf;
+				m_buffer->m_hDeclaration = m_declaration;
+				m_buffer->m_bSoftwareVP =
+					m_softwareVertexProcessing;
+				m_buffer->m_uiVertCount = m_vertexCount;
+				m_buffer->m_uiMaxVertCount = m_maxVertexCount;
+				m_buffer->m_uiStreamCount = m_streamCount;
+				m_buffer->m_puiVertexStride[0] = m_stride;
+				m_buffer->m_uiIndexCount = m_indexCount;
+				m_buffer->m_uiIBSize = m_indexBytes;
+				m_buffer->m_pkIB = m_indexBuffer;
+				m_buffer->m_uiBaseVertexIndex = m_baseVertex;
+				m_buffer->m_eType = m_primitiveType;
+				m_buffer->m_uiTriCount = m_triangleCount;
+				m_buffer->m_uiMaxTriCount = m_maxTriangleCount;
+				m_buffer->m_uiNumArrays = m_arrayCount;
+				m_buffer->m_pusArrayLengths = m_arrayLengths;
+				m_buffer->m_pusIndexArray = m_indexArray;
+
+				m_shape->SetShader(m_shader);
+				m_alpha->m_usFlags = m_alphaFlags;
+				m_alpha->m_ucAlphaTestRef = m_alphaTestRef;
+				m_data->m_kBound = m_bound;
+				m_shape->m_kLocal = m_local;
+				m_shape->m_kWorld = m_world;
+				m_active = false;
+			}
+
+			NiTriShape* m_shape = nullptr;
+			NiTriShapeData* m_data = nullptr;
+			NiAlphaProperty* m_alpha = nullptr;
+			NiGeometryBufferData* m_buffer = nullptr;
+			NiVBChip* m_chip = nullptr;
+			NiTransform m_local;
+			NiTransform m_world;
+			NiBound m_bound;
+			BSShader* m_shader = nullptr;
+			Bitfield16 m_alphaFlags;
+			UInt8 m_alphaTestRef = 0;
+			UInt32 m_bufferFlags = 0;
+			NiGeometryGroup* m_geometryGroup = nullptr;
+			UInt32 m_fvf = 0;
+			void* m_declaration = nullptr;
+			bool m_softwareVertexProcessing = false;
+			UInt32 m_vertexCount = 0;
+			UInt32 m_maxVertexCount = 0;
+			UInt32 m_streamCount = 0;
+			UInt32 m_stride = 0;
+			UInt32 m_indexCount = 0;
+			UInt32 m_indexBytes = 0;
+			IDirect3DIndexBuffer9* m_indexBuffer = nullptr;
+			UInt32 m_baseVertex = 0;
+			D3DPRIMITIVETYPE m_primitiveType = D3DPT_FORCE_DWORD;
+			UInt32 m_triangleCount = 0;
+			UInt32 m_maxTriangleCount = 0;
+			UInt32 m_arrayCount = 0;
+			const UInt16* m_arrayLengths = nullptr;
+			const UInt16* m_indexArray = nullptr;
+			UInt32 m_chipIndex = 0;
+			IDirect3DVertexBuffer9* m_vertexBuffer = nullptr;
+			UInt32 m_chipOffset = 0;
+			UInt32 m_chipLockFlags = 0;
+			UInt32 m_chipSize = 0;
+			bool m_active = false;
+		};
+
 		struct NativePacketDrawResult
 		{
 			bool runtimeFault = false;
 			bool drewPacket = false;
+			bool directShapeRoute = false;
 			bool stockLikeBitmapRoute = false;
 			bool constantStateFault = false;
 			NativeA8FallbackReason failure =
@@ -604,6 +870,175 @@ namespace fonthook::vectorfont
 			return draw;
 		}
 
+		bool TryDrawNativeSinglePacketDirect(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			bool setupDrawmode, NiTriShape* facade,
+			NativeA8ShapePayload& payload,
+			NativePacketDrawResult& draw)
+		{
+			if (!pass || !facade || !payload.buildComplete
+				|| !payload.payloadTemplate
+				|| payload.packetShaders.size() != 1)
+			{
+				return false;
+			}
+			const NativeA8PayloadTemplate& artifact =
+				*payload.payloadTemplate;
+			const std::vector<NativeA8PacketTemplate>& packets =
+				GetNativeA8Packets(artifact, payload.useCompositePackets);
+			if (artifact.pageCount != 1 || packets.size() != 1
+				|| packets[0].atlasPage != 0
+				|| packets[0].firstVertex != 0
+				|| packets[0].vertexCount != artifact.gpuVertices.size())
+			{
+				return false;
+			}
+
+			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::SinglePacketDirectCandidate);
+			NativeDirectShapeSubmissionScope submissionScope;
+			const NativeA8FallbackReason submissionFailure =
+				BeginNativeA8DirectShapeSubmission(facade, payload,
+					submissionScope.submission);
+			if (submissionFailure != NativeA8FallbackReason::None)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SinglePacketDirectFallback);
+				return false;
+			}
+
+			NativeDirectShapeBinding binding(facade, payload,
+				submissionScope.submission);
+			if (!binding.Active())
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SinglePacketDirectFallback);
+				return false;
+			}
+
+			draw.directShapeRoute = true;
+			draw.stockLikeBitmapRoute =
+				payload.stockLikeBitmapPackets;
+			NiDX9Renderer* renderer = draw.stockLikeBitmapRoute
+				? nullptr : NiDX9Renderer::GetSingleton();
+			IDirect3DDevice9* device = renderer
+				? renderer->GetD3DDevice() : nullptr;
+			if (!draw.stockLikeBitmapRoute && !device)
+			{
+				draw.runtimeFault = true;
+				draw.constantStateFault = true;
+				draw.operation = "capture-pixel-constants";
+				draw.result = D3DERR_DEVICELOST;
+			}
+
+			const bool isolatePacketConstants =
+				!draw.stockLikeBitmapRoute;
+			const bool batchedConstants = isolatePacketConstants
+				&& s_pixelConstantBatch.FrameActive();
+			std::optional<NativePixelConstantScope> localConstants;
+			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
+			if (!draw.runtimeFault)
+			{
+				if (isolatePacketConstants)
+					shaderBatch.emplace();
+				if (batchedConstants)
+				{
+					if (!s_pixelConstantBatch.EnsureCaptured(device))
+					{
+						draw.runtimeFault = true;
+						draw.constantStateFault = true;
+						draw.operation = s_pixelConstantBatch.Operation();
+						draw.result = s_pixelConstantBatch.Result();
+						draw.mismatchRegister =
+							s_pixelConstantBatch.MismatchRegister();
+					}
+				}
+				else if (isolatePacketConstants)
+				{
+					localConstants.emplace(device);
+					if (!localConstants->Captured())
+					{
+						draw.runtimeFault = true;
+						draw.constantStateFault = true;
+						draw.operation = localConstants->Operation();
+						draw.result = localConstants->Result();
+					}
+				}
+			}
+
+			if (!draw.runtimeFault)
+			{
+				NativeDirectImmediateScope immediateScope(facade);
+				State().originalTileRenderPass(pass, currentPass, false,
+					true, setupDrawmode);
+				if (immediateScope.Invoked())
+				{
+					draw.drewPacket = true;
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::SinglePacketDirectDraw);
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::SinglePacketDirectVertex,
+						submissionScope.submission.vertexCount);
+					RecordFreeTypePerf(FreeTypePerfCounter::TilePass);
+					if (packets[0].shaderClass
+						== NativeA8ShaderClass::Composite)
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::CompositeDraw);
+					}
+				}
+				else
+				{
+					draw.runtimeFault = true;
+					draw.failure = NativeA8FallbackReason::RuntimeFault;
+					draw.operation = "direct-shape-immediate-not-invoked";
+					draw.result = E_FAIL;
+				}
+				if (!IsNativeA8ShaderGenerationCurrent(
+					payload.preparedGeneration))
+				{
+					draw.runtimeFault = true;
+					draw.failure = NativeA8FallbackReason::RuntimeFault;
+					draw.operation =
+						"generation-changed-after-direct-shape";
+					draw.result = D3DERR_DEVICELOST;
+				}
+			}
+
+			if (isolatePacketConstants && !batchedConstants
+				&& localConstants
+				&& !localConstants->RestoreAndVerify())
+			{
+				draw.runtimeFault = true;
+				draw.constantStateFault = true;
+				draw.operation = localConstants->Operation();
+				draw.result = localConstants->Result();
+				draw.mismatchRegister =
+					localConstants->MismatchRegister();
+			}
+			if (isolatePacketConstants && batchedConstants
+				&& draw.runtimeFault
+				&& !FlushNativePixelConstantBatch(
+					"direct-shape-runtime-fault"))
+			{
+				draw.constantStateFault = true;
+				draw.operation = s_pixelConstantBatch.Operation();
+				draw.result = s_pixelConstantBatch.Result();
+				draw.mismatchRegister =
+					s_pixelConstantBatch.MismatchRegister();
+			}
+			if (draw.runtimeFault)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SinglePacketDirectFallback);
+			}
+			// Once the stock Tile pass has been entered, this route owns the item
+			// even if the immediate callback was unexpectedly skipped. Replaying
+			// through a proxy could duplicate a draw whose driver result is opaque.
+			return true;
+		}
+
 		void LogMissingMetadata(NiTriShape* shape, const char* phase)
 		{
 			if (!g_bEnableFreeTypeFontRenderingLog)
@@ -669,22 +1104,6 @@ namespace fonthook::vectorfont
 	{
 		FlushNativePixelConstantBatch("sorted-frame-end");
 		s_pixelConstantBatch.EndFrame();
-	}
-
-	bool EnsureA8SortedTileConstantCapture(IDirect3DDevice9* device,
-		UInt32 generation)
-	{
-		if (s_pixelConstantBatch.EnsureCaptured(device))
-			return true;
-		MarkNativeA8GenerationFault(generation,
-			s_pixelConstantBatch.Operation(),
-			s_pixelConstantBatch.Result());
-		gLog.FormattedMessage(
-			"tnvse_freetype_native: batched shader-constant isolation fault phase=cross-facade operation=%s hr=0x%08X register=%d generation=%u",
-			s_pixelConstantBatch.Operation(),
-			static_cast<UInt32>(s_pixelConstantBatch.Result()),
-			s_pixelConstantBatch.MismatchRegister(), generation);
-		return false;
 	}
 
 	A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape)
@@ -813,16 +1232,15 @@ namespace fonthook::vectorfont
 		if (failure == NativeA8FallbackReason::None)
 		{
 			NativeA8ShapePayload* const sourcePayload = payload;
-			const NativeA8CrossFacadeDispatch crossFacadeDispatch =
-				DispatchNativeA8CrossFacadeFrame(pass, currentPass,
-					setupDrawmode, shape);
-			if (crossFacadeDispatch
-				!= NativeA8CrossFacadeDispatch::NotHandled)
+			NativePacketDrawResult draw;
+			const bool directShapeHandled = sortedFrameHit
+				&& TryDrawNativeSinglePacketDirect(pass, currentPass,
+					setupDrawmode, shape, *sourcePayload, draw);
+			if (!directShapeHandled)
 			{
-				return;
+				draw = DrawNativePacketSet(pass, currentPass,
+					setupDrawmode, shape, *sourcePayload);
 			}
-			NativePacketDrawResult draw = DrawNativePacketSet(pass,
-				currentPass, setupDrawmode, shape, *sourcePayload);
 			if (!draw.runtimeFault)
 			{
 				if (g_bEnableFreeTypeFontRenderingLog
@@ -837,9 +1255,11 @@ namespace fonthook::vectorfont
 						sourcePayload->payloadTemplate
 							? sourcePayload->payloadTemplate->sourceRangeCount
 							: 0u,
-						draw.stockLikeBitmapRoute
-							? "stock-like-bitmap-pages"
-							: "effect-packets");
+						draw.directShapeRoute
+							? "direct-single-packet-shape"
+							: (draw.stockLikeBitmapRoute
+								? "stock-like-bitmap-pages"
+								: "effect-packets"));
 				}
 				return;
 			}
@@ -932,13 +1352,31 @@ namespace fonthook::vectorfont
 			== &State().triShapeVtable[1];
 	}
 
-	void __fastcall A8RenderImmediate(NiTriShape* shape, void*, NiRenderer*)
+	void __fastcall A8RenderImmediate(NiTriShape* shape, void*,
+		NiRenderer* renderer)
 	{
+		if (s_nativeDirectImmediateContext
+			&& s_nativeDirectImmediateContext->shape == shape
+			&& State().originalRenderImmediate)
+		{
+			s_nativeDirectImmediateContext->invoked = true;
+			State().originalRenderImmediate(shape, renderer);
+			return;
+		}
 		SuppressImmediateRoute(shape, "shape-immediate");
 	}
 
-	void __fastcall A8RenderImmediateAlt(NiTriShape* shape, void*, NiRenderer*)
+	void __fastcall A8RenderImmediateAlt(NiTriShape* shape, void*,
+		NiRenderer* renderer)
 	{
+		if (s_nativeDirectImmediateContext
+			&& s_nativeDirectImmediateContext->shape == shape
+			&& State().originalRenderImmediateAlt)
+		{
+			s_nativeDirectImmediateContext->invoked = true;
+			State().originalRenderImmediateAlt(shape, renderer);
+			return;
+		}
 		SuppressImmediateRoute(shape, "shape-immediate-alt");
 	}
 

@@ -1860,6 +1860,125 @@ namespace fonthook::vectorfont
 			generation);
 	}
 
+	void EndNativeA8DirectShapeSubmission(
+		NativeA8DirectShapeSubmission& submission)
+	{
+		if (submission.active)
+		{
+			NativeA8RingState& state = RingState();
+			if (s_sortedRingLease.active
+				&& s_sortedRingLease.state == &state)
+			{
+				state.activeSubmissions.fetch_sub(
+					1, std::memory_order_acq_rel);
+			}
+			else
+			{
+				std::lock_guard<std::mutex> lock(state.mutex);
+				state.activeSubmissions.fetch_sub(
+					1, std::memory_order_acq_rel);
+				if (!state.activeSubmissions.load(std::memory_order_acquire)
+					&& state.releasePending.load(
+						std::memory_order_acquire))
+				{
+					ReleaseRingResourcesLocked(state);
+				}
+			}
+		}
+		submission = NativeA8DirectShapeSubmission{};
+	}
+
+	NativeA8FallbackReason BeginNativeA8DirectShapeSubmission(
+		NiTriShape* facade, NativeA8ShapePayload& payload,
+		NativeA8DirectShapeSubmission& submission)
+	{
+		EndNativeA8DirectShapeSubmission(submission);
+		if (!facade || !payload.buildComplete || !payload.payloadTemplate
+			|| payload.packetShaders.size() != 1)
+		{
+			return NativeA8FallbackReason::PacketBuild;
+		}
+
+		const NativeA8PayloadTemplate& artifact =
+			*payload.payloadTemplate;
+		const std::vector<NativeA8PacketTemplate>& packets =
+			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		if (artifact.pageCount != 1 || artifact.atlasProperties.size() != 1
+			|| artifact.atlasTextures.size() != 1 || packets.size() != 1
+			|| !payload.packetShaders[0])
+		{
+			return NativeA8FallbackReason::PacketBuild;
+		}
+		const NativeA8PacketTemplate& packet = packets[0];
+		if (packet.atlasPage != 0 || packet.firstVertex != 0
+			|| !packet.vertexCount
+			|| packet.vertexCount != artifact.gpuVertices.size()
+			|| (packet.vertexCount & 3u))
+		{
+			return NativeA8FallbackReason::PacketBuild;
+		}
+
+		// The direct shape already owns the first physical atlas property from
+		// construction. Requiring exact wrapper and source-texture identity keeps
+		// this path mutation-free; page/property changes fall back to the proxy
+		// route, which retains its complete synchronization contract.
+		const TileShaderPropertyView* tile = GetTileProperty(facade);
+		if (!tile || facade->GetTexturingProperty()
+				!= artifact.atlasProperties[0].m_pObject
+			|| tile->sourceTexture.m_pObject
+				!= artifact.atlasTextures[0].m_pObject)
+		{
+			return NativeA8FallbackReason::PropertySync;
+		}
+
+		if (!s_sortedRingLease.active)
+			return NativeA8FallbackReason::PacketPrepare;
+		NativeA8SortedRingLease& lease = s_sortedRingLease;
+		NativeA8RingState* state = lease.state;
+		if (!state || payload.preparedGeneration != lease.generation
+			|| !IsNativeA8ShaderGenerationCurrent(lease.generation)
+			|| state->generation != lease.generation
+			|| state->resourceSerial.load(std::memory_order_acquire)
+				!= lease.resourceSerial
+			|| state->uploadEpoch != lease.uploadEpoch
+			|| state->vertexBuffer != lease.dynamicVertexBuffer
+			|| state->staticVertexBuffer != lease.staticVertexBuffer
+			|| state->indexBuffer != lease.indexBuffer
+			|| state->declaration != lease.declaration
+			|| !lease.indexBuffer || !lease.declaration)
+		{
+			return NativeA8FallbackReason::PacketPrepare;
+		}
+
+		UInt32 baseVertex = 0;
+		bool staticResident = false;
+		if (!ResolveSortedLeaseResidency(*state, artifact,
+			packet.vertexCount, lease.resourceSerial, lease.uploadEpoch,
+			baseVertex, staticResident))
+		{
+			return NativeA8FallbackReason::PacketPrepare;
+		}
+		IDirect3DVertexBuffer9* vertexBuffer = staticResident
+			? lease.staticVertexBuffer : lease.dynamicVertexBuffer;
+		if (!vertexBuffer)
+			return NativeA8FallbackReason::PacketPrepare;
+
+		submission.vertexBuffer = vertexBuffer;
+		submission.indexBuffer = lease.indexBuffer;
+		submission.declaration = lease.declaration;
+		submission.baseVertex = baseVertex;
+		submission.vertexCount = packet.vertexCount;
+		submission.indexBytes = kCanonicalIndexBytes;
+		submission.generation = lease.generation;
+		submission.resourceSerial = lease.resourceSerial;
+		submission.staticResident = staticResident;
+		submission.active = true;
+		state->activeSubmissions.fetch_add(1, std::memory_order_release);
+		payload.packetPrepareFailure.store(
+			NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
+		return NativeA8FallbackReason::None;
+	}
+
 	NativeA8FallbackReason BeginNativeA8RingSubmission(
 		NiTriShape* facade, NativeA8ShapePayload& payload,
 		NativeA8RingSubmission& submission)

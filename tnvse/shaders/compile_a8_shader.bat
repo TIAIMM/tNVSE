@@ -26,8 +26,6 @@ if exist "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_balanced.pso" de
 if exist "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_high.pso" del /q "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_high.pso"
 "%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_vs.vso" "%~dp0freetype_native_vs.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_batch_vs.vso" "%~dp0freetype_native_batch_vs.hlsl"
-if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_coverage.pso" "%~dp0freetype_native_coverage.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_argb.pso" "%~dp0freetype_native_argb.hlsl"
