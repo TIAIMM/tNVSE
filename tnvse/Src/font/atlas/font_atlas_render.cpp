@@ -390,7 +390,6 @@ namespace fonthook::vectorfont
 				return nullptr;
 			}
 			thread_local std::vector<PendingQuad> shaderQuads;
-			ExtendedCacheScratchGuard shaderQuadsGuard(shaderQuads);
 			ShaderEffectBuild shaderBuild;
 			const bool shaderQuadsBuilt = BuildShaderEffectQuads(runtime, glyphs,
 				rasterScale, resolvedQuality, tileColor, suppressEffects,
@@ -552,7 +551,6 @@ namespace fonthook::vectorfont
 			if (diagnostics)
 				++diagnostics->cpuAttempts;
 			thread_local std::vector<PendingQuad> quads;
-			ExtendedCacheScratchGuard quadsGuard(quads);
 			quads.clear();
 			PendingQuadBuildFailure buildFailure = PendingQuadBuildFailure::None;
 			if (!BuildPendingQuads(runtime, glyphs, rasterScale, included,

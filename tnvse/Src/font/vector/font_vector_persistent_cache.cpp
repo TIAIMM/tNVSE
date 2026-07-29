@@ -1629,19 +1629,16 @@ namespace fonthook::vectorfont
 				ApplyEffectExtentsToMetrics(*runtime.config,
 					entry->codePoint, *metrics);
 			}
-			if (!g_bDisableFreeTypeExtendedCaches)
+			const auto inserted = role.glyphIdentities.emplace(
+				entry->codePoint,
+				CachedGlyphIdentity{ entry->faceIndex, entry->glyphIndex,
+					entry->renderedCodePoint });
+			if (inserted.second)
 			{
-				const auto inserted = role.glyphIdentities.emplace(
-					entry->codePoint,
-					CachedGlyphIdentity{ entry->faceIndex, entry->glyphIndex,
-						entry->renderedCodePoint });
-				if (inserted.second)
-				{
-					runtime.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-						runtime.cpuMemory.GetBytes()
-							+ sizeof(std::pair<const UInt32, CachedGlyphIdentity>)
-							+ 3u * sizeof(void*));
-				}
+				runtime.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+					runtime.cpuMemory.GetBytes()
+						+ sizeof(std::pair<const UInt32, CachedGlyphIdentity>)
+						+ 3u * sizeof(void*));
 			}
 			return true;
 		}

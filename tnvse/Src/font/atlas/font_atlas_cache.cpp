@@ -1100,8 +1100,6 @@ namespace fonthook::vectorfont
 			std::vector<std::shared_ptr<AtlasResource>> pages;
 			pages.reserve(entries.size() + 1);
 			thread_local std::unordered_map<UInt16, UInt16> availablePageOrdinals;
-			ExtendedCacheScratchGuard availablePageOrdinalsGuard(
-				availablePageOrdinals);
 			if (outBitmapPageOrdinals)
 			{
 				availablePageOrdinals.clear();

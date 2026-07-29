@@ -11,7 +11,6 @@ bool g_bEnableUTF8;
 bool g_bEnableMultibyteFontHook;
 bool g_bEnableFreeTypeFontRendering;
 bool g_bEnableFreeTypeFontRenderingLog;
-bool g_bDisableFreeTypeExtendedCaches = true;
 float g_fFreeTypeFontResolutionScale = 1.0f;
 UINT32 g_uiFreeTypeFontMemoryCacheMB;
 bool g_bDeleteUnusedFreeTypeFontCache;
@@ -127,12 +126,6 @@ void LoadConfig()
 	g_bEnableFreeTypeFontRenderingLog = ReadConfigInt(
 		kFreeTypeFontSection, "bEnableFreeTypeFontRenderingLog", 0, filename);
 	gLog.FormattedMessage("g_bEnableFreeTypeFontRenderingLog: %d", g_bEnableFreeTypeFontRenderingLog);
-
-	g_bDisableFreeTypeExtendedCaches = ReadConfigInt(
-		kFreeTypeFontSection, "bDisableFreeTypeExtendedCaches", 1, filename) != 0;
-	gLog.FormattedMessage(
-		"g_bDisableFreeTypeExtendedCaches: %d (diagnostic; required atlas/font resources and frame-local render state remain enabled)",
-		g_bDisableFreeTypeExtendedCaches);
 
 	const float configuredFreeTypeFontResolutionScale = std::clamp(
 		ReadConfigFloat(kFreeTypeFontSection, "fFreeTypeFontResolutionScale",

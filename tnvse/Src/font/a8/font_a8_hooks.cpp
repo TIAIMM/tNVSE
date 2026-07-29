@@ -507,7 +507,6 @@ namespace fonthook::vectorfont
 			const bool isolatePacketConstants =
 				!draw.stockLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
-				&& !g_bDisableFreeTypeExtendedCaches
 				&& s_pixelConstantBatch.FrameActive();
 			std::optional<NativePixelConstantScope> localConstants;
 			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
@@ -672,19 +671,27 @@ namespace fonthook::vectorfont
 		s_pixelConstantBatch.EndFrame();
 	}
 
+	bool EnsureA8SortedTileConstantCapture(IDirect3DDevice9* device,
+		UInt32 generation)
+	{
+		if (s_pixelConstantBatch.EnsureCaptured(device))
+			return true;
+		MarkNativeA8GenerationFault(generation,
+			s_pixelConstantBatch.Operation(),
+			s_pixelConstantBatch.Result());
+		gLog.FormattedMessage(
+			"tnvse_freetype_native: batched shader-constant isolation fault phase=cross-facade operation=%s hr=0x%08X register=%d generation=%u",
+			s_pixelConstantBatch.Operation(),
+			static_cast<UInt32>(s_pixelConstantBatch.Result()),
+			s_pixelConstantBatch.MismatchRegister(), generation);
+		return false;
+	}
+
 	A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape)
 	{
 		if (!shape)
 			return {};
 		A8State& state = State();
-		if (g_bDisableFreeTypeExtendedCaches)
-		{
-			RecordFreeTypePerf(FreeTypePerfCounter::MetadataLockedLookup);
-			std::lock_guard<std::mutex> lock(state.metadataMutex);
-			const auto found = state.shapeMetadata.find(shape);
-			return found == state.shapeMetadata.end()
-				? A8ShapeMetadataPtr{} : found->second;
-		}
 		const size_t generationSlot = GetMetadataGenerationSlot(shape);
 		const UInt64 generation = state.metadataGenerations[generationSlot].load(
 			std::memory_order_acquire);
@@ -806,6 +813,14 @@ namespace fonthook::vectorfont
 		if (failure == NativeA8FallbackReason::None)
 		{
 			NativeA8ShapePayload* const sourcePayload = payload;
+			const NativeA8CrossFacadeDispatch crossFacadeDispatch =
+				DispatchNativeA8CrossFacadeFrame(pass, currentPass,
+					setupDrawmode, shape);
+			if (crossFacadeDispatch
+				!= NativeA8CrossFacadeDispatch::NotHandled)
+			{
+				return;
+			}
 			NativePacketDrawResult draw = DrawNativePacketSet(pass,
 				currentPass, setupDrawmode, shape, *sourcePayload);
 			if (!draw.runtimeFault)

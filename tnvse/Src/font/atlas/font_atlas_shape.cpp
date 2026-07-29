@@ -414,12 +414,6 @@ namespace fonthook::vectorfont
 					compositeBitmaps;
 				thread_local std::vector<PendingQuad::GlyphSource>
 					compositeSources;
-				ExtendedCacheScratchGuard compositeRequestsGuard(
-					compositeRequests);
-				ExtendedCacheScratchGuard compositeBitmapsGuard(
-					compositeBitmaps);
-				ExtendedCacheScratchGuard compositeSourcesGuard(
-					compositeSources);
 				compositeRequests.clear();
 				const bool direct = GetDirectAtlasGlyphSources(runtime,
 					glyphs, GlyphMaskType::Composite, rasterScale,
@@ -478,7 +472,6 @@ namespace fonthook::vectorfont
 			{
 				thread_local std::array<
 					std::vector<PendingQuad::GlyphSource>, 4> directLayers;
-				ExtendedCacheScratchGuard directLayersGuard(directLayers);
 				auto loadLayer = [&](AtlasLayer layer, GlyphMaskType mask,
 					bool needed)
 				{
@@ -549,10 +542,6 @@ namespace fonthook::vectorfont
 			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
 			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
 			thread_local std::vector<PendingQuad::GlyphSource> sourceResults;
-			ExtendedCacheScratchGuard preparedGuard(prepared);
-			ExtendedCacheScratchGuard bitmapRequestsGuard(bitmapRequests);
-			ExtendedCacheScratchGuard bitmapResultsGuard(bitmapResults);
-			ExtendedCacheScratchGuard sourceResultsGuard(sourceResults);
 			prepared.clear();
 			prepared.reserve(glyphs.size());
 			bitmapRequests.clear();
@@ -752,9 +741,6 @@ namespace fonthook::vectorfont
 			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
 			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
 			thread_local std::vector<PendingQuad::GlyphSource> sourceResults;
-			ExtendedCacheScratchGuard bitmapRequestsGuard(bitmapRequests);
-			ExtendedCacheScratchGuard bitmapResultsGuard(bitmapResults);
-			ExtendedCacheScratchGuard sourceResultsGuard(sourceResults);
 			std::array<MtsdfSharedRasterProfile, 2> rasterProfiles;
 			std::array<bool, 2> rasterProfileReady = {};
 			for (const AtlasGlyphInstance& instance : glyphs)
@@ -2502,7 +2488,6 @@ namespace fonthook::vectorfont
 
 			thread_local DirectAtlasGlyphBatch batch;
 			batch.Clear();
-			ExtendedCacheScratchGuard batchGuard(batch);
 			struct BatchReset
 			{
 				DirectAtlasGlyphBatch& batch;
@@ -2568,7 +2553,6 @@ namespace fonthook::vectorfont
 
 			thread_local DirectAtlasGlyphBatch batch;
 			batch.Clear();
-			ExtendedCacheScratchGuard batchGuard(batch);
 			struct BatchReset
 			{
 				DirectAtlasGlyphBatch& batch;
@@ -2758,7 +2742,6 @@ namespace fonthook::vectorfont
 			const A8EffectShapeConfig& effects)
 		{
 			AtlasState& state = State();
-			if (!g_bDisableFreeTypeExtendedCaches)
 			{
 				std::lock_guard<std::mutex> lock(state.textArtifactMutex);
 				auto existing = state.textArtifactCache.find(key);
@@ -2980,8 +2963,6 @@ namespace fonthook::vectorfont
 			if (!result)
 				return {};
 			const size_t bytes = GetNativeA8PayloadTemplateBytes(*result);
-			if (g_bDisableFreeTypeExtendedCaches)
-				return result;
 			{
 				std::lock_guard<std::mutex> lock(state.textArtifactMutex);
 				auto existing = state.textArtifactCache.find(key);
@@ -3193,7 +3174,6 @@ namespace fonthook::vectorfont
 				return nullptr;
 			const std::vector<PendingQuad>* activeQuads = &quads;
 			thread_local std::vector<PendingQuad> bakedQuads;
-			ExtendedCacheScratchGuard bakedQuadsGuard(bakedQuads);
 			const bool precomposedArgb = pixelMode == AtlasPixelMode::Argb32
 				&& std::all_of(quads.begin(), quads.end(),
 					[](const PendingQuad& quad)
@@ -3231,9 +3211,6 @@ namespace fonthook::vectorfont
 				roleBitmaps;
 			thread_local std::array<std::unordered_map<UInt64, ResolvedPlacement>, 2>
 				placementRecords;
-			ExtendedCacheScratchGuard roleUniqueGuard(roleUnique);
-			ExtendedCacheScratchGuard roleBitmapsGuard(roleBitmaps);
-			ExtendedCacheScratchGuard placementRecordsGuard(placementRecords);
 			for (size_t roleIndex = 0; roleIndex < roleUnique.size(); ++roleIndex)
 			{
 				roleUnique[roleIndex].clear();
@@ -3337,8 +3314,6 @@ namespace fonthook::vectorfont
 				if (bitmaps.empty())
 					continue;
 				thread_local std::vector<UInt16> bitmapPageOrdinals;
-				ExtendedCacheScratchGuard bitmapPageOrdinalsGuard(
-					bitmapPageOrdinals);
 				const VectorFontByteClass byteClass =
 					static_cast<VectorFontByteClass>(roleIndex);
 				std::vector<std::shared_ptr<AtlasResource>> roleAtlases =
@@ -3482,7 +3457,6 @@ namespace fonthook::vectorfont
 				}
 			}
 			thread_local std::vector<PendingQuad> pagedQuads;
-			ExtendedCacheScratchGuard pagedQuadsGuard(pagedQuads);
 			pagedQuads = *activeQuads;
 			const NiPoint3 batchOrigin = pagedQuads.front().pen;
 			outAtlases.clear();
@@ -3535,8 +3509,6 @@ namespace fonthook::vectorfont
 					}
 				}
 				thread_local std::vector<PendingQuad> orderedDirectQuads;
-				ExtendedCacheScratchGuard orderedDirectQuadsGuard(
-					orderedDirectQuads);
 				orderedDirectQuads.resize(pagedQuads.size());
 				for (const PendingQuad& quad : pagedQuads)
 				{

@@ -104,6 +104,7 @@ namespace fonthook::vectorfont
 			bool compositeShiftedShadow = false;
 			bool writeEffectAlpha = false;
 			bool usesLiveTileRgb = true;
+			bool crossFacade = false;
 
 			bool operator==(const NativeProfileKey& other) const
 			{
@@ -117,6 +118,7 @@ namespace fonthook::vectorfont
 						== other.compositeShiftedShadow
 					&& writeEffectAlpha == other.writeEffectAlpha
 					&& usesLiveTileRgb == other.usesLiveTileRgb
+					&& crossFacade == other.crossFacade
 					&& constantBits == other.constantBits;
 			}
 		};
@@ -141,6 +143,7 @@ namespace fonthook::vectorfont
 				mix(key.compositeShiftedShadow ? 1u : 0u);
 				mix(key.writeEffectAlpha ? 1u : 0u);
 				mix(key.usesLiveTileRgb ? 1u : 0u);
+				mix(key.crossFacade ? 1u : 0u);
 				for (UInt32 value : key.constantBits)
 					mix(value);
 				return hash;
@@ -192,6 +195,9 @@ namespace fonthook::vectorfont
 			NiDX9ShaderDeclarationPtr declaration;
 			IDirect3DVertexDeclaration9* d3dDeclaration = nullptr;
 			NiD3DVertexShaderPtr vertexShader;
+			NiDX9ShaderDeclarationPtr crossFacadeDeclaration;
+			IDirect3DVertexDeclaration9* crossFacadeD3DDeclaration = nullptr;
+			NiD3DVertexShaderPtr crossFacadeVertexShader;
 			NiD3DPixelShaderPtr coverageShader;
 			NiD3DPixelShaderPtr argbShader;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
@@ -408,8 +414,7 @@ namespace fonthook::vectorfont
 				? block->stockUpdateConstants
 				: reinterpret_cast<StockUpdateConstantsFn>(kTileShaderUpdateConstants);
 			NativeFacadeShaderBatch& batch = s_facadeShaderBatch;
-			const bool batchActive = !g_bDisableFreeTypeExtendedCaches
-				&& batch.depth != 0;
+			const bool batchActive = batch.depth != 0;
 			// Retail TileShader::UpdateConstants is also a live render-state
 			// synchronization point: it reapplies Tile scissor and alpha state.
 			// Every native packet invokes a separate stock Tile render pass, so a
@@ -452,8 +457,7 @@ namespace fonthook::vectorfont
 				return;
 			}
 			NativeSortedShaderBatch& sortedBatch = s_sortedShaderBatch;
-			const bool sortedBatchActive =
-				!g_bDisableFreeTypeExtendedCaches && sortedBatch.depth != 0;
+			const bool sortedBatchActive = sortedBatch.depth != 0;
 			if (sortedBatchActive
 				&& (sortedBatch.device != device
 					|| sortedBatch.generation != generation->id))
@@ -473,7 +477,15 @@ namespace fonthook::vectorfont
 			// map on every packet, so c0 must be republished after every stock call
 			// even when its value is unchanged. Only tNVSE-owned c1-c8 may be reused.
 			std::array<float, 4> tileConstant;
-			if (!ResolveStockTilePixelConstant(
+			if (profile->key.crossFacade)
+			{
+				// The batch vertex shader has already multiplied each facade's
+				// exact live Tile RGB/alpha into COLOR0. Retain the stock call above
+				// for render-state synchronization, then neutralize only the pixel
+				// color constant so it is not applied a second time.
+				tileConstant = { 1.0f, 1.0f, 1.0f, 1.0f };
+			}
+			else if (!ResolveStockTilePixelConstant(
 				properties, tileConstant.data()))
 			{
 				MarkGenerationFault(generation, "ResolveStockTilePixelConstant", E_FAIL);
@@ -622,8 +634,7 @@ namespace fonthook::vectorfont
 			if (simpleColorProfile)
 				return;
 
-			const bool sortedSamplerReady = !g_bDisableFreeTypeExtendedCaches
-				&& sortedBatch.depth
+			const bool sortedSamplerReady = sortedBatch.depth
 				&& sortedBatch.samplerReady
 				&& sortedBatch.device == device
 				&& sortedBatch.generation == generation->id;
@@ -667,7 +678,8 @@ namespace fonthook::vectorfont
 		}
 
 		NativeProfileKey MakeProfileKey(const NativeA8PacketTemplate& packet,
-			NativeA8Sampling sampling, bool writeEffectAlpha)
+			NativeA8Sampling sampling, bool writeEffectAlpha,
+			bool crossFacade)
 		{
 			NativeProfileKey key;
 			key.shaderClass = packet.shaderClass;
@@ -680,6 +692,7 @@ namespace fonthook::vectorfont
 				packet.compositeShiftedShadow;
 			key.writeEffectAlpha = writeEffectAlpha;
 			key.usesLiveTileRgb = packet.usesLiveTileRgb;
+			key.crossFacade = crossFacade;
 			std::memcpy(key.constantBits.data(), packet.constants.data(),
 				key.constantBits.size() * sizeof(UInt32));
 			return key;
@@ -878,9 +891,15 @@ namespace fonthook::vectorfont
 						specialized ? 1u : 0u);
 				}
 			}
-			NiD3DVertexShader* vertexShader =
-				generation.vertexShader.m_pObject;
+			NiD3DVertexShader* vertexShader = key.crossFacade
+				? generation.crossFacadeVertexShader.m_pObject
+				: generation.vertexShader.m_pObject;
+			NiDX9ShaderDeclaration* shaderDeclaration = key.crossFacade
+				? generation.crossFacadeDeclaration.m_pObject
+				: generation.declaration.m_pObject;
 			if (!vertexShader || !vertexShader->GetShaderHandle())
+				return nullptr;
+			if (!shaderDeclaration)
 				return nullptr;
 
 			NiPointer<TileShader> shaderGuard =
@@ -904,9 +923,9 @@ namespace fonthook::vectorfont
 				&& packet.layer != 3;
 
 			profile->shaderOwner = shaderGuard;
-			shader->m_spShaderDecl = generation.declaration.m_pObject;
-			shader->spShaderDeclarations[0] = generation.declaration.m_pObject;
-			shader->spShaderDeclarations[1] = generation.declaration.m_pObject;
+			shader->m_spShaderDecl = shaderDeclaration;
+			shader->spShaderDeclarations[0] = shaderDeclaration;
+			shader->spShaderDeclarations[1] = shaderDeclaration;
 			for (NiD3DVertexShaderPtr& slot : shader->spVertexShaders)
 				slot = vertexShader;
 			for (NiD3DPixelShaderPtr& slot : shader->spPixelShaders)
@@ -934,13 +953,13 @@ namespace fonthook::vectorfont
 		}
 
 		bool CreateNativeDeclaration(NativeShaderGeneration& generation,
-			const char*& failure)
+			bool crossFacade, const char*& failure)
 		{
 			// Runtime object size is 0x38. The 0xD4 CommonLib declaration includes
 			// static lookup tables incorrectly; never allocate/copy it with sizeof.
 			NiDX9ShaderDeclarationPtr declaration =
 				CdeclCall<NiDX9ShaderDeclaration*>(kShaderDeclarationCreate,
-					generation.renderer, 5u, 1u);
+					generation.renderer, crossFacade ? 6u : 5u, 1u);
 			if (!declaration)
 			{
 				failure = "declaration-factory";
@@ -963,7 +982,11 @@ namespace fonthook::vectorfont
 					ParameterType::SPTYPE_FLOAT3, 0)
 				&& declaration->SetEntry(4, 0,
 					Parameter::SHADERPARAM_NI_TEXCOORD2,
-					ParameterType::SPTYPE_NORMUSHORT4, 0);
+					ParameterType::SPTYPE_NORMUSHORT4, 0)
+				&& (!crossFacade
+					|| declaration->SetEntry(5, 0,
+						Parameter::SHADERPARAM_NI_TEXCOORD3,
+						ParameterType::SPTYPE_FLOAT4, 0));
 			if (!entriesReady)
 			{
 				failure = "declaration-entries";
@@ -977,8 +1000,16 @@ namespace fonthook::vectorfont
 				failure = "d3d-declaration";
 				return false;
 			}
-			generation.declaration = declaration;
-			generation.d3dDeclaration = d3dDeclaration;
+			if (crossFacade)
+			{
+				generation.crossFacadeDeclaration = declaration;
+				generation.crossFacadeD3DDeclaration = d3dDeclaration;
+			}
+			else
+			{
+				generation.declaration = declaration;
+				generation.d3dDeclaration = d3dDeclaration;
+			}
 			return true;
 		}
 
@@ -1003,6 +1034,8 @@ namespace fonthook::vectorfont
 				GetConfiguredDistanceFieldMethod();
 
 			generation->vertexShader = createVS("tnvse_freetype_native_vs.vso");
+			generation->crossFacadeVertexShader =
+				createVS("tnvse_freetype_native_batch_vs.vso");
 			if (g_bEnableFreeTypeFontAggressivePerformanceMode)
 			{
 				generation->coverageShader =
@@ -1109,9 +1142,31 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			if (!CreateNativeDeclaration(*generation, failure))
+			if (!CreateNativeDeclaration(*generation, false, failure))
 				return nullptr;
 			generation->vertexShader->m_hDecl = generation->d3dDeclaration;
+			const bool crossFacadeVertexReady =
+				HasShaderHandle(generation->crossFacadeVertexShader);
+			const char* crossFacadeFailure = crossFacadeVertexReady
+				? "batch-declaration" : "batch-vertex-shader";
+			if (crossFacadeVertexReady
+				&& CreateNativeDeclaration(*generation, true,
+					crossFacadeFailure))
+			{
+				generation->crossFacadeVertexShader->m_hDecl =
+					generation->crossFacadeD3DDeclaration;
+			}
+			else
+			{
+				// Cross-facade batching is optional. A missing loose batch VSO or
+				// declaration must not disable the proven per-facade renderer.
+				generation->crossFacadeVertexShader = nullptr;
+				generation->crossFacadeDeclaration = nullptr;
+				generation->crossFacadeD3DDeclaration = nullptr;
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: cross-facade shader unavailable reason=%s; retaining per-facade native route",
+					crossFacadeFailure);
+			}
 			return generation.release();
 		}
 
@@ -1254,13 +1309,17 @@ namespace fonthook::vectorfont
 					== DistanceFieldMethod::Mtsdf
 				? "lazy-36" : "disabled";
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s vertexAa=analytic-c4-per-packet",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s vertexAa=analytic-c4-per-packet crossFacade=%s",
 			candidate->id, candidate->device,
 			g_bEnableFreeTypeFontAggressivePerformanceMode
 				? "argb-composite" : "distance-field",
 			g_bEnableFreeTypeFontAggressivePerformanceMode
 				? "disabled" : GetConfiguredDistanceFieldMethodName(),
-			compositeProfileMode);
+			compositeProfileMode,
+			HasShaderHandle(candidate->crossFacadeVertexShader)
+				&& candidate->crossFacadeDeclaration
+				&& candidate->crossFacadeD3DDeclaration
+					? "ready" : "unavailable");
 		return true;
 	}
 
@@ -1322,6 +1381,17 @@ namespace fonthook::vectorfont
 		return current && current->id == generation
 			&& GenerationMatchesCurrentDevice(current)
 			? current->d3dDeclaration : nullptr;
+	}
+
+	IDirect3DVertexDeclaration9* GetNativeA8CrossFacadeD3DDeclaration(
+		UInt32 generation)
+	{
+		NativeShaderGeneration* current = s_publishedGeneration.load(
+			std::memory_order_acquire);
+		return current && current->id == generation
+			&& GenerationMatchesCurrentDevice(current)
+			&& HasShaderHandle(current->crossFacadeVertexShader)
+			? current->crossFacadeD3DDeclaration : nullptr;
 	}
 
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation)
@@ -1412,8 +1482,10 @@ namespace fonthook::vectorfont
 			MarkGenerationFault(current, operation, result);
 	}
 
-	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
-		const NiTriShape* facade, bool scaledFillSampling)
+	TileShader* ResolveNativeA8PacketShaderImpl(
+		const NativeA8PacketTemplate& packet,
+		const NiTriShape* facade, bool scaledFillSampling,
+		bool crossFacade)
 	{
 		if (!IsNativeA8RendererAvailable())
 			return nullptr;
@@ -1421,6 +1493,13 @@ namespace fonthook::vectorfont
 			std::memory_order_acquire);
 		if (!GenerationMatchesCurrentDevice(generation))
 			return nullptr;
+		if (crossFacade
+			&& (!HasShaderHandle(generation->crossFacadeVertexShader)
+				|| !generation->crossFacadeDeclaration
+				|| !generation->crossFacadeD3DDeclaration))
+		{
+			return nullptr;
+		}
 
 		const NativeA8Sampling sampling = ResolveEffectiveSampling(packet,
 			scaledFillSampling);
@@ -1430,7 +1509,7 @@ namespace fonthook::vectorfont
 			&& generation->supportsSeparateAlpha
 			&& alpha && alpha->GetAlphaBlending();
 		const NativeProfileKey key = MakeProfileKey(packet, sampling,
-			writeEffectAlpha);
+			writeEffectAlpha, crossFacade);
 		std::shared_ptr<const NativeProfileMap> snapshot =
 			generation->profiles.load(std::memory_order_acquire);
 		auto found = snapshot->find(key);
@@ -1448,6 +1527,8 @@ namespace fonthook::vectorfont
 		NativeShaderProfile* profile = CreateProfile(*generation, packet, key);
 		if (!profile)
 		{
+			if (crossFacade)
+				return nullptr;
 			if (packet.shaderClass == NativeA8ShaderClass::Composite)
 				return nullptr;
 			MarkGenerationFault(generation, "profile-create",
@@ -1461,6 +1542,21 @@ namespace fonthook::vectorfont
 			std::shared_ptr<const NativeProfileMap>(std::move(updated)),
 			std::memory_order_release);
 		return profile->shader;
+	}
+
+	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
+		const NiTriShape* facade, bool scaledFillSampling)
+	{
+		return ResolveNativeA8PacketShaderImpl(packet, facade,
+			scaledFillSampling, false);
+	}
+
+	TileShader* ResolveNativeA8CrossFacadePacketShader(
+		const NativeA8PacketTemplate& packet,
+		const NiTriShape* facade, bool scaledFillSampling)
+	{
+		return ResolveNativeA8PacketShaderImpl(packet, facade,
+			scaledFillSampling, true);
 	}
 
 }

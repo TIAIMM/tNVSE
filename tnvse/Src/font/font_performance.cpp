@@ -251,6 +251,44 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualValidated)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_cross_facade_perf: cross_facade_groups=%llu facades=%llu source_draws=%llu draws=%llu saved=%llu vertices=%llu upload_bytes=%llu followers_skipped=%llu candidates=%llu state_fallback=%llu cost_eligible=%llu cost_selected=%llu cost_fallback=%llu estimated_saved_ns=%llu estimated_merge_ns=%llu capacity_fallback=%llu resource_fallback=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeGroup)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeFacade)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeSourceDraw)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeDraw)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeDrawSaved)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeVertex)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeUploadBytes)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeFollowerSkipped)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeCandidate)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeStateFallback)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeCostEligible)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeCostSelected)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeCostFallback)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CrossFacadeEstimatedSavedNanoseconds)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CrossFacadeEstimatedMergeNanoseconds)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeCapacityFallback)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CrossFacadeResourceFallback)]);
 		const DurationSummary layout =
 			ConsumeDurationSummary(FreeTypePerfPhase::Layout);
 		const DurationSummary sidecar =
@@ -264,11 +302,14 @@ namespace fonthook::vectorfont
 			ConsumeDurationSummary(FreeTypePerfPhase::Preflight);
 		const DurationSummary submit =
 			ConsumeDurationSummary(FreeTypePerfPhase::Submit);
+		const DurationSummary crossFacadePrepare =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::CrossFacadePrepare);
 		const DurationSummary extendedFnt =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::ExtendedFntGeometry);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf_timing: layout_n=%llu median_us=%.3f p95_us=%.3f sidecar_n=%llu median_us=%.3f p95_us=%.3f direct_compile_n=%llu median_us=%.3f p95_us=%.3f native_registration_n=%llu median_us=%.3f p95_us=%.3f preflight_n=%llu median_us=%.3f p95_us=%.3f submit_n=%llu median_us=%.3f p95_us=%.3f extended_fnt_geometry_n=%llu median_us=%.3f p95_us=%.3f",
+			"tnvse_freetype_perf_timing: layout_n=%llu median_us=%.3f p95_us=%.3f sidecar_n=%llu median_us=%.3f p95_us=%.3f direct_compile_n=%llu median_us=%.3f p95_us=%.3f native_registration_n=%llu median_us=%.3f p95_us=%.3f preflight_n=%llu median_us=%.3f p95_us=%.3f submit_n=%llu median_us=%.3f p95_us=%.3f cross_facade_prepare_n=%llu median_us=%.3f p95_us=%.3f extended_fnt_geometry_n=%llu median_us=%.3f p95_us=%.3f",
 			layout.count, layout.medianMicroseconds,
 			layout.p95Microseconds,
 			sidecar.count, sidecar.medianMicroseconds,
@@ -283,6 +324,9 @@ namespace fonthook::vectorfont
 			preflight.p95Microseconds,
 			submit.count, submit.medianMicroseconds,
 			submit.p95Microseconds,
+			crossFacadePrepare.count,
+			crossFacadePrepare.medianMicroseconds,
+			crossFacadePrepare.p95Microseconds,
 			extendedFnt.count, extendedFnt.medianMicroseconds,
 			extendedFnt.p95Microseconds);
 	}

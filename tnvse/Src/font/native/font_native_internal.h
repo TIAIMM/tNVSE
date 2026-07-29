@@ -10,6 +10,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -22,6 +23,8 @@ namespace fonthook::vectorfont
 	struct A8ShapeMetadata;
 	inline constexpr UInt32 kNativeA8MaximumQuads =
 		std::numeric_limits<UInt16>::max() / 4u;
+	inline constexpr UInt32 kNativeA8CrossFacadeVertexCapacity =
+		kNativeA8MaximumQuads * 4u * 2u;
 	inline constexpr size_t kNativeA8PacketConstantRegisterCount = 8;
 	inline constexpr size_t kNativeA8PacketConstantFloatCount =
 		kNativeA8PacketConstantRegisterCount * 4;
@@ -108,6 +111,21 @@ namespace fonthook::vectorfont
 		UInt16 glyphV1 = 0;
 	};
 	static_assert(sizeof(NativeA8GpuVertex) == 11 * sizeof(float));
+
+	// Frame-local cross-facade batches retain the ordinary pixel-shader ABI.
+	// The batch vertex shader multiplies this exact live Tile value into COLOR0
+	// before emitting the same interpolants as freetype_native_vs.hlsl.
+	struct NativeA8CrossFacadeGpuVertex
+	{
+		NativeA8GpuVertex source;
+		float tileR = 1.0f;
+		float tileG = 1.0f;
+		float tileB = 1.0f;
+		float tileA = 1.0f;
+	};
+	static_assert(offsetof(NativeA8CrossFacadeGpuVertex, tileR)
+		== sizeof(NativeA8GpuVertex));
+	static_assert(sizeof(NativeA8CrossFacadeGpuVertex) == 15 * sizeof(float));
 
 	struct NativeA8PacketTemplate
 	{
@@ -232,6 +250,24 @@ namespace fonthook::vectorfont
 		UInt64 validationToken = 0;
 	};
 
+	struct NativeA8CrossFacadeFrameItem
+	{
+		NiTriShape* facade = nullptr;
+		const A8ShapeMetadata* metadata = nullptr;
+		NativeA8ShapePayload* payload = nullptr;
+		NativeA8FallbackReason preflightResult =
+			NativeA8FallbackReason::RuntimeFault;
+		UInt32 generation = 0;
+		bool barrier = true;
+	};
+
+	enum class NativeA8CrossFacadeDispatch : UInt8
+	{
+		NotHandled,
+		LeaderExecuted,
+		FollowerSuppressed
+	};
+
 	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason);
 	const char* NativeA8PacketPrepareFailureName(
 		NativeA8PacketPrepareFailure failure);
@@ -272,6 +308,9 @@ namespace fonthook::vectorfont
 		NiTriShape* facade, NativeA8ShapePayload& payload,
 		NativeA8RingSubmission& submission, UInt32 packetIndex,
 		NiTriShape*& proxyShape);
+	NativeA8FallbackReason SkipNativeA8RingPacket(
+		NativeA8ShapePayload& payload,
+		NativeA8RingSubmission& submission, UInt32 packetIndex);
 	void EndNativeA8RingSubmission(NativeA8RingSubmission& submission);
 	void ReleaseNativeA8RingResources();
 	void PrepareSortedNativeA8Payloads(
@@ -292,6 +331,8 @@ namespace fonthook::vectorfont
 		const char* operation, HRESULT result);
 	UInt32 GetNativeA8ShaderGeneration();
 	IDirect3DVertexDeclaration9* GetNativeA8D3DDeclaration(UInt32 generation);
+	IDirect3DVertexDeclaration9* GetNativeA8CrossFacadeD3DDeclaration(
+		UInt32 generation);
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation);
 	void BeginNativeA8SortedShaderBatch();
 	void EndNativeA8SortedShaderBatch();
@@ -300,8 +341,23 @@ namespace fonthook::vectorfont
 	void EndNativeA8FacadeShaderBatch();
 	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
 		const NiTriShape* facade, bool scaledFillSampling);
+	TileShader* ResolveNativeA8CrossFacadePacketShader(
+		const NativeA8PacketTemplate& packet,
+		const NiTriShape* facade, bool scaledFillSampling);
 	NativeA8FallbackReason PrepareNativeA8Group(NiTriShape* facade,
 		const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload);
+
+	void PrepareNativeA8CrossFacadeFrame(
+		const std::vector<NativeA8CrossFacadeFrameItem>& items,
+		UInt32 generation);
+	void BeginNativeA8CrossFacadeFrameDispatch();
+	void SuspendNativeA8CrossFacadeFrameDispatch();
+	void ResumeNativeA8CrossFacadeFrameDispatch();
+	void EndNativeA8CrossFacadeFrameDispatch();
+	NativeA8CrossFacadeDispatch DispatchNativeA8CrossFacadeFrame(
+		BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+		bool setupDrawmode, NiTriShape* facade);
+	void ReleaseNativeA8CrossFacadeResources();
 
 	bool HookNativeA8Accumulator();
 	bool IsNativeA8AccumulatorHookCurrent();

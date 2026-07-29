@@ -933,31 +933,28 @@ namespace fonthook::vectorfont
 		const BitmapCacheKey& key, PersistentBitmapProfile*& persistentProfile)
 	{
 		persistentProfile = nullptr;
-		if (!g_bDisableFreeTypeExtendedCaches)
+		auto existing = state.bitmapCache.find(key);
+		if (existing != state.bitmapCache.end())
 		{
-			auto existing = state.bitmapCache.find(key);
-			if (existing != state.bitmapCache.end())
+			TouchBitmapCacheEntry(state, existing->second, key);
+			RecordFreeTypePerf(FreeTypePerfCounter::BitmapMemoryHit);
+			if (existing->second.sourceFontId != runtime.config->fontId)
 			{
-				TouchBitmapCacheEntry(state, existing->second, key);
-				RecordFreeTypePerf(FreeTypePerfCounter::BitmapMemoryHit);
-				if (existing->second.sourceFontId != runtime.config->fontId)
+				RecordFreeTypePerf(FreeTypePerfCounter::BitmapCrossFontHit);
+				if (g_bEnableFreeTypeFontRenderingLog
+					&& !state.loggedCrossFontBitmapShare)
 				{
-					RecordFreeTypePerf(FreeTypePerfCounter::BitmapCrossFontHit);
-					if (g_bEnableFreeTypeFontRenderingLog
-						&& !state.loggedCrossFontBitmapShare)
-					{
-						state.loggedCrossFontBitmapShare = true;
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_font: first cross-font bitmap cache hit sourceFont=%u targetFont=%u path=%ls face=%d glyph=%u size=%ux%u mask=%u",
-							existing->second.sourceFontId, runtime.config->fontId,
-							resolved.runtimeFace->file->path.c_str(),
-							key.fontFaceIndex, key.glyphIndex,
-							key.effectiveWidth, key.effectiveHeight,
-							key.maskType);
-					}
+					state.loggedCrossFontBitmapShare = true;
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: first cross-font bitmap cache hit sourceFont=%u targetFont=%u path=%ls face=%d glyph=%u size=%ux%u mask=%u",
+						existing->second.sourceFontId, runtime.config->fontId,
+						resolved.runtimeFace->file->path.c_str(),
+						key.fontFaceIndex, key.glyphIndex,
+						key.effectiveWidth, key.effectiveHeight,
+						key.maskType);
 				}
-				return existing->second.bitmap;
 			}
+			return existing->second.bitmap;
 		}
 
 		const PersistentBitmapProfileKey persistentKey =
@@ -988,25 +985,22 @@ namespace fonthook::vectorfont
 						key.maskType, static_cast<UInt32>(diskBitmap->alpha.size()),
 						persistentProfile->recordCount);
 				}
-				if (!g_bDisableFreeTypeExtendedCaches)
+				const size_t bytes =
+					sizeof(GlyphBitmap) + diskBitmap->alpha.capacity();
+				state.bitmapLru.push_front(key);
+				const auto [inserted, success] = state.bitmapCache.emplace(key,
+					BitmapCacheEntry{ diskBitmap, bytes,
+						state.bitmapLru.begin(), runtime.config->fontId });
+				if (!success)
 				{
-					const size_t bytes =
-						sizeof(GlyphBitmap) + diskBitmap->alpha.capacity();
-					state.bitmapLru.push_front(key);
-					const auto [inserted, success] = state.bitmapCache.emplace(key,
-						BitmapCacheEntry{ diskBitmap, bytes,
-							state.bitmapLru.begin(), runtime.config->fontId });
-					if (!success)
-					{
-						state.bitmapLru.pop_front();
-						return inserted->second.bitmap;
-					}
-					inserted->second.cpuMemory.Reset(
-						CpuMemoryCategory::GlyphBitmap,
-						GetBitmapCacheEntryCpuBytes());
-					state.bitmapCacheBytes += bytes;
-					TrimBitmapCache(state);
+					state.bitmapLru.pop_front();
+					return inserted->second.bitmap;
 				}
+				inserted->second.cpuMemory.Reset(
+					CpuMemoryCategory::GlyphBitmap,
+					GetBitmapCacheEntryCpuBytes());
+				state.bitmapCacheBytes += bytes;
+				TrimBitmapCache(state);
 				return diskBitmap;
 			}
 			RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskMiss);
@@ -1047,12 +1041,6 @@ namespace fonthook::vectorfont
 		const ResolvedGlyph& resolved, GlyphMaskType maskType, float safeScale,
 		const BitmapCacheKey& key)
 	{
-		if (g_bDisableFreeTypeExtendedCaches)
-		{
-			RecordFreeTypePerf(FreeTypePerfCounter::BitmapRasterized);
-			return BuildGlyphBitmap(
-				state, runtime, resolved, maskType, safeScale, key);
-		}
 		PersistentBitmapProfile* persistentProfile = nullptr;
 		if (std::shared_ptr<const GlyphBitmap> cached = FindCachedGlyphBitmapLocked(
 			state, runtime, resolved, key, persistentProfile))
@@ -1117,10 +1105,8 @@ namespace fonthook::vectorfont
 		FreeTypeState& state = State();
 		std::lock_guard<std::recursive_mutex> lock(state.mutex);
 		const float safeScale = SanitizeBitmapRasterScale(rasterScale);
-		BitmapBatchDedupeScratch localScratch;
 		thread_local BitmapBatchDedupeScratch cachedScratch;
-		BitmapBatchDedupeScratch& scratch = g_bDisableFreeTypeExtendedCaches
-			? localScratch : cachedScratch;
+		BitmapBatchDedupeScratch& scratch = cachedScratch;
 		scratch.Prepare(requests.size());
 		const size_t slotMask = scratch.slots.size() - 1;
 		UInt64 duplicateCount = 0;
@@ -1278,10 +1264,8 @@ namespace fonthook::vectorfont
 		UInt64 duplicateCount = 0;
 		{
 			std::lock_guard<std::recursive_mutex> lock(state.mutex);
-			BitmapBatchDedupeScratch localScratch;
 			thread_local BitmapBatchDedupeScratch cachedScratch;
-			BitmapBatchDedupeScratch& scratch =
-				g_bDisableFreeTypeExtendedCaches ? localScratch : cachedScratch;
+			BitmapBatchDedupeScratch& scratch = cachedScratch;
 			scratch.Prepare(requests.size());
 			const size_t slotMask = scratch.slots.size() - 1;
 			for (size_t requestIndex = 0; requestIndex < requests.size(); ++requestIndex)
@@ -1479,11 +1463,6 @@ namespace fonthook::vectorfont
 			{
 				if (!item.bitmap)
 					continue;
-				if (g_bDisableFreeTypeExtendedCaches)
-				{
-					results[item.requestIndex] = item.bitmap;
-					continue;
-				}
 				auto existing = state.bitmapCache.find(item.key);
 				if (existing != state.bitmapCache.end())
 				{

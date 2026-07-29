@@ -488,8 +488,8 @@ namespace fonthook::vectorfont
 				renderer->m_kD3DCaps9.MaxVertexIndex) + 1u;
 			UInt64 desired = std::min<UInt64>(kRingTargetVertexCapacity, capLimit);
 			desired &= ~static_cast<UInt64>(3u);
-			UInt64 staticDesired = g_bDisableFreeTypeExtendedCaches
-				? 0 : std::min<UInt64>(kStaticInitialVertexCapacity, capLimit);
+			UInt64 staticDesired = std::min<UInt64>(
+				kStaticInitialVertexCapacity, capLimit);
 			staticDesired &= ~static_cast<UInt64>(3u);
 			if (desired < requiredVertices || desired > std::numeric_limits<UInt32>::max())
 			{
@@ -885,8 +885,7 @@ namespace fonthook::vectorfont
 		UInt32 AcquireProxyLocked(NativeA8RingState& state,
 			NativeA8RingThreadState& thread)
 		{
-			if (!g_bDisableFreeTypeExtendedCaches
-				&& thread.preferredProxy < state.proxyCount
+			if (thread.preferredProxy < state.proxyCount
 				&& !state.proxies[thread.preferredProxy].inUse)
 			{
 				state.proxies[thread.preferredProxy].inUse = true;
@@ -897,8 +896,7 @@ namespace fonthook::vectorfont
 				if (!state.proxies[index].inUse)
 				{
 					state.proxies[index].inUse = true;
-					if (!g_bDisableFreeTypeExtendedCaches)
-						thread.preferredProxy = index;
+					thread.preferredProxy = index;
 					return index;
 				}
 			}
@@ -909,8 +907,6 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount, UInt32& baseVertex)
 		{
-			if (g_bDisableFreeTypeExtendedCaches)
-				return false;
 			if (!state.staticVertexBuffer)
 				return false;
 			const UInt32 resourceSerial = state.resourceSerial.load(
@@ -980,8 +976,6 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount)
 		{
-			if (g_bDisableFreeTypeExtendedCaches)
-				return nullptr;
 			// Candidate observation must use the strategy's growth ceiling rather
 			// than the current allocation. Otherwise a payload larger than the
 			// initial 4 MiB buffer can never mature and therefore can never trigger
@@ -1127,8 +1121,6 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount, UInt32& baseVertex)
 		{
-			if (g_bDisableFreeTypeExtendedCaches)
-				return false;
 			const UInt32 resourceSerial = state.resourceSerial.load(
 				std::memory_order_relaxed);
 			NativeA8PayloadResidencyCache& residency =
@@ -1201,8 +1193,6 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplate& payloadTemplate,
 			UInt32 vertexCount)
 		{
-			if (g_bDisableFreeTypeExtendedCaches)
-				return false;
 			const NativeA8PayloadResidencyCache& residency =
 				payloadTemplate.residency;
 			return residency.staticResourceSerial
@@ -1513,20 +1503,6 @@ namespace fonthook::vectorfont
 		{
 			return;
 		}
-		if (g_bDisableFreeTypeExtendedCaches)
-		{
-			if (state.activeSubmissions.load(std::memory_order_acquire))
-				return;
-			state.nextVertex = 0;
-			state.uploadedPayloads.clear();
-			state.uploadedPayloads.rehash(0);
-			state.staticCandidates.clear();
-			state.staticPayloads.clear();
-			s_ringThread.uploadedPayload = {};
-			s_ringThread.staticCandidate = {};
-			s_ringThread.staticPayload = {};
-		}
-
 		auto isValidPayload = [](
 			const NativeA8PayloadTemplatePtr& payloadTemplate)
 		{
@@ -2056,11 +2032,8 @@ namespace fonthook::vectorfont
 				}
 
 				state.nextVertex = startVertex + totalVertices;
-				if (!g_bDisableFreeTypeExtendedCaches)
-				{
-					PublishUploadedPayloadLocked(state, payload.payloadTemplate,
-						startVertex, totalVertices);
-				}
+				PublishUploadedPayloadLocked(state, payload.payloadTemplate,
+					startVertex, totalVertices);
 				RefreshRingCpuMemoryLocked(state);
 				RecordFreeTypePerf(FreeTypePerfCounter::DynamicVertexUpload);
 				RecordFreeTypePerf(
@@ -2209,6 +2182,35 @@ namespace fonthook::vectorfont
 		return NativeA8FallbackReason::None;
 	}
 
+	NativeA8FallbackReason SkipNativeA8RingPacket(
+		NativeA8ShapePayload& payload,
+		NativeA8RingSubmission& submission, UInt32 packetIndex)
+	{
+		if (!submission.active || packetIndex != submission.nextPacket
+			|| packetIndex >= payload.packetShaders.size()
+			|| submission.generation != payload.preparedGeneration
+			|| !IsNativeA8ShaderGenerationCurrent(submission.generation)
+			|| !payload.payloadTemplate)
+		{
+			return NativeA8FallbackReason::RuntimeFault;
+		}
+		const std::vector<NativeA8PacketTemplate>& activePackets =
+			GetNativeA8Packets(*payload.payloadTemplate,
+				payload.useCompositePackets);
+		if (packetIndex >= activePackets.size())
+			return NativeA8FallbackReason::PacketBuild;
+		const NativeA8PacketTemplate& packet = activePackets[packetIndex];
+		const UInt64 end = static_cast<UInt64>(packet.firstVertex)
+			+ packet.vertexCount;
+		if (!packet.vertexCount || (packet.vertexCount & 3u)
+			|| end > payload.payloadTemplate->gpuVertices.size())
+		{
+			return NativeA8FallbackReason::PacketBuild;
+		}
+		++submission.nextPacket;
+		return NativeA8FallbackReason::None;
+	}
+
 	void EndNativeA8RingSubmission(NativeA8RingSubmission& submission)
 	{
 		if (submission.active)
@@ -2253,20 +2255,12 @@ namespace fonthook::vectorfont
 		const UInt32 previous = state->sortedFrameLeases.fetch_sub(
 			1, std::memory_order_acq_rel);
 		if (previous <= 1
-			&& (g_bDisableFreeTypeExtendedCaches
-				|| state->releasePending.load(std::memory_order_acquire)))
+			&& state->releasePending.load(std::memory_order_acquire))
 		{
 			std::lock_guard<std::mutex> lock(state->mutex);
 			if (!state->sortedFrameLeases.load(std::memory_order_acquire)
 				&& !state->activeSubmissions.load(std::memory_order_acquire))
 			{
-				if (g_bDisableFreeTypeExtendedCaches)
-				{
-					state->uploadedPayloads.clear();
-					state->uploadedPayloads.rehash(0);
-					state->nextVertex = 0;
-					s_ringThread.uploadedPayload = {};
-				}
 				if (state->releasePending.load(std::memory_order_acquire))
 					ReleaseRingResourcesLocked(*state);
 			}

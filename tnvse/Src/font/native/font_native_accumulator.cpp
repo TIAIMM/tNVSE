@@ -74,6 +74,7 @@ namespace fonthook::vectorfont
 			std::vector<A8ShapeMetadataPtr> fallbackMetadataOwners;
 			std::vector<NativeA8PayloadTemplatePtr> payloadTemplates;
 			std::vector<UInt32> payloadLookup;
+			std::vector<NativeA8CrossFacadeFrameItem> crossFacadeItems;
 			CpuMemoryLease cpuMemory;
 			UInt32 nestedBypassDepth = 0;
 			UInt64 nextValidationToken = 0;
@@ -183,7 +184,9 @@ namespace fonthook::vectorfont
 					* sizeof(A8ShapeMetadataPtr)
 				+ scratch.payloadTemplates.capacity()
 					* sizeof(NativeA8PayloadTemplatePtr)
-				+ scratch.payloadLookup.capacity() * sizeof(UInt32);
+				+ scratch.payloadLookup.capacity() * sizeof(UInt32)
+				+ scratch.crossFacadeItems.capacity()
+					* sizeof(NativeA8CrossFacadeFrameItem);
 			scratch.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata, bytes);
 		}
 
@@ -193,6 +196,7 @@ namespace fonthook::vectorfont
 			scratch.frameEntries.clear();
 			scratch.fallbackMetadataOwners.clear();
 			scratch.payloadTemplates.clear();
+			scratch.crossFacadeItems.clear();
 			scratch.pendingAccumulator = nullptr;
 			scratch.pendingRegistrations.clear();
 			if (scratch.pendingRegistrations.capacity() > 8192)
@@ -218,6 +222,11 @@ namespace fonthook::vectorfont
 			}
 			if (scratch.payloadLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.payloadLookup);
+			if (scratch.crossFacadeItems.capacity() > 8192)
+			{
+				std::vector<NativeA8CrossFacadeFrameItem>().swap(
+					scratch.crossFacadeItems);
+			}
 			RefreshSortedScratchMemory(scratch);
 			if (IsCpuMemoryBudgetExceeded())
 			{
@@ -231,20 +240,8 @@ namespace fonthook::vectorfont
 				std::vector<NativeA8PayloadTemplatePtr>().swap(
 					scratch.payloadTemplates);
 				std::vector<UInt32>().swap(scratch.payloadLookup);
-				scratch.cpuMemory.Release();
-			}
-			else if (g_bDisableFreeTypeExtendedCaches)
-			{
-				std::vector<RegisteredFacade>().swap(
-					scratch.pendingRegistrations);
-				std::vector<UInt32>().swap(scratch.registrationLookup);
-				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
-				std::vector<UInt32>().swap(scratch.facadeLookup);
-				std::vector<A8ShapeMetadataPtr>().swap(
-					scratch.fallbackMetadataOwners);
-				std::vector<NativeA8PayloadTemplatePtr>().swap(
-					scratch.payloadTemplates);
-				std::vector<UInt32>().swap(scratch.payloadLookup);
+				std::vector<NativeA8CrossFacadeFrameItem>().swap(
+					scratch.crossFacadeItems);
 				scratch.cpuMemory.Release();
 			}
 		}
@@ -443,9 +440,8 @@ namespace fonthook::vectorfont
 			const UInt32 atlasTextureEpoch = frameContext
 				? frameContext->atlasTextureEpoch
 				: GetNativeA8AtlasTextureEpoch();
-			if (!g_bDisableFreeTypeExtendedCaches
-				&& IsNativePreflightCacheCurrent(payload, generation,
-				atlasTextureEpoch, scaledFillSampling, alphaBlending))
+			if (IsNativePreflightCacheCurrent(payload, generation,
+					atlasTextureEpoch, scaledFillSampling, alphaBlending))
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::PreflightFastHit);
 				ClearNativePacketFailure(payload);
@@ -624,9 +620,11 @@ namespace fonthook::vectorfont
 				const bool restoreActive = scratch.active;
 				scratch.active = false;
 				++scratch.nestedBypassDepth;
+				SuspendNativeA8CrossFacadeFrameDispatch();
 				InvalidateNativeA8SortedShaderState();
 				const int result = state.originalSortedTileRender(accumulator);
 				InvalidateNativeA8SortedShaderState();
+				ResumeNativeA8CrossFacadeFrameDispatch();
 				--scratch.nestedBypassDepth;
 				scratch.active = restoreActive;
 				return result;
@@ -641,8 +639,10 @@ namespace fonthook::vectorfont
 				scratch.frameEntries.clear();
 				scratch.fallbackMetadataOwners.clear();
 				scratch.payloadTemplates.clear();
+				scratch.crossFacadeItems.clear();
 				scratch.frameEntries.reserve(itemCount);
 				scratch.payloadTemplates.reserve(itemCount);
+				scratch.crossFacadeItems.reserve(itemCount);
 				PrepareLookup(scratch.facadeLookup, itemCount);
 				PrepareLookup(scratch.payloadLookup, itemCount);
 				const bool haveRegisteredMetadata =
@@ -739,11 +739,56 @@ namespace fonthook::vectorfont
 				}
 				PrepareSortedNativeA8Payloads(
 					scratch.payloadTemplates, generation);
+				for (SInt32 index = accumulator->m_iNumItems - 1;
+					index >= 0; --index)
+				{
+					NativeA8CrossFacadeFrameItem item;
+					NiGeometry* geometry =
+						accumulator->m_ppkItems[index];
+					if (IsFreeTypeFacade(geometry))
+					{
+						item.facade =
+							static_cast<NiTriShape*>(geometry);
+						const size_t entryIndex =
+							LookupSortedFacade(scratch, item.facade);
+						if (entryIndex
+								!= std::numeric_limits<size_t>::max()
+							&& entryIndex
+								< scratch.frameEntries.size())
+						{
+							const SortedFrameEntry& entry =
+								scratch.frameEntries[entryIndex];
+							item.metadata = entry.metadata;
+							item.payload = entry.payload;
+							item.preflightResult =
+								entry.preflightResult;
+							item.generation = entry.generation;
+							item.barrier = false;
+						}
+					}
+					scratch.crossFacadeItems.push_back(item);
+				}
 				RefreshSortedScratchMemory(scratch);
+				if (!scratch.crossFacadeItems.empty())
+				{
+					EnforceCpuMemoryBudget(
+						"cross-facade-traversal");
+					if (IsCpuMemoryBudgetExceeded())
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::
+								CrossFacadeCapacityFallback);
+						scratch.crossFacadeItems.clear();
+					}
+				}
+				PrepareNativeA8CrossFacadeFrame(
+					scratch.crossFacadeItems, generation);
 				BeginNativeA8SortedShaderBatch();
 				BeginA8SortedTileConstantBatch();
 				scratch.active = true;
+				BeginNativeA8CrossFacadeFrameDispatch();
 				const int result = state.originalSortedTileRender(accumulator);
+				EndNativeA8CrossFacadeFrameDispatch();
 				EndA8SortedTileConstantBatch();
 				EndNativeA8SortedShaderBatch();
 				EndNativeA8SortedRingFrame();

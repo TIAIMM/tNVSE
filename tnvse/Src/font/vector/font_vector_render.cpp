@@ -417,12 +417,6 @@ namespace fonthook
 			std::move(s_stockPageShapeCaptures.back());
 		s_stockPageShapeCaptures.pop_back();
 		AttachStockPageShapeBatches(capture.batches, fallbackParent);
-		if (g_bDisableFreeTypeExtendedCaches
-			&& s_stockPageShapeCaptures.empty())
-		{
-			std::vector<StockPageShapeCapture>().swap(
-				s_stockPageShapeCaptures);
-		}
 	}
 
 	bool CanUseFreeTypeStockPageShapes()

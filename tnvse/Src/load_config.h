@@ -8,7 +8,6 @@ extern bool g_bEnableUTF8;
 extern bool g_bEnableMultibyteFontHook;
 extern bool g_bEnableFreeTypeFontRendering;
 extern bool g_bEnableFreeTypeFontRenderingLog;
-extern bool g_bDisableFreeTypeExtendedCaches;
 extern float g_fFreeTypeFontResolutionScale;
 extern UINT32 g_uiFreeTypeFontMemoryCacheMB;
 extern bool g_bDeleteUnusedFreeTypeFontCache;

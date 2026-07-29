@@ -12,7 +12,6 @@ font hook:
 [FreeTypeFont]
 bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
-bDisableFreeTypeExtendedCaches=1
 fFreeTypeFontResolutionScale=1.0
 bEnableFreeTypeFontAggressivePerformanceMode=0
 uiFreeTypeFontDistanceFieldMode=1
@@ -52,31 +51,6 @@ configured multiplier intentionally selects one new compatible cache profile.
 Set `bEnableFreeTypeFontRenderingLog=1` while diagnosing configuration or font
 loading. The log records the XML path, resolved face paths, FreeType errors,
 font-ID activation, and the first atlas-rendered glyph for each byte class.
-
-`bDisableFreeTypeExtendedCaches=1` is a temporary diagnostic mode and is the
-default in the current diagnostic build. It prevents cross-call reuse from the
-prepared-text cache, runtime glyph-bitmap memory/disk path, unified text-artifact
-cache, metadata/runtime-identity hot paths, native preflight cache, static and
-cross-frame vertex residency, native constant/sampler state tracking, and
-retained thread-local scratch capacity. The
-switch intentionally does not destroy live render inputs: current atlas textures
-and glyph placement tables, shape metadata ownership, shader generations,
-proxy/upload resources, and the frame-local sorted upload map remain required
-for correct rendering. Persistent atlas snapshots and the temporary glyph-mask
-files used to construct them also remain enabled because they are generated
-font backing data analogous to retail `.fnt`/`.tex`, rather than optional
-page-switch memoization. Set the option to `0` to restore the optimized path.
-This mode is expected to increase CPU work, lock traffic, rasterization, and
-dynamic vertex uploads.
-
-In steady runtime diagnostics, the periodic `tnvse_freetype_perf` line should
-report zero for prepared-text hits, text-artifact hits, metadata hot hits,
-preflight fast hits, dynamic-VB reuse, static-VB uploads/hits, constant-batch
-reuse, and sampler-state reuse. `atlas_hit` and snapshot/direct-profile activity
-may remain nonzero: they refer to the currently loaded generated font texture
-and glyph table, not a page-switch result cache. Bitmap disk activity may also
-appear while a missing persistent atlas is being constructed, but the completed
-runtime route does not promote those masks into the process bitmap LRU.
 
 Font IDs are configured under `<fonts>` in
 `Data\NVSE\plugins\tnvse_fonts.xml`. Only listed IDs are replaced. Other
@@ -799,12 +773,13 @@ and shader; transforms, alpha, scissor state, and other live Tile values are
 still copied each submission, but unchanged reference-counted properties and
 bindings are not assigned again.
 
-Native vertices store `float3` position, `float2` UV, and one packed
-`D3DCOLOR` base color. The D3D declaration expands that 24-byte record to the
-vertex shader's existing normalized `float4 COLOR0`; the packet-uniform layer
-modifier remains in pixel constant `c1`. Compared with the previous four-float
-base color this reduces cached native geometry and dynamic/static VB traffic by
-one third without adding packets or draw calls. After the stock Tile list has
+Native vertices store `float3` position, `float2` UV, one packed `D3DCOLOR`
+base color, per-glyph distance parameters, and normalized physical glyph
+bounds in a 44-byte record. The D3D declaration expands `D3DCOLOR` to the
+vertex shader's normalized `float4 COLOR0`; packet-uniform layer modifiers
+remain in pixel constants. Compared with a four-float base color, the packed
+field saves twelve bytes per vertex without adding packets or draw calls. After
+the stock Tile list has
 been sorted, tNVSE preflights its FreeType facades, deduplicates their immutable
 text artifacts, and promotes all eligible artifacts with one static-VB
 Lock/copy sequence/Unlock. Tiles are not persistently merged: stock depth/order,
@@ -821,6 +796,62 @@ extended-cache disablement skips these hot/residency paths, omits the static VB,
 and starts each sorted frame with a new dynamic upload epoch. The map published
 after that frame's batch upload is retained only until its packets finish,
 because those packet submissions need stable vertex ranges.
+
+With extended caches enabled, the sorted traversal also builds a frame-local
+packet command stream in the exact reverse order used by the retail Tile
+renderer. Consecutive FreeType facades may be submitted as one real indexed
+draw when their native shader profile and `c1-c8`, physical atlas texture and
+sampling, scissor, alpha/blend, cull/stencil, fixed Tile state, and world
+rotation/scale match. A stock item, failed preflight, repeated facade, profile
+change, atlas-page change, scissor change, or incompatible fixed state is a
+barrier. Translation, live overlay RGB, Tile alpha, and material alpha remain
+per facade.
+
+Cross-facade upload uses a separate 60-byte vertex. Its final `float4` carries
+the exact live Tile color multiplier, while CPU preparation expresses every
+member position in the leader's effective-world space. The batch vertex shader
+applies that color and preserves the ordinary pixel-shader ABI. The leader
+therefore performs one stock `TileShader::UpdateConstants` for the combined
+draw, publishes identity `c0`, retains the normal cross-facade `c1-c8` cache,
+and reuses the Coverage, ARGB, SDF, MTSDF, and Composite pixel shaders. Matching
+linear transforms keep the analytic vertex-shader AA scale identical; only
+translation is folded into vertex positions.
+
+The batch dynamic VB is created lazily, is limited to 131,064 vertices
+(approximately 7.5 MiB), and receives at most one `D3DLOCK_DISCARD` upload per
+sorted traversal. Each INDEX16 draw is capped at 16,383 quads and uses a
+canonical immutable index buffer. Eligible groups are selected by saved draws
+per uploaded vertex; groups outside the capacity or CPU metadata budget execute
+through the unchanged packet path. Roles are published only after the complete
+descriptor build and upload succeed. The first facade executes the command
+stream and later facade callbacks skip duplicate submission; nested sorted
+passes suspend that dispatch map. Device reset, shader-generation replacement,
+or diagnostic cache disablement releases the optional batch resources without
+invalidating the normal native route. This changes neither atlas allocation nor
+the persistent cache format and does not enable NPOT textures.
+
+Candidate publication is additionally guarded by a conservative render-thread
+cost model. Every avoided source packet is valued against per-candidate
+descriptor work, per-packet inspection, two CPU passes over each 60-byte batch
+vertex, and one shared `D3DLOCK_DISCARD` lock/unlock for the traversal. A
+candidate must be individually profitable, and the selected set must remain
+profitable after the shared upload cost. A rejected range never becomes a batch
+command and retains the ordinary static/dynamic packet path; if no range passes
+the gate, no leader/follower roles are published. This is particularly
+important for inventory lists: short unique labels are often already resident
+in the static VB, so reducing their draw count may not justify rebuilding and
+uploading all their vertices every frame.
+
+`tnvse_freetype_cross_facade_perf` reports candidate groups, executed leader
+groups and facades, source and resulting draws, saved draws, vertices and upload
+bytes, skipped followers, cost-eligible/selected/rejected candidates, accepted
+estimated saved/merge nanoseconds, and state/capacity/resource fallbacks. For a
+completed report interval, `followers_skipped` should equal
+`facades - groups`; `saved` must be positive to establish that true batching
+occurred. `estimated_saved_ns` must be greater than `estimated_merge_ns` for
+every published traversal. The timing line separately reports
+`cross_facade_prepare_n`, median, and p95 so the descriptor/gate/upload work is
+not hidden inside the ordinary `preflight` or `submit` measurements.
 
 ## Atlas allocation, mipmaps, and memory
 

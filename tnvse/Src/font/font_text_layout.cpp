@@ -1605,8 +1605,7 @@ namespace fonthook
 		const UInt32 originalTextLen = static_cast<UInt32>(strlen(apOrigString));
 		const float lineSpacingAdjust = FontManager::GetLinePadding(font->iFontNum);
 		UInt64 layoutIdentity = 0;
-		const bool cacheable = !g_bDisableFreeTypeExtendedCaches
-			&& GetFreeTypeLayoutIdentity(font, layoutIdentity)
+		const bool cacheable = GetFreeTypeLayoutIdentity(font, layoutIdentity)
 			&& (resolveEscapes || !std::memchr(apOrigString, '&', originalTextLen));
 		PreparedTextCacheLookupKey cacheLookup;
 		if (cacheable)
@@ -1647,10 +1646,8 @@ namespace fonthook
 		UInt32 sourceTextLen = originalTextLen;
 		int maxAllowedLines = axData->iLineEnd;
 
-		PrepTextScratchPool localScratchPool;
 		thread_local PrepTextScratchPool cachedScratchPool;
-		PrepTextScratchPool& scratchPool = g_bDisableFreeTypeExtendedCaches
-			? localScratchPool : cachedScratchPool;
+		PrepTextScratchPool& scratchPool = cachedScratchPool;
 		PrepTextScratchLease scratchLease(scratchPool);
 		PrepTextScratch& scratch = scratchLease.Get();
 		scratch.Prepare(apOrigString, sourceTextLen);
