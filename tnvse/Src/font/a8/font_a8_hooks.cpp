@@ -1205,6 +1205,23 @@ namespace fonthook::vectorfont
 			LogMissingMetadata(shape, "tile-render-pass");
 			return;
 		}
+		if (payload)
+		{
+			const bool needsVisibilityCheck = !sortedFrameHit
+				|| frameEntry.visibilityCull
+					!= NativeA8VisibilityCull::None;
+			if (needsVisibilityCheck)
+			{
+				const NativeA8VisibilityCull visibilityCull =
+					EvaluateNativeA8SubmissionVisibility(shape, *payload);
+				if (visibilityCull != NativeA8VisibilityCull::None)
+				{
+					RecordNativeA8VisibilityCull(
+						visibilityCull, *payload);
+					return;
+				}
+			}
+		}
 		NativeA8FallbackReason failure = NativeA8FallbackReason::None;
 		if (!payload)
 			failure = NativeA8FallbackReason::PacketBuild;

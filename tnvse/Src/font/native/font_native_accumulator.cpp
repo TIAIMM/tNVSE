@@ -51,6 +51,8 @@ namespace fonthook::vectorfont
 			NativeA8ShapePayload* payload = nullptr;
 			NativeA8FallbackReason preflightResult =
 				NativeA8FallbackReason::RuntimeFault;
+			NativeA8VisibilityCull visibilityCull =
+				NativeA8VisibilityCull::None;
 			UInt32 generation = 0;
 			UInt64 validationToken = 0;
 		};
@@ -688,14 +690,28 @@ namespace fonthook::vectorfont
 						&& entry.metadata->nativePayload.buildComplete)
 					{
 						entry.payload = &entry.metadata->nativePayload;
-						entry.preflightResult = PreflightNativeGroupImpl(
-							facade, *entry.metadata, *entry.payload,
-							&preflightContext);
-						if (entry.preflightResult == NativeA8FallbackReason::None)
+						entry.visibilityCull =
+							EvaluateNativeA8SubmissionVisibility(
+								facade, *entry.payload);
+						if (entry.visibilityCull
+							!= NativeA8VisibilityCull::None)
 						{
-							entry.generation = entry.payload->preparedGeneration;
-							entry.validationToken =
-								frameValidationToken;
+							RecordFreeTypePerf(FreeTypePerfCounter::
+								VisibilityPreflightSkipped);
+						}
+						else
+						{
+							entry.preflightResult = PreflightNativeGroupImpl(
+								facade, *entry.metadata, *entry.payload,
+								&preflightContext);
+							if (entry.preflightResult
+								== NativeA8FallbackReason::None)
+							{
+								entry.generation =
+									entry.payload->preparedGeneration;
+								entry.validationToken =
+									frameValidationToken;
+							}
 						}
 					}
 					else
@@ -825,6 +841,7 @@ namespace fonthook::vectorfont
 		view.metadata = entry.metadata;
 		view.payload = entry.payload;
 		view.preflightResult = entry.preflightResult;
+		view.visibilityCull = entry.visibilityCull;
 		view.generation = entry.generation;
 		view.validationToken = entry.validationToken;
 		RecordFreeTypePerf(FreeTypePerfCounter::SortedFrameLookupHit);

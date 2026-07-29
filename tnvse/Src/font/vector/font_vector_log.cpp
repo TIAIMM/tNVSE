@@ -7,20 +7,20 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
-#include <cstring>
 #include <mutex>
+#include <string>
+#include <utility>
 
 namespace fonthook
 {
 	namespace
 	{
 		constexpr size_t kDeferredLogLineCount = 128;
-		constexpr size_t kDeferredLogLineLength = 1024;
 		// Log mode is diagnostic, but it must not turn a menu that creates
 		// hundreds of text artifacts into a single-frame synchronous disk burst.
 		constexpr size_t kMaximumLogLinesPerFlush = 16;
 
-		using DeferredLogLine = std::array<char, kDeferredLogLineLength>;
+		using DeferredLogLine = std::string;
 
 		std::array<DeferredLogLine, kDeferredLogLineCount> s_deferredLogLines = {};
 		std::mutex s_deferredLogMutex;
@@ -37,16 +37,28 @@ namespace fonthook
 		if (!g_bEnableFreeTypeFontRenderingLog || !apFormat)
 			return;
 
-		DeferredLogLine line = {};
 		va_list args;
 		va_start(args, apFormat);
+		va_list measureArgs;
+		va_copy(measureArgs, args);
+		const int requiredCharacters = _vscprintf(apFormat, measureArgs);
+		va_end(measureArgs);
+		if (requiredCharacters < 0)
+		{
+			va_end(args);
+			return;
+		}
+
+		DeferredLogLine line(
+			static_cast<size_t>(requiredCharacters) + 1, '\0');
 		_vsnprintf_s(line.data(), line.size(), _TRUNCATE, apFormat, args);
 		va_end(args);
+		line.resize(static_cast<size_t>(requiredCharacters));
 
 		std::lock_guard<std::mutex> lock(s_deferredLogMutex);
 		if (s_deferredLogCount < s_deferredLogLines.size())
 		{
-			s_deferredLogLines[s_deferredLogWrite] = line;
+			s_deferredLogLines[s_deferredLogWrite] = std::move(line);
 			s_deferredLogWrite =
 				(s_deferredLogWrite + 1) % s_deferredLogLines.size();
 			++s_deferredLogCount;
@@ -70,6 +82,8 @@ namespace fonthook
 			std::lock_guard<std::mutex> lock(s_deferredLogMutex);
 			if (!g_bEnableFreeTypeFontRenderingLog)
 			{
+				for (DeferredLogLine& line : s_deferredLogLines)
+					DeferredLogLine().swap(line);
 				s_deferredLogRead = 0;
 				s_deferredLogWrite = 0;
 				s_deferredLogCount = 0;
@@ -81,8 +95,8 @@ namespace fonthook
 				s_deferredLogCount, kMaximumLogLinesPerFlush);
 			for (size_t index = 0; index < batchCount; ++index)
 			{
-				batch[index] = s_deferredLogLines[s_deferredLogRead];
-				s_deferredLogLines[s_deferredLogRead] = {};
+				batch[index].swap(
+					s_deferredLogLines[s_deferredLogRead]);
 				s_deferredLogRead =
 					(s_deferredLogRead + 1) % s_deferredLogLines.size();
 			}
@@ -104,7 +118,7 @@ namespace fonthook
 			s_firstLogFlush = false;
 		}
 		for (size_t index = 0; index < batchCount; ++index)
-			gLog.Message(batch[index].data());
+			gLog.Message(batch[index].c_str());
 		if (droppedCount)
 		{
 			gLog.FormattedMessage(

@@ -223,12 +223,23 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
+	enum class NativeA8VisibilityCull : UInt8
+	{
+		None = 0,
+		AppCulled,
+		ZeroAlpha,
+		Clip,
+		Scissor
+	};
+
 	struct NativeA8SortedFrameEntryView
 	{
 		const A8ShapeMetadata* metadata = nullptr;
 		NativeA8ShapePayload* payload = nullptr;
 		NativeA8FallbackReason preflightResult =
 			NativeA8FallbackReason::RuntimeFault;
+		NativeA8VisibilityCull visibilityCull =
+			NativeA8VisibilityCull::None;
 		UInt32 generation = 0;
 		UInt64 validationToken = 0;
 	};
@@ -309,6 +320,10 @@ namespace fonthook::vectorfont
 	void TrimNativeA8CpuCachesForTotalBudget();
 	bool FindNativeA8SortedFrameEntry(NiTriShape* facade,
 		NativeA8SortedFrameEntryView& view);
+	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
+		const NiTriShape* facade, const NativeA8ShapePayload& payload);
+	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,
+		const NativeA8ShapePayload& payload);
 	UInt32 GetNativeA8AtlasTextureEpoch();
 	void NotifyNativeA8AtlasTextureMutation();
 

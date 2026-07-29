@@ -51,6 +51,11 @@ configured multiplier intentionally selects one new compatible cache profile.
 Set `bEnableFreeTypeFontRenderingLog=1` while diagnosing configuration or font
 loading. The log records the XML path, resolved face paths, FreeType errors,
 font-ID activation, and the first atlas-rendered glyph for each byte class.
+Deferred FreeType diagnostics use dynamically sized line storage, so periodic
+performance records are written in full as counters are added. The fixed
+128-line queue and 16-lines-per-flush limit still bound diagnostic backlog and
+per-frame disk work; only the former 1024-byte per-message truncation has been
+removed.
 
 Font IDs are configured under `<fonts>` in
 `Data\NVSE\plugins\tnvse_fonts.xml`. Only listed IDs are replaced. Other
@@ -784,6 +789,54 @@ been sorted, tNVSE preflights its FreeType facades, deduplicates their immutable
 text artifacts, and promotes all eligible artifacts with one static-VB
 Lock/copy sequence/Unlock. Tiles are not persistently merged: stock depth/order,
 per-Tile transform, scissor, alpha, and shader constants remain independent.
+Before that preflight/upload work, each complete native facade receives a
+read-only state test for exact zero Tile/material alpha under a provably no-op
+alpha blend. This test does not consult the renderer's current view-projection,
+viewport, hardware scissor, or the facade's app-cull bit. Those values are not
+authoritative for a particular Tile until the original
+`TileShader::UpdateConstants` call immediately before submission; predicting
+them during sorted preflight can incorrectly reject visible text in nested UI
+and render-target paths.
+
+A sorted facade rejected at this stage does not enter shader/page preflight or
+static/dynamic VB preparation. Its Tile callback re-evaluates visibility before
+skipping the submission, so a same-frame change from invisible to visible falls
+back to the ordinary validated packet route rather than losing text. Unsorted
+native calls perform the same check directly at the Tile hook. Every transform-,
+clip-, scissor-, app-cull-, nonstandard-blend-, or otherwise uncertain case
+remains visible to the original path. The periodic performance line reports
+`visibility_checks`, `culled`, the `alpha` reason count, `preflight_skipped`,
+`packets_saved`, and `vertices_saved`; the retained `app`/`clip`/`scissor`
+fields are compatibility counters and remain zero.
+
+The renderer also installs a code-only list-viewport subtree culler. It does not
+require menu XML changes or recognize menu/tile names. A TileRect, TileImage
+(including hotrect/window instances), or TileText root becomes a candidate only
+when it owns a `listindex` trait, has live `clips`, and has a live nearest
+`clipwindow` ancestor. Its newly created retail NiNode receives a local vtable
+proxy; the global NiNode vtable is left untouched, so world-scene nodes do not
+pay this test.
+
+Immediately before the candidate node would traverse its children in
+`NiNode::OnVisible`, the proxy resolves the original `Tileptr` extra data and
+uses the same retail absolute-Y helper and nearest-clip rule used to build the
+hardware scissor. Items close to the viewport are released immediately. For an
+item clearly outside the viewport, tNVSE conservatively accumulates the live
+vertical bounds of its complete Tile subtree before suppressing that one
+`OnVisible` traversal. A 96-UI-unit guard retains nearby rows and distance-field
+effects. A missing/non-finite dimension, excessive hierarchy, transformed
+Tile, unsupported 3D/radial/menu child, non-retail node vtable, or any other
+uncertain state fails open to the original traversal.
+
+This path never changes `visible`, `target`, `listindex`, `APP_CULLED`, layout,
+scroll position, focus, hit testing, or input state. It only prevents a
+provably off-viewport subtree from registering its already-created render
+objects for the current frame. The performance line reports
+`viewport_nodes`, `install_failed`, `viewport_checks`, `viewport_culled`, and
+`fail_open`. A useful inventory-menu result has nonzero `viewport_culled` and a
+corresponding reduction in `sorted_facades`; `fail_open` is retained work, not
+missing UI.
+
 The dynamic ring retains its two-maximum-payload capacity, while the static VB
 starts at approximately 4 MiB instead of reserving its approximately 12 MiB
 packed-format maximum. When it is full, a safe submission boundary with no
