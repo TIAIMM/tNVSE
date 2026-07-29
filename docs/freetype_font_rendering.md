@@ -776,6 +776,11 @@ while the shader generation, scaled-fill sampling
 class, alpha-blending class, and referenced D3D atlas textures remain unchanged.
 Any device reset, sampling/alpha transition, or page-resource replacement falls
 back to full packet and texture validation before the cache is refreshed.
+Each immutable packet also seals both alpha-class profile hashes when its
+artifact is built. After the first profile-map resolution, the packet retains a
+process-lifetime profile pointer; a generation, sampling, and alpha-class check
+then replaces repeated profile hashing and unordered-map lookup without allowing
+a profile from an older D3D device generation to pass.
 Per-frame native submission also keeps thread-local hot entries for shape
 metadata, static vertex residency, dynamic ring residency, static-promotion
 candidates, and the preferred proxy slot. Shape metadata uses a 16384-entry,
@@ -981,7 +986,8 @@ validated cache resident. A small
 thread-local weak front serves recent resident or still-live artifacts without
 taking the global cache mutex and does not pin an artifact after its real owners
 release it. The first observation uses a constant-cost geometry/effect
-signature and skips the full per-quad color/range hash.
+signature and skips the full per-quad geometry/color fingerprint and
+range/effect identity hash.
 One artifact owns the packed
 vertices, bound, atlas-page
 property/texture references, and merged contiguous packet descriptors that used
@@ -997,6 +1003,26 @@ therefore selects new bitmap, manifest, snapshot, and shader identities without
 requiring manual cache deletion. CPU coverage and distance-field manifests
 cannot alias, and final CPU-route selection removes normal distance-field cache
 files instead of retaining a provisional native/fallback mixture.
+
+Runtime cache-key work is amortized at the point where the corresponding
+identity becomes immutable:
+
+- Prepared text performs one source scan for length, escape detection, and the
+  source hash. Escape expansion hashes its resolved bytes while copying them.
+  Lookup hashing consumes those saved hashes and lengths, while exact string
+  comparison remains the collision check. A small thread-local metric-signature
+  cache is reused only after byte-exact validation of the mutable font metrics.
+- A one-shot text artifact computes only the constant-cost admission signature.
+  Once admitted, one quad traversal computes geometry and color fingerprints
+  together; effect/range identity consumes that color fingerprint instead of
+  scanning the quads again.
+- Distance-field atlas keys are derived directly from the sealed byte-role
+  raster profile. The MTSDF/true-SDF route therefore avoids rescanning the
+  bitmap list and building, sorting, and deduplicating an empty baked-color
+  variant vector. Mixed or non-distance-field routes retain the generic scan.
+- A resolved bitmap key computes its revision-aware stable hash once. The same
+  value supplies the glyph cache ID, persistent-cache identity, batch
+  deduplication, and the folded in-memory unordered-map hash.
 
 Generated distance fields and ARGB-fallback masks and their supporting CPU
 objects are cached in process memory. Equivalent masks are shared across font

@@ -48,17 +48,25 @@ namespace fonthook
 		std::vector<char>& dynamicTextBuffer,
 		UInt32& textBufferSize, UInt32& processedTextLen,
 		UInt32& origConsumed, UInt32& sourceTextLen,
-		FontEx* font, Font::TextData* axData)
+		UInt64& resolvedTextHash, FontEx* font, Font::TextData* axData)
 	{
 		char parsedTextBuffer[1028] = {};
 		bool hasEscapeSequence = false;
 		char* processedOriginalText = processedOriginalBuffer.data();
+		resolvedTextHash = 1469598103934665603ull;
+		auto addResolvedByte = [&](UInt8 value)
+		{
+			resolvedTextHash ^= value;
+			resolvedTextHash *= 1099511628211ull;
+		};
 
 		for (UInt32 srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
 		{
 			if (processedOriginalText[srcTextIndex] != '&')
 			{
 				dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
+				addResolvedByte(static_cast<UInt8>(
+					processedOriginalText[srcTextIndex]));
 				continue;
 			}
 
@@ -118,6 +126,8 @@ namespace fonthook
 					EnsureTextScratchSize(dynamicTextBuffer, textBufferSize + 1);
 				}
 				memcpy(&dynamicTextBuffer[processedTextLen], parsedTextBuffer, postEscapeTextLen);
+				for (UInt32 index = 0; index < postEscapeTextLen; ++index)
+					addResolvedByte(static_cast<UInt8>(parsedTextBuffer[index]));
 				processedTextLen += postEscapeTextLen;
 				origConsumed += totalEscapeSeqLen;
 				srcTextIndex = srcTextIndex + totalEscapeSeqLen - 1;
@@ -125,6 +135,8 @@ namespace fonthook
 			else
 			{
 				dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
+				addResolvedByte(static_cast<UInt8>(
+					processedOriginalText[srcTextIndex]));
 			}
 			hasEscapeSequence = true;
 		}
@@ -212,6 +224,8 @@ namespace fonthook
 		bool terminal = false;
 		std::string_view source;
 		std::string_view resolved;
+		UInt64 sourceHash = 0;
+		UInt64 resolvedHash = 0;
 		size_t precomputedHash = 0;
 	};
 
@@ -231,6 +245,8 @@ namespace fonthook
 		bool terminal = false;
 		std::string source;
 		std::string resolved;
+		UInt64 sourceHash = 0;
+		UInt64 resolvedHash = 0;
 		size_t precomputedHash = 0;
 	};
 
@@ -263,10 +279,14 @@ namespace fonthook
 		addBytes(&key.lineEnd, sizeof(key.lineEnd));
 		addBytes(&key.lineSeparator, sizeof(key.lineSeparator));
 		addBytes(&key.terminal, sizeof(key.terminal));
-		addBytes(key.source.data(), key.source.size());
+		addBytes(&key.sourceHash, sizeof(key.sourceHash));
+		const size_t sourceSize = key.source.size();
+		addBytes(&sourceSize, sizeof(sourceSize));
 		const UInt8 separator = 0xFF;
 		addBytes(&separator, sizeof(separator));
-		addBytes(key.resolved.data(), key.resolved.size());
+		addBytes(&key.resolvedHash, sizeof(key.resolvedHash));
+		const size_t resolvedSize = key.resolved.size();
+		addBytes(&resolvedSize, sizeof(resolvedSize));
 		return static_cast<size_t>(hash ^ (hash >> 32));
 	}
 
@@ -281,7 +301,10 @@ namespace fonthook
 			&& left.height == right.height && left.lineStart == right.lineStart
 			&& left.lineEnd == right.lineEnd
 			&& left.lineSeparator == right.lineSeparator
-			&& left.terminal == right.terminal && left.source == right.source
+			&& left.terminal == right.terminal
+			&& left.sourceHash == right.sourceHash
+			&& left.resolvedHash == right.resolvedHash
+			&& left.source == right.source
 			&& left.resolved == right.resolved;
 	}
 
@@ -403,6 +426,19 @@ namespace fonthook
 		s_preparedTextAdmissionHashes = {};
 	thread_local std::array<UInt8, 256>
 		s_preparedTextAdmissionCounts = {};
+	struct PreparedTextMetricSignatureEntry
+	{
+		const FontEx* font = nullptr;
+		const FontData* fontData = nullptr;
+		float linePadding = 0.0f;
+		float baseline = 0.0f;
+		float fontHeight = 0.0f;
+		FontLetter space = {};
+		UInt64 signature = 0;
+	};
+	thread_local std::array<PreparedTextMetricSignatureEntry, 4>
+		s_preparedTextMetricSignatures;
+	thread_local size_t s_preparedTextMetricSignatureNext = 0;
 
 	struct PreparedTextSidecarHandoff
 	{
@@ -416,17 +452,28 @@ namespace fonthook
 		s_preparedTextSidecarHandoffs;
 	thread_local size_t s_preparedTextSidecarHandoffNext = 0;
 
-	static UInt64 HashPreparedTextContent(const char* text, size_t length)
+	struct PreparedTextScan
 	{
+		UInt32 length = 0;
 		UInt64 hash = 1469598103934665603ull;
-		const UInt8* bytes =
-			reinterpret_cast<const UInt8*>(text);
-		for (size_t index = 0; index < length; ++index)
+		bool hasEscape = false;
+	};
+
+	static PreparedTextScan ScanPreparedText(const char* text)
+	{
+		PreparedTextScan result;
+		if (!text)
+			return result;
+		while (result.length != std::numeric_limits<UInt32>::max()
+			&& text[result.length])
 		{
-			hash ^= bytes[index];
-			hash *= 1099511628211ull;
+			const UInt8 value = static_cast<UInt8>(text[result.length]);
+			result.hasEscape = result.hasEscape || value == '&';
+			result.hash ^= value;
+			result.hash *= 1099511628211ull;
+			++result.length;
 		}
-		return hash;
+		return result;
 	}
 
 	static void PublishPreparedTextSidecar(const Font::TextData* data,
@@ -533,6 +580,30 @@ namespace fonthook
 	static UInt64 GetPreparedTextMetricSignature(const FontEx* font,
 		float linePadding)
 	{
+		if (font && font->pFontData)
+		{
+			const FontLetter& space =
+				font->pFontData->pFontLetters[kSpaceChar];
+			for (const PreparedTextMetricSignatureEntry& entry :
+				s_preparedTextMetricSignatures)
+			{
+				if (entry.font == font
+					&& entry.fontData == font->pFontData
+					&& std::memcmp(&entry.linePadding, &linePadding,
+						sizeof(linePadding)) == 0
+					&& std::memcmp(&entry.baseline,
+						&font->pFontData->fBaseLine,
+						sizeof(entry.baseline)) == 0
+					&& std::memcmp(&entry.fontHeight,
+						&font->fFontHeight,
+						sizeof(entry.fontHeight)) == 0
+					&& std::memcmp(&entry.space, &space,
+						sizeof(space)) == 0)
+				{
+					return entry.signature;
+				}
+			}
+		}
 		UInt64 hash = 1469598103934665603ull;
 		hash = HashPreparedTextBytes(hash, &linePadding, sizeof(linePadding));
 		if (!font || !font->pFontData)
@@ -543,6 +614,17 @@ namespace fonthook
 			sizeof(font->fFontHeight));
 		const FontLetter& space = font->pFontData->pFontLetters[kSpaceChar];
 		hash = HashPreparedTextBytes(hash, &space, sizeof(space));
+		PreparedTextMetricSignatureEntry& cached =
+			s_preparedTextMetricSignatures[
+				s_preparedTextMetricSignatureNext++
+					% s_preparedTextMetricSignatures.size()];
+		cached.font = font;
+		cached.fontData = font->pFontData;
+		cached.linePadding = linePadding;
+		cached.baseline = font->pFontData->fBaseLine;
+		cached.fontHeight = font->fFontHeight;
+		cached.space = space;
+		cached.signature = hash;
 		return hash;
 	}
 
@@ -691,6 +773,7 @@ namespace fonthook
 			lookup.width, lookup.height, lookup.lineStart, lookup.lineEnd,
 			lookup.lineSeparator, lookup.terminal,
 			std::string(lookup.source), std::string(lookup.resolved),
+			lookup.sourceHash, lookup.resolvedHash,
 			lookupHash
 		};
 		auto keyOwner =
@@ -841,7 +924,7 @@ namespace fonthook
 	static std::shared_ptr<const PreparedDirectTextSidecar>
 		BuildPreparedDirectTextSidecar(
 			FontEx* font, const Font::TextData& data,
-			std::vector<DirectTextUnit>&& units)
+			size_t textLength, std::vector<DirectTextUnit>&& units)
 	{
 		vectorfont::FreeTypePerfScope perf(
 			vectorfont::FreeTypePerfPhase::Sidecar);
@@ -851,7 +934,6 @@ namespace fonthook
 		UInt64 layoutIdentity = 0;
 		if (!GetFreeTypeLayoutIdentity(font, layoutIdentity))
 			return {};
-		const size_t textLength = strlen(text);
 		UInt32 previousEnd = 0;
 		for (const DirectTextUnit& unit : units)
 		{
@@ -899,8 +981,6 @@ namespace fonthook
 			std::make_shared<PreparedDirectTextSidecar>();
 		sidecar->layoutIdentity = layoutIdentity;
 		sidecar->textLength = textLength;
-		sidecar->textHash =
-			HashPreparedTextContent(text, textLength);
 		sidecar->units = std::move(units);
 		return sidecar;
 	}
@@ -922,8 +1002,6 @@ namespace fonthook
 			std::make_shared<PreparedDirectTextSidecar>();
 		sidecar->layoutIdentity = layoutIdentity;
 		sidecar->textLength = textLength;
-		sidecar->textHash =
-			HashPreparedTextContent(text, textLength);
 		sidecar->rejectBatch = true;
 		return sidecar;
 	}
@@ -1462,7 +1540,8 @@ namespace fonthook
 					font, *data)
 				: directProfile
 					? BuildPreparedDirectTextSidecar(
-						font, *data, std::move(directUnits))
+						font, *data, outputLength,
+						std::move(directUnits))
 					: std::shared_ptr<const
 						PreparedDirectTextSidecar>();
 		}
@@ -1586,7 +1665,8 @@ namespace fonthook
 			? BuildRejectedPreparedDirectTextSidecar(font, *data)
 			: directProfile
 				? BuildPreparedDirectTextSidecar(
-					font, *data, std::move(directUnits))
+					font, *data, outputLength,
+					std::move(directUnits))
 				: std::shared_ptr<const PreparedDirectTextSidecar>();
 	}
 
@@ -1602,25 +1682,29 @@ namespace fonthook
 			axData->iHeight = kSentinelMax;
 		if (axData->iLineEnd <= 0)
 			axData->iLineEnd = kSentinelMax;
-		const UInt32 originalTextLen = static_cast<UInt32>(strlen(apOrigString));
+		const PreparedTextScan originalText = ScanPreparedText(apOrigString);
+		const UInt32 originalTextLen = originalText.length;
 		const float lineSpacingAdjust = FontManager::GetLinePadding(font->iFontNum);
 		UInt64 layoutIdentity = 0;
 		const bool cacheable = GetFreeTypeLayoutIdentity(font, layoutIdentity)
-			&& (resolveEscapes || !std::memchr(apOrigString, '&', originalTextLen));
+			&& (resolveEscapes || !originalText.hasEscape);
 		PreparedTextCacheLookupKey cacheLookup;
 		if (cacheable)
 		{
 			cacheLookup = {
 				font, font->pFontData, layoutIdentity,
 				GetPreparedTextMetricSignature(font, lineSpacingAdjust),
-				GetPreparedTextIconSignature(font), GetFreeTypeTextCodePage(),
+				0, GetFreeTypeTextCodePage(),
 				axData->iWidth, axData->iHeight, axData->iLineStart,
 				axData->iLineEnd, axData->cLineSep, isTerminal,
-				std::string_view(apOrigString, originalTextLen), {}
+				std::string_view(apOrigString, originalTextLen), {},
+				originalText.hash, 1469598103934665603ull
 			};
-			RefreshPreparedTextLookupHash(cacheLookup);
-			if (!std::memchr(apOrigString, '&', originalTextLen))
+			if (!originalText.hasEscape)
 			{
+				cacheLookup.iconSignature =
+					GetPreparedTextIconSignature(font);
+				RefreshPreparedTextLookupHash(cacheLookup);
 				if (const std::shared_ptr<const PreparedTextCacheValue> cached =
 					FindPreparedTextCacheValue(cacheLookup))
 				{
@@ -1656,18 +1740,20 @@ namespace fonthook
 
 		UInt32 processedTextLen = 0;
 		UInt32 textBufferSize = sourceTextLen + 4;
+		UInt64 resolvedTextHash = 1469598103934665603ull;
 
 		// ---- Pass 1: Process escape sequences (&variable;) ----
 		const bool processedEscapes = resolveEscapes
 			&& ProcessEscapeSequences(scratch.original, scratch.processed,
 				textBufferSize, processedTextLen, origConsumed, sourceTextLen,
-				font, axData);
+				resolvedTextHash, font, axData);
 		processedOriginalText = scratch.original.data();
 		dynamicTextBuffer = scratch.processed.data();
 		if (cacheable && processedEscapes)
 		{
 			cacheLookup.iconSignature = GetPreparedTextIconSignature(font);
 			cacheLookup.resolved = std::string_view(processedOriginalText, sourceTextLen);
+			cacheLookup.resolvedHash = resolvedTextHash;
 			RefreshPreparedTextLookupHash(cacheLookup);
 			if (const std::shared_ptr<const PreparedTextCacheValue> cached =
 				FindPreparedTextCacheValue(cacheLookup))

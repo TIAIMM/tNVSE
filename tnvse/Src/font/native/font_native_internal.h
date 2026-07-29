@@ -116,6 +116,36 @@ namespace fonthook::vectorfont
 	static_assert(offsetof(NativeA8GpuVertex, glyphU0) == 9 * sizeof(float));
 	static_assert(sizeof(NativeA8GpuVertex) == 13 * sizeof(float));
 
+	struct NativeA8PacketShaderCacheEntry
+	{
+		// Native shader profiles are process-lifetime objects. Keep this opaque in
+		// the shared packet model; the shader implementation validates generation
+		// and sampling before using the cached profile.
+		std::atomic<void*> profile{ nullptr };
+
+		NativeA8PacketShaderCacheEntry() = default;
+		NativeA8PacketShaderCacheEntry(
+			const NativeA8PacketShaderCacheEntry&) noexcept
+		{
+		}
+		NativeA8PacketShaderCacheEntry(
+			NativeA8PacketShaderCacheEntry&&) noexcept
+		{
+		}
+		NativeA8PacketShaderCacheEntry& operator=(
+			const NativeA8PacketShaderCacheEntry&) noexcept
+		{
+			profile.store(nullptr, std::memory_order_relaxed);
+			return *this;
+		}
+		NativeA8PacketShaderCacheEntry& operator=(
+			NativeA8PacketShaderCacheEntry&&) noexcept
+		{
+			profile.store(nullptr, std::memory_order_relaxed);
+			return *this;
+		}
+	};
+
 	struct NativeA8PacketTemplate
 	{
 		UInt32 firstVertex = 0;
@@ -136,6 +166,12 @@ namespace fonthook::vectorfont
 		bool compositeShiftedShadow = false;
 		bool staticSmoothSampling = false;
 		bool usesLiveTileRgb = true;
+		// Profile hashes are immutable artifact data. The two slots correspond to
+		// separate-alpha disabled/enabled. Resolved profiles are validated against
+		// the current generation and reset automatically on packet copy or move.
+		std::array<size_t, 2> profileHashes = {};
+		mutable std::array<NativeA8PacketShaderCacheEntry, 2>
+			resolvedShaders;
 	};
 
 	struct NativeA8CompositeSpan

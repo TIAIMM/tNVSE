@@ -76,6 +76,8 @@ namespace fonthook::vectorfont
 
 		UInt64 HashBitmapKey(const BitmapCacheKey& key)
 		{
+			if (key.stableHash)
+				return key.stableHash;
 			UInt64 hash = 1469598103934665603ull;
 			auto add = [&](const void* data, size_t size)
 			{

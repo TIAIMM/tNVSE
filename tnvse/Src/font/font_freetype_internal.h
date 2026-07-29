@@ -256,6 +256,10 @@ namespace fonthook::vectorfont
 		UInt8 sdfSpread = 0;
 		UInt8 maskType = 0;
 		UInt8 distanceFieldMethod = 0;
+		// Derived once after the semantic key fields are resolved. It does not
+		// participate in equality; the folded value also serves as the in-memory
+		// unordered-map hash so all consumers share one calculation.
+		UInt64 stableHash = 0;
 
 		bool operator==(const BitmapCacheKey& other) const
 		{
@@ -278,6 +282,11 @@ namespace fonthook::vectorfont
 	{
 		size_t operator()(const BitmapCacheKey& key) const
 		{
+			if (key.stableHash)
+			{
+				return static_cast<size_t>(
+					key.stableHash ^ (key.stableHash >> 32));
+			}
 			size_t result = static_cast<size_t>(
 				key.fontContentHash ^ (key.fontContentHash >> 32));
 			result ^= static_cast<size_t>(key.fontFaceIndex) * 0x9E3779B1u;

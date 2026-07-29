@@ -2767,6 +2767,7 @@ namespace fonthook::vectorfont
 			const std::vector<PendingQuad>& quads, const NiPoint3& origin)
 		{
 			UInt64 hash = 1469598103934665603ull;
+			UInt64 colorHash = 1469598103934665603ull;
 			auto add = [&](const void* data, size_t size)
 			{
 				const UInt8* bytes = static_cast<const UInt8*>(data);
@@ -2803,8 +2804,17 @@ namespace fonthook::vectorfont
 				add(&quad.atlasPlacement.v0, sizeof(quad.atlasPlacement.v0));
 				add(&quad.atlasPlacement.u1, sizeof(quad.atlasPlacement.u1));
 				add(&quad.atlasPlacement.v1, sizeof(quad.atlasPlacement.v1));
+				const UInt8* colorBytes =
+					reinterpret_cast<const UInt8*>(&quad.baseColor);
+				for (size_t index = 0;
+					index < sizeof(quad.baseColor); ++index)
+				{
+					colorHash ^= colorBytes[index];
+					colorHash *= 1099511628211ull;
+				}
 			}
-			return { hash, static_cast<UInt32>(quads.size()) };
+			return { hash, colorHash,
+				static_cast<UInt32>(quads.size()) };
 		}
 
 		struct TextArtifactHotEntry
@@ -2875,19 +2885,24 @@ namespace fonthook::vectorfont
 				generation ^= atlas->generation + 0x9E3779B9u
 					+ (generation << 6) + (generation >> 2);
 			}
-			return { atlases.empty() ? 0 : reinterpret_cast<uintptr_t>(atlases[0].get()),
-				hash, generation, fingerprint.quadCount };
+			return {
+				atlases.empty() ? 0
+					: reinterpret_cast<uintptr_t>(atlases[0].get()),
+				hash, fingerprint.quadColorHash,
+				generation, fingerprint.quadCount
+			};
 		}
 
 		UInt64 BuildTextArtifactAdmissionSignature(
-			const TextArtifactKey& geometryKey,
 			const std::vector<PendingQuad>& quads,
+			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
+			const NiPoint3& origin,
 			const A8EffectShapeConfig& effect)
 		{
-			// Most text artifacts in menu churn are never requested again. Build a
-			// constant-cost signature first so those one-shot objects avoid both the
-			// full color/range hash and the global cache mutex.
-			UInt64 hash = geometryKey.contentHash;
+			// Most text artifacts in menu churn are never requested again. This
+			// constant-cost signature is intentionally coarse: a collision can only
+			// trigger a later exact fingerprint/cache lookup, never artifact reuse.
+			UInt64 hash = 1469598103934665603ull;
 			auto add = [&](const void* data, size_t size)
 			{
 				const UInt8* bytes = static_cast<const UInt8*>(data);
@@ -2897,9 +2912,55 @@ namespace fonthook::vectorfont
 					hash *= 1099511628211ull;
 				}
 			};
-			add(&geometryKey.atlasIdentity, sizeof(geometryKey.atlasIdentity));
-			add(&geometryKey.generation, sizeof(geometryKey.generation));
-			add(&geometryKey.quadCount, sizeof(geometryKey.quadCount));
+			const size_t quadCount = quads.size();
+			const size_t atlasCount = atlases.size();
+			add(&quadCount, sizeof(quadCount));
+			add(&atlasCount, sizeof(atlasCount));
+			auto addAtlas = [&](const std::shared_ptr<AtlasResource>& atlas)
+			{
+				const uintptr_t identity =
+					reinterpret_cast<uintptr_t>(atlas.get());
+				const UInt32 generation = atlas ? atlas->generation : 0;
+				add(&identity, sizeof(identity));
+				add(&generation, sizeof(generation));
+			};
+			if (!atlases.empty())
+			{
+				addAtlas(atlases.front());
+				if (atlases.size() > 1)
+					addAtlas(atlases.back());
+			}
+			auto addQuad = [&](const PendingQuad& quad)
+			{
+				const UInt64 cacheId = quad.source.CacheId();
+				const NiPoint3 relativePen(
+					quad.pen.x - origin.x,
+					quad.pen.y - origin.y,
+					quad.pen.z - origin.z);
+				add(&cacheId, sizeof(cacheId));
+				add(&relativePen, sizeof(relativePen));
+				add(&quad.offsetX, sizeof(quad.offsetX));
+				add(&quad.offsetY, sizeof(quad.offsetY));
+				add(&quad.rasterScale, sizeof(quad.rasterScale));
+				add(&quad.sourceToLogicalScale,
+					sizeof(quad.sourceToLogicalScale));
+				add(&quad.baselineOffset, sizeof(quad.baselineOffset));
+				add(&quad.expansionPixels, sizeof(quad.expansionPixels));
+				add(&quad.usesSdf, sizeof(quad.usesSdf));
+				add(&quad.glyphOrdinal, sizeof(quad.glyphOrdinal));
+				add(&quad.atlasPage, sizeof(quad.atlasPage));
+				add(&quad.atlasPlacement.atlasIdentity,
+					sizeof(quad.atlasPlacement.atlasIdentity));
+				add(&quad.atlasPlacement.atlasGeneration,
+					sizeof(quad.atlasPlacement.atlasGeneration));
+				add(&quad.baseColor, sizeof(quad.baseColor));
+			};
+			if (!quads.empty())
+			{
+				addQuad(quads.front());
+				if (quads.size() > 1)
+					addQuad(quads.back());
+			}
 			add(&effect.enabled, sizeof(effect.enabled));
 			add(&effect.shaderEffects, sizeof(effect.shaderEffects));
 			add(&effect.bakedCoverage, sizeof(effect.bakedCoverage));
@@ -2923,21 +2984,11 @@ namespace fonthook::vectorfont
 			const size_t rangeCount = effect.ranges.size();
 			add(&pageCount, sizeof(pageCount));
 			add(&rangeCount, sizeof(rangeCount));
-			if (!quads.empty())
-			{
-				add(&quads.front().baseColor,
-					sizeof(quads.front().baseColor));
-				if (quads.size() > 1)
-				{
-					add(&quads.back().baseColor,
-						sizeof(quads.back().baseColor));
-				}
-			}
 			return hash ? hash : 1;
 		}
 
-		UInt64 BuildTextArtifactContentHash(const TextArtifactKey& geometryKey,
-			const std::vector<PendingQuad>& quads,
+		UInt64 BuildTextArtifactContentHash(
+			const TextArtifactKey& geometryKey,
 			const A8EffectShapeConfig& effect)
 		{
 			UInt64 hash = 1469598103934665603ull;
@@ -2952,6 +3003,8 @@ namespace fonthook::vectorfont
 			};
 			add(&geometryKey.atlasIdentity, sizeof(geometryKey.atlasIdentity));
 			add(&geometryKey.contentHash, sizeof(geometryKey.contentHash));
+			add(&geometryKey.quadColorHash,
+				sizeof(geometryKey.quadColorHash));
 			add(&geometryKey.generation, sizeof(geometryKey.generation));
 			add(&geometryKey.quadCount, sizeof(geometryKey.quadCount));
 			add(&effect.enabled, sizeof(effect.enabled));
@@ -2962,8 +3015,6 @@ namespace fonthook::vectorfont
 			add(&effect.distanceFieldMethod,
 				sizeof(effect.distanceFieldMethod));
 			add(&effect.quality, sizeof(effect.quality));
-			for (const PendingQuad& quad : quads)
-				add(&quad.baseColor, sizeof(quad.baseColor));
 			const std::array<float, 16> scalars = {
 				effect.rasterScale,
 				effect.inverseAtlasWidth, effect.inverseAtlasHeight,
@@ -3022,7 +3073,6 @@ namespace fonthook::vectorfont
 		NativeA8PayloadTemplatePtr FindHotTextArtifact(
 			UInt64 admissionSignature,
 			const TextArtifactKey& geometryKey,
-			const std::vector<PendingQuad>& quads,
 			const A8EffectShapeConfig& effects,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
 			TextArtifactKey& resolvedKey, bool& keyResolved)
@@ -3046,7 +3096,7 @@ namespace fonthook::vectorfont
 			{
 				resolvedKey = geometryKey;
 				resolvedKey.contentHash = BuildTextArtifactContentHash(
-					geometryKey, quads, effects);
+					geometryKey, effects);
 				keyResolved = true;
 			}
 			for (TextArtifactHotEntry& entry : s_textArtifactHotEntries)
@@ -3089,21 +3139,24 @@ namespace fonthook::vectorfont
 			AtlasState& state = State();
 			TextArtifactKey key = geometryKey;
 			bool keyResolved = false;
-			if (NativeA8PayloadTemplatePtr hot =
-				FindHotTextArtifact(admissionSignature, geometryKey,
-					quads, effects, atlases, key, keyResolved))
+			if (allowCache)
 			{
-				RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactHit);
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::TextArtifactHotHit);
-				return hot;
+				if (NativeA8PayloadTemplatePtr hot =
+					FindHotTextArtifact(admissionSignature, geometryKey,
+						effects, atlases, key, keyResolved))
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactHit);
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::TextArtifactHotHit);
+					return hot;
+				}
 			}
 			if (allowCache)
 			{
 				if (!keyResolved)
 				{
 					key.contentHash = BuildTextArtifactContentHash(
-						geometryKey, quads, effects);
+						geometryKey, effects);
 					keyResolved = true;
 				}
 				{
@@ -3409,8 +3462,7 @@ namespace fonthook::vectorfont
 		NiTriShape* CreateAtlasShape(Font& font, const std::vector<PendingQuad>& quads,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases, bool prepareObject,
 			const NiColorA& tileColor, bool useCustomA8Shader,
-			const A8EffectShapeConfig* effectConfig,
-			const QuadBatchFingerprint& fingerprint, const NiPoint3& origin)
+			const A8EffectShapeConfig* effectConfig, const NiPoint3& origin)
 		{
 			if (atlases.empty() || !atlases[0] || quads.empty()
 				|| quads.size() > kMaximumQuads)
@@ -3433,13 +3485,19 @@ namespace fonthook::vectorfont
 					: NiPoint2());
 			}
 			BuildA8DrawRanges(quads, resolvedEffect);
-			const TextArtifactKey geometryKey = BuildTextArtifactKey(
-				fingerprint, atlases);
 			const UInt64 artifactAdmissionSignature =
 				BuildTextArtifactAdmissionSignature(
-					geometryKey, quads, resolvedEffect);
+					quads, atlases, origin, resolvedEffect);
 			const bool allowArtifactCache = TouchTextArtifactAdmission(
 				artifactAdmissionSignature);
+			TextArtifactKey geometryKey;
+			if (allowArtifactCache)
+			{
+				const QuadBatchFingerprint fingerprint =
+					BuildQuadBatchFingerprint(quads, origin);
+				geometryKey = BuildTextArtifactKey(
+					fingerprint, atlases);
+			}
 			const NativeA8PayloadTemplatePtr artifact = GetNativeTextArtifact(
 				font, quads, atlases, geometryKey,
 				artifactAdmissionSignature, origin,
@@ -3965,8 +4023,6 @@ namespace fonthook::vectorfont
 						pagedQuads.end(), batchOrder);
 				}
 			}
-			const QuadBatchFingerprint fingerprint =
-				BuildQuadBatchFingerprint(pagedQuads, batchOrigin);
 			A8EffectShapeConfig resolvedEffect;
 			const A8EffectShapeConfig* resolvedEffectPointer = nullptr;
 			if (effectConfig)
@@ -3977,8 +4033,7 @@ namespace fonthook::vectorfont
 				resolvedEffectPointer = &resolvedEffect;
 			}
 			NiTriShape* shape = CreateAtlasShape(font, pagedQuads, outAtlases, prepareObject,
-				tileColor, useCustomA8Shader, resolvedEffectPointer, fingerprint,
-				batchOrigin);
+				tileColor, useCustomA8Shader, resolvedEffectPointer, batchOrigin);
 			if (shape && outAtlases.size() == 1 && outAtlases[0]->transient
 				&& outAtlases[0]->backend == AtlasBackend::DefaultPool)
 			{

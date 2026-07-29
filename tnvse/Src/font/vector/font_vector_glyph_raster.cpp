@@ -899,6 +899,7 @@ namespace fonthook::vectorfont
 			static_cast<UInt8>(maskType),
 			distanceFieldMethod
 		};
+		key.stableHash = HashBitmapKey(key);
 		return true;
 	}
 

@@ -834,13 +834,17 @@ namespace fonthook::vectorfont
 	{
 		uintptr_t atlasIdentity = 0;
 		UInt64 contentHash = 0;
+		UInt64 quadColorHash = 0;
 		UInt32 generation = 0;
 		UInt32 quadCount = 0;
 
 		bool operator==(const TextArtifactKey& other) const
 		{
-			return atlasIdentity == other.atlasIdentity && contentHash == other.contentHash
-				&& generation == other.generation && quadCount == other.quadCount;
+			return atlasIdentity == other.atlasIdentity
+				&& contentHash == other.contentHash
+				&& quadColorHash == other.quadColorHash
+				&& generation == other.generation
+				&& quadCount == other.quadCount;
 		}
 	};
 
@@ -849,6 +853,8 @@ namespace fonthook::vectorfont
 		size_t operator()(const TextArtifactKey& key) const
 		{
 			return static_cast<size_t>(key.contentHash ^ (key.contentHash >> 32))
+				^ static_cast<size_t>(
+					key.quadColorHash ^ (key.quadColorHash >> 32))
 				^ key.atlasIdentity ^ (static_cast<size_t>(key.generation) << 8)
 				^ key.quadCount;
 		}
@@ -857,6 +863,7 @@ namespace fonthook::vectorfont
 	struct QuadBatchFingerprint
 	{
 		UInt64 contentHash = 0;
+		UInt64 quadColorHash = 0;
 		UInt32 quadCount = 0;
 	};
 

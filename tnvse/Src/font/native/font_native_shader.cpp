@@ -107,6 +107,7 @@ namespace fonthook::vectorfont
 			bool compositeShiftedShadow = false;
 			bool writeEffectAlpha = false;
 			bool usesLiveTileRgb = true;
+			size_t precomputedHash = 0;
 
 			bool operator==(const NativeProfileKey& other) const
 			{
@@ -128,6 +129,8 @@ namespace fonthook::vectorfont
 		{
 			size_t operator()(const NativeProfileKey& key) const
 			{
+				if (key.precomputedHash)
+					return key.precomputedHash;
 				// FNV-1a over the exact immutable profile. Float bit identity is
 				// intentional: it preserves the compiled native-constant ABI.
 				size_t hash = 2166136261u;
@@ -682,6 +685,11 @@ namespace fonthook::vectorfont
 			key.usesLiveTileRgb = packet.usesLiveTileRgb;
 			std::memcpy(key.constantBits.data(), packet.constants.data(),
 				key.constantBits.size() * sizeof(UInt32));
+			if (packet.sampling == sampling)
+			{
+				key.precomputedHash =
+					packet.profileHashes[writeEffectAlpha ? 1u : 0u];
+			}
 			return key;
 		}
 
@@ -1482,13 +1490,30 @@ namespace fonthook::vectorfont
 		const bool writeEffectAlpha = packet.layer != 3
 			&& generation->supportsSeparateAlpha
 			&& alpha && alpha->GetAlphaBlending();
+		const size_t cacheIndex = writeEffectAlpha ? 1u : 0u;
+		NativeA8PacketShaderCacheEntry& packetCache =
+			packet.resolvedShaders[cacheIndex];
+		NativeShaderProfile* cachedProfile =
+			static_cast<NativeShaderProfile*>(
+				packetCache.profile.load(std::memory_order_acquire));
+		if (cachedProfile && cachedProfile->owner == generation
+			&& cachedProfile->shader
+			&& cachedProfile->key.sampling == sampling
+			&& cachedProfile->key.writeEffectAlpha == writeEffectAlpha)
+		{
+			return cachedProfile->shader;
+		}
 		const NativeProfileKey key = MakeProfileKey(packet, sampling,
 			writeEffectAlpha);
 		std::shared_ptr<const NativeProfileMap> snapshot =
 			generation->profiles.load(std::memory_order_acquire);
 		auto found = snapshot->find(key);
 		if (found != snapshot->end())
+		{
+			packetCache.profile.store(
+				found->second, std::memory_order_release);
 			return found->second->shader;
+		}
 
 		std::lock_guard<std::mutex> lock(generation->profileMutex);
 		if (!GenerationMatchesCurrentDevice(generation))
@@ -1496,7 +1521,11 @@ namespace fonthook::vectorfont
 		snapshot = generation->profiles.load(std::memory_order_acquire);
 		found = snapshot->find(key);
 		if (found != snapshot->end())
+		{
+			packetCache.profile.store(
+				found->second, std::memory_order_release);
 			return found->second->shader;
+		}
 
 		NativeShaderProfile* profile = CreateProfile(*generation, packet, key);
 		if (!profile)
@@ -1513,6 +1542,7 @@ namespace fonthook::vectorfont
 		generation->profiles.store(
 			std::shared_ptr<const NativeProfileMap>(std::move(updated)),
 			std::memory_order_release);
+		packetCache.profile.store(profile, std::memory_order_release);
 		return profile->shader;
 	}
 

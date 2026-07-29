@@ -89,6 +89,41 @@ namespace fonthook::vectorfont
 					kNativeA8PacketConstantFloatCount * sizeof(float)) == 0;
 		}
 
+		size_t HashNativePacketProfile(const NativeA8PacketTemplate& packet,
+			bool writeEffectAlpha)
+		{
+			size_t hash = 2166136261u;
+			auto mix = [&hash](UInt32 value)
+			{
+				hash ^= value;
+				hash *= 16777619u;
+			};
+			mix(static_cast<UInt32>(packet.shaderClass));
+			mix(static_cast<UInt32>(packet.sampling));
+			mix(static_cast<UInt32>(packet.quality));
+			mix(static_cast<UInt32>(packet.distanceFieldMethod));
+			mix(packet.staticCompositeLayerMask);
+			mix(packet.compositeShiftedShadow ? 1u : 0u);
+			mix(writeEffectAlpha ? 1u : 0u);
+			mix(packet.usesLiveTileRgb ? 1u : 0u);
+			for (float value : packet.constants)
+			{
+				UInt32 bits = 0;
+				std::memcpy(&bits, &value, sizeof(bits));
+				mix(bits);
+			}
+			return hash;
+		}
+
+		void FinalizeNativePacketProfileHashes(
+			NativeA8PacketTemplate& packet)
+		{
+			packet.profileHashes[0] =
+				HashNativePacketProfile(packet, false);
+			packet.profileHashes[1] =
+				HashNativePacketProfile(packet, true);
+		}
+
 		A8CompiledRange CompileRange(const A8EffectShapeConfig& effects,
 			const A8DrawRange& range)
 		{
@@ -315,6 +350,7 @@ namespace fonthook::vectorfont
 				effects.shadowOffsetX * effects.shadowOffsetRasterScale;
 			packet.constants[31] =
 				effects.shadowOffsetY * effects.shadowOffsetRasterScale;
+			FinalizeNativePacketProfileHashes(packet);
 			return packet;
 		}
 
@@ -399,6 +435,7 @@ namespace fonthook::vectorfont
 			packet.atlasPage = span.atlasPage;
 			packet.staticSmoothSampling = span.staticSmoothSampling;
 			packet.usesLiveTileRgb = span.usesLiveTileRgb;
+			FinalizeNativePacketProfileHashes(packet);
 			payload->packets.push_back(std::move(packet));
 		}
 		if (effects.shaderEffects && !compositeSpans.empty())

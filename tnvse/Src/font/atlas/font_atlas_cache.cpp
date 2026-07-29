@@ -747,6 +747,29 @@ namespace fonthook::vectorfont
 				bakedColorHash);
 		}
 
+		bool BuildDistanceFieldAtlasContentHash(
+			const FontConfig& config, VectorFontByteClass byteClass,
+			float rasterScale, UInt64& contentHash)
+		{
+			MtsdfSharedRasterProfile profile;
+			if (!ResolveMtsdfSharedRasterProfile(config, byteClass,
+				rasterScale, true, profile))
+			{
+				return false;
+			}
+			const FontConfig& rasterConfig =
+				GetMtsdfAtlasConfig(config, byteClass);
+			const UInt8 combination = static_cast<UInt8>(
+				1u << static_cast<UInt8>(
+					GlyphMaskType::DistanceField));
+			contentHash = BuildAtlasContentHash(
+				rasterConfig.maskGenerationRoleHashes[
+					static_cast<size_t>(byteClass)],
+				combination, static_cast<UInt8>(profile.sdfSpread),
+				0, 0, 0, 1469598103934665603ull);
+			return true;
+		}
+
 		bool UsesLevelZeroOnly(
 			const std::vector<std::shared_ptr<const GlyphBitmap>>& bitmaps,
 			AtlasPixelMode pixelMode, AtlasRenderMode renderMode)
@@ -975,14 +998,27 @@ namespace fonthook::vectorfont
 					const FontConfig& rasterConfig =
 						renderMode == AtlasRenderMode::ShaderEffects
 						? GetMtsdfAtlasConfig(config, byteClass) : config;
-					baseKeys[roleIndex] = {
-						BuildAtlasContentHash(
+					UInt64 contentHash = 0;
+					const bool distanceFieldFastPath =
+						renderMode == AtlasRenderMode::ShaderEffects
+						&& combinations[roleIndex] == static_cast<UInt8>(
+							1u << static_cast<UInt8>(
+								GlyphMaskType::DistanceField))
+						&& BuildDistanceFieldAtlasContentHash(
+							config, byteClass, rasterScale,
+							contentHash);
+					if (!distanceFieldFastPath)
+					{
+						contentHash = BuildAtlasContentHash(
 							rasterConfig.maskGenerationRoleHashes[roleIndex],
 							combinations[roleIndex], sdfSpreads[roleIndex],
 							outlineStroke, glowStroke,
 							renderMode == AtlasRenderMode::CpuEffects
 								? BuildCpuCoverageHash(config, rasterScale) : 0,
-							1469598103934665603ull),
+							1469598103934665603ull);
+					}
+					baseKeys[roleIndex] = {
+						contentHash,
 						config.fontId,
 						static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
 						pixelMode,
@@ -1075,14 +1111,32 @@ namespace fonthook::vectorfont
 			};
 
 			AtlasState& state = State();
+			UInt64 contentHash = 0;
+			const bool distanceFieldFastPath =
+				renderMode == AtlasRenderMode::ShaderEffects
+				&& pixelMode == GetConfiguredDistanceFieldAtlasPixelMode()
+				&& !bitmaps.empty() && bitmaps.front()
+				&& bitmaps.front()->maskType
+					== GlyphMaskType::DistanceField
+				&& !bitmaps.front()->colorBaked
+				&& BuildDistanceFieldAtlasContentHash(
+					config, byteClass, rasterScale, contentHash);
+			if (!distanceFieldFastPath)
+			{
+				contentHash = BuildAtlasContentHash(
+					config, byteClass, bitmaps, rasterScale,
+					renderMode);
+			}
+			const bool levelZeroOnly = distanceFieldFastPath
+				|| UsesLevelZeroOnly(bitmaps, pixelMode, renderMode);
 			const AtlasCacheKey baseKey = {
-				BuildAtlasContentHash(config, byteClass, bitmaps, rasterScale, renderMode),
+				contentHash,
 				config.fontId,
 				static_cast<UInt32>(std::lround(rasterScale * 1000.0f)),
 				pixelMode,
 				renderMode,
 				padding,
-				UsesLevelZeroOnly(bitmaps, pixelMode, renderMode),
+				levelZeroOnly,
 				byteClass
 			};
 

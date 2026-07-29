@@ -85,7 +85,6 @@ namespace fonthook
 	struct PreparedDirectTextSidecar
 	{
 		UInt64 layoutIdentity = 0;
-		UInt64 textHash = 0;
 		size_t textLength = 0;
 		bool rejectBatch = false;
 		std::vector<DirectTextUnit> units;
