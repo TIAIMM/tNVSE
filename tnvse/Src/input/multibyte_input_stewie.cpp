@@ -25,8 +25,16 @@ namespace fonthook
 			StewieInputTarget target;
 			std::string text;
 			size_t caret = 0;
-			size_t appliedBytes = 0;
+			std::string appliedText;
+			size_t appliedCaret = 0;
 			bool initialized = false;
+		};
+
+		struct MenuSearchReplayStats
+		{
+			UInt32 commits = 0;
+			UInt32 originalCalls = 0;
+			UInt32 legacyEquivalentCalls = 0;
 		};
 
 		struct PendingStewieAscii
@@ -80,6 +88,7 @@ namespace fonthook
 		DWORD s_lastDeferredStewieAsciiCommitTick = 0;
 		UInt8 s_lastDeferredStewieAsciiCommitChar = 0;
 		StewieSpaceCommitState s_lastStewieSpaceCommit;
+		MenuSearchReplayStats s_menuSearchReplayStats;
 		DWORD s_lastStewTargetPollTick = 0;
 		StewieInputTarget s_observedStewTarget;
 
@@ -523,7 +532,8 @@ namespace fonthook
 			if (!target.inputField && s_stewieShadow.text == "_")
 				s_stewieShadow.text.clear();
 			s_stewieShadow.caret = ClampStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret);
-			s_stewieShadow.appliedBytes = s_stewieShadow.text.size();
+			s_stewieShadow.appliedText = s_stewieShadow.text;
+			s_stewieShadow.appliedCaret = s_stewieShadow.caret;
 			s_stewieShadow.initialized = target.valid;
 		}
 
@@ -532,7 +542,9 @@ namespace fonthook
 			if (!target.valid || !s_stewieShadow.initialized)
 				return false;
 
-			const size_t clearCount = std::min<size_t>(s_stewieShadow.appliedBytes, kStewieMaxShadowBytes);
+			const size_t clearCount = std::min<size_t>(
+				s_stewieShadow.appliedText.size(),
+				kStewieMaxShadowBytes);
 
 			s_stewieReplay = true;
 			CallStewieOriginalInput(target.menu, kInputCode_End);
@@ -547,7 +559,215 @@ namespace fonthook
 				CallStewieOriginalInput(target.menu, kInputCode_ArrowLeft);
 			s_stewieReplay = false;
 
-			s_stewieShadow.appliedBytes = s_stewieShadow.text.size();
+			s_stewieShadow.appliedText = s_stewieShadow.text;
+			s_stewieShadow.appliedCaret = caret;
+			return true;
+		}
+
+		bool IsInsertedAtCaret(
+			std::string_view before,
+			size_t beforeCaret,
+			std::string_view after,
+			size_t afterCaret,
+			size_t& insertedBytes)
+		{
+			insertedBytes = 0;
+			if (beforeCaret > before.size()
+				|| afterCaret < beforeCaret
+				|| afterCaret > after.size())
+			{
+				return false;
+			}
+
+			insertedBytes = afterCaret - beforeCaret;
+			return after.size() == before.size() + insertedBytes
+				&& before.compare(0, beforeCaret, after, 0, beforeCaret) == 0
+				&& before.compare(
+					beforeCaret,
+					std::string_view::npos,
+					after,
+					afterCaret,
+					std::string_view::npos) == 0;
+		}
+
+		bool IsRemovedBeforeCaret(
+			std::string_view before,
+			size_t beforeCaret,
+			std::string_view after,
+			size_t afterCaret,
+			size_t& removedBytes)
+		{
+			removedBytes = 0;
+			if (afterCaret > beforeCaret
+				|| beforeCaret > before.size()
+				|| afterCaret > after.size())
+			{
+				return false;
+			}
+
+			removedBytes = beforeCaret - afterCaret;
+			return before.size() == after.size() + removedBytes
+				&& before.compare(0, afterCaret, after, 0, afterCaret) == 0
+				&& before.compare(
+					beforeCaret,
+					std::string_view::npos,
+					after,
+					afterCaret,
+					std::string_view::npos) == 0;
+		}
+
+		bool IsRemovedAfterCaret(
+			std::string_view before,
+			size_t beforeCaret,
+			std::string_view after,
+			size_t afterCaret,
+			size_t& removedBytes)
+		{
+			removedBytes = 0;
+			if (afterCaret != beforeCaret
+				|| beforeCaret > before.size()
+				|| afterCaret > after.size()
+				|| before.size() < after.size())
+			{
+				return false;
+			}
+
+			removedBytes = before.size() - after.size();
+			return before.compare(0, beforeCaret, after, 0, afterCaret) == 0
+				&& before.compare(
+					beforeCaret + removedBytes,
+					std::string_view::npos,
+					after,
+					afterCaret,
+					std::string_view::npos) == 0;
+		}
+
+		size_t CommonStewiePrefix(
+			const StewieInputTarget& target,
+			std::string_view lhs,
+			std::string_view rhs)
+		{
+			size_t prefix = 0;
+			const size_t limit = std::min(lhs.size(), rhs.size());
+			while (prefix < limit && lhs[prefix] == rhs[prefix])
+				++prefix;
+
+			const std::string lhsCopy(lhs);
+			const std::string rhsCopy(rhs);
+			return std::min(
+				ClampStewieBoundary(target, lhsCopy, prefix),
+				ClampStewieBoundary(target, rhsCopy, prefix));
+		}
+
+		bool ApplyMenuSearchShadowDelta(const StewieInputTarget& target)
+		{
+			const std::string& before = s_stewieShadow.appliedText;
+			const std::string& after = s_stewieShadow.text;
+			const size_t beforeCaret = ClampStewieBoundary(
+				target,
+				before,
+				s_stewieShadow.appliedCaret);
+			size_t afterCaret = ClampStewieBoundary(
+				target,
+				after,
+				s_stewieShadow.caret);
+
+			// Stewie's lightweight SearchBar variants only support append and
+			// Backspace. Their caret is therefore always the byte-string end.
+			if (!target.inputField)
+				afterCaret = after.size();
+
+			const UInt32 legacyCalls = g_bMultibyteInputLog
+				? static_cast<UInt32>(
+					1
+						+ before.size()
+						+ after.size()
+						+ (after.size() - afterCaret))
+				: 0;
+			UInt32 issuedCalls = 0;
+			auto issue = [&](UInt32 input)
+			{
+				if (g_bMultibyteInputLog)
+					++issuedCalls;
+				CallStewieOriginalInput(target.menu, input);
+			};
+
+			s_stewieReplay = true;
+			size_t changedBytes = 0;
+			if (before == after)
+			{
+				if (beforeCaret != afterCaret)
+				{
+					if (afterCaret == 0)
+						issue(kInputCode_Home);
+					else if (afterCaret == after.size())
+						issue(kInputCode_End);
+					else if (afterCaret < beforeCaret)
+					{
+						for (size_t i = afterCaret; i < beforeCaret; ++i)
+							issue(kInputCode_ArrowLeft);
+					}
+					else
+					{
+						for (size_t i = beforeCaret; i < afterCaret; ++i)
+							issue(kInputCode_ArrowRight);
+					}
+				}
+			}
+			else if (IsInsertedAtCaret(
+				before,
+				beforeCaret,
+				after,
+				afterCaret,
+				changedBytes))
+			{
+				for (size_t i = beforeCaret; i < afterCaret; ++i)
+					issue(static_cast<UInt8>(after[i]));
+			}
+			else if (IsRemovedBeforeCaret(
+				before,
+				beforeCaret,
+				after,
+				afterCaret,
+				changedBytes))
+			{
+				for (size_t i = 0; i < changedBytes; ++i)
+					issue(kInputCode_Backspace);
+			}
+			else if (IsRemovedAfterCaret(
+				before,
+				beforeCaret,
+				after,
+				afterCaret,
+				changedBytes))
+			{
+				for (size_t i = 0; i < changedBytes; ++i)
+					issue(kInputCode_Delete);
+			}
+			else
+			{
+				if (beforeCaret != before.size())
+					issue(kInputCode_End);
+
+				const size_t prefix = CommonStewiePrefix(target, before, after);
+				for (size_t i = prefix; i < before.size(); ++i)
+					issue(kInputCode_Backspace);
+				for (size_t i = prefix; i < after.size(); ++i)
+					issue(static_cast<UInt8>(after[i]));
+				for (size_t i = afterCaret; i < after.size(); ++i)
+					issue(kInputCode_ArrowLeft);
+			}
+			s_stewieReplay = false;
+
+			s_stewieShadow.caret = afterCaret;
+			s_stewieShadow.appliedText = after;
+			s_stewieShadow.appliedCaret = afterCaret;
+			if (g_bMultibyteInputLog)
+			{
+				++s_menuSearchReplayStats.commits;
+				s_menuSearchReplayStats.originalCalls += issuedCalls;
+				s_menuSearchReplayStats.legacyEquivalentCalls += legacyCalls;
+			}
 			return true;
 		}
 
@@ -565,7 +785,9 @@ namespace fonthook
 			s_stewieShadow.text = std::move(candidate);
 			s_stewieShadow.caret = ClampStewieBoundary(target, s_stewieShadow.text, caret);
 			s_stewieShadow.initialized = true;
-			return ReplayStewieShadow(target);
+			return target.kind == StewieInputKind::MenuSearch
+				? ApplyMenuSearchShadowDelta(target)
+				: ReplayStewieShadow(target);
 		}
 
 		bool InsertTextAtCaretStewie(const StewieInputTarget& target, std::string_view text)
@@ -903,7 +1125,8 @@ namespace fonthook
 			s_stewieShadow.target = target;
 			s_stewieShadow.text = currentText;
 			s_stewieShadow.caret = currentCaret;
-			s_stewieShadow.appliedBytes = currentText.size();
+			s_stewieShadow.appliedText = currentText;
+			s_stewieShadow.appliedCaret = currentCaret;
 			s_stewieShadow.initialized = true;
 
 			const size_t caret = ClampStewieBoundary(target, s_stewieShadow.text, currentCaret);
@@ -1014,6 +1237,22 @@ namespace fonthook
 			// still remove a Space already replayed into the search tile.
 			const bool preserveMenuSearchSpaceCommit =
 				s_lastStewieSpaceCommit.target.kind == StewieInputKind::MenuSearch;
+			if (s_menuSearchReplayStats.commits)
+			{
+				const UInt32 savedCalls =
+					s_menuSearchReplayStats.legacyEquivalentCalls
+						> s_menuSearchReplayStats.originalCalls
+					? s_menuSearchReplayStats.legacyEquivalentCalls
+						- s_menuSearchReplayStats.originalCalls
+					: 0;
+				DebugLog(
+					"tnvse_multibyte_input_performance: target=MenuSearch strategy=incremental commits=%u original_calls=%u legacy_equivalent_calls=%u saved_calls=%u",
+					s_menuSearchReplayStats.commits,
+					s_menuSearchReplayStats.originalCalls,
+					s_menuSearchReplayStats.legacyEquivalentCalls,
+					savedCalls);
+				s_menuSearchReplayStats = {};
+			}
 			s_stewieShadow = StewieShadowState();
 			s_pendingStewieAdapterAscii.clear();
 			s_pendingStewieWndProcAscii.clear();

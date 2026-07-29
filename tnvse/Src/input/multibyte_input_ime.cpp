@@ -236,6 +236,8 @@ namespace fonthook
 
 		void RefreshImeCandidatesFromImm(HWND hwnd)
 		{
+			if (g_bMultibyteInputLog)
+				++State().candidateContentRefreshes;
 			ClearImeCandidates();
 
 			HIMC context = hwnd ? ImmGetContext(hwnd) : nullptr;
@@ -249,8 +251,21 @@ namespace fonthook
 				return;
 			}
 
-			std::unique_ptr<char[]> buffer(new char[bytes]);
-			auto* list = reinterpret_cast<LPCANDIDATELIST>(buffer.get());
+			// Candidate lists are normally tiny. Reuse one bounded buffer so
+			// rapid composition updates do not allocate on the 32-bit heap.
+			constexpr DWORD kMaxCandidateListBytes = 1024 * 1024;
+			constexpr size_t kCandidateOffsetTable =
+				offsetof(CANDIDATELIST, dwOffset);
+			if (bytes < kCandidateOffsetTable + sizeof(DWORD)
+				|| bytes > kMaxCandidateListBytes)
+			{
+				ImmReleaseContext(hwnd, context);
+				return;
+			}
+
+			std::vector<char>& buffer = State().immCandidateBuffer;
+			buffer.resize(bytes);
+			auto* list = reinterpret_cast<LPCANDIDATELIST>(buffer.data());
 			if (ImmGetCandidateListW(context, 0, list, bytes) != bytes)
 			{
 				ImmReleaseContext(hwnd, context);
@@ -263,18 +278,38 @@ namespace fonthook
 				State().candidate.pageStart = list->dwPageStart;
 				State().candidate.pageSize = list->dwPageSize;
 
-				const DWORD pageEnd = std::min<DWORD>(
+				const DWORD boundedCount = std::min<DWORD>(
 					list->dwCount,
-					list->dwPageStart + std::min<DWORD>(list->dwPageSize, kMaxImeCandidatesToDisplay));
-				for (DWORD index = list->dwPageStart; index < pageEnd; ++index)
+					static_cast<DWORD>(
+						(bytes - kCandidateOffsetTable) / sizeof(DWORD)));
+				const DWORD pageStart = std::min<DWORD>(
+					list->dwPageStart,
+					boundedCount);
+				const DWORD pageEnd = std::min<DWORD>(
+					boundedCount,
+					pageStart + std::min<DWORD>(
+						list->dwPageSize,
+						kMaxImeCandidatesToDisplay));
+				for (DWORD index = pageStart; index < pageEnd; ++index)
 				{
 					const DWORD offset = list->dwOffset[index];
 					if (!offset || offset >= bytes)
 						continue;
 
-					const wchar_t* candidate = reinterpret_cast<const wchar_t*>(buffer.get() + offset);
-					if (candidate && *candidate)
-						State().candidate.candidates.emplace_back(candidate);
+					const wchar_t* candidate =
+						reinterpret_cast<const wchar_t*>(
+							buffer.data() + offset);
+					const size_t maxChars =
+						(bytes - offset) / sizeof(wchar_t);
+					size_t length = 0;
+					while (length < maxChars && candidate[length])
+						++length;
+					if (length && length < maxChars)
+					{
+						State().candidate.candidates.emplace_back(
+							candidate,
+							length);
+					}
 				}
 			}
 
@@ -315,6 +350,8 @@ namespace fonthook
 			ImeState& state = State();
 			if (state.hidingSystemImeWindows)
 				return;
+			if (state.hiddenSystemImeUiEpoch == state.imeCompositionUiEpoch)
+				return;
 
 			HIMC context = ImmGetContext(hwnd);
 			if (!context)
@@ -337,6 +374,7 @@ namespace fonthook
 				ImmSetCandidateWindow(context, &offscreen);
 			}
 
+			state.hiddenSystemImeUiEpoch = state.imeCompositionUiEpoch;
 			state.hidingSystemImeWindows = false;
 			ImmReleaseContext(hwnd, context);
 		}
@@ -438,6 +476,19 @@ namespace fonthook
 			if (enable)
 			{
 				ImeState& state = State();
+				if (state.gameImeEnabled
+					&& !state.gameImeContextDetached
+					&& state.associatedGameImeWindow == hwnd
+					&& state.associatedGameImeLayout
+					&& state.associatedGameImeGeneration
+						== state.textInputSessionGeneration)
+				{
+					if (g_bMultibyteInputLog)
+						++state.gameImeAssociationFastPathHits;
+					return;
+				}
+
+				const HKL layout = GetGameKeyboardLayout(hwnd);
 				// Never reuse the HIMC detached from a previous session. The
 				// keyboard layout may have changed while no target was active.
 				ImmAssociateContextEx(hwnd, nullptr, IACE_DEFAULT);
@@ -448,6 +499,9 @@ namespace fonthook
 				if (!context)
 				{
 					state.gameImeEnabled = false;
+					state.associatedGameImeWindow = nullptr;
+					state.associatedGameImeLayout = nullptr;
+					state.associatedGameImeGeneration = 0;
 					gLog.FormattedMessage(
 						"tnvse_multibyte_input: failed to associate game IME context for active text target");
 					return;
@@ -456,6 +510,10 @@ namespace fonthook
 				state.gameImeEnabled = true;
 				state.gameImeContextDetached = false;
 				state.detachedGameImeWindow = nullptr;
+				state.associatedGameImeWindow = hwnd;
+				state.associatedGameImeLayout = layout;
+				state.associatedGameImeGeneration =
+					state.textInputSessionGeneration;
 				RestoreDefaultGameImeContext(hwnd, "enable");
 				DebugLog("tnvse_multibyte_input: game IME context enabled");
 				return;
@@ -469,6 +527,9 @@ namespace fonthook
 				if (!context)
 				{
 					state.gameImeEnabled = false;
+					state.associatedGameImeWindow = nullptr;
+					state.associatedGameImeLayout = nullptr;
+					state.associatedGameImeGeneration = 0;
 					return;
 				}
 				ImmReleaseContext(hwnd, context);
@@ -478,6 +539,9 @@ namespace fonthook
 			// Publish the disabled state before IMM cancellation/association.
 			// Both operations can synchronously deliver IME messages.
 			state.gameImeEnabled = false;
+			state.associatedGameImeWindow = nullptr;
+			state.associatedGameImeLayout = nullptr;
+			state.associatedGameImeGeneration = 0;
 			CancelGameImeComposition(hwnd);
 			s_imeComposing = false;
 			ClearImePreviewState();
@@ -517,6 +581,13 @@ namespace fonthook
 			}
 			else
 			{
+				state.gameImeAssociationFastPathHits = 0;
+				state.ignoredCandidatePositionNotifications = 0;
+				state.candidateContentRefreshes = 0;
+				++state.imeCompositionUiEpoch;
+				if (!state.imeCompositionUiEpoch)
+					++state.imeCompositionUiEpoch;
+				state.hiddenSystemImeUiEpoch = 0;
 				// Resolve and publish the target before TSF callbacks are allowed
 				// to hide their system UI for this session.
 				SynchronizeTextInputTarget("session_activate_sync");
@@ -541,6 +612,15 @@ namespace fonthook
 				}
 			}
 
+			if (!active && g_bMultibyteInputLog)
+			{
+				DebugLog(
+					"tnvse_multibyte_input_performance: target=ImeSession context_fast_hits=%u candidate_content_refreshes=%u candidate_position_notifications_skipped=%u",
+					state.gameImeAssociationFastPathHits,
+					state.candidateContentRefreshes,
+					state.ignoredCandidatePositionNotifications);
+			}
+
 			DebugLog(
 				"tnvse_multibyte_input: text input session %s",
 				active ? "started" : "ended");
@@ -553,6 +633,10 @@ namespace fonthook
 				reason ? reason : "target_refresh_sync");
 			AdvanceTextInputSessionGeneration(
 				reason ? reason : "text_input_target_refresh");
+			++State().imeCompositionUiEpoch;
+			if (!State().imeCompositionUiEpoch)
+				++State().imeCompositionUiEpoch;
+			State().hiddenSystemImeUiEpoch = 0;
 			CancelDeferredStewieAscii();
 			ResetImeCommitKeyState("text_input_target_refresh");
 			s_imeComposing = false;
@@ -563,10 +647,10 @@ namespace fonthook
 			SetJipKeyEventSuppressionCaptureActive(true);
 			if (s_window)
 			{
-				if (State().gameImeEnabled)
-					RestoreDefaultGameImeContext(s_window, reason ? reason : "target_refresh");
-				else
-					SetGameImeEnabled(s_window, true);
+				// The target generation changed, so reacquire the current layout's
+				// default HIMC once. Subsequent input messages take the idempotent
+				// association fast path.
+				SetGameImeEnabled(s_window, true);
 
 				// Target activation is an input event in its own right. Do not wait
 				// for the first composition/key message to publish the status line.
@@ -586,7 +670,10 @@ namespace fonthook
 				return;
 
 			SynchronizeTextInputTarget("update_game_ime_association");
-			SetTextInputSessionActive(HasCurrentTextInputTarget());
+			const bool hasTarget = HasCurrentTextInputTarget();
+			SetTextInputSessionActive(hasTarget);
+			if (hasTarget && State().textInputSessionActive)
+				SetGameImeEnabled(s_window, true);
 		}
 
 		void PumpImeStatusWatchdog()
@@ -609,14 +696,47 @@ namespace fonthook
 				return;
 
 			State().lastImeWatchdogTick = now;
+			if (State().textInputSessionActive && State().gameImeEnabled)
+			{
+				// Validate the cached association only on the 250 ms watchdog.
+				// The hot message path remains free of IMM queries while an
+				// externally detached context is still repaired promptly.
+				HIMC context = ImmGetContext(s_window);
+				if (context)
+					ImmReleaseContext(s_window, context);
+				else
+				{
+					State().gameImeEnabled = false;
+					State().associatedGameImeWindow = nullptr;
+					State().associatedGameImeLayout = nullptr;
+					State().associatedGameImeGeneration = 0;
+				}
+			}
+
 			UpdateGameImeAssociation();
 			if (!State().textInputSessionActive && !State().overlay.visible)
 				return;
 
 			if (g_bMultibyteInputCompositionPreview)
 			{
+				const std::wstring previousName =
+					State().candidate.imeName;
+				const bool previousOpen =
+					State().candidate.imeOpen;
+				const DWORD previousConversion =
+					State().candidate.conversionMode;
+				const DWORD previousSentence =
+					State().candidate.sentenceMode;
 				RefreshImeStatus(s_window);
-				UpdateCandidateOverlay();
+				if (State().candidate.imeName != previousName
+					|| State().candidate.imeOpen != previousOpen
+					|| State().candidate.conversionMode
+						!= previousConversion
+					|| State().candidate.sentenceMode
+						!= previousSentence)
+				{
+					UpdateCandidateOverlay();
+				}
 			}
 		}
 

@@ -689,9 +689,11 @@ struct InputField
 
 - tNVSE 为当前 Stewie target 维护一份 shadow buffer，shadow 的 caret 是 byte offset，但移动和删除都按 DBCS 边界处理。
 - ASCII、IME commit、Backspace、Delete、Left、Right、Home、End 都先修改 shadow。
-- shadow 修改后，tNVSE 用 Stewie original handler 清空当前 Stewie 输入框，再按 byte 重放完整 shadow，最后把 caret 左移回目标位置。这样 Stewie 自己的刷新、过滤、确认逻辑仍由原 DLL 执行，tNVSE 不复制它的搜索实现。
+- 普通菜单的 `MenuSearch` shadow 修改后，tNVSE 比较已提交快照和新快照：光标处插入只提交新增 byte，Backspace/Delete 只提交被删 byte，纯光标移动只提交必要的编辑键；只有不能表示为局部编辑时才保留公共前缀并重放后缀。所有操作仍逐项调用 Stewie original handler，因此过滤语义、列表刷新和确认逻辑不被复制。
+- 该增量路径按 DBCS/UTF-8 完整字符边界选择编辑范围，但向 Stewie `InputField` / `SearchBar` 提交时仍遵守它们的 byte ABI。库存、交易、容器等菜单不会再在每次汉字提交时执行“清空旧串 + 重放完整历史串”，避免搜索串增长后整表刷新次数呈二次增长。StewMenu 搜索和字符串设置继续使用完整重放兼容路径。
 - 组合输入期间，拼音/假名 ASCII 和候选选择键由 Stewie target 吞掉；只有 `GCS_RESULTSTR` 成功转成当前 `uiEncoding` codepage 后才写入 shadow。
 - 原生 Tile candidate overlay 的 target gate 也包含 Stewie target，因此候选窗可以跟随 StewMenu / MenuSearch 搜索框显示。
+- `bMultibyteInputLog=1` 时，会在 MenuSearch shadow 清理时输出 `tnvse_multibyte_input_performance ... strategy=incremental`，其中 `legacy_equivalent_calls` 是旧完整重放需要的 Stewie original 调用数，`original_calls` 是增量路径的实际调用数，`saved_calls` 是避免的调用数。每个被避免的文字调用在库存/交易等菜单中通常也对应一次被避免的完整列表刷新。
 
 这个 adapter 的边界是：不修改 Stewie DLL，不改 Stewie 菜单 XML，不接管搜索匹配语义。Stewie 仍然按它自己的 codepage byte substring 逻辑过滤列表；tNVSE 只保证输入框里的多字节文本不会被按单 byte 删除、移动或被 IME 预编辑串污染。
 
@@ -832,6 +834,11 @@ bool MoveCaretNext(TextEditState&);
 - `GCS_COMPSTR` 只用于 composition 行，不进入真实 buffer。
 - TSF `ITfCandidateListUIElement` 优先提供候选汉字；`ImmGetCandidateListW` 只作为旧 IME fallback。
 - 输入法名称优先来自 TSF profile description，失败才退回 `ImmGetDescriptionW` / keyboard layout。
+- 活动输入会话的 HIMC 关联按窗口、输入会话 generation 和 keyboard layout 缓存；首次激活/切换 layout 仍同步建立默认 context，后续输入消息只走常量时间 fast path。250 ms watchdog 才查询一次 context 是否被外部插件解绑。
+- TSF profile description 只在初始化和 profile activation 时查询；主循环没有 TSF 更新时通过原子 dirty gate 跳过 pending lock。IMM candidate buffer 在 1 MiB 上限内复用，避免候选更新反复分配 32 位堆内存。
+- `IMN_SETCANDIDATEPOS` 仍被消费以阻止系统候选窗接管，但不再读取候选内容、刷新 IME 状态或重建原生 Tile。offscreen composition/candidate form 在每次 composition 开始时设置一次，并在候选首次打开时补设一次，不在每条 composition/position 通知上形成反馈循环。
+- 原生 Tile 候选层只有内容/状态、宿主 generation 或可见性实际变化时才重建；宿主树按 250 ms 安全周期验证，稳定帧不再重复编码候选文字、测量字形 visual bounds 或写 Tile traits。
+- `bMultibyteInputLog=1` 的会话结束统计 `context_fast_hits`、`candidate_content_refreshes` 和 `candidate_position_notifications_skipped` 可用于确认上述快路径；详细日志本身会影响帧时间，性能对比仍应在关闭日志后采集。
 
 ### DBCS 编辑键
 

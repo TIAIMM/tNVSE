@@ -277,6 +277,13 @@ namespace fonthook
 
 			void PumpPendingUpdates()
 			{
+				if (!m_pendingDirty.exchange(
+						false,
+						std::memory_order_acquire))
+				{
+					return;
+				}
+
 				TsfPendingUpdate pending;
 				AcquireSRWLockExclusive(&m_pendingLock);
 				pending = std::move(m_pending);
@@ -285,6 +292,8 @@ namespace fonthook
 
 				if (pending.profileChanged && s_window)
 				{
+					m_currentInputMethodName =
+						QueryCurrentInputMethodName();
 					RefreshImeStatus(s_window);
 					State().overlayRefreshPending = true;
 					DebugLog(
@@ -412,6 +421,7 @@ namespace fonthook
 					SafeRelease(profiles);
 				}
 
+				m_currentInputMethodName = QueryCurrentInputMethodName();
 				m_initialized = true;
 				return true;
 			}
@@ -453,6 +463,8 @@ namespace fonthook
 				m_threadMgrEventSinkCookie = TF_INVALID_COOKIE;
 				m_activated = false;
 				m_initialized = false;
+				m_pendingDirty.store(false, std::memory_order_release);
+				m_currentInputMethodName.clear();
 				SafeRelease(m_profileMgr);
 				SafeRelease(m_threadMgrEx);
 
@@ -464,6 +476,12 @@ namespace fonthook
 			}
 
 			std::wstring GetCurrentInputMethodName() const
+			{
+				return m_currentInputMethodName;
+			}
+
+		private:
+			std::wstring QueryCurrentInputMethodName() const
 			{
 				if (!m_profileMgr)
 					return {};
@@ -500,12 +518,12 @@ namespace fonthook
 				return result;
 			}
 
-		private:
 			void PublishProfileChanged()
 			{
 				AcquireSRWLockExclusive(&m_pendingLock);
 				m_pending.profileChanged = true;
 				ReleaseSRWLockExclusive(&m_pendingLock);
+				m_pendingDirty.store(true, std::memory_order_release);
 			}
 
 			void PublishComposition(
@@ -517,6 +535,7 @@ namespace fonthook
 				m_pending.compositionGeneration = generation;
 				m_pending.composition = std::move(composition);
 				ReleaseSRWLockExclusive(&m_pendingLock);
+				m_pendingDirty.store(true, std::memory_order_release);
 			}
 
 			void DetachTextEditSink()
@@ -786,6 +805,8 @@ namespace fonthook
 			bool m_readingCandidateElement = false;
 			SRWLOCK m_pendingLock;
 			TsfPendingUpdate m_pending;
+			std::atomic_bool m_pendingDirty = false;
+			std::wstring m_currentInputMethodName;
 		};
 
 		bool InitializeTsfCandidateSupport()

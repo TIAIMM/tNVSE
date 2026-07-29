@@ -84,17 +84,28 @@ namespace fonthook
 			CandidateOverlayState overlay;
 			bool tsfCandidateActive = false;
 			bool hidingSystemImeWindows = false;
+			UInt32 imeCompositionUiEpoch = 1;
+			UInt32 hiddenSystemImeUiEpoch = 0;
 			std::atomic<ULONG_PTR> tsfInputWindow = 0;
 			bool gameImeEnabled = false;
 			bool gameImeContextDetached = false;
 			HWND detachedGameImeWindow = nullptr;
+			HWND associatedGameImeWindow = nullptr;
+			HKL associatedGameImeLayout = nullptr;
+			UInt32 associatedGameImeGeneration = 0;
 			std::atomic_bool textInputSessionActive = false;
 			UInt32 textInputSessionGeneration = 1;
 			TextInputTarget currentTextInputTarget;
 			bool overlayRefreshPending = false;
+			UInt32 nativeOverlayHostGeneration = 0;
+			DWORD lastNativeOverlayHostCheckTick = 0;
 			bool tsfCompositionFallbackActive = false;
 			DWORD nativeImeAsciiGuardUntilTick = 0;
 			DWORD lastImeWatchdogTick = 0;
+			UInt32 gameImeAssociationFastPathHits = 0;
+			UInt32 ignoredCandidatePositionNotifications = 0;
+			UInt32 candidateContentRefreshes = 0;
+			std::vector<char> immCandidateBuffer;
 
 			UInt32 tsfSessionGeneration = 1;
 			std::vector<TsfUiElementSession> tsfUiElementSessions;

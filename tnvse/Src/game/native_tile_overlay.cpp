@@ -99,6 +99,7 @@ namespace fonthook
 
 		NativeTileOverlayState s_state;
 		std::atomic_bool s_imeReady = false;
+		std::atomic<UInt32> s_imeHostGeneration = 1;
 		std::atomic_bool s_prewarmReady = false;
 		std::atomic_bool s_prewarmActive = false;
 		// Preserve the MSVC complete-object locator at vtable[-1] as well as
@@ -113,6 +114,15 @@ namespace fonthook
 		bool s_pipboyRenderHookInstallFailed = false;
 		bool s_loggedPipboyRttExclusion = false;
 		bool s_creatingImeMenu = false;
+
+		void AdvanceImeHostGeneration()
+		{
+			const UInt32 previous = s_imeHostGeneration.fetch_add(
+				1,
+				std::memory_order_acq_rel);
+			if (previous == std::numeric_limits<UInt32>::max())
+				s_imeHostGeneration.store(1, std::memory_order_release);
+		}
 		UInt32 s_imeVisualBoundsLogCount = 0;
 
 		UInt32 __fastcall ImeMenuGetId(Menu*, void*)
@@ -560,6 +570,16 @@ namespace fonthook
 
 		void ClearImeResolvedTiles()
 		{
+			const bool hadResolvedTiles = s_state.imeRoot
+				|| s_state.imeBackground
+				|| std::any_of(
+					s_state.imeLines.begin(),
+					s_state.imeLines.end(),
+					[](Tile* tile) { return tile != nullptr; })
+				|| std::any_of(
+					s_state.imeHighlights.begin(),
+					s_state.imeHighlights.end(),
+					[](Tile* tile) { return tile != nullptr; });
 			s_imeReady.store(false, std::memory_order_release);
 			s_state.imeRoot = nullptr;
 			s_state.imeBackground = nullptr;
@@ -569,6 +589,8 @@ namespace fonthook
 			s_state.imeLineHeight = 0.0f;
 			s_state.imeContentWidth = 0.0f;
 			s_state.imeVisible = false;
+			if (hadResolvedTiles)
+				AdvanceImeHostGeneration();
 		}
 
 		void ClearPrewarmResolvedTiles()
@@ -755,10 +777,16 @@ namespace fonthook
 			if (!background)
 				return false;
 
+			const bool changed = s_state.imeRoot != root
+				|| s_state.imeBackground != background
+				|| s_state.imeLines != lines
+				|| s_state.imeHighlights != highlights;
 			s_state.imeRoot = root;
 			s_state.imeBackground = background;
 			s_state.imeLines = lines;
 			s_state.imeHighlights = highlights;
+			if (changed)
+				AdvanceImeHostGeneration();
 			return true;
 		}
 
@@ -1233,6 +1261,20 @@ namespace fonthook
 		return s_imeReady.load(std::memory_order_acquire);
 	}
 
+	bool IsNativeImeOverlayVisible()
+	{
+		return IsNativeImeOverlayHostReady()
+			&& s_state.imeVisible
+			&& s_state.imeRoot
+			&& s_state.imeRoot->GetValueFloat(
+				Tile::kTileValue_visible) > 0.5f;
+	}
+
+	UInt32 GetNativeImeOverlayHostGeneration()
+	{
+		return s_imeHostGeneration.load(std::memory_order_acquire);
+	}
+
 	bool IsNativePrewarmOverlayHostReady()
 	{
 		return s_prewarmReady.load(std::memory_order_acquire);
@@ -1241,7 +1283,8 @@ namespace fonthook
 	void UpdateNativeImeOverlay(
 		const std::vector<NativeTileOverlayLine>& lines)
 	{
-		EnsureNativeImeOverlayHost();
+		if (!IsNativeImeOverlayHostReady())
+			EnsureNativeImeOverlayHost();
 		if (!IsNativeImeOverlayHostReady()
 			|| s_prewarmActive.load(std::memory_order_acquire))
 		{

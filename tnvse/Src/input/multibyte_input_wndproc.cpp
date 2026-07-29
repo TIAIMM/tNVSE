@@ -625,6 +625,9 @@ namespace fonthook
 							+ kInputLanguageSwitchAsciiGuardMs;
 						SuppressStewieInputLanguageSwitchSpace();
 					}
+					state.associatedGameImeLayout = nullptr;
+					state.associatedGameImeGeneration = 0;
+					state.hiddenSystemImeUiEpoch = 0;
 					RestoreDefaultGameImeContext(hwnd, "inputlangchange", newLayout);
 					ClearImeCandidates();
 					UpdateCandidateOverlay();
@@ -663,6 +666,9 @@ namespace fonthook
 						currentLayout = GetGameKeyboardLayout(hwnd);
 					}
 
+					state.associatedGameImeLayout = nullptr;
+					state.associatedGameImeGeneration = 0;
+					state.hiddenSystemImeUiEpoch = 0;
 					RestoreDefaultGameImeContext(hwnd, "winspace_complete", currentLayout);
 					ClearImeCandidates();
 					UpdateCandidateOverlay();
@@ -712,6 +718,9 @@ namespace fonthook
 				if (state.textInputSessionActive && IsFocusRestoreMessage(msg, wParam))
 				{
 					RestoreDefaultGameImeContext(hwnd, "focus_restore");
+					state.hiddenSystemImeUiEpoch = 0;
+					if (s_imeComposing)
+						HideSystemImeWindows(hwnd);
 					ClearImeCandidates();
 					UpdateCandidateOverlay();
 					DebugLog("tnvse_multibyte_input_event: source=WndProc action=focus_restore_ime msg=0x%04X", static_cast<UInt32>(msg));
@@ -747,6 +756,10 @@ namespace fonthook
 						SuppressStewieInputLanguageSwitchSpace();
 						state.inputLanguageSwitchGuardUntilTick = 0;
 					}
+					++state.imeCompositionUiEpoch;
+					if (!state.imeCompositionUiEpoch)
+						++state.imeCompositionUiEpoch;
+					state.hiddenSystemImeUiEpoch = 0;
 					HideSystemImeWindows(hwnd);
 					s_imeComposing = true;
 					state.compositionEchoChecked = false;
@@ -766,11 +779,15 @@ namespace fonthook
 
 				if (msg == WM_IME_NOTIFY && hasInputTarget)
 				{
-					RefreshImeStatus(hwnd);
 					switch (wParam)
 					{
 					case IMN_OPENCANDIDATE:
-					case IMN_SETCANDIDATEPOS:
+						// Some IMM services replace their candidate form when the
+						// list is first opened. Reapply the offscreen form once for
+						// that edge, not on every composition/position update.
+						state.hiddenSystemImeUiEpoch = 0;
+						HideSystemImeWindows(hwnd);
+						[[fallthrough]];
 					case IMN_CHANGECANDIDATE:
 						// Candidate list updates are driven by WM_IME_NOTIFY and the TSF
 						// UI element sink. Do not poll IMM during composition text updates;
@@ -783,6 +800,10 @@ namespace fonthook
 							static_cast<UInt32>(state.candidate.pageStart),
 							static_cast<UInt32>(state.candidate.pageSize));
 						return 0;
+					case IMN_SETCANDIDATEPOS:
+						// Hide/consume the system candidate position notification, but
+						// do not reread candidate content or rebuild the native overlay.
+						return 0;
 					case IMN_CLOSECANDIDATE:
 						ClearImeCandidates();
 						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=close_candidates");
@@ -790,6 +811,7 @@ namespace fonthook
 					case IMN_SETOPENSTATUS:
 					case IMN_SETCONVERSIONMODE:
 					case IMN_SETSENTENCEMODE:
+						RefreshImeStatus(hwnd);
 						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=refresh_ime_status");
 						break;
 					default:
@@ -827,26 +849,37 @@ namespace fonthook
 
 					if (hasInputTarget)
 					{
+						bool overlayChanged = false;
 						if (lParam & GCS_RESULTSTR)
 						{
 							s_imeComposing = false;
+							overlayChanged =
+								state.candidate.composing
+								|| !state.candidate.composition.empty()
+								|| !state.candidate.candidates.empty();
 							ClearImePreviewState();
 						}
 						else
 						{
 							s_imeComposing = true;
+							overlayChanged = !state.candidate.composing;
 							state.candidate.composing = true;
 						}
-						RefreshImeStatus(hwnd);
 						if (lParam & GCS_COMPSTR)
 						{
-							state.candidate.composition = event.composition;
+							if (state.candidate.composition
+								!= event.composition)
+							{
+								state.candidate.composition =
+									event.composition;
+								overlayChanged = true;
+							}
 							if (!event.composition.empty())
 								state.tsfCompositionFallbackActive = false;
 							TryRemoveCompositionEcho();
 						}
-						RefreshImeCandidates(hwnd);
-						UpdateCandidateOverlay();
+						if (overlayChanged)
+							UpdateCandidateOverlay();
 						DebugLogState("WndProc.WM_IME_COMPOSITION", "composition_continue", GetAnyActiveTextInputMenu(), static_cast<SInt32>(lParam));
 						return 0;
 					}
@@ -901,6 +934,9 @@ namespace fonthook
 				State().gameImeEnabled = false;
 				State().gameImeContextDetached = false;
 				State().detachedGameImeWindow = nullptr;
+				State().associatedGameImeWindow = nullptr;
+				State().associatedGameImeLayout = nullptr;
+				State().associatedGameImeGeneration = 0;
 				s_window = nullptr;
 				const LRESULT result =
 					ForwardWindowMessage(hwnd, msg, wParam, lParam);
@@ -996,17 +1032,26 @@ namespace fonthook
 				switch (wParam)
 				{
 				case IMN_OPENCANDIDATE:
-				case IMN_SETCANDIDATEPOS:
 				case IMN_CHANGECANDIDATE:
 					RefreshImeCandidates(hwnd);
+					state.overlayRefreshPending = true;
+					break;
+				case IMN_SETCANDIDATEPOS:
+					if (g_bMultibyteInputLog)
+						++state.ignoredCandidatePositionNotifications;
 					break;
 				case IMN_CLOSECANDIDATE:
 					ClearImeCandidates();
+					state.overlayRefreshPending = true;
+					break;
+				case IMN_SETOPENSTATUS:
+				case IMN_SETCONVERSIONMODE:
+				case IMN_SETSENTENCEMODE:
+					state.overlayRefreshPending = true;
 					break;
 				default:
 					break;
 				}
-				state.overlayRefreshPending = true;
 			}
 
 			// Preserve the normal consume/forward contract even if the bounded
@@ -1172,6 +1217,9 @@ namespace fonthook
 			s_window = hwnd;
 			s_originalWndProc = reinterpret_cast<WNDPROC>(original);
 			State().gameImeEnabled = false;
+			State().associatedGameImeWindow = nullptr;
+			State().associatedGameImeLayout = nullptr;
+			State().associatedGameImeGeneration = 0;
 			if (State().detachedGameImeWindow != hwnd)
 			{
 				State().gameImeContextDetached = false;

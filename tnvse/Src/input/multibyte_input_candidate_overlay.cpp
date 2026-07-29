@@ -108,17 +108,49 @@ namespace fonthook
 		void PumpCandidateOverlay()
 		{
 			ImeState& state = State();
-			if (g_bMultibyteInputCompositionPreview)
+			const DWORD now = GetTickCount();
+			constexpr DWORD kOverlayHostValidationIntervalMs = 250;
+			const bool validateHost = g_bMultibyteInputCompositionPreview
+				&& (state.overlayRefreshPending
+					|| !IsNativeImeOverlayHostReady()
+					|| !state.lastNativeOverlayHostCheckTick
+					|| now - state.lastNativeOverlayHostCheckTick
+						>= kOverlayHostValidationIntervalMs);
+			if (validateHost)
+			{
 				EnsureNativeImeOverlayHost();
-			state.overlayRefreshPending = false;
+				state.lastNativeOverlayHostCheckTick = now;
+				if (state.overlay.visible
+					&& !IsNativeImeOverlayVisible())
+				{
+					state.overlayRefreshPending = true;
+				}
+			}
+
+			const UInt32 hostGeneration =
+				GetNativeImeOverlayHostGeneration();
+			if (state.nativeOverlayHostGeneration != hostGeneration)
+				state.overlayRefreshPending = true;
 
 			if (!g_bMultibyteInputCompositionPreview
 				|| IsNativePrewarmOverlayActive()
 				|| !IsCandidateOverlayRendererAvailable()
 				|| !state.candidate.imeOpen)
 			{
+				const bool shouldHide = state.overlay.visible
+					|| state.overlayRefreshPending;
 				state.overlay.visible = false;
-				HideNativeImeOverlay();
+				if (shouldHide)
+					HideNativeImeOverlay();
+				state.nativeOverlayHostGeneration = hostGeneration;
+				state.overlayRefreshPending = false;
+				return;
+			}
+
+			if (!state.overlayRefreshPending
+				&& state.overlay.visible
+				&& state.nativeOverlayHostGeneration == hostGeneration)
+			{
 				return;
 			}
 
@@ -126,8 +158,13 @@ namespace fonthook
 				BuildCandidateOverlayLines();
 			if (lines.empty())
 			{
+				const bool shouldHide = state.overlay.visible
+					|| state.overlayRefreshPending;
 				state.overlay.visible = false;
-				HideNativeImeOverlay();
+				if (shouldHide)
+					HideNativeImeOverlay();
+				state.nativeOverlayHostGeneration = hostGeneration;
+				state.overlayRefreshPending = false;
 				return;
 			}
 
@@ -139,11 +176,11 @@ namespace fonthook
 					std::move(line.text), line.highlighted
 				});
 			}
-			// Always enter the service so a pMenuRoot/IME Menu rebuild can
-			// repopulate and show its fresh, XML-default-hidden Tile tree. The
-			// service still compares its own content key before mutating traits.
 			UpdateNativeImeOverlay(nativeLines);
-			state.overlay.visible = true;
+			state.overlay.visible = IsNativeImeOverlayVisible();
+			state.nativeOverlayHostGeneration =
+				GetNativeImeOverlayHostGeneration();
+			state.overlayRefreshPending = false;
 		}
 	}
 }

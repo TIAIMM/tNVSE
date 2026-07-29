@@ -17,6 +17,8 @@ namespace fonthook
 	bool EnsureNativePrewarmOverlayHost();
 	bool IsNativeImeOverlayHostReady();
 	bool IsNativePrewarmOverlayHostReady();
+	bool IsNativeImeOverlayVisible();
+	UInt32 GetNativeImeOverlayHostGeneration();
 
 	void UpdateNativeImeOverlay(
 		const std::vector<NativeTileOverlayLine>& lines);
