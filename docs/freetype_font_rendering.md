@@ -974,7 +974,15 @@ the distance spread and an additional guard texel are already inside each glyph
 bitmap. Aggressive composite and ARGB fallback pages retain four
 transparent pixels per side, isolating the 1/4 mip even when glyph dimensions
 are not multiples of four. Repeated text also reuses cached layout and unique
-text artifacts. One artifact owns the packed
+text artifacts. Text artifacts use a two-observation coarse-signature admission
+filter: a one-shot menu string is returned directly to its shape without
+entering the global map/LRU, while a warmed signature may create a fully
+validated cache resident. A small
+thread-local weak front serves recent resident or still-live artifacts without
+taking the global cache mutex and does not pin an artifact after its real owners
+release it. The first observation uses a constant-cost geometry/effect
+signature and skips the full per-quad color/range hash.
+One artifact owns the packed
 vertices, bound, atlas-page
 property/texture references, and merged contiguous packet descriptors that used
 to live in separate batch and packet-template caches. Geometry, per-glyph base

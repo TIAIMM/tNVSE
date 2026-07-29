@@ -2807,6 +2807,48 @@ namespace fonthook::vectorfont
 			return { hash, static_cast<UInt32>(quads.size()) };
 		}
 
+		struct TextArtifactHotEntry
+		{
+			UInt64 admissionSignature = 0;
+			TextArtifactKey key;
+			std::weak_ptr<const NativeA8PayloadTemplate> data;
+			bool occupied = false;
+		};
+
+		struct TextArtifactAdmissionSlot
+		{
+			UInt64 signature = 0;
+			UInt8 observations = 0;
+		};
+
+		inline constexpr size_t kTextArtifactHotEntryCount = 4;
+		inline constexpr size_t kTextArtifactAdmissionSlotCount = 256;
+		// The hot front never extends artifact lifetime. A coarse-admission
+		// collision can only cause an extra exact lookup/admission; the resident
+		// key and atlas objects are still fully validated before reuse.
+		thread_local std::array<TextArtifactHotEntry,
+			kTextArtifactHotEntryCount> s_textArtifactHotEntries;
+		thread_local size_t s_textArtifactHotNext = 0;
+		thread_local std::array<TextArtifactAdmissionSlot,
+			kTextArtifactAdmissionSlotCount> s_textArtifactAdmission;
+
+		bool TouchTextArtifactAdmission(UInt64 signature)
+		{
+			if (!signature)
+				signature = 1;
+			TextArtifactAdmissionSlot& slot = s_textArtifactAdmission[
+				static_cast<size_t>(signature)
+					% s_textArtifactAdmission.size()];
+			if (slot.signature != signature)
+			{
+				slot.signature = signature;
+				slot.observations = 0;
+			}
+			if (slot.observations < 2)
+				++slot.observations;
+			return slot.observations >= 2;
+		}
+
 		TextArtifactKey BuildTextArtifactKey(const QuadBatchFingerprint& fingerprint,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases)
 		{
@@ -2835,6 +2877,63 @@ namespace fonthook::vectorfont
 			}
 			return { atlases.empty() ? 0 : reinterpret_cast<uintptr_t>(atlases[0].get()),
 				hash, generation, fingerprint.quadCount };
+		}
+
+		UInt64 BuildTextArtifactAdmissionSignature(
+			const TextArtifactKey& geometryKey,
+			const std::vector<PendingQuad>& quads,
+			const A8EffectShapeConfig& effect)
+		{
+			// Most text artifacts in menu churn are never requested again. Build a
+			// constant-cost signature first so those one-shot objects avoid both the
+			// full color/range hash and the global cache mutex.
+			UInt64 hash = geometryKey.contentHash;
+			auto add = [&](const void* data, size_t size)
+			{
+				const UInt8* bytes = static_cast<const UInt8*>(data);
+				for (size_t index = 0; index < size; ++index)
+				{
+					hash ^= bytes[index];
+					hash *= 1099511628211ull;
+				}
+			};
+			add(&geometryKey.atlasIdentity, sizeof(geometryKey.atlasIdentity));
+			add(&geometryKey.generation, sizeof(geometryKey.generation));
+			add(&geometryKey.quadCount, sizeof(geometryKey.quadCount));
+			add(&effect.enabled, sizeof(effect.enabled));
+			add(&effect.shaderEffects, sizeof(effect.shaderEffects));
+			add(&effect.bakedCoverage, sizeof(effect.bakedCoverage));
+			add(&effect.precomposedArgb, sizeof(effect.precomposedArgb));
+			add(&effect.distanceFieldMethod,
+				sizeof(effect.distanceFieldMethod));
+			add(&effect.quality, sizeof(effect.quality));
+			const std::array<float, 16> scalars = {
+				effect.rasterScale,
+				effect.inverseAtlasWidth, effect.inverseAtlasHeight,
+				effect.sdfSpreadPixels, effect.shadowBlurPixels,
+				effect.shadowPower, effect.shadowGlowAlpha,
+				effect.shadowOutlineAlpha, effect.shadowOffsetX,
+				effect.shadowOffsetY, effect.shadowOffsetRasterScale,
+				effect.glowInnerPixels,
+				effect.glowOuterPixels, effect.glowPower,
+				effect.outlineWidthPixels, effect.outlineSoftnessPixels
+			};
+			add(scalars.data(), scalars.size() * sizeof(float));
+			const size_t pageCount = effect.atlasInverseSizes.size();
+			const size_t rangeCount = effect.ranges.size();
+			add(&pageCount, sizeof(pageCount));
+			add(&rangeCount, sizeof(rangeCount));
+			if (!quads.empty())
+			{
+				add(&quads.front().baseColor,
+					sizeof(quads.front().baseColor));
+				if (quads.size() > 1)
+				{
+					add(&quads.back().baseColor,
+						sizeof(quads.back().baseColor));
+				}
+			}
+			return hash ? hash : 1;
 		}
 
 		UInt64 BuildTextArtifactContentHash(const TextArtifactKey& geometryKey,
@@ -2920,35 +3019,130 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		NativeA8PayloadTemplatePtr FindHotTextArtifact(
+			UInt64 admissionSignature,
+			const TextArtifactKey& geometryKey,
+			const std::vector<PendingQuad>& quads,
+			const A8EffectShapeConfig& effects,
+			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
+			TextArtifactKey& resolvedKey, bool& keyResolved)
+		{
+			bool hasCandidate = false;
+			for (TextArtifactHotEntry& entry : s_textArtifactHotEntries)
+			{
+				if (!entry.occupied
+					|| entry.admissionSignature != admissionSignature)
+					continue;
+				if (entry.data.expired())
+				{
+					entry = {};
+					continue;
+				}
+				hasCandidate = true;
+			}
+			if (!hasCandidate)
+				return {};
+			if (!keyResolved)
+			{
+				resolvedKey = geometryKey;
+				resolvedKey.contentHash = BuildTextArtifactContentHash(
+					geometryKey, quads, effects);
+				keyResolved = true;
+			}
+			for (TextArtifactHotEntry& entry : s_textArtifactHotEntries)
+			{
+				if (!entry.occupied
+					|| entry.admissionSignature != admissionSignature
+					|| !(entry.key == resolvedKey))
+				{
+					continue;
+				}
+				NativeA8PayloadTemplatePtr data = entry.data.lock();
+				if (data && TextArtifactMatchesAtlases(*data, atlases))
+					return data;
+				entry = {};
+			}
+			return {};
+		}
+
+		void PublishHotTextArtifact(UInt64 admissionSignature,
+			const TextArtifactKey& key,
+			const NativeA8PayloadTemplatePtr& data)
+		{
+			if (!data)
+				return;
+			TextArtifactHotEntry& entry = s_textArtifactHotEntries[
+				s_textArtifactHotNext++ % s_textArtifactHotEntries.size()];
+			entry.admissionSignature = admissionSignature;
+			entry.key = key;
+			entry.data = data;
+			entry.occupied = true;
+		}
+
 		NativeA8PayloadTemplatePtr GetNativeTextArtifact(Font& font,
 			const std::vector<PendingQuad>& quads,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
-			const TextArtifactKey& key, const NiPoint3& origin,
-			const A8EffectShapeConfig& effects)
+			const TextArtifactKey& geometryKey, UInt64 admissionSignature,
+			const NiPoint3& origin, const A8EffectShapeConfig& effects,
+			bool allowCache)
 		{
 			AtlasState& state = State();
+			TextArtifactKey key = geometryKey;
+			bool keyResolved = false;
+			if (NativeA8PayloadTemplatePtr hot =
+				FindHotTextArtifact(admissionSignature, geometryKey,
+					quads, effects, atlases, key, keyResolved))
 			{
-				std::lock_guard<std::mutex> lock(state.textArtifactMutex);
-				auto existing = state.textArtifactCache.find(key);
-				if (existing != state.textArtifactCache.end())
+				RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactHit);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::TextArtifactHotHit);
+				return hot;
+			}
+			if (allowCache)
+			{
+				if (!keyResolved)
 				{
-					if (existing->second.data
-						&& TextArtifactMatchesAtlases(*existing->second.data,
-							atlases))
-					{
-						state.textArtifactLru.splice(state.textArtifactLru.begin(),
-							state.textArtifactLru,
-							existing->second.lru);
-						existing->second.lru = state.textArtifactLru.begin();
-						RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactHit);
-						return existing->second.data;
-					}
-					state.textArtifactCacheBytes -= std::min(
-						state.textArtifactCacheBytes,
-						existing->second.bytes);
-					state.textArtifactLru.erase(existing->second.lru);
-					state.textArtifactCache.erase(existing);
+					key.contentHash = BuildTextArtifactContentHash(
+						geometryKey, quads, effects);
+					keyResolved = true;
 				}
+				{
+					std::lock_guard<std::mutex> lock(
+						state.textArtifactMutex);
+					auto existing = state.textArtifactCache.find(key);
+					if (existing != state.textArtifactCache.end())
+					{
+						if (existing->second.data
+							&& TextArtifactMatchesAtlases(
+								*existing->second.data, atlases))
+						{
+							state.textArtifactLru.splice(
+								state.textArtifactLru.begin(),
+								state.textArtifactLru,
+								existing->second.lru);
+							existing->second.lru =
+								state.textArtifactLru.begin();
+							PublishHotTextArtifact(
+								admissionSignature, key,
+								existing->second.data);
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::TextArtifactHit);
+							return existing->second.data;
+						}
+						state.textArtifactCacheBytes -= std::min(
+							state.textArtifactCacheBytes,
+							existing->second.bytes);
+						state.textArtifactLru.erase(existing->second.lru);
+						state.textArtifactCache.erase(existing);
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::TextArtifactEviction);
+					}
+				}
+			}
+			else
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::TextArtifactAdmissionBypass);
 			}
 			RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactMiss);
 
@@ -3147,7 +3341,20 @@ namespace fonthook::vectorfont
 				bound, std::move(compositeSpans));
 			if (!result)
 				return {};
+			if (!allowCache)
+				return result;
 			const size_t bytes = GetNativeA8PayloadTemplateBytes(*result);
+			const size_t cacheOverhead = sizeof(TextArtifactEntry)
+				+ 2u * sizeof(TextArtifactKey) + 4u * sizeof(void*);
+			const size_t preferred = static_cast<size_t>(
+				g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 12u;
+			const size_t limit = GetCpuMemoryCategoryHeadroom(
+				CpuMemoryCategory::TextArtifact, preferred);
+			if (!limit || bytes > limit
+				|| cacheOverhead > limit - bytes)
+			{
+				return result;
+			}
 			{
 				std::lock_guard<std::mutex> lock(state.textArtifactMutex);
 				auto existing = state.textArtifactCache.find(key);
@@ -3161,6 +3368,8 @@ namespace fonthook::vectorfont
 							state.textArtifactLru,
 							existing->second.lru);
 						existing->second.lru = state.textArtifactLru.begin();
+						PublishHotTextArtifact(admissionSignature, key,
+							existing->second.data);
 						return existing->second.data;
 					}
 					state.textArtifactCacheBytes -= std::min(
@@ -3168,6 +3377,8 @@ namespace fonthook::vectorfont
 						existing->second.bytes);
 					state.textArtifactLru.erase(existing->second.lru);
 					state.textArtifactCache.erase(existing);
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::TextArtifactEviction);
 				}
 				state.textArtifactLru.push_front(key);
 				const auto [inserted, success] = state.textArtifactCache.emplace(key,
@@ -3180,13 +3391,17 @@ namespace fonthook::vectorfont
 						state.textArtifactLru,
 						inserted->second.lru);
 					inserted->second.lru = state.textArtifactLru.begin();
+					PublishHotTextArtifact(admissionSignature, key,
+						inserted->second.data);
 					return inserted->second.data;
 				}
-				inserted->second.cpuMemory.Reset(CpuMemoryCategory::TextArtifact,
-					sizeof(TextArtifactEntry) + 2u * sizeof(TextArtifactKey)
-						+ 4u * sizeof(void*));
+				inserted->second.cpuMemory.Reset(
+					CpuMemoryCategory::TextArtifact, cacheOverhead);
 				state.textArtifactCacheBytes += bytes;
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::TextArtifactAdmission);
 				TrimTextArtifactCache(state);
+				PublishHotTextArtifact(admissionSignature, key, result);
 			}
 			return result;
 		}
@@ -3220,12 +3435,15 @@ namespace fonthook::vectorfont
 			BuildA8DrawRanges(quads, resolvedEffect);
 			const TextArtifactKey geometryKey = BuildTextArtifactKey(
 				fingerprint, atlases);
-			const UInt64 artifactHash = BuildTextArtifactContentHash(
-				geometryKey, quads, resolvedEffect);
-			TextArtifactKey artifactKey = geometryKey;
-			artifactKey.contentHash = artifactHash;
+			const UInt64 artifactAdmissionSignature =
+				BuildTextArtifactAdmissionSignature(
+					geometryKey, quads, resolvedEffect);
+			const bool allowArtifactCache = TouchTextArtifactAdmission(
+				artifactAdmissionSignature);
 			const NativeA8PayloadTemplatePtr artifact = GetNativeTextArtifact(
-				font, quads, atlases, artifactKey, origin, resolvedEffect);
+				font, quads, atlases, geometryKey,
+				artifactAdmissionSignature, origin,
+				resolvedEffect, allowArtifactCache);
 			if (!artifact || artifact->gpuVertices.size() < quads.size() * 4u)
 				return nullptr;
 

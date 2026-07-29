@@ -583,8 +583,12 @@ namespace fonthook::vectorfont
 				auto existing = state.textArtifactCache.find(key);
 				if (existing != state.textArtifactCache.end())
 				{
-					state.textArtifactCacheBytes -= existing->second.bytes;
+					state.textArtifactCacheBytes -= std::min(
+						state.textArtifactCacheBytes,
+						existing->second.bytes);
 					state.textArtifactCache.erase(existing);
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::TextArtifactEviction);
 				}
 				state.textArtifactLru.pop_back();
 			}
