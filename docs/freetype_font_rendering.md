@@ -920,10 +920,13 @@ different topology selected by shader preflight retain the one-facade route.
 There is no global `NiNode::AttachChild` hook.
 
 The group primary owns the immutable payload, atlas references, and complete
-facade fallback. Followers hold only a non-owning group/slot identity. Before
-registration the primary copies its current transform, object flags, hardware
-scissor, overlay RGB, Tile and material alpha, and blend/cull/stencil properties
-and full world bound to the page-specific siblings, then performs the
+facade fallback. Shape metadata keeps a raw group identity plus a weak owner;
+locking that owner replaces a global metadata-map lock and lookup while still
+rejecting an expired, unpublished, or pointer-reused group. Followers hold no
+strong group ownership. Before registration the primary copies its current
+transform, object flags, hardware scissor, overlay RGB, Tile and material
+alpha, and blend/cull/stencil properties and full world bound to the
+page-specific siblings, then performs the
 conservative whole-group visibility test once. All slots must be registered
 into the same accumulator in descending slot order at consecutive final item
 positions. The per-shape registration hook records submission order only:
@@ -936,6 +939,10 @@ publication: only the primary executes the compatibility packet set and every
 follower is skipped. This final-layout scan does not build facade frame
 entries, acquire per-item metadata ownership, or run compatibility preflight
 for frames whose tracked FreeType objects are all virtual-stock primaries.
+The common one-slot group omits the multi-slot registration-index allocation
+and ordering pass, but still participates in the final accumulator scan and
+must appear exactly once; the shortcut therefore does not weaken identity or
+duplicate-registration validation.
 
 Each direct slot owns a small `NiGeometryBufferData`/`NiVBChip` descriptor but
 does not own its D3D buffers. The descriptor points at
@@ -952,6 +959,13 @@ unchanged. A stable slot is fully validated and reused without rewriting its
 descriptor; only an actual resource, atlas, shader, or descriptor change
 performs a rebind. Atlas validation includes both the texturing-property wrapper
 and the Tile shade property's page-specific source texture.
+Binding resolution uses per-thread fixed-capacity scratch whose used entries
+are overwritten before consumption, avoiding zero-initialization of 64 packet
+bindings for each group. A stable descriptor is checked once during sorted
+preparation; a changed descriptor is checked after publication. The direct
+draw path retains the primary payload owner only for follower slots and reads
+the immutable packet template in place, avoiding a shared-owner increment and
+packet copy for the usual primary/singleton draw.
 
 Static-buffer replacement, device reset, shader reload, and atlas epoch changes
 revoke every borrowed descriptor before the underlying resource can be

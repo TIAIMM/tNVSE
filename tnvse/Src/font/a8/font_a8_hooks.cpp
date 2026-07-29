@@ -799,9 +799,9 @@ namespace fonthook::vectorfont
 			}
 			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
 
-			NativeA8ShapePayload* payload = nullptr;
+			const NativeA8ShapePayload* payload = nullptr;
 			A8ShapeMetadataPtr primaryMetadataOwner;
-			NativeA8PacketTemplate packet;
+			const NativeA8PacketTemplate* packet = nullptr;
 			NativeA8VirtualStockPacketBinding binding;
 			NiGeometryBufferData* expectedBuffer = nullptr;
 			NiVBChip* expectedChip = nullptr;
@@ -817,8 +817,17 @@ namespace fonthook::vectorfont
 				{
 					return false;
 				}
-				primaryMetadataOwner = group->primaryMetadataOwner;
-				payload = &primaryMetadataOwner->nativePayload;
+				if (metadata.virtualStockPrimary)
+				{
+					if (group->primaryMetadataOwner.get() != &metadata)
+						return false;
+					payload = &metadata.nativePayload;
+				}
+				else
+				{
+					primaryMetadataOwner = group->primaryMetadataOwner;
+					payload = &primaryMetadataOwner->nativePayload;
+				}
 				if (!payload->buildComplete || !payload->payloadTemplate)
 					return false;
 				const std::vector<NativeA8PacketTemplate>& packets =
@@ -831,7 +840,7 @@ namespace fonthook::vectorfont
 				{
 					return false;
 				}
-				packet = packets[slot.packetIndex];
+				packet = &packets[slot.packetIndex];
 				packetIndex = slot.packetIndex;
 				expectedBuffer = slot.bindingBuffer;
 				expectedChip = slot.bindingChip;
@@ -877,20 +886,20 @@ namespace fonthook::vectorfont
 				&& expectedBuffer->m_ppkVBChip
 				&& expectedBuffer->m_ppkVBChip[0] == expectedChip
 				&& expectedBuffer->m_uiIndexCount
-					== packet.vertexCount / 4u * 6u
+					== packet->vertexCount / 4u * 6u
 				&& expectedBuffer->m_uiIBSize == binding.indexBytes
 				&& expectedBuffer->m_eType == D3DPT_TRIANGLELIST
 				&& expectedBuffer->m_uiTriCount
-					== packet.vertexCount / 4u * 2u
+					== packet->vertexCount / 4u * 2u
 				&& expectedBuffer->m_uiMaxTriCount
-					== packet.vertexCount / 4u * 2u
+					== packet->vertexCount / 4u * 2u
 				&& expectedBuffer->m_uiNumArrays == 1
 				&& expectedChip->m_pkVB == binding.vertexBuffer
 				&& expectedChip->m_uiOffset == 0
 				&& expectedChip->m_uiSize
 					== binding.vertexCount
 						* sizeof(NativeA8GpuVertex)
-				&& binding.vertexCount == packet.vertexCount
+				&& binding.vertexCount == packet->vertexCount
 				&& IsNativeA8VirtualStockPacketAtlasCurrent(
 					shape, *payload, packetIndex)
 				&& IsNativeA8VirtualStockPacketBindingCurrent(binding);
@@ -952,7 +961,7 @@ namespace fonthook::vectorfont
 			if (!draw.runtimeFault)
 			{
 				VirtualStockTileStateScope tileState(
-					shape, *payload, packet);
+					shape, *payload, *packet);
 				if (!tileState.Active())
 				{
 					draw.runtimeFault = true;
@@ -974,7 +983,7 @@ namespace fonthook::vectorfont
 							FreeTypePerfCounter::VirtualStockDraw);
 						RecordFreeTypePerf(
 							FreeTypePerfCounter::TilePass);
-						if (packet.shaderClass
+						if (packet->shaderClass
 							== NativeA8ShaderClass::Composite)
 						{
 							RecordFreeTypePerf(
@@ -1497,12 +1506,11 @@ namespace fonthook::vectorfont
 		VirtualStockShapeGroup* group = metadata.virtualStockGroup;
 		if (!group)
 			return {};
-		A8State& state = State();
-		std::lock_guard<std::mutex> lock(state.metadataMutex);
-		const auto found = state.virtualStockGroups.find(group);
-		return found != state.virtualStockGroups.end()
-			? found->second
-			: std::shared_ptr<VirtualStockShapeGroup>{};
+		std::shared_ptr<VirtualStockShapeGroup> owner =
+			metadata.virtualStockOwner.lock();
+		return owner && owner.get() == group
+			&& owner->metadataPublished.load(std::memory_order_acquire)
+			? owner : std::shared_ptr<VirtualStockShapeGroup>{};
 	}
 
 	TileRenderPassFn ReadTileRenderPassCallTarget()

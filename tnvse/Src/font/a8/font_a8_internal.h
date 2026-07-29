@@ -118,6 +118,7 @@ namespace fonthook::vectorfont
 		FreeTypeShapeBackend backend =
 			FreeTypeShapeBackend::CompatibilityFacade;
 		VirtualStockShapeGroup* virtualStockGroup = nullptr;
+		std::weak_ptr<VirtualStockShapeGroup> virtualStockOwner;
 		UInt16 virtualStockSlot = 0;
 		bool virtualStockPrimary = false;
 	};
@@ -163,6 +164,7 @@ namespace fonthook::vectorfont
 		bool registrationContiguous = true;
 		bool duplicateRegistration = false;
 		std::atomic<UInt32> directDrawCount = 0;
+		std::atomic<bool> metadataPublished = false;
 		std::atomic<VirtualStockFrameMode> frameMode =
 			VirtualStockFrameMode::Facade;
 	};

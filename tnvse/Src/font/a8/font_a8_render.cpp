@@ -699,7 +699,8 @@ namespace fonthook::vectorfont
 		group->useCompositeTopology = useCompositeTopology;
 		group->slots.resize(shapes.size());
 		group->liveSlotCount = static_cast<UInt32>(shapes.size());
-		group->registrationItemIndices.assign(shapes.size(), -1);
+		if (shapes.size() > 1)
+			group->registrationItemIndices.assign(shapes.size(), -1);
 		group->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
 			sizeof(VirtualStockShapeGroup)
 				+ group->slots.capacity() * sizeof(VirtualStockSlotBinding)
@@ -723,6 +724,7 @@ namespace fonthook::vectorfont
 				metadata->colorContract = *colorContract;
 			metadata->backend = FreeTypeShapeBackend::VirtualStockNative;
 			metadata->virtualStockGroup = group.get();
+			metadata->virtualStockOwner = group;
 			metadata->virtualStockSlot = static_cast<UInt16>(index);
 			metadata->virtualStockPrimary = index == primarySlot;
 			metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
@@ -758,6 +760,8 @@ namespace fonthook::vectorfont
 			A8State& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
 			state.virtualStockGroups[group.get()] = group;
+			group->metadataPublished.store(true,
+				std::memory_order_release);
 			for (size_t index = 0; index < shapes.size(); ++index)
 			{
 				state.metadataGenerations[
@@ -823,8 +827,11 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		std::array<NativeA8VirtualStockPacketBinding,
-			kMaximumVirtualStockShapes> resolved = {};
+		// Resolve overwrites every used entry before it is consumed. Keeping the
+		// fixed-capacity scratch per thread avoids value-initializing all 64
+		// entries for the overwhelmingly singleton virtual-stock workload.
+		thread_local std::array<NativeA8VirtualStockPacketBinding,
+			kMaximumVirtualStockShapes> resolved;
 		bool configurationFailed = false;
 		for (size_t index = 0; index < group->slots.size(); ++index)
 		{
@@ -930,7 +937,7 @@ namespace fonthook::vectorfont
 			if (needsRebind)
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::VirtualStockRebind);
-			if (!IsVirtualStockBindingConfigured(
+			if (needsRebind && !IsVirtualStockBindingConfigured(
 				slot, resolved[index], payload.packetShaders[index]))
 			{
 				configurationFailed = true;
@@ -1046,6 +1053,8 @@ namespace fonthook::vectorfont
 		{
 			A8State& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
+			group->metadataPublished.store(false,
+				std::memory_order_release);
 			const auto found =
 				state.virtualStockGroups.find(group.get());
 			if (found != state.virtualStockGroups.end()

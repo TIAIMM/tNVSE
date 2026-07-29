@@ -520,14 +520,16 @@ namespace fonthook::vectorfont
 				{
 					std::lock_guard<std::mutex> lock(groupOwner->mutex);
 					VirtualStockShapeGroup& group = *groupOwner;
+					const bool singleton = group.slots.size() == 1;
 					std::fill(group.registrationItemIndices.begin(),
 						group.registrationItemIndices.end(), -1);
 					bool contiguous =
 						group.registrationContiguous
 						&& group.registrationAccumulator == accumulator
 						&& group.registeredSlotCount == group.slots.size()
-						&& group.registrationItemIndices.size()
-							== group.slots.size()
+						&& (singleton
+							|| group.registrationItemIndices.size()
+								== group.slots.size())
 						&& group.primarySlot + 1u == group.slots.size();
 					for (size_t slot = 0; slot < group.slots.size(); ++slot)
 					{
@@ -544,8 +546,11 @@ namespace fonthook::vectorfont
 						if (frameSlot.occurrences == 1
 							&& frameSlot.itemIndex >= 0)
 						{
-							group.registrationItemIndices[slot] =
-								frameSlot.itemIndex;
+							if (!singleton)
+							{
+								group.registrationItemIndices[slot] =
+									frameSlot.itemIndex;
+							}
 							++resolved;
 						}
 						else if (!frameSlot.occurrences)
@@ -561,8 +566,9 @@ namespace fonthook::vectorfont
 						}
 					}
 					SInt32 previous = -1;
-					for (SInt32 slot = static_cast<SInt32>(
-							group.primarySlot);
+					for (SInt32 slot = singleton
+							? -1
+							: static_cast<SInt32>(group.primarySlot);
 						contiguous && slot >= 0; --slot)
 					{
 						const SInt32 item =
