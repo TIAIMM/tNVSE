@@ -16,7 +16,10 @@ namespace fonthook::vectorfont
 {
 	std::unordered_map<UInt32, FontConfig> g_configs;
 
-	namespace
+	namespace implementation::font_vector_config {}
+	using namespace implementation::font_vector_config;
+
+	namespace implementation::font_vector_config
 	{
 		std::wstring GetGameDirectory()
 		{

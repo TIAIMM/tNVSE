@@ -17,7 +17,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_a8_hooks {}
+	using namespace implementation::font_a8_hooks;
+
+	namespace implementation::font_a8_hooks
 	{
 		struct A8MetadataHotEntry
 		{

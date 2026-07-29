@@ -10,7 +10,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::dictionary_loader {}
+	using namespace implementation::dictionary_loader;
+
+	namespace implementation::dictionary_loader
 	{
 		struct StageFilter
 		{

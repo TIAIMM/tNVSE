@@ -12,7 +12,10 @@
 
 namespace fonthook::dependencies
 {
-	namespace
+	namespace implementation::plugin_dependencies {}
+	using namespace implementation::plugin_dependencies;
+
+	namespace implementation::plugin_dependencies
 	{
 		std::string FormatVersion(UInt32 version)
 		{

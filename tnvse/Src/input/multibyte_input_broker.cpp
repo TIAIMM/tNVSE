@@ -4,7 +4,10 @@ namespace fonthook
 {
 	namespace multibyte_input
 	{
-		namespace
+		namespace implementation::multibyte_input_broker {}
+		using namespace implementation::multibyte_input_broker;
+
+		namespace implementation::multibyte_input_broker
 		{
 			bool SameTokenIdentity(
 				const TextInputTargetToken& lhs,

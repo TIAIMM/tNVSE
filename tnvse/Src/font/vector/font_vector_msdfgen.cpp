@@ -9,7 +9,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_vector_msdfgen {}
+	using namespace implementation::font_vector_msdfgen;
+
+	namespace implementation::font_vector_msdfgen
 	{
 		float MedianMtsdfRgb(float red, float green, float blue)
 		{

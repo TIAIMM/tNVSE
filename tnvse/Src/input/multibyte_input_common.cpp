@@ -6,7 +6,10 @@ namespace fonthook
 {
 	namespace multibyte_input
 	{
-		namespace
+		namespace implementation::multibyte_input_common {}
+		using namespace implementation::multibyte_input_common;
+
+		namespace implementation::multibyte_input_common
 		{
 			constexpr UInt8 FoldAsciiLetter(UInt8 value)
 			{

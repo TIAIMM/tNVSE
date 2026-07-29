@@ -6,7 +6,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_atlas_render {}
+	using namespace implementation::font_atlas_render;
+
+	namespace implementation::font_atlas_render
 	{
 		bool IsControlCodePoint(UInt32 codePoint)
 		{

@@ -21,7 +21,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_atlas_cache {}
+	using namespace implementation::font_atlas_cache;
+
+	namespace implementation::font_atlas_cache
 	{
 		AtlasState s_atlasState;
 	}

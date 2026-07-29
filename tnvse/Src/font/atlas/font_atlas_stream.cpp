@@ -20,7 +20,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_atlas_stream {}
+	using namespace implementation::font_atlas_stream;
+
+	namespace implementation::font_atlas_stream
 	{
 		struct StreamingPage
 		{

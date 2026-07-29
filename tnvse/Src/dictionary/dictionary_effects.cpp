@@ -3,7 +3,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::dictionary_effects {}
+	using namespace implementation::dictionary_effects;
+
+	namespace implementation::dictionary_effects
 	{
 		struct EffectSegment
 		{

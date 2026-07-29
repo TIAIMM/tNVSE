@@ -28,7 +28,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::font_vector_render {}
+	using namespace implementation::font_vector_render;
+
+	namespace implementation::font_vector_render
 	{
 		NiTexturingProperty* s_whiteTextureProperty = nullptr;
 		bool s_whiteTextureInitialized = false;

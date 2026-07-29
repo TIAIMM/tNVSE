@@ -13,7 +13,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::font_vector_log {}
+	using namespace implementation::font_vector_log;
+
+	namespace implementation::font_vector_log
 	{
 		constexpr size_t kDeferredLogLineCount = 128;
 		// Log mode is diagnostic, but it must not turn a menu that creates

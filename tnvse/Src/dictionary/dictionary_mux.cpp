@@ -6,7 +6,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::dictionary_mux {}
+	using namespace implementation::dictionary_mux;
+
+	namespace implementation::dictionary_mux
 	{
 		struct MuxQuestSegment
 		{

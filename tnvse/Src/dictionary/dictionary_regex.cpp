@@ -6,7 +6,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::dictionary_regex {}
+	using namespace implementation::dictionary_regex;
+
+	namespace implementation::dictionary_regex
 	{
 		struct FuzzyRegexRule
 		{

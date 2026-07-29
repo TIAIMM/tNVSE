@@ -71,7 +71,10 @@ namespace fonthook
 		return apManager->extraFonts[auiFontId - kFirstJipExtendedFontId];
 	}
 
-	namespace
+	namespace implementation::font_manager {}
+	using namespace implementation::font_manager;
+
+	namespace implementation::font_manager
 	{
 		static constexpr UInt32 kRichTextDbcsFailureLogLimit = 64;
 		static constexpr UInt32 kRichTextCharTypeOpen = 0x01;

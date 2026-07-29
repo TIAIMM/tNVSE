@@ -324,7 +324,10 @@ namespace fonthook
 			return false;
 		}
 
-		namespace
+		namespace implementation::multibyte_input_wndproc {}
+		using namespace implementation::multibyte_input_wndproc;
+
+		namespace implementation::multibyte_input_wndproc
 		{
 			constexpr size_t kCapturedInputEventCapacity = 128;
 

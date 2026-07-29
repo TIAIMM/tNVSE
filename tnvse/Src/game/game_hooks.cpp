@@ -21,7 +21,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::game_hooks {}
+	using namespace implementation::game_hooks;
+
+	namespace implementation::game_hooks
 	{
 		using FontInitFn = Font* (__thiscall*)(Font*, int, char*, bool);
 		using FontLoadFn = void (__thiscall*)(Font*);

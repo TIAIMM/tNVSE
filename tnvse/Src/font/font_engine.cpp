@@ -9,7 +9,10 @@
 #include <cmath>
 #include <vector>
 
-namespace
+namespace fonthook::implementation::font_engine {}
+using namespace fonthook::implementation::font_engine;
+
+namespace fonthook::implementation::font_engine
 {
 	thread_local UInt32 s_fontInitLoadDepth = 0;
 

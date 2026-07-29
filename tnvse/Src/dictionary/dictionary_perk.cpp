@@ -5,7 +5,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::dictionary_perk {}
+	using namespace implementation::dictionary_perk;
+
+	namespace implementation::dictionary_perk
 	{
 		struct PerkDescriptionParts
 		{

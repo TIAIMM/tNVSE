@@ -9,7 +9,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::dictionary_translate {}
+	using namespace implementation::dictionary_translate;
+
+	namespace implementation::dictionary_translate
 	{
 		struct PreparedTranslationMatch
 		{

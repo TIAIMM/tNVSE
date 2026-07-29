@@ -6,7 +6,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_vector_runtime {}
+	using namespace implementation::font_vector_runtime;
+
+	namespace implementation::font_vector_runtime
 	{
 		FreeTypeState s_freeTypeState;
 		thread_local FreeTypeThreadState s_freeTypeThreadState;

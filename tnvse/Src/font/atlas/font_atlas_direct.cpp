@@ -15,7 +15,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_atlas_direct {}
+	using namespace implementation::font_atlas_direct;
+
+	namespace implementation::font_atlas_direct
 	{
 		constexpr UInt32 kFirstLeadByte = 0x81;
 		constexpr UInt32 kLastLeadByte = 0xFE;

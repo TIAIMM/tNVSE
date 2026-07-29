@@ -11,7 +11,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_native_fallback {}
+	using namespace implementation::font_native_fallback;
+
+	namespace implementation::font_native_fallback
 	{
 		constexpr UInt32 kMaximumSuppressionLogs = 64;
 		std::atomic<UInt32> s_suppressionLogCount = 0;

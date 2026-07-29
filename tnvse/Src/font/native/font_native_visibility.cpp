@@ -6,7 +6,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_native_visibility {}
+	using namespace implementation::font_native_visibility;
+
+	namespace implementation::font_native_visibility
 	{
 		// Font::MakeTriShape returns a TileShaderProperty, but the concrete class
 		// is not exposed by this CommonLib snapshot. Keep this read-only view tied

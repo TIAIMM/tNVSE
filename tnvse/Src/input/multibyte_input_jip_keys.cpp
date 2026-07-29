@@ -10,7 +10,10 @@
 
 namespace fonthook::multibyte_input
 {
-	namespace
+	namespace implementation::multibyte_input_jip_keys {}
+	using namespace implementation::multibyte_input_jip_keys;
+
+	namespace implementation::multibyte_input_jip_keys
 	{
 		constexpr SIZE_T kJipRawKeyStateCompareRva = 0x13C59;
 		constexpr SIZE_T kJipLastKeyStateRva = 0x772E0;

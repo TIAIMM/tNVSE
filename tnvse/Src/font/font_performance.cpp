@@ -10,7 +10,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_performance {}
+	using namespace implementation::font_performance;
+
+	namespace implementation::font_performance
 	{
 		constexpr size_t kCounterCount = static_cast<size_t>(FreeTypePerfCounter::Count);
 		constexpr size_t kPhaseCount =

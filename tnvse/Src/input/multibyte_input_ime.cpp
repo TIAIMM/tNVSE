@@ -4,7 +4,10 @@ namespace fonthook
 {
 	namespace multibyte_input
 	{
-		namespace
+		namespace implementation::multibyte_input_ime {}
+		using namespace implementation::multibyte_input_ime;
+
+		namespace implementation::multibyte_input_ime
 		{
 			ImeState s_imeState;
 		}
@@ -779,7 +782,7 @@ namespace fonthook
 			return (GetKeyState(vk) & 0x8000) != 0 || (GetAsyncKeyState(vk) & 0x8000) != 0;
 		}
 
-		namespace
+		namespace implementation::multibyte_input_ime
 		{
 			bool MapImeCommitVirtualKey(UINT virtualKey, UInt32& input)
 			{

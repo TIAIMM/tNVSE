@@ -27,7 +27,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_atlas_snapshot {}
+	using namespace implementation::font_atlas_snapshot;
+
+	namespace implementation::font_atlas_snapshot
 	{
 		UInt64 HashAtlasBytes(const void* data, size_t size,
 			UInt64 hash = 1469598103934665603ull)
@@ -2669,7 +2672,7 @@ namespace fonthook::vectorfont
 		return failedFiles == 0;
 	}
 
-	namespace
+	namespace implementation::font_atlas_snapshot
 	{
 		bool MarkPhysicalAtlasGroupFallback(RuntimeFont& runtime,
 			const AtlasCacheKey& baseKey, UInt32 pageCount)

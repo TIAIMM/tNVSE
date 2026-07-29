@@ -17,7 +17,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_a8_render {}
+	using namespace implementation::font_a8_render;
+
+	namespace implementation::font_a8_render
 	{
 		inline constexpr UInt32 kGeometryBufferDataConstructor = 0xE947C0;
 		inline constexpr UInt32 kCanonicalArrayCount = 1;

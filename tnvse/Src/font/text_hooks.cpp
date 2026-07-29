@@ -4,7 +4,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::text_hooks {}
+	using namespace implementation::text_hooks;
+
+	namespace implementation::text_hooks
 	{
 		std::string GetDoorStructuralParticle()
 		{

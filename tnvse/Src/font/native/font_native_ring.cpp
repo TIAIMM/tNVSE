@@ -26,7 +26,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_native_ring {}
+	using namespace implementation::font_native_ring;
+
+	namespace implementation::font_native_ring
 	{
 		inline constexpr UInt32 kGeometryBufferDataConstructor = 0xE947C0;
 		inline constexpr UInt32 kScissorTriShapeSize = 0xD4;

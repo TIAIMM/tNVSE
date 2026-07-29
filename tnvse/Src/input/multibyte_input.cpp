@@ -6,7 +6,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::multibyte_input {}
+	using namespace implementation::multibyte_input;
+
+	namespace implementation::multibyte_input
 	{
 		bool s_initialized = false;
 	}

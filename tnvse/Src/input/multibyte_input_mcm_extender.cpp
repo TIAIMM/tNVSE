@@ -6,7 +6,10 @@
 
 namespace fonthook::multibyte_input
 {
-	namespace
+	namespace implementation::multibyte_input_mcm_extender {}
+	using namespace implementation::multibyte_input_mcm_extender;
+
+	namespace implementation::multibyte_input_mcm_extender
 	{
 		constexpr char kSearchChangedEvent[] = "tNVSE:MCMExtenderSearchChanged";
 		constexpr char kKeyDownEvent[] = "tNVSE:MCMExtenderKeyDown";

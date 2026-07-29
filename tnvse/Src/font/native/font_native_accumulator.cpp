@@ -17,7 +17,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_native_accumulator {}
+	using namespace implementation::font_native_accumulator;
+
+	namespace implementation::font_native_accumulator
 	{
 		inline constexpr UInt32 kBSShaderAccumulatorVtable = 0x10ADFF8;
 		inline constexpr UInt32 kRegisterObjectVtableSlot = 38;

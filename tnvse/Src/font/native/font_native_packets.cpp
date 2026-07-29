@@ -10,7 +10,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_native_packets {}
+	using namespace implementation::font_native_packets;
+
+	namespace implementation::font_native_packets
 	{
 		struct PacketSpan
 		{

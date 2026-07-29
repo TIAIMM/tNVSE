@@ -9,7 +9,10 @@
 #include <cmath>
 #include <cstring>
 
-namespace
+namespace fonthook::implementation::font_uio_scale {}
+using namespace fonthook::implementation::font_uio_scale;
+
+namespace fonthook::implementation::font_uio_scale
 {
 	constexpr UInt32 kSupportedUioVersion = 230;
 	constexpr float kMinimumUioScale = 0.1f;

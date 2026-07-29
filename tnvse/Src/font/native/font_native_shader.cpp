@@ -34,7 +34,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_native_shader {}
+	using namespace implementation::font_native_shader;
+
+	namespace implementation::font_native_shader
 	{
 		static_assert(sizeof(void*) == 4,
 			"The native FreeType TileShader path is a Win32 ABI implementation");

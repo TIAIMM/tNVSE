@@ -21,7 +21,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::native_tile_overlay {}
+	using namespace implementation::native_tile_overlay;
+
+	namespace implementation::native_tile_overlay
 	{
 		constexpr const char* kImeOverlayXmlPath =
 			"Data\\Menus\\prefabs\\tNVSE\\ImeOverlay.xml";

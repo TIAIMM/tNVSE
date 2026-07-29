@@ -14,7 +14,10 @@ namespace fonthook::vectorfont
 	void TrimPreparedTextCpuCacheForTotalBudget();
 	void TrimNativeA8CpuCachesForTotalBudget();
 
-	namespace
+	namespace implementation::font_cpu_budget {}
+	using namespace implementation::font_cpu_budget;
+
+	namespace implementation::font_cpu_budget
 	{
 		struct CpuBudgetState
 		{

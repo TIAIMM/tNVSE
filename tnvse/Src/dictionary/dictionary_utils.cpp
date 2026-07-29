@@ -12,7 +12,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::dictionary_utils {}
+	using namespace implementation::dictionary_utils;
+
+	namespace implementation::dictionary_utils
 	{
 		std::string WideToMultiByte(const std::wstring& value, UINT codePage)
 		{

@@ -2,7 +2,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::dictionary_match {}
+	using namespace implementation::dictionary_match;
+
+	namespace implementation::dictionary_match
 	{
 		std::string TranslateCapture(const std::string& capture, int depth)
 		{

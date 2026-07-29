@@ -637,7 +637,10 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		namespace
+		namespace implementation::font_atlas_resource {}
+		using namespace implementation::font_atlas_resource;
+
+		namespace implementation::font_atlas_resource
 		{
 			constexpr UInt64 kAtlasByteHashOffset = 1469598103934665603ull;
 
@@ -2251,7 +2254,7 @@ namespace fonthook::vectorfont
 			return map ? map->m_spTexture : nullptr;
 		}
 
-	namespace
+	namespace implementation::font_atlas_resource
 	{
 		bool CanAliasRebuiltDefaultPoolTexture(
 			const AtlasResource& target,

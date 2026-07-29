@@ -6,7 +6,10 @@
 
 namespace fonthook::multibyte_input
 {
-	namespace
+	namespace implementation::multibyte_input_dialogue_history {}
+	using namespace implementation::multibyte_input_dialogue_history;
+
+	namespace implementation::multibyte_input_dialogue_history
 	{
 		constexpr char kSearchChangedEvent[] = "tNVSE:DialogueHistorySearchChanged";
 		constexpr char kKeyDownEvent[] = "tNVSE:DialogueHistoryKeyDown";

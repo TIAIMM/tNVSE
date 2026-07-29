@@ -16,7 +16,10 @@ namespace fonthook
 {
 	void CaptureSaveDisplayName(const char* originalName, const char* actualName);
 
-	namespace
+	namespace implementation::save_display_name {}
+	using namespace implementation::save_display_name;
+
+	namespace implementation::save_display_name
 	{
 		constexpr UInt32 kStoreMagic = 'SVDN';
 		constexpr UInt32 kStoreVersion = 1;

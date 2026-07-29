@@ -4,7 +4,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::dictionary_prepare {}
+	using namespace implementation::dictionary_prepare;
+
+	namespace implementation::dictionary_prepare
 	{
 		bool IsSourceWhitespace(char ch)
 		{

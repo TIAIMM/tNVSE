@@ -7,7 +7,10 @@
 
 namespace fonthook
 {
-	namespace
+	namespace implementation::dictionary_entry {}
+	using namespace implementation::dictionary_entry;
+
+	namespace implementation::dictionary_entry
 	{
 		void RemoveBraceComments(std::string& text)
 		{

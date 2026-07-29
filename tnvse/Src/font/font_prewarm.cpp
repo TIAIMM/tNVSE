@@ -19,7 +19,10 @@
 
 namespace fonthook::vectorfont
 {
-	namespace
+	namespace implementation::font_prewarm {}
+	using namespace implementation::font_prewarm;
+
+	namespace implementation::font_prewarm
 	{
 		constexpr UInt32 kMaximumCandidatesPerBatch = 32768;
 		constexpr UInt32 kMaximumGlyphsPerBatch = 4096;
@@ -709,7 +712,7 @@ namespace fonthook::vectorfont
 			QueueFontPrewarm(fontId);
 	}
 
-	namespace
+	namespace implementation::font_prewarm
 	{
 		const char* PrewarmPhaseName(PrewarmPhase phase)
 		{
