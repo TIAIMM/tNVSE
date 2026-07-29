@@ -231,10 +231,17 @@ repeat code-page decoding or derive a second glyph identity.
 Rich-text rendering uses fixed font-ID builder slots for the normal retail and
 registered-font range. Pointer-keyed builders remain only for an out-of-range
 font, slot collision, or another ambiguous lifetime case. Prepared-text lookup
-has a four-entry TLS front cache keyed by the already computed text/config
-signature. A TLS hit avoids the global mutex; a global miss does not allocate an
-additional TLS string key, while cache-generation changes invalidate old TLS
-entries.
+has an eight-slot hash-indexed TLS front keyed by the already computed
+text/config signature. A miss compares at most one resident hash before the
+exact collision check. Admission is three-phase: the first observation bypasses
+the global cache, the second builds the resident value without a guaranteed-empty
+global lookup, and the store publishes that value directly into the TLS slot.
+Only a later TLS miss for an already observed key probes the global table.
+Cache-generation changes clear the TLS front, and a value that cannot be stored
+resets its admission state
+and receives an eight-observation retry cooldown. Unsupported or
+budget-rejected text therefore stays on the lock-free layout path instead of
+repeatedly locking on a known global miss.
 
 ## Bounded-throughput prewarm and persistent caches
 
@@ -1012,6 +1019,13 @@ identity becomes immutable:
   Lookup hashing consumes those saved hashes and lengths, while exact string
   comparison remains the collision check. A small thread-local metric-signature
   cache is reused only after byte-exact validation of the mutable font metrics.
+  The periodic performance line keeps `prepared_text_hit` and its following
+  `miss`, and additionally reports `promotion_bypass`, `probe`, `probe_miss`,
+  `admitted`, `evicted`, `admission_rejected`, and `backoff_bypass`. A healthy
+  repeated-text path normally records one promotion and admission followed by
+  TLS hits with no probe; `probe_miss`, `admission_rejected`, or sustained
+  `backoff_bypass` identifies collision, unsupported, or memory-pressure churn
+  that still needs investigation.
 - A one-shot text artifact computes only the constant-cost admission signature.
   Once admitted, one quad traversal computes geometry and color fingerprints
   together; effect/range identity consumes that color fingerprint instead of
