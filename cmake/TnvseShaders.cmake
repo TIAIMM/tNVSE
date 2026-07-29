@@ -97,6 +97,9 @@ function(tnvse_enable_live_deployment target plugin_path shader_outputs overlay_
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${plugin_path}"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       "$<TARGET_FILE:${target}>" "${plugin_path}/$<TARGET_FILE_NAME:${target}>"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      "$<TARGET_PDB_FILE:${target}>"
+      "${plugin_path}/$<TARGET_PDB_FILE_NAME:${target}>"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${shader_path}"
     COMMAND "${CMAKE_COMMAND}" -E rm -f
       "${shader_path}/tnvse_freetype_native_original.pso"
@@ -118,6 +121,6 @@ function(tnvse_enable_live_deployment target plugin_path shader_outputs overlay_
       "${shader_path}/tnvse_freetype_native_cache.pso"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       ${shader_outputs} "${shader_path}"
-    COMMENT "Deploying tNVSE DLL and native shaders"
+    COMMENT "Deploying tNVSE DLL, PDB and native shaders"
     VERBATIM)
 endfunction()

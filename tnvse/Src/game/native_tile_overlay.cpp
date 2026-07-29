@@ -76,6 +76,7 @@ namespace fonthook
 			std::array<Tile*, kImeLineCount> imeLines = {};
 			std::array<Tile*, kImeHighlightCount> imeHighlights = {};
 			std::wstring imeKey;
+			size_t imeVisibleLineCount = 0;
 			float imeLineHeight = 0.0f;
 			float imeContentWidth = 0.0f;
 			bool imeLoadFailed = false;
@@ -503,6 +504,28 @@ namespace fonthook
 			tile->SetValueString(Tile::kTileValue_string, encoded.c_str(), true);
 		}
 
+		void PublishTextGeometry(
+			Tile* tile,
+			std::wstring_view value,
+			bool forceRefresh)
+		{
+			if (!tile)
+				return;
+			const std::string encoded = WideToUiText(value);
+			if (forceRefresh)
+			{
+				// Tile::SetValueString may leave an equal string untouched. An
+				// IME status row can therefore retain geometry that was created
+				// while its Menu ancestor was hidden. Clear it once on logical
+				// activation/repair so the replacement shape is built with the
+				// now-visible ancestor and current TileShader alpha.
+				tile->SetValueString(
+					Tile::kTileValue_string, "", true);
+			}
+			tile->SetValueString(
+				Tile::kTileValue_string, encoded.c_str(), true);
+		}
+
 		void RebuildTextGeometry(Tile* tile)
 		{
 			if (!tile)
@@ -568,6 +591,31 @@ namespace fonthook
 			root->SetValueFloat(Tile::kTileValue_depth, depth, true);
 		}
 
+		bool HasExpectedImeLinePresentation(size_t visibleCount)
+		{
+			if (!visibleCount || visibleCount > kImeLineCount)
+				return false;
+			for (size_t i = 0; i < kImeLineCount; ++i)
+			{
+				Tile* line = s_state.imeLines[i];
+				if (!line)
+					return false;
+				const bool expectedVisible = i < visibleCount;
+				const bool visible =
+					line->GetValueFloat(
+						Tile::kTileValue_visible) > 0.5f;
+				if (visible != expectedVisible)
+					return false;
+				if (expectedVisible
+					&& !line->GetValueString(
+						Tile::kTileValue_string)[0])
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
 		void ClearImeResolvedTiles()
 		{
 			const bool hadResolvedTiles = s_state.imeRoot
@@ -586,6 +634,7 @@ namespace fonthook
 			s_state.imeLines.fill(nullptr);
 			s_state.imeHighlights.fill(nullptr);
 			s_state.imeKey.clear();
+			s_state.imeVisibleLineCount = 0;
 			s_state.imeLineHeight = 0.0f;
 			s_state.imeContentWidth = 0.0f;
 			s_state.imeVisible = false;
@@ -898,6 +947,7 @@ namespace fonthook
 		void ResetImePresentationState()
 		{
 			s_state.imeKey.clear();
+			s_state.imeVisibleLineCount = 0;
 			s_state.imeLineHeight = 0.0f;
 			s_state.imeContentWidth = 0.0f;
 			s_state.imeVisible = false;
@@ -1267,7 +1317,9 @@ namespace fonthook
 			&& s_state.imeVisible
 			&& s_state.imeRoot
 			&& s_state.imeRoot->GetValueFloat(
-				Tile::kTileValue_visible) > 0.5f;
+				Tile::kTileValue_visible) > 0.5f
+			&& HasExpectedImeLinePresentation(
+				s_state.imeVisibleLineCount);
 	}
 
 	UInt32 GetNativeImeOverlayHostGeneration()
@@ -1281,7 +1333,8 @@ namespace fonthook
 	}
 
 	void UpdateNativeImeOverlay(
-		const std::vector<NativeTileOverlayLine>& lines)
+		const std::vector<NativeTileOverlayLine>& lines,
+		bool forceTextGeometryRefresh)
 	{
 		if (!IsNativeImeOverlayHostReady())
 			EnsureNativeImeOverlayHost();
@@ -1297,12 +1350,36 @@ namespace fonthook
 			return;
 		}
 
+		const size_t visibleCount = std::min(lines.size(), kImeLineCount);
+		const bool rootVisible =
+			s_state.imeRoot->GetValueFloat(
+				Tile::kTileValue_visible) > 0.5f;
+		const bool linePresentationIntact =
+			HasExpectedImeLinePresentation(
+				s_state.imeVisibleLineCount);
+		const bool presentationNeedsRepair =
+			forceTextGeometryRefresh
+			|| !s_state.imeVisible
+			|| !rootVisible
+			|| !linePresentationIntact;
+
+		// Publish text only after its Menu ancestor is visible. Line 00 is the
+		// status-only presentation created when a text target first activates;
+		// constructing it below the XML-default-hidden root can seal a zero-alpha
+		// FreeType shape while later composition/candidate rows are built after
+		// the root is visible.
+		SynchronizeOverlayDepth(s_state.imeRoot);
+		if (!rootVisible)
+			SetVisible(s_state.imeRoot, true);
+		s_state.imeVisible = true;
+
 		const std::wstring key = BuildImeKey(lines);
 		const bool contentChanged = key != s_state.imeKey;
-		const size_t visibleCount = std::min(lines.size(), kImeLineCount);
-		if (contentChanged)
+		const bool republish = contentChanged || presentationNeedsRepair;
+		if (republish)
 		{
 			s_state.imeKey = key;
+			s_state.imeVisibleLineCount = visibleCount;
 			for (Tile* highlight : s_state.imeHighlights)
 				SetVisible(highlight, false);
 			for (size_t i = 0; i < kImeLineCount; ++i)
@@ -1310,7 +1387,22 @@ namespace fonthook
 				const bool visible = i < visibleCount;
 				SetVisible(s_state.imeLines[i], visible);
 				if (visible)
-					SetText(s_state.imeLines[i], lines[i].text);
+				{
+					PublishTextGeometry(
+						s_state.imeLines[i],
+						lines[i].text,
+						presentationNeedsRepair);
+				}
+			}
+			if (presentationNeedsRepair && g_bMultibyteInputLog)
+			{
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: repaired IME text presentation host=%p lines=%u caller_force=%u root_visible=%u line_state_valid=%u",
+					s_state.imeRoot,
+					static_cast<UInt32>(visibleCount),
+					forceTextGeometryRefresh ? 1u : 0u,
+					rootVisible ? 1u : 0u,
+					linePresentationIntact ? 1u : 0u);
 			}
 		}
 
@@ -1348,7 +1440,7 @@ namespace fonthook
 			std::fabs(lineHeight - s_state.imeLineHeight) > 0.25f;
 		const bool widthChanged =
 			std::fabs(contentWidth - s_state.imeContentWidth) > 0.25f;
-		if (contentChanged || metricsChanged || widthChanged)
+		if (republish || metricsChanged || widthChanged)
 		{
 			s_state.imeLineHeight = lineHeight;
 			s_state.imeContentWidth = contentWidth;
@@ -1456,15 +1548,6 @@ namespace fonthook
 			}
 		}
 
-		SynchronizeOverlayDepth(s_state.imeRoot);
-		const bool tileVisible =
-			s_state.imeRoot->GetValueFloat(
-				Tile::kTileValue_visible) > 0.5f;
-		if (!s_state.imeVisible || !tileVisible)
-		{
-			SetVisible(s_state.imeRoot, true);
-			s_state.imeVisible = true;
-		}
 	}
 
 	void HideNativeImeOverlay()
@@ -1480,6 +1563,7 @@ namespace fonthook
 			ClearImeResolvedTiles();
 		s_state.imeVisible = false;
 		s_state.imeKey.clear();
+		s_state.imeVisibleLineCount = 0;
 	}
 
 	void ShowNativePrewarmOverlay()

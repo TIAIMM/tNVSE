@@ -550,6 +550,7 @@ std::vector<std::wstring> candidates;
 - 两棵树分别维护宿主身份和 ready/fail 状态；预热 XML 失败不会禁用 IME，IME XML/工厂或 Pip-Boy RTT 隔离 hook 安装失败也不会取消字体预热。IME Menu 完整解析、`GetID()==1079` 且原生 Tile 注册有效只决定 tNVSE 候选层能否显示，不再决定系统候选窗是否被抑制。
 - 根身份变化时只丢弃旧指针并在新根上重新加载，绝不接触可能已经释放的旧树；同一根下每次主循环还验证组件及全部固定命名子节点的父子身份，若被其他 UI reload 替换则重新解析或重载。同一有效父根上的损坏、重复组件以及正常 shutdown 都先走原版 `ReleaseTileTree`，再销毁根，避免遗留 TileMenu 注册或场景节点。
 - IME XML 预先定义状态行、composition 行、9 个候选槽和 9 个高亮槽，预热 XML 则预定义标题、字体说明、阶段和百分比文本。未使用候选槽只切换 `visible`，运行期间不反复创建或销毁 Tile。两套界面的全部 `TileText` 都显式使用 `<zoom>80</zoom>`，由 UIO 的 TileText zoom 支持把字体槽 1 缩放到 80%。`TileText::height` 是整行度量，不能描述字体 top-edge 与 descender 留白的不对称；IME 服务因此把动态行顶、行高、当前字符串的可见字形上沿和可见字形高度分别写入 `user0..user3`，XML 按 `y = user0 + (user1 - user3) / 2 - user2` 完成加减换算。可见上沿严格复用 `Font::CreateText` 的几何坐标：首行 Z 原点为 `2 * (baseline - fontHeight)`，字形上沿再加 `FontLetter::fTopEdge`，最后取反换成向下为正的 Tile Y；可见高度使用 `FontLetter::fHeight`。所得包围盒再用 Tile 回写高度与源行高的比例换算到 UIO 缩放后的坐标，不依赖固定像素补偿，也不假定 UIO 一定存在。启用字体渲染日志时会限量记录 `rowHeight/tileHeight/glyphTop/glyphHeight/xmlOffset`，便于直接验证最终补偿方向。
+- 状态行是输入目标激活时最先发布、且最常跨会话保持相同字符串的一行。服务现在先把 XML 默认隐藏的 IME Menu 根切到可见，再发布任一行的字符串；在逻辑输入目标切换、宿主代次变化、根或行可见性被外部菜单破坏时，只进行一次“清空字符串再写回”的强制几何刷新。这样 FreeType shape 不会保留在隐藏祖先下生成的零 alpha 动态状态；composition 和候选的稳定更新仍只改写真正变化的内容，不恢复逐帧重建。
 - 所有字符串、选择状态、尺寸和可见性 trait 只在 `kMessage_MainGameLoop` 更新，并位于 TSF/IMM 状态泵和输入目标同步之后。WndProc 与 TSF callback 只更新受保护的候选快照及 dirty 标志。
 - 候选根通过只读扫描 `pMenuRoot` 的其他直接 Menu 子节点，按原版 `menu root depth + Menu::iMenuThickness + 2` 规则抬到前景；扫描排除 IME Menu 自身，不会调用 `0xA1DFB0 Menu::GetMaxDepth`。逆向确认该函数同时改写 cursor Tile 的 `depth` 和 cursor NiNode 的 Y 平移，原版只在 Menu 创建/显示生命周期边界调用，不能把它当作普通查询用于候选内容刷新。IME Menu 的 `iMenuThickness` 设为负值，使原版以后创建菜单时也不会把 overlay 深度反向计入最大菜单深度。服务每帧可重新计算目标深度，但只有数值实际变化时才写入根 trait。
 - 服务是 IME 根 `visible` 的唯一状态源。渲染隔离或其他 pass 暂时裁剪 NiNode 时，不会反读根 trait 并清空 `imeVisible`/内容 key；只有输入目标、IME open 状态、预热屏障、树身份或显式隐藏请求能够结束显示。
@@ -837,7 +838,7 @@ bool MoveCaretNext(TextEditState&);
 - 活动输入会话的 HIMC 关联按窗口、输入会话 generation 和 keyboard layout 缓存；首次激活/切换 layout 仍同步建立默认 context，后续输入消息只走常量时间 fast path。250 ms watchdog 才查询一次 context 是否被外部插件解绑。
 - TSF profile description 只在初始化和 profile activation 时查询；主循环没有 TSF 更新时通过原子 dirty gate 跳过 pending lock。IMM candidate buffer 在 1 MiB 上限内复用，避免候选更新反复分配 32 位堆内存。
 - `IMN_SETCANDIDATEPOS` 仍被消费以阻止系统候选窗接管，但不再读取候选内容、刷新 IME 状态或重建原生 Tile。offscreen composition/candidate form 在每次 composition 开始时设置一次，并在候选首次打开时补设一次，不在每条 composition/position 通知上形成反馈循环。
-- 原生 Tile 候选层只有内容/状态、宿主 generation 或可见性实际变化时才重建；宿主树按 250 ms 安全周期验证，稳定帧不再重复编码候选文字、测量字形 visual bounds 或写 Tile traits。
+- 原生 Tile 候选层只有内容/状态、宿主 generation、逻辑目标代次或可见性实际变化时才重建；宿主树按 250 ms 安全周期验证。验证同时检查固定行槽的预期 `visible` 和非空字符串状态，发现局部行状态损坏时触发一次完整行发布；稳定帧不再重复编码候选文字、测量字形 visual bounds 或写 Tile traits。
 - `bMultibyteInputLog=1` 的会话结束统计 `context_fast_hits`、`candidate_content_refreshes` 和 `candidate_position_notifications_skipped` 可用于确认上述快路径；详细日志本身会影响帧时间，性能对比仍应在关闭日志后采集。
 
 ### DBCS 编辑键

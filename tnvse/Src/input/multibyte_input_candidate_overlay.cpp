@@ -129,7 +129,9 @@ namespace fonthook
 
 			const UInt32 hostGeneration =
 				GetNativeImeOverlayHostGeneration();
-			if (state.nativeOverlayHostGeneration != hostGeneration)
+			const bool hostGenerationChanged =
+				state.nativeOverlayHostGeneration != hostGeneration;
+			if (hostGenerationChanged)
 				state.overlayRefreshPending = true;
 
 			if (!g_bMultibyteInputCompositionPreview
@@ -176,7 +178,16 @@ namespace fonthook
 					std::move(line.text), line.highlighted
 				});
 			}
-			UpdateNativeImeOverlay(nativeLines);
+			// A target switch can deactivate and reactivate the logical overlay
+			// before the main-thread pump ever hides its native Menu. Force one
+			// text republish for that transition so the unchanged status string
+			// cannot reuse geometry created under a hidden/stale ancestor.
+			const bool forceTextGeometryRefresh =
+				!state.overlay.visible
+				|| hostGenerationChanged
+				|| !IsNativeImeOverlayVisible();
+			UpdateNativeImeOverlay(
+				nativeLines, forceTextGeometryRefresh);
 			state.overlay.visible = IsNativeImeOverlayVisible();
 			state.nativeOverlayHostGeneration =
 				GetNativeImeOverlayHostGeneration();

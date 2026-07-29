@@ -21,7 +21,8 @@ namespace fonthook
 	UInt32 GetNativeImeOverlayHostGeneration();
 
 	void UpdateNativeImeOverlay(
-		const std::vector<NativeTileOverlayLine>& lines);
+		const std::vector<NativeTileOverlayLine>& lines,
+		bool forceTextGeometryRefresh = false);
 	void HideNativeImeOverlay();
 
 	void ShowNativePrewarmOverlay();
