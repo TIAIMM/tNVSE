@@ -625,11 +625,11 @@ namespace fonthook
 
 		void ProcessStewieMenuSearchPendingStateSync()
 		{
-			// The three Pip-Boy searches use Stewie's InputField. Its _IsActive
-			// trait is written only by InputField::SetActive(), so it is a stable
-			// lifecycle signal rather than a render-pass visibility detail. This
-			// also restores ownership if a still-active search tab becomes visible
-			// again after another Pip-Boy tab temporarily hid its menu object.
+			// The three Pip-Boy searches use Stewie's InputField. _IsActive is a
+			// presentation trait written by InputField::SetActive(), not the
+			// IsSearchMode flag that the menu keyboard handler actually tests.
+			// Keep it only as a recovery hint when our explicit Ctrl+F state was
+			// unavailable (for example, after a tab becomes visible again).
 			for (StewieMenuSearchHook& hook : s_menuSearchHooks)
 			{
 				if (!hook.installed
@@ -714,8 +714,7 @@ namespace fonthook
 				const bool hasSearchTile = searchTile != nullptr;
 				const bool ownerReportsActive =
 					MenuSearchOwnerReportsActive(hook, menu, searchTile);
-				if ((!hasSearchTile
-						|| (!hook.stateSyncWasActive && !ownerReportsActive))
+				if (!hasSearchTile
 					&& static_cast<SInt32>(now - hook.stateSyncStartTick)
 						< static_cast<SInt32>(kStewieMenuSearchStateSyncTimeoutMs))
 				{
@@ -730,8 +729,7 @@ namespace fonthook
 				}
 
 				hook.keyboardActive = !hook.stateSyncWasActive
-					&& hasSearchTile
-					&& ownerReportsActive;
+					&& hasSearchTile;
 				DebugLog(
 					"tnvse_multibyte_input_event: source=MainLoop action=menusearch_sync_apply menu=%u hasTile=%u ownerActive=%u activeAfter=%u",
 					hook.menuID,
@@ -779,10 +777,14 @@ namespace fonthook
 
 				if (MenuSearchUsesInputField(hook.menuID))
 				{
-					// _IsActive comes from InputField::SetActive(), including
-					// Enter and Pip-Boy-close paths, and does not participate in
-					// the visibility flicker that affected the old implementation.
-					DeactivateMenuSearch(hook, "input_field_inactive", searchTile);
+					// The chained Stewie handler and the matching Ctrl+F/Ctrl+R
+					// transition are authoritative. The _IsActive Tile mirror can
+					// read false while InputField::isActive and IsSearchMode still
+					// accept input (the caret remains visible in that state).
+					// Closing the session here detaches HIMC, so the next printable
+					// key is consumed by Stewie before the IME can see it. Menu
+					// visibility, tile lifetime and explicit hotkeys still end
+					// ownership.
 					continue;
 				}
 
@@ -821,13 +823,16 @@ namespace fonthook
 				return true;
 			}
 
-			ScheduleMenuSearchStateSync(menu, input, "StewieTweaksInputTarget", true);
 			if (!hook)
 				return true;
 
 			const bool active = key == 'f' ? !wasActive : false;
 			hook->keyboardActive = active;
 			hook->targetReported = false;
+			// We just called the exact chained Stewie handler and know that it
+			// accepted this control key. Do not let the delayed _IsActive probe
+			// overwrite that result; the trait is not Stewie's IsSearchMode.
+			ResetMenuSearchStateSync(*hook);
 			if (active)
 			{
 				RefreshTextInputSessionForActiveTarget("menusearch_ctrl_f_open");

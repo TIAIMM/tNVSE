@@ -665,7 +665,7 @@ hook 策略：
 - StewMenu 搜索框和字符串子设置都优先从菜单对象内的 `InputField` 反查 active 状态和 `inputType`。搜索框 id `5` 反查失败时才回退到 root `_IsSearchActive` / tile `_IsActive`；字符串子设置 id `103` 会在列表项模板中重复出现，必须反查到 active `InputField` 且 `inputType == 0` 才接管。
 - 主循环以 50 ms 间隔观察 StewMenu 的真实 `InputField` 状态；菜单对象消失，或搜索/字符串子设置的 active 状态关闭时，会同时清除 shadow、composition/candidate 快照、输入会话和原生 Tile 候选层，而不是只丢弃观察指针。由键盘 handler 刚激活的目标也会立即写入观察状态，因此在下一次轮询前关闭菜单不会留下悬空 IME 会话。
 - `Ctrl` 组合键直接链回 Stewie original，并清掉 tNVSE shadow，保留 `Ctrl-F`、`Ctrl-R` 等 Stewie 原行为。
-- MenuSearch 的会话状态以已经链回 Stewie 且返回 handled 的 `Ctrl-F`/`Ctrl-R` 结果为准，并在菜单关闭、菜单对象消失或搜索 Tile 被真正替换时结束。Inventory、Stats、Map 使用 Stewie `InputField::SetActive()` 写入的 `_IsActive` 作为稳定关闭判据；Pip-Boy 页切走时按该页自身的菜单可见性结束，返回仍处于 active 的搜索页时再从 `_IsActive` 恢复接管。
+- MenuSearch 的会话状态以已经链回 Stewie 且返回 handled 的 `Ctrl-F`/`Ctrl-R` 结果为准；精确链式 hook 已经知道这次切换结果，不再启动第二次延迟状态同步。Inventory、Stats、Map 的键盘 handler 实际按各自的 `IsSearchMode` 接受字符，而 `InputField::SetActive()` 写入 Tile 的 `_IsActive` 只是显示镜像：实测它会在空串光标闪烁和 IME composition 期间短暂读为 `0`，即使 `InputField` 仍显示光标且 `IsSearchMode` 仍接受输入。因此 `_IsActive == 1` 只用于丢失显式边沿后的恢复提示，`_IsActive == 0` 不再关闭输入会话；菜单关闭、菜单对象消失、搜索 Tile 被真正替换、对应页不可见或显式 `Ctrl-F`/`Ctrl-R` 才结束接管。
 - Save/Load 搜索属于仍常驻的 `StartMenu (1013)`，离开保存/读取子页后不能用 StartMenu 可见性判断。tNVSE 按 Stewie 9.90+ 的同一布局读取 `StartMenu::savesList`（`+0x174`）的 `ListBox::parentTile`（合计 `+0x180`），并使用 Stewie `savesList.IsEnabled()` 等价的 `_enabled` trait 结束会话。搜索 Tile 的 `visible`/`alpha` 仍只用于诊断，不参与存活判定；这样列表刷新时的瞬时渲染 trait 改写不会重新引入候选层高频闪烁。
 
 `StewMenu::subSettingInput` 使用 Stewie 自己的 `InputField`，当前按 Stewie 9.90+ 源码布局只读判断：
