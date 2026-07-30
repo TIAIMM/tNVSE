@@ -548,29 +548,29 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::
 					CommandDeferredRenderTargetCapture)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: b98e80_lite_candidates=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu stock_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
+			"tnvse_freetype_perf: standard_pass_lite_candidates=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu stock_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteCandidate)],
+				FreeTypePerfCounter::StandardPassLiteCandidate)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteStage1Eligible)],
+				FreeTypePerfCounter::StandardPassLiteStage1Eligible)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteStage2Resident)],
+				FreeTypePerfCounter::StandardPassLiteStage2Resident)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteStage3Replay)],
+				FreeTypePerfCounter::StandardPassLiteStage3Replay)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteStockFallback)],
+				FreeTypePerfCounter::StandardPassLiteStockFallback)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteFallbackEnvelope)],
+				FreeTypePerfCounter::StandardPassLiteFallbackEnvelope)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteFallbackProgram)],
+				FreeTypePerfCounter::StandardPassLiteFallbackProgram)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteFallbackRenderer)],
+				FreeTypePerfCounter::StandardPassLiteFallbackRenderer)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteFallbackGeometry)],
+				FreeTypePerfCounter::StandardPassLiteFallbackGeometry)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteFallbackBinding)],
+				FreeTypePerfCounter::StandardPassLiteFallbackBinding)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::B98E80LiteFallbackPrelude)]);
+				FreeTypePerfCounter::StandardPassLiteFallbackPrelude)]);
 		const DurationSummary layout =
 			ConsumeDurationSummary(FreeTypePerfPhase::Layout);
 		const DurationSummary sidecar =

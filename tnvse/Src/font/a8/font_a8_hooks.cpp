@@ -22,7 +22,7 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_a8_hooks
 	{
-		inline constexpr UInt32 kDefaultTileRenderPass = 0xB98E80;
+		inline constexpr UInt32 kRenderPassImmediatelyStandard = 0xB98E80;
 		inline constexpr UInt32 kSelectShaderForPass = 0xB99390;
 		inline constexpr UInt32 kSetAlphaTestState = 0xB98540;
 		inline constexpr UInt32 kGeometryUsesSpecialPass = 0xE72C20;
@@ -1405,7 +1405,8 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			// These are the three mutually exclusive branches immediately before
-			// retail B994F0 reaches B98E80. E72C20 is a renderer-state
+			// Retail BSBatchRenderer::RenderPassImmediately reaches
+			// BSBatchRenderer::RenderPassImmediately_Standard. E72C20 is a renderer-state
 			// __thiscall, while the other two are NiGeometry virtual calls.
 			// Treat an absent vtable predicate as unsafe instead of guessing.
 			if (RendererUsesSpecialPass(geometry)
@@ -1419,7 +1420,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool CanUseB98E80LiteEnvelope(
+		bool CanUseStandardPassLiteEnvelope(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			NiTriShape* geometry, const NativeA8DrawCommand& command)
 		{
@@ -1437,7 +1438,7 @@ namespace fonthook::vectorfont
 			// IsParticlesGeom/IsLinesGeom. Proving those immutable facts avoids
 			// all three B994F0 classification calls on the lite hot path.
 			return modelData && modelData->m_pkBuffData
-				&& State().b98e80LitePredicatesValidated
+				&& State().standardPassLitePredicatesValidated
 				&& geometryVtable
 					== &State().triShapeVtable[1];
 		}
@@ -1454,7 +1455,7 @@ namespace fonthook::vectorfont
 
 			// The hook replaces the B994F0 call at B64FD1, so none of B994F0's
 			// prelude has executed yet. Mirror the retail order before entering
-			// the confirmed default B98E80 branch.
+			// the confirmed RenderPassImmediately_Standard branch.
 			*reinterpret_cast<BSShaderProperty::RenderPass**>(
 				kCurrentRenderPass) = pass;
 			*reinterpret_cast<UInt32*>(kCurrentRenderPassType) =
@@ -1491,7 +1492,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		enum class B98E80LiteFallback : UInt8
+		enum class StandardPassLiteFallback : UInt8
 		{
 			None = 0,
 			Envelope,
@@ -1502,7 +1503,7 @@ namespace fonthook::vectorfont
 			Prelude
 		};
 
-		struct B98E80LiteDispatch
+		struct StandardPassLiteDispatch
 		{
 			NiDX9Renderer* renderer = nullptr;
 			NiGeometryBufferData* buffer = nullptr;
@@ -1511,44 +1512,44 @@ namespace fonthook::vectorfont
 			const NativeA8CompiledPacketCommand* program = nullptr;
 		};
 
-		void RecordB98E80LiteFallback(B98E80LiteFallback fallback)
+		void RecordStandardPassLiteFallback(StandardPassLiteFallback fallback)
 		{
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::B98E80LiteStockFallback);
+				FreeTypePerfCounter::StandardPassLiteStockFallback);
 			switch (fallback)
 			{
-			case B98E80LiteFallback::Envelope:
+			case StandardPassLiteFallback::Envelope:
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::B98E80LiteFallbackEnvelope);
+					FreeTypePerfCounter::StandardPassLiteFallbackEnvelope);
 				break;
-			case B98E80LiteFallback::Program:
+			case StandardPassLiteFallback::Program:
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::B98E80LiteFallbackProgram);
+					FreeTypePerfCounter::StandardPassLiteFallbackProgram);
 				break;
-			case B98E80LiteFallback::Renderer:
+			case StandardPassLiteFallback::Renderer:
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::B98E80LiteFallbackRenderer);
+					FreeTypePerfCounter::StandardPassLiteFallbackRenderer);
 				break;
-			case B98E80LiteFallback::Geometry:
+			case StandardPassLiteFallback::Geometry:
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::B98E80LiteFallbackGeometry);
+					FreeTypePerfCounter::StandardPassLiteFallbackGeometry);
 				break;
-			case B98E80LiteFallback::Binding:
+			case StandardPassLiteFallback::Binding:
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::B98E80LiteFallbackBinding);
+					FreeTypePerfCounter::StandardPassLiteFallbackBinding);
 				break;
-			case B98E80LiteFallback::Prelude:
+			case StandardPassLiteFallback::Prelude:
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::B98E80LiteFallbackPrelude);
+					FreeTypePerfCounter::StandardPassLiteFallbackPrelude);
 				break;
 			default:
 				break;
 			}
 		}
 
-		B98E80LiteFallback PrepareB98E80LiteDispatch(
+		StandardPassLiteFallback PrepareStandardPassLiteDispatch(
 			NiTriShape* geometry, const NativeA8DrawCommand& command,
-			B98E80LiteDispatch& dispatch)
+			StandardPassLiteDispatch& dispatch)
 		{
 			dispatch = {};
 			const NativeA8CompiledPacketCommand* program =
@@ -1568,12 +1569,12 @@ namespace fonthook::vectorfont
 				|| !program->postGeometry
 				|| !program->setupNonFirstPass)
 			{
-				return B98E80LiteFallback::Program;
+				return StandardPassLiteFallback::Program;
 			}
 
 			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 			if (!renderer || program->device != renderer->GetD3DDevice())
-				return B98E80LiteFallback::Renderer;
+				return StandardPassLiteFallback::Renderer;
 
 			NiTriShapeData* modelData =
 				geometry ? geometry->GetModelData() : nullptr;
@@ -1585,7 +1586,7 @@ namespace fonthook::vectorfont
 				|| geometryVtable[kRenderImmediateAltSlot]
 					!= reinterpret_cast<void*>(&A8RenderImmediateAlt))
 			{
-				return B98E80LiteFallback::Geometry;
+				return StandardPassLiteFallback::Geometry;
 			}
 
 			NiVBChip* chip = buffer->m_uiStreamCount
@@ -1601,7 +1602,7 @@ namespace fonthook::vectorfont
 				|| buffer->m_uiVertCount
 					!= command.binding.vertexCount)
 			{
-				return B98E80LiteFallback::Binding;
+				return StandardPassLiteFallback::Binding;
 			}
 
 			dispatch.renderer = renderer;
@@ -1609,13 +1610,13 @@ namespace fonthook::vectorfont
 			dispatch.shader = shader;
 			dispatch.properties = &geometry->m_kProperties;
 			dispatch.program = program;
-			return B98E80LiteFallback::None;
+			return StandardPassLiteFallback::None;
 		}
 
-		void ExecuteB98E80Lite(
+		void ExecuteStandardPassLite(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
-			NiTriShape* geometry, const B98E80LiteDispatch& dispatch)
+			NiTriShape* geometry, const StandardPassLiteDispatch& dispatch)
 		{
 			NiDX9Renderer* renderer = dispatch.renderer;
 			TileShader* shader = dispatch.shader;
@@ -1689,31 +1690,31 @@ namespace fonthook::vectorfont
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
 			NiTriShape* geometry, const NativeA8DrawCommand* command,
-			bool preferB98E80Lite)
+			bool preferStandardPassLite)
 		{
-			if (preferB98E80Lite)
+			if (preferStandardPassLite)
 			{
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::B98E80LiteCandidate);
+					FreeTypePerfCounter::StandardPassLiteCandidate);
 			}
 
 			bool guardedEligible = false;
 			bool liteEnvelope = false;
-			if (preferB98E80Lite)
+			if (preferStandardPassLite)
 			{
 				liteEnvelope = command
-					&& CanUseB98E80LiteEnvelope(
+					&& CanUseStandardPassLiteEnvelope(
 						pass, currentPass, geometry, *command);
 				if (liteEnvelope)
 				{
 					guardedEligible = true;
 					RecordFreeTypePerf(
-						FreeTypePerfCounter::B98E80LiteStage1Eligible);
+						FreeTypePerfCounter::StandardPassLiteStage1Eligible);
 				}
 				else
 				{
-					RecordB98E80LiteFallback(
-						B98E80LiteFallback::Envelope);
+					RecordStandardPassLiteFallback(
+						StandardPassLiteFallback::Envelope);
 				}
 			}
 			if (!guardedEligible && command)
@@ -1729,33 +1730,33 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			B98E80LiteDispatch liteDispatch;
-			bool useB98E80Lite = false;
+			StandardPassLiteDispatch liteDispatch;
+			bool useStandardPassLite = false;
 			if (liteEnvelope)
 			{
-				const B98E80LiteFallback liteFailure =
-					PrepareB98E80LiteDispatch(
+				const StandardPassLiteFallback liteFailure =
+					PrepareStandardPassLiteDispatch(
 						geometry, *command, liteDispatch);
-				if (liteFailure == B98E80LiteFallback::None)
+				if (liteFailure == StandardPassLiteFallback::None)
 				{
-					useB98E80Lite = true;
+					useStandardPassLite = true;
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::
-							B98E80LiteStage2Resident);
+							StandardPassLiteStage2Resident);
 				}
 				else
 				{
-					RecordB98E80LiteFallback(liteFailure);
+					RecordStandardPassLiteFallback(liteFailure);
 				}
 			}
 
 			if (!PrepareGuardedNativeReplay(
 					pass, currentPass, geometry))
 			{
-				if (useB98E80Lite)
+				if (useStandardPassLite)
 				{
-					RecordB98E80LiteFallback(
-						B98E80LiteFallback::Prelude);
+					RecordStandardPassLiteFallback(
+						StandardPassLiteFallback::Prelude);
 				}
 				if (g_bEnableFreeTypeFontCommandBuffer)
 					RecordNativeA8CommandFallback(
@@ -1763,13 +1764,13 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			if (useB98E80Lite)
+			if (useStandardPassLite)
 			{
-				ExecuteB98E80Lite(pass, currentPass,
+				ExecuteStandardPassLite(pass, currentPass,
 					testAlpha, blendAlpha, setupDrawmode,
 					geometry, liteDispatch);
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::B98E80LiteStage3Replay);
+					FreeTypePerfCounter::StandardPassLiteStage3Replay);
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::CommandNativeReplay);
 				return true;
@@ -1777,7 +1778,7 @@ namespace fonthook::vectorfont
 
 			using DefaultPassFn = int(__cdecl*)(
 				BSShaderProperty::RenderPass*, bool, bool, bool);
-			reinterpret_cast<DefaultPassFn>(kDefaultTileRenderPass)(
+			reinterpret_cast<DefaultPassFn>(kRenderPassImmediatelyStandard)(
 				pass, testAlpha, blendAlpha, setupDrawmode);
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandNativeReplay);
@@ -1788,11 +1789,11 @@ namespace fonthook::vectorfont
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
 			NiTriShape* geometry, const NativeA8DrawCommand* command,
-			bool preferB98E80Lite = false)
+			bool preferStandardPassLite = false)
 		{
 			if (InvokeGuardedNativeReplay(pass, currentPass,
 				testAlpha, blendAlpha, setupDrawmode,
-				geometry, command, preferB98E80Lite))
+				geometry, command, preferStandardPassLite))
 			{
 				return true;
 			}
@@ -4279,7 +4280,7 @@ namespace fonthook::vectorfont
 		// Verify the reverse-engineered identity and behavior once while the
 		// object still owns the stock vtable. The lite hot path then needs only
 		// the tNVSE vtable identity plus this immutable result.
-		state.b98e80LitePredicatesValidated =
+		state.standardPassLitePredicatesValidated =
 			predicateSlotsMatch
 			&& !CallGeometryPredicate(
 				shape, kGeometrySpecialPredicateSlot)
@@ -4288,8 +4289,8 @@ namespace fonthook::vectorfont
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: B98E80-lite predicate-envelope validated=%u special=%p alternate=%p expected=%p",
-				state.b98e80LitePredicatesValidated ? 1u : 0u,
+				"tnvse_freetype_native: RenderPassImmediately_Standard-lite predicate-envelope validated=%u special=%p alternate=%p expected=%p",
+				state.standardPassLitePredicatesValidated ? 1u : 0u,
 				source[kGeometrySpecialPredicateSlot],
 				source[kGeometryAlternatePredicateSlot],
 				expectedFalsePredicate);

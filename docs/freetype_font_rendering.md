@@ -1032,7 +1032,8 @@ topology is compiled separately. The default is `0`.
 
 - `0` retains the current submission path.
 - `1` enables command recording, retained bridge submission, and guarded
-  native replay as one unit. One reverse-verified `B98E80` bootstrap supplies
+  native replay as one unit. One reverse-verified
+  `BSBatchRenderer::RenderPassImmediately_Standard` bootstrap supplies
   live Tile WVP, color/alpha, scissor, viewport, render-target state, and the
   paired slot-35 cleanup for an eligible logical span. Remaining packets keep
   their original order and use tNVSE's generation-bound binder for shader,
@@ -1046,14 +1047,18 @@ part of the production path.
 
 Guarded replay publishes the retail current-pass globals, invokes `B99390`
 when the selected TileShader/pass must change, applies the special alpha-test
-state used by `B994F0`, and enters `B98E80` only when every reverse-verified
-default-path predicate agrees. Multi-pass `B99110`, skin/light/special passes,
+state used by `BSBatchRenderer::RenderPassImmediately`, and enters
+`BSBatchRenderer::RenderPassImmediately_Standard` only when every
+reverse-verified default-path predicate agrees.
+`BSBatchRenderer::RenderPassImmediately_Skinned` multi-pass,
+skin/light/special passes,
 unknown shader or geometry vtables, and forced shader-selection passes retain
 the stock path. A stock `TileShader::UpdateConstants` call is still required
 once per span.
 
 Ordinary dedicated single-packet commands additionally use a staged
-`B98E80-lite` specialization. Stage 1 proves the same default-pass envelope
+`RenderPassImmediately_Standard-lite` specialization. Stage 1 proves the same
+default-pass envelope
 without executing `E72C20` or the particle/line virtual predicates: formal
 `E72C20` and the symbolized test build both show that an already resident
 `m_pkBuffData` makes the former return false immediately, while the exact
@@ -1065,9 +1070,10 @@ publish renderer property/effect state; invoke slots 30, 31, conditional
 32/33/68, optional 34, slot 27, `RenderImmediateAlt`, and slot 35. It omits only
 the geometry-group helper whose resident-buffer branch has no side effect.
 Failure in stages 1 or 2 re-enters the complete guarded decision, selecting
-full `B98E80` when it still qualifies and otherwise the unchanged `B994F0`; a
-prelude failure also selects `B994F0`. No fallback is attempted after an
-immediate draw.
+full `BSBatchRenderer::RenderPassImmediately_Standard` when it still qualifies
+and otherwise the unchanged `BSBatchRenderer::RenderPassImmediately`; a
+prelude failure also selects `BSBatchRenderer::RenderPassImmediately`. No
+fallback is attempted after an immediate draw.
 
 The immutable Text Artifact retains packet ranges, profile hashes/classes,
 atlas-page topology, vertex ranges, and replayable run boundaries, but no Tile
@@ -1135,7 +1141,7 @@ unexpected fallbacks, and that `stock_constant_updates` approaches the
 logical-span count without visual or runtime faults. Build success alone does
 not establish runtime correctness or the CPU-performance thresholds.
 
-The adjacent `b98e80_lite_` line exposes stage invariants for the dedicated
+The adjacent `standard_pass_lite_` line exposes stage invariants for the dedicated
 single-packet subset. A healthy fully eligible run has
 `candidates = stage1_eligible = stage2_resident = stage3_replays`,
 `stock_fallbacks=0`, and every categorized fallback at zero. When fallbacks are
