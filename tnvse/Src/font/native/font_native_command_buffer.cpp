@@ -837,6 +837,27 @@ namespace fonthook::vectorfont
 			}
 			return NativeA8CommandFallback::None;
 		}
+
+		NativeA8CommandFallback ValidatePacketExecutionGuard(
+			NativeA8FrameCommandBuffer& buffer,
+			NativeA8CommandSpanState state,
+			UInt64 executionValidationToken,
+			UInt32 executionSegmentEpoch,
+			UInt32 executionExternalMutationEpoch,
+			NiRenderer* renderer)
+		{
+			if (state != NativeA8CommandSpanState::Executing
+				|| executionValidationToken
+					!= buffer.stamp.validationToken)
+			{
+				return NativeA8CommandFallback::State;
+			}
+			if (!renderer || renderer != buffer.stamp.renderer)
+				return NativeA8CommandFallback::Generation;
+			return ValidateExecutionSegmentEpoch(buffer,
+				executionSegmentEpoch,
+				executionExternalMutationEpoch);
+		}
 	}
 
 	size_t GetNativeA8TileRetainedCapacityBytes(
@@ -1977,6 +1998,134 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
+	bool GuardNativeA8Command(UInt32 spanIndex,
+		UInt32 commandOffset, NiTriShape* geometry, NiRenderer* renderer)
+	{
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandPacketEpochGuard);
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeA8CommandFallback commandFailure =
+			NativeA8CommandFallback::None;
+		if (!buffer.active || spanIndex >= buffer.spans.size())
+		{
+			commandFailure = NativeA8CommandFallback::State;
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordNativeA8CommandFallback(commandFailure);
+			return false;
+		}
+
+		const NativeA8CommandSpan& span = buffer.spans[spanIndex];
+		if (commandOffset >= span.commandCount
+			|| span.firstCommand + commandOffset
+				>= buffer.commands.size())
+		{
+			commandFailure = NativeA8CommandFallback::Topology;
+		}
+		else
+		{
+			commandFailure = ValidatePacketExecutionGuard(buffer,
+				span.state, span.executionValidationToken,
+				span.executionSegmentEpoch,
+				span.executionExternalMutationEpoch, renderer);
+		}
+		if (commandFailure == NativeA8CommandFallback::None)
+		{
+			const NativeA8DrawCommand& command =
+				buffer.commands[span.firstCommand + commandOffset];
+			if (!geometry
+				|| (command.expectedGeometry
+					&& command.expectedGeometry != geometry))
+			{
+				commandFailure = NativeA8CommandFallback::Topology;
+			}
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordNativeA8CommandFallback(commandFailure);
+			return false;
+		}
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandPacketStateValidationElided);
+		return true;
+	}
+
+	bool ValidateNativeA8VirtualCommandRange(UInt32 spanIndex,
+		UInt32 firstCommandOffset, UInt32 commandCount,
+		NiRenderer* renderer)
+	{
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandPacketRangeValidation);
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeA8CommandFallback commandFailure =
+			NativeA8CommandFallback::None;
+		if (!buffer.active || spanIndex >= buffer.spans.size())
+		{
+			commandFailure = NativeA8CommandFallback::State;
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordNativeA8CommandFallback(commandFailure);
+			return false;
+		}
+
+		const NativeA8CommandSpan& span = buffer.spans[spanIndex];
+		const UInt64 rangeEnd =
+			static_cast<UInt64>(firstCommandOffset) + commandCount;
+		if (!span.virtualStock || !commandCount
+			|| rangeEnd > span.commandCount
+			|| static_cast<UInt64>(span.firstCommand) + rangeEnd
+				> buffer.commands.size())
+		{
+			commandFailure = NativeA8CommandFallback::Topology;
+		}
+		else
+		{
+			commandFailure = ValidatePacketExecutionGuard(buffer,
+				span.state, span.executionValidationToken,
+				span.executionSegmentEpoch,
+				span.executionExternalMutationEpoch, renderer);
+		}
+		if (commandFailure == NativeA8CommandFallback::None)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandPacketLightValidation,
+				commandCount);
+			for (UInt32 index = 0; index < commandCount; ++index)
+			{
+				const UInt32 commandOffset =
+					firstCommandOffset + index;
+				const NativeA8DrawCommand& command =
+					buffer.commands[
+						span.firstCommand + commandOffset];
+				if (!command.expectedGeometry)
+				{
+					commandFailure =
+						NativeA8CommandFallback::Topology;
+					break;
+				}
+				commandFailure = ValidateDrawCommandState(buffer,
+					command, span.payload, commandOffset,
+					command.expectedGeometry, renderer);
+				if (commandFailure
+					!= NativeA8CommandFallback::None)
+				{
+					break;
+				}
+			}
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordNativeA8CommandFallback(commandFailure);
+			return false;
+		}
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandPacketRangeValidated,
+			commandCount);
+		return true;
+	}
+
 	bool ValidateNativeA8SinglePacketCommand(UInt32 commandIndex,
 		NiTriShape* geometry, NiRenderer* renderer)
 	{
@@ -2021,6 +2170,47 @@ namespace fonthook::vectorfont
 			RecordSinglePacketCommandFallback(commandFailure);
 			return false;
 		}
+		return true;
+	}
+
+	bool GuardNativeA8SinglePacketCommand(UInt32 commandIndex,
+		NiTriShape* geometry, NiRenderer* renderer)
+	{
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandPacketEpochGuard);
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeA8CommandFallback commandFailure =
+			NativeA8CommandFallback::None;
+		if (!buffer.active
+			|| commandIndex >= buffer.singlePacketCommands.size())
+		{
+			commandFailure = NativeA8CommandFallback::State;
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordSinglePacketCommandFallback(commandFailure);
+			return false;
+		}
+
+		const NativeA8SinglePacketCommand& command =
+			buffer.singlePacketCommands[commandIndex];
+		commandFailure = ValidatePacketExecutionGuard(buffer,
+			command.state, command.executionValidationToken,
+			command.executionSegmentEpoch,
+			command.executionExternalMutationEpoch, renderer);
+		if (commandFailure == NativeA8CommandFallback::None
+			&& (!geometry || command.facade != geometry
+				|| command.draw.sourceGeometry != geometry))
+		{
+			commandFailure = NativeA8CommandFallback::Topology;
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordSinglePacketCommandFallback(commandFailure);
+			return false;
+		}
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandPacketStateValidationElided);
 		return true;
 	}
 
@@ -2227,6 +2417,50 @@ namespace fonthook::vectorfont
 			RecordVirtualSinglePacketCommandFallback(commandFailure);
 			return false;
 		}
+		return true;
+	}
+
+	bool GuardNativeA8VirtualSinglePacketCommand(UInt32 commandIndex,
+		NiTriShape* geometry, NiRenderer* renderer)
+	{
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandPacketEpochGuard);
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeA8CommandFallback commandFailure =
+			NativeA8CommandFallback::None;
+		if (!buffer.active
+			|| commandIndex
+				>= buffer.virtualSinglePacketCommands.size())
+		{
+			commandFailure = NativeA8CommandFallback::State;
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordVirtualSinglePacketCommandFallback(commandFailure);
+			return false;
+		}
+
+		const NativeA8VirtualSinglePacketCommand& command =
+			buffer.virtualSinglePacketCommands[commandIndex];
+		commandFailure = ValidatePacketExecutionGuard(buffer,
+			command.state, command.executionValidationToken,
+			command.executionSegmentEpoch,
+			command.executionExternalMutationEpoch, renderer);
+		if (commandFailure == NativeA8CommandFallback::None
+			&& (!geometry || command.geometry != geometry
+				|| !command.draw
+				|| command.draw->sourceGeometry != geometry
+				|| command.draw->expectedGeometry != geometry))
+		{
+			commandFailure = NativeA8CommandFallback::Topology;
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordVirtualSinglePacketCommandFallback(commandFailure);
+			return false;
+		}
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandPacketStateValidationElided);
 		return true;
 	}
 

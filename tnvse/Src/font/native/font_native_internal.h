@@ -754,6 +754,11 @@ namespace fonthook::vectorfont
 		UInt32 commandOffset);
 	bool ValidateNativeA8Command(UInt32 spanIndex,
 		UInt32 commandOffset, NiTriShape* geometry, NiRenderer* renderer);
+	bool GuardNativeA8Command(UInt32 spanIndex,
+		UInt32 commandOffset, NiTriShape* geometry, NiRenderer* renderer);
+	bool ValidateNativeA8VirtualCommandRange(UInt32 spanIndex,
+		UInt32 firstCommandOffset, UInt32 commandCount,
+		NiRenderer* renderer);
 	bool FindNativeA8SinglePacketCommand(UInt32 commandIndex,
 		UInt64 validationToken, NativeA8SinglePacketCommandView& view);
 	bool BeginNativeA8SinglePacketCommandExecution(UInt32 commandIndex,
@@ -761,6 +766,8 @@ namespace fonthook::vectorfont
 	void EndNativeA8SinglePacketCommandExecution(UInt32 commandIndex,
 		bool success, bool drewPacket);
 	bool ValidateNativeA8SinglePacketCommand(UInt32 commandIndex,
+		NiTriShape* geometry, NiRenderer* renderer);
+	bool GuardNativeA8SinglePacketCommand(UInt32 commandIndex,
 		NiTriShape* geometry, NiRenderer* renderer);
 	bool FindNativeA8VirtualSinglePacketCommand(UInt32 commandIndex,
 		UInt64 validationToken,
@@ -772,6 +779,8 @@ namespace fonthook::vectorfont
 	void EndNativeA8VirtualSinglePacketCommandExecution(
 		UInt32 commandIndex, bool success, bool drewPacket);
 	bool ValidateNativeA8VirtualSinglePacketCommand(UInt32 commandIndex,
+		NiTriShape* geometry, NiRenderer* renderer);
+	bool GuardNativeA8VirtualSinglePacketCommand(UInt32 commandIndex,
 		NiTriShape* geometry, NiRenderer* renderer);
 	void RecordNativeA8CommandFallback(NativeA8CommandFallback reason);
 

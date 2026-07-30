@@ -363,6 +363,7 @@ namespace fonthook::vectorfont
 			NativeImmediateCommandKind commandKind =
 				NativeImmediateCommandKind::None;
 			bool strictValidation = false;
+			bool packetStatePrevalidated = false;
 			bool invoked = false;
 			bool validationPassed = true;
 			bool drew = false;
@@ -382,7 +383,8 @@ namespace fonthook::vectorfont
 				void* continuation = nullptr,
 				NativeImmediateContinuationFn continueImmediate = nullptr,
 				NativeImmediateCommandKind commandKind =
-					NativeImmediateCommandKind::SpanPacket)
+					NativeImmediateCommandKind::SpanPacket,
+				bool packetStatePrevalidated = false)
 				: m_previous(s_nativeDirectImmediateContext)
 			{
 				m_context.shape = shape;
@@ -393,6 +395,8 @@ namespace fonthook::vectorfont
 					? commandKind
 					: NativeImmediateCommandKind::None;
 				m_context.strictValidation = strictValidation;
+				m_context.packetStatePrevalidated =
+					packetStatePrevalidated;
 				m_context.continuation = continuation;
 				m_context.continueImmediate = continueImmediate;
 				s_nativeDirectImmediateContext = &m_context;
@@ -432,6 +436,26 @@ namespace fonthook::vectorfont
 			const NativeDirectImmediateContext& context,
 			NiTriShape* shape, NiRenderer* renderer)
 		{
+			if (context.packetStatePrevalidated)
+			{
+				switch (context.commandKind)
+				{
+				case NativeImmediateCommandKind::SpanPacket:
+					return context.commandOffset
+							!= kInvalidNativeA8CommandIndex
+						&& GuardNativeA8Command(
+							context.commandSpanIndex,
+							context.commandOffset, shape, renderer);
+				case NativeImmediateCommandKind::SinglePacket:
+					return GuardNativeA8SinglePacketCommand(
+						context.commandSpanIndex, shape, renderer);
+				case NativeImmediateCommandKind::VirtualSinglePacket:
+					return GuardNativeA8VirtualSinglePacketCommand(
+						context.commandSpanIndex, shape, renderer);
+				default:
+					return true;
+				}
+			}
 			switch (context.commandKind)
 			{
 			case NativeImmediateCommandKind::SpanPacket:
@@ -1014,6 +1038,23 @@ namespace fonthook::vectorfont
 			bool m_active = false;
 		};
 
+		bool SameNativePacketBinding(
+			const NativeA8FramePacketBinding& command,
+			const NativeA8VirtualStockPacketBinding& live)
+		{
+			return command.active && live.active
+				&& command.vertexBuffer == live.vertexBuffer
+				&& command.indexBuffer == live.indexBuffer
+				&& command.declaration == live.declaration
+				&& command.baseVertex == live.baseVertex
+				&& command.vertexCount == live.vertexCount
+				&& command.indexBytes == live.indexBytes
+				&& command.generation == live.generation
+				&& command.resourceSerial == live.resourceSerial
+				&& command.uploadEpoch == live.uploadEpoch
+				&& command.staticResident == live.staticResident;
+		}
+
 		FreeTypePerfCounter DirectShapeBindingFallbackCounter(
 			NativeDirectShapeBindingFailure failure)
 		{
@@ -1241,10 +1282,9 @@ namespace fonthook::vectorfont
 
 		bool CanUseNativeReplayBase(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			NiTriShape* geometry, const NativeA8DrawCommand& command)
+			NiTriShape* geometry, const NativeA8DrawCommand& command,
+			bool packetStatePrevalidated)
 		{
-			BSShader* shader = geometry
-				? geometry->GetShader() : nullptr;
 			if (!g_bEnableFreeTypeFontCommandBuffer
 				|| !pass || !geometry || !command.program
 				|| !command.program->active
@@ -1253,21 +1293,30 @@ namespace fonthook::vectorfont
 				|| currentPass == kForcedShaderSelectionPass
 				|| !IsDefaultNativeReplayPass(currentPass)
 				|| geometry->GetSkinInstance()
-				|| pass->ucNumLights || pass->ppSceneLights
-				|| !shader || shader != command.program->shader
-				|| !shader->IsTileShader())
+				|| pass->ucNumLights || pass->ppSceneLights)
 			{
 				return false;
+			}
+			if (!packetStatePrevalidated)
+			{
+				BSShader* shader = geometry->GetShader();
+				if (!shader || shader != command.program->shader
+					|| !shader->IsTileShader())
+				{
+					return false;
+				}
 			}
 			return true;
 		}
 
 		bool CanUseGuardedNativeReplay(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			NiTriShape* geometry, const NativeA8DrawCommand& command)
+			NiTriShape* geometry, const NativeA8DrawCommand& command,
+			bool packetStatePrevalidated)
 		{
 			if (!CanUseNativeReplayBase(
-					pass, currentPass, geometry, command))
+					pass, currentPass, geometry, command,
+					packetStatePrevalidated))
 			{
 				return false;
 			}
@@ -1289,10 +1338,12 @@ namespace fonthook::vectorfont
 
 		bool CanUseStandardPassLiteEnvelope(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			NiTriShape* geometry, const NativeA8DrawCommand& command)
+			NiTriShape* geometry, const NativeA8DrawCommand& command,
+			bool packetStatePrevalidated)
 		{
 			if (!CanUseNativeReplayBase(
-					pass, currentPass, geometry, command))
+					pass, currentPass, geometry, command,
+					packetStatePrevalidated))
 			{
 				return false;
 			}
@@ -1312,12 +1363,14 @@ namespace fonthook::vectorfont
 
 		bool PrepareGuardedNativeReplay(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			NiTriShape* geometry)
+			NiTriShape* geometry, BSShader* validatedShader)
 		{
 			if (!pass || !geometry)
 				return false;
-			BSShader* shader = geometry->GetShader();
-			if (!shader || !shader->IsTileShader())
+			BSShader* shader = validatedShader
+				? validatedShader : geometry->GetShader();
+			if (!shader
+				|| (!validatedShader && !shader->IsTileShader()))
 				return false;
 
 			// The hook replaces the B994F0 call at B64FD1, so none of B994F0's
@@ -1416,7 +1469,8 @@ namespace fonthook::vectorfont
 
 		StandardPassLiteFallback PrepareStandardPassLiteDispatch(
 			NiTriShape* geometry, const NativeA8DrawCommand& command,
-			StandardPassLiteDispatch& dispatch)
+			StandardPassLiteDispatch& dispatch,
+			bool packetStatePrevalidated)
 		{
 			dispatch = {};
 			const NativeA8CompiledPacketCommand* program =
@@ -1459,15 +1513,19 @@ namespace fonthook::vectorfont
 			NiVBChip* chip = buffer->m_uiStreamCount
 					&& buffer->m_ppkVBChip
 				? buffer->m_ppkVBChip[0] : nullptr;
-			if (!command.binding.active || !chip
-				|| buffer->m_hDeclaration
-					!= command.binding.declaration
-				|| buffer->m_pkIB != command.binding.indexBuffer
-				|| chip->m_pkVB != command.binding.vertexBuffer
-				|| buffer->m_uiBaseVertexIndex
-					!= command.binding.baseVertex
-				|| buffer->m_uiVertCount
-					!= command.binding.vertexCount)
+			if (!chip
+				|| (!packetStatePrevalidated
+					&& (!command.binding.active
+						|| buffer->m_hDeclaration
+							!= command.binding.declaration
+						|| buffer->m_pkIB
+							!= command.binding.indexBuffer
+						|| chip->m_pkVB
+							!= command.binding.vertexBuffer
+						|| buffer->m_uiBaseVertexIndex
+							!= command.binding.baseVertex
+						|| buffer->m_uiVertCount
+							!= command.binding.vertexCount)))
 			{
 				return StandardPassLiteFallback::Binding;
 			}
@@ -1557,7 +1615,8 @@ namespace fonthook::vectorfont
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
 			NiTriShape* geometry, const NativeA8DrawCommand* command,
-			bool preferStandardPassLite)
+			bool preferStandardPassLite,
+			bool packetStatePrevalidated)
 		{
 			if (preferStandardPassLite)
 			{
@@ -1571,7 +1630,8 @@ namespace fonthook::vectorfont
 			{
 				liteEnvelope = command
 					&& CanUseStandardPassLiteEnvelope(
-						pass, currentPass, geometry, *command);
+						pass, currentPass, geometry, *command,
+						packetStatePrevalidated);
 				if (liteEnvelope)
 				{
 					guardedEligible = true;
@@ -1587,7 +1647,8 @@ namespace fonthook::vectorfont
 			if (!guardedEligible && command)
 			{
 				guardedEligible = CanUseGuardedNativeReplay(
-					pass, currentPass, geometry, *command);
+					pass, currentPass, geometry, *command,
+					packetStatePrevalidated);
 			}
 			if (!command || !guardedEligible)
 			{
@@ -1603,7 +1664,8 @@ namespace fonthook::vectorfont
 			{
 				const StandardPassLiteFallback liteFailure =
 					PrepareStandardPassLiteDispatch(
-						geometry, *command, liteDispatch);
+						geometry, *command, liteDispatch,
+						packetStatePrevalidated);
 				if (liteFailure == StandardPassLiteFallback::None)
 				{
 					useStandardPassLite = true;
@@ -1618,7 +1680,9 @@ namespace fonthook::vectorfont
 			}
 
 			if (!PrepareGuardedNativeReplay(
-					pass, currentPass, geometry))
+					pass, currentPass, geometry,
+					packetStatePrevalidated && command
+						? command->program->shader : nullptr))
 			{
 				if (useStandardPassLite)
 				{
@@ -1656,11 +1720,13 @@ namespace fonthook::vectorfont
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
 			NiTriShape* geometry, const NativeA8DrawCommand* command,
-			bool preferStandardPassLite = false)
+			bool preferStandardPassLite = false,
+			bool packetStatePrevalidated = false)
 		{
 			if (InvokeGuardedNativeReplay(pass, currentPass,
 				testAlpha, blendAlpha, setupDrawmode,
-				geometry, command, preferStandardPassLite))
+				geometry, command, preferStandardPassLite,
+				packetStatePrevalidated))
 			{
 				return true;
 			}
@@ -1710,6 +1776,7 @@ namespace fonthook::vectorfont
 			const char* operation = "retained-bridge";
 			HRESULT result = E_FAIL;
 			bool virtualStock = false;
+			bool packetStatePrevalidated = false;
 			bool failed = false;
 			bool constantStateFault = false;
 		};
@@ -1764,9 +1831,15 @@ namespace fonthook::vectorfont
 
 			auto drawGeometry = [&]() -> bool
 			{
-				if (!ValidateNativeA8Command(
-					context.view.spanIndex, commandOffset,
-					geometry, renderer))
+				const bool commandValid =
+					context.packetStatePrevalidated
+						? GuardNativeA8Command(
+							context.view.spanIndex, commandOffset,
+							geometry, renderer)
+						: ValidateNativeA8Command(
+							context.view.spanIndex, commandOffset,
+							geometry, renderer);
+				if (!commandValid)
 				{
 					FailRetainedBridge(context,
 						NativeA8FallbackReason::PacketPrepare,
@@ -2109,6 +2182,11 @@ namespace fonthook::vectorfont
 				bridge.bindState = MakeNativeCommandBindState(
 					pass, currentPass, false, true,
 					setupDrawmode);
+				// PrepareNativeA8RingPacket just established the exact retained
+				// packet binding on this private proxy. The immediate callback
+				// only needs the mutation-epoch guard; rereading the full proxy
+				// descriptor would duplicate the packet preparation proof.
+				bridge.packetStatePrevalidated = true;
 				const bool hasContinuation =
 					bridge.nextCommandOffset
 						< bridge.endCommandOffset;
@@ -2116,9 +2194,11 @@ namespace fonthook::vectorfont
 					proxy, commandSpanIndex, firstOffset, true,
 					hasContinuation ? &bridge : nullptr,
 					hasContinuation
-						? &ContinueRetainedBridge : nullptr);
+						? &ContinueRetainedBridge : nullptr,
+					NativeImmediateCommandKind::SpanPacket, true);
 				InvokeNativeCommandBootstrap(pass, currentPass,
-					false, true, setupDrawmode, proxy, first);
+					false, true, setupDrawmode, proxy, first,
+					false, true);
 				if (immediateScope.Drew())
 				{
 					draw.drewPacket = true;
@@ -2292,6 +2372,16 @@ namespace fonthook::vectorfont
 				? nullptr : NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer
 				? renderer->GetD3DDevice() : nullptr;
+			NiRenderer* commandRenderer = renderer
+				? renderer : NiDX9Renderer::GetSingleton();
+			if (!ValidateNativeA8VirtualCommandRange(
+					commandSpanIndex, 0,
+					view.span->commandCount, commandRenderer))
+			{
+				EndNativeA8CommandSpanExecution(
+					commandSpanIndex, false, false);
+				return false;
+			}
 			const bool isolatePacketConstants =
 				!draw.stockLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
@@ -2362,7 +2452,6 @@ namespace fonthook::vectorfont
 					draw.result = E_FAIL;
 					break;
 				}
-
 				VirtualStockTileStateScope tileState(
 					geometry, *payload, *first->packet);
 				if (!tileState.Active())
@@ -2400,6 +2489,7 @@ namespace fonthook::vectorfont
 					pass, currentPass, false, true,
 					setupDrawmode);
 				bridge.virtualStock = true;
+				bridge.packetStatePrevalidated = true;
 				const bool hasContinuation =
 					bridge.nextCommandOffset
 						< bridge.endCommandOffset;
@@ -2407,9 +2497,11 @@ namespace fonthook::vectorfont
 					geometry, commandSpanIndex, firstOffset, true,
 					hasContinuation ? &bridge : nullptr,
 					hasContinuation
-						? &ContinueRetainedBridge : nullptr);
+						? &ContinueRetainedBridge : nullptr,
+					NativeImmediateCommandKind::SpanPacket, true);
 				InvokeNativeCommandBootstrap(pass, currentPass,
-					false, true, setupDrawmode, geometry, first);
+					false, true, setupDrawmode, geometry, first,
+					false, true);
 				if (immediateScope.Drew())
 				{
 					draw.drewPacket = true;
@@ -2656,10 +2748,8 @@ namespace fonthook::vectorfont
 			draw.directShapeRoute = true;
 			draw.stockLikeBitmapRoute = payload->stockLikeBitmapPackets;
 			NiTriShapeData* data = shape->GetModelData();
-			const bool bindingCurrent =
-				validationToken
-					== GetNativeA8SortedFrameValidationToken()
-				&& data && data->m_pkBuffData == expectedBuffer
+			const bool bindingDescriptorCurrent =
+				data && data->m_pkBuffData == expectedBuffer
 				&& shape->GetShader() == expectedShader
 				&& expectedBuffer && expectedChip
 				&& expectedBuffer->m_hDeclaration == binding.declaration
@@ -2692,8 +2782,16 @@ namespace fonthook::vectorfont
 						* sizeof(NativeA8GpuVertex)
 				&& binding.vertexCount == packet->vertexCount
 				&& IsNativeA8VirtualStockPacketAtlasCurrent(
-					shape, *payload, packetIndex)
-				&& IsNativeA8VirtualStockPacketBindingCurrent(binding);
+					shape, *payload, packetIndex);
+			const bool bindingCurrent = bindingDescriptorCurrent
+				&& (commandExecution
+					? command
+						&& SameNativePacketBinding(
+							command->binding, binding)
+					: validationToken
+							== GetNativeA8SortedFrameValidationToken()
+						&& IsNativeA8VirtualStockPacketBindingCurrent(
+							binding));
 			if (!bindingCurrent)
 			{
 				draw.runtimeFault = true;
@@ -2779,7 +2877,8 @@ namespace fonthook::vectorfont
 						virtualSingleCommandExecution
 							? NativeImmediateCommandKind::
 								VirtualSinglePacket
-							: NativeImmediateCommandKind::SpanPacket);
+							: NativeImmediateCommandKind::SpanPacket,
+						commandExecution && bindingCurrent);
 					bool usedNativeReplay = false;
 					if (commandExecution)
 					{
@@ -2787,7 +2886,8 @@ namespace fonthook::vectorfont
 							InvokeNativeCommandBootstrap(pass,
 							currentPass, false, true,
 							setupDrawmode, shape, command,
-							virtualSingleCommandExecution);
+							virtualSingleCommandExecution,
+							bindingCurrent);
 					}
 					else
 					{
@@ -3315,14 +3415,16 @@ namespace fonthook::vectorfont
 					commandExecution, nullptr, nullptr,
 					singleCommandExecution
 						? NativeImmediateCommandKind::SinglePacket
-						: NativeImmediateCommandKind::SpanPacket);
+						: NativeImmediateCommandKind::SpanPacket,
+					commandExecution);
 				bool usedNativeReplay = false;
 				if (commandExecution)
 				{
 					usedNativeReplay =
 						InvokeNativeCommandBootstrap(pass, currentPass,
 						false, true, setupDrawmode,
-						facade, command, singleCommandExecution);
+						facade, command, singleCommandExecution,
+						true);
 					if (!usedNativeReplay
 						&& singleCommandExecution)
 					{

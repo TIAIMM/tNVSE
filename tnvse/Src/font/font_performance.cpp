@@ -485,7 +485,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VirtualStockRegistrationOrderMismatch)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu virtual_spans_fused=%llu followers_consumed=%llu direct_range_replays=%llu span_full_validations=%llu light_validations=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
+			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu virtual_spans_fused=%llu followers_consumed=%llu direct_range_replays=%llu span_full_validations=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu packet_range_validations=%llu packet_range_packets=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRecorded)],
 			values[static_cast<size_t>(
@@ -524,6 +524,15 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::CommandSpanFullValidation)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandPacketLightValidation)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandPacketEpochGuard)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CommandPacketStateValidationElided)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandPacketRangeValidation)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandPacketRangeValidated)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRenderTargetValidation)],
 			values[static_cast<size_t>(

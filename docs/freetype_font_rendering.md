@@ -1183,10 +1183,21 @@ same device, generation, viewport, and raster scale; external Tile draws,
 nested traversal, reset, generation changes, and explicit state invalidation
 still force a new publication.
 
-Each immediate callback retains its execution-token, command-range, renderer,
-program/payload, and exact live geometry-binding checks. It no longer repeats
-frame token, nesting, shader-generation, atlas-generation, or ring-lease
-queries that the segment already certified. Device reset, shader publication or
+Packet admission now produces a short-lived binding proof before entering the
+immediate callback. A direct facade proof comes from the binding scope that has
+just installed the command's exact descriptor; an ordinary retained proof comes
+from `PrepareNativeA8RingPacket`; and a Virtual-stock singleton reuses the
+complete live slot/buffer/atlas check already required by its direct route.
+Fused Virtual-stock commands are validated as one contiguous execution range:
+the segment/token/renderer guard is paid once, then the exact live geometry
+binding is checked once for each distinct slot in a cache-friendly loop.
+
+With that proof, each immediate callback performs only the irreducible
+execution-state, renderer/geometry identity, and acquire-load mutation-epoch
+guard. It does not reread program/payload/atlas state or the complete
+VB/IB/declaration descriptor, and the standard-pass-lite dispatcher does not
+repeat the already proven binding comparison. A route without a binding proof
+retains the complete packet validator. Device reset, shader publication or
 fault, atlas mutation, ring resource replacement/discard, shape destruction,
 Virtual-stock binding invalidation, nested traversal, and every transition
 through a non-FreeType Tile advance one of the epochs. A mutation during a span
@@ -1198,10 +1209,12 @@ duplicate layers.
 The periodic command line reports recorded spans/packets, span hits/misses,
 retained bridge draws, guarded native replays, saved stock bootstraps, fused
 Virtual-stock spans/followers, arbitrary-range direct replays, legacy
-per-span-full/light/render-target validation counts, successful execution
-segments, segment full validations/reuses/invalidations, retained-program
-hits/misses, and fallbacks by token, generation, atlas, resource, topology,
-hook, nesting, render target, and state.
+per-span-full/light/render-target validation counts, packet epoch guards,
+full packet-state validation elisions, Virtual-stock range validations and
+their packet coverage, successful execution segments, segment full
+validations/reuses/invalidations, retained-program hits/misses, and fallbacks
+by token, generation, atlas, resource, topology, hook, nesting, render target,
+and state.
 The main performance line reports `constant_ownership_segments`, segment
 reuses/releases, and the snapshot Get and restore Set calls elided by pass
 ownership. The `state_shadow_` line retains the old mirror/driver
@@ -1218,10 +1231,14 @@ The timing line adds `command_build` and `command_submit` while preserving
 `submit`. Runtime validation should confirm nonzero `native_replays` and
 `direct_range_replays`, `span_full_validations=0`,
 `render_target_validations` tracking `segment_full_validations` rather than
-logical spans or packets, substantial `segment_validation_reuses`, zero
-unexpected fallbacks, and that `stock_constant_updates` approaches the
-logical-span count without visual or runtime faults. Build success alone does
-not establish runtime correctness or the CPU-performance thresholds.
+logical spans or packets, substantial `segment_validation_reuses`,
+`packet_epoch_guards` tracking submitted command packets,
+`packet_state_elisions` covering all proven direct/ring packets, and
+`light_validations` remaining only for exact Virtual-stock range coverage or
+unproven compatibility paths. Unexpected fallbacks must remain zero, and
+`stock_constant_updates` should approach the logical-span count without visual
+or runtime faults. Build success alone does not establish runtime correctness
+or the CPU-performance thresholds.
 
 The command-build diagnostic additionally reports `tile_retained_builds`,
 `refreshes`, `hits`, `misses`, and `packet_reuses`. After a menu reaches steady
