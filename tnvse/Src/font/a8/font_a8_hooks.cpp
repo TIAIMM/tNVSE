@@ -109,270 +109,81 @@ namespace fonthook::vectorfont
 			return victim;
 		}
 
-		// The Xbox test-build PDB names this exact 0x88-byte base layout
-		// NiD3DShaderConstantManager. Retail PC preserves the base offsets and
-		// adds one byte at 0x88 in NiDX9ShaderConstantManager, but its constructor
-		// leaves all constant-data pointers null and its CommitChanges override is
-		// a no-op. The mirror is therefore usable only when its runtime identity
-		// and backing arrays prove that a compatible implementation populated it.
-		struct EngineShaderConstantManagerView
-		{
-			void* vtable = nullptr;
-			UInt32 refCount = 0;
-			float* floatVsConstants = nullptr;
-			float* savedFloatVsConstants = nullptr;
-			float* floatPsConstants = nullptr;
-			float* savedFloatPsConstants = nullptr;
-			UInt32 firstDirtyFloatVs = 0;
-			UInt32 firstCleanFloatVs = 0;
-			UInt32 firstDirtyFloatPs = 0;
-			UInt32 firstCleanFloatPs = 0;
-			UInt32 floatVsCount = 0;
-			UInt32 floatPsCount = 0;
-			SInt32* intVsConstants = nullptr;
-			SInt32* savedIntVsConstants = nullptr;
-			SInt32* intPsConstants = nullptr;
-			SInt32* savedIntPsConstants = nullptr;
-			UInt32 firstDirtyIntVs = 0;
-			UInt32 firstCleanIntVs = 0;
-			UInt32 firstDirtyIntPs = 0;
-			UInt32 firstCleanIntPs = 0;
-			UInt32 intVsCount = 0;
-			UInt32 intPsCount = 0;
-			BOOL* boolVsConstants = nullptr;
-			BOOL* savedBoolVsConstants = nullptr;
-			BOOL* boolPsConstants = nullptr;
-			BOOL* savedBoolPsConstants = nullptr;
-			UInt32 firstDirtyBoolVs = 0;
-			UInt32 firstCleanBoolVs = 0;
-			UInt32 firstDirtyBoolPs = 0;
-			UInt32 firstCleanBoolPs = 0;
-			UInt32 boolVsCount = 0;
-			UInt32 boolPsCount = 0;
-			IDirect3DDevice9* device = nullptr;
-			NiDX9Renderer* renderer = nullptr;
-		};
-
-		static_assert(sizeof(EngineShaderConstantManagerView) == 0x88);
-		static_assert(offsetof(
-			EngineShaderConstantManagerView, floatVsConstants) == 0x08);
-		static_assert(offsetof(
-			EngineShaderConstantManagerView, floatPsConstants) == 0x10);
-		static_assert(offsetof(
-			EngineShaderConstantManagerView, floatVsCount) == 0x28);
-		static_assert(offsetof(
-			EngineShaderConstantManagerView, device) == 0x80);
-
-		bool TryCaptureEngineConstantMirror(IDirect3DDevice9* device,
-			UINT firstPsRegister, UINT psRegisterCount, float* psOutput,
-			UINT firstVsRegister, UINT vsRegisterCount, float* vsOutput)
-		{
-			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-			NiD3DRenderState* renderState =
-				renderer ? renderer->m_pkRenderState : nullptr;
-			auto* manager = renderState
-				? reinterpret_cast<EngineShaderConstantManagerView*>(
-					renderState->m_spShaderConstantManager)
-				: nullptr;
-			if (!device || !renderer || renderer->GetD3DDevice() != device
-				|| !renderState || renderState->m_pkD3DDevice != device
-				|| !manager || manager->device != device
-				|| manager->renderer != renderer
-				|| !manager->floatPsConstants
-				|| !manager->floatVsConstants
-				|| firstPsRegister > manager->floatPsCount
-				|| psRegisterCount
-					> manager->floatPsCount - firstPsRegister
-				|| firstVsRegister > manager->floatVsCount
-				|| vsRegisterCount
-					> manager->floatVsCount - firstVsRegister
-				|| !psOutput || !vsOutput)
-			{
-				return false;
-			}
-			std::memcpy(psOutput,
-				manager->floatPsConstants + firstPsRegister * 4u,
-				static_cast<size_t>(psRegisterCount) * 4u * sizeof(float));
-			std::memcpy(vsOutput,
-				manager->floatVsConstants + firstVsRegister * 4u,
-				static_cast<size_t>(vsRegisterCount) * 4u * sizeof(float));
-			return true;
-		}
-
-		enum class NativeConstantCaptureSource : UInt8
-		{
-			None = 0,
-			EngineMirror,
-			DriverSnapshot,
-		};
-
-		HRESULT CaptureNativeConstantState(IDirect3DDevice9* device,
-			UINT firstPsRegister, UINT psRegisterCount, float* psOutput,
-			UINT firstVsRegister, UINT vsRegisterCount, float* vsOutput,
-			NativeConstantCaptureSource& source, const char*& operation)
-		{
-			source = NativeConstantCaptureSource::None;
-			operation = "capture-pixel-constants";
-			if (!device || !psOutput || !vsOutput)
-				return D3DERR_INVALIDCALL;
-
-			if (TryCaptureEngineConstantMirror(device,
-				firstPsRegister, psRegisterCount, psOutput,
-				firstVsRegister, vsRegisterCount, vsOutput))
-			{
-				source = NativeConstantCaptureSource::EngineMirror;
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::ConstantCaptureMirror);
-				operation = "none";
-				return D3D_OK;
-			}
-
-			// Retail PC does not maintain the Xbox constant-manager arrays.
-			// Capture only the two ranges tNVSE overwrites, once per sorted
-			// traversal through NativePixelConstantBatch. Diagnostic readback
-			// remains removed.
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::StateShadowDriverGet);
-			HRESULT result = device->GetPixelShaderConstantF(
-				firstPsRegister, psOutput, psRegisterCount);
-			if (FAILED(result))
-				return result;
-
-			operation = "capture-vertex-aa-constant";
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::StateShadowDriverGet);
-			result = device->GetVertexShaderConstantF(
-				firstVsRegister, vsOutput, vsRegisterCount);
-			if (FAILED(result))
-				return result;
-
-			source = NativeConstantCaptureSource::DriverSnapshot;
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::ConstantCaptureDriver);
-			operation = "none";
-			return D3D_OK;
-		}
-
-		void RecordConstantIsolationBypass(
-			const char* operation, HRESULT result)
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::ConstantIsolationBypass);
-			static std::atomic<bool> logged = false;
-			if (!logged.exchange(true, std::memory_order_acq_rel))
-			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_native: constant snapshot unavailable operation=%s hr=0x%08X; continuing native draw without constant restore instead of suppressing text",
-					operation ? operation : "unknown",
-					static_cast<UInt32>(result));
-			}
-		}
-
-		class NativePixelConstantScope
+		// D3D9 shader constants are draw-program inputs rather than renderer
+		// state that must survive a pass boundary. The test-build symbols prove
+		// that RenderPassImmediately_Standard calls SetupGeometryConstants before
+		// every geometry draw. NiD3DShaderConstantMap::SetShaderConstants then
+		// submits each live reflected entry; TileShader publishes PS c0 and VS
+		// c0-c4, and the shipped TILE1000/1001/1002 programs read no other stock
+		// constants. Native A8 owns PS c1-c8 and VS c4 only while its program is
+		// bound. At the next stock Tile, that pass republishes every register it
+		// reads; after the sorted Tile traversal, the next shader does the same.
+		//
+		// Treat the native range as pass-local ownership instead of snapshotting
+		// and restoring the global D3D register file. This removes one pixel and
+		// one vertex Get* plus their matching Set* calls per isolation segment.
+		class NativePassConstantScope
 		{
 		public:
-			// The native profile mirrors the stock Tile value into c0 for its final
-			// packet and deliberately leaves it there, matching an ordinary Tile
-			// draw. tNVSE-owned pixel c1-c8 and vertex c4 need isolation from the
-			// next shader; VS c4 carries viewport/raster data for analytic AA.
-			static constexpr UINT kFirstRegister = 1;
-			static constexpr UINT kRegisterCount =
-				static_cast<UINT>(kNativeA8PacketConstantRegisterCount);
-			static constexpr size_t kFloatCount = kRegisterCount * 4;
-			static constexpr UINT kVertexRegister =
-				static_cast<UINT>(kNativeA8VertexAaConstantRegister);
-			static constexpr UINT kVertexRegisterCount = 1;
-			static constexpr size_t kVertexFloatCount = 4;
-
-			explicit NativePixelConstantScope(IDirect3DDevice9* device)
-				: m_device(device)
+			explicit NativePassConstantScope(IDirect3DDevice9* device)
 			{
-				if (!m_device)
+				if (!device)
 				{
 					m_result = D3DERR_INVALIDCALL;
-					m_operation = "capture-pixel-constants";
+					m_operation = "acquire-pass-constant-ownership";
 					return;
 				}
-				NativeConstantCaptureSource source =
-					NativeConstantCaptureSource::None;
-				const char* captureOperation = "capture-pixel-constants";
-				m_result = CaptureNativeConstantState(m_device,
-					kFirstRegister, kRegisterCount, m_original.data(),
-					kVertexRegister, kVertexRegisterCount,
-					m_originalVertex.data(), source, captureOperation);
-				if (FAILED(m_result))
-				{
-					RecordConstantIsolationBypass(
-						captureOperation, m_result);
-					m_captured = true;
-					m_restoreRequired = false;
-					m_operation = "constant-isolation-bypassed";
-					m_result = D3D_OK;
-					return;
-				}
-				m_captured = true;
-				m_restoreRequired = true;
+				m_owned = true;
 				m_result = D3D_OK;
 				m_operation = "none";
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ConstantOwnershipSegment);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ConstantSnapshotGetElided, 2);
 			}
 
-			~NativePixelConstantScope()
+			~NativePassConstantScope()
 			{
-				if (m_captured && !m_finished)
-					RestoreAndVerify();
+				if (m_owned && !m_released)
+					Release();
 			}
 
-			bool Captured() const { return m_captured; }
+			bool Owned() const { return m_owned; }
 			HRESULT Result() const { return m_result; }
 			const char* Operation() const { return m_operation; }
 			SInt32 MismatchRegister() const { return m_mismatchRegister; }
 
-			bool RestoreAndVerify()
+			bool Release()
 			{
-				if (!m_captured)
+				if (!m_owned)
 					return false;
-				if (m_finished)
-					return SUCCEEDED(m_result);
-				m_finished = true;
-				if (!m_restoreRequired)
-				return true;
-
-				m_result = m_device->SetPixelShaderConstantF(kFirstRegister,
-					m_original.data(), kRegisterCount);
-				if (FAILED(m_result))
-				{
-					m_operation = "restore-pixel-constants";
-					return false;
-				}
-				m_result = m_device->SetVertexShaderConstantF(kVertexRegister,
-					m_originalVertex.data(), kVertexRegisterCount);
-				if (FAILED(m_result))
-				{
-					m_operation = "restore-vertex-aa-constant";
-					return false;
-				}
+				if (m_released)
+					return true;
+				m_released = true;
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ConstantOwnershipRelease);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ConstantRestoreSetElided, 2);
 				m_operation = "none";
 				m_result = D3D_OK;
 				return true;
 			}
 
 		private:
-			IDirect3DDevice9* m_device = nullptr;
-			std::array<float, kFloatCount> m_original = {};
-			std::array<float, kVertexFloatCount> m_originalVertex = {};
 			HRESULT m_result = D3DERR_INVALIDCALL;
-			const char* m_operation = "capture-pixel-constants";
+			const char* m_operation = "acquire-pass-constant-ownership";
 			SInt32 m_mismatchRegister = -1;
-			bool m_captured = false;
-			bool m_finished = false;
-			bool m_restoreRequired = false;
+			bool m_owned = false;
+			bool m_released = false;
 		};
 
-		class NativePixelConstantBatch
+		class NativePassConstantBatch
 		{
 		public:
 			void BeginFrame()
 			{
+				if (m_owned)
+					Release();
 				m_frameActive = true;
 			}
 
@@ -381,52 +192,40 @@ namespace fonthook::vectorfont
 				return m_frameActive;
 			}
 
-			bool EnsureCaptured(IDirect3DDevice9* device)
+			bool EnsureOwned(IDirect3DDevice9* device)
 			{
 				if (!m_frameActive || !device)
-					return SetFailure("capture-pixel-constants",
+					return SetFailure("acquire-pass-constant-ownership",
 						D3DERR_INVALIDCALL);
-				if (m_captured)
+				if (m_owned)
 				{
 					if (m_device == device)
 					{
 						RecordFreeTypePerf(
-							FreeTypePerfCounter::ConstantBatchReuse);
+							FreeTypePerfCounter::ConstantOwnershipReuse);
 						return true;
 					}
-					if (!Flush())
+					if (!Release())
 						return false;
 				}
-				return Capture(device);
+				return Acquire(device);
 			}
 
-			bool Flush()
+			bool Release()
 			{
-				if (!m_captured)
+				if (!m_owned)
 					return true;
-				m_captured = false;
+				m_owned = false;
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::ConstantBatchFlush);
-				if (!m_restoreRequired)
-				return ResetAfterFlush();
-				m_result = m_device->SetPixelShaderConstantF(
-					NativePixelConstantScope::kFirstRegister,
-					m_original.data(),
-					NativePixelConstantScope::kRegisterCount);
-				if (FAILED(m_result))
-					return SetFailure("restore-pixel-constants", m_result);
-				m_result = m_device->SetVertexShaderConstantF(
-					NativePixelConstantScope::kVertexRegister,
-					m_originalVertex.data(),
-					NativePixelConstantScope::kVertexRegisterCount);
-				if (FAILED(m_result))
-					return SetFailure(
-						"restore-vertex-aa-constant", m_result);
-				return ResetAfterFlush();
+					FreeTypePerfCounter::ConstantOwnershipRelease);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ConstantRestoreSetElided, 2);
+				return ResetAfterRelease();
 			}
 
 			void EndFrame()
 			{
+				Release();
 				m_frameActive = false;
 			}
 
@@ -436,49 +235,27 @@ namespace fonthook::vectorfont
 			UInt32 Generation() const { return m_generation; }
 
 		private:
-			bool Capture(IDirect3DDevice9* device)
+			bool Acquire(IDirect3DDevice9* device)
 			{
 				m_device = device;
 				m_generation = GetNativeA8ShaderGeneration();
 				m_mismatchRegister = -1;
-				NativeConstantCaptureSource source =
-					NativeConstantCaptureSource::None;
-				const char* captureOperation = "capture-pixel-constants";
-				m_result = CaptureNativeConstantState(device,
-					NativePixelConstantScope::kFirstRegister,
-					NativePixelConstantScope::kRegisterCount,
-					m_original.data(),
-					NativePixelConstantScope::kVertexRegister,
-					NativePixelConstantScope::kVertexRegisterCount,
-					m_originalVertex.data(), source, captureOperation);
-				if (FAILED(m_result))
-				{
-					RecordConstantIsolationBypass(
-						captureOperation, m_result);
-					m_captured = true;
-					m_restoreRequired = false;
-					m_operation = "constant-isolation-bypassed";
-					m_result = D3D_OK;
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::ConstantBatchCapture);
-					return true;
-				}
-				m_captured = true;
-				m_restoreRequired = true;
+				m_owned = true;
 				m_result = D3D_OK;
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::ConstantBatchCapture);
+					FreeTypePerfCounter::ConstantOwnershipSegment);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ConstantSnapshotGetElided, 2);
 				m_operation = "none";
 				return true;
 			}
 
-			bool ResetAfterFlush()
+			bool ResetAfterRelease()
 			{
 				m_device = nullptr;
 				m_operation = "none";
 				m_result = D3D_OK;
 				m_mismatchRegister = -1;
-				m_restoreRequired = false;
 				return true;
 			}
 
@@ -487,41 +264,35 @@ namespace fonthook::vectorfont
 				m_operation = operation;
 				m_result = result;
 				m_device = nullptr;
-				m_captured = false;
-				m_restoreRequired = false;
+				m_owned = false;
 				return false;
 			}
 
 			IDirect3DDevice9* m_device = nullptr;
-			std::array<float, NativePixelConstantScope::kFloatCount> m_original = {};
-			std::array<float,
-				NativePixelConstantScope::kVertexFloatCount>
-				m_originalVertex = {};
 			HRESULT m_result = D3D_OK;
 			const char* m_operation = "none";
 			SInt32 m_mismatchRegister = -1;
 			UInt32 m_generation = 0;
 			bool m_frameActive = false;
-			bool m_captured = false;
-			bool m_restoreRequired = false;
+			bool m_owned = false;
 		};
 
-		thread_local NativePixelConstantBatch s_pixelConstantBatch;
+		thread_local NativePassConstantBatch s_constantOwnershipBatch;
 
-		bool FlushNativePixelConstantBatch(const char* phase)
+		bool ReleaseNativeConstantOwnershipBatch(const char* phase)
 		{
-			if (s_pixelConstantBatch.Flush())
+			if (s_constantOwnershipBatch.Release())
 				return true;
-			MarkNativeA8GenerationFault(s_pixelConstantBatch.Generation(),
-				s_pixelConstantBatch.Operation(),
-				s_pixelConstantBatch.Result());
+			MarkNativeA8GenerationFault(s_constantOwnershipBatch.Generation(),
+				s_constantOwnershipBatch.Operation(),
+				s_constantOwnershipBatch.Result());
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: batched shader-constant isolation fault phase=%s operation=%s hr=0x%08X register=%d generation=%u",
+				"tnvse_freetype_native: pass-constant ownership release fault phase=%s operation=%s hr=0x%08X register=%d generation=%u",
 				phase ? phase : "unknown",
-				s_pixelConstantBatch.Operation(),
-				static_cast<UInt32>(s_pixelConstantBatch.Result()),
-				s_pixelConstantBatch.MismatchRegister(),
-				s_pixelConstantBatch.Generation());
+				s_constantOwnershipBatch.Operation(),
+				static_cast<UInt32>(s_constantOwnershipBatch.Result()),
+				s_constantOwnershipBatch.MismatchRegister(),
+				s_constantOwnershipBatch.Generation());
 			return false;
 		}
 
@@ -2232,8 +2003,8 @@ namespace fonthook::vectorfont
 			const bool isolatePacketConstants =
 				!draw.stockLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
-				&& s_pixelConstantBatch.FrameActive();
-			std::optional<NativePixelConstantScope> localConstants;
+				&& s_constantOwnershipBatch.FrameActive();
+			std::optional<NativePassConstantScope> localConstants;
 			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
 			if (isolatePacketConstants)
 			{
@@ -2242,21 +2013,21 @@ namespace fonthook::vectorfont
 				draw.runtimeFault = true;
 				else if (batchedConstants)
 				{
-					if (!s_pixelConstantBatch.EnsureCaptured(device))
+					if (!s_constantOwnershipBatch.EnsureOwned(device))
 					{
 						draw.runtimeFault = true;
 						draw.constantStateFault = true;
 						draw.operation =
-							s_pixelConstantBatch.Operation();
-						draw.result = s_pixelConstantBatch.Result();
+							s_constantOwnershipBatch.Operation();
+						draw.result = s_constantOwnershipBatch.Result();
 						draw.mismatchRegister =
-							s_pixelConstantBatch.MismatchRegister();
+							s_constantOwnershipBatch.MismatchRegister();
 					}
 				}
 				else
 				{
 					localConstants.emplace(device);
-					if (!localConstants->Captured())
+					if (!localConstants->Owned())
 					{
 						draw.runtimeFault = true;
 						draw.constantStateFault = true;
@@ -2391,7 +2162,7 @@ namespace fonthook::vectorfont
 
 			if (isolatePacketConstants && !batchedConstants
 				&& localConstants
-				&& !localConstants->RestoreAndVerify())
+				&& !localConstants->Release())
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
@@ -2402,14 +2173,14 @@ namespace fonthook::vectorfont
 			}
 			if (isolatePacketConstants && batchedConstants
 				&& draw.runtimeFault
-				&& !FlushNativePixelConstantBatch(
+				&& !ReleaseNativeConstantOwnershipBatch(
 					"retained-command-runtime-fault"))
 			{
 				draw.constantStateFault = true;
-				draw.operation = s_pixelConstantBatch.Operation();
-				draw.result = s_pixelConstantBatch.Result();
+				draw.operation = s_constantOwnershipBatch.Operation();
+				draw.result = s_constantOwnershipBatch.Result();
 				draw.mismatchRegister =
-					s_pixelConstantBatch.MismatchRegister();
+					s_constantOwnershipBatch.MismatchRegister();
 			}
 
 			const bool success = !draw.runtimeFault
@@ -2524,8 +2295,8 @@ namespace fonthook::vectorfont
 			const bool isolatePacketConstants =
 				!draw.stockLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
-				&& s_pixelConstantBatch.FrameActive();
-			std::optional<NativePixelConstantScope> localConstants;
+				&& s_constantOwnershipBatch.FrameActive();
+			std::optional<NativePassConstantScope> localConstants;
 			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
 			if (isolatePacketConstants)
 			{
@@ -2534,21 +2305,21 @@ namespace fonthook::vectorfont
 					draw.runtimeFault = true;
 				else if (batchedConstants)
 				{
-					if (!s_pixelConstantBatch.EnsureCaptured(device))
+					if (!s_constantOwnershipBatch.EnsureOwned(device))
 					{
 						draw.runtimeFault = true;
 						draw.constantStateFault = true;
 						draw.operation =
-							s_pixelConstantBatch.Operation();
-						draw.result = s_pixelConstantBatch.Result();
+							s_constantOwnershipBatch.Operation();
+						draw.result = s_constantOwnershipBatch.Result();
 						draw.mismatchRegister =
-							s_pixelConstantBatch.MismatchRegister();
+							s_constantOwnershipBatch.MismatchRegister();
 					}
 				}
 				else
 				{
 					localConstants.emplace(device);
-					if (!localConstants->Captured())
+					if (!localConstants->Owned())
 					{
 						draw.runtimeFault = true;
 						draw.constantStateFault = true;
@@ -2682,7 +2453,7 @@ namespace fonthook::vectorfont
 
 			if (isolatePacketConstants && !batchedConstants
 				&& localConstants
-				&& !localConstants->RestoreAndVerify())
+				&& !localConstants->Release())
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
@@ -2693,14 +2464,14 @@ namespace fonthook::vectorfont
 			}
 			if (isolatePacketConstants && batchedConstants
 				&& draw.runtimeFault
-				&& !FlushNativePixelConstantBatch(
+				&& !ReleaseNativeConstantOwnershipBatch(
 					"retained-virtual-runtime-fault"))
 			{
 				draw.constantStateFault = true;
-				draw.operation = s_pixelConstantBatch.Operation();
-				draw.result = s_pixelConstantBatch.Result();
+				draw.operation = s_constantOwnershipBatch.Operation();
+				draw.result = s_constantOwnershipBatch.Result();
 				draw.mismatchRegister =
-					s_pixelConstantBatch.MismatchRegister();
+					s_constantOwnershipBatch.MismatchRegister();
 			}
 
 			if (draw.drawnPacketCount)
@@ -2939,15 +2710,15 @@ namespace fonthook::vectorfont
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
-				draw.operation = "capture-pixel-constants";
+				draw.operation = "acquire-pass-constant-ownership";
 				draw.result = D3DERR_DEVICELOST;
 			}
 
 			const bool isolatePacketConstants =
 				!draw.stockLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
-				&& s_pixelConstantBatch.FrameActive();
-			std::optional<NativePixelConstantScope> localConstants;
+				&& s_constantOwnershipBatch.FrameActive();
+			std::optional<NativePassConstantScope> localConstants;
 			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
 			if (!draw.runtimeFault)
 			{
@@ -2955,20 +2726,20 @@ namespace fonthook::vectorfont
 					shaderBatch.emplace();
 				if (batchedConstants)
 				{
-					if (!s_pixelConstantBatch.EnsureCaptured(device))
+					if (!s_constantOwnershipBatch.EnsureOwned(device))
 					{
 						draw.runtimeFault = true;
 						draw.constantStateFault = true;
-						draw.operation = s_pixelConstantBatch.Operation();
-						draw.result = s_pixelConstantBatch.Result();
+						draw.operation = s_constantOwnershipBatch.Operation();
+						draw.result = s_constantOwnershipBatch.Result();
 						draw.mismatchRegister =
-							s_pixelConstantBatch.MismatchRegister();
+							s_constantOwnershipBatch.MismatchRegister();
 					}
 				}
 				else if (isolatePacketConstants)
 				{
 					localConstants.emplace(device);
-					if (!localConstants->Captured())
+					if (!localConstants->Owned())
 					{
 						draw.runtimeFault = true;
 						draw.constantStateFault = true;
@@ -3072,7 +2843,7 @@ namespace fonthook::vectorfont
 
 			if (isolatePacketConstants && !batchedConstants
 				&& localConstants
-				&& !localConstants->RestoreAndVerify())
+				&& !localConstants->Release())
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
@@ -3083,14 +2854,14 @@ namespace fonthook::vectorfont
 			}
 			if (isolatePacketConstants && batchedConstants
 				&& draw.runtimeFault
-				&& !FlushNativePixelConstantBatch(
+				&& !ReleaseNativeConstantOwnershipBatch(
 					"virtual-stock-runtime-fault"))
 			{
 				draw.constantStateFault = true;
-				draw.operation = s_pixelConstantBatch.Operation();
-				draw.result = s_pixelConstantBatch.Result();
+				draw.operation = s_constantOwnershipBatch.Operation();
+				draw.result = s_constantOwnershipBatch.Result();
 				draw.mismatchRegister =
-					s_pixelConstantBatch.MismatchRegister();
+					s_constantOwnershipBatch.MismatchRegister();
 			}
 			if (commandExecution)
 			{
@@ -3183,7 +2954,7 @@ namespace fonthook::vectorfont
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
-				draw.operation = "capture-pixel-constants";
+				draw.operation = "acquire-pass-constant-ownership";
 				draw.result = D3DERR_DEVICELOST;
 			}
 			// Retail NiDX9Renderer's indexed-array loop cannot express
@@ -3200,32 +2971,32 @@ namespace fonthook::vectorfont
 			const bool isolatePacketConstants =
 				!draw.stockLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
-				&& s_pixelConstantBatch.FrameActive();
-			std::optional<NativePixelConstantScope> localConstants;
+				&& s_constantOwnershipBatch.FrameActive();
+			std::optional<NativePassConstantScope> localConstants;
 			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
 			if (!draw.runtimeFault)
 			{
 				if (isolatePacketConstants)
 					shaderBatch.emplace();
-				// Retail 0xB64F90 calls 0xB994F0 once per sorted item with no
-				// intervening draw. Capture PS c1-c8 and VS c4 once for that batch and
-				// preserve the local scope for direct/non-sorted submissions.
+				// Retail 0xB64F90 calls RenderPassImmediately once per sorted item
+				// with no intervening draw. Own PS c1-c8 and VS c4 for the
+				// contiguous native segment; the next pass republishes its inputs.
 				if (batchedConstants)
 				{
-					if (!s_pixelConstantBatch.EnsureCaptured(device))
+					if (!s_constantOwnershipBatch.EnsureOwned(device))
 					{
 						draw.runtimeFault = true;
 						draw.constantStateFault = true;
-						draw.operation = s_pixelConstantBatch.Operation();
-						draw.result = s_pixelConstantBatch.Result();
+						draw.operation = s_constantOwnershipBatch.Operation();
+						draw.result = s_constantOwnershipBatch.Result();
 						draw.mismatchRegister =
-							s_pixelConstantBatch.MismatchRegister();
+							s_constantOwnershipBatch.MismatchRegister();
 					}
 				}
 				else if (isolatePacketConstants)
 				{
 					localConstants.emplace(device);
-					if (!localConstants->Captured())
+					if (!localConstants->Owned())
 					{
 						draw.runtimeFault = true;
 						draw.constantStateFault = true;
@@ -3277,7 +3048,7 @@ namespace fonthook::vectorfont
 				}
 				if (isolatePacketConstants && !batchedConstants
 					&& localConstants
-					&& !localConstants->RestoreAndVerify())
+					&& !localConstants->Release())
 				{
 					draw.runtimeFault = true;
 					draw.constantStateFault = true;
@@ -3288,13 +3059,13 @@ namespace fonthook::vectorfont
 				}
 			}
 			if (isolatePacketConstants && batchedConstants && draw.runtimeFault
-				&& !FlushNativePixelConstantBatch("native-runtime-fault"))
+				&& !ReleaseNativeConstantOwnershipBatch("native-runtime-fault"))
 			{
 				draw.constantStateFault = true;
-				draw.operation = s_pixelConstantBatch.Operation();
-				draw.result = s_pixelConstantBatch.Result();
+				draw.operation = s_constantOwnershipBatch.Operation();
+				draw.result = s_constantOwnershipBatch.Result();
 				draw.mismatchRegister =
-					s_pixelConstantBatch.MismatchRegister();
+					s_constantOwnershipBatch.MismatchRegister();
 			}
 			return draw;
 		}
@@ -3490,15 +3261,15 @@ namespace fonthook::vectorfont
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
-				draw.operation = "capture-pixel-constants";
+				draw.operation = "acquire-pass-constant-ownership";
 				draw.result = D3DERR_DEVICELOST;
 			}
 
 			const bool isolatePacketConstants =
 				!draw.stockLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
-				&& s_pixelConstantBatch.FrameActive();
-			std::optional<NativePixelConstantScope> localConstants;
+				&& s_constantOwnershipBatch.FrameActive();
+			std::optional<NativePassConstantScope> localConstants;
 			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
 			if (!draw.runtimeFault)
 			{
@@ -3506,20 +3277,20 @@ namespace fonthook::vectorfont
 					shaderBatch.emplace();
 				if (batchedConstants)
 				{
-					if (!s_pixelConstantBatch.EnsureCaptured(device))
+					if (!s_constantOwnershipBatch.EnsureOwned(device))
 					{
 						draw.runtimeFault = true;
 						draw.constantStateFault = true;
-						draw.operation = s_pixelConstantBatch.Operation();
-						draw.result = s_pixelConstantBatch.Result();
+						draw.operation = s_constantOwnershipBatch.Operation();
+						draw.result = s_constantOwnershipBatch.Result();
 						draw.mismatchRegister =
-							s_pixelConstantBatch.MismatchRegister();
+							s_constantOwnershipBatch.MismatchRegister();
 					}
 				}
 				else if (isolatePacketConstants)
 				{
 					localConstants.emplace(device);
-					if (!localConstants->Captured())
+					if (!localConstants->Owned())
 					{
 						draw.runtimeFault = true;
 						draw.constantStateFault = true;
@@ -3619,7 +3390,7 @@ namespace fonthook::vectorfont
 
 			if (isolatePacketConstants && !batchedConstants
 				&& localConstants
-				&& !localConstants->RestoreAndVerify())
+				&& !localConstants->Release())
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
@@ -3630,14 +3401,14 @@ namespace fonthook::vectorfont
 			}
 			if (isolatePacketConstants && batchedConstants
 				&& draw.runtimeFault
-				&& !FlushNativePixelConstantBatch(
+				&& !ReleaseNativeConstantOwnershipBatch(
 					"direct-shape-runtime-fault"))
 			{
 				draw.constantStateFault = true;
-				draw.operation = s_pixelConstantBatch.Operation();
-				draw.result = s_pixelConstantBatch.Result();
+				draw.operation = s_constantOwnershipBatch.Operation();
+				draw.result = s_constantOwnershipBatch.Result();
 				draw.mismatchRegister =
-					s_pixelConstantBatch.MismatchRegister();
+					s_constantOwnershipBatch.MismatchRegister();
 			}
 			if (draw.runtimeFault)
 			{
@@ -3732,15 +3503,15 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	void BeginA8SortedTileConstantBatch()
+	void BeginA8SortedTileConstantOwnership()
 	{
-		s_pixelConstantBatch.BeginFrame();
+		s_constantOwnershipBatch.BeginFrame();
 	}
 
-	void EndA8SortedTileConstantBatch()
+	void EndA8SortedTileConstantOwnership()
 	{
-		FlushNativePixelConstantBatch("sorted-frame-end");
-		s_pixelConstantBatch.EndFrame();
+		ReleaseNativeConstantOwnershipBatch("sorted-frame-end");
+		s_constantOwnershipBatch.EndFrame();
 	}
 
 	A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape)
@@ -3824,8 +3595,8 @@ namespace fonthook::vectorfont
 			? reinterpret_cast<NiTriShape*>(pass->pGeometry) : nullptr;
 		if (!IsA8AtlasShape(shape))
 		{
-			if (s_pixelConstantBatch.FrameActive())
-				FlushNativePixelConstantBatch("before-stock-tile");
+			if (s_constantOwnershipBatch.FrameActive())
+				ReleaseNativeConstantOwnershipBatch("before-stock-tile");
 			InvalidateNativeA8SortedShaderState();
 			state.originalTileRenderPass(pass, currentPass, testAlpha,
 				blendAlpha, setupDrawmode);
@@ -4034,7 +3805,7 @@ namespace fonthook::vectorfont
 							primaryPayload->preparedGeneration,
 							draw.operation, draw.result);
 						gLog.FormattedMessage(
-							"tnvse_freetype_native: virtual-stock constant isolation fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-group",
+							"tnvse_freetype_native: virtual-stock pass-constant ownership fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-group",
 							draw.operation,
 							static_cast<UInt32>(draw.result),
 							draw.mismatchRegister, shape,
@@ -4183,7 +3954,7 @@ namespace fonthook::vectorfont
 					sourcePayload->preparedGeneration,
 					draw.operation, draw.result);
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: shader-constant isolation fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-native-group",
+					"tnvse_freetype_native: pass-constant ownership fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-native-group",
 					draw.operation, static_cast<UInt32>(draw.result),
 					draw.mismatchRegister, shape, metadata->fontId,
 					sourcePayload->preparedGeneration,

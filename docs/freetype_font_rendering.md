@@ -986,11 +986,12 @@ kinds, upload epochs, and ranges agree. During its Tile callback the
 shape changes only its packet bound, folds the artifact origin into its live
 transform, and temporarily disables alpha test; descriptor, declaration,
 shader, texture, scissor, color, alpha, blend, cull, and stencil state remain
-the real shape's state. The normal pixel shaders and constant isolation remain
-unchanged. A stable slot is fully validated and reused without rewriting its
-descriptor; only an actual resource, atlas, shader, or descriptor change
-performs a rebind. Atlas validation includes both the texturing-property wrapper
-and the Tile shade property's page-specific source texture.
+the real shape's state. The normal pixel shaders and pass-local constant
+ownership remain unchanged. A stable slot is fully validated and reused
+without rewriting its descriptor; only an actual resource, atlas, shader, or
+descriptor change performs a rebind. Atlas validation includes both the
+texturing-property wrapper and the Tile shade property's page-specific source
+texture.
 Binding resolution uses per-thread fixed-capacity scratch whose used entries
 are overwritten before consumption, avoiding zero-initialization of 64 packet
 bindings for each group. A stable descriptor is checked once during sorted
@@ -1128,16 +1129,21 @@ traversal; it is never accepted merely by opening a later segment.
 
 The command path obtains render-target-group and viewport identity from
 `NiDX9Renderer`'s software mirrors, so it does not use
-`IDirect3DDevice9::GetRenderTarget` or `GetViewport`. The Xbox test-build PDB
-describes float arrays in the `0x88`-byte `NiD3DShaderConstantManager` base, but
-retail PC reverse engineering shows that `NiDX9ShaderConstantManager` is
-`0x8C` bytes, leaves those arrays null, and supplies a no-op `CommitChanges`.
-Retail constant isolation therefore captures only pixel c1-c8 and vertex c4
-from the device once per sorted traversal, not once per packet. Diagnostic
-restore readback remains removed. If that bounded snapshot itself fails, the
-native draw continues without restoration instead of suppressing the complete
-text group; the next failed device submission still follows normal
-device-loss/runtime-fault handling.
+`IDirect3DDevice9::GetRenderTarget` or `GetViewport`. Shader constants use a
+pass-ownership contract rather than a device snapshot. The symbolized test
+build shows that `BSBatchRenderer::RenderPassImmediately_Standard` invokes
+`SetupGeometryConstants` before `PrepareGeometryForRendering` and the geometry
+draw, while `NiD3DShaderConstantMap::SetShaderConstants` submits every live
+reflected entry. `TileShader::CreateConstantMaps` binds `tintcolor` to PS c0,
+`WorldViewProjTranspose` to VS c0-c3, and `TexScroll` to VS c4. The shipped
+`TILE1000`, `TILE1001`, and `TILE1002` bytecode reads precisely those ranges.
+Native A8 may therefore own PS c1-c8 and VS c4 while its program is bound:
+the next stock Tile republishes all constants it can read, and the first
+non-Tile pass after the sorted traversal likewise publishes its own reflected
+inputs before drawing. No D3D `GetPixelShaderConstantF` or
+`GetVertexShaderConstantF` snapshot is taken and no stale snapshot is written
+back. Device-loss and native submission failures still follow the existing
+runtime-fault handling.
 
 Retained packet binding also treats
 `TileShader::SetupGeometryTextures` as the owner of VS/PS publication, as
@@ -1196,16 +1202,18 @@ per-span-full/light/render-target validation counts, successful execution
 segments, segment full validations/reuses/invalidations, retained-program
 hits/misses, and fallbacks by token, generation, atlas, resource, topology,
 hook, nesting, render target, and state.
-The `state_shadow_` line reports mirror/driver constant-capture counts, the
-bounded number of state driver gets, any fail-open isolation bypass, elided
-program binds versus required profile setups, texture sets/reuses,
-packet-constant full/partial/reuse, and vertex-AA set/reuse counts. Program
-reuse is counted as two avoided publications, one VS plus one PS. On retail PC,
-a `vertex_aa_stock_preserved` count records stock updates that retained the
-already published native c4 through the WVP-only profile map. On retail PC,
-a healthy interval normally has two
-driver gets per sorted traversal that contains native distance-field packets
-and zero `isolation_bypass`.
+The main performance line reports `constant_ownership_segments`, segment
+reuses/releases, and the snapshot Get and restore Set calls elided by pass
+ownership. The `state_shadow_` line retains the old mirror/driver
+constant-capture and `state_shadow_driver_gets` fields so a runtime log proves
+that the former path stayed inactive, followed by program/texture/packet and
+vertex-AA reuse counters. Program reuse is counted as two avoided
+publications, one VS plus one PS. A `vertex_aa_stock_preserved` count records
+stock updates that retained the already published native c4 through the
+WVP-only profile map. A healthy interval has nonzero, balanced ownership
+segments/releases, `snapshot_gets_elided == 2 * constant_ownership_segments`,
+`restore_sets_elided == 2 * releases`, and zero
+`state_shadow_driver_gets`, driver captures, and `isolation_bypass`.
 The timing line adds `command_build` and `command_submit` while preserving
 `submit`. Runtime validation should confirm nonzero `native_replays` and
 `direct_range_replays`, `span_full_validations=0`,

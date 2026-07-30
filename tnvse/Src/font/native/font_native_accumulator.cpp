@@ -1576,11 +1576,11 @@ namespace fonthook::vectorfont
 				}
 				RefreshSortedScratchMemory(scratch);
 				BeginNativeA8SortedShaderBatch();
-				BeginA8SortedTileConstantBatch();
+				BeginA8SortedTileConstantOwnership();
 				scratch.activeValidationToken = frameValidationToken;
 				scratch.active = true;
 				const int result = state.originalSortedTileRender(accumulator);
-				EndA8SortedTileConstantBatch();
+				EndA8SortedTileConstantOwnership();
 				EndNativeA8SortedShaderBatch();
 				EndNativeA8FrameCommandBuffer();
 				EndNativeA8SortedRingFrame();
