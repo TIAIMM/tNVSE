@@ -202,6 +202,7 @@ namespace fonthook::vectorfont
 		ConstantIsolationBypass,
 		VertexAaConstantSet,
 		VertexAaConstantReuse,
+		CommandProgramSetup,
 		CommandProgramBindElided,
 		CommandTextureBindSet,
 		CommandTextureBindReuse,

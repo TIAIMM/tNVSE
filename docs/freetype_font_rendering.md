@@ -1130,13 +1130,29 @@ Retained packet binding also treats
 `TileShader::SetupGeometryTextures` as the owner of VS/PS publication, as
 confirmed by the symbolized test build, and does not submit the same VS/PS a
 second time; `NiD3DRenderState`'s current-program mirror validates that setup
-without a driver query. Texture and sampler changes go through
-`NiD3DRenderState`, keeping Gamebryo's software mirror coherent while its own
-setter suppresses unchanged driver calls. The traversal-local shadow records a
-bootstrap texture only when the engine mirror confirms the exact atlas page.
-The level-zero sampler contract is normalized once after any stock setup that
-can change it and then reused by continuation packets. Packet c1-c8 uploads
-compare the
+without a driver query. Same-profile retained packets now consult that mirror
+directly and skip both setup callbacks when the two program handles remain
+current; a mismatch repairs the setup instead of trusting the local profile
+pointer.
+
+Stage-zero texture identity is read directly from
+`NiD3DRenderState::m_apkTextureStageTextures`, which retail
+`NiDX9RenderState::SetTexture` updates before its driver call. An exact mirror
+match is therefore a complete zero-driver-query reuse proof even when a stock
+bootstrap did not prime the traversal-local bit. Only a real page change enters
+the engine setter.
+
+Retail `NiDX9RenderState::SetSamplerState` maps only `ADDRESSU`, `ADDRESSV`,
+`MAGFILTER`, `MINFILTER`, and `MIPFILTER` into its five software slots;
+`SRGBTEXTURE` is not tracked and passing it through the wrapper is a no-op. The
+native Tile path never publishes that state and D3D9 initializes it to false.
+The level-zero contract consequently checks the mirrored `MIPFILTER` slot
+directly and calls the engine setter only when it is not already
+`D3DTEXF_NONE`. A stock setup preserves sampler readiness when its resulting
+mirror is already correct. A same-profile command whose program, packet
+constant, vertex-AA, and sampler mirrors are all current bypasses the three
+binder helpers entirely while recording their reuse counters. Packet c1-c8
+uploads compare the
 traversal-local constant shadow and submit only the changed contiguous register
 range. Vertex c4 is reused between retained packets with the same viewport and
 raster scale, but is forcibly republished after every stock
@@ -1163,8 +1179,10 @@ hits/misses, and fallbacks by token, generation, atlas, resource, topology,
 hook, nesting, render target, and state.
 The `state_shadow_` line reports mirror/driver constant-capture counts, the
 bounded number of state driver gets, any fail-open isolation bypass, elided
-program binds, texture sets/reuses, packet-constant full/partial/reuse, and
-vertex-AA set/reuse counts. On retail PC, a healthy interval normally has two
+program binds versus required profile setups, texture sets/reuses,
+packet-constant full/partial/reuse, and vertex-AA set/reuse counts. Program
+reuse is counted as two avoided publications, one VS plus one PS. On retail PC,
+a healthy interval normally has two
 driver gets per sorted traversal that contains native distance-field packets
 and zero `isolation_bypass`.
 The timing line adds `command_build` and `command_submit` while preserving

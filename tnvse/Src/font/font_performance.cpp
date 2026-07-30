@@ -307,7 +307,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu command_program_binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu",
+			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu command_program_setups=%llu binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::ConstantCaptureMirror)],
 			values[static_cast<size_t>(
@@ -320,6 +320,8 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::VertexAaConstantSet)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VertexAaConstantReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandProgramSetup)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandProgramBindElided)],
 			values[static_cast<size_t>(

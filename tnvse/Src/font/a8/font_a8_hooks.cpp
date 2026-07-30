@@ -1941,7 +1941,6 @@ namespace fonthook::vectorfont
 			bool virtualStock = false;
 			bool failed = false;
 			bool constantStateFault = false;
-			bool bootstrapBindingPrimed = false;
 		};
 
 		void FailRetainedBridge(NativeBridgeExecutionContext& context,
@@ -2073,24 +2072,6 @@ namespace fonthook::vectorfont
 				static_cast<NativeBridgeExecutionContext*>(opaque);
 			if (!context || context->failed)
 				return false;
-			if (!context->bootstrapBindingPrimed)
-			{
-				const NativeA8DrawCommand* bootstrap =
-					ResolveNativeCommand(context->view,
-						context->bootstrapCommandOffset);
-				if (!bootstrap || !bootstrap->program)
-				{
-					FailRetainedBridge(*context,
-						NativeA8FallbackReason::PacketBuild,
-						"retained-bootstrap-binding", E_FAIL);
-					return false;
-				}
-				// Reaching the immediate callback proves the stock bootstrap has
-				// already executed SetupGeometryTextures for this exact command.
-				PrimeNativeA8CommandTextureBinding(
-					*bootstrap->program, bootstrap->atlasTexture);
-				context->bootstrapBindingPrimed = true;
-			}
 			while (context->nextCommandOffset
 				< context->endCommandOffset)
 			{

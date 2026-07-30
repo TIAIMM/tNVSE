@@ -52,6 +52,10 @@ namespace fonthook::vectorfont
 
 		static_assert(offsetof(TilePixelConstantView, overlayColor) == 0x68);
 		static_assert(offsetof(TilePixelConstantView, tileAlpha) == 0x78);
+		static_assert(offsetof(
+			NiD3DRenderState, m_akSamplerStateSettings) == 0xE20);
+		static_assert(offsetof(
+			NiD3DRenderState, m_apkTextureStageTextures) == 0x10A0);
 
 		inline constexpr UInt32 kTileShaderCreate = 0xBCAE90;
 		inline constexpr UInt32 kTileShaderUpdateConstants = 0xBCA980;
@@ -87,16 +91,15 @@ namespace fonthook::vectorfont
 		struct NativeSortedShaderBatch
 		{
 			IDirect3DDevice9* device = nullptr;
+			NiD3DRenderState* renderState = nullptr;
 			UInt32 generation = 0;
 			NativeShaderProfile* packetProfile = nullptr;
-			IDirect3DBaseTexture9* texture0 = nullptr;
 			std::array<float, kNativeA8PacketConstantFloatCount>
 				packetConstants = {};
 			UInt32 depth = 0;
 			NativeVertexAaState vertexAa;
 			bool packetConstantsReady = false;
 			bool samplerReady = false;
-			bool textureReady = false;
 		};
 
 		thread_local NativeSortedShaderBatch s_sortedShaderBatch;
@@ -370,6 +373,47 @@ namespace fonthook::vectorfont
 				? renderState : nullptr;
 		}
 
+		void ResetSortedShaderIdentity(NativeSortedShaderBatch& batch,
+			IDirect3DDevice9* device, UInt32 generation)
+		{
+			batch.device = device;
+			batch.renderState = ResolveEngineRenderState(device);
+			batch.generation = generation;
+			batch.packetProfile = nullptr;
+			batch.vertexAa = {};
+			batch.packetConstantsReady = false;
+			batch.samplerReady = false;
+		}
+
+		NiD3DRenderState* ResolveSortedRenderState(
+			IDirect3DDevice9* device)
+		{
+			NativeSortedShaderBatch& batch = s_sortedShaderBatch;
+			if (batch.depth && batch.device == device && batch.renderState
+				&& batch.renderState->m_pkD3DDevice == device)
+			{
+				return batch.renderState;
+			}
+			NiD3DRenderState* renderState =
+				ResolveEngineRenderState(device);
+			if (batch.depth && batch.device == device)
+				batch.renderState = renderState;
+			return renderState;
+		}
+
+		bool IsNativeMipFilterReady(
+			const NiD3DRenderState* renderState)
+		{
+			// Retail NiDX9RenderState maps only ADDRESSU/V, MAG, MIN and MIP
+			// into the five software-mirror slots. MIPFILTER is slot 4
+			// (NiDX9RenderState::SetSamplerState at 0xE910A0).
+			constexpr size_t kMipFilterMirrorIndex = 4;
+			return renderState
+				&& renderState->m_akSamplerStateSettings[0]
+					[kMipFilterMirrorIndex].m_uiCurrValue
+						== D3DTEXF_NONE;
+		}
+
 		bool ResolveEngineViewport(IDirect3DDevice9* device,
 			D3DVIEWPORT9& viewport)
 		{
@@ -516,14 +560,8 @@ namespace fonthook::vectorfont
 				// Device/generation identity is shared by the sampler and c1-c8
 				// caches. A change invalidates both before this submission can
 				// publish a new identity.
-				sortedBatch.device = device;
-				sortedBatch.generation = generation->id;
-				sortedBatch.packetProfile = nullptr;
-				sortedBatch.texture0 = nullptr;
-				sortedBatch.vertexAa = {};
-				sortedBatch.packetConstantsReady = false;
-				sortedBatch.samplerReady = false;
-				sortedBatch.textureReady = false;
+				ResetSortedShaderIdentity(
+					sortedBatch, device, generation->id);
 			}
 			// Distance-field profiles bind different pixel programs and upload
 			// c0-c8 directly. The stock update refreshes Tile's color/alpha constant
@@ -679,11 +717,15 @@ namespace fonthook::vectorfont
 			if (simpleColorProfile)
 				return;
 
+			const bool mipFilterReady = IsNativeMipFilterReady(
+				ResolveSortedRenderState(device));
 			const bool sortedSamplerReady = sortedBatch.depth
 				&& sortedBatch.samplerReady
 				&& sortedBatch.device == device
-				&& sortedBatch.generation == generation->id;
-			if ((!batchActive || !batch.samplerReady)
+				&& sortedBatch.generation == generation->id
+				&& mipFilterReady;
+			if ((!batchActive || !batch.samplerReady
+					|| !mipFilterReady)
 				&& !sortedSamplerReady)
 			{
 				bool samplerChanged = false;
@@ -1476,13 +1518,12 @@ namespace fonthook::vectorfont
 		if (!batch.depth++)
 		{
 			batch.device = nullptr;
+			batch.renderState = nullptr;
 			batch.generation = 0;
 			batch.packetProfile = nullptr;
-			batch.texture0 = nullptr;
 			batch.vertexAa = {};
 			batch.packetConstantsReady = false;
 			batch.samplerReady = false;
-			batch.textureReady = false;
 		}
 	}
 
@@ -1494,13 +1535,12 @@ namespace fonthook::vectorfont
 		if (!--batch.depth)
 		{
 			batch.device = nullptr;
+			batch.renderState = nullptr;
 			batch.generation = 0;
 			batch.packetProfile = nullptr;
-			batch.texture0 = nullptr;
 			batch.vertexAa = {};
 			batch.packetConstantsReady = false;
 			batch.samplerReady = false;
-			batch.textureReady = false;
 		}
 	}
 
@@ -1510,13 +1550,12 @@ namespace fonthook::vectorfont
 			NativeA8CommandFallback::State);
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 		batch.device = nullptr;
+		batch.renderState = nullptr;
 		batch.generation = 0;
 		batch.packetProfile = nullptr;
-		batch.texture0 = nullptr;
 		batch.vertexAa = {};
 		batch.packetConstantsReady = false;
 		batch.samplerReady = false;
-		batch.textureReady = false;
 		// If invalidation happens during a nested pass inside one facade, its
 		// per-facade fallback must not resurrect constants from before that pass.
 		NativeFacadeShaderBatch& facadeBatch = s_facadeShaderBatch;
@@ -1703,7 +1742,7 @@ namespace fonthook::vectorfont
 			changed = false;
 			operation = "none";
 			NiD3DRenderState* renderState =
-				ResolveEngineRenderState(device);
+				ResolveSortedRenderState(device);
 			if (!renderState)
 			{
 				operation = "resolve-engine-render-state(sampler)";
@@ -1711,19 +1750,29 @@ namespace fonthook::vectorfont
 			}
 			NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 			if (batch.depth && batch.device == device
-				&& batch.samplerReady)
+				&& batch.samplerReady
+				&& IsNativeMipFilterReady(renderState))
 			{
 				return D3D_OK;
 			}
 
-			// Use Gamebryo's state setter so its software mirror remains
-			// coherent with the device. The engine suppresses an unchanged
-			// driver SetSamplerState internally.
-			renderState->SetSamplerState(
-				0, D3DSAMP_SRGBTEXTURE, FALSE, false);
-			renderState->SetSamplerState(
-				0, D3DSAMP_MIPFILTER, D3DTEXF_NONE, false);
-			changed = true;
+			// The retail reverse map has no SRGBTEXTURE slot; routing that enum
+			// through NiD3DRenderState is a no-op. Fallout's Tile texture path
+			// never publishes SRGBTEXTURE and D3D9 defaults it to FALSE, so do
+			// not pay for a redundant virtual call that cannot affect state.
+			// MIPFILTER is mirrored. Read that zero-driver-cost value first and
+			// enter the engine setter only when normalization is actually needed.
+			if (!IsNativeMipFilterReady(renderState))
+			{
+				renderState->SetSamplerState(
+					0, D3DSAMP_MIPFILTER, D3DTEXF_NONE, false);
+				if (!IsNativeMipFilterReady(renderState))
+				{
+					operation = "SetSamplerState(mip-shadow)";
+					return E_FAIL;
+				}
+				changed = true;
+			}
 			if (batch.depth)
 				batch.samplerReady = true;
 			return D3D_OK;
@@ -1741,16 +1790,16 @@ namespace fonthook::vectorfont
 			auto* texture = const_cast<IDirect3DBaseTexture9*>(
 				static_cast<const IDirect3DBaseTexture9*>(atlasTexture));
 			NiD3DRenderState* renderState =
-				ResolveEngineRenderState(device);
+				ResolveSortedRenderState(device);
 			if (!renderState)
 			{
 				operation = "resolve-engine-render-state(texture)";
 				return D3DERR_INVALIDCALL;
 			}
-			NativeSortedShaderBatch& batch = s_sortedShaderBatch;
-			if (batch.depth && batch.device == device
-				&& batch.textureReady && batch.texture0 == texture
-				&& renderState->m_apkTextureStageTextures[0] == texture)
+			// The engine mirror is authoritative for texture stage 0. Requiring
+			// a second traversal-local ready bit caused every command to call
+			// SetTexture when a stock bootstrap had already installed this page.
+			if (renderState->m_apkTextureStageTextures[0] == texture)
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::CommandTextureBindReuse);
@@ -1765,11 +1814,6 @@ namespace fonthook::vectorfont
 			{
 				operation = "SetTexture(command-page-shadow)";
 				return E_FAIL;
-			}
-			if (batch.depth)
-			{
-				batch.texture0 = texture;
-				batch.textureReady = true;
 			}
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandTextureBindSet);
@@ -1791,14 +1835,8 @@ namespace fonthook::vectorfont
 			if (batchActive && (batch.device != device
 				|| batch.generation != generation->id))
 			{
-				batch.device = device;
-				batch.generation = generation->id;
-				batch.packetProfile = nullptr;
-				batch.texture0 = nullptr;
-				batch.vertexAa = {};
-				batch.packetConstantsReady = false;
-				batch.samplerReady = false;
-				batch.textureReady = false;
+				ResetSortedShaderIdentity(
+					batch, device, generation->id);
 			}
 
 			HRESULT result = D3D_OK;
@@ -1879,30 +1917,6 @@ namespace fonthook::vectorfont
 
 	}
 
-	void PrimeNativeA8CommandTextureBinding(
-		const NativeA8CompiledPacketCommand& command,
-		const void* atlasTexture)
-	{
-		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
-		if (!batch.depth || !atlasTexture || !command.device
-			|| batch.device != command.device
-			|| batch.generation != command.generation)
-		{
-			return;
-		}
-		auto* texture = const_cast<IDirect3DBaseTexture9*>(
-			static_cast<const IDirect3DBaseTexture9*>(atlasTexture));
-		NiD3DRenderState* renderState =
-			ResolveEngineRenderState(command.device);
-		if (!renderState
-			|| renderState->m_apkTextureStageTextures[0] != texture)
-		{
-			return;
-		}
-		batch.texture0 = texture;
-		batch.textureReady = true;
-	}
-
 	bool BindNativeA8CommandPacket(
 		const NativeA8CompiledPacketCommand& command,
 		const void* atlasTexture, bool publishPrograms,
@@ -1935,7 +1949,31 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		if (publishPrograms)
+		NativeSortedShaderBatch& sortedBatch = s_sortedShaderBatch;
+		if (sortedBatch.depth
+			&& (sortedBatch.device != device
+				|| sortedBatch.generation != generation->id))
+		{
+			ResetSortedShaderIdentity(
+				sortedBatch, device, generation->id);
+		}
+		NiD3DRenderState* renderState =
+			ResolveSortedRenderState(device);
+		if (!renderState)
+		{
+			operation = "resolve-engine-render-state(program)";
+			result = D3DERR_INVALIDCALL;
+			return false;
+		}
+		const bool programsReady =
+			renderState->m_hCurrentVertexShader == command.vertexShader
+			&& renderState->m_hCurrentPixelShader == command.pixelShader;
+		// A profile change can also change pass render state even when two
+		// profiles share shader handles, so it still requires SetupPass. If the
+		// caller retained the same profile but an unexpected program mutation
+		// occurred, repair it here instead of trusting a stale local pointer.
+		const bool setupRequired = publishPrograms || !programsReady;
+		if (setupRequired)
 		{
 			if (!command.setupPass || !properties)
 			{
@@ -1991,8 +2029,7 @@ namespace fonthook::vectorfont
 			// programs through NiD3DRenderState before configuring stage 0.
 			// Reissuing SetVertexShader/SetPixelShader here was a guaranteed
 			// duplicate driver submission. Validate the software mirror instead.
-			NiD3DRenderState* renderState =
-				ResolveEngineRenderState(device);
+			renderState = ResolveSortedRenderState(device);
 			if (!renderState
 				|| renderState->m_hCurrentVertexShader
 					!= command.vertexShader
@@ -2003,34 +2040,42 @@ namespace fonthook::vectorfont
 				result = E_FAIL;
 				return false;
 			}
-			if (s_sortedShaderBatch.depth)
+			if (sortedBatch.depth)
 			{
-				// The setup call above bound this exact validated atlas page.
-				// Publish that fact to the traversal shadow so the common tail
-				// does not submit the same texture a second time.
-				auto* texture =
-					const_cast<IDirect3DBaseTexture9*>(
-						static_cast<const IDirect3DBaseTexture9*>(
-							atlasTexture));
-				if (renderState->m_apkTextureStageTextures[0]
-					== texture)
-				{
-					s_sortedShaderBatch.texture0 = texture;
-					s_sortedShaderBatch.textureReady = true;
-				}
-				else
-				{
-					s_sortedShaderBatch.texture0 = nullptr;
-					s_sortedShaderBatch.textureReady = false;
-				}
-				// Stock SetupGeometryTextures can rewrite sampler state when
-				// the program/profile changes. Force one engine-shadowed
-				// normalization before continuation packets reuse it.
-				s_sortedShaderBatch.samplerReady = false;
+				// SetupGeometryTextures may publish MIPFILTER. Preserve a ready
+				// result when the engine mirror already contains the native
+				// level-zero contract instead of invalidating it unconditionally.
+				sortedBatch.samplerReady =
+					IsNativeMipFilterReady(renderState);
 			}
 			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandProgramSetup);
+		}
+		else
+		{
+			// Both engine program handles already match the retained command.
+			// Count the two VS/PS publications avoided by the profile-local fast
+			// path; no driver query or setup callback is needed.
+			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandProgramBindElided, 2);
-			if (!command.simpleColor)
+		}
+
+		if (!command.simpleColor)
+		{
+			const bool packetStateReady = sortedBatch.depth
+				&& sortedBatch.device == device
+				&& sortedBatch.generation == generation->id
+				&& sortedBatch.packetConstantsReady
+				&& sortedBatch.packetProfile == profile
+				&& sortedBatch.vertexAa.constantReady
+				&& std::memcmp(&sortedBatch.vertexAa.rasterScale,
+					&profile->constants[7],
+					sizeof(profile->constants[7])) == 0
+				&& sortedBatch.samplerReady
+				&& IsNativeMipFilterReady(renderState);
+			const bool publishPacketState = publishPrograms
+				|| !programsReady || !packetStateReady;
+			if (publishPacketState)
 			{
 				result = PublishRetainedPacketConstants(
 					device, generation, profile, operation);
@@ -2038,8 +2083,8 @@ namespace fonthook::vectorfont
 					return false;
 				const char* vertexOperation = "none";
 				NativeVertexAaState* vertexCache =
-					s_sortedShaderBatch.depth
-						? &s_sortedShaderBatch.vertexAa : nullptr;
+					sortedBatch.depth
+						? &sortedBatch.vertexAa : nullptr;
 				result = PublishNativeVertexAaConstant(device,
 					profile->constants[7], vertexCache, false,
 					vertexOperation);
@@ -2060,10 +2105,20 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(samplerChanged
 					? FreeTypePerfCounter::SamplerStateSet
 					: FreeTypePerfCounter::SamplerStateReuse);
-				if (s_sortedShaderBatch.depth)
-				{
-					s_sortedShaderBatch.samplerReady = true;
-				}
+				if (sortedBatch.depth)
+					sortedBatch.samplerReady = true;
+			}
+			else
+			{
+				// Same retained profile and unchanged engine mirrors prove that
+				// c1-c8, vertex c4 and MIPFILTER all remain current. Account the
+				// implicit fast path without invoking three helper binders.
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandPacketConstantReuse);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::VertexAaConstantReuse);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SamplerStateReuse);
 			}
 		}
 

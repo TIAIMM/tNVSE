@@ -693,9 +693,6 @@ namespace fonthook::vectorfont
 		const NativeA8PacketTemplate& packet,
 		TileShader* shader, UInt32 generation,
 		const NativeA8CompiledPacketCommand*& program);
-	void PrimeNativeA8CommandTextureBinding(
-		const NativeA8CompiledPacketCommand& command,
-		const void* atlasTexture);
 	bool BindNativeA8CommandPacket(
 		const NativeA8CompiledPacketCommand& command,
 		const void* atlasTexture, bool publishPrograms,
