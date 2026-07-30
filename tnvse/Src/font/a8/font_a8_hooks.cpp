@@ -35,10 +35,15 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kSelectedRenderPassType = 0x11FFE30;
 		inline constexpr UInt32 kSelectedShader = 0x11FFE2C;
 		inline constexpr UInt32 kSpecialTilePassState = 0x11F9421;
+		inline constexpr UInt32 kFirstPassState = 0x11AD8EC;
 		inline constexpr UInt32 kRendererState = 0x11F9508;
 		inline constexpr UInt32 kForcedShaderSelectionPass = 758;
 		inline constexpr UInt32 kGeometrySpecialPredicateSlot = 12;
 		inline constexpr UInt32 kGeometryAlternatePredicateSlot = 13;
+		// Official NiTriShape vtable slots 12/13 both point at ACBB70,
+		// the shared predicate thunk that returns false. E68810 is instead
+		// the positive cast thunk used by slots 6/7/9 and returns this.
+		inline constexpr UInt32 kNiGeometryFalsePredicate = 0xACBB70;
 
 		struct A8MetadataHotEntry
 		{
@@ -1363,7 +1368,7 @@ namespace fonthook::vectorfont
 					rendererState, geometry, 0);
 		}
 
-		bool CanUseGuardedNativeReplay(
+		bool CanUseNativeReplayBase(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			NiTriShape* geometry, const NativeA8DrawCommand& command)
 		{
@@ -1383,7 +1388,18 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
+			return true;
+		}
 
+		bool CanUseGuardedNativeReplay(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			NiTriShape* geometry, const NativeA8DrawCommand& command)
+		{
+			if (!CanUseNativeReplayBase(
+					pass, currentPass, geometry, command))
+			{
+				return false;
+			}
 			// These are the three mutually exclusive branches immediately before
 			// retail B994F0 reaches B98E80. E72C20 is a renderer-state
 			// __thiscall, while the other two are NiGeometry virtual calls.
@@ -1397,6 +1413,29 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			return true;
+		}
+
+		bool CanUseB98E80LiteEnvelope(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			NiTriShape* geometry, const NativeA8DrawCommand& command)
+		{
+			if (!CanUseNativeReplayBase(
+					pass, currentPass, geometry, command))
+			{
+				return false;
+			}
+
+			NiTriShapeData* modelData = geometry->GetModelData();
+			void** geometryVtable =
+				*reinterpret_cast<void***>(geometry);
+			// E72C20's first branch returns false when m_pkBuffData exists.
+			// NiTriShape slots 12/13 are the stock null-casts for
+			// IsParticlesGeom/IsLinesGeom. Proving those immutable facts avoids
+			// all three B994F0 classification calls on the lite hot path.
+			return modelData && modelData->m_pkBuffData
+				&& State().b98e80LitePredicatesValidated
+				&& geometryVtable
+					== &State().triShapeVtable[1];
 		}
 
 		bool PrepareGuardedNativeReplay(
@@ -1448,20 +1487,288 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		enum class B98E80LiteFallback : UInt8
+		{
+			None = 0,
+			Envelope,
+			Program,
+			Renderer,
+			Geometry,
+			Binding,
+			Prelude
+		};
+
+		struct B98E80LiteDispatch
+		{
+			NiDX9Renderer* renderer = nullptr;
+			NiGeometryBufferData* buffer = nullptr;
+			TileShader* shader = nullptr;
+			const NiPropertyState* properties = nullptr;
+			const NativeA8CompiledPacketCommand* program = nullptr;
+		};
+
+		void RecordB98E80LiteFallback(B98E80LiteFallback fallback)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::B98E80LiteStockFallback);
+			switch (fallback)
+			{
+			case B98E80LiteFallback::Envelope:
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::B98E80LiteFallbackEnvelope);
+				break;
+			case B98E80LiteFallback::Program:
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::B98E80LiteFallbackProgram);
+				break;
+			case B98E80LiteFallback::Renderer:
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::B98E80LiteFallbackRenderer);
+				break;
+			case B98E80LiteFallback::Geometry:
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::B98E80LiteFallbackGeometry);
+				break;
+			case B98E80LiteFallback::Binding:
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::B98E80LiteFallbackBinding);
+				break;
+			case B98E80LiteFallback::Prelude:
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::B98E80LiteFallbackPrelude);
+				break;
+			default:
+				break;
+			}
+		}
+
+		B98E80LiteFallback PrepareB98E80LiteDispatch(
+			NiTriShape* geometry, const NativeA8DrawCommand& command,
+			B98E80LiteDispatch& dispatch)
+		{
+			dispatch = {};
+			const NativeA8CompiledPacketCommand* program =
+				command.program;
+			TileShader* shader = program ? program->shader : nullptr;
+			void** shaderVtable = shader
+				? *reinterpret_cast<void***>(shader) : nullptr;
+			if (!program || !program->active || !shader
+				|| !shaderVtable
+				|| shaderVtable != program->shaderVtable
+				|| !program->prepareGeometry
+				|| !program->setupPass
+				|| !program->updateConstants
+				|| !program->setupBlend
+				|| !program->setupAlphaTest
+				|| !program->setupDrawmode
+				|| !program->postGeometry
+				|| !program->setupNonFirstPass)
+			{
+				return B98E80LiteFallback::Program;
+			}
+
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			if (!renderer || program->device != renderer->GetD3DDevice())
+				return B98E80LiteFallback::Renderer;
+
+			NiTriShapeData* modelData =
+				geometry ? geometry->GetModelData() : nullptr;
+			NiGeometryBufferData* buffer =
+				modelData ? modelData->m_pkBuffData : nullptr;
+			void** geometryVtable = geometry
+				? *reinterpret_cast<void***>(geometry) : nullptr;
+			if (!modelData || !buffer || !geometryVtable
+				|| geometryVtable[kRenderImmediateAltSlot]
+					!= reinterpret_cast<void*>(&A8RenderImmediateAlt))
+			{
+				return B98E80LiteFallback::Geometry;
+			}
+
+			NiVBChip* chip = buffer->m_uiStreamCount
+					&& buffer->m_ppkVBChip
+				? buffer->m_ppkVBChip[0] : nullptr;
+			if (!command.binding.active || !chip
+				|| buffer->m_hDeclaration
+					!= command.binding.declaration
+				|| buffer->m_pkIB != command.binding.indexBuffer
+				|| chip->m_pkVB != command.binding.vertexBuffer
+				|| buffer->m_uiBaseVertexIndex
+					!= command.binding.baseVertex
+				|| buffer->m_uiVertCount
+					!= command.binding.vertexCount)
+			{
+				return B98E80LiteFallback::Binding;
+			}
+
+			dispatch.renderer = renderer;
+			dispatch.buffer = buffer;
+			dispatch.shader = shader;
+			dispatch.properties = &geometry->m_kProperties;
+			dispatch.program = program;
+			return B98E80LiteFallback::None;
+		}
+
+		void ExecuteB98E80Lite(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			bool testAlpha, bool blendAlpha, bool setupDrawmode,
+			NiTriShape* geometry, const B98E80LiteDispatch& dispatch)
+		{
+			NiDX9Renderer* renderer = dispatch.renderer;
+			TileShader* shader = dispatch.shader;
+			const NiPropertyState* properties = dispatch.properties;
+			const NativeA8CompiledPacketCommand& program =
+				*dispatch.program;
+
+			// Retail RenderPassImmediately_Standard first publishes the current
+			// property/effect state. Its geometry-group helper is deliberately
+			// absent here: formal E88DC0 and the symbolized test build both prove
+			// that the exact (skin=null) call has no side effects when
+			// modelData->m_pkBuffData is already resident, which stage 2 proved.
+			renderer->m_pkCurrProp =
+				const_cast<NiPropertyState*>(properties);
+			renderer->m_pkCurrEffects = nullptr;
+
+			using SetupStateFn = void(__thiscall*)(
+				TileShader*, const NiPropertyState*);
+			using SetupDrawmodeFn = void(__thiscall*)(
+				TileShader*, const NiPropertyState*, bool);
+			using PrepareGeometryFn = void(__thiscall*)(
+				TileShader*, NiGeometry*, UInt32,
+				NiGeometryBufferData*, const NiPropertyState*);
+
+			reinterpret_cast<SetupStateFn>(
+				program.setupPass)(shader, properties);
+			reinterpret_cast<SetupStateFn>(
+				program.updateConstants)(shader, properties);
+			if (pass->bIsFirst)
+			{
+				if (blendAlpha && !CdeclCall<bool>(
+						kPassSuppressesBlendAlpha, currentPass))
+				{
+					reinterpret_cast<SetupStateFn>(
+						program.setupBlend)(shader, properties);
+				}
+				if (testAlpha
+					&& (currentPass < 4 || currentPass > 5)
+					&& (currentPass < 0xE || currentPass > 0xF)
+					&& currentPass != 570)
+				{
+					reinterpret_cast<SetupStateFn>(
+						program.setupAlphaTest)(shader, properties);
+				}
+			}
+			else if (*reinterpret_cast<UInt8*>(kFirstPassState)
+				&& !CdeclCall<bool>(
+					kPassSuppressesBlendAlpha, currentPass))
+			{
+				reinterpret_cast<SetupStateFn>(
+					program.setupNonFirstPass)(shader, properties);
+				*reinterpret_cast<UInt8*>(kFirstPassState) = 0;
+			}
+			if (setupDrawmode)
+			{
+				reinterpret_cast<SetupDrawmodeFn>(
+					program.setupDrawmode)(
+						shader, properties, pass->bIsFirst);
+			}
+
+			reinterpret_cast<PrepareGeometryFn>(
+				program.prepareGeometry)(
+					shader, geometry, 0,
+					dispatch.buffer, properties);
+			A8RenderImmediateAlt(geometry, nullptr, renderer);
+			reinterpret_cast<SetupStateFn>(
+				program.postGeometry)(shader, properties);
+		}
+
 		bool InvokeGuardedNativeReplay(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
-			NiTriShape* geometry, const NativeA8DrawCommand* command)
+			NiTriShape* geometry, const NativeA8DrawCommand* command,
+			bool preferB98E80Lite)
 		{
-			if (!command || !CanUseGuardedNativeReplay(
-					pass, currentPass, geometry, *command)
-				|| !PrepareGuardedNativeReplay(
-					pass, currentPass, geometry))
+			if (preferB98E80Lite)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::B98E80LiteCandidate);
+			}
+
+			bool guardedEligible = false;
+			bool liteEnvelope = false;
+			if (preferB98E80Lite)
+			{
+				liteEnvelope = command
+					&& CanUseB98E80LiteEnvelope(
+						pass, currentPass, geometry, *command);
+				if (liteEnvelope)
+				{
+					guardedEligible = true;
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::B98E80LiteStage1Eligible);
+				}
+				else
+				{
+					RecordB98E80LiteFallback(
+						B98E80LiteFallback::Envelope);
+				}
+			}
+			if (!guardedEligible && command)
+			{
+				guardedEligible = CanUseGuardedNativeReplay(
+					pass, currentPass, geometry, *command);
+			}
+			if (!command || !guardedEligible)
 			{
 				if (g_bEnableFreeTypeFontCommandBuffer)
 					RecordNativeA8CommandFallback(
 					NativeA8CommandFallback::State);
 				return false;
+			}
+
+			B98E80LiteDispatch liteDispatch;
+			bool useB98E80Lite = false;
+			if (liteEnvelope)
+			{
+				const B98E80LiteFallback liteFailure =
+					PrepareB98E80LiteDispatch(
+						geometry, *command, liteDispatch);
+				if (liteFailure == B98E80LiteFallback::None)
+				{
+					useB98E80Lite = true;
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							B98E80LiteStage2Resident);
+				}
+				else
+				{
+					RecordB98E80LiteFallback(liteFailure);
+				}
+			}
+
+			if (!PrepareGuardedNativeReplay(
+					pass, currentPass, geometry))
+			{
+				if (useB98E80Lite)
+				{
+					RecordB98E80LiteFallback(
+						B98E80LiteFallback::Prelude);
+				}
+				if (g_bEnableFreeTypeFontCommandBuffer)
+					RecordNativeA8CommandFallback(
+						NativeA8CommandFallback::State);
+				return false;
+			}
+
+			if (useB98E80Lite)
+			{
+				ExecuteB98E80Lite(pass, currentPass,
+					testAlpha, blendAlpha, setupDrawmode,
+					geometry, liteDispatch);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::B98E80LiteStage3Replay);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandNativeReplay);
+				return true;
 			}
 
 			using DefaultPassFn = int(__cdecl*)(
@@ -1476,11 +1783,12 @@ namespace fonthook::vectorfont
 		bool InvokeNativeCommandBootstrap(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
-			NiTriShape* geometry, const NativeA8DrawCommand* command)
+			NiTriShape* geometry, const NativeA8DrawCommand* command,
+			bool preferB98E80Lite = false)
 		{
 			if (InvokeGuardedNativeReplay(pass, currentPass,
 				testAlpha, blendAlpha, setupDrawmode,
-				geometry, command))
+				geometry, command, preferB98E80Lite))
 			{
 				return true;
 			}
@@ -3080,7 +3388,7 @@ namespace fonthook::vectorfont
 					usedNativeReplay =
 						InvokeNativeCommandBootstrap(pass, currentPass,
 						false, true, setupDrawmode,
-						facade, command);
+						facade, command, singleCommandExecution);
 					if (!usedNativeReplay
 						&& singleCommandExecution)
 					{
@@ -3876,23 +4184,50 @@ namespace fonthook::vectorfont
 		if (State().originalTriShapeVtable)
 			return source == State().originalTriShapeVtable;
 
-		State().originalTriShapeVtable = source;
-		State().triShapeVtable[0] = source[-1];
+		A8State& state = State();
+		state.originalTriShapeVtable = source;
+		const void* expectedFalsePredicate =
+			reinterpret_cast<void*>(kNiGeometryFalsePredicate);
+		const bool predicateSlotsMatch =
+			source[kGeometrySpecialPredicateSlot]
+				== expectedFalsePredicate
+			&& source[kGeometryAlternatePredicateSlot]
+				== expectedFalsePredicate;
+		// Verify the reverse-engineered identity and behavior once while the
+		// object still owns the stock vtable. The lite hot path then needs only
+		// the tNVSE vtable identity plus this immutable result.
+		state.b98e80LitePredicatesValidated =
+			predicateSlotsMatch
+			&& !CallGeometryPredicate(
+				shape, kGeometrySpecialPredicateSlot)
+			&& !CallGeometryPredicate(
+				shape, kGeometryAlternatePredicateSlot);
+		if (g_bEnableFreeTypeFontRenderingLog)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: B98E80-lite predicate-envelope validated=%u special=%p alternate=%p expected=%p",
+				state.b98e80LitePredicatesValidated ? 1u : 0u,
+				source[kGeometrySpecialPredicateSlot],
+				source[kGeometryAlternatePredicateSlot],
+				expectedFalsePredicate);
+		}
+
+		state.triShapeVtable[0] = source[-1];
 		std::copy(source, source + kCopiedTriShapeVtableEntries,
-			State().triShapeVtable.begin() + 1);
-		State().originalRenderImmediate = reinterpret_cast<RenderImmediateFn>(
-			State().triShapeVtable[kRenderImmediateSlot + 1]);
-		State().originalRenderImmediateAlt = reinterpret_cast<RenderImmediateFn>(
-			State().triShapeVtable[kRenderImmediateAltSlot + 1]);
-		State().originalDeleteThis = reinterpret_cast<DeleteThisFn>(
-			State().triShapeVtable[kDeleteThisSlot + 1]);
-		State().triShapeVtable[kDeleteThisSlot + 1]
+			state.triShapeVtable.begin() + 1);
+		state.originalRenderImmediate = reinterpret_cast<RenderImmediateFn>(
+			state.triShapeVtable[kRenderImmediateSlot + 1]);
+		state.originalRenderImmediateAlt = reinterpret_cast<RenderImmediateFn>(
+			state.triShapeVtable[kRenderImmediateAltSlot + 1]);
+		state.originalDeleteThis = reinterpret_cast<DeleteThisFn>(
+			state.triShapeVtable[kDeleteThisSlot + 1]);
+		state.triShapeVtable[kDeleteThisSlot + 1]
 			= reinterpret_cast<void*>(&A8DeleteThis);
-		State().triShapeVtable[kRenderImmediateSlot + 1]
+		state.triShapeVtable[kRenderImmediateSlot + 1]
 			= reinterpret_cast<void*>(&A8RenderImmediate);
-		State().triShapeVtable[kRenderImmediateAltSlot + 1]
+		state.triShapeVtable[kRenderImmediateAltSlot + 1]
 			= reinterpret_cast<void*>(&A8RenderImmediateAlt);
-		return State().originalRenderImmediate && State().originalRenderImmediateAlt
-			&& State().originalDeleteThis;
+		return state.originalRenderImmediate && state.originalRenderImmediateAlt
+			&& state.originalDeleteThis;
 	}
 }

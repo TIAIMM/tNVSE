@@ -519,6 +519,30 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::CommandFallbackRenderTarget)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandFallbackState)]);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_perf: b98e80_lite_candidates=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu stock_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteCandidate)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteStage1Eligible)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteStage2Resident)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteStage3Replay)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteStockFallback)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteFallbackEnvelope)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteFallbackProgram)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteFallbackRenderer)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteFallbackGeometry)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteFallbackBinding)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::B98E80LiteFallbackPrelude)]);
 		const DurationSummary layout =
 			ConsumeDurationSummary(FreeTypePerfPhase::Layout);
 		const DurationSummary sidecar =

@@ -189,6 +189,7 @@ namespace fonthook::vectorfont
 		bool loggedTileRenderPassHookConflict = false;
 		bool loggedSortedTileRenderHookConflict = false;
 		bool loggedTileRenderPassHit = false;
+		bool b98e80LitePredicatesValidated = false;
 		UInt32 shapeValidationFailureLogCount = 0;
 
 		std::mutex metadataMutex;

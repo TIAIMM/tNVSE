@@ -1052,6 +1052,23 @@ unknown shader or geometry vtables, and forced shader-selection passes retain
 the stock path. A stock `TileShader::UpdateConstants` call is still required
 once per span.
 
+Ordinary dedicated single-packet commands additionally use a staged
+`B98E80-lite` specialization. Stage 1 proves the same default-pass envelope
+without executing `E72C20` or the particle/line virtual predicates: formal
+`E72C20` and the symbolized test build both show that an already resident
+`m_pkBuffData` makes the former return false immediately, while the exact
+tNVSE-owned `NiTriShape` vtable proves the latter two stock null-casts. Stage 2
+checks the generation-owned retained shader vtable identity, all required
+prebound methods, renderer/device identity, the live buffer resources, and the
+`RenderImmediateAlt` hook. Stage 3 mirrors the confirmed standard order:
+publish renderer property/effect state; invoke slots 30, 31, conditional
+32/33/68, optional 34, slot 27, `RenderImmediateAlt`, and slot 35. It omits only
+the geometry-group helper whose resident-buffer branch has no side effect.
+Failure in stages 1 or 2 re-enters the complete guarded decision, selecting
+full `B98E80` when it still qualifies and otherwise the unchanged `B994F0`; a
+prelude failure also selects `B994F0`. No fallback is attempted after an
+immediate draw.
+
 The immutable Text Artifact retains packet ranges, profile hashes/classes,
 atlas-page topology, vertex ranges, and replayable run boundaries, but no Tile
 state or D3D COM ownership. Each generation-owned shader profile now also owns
@@ -1117,6 +1134,14 @@ logical spans or packets, substantial `segment_validation_reuses`, zero
 unexpected fallbacks, and that `stock_constant_updates` approaches the
 logical-span count without visual or runtime faults. Build success alone does
 not establish runtime correctness or the CPU-performance thresholds.
+
+The adjacent `b98e80_lite_` line exposes stage invariants for the dedicated
+single-packet subset. A healthy fully eligible run has
+`candidates = stage1_eligible = stage2_resident = stage3_replays`,
+`stock_fallbacks=0`, and every categorized fallback at zero. When fallbacks are
+present, `stock_fallbacks` equals the sum of `fallback_envelope`, `program`,
+`renderer`, `geometry`, `binding`, and `prelude`; these counters distinguish a
+safe staged fallback from a missing command or a runtime draw fault.
 
 ## Atlas allocation, mipmaps, and memory
 

@@ -949,13 +949,18 @@ namespace fonthook::vectorfont
 				profile->retainedProgram;
 			program.profile = profile;
 			program.shader = shader;
+			program.shaderVtable = vtable->slots.data();
 			program.device = generation.device;
 			program.vertexShader = vertexShader->GetShaderHandle();
 			program.pixelShader = pixelShader->GetShaderHandle();
+			program.prepareGeometry = vtable->slots[27];
 			program.setupPass = vtable->slots[30];
+			program.updateConstants = vtable->slots[31];
 			program.setupBlend = vtable->slots[32];
 			program.setupAlphaTest = vtable->slots[33];
 			program.setupDrawmode = vtable->slots[34];
+			program.postGeometry = vtable->slots[35];
+			program.setupNonFirstPass = vtable->slots[68];
 			program.generation = generation.id;
 			program.simpleColor =
 				packet.shaderClass == NativeA8ShaderClass::Coverage

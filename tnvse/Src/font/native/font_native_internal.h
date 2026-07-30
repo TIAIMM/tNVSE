@@ -367,13 +367,21 @@ namespace fonthook::vectorfont
 	{
 		void* profile = nullptr;
 		TileShader* shader = nullptr;
+		void** shaderVtable = nullptr;
 		IDirect3DDevice9* device = nullptr;
 		IDirect3DVertexShader9* vertexShader = nullptr;
 		IDirect3DPixelShader9* pixelShader = nullptr;
+		// Reverse-verified B98E80 default-branch call table. The command buffer
+		// may use these generation-owned pointers only after proving that the
+		// live native TileShader still publishes the same vtable entries.
+		void* prepareGeometry = nullptr;
 		void* setupPass = nullptr;
+		void* updateConstants = nullptr;
 		void* setupBlend = nullptr;
 		void* setupAlphaTest = nullptr;
 		void* setupDrawmode = nullptr;
+		void* postGeometry = nullptr;
+		void* setupNonFirstPass = nullptr;
 		UInt32 generation = 0;
 		bool simpleColor = false;
 		bool active = false;
