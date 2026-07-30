@@ -379,6 +379,63 @@ namespace fonthook::vectorfont
 			}
 			return resolved;
 		}
+
+		bool HasSameRetainedProfile(const NativeA8PacketTemplate& left,
+			const NativeA8PacketTemplate& right)
+		{
+			return left.shaderClass == right.shaderClass
+				&& left.sampling == right.sampling
+				&& left.quality == right.quality
+				&& left.distanceFieldMethod == right.distanceFieldMethod
+				&& left.layer == right.layer
+				&& left.staticCompositeLayerMask
+					== right.staticCompositeLayerMask
+				&& left.compositeShiftedShadow
+					== right.compositeShiftedShadow
+				&& left.staticSmoothSampling
+					== right.staticSmoothSampling
+				&& left.usesLiveTileRgb == right.usesLiveTileRgb
+				&& left.profileHashes == right.profileHashes
+				&& std::memcmp(left.constants.data(), right.constants.data(),
+					left.constants.size() * sizeof(float)) == 0;
+		}
+
+		void BuildRetainedRuns(
+			const std::vector<NativeA8PacketTemplate>& packets,
+			std::vector<NativeA8RetainedRun>& runs)
+		{
+			runs.clear();
+			runs.reserve(packets.size());
+			for (size_t first = 0; first < packets.size();)
+			{
+				size_t end = first + 1;
+				while (end < packets.size()
+					&& HasSameRetainedProfile(
+						packets[first], packets[end]))
+				{
+					++end;
+				}
+				NativeA8RetainedRun run;
+				run.firstPacket = static_cast<UInt32>(first);
+				run.packetCount = static_cast<UInt32>(end - first);
+				run.firstVertex = packets[first].firstVertex;
+				run.shaderClass = packets[first].shaderClass;
+				run.firstAtlasPage = packets[first].atlasPage;
+				UInt64 vertexCount = 0;
+				for (size_t index = first; index < end; ++index)
+					vertexCount += packets[index].vertexCount;
+				run.vertexCount = vertexCount
+						<= std::numeric_limits<UInt32>::max()
+					? static_cast<UInt32>(vertexCount) : 0;
+				// A single retained run can still participate in a larger
+				// cross-profile logical span. Eligibility describes whether
+				// the immutable run is replayable, not whether it alone saves
+				// a stock bootstrap.
+				run.bridgeEligible = run.vertexCount != 0;
+				runs.push_back(run);
+				first = end;
+			}
+		}
 	}
 
 	NativeA8PayloadTemplatePtr BuildNativeA8PayloadTemplate(
@@ -438,6 +495,7 @@ namespace fonthook::vectorfont
 			FinalizeNativePacketProfileHashes(packet);
 			payload->packets.push_back(std::move(packet));
 		}
+		BuildRetainedRuns(payload->packets, payload->retainedRuns);
 		if (effects.shaderEffects && !compositeSpans.empty())
 		{
 			payload->compositePackets.reserve(compositeSpans.size());
@@ -462,6 +520,8 @@ namespace fonthook::vectorfont
 						staticLayerMask));
 			}
 		}
+		BuildRetainedRuns(payload->compositePackets,
+			payload->compositeRetainedRuns);
 		payload->cpuMemory.Reset(CpuMemoryCategory::TextArtifact,
 			GetNativeA8PayloadTemplateBytes(*payload));
 		return payload;
@@ -534,8 +594,12 @@ namespace fonthook::vectorfont
 				* sizeof(NiTexturingPropertyPtr)
 			+ payloadTemplate.atlasTextures.capacity() * sizeof(NiTexturePtr)
 			+ payloadTemplate.packets.capacity() * sizeof(NativeA8PacketTemplate)
+			+ payloadTemplate.retainedRuns.capacity()
+				* sizeof(NativeA8RetainedRun)
 			+ payloadTemplate.compositePackets.capacity()
 				* sizeof(NativeA8PacketTemplate)
+			+ payloadTemplate.compositeRetainedRuns.capacity()
+				* sizeof(NativeA8RetainedRun)
 			+ payloadTemplate.gpuVertices.capacity() * sizeof(NativeA8GpuVertex);
 		return bytes;
 	}

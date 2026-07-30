@@ -17,6 +17,7 @@ bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
 bool g_bEnableFreeTypeFontAggressivePerformanceMode = false;
+bool g_bEnableFreeTypeFontCommandBuffer = false;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = 1;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bEnableFreeTypeFontCompositePass = true;
@@ -161,6 +162,36 @@ void LoadConfig()
 	gLog.FormattedMessage(
 		"g_bEnableFreeTypeFontAggressivePerformanceMode: %d",
 		g_bEnableFreeTypeFontAggressivePerformanceMode);
+
+	char commandBufferValue[32] = {};
+	ReadConfigString(kFreeTypeFontSection,
+		"bEnableFreeTypeFontCommandBuffer", "",
+		commandBufferValue,
+		static_cast<DWORD>(sizeof(commandBufferValue)), filename);
+	if (commandBufferValue[0])
+	{
+		g_bEnableFreeTypeFontCommandBuffer = ReadConfigInt(
+			kFreeTypeFontSection,
+			"bEnableFreeTypeFontCommandBuffer", 0, filename) != 0;
+	}
+	else
+	{
+		const UINT32 legacyMode = ReadConfigInt(
+			kFreeTypeFontSection,
+			"uiFreeTypeFontCommandBufferMode", 0, filename);
+		g_bEnableFreeTypeFontCommandBuffer = legacyMode != 0;
+		if (legacyMode)
+		{
+			gLog.FormattedMessage(
+				"uiFreeTypeFontCommandBufferMode=%u is deprecated; migrating this run to bEnableFreeTypeFontCommandBuffer=1",
+				legacyMode);
+		}
+	}
+	gLog.FormattedMessage(
+		"g_bEnableFreeTypeFontCommandBuffer: %d (%s)",
+		g_bEnableFreeTypeFontCommandBuffer,
+		g_bEnableFreeTypeFontCommandBuffer
+			? "retained-native-replay" : "current");
 
 	g_uiFreeTypeFontDistanceFieldMode = ReadConfigInt(
 		kFreeTypeFontSection, "uiFreeTypeFontDistanceFieldMode", 1,

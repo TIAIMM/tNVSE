@@ -17,10 +17,12 @@
 
 class NiGeometryBufferData;
 class NiVBChip;
+class NiDX9Renderer;
 
 namespace fonthook::vectorfont
 {
 	struct A8ShapeMetadata;
+	struct VirtualStockShapeGroup;
 	inline constexpr UInt32 kNativeA8MaximumQuads =
 		std::numeric_limits<UInt16>::max() / 4u;
 	inline constexpr UInt32 kMaximumVirtualStockShapes = 64;
@@ -182,6 +184,20 @@ namespace fonthook::vectorfont
 		bool fused = false;
 	};
 
+	// A retained run is immutable Text Artifact metadata. It deliberately
+	// excludes Tile, renderer and D3D state; those identities are compiled into
+	// the traversal-local command buffer only after sorted preflight.
+	struct NativeA8RetainedRun
+	{
+		UInt32 firstPacket = 0;
+		UInt32 packetCount = 0;
+		UInt32 firstVertex = 0;
+		UInt32 vertexCount = 0;
+		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
+		UInt16 firstAtlasPage = 0;
+		bool bridgeEligible = false;
+	};
+
 	// Renderer-owned VB locations are mutable cache data attached to the immutable
 	// text artifact. Every read is protected by the ring mutex and validated
 	// against the current resource serial/epoch before the location is used.
@@ -207,9 +223,11 @@ namespace fonthook::vectorfont
 		std::vector<NiTexturePtr> atlasTextures;
 		std::vector<NativeA8GpuVertex> gpuVertices;
 		std::vector<NativeA8PacketTemplate> packets;
+		std::vector<NativeA8RetainedRun> retainedRuns;
 		// Optional single-pass distance-field representation. The ordinary packet
 		// list remains available if that shader class is unavailable.
 		std::vector<NativeA8PacketTemplate> compositePackets;
+		std::vector<NativeA8RetainedRun> compositeRetainedRuns;
 		mutable NativeA8PayloadResidencyCache residency;
 	};
 	using NativeA8PayloadTemplatePtr =
@@ -249,6 +267,14 @@ namespace fonthook::vectorfont
 			? payloadTemplate.compositePackets : payloadTemplate.packets;
 	}
 
+	inline const std::vector<NativeA8RetainedRun>& GetNativeA8RetainedRuns(
+		const NativeA8PayloadTemplate& payloadTemplate, bool useComposite)
+	{
+		return useComposite && !payloadTemplate.compositePackets.empty()
+			? payloadTemplate.compositeRetainedRuns
+			: payloadTemplate.retainedRuns;
+	}
+
 	inline bool UsesOnlyStockLikeBitmapPackets(
 		const std::vector<NativeA8PacketTemplate>& packets)
 	{
@@ -284,6 +310,144 @@ namespace fonthook::vectorfont
 			NativeA8VisibilityCull::None;
 		UInt32 generation = 0;
 		UInt64 validationToken = 0;
+		UInt32 commandSpanIndex = std::numeric_limits<UInt32>::max();
+	};
+
+	inline constexpr UInt32 kInvalidNativeA8CommandIndex =
+		std::numeric_limits<UInt32>::max();
+
+	enum class NativeA8CommandSpanState : UInt8
+	{
+		Ready = 0,
+		Executing,
+		Consumed,
+		Fault
+	};
+
+	enum class NativeA8CommandFallback : UInt8
+	{
+		None = 0,
+		Token,
+		Generation,
+		Atlas,
+		Resource,
+		Topology,
+		Hook,
+		Nested,
+		RenderTarget,
+		State
+	};
+
+	struct NativeA8FramePacketBinding
+	{
+		IDirect3DVertexBuffer9* vertexBuffer = nullptr;
+		IDirect3DIndexBuffer9* indexBuffer = nullptr;
+		IDirect3DVertexDeclaration9* declaration = nullptr;
+		UInt32 baseVertex = 0;
+		UInt32 vertexCount = 0;
+		UInt32 indexBytes = 0;
+		UInt32 generation = 0;
+		UInt32 resourceSerial = 0;
+		UInt32 uploadEpoch = 0;
+		bool staticResident = false;
+		bool active = false;
+	};
+
+	// Shader profiles stay private to font_native_shader.cpp. This is a
+	// generation-bound, non-owning packet program compiled for one sorted
+	// traversal.
+	struct NativeA8CompiledPacketCommand
+	{
+		void* profile = nullptr;
+		TileShader* shader = nullptr;
+		IDirect3DDevice9* device = nullptr;
+		IDirect3DVertexShader9* vertexShader = nullptr;
+		IDirect3DPixelShader9* pixelShader = nullptr;
+		void* setupPass = nullptr;
+		void* setupBlend = nullptr;
+		void* setupAlphaTest = nullptr;
+		void* setupDrawmode = nullptr;
+		UInt32 generation = 0;
+		bool simpleColor = false;
+		bool active = false;
+	};
+
+	struct NativeA8CommandBindState
+	{
+		bool applyBlend = false;
+		bool applyAlphaTest = false;
+		bool applyDrawmode = false;
+		bool noFog = false;
+	};
+
+	struct NativeA8FrameStamp
+	{
+		BSShaderAccumulator* accumulator = nullptr;
+		NiDX9Renderer* renderer = nullptr;
+		IDirect3DDevice9* device = nullptr;
+		IDirect3DSurface9* renderTarget = nullptr;
+		D3DVIEWPORT9 viewport = {};
+		UInt64 validationToken = 0;
+		UInt32 generation = 0;
+		UInt32 atlasTextureEpoch = 0;
+		UInt32 resourceSerial = 0;
+		UInt32 uploadEpoch = 0;
+		UInt64 nestedTraversalSerial = 0;
+		bool renderTargetReady = false;
+		bool viewportReady = false;
+	};
+
+	struct NativeA8DrawCommand
+	{
+		NiTriShape* sourceGeometry = nullptr;
+		NiTriShape* expectedGeometry = nullptr;
+		NativeA8ShapePayload* payload = nullptr;
+		const NativeA8PacketTemplate* packet = nullptr;
+		const void* atlasTexture = nullptr;
+		NativeA8FramePacketBinding binding;
+		NativeA8CompiledPacketCommand shader;
+		UInt32 packetIndex = 0;
+	};
+
+	struct NativeA8FrameCommandRun
+	{
+		UInt32 firstCommand = 0;
+		UInt32 commandCount = 0;
+		bool bridgeEligible = false;
+		// Binder runs keep exact shader profiles. Retained replay may continue
+		// across an adjacent profile run when the live Tile state is proven
+		// identical.
+		bool continuesBridgeSpan = false;
+	};
+
+	struct NativeA8CommandSpan
+	{
+		NiTriShape* facade = nullptr;
+		const A8ShapeMetadata* metadata = nullptr;
+		NativeA8ShapePayload* payload = nullptr;
+		VirtualStockShapeGroup* virtualStockGroup = nullptr;
+		UInt32 firstCommand = 0;
+		UInt32 commandCount = 0;
+		UInt32 firstRun = 0;
+		UInt32 runCount = 0;
+		UInt32 leaderSlot = 0;
+		UInt32 generation = 0;
+		UInt32 atlasTextureEpoch = 0;
+		UInt64 validationToken = 0;
+		NativeA8CommandSpanState state = NativeA8CommandSpanState::Ready;
+		bool virtualStock = false;
+		bool bridgeEligible = false;
+		bool partialDraw = false;
+		bool useCompositePackets = false;
+	};
+
+	struct NativeA8CommandSpanView
+	{
+		const NativeA8FrameStamp* stamp = nullptr;
+		const NativeA8CommandSpan* span = nullptr;
+		const NativeA8DrawCommand* commands = nullptr;
+		const NativeA8FrameCommandRun* runs = nullptr;
+		UInt32 spanIndex = kInvalidNativeA8CommandIndex;
 	};
 
 	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason);
@@ -385,10 +549,16 @@ namespace fonthook::vectorfont
 		std::vector<NativeA8PayloadTemplatePtr>& payloadTemplates,
 		UInt32 generation);
 	void EndNativeA8SortedRingFrame();
+	bool ResolveNativeA8FramePacketBinding(
+		const NativeA8ShapePayload& payload, UInt32 packetIndex,
+		NativeA8FramePacketBinding& binding);
+	bool IsNativeA8FramePacketBindingCurrent(
+		const NativeA8FramePacketBinding& binding);
 	void TrimNativeA8CpuCachesForTotalBudget();
 	bool FindNativeA8SortedFrameEntry(NiTriShape* facade,
 		NativeA8SortedFrameEntryView& view);
 	UInt64 GetNativeA8SortedFrameValidationToken();
+	UInt64 GetNativeA8SortedNestedTraversalSerial();
 	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload);
 	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,
@@ -412,11 +582,45 @@ namespace fonthook::vectorfont
 	void EndNativeA8FacadeShaderBatch();
 	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
 		const NiTriShape* facade, bool scaledFillSampling);
+	bool CompileNativeA8PacketCommand(const NativeA8PacketTemplate& packet,
+		TileShader* shader, UInt32 generation,
+		NativeA8CompiledPacketCommand& command);
+	bool BindNativeA8CommandPacket(
+		const NativeA8CompiledPacketCommand& command,
+		const void* atlasTexture, bool publishPrograms,
+		const NiPropertyState* properties,
+		const NativeA8CommandBindState& bindState,
+		const char*& operation, HRESULT& result);
 	NativeA8FallbackReason PrepareNativeA8Group(NiTriShape* facade,
 		const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload);
 
+	void BeginNativeA8FrameCommandBuffer(BSShaderAccumulator* accumulator,
+		UInt64 validationToken, UInt32 generation, UInt32 atlasTextureEpoch);
+	UInt32 AddNativeA8FrameCommandSpan(NiTriShape* facade,
+		const A8ShapeMetadata* metadata, NativeA8ShapePayload* payload,
+		VirtualStockShapeGroup* virtualStockGroup = nullptr);
+	void ActivateNativeA8FrameCommandBuffer();
+	void EndNativeA8FrameCommandBuffer();
+	void InvalidateNativeA8CommandGeometry(NiTriShape* geometry);
+	bool FindNativeA8CommandSpan(UInt32 spanIndex, UInt64 validationToken,
+		NativeA8CommandSpanView& view);
+	NativeA8CommandFallback ValidateNativeA8CommandSpan(
+		const NativeA8CommandSpanView& view, bool validateRenderTarget);
+	bool BeginNativeA8CommandSpanExecution(UInt32 spanIndex,
+		NiTriShape* geometry, bool virtualLeader,
+		NativeA8CommandSpanView& view);
+	void EndNativeA8CommandSpanExecution(UInt32 spanIndex,
+		bool success, bool drewPacket);
+	bool ShouldConsumeNativeA8CommandFollower(UInt32 spanIndex,
+		UInt64 validationToken, NiTriShape* geometry,
+		UInt32 commandOffset);
+	bool ValidateNativeA8Command(UInt32 spanIndex,
+		UInt32 commandOffset, NiTriShape* geometry, NiRenderer* renderer);
+	void RecordNativeA8CommandFallback(NativeA8CommandFallback reason);
+
 	bool HookNativeA8Accumulator();
 	bool IsNativeA8AccumulatorHookCurrent();
+	bool IsNativeA8SortedTraversalHookCurrent();
 
 	void RecordNativeA8Suppression(NiTriShape* shape,
 		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason,

@@ -22,6 +22,21 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_a8_hooks
 	{
+		inline constexpr UInt32 kDefaultTileRenderPass = 0xB98E80;
+		inline constexpr UInt32 kSelectShaderForPass = 0xB99390;
+		inline constexpr UInt32 kSetAlphaTestState = 0xB98540;
+		inline constexpr UInt32 kGeometryUsesSpecialPass = 0xE72C20;
+		inline constexpr UInt32 kPassSuppressesBlendAlpha = 0xB630F0;
+		inline constexpr UInt32 kCurrentRenderPass = 0x11F91E0;
+		inline constexpr UInt32 kCurrentRenderPassType = 0x11F91E4;
+		inline constexpr UInt32 kSelectedRenderPassType = 0x11FFE30;
+		inline constexpr UInt32 kSelectedShader = 0x11FFE2C;
+		inline constexpr UInt32 kSpecialTilePassState = 0x11F9421;
+		inline constexpr UInt32 kRendererState = 0x11F9508;
+		inline constexpr UInt32 kForcedShaderSelectionPass = 758;
+		inline constexpr UInt32 kGeometrySpecialPredicateSlot = 12;
+		inline constexpr UInt32 kGeometryAlternatePredicateSlot = 13;
+
 		struct A8MetadataHotEntry
 		{
 			const NiTriShape* shape = nullptr;
@@ -452,10 +467,21 @@ namespace fonthook::vectorfont
 			NativeA8DirectShapeSubmission submission;
 		};
 
+		using NativeImmediateContinuationFn =
+			bool(*)(void*, NiRenderer*, bool);
+
 		struct NativeDirectImmediateContext
 		{
 			NiTriShape* shape = nullptr;
+			void* continuation = nullptr;
+			NativeImmediateContinuationFn continueImmediate = nullptr;
+			UInt32 commandSpanIndex = kInvalidNativeA8CommandIndex;
+			UInt32 commandOffset = kInvalidNativeA8CommandIndex;
+			bool strictValidation = false;
 			bool invoked = false;
+			bool validationPassed = true;
+			bool drew = false;
+			bool continuationSucceeded = true;
 		};
 
 		thread_local NativeDirectImmediateContext*
@@ -464,10 +490,20 @@ namespace fonthook::vectorfont
 		class NativeDirectImmediateScope
 		{
 		public:
-			explicit NativeDirectImmediateScope(NiTriShape* shape)
+			explicit NativeDirectImmediateScope(NiTriShape* shape,
+				UInt32 commandSpanIndex = kInvalidNativeA8CommandIndex,
+				UInt32 commandOffset = kInvalidNativeA8CommandIndex,
+				bool strictValidation = false,
+				void* continuation = nullptr,
+				NativeImmediateContinuationFn continueImmediate = nullptr)
 				: m_previous(s_nativeDirectImmediateContext)
 			{
 				m_context.shape = shape;
+				m_context.commandSpanIndex = commandSpanIndex;
+				m_context.commandOffset = commandOffset;
+				m_context.strictValidation = strictValidation;
+				m_context.continuation = continuation;
+				m_context.continueImmediate = continueImmediate;
 				s_nativeDirectImmediateContext = &m_context;
 			}
 
@@ -481,9 +517,66 @@ namespace fonthook::vectorfont
 				return m_context.invoked;
 			}
 
+			bool ValidationPassed() const
+			{
+				return m_context.validationPassed;
+			}
+
+			bool Drew() const
+			{
+				return m_context.drew;
+			}
+
+			bool ContinuationSucceeded() const
+			{
+				return m_context.continuationSucceeded;
+			}
+
 		private:
 			NativeDirectImmediateContext m_context;
 			NativeDirectImmediateContext* m_previous = nullptr;
+		};
+
+		class NativeImmediateHookVtableScope
+		{
+		public:
+			explicit NativeImmediateHookVtableScope(NiTriShape* shape)
+				: m_shape(shape)
+			{
+				if (!m_shape || !State().originalRenderImmediate
+					|| !State().originalRenderImmediateAlt)
+				{
+					return;
+				}
+				m_original = *reinterpret_cast<void***>(m_shape);
+				void** hook = &State().triShapeVtable[1];
+				if (!m_original || !hook)
+					return;
+				if (m_original != hook)
+				{
+					*reinterpret_cast<void***>(m_shape) = hook;
+					m_changed = true;
+				}
+				m_active =
+					*reinterpret_cast<void***>(m_shape) == hook;
+			}
+
+			~NativeImmediateHookVtableScope()
+			{
+				if (m_changed && m_shape)
+					*reinterpret_cast<void***>(m_shape) = m_original;
+			}
+
+			bool Active() const
+			{
+				return m_active;
+			}
+
+		private:
+			NiTriShape* m_shape = nullptr;
+			void** m_original = nullptr;
+			bool m_changed = false;
+			bool m_active = false;
 		};
 
 		class NativeFacadeShaderBatchScope
@@ -778,6 +871,7 @@ namespace fonthook::vectorfont
 			bool directShapeRoute = false;
 			bool stockLikeBitmapRoute = false;
 			bool constantStateFault = false;
+			UInt32 drawnPacketCount = 0;
 			NativeA8FallbackReason failure =
 				NativeA8FallbackReason::RuntimeFault;
 			const char* operation = "generation-changed-after-packet";
@@ -785,11 +879,1031 @@ namespace fonthook::vectorfont
 			SInt32 mismatchRegister = -1;
 		};
 
+		const NativeA8DrawCommand* ResolveNativeCommand(
+			const NativeA8CommandSpanView& view, UInt32 commandOffset)
+		{
+			if (!view.span || !view.commands
+				|| commandOffset >= view.span->commandCount)
+			{
+				return nullptr;
+			}
+			return &view.commands[
+				view.span->firstCommand + commandOffset];
+		}
+
+		bool IsDefaultNativeReplayPass(UInt32 pass)
+		{
+			switch (pass)
+			{
+			case 0xCA:
+			case 0xD1:
+			case 0xFC:
+			case 0xFD:
+			case 0x102:
+				return false;
+			default:
+				return true;
+			}
+		}
+
+		NativeA8CommandBindState MakeNativeCommandBindState(
+			const BSShaderProperty::RenderPass* pass,
+			UInt32 currentPass, bool testAlpha,
+			bool blendAlpha, bool setupDrawmode)
+		{
+			NativeA8CommandBindState state;
+			state.noFog = pass && pass->bNoFog;
+			state.applyBlend = state.noFog && blendAlpha
+				&& !CdeclCall<bool>(
+					kPassSuppressesBlendAlpha, currentPass);
+			state.applyAlphaTest = state.noFog && testAlpha
+				&& (currentPass < 4 || currentPass > 5)
+				&& (currentPass < 0xE || currentPass > 0xF)
+				&& currentPass != 570;
+			state.applyDrawmode = setupDrawmode;
+			return state;
+		}
+
+		bool CallGeometryPredicate(NiGeometry* geometry, UInt32 slot)
+		{
+			void** vtable = geometry
+				? *reinterpret_cast<void***>(geometry) : nullptr;
+			if (!vtable || !vtable[slot])
+				return true;
+			using PredicateFn = bool(__thiscall*)(NiGeometry*);
+			return reinterpret_cast<PredicateFn>(vtable[slot])(geometry);
+		}
+
+		bool RendererUsesSpecialPass(NiGeometry* geometry)
+		{
+			void* rendererState =
+				*reinterpret_cast<void**>(kRendererState);
+			if (!rendererState || !geometry)
+				return true;
+			// Retail B994F0 loads dword_11F9508 into ECX before calling
+			// E72C20(rendererState, geometry, 0). Calling it as __cdecl leaves
+			// ECX undefined and can classify every Tile as a multi-pass shape.
+			using PredicateFn =
+				bool(__thiscall*)(void*, NiGeometry*, UInt32);
+			return reinterpret_cast<PredicateFn>(
+				kGeometryUsesSpecialPass)(
+					rendererState, geometry, 0);
+		}
+
+		bool CanUseGuardedNativeReplay(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			NiTriShape* geometry, const NativeA8DrawCommand& command)
+		{
+			BSShader* shader = geometry
+				? geometry->GetShader() : nullptr;
+			if (!g_bEnableFreeTypeFontCommandBuffer
+				|| !pass || !geometry || !command.shader.active
+				|| pass->pGeometry != geometry
+				|| pass->usPassEnum != currentPass
+				|| currentPass == kForcedShaderSelectionPass
+				|| !IsDefaultNativeReplayPass(currentPass)
+				|| geometry->GetSkinInstance()
+				|| pass->ucNumLights || pass->ppSceneLights
+				|| !shader || shader != command.shader.shader
+				|| !shader->IsTileShader())
+			{
+				return false;
+			}
+
+			// These are the three mutually exclusive branches immediately before
+			// retail B994F0 reaches B98E80. E72C20 is a renderer-state
+			// __thiscall, while the other two are NiGeometry virtual calls.
+			// Treat an absent vtable predicate as unsafe instead of guessing.
+			if (RendererUsesSpecialPass(geometry)
+				|| CallGeometryPredicate(
+					geometry, kGeometrySpecialPredicateSlot)
+				|| CallGeometryPredicate(
+					geometry, kGeometryAlternatePredicateSlot))
+			{
+				return false;
+			}
+			return true;
+		}
+
+		bool PrepareGuardedNativeReplay(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			NiTriShape* geometry)
+		{
+			if (!pass || !geometry)
+				return false;
+			BSShader* shader = geometry->GetShader();
+			if (!shader || !shader->IsTileShader())
+				return false;
+
+			// The hook replaces the B994F0 call at B64FD1, so none of B994F0's
+			// prelude has executed yet. Mirror the retail order before entering
+			// the confirmed default B98E80 branch.
+			*reinterpret_cast<BSShaderProperty::RenderPass**>(
+				kCurrentRenderPass) = pass;
+			*reinterpret_cast<UInt32*>(kCurrentRenderPassType) =
+				currentPass;
+
+			const bool selectShader =
+				*reinterpret_cast<UInt32*>(
+					kSelectedRenderPassType) != currentPass
+				|| *reinterpret_cast<BSShader**>(
+					kSelectedShader) != shader;
+			if (selectShader)
+			{
+				CdeclCall<void>(kSelectShaderForPass,
+					currentPass, shader);
+				if (*reinterpret_cast<UInt32*>(
+						kSelectedRenderPassType) != currentPass
+					|| *reinterpret_cast<BSShader**>(
+						kSelectedShader) != shader)
+				{
+					return false;
+				}
+			}
+			// B994F0 performs post-pass restoration only for shader types 1-5
+			// and 17. Guarded replay accepts only TileShader (type 20), so the
+			// retail default branch has no corresponding restoration call.
+
+			if (*reinterpret_cast<UInt8*>(kSpecialTilePassState))
+			{
+				NiAlphaProperty* alpha =
+					geometry->GetAlphaProperty();
+				CdeclCall<void>(kSetAlphaTestState,
+					alpha && alpha->HasAlphaTest(), false);
+			}
+			return true;
+		}
+
+		bool InvokeGuardedNativeReplay(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			bool testAlpha, bool blendAlpha, bool setupDrawmode,
+			NiTriShape* geometry, const NativeA8DrawCommand* command)
+		{
+			if (!command || !CanUseGuardedNativeReplay(
+					pass, currentPass, geometry, *command)
+				|| !PrepareGuardedNativeReplay(
+					pass, currentPass, geometry))
+			{
+				if (g_bEnableFreeTypeFontCommandBuffer)
+					RecordNativeA8CommandFallback(
+					NativeA8CommandFallback::State);
+				return false;
+			}
+
+			using DefaultPassFn = int(__cdecl*)(
+				BSShaderProperty::RenderPass*, bool, bool, bool);
+			reinterpret_cast<DefaultPassFn>(kDefaultTileRenderPass)(
+				pass, testAlpha, blendAlpha, setupDrawmode);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandNativeReplay);
+			return true;
+		}
+
+		void InvokeNativeCommandBootstrap(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			bool testAlpha, bool blendAlpha, bool setupDrawmode,
+			NiTriShape* geometry, const NativeA8DrawCommand* command)
+		{
+			if (!InvokeGuardedNativeReplay(pass, currentPass,
+				testAlpha, blendAlpha, setupDrawmode,
+				geometry, command))
+			{
+				State().originalTileRenderPass(pass, currentPass,
+					testAlpha, blendAlpha, setupDrawmode);
+			}
+		}
+
+		void RecordRetainedPacketDraw(
+			const NativeA8DrawCommand& command, bool virtualStock,
+			bool retainedExtra)
+		{
+			if (retainedExtra)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandRetainedBridgeDraw);
+			}
+			if (virtualStock)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::VirtualStockDraw);
+			}
+			RecordFreeTypePerf(FreeTypePerfCounter::TilePass);
+			if (command.packet
+				&& command.packet->shaderClass
+					== NativeA8ShaderClass::Composite)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CompositeDraw);
+			}
+		}
+
+		struct NativeBridgeExecutionContext
+		{
+			NativeA8CommandSpanView view;
+			NiTriShape* facade = nullptr;
+			NativeA8ShapePayload* payload = nullptr;
+			NativeA8RingSubmission* ringSubmission = nullptr;
+			UInt32 bootstrapCommandOffset = 0;
+			UInt32 nextCommandOffset = 0;
+			UInt32 endCommandOffset = 0;
+			void* boundProfile = nullptr;
+			NativeA8CommandBindState bindState;
+			UInt32 drewPackets = 0;
+			NativeA8FallbackReason failure =
+				NativeA8FallbackReason::RuntimeFault;
+			const char* operation = "retained-bridge";
+			HRESULT result = E_FAIL;
+			bool virtualStock = false;
+			bool failed = false;
+			bool constantStateFault = false;
+		};
+
+		void FailRetainedBridge(NativeBridgeExecutionContext& context,
+			NativeA8FallbackReason failure, const char* operation,
+			HRESULT result, bool constantStateFault = false)
+		{
+			context.failure = failure;
+			context.operation = operation;
+			context.result = result;
+			context.constantStateFault = constantStateFault;
+			context.failed = true;
+		}
+
+		bool DrawRetainedBridgeCommand(
+			NativeBridgeExecutionContext& context,
+			const NativeA8DrawCommand& command, UInt32 commandOffset,
+			NiRenderer* renderer, bool alternate)
+		{
+			NiTriShape* geometry = nullptr;
+			if (context.virtualStock)
+			{
+				geometry = command.expectedGeometry;
+			}
+			else
+			{
+				if (!context.facade || !context.payload
+					|| !context.ringSubmission
+					|| command.packetIndex != commandOffset)
+				{
+					FailRetainedBridge(context,
+						NativeA8FallbackReason::PacketBuild,
+						"retained-command-order", E_FAIL);
+					return false;
+				}
+				const NativeA8FallbackReason prepare =
+					PrepareNativeA8RingPacket(context.facade,
+						*context.payload, *context.ringSubmission,
+						command.packetIndex, geometry);
+				if (prepare != NativeA8FallbackReason::None
+					|| !geometry)
+				{
+					FailRetainedBridge(context,
+						prepare != NativeA8FallbackReason::None
+							? prepare
+							: NativeA8FallbackReason::RuntimeFault,
+						"retained-ring-packet", E_FAIL);
+					return false;
+				}
+			}
+
+			auto drawGeometry = [&]() -> bool
+			{
+				if (!ValidateNativeA8Command(
+					context.view.spanIndex, commandOffset,
+					geometry, renderer))
+				{
+					FailRetainedBridge(context,
+						NativeA8FallbackReason::PacketPrepare,
+						"retained-command-binding", E_FAIL);
+					return false;
+				}
+				const bool publishPrograms =
+					context.boundProfile != command.shader.profile;
+				const char* operation = "none";
+				HRESULT result = D3D_OK;
+				if (!BindNativeA8CommandPacket(command.shader,
+					command.atlasTexture, publishPrograms,
+					&geometry->m_kProperties,
+					context.bindState,
+					operation, result))
+				{
+					FailRetainedBridge(context,
+						NativeA8FallbackReason::RuntimeFault,
+						operation, result, true);
+					return false;
+				}
+				context.boundProfile = command.shader.profile;
+				RenderImmediateFn immediate = alternate
+					? State().originalRenderImmediateAlt
+					: State().originalRenderImmediate;
+				if (!immediate)
+				{
+					FailRetainedBridge(context,
+						NativeA8FallbackReason::RuntimeFault,
+						"retained-immediate-missing", E_FAIL);
+					return false;
+				}
+				immediate(geometry, renderer);
+				++context.drewPackets;
+				RecordRetainedPacketDraw(
+					command, context.virtualStock, true);
+				if (!IsNativeA8ShaderGenerationCurrent(
+					command.shader.generation))
+				{
+					FailRetainedBridge(context,
+						NativeA8FallbackReason::DeviceReset,
+						"retained-generation-after-draw",
+						D3DERR_DEVICELOST);
+					return false;
+				}
+				return true;
+			};
+
+			if (!context.virtualStock)
+				return drawGeometry();
+			if (!command.packet || !command.payload)
+			{
+				FailRetainedBridge(context,
+					NativeA8FallbackReason::PacketBuild,
+					"retained-virtual-packet", E_FAIL);
+				return false;
+			}
+			VirtualStockTileStateScope tileState(
+				geometry, *command.payload, *command.packet);
+			if (!tileState.Active())
+			{
+				FailRetainedBridge(context,
+					NativeA8FallbackReason::PropertySync,
+					"retained-virtual-tile-state", E_FAIL);
+				return false;
+			}
+			return drawGeometry();
+		}
+
+		bool ContinueRetainedBridge(
+			void* opaque, NiRenderer* renderer, bool alternate)
+		{
+			auto* context =
+				static_cast<NativeBridgeExecutionContext*>(opaque);
+			if (!context || context->failed)
+				return false;
+			while (context->nextCommandOffset
+				< context->endCommandOffset)
+			{
+				const UInt32 commandOffset =
+					context->nextCommandOffset++;
+				const NativeA8DrawCommand* command =
+					ResolveNativeCommand(context->view, commandOffset);
+				if (!command || !DrawRetainedBridgeCommand(
+					*context, *command, commandOffset,
+					renderer, alternate))
+				{
+					return false;
+				}
+			}
+			const NativeA8DrawCommand* bootstrap =
+				ResolveNativeCommand(
+					context->view, context->bootstrapCommandOffset);
+			if (!bootstrap)
+			{
+				FailRetainedBridge(*context,
+					NativeA8FallbackReason::PacketBuild,
+					"retained-bootstrap-command", E_FAIL);
+				return false;
+			}
+			// B994F0's global selected-shader identity still names the bootstrap
+			// profile. Restore the corresponding D3D program/texture before its
+			// one stock slot-35 cleanup returns, otherwise the next Tile can skip
+			// B99390 while the driver still has the final retained profile bound.
+			const char* operation = "none";
+			HRESULT result = D3D_OK;
+			NiTriShape* bootstrapGeometry =
+				context->virtualStock
+					? bootstrap->expectedGeometry
+					: context->ringSubmission
+						? context->ringSubmission->proxyShape
+						: nullptr;
+			if (!BindNativeA8CommandPacket(bootstrap->shader,
+				bootstrap->atlasTexture,
+				context->boundProfile != bootstrap->shader.profile,
+				bootstrapGeometry
+					? &bootstrapGeometry->m_kProperties : nullptr,
+				context->bindState,
+				operation, result))
+			{
+				FailRetainedBridge(*context,
+					NativeA8FallbackReason::RuntimeFault,
+					operation, result, true);
+				return false;
+			}
+			context->boundProfile = bootstrap->shader.profile;
+			return true;
+		}
+
+		bool ResolveNextBridgeGroup(
+			const NativeA8CommandSpanView& view, UInt32& runCursor,
+			UInt32& firstCommandOffset, UInt32& endCommandOffset)
+		{
+			if (!view.span || !view.runs
+				|| runCursor >= view.span->runCount)
+			{
+				return false;
+			}
+			const UInt32 spanFirst = view.span->firstCommand;
+			const UInt32 spanEnd =
+				spanFirst + view.span->commandCount;
+			const NativeA8FrameCommandRun& firstRun =
+				view.runs[view.span->firstRun + runCursor];
+			if (!firstRun.commandCount
+				|| firstRun.firstCommand < spanFirst
+				|| firstRun.firstCommand + firstRun.commandCount
+					> spanEnd)
+			{
+				return false;
+			}
+			UInt32 end = firstRun.firstCommand
+				+ firstRun.commandCount;
+			++runCursor;
+			while (runCursor < view.span->runCount)
+			{
+				const NativeA8FrameCommandRun& next =
+					view.runs[view.span->firstRun + runCursor];
+				if (!next.continuesBridgeSpan)
+					break;
+				if (!next.commandCount || next.firstCommand != end
+					|| next.firstCommand + next.commandCount
+						> spanEnd)
+				{
+					return false;
+				}
+				end = next.firstCommand + next.commandCount;
+				++runCursor;
+			}
+			firstCommandOffset = firstRun.firstCommand - spanFirst;
+			endCommandOffset = end - spanFirst;
+			return firstCommandOffset < endCommandOffset;
+		}
+
+		bool TryDrawNativeRetainedSpan(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			bool setupDrawmode, NiTriShape* facade,
+			NativeA8ShapePayload& payload,
+			UInt32 commandSpanIndex,
+			NativePacketDrawResult& draw)
+		{
+			if (!g_bEnableFreeTypeFontCommandBuffer
+				|| !pass || !facade
+				|| commandSpanIndex == kInvalidNativeA8CommandIndex)
+			{
+				return false;
+			}
+			if (currentPass == kForcedShaderSelectionPass
+				|| !IsDefaultNativeReplayPass(currentPass))
+			{
+				RecordNativeA8CommandFallback(
+					NativeA8CommandFallback::State);
+				return false;
+			}
+
+			NativeA8CommandSpanView view;
+			if (!BeginNativeA8CommandSpanExecution(
+				commandSpanIndex, facade, false, view))
+			{
+				return false;
+			}
+			if (!view.span || view.span->virtualStock
+				|| view.span->payload != &payload
+				|| view.span->commandCount < 2
+				|| !view.span->bridgeEligible)
+			{
+				EndNativeA8CommandSpanExecution(
+					commandSpanIndex, false, false);
+				RecordNativeA8CommandFallback(
+					NativeA8CommandFallback::Topology);
+				return false;
+			}
+
+			FreeTypePerfScope submitPerf(FreeTypePerfPhase::Submit);
+			FreeTypePerfScope commandPerf(
+				FreeTypePerfPhase::CommandSubmit);
+			draw.stockLikeBitmapRoute =
+				payload.stockLikeBitmapPackets;
+			NativeRingSubmissionScope ringScope;
+			const NativeA8FallbackReason ringFailure =
+				BeginNativeA8RingSubmission(
+					facade, payload, ringScope.submission);
+			if (ringFailure != NativeA8FallbackReason::None)
+			{
+				EndNativeA8CommandSpanExecution(
+					commandSpanIndex, false, false);
+				return false;
+			}
+
+			NiDX9Renderer* renderer = draw.stockLikeBitmapRoute
+				? nullptr : NiDX9Renderer::GetSingleton();
+			IDirect3DDevice9* device = renderer
+				? renderer->GetD3DDevice() : nullptr;
+			const bool isolatePacketConstants =
+				!draw.stockLikeBitmapRoute;
+			const bool batchedConstants = isolatePacketConstants
+				&& s_pixelConstantBatch.FrameActive();
+			std::optional<NativePixelConstantScope> localConstants;
+			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
+			if (isolatePacketConstants)
+			{
+				shaderBatch.emplace();
+				if (!device)
+				draw.runtimeFault = true;
+				else if (batchedConstants)
+				{
+					if (!s_pixelConstantBatch.EnsureCaptured(device))
+					{
+						draw.runtimeFault = true;
+						draw.constantStateFault = true;
+						draw.operation =
+							s_pixelConstantBatch.Operation();
+						draw.result = s_pixelConstantBatch.Result();
+						draw.mismatchRegister =
+							s_pixelConstantBatch.MismatchRegister();
+					}
+				}
+				else
+				{
+					localConstants.emplace(device);
+					if (!localConstants->Captured())
+					{
+						draw.runtimeFault = true;
+						draw.constantStateFault = true;
+						draw.operation =
+							localConstants->Operation();
+						draw.result = localConstants->Result();
+					}
+				}
+			}
+
+			NativeTilePacketScope packetScope(pass);
+			UInt32 runCursor = 0;
+			while (!draw.runtimeFault
+				&& runCursor < view.span->runCount)
+			{
+				UInt32 firstOffset = 0;
+				UInt32 endOffset = 0;
+				if (!ResolveNextBridgeGroup(
+					view, runCursor, firstOffset, endOffset))
+				{
+					draw.runtimeFault = true;
+					draw.failure =
+						NativeA8FallbackReason::PacketBuild;
+					draw.operation = "retained-run-topology";
+					draw.result = E_FAIL;
+					break;
+				}
+				const NativeA8DrawCommand* first =
+					ResolveNativeCommand(view, firstOffset);
+				NiTriShape* proxy = nullptr;
+				if (!first || first->packetIndex != firstOffset)
+				{
+					draw.runtimeFault = true;
+					draw.failure =
+						NativeA8FallbackReason::PacketBuild;
+					draw.operation = "retained-first-command";
+					draw.result = E_FAIL;
+					break;
+				}
+				const NativeA8FallbackReason prepare =
+					PrepareNativeA8RingPacket(facade, payload,
+						ringScope.submission,
+						first->packetIndex, proxy);
+				if (prepare != NativeA8FallbackReason::None
+					|| !proxy)
+				{
+					draw.runtimeFault = true;
+					draw.failure =
+						prepare != NativeA8FallbackReason::None
+							? prepare
+							: NativeA8FallbackReason::RuntimeFault;
+					draw.operation = "retained-first-packet";
+					draw.result = E_FAIL;
+					break;
+				}
+
+				packetScope.Select(proxy);
+				NativeImmediateHookVtableScope hookVtable(proxy);
+				if (!hookVtable.Active())
+				{
+					draw.runtimeFault = true;
+					draw.failure =
+						NativeA8FallbackReason::RuntimeFault;
+					draw.operation = "retained-immediate-vtable";
+					draw.result = E_FAIL;
+					break;
+				}
+
+				NativeBridgeExecutionContext bridge;
+				bridge.view = view;
+				bridge.facade = facade;
+				bridge.payload = &payload;
+				bridge.ringSubmission = &ringScope.submission;
+				bridge.bootstrapCommandOffset = firstOffset;
+				bridge.nextCommandOffset = firstOffset + 1u;
+				bridge.endCommandOffset = endOffset;
+				bridge.boundProfile = first->shader.profile;
+				bridge.bindState = MakeNativeCommandBindState(
+					pass, currentPass, false, true,
+					setupDrawmode);
+				const bool hasContinuation =
+					bridge.nextCommandOffset
+						< bridge.endCommandOffset;
+				NativeDirectImmediateScope immediateScope(
+					proxy, commandSpanIndex, firstOffset, true,
+					hasContinuation ? &bridge : nullptr,
+					hasContinuation
+						? &ContinueRetainedBridge : nullptr);
+				InvokeNativeCommandBootstrap(pass, currentPass,
+					false, true, setupDrawmode, proxy, first);
+				if (immediateScope.Drew())
+				{
+					draw.drewPacket = true;
+					++draw.drawnPacketCount;
+					RecordRetainedPacketDraw(
+						*first, false, false);
+				}
+				if (bridge.drewPackets)
+				{
+					draw.drewPacket = true;
+					draw.drawnPacketCount += bridge.drewPackets;
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							CommandStockBootstrapSaved,
+						bridge.drewPackets);
+				}
+				if (!immediateScope.Invoked()
+					|| !immediateScope.ValidationPassed()
+					|| !immediateScope.Drew())
+				{
+					draw.runtimeFault = true;
+					draw.failure =
+						NativeA8FallbackReason::RuntimeFault;
+					draw.operation =
+						"retained-bootstrap-immediate";
+					draw.result = E_FAIL;
+					break;
+				}
+				if (!immediateScope.ContinuationSucceeded()
+					|| bridge.failed)
+				{
+					draw.runtimeFault = true;
+					draw.failure = bridge.failure;
+					draw.operation = bridge.operation;
+					draw.result = bridge.result;
+					draw.constantStateFault =
+						bridge.constantStateFault;
+					break;
+				}
+			}
+
+			if (isolatePacketConstants && !batchedConstants
+				&& localConstants
+				&& !localConstants->RestoreAndVerify())
+			{
+				draw.runtimeFault = true;
+				draw.constantStateFault = true;
+				draw.operation = localConstants->Operation();
+				draw.result = localConstants->Result();
+				draw.mismatchRegister =
+					localConstants->MismatchRegister();
+			}
+			if (isolatePacketConstants && batchedConstants
+				&& draw.runtimeFault
+				&& !FlushNativePixelConstantBatch(
+					"retained-command-runtime-fault"))
+			{
+				draw.constantStateFault = true;
+				draw.operation = s_pixelConstantBatch.Operation();
+				draw.result = s_pixelConstantBatch.Result();
+				draw.mismatchRegister =
+					s_pixelConstantBatch.MismatchRegister();
+			}
+
+			const bool success = !draw.runtimeFault
+				&& draw.drawnPacketCount
+					== view.span->commandCount;
+			EndNativeA8CommandSpanExecution(
+				commandSpanIndex, success, draw.drewPacket);
+			if (success)
+				return true;
+			// No command reached the driver: the unmodified current path can
+			// safely acquire a fresh proxy and render the complete payload.
+			return draw.drewPacket || draw.constantStateFault;
+		}
+
+		bool TryDrawVirtualStockRetainedSpan(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			bool setupDrawmode, NiTriShape* leader,
+			const A8ShapeMetadata& metadata, UInt64 validationToken,
+			UInt32 commandSpanIndex,
+			NativePacketDrawResult& draw)
+		{
+			VirtualStockShapeGroup* group =
+				metadata.virtualStockGroup;
+			if (!g_bEnableFreeTypeFontCommandBuffer
+				|| !pass || !leader || !group || !validationToken
+				|| commandSpanIndex == kInvalidNativeA8CommandIndex)
+			{
+				return false;
+			}
+			if (currentPass == kForcedShaderSelectionPass
+				|| !IsDefaultNativeReplayPass(currentPass))
+			{
+				RecordNativeA8CommandFallback(
+					NativeA8CommandFallback::State);
+				return false;
+			}
+
+			NativeA8CommandSpanView view;
+			if (!BeginNativeA8CommandSpanExecution(
+				commandSpanIndex, leader, true, view))
+			{
+				return false;
+			}
+			if (!view.span || !view.span->virtualStock
+				|| view.span->virtualStockGroup != group
+				|| !view.span->payload
+				|| view.span->commandCount < 2
+				|| !view.span->bridgeEligible)
+			{
+				EndNativeA8CommandSpanExecution(
+					commandSpanIndex, false, false);
+				RecordNativeA8CommandFallback(
+					NativeA8CommandFallback::Topology);
+				return false;
+			}
+
+			NativeA8ShapePayload* payload = view.span->payload;
+			{
+				std::lock_guard<std::mutex> lock(group->mutex);
+				if (!group->primaryMetadataOwner
+					|| payload
+						!= &group->primaryMetadataOwner->nativePayload
+					|| group->preparedValidationToken
+						!= validationToken
+					|| group->frameMode.load(
+						std::memory_order_acquire)
+						!= VirtualStockFrameMode::Direct
+					|| group->slots.size()
+						!= view.span->commandCount
+					|| group->duplicateRegistration
+					|| !group->registrationContiguous
+					|| group->registeredSlotCount
+						!= group->slots.size()
+					|| metadata.virtualStockSlot
+						!= view.span->leaderSlot)
+				{
+					EndNativeA8CommandSpanExecution(
+						commandSpanIndex, false, false);
+					RecordNativeA8CommandFallback(
+						NativeA8CommandFallback::Topology);
+					return false;
+				}
+				for (UInt32 index = 0;
+					index < view.span->commandCount; ++index)
+				{
+					const NativeA8DrawCommand* command =
+						ResolveNativeCommand(view, index);
+					if (!command || command->packetIndex != index
+						|| group->slots[index].packetIndex != index
+						|| group->slots[index].shape
+							!= command->expectedGeometry)
+					{
+						EndNativeA8CommandSpanExecution(
+							commandSpanIndex, false, false);
+						RecordNativeA8CommandFallback(
+							NativeA8CommandFallback::Topology);
+						return false;
+					}
+				}
+			}
+
+			FreeTypePerfScope submitPerf(FreeTypePerfPhase::Submit);
+			FreeTypePerfScope commandPerf(
+				FreeTypePerfPhase::CommandSubmit);
+			draw.directShapeRoute = true;
+			draw.stockLikeBitmapRoute =
+				payload->stockLikeBitmapPackets;
+			NiDX9Renderer* renderer = draw.stockLikeBitmapRoute
+				? nullptr : NiDX9Renderer::GetSingleton();
+			IDirect3DDevice9* device = renderer
+				? renderer->GetD3DDevice() : nullptr;
+			const bool isolatePacketConstants =
+				!draw.stockLikeBitmapRoute;
+			const bool batchedConstants = isolatePacketConstants
+				&& s_pixelConstantBatch.FrameActive();
+			std::optional<NativePixelConstantScope> localConstants;
+			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
+			if (isolatePacketConstants)
+			{
+				shaderBatch.emplace();
+				if (!device)
+					draw.runtimeFault = true;
+				else if (batchedConstants)
+				{
+					if (!s_pixelConstantBatch.EnsureCaptured(device))
+					{
+						draw.runtimeFault = true;
+						draw.constantStateFault = true;
+						draw.operation =
+							s_pixelConstantBatch.Operation();
+						draw.result = s_pixelConstantBatch.Result();
+						draw.mismatchRegister =
+							s_pixelConstantBatch.MismatchRegister();
+					}
+				}
+				else
+				{
+					localConstants.emplace(device);
+					if (!localConstants->Captured())
+					{
+						draw.runtimeFault = true;
+						draw.constantStateFault = true;
+						draw.operation =
+							localConstants->Operation();
+						draw.result = localConstants->Result();
+					}
+				}
+			}
+
+			NativeTilePacketScope packetScope(pass);
+			UInt32 runCursor = 0;
+			while (!draw.runtimeFault
+				&& runCursor < view.span->runCount)
+			{
+				UInt32 firstOffset = 0;
+				UInt32 endOffset = 0;
+				if (!ResolveNextBridgeGroup(
+					view, runCursor, firstOffset, endOffset))
+				{
+					draw.runtimeFault = true;
+					draw.failure =
+						NativeA8FallbackReason::PacketBuild;
+					draw.operation =
+						"retained-virtual-run-topology";
+					draw.result = E_FAIL;
+					break;
+				}
+				const NativeA8DrawCommand* first =
+					ResolveNativeCommand(view, firstOffset);
+				NiTriShape* geometry =
+					first ? first->expectedGeometry : nullptr;
+				if (!first || !geometry || !first->packet)
+				{
+					draw.runtimeFault = true;
+					draw.failure =
+						NativeA8FallbackReason::PacketBuild;
+					draw.operation =
+						"retained-virtual-first-command";
+					draw.result = E_FAIL;
+					break;
+				}
+
+				VirtualStockTileStateScope tileState(
+					geometry, *payload, *first->packet);
+				if (!tileState.Active())
+				{
+					draw.runtimeFault = true;
+					draw.failure =
+						NativeA8FallbackReason::PropertySync;
+					draw.operation =
+						"retained-virtual-first-state";
+					draw.result = E_FAIL;
+					break;
+				}
+				packetScope.Select(geometry);
+				NativeImmediateHookVtableScope hookVtable(geometry);
+				if (!hookVtable.Active())
+				{
+					draw.runtimeFault = true;
+					draw.failure =
+						NativeA8FallbackReason::RuntimeFault;
+					draw.operation =
+						"retained-virtual-immediate-vtable";
+					draw.result = E_FAIL;
+					break;
+				}
+
+				NativeBridgeExecutionContext bridge;
+				bridge.view = view;
+				bridge.payload = payload;
+				bridge.bootstrapCommandOffset = firstOffset;
+				bridge.nextCommandOffset = firstOffset + 1u;
+				bridge.endCommandOffset = endOffset;
+				bridge.boundProfile = first->shader.profile;
+				bridge.bindState = MakeNativeCommandBindState(
+					pass, currentPass, false, true,
+					setupDrawmode);
+				bridge.virtualStock = true;
+				const bool hasContinuation =
+					bridge.nextCommandOffset
+						< bridge.endCommandOffset;
+				NativeDirectImmediateScope immediateScope(
+					geometry, commandSpanIndex, firstOffset, true,
+					hasContinuation ? &bridge : nullptr,
+					hasContinuation
+						? &ContinueRetainedBridge : nullptr);
+				InvokeNativeCommandBootstrap(pass, currentPass,
+					false, true, setupDrawmode, geometry, first);
+				if (immediateScope.Drew())
+				{
+					draw.drewPacket = true;
+					++draw.drawnPacketCount;
+					RecordRetainedPacketDraw(
+						*first, true, false);
+				}
+				if (bridge.drewPackets)
+				{
+					draw.drewPacket = true;
+					draw.drawnPacketCount += bridge.drewPackets;
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							CommandStockBootstrapSaved,
+						bridge.drewPackets);
+				}
+				if (!immediateScope.Invoked()
+					|| !immediateScope.ValidationPassed()
+					|| !immediateScope.Drew())
+				{
+					draw.runtimeFault = true;
+					draw.failure =
+						NativeA8FallbackReason::RuntimeFault;
+					draw.operation =
+						"retained-virtual-bootstrap-immediate";
+					draw.result = E_FAIL;
+					break;
+				}
+				if (!immediateScope.ContinuationSucceeded()
+					|| bridge.failed)
+				{
+					draw.runtimeFault = true;
+					draw.failure = bridge.failure;
+					draw.operation = bridge.operation;
+					draw.result = bridge.result;
+					draw.constantStateFault =
+						bridge.constantStateFault;
+					break;
+				}
+			}
+
+			if (isolatePacketConstants && !batchedConstants
+				&& localConstants
+				&& !localConstants->RestoreAndVerify())
+			{
+				draw.runtimeFault = true;
+				draw.constantStateFault = true;
+				draw.operation = localConstants->Operation();
+				draw.result = localConstants->Result();
+				draw.mismatchRegister =
+					localConstants->MismatchRegister();
+			}
+			if (isolatePacketConstants && batchedConstants
+				&& draw.runtimeFault
+				&& !FlushNativePixelConstantBatch(
+					"retained-virtual-runtime-fault"))
+			{
+				draw.constantStateFault = true;
+				draw.operation = s_pixelConstantBatch.Operation();
+				draw.result = s_pixelConstantBatch.Result();
+				draw.mismatchRegister =
+					s_pixelConstantBatch.MismatchRegister();
+			}
+
+			if (draw.drawnPacketCount)
+			{
+				group->directDrawCount.fetch_add(
+					draw.drawnPacketCount,
+					std::memory_order_acq_rel);
+			}
+			const bool success = !draw.runtimeFault
+				&& draw.drawnPacketCount
+					== view.span->commandCount;
+			EndNativeA8CommandSpanExecution(
+				commandSpanIndex, success, draw.drewPacket);
+			if (success)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandVirtualSpanFused);
+				return true;
+			}
+			return draw.drewPacket || draw.constantStateFault;
+		}
+
 		bool TryDrawVirtualStockPacket(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool setupDrawmode, NiTriShape* shape,
 			const A8ShapeMetadata& metadata, UInt64 validationToken,
-			NativePacketDrawResult& draw)
+			NativePacketDrawResult& draw,
+			UInt32 commandSpanIndex =
+				kInvalidNativeA8CommandIndex,
+			UInt32 commandOffset =
+				kInvalidNativeA8CommandIndex)
 		{
 			VirtualStockShapeGroup* group =
 				metadata.virtualStockGroup;
@@ -798,6 +1912,9 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
+			FreeTypePerfScope commandPerf(
+				FreeTypePerfPhase::CommandSubmit,
+				commandSpanIndex != kInvalidNativeA8CommandIndex);
 
 			const NativeA8ShapePayload* payload = nullptr;
 			A8ShapeMetadataPtr primaryMetadataOwner;
@@ -860,6 +1977,44 @@ namespace fonthook::vectorfont
 				binding.resourceSerial = slot.resourceSerial;
 				binding.atlasTextureEpoch = slot.atlasTextureEpoch;
 				binding.active = slot.bound;
+			}
+
+			NativeA8CommandSpanView commandView;
+			const NativeA8DrawCommand* command = nullptr;
+			bool commandExecution = false;
+			bool commandBegun = false;
+			if (g_bEnableFreeTypeFontCommandBuffer
+				&& commandSpanIndex
+					!= kInvalidNativeA8CommandIndex)
+			{
+				NativeA8CommandSpanView candidate;
+				if (FindNativeA8CommandSpan(commandSpanIndex,
+						validationToken, candidate)
+					&& candidate.span
+					&& candidate.span->virtualStock
+					&& candidate.span->virtualStockGroup == group
+					&& candidate.span->payload == payload
+					&& candidate.span->commandCount == 1
+					&& commandOffset == 0)
+				{
+					commandBegun =
+						BeginNativeA8CommandSpanExecution(
+							commandSpanIndex, shape, true,
+							commandView);
+					if (commandBegun)
+					{
+						command = ResolveNativeCommand(
+							commandView, 0);
+						commandExecution = command
+							&& command->expectedGeometry == shape
+							&& command->packetIndex == packetIndex;
+					}
+				}
+				if (commandBegun && !commandExecution)
+				{
+					EndNativeA8CommandSpanExecution(
+						commandSpanIndex, false, false);
+				}
 			}
 
 			draw.directShapeRoute = true;
@@ -971,12 +2126,33 @@ namespace fonthook::vectorfont
 				}
 				else
 				{
-					NativeDirectImmediateScope immediateScope(shape);
-					State().originalTileRenderPass(pass, currentPass, false,
-						true, setupDrawmode);
-					if (immediateScope.Invoked())
+					const UInt32 validationSpanIndex =
+						commandExecution
+							? commandSpanIndex
+							: kInvalidNativeA8CommandIndex;
+					NativeDirectImmediateScope immediateScope(
+						shape, validationSpanIndex,
+						validationSpanIndex
+								!= kInvalidNativeA8CommandIndex
+							? commandOffset
+							: kInvalidNativeA8CommandIndex,
+						commandExecution);
+					if (commandExecution)
+					{
+						InvokeNativeCommandBootstrap(pass,
+							currentPass, false, true,
+							setupDrawmode, shape, command);
+					}
+					else
+					{
+						State().originalTileRenderPass(pass,
+							currentPass, false, true,
+							setupDrawmode);
+					}
+					if (immediateScope.Drew())
 					{
 						draw.drewPacket = true;
+						draw.drawnPacketCount = 1;
 						group->directDrawCount.fetch_add(
 							1, std::memory_order_acq_rel);
 						RecordFreeTypePerf(
@@ -995,8 +2171,9 @@ namespace fonthook::vectorfont
 						draw.runtimeFault = true;
 						draw.failure =
 							NativeA8FallbackReason::RuntimeFault;
-						draw.operation =
-							"virtual-stock-immediate-not-invoked";
+						draw.operation = immediateScope.Invoked()
+							? "virtual-stock-command-validation"
+							: "virtual-stock-immediate-not-invoked";
 						draw.result = E_FAIL;
 					}
 				}
@@ -1032,6 +2209,13 @@ namespace fonthook::vectorfont
 				draw.result = s_pixelConstantBatch.Result();
 				draw.mismatchRegister =
 					s_pixelConstantBatch.MismatchRegister();
+			}
+			if (commandExecution)
+			{
+				EndNativeA8CommandSpanExecution(
+					commandSpanIndex,
+					!draw.runtimeFault && draw.drewPacket,
+					draw.drewPacket);
 			}
 			if (draw.runtimeFault)
 			{
@@ -1077,10 +2261,15 @@ namespace fonthook::vectorfont
 		NativePacketDrawResult DrawNativePacketSet(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool setupDrawmode, NiTriShape* facade,
-			NativeA8ShapePayload& payload)
+			NativeA8ShapePayload& payload,
+			UInt32 commandSpanIndex =
+				kInvalidNativeA8CommandIndex)
 		{
 			FreeTypePerfScope perf(
 				FreeTypePerfPhase::Submit);
+			FreeTypePerfScope commandPerf(
+				FreeTypePerfPhase::CommandSubmit,
+				commandSpanIndex != kInvalidNativeA8CommandIndex);
 			NativePacketDrawResult draw;
 			NativeRingSubmissionScope ringScope;
 			NativeA8FallbackReason failure = BeginNativeA8RingSubmission(
@@ -1171,9 +2360,11 @@ namespace fonthook::vectorfont
 						break;
 					}
 					packetScope.Select(proxyShape);
-					State().originalTileRenderPass(pass, currentPass, false,
-						true, setupDrawmode);
+					State().originalTileRenderPass(pass,
+						currentPass, false, true,
+						setupDrawmode);
 					draw.drewPacket = true;
+					++draw.drawnPacketCount;
 					RecordFreeTypePerf(FreeTypePerfCounter::TilePass);
 					const std::vector<NativeA8PacketTemplate>& activePackets =
 						GetNativeA8Packets(*payload.payloadTemplate,
@@ -1220,7 +2411,9 @@ namespace fonthook::vectorfont
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool setupDrawmode, NiTriShape* facade,
 			NativeA8ShapePayload& payload,
-			NativePacketDrawResult& draw)
+			NativePacketDrawResult& draw,
+			UInt32 commandSpanIndex =
+				kInvalidNativeA8CommandIndex)
 		{
 			if (!pass || !facade || !payload.buildComplete
 				|| !payload.payloadTemplate
@@ -1241,6 +2434,9 @@ namespace fonthook::vectorfont
 			}
 
 			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
+			FreeTypePerfScope commandPerf(
+				FreeTypePerfPhase::CommandSubmit,
+				commandSpanIndex != kInvalidNativeA8CommandIndex);
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::SinglePacketDirectCandidate);
 			NativeDirectShapeSubmissionScope submissionScope;
@@ -1261,6 +2457,30 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::SinglePacketDirectFallback);
 				return false;
+			}
+
+			NativeA8CommandSpanView commandView;
+			const NativeA8DrawCommand* command = nullptr;
+			bool commandExecution = false;
+			if (g_bEnableFreeTypeFontCommandBuffer
+				&& commandSpanIndex
+					!= kInvalidNativeA8CommandIndex
+				&& BeginNativeA8CommandSpanExecution(
+					commandSpanIndex, facade, false, commandView))
+			{
+				if (commandView.span
+					&& !commandView.span->virtualStock
+					&& commandView.span->payload == &payload
+					&& commandView.span->commandCount == 1)
+				{
+					command = ResolveNativeCommand(commandView, 0);
+					commandExecution = command != nullptr;
+				}
+				if (!commandExecution)
+				{
+					EndNativeA8CommandSpanExecution(
+						commandSpanIndex, false, false);
+				}
 			}
 
 			draw.directShapeRoute = true;
@@ -1315,12 +2535,31 @@ namespace fonthook::vectorfont
 
 			if (!draw.runtimeFault)
 			{
-				NativeDirectImmediateScope immediateScope(facade);
-				State().originalTileRenderPass(pass, currentPass, false,
-					true, setupDrawmode);
-				if (immediateScope.Invoked())
+				const UInt32 validationSpanIndex =
+					commandSpanIndex != kInvalidNativeA8CommandIndex
+						? commandSpanIndex
+						: kInvalidNativeA8CommandIndex;
+				NativeDirectImmediateScope immediateScope(
+					facade, validationSpanIndex,
+					validationSpanIndex != kInvalidNativeA8CommandIndex
+						? 0u : kInvalidNativeA8CommandIndex,
+					commandExecution);
+				if (commandExecution)
+				{
+					InvokeNativeCommandBootstrap(pass, currentPass,
+						false, true, setupDrawmode,
+						facade, command);
+				}
+				else
+				{
+					State().originalTileRenderPass(pass,
+						currentPass, false, true,
+						setupDrawmode);
+				}
+				if (immediateScope.Drew())
 				{
 					draw.drewPacket = true;
+					draw.drawnPacketCount = 1;
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::SinglePacketDirectDraw);
 					RecordFreeTypePerf(
@@ -1338,7 +2577,9 @@ namespace fonthook::vectorfont
 				{
 					draw.runtimeFault = true;
 					draw.failure = NativeA8FallbackReason::RuntimeFault;
-					draw.operation = "direct-shape-immediate-not-invoked";
+					draw.operation = immediateScope.Invoked()
+						? "direct-shape-command-validation"
+						: "direct-shape-immediate-not-invoked";
 					draw.result = E_FAIL;
 				}
 				if (!IsNativeA8ShaderGenerationCurrent(
@@ -1378,6 +2619,18 @@ namespace fonthook::vectorfont
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::SinglePacketDirectFallback);
+			}
+			if (commandExecution)
+			{
+				const bool success =
+					!draw.runtimeFault && draw.drewPacket;
+				EndNativeA8CommandSpanExecution(
+					commandSpanIndex, success, draw.drewPacket);
+				if (!success && !draw.drewPacket
+					&& !draw.constantStateFault)
+				{
+					return false;
+				}
 			}
 			// Once the stock Tile pass has been entered, this route owns the item
 			// even if the immediate callback was unexpectedly skipped. Replaying
@@ -1424,6 +2677,7 @@ namespace fonthook::vectorfont
 		void __fastcall A8DeleteThis(NiTriShape* shape, void*)
 		{
 			A8State& state = State();
+			InvalidateNativeA8CommandGeometry(shape);
 			A8ShapeMetadataPtr retiredMetadata;
 			{
 				std::lock_guard<std::mutex> lock(state.metadataMutex);
@@ -1603,9 +2857,68 @@ namespace fonthook::vectorfont
 			if (mode == VirtualStockFrameMode::Direct)
 			{
 				NativePacketDrawResult draw;
-				const bool handled = TryDrawVirtualStockPacket(
-					pass, currentPass, setupDrawmode, shape,
-					*metadata, validationToken, draw);
+				bool handled = false;
+				const UInt64 commandToken =
+					group->commandValidationToken.load(
+						std::memory_order_acquire);
+				const UInt32 commandSpanIndex =
+					group->commandSpanIndex.load(
+						std::memory_order_acquire);
+				const UInt32 commandLeaderSlot =
+					group->commandLeaderSlot.load(
+						std::memory_order_acquire);
+				const bool commandCurrent = commandToken
+					&& commandToken == validationToken
+					&& commandSpanIndex
+						!= kInvalidNativeA8CommandIndex;
+				if (commandCurrent
+					&& g_bEnableFreeTypeFontCommandBuffer)
+				{
+					if (metadata->virtualStockSlot
+						!= commandLeaderSlot)
+					{
+						if (ShouldConsumeNativeA8CommandFollower(
+							commandSpanIndex, validationToken,
+							shape,
+							metadata->virtualStockSlot))
+						{
+							return;
+						}
+					}
+					else
+					{
+						NativeA8CommandSpanView candidate;
+						if (FindNativeA8CommandSpan(
+								commandSpanIndex,
+								validationToken, candidate)
+							&& candidate.span
+							&& candidate.span->commandCount > 1)
+						{
+							handled =
+								TryDrawVirtualStockRetainedSpan(
+									pass, currentPass,
+									setupDrawmode, shape,
+									*metadata, validationToken,
+									commandSpanIndex, draw);
+						}
+					}
+				}
+				if (!handled)
+				{
+					draw = {};
+					const UInt32 packetCommandSpanIndex =
+						commandCurrent
+							? commandSpanIndex
+							: kInvalidNativeA8CommandIndex;
+					handled = TryDrawVirtualStockPacket(
+						pass, currentPass, setupDrawmode, shape,
+						*metadata, validationToken, draw,
+						packetCommandSpanIndex,
+						packetCommandSpanIndex
+								!= kInvalidNativeA8CommandIndex
+							? metadata->virtualStockSlot
+							: kInvalidNativeA8CommandIndex);
+				}
 				if (!handled)
 				{
 					if (validationToken)
@@ -1757,13 +3070,41 @@ namespace fonthook::vectorfont
 		{
 			NativeA8ShapePayload* const sourcePayload = payload;
 			NativePacketDrawResult draw;
-			const bool directShapeHandled = sortedFrameHit
-				&& TryDrawNativeSinglePacketDirect(pass, currentPass,
-					setupDrawmode, shape, *sourcePayload, draw);
-			if (!directShapeHandled)
+			const UInt32 commandSpanIndex =
+				sortedFrameHit
+					? frameEntry.commandSpanIndex
+					: kInvalidNativeA8CommandIndex;
+			bool commandHandled = false;
+			if (g_bEnableFreeTypeFontCommandBuffer
+				&& commandSpanIndex
+					!= kInvalidNativeA8CommandIndex)
 			{
-				draw = DrawNativePacketSet(pass, currentPass,
-					setupDrawmode, shape, *sourcePayload);
+				NativeA8CommandSpanView commandView;
+				if (FindNativeA8CommandSpan(commandSpanIndex,
+						frameEntry.validationToken, commandView)
+					&& commandView.span
+					&& commandView.span->commandCount > 1)
+				{
+					commandHandled = TryDrawNativeRetainedSpan(
+						pass, currentPass, setupDrawmode,
+						shape, *sourcePayload,
+						commandSpanIndex, draw);
+				}
+			}
+			if (!commandHandled)
+			{
+				draw = {};
+				const bool directShapeHandled = sortedFrameHit
+					&& TryDrawNativeSinglePacketDirect(
+						pass, currentPass, setupDrawmode,
+						shape, *sourcePayload, draw,
+						commandSpanIndex);
+				if (!directShapeHandled)
+				{
+					draw = DrawNativePacketSet(pass, currentPass,
+						setupDrawmode, shape, *sourcePayload,
+						kInvalidNativeA8CommandIndex);
+				}
 			}
 			if (!draw.runtimeFault)
 			{
@@ -1890,8 +3231,44 @@ namespace fonthook::vectorfont
 			&& s_nativeDirectImmediateContext->shape == shape
 			&& State().originalRenderImmediate)
 		{
-			s_nativeDirectImmediateContext->invoked = true;
+			NativeDirectImmediateContext& context =
+				*s_nativeDirectImmediateContext;
+			context.invoked = true;
+			if (context.strictValidation
+				&& context.commandSpanIndex
+					!= kInvalidNativeA8CommandIndex
+				&& context.commandOffset
+					!= kInvalidNativeA8CommandIndex)
+			{
+				context.validationPassed =
+					ValidateNativeA8Command(
+						context.commandSpanIndex,
+						context.commandOffset, shape, renderer);
+			}
+			if (!context.validationPassed
+				&& context.strictValidation)
+			{
+				return;
+			}
 			State().originalRenderImmediate(shape, renderer);
+			context.drew = true;
+			if (!context.strictValidation
+				&& context.commandSpanIndex
+					!= kInvalidNativeA8CommandIndex
+				&& context.commandOffset
+					!= kInvalidNativeA8CommandIndex)
+			{
+				context.validationPassed =
+					ValidateNativeA8Command(
+						context.commandSpanIndex,
+						context.commandOffset, shape, renderer);
+			}
+			if (context.continueImmediate)
+			{
+				context.continuationSucceeded =
+					context.continueImmediate(
+						context.continuation, renderer, false);
+			}
 			return;
 		}
 		SuppressImmediateRoute(shape, "shape-immediate");
@@ -1904,8 +3281,44 @@ namespace fonthook::vectorfont
 			&& s_nativeDirectImmediateContext->shape == shape
 			&& State().originalRenderImmediateAlt)
 		{
-			s_nativeDirectImmediateContext->invoked = true;
+			NativeDirectImmediateContext& context =
+				*s_nativeDirectImmediateContext;
+			context.invoked = true;
+			if (context.strictValidation
+				&& context.commandSpanIndex
+					!= kInvalidNativeA8CommandIndex
+				&& context.commandOffset
+					!= kInvalidNativeA8CommandIndex)
+			{
+				context.validationPassed =
+					ValidateNativeA8Command(
+						context.commandSpanIndex,
+						context.commandOffset, shape, renderer);
+			}
+			if (!context.validationPassed
+				&& context.strictValidation)
+			{
+				return;
+			}
 			State().originalRenderImmediateAlt(shape, renderer);
+			context.drew = true;
+			if (!context.strictValidation
+				&& context.commandSpanIndex
+					!= kInvalidNativeA8CommandIndex
+				&& context.commandOffset
+					!= kInvalidNativeA8CommandIndex)
+			{
+				context.validationPassed =
+					ValidateNativeA8Command(
+						context.commandSpanIndex,
+						context.commandOffset, shape, renderer);
+			}
+			if (context.continueImmediate)
+			{
+				context.continuationSucceeded =
+					context.continueImmediate(
+						context.continuation, renderer, true);
+			}
 			return;
 		}
 		SuppressImmediateRoute(shape, "shape-immediate-alt");

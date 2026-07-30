@@ -58,6 +58,7 @@ namespace fonthook::vectorfont
 				NativeA8VisibilityCull::None;
 			UInt32 generation = 0;
 			UInt64 validationToken = 0;
+			UInt32 commandSpanIndex = kInvalidNativeA8CommandIndex;
 		};
 
 		struct VirtualStockFrameSlot
@@ -95,6 +96,7 @@ namespace fonthook::vectorfont
 			std::vector<UInt32> virtualStockSlotLookup;
 			CpuMemoryLease cpuMemory;
 			UInt32 nestedBypassDepth = 0;
+			UInt64 nestedTraversalSerial = 1;
 			UInt64 registrationCycle = 1;
 			UInt64 nextValidationToken = 0;
 			UInt64 activeValidationToken = 0;
@@ -216,6 +218,7 @@ namespace fonthook::vectorfont
 
 		void ClearSortedFrame(SortedPayloadScratch& scratch)
 		{
+			EndNativeA8FrameCommandBuffer();
 			scratch.active = false;
 			scratch.activeValidationToken = 0;
 			scratch.frameCandidates.clear();
@@ -1144,6 +1147,10 @@ namespace fonthook::vectorfont
 				const bool restoreActive = scratch.active;
 				scratch.active = false;
 				++scratch.nestedBypassDepth;
+				if (++scratch.nestedTraversalSerial == 0)
+					++scratch.nestedTraversalSerial;
+				RecordNativeA8CommandFallback(
+					NativeA8CommandFallback::Nested);
 				InvalidateNativeA8SortedShaderState();
 				const int result = state.originalSortedTileRender(accumulator);
 				InvalidateNativeA8SortedShaderState();
@@ -1449,6 +1456,62 @@ namespace fonthook::vectorfont
 						generation, preflightContext.atlasTextureEpoch,
 						frameValidationToken);
 				}
+				if (g_bEnableFreeTypeFontCommandBuffer)
+				{
+					FreeTypePerfScope commandBuild(
+						FreeTypePerfPhase::CommandBuild);
+					BeginNativeA8FrameCommandBuffer(accumulator,
+						frameValidationToken, generation,
+						preflightContext.atlasTextureEpoch);
+					for (const std::shared_ptr<VirtualStockShapeGroup>& group
+						: scratch.virtualStockGroups)
+					{
+						if (!group)
+							continue;
+						AddNativeA8FrameCommandSpan(
+							nullptr, nullptr, nullptr,
+							group.get());
+					}
+					for (SortedFrameEntry& entry : scratch.frameEntries)
+					{
+						if (!entry.metadata || !entry.payload
+							|| entry.preflightResult
+								!= NativeA8FallbackReason::None
+							|| entry.visibilityCull
+								!= NativeA8VisibilityCull::None)
+						{
+							continue;
+						}
+						if (entry.metadata->backend
+							== FreeTypeShapeBackend::
+								VirtualStockNative)
+						{
+							VirtualStockShapeGroup* group =
+								entry.metadata->virtualStockGroup;
+							if (group
+								&& group->commandValidationToken.load(
+									std::memory_order_acquire)
+									== frameValidationToken)
+							{
+								entry.commandSpanIndex =
+									group->commandSpanIndex.load(
+										std::memory_order_acquire);
+							}
+						}
+						else
+						{
+							entry.commandSpanIndex =
+								AddNativeA8FrameCommandSpan(
+									entry.facade, entry.metadata,
+									entry.payload);
+						}
+					}
+					ActivateNativeA8FrameCommandBuffer();
+				}
+				else
+				{
+					EndNativeA8FrameCommandBuffer();
+				}
 				RefreshSortedScratchMemory(scratch);
 				BeginNativeA8SortedShaderBatch();
 				BeginA8SortedTileConstantBatch();
@@ -1457,6 +1520,7 @@ namespace fonthook::vectorfont
 				const int result = state.originalSortedTileRender(accumulator);
 				EndA8SortedTileConstantBatch();
 				EndNativeA8SortedShaderBatch();
+				EndNativeA8FrameCommandBuffer();
 				EndNativeA8SortedRingFrame();
 				ClearSortedFrame(scratch);
 				return result;
@@ -1560,6 +1624,7 @@ namespace fonthook::vectorfont
 		view.visibilityCull = entry.visibilityCull;
 		view.generation = entry.generation;
 		view.validationToken = entry.validationToken;
+		view.commandSpanIndex = entry.commandSpanIndex;
 		RecordFreeTypePerf(FreeTypePerfCounter::SortedFrameLookupHit);
 		return true;
 	}
@@ -1568,6 +1633,11 @@ namespace fonthook::vectorfont
 	{
 		const SortedPayloadScratch& scratch = s_sortedPayloadScratch;
 		return scratch.active ? scratch.activeValidationToken : 0;
+	}
+
+	UInt64 GetNativeA8SortedNestedTraversalSerial()
+	{
+		return s_sortedPayloadScratch.nestedTraversalSerial;
 	}
 
 	UInt32 GetNativeA8AtlasTextureEpoch()
@@ -1625,5 +1695,13 @@ namespace fonthook::vectorfont
 		return *reinterpret_cast<void**>(kRegisterObjectVtableEntry)
 			== reinterpret_cast<void*>(&NativeA8RegisterObject)
 			&& s_originalRegisterObject != nullptr;
+	}
+
+	bool IsNativeA8SortedTraversalHookCurrent()
+	{
+		return State().originalSortedTileRender
+			&& ReadSortedTileRenderCallTarget()
+				== reinterpret_cast<SortedTileRenderFn>(
+					&NativeA8RenderSorted);
 	}
 }

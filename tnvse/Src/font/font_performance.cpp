@@ -123,9 +123,10 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	FreeTypePerfScope::FreeTypePerfScope(FreeTypePerfPhase phase)
+	FreeTypePerfScope::FreeTypePerfScope(
+		FreeTypePerfPhase phase, bool enabled)
 		: m_phase(phase),
-		m_active(g_bEnableFreeTypeFontRenderingLog)
+		m_active(enabled && g_bEnableFreeTypeFontRenderingLog)
 	{
 		if (!m_active)
 			return;
@@ -359,6 +360,46 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::VirtualStockRegistrationDuplicate)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VirtualStockRegistrationOrderMismatch)]);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_perf: command_recorded=%llu spans=%llu packets=%llu span_hits=%llu miss=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu virtual_spans_fused=%llu followers_consumed=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandRecorded)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandSpanRecorded)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandPacketRecorded)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandSpanHit)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandSpanMiss)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandRetainedBridgeDraw)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandNativeReplay)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandStockBootstrapSaved)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandVirtualSpanFused)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandVirtualFollowerConsumed)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandFallbackToken)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandFallbackGeneration)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandFallbackAtlas)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandFallbackResource)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandFallbackTopology)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandFallbackHook)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandFallbackNested)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandFallbackRenderTarget)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandFallbackState)]);
 		const DurationSummary layout =
 			ConsumeDurationSummary(FreeTypePerfPhase::Layout);
 		const DurationSummary sidecar =
@@ -372,11 +413,15 @@ namespace fonthook::vectorfont
 			ConsumeDurationSummary(FreeTypePerfPhase::Preflight);
 		const DurationSummary submit =
 			ConsumeDurationSummary(FreeTypePerfPhase::Submit);
+		const DurationSummary commandBuild =
+			ConsumeDurationSummary(FreeTypePerfPhase::CommandBuild);
+		const DurationSummary commandSubmit =
+			ConsumeDurationSummary(FreeTypePerfPhase::CommandSubmit);
 		const DurationSummary extendedFnt =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::ExtendedFntGeometry);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf_timing: layout_n=%llu median_us=%.3f p95_us=%.3f sidecar_n=%llu median_us=%.3f p95_us=%.3f direct_compile_n=%llu median_us=%.3f p95_us=%.3f native_registration_n=%llu median_us=%.3f p95_us=%.3f preflight_n=%llu median_us=%.3f p95_us=%.3f submit_n=%llu median_us=%.3f p95_us=%.3f extended_fnt_geometry_n=%llu median_us=%.3f p95_us=%.3f",
+			"tnvse_freetype_perf_timing: layout_n=%llu median_us=%.3f p95_us=%.3f sidecar_n=%llu median_us=%.3f p95_us=%.3f direct_compile_n=%llu median_us=%.3f p95_us=%.3f native_registration_n=%llu median_us=%.3f p95_us=%.3f preflight_n=%llu median_us=%.3f p95_us=%.3f submit_n=%llu median_us=%.3f p95_us=%.3f command_build_n=%llu median_us=%.3f p95_us=%.3f command_submit_n=%llu median_us=%.3f p95_us=%.3f extended_fnt_geometry_n=%llu median_us=%.3f p95_us=%.3f",
 			layout.count, layout.medianMicroseconds,
 			layout.p95Microseconds,
 			sidecar.count, sidecar.medianMicroseconds,
@@ -391,6 +436,10 @@ namespace fonthook::vectorfont
 			preflight.p95Microseconds,
 			submit.count, submit.medianMicroseconds,
 			submit.p95Microseconds,
+			commandBuild.count, commandBuild.medianMicroseconds,
+			commandBuild.p95Microseconds,
+			commandSubmit.count, commandSubmit.medianMicroseconds,
+			commandSubmit.p95Microseconds,
 			extendedFnt.count, extendedFnt.medianMicroseconds,
 			extendedFnt.p95Microseconds);
 	}

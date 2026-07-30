@@ -195,6 +195,25 @@ namespace fonthook::vectorfont
 		CompositeVisualValidated,
 		CompositeVisualRejected,
 		CompositeVisualInconclusive,
+		CommandRecorded,
+		CommandSpanRecorded,
+		CommandPacketRecorded,
+		CommandSpanHit,
+		CommandSpanMiss,
+		CommandRetainedBridgeDraw,
+		CommandNativeReplay,
+		CommandStockBootstrapSaved,
+		CommandVirtualSpanFused,
+		CommandVirtualFollowerConsumed,
+		CommandFallbackToken,
+		CommandFallbackGeneration,
+		CommandFallbackAtlas,
+		CommandFallbackResource,
+		CommandFallbackTopology,
+		CommandFallbackHook,
+		CommandFallbackNested,
+		CommandFallbackRenderTarget,
+		CommandFallbackState,
 		Count,
 	};
 
@@ -209,6 +228,8 @@ namespace fonthook::vectorfont
 		NativeRegistration,
 		Preflight,
 		Submit,
+		CommandBuild,
+		CommandSubmit,
 		ExtendedFntGeometry,
 		Count,
 	};
@@ -216,7 +237,8 @@ namespace fonthook::vectorfont
 	class FreeTypePerfScope
 	{
 	public:
-		explicit FreeTypePerfScope(FreeTypePerfPhase aePhase);
+		explicit FreeTypePerfScope(
+			FreeTypePerfPhase aePhase, bool abEnabled = true);
 		~FreeTypePerfScope();
 
 		FreeTypePerfScope(const FreeTypePerfScope&) = delete;

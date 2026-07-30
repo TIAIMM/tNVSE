@@ -164,6 +164,10 @@ namespace fonthook::vectorfont
 		bool registrationContiguous = true;
 		bool duplicateRegistration = false;
 		std::atomic<UInt32> directDrawCount = 0;
+		std::atomic<UInt64> commandValidationToken = 0;
+		std::atomic<UInt32> commandSpanIndex =
+			kInvalidNativeA8CommandIndex;
+		std::atomic<UInt32> commandLeaderSlot = 0;
 		std::atomic<bool> metadataPublished = false;
 		std::atomic<VirtualStockFrameMode> frameMode =
 			VirtualStockFrameMode::Facade;

@@ -14,6 +14,7 @@ bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
 fFreeTypeFontResolutionScale=1.0
 bEnableFreeTypeFontAggressivePerformanceMode=0
+bEnableFreeTypeFontCommandBuffer=0
 uiFreeTypeFontDistanceFieldMode=1
 ```
 
@@ -988,6 +989,75 @@ NPOT texture, or external API. The diagnostic line beginning
 `tnvse_freetype_perf: virtual_stock_` reports candidates, groups, shapes,
 draws, static hits, rebinds, revokes, facade fallbacks, skipped followers,
 saved preflight/proxy work, and categorized fallback reasons.
+
+### Retained text command buffer
+
+`bEnableFreeTypeFontCommandBuffer` is the master switch for the production
+command path used by FreeType A8 shapes in the validated sorted Tile traversal.
+It is independent of `bEnableFreeTypeFontAggressivePerformanceMode` and
+`bEnableFreeTypeFontCompositePass`; the active ordinary or Composite packet
+topology is compiled separately. The default is `0`.
+
+- `0` retains the current submission path.
+- `1` enables command recording, retained bridge submission, and guarded
+  native replay as one unit. One reverse-verified `B98E80` bootstrap supplies
+  live Tile WVP, color/alpha, scissor, viewport, render-target state, and the
+  paired slot-35 cleanup for an eligible logical span. Remaining packets keep
+  their original order and use tNVSE's generation-bound binder for shader,
+  atlas page, packet constants, pass state, and draw range.
+
+The former `uiFreeTypeFontCommandBufferMode` option is deprecated. When the new
+switch is absent, any nonzero legacy mode enables the complete command path for
+that run and logs a migration notice. Once the new switch is present, it is
+authoritative. The retired shadow-only stage and its D3D `Get*` captures are not
+part of the production path.
+
+Guarded replay publishes the retail current-pass globals, invokes `B99390`
+when the selected TileShader/pass must change, applies the special alpha-test
+state used by `B994F0`, and enters `B98E80` only when every reverse-verified
+default-path predicate agrees. Multi-pass `B99110`, skin/light/special passes,
+unknown shader or geometry vtables, and forced shader-selection passes retain
+the stock path. A stock `TileShader::UpdateConstants` call is still required
+once per span.
+
+The retained program is part of the immutable Text Artifact: it records packet
+ranges, profile classes, atlas-page topology, and vertex ranges, but no Tile
+state or D3D COM ownership. After registration, preflight, static/dynamic VB
+residency, and Virtual-stock topology are frozen, each sorted traversal builds
+a temporary command table containing only validated non-owning views. It is
+cleared before the ring lease ends. Command vectors participate in
+`RuntimeMetadata` accounting, retain at most 16384 command slots and 8192
+run/span slots between traversals, and release all retained capacity
+when the aggregate CPU budget remains exceeded.
+
+Compatibility facades retain their original position relative to non-FreeType
+items. A Virtual-stock group can fuse only when every slot is registered
+exactly once at consecutive final accumulator positions and each adjacent
+packet has byte-identical live Tile, transform, scissor, alpha, blend, cull,
+and stencil state. Traversal reaches slot 0 first; that leader executes the
+span, while followers consume only a token- and geometry-validated skip marker.
+A one-packet facade or Virtual-stock group still performs one stock bootstrap
+through its direct command lookup.
+
+Every execution checks the sorted validation token, accumulator nesting serial,
+hook identity, renderer/device and shader generation, atlas epoch, and VB
+resource serial/upload epoch, render-target identity, and viewport identity.
+Device reset, shader reload, atlas mutation, resource
+replacement, shape destruction, or Virtual-stock retirement therefore faults
+the affected command immediately. A failure before any draw re-enters the
+unchanged current path; after any packet reaches the driver, the span is marked
+faulted and followers are consumed without replay, preventing duplicate
+layers.
+
+The periodic command line reports recorded spans/packets, span hits/misses,
+retained bridge draws, guarded native replays, saved stock bootstraps, fused
+Virtual-stock spans/followers, and fallbacks by token, generation, atlas,
+resource, topology, hook, nesting, render target, and state. The timing line
+adds `command_build` and `command_submit` while preserving `submit`. Runtime
+validation should confirm nonzero `native_replays`, zero unexpected fallbacks,
+and that `stock_constant_updates` approaches the logical-span count without
+visual or runtime faults. Build success alone does not establish runtime
+correctness or the CPU-performance thresholds.
 
 ## Atlas allocation, mipmaps, and memory
 

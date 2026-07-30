@@ -1546,4 +1546,220 @@ namespace fonthook::vectorfont
 		return profile->shader;
 	}
 
+	bool CompileNativeA8PacketCommand(const NativeA8PacketTemplate& packet,
+		TileShader* shader, UInt32 generation,
+		NativeA8CompiledPacketCommand& command)
+	{
+		command = {};
+		NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
+		NativeShaderProfile* profile = block ? block->profile : nullptr;
+		NativeShaderGeneration* owner = profile ? profile->owner : nullptr;
+		if (!profile || !owner || profile->shader != shader
+			|| owner->id != generation
+			|| !GenerationMatchesCurrentDevice(owner)
+			|| profile->key.shaderClass != packet.shaderClass
+			|| profile->key.quality != packet.quality
+			|| profile->key.distanceFieldMethod
+				!= packet.distanceFieldMethod
+			|| profile->key.staticCompositeLayerMask
+				!= packet.staticCompositeLayerMask
+			|| profile->key.compositeShiftedShadow
+				!= packet.compositeShiftedShadow
+			|| profile->key.usesLiveTileRgb != packet.usesLiveTileRgb
+			|| std::memcmp(profile->constants.data(),
+				packet.constants.data(),
+				packet.constants.size() * sizeof(float)) != 0)
+		{
+			return false;
+		}
+		NiD3DPass* pass = shader->spPasses[0].m_pObject;
+		IDirect3DVertexShader9* vertexShader =
+			pass && pass->m_spVertexShader
+				? pass->m_spVertexShader->GetShaderHandle() : nullptr;
+		IDirect3DPixelShader9* pixelShader =
+			pass && pass->m_spPixelShader
+				? pass->m_spPixelShader->GetShaderHandle() : nullptr;
+		if (!owner->device || !vertexShader || !pixelShader)
+			return false;
+
+		command.profile = profile;
+		command.shader = shader;
+		command.device = owner->device;
+		command.vertexShader = vertexShader;
+		command.pixelShader = pixelShader;
+		void** shaderVtable =
+			*reinterpret_cast<void***>(shader);
+		command.setupPass = shaderVtable
+			? shaderVtable[30] : nullptr;
+		command.setupBlend = shaderVtable
+			? shaderVtable[32] : nullptr;
+		command.setupAlphaTest = shaderVtable
+			? shaderVtable[33] : nullptr;
+		command.setupDrawmode = shaderVtable
+			? shaderVtable[34] : nullptr;
+		command.generation = owner->id;
+		command.simpleColor =
+			packet.shaderClass == NativeA8ShaderClass::Coverage
+			|| packet.shaderClass == NativeA8ShaderClass::Argb;
+		command.active = command.setupPass != nullptr;
+		return command.active;
+	}
+
+	bool BindNativeA8CommandPacket(
+		const NativeA8CompiledPacketCommand& command,
+		const void* atlasTexture, bool publishPrograms,
+		const NiPropertyState* properties,
+		const NativeA8CommandBindState& bindState,
+		const char*& operation, HRESULT& result)
+	{
+		operation = "none";
+		result = D3D_OK;
+		auto* profile = static_cast<NativeShaderProfile*>(command.profile);
+		NativeShaderGeneration* generation =
+			profile ? profile->owner : nullptr;
+		IDirect3DDevice9* device = command.device;
+		void** shaderVtable = command.shader
+			? *reinterpret_cast<void***>(command.shader) : nullptr;
+		if (!command.active || !profile || !generation || !device
+			|| profile->shader != command.shader
+			|| !shaderVtable
+			|| shaderVtable[30] != command.setupPass
+			|| shaderVtable[32] != command.setupBlend
+			|| shaderVtable[33] != command.setupAlphaTest
+			|| shaderVtable[34] != command.setupDrawmode
+			|| generation->id != command.generation
+			|| generation->device != device
+			|| !GenerationMatchesCurrentDevice(generation)
+			|| !atlasTexture)
+		{
+			operation = "validate-command-packet";
+			result = D3DERR_INVALIDCALL;
+			return false;
+		}
+
+		if (publishPrograms)
+		{
+			if (!command.setupPass || !properties)
+			{
+				operation = "validate-command-pass-state";
+				result = D3DERR_INVALIDCALL;
+				return false;
+			}
+			using SetupPassFn = void(__thiscall*)(
+				TileShader*, const NiPropertyState*);
+			reinterpret_cast<SetupPassFn>(
+				command.setupPass)(command.shader, properties);
+			using SetupStateFn = void(__thiscall*)(
+				TileShader*, const NiPropertyState*);
+			using SetupDrawmodeFn = void(__thiscall*)(
+				TileShader*, const NiPropertyState*, bool);
+			if (bindState.applyBlend)
+			{
+				if (!command.setupBlend)
+				{
+					operation = "validate-command-blend-state";
+					result = D3DERR_INVALIDCALL;
+					return false;
+				}
+				reinterpret_cast<SetupStateFn>(
+					command.setupBlend)(command.shader, properties);
+			}
+			if (bindState.applyAlphaTest)
+			{
+				if (!command.setupAlphaTest)
+				{
+					operation = "validate-command-alpha-state";
+					result = D3DERR_INVALIDCALL;
+					return false;
+				}
+				reinterpret_cast<SetupStateFn>(
+					command.setupAlphaTest)(
+						command.shader, properties);
+			}
+			if (bindState.applyDrawmode)
+			{
+				if (!command.setupDrawmode)
+				{
+					operation = "validate-command-drawmode-state";
+					result = D3DERR_INVALIDCALL;
+					return false;
+				}
+				reinterpret_cast<SetupDrawmodeFn>(
+					command.setupDrawmode)(
+						command.shader, properties,
+						bindState.noFog);
+			}
+			result = device->SetVertexShader(command.vertexShader);
+			if (FAILED(result))
+			{
+				operation = "SetVertexShader(command)";
+				return false;
+			}
+			result = device->SetPixelShader(command.pixelShader);
+			if (FAILED(result))
+			{
+				operation = "SetPixelShader(command)";
+				return false;
+			}
+			if (!command.simpleColor)
+			{
+				result = device->SetPixelShaderConstantF(1,
+					profile->constants.data(),
+					static_cast<UINT>(
+						kNativeA8PacketConstantRegisterCount));
+				if (FAILED(result))
+				{
+					operation = "SetPixelShaderConstantF(command-c1-c8)";
+					return false;
+				}
+				const char* vertexOperation = "none";
+				NativeVertexAaState* vertexCache =
+					s_sortedShaderBatch.depth
+						? &s_sortedShaderBatch.vertexAa : nullptr;
+				result = PublishNativeVertexAaConstant(device,
+					profile->constants[7], vertexCache,
+					vertexOperation);
+				if (FAILED(result))
+				{
+					operation = vertexOperation;
+					return false;
+				}
+				result = device->SetSamplerState(
+					0, D3DSAMP_SRGBTEXTURE, FALSE);
+				if (FAILED(result))
+				{
+					operation = "SetSamplerState(command-srgb)";
+					return false;
+				}
+				result = device->SetSamplerState(
+					0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+				if (FAILED(result))
+				{
+					operation = "SetSamplerState(command-mip)";
+					return false;
+				}
+				if (s_sortedShaderBatch.depth)
+				{
+					s_sortedShaderBatch.device = device;
+					s_sortedShaderBatch.generation = generation->id;
+					s_sortedShaderBatch.packetProfile = profile;
+					s_sortedShaderBatch.packetConstants =
+						profile->constants;
+					s_sortedShaderBatch.packetConstantsReady = true;
+					s_sortedShaderBatch.samplerReady = true;
+				}
+			}
+		}
+
+		result = device->SetTexture(0,
+			const_cast<IDirect3DBaseTexture9*>(
+				static_cast<const IDirect3DBaseTexture9*>(atlasTexture)));
+		if (FAILED(result))
+		{
+			operation = "SetTexture(command-page)";
+			return false;
+		}
+		return true;
+	}
+
 }

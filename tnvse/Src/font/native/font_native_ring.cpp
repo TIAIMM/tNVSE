@@ -2700,6 +2700,95 @@ namespace fonthook::vectorfont
 		}
 	}
 
+	bool ResolveNativeA8FramePacketBinding(
+		const NativeA8ShapePayload& payload, UInt32 packetIndex,
+		NativeA8FramePacketBinding& binding)
+	{
+		binding = {};
+		if (!s_sortedRingLease.active || !payload.payloadTemplate
+			|| payload.preparedGeneration != s_sortedRingLease.generation)
+		{
+			return false;
+		}
+		NativeA8SortedRingLease& lease = s_sortedRingLease;
+		NativeA8RingState* state = lease.state;
+		if (!state || state->generation != lease.generation
+			|| state->resourceSerial.load(std::memory_order_acquire)
+				!= lease.resourceSerial
+			|| state->uploadEpoch != lease.uploadEpoch
+			|| state->indexBuffer != lease.indexBuffer
+			|| state->declaration != lease.declaration)
+		{
+			return false;
+		}
+		const NativeA8PayloadTemplate& artifact =
+			*payload.payloadTemplate;
+		const std::vector<NativeA8PacketTemplate>& packets =
+			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		if (packetIndex >= packets.size())
+			return false;
+		const NativeA8PacketTemplate& packet = packets[packetIndex];
+		const UInt64 packetEnd = static_cast<UInt64>(packet.firstVertex)
+			+ packet.vertexCount;
+		if (!packet.vertexCount || (packet.vertexCount & 3u)
+			|| packetEnd > artifact.gpuVertices.size())
+		{
+			return false;
+		}
+		const UInt32 artifactVertices = static_cast<UInt32>(
+			artifact.gpuVertices.size());
+		UInt32 payloadBaseVertex = 0;
+		bool staticResident = false;
+		if (!ResolveSortedLeaseResidency(*state, artifact,
+			artifactVertices, lease.resourceSerial, lease.uploadEpoch,
+			payloadBaseVertex, staticResident))
+		{
+			return false;
+		}
+		const UInt64 baseVertex = static_cast<UInt64>(payloadBaseVertex)
+			+ packet.firstVertex;
+		if (baseVertex > std::numeric_limits<UInt32>::max())
+			return false;
+
+		binding.vertexBuffer = staticResident
+			? lease.staticVertexBuffer : lease.dynamicVertexBuffer;
+		binding.indexBuffer = lease.indexBuffer;
+		binding.declaration = lease.declaration;
+		binding.baseVertex = static_cast<UInt32>(baseVertex);
+		binding.vertexCount = packet.vertexCount;
+		binding.indexBytes = kCanonicalIndexBytes;
+		binding.generation = lease.generation;
+		binding.resourceSerial = lease.resourceSerial;
+		binding.uploadEpoch = lease.uploadEpoch;
+		binding.staticResident = staticResident;
+		binding.active = binding.vertexBuffer && binding.indexBuffer
+			&& binding.declaration;
+		return binding.active;
+	}
+
+	bool IsNativeA8FramePacketBindingCurrent(
+		const NativeA8FramePacketBinding& binding)
+	{
+		if (!binding.active || !s_sortedRingLease.active)
+			return false;
+		const NativeA8SortedRingLease& lease = s_sortedRingLease;
+		const NativeA8RingState* state = lease.state;
+		const IDirect3DVertexBuffer9* expectedVertexBuffer =
+			binding.staticResident
+				? lease.staticVertexBuffer : lease.dynamicVertexBuffer;
+		return state && lease.active
+			&& binding.generation == lease.generation
+			&& binding.resourceSerial == lease.resourceSerial
+			&& binding.uploadEpoch == lease.uploadEpoch
+			&& binding.vertexBuffer == expectedVertexBuffer
+			&& binding.indexBuffer == lease.indexBuffer
+			&& binding.declaration == lease.declaration
+			&& state->generation == lease.generation
+			&& state->resourceSerial.load(std::memory_order_acquire)
+				== lease.resourceSerial
+			&& state->uploadEpoch == lease.uploadEpoch;
+	}
+
 	void ReleaseNativeA8RingResources()
 	{
 		NativeA8RingState& state = RingState();

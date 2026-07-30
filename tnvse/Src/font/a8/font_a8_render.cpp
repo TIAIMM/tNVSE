@@ -525,6 +525,13 @@ namespace fonthook::vectorfont
 			group.preparedGeneration = 0;
 			group.preparedAtlasTextureEpoch = 0;
 			group.directDrawCount.store(0, std::memory_order_release);
+			group.commandValidationToken.store(
+				0, std::memory_order_release);
+			group.commandSpanIndex.store(
+				kInvalidNativeA8CommandIndex,
+				std::memory_order_release);
+			group.commandLeaderSlot.store(
+				0, std::memory_order_release);
 			group.frameMode.store(VirtualStockFrameMode::Facade,
 				std::memory_order_release);
 			RecordFreeTypePerf(
@@ -1006,6 +1013,13 @@ namespace fonthook::vectorfont
 			group->preparedGeneration = 0;
 			group->preparedAtlasTextureEpoch = 0;
 			group->directDrawCount.store(0, std::memory_order_release);
+			group->commandValidationToken.store(
+				0, std::memory_order_release);
+			group->commandSpanIndex.store(
+				kInvalidNativeA8CommandIndex,
+				std::memory_order_release);
+			group->commandLeaderSlot.store(
+				0, std::memory_order_release);
 			if (group->frameMode.load(std::memory_order_acquire)
 				!= VirtualStockFrameMode::Retired)
 			{
@@ -1044,6 +1058,11 @@ namespace fonthook::vectorfont
 			{
 				group->primaryShape = nullptr;
 				group->primaryMetadataOwner.reset();
+				group->commandValidationToken.store(
+					0, std::memory_order_release);
+				group->commandSpanIndex.store(
+					kInvalidNativeA8CommandIndex,
+					std::memory_order_release);
 				group->frameMode.store(VirtualStockFrameMode::Retired,
 					std::memory_order_release);
 			}
