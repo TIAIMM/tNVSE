@@ -567,6 +567,8 @@ namespace fonthook::vectorfont
 		payload.payloadTemplate = std::move(payloadTemplate);
 		payload.geometryOrigin = geometryOrigin;
 		payload.packetShaders.assign(payload.payloadTemplate->packets.size(), nullptr);
+		payload.packetPrograms.assign(payload.payloadTemplate->packets.size(),
+			nullptr);
 		payload.preflightAtlasTextures.assign(payload.payloadTemplate->pageCount, nullptr);
 		payload.preparedGeneration = 0;
 		payload.compositeAttemptGeneration = 0;
@@ -642,6 +644,8 @@ namespace fonthook::vectorfont
 				payload.preflightAtlasTextures.end(), nullptr);
 			std::fill(payload.packetShaders.begin(),
 				payload.packetShaders.end(), nullptr);
+			std::fill(payload.packetPrograms.begin(),
+				payload.packetPrograms.end(), nullptr);
 		}
 	}
 }

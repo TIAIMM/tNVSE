@@ -184,6 +184,7 @@ namespace fonthook::vectorfont
 			NiPointer<TileShader> shaderOwner;
 			TileShader* shader = nullptr;
 			NativeTileVtableBlock* vtable = nullptr;
+			NativeA8CompiledPacketCommand retainedProgram;
 			bool effectPass = false;
 		};
 
@@ -938,6 +939,23 @@ namespace fonthook::vectorfont
 				reinterpret_cast<void*>(&NativeUpdateConstants);
 			profile->vtable = vtable;
 			*reinterpret_cast<void***>(shader) = vtable->slots.data();
+			NativeA8CompiledPacketCommand& program =
+				profile->retainedProgram;
+			program.profile = profile;
+			program.shader = shader;
+			program.device = generation.device;
+			program.vertexShader = vertexShader->GetShaderHandle();
+			program.pixelShader = pixelShader->GetShaderHandle();
+			program.setupPass = vtable->slots[30];
+			program.setupBlend = vtable->slots[32];
+			program.setupAlphaTest = vtable->slots[33];
+			program.setupDrawmode = vtable->slots[34];
+			program.generation = generation.id;
+			program.simpleColor =
+				packet.shaderClass == NativeA8ShaderClass::Coverage
+				|| packet.shaderClass == NativeA8ShaderClass::Argb;
+			program.active = program.device && program.vertexShader
+				&& program.pixelShader && program.setupPass;
 			return profile;
 		}
 
@@ -1546,63 +1564,69 @@ namespace fonthook::vectorfont
 		return profile->shader;
 	}
 
-	bool CompileNativeA8PacketCommand(const NativeA8PacketTemplate& packet,
+	bool ResolveNativeA8RetainedPacketProgram(
+		const NativeA8PacketTemplate& packet,
 		TileShader* shader, UInt32 generation,
-		NativeA8CompiledPacketCommand& command)
+		const NativeA8CompiledPacketCommand*& program)
 	{
-		command = {};
+		program = nullptr;
 		NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
 		NativeShaderProfile* profile = block ? block->profile : nullptr;
 		NativeShaderGeneration* owner = profile ? profile->owner : nullptr;
 		if (!profile || !owner || profile->shader != shader
 			|| owner->id != generation
-			|| !GenerationMatchesCurrentDevice(owner)
-			|| profile->key.shaderClass != packet.shaderClass
-			|| profile->key.quality != packet.quality
-			|| profile->key.distanceFieldMethod
-				!= packet.distanceFieldMethod
-			|| profile->key.staticCompositeLayerMask
-				!= packet.staticCompositeLayerMask
-			|| profile->key.compositeShiftedShadow
-				!= packet.compositeShiftedShadow
-			|| profile->key.usesLiveTileRgb != packet.usesLiveTileRgb
-			|| std::memcmp(profile->constants.data(),
-				packet.constants.data(),
-				packet.constants.size() * sizeof(float)) != 0)
+			|| !GenerationMatchesCurrentDevice(owner))
 		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandRetainedProgramMiss);
 			return false;
 		}
-		NiD3DPass* pass = shader->spPasses[0].m_pObject;
-		IDirect3DVertexShader9* vertexShader =
-			pass && pass->m_spVertexShader
-				? pass->m_spVertexShader->GetShaderHandle() : nullptr;
-		IDirect3DPixelShader9* pixelShader =
-			pass && pass->m_spPixelShader
-				? pass->m_spPixelShader->GetShaderHandle() : nullptr;
-		if (!owner->device || !vertexShader || !pixelShader)
-			return false;
+		const size_t cacheIndex =
+			profile->key.writeEffectAlpha ? 1u : 0u;
+		NativeA8PacketShaderCacheEntry& packetCache =
+			packet.resolvedShaders[cacheIndex];
+		NativeShaderProfile* cachedProfile =
+			static_cast<NativeShaderProfile*>(
+				packetCache.profile.load(std::memory_order_acquire));
+		const bool cacheHit = cachedProfile == profile;
+		if (!cacheHit)
+		{
+			if (profile->key.shaderClass != packet.shaderClass
+				|| profile->key.quality != packet.quality
+				|| profile->key.distanceFieldMethod
+					!= packet.distanceFieldMethod
+				|| profile->key.staticCompositeLayerMask
+					!= packet.staticCompositeLayerMask
+				|| profile->key.compositeShiftedShadow
+					!= packet.compositeShiftedShadow
+				|| profile->key.usesLiveTileRgb
+					!= packet.usesLiveTileRgb
+				|| std::memcmp(profile->constants.data(),
+					packet.constants.data(),
+					packet.constants.size() * sizeof(float)) != 0)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandRetainedProgramMiss);
+				return false;
+			}
+			packetCache.profile.store(profile, std::memory_order_release);
+		}
 
-		command.profile = profile;
-		command.shader = shader;
-		command.device = owner->device;
-		command.vertexShader = vertexShader;
-		command.pixelShader = pixelShader;
-		void** shaderVtable =
-			*reinterpret_cast<void***>(shader);
-		command.setupPass = shaderVtable
-			? shaderVtable[30] : nullptr;
-		command.setupBlend = shaderVtable
-			? shaderVtable[32] : nullptr;
-		command.setupAlphaTest = shaderVtable
-			? shaderVtable[33] : nullptr;
-		command.setupDrawmode = shaderVtable
-			? shaderVtable[34] : nullptr;
-		command.generation = owner->id;
-		command.simpleColor =
-			packet.shaderClass == NativeA8ShaderClass::Coverage
-			|| packet.shaderClass == NativeA8ShaderClass::Argb;
-		command.active = command.setupPass != nullptr;
-		return command.active;
+		const NativeA8CompiledPacketCommand& retained =
+			profile->retainedProgram;
+		if (!retained.active || retained.profile != profile
+			|| retained.shader != shader || retained.device != owner->device
+			|| retained.generation != owner->id)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandRetainedProgramMiss);
+			return false;
+		}
+		RecordFreeTypePerf(cacheHit
+			? FreeTypePerfCounter::CommandRetainedProgramHit
+			: FreeTypePerfCounter::CommandRetainedProgramMiss);
+		program = &retained;
+		return true;
 	}
 
 	bool BindNativeA8CommandPacket(

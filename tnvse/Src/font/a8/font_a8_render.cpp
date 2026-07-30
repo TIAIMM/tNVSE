@@ -639,6 +639,8 @@ namespace fonthook::vectorfont
 			sizeof(A8ShapeMetadata)
 				+ metadata->nativePayload.packetShaders.capacity()
 					* sizeof(TileShader*)
+				+ metadata->nativePayload.packetPrograms.capacity()
+					* sizeof(const NativeA8CompiledPacketCommand*)
 				+ metadata->nativePayload.preflightAtlasTextures.capacity()
 					* sizeof(const void*)
 				+ sizeof(A8ShapeMetadataPtr) + 6u * sizeof(void*));
@@ -759,6 +761,8 @@ namespace fonthook::vectorfont
 			primary.cpuMemory.GetBytes()
 				+ primary.nativePayload.packetShaders.capacity()
 					* sizeof(TileShader*)
+				+ primary.nativePayload.packetPrograms.capacity()
+					* sizeof(const NativeA8CompiledPacketCommand*)
 				+ primary.nativePayload.preflightAtlasTextures.capacity()
 					* sizeof(const void*));
 		group->primaryMetadataOwner = metadataEntries[primarySlot];

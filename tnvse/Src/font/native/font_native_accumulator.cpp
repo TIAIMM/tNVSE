@@ -643,6 +643,8 @@ namespace fonthook::vectorfont
 				payload.preflightAtlasTextures.end(), nullptr);
 			std::fill(payload.packetShaders.begin(),
 				payload.packetShaders.end(), nullptr);
+			std::fill(payload.packetPrograms.begin(),
+				payload.packetPrograms.end(), nullptr);
 		}
 
 		bool IsNativePreflightCacheCurrent(const NativeA8ShapePayload& payload,
@@ -668,7 +670,8 @@ namespace fonthook::vectorfont
 				|| payload.useCompositePackets != compositeDesired
 				|| payload.preflightAtlasTextures.size()
 					!= artifact.atlasTextures.size()
-				|| payload.packetShaders.size() != packets.size())
+				|| payload.packetShaders.size() != packets.size()
+				|| payload.packetPrograms.size() != packets.size())
 			{
 				return false;
 			}
@@ -747,6 +750,7 @@ namespace fonthook::vectorfont
 			payload.stockLikeBitmapPackets =
 				UsesOnlyStockLikeBitmapPackets(*packets);
 			payload.packetShaders.assign(packets->size(), nullptr);
+			payload.packetPrograms.assign(packets->size(), nullptr);
 			if (payload.preflightAtlasTextures.size() != artifact.atlasTextures.size())
 				return NativeA8FallbackReason::PacketBuild;
 			for (const NativeA8PacketTemplate& packetTemplate : *packets)
@@ -800,6 +804,7 @@ namespace fonthook::vectorfont
 				payload.stockLikeBitmapPackets =
 					UsesOnlyStockLikeBitmapPackets(*packets);
 				payload.packetShaders.assign(packets->size(), nullptr);
+				payload.packetPrograms.assign(packets->size(), nullptr);
 				shaderSetReady = true;
 				for (size_t index = 0; index < packets->size(); ++index)
 				{
@@ -819,6 +824,16 @@ namespace fonthook::vectorfont
 			}
 			if (!shaderSetReady)
 				return NativeA8FallbackReason::ShaderGeneration;
+			if (g_bEnableFreeTypeFontCommandBuffer)
+			{
+				for (size_t index = 0; index < packets->size(); ++index)
+				{
+					ResolveNativeA8RetainedPacketProgram(
+						(*packets)[index],
+						payload.packetShaders[index], generation,
+						payload.packetPrograms[index]);
+				}
+			}
 			if (attemptComposite && payload.useCompositePackets)
 			{
 				payload.compositeAttemptGeneration = generation;

@@ -877,29 +877,56 @@ ring; expired static entries are discarded during compaction. The map published
 after a sorted frame's batch upload is retained only until its packets finish,
 because those packet submissions need stable vertex ranges.
 
-When a sorted FreeType facade has exactly one active packet covering one
-physical page and the complete immutable payload, it skips the packet proxy
-entirely. For the duration of that one stock Tile pass, the facade's existing
-geometry-buffer descriptor is rebound directly to the sealed static/dynamic
-vertex range, canonical INDEX16 buffer, native declaration, and resolved
-shader. The facade itself remains `RenderPass::pGeometry`, so the retail
+When a sorted FreeType facade has exactly one active packet, it can skip the
+packet proxy entirely. The command-backed route accepts an arbitrary sealed
+packet vertex subrange and any referenced physical atlas page; it no longer
+requires page zero or a packet covering the complete immutable payload. For
+the duration of that one stock Tile pass, the facade's existing geometry-buffer
+descriptor is rebound directly to that packet's static/dynamic VB range,
+canonical INDEX16 buffer, native declaration, and resolved shader. The facade
+itself remains `RenderPass::pGeometry`, so the retail
 `TileShader::UpdateConstants` reads its live scissor, overlay color, Tile and
 material alpha, blend, cull, and stencil state without a proxy-state copy.
-The payload origin is temporarily folded into the facade transform and its
-model bound, alpha-test flag, shader, transform, and every modified buffer/chip
-field are restored synchronously after `RenderImmediate`.
+The payload origin is temporarily folded into the facade transform. If the
+packet references another physical page, the retained atlas texturing property
+and Tile source texture are installed for the pass. The original property,
+source texture, model bound, alpha-test flag, shader, transforms, and every
+modified buffer/chip field are held by RAII and restored synchronously after
+`RenderImmediate`.
 
 This direct-shape route is published only inside the validated sorted-frame
-ring lease. It requires exact generation, resource serial/upload epoch,
-page-zero texturing property and source-texture identity, a prepared geometry
-buffer, and a full-range packet. A failed check occurs before the retail pass
-and falls back to the unchanged packet/proxy path; once the retail pass has
-started it is never replayed. Device reset and shader-generation replacement
-therefore invalidate it through the existing lease rules. It creates no
-per-facade D3D allocation, changes no atlas or cache format, and does not enable
-NPOT textures. The periodic performance line reports
-`direct_shape_candidates`, `direct_shape_draws`, `direct_shape_vertices`, and
-`direct_shape_fallback`.
+ring lease. It requires exact generation, resource serial/upload epoch, a
+prepared geometry buffer, a valid retained atlas property/texture, and a
+four-vertex-aligned packet range. Without a valid command, the older
+mutation-free page-zero/full-range eligibility remains the fallback fast path.
+A failed check occurs before the retail pass and falls back to the unchanged
+packet/proxy path; once the retail pass has started it is never replayed.
+Device reset and shader-generation replacement therefore invalidate it through
+the existing lease rules. It creates no per-facade D3D allocation, changes no
+atlas or cache format, and does not enable NPOT textures. The periodic
+performance lines report `direct_shape_candidates`, `direct_shape_draws`,
+`direct_shape_vertices`, `direct_shape_fallback`, and command-backed
+`direct_range_replays`; the last counter advances only when page/range
+eligibility is broader than the legacy page-zero/full-payload case.
+Each direct fallback now also increments exactly one first-failure stage:
+`command`, `submission`, `binding_input`, `binding_topology`, `binding_atlas`,
+`binding_facade`, `binding_property`, `binding_texture`, `binding_shader`, or
+`runtime`. The dedicated `direct_fallback_total` line reports `classified` as
+the sum of those stages; the two values must match for every reporting window.
+`binding_facade` remains a compatibility aggregate and is split into the
+mutually exclusive `facade_model_data`, `facade_alpha_property`,
+`facade_buffer_data`, `facade_tile_property`, `facade_stream_count`,
+`facade_vertex_stride`, `facade_vertex_chip_array`, and `facade_vertex_chip`
+leaves. `facade_classified` is their sum and must equal `binding_facade`;
+`classified` counts the leaves instead of the aggregate so facade failures are
+not double-counted.
+When a stock facade has no `NiGeometryBufferData`, direct replay now installs a
+stack-local, non-owning descriptor for the synchronous retail
+`NiTriShape::RenderImmediate` call. It borrows the command VB, IB, declaration,
+stride, and chip view, restores the original null descriptor immediately after
+the pass, and clears all borrowed fields before invoking the retail
+non-deleting destructor. This path performs no per-draw heap allocation and is
+reported by `synthetic_buffers`.
 
 ### Virtual-stock FreeType shapes
 
@@ -1020,15 +1047,23 @@ unknown shader or geometry vtables, and forced shader-selection passes retain
 the stock path. A stock `TileShader::UpdateConstants` call is still required
 once per span.
 
-The retained program is part of the immutable Text Artifact: it records packet
-ranges, profile classes, atlas-page topology, and vertex ranges, but no Tile
-state or D3D COM ownership. After registration, preflight, static/dynamic VB
-residency, and Virtual-stock topology are frozen, each sorted traversal builds
-a temporary command table containing only validated non-owning views. It is
-cleared before the ring lease ends. Command vectors participate in
-`RuntimeMetadata` accounting, retain at most 16384 command slots and 8192
-run/span slots between traversals, and release all retained capacity
-when the aggregate CPU budget remains exceeded.
+The immutable Text Artifact retains packet ranges, profile hashes/classes,
+atlas-page topology, vertex ranges, and replayable run boundaries, but no Tile
+state or D3D COM ownership. Each generation-owned shader profile now also owns
+one immutable compiled packet program containing its already resolved shader,
+VS/PS handles, slot methods, constants profile, and replay flags. Shape
+preflight publishes generation-bound non-owning program pointers alongside its
+resolved shaders. A later traversal therefore references the compiled program
+directly instead of recovering the profile, validating all immutable packet
+fields, and copying the program into every frame command again.
+
+After registration, preflight, static/dynamic VB residency, and Virtual-stock
+topology are frozen, each sorted traversal builds a temporary command table
+containing only validated non-owning views plus frame-local buffer ranges. It
+is cleared before the ring lease ends. Command vectors and the per-shape
+program-pointer arrays participate in `RuntimeMetadata` accounting, retain at
+most 16384 command slots and 8192 run/span slots between traversals, and release
+all retained capacity when the aggregate CPU budget remains exceeded.
 
 Compatibility facades retain their original position relative to non-FreeType
 items. A Virtual-stock group can fuse only when every slot is registered
@@ -1039,22 +1074,29 @@ span, while followers consume only a token- and geometry-validated skip marker.
 A one-packet facade or Virtual-stock group still performs one stock bootstrap
 through its direct command lookup.
 
-Every execution checks the sorted validation token, accumulator nesting serial,
-hook identity, renderer/device and shader generation, atlas epoch, and VB
-resource serial/upload epoch, render-target identity, and viewport identity.
-Device reset, shader reload, atlas mutation, resource
-replacement, shape destruction, or Virtual-stock retirement therefore faults
-the affected command immediately. A failure before any draw re-enters the
-unchanged current path; after any packet reaches the driver, the span is marked
-faulted and followers are consumed without replay, preventing duplicate
-layers.
+Before a span starts, one full validation checks the sorted validation token,
+accumulator nesting serial, hook identity, renderer/device and shader
+generation, complete packet/program topology, atlas epoch, every VB resource
+serial/upload epoch, render-target identity, and viewport identity. Each
+immediate callback then performs only an execution-token check and the
+packet-local generation, atlas, residency, and geometry-binding checks needed
+to catch a reset or mutation during the span. Render target/viewport and the
+complete packet list are not queried again for every packet. Device reset,
+shader reload, atlas mutation, resource replacement, shape destruction, or
+Virtual-stock retirement therefore still faults the affected command
+immediately. A failure before any draw re-enters the unchanged current path;
+after any packet reaches the driver, the span is marked faulted and followers
+are consumed without replay, preventing duplicate layers.
 
 The periodic command line reports recorded spans/packets, span hits/misses,
 retained bridge draws, guarded native replays, saved stock bootstraps, fused
-Virtual-stock spans/followers, and fallbacks by token, generation, atlas,
-resource, topology, hook, nesting, render target, and state. The timing line
-adds `command_build` and `command_submit` while preserving `submit`. Runtime
-validation should confirm nonzero `native_replays`, zero unexpected fallbacks,
+Virtual-stock spans/followers, arbitrary-range direct replays, full/light/render
+target validation counts, retained-program hits/misses, and fallbacks by token,
+generation, atlas, resource, topology, hook, nesting, render target, and state.
+The timing line adds `command_build` and `command_submit` while preserving
+`submit`. Runtime validation should confirm nonzero `native_replays` and
+`direct_range_replays`, `render_target_validations` tracking
+`full_validations` rather than `light_validations`, zero unexpected fallbacks,
 and that `stock_constant_updates` approaches the logical-span count without
 visual or runtime faults. Build success alone does not establish runtime
 correctness or the CPU-performance thresholds.

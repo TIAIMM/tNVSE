@@ -198,6 +198,8 @@ namespace fonthook::vectorfont
 		bool bridgeEligible = false;
 	};
 
+	struct NativeA8CompiledPacketCommand;
+
 	// Renderer-owned VB locations are mutable cache data attached to the immutable
 	// text artifact. Every read is protected by the ring mutex and validated
 	// against the current resource serial/epoch before the location is used.
@@ -238,8 +240,10 @@ namespace fonthook::vectorfont
 		NativeA8PayloadTemplatePtr payloadTemplate;
 		NiPoint3 geometryOrigin;
 		// Packet geometry, constants, page identity, and profile keys live only in
-		// the shared text artifact. A Tile instance retains just resolved shaders.
+		// the shared text artifact. A Tile instance retains generation-bound
+		// shader/program views; both are cleared with native preflight state.
 		std::vector<TileShader*> packetShaders;
+		std::vector<const NativeA8CompiledPacketCommand*> packetPrograms;
 		std::atomic<bool> suppressNextSubmit = false;
 		std::atomic<NativeA8FallbackReason> stickyReason =
 			NativeA8FallbackReason::None;
@@ -353,9 +357,10 @@ namespace fonthook::vectorfont
 		bool active = false;
 	};
 
-	// Shader profiles stay private to font_native_shader.cpp. This is a
-	// generation-bound, non-owning packet program compiled for one sorted
-	// traversal.
+	// Shader profiles stay private to font_native_shader.cpp. This immutable,
+	// generation-owned program is published once with its profile. Traversal-local
+	// commands retain only a non-owning pointer and validate the generation before
+	// every execution.
 	struct NativeA8CompiledPacketCommand
 	{
 		void* profile = nullptr;
@@ -405,7 +410,7 @@ namespace fonthook::vectorfont
 		const NativeA8PacketTemplate* packet = nullptr;
 		const void* atlasTexture = nullptr;
 		NativeA8FramePacketBinding binding;
-		NativeA8CompiledPacketCommand shader;
+		const NativeA8CompiledPacketCommand* program = nullptr;
 		UInt32 packetIndex = 0;
 	};
 
@@ -434,6 +439,7 @@ namespace fonthook::vectorfont
 		UInt32 generation = 0;
 		UInt32 atlasTextureEpoch = 0;
 		UInt64 validationToken = 0;
+		UInt64 executionValidationToken = 0;
 		NativeA8CommandSpanState state = NativeA8CommandSpanState::Ready;
 		bool virtualStock = false;
 		bool bridgeEligible = false;
@@ -582,9 +588,10 @@ namespace fonthook::vectorfont
 	void EndNativeA8FacadeShaderBatch();
 	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
 		const NiTriShape* facade, bool scaledFillSampling);
-	bool CompileNativeA8PacketCommand(const NativeA8PacketTemplate& packet,
+	bool ResolveNativeA8RetainedPacketProgram(
+		const NativeA8PacketTemplate& packet,
 		TileShader* shader, UInt32 generation,
-		NativeA8CompiledPacketCommand& command);
+		const NativeA8CompiledPacketCommand*& program);
 	bool BindNativeA8CommandPacket(
 		const NativeA8CompiledPacketCommand& command,
 		const void* atlasTexture, bool publishPrograms,

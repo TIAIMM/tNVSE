@@ -306,6 +306,91 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualValidated)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
+		const UInt64 directFacadeClassified =
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeModelData)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					SinglePacketDirectFallbackFacadeAlphaProperty)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeBufferData)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeTileProperty)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeStreamCount)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeVertexStride)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					SinglePacketDirectFallbackFacadeVertexChipArray)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeVertexChip)];
+		const UInt64 directFallbackClassified =
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackCommand)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackSubmission)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingInput)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingTopology)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingAtlas)]
+			+ directFacadeClassified
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingProperty)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingTexture)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingShader)]
+			+ values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackRuntime)];
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_perf: direct_fallback_total=%llu classified=%llu command=%llu submission=%llu binding_input=%llu binding_topology=%llu binding_atlas=%llu binding_facade=%llu facade_classified=%llu facade_model_data=%llu facade_alpha_property=%llu facade_buffer_data=%llu facade_tile_property=%llu facade_stream_count=%llu facade_vertex_stride=%llu facade_vertex_chip_array=%llu facade_vertex_chip=%llu binding_property=%llu binding_texture=%llu binding_shader=%llu runtime=%llu synthetic_buffers=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallback)],
+			directFallbackClassified,
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackCommand)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackSubmission)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingInput)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingTopology)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingAtlas)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingFacade)],
+			directFacadeClassified,
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeModelData)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					SinglePacketDirectFallbackFacadeAlphaProperty)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeBufferData)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeTileProperty)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeStreamCount)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeVertexStride)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					SinglePacketDirectFallbackFacadeVertexChipArray)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackFacadeVertexChip)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingProperty)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingTexture)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackBindingShader)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectFallbackRuntime)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SinglePacketDirectSyntheticBuffer)]);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: virtual_stock_candidates=%llu virtual_stock_groups=%llu virtual_stock_shapes=%llu virtual_stock_draws=%llu virtual_stock_static_hits=%llu virtual_stock_rebinds=%llu virtual_stock_revokes=%llu facade_fallbacks=%llu followers_skipped=%llu sorted_preflight_saved=%llu proxy_packets_saved=%llu fallback_no_parent=%llu packet_limit=%llu cpu_budget=%llu static_not_ready=%llu topology=%llu shader=%llu generation=%llu atlas=%llu resource=%llu noncontiguous=%llu registration_resolved=%llu register_rejected=%llu registration_missing=%llu registration_duplicate=%llu registration_order_mismatch=%llu",
 			values[static_cast<size_t>(
@@ -361,7 +446,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VirtualStockRegistrationOrderMismatch)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: command_recorded=%llu spans=%llu packets=%llu span_hits=%llu miss=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu virtual_spans_fused=%llu followers_consumed=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
+			"tnvse_freetype_perf: command_recorded=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu virtual_spans_fused=%llu followers_consumed=%llu direct_range_replays=%llu full_validations=%llu light_validations=%llu render_target_validations=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRecorded)],
 			values[static_cast<size_t>(
@@ -382,6 +467,18 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::CommandVirtualSpanFused)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandVirtualFollowerConsumed)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandDirectRangeReplay)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandSpanFullValidation)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandPacketLightValidation)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandRenderTargetValidation)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandRetainedProgramHit)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandRetainedProgramMiss)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandFallbackToken)],
 			values[static_cast<size_t>(

@@ -212,7 +212,8 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
-			if (geometry->GetShader() != command.shader.shader)
+			if (!command.program
+				|| geometry->GetShader() != command.program->shader)
 				return false;
 			NiTriShapeData* data = geometry->GetModelData();
 			NiGeometryBufferData* buffer =
@@ -275,11 +276,16 @@ namespace fonthook::vectorfont
 				payload.preflightAtlasTextures[packet.atlasPage];
 			if (!command.atlasTexture
 				|| packetIndex >= payload.packetShaders.size()
+				|| packetIndex >= payload.packetPrograms.size()
 				|| !ResolveNativeA8FramePacketBinding(
 					payload, packetIndex, command.binding)
-				|| !CompileNativeA8PacketCommand(packet,
-					payload.packetShaders[packetIndex],
-					payload.preparedGeneration, command.shader))
+				|| !(command.program =
+					payload.packetPrograms[packetIndex])
+				|| !command.program->active
+				|| command.program->shader
+					!= payload.packetShaders[packetIndex]
+				|| command.program->generation
+					!= payload.preparedGeneration)
 			{
 				return false;
 			}
@@ -310,11 +316,16 @@ namespace fonthook::vectorfont
 			NativeA8FramePacketBinding resolved;
 			if (!command.atlasTexture
 				|| packetIndex >= payload.packetShaders.size()
+				|| packetIndex >= payload.packetPrograms.size()
 				|| !ResolveNativeA8FramePacketBinding(
 					payload, packetIndex, resolved)
-				|| !CompileNativeA8PacketCommand(packet,
-					payload.packetShaders[packetIndex],
-					payload.preparedGeneration, command.shader))
+				|| !(command.program =
+					payload.packetPrograms[packetIndex])
+				|| !command.program->active
+				|| command.program->shader
+					!= payload.packetShaders[packetIndex]
+				|| command.program->generation
+					!= payload.preparedGeneration)
 			{
 				return false;
 			}
@@ -376,8 +387,9 @@ namespace fonthook::vectorfont
 					{
 						const NativeA8DrawCommand& candidate =
 							buffer.commands[span.firstCommand + end];
-						if (candidate.shader.profile
-							!= firstCommand.shader.profile)
+						if (!candidate.program || !firstCommand.program
+							|| candidate.program->profile
+								!= firstCommand.program->profile)
 						{
 							break;
 						}
@@ -421,6 +433,8 @@ namespace fonthook::vectorfont
 		bool ValidateRenderTarget(
 			const NativeA8FrameStamp& stamp)
 		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandRenderTargetValidation);
 			if (!stamp.renderTargetReady || !stamp.viewportReady
 				|| !stamp.device)
 			{
@@ -717,6 +731,7 @@ namespace fonthook::vectorfont
 				continue;
 			span.partialDraw = span.partialDraw
 				|| span.state == NativeA8CommandSpanState::Executing;
+			span.executionValidationToken = 0;
 			span.state = NativeA8CommandSpanState::Fault;
 			invalidated = true;
 		}
@@ -760,6 +775,8 @@ namespace fonthook::vectorfont
 	NativeA8CommandFallback ValidateNativeA8CommandSpan(
 		const NativeA8CommandSpanView& view, bool validateRenderTarget)
 	{
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandSpanFullValidation);
 		if (!view.stamp || !view.span || !view.commands
 			|| !view.runs
 			|| view.span->validationToken
@@ -820,7 +837,7 @@ namespace fonthook::vectorfont
 		{
 			const NativeA8DrawCommand& command =
 				view.commands[view.span->firstCommand + index];
-			if (!command.payload || !command.packet
+			if (!command.payload || !command.packet || !command.program
 				|| command.payload != view.span->payload
 				|| command.packetIndex != index
 				|| command.packet != &activePackets[index]
@@ -831,7 +848,12 @@ namespace fonthook::vectorfont
 				|| command.packetIndex
 					>= command.payload->packetShaders.size()
 				|| command.payload->packetShaders[
-					command.packetIndex] != command.shader.shader)
+					command.packetIndex] != command.program->shader
+				|| !command.program->active
+				|| command.program->generation
+					!= view.stamp->generation
+				|| command.program->device
+					!= view.stamp->device)
 			{
 				return NativeA8CommandFallback::Topology;
 			}
@@ -890,12 +912,15 @@ namespace fonthook::vectorfont
 		{
 			span.state = NativeA8CommandSpanState::Fault;
 			span.partialDraw = false;
+			span.executionValidationToken = 0;
 			RecordNativeA8CommandFallback(
 				NativeA8CommandFallback::Topology);
 			return false;
 		}
 		span.state = NativeA8CommandSpanState::Executing;
 		span.partialDraw = false;
+		span.executionValidationToken =
+			buffer.stamp.validationToken;
 		view.span = &span;
 		return true;
 	}
@@ -908,6 +933,7 @@ namespace fonthook::vectorfont
 			return;
 		NativeA8CommandSpan& span = buffer.spans[spanIndex];
 		span.partialDraw = drewPacket;
+		span.executionValidationToken = 0;
 		span.state = success
 			? NativeA8CommandSpanState::Consumed
 			: NativeA8CommandSpanState::Fault;
@@ -950,6 +976,7 @@ namespace fonthook::vectorfont
 			// per-shape route and prevent a later leader from replaying it.
 			span.state = NativeA8CommandSpanState::Fault;
 			span.partialDraw = false;
+			span.executionValidationToken = 0;
 			RecordNativeA8CommandFallback(
 				NativeA8CommandFallback::Topology);
 		}
@@ -959,17 +986,35 @@ namespace fonthook::vectorfont
 	bool ValidateNativeA8Command(UInt32 spanIndex,
 		UInt32 commandOffset, NiTriShape* geometry, NiRenderer* renderer)
 	{
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandPacketLightValidation);
 		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		if (!buffer.active || spanIndex >= buffer.spans.size())
-			return true;
-		const NativeA8CommandSpan& span = buffer.spans[spanIndex];
-		if (commandOffset >= span.commandCount)
-			return false;
-		const NativeA8DrawCommand& command =
-			buffer.commands[span.firstCommand + commandOffset];
 		NativeA8CommandFallback commandFailure =
 			NativeA8CommandFallback::None;
-		if (span.validationToken != buffer.stamp.validationToken
+		if (!buffer.active || spanIndex >= buffer.spans.size())
+		{
+			commandFailure = NativeA8CommandFallback::State;
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordNativeA8CommandFallback(commandFailure);
+			return false;
+		}
+
+		const NativeA8CommandSpan& span = buffer.spans[spanIndex];
+		if (span.state != NativeA8CommandSpanState::Executing
+			|| span.executionValidationToken
+				!= buffer.stamp.validationToken)
+		{
+			commandFailure = NativeA8CommandFallback::State;
+		}
+		else if (commandOffset >= span.commandCount
+			|| span.firstCommand + commandOffset
+				>= buffer.commands.size())
+		{
+			commandFailure = NativeA8CommandFallback::Topology;
+		}
+		else if (span.validationToken != buffer.stamp.validationToken
 			|| buffer.stamp.validationToken
 				!= GetNativeA8SortedFrameValidationToken())
 		{
@@ -980,84 +1025,52 @@ namespace fonthook::vectorfont
 		{
 			commandFailure = NativeA8CommandFallback::Nested;
 		}
-		else if (!IsNativeA8AccumulatorHookCurrent()
-			|| !IsNativeA8SortedTraversalHookCurrent()
-			|| !IsA8TileRenderPassHookCurrent())
+		if (commandFailure != NativeA8CommandFallback::None)
 		{
-			commandFailure = NativeA8CommandFallback::Hook;
+			RecordNativeA8CommandFallback(commandFailure);
+			return false;
 		}
-		else if (!IsNativeA8ShaderGenerationCurrent(
-				buffer.stamp.generation)
-			|| command.shader.generation
+
+		const NativeA8DrawCommand& command =
+			buffer.commands[span.firstCommand + commandOffset];
+		if (!command.program || !command.program->active
+			|| command.program->generation
 				!= buffer.stamp.generation
-			|| command.shader.device != buffer.stamp.device
-			|| !renderer
-			|| renderer != buffer.stamp.renderer)
+			|| command.program->device != buffer.stamp.device
+			|| !renderer || renderer != buffer.stamp.renderer
+			|| !IsNativeA8ShaderGenerationCurrent(
+				buffer.stamp.generation))
 		{
 			commandFailure = NativeA8CommandFallback::Generation;
 		}
+		else if (!command.payload || command.payload != span.payload
+			|| !command.packet
+			|| command.packetIndex != commandOffset
+			|| commandOffset >= command.payload->packetShaders.size()
+			|| command.program->shader
+				!= command.payload->packetShaders[commandOffset])
+		{
+			commandFailure = NativeA8CommandFallback::Topology;
+		}
 		else if (GetNativeA8AtlasTextureEpoch()
 				!= buffer.stamp.atlasTextureEpoch
-			|| !command.payload
 			|| command.payload->preflightAtlasTextureEpoch
 				!= buffer.stamp.atlasTextureEpoch)
 		{
 			commandFailure = NativeA8CommandFallback::Atlas;
 		}
-		else if (!span.payload
-			|| !span.payload->payloadTemplate
-			|| span.payload->useCompositePackets
-				!= span.useCompositePackets)
-		{
-			commandFailure = NativeA8CommandFallback::Topology;
-		}
-		else
-		{
-			const std::vector<NativeA8PacketTemplate>& activePackets =
-				GetNativeA8Packets(
-					*span.payload->payloadTemplate,
-					span.useCompositePackets);
-			if (activePackets.size() != span.commandCount
-				|| span.payload->packetShaders.size()
-					!= activePackets.size()
-				|| command.packetIndex != commandOffset
-				|| command.packetIndex >= activePackets.size()
-				|| command.packet
-					!= &activePackets[command.packetIndex]
-				|| span.payload->packetShaders[
-					command.packetIndex] != command.shader.shader)
-			{
-				commandFailure =
-					NativeA8CommandFallback::Topology;
-			}
-			else if (command.packet->atlasPage
-					>= span.payload->preflightAtlasTextures.size()
-				|| command.atlasTexture
-					!= span.payload->preflightAtlasTextures[
-						command.packet->atlasPage])
-			{
-				commandFailure = NativeA8CommandFallback::Atlas;
-			}
-		}
-		if (commandFailure == NativeA8CommandFallback::None
-			&& !IsNativeA8FramePacketBindingCurrent(
-			command.binding))
+		else if (!IsNativeA8FramePacketBindingCurrent(
+				command.binding)
+			|| !ValidateGeometryBinding(command, geometry))
 		{
 			commandFailure = NativeA8CommandFallback::Resource;
-		}
-		else if (commandFailure == NativeA8CommandFallback::None
-			&& !ValidateRenderTarget(buffer.stamp))
-		{
-			commandFailure =
-				NativeA8CommandFallback::RenderTarget;
 		}
 		if (commandFailure != NativeA8CommandFallback::None)
 		{
 			RecordNativeA8CommandFallback(commandFailure);
 			return false;
 		}
-		return command.packetIndex == commandOffset
-			&& ValidateGeometryBinding(command, geometry);
+		return true;
 	}
 
 	void RecordNativeA8CommandFallback(
