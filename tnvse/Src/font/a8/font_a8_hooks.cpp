@@ -482,7 +482,8 @@ namespace fonthook::vectorfont
 		{
 			None = 0,
 			SpanPacket,
-			SinglePacket
+			SinglePacket,
+			VirtualSinglePacket
 		};
 
 		struct NativeDirectImmediateContext
@@ -574,6 +575,9 @@ namespace fonthook::vectorfont
 						context.commandOffset, shape, renderer);
 			case NativeImmediateCommandKind::SinglePacket:
 				return ValidateNativeA8SinglePacketCommand(
+					context.commandSpanIndex, shape, renderer);
+			case NativeImmediateCommandKind::VirtualSinglePacket:
+				return ValidateNativeA8VirtualSinglePacketCommand(
 					context.commandSpanIndex, shape, renderer);
 			default:
 				return true;
@@ -2630,6 +2634,8 @@ namespace fonthook::vectorfont
 			UInt32 commandSpanIndex =
 				kInvalidNativeA8CommandIndex,
 			UInt32 commandOffset =
+				kInvalidNativeA8CommandIndex,
+			UInt32 virtualSinglePacketCommandIndex =
 				kInvalidNativeA8CommandIndex)
 		{
 			VirtualStockShapeGroup* group =
@@ -2641,7 +2647,9 @@ namespace fonthook::vectorfont
 			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
 			FreeTypePerfScope commandPerf(
 				FreeTypePerfPhase::CommandSubmit,
-				commandSpanIndex != kInvalidNativeA8CommandIndex);
+				commandSpanIndex != kInvalidNativeA8CommandIndex
+					|| virtualSinglePacketCommandIndex
+						!= kInvalidNativeA8CommandIndex);
 
 			const NativeA8ShapePayload* payload = nullptr;
 			A8ShapeMetadataPtr primaryMetadataOwner;
@@ -2709,10 +2717,41 @@ namespace fonthook::vectorfont
 			}
 
 			NativeA8CommandSpanView commandView;
+			NativeA8VirtualSinglePacketCommandView
+				virtualSingleCommandView;
 			const NativeA8DrawCommand* command = nullptr;
 			bool commandExecution = false;
 			bool commandBegun = false;
+			bool virtualSingleCommandExecution = false;
 			if (g_bEnableFreeTypeFontCommandBuffer
+				&& virtualSinglePacketCommandIndex
+					!= kInvalidNativeA8CommandIndex)
+			{
+				commandBegun =
+					BeginNativeA8VirtualSinglePacketCommandExecution(
+						virtualSinglePacketCommandIndex,
+						group, shape, virtualSingleCommandView);
+				if (commandBegun
+					&& virtualSingleCommandView.command)
+				{
+					command =
+						virtualSingleCommandView.command->draw;
+					commandExecution = command
+						&& command->payload == payload
+						&& command->expectedGeometry == shape
+						&& command->packetIndex == packetIndex;
+					virtualSingleCommandExecution =
+						commandExecution;
+				}
+				if (commandBegun && !commandExecution)
+				{
+					EndNativeA8VirtualSinglePacketCommandExecution(
+						virtualSinglePacketCommandIndex,
+						false, false);
+				}
+			}
+			if (!commandExecution
+				&& g_bEnableFreeTypeFontCommandBuffer
 				&& commandSpanIndex
 					!= kInvalidNativeA8CommandIndex)
 			{
@@ -2855,22 +2894,32 @@ namespace fonthook::vectorfont
 				}
 				else
 				{
-					const UInt32 validationSpanIndex =
+					const UInt32 validationCommandIndex =
 						commandExecution
-							? commandSpanIndex
+							? (virtualSingleCommandExecution
+								? virtualSinglePacketCommandIndex
+								: commandSpanIndex)
 							: kInvalidNativeA8CommandIndex;
 					NativeDirectImmediateScope immediateScope(
-						shape, validationSpanIndex,
-						validationSpanIndex
+						shape, validationCommandIndex,
+						validationCommandIndex
 								!= kInvalidNativeA8CommandIndex
+							&& !virtualSingleCommandExecution
 							? commandOffset
 							: kInvalidNativeA8CommandIndex,
-						commandExecution);
+						commandExecution, nullptr, nullptr,
+						virtualSingleCommandExecution
+							? NativeImmediateCommandKind::
+								VirtualSinglePacket
+							: NativeImmediateCommandKind::SpanPacket);
+					bool usedNativeReplay = false;
 					if (commandExecution)
 					{
-						InvokeNativeCommandBootstrap(pass,
+						usedNativeReplay =
+							InvokeNativeCommandBootstrap(pass,
 							currentPass, false, true,
-							setupDrawmode, shape, command);
+							setupDrawmode, shape, command,
+							virtualSingleCommandExecution);
 					}
 					else
 					{
@@ -2888,6 +2937,13 @@ namespace fonthook::vectorfont
 							FreeTypePerfCounter::VirtualStockDraw);
 						RecordFreeTypePerf(
 							FreeTypePerfCounter::TilePass);
+						if (usedNativeReplay
+							&& virtualSingleCommandExecution)
+						{
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::
+									CommandVirtualSinglePacketReplay);
+						}
 						if (packet->shaderClass
 							== NativeA8ShaderClass::Composite)
 						{
@@ -2941,10 +2997,20 @@ namespace fonthook::vectorfont
 			}
 			if (commandExecution)
 			{
-				EndNativeA8CommandSpanExecution(
-					commandSpanIndex,
-					!draw.runtimeFault && draw.drewPacket,
-					draw.drewPacket);
+				if (virtualSingleCommandExecution)
+				{
+					EndNativeA8VirtualSinglePacketCommandExecution(
+						virtualSinglePacketCommandIndex,
+						!draw.runtimeFault && draw.drewPacket,
+						draw.drewPacket);
+				}
+				else
+				{
+					EndNativeA8CommandSpanExecution(
+						commandSpanIndex,
+						!draw.runtimeFault && draw.drewPacket,
+						draw.drewPacket);
+				}
 			}
 			if (draw.runtimeFault)
 			{
@@ -3725,17 +3791,24 @@ namespace fonthook::vectorfont
 				const UInt32 commandSpanIndex =
 					group->commandSpanIndex.load(
 						std::memory_order_acquire);
+				const UInt32 virtualSinglePacketCommandIndex =
+					group->commandVirtualSinglePacketIndex.load(
+						std::memory_order_acquire);
 				const UInt32 commandLeaderSlot =
 					group->commandLeaderSlot.load(
 						std::memory_order_acquire);
 				const bool commandCurrent = commandToken
 					&& commandToken == validationToken
-					&& commandSpanIndex
-						!= kInvalidNativeA8CommandIndex;
+					&& (commandSpanIndex
+							!= kInvalidNativeA8CommandIndex
+						|| virtualSinglePacketCommandIndex
+							!= kInvalidNativeA8CommandIndex);
 				if (commandCurrent
 					&& g_bEnableFreeTypeFontCommandBuffer)
 				{
-					if (metadata->virtualStockSlot
+					if (commandSpanIndex
+							!= kInvalidNativeA8CommandIndex
+						&& metadata->virtualStockSlot
 						!= commandLeaderSlot)
 					{
 						if (ShouldConsumeNativeA8CommandFollower(
@@ -3746,7 +3819,8 @@ namespace fonthook::vectorfont
 							return;
 						}
 					}
-					else
+					else if (commandSpanIndex
+						!= kInvalidNativeA8CommandIndex)
 					{
 						NativeA8CommandSpanView candidate;
 						if (FindNativeA8CommandSpan(
@@ -3769,7 +3843,15 @@ namespace fonthook::vectorfont
 					draw = {};
 					const UInt32 packetCommandSpanIndex =
 						commandCurrent
+							&& commandSpanIndex
+								!= kInvalidNativeA8CommandIndex
 							? commandSpanIndex
+							: kInvalidNativeA8CommandIndex;
+					const UInt32 packetVirtualSingleCommandIndex =
+						commandCurrent
+							&& virtualSinglePacketCommandIndex
+								!= kInvalidNativeA8CommandIndex
+							? virtualSinglePacketCommandIndex
 							: kInvalidNativeA8CommandIndex;
 					handled = TryDrawVirtualStockPacket(
 						pass, currentPass, setupDrawmode, shape,
@@ -3778,7 +3860,8 @@ namespace fonthook::vectorfont
 						packetCommandSpanIndex
 								!= kInvalidNativeA8CommandIndex
 							? metadata->virtualStockSlot
-							: kInvalidNativeA8CommandIndex);
+							: kInvalidNativeA8CommandIndex,
+						packetVirtualSingleCommandIndex);
 				}
 				if (!handled)
 				{

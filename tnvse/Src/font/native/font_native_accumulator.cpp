@@ -1479,61 +1479,90 @@ namespace fonthook::vectorfont
 				{
 					FreeTypePerfScope commandBuild(
 						FreeTypePerfPhase::CommandBuild);
-					BeginNativeA8FrameCommandBuffer(accumulator,
-						frameValidationToken, generation,
-						preflightContext.atlasTextureEpoch);
-					for (const std::shared_ptr<VirtualStockShapeGroup>& group
-						: scratch.virtualStockGroups)
 					{
-						if (!group)
-							continue;
-						AddNativeA8FrameCommandSpan(
-							nullptr, nullptr, nullptr,
-							group.get());
+						FreeTypePerfScope commandBuildStamp(
+							FreeTypePerfPhase::CommandBuildStamp);
+						BeginNativeA8FrameCommandBuffer(accumulator,
+							frameValidationToken, generation,
+							preflightContext.atlasTextureEpoch);
+						const size_t ordinaryCapacityHint =
+							scratch.frameEntries.size()
+								>= scratch.virtualStockSlots.size()
+							? scratch.frameEntries.size()
+								- scratch.virtualStockSlots.size()
+							: 0;
+						ReserveNativeA8FrameCommandBuffer(
+							ordinaryCapacityHint,
+							scratch.virtualStockGroups.size());
 					}
-					for (SortedFrameEntry& entry : scratch.frameEntries)
 					{
-						if (!entry.metadata || !entry.payload
-							|| entry.preflightResult
-								!= NativeA8FallbackReason::None
-							|| entry.visibilityCull
-								!= NativeA8VisibilityCull::None)
+						FreeTypePerfScope commandBuildVirtual(
+							FreeTypePerfPhase::CommandBuildVirtual);
+						for (const std::shared_ptr<
+							VirtualStockShapeGroup>& group
+							: scratch.virtualStockGroups)
 						{
-							continue;
+							if (!group)
+								continue;
+							AddNativeA8FrameCommandSpan(
+								nullptr, nullptr, nullptr,
+								group.get());
 						}
-						if (entry.metadata->backend
-							== FreeTypeShapeBackend::
-								VirtualStockNative)
+					}
+					{
+						FreeTypePerfScope commandBuildOrdinary(
+							FreeTypePerfPhase::CommandBuildOrdinary);
+						for (SortedFrameEntry& entry
+							: scratch.frameEntries)
 						{
-							VirtualStockShapeGroup* group =
-								entry.metadata->virtualStockGroup;
-							if (group
-								&& group->commandValidationToken.load(
-									std::memory_order_acquire)
-									== frameValidationToken)
+							if (!entry.metadata || !entry.payload
+								|| entry.preflightResult
+									!= NativeA8FallbackReason::None
+								|| entry.visibilityCull
+									!= NativeA8VisibilityCull::None)
 							{
-								entry.commandSpanIndex =
-									group->commandSpanIndex.load(
-										std::memory_order_acquire);
+								continue;
 							}
-						}
-						else
-						{
-							entry.singlePacketCommandIndex =
-								AddNativeA8FrameSinglePacketCommand(
-									entry.facade, entry.metadata,
-									entry.payload);
-							if (entry.singlePacketCommandIndex
-								== kInvalidNativeA8CommandIndex)
+							if (entry.metadata->backend
+								== FreeTypeShapeBackend::
+									VirtualStockNative)
 							{
-								entry.commandSpanIndex =
-									AddNativeA8FrameCommandSpan(
+								VirtualStockShapeGroup* group =
+									entry.metadata->virtualStockGroup;
+								if (group
+									&& group->
+										commandValidationToken.load(
+											std::memory_order_acquire)
+										== frameValidationToken)
+								{
+									entry.commandSpanIndex =
+										group->commandSpanIndex.load(
+											std::memory_order_acquire);
+								}
+							}
+							else
+							{
+								entry.singlePacketCommandIndex =
+									AddNativeA8FrameSinglePacketCommand(
 										entry.facade, entry.metadata,
 										entry.payload);
+								if (entry.singlePacketCommandIndex
+									== kInvalidNativeA8CommandIndex)
+								{
+									entry.commandSpanIndex =
+										AddNativeA8FrameCommandSpan(
+											entry.facade,
+											entry.metadata,
+											entry.payload);
+								}
 							}
 						}
 					}
-					ActivateNativeA8FrameCommandBuffer();
+					{
+						FreeTypePerfScope commandBuildFinalize(
+							FreeTypePerfPhase::CommandBuildFinalize);
+						ActivateNativeA8FrameCommandBuffer();
+					}
 				}
 				else
 				{

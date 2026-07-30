@@ -2687,9 +2687,9 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	bool ResolveNativeA8FramePacketBinding(
-		const NativeA8ShapePayload& payload, UInt32 packetIndex,
-		NativeA8FramePacketBinding& binding)
+	bool ResolveNativeA8FramePayloadBinding(
+		const NativeA8ShapePayload& payload,
+		NativeA8FramePayloadBinding& binding)
 	{
 		binding = {};
 		if (!s_sortedRingLease.active || !payload.payloadTemplate
@@ -2710,15 +2710,9 @@ namespace fonthook::vectorfont
 		}
 		const NativeA8PayloadTemplate& artifact =
 			*payload.payloadTemplate;
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(artifact, payload.useCompositePackets);
-		if (packetIndex >= packets.size())
-			return false;
-		const NativeA8PacketTemplate& packet = packets[packetIndex];
-		const UInt64 packetEnd = static_cast<UInt64>(packet.firstVertex)
-			+ packet.vertexCount;
-		if (!packet.vertexCount || (packet.vertexCount & 3u)
-			|| packetEnd > artifact.gpuVertices.size())
+		if (artifact.gpuVertices.empty()
+			|| artifact.gpuVertices.size()
+				> std::numeric_limits<UInt32>::max())
 		{
 			return false;
 		}
@@ -2732,17 +2726,13 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
-		const UInt64 baseVertex = static_cast<UInt64>(payloadBaseVertex)
-			+ packet.firstVertex;
-		if (baseVertex > std::numeric_limits<UInt32>::max())
-			return false;
 
 		binding.vertexBuffer = staticResident
 			? lease.staticVertexBuffer : lease.dynamicVertexBuffer;
 		binding.indexBuffer = lease.indexBuffer;
 		binding.declaration = lease.declaration;
-		binding.baseVertex = static_cast<UInt32>(baseVertex);
-		binding.vertexCount = packet.vertexCount;
+		binding.payloadBaseVertex = payloadBaseVertex;
+		binding.payloadVertexCount = artifactVertices;
 		binding.indexBytes = kCanonicalIndexBytes;
 		binding.generation = lease.generation;
 		binding.resourceSerial = lease.resourceSerial;
@@ -2750,6 +2740,51 @@ namespace fonthook::vectorfont
 		binding.staticResident = staticResident;
 		binding.active = binding.vertexBuffer && binding.indexBuffer
 			&& binding.declaration;
+		return binding.active;
+	}
+
+	bool ResolveNativeA8FramePacketBinding(
+		const NativeA8ShapePayload& payload, UInt32 packetIndex,
+		NativeA8FramePacketBinding& binding)
+	{
+		binding = {};
+		if (!payload.payloadTemplate)
+			return false;
+		const NativeA8PayloadTemplate& artifact =
+			*payload.payloadTemplate;
+		const std::vector<NativeA8PacketTemplate>& packets =
+			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		if (packetIndex >= packets.size())
+			return false;
+		const NativeA8PacketTemplate& packet = packets[packetIndex];
+		const UInt64 packetEnd = static_cast<UInt64>(packet.firstVertex)
+			+ packet.vertexCount;
+		if (!packet.vertexCount || (packet.vertexCount & 3u)
+			|| packetEnd > artifact.gpuVertices.size())
+		{
+			return false;
+		}
+		NativeA8FramePayloadBinding payloadBinding;
+		if (!ResolveNativeA8FramePayloadBinding(
+				payload, payloadBinding))
+			return false;
+		const UInt64 baseVertex = static_cast<UInt64>(
+			payloadBinding.payloadBaseVertex)
+			+ packet.firstVertex;
+		if (baseVertex > std::numeric_limits<UInt32>::max())
+			return false;
+
+		binding.vertexBuffer = payloadBinding.vertexBuffer;
+		binding.indexBuffer = payloadBinding.indexBuffer;
+		binding.declaration = payloadBinding.declaration;
+		binding.baseVertex = static_cast<UInt32>(baseVertex);
+		binding.vertexCount = packet.vertexCount;
+		binding.indexBytes = payloadBinding.indexBytes;
+		binding.generation = payloadBinding.generation;
+		binding.resourceSerial = payloadBinding.resourceSerial;
+		binding.uploadEpoch = payloadBinding.uploadEpoch;
+		binding.staticResident = payloadBinding.staticResident;
+		binding.active = payloadBinding.active;
 		return binding.active;
 	}
 

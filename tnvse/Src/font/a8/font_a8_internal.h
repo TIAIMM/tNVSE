@@ -169,7 +169,14 @@ namespace fonthook::vectorfont
 		std::atomic<UInt64> commandValidationToken = 0;
 		std::atomic<UInt32> commandSpanIndex =
 			kInvalidNativeA8CommandIndex;
+		std::atomic<UInt32> commandVirtualSinglePacketIndex =
+			kInvalidNativeA8CommandIndex;
 		std::atomic<UInt32> commandLeaderSlot = 0;
+		// Prepared under group->mutex and published by the validation token.
+		// Invalidation clears the token but never mutates this view; the next
+		// sorted prepare overwrites it before publishing a new token.
+		std::vector<NativeA8DrawCommand> commandBuildCommands;
+		std::atomic<UInt64> commandBuildValidationToken = 0;
 		std::atomic<bool> metadataPublished = false;
 		std::atomic<VirtualStockFrameMode> frameMode =
 			VirtualStockFrameMode::Facade;

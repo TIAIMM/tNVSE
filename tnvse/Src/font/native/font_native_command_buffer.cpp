@@ -64,12 +64,20 @@ namespace fonthook::vectorfont
 			std::vector<NativeA8CommandSpan> spans;
 			std::vector<NativeA8SinglePacketCommand>
 				singlePacketCommands;
+			std::vector<NativeA8VirtualSinglePacketCommand>
+				virtualSinglePacketCommands;
 			CpuMemoryLease cpuMemory;
 			NativeA8ExecutionSegmentState executionSegment;
 			UInt32 executionBoundaryEpoch = 1;
 			UInt32 frameExternalMutationEpoch = 0;
 			NativeA8CommandFallback executionBoundaryReason =
 				NativeA8CommandFallback::State;
+			size_t trackedCapacityBytes = 0;
+			size_t highWaterCommands = 0;
+			size_t highWaterRuns = 0;
+			size_t highWaterSpans = 0;
+			size_t highWaterSinglePackets = 0;
+			size_t highWaterVirtualSinglePackets = 0;
 			bool enabled = false;
 			bool active = false;
 			bool building = false;
@@ -108,6 +116,15 @@ namespace fonthook::vectorfont
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandSinglePacketFallback);
+			RecordNativeA8CommandFallback(reason);
+		}
+
+		void RecordVirtualSinglePacketCommandFallback(
+			NativeA8CommandFallback reason)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::
+					CommandVirtualSinglePacketFallback);
 			RecordNativeA8CommandFallback(reason);
 		}
 
@@ -239,23 +256,81 @@ namespace fonthook::vectorfont
 					* sizeof(NativeA8FrameCommandRun)
 				+ buffer.spans.capacity() * sizeof(NativeA8CommandSpan)
 				+ buffer.singlePacketCommands.capacity()
-					* sizeof(NativeA8SinglePacketCommand);
+					* sizeof(NativeA8SinglePacketCommand)
+				+ buffer.virtualSinglePacketCommands.capacity()
+					* sizeof(NativeA8VirtualSinglePacketCommand);
+			if (bytes == buffer.trackedCapacityBytes)
+				return;
+			buffer.trackedCapacityBytes = bytes;
 			buffer.cpuMemory.Reset(
 				CpuMemoryCategory::RuntimeMetadata, bytes);
+		}
+
+		void RecordCommandVectorGrowth(
+			size_t previousCapacity, size_t currentCapacity)
+		{
+			if (currentCapacity > previousCapacity)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandBuildVectorGrowth);
+			}
+		}
+
+		template <class T>
+		void ReserveCommandVector(std::vector<T>& values, size_t count)
+		{
+			if (count <= values.capacity())
+				return;
+			const size_t previousCapacity = values.capacity();
+			values.reserve(count);
+			RecordCommandVectorGrowth(
+				previousCapacity, values.capacity());
+		}
+
+		void UpdateCommandHighWater(NativeA8FrameCommandBuffer& buffer)
+		{
+			buffer.highWaterCommands = std::max(
+				buffer.highWaterCommands, buffer.commands.size());
+			buffer.highWaterRuns = std::max(
+				buffer.highWaterRuns, buffer.runs.size());
+			buffer.highWaterSpans = std::max(
+				buffer.highWaterSpans, buffer.spans.size());
+			buffer.highWaterSinglePackets = std::max(
+				buffer.highWaterSinglePackets,
+				buffer.singlePacketCommands.size());
+			buffer.highWaterVirtualSinglePackets = std::max(
+				buffer.highWaterVirtualSinglePackets,
+				buffer.virtualSinglePacketCommands.size());
 		}
 
 		void TrimCommandCapacity(NativeA8FrameCommandBuffer& buffer)
 		{
 			if (buffer.commands.capacity() > 16384)
+			{
 				std::vector<NativeA8DrawCommand>().swap(buffer.commands);
+				buffer.highWaterCommands = 0;
+			}
 			if (buffer.runs.capacity() > 8192)
+			{
 				std::vector<NativeA8FrameCommandRun>().swap(buffer.runs);
+				buffer.highWaterRuns = 0;
+			}
 			if (buffer.spans.capacity() > 8192)
+			{
 				std::vector<NativeA8CommandSpan>().swap(buffer.spans);
+				buffer.highWaterSpans = 0;
+			}
 			if (buffer.singlePacketCommands.capacity() > 8192)
 			{
 				std::vector<NativeA8SinglePacketCommand>().swap(
 					buffer.singlePacketCommands);
+				buffer.highWaterSinglePackets = 0;
+			}
+			if (buffer.virtualSinglePacketCommands.capacity() > 8192)
+			{
+				std::vector<NativeA8VirtualSinglePacketCommand>().swap(
+					buffer.virtualSinglePacketCommands);
+				buffer.highWaterVirtualSinglePackets = 0;
 			}
 			RefreshCommandMemory(buffer);
 			if (!IsCpuMemoryBudgetExceeded())
@@ -265,6 +340,14 @@ namespace fonthook::vectorfont
 			std::vector<NativeA8CommandSpan>().swap(buffer.spans);
 			std::vector<NativeA8SinglePacketCommand>().swap(
 				buffer.singlePacketCommands);
+			std::vector<NativeA8VirtualSinglePacketCommand>().swap(
+				buffer.virtualSinglePacketCommands);
+			buffer.highWaterCommands = 0;
+			buffer.highWaterRuns = 0;
+			buffer.highWaterSpans = 0;
+			buffer.highWaterSinglePackets = 0;
+			buffer.highWaterVirtualSinglePackets = 0;
+			buffer.trackedCapacityBytes = 0;
 			buffer.cpuMemory.Release();
 		}
 
@@ -272,6 +355,10 @@ namespace fonthook::vectorfont
 		{
 			if (!stamp.device)
 				return false;
+			stamp.renderTarget = nullptr;
+			stamp.viewport = {};
+			stamp.renderTargetReady = false;
+			stamp.viewportReady = false;
 			IDirect3DSurface9* renderTarget = nullptr;
 			const HRESULT targetResult =
 				stamp.device->GetRenderTarget(0, &renderTarget);
@@ -279,12 +366,19 @@ namespace fonthook::vectorfont
 				return false;
 			stamp.renderTarget = renderTarget;
 			renderTarget->Release();
-			stamp.renderTargetReady = true;
 			const HRESULT viewportResult =
 				stamp.device->GetViewport(&stamp.viewport);
-			stamp.viewportReady = SUCCEEDED(viewportResult)
+			const bool viewportReady = SUCCEEDED(viewportResult)
 				&& stamp.viewport.Width && stamp.viewport.Height;
-			return stamp.viewportReady;
+			if (!viewportReady)
+			{
+				stamp.renderTarget = nullptr;
+				stamp.viewport = {};
+				return false;
+			}
+			stamp.renderTargetReady = true;
+			stamp.viewportReady = true;
+			return true;
 		}
 
 		bool ValidateGeometryBinding(
@@ -385,6 +479,7 @@ namespace fonthook::vectorfont
 		bool CompileCompatibilityCommand(
 			NiTriShape* facade, NativeA8ShapePayload& payload,
 			const NativeA8PacketTemplate& packet, UInt32 packetIndex,
+			const NativeA8FramePayloadBinding& payloadBinding,
 			NativeA8DrawCommand& command)
 		{
 			command = {};
@@ -394,13 +489,25 @@ namespace fonthook::vectorfont
 			command.packetIndex = packetIndex;
 			if (packet.atlasPage >= payload.preflightAtlasTextures.size())
 				return false;
+			const UInt64 packetEnd =
+				static_cast<UInt64>(packet.firstVertex)
+					+ packet.vertexCount;
+			const UInt64 baseVertex =
+				static_cast<UInt64>(
+					payloadBinding.payloadBaseVertex)
+					+ packet.firstVertex;
 			command.atlasTexture =
 				payload.preflightAtlasTextures[packet.atlasPage];
 			if (!command.atlasTexture
+				|| !payloadBinding.active
+				|| !packet.vertexCount
+				|| (packet.vertexCount & 3u)
+				|| packetEnd
+					> payloadBinding.payloadVertexCount
+				|| baseVertex
+					> std::numeric_limits<UInt32>::max()
 				|| packetIndex >= payload.packetShaders.size()
 				|| packetIndex >= payload.packetPrograms.size()
-				|| !ResolveNativeA8FramePacketBinding(
-					payload, packetIndex, command.binding)
 				|| !(command.program =
 					payload.packetPrograms[packetIndex])
 				|| !command.program->active
@@ -411,86 +518,65 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
+			command.binding.vertexBuffer =
+				payloadBinding.vertexBuffer;
+			command.binding.indexBuffer =
+				payloadBinding.indexBuffer;
+			command.binding.declaration =
+				payloadBinding.declaration;
+			command.binding.baseVertex =
+				static_cast<UInt32>(baseVertex);
+			command.binding.vertexCount = packet.vertexCount;
+			command.binding.indexBytes =
+				payloadBinding.indexBytes;
+			command.binding.generation =
+				payloadBinding.generation;
+			command.binding.resourceSerial =
+				payloadBinding.resourceSerial;
+			command.binding.uploadEpoch =
+				payloadBinding.uploadEpoch;
+			command.binding.staticResident =
+				payloadBinding.staticResident;
+			command.binding.active = payloadBinding.active;
 			return true;
 		}
 
 		bool AppendCompatibilityCommand(
 			NativeA8FrameCommandBuffer& buffer,
 			NiTriShape* facade, NativeA8ShapePayload& payload,
-			const NativeA8PacketTemplate& packet, UInt32 packetIndex)
+			const NativeA8PacketTemplate& packet, UInt32 packetIndex,
+			const NativeA8FramePayloadBinding& payloadBinding)
 		{
-			NativeA8DrawCommand command;
+			const size_t previousCapacity = buffer.commands.capacity();
+			buffer.commands.emplace_back();
+			RecordCommandVectorGrowth(
+				previousCapacity, buffer.commands.capacity());
+			NativeA8DrawCommand& command = buffer.commands.back();
 			if (!CompileCompatibilityCommand(facade, payload,
-					packet, packetIndex, command))
+					packet, packetIndex, payloadBinding, command))
 			{
+				buffer.commands.pop_back();
 				return false;
 			}
-			buffer.commands.push_back(command);
 			return true;
 		}
 
-		bool AppendVirtualCommand(
+		bool AdoptFrameResourceStamp(
 			NativeA8FrameCommandBuffer& buffer,
-			NativeA8ShapePayload& payload,
-			const NativeA8PacketTemplate& packet,
-			const VirtualStockSlotBinding& slot, UInt32 packetIndex)
+			UInt32 resourceSerial, UInt32 uploadEpoch)
 		{
-			NativeA8DrawCommand command;
-			command.sourceGeometry = slot.shape;
-			command.expectedGeometry = slot.shape;
-			command.payload = &payload;
-			command.packet = &packet;
-			command.packetIndex = packetIndex;
-			if (!slot.bound || slot.packetIndex != packetIndex
-				|| packet.atlasPage
-					>= payload.preflightAtlasTextures.size())
+			if (!resourceSerial
+				|| (buffer.stamp.resourceSerial
+					&& (buffer.stamp.resourceSerial != resourceSerial
+						|| buffer.stamp.uploadEpoch != uploadEpoch)))
 			{
 				return false;
 			}
-			command.atlasTexture =
-				payload.preflightAtlasTextures[packet.atlasPage];
-			NativeA8FramePacketBinding resolved;
-			if (!command.atlasTexture
-				|| packetIndex >= payload.packetShaders.size()
-				|| packetIndex >= payload.packetPrograms.size()
-				|| !ResolveNativeA8FramePacketBinding(
-					payload, packetIndex, resolved)
-				|| !(command.program =
-					payload.packetPrograms[packetIndex])
-				|| !command.program->active
-				|| command.program->shader
-					!= payload.packetShaders[packetIndex]
-				|| command.program->generation
-					!= payload.preparedGeneration)
+			if (!buffer.stamp.resourceSerial)
 			{
-				return false;
+				buffer.stamp.resourceSerial = resourceSerial;
+				buffer.stamp.uploadEpoch = uploadEpoch;
 			}
-			command.binding = resolved;
-			command.binding.vertexBuffer =
-				slot.bindingChip ? slot.bindingChip->m_pkVB : nullptr;
-			command.binding.indexBuffer =
-				slot.bindingBuffer ? slot.bindingBuffer->m_pkIB : nullptr;
-			command.binding.declaration =
-				slot.bindingBuffer
-					? static_cast<IDirect3DVertexDeclaration9*>(
-						slot.bindingBuffer->m_hDeclaration) : nullptr;
-			command.binding.baseVertex = slot.baseVertex;
-			command.binding.vertexCount = slot.vertexCount;
-			command.binding.indexBytes =
-				slot.bindingBuffer ? slot.bindingBuffer->m_uiIBSize : 0;
-			command.binding.generation = slot.generation;
-			command.binding.resourceSerial = slot.resourceSerial;
-			command.binding.active = command.binding.vertexBuffer
-				&& command.binding.indexBuffer
-				&& command.binding.declaration
-				&& command.binding.vertexBuffer == resolved.vertexBuffer
-				&& command.binding.indexBuffer == resolved.indexBuffer
-				&& command.binding.declaration == resolved.declaration
-				&& command.binding.baseVertex == resolved.baseVertex
-				&& command.binding.vertexCount == resolved.vertexCount;
-			if (!command.binding.active)
-				return false;
-			buffer.commands.push_back(command);
 			return true;
 		}
 
@@ -643,8 +729,23 @@ namespace fonthook::vectorfont
 			{
 				return NativeA8CommandFallback::Resource;
 			}
-			if (!ValidateRenderTarget(stamp))
+			if (!stamp.renderTargetReady || !stamp.viewportReady)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						CommandDeferredRenderTargetCapture);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						CommandRenderTargetValidation);
+				if (!ResolveRenderTargetStamp(stamp))
+				{
+					return NativeA8CommandFallback::RenderTarget;
+				}
+			}
+			else if (!ValidateRenderTarget(stamp))
+			{
 				return NativeA8CommandFallback::RenderTarget;
+			}
 			if (LoadExternalMutationEpoch()
 				!= expectedExternalMutationEpoch)
 			{
@@ -797,8 +898,29 @@ namespace fonthook::vectorfont
 			return;
 		buffer.frameExternalMutationEpoch =
 			LoadExternalMutationEpoch();
-		ResolveRenderTargetStamp(buffer.stamp);
 		buffer.building = true;
+	}
+
+	void ReserveNativeA8FrameCommandBuffer(size_t ordinaryEntryCount,
+		size_t virtualGroupCount)
+	{
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		if (!buffer.building)
+			return;
+
+		ReserveCommandVector(buffer.commands,
+			buffer.highWaterCommands);
+		ReserveCommandVector(buffer.runs,
+			buffer.highWaterRuns);
+		ReserveCommandVector(buffer.spans,
+			buffer.highWaterSpans);
+		ReserveCommandVector(buffer.singlePacketCommands,
+			std::max(buffer.highWaterSinglePackets,
+				ordinaryEntryCount));
+		ReserveCommandVector(buffer.virtualSinglePacketCommands,
+			std::max(buffer.highWaterVirtualSinglePackets,
+				virtualGroupCount));
+		RefreshCommandMemory(buffer);
 	}
 
 	UInt32 AddNativeA8FrameSinglePacketCommand(NiTriShape* facade,
@@ -825,7 +947,24 @@ namespace fonthook::vectorfont
 			return kInvalidNativeA8CommandIndex;
 		}
 
-		NativeA8SinglePacketCommand command;
+		NativeA8FramePayloadBinding payloadBinding;
+		if (!ResolveNativeA8FramePayloadBinding(
+				*payload, payloadBinding))
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::
+					CommandSinglePacketBuildFallback);
+			return kInvalidNativeA8CommandIndex;
+		}
+		const UInt32 commandIndex = static_cast<UInt32>(
+			buffer.singlePacketCommands.size());
+		const size_t previousSingleCapacity =
+			buffer.singlePacketCommands.capacity();
+		buffer.singlePacketCommands.emplace_back();
+		RecordCommandVectorGrowth(previousSingleCapacity,
+			buffer.singlePacketCommands.capacity());
+		NativeA8SinglePacketCommand& command =
+			buffer.singlePacketCommands.back();
 		command.facade = facade;
 		command.payload = payload;
 		command.artifact = payload->payloadTemplate.get();
@@ -834,8 +973,9 @@ namespace fonthook::vectorfont
 		command.atlasTextureEpoch = buffer.stamp.atlasTextureEpoch;
 		command.useCompositePackets = payload->useCompositePackets;
 		if (!CompileCompatibilityCommand(facade, *payload,
-				packets.front(), 0, command.draw))
+				packets.front(), 0, payloadBinding, command.draw))
 		{
+			buffer.singlePacketCommands.pop_back();
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
 					CommandSinglePacketBuildFallback);
@@ -845,25 +985,16 @@ namespace fonthook::vectorfont
 		const UInt32 resourceSerial =
 			command.draw.binding.resourceSerial;
 		const UInt32 uploadEpoch = command.draw.binding.uploadEpoch;
-		if (!resourceSerial
-			|| (buffer.stamp.resourceSerial
-				&& (buffer.stamp.resourceSerial != resourceSerial
-					|| buffer.stamp.uploadEpoch != uploadEpoch)))
+		if (!AdoptFrameResourceStamp(
+				buffer, resourceSerial, uploadEpoch))
 		{
+			buffer.singlePacketCommands.pop_back();
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
 					CommandSinglePacketBuildFallback);
 			return kInvalidNativeA8CommandIndex;
 		}
-		if (!buffer.stamp.resourceSerial)
-		{
-			buffer.stamp.resourceSerial = resourceSerial;
-			buffer.stamp.uploadEpoch = uploadEpoch;
-		}
 
-		const UInt32 commandIndex = static_cast<UInt32>(
-			buffer.singlePacketCommands.size());
-		buffer.singlePacketCommands.push_back(command);
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::CommandSinglePacketRecorded);
 		RecordFreeTypePerf(FreeTypePerfCounter::CommandPacketRecorded);
@@ -891,6 +1022,14 @@ namespace fonthook::vectorfont
 			{
 				return existingIndex;
 			}
+			if (existingToken == buffer.stamp.validationToken
+				&& virtualStockGroup->
+					commandVirtualSinglePacketIndex.load(
+						std::memory_order_acquire)
+					!= kInvalidNativeA8CommandIndex)
+			{
+				return kInvalidNativeA8CommandIndex;
+			}
 		}
 
 		NativeA8CommandSpan span;
@@ -910,44 +1049,111 @@ namespace fonthook::vectorfont
 		bool appended = false;
 		if (virtualStockGroup)
 		{
-			std::lock_guard<std::mutex> lock(
-				virtualStockGroup->mutex);
-			if (!virtualStockGroup->primaryMetadataOwner
-				|| virtualStockGroup->preparedValidationToken
-					!= buffer.stamp.validationToken
+			const UInt64 buildToken =
+				virtualStockGroup->commandBuildValidationToken.load(
+					std::memory_order_acquire);
+			const std::vector<NativeA8DrawCommand>& prepared =
+				virtualStockGroup->commandBuildCommands;
+			if (buildToken != buffer.stamp.validationToken
 				|| virtualStockGroup->frameMode.load(
 					std::memory_order_acquire)
 					!= VirtualStockFrameMode::Direct
+				|| virtualStockGroup->preparedValidationToken
+					!= buffer.stamp.validationToken
+				|| virtualStockGroup->preparedGeneration
+					!= buffer.stamp.generation
+				|| virtualStockGroup->preparedAtlasTextureEpoch
+					!= buffer.stamp.atlasTextureEpoch
 				|| virtualStockGroup->duplicateRegistration
 				|| !virtualStockGroup->registrationContiguous
 				|| virtualStockGroup->registeredSlotCount
-					!= virtualStockGroup->slots.size())
+					!= prepared.size()
+				|| prepared.empty())
 			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandBuildViewMiss);
 				return kInvalidNativeA8CommandIndex;
 			}
-			payload =
-				&virtualStockGroup->primaryMetadataOwner->nativePayload;
+			const NativeA8DrawCommand& first = prepared.front();
+			payload = first.payload;
+			if (!payload || !payload->buildComplete
+				|| !payload->payloadTemplate
+				|| first.sourceGeometry == nullptr
+				|| first.expectedGeometry != first.sourceGeometry
+				|| !first.packet || !first.program
+				|| !first.atlasTexture || !first.binding.active)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandBuildViewMiss);
+				return kInvalidNativeA8CommandIndex;
+			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandBuildViewHit);
 			span.payload = payload;
-			span.facade = virtualStockGroup->primaryShape;
-			span.metadata =
-				virtualStockGroup->primaryMetadataOwner.get();
-			const std::vector<NativeA8PacketTemplate>& packets =
-				GetNativeA8Packets(*payload->payloadTemplate,
-					payload->useCompositePackets);
-			if (packets.size() != virtualStockGroup->slots.size())
-				return kInvalidNativeA8CommandIndex;
-			for (UInt32 index = 0;
-				index < packets.size(); ++index)
+			span.facade = first.sourceGeometry;
+
+			if (prepared.size() == 1)
 			{
-				if (!AppendVirtualCommand(buffer, *payload,
-					packets[index], virtualStockGroup->slots[index],
-					index))
+				if (first.packetIndex != 0
+					|| !AdoptFrameResourceStamp(buffer,
+						first.binding.resourceSerial,
+						first.binding.uploadEpoch))
 				{
-					appended = false;
-					break;
+					return kInvalidNativeA8CommandIndex;
 				}
-				appended = true;
+				const UInt32 commandIndex = static_cast<UInt32>(
+					buffer.virtualSinglePacketCommands.size());
+				const size_t previousVirtualSingleCapacity =
+					buffer.virtualSinglePacketCommands.capacity();
+				buffer.virtualSinglePacketCommands.emplace_back();
+				RecordCommandVectorGrowth(
+					previousVirtualSingleCapacity,
+					buffer.virtualSinglePacketCommands.capacity());
+				NativeA8VirtualSinglePacketCommand& command =
+					buffer.virtualSinglePacketCommands.back();
+				command.group = virtualStockGroup;
+				command.geometry = first.expectedGeometry;
+				command.payload = payload;
+				command.artifact = payload->payloadTemplate.get();
+				command.draw = &first;
+				command.generation = buffer.stamp.generation;
+				command.atlasTextureEpoch =
+					buffer.stamp.atlasTextureEpoch;
+				command.validationToken =
+					buffer.stamp.validationToken;
+				command.useCompositePackets =
+					payload->useCompositePackets;
+				virtualStockGroup->commandLeaderSlot.store(
+					0, std::memory_order_relaxed);
+				virtualStockGroup->commandSpanIndex.store(
+					kInvalidNativeA8CommandIndex,
+					std::memory_order_relaxed);
+				virtualStockGroup->
+					commandVirtualSinglePacketIndex.store(
+						commandIndex, std::memory_order_relaxed);
+				virtualStockGroup->commandValidationToken.store(
+					buffer.stamp.validationToken,
+					std::memory_order_release);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						CommandVirtualSinglePacketRecorded);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandPacketRecorded);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandBuildBindingReuse);
+				return kInvalidNativeA8CommandIndex;
 			}
+
+			const size_t previousCommandCapacity =
+				buffer.commands.capacity();
+			buffer.commands.insert(buffer.commands.end(),
+				prepared.begin(), prepared.end());
+			RecordCommandVectorGrowth(previousCommandCapacity,
+				buffer.commands.capacity());
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandBuildBindingReuse,
+				static_cast<UInt64>(prepared.size()));
+			appended = true;
 		}
 		else if (facade && payload && payload->buildComplete
 			&& payload->payloadTemplate)
@@ -955,16 +1161,30 @@ namespace fonthook::vectorfont
 			const std::vector<NativeA8PacketTemplate>& packets =
 				GetNativeA8Packets(*payload->payloadTemplate,
 					payload->useCompositePackets);
-			for (UInt32 index = 0;
-				index < packets.size(); ++index)
+			NativeA8FramePayloadBinding payloadBinding;
+			if (ResolveNativeA8FramePayloadBinding(
+					*payload, payloadBinding))
 			{
-				if (!AppendCompatibilityCommand(buffer, facade,
-					*payload, packets[index], index))
+				for (UInt32 index = 0;
+					index < packets.size(); ++index)
 				{
-					appended = false;
-					break;
+					if (!AppendCompatibilityCommand(buffer, facade,
+						*payload, packets[index], index,
+						payloadBinding))
+					{
+						appended = false;
+						break;
+					}
+					appended = true;
 				}
-				appended = true;
+				if (appended && packets.size() > 1)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							CommandBuildBindingReuse,
+						static_cast<UInt64>(
+							packets.size() - 1));
+				}
 			}
 		}
 		if (!appended)
@@ -980,7 +1200,12 @@ namespace fonthook::vectorfont
 		const std::vector<NativeA8RetainedRun>& retainedRuns =
 			GetNativeA8RetainedRuns(*span.payload->payloadTemplate,
 				span.useCompositePackets);
-		if (!BuildFrameRuns(buffer, span, retainedRuns))
+		const size_t previousRunCapacity = buffer.runs.capacity();
+		const bool builtRuns =
+			BuildFrameRuns(buffer, span, retainedRuns);
+		RecordCommandVectorGrowth(
+			previousRunCapacity, buffer.runs.capacity());
+		if (!builtRuns)
 		{
 			buffer.commands.resize(commandRollback);
 			buffer.runs.resize(runRollback);
@@ -995,53 +1220,31 @@ namespace fonthook::vectorfont
 			return kInvalidNativeA8CommandIndex;
 		}
 
-		UInt32 spanResourceSerial = 0;
-		UInt32 spanUploadEpoch = 0;
-		for (UInt32 index = 0; index < span.commandCount; ++index)
-		{
-			const NativeA8DrawCommand& command =
-				buffer.commands[span.firstCommand + index];
-			if (!spanResourceSerial)
-			{
-				spanResourceSerial =
-					command.binding.resourceSerial;
-				spanUploadEpoch =
-					command.binding.uploadEpoch;
-			}
-			else if (spanResourceSerial
-					!= command.binding.resourceSerial
-				|| spanUploadEpoch
-					!= command.binding.uploadEpoch)
-			{
-				buffer.commands.resize(commandRollback);
-				buffer.runs.resize(runRollback);
-				return kInvalidNativeA8CommandIndex;
-			}
-		}
-		if ((buffer.stamp.resourceSerial
-				&& (buffer.stamp.resourceSerial != spanResourceSerial
-					|| buffer.stamp.uploadEpoch != spanUploadEpoch))
-			|| !spanResourceSerial)
+		const NativeA8FramePacketBinding& spanBinding =
+			buffer.commands[span.firstCommand].binding;
+		if (!AdoptFrameResourceStamp(buffer,
+				spanBinding.resourceSerial, spanBinding.uploadEpoch))
 		{
 			buffer.commands.resize(commandRollback);
 			buffer.runs.resize(runRollback);
 			return kInvalidNativeA8CommandIndex;
 		}
-		if (!buffer.stamp.resourceSerial)
-		{
-			buffer.stamp.resourceSerial = spanResourceSerial;
-			buffer.stamp.uploadEpoch = spanUploadEpoch;
-		}
 
 		const UInt32 spanIndex = static_cast<UInt32>(
 			buffer.spans.size());
+		const size_t previousSpanCapacity = buffer.spans.capacity();
 		buffer.spans.push_back(span);
+		RecordCommandVectorGrowth(
+			previousSpanCapacity, buffer.spans.capacity());
 		if (virtualStockGroup)
 		{
 			virtualStockGroup->commandLeaderSlot.store(
 				0, std::memory_order_relaxed);
 			virtualStockGroup->commandSpanIndex.store(
 				spanIndex, std::memory_order_relaxed);
+			virtualStockGroup->commandVirtualSinglePacketIndex.store(
+				kInvalidNativeA8CommandIndex,
+				std::memory_order_relaxed);
 			virtualStockGroup->commandValidationToken.store(
 				buffer.stamp.validationToken,
 				std::memory_order_release);
@@ -1058,9 +1261,11 @@ namespace fonthook::vectorfont
 		buffer.building = false;
 		buffer.active = buffer.enabled && buffer.stamp.device
 			&& ((!buffer.spans.empty() && !buffer.commands.empty())
-				|| !buffer.singlePacketCommands.empty());
+				|| !buffer.singlePacketCommands.empty()
+				|| !buffer.virtualSinglePacketCommands.empty());
 		if (buffer.active)
 			RecordFreeTypePerf(FreeTypePerfCounter::CommandRecorded);
+		UpdateCommandHighWater(buffer);
 		RefreshCommandMemory(buffer);
 	}
 
@@ -1078,9 +1283,38 @@ namespace fonthook::vectorfont
 			{
 				continue;
 			}
+			group->commandBuildValidationToken.store(
+				0, std::memory_order_release);
 			group->commandValidationToken.store(
 				0, std::memory_order_release);
 			group->commandSpanIndex.store(
+				kInvalidNativeA8CommandIndex,
+				std::memory_order_release);
+			group->commandVirtualSinglePacketIndex.store(
+				kInvalidNativeA8CommandIndex,
+				std::memory_order_release);
+			group->commandLeaderSlot.store(
+				0, std::memory_order_release);
+		}
+		for (const NativeA8VirtualSinglePacketCommand& command
+			: buffer.virtualSinglePacketCommands)
+		{
+			VirtualStockShapeGroup* group = command.group;
+			if (!group
+				|| group->commandValidationToken.load(
+					std::memory_order_acquire)
+					!= command.validationToken)
+			{
+				continue;
+			}
+			group->commandBuildValidationToken.store(
+				0, std::memory_order_release);
+			group->commandValidationToken.store(
+				0, std::memory_order_release);
+			group->commandSpanIndex.store(
+				kInvalidNativeA8CommandIndex,
+				std::memory_order_release);
+			group->commandVirtualSinglePacketIndex.store(
 				kInvalidNativeA8CommandIndex,
 				std::memory_order_release);
 			group->commandLeaderSlot.store(
@@ -1099,6 +1333,7 @@ namespace fonthook::vectorfont
 		buffer.runs.clear();
 		buffer.spans.clear();
 		buffer.singlePacketCommands.clear();
+		buffer.virtualSinglePacketCommands.clear();
 		TrimCommandCapacity(buffer);
 	}
 
@@ -1115,6 +1350,7 @@ namespace fonthook::vectorfont
 			return;
 		bool invalidated = false;
 		bool singlePacketInvalidated = false;
+		bool virtualSinglePacketInvalidated = false;
 		for (NativeA8SinglePacketCommand& command
 			: buffer.singlePacketCommands)
 		{
@@ -1133,6 +1369,26 @@ namespace fonthook::vectorfont
 			command.state = NativeA8CommandSpanState::Fault;
 			invalidated = true;
 			singlePacketInvalidated = true;
+		}
+		for (NativeA8VirtualSinglePacketCommand& command
+			: buffer.virtualSinglePacketCommands)
+		{
+			if (command.geometry != geometry
+				&& (!command.draw
+					|| (command.draw->sourceGeometry != geometry
+						&& command.draw->expectedGeometry != geometry)))
+			{
+				continue;
+			}
+			command.partialDraw = command.partialDraw
+				|| command.state
+					== NativeA8CommandSpanState::Executing;
+			command.executionValidationToken = 0;
+			command.executionSegmentEpoch = 0;
+			command.executionExternalMutationEpoch = 0;
+			command.state = NativeA8CommandSpanState::Fault;
+			invalidated = true;
+			virtualSinglePacketInvalidated = true;
 		}
 		for (NativeA8CommandSpan& span : buffer.spans)
 		{
@@ -1162,6 +1418,12 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::
 						CommandSinglePacketFallback);
+			}
+			if (virtualSinglePacketInvalidated)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						CommandVirtualSinglePacketFallback);
 			}
 			RecordNativeA8CommandFallback(
 				NativeA8CommandFallback::Topology);
@@ -1534,6 +1796,212 @@ namespace fonthook::vectorfont
 		if (commandFailure != NativeA8CommandFallback::None)
 		{
 			RecordSinglePacketCommandFallback(commandFailure);
+			return false;
+		}
+		return true;
+	}
+
+	bool FindNativeA8VirtualSinglePacketCommand(UInt32 commandIndex,
+		UInt64 validationToken,
+		NativeA8VirtualSinglePacketCommandView& view)
+	{
+		view = {};
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		if (!buffer.active || !validationToken
+			|| validationToken != buffer.stamp.validationToken
+			|| commandIndex
+				>= buffer.virtualSinglePacketCommands.size())
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::
+					CommandVirtualSinglePacketMiss);
+			return false;
+		}
+		const NativeA8VirtualSinglePacketCommand& command =
+			buffer.virtualSinglePacketCommands[commandIndex];
+		if (command.validationToken != validationToken)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::
+					CommandVirtualSinglePacketMiss);
+			return false;
+		}
+		view.stamp = &buffer.stamp;
+		view.command = &command;
+		view.commandIndex = commandIndex;
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandVirtualSinglePacketHit);
+		return true;
+	}
+
+	bool BeginNativeA8VirtualSinglePacketCommandExecution(
+		UInt32 commandIndex, VirtualStockShapeGroup* group,
+		NiTriShape* geometry,
+		NativeA8VirtualSinglePacketCommandView& view)
+	{
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		if (!FindNativeA8VirtualSinglePacketCommand(commandIndex,
+				buffer.stamp.validationToken, view))
+		{
+			return false;
+		}
+		NativeA8CommandFallback failure =
+			EnsureExecutionSegmentValidated(buffer);
+		if (failure != NativeA8CommandFallback::None)
+		{
+			RecordVirtualSinglePacketCommandFallback(failure);
+			return false;
+		}
+
+		NativeA8VirtualSinglePacketCommand& command =
+			buffer.virtualSinglePacketCommands[commandIndex];
+		if (command.validationToken != buffer.stamp.validationToken
+			|| command.generation != buffer.stamp.generation
+			|| command.atlasTextureEpoch
+				!= buffer.stamp.atlasTextureEpoch
+			|| !command.group || command.group != group
+			|| !command.payload || !command.artifact
+			|| !command.payload->payloadTemplate
+			|| command.payload->payloadTemplate.get()
+				!= command.artifact
+			|| command.payload->useCompositePackets
+				!= command.useCompositePackets
+			|| !command.draw
+			|| command.draw->payload != command.payload
+			|| !command.draw->packet
+			|| command.draw->packetIndex != 0
+			|| command.draw->sourceGeometry != command.geometry
+			|| command.draw->expectedGeometry != command.geometry
+			|| group->commandBuildValidationToken.load(
+				std::memory_order_acquire)
+				!= buffer.stamp.validationToken
+			|| group->preparedValidationToken
+				!= buffer.stamp.validationToken
+			|| group->preparedGeneration != buffer.stamp.generation
+			|| group->preparedAtlasTextureEpoch
+				!= buffer.stamp.atlasTextureEpoch
+			|| group->commandValidationToken.load(
+				std::memory_order_acquire)
+				!= buffer.stamp.validationToken
+			|| group->commandSpanIndex.load(
+				std::memory_order_acquire)
+				!= kInvalidNativeA8CommandIndex
+			|| group->commandVirtualSinglePacketIndex.load(
+				std::memory_order_acquire) != commandIndex
+			|| group->frameMode.load(std::memory_order_acquire)
+				!= VirtualStockFrameMode::Direct)
+		{
+			RecordVirtualSinglePacketCommandFallback(
+				NativeA8CommandFallback::Topology);
+			return false;
+		}
+		if (command.state != NativeA8CommandSpanState::Ready)
+		{
+			RecordVirtualSinglePacketCommandFallback(
+				NativeA8CommandFallback::State);
+			return false;
+		}
+		if (!geometry || command.geometry != geometry)
+		{
+			command.state = NativeA8CommandSpanState::Fault;
+			command.partialDraw = false;
+			command.executionValidationToken = 0;
+			command.executionSegmentEpoch = 0;
+			command.executionExternalMutationEpoch = 0;
+			RecordVirtualSinglePacketCommandFallback(
+				NativeA8CommandFallback::Topology);
+			return false;
+		}
+
+		command.state = NativeA8CommandSpanState::Executing;
+		command.partialDraw = false;
+		command.executionValidationToken =
+			buffer.stamp.validationToken;
+		command.executionSegmentEpoch =
+			buffer.executionSegment.boundaryEpoch;
+		command.executionExternalMutationEpoch =
+			buffer.executionSegment.externalMutationEpoch;
+		view.command = &command;
+		return true;
+	}
+
+	void EndNativeA8VirtualSinglePacketCommandExecution(
+		UInt32 commandIndex, bool success, bool drewPacket)
+	{
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		if (commandIndex
+			>= buffer.virtualSinglePacketCommands.size())
+		{
+			return;
+		}
+		NativeA8VirtualSinglePacketCommand& command =
+			buffer.virtualSinglePacketCommands[commandIndex];
+		command.partialDraw = drewPacket;
+		command.executionValidationToken = 0;
+		command.executionSegmentEpoch = 0;
+		command.executionExternalMutationEpoch = 0;
+		command.state = success
+			? NativeA8CommandSpanState::Consumed
+			: NativeA8CommandSpanState::Fault;
+	}
+
+	bool ValidateNativeA8VirtualSinglePacketCommand(UInt32 commandIndex,
+		NiTriShape* geometry, NiRenderer* renderer)
+	{
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandPacketLightValidation);
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeA8CommandFallback commandFailure =
+			NativeA8CommandFallback::None;
+		if (!buffer.active
+			|| commandIndex
+				>= buffer.virtualSinglePacketCommands.size())
+		{
+			commandFailure = NativeA8CommandFallback::State;
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordVirtualSinglePacketCommandFallback(commandFailure);
+			return false;
+		}
+
+		const NativeA8VirtualSinglePacketCommand& command =
+			buffer.virtualSinglePacketCommands[commandIndex];
+		if (command.state != NativeA8CommandSpanState::Executing
+			|| command.executionValidationToken
+				!= buffer.stamp.validationToken)
+		{
+			commandFailure = NativeA8CommandFallback::State;
+		}
+		else
+		{
+			commandFailure = ValidateExecutionSegmentEpoch(buffer,
+				command.executionSegmentEpoch,
+				command.executionExternalMutationEpoch);
+		}
+		if (commandFailure == NativeA8CommandFallback::None
+			&& (!command.group
+				|| command.group->commandValidationToken.load(
+					std::memory_order_acquire)
+					!= buffer.stamp.validationToken
+				|| command.group->
+					commandVirtualSinglePacketIndex.load(
+						std::memory_order_acquire) != commandIndex
+				|| command.group->frameMode.load(
+					std::memory_order_acquire)
+					!= VirtualStockFrameMode::Direct))
+		{
+			commandFailure = NativeA8CommandFallback::Topology;
+		}
+		if (commandFailure == NativeA8CommandFallback::None)
+		{
+			commandFailure = ValidateDrawCommandState(buffer,
+				*command.draw, command.payload, 0,
+				geometry, renderer);
+		}
+		if (commandFailure != NativeA8CommandFallback::None)
+		{
+			RecordVirtualSinglePacketCommandFallback(commandFailure);
 			return false;
 		}
 		return true;

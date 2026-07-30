@@ -520,6 +520,8 @@ namespace fonthook::vectorfont
 		void SetVirtualStockFacadeMode(VirtualStockShapeGroup& group,
 			NativeA8FallbackReason reason)
 		{
+			group.commandBuildValidationToken.store(
+				0, std::memory_order_release);
 			for (VirtualStockSlotBinding& slot : group.slots)
 				RestoreVirtualStockSlot(slot);
 			group.preparedValidationToken = 0;
@@ -530,6 +532,9 @@ namespace fonthook::vectorfont
 			group.commandValidationToken.store(
 				0, std::memory_order_release);
 			group.commandSpanIndex.store(
+				kInvalidNativeA8CommandIndex,
+				std::memory_order_release);
+			group.commandVirtualSinglePacketIndex.store(
 				kInvalidNativeA8CommandIndex,
 				std::memory_order_release);
 			group.commandLeaderSlot.store(
@@ -709,12 +714,16 @@ namespace fonthook::vectorfont
 		group->primarySlot = primarySlot;
 		group->useCompositeTopology = useCompositeTopology;
 		group->slots.resize(shapes.size());
+		if (g_bEnableFreeTypeFontCommandBuffer)
+			group->commandBuildCommands.resize(shapes.size());
 		group->liveSlotCount = static_cast<UInt32>(shapes.size());
 		if (shapes.size() > 1)
 			group->registrationItemIndices.assign(shapes.size(), -1);
 		group->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
 			sizeof(VirtualStockShapeGroup)
 				+ group->slots.capacity() * sizeof(VirtualStockSlotBinding)
+				+ group->commandBuildCommands.capacity()
+					* sizeof(NativeA8DrawCommand)
 				+ group->registrationItemIndices.capacity() * sizeof(SInt32)
 				+ shapes.size() * kVirtualStockEstimatedShapeBytes
 				+ 6u * sizeof(void*));
@@ -801,6 +810,8 @@ namespace fonthook::vectorfont
 		if (!group || !generation || !validationToken)
 			return false;
 		std::lock_guard<std::mutex> lock(group->mutex);
+		group->commandBuildValidationToken.store(
+			0, std::memory_order_release);
 		if (!group->primaryMetadataOwner || !group->primaryShape
 			|| group->frameMode.load(std::memory_order_acquire)
 				== VirtualStockFrameMode::Retired)
@@ -822,9 +833,15 @@ namespace fonthook::vectorfont
 		const std::vector<NativeA8PacketTemplate>& packets =
 			GetNativeA8Packets(*payload.payloadTemplate,
 				payload.useCompositePackets);
+		const bool buildCommandView =
+			g_bEnableFreeTypeFontCommandBuffer;
 		if (payload.useCompositePackets != group->useCompositeTopology
 			|| packets.size() != group->slots.size()
-			|| payload.packetShaders.size() != packets.size())
+			|| payload.packetShaders.size() != packets.size()
+			|| (buildCommandView
+				&& (payload.packetPrograms.size() != packets.size()
+					|| group->commandBuildCommands.size()
+						!= packets.size())))
 		{
 			SetVirtualStockFacadeMode(*group,
 				NativeA8FallbackReason::PacketBuild);
@@ -973,10 +990,65 @@ namespace fonthook::vectorfont
 				NativeA8FallbackReason::PropertySync);
 			return false;
 		}
+
+		if (buildCommandView)
+		{
+			for (UInt32 index = 0;
+				index < packets.size(); ++index)
+			{
+				const NativeA8PacketTemplate& packet = packets[index];
+				const NativeA8VirtualStockPacketBinding& source =
+					resolved[index];
+				const VirtualStockSlotBinding& slot =
+					group->slots[index];
+				NativeA8DrawCommand& command =
+					group->commandBuildCommands[index];
+				command = {};
+				if (!slot.shape || !slot.bound || !source.active
+					|| packet.atlasPage
+						>= payload.preflightAtlasTextures.size()
+					|| !payload.preflightAtlasTextures[packet.atlasPage]
+					|| !payload.packetPrograms[index]
+					|| !payload.packetPrograms[index]->active
+					|| payload.packetPrograms[index]->generation
+						!= generation
+					|| payload.packetPrograms[index]->shader
+						!= payload.packetShaders[index])
+				{
+					SetVirtualStockFacadeMode(*group,
+						NativeA8FallbackReason::PacketBuild);
+					return false;
+				}
+				command.sourceGeometry = slot.shape;
+				command.expectedGeometry = slot.shape;
+				command.payload = &payload;
+				command.packet = &packet;
+				command.packetIndex = index;
+				command.atlasTexture =
+					payload.preflightAtlasTextures[packet.atlasPage];
+				command.program = payload.packetPrograms[index];
+				command.binding.vertexBuffer = source.vertexBuffer;
+				command.binding.indexBuffer = source.indexBuffer;
+				command.binding.declaration = source.declaration;
+				command.binding.baseVertex = source.baseVertex;
+				command.binding.vertexCount = source.vertexCount;
+				command.binding.indexBytes = source.indexBytes;
+				command.binding.generation = source.generation;
+				command.binding.resourceSerial = source.resourceSerial;
+				command.binding.uploadEpoch = source.uploadEpoch;
+				command.binding.staticResident = source.staticResident;
+				command.binding.active = source.active;
+			}
+		}
 		group->preparedValidationToken = validationToken;
 		group->preparedGeneration = generation;
 		group->preparedAtlasTextureEpoch = atlasTextureEpoch;
 		group->directDrawCount.store(0, std::memory_order_release);
+		if (buildCommandView)
+		{
+			group->commandBuildValidationToken.store(
+				validationToken, std::memory_order_release);
+		}
 		group->frameMode.store(VirtualStockFrameMode::Direct,
 			std::memory_order_release);
 		RecordFreeTypePerf(
@@ -1035,9 +1107,14 @@ namespace fonthook::vectorfont
 			group->preparedGeneration = 0;
 			group->preparedAtlasTextureEpoch = 0;
 			group->directDrawCount.store(0, std::memory_order_release);
+			group->commandBuildValidationToken.store(
+				0, std::memory_order_release);
 			group->commandValidationToken.store(
 				0, std::memory_order_release);
 			group->commandSpanIndex.store(
+				kInvalidNativeA8CommandIndex,
+				std::memory_order_release);
+			group->commandVirtualSinglePacketIndex.store(
 				kInvalidNativeA8CommandIndex,
 				std::memory_order_release);
 			group->commandLeaderSlot.store(
@@ -1080,9 +1157,14 @@ namespace fonthook::vectorfont
 			{
 				group->primaryShape = nullptr;
 				group->primaryMetadataOwner.reset();
+				group->commandBuildValidationToken.store(
+					0, std::memory_order_release);
 				group->commandValidationToken.store(
 					0, std::memory_order_release);
 				group->commandSpanIndex.store(
+					kInvalidNativeA8CommandIndex,
+					std::memory_order_release);
+				group->commandVirtualSinglePacketIndex.store(
 					kInvalidNativeA8CommandIndex,
 					std::memory_order_release);
 				group->frameMode.store(VirtualStockFrameMode::Retired,

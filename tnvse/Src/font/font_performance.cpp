@@ -520,6 +520,34 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandFallbackState)]);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_perf: command_virtual_single_recorded=%llu hits=%llu misses=%llu replays=%llu fallbacks=%llu build_view_hits=%llu build_view_misses=%llu build_binding_reuses=%llu build_vector_growth=%llu deferred_render_target_captures=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CommandVirtualSinglePacketRecorded)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CommandVirtualSinglePacketHit)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CommandVirtualSinglePacketMiss)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CommandVirtualSinglePacketReplay)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CommandVirtualSinglePacketFallback)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandBuildViewHit)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandBuildViewMiss)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandBuildBindingReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandBuildVectorGrowth)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CommandDeferredRenderTargetCapture)]);
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: b98e80_lite_candidates=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu stock_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::B98E80LiteCandidate)],
@@ -558,6 +586,18 @@ namespace fonthook::vectorfont
 			ConsumeDurationSummary(FreeTypePerfPhase::Submit);
 		const DurationSummary commandBuild =
 			ConsumeDurationSummary(FreeTypePerfPhase::CommandBuild);
+		const DurationSummary commandBuildStamp =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::CommandBuildStamp);
+		const DurationSummary commandBuildVirtual =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::CommandBuildVirtual);
+		const DurationSummary commandBuildOrdinary =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::CommandBuildOrdinary);
+		const DurationSummary commandBuildFinalize =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::CommandBuildFinalize);
 		const DurationSummary commandSubmit =
 			ConsumeDurationSummary(FreeTypePerfPhase::CommandSubmit);
 		const DurationSummary extendedFnt =
@@ -585,6 +625,20 @@ namespace fonthook::vectorfont
 			commandSubmit.p95Microseconds,
 			extendedFnt.count, extendedFnt.medianMicroseconds,
 			extendedFnt.p95Microseconds);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_command_build_timing: stamp_n=%llu median_us=%.3f p95_us=%.3f virtual_n=%llu median_us=%.3f p95_us=%.3f ordinary_n=%llu median_us=%.3f p95_us=%.3f finalize_n=%llu median_us=%.3f p95_us=%.3f",
+			commandBuildStamp.count,
+			commandBuildStamp.medianMicroseconds,
+			commandBuildStamp.p95Microseconds,
+			commandBuildVirtual.count,
+			commandBuildVirtual.medianMicroseconds,
+			commandBuildVirtual.p95Microseconds,
+			commandBuildOrdinary.count,
+			commandBuildOrdinary.medianMicroseconds,
+			commandBuildOrdinary.p95Microseconds,
+			commandBuildFinalize.count,
+			commandBuildFinalize.medianMicroseconds,
+			commandBuildFinalize.p95Microseconds);
 	}
 }
 

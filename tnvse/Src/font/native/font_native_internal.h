@@ -359,6 +359,24 @@ namespace fonthook::vectorfont
 		bool active = false;
 	};
 
+	// Traversal-sealed residency shared by every packet in one payload. Packet
+	// commands derive only their range from this view instead of resolving the
+	// same payload residency once per packet.
+	struct NativeA8FramePayloadBinding
+	{
+		IDirect3DVertexBuffer9* vertexBuffer = nullptr;
+		IDirect3DIndexBuffer9* indexBuffer = nullptr;
+		IDirect3DVertexDeclaration9* declaration = nullptr;
+		UInt32 payloadBaseVertex = 0;
+		UInt32 payloadVertexCount = 0;
+		UInt32 indexBytes = 0;
+		UInt32 generation = 0;
+		UInt32 resourceSerial = 0;
+		UInt32 uploadEpoch = 0;
+		bool staticResident = false;
+		bool active = false;
+	};
+
 	// Shader profiles stay private to font_native_shader.cpp. This immutable,
 	// generation-owned program is published once with its profile. Traversal-local
 	// commands retain only a non-owning pointer and validate the generation before
@@ -482,6 +500,27 @@ namespace fonthook::vectorfont
 		bool useCompositePackets = false;
 	};
 
+	// A singleton Virtual-stock group needs neither retained-run topology nor a
+	// span/follower state machine. Its prepared group snapshot already contains
+	// the exact geometry and frame binding for the sole packet.
+	struct NativeA8VirtualSinglePacketCommand
+	{
+		VirtualStockShapeGroup* group = nullptr;
+		NiTriShape* geometry = nullptr;
+		NativeA8ShapePayload* payload = nullptr;
+		const NativeA8PayloadTemplate* artifact = nullptr;
+		const NativeA8DrawCommand* draw = nullptr;
+		UInt32 generation = 0;
+		UInt32 atlasTextureEpoch = 0;
+		UInt64 validationToken = 0;
+		UInt64 executionValidationToken = 0;
+		UInt32 executionSegmentEpoch = 0;
+		UInt32 executionExternalMutationEpoch = 0;
+		NativeA8CommandSpanState state = NativeA8CommandSpanState::Ready;
+		bool partialDraw = false;
+		bool useCompositePackets = false;
+	};
+
 	struct NativeA8CommandSpanView
 	{
 		const NativeA8FrameStamp* stamp = nullptr;
@@ -495,6 +534,13 @@ namespace fonthook::vectorfont
 	{
 		const NativeA8FrameStamp* stamp = nullptr;
 		const NativeA8SinglePacketCommand* command = nullptr;
+		UInt32 commandIndex = kInvalidNativeA8CommandIndex;
+	};
+
+	struct NativeA8VirtualSinglePacketCommandView
+	{
+		const NativeA8FrameStamp* stamp = nullptr;
+		const NativeA8VirtualSinglePacketCommand* command = nullptr;
 		UInt32 commandIndex = kInvalidNativeA8CommandIndex;
 	};
 
@@ -603,6 +649,9 @@ namespace fonthook::vectorfont
 	bool ResolveNativeA8FramePacketBinding(
 		const NativeA8ShapePayload& payload, UInt32 packetIndex,
 		NativeA8FramePacketBinding& binding);
+	bool ResolveNativeA8FramePayloadBinding(
+		const NativeA8ShapePayload& payload,
+		NativeA8FramePayloadBinding& binding);
 	bool IsNativeA8FramePacketBindingCurrent(
 		const NativeA8FramePacketBinding& binding);
 	bool IsNativeA8FrameResourceStampCurrent(
@@ -650,6 +699,8 @@ namespace fonthook::vectorfont
 
 	void BeginNativeA8FrameCommandBuffer(BSShaderAccumulator* accumulator,
 		UInt64 validationToken, UInt32 generation, UInt32 atlasTextureEpoch);
+	void ReserveNativeA8FrameCommandBuffer(size_t ordinaryEntryCount,
+		size_t virtualGroupCount);
 	UInt32 AddNativeA8FrameSinglePacketCommand(NiTriShape* facade,
 		const A8ShapeMetadata* metadata, NativeA8ShapePayload* payload);
 	UInt32 AddNativeA8FrameCommandSpan(NiTriShape* facade,
@@ -681,6 +732,17 @@ namespace fonthook::vectorfont
 	void EndNativeA8SinglePacketCommandExecution(UInt32 commandIndex,
 		bool success, bool drewPacket);
 	bool ValidateNativeA8SinglePacketCommand(UInt32 commandIndex,
+		NiTriShape* geometry, NiRenderer* renderer);
+	bool FindNativeA8VirtualSinglePacketCommand(UInt32 commandIndex,
+		UInt64 validationToken,
+		NativeA8VirtualSinglePacketCommandView& view);
+	bool BeginNativeA8VirtualSinglePacketCommandExecution(
+		UInt32 commandIndex, VirtualStockShapeGroup* group,
+		NiTriShape* geometry,
+		NativeA8VirtualSinglePacketCommandView& view);
+	void EndNativeA8VirtualSinglePacketCommandExecution(
+		UInt32 commandIndex, bool success, bool drewPacket);
+	bool ValidateNativeA8VirtualSinglePacketCommand(UInt32 commandIndex,
 		NiTriShape* geometry, NiRenderer* renderer);
 	void RecordNativeA8CommandFallback(NativeA8CommandFallback reason);
 
