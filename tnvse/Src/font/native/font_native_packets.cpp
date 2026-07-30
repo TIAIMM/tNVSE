@@ -560,7 +560,8 @@ namespace fonthook::vectorfont
 			std::lock_guard<std::mutex> lock(State().metadataMutex);
 			for (const auto& entry : State().shapeMetadata)
 			{
-				const A8ShapeMetadataPtr& metadata = entry.second;
+				const A8ShapeMetadataPtr& metadata =
+					entry.second.metadata;
 				if (!metadata || !metadata->nativePayload.buildComplete)
 					continue;
 				metadataEntries.push_back(metadata);

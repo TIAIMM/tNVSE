@@ -28,6 +28,50 @@ namespace fonthook::vectorfont
 
 		A8State s_a8State;
 
+		void InitializeA8MetadataIdentity(
+			A8ShapeMetadata& metadata, const NiTriShape* shape)
+		{
+			A8State& state = State();
+			metadata.allocationId =
+				state.nextMetadataAllocationId.fetch_add(
+					1, std::memory_order_relaxed);
+			if (!metadata.allocationId)
+			{
+				metadata.allocationId =
+					state.nextMetadataAllocationId.fetch_add(
+						1, std::memory_order_relaxed);
+			}
+			metadata.selfIdentity = &metadata;
+			metadata.shapeIdentity = shape;
+		}
+
+		A8ShapeMetadataEntry MakeA8MetadataEntry(
+			A8ShapeMetadataPtr metadata)
+		{
+			A8ShapeMetadataEntry entry;
+			if (metadata)
+			{
+				entry.allocationId = metadata->allocationId;
+				entry.selfIdentity = metadata->selfIdentity;
+				entry.shapeIdentity = metadata->shapeIdentity;
+			}
+			entry.metadata = std::move(metadata);
+			return entry;
+		}
+
+		void LogA8MetadataAllocation(const A8ShapeMetadata& metadata)
+		{
+			if (!g_bEnableFreeTypeFontRenderingLog)
+				return;
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: metadata-allocate allocationId=%llu self=%p shape=%p font=%u backend=%u slot=%u primary=%u",
+				static_cast<unsigned long long>(metadata.allocationId),
+				metadata.selfIdentity, metadata.shapeIdentity,
+				metadata.fontId, static_cast<UInt32>(metadata.backend),
+				static_cast<UInt32>(metadata.virtualStockSlot),
+				metadata.virtualStockPrimary ? 1u : 0u);
+		}
+
 		bool IsFiniteColor(const NiColorA& color)
 		{
 			return std::isfinite(color.r) && std::isfinite(color.g)
@@ -630,6 +674,7 @@ namespace fonthook::vectorfont
 			return false;
 		}
 		auto metadata = std::make_shared<A8ShapeMetadata>();
+		InitializeA8MetadataIdentity(*metadata, shape);
 		metadata->fontId = fontId;
 		metadata->glyphCount = glyphCount;
 		metadata->quadCount = quadCount;
@@ -652,13 +697,16 @@ namespace fonthook::vectorfont
 					* sizeof(const void*)
 				+ GetNativeA8TileRetainedCapacityBytes(
 					metadata->nativePayload)
-				+ sizeof(A8ShapeMetadataPtr) + 6u * sizeof(void*));
+				+ sizeof(A8ShapeMetadataEntry) + 6u * sizeof(void*));
+		LogA8MetadataAllocation(*metadata);
 		{
 			A8State& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
 			state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(
 				1, std::memory_order_release);
-			state.shapeMetadata[shape] = std::move(metadata);
+			A8ShapeMetadataPtr publishedMetadata = std::move(metadata);
+			state.shapeMetadata[shape] =
+				MakeA8MetadataEntry(std::move(publishedMetadata));
 		}
 		*reinterpret_cast<void***>(shape) = &State().triShapeVtable[1];
 		return true;
@@ -740,6 +788,7 @@ namespace fonthook::vectorfont
 		for (size_t index = 0; index < shapes.size(); ++index)
 		{
 			auto metadata = std::make_shared<A8ShapeMetadata>();
+			InitializeA8MetadataIdentity(*metadata, shapes[index]);
 			metadata->fontId = fontId;
 			metadata->glyphCount = glyphCount;
 			metadata->quadCount = quadCount;
@@ -755,7 +804,7 @@ namespace fonthook::vectorfont
 			metadata->virtualStockSlot = static_cast<UInt16>(index);
 			metadata->virtualStockPrimary = index == primarySlot;
 			metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-				sizeof(A8ShapeMetadata) + sizeof(A8ShapeMetadataPtr)
+				sizeof(A8ShapeMetadata) + sizeof(A8ShapeMetadataEntry)
 					+ 4u * sizeof(void*));
 
 			VirtualStockSlotBinding& slot = group->slots[index];
@@ -787,6 +836,13 @@ namespace fonthook::vectorfont
 					primary.nativePayload));
 		group->primaryMetadataOwner = metadataEntries[primarySlot];
 
+		for (const std::shared_ptr<A8ShapeMetadata>& metadata
+			: metadataEntries)
+		{
+			if (metadata)
+				LogA8MetadataAllocation(*metadata);
+		}
+
 		{
 			A8State& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
@@ -798,8 +854,11 @@ namespace fonthook::vectorfont
 				state.metadataGenerations[
 					GetMetadataGenerationSlot(shapes[index])].fetch_add(
 						1, std::memory_order_release);
-				state.shapeMetadata[shapes[index]] =
+				A8ShapeMetadataPtr publishedMetadata =
 					metadataEntries[index];
+				state.shapeMetadata[shapes[index]] =
+					MakeA8MetadataEntry(
+						std::move(publishedMetadata));
 			}
 		}
 		for (NiTriShape* shape : shapes)
@@ -1054,6 +1113,11 @@ namespace fonthook::vectorfont
 				command.atlasTexture =
 					payload.preflightAtlasTextures[packet.atlasPage];
 				command.program = retained.program;
+				if (packets.size() == 1)
+				{
+					command.standardPassLite =
+						&retainedText->standardPassLite;
+				}
 				command.binding.vertexBuffer = source.vertexBuffer;
 				command.binding.indexBuffer = source.indexBuffer;
 				command.binding.declaration = source.declaration;

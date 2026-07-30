@@ -19,11 +19,13 @@ class NiGeometryBufferData;
 class NiVBChip;
 class NiDX9Renderer;
 class NiRenderTargetGroup;
+class NiPropertyState;
 
 namespace fonthook::vectorfont
 {
 	struct A8ShapeMetadata;
 	struct VirtualStockShapeGroup;
+	struct NativeA8CompiledPacketCommand;
 	inline constexpr UInt32 kNativeA8MaximumQuads =
 		std::numeric_limits<UInt16>::max() / 4u;
 	inline constexpr UInt32 kMaximumVirtualStockShapes = 64;
@@ -220,6 +222,21 @@ namespace fonthook::vectorfont
 	using NativeA8PayloadTemplatePtr =
 		std::shared_ptr<const NativeA8PayloadTemplate>;
 
+	// The Standard-lite call program is resolved once for a live Tile and shader
+	// generation. It deliberately excludes VB/IB/declaration residency: ordinary
+	// single-packet facades may attach a short-lived synthetic buffer while the
+	// Tile, property state, shader program, and renderer remain stable.
+	struct NativeA8StandardPassLiteDispatch
+	{
+		NiTriShape* geometry = nullptr;
+		const NiPropertyState* properties = nullptr;
+		NiDX9Renderer* renderer = nullptr;
+		TileShader* shader = nullptr;
+		const NativeA8CompiledPacketCommand* program = nullptr;
+		UInt32 generation = 0;
+		bool ready = false;
+	};
+
 	// The Text Artifact owns immutable geometry and packet data. The resolved
 	// replay program belongs to one live Tile facade instead: shader/profile
 	// selection depends on that Tile's alpha and sampling class. These packet
@@ -249,6 +266,9 @@ namespace fonthook::vectorfont
 		const NativeA8PayloadTemplate* artifact = nullptr;
 		std::vector<NativeA8TileRetainedPacket> packets;
 		std::vector<NativeA8TileRetainedRun> runs;
+		// Standard-lite is currently a dedicated single-packet specialization,
+		// so one Tile-lifetime dispatch is sufficient for this retained text.
+		NativeA8StandardPassLiteDispatch standardPassLite;
 		UInt32 generation = 0;
 		UInt32 atlasTextureEpoch = 0;
 		bool useCompositePackets = false;
@@ -458,6 +478,7 @@ namespace fonthook::vectorfont
 		const void* atlasTexture = nullptr;
 		NativeA8FramePacketBinding binding;
 		const NativeA8CompiledPacketCommand* program = nullptr;
+		const NativeA8StandardPassLiteDispatch* standardPassLite = nullptr;
 		UInt32 packetIndex = 0;
 	};
 
@@ -580,13 +601,26 @@ namespace fonthook::vectorfont
 	size_t GetNativeA8TileRetainedCapacityBytes(
 		const NativeA8ShapePayload& payload);
 	void InvalidateNativeA8TileRetainedText(
-		NativeA8ShapePayload& payload);
+		NativeA8ShapePayload& payload,
+		bool preserveStandardPassLite = false);
 	bool BuildNativeA8TileRetainedText(NiTriShape* ownerTile,
 		NativeA8ShapePayload& payload, UInt32 generation,
 		UInt32 atlasTextureEpoch);
 	bool IsNativeA8TileRetainedTextCurrent(
 		const NativeA8ShapePayload& payload, const NiTriShape* ownerTile,
 		UInt32 generation, UInt32 atlasTextureEpoch);
+	bool BuildNativeA8StandardPassLiteDispatch(
+		NiTriShape* geometry,
+		const NativeA8CompiledPacketCommand* program,
+		UInt32 generation,
+		NativeA8StandardPassLiteDispatch& dispatch);
+	bool IsNativeA8StandardPassLiteDispatchCurrent(
+		const NativeA8StandardPassLiteDispatch& dispatch,
+		const NiTriShape* geometry,
+		const NativeA8CompiledPacketCommand* program,
+		UInt32 generation);
+	void InvalidateNativeA8StandardPassLiteDispatch(
+		NativeA8StandardPassLiteDispatch& dispatch);
 	void InvalidateNativeA8RingResources(NativeA8FallbackReason reason);
 
 	struct NativeA8RingSubmission

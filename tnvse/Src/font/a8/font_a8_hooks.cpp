@@ -636,6 +636,11 @@ namespace fonthook::vectorfont
 				return m_failure;
 			}
 
+			NiGeometryBufferData* Buffer() const
+			{
+				return m_active ? m_buffer : nullptr;
+			}
+
 		private:
 			bool AttachSyntheticBuffer()
 			{
@@ -1339,26 +1344,48 @@ namespace fonthook::vectorfont
 		bool CanUseStandardPassLiteEnvelope(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			NiTriShape* geometry, const NativeA8DrawCommand& command,
-			bool packetStatePrevalidated)
+			bool packetStatePrevalidated,
+			const NativeA8StandardPassLiteDispatch*& retainedDispatch)
 		{
-			if (!CanUseNativeReplayBase(
-					pass, currentPass, geometry, command,
-					packetStatePrevalidated))
+			retainedDispatch = nullptr;
+			const NativeA8CompiledPacketCommand* program =
+				command.program;
+			const NativeA8StandardPassLiteDispatch* dispatch =
+				command.standardPassLite;
+			const bool dispatchCurrent =
+				dispatch && program
+				&& (packetStatePrevalidated
+					? dispatch->ready
+						&& dispatch->geometry == geometry
+						&& dispatch->program == program
+					: IsNativeA8StandardPassLiteDispatchCurrent(
+						*dispatch, geometry, program,
+						program->generation));
+			if (!dispatchCurrent)
 			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						StandardPassLiteRetainedMiss);
 				return false;
 			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::StandardPassLiteRetainedHit);
+			retainedDispatch = dispatch;
 
-			NiTriShapeData* modelData = geometry->GetModelData();
-			void** geometryVtable =
-				*reinterpret_cast<void***>(geometry);
-			// E72C20's first branch returns false when m_pkBuffData exists.
-			// NiTriShape slots 12/13 are the stock null-casts for
-			// IsParticlesGeom/IsLinesGeom. Proving those immutable facts avoids
-			// all three B994F0 classification calls on the lite hot path.
-			return modelData && modelData->m_pkBuffData
-				&& State().standardPassLitePredicatesValidated
-				&& geometryVtable
-					== &State().triShapeVtable[1];
+			// The retained dispatch has already proved the Tile-owned vtable,
+			// null skin, model data, renderer/device, shader vtable, and complete
+			// slot table. Only RenderPass fields are live per traversal.
+			return g_bEnableFreeTypeFontCommandBuffer
+				&& pass && geometry
+				&& pass->pGeometry == geometry
+				&& pass->usPassEnum == currentPass
+				&& currentPass != kForcedShaderSelectionPass
+				&& IsDefaultNativeReplayPass(currentPass)
+				&& !pass->ucNumLights && !pass->ppSceneLights
+				&& (packetStatePrevalidated
+					|| (program->active
+						&& geometry->GetShader() == dispatch->shader
+						&& dispatch->shader->IsTileShader()));
 		}
 
 		bool PrepareGuardedNativeReplay(
@@ -1423,15 +1450,6 @@ namespace fonthook::vectorfont
 			Prelude
 		};
 
-		struct StandardPassLiteDispatch
-		{
-			NiDX9Renderer* renderer = nullptr;
-			NiGeometryBufferData* buffer = nullptr;
-			TileShader* shader = nullptr;
-			const NiPropertyState* properties = nullptr;
-			const NativeA8CompiledPacketCommand* program = nullptr;
-		};
-
 		void RecordStandardPassLiteFallback(StandardPassLiteFallback fallback)
 		{
 			RecordFreeTypePerf(
@@ -1467,81 +1485,43 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		StandardPassLiteFallback PrepareStandardPassLiteDispatch(
-			NiTriShape* geometry, const NativeA8DrawCommand& command,
-			StandardPassLiteDispatch& dispatch,
+		StandardPassLiteFallback ResolveStandardPassLiteResidency(
+			const NativeA8DrawCommand& command,
+			NiGeometryBufferData* preparedBuffer,
 			bool packetStatePrevalidated)
 		{
-			dispatch = {};
-			const NativeA8CompiledPacketCommand* program =
-				command.program;
-			TileShader* shader = program ? program->shader : nullptr;
-			void** shaderVtable = shader
-				? *reinterpret_cast<void***>(shader) : nullptr;
-			if (!program || !program->active || !shader
-				|| !shaderVtable
-				|| shaderVtable != program->shaderVtable
-				|| !program->prepareGeometry
-				|| !program->setupPass
-				|| !program->updateConstants
-				|| !program->setupBlend
-				|| !program->setupAlphaTest
-				|| !program->setupDrawmode
-				|| !program->postGeometry
-				|| !program->setupNonFirstPass)
-			{
-				return StandardPassLiteFallback::Program;
-			}
-
-			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-			if (!renderer || program->device != renderer->GetD3DDevice())
-				return StandardPassLiteFallback::Renderer;
-
-			NiTriShapeData* modelData =
-				geometry ? geometry->GetModelData() : nullptr;
-			NiGeometryBufferData* buffer =
-				modelData ? modelData->m_pkBuffData : nullptr;
-			void** geometryVtable = geometry
-				? *reinterpret_cast<void***>(geometry) : nullptr;
-			if (!modelData || !buffer || !geometryVtable
-				|| geometryVtable[kRenderImmediateAltSlot]
-					!= reinterpret_cast<void*>(&A8RenderImmediateAlt))
-			{
+			if (!preparedBuffer)
 				return StandardPassLiteFallback::Geometry;
-			}
 
-			NiVBChip* chip = buffer->m_uiStreamCount
-					&& buffer->m_ppkVBChip
-				? buffer->m_ppkVBChip[0] : nullptr;
-			if (!chip
-				|| (!packetStatePrevalidated
-					&& (!command.binding.active
-						|| buffer->m_hDeclaration
-							!= command.binding.declaration
-						|| buffer->m_pkIB
-							!= command.binding.indexBuffer
-						|| chip->m_pkVB
-							!= command.binding.vertexBuffer
-						|| buffer->m_uiBaseVertexIndex
-							!= command.binding.baseVertex
-						|| buffer->m_uiVertCount
-							!= command.binding.vertexCount)))
+			if (!packetStatePrevalidated)
 			{
-				return StandardPassLiteFallback::Binding;
+				NiVBChip* chip = preparedBuffer->m_uiStreamCount
+						&& preparedBuffer->m_ppkVBChip
+					? preparedBuffer->m_ppkVBChip[0] : nullptr;
+				if (!chip || !command.binding.active
+					|| preparedBuffer->m_hDeclaration
+							!= command.binding.declaration
+					|| preparedBuffer->m_pkIB
+							!= command.binding.indexBuffer
+					|| chip->m_pkVB
+							!= command.binding.vertexBuffer
+					|| preparedBuffer->m_uiBaseVertexIndex
+							!= command.binding.baseVertex
+					|| preparedBuffer->m_uiVertCount
+							!= command.binding.vertexCount)
+				{
+					return StandardPassLiteFallback::Binding;
+				}
 			}
-
-			dispatch.renderer = renderer;
-			dispatch.buffer = buffer;
-			dispatch.shader = shader;
-			dispatch.properties = &geometry->m_kProperties;
-			dispatch.program = program;
 			return StandardPassLiteFallback::None;
 		}
 
 		void ExecuteStandardPassLite(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
-			NiTriShape* geometry, const StandardPassLiteDispatch& dispatch)
+			NiTriShape* geometry,
+			const NativeA8StandardPassLiteDispatch& dispatch,
+			NiGeometryBufferData* preparedBuffer)
 		{
 			NiDX9Renderer* renderer = dispatch.renderer;
 			TileShader* shader = dispatch.shader;
@@ -1605,7 +1585,7 @@ namespace fonthook::vectorfont
 			reinterpret_cast<PrepareGeometryFn>(
 				program.prepareGeometry)(
 					shader, geometry, 0,
-					dispatch.buffer, properties);
+					preparedBuffer, properties);
 			A8RenderImmediateAlt(geometry, nullptr, renderer);
 			reinterpret_cast<SetupStateFn>(
 				program.postGeometry)(shader, properties);
@@ -1616,7 +1596,8 @@ namespace fonthook::vectorfont
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
 			NiTriShape* geometry, const NativeA8DrawCommand* command,
 			bool preferStandardPassLite,
-			bool packetStatePrevalidated)
+			bool packetStatePrevalidated,
+			NiGeometryBufferData* preparedBuffer)
 		{
 			if (preferStandardPassLite)
 			{
@@ -1626,12 +1607,13 @@ namespace fonthook::vectorfont
 
 			bool guardedEligible = false;
 			bool liteEnvelope = false;
+			const NativeA8StandardPassLiteDispatch* liteDispatch = nullptr;
 			if (preferStandardPassLite)
 			{
 				liteEnvelope = command
 					&& CanUseStandardPassLiteEnvelope(
 						pass, currentPass, geometry, *command,
-						packetStatePrevalidated);
+						packetStatePrevalidated, liteDispatch);
 				if (liteEnvelope)
 				{
 					guardedEligible = true;
@@ -1658,13 +1640,12 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			StandardPassLiteDispatch liteDispatch;
 			bool useStandardPassLite = false;
 			if (liteEnvelope)
 			{
 				const StandardPassLiteFallback liteFailure =
-					PrepareStandardPassLiteDispatch(
-						geometry, *command, liteDispatch,
+					ResolveStandardPassLiteResidency(
+						*command, preparedBuffer,
 						packetStatePrevalidated);
 				if (liteFailure == StandardPassLiteFallback::None)
 				{
@@ -1699,7 +1680,7 @@ namespace fonthook::vectorfont
 			{
 				ExecuteStandardPassLite(pass, currentPass,
 					testAlpha, blendAlpha, setupDrawmode,
-					geometry, liteDispatch);
+					geometry, *liteDispatch, preparedBuffer);
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::StandardPassLiteStage3Replay);
 				RecordFreeTypePerf(
@@ -1721,12 +1702,13 @@ namespace fonthook::vectorfont
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
 			NiTriShape* geometry, const NativeA8DrawCommand* command,
 			bool preferStandardPassLite = false,
-			bool packetStatePrevalidated = false)
+			bool packetStatePrevalidated = false,
+			NiGeometryBufferData* preparedBuffer = nullptr)
 		{
 			if (InvokeGuardedNativeReplay(pass, currentPass,
 				testAlpha, blendAlpha, setupDrawmode,
 				geometry, command, preferStandardPassLite,
-				packetStatePrevalidated))
+				packetStatePrevalidated, preparedBuffer))
 			{
 				return true;
 			}
@@ -2887,7 +2869,8 @@ namespace fonthook::vectorfont
 							currentPass, false, true,
 							setupDrawmode, shape, command,
 							virtualSingleCommandExecution,
-							bindingCurrent);
+							bindingCurrent,
+							expectedBuffer);
 					}
 					else
 					{
@@ -3424,7 +3407,7 @@ namespace fonthook::vectorfont
 						InvokeNativeCommandBootstrap(pass, currentPass,
 						false, true, setupDrawmode,
 						facade, command, singleCommandExecution,
-						true);
+						true, binding->Buffer());
 					if (!usedNativeReplay
 						&& singleCommandExecution)
 					{
@@ -3571,29 +3554,134 @@ namespace fonthook::vectorfont
 				phase);
 		}
 
+		struct A8MetadataIdentitySnapshot
+		{
+			UInt64 allocationId = 0;
+			const A8ShapeMetadata* selfIdentity = nullptr;
+			const NiTriShape* shapeIdentity = nullptr;
+			UInt32 fontId = 0;
+			UInt32 backend = 0;
+			UInt32 virtualStockSlot = 0;
+			bool virtualStockPrimary = false;
+			bool buildComplete = false;
+		};
+
+		bool TryReadA8MetadataIdentity(
+			const A8ShapeMetadata* metadata,
+			A8MetadataIdentitySnapshot& snapshot)
+		{
+			if (!metadata)
+				return false;
+			__try
+			{
+				snapshot.allocationId = metadata->allocationId;
+				snapshot.selfIdentity = metadata->selfIdentity;
+				snapshot.shapeIdentity = metadata->shapeIdentity;
+				snapshot.fontId = metadata->fontId;
+				snapshot.backend =
+					static_cast<UInt32>(metadata->backend);
+				snapshot.virtualStockSlot =
+					static_cast<UInt32>(metadata->virtualStockSlot);
+				snapshot.virtualStockPrimary =
+					metadata->virtualStockPrimary;
+				snapshot.buildComplete =
+					metadata->nativePayload.buildComplete;
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		bool LogA8MetadataDeleteAudit(NiTriShape* shape,
+			bool registryFound, const A8ShapeMetadataEntry& entry)
+		{
+			const A8ShapeMetadata* mappedMetadata =
+				entry.metadata.get();
+			A8MetadataIdentitySnapshot snapshot;
+			const bool readable = TryReadA8MetadataIdentity(
+				mappedMetadata, snapshot);
+			const bool registryIdentityValid =
+				registryFound && entry.allocationId
+				&& entry.selfIdentity
+				&& entry.shapeIdentity == shape;
+			const bool pointerMatch =
+				mappedMetadata == entry.selfIdentity;
+			const bool allocationMatch = readable
+				&& snapshot.allocationId == entry.allocationId;
+			const bool selfMatch = readable
+				&& snapshot.selfIdentity == entry.selfIdentity
+				&& snapshot.selfIdentity == mappedMetadata;
+			const bool shapeMatch = readable
+				&& snapshot.shapeIdentity == entry.shapeIdentity
+				&& snapshot.shapeIdentity == shape;
+			const bool integrity = registryIdentityValid
+				&& pointerMatch && allocationMatch
+				&& selfMatch && shapeMatch;
+
+			static std::atomic<UInt32> failureLogCount = 0;
+			const UInt32 failureOrdinal = integrity ? 0
+				: failureLogCount.fetch_add(
+					1, std::memory_order_relaxed);
+			const bool logFailure = !integrity
+				&& failureOrdinal < 64;
+			if (!g_bEnableFreeTypeFontRenderingLog && !logFailure)
+				return integrity;
+
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: metadata-delete-pre shape=%p registry=%u mapped=%p expectedSelf=%p expectedShape=%p allocationId=%llu readable=%u objectAllocationId=%llu objectSelf=%p objectShape=%p font=%u backend=%u slot=%u primary=%u build=%u registryIdentity=%u pointer=%u allocation=%u self=%u shapeIdentity=%u integrity=%u",
+				shape, registryFound ? 1u : 0u,
+				mappedMetadata, entry.selfIdentity,
+				entry.shapeIdentity,
+				static_cast<unsigned long long>(entry.allocationId),
+				readable ? 1u : 0u,
+				static_cast<unsigned long long>(
+					snapshot.allocationId),
+				snapshot.selfIdentity, snapshot.shapeIdentity,
+				snapshot.fontId, snapshot.backend,
+				snapshot.virtualStockSlot,
+				snapshot.virtualStockPrimary ? 1u : 0u,
+				snapshot.buildComplete ? 1u : 0u,
+				registryIdentityValid ? 1u : 0u,
+				pointerMatch ? 1u : 0u,
+				allocationMatch ? 1u : 0u,
+				selfMatch ? 1u : 0u,
+				shapeMatch ? 1u : 0u,
+				integrity ? 1u : 0u);
+			return integrity;
+		}
+
 		void __fastcall A8DeleteThis(NiTriShape* shape, void*)
 		{
 			A8State& state = State();
 			InvalidateNativeA8CommandGeometry(shape);
-			A8ShapeMetadataPtr retiredMetadata;
+			A8ShapeMetadataEntry retiredEntry;
+			bool registryFound = false;
 			{
 				std::lock_guard<std::mutex> lock(state.metadataMutex);
 				const auto found = state.shapeMetadata.find(shape);
 				if (found != state.shapeMetadata.end())
 				{
+					registryFound = true;
 					state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(1,
 						std::memory_order_release);
-					retiredMetadata = std::move(found->second);
+					retiredEntry = std::move(found->second);
 					state.shapeMetadata.erase(found);
 				}
 			}
-			if (retiredMetadata
+			const bool metadataIntegrity =
+				LogA8MetadataDeleteAudit(
+				shape, registryFound, retiredEntry);
+			A8ShapeMetadataPtr retiredMetadata =
+				std::move(retiredEntry.metadata);
+			if (metadataIntegrity && retiredMetadata
 				&& retiredMetadata->nativePayload.buildComplete)
 			{
 				InvalidateNativeA8TileRetainedText(
 					retiredMetadata->nativePayload);
 			}
-			if (retiredMetadata
+			if (metadataIntegrity && retiredMetadata
 				&& retiredMetadata->backend
 					== FreeTypeShapeBackend::VirtualStockNative)
 			{
@@ -3653,8 +3741,8 @@ namespace fonthook::vectorfont
 		hot.shape = shape;
 		hot.generation = state.metadataGenerations[generationSlot].load(
 			std::memory_order_relaxed);
-		hot.metadata = found->second;
-		return found->second;
+		hot.metadata = found->second.metadata;
+		return found->second.metadata;
 	}
 
 	std::shared_ptr<VirtualStockShapeGroup>

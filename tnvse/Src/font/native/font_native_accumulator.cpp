@@ -641,7 +641,10 @@ namespace fonthook::vectorfont
 			payload.preparedGeneration = 0;
 			payload.preflightAtlasTextureEpoch = 0;
 			payload.stockLikeBitmapPackets = false;
-			InvalidateNativeA8TileRetainedText(payload);
+			// Full preflight often refreshes only atlas/resource stamps. Keep
+			// the Tile/program dispatch until retained rebuild can compare its
+			// geometry, program, and generation identities.
+			InvalidateNativeA8TileRetainedText(payload, true);
 			std::fill(payload.preflightAtlasTextures.begin(),
 				payload.preflightAtlasTextures.end(), nullptr);
 			std::fill(payload.packetShaders.begin(),

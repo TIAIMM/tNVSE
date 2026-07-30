@@ -480,6 +480,12 @@ namespace fonthook::vectorfont
 			command.packet = retained.packet;
 			command.packetIndex = retained.packetIndex;
 			command.program = retained.program;
+			if (retained.packetIndex == 0
+				&& payload.retainedText.packets.size() == 1)
+			{
+				command.standardPassLite =
+					&payload.retainedText.standardPassLite;
+			}
 			if (!retained.packet || !retained.program
 				|| retained.atlasPage
 					>= payload.preflightAtlasTextures.size())
@@ -860,6 +866,91 @@ namespace fonthook::vectorfont
 		}
 	}
 
+	bool IsNativeA8StandardPassLiteDispatchCurrent(
+		const NativeA8StandardPassLiteDispatch& dispatch,
+		const NiTriShape* geometry,
+		const NativeA8CompiledPacketCommand* program,
+		UInt32 generation)
+	{
+		return dispatch.ready && geometry && program && generation
+			&& dispatch.geometry == geometry
+			&& dispatch.properties == &geometry->m_kProperties
+			&& dispatch.program == program
+			&& dispatch.shader == program->shader
+			&& dispatch.renderer
+			&& dispatch.generation == generation
+			&& program->generation == generation;
+	}
+
+	void InvalidateNativeA8StandardPassLiteDispatch(
+		NativeA8StandardPassLiteDispatch& dispatch)
+	{
+		dispatch = {};
+	}
+
+	bool BuildNativeA8StandardPassLiteDispatch(
+		NiTriShape* geometry,
+		const NativeA8CompiledPacketCommand* program,
+		UInt32 generation,
+		NativeA8StandardPassLiteDispatch& dispatch)
+	{
+		if (IsNativeA8StandardPassLiteDispatchCurrent(
+				dispatch, geometry, program, generation))
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::StandardPassLiteRetainedReuse);
+			return true;
+		}
+
+		InvalidateNativeA8StandardPassLiteDispatch(dispatch);
+		if (!g_bEnableFreeTypeFontCommandBuffer
+			|| !geometry || !program || !generation
+			|| !State().standardPassLitePredicatesValidated
+			|| geometry->GetSkinInstance()
+			|| !geometry->GetModelData())
+		{
+			return false;
+		}
+
+		void** geometryVtable =
+			*reinterpret_cast<void***>(geometry);
+		TileShader* shader = program->shader;
+		void** shaderVtable = shader
+			? *reinterpret_cast<void***>(shader) : nullptr;
+		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+		if (geometryVtable != &State().triShapeVtable[1]
+			|| geometryVtable[kRenderImmediateAltSlot]
+				!= reinterpret_cast<void*>(&A8RenderImmediateAlt)
+			|| !program->active || !program->profile
+			|| program->generation != generation
+			|| !shader || !shaderVtable
+			|| shaderVtable != program->shaderVtable
+			|| !program->prepareGeometry
+			|| !program->setupPass
+			|| !program->updateConstants
+			|| !program->setupBlend
+			|| !program->setupAlphaTest
+			|| !program->setupDrawmode
+			|| !program->postGeometry
+			|| !program->setupNonFirstPass
+			|| !renderer
+			|| program->device != renderer->GetD3DDevice())
+		{
+			return false;
+		}
+
+		dispatch.geometry = geometry;
+		dispatch.properties = &geometry->m_kProperties;
+		dispatch.renderer = renderer;
+		dispatch.shader = shader;
+		dispatch.program = program;
+		dispatch.generation = generation;
+		dispatch.ready = true;
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::StandardPassLiteRetainedBuild);
+		return true;
+	}
+
 	size_t GetNativeA8TileRetainedCapacityBytes(
 		const NativeA8ShapePayload& payload)
 	{
@@ -870,23 +961,36 @@ namespace fonthook::vectorfont
 	}
 
 	void InvalidateNativeA8TileRetainedText(
-		NativeA8ShapePayload& payload)
+		NativeA8ShapePayload& payload,
+		bool preserveStandardPassLite)
 	{
 		NativeA8TileRetainedText& retained = payload.retainedText;
 		retained.ready = false;
 		retained.atlasTextureEpoch = 0;
 		retained.bridgeEligible = false;
+		if (!preserveStandardPassLite)
+		{
+			InvalidateNativeA8StandardPassLiteDispatch(
+				retained.standardPassLite);
+		}
 	}
 
 	bool BuildNativeA8TileRetainedText(NiTriShape* ownerTile,
 		NativeA8ShapePayload& payload, UInt32 generation,
 		UInt32 atlasTextureEpoch)
 	{
-		InvalidateNativeA8TileRetainedText(payload);
+		NativeA8TileRetainedText& retained = payload.retainedText;
+		// Keep an identity-matching Standard-lite dispatch available while a
+		// preflight refresh proves that the Tile/program pair is unchanged.
+		retained.ready = false;
+		retained.atlasTextureEpoch = 0;
+		retained.bridgeEligible = false;
 		if (!g_bEnableFreeTypeFontCommandBuffer || !ownerTile
 			|| !generation || !atlasTextureEpoch
 			|| !payload.payloadTemplate)
 		{
+			InvalidateNativeA8StandardPassLiteDispatch(
+				retained.standardPassLite);
 			return false;
 		}
 
@@ -894,7 +998,6 @@ namespace fonthook::vectorfont
 			*payload.payloadTemplate;
 		const std::vector<NativeA8PacketTemplate>& packets =
 			GetNativeA8Packets(artifact, payload.useCompositePackets);
-		NativeA8TileRetainedText& retained = payload.retainedText;
 		auto discardRetained = [&retained]()
 		{
 			retained.ready = false;
@@ -906,6 +1009,8 @@ namespace fonthook::vectorfont
 			retained.bridgeEligible = false;
 			retained.packets.clear();
 			retained.runs.clear();
+			InvalidateNativeA8StandardPassLiteDispatch(
+				retained.standardPassLite);
 		};
 		if (packets.empty()
 			|| payload.packetShaders.size() != packets.size()
@@ -967,6 +1072,17 @@ namespace fonthook::vectorfont
 
 		if (canRefresh)
 		{
+			if (retained.packets.size() == 1)
+			{
+				BuildNativeA8StandardPassLiteDispatch(
+					ownerTile, retained.packets.front().program,
+					generation, retained.standardPassLite);
+			}
+			else
+			{
+				InvalidateNativeA8StandardPassLiteDispatch(
+					retained.standardPassLite);
+			}
 			retained.atlasTextureEpoch = atlasTextureEpoch;
 			retained.bridgeEligible = retained.packets.size() > 1;
 			retained.ready = true;
@@ -1024,6 +1140,17 @@ namespace fonthook::vectorfont
 		retained.atlasTextureEpoch = atlasTextureEpoch;
 		retained.useCompositePackets = payload.useCompositePackets;
 		retained.bridgeEligible = retained.packets.size() > 1;
+		if (retained.packets.size() == 1)
+		{
+			BuildNativeA8StandardPassLiteDispatch(
+				ownerTile, retained.packets.front().program,
+				generation, retained.standardPassLite);
+		}
+		else
+		{
+			InvalidateNativeA8StandardPassLiteDispatch(
+				retained.standardPassLite);
+		}
 		retained.ready = !retained.packets.empty()
 			&& !retained.runs.empty();
 		if (!retained.ready)

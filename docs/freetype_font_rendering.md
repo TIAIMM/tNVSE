@@ -1063,10 +1063,17 @@ default-pass envelope
 without executing `E72C20` or the particle/line virtual predicates: formal
 `E72C20` and the symbolized test build both show that an already resident
 `m_pkBuffData` makes the former return false immediately, while the exact
-tNVSE-owned `NiTriShape` vtable proves the latter two stock null-casts. Stage 2
-checks the generation-owned retained shader vtable identity, all required
-prebound methods, renderer/device identity, the live buffer resources, and the
-`RenderImmediateAlt` hook. Stage 3 mirrors the confirmed standard order:
+tNVSE-owned `NiTriShape` vtable proves the latter two stock null-casts. Full
+preflight compiles those immutable facts into a
+`NativeA8StandardPassLiteDispatch` owned by `NativeA8TileRetainedText`. It
+retains the Tile/property identity, renderer, shader, generation-owned program,
+and resolved slot table for the Tile lifetime; frame commands carry only a
+non-owning pointer to it. Stage 1 therefore checks the live `RenderPass`
+envelope plus that retained identity instead of reconstructing a local dispatch
+and rereading the shader vtable, renderer/device, model data, and hook vtable on
+every submission. Stage 2 accepts the current buffer already proved by direct
+or Virtual-stock binding; only an unproven compatibility caller performs the
+full VB/IB/declaration/range comparison. Stage 3 mirrors the confirmed standard order:
 publish renderer property/effect state; invoke slots 30, 31, conditional
 32/33/68, optional 34, slot 27, `RenderImmediateAlt`, and slot 35. It omits only
 the geometry-group helper whose resident-buffer branch has no side effect.
@@ -1087,6 +1094,16 @@ The custom `NiTriShape::DeleteThis` route invalidates that metadata before the
 stock Tile geometry is destroyed, so retained text cannot remain usable after
 its Tile lifetime ends.
 
+Every published A8 metadata object carries a monotonic allocation ID, its own
+address, and its owning shape address. The shape registry stores a second
+publication-time copy outside the `shared_ptr`. With FreeType rendering logs
+enabled, allocation emits `metadata-allocate` and destruction emits
+`metadata-delete-pre` before any metadata dereference. A healthy deletion ends
+with `registryIdentity=1 pointer=1 allocation=1 self=1 shapeIdentity=1
+integrity=1`. Integrity failures are logged even when verbose rendering logs
+are disabled (capped at 64 entries); unsafe retained/Virtual-stock cleanup is
+then skipped so the audit itself does not dereference a mismatched object.
+
 Each generation-owned shader profile owns one immutable compiled packet
 program containing its already resolved shader, VS/PS handles, slot methods,
 constants profile, and replay flags. Tile-retained text stores non-owning
@@ -1095,7 +1112,12 @@ scissor, material state, render target, viewport, VB/IB/declaration, texture
 COM ownership, or other mutable frame state. A later traversal therefore
 materializes only current sealed residency and atlas texture views instead of
 recovering the profile, validating all immutable packet fields, and rebuilding
-run topology for every frame.
+run topology for every frame. The retained Standard-lite dispatch follows the
+same rule: its buffer argument is injected from the traversal-local, already
+validated residency view, so a stack-local synthetic compatibility buffer can
+never escape into Tile-retained data. Atlas/resource-only preflight refreshes
+reuse the dispatch; Tile destruction, topology/program replacement, shader
+generation changes, or hard retained invalidation clear or replace it.
 
 After registration, preflight, static/dynamic VB residency, and Virtual-stock
 topology are frozen, each sorted traversal builds a temporary command table
@@ -1250,10 +1272,14 @@ remain zero, and packet reuse should closely track recorded command packets.
 The adjacent `standard_pass_lite_` line exposes stage invariants for the dedicated
 single-packet subset. A healthy fully eligible run has
 `candidates = stage1_eligible = stage2_resident = stage3_replays`,
-`stock_fallbacks=0`, and every categorized fallback at zero. When fallbacks are
-present, `stock_fallbacks` equals the sum of `fallback_envelope`, `program`,
-`renderer`, `geometry`, `binding`, and `prelude`; these counters distinguish a
-safe staged fallback from a missing command or a runtime draw fault.
+`retained_hits = candidates`, `retained_misses=0`, `stock_fallbacks=0`, and
+every categorized fallback at zero. `retained_builds` counts new Tile/program
+dispatches, while `retained_reuses` counts full preflights that retained the
+same Tile/program dispatch instead of rebuilding it; neither should scale with
+steady-state packet submissions. When fallbacks are present,
+`stock_fallbacks` equals the sum of `fallback_envelope`, `program`, `renderer`,
+`geometry`, `binding`, and `prelude`; the retained hit/miss pair distinguishes
+a missing or invalidated Tile dispatch from a dynamic pass-envelope rejection.
 
 ## Atlas allocation, mipmaps, and memory
 

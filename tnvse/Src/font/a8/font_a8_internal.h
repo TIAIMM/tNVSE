@@ -106,6 +106,9 @@ namespace fonthook::vectorfont
 
 	struct A8ShapeMetadata
 	{
+		UInt64 allocationId = 0;
+		const A8ShapeMetadata* selfIdentity = nullptr;
+		const NiTriShape* shapeIdentity = nullptr;
 		UInt32 fontId = 0;
 		UInt32 glyphCount = 0;
 		UInt32 quadCount = 0;
@@ -123,6 +126,18 @@ namespace fonthook::vectorfont
 		bool virtualStockPrimary = false;
 	};
 	using A8ShapeMetadataPtr = std::shared_ptr<const A8ShapeMetadata>;
+
+	// Keep a publication-time identity copy outside the owned object. A damaged
+	// shared_ptr may no longer point at readable A8ShapeMetadata, so deletion
+	// auditing must be able to compare its raw object pointer without first
+	// dereferencing it.
+	struct A8ShapeMetadataEntry
+	{
+		A8ShapeMetadataPtr metadata;
+		UInt64 allocationId = 0;
+		const A8ShapeMetadata* selfIdentity = nullptr;
+		const NiTriShape* shapeIdentity = nullptr;
+	};
 
 	struct VirtualStockSlotBinding
 	{
@@ -200,9 +215,10 @@ namespace fonthook::vectorfont
 		UInt32 shapeValidationFailureLogCount = 0;
 
 		std::mutex metadataMutex;
-		std::unordered_map<const NiTriShape*, A8ShapeMetadataPtr> shapeMetadata;
+		std::unordered_map<const NiTriShape*, A8ShapeMetadataEntry> shapeMetadata;
 		std::unordered_map<VirtualStockShapeGroup*,
 			std::shared_ptr<VirtualStockShapeGroup>> virtualStockGroups;
+		std::atomic<UInt64> nextMetadataAllocationId = 1;
 		std::array<std::atomic<UInt64>, kMetadataGenerationSlotCount>
 			metadataGenerations = {};
 

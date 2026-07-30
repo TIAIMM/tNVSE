@@ -605,9 +605,17 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::
 					CommandTileRetainedPacketReuse)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: standard_pass_lite_candidates=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu stock_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
+			"tnvse_freetype_perf: standard_pass_lite_candidates=%llu retained_builds=%llu retained_reuses=%llu retained_hits=%llu retained_misses=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu stock_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteCandidate)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::StandardPassLiteRetainedBuild)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::StandardPassLiteRetainedReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::StandardPassLiteRetainedHit)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::StandardPassLiteRetainedMiss)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteStage1Eligible)],
 			values[static_cast<size_t>(
