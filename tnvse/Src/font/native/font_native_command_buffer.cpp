@@ -42,6 +42,20 @@ namespace fonthook::vectorfont
 		static_assert(offsetof(
 			CommandTileShaderPropertyView, overlayColor) == 0x68);
 
+		struct NativeA8ExecutionSegmentState
+		{
+			// A segment spans adjacent FreeType Tile submissions. Full frame,
+			// hook, device, ring, RT, and viewport validation is shared until a
+			// stock/non-FreeType boundary or an externally published resource
+			// mutation advances one of these epochs.
+			UInt64 validationToken = 0;
+			UInt32 boundaryEpoch = 0;
+			UInt32 externalMutationEpoch = 0;
+			NativeA8CommandFallback failure =
+				NativeA8CommandFallback::State;
+			bool validated = false;
+		};
+
 		struct NativeA8FrameCommandBuffer
 		{
 			NativeA8FrameStamp stamp;
@@ -49,12 +63,64 @@ namespace fonthook::vectorfont
 			std::vector<NativeA8FrameCommandRun> runs;
 			std::vector<NativeA8CommandSpan> spans;
 			CpuMemoryLease cpuMemory;
+			NativeA8ExecutionSegmentState executionSegment;
+			UInt32 executionBoundaryEpoch = 1;
+			UInt32 frameExternalMutationEpoch = 0;
+			NativeA8CommandFallback executionBoundaryReason =
+				NativeA8CommandFallback::State;
 			bool enabled = false;
 			bool active = false;
 			bool building = false;
 		};
 
 		thread_local NativeA8FrameCommandBuffer s_commandBuffer;
+		// Resource lifecycles may publish from a reset/cache thread while the
+		// command buffer itself is render-thread local. One process-wide epoch
+		// lets packet callbacks reject that race with a single acquire load.
+		std::atomic<UInt32> s_externalMutationEpoch = 1;
+		std::atomic<UInt8> s_externalMutationReason =
+			static_cast<UInt8>(NativeA8CommandFallback::State);
+
+		NativeA8CommandFallback NormalizeMutationReason(
+			NativeA8CommandFallback reason)
+		{
+			return reason == NativeA8CommandFallback::None
+				? NativeA8CommandFallback::State : reason;
+		}
+
+		UInt32 LoadExternalMutationEpoch()
+		{
+			return s_externalMutationEpoch.load(std::memory_order_acquire);
+		}
+
+		NativeA8CommandFallback LoadExternalMutationReason()
+		{
+			return NormalizeMutationReason(
+				static_cast<NativeA8CommandFallback>(
+					s_externalMutationReason.load(
+						std::memory_order_acquire)));
+		}
+
+		void AdvanceExecutionBoundaryEpoch(
+			NativeA8FrameCommandBuffer& buffer,
+			NativeA8CommandFallback reason)
+		{
+			NativeA8ExecutionSegmentState& segment =
+				buffer.executionSegment;
+			if (!buffer.active || !segment.validated
+				|| segment.boundaryEpoch
+					!= buffer.executionBoundaryEpoch)
+			{
+				return;
+			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandSegmentInvalidation);
+			if (++buffer.executionBoundaryEpoch == 0)
+				++buffer.executionBoundaryEpoch;
+			buffer.executionBoundaryReason =
+				NormalizeMutationReason(reason);
+			segment.validated = false;
+		}
 
 		bool EqualTransform(const NiTransform& left,
 			const NiTransform& right)
@@ -456,6 +522,183 @@ namespace fonthook::vectorfont
 				&& std::memcmp(&viewport, &stamp.viewport,
 					sizeof(viewport)) == 0;
 		}
+
+		NativeA8CommandFallback ValidateExecutionSegmentState(
+			NativeA8FrameCommandBuffer& buffer,
+			UInt32 expectedExternalMutationEpoch)
+		{
+			NativeA8FrameStamp& stamp = buffer.stamp;
+			if (!buffer.frameExternalMutationEpoch
+				|| expectedExternalMutationEpoch
+					!= buffer.frameExternalMutationEpoch)
+			{
+				return LoadExternalMutationReason();
+			}
+			if (!stamp.accumulator || !stamp.validationToken
+				|| stamp.validationToken
+					!= GetNativeA8SortedFrameValidationToken())
+			{
+				return NativeA8CommandFallback::Token;
+			}
+			if (stamp.nestedTraversalSerial
+				!= GetNativeA8SortedNestedTraversalSerial())
+			{
+				return NativeA8CommandFallback::Nested;
+			}
+			if (!IsNativeA8AccumulatorHookCurrent()
+				|| !IsNativeA8SortedTraversalHookCurrent()
+				|| !IsA8TileRenderPassHookCurrent())
+			{
+				return NativeA8CommandFallback::Hook;
+			}
+
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			IDirect3DDevice9* device =
+				renderer ? renderer->GetD3DDevice() : nullptr;
+			if (!renderer || renderer != stamp.renderer
+				|| !device || device != stamp.device
+				|| !IsNativeA8ShaderGenerationCurrent(
+					stamp.generation))
+			{
+				return NativeA8CommandFallback::Generation;
+			}
+			if (GetNativeA8AtlasTextureEpoch()
+				!= stamp.atlasTextureEpoch)
+			{
+				return NativeA8CommandFallback::Atlas;
+			}
+			if (!IsNativeA8FrameResourceStampCurrent(
+				stamp.generation, stamp.resourceSerial,
+				stamp.uploadEpoch))
+			{
+				return NativeA8CommandFallback::Resource;
+			}
+			if (!ValidateRenderTarget(stamp))
+				return NativeA8CommandFallback::RenderTarget;
+			if (LoadExternalMutationEpoch()
+				!= expectedExternalMutationEpoch)
+			{
+				return LoadExternalMutationReason();
+			}
+			return NativeA8CommandFallback::None;
+		}
+
+		NativeA8CommandFallback EnsureExecutionSegmentValidated(
+			NativeA8FrameCommandBuffer& buffer)
+		{
+			NativeA8ExecutionSegmentState& segment =
+				buffer.executionSegment;
+			const UInt32 externalMutationEpoch =
+				LoadExternalMutationEpoch();
+			if (segment.validated
+				&& segment.validationToken
+					== buffer.stamp.validationToken
+				&& segment.boundaryEpoch
+					== buffer.executionBoundaryEpoch
+				&& segment.externalMutationEpoch
+					== externalMutationEpoch)
+			{
+				if (segment.failure
+					== NativeA8CommandFallback::None)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							CommandSegmentValidationReuse);
+				}
+				return segment.failure;
+			}
+
+			if (segment.validated
+				&& segment.boundaryEpoch
+					== buffer.executionBoundaryEpoch
+				&& segment.externalMutationEpoch
+					!= externalMutationEpoch)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandSegmentInvalidation);
+			}
+
+			segment = {};
+			segment.validationToken = buffer.stamp.validationToken;
+			segment.boundaryEpoch = buffer.executionBoundaryEpoch;
+			segment.externalMutationEpoch = externalMutationEpoch;
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandSegmentFullValidation);
+			segment.failure = ValidateExecutionSegmentState(
+				buffer, externalMutationEpoch);
+			if (LoadExternalMutationEpoch()
+				!= externalMutationEpoch)
+			{
+				segment.failure = LoadExternalMutationReason();
+				segment.validated = false;
+				return segment.failure;
+			}
+			segment.validated = true;
+			if (segment.failure == NativeA8CommandFallback::None)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandExecutionSegment);
+			}
+			return segment.failure;
+		}
+
+		NativeA8CommandFallback ValidateExecutionSegmentEpoch(
+			NativeA8FrameCommandBuffer& buffer,
+			const NativeA8CommandSpan& span)
+		{
+			const NativeA8ExecutionSegmentState& segment =
+				buffer.executionSegment;
+			if (!segment.validated
+				|| segment.failure != NativeA8CommandFallback::None
+				|| span.executionSegmentEpoch
+					!= buffer.executionBoundaryEpoch
+				|| span.executionSegmentEpoch
+					!= segment.boundaryEpoch)
+			{
+				return buffer.executionBoundaryReason;
+			}
+			const UInt32 externalMutationEpoch =
+				LoadExternalMutationEpoch();
+			if (span.executionExternalMutationEpoch
+					!= externalMutationEpoch
+				|| segment.externalMutationEpoch
+					!= externalMutationEpoch)
+			{
+				const NativeA8CommandFallback reason =
+					LoadExternalMutationReason();
+				AdvanceExecutionBoundaryEpoch(buffer, reason);
+				return reason;
+			}
+			return NativeA8CommandFallback::None;
+		}
+	}
+
+	void NotifyNativeA8CommandExternalMutation(
+		NativeA8CommandFallback reason)
+	{
+		s_externalMutationReason.store(static_cast<UInt8>(
+			NormalizeMutationReason(reason)), std::memory_order_relaxed);
+		UInt32 current =
+			s_externalMutationEpoch.load(std::memory_order_relaxed);
+		for (;;)
+		{
+			UInt32 next = current + 1u;
+			if (!next)
+				next = 1u;
+			if (s_externalMutationEpoch.compare_exchange_weak(
+				current, next, std::memory_order_release,
+				std::memory_order_relaxed))
+			{
+				return;
+			}
+		}
+	}
+
+	void InvalidateNativeA8CommandExecutionSegment(
+		NativeA8CommandFallback reason)
+	{
+		AdvanceExecutionBoundaryEpoch(
+			s_commandBuffer, NormalizeMutationReason(reason));
 	}
 
 	void BeginNativeA8FrameCommandBuffer(BSShaderAccumulator* accumulator,
@@ -481,6 +724,8 @@ namespace fonthook::vectorfont
 			? buffer.stamp.renderer->GetD3DDevice() : nullptr;
 		if (!buffer.stamp.device)
 			return;
+		buffer.frameExternalMutationEpoch =
+			LoadExternalMutationEpoch();
 		ResolveRenderTargetStamp(buffer.stamp);
 		buffer.building = true;
 	}
@@ -703,6 +948,11 @@ namespace fonthook::vectorfont
 		buffer.active = false;
 		buffer.building = false;
 		buffer.stamp = {};
+		buffer.executionSegment = {};
+		buffer.executionBoundaryEpoch = 1;
+		buffer.frameExternalMutationEpoch = 0;
+		buffer.executionBoundaryReason =
+			NativeA8CommandFallback::State;
 		buffer.enabled = false;
 		buffer.commands.clear();
 		buffer.runs.clear();
@@ -713,7 +963,13 @@ namespace fonthook::vectorfont
 	void InvalidateNativeA8CommandGeometry(NiTriShape* geometry)
 	{
 		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		if (!geometry || (!buffer.active && !buffer.building))
+		if (!geometry)
+			return;
+		NotifyNativeA8CommandExternalMutation(
+			NativeA8CommandFallback::Topology);
+		InvalidateNativeA8CommandExecutionSegment(
+			NativeA8CommandFallback::Topology);
+		if (!buffer.active && !buffer.building)
 			return;
 		bool invalidated = false;
 		for (NativeA8CommandSpan& span : buffer.spans)
@@ -732,6 +988,8 @@ namespace fonthook::vectorfont
 			span.partialDraw = span.partialDraw
 				|| span.state == NativeA8CommandSpanState::Executing;
 			span.executionValidationToken = 0;
+			span.executionSegmentEpoch = 0;
+			span.executionExternalMutationEpoch = 0;
 			span.state = NativeA8CommandSpanState::Fault;
 			invalidated = true;
 		}
@@ -772,113 +1030,6 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	NativeA8CommandFallback ValidateNativeA8CommandSpan(
-		const NativeA8CommandSpanView& view, bool validateRenderTarget)
-	{
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandSpanFullValidation);
-		if (!view.stamp || !view.span || !view.commands
-			|| !view.runs
-			|| view.span->validationToken
-				!= view.stamp->validationToken
-			|| view.stamp->validationToken
-				!= GetNativeA8SortedFrameValidationToken())
-		{
-			return NativeA8CommandFallback::Token;
-		}
-		if (view.stamp->nestedTraversalSerial
-			!= GetNativeA8SortedNestedTraversalSerial())
-		{
-			return NativeA8CommandFallback::Nested;
-		}
-		if (!IsNativeA8AccumulatorHookCurrent()
-			|| !IsNativeA8SortedTraversalHookCurrent()
-			|| !IsA8TileRenderPassHookCurrent())
-		{
-			return NativeA8CommandFallback::Hook;
-		}
-		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-		IDirect3DDevice9* device =
-			renderer ? renderer->GetD3DDevice() : nullptr;
-		if (!renderer || renderer != view.stamp->renderer
-			|| !device || device != view.stamp->device
-			|| view.span->generation != view.stamp->generation
-			|| !IsNativeA8ShaderGenerationCurrent(
-				view.stamp->generation))
-		{
-			return NativeA8CommandFallback::Generation;
-		}
-		if (view.span->atlasTextureEpoch
-				!= view.stamp->atlasTextureEpoch
-			|| GetNativeA8AtlasTextureEpoch()
-				!= view.stamp->atlasTextureEpoch)
-		{
-			return NativeA8CommandFallback::Atlas;
-		}
-		if (!view.span->payload
-			|| !view.span->payload->payloadTemplate
-			|| view.span->payload->useCompositePackets
-				!= view.span->useCompositePackets)
-		{
-			return NativeA8CommandFallback::Topology;
-		}
-		const std::vector<NativeA8PacketTemplate>& activePackets =
-			GetNativeA8Packets(
-				*view.span->payload->payloadTemplate,
-				view.span->useCompositePackets);
-		if (activePackets.size() != view.span->commandCount
-			|| view.span->payload->packetShaders.size()
-				!= activePackets.size())
-		{
-			return NativeA8CommandFallback::Topology;
-		}
-		for (UInt32 index = 0;
-			index < view.span->commandCount; ++index)
-		{
-			const NativeA8DrawCommand& command =
-				view.commands[view.span->firstCommand + index];
-			if (!command.payload || !command.packet || !command.program
-				|| command.payload != view.span->payload
-				|| command.packetIndex != index
-				|| command.packet != &activePackets[index]
-				|| command.payload->preparedGeneration
-					!= view.stamp->generation
-				|| command.payload->preflightAtlasTextureEpoch
-					!= view.stamp->atlasTextureEpoch
-				|| command.packetIndex
-					>= command.payload->packetShaders.size()
-				|| command.payload->packetShaders[
-					command.packetIndex] != command.program->shader
-				|| !command.program->active
-				|| command.program->generation
-					!= view.stamp->generation
-				|| command.program->device
-					!= view.stamp->device)
-			{
-				return NativeA8CommandFallback::Topology;
-			}
-			if (command.packet->atlasPage
-					>= command.payload->preflightAtlasTextures.size()
-				|| command.atlasTexture
-					!= command.payload->preflightAtlasTextures[
-						command.packet->atlasPage])
-			{
-				return NativeA8CommandFallback::Atlas;
-			}
-			if (!IsNativeA8FramePacketBindingCurrent(
-				command.binding))
-			{
-				return NativeA8CommandFallback::Resource;
-			}
-		}
-		if (validateRenderTarget
-			&& !ValidateRenderTarget(*view.stamp))
-		{
-			return NativeA8CommandFallback::RenderTarget;
-		}
-		return NativeA8CommandFallback::None;
-	}
-
 	bool BeginNativeA8CommandSpanExecution(UInt32 spanIndex,
 		NiTriShape* geometry, bool virtualLeader,
 		NativeA8CommandSpanView& view)
@@ -890,13 +1041,25 @@ namespace fonthook::vectorfont
 			return false;
 		}
 		NativeA8CommandFallback failure =
-			ValidateNativeA8CommandSpan(view, true);
+			EnsureExecutionSegmentValidated(buffer);
 		if (failure != NativeA8CommandFallback::None)
 		{
 			RecordNativeA8CommandFallback(failure);
 			return false;
 		}
 		NativeA8CommandSpan& span = buffer.spans[spanIndex];
+		if (span.validationToken != buffer.stamp.validationToken
+			|| span.generation != buffer.stamp.generation
+			|| span.atlasTextureEpoch
+				!= buffer.stamp.atlasTextureEpoch
+			|| !span.payload || !span.payload->payloadTemplate
+			|| span.payload->useCompositePackets
+				!= span.useCompositePackets)
+		{
+			RecordNativeA8CommandFallback(
+				NativeA8CommandFallback::Topology);
+			return false;
+		}
 		if (span.state != NativeA8CommandSpanState::Ready
 			|| span.virtualStock != virtualLeader)
 		{
@@ -913,6 +1076,8 @@ namespace fonthook::vectorfont
 			span.state = NativeA8CommandSpanState::Fault;
 			span.partialDraw = false;
 			span.executionValidationToken = 0;
+			span.executionSegmentEpoch = 0;
+			span.executionExternalMutationEpoch = 0;
 			RecordNativeA8CommandFallback(
 				NativeA8CommandFallback::Topology);
 			return false;
@@ -921,6 +1086,10 @@ namespace fonthook::vectorfont
 		span.partialDraw = false;
 		span.executionValidationToken =
 			buffer.stamp.validationToken;
+		span.executionSegmentEpoch =
+			buffer.executionSegment.boundaryEpoch;
+		span.executionExternalMutationEpoch =
+			buffer.executionSegment.externalMutationEpoch;
 		view.span = &span;
 		return true;
 	}
@@ -934,6 +1103,8 @@ namespace fonthook::vectorfont
 		NativeA8CommandSpan& span = buffer.spans[spanIndex];
 		span.partialDraw = drewPacket;
 		span.executionValidationToken = 0;
+		span.executionSegmentEpoch = 0;
+		span.executionExternalMutationEpoch = 0;
 		span.state = success
 			? NativeA8CommandSpanState::Consumed
 			: NativeA8CommandSpanState::Fault;
@@ -977,6 +1148,8 @@ namespace fonthook::vectorfont
 			span.state = NativeA8CommandSpanState::Fault;
 			span.partialDraw = false;
 			span.executionValidationToken = 0;
+			span.executionSegmentEpoch = 0;
+			span.executionExternalMutationEpoch = 0;
 			RecordNativeA8CommandFallback(
 				NativeA8CommandFallback::Topology);
 		}
@@ -1014,17 +1187,9 @@ namespace fonthook::vectorfont
 		{
 			commandFailure = NativeA8CommandFallback::Topology;
 		}
-		else if (span.validationToken != buffer.stamp.validationToken
-			|| buffer.stamp.validationToken
-				!= GetNativeA8SortedFrameValidationToken())
-		{
-			commandFailure = NativeA8CommandFallback::Token;
-		}
-		else if (buffer.stamp.nestedTraversalSerial
-			!= GetNativeA8SortedNestedTraversalSerial())
-		{
-			commandFailure = NativeA8CommandFallback::Nested;
-		}
+		else
+			commandFailure =
+				ValidateExecutionSegmentEpoch(buffer, span);
 		if (commandFailure != NativeA8CommandFallback::None)
 		{
 			RecordNativeA8CommandFallback(commandFailure);
@@ -1037,9 +1202,7 @@ namespace fonthook::vectorfont
 			|| command.program->generation
 				!= buffer.stamp.generation
 			|| command.program->device != buffer.stamp.device
-			|| !renderer || renderer != buffer.stamp.renderer
-			|| !IsNativeA8ShaderGenerationCurrent(
-				buffer.stamp.generation))
+			|| !renderer || renderer != buffer.stamp.renderer)
 		{
 			commandFailure = NativeA8CommandFallback::Generation;
 		}
@@ -1052,16 +1215,12 @@ namespace fonthook::vectorfont
 		{
 			commandFailure = NativeA8CommandFallback::Topology;
 		}
-		else if (GetNativeA8AtlasTextureEpoch()
-				!= buffer.stamp.atlasTextureEpoch
-			|| command.payload->preflightAtlasTextureEpoch
+		else if (command.payload->preflightAtlasTextureEpoch
 				!= buffer.stamp.atlasTextureEpoch)
 		{
 			commandFailure = NativeA8CommandFallback::Atlas;
 		}
-		else if (!IsNativeA8FramePacketBindingCurrent(
-				command.binding)
-			|| !ValidateGeometryBinding(command, geometry))
+		else if (!ValidateGeometryBinding(command, geometry))
 		{
 			commandFailure = NativeA8CommandFallback::Resource;
 		}

@@ -440,6 +440,10 @@ namespace fonthook::vectorfont
 		UInt32 atlasTextureEpoch = 0;
 		UInt64 validationToken = 0;
 		UInt64 executionValidationToken = 0;
+		// Execution-only epochs are assigned when the span enters a validated
+		// contiguous FreeType segment and cleared as soon as it is consumed.
+		UInt32 executionSegmentEpoch = 0;
+		UInt32 executionExternalMutationEpoch = 0;
 		NativeA8CommandSpanState state = NativeA8CommandSpanState::Ready;
 		bool virtualStock = false;
 		bool bridgeEligible = false;
@@ -563,6 +567,8 @@ namespace fonthook::vectorfont
 		NativeA8FramePacketBinding& binding);
 	bool IsNativeA8FramePacketBindingCurrent(
 		const NativeA8FramePacketBinding& binding);
+	bool IsNativeA8FrameResourceStampCurrent(
+		UInt32 generation, UInt32 resourceSerial, UInt32 uploadEpoch);
 	void TrimNativeA8CpuCachesForTotalBudget();
 	bool FindNativeA8SortedFrameEntry(NiTriShape* facade,
 		NativeA8SortedFrameEntryView& view);
@@ -611,11 +617,13 @@ namespace fonthook::vectorfont
 		VirtualStockShapeGroup* virtualStockGroup = nullptr);
 	void ActivateNativeA8FrameCommandBuffer();
 	void EndNativeA8FrameCommandBuffer();
+	void InvalidateNativeA8CommandExecutionSegment(
+		NativeA8CommandFallback reason = NativeA8CommandFallback::State);
+	void NotifyNativeA8CommandExternalMutation(
+		NativeA8CommandFallback reason);
 	void InvalidateNativeA8CommandGeometry(NiTriShape* geometry);
 	bool FindNativeA8CommandSpan(UInt32 spanIndex, UInt64 validationToken,
 		NativeA8CommandSpanView& view);
-	NativeA8CommandFallback ValidateNativeA8CommandSpan(
-		const NativeA8CommandSpanView& view, bool validateRenderTarget);
 	bool BeginNativeA8CommandSpanExecution(UInt32 spanIndex,
 		NiTriShape* geometry, bool virtualLeader,
 		NativeA8CommandSpanView& view);

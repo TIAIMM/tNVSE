@@ -1166,6 +1166,8 @@ namespace fonthook::vectorfont
 					++scratch.nestedTraversalSerial;
 				RecordNativeA8CommandFallback(
 					NativeA8CommandFallback::Nested);
+				InvalidateNativeA8CommandExecutionSegment(
+					NativeA8CommandFallback::Nested);
 				InvalidateNativeA8SortedShaderState();
 				const int result = state.originalSortedTileRender(accumulator);
 				InvalidateNativeA8SortedShaderState();
@@ -1672,6 +1674,8 @@ namespace fonthook::vectorfont
 				std::memory_order_release, std::memory_order_relaxed))
 			{
 				InvalidateAllVirtualStockBindings();
+				NotifyNativeA8CommandExternalMutation(
+					NativeA8CommandFallback::Atlas);
 				return;
 			}
 		}

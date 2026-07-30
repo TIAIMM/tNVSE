@@ -305,6 +305,8 @@ namespace fonthook::vectorfont
 			if (!generation)
 				return;
 			generation->runtimeFault.store(true, std::memory_order_release);
+			NotifyNativeA8CommandExternalMutation(
+				NativeA8CommandFallback::Generation);
 			bool expected = false;
 			if (generation->runtimeFaultLogged.compare_exchange_strong(expected,
 				true, std::memory_order_acq_rel))
@@ -439,7 +441,11 @@ namespace fonthook::vectorfont
 				NativeShaderGeneration* current = s_publishedGeneration.load(
 					std::memory_order_acquire);
 				if (current)
+				{
 					current->runtimeFault.store(true, std::memory_order_release);
+					NotifyNativeA8CommandExternalMutation(
+						NativeA8CommandFallback::Generation);
+				}
 				return;
 			}
 
@@ -1239,7 +1245,11 @@ namespace fonthook::vectorfont
 				NativeShaderGeneration* current = s_publishedGeneration.load(
 					std::memory_order_acquire);
 				if (current)
+				{
 					current->runtimeFault.store(true, std::memory_order_release);
+					NotifyNativeA8CommandExternalMutation(
+						NativeA8CommandFallback::Generation);
+				}
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: generation-invalidated reason=device-reset generation=%u phase=release; dynamic VB/IB ring released",
 					current ? current->id : 0);
@@ -1325,6 +1335,8 @@ namespace fonthook::vectorfont
 		candidate->id = s_nextGeneration++;
 		s_processGenerations.push_back(candidate);
 		s_publishedGeneration.store(candidate, std::memory_order_release);
+		NotifyNativeA8CommandExternalMutation(
+			NativeA8CommandFallback::Generation);
 		const char* compositeProfileMode =
 			!g_bEnableFreeTypeFontAggressivePerformanceMode
 				&& candidate->distanceFieldMethod
@@ -1444,6 +1456,8 @@ namespace fonthook::vectorfont
 
 	void InvalidateNativeA8SortedShaderState()
 	{
+		InvalidateNativeA8CommandExecutionSegment(
+			NativeA8CommandFallback::State);
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 		batch.device = nullptr;
 		batch.generation = 0;

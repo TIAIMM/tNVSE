@@ -357,7 +357,17 @@ namespace fonthook::vectorfont
 				serial = 1u;
 				state.resourceSerial.store(serial, std::memory_order_release);
 			}
+			NotifyNativeA8CommandExternalMutation(
+				NativeA8CommandFallback::Resource);
 			return serial;
+		}
+
+		void AdvanceUploadEpochLocked(NativeA8RingState& state)
+		{
+			if (++state.uploadEpoch == 0)
+				++state.uploadEpoch;
+			NotifyNativeA8CommandExternalMutation(
+				NativeA8CommandFallback::Resource);
 		}
 
 		void ReleaseRingResourcesLocked(NativeA8RingState& state)
@@ -367,9 +377,7 @@ namespace fonthook::vectorfont
 			// any buffer or declaration can be released.
 			InvalidateAllVirtualStockBindings();
 			state.releasePending.store(false, std::memory_order_release);
-			++state.uploadEpoch;
-			if (!state.uploadEpoch)
-				++state.uploadEpoch;
+			AdvanceUploadEpochLocked(state);
 			state.uploadedPayloads.clear();
 			state.staticPayloads.clear();
 			state.staticCandidates.clear();
@@ -1945,9 +1953,7 @@ namespace fonthook::vectorfont
 		{
 			startVertex = 0;
 			lockFlags = D3DLOCK_DISCARD;
-			++state.uploadEpoch;
-			if (!state.uploadEpoch)
-				++state.uploadEpoch;
+			AdvanceUploadEpochLocked(state);
 			state.uploadedPayloads.clear();
 			s_ringThread.uploadedPayload = {};
 			state.nextVertex = 0;
@@ -2404,9 +2410,7 @@ namespace fonthook::vectorfont
 					}
 					startVertex = 0;
 					lockFlags = D3DLOCK_DISCARD;
-					++state.uploadEpoch;
-					if (!state.uploadEpoch)
-						++state.uploadEpoch;
+					AdvanceUploadEpochLocked(state);
 					state.uploadedPayloads.clear();
 					RefreshRingCpuMemoryLocked(state);
 					s_ringThread.uploadedPayload = {};
@@ -2770,6 +2774,30 @@ namespace fonthook::vectorfont
 			&& state->resourceSerial.load(std::memory_order_acquire)
 				== lease.resourceSerial
 			&& state->uploadEpoch == lease.uploadEpoch;
+	}
+
+	bool IsNativeA8FrameResourceStampCurrent(
+		UInt32 generation, UInt32 resourceSerial, UInt32 uploadEpoch)
+	{
+		if (!generation || !resourceSerial
+			|| !s_sortedRingLease.active)
+		{
+			return false;
+		}
+		const NativeA8SortedRingLease& lease = s_sortedRingLease;
+		const NativeA8RingState* state = lease.state;
+		return state && lease.active
+			&& generation == lease.generation
+			&& resourceSerial == lease.resourceSerial
+			&& uploadEpoch == lease.uploadEpoch
+			&& lease.indexBuffer && lease.declaration
+			&& (lease.staticVertexBuffer || lease.dynamicVertexBuffer)
+			&& state->generation == lease.generation
+			&& state->resourceSerial.load(std::memory_order_acquire)
+				== lease.resourceSerial
+			&& state->uploadEpoch == lease.uploadEpoch
+			&& state->indexBuffer == lease.indexBuffer
+			&& state->declaration == lease.declaration;
 	}
 
 	void ReleaseNativeA8RingResources()

@@ -1011,6 +1011,8 @@ namespace fonthook::vectorfont
 
 	void InvalidateAllVirtualStockBindings()
 	{
+		NotifyNativeA8CommandExternalMutation(
+			NativeA8CommandFallback::Resource);
 		std::vector<std::shared_ptr<VirtualStockShapeGroup>> groups;
 		{
 			A8State& state = State();

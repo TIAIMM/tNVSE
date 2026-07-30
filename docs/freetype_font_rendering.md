@@ -1079,32 +1079,44 @@ span, while followers consume only a token- and geometry-validated skip marker.
 A one-packet facade or Virtual-stock group still performs one stock bootstrap
 through its direct command lookup.
 
-Before a span starts, one full validation checks the sorted validation token,
-accumulator nesting serial, hook identity, renderer/device and shader
-generation, complete packet/program topology, atlas epoch, every VB resource
-serial/upload epoch, render-target identity, and viewport identity. Each
-immediate callback then performs only an execution-token check and the
-packet-local generation, atlas, residency, and geometry-binding checks needed
-to catch a reset or mutation during the span. Render target/viewport and the
-complete packet list are not queried again for every packet. Device reset,
-shader reload, atlas mutation, resource replacement, shape destruction, or
-Virtual-stock retirement therefore still faults the affected command
-immediately. A failure before any draw re-enters the unchanged current path;
-after any packet reaches the driver, the span is marked faulted and followers
-are consumed without replay, preventing duplicate layers.
+Full validation is owned by a contiguous FreeType execution segment rather than
+by each logical text span. The first command after traversal activation, a
+non-FreeType Tile, nested traversal, or explicit native-state invalidation
+checks the sorted validation token, nesting serial, all three hook identities,
+renderer/device and shader generation, atlas epoch, the sealed ring resource
+serial/upload epoch, render-target identity, and viewport identity. Adjacent
+FreeType spans reuse that result while both the local segment epoch and the
+cross-thread external-mutation epoch remain unchanged. Any external mutation
+after command compilation invalidates the remaining command table for that
+traversal; it is never accepted merely by opening a later segment.
+
+Each immediate callback retains its execution-token, command-range, renderer,
+program/payload, and exact live geometry-binding checks. It no longer repeats
+frame token, nesting, shader-generation, atlas-generation, or ring-lease
+queries that the segment already certified. Device reset, shader publication or
+fault, atlas mutation, ring resource replacement/discard, shape destruction,
+Virtual-stock binding invalidation, nested traversal, and every transition
+through a non-FreeType Tile advance one of the epochs. A mutation during a span
+therefore faults its next packet before drawing. A failure before any draw
+re-enters the unchanged current path; after any packet reaches the driver, the
+span is marked faulted and followers are consumed without replay, preventing
+duplicate layers.
 
 The periodic command line reports recorded spans/packets, span hits/misses,
 retained bridge draws, guarded native replays, saved stock bootstraps, fused
-Virtual-stock spans/followers, arbitrary-range direct replays, full/light/render
-target validation counts, retained-program hits/misses, and fallbacks by token,
-generation, atlas, resource, topology, hook, nesting, render target, and state.
+Virtual-stock spans/followers, arbitrary-range direct replays, legacy
+per-span-full/light/render-target validation counts, successful execution
+segments, segment full validations/reuses/invalidations, retained-program
+hits/misses, and fallbacks by token, generation, atlas, resource, topology,
+hook, nesting, render target, and state.
 The timing line adds `command_build` and `command_submit` while preserving
 `submit`. Runtime validation should confirm nonzero `native_replays` and
-`direct_range_replays`, `render_target_validations` tracking
-`full_validations` rather than `light_validations`, zero unexpected fallbacks,
-and that `stock_constant_updates` approaches the logical-span count without
-visual or runtime faults. Build success alone does not establish runtime
-correctness or the CPU-performance thresholds.
+`direct_range_replays`, `span_full_validations=0`,
+`render_target_validations` tracking `segment_full_validations` rather than
+logical spans or packets, substantial `segment_validation_reuses`, zero
+unexpected fallbacks, and that `stock_constant_updates` approaches the
+logical-span count without visual or runtime faults. Build success alone does
+not establish runtime correctness or the CPU-performance thresholds.
 
 ## Atlas allocation, mipmaps, and memory
 
