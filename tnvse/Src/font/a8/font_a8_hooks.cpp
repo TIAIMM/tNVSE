@@ -107,15 +107,15 @@ namespace fonthook::vectorfont
 			return victim;
 		}
 
-		// D3D9 shader constants are draw-program inputs rather than renderer
-		// state that must survive a pass boundary. The test-build symbols prove
-		// that RenderPassImmediately_Standard calls SetupGeometryConstants before
-		// every geometry draw. NiD3DShaderConstantMap::SetShaderConstants then
-		// submits each live reflected entry; TileShader publishes PS c0 and VS
-		// c0-c4, and the shipped TILE1000/1001/1002 programs read no other stock
-		// constants. Native A8 owns PS c1-c8 and VS c4 only while its program is
-		// bound. At the next stock Tile, that pass republishes every register it
-		// reads; after the sorted Tile traversal, the next shader does the same.
+		// D3D9 shader constants are draw-program inputs rather than renderer state
+		// that must survive a pass boundary. The test-build symbols prove that
+		// RenderPassImmediately_Standard calls SetupGeometryConstants before every
+		// geometry draw. NiD3DShaderConstantMap::SetShaderConstants then submits
+		// each live reflected entry. TileShader publishes PS c0 and VS c0-c4;
+		// tNVSE uses the non-overlapping SM3 reserved ranges PS c176-c183 and
+		// VS c208.
+		// Shipped constant tables, including relative arrays, end at PS c24 and
+		// VS c120; shader-local pixel literals extend only to c30.
 		//
 		// Treat the native range as pass-local ownership instead of snapshotting
 		// and restoring the global D3D register file. This removes one pixel and
@@ -3600,9 +3600,9 @@ namespace fonthook::vectorfont
 			// Font::MakeTriShape proxy and then executes the untouched
 			// TileRenderPass -> NiTriShape::RenderImmediate renderer path.
 			//
-			// Final ARGB and baked-coverage bitmaps use only c0. Skipping the
-			// distance-field c1-c8/VS-c4 isolation and facade bookkeeping removes
-			// the only per-facade driver readback/writeback from this stock-like
+			// Final ARGB and baked-coverage bitmaps use only stock c0. Skipping the
+			// distance-field private-high-range ownership and facade bookkeeping
+			// removes the only per-facade isolation work from this stock-like
 			// multipage route.
 			const bool isolatePacketConstants =
 				!draw.stockLikeBitmapRoute;
@@ -3615,8 +3615,8 @@ namespace fonthook::vectorfont
 				if (isolatePacketConstants)
 					shaderBatch.emplace();
 				// Retail 0xB64F90 calls RenderPassImmediately once per sorted item
-				// with no intervening draw. Own PS c1-c8 and VS c4 for the
-				// contiguous native segment; the next pass republishes its inputs.
+				// with no intervening draw. Own PS c176-c183 and VS c208 for the
+				// contiguous native segment.
 				if (batchedConstants)
 				{
 					if (!s_constantOwnershipBatch.EnsureOwned(device))

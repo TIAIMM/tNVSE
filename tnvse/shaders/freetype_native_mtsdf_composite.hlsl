@@ -12,17 +12,17 @@
 
 sampler2D FontAtlas : register(s0);
 float4 TileColor : register(c0);
-float4 ShadowColor : register(c1);
-float4 AtlasPass : register(c2);      // invWidth, invHeight, reserved, raster
-float4 EffectPrimary : register(c3);  // shadow blur/power, glow inner/outer
-float4 EffectSecondary : register(c4);// glow power, outline width/softness,
-                                      // hard-shadow glow alpha
-float4 GlowColor : register(c5);
-float4 OutlineColor : register(c6);
-float4 FillColor : register(c7);
-float4 CompositeFlags : register(c8);// hard-shadow outline alpha,
-                                     // live-Tile-RGB layer mask,
-                                     // shadow x/y in source pixels
+float4 ShadowColor : register(c176);
+float4 AtlasPass : register(c177);      // invWidth, invHeight, reserved, raster
+float4 EffectPrimary : register(c178);  // shadow blur/power, glow inner/outer
+float4 EffectSecondary : register(c179);// glow power, outline width/softness,
+                                        // hard-shadow glow alpha
+float4 GlowColor : register(c180);
+float4 OutlineColor : register(c181);
+float4 FillColor : register(c182);
+float4 CompositeFlags : register(c183);// hard-shadow outline alpha,
+                                       // live-Tile-RGB layer mask,
+                                       // shadow x/y in source pixels
 
 #if COMPOSITE_STATIC_SHIFTED_SHADOW == 0
 #define NATIVE_FONT_EXPLICIT_LOD 0

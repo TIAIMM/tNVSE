@@ -1168,8 +1168,9 @@ namespace fonthook::vectorfont
 			{
 				// A nested stock Tile pass must not see facade entries from the outer
 				// accumulator. It retains the fully validated map/preflight fallback.
-				// Its draws may also change sampler and c1-c8 state outside the outer
-				// traversal, so neither side may inherit the other's sorted cache.
+				// Its draws may also change sampler and private c176-c183 state
+				// outside the outer traversal, so neither side may inherit the
+				// other's sorted cache.
 				const bool restoreActive = scratch.active;
 				scratch.active = false;
 				++scratch.nestedBypassDepth;

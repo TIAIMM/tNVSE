@@ -1197,16 +1197,39 @@ pass-ownership contract rather than a device snapshot. The symbolized test
 build shows that `BSBatchRenderer::RenderPassImmediately_Standard` invokes
 `SetupGeometryConstants` before `PrepareGeometryForRendering` and the geometry
 draw, while `NiD3DShaderConstantMap::SetShaderConstants` submits every live
-reflected entry. `TileShader::CreateConstantMaps` binds `tintcolor` to PS c0,
-`WorldViewProjTranspose` to VS c0-c3, and `TexScroll` to VS c4. The shipped
-`TILE1000`, `TILE1001`, and `TILE1002` bytecode reads precisely those ranges.
-Native A8 may therefore own PS c1-c8 and VS c4 while its program is bound:
-the next stock Tile republishes all constants it can read, and the first
-non-Tile pass after the sorted traversal likewise publishes its own reflected
-inputs before drawing. No D3D `GetPixelShaderConstantF` or
+reflected entry. Both the official executable and the symbolized test build
+show that `TileShader::CreateConstantMaps` binds `tintcolor` to PS c0,
+`WorldViewProjTranspose` to VS c0-c3, and `TexScroll` to VS c4. A scan of every
+decompiled shipped shader package finds that reflected constant tables,
+including relatively indexed arrays, end at PS c24 and VS c120; shader-local
+pixel `def` literals extend only to c30. Native A8 consequently leaves all
+stock registers intact. Its immutable packet block occupies the middle-high
+reserved PS c176-c183 band and its analytic-AA input occupies VS c208. This
+leaves 40 pixel and 47 vertex float registers above tNVSE's highest register,
+avoiding both the audited low/middle footprint and the SM3 register-file edge.
+PS c0 remains the live stock Tile color and VS c0-c4 remains entirely
+stock-owned. No D3D
+`GetPixelShaderConstantF` or
 `GetVertexShaderConstantF` snapshot is taken and no stale snapshot is written
-back. Device-loss and native submission failures still follow the existing
-runtime-fault handling.
+back. Initialization also rejects a device whose advertised vertex constant
+count cannot address c208. Device-loss and native submission failures still
+follow the existing runtime-fault handling.
+
+The high-register ABI was also checked against common shader plugins.
+NewVegas Reloaded's explicit New Vegas ranges end at c145, its D3D9 device
+proxy forwards constant writes unchanged, and a separately compiled
+high-pressure `WetWorld` pixel entry uses external constants only through c79
+and shader-local literals through c103. Its explicit New Vegas vertex ranges
+end at c145. The same source tree's Oblivion-only grass path occupies VS
+c20-c252 and would overlap c208, but that package is not selected by the New
+Vegas build; the compatibility claim is deliberately scoped to the supplied
+New Vegas runtime. Fallout Dynamic Reflections adds only PS c1/c27 and c3/c11
+variants to 3D lighting passes. FNV Depth Resolve's replacement DOF shaders
+use VS and PS c0-c2 and hook the main 3D accumulator rather than the sorted
+Tile traversal. Those New Vegas plugin paths therefore do not overlap PS
+c176-c183 or VS c208. Their real rendering occurs outside a native sorted
+execution segment; every traversal start clears the local constant shadow,
+while nested and non-FreeType transitions invalidate it.
 
 Retained packet binding also treats
 `TileShader::SetupGeometryTextures` as the owner of VS/PS publication, as
@@ -1233,18 +1256,17 @@ directly and calls the engine setter only when it is not already
 `D3DTEXF_NONE`. A stock setup preserves sampler readiness when its resulting
 mirror is already correct. A same-profile command whose program, packet
 constant, vertex-AA, and sampler mirrors are all current bypasses the three
-binder helpers entirely while recording their reuse counters. Packet c1-c8
-uploads compare the
+binder helpers entirely while recording their reuse counters. Packet
+c176-c183 uploads compare the
 traversal-local constant shadow and submit only the changed contiguous register
-range. The stock Tile vertex constant map contains
-`WorldViewProjTranspose` at c0-c3 and `TexScroll` at c4. Every native
-profile removes only its private `TexScroll` entry, leaving the original
-`TileShader::UpdateConstants` call responsible for the live WVP while
-preventing it from overwriting tNVSE's analytic-AA c4. Consequently c4 is
-reused after stock updates whenever the sorted/facade mirror still proves the
-same device, generation, viewport, and raster scale; external Tile draws,
-nested traversal, reset, generation changes, and explicit state invalidation
-still force a new publication.
+range. The original Tile vertex constant maps are no longer specialized or
+mutated: `TileShader::UpdateConstants` continues to publish both
+`WorldViewProjTranspose` at c0-c3 and `TexScroll` at c4, while the native vertex
+shader reads its AA profile only from c208. Consequently c208 can be reused
+after stock updates whenever the sorted/facade mirror still proves the same
+device, generation, viewport, and raster scale; external shaders, nested
+traversal, reset, generation changes, and explicit state invalidation still
+force a new publication.
 
 Packet admission now produces a short-lived binding proof before entering the
 immediate callback. A direct facade proof comes from the binding scope that has
@@ -1285,8 +1307,8 @@ constant-capture and `state_shadow_driver_gets` fields so a runtime log proves
 that the former path stayed inactive, followed by program/texture/packet and
 vertex-AA reuse counters. Program reuse is counted as two avoided
 publications, one VS plus one PS. A `vertex_aa_stock_preserved` count records
-stock updates that retained the already published native c4 through the
-WVP-only profile map. A healthy interval has nonzero, balanced ownership
+stock updates that leave the already published native c208 outside their
+c0-c4 range. A healthy interval has nonzero, balanced ownership
 segments/releases, `snapshot_gets_elided == 2 * constant_ownership_segments`,
 `restore_sets_elided == 2 * releases`, and zero
 `state_shadow_driver_gets`, driver captures, and `isolation_bypass`.

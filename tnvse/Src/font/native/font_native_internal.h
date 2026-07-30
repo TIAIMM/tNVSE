@@ -32,10 +32,17 @@ namespace fonthook::vectorfont
 	inline constexpr size_t kNativeA8PacketConstantRegisterCount = 8;
 	inline constexpr size_t kNativeA8PacketConstantFloatCount =
 		kNativeA8PacketConstantRegisterCount * 4;
-	// c0-c3 retain the stock Tile WVP matrix. c4 is tNVSE-owned while a native
-	// distance-field packet is active and carries viewport/raster information
-	// used to compute the analytic AA footprint in the vertex shader.
-	inline constexpr UInt32 kNativeA8VertexAaConstantRegister = 4;
+	// Keep every tNVSE-owned float constant above the complete shipped and
+	// audited New Vegas plugin shader footprint, while retaining guard space
+	// below the SM3 register-file boundary. Pixel c0 remains the stock Tile
+	// color; vertex c0-c4 remain the stock WVP/TexScroll range.
+	inline constexpr UInt32 kNativeA8PixelConstantBaseRegister = 176;
+	inline constexpr UInt32 kNativeA8PixelConstantLastRegister =
+		kNativeA8PixelConstantBaseRegister
+		+ static_cast<UInt32>(kNativeA8PacketConstantRegisterCount) - 1u;
+	inline constexpr UInt32 kNativeA8VertexAaConstantRegister = 208;
+	static_assert(kNativeA8PixelConstantLastRegister <= 223);
+	static_assert(kNativeA8VertexAaConstantRegister <= 255);
 
 	enum class NativeA8ShaderClass : UInt8
 	{

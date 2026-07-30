@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 
 set "FXC=%WindowsSdkDir%bin\%WindowsSDKVersion%x64\fxc.exe"
 if not exist "%FXC%" set "FXC=C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe"
@@ -10,20 +10,14 @@ if not exist "%FXC%" (
 )
 
 if not exist "%~dp0compiled" mkdir "%~dp0compiled"
-if exist "%~dp0compiled\tnvse_freetype_native_original.pso" del /q "%~dp0compiled\tnvse_freetype_native_original.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_coverage.pso" del /q "%~dp0compiled\tnvse_freetype_native_coverage.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_argb.pso" del /q "%~dp0compiled\tnvse_freetype_native_argb.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_sdf.pso" del /q "%~dp0compiled\tnvse_freetype_native_sdf.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_effects_fast.pso" del /q "%~dp0compiled\tnvse_freetype_native_effects_fast.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_effects_balanced.pso" del /q "%~dp0compiled\tnvse_freetype_native_effects_balanced.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_effects_high.pso" del /q "%~dp0compiled\tnvse_freetype_native_effects_high.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_mtsdf_fill.pso" del /q "%~dp0compiled\tnvse_freetype_native_mtsdf_fill.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso" del /q "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso" del /q "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_high.pso" del /q "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_subpixel_high.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_fast.pso" del /q "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_fast.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_balanced.pso" del /q "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_balanced.pso"
-if exist "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_high.pso" del /q "%~dp0compiled\tnvse_freetype_native_sdf_fill_subpixel_high.pso"
+del /q "%~dp0compiled\tnvse_freetype_native_*.pso" 2>nul
+del /q "%~dp0compiled\tnvse_freetype_native_*.vso" 2>nul
+for %%F in ("%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_freetype_native_*.vso") do (
+	if exist "%%~fF" (
+		echo Could not remove stale shader output %%~fF.
+		exit /b 1
+	)
+)
 "%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_vs.vso" "%~dp0freetype_native_vs.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_coverage.pso" "%~dp0freetype_native_coverage.hlsl"
@@ -72,6 +66,17 @@ call :compile_mtsdf_profiles 1 balanced
 if errorlevel 1 exit /b %errorlevel%
 call :compile_mtsdf_profiles 2 high
 if errorlevel 1 exit /b %errorlevel%
+for /f %%C in ('dir /b /a-d "%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_freetype_native_*.vso" 2^>nul ^| find /c /v ""') do set "OUTPUT_COUNT=%%C"
+if not "%OUTPUT_COUNT%"=="57" (
+	echo Expected 57 native shader outputs, found %OUTPUT_COUNT%.
+	exit /b 1
+)
+for %%F in ("%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_freetype_native_*.vso") do (
+	if %%~zF LEQ 0 (
+		echo Shader output is empty: %%~fF.
+		exit /b 1
+	)
+)
 exit /b 0
 
 :compile_mtsdf_profiles

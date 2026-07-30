@@ -1,5 +1,5 @@
 float4x4 WorldViewProjection : register(c0);
-float4 NativeAaProfile : register(c4); // viewport half-size, raster scale, valid
+float4 NativeAaProfile : register(c208); // viewport half-size, raster scale, valid
 
 struct NativeFontVertexInput
 {

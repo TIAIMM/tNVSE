@@ -4,10 +4,10 @@
 
 sampler2D FontAtlas : register(s0);
 float4 TileColor : register(c0);
-float4 AtlasPass : register(c2);    // invWidth, invHeight, layer, raster scale
-float4 EffectParams : register(c3); // layer-specific source-pixel parameters
-float4 MtsdfFlags : register(c4);   // hard shadow y: outline softness,
-                                    // z/w: copied glow/outline alpha
+float4 AtlasPass : register(c177);    // invWidth, invHeight, layer, raster scale
+float4 EffectParams : register(c178); // layer-specific source-pixel parameters
+float4 MtsdfFlags : register(c179);   // hard shadow y: outline softness,
+                                      // z/w: copied glow/outline alpha
 
 #include "freetype_native_common.hlsli"
 

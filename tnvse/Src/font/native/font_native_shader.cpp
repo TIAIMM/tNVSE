@@ -241,7 +241,6 @@ namespace fonthook::vectorfont
 		UInt32 s_nextGeneration = 1;
 		DWORD s_lastInitializationAttempt = 0;
 		std::atomic<bool> s_invalidVtableLogged = false;
-		std::atomic<bool> s_vertexConstantMapFailureLogged = false;
 		std::atomic<UInt32> s_compositeProfileLogCount = 0;
 		std::atomic<bool> s_resetInProgress = false;
 		NiDX9Renderer* s_resetRenderer = nullptr;
@@ -429,47 +428,6 @@ namespace fonthook::vectorfont
 			return viewport.Width && viewport.Height;
 		}
 
-		bool RemoveNativeTexScrollConstant(
-			NiD3DShaderConstantMap* constantMap, bool requireWorldViewProjection)
-		{
-			if (!constantMap)
-				return !requireWorldViewProjection;
-
-			constexpr const char* kWorldViewProjection =
-				"WorldViewProjTranspose";
-			constexpr const char* kTexScroll = "TexScroll";
-			if (requireWorldViewProjection
-				&& !constantMap->GetEntry(kWorldViewProjection))
-			{
-				return false;
-			}
-			if (constantMap->GetEntry(kTexScroll))
-				constantMap->RemoveEntry(kTexScroll);
-			return !constantMap->GetEntry(kTexScroll)
-				&& (!requireWorldViewProjection
-					|| constantMap->GetEntry(kWorldViewProjection));
-		}
-
-		bool SpecializeNativeVertexConstantMaps(
-			TileShader* shader, NiD3DPass* pass)
-		{
-			if (!shader)
-				return false;
-			NiD3DShaderConstantMap* shaderMap =
-				shader->m_spVertexConstantMap.m_pObject;
-			if (!RemoveNativeTexScrollConstant(shaderMap, true))
-				return false;
-
-			// The retail Tile map contains WVP at c0-c3 followed by TexScroll at
-			// c4. Native shaders own c4 for their analytic-AA profile. Strip the
-			// stock c4 entry from both profile-local views so the untouched stock
-			// UpdateConstants call still refreshes WVP without overwriting c4.
-			NiD3DShaderConstantMap* passMap = pass
-				? pass->m_spVertexConstantMap.m_pObject : nullptr;
-			return passMap == shaderMap
-				|| RemoveNativeTexScrollConstant(passMap, false);
-		}
-
 		HRESULT EnsureNativeSamplerState(IDirect3DDevice9* device,
 			bool& changed, const char*& operation);
 
@@ -519,16 +477,14 @@ namespace fonthook::vectorfont
 				static_cast<float>(viewport.Height) * 0.5f,
 				rasterScale, 1.0f
 			};
-			// Stock TileShader::UpdateConstants runs immediately before this call.
-			// Its reflected vertex-constant map is free to rewrite c4 for every
-			// stock bootstrap, so force-publish after that call. Retained
-			// continuation packets do not run the stock updater and may reuse c4
-			// when both viewport and raster scale remain unchanged.
+			// Stock TileShader::UpdateConstants owns only c0-c4. The private c208
+			// value therefore survives stock Tile updates and may be reused while
+			// device, generation, viewport and raster scale remain unchanged.
 			const HRESULT constantResult = device->SetVertexShaderConstantF(
 				kNativeA8VertexAaConstantRegister, aaProfile.data(), 1);
 			if (FAILED(constantResult))
 			{
-				operation = "SetVertexShaderConstantF(c4-aa)";
+				operation = "SetVertexShaderConstantF(c208-aa)";
 				return constantResult;
 			}
 			if (cache)
@@ -604,16 +560,17 @@ namespace fonthook::vectorfont
 				&& (sortedBatch.device != device
 					|| sortedBatch.generation != generation->id))
 			{
-				// Device/generation identity is shared by the sampler and c1-c8
-				// caches. A change invalidates both before this submission can
-				// publish a new identity.
+				// Device/generation identity is shared by the sampler and private
+				// c176-c183 caches. A change invalidates both before this
+				// submission can publish a new identity.
 				ResetSortedShaderIdentity(
 					sortedBatch, device, generation->id);
 			}
 			// Distance-field profiles bind different pixel programs and upload
-			// c0-c8 directly. The stock update refreshes Tile's color/alpha constant
-			// map on every packet, so c0 must be republished after every stock call
-			// even when its value is unchanged. Only tNVSE-owned c1-c8 may be reused.
+			// stock c0 and private c176-c183 separately. The stock update refreshes
+			// Tile's color/alpha constant map on every packet, so c0 must be
+			// republished after every stock call even when its value is unchanged.
+			// Only the tNVSE-owned high block may be reused.
 			std::array<float, 4> tileConstant;
 			if (!ResolveStockTilePixelConstant(
 				properties, tileConstant.data()))
@@ -646,15 +603,14 @@ namespace fonthook::vectorfont
 							VertexAaConstantStockPreserved);
 				}
 			}
-			if (simpleColorProfile)
-			{
-				// The baked-coverage program consumes only live Tile c0. Avoid the
-				// eight distance/effect registers that make no contribution to this
-				// stock-like one-sample path.
-				constantsResult = device->SetPixelShaderConstantF(
-					0, tileConstant.data(), 1);
-			}
-			else
+
+			// c0 remains live stock Tile state for every native profile. It cannot
+			// be combined with the discontiguous private high block.
+			const char* constantsOperation =
+				"SetPixelShaderConstantF(stock-c0)";
+			constantsResult = device->SetPixelShaderConstantF(
+				0, tileConstant.data(), 1);
+			if (SUCCEEDED(constantsResult) && !simpleColorProfile)
 			{
 				const NativeShaderProfile* cachedProfile = nullptr;
 				const std::array<float,
@@ -671,16 +627,12 @@ namespace fonthook::vectorfont
 
 				if (!cachedConstants)
 				{
-					std::array<float,
-						(kNativeA8PacketConstantRegisterCount + 1) * 4>
-						fullConstants;
-					std::copy(tileConstant.begin(), tileConstant.end(),
-						fullConstants.begin());
-					std::copy(profile->constants.begin(),
-						profile->constants.end(), fullConstants.begin() + 4);
+					constantsOperation =
+						"SetPixelShaderConstantF(native-c176-c183)";
 					constantsResult = device->SetPixelShaderConstantF(
-						0, fullConstants.data(), static_cast<UINT>(
-							kNativeA8PacketConstantRegisterCount + 1));
+						kNativeA8PixelConstantBaseRegister,
+						profile->constants.data(), static_cast<UINT>(
+							kNativeA8PacketConstantRegisterCount));
 					if (SUCCEEDED(constantsResult))
 					{
 						RecordFreeTypePerf(
@@ -689,18 +641,6 @@ namespace fonthook::vectorfont
 				}
 				else
 				{
-					// c0 is owned by the live Tile submission and may have been
-					// touched by the stock update above. c1-c8 remain tNVSE-owned
-					// across consecutive native facades in the sorted Tile run.
-					constantsResult = device->SetPixelShaderConstantF(
-						0, tileConstant.data(), 1);
-					if (FAILED(constantsResult))
-					{
-						MarkGenerationFault(generation,
-							"SetPixelShaderConstantF(c0)", constantsResult);
-						return;
-					}
-
 					size_t firstChanged =
 						kNativeA8PacketConstantRegisterCount;
 					size_t lastChanged = 0;
@@ -727,8 +667,12 @@ namespace fonthook::vectorfont
 					}
 					if (firstChanged < kNativeA8PacketConstantRegisterCount)
 					{
+						constantsOperation =
+							"SetPixelShaderConstantF(native-high-partial)";
 						constantsResult = device->SetPixelShaderConstantF(
-							static_cast<UINT>(1u + firstChanged),
+							static_cast<UINT>(
+								kNativeA8PixelConstantBaseRegister
+									+ firstChanged),
 							profile->constants.data() + firstChanged * 4u,
 							static_cast<UINT>(
 								lastChanged - firstChanged + 1u));
@@ -748,8 +692,8 @@ namespace fonthook::vectorfont
 			}
 			if (FAILED(constantsResult))
 			{
-				MarkGenerationFault(generation, "SetPixelShaderConstantF(c0-c8)",
-					constantsResult);
+				MarkGenerationFault(
+					generation, constantsOperation, constantsResult);
 				return;
 			}
 			if (batchActive && !simpleColorProfile)
@@ -1045,22 +989,11 @@ namespace fonthook::vectorfont
 			void** stockVtable = *reinterpret_cast<void***>(shader);
 			if (!pass || pass->m_uiStageCount < 1 || !stockVtable)
 				return nullptr;
-			if (!SpecializeNativeVertexConstantMaps(shader, pass))
-			{
-				bool expected = false;
-				if (s_vertexConstantMapFailureLogged.compare_exchange_strong(
-					expected, true, std::memory_order_acq_rel))
-				{
-					gLog.FormattedMessage(
-						"tnvse_freetype_native: profile unavailable reason=vertex-constant-map-layout shaderClass=%u; retaining stock fallback",
-						static_cast<UInt32>(packet.shaderClass));
-				}
-				return nullptr;
-			}
 
-			// Preserve the complete immutable c1-c8 packet ABI. COLOR0 now owns
-			// only the shared per-glyph base modifier, so replacing c1 with the
-			// historical identity value would turn every fixed effect layer white.
+			// Preserve the complete immutable private c176-c183 packet ABI.
+			// COLOR0 now owns only the shared per-glyph base modifier, so
+			// replacing c176 with the historical identity value would turn every
+			// fixed effect layer white.
 			auto* profile = new NativeShaderProfile(generation, key,
 				packet.constants);
 			profile->shader = shader;
@@ -1461,6 +1394,8 @@ namespace fonthook::vectorfont
 		if (renderer && device
 			&& renderer->m_kD3DCaps9.VertexShaderVersion >= D3DVS_VERSION(3, 0)
 			&& renderer->m_kD3DCaps9.PixelShaderVersion >= D3DPS_VERSION(3, 0)
+			&& renderer->m_kD3DCaps9.MaxVertexShaderConst
+				> kNativeA8VertexAaConstantRegister
 			&& ResolveShaderLoader(createVS, createPS, failure))
 		{
 			candidate = BuildGeneration(createVS, createPS, renderer, device,
@@ -1474,6 +1409,11 @@ namespace fonthook::vectorfont
 			|| renderer->m_kD3DCaps9.PixelShaderVersion < D3DPS_VERSION(3, 0))
 		{
 			failure = "shader-model-3";
+		}
+		else if (renderer->m_kD3DCaps9.MaxVertexShaderConst
+			<= kNativeA8VertexAaConstantRegister)
+		{
+			failure = "shader-constant-registers";
 		}
 
 		if (!candidate || !GenerationResourcesReady(candidate))
@@ -1498,7 +1438,7 @@ namespace fonthook::vectorfont
 					== DistanceFieldMethod::Mtsdf
 				? "lazy-36" : "disabled";
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s vertexAa=analytic-c4-wvp-only-map vertexFormat=float4 vertexStride=%u declTypes=0x%08X",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s constantAbi=stock-ps-c0-vs-c0-c4-private-ps-c176-c183-vs-c208 vertexAa=analytic-c208-stock-map-intact vertexFormat=float4 vertexStride=%u declTypes=0x%08X maxVertexConstants=%u",
 			candidate->id, candidate->device,
 			g_bEnableFreeTypeFontAggressivePerformanceMode
 				? "argb-composite" : "distance-field",
@@ -1506,7 +1446,8 @@ namespace fonthook::vectorfont
 				? "disabled" : GetConfiguredDistanceFieldMethodName(),
 			compositeProfileMode,
 			static_cast<UInt32>(sizeof(NativeA8GpuVertex)),
-			candidate->renderer->m_kD3DCaps9.DeclTypes);
+			candidate->renderer->m_kD3DCaps9.DeclTypes,
+			candidate->renderer->m_kD3DCaps9.MaxVertexShaderConst);
 		return true;
 	}
 
@@ -1909,13 +1850,14 @@ namespace fonthook::vectorfont
 			HRESULT result = D3D_OK;
 			if (!batchActive || !batch.packetConstantsReady)
 			{
-				result = device->SetPixelShaderConstantF(1,
+				result = device->SetPixelShaderConstantF(
+					kNativeA8PixelConstantBaseRegister,
 					profile->constants.data(), static_cast<UINT>(
 						kNativeA8PacketConstantRegisterCount));
 				if (FAILED(result))
 				{
 					operation =
-						"SetPixelShaderConstantF(command-c1-c8)";
+						"SetPixelShaderConstantF(command-c176-c183)";
 					return result;
 				}
 				RecordFreeTypePerf(
@@ -1951,7 +1893,9 @@ namespace fonthook::vectorfont
 					< kNativeA8PacketConstantRegisterCount)
 				{
 					result = device->SetPixelShaderConstantF(
-						static_cast<UINT>(1u + firstChanged),
+						static_cast<UINT>(
+							kNativeA8PixelConstantBaseRegister
+								+ firstChanged),
 						profile->constants.data()
 							+ firstChanged * 4u,
 						static_cast<UINT>(
@@ -2178,8 +2122,9 @@ namespace fonthook::vectorfont
 			else
 			{
 				// Same retained profile and unchanged engine mirrors prove that
-				// c1-c8, vertex c4 and MIPFILTER all remain current. Account the
-				// implicit fast path without invoking three helper binders.
+				// pixel c176-c183, vertex c208 and MIPFILTER all remain current.
+				// Account the implicit fast path without invoking three helper
+				// binders.
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::CommandPacketConstantReuse);
 				RecordFreeTypePerf(

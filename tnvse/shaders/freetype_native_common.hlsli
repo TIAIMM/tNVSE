@@ -1,7 +1,7 @@
 #ifndef TNVSE_FREETYPE_NATIVE_COMMON_HLSLI
 #define TNVSE_FREETYPE_NATIVE_COMMON_HLSLI
 
-float4 LayerColor : register(c1);
+float4 LayerColor : register(c176);
 
 struct NativeFontPixelInput
 {
