@@ -508,9 +508,10 @@ namespace fonthook::vectorfont
 	};
 
 	// A virtual-stock shape keeps a plugin-owned geometry descriptor and borrows
-	// the immutable static arena for the complete sorted Tile traversal. The
-	// sorted-frame lease owns the D3D resources; this value is a validated
-	// non-owning view and must never outlive that traversal.
+	// either immutable static residency or a traversal-sealed dynamic range for
+	// the complete sorted Tile traversal. The sorted-frame lease owns the D3D
+	// resources; this value is a validated non-owning view and must never outlive
+	// that traversal.
 	struct NativeA8VirtualStockPacketBinding
 	{
 		IDirect3DVertexBuffer9* vertexBuffer = nullptr;
@@ -521,7 +522,9 @@ namespace fonthook::vectorfont
 		UInt32 indexBytes = 0;
 		UInt32 generation = 0;
 		UInt32 resourceSerial = 0;
+		UInt32 uploadEpoch = 0;
 		UInt32 atlasTextureEpoch = 0;
+		bool staticResident = false;
 		bool active = false;
 	};
 

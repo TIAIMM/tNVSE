@@ -974,11 +974,15 @@ duplicate-registration validation.
 
 Each direct slot owns a small `NiGeometryBufferData`/`NiVBChip` descriptor but
 does not own its D3D buffers. The descriptor points at
-`staticBaseVertex + packet.firstVertex` in the shared immutable 52-byte vertex
-arena and at the canonical INDEX16 buffer. Dynamic-ring locations are never
-published as persistent bindings. The sorted lease resolves every slot first
-and publishes the group only after all textures, shaders, generations, atlas
-epochs, item positions, and static ranges agree. During its Tile callback the
+`payloadBaseVertex + packet.firstVertex` in either the shared immutable static
+arena or the traversal-sealed dynamic arena, plus the canonical INDEX16 buffer.
+Virtual-stock now reuses the same frame-packet residency resolver as retained
+commands instead of rejecting an otherwise valid dynamic upload as
+`static_not_ready`. A dynamic binding records the sorted lease upload epoch and
+is valid only while that lease prevents ring overwrite or resource release.
+The sorted lease resolves every slot first and publishes the group only after
+all textures, shaders, generations, atlas epochs, item positions, residency
+kinds, upload epochs, and ranges agree. During its Tile callback the
 shape changes only its packet bound, folds the artifact origin into its live
 transform, and temporarily disables alpha test; descriptor, declaration,
 shader, texture, scissor, color, alpha, blend, cull, and stencil state remain
@@ -993,16 +997,17 @@ bindings for each group. A stable descriptor is checked once during sorted
 preparation; a changed descriptor is checked after publication. The direct
 draw path retains the primary payload owner only for follower slots and reads
 the immutable packet template in place, avoiding a shared-owner increment and
-packet copy for the usual primary/singleton draw.
+packet copy for the usual primary/singleton draw. Periodic counters distinguish
+`virtual_stock_static_hits` from `virtual_stock_dynamic_hits`.
 
-Static-buffer replacement, device reset, shader reload, and atlas epoch changes
-revoke every borrowed descriptor before the underlying resource can be
-released. Shape destruction restores the original shell buffer and shader
-before deleting the plugin-owned descriptor. A primary destroyed early retires
-the group so surviving followers cannot submit it. A virtual backend failure
-falls back or suppresses that group and does not fault the complete FreeType
-shader generation; failure to restore shared shader constants retains the
-existing generation-fault rule.
+Static/dynamic-buffer replacement, dynamic upload-epoch change, device reset,
+shader reload, and atlas epoch changes revoke every borrowed descriptor before
+the underlying resource can be overwritten or released. Shape destruction
+restores the original shell buffer and shader before deleting the plugin-owned
+descriptor. A primary destroyed early retires the group so surviving followers
+cannot submit it. A virtual backend failure falls back or suppresses that group
+and does not fault the complete FreeType shader generation; failure to restore
+shared shader constants retains the existing generation-fault rule.
 If validation fails before any packet in the group has drawn, the descriptors
 are restored and the primary executes the complete facade in that same
 traversal. Once any packet has reached `RenderImmediate`, the group is never

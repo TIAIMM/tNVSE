@@ -455,9 +455,11 @@ namespace fonthook::vectorfont
 			}
 			slot.generation = 0;
 			slot.resourceSerial = 0;
+			slot.uploadEpoch = 0;
 			slot.atlasTextureEpoch = 0;
 			slot.baseVertex = 0;
 			slot.vertexCount = 0;
+			slot.staticResident = false;
 			slot.bound = false;
 		}
 
@@ -844,6 +846,8 @@ namespace fonthook::vectorfont
 		thread_local std::array<NativeA8VirtualStockPacketBinding,
 			kMaximumVirtualStockShapes> resolved;
 		bool configurationFailed = false;
+		UInt64 staticBindings = 0;
+		UInt64 dynamicBindings = 0;
 		for (size_t index = 0; index < group->slots.size(); ++index)
 		{
 			const NativeA8FallbackReason result =
@@ -860,6 +864,10 @@ namespace fonthook::vectorfont
 				}
 				return false;
 			}
+			if (resolved[index].staticResident)
+				++staticBindings;
+			else
+				++dynamicBindings;
 		}
 
 		for (size_t index = 0; index < group->slots.size(); ++index)
@@ -897,9 +905,11 @@ namespace fonthook::vectorfont
 			const bool changed = !slot.bound
 				|| slot.generation != source.generation
 				|| slot.resourceSerial != source.resourceSerial
+				|| slot.uploadEpoch != source.uploadEpoch
 				|| slot.atlasTextureEpoch != source.atlasTextureEpoch
 				|| slot.baseVertex != source.baseVertex
 				|| slot.vertexCount != source.vertexCount
+				|| slot.staticResident != source.staticResident
 				|| slot.shape->GetShader()
 					!= payload.packetShaders[index];
 			const bool needsRebind = changed
@@ -941,9 +951,11 @@ namespace fonthook::vectorfont
 			}
 			slot.generation = source.generation;
 			slot.resourceSerial = source.resourceSerial;
+			slot.uploadEpoch = source.uploadEpoch;
 			slot.atlasTextureEpoch = source.atlasTextureEpoch;
 			slot.baseVertex = source.baseVertex;
 			slot.vertexCount = source.vertexCount;
+			slot.staticResident = source.staticResident;
 			slot.bound = true;
 			if (needsRebind)
 				RecordFreeTypePerf(
@@ -967,8 +979,12 @@ namespace fonthook::vectorfont
 		group->directDrawCount.store(0, std::memory_order_release);
 		group->frameMode.store(VirtualStockFrameMode::Direct,
 			std::memory_order_release);
-		RecordFreeTypePerf(FreeTypePerfCounter::VirtualStockStaticHit,
-			static_cast<UInt64>(group->slots.size()));
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::VirtualStockStaticHit,
+			staticBindings);
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::VirtualStockDynamicHit,
+			dynamicBindings);
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::VirtualStockSortedPreflightSaved,
 			group->slots.size() > 1 ? group->slots.size() - 1 : 1);

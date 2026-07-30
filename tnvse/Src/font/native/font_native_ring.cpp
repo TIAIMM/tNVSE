@@ -2196,46 +2196,29 @@ namespace fonthook::vectorfont
 			return NativeA8FallbackReason::PacketBuild;
 		}
 
-		if (!s_sortedRingLease.active)
+		if (!IsNativeA8ShaderGenerationCurrent(
+				payload.preparedGeneration))
+		{
 			return NativeA8FallbackReason::PacketPrepare;
-		const NativeA8SortedRingLease& lease = s_sortedRingLease;
-		NativeA8RingState* state = lease.state;
-		if (!state || payload.preparedGeneration != lease.generation
-			|| !IsNativeA8ShaderGenerationCurrent(lease.generation)
-			|| state->generation != lease.generation
-			|| state->resourceSerial.load(std::memory_order_acquire)
-				!= lease.resourceSerial
-			|| state->uploadEpoch != lease.uploadEpoch
-			|| state->staticVertexBuffer != lease.staticVertexBuffer
-			|| state->indexBuffer != lease.indexBuffer
-			|| state->declaration != lease.declaration
-			|| !lease.staticVertexBuffer || !lease.indexBuffer
-			|| !lease.declaration)
+		}
+		NativeA8FramePacketBinding frameBinding;
+		if (!ResolveNativeA8FramePacketBinding(
+				payload, packetIndex, frameBinding))
 		{
 			return NativeA8FallbackReason::PacketPrepare;
 		}
 
-		UInt32 payloadBaseVertex = 0;
-		bool staticResident = false;
-		if (!ResolveSortedLeaseResidency(*state, artifact,
-			artifactVertexCount, lease.resourceSerial, lease.uploadEpoch,
-			payloadBaseVertex, staticResident)
-			|| !staticResident
-			|| packet.firstVertex
-				> std::numeric_limits<UInt32>::max() - payloadBaseVertex)
-		{
-			return NativeA8FallbackReason::PacketPrepare;
-		}
-
-		binding.vertexBuffer = lease.staticVertexBuffer;
-		binding.indexBuffer = lease.indexBuffer;
-		binding.declaration = lease.declaration;
-		binding.baseVertex = payloadBaseVertex + packet.firstVertex;
-		binding.vertexCount = packet.vertexCount;
-		binding.indexBytes = kCanonicalIndexBytes;
-		binding.generation = lease.generation;
-		binding.resourceSerial = lease.resourceSerial;
+		binding.vertexBuffer = frameBinding.vertexBuffer;
+		binding.indexBuffer = frameBinding.indexBuffer;
+		binding.declaration = frameBinding.declaration;
+		binding.baseVertex = frameBinding.baseVertex;
+		binding.vertexCount = frameBinding.vertexCount;
+		binding.indexBytes = frameBinding.indexBytes;
+		binding.generation = frameBinding.generation;
+		binding.resourceSerial = frameBinding.resourceSerial;
+		binding.uploadEpoch = frameBinding.uploadEpoch;
 		binding.atlasTextureEpoch = payload.preflightAtlasTextureEpoch;
+		binding.staticResident = frameBinding.staticResident;
 		binding.active = true;
 		return NativeA8FallbackReason::None;
 	}
@@ -2245,21 +2228,21 @@ namespace fonthook::vectorfont
 	{
 		if (!binding.active || !s_sortedRingLease.active)
 			return false;
-		const NativeA8SortedRingLease& lease = s_sortedRingLease;
-		const NativeA8RingState* state = lease.state;
-		return state
-			&& binding.vertexBuffer == lease.staticVertexBuffer
-			&& binding.indexBuffer == lease.indexBuffer
-			&& binding.declaration == lease.declaration
-			&& binding.generation == lease.generation
-			&& binding.resourceSerial == lease.resourceSerial
-			&& binding.atlasTextureEpoch == GetNativeA8AtlasTextureEpoch()
-			&& state->generation == lease.generation
-			&& state->resourceSerial.load(std::memory_order_acquire)
-				== lease.resourceSerial
-			&& state->staticVertexBuffer == lease.staticVertexBuffer
-			&& state->indexBuffer == lease.indexBuffer
-			&& state->declaration == lease.declaration;
+		NativeA8FramePacketBinding frameBinding;
+		frameBinding.vertexBuffer = binding.vertexBuffer;
+		frameBinding.indexBuffer = binding.indexBuffer;
+		frameBinding.declaration = binding.declaration;
+		frameBinding.baseVertex = binding.baseVertex;
+		frameBinding.vertexCount = binding.vertexCount;
+		frameBinding.indexBytes = binding.indexBytes;
+		frameBinding.generation = binding.generation;
+		frameBinding.resourceSerial = binding.resourceSerial;
+		frameBinding.uploadEpoch = binding.uploadEpoch;
+		frameBinding.staticResident = binding.staticResident;
+		frameBinding.active = binding.active;
+		return binding.atlasTextureEpoch
+				== GetNativeA8AtlasTextureEpoch()
+			&& IsNativeA8FramePacketBindingCurrent(frameBinding);
 	}
 
 	bool IsNativeA8VirtualStockPacketAtlasCurrent(

@@ -2359,7 +2359,9 @@ namespace fonthook::vectorfont
 					? slot.bindingBuffer->m_uiIBSize : 0;
 				binding.generation = slot.generation;
 				binding.resourceSerial = slot.resourceSerial;
+				binding.uploadEpoch = slot.uploadEpoch;
 				binding.atlasTextureEpoch = slot.atlasTextureEpoch;
+				binding.staticResident = slot.staticResident;
 				binding.active = slot.bound;
 			}
 

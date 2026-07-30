@@ -164,6 +164,7 @@ namespace fonthook::vectorfont
 		VirtualStockShape,
 		VirtualStockDraw,
 		VirtualStockStaticHit,
+		VirtualStockDynamicHit,
 		VirtualStockRebind,
 		VirtualStockRevoke,
 		VirtualStockFacadeFallback,

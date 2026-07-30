@@ -136,9 +136,11 @@ namespace fonthook::vectorfont
 		UInt32 packetIndex = 0;
 		UInt32 generation = 0;
 		UInt32 resourceSerial = 0;
+		UInt32 uploadEpoch = 0;
 		UInt32 atlasTextureEpoch = 0;
 		UInt32 baseVertex = 0;
 		UInt32 vertexCount = 0;
+		bool staticResident = false;
 		bool bound = false;
 	};
 

@@ -392,7 +392,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SinglePacketDirectSyntheticBuffer)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: virtual_stock_candidates=%llu virtual_stock_groups=%llu virtual_stock_shapes=%llu virtual_stock_draws=%llu virtual_stock_static_hits=%llu virtual_stock_rebinds=%llu virtual_stock_revokes=%llu facade_fallbacks=%llu followers_skipped=%llu sorted_preflight_saved=%llu proxy_packets_saved=%llu fallback_no_parent=%llu packet_limit=%llu cpu_budget=%llu static_not_ready=%llu topology=%llu shader=%llu generation=%llu atlas=%llu resource=%llu noncontiguous=%llu registration_resolved=%llu register_rejected=%llu registration_missing=%llu registration_duplicate=%llu registration_order_mismatch=%llu",
+			"tnvse_freetype_perf: virtual_stock_candidates=%llu virtual_stock_groups=%llu virtual_stock_shapes=%llu virtual_stock_draws=%llu virtual_stock_static_hits=%llu virtual_stock_dynamic_hits=%llu virtual_stock_rebinds=%llu virtual_stock_revokes=%llu facade_fallbacks=%llu followers_skipped=%llu sorted_preflight_saved=%llu proxy_packets_saved=%llu fallback_no_parent=%llu packet_limit=%llu cpu_budget=%llu static_not_ready=%llu topology=%llu shader=%llu generation=%llu atlas=%llu resource=%llu noncontiguous=%llu registration_resolved=%llu register_rejected=%llu registration_missing=%llu registration_duplicate=%llu registration_order_mismatch=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VirtualStockCandidate)],
 			values[static_cast<size_t>(
@@ -403,6 +403,8 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::VirtualStockDraw)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VirtualStockStaticHit)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VirtualStockDynamicHit)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VirtualStockRebind)],
 			values[static_cast<size_t>(
