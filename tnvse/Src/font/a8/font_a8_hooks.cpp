@@ -473,6 +473,13 @@ namespace fonthook::vectorfont
 		using NativeImmediateContinuationFn =
 			bool(*)(void*, NiRenderer*, bool);
 
+		enum class NativeImmediateCommandKind : UInt8
+		{
+			None = 0,
+			SpanPacket,
+			SinglePacket
+		};
+
 		struct NativeDirectImmediateContext
 		{
 			NiTriShape* shape = nullptr;
@@ -480,6 +487,8 @@ namespace fonthook::vectorfont
 			NativeImmediateContinuationFn continueImmediate = nullptr;
 			UInt32 commandSpanIndex = kInvalidNativeA8CommandIndex;
 			UInt32 commandOffset = kInvalidNativeA8CommandIndex;
+			NativeImmediateCommandKind commandKind =
+				NativeImmediateCommandKind::None;
 			bool strictValidation = false;
 			bool invoked = false;
 			bool validationPassed = true;
@@ -498,12 +507,18 @@ namespace fonthook::vectorfont
 				UInt32 commandOffset = kInvalidNativeA8CommandIndex,
 				bool strictValidation = false,
 				void* continuation = nullptr,
-				NativeImmediateContinuationFn continueImmediate = nullptr)
+				NativeImmediateContinuationFn continueImmediate = nullptr,
+				NativeImmediateCommandKind commandKind =
+					NativeImmediateCommandKind::SpanPacket)
 				: m_previous(s_nativeDirectImmediateContext)
 			{
 				m_context.shape = shape;
 				m_context.commandSpanIndex = commandSpanIndex;
 				m_context.commandOffset = commandOffset;
+				m_context.commandKind = commandSpanIndex
+						!= kInvalidNativeA8CommandIndex
+					? commandKind
+					: NativeImmediateCommandKind::None;
 				m_context.strictValidation = strictValidation;
 				m_context.continuation = continuation;
 				m_context.continueImmediate = continueImmediate;
@@ -539,6 +554,26 @@ namespace fonthook::vectorfont
 			NativeDirectImmediateContext m_context;
 			NativeDirectImmediateContext* m_previous = nullptr;
 		};
+
+		bool ValidateNativeImmediateCommand(
+			const NativeDirectImmediateContext& context,
+			NiTriShape* shape, NiRenderer* renderer)
+		{
+			switch (context.commandKind)
+			{
+			case NativeImmediateCommandKind::SpanPacket:
+				return context.commandOffset
+						!= kInvalidNativeA8CommandIndex
+					&& ValidateNativeA8Command(
+						context.commandSpanIndex,
+						context.commandOffset, shape, renderer);
+			case NativeImmediateCommandKind::SinglePacket:
+				return ValidateNativeA8SinglePacketCommand(
+					context.commandSpanIndex, shape, renderer);
+			default:
+				return true;
+			}
+		}
 
 		class NativeImmediateHookVtableScope
 		{
@@ -2799,6 +2834,8 @@ namespace fonthook::vectorfont
 			NativeA8ShapePayload& payload,
 			NativePacketDrawResult& draw,
 			UInt32 commandSpanIndex =
+				kInvalidNativeA8CommandIndex,
+			UInt32 singlePacketCommandIndex =
 				kInvalidNativeA8CommandIndex)
 		{
 			if (!pass || !facade || !payload.buildComplete
@@ -2833,18 +2870,55 @@ namespace fonthook::vectorfont
 			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
 			FreeTypePerfScope commandPerf(
 				FreeTypePerfPhase::CommandSubmit,
-				commandSpanIndex != kInvalidNativeA8CommandIndex);
+				commandSpanIndex != kInvalidNativeA8CommandIndex
+					|| singlePacketCommandIndex
+						!= kInvalidNativeA8CommandIndex);
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::SinglePacketDirectCandidate);
 
 			const bool commandRequested =
 				g_bEnableFreeTypeFontCommandBuffer
-				&& commandSpanIndex
-					!= kInvalidNativeA8CommandIndex;
+				&& (singlePacketCommandIndex
+						!= kInvalidNativeA8CommandIndex
+					|| commandSpanIndex
+						!= kInvalidNativeA8CommandIndex);
 			NativeA8CommandSpanView commandView;
+			NativeA8SinglePacketCommandView singleCommandView;
 			const NativeA8DrawCommand* command = nullptr;
 			bool commandExecution = false;
+			bool singleCommandExecution = false;
 			if (commandRequested
+				&& singlePacketCommandIndex
+					!= kInvalidNativeA8CommandIndex
+				&& BeginNativeA8SinglePacketCommandExecution(
+					singlePacketCommandIndex, facade,
+					singleCommandView))
+			{
+				if (singleCommandView.command
+					&& singleCommandView.command->payload == &payload)
+				{
+					command = &singleCommandView.command->draw;
+					commandExecution = command->program
+						&& command->packet == &packets[0]
+						&& command->binding.active
+						&& command->binding.vertexCount
+							== packets[0].vertexCount;
+					singleCommandExecution = commandExecution;
+				}
+				if (!commandExecution)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							CommandSinglePacketFallback);
+					RecordNativeA8CommandFallback(
+						NativeA8CommandFallback::Topology);
+					EndNativeA8SinglePacketCommandExecution(
+						singlePacketCommandIndex, false, false);
+				}
+			}
+			else if (commandRequested
+				&& commandSpanIndex
+					!= kInvalidNativeA8CommandIndex
 				&& BeginNativeA8CommandSpanExecution(
 					commandSpanIndex, facade, false, commandView))
 			{
@@ -2866,6 +2940,22 @@ namespace fonthook::vectorfont
 						commandSpanIndex, false, false);
 				}
 			}
+
+			auto endCommandExecution =
+				[&](bool success, bool drewPacket)
+			{
+				if (singleCommandExecution)
+				{
+					EndNativeA8SinglePacketCommandExecution(
+						singlePacketCommandIndex,
+						success, drewPacket);
+				}
+				else
+				{
+					EndNativeA8CommandSpanExecution(
+						commandSpanIndex, success, drewPacket);
+				}
+			};
 
 			NativeDirectShapeSubmissionScope submissionScope;
 			std::optional<NativeDirectShapeBinding> binding;
@@ -2899,8 +2989,15 @@ namespace fonthook::vectorfont
 			{
 				if (commandExecution)
 				{
-					EndNativeA8CommandSpanExecution(
-						commandSpanIndex, false, false);
+					if (singleCommandExecution)
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::
+								CommandSinglePacketFallback);
+						RecordNativeA8CommandFallback(
+							NativeA8CommandFallback::Resource);
+					}
+					endCommandExecution(false, false);
 				}
 				RecordSinglePacketDirectFallback(
 					binding
@@ -2963,15 +3060,20 @@ namespace fonthook::vectorfont
 
 			if (!draw.runtimeFault)
 			{
-				const UInt32 validationSpanIndex =
+				const UInt32 validationCommandIndex =
 					commandExecution
-						? commandSpanIndex
+						? (singleCommandExecution
+							? singlePacketCommandIndex
+							: commandSpanIndex)
 						: kInvalidNativeA8CommandIndex;
 				NativeDirectImmediateScope immediateScope(
-					facade, validationSpanIndex,
-					validationSpanIndex != kInvalidNativeA8CommandIndex
+					facade, validationCommandIndex,
+					commandExecution && !singleCommandExecution
 						? 0u : kInvalidNativeA8CommandIndex,
-					commandExecution);
+					commandExecution, nullptr, nullptr,
+					singleCommandExecution
+						? NativeImmediateCommandKind::SinglePacket
+						: NativeImmediateCommandKind::SpanPacket);
 				bool usedNativeReplay = false;
 				if (commandExecution)
 				{
@@ -2979,6 +3081,13 @@ namespace fonthook::vectorfont
 						InvokeNativeCommandBootstrap(pass, currentPass,
 						false, true, setupDrawmode,
 						facade, command);
+					if (!usedNativeReplay
+						&& singleCommandExecution)
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::
+								CommandSinglePacketFallback);
+					}
 				}
 				else
 				{
@@ -3001,6 +3110,13 @@ namespace fonthook::vectorfont
 						RecordFreeTypePerf(
 							FreeTypePerfCounter::
 								CommandDirectRangeReplay);
+					}
+					if (usedNativeReplay
+						&& singleCommandExecution)
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::
+								CommandSinglePacketReplay);
 					}
 					RecordFreeTypePerf(FreeTypePerfCounter::TilePass);
 					if (packets[0].shaderClass
@@ -3062,8 +3178,7 @@ namespace fonthook::vectorfont
 			{
 				const bool success =
 					!draw.runtimeFault && draw.drewPacket;
-				EndNativeA8CommandSpanExecution(
-					commandSpanIndex, success, draw.drewPacket);
+				endCommandExecution(success, draw.drewPacket);
 				if (!success && !draw.drewPacket
 					&& !draw.constantStateFault)
 				{
@@ -3536,7 +3651,8 @@ namespace fonthook::vectorfont
 					&& TryDrawNativeSinglePacketDirect(
 						pass, currentPass, setupDrawmode,
 						shape, *sourcePayload, draw,
-						commandSpanIndex);
+						commandSpanIndex,
+						frameEntry.singlePacketCommandIndex);
 				if (!directShapeHandled)
 				{
 					draw = DrawNativePacketSet(pass, currentPass,
@@ -3674,14 +3790,11 @@ namespace fonthook::vectorfont
 			context.invoked = true;
 			if (context.strictValidation
 				&& context.commandSpanIndex
-					!= kInvalidNativeA8CommandIndex
-				&& context.commandOffset
 					!= kInvalidNativeA8CommandIndex)
 			{
 				context.validationPassed =
-					ValidateNativeA8Command(
-						context.commandSpanIndex,
-						context.commandOffset, shape, renderer);
+					ValidateNativeImmediateCommand(
+						context, shape, renderer);
 			}
 			if (!context.validationPassed
 				&& context.strictValidation)
@@ -3692,14 +3805,11 @@ namespace fonthook::vectorfont
 			context.drew = true;
 			if (!context.strictValidation
 				&& context.commandSpanIndex
-					!= kInvalidNativeA8CommandIndex
-				&& context.commandOffset
 					!= kInvalidNativeA8CommandIndex)
 			{
 				context.validationPassed =
-					ValidateNativeA8Command(
-						context.commandSpanIndex,
-						context.commandOffset, shape, renderer);
+					ValidateNativeImmediateCommand(
+						context, shape, renderer);
 			}
 			if (context.continueImmediate)
 			{
@@ -3724,14 +3834,11 @@ namespace fonthook::vectorfont
 			context.invoked = true;
 			if (context.strictValidation
 				&& context.commandSpanIndex
-					!= kInvalidNativeA8CommandIndex
-				&& context.commandOffset
 					!= kInvalidNativeA8CommandIndex)
 			{
 				context.validationPassed =
-					ValidateNativeA8Command(
-						context.commandSpanIndex,
-						context.commandOffset, shape, renderer);
+					ValidateNativeImmediateCommand(
+						context, shape, renderer);
 			}
 			if (!context.validationPassed
 				&& context.strictValidation)
@@ -3742,14 +3849,11 @@ namespace fonthook::vectorfont
 			context.drew = true;
 			if (!context.strictValidation
 				&& context.commandSpanIndex
-					!= kInvalidNativeA8CommandIndex
-				&& context.commandOffset
 					!= kInvalidNativeA8CommandIndex)
 			{
 				context.validationPassed =
-					ValidateNativeA8Command(
-						context.commandSpanIndex,
-						context.commandOffset, shape, renderer);
+					ValidateNativeImmediateCommand(
+						context, shape, renderer);
 			}
 			if (context.continueImmediate)
 			{

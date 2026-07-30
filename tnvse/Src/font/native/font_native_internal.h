@@ -315,6 +315,8 @@ namespace fonthook::vectorfont
 		UInt32 generation = 0;
 		UInt64 validationToken = 0;
 		UInt32 commandSpanIndex = std::numeric_limits<UInt32>::max();
+		UInt32 singlePacketCommandIndex =
+			std::numeric_limits<UInt32>::max();
 	};
 
 	inline constexpr UInt32 kInvalidNativeA8CommandIndex =
@@ -451,6 +453,27 @@ namespace fonthook::vectorfont
 		bool useCompositePackets = false;
 	};
 
+	// Ordinary one-packet Tile submissions do not need run/span topology.
+	// This traversal-local command embeds its sole draw and carries only the
+	// execution state required to share full validation with the current
+	// contiguous FreeType segment.
+	struct NativeA8SinglePacketCommand
+	{
+		NiTriShape* facade = nullptr;
+		NativeA8ShapePayload* payload = nullptr;
+		const NativeA8PayloadTemplate* artifact = nullptr;
+		NativeA8DrawCommand draw;
+		UInt32 generation = 0;
+		UInt32 atlasTextureEpoch = 0;
+		UInt64 validationToken = 0;
+		UInt64 executionValidationToken = 0;
+		UInt32 executionSegmentEpoch = 0;
+		UInt32 executionExternalMutationEpoch = 0;
+		NativeA8CommandSpanState state = NativeA8CommandSpanState::Ready;
+		bool partialDraw = false;
+		bool useCompositePackets = false;
+	};
+
 	struct NativeA8CommandSpanView
 	{
 		const NativeA8FrameStamp* stamp = nullptr;
@@ -458,6 +481,13 @@ namespace fonthook::vectorfont
 		const NativeA8DrawCommand* commands = nullptr;
 		const NativeA8FrameCommandRun* runs = nullptr;
 		UInt32 spanIndex = kInvalidNativeA8CommandIndex;
+	};
+
+	struct NativeA8SinglePacketCommandView
+	{
+		const NativeA8FrameStamp* stamp = nullptr;
+		const NativeA8SinglePacketCommand* command = nullptr;
+		UInt32 commandIndex = kInvalidNativeA8CommandIndex;
 	};
 
 	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason);
@@ -612,6 +642,8 @@ namespace fonthook::vectorfont
 
 	void BeginNativeA8FrameCommandBuffer(BSShaderAccumulator* accumulator,
 		UInt64 validationToken, UInt32 generation, UInt32 atlasTextureEpoch);
+	UInt32 AddNativeA8FrameSinglePacketCommand(NiTriShape* facade,
+		const A8ShapeMetadata* metadata, NativeA8ShapePayload* payload);
 	UInt32 AddNativeA8FrameCommandSpan(NiTriShape* facade,
 		const A8ShapeMetadata* metadata, NativeA8ShapePayload* payload,
 		VirtualStockShapeGroup* virtualStockGroup = nullptr);
@@ -634,6 +666,14 @@ namespace fonthook::vectorfont
 		UInt32 commandOffset);
 	bool ValidateNativeA8Command(UInt32 spanIndex,
 		UInt32 commandOffset, NiTriShape* geometry, NiRenderer* renderer);
+	bool FindNativeA8SinglePacketCommand(UInt32 commandIndex,
+		UInt64 validationToken, NativeA8SinglePacketCommandView& view);
+	bool BeginNativeA8SinglePacketCommandExecution(UInt32 commandIndex,
+		NiTriShape* geometry, NativeA8SinglePacketCommandView& view);
+	void EndNativeA8SinglePacketCommandExecution(UInt32 commandIndex,
+		bool success, bool drewPacket);
+	bool ValidateNativeA8SinglePacketCommand(UInt32 commandIndex,
+		NiTriShape* geometry, NiRenderer* renderer);
 	void RecordNativeA8CommandFallback(NativeA8CommandFallback reason);
 
 	bool HookNativeA8Accumulator();

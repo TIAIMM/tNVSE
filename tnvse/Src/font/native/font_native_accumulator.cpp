@@ -59,6 +59,8 @@ namespace fonthook::vectorfont
 			UInt32 generation = 0;
 			UInt64 validationToken = 0;
 			UInt32 commandSpanIndex = kInvalidNativeA8CommandIndex;
+			UInt32 singlePacketCommandIndex =
+				kInvalidNativeA8CommandIndex;
 		};
 
 		struct VirtualStockFrameSlot
@@ -1517,10 +1519,18 @@ namespace fonthook::vectorfont
 						}
 						else
 						{
-							entry.commandSpanIndex =
-								AddNativeA8FrameCommandSpan(
+							entry.singlePacketCommandIndex =
+								AddNativeA8FrameSinglePacketCommand(
 									entry.facade, entry.metadata,
 									entry.payload);
+							if (entry.singlePacketCommandIndex
+								== kInvalidNativeA8CommandIndex)
+							{
+								entry.commandSpanIndex =
+									AddNativeA8FrameCommandSpan(
+										entry.facade, entry.metadata,
+										entry.payload);
+							}
 						}
 					}
 					ActivateNativeA8FrameCommandBuffer();
@@ -1642,6 +1652,8 @@ namespace fonthook::vectorfont
 		view.generation = entry.generation;
 		view.validationToken = entry.validationToken;
 		view.commandSpanIndex = entry.commandSpanIndex;
+		view.singlePacketCommandIndex =
+			entry.singlePacketCommandIndex;
 		RecordFreeTypePerf(FreeTypePerfCounter::SortedFrameLookupHit);
 		return true;
 	}
