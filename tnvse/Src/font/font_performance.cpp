@@ -636,6 +636,28 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::StandardPassLiteFallbackBinding)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteFallbackPrelude)]);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceStateStart)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceStateReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDevicePassSet)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDevicePassReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceBlendSet)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceBlendReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceAlphaTestSet)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceAlphaTestReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceDrawmodeSet)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceDrawmodeReuse)]);
 		const DurationSummary layout =
 			ConsumeDurationSummary(FreeTypePerfPhase::Layout);
 		const DurationSummary sidecar =

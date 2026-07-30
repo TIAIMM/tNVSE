@@ -1083,6 +1083,47 @@ and otherwise the unchanged `BSBatchRenderer::RenderPassImmediately`; a
 prelude failure also selects `BSBatchRenderer::RenderPassImmediately`. No
 fallback is attempted after an immediate draw.
 
+Dedicated one-packet Standard-lite replays also share a traversal-local
+device-state cache across adjacent Tiles in the same validated command
+execution segment. Retail PC and the symbolized test build agree on the
+relevant slot effects: Tile slot 30 publishes programs, the declaration,
+texture stages, and effective clamp mode; slot 32 publishes blend
+enable/function; slot 33 publishes alpha-test function/reference; slot 34
+publishes cull mode and alpha-test enable. The formal implementations at
+`BCA760`, `BE1FF0`, `BE20B0`, and `BE20E0` do not overlap those four output
+categories. Slot 31 changes live transform/color constants, scissor, and
+stencil state, while slot 35 restores only the scissor and stencil enables
+established by slot 31.
+
+The cache therefore tracks each slot independently. A texture-page change can
+require slot 30 without forcing identical blend and drawmode callbacks to run;
+an alpha/fade change can require slot 32 without republishing programs or
+textures. Keys describe effective output rather than raw input identity:
+blend alpha values collapse to the exact enable/function tuple, alpha-test
+flags collapse to function/reference, and stencil/alpha flags collapse to
+cull mode plus alpha-test enable. Tile fields not read by the corresponding
+retail function are excluded. Slot 31, slot 27 (geometry residency/range), the
+draw, and slot 35 still execute for every Tile. Slot 30 reuse is restricted to
+ordinary one-source, no-alpha-texture native atlas commands; each later slot
+retains its own applicability rules.
+
+The cache stamp contains the command validation token, renderer/device
+identity and shader generation, atlas/resource/upload epochs, render-target
+group, viewport, and the command segment plus external-mutation epochs. A
+non-FreeType item, nested traversal, stock/full-standard fallback, shader or
+ring mutation, device reset, render-target/viewport transition, runtime fault,
+or a new sorted traversal starts a new cache head. `B99390` shader/pass
+selection also starts a new head because its teardown/setup callbacks are
+outside the four cached slots and may republish their states. The PC-only
+pre-standard `B98540` call remains mandatory on every applicable pass, but it
+does not invalidate these proofs: the formal build shows that it publishes
+only the vendor alpha-to-coverage extension through render state 154 with
+`A2M0`/`A2M1`, or state 181 with zero/`ATOC`. It does not touch the
+alpha-test function/reference states owned by slot 33, or the cull and
+alpha-test-enable states owned by slot 34. This cache never retains a Tile or
+COM object and never allows device-state reuse across a command-validation
+boundary.
+
 The immutable Text Artifact retains shared packet geometry, profile
 hashes/classes, atlas-page topology, and vertex ranges, but no resolved Tile
 program. `NativeA8TileRetainedText` is instead owned by the
@@ -1280,6 +1321,13 @@ steady-state packet submissions. When fallbacks are present,
 `stock_fallbacks` equals the sum of `fallback_envelope`, `program`, `renderer`,
 `geometry`, `binding`, and `prelude`; the retained hit/miss pair distinguishes
 a missing or invalidated Tile dispatch from a dynamic pass-envelope rejection.
+The following `segment_device_state_` line reports cache starts/reuses and
+set/reuse pairs for texture/program, blend, alpha-test, and drawmode callbacks.
+In a long contiguous menu run, `starts` should track execution-segment or stock
+fallback boundaries rather than one-packet replays, while nonzero category
+`reuses` directly count callbacks skipped across distinct Tiles. Alpha-test
+sets/reuses may remain zero because the native A8 direct route normally
+disables stock alpha testing.
 
 ## Atlas allocation, mipmaps, and memory
 

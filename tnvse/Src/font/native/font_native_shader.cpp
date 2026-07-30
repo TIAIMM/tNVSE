@@ -2090,7 +2090,7 @@ namespace fonthook::vectorfont
 				reinterpret_cast<SetupDrawmodeFn>(
 					command.setupDrawmode)(
 						command.shader, properties,
-						bindState.noFog);
+						bindState.firstPass);
 			}
 			// Reverse-verified TileShader::SetupGeometryTextures publishes both
 			// programs through NiD3DRenderState before configuring stage 0.

@@ -274,6 +274,16 @@ namespace fonthook::vectorfont
 		StandardPassLiteFallbackGeometry,
 		StandardPassLiteFallbackBinding,
 		StandardPassLiteFallbackPrelude,
+		SegmentDeviceStateStart,
+		SegmentDeviceStateReuse,
+		SegmentDevicePassSet,
+		SegmentDevicePassReuse,
+		SegmentDeviceBlendSet,
+		SegmentDeviceBlendReuse,
+		SegmentDeviceAlphaTestSet,
+		SegmentDeviceAlphaTestReuse,
+		SegmentDeviceDrawmodeSet,
+		SegmentDeviceDrawmodeReuse,
 		CommandStockBootstrapSaved,
 		CommandVirtualSpanFused,
 		CommandVirtualFollowerConsumed,
@@ -302,6 +312,9 @@ namespace fonthook::vectorfont
 		CommandFallbackState,
 		Count,
 	};
+	static_assert(
+		static_cast<UInt32>(FreeTypePerfCounter::Count) <= 0xFFu,
+		"FreeTypePerfCounter no longer fits its UInt8 ABI");
 
 	void RecordFreeTypePerf(FreeTypePerfCounter aeCounter, UInt64 auiAmount = 1);
 	void ReportFreeTypePerf();

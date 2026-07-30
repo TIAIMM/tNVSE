@@ -446,7 +446,7 @@ namespace fonthook::vectorfont
 		bool applyBlend = false;
 		bool applyAlphaTest = false;
 		bool applyDrawmode = false;
-		bool noFog = false;
+		bool firstPass = false;
 	};
 
 	struct NativeA8FrameStamp
@@ -467,6 +467,27 @@ namespace fonthook::vectorfont
 		UInt64 nestedTraversalSerial = 0;
 		bool renderTargetReady = false;
 		bool viewportReady = false;
+	};
+
+	// A non-owning execution proof for device-state reuse between adjacent
+	// dedicated one-packet Tiles. The command buffer assigns the two execution
+	// epochs only after validating the current contiguous FreeType segment.
+	// Render-target and viewport values are copied rather than retained through
+	// COM pointers or mutable renderer state.
+	struct NativeA8SegmentDeviceStateStamp
+	{
+		NiDX9Renderer* renderer = nullptr;
+		IDirect3DDevice9* device = nullptr;
+		NiRenderTargetGroup* renderTargetGroup = nullptr;
+		D3DVIEWPORT9 viewport = {};
+		UInt64 validationToken = 0;
+		UInt32 generation = 0;
+		UInt32 atlasTextureEpoch = 0;
+		UInt32 resourceSerial = 0;
+		UInt32 uploadEpoch = 0;
+		UInt32 executionSegmentEpoch = 0;
+		UInt32 externalMutationEpoch = 0;
+		bool ready = false;
 	};
 
 	struct NativeA8DrawCommand

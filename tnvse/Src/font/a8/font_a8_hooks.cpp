@@ -27,7 +27,7 @@ namespace fonthook::vectorfont
 	{
 		inline constexpr UInt32 kRenderPassImmediatelyStandard = 0xB98E80;
 		inline constexpr UInt32 kSelectShaderForPass = 0xB99390;
-		inline constexpr UInt32 kSetAlphaTestState = 0xB98540;
+		inline constexpr UInt32 kSetVendorAlphaToCoverageState = 0xB98540;
 		inline constexpr UInt32 kGeometryUsesSpecialPass = 0xE72C20;
 		inline constexpr UInt32 kPassSuppressesBlendAlpha = 0xB630F0;
 		inline constexpr UInt32 kTileSetSourceTexture = 0xBB7A10;
@@ -35,7 +35,7 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kCurrentRenderPassType = 0x11F91E4;
 		inline constexpr UInt32 kSelectedRenderPassType = 0x11FFE30;
 		inline constexpr UInt32 kSelectedShader = 0x11FFE2C;
-		inline constexpr UInt32 kSpecialTilePassState = 0x11F9421;
+		inline constexpr UInt32 kVendorAlphaToCoverageEnabled = 0x11F9421;
 		inline constexpr UInt32 kFirstPassState = 0x11AD8EC;
 		inline constexpr UInt32 kRendererState = 0x11F9508;
 		inline constexpr UInt32 kForcedShaderSelectionPass = 758;
@@ -555,6 +555,35 @@ namespace fonthook::vectorfont
 			bool useScissorTest = false;
 		};
 		static_assert(sizeof(DirectTileShaderPropertyView) == 0xB0);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, fAlpha) == 0x28);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, fFadeAlpha) == 0x2C);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, sourceTexture) == 0x60);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, alphaTexture) == 0x64);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, clampMode) == 0x8C);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, byte90) == 0x90);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, rotates) == 0x91);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, hasVertexColors) == 0x92);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, noTexture) == 0x93);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, scissorRect) == 0x9C);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, useScissorTest) == 0xAC);
+		// B98E80 tests byte [RenderPass+7] before slots 32-34. Keep the
+		// first-pass predicate tied to the reverse-verified field rather than
+		// the adjacent no-fog byte.
+		static_assert(offsetof(
+			BSShaderProperty::RenderPass, bIsFirst) == 0x07);
+		static_assert(offsetof(
+			BSShaderProperty::RenderPass, bNoFog) == 0x08);
 
 		DirectTileShaderPropertyView* GetDirectTileProperty(
 			NiTriShape* shape)
@@ -565,6 +594,328 @@ namespace fonthook::vectorfont
 					&& shade->m_eShaderType == NiShadeProperty::PROP_Tile
 				? reinterpret_cast<DirectTileShaderPropertyView*>(shade)
 				: nullptr;
+		}
+
+		struct NativeSegmentPassStateKey
+		{
+			const NativeA8CompiledPacketCommand* program = nullptr;
+			const NiTexture* sourceTexture = nullptr;
+			const NiTexture* alphaTexture = nullptr;
+			const void* atlasTexture = nullptr;
+			NiTexturingProperty::ClampMode effectiveClampMode =
+				NiTexturingProperty::CLAMP_S_CLAMP_T;
+			UInt8 textureModeFlags = 0;
+		};
+
+		struct NativeSegmentBlendStateKey
+		{
+			UInt8 sourceFunction =
+				static_cast<UInt8>(NiAlphaProperty::ALPHA_SRCALPHA);
+			UInt8 destinationFunction =
+				static_cast<UInt8>(NiAlphaProperty::ALPHA_INVSRCALPHA);
+			bool enabled = false;
+		};
+
+		struct NativeSegmentAlphaTestStateKey
+		{
+			UInt8 testFunction = 0;
+			UInt8 alphaTestRef = 0;
+		};
+
+		struct NativeSegmentDrawmodeStateKey
+		{
+			bool drawBoth = false;
+			bool alphaTestEnabled = false;
+		};
+
+		struct NativeSegmentDeviceStateCache
+		{
+			NativeA8SegmentDeviceStateStamp stamp;
+			NativeSegmentPassStateKey pass;
+			NativeSegmentBlendStateKey blend;
+			NativeSegmentAlphaTestStateKey alphaTest;
+			NativeSegmentDrawmodeStateKey drawmode;
+			bool stampReady = false;
+			bool passReady = false;
+			bool blendReady = false;
+			bool alphaTestReady = false;
+			bool drawmodeReady = false;
+
+			void Reset()
+			{
+				stamp = {};
+				pass = {};
+				blend = {};
+				alphaTest = {};
+				drawmode = {};
+				stampReady = false;
+				passReady = false;
+				blendReady = false;
+				alphaTestReady = false;
+				drawmodeReady = false;
+			}
+
+			void InvalidateStates()
+			{
+				passReady = false;
+				blendReady = false;
+				alphaTestReady = false;
+				drawmodeReady = false;
+			}
+		};
+
+		thread_local NativeSegmentDeviceStateCache
+			s_segmentDeviceStateCache;
+
+		bool SameSegmentDeviceStateStamp(
+			const NativeA8SegmentDeviceStateStamp& left,
+			const NativeA8SegmentDeviceStateStamp& right)
+		{
+			return left.ready && right.ready
+				&& left.renderer == right.renderer
+				&& left.device == right.device
+				&& left.renderTargetGroup == right.renderTargetGroup
+				&& left.validationToken == right.validationToken
+				&& left.generation == right.generation
+				&& left.atlasTextureEpoch == right.atlasTextureEpoch
+				&& left.resourceSerial == right.resourceSerial
+				&& left.uploadEpoch == right.uploadEpoch
+				&& left.executionSegmentEpoch
+					== right.executionSegmentEpoch
+				&& left.externalMutationEpoch
+					== right.externalMutationEpoch
+				&& std::memcmp(&left.viewport, &right.viewport,
+					sizeof(left.viewport)) == 0;
+		}
+
+		NativeSegmentDeviceStateCache*
+			EnterSegmentDeviceStateCache(
+				const NativeA8SegmentDeviceStateStamp* stamp)
+		{
+			NativeSegmentDeviceStateCache& cache =
+				s_segmentDeviceStateCache;
+			if (!stamp || !stamp->ready || !stamp->renderer
+				|| !stamp->device
+				|| !stamp->renderTargetGroup
+				|| !stamp->validationToken || !stamp->generation
+				|| !stamp->atlasTextureEpoch
+				|| !stamp->resourceSerial
+				|| !stamp->executionSegmentEpoch
+				|| !stamp->externalMutationEpoch
+				|| !stamp->viewport.Width
+				|| !stamp->viewport.Height)
+			{
+				cache.Reset();
+				return nullptr;
+			}
+			if (!cache.stampReady
+				|| !SameSegmentDeviceStateStamp(cache.stamp, *stamp))
+			{
+				cache.Reset();
+				cache.stamp = *stamp;
+				cache.stampReady = true;
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SegmentDeviceStateStart);
+			}
+			else
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SegmentDeviceStateReuse);
+			}
+			return &cache;
+		}
+
+		void InvalidateSegmentDeviceStateCache()
+		{
+			s_segmentDeviceStateCache.Reset();
+		}
+
+		bool SameSegmentPassState(
+			const NativeSegmentPassStateKey& left,
+			const NativeSegmentPassStateKey& right)
+		{
+			return left.program == right.program
+				&& left.sourceTexture == right.sourceTexture
+				&& left.alphaTexture == right.alphaTexture
+				&& left.atlasTexture == right.atlasTexture
+				&& left.effectiveClampMode
+					== right.effectiveClampMode
+				&& left.textureModeFlags
+					== right.textureModeFlags;
+		}
+
+		bool BuildSegmentPassStateKey(NiTriShape* geometry,
+			const NativeA8DrawCommand& command,
+			NativeSegmentPassStateKey& key)
+		{
+			DirectTileShaderPropertyView* tile =
+				GetDirectTileProperty(geometry);
+			if (!tile || !command.program || !command.atlasTexture
+				|| !tile->sourceTexture.m_pObject
+				|| tile->alphaTexture.m_pObject
+				|| tile->noTexture)
+			{
+				return false;
+			}
+			key = {};
+			key.program = command.program;
+			key.sourceTexture = tile->sourceTexture.m_pObject;
+			key.alphaTexture = tile->alphaTexture.m_pObject;
+			key.atlasTexture = command.atlasTexture;
+			// Official TileShader::SetupGeometryTextures (BCA760) reads
+			// rotates, hasVertexColors, noTexture, both texture pointers and
+			// clampMode. byte90 and every RenderPass flag are irrelevant.
+			key.effectiveClampMode = tile->rotates
+				? NiTexturingProperty::WRAP_S_WRAP_T
+				: tile->clampMode;
+			key.textureModeFlags =
+				(tile->rotates ? 1u : 0u)
+				| (tile->hasVertexColors ? 2u : 0u);
+			return true;
+		}
+
+		bool BuildSegmentBlendStateKey(NiTriShape* geometry,
+			NativeSegmentBlendStateKey& key)
+		{
+			DirectTileShaderPropertyView* tile =
+				GetDirectTileProperty(geometry);
+			if (!tile)
+				return false;
+			const NiAlphaProperty* alpha =
+				geometry->GetAlphaProperty();
+			key = {};
+			const UInt16 flags = alpha
+				? alpha->m_usFlags.Get() : 0;
+			const bool propertyBlend = alpha
+				&& (flags & NiAlphaProperty::ALPHA_BLEND_MASK) != 0;
+			// BE1FF0/BSShader::SetupGeometryAlphaBlending compares both
+			// values only against 1.0. Preserve its NaN behavior by negating
+			// the pair of >= comparisons instead of using <.
+			const bool opacityBlend =
+				!(tile->fAlpha >= 1.0f && tile->fFadeAlpha >= 1.0f);
+			key.enabled = propertyBlend || opacityBlend;
+			if (propertyBlend)
+			{
+				key.sourceFunction = static_cast<UInt8>(
+					(flags & NiAlphaProperty::SRC_BLEND_MASK)
+						>> NiAlphaProperty::SRC_BLEND_POS);
+				key.destinationFunction = static_cast<UInt8>(
+					(flags & NiAlphaProperty::DEST_BLEND_MASK)
+						>> NiAlphaProperty::DEST_BLEND_POS);
+			}
+			else
+			{
+				key.sourceFunction = static_cast<UInt8>(
+					NiAlphaProperty::ALPHA_SRCALPHA);
+				key.destinationFunction = static_cast<UInt8>(
+					NiAlphaProperty::ALPHA_INVSRCALPHA);
+			}
+			return true;
+		}
+
+		bool SameSegmentBlendState(
+			const NativeSegmentBlendStateKey& left,
+			const NativeSegmentBlendStateKey& right)
+		{
+			return left.enabled == right.enabled
+				&& (!left.enabled
+					|| (left.sourceFunction == right.sourceFunction
+						&& left.destinationFunction
+							== right.destinationFunction));
+		}
+
+		bool BuildSegmentAlphaTestStateKey(NiTriShape* geometry,
+			NativeSegmentAlphaTestStateKey& key)
+		{
+			const NiAlphaProperty* alpha =
+				geometry ? geometry->GetAlphaProperty() : nullptr;
+			if (!alpha)
+				return false;
+			const UInt16 flags = alpha->m_usFlags.Get();
+			key.testFunction = static_cast<UInt8>(
+				(flags & NiAlphaProperty::TEST_FUNC_MASK)
+					>> NiAlphaProperty::TEST_FUNC_POS);
+			key.alphaTestRef = alpha->m_ucAlphaTestRef;
+			return true;
+		}
+
+		bool SameSegmentAlphaTestState(
+			const NativeSegmentAlphaTestStateKey& left,
+			const NativeSegmentAlphaTestStateKey& right)
+		{
+			return left.testFunction == right.testFunction
+				&& left.alphaTestRef == right.alphaTestRef;
+		}
+
+		bool BuildSegmentDrawmodeStateKey(NiTriShape* geometry,
+			UInt32 currentPass, bool firstPass,
+			NativeSegmentDrawmodeStateKey& key)
+		{
+			if (!geometry)
+				return false;
+			const NiStencilProperty* stencil =
+				geometry->GetStencilProperty();
+			const NiAlphaProperty* alpha =
+				geometry->GetAlphaProperty();
+			key = {};
+			// BE20E0/BSShader::SetupGeometryRenderStates publishes only two
+			// effective outputs. Other stencil/alpha bits do not participate.
+			key.drawBoth = (currentPass >= 86u && currentPass <= 87u)
+				|| (stencil
+					&& ((stencil->m_usFlags.Get()
+							& NiStencilProperty::DRAWMODE_MASK)
+						>> NiStencilProperty::DRAWMODE_POS)
+						== NiStencilProperty::DRAW_BOTH);
+			key.alphaTestEnabled = firstPass
+				&& alpha && alpha->HasAlphaTest();
+			return true;
+		}
+
+		bool SameSegmentDrawmodeState(
+			const NativeSegmentDrawmodeStateKey& left,
+			const NativeSegmentDrawmodeStateKey& right)
+		{
+			return left.drawBoth == right.drawBoth
+				&& left.alphaTestEnabled
+					== right.alphaTestEnabled;
+		}
+
+		bool BuildSegmentDeviceStateStamp(
+			const NativeA8FrameStamp* frame,
+			UInt32 executionSegmentEpoch,
+			UInt32 externalMutationEpoch,
+			NativeA8SegmentDeviceStateStamp& stamp)
+		{
+			stamp = {};
+			if (!frame || !frame->renderer || !frame->device
+				|| !frame->renderTargetReady
+				|| !frame->viewportReady
+				|| !frame->renderTargetGroup
+				|| !frame->validationToken
+				|| !frame->generation
+				|| !frame->atlasTextureEpoch
+				|| !frame->resourceSerial
+				|| !executionSegmentEpoch
+				|| !externalMutationEpoch)
+			{
+				return false;
+			}
+			stamp.renderer = frame->renderer;
+			stamp.device = frame->device;
+			stamp.renderTargetGroup = frame->renderTargetGroup;
+			stamp.viewport = frame->viewport;
+			stamp.validationToken = frame->validationToken;
+			stamp.generation = frame->generation;
+			stamp.atlasTextureEpoch =
+				frame->atlasTextureEpoch;
+			stamp.resourceSerial = frame->resourceSerial;
+			stamp.uploadEpoch = frame->uploadEpoch;
+			stamp.executionSegmentEpoch =
+				executionSegmentEpoch;
+			stamp.externalMutationEpoch =
+				externalMutationEpoch;
+			stamp.ready = true;
+			return true;
 		}
 
 		enum class NativeDirectShapeBindingFailure : UInt8
@@ -1245,11 +1596,11 @@ namespace fonthook::vectorfont
 			bool blendAlpha, bool setupDrawmode)
 		{
 			NativeA8CommandBindState state;
-			state.noFog = pass && pass->bNoFog;
-			state.applyBlend = state.noFog && blendAlpha
+			state.firstPass = pass && pass->bIsFirst;
+			state.applyBlend = state.firstPass && blendAlpha
 				&& !CdeclCall<bool>(
 					kPassSuppressesBlendAlpha, currentPass);
-			state.applyAlphaTest = state.noFog && testAlpha
+			state.applyAlphaTest = state.firstPass && testAlpha
 				&& (currentPass < 4 || currentPass > 5)
 				&& (currentPass < 0xE || currentPass > 0xF)
 				&& currentPass != 570;
@@ -1413,6 +1764,13 @@ namespace fonthook::vectorfont
 					kSelectedShader) != shader;
 			if (selectShader)
 			{
+				// B99390 first tears down the previously selected shader and
+				// invokes the new shader's pass callbacks. Those callbacks are
+				// outside the four Standard-lite slots and may republish any of
+				// their device-state categories. Do not carry a cache head
+				// across that transition, even if the command stamp itself is
+				// otherwise unchanged.
+				InvalidateSegmentDeviceStateCache();
 				CdeclCall<void>(kSelectShaderForPass,
 					currentPass, shader);
 				if (*reinterpret_cast<UInt32*>(
@@ -1427,11 +1785,19 @@ namespace fonthook::vectorfont
 			// and 17. Guarded replay accepts only TileShader (type 20), so the
 			// retail default branch has no corresponding restoration call.
 
-			if (*reinterpret_cast<UInt8*>(kSpecialTilePassState))
+			if (*reinterpret_cast<UInt8*>(
+					kVendorAlphaToCoverageEnabled))
 			{
+				// B98540 is the PC vendor alpha-to-coverage publisher, not an
+				// alpha-test-state owner. The formal build writes only render
+				// state 154 with A2M0/A2M1 or state 181 with 0/ATOC. Slot 33
+				// owns states 24/25, while slot 34 owns cull plus state 15, so
+				// this mandatory per-pass call cannot invalidate either cached
+				// output. Keep executing it to preserve the vendor extension's
+				// nesting semantics, but retain all four Standard-lite proofs.
 				NiAlphaProperty* alpha =
 					geometry->GetAlphaProperty();
-				CdeclCall<void>(kSetAlphaTestState,
+				CdeclCall<void>(kSetVendorAlphaToCoverageState,
 					alpha && alpha->HasAlphaTest(), false);
 			}
 			return true;
@@ -1519,13 +1885,18 @@ namespace fonthook::vectorfont
 			bool testAlpha, bool blendAlpha, bool setupDrawmode,
 			NiTriShape* geometry,
 			const NativeA8StandardPassLiteDispatch& dispatch,
-			NiGeometryBufferData* preparedBuffer)
+			const NativeA8DrawCommand& command,
+			NiGeometryBufferData* preparedBuffer,
+			const NativeA8SegmentDeviceStateStamp*
+				deviceStateStamp)
 		{
 			NiDX9Renderer* renderer = dispatch.renderer;
 			TileShader* shader = dispatch.shader;
 			const NiPropertyState* properties = dispatch.properties;
 			const NativeA8CompiledPacketCommand& program =
 				*dispatch.program;
+			NativeSegmentDeviceStateCache* deviceState =
+				EnterSegmentDeviceStateCache(deviceStateStamp);
 
 			// Retail RenderPassImmediately_Standard first publishes the current
 			// property/effect state. Its geometry-group helper is deliberately
@@ -1544,25 +1915,139 @@ namespace fonthook::vectorfont
 				TileShader*, NiGeometry*, UInt32,
 				NiGeometryBufferData*, const NiPropertyState*);
 
-			reinterpret_cast<SetupStateFn>(
-				program.setupPass)(shader, properties);
+			// The formal build and the symbolized test build agree on these
+			// disjoint effects:
+			//   slot 30: programs, declaration, texture stages and clamp;
+			//   slot 32: blend enable/function;
+			//   slot 33: alpha-test function/reference;
+			//   slot 34: cull mode and alpha-test enable.
+			// Slot 31 always runs between them and changes constants, scissor and
+			// stencil state only; slot 35 restores scissor/stencil only. Cache the
+			// four effective outputs independently. The former all-or-nothing
+			// aggregate made a page texture or Tile alpha change force every slot
+			// to run and therefore produced zero reuse in real traversals.
+			const bool firstPass = pass->bIsFirst;
+			const bool blendApplicable = firstPass && blendAlpha
+				&& !CdeclCall<bool>(
+					kPassSuppressesBlendAlpha, currentPass);
+			const bool alphaTestApplicable = firstPass && testAlpha
+				&& (currentPass < 4 || currentPass > 5)
+				&& (currentPass < 0xE || currentPass > 0xF)
+				&& currentPass != 570;
+			const bool drawmodeApplicable = setupDrawmode;
+
+			NativeSegmentPassStateKey passState;
+			NativeSegmentBlendStateKey blendState;
+			NativeSegmentAlphaTestStateKey alphaState;
+			NativeSegmentDrawmodeStateKey drawmodeState;
+			const bool passKeyReady =
+				BuildSegmentPassStateKey(geometry, command, passState);
+			const bool passStateReady = deviceState && passKeyReady
+				&& deviceState->passReady
+				&& SameSegmentPassState(
+					deviceState->pass, passState);
+			if (passStateReady)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						SegmentDevicePassReuse);
+			}
+			else
+			{
+				reinterpret_cast<SetupStateFn>(
+					program.setupPass)(shader, properties);
+				if (deviceState)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							SegmentDevicePassSet);
+				}
+			}
+			if (deviceState)
+			{
+				deviceState->passReady = passKeyReady;
+				if (passKeyReady)
+					deviceState->pass = passState;
+			}
+
 			reinterpret_cast<SetupStateFn>(
 				program.updateConstants)(shader, properties);
-			if (pass->bIsFirst)
+			if (firstPass)
 			{
-				if (blendAlpha && !CdeclCall<bool>(
-						kPassSuppressesBlendAlpha, currentPass))
+				if (blendApplicable)
 				{
-					reinterpret_cast<SetupStateFn>(
-						program.setupBlend)(shader, properties);
+					const bool blendKeyReady =
+						BuildSegmentBlendStateKey(
+							geometry, blendState);
+					const bool blendStateReady =
+						deviceState && blendKeyReady
+						&& deviceState->blendReady
+						&& SameSegmentBlendState(
+							deviceState->blend, blendState);
+					if (blendStateReady)
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::
+								SegmentDeviceBlendReuse);
+					}
+					else
+					{
+						reinterpret_cast<SetupStateFn>(
+							program.setupBlend)(
+								shader, properties);
+						if (deviceState)
+						{
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::
+									SegmentDeviceBlendSet);
+						}
+					}
+					if (deviceState)
+					{
+						deviceState->blendReady =
+							blendKeyReady;
+						if (blendKeyReady)
+							deviceState->blend = blendState;
+					}
 				}
-				if (testAlpha
-					&& (currentPass < 4 || currentPass > 5)
-					&& (currentPass < 0xE || currentPass > 0xF)
-					&& currentPass != 570)
+				if (alphaTestApplicable)
 				{
-					reinterpret_cast<SetupStateFn>(
-						program.setupAlphaTest)(shader, properties);
+					const bool alphaKeyReady =
+						BuildSegmentAlphaTestStateKey(
+							geometry, alphaState);
+					const bool alphaStateReady =
+						deviceState && alphaKeyReady
+						&& deviceState->alphaTestReady
+						&& SameSegmentAlphaTestState(
+							deviceState->alphaTest, alphaState);
+					if (alphaStateReady)
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::
+								SegmentDeviceAlphaTestReuse);
+					}
+					else
+					{
+						reinterpret_cast<SetupStateFn>(
+							program.setupAlphaTest)(
+								shader, properties);
+						if (deviceState)
+						{
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::
+									SegmentDeviceAlphaTestSet);
+						}
+					}
+					if (deviceState)
+					{
+						deviceState->alphaTestReady =
+							alphaKeyReady;
+						if (alphaKeyReady)
+						{
+							deviceState->alphaTest =
+								alphaState;
+						}
+					}
 				}
 			}
 			else if (*reinterpret_cast<UInt8*>(kFirstPassState)
@@ -1572,12 +2057,50 @@ namespace fonthook::vectorfont
 				reinterpret_cast<SetupStateFn>(
 					program.setupNonFirstPass)(shader, properties);
 				*reinterpret_cast<UInt8*>(kFirstPassState) = 0;
+				if (deviceState)
+				{
+					// Slot 68 changes blend, Z-write and Z-function state
+					// after slot 30. The next pass cannot treat the resulting
+					// aggregate as a reusable first-pass setup.
+					deviceState->InvalidateStates();
+				}
 			}
-			if (setupDrawmode)
+			if (drawmodeApplicable)
 			{
-				reinterpret_cast<SetupDrawmodeFn>(
-					program.setupDrawmode)(
-						shader, properties, pass->bIsFirst);
+				const bool drawmodeKeyReady =
+					BuildSegmentDrawmodeStateKey(
+						geometry, currentPass, firstPass,
+						drawmodeState);
+				const bool drawmodeStateReady =
+					deviceState && drawmodeKeyReady
+					&& deviceState->drawmodeReady
+					&& SameSegmentDrawmodeState(
+						deviceState->drawmode, drawmodeState);
+				if (drawmodeStateReady)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							SegmentDeviceDrawmodeReuse);
+				}
+				else
+				{
+					reinterpret_cast<SetupDrawmodeFn>(
+						program.setupDrawmode)(
+							shader, properties, firstPass);
+					if (deviceState)
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::
+								SegmentDeviceDrawmodeSet);
+					}
+				}
+				if (deviceState)
+				{
+					deviceState->drawmodeReady =
+						drawmodeKeyReady;
+					if (drawmodeKeyReady)
+						deviceState->drawmode = drawmodeState;
+				}
 			}
 
 			reinterpret_cast<PrepareGeometryFn>(
@@ -1595,7 +2118,9 @@ namespace fonthook::vectorfont
 			NiTriShape* geometry, const NativeA8DrawCommand* command,
 			bool preferStandardPassLite,
 			bool packetStatePrevalidated,
-			NiGeometryBufferData* preparedBuffer)
+			NiGeometryBufferData* preparedBuffer,
+			const NativeA8SegmentDeviceStateStamp*
+				deviceStateStamp)
 		{
 			if (preferStandardPassLite)
 			{
@@ -1678,7 +2203,8 @@ namespace fonthook::vectorfont
 			{
 				ExecuteStandardPassLite(pass, currentPass,
 					testAlpha, blendAlpha, setupDrawmode,
-					geometry, *liteDispatch, preparedBuffer);
+					geometry, *liteDispatch, *command,
+					preparedBuffer, deviceStateStamp);
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::StandardPassLiteStage3Replay);
 				RecordFreeTypePerf(
@@ -1686,6 +2212,10 @@ namespace fonthook::vectorfont
 				return true;
 			}
 
+			// The complete stock standard path may touch every device-state
+			// category. A later dedicated one-packet Tile must establish a new
+			// cache head even when it remains in the same validation segment.
+			InvalidateSegmentDeviceStateCache();
 			using DefaultPassFn = int(__cdecl*)(
 				BSShaderProperty::RenderPass*, bool, bool, bool);
 			reinterpret_cast<DefaultPassFn>(kRenderPassImmediatelyStandard)(
@@ -1701,15 +2231,19 @@ namespace fonthook::vectorfont
 			NiTriShape* geometry, const NativeA8DrawCommand* command,
 			bool preferStandardPassLite = false,
 			bool packetStatePrevalidated = false,
-			NiGeometryBufferData* preparedBuffer = nullptr)
+			NiGeometryBufferData* preparedBuffer = nullptr,
+			const NativeA8SegmentDeviceStateStamp*
+				deviceStateStamp = nullptr)
 		{
 			if (InvokeGuardedNativeReplay(pass, currentPass,
 				testAlpha, blendAlpha, setupDrawmode,
 				geometry, command, preferStandardPassLite,
-				packetStatePrevalidated, preparedBuffer))
+				packetStatePrevalidated, preparedBuffer,
+				deviceStateStamp))
 			{
 				return true;
 			}
+			InvalidateSegmentDeviceStateCache();
 			State().originalTileRenderPass(pass, currentPass,
 				testAlpha, blendAlpha, setupDrawmode);
 			return false;
@@ -2862,16 +3396,36 @@ namespace fonthook::vectorfont
 					bool usedNativeReplay = false;
 					if (commandExecution)
 					{
+						NativeA8SegmentDeviceStateStamp
+							segmentDeviceStateStamp;
+						const NativeA8SegmentDeviceStateStamp*
+							segmentDeviceState = nullptr;
+						if (virtualSingleCommandExecution
+							&& virtualSingleCommandView.stamp
+							&& virtualSingleCommandView.command
+							&& BuildSegmentDeviceStateStamp(
+								virtualSingleCommandView.stamp,
+								virtualSingleCommandView.command->
+									executionSegmentEpoch,
+								virtualSingleCommandView.command->
+									executionExternalMutationEpoch,
+								segmentDeviceStateStamp))
+						{
+							segmentDeviceState =
+								&segmentDeviceStateStamp;
+						}
 						usedNativeReplay =
 							InvokeNativeCommandBootstrap(pass,
 							currentPass, false, true,
 							setupDrawmode, shape, command,
 							virtualSingleCommandExecution,
 							bindingCurrent,
-							expectedBuffer);
+							expectedBuffer,
+							segmentDeviceState);
 					}
 					else
 					{
+						InvalidateSegmentDeviceStateCache();
 						State().originalTileRenderPass(pass,
 							currentPass, false, true,
 							setupDrawmode);
@@ -3014,6 +3568,7 @@ namespace fonthook::vectorfont
 			FreeTypePerfScope commandPerf(
 				FreeTypePerfPhase::CommandSubmit,
 				commandSpanIndex != kInvalidNativeA8CommandIndex);
+			InvalidateSegmentDeviceStateCache();
 			NativePacketDrawResult draw;
 			NativeRingSubmissionScope ringScope;
 			NativeA8FallbackReason failure = BeginNativeA8RingSubmission(
@@ -3401,11 +3956,30 @@ namespace fonthook::vectorfont
 				bool usedNativeReplay = false;
 				if (commandExecution)
 				{
+					NativeA8SegmentDeviceStateStamp
+						segmentDeviceStateStamp;
+					const NativeA8SegmentDeviceStateStamp*
+						segmentDeviceState = nullptr;
+					if (singleCommandExecution
+						&& singleCommandView.stamp
+						&& singleCommandView.command
+						&& BuildSegmentDeviceStateStamp(
+							singleCommandView.stamp,
+							singleCommandView.command->
+								executionSegmentEpoch,
+							singleCommandView.command->
+								executionExternalMutationEpoch,
+							segmentDeviceStateStamp))
+					{
+						segmentDeviceState =
+							&segmentDeviceStateStamp;
+					}
 					usedNativeReplay =
 						InvokeNativeCommandBootstrap(pass, currentPass,
 						false, true, setupDrawmode,
 						facade, command, singleCommandExecution,
-						true, binding->Buffer());
+						true, binding->Buffer(),
+						segmentDeviceState);
 					if (!usedNativeReplay
 						&& singleCommandExecution)
 					{
@@ -3416,6 +3990,7 @@ namespace fonthook::vectorfont
 				}
 				else
 				{
+					InvalidateSegmentDeviceStateCache();
 					State().originalTileRenderPass(pass,
 						currentPass, false, true,
 						setupDrawmode);
@@ -3693,11 +4268,13 @@ namespace fonthook::vectorfont
 
 	void BeginA8SortedTileConstantOwnership()
 	{
+		InvalidateSegmentDeviceStateCache();
 		s_constantOwnershipBatch.BeginFrame();
 	}
 
 	void EndA8SortedTileConstantOwnership()
 	{
+		InvalidateSegmentDeviceStateCache();
 		ReleaseNativeConstantOwnershipBatch("sorted-frame-end");
 		s_constantOwnershipBatch.EndFrame();
 	}
@@ -3785,6 +4362,7 @@ namespace fonthook::vectorfont
 		{
 			if (s_constantOwnershipBatch.FrameActive())
 				ReleaseNativeConstantOwnershipBatch("before-stock-tile");
+			InvalidateSegmentDeviceStateCache();
 			InvalidateNativeA8SortedShaderState();
 			state.originalTileRenderPass(pass, currentPass, testAlpha,
 				blendAlpha, setupDrawmode);
@@ -4350,7 +4928,7 @@ namespace fonthook::vectorfont
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: RenderPassImmediately_Standard-lite predicate-envelope validated=%u special=%p alternate=%p expected=%p",
+				"tnvse_freetype_native: RenderPassImmediately_Standard-lite predicate-envelope validated=%u special=%p alternate=%p expected=%p segmentState=independent-effective-v3 slot34=vendor-atoc-independent",
 				state.standardPassLitePredicatesValidated ? 1u : 0u,
 				source[kGeometrySpecialPredicateSlot],
 				source[kGeometryAlternatePredicateSlot],
