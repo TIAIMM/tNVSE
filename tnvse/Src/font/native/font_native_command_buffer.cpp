@@ -5,6 +5,7 @@
 
 #include "NiGeometryBufferData.hpp"
 #include "NiMaterialProperty.hpp"
+#include "NiDX9Renderer.hpp"
 #include "NiRenderer.hpp"
 #include "NiTriShapeData.hpp"
 #include "NiVBChip.hpp"
@@ -351,31 +352,22 @@ namespace fonthook::vectorfont
 			buffer.cpuMemory.Release();
 		}
 
-		bool ResolveRenderTargetStamp(NativeA8FrameStamp& stamp)
+		bool ResolveRenderContextStamp(NativeA8FrameStamp& stamp)
 		{
-			if (!stamp.device)
+			if (!stamp.renderer || !stamp.device
+				|| stamp.renderer->GetD3DDevice() != stamp.device)
 				return false;
-			stamp.renderTarget = nullptr;
+			stamp.renderTargetGroup = nullptr;
 			stamp.viewport = {};
 			stamp.renderTargetReady = false;
 			stamp.viewportReady = false;
-			IDirect3DSurface9* renderTarget = nullptr;
-			const HRESULT targetResult =
-				stamp.device->GetRenderTarget(0, &renderTarget);
-			if (FAILED(targetResult) || !renderTarget)
+			NiRenderTargetGroup* renderTargetGroup =
+				stamp.renderer->m_pkCurrRenderTargetGroup;
+			const D3DVIEWPORT9 viewport = stamp.renderer->m_kD3DPort;
+			if (!renderTargetGroup || !viewport.Width || !viewport.Height)
 				return false;
-			stamp.renderTarget = renderTarget;
-			renderTarget->Release();
-			const HRESULT viewportResult =
-				stamp.device->GetViewport(&stamp.viewport);
-			const bool viewportReady = SUCCEEDED(viewportResult)
-				&& stamp.viewport.Width && stamp.viewport.Height;
-			if (!viewportReady)
-			{
-				stamp.renderTarget = nullptr;
-				stamp.viewport = {};
-				return false;
-			}
+			stamp.renderTargetGroup = renderTargetGroup;
+			stamp.viewport = viewport;
 			stamp.renderTargetReady = true;
 			stamp.viewportReady = true;
 			return true;
@@ -652,31 +644,22 @@ namespace fonthook::vectorfont
 			return coveredPackets == span.commandCount;
 		}
 
-		bool ValidateRenderTarget(
+		bool ValidateRenderContext(
 			const NativeA8FrameStamp& stamp)
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandRenderTargetValidation);
 			if (!stamp.renderTargetReady || !stamp.viewportReady
-				|| !stamp.device)
+				|| !stamp.renderer || !stamp.device
+				|| !stamp.renderTargetGroup)
 			{
 				return false;
 			}
-			IDirect3DSurface9* currentTarget = nullptr;
-			if (FAILED(stamp.device->GetRenderTarget(
-					0, &currentTarget))
-				|| !currentTarget)
-			{
-				return false;
-			}
-			const bool sameTarget =
-				currentTarget == stamp.renderTarget;
-			currentTarget->Release();
-			D3DVIEWPORT9 viewport = {};
-			return sameTarget
-				&& SUCCEEDED(stamp.device->GetViewport(&viewport))
-				&& std::memcmp(&viewport, &stamp.viewport,
-					sizeof(viewport)) == 0;
+			return stamp.renderer->GetD3DDevice() == stamp.device
+				&& stamp.renderer->m_pkCurrRenderTargetGroup
+					== stamp.renderTargetGroup
+				&& std::memcmp(&stamp.renderer->m_kD3DPort, &stamp.viewport,
+					sizeof(stamp.viewport)) == 0;
 		}
 
 		NativeA8CommandFallback ValidateExecutionSegmentState(
@@ -737,12 +720,12 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::
 						CommandRenderTargetValidation);
-				if (!ResolveRenderTargetStamp(stamp))
+				if (!ResolveRenderContextStamp(stamp))
 				{
 					return NativeA8CommandFallback::RenderTarget;
 				}
 			}
-			else if (!ValidateRenderTarget(stamp))
+			else if (!ValidateRenderContext(stamp))
 			{
 				return NativeA8CommandFallback::RenderTarget;
 			}

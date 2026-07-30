@@ -1113,6 +1113,35 @@ cross-thread external-mutation epoch remain unchanged. Any external mutation
 after command compilation invalidates the remaining command table for that
 traversal; it is never accepted merely by opening a later segment.
 
+The command path obtains render-target-group and viewport identity from
+`NiDX9Renderer`'s software mirrors, so it does not use
+`IDirect3DDevice9::GetRenderTarget` or `GetViewport`. The Xbox test-build PDB
+describes float arrays in the `0x88`-byte `NiD3DShaderConstantManager` base, but
+retail PC reverse engineering shows that `NiDX9ShaderConstantManager` is
+`0x8C` bytes, leaves those arrays null, and supplies a no-op `CommitChanges`.
+Retail constant isolation therefore captures only pixel c1-c8 and vertex c4
+from the device once per sorted traversal, not once per packet. Diagnostic
+restore readback remains removed. If that bounded snapshot itself fails, the
+native draw continues without restoration instead of suppressing the complete
+text group; the next failed device submission still follows normal
+device-loss/runtime-fault handling.
+
+Retained packet binding also treats
+`TileShader::SetupGeometryTextures` as the owner of VS/PS publication, as
+confirmed by the symbolized test build, and does not submit the same VS/PS a
+second time; `NiD3DRenderState`'s current-program mirror validates that setup
+without a driver query. Texture and sampler changes go through
+`NiD3DRenderState`, keeping Gamebryo's software mirror coherent while its own
+setter suppresses unchanged driver calls. The traversal-local shadow records a
+bootstrap texture only when the engine mirror confirms the exact atlas page.
+The level-zero sampler contract is normalized once after any stock setup that
+can change it and then reused by continuation packets. Packet c1-c8 uploads
+compare the
+traversal-local constant shadow and submit only the changed contiguous register
+range. Vertex c4 is reused between retained packets with the same viewport and
+raster scale, but is forcibly republished after every stock
+`TileShader::UpdateConstants`.
+
 Each immediate callback retains its execution-token, command-range, renderer,
 program/payload, and exact live geometry-binding checks. It no longer repeats
 frame token, nesting, shader-generation, atlas-generation, or ring-lease
@@ -1132,6 +1161,12 @@ per-span-full/light/render-target validation counts, successful execution
 segments, segment full validations/reuses/invalidations, retained-program
 hits/misses, and fallbacks by token, generation, atlas, resource, topology,
 hook, nesting, render target, and state.
+The `state_shadow_` line reports mirror/driver constant-capture counts, the
+bounded number of state driver gets, any fail-open isolation bypass, elided
+program binds, texture sets/reuses, packet-constant full/partial/reuse, and
+vertex-AA set/reuse counts. On retail PC, a healthy interval normally has two
+driver gets per sorted traversal that contains native distance-field packets
+and zero `isolation_bypass`.
 The timing line adds `command_build` and `command_submit` while preserving
 `submit`. Runtime validation should confirm nonzero `native_replays` and
 `direct_range_replays`, `span_full_validations=0`,

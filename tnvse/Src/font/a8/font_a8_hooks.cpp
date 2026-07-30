@@ -3,6 +3,9 @@
 #include "load_config.h"
 #include "tnvse.h"
 
+#include "NiD3DRenderState.hpp"
+#include "NiDX9Renderer.hpp"
+#include "NiDX9RenderState.hpp"
 #include "NiGeometryBufferData.hpp"
 #include "NiRenderer.hpp"
 #include "NiTriShapeData.hpp"
@@ -106,6 +109,165 @@ namespace fonthook::vectorfont
 			return victim;
 		}
 
+		// The Xbox test-build PDB names this exact 0x88-byte base layout
+		// NiD3DShaderConstantManager. Retail PC preserves the base offsets and
+		// adds one byte at 0x88 in NiDX9ShaderConstantManager, but its constructor
+		// leaves all constant-data pointers null and its CommitChanges override is
+		// a no-op. The mirror is therefore usable only when its runtime identity
+		// and backing arrays prove that a compatible implementation populated it.
+		struct EngineShaderConstantManagerView
+		{
+			void* vtable = nullptr;
+			UInt32 refCount = 0;
+			float* floatVsConstants = nullptr;
+			float* savedFloatVsConstants = nullptr;
+			float* floatPsConstants = nullptr;
+			float* savedFloatPsConstants = nullptr;
+			UInt32 firstDirtyFloatVs = 0;
+			UInt32 firstCleanFloatVs = 0;
+			UInt32 firstDirtyFloatPs = 0;
+			UInt32 firstCleanFloatPs = 0;
+			UInt32 floatVsCount = 0;
+			UInt32 floatPsCount = 0;
+			SInt32* intVsConstants = nullptr;
+			SInt32* savedIntVsConstants = nullptr;
+			SInt32* intPsConstants = nullptr;
+			SInt32* savedIntPsConstants = nullptr;
+			UInt32 firstDirtyIntVs = 0;
+			UInt32 firstCleanIntVs = 0;
+			UInt32 firstDirtyIntPs = 0;
+			UInt32 firstCleanIntPs = 0;
+			UInt32 intVsCount = 0;
+			UInt32 intPsCount = 0;
+			BOOL* boolVsConstants = nullptr;
+			BOOL* savedBoolVsConstants = nullptr;
+			BOOL* boolPsConstants = nullptr;
+			BOOL* savedBoolPsConstants = nullptr;
+			UInt32 firstDirtyBoolVs = 0;
+			UInt32 firstCleanBoolVs = 0;
+			UInt32 firstDirtyBoolPs = 0;
+			UInt32 firstCleanBoolPs = 0;
+			UInt32 boolVsCount = 0;
+			UInt32 boolPsCount = 0;
+			IDirect3DDevice9* device = nullptr;
+			NiDX9Renderer* renderer = nullptr;
+		};
+
+		static_assert(sizeof(EngineShaderConstantManagerView) == 0x88);
+		static_assert(offsetof(
+			EngineShaderConstantManagerView, floatVsConstants) == 0x08);
+		static_assert(offsetof(
+			EngineShaderConstantManagerView, floatPsConstants) == 0x10);
+		static_assert(offsetof(
+			EngineShaderConstantManagerView, floatVsCount) == 0x28);
+		static_assert(offsetof(
+			EngineShaderConstantManagerView, device) == 0x80);
+
+		bool TryCaptureEngineConstantMirror(IDirect3DDevice9* device,
+			UINT firstPsRegister, UINT psRegisterCount, float* psOutput,
+			UINT firstVsRegister, UINT vsRegisterCount, float* vsOutput)
+		{
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			NiD3DRenderState* renderState =
+				renderer ? renderer->m_pkRenderState : nullptr;
+			auto* manager = renderState
+				? reinterpret_cast<EngineShaderConstantManagerView*>(
+					renderState->m_spShaderConstantManager)
+				: nullptr;
+			if (!device || !renderer || renderer->GetD3DDevice() != device
+				|| !renderState || renderState->m_pkD3DDevice != device
+				|| !manager || manager->device != device
+				|| manager->renderer != renderer
+				|| !manager->floatPsConstants
+				|| !manager->floatVsConstants
+				|| firstPsRegister > manager->floatPsCount
+				|| psRegisterCount
+					> manager->floatPsCount - firstPsRegister
+				|| firstVsRegister > manager->floatVsCount
+				|| vsRegisterCount
+					> manager->floatVsCount - firstVsRegister
+				|| !psOutput || !vsOutput)
+			{
+				return false;
+			}
+			std::memcpy(psOutput,
+				manager->floatPsConstants + firstPsRegister * 4u,
+				static_cast<size_t>(psRegisterCount) * 4u * sizeof(float));
+			std::memcpy(vsOutput,
+				manager->floatVsConstants + firstVsRegister * 4u,
+				static_cast<size_t>(vsRegisterCount) * 4u * sizeof(float));
+			return true;
+		}
+
+		enum class NativeConstantCaptureSource : UInt8
+		{
+			None = 0,
+			EngineMirror,
+			DriverSnapshot,
+		};
+
+		HRESULT CaptureNativeConstantState(IDirect3DDevice9* device,
+			UINT firstPsRegister, UINT psRegisterCount, float* psOutput,
+			UINT firstVsRegister, UINT vsRegisterCount, float* vsOutput,
+			NativeConstantCaptureSource& source, const char*& operation)
+		{
+			source = NativeConstantCaptureSource::None;
+			operation = "capture-pixel-constants";
+			if (!device || !psOutput || !vsOutput)
+				return D3DERR_INVALIDCALL;
+
+			if (TryCaptureEngineConstantMirror(device,
+				firstPsRegister, psRegisterCount, psOutput,
+				firstVsRegister, vsRegisterCount, vsOutput))
+			{
+				source = NativeConstantCaptureSource::EngineMirror;
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::ConstantCaptureMirror);
+				operation = "none";
+				return D3D_OK;
+			}
+
+			// Retail PC does not maintain the Xbox constant-manager arrays.
+			// Capture only the two ranges tNVSE overwrites, once per sorted
+			// traversal through NativePixelConstantBatch. Diagnostic readback
+			// remains removed.
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::StateShadowDriverGet);
+			HRESULT result = device->GetPixelShaderConstantF(
+				firstPsRegister, psOutput, psRegisterCount);
+			if (FAILED(result))
+				return result;
+
+			operation = "capture-vertex-aa-constant";
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::StateShadowDriverGet);
+			result = device->GetVertexShaderConstantF(
+				firstVsRegister, vsOutput, vsRegisterCount);
+			if (FAILED(result))
+				return result;
+
+			source = NativeConstantCaptureSource::DriverSnapshot;
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::ConstantCaptureDriver);
+			operation = "none";
+			return D3D_OK;
+		}
+
+		void RecordConstantIsolationBypass(
+			const char* operation, HRESULT result)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::ConstantIsolationBypass);
+			static std::atomic<bool> logged = false;
+			if (!logged.exchange(true, std::memory_order_acq_rel))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: constant snapshot unavailable operation=%s hr=0x%08X; continuing native draw without constant restore instead of suppressing text",
+					operation ? operation : "unknown",
+					static_cast<UInt32>(result));
+			}
+		}
+
 		class NativePixelConstantScope
 		{
 		public:
@@ -131,21 +293,26 @@ namespace fonthook::vectorfont
 					m_operation = "capture-pixel-constants";
 					return;
 				}
-				m_result = m_device->GetPixelShaderConstantF(kFirstRegister,
-					m_original.data(), kRegisterCount);
+				NativeConstantCaptureSource source =
+					NativeConstantCaptureSource::None;
+				const char* captureOperation = "capture-pixel-constants";
+				m_result = CaptureNativeConstantState(m_device,
+					kFirstRegister, kRegisterCount, m_original.data(),
+					kVertexRegister, kVertexRegisterCount,
+					m_originalVertex.data(), source, captureOperation);
 				if (FAILED(m_result))
 				{
-					m_operation = "capture-pixel-constants";
-					return;
-				}
-				m_result = m_device->GetVertexShaderConstantF(kVertexRegister,
-					m_originalVertex.data(), kVertexRegisterCount);
-				if (FAILED(m_result))
-				{
-					m_operation = "capture-vertex-aa-constant";
+					RecordConstantIsolationBypass(
+						captureOperation, m_result);
+					m_captured = true;
+					m_restoreRequired = false;
+					m_operation = "constant-isolation-bypassed";
+					m_result = D3D_OK;
 					return;
 				}
 				m_captured = true;
+				m_restoreRequired = true;
+				m_result = D3D_OK;
 				m_operation = "none";
 			}
 
@@ -167,6 +334,8 @@ namespace fonthook::vectorfont
 				if (m_finished)
 					return SUCCEEDED(m_result);
 				m_finished = true;
+				if (!m_restoreRequired)
+				return true;
 
 				m_result = m_device->SetPixelShaderConstantF(kFirstRegister,
 					m_original.data(), kRegisterCount);
@@ -182,53 +351,6 @@ namespace fonthook::vectorfont
 					m_operation = "restore-vertex-aa-constant";
 					return false;
 				}
-				// The Set calls already report a failed restore. Readback is useful
-				// for diagnostics but forces driver round trips, so retain it only
-				// in detailed logging mode.
-				if (!g_bEnableFreeTypeFontRenderingLog)
-				{
-					m_operation = "none";
-					m_result = D3D_OK;
-					return true;
-				}
-				m_result = m_device->GetPixelShaderConstantF(kFirstRegister,
-					m_verify.data(), kRegisterCount);
-				if (FAILED(m_result))
-				{
-					m_operation = "verify-pixel-constants";
-					return false;
-				}
-				for (size_t index = 0; index < kFloatCount; ++index)
-				{
-					if (std::memcmp(&m_original[index], &m_verify[index],
-						sizeof(float)) != 0)
-					{
-						m_operation = "pixel-constant-mismatch";
-						m_mismatchRegister = static_cast<SInt32>(
-							kFirstRegister + index / 4);
-						m_result = E_FAIL;
-						return false;
-					}
-				}
-				m_result = m_device->GetVertexShaderConstantF(kVertexRegister,
-					m_verifyVertex.data(), kVertexRegisterCount);
-				if (FAILED(m_result))
-				{
-					m_operation = "verify-vertex-aa-constant";
-					return false;
-				}
-				for (size_t index = 0; index < kVertexFloatCount; ++index)
-				{
-					if (std::memcmp(&m_originalVertex[index],
-						&m_verifyVertex[index], sizeof(float)) != 0)
-					{
-						m_operation = "vertex-aa-constant-mismatch";
-						m_mismatchRegister =
-							static_cast<SInt32>(kVertexRegister);
-						m_result = E_FAIL;
-						return false;
-					}
-				}
 				m_operation = "none";
 				m_result = D3D_OK;
 				return true;
@@ -237,14 +359,13 @@ namespace fonthook::vectorfont
 		private:
 			IDirect3DDevice9* m_device = nullptr;
 			std::array<float, kFloatCount> m_original = {};
-			std::array<float, kFloatCount> m_verify = {};
 			std::array<float, kVertexFloatCount> m_originalVertex = {};
-			std::array<float, kVertexFloatCount> m_verifyVertex = {};
 			HRESULT m_result = D3DERR_INVALIDCALL;
 			const char* m_operation = "capture-pixel-constants";
 			SInt32 m_mismatchRegister = -1;
 			bool m_captured = false;
 			bool m_finished = false;
+			bool m_restoreRequired = false;
 		};
 
 		class NativePixelConstantBatch
@@ -286,6 +407,8 @@ namespace fonthook::vectorfont
 				m_captured = false;
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::ConstantBatchFlush);
+				if (!m_restoreRequired)
+				return ResetAfterFlush();
 				m_result = m_device->SetPixelShaderConstantF(
 					NativePixelConstantScope::kFirstRegister,
 					m_original.data(),
@@ -299,53 +422,7 @@ namespace fonthook::vectorfont
 				if (FAILED(m_result))
 					return SetFailure(
 						"restore-vertex-aa-constant", m_result);
-				if (g_bEnableFreeTypeFontRenderingLog)
-				{
-					m_result = m_device->GetPixelShaderConstantF(
-						NativePixelConstantScope::kFirstRegister,
-						m_verify.data(),
-						NativePixelConstantScope::kRegisterCount);
-					if (FAILED(m_result))
-						return SetFailure("verify-pixel-constants", m_result);
-					for (size_t index = 0;
-						index < NativePixelConstantScope::kFloatCount; ++index)
-					{
-						if (std::memcmp(&m_original[index], &m_verify[index],
-							sizeof(float)) != 0)
-						{
-							m_mismatchRegister = static_cast<SInt32>(
-								NativePixelConstantScope::kFirstRegister
-									+ index / 4);
-							return SetFailure(
-								"pixel-constant-mismatch", E_FAIL);
-						}
-					}
-					m_result = m_device->GetVertexShaderConstantF(
-						NativePixelConstantScope::kVertexRegister,
-						m_verifyVertex.data(),
-						NativePixelConstantScope::kVertexRegisterCount);
-					if (FAILED(m_result))
-						return SetFailure(
-							"verify-vertex-aa-constant", m_result);
-					for (size_t index = 0;
-						index < NativePixelConstantScope::kVertexFloatCount;
-						++index)
-					{
-						if (std::memcmp(&m_originalVertex[index],
-							&m_verifyVertex[index], sizeof(float)) != 0)
-						{
-							m_mismatchRegister = static_cast<SInt32>(
-								NativePixelConstantScope::kVertexRegister);
-							return SetFailure(
-								"vertex-aa-constant-mismatch", E_FAIL);
-						}
-					}
-				}
-				m_device = nullptr;
-				m_operation = "none";
-				m_result = D3D_OK;
-				m_mismatchRegister = -1;
-				return true;
+				return ResetAfterFlush();
 			}
 
 			void EndFrame()
@@ -364,23 +441,44 @@ namespace fonthook::vectorfont
 				m_device = device;
 				m_generation = GetNativeA8ShaderGeneration();
 				m_mismatchRegister = -1;
-				m_result = device->GetPixelShaderConstantF(
+				NativeConstantCaptureSource source =
+					NativeConstantCaptureSource::None;
+				const char* captureOperation = "capture-pixel-constants";
+				m_result = CaptureNativeConstantState(device,
 					NativePixelConstantScope::kFirstRegister,
+					NativePixelConstantScope::kRegisterCount,
 					m_original.data(),
-					NativePixelConstantScope::kRegisterCount);
-				if (FAILED(m_result))
-					return SetFailure("capture-pixel-constants", m_result);
-				m_result = device->GetVertexShaderConstantF(
 					NativePixelConstantScope::kVertexRegister,
-					m_originalVertex.data(),
-					NativePixelConstantScope::kVertexRegisterCount);
+					NativePixelConstantScope::kVertexRegisterCount,
+					m_originalVertex.data(), source, captureOperation);
 				if (FAILED(m_result))
-					return SetFailure(
-						"capture-vertex-aa-constant", m_result);
+				{
+					RecordConstantIsolationBypass(
+						captureOperation, m_result);
+					m_captured = true;
+					m_restoreRequired = false;
+					m_operation = "constant-isolation-bypassed";
+					m_result = D3D_OK;
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::ConstantBatchCapture);
+					return true;
+				}
 				m_captured = true;
+				m_restoreRequired = true;
+				m_result = D3D_OK;
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::ConstantBatchCapture);
 				m_operation = "none";
+				return true;
+			}
+
+			bool ResetAfterFlush()
+			{
+				m_device = nullptr;
+				m_operation = "none";
+				m_result = D3D_OK;
+				m_mismatchRegister = -1;
+				m_restoreRequired = false;
 				return true;
 			}
 
@@ -390,24 +488,22 @@ namespace fonthook::vectorfont
 				m_result = result;
 				m_device = nullptr;
 				m_captured = false;
+				m_restoreRequired = false;
 				return false;
 			}
 
 			IDirect3DDevice9* m_device = nullptr;
 			std::array<float, NativePixelConstantScope::kFloatCount> m_original = {};
-			std::array<float, NativePixelConstantScope::kFloatCount> m_verify = {};
 			std::array<float,
 				NativePixelConstantScope::kVertexFloatCount>
 				m_originalVertex = {};
-			std::array<float,
-				NativePixelConstantScope::kVertexFloatCount>
-				m_verifyVertex = {};
 			HRESULT m_result = D3D_OK;
 			const char* m_operation = "none";
 			SInt32 m_mismatchRegister = -1;
 			UInt32 m_generation = 0;
 			bool m_frameActive = false;
 			bool m_captured = false;
+			bool m_restoreRequired = false;
 		};
 
 		thread_local NativePixelConstantBatch s_pixelConstantBatch;
@@ -1845,6 +1941,7 @@ namespace fonthook::vectorfont
 			bool virtualStock = false;
 			bool failed = false;
 			bool constantStateFault = false;
+			bool bootstrapBindingPrimed = false;
 		};
 
 		void FailRetainedBridge(NativeBridgeExecutionContext& context,
@@ -1976,6 +2073,24 @@ namespace fonthook::vectorfont
 				static_cast<NativeBridgeExecutionContext*>(opaque);
 			if (!context || context->failed)
 				return false;
+			if (!context->bootstrapBindingPrimed)
+			{
+				const NativeA8DrawCommand* bootstrap =
+					ResolveNativeCommand(context->view,
+						context->bootstrapCommandOffset);
+				if (!bootstrap || !bootstrap->program)
+				{
+					FailRetainedBridge(*context,
+						NativeA8FallbackReason::PacketBuild,
+						"retained-bootstrap-binding", E_FAIL);
+					return false;
+				}
+				// Reaching the immediate callback proves the stock bootstrap has
+				// already executed SetupGeometryTextures for this exact command.
+				PrimeNativeA8CommandTextureBinding(
+					*bootstrap->program, bootstrap->atlasTexture);
+				context->bootstrapBindingPrimed = true;
+			}
 			while (context->nextCommandOffset
 				< context->endCommandOffset)
 			{

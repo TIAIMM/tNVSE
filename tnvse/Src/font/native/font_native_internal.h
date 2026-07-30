@@ -18,6 +18,7 @@
 class NiGeometryBufferData;
 class NiVBChip;
 class NiDX9Renderer;
+class NiRenderTargetGroup;
 
 namespace fonthook::vectorfont
 {
@@ -419,7 +420,10 @@ namespace fonthook::vectorfont
 		BSShaderAccumulator* accumulator = nullptr;
 		NiDX9Renderer* renderer = nullptr;
 		IDirect3DDevice9* device = nullptr;
-		IDirect3DSurface9* renderTarget = nullptr;
+		// Gamebryo mirrors both values in NiDX9Renderer. Retaining the engine
+		// render-target-group identity avoids IDirect3DDevice9::GetRenderTarget
+		// and its COM AddRef/Release pair during command validation.
+		NiRenderTargetGroup* renderTargetGroup = nullptr;
 		D3DVIEWPORT9 viewport = {};
 		UInt64 validationToken = 0;
 		UInt32 generation = 0;
@@ -689,6 +693,9 @@ namespace fonthook::vectorfont
 		const NativeA8PacketTemplate& packet,
 		TileShader* shader, UInt32 generation,
 		const NativeA8CompiledPacketCommand*& program);
+	void PrimeNativeA8CommandTextureBinding(
+		const NativeA8CompiledPacketCommand& command,
+		const void* atlasTexture);
 	bool BindNativeA8CommandPacket(
 		const NativeA8CompiledPacketCommand& command,
 		const void* atlasTexture, bool publishPrograms,
