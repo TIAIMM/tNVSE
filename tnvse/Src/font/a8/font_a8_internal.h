@@ -36,6 +36,12 @@ namespace fonthook::vectorfont
 	inline constexpr UInt32 kSortedTileRenderCallSite = 0xB65EA0;
 	inline constexpr UInt32 kStockSortedTileRender = 0xB64F90;
 	inline constexpr UInt32 kMaximumShapeValidationFailureLogs = 16;
+	// Retail 1.4.0.525 and the symbolized Aug 22 beta agree that
+	// NiGeometryBufferData owns a two-slot RendererData vtable. Use the
+	// non-deleting destructor explicitly for placement-constructed descriptors;
+	// slot 1 is ContainsVertexData, not DeleteThis.
+	inline constexpr UInt32 kGeometryBufferDataConstructor = 0xE947C0;
+	inline constexpr UInt32 kGeometryBufferDataDestructor = 0xE8F0F0;
 	// Metadata generation slots are deliberately much larger than the live TLS
 	// hot-cache set count. Shape allocators commonly return addresses with
 	// repeating low bits; a small modulo table lets unrelated menu facades

@@ -5,17 +5,24 @@
 #include "NiColor.hpp"
 #include "NiPoint2.hpp"
 #include "NiAdditionalGeometryData.hpp"
-#include "NiGeometryBufferData.hpp"
 #include "NiShaderDeclaration.hpp"
 
 NiSmartPointer(NiGeometryData);
 
+class NiGeometryBufferData;
 class NiTriStripsData;
 class NiTriShapeData;
 class BSAdditionalGeomDataBlock;
 
 class NiGeometryData : public NiObject {
 public:
+	class RendererData {
+	public:
+		virtual ~RendererData();
+		virtual bool ContainsVertexData(
+			NiShaderDeclaration::ShaderParameter eParameter) const = 0;
+	};
+
 	NiGeometryData();
 	virtual ~NiGeometryData();
 
@@ -23,7 +30,7 @@ public:
 	virtual UInt16				GetActiveVertexCount();
 	virtual NiTriStripsData*	IsStripsData();
 	virtual NiTriShapeData*		IsShapeData();
-	virtual bool				ContainsVertexData(NiShaderDeclaration::ShaderParameter eParameter);
+	virtual bool				ContainsVertexData(NiShaderDeclaration::ShaderParameter eParameter) const;
 	virtual void				CalculateNormals();
 
 	enum Consistency {
@@ -132,4 +139,5 @@ public:
 	void ReplaceData(UInt16 ausVertices, NiPoint3* apVertex, NiPoint3* apNormal, NiColorA* apColor, NiPoint2* apTexture, UInt16 ausNumTextureSets, NiGeometryData::DataFlags aeNBTMethod);
 };
 
+ASSERT_SIZE(NiGeometryData::RendererData, 0x4);
 ASSERT_SIZE(NiGeometryData, 0x40);

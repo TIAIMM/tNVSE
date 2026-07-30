@@ -31,8 +31,6 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kGeometryUsesSpecialPass = 0xE72C20;
 		inline constexpr UInt32 kPassSuppressesBlendAlpha = 0xB630F0;
 		inline constexpr UInt32 kTileSetSourceTexture = 0xBB7A10;
-		inline constexpr UInt32 kGeometryBufferDataConstructor = 0xE947C0;
-		inline constexpr UInt32 kGeometryBufferDataDestructor = 0xE8F0F0;
 		inline constexpr UInt32 kCurrentRenderPass = 0x11F91E0;
 		inline constexpr UInt32 kCurrentRenderPassType = 0x11F91E4;
 		inline constexpr UInt32 kSelectedRenderPassType = 0x11FFE30;

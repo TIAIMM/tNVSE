@@ -1,15 +1,17 @@
 #pragma once
 
+#include "NiGeometryData.hpp"
 #include "NiVBChip.hpp"
 
 class NiGeometryGroup;
 
-class NiGeometryBufferData {
+class NiGeometryBufferData : public NiGeometryData::RendererData {
 public:
 	NiGeometryBufferData();
 
-	virtual				~NiGeometryBufferData();
-	virtual void		DeleteThis();
+	virtual				~NiGeometryBufferData() override;
+	virtual bool		ContainsVertexData(
+		NiShaderDeclaration::ShaderParameter eParameter) const override;
 
 	UInt32						m_uiFlags;
 	NiGeometryGroup*			m_pkGeometryGroup;
@@ -46,3 +48,12 @@ public:
 };
 
 ASSERT_SIZE(NiGeometryBufferData, 0x54);
+ASSERT_OFFSET(NiGeometryBufferData, m_uiFlags, 0x04);
+ASSERT_OFFSET(NiGeometryBufferData, m_pkGeometryGroup, 0x08);
+ASSERT_OFFSET(NiGeometryBufferData, m_hDeclaration, 0x10);
+ASSERT_OFFSET(NiGeometryBufferData, m_uiStreamCount, 0x20);
+ASSERT_OFFSET(NiGeometryBufferData, m_puiVertexStride, 0x24);
+ASSERT_OFFSET(NiGeometryBufferData, m_ppkVBChip, 0x28);
+ASSERT_OFFSET(NiGeometryBufferData, m_pkIB, 0x34);
+ASSERT_OFFSET(NiGeometryBufferData, m_uiNumArrays, 0x48);
+ASSERT_OFFSET(NiGeometryBufferData, m_pusIndexArray, 0x50);

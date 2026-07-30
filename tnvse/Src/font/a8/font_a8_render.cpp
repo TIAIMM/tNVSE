@@ -22,7 +22,6 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_a8_render
 	{
-		inline constexpr UInt32 kGeometryBufferDataConstructor = 0xE947C0;
 		inline constexpr UInt32 kCanonicalArrayCount = 1;
 		inline constexpr size_t kVirtualStockEstimatedShapeBytes = 1024;
 
@@ -524,12 +523,23 @@ namespace fonthook::vectorfont
 			RestoreVirtualStockSlot(slot);
 			if (slot.bindingBuffer)
 			{
-				// Detach our separately allocated arrays before invoking the retail
-				// destructor, then release those arrays exactly once ourselves.
-				slot.bindingBuffer->m_uiStreamCount = 0;
-				slot.bindingBuffer->m_puiVertexStride = nullptr;
-				slot.bindingBuffer->m_ppkVBChip = nullptr;
-				slot.bindingBuffer->DeleteThis();
+				NiGeometryBufferData* buffer = slot.bindingBuffer;
+				// E8F0F0 releases geometry-group chips, the declaration, the IB,
+				// and both stream arrays. This descriptor never owns its ring COM
+				// bindings and its arrays are released below, so detach every
+				// destructor-owned field before calling the verified non-deleting
+				// destructor. Virtual slot 1 is ContainsVertexData(parameter) and
+				// calling it as DeleteThis() corrupts ESP because it returns with
+				// retn 4.
+				buffer->m_pkGeometryGroup = nullptr;
+				buffer->m_hDeclaration = nullptr;
+				buffer->m_uiStreamCount = 0;
+				buffer->m_puiVertexStride = nullptr;
+				buffer->m_ppkVBChip = nullptr;
+				buffer->m_pkIB = nullptr;
+				ThisStdCall<void>(
+					kGeometryBufferDataDestructor, buffer);
+				NiDelete(buffer, sizeof(NiGeometryBufferData));
 			}
 			if (slot.bindingStride)
 				NiFree(slot.bindingStride);
