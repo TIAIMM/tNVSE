@@ -4363,9 +4363,10 @@ namespace fonthook::vectorfont
 			if (s_constantOwnershipBatch.FrameActive())
 				ReleaseNativeConstantOwnershipBatch("before-stock-tile");
 			InvalidateSegmentDeviceStateCache();
-			InvalidateNativeA8SortedShaderState();
+			AdvanceNativeA8SortedShaderStateAcrossStockTile();
 			state.originalTileRenderPass(pass, currentPass, testAlpha,
 				blendAlpha, setupDrawmode);
+			ValidateNativeA8SortedShaderStateAfterStockTile();
 			return;
 		}
 

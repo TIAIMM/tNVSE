@@ -771,6 +771,8 @@ namespace fonthook::vectorfont
 	void BeginNativeA8SortedShaderBatch();
 	void EndNativeA8SortedShaderBatch();
 	void InvalidateNativeA8SortedShaderState();
+	void AdvanceNativeA8SortedShaderStateAcrossStockTile();
+	void ValidateNativeA8SortedShaderStateAfterStockTile();
 	void BeginNativeA8FacadeShaderBatch();
 	void EndNativeA8FacadeShaderBatch();
 	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,

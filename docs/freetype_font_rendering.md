@@ -1215,6 +1215,17 @@ back. Initialization also rejects a device whose advertised vertex constant
 count cannot address c208. Device-loss and native submission failures still
 follow the existing runtime-fault handling.
 
+The separation also removes a formerly unavoidable-looking per-packet write.
+Both reverse targets show that the stock slot-31 call computes live Tile RGB
+and alpha and then submits the PS constant map whose `tintcolor` entry is c0.
+The native wrapper therefore does not reconstruct that value and call
+`SetPixelShaderConstantF(0, ..., 1)` a second time when the preserved slot is
+the verified retail `TileShader::SetupGeometryConstants`. This saves one D3D
+constant publication for every stock bootstrap or ordinary native packet,
+including the simple Coverage/ARGB path. If another plugin replaces slot 31,
+the proof no longer applies and the wrapper retains the explicit c0
+publication as a compatibility path.
+
 The high-register ABI was also checked against common shader plugins.
 NewVegas Reloaded's explicit New Vegas ranges end at c145, its D3D9 device
 proxy forwards constant writes unchanged, and a separately compiled
@@ -1229,7 +1240,12 @@ use VS and PS c0-c2 and hook the main 3D accumulator rather than the sorted
 Tile traversal. Those New Vegas plugin paths therefore do not overlap PS
 c176-c183 or VS c208. Their real rendering occurs outside a native sorted
 execution segment; every traversal start clears the local constant shadow,
-while nested and non-FreeType transitions invalidate it.
+while nested, reset, device/generation, and unknown external transitions
+invalidate it. A verified stock Tile transition still terminates retained
+command and sampler/pass-state reuse, but preserves the private-register shadow:
+the reverse-confirmed stock maps cannot write PS c176-c183 or VS c208. The
+cached viewport width/height is checked at that boundary and c208 alone is
+invalidated if its analytic-AA dimensions changed.
 
 Retained packet binding also treats
 `TileShader::SetupGeometryTextures` as the owner of VS/PS publication, as
@@ -1259,14 +1275,26 @@ constant, vertex-AA, and sampler mirrors are all current bypasses the three
 binder helpers entirely while recording their reuse counters. Packet
 c176-c183 uploads compare the
 traversal-local constant shadow and submit only the changed contiguous register
-range. The original Tile vertex constant maps are no longer specialized or
-mutated: `TileShader::UpdateConstants` continues to publish both
+range. That shadow now retains the process-lifetime immutable
+`NativeShaderProfile` identity directly. It no longer copies the 32-float
+packet block into both sorted and facade TLS on every packet; pointer identity
+proves an exact reuse, while a profile transition compares against the previous
+immutable profile only once to find the minimal changed range. The profile also
+retains its shader-visible prefix length: Body uploads c176-c177, Effect uploads
+c176-c179, and only Composite uploads the complete c176-c183 block. The shadow
+tracks how much of the previous immutable profile is actually resident, so an
+unused tail is never uploaded but can never be mistaken for valid state on a
+later wider profile. The original
+Tile vertex constant maps are no longer specialized or mutated:
+`TileShader::UpdateConstants` continues to publish both
 `WorldViewProjTranspose` at c0-c3 and `TexScroll` at c4, while the native vertex
 shader reads its AA profile only from c208. Consequently c208 can be reused
 after stock updates whenever the sorted/facade mirror still proves the same
 device, generation, viewport, and raster scale; external shaders, nested
 traversal, reset, generation changes, and explicit state invalidation still
-force a new publication.
+force a new publication. Ordinary interleaved stock Tiles are the narrow
+exception described above and can now carry the disjoint private state across
+the command-segment boundary.
 
 Packet admission now produces a short-lived binding proof before entering the
 immediate callback. A direct facade proof comes from the binding scope that has
@@ -1302,7 +1330,17 @@ by token, generation, atlas, resource, topology, hook, nesting, render target,
 and state.
 The main performance line reports `constant_ownership_segments`, segment
 reuses/releases, and the snapshot Get and restore Set calls elided by pass
-ownership. The `state_shadow_` line retains the old mirror/driver
+ownership. It also reports `private_reuses`,
+`stock_c0_republish_elided`, `compat_republishes`,
+`private_registers_uploaded`, `full_tail_elided`, and
+`stock_tile_private_preserves`. With an unmodified retail
+slot 31, `stock_c0_republish_elided` should track
+`stock_constant_updates` exactly and `compat_republishes` should remain zero;
+any compatibility republish means another component supplied a non-retail
+slot-31 implementation. `full_tail_elided` measures the 8-register-block tail
+not sent by first/full Body and Effect publications. The command-state line
+reports the corresponding `registers_uploaded` and `full_tail_elided` values
+for retained binding. The `state_shadow_` line retains the old mirror/driver
 constant-capture and `state_shadow_driver_gets` fields so a runtime log proves
 that the former path stayed inactive, followed by program/texture/packet and
 vertex-AA reuse counters. Program reuse is counted as two avoided
