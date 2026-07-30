@@ -650,6 +650,8 @@ namespace fonthook::vectorfont
 					* sizeof(const NativeA8CompiledPacketCommand*)
 				+ metadata->nativePayload.preflightAtlasTextures.capacity()
 					* sizeof(const void*)
+				+ GetNativeA8TileRetainedCapacityBytes(
+					metadata->nativePayload)
 				+ sizeof(A8ShapeMetadataPtr) + 6u * sizeof(void*));
 		{
 			A8State& state = State();
@@ -686,6 +688,11 @@ namespace fonthook::vectorfont
 			+ shapes.size() * (sizeof(VirtualStockSlotBinding)
 				+ sizeof(A8ShapeMetadata) + sizeof(SInt32)
 				+ kVirtualStockEstimatedShapeBytes)
+			+ (g_bEnableFreeTypeFontCommandBuffer
+				? topology.size()
+					* (sizeof(NativeA8TileRetainedPacket)
+						+ sizeof(NativeA8TileRetainedRun))
+				: 0)
 			+ 6u * sizeof(void*);
 		if (GetCpuMemoryCategoryHeadroom(CpuMemoryCategory::RuntimeMetadata,
 				estimatedBytes) < estimatedBytes)
@@ -775,7 +782,9 @@ namespace fonthook::vectorfont
 				+ primary.nativePayload.packetPrograms.capacity()
 					* sizeof(const NativeA8CompiledPacketCommand*)
 				+ primary.nativePayload.preflightAtlasTextures.capacity()
-					* sizeof(const void*));
+					* sizeof(const void*)
+				+ GetNativeA8TileRetainedCapacityBytes(
+					primary.nativePayload));
 		group->primaryMetadataOwner = metadataEntries[primarySlot];
 
 		{
@@ -835,11 +844,29 @@ namespace fonthook::vectorfont
 				payload.useCompositePackets);
 		const bool buildCommandView =
 			g_bEnableFreeTypeFontCommandBuffer;
+		const NativeA8TileRetainedText* retainedText = nullptr;
+		if (buildCommandView)
+		{
+			if (!IsNativeA8TileRetainedTextCurrent(payload,
+					group->primaryShape, generation,
+					atlasTextureEpoch))
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandTileRetainedMiss);
+				SetVirtualStockFacadeMode(*group,
+					NativeA8FallbackReason::PacketBuild);
+				return false;
+			}
+			retainedText = &payload.retainedText;
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandTileRetainedHit);
+		}
 		if (payload.useCompositePackets != group->useCompositeTopology
 			|| packets.size() != group->slots.size()
 			|| payload.packetShaders.size() != packets.size()
 			|| (buildCommandView
-				&& (payload.packetPrograms.size() != packets.size()
+				&& (!retainedText
+					|| retainedText->packets.size() != packets.size()
 					|| group->commandBuildCommands.size()
 						!= packets.size())))
 		{
@@ -996,7 +1023,10 @@ namespace fonthook::vectorfont
 			for (UInt32 index = 0;
 				index < packets.size(); ++index)
 			{
-				const NativeA8PacketTemplate& packet = packets[index];
+				const NativeA8TileRetainedPacket& retained =
+					retainedText->packets[index];
+				const NativeA8PacketTemplate& packet =
+					*retained.packet;
 				const NativeA8VirtualStockPacketBinding& source =
 					resolved[index];
 				const VirtualStockSlotBinding& slot =
@@ -1008,12 +1038,9 @@ namespace fonthook::vectorfont
 					|| packet.atlasPage
 						>= payload.preflightAtlasTextures.size()
 					|| !payload.preflightAtlasTextures[packet.atlasPage]
-					|| !payload.packetPrograms[index]
-					|| !payload.packetPrograms[index]->active
-					|| payload.packetPrograms[index]->generation
-						!= generation
-					|| payload.packetPrograms[index]->shader
-						!= payload.packetShaders[index])
+					|| retained.packetIndex != index
+					|| retained.vertexCount != source.vertexCount
+					|| !retained.program)
 				{
 					SetVirtualStockFacadeMode(*group,
 						NativeA8FallbackReason::PacketBuild);
@@ -1026,7 +1053,7 @@ namespace fonthook::vectorfont
 				command.packetIndex = index;
 				command.atlasTexture =
 					payload.preflightAtlasTextures[packet.atlasPage];
-				command.program = payload.packetPrograms[index];
+				command.program = retained.program;
 				command.binding.vertexBuffer = source.vertexBuffer;
 				command.binding.indexBuffer = source.indexBuffer;
 				command.binding.declaration = source.declaration;
@@ -1039,6 +1066,9 @@ namespace fonthook::vectorfont
 				command.binding.staticResident = source.staticResident;
 				command.binding.active = source.active;
 			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandTileRetainedPacketReuse,
+				static_cast<UInt64>(packets.size()));
 		}
 		group->preparedValidationToken = validationToken;
 		group->preparedGeneration = generation;

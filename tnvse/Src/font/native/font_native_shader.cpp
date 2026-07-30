@@ -8,6 +8,7 @@
 #include "NiD3DPass.hpp"
 #include "NiD3DPixelShader.hpp"
 #include "NiD3DRenderState.hpp"
+#include "NiD3DShaderConstantMap.hpp"
 #include "NiD3DTextureStage.hpp"
 #include "NiD3DVertexShader.hpp"
 #include "NiDX9Renderer.hpp"
@@ -240,6 +241,7 @@ namespace fonthook::vectorfont
 		UInt32 s_nextGeneration = 1;
 		DWORD s_lastInitializationAttempt = 0;
 		std::atomic<bool> s_invalidVtableLogged = false;
+		std::atomic<bool> s_vertexConstantMapFailureLogged = false;
 		std::atomic<UInt32> s_compositeProfileLogCount = 0;
 		std::atomic<bool> s_resetInProgress = false;
 		NiDX9Renderer* s_resetRenderer = nullptr;
@@ -427,14 +429,57 @@ namespace fonthook::vectorfont
 			return viewport.Width && viewport.Height;
 		}
 
+		bool RemoveNativeTexScrollConstant(
+			NiD3DShaderConstantMap* constantMap, bool requireWorldViewProjection)
+		{
+			if (!constantMap)
+				return !requireWorldViewProjection;
+
+			constexpr const char* kWorldViewProjection =
+				"WorldViewProjTranspose";
+			constexpr const char* kTexScroll = "TexScroll";
+			if (requireWorldViewProjection
+				&& !constantMap->GetEntry(kWorldViewProjection))
+			{
+				return false;
+			}
+			if (constantMap->GetEntry(kTexScroll))
+				constantMap->RemoveEntry(kTexScroll);
+			return !constantMap->GetEntry(kTexScroll)
+				&& (!requireWorldViewProjection
+					|| constantMap->GetEntry(kWorldViewProjection));
+		}
+
+		bool SpecializeNativeVertexConstantMaps(
+			TileShader* shader, NiD3DPass* pass)
+		{
+			if (!shader)
+				return false;
+			NiD3DShaderConstantMap* shaderMap =
+				shader->m_spVertexConstantMap.m_pObject;
+			if (!RemoveNativeTexScrollConstant(shaderMap, true))
+				return false;
+
+			// The retail Tile map contains WVP at c0-c3 followed by TexScroll at
+			// c4. Native shaders own c4 for their analytic-AA profile. Strip the
+			// stock c4 entry from both profile-local views so the untouched stock
+			// UpdateConstants call still refreshes WVP without overwriting c4.
+			NiD3DShaderConstantMap* passMap = pass
+				? pass->m_spVertexConstantMap.m_pObject : nullptr;
+			return passMap == shaderMap
+				|| RemoveNativeTexScrollConstant(passMap, false);
+		}
+
 		HRESULT EnsureNativeSamplerState(IDirect3DDevice9* device,
 			bool& changed, const char*& operation);
 
 		HRESULT PublishNativeVertexAaConstant(IDirect3DDevice9* device,
 			float rasterScale, NativeVertexAaState* cache,
-			bool forcePublish, const char*& operation)
+			bool forcePublish, bool* published, const char*& operation)
 		{
 			operation = "none";
+			if (published)
+				*published = false;
 			if (!device || !std::isfinite(rasterScale) || rasterScale <= 0.0f)
 			{
 				operation = "resolve-vertex-aa-profile";
@@ -491,6 +536,8 @@ namespace fonthook::vectorfont
 				cache->rasterScale = rasterScale;
 				cache->constantReady = true;
 			}
+			if (published)
+				*published = true;
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VertexAaConstantSet);
 			return D3D_OK;
@@ -581,14 +628,22 @@ namespace fonthook::vectorfont
 					? &sortedBatch.vertexAa
 					: batchActive ? &batch.vertexAa : nullptr;
 				const char* vertexAaOperation = "none";
+				bool vertexAaPublished = false;
 				const HRESULT vertexAaResult = PublishNativeVertexAaConstant(
-					device, profile->constants[7], vertexAaCache, true,
+					device, profile->constants[7], vertexAaCache, false,
+					&vertexAaPublished,
 					vertexAaOperation);
 				if (FAILED(vertexAaResult))
 				{
 					MarkGenerationFault(generation, vertexAaOperation,
 						vertexAaResult);
 					return;
+				}
+				if (!vertexAaPublished)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							VertexAaConstantStockPreserved);
 				}
 			}
 			if (simpleColorProfile)
@@ -990,6 +1045,18 @@ namespace fonthook::vectorfont
 			void** stockVtable = *reinterpret_cast<void***>(shader);
 			if (!pass || pass->m_uiStageCount < 1 || !stockVtable)
 				return nullptr;
+			if (!SpecializeNativeVertexConstantMaps(shader, pass))
+			{
+				bool expected = false;
+				if (s_vertexConstantMapFailureLogged.compare_exchange_strong(
+					expected, true, std::memory_order_acq_rel))
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_native: profile unavailable reason=vertex-constant-map-layout shaderClass=%u; retaining stock fallback",
+						static_cast<UInt32>(packet.shaderClass));
+				}
+				return nullptr;
+			}
 
 			// Preserve the complete immutable c1-c8 packet ABI. COLOR0 now owns
 			// only the shared per-glyph base modifier, so replacing c1 with the
@@ -1431,7 +1498,7 @@ namespace fonthook::vectorfont
 					== DistanceFieldMethod::Mtsdf
 				? "lazy-36" : "disabled";
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s vertexAa=analytic-c4-per-packet vertexFormat=float4 vertexStride=%u declTypes=0x%08X",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s vertexAa=analytic-c4-wvp-only-map vertexFormat=float4 vertexStride=%u declTypes=0x%08X",
 			candidate->id, candidate->device,
 			g_bEnableFreeTypeFontAggressivePerformanceMode
 				? "argb-composite" : "distance-field",
@@ -2086,7 +2153,7 @@ namespace fonthook::vectorfont
 					sortedBatch.depth
 						? &sortedBatch.vertexAa : nullptr;
 				result = PublishNativeVertexAaConstant(device,
-					profile->constants[7], vertexCache, false,
+					profile->constants[7], vertexCache, false, nullptr,
 					vertexOperation);
 				if (FAILED(result))
 				{

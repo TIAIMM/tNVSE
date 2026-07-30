@@ -307,7 +307,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu command_program_setups=%llu binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu",
+			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu vertex_aa_stock_preserved=%llu command_program_setups=%llu binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::ConstantCaptureMirror)],
 			values[static_cast<size_t>(
@@ -320,6 +320,8 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::VertexAaConstantSet)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VertexAaConstantReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::VertexAaConstantStockPreserved)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandProgramSetup)],
 			values[static_cast<size_t>(
@@ -548,7 +550,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandFallbackState)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: command_virtual_single_recorded=%llu hits=%llu misses=%llu replays=%llu fallbacks=%llu build_view_hits=%llu build_view_misses=%llu build_binding_reuses=%llu build_vector_growth=%llu deferred_render_target_captures=%llu",
+			"tnvse_freetype_perf: command_virtual_single_recorded=%llu hits=%llu misses=%llu replays=%llu fallbacks=%llu build_view_hits=%llu build_view_misses=%llu build_binding_reuses=%llu build_vector_growth=%llu deferred_render_target_captures=%llu tile_retained_builds=%llu refreshes=%llu hits=%llu misses=%llu packet_reuses=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
 					CommandVirtualSinglePacketRecorded)],
@@ -574,7 +576,18 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::CommandBuildVectorGrowth)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
-					CommandDeferredRenderTargetCapture)]);
+					CommandDeferredRenderTargetCapture)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandTileRetainedBuild)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandTileRetainedRefresh)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandTileRetainedHit)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandTileRetainedMiss)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					CommandTileRetainedPacketReuse)]);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: standard_pass_lite_candidates=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu stock_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
 			values[static_cast<size_t>(

@@ -1075,23 +1075,36 @@ and otherwise the unchanged `BSBatchRenderer::RenderPassImmediately`; a
 prelude failure also selects `BSBatchRenderer::RenderPassImmediately`. No
 fallback is attempted after an immediate draw.
 
-The immutable Text Artifact retains packet ranges, profile hashes/classes,
-atlas-page topology, vertex ranges, and replayable run boundaries, but no Tile
-state or D3D COM ownership. Each generation-owned shader profile now also owns
-one immutable compiled packet program containing its already resolved shader,
-VS/PS handles, slot methods, constants profile, and replay flags. Shape
-preflight publishes generation-bound non-owning program pointers alongside its
-resolved shaders. A later traversal therefore references the compiled program
-directly instead of recovering the profile, validating all immutable packet
-fields, and copying the program into every frame command again.
+The immutable Text Artifact retains shared packet geometry, profile
+hashes/classes, atlas-page topology, and vertex ranges, but no resolved Tile
+program. `NativeA8TileRetainedText` is instead owned by the
+`A8ShapeMetadata::nativePayload` associated with the live Tile facade. Full
+preflight builds its packet and run skeleton only when the Tile's packet
+topology, sampling/alpha class, or shader program changes. Atlas/resource-only
+preflight changes refresh the validity stamp while retaining the same skeleton.
+The custom `NiTriShape::DeleteThis` route invalidates that metadata before the
+stock Tile geometry is destroyed, so retained text cannot remain usable after
+its Tile lifetime ends.
+
+Each generation-owned shader profile owns one immutable compiled packet
+program containing its already resolved shader, VS/PS handles, slot methods,
+constants profile, and replay flags. Tile-retained text stores non-owning
+packet/program views and static vertex/page offsets, but no transform,
+scissor, material state, render target, viewport, VB/IB/declaration, texture
+COM ownership, or other mutable frame state. A later traversal therefore
+materializes only current sealed residency and atlas texture views instead of
+recovering the profile, validating all immutable packet fields, and rebuilding
+run topology for every frame.
 
 After registration, preflight, static/dynamic VB residency, and Virtual-stock
 topology are frozen, each sorted traversal builds a temporary command table
 containing only validated non-owning views plus frame-local buffer ranges. It
-is cleared before the ring lease ends. Command vectors and the per-shape
-program-pointer arrays participate in `RuntimeMetadata` accounting, retain at
-most 16384 command slots and 8192 run/span slots between traversals, and release
-all retained capacity when the aggregate CPU budget remains exceeded.
+is cleared before the ring lease ends. Command vectors, per-shape
+program-pointer arrays, and Tile-retained packet/run capacity participate in
+`RuntimeMetadata` accounting. Frame storage retains at most 16384 command
+slots and 8192 run/span slots between traversals and releases all retained
+capacity when the aggregate CPU budget remains exceeded; Tile-retained
+capacity is released with its owning Tile metadata.
 
 Compatibility facades retain their original position relative to non-FreeType
 items. A Virtual-stock group can fuse only when every slot is registered
@@ -1154,9 +1167,15 @@ constant, vertex-AA, and sampler mirrors are all current bypasses the three
 binder helpers entirely while recording their reuse counters. Packet c1-c8
 uploads compare the
 traversal-local constant shadow and submit only the changed contiguous register
-range. Vertex c4 is reused between retained packets with the same viewport and
-raster scale, but is forcibly republished after every stock
-`TileShader::UpdateConstants`.
+range. The stock Tile vertex constant map contains
+`WorldViewProjTranspose` at c0-c3 and `TexScroll` at c4. Every native
+profile removes only its private `TexScroll` entry, leaving the original
+`TileShader::UpdateConstants` call responsible for the live WVP while
+preventing it from overwriting tNVSE's analytic-AA c4. Consequently c4 is
+reused after stock updates whenever the sorted/facade mirror still proves the
+same device, generation, viewport, and raster scale; external Tile draws,
+nested traversal, reset, generation changes, and explicit state invalidation
+still force a new publication.
 
 Each immediate callback retains its execution-token, command-range, renderer,
 program/payload, and exact live geometry-binding checks. It no longer repeats
@@ -1182,6 +1201,8 @@ bounded number of state driver gets, any fail-open isolation bypass, elided
 program binds versus required profile setups, texture sets/reuses,
 packet-constant full/partial/reuse, and vertex-AA set/reuse counts. Program
 reuse is counted as two avoided publications, one VS plus one PS. On retail PC,
+a `vertex_aa_stock_preserved` count records stock updates that retained the
+already published native c4 through the WVP-only profile map. On retail PC,
 a healthy interval normally has two
 driver gets per sorted traversal that contains native distance-field packets
 and zero `isolation_bypass`.
@@ -1193,6 +1214,13 @@ logical spans or packets, substantial `segment_validation_reuses`, zero
 unexpected fallbacks, and that `stock_constant_updates` approaches the
 logical-span count without visual or runtime faults. Build success alone does
 not establish runtime correctness or the CPU-performance thresholds.
+
+The command-build diagnostic additionally reports `tile_retained_builds`,
+`refreshes`, `hits`, `misses`, and `packet_reuses`. After a menu reaches steady
+state, builds should track newly created or program-changed Tile text,
+atlas/resource-only preflight changes may increment refreshes without rebuilding
+the skeleton, hits should track commandized Tile traversals, misses should
+remain zero, and packet reuse should closely track recorded command packets.
 
 The adjacent `standard_pass_lite_` line exposes stage invariants for the dedicated
 single-packet subset. A healthy fully eligible run has

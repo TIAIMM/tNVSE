@@ -641,6 +641,7 @@ namespace fonthook::vectorfont
 			payload.preparedGeneration = 0;
 			payload.preflightAtlasTextureEpoch = 0;
 			payload.stockLikeBitmapPackets = false;
+			InvalidateNativeA8TileRetainedText(payload);
 			std::fill(payload.preflightAtlasTextures.begin(),
 				payload.preflightAtlasTextures.end(), nullptr);
 			std::fill(payload.packetShaders.begin(),
@@ -849,6 +850,11 @@ namespace fonthook::vectorfont
 
 			payload.preparedGeneration = generation;
 			payload.preflightAtlasTextureEpoch = atlasTextureEpoch;
+			if (g_bEnableFreeTypeFontCommandBuffer)
+			{
+				BuildNativeA8TileRetainedText(facade, payload,
+					generation, atlasTextureEpoch);
+			}
 			ClearNativePacketFailure(payload);
 			return NativeA8FallbackReason::None;
 		}

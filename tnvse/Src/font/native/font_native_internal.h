@@ -185,20 +185,6 @@ namespace fonthook::vectorfont
 		bool fused = false;
 	};
 
-	// A retained run is immutable Text Artifact metadata. It deliberately
-	// excludes Tile, renderer and D3D state; those identities are compiled into
-	// the traversal-local command buffer only after sorted preflight.
-	struct NativeA8RetainedRun
-	{
-		UInt32 firstPacket = 0;
-		UInt32 packetCount = 0;
-		UInt32 firstVertex = 0;
-		UInt32 vertexCount = 0;
-		NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
-		UInt16 firstAtlasPage = 0;
-		bool bridgeEligible = false;
-	};
-
 	struct NativeA8CompiledPacketCommand;
 
 	// Renderer-owned VB locations are mutable cache data attached to the immutable
@@ -226,25 +212,61 @@ namespace fonthook::vectorfont
 		std::vector<NiTexturePtr> atlasTextures;
 		std::vector<NativeA8GpuVertex> gpuVertices;
 		std::vector<NativeA8PacketTemplate> packets;
-		std::vector<NativeA8RetainedRun> retainedRuns;
 		// Optional single-pass distance-field representation. The ordinary packet
 		// list remains available if that shader class is unavailable.
 		std::vector<NativeA8PacketTemplate> compositePackets;
-		std::vector<NativeA8RetainedRun> compositeRetainedRuns;
 		mutable NativeA8PayloadResidencyCache residency;
 	};
 	using NativeA8PayloadTemplatePtr =
 		std::shared_ptr<const NativeA8PayloadTemplate>;
 
+	// The Text Artifact owns immutable geometry and packet data. The resolved
+	// replay program belongs to one live Tile facade instead: shader/profile
+	// selection depends on that Tile's alpha and sampling class. These packet
+	// skeletons retain no renderer state or D3D COM ownership; traversal-local
+	// commands add the current atlas and VB/IB residency after sorted preflight.
+	struct NativeA8TileRetainedPacket
+	{
+		const NativeA8PacketTemplate* packet = nullptr;
+		const NativeA8CompiledPacketCommand* program = nullptr;
+		UInt32 packetIndex = 0;
+		UInt32 firstVertex = 0;
+		UInt32 vertexCount = 0;
+		UInt16 atlasPage = 0;
+	};
+
+	struct NativeA8TileRetainedRun
+	{
+		UInt32 firstPacket = 0;
+		UInt32 packetCount = 0;
+		bool bridgeEligible = false;
+		bool continuesBridgeSpan = false;
+	};
+
+	struct NativeA8TileRetainedText
+	{
+		NiTriShape* ownerTile = nullptr;
+		const NativeA8PayloadTemplate* artifact = nullptr;
+		std::vector<NativeA8TileRetainedPacket> packets;
+		std::vector<NativeA8TileRetainedRun> runs;
+		UInt32 generation = 0;
+		UInt32 atlasTextureEpoch = 0;
+		bool useCompositePackets = false;
+		bool bridgeEligible = false;
+		bool ready = false;
+	};
+
 	struct NativeA8ShapePayload
 	{
 		NativeA8PayloadTemplatePtr payloadTemplate;
 		NiPoint3 geometryOrigin;
-		// Packet geometry, constants, page identity, and profile keys live only in
-		// the shared text artifact. A Tile instance retains generation-bound
-		// shader/program views; both are cleared with native preflight state.
+		// Packet geometry, constants, page identity, and profile keys live in the
+		// shared text artifact. The Tile instance retains its generation-bound
+		// shader/program skeleton until that Tile is destroyed or preflight is
+		// invalidated.
 		std::vector<TileShader*> packetShaders;
 		std::vector<const NativeA8CompiledPacketCommand*> packetPrograms;
+		NativeA8TileRetainedText retainedText;
 		std::atomic<bool> suppressNextSubmit = false;
 		std::atomic<NativeA8FallbackReason> stickyReason =
 			NativeA8FallbackReason::None;
@@ -270,14 +292,6 @@ namespace fonthook::vectorfont
 	{
 		return useComposite && !payloadTemplate.compositePackets.empty()
 			? payloadTemplate.compositePackets : payloadTemplate.packets;
-	}
-
-	inline const std::vector<NativeA8RetainedRun>& GetNativeA8RetainedRuns(
-		const NativeA8PayloadTemplate& payloadTemplate, bool useComposite)
-	{
-		return useComposite && !payloadTemplate.compositePackets.empty()
-			? payloadTemplate.compositeRetainedRuns
-			: payloadTemplate.retainedRuns;
 	}
 
 	inline bool UsesOnlyStockLikeBitmapPackets(
@@ -563,6 +577,16 @@ namespace fonthook::vectorfont
 		const NiPoint3& geometryOrigin, NativeA8ShapePayload& payload);
 	size_t GetNativeA8PayloadTemplateBytes(
 		const NativeA8PayloadTemplate& payloadTemplate);
+	size_t GetNativeA8TileRetainedCapacityBytes(
+		const NativeA8ShapePayload& payload);
+	void InvalidateNativeA8TileRetainedText(
+		NativeA8ShapePayload& payload);
+	bool BuildNativeA8TileRetainedText(NiTriShape* ownerTile,
+		NativeA8ShapePayload& payload, UInt32 generation,
+		UInt32 atlasTextureEpoch);
+	bool IsNativeA8TileRetainedTextCurrent(
+		const NativeA8ShapePayload& payload, const NiTriShape* ownerTile,
+		UInt32 generation, UInt32 atlasTextureEpoch);
 	void InvalidateNativeA8RingResources(NativeA8FallbackReason reason);
 
 	struct NativeA8RingSubmission

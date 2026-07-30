@@ -3715,6 +3715,12 @@ namespace fonthook::vectorfont
 				}
 			}
 			if (retiredMetadata
+				&& retiredMetadata->nativePayload.buildComplete)
+			{
+				InvalidateNativeA8TileRetainedText(
+					retiredMetadata->nativePayload);
+			}
+			if (retiredMetadata
 				&& retiredMetadata->backend
 					== FreeTypeShapeBackend::VirtualStockNative)
 			{

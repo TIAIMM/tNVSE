@@ -470,43 +470,35 @@ namespace fonthook::vectorfont
 
 		bool CompileCompatibilityCommand(
 			NiTriShape* facade, NativeA8ShapePayload& payload,
-			const NativeA8PacketTemplate& packet, UInt32 packetIndex,
+			const NativeA8TileRetainedPacket& retained,
 			const NativeA8FramePayloadBinding& payloadBinding,
 			NativeA8DrawCommand& command)
 		{
 			command = {};
 			command.sourceGeometry = facade;
 			command.payload = &payload;
-			command.packet = &packet;
-			command.packetIndex = packetIndex;
-			if (packet.atlasPage >= payload.preflightAtlasTextures.size())
+			command.packet = retained.packet;
+			command.packetIndex = retained.packetIndex;
+			command.program = retained.program;
+			if (!retained.packet || !retained.program
+				|| retained.atlasPage
+					>= payload.preflightAtlasTextures.size())
 				return false;
-			const UInt64 packetEnd =
-				static_cast<UInt64>(packet.firstVertex)
-					+ packet.vertexCount;
 			const UInt64 baseVertex =
 				static_cast<UInt64>(
 					payloadBinding.payloadBaseVertex)
-					+ packet.firstVertex;
+					+ retained.firstVertex;
 			command.atlasTexture =
-				payload.preflightAtlasTextures[packet.atlasPage];
+				payload.preflightAtlasTextures[retained.atlasPage];
 			if (!command.atlasTexture
 				|| !payloadBinding.active
-				|| !packet.vertexCount
-				|| (packet.vertexCount & 3u)
-				|| packetEnd
+				|| !retained.vertexCount
+				|| (retained.vertexCount & 3u)
+				|| static_cast<UInt64>(retained.firstVertex)
+						+ retained.vertexCount
 					> payloadBinding.payloadVertexCount
 				|| baseVertex
-					> std::numeric_limits<UInt32>::max()
-				|| packetIndex >= payload.packetShaders.size()
-				|| packetIndex >= payload.packetPrograms.size()
-				|| !(command.program =
-					payload.packetPrograms[packetIndex])
-				|| !command.program->active
-				|| command.program->shader
-					!= payload.packetShaders[packetIndex]
-				|| command.program->generation
-					!= payload.preparedGeneration)
+					> std::numeric_limits<UInt32>::max())
 			{
 				return false;
 			}
@@ -518,7 +510,7 @@ namespace fonthook::vectorfont
 				payloadBinding.declaration;
 			command.binding.baseVertex =
 				static_cast<UInt32>(baseVertex);
-			command.binding.vertexCount = packet.vertexCount;
+			command.binding.vertexCount = retained.vertexCount;
 			command.binding.indexBytes =
 				payloadBinding.indexBytes;
 			command.binding.generation =
@@ -536,7 +528,7 @@ namespace fonthook::vectorfont
 		bool AppendCompatibilityCommand(
 			NativeA8FrameCommandBuffer& buffer,
 			NiTriShape* facade, NativeA8ShapePayload& payload,
-			const NativeA8PacketTemplate& packet, UInt32 packetIndex,
+			const NativeA8TileRetainedPacket& retained,
 			const NativeA8FramePayloadBinding& payloadBinding)
 		{
 			const size_t previousCapacity = buffer.commands.capacity();
@@ -545,12 +537,37 @@ namespace fonthook::vectorfont
 				previousCapacity, buffer.commands.capacity());
 			NativeA8DrawCommand& command = buffer.commands.back();
 			if (!CompileCompatibilityCommand(facade, payload,
-					packet, packetIndex, payloadBinding, command))
+					retained, payloadBinding, command))
 			{
 				buffer.commands.pop_back();
 				return false;
 			}
 			return true;
+		}
+
+		const NativeA8TileRetainedText* ResolveTileRetainedText(
+			const NativeA8FrameCommandBuffer& buffer,
+			NiTriShape* ownerTile, NativeA8ShapePayload& payload,
+			bool recordResult = true)
+		{
+			if (!IsNativeA8TileRetainedTextCurrent(payload,
+					ownerTile, buffer.stamp.generation,
+					buffer.stamp.atlasTextureEpoch))
+			{
+				if (recordResult)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							CommandTileRetainedMiss);
+				}
+				return nullptr;
+			}
+			if (recordResult)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandTileRetainedHit);
+			}
+			return &payload.retainedText;
 		}
 
 		bool AdoptFrameResourceStamp(
@@ -574,11 +591,11 @@ namespace fonthook::vectorfont
 
 		bool BuildFrameRuns(NativeA8FrameCommandBuffer& buffer,
 			NativeA8CommandSpan& span,
-			const std::vector<NativeA8RetainedRun>& retainedRuns)
+			const std::vector<NativeA8TileRetainedRun>& retainedRuns,
+			bool retainedBridgeEligible)
 		{
 			UInt32 coveredPackets = 0;
-			bool allBridgeEligible = !retainedRuns.empty();
-			for (const NativeA8RetainedRun& retained : retainedRuns)
+			for (const NativeA8TileRetainedRun& retained : retainedRuns)
 			{
 				if (!retained.packetCount
 					|| retained.firstPacket != coveredPackets
@@ -587,8 +604,6 @@ namespace fonthook::vectorfont
 				{
 					return false;
 				}
-				allBridgeEligible = allBridgeEligible
-					&& retained.bridgeEligible;
 				UInt32 first = retained.firstPacket;
 				const UInt32 retainedEnd =
 					retained.firstPacket + retained.packetCount;
@@ -601,12 +616,6 @@ namespace fonthook::vectorfont
 					{
 						const NativeA8DrawCommand& candidate =
 							buffer.commands[span.firstCommand + end];
-						if (!candidate.program || !firstCommand.program
-							|| candidate.program->profile
-								!= firstCommand.program->profile)
-						{
-							break;
-						}
 						if (span.virtualStock
 							&& !SameVirtualTileState(
 								firstCommand.expectedGeometry,
@@ -620,8 +629,7 @@ namespace fonthook::vectorfont
 					run.firstCommand = span.firstCommand + first;
 					run.commandCount = end - first;
 					run.bridgeEligible = retained.bridgeEligible;
-					if (!buffer.runs.empty()
-						&& buffer.runs.size() > span.firstRun)
+					if (buffer.runs.size() > span.firstRun)
 					{
 						const NativeA8FrameCommandRun& previous =
 							buffer.runs.back();
@@ -629,10 +637,13 @@ namespace fonthook::vectorfont
 							buffer.commands[
 								previous.firstCommand
 									+ previous.commandCount - 1u];
-						run.continuesBridgeSpan = !span.virtualStock
-							|| SameVirtualTileState(
+						run.continuesBridgeSpan =
+							(retained.continuesBridgeSpan
+								|| first != retained.firstPacket)
+							&& (!span.virtualStock
+								|| SameVirtualTileState(
 								previousCommand.expectedGeometry,
-								firstCommand.expectedGeometry);
+								firstCommand.expectedGeometry));
 					}
 					buffer.runs.push_back(run);
 					first = end;
@@ -640,7 +651,7 @@ namespace fonthook::vectorfont
 				coveredPackets += retained.packetCount;
 			}
 			span.bridgeEligible =
-				span.commandCount > 1 && allBridgeEligible;
+				span.commandCount > 1 && retainedBridgeEligible;
 			return coveredPackets == span.commandCount;
 		}
 
@@ -828,6 +839,210 @@ namespace fonthook::vectorfont
 		}
 	}
 
+	size_t GetNativeA8TileRetainedCapacityBytes(
+		const NativeA8ShapePayload& payload)
+	{
+		return payload.retainedText.packets.capacity()
+				* sizeof(NativeA8TileRetainedPacket)
+			+ payload.retainedText.runs.capacity()
+				* sizeof(NativeA8TileRetainedRun);
+	}
+
+	void InvalidateNativeA8TileRetainedText(
+		NativeA8ShapePayload& payload)
+	{
+		NativeA8TileRetainedText& retained = payload.retainedText;
+		retained.ready = false;
+		retained.atlasTextureEpoch = 0;
+		retained.bridgeEligible = false;
+	}
+
+	bool BuildNativeA8TileRetainedText(NiTriShape* ownerTile,
+		NativeA8ShapePayload& payload, UInt32 generation,
+		UInt32 atlasTextureEpoch)
+	{
+		InvalidateNativeA8TileRetainedText(payload);
+		if (!g_bEnableFreeTypeFontCommandBuffer || !ownerTile
+			|| !generation || !atlasTextureEpoch
+			|| !payload.payloadTemplate)
+		{
+			return false;
+		}
+
+		const NativeA8PayloadTemplate& artifact =
+			*payload.payloadTemplate;
+		const std::vector<NativeA8PacketTemplate>& packets =
+			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		NativeA8TileRetainedText& retained = payload.retainedText;
+		auto discardRetained = [&retained]()
+		{
+			retained.ready = false;
+			retained.ownerTile = nullptr;
+			retained.artifact = nullptr;
+			retained.generation = 0;
+			retained.atlasTextureEpoch = 0;
+			retained.useCompositePackets = false;
+			retained.bridgeEligible = false;
+			retained.packets.clear();
+			retained.runs.clear();
+		};
+		if (packets.empty()
+			|| payload.packetShaders.size() != packets.size()
+			|| payload.packetPrograms.size() != packets.size()
+			|| payload.preflightAtlasTextures.size()
+				!= artifact.atlasTextures.size())
+		{
+			discardRetained();
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandTileRetainedMiss);
+			return false;
+		}
+
+		bool canRefresh = retained.ownerTile == ownerTile
+			&& retained.artifact == &artifact
+			&& retained.generation == generation
+			&& retained.useCompositePackets
+				== payload.useCompositePackets
+			&& retained.packets.size() == packets.size()
+			&& !retained.runs.empty();
+		for (UInt32 index = 0;
+			index < static_cast<UInt32>(packets.size()); ++index)
+		{
+			const NativeA8PacketTemplate& packet = packets[index];
+			const NativeA8CompiledPacketCommand* program =
+				payload.packetPrograms[index];
+			const UInt64 packetEnd =
+				static_cast<UInt64>(packet.firstVertex)
+					+ packet.vertexCount;
+			if (!packet.vertexCount || (packet.vertexCount & 3u)
+				|| packetEnd > artifact.gpuVertices.size()
+				|| packet.atlasPage
+					>= payload.preflightAtlasTextures.size()
+				|| !payload.preflightAtlasTextures[packet.atlasPage]
+				|| !payload.packetShaders[index] || !program
+				|| !program->active || !program->profile
+				|| program->generation != generation
+				|| program->shader != payload.packetShaders[index])
+			{
+				discardRetained();
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandTileRetainedMiss);
+				return false;
+			}
+
+			if (canRefresh)
+			{
+				const NativeA8TileRetainedPacket& existing =
+					retained.packets[index];
+				canRefresh = existing.packet == &packet
+					&& existing.program == program
+					&& existing.packetIndex == index
+					&& existing.firstVertex == packet.firstVertex
+					&& existing.vertexCount == packet.vertexCount
+					&& existing.atlasPage == packet.atlasPage;
+				continue;
+			}
+		}
+
+		if (canRefresh)
+		{
+			retained.atlasTextureEpoch = atlasTextureEpoch;
+			retained.bridgeEligible = retained.packets.size() > 1;
+			retained.ready = true;
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandTileRetainedRefresh);
+			return true;
+		}
+
+		discardRetained();
+		if (retained.packets.capacity() < packets.size()
+			|| retained.runs.capacity() < packets.size())
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandTileRetainedMiss);
+			return false;
+		}
+
+		for (UInt32 index = 0;
+			index < static_cast<UInt32>(packets.size()); ++index)
+		{
+			const NativeA8PacketTemplate& packet = packets[index];
+			NativeA8TileRetainedPacket command;
+			command.packet = &packet;
+			command.program = payload.packetPrograms[index];
+			command.packetIndex = index;
+			command.firstVertex = packet.firstVertex;
+			command.vertexCount = packet.vertexCount;
+			command.atlasPage = packet.atlasPage;
+			retained.packets.push_back(command);
+		}
+
+		for (UInt32 first = 0;
+			first < static_cast<UInt32>(retained.packets.size());)
+		{
+			const void* profile =
+				retained.packets[first].program->profile;
+			UInt32 end = first + 1u;
+			while (end < retained.packets.size()
+				&& retained.packets[end].program->profile == profile)
+			{
+				++end;
+			}
+			NativeA8TileRetainedRun run;
+			run.firstPacket = first;
+			run.packetCount = end - first;
+			run.bridgeEligible = true;
+			run.continuesBridgeSpan = first != 0;
+			retained.runs.push_back(run);
+			first = end;
+		}
+
+		retained.ownerTile = ownerTile;
+		retained.artifact = &artifact;
+		retained.generation = generation;
+		retained.atlasTextureEpoch = atlasTextureEpoch;
+		retained.useCompositePackets = payload.useCompositePackets;
+		retained.bridgeEligible = retained.packets.size() > 1;
+		retained.ready = !retained.packets.empty()
+			&& !retained.runs.empty();
+		if (!retained.ready)
+		{
+			discardRetained();
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::CommandTileRetainedMiss);
+			return false;
+		}
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandTileRetainedBuild);
+		return true;
+	}
+
+	bool IsNativeA8TileRetainedTextCurrent(
+		const NativeA8ShapePayload& payload,
+		const NiTriShape* ownerTile, UInt32 generation,
+		UInt32 atlasTextureEpoch)
+	{
+		const NativeA8TileRetainedText& retained =
+			payload.retainedText;
+		if (!retained.ready || !ownerTile || !generation
+			|| !atlasTextureEpoch || !payload.payloadTemplate
+			|| retained.ownerTile != ownerTile
+			|| retained.artifact != payload.payloadTemplate.get()
+			|| retained.generation != generation
+			|| retained.atlasTextureEpoch != atlasTextureEpoch
+			|| retained.useCompositePackets
+				!= payload.useCompositePackets)
+		{
+			return false;
+		}
+		const std::vector<NativeA8PacketTemplate>& packets =
+			GetNativeA8Packets(*payload.payloadTemplate,
+				payload.useCompositePackets);
+		return !retained.packets.empty()
+			&& !retained.runs.empty()
+			&& retained.packets.size() == packets.size();
+	}
+
 	void NotifyNativeA8CommandExternalMutation(
 		NativeA8CommandFallback reason)
 	{
@@ -916,13 +1131,14 @@ namespace fonthook::vectorfont
 			return kInvalidNativeA8CommandIndex;
 		}
 
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(*payload->payloadTemplate,
-				payload->useCompositePackets);
-		if (packets.size() != 1)
+		if (GetNativeA8Packets(*payload->payloadTemplate,
+				payload->useCompositePackets).size() != 1)
+		{
 			return kInvalidNativeA8CommandIndex;
-		if (payload->packetShaders.size() != 1
-			|| payload->packetPrograms.size() != 1)
+		}
+		const NativeA8TileRetainedText* retainedText =
+			ResolveTileRetainedText(buffer, facade, *payload);
+		if (!retainedText || retainedText->packets.size() != 1)
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
@@ -956,7 +1172,8 @@ namespace fonthook::vectorfont
 		command.atlasTextureEpoch = buffer.stamp.atlasTextureEpoch;
 		command.useCompositePackets = payload->useCompositePackets;
 		if (!CompileCompatibilityCommand(facade, *payload,
-				packets.front(), 0, payloadBinding, command.draw))
+				retainedText->packets.front(),
+				payloadBinding, command.draw))
 		{
 			buffer.singlePacketCommands.pop_back();
 			RecordFreeTypePerf(
@@ -981,6 +1198,8 @@ namespace fonthook::vectorfont
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::CommandSinglePacketRecorded);
 		RecordFreeTypePerf(FreeTypePerfCounter::CommandPacketRecorded);
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::CommandTileRetainedPacketReuse);
 		return commandIndex;
 	}
 
@@ -1030,6 +1249,7 @@ namespace fonthook::vectorfont
 		const size_t commandRollback = buffer.commands.size();
 		const size_t runRollback = buffer.runs.size();
 		bool appended = false;
+		const NativeA8TileRetainedText* retainedText = nullptr;
 		if (virtualStockGroup)
 		{
 			const UInt64 buildToken =
@@ -1074,6 +1294,15 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::CommandBuildViewHit);
 			span.payload = payload;
 			span.facade = first.sourceGeometry;
+			retainedText = ResolveTileRetainedText(buffer,
+				virtualStockGroup->primaryShape, *payload, false);
+			if (!retainedText
+				|| retainedText->packets.size() != prepared.size())
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::CommandBuildViewMiss);
+				return kInvalidNativeA8CommandIndex;
+			}
 
 			if (prepared.size() == 1)
 			{
@@ -1141,18 +1370,18 @@ namespace fonthook::vectorfont
 		else if (facade && payload && payload->buildComplete
 			&& payload->payloadTemplate)
 		{
-			const std::vector<NativeA8PacketTemplate>& packets =
-				GetNativeA8Packets(*payload->payloadTemplate,
-					payload->useCompositePackets);
+			retainedText = ResolveTileRetainedText(
+				buffer, facade, *payload);
 			NativeA8FramePayloadBinding payloadBinding;
-			if (ResolveNativeA8FramePayloadBinding(
+			if (retainedText
+				&& ResolveNativeA8FramePayloadBinding(
 					*payload, payloadBinding))
 			{
 				for (UInt32 index = 0;
-					index < packets.size(); ++index)
+					index < retainedText->packets.size(); ++index)
 				{
 					if (!AppendCompatibilityCommand(buffer, facade,
-						*payload, packets[index], index,
+						*payload, retainedText->packets[index],
 						payloadBinding))
 					{
 						appended = false;
@@ -1160,13 +1389,21 @@ namespace fonthook::vectorfont
 					}
 					appended = true;
 				}
-				if (appended && packets.size() > 1)
+				if (appended && retainedText->packets.size() > 1)
 				{
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::
 							CommandBuildBindingReuse,
 						static_cast<UInt64>(
-							packets.size() - 1));
+							retainedText->packets.size() - 1));
+				}
+				if (appended)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							CommandTileRetainedPacketReuse,
+						static_cast<UInt64>(
+							retainedText->packets.size()));
 				}
 			}
 		}
@@ -1180,12 +1417,15 @@ namespace fonthook::vectorfont
 			buffer.commands.size() - span.firstCommand);
 		span.useCompositePackets =
 			span.payload->useCompositePackets;
-		const std::vector<NativeA8RetainedRun>& retainedRuns =
-			GetNativeA8RetainedRuns(*span.payload->payloadTemplate,
-				span.useCompositePackets);
+		if (!retainedText)
+		{
+			buffer.commands.resize(commandRollback);
+			return kInvalidNativeA8CommandIndex;
+		}
 		const size_t previousRunCapacity = buffer.runs.capacity();
 		const bool builtRuns =
-			BuildFrameRuns(buffer, span, retainedRuns);
+			BuildFrameRuns(buffer, span, retainedText->runs,
+				retainedText->bridgeEligible);
 		RecordCommandVectorGrowth(
 			previousRunCapacity, buffer.runs.capacity());
 		if (!builtRuns)
