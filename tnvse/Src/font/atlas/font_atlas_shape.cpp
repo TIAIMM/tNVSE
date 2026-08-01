@@ -1667,8 +1667,9 @@ namespace fonthook::vectorfont
 			return result;
 		}
 		const std::shared_ptr<const SealedDirectFontProfile> published =
-			AcquireSealedDirectFontProfile(runtime, rasterScale);
+			LoadRuntimeSealedDirectProfile(runtime);
 		if (published.get() != sealed.get()
+			|| !IsSealedDirectFontProfileUsable(runtime, sealed, rasterScale)
 			|| sealed->recordKind
 				!= DirectCachedLetterKind::EffectLayers
 			|| sealed->renderMode != AtlasRenderMode::CpuEffects
@@ -2661,15 +2662,18 @@ namespace fonthook::vectorfont
 				sealedBeforeBuild =
 					LoadRuntimeSealedDirectProfile(runtime);
 			const bool sealedBatchExpected = sealedBeforeBuild
-				&& sealedBeforeBuild->validityEpoch
-					== State().directProfileEpoch.load(
-						std::memory_order_acquire)
-				&& sealedBeforeBuild->scaleMilli
-					== static_cast<UInt32>(std::lround(
-						rasterScale * 1000.0f))
+				&& IsSealedDirectFontProfileUsable(
+					runtime, sealedBeforeBuild, rasterScale)
 				&& sealedBeforeBuild->pixelMode == pixelMode
 				&& sealedBeforeBuild->renderMode == renderMode
-				&& sealedBeforeBuild->padding == padding;
+				&& sealedBeforeBuild->padding == padding
+				&& std::all_of(glyphs.begin(), glyphs.end(),
+					[](const AtlasGlyphInstance& instance)
+					{
+						return instance.glyph.hasDirectMetrics
+							&& instance.glyph.directSlot
+								!= std::numeric_limits<UInt16>::max();
+					});
 
 			thread_local DirectAtlasGlyphBatch batch;
 			batch.Clear();
@@ -2681,9 +2685,13 @@ namespace fonthook::vectorfont
 			if (!GetDirectAtlasGlyphBatch(runtime, glyphs, maskType,
 				rasterScale, pixelMode, renderMode, padding, batch))
 			{
-				if (sealedBatchExpected)
+				const bool sealedStillCurrent = sealedBatchExpected
+					&& LoadRuntimeSealedDirectProfile(runtime).get()
+						== sealedBeforeBuild.get();
+				if (sealedStillCurrent)
 				{
-					InvalidateSealedDirectFontProfile(runtime);
+					InvalidateSealedDirectFontProfileIfCurrent(
+						runtime, sealedBeforeBuild);
 					result.outcome =
 						DirectAtlasShapeOutcome::Failed;
 				}
@@ -2693,16 +2701,20 @@ namespace fonthook::vectorfont
 				font, runtime, glyphs, batch, rasterScale,
 				prepareObject, tileColor, suppressEffects,
 				maskType, quality);
-			if (sealedBatchExpected
+			const bool sealedStillCurrent = sealedBatchExpected
+				&& LoadRuntimeSealedDirectProfile(runtime).get()
+					== sealedBeforeBuild.get();
+			if (sealedStillCurrent
 				&& result.outcome
 					== DirectAtlasShapeOutcome::Unavailable)
 			{
 				result.outcome = DirectAtlasShapeOutcome::Failed;
 			}
-			if (sealedBatchExpected
+			if (sealedStillCurrent
 				&& result.outcome == DirectAtlasShapeOutcome::Failed)
 			{
-				InvalidateSealedDirectFontProfile(runtime);
+				InvalidateSealedDirectFontProfileIfCurrent(
+					runtime, sealedBeforeBuild);
 			}
 			return result;
 		}
@@ -2747,7 +2759,7 @@ namespace fonthook::vectorfont
 				glyphs, maskType, rasterScale, pixelMode,
 				renderMode, padding, batch))
 			{
-				InvalidateSealedDirectFontProfile(runtime);
+				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 				result.outcome = DirectAtlasShapeOutcome::Failed;
 				return result;
 			}
@@ -2758,7 +2770,7 @@ namespace fonthook::vectorfont
 			if (result.outcome == DirectAtlasShapeOutcome::Unavailable)
 				result.outcome = DirectAtlasShapeOutcome::Failed;
 			if (result.outcome == DirectAtlasShapeOutcome::Failed)
-				InvalidateSealedDirectFontProfile(runtime);
+				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 			return result;
 		}
 

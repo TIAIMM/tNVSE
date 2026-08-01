@@ -152,7 +152,7 @@ namespace fonthook::vectorfont
 			&& profile->pixelMode == AtlasPixelMode::A8;
 		if (!precomposed && !distanceField && !cpuEffects)
 		{
-			InvalidateSealedDirectFontProfile(runtime);
+			InvalidateSealedDirectFontProfileIfCurrent(runtime, profile);
 			if (diagnostics)
 				diagnostics->outcome =
 					GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
@@ -230,7 +230,7 @@ namespace fonthook::vectorfont
 			}
 			return nullptr;
 		default:
-			InvalidateSealedDirectFontProfile(runtime);
+			InvalidateSealedDirectFontProfileIfCurrent(runtime, profile);
 			if (diagnostics)
 			{
 				diagnostics->outcome =

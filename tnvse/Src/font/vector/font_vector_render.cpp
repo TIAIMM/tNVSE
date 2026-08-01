@@ -416,6 +416,41 @@ namespace fonthook
 		std::vector<vectorfont::DirectGlyphCommand> directGlyphs;
 		std::vector<vectorfont::AtlasGlyphInstance> glyphs;
 
+		bool ConvertDirectGlyphsToGeneric()
+		{
+			if (!font)
+				return false;
+			glyphs.clear();
+			glyphs.reserve(directGlyphs.size() + 1u);
+			for (const vectorfont::DirectGlyphCommand& command : directGlyphs)
+			{
+				char replay[3] = {};
+				if (command.byteLength == 2)
+				{
+					replay[0] = static_cast<char>(command.encodedCode >> 8);
+					replay[1] = static_cast<char>(command.encodedCode & 0xFF);
+				}
+				else
+				{
+					replay[0] = static_cast<char>(command.encodedCode & 0xFF);
+				}
+				VectorEncodedGlyph replayGlyph;
+				if (!DecodeFreeTypeGlyph(font, replay, replayGlyph))
+				{
+					sealedBatchInvalid = true;
+					glyphs.clear();
+					sealedProfile.reset();
+					return false;
+				}
+				glyphs.push_back({ replayGlyph, command.pen,
+					UnpackDirectCommandColor(command.packedColor) });
+			}
+			directGlyphs.clear();
+			sealedProfile.reset();
+			sealedBatchInvalid = false;
+			return true;
+		}
+
 		Impl(Font* apFont, bool abPrepareObject, float afRasterScale,
 			const NiColorA* apTileColor)
 			: font(apFont), prepareObject(abPrepareObject),
@@ -572,8 +607,12 @@ namespace fonthook
 					== std::numeric_limits<UInt16>::max()
 				|| static_cast<size_t>(glyph.byteClass) >= 2)
 			{
-				m_impl->sealedBatchInvalid = true;
-				return false;
+				vectorfont::InvalidateSealedDirectFontProfileIfCurrent(
+					*m_impl->runtime, m_impl->sealedProfile);
+				if (!m_impl->ConvertDirectGlyphsToGeneric())
+					return false;
+				m_impl->glyphs.push_back({ glyph, pen, sourceColor });
+				return true;
 			}
 			vectorfont::DirectGlyphCommand command;
 			command.pen = pen;
@@ -607,55 +646,20 @@ namespace fonthook
 				vectorfont::DecodeSealedDirectGlyph(
 					*m_impl->sealedProfile,
 					encodedText, glyph);
-			if (lookup
-				== vectorfont::SealedDirectGlyphLookup::Unavailable)
+			if (lookup != vectorfont::SealedDirectGlyphLookup::Resolved)
 			{
-				m_impl->glyphs.reserve(
-					m_impl->directGlyphs.size() + 1u);
-				for (const vectorfont::DirectGlyphCommand& command :
-					m_impl->directGlyphs)
+				if (lookup == vectorfont::SealedDirectGlyphLookup::Invalid)
 				{
-					char replay[3] = {};
-					if (command.byteLength == 2)
-					{
-						replay[0] = static_cast<char>(
-							command.encodedCode >> 8);
-						replay[1] = static_cast<char>(
-							command.encodedCode & 0xFF);
-					}
-					else
-						replay[0] = static_cast<char>(
-							command.encodedCode & 0xFF);
-					VectorEncodedGlyph replayGlyph;
-					if (!DecodeFreeTypeGlyph(
-						m_impl->font, replay, replayGlyph))
-					{
-						m_impl->sealedBatchInvalid = true;
-						m_impl->glyphs.clear();
-						m_impl->sealedProfile.reset();
-						return false;
-					}
-					m_impl->glyphs.push_back({
-						replayGlyph, command.pen,
-						UnpackDirectCommandColor(
-							command.packedColor) });
+					vectorfont::InvalidateSealedDirectFontProfileIfCurrent(
+						*m_impl->runtime, m_impl->sealedProfile);
 				}
-				m_impl->directGlyphs.clear();
-				m_impl->sealedProfile.reset();
-				m_impl->sealedBatchInvalid = false;
+				if (!m_impl->ConvertDirectGlyphsToGeneric())
+					return false;
 				if (!DecodeFreeTypeGlyph(
 					m_impl->font, encodedText, glyph))
 				{
 					return false;
 				}
-			}
-			else if (lookup
-				!= vectorfont::SealedDirectGlyphLookup::Resolved)
-			{
-				m_impl->sealedBatchInvalid = true;
-				vectorfont::InvalidateSealedDirectFontProfile(
-					*m_impl->runtime);
-				return false;
 			}
 		}
 		else if (!DecodeFreeTypeGlyph(
@@ -678,13 +682,9 @@ namespace fonthook
 		if (!m_impl->available)
 			return CreateEmptyVectorShape(m_impl->font, m_impl->prepareObject);
 
-		std::optional<vectorfont::GlyphAtlasBuildDiagnostics>
-			atlasDiagnosticsStorage;
-		if (g_bEnableFreeTypeFontRenderingLog)
-			atlasDiagnosticsStorage.emplace();
+		vectorfont::GlyphAtlasBuildDiagnostics atlasDiagnosticsStorage;
 		vectorfont::GlyphAtlasBuildDiagnostics* diagnostics =
-			atlasDiagnosticsStorage
-				? &*atlasDiagnosticsStorage : nullptr;
+			&atlasDiagnosticsStorage;
 		NiTriShape* atlasShape = nullptr;
 		if (m_impl->sealedProfile)
 		{
@@ -703,8 +703,8 @@ namespace fonthook
 			}
 			else
 			{
-				vectorfont::InvalidateSealedDirectFontProfile(
-					*m_impl->runtime);
+				vectorfont::InvalidateSealedDirectFontProfileIfCurrent(
+					*m_impl->runtime, m_impl->sealedProfile);
 				if (diagnostics)
 				{
 					diagnostics->inputGlyphCount =
@@ -717,6 +717,18 @@ namespace fonthook
 			}
 		}
 		else
+		{
+			atlasShape = vectorfont::TryCreateGlyphAtlasShape(
+				*m_impl->font, *m_impl->runtime, m_impl->glyphs,
+				m_impl->rasterScale, m_impl->prepareObject,
+				m_impl->tileColor, m_impl->suppressEffects,
+				diagnostics);
+		}
+		if (!atlasShape && m_impl->sealedProfile
+			&& !m_impl->sealedBatchInvalid
+			&& diagnostics->outcome
+				== vectorfont::GlyphAtlasBuildOutcome::AtlasOrShapeFailure
+			&& m_impl->ConvertDirectGlyphsToGeneric())
 		{
 			atlasShape = vectorfont::TryCreateGlyphAtlasShape(
 				*m_impl->font, *m_impl->runtime, m_impl->glyphs,

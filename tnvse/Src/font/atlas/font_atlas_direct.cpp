@@ -1809,6 +1809,11 @@ namespace fonthook::vectorfont
 					state.sealedDirectProfiles[
 						sealed->identity] = published;
 				}
+				for (const auto& atlas : published->atlases)
+				{
+					if (atlas)
+						atlas->sealedImmutable = true;
+				}
 				ReleaseSealedAtlasCpuIndexesLocked(
 					state, *published);
 			}
@@ -1943,6 +1948,25 @@ namespace fonthook::vectorfont
 	void InvalidateSealedDirectFontProfile(RuntimeFont& runtime)
 	{
 		StoreRuntimeSealedDirectProfile(runtime, {});
+	}
+
+	bool IsSealedDirectFontProfileUsable(RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
+		float rasterScale)
+	{
+		if (!sealed || !std::isfinite(rasterScale) || rasterScale <= 0.0f)
+			return false;
+		const UInt32 scaleMilli = static_cast<UInt32>(std::lround(
+			rasterScale * 1000.0f));
+		AtlasState& state = State();
+		return scaleMilli
+			&& state.directProfilesAvailable.load(std::memory_order_acquire)
+			&& sealed->validityEpoch == state.directProfileEpoch.load(
+				std::memory_order_acquire)
+			&& sealed->layoutIdentity == GetRuntimeDirectLayoutIdentity(runtime)
+			&& sealed->scaleMilli == scaleMilli
+			&& sealed->codePage == GetFreeTypeTextCodePage()
+			&& IsSealedDirectProfileValid(*sealed);
 	}
 
 	std::shared_ptr<const SealedDirectFontProfile>
@@ -2131,31 +2155,15 @@ namespace fonthook::vectorfont
 		if (maskIndex >= kDirectAtlasMaskCount)
 			return false;
 
-		AtlasState& state = State();
 		const std::shared_ptr<const SealedDirectFontProfile> published =
 			LoadRuntimeSealedDirectProfile(runtime);
-		const UInt32 scaleMilli =
-			std::isfinite(rasterScale) && rasterScale > 0.0f
-				? static_cast<UInt32>(std::lround(
-					rasterScale * 1000.0f))
-				: 0;
 		if (published.get() != sealed.get()
-			|| sealed->validityEpoch
-				!= state.directProfileEpoch.load(
-					std::memory_order_acquire)
-			|| !state.directProfilesAvailable.load(
-				std::memory_order_acquire)
-			|| !IsSealedDirectProfileValid(*sealed)
-			|| sealed->layoutIdentity
-				!= GetRuntimeDirectLayoutIdentity(runtime)
-			|| sealed->scaleMilli != scaleMilli
+			|| !IsSealedDirectFontProfileUsable(runtime, sealed, rasterScale)
 			|| sealed->pixelMode != pixelMode
 			|| sealed->renderMode != renderMode
-			|| sealed->padding != padding
-			|| sealed->codePage != GetFreeTypeTextCodePage())
+			|| sealed->padding != padding)
 		{
-			if (published.get() == sealed.get())
-				InvalidateSealedDirectFontProfile(runtime);
+			InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 			return false;
 		}
 		const UInt8 requestedMask = static_cast<UInt8>(
@@ -2177,7 +2185,7 @@ namespace fonthook::vectorfont
 				|| glyph.directSlot
 					== std::numeric_limits<UInt16>::max())
 			{
-				InvalidateSealedDirectFontProfile(runtime);
+				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 				result.Clear();
 				return false;
 			}
@@ -2191,7 +2199,7 @@ namespace fonthook::vectorfont
 				|| expectedSlot != glyph.directSlot
 				|| expectedSlot >= table.SlotCount())
 			{
-				InvalidateSealedDirectFontProfile(runtime);
+				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 				result.Clear();
 				return false;
 			}
@@ -2205,7 +2213,7 @@ namespace fonthook::vectorfont
 			{
 				if (maskType != GlyphMaskType::Composite)
 				{
-					InvalidateSealedDirectFontProfile(runtime);
+					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 					result.Clear();
 					return false;
 				}
@@ -2220,7 +2228,7 @@ namespace fonthook::vectorfont
 					|| letter.iTextureIndex
 						>= kMaximumAtlasSnapshotPages)
 				{
-					InvalidateSealedDirectFontProfile(runtime);
+					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 					result.Clear();
 					return false;
 				}
@@ -2236,7 +2244,7 @@ namespace fonthook::vectorfont
 					|| letter.encodedCode != glyph.encodedCode
 					|| letter.byteClass != glyph.byteClass)
 				{
-					InvalidateSealedDirectFontProfile(runtime);
+					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 					result.Clear();
 					return false;
 				}
@@ -2250,7 +2258,7 @@ namespace fonthook::vectorfont
 				if (!layer || layer->pageSlot
 						>= kMaximumAtlasSnapshotPages)
 				{
-					InvalidateSealedDirectFontProfile(runtime);
+					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 					result.Clear();
 					return false;
 				}
@@ -2262,7 +2270,7 @@ namespace fonthook::vectorfont
 				sealed->pageOrdinals[roleIndex][localPage];
 			if (ordinal >= sealed->atlases.size())
 			{
-				InvalidateSealedDirectFontProfile(runtime);
+				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 				result.Clear();
 				return false;
 			}
@@ -2274,7 +2282,7 @@ namespace fonthook::vectorfont
 				|| output.snapshotPlacementIndex
 					>= page->compactSnapshot->placements.size())
 			{
-				InvalidateSealedDirectFontProfile(runtime);
+				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 				result.Clear();
 				return false;
 			}
@@ -2284,7 +2292,7 @@ namespace fonthook::vectorfont
 			if (placement.maskType
 				!= static_cast<UInt8>(maskType))
 			{
-				InvalidateSealedDirectFontProfile(runtime);
+				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 				result.Clear();
 				return false;
 			}
@@ -2312,19 +2320,12 @@ namespace fonthook::vectorfont
 		std::shared_ptr<const SealedDirectFontProfile> sealed =
 			LoadRuntimeSealedDirectProfile(runtime);
 		AtlasState& state = State();
-		const UInt32 currentEpoch = state.directProfileEpoch.load(
-			std::memory_order_acquire);
 		if (sealed
-			&& sealed->validityEpoch == currentEpoch
-			&& state.directProfilesAvailable.load(
-				std::memory_order_acquire)
-			&& IsSealedDirectProfileValid(*sealed)
-			&& sealed->scaleMilli == static_cast<UInt32>(std::lround(
-				rasterScale * 1000.0f))
+			&& IsSealedDirectFontProfileUsable(
+				runtime, sealed, rasterScale)
 			&& sealed->pixelMode == pixelMode
 			&& sealed->renderMode == renderMode
-			&& sealed->padding == padding
-			&& sealed->codePage == GetFreeTypeTextCodePage())
+			&& sealed->padding == padding)
 		{
 			const UInt8 requestedMask =
 				static_cast<UInt8>(1u << static_cast<UInt8>(
@@ -2346,25 +2347,26 @@ namespace fonthook::vectorfont
 				if (roleIndex >= sealed->tables.size()
 					|| !sealed->tables[roleIndex])
 				{
-					InvalidateSealedDirectFontProfile(runtime);
+					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 					result.Clear();
 					return false;
 				}
 				const DirectAtlasGlyphTable& table =
 					*sealed->tables[roleIndex];
-				size_t glyphSlot = glyph.directSlot;
-				if (glyphSlot
-						== std::numeric_limits<UInt16>::max()
-					&& !ResolveDirectGlyphSlot(glyph.byteClass,
-						glyph.encodedCode, glyphSlot))
+				// A generic decode deliberately lacks a sealed slot when a code point
+				// was not part of the immutable prewarm table. That is an ordinary
+				// direct-cache miss, not profile corruption.
+				if (!glyph.hasDirectMetrics
+					|| glyph.directSlot
+						== std::numeric_limits<UInt16>::max())
 				{
-					InvalidateSealedDirectFontProfile(runtime);
 					result.Clear();
 					return false;
 				}
+				const size_t glyphSlot = glyph.directSlot;
 				if (glyphSlot >= table.SlotCount())
 				{
-					InvalidateSealedDirectFontProfile(runtime);
+					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 					result.Clear();
 					return false;
 				}
@@ -2378,7 +2380,8 @@ namespace fonthook::vectorfont
 				{
 					if (maskType != GlyphMaskType::Composite)
 					{
-						InvalidateSealedDirectFontProfile(runtime);
+						InvalidateSealedDirectFontProfileIfCurrent(
+							runtime, sealed);
 						result.Clear();
 						return false;
 					}
@@ -2393,7 +2396,8 @@ namespace fonthook::vectorfont
 						|| letter.iTextureIndex
 							>= kMaximumAtlasSnapshotPages)
 					{
-						InvalidateSealedDirectFontProfile(runtime);
+						InvalidateSealedDirectFontProfileIfCurrent(
+							runtime, sealed);
 						result.Clear();
 						return false;
 					}
@@ -2410,7 +2414,8 @@ namespace fonthook::vectorfont
 						|| letter.byteClass
 							!= static_cast<UInt8>(glyph.byteClass))
 					{
-						InvalidateSealedDirectFontProfile(runtime);
+						InvalidateSealedDirectFontProfileIfCurrent(
+							runtime, sealed);
 						result.Clear();
 						return false;
 					}
@@ -2424,7 +2429,8 @@ namespace fonthook::vectorfont
 					if (!layer || layer->pageSlot
 							>= kMaximumAtlasSnapshotPages)
 					{
-						InvalidateSealedDirectFontProfile(runtime);
+						InvalidateSealedDirectFontProfileIfCurrent(
+							runtime, sealed);
 						result.Clear();
 						return false;
 					}
@@ -2436,7 +2442,8 @@ namespace fonthook::vectorfont
 					sealed->pageOrdinals[roleIndex][localPage];
 				if (ordinal >= sealed->atlases.size())
 				{
-					InvalidateSealedDirectFontProfile(runtime);
+					InvalidateSealedDirectFontProfileIfCurrent(
+						runtime, sealed);
 					result.Clear();
 					return false;
 				}
@@ -2448,7 +2455,8 @@ namespace fonthook::vectorfont
 					|| output.snapshotPlacementIndex
 						>= page->compactSnapshot->placements.size())
 				{
-					InvalidateSealedDirectFontProfile(runtime);
+					InvalidateSealedDirectFontProfileIfCurrent(
+						runtime, sealed);
 					result.Clear();
 					return false;
 				}
@@ -2458,7 +2466,8 @@ namespace fonthook::vectorfont
 				if (placement.maskType
 					!= static_cast<UInt8>(maskType))
 				{
-					InvalidateSealedDirectFontProfile(runtime);
+					InvalidateSealedDirectFontProfileIfCurrent(
+						runtime, sealed);
 					result.Clear();
 					return false;
 				}
@@ -2471,7 +2480,7 @@ namespace fonthook::vectorfont
 		}
 		if (sealed)
 		{
-			InvalidateSealedDirectFontProfile(runtime);
+			InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 			return false;
 		}
 

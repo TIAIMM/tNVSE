@@ -386,15 +386,10 @@ namespace fonthook::vectorfont
 		{
 			AtlasProfileIndex& profile = state.atlasProfiles[MakeAtlasProfileKey(key)];
 			EnsureAtlasProfileIndexLocked(state, key, profile);
-			// A direct table stores page slots and page-local glyph indices. Any page
-			// insertion or replacement invalidates that immutable view; complete
-			// prewarm republishes it after the profile generation is finalized.
-			if (profile.directGlyphs
-				&& profile.directGlyphs->validity)
-			{
-				profile.directGlyphs->validity->store(
-					false, std::memory_order_release);
-			}
+			// Stop publishing the old table through the mutable profile index, but do
+			// not revoke immutable sealed owners. Their page ordinals, placements and
+			// strong atlas owners remain a complete generation. Actual resource loss
+			// (reset, eviction, or profile destruction) invalidates the shared token.
 			profile.directGlyphs.reset();
 			const auto page = std::lower_bound(profile.pages.begin(), profile.pages.end(),
 				key.pageIndex);
@@ -1230,7 +1225,15 @@ namespace fonthook::vectorfont
 
 			std::vector<std::shared_ptr<const GlyphBitmap>> accepted;
 			std::vector<std::shared_ptr<const GlyphBitmap>> remaining;
-			if (!pages.empty())
+			// A published direct table can still be held by an in-flight CreateText
+			// call (and can be shared by several physical-font aliases). Never append
+			// demand glyphs to that generation in place. Put the first late glyph on
+			// a small overflow page; subsequent demand glyphs may extend that page.
+			const bool preserveSealedGeneration =
+				(profile != state.atlasProfiles.end()
+					&& profile->second.directGlyphs != nullptr)
+				|| (!pages.empty() && pages.back()->sealedImmutable);
+			if (!pages.empty() && !preserveSealedGeneration)
 			{
 				AtlasCacheEntry& entry = *entries.back().second;
 				if (AddBitmapsToAtlas(*pages.back(), missing))

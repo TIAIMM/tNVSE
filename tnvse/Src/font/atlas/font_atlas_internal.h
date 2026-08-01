@@ -183,6 +183,10 @@ namespace fonthook::vectorfont
 		bool resetPending = false;
 		bool transient = false;
 		bool sharedGpuPage = false;
+		// A sealed direct profile keeps page-local placement indices into this
+		// resource. Demand rendering must append to an overflow generation instead
+		// of mutating this object in place.
+		bool sealedImmutable = false;
 		bool compactGlyphIndexReleased = false;
 		UInt64 pageContentHash = 0;
 		std::vector<UInt8> pixels;
@@ -972,7 +976,12 @@ namespace fonthook::vectorfont
 		UInt32 padding, DirectAtlasGlyphBatch& result);
 	SealedDirectGlyphLookup DecodeSealedDirectGlyph(RuntimeFont& runtime,
 		const char* text, VectorEncodedGlyph& glyph);
+	bool IsSealedDirectFontProfileUsable(RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
+		float rasterScale);
 	void InvalidateSealedDirectFontProfile(RuntimeFont& runtime);
+	void InvalidateSealedDirectFontProfileIfCurrent(RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& expected);
 	DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
 		Font& font, RuntimeFont& runtime,
 		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,

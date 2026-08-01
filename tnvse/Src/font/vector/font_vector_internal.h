@@ -747,6 +747,8 @@ namespace fonthook::vectorfont
 		const SealedDirectFontProfile& arProfile,
 		const char* apText, VectorEncodedGlyph& arGlyph);
 	void InvalidateSealedDirectFontProfile(RuntimeFont& arRuntime);
+	void InvalidateSealedDirectFontProfileIfCurrent(RuntimeFont& arRuntime,
+		const std::shared_ptr<const SealedDirectFontProfile>& apExpected);
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
 	UInt64 GetRuntimeDirectLayoutIdentity(const RuntimeFont& arRuntime);
 	UInt64 GetRuntimeDirectRoleLayoutIdentity(RuntimeFont& arRuntime,

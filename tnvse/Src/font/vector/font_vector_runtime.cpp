@@ -1467,6 +1467,18 @@ namespace fonthook::vectorfont
 			std::move(profile), std::memory_order_release);
 	}
 
+	void InvalidateSealedDirectFontProfileIfCurrent(RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& expected)
+	{
+		if (!expected)
+			return;
+		std::shared_ptr<const SealedDirectFontProfile> current = expected;
+		std::shared_ptr<const SealedDirectFontProfile> empty;
+		runtime.sealedDirectProfile.compare_exchange_strong(
+			current, std::move(empty), std::memory_order_acq_rel,
+			std::memory_order_acquire);
+	}
+
 	void ReleaseSealedRuntimeFreeTypeState(RuntimeFont& runtime)
 	{
 		FreeTypeState& state = State();
