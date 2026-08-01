@@ -24,21 +24,36 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_native_accumulator
 	{
-		inline constexpr UInt32 kBSShaderAccumulatorVtable = 0x10ADFF8;
-		inline constexpr UInt32 kRegisterObjectVtableSlot = 38;
-		inline constexpr UInt32 kRegisterObjectVtableEntry =
-			kBSShaderAccumulatorVtable + kRegisterObjectVtableSlot * sizeof(void*);
-		inline constexpr UInt32 kStockRegisterObject = 0xB63F10;
+		// BSShaderAccumulator::RegisterObject (0xB63F10) performs the common
+		// geometry checks and then dispatches through
+		// pRegisterObjectFunc[eRenderMode].  BSShaderManager::Initialize writes
+		// the Tile/Interface callback at 0x11F9F80[10] (instruction 0xB576D6).
+		// Hook that narrow callback instead of the global RegisterObject vtable so
+		// scene, water, shadow, and post-process accumulators never enter tNVSE.
+		inline constexpr UInt32 kRegisterObjectFunctionTable = 0x11F9F80;
+		inline constexpr UInt32 kTileRegisterObjectFunctionEntry =
+			kRegisterObjectFunctionTable
+			+ static_cast<UInt32>(BSShaderManager::BSSM_RENDER_TILES)
+				* sizeof(void*);
+		inline constexpr UInt32 kStockTileRegisterObject = 0xB65A90;
 		inline constexpr UInt32 kMaximumMissingMetadataLogs = 8;
 		inline constexpr size_t kMaximumStableTieItems = 8192;
 
-		using RegisterObjectFn = bool(__thiscall*)(BSShaderAccumulator*, NiGeometry*);
+		using TileRegisterObjectFn = bool(__cdecl*)(BSShaderAccumulator*,
+			NiGeometry*, const NiPropertyState*, BSShaderProperty*, BSShader*);
+		static_assert(kTileRegisterObjectFunctionEntry == 0x11F9FA8);
+		static_assert(sizeof(TileRegisterObjectFn) == sizeof(UInt32));
 
-		RegisterObjectFn s_originalRegisterObject = nullptr;
-		bool s_hookAttempted = false;
+		std::atomic<TileRegisterObjectFn> s_originalTileRegisterObject = nullptr;
+		bool s_loggedTileRegisterObjectConflict = false;
+		bool s_loggedTileRegisterObjectSlotUnavailable = false;
 		std::atomic<UInt32> s_missingMetadataLogCount = 0;
 		std::atomic<UInt32> s_atlasTextureEpoch = 1;
 
+		bool __cdecl NativeA8RegisterObject(BSShaderAccumulator* accumulator,
+			NiGeometry* geometry, const NiPropertyState* properties,
+			BSShaderProperty* shaderProperty, BSShader* shader);
+		bool IsTileRegisterObjectSlotWritable();
 		void __fastcall NativeA8RenderAlphaGeometry(
 			BSShaderAccumulator* accumulator, void*);
 
@@ -379,6 +394,61 @@ namespace fonthook::vectorfont
 				return nullptr;
 			}
 			return reinterpret_cast<RenderAlphaGeometryFn>(target);
+		}
+
+		TileRegisterObjectFn ReadTileRegisterObjectTarget()
+		{
+			if (!IsTileRegisterObjectSlotWritable())
+				return nullptr;
+			return *reinterpret_cast<TileRegisterObjectFn volatile*>(
+				kTileRegisterObjectFunctionEntry);
+		}
+
+		bool IsTileRegisterObjectSlotWritable()
+		{
+			static const bool writable = []()
+			{
+				MEMORY_BASIC_INFORMATION region = {};
+				if (VirtualQuery(reinterpret_cast<const void*>(
+					kTileRegisterObjectFunctionEntry), &region, sizeof(region))
+					!= sizeof(region)
+					|| region.State != MEM_COMMIT
+					|| (region.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+				{
+					return false;
+				}
+				const DWORD protection = region.Protect & 0xFFu;
+				return protection == PAGE_READWRITE
+					|| protection == PAGE_WRITECOPY
+					|| protection == PAGE_EXECUTE_READWRITE
+					|| protection == PAGE_EXECUTE_WRITECOPY;
+			}();
+			return writable;
+		}
+
+		bool PublishTileRegisterObjectHook(TileRegisterObjectFn expected)
+		{
+			if (!expected || !IsTileRegisterObjectSlotWritable())
+				return false;
+			const UInt32 expectedBits = reinterpret_cast<UInt32>(expected);
+			const UInt32 hookBits = reinterpret_cast<UInt32>(
+				&NativeA8RegisterObject);
+			const LONG observed = InterlockedCompareExchange(
+				reinterpret_cast<volatile LONG*>(
+					kTileRegisterObjectFunctionEntry),
+				static_cast<LONG>(hookBits),
+				static_cast<LONG>(expectedBits));
+			return static_cast<UInt32>(observed) == expectedBits;
+		}
+
+		__forceinline bool ForwardTileRegisterObject(
+			TileRegisterObjectFn original, BSShaderAccumulator* accumulator,
+			NiGeometry* geometry,
+			const NiPropertyState* properties,
+			BSShaderProperty* shaderProperty, BSShader* shader)
+		{
+			return original && original(accumulator, geometry, properties,
+				shaderProperty, shader);
 		}
 
 		void ClearPendingRegistrations(SortedPayloadScratch& scratch)
@@ -1312,7 +1382,10 @@ namespace fonthook::vectorfont
 		}
 
 		bool RegisterVirtualStockShape(BSShaderAccumulator* accumulator,
-			NiTriShape* shape, const A8ShapeMetadataPtr& metadata)
+			NiTriShape* shape, const A8ShapeMetadataPtr& metadata,
+			TileRegisterObjectFn original,
+			const NiPropertyState* properties,
+			BSShaderProperty* shaderProperty, BSShader* shader)
 		{
 			if (!accumulator || !shape || !metadata
 				|| metadata->backend
@@ -1357,7 +1430,8 @@ namespace fonthook::vectorfont
 				}
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::VirtualStockFacadeFallback);
-				return s_originalRegisterObject(accumulator, shape);
+				return ForwardTileRegisterObject(original, accumulator, shape,
+					properties, shaderProperty, shader);
 			}
 
 			UInt64 registrationCycle = 0;
@@ -1502,8 +1576,8 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			const bool result =
-				s_originalRegisterObject(accumulator, shape);
+			const bool result = ForwardTileRegisterObject(original, accumulator,
+				shape, properties, shaderProperty, shader);
 			if (!result)
 			{
 				RecordFreeTypePerf(
@@ -1536,15 +1610,18 @@ namespace fonthook::vectorfont
 			return result;
 		}
 
-		bool __fastcall NativeA8RegisterObject(BSShaderAccumulator* accumulator,
-			void*, NiGeometry* geometry)
+		bool __cdecl NativeA8RegisterObject(BSShaderAccumulator* accumulator,
+			NiGeometry* geometry, const NiPropertyState* properties,
+			BSShaderProperty* shaderProperty, BSShader* shader)
 		{
-			if (!s_originalRegisterObject || !accumulator || !geometry
+			const TileRegisterObjectFn original =
+				s_originalTileRegisterObject.load(std::memory_order_acquire);
+			if (!original || !accumulator || !geometry
 				|| accumulator->eRenderMode != BSShaderManager::BSSM_RENDER_TILES
 				|| !IsFreeTypeFacade(geometry))
 			{
-				return s_originalRegisterObject
-					? s_originalRegisterObject(accumulator, geometry) : false;
+				return ForwardTileRegisterObject(original, accumulator, geometry,
+					properties, shaderProperty, shader);
 			}
 
 			NiTriShape* facade = static_cast<NiTriShape*>(geometry);
@@ -1558,8 +1635,8 @@ namespace fonthook::vectorfont
 						NativeA8FallbackReason::TileRouteConflict,
 						"virtual-stock-register");
 				}
-				return RegisterVirtualStockShape(
-					accumulator, facade, metadata);
+				return RegisterVirtualStockShape(accumulator, facade, metadata,
+					original, properties, shaderProperty, shader);
 			}
 			if (!metadata || !metadata->nativePayload.buildComplete)
 			{
@@ -1593,7 +1670,8 @@ namespace fonthook::vectorfont
 				return SuppressNativeGroup(facade, *metadata,
 					NativeA8FallbackReason::TileRouteConflict, "register-object");
 			RecordSortedRegistration(accumulator, facade, metadata);
-			return s_originalRegisterObject(accumulator, facade);
+			return ForwardTileRegisterObject(original, accumulator, facade,
+				properties, shaderProperty, shader);
 		}
 
 		void __fastcall NativeA8RenderAlphaGeometry(BSShaderAccumulator* accumulator, void*)
@@ -2187,58 +2265,149 @@ namespace fonthook::vectorfont
 
 	bool HookNativeA8Accumulator()
 	{
-		if (!hook_identity::IsAccessibleRegion(
-			kRegisterObjectVtableEntry, sizeof(void*), false))
+		if (!IsTileRegisterObjectSlotWritable())
 		{
-			gLog.FormattedMessage(
-				"tnvse_freetype_native: BSShaderAccumulator::RegisterObject hook skipped; vtable slot 38 is unreadable entry=%08X",
-				kRegisterObjectVtableEntry);
+			if (!s_loggedTileRegisterObjectSlotUnavailable)
+			{
+				s_loggedTileRegisterObjectSlotUnavailable = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: Tile RegisterObject dispatch hook skipped; function-table slot is unavailable entry=%08X",
+					kTileRegisterObjectFunctionEntry);
+			}
 			return false;
 		}
-		void* current = *reinterpret_cast<void**>(kRegisterObjectVtableEntry);
-		if (current == reinterpret_cast<void*>(&NativeA8RegisterObject))
+
+		const TileRegisterObjectFn hook = &NativeA8RegisterObject;
+		const TileRegisterObjectFn current = ReadTileRegisterObjectTarget();
+		if (current == hook)
 		{
+			if (!s_originalTileRegisterObject.load(
+				std::memory_order_acquire))
+			{
+				if (!s_loggedTileRegisterObjectConflict)
+				{
+					s_loggedTileRegisterObjectConflict = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_native: Tile RegisterObject dispatch points at tNVSE without a predecessor; native route disabled");
+				}
+				return false;
+			}
 			HookRenderAlphaGeometry();
-			return s_originalRegisterObject != nullptr;
+			return true;
 		}
-		if (s_hookAttempted)
+
+		if (!current)
+		{
+			if (g_bEnableFreeTypeFontRenderingLog
+				&& !s_loggedTileRegisterObjectSlotUnavailable)
+			{
+				s_loggedTileRegisterObjectSlotUnavailable = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: Tile RegisterObject dispatch is not initialized yet; installation will retry entry=%08X",
+					kTileRegisterObjectFunctionEntry);
+			}
 			return false;
-		s_hookAttempted = true;
+		}
+
 		if (!hook_identity::IsExecutableTarget(
 			reinterpret_cast<SIZE_T>(current)))
 		{
-			gLog.FormattedMessage(
-				"tnvse_freetype_native: BSShaderAccumulator::RegisterObject hook skipped; vtable slot 38 target is not executable target=%p",
-				current);
+			if (!s_loggedTileRegisterObjectConflict)
+			{
+				s_loggedTileRegisterObjectConflict = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: Tile RegisterObject dispatch hook skipped; target is not executable target=%p entry=%08X",
+					current, kTileRegisterObjectFunctionEntry);
+				InvalidateAllVirtualStockBindings();
+			}
 			return false;
 		}
-		if (reinterpret_cast<SIZE_T>(current) != kStockRegisterObject
+
+		// A stock reset, or restoration of the predecessor we previously owned,
+		// is safe to republish over.  Any other target observed after installation
+		// may be a successor that already chains to tNVSE; never reassert over it or
+		// the two hooks could recurse through each other.
+		const TileRegisterObjectFn installedPredecessor =
+			s_originalTileRegisterObject.load(std::memory_order_acquire);
+		if (installedPredecessor
+			&& current != reinterpret_cast<TileRegisterObjectFn>(
+				kStockTileRegisterObject)
+			&& current != installedPredecessor)
+		{
+			if (!s_loggedTileRegisterObjectConflict)
+			{
+				s_loggedTileRegisterObjectConflict = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: Tile RegisterObject dispatch was replaced by a successor target=%p; tNVSE will not reassert ownership",
+					current);
+				InvalidateAllVirtualStockBindings();
+			}
+			return false;
+		}
+
+		if (reinterpret_cast<SIZE_T>(current) != kStockTileRegisterObject
 			&& g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: chaining pre-existing BSShaderAccumulator::RegisterObject target=%p stock=%08X",
-				current, kStockRegisterObject);
+				"tnvse_freetype_native: chaining pre-existing Tile RegisterObject dispatch target=%p stock=%08X",
+				current, kStockTileRegisterObject);
 		}
-		s_originalRegisterObject = reinterpret_cast<RegisterObjectFn>(current);
-		SafeWrite32(kRegisterObjectVtableEntry,
-			reinterpret_cast<UInt32>(&NativeA8RegisterObject));
+
+		const TileRegisterObjectFn previousOriginal = installedPredecessor;
+		s_originalTileRegisterObject.store(current, std::memory_order_release);
+		if (!PublishTileRegisterObjectHook(current))
+		{
+			// The slot changed after validation.  Preserve an older predecessor if
+			// one may still be reached through a successor chain; otherwise allow a
+			// clean retry against the newly observed initial target.
+			s_originalTileRegisterObject.store(previousOriginal,
+				std::memory_order_release);
+			if (!s_loggedTileRegisterObjectConflict)
+			{
+				s_loggedTileRegisterObjectConflict = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: Tile RegisterObject dispatch changed during publication; hook not installed expected=%p actual=%p",
+					current, ReadTileRegisterObjectTarget());
+			}
+			return false;
+		}
+
 		const bool accumulatorReady = IsNativeA8AccumulatorHookCurrent();
 		if (!accumulatorReady)
 		{
-			SafeWrite32(kRegisterObjectVtableEntry,
-				reinterpret_cast<UInt32>(current));
-			s_originalRegisterObject = nullptr;
+			// Do not overwrite a successor that raced the readback.  It may already
+			// retain NativeA8RegisterObject as its predecessor, so the saved target
+			// must remain valid even though direct ownership was lost.
+			if (!s_loggedTileRegisterObjectConflict)
+			{
+				s_loggedTileRegisterObjectConflict = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: Tile RegisterObject dispatch ownership changed immediately after publication actual=%p",
+					ReadTileRegisterObjectTarget());
+				InvalidateAllVirtualStockBindings();
+			}
+			return false;
 		}
-		if (accumulatorReady)
-			HookRenderAlphaGeometry();
-		return accumulatorReady;
+
+		s_loggedTileRegisterObjectConflict = false;
+		s_loggedTileRegisterObjectSlotUnavailable = false;
+		HookRenderAlphaGeometry();
+		if (g_bEnableFreeTypeFontRenderingLog)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: installed Tile RegisterObject dispatch route entry=%08X predecessor=%p stock=%u",
+				kTileRegisterObjectFunctionEntry, current,
+				reinterpret_cast<SIZE_T>(current)
+					== kStockTileRegisterObject ? 1u : 0u);
+		}
+		return true;
 	}
 
 	bool IsNativeA8AccumulatorHookCurrent()
 	{
-		return *reinterpret_cast<void**>(kRegisterObjectVtableEntry)
-			== reinterpret_cast<void*>(&NativeA8RegisterObject)
-			&& s_originalRegisterObject != nullptr;
+		return ReadTileRegisterObjectTarget() == &NativeA8RegisterObject
+			&& s_originalTileRegisterObject.load(std::memory_order_acquire)
+				!= nullptr;
 	}
 
 	bool IsNativeA8RenderAlphaGeometryHookCurrent()
