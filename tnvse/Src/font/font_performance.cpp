@@ -350,6 +350,40 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SortedMixedEqualDepthRestoreRejected)]);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_sort_proof: stock_equivalent_sorts=%llu items=%llu ordinal_sidecar_recovered=%llu sidecar_mixed_runs=%llu sidecar_legacy=%llu fail_gate=%llu fail_count=%llu fail_storage=%llu fail_source=%llu fail_depth=%llu fail_metadata=%llu fail_registration=%llu fail_group=%llu fail_singleton=%llu fail_coverage=%llu fail_apply=%llu",
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderStockEquivalentSort)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderStockEquivalentItem)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderSidecarRecovered)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderSidecarMixedRun)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderSidecarLegacy)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailGate)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailCount)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailStorage)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailSource)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailDepth)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailMetadata)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailRegistration)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailGroup)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailSingleton)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailCoverage)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorFailApply)]);
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_viewport_cull: nodes=%llu install_failed=%llu checks=%llu fast_visible=%llu deep_checks=%llu deep_tiles=%llu culled=%llu app_culled=%llu fail_open=%llu fail_listindex=%llu fail_clips=%llu fail_clipwindow=%llu fail_root_bounds=%llu fail_transform=%llu fail_node_identity=%llu fail_subtree_topology=%llu fail_subtree_bounds=%llu deep_overlap=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::ViewportNodeInstalled)],

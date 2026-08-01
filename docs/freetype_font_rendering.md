@@ -847,6 +847,13 @@ is finite, and all facade identity, registration-cycle, duplicate, contiguous
 Virtual-stock block, slot, and item-count proofs succeed. A changed call site or
 vtable predecessor is never overwritten or bypassed.
 
+An attempted FreeType registration that did not commit an exact `AddTail`
+ordinal no longer rejects the anchor by itself. It is ignored as a candidate,
+then the source-wide identity pass still requires every FreeType facade that
+actually entered the list to have one exact committed ordinal. This removes
+culled and duplicate attempts from the proof without allowing an untracked
+facade into the reordered output.
+
 The anchored sorter copies the `AddTail` list directly into the engine arrays
 while carrying a sidecar ordinal through a decision-equivalent copy of the
 stock pivot, partition, swap, recursion, and tail-iteration decisions. It then
@@ -860,14 +867,36 @@ produced by the retail quicksort. This removes the normal path's post-sort list
 snapshot, pointer hash construction, sorted-to-registration reconstruction,
 and per-run `std::sort`.
 
-Any failed proof calls the EDX predecessor and retains the older conservative
-post-sort repair. It cannot turn an uncertain frame into an anchored frame.
+The sort hook now separates the retail-sort proof from the stricter FreeType
+topology proof. Once the stock predecessor, source list, finite depths, storage,
+and item count prove that the decision-equivalent quicksort is safe, its exact
+registration-ordinal sidecar remains authoritative even if the later topology
+proof fails. For ordinary facades and true Virtual-stock singletons, a
+validation pass first proves that sidecar to be a permutation and identifies
+only changed exact-equal-depth mixed runs; a second pass commits those compact
+runs in original painter order. This path does not call the predecessor again
+and does not build the compatibility source snapshot, pointer hash, full block
+table, or sorted-to-registration reconstruction. The two-pass commit leaves the
+stock-equivalent array untouched if any validation fails.
+
+A real multi-slot Virtual-stock group is deliberately excluded from this
+single-block sidecar path. It retains the older conservative post-sort repair,
+including its primary/follower contiguous-block proof. Only failures of the
+retail-sort envelope itself (non-stock predecessor, non-interface sort, invalid
+source list, non-finite depth, item/storage limit) call the EDX predecessor.
+An uncertain topology can therefore never be promoted into a guessed block or
+anchored frame.
+
 The initialization line reports `sortAnchorHook=1` when the guarded call-site
 patch is current. The aggregate `tnvse_freetype_sort` line reports
 `original_anchor_sorts`, `anchor_items`, changed `anchor_mixed_runs`, and
 `anchor_fallbacks` (split into non-stock predecessor and proof failures);
 `mixed_equal_depth_runs_restored`, `items_restored`, and `restore_rejected`
-then describe only compatibility-path work.
+then describe only compatibility-path work. `tnvse_freetype_sort_proof` reports
+stock-equivalent sorts/items, ordinal-sidecar recoveries and changed runs,
+multi-slot legacy handoffs, and the exact failed proof stage: gate, count,
+storage, source, depth, metadata, registration, group, singleton, coverage, or
+final apply.
 
 Before preflight/upload work, each complete compatibility facade or
 virtual-stock group receives a read-only state test for exact zero
