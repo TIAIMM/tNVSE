@@ -970,7 +970,16 @@ callers, more than 64 packets, a missing parent, insufficient CPU budget, or a
 different topology selected by shader preflight retain the one-facade route.
 There is no global `NiNode::AttachChild` hook.
 
-The group primary owns the immutable payload, atlas references, and complete
+A one-packet artifact uses the dedicated `VirtualStockSingleton` backend. Its
+derived metadata and backend state share one `make_shared` allocation and the
+sole slot, registration proof, prepared binding, and command-build record are
+embedded values. It creates no `VirtualStockShapeGroup`, slot or command
+vector, registration-index array, group-registry node, weak group owner, or
+group mutex. Creation also bypasses the temporary packet-shape vector. The
+ordinary metadata registry remains the lifetime authority for the real shape.
+
+For multi-packet artifacts, the group primary owns the immutable payload,
+atlas references, and complete
 facade fallback. Shape metadata keeps a raw group identity plus a weak owner;
 locking that owner replaces a global metadata-map lock and lookup while still
 rejecting an expired, unpublished, or pointer-reused group. Followers hold no
@@ -990,10 +999,12 @@ publication: only the primary executes the compatibility packet set and every
 follower is skipped. This final-layout scan does not build facade frame
 entries, acquire per-item metadata ownership, or run compatibility preflight
 for frames whose tracked FreeType objects are all virtual-stock primaries.
-The common one-slot group omits the multi-slot registration-index allocation
-and ordering pass, but still participates in the final accumulator scan and
-must appear exactly once; the shortcut therefore does not weaken identity or
-duplicate-registration validation.
+The singleton registration route is render-thread serialized and records the
+stock registration result directly. It rejects a second registration in the
+same accumulator cycle, so it needs neither the group lock nor the completed
+accumulator slot lookup/layout scan. The sorted traversal retains the existing
+metadata owner, validates the exact shape identity and registration cycle, and
+publishes the singleton only after its payload and sole slot are ready.
 
 Each direct slot owns a small `NiGeometryBufferData`/`NiVBChip` descriptor but
 does not own its D3D buffers. The descriptor points at
@@ -1003,7 +1014,8 @@ Virtual-stock now reuses the same frame-packet residency resolver as retained
 commands instead of rejecting an otherwise valid dynamic upload as
 `static_not_ready`. A dynamic binding records the sorted lease upload epoch and
 is valid only while that lease prevents ring overwrite or resource release.
-The sorted lease resolves every slot first and publishes the group only after
+The sorted lease resolves the singleton directly or resolves every multi-slot
+group entry first, and publishes the backend only after
 all textures, shaders, generations, atlas epochs, item positions, residency
 kinds, upload epochs, and ranges agree. During its Tile callback the
 shape changes only its packet bound, folds the artifact origin into its live
@@ -1015,13 +1027,14 @@ without rewriting its descriptor; only an actual resource, atlas, shader, or
 descriptor change performs a rebind. Atlas validation includes both the
 texturing-property wrapper and the Tile shade property's page-specific source
 texture.
-Binding resolution uses per-thread fixed-capacity scratch whose used entries
+Multi-slot binding resolution uses per-thread fixed-capacity scratch whose used entries
 are overwritten before consumption, avoiding zero-initialization of 64 packet
 bindings for each group. A stable descriptor is checked once during sorted
 preparation; a changed descriptor is checked after publication. The direct
 draw path retains the primary payload owner only for follower slots and reads
 the immutable packet template in place, avoiding a shared-owner increment and
-packet copy for the usual primary/singleton draw. Periodic counters distinguish
+packet copy for the usual primary draw. The singleton reads its embedded slot
+and metadata-owned payload directly. Periodic counters distinguish
 `virtual_stock_static_hits` from `virtual_stock_dynamic_hits`.
 
 Static/dynamic-buffer replacement, dynamic upload-epoch change, device reset,
@@ -1029,7 +1042,8 @@ shader reload, and atlas epoch changes revoke every borrowed descriptor before
 the underlying resource can be overwritten or released. Shape destruction
 restores the original shell buffer and shader before deleting the plugin-owned
 descriptor. A primary destroyed early retires the group so surviving followers
-cannot submit it. A virtual backend failure falls back or suppresses that group
+cannot submit it. Singleton destruction retires its embedded state without a
+group-map removal. A virtual backend failure falls back or suppresses that group
 and does not fault the complete FreeType shader generation; failure to restore
 shared shader constants retains the existing generation-fault rule.
 If validation fails before any packet in the group has drawn, the descriptors
@@ -1042,7 +1056,7 @@ descriptor replacement, and unnecessary full-list preflight work. It does not
 merge packets or facades: one packet still produces one
 `DrawIndexedPrimitive`. It adds no shader file, cache-format field, INI option,
 NPOT texture, or external API. The diagnostic line beginning
-`tnvse_freetype_perf: virtual_stock_` reports candidates, groups, shapes,
+`tnvse_freetype_perf: virtual_stock_` reports candidates, singletons, groups, shapes,
 draws, static hits, rebinds, revokes, facade fallbacks, skipped followers,
 saved preflight/proxy work, and categorized fallback reasons.
 
@@ -1219,8 +1233,10 @@ exactly once at consecutive final accumulator positions and each adjacent
 packet has byte-identical live Tile, transform, scissor, alpha, blend, cull,
 and stencil state. Traversal reaches slot 0 first; that leader executes the
 span, while followers consume only a token- and geometry-validated skip marker.
-A one-packet facade or Virtual-stock group still performs one stock bootstrap
-through its direct command lookup.
+A one-packet facade or dedicated Virtual-stock singleton still performs one
+stock bootstrap through its direct command lookup. The singleton command keeps
+the metadata identity and points at the embedded prepared draw; it does not
+retain a group identity or allocate span/run topology.
 
 Full validation is owned by a contiguous FreeType execution segment rather than
 by each logical text span. The first command after traversal activation, a

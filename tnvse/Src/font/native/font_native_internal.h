@@ -595,12 +595,12 @@ namespace fonthook::vectorfont
 		bool useCompositePackets = false;
 	};
 
-	// A singleton Virtual-stock group needs neither retained-run topology nor a
-	// span/follower state machine. Its prepared group snapshot already contains
-	// the exact geometry and frame binding for the sole packet.
+	// A dedicated Virtual-stock singleton needs neither retained-run topology nor
+	// a span/follower state machine. Its metadata-owned backend snapshot already
+	// contains the exact geometry and frame binding for the sole packet.
 	struct NativeA8VirtualSinglePacketCommand
 	{
-		VirtualStockShapeGroup* group = nullptr;
+		const A8ShapeMetadata* singletonMetadata = nullptr;
 		NiTriShape* geometry = nullptr;
 		NativeA8ShapePayload* payload = nullptr;
 		const NativeA8PayloadTemplate* artifact = nullptr;
@@ -820,9 +820,11 @@ namespace fonthook::vectorfont
 	void BeginNativeA8FrameCommandBuffer(BSShaderAccumulator* accumulator,
 		UInt64 validationToken, UInt32 generation, UInt32 atlasTextureEpoch);
 	void ReserveNativeA8FrameCommandBuffer(size_t ordinaryEntryCount,
-		size_t virtualGroupCount);
+		size_t virtualSingletonCount);
 	UInt32 AddNativeA8FrameSinglePacketCommand(NiTriShape* facade,
 		const A8ShapeMetadata* metadata, NativeA8ShapePayload* payload);
+	UInt32 AddNativeA8FrameVirtualSingletonCommand(
+		const A8ShapeMetadata* metadata);
 	UInt32 AddNativeA8FrameCommandSpan(NiTriShape* facade,
 		const A8ShapeMetadata* metadata, NativeA8ShapePayload* payload,
 		VirtualStockShapeGroup* virtualStockGroup = nullptr);
@@ -864,7 +866,7 @@ namespace fonthook::vectorfont
 		UInt64 validationToken,
 		NativeA8VirtualSinglePacketCommandView& view);
 	bool BeginNativeA8VirtualSinglePacketCommandExecution(
-		UInt32 commandIndex, VirtualStockShapeGroup* group,
+		UInt32 commandIndex, const A8ShapeMetadata* singletonMetadata,
 		NiTriShape* geometry,
 		NativeA8VirtualSinglePacketCommandView& view);
 	void EndNativeA8VirtualSinglePacketCommandExecution(

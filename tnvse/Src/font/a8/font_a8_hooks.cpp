@@ -3312,24 +3312,22 @@ namespace fonthook::vectorfont
 			bool setupDrawmode, NiTriShape* shape,
 			const A8ShapeMetadata& metadata, UInt64 validationToken,
 			NativePacketDrawResult& draw,
-			UInt32 commandSpanIndex =
-				kInvalidNativeA8CommandIndex,
-			UInt32 commandOffset =
-				kInvalidNativeA8CommandIndex,
 			UInt32 virtualSinglePacketCommandIndex =
 				kInvalidNativeA8CommandIndex)
 		{
 			VirtualStockShapeGroup* group =
 				metadata.virtualStockGroup;
-			if (!pass || !shape || !group || !validationToken)
+			VirtualStockSingletonState* singleton =
+				GetVirtualStockSingletonState(metadata);
+			if (!pass || !shape || (!group && !singleton)
+				|| validationToken == 0)
 			{
 				return false;
 			}
 			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
 			FreeTypePerfScope commandPerf(
 				FreeTypePerfPhase::CommandSubmit,
-				commandSpanIndex != kInvalidNativeA8CommandIndex
-					|| virtualSinglePacketCommandIndex
+				virtualSinglePacketCommandIndex
 						!= kInvalidNativeA8CommandIndex);
 
 			const NativeA8ShapePayload* payload = nullptr;
@@ -3340,34 +3338,17 @@ namespace fonthook::vectorfont
 			NiVBChip* expectedChip = nullptr;
 			TileShader* expectedShader = nullptr;
 			UInt32 packetIndex = 0;
+			std::atomic<UInt32>* directDrawCount = nullptr;
+			auto captureBinding = [&](const VirtualStockSlotBinding& slot)
 			{
-				std::lock_guard<std::mutex> lock(group->mutex);
-				if (!group->primaryMetadataOwner
-					|| metadata.virtualStockSlot >= group->slots.size()
-					|| group->preparedValidationToken != validationToken
-					|| group->frameMode.load(std::memory_order_acquire)
-						!= VirtualStockFrameMode::Direct)
+				if (!payload || !payload->buildComplete
+					|| !payload->payloadTemplate)
 				{
 					return false;
 				}
-				if (metadata.virtualStockPrimary)
-				{
-					if (group->primaryMetadataOwner.get() != &metadata)
-						return false;
-					payload = &metadata.nativePayload;
-				}
-				else
-				{
-					primaryMetadataOwner = group->primaryMetadataOwner;
-					payload = &primaryMetadataOwner->nativePayload;
-				}
-				if (!payload->buildComplete || !payload->payloadTemplate)
-					return false;
 				const std::vector<NativeA8PacketTemplate>& packets =
 					GetNativeA8Packets(*payload->payloadTemplate,
 						payload->useCompositePackets);
-				const VirtualStockSlotBinding& slot =
-					group->slots[metadata.virtualStockSlot];
 				if (slot.shape != shape || slot.packetIndex >= packets.size()
 					|| slot.packetIndex >= payload->packetShaders.size())
 				{
@@ -3395,9 +3376,49 @@ namespace fonthook::vectorfont
 				binding.atlasTextureEpoch = slot.atlasTextureEpoch;
 				binding.staticResident = slot.staticResident;
 				binding.active = slot.bound;
+				return true;
+			};
+			if (singleton)
+			{
+				if (singleton->slot.shape != shape
+					|| singleton->preparedValidationToken != validationToken
+					|| singleton->frameMode.load(std::memory_order_acquire)
+						!= VirtualStockFrameMode::Direct)
+				{
+					return false;
+				}
+				payload = &metadata.nativePayload;
+				directDrawCount = &singleton->directDrawCount;
+				if (!captureBinding(singleton->slot))
+					return false;
+			}
+			else
+			{
+				std::lock_guard<std::mutex> lock(group->mutex);
+				if (!group->primaryMetadataOwner
+					|| metadata.virtualStockSlot >= group->slots.size()
+					|| group->preparedValidationToken != validationToken
+					|| group->frameMode.load(std::memory_order_acquire)
+						!= VirtualStockFrameMode::Direct)
+				{
+					return false;
+				}
+				if (metadata.virtualStockPrimary)
+				{
+					if (group->primaryMetadataOwner.get() != &metadata)
+						return false;
+					payload = &metadata.nativePayload;
+				}
+				else
+				{
+					primaryMetadataOwner = group->primaryMetadataOwner;
+					payload = &primaryMetadataOwner->nativePayload;
+				}
+				directDrawCount = &group->directDrawCount;
+				if (!captureBinding(group->slots[metadata.virtualStockSlot]))
+					return false;
 			}
 
-			NativeA8CommandSpanView commandView;
 			NativeA8VirtualSinglePacketCommandView
 				virtualSingleCommandView;
 			const NativeA8DrawCommand* command = nullptr;
@@ -3411,7 +3432,7 @@ namespace fonthook::vectorfont
 				commandBegun =
 					BeginNativeA8VirtualSinglePacketCommandExecution(
 						virtualSinglePacketCommandIndex,
-						group, shape, virtualSingleCommandView);
+						&metadata, shape, virtualSingleCommandView);
 				if (commandBegun
 					&& virtualSingleCommandView.command)
 				{
@@ -3431,41 +3452,6 @@ namespace fonthook::vectorfont
 						false, false);
 				}
 			}
-			if (!commandExecution
-				&& g_bEnableFreeTypeFontCommandBuffer
-				&& commandSpanIndex
-					!= kInvalidNativeA8CommandIndex)
-			{
-				NativeA8CommandSpanView candidate;
-				if (FindNativeA8CommandSpan(commandSpanIndex,
-						validationToken, candidate)
-					&& candidate.span
-					&& candidate.span->virtualStock
-					&& candidate.span->virtualStockGroup == group
-					&& candidate.span->payload == payload
-					&& candidate.span->commandCount == 1
-					&& commandOffset == 0)
-				{
-					commandBegun =
-						BeginNativeA8CommandSpanExecution(
-							commandSpanIndex, shape, true,
-							commandView);
-					if (commandBegun)
-					{
-						command = ResolveNativeCommand(
-							commandView, 0);
-						commandExecution = command
-							&& command->expectedGeometry == shape
-							&& command->packetIndex == packetIndex;
-					}
-				}
-				if (commandBegun && !commandExecution)
-				{
-					EndNativeA8CommandSpanExecution(
-						commandSpanIndex, false, false);
-				}
-			}
-
 			draw.directShapeRoute = true;
 			draw.stockLikeBitmapRoute = payload->stockLikeBitmapPackets;
 			NiTriShapeData* data = shape->GetModelData();
@@ -3584,22 +3570,13 @@ namespace fonthook::vectorfont
 					bool usedNativeReplay = false;
 					const UInt32 validationCommandIndex =
 						commandExecution
-							? (virtualSingleCommandExecution
-								? virtualSinglePacketCommandIndex
-								: commandSpanIndex)
+							? virtualSinglePacketCommandIndex
 							: kInvalidNativeA8CommandIndex;
 					NativeDirectImmediateScope immediateScope(
 						shape, validationCommandIndex,
-						validationCommandIndex
-								!= kInvalidNativeA8CommandIndex
-							&& !virtualSingleCommandExecution
-							? commandOffset
-							: kInvalidNativeA8CommandIndex,
+						kInvalidNativeA8CommandIndex,
 						commandExecution, nullptr, nullptr,
-						virtualSingleCommandExecution
-							? NativeImmediateCommandKind::
-								VirtualSinglePacket
-							: NativeImmediateCommandKind::SpanPacket,
+						NativeImmediateCommandKind::VirtualSinglePacket,
 						commandExecution && bindingCurrent);
 					if (commandExecution)
 					{
@@ -3641,7 +3618,7 @@ namespace fonthook::vectorfont
 					{
 						draw.drewPacket = true;
 						draw.drawnPacketCount = 1;
-						group->directDrawCount.fetch_add(
+						directDrawCount->fetch_add(
 							1, std::memory_order_acq_rel);
 						RecordFreeTypePerf(
 							FreeTypePerfCounter::VirtualStockDraw);
@@ -3705,30 +3682,41 @@ namespace fonthook::vectorfont
 				draw.mismatchRegister =
 					s_constantOwnershipBatch.MismatchRegister();
 			}
-			if (commandExecution)
+			if (virtualSingleCommandExecution)
 			{
-				if (virtualSingleCommandExecution)
-				{
-					EndNativeA8VirtualSinglePacketCommandExecution(
-						virtualSinglePacketCommandIndex,
-						!draw.runtimeFault && draw.drewPacket,
-						draw.drewPacket);
-				}
-				else
-				{
-					EndNativeA8CommandSpanExecution(
-						commandSpanIndex,
-						!draw.runtimeFault && draw.drewPacket,
-						draw.drewPacket);
-				}
+				EndNativeA8VirtualSinglePacketCommandExecution(
+					virtualSinglePacketCommandIndex,
+					!draw.runtimeFault && draw.drewPacket,
+					draw.drewPacket);
 			}
 			if (draw.runtimeFault)
 			{
 				const bool facadeFallbackSafe =
 					!draw.drewPacket && !draw.constantStateFault
-					&& group->directDrawCount.load(
+					&& directDrawCount->load(
 						std::memory_order_acquire) == 0;
-				if (facadeFallbackSafe)
+				if (singleton)
+				{
+					if (facadeFallbackSafe)
+					{
+						RestoreVirtualStockSingletonToFacade(
+							metadata, draw.failure);
+					}
+					else
+					{
+						if (singleton->frameMode.load(
+								std::memory_order_acquire)
+							!= VirtualStockFrameMode::Retired)
+						{
+							singleton->frameMode.store(
+								VirtualStockFrameMode::Fault,
+								std::memory_order_release);
+						}
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							VirtualStockFallbackResource);
+					}
+				}
+				else if (facadeFallbackSafe)
 				{
 					std::shared_ptr<VirtualStockShapeGroup> groupOwner =
 						AcquireVirtualStockShapeGroup(metadata);
@@ -4467,6 +4455,13 @@ namespace fonthook::vectorfont
 			}
 			if (metadataIntegrity && retiredMetadata
 				&& retiredMetadata->backend
+					== FreeTypeShapeBackend::VirtualStockSingleton)
+			{
+				ReleaseVirtualStockSingletonBinding(
+					shape, *retiredMetadata);
+			}
+			else if (metadataIntegrity && retiredMetadata
+				&& retiredMetadata->backend
 					== FreeTypeShapeBackend::VirtualStockNative)
 			{
 				ReleaseVirtualStockShapeBinding(
@@ -4607,6 +4602,108 @@ namespace fonthook::vectorfont
 			return;
 		}
 		if (metadata->backend
+			== FreeTypeShapeBackend::VirtualStockSingleton)
+		{
+			VirtualStockSingletonState* singleton =
+				GetVirtualStockSingletonState(*metadata);
+			if (!singleton || singleton->slot.shape != shape)
+			{
+				RecordNativeA8Suppression(shape, *metadata,
+					NativeA8FallbackReason::PacketBuild,
+					"virtual-stock-singleton-tile");
+				return;
+			}
+			const VirtualStockFrameMode mode =
+				singleton->frameMode.load(std::memory_order_acquire);
+			if (mode == VirtualStockFrameMode::Culled
+				|| mode == VirtualStockFrameMode::Fault
+				|| mode == VirtualStockFrameMode::Retired)
+			{
+				return;
+			}
+
+			const UInt64 validationToken =
+				GetNativeA8SortedFrameValidationToken();
+			if (mode == VirtualStockFrameMode::Direct)
+			{
+				NativePacketDrawResult draw;
+				const UInt64 commandToken =
+					singleton->commandValidationToken.load(
+						std::memory_order_acquire);
+				const UInt32 virtualSinglePacketCommandIndex =
+					singleton->commandVirtualSinglePacketIndex.load(
+						std::memory_order_acquire);
+				const bool commandCurrent = g_bEnableFreeTypeFontCommandBuffer
+					&& commandToken && commandToken == validationToken
+					&& virtualSinglePacketCommandIndex
+						!= kInvalidNativeA8CommandIndex;
+				bool handled = TryDrawVirtualStockPacket(pass, currentPass,
+					setupDrawmode, shape, *metadata, validationToken, draw,
+					commandCurrent ? virtualSinglePacketCommandIndex
+						: kInvalidNativeA8CommandIndex);
+				if (!handled)
+				{
+					if (validationToken
+						&& singleton->directDrawCount.load(
+							std::memory_order_acquire) == 0)
+					{
+						RestoreVirtualStockSingletonToFacade(*metadata,
+							NativeA8FallbackReason::PacketPrepare);
+					}
+					else
+					{
+						singleton->frameMode.store(
+							VirtualStockFrameMode::Fault,
+							std::memory_order_release);
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							VirtualStockFallbackResource);
+					}
+					if (singleton->frameMode.load(std::memory_order_acquire)
+						!= VirtualStockFrameMode::Facade)
+					{
+						return;
+					}
+				}
+				else if (!draw.runtimeFault)
+				{
+					return;
+				}
+				else
+				{
+					InvalidateNativeA8SortedShaderState();
+					NativeA8ShapePayload* singletonPayload =
+						&metadata->nativePayload;
+					if (draw.constantStateFault)
+					{
+						MarkNativeA8GenerationFault(
+							singletonPayload->preparedGeneration,
+							draw.operation, draw.result);
+						gLog.FormattedMessage(
+							"tnvse_freetype_native: virtual-stock singleton pass-constant ownership fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-shape",
+							draw.operation,
+							static_cast<UInt32>(draw.result),
+							draw.mismatchRegister, shape,
+							metadata->fontId,
+							singletonPayload->preparedGeneration,
+							draw.drewPacket ? 1 : 0);
+					}
+					if (draw.drewPacket)
+					{
+						MarkNativeA8RuntimeFault(*metadata,
+							*singletonPayload, draw.failure);
+					}
+					if (draw.drewPacket || draw.constantStateFault
+						|| singleton->frameMode.load(
+							std::memory_order_acquire)
+							!= VirtualStockFrameMode::Facade)
+					{
+						return;
+					}
+				}
+			}
+			payload = &metadata->nativePayload;
+		}
+		else if (metadata->backend
 			== FreeTypeShapeBackend::VirtualStockNative)
 		{
 			VirtualStockShapeGroup* group =
@@ -4645,18 +4742,12 @@ namespace fonthook::vectorfont
 				const UInt32 commandSpanIndex =
 					group->commandSpanIndex.load(
 						std::memory_order_acquire);
-				const UInt32 virtualSinglePacketCommandIndex =
-					group->commandVirtualSinglePacketIndex.load(
-						std::memory_order_acquire);
 				const UInt32 commandLeaderSlot =
 					group->commandLeaderSlot.load(
 						std::memory_order_acquire);
 				const bool commandCurrent = commandToken
 					&& commandToken == validationToken
-					&& (commandSpanIndex
-							!= kInvalidNativeA8CommandIndex
-						|| virtualSinglePacketCommandIndex
-							!= kInvalidNativeA8CommandIndex);
+					&& commandSpanIndex != kInvalidNativeA8CommandIndex;
 				if (commandCurrent
 					&& g_bEnableFreeTypeFontCommandBuffer)
 				{
@@ -4695,27 +4786,9 @@ namespace fonthook::vectorfont
 				if (!handled)
 				{
 					draw = {};
-					const UInt32 packetCommandSpanIndex =
-						commandCurrent
-							&& commandSpanIndex
-								!= kInvalidNativeA8CommandIndex
-							? commandSpanIndex
-							: kInvalidNativeA8CommandIndex;
-					const UInt32 packetVirtualSingleCommandIndex =
-						commandCurrent
-							&& virtualSinglePacketCommandIndex
-								!= kInvalidNativeA8CommandIndex
-							? virtualSinglePacketCommandIndex
-							: kInvalidNativeA8CommandIndex;
 					handled = TryDrawVirtualStockPacket(
 						pass, currentPass, setupDrawmode, shape,
-						*metadata, validationToken, draw,
-						packetCommandSpanIndex,
-						packetCommandSpanIndex
-								!= kInvalidNativeA8CommandIndex
-							? metadata->virtualStockSlot
-							: kInvalidNativeA8CommandIndex,
-						packetVirtualSingleCommandIndex);
+						*metadata, validationToken, draw);
 				}
 				if (!handled)
 				{

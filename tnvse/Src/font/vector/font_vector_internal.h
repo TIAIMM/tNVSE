@@ -161,6 +161,7 @@ namespace fonthook::vectorfont
 		SinglePacketDirectFallbackBindingShader,
 		SinglePacketDirectFallbackRuntime,
 		VirtualStockCandidate,
+		VirtualStockSingleton,
 		VirtualStockGroup,
 		VirtualStockShape,
 		VirtualStockDraw,
@@ -873,6 +874,12 @@ namespace fonthook::vectorfont
 		const NiPoint3& arGeometryOrigin = NiPoint3());
 	bool PrepareVirtualStockA8ShapeGroup(Font& arFont,
 		const std::vector<NiTriShape*>& arShapes, UInt32 auiPrimarySlot,
+		UInt32 auiFontId, UInt32 auiGlyphCount, UInt32 auiQuadCount,
+		const A8EffectShapeConfig* apEffectConfig,
+		const A8ShapeColorContract* apColorContract,
+		std::shared_ptr<const NativeA8PayloadTemplate> apPayloadTemplate,
+		const NiPoint3& arGeometryOrigin, bool abUseCompositeTopology);
+	bool PrepareVirtualStockA8Singleton(Font& arFont, NiTriShape* apShape,
 		UInt32 auiFontId, UInt32 auiGlyphCount, UInt32 auiQuadCount,
 		const A8EffectShapeConfig* apEffectConfig,
 		const A8ShapeColorContract* apColorContract,

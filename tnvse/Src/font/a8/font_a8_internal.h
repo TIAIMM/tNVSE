@@ -92,7 +92,8 @@ namespace fonthook::vectorfont
 	{
 		CompatibilityFacade = 0,
 		VirtualStockNative,
-		StockArgb
+		StockArgb,
+		VirtualStockSingleton
 	};
 
 	enum class VirtualStockFrameMode : UInt8
@@ -194,8 +195,6 @@ namespace fonthook::vectorfont
 		std::atomic<UInt64> commandValidationToken = 0;
 		std::atomic<UInt32> commandSpanIndex =
 			kInvalidNativeA8CommandIndex;
-		std::atomic<UInt32> commandVirtualSinglePacketIndex =
-			kInvalidNativeA8CommandIndex;
 		std::atomic<UInt32> commandLeaderSlot = 0;
 		// Prepared under group->mutex and published by the validation token.
 		// Invalidation clears the token but never mutates this view; the next
@@ -206,6 +205,47 @@ namespace fonthook::vectorfont
 		std::atomic<VirtualStockFrameMode> frameMode =
 			VirtualStockFrameMode::Facade;
 	};
+
+	// The overwhelmingly common one-packet Virtual-stock shape owns its complete
+	// backend in the same shared allocation as A8ShapeMetadata. It deliberately
+	// has no group owner, slot vector, registry node, or mutex: registration and
+	// sorted submission are render-thread serialized, while the few values read
+	// by command callbacks remain explicitly published through atomics.
+	struct VirtualStockSingletonState
+	{
+		VirtualStockSlotBinding slot;
+		BSShaderAccumulator* registrationAccumulator = nullptr;
+		UInt64 registrationCycle = 0;
+		UInt64 preflightValidationToken = 0;
+		UInt64 preparedValidationToken = 0;
+		UInt32 preparedGeneration = 0;
+		UInt32 preparedAtlasTextureEpoch = 0;
+		UInt32 registeredSlotCount = 0;
+		bool useCompositeTopology = false;
+		bool registrationContiguous = true;
+		bool duplicateRegistration = false;
+		std::atomic<UInt32> directDrawCount = 0;
+		NativeA8DrawCommand commandBuildCommand;
+		std::atomic<UInt64> commandBuildValidationToken = 0;
+		std::atomic<UInt64> commandValidationToken = 0;
+		std::atomic<UInt32> commandVirtualSinglePacketIndex =
+			kInvalidNativeA8CommandIndex;
+		std::atomic<VirtualStockFrameMode> frameMode =
+			VirtualStockFrameMode::Facade;
+	};
+
+	struct VirtualStockSingletonMetadata final : A8ShapeMetadata
+	{
+		mutable VirtualStockSingletonState singleton;
+	};
+
+	inline VirtualStockSingletonState* GetVirtualStockSingletonState(
+		const A8ShapeMetadata& metadata)
+	{
+		return metadata.backend == FreeTypeShapeBackend::VirtualStockSingleton
+			? &static_cast<const VirtualStockSingletonMetadata&>(metadata).singleton
+			: nullptr;
+	}
 
 	struct A8State
 	{
@@ -257,6 +297,15 @@ namespace fonthook::vectorfont
 		const A8ShapeColorContract* colorContract,
 		NativeA8PayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin, bool useCompositeTopology);
+	bool PrepareVirtualStockA8Singleton(Font& font, NiTriShape* shape,
+		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
+		const A8EffectShapeConfig* effectConfig,
+		const A8ShapeColorContract* colorContract,
+		NativeA8PayloadTemplatePtr payloadTemplate,
+		const NiPoint3& geometryOrigin, bool useCompositeTopology);
+	bool PrepareVirtualStockSingletonForSortedFrame(
+		const A8ShapeMetadata& metadata, UInt32 generation,
+		UInt32 atlasTextureEpoch, UInt64 validationToken);
 	bool PrepareVirtualStockGroupForSortedFrame(
 		const std::shared_ptr<VirtualStockShapeGroup>& group,
 		UInt32 generation, UInt32 atlasTextureEpoch,
@@ -264,7 +313,11 @@ namespace fonthook::vectorfont
 	void RestoreVirtualStockGroupToFacade(
 		const std::shared_ptr<VirtualStockShapeGroup>& group,
 		NativeA8FallbackReason reason);
+	void RestoreVirtualStockSingletonToFacade(
+		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason);
 	void InvalidateAllVirtualStockBindings();
 	void ReleaseVirtualStockShapeBinding(
+		NiTriShape* shape, const A8ShapeMetadata& metadata);
+	void ReleaseVirtualStockSingletonBinding(
 		NiTriShape* shape, const A8ShapeMetadata& metadata);
 }

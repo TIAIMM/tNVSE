@@ -1455,6 +1455,40 @@ namespace fonthook::vectorfont
 					break;
 				}
 
+				if (topology.size() == 1)
+				{
+					const NativeA8PacketTemplate& packet = topology.front();
+					NiTriShape* packetShape = packet.atlasPage < atlases.size()
+						? CreateDirectNativePacketShell(font,
+							atlases[packet.atlasPage], *payload, packet,
+							facadeColor, tileColor, origin, prepareObject)
+						: nullptr;
+					if (!packetShape)
+						break;
+
+					if (useCompositeTopology
+						&& (GetNativeA8ShaderGeneration() == 0
+							|| !ResolveNativeA8PacketShader(
+								packet, packetShape, false)))
+					{
+						packetShape->DeleteThis();
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							CompositeShaderFallback);
+						useCompositeTopology = false;
+						continue;
+					}
+
+					if (PrepareVirtualStockA8Singleton(font, packetShape,
+						font.iFontNum, glyphCount, quadCount, &effects,
+						&colorContract, payload, origin,
+						useCompositeTopology))
+					{
+						return packetShape;
+					}
+					packetShape->DeleteThis();
+					break;
+				}
+
 				std::vector<NiTriShape*> packetShapes;
 				packetShapes.reserve(topology.size());
 				for (const NativeA8PacketTemplate& packet : topology)
@@ -1512,9 +1546,6 @@ namespace fonthook::vectorfont
 				{
 					NiTriShape* primaryShape =
 						packetShapes[primarySlot];
-					if (packetShapes.size() == 1)
-						return primaryShape;
-
 					std::vector<NiTriShape*> additionalShapes;
 					additionalShapes.reserve(packetShapes.size() - 1u);
 					for (size_t index = packetShapes.size() - 1u;
