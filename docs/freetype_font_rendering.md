@@ -878,16 +878,46 @@ submission, so a same-frame alpha change cannot lose text. This early test does
 not guess clip or renderer state: those values are not authoritative for a
 particular Tile during sorted preflight.
 
-`clips` and `clipwindow` are instead handled at the final stock boundary. The
-symbolized test build shows `Tile::UpdateClipwindows` propagating the
-`clipwindow` relationship and `Tile::ReClipChildren` resolving it, together
-with each child's `clips` trait, into the live `TileShaderProperty` scissor.
-Retail PC `TileShader::SetupGeometryConstants` at `0xBCA980` consumes that
-property, publishes the current model transform, and installs the hardware
-scissor; `TileShader::PostGeometry` at `0xBCAC60` restores scissor/stencil state.
-The native path therefore never walks or predicts the Tile hierarchy and never
-uses the independent `BSScissorTriShape` tail as a substitute for resolved Tile
-state.
+Long clipped lists also have a conservative subtree gate before scene traversal
+can register any of the row's geometry. It is installed only on an exact retail
+`NiNode` produced for a `TileRect`, `TileImage`, or `TileText` that already has a
+nonnegative integral `listindex`, enabled `clips`, and a finite ancestor
+`clipwindow`. An existing executable MakeNode hook is retained as the
+predecessor. An unreadable or non-executable entry, failed write verification,
+custom output-node vtable, or missing reciprocal `Tileptr` extra data leaves the
+candidate node unmodified.
+
+The hot visible-row path re-reads the live traits and compares only the row's
+finite positive vertical interval with its current clipwindow, expanded by 96
+UI units. An overlapping interval returns immediately to stock and does not
+walk the subtree. Only a root already outside that guard band starts the deep
+proof. That proof is bounded to 32 levels and 256 Tiles and requires an exact
+integer list index, an unrotated identity-zoom chain through the clipwindow,
+supported Tile types, finite nonnegative heights and absolute positions,
+reciprocal Tile/node identities, intact Tile parent links, and every Tile-owned
+live child node to remain below the candidate scene node. App-culled branches
+contribute no bound. The complete union must remain outside the padded clip
+interval; unknown types, limits, transforms, malformed links, missing areas, or
+an injected Tile that extends back toward the window all fail open. No
+visibility result or Tile pointer is cached across frames.
+
+A proved miss returns before the stock `NiNode::OnVisible`, so the complete row
+avoids culling traversal, `RegisterObject`, accumulator insertion/sorting,
+FreeType preflight, and command construction. A kept row calls the saved
+predecessor unchanged. This gate neither inserts nor reorders geometry, so the
+original-order anchor and its conservative compatibility fallback remain the
+only paths that alter equal-depth sort output for MapMO/UIO and other injected
+elements.
+
+The final per-facade boundary remains independent and exact. The symbolized test
+build shows `Tile::UpdateClipwindows` propagating the `clipwindow` relationship
+and `Tile::ReClipChildren` resolving it, together with each child's `clips`
+trait, into the live `TileShaderProperty` scissor. Retail PC
+`TileShader::SetupGeometryConstants` at `0xBCA980` consumes that property,
+publishes the current model transform, and installs the hardware scissor;
+`TileShader::PostGeometry` at `0xBCAC60` restores scissor/stencil state. The
+native path never uses the independent `BSScissorTriShape` tail as a substitute
+for resolved Tile state.
 
 The retail matrix path is reproduced rather than inferred from the renderer's
 previous world matrix. `0xBCA980` calls `0xE6FBB0` with
@@ -963,6 +993,12 @@ menu, the desired result is nonzero `scissor_pre31`, a reduced
 `stock_constant_updates`, and corresponding saved packets/vertices.
 `scissor_post31` shows safe fallback coverage. `scissor=0` means neither final
 conservative proof fired, not that the `clips`/`clipwindow` traits were absent.
+The separate `tnvse_freetype_viewport_cull` line reports installed `nodes`,
+`install_failed`, total `checks`, cheap `fast_visible` returns, `deep_checks`,
+the number of `deep_tiles` inspected, proved `culled` subtrees, and
+`fail_open`. For useful list culling, `culled` should be substantial while
+`deep_tiles / culled` remains small; a high `fail_open / deep_checks` ratio
+identifies compatibility structures that deliberately retain the stock path.
 
 The dynamic ring retains its two-maximum-payload capacity, while the static VB
 starts at approximately 4 MiB instead of reserving its approximately 12 MiB

@@ -350,6 +350,24 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SortedMixedEqualDepthRestoreRejected)]);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_viewport_cull: nodes=%llu install_failed=%llu checks=%llu fast_visible=%llu deep_checks=%llu deep_tiles=%llu culled=%llu fail_open=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportNodeInstalled)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportNodeInstallFailed)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportCullCheck)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportCullFastVisible)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportCullDeepCheck)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportCullDeepTile)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportCulled)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportFailOpen)]);
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu vertex_aa_stock_preserved=%llu command_program_setups=%llu binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu registers_uploaded=%llu full_tail_elided=%llu",
 			static_cast<UInt64>(0),
 			static_cast<UInt64>(0),
@@ -786,6 +804,37 @@ namespace fonthook
 		vectorfont::RecordFreeTypePerf(hit
 			? vectorfont::FreeTypePerfCounter::PreparedTextHit
 			: vectorfont::FreeTypePerfCounter::PreparedTextMiss);
+	}
+
+	void RecordFreeTypeViewportNodeInstallResult(bool installed)
+	{
+		vectorfont::RecordFreeTypePerf(installed
+			? vectorfont::FreeTypePerfCounter::ViewportNodeInstalled
+			: vectorfont::FreeTypePerfCounter::ViewportNodeInstallFailed);
+	}
+
+	void RecordFreeTypeViewportCullResult(
+		bool culled, bool failOpen, bool fastVisible,
+		bool deepCheck, UInt32 visitedTiles)
+	{
+		using vectorfont::FreeTypePerfCounter;
+		vectorfont::RecordFreeTypePerf(FreeTypePerfCounter::ViewportCullCheck);
+		if (fastVisible)
+		{
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportCullFastVisible);
+		}
+		if (deepCheck)
+		{
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportCullDeepCheck);
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportCullDeepTile, visitedTiles);
+		}
+		if (culled)
+			vectorfont::RecordFreeTypePerf(FreeTypePerfCounter::ViewportCulled);
+		if (failOpen)
+			vectorfont::RecordFreeTypePerf(FreeTypePerfCounter::ViewportFailOpen);
 	}
 
 	void PumpFreeTypeFontPerformance()

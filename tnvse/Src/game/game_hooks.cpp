@@ -8,10 +8,16 @@
 #include "text_hooks.h"
 #include "tnvse.h"
 
+#include "NiExtraData.hpp"
+#include "TileImage.hpp"
+#include "TileRect.hpp"
 #include "TileText.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace fonthook
 {
@@ -337,12 +343,518 @@ namespace fonthook
 
 		constexpr SIZE_T kTileTextMakeNodeVTableEntry = 0x1094880;
 		constexpr SIZE_T kVanillaTileTextMakeNode = 0xA21AF0;
+		constexpr SIZE_T kTileRectMakeNodeVTableEntry = 0x106ED78;
+		constexpr SIZE_T kVanillaTileRectMakeNode = 0xA1F3B0;
+		constexpr SIZE_T kTileImageMakeNodeVTableEntry = 0x106F024;
+		constexpr SIZE_T kVanillaTileImageMakeNode = 0xA1FD50;
+		constexpr SIZE_T kVanillaNiNodeVTable = 0x109B5AC;
+		constexpr SIZE_T kVanillaNiNodeOnVisible = 0xA5DBE0;
+		constexpr SIZE_T kTileNodeExtraVTable = 0x1094CFC;
+		constexpr SIZE_T kTileAbsoluteY = 0xA01440;
+		constexpr size_t kNiNodeVirtualCount = 64;
+		constexpr size_t kNiNodeOnVisibleSlot = 53;
+		constexpr UInt32 kMaximumTileAncestorDepth = 64;
+		constexpr UInt32 kMaximumViewportSubtreeDepth = 32;
+		constexpr UInt32 kMaximumViewportSubtreeTiles = 256;
+		constexpr float kMaximumExactFloatInteger = 16777216.0f;
+		constexpr float kViewportCullSafetyPadding = 96.0f;
+		constexpr float kIdentityTransformEpsilon = 0.001f;
 
 		using TileTextMakeNodeFn = NiNode* (__thiscall*)(TileText*);
+		using TileRectMakeNodeFn = NiNode* (__thiscall*)(TileRect*);
+		using TileImageMakeNodeFn = NiNode* (__thiscall*)(TileImage*);
+		using NiNodeOnVisibleFn =
+			void (__thiscall*)(NiNode*, NiCullingProcess*);
+		using TileAbsoluteYFn = float (__thiscall*)(Tile*);
+
+		struct TileNodeExtraView
+		{
+			UInt8 base[0x0C];
+			Tile* tile = nullptr;
+			NiNode* node = nullptr;
+		};
+
+		struct ViewportNodeVTableProxy
+		{
+			void** sourceVTable = nullptr;
+			NiNodeOnVisibleFn predecessor = nullptr;
+			void* completeObjectLocator = nullptr;
+			std::array<void*, kNiNodeVirtualCount> entries = {};
+		};
+
+		struct TileVerticalBounds
+		{
+			float top = std::numeric_limits<float>::max();
+			float bottom = std::numeric_limits<float>::lowest();
+			UInt32 visited = 0;
+			bool hasArea = false;
+		};
+
+		struct ViewportCullDecision
+		{
+			bool checked = false;
+			bool culled = false;
+			bool failOpen = false;
+			bool fastVisible = false;
+			bool deepCheck = false;
+			UInt32 visitedTiles = 0;
+		};
+
+		static_assert(sizeof(NiExtraData) == 0x0C,
+			"Tileptr extra-data layout requires the retail NiExtraData ABI");
+		static_assert(offsetof(TileNodeExtraView, tile) == 0x0C,
+			"Tileptr Tile offset changed");
+		static_assert(offsetof(TileNodeExtraView, node) == 0x10,
+			"Tileptr NiNode offset changed");
+		static_assert(offsetof(ViewportNodeVTableProxy, entries)
+			== offsetof(ViewportNodeVTableProxy, completeObjectLocator)
+				+ sizeof(void*),
+			"RTTI locator must immediately precede the proxy vtable");
 
 		TileTextMakeNodeFn s_tileTextMakeNode = nullptr;
+		TileRectMakeNodeFn s_tileRectMakeNode = nullptr;
+		TileImageMakeNodeFn s_tileImageMakeNode = nullptr;
+		ViewportNodeVTableProxy s_viewportNodeVTable;
 		thread_local UInt32 s_effectSuppressionDepth = 0;
 		thread_local UInt32 s_vuiProxyMeasureOnlyDepth = 0;
+		bool s_loggedViewportNodeVTableConflict = false;
+
+		void __fastcall ViewportListNodeOnVisibleHook(
+			NiNode* node, void*, NiCullingProcess* culler);
+
+		bool IsFiniteTraitValue(const Tile::Value* value)
+		{
+			return value && std::isfinite(value->fNum);
+		}
+
+		bool IsNonnegativeIntegralListIndex(float value)
+		{
+			return std::isfinite(value) && value >= 0.0f
+				&& value <= kMaximumExactFloatInteger
+				&& std::floor(value) == value;
+		}
+
+		Tile* FindNearestClipWindow(Tile* tile, bool& valid)
+		{
+			valid = true;
+			UInt32 depth = 0;
+			for (Tile* current = tile ? tile->pParent : nullptr;
+				current; current = current->pParent)
+			{
+				if (++depth > kMaximumTileAncestorDepth)
+				{
+					valid = false;
+					return nullptr;
+				}
+				Tile::Value* clipWindow =
+					current->GetValue(Tile::kTileValue_clipwindow);
+				if (!clipWindow)
+					continue;
+				if (!std::isfinite(clipWindow->fNum))
+				{
+					valid = false;
+					return nullptr;
+				}
+				if (clipWindow->fNum > 0.5f)
+					return current;
+			}
+			return nullptr;
+		}
+
+		bool IsViewportListItemCandidate(Tile* tile)
+		{
+			if (!tile)
+				return false;
+			Tile::Value* listIndex =
+				tile->GetValue(Tile::kTileValue_listindex);
+			if (!listIndex
+				|| !IsNonnegativeIntegralListIndex(listIndex->fNum))
+			{
+				return false;
+			}
+			Tile::Value* clips = tile->GetValue(Tile::kTileValue_clips);
+			if (!IsFiniteTraitValue(clips) || clips->fNum <= 0.5f)
+				return false;
+			bool valid = true;
+			return FindNearestClipWindow(tile, valid) && valid;
+		}
+
+		Tile* FindTileForNode(NiNode* node)
+		{
+			if (!node || !node->m_ppkExtra || !node->m_usExtraDataSize
+				|| node->m_usExtraDataSize > 64)
+			{
+				return nullptr;
+			}
+			for (UInt16 index = 0;
+				index < node->m_usExtraDataSize; ++index)
+			{
+				NiExtraData* extra = node->m_ppkExtra[index];
+				if (!extra
+					|| *reinterpret_cast<const SIZE_T*>(extra)
+						!= kTileNodeExtraVTable)
+				{
+					continue;
+				}
+				const TileNodeExtraView* view =
+					reinterpret_cast<const TileNodeExtraView*>(extra);
+				if (view->node == node && view->tile
+					&& view->tile->spNiNode == node)
+				{
+					return view->tile;
+				}
+			}
+			return nullptr;
+		}
+
+		bool HasIdentityTileTransform(Tile* tile)
+		{
+			if (!tile)
+				return false;
+			if (Tile::Value* rotation =
+				tile->GetValue(Tile::kTileValue_rotateangle))
+			{
+				if (!std::isfinite(rotation->fNum)
+					|| std::fabs(rotation->fNum)
+						> kIdentityTransformEpsilon)
+				{
+					return false;
+				}
+			}
+			if (Tile::Value* zoom =
+				tile->GetValue(Tile::kTileValue_zoom))
+			{
+				if (!std::isfinite(zoom->fNum))
+					return false;
+				// Retail uses zero as the uninitialized/default zoom sentinel and
+				// 100 as an explicit identity value.
+				const float value = zoom->fNum;
+				if (std::fabs(value) > kIdentityTransformEpsilon
+					&& std::fabs(value - 100.0f)
+						> kIdentityTransformEpsilon)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		bool HasSafeTileChain(Tile* tile, Tile* clipWindow)
+		{
+			UInt32 depth = 0;
+			for (Tile* current = tile; current;
+				current = current->pParent)
+			{
+				if (++depth > kMaximumTileAncestorDepth
+					|| !HasIdentityTileTransform(current))
+				{
+					return false;
+				}
+				if (current == clipWindow)
+					return true;
+			}
+			return false;
+		}
+
+		bool IsSupportedViewportTileType(Tile* tile)
+		{
+			if (!tile)
+				return false;
+			switch (tile->GetType())
+			{
+			case Tile::kTileID_rect:
+			case Tile::kTileID_image:
+			case Tile::kTileID_text:
+			case Tile::kTileID_hotrect:
+			case Tile::kTileID_window:
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		float GetAbsoluteTileY(Tile* tile)
+		{
+			return reinterpret_cast<TileAbsoluteYFn>(
+				kTileAbsoluteY)(tile);
+		}
+
+		bool IsSceneNodeWithinRoot(NiNode* node, NiNode* root)
+		{
+			UInt32 depth = 0;
+			for (NiNode* current = node; current;
+				current = current->m_pkParent)
+			{
+				if (++depth > kMaximumTileAncestorDepth)
+					return false;
+				if (current == root)
+					return true;
+			}
+			return false;
+		}
+
+		bool AccumulateViewportSubtreeBounds(
+			Tile* tile, Tile* expectedParent, NiNode* rootNode,
+			UInt32 depth, TileVerticalBounds& bounds)
+		{
+			if (!tile || tile->pParent != expectedParent
+				|| depth > kMaximumViewportSubtreeDepth
+				|| ++bounds.visited > kMaximumViewportSubtreeTiles)
+			{
+				return false;
+			}
+
+			NiNode* tileNode = tile->spNiNode;
+			if (tileNode && tileNode->GetAppCulled())
+				return true;
+			if (!IsSupportedViewportTileType(tile)
+				|| !HasIdentityTileTransform(tile))
+			{
+				return false;
+			}
+			if (tileNode
+				&& (FindTileForNode(tileNode) != tile
+					|| !IsSceneNodeWithinRoot(tileNode, rootNode)))
+			{
+				return false;
+			}
+
+			Tile::Value* height = tile->GetValue(Tile::kTileValue_height);
+			if (!height)
+			{
+				if (tileNode)
+					return false;
+			}
+			else
+			{
+				if (!std::isfinite(height->fNum) || height->fNum < 0.0f)
+					return false;
+				if (height->fNum > 0.0f)
+				{
+					const float top = GetAbsoluteTileY(tile);
+					const float bottom = top + height->fNum;
+					if (!std::isfinite(top) || !std::isfinite(bottom)
+						|| bottom < top)
+					{
+						return false;
+					}
+					bounds.top = std::min(bounds.top, top);
+					bounds.bottom = std::max(bounds.bottom, bottom);
+					bounds.hasArea = true;
+				}
+			}
+
+			for (Tile* child : tile->kChildren)
+			{
+				if (child && !AccumulateViewportSubtreeBounds(
+					child, tile, rootNode, depth + 1, bounds))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		bool IsOutsidePaddedViewport(
+			float top, float bottom, float clipTop, float clipBottom)
+		{
+			const double padding = kViewportCullSafetyPadding;
+			return static_cast<double>(bottom)
+					< static_cast<double>(clipTop) - padding
+				|| static_cast<double>(top)
+					> static_cast<double>(clipBottom) + padding;
+		}
+
+		ViewportCullDecision ShouldCullViewportListNode(NiNode* node)
+		{
+			ViewportCullDecision decision;
+			Tile* tile = FindTileForNode(node);
+			if (!tile)
+				return decision;
+
+			Tile::Value* listIndex =
+				tile->GetValue(Tile::kTileValue_listindex);
+			if (!listIndex || listIndex->fNum < 0.0f)
+				return decision;
+			decision.checked = true;
+			if (!std::isfinite(listIndex->fNum))
+			{
+				decision.failOpen = true;
+				return decision;
+			}
+
+			Tile::Value* clips = tile->GetValue(Tile::kTileValue_clips);
+			if (!clips || clips->fNum <= 0.5f)
+				return decision;
+			if (!std::isfinite(clips->fNum))
+			{
+				decision.failOpen = true;
+				return decision;
+			}
+
+			bool chainValid = true;
+			Tile* clipWindow = FindNearestClipWindow(tile, chainValid);
+			Tile::Value* clipHeight = clipWindow
+				? clipWindow->GetValue(Tile::kTileValue_height) : nullptr;
+			Tile::Value* rootHeight =
+				tile->GetValue(Tile::kTileValue_height);
+			if (!chainValid || !clipWindow
+				|| !IsFiniteTraitValue(clipHeight)
+				|| clipHeight->fNum <= 0.0f
+				|| !IsFiniteTraitValue(rootHeight)
+				|| rootHeight->fNum <= 0.0f)
+			{
+				decision.failOpen = true;
+				return decision;
+			}
+
+			const float clipTop = GetAbsoluteTileY(clipWindow);
+			const float clipBottom = clipTop + clipHeight->fNum;
+			const float rootTop = GetAbsoluteTileY(tile);
+			const float rootBottom = rootTop + rootHeight->fNum;
+			if (!std::isfinite(clipTop) || !std::isfinite(clipBottom)
+				|| !std::isfinite(rootTop) || !std::isfinite(rootBottom)
+				|| clipBottom < clipTop || rootBottom < rootTop)
+			{
+				decision.failOpen = true;
+				return decision;
+			}
+
+			// This is the hot visible-row path. It deliberately avoids transform
+			// validation and recursive trait/node traversal because returning to
+			// stock never needs an invisibility proof.
+			if (!IsOutsidePaddedViewport(
+				rootTop, rootBottom, clipTop, clipBottom))
+			{
+				decision.fastVisible = true;
+				return decision;
+			}
+
+			decision.deepCheck = true;
+			if (!IsNonnegativeIntegralListIndex(listIndex->fNum)
+				|| !HasSafeTileChain(tile, clipWindow)
+				|| tile->spNiNode != node)
+			{
+				decision.failOpen = true;
+				return decision;
+			}
+
+			TileVerticalBounds bounds;
+			const bool complete = AccumulateViewportSubtreeBounds(
+				tile, tile->pParent, node, 0, bounds);
+			decision.visitedTiles = bounds.visited;
+			if (!complete || !bounds.hasArea)
+			{
+				decision.failOpen = true;
+				return decision;
+			}
+			decision.culled = IsOutsidePaddedViewport(
+				bounds.top, bounds.bottom, clipTop, clipBottom);
+			return decision;
+		}
+
+		bool InitializeViewportNodeVTable()
+		{
+			if (s_viewportNodeVTable.sourceVTable)
+				return true;
+
+			constexpr SIZE_T tableStart =
+				kVanillaNiNodeVTable - sizeof(void*);
+			constexpr SIZE_T tableBytes =
+				(kNiNodeVirtualCount + 1) * sizeof(void*);
+			if (!hook_identity::IsAccessibleRegion(
+				tableStart, tableBytes, false))
+			{
+				return false;
+			}
+			void** source = reinterpret_cast<void**>(kVanillaNiNodeVTable);
+			const SIZE_T predecessor = reinterpret_cast<SIZE_T>(
+				source[kNiNodeOnVisibleSlot]);
+			const SIZE_T hook = reinterpret_cast<SIZE_T>(
+				&ViewportListNodeOnVisibleHook);
+			if (!source[-1] || predecessor == hook
+				|| !hook_identity::IsExecutableTarget(predecessor))
+			{
+				return false;
+			}
+
+			s_viewportNodeVTable.predecessor =
+				reinterpret_cast<NiNodeOnVisibleFn>(predecessor);
+			s_viewportNodeVTable.completeObjectLocator = source[-1];
+			std::memcpy(s_viewportNodeVTable.entries.data(), source,
+				sizeof(void*) * s_viewportNodeVTable.entries.size());
+			s_viewportNodeVTable.entries[kNiNodeOnVisibleSlot] =
+				reinterpret_cast<void*>(&ViewportListNodeOnVisibleHook);
+			s_viewportNodeVTable.sourceVTable = source;
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: conservative list viewport subtree culling active source_onvisible=%08X chained=%d safety_padding=%.1f max_depth=%u max_tiles=%u",
+				static_cast<UInt32>(predecessor),
+				predecessor != kVanillaNiNodeOnVisible ? 1 : 0,
+				kViewportCullSafetyPadding,
+				kMaximumViewportSubtreeDepth,
+				kMaximumViewportSubtreeTiles);
+			return true;
+		}
+
+		void InstallViewportCullForTileNode(Tile* tile, NiNode* node)
+		{
+			if (!node || !IsViewportListItemCandidate(tile))
+				return;
+
+			bool installed = false;
+			if (FindTileForNode(node) == tile
+				&& InitializeViewportNodeVTable())
+			{
+				void*** objectVTable = reinterpret_cast<void***>(node);
+				void** current = *objectVTable;
+				void** proxy = s_viewportNodeVTable.entries.data();
+				if (current == proxy)
+					return;
+				if (current == s_viewportNodeVTable.sourceVTable)
+				{
+					void* observed = InterlockedCompareExchangePointer(
+						reinterpret_cast<void* volatile*>(objectVTable),
+						proxy, current);
+					installed = observed == current && *objectVTable == proxy;
+				}
+				else if (!s_loggedViewportNodeVTableConflict)
+				{
+					s_loggedViewportNodeVTableConflict = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: list viewport candidate kept on original path because its NiNode vtable is not the retail table current=%08X expected=%08X",
+						static_cast<UInt32>(
+							reinterpret_cast<SIZE_T>(current)),
+						static_cast<UInt32>(kVanillaNiNodeVTable));
+				}
+			}
+			RecordFreeTypeViewportNodeInstallResult(installed);
+		}
+
+		void __fastcall ViewportListNodeOnVisibleHook(
+			NiNode* node, void*, NiCullingProcess* culler)
+		{
+			const ViewportCullDecision decision =
+				ShouldCullViewportListNode(node);
+			if (decision.checked && g_bEnableFreeTypeFontRenderingLog)
+			{
+				RecordFreeTypeViewportCullResult(
+					decision.culled, decision.failOpen,
+					decision.fastVisible, decision.deepCheck,
+					decision.visitedTiles);
+			}
+			if (decision.culled)
+				return;
+
+			NiNodeOnVisibleFn next = s_viewportNodeVTable.predecessor;
+			if (!next || reinterpret_cast<SIZE_T>(next)
+				== reinterpret_cast<SIZE_T>(
+					&ViewportListNodeOnVisibleHook))
+			{
+				next = reinterpret_cast<NiNodeOnVisibleFn>(
+					kVanillaNiNodeOnVisible);
+			}
+			next(node, culler);
+		}
 		Font* ResolveVuiEffectProxyFont(TileText* tile)
 		{
 			if (!tile)
@@ -425,6 +937,23 @@ namespace fonthook
 
 			if (replaceProxy && node)
 				node->SetAppCulled(true);
+			InstallViewportCullForTileNode(tile, node);
+			return node;
+		}
+
+		NiNode* __fastcall TileRectMakeNodeHook(TileRect* tile, void*)
+		{
+			NiNode* node = s_tileRectMakeNode
+				? s_tileRectMakeNode(tile) : nullptr;
+			InstallViewportCullForTileNode(tile, node);
+			return node;
+		}
+
+		NiNode* __fastcall TileImageMakeNodeHook(TileImage* tile, void*)
+		{
+			NiNode* node = s_tileImageMakeNode
+				? s_tileImageMakeNode(tile) : nullptr;
+			InstallViewportCullForTileNode(tile, node);
 			return node;
 		}
 
@@ -467,6 +996,69 @@ namespace fonthook
 				static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
 				static_cast<UInt32>(current), current != kVanillaTileTextMakeNode ? 1 : 0);
 			return true;
+		}
+
+		template <class MakeNodeFn>
+		bool InstallViewportMakeNodeHook(
+			SIZE_T entry, SIZE_T stockTarget, const char* tileType,
+			SIZE_T hookTarget, MakeNodeFn& predecessor)
+		{
+			if (!hook_identity::IsAccessibleRegion(
+				entry, sizeof(SIZE_T), false))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: list viewport %s hook skipped; MakeNode vtable entry is unreadable entry=%08X",
+					tileType, static_cast<UInt32>(entry));
+				return false;
+			}
+			const SIZE_T current =
+				*reinterpret_cast<const SIZE_T*>(entry);
+			if (current == hookTarget)
+				return predecessor != nullptr;
+			if (!hook_identity::IsExecutableTarget(current))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: list viewport %s hook skipped; MakeNode target is not executable target=%08X",
+					tileType, static_cast<UInt32>(current));
+				return false;
+			}
+
+			predecessor = reinterpret_cast<MakeNodeFn>(current);
+			SafeWrite32(entry, hookTarget);
+			if (*reinterpret_cast<const SIZE_T*>(entry) != hookTarget)
+			{
+				SafeWrite32(entry, current);
+				predecessor = nullptr;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: list viewport %s hook write verification failed entry=%08X",
+					tileType, static_cast<UInt32>(entry));
+				return false;
+			}
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: list viewport %s hook installed entry=%08X target=%08X chained=%d",
+				tileType, static_cast<UInt32>(entry),
+				static_cast<UInt32>(current),
+				current != stockTarget ? 1 : 0);
+			return true;
+		}
+
+		void InstallViewportListSubtreeCulling()
+		{
+			if (!InitializeViewportNodeVTable())
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: conservative list viewport subtree culling skipped; retail NiNode vtable identity is unavailable");
+				return;
+			}
+
+			InstallViewportMakeNodeHook(
+				kTileRectMakeNodeVTableEntry, kVanillaTileRectMakeNode,
+				"TileRect", reinterpret_cast<SIZE_T>(&TileRectMakeNodeHook),
+				s_tileRectMakeNode);
+			InstallViewportMakeNodeHook(
+				kTileImageMakeNodeVTableEntry, kVanillaTileImageMakeNode,
+				"TileImage", reinterpret_cast<SIZE_T>(&TileImageMakeNodeHook),
+				s_tileImageMakeNode);
 		}
 	}
 
@@ -651,7 +1243,10 @@ namespace fonthook
 		s_fontHookInstallState.multibyte = g_bEnableMultibyteFontHook;
 		s_fontHookInstallState.freeType = g_bEnableFreeTypeFontRendering;
 		if (s_fontHookInstallState.freeType)
+		{
 			InstallVuiEffectProxyCompatibility();
+			InstallViewportListSubtreeCulling();
+		}
 
 		// FontManager::CreateText -> FontManager::PrepText
 		WriteRelCallEx(0xA18F4A, &FontManagerEx::PrepText);

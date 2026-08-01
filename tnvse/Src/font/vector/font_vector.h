@@ -111,6 +111,10 @@ namespace fonthook
 	void ShutdownFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
 	void RecordFreeTypePreparedTextCacheResult(bool abHit);
+	void RecordFreeTypeViewportNodeInstallResult(bool abInstalled);
+	void RecordFreeTypeViewportCullResult(
+		bool abCulled, bool abFailOpen, bool abFastVisible,
+		bool abDeepCheck, UInt32 auiVisitedTiles);
 	void FlushFreeTypePersistentFontCache();
 	float GetCanonicalFreeTypeRasterScale();
 	float ConsumeFreeTypeCreateTextScale();
