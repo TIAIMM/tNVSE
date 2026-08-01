@@ -877,7 +877,7 @@ namespace fonthook::vectorfont
 
 	bool HookNativeA8Accumulator();
 	bool IsNativeA8AccumulatorHookCurrent();
-	bool IsNativeA8SortedTraversalHookCurrent();
+	bool IsNativeA8RenderAlphaGeometryHookCurrent();
 
 	void RecordNativeA8Suppression(NiTriShape* shape,
 		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason,

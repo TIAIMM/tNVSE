@@ -1,5 +1,6 @@
 #include "font_a8_internal.h"
 
+#include "hook_identity.h"
 #include "load_config.h"
 #include "tnvse.h"
 
@@ -2450,7 +2451,7 @@ namespace fonthook::vectorfont
 				return true;
 			}
 			InvalidateSegmentDeviceStateCache();
-			State().originalTileRenderPass(pass, currentPass,
+			State().originalRenderPassImmediately(pass, currentPass,
 				testAlpha, blendAlpha, setupDrawmode);
 			return false;
 		}
@@ -3632,7 +3633,7 @@ namespace fonthook::vectorfont
 					else
 					{
 						InvalidateSegmentDeviceStateCache();
-						State().originalTileRenderPass(pass,
+						State().originalRenderPassImmediately(pass,
 							currentPass, false, true,
 							setupDrawmode);
 					}
@@ -3804,7 +3805,7 @@ namespace fonthook::vectorfont
 			// strip lengths (primitiveCount = length - 2). Keep the page split at
 			// the one stock sorted Tile callsite instead. Each packet selects a
 			// Font::MakeTriShape proxy and then executes the untouched
-			// TileRenderPass -> NiTriShape::RenderImmediate renderer path.
+			// RenderPassImmediately -> NiTriShape::RenderImmediate renderer path.
 			//
 			// Final ARGB and baked-coverage bitmaps use only stock c0. Skipping the
 			// distance-field private-high-range ownership and facade bookkeeping
@@ -3865,7 +3866,7 @@ namespace fonthook::vectorfont
 						break;
 					}
 					packetScope.Select(proxyShape);
-					State().originalTileRenderPass(pass,
+					State().originalRenderPassImmediately(pass,
 						currentPass, false, true,
 						setupDrawmode);
 					draw.drewPacket = true;
@@ -4197,7 +4198,7 @@ namespace fonthook::vectorfont
 				else
 				{
 					InvalidateSegmentDeviceStateCache();
-					State().originalTileRenderPass(pass,
+					State().originalRenderPassImmediately(pass,
 						currentPass, false, true,
 						setupDrawmode);
 				}
@@ -4543,28 +4544,30 @@ namespace fonthook::vectorfont
 			? owner : std::shared_ptr<VirtualStockShapeGroup>{};
 	}
 
-	TileRenderPassFn ReadTileRenderPassCallTarget()
+	RenderPassImmediatelyFn ReadRenderPassImmediatelyCallTarget()
 	{
-		const UInt8* call = reinterpret_cast<const UInt8*>(kTileRenderPassCallSite);
-		if (!call || call[0] != 0xE8)
+		SIZE_T target = 0;
+		if (!hook_identity::ReadRel32Target(
+			kRenderPassImmediatelyCallSite,
+			hook_identity::Rel32Opcode::Call,
+			target))
+		{
 			return nullptr;
-		SInt32 displacement = 0;
-		std::memcpy(&displacement, call + 1, sizeof(displacement));
-		return reinterpret_cast<TileRenderPassFn>(
-			kTileRenderPassCallSite + 5 + displacement);
+		}
+		return reinterpret_cast<RenderPassImmediatelyFn>(target);
 	}
 
-	bool IsA8TileRenderPassHookCurrent()
+	bool IsA8RenderPassImmediatelyHookCurrent()
 	{
-		return State().originalTileRenderPass
-			&& ReadTileRenderPassCallTarget() == &A8TileRenderPass;
+		return State().originalRenderPassImmediately
+			&& ReadRenderPassImmediatelyCallTarget() == &A8RenderPassImmediately;
 	}
 
-	void __cdecl A8TileRenderPass(BSShaderProperty::RenderPass* pass,
+	void __cdecl A8RenderPassImmediately(BSShaderProperty::RenderPass* pass,
 		UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupDrawmode)
 	{
 		A8State& state = State();
-		if (!state.originalTileRenderPass)
+		if (!state.originalRenderPassImmediately)
 			return;
 		NiTriShape* shape = pass
 			? reinterpret_cast<NiTriShape*>(pass->pGeometry) : nullptr;
@@ -4574,7 +4577,7 @@ namespace fonthook::vectorfont
 				ReleaseNativeConstantOwnershipBatch("before-stock-tile");
 			InvalidateSegmentDeviceStateCache();
 			AdvanceNativeA8SortedShaderStateAcrossStockTile();
-			state.originalTileRenderPass(pass, currentPass, testAlpha,
+			state.originalRenderPassImmediately(pass, currentPass, testAlpha,
 				blendAlpha, setupDrawmode);
 			ValidateNativeA8SortedShaderStateAfterStockTile();
 			return;
@@ -4854,7 +4857,7 @@ namespace fonthook::vectorfont
 				== GetNativeA8AtlasTextureEpoch()
 			)
 		{
-			// NativeA8RenderSorted retained the metadata owner and validated this
+			// NativeA8RenderAlphaGeometry retained the metadata owner and validated this
 			// exact payload immediately before the stock sorted Tile traversal.
 			failure = NativeA8FallbackReason::None;
 		}
@@ -4905,9 +4908,9 @@ namespace fonthook::vectorfont
 			if (!draw.runtimeFault)
 			{
 				if (g_bEnableFreeTypeFontRenderingLog
-					&& !state.loggedTileRenderPassHit)
+					&& !state.loggedRenderPassImmediatelyHit)
 				{
-					state.loggedTileRenderPassHit = true;
+					state.loggedRenderPassImmediatelyHit = true;
 					gLog.FormattedMessage(
 						"tnvse_freetype_native: native Tile group route hit shape=%p font=%u pass=%u packets=%u ranges=%u route=%s",
 						shape, metadata->fontId, currentPass,
@@ -4949,66 +4952,67 @@ namespace fonthook::vectorfont
 		RecordNativeA8Suppression(shape, *metadata, failure, "tile-render-pass");
 	}
 
-	bool HookTileRenderPass()
+	bool HookRenderPassImmediately()
 	{
-		TileRenderPassFn current = ReadTileRenderPassCallTarget();
-		const TileRenderPassFn hook = &A8TileRenderPass;
+		RenderPassImmediatelyFn current = ReadRenderPassImmediatelyCallTarget();
+		const RenderPassImmediatelyFn hook = &A8RenderPassImmediately;
 		if (current == hook)
 		{
-			State().tileRenderPassHookInstalled = State().originalTileRenderPass != nullptr;
-			return State().tileRenderPassHookInstalled;
+			State().renderPassImmediatelyHookInstalled = State().originalRenderPassImmediately != nullptr;
+			return State().renderPassImmediatelyHookInstalled;
 		}
 		if (!current)
 		{
-			if (State().tileRenderPassHookInstalled)
+			if (State().renderPassImmediatelyHookInstalled)
 			{
-				State().tileRenderPassHookInstalled = false;
+				State().renderPassImmediatelyHookInstalled = false;
 				InvalidateAllVirtualStockBindings();
 			}
-			if (!State().loggedTileRenderPassHookConflict)
+			if (!State().loggedRenderPassImmediatelyHookConflict)
 			{
-				State().loggedTileRenderPassHookConflict = true;
+				State().loggedRenderPassImmediatelyHookConflict = true;
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: Tile accumulator call site is not CALL rel32; native route unavailable");
+					"tnvse_freetype_native: BSShaderAccumulator::RenderAlphaGeometry -> BSBatchRenderer::RenderPassImmediately call site is not CALL rel32; native route unavailable");
 			}
 			return false;
 		}
-		if (State().tileRenderPassHookInstalled)
+		if (State().renderPassImmediatelyHookInstalled)
 		{
-			State().tileRenderPassHookInstalled = false;
+			State().renderPassImmediatelyHookInstalled = false;
 			InvalidateAllVirtualStockBindings();
-			if (!State().loggedTileRenderPassHookConflict)
+			if (!State().loggedRenderPassImmediatelyHookConflict)
 			{
-				State().loggedTileRenderPassHookConflict = true;
+				State().loggedRenderPassImmediatelyHookConflict = true;
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: Tile accumulator native route was replaced; marked groups will be suppressed");
+					"tnvse_freetype_native: RenderPassImmediately native route was replaced; marked groups will be suppressed");
 			}
 			return false;
 		}
-		if (reinterpret_cast<UInt32>(current) != kStockTileRenderPassImmediately)
+		if (reinterpret_cast<UInt32>(current) != kStockRenderPassImmediately)
 		{
-			if (!State().loggedTileRenderPassHookConflict)
+			if (!State().loggedRenderPassImmediatelyHookConflict)
 			{
-				State().loggedTileRenderPassHookConflict = true;
+				State().loggedRenderPassImmediatelyHookConflict = true;
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: Tile accumulator call site already has a non-stock target=%p; leaving it untouched",
+					"tnvse_freetype_native: RenderPassImmediately call site already has a non-stock target=%p; leaving it untouched",
 					current);
 			}
 			return false;
 		}
 
-		State().originalTileRenderPass = current;
-		WriteRelCall(kTileRenderPassCallSite, hook);
-		State().tileRenderPassHookInstalled = ReadTileRenderPassCallTarget() == hook;
-		if (!State().tileRenderPassHookInstalled)
+		State().originalRenderPassImmediately = current;
+		WriteRelCall(kRenderPassImmediatelyCallSite, hook);
+		State().renderPassImmediatelyHookInstalled = ReadRenderPassImmediatelyCallTarget() == hook;
+		if (!State().renderPassImmediatelyHookInstalled)
 		{
-			State().originalTileRenderPass = nullptr;
+			WriteRelCall(kRenderPassImmediatelyCallSite, current);
+			State().originalRenderPassImmediately = nullptr;
 			return false;
 		}
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: installed Tile accumulator native route original=%p stock=1",
+				"tnvse_freetype_native: installed RenderPassImmediately native route original=%p stock=1",
 				current);
 		}
 		return true;

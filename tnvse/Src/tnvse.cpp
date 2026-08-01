@@ -270,7 +270,6 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 		fonthook::InitPluralHooks();
 	}
 
-	fonthook::InitVertSpacingHook();
 
 
 	fonthook::InitFontHooks();

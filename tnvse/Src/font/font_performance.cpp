@@ -184,7 +184,7 @@ namespace fonthook::vectorfont
 					- stockC0CompatibilityRepublishes
 				: 0;
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu promotion_bypass=%llu probe=%llu probe_miss=%llu admitted=%llu evicted=%llu admission_rejected=%llu backoff_bypass=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu text_artifact_hit=%llu miss=%llu hot=%llu bypass=%llu admitted=%llu evicted=%llu shader_batches=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu sorted_static_batches=%llu payloads=%llu bytes=%llu merged_packet_ranges=%llu metadata_hot=%llu locked=%llu sorted_facades=%llu unique_payloads=%llu frame_lookup_hits=%llu preflight_fast=%llu full=%llu direct_static=%llu direct_dynamic=%llu sorted_dynamic_batches=%llu payloads=%llu bytes=%llu lockless_packets=%llu visibility_checks=%llu culled=%llu app=%llu alpha=%llu clip=%llu scissor=%llu preflight_skipped=%llu packets_saved=%llu vertices_saved=%llu viewport_nodes=%llu install_failed=%llu viewport_checks=%llu viewport_culled=%llu fail_open=%llu direct_shape_candidates=%llu direct_shape_draws=%llu direct_shape_vertices=%llu direct_shape_fallback=%llu constant_ownership_segments=%llu reuses=%llu releases=%llu snapshot_gets_elided=%llu restore_sets_elided=%llu stock_constant_updates=%llu reuses=%llu composite_constant_full=%llu private_reuses=%llu partial=%llu stock_c0_republish_elided=%llu compat_republishes=%llu private_registers_uploaded=%llu full_tail_elided=%llu stock_tile_private_preserves=%llu sampler_sets=%llu reuses=%llu composite_onequad_single_page=%llu onequad_paged=%llu onequad_build_fallback=%llu legacy_multipage_fallback=%llu shader_fallback=%llu composite_draws=%llu tile_passes=%llu cache_hit=%llu miss=%llu state_changes=%llu generated=%llu evicted=%llu cache_bytes=%llu budget_reject=%llu rtt_fail=%llu restore_fail=%llu visual_validated=%llu rejected=%llu inconclusive=%llu",
+			"tnvse_freetype_perf: bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu prepared_text_hit=%llu miss=%llu promotion_bypass=%llu probe=%llu probe_miss=%llu admitted=%llu evicted=%llu admission_rejected=%llu backoff_bypass=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu text_artifact_hit=%llu miss=%llu hot=%llu bypass=%llu admitted=%llu evicted=%llu shader_batches=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu sorted_static_batches=%llu payloads=%llu bytes=%llu merged_packet_ranges=%llu metadata_hot=%llu locked=%llu sorted_facades=%llu unique_payloads=%llu frame_lookup_hits=%llu preflight_fast=%llu full=%llu direct_static=%llu direct_dynamic=%llu sorted_dynamic_batches=%llu payloads=%llu bytes=%llu lockless_packets=%llu visibility_checks=%llu culled=%llu app=%llu alpha=%llu clip=%llu scissor=%llu preflight_skipped=%llu packets_saved=%llu vertices_saved=%llu direct_shape_candidates=%llu direct_shape_draws=%llu direct_shape_vertices=%llu direct_shape_fallback=%llu constant_ownership_segments=%llu reuses=%llu releases=%llu snapshot_gets_elided=%llu restore_sets_elided=%llu stock_constant_updates=%llu reuses=%llu composite_constant_full=%llu private_reuses=%llu partial=%llu stock_c0_republish_elided=%llu compat_republishes=%llu private_registers_uploaded=%llu full_tail_elided=%llu stock_tile_private_preserves=%llu sampler_sets=%llu reuses=%llu composite_onequad_single_page=%llu onequad_paged=%llu onequad_build_fallback=%llu legacy_multipage_fallback=%llu shader_fallback=%llu composite_draws=%llu tile_passes=%llu cache_hit=%llu miss=%llu state_changes=%llu generated=%llu evicted=%llu cache_bytes=%llu budget_reject=%llu rtt_fail=%llu restore_fail=%llu visual_validated=%llu rejected=%llu inconclusive=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapMemoryHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapCrossFontHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskHit)],
@@ -268,16 +268,6 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::VisibilityPacketsSaved)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VisibilityVerticesSaved)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportNodeInstalled)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportNodeInstallFailed)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportCullCheck)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportCulled)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailOpen)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SinglePacketDirectCandidate)],
 			values[static_cast<size_t>(
@@ -778,29 +768,6 @@ namespace fonthook
 		vectorfont::RecordFreeTypePerf(hit
 			? vectorfont::FreeTypePerfCounter::PreparedTextHit
 			: vectorfont::FreeTypePerfCounter::PreparedTextMiss);
-	}
-
-	void RecordFreeTypeViewportNodeInstallResult(bool installed)
-	{
-		vectorfont::RecordFreeTypePerf(installed
-			? vectorfont::FreeTypePerfCounter::ViewportNodeInstalled
-			: vectorfont::FreeTypePerfCounter::ViewportNodeInstallFailed);
-	}
-
-	void RecordFreeTypeViewportCullResult(bool culled, bool failOpen)
-	{
-		vectorfont::RecordFreeTypePerf(
-			vectorfont::FreeTypePerfCounter::ViewportCullCheck);
-		if (culled)
-		{
-			vectorfont::RecordFreeTypePerf(
-				vectorfont::FreeTypePerfCounter::ViewportCulled);
-		}
-		if (failOpen)
-		{
-			vectorfont::RecordFreeTypePerf(
-				vectorfont::FreeTypePerfCounter::ViewportFailOpen);
-		}
 	}
 
 	void PumpFreeTypeFontPerformance()

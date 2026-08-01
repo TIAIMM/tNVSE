@@ -1,5 +1,6 @@
 #include "font_a8_internal.h"
 #include "font_native_internal.h"
+#include "hook_identity.h"
 #include "load_config.h"
 #include "tnvse.h"
 
@@ -27,6 +28,7 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kRegisterObjectVtableSlot = 38;
 		inline constexpr UInt32 kRegisterObjectVtableEntry =
 			kBSShaderAccumulatorVtable + kRegisterObjectVtableSlot * sizeof(void*);
+		inline constexpr UInt32 kStockRegisterObject = 0xB63F10;
 		inline constexpr UInt32 kMaximumMissingMetadataLogs = 8;
 		inline constexpr size_t kMaximumStableTieItems = 8192;
 
@@ -37,7 +39,7 @@ namespace fonthook::vectorfont
 		std::atomic<UInt32> s_missingMetadataLogCount = 0;
 		std::atomic<UInt32> s_atlasTextureEpoch = 1;
 
-		int __fastcall NativeA8RenderSorted(
+		void __fastcall NativeA8RenderAlphaGeometry(
 			BSShaderAccumulator* accumulator, void*);
 
 		struct RegisteredFacade
@@ -87,7 +89,7 @@ namespace fonthook::vectorfont
 			UInt32 generation = 0;
 			UInt32 atlasTextureEpoch = 0;
 			bool accumulatorCurrent = false;
-			bool tileRouteCurrent = false;
+			bool immediateRouteCurrent = false;
 			bool rendererAvailable = false;
 		};
 
@@ -366,16 +368,17 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		SortedTileRenderFn ReadSortedTileRenderCallTarget()
+		RenderAlphaGeometryFn ReadRenderAlphaGeometryCallTarget()
 		{
-			const UInt8* call = reinterpret_cast<const UInt8*>(
-				kSortedTileRenderCallSite);
-			if (!call || call[0] != 0xE8)
+			SIZE_T target = 0;
+			if (!hook_identity::ReadRel32Target(
+				kRenderAlphaGeometryCallSite,
+				hook_identity::Rel32Opcode::Call,
+				target))
+			{
 				return nullptr;
-			SInt32 displacement = 0;
-			std::memcpy(&displacement, call + 1, sizeof(displacement));
-			return reinterpret_cast<SortedTileRenderFn>(
-				kSortedTileRenderCallSite + 5 + displacement);
+			}
+			return reinterpret_cast<RenderAlphaGeometryFn>(target);
 		}
 
 		void ClearPendingRegistrations(SortedPayloadScratch& scratch)
@@ -388,9 +391,9 @@ namespace fonthook::vectorfont
 		bool EnsurePendingAccumulator(BSShaderAccumulator* accumulator)
 		{
 			SortedPayloadScratch& scratch = s_sortedPayloadScratch;
-			const bool hookCurrent = ReadSortedTileRenderCallTarget()
-				== reinterpret_cast<SortedTileRenderFn>(
-					&NativeA8RenderSorted);
+			const bool hookCurrent = ReadRenderAlphaGeometryCallTarget()
+				== reinterpret_cast<RenderAlphaGeometryFn>(
+					&NativeA8RenderAlphaGeometry);
 			if (!accumulator || scratch.active || scratch.nestedBypassDepth
 				|| !hookCurrent)
 			{
@@ -1138,8 +1141,8 @@ namespace fonthook::vectorfont
 				: IsNativeA8AccumulatorHookCurrent()))
 				return NativeA8FallbackReason::AccumulatorConflict;
 			if (!(frameContext
-				? frameContext->tileRouteCurrent
-				: IsA8TileRenderPassHookCurrent()))
+				? frameContext->immediateRouteCurrent
+				: IsA8RenderPassImmediatelyHookCurrent()))
 				return NativeA8FallbackReason::TileRouteConflict;
 			if (!(frameContext
 				? frameContext->rendererAvailable
@@ -1549,7 +1552,7 @@ namespace fonthook::vectorfont
 			if (metadata && metadata->backend
 				== FreeTypeShapeBackend::VirtualStockNative)
 			{
-				if (!IsA8TileRenderPassHookCurrent())
+				if (!IsA8RenderPassImmediatelyHookCurrent())
 				{
 					return SuppressNativeGroup(facade, *metadata,
 						NativeA8FallbackReason::TileRouteConflict,
@@ -1586,18 +1589,18 @@ namespace fonthook::vectorfont
 			// Keep one facade in the stock Tile alpha list. Equal-depth entries are
 			// quicksorted unstably, so individually registered packets cannot retain
 			// Glow/Shadow/Outline/Fill order. Expand only after stock UI sorting.
-			if (!IsA8TileRenderPassHookCurrent())
+			if (!IsA8RenderPassImmediatelyHookCurrent())
 				return SuppressNativeGroup(facade, *metadata,
 					NativeA8FallbackReason::TileRouteConflict, "register-object");
 			RecordSortedRegistration(accumulator, facade, metadata);
 			return s_originalRegisterObject(accumulator, facade);
 		}
 
-		int __fastcall NativeA8RenderSorted(BSShaderAccumulator* accumulator, void*)
+		void __fastcall NativeA8RenderAlphaGeometry(BSShaderAccumulator* accumulator, void*)
 		{
 			A8State& state = State();
-			if (!state.originalSortedTileRender)
-				return 0;
+			if (!state.originalRenderAlphaGeometry)
+				return;
 
 			SortedPayloadScratch& scratch = s_sortedPayloadScratch;
 			if (scratch.active || scratch.nestedBypassDepth)
@@ -1617,11 +1620,11 @@ namespace fonthook::vectorfont
 				InvalidateNativeA8CommandExecutionSegment(
 					NativeA8CommandFallback::Nested);
 				InvalidateNativeA8SortedShaderState();
-				const int result = state.originalSortedTileRender(accumulator);
+				state.originalRenderAlphaGeometry(accumulator);
 				InvalidateNativeA8SortedShaderState();
 				--scratch.nestedBypassDepth;
 				scratch.active = restoreActive;
-				return result;
+				return;
 			}
 
 			if (accumulator
@@ -1648,8 +1651,8 @@ namespace fonthook::vectorfont
 				NativePreflightFrameContext preflightContext;
 				preflightContext.accumulatorCurrent =
 					IsNativeA8AccumulatorHookCurrent();
-				preflightContext.tileRouteCurrent =
-					IsA8TileRenderPassHookCurrent();
+				preflightContext.immediateRouteCurrent =
+					IsA8RenderPassImmediatelyHookCurrent();
 				preflightContext.rendererAvailable =
 					IsNativeA8RendererAvailable();
 				preflightContext.generation =
@@ -2026,13 +2029,13 @@ namespace fonthook::vectorfont
 				BeginA8SortedTileConstantOwnership();
 				scratch.activeValidationToken = frameValidationToken;
 				scratch.active = true;
-				const int result = state.originalSortedTileRender(accumulator);
+				state.originalRenderAlphaGeometry(accumulator);
 				EndA8SortedTileConstantOwnership();
 				EndNativeA8SortedShaderBatch();
 				EndNativeA8FrameCommandBuffer();
 				EndNativeA8SortedRingFrame();
 				ClearSortedFrame(scratch);
-				return result;
+				return;
 			}
 
 			if (scratch.pendingAccumulator == accumulator)
@@ -2040,73 +2043,74 @@ namespace fonthook::vectorfont
 				ClearPendingRegistrations(scratch);
 				RefreshSortedScratchMemory(scratch);
 			}
-			return state.originalSortedTileRender(accumulator);
+			state.originalRenderAlphaGeometry(accumulator);
 		}
 
-		bool HookSortedTileRender()
+		bool HookRenderAlphaGeometry()
 		{
 			A8State& state = State();
-			const SortedTileRenderFn hook = reinterpret_cast<SortedTileRenderFn>(
-				&NativeA8RenderSorted);
-			const SortedTileRenderFn current = ReadSortedTileRenderCallTarget();
+			const RenderAlphaGeometryFn hook = reinterpret_cast<RenderAlphaGeometryFn>(
+				&NativeA8RenderAlphaGeometry);
+			const RenderAlphaGeometryFn current = ReadRenderAlphaGeometryCallTarget();
 			if (current == hook)
 			{
-				state.sortedTileRenderHookInstalled =
-					state.originalSortedTileRender != nullptr;
-				return state.sortedTileRenderHookInstalled;
+				state.renderAlphaGeometryHookInstalled =
+					state.originalRenderAlphaGeometry != nullptr;
+				return state.renderAlphaGeometryHookInstalled;
 			}
 			if (!current)
 			{
-				if (state.sortedTileRenderHookInstalled)
+				if (state.renderAlphaGeometryHookInstalled)
 				{
-					state.sortedTileRenderHookInstalled = false;
+					state.renderAlphaGeometryHookInstalled = false;
 					InvalidateAllVirtualStockBindings();
 				}
-				if (!state.loggedSortedTileRenderHookConflict)
+				if (!state.loggedRenderAlphaGeometryHookConflict)
 				{
-					state.loggedSortedTileRenderHookConflict = true;
+					state.loggedRenderAlphaGeometryHookConflict = true;
 					gLog.FormattedMessage(
-						"tnvse_freetype_native: sorted Tile render call site is not CALL rel32; frame upload batching disabled");
+						"tnvse_freetype_native: BSShaderAccumulator::RenderAlphaGeometry call site is not CALL rel32; frame upload batching disabled");
 				}
 				return false;
 			}
-			if (state.sortedTileRenderHookInstalled)
+			if (state.renderAlphaGeometryHookInstalled)
 			{
-				state.sortedTileRenderHookInstalled = false;
+				state.renderAlphaGeometryHookInstalled = false;
 				InvalidateAllVirtualStockBindings();
-				if (!state.loggedSortedTileRenderHookConflict)
+				if (!state.loggedRenderAlphaGeometryHookConflict)
 				{
-					state.loggedSortedTileRenderHookConflict = true;
+					state.loggedRenderAlphaGeometryHookConflict = true;
 					gLog.FormattedMessage(
-						"tnvse_freetype_native: sorted Tile frame upload hook was replaced; per-shape upload fallback remains active");
+						"tnvse_freetype_native: RenderAlphaGeometry frame hook was replaced; per-shape upload fallback remains active");
 				}
 				return false;
 			}
-			if (reinterpret_cast<UInt32>(current) != kStockSortedTileRender)
+			if (reinterpret_cast<UInt32>(current) != kStockRenderAlphaGeometry)
 			{
-				if (!state.loggedSortedTileRenderHookConflict)
+				if (!state.loggedRenderAlphaGeometryHookConflict)
 				{
-					state.loggedSortedTileRenderHookConflict = true;
+					state.loggedRenderAlphaGeometryHookConflict = true;
 					gLog.FormattedMessage(
-						"tnvse_freetype_native: sorted Tile render call site already has a non-stock target=%p; frame upload batching left disabled",
+						"tnvse_freetype_native: RenderAlphaGeometry call site already has a non-stock target=%p; frame upload batching left disabled",
 						current);
 				}
 				return false;
 			}
 
-			state.originalSortedTileRender = current;
-			WriteRelCall(kSortedTileRenderCallSite, hook);
-			state.sortedTileRenderHookInstalled =
-				ReadSortedTileRenderCallTarget() == hook;
-			if (!state.sortedTileRenderHookInstalled)
+			state.originalRenderAlphaGeometry = current;
+			WriteRelCall(kRenderAlphaGeometryCallSite, hook);
+			state.renderAlphaGeometryHookInstalled =
+				ReadRenderAlphaGeometryCallTarget() == hook;
+			if (!state.renderAlphaGeometryHookInstalled)
 			{
-				state.originalSortedTileRender = nullptr;
+				WriteRelCall(kRenderAlphaGeometryCallSite, current);
+				state.originalRenderAlphaGeometry = nullptr;
 				return false;
 			}
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: installed sorted Tile frame upload route original=%p stock=1",
+					"tnvse_freetype_native: installed RenderAlphaGeometry frame route original=%p stock=1",
 					current);
 			}
 			return true;
@@ -2183,23 +2187,50 @@ namespace fonthook::vectorfont
 
 	bool HookNativeA8Accumulator()
 	{
+		if (!hook_identity::IsAccessibleRegion(
+			kRegisterObjectVtableEntry, sizeof(void*), false))
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: BSShaderAccumulator::RegisterObject hook skipped; vtable slot 38 is unreadable entry=%08X",
+				kRegisterObjectVtableEntry);
+			return false;
+		}
 		void* current = *reinterpret_cast<void**>(kRegisterObjectVtableEntry);
 		if (current == reinterpret_cast<void*>(&NativeA8RegisterObject))
 		{
-			HookSortedTileRender();
+			HookRenderAlphaGeometry();
 			return s_originalRegisterObject != nullptr;
 		}
 		if (s_hookAttempted)
 			return false;
 		s_hookAttempted = true;
-		if (!current)
+		if (!hook_identity::IsExecutableTarget(
+			reinterpret_cast<SIZE_T>(current)))
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: BSShaderAccumulator::RegisterObject hook skipped; vtable slot 38 target is not executable target=%p",
+				current);
 			return false;
+		}
+		if (reinterpret_cast<SIZE_T>(current) != kStockRegisterObject
+			&& g_bEnableFreeTypeFontRenderingLog)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: chaining pre-existing BSShaderAccumulator::RegisterObject target=%p stock=%08X",
+				current, kStockRegisterObject);
+		}
 		s_originalRegisterObject = reinterpret_cast<RegisterObjectFn>(current);
 		SafeWrite32(kRegisterObjectVtableEntry,
 			reinterpret_cast<UInt32>(&NativeA8RegisterObject));
 		const bool accumulatorReady = IsNativeA8AccumulatorHookCurrent();
+		if (!accumulatorReady)
+		{
+			SafeWrite32(kRegisterObjectVtableEntry,
+				reinterpret_cast<UInt32>(current));
+			s_originalRegisterObject = nullptr;
+		}
 		if (accumulatorReady)
-			HookSortedTileRender();
+			HookRenderAlphaGeometry();
 		return accumulatorReady;
 	}
 
@@ -2210,11 +2241,11 @@ namespace fonthook::vectorfont
 			&& s_originalRegisterObject != nullptr;
 	}
 
-	bool IsNativeA8SortedTraversalHookCurrent()
+	bool IsNativeA8RenderAlphaGeometryHookCurrent()
 	{
-		return State().originalSortedTileRender
-			&& ReadSortedTileRenderCallTarget()
-				== reinterpret_cast<SortedTileRenderFn>(
-					&NativeA8RenderSorted);
+		return State().originalRenderAlphaGeometry
+			&& ReadRenderAlphaGeometryCallTarget()
+				== reinterpret_cast<RenderAlphaGeometryFn>(
+					&NativeA8RenderAlphaGeometry);
 	}
 }

@@ -1,5 +1,6 @@
 #include "multibyte_input_ime_internal.h"
 
+#include "hook_identity.h"
 #include "plugin_dependencies.h"
 
 #include <array>
@@ -212,9 +213,19 @@ namespace fonthook::multibyte_input
 			return;
 		}
 
-		WriteRelCall(
-			reinterpret_cast<SIZE_T>(hJIP) + kJipRawKeyStateCompareRva,
-			&JipRawKeyStateCompareHook);
+		const SIZE_T callSite =
+			reinterpret_cast<SIZE_T>(hJIP) + kJipRawKeyStateCompareRva;
+		WriteRelCall(callSite, &JipRawKeyStateCompareHook);
+		if (!hook_identity::MatchesRel32Target(
+			callSite,
+			hook_identity::Rel32Opcode::Call,
+			reinterpret_cast<SIZE_T>(&JipRawKeyStateCompareHook)))
+		{
+			SafeWriteBuf(callSite, kJipRawKeyStateSignature.data(), 5);
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: JIP key-event suppression write verification failed; restored original comparison");
+			return;
+		}
 		s_captureActive = State().textInputSessionActive;
 		s_hookInstalled = true;
 		gLog.FormattedMessage(

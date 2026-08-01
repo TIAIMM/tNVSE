@@ -1,6 +1,7 @@
 #include "save_display_name.h"
 
 #include "encoding.h"
+#include "hook_identity.h"
 #include "load_config.h"
 #include "SafeWrite.h"
 #include "tnvse.h"
@@ -21,6 +22,13 @@ namespace fonthook
 
 	namespace implementation::save_display_name
 	{
+		using hook_identity::Rel32Opcode;
+
+		constexpr SIZE_T kSavePathProcessCallSite = 0x8518BB;
+		constexpr SIZE_T kStockSavePathProcess = 0x8518D0;
+		constexpr SIZE_T kManualSaveNameCheckCallSite = 0x851AAE;
+		constexpr SIZE_T kStockManualSaveNameCheck = 0x851980;
+
 		constexpr UInt32 kStoreMagic = 'SVDN';
 		constexpr UInt32 kStoreVersion = 1;
 		constexpr UInt32 kMaxStoreFileSize = 16 * 1024 * 1024;
@@ -874,9 +882,11 @@ namespace fonthook
 			return true;
 		}
 
-		bool __stdcall SaveDisplayNameIsManualSave(const char* actualName)
+		bool __fastcall SaveDisplayNameIsManualSave(
+			void* saveManager, void*, const char* actualName)
 		{
-			if (StdCall<bool>(0x851980, actualName))
+			if (ThisStdCall<bool>(
+				kStockManualSaveNameCheck, saveManager, actualName))
 				return true;
 
 			std::string actualKey;
@@ -1033,7 +1043,43 @@ namespace fonthook
 		if (!g_bSaveDisplayNameMap)
 			return;
 
-		WriteRelCall(0x8518BB, &SavePathProcess);
-		WriteRelCall(0x851AAE, &SaveDisplayNameIsManualSave);
+		SIZE_T savePathTarget = 0;
+		SIZE_T manualSaveTarget = 0;
+		if (!hook_identity::ReadRel32Target(
+				kSavePathProcessCallSite, Rel32Opcode::Call, savePathTarget)
+			|| savePathTarget != kStockSavePathProcess
+			|| !hook_identity::ReadRel32Target(
+				kManualSaveNameCheckCallSite,
+				Rel32Opcode::Call,
+				manualSaveTarget)
+			|| manualSaveTarget != kStockManualSaveNameCheck)
+		{
+			gLog.FormattedMessage(
+				"tnvse_save_display_name: hook identity mismatch path=%08X manual=%08X; disabled",
+				static_cast<UInt32>(savePathTarget),
+				static_cast<UInt32>(manualSaveTarget));
+			return;
+		}
+
+		WriteRelCall(kSavePathProcessCallSite, &SavePathProcess);
+		WriteRelCall(kManualSaveNameCheckCallSite,
+			&SaveDisplayNameIsManualSave);
+
+		const bool installed = hook_identity::MatchesRel32Target(
+			kSavePathProcessCallSite,
+			Rel32Opcode::Call,
+			reinterpret_cast<SIZE_T>(&SavePathProcess))
+			&& hook_identity::MatchesRel32Target(
+				kManualSaveNameCheckCallSite,
+				Rel32Opcode::Call,
+				reinterpret_cast<SIZE_T>(&SaveDisplayNameIsManualSave));
+		if (!installed)
+		{
+			WriteRelCall(kSavePathProcessCallSite, kStockSavePathProcess);
+			WriteRelCall(kManualSaveNameCheckCallSite,
+				kStockManualSaveNameCheck);
+			gLog.FormattedMessage(
+				"tnvse_save_display_name: hook write verification failed; restored stock targets");
+		}
 	}
 }

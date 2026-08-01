@@ -31,10 +31,14 @@ namespace fonthook::vectorfont
 	inline constexpr UInt32 kRenderImmediateAltSlot = 56;
 	inline constexpr UInt32 kCopiedTriShapeVtableEntries = 61;
 	inline constexpr UInt32 kShaderRefreshMessage = 0;
-	inline constexpr UInt32 kTileRenderPassCallSite = 0xB64FD1;
-	inline constexpr UInt32 kStockTileRenderPassImmediately = 0xB994F0;
-	inline constexpr UInt32 kSortedTileRenderCallSite = 0xB65EA0;
-	inline constexpr UInt32 kStockSortedTileRender = 0xB64F90;
+	// BSShaderAccumulator::RenderAlphaGeometry calls the static
+	// BSBatchRenderer::RenderPassImmediately dispatcher here. The symbolized
+	// Aug 22 test build supplies both names; retail 1.4.0.525 has the same call
+	// graph at B65EA0 -> B64F90 and B64FD1 -> B994F0.
+	inline constexpr UInt32 kRenderPassImmediatelyCallSite = 0xB64FD1;
+	inline constexpr UInt32 kStockRenderPassImmediately = 0xB994F0;
+	inline constexpr UInt32 kRenderAlphaGeometryCallSite = 0xB65EA0;
+	inline constexpr UInt32 kStockRenderAlphaGeometry = 0xB64F90;
 	inline constexpr UInt32 kMaximumShapeValidationFailureLogs = 16;
 	// Retail 1.4.0.525 and the symbolized Aug 22 beta agree that
 	// NiGeometryBufferData owns a two-slot RendererData vtable. Use the
@@ -72,9 +76,9 @@ namespace fonthook::vectorfont
 
 	using RenderImmediateFn = void(__thiscall*)(NiTriShape*, NiRenderer*);
 	using DeleteThisFn = void(__thiscall*)(NiTriShape*);
-	using TileRenderPassFn = void(__cdecl*)(BSShaderProperty::RenderPass*,
+	using RenderPassImmediatelyFn = void(__cdecl*)(BSShaderProperty::RenderPass*,
 		UInt32, bool, bool, bool);
-	using SortedTileRenderFn = int(__thiscall*)(BSShaderAccumulator*);
+	using RenderAlphaGeometryFn = void(__thiscall*)(BSShaderAccumulator*);
 
 	enum class A8CompiledShaderClass : UInt8
 	{
@@ -210,13 +214,13 @@ namespace fonthook::vectorfont
 		RenderImmediateFn originalRenderImmediate = nullptr;
 		RenderImmediateFn originalRenderImmediateAlt = nullptr;
 		DeleteThisFn originalDeleteThis = nullptr;
-		TileRenderPassFn originalTileRenderPass = nullptr;
-		SortedTileRenderFn originalSortedTileRender = nullptr;
-		bool tileRenderPassHookInstalled = false;
-		bool sortedTileRenderHookInstalled = false;
-		bool loggedTileRenderPassHookConflict = false;
-		bool loggedSortedTileRenderHookConflict = false;
-		bool loggedTileRenderPassHit = false;
+		RenderPassImmediatelyFn originalRenderPassImmediately = nullptr;
+		RenderAlphaGeometryFn originalRenderAlphaGeometry = nullptr;
+		bool renderPassImmediatelyHookInstalled = false;
+		bool renderAlphaGeometryHookInstalled = false;
+		bool loggedRenderPassImmediatelyHookConflict = false;
+		bool loggedRenderAlphaGeometryHookConflict = false;
+		bool loggedRenderPassImmediatelyHit = false;
 		bool standardPassLitePredicatesValidated = false;
 		UInt32 shapeValidationFailureLogCount = 0;
 
@@ -236,12 +240,12 @@ namespace fonthook::vectorfont
 		AcquireVirtualStockShapeGroup(const A8ShapeMetadata& metadata);
 	bool IsA8AtlasShape(const NiTriShape* shape);
 	bool NeedsScaledFillSampling(const NiTriShape* shape);
-	bool HookTileRenderPass();
-	bool IsA8TileRenderPassHookCurrent();
-	TileRenderPassFn ReadTileRenderPassCallTarget();
+	bool HookRenderPassImmediately();
+	bool IsA8RenderPassImmediatelyHookCurrent();
+	RenderPassImmediatelyFn ReadRenderPassImmediatelyCallTarget();
 	void BeginA8SortedTileConstantOwnership();
 	void EndA8SortedTileConstantOwnership();
-	void __cdecl A8TileRenderPass(BSShaderProperty::RenderPass* pass,
+	void __cdecl A8RenderPassImmediately(BSShaderProperty::RenderPass* pass,
 		UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupDrawmode);
 	void __fastcall A8RenderImmediate(NiTriShape* shape, void*, NiRenderer* renderer);
 	void __fastcall A8RenderImmediateAlt(NiTriShape* shape, void*, NiRenderer* renderer);

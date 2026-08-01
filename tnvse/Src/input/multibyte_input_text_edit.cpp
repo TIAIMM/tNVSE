@@ -1,4 +1,5 @@
 #include "multibyte_input_internal.h"
+#include "hook_identity.h"
 
 // Vanilla TextEditMenu editing plus the JIP LN text-input adapter.
 
@@ -7,11 +8,13 @@ namespace fonthook
 	namespace multibyte_input
 	{
 		constexpr SIZE_T kPlayerNameTextEditOpenCall = 0x7AB740;
+		constexpr SIZE_T kStockTextEditMenuOpen = 0x7E6320;
 		constexpr SIZE_T kPlayerNameIsValidName = 0x7AB820;
 		constexpr SIZE_T kTextEditMenuVTable = 0x1070034;
 		constexpr SIZE_T kTextEditMenuHandleKeyboardInput = 0x7E6620;
 		constexpr SIZE_T kTextEditMenuInputVTableEntry = 0x1070064;
 		constexpr SIZE_T kTextEditStateInputCallInHandleKeyboardInput = 0x7E6685;
+		constexpr SIZE_T kStockTextEditStateInput = 0x716B00;
 		constexpr UInt32 kMaxTextEditRawBytes = 1023;
 		constexpr UInt32 kJipNumericOnlyFlag = 1;
 		constexpr UInt32 kJipEnterAcceptsOkFlag = 2;
@@ -948,8 +951,46 @@ namespace fonthook
 
 		void InstallTextEditHooks()
 		{
+			using hook_identity::Rel32Opcode;
+			SIZE_T openTarget = 0;
+			SIZE_T inputTarget = 0;
+			if (!hook_identity::ReadRel32Target(
+					kPlayerNameTextEditOpenCall,
+					Rel32Opcode::Call,
+					openTarget)
+				|| openTarget != kStockTextEditMenuOpen
+				|| !hook_identity::ReadRel32Target(
+					kTextEditStateInputCallInHandleKeyboardInput,
+					Rel32Opcode::Call,
+					inputTarget)
+				|| inputTarget != kStockTextEditStateInput)
+			{
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: TextEdit hook identity mismatch open=%08X input=%08X; disabled",
+					static_cast<UInt32>(openTarget),
+					static_cast<UInt32>(inputTarget));
+				return;
+			}
+
 			WriteRelCall(kPlayerNameTextEditOpenCall, &TextEditMenuEx::Open);
 			WriteRelCall(kTextEditStateInputCallInHandleKeyboardInput, &TextEditStateEx::Input);
+			const bool installed = hook_identity::MatchesRel32Target(
+				kPlayerNameTextEditOpenCall,
+				Rel32Opcode::Call,
+				reinterpret_cast<SIZE_T>(&TextEditMenuEx::Open))
+				&& hook_identity::MatchesRel32Target(
+					kTextEditStateInputCallInHandleKeyboardInput,
+					Rel32Opcode::Call,
+					reinterpret_cast<SIZE_T>(&TextEditStateEx::Input));
+			if (!installed)
+			{
+				WriteRelCall(kPlayerNameTextEditOpenCall,
+					kStockTextEditMenuOpen);
+				WriteRelCall(kTextEditStateInputCallInHandleKeyboardInput,
+					kStockTextEditStateInput);
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: TextEdit hook write verification failed; restored stock targets");
+			}
 		}
 
 		void RestoreTextEditInputHook()

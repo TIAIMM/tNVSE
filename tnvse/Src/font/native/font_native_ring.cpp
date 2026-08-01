@@ -2381,7 +2381,7 @@ namespace fonthook::vectorfont
 		UInt32 startVertex = 0;
 		bool staticResident = ResolveStaticPayloadLocked(state,
 			payload.payloadTemplate, totalVertices, startVertex);
-		if (!staticResident && !State().sortedTileRenderHookInstalled)
+		if (!staticResident && !State().renderAlphaGeometryHookInstalled)
 		{
 			staticResident = PromoteStaticPayloadLocked(state,
 				payload.payloadTemplate, totalVertices, startVertex);

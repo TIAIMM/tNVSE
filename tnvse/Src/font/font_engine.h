@@ -57,11 +57,11 @@ namespace fonthook
 		void Load();
 		void __thiscall PrepTextForTerminal(const char* apOrigString, Font::TextData* axData);
 		void __thiscall PrepText(const char* apOrigString, Font::TextData* axData);
-		UInt32 CreateText(
+		void CreateText(
 			BSStringT<char>* axTextString, int* aiWidth, int* aiHeight,
 			int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
 			const NiColorA* axFontColor, NiTriShape** apTextShape, NiTriShape** apIconShape);
-		NiTriShape* MakeString(
+		NiAVObject* MakeString(
 			float afStartX, float afStartY, float afZ,
 			BSStringT<char>* apTextString, int* aiWidth, bool abPrepareObject,
 			const NiColorA* arg1C, bool abUpperLeftCorner, bool abPrepareObject_1);

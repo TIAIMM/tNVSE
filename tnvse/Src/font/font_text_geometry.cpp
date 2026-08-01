@@ -279,7 +279,7 @@ namespace fonthook
 			escaped.c_str());
 	}
 
-	static UInt32 CreateFreeTypePreparedText(
+	static void CreateFreeTypePreparedText(
 		FontEx* font,
 		Font::TextData& textData,
 		int* outputWidth,
@@ -297,7 +297,8 @@ namespace fonthook
 		{
 			*textShape = CreateEmptyFreeTypeTextShape(font, true);
 			font->ButtonIcons.Clear(1);
-			return ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&textData));
+			ThisStdCall(0x7593E0, reinterpret_cast<char*>(&textData));
+			return;
 		}
 		builder.ReserveGlyphs(static_cast<size_t>(std::max(0, textData.iCharCount)));
 		if (outputWidth)
@@ -393,8 +394,8 @@ namespace fonthook
 		{
 			*textShape = CreateEmptyFreeTypeTextShape(font, true);
 			font->ButtonIcons.Clear(1);
-			return ThisStdCall<UInt32>(0x7593E0,
-				reinterpret_cast<char*>(&textData));
+			ThisStdCall(0x7593E0, reinterpret_cast<char*>(&textData));
+			return;
 		}
 		const std::shared_ptr<const PreparedDirectTextSidecar>
 			directSidecar = builder.UsesSealedDirectProfile()
@@ -513,11 +514,11 @@ namespace fonthook
 			*textShape = textObject;
 		}
 		font->ButtonIcons.Clear(1);
-		return ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&textData));
+		ThisStdCall(0x7593E0, reinterpret_cast<char*>(&textData));
 	}
 
 	// ==================== FontEx::CreateText ====================
-	UInt32 FontEx::CreateText(
+	void FontEx::CreateText(
 		BSStringT<char>* axTextString, int* aiWidth, int* aiHeight,
 		int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
 		const NiColorA* axFontColor, NiTriShape** apTextShape, NiTriShape** apIconShape)
@@ -526,9 +527,10 @@ namespace fonthook
 		const bool freeTypeActive = IsFreeTypeFontActive(this);
 		if (!g_bEnableMultibyteFontHook && !freeTypeActive)
 		{
-			return CallOriginalFontCreateText(this, axTextString, aiWidth,
+			CallOriginalFontCreateText(this, axTextString, aiWidth,
 				aiHeight, aiLineStart, aiLineEnd, aiFlags, aiLineBreakChar,
 				axFontColor, apTextShape, apIconShape);
+			return;
 		}
 
 		auto* extraGlyphs = GetExtraGlyphs(this->iFontNum);
@@ -582,16 +584,18 @@ namespace fonthook
 							this->iFontNum);
 					}
 				}
-				return ThisStdCall<UInt32>(0x7593E0,
+				ThisStdCall(0x7593E0,
 					reinterpret_cast<char*>(&textData));
+				return;
 			}
 		}
 
 		if (freeTypeActive)
 		{
-			return CreateFreeTypePreparedText(this, textData, aiWidth,
+			CreateFreeTypePreparedText(this, textData, aiWidth,
 				aiFlags, aiLineBreakChar, axFontColor, apTextShape, apIconShape,
 				rasterScale);
+			return;
 		}
 		vectorfont::FreeTypePerfScope extendedFntPerf(
 			vectorfont::FreeTypePerfPhase::ExtendedFntGeometry);
@@ -708,11 +712,11 @@ namespace fonthook
 				pIconGeomData->m_usVertices, pIconGeomData->m_pkVertex);
 		}
 		this->ButtonIcons.Clear(1);
-		return ThisStdCall(0x7593E0, (char*)&textData);
+		ThisStdCall(0x7593E0, (char*)&textData);
 	}
 
 	// ==================== FontEx::MakeString ====================
-	NiTriShape* FontEx::MakeString(
+	NiAVObject* FontEx::MakeString(
 		float afStartX, float afStartY, float afZ,
 		BSStringT<char>* apTextString, int* aiWidth, bool abPrepareObject,
 		const NiColorA* arg1C, bool abUpperLeftCorner, bool abPrepareObject_1)

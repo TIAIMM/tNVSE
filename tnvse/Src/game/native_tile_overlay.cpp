@@ -3,6 +3,7 @@
 #include "BSMemory.hpp"
 #include "font_glyphs.h"
 #include "font_manager.h"
+#include "hook_identity.h"
 #include "InterfaceManager.hpp"
 #include "Menu.hpp"
 #include "SafeWrite.h"
@@ -58,16 +59,17 @@ namespace fonthook
 		constexpr size_t kMenuBaseVtableEntryCount = 18;
 		constexpr size_t kMenuGetIdVtableIndex = 13;
 		constexpr SInt32 kImeMenuDepthContribution = -1000000;
-		// FOPipboyManager vtable slot 3 is FORenderedMenu::Render
-		// (FalloutNV.exe 0x7FBA00). It captures the UI into the Pip-Boy's
+		// FOPipboyManager vtable slot 3 is FORenderedMenu::Draw
+		// (FalloutNV.exe 0x7FBA00; symbolized test build 0x82674410). It
+		// captures the UI into the Pip-Boy's
 		// 1280x960 render target before the ordinary screen-space UI pass.
-		constexpr SIZE_T kPipboyRenderVtableEntry = 0x10780B8;
-		constexpr SIZE_T kVanillaRenderedMenuRender = 0x7FBA00;
+		constexpr SIZE_T kPipboyDrawVtableEntry = 0x10780B8;
+		constexpr SIZE_T kVanillaRenderedMenuDraw = 0x7FBA00;
 
 		using CreateMenuByClassFn =
 			Menu* (__thiscall*)(void*, UInt32);
-		using RenderedMenuRenderFn =
-			char* (__thiscall*)(void*, int, int, int);
+		using RenderedMenuDrawFn =
+			void (__thiscall*)(void*, int, int, int);
 
 		struct NativeTileOverlayState
 		{
@@ -111,11 +113,11 @@ namespace fonthook
 		std::array<SIZE_T, kMenuBaseVtableEntryCount + 1>
 			s_imeMenuVtable = {};
 		CreateMenuByClassFn s_originalCreateMenuByClass = nullptr;
-		RenderedMenuRenderFn s_originalPipboyRender = nullptr;
+		RenderedMenuDrawFn s_originalPipboyDraw = nullptr;
 		bool s_imeMenuFactoryInstalled = false;
 		bool s_imeMenuFactoryInstallFailed = false;
-		bool s_pipboyRenderHookInstalled = false;
-		bool s_pipboyRenderHookInstallFailed = false;
+		bool s_pipboyDrawHookInstalled = false;
+		bool s_pipboyDrawHookInstallFailed = false;
 		bool s_loggedPipboyRttExclusion = false;
 		bool s_creatingImeMenu = false;
 
@@ -170,7 +172,7 @@ namespace fonthook
 				: nullptr;
 		}
 
-		char* __fastcall PipboyRenderedMenuRenderHook(
+		void __fastcall PipboyRenderedMenuDrawHook(
 			void* renderedMenu,
 			void*,
 			int arg2,
@@ -197,10 +199,8 @@ namespace fonthook
 				}
 			}
 
-			char* result = s_originalPipboyRender
-				? s_originalPipboyRender(
-					renderedMenu, arg2, arg3, arg4)
-				: nullptr;
+			if (s_originalPipboyDraw)
+				s_originalPipboyDraw(renderedMenu, arg2, arg3, arg4);
 
 			if (imeNode && !wasAppCulled)
 			{
@@ -213,60 +213,86 @@ namespace fonthook
 						imeNode);
 				}
 			}
-			return result;
 		}
 
-		bool EnsurePipboyRenderExclusionHook()
+		bool EnsurePipboyDrawExclusionHook()
 		{
-			if (s_pipboyRenderHookInstalled)
+			if (s_pipboyDrawHookInstalled)
 				return true;
-			if (s_pipboyRenderHookInstallFailed)
+			if (s_pipboyDrawHookInstallFailed)
 				return false;
+
+			if (!hook_identity::IsAccessibleRegion(
+				kPipboyDrawVtableEntry, sizeof(SIZE_T), false))
+			{
+				s_pipboyDrawHookInstallFailed = true;
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: cannot install Pip-Boy RTT exclusion hook; FORenderedMenu::Draw vtable entry is unreadable entry=0x%08X",
+					static_cast<UInt32>(kPipboyDrawVtableEntry));
+				return false;
+			}
 
 			const SIZE_T currentTarget =
 				*reinterpret_cast<const SIZE_T*>(
-					kPipboyRenderVtableEntry);
+					kPipboyDrawVtableEntry);
 			if (currentTarget == reinterpret_cast<SIZE_T>(
-					&PipboyRenderedMenuRenderHook))
+					&PipboyRenderedMenuDrawHook))
 			{
-				s_pipboyRenderHookInstalled =
-					s_originalPipboyRender != nullptr;
-				return s_pipboyRenderHookInstalled;
+				s_pipboyDrawHookInstalled =
+					s_originalPipboyDraw != nullptr;
+				return s_pipboyDrawHookInstalled;
 			}
-			if (!currentTarget)
+			if (!hook_identity::IsExecutableTarget(currentTarget))
 			{
-				s_pipboyRenderHookInstallFailed = true;
+				s_pipboyDrawHookInstallFailed = true;
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: cannot install Pip-Boy RTT exclusion hook; empty vtable entry at 0x%08X",
-					static_cast<UInt32>(kPipboyRenderVtableEntry));
+					"tnvse_native_overlay: cannot install Pip-Boy RTT exclusion hook; non-executable FORenderedMenu::Draw target=0x%08X entry=0x%08X",
+					static_cast<UInt32>(currentTarget),
+					static_cast<UInt32>(kPipboyDrawVtableEntry));
 				return false;
 			}
 
-			s_originalPipboyRender =
-				reinterpret_cast<RenderedMenuRenderFn>(currentTarget);
+			s_originalPipboyDraw =
+				reinterpret_cast<RenderedMenuDrawFn>(currentTarget);
 			SafeWrite32(
-				kPipboyRenderVtableEntry,
+				kPipboyDrawVtableEntry,
 				reinterpret_cast<SIZE_T>(
-					&PipboyRenderedMenuRenderHook));
-			s_pipboyRenderHookInstalled = true;
+					&PipboyRenderedMenuDrawHook));
+			s_pipboyDrawHookInstalled =
+				*reinterpret_cast<const SIZE_T*>(kPipboyDrawVtableEntry)
+					== reinterpret_cast<SIZE_T>(
+						&PipboyRenderedMenuDrawHook);
+			if (!s_pipboyDrawHookInstalled)
+			{
+				SafeWrite32(kPipboyDrawVtableEntry, currentTarget);
+				s_originalPipboyDraw = nullptr;
+				s_pipboyDrawHookInstallFailed = true;
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: Pip-Boy FORenderedMenu::Draw hook write verification failed entry=0x%08X",
+					static_cast<UInt32>(kPipboyDrawVtableEntry));
+				return false;
+			}
 			gLog.FormattedMessage(
 				"tnvse_native_overlay: installed Pip-Boy RTT exclusion hook chainedTarget=0x%08X vanilla=%d",
 				static_cast<UInt32>(currentTarget),
-				currentTarget == kVanillaRenderedMenuRender ? 1 : 0);
+				currentTarget == kVanillaRenderedMenuDraw ? 1 : 0);
 			return true;
 		}
 
 		bool EnsureImeMenuFactory()
 		{
-			if (!EnsurePipboyRenderExclusionHook())
+			if (!EnsurePipboyDrawExclusionHook())
 				return false;
 			if (s_imeMenuFactoryInstalled)
 				return true;
 			if (s_imeMenuFactoryInstallFailed)
 				return false;
 
-			if (*reinterpret_cast<const UInt8*>(
-					kCreateMenuByClassCall) != 0xE8)
+			SIZE_T currentTarget = 0;
+			if (!hook_identity::ReadRel32Target(
+				kCreateMenuByClassCall,
+				hook_identity::Rel32Opcode::Call,
+				currentTarget))
 			{
 				s_imeMenuFactoryInstallFailed = true;
 				gLog.FormattedMessage(
@@ -275,14 +301,24 @@ namespace fonthook
 				return false;
 			}
 
-			const SIZE_T currentTarget =
-				GetRelJumpAddr(kCreateMenuByClassCall);
 			if (currentTarget == reinterpret_cast<SIZE_T>(
 					&CreateMenuByClassHook))
 			{
 				s_imeMenuFactoryInstalled =
 					s_originalCreateMenuByClass != nullptr;
 				return s_imeMenuFactoryInstalled;
+			}
+			if (!hook_identity::IsExecutableTarget(currentTarget)
+				|| !hook_identity::IsAccessibleRegion(
+					kMenuBaseVtable - sizeof(SIZE_T),
+					(kMenuBaseVtableEntryCount + 1) * sizeof(SIZE_T),
+					false))
+			{
+				s_imeMenuFactoryInstallFailed = true;
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: cannot install IME Menu factory hook; invalid CreateMenuByClass target=0x%08X or Menu vtable",
+					static_cast<UInt32>(currentTarget));
+				return false;
 			}
 
 			const SIZE_T* vanillaVtable =
@@ -299,7 +335,22 @@ namespace fonthook
 			WriteRelCall(
 				kCreateMenuByClassCall,
 				&CreateMenuByClassHook);
-			s_imeMenuFactoryInstalled = true;
+			s_imeMenuFactoryInstalled =
+				hook_identity::MatchesRel32Target(
+					kCreateMenuByClassCall,
+					hook_identity::Rel32Opcode::Call,
+					reinterpret_cast<SIZE_T>(
+						&CreateMenuByClassHook));
+			if (!s_imeMenuFactoryInstalled)
+			{
+				WriteRelCall(kCreateMenuByClassCall, currentTarget);
+				s_originalCreateMenuByClass = nullptr;
+				s_imeMenuFactoryInstallFailed = true;
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: IME Menu factory hook write verification failed call=0x%08X",
+					static_cast<UInt32>(kCreateMenuByClassCall));
+				return false;
+			}
 			gLog.FormattedMessage(
 				"tnvse_native_overlay: installed dedicated IME Menu factory class=%u chainedTarget=0x%08X",
 				kImeMenuClass,

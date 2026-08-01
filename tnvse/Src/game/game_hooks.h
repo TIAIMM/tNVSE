@@ -15,7 +15,6 @@ namespace fonthook
 	void InitDoorPromptHooksCHS();
 	void InitDoorPromptHooksKOR();
 	void InitPluralHooks();
-	void InitVertSpacingHook();
 	FontHookInstallState InitFontHooks();
 	bool AreMultibyteFontHooksInstalled();
 	bool AreFreeTypeFontHooksInstalled();
@@ -23,11 +22,11 @@ namespace fonthook
 	Font* CallOriginalFontInit(
 		Font* font, int fontNum, char* filename, bool load);
 	void CallOriginalFontLoad(Font* font);
-	UInt32 CallOriginalFontCreateText(
+	void CallOriginalFontCreateText(
 		Font* font, BSStringT<char>* text, int* width, int* height,
 		int lineStart, int lineEnd, int flags, char lineBreak,
 		const NiColorA* color, NiTriShape** textShape, NiTriShape** iconShape);
-	NiTriShape* CallOriginalFontMakeString(
+	NiAVObject* CallOriginalFontMakeString(
 		Font* font, float startX, float startY, float z,
 		BSStringT<char>* text, int* width, bool prepareObject,
 		const NiColorA* color, bool upperLeftCorner, bool prepareObjectFinal);

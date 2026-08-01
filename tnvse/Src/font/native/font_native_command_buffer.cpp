@@ -702,8 +702,8 @@ namespace fonthook::vectorfont
 				return NativeA8CommandFallback::Nested;
 			}
 			if (!IsNativeA8AccumulatorHookCurrent()
-				|| !IsNativeA8SortedTraversalHookCurrent()
-				|| !IsA8TileRenderPassHookCurrent())
+				|| !IsNativeA8RenderAlphaGeometryHookCurrent()
+				|| !IsA8RenderPassImmediatelyHookCurrent())
 			{
 				return NativeA8CommandFallback::Hook;
 			}

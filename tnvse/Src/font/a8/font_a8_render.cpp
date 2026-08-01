@@ -605,18 +605,18 @@ namespace fonthook::vectorfont
 	void FinalizeA8RendererDetection()
 	{
 		const bool accumulatorReady = HookNativeA8Accumulator();
-		const bool tileRouteReady = HookTileRenderPass();
+		const bool immediateRouteReady = HookRenderPassImmediately();
 		const bool shaderReady = InitializeNativeA8Renderer(true, true);
 		const bool nativeReady =
-			accumulatorReady && tileRouteReady && shaderReady;
+			accumulatorReady && immediateRouteReady && shaderReady;
 		SynchronizePersistentFontCacheRoute(ResolveFontAtlasRoute(
 			nativeReady, g_bEnableFreeTypeFontAggressivePerformanceMode));
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: initialization nativeReady=%u accumulator=%u sortedUpload=%u tileRoute=%u shader=%u",
+			"tnvse_freetype_native: initialization nativeReady=%u accumulator=%u alphaRenderHook=%u immediateRoute=%u shader=%u",
 			nativeReady ? 1 : 0,
 			accumulatorReady ? 1 : 0,
-			State().sortedTileRenderHookInstalled ? 1 : 0,
-			tileRouteReady ? 1 : 0,
+			State().renderAlphaGeometryHookInstalled ? 1 : 0,
+			immediateRouteReady ? 1 : 0,
 			shaderReady ? 1 : 0);
 	}
 
@@ -626,7 +626,7 @@ namespace fonthook::vectorfont
 			return;
 		HandleNativeA8RendererMainLoop();
 		HookNativeA8Accumulator();
-		HookTileRenderPass();
+		HookRenderPassImmediately();
 		EnforceCpuMemoryBudget("main-loop");
 	}
 
@@ -639,7 +639,7 @@ namespace fonthook::vectorfont
 	bool IsA8RendererAvailable()
 	{
 		return g_bEnableFreeTypeFontRendering
-			&& HookNativeA8Accumulator() && HookTileRenderPass()
+			&& HookNativeA8Accumulator() && HookRenderPassImmediately()
 			&& InitializeNativeA8Renderer(false, false);
 	}
 

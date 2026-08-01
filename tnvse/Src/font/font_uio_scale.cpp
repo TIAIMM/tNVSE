@@ -188,12 +188,12 @@ extern "C" void __cdecl tnvse_SetFreeTypeCreateTextScale(
 	}
 }
 
-extern "C" UInt32 __fastcall tnvse_FreeTypeCreateTextDispatch(
+extern "C" void __fastcall tnvse_FreeTypeCreateTextDispatch(
 	fonthook::FontEx* font, void*, BSStringT<char>* text, int* width, int* height,
 	int lineStart, int lineEnd, int flags, char lineBreak,
 	const NiColorA* color, NiTriShape** textShape, NiTriShape** iconShape)
 {
-	return font->CreateText(text, width, height, lineStart, lineEnd, flags,
+	font->CreateText(text, width, height, lineStart, lineEnd, flags,
 		lineBreak, color, textShape, iconShape);
 }
 
