@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -27,6 +28,7 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kRegisterObjectVtableEntry =
 			kBSShaderAccumulatorVtable + kRegisterObjectVtableSlot * sizeof(void*);
 		inline constexpr UInt32 kMaximumMissingMetadataLogs = 8;
+		inline constexpr size_t kMaximumStableTieItems = 8192;
 
 		using RegisterObjectFn = bool(__thiscall*)(BSShaderAccumulator*, NiGeometry*);
 
@@ -72,6 +74,14 @@ namespace fonthook::vectorfont
 			UInt32 occurrences = 0;
 		};
 
+		struct StableTileTieItem
+		{
+			NiGeometry* geometry = nullptr;
+			float depth = 0.0f;
+			UInt32 registrationOrdinal = 0;
+			UInt32 registrationBlockOrdinal = 0;
+		};
+
 		struct NativePreflightFrameContext
 		{
 			UInt32 generation = 0;
@@ -85,6 +95,15 @@ namespace fonthook::vectorfont
 		{
 			BSShaderAccumulator* pendingAccumulator = nullptr;
 			std::vector<RegisteredFacade> pendingRegistrations;
+			// Sort() copies its source NiSortedObjectList into m_ppkItems without
+			// consuming the list. Snapshot that non-owning AddTail order only when
+			// a mixed equal-depth FreeType repair may be needed.
+			std::vector<NiGeometry*> acceptedTileRegistrations;
+			std::vector<UInt32> acceptedRegistrationLookup;
+			std::vector<UInt32> sortedRegistrationOrdinals;
+			std::vector<UInt32> sortedItemIndicesByRegistrationOrdinal;
+			std::vector<UInt32> registrationBlockOrdinals;
+			std::vector<StableTileTieItem> stableTieItems;
 			std::vector<UInt32> registrationLookup;
 			std::vector<NiTriShape*> frameCandidates;
 			std::vector<SortedFrameEntry> frameEntries;
@@ -201,6 +220,18 @@ namespace fonthook::vectorfont
 			const size_t bytes =
 				scratch.pendingRegistrations.capacity()
 					* sizeof(RegisteredFacade)
+				+ scratch.acceptedTileRegistrations.capacity()
+					* sizeof(NiGeometry*)
+				+ scratch.acceptedRegistrationLookup.capacity()
+					* sizeof(UInt32)
+				+ scratch.sortedRegistrationOrdinals.capacity()
+					* sizeof(UInt32)
+				+ scratch.sortedItemIndicesByRegistrationOrdinal.capacity()
+					* sizeof(UInt32)
+				+ scratch.registrationBlockOrdinals.capacity()
+					* sizeof(UInt32)
+				+ scratch.stableTieItems.capacity()
+					* sizeof(StableTileTieItem)
 				+ scratch.registrationLookup.capacity() * sizeof(UInt32)
 				+ scratch.frameCandidates.capacity() * sizeof(NiTriShape*)
 				+ scratch.frameEntries.capacity() * sizeof(SortedFrameEntry)
@@ -231,12 +262,43 @@ namespace fonthook::vectorfont
 			scratch.virtualStockSlots.clear();
 			scratch.pendingAccumulator = nullptr;
 			scratch.pendingRegistrations.clear();
+			scratch.acceptedTileRegistrations.clear();
 			if (++scratch.registrationCycle == 0)
 				++scratch.registrationCycle;
 			if (scratch.pendingRegistrations.capacity() > 8192)
 			{
 				std::vector<RegisteredFacade>().swap(
 					scratch.pendingRegistrations);
+			}
+			if (scratch.acceptedTileRegistrations.capacity() > 8192)
+			{
+				std::vector<NiGeometry*>().swap(
+					scratch.acceptedTileRegistrations);
+			}
+			if (scratch.acceptedRegistrationLookup.capacity() > 16384)
+			{
+				std::vector<UInt32>().swap(
+					scratch.acceptedRegistrationLookup);
+			}
+			if (scratch.sortedRegistrationOrdinals.capacity() > 8192)
+			{
+				std::vector<UInt32>().swap(
+					scratch.sortedRegistrationOrdinals);
+			}
+			if (scratch.sortedItemIndicesByRegistrationOrdinal.capacity() > 8192)
+			{
+				std::vector<UInt32>().swap(
+					scratch.sortedItemIndicesByRegistrationOrdinal);
+			}
+			if (scratch.registrationBlockOrdinals.capacity() > 8192)
+			{
+				std::vector<UInt32>().swap(
+					scratch.registrationBlockOrdinals);
+			}
+			if (scratch.stableTieItems.capacity() > 8192)
+			{
+				std::vector<StableTileTieItem>().swap(
+					scratch.stableTieItems);
 			}
 			if (scratch.registrationLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.registrationLookup);
@@ -273,6 +335,18 @@ namespace fonthook::vectorfont
 			{
 				std::vector<RegisteredFacade>().swap(
 					scratch.pendingRegistrations);
+				std::vector<NiGeometry*>().swap(
+					scratch.acceptedTileRegistrations);
+				std::vector<UInt32>().swap(
+					scratch.acceptedRegistrationLookup);
+				std::vector<UInt32>().swap(
+					scratch.sortedRegistrationOrdinals);
+				std::vector<UInt32>().swap(
+					scratch.sortedItemIndicesByRegistrationOrdinal);
+				std::vector<UInt32>().swap(
+					scratch.registrationBlockOrdinals);
+				std::vector<StableTileTieItem>().swap(
+					scratch.stableTieItems);
 				std::vector<UInt32>().swap(scratch.registrationLookup);
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
 				std::vector<NiTriShape*>().swap(scratch.frameCandidates);
@@ -308,17 +382,16 @@ namespace fonthook::vectorfont
 		{
 			scratch.pendingAccumulator = nullptr;
 			scratch.pendingRegistrations.clear();
+			scratch.acceptedTileRegistrations.clear();
 		}
 
-		UInt64 RecordSortedRegistration(BSShaderAccumulator* accumulator,
-			NiTriShape* facade, const A8ShapeMetadataPtr& metadata)
+		bool EnsurePendingAccumulator(BSShaderAccumulator* accumulator)
 		{
 			SortedPayloadScratch& scratch = s_sortedPayloadScratch;
 			const bool hookCurrent = ReadSortedTileRenderCallTarget()
 				== reinterpret_cast<SortedTileRenderFn>(
 					&NativeA8RenderSorted);
-			if (!accumulator || !facade || !metadata || scratch.active
-				|| scratch.nestedBypassDepth
+			if (!accumulator || scratch.active || scratch.nestedBypassDepth
 				|| !hookCurrent)
 			{
 				if (!scratch.active && !scratch.nestedBypassDepth
@@ -326,7 +399,7 @@ namespace fonthook::vectorfont
 				{
 					ClearPendingRegistrations(scratch);
 				}
-				return 0;
+				return false;
 			}
 			if (scratch.pendingAccumulator != accumulator)
 			{
@@ -335,8 +408,371 @@ namespace fonthook::vectorfont
 				if (++scratch.registrationCycle == 0)
 					++scratch.registrationCycle;
 			}
+			return true;
+		}
+
+		UInt64 RecordSortedRegistration(BSShaderAccumulator* accumulator,
+			NiTriShape* facade, const A8ShapeMetadataPtr& metadata)
+		{
+			SortedPayloadScratch& scratch = s_sortedPayloadScratch;
+			if (!facade || !metadata || !EnsurePendingAccumulator(accumulator))
+				return 0;
 			scratch.pendingRegistrations.push_back({ facade, metadata });
 			return scratch.registrationCycle;
+		}
+
+		bool IsFreeTypeFacade(const NiGeometry* geometry);
+
+		bool RestoreFreeTypeMixedEqualDepthPainterOrder(
+			SortedPayloadScratch& scratch, BSShaderAccumulator* accumulator)
+		{
+			if (scratch.pendingRegistrations.empty())
+				return true;
+			const size_t itemCount = accumulator
+				? static_cast<size_t>(accumulator->m_iNumItems) : 0;
+			auto reject = []()
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SortedMixedEqualDepthRestoreRejected);
+				return false;
+			};
+			if (!accumulator || scratch.pendingAccumulator != accumulator
+				|| !accumulator->m_ppkItems || !accumulator->m_pfDepths
+				|| itemCount < 2 || itemCount > kMaximumStableTieItems)
+			{
+				return itemCount < 2 ? true : reject();
+			}
+			bool hasMixedTieCandidate = false;
+			for (size_t runBegin = 0;
+				runBegin < itemCount && !hasMixedTieCandidate;)
+			{
+				const float runDepth = accumulator->m_pfDepths[runBegin];
+				size_t runEnd = runBegin + 1u;
+				if (std::isfinite(runDepth))
+				{
+					while (runEnd < itemCount
+						&& std::isfinite(accumulator->m_pfDepths[runEnd])
+						&& accumulator->m_pfDepths[runEnd] == runDepth)
+					{
+						++runEnd;
+					}
+				}
+				bool hasFreeType = false;
+				bool hasStock = false;
+				for (size_t item = runBegin; item < runEnd; ++item)
+				{
+					const bool isFreeType =
+						IsFreeTypeFacade(accumulator->m_ppkItems[item]);
+					hasFreeType = hasFreeType || isFreeType;
+					hasStock = hasStock || !isFreeType;
+				}
+				hasMixedTieCandidate = hasFreeType && hasStock
+					&& runEnd - runBegin > 1u;
+				runBegin = runEnd;
+			}
+			if (!hasMixedTieCandidate)
+				return true;
+			const NiSortedObjectList* sourceList =
+				accumulator->m_pGeometryList
+					? accumulator->m_pGeometryList : &accumulator->m_kItems;
+			if (!sourceList || sourceList->GetSize() != itemCount)
+				return reject();
+			scratch.acceptedTileRegistrations.clear();
+			scratch.acceptedTileRegistrations.reserve(itemCount);
+			NiTListIterator position = sourceList->GetHeadPos();
+			while (position
+				&& scratch.acceptedTileRegistrations.size() < itemCount)
+			{
+				scratch.acceptedTileRegistrations.push_back(
+					sourceList->GetNext(position));
+			}
+			if (position
+				|| scratch.acceptedTileRegistrations.size() != itemCount)
+			{
+				return reject();
+			}
+
+			constexpr UInt32 kConsumedBit = 0x80000000u;
+			constexpr UInt32 kIndexMask = 0x7FFFFFFFu;
+			PrepareLookup(scratch.acceptedRegistrationLookup, itemCount);
+			const size_t lookupMask =
+				scratch.acceptedRegistrationLookup.size() - 1u;
+			for (size_t ordinal = 0; ordinal < itemCount; ++ordinal)
+			{
+				NiGeometry* geometry =
+					scratch.acceptedTileRegistrations[ordinal];
+				if (!geometry)
+					return reject();
+				size_t slot = HashPointer(geometry) & lookupMask;
+				bool inserted = false;
+				for (size_t probe = 0;
+					probe < scratch.acceptedRegistrationLookup.size(); ++probe)
+				{
+					const UInt32 stored =
+						scratch.acceptedRegistrationLookup[slot];
+					if (!stored)
+					{
+						scratch.acceptedRegistrationLookup[slot] =
+							static_cast<UInt32>(ordinal + 1u);
+						inserted = true;
+						break;
+					}
+					const size_t existing =
+						static_cast<size_t>((stored & kIndexMask) - 1u);
+					if (existing < itemCount
+						&& scratch.acceptedTileRegistrations[existing]
+							== geometry)
+					{
+						// Ambiguous repeated geometry is legal for the engine but
+						// cannot be assigned a unique insertion ordinal here.
+						return reject();
+					}
+					slot = (slot + 1u) & lookupMask;
+				}
+				if (!inserted)
+					return reject();
+			}
+
+			scratch.sortedRegistrationOrdinals.resize(itemCount);
+			scratch.sortedItemIndicesByRegistrationOrdinal.resize(itemCount);
+			for (size_t item = 0; item < itemCount; ++item)
+			{
+				NiGeometry* geometry = accumulator->m_ppkItems[item];
+				size_t slot = HashPointer(geometry) & lookupMask;
+				bool found = false;
+				for (size_t probe = 0;
+					probe < scratch.acceptedRegistrationLookup.size(); ++probe)
+				{
+					const UInt32 stored =
+						scratch.acceptedRegistrationLookup[slot];
+					if (!stored)
+						break;
+					const size_t ordinal = static_cast<size_t>(
+						(stored & kIndexMask) - 1u);
+					if (ordinal < itemCount
+						&& scratch.acceptedTileRegistrations[ordinal]
+							== geometry)
+					{
+						if (stored & kConsumedBit)
+							return reject();
+						scratch.acceptedRegistrationLookup[slot] =
+							stored | kConsumedBit;
+						scratch.sortedRegistrationOrdinals[item] =
+							static_cast<UInt32>(ordinal);
+						scratch.sortedItemIndicesByRegistrationOrdinal[ordinal] =
+							static_cast<UInt32>(item);
+						found = true;
+						break;
+					}
+					slot = (slot + 1u) & lookupMask;
+				}
+				if (!found)
+					return reject();
+			}
+
+			// Treat a Virtual-stock logical text as one painter-order block. Its
+			// primary/follower array order must remain ascending by registration so
+			// the stock reverse traversal submits slot 0 through primary and the
+			// later topology validator still sees one contiguous span.
+			scratch.registrationBlockOrdinals.resize(itemCount);
+			for (size_t ordinal = 0; ordinal < itemCount; ++ordinal)
+			{
+				scratch.registrationBlockOrdinals[ordinal] =
+					static_cast<UInt32>(ordinal);
+			}
+			auto lookupAcceptedOrdinal = [&](const NiGeometry* geometry,
+				size_t& ordinal)
+			{
+				if (!geometry)
+					return false;
+				size_t slot = HashPointer(geometry) & lookupMask;
+				for (size_t probe = 0;
+					probe < scratch.acceptedRegistrationLookup.size(); ++probe)
+				{
+					const UInt32 stored =
+						scratch.acceptedRegistrationLookup[slot];
+					if (!stored)
+						return false;
+					const size_t candidate = static_cast<size_t>(
+						(stored & kIndexMask) - 1u);
+					if (candidate < itemCount
+						&& scratch.acceptedTileRegistrations[candidate]
+							== geometry)
+					{
+						ordinal = candidate;
+						return true;
+					}
+					slot = (slot + 1u) & lookupMask;
+				}
+				return false;
+			};
+			for (const RegisteredFacade& registration
+				: scratch.pendingRegistrations)
+			{
+				const A8ShapeMetadata* metadata = registration.metadata.get();
+				if (!metadata
+					|| metadata->backend
+						!= FreeTypeShapeBackend::VirtualStockNative)
+				{
+					continue;
+				}
+				if (!metadata->virtualStockPrimary
+					|| !metadata->virtualStockGroup)
+				{
+					return reject();
+				}
+				VirtualStockShapeGroup& group =
+					*metadata->virtualStockGroup;
+				std::lock_guard<std::mutex> lock(group.mutex);
+				const VirtualStockFrameMode mode =
+					group.frameMode.load(std::memory_order_acquire);
+				if (mode == VirtualStockFrameMode::Culled
+					|| group.registeredSlotCount == 0)
+				{
+					continue;
+				}
+				const size_t slotCount = group.slots.size();
+				if (mode != VirtualStockFrameMode::Facade
+					|| group.registrationAccumulator != accumulator
+					|| group.registrationCycle != scratch.registrationCycle
+					|| !group.registrationContiguous
+					|| group.duplicateRegistration
+					|| !slotCount
+					|| group.registeredSlotCount != slotCount
+					|| group.primarySlot + 1u != slotCount)
+				{
+					return reject();
+				}
+				if (slotCount == 1u)
+					continue;
+
+				size_t blockStart = itemCount;
+				float blockDepth = 0.0f;
+				for (SInt32 slotIndex =
+						static_cast<SInt32>(group.primarySlot);
+					slotIndex >= 0; --slotIndex)
+				{
+					const size_t offset = static_cast<size_t>(
+						group.primarySlot - static_cast<UInt32>(slotIndex));
+					size_t ordinal = itemCount;
+					if (!lookupAcceptedOrdinal(
+						group.slots[slotIndex].shape, ordinal))
+					{
+						return reject();
+					}
+					if (!offset)
+						blockStart = ordinal;
+					else if (ordinal != blockStart + offset)
+						return reject();
+					const size_t sortedItem =
+						scratch.sortedItemIndicesByRegistrationOrdinal[ordinal];
+					if (sortedItem >= itemCount)
+						return reject();
+					const float depth = accumulator->m_pfDepths[sortedItem];
+					if (!std::isfinite(depth)
+						|| (offset && depth != blockDepth))
+					{
+						return reject();
+					}
+					if (!offset)
+						blockDepth = depth;
+				}
+				for (size_t offset = 0; offset < slotCount; ++offset)
+				{
+					scratch.registrationBlockOrdinals[blockStart + offset] =
+						static_cast<UInt32>(blockStart);
+				}
+			}
+
+			for (size_t runBegin = 0; runBegin < itemCount;)
+			{
+				const float runDepth = accumulator->m_pfDepths[runBegin];
+				size_t runEnd = runBegin + 1u;
+				if (std::isfinite(runDepth))
+				{
+					while (runEnd < itemCount
+						&& std::isfinite(accumulator->m_pfDepths[runEnd])
+						&& accumulator->m_pfDepths[runEnd] == runDepth)
+					{
+						++runEnd;
+					}
+				}
+				bool hasFreeType = false;
+				bool hasStock = false;
+				bool painterOrderChanged = false;
+				for (size_t item = runBegin; item < runEnd; ++item)
+				{
+					const bool isFreeType =
+						IsFreeTypeFacade(accumulator->m_ppkItems[item]);
+					hasFreeType = hasFreeType || isFreeType;
+					hasStock = hasStock || !isFreeType;
+					if (item > runBegin)
+					{
+						const UInt32 previousOrdinal =
+							scratch.sortedRegistrationOrdinals[item - 1u];
+						const UInt32 currentOrdinal =
+							scratch.sortedRegistrationOrdinals[item];
+						const UInt32 previousBlock =
+							scratch.registrationBlockOrdinals[previousOrdinal];
+						const UInt32 currentBlock =
+							scratch.registrationBlockOrdinals[currentOrdinal];
+						// FinishAccumulating consumes the array backwards. Blocks
+						// therefore descend by registration, while members of one
+						// Virtual-stock block retain their original ascending order.
+						painterOrderChanged = painterOrderChanged
+							|| currentBlock > previousBlock
+							|| (currentBlock == previousBlock
+								&& currentOrdinal < previousOrdinal);
+					}
+				}
+				if (hasFreeType && hasStock && painterOrderChanged
+					&& runEnd - runBegin > 1u)
+				{
+					scratch.stableTieItems.clear();
+					scratch.stableTieItems.reserve(runEnd - runBegin);
+					for (size_t item = runBegin; item < runEnd; ++item)
+					{
+						scratch.stableTieItems.push_back({
+							accumulator->m_ppkItems[item],
+							accumulator->m_pfDepths[item],
+							scratch.sortedRegistrationOrdinals[item],
+							scratch.registrationBlockOrdinals[
+								scratch.sortedRegistrationOrdinals[item]]
+						});
+					}
+					std::sort(scratch.stableTieItems.begin(),
+						scratch.stableTieItems.end(),
+						[](const StableTileTieItem& left,
+							const StableTileTieItem& right)
+						{
+							if (left.registrationBlockOrdinal
+								!= right.registrationBlockOrdinal)
+							{
+								return left.registrationBlockOrdinal
+									> right.registrationBlockOrdinal;
+							}
+							return left.registrationOrdinal
+								< right.registrationOrdinal;
+						});
+					for (size_t offset = 0;
+						offset < scratch.stableTieItems.size(); ++offset)
+					{
+						const StableTileTieItem& item =
+							scratch.stableTieItems[offset];
+						accumulator->m_ppkItems[runBegin + offset] =
+							item.geometry;
+						accumulator->m_pfDepths[runBegin + offset] =
+							item.depth;
+					}
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::SortedMixedEqualDepthRunRestored);
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::SortedMixedEqualDepthItemRestored,
+						static_cast<UInt64>(runEnd - runBegin));
+				}
+				runBegin = runEnd;
+			}
+			return true;
 		}
 
 		void PrepareRegistrationLookup(SortedPayloadScratch& scratch)
@@ -1194,6 +1630,13 @@ namespace fonthook::vectorfont
 			{
 				const size_t itemCount = static_cast<size_t>(
 					accumulator->m_iNumItems);
+				// NiBackToFrontAccumulator::Sort uses a depth-only quicksort. Its
+				// equal-key permutation changes when tNVSE adds facade geometry. The
+				// renderer consumes the result backwards, so mixed equal-depth runs
+				// must be stored in reverse AddTail order for later registrations to
+				// remain later/on top. Pure stock and pure FreeType ties stay untouched.
+				RestoreFreeTypeMixedEqualDepthPainterOrder(
+					scratch, accumulator);
 				scratch.frameEntries.clear();
 				scratch.fallbackMetadataOwners.clear();
 				scratch.payloadTemplates.clear();

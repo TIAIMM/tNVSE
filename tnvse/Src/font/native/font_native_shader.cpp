@@ -59,7 +59,12 @@ namespace fonthook::vectorfont
 			NiD3DRenderState, m_apkTextureStageTextures) == 0x10A0);
 
 		inline constexpr UInt32 kTileShaderCreate = 0xBCAE90;
+		inline constexpr UInt32 kTileShaderSetupGeometryTextures = 0xBCA760;
 		inline constexpr UInt32 kTileShaderUpdateConstants = 0xBCA980;
+		inline constexpr UInt32 kShaderSetupGeometryAlphaBlending = 0xBE1FF0;
+		inline constexpr UInt32 kShaderSetupGeometryAlphaTesting = 0xBE20B0;
+		inline constexpr UInt32 kShaderSetupGeometryRenderStates = 0xBE20E0;
+		inline constexpr UInt32 kTileShaderPostGeometry = 0xBCAC60;
 		inline constexpr UInt32 kShaderDeclarationCreate = 0xE76700;
 		inline constexpr UInt32 kTextureStageSetProperties = 0xBE0CF0;
 		inline constexpr UInt32 kTextureStageSetFilter = 0xE7DEF0;
@@ -72,6 +77,46 @@ namespace fonthook::vectorfont
 		inline constexpr UInt8 kStaticCompositeLayerMaskFirst = 8;
 		inline constexpr size_t kStaticCompositeLayerMaskCount = 8;
 		inline constexpr size_t kStaticCompositeShiftCount = 2;
+		inline constexpr char kAlphaFixesDllName[] = "Alpha Fixes.dll";
+		inline constexpr UInt32 kAlphaFixesPluginVersion = 252;
+		inline constexpr DWORD kAlphaFixesTimeDateStamp = 0x65FACE99;
+		inline constexpr SIZE_T kAlphaFixesImageSize = 0x9000;
+		inline constexpr SIZE_T kAlphaFixesSetBlendAlphaRva = 0x1700;
+
+		constexpr std::array<UInt8, 15> kAlphaFixesBlendPrologue = {
+			0x55, 0x8B, 0xEC, 0x56, 0x6A, 0x00, 0x6A, 0x00,
+			0xBE, 0xA0, 0x7F, 0xB9, 0x00, 0xFF, 0xD6
+		};
+		constexpr std::array<UInt8, 37> kAlphaFixesBlendPropertyLookup = {
+			0x8B, 0x45, 0x08, 0x83, 0xC4, 0x08, 0x8B, 0x48,
+			0x0C, 0x85, 0xC9, 0x0F, 0x84, 0x82, 0x00, 0x00,
+			0x00, 0x83, 0x79, 0x1C, 0xFF, 0x74, 0x7C, 0x8B,
+			0x00, 0x85, 0xC0, 0x74, 0x06, 0x0F, 0xB7, 0x40,
+			0x18, 0xEB, 0x02, 0x33, 0xC0
+		};
+		constexpr std::array<UInt8, 35> kAlphaFixesBlendPredicate = {
+			0x53, 0x8A, 0xD8, 0x89, 0x45, 0x08, 0x80, 0xE3,
+			0x01, 0x0F, 0x2F, 0x41, 0x28, 0x76, 0x0A, 0x8B,
+			0x41, 0x24, 0xC1, 0xE8, 0x03, 0xA8, 0x01, 0x74,
+			0x0A, 0x0F, 0x2F, 0x41, 0x2C, 0x77, 0x04, 0x84,
+			0xDB, 0x74, 0x42
+		};
+		constexpr std::array<UInt8, 12> kAlphaFixesBlendEnable = {
+			0x6A, 0x00, 0x6A, 0x01, 0xFF, 0xD6, 0x83, 0xC4,
+			0x08, 0x6A, 0x00, 0x84
+		};
+		constexpr std::array<UInt8, 37> kAlphaFixesPropertyBlendFunctions = {
+			0x8B, 0x45, 0x08, 0x0F, 0xB7, 0xC8, 0x8B, 0xC1,
+			0xD1, 0xE9, 0xC1, 0xE8, 0x05, 0x83, 0xE1, 0x0F,
+			0x83, 0xE0, 0x0F, 0x50, 0x51, 0xB8, 0xF0, 0x7F,
+			0xB9, 0x00, 0xFF, 0xD0, 0x83, 0xC4, 0x0C, 0x5B,
+			0x5E, 0x5D, 0xC2, 0x04, 0x00
+		};
+		constexpr std::array<UInt8, 20> kAlphaFixesDefaultBlendFunctions = {
+			0x6A, 0x07, 0x6A, 0x06, 0xB8, 0xF0, 0x7F, 0xB9,
+			0x00, 0xFF, 0xD0, 0x83, 0xC4, 0x0C, 0x5B, 0x5E,
+			0x5D, 0xC2, 0x04, 0x00
+		};
 
 		using CreateVertexShaderFn = NiD3DVertexShader* (__cdecl*)(const char*);
 		using CreatePixelShaderFn = NiD3DPixelShader* (__cdecl*)(const char*);
@@ -267,6 +312,8 @@ namespace fonthook::vectorfont
 		std::atomic<bool> s_invalidVtableLogged = false;
 		std::atomic<UInt32> s_compositeProfileLogCount = 0;
 		std::atomic<bool> s_resetInProgress = false;
+		std::atomic<bool> s_alphaFixesBlendLogged = false;
+		std::atomic<UInt32> s_standardV2ProofLogGeneration = 0;
 		NiDX9Renderer* s_resetRenderer = nullptr;
 
 		struct NativeFacadeShaderBatch
@@ -279,6 +326,118 @@ namespace fonthook::vectorfont
 		};
 
 		thread_local NativeFacadeShaderBatch s_facadeShaderBatch;
+
+		template <size_t N>
+		bool MatchesModuleBytes(const UInt8* module, SIZE_T imageSize,
+			SIZE_T rva, const std::array<UInt8, N>& expected)
+		{
+			return module && rva <= imageSize
+				&& N <= imageSize - rva
+				&& std::memcmp(module + rva, expected.data(), N) == 0;
+		}
+
+		bool IsAlphaFixes252BlendCallback(void* callback)
+		{
+			if (!callback || !g_cmdTableInterface
+				|| !g_cmdTableInterface->GetPluginInfoByDLLName)
+			{
+				return false;
+			}
+
+			const PluginInfo* info =
+				g_cmdTableInterface->GetPluginInfoByDLLName(
+					kAlphaFixesDllName);
+			if (!dependencies::IsPluginInfoValid(info)
+				|| info->version != kAlphaFixesPluginVersion)
+			{
+				return false;
+			}
+
+			HMODULE module = GetModuleHandleA(kAlphaFixesDllName);
+			const UInt8* image =
+				reinterpret_cast<const UInt8*>(module);
+			if (!image)
+				return false;
+
+			const auto* dos =
+				reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+			if (dos->e_magic != IMAGE_DOS_SIGNATURE
+				|| dos->e_lfanew < static_cast<LONG>(
+					sizeof(IMAGE_DOS_HEADER))
+				|| dos->e_lfanew > 0x1000)
+			{
+				return false;
+			}
+			const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+				image + dos->e_lfanew);
+			if (nt->Signature != IMAGE_NT_SIGNATURE
+				|| nt->OptionalHeader.Magic
+					!= IMAGE_NT_OPTIONAL_HDR32_MAGIC
+				|| nt->FileHeader.TimeDateStamp
+					!= kAlphaFixesTimeDateStamp
+				|| nt->OptionalHeader.SizeOfImage
+					!= kAlphaFixesImageSize
+				|| reinterpret_cast<const UInt8*>(callback)
+					!= image + kAlphaFixesSetBlendAlphaRva)
+			{
+				return false;
+			}
+
+			return MatchesModuleBytes(image, kAlphaFixesImageSize,
+					kAlphaFixesSetBlendAlphaRva,
+					kAlphaFixesBlendPrologue)
+				&& MatchesModuleBytes(image, kAlphaFixesImageSize,
+					kAlphaFixesSetBlendAlphaRva + 0x17,
+					kAlphaFixesBlendPropertyLookup)
+				&& MatchesModuleBytes(image, kAlphaFixesImageSize,
+					kAlphaFixesSetBlendAlphaRva + 0x44,
+					kAlphaFixesBlendPredicate)
+				&& MatchesModuleBytes(image, kAlphaFixesImageSize,
+					kAlphaFixesSetBlendAlphaRva + 0x67,
+					kAlphaFixesBlendEnable)
+				&& MatchesModuleBytes(image, kAlphaFixesImageSize,
+					kAlphaFixesSetBlendAlphaRva + 0x76,
+					kAlphaFixesPropertyBlendFunctions)
+				&& MatchesModuleBytes(image, kAlphaFixesImageSize,
+					kAlphaFixesSetBlendAlphaRva + 0x9B,
+					kAlphaFixesDefaultBlendFunctions);
+		}
+
+		NativeA8StandardBlendSemantics ClassifyStandardBlendCallback(
+			void* callback)
+		{
+			if (callback == reinterpret_cast<void*>(
+					kShaderSetupGeometryAlphaBlending))
+			{
+				return NativeA8StandardBlendSemantics::Retail;
+			}
+			if (!IsAlphaFixes252BlendCallback(callback))
+				return NativeA8StandardBlendSemantics::Unknown;
+
+			if (!s_alphaFixesBlendLogged.exchange(
+					true, std::memory_order_relaxed))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: standard-v2 slot32 recognized provider=%s version=%u semantics=alpha-blend-fix callback=%p",
+					kAlphaFixesDllName, kAlphaFixesPluginVersion,
+					callback);
+			}
+			return NativeA8StandardBlendSemantics::AlphaFixes252;
+		}
+
+		const char* StandardBlendSemanticsName(
+			NativeA8StandardBlendSemantics semantics)
+		{
+			switch (semantics)
+			{
+			case NativeA8StandardBlendSemantics::Retail:
+				return "retail";
+			case NativeA8StandardBlendSemantics::AlphaFixes252:
+				return "alpha-fixes-252";
+			default:
+				return "unknown";
+			}
+		}
 
 		bool HasShaderHandle(const NiD3DVertexShaderPtr& shader)
 		{
@@ -533,12 +692,12 @@ namespace fonthook::vectorfont
 			NativeFacadeShaderBatch& batch = s_facadeShaderBatch;
 			const bool batchActive = batch.depth != 0;
 			// Retail TileShader::UpdateConstants is also a live render-state
-			// synchronization point: it reapplies Tile scissor and alpha state.
-			// Every native packet invokes a separate stock Tile render pass, so a
-			// preceding effect pass may invalidate those states before the next
-			// packet. Never reuse or skip the stock call across packets. Retail
-			// slot 35 cleanup runs after that pass and releases the paired scissor
-			// and alpha state; do not duplicate that cleanup here.
+			// synchronization point: it reapplies Tile scissor and stencil state.
+			// Standard v2 may suppress this whole wrapper only inside one
+			// validated execution segment, with the verified retail slot retained,
+			// identical transform/color/camera inputs, and no transient
+			// scissor/stencil state. Every other packet still enters here and keeps
+			// the exact stock slot-31/35 pairing.
 			stockUpdate(shader, properties);
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::StockConstantUpdate);
@@ -1119,12 +1278,73 @@ namespace fonthook::vectorfont
 			program.setupDrawmode = vtable->slots[34];
 			program.postGeometry = vtable->slots[35];
 			program.setupNonFirstPass = vtable->slots[68];
+			program.standardV2SlotProofs = 0;
+			program.standardBlendSemantics =
+				ClassifyStandardBlendCallback(program.setupBlend);
+			if (program.setupPass == reinterpret_cast<void*>(
+					kTileShaderSetupGeometryTextures))
+			{
+				program.standardV2SlotProofs |=
+					NativeA8CompiledPacketCommand::kStandardSlot30Proof;
+			}
+			if (vtable->stockUpdateConstants
+				== reinterpret_cast<StockUpdateConstantsFn>(
+					kTileShaderUpdateConstants))
+			{
+				program.standardV2SlotProofs |=
+					NativeA8CompiledPacketCommand::kStandardSlot31Proof;
+			}
+			if (program.standardBlendSemantics
+				!= NativeA8StandardBlendSemantics::Unknown)
+			{
+				program.standardV2SlotProofs |=
+					NativeA8CompiledPacketCommand::kStandardSlot32Proof;
+			}
+			if (program.setupAlphaTest == reinterpret_cast<void*>(
+					kShaderSetupGeometryAlphaTesting))
+			{
+				program.standardV2SlotProofs |=
+					NativeA8CompiledPacketCommand::kStandardSlot33Proof;
+			}
+			if (program.setupDrawmode == reinterpret_cast<void*>(
+					kShaderSetupGeometryRenderStates))
+			{
+				program.standardV2SlotProofs |=
+					NativeA8CompiledPacketCommand::kStandardSlot34Proof;
+			}
+			if (program.postGeometry == reinterpret_cast<void*>(
+					kTileShaderPostGeometry))
+			{
+				program.standardV2SlotProofs |=
+					NativeA8CompiledPacketCommand::kStandardSlot35Proof;
+			}
 			program.generation = generation.id;
 			program.simpleColor =
 				packet.shaderClass == NativeA8ShaderClass::Coverage
-				|| packet.shaderClass == NativeA8ShaderClass::Argb;
+					|| packet.shaderClass == NativeA8ShaderClass::Argb;
 			program.active = program.device && program.vertexShader
 				&& program.pixelShader && program.setupPass;
+			const UInt32 previousProofGeneration =
+				s_standardV2ProofLogGeneration.exchange(
+					generation.id, std::memory_order_relaxed);
+			if (previousProofGeneration != generation.id)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: standard-v2 slot proofs generation=%u mask=%02X required=%02X blend=%s slot32=%p ready=%u",
+					generation.id,
+					static_cast<UInt32>(
+						program.standardV2SlotProofs),
+					static_cast<UInt32>(
+						NativeA8CompiledPacketCommand::
+							kStandardV2RequiredProofs),
+					StandardBlendSemanticsName(
+						program.standardBlendSemantics),
+					program.setupBlend,
+					program.standardV2SlotProofs
+							== NativeA8CompiledPacketCommand::
+								kStandardV2RequiredProofs
+						? 1u : 0u);
+			}
 			return profile;
 		}
 

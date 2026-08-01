@@ -59,7 +59,10 @@ namespace fonthook::vectorfont
 	constexpr UInt32 kFillPrewarmWorkChunk = 8;
 
 	struct NativeA8PayloadTemplate;
-	enum class FreeTypePerfCounter : UInt8
+	// The runtime now has more than 255 independently reported counters.
+	// Keeping an UInt8 base aliases the tail entries and can index the wrong
+	// atomic slot after integer promotion.
+	enum class FreeTypePerfCounter : UInt16
 	{
 		BitmapMemoryHit,
 		BitmapCrossFontHit,
@@ -114,6 +117,9 @@ namespace fonthook::vectorfont
 		SortedFrameFacade,
 		SortedFramePayload,
 		SortedFrameLookupHit,
+		SortedMixedEqualDepthRunRestored,
+		SortedMixedEqualDepthItemRestored,
+		SortedMixedEqualDepthRestoreRejected,
 		PreflightFastHit,
 		PreflightFullValidation,
 		DirectStaticResidencyHit,
@@ -190,7 +196,7 @@ namespace fonthook::vectorfont
 		ConstantOwnershipReuse,
 		ConstantOwnershipRelease,
 		StockConstantUpdate,
-		StockConstantReuse,
+		SegmentDevicePostSet,
 		CompositeConstantFullUpload,
 		NativePacketConstantReuse,
 		CompositeConstantPartialUpload,
@@ -200,10 +206,10 @@ namespace fonthook::vectorfont
 		NativePrivateStateStockTilePreserve,
 		SamplerStateSet,
 		SamplerStateReuse,
-		ConstantCaptureMirror,
-		ConstantCaptureDriver,
-		StateShadowDriverGet,
-		ConstantIsolationBypass,
+		StandardPassV2Replay,
+		StandardPassV2CompatibilityReplay,
+		SegmentDeviceConstantsSet,
+		SegmentDeviceConstantsReuse,
 		ConstantSnapshotGetElided,
 		ConstantRestoreSetElided,
 		VertexAaConstantSet,
@@ -294,7 +300,7 @@ namespace fonthook::vectorfont
 		CommandVirtualSpanFused,
 		CommandVirtualFollowerConsumed,
 		CommandDirectRangeReplay,
-		CommandSpanFullValidation,
+		SegmentDevicePostElision,
 		CommandPacketLightValidation,
 		CommandPacketEpochGuard,
 		CommandPacketStateValidationElided,
@@ -319,8 +325,8 @@ namespace fonthook::vectorfont
 		Count,
 	};
 	static_assert(
-		static_cast<UInt32>(FreeTypePerfCounter::Count) <= 0xFFu,
-		"FreeTypePerfCounter no longer fits its UInt8 ABI");
+		static_cast<UInt32>(FreeTypePerfCounter::Count) <= 0xFFFFu,
+		"FreeTypePerfCounter no longer fits its UInt16 storage");
 
 	void RecordFreeTypePerf(FreeTypePerfCounter aeCounter, UInt64 auiAmount = 1);
 	void ReportFreeTypePerf();

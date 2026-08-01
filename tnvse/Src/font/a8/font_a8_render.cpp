@@ -58,19 +58,6 @@ namespace fonthook::vectorfont
 			return entry;
 		}
 
-		void LogA8MetadataAllocation(const A8ShapeMetadata& metadata)
-		{
-			if (!g_bEnableFreeTypeFontRenderingLog)
-				return;
-			gLog.FormattedMessage(
-				"tnvse_freetype_native: metadata-allocate allocationId=%llu self=%p shape=%p font=%u backend=%u slot=%u primary=%u",
-				static_cast<unsigned long long>(metadata.allocationId),
-				metadata.selfIdentity, metadata.shapeIdentity,
-				metadata.fontId, static_cast<UInt32>(metadata.backend),
-				static_cast<UInt32>(metadata.virtualStockSlot),
-				metadata.virtualStockPrimary ? 1u : 0u);
-		}
-
 		bool IsFiniteColor(const NiColorA& color)
 		{
 			return std::isfinite(color.r) && std::isfinite(color.g)
@@ -708,7 +695,6 @@ namespace fonthook::vectorfont
 				+ GetNativeA8TileRetainedCapacityBytes(
 					metadata->nativePayload)
 				+ sizeof(A8ShapeMetadataEntry) + 6u * sizeof(void*));
-		LogA8MetadataAllocation(*metadata);
 		{
 			A8State& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
@@ -845,13 +831,6 @@ namespace fonthook::vectorfont
 				+ GetNativeA8TileRetainedCapacityBytes(
 					primary.nativePayload));
 		group->primaryMetadataOwner = metadataEntries[primarySlot];
-
-		for (const std::shared_ptr<A8ShapeMetadata>& metadata
-			: metadataEntries)
-		{
-			if (metadata)
-				LogA8MetadataAllocation(*metadata);
-		}
 
 		{
 			A8State& state = State();

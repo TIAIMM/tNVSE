@@ -219,30 +219,6 @@ namespace fonthook::vectorfont
 			if (distanceField)
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::ShaderEffectBatch);
-			if (g_bEnableFreeTypeFontRenderingLog)
-			{
-				if (precomposed)
-				{
-					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: sealed direct aggressive batch font=%u glyphs=%u geometryQuads=%u pages=%u compiler=compact-slot",
-						font.iFontNum,
-						static_cast<UInt32>(glyphs.size()),
-						direct.geometryQuadCount,
-						direct.pageCount);
-				}
-				else
-				{
-					FreeTypeFontDebugLog(
-						cpuEffects
-							? "tnvse_freetype_font: sealed direct CPU-effects batch font=%u glyphs=%u geometryQuads=%u drawQuads=%u pages=%u compiler=fixed-layer-page"
-							: "tnvse_freetype_font: sealed direct distance batch font=%u glyphs=%u geometryQuads=%u drawQuads=%u pages=%u compiler=compact-slot",
-						font.iFontNum,
-						static_cast<UInt32>(glyphs.size()),
-						direct.geometryQuadCount,
-						direct.drawQuadCount,
-						direct.pageCount);
-				}
-			}
 			return direct.shape;
 		case DirectAtlasShapeOutcome::Empty:
 			if (diagnostics)
@@ -365,21 +341,6 @@ namespace fonthook::vectorfont
 						+ (config.outline.enabled ? 1 : 0));
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::CpuEffectMasksAvoided, avoided);
-				if (g_bEnableFreeTypeFontRenderingLog)
-				{
-					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: direct shader batch font=%u fill=%s quality=%u spread=%.0f glyphs=%u geometryQuads=%u drawQuads=%u pages=%u texture0=%ux%u compiler=dense-cached-letter",
-						font.iFontNum,
-						GetConfiguredDistanceFieldMethodName(),
-						static_cast<UInt32>(resolvedQuality),
-						directShape.sdfSpreadPixels,
-						static_cast<UInt32>(glyphs.size()),
-						directShape.geometryQuadCount,
-						directShape.drawQuadCount,
-						directShape.pageCount,
-						directShape.firstAtlasWidth,
-						directShape.firstAtlasHeight);
-				}
 				return directShape.shape;
 			}
 			if (directShape.outcome == DirectAtlasShapeOutcome::Failed)
@@ -437,22 +398,6 @@ namespace fonthook::vectorfont
 						* static_cast<UInt64>((config.glow.enabled ? 1 : 0)
 							+ (config.outline.enabled ? 1 : 0));
 					RecordFreeTypePerf(FreeTypePerfCounter::CpuEffectMasksAvoided, avoided);
-					if (g_bEnableFreeTypeFontRenderingLog)
-					{
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_font: shader batch font=%u requestedFill=%s resolvedFill=%s quality=%u spread=%.0f glyphs=%u geometryQuads=%u drawQuads=%u padding=%u pages=%u texture0=%ux%u abi=%u",
-							font.iFontNum,
-							GetConfiguredDistanceFieldMethodName(),
-							GetConfiguredDistanceFieldMethodName(),
-							static_cast<UInt32>(resolvedQuality),
-							shaderBuild.config.sdfSpreadPixels,
-							static_cast<UInt32>(glyphs.size()),
-							static_cast<UInt32>(shaderQuads.size()),
-							shaderBuild.drawQuadCount, shaderBuild.padding,
-							static_cast<UInt32>(shaderAtlases.size()),
-							shaderAtlases[0]->width, shaderAtlases[0]->height,
-							A8ShapeColorContract::kTileUniformColorAbi);
-					}
 					return shaderShape;
 				}
 				shaderAtlasOrShapeFailed = true;

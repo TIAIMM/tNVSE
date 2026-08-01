@@ -879,7 +879,11 @@ namespace fonthook::vectorfont
 			&& dispatch.shader == program->shader
 			&& dispatch.renderer
 			&& dispatch.generation == generation
-			&& program->generation == generation;
+			&& program->generation == generation
+			&& dispatch.standardV2Ready
+				== (program->standardV2SlotProofs
+					== NativeA8CompiledPacketCommand::
+						kStandardV2RequiredProofs);
 	}
 
 	void InvalidateNativeA8StandardPassLiteDispatch(
@@ -945,6 +949,10 @@ namespace fonthook::vectorfont
 		dispatch.shader = shader;
 		dispatch.program = program;
 		dispatch.generation = generation;
+		dispatch.standardV2Ready =
+			program->standardV2SlotProofs
+				== NativeA8CompiledPacketCommand::
+					kStandardV2RequiredProofs;
 		dispatch.ready = true;
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::StandardPassLiteRetainedBuild);

@@ -58,6 +58,14 @@ performance records are written in full as counters are added. The fixed
 per-frame disk work; only the former 1024-byte per-message truncation has been
 removed.
 
+Successful per-shape metadata allocation/deletion audits and successful
+per-text atlas-batch records are intentionally omitted. Their aggregate values
+remain available in the performance counters, while metadata integrity failures
+and real route fallbacks still emit complete records. The temporary font-8
+singleton binding/driver trace has been removed now that it established that
+the missing MAPMO text reached a successful draw and was subsequently covered
+by another equal-depth UI item.
+
 Font IDs are configured under `<fonts>` in
 `Data\NVSE\plugins\tnvse_fonts.xml`. Only listed IDs are replaced. Other
 fonts continue to use the original `.fnt` and `.tex` files.
@@ -817,15 +825,30 @@ and virtual-stock primaries, deduplicates their immutable text artifacts, and
 promotes all eligible artifacts with one static-VB Lock/copy
 sequence/Unlock. Tiles are not persistently merged: stock depth/order,
 per-Tile transform, scissor, alpha, and shader constants remain independent.
-Before that preflight/upload work, each complete compatibility facade or
-virtual-stock group receives a
-read-only state test for exact zero Tile/material alpha under a provably no-op
-alpha blend. This test does not consult the renderer's current view-projection,
-viewport, hardware scissor, or the facade's app-cull bit. Those values are not
-authoritative for a particular Tile until the original
-`TileShader::UpdateConstants` call immediately before submission; predicting
-them during sorted preflight can incorrectly reject visible text in nested UI
-and render-target paths.
+The retail and symbolized test builds both append accepted Tile geometry to the
+accumulator and then apply a depth-only unstable quicksort. Adding FreeType
+facades can therefore change the permutation of unrelated equal-depth menu
+items. Immediately after stock sorting, tNVSE restores painter order only
+within a contiguous exact-equal-depth run containing both FreeType facades and
+stock geometry. Because the stock renderer consumes the sorted array backwards,
+logical blocks are ordered by descending registration ordinal: earlier blocks
+are submitted first and later blocks remain later/on top. A multi-slot
+Virtual-stock text is one block whose internal primary-to-follower array order
+is preserved, so reverse submission still draws slot 0 through primary and its
+topology remains command-buffer eligible. Pure stock, pure FreeType, and
+unequal-depth runs are untouched. Pointer, count, duplicate, or topology
+ambiguity fails closed without modifying the sorted arrays. The aggregate
+`tnvse_freetype_sort` line reports restored mixed runs, restored items, and
+rejected restorations.
+
+Before preflight/upload work, each complete compatibility facade or
+virtual-stock group receives a read-only state test for exact zero
+Tile/material alpha under a provably no-op alpha blend. This test does not
+consult the renderer's current view-projection, viewport, hardware scissor, or
+the facade's app-cull bit. Those values are not authoritative for a particular
+Tile until the original `TileShader::UpdateConstants` call immediately before
+submission; predicting them during sorted preflight can incorrectly reject
+visible text in nested UI and render-target paths.
 
 A sorted facade rejected at this stage does not enter shader/page preflight or
 static/dynamic VB preparation. Its Tile callback re-evaluates visibility before
@@ -1083,17 +1106,18 @@ and otherwise the unchanged `BSBatchRenderer::RenderPassImmediately`; a
 prelude failure also selects `BSBatchRenderer::RenderPassImmediately`. No
 fallback is attempted after an immediate draw.
 
-Dedicated one-packet Standard-lite replays also share a traversal-local
-device-state cache across adjacent Tiles in the same validated command
+Dedicated one-packet Standard-lite replays also use
+`BSBatchRenderer::RenderPassImmediately_Standard` v2, a traversal-local
+slot-delta executor shared across adjacent Tiles in the same validated command
 execution segment. Retail PC and the symbolized test build agree on the
 relevant slot effects: Tile slot 30 publishes programs, the declaration,
-texture stages, and effective clamp mode; slot 32 publishes blend
-enable/function; slot 33 publishes alpha-test function/reference; slot 34
-publishes cull mode and alpha-test enable. The formal implementations at
-`BCA760`, `BE1FF0`, `BE20B0`, and `BE20E0` do not overlap those four output
-categories. Slot 31 changes live transform/color constants, scissor, and
-stencil state, while slot 35 restores only the scissor and stencil enables
-established by slot 31.
+texture stages, and effective clamp mode; slot 31 publishes live
+transform/color constants plus optional scissor/stencil state; slot 32
+publishes blend enable/function; slot 33 publishes alpha-test
+function/reference; slot 34 publishes cull mode and alpha-test enable; and slot
+35 restores only the scissor and stencil enables established by slot 31. The
+formal implementations at `BCA760`, `BCA980`, `BE1FF0`, `BE20B0`, `BE20E0`,
+and `BCAC60` establish those disjoint output categories.
 
 The cache therefore tracks each slot independently. A texture-page change can
 require slot 30 without forcing identical blend and drawmode callbacks to run;
@@ -1102,10 +1126,28 @@ textures. Keys describe effective output rather than raw input identity:
 blend alpha values collapse to the exact enable/function tuple, alpha-test
 flags collapse to function/reference, and stencil/alpha flags collapse to
 cull mode plus alpha-test enable. Tile fields not read by the corresponding
-retail function are excluded. Slot 31, slot 27 (geometry residency/range), the
-draw, and slot 35 still execute for every Tile. Slot 30 reuse is restricted to
-ordinary one-source, no-alpha-texture native atlas commands; each later slot
-retains its own applicability rules.
+retail function are excluded. Slot 30 reuse is restricted to ordinary
+one-source, no-alpha-texture native atlas commands; each later slot retains its
+own applicability rules.
+
+V2 additionally caches slot 31 only for the strict non-transient subset: the
+program, world transform, renderer view/projection and camera inputs, Tile
+overlay/tile alpha/texture transform, material alpha, depth range, render
+target, and viewport must all match, and neither Tile scissor nor enabled
+stencil may be present. That rule preserves both low constant-register output
+and `SetModelTransform`'s renderer mirrors. A transient packet still executes
+the exact stock slot-31/slot-35 pair; v2 does not nest or retain the stock
+scissor/stencil restore stack. For a verified retail slot 35 with no transient
+state, the callback is known to be a no-op and is omitted. Slot 27, the draw,
+and any required cleanup remain mandatory.
+
+Each generation records a retained identity proof for slots 30 through 35.
+Delta scheduling is enabled only when all six callbacks have
+reverse-verified implementations and an exact effective-state key. This
+includes retail and the separately classified Alpha Fixes 2.52 blend callback.
+If another plugin replaces any slot with an unknown implementation,
+Standard-lite returns to the complete stock pass before drawing and does not
+carry its unknown effects into the next Tile.
 
 The cache stamp contains the command validation token, renderer/device
 identity and shader generation, atlas/resource/upload epochs, render-target
@@ -1114,7 +1156,7 @@ non-FreeType item, nested traversal, stock/full-standard fallback, shader or
 ring mutation, device reset, render-target/viewport transition, runtime fault,
 or a new sorted traversal starts a new cache head. `B99390` shader/pass
 selection also starts a new head because its teardown/setup callbacks are
-outside the four cached slots and may republish their states. The PC-only
+outside the cached slots and may republish their states. The PC-only
 pre-standard `B98540` call remains mandatory on every applicable pass, but it
 does not invalidate these proofs: the formal build shows that it publishes
 only the vendor alpha-to-coverage extension through render state 154 with
@@ -1137,13 +1179,14 @@ its Tile lifetime ends.
 
 Every published A8 metadata object carries a monotonic allocation ID, its own
 address, and its owning shape address. The shape registry stores a second
-publication-time copy outside the `shared_ptr`. With FreeType rendering logs
-enabled, allocation emits `metadata-allocate` and destruction emits
-`metadata-delete-pre` before any metadata dereference. A healthy deletion ends
-with `registryIdentity=1 pointer=1 allocation=1 self=1 shapeIdentity=1
-integrity=1`. Integrity failures are logged even when verbose rendering logs
-are disabled (capped at 64 entries); unsafe retained/Virtual-stock cleanup is
-then skipped so the audit itself does not dereference a mismatched object.
+publication-time copy outside the `shared_ptr`. Healthy allocation and deletion
+remain silent; the identity fields are retained for correlation with targeted
+diagnostics and crash analysis. Destruction emits
+`metadata-delete-integrity-failure` only when registry identity, pointer,
+allocation ID, self pointer, or shape identity validation fails. Integrity
+failures are logged even when verbose rendering logs are disabled (capped at 64
+entries); unsafe retained/Virtual-stock cleanup is then skipped so the audit
+itself does not dereference a mismatched object.
 
 Each generation-owned shader profile owns one immutable compiled packet
 program containing its already resolved shader, VS/PS handles, slot methods,
@@ -1359,9 +1402,10 @@ logical spans or packets, substantial `segment_validation_reuses`,
 `packet_state_elisions` covering all proven direct/ring packets, and
 `light_validations` remaining only for exact Virtual-stock range coverage or
 unproven compatibility paths. Unexpected fallbacks must remain zero, and
-`stock_constant_updates` should approach the logical-span count without visual
-or runtime faults. Build success alone does not establish runtime correctness
-or the CPU-performance thresholds.
+`stock_constant_updates` should not exceed the logical-span count; Standard v2
+may reduce it further by exactly `constants_reuses`, without visual or runtime
+faults. Build success alone does not establish runtime correctness or the
+CPU-performance thresholds.
 
 The command-build diagnostic additionally reports `tile_retained_builds`,
 `refreshes`, `hits`, `misses`, and `packet_reuses`. After a menu reaches steady
@@ -1371,10 +1415,19 @@ the skeleton, hits should track commandized Tile traversals, misses should
 remain zero, and packet reuse should closely track recorded command packets.
 
 The adjacent `standard_pass_lite_` line exposes stage invariants for the dedicated
-single-packet subset. A healthy fully eligible run has
+single-packet subset. A healthy fully eligible retail run has
 `candidates = stage1_eligible = stage2_resident = stage3_replays`,
+`standard_v2_replays = stage3_replays`, `standard_v2_compat=0`,
 `retained_hits = candidates`, `retained_misses=0`, `stock_fallbacks=0`, and
-every categorized fallback at zero. `retained_builds` counts new Tile/program
+every categorized fallback at zero. Standard v2 accepts the six retail slot
+implementations plus the signature- and PE-identity-verified
+`Alpha Fixes.dll` 2.52 slot-32 implementation. The latter receives its own
+blend-state key because it suppresses `fAlpha`-driven blending when
+`BSShaderProperty::Vertex_Alpha` is set. A nonzero `standard_v2_compat` means
+at least one retained shader generation did not match a fully classified
+six-slot table; it increments `fallback_program` and returns to stock `B994F0`
+before any lite prelude or draw, rather than executing an unknown callback
+inside the delta cache. `retained_builds` counts new Tile/program
 dispatches, while `retained_reuses` counts full preflights that retained the
 same Tile/program dispatch instead of rebuilding it; neither should scale with
 steady-state packet submissions. When fallbacks are present,
@@ -1382,10 +1435,14 @@ steady-state packet submissions. When fallbacks are present,
 `geometry`, `binding`, and `prelude`; the retained hit/miss pair distinguishes
 a missing or invalidated Tile dispatch from a dynamic pass-envelope rejection.
 The following `segment_device_state_` line reports cache starts/reuses and
-set/reuse pairs for texture/program, blend, alpha-test, and drawmode callbacks.
+set/reuse pairs for texture/program, constants, blend, alpha-test, and drawmode
+callbacks, followed by actual slot-35 calls and verified no-op elisions.
 In a long contiguous menu run, `starts` should track execution-segment or stock
 fallback boundaries rather than one-packet replays, while nonzero category
-`reuses` directly count callbacks skipped across distinct Tiles. Alpha-test
+`reuses` directly count callbacks skipped across distinct Tiles.
+`constants_reuses` proves slot 31 was skipped only for identical
+non-transient state; `post_elisions` normally covers every verified packet
+without scissor/stencil, including packets whose constants changed. Alpha-test
 sets/reuses may remain zero because the native A8 direct route normally
 disables stock alpha testing.
 

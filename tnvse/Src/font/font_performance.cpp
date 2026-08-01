@@ -297,7 +297,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::ConstantRestoreSetElided)],
 			stockConstantUpdates,
-			values[static_cast<size_t>(FreeTypePerfCounter::StockConstantReuse)],
+			static_cast<UInt64>(0),
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CompositeConstantFullUpload)],
 			values[static_cast<size_t>(
@@ -336,15 +336,19 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_sort: mixed_equal_depth_runs_restored=%llu items_restored=%llu restore_rejected=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SortedMixedEqualDepthRunRestored)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SortedMixedEqualDepthItemRestored)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SortedMixedEqualDepthRestoreRejected)]);
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu vertex_aa_stock_preserved=%llu command_program_setups=%llu binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu registers_uploaded=%llu full_tail_elided=%llu",
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ConstantCaptureMirror)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ConstantCaptureDriver)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::StateShadowDriverGet)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ConstantIsolationBypass)],
+			static_cast<UInt64>(0),
+			static_cast<UInt64>(0),
+			static_cast<UInt64>(0),
+			static_cast<UInt64>(0),
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VertexAaConstantSet)],
 			values[static_cast<size_t>(
@@ -546,8 +550,7 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::CommandVirtualFollowerConsumed)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandDirectRangeReplay)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::CommandSpanFullValidation)],
+			static_cast<UInt64>(0),
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandPacketLightValidation)],
 			values[static_cast<size_t>(
@@ -631,7 +634,7 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::
 					CommandTileRetainedPacketReuse)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: standard_pass_lite_candidates=%llu retained_builds=%llu retained_reuses=%llu retained_hits=%llu retained_misses=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu stock_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
+			"tnvse_freetype_perf: standard_pass_lite_candidates=%llu retained_builds=%llu retained_reuses=%llu retained_hits=%llu retained_misses=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu standard_v2_replays=%llu standard_v2_compat=%llu stock_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteCandidate)],
 			values[static_cast<size_t>(
@@ -649,6 +652,11 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteStage3Replay)],
 			values[static_cast<size_t>(
+				FreeTypePerfCounter::StandardPassV2Replay)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::
+					StandardPassV2CompatibilityReplay)],
+			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteStockFallback)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteFallbackEnvelope)],
@@ -663,7 +671,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteFallbackPrelude)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu",
+			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceStateStart)],
 			values[static_cast<size_t>(
@@ -672,6 +680,10 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::SegmentDevicePassSet)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDevicePassReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceConstantsSet)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceConstantsReuse)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceBlendSet)],
 			values[static_cast<size_t>(
@@ -683,7 +695,11 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceDrawmodeSet)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::SegmentDeviceDrawmodeReuse)]);
+				FreeTypePerfCounter::SegmentDeviceDrawmodeReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDevicePostSet)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDevicePostElision)]);
 		const DurationSummary layout =
 			ConsumeDurationSummary(FreeTypePerfPhase::Layout);
 		const DurationSummary sidecar =

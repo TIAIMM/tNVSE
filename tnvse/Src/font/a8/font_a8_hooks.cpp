@@ -7,6 +7,7 @@
 #include "NiDX9Renderer.hpp"
 #include "NiDX9RenderState.hpp"
 #include "NiGeometryBufferData.hpp"
+#include "NiMaterialProperty.hpp"
 #include "NiRenderer.hpp"
 #include "NiTriShapeData.hpp"
 #include "NiVBChip.hpp"
@@ -564,6 +565,12 @@ namespace fonthook::vectorfont
 		static_assert(offsetof(
 			DirectTileShaderPropertyView, alphaTexture) == 0x64);
 		static_assert(offsetof(
+			DirectTileShaderPropertyView, overlayColor) == 0x68);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, tileAlpha) == 0x78);
+		static_assert(offsetof(
+			DirectTileShaderPropertyView, textureTransform) == 0x7C);
+		static_assert(offsetof(
 			DirectTileShaderPropertyView, clampMode) == 0x8C);
 		static_assert(offsetof(
 			DirectTileShaderPropertyView, byte90) == 0x90);
@@ -628,15 +635,40 @@ namespace fonthook::vectorfont
 			bool alphaTestEnabled = false;
 		};
 
+		// Slot 31 can be retained only when none of its paired transient states
+		// needs slot-35 restoration. The key intentionally stores the exact
+		// stock inputs rather than derived WVP/color values: identical inputs
+		// preserve both the constant-map output and SetModelTransform's renderer
+		// mirror side effects without doing floating-point work in the hot path.
+		struct NativeSegmentConstantsStateKey
+		{
+			const NativeA8CompiledPacketCommand* program = nullptr;
+			NiTransform world;
+			D3DXMATRIX view;
+			D3DXMATRIX projection;
+			D3DXMATRIX viewProjection;
+			NiPoint3 cameraRight;
+			NiPoint3 cameraUp;
+			NiColorA overlayColor;
+			NiPoint4 textureTransform;
+			float tileAlpha = 1.0f;
+			float materialAlpha = 1.0f;
+			float nearDepth = 0.0f;
+			float depthRange = 0.0f;
+			bool rotates = false;
+		};
+
 		struct NativeSegmentDeviceStateCache
 		{
 			NativeA8SegmentDeviceStateStamp stamp;
 			NativeSegmentPassStateKey pass;
+			NativeSegmentConstantsStateKey constants;
 			NativeSegmentBlendStateKey blend;
 			NativeSegmentAlphaTestStateKey alphaTest;
 			NativeSegmentDrawmodeStateKey drawmode;
 			bool stampReady = false;
 			bool passReady = false;
+			bool constantsReady = false;
 			bool blendReady = false;
 			bool alphaTestReady = false;
 			bool drawmodeReady = false;
@@ -645,11 +677,13 @@ namespace fonthook::vectorfont
 			{
 				stamp = {};
 				pass = {};
+				constants = {};
 				blend = {};
 				alphaTest = {};
 				drawmode = {};
 				stampReady = false;
 				passReady = false;
+				constantsReady = false;
 				blendReady = false;
 				alphaTestReady = false;
 				drawmodeReady = false;
@@ -658,6 +692,7 @@ namespace fonthook::vectorfont
 			void InvalidateStates()
 			{
 				passReady = false;
+				constantsReady = false;
 				blendReady = false;
 				alphaTestReady = false;
 				drawmodeReady = false;
@@ -774,12 +809,99 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		bool BuildSegmentConstantsStateKey(NiTriShape* geometry,
+			NiDX9Renderer* renderer,
+			const NativeA8DrawCommand& command,
+			NativeSegmentConstantsStateKey& key,
+			bool& cleanupRequired)
+		{
+			key = {};
+			cleanupRequired = true;
+			DirectTileShaderPropertyView* tile =
+				GetDirectTileProperty(geometry);
+			if (!geometry || !renderer || !tile || !command.program)
+				return false;
+
+			const NiStencilProperty* stencil =
+				geometry->GetStencilProperty();
+			cleanupRequired = tile->useScissorTest
+				|| (stencil && stencil->IsEnabled());
+			if (cleanupRequired)
+			{
+				// Stock slot 31 pushes scissor/stencil enable state and slot 35
+				// restores it. Repeating slot 31 without that paired restore
+				// would nest the render-state stack, so transient packets stay
+				// on the exact stock pair until NativeTileConstantsLite exists.
+				return false;
+			}
+
+			const NiMaterialProperty* material =
+				geometry->GetMaterialProperty();
+			key.program = command.program;
+			key.world = geometry->m_kWorld;
+			key.view = renderer->m_kD3DView;
+			key.projection = renderer->m_kD3DProj;
+			key.viewProjection = renderer->m_kViewProj;
+			key.cameraRight = renderer->m_kCamRight;
+			key.cameraUp = renderer->m_kCamUp;
+			key.overlayColor = tile->overlayColor;
+			key.tileAlpha = tile->tileAlpha;
+			key.materialAlpha = material ? material->m_fAlpha : 1.0f;
+			key.nearDepth = renderer->m_fNearDepth;
+			key.depthRange = renderer->m_fDepthRange;
+			key.rotates = tile->rotates;
+			if (tile->rotates)
+				key.textureTransform = tile->textureTransform;
+			return true;
+		}
+
+		bool SameSegmentConstantsState(
+			const NativeSegmentConstantsStateKey& left,
+			const NativeSegmentConstantsStateKey& right)
+		{
+			return left.program == right.program
+				&& left.rotates == right.rotates
+				&& std::memcmp(&left.world, &right.world,
+					sizeof(left.world)) == 0
+				&& std::memcmp(&left.view, &right.view,
+					sizeof(left.view)) == 0
+				&& std::memcmp(&left.projection, &right.projection,
+					sizeof(left.projection)) == 0
+				&& std::memcmp(&left.viewProjection,
+					&right.viewProjection,
+					sizeof(left.viewProjection)) == 0
+				&& std::memcmp(&left.cameraRight,
+					&right.cameraRight,
+					sizeof(left.cameraRight)) == 0
+				&& std::memcmp(&left.cameraUp, &right.cameraUp,
+					sizeof(left.cameraUp)) == 0
+				&& std::memcmp(&left.overlayColor,
+					&right.overlayColor,
+					sizeof(left.overlayColor)) == 0
+				&& (!left.rotates
+					|| std::memcmp(&left.textureTransform,
+						&right.textureTransform,
+						sizeof(left.textureTransform)) == 0)
+				&& std::memcmp(&left.tileAlpha, &right.tileAlpha,
+					sizeof(left.tileAlpha)) == 0
+				&& std::memcmp(&left.materialAlpha,
+					&right.materialAlpha,
+					sizeof(left.materialAlpha)) == 0
+				&& std::memcmp(&left.nearDepth, &right.nearDepth,
+					sizeof(left.nearDepth)) == 0
+				&& std::memcmp(&left.depthRange, &right.depthRange,
+					sizeof(left.depthRange)) == 0;
+		}
+
 		bool BuildSegmentBlendStateKey(NiTriShape* geometry,
+			NativeA8StandardBlendSemantics semantics,
 			NativeSegmentBlendStateKey& key)
 		{
 			DirectTileShaderPropertyView* tile =
 				GetDirectTileProperty(geometry);
-			if (!tile)
+			if (!tile
+				|| semantics
+					== NativeA8StandardBlendSemantics::Unknown)
 				return false;
 			const NiAlphaProperty* alpha =
 				geometry->GetAlphaProperty();
@@ -788,11 +910,28 @@ namespace fonthook::vectorfont
 				? alpha->m_usFlags.Get() : 0;
 			const bool propertyBlend = alpha
 				&& (flags & NiAlphaProperty::ALPHA_BLEND_MASK) != 0;
-			// BE1FF0/BSShader::SetupGeometryAlphaBlending compares both
-			// values only against 1.0. Preserve its NaN behavior by negating
-			// the pair of >= comparisons instead of using <.
-			const bool opacityBlend =
-				!(tile->fAlpha >= 1.0f && tile->fFadeAlpha >= 1.0f);
+			bool opacityBlend = false;
+			if (semantics
+				== NativeA8StandardBlendSemantics::AlphaFixes252)
+			{
+				// Fallout Alpha Rendering Tweaks 2.52 keeps fFadeAlpha
+				// blending, but suppresses fAlpha-driven blending when the
+				// shader property already advertises vertex alpha. Its
+				// COMISS/branch sequence also treats NaN as not less than 1.
+				opacityBlend =
+					(tile->fAlpha < 1.0f
+						&& (tile->ulFlags[0]
+							& BSShaderProperty::Vertex_Alpha) == 0)
+					|| tile->fFadeAlpha < 1.0f;
+			}
+			else
+			{
+				// BE1FF0/BSShader::SetupGeometryAlphaBlending compares both
+				// values only against 1.0. Preserve its NaN behavior by
+				// negating the pair of >= comparisons instead of using <.
+				opacityBlend = !(tile->fAlpha >= 1.0f
+					&& tile->fFadeAlpha >= 1.0f);
+			}
 			key.enabled = propertyBlend || opacityBlend;
 			if (propertyBlend)
 			{
@@ -1895,9 +2034,13 @@ namespace fonthook::vectorfont
 			const NiPropertyState* properties = dispatch.properties;
 			const NativeA8CompiledPacketCommand& program =
 				*dispatch.program;
+			// InvokeGuardedNativeReplay admits only a completely classified
+			// callback table. Unknown injected callbacks return to stock B994F0
+			// before its prelude or any draw has executed.
 			NativeSegmentDeviceStateCache* deviceState =
 				EnterSegmentDeviceStateCache(deviceStateStamp);
-
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::StandardPassV2Replay);
 			// Retail RenderPassImmediately_Standard first publishes the current
 			// property/effect state. Its geometry-group helper is deliberately
 			// absent here: formal E88DC0 and the symbolized test build both prove
@@ -1921,11 +2064,13 @@ namespace fonthook::vectorfont
 			//   slot 32: blend enable/function;
 			//   slot 33: alpha-test function/reference;
 			//   slot 34: cull mode and alpha-test enable.
-			// Slot 31 always runs between them and changes constants, scissor and
-			// stencil state only; slot 35 restores scissor/stencil only. Cache the
-			// four effective outputs independently. The former all-or-nothing
-			// aggregate made a page texture or Tile alpha change force every slot
-			// to run and therefore produced zero reuse in real traversals.
+			// Slot 31 changes constants, scissor and stencil state only; slot 35
+			// restores scissor/stencil only. Standard v2 retains slot 31 as a fifth
+			// independent category for packets that require neither transient
+			// state, and omits the verified no-op slot 35 for those packets. The
+			// former all-or-nothing aggregate made a page texture or Tile alpha
+			// change force every slot to run and therefore produced zero reuse in
+			// real traversals.
 			const bool firstPass = pass->bIsFirst;
 			const bool blendApplicable = firstPass && blendAlpha
 				&& !CdeclCall<bool>(
@@ -1970,15 +2115,51 @@ namespace fonthook::vectorfont
 					deviceState->pass = passState;
 			}
 
-			reinterpret_cast<SetupStateFn>(
-				program.updateConstants)(shader, properties);
+			NativeSegmentConstantsStateKey constantsState;
+			bool cleanupRequired = true;
+			const bool constantsKeyReady =
+				dispatch.standardV2Ready
+				&& BuildSegmentConstantsStateKey(
+					geometry, renderer, command,
+					constantsState, cleanupRequired);
+			const bool constantsStateReady =
+				deviceState && constantsKeyReady
+				&& deviceState->constantsReady
+				&& SameSegmentConstantsState(
+					deviceState->constants, constantsState);
+			if (constantsStateReady)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						SegmentDeviceConstantsReuse);
+			}
+			else
+			{
+				reinterpret_cast<SetupStateFn>(
+					program.updateConstants)(shader, properties);
+				if (deviceState)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							SegmentDeviceConstantsSet);
+				}
+			}
+			if (deviceState)
+			{
+				deviceState->constantsReady =
+					constantsKeyReady;
+				if (constantsKeyReady)
+				deviceState->constants = constantsState;
+			}
 			if (firstPass)
 			{
 				if (blendApplicable)
 				{
 					const bool blendKeyReady =
 						BuildSegmentBlendStateKey(
-							geometry, blendState);
+							geometry,
+							program.standardBlendSemantics,
+							blendState);
 					const bool blendStateReady =
 						deviceState && blendKeyReady
 						&& deviceState->blendReady
@@ -2108,8 +2289,23 @@ namespace fonthook::vectorfont
 					shader, geometry, 0,
 					preparedBuffer, properties);
 			A8RenderImmediateAlt(geometry, nullptr, renderer);
-			reinterpret_cast<SetupStateFn>(
-				program.postGeometry)(shader, properties);
+			const bool verifiedPost =
+				(program.standardV2SlotProofs
+					& NativeA8CompiledPacketCommand::
+						kStandardSlot35Proof) != 0;
+			if (!verifiedPost || cleanupRequired)
+			{
+				reinterpret_cast<SetupStateFn>(
+					program.postGeometry)(shader, properties);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SegmentDevicePostSet);
+			}
+			else
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						SegmentDevicePostElision);
+			}
 		}
 
 		bool InvokeGuardedNativeReplay(
@@ -2142,6 +2338,16 @@ namespace fonthook::vectorfont
 					guardedEligible = true;
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::StandardPassLiteStage1Eligible);
+					if (!liteDispatch
+						|| !liteDispatch->standardV2Ready)
+					{
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::
+								StandardPassV2CompatibilityReplay);
+						RecordStandardPassLiteFallback(
+							StandardPassLiteFallback::Program);
+						return false;
+					}
 				}
 				else
 				{
@@ -3374,6 +3580,7 @@ namespace fonthook::vectorfont
 				}
 				else
 				{
+					bool usedNativeReplay = false;
 					const UInt32 validationCommandIndex =
 						commandExecution
 							? (virtualSingleCommandExecution
@@ -3393,7 +3600,6 @@ namespace fonthook::vectorfont
 								VirtualSinglePacket
 							: NativeImmediateCommandKind::SpanPacket,
 						commandExecution && bindingCurrent);
-					bool usedNativeReplay = false;
 					if (commandExecution)
 					{
 						NativeA8SegmentDeviceStateStamp
@@ -4199,11 +4405,15 @@ namespace fonthook::vectorfont
 					1, std::memory_order_relaxed);
 			const bool logFailure = !integrity
 				&& failureOrdinal < 64;
-			if (!g_bEnableFreeTypeFontRenderingLog && !logFailure)
+			// Successful delete audits were useful while proving the lifetime
+			// guard, but they dominate normal diagnostic logs. Keep the complete
+			// record only for an actual integrity failure, even when verbose font
+			// logging is enabled.
+			if (!logFailure)
 				return integrity;
 
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: metadata-delete-pre shape=%p registry=%u mapped=%p expectedSelf=%p expectedShape=%p allocationId=%llu readable=%u objectAllocationId=%llu objectSelf=%p objectShape=%p font=%u backend=%u slot=%u primary=%u build=%u registryIdentity=%u pointer=%u allocation=%u self=%u shapeIdentity=%u integrity=%u",
+				"tnvse_freetype_native: metadata-delete-integrity-failure shape=%p registry=%u mapped=%p expectedSelf=%p expectedShape=%p allocationId=%llu readable=%u objectAllocationId=%llu objectSelf=%p objectShape=%p font=%u backend=%u slot=%u primary=%u build=%u registryIdentity=%u pointer=%u allocation=%u self=%u shapeIdentity=%u integrity=%u",
 				shape, registryFound ? 1u : 0u,
 				mappedMetadata, entry.selfIdentity,
 				entry.shapeIdentity,
@@ -4929,7 +5139,7 @@ namespace fonthook::vectorfont
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: RenderPassImmediately_Standard-lite predicate-envelope validated=%u special=%p alternate=%p expected=%p segmentState=independent-effective-v3 slot34=vendor-atoc-independent",
+				"tnvse_freetype_native: RenderPassImmediately_Standard-lite predicate-envelope validated=%u special=%p alternate=%p expected=%p segmentState=independent-effective-v7 slot34=vendor-atoc-independent standardV2=classified-slot-delta slot31=stable-no-transient slot35=need-only",
 				state.standardPassLitePredicatesValidated ? 1u : 0u,
 				source[kGeometrySpecialPredicateSlot],
 				source[kGeometryAlternatePredicateSlot],

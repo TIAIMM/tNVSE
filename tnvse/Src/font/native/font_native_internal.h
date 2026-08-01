@@ -241,6 +241,7 @@ namespace fonthook::vectorfont
 		TileShader* shader = nullptr;
 		const NativeA8CompiledPacketCommand* program = nullptr;
 		UInt32 generation = 0;
+		bool standardV2Ready = false;
 		bool ready = false;
 	};
 
@@ -423,8 +424,31 @@ namespace fonthook::vectorfont
 	// generation-owned program is published once with its profile. Traversal-local
 	// commands retain only a non-owning pointer and validate the generation before
 	// every execution.
+	enum class NativeA8StandardBlendSemantics : UInt8
+	{
+		Unknown = 0,
+		Retail,
+		AlphaFixes252
+	};
+
 	struct NativeA8CompiledPacketCommand
 	{
+		// Standard v2 elides a TileShader callback only when the generation was
+		// built from the reverse-verified retail implementation for that slot.
+		// The live slot-31 entry is NativeUpdateConstants, so its proof bit
+		// describes the stock callback retained by the native vtable sidecar.
+		static constexpr UInt8 kStandardSlot30Proof = 1u << 0;
+		static constexpr UInt8 kStandardSlot31Proof = 1u << 1;
+		static constexpr UInt8 kStandardSlot32Proof = 1u << 2;
+		static constexpr UInt8 kStandardSlot33Proof = 1u << 3;
+		static constexpr UInt8 kStandardSlot34Proof = 1u << 4;
+		static constexpr UInt8 kStandardSlot35Proof = 1u << 5;
+		static constexpr UInt8 kStandardV2RequiredProofs =
+			kStandardSlot30Proof | kStandardSlot31Proof
+			| kStandardSlot32Proof | kStandardSlot33Proof
+			| kStandardSlot34Proof | kStandardSlot35Proof;
+		static_assert(kStandardV2RequiredProofs == 0x3Fu);
+
 		void* profile = nullptr;
 		TileShader* shader = nullptr;
 		void** shaderVtable = nullptr;
@@ -444,6 +468,9 @@ namespace fonthook::vectorfont
 		void* postGeometry = nullptr;
 		void* setupNonFirstPass = nullptr;
 		UInt32 generation = 0;
+		UInt8 standardV2SlotProofs = 0;
+		NativeA8StandardBlendSemantics standardBlendSemantics =
+			NativeA8StandardBlendSemantics::Unknown;
 		bool simpleColor = false;
 		bool active = false;
 	};
