@@ -367,6 +367,7 @@ namespace fonthook::vectorfont
 			bool invoked = false;
 			bool validationPassed = true;
 			bool drew = false;
+			bool visibilityCulled = false;
 			bool continuationSucceeded = true;
 		};
 
@@ -377,6 +378,7 @@ namespace fonthook::vectorfont
 		{
 		public:
 			explicit NativeDirectImmediateScope(NiTriShape* shape,
+				const NativeA8ShapePayload* payload,
 				UInt32 commandSpanIndex = kInvalidNativeA8CommandIndex,
 				UInt32 commandOffset = kInvalidNativeA8CommandIndex,
 				bool strictValidation = false,
@@ -385,7 +387,8 @@ namespace fonthook::vectorfont
 				NativeImmediateCommandKind commandKind =
 					NativeImmediateCommandKind::SpanPacket,
 				bool packetStatePrevalidated = false)
-				: m_previous(s_nativeDirectImmediateContext)
+				: m_visibility(shape, payload),
+				  m_previous(s_nativeDirectImmediateContext)
 			{
 				m_context.shape = shape;
 				m_context.commandSpanIndex = commandSpanIndex;
@@ -422,12 +425,18 @@ namespace fonthook::vectorfont
 				return m_context.drew;
 			}
 
+			bool VisibilityCulled() const
+			{
+				return m_context.visibilityCulled;
+			}
+
 			bool ContinuationSucceeded() const
 			{
 				return m_context.continuationSucceeded;
 			}
 
 		private:
+			NativeA8LateVisibilityScope m_visibility;
 			NativeDirectImmediateContext m_context;
 			NativeDirectImmediateContext* m_previous = nullptr;
 		};
@@ -1694,6 +1703,7 @@ namespace fonthook::vectorfont
 			bool drewPacket = false;
 			bool directShapeRoute = false;
 			bool stockLikeBitmapRoute = false;
+			bool visibilityCulled = false;
 			bool constantStateFault = false;
 			UInt32 drawnPacketCount = 0;
 			NativeA8FallbackReason failure =
@@ -2912,7 +2922,7 @@ namespace fonthook::vectorfont
 					bridge.nextCommandOffset
 						< bridge.endCommandOffset;
 				NativeDirectImmediateScope immediateScope(
-					proxy, commandSpanIndex, firstOffset, true,
+					proxy, &payload, commandSpanIndex, firstOffset, true,
 					hasContinuation ? &bridge : nullptr,
 					hasContinuation
 						? &ContinueRetainedBridge : nullptr,
@@ -2920,6 +2930,11 @@ namespace fonthook::vectorfont
 				InvokeNativeCommandBootstrap(pass, currentPass,
 					false, true, setupDrawmode, proxy, first,
 					false, true);
+				if (immediateScope.VisibilityCulled())
+				{
+					draw.visibilityCulled = true;
+					break;
+				}
 				if (immediateScope.Drew())
 				{
 					draw.drewPacket = true;
@@ -2985,8 +3000,9 @@ namespace fonthook::vectorfont
 			}
 
 			const bool success = !draw.runtimeFault
-				&& draw.drawnPacketCount
-					== view.span->commandCount;
+				&& (draw.visibilityCulled
+					|| draw.drawnPacketCount
+						== view.span->commandCount);
 			EndNativeA8CommandSpanExecution(
 				commandSpanIndex, success, draw.drewPacket);
 			if (success)
@@ -3214,8 +3230,12 @@ namespace fonthook::vectorfont
 				const bool hasContinuation =
 					bridge.nextCommandOffset
 						< bridge.endCommandOffset;
+				// A fused multi-slot Virtual-stock span can carry independently live
+				// Tile properties on each stock shell.  One slot's resolved scissor
+				// cannot prove that every later slot is invisible, so keep this rare
+				// topology fail-open. Singletons and non-fused slots are culled below.
 				NativeDirectImmediateScope immediateScope(
-					geometry, commandSpanIndex, firstOffset, true,
+					geometry, nullptr, commandSpanIndex, firstOffset, true,
 					hasContinuation ? &bridge : nullptr,
 					hasContinuation
 						? &ContinueRetainedBridge : nullptr,
@@ -3294,14 +3314,18 @@ namespace fonthook::vectorfont
 					std::memory_order_acq_rel);
 			}
 			const bool success = !draw.runtimeFault
-				&& draw.drawnPacketCount
-					== view.span->commandCount;
+				&& (draw.visibilityCulled
+					|| draw.drawnPacketCount
+						== view.span->commandCount);
 			EndNativeA8CommandSpanExecution(
 				commandSpanIndex, success, draw.drewPacket);
 			if (success)
 			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::CommandVirtualSpanFused);
+				if (!draw.visibilityCulled)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::CommandVirtualSpanFused);
+				}
 				return true;
 			}
 			return draw.drewPacket || draw.constantStateFault;
@@ -3573,7 +3597,7 @@ namespace fonthook::vectorfont
 							? virtualSinglePacketCommandIndex
 							: kInvalidNativeA8CommandIndex;
 					NativeDirectImmediateScope immediateScope(
-						shape, validationCommandIndex,
+						shape, payload, validationCommandIndex,
 						kInvalidNativeA8CommandIndex,
 						commandExecution, nullptr, nullptr,
 						NativeImmediateCommandKind::VirtualSinglePacket,
@@ -3638,6 +3662,16 @@ namespace fonthook::vectorfont
 								FreeTypePerfCounter::CompositeDraw);
 						}
 					}
+					else if (immediateScope.VisibilityCulled())
+					{
+						draw.visibilityCulled = true;
+						if (singleton)
+						{
+							singleton->frameMode.store(
+								VirtualStockFrameMode::Culled,
+								std::memory_order_release);
+						}
+					}
 					else
 					{
 						draw.runtimeFault = true;
@@ -3686,7 +3720,8 @@ namespace fonthook::vectorfont
 			{
 				EndNativeA8VirtualSinglePacketCommandExecution(
 					virtualSinglePacketCommandIndex,
-					!draw.runtimeFault && draw.drewPacket,
+					!draw.runtimeFault
+						&& (draw.drewPacket || draw.visibilityCulled),
 					draw.drewPacket);
 			}
 			if (draw.runtimeFault)
@@ -4140,7 +4175,7 @@ namespace fonthook::vectorfont
 							: commandSpanIndex)
 						: kInvalidNativeA8CommandIndex;
 				NativeDirectImmediateScope immediateScope(
-					facade, validationCommandIndex,
+					facade, &payload, validationCommandIndex,
 					commandExecution && !singleCommandExecution
 						? 0u : kInvalidNativeA8CommandIndex,
 					commandExecution, nullptr, nullptr,
@@ -4221,6 +4256,10 @@ namespace fonthook::vectorfont
 							FreeTypePerfCounter::CompositeDraw);
 					}
 				}
+				else if (immediateScope.VisibilityCulled())
+				{
+					draw.visibilityCulled = true;
+				}
 				else
 				{
 					draw.runtimeFault = true;
@@ -4272,7 +4311,8 @@ namespace fonthook::vectorfont
 			if (commandExecution)
 			{
 				const bool success =
-					!draw.runtimeFault && draw.drewPacket;
+					!draw.runtimeFault
+						&& (draw.drewPacket || draw.visibilityCulled);
 				endCommandExecution(success, draw.drewPacket);
 				if (!success && !draw.drewPacket
 					&& !draw.constantStateFault)
@@ -5120,6 +5160,11 @@ namespace fonthook::vectorfont
 			{
 				return;
 			}
+			if (ConsumeNativeA8LateVisibilityCull(shape))
+			{
+				context.visibilityCulled = true;
+				return;
+			}
 			State().originalRenderImmediate(shape, renderer);
 			context.drew = true;
 			if (!context.strictValidation
@@ -5162,6 +5207,11 @@ namespace fonthook::vectorfont
 			if (!context.validationPassed
 				&& context.strictValidation)
 			{
+				return;
+			}
+			if (ConsumeNativeA8LateVisibilityCull(shape))
+			{
+				context.visibilityCulled = true;
 				return;
 			}
 			State().originalRenderImmediateAlt(shape, renderer);

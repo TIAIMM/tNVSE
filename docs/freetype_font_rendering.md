@@ -843,51 +843,55 @@ rejected restorations.
 
 Before preflight/upload work, each complete compatibility facade or
 virtual-stock group receives a read-only state test for exact zero
-Tile/material alpha under a provably no-op alpha blend. This test does not
-consult the renderer's current view-projection, viewport, hardware scissor, or
-the facade's app-cull bit. Those values are not authoritative for a particular
-Tile until the original `TileShader::UpdateConstants` call immediately before
-submission; predicting them during sorted preflight can incorrectly reject
-visible text in nested UI and render-target paths.
+Tile/material alpha under a provably no-op alpha blend. A sorted facade rejected
+at this stage does not enter shader/page preflight or static/dynamic VB
+preparation. Its Tile callback re-evaluates the condition before suppressing the
+submission, so a same-frame alpha change cannot lose text. This early test does
+not guess clip or renderer state: those values are not authoritative for a
+particular Tile during sorted preflight.
 
-A sorted facade rejected at this stage does not enter shader/page preflight or
-static/dynamic VB preparation. Its Tile callback re-evaluates visibility before
-skipping the submission, so a same-frame change from invisible to visible falls
-back to the ordinary validated packet route rather than losing text. Unsorted
-native calls perform the same check directly at the Tile hook. Every transform-,
-clip-, scissor-, app-cull-, nonstandard-blend-, or otherwise uncertain case
-remains visible to the original path. The periodic performance line reports
-`visibility_checks`, `culled`, the `alpha` reason count, `preflight_skipped`,
-`packets_saved`, and `vertices_saved`; the retained `app`/`clip`/`scissor`
-fields are compatibility counters and remain zero.
+`clips` and `clipwindow` are instead handled at the final stock boundary. The
+symbolized test build shows `Tile::UpdateClipwindows` propagating the
+`clipwindow` relationship and `Tile::ReClipChildren` resolving it, together
+with each child's `clips` trait, into the live `TileShaderProperty` scissor.
+Retail PC `TileShader::SetupGeometryConstants` at `0xBCA980` consumes that
+property, publishes the current model transform, and installs the hardware
+scissor; `TileShader::PostGeometry` at `0xBCAC60` restores scissor/stencil state.
+The native path therefore never walks or predicts the Tile hierarchy and never
+uses the independent `BSScissorTriShape` tail as a substitute for resolved Tile
+state.
 
-The renderer also installs a code-only list-viewport subtree culler. It does not
-require menu XML changes or recognize menu/tile names. A TileRect, TileImage
-(including hotrect/window instances), or TileText root becomes a candidate only
-when it owns a `listindex` trait, has live `clips`, and has a live nearest
-`clipwindow` ancestor. Its newly created retail NiNode receives a local vtable
-proxy; the global NiNode vtable is left untouched, so world-scene nodes do not
-pay this test.
+Around a guarded native pass, tNVSE arms a thread-local late-visibility scope.
+The exact retail slot 31 runs first. Only when its current pass geometry,
+property state, renderer, and D3D device all match does tNVSE test the immutable
+whole-text bound against the now-final `TileShaderProperty` scissor and current
+world-view-projection/viewport. The sphere bound is expanded to an enclosing
+cube and evaluated with four homogeneous half-space intervals; a draw is
+suppressed only when the complete cube is strictly outside one edge of a
+two-pixel-expanded scissor. No corner division, Tile traversal, allocation,
+D3D state query, or GPU readback is performed.
 
-Immediately before the candidate node would traverse its children in
-`NiNode::OnVisible`, the proxy resolves the original `Tileptr` extra data and
-uses the same retail absolute-Y helper and nearest-clip rule used to build the
-hardware scissor. Items close to the viewport are released immediately. For an
-item clearly outside the viewport, tNVSE conservatively accumulates the live
-vertical bounds of its complete Tile subtree before suppressing that one
-`OnVisible` traversal. A 96-UI-unit guard retains nearby rows and distance-field
-effects. A missing/non-finite dimension, excessive hierarchy, transformed
-Tile, unsupported 3D/radial/menu child, non-retail node vtable, or any other
-uncertain state fails open to the original traversal.
+Every ambiguous case fails open: disabled or malformed scissor, non-finite
+bound/matrix, a cube touching or crossing `w=0`, viewport mismatch, the retail
+special scissor-scaling mode, a replaced slot 31, pass/property/device identity
+mismatch, or an edge within the numeric safety slack all keep the original draw.
+On a proved miss, only the immediate driver draw is skipped; the surrounding
+retail pass continues through slot 35, preserving the original restore pairing.
+Command-buffer execution treats this as a successful consumed command, and a
+Virtual-stock singleton marks its frame `Culled` rather than reporting a
+resource fault. A non-fused multi-slot group tests each physical slot
+independently. Its fused retained span deliberately fails open because separate
+stock shells can carry independently live Tile properties; one shell's scissor
+is not accepted as proof for every follower.
 
-This path never changes `visible`, `target`, `listindex`, `APP_CULLED`, layout,
-scroll position, focus, hit testing, or input state. It only prevents a
-provably off-viewport subtree from registering its already-created render
-objects for the current frame. The performance line reports
-`viewport_nodes`, `install_failed`, `viewport_checks`, `viewport_culled`, and
-`fail_open`. A useful inventory-menu result has nonzero `viewport_culled` and a
-corresponding reduction in `sorted_facades`; `fail_open` is retained work, not
-missing UI.
+The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
+`scissor`, `preflight_skipped`, `packets_saved`, and `vertices_saved`. Alpha
+culls can increase `preflight_skipped`; late scissor culls occur after preflight
+and therefore save draw submission but not preparation. `app` and `clip` remain
+reserved fail-open compatibility counters. In a clipped Tweak/list menu,
+successful operation is shown by nonzero `scissor` with corresponding saved
+packets/vertices; `scissor=0` means the final conservative proof did not fire,
+not that the `clips`/`clipwindow` traits were absent.
 
 The dynamic ring retains its two-maximum-payload capacity, while the static VB
 starts at approximately 4 MiB instead of reserving its approximately 12 MiB
@@ -1132,6 +1136,11 @@ function/reference; slot 34 publishes cull mode and alpha-test enable; and slot
 35 restores only the scissor and stencil enables established by slot 31. The
 formal implementations at `BCA760`, `BCA980`, `BE1FF0`, `BE20B0`, `BE20E0`,
 and `BCAC60` establish those disjoint output categories.
+
+The late scissor visibility proof runs after an exact retail slot 31 and before
+the immediate driver draw. Even when that draw is culled, the pass is allowed to
+reach slot 35; the optimization therefore does not unbalance the retail
+scissor/stencil restore stack.
 
 The cache therefore tracks each slot independently. A texture-page change can
 require slot 30 without forcing identical blend and drawmode callbacks to run;

@@ -1,8 +1,13 @@
 #include "font_native_internal.h"
 
 #include "NiAlphaProperty.hpp"
+#include "NiDX9Renderer.hpp"
 #include "NiMaterialProperty.hpp"
+#include "NiPropertyState.hpp"
 #include "NiTexturingProperty.hpp"
+
+#include <cmath>
+#include <cstdint>
 
 namespace fonthook::vectorfont
 {
@@ -11,6 +16,13 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_native_visibility
 	{
+		inline constexpr UInt32 kCurrentRenderPass = 0x11F91E0;
+		inline constexpr UInt32 kScaledScissorActive = 0x11F9426;
+		inline constexpr double kScissorSafetyMarginPixels = 2.0;
+		inline constexpr double kClipIntervalRelativeSlack = 1.0e-6;
+
+		thread_local NativeA8LateVisibilityScope* s_lateVisibilityScope = nullptr;
+
 		// Font::MakeTriShape returns a TileShaderProperty, but the concrete class
 		// is not exposed by this CommonLib snapshot. Keep this read-only view tied
 		// to the same retail ABI already used by native packet state mirroring.
@@ -35,6 +47,8 @@ namespace fonthook::vectorfont
 		static_assert(sizeof(TileVisibilityPropertyView) == 0xB0);
 		static_assert(offsetof(TileVisibilityPropertyView, overlayColor) == 0x68);
 		static_assert(offsetof(TileVisibilityPropertyView, tileAlpha) == 0x78);
+		static_assert(offsetof(TileVisibilityPropertyView, scissorRect) == 0x9C);
+		static_assert(offsetof(TileVisibilityPropertyView, useScissorTest) == 0xAC);
 
 		const TileVisibilityPropertyView* GetTileProperty(
 			const NiTriShape* facade)
@@ -48,6 +62,199 @@ namespace fonthook::vectorfont
 			}
 			return static_cast<const TileVisibilityPropertyView*>(
 				static_cast<const BSShaderProperty*>(property));
+		}
+
+		const TileVisibilityPropertyView* GetTileProperty(
+			const NiPropertyState* properties)
+		{
+			NiShadeProperty* property = properties
+				? properties->m_spShadeProperty.m_pObject : nullptr;
+			if (!property
+				|| property->m_eShaderType != NiShadeProperty::PROP_Tile)
+			{
+				return nullptr;
+			}
+			return static_cast<const TileVisibilityPropertyView*>(
+				static_cast<const BSShaderProperty*>(property));
+		}
+
+		bool IsFiniteMatrix(const D3DXMATRIX& matrix)
+		{
+			for (UInt32 row = 0; row < 4; ++row)
+			{
+				for (UInt32 column = 0; column < 4; ++column)
+				{
+					if (!std::isfinite(matrix.m[row][column]))
+						return false;
+				}
+			}
+			return true;
+		}
+
+		D3DXMATRIX MultiplyMatrices(const D3DXMATRIX& left,
+			const D3DXMATRIX& right)
+		{
+			D3DXMATRIX result = {};
+			for (UInt32 row = 0; row < 4; ++row)
+			{
+				for (UInt32 column = 0; column < 4; ++column)
+				{
+					double value = 0.0;
+					for (UInt32 inner = 0; inner < 4; ++inner)
+					{
+						value += static_cast<double>(left.m[row][inner])
+							* static_cast<double>(right.m[inner][column]);
+					}
+					result.m[row][column] = static_cast<float>(value);
+				}
+			}
+			return result;
+		}
+
+		struct ClipColumn
+		{
+			double x = 0.0;
+			double y = 0.0;
+			double z = 0.0;
+			double translation = 0.0;
+		};
+
+		ClipColumn GetClipColumn(const D3DXMATRIX& matrix, UInt32 column)
+		{
+			return {
+				matrix.m[0][column], matrix.m[1][column],
+				matrix.m[2][column], matrix.m[3][column]
+			};
+		}
+
+		double EvaluateColumn(const ClipColumn& column,
+			const NiPoint3& point)
+		{
+			return column.x * point.x + column.y * point.y
+				+ column.z * point.z + column.translation;
+		}
+
+		double CubeExtent(const ClipColumn& column, double radius)
+		{
+			return radius * (std::abs(column.x) + std::abs(column.y)
+				+ std::abs(column.z));
+		}
+
+		ClipColumn SubtractScaled(const ClipColumn& left,
+			const ClipColumn& right, double scale)
+		{
+			return {
+				left.x - right.x * scale,
+				left.y - right.y * scale,
+				left.z - right.z * scale,
+				left.translation - right.translation * scale
+			};
+		}
+
+		bool CubeIsOutsidePlane(const ClipColumn& insidePlane,
+			const NiBound& bound)
+		{
+			const double center = EvaluateColumn(
+				insidePlane, bound.m_kCenter);
+			const double extent = CubeExtent(
+				insidePlane, bound.m_fRadius);
+			const double slack = (std::abs(center) + extent + 1.0)
+				* kClipIntervalRelativeSlack;
+			return center + extent < -slack;
+		}
+
+		bool IsValidScissorForViewport(const RECT& scissor,
+			const D3DVIEWPORT9& viewport)
+		{
+			if (!viewport.Width || !viewport.Height
+				|| scissor.left < 0 || scissor.top < 0
+				|| scissor.left >= scissor.right
+				|| scissor.top >= scissor.bottom)
+			{
+				return false;
+			}
+			const std::int64_t viewportLeft = viewport.X;
+			const std::int64_t viewportTop = viewport.Y;
+			const std::int64_t viewportRight = viewportLeft + viewport.Width;
+			const std::int64_t viewportBottom = viewportTop + viewport.Height;
+			return scissor.left >= viewportLeft
+				&& scissor.top >= viewportTop
+				&& scissor.right <= viewportRight
+				&& scissor.bottom <= viewportBottom;
+		}
+
+		bool IsPayloadOutsideScissor(const NativeA8ShapePayload& payload,
+			const TileVisibilityPropertyView& tile,
+			const NiDX9Renderer& renderer)
+		{
+			if (!payload.payloadTemplate || !tile.useScissorTest
+				|| *reinterpret_cast<const UInt8*>(kScaledScissorActive))
+			{
+				return false;
+			}
+			const NiBound& bound = payload.payloadTemplate->bound;
+			if (!std::isfinite(bound.m_kCenter.x)
+				|| !std::isfinite(bound.m_kCenter.y)
+				|| !std::isfinite(bound.m_kCenter.z)
+				|| !std::isfinite(bound.m_fRadius)
+				|| bound.m_fRadius < 0.0f
+				|| !IsValidScissorForViewport(
+					tile.scissorRect, renderer.m_kD3DPort)
+				|| !IsFiniteMatrix(renderer.m_kD3DMat)
+				|| !IsFiniteMatrix(renderer.m_kViewProj))
+			{
+				return false;
+			}
+
+			const D3DXMATRIX worldViewProjection = MultiplyMatrices(
+				renderer.m_kD3DMat, renderer.m_kViewProj);
+			if (!IsFiniteMatrix(worldViewProjection))
+				return false;
+
+			const ClipColumn clipX = GetClipColumn(worldViewProjection, 0);
+			const ClipColumn clipY = GetClipColumn(worldViewProjection, 1);
+			const ClipColumn clipW = GetClipColumn(worldViewProjection, 3);
+			const double radius = bound.m_fRadius;
+			const double centerW = EvaluateColumn(clipW, bound.m_kCenter);
+			const double extentW = CubeExtent(clipW, radius);
+			const double wSlack = (std::abs(centerW) + extentW + 1.0)
+				* kClipIntervalRelativeSlack;
+			// Perspective division is monotonic over the complete conservative cube
+			// only when every point is strictly in front of the w=0 plane.
+			if (centerW - extentW <= wSlack)
+				return false;
+
+			const D3DVIEWPORT9& viewport = renderer.m_kD3DPort;
+			const double inverseWidth = 1.0 / viewport.Width;
+			const double inverseHeight = 1.0 / viewport.Height;
+			const double leftNdc = ((tile.scissorRect.left
+				- kScissorSafetyMarginPixels - viewport.X)
+				* 2.0 * inverseWidth) - 1.0;
+			const double rightNdc = ((tile.scissorRect.right
+				+ kScissorSafetyMarginPixels - viewport.X)
+				* 2.0 * inverseWidth) - 1.0;
+			const double topNdc = 1.0 - ((tile.scissorRect.top
+				- kScissorSafetyMarginPixels - viewport.Y)
+				* 2.0 * inverseHeight);
+			const double bottomNdc = 1.0 - ((tile.scissorRect.bottom
+				+ kScissorSafetyMarginPixels - viewport.Y)
+				* 2.0 * inverseHeight);
+
+			// Each expression is non-negative inside the expanded scissor.  The
+			// payload sphere is first expanded to a cube; only a negative maximum
+			// for the whole cube proves that every glyph triangle is outside.
+			const ClipColumn leftPlane = SubtractScaled(
+				clipX, clipW, leftNdc);
+			const ClipColumn rightPlane = SubtractScaled(
+				ClipColumn{}, SubtractScaled(clipX, clipW, rightNdc), 1.0);
+			const ClipColumn topPlane = SubtractScaled(
+				ClipColumn{}, SubtractScaled(clipY, clipW, topNdc), 1.0);
+			const ClipColumn bottomPlane = SubtractScaled(
+				clipY, clipW, bottomNdc);
+			return CubeIsOutsidePlane(leftPlane, bound)
+				|| CubeIsOutsidePlane(rightPlane, bound)
+				|| CubeIsOutsidePlane(topPlane, bound)
+				|| CubeIsOutsidePlane(bottomPlane, bound);
 		}
 
 		bool IsZeroAlphaNoOpBlend(const NiAlphaProperty* alpha)
@@ -75,6 +282,20 @@ namespace fonthook::vectorfont
 		}
 	}
 
+	NativeA8LateVisibilityScope::NativeA8LateVisibilityScope(
+		const NiTriShape* geometry, const NativeA8ShapePayload* payload)
+		: m_geometry(geometry), m_payload(payload),
+		  m_previous(s_lateVisibilityScope)
+	{
+		s_lateVisibilityScope = this;
+	}
+
+	NativeA8LateVisibilityScope::~NativeA8LateVisibilityScope()
+	{
+		if (s_lateVisibilityScope == this)
+			s_lateVisibilityScope = m_previous;
+	}
+
 	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload)
 	{
@@ -94,6 +315,53 @@ namespace fonthook::vectorfont
 			return NativeA8VisibilityCull::ZeroAlpha;
 		}
 		return NativeA8VisibilityCull::None;
+	}
+
+	void EvaluateNativeA8PostConstantsVisibility(
+		const NiPropertyState* properties,
+		IDirect3DDevice9* device, bool verifiedRetailSlot31)
+	{
+		NativeA8LateVisibilityScope* scope = s_lateVisibilityScope;
+		if (!scope || scope->m_evaluated)
+			return;
+		scope->m_evaluated = true;
+		if (!verifiedRetailSlot31 || !scope->m_geometry || !scope->m_payload
+			|| !properties
+			|| properties != &scope->m_geometry->m_kProperties)
+		{
+			return;
+		}
+		BSShaderProperty::RenderPass* currentPass =
+			*reinterpret_cast<BSShaderProperty::RenderPass**>(
+				kCurrentRenderPass);
+		if (!currentPass || currentPass->pGeometry != scope->m_geometry)
+			return;
+		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
+		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+		if (!tile || !renderer || !device
+			|| renderer->GetD3DDevice() != device)
+		{
+			return;
+		}
+		if (IsPayloadOutsideScissor(*scope->m_payload, *tile, *renderer))
+			scope->m_cull = NativeA8VisibilityCull::Scissor;
+	}
+
+	bool ConsumeNativeA8LateVisibilityCull(const NiTriShape* geometry)
+	{
+		NativeA8LateVisibilityScope* scope = s_lateVisibilityScope;
+		if (!scope || scope->m_geometry != geometry
+			|| scope->m_cull == NativeA8VisibilityCull::None)
+		{
+			return false;
+		}
+		if (!scope->m_recorded && scope->m_payload)
+		{
+			scope->m_recorded = true;
+			RecordNativeA8VisibilityCull(
+				scope->m_cull, *scope->m_payload);
+		}
+		return true;
 	}
 
 	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,

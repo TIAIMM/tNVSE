@@ -347,6 +347,39 @@ namespace fonthook::vectorfont
 		Scissor
 	};
 
+	// clips/clipwindow are resolved by retail Tile::ReClipChildren into the live
+	// TileShaderProperty scissor.  A late scope is armed only around a guarded
+	// native pass so NativeUpdateConstants can test that final, pass-local state
+	// after the verified retail slot 31 has published it.  The matching immediate
+	// hook consumes the proof and skips only the driver draw; stock slot 35 still
+	// runs and restores the scissor/stencil stack.
+	class NativeA8LateVisibilityScope
+	{
+	public:
+		NativeA8LateVisibilityScope(const NiTriShape* geometry,
+			const NativeA8ShapePayload* payload);
+		~NativeA8LateVisibilityScope();
+
+		NativeA8LateVisibilityScope(
+			const NativeA8LateVisibilityScope&) = delete;
+		NativeA8LateVisibilityScope& operator=(
+			const NativeA8LateVisibilityScope&) = delete;
+
+	private:
+		friend void EvaluateNativeA8PostConstantsVisibility(
+			const NiPropertyState* properties,
+			IDirect3DDevice9* device, bool verifiedRetailSlot31);
+		friend bool ConsumeNativeA8LateVisibilityCull(
+			const NiTriShape* geometry);
+
+		const NiTriShape* m_geometry = nullptr;
+		const NativeA8ShapePayload* m_payload = nullptr;
+		NativeA8LateVisibilityScope* m_previous = nullptr;
+		NativeA8VisibilityCull m_cull = NativeA8VisibilityCull::None;
+		bool m_evaluated = false;
+		bool m_recorded = false;
+	};
+
 	struct NativeA8SortedFrameEntryView
 	{
 		const A8ShapeMetadata* metadata = nullptr;
@@ -781,6 +814,11 @@ namespace fonthook::vectorfont
 	UInt64 GetNativeA8SortedNestedTraversalSerial();
 	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload);
+	void EvaluateNativeA8PostConstantsVisibility(
+		const NiPropertyState* properties,
+		IDirect3DDevice9* device, bool verifiedRetailSlot31);
+	bool ConsumeNativeA8LateVisibilityCull(
+		const NiTriShape* geometry);
 	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,
 		const NativeA8ShapePayload& payload);
 	UInt32 GetNativeA8AtlasTextureEpoch();
