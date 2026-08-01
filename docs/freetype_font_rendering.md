@@ -889,23 +889,61 @@ The native path therefore never walks or predicts the Tile hierarchy and never
 uses the independent `BSScissorTriShape` tail as a substitute for resolved Tile
 state.
 
-Around a guarded native pass, tNVSE arms a thread-local late-visibility scope.
-The exact retail slot 31 runs first. Only when its current pass geometry,
-property state, renderer, and D3D device all match does tNVSE test the immutable
-whole-text bound against the now-final `TileShaderProperty` scissor and current
-world-view-projection/viewport. The sphere bound is expanded to an enclosing
-cube and evaluated with four homogeneous half-space intervals; a draw is
-suppressed only when the complete cube is strictly outside one edge of a
-two-pixel-expanded scissor. No corner division, Tile traversal, allocation,
-D3D state query, or GPU readback is performed.
+The retail matrix path is reproduced rather than inferred from the renderer's
+previous world matrix. `0xBCA980` calls `0xE6FBB0` with
+`currentPass->pGeometry->m_kWorld`, and `0xE6FBB0` calls
+`NiD3DUtility::GetD3DFromNi` at `0xB71A40`. For a Ni rotation `R`, uniform scale
+`s`, translation `t`, and renderer position adjustment `p`, the PC D3D matrix
+written by that function is
+
+```text
+W = [ sR00 sR10 sR20 0 ]
+    [ sR01 sR11 sR21 0 ]
+    [ sR02 sR12 sR22 0 ]
+    [ tx-px ty-py tz-pz 1 ]
+```
+
+The symbolized Xenon test build independently names
+`TileShader::SetupGeometryConstants` at `0x82250E58`, its
+`NiXenonRenderer::SetModelTransform` call at `0x8224ADF8`, and
+`NiD3DUtility::GetD3DFromNi` at `0x8224AE08`, including the same uniform-scale
+and `NiRenderer::PosAdjust` contract. Tile's vertex constant map requests
+`WorldViewProjTranspose`; retail `NiD3DShaderConstantMap` at `0xE85D10`
+constructs `(W * View) * Projection` with two `D3DXMatrixMultiply` calls and
+then transposes it. All 16 decompiled shader packages contain the same three
+Tile position programs (`TILE1000/1001/1002`): VS c0-c3 are four `dp4`
+operations against the input position. The pre-slot proof uses the same world
+layout, the same two D3DX calls and association order, and the untransposed
+matrix columns that those four shader rows represent.
+
+Around a guarded native pass, tNVSE arms a thread-local visibility scope. A
+fully classified Standard-lite pass first proves exact current-pass geometry,
+property, payload, renderer, and retail slot-31 identity. It can then test the
+immutable whole-text bound against the already-resolved live scissor before
+slot 31. The sphere bound is expanded to an enclosing cube and evaluated with
+four homogeneous half-space intervals; a pass is suppressed only when the
+complete cube is strictly outside one edge of a two-pixel-expanded scissor.
+Term-magnitude-relative slack is applied before cancellation, and every point
+of the cube must be strictly in front of `w=0`. A successful proof is consumed
+through the ordinary immediate validation hook, but slots 30-35, geometry
+preparation, the optional non-first-pass slot 68, and the driver draw are all
+skipped. Because slot 31 never pushed scissor/stencil state, slot 35 is
+intentionally not called.
+
+Other guarded routes, and Standard-lite calls rejected before exact pre-slot
+input evaluation, retain the original fallback: the exact retail slot 31 runs,
+the scope verifies the published renderer world matrix and pass-local
+identities, only the immediate driver draw is skipped, and slot 35 restores the
+stock scissor/stencil stack. Once Standard-lite has evaluated the exact same
+matrix/scissor inputs and kept the draw, the redundant post-slot calculation is
+elided; slot 31 does not mutate any of those inputs.
 
 Every ambiguous case fails open: disabled or malformed scissor, non-finite
-bound/matrix, a cube touching or crossing `w=0`, viewport mismatch, the retail
-special scissor-scaling mode, a replaced slot 31, pass/property/device identity
-mismatch, or an edge within the numeric safety slack all keep the original draw.
-On a proved miss, only the immediate driver draw is skipped; the surrounding
-retail pass continues through slot 35, preserving the original restore pairing.
-Command-buffer execution treats this as a successful consumed command, and a
+bound/transform/position-adjust/matrix, a cube touching or crossing `w=0`,
+viewport mismatch, the retail special scissor-scaling mode, a replaced slot 31,
+pass/property/payload/renderer/device identity mismatch, or an edge within the
+numeric safety slack all keep the original path. Command-buffer execution
+treats either kind of proved miss as a successful consumed command, and a
 Virtual-stock singleton marks its frame `Culled` rather than reporting a
 resource fault. A non-fused multi-slot group tests each physical slot
 independently. Its fused retained span deliberately fails open because separate
@@ -913,13 +951,18 @@ stock shells can carry independently live Tile properties; one shell's scissor
 is not accepted as proof for every follower.
 
 The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
-`scissor`, `preflight_skipped`, `packets_saved`, and `vertices_saved`. Alpha
-culls can increase `preflight_skipped`; late scissor culls occur after preflight
-and therefore save draw submission but not preparation. `app` and `clip` remain
-reserved fail-open compatibility counters. In a clipped Tweak/list menu,
-successful operation is shown by nonzero `scissor` with corresponding saved
-packets/vertices; `scissor=0` means the final conservative proof did not fire,
-not that the `clips`/`clipwindow` traits were absent.
+`scissor`, `scissor_pre31`, `scissor_post31`, `preflight_skipped`,
+`packets_saved`, and `vertices_saved`. `scissor` is the total and the two phase
+counters partition successfully consumed scissor culls. Alpha culls can
+increase `preflight_skipped`. Both scissor paths occur after preflight, but the
+pre-slot path additionally avoids all six Tile callbacks and geometry setup;
+it also avoids optional slot 68 on a non-first pass. The post-slot fallback
+saves only the driver submission. `app` and `clip`
+remain reserved fail-open compatibility counters. In a clipped Tweak/list
+menu, the desired result is nonzero `scissor_pre31`, a reduced
+`stock_constant_updates`, and corresponding saved packets/vertices.
+`scissor_post31` shows safe fallback coverage. `scissor=0` means neither final
+conservative proof fired, not that the `clips`/`clipwindow` traits were absent.
 
 The dynamic ring retains its two-maximum-payload capacity, while the static VB
 starts at approximately 4 MiB instead of reserving its approximately 12 MiB
@@ -1165,10 +1208,13 @@ function/reference; slot 34 publishes cull mode and alpha-test enable; and slot
 formal implementations at `BCA760`, `BCA980`, `BE1FF0`, `BE20B0`, `BE20E0`,
 and `BCAC60` establish those disjoint output categories.
 
-The late scissor visibility proof runs after an exact retail slot 31 and before
-the immediate driver draw. Even when that draw is culled, the pass is allowed to
-reach slot 35; the optimization therefore does not unbalance the retail
-scissor/stencil restore stack.
+Before Standard-lite slot 30, the reconstructed world-to-scissor proof may
+consume the complete pass. This early exit calls neither slot 31 nor slot 35,
+so it cannot unbalance the retail scissor/stencil restore stack. If its strict
+identity or matrix-construction gate fails, the exact slot-31 path remains
+unchanged; the post-slot fallback can still suppress the immediate driver draw
+and then lets slot 35 perform the required restore. A completed pre-slot test
+that cannot prove the cube outside simply keeps the draw and is not repeated.
 
 The cache therefore tracks each slot independently. A texture-page change can
 require slot 30 without forcing identical blend and drawmode callbacks to run;

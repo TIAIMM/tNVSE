@@ -140,6 +140,8 @@ namespace fonthook::vectorfont
 		VisibilityZeroAlpha,
 		VisibilityClip,
 		VisibilityScissor,
+		VisibilityScissorPreConstants,
+		VisibilityScissorPostConstants,
 		VisibilityPreflightSkipped,
 		VisibilityPacketsSaved,
 		VisibilityVerticesSaved,

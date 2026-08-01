@@ -348,11 +348,11 @@ namespace fonthook::vectorfont
 	};
 
 	// clips/clipwindow are resolved by retail Tile::ReClipChildren into the live
-	// TileShaderProperty scissor.  A late scope is armed only around a guarded
-	// native pass so NativeUpdateConstants can test that final, pass-local state
-	// after the verified retail slot 31 has published it.  The matching immediate
-	// hook consumes the proof and skips only the driver draw; stock slot 35 still
-	// runs and restores the scissor/stencil stack.
+	// TileShaderProperty scissor. A visibility scope is armed only around a
+	// guarded native pass. Standard-lite may reconstruct retail's model matrix
+	// and prove a miss before slot 31; otherwise NativeUpdateConstants retains
+	// the post-slot-31 fallback. The matching immediate hook consumes either
+	// proof as a successful draw suppression.
 	class NativeA8LateVisibilityScope
 	{
 	public:
@@ -366,6 +366,12 @@ namespace fonthook::vectorfont
 			const NativeA8LateVisibilityScope&) = delete;
 
 	private:
+		friend bool EvaluateNativeA8PreConstantsVisibility(
+			const NiTriShape* geometry,
+			const NativeA8ShapePayload& payload,
+			const NiPropertyState* properties,
+			NiDX9Renderer* renderer, IDirect3DDevice9* device,
+			bool verifiedRetailSlot31);
 		friend void EvaluateNativeA8PostConstantsVisibility(
 			const NiPropertyState* properties,
 			IDirect3DDevice9* device, bool verifiedRetailSlot31);
@@ -378,6 +384,7 @@ namespace fonthook::vectorfont
 		NativeA8VisibilityCull m_cull = NativeA8VisibilityCull::None;
 		bool m_evaluated = false;
 		bool m_recorded = false;
+		bool m_preConstantsCull = false;
 	};
 
 	struct NativeA8SortedFrameEntryView
@@ -814,6 +821,10 @@ namespace fonthook::vectorfont
 	UInt64 GetNativeA8SortedNestedTraversalSerial();
 	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload);
+	bool EvaluateNativeA8PreConstantsVisibility(
+		const NiTriShape* geometry, const NativeA8ShapePayload& payload,
+		const NiPropertyState* properties, NiDX9Renderer* renderer,
+		IDirect3DDevice9* device, bool verifiedRetailSlot31);
 	void EvaluateNativeA8PostConstantsVisibility(
 		const NiPropertyState* properties,
 		IDirect3DDevice9* device, bool verifiedRetailSlot31);

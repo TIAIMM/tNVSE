@@ -2048,8 +2048,6 @@ namespace fonthook::vectorfont
 			// InvokeGuardedNativeReplay admits only a completely classified
 			// callback table. Unknown injected callbacks return to stock B994F0
 			// before its prelude or any draw has executed.
-			NativeSegmentDeviceStateCache* deviceState =
-				EnterSegmentDeviceStateCache(deviceStateStamp);
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::StandardPassV2Replay);
 			// Retail RenderPassImmediately_Standard first publishes the current
@@ -2060,6 +2058,24 @@ namespace fonthook::vectorfont
 			renderer->m_pkCurrProp =
 				const_cast<NiPropertyState*>(properties);
 			renderer->m_pkCurrEffects = nullptr;
+			const bool verifiedRetailSlot31 =
+				(program.standardV2SlotProofs
+					& NativeA8CompiledPacketCommand::
+						kStandardSlot31Proof) != 0;
+			if (command.payload
+				&& EvaluateNativeA8PreConstantsVisibility(
+					geometry, *command.payload, properties, renderer,
+					program.device, verifiedRetailSlot31))
+			{
+				// The visibility scope carries a whole-payload proof. Route it
+				// through the ordinary immediate hook so validation/accounting
+				// remain identical, but skip every pass callback and geometry setup.
+				A8RenderImmediateAlt(geometry, nullptr, renderer);
+				return;
+			}
+
+			NativeSegmentDeviceStateCache* deviceState =
+				EnterSegmentDeviceStateCache(deviceStateStamp);
 
 			using SetupStateFn = void(__thiscall*)(
 				TileShader*, const NiPropertyState*);

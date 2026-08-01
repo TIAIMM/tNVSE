@@ -18,6 +18,7 @@ namespace fonthook::vectorfont
 	{
 		inline constexpr UInt32 kCurrentRenderPass = 0x11F91E0;
 		inline constexpr UInt32 kScaledScissorActive = 0x11F9426;
+		inline constexpr UInt32 kRendererPositionAdjust = 0x11F474C;
 		inline constexpr double kScissorSafetyMarginPixels = 2.0;
 		inline constexpr double kClipIntervalRelativeSlack = 1.0e-6;
 
@@ -91,24 +92,44 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		D3DXMATRIX MultiplyMatrices(const D3DXMATRIX& left,
-			const D3DXMATRIX& right)
+		bool BuildRetailTileWorldMatrix(const NiTransform& transform,
+			D3DXMATRIX& world)
 		{
-			D3DXMATRIX result = {};
-			for (UInt32 row = 0; row < 4; ++row)
+			const NiPoint3 positionAdjust =
+				*reinterpret_cast<const NiPoint3*>(
+					kRendererPositionAdjust);
+			if (!std::isfinite(transform.m_fScale)
+				|| !std::isfinite(transform.m_Translate.x)
+				|| !std::isfinite(transform.m_Translate.y)
+				|| !std::isfinite(transform.m_Translate.z)
+				|| !std::isfinite(positionAdjust.x)
+				|| !std::isfinite(positionAdjust.y)
+				|| !std::isfinite(positionAdjust.z))
 			{
-				for (UInt32 column = 0; column < 4; ++column)
+				return false;
+			}
+
+			world = {};
+			for (UInt32 row = 0; row < 3; ++row)
+			{
+				for (UInt32 column = 0; column < 3; ++column)
 				{
-					double value = 0.0;
-					for (UInt32 inner = 0; inner < 4; ++inner)
-					{
-						value += static_cast<double>(left.m[row][inner])
-							* static_cast<double>(right.m[inner][column]);
-					}
-					result.m[row][column] = static_cast<float>(value);
+					const float rotation =
+						transform.m_Rotate.m_pEntry[column][row];
+					if (!std::isfinite(rotation))
+						return false;
+					// Retail NiD3DUtility::GetD3DFromNi at B71A40
+					// transposes NiMatrix3 for D3D's row-vector layout and
+					// applies the uniform NiTransform scale while storing.
+					world.m[row][column] =
+						rotation * transform.m_fScale;
 				}
 			}
-			return result;
+			world.m[3][0] = transform.m_Translate.x - positionAdjust.x;
+			world.m[3][1] = transform.m_Translate.y - positionAdjust.y;
+			world.m[3][2] = transform.m_Translate.z - positionAdjust.z;
+			world.m[3][3] = 1.0f;
+			return IsFiniteMatrix(world);
 		}
 
 		struct ClipColumn
@@ -132,6 +153,15 @@ namespace fonthook::vectorfont
 		{
 			return column.x * point.x + column.y * point.y
 				+ column.z * point.z + column.translation;
+		}
+
+		double ColumnEvaluationMagnitude(const ClipColumn& column,
+			const NiPoint3& point)
+		{
+			return std::abs(column.x * point.x)
+				+ std::abs(column.y * point.y)
+				+ std::abs(column.z * point.z)
+				+ std::abs(column.translation);
 		}
 
 		double CubeExtent(const ClipColumn& column, double radius)
@@ -158,7 +188,11 @@ namespace fonthook::vectorfont
 				insidePlane, bound.m_kCenter);
 			const double extent = CubeExtent(
 				insidePlane, bound.m_fRadius);
-			const double slack = (std::abs(center) + extent + 1.0)
+			// Use the pre-cancellation term magnitude. abs(center) alone can be
+			// tiny after subtracting large world/viewport terms and would not
+			// bound the float shader's dot-product rounding.
+			const double slack = (ColumnEvaluationMagnitude(
+				insidePlane, bound.m_kCenter) + extent + 1.0)
 				* kClipIntervalRelativeSlack;
 			return center + extent < -slack;
 		}
@@ -185,7 +219,8 @@ namespace fonthook::vectorfont
 
 		bool IsPayloadOutsideScissor(const NativeA8ShapePayload& payload,
 			const TileVisibilityPropertyView& tile,
-			const NiDX9Renderer& renderer)
+			const NiDX9Renderer& renderer, const D3DXMATRIX& world,
+			bool worldKnownFinite = false)
 		{
 			if (!payload.payloadTemplate || !tile.useScissorTest
 				|| *reinterpret_cast<const UInt8*>(kScaledScissorActive))
@@ -200,14 +235,24 @@ namespace fonthook::vectorfont
 				|| bound.m_fRadius < 0.0f
 				|| !IsValidScissorForViewport(
 					tile.scissorRect, renderer.m_kD3DPort)
-				|| !IsFiniteMatrix(renderer.m_kD3DMat)
-				|| !IsFiniteMatrix(renderer.m_kViewProj))
+				|| (!worldKnownFinite && !IsFiniteMatrix(world))
+				|| !IsFiniteMatrix(renderer.m_kD3DView)
+				|| !IsFiniteMatrix(renderer.m_kD3DProj))
 			{
 				return false;
 			}
 
-			const D3DXMATRIX worldViewProjection = MultiplyMatrices(
-				renderer.m_kD3DMat, renderer.m_kViewProj);
+			// WorldViewProjTranspose is predefined mapping 23 in the retail
+			// constant map at E85D10. It calls D3DXMatrixMultiply twice in this
+			// exact association order, then transposes for VS c0-c3. Use the same
+			// D3DX entry point and retain the non-transposed matrix for row-vector
+			// homogeneous half-space evaluation below.
+			D3DXMATRIX worldView = {};
+			D3DXMATRIX worldViewProjection = {};
+			D3DXMatrixMultiply(
+				&worldView, &world, &renderer.m_kD3DView);
+			D3DXMatrixMultiply(&worldViewProjection,
+				&worldView, &renderer.m_kD3DProj);
 			if (!IsFiniteMatrix(worldViewProjection))
 				return false;
 
@@ -217,7 +262,8 @@ namespace fonthook::vectorfont
 			const double radius = bound.m_fRadius;
 			const double centerW = EvaluateColumn(clipW, bound.m_kCenter);
 			const double extentW = CubeExtent(clipW, radius);
-			const double wSlack = (std::abs(centerW) + extentW + 1.0)
+			const double wSlack = (ColumnEvaluationMagnitude(
+				clipW, bound.m_kCenter) + extentW + 1.0)
 				* kClipIntervalRelativeSlack;
 			// Perspective division is monotonic over the complete conservative cube
 			// only when every point is strictly in front of the w=0 plane.
@@ -317,6 +363,60 @@ namespace fonthook::vectorfont
 		return NativeA8VisibilityCull::None;
 	}
 
+	bool EvaluateNativeA8PreConstantsVisibility(
+		const NiTriShape* geometry, const NativeA8ShapePayload& payload,
+		const NiPropertyState* properties, NiDX9Renderer* renderer,
+		IDirect3DDevice9* device, bool verifiedRetailSlot31)
+	{
+		NativeA8LateVisibilityScope* scope = s_lateVisibilityScope;
+		if (!scope || scope->m_evaluated || !verifiedRetailSlot31
+			|| !geometry || scope->m_geometry != geometry
+			|| scope->m_payload != &payload || !properties
+			|| properties != &geometry->m_kProperties || !renderer
+			|| renderer != NiDX9Renderer::GetSingleton() || !device
+			|| renderer->GetD3DDevice() != device)
+		{
+			return false;
+		}
+		BSShaderProperty::RenderPass* currentPass =
+			*reinterpret_cast<BSShaderProperty::RenderPass**>(
+				kCurrentRenderPass);
+		if (!currentPass || currentPass->pGeometry != geometry)
+			return false;
+		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
+		if (!tile)
+			return false;
+		if (!payload.payloadTemplate || !tile->useScissorTest
+			|| *reinterpret_cast<const UInt8*>(kScaledScissorActive))
+		{
+			// These are immutable/pass-local no-proof gates which the post-slot
+			// fallback tests identically. Avoid even constructing a world matrix.
+			scope->m_evaluated = true;
+			return false;
+		}
+		D3DXMATRIX world = {};
+		if (!BuildRetailTileWorldMatrix(geometry->m_kWorld, world))
+			return false;
+		const bool outside = IsPayloadOutsideScissor(
+			payload, *tile, *renderer, world, true);
+		// Slot 31 does not mutate any proof input; it only publishes this same
+		// model matrix/constants and device state. Once the exact pre-slot
+		// inputs were evaluated, repeating the identical test in the post-slot
+		// fallback would add CPU work without recovering an indeterminate case.
+		scope->m_evaluated = true;
+		if (!outside)
+			return false;
+
+		// This is the exact matrix slot 31 would publish: formal PC BCA980
+		// calls E6FBB0 -> B71A40 with currentPass->geometry->m_kWorld, and
+		// the symbolized test build expresses the same operation as
+		// NiXenonRenderer::SetModelTransform. No slot-31 state has run, so
+		// Standard-lite can suppress the complete pass without a slot-35 pop.
+		scope->m_cull = NativeA8VisibilityCull::Scissor;
+		scope->m_preConstantsCull = true;
+		return true;
+	}
+
 	void EvaluateNativeA8PostConstantsVisibility(
 		const NiPropertyState* properties,
 		IDirect3DDevice9* device, bool verifiedRetailSlot31)
@@ -343,8 +443,12 @@ namespace fonthook::vectorfont
 		{
 			return;
 		}
-		if (IsPayloadOutsideScissor(*scope->m_payload, *tile, *renderer))
+		if (IsPayloadOutsideScissor(*scope->m_payload, *tile, *renderer,
+			renderer->m_kD3DMat))
+		{
 			scope->m_cull = NativeA8VisibilityCull::Scissor;
+			scope->m_preConstantsCull = false;
+		}
 	}
 
 	bool ConsumeNativeA8LateVisibilityCull(const NiTriShape* geometry)
@@ -358,6 +462,12 @@ namespace fonthook::vectorfont
 		if (!scope->m_recorded && scope->m_payload)
 		{
 			scope->m_recorded = true;
+			if (scope->m_cull == NativeA8VisibilityCull::Scissor)
+			{
+				RecordFreeTypePerf(scope->m_preConstantsCull
+					? FreeTypePerfCounter::VisibilityScissorPreConstants
+					: FreeTypePerfCounter::VisibilityScissorPostConstants);
+			}
 			RecordNativeA8VisibilityCull(
 				scope->m_cull, *scope->m_payload);
 		}
