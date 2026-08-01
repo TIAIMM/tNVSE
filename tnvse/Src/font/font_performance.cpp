@@ -326,7 +326,19 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_sort: mixed_equal_depth_runs_restored=%llu items_restored=%llu restore_rejected=%llu",
+			"tnvse_freetype_sort: original_anchor_sorts=%llu anchor_items=%llu anchor_mixed_runs=%llu anchor_fallbacks=%llu anchor_predecessor_fallbacks=%llu anchor_proof_fallbacks=%llu mixed_equal_depth_runs_restored=%llu items_restored=%llu restore_rejected=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SortedOriginalOrderAnchorSort)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SortedOriginalOrderAnchorItem)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SortedOriginalOrderAnchorMixedRun)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SortedOriginalOrderAnchorFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SortedOriginalOrderAnchorPredecessorFallback)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SortedOriginalOrderAnchorProofFallback)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SortedMixedEqualDepthRunRestored)],
 			values[static_cast<size_t>(

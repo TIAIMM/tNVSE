@@ -636,10 +636,11 @@ namespace fonthook::vectorfont
 		SynchronizePersistentFontCacheRoute(ResolveFontAtlasRoute(
 			nativeReady, g_bEnableFreeTypeFontAggressivePerformanceMode));
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: initialization nativeReady=%u accumulator=%u alphaRenderHook=%u immediateRoute=%u shader=%u",
+			"tnvse_freetype_native: initialization nativeReady=%u accumulator=%u alphaRenderHook=%u sortAnchorHook=%u immediateRoute=%u shader=%u",
 			nativeReady ? 1 : 0,
 			accumulatorReady ? 1 : 0,
 			State().renderAlphaGeometryHookInstalled ? 1 : 0,
+			State().tileSortAnchorHookInstalled ? 1 : 0,
 			immediateRouteReady ? 1 : 0,
 			shaderReady ? 1 : 0);
 	}

@@ -826,20 +826,48 @@ promotes all eligible artifacts with one static-VB Lock/copy
 sequence/Unlock. Tiles are not persistently merged: stock depth/order,
 per-Tile transform, scissor, alpha, and shader constants remain independent.
 The retail and symbolized test builds both append accepted Tile geometry to the
-accumulator and then apply a depth-only unstable quicksort. Adding FreeType
-facades can therefore change the permutation of unrelated equal-depth menu
-items. Immediately after stock sorting, tNVSE restores painter order only
-within a contiguous exact-equal-depth run containing both FreeType facades and
-stock geometry. Because the stock renderer consumes the sorted array backwards,
-logical blocks are ordered by descending registration ordinal: earlier blocks
-are submitted first and later blocks remain later/on top. A multi-slot
-Virtual-stock text is one block whose internal primary-to-follower array order
-is preserved, so reverse submission still draws slot 0 through primary and its
-topology remains command-buffer eligible. Pure stock, pure FreeType, and
-unequal-depth runs are untouched. Pointer, count, duplicate, or topology
-ambiguity fails closed without modifying the sorted arrays. The aggregate
-`tnvse_freetype_sort` line reports restored mixed runs, restored items, and
-rejected restorations.
+accumulator and then apply the same depth-only unstable quicksort. In retail,
+`BSShaderAccumulator::FinishAccumulating_Tiles` at `0xB65E80` loads virtual
+slot `0xA4`, clears `m_pGeometryList` at `0xB65E95`, calls
+`NiAlphaAccumulator::Sort` (`0xA9B570`), and enters the backwards
+`RenderAlphaGeometry` traversal at `0xB65EA0 -> 0xB64F90`. The symbolized
+August 22 test build confirms the same sequence in
+`FinishAccumulating_Interface` (`0x82260438`), the interface-depth source
+`world.translate.y` in `NiAlphaAccumulator::Sort` (`0x8221B778`), the exact
+pivot/partition recursion in `SortObjectsByDepth` (`0x82276BC8`) and
+`ChoosePivot` (`0x82276CA0`), and the backwards traversal at `0x8223F1D0`.
+
+tNVSE now treats the successfully committed stock `AddTail` ordinal as the
+original-order anchor. It records an ordinal only when the predecessor grows
+`m_kItems` by exactly one and the new tail is the same facade. The nine stock
+bytes at `0xB65E95` are replaced as one guarded block by a call that receives
+the already loaded sort target in EDX. The fast path is entered only when that
+target is still the retail stock sort, interface sorting is active, every depth
+is finite, and all facade identity, registration-cycle, duplicate, contiguous
+Virtual-stock block, slot, and item-count proofs succeed. A changed call site or
+vtable predecessor is never overwritten or bypassed.
+
+The anchored sorter copies the `AddTail` list directly into the engine arrays
+while carrying a sidecar ordinal through a decision-equivalent copy of the
+stock pivot, partition, swap, recursion, and tail-iteration decisions. It then
+uses linear ordinal/run tables to change only a contiguous exact-equal-depth run
+that contains both stock and FreeType geometry. Logical blocks are stored by
+descending registration ordinal because the renderer consumes the array
+backwards; members of one multi-slot Virtual-stock block remain ascending in
+the stored array, so reverse submission still draws slot 0 through primary.
+Pure-stock, pure-FreeType, and unequal-depth permutations remain exactly those
+produced by the retail quicksort. This removes the normal path's post-sort list
+snapshot, pointer hash construction, sorted-to-registration reconstruction,
+and per-run `std::sort`.
+
+Any failed proof calls the EDX predecessor and retains the older conservative
+post-sort repair. It cannot turn an uncertain frame into an anchored frame.
+The initialization line reports `sortAnchorHook=1` when the guarded call-site
+patch is current. The aggregate `tnvse_freetype_sort` line reports
+`original_anchor_sorts`, `anchor_items`, changed `anchor_mixed_runs`, and
+`anchor_fallbacks` (split into non-stock predecessor and proof failures);
+`mixed_equal_depth_runs_restored`, `items_restored`, and `restore_rejected`
+then describe only compatibility-path work.
 
 Before preflight/upload work, each complete compatibility facade or
 virtual-stock group receives a read-only state test for exact zero
