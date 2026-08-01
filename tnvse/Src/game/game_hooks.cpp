@@ -397,8 +397,19 @@ namespace fonthook
 			bool failOpen = false;
 			bool fastVisible = false;
 			bool deepCheck = false;
+			bool deepOverlap = false;
+			bool appCulled = false;
 			UInt32 visitedTiles = 0;
+			FreeTypeViewportCullFailReason failReason =
+				FreeTypeViewportCullFailReason::None;
 		};
+
+		void SetViewportFailOpen(ViewportCullDecision& decision,
+			FreeTypeViewportCullFailReason reason)
+		{
+			decision.failOpen = true;
+			decision.failReason = reason;
+		}
 
 		static_assert(sizeof(NiExtraData) == 0x0C,
 			"Tileptr extra-data layout requires the retail NiExtraData ABI");
@@ -593,7 +604,7 @@ namespace fonthook
 			return false;
 		}
 
-		bool AccumulateViewportSubtreeBounds(
+		FreeTypeViewportCullFailReason AccumulateViewportSubtreeBounds(
 			Tile* tile, Tile* expectedParent, NiNode* rootNode,
 			UInt32 depth, TileVerticalBounds& bounds)
 		{
@@ -601,34 +612,40 @@ namespace fonthook
 				|| depth > kMaximumViewportSubtreeDepth
 				|| ++bounds.visited > kMaximumViewportSubtreeTiles)
 			{
-				return false;
+				return FreeTypeViewportCullFailReason::SubtreeTopology;
 			}
 
 			NiNode* tileNode = tile->spNiNode;
 			if (tileNode && tileNode->GetAppCulled())
-				return true;
-			if (!IsSupportedViewportTileType(tile)
-				|| !HasIdentityTileTransform(tile))
+				return FreeTypeViewportCullFailReason::None;
+			// A Tile with no scene node is only a logical container. Its children
+			// still receive the complete proof, so an unfamiliar container type does
+			// not by itself make either a drawable or an unbounded interval.
+			if (tileNode && !IsSupportedViewportTileType(tile))
 			{
-				return false;
+				return FreeTypeViewportCullFailReason::SubtreeTopology;
+			}
+			if (!HasIdentityTileTransform(tile))
+			{
+				return FreeTypeViewportCullFailReason::Transform;
 			}
 			if (tileNode
 				&& (FindTileForNode(tileNode) != tile
 					|| !IsSceneNodeWithinRoot(tileNode, rootNode)))
 			{
-				return false;
+				return FreeTypeViewportCullFailReason::SubtreeTopology;
 			}
 
 			Tile::Value* height = tile->GetValue(Tile::kTileValue_height);
 			if (!height)
 			{
 				if (tileNode)
-					return false;
+					return FreeTypeViewportCullFailReason::SubtreeBounds;
 			}
 			else
 			{
 				if (!std::isfinite(height->fNum) || height->fNum < 0.0f)
-					return false;
+					return FreeTypeViewportCullFailReason::SubtreeBounds;
 				if (height->fNum > 0.0f)
 				{
 					const float top = GetAbsoluteTileY(tile);
@@ -636,7 +653,7 @@ namespace fonthook
 					if (!std::isfinite(top) || !std::isfinite(bottom)
 						|| bottom < top)
 					{
-						return false;
+						return FreeTypeViewportCullFailReason::SubtreeBounds;
 					}
 					bounds.top = std::min(bounds.top, top);
 					bounds.bottom = std::max(bounds.bottom, bottom);
@@ -646,13 +663,17 @@ namespace fonthook
 
 			for (Tile* child : tile->kChildren)
 			{
-				if (child && !AccumulateViewportSubtreeBounds(
-					child, tile, rootNode, depth + 1, bounds))
+				if (!child)
+					continue;
+				const FreeTypeViewportCullFailReason failure =
+					AccumulateViewportSubtreeBounds(
+						child, tile, rootNode, depth + 1, bounds);
+				if (failure != FreeTypeViewportCullFailReason::None)
 				{
-					return false;
+					return failure;
 				}
 			}
-			return true;
+			return FreeTypeViewportCullFailReason::None;
 		}
 
 		bool IsOutsidePaddedViewport(
@@ -679,7 +700,8 @@ namespace fonthook
 			decision.checked = true;
 			if (!std::isfinite(listIndex->fNum))
 			{
-				decision.failOpen = true;
+				SetViewportFailOpen(decision,
+					FreeTypeViewportCullFailReason::ListIndex);
 				return decision;
 			}
 
@@ -688,23 +710,43 @@ namespace fonthook
 				return decision;
 			if (!std::isfinite(clips->fNum))
 			{
-				decision.failOpen = true;
+				SetViewportFailOpen(decision,
+					FreeTypeViewportCullFailReason::Clips);
+				return decision;
+			}
+			if (node->GetAppCulled())
+			{
+				// This is the exact engine visibility bit that stock NiNode::OnVisible
+				// would honor before traversing or registering any child geometry.
+				decision.culled = true;
+				decision.appCulled = true;
 				return decision;
 			}
 
 			bool chainValid = true;
 			Tile* clipWindow = FindNearestClipWindow(tile, chainValid);
-			Tile::Value* clipHeight = clipWindow
-				? clipWindow->GetValue(Tile::kTileValue_height) : nullptr;
+			if (!chainValid || !clipWindow)
+			{
+				SetViewportFailOpen(decision,
+					FreeTypeViewportCullFailReason::ClipWindow);
+				return decision;
+			}
+			Tile::Value* clipHeight =
+				clipWindow->GetValue(Tile::kTileValue_height);
+			if (!IsFiniteTraitValue(clipHeight)
+				|| clipHeight->fNum <= 0.0f)
+			{
+				SetViewportFailOpen(decision,
+					FreeTypeViewportCullFailReason::ClipWindow);
+				return decision;
+			}
 			Tile::Value* rootHeight =
 				tile->GetValue(Tile::kTileValue_height);
-			if (!chainValid || !clipWindow
-				|| !IsFiniteTraitValue(clipHeight)
-				|| clipHeight->fNum <= 0.0f
-				|| !IsFiniteTraitValue(rootHeight)
+			if (!IsFiniteTraitValue(rootHeight)
 				|| rootHeight->fNum <= 0.0f)
 			{
-				decision.failOpen = true;
+				SetViewportFailOpen(decision,
+					FreeTypeViewportCullFailReason::RootBounds);
 				return decision;
 			}
 
@@ -716,7 +758,8 @@ namespace fonthook
 				|| !std::isfinite(rootTop) || !std::isfinite(rootBottom)
 				|| clipBottom < clipTop || rootBottom < rootTop)
 			{
-				decision.failOpen = true;
+				SetViewportFailOpen(decision,
+					FreeTypeViewportCullFailReason::RootBounds);
 				return decision;
 			}
 
@@ -731,25 +774,51 @@ namespace fonthook
 			}
 
 			decision.deepCheck = true;
-			if (!IsNonnegativeIntegralListIndex(listIndex->fNum)
-				|| !HasSafeTileChain(tile, clipWindow)
-				|| tile->spNiNode != node)
+			// The exact-integer list index was an installation classifier. Once the
+			// node is hooked, a live finite nonnegative value is sufficient: it never
+			// participates in the geometric miss proof below.
+			if (!HasSafeTileChain(tile, clipWindow))
 			{
-				decision.failOpen = true;
+				SetViewportFailOpen(decision,
+					FreeTypeViewportCullFailReason::Transform);
+				return decision;
+			}
+			if (tile->spNiNode != node)
+			{
+				SetViewportFailOpen(decision,
+					FreeTypeViewportCullFailReason::NodeIdentity);
 				return decision;
 			}
 
+			// Root type/identity/transform/height/absolute-Y were already proved on
+			// the hot decision path. Seed that exact interval and recurse only into
+			// children, avoiding duplicate trait lookup, Tileptr scanning and scene
+			// parent walks for every offscreen row.
 			TileVerticalBounds bounds;
-			const bool complete = AccumulateViewportSubtreeBounds(
-				tile, tile->pParent, node, 0, bounds);
-			decision.visitedTiles = bounds.visited;
-			if (!complete || !bounds.hasArea)
+			bounds.top = rootTop;
+			bounds.bottom = rootBottom;
+			bounds.visited = 1;
+			bounds.hasArea = true;
+			FreeTypeViewportCullFailReason failure =
+				FreeTypeViewportCullFailReason::None;
+			for (Tile* child : tile->kChildren)
 			{
-				decision.failOpen = true;
+				if (!child)
+					continue;
+				failure = AccumulateViewportSubtreeBounds(
+					child, tile, node, 1, bounds);
+				if (failure != FreeTypeViewportCullFailReason::None)
+					break;
+			}
+			decision.visitedTiles = bounds.visited;
+			if (failure != FreeTypeViewportCullFailReason::None)
+			{
+				SetViewportFailOpen(decision, failure);
 				return decision;
 			}
 			decision.culled = IsOutsidePaddedViewport(
 				bounds.top, bounds.bottom, clipTop, clipBottom);
+			decision.deepOverlap = !decision.culled;
 			return decision;
 		}
 
@@ -840,7 +909,8 @@ namespace fonthook
 				RecordFreeTypeViewportCullResult(
 					decision.culled, decision.failOpen,
 					decision.fastVisible, decision.deepCheck,
-					decision.visitedTiles);
+					decision.visitedTiles, decision.failReason,
+					decision.deepOverlap, decision.appCulled);
 			}
 			if (decision.culled)
 				return;

@@ -891,15 +891,26 @@ The hot visible-row path re-reads the live traits and compares only the row's
 finite positive vertical interval with its current clipwindow, expanded by 96
 UI units. An overlapping interval returns immediately to stock and does not
 walk the subtree. Only a root already outside that guard band starts the deep
-proof. That proof is bounded to 32 levels and 256 Tiles and requires an exact
-integer list index, an unrotated identity-zoom chain through the clipwindow,
-supported Tile types, finite nonnegative heights and absolute positions,
-reciprocal Tile/node identities, intact Tile parent links, and every Tile-owned
-live child node to remain below the candidate scene node. App-culled branches
-contribute no bound. The complete union must remain outside the padded clip
-interval; unknown types, limits, transforms, malformed links, missing areas, or
-an injected Tile that extends back toward the window all fail open. No
-visibility result or Tile pointer is cached across frames.
+proof. The exact integer list index remains the installation classifier; on an
+already-proxied node the live proof accepts any finite nonnegative value because
+the index is not a geometric input. The deep proof is bounded to 32 levels and
+256 Tiles and still requires an unrotated identity-zoom chain through the
+clipwindow, finite nonnegative heights and absolute positions, reciprocal
+Tile/node identities, intact Tile parent links, and every Tile-owned live child
+node to remain below the candidate scene node. A child with a scene node must
+have a supported drawable Tile type; an unfamiliar logical container with no
+scene node may contribute its completely proved children but cannot contribute
+an assumed bound. App-culled branches contribute no bound. The root interval
+and identity already established before recursion seed the deep union, so the
+proof does not repeat root trait, Tileptr, or scene-parent validation. The
+complete union must remain outside the padded clip interval; limits,
+transforms, malformed links, missing bounds, or an injected Tile that extends
+back toward the window all fail open. No visibility result or Tile pointer is
+cached across frames.
+
+An exact root `NiNode::GetAppCulled()` bit returns before the same stock
+`OnVisible` traversal that would honor it; `app_culled` reports this separate
+engine-authored case. No Tile trait is interpreted as an equivalent app-cull.
 
 A proved miss returns before the stock `NiNode::OnVisible`, so the complete row
 avoids culling traversal, `RegisterObject`, accumulator insertion/sorting,
@@ -995,10 +1006,15 @@ menu, the desired result is nonzero `scissor_pre31`, a reduced
 conservative proof fired, not that the `clips`/`clipwindow` traits were absent.
 The separate `tnvse_freetype_viewport_cull` line reports installed `nodes`,
 `install_failed`, total `checks`, cheap `fast_visible` returns, `deep_checks`,
-the number of `deep_tiles` inspected, proved `culled` subtrees, and
-`fail_open`. For useful list culling, `culled` should be substantial while
-`deep_tiles / culled` remains small; a high `fail_open / deep_checks` ratio
-identifies compatibility structures that deliberately retain the stock path.
+the number of `deep_tiles` inspected, proved `culled` subtrees, exact
+`app_culled`, and `fail_open`. Failure leaves split list-index, clips,
+clipwindow, root-bounds, transform, node-identity, subtree-topology, and
+subtree-bounds uncertainty;
+`deep_overlap` counts complete proofs whose descendant union reaches the padded
+window and therefore stays on the stock path. For useful list culling, `culled`
+should be substantial while `deep_tiles / culled` remains small; the split
+failures identify which compatibility structures deliberately retain stock
+without weakening another proof gate.
 
 The dynamic ring retains its two-maximum-payload capacity, while the static VB
 starts at approximately 4 MiB instead of reserving its approximately 12 MiB

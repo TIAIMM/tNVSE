@@ -350,7 +350,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SortedMixedEqualDepthRestoreRejected)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_viewport_cull: nodes=%llu install_failed=%llu checks=%llu fast_visible=%llu deep_checks=%llu deep_tiles=%llu culled=%llu fail_open=%llu",
+			"tnvse_freetype_viewport_cull: nodes=%llu install_failed=%llu checks=%llu fast_visible=%llu deep_checks=%llu deep_tiles=%llu culled=%llu app_culled=%llu fail_open=%llu fail_listindex=%llu fail_clips=%llu fail_clipwindow=%llu fail_root_bounds=%llu fail_transform=%llu fail_node_identity=%llu fail_subtree_topology=%llu fail_subtree_bounds=%llu deep_overlap=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::ViewportNodeInstalled)],
 			values[static_cast<size_t>(
@@ -366,7 +366,27 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::ViewportCulled)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailOpen)]);
+				FreeTypePerfCounter::ViewportAppCulled)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportFailOpen)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportFailListIndex)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportFailClips)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportFailClipWindow)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportFailRootBounds)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportFailTransform)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportFailNodeIdentity)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportFailSubtreeTopology)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportFailSubtreeBounds)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::ViewportDeepOverlap)]);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu vertex_aa_stock_preserved=%llu command_program_setups=%llu binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu registers_uploaded=%llu full_tail_elided=%llu",
 			static_cast<UInt64>(0),
@@ -815,7 +835,9 @@ namespace fonthook
 
 	void RecordFreeTypeViewportCullResult(
 		bool culled, bool failOpen, bool fastVisible,
-		bool deepCheck, UInt32 visitedTiles)
+		bool deepCheck, UInt32 visitedTiles,
+		FreeTypeViewportCullFailReason failReason,
+		bool deepOverlap, bool appCulled)
 	{
 		using vectorfont::FreeTypePerfCounter;
 		vectorfont::RecordFreeTypePerf(FreeTypePerfCounter::ViewportCullCheck);
@@ -835,6 +857,53 @@ namespace fonthook
 			vectorfont::RecordFreeTypePerf(FreeTypePerfCounter::ViewportCulled);
 		if (failOpen)
 			vectorfont::RecordFreeTypePerf(FreeTypePerfCounter::ViewportFailOpen);
+		switch (failReason)
+		{
+		case FreeTypeViewportCullFailReason::ListIndex:
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportFailListIndex);
+			break;
+		case FreeTypeViewportCullFailReason::Clips:
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportFailClips);
+			break;
+		case FreeTypeViewportCullFailReason::ClipWindow:
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportFailClipWindow);
+			break;
+		case FreeTypeViewportCullFailReason::RootBounds:
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportFailRootBounds);
+			break;
+		case FreeTypeViewportCullFailReason::Transform:
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportFailTransform);
+			break;
+		case FreeTypeViewportCullFailReason::NodeIdentity:
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportFailNodeIdentity);
+			break;
+		case FreeTypeViewportCullFailReason::SubtreeTopology:
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportFailSubtreeTopology);
+			break;
+		case FreeTypeViewportCullFailReason::SubtreeBounds:
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportFailSubtreeBounds);
+			break;
+		default:
+			break;
+		}
+		if (deepOverlap)
+		{
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportDeepOverlap);
+		}
+		if (appCulled)
+		{
+			vectorfont::RecordFreeTypePerf(
+				FreeTypePerfCounter::ViewportAppCulled);
+		}
 	}
 
 	void PumpFreeTypeFontPerformance()
