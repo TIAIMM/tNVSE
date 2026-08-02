@@ -512,6 +512,10 @@ namespace fonthook::vectorfont
 		UInt8 standardV2SlotProofs = 0;
 		NativeA8StandardBlendSemantics standardBlendSemantics =
 			NativeA8StandardBlendSemantics::Unknown;
+		// The immutable native shader vtable retains the exact retail PC slot-27
+		// binder and the side-effect-free retail FirstPass callback. A live draw
+		// still proves its geometry, renderer and resident descriptor separately.
+		bool directDrawLiteReady = false;
 		bool simpleColor = false;
 		bool active = false;
 	};

@@ -765,6 +765,32 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteFallbackPrelude)]);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_direct_draw_lite: candidates=%llu replays=%llu fallbacks=%llu program=%llu renderer=%llu geometry=%llu binding=%llu declaration=%llu binding_sets=%llu binding_reuses=%llu binding_device_failures=%llu draw_device_failures=%llu",
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteCandidate)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteReplay)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteFallbackProgram)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteFallbackRenderer)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteFallbackGeometry)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteFallbackBinding)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteFallbackDeclaration)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteBindingSet)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteBindingReuse)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteBindingDeviceFailure)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeDirectDrawLiteDrawDeviceFailure)]);
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu constants_lite_replays=%llu constants_lite_fallbacks=%llu constants_lite_scaled_fallbacks=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceStateStart)],

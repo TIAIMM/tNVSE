@@ -397,6 +397,18 @@ namespace fonthook::vectorfont
 		NativeTileConstantsTranslationLiteScaledScissorFallback,
 		NativeTileConstantsTranslationLiteNonFiniteFallback,
 		NativeTileConstantsTranslationLiteDeviceFailure,
+		NativeDirectDrawLiteCandidate,
+		NativeDirectDrawLiteReplay,
+		NativeDirectDrawLiteFallback,
+		NativeDirectDrawLiteFallbackProgram,
+		NativeDirectDrawLiteFallbackRenderer,
+		NativeDirectDrawLiteFallbackGeometry,
+		NativeDirectDrawLiteFallbackBinding,
+		NativeDirectDrawLiteFallbackDeclaration,
+		NativeDirectDrawLiteBindingSet,
+		NativeDirectDrawLiteBindingReuse,
+		NativeDirectDrawLiteBindingDeviceFailure,
+		NativeDirectDrawLiteDrawDeviceFailure,
 		Count,
 	};
 	static_assert(

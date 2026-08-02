@@ -33,6 +33,7 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kGeometryUsesSpecialPass = 0xE72C20;
 		inline constexpr UInt32 kPassSuppressesBlendAlpha = 0xB630F0;
 		inline constexpr UInt32 kTileSetSourceTexture = 0xBB7A10;
+		inline constexpr UInt32 kNiTriShapeOnlyRenderImmediate = 0xA74600;
 		inline constexpr UInt32 kCurrentRenderPass = 0x11F91E0;
 		inline constexpr UInt32 kCurrentRenderPassType = 0x11F91E4;
 		inline constexpr UInt32 kSelectedRenderPassType = 0x11FFE30;
@@ -41,6 +42,8 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kFirstPassState = 0x11AD8EC;
 		inline constexpr UInt32 kRendererState = 0x11F9508;
 		inline constexpr UInt32 kForcedShaderSelectionPass = 758;
+		inline constexpr UInt32 kGeometrySegmentedPredicateSlot = 10;
+		inline constexpr UInt32 kGeometryResizablePredicateSlot = 11;
 		inline constexpr UInt32 kGeometrySpecialPredicateSlot = 12;
 		inline constexpr UInt32 kGeometryAlternatePredicateSlot = 13;
 		// Official NiTriShape vtable slots 12/13 both point at ACBB70,
@@ -344,6 +347,7 @@ namespace fonthook::vectorfont
 
 		using NativeImmediateContinuationFn =
 			bool(*)(void*, NiRenderer*, bool);
+		struct NativeDirectDrawLiteSubmission;
 
 		enum class NativeImmediateCommandKind : UInt8
 		{
@@ -369,6 +373,7 @@ namespace fonthook::vectorfont
 			bool drew = false;
 			bool visibilityCulled = false;
 			bool continuationSucceeded = true;
+			const NativeDirectDrawLiteSubmission* directDrawLite = nullptr;
 		};
 
 		thread_local NativeDirectImmediateContext*
@@ -645,6 +650,14 @@ namespace fonthook::vectorfont
 			bool alphaTestEnabled = false;
 		};
 
+		struct NativeSegmentGeometryBindingKey
+		{
+			IDirect3DVertexDeclaration9* declaration = nullptr;
+			IDirect3DVertexBuffer9* vertexBuffer = nullptr;
+			IDirect3DIndexBuffer9* indexBuffer = nullptr;
+			UInt32 stride = 0;
+		};
+
 		// Slot 31's constant prefix can be retained independently of its paired
 		// transient suffix. The key intentionally stores the exact
 		// stock inputs rather than derived WVP/color values: identical inputs
@@ -676,12 +689,14 @@ namespace fonthook::vectorfont
 			NativeSegmentBlendStateKey blend;
 			NativeSegmentAlphaTestStateKey alphaTest;
 			NativeSegmentDrawmodeStateKey drawmode;
+			NativeSegmentGeometryBindingKey geometryBinding;
 			bool stampReady = false;
 			bool passReady = false;
 			bool constantsReady = false;
 			bool blendReady = false;
 			bool alphaTestReady = false;
 			bool drawmodeReady = false;
+			bool geometryBindingReady = false;
 
 			void Reset()
 			{
@@ -691,12 +706,14 @@ namespace fonthook::vectorfont
 				blend = {};
 				alphaTest = {};
 				drawmode = {};
+				geometryBinding = {};
 				stampReady = false;
 				passReady = false;
 				constantsReady = false;
 				blendReady = false;
 				alphaTestReady = false;
 				drawmodeReady = false;
+				geometryBindingReady = false;
 			}
 
 			void InvalidateStates()
@@ -1157,6 +1174,16 @@ namespace fonthook::vectorfont
 			return left.drawBoth == right.drawBoth
 				&& left.alphaTestEnabled
 					== right.alphaTestEnabled;
+		}
+
+		bool SameSegmentGeometryBinding(
+			const NativeSegmentGeometryBindingKey& left,
+			const NativeSegmentGeometryBindingKey& right)
+		{
+			return left.declaration == right.declaration
+				&& left.vertexBuffer == right.vertexBuffer
+				&& left.indexBuffer == right.indexBuffer
+				&& left.stride == right.stride;
 		}
 
 		bool BuildSegmentDeviceStateStamp(
@@ -1771,6 +1798,277 @@ namespace fonthook::vectorfont
 			default:
 				break;
 			}
+		}
+
+		enum class NativeDirectDrawLiteFallback : UInt8
+		{
+			None = 0,
+			Program,
+			Renderer,
+			Geometry,
+			Binding,
+			Declaration,
+		};
+
+		struct NativeDirectDrawLiteSubmission
+		{
+			NiTriShapeData* data = nullptr;
+			NiDX9RenderState* renderState = nullptr;
+			IDirect3DDevice9* device = nullptr;
+			NativeSegmentDeviceStateCache* deviceState = nullptr;
+			NativeSegmentGeometryBindingKey binding;
+			UInt32 baseVertex = 0;
+			UInt32 vertexCount = 0;
+			UInt32 triangleCount = 0;
+		};
+
+		void RecordNativeDirectDrawLiteFallback(
+			NativeDirectDrawLiteFallback failure)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::NativeDirectDrawLiteFallback);
+			switch (failure)
+			{
+			case NativeDirectDrawLiteFallback::Renderer:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					NativeDirectDrawLiteFallbackRenderer);
+				break;
+			case NativeDirectDrawLiteFallback::Geometry:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					NativeDirectDrawLiteFallbackGeometry);
+				break;
+			case NativeDirectDrawLiteFallback::Binding:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					NativeDirectDrawLiteFallbackBinding);
+				break;
+			case NativeDirectDrawLiteFallback::Declaration:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					NativeDirectDrawLiteFallbackDeclaration);
+				break;
+			case NativeDirectDrawLiteFallback::None:
+			case NativeDirectDrawLiteFallback::Program:
+			default:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					NativeDirectDrawLiteFallbackProgram);
+				break;
+			}
+		}
+
+		NativeDirectDrawLiteFallback BuildNativeDirectDrawLiteSubmission(
+			NiTriShape* geometry, NiDX9Renderer* renderer,
+			const NiPropertyState* properties,
+			const NativeA8CompiledPacketCommand& program,
+			const NativeA8DrawCommand& command,
+			NiGeometryBufferData* buffer,
+			NativeSegmentDeviceStateCache* deviceState,
+			NativeDirectDrawLiteSubmission& submission)
+		{
+			submission = {};
+			TileShader* shader = program.shader;
+			void** geometryVtable = geometry
+				? *reinterpret_cast<void***>(geometry) : nullptr;
+			void** shaderVtable = shader
+				? *reinterpret_cast<void***>(shader) : nullptr;
+			if (!program.directDrawLiteReady || !geometry || !shader
+				|| !shaderVtable || shaderVtable != program.shaderVtable
+				|| command.program != &program
+				|| State().originalRenderImmediateAlt
+					!= reinterpret_cast<RenderImmediateFn>(
+						kNiTriShapeOnlyRenderImmediate))
+			{
+				return NativeDirectDrawLiteFallback::Program;
+			}
+
+			if (!renderer || !program.device
+				|| program.device != renderer->GetD3DDevice()
+				|| shader->m_pkD3DDevice != program.device
+				|| shader->m_pkD3DRenderer != renderer
+				|| !shader->m_pkD3DRenderState
+				|| shader->m_pkD3DRenderState != renderer->m_pkRenderState
+				|| !renderer->GetInsideFrameState()
+				|| !renderer->m_bRenderTargetGroupActive
+				|| renderer->m_bDeviceLost)
+			{
+				return NativeDirectDrawLiteFallback::Renderer;
+			}
+
+			NiTriShapeData* data = geometry->GetModelData();
+			if (!geometryVtable
+				|| geometryVtable != &State().triShapeVtable[1]
+				|| geometryVtable[kGeometrySegmentedPredicateSlot]
+					!= reinterpret_cast<void*>(kNiGeometryFalsePredicate)
+				|| geometryVtable[kGeometryResizablePredicateSlot]
+					!= reinterpret_cast<void*>(kNiGeometryFalsePredicate)
+				|| geometry->GetSkinInstance() || geometry->GetControllers()
+				|| geometry->GetShader() != shader || !data
+				|| data->m_pkBuffData != buffer
+				|| data->m_spAdditionalGeomData.m_pObject
+				|| (data->m_usDirtyFlags
+					& NiGeometryData::CONSISTENCY_MASK)
+					!= NiGeometryData::STATIC
+				|| !data->GetActiveVertexCount()
+				|| properties != &geometry->m_kProperties
+				|| renderer->m_pkCurrProp != properties
+				|| renderer->m_pkCurrEffects
+				|| shader->m_uiCurrentPass != 0)
+			{
+				return NativeDirectDrawLiteFallback::Geometry;
+			}
+
+			const NativeA8FramePacketBinding& expected = command.binding;
+			NiVBChip* chip = buffer && buffer->m_uiStreamCount == 1
+				&& buffer->m_ppkVBChip
+				? buffer->m_ppkVBChip[0] : nullptr;
+			const UInt32 vertexCount = expected.vertexCount;
+			const UInt32 quadCount = vertexCount / 4u;
+			const UInt32 triangleCount = quadCount * 2u;
+			const UInt32 indexCount = quadCount * 6u;
+			const UInt64 requiredVertexBytes =
+				static_cast<UInt64>(vertexCount)
+					* sizeof(NativeA8GpuVertex);
+			const UInt64 requiredIndexBytes =
+				static_cast<UInt64>(indexCount) * sizeof(UInt16);
+			if (!expected.active || !expected.vertexBuffer
+				|| !expected.indexBuffer || !expected.declaration
+				|| !vertexCount || (vertexCount & 3u)
+				|| !command.packet
+				|| command.packet->vertexCount != vertexCount
+				|| !buffer || buffer->m_uiFlags
+				|| buffer->m_pkGeometryGroup || buffer->m_uiFVF
+				|| buffer->m_hDeclaration != expected.declaration
+				|| buffer->m_bSoftwareVP
+				|| buffer->m_uiVertCount != vertexCount
+				|| buffer->m_uiMaxVertCount != vertexCount
+				|| buffer->m_uiStreamCount != 1
+				|| !buffer->m_puiVertexStride
+				|| buffer->m_puiVertexStride[0]
+					!= sizeof(NativeA8GpuVertex)
+				|| !chip || chip->m_uiIndex
+				|| chip->m_pkVB != expected.vertexBuffer
+				|| chip->m_uiOffset || chip->m_uiLockFlags
+				|| chip->m_uiSize < requiredVertexBytes
+				|| buffer->m_uiIndexCount != indexCount
+				|| buffer->m_uiIBSize != expected.indexBytes
+				|| requiredIndexBytes > buffer->m_uiIBSize
+				|| buffer->m_pkIB != expected.indexBuffer
+				|| buffer->m_uiBaseVertexIndex != expected.baseVertex
+				|| buffer->m_eType != D3DPT_TRIANGLELIST
+				|| buffer->m_uiTriCount != triangleCount
+				|| buffer->m_uiMaxTriCount != triangleCount
+				|| buffer->m_uiNumArrays != 1
+				|| buffer->m_pusArrayLengths
+				|| buffer->m_pusIndexArray)
+			{
+				return NativeDirectDrawLiteFallback::Binding;
+			}
+
+			NiD3DShaderDeclaration* shaderDeclaration =
+				shader->m_spShaderDecl.m_pObject;
+			if (!shaderDeclaration
+				|| shaderDeclaration->GetD3DDeclaration()
+					!= expected.declaration)
+			{
+				return NativeDirectDrawLiteFallback::Declaration;
+			}
+
+			submission.data = data;
+			submission.renderState = shader->m_pkD3DRenderState;
+			submission.device = program.device;
+			submission.deviceState = deviceState;
+			submission.binding.declaration = expected.declaration;
+			submission.binding.vertexBuffer = expected.vertexBuffer;
+			submission.binding.indexBuffer = expected.indexBuffer;
+			submission.binding.stride = sizeof(NativeA8GpuVertex);
+			submission.baseVertex = expected.baseVertex;
+			submission.vertexCount = vertexCount;
+			submission.triangleCount = triangleCount;
+			return NativeDirectDrawLiteFallback::None;
+		}
+
+		class NativeDirectDrawLiteArmScope
+		{
+		public:
+			NativeDirectDrawLiteArmScope(NiTriShape* geometry,
+				const NativeDirectDrawLiteSubmission& submission)
+			{
+				m_context = s_nativeDirectImmediateContext;
+				if (!m_context || m_context->shape != geometry
+					|| m_context->directDrawLite)
+				{
+					m_context = nullptr;
+					return;
+				}
+				m_context->directDrawLite = &submission;
+			}
+
+			~NativeDirectDrawLiteArmScope()
+			{
+				if (m_context)
+					m_context->directDrawLite = nullptr;
+			}
+
+			bool Active() const
+			{
+				return m_context != nullptr;
+			}
+
+		private:
+			NativeDirectImmediateContext* m_context = nullptr;
+		};
+
+		void ExecuteNativeDirectDrawLite(
+			const NativeDirectDrawLiteSubmission& submission)
+		{
+			NativeSegmentDeviceStateCache* deviceState =
+				submission.deviceState;
+			const bool bindingReady = deviceState
+				&& deviceState->geometryBindingReady
+				&& SameSegmentGeometryBinding(
+					deviceState->geometryBinding, submission.binding);
+			if (bindingReady)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					NativeDirectDrawLiteBindingReuse);
+			}
+			else
+			{
+				if (deviceState)
+					deviceState->geometryBindingReady = false;
+				submission.renderState->vSetDeclaration(
+					submission.binding.declaration, false);
+				const HRESULT streamResult = submission.device->SetStreamSource(
+					0, submission.binding.vertexBuffer, 0,
+					submission.binding.stride);
+				const HRESULT indexResult = submission.device->SetIndices(
+					submission.binding.indexBuffer);
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					NativeDirectDrawLiteBindingSet);
+				if (FAILED(streamResult) || FAILED(indexResult))
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						NativeDirectDrawLiteBindingDeviceFailure);
+				}
+				else if (deviceState)
+				{
+					deviceState->geometryBinding = submission.binding;
+					deviceState->geometryBindingReady = true;
+				}
+			}
+
+			const HRESULT drawResult = submission.device->DrawIndexedPrimitive(
+				D3DPT_TRIANGLELIST,
+				static_cast<INT>(submission.baseVertex), 0,
+				submission.vertexCount, 0, submission.triangleCount);
+			// Formal E745A0 clears the low dirty/revision bits after the indexed
+			// loop even when the D3D call fails. Preserve that exact side effect.
+			submission.data->m_usDirtyFlags &= 0xF000u;
+			if (FAILED(drawResult))
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					NativeDirectDrawLiteDrawDeviceFailure);
+			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::NativeDirectDrawLiteReplay);
 		}
 
 		class VirtualStockTileStateScope
@@ -2523,11 +2821,39 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			reinterpret_cast<PrepareGeometryFn>(
-				program.prepareGeometry)(
-					shader, geometry, 0,
-					preparedBuffer, properties);
-			A8RenderImmediateAlt(geometry, nullptr, renderer);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::NativeDirectDrawLiteCandidate);
+			NativeDirectDrawLiteSubmission directDrawLite;
+			const NativeDirectDrawLiteFallback directDrawFailure =
+				BuildNativeDirectDrawLiteSubmission(
+					geometry, renderer, properties, program, command,
+					preparedBuffer, deviceState, directDrawLite);
+			bool directDrawArmed = false;
+			if (directDrawFailure == NativeDirectDrawLiteFallback::None)
+			{
+				NativeDirectDrawLiteArmScope directDrawScope(
+					geometry, directDrawLite);
+				directDrawArmed = directDrawScope.Active();
+				if (directDrawArmed)
+					A8RenderImmediateAlt(geometry, nullptr, renderer);
+			}
+			if (!directDrawArmed)
+			{
+				RecordNativeDirectDrawLiteFallback(
+					directDrawFailure == NativeDirectDrawLiteFallback::None
+						? NativeDirectDrawLiteFallback::Program
+						: directDrawFailure);
+				// Slot 27 publishes declaration, streams and indices. A failed
+				// lite proof cannot describe its resulting binding, so prevent a
+				// later packet from reusing an older segment key.
+				if (deviceState)
+					deviceState->geometryBindingReady = false;
+				reinterpret_cast<PrepareGeometryFn>(
+					program.prepareGeometry)(
+						shader, geometry, 0,
+						preparedBuffer, properties);
+				A8RenderImmediateAlt(geometry, nullptr, renderer);
+			}
 			const bool verifiedPost =
 				(program.standardV2SlotProofs
 					& NativeA8CompiledPacketCommand::
@@ -5442,7 +5768,14 @@ namespace fonthook::vectorfont
 				context.visibilityCulled = true;
 				return;
 			}
-			State().originalRenderImmediateAlt(shape, renderer);
+			if (context.directDrawLite)
+			{
+				ExecuteNativeDirectDrawLite(*context.directDrawLite);
+			}
+			else
+			{
+				State().originalRenderImmediateAlt(shape, renderer);
+			}
 			context.drew = true;
 			if (!context.strictValidation
 				&& context.commandSpanIndex
@@ -5510,6 +5843,16 @@ namespace fonthook::vectorfont
 			state.triShapeVtable[kRenderImmediateAltSlot + 1]);
 		state.originalDeleteThis = reinterpret_cast<DeleteThisFn>(
 			state.triShapeVtable[kDeleteThisSlot + 1]);
+		if (g_bEnableFreeTypeFontRenderingLog)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: direct-draw-lite immediate proof ready=%u original=%p expected=%p",
+				state.originalRenderImmediateAlt
+					== reinterpret_cast<RenderImmediateFn>(
+						kNiTriShapeOnlyRenderImmediate) ? 1u : 0u,
+				state.originalRenderImmediateAlt,
+				reinterpret_cast<void*>(kNiTriShapeOnlyRenderImmediate));
+		}
 		state.triShapeVtable[kDeleteThisSlot + 1]
 			= reinterpret_cast<void*>(&A8DeleteThis);
 		state.triShapeVtable[kRenderImmediateSlot + 1]

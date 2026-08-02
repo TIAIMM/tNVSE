@@ -1266,10 +1266,12 @@ envelope plus that retained identity instead of reconstructing a local dispatch
 and rereading the shader vtable, renderer/device, model data, and hook vtable on
 every submission. Stage 2 accepts the current buffer already proved by direct
 or Virtual-stock binding; only an unproven compatibility caller performs the
-full VB/IB/declaration/range comparison. Stage 3 mirrors the confirmed standard order:
-publish renderer property/effect state; invoke slots 30, 31, conditional
-32/33/68, optional 34, slot 27, `RenderImmediateAlt`, and slot 35. It omits only
-the geometry-group helper whose resident-buffer branch has no side effect.
+full VB/IB/declaration/range comparison. Stage 3 mirrors the confirmed standard
+order: publish renderer property/effect state; invoke slots 30, 31, conditional
+32/33/68, optional 34, geometry submission, and slot 35. Its compatibility path
+still uses slot 27 plus `RenderImmediateAlt`; its direct-draw-lite path replaces
+that pair only after the additional proof described below. It also omits the
+geometry-group helper whose resident-buffer branch has no side effect.
 Failure in stages 1 or 2 re-enters the complete guarded decision, selecting
 full `BSBatchRenderer::RenderPassImmediately_Standard` when it still qualifies
 and otherwise the unchanged `BSBatchRenderer::RenderPassImmediately`; a
@@ -1477,6 +1479,34 @@ scissor/stencil state is then installed through the same suffix helpers and
 remains paired with slot 35. Non-finite input, device failure, unknown identity,
 or resolution-scaled scissor conservatively re-enters the complete slot 31/35
 path before drawing.
+
+The same one-packet executor now has a `direct-draw-lite` geometry submission.
+Official PC `NiD3DShader::PrepareGeometryForRendering` at `E812F0` first selects
+the shader declaration, then calls the resident-buffer pack helper and finally
+publishes each stream plus the index buffer. For a valid static buffer the pack
+helper returns before mutation. Official `NiTriShape::OnlyRenderImmediate` at
+`A74600` and `NiDX9Renderer::Do_RenderShapeAlt` at `E745A0` then reduce to one
+indexed draw when the renderer is inside an active frame, the device is not
+lost, the model has active vertices, `m_pkBuffData` is resident, and the shape
+is neither segmented, resizable nor skinned. The symbolized test build has the
+same declaration/stream/index preparation followed by the same ordinary
+indexed-shape branch.
+
+The lite route consequently requires the immutable native program to retain
+the exact retail slot 27 and side-effect-free retail `FirstPass` entry, and
+requires the original `OnlyRenderImmediate` target to remain unhooked. Each
+draw additionally proves the exact tNVSE `NiTriShape` vtable, null controller,
+null skin and additional geometry, static consistency, live renderer/property
+identity, shader declaration identity, and a single-stream, single-array
+triangle-list descriptor whose VB, IB, declaration, base vertex, counts and
+sizes equal the sealed command binding. It then uses the engine declaration
+publisher, binds stream 0 and the IB, calls `DrawIndexedPrimitive`, and performs
+the retail low-dirty-bit clear. A segment cache elides all three binding calls
+only while the validation, resource, upload and external-mutation epochs and
+the complete declaration/VB/IB/stride key remain unchanged. Failure of any
+proof occurs before device mutation and uses the existing slot-27 plus
+`RenderImmediateAlt` path; D3D bind/draw failures retain the stock
+attempted-submission semantics and are counted separately.
 
 The high-register ABI was also checked against common shader plugins.
 NewVegas Reloaded's explicit New Vegas ranges end at c145, its D3D9 device

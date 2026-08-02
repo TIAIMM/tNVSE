@@ -65,6 +65,8 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kShaderSetupGeometryAlphaTesting = 0xBE20B0;
 		inline constexpr UInt32 kShaderSetupGeometryRenderStates = 0xBE20E0;
 		inline constexpr UInt32 kTileShaderPostGeometry = 0xBCAC60;
+		inline constexpr UInt32 kNiD3DShaderPrepareGeometry = 0xE812F0;
+		inline constexpr UInt32 kNiD3DShaderFirstPass = 0xE80580;
 		inline constexpr UInt32 kShaderDeclarationCreate = 0xE76700;
 		inline constexpr UInt32 kTextureStageSetProperties = 0xBE0CF0;
 		inline constexpr UInt32 kTextureStageSetFilter = 0xE7DEF0;
@@ -1321,6 +1323,11 @@ namespace fonthook::vectorfont
 				program.standardV2SlotProofs |=
 					NativeA8CompiledPacketCommand::kStandardSlot35Proof;
 			}
+			program.directDrawLiteReady =
+				program.prepareGeometry == reinterpret_cast<void*>(
+					kNiD3DShaderPrepareGeometry)
+				&& vtable->slots[36] == reinterpret_cast<void*>(
+					kNiD3DShaderFirstPass);
 			program.generation = generation.id;
 			program.simpleColor =
 				packet.shaderClass == NativeA8ShaderClass::Coverage
@@ -1333,7 +1340,7 @@ namespace fonthook::vectorfont
 			if (previousProofGeneration != generation.id)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: standard-v2 slot proofs generation=%u mask=%02X required=%02X blend=%s slot32=%p ready=%u",
+					"tnvse_freetype_native: standard-v2 slot proofs generation=%u mask=%02X required=%02X blend=%s slot32=%p ready=%u directDrawLite=%u prepare=%p firstPass=%p",
 					generation.id,
 					static_cast<UInt32>(
 						program.standardV2SlotProofs),
@@ -1346,7 +1353,10 @@ namespace fonthook::vectorfont
 					program.standardV2SlotProofs
 							== NativeA8CompiledPacketCommand::
 								kStandardV2RequiredProofs
-						? 1u : 0u);
+						? 1u : 0u,
+					program.directDrawLiteReady ? 1u : 0u,
+					program.prepareGeometry,
+					vtable->slots[36]);
 			}
 			return profile;
 		}
