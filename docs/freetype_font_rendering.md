@@ -1260,10 +1260,12 @@ and local depth. Optional sidecar fields remain at the tail of the private
 packet/payload structures, and sidecars are not built while the feature is
 disabled, preserving the established direct-draw-lite data prefix and work.
 Admission snapshots only the exact scissor/stencil/cleanup compatibility key;
-it does not build matrices or colors. At the leader callback the batch builds
-every live property/world snapshot once, then appends the member's
-retail-equivalent WVP and TileColor to form one 152-byte stream-1 instance. The
-first reached batch uses `D3DLOCK_DISCARD`;
+it does not build matrices or colors. The leader first performs a complete
+batch-wide live immutable/transient/visibility preflight without constructing
+any complete snapshots. Only when every member passes does a second pass build
+each retail-equivalent WVP and TileColor, recheck the transient state, and form
+the 152-byte stream-1 instances. A failed preflight therefore avoids complete
+snapshot work for the whole batch. The first reached batch uses `D3DLOCK_DISCARD`;
 later reached batches use disjoint `D3DLOCK_NOOVERWRITE` ranges. No frame-build
 snapshot is uploaded and no concatenated CPU vertex array is built. The buffer
 grows on demand up to 16 MiB and stops only at text boundaries.
@@ -1322,6 +1324,9 @@ also emits `tnvse_freetype_native_dip_diag` with the actual DIP arguments and
 the stream/index/draw HRESULTs under the same bounded id. Instancing admission and execution
 failures emit separately bounded `tnvse_freetype_glyph_instancing_diag` records
 with their concrete contract, member, resource, upload, or device operation.
+The aggregate instancing line separates `begin_preflight` from
+`begin_snapshot`; `snapshot_avoided_texts` counts complete member snapshots
+skipped when the first live pass rejects a batch.
 Exit messages force one final performance report and fully drain the bounded
 diagnostic queue, so a short menu reproduction is not represented only by an
 earlier startup summary.

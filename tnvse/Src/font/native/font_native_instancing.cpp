@@ -163,6 +163,7 @@ namespace fonthook::vectorfont
 			UInt32 uploadEpoch = 0;
 			UInt32 plannedInstanceCount = 0;
 			UInt32 uploadCursorInstances = 0;
+			NiDX9Renderer* renderer = nullptr;
 			IDirect3DDevice9* device = nullptr;
 			BSShaderAccumulator* accumulator = nullptr;
 			bool building = false;
@@ -209,6 +210,7 @@ namespace fonthook::vectorfont
 			frame.uploadEpoch = 0;
 			frame.plannedInstanceCount = 0;
 			frame.uploadCursorInstances = 0;
+			frame.renderer = nullptr;
 			frame.device = nullptr;
 			frame.accumulator = nullptr;
 			frame.building = false;
@@ -293,7 +295,7 @@ namespace fonthook::vectorfont
 		enum class BuildMemberPhase : UInt8
 		{
 			Admission = 0,
-			Live
+			LivePreflight
 		};
 
 		std::atomic<UInt32> s_instancingDiagnosticCount = 0;
@@ -452,6 +454,7 @@ namespace fonthook::vectorfont
 				frame.atlasTextureEpoch = stamp->atlasTextureEpoch;
 				frame.resourceSerial = stamp->resourceSerial;
 				frame.uploadEpoch = stamp->uploadEpoch;
+				frame.renderer = stamp->renderer;
 				frame.device = stamp->device;
 				frame.accumulator = stamp->accumulator;
 			}
@@ -459,6 +462,7 @@ namespace fonthook::vectorfont
 				|| frame.atlasTextureEpoch != stamp->atlasTextureEpoch
 				|| frame.resourceSerial != stamp->resourceSerial
 				|| frame.uploadEpoch != stamp->uploadEpoch
+				|| frame.renderer != stamp->renderer
 				|| frame.device != stamp->device
 				|| frame.accumulator != stamp->accumulator)
 			{
@@ -527,41 +531,9 @@ namespace fonthook::vectorfont
 			}
 
 			NativeTileInstancingSnapshot snapshot;
-			NativeTileInstancingSnapshotResult snapshotResult =
-				NativeTileInstancingSnapshotResult::NotApplicable;
-			if (phase == BuildMemberPhase::Admission)
-			{
-				// Frame construction needs only the exact transient key used to
-				// decide adjacency. Avoid building a WVP and TileColor that the
-				// leader would necessarily discard and rebuild later.
-				snapshotResult = BuildNativeTileInstancingAdmissionSnapshot(
+			const NativeTileInstancingSnapshotResult snapshotResult =
+				BuildNativeTileInstancingAdmissionSnapshot(
 					item.geometry, &item.geometry->m_kProperties, snapshot);
-			}
-			else
-			{
-				// Both ordinary direct-shape and Virtual-stock singleton
-				// submission temporarily apply the payload origin before reaching
-				// TileShader. Only the leader-time live phase freezes the effective
-				// world, retail WVP and TileColor used by this draw.
-				NiTransform effectiveWorld;
-				ApplyNativeA8GeometryOrigin(effectiveWorld,
-					item.geometry->m_kWorld,
-					item.payload->geometryOrigin);
-				snapshotResult = BuildNativeTileInstancingSnapshotForWorld(
-					item.geometry, &item.geometry->m_kProperties,
-					stamp->renderer, effectiveWorld, snapshot);
-				// Followers do not enter their own late-visibility scope after a
-				// successful batch. Reuse the existing conservative payload/scissor
-				// proof and reject the complete batch when any member is outside.
-				if (snapshotResult
-						== NativeTileInstancingSnapshotResult::Ready
-					&& IsNativeA8PayloadOutsideScissorForWorld(
-						*item.payload, &item.geometry->m_kProperties,
-						stamp->renderer, effectiveWorld))
-				{
-					return BuildMemberFailure::Scissor;
-				}
-			}
 			if (snapshotResult
 				== NativeTileInstancingSnapshotResult::ScaledScissor)
 			{
@@ -569,6 +541,26 @@ namespace fonthook::vectorfont
 			}
 			if (snapshotResult != NativeTileInstancingSnapshotResult::Ready)
 				return BuildMemberFailure::State;
+			if (phase == BuildMemberPhase::LivePreflight)
+			{
+				// Both ordinary direct-shape and Virtual-stock singleton
+				// submission temporarily apply the payload origin before reaching
+				// TileShader. This first leader-time pass uses the effective world
+				// only for conservative visibility; it does not build WVP/TileColor.
+				NiTransform effectiveWorld;
+				ApplyNativeA8GeometryOrigin(effectiveWorld,
+					item.geometry->m_kWorld,
+					item.payload->geometryOrigin);
+				// Followers do not enter their own late-visibility scope after a
+				// successful batch. Prove every member before constructing any
+				// complete live snapshot for the batch.
+				if (IsNativeA8PayloadOutsideScissorForWorld(
+						*item.payload, &item.geometry->m_kProperties,
+						frame.renderer, effectiveWorld))
+				{
+					return BuildMemberFailure::Scissor;
+				}
+			}
 			member.sequenceIndex = sequenceIndex;
 			member.sequence = item;
 			member.command = command;
@@ -619,12 +611,51 @@ namespace fonthook::vectorfont
 				BuildMemberPhase::Admission, member);
 		}
 
-		BuildMemberFailure BuildLiveMember(
+		BuildMemberFailure BuildLivePreflightMember(
 			const CrossTextSequenceItem& item, UInt32 sequenceIndex,
 			CrossTextMember& member)
 		{
 			return BuildMemberForPhase(item, sequenceIndex,
-				BuildMemberPhase::Live, member);
+				BuildMemberPhase::LivePreflight, member);
+		}
+
+		BuildMemberFailure BuildCompleteLiveMemberSnapshot(
+			CrossTextMember& member)
+		{
+			CrossTextFrame& frame = s_crossTextFrame;
+			NiTriShape* geometry = member.sequence.geometry;
+			NativeA8ShapePayload* payload = member.sequence.payload;
+			if (!geometry || !payload)
+				return BuildMemberFailure::Topology;
+			if (!frame.renderer)
+				return BuildMemberFailure::State;
+
+			NiTransform effectiveWorld;
+			ApplyNativeA8GeometryOrigin(effectiveWorld,
+				geometry->m_kWorld, payload->geometryOrigin);
+			NativeTileInstancingSnapshot snapshot;
+			const NativeTileInstancingSnapshotResult snapshotResult =
+				BuildNativeTileInstancingSnapshotForWorld(geometry,
+					&geometry->m_kProperties, frame.renderer,
+					effectiveWorld, snapshot);
+			if (snapshotResult
+				== NativeTileInstancingSnapshotResult::ScaledScissor)
+			{
+				return BuildMemberFailure::Scissor;
+			}
+			if (snapshotResult != NativeTileInstancingSnapshotResult::Ready)
+				return BuildMemberFailure::State;
+
+			// No callback or device submission occurs between the two passes.
+			// Recheck what the complete builder resolved so a later refactor cannot
+			// separate the visibility proof from upload/slot-35 transient state.
+			if (!SameNativeTileInstancingTransientState(
+					member.snapshot, snapshot))
+			{
+				return BuildMemberFailure::Scissor;
+			}
+			member.snapshot = snapshot;
+			return BuildMemberFailure::None;
 		}
 
 		void RecordBuildFailure(BuildMemberFailure failure)
@@ -761,7 +792,7 @@ namespace fonthook::vectorfont
 		{
 			CrossTextFrame& frame = s_crossTextFrame;
 			if (frame.batches.empty() || frame.members.empty()
-				|| !frame.device || !frame.generation)
+				|| !frame.renderer || !frame.device || !frame.generation)
 			{
 				return false;
 			}
@@ -1595,23 +1626,32 @@ namespace fonthook::vectorfont
 			return rejectBegin(FreeTypePerfCounter::
 				GlyphInstancingBeginResourceFallback, "resource-epoch");
 		}
+		const auto rejectLivePreflight = [&](FreeTypePerfCounter detail,
+			const char* reason, UInt32 memberOffset)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				GlyphInstancingBeginPreflightFallback);
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				GlyphInstancingLiveSnapshotAvoidedText,
+				batch.memberCount);
+			return rejectBegin(detail, reason, memberOffset);
+		};
 
-		// The command list can be built well before this Tile reaches the final
-		// accumulator callback.  Rebuild all live property/world snapshots here,
-		// keep only immutable command/packet/sidecar identity from admission, and
-		// compare compatibility against the live leader rather than against stale
-		// frame-build matrices and colors.
+		// Pass 1: refresh immutable/property identity, the compatibility key and
+		// transient state for every member, then prove current visibility. No full
+		// WVP/TileColor snapshot is constructed unless the complete batch passes.
 		for (UInt32 offset = 0; offset < batch.memberCount; ++offset)
 		{
 			CrossTextMember current;
 			CrossTextMember& planned =
 				frame.members[batch.firstMember + offset];
-			const BuildMemberFailure failure = BuildLiveMember(
+			const BuildMemberFailure failure = BuildLivePreflightMember(
 				planned.sequence, planned.sequenceIndex, current);
 			if (failure != BuildMemberFailure::None)
 			{
 				RecordBuildFailure(failure);
-				return rejectBegin(failure == BuildMemberFailure::Scissor
+				return rejectLivePreflight(
+					failure == BuildMemberFailure::Scissor
 					? FreeTypePerfCounter::
 						GlyphInstancingBeginTransientFallback
 					: FreeTypePerfCounter::
@@ -1625,7 +1665,7 @@ namespace fonthook::vectorfont
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::GlyphInstancingTopologyFallback);
-				return rejectBegin(FreeTypePerfCounter::
+				return rejectLivePreflight(FreeTypePerfCounter::
 					GlyphInstancingBeginImmutableFallback,
 					"immutable-identity", offset);
 			}
@@ -1635,7 +1675,7 @@ namespace fonthook::vectorfont
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::GlyphInstancingStateFallback);
-				return rejectBegin(FreeTypePerfCounter::
+				return rejectLivePreflight(FreeTypePerfCounter::
 					GlyphInstancingBeginImmutableFallback,
 					"compatibility-key", offset);
 			}
@@ -1645,12 +1685,35 @@ namespace fonthook::vectorfont
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::GlyphInstancingScissorFallback);
-				return rejectBegin(FreeTypePerfCounter::
+				return rejectLivePreflight(FreeTypePerfCounter::
 					GlyphInstancingBeginTransientFallback,
 					"transient-state", offset);
 			}
 			planned.compatibility = current.compatibility;
 			planned.snapshot = current.snapshot;
+		}
+
+		// Pass 2: the render-thread-only preflight above completed without a
+		// callback or device submission. Freeze exactly one complete live snapshot
+		// per member, and upload only after every snapshot succeeds.
+		for (UInt32 offset = 0; offset < batch.memberCount; ++offset)
+		{
+			CrossTextMember& planned =
+				frame.members[batch.firstMember + offset];
+			const BuildMemberFailure failure =
+				BuildCompleteLiveMemberSnapshot(planned);
+			if (failure != BuildMemberFailure::None)
+			{
+				RecordBuildFailure(failure);
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					GlyphInstancingBeginSnapshotFallback);
+				return rejectBegin(failure == BuildMemberFailure::Scissor
+					? FreeTypePerfCounter::
+						GlyphInstancingBeginTransientFallback
+					: FreeTypePerfCounter::
+						GlyphInstancingBeginImmutableFallback,
+					BuildMemberFailureName(failure), offset);
+			}
 		}
 
 		if (!UploadBatchInstances(batch))

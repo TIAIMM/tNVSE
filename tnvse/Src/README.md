@@ -22,7 +22,7 @@ configuration, dependency checks, globals, and native-call helpers stay at the
     transient-tail specialization and the translation-only VS c0-c3 update
     used after exact retained-constant proofs. `font_native_instancing.cpp`
     owns final-order lightweight transient admission, immutable glyph-sidecar
-    consumption, leader-time live snapshot/upload, D3D9 instancing resources,
+    consumption, two-pass leader live preflight/snapshot/upload, D3D9 resources,
     the draw-free bind/restore proof bracket, and slot-27 fail-open
     leader/follower execution.
     `font_native_diagnostics.cpp` owns the bounded, logging-only D3D9 binding,
