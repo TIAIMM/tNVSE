@@ -21,9 +21,10 @@ configuration, dependency checks, globals, and native-call helpers stay at the
     `font_native_tile_constants.cpp` owns the reverse-verified Tile slot-31
     transient-tail specialization and the translation-only VS c0-c3 update
     used after exact retained-constant proofs. `font_native_instancing.cpp`
-    owns final-order cross-text admission, immutable glyph-sidecar consumption,
-    leader-time live instance upload, D3D9 instancing resources, the draw-free
-    bind/restore proof bracket, and slot-27 fail-open leader/follower execution.
+    owns final-order lightweight transient admission, immutable glyph-sidecar
+    consumption, leader-time live snapshot/upload, D3D9 instancing resources,
+    the draw-free bind/restore proof bracket, and slot-27 fail-open
+    leader/follower execution.
     `font_native_diagnostics.cpp` owns the bounded, logging-only D3D9 binding,
     Tile-constant, ring-upload/packet-range, and final indexed-submit probes
     used to compare direct and slot-27 draw paths without reading WRITEONLY GPU

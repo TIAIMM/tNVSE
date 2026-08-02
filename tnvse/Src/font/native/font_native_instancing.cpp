@@ -7,7 +7,6 @@
 #include "NiD3DRenderState.hpp"
 #include "NiDX9Renderer.hpp"
 #include "NiGeometryBufferData.hpp"
-#include "NiMaterialProperty.hpp"
 #include "NiStencilProperty.hpp"
 #include "NiTexturingProperty.hpp"
 #include "NiTriShapeData.hpp"
@@ -108,14 +107,6 @@ namespace fonthook::vectorfont
 			float shaderFadeAlpha = 1.0f;
 		};
 
-		struct CrossTextDynamicKey
-		{
-			NiTransform world;
-			NiColorA overlayColor;
-			float tileAlpha = 1.0f;
-			float materialAlpha = 1.0f;
-		};
-
 		struct CrossTextMember
 		{
 			UInt32 sequenceIndex = kInvalidNativeA8CommandIndex;
@@ -125,7 +116,6 @@ namespace fonthook::vectorfont
 			const NativeA8GlyphInstanceSidecar* sidecars = nullptr;
 			UInt32 sidecarCount = 0;
 			CrossTextCompatibilityKey compatibility;
-			CrossTextDynamicKey dynamic;
 			NativeTileInstancingSnapshot snapshot;
 		};
 
@@ -300,6 +290,12 @@ namespace fonthook::vectorfont
 			Topology
 		};
 
+		enum class BuildMemberPhase : UInt8
+		{
+			Admission = 0,
+			Live
+		};
+
 		std::atomic<UInt32> s_instancingDiagnosticCount = 0;
 		constexpr UInt32 kMaximumInstancingDiagnosticLines = 32;
 
@@ -392,11 +388,11 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		BuildMemberFailure BuildMember(const CrossTextSequenceItem& item,
-			UInt32 sequenceIndex, bool proveLiveVisibility,
+		BuildMemberFailure BuildMemberForPhase(
+			const CrossTextSequenceItem& item,
+			UInt32 sequenceIndex, BuildMemberPhase phase,
 			CrossTextMember& member)
 		{
-			member = {};
 			if (item.kind == NativeA8CrossTextCommandKind::Barrier
 				|| !item.geometry || !item.metadata || !item.payload
 				|| item.commandIndex == kInvalidNativeA8CommandIndex
@@ -409,7 +405,8 @@ namespace fonthook::vectorfont
 			const NativeA8FrameStamp* stamp = nullptr;
 			const NativeA8DrawCommand* command =
 				ResolveSequenceCommand(item, stamp);
-			if (!command || !stamp || !stamp->accumulator || !stamp->device
+			if (!command || !stamp || !stamp->accumulator || !stamp->renderer
+				|| !stamp->device
 				|| !stamp->generation || !stamp->resourceSerial
 				|| command->sourceGeometry != item.geometry
 				|| command->expectedGeometry != item.geometry
@@ -510,8 +507,6 @@ namespace fonthook::vectorfont
 				? reinterpret_cast<const InstancingTilePropertyView*>(shade)
 				: nullptr;
 			const NiAlphaProperty* alpha = item.geometry->GetAlphaProperty();
-			const NiMaterialProperty* material =
-				item.geometry->GetMaterialProperty();
 			if (!tile || !alpha
 				|| tile->alphaTexture.m_pObject || tile->noTexture)
 			{
@@ -531,19 +526,42 @@ namespace fonthook::vectorfont
 				return BuildMemberFailure::State;
 			}
 
-			// Both ordinary direct-shape and Virtual-stock singleton submission
-			// temporarily apply the payload origin and disable alpha testing before
-			// reaching TileShader. Build the instance from that effective state,
-			// while retaining the raw world transform below for runtime mutation
-			// validation.
-			NiTransform effectiveWorld;
-			ApplyNativeA8GeometryOrigin(effectiveWorld,
-				item.geometry->m_kWorld, item.payload->geometryOrigin);
 			NativeTileInstancingSnapshot snapshot;
-			const NativeTileInstancingSnapshotResult snapshotResult =
-				BuildNativeTileInstancingSnapshotForWorld(item.geometry,
-					&item.geometry->m_kProperties,
+			NativeTileInstancingSnapshotResult snapshotResult =
+				NativeTileInstancingSnapshotResult::NotApplicable;
+			if (phase == BuildMemberPhase::Admission)
+			{
+				// Frame construction needs only the exact transient key used to
+				// decide adjacency. Avoid building a WVP and TileColor that the
+				// leader would necessarily discard and rebuild later.
+				snapshotResult = BuildNativeTileInstancingAdmissionSnapshot(
+					item.geometry, &item.geometry->m_kProperties, snapshot);
+			}
+			else
+			{
+				// Both ordinary direct-shape and Virtual-stock singleton
+				// submission temporarily apply the payload origin before reaching
+				// TileShader. Only the leader-time live phase freezes the effective
+				// world, retail WVP and TileColor used by this draw.
+				NiTransform effectiveWorld;
+				ApplyNativeA8GeometryOrigin(effectiveWorld,
+					item.geometry->m_kWorld,
+					item.payload->geometryOrigin);
+				snapshotResult = BuildNativeTileInstancingSnapshotForWorld(
+					item.geometry, &item.geometry->m_kProperties,
 					stamp->renderer, effectiveWorld, snapshot);
+				// Followers do not enter their own late-visibility scope after a
+				// successful batch. Reuse the existing conservative payload/scissor
+				// proof and reject the complete batch when any member is outside.
+				if (snapshotResult
+						== NativeTileInstancingSnapshotResult::Ready
+					&& IsNativeA8PayloadOutsideScissorForWorld(
+						*item.payload, &item.geometry->m_kProperties,
+						stamp->renderer, effectiveWorld))
+				{
+					return BuildMemberFailure::Scissor;
+				}
+			}
 			if (snapshotResult
 				== NativeTileInstancingSnapshotResult::ScaledScissor)
 			{
@@ -551,19 +569,6 @@ namespace fonthook::vectorfont
 			}
 			if (snapshotResult != NativeTileInstancingSnapshotResult::Ready)
 				return BuildMemberFailure::State;
-			// Followers do not enter their own late-visibility scope after a
-			// successful batch.  Reuse the existing conservative payload/scissor
-			// proof and reject the complete batch when any member is currently
-			// outside, so the ordinary callbacks retain their individual cull and
-			// accounting behavior.
-			if (proveLiveVisibility
-				&& IsNativeA8PayloadOutsideScissorForWorld(
-					*item.payload, &item.geometry->m_kProperties,
-					stamp->renderer, effectiveWorld))
-			{
-				return BuildMemberFailure::Scissor;
-			}
-
 			member.sequenceIndex = sequenceIndex;
 			member.sequence = item;
 			member.command = command;
@@ -572,11 +577,6 @@ namespace fonthook::vectorfont
 				+ packets[0].instanceSidecarFirst;
 			member.sidecarCount = packets[0].instanceSidecarCount;
 			member.snapshot = snapshot;
-			member.dynamic.world = item.geometry->m_kWorld;
-			member.dynamic.overlayColor = tile->overlayColor;
-			member.dynamic.tileAlpha = tile->tileAlpha;
-			member.dynamic.materialAlpha = material
-				? material->m_fAlpha : 1.0f;
 			CrossTextCompatibilityKey& key = member.compatibility;
 			key.program = command->program;
 			key.normalDeclaration = command->binding.declaration;
@@ -609,6 +609,22 @@ namespace fonthook::vectorfont
 			key.shaderFadeAlpha = tile->fFadeAlpha;
 
 			return BuildMemberFailure::None;
+		}
+
+		BuildMemberFailure BuildAdmissionMember(
+			const CrossTextSequenceItem& item, UInt32 sequenceIndex,
+			CrossTextMember& member)
+		{
+			return BuildMemberForPhase(item, sequenceIndex,
+				BuildMemberPhase::Admission, member);
+		}
+
+		BuildMemberFailure BuildLiveMember(
+			const CrossTextSequenceItem& item, UInt32 sequenceIndex,
+			CrossTextMember& member)
+		{
+			return BuildMemberForPhase(item, sequenceIndex,
+				BuildMemberPhase::Live, member);
 		}
 
 		void RecordBuildFailure(BuildMemberFailure failure)
@@ -1362,7 +1378,7 @@ namespace fonthook::vectorfont
 				}
 				CrossTextMember member;
 				const BuildMemberFailure failure =
-					BuildMember(item, cursor, false, member);
+					BuildAdmissionMember(item, cursor, member);
 				if (failure != BuildMemberFailure::None)
 				{
 					RecordBuildFailure(failure);
@@ -1590,8 +1606,8 @@ namespace fonthook::vectorfont
 			CrossTextMember current;
 			CrossTextMember& planned =
 				frame.members[batch.firstMember + offset];
-			const BuildMemberFailure failure = BuildMember(
-				planned.sequence, planned.sequenceIndex, true, current);
+			const BuildMemberFailure failure = BuildLiveMember(
+				planned.sequence, planned.sequenceIndex, current);
 			if (failure != BuildMemberFailure::None)
 			{
 				RecordBuildFailure(failure);
@@ -1634,7 +1650,6 @@ namespace fonthook::vectorfont
 					"transient-state", offset);
 			}
 			planned.compatibility = current.compatibility;
-			planned.dynamic = current.dynamic;
 			planned.snapshot = current.snapshot;
 		}
 

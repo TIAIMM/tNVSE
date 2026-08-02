@@ -92,6 +92,23 @@ namespace fonthook::vectorfont
 				&& *reinterpret_cast<const UInt8*>(kScaledScissorActive);
 		}
 
+		void PopulateNativeTileInstancingTransientSnapshot(
+			const TileConstantsTransientState& state,
+			NativeTileInstancingSnapshot& snapshot)
+		{
+			snapshot.scissorEnabled = state.tile->useScissorTest;
+			snapshot.scissorRect = state.tile->scissorRect;
+			snapshot.stencilPresent = state.stencil != nullptr;
+			snapshot.stencilEnabled = state.stencilEnabled;
+			snapshot.cleanupRequired = state.cleanupRequired;
+			if (state.stencil)
+			{
+				snapshot.stencilFlags = state.stencil->m_usFlags.Get();
+				snapshot.stencilRef = state.stencil->m_uiRef;
+				snapshot.stencilMask = state.stencil->m_uiMask;
+			}
+		}
+
 		void ApplyTileConstantsTransientState(
 			const TileConstantsTransientState& state)
 		{
@@ -245,17 +262,31 @@ namespace fonthook::vectorfont
 			if (!std::isfinite(value))
 				return NativeTileInstancingSnapshotResult::NonFinite;
 		}
-		snapshot.scissorEnabled = transientState.tile->useScissorTest;
-		snapshot.scissorRect = transientState.tile->scissorRect;
-		snapshot.stencilPresent = transientState.stencil != nullptr;
-		snapshot.stencilEnabled = transientState.stencilEnabled;
-		snapshot.cleanupRequired = transientState.cleanupRequired;
-		if (transientState.stencil)
+		PopulateNativeTileInstancingTransientSnapshot(
+			transientState, snapshot);
+		return NativeTileInstancingSnapshotResult::Ready;
+	}
+
+	NativeTileInstancingSnapshotResult
+		BuildNativeTileInstancingAdmissionSnapshot(
+		const NiTriShape* geometry, const NiPropertyState* properties,
+		NativeTileInstancingSnapshot& snapshot)
+	{
+		// D3DXMATRIX has a user-provided empty default constructor. Admission
+		// members are copied into the frame vector before their leader-time live
+		// refresh, so make the deliberately absent matrix/color payload defined
+		// without paying for matrix construction, multiplication or validation.
+		std::memset(&snapshot, 0, sizeof(snapshot));
+		TileConstantsTransientState transientState;
+		if (!ResolveTileConstantsTransientState(
+				geometry, properties, transientState))
 		{
-			snapshot.stencilFlags = transientState.stencil->m_usFlags.Get();
-			snapshot.stencilRef = transientState.stencil->m_uiRef;
-			snapshot.stencilMask = transientState.stencil->m_uiMask;
+			return NativeTileInstancingSnapshotResult::NotApplicable;
 		}
+		if (UsesScaledScissor(transientState))
+			return NativeTileInstancingSnapshotResult::ScaledScissor;
+		PopulateNativeTileInstancingTransientSnapshot(
+			transientState, snapshot);
 		return NativeTileInstancingSnapshotResult::Ready;
 	}
 

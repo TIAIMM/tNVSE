@@ -1259,9 +1259,11 @@ packed color, distance parameters, layer mask, Tile-RGB selector, glyph bounds,
 and local depth. Optional sidecar fields remain at the tail of the private
 packet/payload structures, and sidecars are not built while the feature is
 disabled, preserving the established direct-draw-lite data prefix and work.
-At the leader callback the batch rebuilds every live property/world snapshot,
-then appends the member's retail-equivalent WVP and TileColor to form one
-152-byte stream-1 instance. The first reached batch uses `D3DLOCK_DISCARD`;
+Admission snapshots only the exact scissor/stencil/cleanup compatibility key;
+it does not build matrices or colors. At the leader callback the batch builds
+every live property/world snapshot once, then appends the member's
+retail-equivalent WVP and TileColor to form one 152-byte stream-1 instance. The
+first reached batch uses `D3DLOCK_DISCARD`;
 later reached batches use disjoint `D3DLOCK_NOOVERWRITE` ranges. No frame-build
 snapshot is uploaded and no concatenated CPU vertex array is built. The buffer
 grows on demand up to 16 MiB and stops only at text boundaries.

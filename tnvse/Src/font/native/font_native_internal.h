@@ -690,6 +690,14 @@ namespace fonthook::vectorfont
 		const NiTriShape* geometry, const NiPropertyState* properties,
 		const NiDX9Renderer* renderer,
 		NativeTileInstancingSnapshot& snapshot);
+	// Admission needs only the exact slot-31 transient compatibility state.
+	// WVP, TileColor and retail-world mirrors are deliberately left zeroed until
+	// the leader callback takes the live snapshot used for upload and restore.
+	NativeTileInstancingSnapshotResult
+		BuildNativeTileInstancingAdmissionSnapshot(
+			const NiTriShape* geometry,
+			const NiPropertyState* properties,
+			NativeTileInstancingSnapshot& snapshot);
 	NativeTileInstancingSnapshotResult
 		BuildNativeTileInstancingSnapshotForWorld(
 			const NiTriShape* geometry,
