@@ -360,6 +360,12 @@ namespace fonthook::vectorfont
 		CommandFallbackNested,
 		CommandFallbackRenderTarget,
 		CommandFallbackState,
+		StaticPromotionDeferredLifecycle,
+		StaticPromotionDeferredUploadHistory,
+		StaticPromotionDeferredBudget,
+		StaticPromotionDeferredRetry,
+		StaticResidentColdEviction,
+		StaticResidentColdEvictionBytes,
 		Count,
 	};
 	static_assert(

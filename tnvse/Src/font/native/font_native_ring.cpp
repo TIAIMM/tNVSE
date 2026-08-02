@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -42,7 +43,15 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kStaticInitialVertexBytes = 4u * 1024u * 1024u;
 		inline constexpr UInt32 kStaticInitialVertexCapacity =
 			(kStaticInitialVertexBytes / sizeof(NativeA8GpuVertex)) & ~3u;
-		inline constexpr UInt32 kStaticPromotionFrameCount = 2;
+		inline constexpr UInt32 kStaticPromotionMinimumFrameCount = 2;
+		inline constexpr UInt32 kStaticPromotionMaximumBaseFrameCount = 16;
+		inline constexpr UInt32 kStaticPromotionMaximumOversizeFrameCount = 32;
+		inline constexpr UInt32 kStaticPromotionMaximumFrameGap = 2;
+		inline constexpr UInt32 kStaticPromotionRetryFrames = 8;
+		inline constexpr UInt32 kStaticPromotionBudgetBytes = 1024u * 1024u;
+		inline constexpr UInt32 kStaticPromotionPayloadLimit = 128;
+		inline constexpr UInt32 kStaticCandidateInactiveFrames = 600;
+		inline constexpr UInt32 kStaticCandidateSweepIntervalFrames = 60;
 		inline constexpr UInt32 kStaticCompactionCooldownFrames = 2;
 		inline constexpr UInt32 kStaticCompactionReserveDivisor = 8;
 		inline constexpr size_t kStaticCandidateLimit = 4096;
@@ -119,15 +128,21 @@ namespace fonthook::vectorfont
 		{
 			CpuMemoryLease cpuMemory;
 			std::weak_ptr<const NativeA8PayloadTemplate> owner;
-			UInt32 observedFrameCount = 0;
+			UInt32 firstObservedFrame = 0;
 			UInt32 lastObservedFrame = 0;
+			UInt32 activeObservedFrames = 0;
+			UInt32 dynamicUploadEpochCount = 0;
+			UInt32 lastDynamicUploadEpoch = 0;
+			UInt32 lastDynamicUploadResourceSerial = 0;
+			UInt32 nextRetryFrame = 0;
+			bool observationFrameValid = false;
 			bool promotionDisabled = false;
 		};
 
 		struct NativeA8StaticHotEntry
 		{
 			const NativeA8PayloadTemplate* key = nullptr;
-			NativeA8PayloadTemplatePtr owner;
+			std::weak_ptr<const NativeA8PayloadTemplate> owner;
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 resourceSerial = 0;
@@ -146,7 +161,7 @@ namespace fonthook::vectorfont
 		struct NativeA8CandidateHotEntry
 		{
 			const NativeA8PayloadTemplate* key = nullptr;
-			NativeA8PayloadTemplatePtr owner;
+			std::weak_ptr<const NativeA8PayloadTemplate> owner;
 			std::shared_ptr<NativeA8StaticCandidate> candidate;
 			UInt32 resourceSerial = 0;
 		};
@@ -191,8 +206,15 @@ namespace fonthook::vectorfont
 			std::atomic<bool> releasePending = false;
 			UInt32 lastStaticCompactionFrame = 0;
 			UInt32 lastStaticCompactionDeferredLogFrame = 0;
+			UInt32 lastStaticCandidateSweepFrame = 0;
+			UInt32 staticPromotionBudgetFrame = 0;
+			UInt32 staticPromotionGlobalRetryFrame = 0;
+			UInt32 staticPromotionBytesThisFrame = 0;
+			UInt32 staticPromotionPayloadsThisFrame = 0;
 			bool staticCompactionFrameValid = false;
 			bool staticCompactionDeferredLogFrameValid = false;
+			bool staticCandidateSweepFrameValid = false;
+			bool staticPromotionBudgetFrameValid = false;
 			bool loggedReady = false;
 		};
 
@@ -406,8 +428,15 @@ namespace fonthook::vectorfont
 			state.nextStaticVertex = 0;
 			state.lastStaticCompactionFrame = 0;
 			state.lastStaticCompactionDeferredLogFrame = 0;
+			state.lastStaticCandidateSweepFrame = 0;
+			state.staticPromotionBudgetFrame = 0;
+			state.staticPromotionGlobalRetryFrame = 0;
+			state.staticPromotionBytesThisFrame = 0;
+			state.staticPromotionPayloadsThisFrame = 0;
 			state.staticCompactionFrameValid = false;
 			state.staticCompactionDeferredLogFrameValid = false;
+			state.staticCandidateSweepFrameValid = false;
+			state.staticPromotionBudgetFrameValid = false;
 		}
 
 		bool PopulateCanonicalIndexBuffer(IDirect3DIndexBuffer9* indexBuffer,
@@ -588,8 +617,15 @@ namespace fonthook::vectorfont
 			state.nextStaticVertex = 0;
 			state.lastStaticCompactionFrame = 0;
 			state.lastStaticCompactionDeferredLogFrame = 0;
+			state.lastStaticCandidateSweepFrame = 0;
+			state.staticPromotionBudgetFrame = 0;
+			state.staticPromotionGlobalRetryFrame = 0;
+			state.staticPromotionBytesThisFrame = 0;
+			state.staticPromotionPayloadsThisFrame = 0;
 			state.staticCompactionFrameValid = false;
 			state.staticCompactionDeferredLogFrameValid = false;
+			state.staticCandidateSweepFrameValid = false;
+			state.staticPromotionBudgetFrameValid = false;
 			for (UInt32 index = 0; index < state.proxyCount; ++index)
 			{
 				NativeA8Proxy& proxy = state.proxies[index];
@@ -606,9 +642,17 @@ namespace fonthook::vectorfont
 			{
 				state.loggedReady = true;
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: geometry cache ready generation=%u proxies=%u dynamicVertexCapacity=%u staticVertexCapacity=%u staticPromotionFrames=%u vertexStride=%u canonicalQuads=%u canonicalIndexBytes=%u",
+					"tnvse_freetype_native: geometry cache ready generation=%u proxies=%u dynamicVertexCapacity=%u staticVertexCapacity=%u staticPromotionBaseFrames=%u-%u staticPromotionOversizeMaxFrames=%u staticPromotionBudgetBytes=%u staticPromotionPayloadLimit=%u staticCandidateLimit=%u staticCandidateSweepFrames=%u staticCandidateInactiveFrames=%u vertexStride=%u canonicalQuads=%u canonicalIndexBytes=%u",
 					generation, state.proxyCount, state.vertexCapacity,
-					state.staticVertexCapacity, kStaticPromotionFrameCount,
+					state.staticVertexCapacity,
+					kStaticPromotionMinimumFrameCount,
+					kStaticPromotionMaximumBaseFrameCount,
+					kStaticPromotionMaximumOversizeFrameCount,
+					kStaticPromotionBudgetBytes,
+					kStaticPromotionPayloadLimit,
+					static_cast<UInt32>(kStaticCandidateLimit),
+					kStaticCandidateSweepIntervalFrames,
+					kStaticCandidateInactiveFrames,
 					static_cast<UInt32>(sizeof(NativeA8GpuVertex)),
 					kNativeA8MaximumQuads, kCanonicalIndexBytes);
 			}
@@ -626,6 +670,137 @@ namespace fonthook::vectorfont
 		UInt32 GetStaticObservationFrame(const NativeA8RingState& state)
 		{
 			return state.renderer ? state.renderer->m_uiFrameID : 0;
+		}
+
+		struct StaticPromotionPolicy
+		{
+			UInt32 maximumBytes = 0;
+			UInt32 minimumActiveFrames = 0;
+			UInt32 minimumDynamicUploadEpochs = 0;
+			UInt32 coldResidentFrames = 0;
+		};
+
+		inline constexpr std::array<StaticPromotionPolicy, 5>
+			kStaticPromotionPolicies = {{
+				{ 32u * 1024u, 2, 2, 1800 },
+				{ 128u * 1024u, 3, 2, 900 },
+				{ 512u * 1024u, 5, 3, 450 },
+				{ 2u * 1024u * 1024u, 8, 4, 240 },
+				{ std::numeric_limits<UInt32>::max(), 16, 6, 120 },
+			}};
+
+		const StaticPromotionPolicy& GetStaticPromotionPolicy(UInt32 vertexCount)
+		{
+			const UInt64 bytes = static_cast<UInt64>(vertexCount)
+				* sizeof(NativeA8GpuVertex);
+			for (const StaticPromotionPolicy& policy : kStaticPromotionPolicies)
+			{
+				if (bytes <= policy.maximumBytes)
+					return policy;
+			}
+			return kStaticPromotionPolicies.back();
+		}
+
+		enum class StaticPromotionReadiness : UInt8
+		{
+			Ready = 0,
+			Disabled,
+			Lifecycle,
+			UploadHistory,
+			Retry,
+		};
+
+		bool IsFrameBefore(UInt32 current, UInt32 target)
+		{
+			return static_cast<std::int32_t>(current - target) < 0;
+		}
+
+		StaticPromotionReadiness GetStaticPromotionReadiness(
+			const NativeA8RingState& state,
+			const NativeA8StaticCandidate& candidate, UInt32 vertexCount,
+			UInt32 frame, UInt32 maturityMultiplier = 1)
+		{
+			if (candidate.promotionDisabled)
+				return StaticPromotionReadiness::Disabled;
+			if ((state.staticPromotionGlobalRetryFrame
+					&& IsFrameBefore(frame,
+						state.staticPromotionGlobalRetryFrame))
+				|| (candidate.nextRetryFrame
+					&& IsFrameBefore(frame, candidate.nextRetryFrame)))
+			{
+				return StaticPromotionReadiness::Retry;
+			}
+			const StaticPromotionPolicy& policy =
+				GetStaticPromotionPolicy(vertexCount);
+			const UInt32 requiredFrames = policy.minimumActiveFrames
+				* maturityMultiplier;
+			if (!candidate.observationFrameValid
+				|| candidate.activeObservedFrames < requiredFrames
+				|| static_cast<UInt32>(frame
+					- candidate.firstObservedFrame) + 1u < requiredFrames
+				|| static_cast<UInt32>(frame - candidate.lastObservedFrame)
+					> kStaticPromotionMaximumFrameGap)
+			{
+				return StaticPromotionReadiness::Lifecycle;
+			}
+			const UInt32 requiredUploads = policy.minimumDynamicUploadEpochs
+				* maturityMultiplier;
+			if (candidate.dynamicUploadEpochCount < requiredUploads)
+				return StaticPromotionReadiness::UploadHistory;
+			return StaticPromotionReadiness::Ready;
+		}
+
+		void ResetStaticPromotionBudgetFrame(NativeA8RingState& state,
+			UInt32 frame)
+		{
+			if (state.staticPromotionBudgetFrameValid
+				&& state.staticPromotionBudgetFrame == frame)
+			{
+				return;
+			}
+			state.staticPromotionBudgetFrame = frame;
+			state.staticPromotionBytesThisFrame = 0;
+			state.staticPromotionPayloadsThisFrame = 0;
+			state.staticPromotionBudgetFrameValid = true;
+		}
+
+		bool FitsStaticPromotionBudget(NativeA8RingState& state,
+			const NativeA8StaticCandidate& candidate, UInt32 vertexCount,
+			UInt32 pendingBytes, UInt32 pendingPayloads)
+		{
+			const UInt32 frame = GetStaticObservationFrame(state);
+			ResetStaticPromotionBudgetFrame(state, frame);
+			const UInt64 byteCount = static_cast<UInt64>(vertexCount)
+				* sizeof(NativeA8GpuVertex);
+			const UInt64 usedBytes = static_cast<UInt64>(
+				state.staticPromotionBytesThisFrame) + pendingBytes;
+			const UInt64 usedPayloads = static_cast<UInt64>(
+				state.staticPromotionPayloadsThisFrame) + pendingPayloads;
+			if (byteCount > kStaticPromotionBudgetBytes)
+			{
+				return !usedBytes && !usedPayloads
+					&& GetStaticPromotionReadiness(state, candidate, vertexCount,
+						frame, 2) == StaticPromotionReadiness::Ready;
+			}
+			return usedPayloads < kStaticPromotionPayloadLimit
+				&& usedBytes + byteCount <= kStaticPromotionBudgetBytes;
+		}
+
+		void CommitStaticPromotionBudget(NativeA8RingState& state,
+			UInt32 bytes, UInt32 payloads)
+		{
+			ResetStaticPromotionBudgetFrame(state,
+				GetStaticObservationFrame(state));
+			state.staticPromotionBytesThisFrame += bytes;
+			state.staticPromotionPayloadsThisFrame += payloads;
+		}
+
+		void DeferStaticPromotionsLocked(NativeA8RingState& state, UInt32 frame)
+		{
+			state.staticPromotionGlobalRetryFrame = frame
+				+ kStaticPromotionRetryFrames;
+			if (!state.staticPromotionGlobalRetryFrame)
+				state.staticPromotionGlobalRetryFrame = 1;
 		}
 
 		void ClearMatchingStaticResidency(
@@ -646,19 +821,37 @@ namespace fonthook::vectorfont
 			residency.staticResourceSerial = 0;
 			residency.staticBaseVertex = 0;
 			residency.staticVertexCount = 0;
+			residency.staticLastUsedFrame = 0;
 		}
 
-		void ReclaimExpiredStaticPayloadsLocked(NativeA8RingState& state,
+		void ReclaimExpiredAndColdStaticPayloadsLocked(NativeA8RingState& state,
 			UInt32 requiredVertices)
 		{
-			// The hot entry intentionally owns its most recent hit, but under
-			// allocation pressure that reference must not keep an otherwise dead
-			// tail allocation resident. Live shapes retain their own payload owner.
+			// Hot entries never own payload lifetime. Clear the local location cache
+			// before erasing residency so it cannot resurrect a reclaimed tail slot.
 			s_ringThread.staticPayload = {};
 
 			const UInt32 previousNextVertex = state.nextStaticVertex;
-			UInt32 liveEndVertex = 0;
+			const UInt32 currentFrame = GetStaticObservationFrame(state);
+			const bool underPressure = state.nextStaticVertex
+				> state.staticVertexCapacity
+				|| requiredVertices > state.staticVertexCapacity
+					- std::min(state.nextStaticVertex,
+						state.staticVertexCapacity);
+			struct ColdPayload
+			{
+				const NativeA8PayloadTemplate* key = nullptr;
+				UInt32 vertexCount = 0;
+				UInt32 ageFrames = 0;
+			};
+			std::vector<ColdPayload> coldPayloads;
+			CpuMemoryLease reclaimCpuMemory;
+			if (underPressure)
+				coldPayloads.reserve(state.staticPayloads.size());
+			UInt64 liveVertexCount = 0;
 			UInt32 removedPayloads = 0;
+			UInt32 coldRemovedPayloads = 0;
+			UInt64 coldRemovedVertices = 0;
 			for (auto current = state.staticPayloads.begin();
 				current != state.staticPayloads.end();)
 			{
@@ -680,13 +873,103 @@ namespace fonthook::vectorfont
 					++removedPayloads;
 					continue;
 				}
-				liveEndVertex = std::max(liveEndVertex,
-					payload.baseVertex + payload.vertexCount);
+				liveVertexCount += payload.vertexCount;
+				if (underPressure)
+				{
+					const NativeA8PayloadResidencyCache& residency =
+						owner->residency;
+					const UInt32 ageFrames = static_cast<UInt32>(
+						currentFrame - residency.staticLastUsedFrame);
+					const StaticPromotionPolicy& policy =
+						GetStaticPromotionPolicy(payload.vertexCount);
+					if (ageFrames && ageFrames >= policy.coldResidentFrames)
+					{
+						coldPayloads.push_back({
+							current->first, payload.vertexCount, ageFrames });
+					}
+				}
 				++current;
+			}
+			reclaimCpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+				coldPayloads.capacity() * sizeof(ColdPayload));
+
+			if (underPressure
+				&& liveVertexCount + requiredVertices
+					> state.staticVertexCapacity && !coldPayloads.empty())
+			{
+				std::sort(coldPayloads.begin(), coldPayloads.end(),
+					[](const ColdPayload& left, const ColdPayload& right)
+					{
+						const UInt64 leftScore = static_cast<UInt64>(
+							left.ageFrames) * left.vertexCount;
+						const UInt64 rightScore = static_cast<UInt64>(
+							right.ageFrames) * right.vertexCount;
+						if (leftScore != rightScore)
+							return leftScore > rightScore;
+						return left.vertexCount > right.vertexCount;
+					});
+				for (const ColdPayload& cold : coldPayloads)
+				{
+					if (liveVertexCount + requiredVertices
+						<= state.staticVertexCapacity)
+					{
+						break;
+					}
+					auto found = state.staticPayloads.find(cold.key);
+					if (found == state.staticPayloads.end())
+						continue;
+					const NativeA8StaticPayload payload = found->second;
+					NativeA8PayloadTemplatePtr owner = payload.owner.lock();
+					if (owner && owner.get() == found->first)
+						ClearMatchingStaticResidency(state, payload, owner);
+					liveVertexCount -= std::min<UInt64>(
+						liveVertexCount, payload.vertexCount);
+					coldRemovedVertices += payload.vertexCount;
+					state.staticPayloads.erase(found);
+					++coldRemovedPayloads;
+					++removedPayloads;
+				}
+			}
+
+			UInt32 liveEndVertex = 0;
+			for (const auto& entry : state.staticPayloads)
+			{
+				liveEndVertex = std::max(liveEndVertex,
+					entry.second.baseVertex + entry.second.vertexCount);
 			}
 
 			if (liveEndVertex < state.nextStaticVertex)
 				state.nextStaticVertex = liveEndVertex;
+			if (coldRemovedPayloads)
+			{
+				// Cold entries can still have live command/virtual-stock descriptors.
+				// Invalidate the shared resource identity before a reclaimed tail range
+				// is reused, then republish only the retained static locations.
+				InvalidateAllVirtualStockBindings();
+				AdvanceUploadEpochLocked(state);
+				state.uploadedPayloads.clear();
+				const UInt32 resourceSerial =
+					AdvanceResourceSerialLocked(state);
+				for (const auto& entry : state.staticPayloads)
+				{
+					NativeA8PayloadTemplatePtr owner = entry.second.owner.lock();
+					if (!owner || owner.get() != entry.first)
+						continue;
+					NativeA8PayloadResidencyCache& residency = owner->residency;
+					residency.staticResourceSerial = resourceSerial;
+					residency.staticBaseVertex = entry.second.baseVertex;
+					residency.staticVertexCount = entry.second.vertexCount;
+				}
+				s_ringThread.staticPayload = {};
+				s_ringThread.uploadedPayload = {};
+				s_ringThread.staticCandidate = {};
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StaticResidentColdEviction,
+					coldRemovedPayloads);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StaticResidentColdEvictionBytes,
+					coldRemovedVertices * sizeof(NativeA8GpuVertex));
+			}
 			if (removedPayloads)
 				RefreshRingCpuMemoryLocked(state);
 
@@ -696,8 +979,10 @@ namespace fonthook::vectorfont
 				&& (removedPayloads || reclaimedVertices))
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_native: static vertex tail reclaimed removedPayloads=%u reclaimedVertices=%u residentVertices=%u capacity=%u requestedVertices=%u",
-					removedPayloads, reclaimedVertices,
+					"tnvse_freetype_native: static vertex residency reclaimed removedPayloads=%u coldPayloads=%u coldBytes=%llu reclaimedTailVertices=%u residentVertices=%u capacity=%u requestedVertices=%u",
+					removedPayloads, coldRemovedPayloads,
+					static_cast<unsigned long long>(coldRemovedVertices
+						* sizeof(NativeA8GpuVertex)), reclaimedVertices,
 					state.nextStaticVertex, state.staticVertexCapacity,
 					requiredVertices);
 			}
@@ -707,11 +992,13 @@ namespace fonthook::vectorfont
 			UInt32 requiredVertices, bool& permanentFailure)
 		{
 			permanentFailure = false;
-			if (!state.device || !state.staticVertexBuffer || !requiredVertices)
+			if (requiredVertices > kStaticTargetVertexCapacity)
 			{
 				permanentFailure = true;
 				return false;
 			}
+			if (!state.device || !state.staticVertexBuffer || !requiredVertices)
+				return false;
 
 			// A published submission can still be issuing packets against the old
 			// buffer. The one permitted in-use proxy is only the caller's reserved,
@@ -721,10 +1008,11 @@ namespace fonthook::vectorfont
 				state.proxies.begin(), state.proxies.begin() + state.proxyCount,
 				[](const NativeA8Proxy& proxy) { return proxy.inUse; }));
 			if (state.activeSubmissions.load(std::memory_order_acquire)
+				|| state.sortedFrameLeases.load(std::memory_order_acquire)
 				|| activeProxies > 1)
 				return false;
 
-			ReclaimExpiredStaticPayloadsLocked(state, requiredVertices);
+			ReclaimExpiredAndColdStaticPayloadsLocked(state, requiredVertices);
 			if (state.nextStaticVertex <= state.staticVertexCapacity
 				&& requiredVertices <= state.staticVertexCapacity
 					- state.nextStaticVertex)
@@ -749,7 +1037,6 @@ namespace fonthook::vectorfont
 				if (liveVertexCount + owner->gpuVertices.size()
 					> kStaticTargetVertexCapacity)
 				{
-					permanentFailure = true;
 					return false;
 				}
 				livePayloads.push_back({ std::move(owner),
@@ -759,10 +1046,7 @@ namespace fonthook::vectorfont
 
 			const UInt64 requiredCapacity = liveVertexCount + requiredVertices;
 			if (requiredCapacity > kStaticTargetVertexCapacity)
-			{
-				permanentFailure = true;
 				return false;
-			}
 			const UInt64 currentCapacity = state.staticVertexCapacity;
 			const UInt64 reserveVertices = std::max<UInt64>(4,
 				currentCapacity / kStaticCompactionReserveDivisor);
@@ -780,10 +1064,7 @@ namespace fonthook::vectorfont
 			// holes behind the bump pointer. It compacts the live prefix in one upload.
 			if (desiredCapacity == state.staticVertexCapacity
 				&& liveVertexCount == state.nextStaticVertex)
-			{
-				permanentFailure = true;
 				return false;
-			}
 			const bool sameSizeCompaction =
 				desiredCapacity == state.staticVertexCapacity;
 			const UInt32 currentFrame = GetStaticObservationFrame(state);
@@ -817,7 +1098,6 @@ namespace fonthook::vectorfont
 			{
 				if (replacement)
 					replacement->Release();
-				permanentFailure = true;
 				return false;
 			}
 
@@ -830,7 +1110,6 @@ namespace fonthook::vectorfont
 				if (FAILED(result) || !destination)
 				{
 					replacement->Release();
-					permanentFailure = true;
 					return false;
 				}
 				for (const LiveStaticPayload& payload : livePayloads)
@@ -845,7 +1124,6 @@ namespace fonthook::vectorfont
 				if (FAILED(result))
 				{
 					replacement->Release();
-					permanentFailure = true;
 					return false;
 				}
 			}
@@ -1070,6 +1348,16 @@ namespace fonthook::vectorfont
 			return std::numeric_limits<UInt32>::max();
 		}
 
+		void MarkStaticPayloadUsedLocked(NativeA8RingState& state,
+			const NativeA8PayloadTemplatePtr& payloadTemplate)
+		{
+			NativeA8PayloadResidencyCache& residency =
+				payloadTemplate->residency;
+			const UInt32 frame = GetStaticObservationFrame(state);
+			if (residency.staticLastUsedFrame != frame)
+				residency.staticLastUsedFrame = frame;
+		}
+
 		bool ResolveStaticPayloadLocked(NativeA8RingState& state,
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount, UInt32& baseVertex)
@@ -1087,6 +1375,7 @@ namespace fonthook::vectorfont
 					- residency.staticBaseVertex)
 			{
 				baseVertex = residency.staticBaseVertex;
+				MarkStaticPayloadUsedLocked(state, payloadTemplate);
 				RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexHit);
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::DirectStaticResidencyHit);
@@ -1096,15 +1385,17 @@ namespace fonthook::vectorfont
 			if (hot.key == payloadTemplate.get()
 				&& hot.resourceSerial == resourceSerial)
 			{
-				if (hot.owner.get() == payloadTemplate.get()
+				const NativeA8PayloadTemplatePtr hotOwner = hot.owner.lock();
+				if (hotOwner.get() == payloadTemplate.get()
+					&& residency.staticResourceSerial == resourceSerial
+					&& residency.staticBaseVertex == hot.baseVertex
+					&& residency.staticVertexCount == hot.vertexCount
 					&& hot.vertexCount == vertexCount
 					&& hot.baseVertex <= state.staticVertexCapacity
 					&& vertexCount <= state.staticVertexCapacity - hot.baseVertex)
 				{
 					baseVertex = hot.baseVertex;
-					residency.staticResourceSerial = resourceSerial;
-					residency.staticBaseVertex = hot.baseVertex;
-					residency.staticVertexCount = hot.vertexCount;
+					MarkStaticPayloadUsedLocked(state, payloadTemplate);
 					RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexHit);
 					return true;
 				}
@@ -1130,6 +1421,7 @@ namespace fonthook::vectorfont
 				residency.staticResourceSerial = resourceSerial;
 				residency.staticBaseVertex = found->second.baseVertex;
 				residency.staticVertexCount = found->second.vertexCount;
+				MarkStaticPayloadUsedLocked(state, payloadTemplate);
 				RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexHit);
 				return true;
 			}
@@ -1141,7 +1433,7 @@ namespace fonthook::vectorfont
 		NativeA8StaticCandidate* ResolveStaticCandidateLocked(
 			NativeA8RingState& state,
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
-			UInt32 vertexCount)
+			UInt32 vertexCount, bool allowCreate)
 		{
 			// Candidate observation must use the strategy's growth ceiling rather
 			// than the current allocation. Otherwise a payload larger than the
@@ -1155,30 +1447,63 @@ namespace fonthook::vectorfont
 			if (hot.key == payloadTemplate.get()
 				&& hot.resourceSerial == resourceSerial && hot.candidate)
 			{
-				if (hot.owner.get() == payloadTemplate.get())
+				const NativeA8PayloadTemplatePtr hotOwner = hot.owner.lock();
+				if (hotOwner.get() == payloadTemplate.get())
 					return hot.candidate.get();
 				hot = {};
 			}
+			bool memoryChanged = false;
 			auto found = state.staticCandidates.find(payloadTemplate.get());
 			if (found == state.staticCandidates.end())
 			{
+				if (!allowCreate)
+					return nullptr;
 				if (state.staticCandidates.size() >= kStaticCandidateLimit)
 				{
-					for (auto current = state.staticCandidates.begin();
-						current != state.staticCandidates.end();)
+					const UInt32 frame = GetStaticObservationFrame(state);
+					if (!state.staticCandidateSweepFrameValid
+						|| static_cast<UInt32>(frame
+							- state.lastStaticCandidateSweepFrame)
+							>= kStaticCandidateSweepIntervalFrames)
 					{
-						if (!current->second || current->second->owner.expired())
-							current = state.staticCandidates.erase(current);
-						else
-							++current;
+						state.lastStaticCandidateSweepFrame = frame;
+						state.staticCandidateSweepFrameValid = true;
+						s_ringThread.staticCandidate = {};
+						for (auto current = state.staticCandidates.begin();
+							current != state.staticCandidates.end();)
+						{
+							const bool inactive = current->second
+								&& current->second->observationFrameValid
+								&& static_cast<UInt32>(frame
+									- current->second->lastObservedFrame)
+									> kStaticCandidateInactiveFrames;
+							if (!current->second
+								|| current->second->owner.expired() || inactive)
+							{
+								current = state.staticCandidates.erase(current);
+								memoryChanged = true;
+							}
+							else
+								++current;
+						}
 					}
-					RefreshRingCpuMemoryLocked(state);
 					if (state.staticCandidates.size() >= kStaticCandidateLimit)
+					{
+						if (memoryChanged)
+							RefreshRingCpuMemoryLocked(state);
 						return nullptr;
+					}
 				}
 				auto candidate = CreateStaticCandidate(payloadTemplate);
 				found = state.staticCandidates.emplace(
 					payloadTemplate.get(), std::move(candidate)).first;
+				memoryChanged = true;
+				if (state.staticCandidates.size() >= kStaticCandidateLimit)
+				{
+					state.lastStaticCandidateSweepFrame =
+						GetStaticObservationFrame(state);
+					state.staticCandidateSweepFrameValid = true;
+				}
 			}
 			else
 			{
@@ -1187,9 +1512,11 @@ namespace fonthook::vectorfont
 				if (owner.get() != payloadTemplate.get())
 				{
 					found->second = CreateStaticCandidate(payloadTemplate);
+					memoryChanged = true;
 				}
 			}
-			RefreshRingCpuMemoryLocked(state);
+			if (memoryChanged)
+				RefreshRingCpuMemoryLocked(state);
 			hot.key = payloadTemplate.get();
 			hot.owner = payloadTemplate;
 			hot.candidate = found->second;
@@ -1200,25 +1527,91 @@ namespace fonthook::vectorfont
 		NativeA8StaticCandidate* ObserveStaticCandidateLocked(
 			NativeA8RingState& state,
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
-			UInt32 vertexCount)
+			UInt32 vertexCount, bool allowCreate)
 		{
 			NativeA8StaticCandidate* candidate = ResolveStaticCandidateLocked(
-				state, payloadTemplate, vertexCount);
+				state, payloadTemplate, vertexCount, allowCreate);
 			if (!candidate || candidate->promotionDisabled)
 				return candidate;
 
 			const UInt32 frame = GetStaticObservationFrame(state);
-			if (!candidate->observedFrameCount
-				|| candidate->lastObservedFrame != frame)
+			if (!candidate->observationFrameValid)
 			{
+				candidate->firstObservedFrame = frame;
 				candidate->lastObservedFrame = frame;
-				if (candidate->observedFrameCount
+				candidate->activeObservedFrames = 1;
+				candidate->observationFrameValid = true;
+			}
+			else if (candidate->lastObservedFrame != frame)
+			{
+				const UInt32 gap = static_cast<UInt32>(
+					frame - candidate->lastObservedFrame);
+				if (gap > kStaticPromotionMaximumFrameGap)
+				{
+					candidate->firstObservedFrame = frame;
+					candidate->activeObservedFrames = 1;
+					candidate->dynamicUploadEpochCount = 0;
+					candidate->lastDynamicUploadEpoch = 0;
+					candidate->lastDynamicUploadResourceSerial = 0;
+				}
+				else if (candidate->activeObservedFrames
 					< std::numeric_limits<UInt32>::max())
 				{
-					++candidate->observedFrameCount;
+					++candidate->activeObservedFrames;
 				}
+				candidate->lastObservedFrame = frame;
 			}
 			return candidate;
+		}
+
+		void NoteStaticCandidateDynamicUploadLocked(NativeA8RingState& state,
+			const NativeA8PayloadTemplatePtr& payloadTemplate,
+			UInt32 vertexCount)
+		{
+			NativeA8StaticCandidate* candidate = ObserveStaticCandidateLocked(
+				state, payloadTemplate, vertexCount, true);
+			const UInt32 resourceSerial = state.resourceSerial.load(
+				std::memory_order_relaxed);
+			if (!candidate || candidate->promotionDisabled
+				|| (candidate->lastDynamicUploadEpoch == state.uploadEpoch
+					&& candidate->lastDynamicUploadResourceSerial
+						== resourceSerial))
+			{
+				return;
+			}
+			candidate->lastDynamicUploadEpoch = state.uploadEpoch;
+			candidate->lastDynamicUploadResourceSerial = resourceSerial;
+			if (candidate->dynamicUploadEpochCount
+				< std::numeric_limits<UInt32>::max())
+			{
+				++candidate->dynamicUploadEpochCount;
+			}
+		}
+
+		void RecordStaticPromotionDeferral(StaticPromotionReadiness readiness,
+			UInt64 amount = 1)
+		{
+			if (!amount)
+				return;
+			switch (readiness)
+			{
+			case StaticPromotionReadiness::Lifecycle:
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StaticPromotionDeferredLifecycle,
+					amount);
+				break;
+			case StaticPromotionReadiness::UploadHistory:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					StaticPromotionDeferredUploadHistory, amount);
+				break;
+			case StaticPromotionReadiness::Retry:
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StaticPromotionDeferredRetry,
+					amount);
+				break;
+			default:
+				break;
+			}
 		}
 
 		bool PromoteStaticPayloadLocked(NativeA8RingState& state,
@@ -1227,11 +1620,26 @@ namespace fonthook::vectorfont
 		{
 			NativeA8StaticCandidate* candidate =
 				ObserveStaticCandidateLocked(
-					state, payloadTemplate, vertexCount);
-			if (!candidate || candidate->promotionDisabled
-				|| candidate->observedFrameCount
-					< kStaticPromotionFrameCount)
+					state, payloadTemplate, vertexCount, false);
+			if (!candidate)
 			{
+				return false;
+			}
+			const UInt32 frame = GetStaticObservationFrame(state);
+			const StaticPromotionReadiness readiness =
+				GetStaticPromotionReadiness(state, *candidate,
+					vertexCount, frame);
+			if (readiness != StaticPromotionReadiness::Ready)
+			{
+				RecordStaticPromotionDeferral(readiness);
+				return false;
+			}
+			const UInt32 byteCount = vertexCount * sizeof(NativeA8GpuVertex);
+			if (!FitsStaticPromotionBudget(state, *candidate,
+				vertexCount, 0, 0))
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StaticPromotionDeferredBudget);
 				return false;
 			}
 
@@ -1244,6 +1652,12 @@ namespace fonthook::vectorfont
 					permanentFailure))
 				{
 					candidate->promotionDisabled = permanentFailure;
+					if (!permanentFailure)
+					{
+						candidate->nextRetryFrame = frame
+							+ kStaticPromotionRetryFrames;
+						DeferStaticPromotionsLocked(state, frame);
+					}
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::StaticVertexPromotionFailed);
 					return false;
@@ -1252,13 +1666,14 @@ namespace fonthook::vectorfont
 
 			baseVertex = state.nextStaticVertex;
 			const UINT byteOffset = baseVertex * sizeof(NativeA8GpuVertex);
-			const UINT byteCount = vertexCount * sizeof(NativeA8GpuVertex);
 			void* destination = nullptr;
 			HRESULT result = state.staticVertexBuffer->Lock(byteOffset, byteCount,
 				&destination, 0);
 			if (FAILED(result) || !destination)
 			{
-				candidate->promotionDisabled = true;
+				candidate->nextRetryFrame = frame
+					+ kStaticPromotionRetryFrames;
+				DeferStaticPromotionsLocked(state, frame);
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::StaticVertexPromotionFailed);
 				return false;
@@ -1267,7 +1682,11 @@ namespace fonthook::vectorfont
 			result = state.staticVertexBuffer->Unlock();
 			if (FAILED(result))
 			{
-				candidate->promotionDisabled = true;
+				state.nextStaticVertex = baseVertex + vertexCount;
+				CommitStaticPromotionBudget(state, byteCount, 1);
+				candidate->nextRetryFrame = frame
+					+ kStaticPromotionRetryFrames;
+				DeferStaticPromotionsLocked(state, frame);
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::StaticVertexPromotionFailed);
 				return false;
@@ -1282,6 +1701,7 @@ namespace fonthook::vectorfont
 				std::memory_order_relaxed);
 			residency.staticBaseVertex = baseVertex;
 			residency.staticVertexCount = vertexCount;
+			residency.staticLastUsedFrame = frame;
 			state.staticCandidates.erase(payloadTemplate.get());
 			s_ringThread.staticPayload = {
 				payloadTemplate.get(), payloadTemplate, baseVertex, vertexCount,
@@ -1289,6 +1709,7 @@ namespace fonthook::vectorfont
 			if (s_ringThread.staticCandidate.key == payloadTemplate.get())
 				s_ringThread.staticCandidate = {};
 			RefreshRingCpuMemoryLocked(state);
+			CommitStaticPromotionBudget(state, byteCount, 1);
 			RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexUpload);
 			RecordFreeTypePerf(FreeTypePerfCounter::StaticVertexUploadBytes,
 				byteCount);
@@ -1410,6 +1831,8 @@ namespace fonthook::vectorfont
 			residency.dynamicUploadEpoch = state.uploadEpoch;
 			residency.dynamicBaseVertex = baseVertex;
 			residency.dynamicVertexCount = vertexCount;
+			NoteStaticCandidateDynamicUploadLocked(state, payloadTemplate,
+				vertexCount);
 			s_ringThread.uploadedPayload = {
 				payloadTemplate.get(), payloadTemplate, baseVertex, vertexCount,
 				state.uploadEpoch, resourceSerial };
@@ -1421,7 +1844,7 @@ namespace fonthook::vectorfont
 			UInt32 resourceSerial, UInt32 uploadEpoch,
 			UInt32& baseVertex, bool& staticResident)
 		{
-			const NativeA8PayloadResidencyCache& residency =
+			NativeA8PayloadResidencyCache& residency =
 				artifact.residency;
 			if (state.staticVertexBuffer
 				&& residency.staticResourceSerial == resourceSerial
@@ -1689,40 +2112,22 @@ namespace fonthook::vectorfont
 				&& payloadTemplate->gpuVertices.size() / 4u
 					<= kNativeA8MaximumQuads;
 		};
-		for (const NativeA8PayloadTemplatePtr& payloadTemplate
-			: payloadTemplates)
-		{
-			if (!isValidPayload(payloadTemplate))
-				continue;
-			const UInt32 vertexCount = static_cast<UInt32>(
-				payloadTemplate->gpuVertices.size());
-			if (!HasDirectStaticPayloadLocked(state, *payloadTemplate,
-					vertexCount))
-			{
-				ObserveStaticCandidateLocked(state, payloadTemplate,
-					vertexCount);
-			}
-		}
-		auto isBatchPromotionReady = [&state](
-			const NativeA8PayloadTemplatePtr& payloadTemplate)
-		{
-			auto found = state.staticCandidates.find(payloadTemplate.get());
-			if (found == state.staticCandidates.end() || !found->second)
-				return false;
-			NativeA8PayloadTemplatePtr owner = found->second->owner.lock();
-			if (owner.get() != payloadTemplate.get())
-			{
-				state.staticCandidates.erase(found);
-				return false;
-			}
-			return !found->second->promotionDisabled
-				&& found->second->observedFrameCount
-					>= kStaticPromotionFrameCount;
-		};
-
 		if (state.staticVertexBuffer)
 		{
-			UInt64 requestedVertices = 0;
+			std::vector<NativeA8PayloadTemplatePtr> selected;
+			selected.reserve(std::min<size_t>(payloadTemplates.size(),
+				kStaticPromotionPayloadLimit));
+			CpuMemoryLease selectedCpuMemory;
+			selectedCpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+				selected.capacity() * sizeof(NativeA8PayloadTemplatePtr));
+			UInt32 requestedVertices = 0;
+			UInt32 requestedBytes = 0;
+			UInt32 requestedPayloads = 0;
+			UInt64 lifecycleDeferred = 0;
+			UInt64 uploadDeferred = 0;
+			UInt64 retryDeferred = 0;
+			UInt64 budgetDeferred = 0;
+			const UInt32 frame = GetStaticObservationFrame(state);
 			for (const NativeA8PayloadTemplatePtr& payloadTemplate
 				: payloadTemplates)
 			{
@@ -1732,47 +2137,105 @@ namespace fonthook::vectorfont
 					payloadTemplate->gpuVertices.size());
 				UInt32 baseVertex = 0;
 				if (ResolveStaticPayloadLocked(state, payloadTemplate,
-					vertexCount, baseVertex)
-					|| !isBatchPromotionReady(payloadTemplate))
+					vertexCount, baseVertex))
 				{
 					continue;
 				}
+				NativeA8StaticCandidate* candidate =
+					ObserveStaticCandidateLocked(state, payloadTemplate,
+						vertexCount, false);
+				if (!candidate)
+					continue;
+				const StaticPromotionReadiness readiness =
+					GetStaticPromotionReadiness(state, *candidate,
+						vertexCount, frame);
+				if (readiness != StaticPromotionReadiness::Ready)
+				{
+					switch (readiness)
+					{
+					case StaticPromotionReadiness::Lifecycle:
+						++lifecycleDeferred;
+						break;
+					case StaticPromotionReadiness::UploadHistory:
+						++uploadDeferred;
+						break;
+					case StaticPromotionReadiness::Retry:
+						++retryDeferred;
+						break;
+					default:
+						break;
+					}
+					continue;
+				}
+				if (!FitsStaticPromotionBudget(state, *candidate,
+					vertexCount, requestedBytes, requestedPayloads))
+				{
+					++budgetDeferred;
+					continue;
+				}
 				requestedVertices += vertexCount;
+				requestedBytes += vertexCount * sizeof(NativeA8GpuVertex);
+				++requestedPayloads;
+				selected.push_back(payloadTemplate);
+			}
+			RecordStaticPromotionDeferral(
+				StaticPromotionReadiness::Lifecycle, lifecycleDeferred);
+			RecordStaticPromotionDeferral(
+				StaticPromotionReadiness::UploadHistory, uploadDeferred);
+			RecordStaticPromotionDeferral(
+				StaticPromotionReadiness::Retry, retryDeferred);
+			if (budgetDeferred)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StaticPromotionDeferredBudget,
+					budgetDeferred);
 			}
 
-			const UInt64 availableVertices = state.nextStaticVertex
+			const UInt32 availableVertices = state.nextStaticVertex
 				<= state.staticVertexCapacity
 				? state.staticVertexCapacity - state.nextStaticVertex : 0;
 			if (requestedVertices > availableVertices
-				&& requestedVertices <= std::numeric_limits<UInt32>::max())
+				&& requestedVertices)
 			{
 				bool permanentFailure = false;
-				TryGrowStaticVertexBufferLocked(state,
-					static_cast<UInt32>(requestedVertices), permanentFailure);
+				if (!TryGrowStaticVertexBufferLocked(state,
+					requestedVertices, permanentFailure)
+					&& !permanentFailure)
+				{
+					DeferStaticPromotionsLocked(state, frame);
+				}
 			}
 
 			const UInt32 staticAvailable = state.nextStaticVertex
 				<= state.staticVertexCapacity
 				? state.staticVertexCapacity - state.nextStaticVertex : 0;
+			auto deferSelectedCandidate = [&](
+				const NativeA8PayloadTemplatePtr& payloadTemplate)
+			{
+				auto found = state.staticCandidates.find(payloadTemplate.get());
+				if (found != state.staticCandidates.end() && found->second)
+				{
+					found->second->nextRetryFrame = frame
+						+ kStaticPromotionRetryFrames;
+				}
+			};
 			UInt32 selectedVertices = 0;
 			size_t selectedPayloads = 0;
-			for (const NativeA8PayloadTemplatePtr& payloadTemplate
-				: payloadTemplates)
+			for (size_t index = 0; index < selected.size(); ++index)
 			{
-				if (!isValidPayload(payloadTemplate))
-					continue;
+				const NativeA8PayloadTemplatePtr& payloadTemplate = selected[index];
 				const UInt32 vertexCount = static_cast<UInt32>(
 					payloadTemplate->gpuVertices.size());
-				if (HasDirectStaticPayloadLocked(state, *payloadTemplate,
-						vertexCount)
-					|| !isBatchPromotionReady(payloadTemplate)
-					|| vertexCount > staticAvailable - selectedVertices)
+				if (vertexCount > staticAvailable - selectedVertices)
 				{
+					deferSelectedCandidate(payloadTemplate);
 					continue;
 				}
+				selected[selectedPayloads] = payloadTemplate;
 				selectedVertices += vertexCount;
 				++selectedPayloads;
 			}
+			selected.resize(selectedPayloads);
 
 			if (selectedPayloads && selectedVertices)
 			{
@@ -1788,20 +2251,10 @@ namespace fonthook::vectorfont
 				if (SUCCEEDED(result) && destination)
 				{
 					UInt32 copiedVertices = 0;
-					for (const NativeA8PayloadTemplatePtr& payloadTemplate
-						: payloadTemplates)
+					for (const NativeA8PayloadTemplatePtr& payloadTemplate : selected)
 					{
-						if (!isValidPayload(payloadTemplate))
-							continue;
 						const UInt32 vertexCount = static_cast<UInt32>(
 							payloadTemplate->gpuVertices.size());
-						if (HasDirectStaticPayloadLocked(state,
-								*payloadTemplate, vertexCount)
-							|| !isBatchPromotionReady(payloadTemplate)
-							|| vertexCount > staticAvailable - copiedVertices)
-						{
-							continue;
-						}
 						std::memcpy(static_cast<UInt8*>(destination)
 								+ copiedVertices
 									* sizeof(NativeA8GpuVertex),
@@ -1818,20 +2271,10 @@ namespace fonthook::vectorfont
 								std::memory_order_relaxed);
 						UInt32 mappedVertices = 0;
 						for (const NativeA8PayloadTemplatePtr& payloadTemplate
-							: payloadTemplates)
+							: selected)
 						{
-							if (!isValidPayload(payloadTemplate))
-								continue;
 							const UInt32 vertexCount = static_cast<UInt32>(
 								payloadTemplate->gpuVertices.size());
-							if (HasDirectStaticPayloadLocked(state,
-									*payloadTemplate, vertexCount)
-								|| !isBatchPromotionReady(payloadTemplate)
-								|| vertexCount
-									> staticAvailable - mappedVertices)
-							{
-								continue;
-							}
 							const UInt32 baseVertex =
 								state.nextStaticVertex + mappedVertices;
 							state.staticPayloads[payloadTemplate.get()] = {
@@ -1841,6 +2284,7 @@ namespace fonthook::vectorfont
 							residency.staticResourceSerial = resourceSerial;
 							residency.staticBaseVertex = baseVertex;
 							residency.staticVertexCount = vertexCount;
+							residency.staticLastUsedFrame = frame;
 							state.staticCandidates.erase(payloadTemplate.get());
 							if (s_ringThread.staticCandidate.key
 								== payloadTemplate.get())
@@ -1850,6 +2294,8 @@ namespace fonthook::vectorfont
 							mappedVertices += vertexCount;
 						}
 						state.nextStaticVertex += selectedVertices;
+						CommitStaticPromotionBudget(state, byteCount,
+							static_cast<UInt32>(selectedPayloads));
 						RecordFreeTypePerf(
 							FreeTypePerfCounter::StaticVertexUpload);
 						RecordFreeTypePerf(
@@ -1880,12 +2326,26 @@ namespace fonthook::vectorfont
 						// so no later append can overwrite geometry that might have
 						// been partially accepted by the driver.
 						state.nextStaticVertex += selectedVertices;
+						CommitStaticPromotionBudget(state, byteCount,
+							static_cast<UInt32>(selectedPayloads));
+						for (const NativeA8PayloadTemplatePtr& payloadTemplate
+							: selected)
+						{
+							deferSelectedCandidate(payloadTemplate);
+						}
+						DeferStaticPromotionsLocked(state, frame);
 						RecordFreeTypePerf(
 							FreeTypePerfCounter::StaticVertexPromotionFailed);
 					}
 				}
 				else
 				{
+					for (const NativeA8PayloadTemplatePtr& payloadTemplate
+						: selected)
+					{
+						deferSelectedCandidate(payloadTemplate);
+					}
+					DeferStaticPromotionsLocked(state, frame);
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::StaticVertexPromotionFailed);
 				}
@@ -2460,7 +2920,7 @@ namespace fonthook::vectorfont
 			}
 
 			ObserveStaticCandidateLocked(state, payload.payloadTemplate,
-				totalVertices);
+				totalVertices, false);
 		}
 
 		NativeA8Proxy& proxy = state.proxies[proxyIndex];

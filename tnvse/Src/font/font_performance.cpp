@@ -330,6 +330,20 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_static_promotion: deferred_lifecycle=%llu deferred_upload_history=%llu deferred_budget=%llu deferred_retry=%llu cold_evictions=%llu cold_evicted_bytes=%llu",
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				StaticPromotionDeferredLifecycle)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				StaticPromotionDeferredUploadHistory)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				StaticPromotionDeferredBudget)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				StaticPromotionDeferredRetry)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				StaticResidentColdEviction)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				StaticResidentColdEvictionBytes)]);
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_sort: original_anchor_sorts=%llu anchor_items=%llu anchor_mixed_runs=%llu anchor_fallbacks=%llu anchor_predecessor_fallbacks=%llu anchor_proof_fallbacks=%llu mixed_equal_depth_runs_restored=%llu items_restored=%llu restore_rejected=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SortedOriginalOrderAnchorSort)],

@@ -204,6 +204,7 @@ namespace fonthook::vectorfont
 		UInt32 staticResourceSerial = 0;
 		UInt32 staticBaseVertex = 0;
 		UInt32 staticVertexCount = 0;
+		UInt32 staticLastUsedFrame = 0;
 		UInt32 dynamicResourceSerial = 0;
 		UInt32 dynamicUploadEpoch = 0;
 		UInt32 dynamicBaseVertex = 0;
