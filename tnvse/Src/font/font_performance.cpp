@@ -432,6 +432,20 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_pre_accumulator_cull: checks=%llu eligible=%llu culled=%llu alpha=%llu scissor_deferred=%llu fail_open=%llu",
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				VisibilityPreAccumulatorCheck)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				VisibilityPreAccumulatorEligible)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				VisibilityPreAccumulatorCulled)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				VisibilityPreAccumulatorZeroAlpha)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				VisibilityPreAccumulatorScissorDeferred)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				VisibilityPreAccumulatorFailOpen)]);
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_static_promotion: deferred_lifecycle=%llu deferred_upload_history=%llu deferred_budget=%llu deferred_retry=%llu cold_evictions=%llu cold_evicted_bytes=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				StaticPromotionDeferredLifecycle)],

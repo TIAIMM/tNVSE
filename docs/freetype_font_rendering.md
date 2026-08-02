@@ -899,14 +899,27 @@ multi-slot legacy handoffs, and the exact failed proof stage: gate, count,
 storage, source, depth, metadata, registration, group, singleton, coverage, or
 final apply.
 
-Before preflight/upload work, each complete compatibility facade or
-virtual-stock group receives a read-only state test for exact zero
-Tile/material alpha under a provably no-op alpha blend. A sorted facade rejected
-at this stage does not enter shader/page preflight or static/dynamic VB
-preparation. Its Tile callback re-evaluates the condition before suppressing the
-submission, so a same-frame alpha change cannot lose text. This early test does
-not guess clip or renderer state: those values are not authoritative for a
-particular Tile during sorted preflight.
+The Tile registration callback owns the earliest per-facade alpha gate. It runs
+only during the normal, non-nested accumulator cycle and requires the callback's
+`NiPropertyState`, shader, shade property, alpha property, and material property
+to be the facade's exact current objects. Exact zero Tile/material alpha is
+accepted only with the same provably no-op blend contract used by the later
+submission check. If that proof succeeds, the callback returns handled without
+calling its chained predecessor: the facade never reaches stock `AddTail`, depth
+sorting, sorted-frame construction, preflight/upload, command construction, or
+instancing admission. The culled attempt is also absent from tNVSE's pending
+original-order anchor candidates.
+
+Scissor is deliberately not evaluated in `RegisterObject`. The Tile scissor
+property is live there, but TileShader has not yet established an authoritative
+interface view/projection for that entry; combining the property with the
+renderer matrices from another pass can falsely prove visible list text outside.
+Scissored entries therefore remain fail-open at registration and continue to the
+existing list-subtree gate and the pre/post-slot-31 whole-payload proofs. Every
+property identity mismatch, nested traversal, or malformed/non-finite alpha
+input also fails open. Kept facades retain the sorted exact-zero check, so a
+state that becomes transparent later in the same traversal can still be
+suppressed.
 
 Long clipped lists also have a conservative subtree gate before scene traversal
 can register any of the row's geometry. It is installed only on an exact retail
@@ -987,7 +1000,8 @@ operations against the input position. The pre-slot proof uses the same world
 layout, the same two D3DX calls and association order, and the untransposed
 matrix columns that those four shader rows represent.
 
-Around a guarded native pass, tNVSE arms a thread-local visibility scope. A
+For facades not removed at registration, tNVSE still arms a thread-local
+visibility scope around a guarded native pass. A
 fully classified Standard-lite pass first proves exact current-pass geometry,
 property, payload, renderer, and retail slot-31 identity. It can then test the
 immutable whole-text bound against the already-resolved live scissor before
@@ -1024,11 +1038,16 @@ is not accepted as proof for every follower.
 The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
 `scissor`, `scissor_pre31`, `scissor_post31`, `preflight_skipped`,
 `packets_saved`, and `vertices_saved`. `scissor` is the total and the two phase
-counters partition successfully consumed scissor culls. Alpha culls can
-increase `preflight_skipped`. Both scissor paths occur after preflight, but the
-pre-slot path additionally avoids all six Tile callbacks and geometry setup;
-it also avoids optional slot 68 on a non-first pass. The post-slot fallback
-saves only the driver submission. `app` and `clip`
+counters partition successfully consumed scissor culls. The separate
+`tnvse_freetype_pre_accumulator_cull` line reports registration `checks`, exact
+property-state `eligible` cases, total `culled`, exact-zero `alpha`,
+`scissor_deferred`, and conservative `fail_open` outcomes. Registration
+`culled` must equal `alpha`: scissored entries are counted as deferred but are
+never rejected at this phase. Registration culls do not increase
+`preflight_skipped` because they never become sorted frame entries. Remaining
+alpha culls can increase that counter. The pre-slot path avoids all six Tile
+callbacks and geometry setup; it also avoids optional slot 68 on a non-first
+pass. The post-slot fallback saves only the driver submission. `app` and `clip`
 remain reserved fail-open compatibility counters. In a clipped Tweak/list
 menu, the desired result is nonzero `scissor_pre31`, a reduced
 `stock_constant_updates`, and corresponding saved packets/vertices.

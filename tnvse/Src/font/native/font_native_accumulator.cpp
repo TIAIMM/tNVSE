@@ -671,6 +671,28 @@ namespace fonthook::vectorfont
 			}
 		}
 
+		void DiscardUnacceptedSortedRegistration(
+			BSShaderAccumulator* accumulator, NiTriShape* facade,
+			UInt64 registrationCycle)
+		{
+			SortedPayloadScratch& scratch = s_sortedPayloadScratch;
+			if (!accumulator || !facade || !registrationCycle
+				|| scratch.registrationCycle != registrationCycle
+				|| scratch.pendingAccumulator != accumulator
+				|| scratch.pendingRegistrations.empty())
+			{
+				return;
+			}
+			const RegisteredFacade& registration =
+				scratch.pendingRegistrations.back();
+			if (registration.facade == facade
+				&& registration.acceptedOrdinal
+					== kInvalidNativeA8CommandIndex)
+			{
+				scratch.pendingRegistrations.pop_back();
+			}
+		}
+
 		bool IsFreeTypeFacade(const NiGeometry* geometry);
 
 		void RecordOriginalOrderAnchorFailure(
@@ -2342,8 +2364,11 @@ namespace fonthook::vectorfont
 			}
 
 			const NativeA8VisibilityCull visibility =
-				EvaluateNativeA8SubmissionVisibility(
-					shape, metadata->nativePayload);
+				registrationCycle
+					? EvaluateNativeA8PreAccumulatorVisibility(shape,
+						metadata->nativePayload, properties, shaderProperty, shader)
+					: EvaluateNativeA8SubmissionVisibility(
+						shape, metadata->nativePayload);
 			if (visibility != NativeA8VisibilityCull::None)
 			{
 				if (singleton->registrationCycle == registrationCycle
@@ -2356,6 +2381,8 @@ namespace fonthook::vectorfont
 				}
 				RecordNativeA8VisibilityCull(
 					visibility, metadata->nativePayload);
+				DiscardUnacceptedSortedRegistration(
+					accumulator, shape, registrationCycle);
 				return true;
 			}
 
@@ -2501,28 +2528,12 @@ namespace fonthook::vectorfont
 					}
 				}
 
-				bool dynamicStateSynchronized = true;
-				for (const VirtualStockSlotBinding& slot : group->slots)
-				{
-					if (!slot.shape || slot.shape == shape)
-						continue;
-					dynamicStateSynchronized =
-						SynchronizeFreeTypeStockPageShapeState(
-							*shape, *slot.shape)
-						&& dynamicStateSynchronized;
-				}
-				if (!dynamicStateSynchronized)
-				{
-					std::lock_guard<std::mutex> lock(group->mutex);
-					group->registrationContiguous = false;
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::
-							VirtualStockFallbackAtlas);
-				}
-
 				const NativeA8VisibilityCull visibility =
-					EvaluateNativeA8SubmissionVisibility(
-						shape, metadata->nativePayload);
+					registrationCycle
+						? EvaluateNativeA8PreAccumulatorVisibility(shape,
+							metadata->nativePayload, properties, shaderProperty, shader)
+						: EvaluateNativeA8SubmissionVisibility(
+							shape, metadata->nativePayload);
 				if (visibility != NativeA8VisibilityCull::None)
 				{
 					{
@@ -2540,7 +2551,28 @@ namespace fonthook::vectorfont
 					}
 					RecordNativeA8VisibilityCull(
 						visibility, metadata->nativePayload);
+					DiscardUnacceptedSortedRegistration(
+						accumulator, shape, registrationCycle);
 					return true;
+				}
+
+				bool dynamicStateSynchronized = true;
+				for (const VirtualStockSlotBinding& slot : group->slots)
+				{
+					if (!slot.shape || slot.shape == shape)
+						continue;
+					dynamicStateSynchronized =
+						SynchronizeFreeTypeStockPageShapeState(
+							*shape, *slot.shape)
+						&& dynamicStateSynchronized;
+				}
+				if (!dynamicStateSynchronized)
+				{
+					std::lock_guard<std::mutex> lock(group->mutex);
+					group->registrationContiguous = false;
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							VirtualStockFallbackAtlas);
 				}
 			}
 			else
@@ -2690,12 +2722,26 @@ namespace fonthook::vectorfont
 				return true;
 			}
 
-			// Keep one facade in the stock Tile alpha list. Equal-depth entries are
-			// quicksorted unstably, so individually registered packets cannot retain
-			// Glow/Shadow/Outline/Fill order. Expand only after stock UI sorting.
+			// A provably invisible zero-alpha entry is handled before either tNVSE or
+			// the predecessor records it. Kept text contributes one facade to the stock
+			// Tile alpha list. Equal-depth entries are quicksorted unstably, so
+			// individually registered packets cannot retain Glow/Shadow/Outline/Fill
+			// order. Expand only after stock UI sorting.
 			if (!IsA8RenderPassImmediatelyHookCurrent())
 				return SuppressNativeGroup(facade, *metadata,
 					NativeA8FallbackReason::TileRouteConflict, "register-object");
+			if (EnsurePendingAccumulator(accumulator))
+			{
+				const NativeA8VisibilityCull visibility =
+					EvaluateNativeA8PreAccumulatorVisibility(facade,
+						metadata->nativePayload, properties, shaderProperty, shader);
+				if (visibility != NativeA8VisibilityCull::None)
+				{
+					RecordNativeA8VisibilityCull(
+						visibility, metadata->nativePayload);
+					return true;
+				}
+			}
 			const UInt64 registrationCycle = RecordSortedRegistration(
 				accumulator, facade, metadata);
 			const UInt32 sizeBefore = accumulator->m_kItems.GetSize();

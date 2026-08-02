@@ -1102,6 +1102,10 @@ namespace fonthook::vectorfont
 	UInt64 GetNativeA8SortedNestedTraversalSerial();
 	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload);
+	NativeA8VisibilityCull EvaluateNativeA8PreAccumulatorVisibility(
+		const NiTriShape* facade, const NativeA8ShapePayload& payload,
+		const NiPropertyState* properties,
+		const BSShaderProperty* shaderProperty, BSShader* shader);
 	bool EvaluateNativeA8PreConstantsVisibility(
 		const NiTriShape* geometry, const NativeA8ShapePayload& payload,
 		const NiPropertyState* properties, NiDX9Renderer* renderer,

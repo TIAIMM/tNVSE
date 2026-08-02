@@ -361,10 +361,84 @@ namespace fonthook::vectorfont
 			return NativeA8VisibilityCull::None;
 		const NiMaterialProperty* material = facade->GetMaterialProperty();
 		const float materialAlpha = material ? material->m_fAlpha : 1.0f;
-		if (IsZeroAlphaNoOpBlend(facade->GetAlphaProperty())
+		if (std::isfinite(tile->tileAlpha) && std::isfinite(materialAlpha)
+			&& IsZeroAlphaNoOpBlend(facade->GetAlphaProperty())
 			&& (tile->tileAlpha == 0.0f || materialAlpha == 0.0f))
 		{
 			return NativeA8VisibilityCull::ZeroAlpha;
+		}
+		return NativeA8VisibilityCull::None;
+	}
+
+	NativeA8VisibilityCull EvaluateNativeA8PreAccumulatorVisibility(
+		const NiTriShape* facade, const NativeA8ShapePayload& payload,
+		const NiPropertyState* properties,
+		const BSShaderProperty* shaderProperty, BSShader* shader)
+	{
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::VisibilityPreAccumulatorCheck);
+		RecordFreeTypePerf(FreeTypePerfCounter::VisibilityCheck);
+		auto failOpen = []()
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VisibilityPreAccumulatorFailOpen);
+			return NativeA8VisibilityCull::None;
+		};
+
+		// RegisterObject receives the live state stock would append to the Tile
+		// accumulator.  Suppress only when every pointer names the facade's exact
+		// current property state; an alternate property state or chained shader
+		// identity remains entirely on the predecessor path.
+		if (!facade || !payload.buildComplete || !properties
+			|| properties != &facade->m_kProperties || !shaderProperty
+			|| !shader || shader != facade->GetShader()
+			|| !shader->IsTileShader())
+		{
+			return failOpen();
+		}
+		NiShadeProperty* shade =
+			properties->m_spShadeProperty.m_pObject;
+		if (!shade || shade != facade->GetShadeProperty())
+		{
+			return failOpen();
+		}
+		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
+		if (!tile || tile != GetTileProperty(facade)
+			|| static_cast<const BSShaderProperty*>(tile) != shaderProperty)
+			return failOpen();
+
+		const NiAlphaProperty* alpha =
+			properties->m_spAlphaProperty.m_pObject;
+		const NiMaterialProperty* material =
+			properties->m_spMaterialProperty.m_pObject;
+		if (alpha != facade->GetAlphaProperty()
+			|| material != facade->GetMaterialProperty())
+		{
+			return failOpen();
+		}
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::VisibilityPreAccumulatorEligible);
+		const float materialAlpha = material ? material->m_fAlpha : 1.0f;
+		if (std::isfinite(tile->tileAlpha) && std::isfinite(materialAlpha)
+			&& IsZeroAlphaNoOpBlend(alpha)
+			&& (tile->tileAlpha == 0.0f || materialAlpha == 0.0f))
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VisibilityPreAccumulatorCulled);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VisibilityPreAccumulatorZeroAlpha);
+			return NativeA8VisibilityCull::ZeroAlpha;
+		}
+
+		// RegisterObject runs before TileShader has established the authoritative
+		// interface view/projection for this entry. The Tile scissor itself is live,
+		// but combining it with the renderer's current matrices here can compare two
+		// different passes and falsely reject visible text. Defer every scissored
+		// entry to the existing list-subtree and slot-31 visibility proofs.
+		if (tile->useScissorTest)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VisibilityPreAccumulatorScissorDeferred);
 		}
 		return NativeA8VisibilityCull::None;
 	}
