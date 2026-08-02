@@ -107,7 +107,10 @@ namespace fonthook::vectorfont
 			float shaderFadeAlpha = 1.0f;
 		};
 
-		struct CrossTextMember
+		// Retained command-build result.  This is immutable after admission and
+		// deliberately contains no transient state, WVP, TileColor, or retail-world
+		// mirror.  Those values belong to the batch-local leader-time scratch below.
+		struct CrossTextAdmissionMember
 		{
 			UInt32 sequenceIndex = kInvalidNativeA8CommandIndex;
 			CrossTextSequenceItem sequence;
@@ -115,8 +118,23 @@ namespace fonthook::vectorfont
 			const NativeA8PacketTemplate* packet = nullptr;
 			const NativeA8GlyphInstanceSidecar* sidecars = nullptr;
 			UInt32 sidecarCount = 0;
+		};
+
+		// Temporary admission-only grouping evidence.  Only the immutable member is
+		// retained after a batch is accepted.
+		struct CrossTextAdmissionCandidate
+		{
+			CrossTextAdmissionMember member;
 			CrossTextCompatibilityKey compatibility;
-			NativeTileInstancingSnapshot snapshot;
+			NativeTileInstancingTransientState transient;
+		};
+
+		// Leader-time pass-1 output.  It exists only for the batch currently being
+		// prepared and never overwrites the retained admission plan.
+		struct CrossTextLivePreflight
+		{
+			CrossTextCompatibilityKey compatibility;
+			NativeTileInstancingTransientState transient;
 		};
 
 		enum class CrossTextBatchState : UInt8
@@ -152,9 +170,11 @@ namespace fonthook::vectorfont
 		struct CrossTextFrame
 		{
 			std::vector<CrossTextSequenceItem> sequence;
-			std::vector<CrossTextMember> members;
+			std::vector<CrossTextAdmissionMember> admissionMembers;
 			std::vector<CrossTextBatch> batches;
 			std::vector<UInt32> sequenceToBatch;
+			std::vector<CrossTextLivePreflight> livePreflight;
+			std::vector<NativeTileInstancingSnapshot> liveSnapshots;
 			CpuMemoryLease cpuMemory;
 			UInt64 validationToken = 0;
 			UInt32 generation = 0;
@@ -163,6 +183,7 @@ namespace fonthook::vectorfont
 			UInt32 uploadEpoch = 0;
 			UInt32 plannedInstanceCount = 0;
 			UInt32 uploadCursorInstances = 0;
+			UInt32 liveBatchIndex = kInvalidNativeA8CommandIndex;
 			NiDX9Renderer* renderer = nullptr;
 			IDirect3DDevice9* device = nullptr;
 			BSShaderAccumulator* accumulator = nullptr;
@@ -190,9 +211,14 @@ namespace fonthook::vectorfont
 			CrossTextFrame& frame = s_crossTextFrame;
 			const size_t bytes = sizeof(frame)
 				+ frame.sequence.capacity() * sizeof(CrossTextSequenceItem)
-				+ frame.members.capacity() * sizeof(CrossTextMember)
+				+ frame.admissionMembers.capacity()
+					* sizeof(CrossTextAdmissionMember)
 				+ frame.batches.capacity() * sizeof(CrossTextBatch)
-				+ frame.sequenceToBatch.capacity() * sizeof(UInt32);
+				+ frame.sequenceToBatch.capacity() * sizeof(UInt32)
+				+ frame.livePreflight.capacity()
+					* sizeof(CrossTextLivePreflight)
+				+ frame.liveSnapshots.capacity()
+					* sizeof(NativeTileInstancingSnapshot);
 			frame.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata, bytes);
 		}
 
@@ -200,9 +226,11 @@ namespace fonthook::vectorfont
 		{
 			CrossTextFrame& frame = s_crossTextFrame;
 			frame.sequence.clear();
-			frame.members.clear();
+			frame.admissionMembers.clear();
 			frame.batches.clear();
 			frame.sequenceToBatch.clear();
+			frame.livePreflight.clear();
+			frame.liveSnapshots.clear();
 			frame.validationToken = 0;
 			frame.generation = 0;
 			frame.atlasTextureEpoch = 0;
@@ -210,6 +238,7 @@ namespace fonthook::vectorfont
 			frame.uploadEpoch = 0;
 			frame.plannedInstanceCount = 0;
 			frame.uploadCursorInstances = 0;
+			frame.liveBatchIndex = kInvalidNativeA8CommandIndex;
 			frame.renderer = nullptr;
 			frame.device = nullptr;
 			frame.accumulator = nullptr;
@@ -220,35 +249,165 @@ namespace fonthook::vectorfont
 			RefreshFrameMemory();
 		}
 
-		bool SameCompatibilityKey(const CrossTextCompatibilityKey& left,
-			const CrossTextCompatibilityKey& right)
+		void ResetLiveBatchScratch()
 		{
-			return left.program == right.program
-				&& left.normalDeclaration == right.normalDeclaration
-				&& left.sourceTexture == right.sourceTexture
-				&& left.alphaTexture == right.alphaTexture
-				&& left.atlasTexture == right.atlasTexture
-				&& std::memcmp(left.constants.data(), right.constants.data(),
-					left.constants.size() * sizeof(float)) == 0
-				&& std::memcmp(&left.textureTransform,
+			CrossTextFrame& frame = s_crossTextFrame;
+			frame.livePreflight.clear();
+			frame.liveSnapshots.clear();
+			frame.liveBatchIndex = kInvalidNativeA8CommandIndex;
+		}
+
+		enum class CompatibilityComparePhase : UInt8
+		{
+			Admission = 0,
+			Live
+		};
+
+		bool RecordCompatibilityKeyMismatch(CompatibilityComparePhase phase,
+			FreeTypePerfCounter field)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchTotal);
+			RecordFreeTypePerf(phase == CompatibilityComparePhase::Admission
+				? FreeTypePerfCounter::
+					GlyphInstancingCompatibilityMismatchAdmission
+				: FreeTypePerfCounter::
+					GlyphInstancingCompatibilityMismatchLive);
+			RecordFreeTypePerf(field);
+			return false;
+		}
+
+		bool SameCompatibilityKey(const CrossTextCompatibilityKey& left,
+			const CrossTextCompatibilityKey& right,
+			CompatibilityComparePhase phase)
+		{
+			if (left.program != right.program)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchProgram);
+			}
+			if (left.normalDeclaration != right.normalDeclaration)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchDeclaration);
+			}
+			if (left.sourceTexture != right.sourceTexture)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchSourceTexture);
+			}
+			if (left.alphaTexture != right.alphaTexture)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchAlphaTexture);
+			}
+			if (left.atlasTexture != right.atlasTexture)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchAtlasTexture);
+			}
+			if (std::memcmp(left.constants.data(), right.constants.data(),
+					left.constants.size() * sizeof(float)) != 0)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchConstants);
+			}
+			if (std::memcmp(&left.textureTransform,
 					&right.textureTransform,
-					sizeof(left.textureTransform)) == 0
-				&& left.clampMode == right.clampMode
-				&& left.shaderClass == right.shaderClass
-				&& left.sampling == right.sampling
-				&& left.quality == right.quality
-				&& left.distanceFieldMethod == right.distanceFieldMethod
-				&& left.layer == right.layer
-				&& left.atlasPage == right.atlasPage
-				&& left.alphaFlags == right.alphaFlags
-				&& left.alphaTestRef == right.alphaTestRef
-				&& left.textureModeFlags == right.textureModeFlags
-				&& left.shaderFlags == right.shaderFlags
-				&& std::memcmp(&left.shaderAlpha, &right.shaderAlpha,
-					sizeof(left.shaderAlpha)) == 0
-				&& std::memcmp(&left.shaderFadeAlpha,
+					sizeof(left.textureTransform)) != 0)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchTextureTransform);
+			}
+			if (left.clampMode != right.clampMode)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchClampMode);
+			}
+			if (left.shaderClass != right.shaderClass)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchShaderClass);
+			}
+			if (left.sampling != right.sampling)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchSampling);
+			}
+			if (left.quality != right.quality)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchQuality);
+			}
+			if (left.distanceFieldMethod != right.distanceFieldMethod)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchDistanceFieldMethod);
+			}
+			if (left.layer != right.layer)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchLayer);
+			}
+			if (left.atlasPage != right.atlasPage)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchAtlasPage);
+			}
+			if (left.alphaFlags != right.alphaFlags)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchAlphaFlags);
+			}
+			if (left.alphaTestRef != right.alphaTestRef)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchAlphaTestRef);
+			}
+			if (left.textureModeFlags != right.textureModeFlags)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchTextureModeFlags);
+			}
+			if (left.shaderFlags != right.shaderFlags)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchShaderFlags);
+			}
+			if (std::memcmp(&left.shaderAlpha, &right.shaderAlpha,
+					sizeof(left.shaderAlpha)) != 0)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchShaderAlpha);
+			}
+			if (std::memcmp(&left.shaderFadeAlpha,
 					&right.shaderFadeAlpha,
-					sizeof(left.shaderFadeAlpha)) == 0;
+					sizeof(left.shaderFadeAlpha)) != 0)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchShaderFadeAlpha);
+			}
+			return true;
 		}
 
 		const NativeA8DrawCommand* ResolveSequenceCommand(
@@ -292,12 +451,6 @@ namespace fonthook::vectorfont
 			Topology
 		};
 
-		enum class BuildMemberPhase : UInt8
-		{
-			Admission = 0,
-			LivePreflight
-		};
-
 		std::atomic<UInt32> s_instancingDiagnosticCount = 0;
 		constexpr UInt32 kMaximumInstancingDiagnosticLines = 32;
 
@@ -334,15 +487,18 @@ namespace fonthook::vectorfont
 			const CrossTextFrame& frame = s_crossTextFrame;
 			const CrossTextBatch* batch = batchIndex < frame.batches.size()
 				? &frame.batches[batchIndex] : nullptr;
-			const CrossTextMember* member = batch
+			const CrossTextAdmissionMember* member = batch
 				&& memberOffset < batch->memberCount
 				&& static_cast<UInt64>(batch->firstMember) + memberOffset
-					< frame.members.size()
-				? &frame.members[batch->firstMember + memberOffset] : nullptr;
-			const NativeTileInstancingSnapshot* snapshot = member
-				? &member->snapshot : nullptr;
+					< frame.admissionMembers.size()
+				? &frame.admissionMembers[
+					batch->firstMember + memberOffset] : nullptr;
+			const NativeTileInstancingTransientState* transient =
+				frame.liveBatchIndex == batchIndex
+				&& memberOffset < frame.livePreflight.size()
+				? &frame.livePreflight[memberOffset].transient : nullptr;
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_glyph_instancing_diag: phase=begin reason=%s sequence=%u batch=%u member=%u frameActive=%u frameBuilding=%u generation=%u resource=%u uploadEpoch=%u plannedInstances=%u uploadCursor=%u resourceGeneration=%u disabledGeneration=%u instanceBufferBytes=%u batchState=%u texts=%u instances=%u followersBegun=%u leader=%p plannedGeometry=%p pass=%p expectedPass=%p passGeometry=%p passEnum=%u currentPass=%u lights=%u lightArray=%p callback=%u/%u/%u scissor=%u rect=(%ld,%ld,%ld,%ld) stencilPresent=%u stencilEnabled=%u",
+				"tnvse_freetype_glyph_instancing_diag: phase=begin reason=%s sequence=%u batch=%u member=%u frameActive=%u frameBuilding=%u generation=%u resource=%u uploadEpoch=%u plannedInstances=%u uploadCursor=%u resourceGeneration=%u disabledGeneration=%u instanceBufferBytes=%u batchState=%u texts=%u instances=%u followersBegun=%u leader=%p plannedGeometry=%p pass=%p expectedPass=%p passGeometry=%p passEnum=%u currentPass=%u lights=%u lightArray=%p callback=%u/%u/%u liveTransientReady=%u scissor=%u rect=(%ld,%ld,%ld,%ld) stencilPresent=%u stencilEnabled=%u",
 				reason ? reason : "unknown", sequenceIndex, batchIndex,
 				memberOffset, frame.active ? 1u : 0u,
 				frame.building ? 1u : 0u, frame.generation,
@@ -365,13 +521,14 @@ namespace fonthook::vectorfont
 				renderPass ? renderPass->ppSceneLights : nullptr,
 				testAlpha ? 1u : 0u, blendAlpha ? 1u : 0u,
 				setupDrawmode ? 1u : 0u,
-				snapshot && snapshot->scissorEnabled ? 1u : 0u,
-				snapshot ? snapshot->scissorRect.left : 0,
-				snapshot ? snapshot->scissorRect.top : 0,
-				snapshot ? snapshot->scissorRect.right : 0,
-				snapshot ? snapshot->scissorRect.bottom : 0,
-				snapshot && snapshot->stencilPresent ? 1u : 0u,
-				snapshot && snapshot->stencilEnabled ? 1u : 0u);
+				transient ? 1u : 0u,
+				transient && transient->scissorEnabled ? 1u : 0u,
+				transient ? transient->scissorRect.left : 0,
+				transient ? transient->scissorRect.top : 0,
+				transient ? transient->scissorRect.right : 0,
+				transient ? transient->scissorRect.bottom : 0,
+				transient && transient->stencilPresent ? 1u : 0u,
+				transient && transient->stencilEnabled ? 1u : 0u);
 		}
 
 		void DisableInstancingGeneration(UInt32 generation,
@@ -390,11 +547,23 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		BuildMemberFailure BuildMemberForPhase(
-			const CrossTextSequenceItem& item,
-			UInt32 sequenceIndex, BuildMemberPhase phase,
-			CrossTextMember& member)
+		struct ResolvedCrossTextMember
 		{
+			const NativeA8FrameStamp* stamp = nullptr;
+			const NativeA8DrawCommand* command = nullptr;
+			const NativeA8PayloadTemplate* artifact = nullptr;
+			const NativeA8PacketTemplate* packet = nullptr;
+			const NativeA8GlyphInstanceSidecar* sidecars = nullptr;
+			UInt32 sidecarCount = 0;
+			const InstancingTilePropertyView* tile = nullptr;
+			const NiAlphaProperty* alpha = nullptr;
+		};
+
+		BuildMemberFailure ResolveCrossTextCommand(
+			const CrossTextSequenceItem& item,
+			ResolvedCrossTextMember& resolved)
+		{
+			resolved = {};
 			if (item.kind == NativeA8CrossTextCommandKind::Barrier
 				|| !item.geometry || !item.metadata || !item.payload
 				|| item.commandIndex == kInvalidNativeA8CommandIndex
@@ -404,12 +573,11 @@ namespace fonthook::vectorfont
 				return BuildMemberFailure::Topology;
 			}
 
-			const NativeA8FrameStamp* stamp = nullptr;
-			const NativeA8DrawCommand* command =
-				ResolveSequenceCommand(item, stamp);
+			resolved.command = ResolveSequenceCommand(item, resolved.stamp);
+			const NativeA8DrawCommand* command = resolved.command;
+			const NativeA8FrameStamp* stamp = resolved.stamp;
 			if (!command || !stamp || !stamp->accumulator || !stamp->renderer
-				|| !stamp->device
-				|| !stamp->generation || !stamp->resourceSerial
+				|| !stamp->device || !stamp->generation || !stamp->resourceSerial
 				|| command->sourceGeometry != item.geometry
 				|| command->expectedGeometry != item.geometry
 				|| command->payload != item.payload
@@ -429,8 +597,14 @@ namespace fonthook::vectorfont
 			{
 				return BuildMemberFailure::State;
 			}
+			return BuildMemberFailure::None;
+		}
+
+		BuildMemberFailure AdmitCrossTextFrameStamp(
+			const NativeA8FrameStamp& stamp)
+		{
 			CrossTextFrame& frame = s_crossTextFrame;
-			if (s_instancingResources.disabledGeneration == stamp->generation)
+			if (s_instancingResources.disabledGeneration == stamp.generation)
 			{
 				frame.generationUnavailable = true;
 				return BuildMemberFailure::State;
@@ -439,35 +613,53 @@ namespace fonthook::vectorfont
 			{
 				NativeA8InstancingShaderResources shaderResources;
 				if (!GetNativeA8InstancingShaderResources(
-						stamp->generation, shaderResources)
-					|| shaderResources.device != stamp->device)
+						stamp.generation, shaderResources)
+					|| shaderResources.device != stamp.device)
 				{
 					// Capability or shader deployment failures are stable for this
 					// generation. Avoid repeating the complete member proof every
 					// frame, but do not classify an unsupported device as a runtime
 					// D3D failure.
-					DisableInstancingGeneration(stamp->generation, false);
+					DisableInstancingGeneration(stamp.generation, false);
 					frame.generationUnavailable = true;
 					return BuildMemberFailure::State;
 				}
-				frame.generation = stamp->generation;
-				frame.atlasTextureEpoch = stamp->atlasTextureEpoch;
-				frame.resourceSerial = stamp->resourceSerial;
-				frame.uploadEpoch = stamp->uploadEpoch;
-				frame.renderer = stamp->renderer;
-				frame.device = stamp->device;
-				frame.accumulator = stamp->accumulator;
+				frame.generation = stamp.generation;
+				frame.atlasTextureEpoch = stamp.atlasTextureEpoch;
+				frame.resourceSerial = stamp.resourceSerial;
+				frame.uploadEpoch = stamp.uploadEpoch;
+				frame.renderer = stamp.renderer;
+				frame.device = stamp.device;
+				frame.accumulator = stamp.accumulator;
+				return BuildMemberFailure::None;
 			}
-			else if (frame.generation != stamp->generation
-				|| frame.atlasTextureEpoch != stamp->atlasTextureEpoch
-				|| frame.resourceSerial != stamp->resourceSerial
-				|| frame.uploadEpoch != stamp->uploadEpoch
-				|| frame.renderer != stamp->renderer
-				|| frame.device != stamp->device
-				|| frame.accumulator != stamp->accumulator)
-			{
-				return BuildMemberFailure::State;
-			}
+			return frame.generation == stamp.generation
+				&& frame.atlasTextureEpoch == stamp.atlasTextureEpoch
+				&& frame.resourceSerial == stamp.resourceSerial
+				&& frame.uploadEpoch == stamp.uploadEpoch
+				&& frame.renderer == stamp.renderer
+				&& frame.device == stamp.device
+				&& frame.accumulator == stamp.accumulator
+				? BuildMemberFailure::None : BuildMemberFailure::State;
+		}
+
+		bool IsCrossTextFrameStampLive(const NativeA8FrameStamp& stamp)
+		{
+			const CrossTextFrame& frame = s_crossTextFrame;
+			return s_instancingResources.disabledGeneration != stamp.generation
+				&& frame.generation == stamp.generation
+				&& frame.atlasTextureEpoch == stamp.atlasTextureEpoch
+				&& frame.resourceSerial == stamp.resourceSerial
+				&& frame.uploadEpoch == stamp.uploadEpoch
+				&& frame.renderer == stamp.renderer
+				&& frame.device == stamp.device
+				&& frame.accumulator == stamp.accumulator;
+		}
+
+		BuildMemberFailure ResolveCrossTextPayload(
+			const CrossTextSequenceItem& item,
+			ResolvedCrossTextMember& resolved)
+		{
 			NiTriShapeData* geometryData = item.geometry->GetModelData();
 			if (!IsA8AtlasShape(item.geometry)
 				|| item.geometry->GetSkinInstance()
@@ -482,37 +674,41 @@ namespace fonthook::vectorfont
 				return BuildMemberFailure::Topology;
 			}
 
-			const NativeA8PayloadTemplate& artifact =
-				*item.payload->payloadTemplate;
+			resolved.artifact = item.payload->payloadTemplate.get();
 			const std::vector<NativeA8PacketTemplate>& packets =
-				GetNativeA8Packets(artifact,
+				GetNativeA8Packets(*resolved.artifact,
 					item.payload->useCompositePackets);
-			if (packets.size() != 1 || command->packet != &packets[0]
+			if (packets.size() != 1
+				|| resolved.command->packet != &packets[0]
 				|| item.payload->packetShaders.size() != 1
-				|| item.payload->packetShaders[0] != command->program->shader
+				|| item.payload->packetShaders[0]
+					!= resolved.command->program->shader
 				|| item.payload->packetPrograms.size() != 1
-				|| item.payload->packetPrograms[0] != command->program
+				|| item.payload->packetPrograms[0] != resolved.command->program
 				|| !packets[0].instanceTopologyValid
 				|| !packets[0].instanceSidecarCount
-				|| packets[0].atlasPage >= artifact.atlasProperties.size()
-				|| packets[0].atlasPage >= artifact.atlasTextures.size()
-				|| !artifact.atlasProperties[packets[0].atlasPage]
-				|| !artifact.atlasTextures[packets[0].atlasPage]
+				|| packets[0].atlasPage
+					>= resolved.artifact->atlasProperties.size()
+				|| packets[0].atlasPage
+					>= resolved.artifact->atlasTextures.size()
+				|| !resolved.artifact->atlasProperties[packets[0].atlasPage]
+				|| !resolved.artifact->atlasTextures[packets[0].atlasPage]
 				|| static_cast<UInt64>(packets[0].instanceSidecarFirst)
 					+ packets[0].instanceSidecarCount
-					> artifact.glyphInstanceSidecars.size())
+					> resolved.artifact->glyphInstanceSidecars.size())
 			{
 				return BuildMemberFailure::Topology;
 			}
 
 			NiShadeProperty* shade = item.geometry->GetShadeProperty();
-			const auto* tile = shade
+			resolved.tile = shade
 				&& shade->m_eShaderType == NiShadeProperty::PROP_Tile
 				? reinterpret_cast<const InstancingTilePropertyView*>(shade)
 				: nullptr;
-			const NiAlphaProperty* alpha = item.geometry->GetAlphaProperty();
-			if (!tile || !alpha
-				|| tile->alphaTexture.m_pObject || tile->noTexture)
+			resolved.alpha = item.geometry->GetAlphaProperty();
+			if (!resolved.tile || !resolved.alpha
+				|| resolved.tile->alphaTexture.m_pObject
+				|| resolved.tile->noTexture)
 			{
 				return BuildMemberFailure::State;
 			}
@@ -521,7 +717,7 @@ namespace fonthook::vectorfont
 				&& (!IsNativeA8VirtualStockPacketAtlasCurrent(
 						item.geometry, *item.payload, 0)
 					|| item.geometry->GetShader()
-						!= command->program->shader))
+						!= resolved.command->program->shader))
 			{
 				// Unlike an ordinary facade, the Virtual-stock singleton route does
 				// not replace its atlas property, source texture, or shader around
@@ -530,101 +726,148 @@ namespace fonthook::vectorfont
 				return BuildMemberFailure::State;
 			}
 
-			NativeTileInstancingSnapshot snapshot;
-			const NativeTileInstancingSnapshotResult snapshotResult =
-				BuildNativeTileInstancingAdmissionSnapshot(
-					item.geometry, &item.geometry->m_kProperties, snapshot);
-			if (snapshotResult
-				== NativeTileInstancingSnapshotResult::ScaledScissor)
-			{
-				return BuildMemberFailure::Scissor;
-			}
-			if (snapshotResult != NativeTileInstancingSnapshotResult::Ready)
-				return BuildMemberFailure::State;
-			if (phase == BuildMemberPhase::LivePreflight)
-			{
-				// Both ordinary direct-shape and Virtual-stock singleton
-				// submission temporarily apply the payload origin before reaching
-				// TileShader. This first leader-time pass uses the effective world
-				// only for conservative visibility; it does not build WVP/TileColor.
-				NiTransform effectiveWorld;
-				ApplyNativeA8GeometryOrigin(effectiveWorld,
-					item.geometry->m_kWorld,
-					item.payload->geometryOrigin);
-				// Followers do not enter their own late-visibility scope after a
-				// successful batch. Prove every member before constructing any
-				// complete live snapshot for the batch.
-				if (IsNativeA8PayloadOutsideScissorForWorld(
-						*item.payload, &item.geometry->m_kProperties,
-						frame.renderer, effectiveWorld))
-				{
-					return BuildMemberFailure::Scissor;
-				}
-			}
-			member.sequenceIndex = sequenceIndex;
-			member.sequence = item;
-			member.command = command;
-			member.packet = &packets[0];
-			member.sidecars = artifact.glyphInstanceSidecars.data()
+			resolved.packet = &packets[0];
+			resolved.sidecars = resolved.artifact->glyphInstanceSidecars.data()
 				+ packets[0].instanceSidecarFirst;
-			member.sidecarCount = packets[0].instanceSidecarCount;
-			member.snapshot = snapshot;
-			CrossTextCompatibilityKey& key = member.compatibility;
-			key.program = command->program;
-			key.normalDeclaration = command->binding.declaration;
-			key.sourceTexture =
-				artifact.atlasTextures[packets[0].atlasPage].m_pObject;
-			key.alphaTexture = tile->alphaTexture.m_pObject;
-			key.atlasTexture = command->atlasTexture;
-			key.constants = packets[0].constants;
+			resolved.sidecarCount = packets[0].instanceSidecarCount;
+			return BuildMemberFailure::None;
+		}
+
+		void BuildCompatibilityKey(const ResolvedCrossTextMember& resolved,
+			CrossTextCompatibilityKey& key)
+		{
+			key = {};
+			key.program = resolved.command->program;
+			key.normalDeclaration = resolved.command->binding.declaration;
+			key.sourceTexture = resolved.artifact->atlasTextures[
+				resolved.packet->atlasPage].m_pObject;
+			key.alphaTexture = resolved.tile->alphaTexture.m_pObject;
+			key.atlasTexture = resolved.command->atlasTexture;
+			key.constants = resolved.packet->constants;
 			// Retail and the symbolized test build map VS c4 to TileShader::
 			// TexScroll. It is refreshed only for rotating Tile properties. Exact
 			// texture-transform plus rotates identity therefore proves c4 is the
 			// same for every member; the instanced VS never mutates that register.
-			key.textureTransform = tile->textureTransform;
-			key.clampMode = tile->rotates
-				? NiTexturingProperty::WRAP_S_WRAP_T : tile->clampMode;
-			key.shaderClass = packets[0].shaderClass;
-			key.sampling = packets[0].sampling;
-			key.quality = packets[0].quality;
-			key.distanceFieldMethod = packets[0].distanceFieldMethod;
-			key.layer = packets[0].layer;
-			key.atlasPage = packets[0].atlasPage;
-			key.alphaFlags = alpha->m_usFlags.Get()
+			key.textureTransform = resolved.tile->textureTransform;
+			key.clampMode = resolved.tile->rotates
+				? NiTexturingProperty::WRAP_S_WRAP_T
+				: resolved.tile->clampMode;
+			key.shaderClass = resolved.packet->shaderClass;
+			key.sampling = resolved.packet->sampling;
+			key.quality = resolved.packet->quality;
+			key.distanceFieldMethod = resolved.packet->distanceFieldMethod;
+			key.layer = resolved.packet->layer;
+			key.atlasPage = resolved.packet->atlasPage;
+			key.alphaFlags = resolved.alpha->m_usFlags.Get()
 				& ~NiAlphaProperty::TEST_ENABLE_MASK;
-			key.alphaTestRef = alpha->m_ucAlphaTestRef;
+			key.alphaTestRef = resolved.alpha->m_ucAlphaTestRef;
 			key.textureModeFlags =
-				(tile->rotates ? 1u : 0u)
-				| (tile->hasVertexColors ? 2u : 0u);
-			key.shaderFlags = { tile->ulFlags[0], tile->ulFlags[1] };
-			key.shaderAlpha = tile->fAlpha;
-			key.shaderFadeAlpha = tile->fFadeAlpha;
-
-			return BuildMemberFailure::None;
+				(resolved.tile->rotates ? 1u : 0u)
+				| (resolved.tile->hasVertexColors ? 2u : 0u);
+			key.shaderFlags = {
+				resolved.tile->ulFlags[0], resolved.tile->ulFlags[1] };
+			key.shaderAlpha = resolved.tile->fAlpha;
+			key.shaderFadeAlpha = resolved.tile->fFadeAlpha;
 		}
 
 		BuildMemberFailure BuildAdmissionMember(
 			const CrossTextSequenceItem& item, UInt32 sequenceIndex,
-			CrossTextMember& member)
+			CrossTextAdmissionCandidate& candidate)
 		{
-			return BuildMemberForPhase(item, sequenceIndex,
-				BuildMemberPhase::Admission, member);
+			ResolvedCrossTextMember resolved;
+			BuildMemberFailure failure = ResolveCrossTextCommand(item, resolved);
+			if (failure != BuildMemberFailure::None)
+				return failure;
+			failure = AdmitCrossTextFrameStamp(*resolved.stamp);
+			if (failure != BuildMemberFailure::None)
+				return failure;
+			failure = ResolveCrossTextPayload(item, resolved);
+			if (failure != BuildMemberFailure::None)
+				return failure;
+
+			const NativeTileInstancingSnapshotResult transientResult =
+				BuildNativeTileInstancingTransientState(
+					item.geometry, &item.geometry->m_kProperties,
+					candidate.transient);
+			if (transientResult
+				== NativeTileInstancingSnapshotResult::ScaledScissor)
+			{
+				return BuildMemberFailure::Scissor;
+			}
+			if (transientResult != NativeTileInstancingSnapshotResult::Ready)
+				return BuildMemberFailure::State;
+
+			candidate.member.sequenceIndex = sequenceIndex;
+			candidate.member.sequence = item;
+			candidate.member.command = resolved.command;
+			candidate.member.packet = resolved.packet;
+			candidate.member.sidecars = resolved.sidecars;
+			candidate.member.sidecarCount = resolved.sidecarCount;
+			BuildCompatibilityKey(resolved, candidate.compatibility);
+			return BuildMemberFailure::None;
 		}
 
 		BuildMemberFailure BuildLivePreflightMember(
-			const CrossTextSequenceItem& item, UInt32 sequenceIndex,
-			CrossTextMember& member)
+			const CrossTextAdmissionMember& planned,
+			CrossTextLivePreflight& live)
 		{
-			return BuildMemberForPhase(item, sequenceIndex,
-				BuildMemberPhase::LivePreflight, member);
+			const CrossTextSequenceItem& item = planned.sequence;
+			ResolvedCrossTextMember resolved;
+			BuildMemberFailure failure = ResolveCrossTextCommand(item, resolved);
+			if (failure != BuildMemberFailure::None)
+				return failure;
+			if (!IsCrossTextFrameStampLive(*resolved.stamp))
+				return BuildMemberFailure::State;
+			failure = ResolveCrossTextPayload(item, resolved);
+			if (failure != BuildMemberFailure::None)
+				return failure;
+			if (resolved.command != planned.command
+				|| resolved.packet != planned.packet
+				|| resolved.sidecars != planned.sidecars
+				|| resolved.sidecarCount != planned.sidecarCount)
+			{
+				return BuildMemberFailure::Topology;
+			}
+
+			const NativeTileInstancingSnapshotResult transientResult =
+				BuildNativeTileInstancingTransientState(
+					item.geometry, &item.geometry->m_kProperties,
+					live.transient);
+			if (transientResult
+				== NativeTileInstancingSnapshotResult::ScaledScissor)
+			{
+				return BuildMemberFailure::Scissor;
+			}
+			if (transientResult != NativeTileInstancingSnapshotResult::Ready)
+				return BuildMemberFailure::State;
+
+			// Both ordinary direct-shape and Virtual-stock singleton submission
+			// temporarily apply the payload origin before reaching TileShader. This
+			// pass uses the effective world only for conservative visibility.
+			NiTransform effectiveWorld;
+			ApplyNativeA8GeometryOrigin(effectiveWorld,
+				item.geometry->m_kWorld, item.payload->geometryOrigin);
+			// Followers do not enter their own late-visibility scope after a
+			// successful batch. Prove every member before constructing any complete
+			// live matrix/color snapshot for the batch.
+			if (IsNativeA8PayloadOutsideScissorForWorld(
+					*item.payload, &item.geometry->m_kProperties,
+					s_crossTextFrame.renderer, effectiveWorld))
+			{
+				return BuildMemberFailure::Scissor;
+			}
+			BuildCompatibilityKey(resolved, live.compatibility);
+			return BuildMemberFailure::None;
 		}
 
 		BuildMemberFailure BuildCompleteLiveMemberSnapshot(
-			CrossTextMember& member)
+			const CrossTextAdmissionMember& planned,
+			const CrossTextLivePreflight& preflight,
+			NativeTileInstancingSnapshot& snapshot)
 		{
 			CrossTextFrame& frame = s_crossTextFrame;
-			NiTriShape* geometry = member.sequence.geometry;
-			NativeA8ShapePayload* payload = member.sequence.payload;
+			NiTriShape* geometry = planned.sequence.geometry;
+			NativeA8ShapePayload* payload = planned.sequence.payload;
 			if (!geometry || !payload)
 				return BuildMemberFailure::Topology;
 			if (!frame.renderer)
@@ -633,7 +876,6 @@ namespace fonthook::vectorfont
 			NiTransform effectiveWorld;
 			ApplyNativeA8GeometryOrigin(effectiveWorld,
 				geometry->m_kWorld, payload->geometryOrigin);
-			NativeTileInstancingSnapshot snapshot;
 			const NativeTileInstancingSnapshotResult snapshotResult =
 				BuildNativeTileInstancingSnapshotForWorld(geometry,
 					&geometry->m_kProperties, frame.renderer,
@@ -646,15 +888,14 @@ namespace fonthook::vectorfont
 			if (snapshotResult != NativeTileInstancingSnapshotResult::Ready)
 				return BuildMemberFailure::State;
 
-			// No callback or device submission occurs between the two passes.
-			// Recheck what the complete builder resolved so a later refactor cannot
-			// separate the visibility proof from upload/slot-35 transient state.
+			// No callback or device submission occurs between the two live passes.
+			// Recheck the complete builder's slot-31 result against pass 1 so upload
+			// and restoration cannot observe a different transient state.
 			if (!SameNativeTileInstancingTransientState(
-					member.snapshot, snapshot))
+					preflight.transient, snapshot.transient))
 			{
 				return BuildMemberFailure::Scissor;
 			}
-			member.snapshot = snapshot;
 			return BuildMemberFailure::None;
 		}
 
@@ -791,7 +1032,7 @@ namespace fonthook::vectorfont
 		bool PrepareFrameInstanceResources()
 		{
 			CrossTextFrame& frame = s_crossTextFrame;
-			if (frame.batches.empty() || frame.members.empty()
+			if (frame.batches.empty() || frame.admissionMembers.empty()
 				|| !frame.renderer || !frame.device || !frame.generation)
 			{
 				return false;
@@ -830,14 +1071,18 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool UploadBatchInstances(CrossTextBatch& batch)
+		bool UploadBatchInstances(UInt32 batchIndex, CrossTextBatch& batch)
 		{
+			FreeTypePerfScope uploadPerf(
+				FreeTypePerfPhase::GlyphInstancingUpload);
 			CrossTextFrame& frame = s_crossTextFrame;
 			if (!frame.active || !frame.device || !frame.generation
 				|| !batch.instanceCount || !batch.memberCount
-				|| batch.firstMember >= frame.members.size()
+				|| batch.firstMember >= frame.admissionMembers.size()
 				|| static_cast<UInt64>(batch.firstMember) + batch.memberCount
-					> frame.members.size()
+					> frame.admissionMembers.size()
+				|| frame.liveBatchIndex != batchIndex
+				|| frame.liveSnapshots.size() != batch.memberCount
 				|| frame.uploadCursorInstances > frame.plannedInstanceCount
 				|| batch.instanceCount
 					> frame.plannedInstanceCount - frame.uploadCursorInstances
@@ -877,14 +1122,16 @@ namespace fonthook::vectorfont
 			for (UInt32 memberOffset = 0;
 				memberOffset < batch.memberCount; ++memberOffset)
 			{
-				const CrossTextMember& member = frame.members[
+				const CrossTextAdmissionMember& member = frame.admissionMembers[
 					batch.firstMember + memberOffset];
+				const NativeTileInstancingSnapshot& snapshot =
+					frame.liveSnapshots[memberOffset];
 				for (UInt32 glyph = 0; glyph < member.sidecarCount; ++glyph)
 				{
 					NativeA8GlyphInstance instance;
 					instance.sidecar = member.sidecars[glyph];
-					instance.wvpColumns = member.snapshot.wvpColumns;
-					instance.tileColor = member.snapshot.tileColor;
+					instance.wvpColumns = snapshot.wvpColumns;
+					instance.tileColor = snapshot.tileColor;
 					std::memcpy(output, &instance, sizeof(instance));
 					output += sizeof(instance);
 				}
@@ -907,7 +1154,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool BeginFollowerCommand(const CrossTextMember& member)
+		bool BeginFollowerCommand(const CrossTextAdmissionMember& member)
 		{
 			if (member.sequence.kind
 				== NativeA8CrossTextCommandKind::SinglePacket)
@@ -929,7 +1176,7 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		void EndFollowerCommand(const CrossTextMember& member,
+		void EndFollowerCommand(const CrossTextAdmissionMember& member,
 			bool success)
 		{
 			if (member.sequence.kind
@@ -962,7 +1209,7 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		bool IsLeaderCommandConsumed(const CrossTextMember& member)
+		bool IsLeaderCommandConsumed(const CrossTextAdmissionMember& member)
 		{
 			if (member.sequence.kind
 				== NativeA8CrossTextCommandKind::SinglePacket)
@@ -981,7 +1228,7 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		bool IsRestorableMember(const CrossTextMember* member,
+		bool IsRestorableMember(const CrossTextAdmissionMember* member,
 			IDirect3DDevice9* device)
 		{
 			return member && member->sequence.geometry && member->command
@@ -1010,11 +1257,14 @@ namespace fonthook::vectorfont
 				NiDX9Renderer* renderer,
 				NiD3DRenderState* renderState,
 				UInt32 generation,
-				const CrossTextMember* leader,
-				const CrossTextMember* last)
+				const CrossTextAdmissionMember* leader,
+				const NativeTileInstancingSnapshot* leaderSnapshot,
+				const CrossTextAdmissionMember* last,
+				const NativeTileInstancingSnapshot* lastSnapshot)
 				: m_device(device), m_renderer(renderer),
 				  m_renderState(renderState), m_generation(generation),
-				  m_leader(leader), m_last(last)
+				  m_leader(leader), m_leaderSnapshot(leaderSnapshot),
+				  m_last(last), m_lastSnapshot(lastSnapshot)
 			{
 			}
 
@@ -1032,13 +1282,18 @@ namespace fonthook::vectorfont
 			{
 				if (m_restored)
 					return m_restoreSucceeded;
+				FreeTypePerfScope restorePerf(
+					FreeTypePerfPhase::GlyphInstancingRestore);
 				m_restored = true;
 				if (!m_device)
 					return false;
 
-				const CrossTextMember* target = m_drawSucceeded
+				const CrossTextAdmissionMember* target = m_drawSucceeded
 					? m_last : m_leader;
-				const bool targetReady = IsRestorableMember(target, m_device);
+				const NativeTileInstancingSnapshot* targetSnapshot =
+					m_drawSucceeded ? m_lastSnapshot : m_leaderSnapshot;
+				const bool targetReady = targetSnapshot
+					&& IsRestorableMember(target, m_device);
 				const NativeA8CompiledPacketCommand* program = targetReady
 					? target->command->program : nullptr;
 				const NativeA8FramePacketBinding* binding = targetReady
@@ -1072,13 +1327,13 @@ namespace fonthook::vectorfont
 					pixelShader = m_device->SetPixelShader(
 						program->pixelShader);
 					vertexConstants = m_device->SetVertexShaderConstantF(
-						0, &target->snapshot.wvpColumns._11, 4);
-					// c4 is TileShader::TexScroll, not part of WVP. Admission proves
-					// identical textureTransform/rotates inputs and the temporary VS
-					// does not write c4, so retaining the leader value is the exact
+						0, &targetSnapshot->wvpColumns._11, 4);
+					// c4 is TileShader::TexScroll, not part of WVP. The live preflight
+					// proves identical textureTransform/rotates inputs and the temporary
+					// VS does not write c4, so retaining the leader value is the exact
 					// state the logical last member would have published.
 					pixelConstant = m_device->SetPixelShaderConstantF(
-						0, target->snapshot.tileColor.data(), 1);
+						0, targetSnapshot->tileColor.data(), 1);
 				}
 
 				const bool bindingFailure = FAILED(reset0) || FAILED(reset1)
@@ -1122,8 +1377,8 @@ namespace fonthook::vectorfont
 						&target->sequence.geometry->m_kProperties;
 					m_renderer->m_pkCurrEffects = nullptr;
 					std::memcpy(&m_renderer->m_kD3DMat,
-						&target->snapshot.retailWorld,
-						sizeof(target->snapshot.retailWorld));
+						&targetSnapshot->retailWorld,
+						sizeof(targetSnapshot->retailWorld));
 				}
 				m_restoreSucceeded = true;
 				return true;
@@ -1134,8 +1389,10 @@ namespace fonthook::vectorfont
 			NiDX9Renderer* m_renderer = nullptr;
 			NiD3DRenderState* m_renderState = nullptr;
 			UInt32 m_generation = 0;
-			const CrossTextMember* m_leader = nullptr;
-			const CrossTextMember* m_last = nullptr;
+			const CrossTextAdmissionMember* m_leader = nullptr;
+			const NativeTileInstancingSnapshot* m_leaderSnapshot = nullptr;
+			const CrossTextAdmissionMember* m_last = nullptr;
+			const NativeTileInstancingSnapshot* m_lastSnapshot = nullptr;
 			bool m_drawSucceeded = false;
 			bool m_restored = false;
 			bool m_restoreSucceeded = false;
@@ -1203,7 +1460,8 @@ namespace fonthook::vectorfont
 		}
 
 		bool ProveNormalDeviceState(IDirect3DDevice9* device,
-			const CrossTextMember& member)
+			const CrossTextAdmissionMember& member,
+			const NativeTileInstancingSnapshot& snapshot)
 		{
 			if (!IsRestorableMember(&member, device))
 				return false;
@@ -1270,10 +1528,10 @@ namespace fonthook::vectorfont
 				&& vertexShader == program.vertexShader
 				&& pixelShader == program.pixelShader
 				&& std::memcmp(&vertexConstants,
-					&member.snapshot.wvpColumns,
+					&snapshot.wvpColumns,
 					sizeof(vertexConstants)) == 0
 				&& std::memcmp(pixelConstant.data(),
-					member.snapshot.tileColor.data(),
+					snapshot.tileColor.data(),
 					pixelConstant.size() * sizeof(float)) == 0;
 
 			ReleaseD3D(stream0Buffer);
@@ -1358,12 +1616,14 @@ namespace fonthook::vectorfont
 			frame.building = false;
 			return;
 		}
-		frame.members.reserve(frame.sequence.size());
+		FreeTypePerfScope admissionPerf(
+			FreeTypePerfPhase::GlyphInstancingAdmission);
+		frame.admissionMembers.reserve(frame.sequence.size());
 		frame.batches.reserve(frame.sequence.size() / 2u);
 		// Reuse one small proof scratch for the entire traversal. Allocating a
 		// vector for every singleton would erase much of the CPU saving in menus
 		// whose adjacent depths rarely match.
-		std::vector<CrossTextMember> candidateMembers;
+		std::vector<CrossTextAdmissionCandidate> candidateMembers;
 		candidateMembers.reserve(8);
 		UInt64 acceptedBytes = 0;
 		for (UInt32 index = 0;
@@ -1407,9 +1667,9 @@ namespace fonthook::vectorfont
 						FreeTypePerfCounter::GlyphInstancingDepthFallback);
 					break;
 				}
-				CrossTextMember member;
+				CrossTextAdmissionCandidate candidate;
 				const BuildMemberFailure failure =
-					BuildAdmissionMember(item, cursor, member);
+					BuildAdmissionMember(item, cursor, candidate);
 				if (failure != BuildMemberFailure::None)
 				{
 					RecordBuildFailure(failure);
@@ -1417,16 +1677,18 @@ namespace fonthook::vectorfont
 				}
 				if (!candidateMembers.empty())
 				{
-					const CrossTextMember& leader = candidateMembers.front();
+					const CrossTextAdmissionCandidate& leader =
+						candidateMembers.front();
 					if (!SameCompatibilityKey(
-							leader.compatibility, member.compatibility))
+							leader.compatibility, candidate.compatibility,
+							CompatibilityComparePhase::Admission))
 					{
 						RecordFreeTypePerf(FreeTypePerfCounter::
 							GlyphInstancingStateFallback);
 						break;
 					}
 					if (!SameNativeTileInstancingTransientState(
-							leader.snapshot, member.snapshot))
+							leader.transient, candidate.transient))
 					{
 						RecordFreeTypePerf(FreeTypePerfCounter::
 							GlyphInstancingScissorFallback);
@@ -1434,7 +1696,8 @@ namespace fonthook::vectorfont
 					}
 				}
 				const UInt64 memberBytes = static_cast<UInt64>(
-					member.sidecarCount) * kNativeA8GlyphInstanceBytes;
+					candidate.member.sidecarCount)
+					* kNativeA8GlyphInstanceBytes;
 				if (acceptedBytes + candidateInstances
 						* kNativeA8GlyphInstanceBytes + memberBytes
 					> kNativeA8MaximumInstanceBufferBytes)
@@ -1443,21 +1706,24 @@ namespace fonthook::vectorfont
 						GlyphInstancingBudgetFallback);
 					break;
 				}
-				candidateInstances += member.sidecarCount;
-				candidateMembers.push_back(std::move(member));
+				candidateInstances += candidate.member.sidecarCount;
+				candidateMembers.push_back(std::move(candidate));
 			}
 
 			if (candidateMembers.size() >= 2)
 			{
 				CrossTextBatch batch;
-				batch.firstMember = static_cast<UInt32>(frame.members.size());
+				batch.firstMember = static_cast<UInt32>(
+					frame.admissionMembers.size());
 				batch.memberCount = static_cast<UInt32>(candidateMembers.size());
 				batch.instanceCount = static_cast<UInt32>(candidateInstances);
 				const UInt32 batchIndex = static_cast<UInt32>(frame.batches.size());
-				for (CrossTextMember& member : candidateMembers)
+				for (CrossTextAdmissionCandidate& candidate : candidateMembers)
 				{
-					frame.sequenceToBatch[member.sequenceIndex] = batchIndex;
-					frame.members.push_back(std::move(member));
+					frame.sequenceToBatch[candidate.member.sequenceIndex] =
+						batchIndex;
+					frame.admissionMembers.push_back(
+						std::move(candidate.member));
 				}
 				frame.batches.push_back(batch);
 				acceptedBytes += candidateInstances
@@ -1472,6 +1738,13 @@ namespace fonthook::vectorfont
 
 		frame.building = false;
 		const bool hadAcceptedBatches = !frame.batches.empty();
+		UInt32 maximumBatchMembers = 0;
+		for (const CrossTextBatch& batch : frame.batches)
+			maximumBatchMembers = std::max(maximumBatchMembers, batch.memberCount);
+		// Reserve both leader-time arrays during command build.  Begin never grows
+		// either vector, so live capture cannot allocate inside TileShader.
+		frame.livePreflight.reserve(maximumBatchMembers);
+		frame.liveSnapshots.reserve(maximumBatchMembers);
 		// Allocate and size the D3D resources now, but do not freeze WVP/TileColor
 		// during command construction.  Each leader refreshes and uploads only its
 		// own batch immediately before drawing.
@@ -1484,7 +1757,8 @@ namespace fonthook::vectorfont
 			for (UInt32& mapping : frame.sequenceToBatch)
 				mapping = kInvalidNativeA8CommandIndex;
 			frame.batches.clear();
-			frame.members.clear();
+			frame.admissionMembers.clear();
+			ResetLiveBatchScratch();
 		}
 		else
 		{
@@ -1526,7 +1800,8 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
-		const CrossTextMember& leader = frame.members[batch.firstMember];
+		const CrossTextAdmissionMember& leader =
+			frame.admissionMembers[batch.firstMember];
 		if (leader.sequenceIndex == sequenceIndex)
 			return false;
 		// Accepted members are a contiguous slice of the final accumulator
@@ -1537,8 +1812,8 @@ namespace fonthook::vectorfont
 		const UInt32 offset = sequenceIndex - leader.sequenceIndex;
 		if (!offset || offset >= batch.memberCount)
 			return false;
-		const CrossTextMember& member =
-			frame.members[batch.firstMember + offset];
+		const CrossTextAdmissionMember& member =
+			frame.admissionMembers[batch.firstMember + offset];
 		if (member.sequenceIndex == sequenceIndex
 			&& member.sequence.geometry == geometry)
 		{
@@ -1574,6 +1849,8 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
+		FreeTypePerfScope leaderPerf(
+			FreeTypePerfPhase::GlyphInstancingLeader);
 		const auto rejectBegin = [&](FreeTypePerfCounter detail,
 			const char* reason, UInt32 memberOffset = 0u)
 		{
@@ -1584,9 +1861,18 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::GlyphInstancingBeginFallback);
 			RecordFreeTypePerf(detail);
 			batch.state = CrossTextBatchState::Fallback;
+			ResetLiveBatchScratch();
 			return false;
 		};
-		CrossTextMember& leader = frame.members[batch.firstMember];
+		if (batch.firstMember >= frame.admissionMembers.size()
+			|| static_cast<UInt64>(batch.firstMember) + batch.memberCount
+				> frame.admissionMembers.size())
+		{
+			return rejectBegin(FreeTypePerfCounter::
+				GlyphInstancingBeginImmutableFallback, "admission-range");
+		}
+		const CrossTextAdmissionMember& leader =
+			frame.admissionMembers[batch.firstMember];
 		if (leader.sequenceIndex != sequenceIndex
 			|| leader.sequence.geometry != leaderGeometry
 			// Formal B64FB5-B64FD1 reuses this one accumulator-owned Tile pass for
@@ -1626,6 +1912,16 @@ namespace fonthook::vectorfont
 			return rejectBegin(FreeTypePerfCounter::
 				GlyphInstancingBeginResourceFallback, "resource-epoch");
 		}
+		ResetLiveBatchScratch();
+		if (frame.livePreflight.capacity() < batch.memberCount
+			|| frame.liveSnapshots.capacity() < batch.memberCount)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::GlyphInstancingStateFallback);
+			return rejectBegin(FreeTypePerfCounter::
+				GlyphInstancingBeginResourceFallback, "live-scratch-capacity");
+		}
+		frame.liveBatchIndex = batchIndex;
 		const auto rejectLivePreflight = [&](FreeTypePerfCounter detail,
 			const char* reason, UInt32 memberOffset)
 		{
@@ -1637,86 +1933,90 @@ namespace fonthook::vectorfont
 			return rejectBegin(detail, reason, memberOffset);
 		};
 
-		// Pass 1: refresh immutable/property identity, the compatibility key and
-		// transient state for every member, then prove current visibility. No full
-		// WVP/TileColor snapshot is constructed unless the complete batch passes.
-		for (UInt32 offset = 0; offset < batch.memberCount; ++offset)
+		// Pass 1 independently re-resolves immutable/property identity into the
+		// batch-local live scratch, normalizes the compatibility key and transient
+		// state, then proves current visibility.  The retained admission plan is
+		// never modified, and no WVP/TileColor is built until the whole pass succeeds.
 		{
-			CrossTextMember current;
-			CrossTextMember& planned =
-				frame.members[batch.firstMember + offset];
-			const BuildMemberFailure failure = BuildLivePreflightMember(
-				planned.sequence, planned.sequenceIndex, current);
-			if (failure != BuildMemberFailure::None)
+			FreeTypePerfScope livePreflightPerf(
+				FreeTypePerfPhase::GlyphInstancingLivePreflight);
+			for (UInt32 offset = 0; offset < batch.memberCount; ++offset)
 			{
-				RecordBuildFailure(failure);
-				return rejectLivePreflight(
-					failure == BuildMemberFailure::Scissor
-					? FreeTypePerfCounter::
-						GlyphInstancingBeginTransientFallback
-					: FreeTypePerfCounter::
+				const CrossTextAdmissionMember& planned =
+					frame.admissionMembers[batch.firstMember + offset];
+				frame.livePreflight.emplace_back();
+				CrossTextLivePreflight& current =
+					frame.livePreflight.back();
+				const BuildMemberFailure failure = BuildLivePreflightMember(
+					planned, current);
+				if (failure != BuildMemberFailure::None)
+				{
+					RecordBuildFailure(failure);
+					return rejectLivePreflight(
+						failure == BuildMemberFailure::Scissor
+						? FreeTypePerfCounter::
+							GlyphInstancingBeginTransientFallback
+						: FreeTypePerfCounter::
+							GlyphInstancingBeginImmutableFallback,
+						BuildMemberFailureName(failure), offset);
+				}
+				if (offset != 0
+					&& !SameCompatibilityKey(
+						frame.livePreflight.front().compatibility,
+						current.compatibility,
+						CompatibilityComparePhase::Live))
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::GlyphInstancingStateFallback);
+					return rejectLivePreflight(FreeTypePerfCounter::
 						GlyphInstancingBeginImmutableFallback,
-					BuildMemberFailureName(failure), offset);
+						"compatibility-key", offset);
+				}
+				if (offset != 0
+					&& !SameNativeTileInstancingTransientState(
+						frame.livePreflight.front().transient,
+						current.transient))
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::GlyphInstancingScissorFallback);
+					return rejectLivePreflight(FreeTypePerfCounter::
+						GlyphInstancingBeginTransientFallback,
+						"transient-state", offset);
+				}
 			}
-			if (current.command != planned.command
-				|| current.packet != planned.packet
-				|| current.sidecars != planned.sidecars
-				|| current.sidecarCount != planned.sidecarCount)
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::GlyphInstancingTopologyFallback);
-				return rejectLivePreflight(FreeTypePerfCounter::
-					GlyphInstancingBeginImmutableFallback,
-					"immutable-identity", offset);
-			}
-			if (offset != 0
-				&& !SameCompatibilityKey(
-					leader.compatibility, current.compatibility))
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::GlyphInstancingStateFallback);
-				return rejectLivePreflight(FreeTypePerfCounter::
-					GlyphInstancingBeginImmutableFallback,
-					"compatibility-key", offset);
-			}
-			if (offset != 0
-				&& !SameNativeTileInstancingTransientState(
-					leader.snapshot, current.snapshot))
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::GlyphInstancingScissorFallback);
-				return rejectLivePreflight(FreeTypePerfCounter::
-					GlyphInstancingBeginTransientFallback,
-					"transient-state", offset);
-			}
-			planned.compatibility = current.compatibility;
-			planned.snapshot = current.snapshot;
 		}
 
 		// Pass 2: the render-thread-only preflight above completed without a
 		// callback or device submission. Freeze exactly one complete live snapshot
 		// per member, and upload only after every snapshot succeeds.
-		for (UInt32 offset = 0; offset < batch.memberCount; ++offset)
 		{
-			CrossTextMember& planned =
-				frame.members[batch.firstMember + offset];
-			const BuildMemberFailure failure =
-				BuildCompleteLiveMemberSnapshot(planned);
-			if (failure != BuildMemberFailure::None)
+			FreeTypePerfScope snapshotPerf(
+				FreeTypePerfPhase::GlyphInstancingSnapshot);
+			for (UInt32 offset = 0; offset < batch.memberCount; ++offset)
 			{
-				RecordBuildFailure(failure);
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					GlyphInstancingBeginSnapshotFallback);
-				return rejectBegin(failure == BuildMemberFailure::Scissor
-					? FreeTypePerfCounter::
-						GlyphInstancingBeginTransientFallback
-					: FreeTypePerfCounter::
-						GlyphInstancingBeginImmutableFallback,
-					BuildMemberFailureName(failure), offset);
+				const CrossTextAdmissionMember& planned =
+					frame.admissionMembers[batch.firstMember + offset];
+				frame.liveSnapshots.emplace_back();
+				const BuildMemberFailure failure =
+					BuildCompleteLiveMemberSnapshot(planned,
+						frame.livePreflight[offset],
+						frame.liveSnapshots.back());
+				if (failure != BuildMemberFailure::None)
+				{
+					RecordBuildFailure(failure);
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						GlyphInstancingBeginSnapshotFallback);
+					return rejectBegin(failure == BuildMemberFailure::Scissor
+						? FreeTypePerfCounter::
+							GlyphInstancingBeginTransientFallback
+						: FreeTypePerfCounter::
+							GlyphInstancingBeginImmutableFallback,
+						BuildMemberFailureName(failure), offset);
+				}
 			}
 		}
 
-		if (!UploadBatchInstances(batch))
+		if (!UploadBatchInstances(batchIndex, batch))
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::GlyphInstancingStateFallback);
@@ -1725,26 +2025,30 @@ namespace fonthook::vectorfont
 		}
 
 		batch.followersBegun = 0;
-		for (UInt32 offset = 1; offset < batch.memberCount; ++offset)
 		{
-			const CrossTextMember& follower =
-				frame.members[batch.firstMember + offset];
-			if (!BeginFollowerCommand(follower))
+			FreeTypePerfScope followerReservePerf(
+				FreeTypePerfPhase::GlyphInstancingFollowerReserve);
+			for (UInt32 offset = 1; offset < batch.memberCount; ++offset)
 			{
-				for (UInt32 rollback = 1;
-					rollback <= batch.followersBegun; ++rollback)
+				const CrossTextAdmissionMember& follower =
+					frame.admissionMembers[batch.firstMember + offset];
+				if (!BeginFollowerCommand(follower))
 				{
-					EndFollowerCommand(frame.members[
-						batch.firstMember + rollback], false);
+					for (UInt32 rollback = 1;
+						rollback <= batch.followersBegun; ++rollback)
+					{
+						EndFollowerCommand(frame.admissionMembers[
+							batch.firstMember + rollback], false);
+					}
+					batch.followersBegun = 0;
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						GlyphInstancingStateFallback);
+					return rejectBegin(FreeTypePerfCounter::
+						GlyphInstancingBeginFollowerFallback,
+						"follower-command", offset);
 				}
-				batch.followersBegun = 0;
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					GlyphInstancingStateFallback);
-				return rejectBegin(FreeTypePerfCounter::
-					GlyphInstancingBeginFollowerFallback,
-					"follower-command", offset);
+				++batch.followersBegun;
 			}
-			++batch.followersBegun;
 		}
 
 		batch.state = CrossTextBatchState::Executing;
@@ -1755,7 +2059,7 @@ namespace fonthook::vectorfont
 		view.baseInstance = batch.baseInstance;
 		view.generation = frame.generation;
 		view.leaderGeometry = leaderGeometry;
-		view.lastGeometry = frame.members[
+		view.lastGeometry = frame.admissionMembers[
 			batch.firstMember + batch.memberCount - 1u].sequence.geometry;
 		view.active = true;
 		return true;
@@ -1773,13 +2077,24 @@ namespace fonthook::vectorfont
 		CrossTextBatch& batch = frame.batches[view.batchIndex];
 		if (batch.state != CrossTextBatchState::Executing)
 		{
+			if (frame.liveBatchIndex == view.batchIndex)
+				ResetLiveBatchScratch();
 			view = {};
 			return;
 		}
+		const bool liveSnapshotsReady =
+			frame.liveBatchIndex == view.batchIndex
+			&& frame.liveSnapshots.size() == batch.memberCount;
+		if (success && !liveSnapshotsReady)
+		{
+			success = false;
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				GlyphInstancingValidationFallback);
+		}
 		if (success)
 		{
-			const CrossTextMember& leader =
-				frame.members[batch.firstMember];
+			const CrossTextAdmissionMember& leader =
+				frame.admissionMembers[batch.firstMember];
 			if (!IsLeaderCommandConsumed(leader))
 			{
 				success = false;
@@ -1789,8 +2104,8 @@ namespace fonthook::vectorfont
 		}
 		for (UInt32 offset = 1; offset <= batch.followersBegun; ++offset)
 		{
-			CrossTextMember& follower =
-				frame.members[batch.firstMember + offset];
+			const CrossTextAdmissionMember& follower =
+				frame.admissionMembers[batch.firstMember + offset];
 			EndFollowerCommand(follower, success);
 			if (success && follower.sequence.kind
 				== NativeA8CrossTextCommandKind::VirtualSinglePacket)
@@ -1817,15 +2132,17 @@ namespace fonthook::vectorfont
 				batch.memberCount - 1u);
 			for (UInt32 offset = 0; offset < batch.memberCount; ++offset)
 			{
-				NiTriShape* geometry = frame.members[
+				NiTriShape* geometry = frame.admissionMembers[
 					batch.firstMember + offset].sequence.geometry;
 				NiTriShapeData* data = geometry
 					? geometry->GetModelData() : nullptr;
 				if (data)
 					data->m_usDirtyFlags &= 0xF000u;
 			}
-			const CrossTextMember& last = frame.members[
+			const CrossTextAdmissionMember& last = frame.admissionMembers[
 				batch.firstMember + batch.memberCount - 1u];
+			const NativeTileInstancingSnapshot& lastSnapshot =
+				frame.liveSnapshots.back();
 			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 			if (renderer && renderer->GetD3DDevice() == frame.device)
 			{
@@ -1833,10 +2150,11 @@ namespace fonthook::vectorfont
 					&last.sequence.geometry->m_kProperties;
 				renderer->m_pkCurrEffects = nullptr;
 				std::memcpy(&renderer->m_kD3DMat,
-					&last.snapshot.retailWorld,
-					sizeof(last.snapshot.retailWorld));
+					&lastSnapshot.retailWorld,
+					sizeof(lastSnapshot.retailWorld));
 			}
 		}
+		ResetLiveBatchScratch();
 		view = {};
 	}
 
@@ -1856,6 +2174,8 @@ namespace fonthook::vectorfont
 				!= frame.batches[view.batchIndex].memberCount
 			|| view.instanceCount
 				!= frame.batches[view.batchIndex].instanceCount
+			|| frame.liveBatchIndex != view.batchIndex
+			|| frame.liveSnapshots.size() != view.textCount
 			|| (static_cast<UInt64>(view.baseInstance)
 					+ view.instanceCount) * kNativeA8GlyphInstanceBytes
 					> s_instancingResources.instanceBufferBytes
@@ -1888,9 +2208,9 @@ namespace fonthook::vectorfont
 		}
 		CrossTextBatch& batch = frame.batches[view.batchIndex];
 		if (view.baseInstance != batch.baseInstance
-			|| batch.firstMember >= frame.members.size()
+			|| batch.firstMember >= frame.admissionMembers.size()
 			|| static_cast<UInt64>(batch.firstMember) + batch.memberCount
-				> frame.members.size())
+				> frame.admissionMembers.size())
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::GlyphInstancingStateFallback);
@@ -1898,9 +2218,14 @@ namespace fonthook::vectorfont
 				GlyphInstancingValidationFallback);
 			return false;
 		}
-		const CrossTextMember& leader = frame.members[batch.firstMember];
-		const CrossTextMember& last = frame.members[
+		const CrossTextAdmissionMember& leader =
+			frame.admissionMembers[batch.firstMember];
+		const CrossTextAdmissionMember& last = frame.admissionMembers[
 			batch.firstMember + batch.memberCount - 1u];
+		const NativeTileInstancingSnapshot& leaderSnapshot =
+			frame.liveSnapshots.front();
+		const NativeTileInstancingSnapshot& lastSnapshot =
+			frame.liveSnapshots.back();
 		if (!IsRestorableMember(&leader, frame.device)
 			|| !IsRestorableMember(&last, frame.device)
 			|| leader.command->program != last.command->program
@@ -1933,6 +2258,8 @@ namespace fonthook::vectorfont
 		const float identity[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 		auto bindInstancingState = [&]()
 		{
+			FreeTypePerfScope bindPerf(
+				FreeTypePerfPhase::GlyphInstancingBind);
 			operation = "bind-glyph-instancing";
 			const HRESULT frequency0 = device->SetStreamSourceFreq(
 				0, expectedFrequency0);
@@ -1989,7 +2316,8 @@ namespace fonthook::vectorfont
 		{
 			resetGuard.reset();
 			resetGuard.emplace(device, renderer, renderState,
-				frame.generation, &leader, &last);
+				frame.generation, &leader, &leaderSnapshot,
+				&last, &lastSnapshot);
 		};
 		armResetGuard();
 		if (!bindInstancingState())
@@ -2019,7 +2347,7 @@ namespace fonthook::vectorfont
 			operation = "prove-glyph-instancing-restore";
 			const bool restoreReady = resetGuard->Restore();
 			const bool normalStateReady = restoreReady
-				&& ProveNormalDeviceState(device, leader);
+				&& ProveNormalDeviceState(device, leader, leaderSnapshot);
 			if (!normalStateReady)
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
@@ -2044,8 +2372,12 @@ namespace fonthook::vectorfont
 		}
 
 		operation = "draw-glyph-instancing";
-		result = device->DrawIndexedPrimitive(
-			D3DPT_TRIANGLELIST, 0, 0, 4, 0, 2);
+		{
+			FreeTypePerfScope drawPerf(
+				FreeTypePerfPhase::GlyphInstancingDraw);
+			result = device->DrawIndexedPrimitive(
+				D3DPT_TRIANGLELIST, 0, 0, 4, 0, 2);
+		}
 		if (FAILED(result))
 		{
 			RecordFreeTypePerf(
@@ -2075,8 +2407,9 @@ namespace fonthook::vectorfont
 	{
 		const CrossTextFrame& frame = s_crossTextFrame;
 		if (!frame.building && !frame.active
-			&& frame.sequence.empty() && frame.members.empty()
+			&& frame.sequence.empty() && frame.admissionMembers.empty()
 			&& frame.batches.empty() && frame.sequenceToBatch.empty()
+			&& frame.livePreflight.empty() && frame.liveSnapshots.empty()
 			&& !frame.validationToken)
 		{
 			return;

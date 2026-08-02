@@ -668,14 +668,11 @@ namespace fonthook::vectorfont
 		NonFinite
 	};
 
-	// Pure retained inputs needed by the instanced VS and by the exact
-	// scissor/stencil compatibility proof. wvpColumns is byte-identical to the
-	// four float4 values that retail TileShader publishes at VS c0-c3.
-	struct NativeTileInstancingSnapshot
+	// Exact slot-31 state used to decide whether adjacent texts can share one
+	// instanced draw.  Keep this separate from the live matrix/color snapshot so
+	// command-build admission cannot accidentally publish stale draw constants.
+	struct NativeTileInstancingTransientState
 	{
-		D3DXMATRIX retailWorld = {};
-		D3DXMATRIX wvpColumns = {};
-		std::array<float, 4> tileColor = {};
 		RECT scissorRect = {};
 		UInt16 stencilFlags = 0;
 		UInt32 stencilRef = 0;
@@ -686,18 +683,27 @@ namespace fonthook::vectorfont
 		bool cleanupRequired = false;
 	};
 
+	// Live inputs needed by the instanced VS and exact renderer restoration.
+	// wvpColumns is byte-identical to the four float4 values that retail
+	// TileShader publishes at VS c0-c3.  transient is captured in the same
+	// leader-time operation and rechecked against the preceding live preflight.
+	struct NativeTileInstancingSnapshot
+	{
+		D3DXMATRIX retailWorld = {};
+		D3DXMATRIX wvpColumns = {};
+		std::array<float, 4> tileColor = {};
+		NativeTileInstancingTransientState transient;
+	};
+
 	NativeTileInstancingSnapshotResult BuildNativeTileInstancingSnapshot(
 		const NiTriShape* geometry, const NiPropertyState* properties,
 		const NiDX9Renderer* renderer,
 		NativeTileInstancingSnapshot& snapshot);
-	// Admission needs only the exact slot-31 transient compatibility state.
-	// WVP, TileColor and retail-world mirrors are deliberately left zeroed until
-	// the leader callback takes the live snapshot used for upload and restore.
 	NativeTileInstancingSnapshotResult
-		BuildNativeTileInstancingAdmissionSnapshot(
+		BuildNativeTileInstancingTransientState(
 			const NiTriShape* geometry,
 			const NiPropertyState* properties,
-			NativeTileInstancingSnapshot& snapshot);
+			NativeTileInstancingTransientState& transient);
 	NativeTileInstancingSnapshotResult
 		BuildNativeTileInstancingSnapshotForWorld(
 			const NiTriShape* geometry,
@@ -708,8 +714,8 @@ namespace fonthook::vectorfont
 	void ApplyNativeA8GeometryOrigin(NiTransform& destination,
 		const NiTransform& source, const NiPoint3& origin);
 	bool SameNativeTileInstancingTransientState(
-		const NativeTileInstancingSnapshot& left,
-		const NativeTileInstancingSnapshot& right);
+		const NativeTileInstancingTransientState& left,
+		const NativeTileInstancingTransientState& right);
 	bool IsNativeA8PayloadOutsideScissorForWorld(
 		const NativeA8ShapePayload& payload,
 		const NiPropertyState* properties,

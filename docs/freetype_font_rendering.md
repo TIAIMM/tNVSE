@@ -1327,6 +1327,15 @@ with their concrete contract, member, resource, upload, or device operation.
 The aggregate instancing line separates `begin_preflight` from
 `begin_snapshot`; `snapshot_avoided_texts` counts complete member snapshots
 skipped when the first live pass rejects a batch.
+Admission and live capture are also separate data lifetimes. Command build
+retains only immutable sequence/command/packet/sidecar identity; its normalized
+compatibility key and slot-31 transient proof live only in the local grouping
+candidate and are discarded after acceptance. Each accepted frame reserves two
+scratch arrays sized to its largest batch. At the leader callback, pass 1 fills
+the live compatibility/transient/visibility array and pass 2 fills a distinct
+WVP/TileColor/retail-world array. Neither pass writes back to the admission
+plan, neither can allocate in TileShader, and every rejection clears both live
+arrays before ordinary commands are replayed.
 Exit messages force one final performance report and fully drain the bounded
 diagnostic queue, so a short menu reproduction is not represented only by an
 earlier startup summary.
@@ -1349,6 +1358,15 @@ subcategories, arm/device-validation and direct-draw admission fallbacks,
 follower consumption, and text/instance
 median, p95, and maximum batch sizes. The median and p95 values use
 power-of-two histogram upper bounds capped at the exact observed maximum.
+`tnvse_freetype_glyph_instancing_compat_mismatch` separately reports the first
+incompatible field in the exact comparison order, split between command-build
+admission and leader-time live revalidation. Its field counts therefore sum to
+`total`, while `admission + live` independently sums to the same value. The
+companion `tnvse_freetype_glyph_instancing_timing` histogram separates whole
+frame admission, accepted leader preparation, live preflight, complete
+WVP/TileColor snapshots, instance upload, follower reservation, D3D9 binding,
+the indexed draw, and the unconditional restore bracket. These timers are
+active only with the existing FreeType rendering log switch.
 
 Guarded replay publishes the retail current-pass globals, invokes `B99390`
 when the selected TileShader/pass must change, applies the special alpha-test

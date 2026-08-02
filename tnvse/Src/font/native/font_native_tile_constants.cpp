@@ -94,18 +94,18 @@ namespace fonthook::vectorfont
 
 		void PopulateNativeTileInstancingTransientSnapshot(
 			const TileConstantsTransientState& state,
-			NativeTileInstancingSnapshot& snapshot)
+			NativeTileInstancingTransientState& transient)
 		{
-			snapshot.scissorEnabled = state.tile->useScissorTest;
-			snapshot.scissorRect = state.tile->scissorRect;
-			snapshot.stencilPresent = state.stencil != nullptr;
-			snapshot.stencilEnabled = state.stencilEnabled;
-			snapshot.cleanupRequired = state.cleanupRequired;
+			transient.scissorEnabled = state.tile->useScissorTest;
+			transient.scissorRect = state.tile->scissorRect;
+			transient.stencilPresent = state.stencil != nullptr;
+			transient.stencilEnabled = state.stencilEnabled;
+			transient.cleanupRequired = state.cleanupRequired;
 			if (state.stencil)
 			{
-				snapshot.stencilFlags = state.stencil->m_usFlags.Get();
-				snapshot.stencilRef = state.stencil->m_uiRef;
-				snapshot.stencilMask = state.stencil->m_uiMask;
+				transient.stencilFlags = state.stencil->m_usFlags.Get();
+				transient.stencilRef = state.stencil->m_uiRef;
+				transient.stencilMask = state.stencil->m_uiMask;
 			}
 		}
 
@@ -263,20 +263,16 @@ namespace fonthook::vectorfont
 				return NativeTileInstancingSnapshotResult::NonFinite;
 		}
 		PopulateNativeTileInstancingTransientSnapshot(
-			transientState, snapshot);
+			transientState, snapshot.transient);
 		return NativeTileInstancingSnapshotResult::Ready;
 	}
 
 	NativeTileInstancingSnapshotResult
-		BuildNativeTileInstancingAdmissionSnapshot(
+		BuildNativeTileInstancingTransientState(
 		const NiTriShape* geometry, const NiPropertyState* properties,
-		NativeTileInstancingSnapshot& snapshot)
+		NativeTileInstancingTransientState& transient)
 	{
-		// D3DXMATRIX has a user-provided empty default constructor. Admission
-		// members are copied into the frame vector before their leader-time live
-		// refresh, so make the deliberately absent matrix/color payload defined
-		// without paying for matrix construction, multiplication or validation.
-		std::memset(&snapshot, 0, sizeof(snapshot));
+		transient = {};
 		TileConstantsTransientState transientState;
 		if (!ResolveTileConstantsTransientState(
 				geometry, properties, transientState))
@@ -286,7 +282,7 @@ namespace fonthook::vectorfont
 		if (UsesScaledScissor(transientState))
 			return NativeTileInstancingSnapshotResult::ScaledScissor;
 		PopulateNativeTileInstancingTransientSnapshot(
-			transientState, snapshot);
+			transientState, transient);
 		return NativeTileInstancingSnapshotResult::Ready;
 	}
 
@@ -305,8 +301,8 @@ namespace fonthook::vectorfont
 	}
 
 	bool SameNativeTileInstancingTransientState(
-		const NativeTileInstancingSnapshot& left,
-		const NativeTileInstancingSnapshot& right)
+		const NativeTileInstancingTransientState& left,
+		const NativeTileInstancingTransientState& right)
 	{
 		return left.scissorEnabled == right.scissorEnabled
 			&& left.stencilPresent == right.stencilPresent

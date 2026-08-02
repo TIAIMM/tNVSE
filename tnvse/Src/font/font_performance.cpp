@@ -265,6 +265,10 @@ namespace fonthook::vectorfont
 		for (size_t i = 0; i < values.size(); ++i)
 			values[i] = state.counters[i].exchange(
 				0, std::memory_order_relaxed);
+		const auto counterValue = [&values](FreeTypePerfCounter counter)
+		{
+			return values[static_cast<size_t>(counter)];
+		};
 		const SizeSummary instancingTextSizes = ConsumeSizeSummary(
 			state.instancingTextSizes, state.instancingTextMax);
 		const SizeSummary instancingInstanceSizes = ConsumeSizeSummary(
@@ -936,6 +940,54 @@ namespace fonthook::vectorfont
 			instancingInstanceSizes.p95,
 			instancingInstanceSizes.maximum);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_glyph_instancing_compat_mismatch: total=%llu admission=%llu live=%llu program=%llu declaration=%llu source_texture=%llu alpha_texture=%llu atlas_texture=%llu constants=%llu texture_transform=%llu clamp_mode=%llu shader_class=%llu sampling=%llu quality=%llu distance_field_method=%llu layer=%llu atlas_page=%llu alpha_flags=%llu alpha_test_ref=%llu texture_mode_flags=%llu shader_flags=%llu shader_alpha=%llu shader_fade_alpha=%llu",
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchTotal),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchAdmission),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchLive),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchProgram),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchDeclaration),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchSourceTexture),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchAlphaTexture),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchAtlasTexture),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchConstants),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchTextureTransform),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchClampMode),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchShaderClass),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchSampling),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchQuality),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchDistanceFieldMethod),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchLayer),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchAtlasPage),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchAlphaFlags),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchAlphaTestRef),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchTextureModeFlags),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchShaderFlags),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchShaderAlpha),
+			counterValue(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityMismatchShaderFadeAlpha));
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu constants_lite_replays=%llu constants_lite_fallbacks=%llu constants_lite_scaled_fallbacks=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceStateStart)],
@@ -987,10 +1039,6 @@ namespace fonthook::vectorfont
 				NativeTileConstantsTranslationLiteNonFiniteFallback)],
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				NativeTileConstantsTranslationLiteDeviceFailure)]);
-		const auto counterValue = [&values](FreeTypePerfCounter counter)
-		{
-			return values[static_cast<size_t>(counter)];
-		};
 		const UInt64 worldRotationOnly = counterValue(
 			FreeTypePerfCounter::
 				SegmentDeviceConstantsWorldMismatchRotationOnly);
@@ -1124,6 +1172,33 @@ namespace fonthook::vectorfont
 		const DurationSummary extendedFnt =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::ExtendedFntGeometry);
+		const DurationSummary instancingAdmission =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::GlyphInstancingAdmission);
+		const DurationSummary instancingLeader =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::GlyphInstancingLeader);
+		const DurationSummary instancingLivePreflight =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::GlyphInstancingLivePreflight);
+		const DurationSummary instancingSnapshot =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::GlyphInstancingSnapshot);
+		const DurationSummary instancingUpload =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::GlyphInstancingUpload);
+		const DurationSummary instancingFollowerReserve =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::GlyphInstancingFollowerReserve);
+		const DurationSummary instancingBind =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::GlyphInstancingBind);
+		const DurationSummary instancingDraw =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::GlyphInstancingDraw);
+		const DurationSummary instancingRestore =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::GlyphInstancingRestore);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf_timing: layout_n=%llu median_us=%.3f p95_us=%.3f sidecar_n=%llu median_us=%.3f p95_us=%.3f direct_compile_n=%llu median_us=%.3f p95_us=%.3f native_registration_n=%llu median_us=%.3f p95_us=%.3f preflight_n=%llu median_us=%.3f p95_us=%.3f submit_n=%llu median_us=%.3f p95_us=%.3f command_build_n=%llu median_us=%.3f p95_us=%.3f command_submit_n=%llu median_us=%.3f p95_us=%.3f extended_fnt_geometry_n=%llu median_us=%.3f p95_us=%.3f",
 			layout.count, layout.medianMicroseconds,
@@ -1160,6 +1235,35 @@ namespace fonthook::vectorfont
 			commandBuildFinalize.count,
 			commandBuildFinalize.medianMicroseconds,
 			commandBuildFinalize.p95Microseconds);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_glyph_instancing_timing: admission_n=%llu median_us=%.3f p95_us=%.3f leader_n=%llu median_us=%.3f p95_us=%.3f live_preflight_n=%llu median_us=%.3f p95_us=%.3f snapshot_n=%llu median_us=%.3f p95_us=%.3f upload_n=%llu median_us=%.3f p95_us=%.3f follower_reserve_n=%llu median_us=%.3f p95_us=%.3f bind_n=%llu median_us=%.3f p95_us=%.3f draw_n=%llu median_us=%.3f p95_us=%.3f restore_n=%llu median_us=%.3f p95_us=%.3f",
+			instancingAdmission.count,
+			instancingAdmission.medianMicroseconds,
+			instancingAdmission.p95Microseconds,
+			instancingLeader.count,
+			instancingLeader.medianMicroseconds,
+			instancingLeader.p95Microseconds,
+			instancingLivePreflight.count,
+			instancingLivePreflight.medianMicroseconds,
+			instancingLivePreflight.p95Microseconds,
+			instancingSnapshot.count,
+			instancingSnapshot.medianMicroseconds,
+			instancingSnapshot.p95Microseconds,
+			instancingUpload.count,
+			instancingUpload.medianMicroseconds,
+			instancingUpload.p95Microseconds,
+			instancingFollowerReserve.count,
+			instancingFollowerReserve.medianMicroseconds,
+			instancingFollowerReserve.p95Microseconds,
+			instancingBind.count,
+			instancingBind.medianMicroseconds,
+			instancingBind.p95Microseconds,
+			instancingDraw.count,
+			instancingDraw.medianMicroseconds,
+			instancingDraw.p95Microseconds,
+			instancingRestore.count,
+			instancingRestore.medianMicroseconds,
+			instancingRestore.p95Microseconds);
 	}
 }
 
