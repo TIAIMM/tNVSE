@@ -605,9 +605,11 @@ namespace fonthook::vectorfont
 		bool ready = false;
 	};
 
-	// A non-owning execution proof for device-state reuse between adjacent
-	// dedicated one-packet Tiles. The command buffer assigns the two execution
-	// epochs only after validating the current contiguous FreeType segment.
+	// A non-owning execution proof for device-state reuse inside one validated
+	// command segment. Exact retail Standard stock-Tile passes and successful
+	// native instancing draws may retain the segment while narrowly invalidating
+	// the state categories they actually publish. The command buffer assigns the
+	// two execution epochs only after validating that segment.
 	// Render-target and viewport values are copied rather than retained through
 	// COM pointers or mutable renderer state.
 	struct NativeA8SegmentDeviceStateStamp
@@ -865,7 +867,7 @@ namespace fonthook::vectorfont
 		UInt64 validationToken = 0;
 		UInt64 executionValidationToken = 0;
 		// Execution-only epochs are assigned when the span enters a validated
-		// contiguous FreeType segment and cleared as soon as it is consumed.
+		// safe segment and cleared as soon as it is consumed.
 		UInt32 executionSegmentEpoch = 0;
 		UInt32 executionExternalMutationEpoch = 0;
 		NativeA8CommandSpanState state = NativeA8CommandSpanState::Ready;
@@ -877,8 +879,8 @@ namespace fonthook::vectorfont
 
 	// Ordinary one-packet Tile submissions do not need run/span topology.
 	// This traversal-local command embeds its sole draw and carries only the
-	// execution state required to share full validation with the current
-	// contiguous FreeType segment.
+	// execution state required to share full validation with the current safe
+	// segment.
 	struct NativeA8SinglePacketCommand
 	{
 		NiTriShape* facade = nullptr;
@@ -1131,10 +1133,14 @@ namespace fonthook::vectorfont
 	bool GetNativeA8InstancingShaderResources(UInt32 generation,
 		NativeA8InstancingShaderResources& resources);
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation);
+	bool ClassifyNativeA8StockTileStandardPass(BSShader* shader,
+		NativeA8StandardBlendSemantics& blendSemantics);
 	void BeginNativeA8SortedShaderBatch();
 	void EndNativeA8SortedShaderBatch();
 	void InvalidateNativeA8SortedShaderState();
-	void AdvanceNativeA8SortedShaderStateAcrossStockTile();
+	void InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
+	void AdvanceNativeA8SortedShaderStateAcrossStockTile(
+		bool retainExecutionSegment);
 	void ValidateNativeA8SortedShaderStateAfterStockTile();
 	void BeginNativeA8FacadeShaderBatch();
 	void EndNativeA8FacadeShaderBatch();
@@ -1168,6 +1174,8 @@ namespace fonthook::vectorfont
 	void EndNativeA8FrameCommandBuffer();
 	void InvalidateNativeA8CommandExecutionSegment(
 		NativeA8CommandFallback reason = NativeA8CommandFallback::State);
+	bool PreserveNativeA8CommandExecutionSegmentAcrossStockTile();
+	bool PreserveNativeA8CommandExecutionSegmentAfterInstancing();
 	void NotifyNativeA8CommandExternalMutation(
 		NativeA8CommandFallback reason);
 	void InvalidateNativeA8CommandGeometry(NiTriShape* geometry);

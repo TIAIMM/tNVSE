@@ -725,7 +725,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VirtualStockRegistrationOrderMismatch)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu virtual_spans_fused=%llu followers_consumed=%llu direct_range_replays=%llu span_full_validations=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu packet_range_validations=%llu packet_range_packets=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
+			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu virtual_spans_fused=%llu followers_consumed=%llu direct_range_replays=%llu span_full_validations=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu packet_range_validations=%llu packet_range_packets=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu stock_tile_bridges=%llu instancing_bridges=%llu bridge_rejected=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRecorded)],
 			values[static_cast<size_t>(
@@ -782,6 +782,12 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::CommandSegmentValidationReuse)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandSegmentInvalidation)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandSegmentStockTileBridge)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandSegmentInstancingBridge)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::CommandSegmentBridgeRejected)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRetainedProgramHit)],
 			values[static_cast<size_t>(
@@ -1008,11 +1014,17 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				GlyphInstancingCompatibilityMismatchShaderFadeAlpha));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu constants_lite_replays=%llu constants_lite_fallbacks=%llu constants_lite_scaled_fallbacks=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
+			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu stock_tile_bridges=%llu stock_tile_resets=%llu instancing_narrow_invalidates=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu constants_lite_replays=%llu constants_lite_fallbacks=%llu constants_lite_scaled_fallbacks=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceStateStart)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceStateReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceStockTileBridge)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::SegmentDeviceStockTileReset)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				SegmentDeviceInstancingNarrowInvalidate)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDevicePassSet)],
 			values[static_cast<size_t>(

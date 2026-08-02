@@ -320,6 +320,7 @@ namespace fonthook::vectorfont
 		std::atomic<UInt32> s_compositeProfileLogCount = 0;
 		std::atomic<bool> s_resetInProgress = false;
 		std::atomic<bool> s_alphaFixesBlendLogged = false;
+		std::atomic<void*> s_verifiedAlphaFixesBlendCallback = nullptr;
 		std::atomic<UInt32> s_standardV2ProofLogGeneration = 0;
 		NiDX9Renderer* s_resetRenderer = nullptr;
 
@@ -418,8 +419,16 @@ namespace fonthook::vectorfont
 			{
 				return NativeA8StandardBlendSemantics::Retail;
 			}
+			if (callback
+				&& callback == s_verifiedAlphaFixesBlendCallback.load(
+					std::memory_order_acquire))
+			{
+				return NativeA8StandardBlendSemantics::AlphaFixes252;
+			}
 			if (!IsAlphaFixes252BlendCallback(callback))
 				return NativeA8StandardBlendSemantics::Unknown;
+			s_verifiedAlphaFixesBlendCallback.store(
+				callback, std::memory_order_release);
 
 			if (!s_alphaFixesBlendLogged.exchange(
 					true, std::memory_order_relaxed))
@@ -430,6 +439,26 @@ namespace fonthook::vectorfont
 					callback);
 			}
 			return NativeA8StandardBlendSemantics::AlphaFixes252;
+		}
+
+		void ResetSortedShaderStateCaches()
+		{
+			NativeSortedShaderBatch& batch = s_sortedShaderBatch;
+			batch.device = nullptr;
+			batch.renderState = nullptr;
+			batch.generation = 0;
+			batch.packetProfile = nullptr;
+			batch.packetRegisterCount = 0;
+			batch.vertexAa = {};
+			batch.samplerReady = false;
+
+			// If invalidation happens during a nested pass inside one facade, its
+			// per-facade fallback must not resurrect constants from before that pass.
+			NativeFacadeShaderBatch& facadeBatch = s_facadeShaderBatch;
+			facadeBatch.packetProfile = nullptr;
+			facadeBatch.packetRegisterCount = 0;
+			facadeBatch.vertexAa = {};
+			facadeBatch.samplerReady = false;
 		}
 
 		const char* StandardBlendSemanticsName(
@@ -1958,6 +1987,34 @@ namespace fonthook::vectorfont
 			&& !current->runtimeFault.load(std::memory_order_acquire);
 	}
 
+	bool ClassifyNativeA8StockTileStandardPass(BSShader* shader,
+		NativeA8StandardBlendSemantics& blendSemantics)
+	{
+		blendSemantics = NativeA8StandardBlendSemantics::Unknown;
+		if (!shader || !shader->IsTileShader())
+			return false;
+		void** vtable = *reinterpret_cast<void***>(shader);
+		if (!vtable)
+			return false;
+		blendSemantics = ClassifyStandardBlendCallback(vtable[32]);
+		return vtable[27] == reinterpret_cast<void*>(
+				kNiD3DShaderPrepareGeometry)
+			&& vtable[30] == reinterpret_cast<void*>(
+				kTileShaderSetupGeometryTextures)
+			&& vtable[31] == reinterpret_cast<void*>(
+				kTileShaderUpdateConstants)
+			&& blendSemantics
+				!= NativeA8StandardBlendSemantics::Unknown
+			&& vtable[33] == reinterpret_cast<void*>(
+				kShaderSetupGeometryAlphaTesting)
+			&& vtable[34] == reinterpret_cast<void*>(
+				kShaderSetupGeometryRenderStates)
+			&& vtable[35] == reinterpret_cast<void*>(
+				kTileShaderPostGeometry)
+			&& vtable[36] == reinterpret_cast<void*>(
+				kNiD3DShaderFirstPass);
+	}
+
 	void BeginNativeA8SortedShaderBatch()
 	{
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
@@ -1994,31 +2051,27 @@ namespace fonthook::vectorfont
 	{
 		InvalidateNativeA8CommandExecutionSegment(
 			NativeA8CommandFallback::State);
-		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
-		batch.device = nullptr;
-		batch.renderState = nullptr;
-		batch.generation = 0;
-		batch.packetProfile = nullptr;
-		batch.packetRegisterCount = 0;
-		batch.vertexAa = {};
-		batch.samplerReady = false;
-		// If invalidation happens during a nested pass inside one facade, its
-		// per-facade fallback must not resurrect constants from before that pass.
-		NativeFacadeShaderBatch& facadeBatch = s_facadeShaderBatch;
-		facadeBatch.packetProfile = nullptr;
-		facadeBatch.packetRegisterCount = 0;
-		facadeBatch.vertexAa = {};
-		facadeBatch.samplerReady = false;
+		ResetSortedShaderStateCaches();
 	}
 
-	void AdvanceNativeA8SortedShaderStateAcrossStockTile()
+	void InvalidateNativeA8SortedShaderStateWithinExecutionSegment()
 	{
-		// A stock Tile still breaks retained command/state sequencing, but both
-		// reverse targets prove its constant maps write only PS c0 and VS c0-c4.
-		// Preserve the disjoint private register shadow while invalidating every
-		// binding whose stock pass is allowed to change.
-		InvalidateNativeA8CommandExecutionSegment(
-			NativeA8CommandFallback::State);
+		ResetSortedShaderStateCaches();
+	}
+
+	void AdvanceNativeA8SortedShaderStateAcrossStockTile(
+		bool retainExecutionSegment)
+	{
+		// An unclassified stock Tile remains a hard command boundary. A fully
+		// classified retail Standard pass may retain the global execution proof,
+		// while both reverse targets prove its constant maps write only PS c0 and
+		// VS c0-c4. In either case preserve the disjoint private register shadow
+		// while invalidating every binding the stock pass is allowed to change.
+		if (!retainExecutionSegment)
+		{
+			InvalidateNativeA8CommandExecutionSegment(
+				NativeA8CommandFallback::State);
+		}
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 		NiD3DRenderState* renderState =
 			batch.depth && batch.device

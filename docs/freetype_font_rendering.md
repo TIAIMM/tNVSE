@@ -1566,16 +1566,26 @@ stock bootstrap through its direct command lookup. The singleton command keeps
 the metadata identity and points at the embedded prepared draw; it does not
 retain a group identity or allocate span/run topology.
 
-Full validation is owned by a contiguous FreeType execution segment rather than
-by each logical text span. The first command after traversal activation, a
-non-FreeType Tile, nested traversal, or explicit native-state invalidation
-checks the sorted validation token, nesting serial, all three hook identities,
+Full validation is owned by a traversal-local safe execution segment rather
+than by each logical text span. The first command after traversal activation,
+a hard boundary, nested traversal, or explicit native-state invalidation checks
+the sorted validation token, nesting serial, all three hook identities,
 renderer/device and shader generation, atlas epoch, the sealed ring resource
-serial/upload epoch, render-target identity, and viewport identity. Adjacent
-FreeType spans reuse that result while both the local segment epoch and the
-cross-thread external-mutation epoch remain unchanged. Any external mutation
-after command compilation invalidates the remaining command table for that
-traversal; it is never accepted merely by opening a later segment.
+serial/upload epoch, render-target identity, and viewport identity. The segment
+may now cross a non-A8 stock Tile only when its pass envelope is ordinary, its
+NiTriShape special/alternate slots are the reverse-verified retail constant-
+false thunk, its renderer special-pass predicate is false, and all six
+TileShader Standard state callbacks plus its geometry binder and first-pass
+callback have classified retail semantics. After the stock call, a cheap
+bridge guard rechecks the external-mutation epoch,
+renderer/device, render-target group, and complete viewport. A successful
+instancing draw uses the same post-boundary guard. Unknown callbacks, special
+passes, non-first-pass state transitions, nested traversal, reset/generation
+changes, or any context mismatch remain hard boundaries. Adjacent commands
+reuse the full result while both the local segment epoch and the cross-thread
+external-mutation epoch remain unchanged. Any external mutation after command
+compilation invalidates the remaining command table for that traversal; it is
+never accepted merely by opening a later segment.
 
 The command path obtains render-target-group and viewport identity from
 `NiDX9Renderer`'s software mirrors, so it does not use
@@ -1685,11 +1695,15 @@ Tile traversal. Those New Vegas plugin paths therefore do not overlap PS
 c176-c183 or VS c208. Their real rendering occurs outside a native sorted
 execution segment; every traversal start clears the local constant shadow,
 while nested, reset, device/generation, and unknown external transitions
-invalidate it. A verified stock Tile transition still terminates retained
-command and sampler/pass-state reuse, but preserves the private-register shadow:
-the reverse-confirmed stock maps cannot write PS c176-c183 or VS c208. The
-cached viewport width/height is checked at that boundary and c208 alone is
-invalidated if its analytic-AA dimensions changed.
+invalidate it. A verified stock Tile transition can retain the global command
+execution proof, but it always invalidates program, sampler, stock constants,
+and geometry-binding reuse. Exact first-pass Standard callbacks allow their
+final blend, alpha-test, and drawmode outputs to be normalized back into the
+independent state keys; an unclassified callback or pass resets the complete
+device-state cache. The private-register shadow remains valid because the
+reverse-confirmed stock maps cannot write PS c176-c183 or VS c208. The cached
+viewport width/height is checked at that boundary and c208 alone is invalidated
+if its analytic-AA dimensions changed.
 
 Retained packet binding also treats
 `TileShader::SetupGeometryTextures` as the owner of VS/PS publication, as
@@ -1756,9 +1770,11 @@ VB/IB/declaration descriptor, and the standard-pass-lite dispatcher does not
 repeat the already proven binding comparison. A route without a binding proof
 retains the complete packet validator. Device reset, shader publication or
 fault, atlas mutation, ring resource replacement/discard, shape destruction,
-Virtual-stock binding invalidation, nested traversal, and every transition
-through a non-FreeType Tile advance one of the epochs. A mutation during a span
-therefore faults its next packet before drawing. A failure before any draw
+Virtual-stock binding invalidation, nested traversal, and every unclassified
+non-FreeType transition advance one of the epochs. A classified stock Tile or
+successful instancing batch instead retains the segment only after the cheap
+post-boundary context guard succeeds. A mutation during a span therefore faults
+its next packet before drawing. A failure before any draw
 re-enters the unchanged current path; after any packet reaches the driver, the
 span is marked faulted and followers are consumed without replay, preventing
 duplicate layers.
@@ -1769,9 +1785,9 @@ Virtual-stock spans/followers, arbitrary-range direct replays, legacy
 per-span-full/light/render-target validation counts, packet epoch guards,
 full packet-state validation elisions, Virtual-stock range validations and
 their packet coverage, successful execution segments, segment full
-validations/reuses/invalidations, retained-program hits/misses, and fallbacks
-by token, generation, atlas, resource, topology, hook, nesting, render target,
-and state.
+validations/reuses/invalidations, accepted stock-Tile and instancing bridges,
+rejected bridge guards, retained-program hits/misses, and fallbacks by token,
+generation, atlas, resource, topology, hook, nesting, render target, and state.
 The main performance line reports `constant_ownership_segments`, segment
 reuses/releases, and the snapshot Get and restore Set calls elided by pass
 ownership. It also reports `private_reuses`,
@@ -1798,7 +1814,9 @@ The timing line adds `command_build` and `command_submit` while preserving
 `submit`. Runtime validation should confirm nonzero `native_replays` and
 `direct_range_replays`, `span_full_validations=0`,
 `render_target_validations` tracking `segment_full_validations` rather than
-logical spans or packets, substantial `segment_validation_reuses`,
+logical spans or packets, substantial `segment_validation_reuses`, nonzero
+`stock_tile_bridges` (and `instancing_bridges` when that feature is enabled),
+normally zero `bridge_rejected`,
 `packet_epoch_guards` tracking submitted command packets,
 `packet_state_elisions` covering all proven direct/ring packets, and
 `light_validations` remaining only for exact Virtual-stock range coverage or
@@ -1860,12 +1878,18 @@ steady-state packet submissions. When fallbacks are present,
 `stock_fallbacks` equals the sum of `fallback_envelope`, `program`, `renderer`,
 `geometry`, `binding`, and `prelude`; the retained hit/miss pair distinguishes
 a missing or invalidated Tile dispatch from a dynamic pass-envelope rejection.
-The following `segment_device_state_` line reports cache starts/reuses and
-set/reuse pairs for texture/program, constants, blend, alpha-test, and drawmode
-callbacks, followed by actual slot-35 calls and verified no-op elisions.
-In a long contiguous menu run, `starts` should track execution-segment or stock
-fallback boundaries rather than one-packet replays, while nonzero category
-`reuses` directly count callbacks skipped across distinct Tiles.
+The following `segment_device_state_` line reports cache starts/reuses, accepted
+stock-Tile bridges, conservative stock resets, narrow post-instancing
+invalidations, and set/reuse pairs for texture/program, constants, blend,
+alpha-test, and drawmode callbacks, followed by actual slot-35 calls and
+verified no-op elisions. A stock bridge or instancing cleanup invalidates only
+program/constants/geometry bindings; independently proved blend, alpha-test,
+and drawmode keys survive. In a long menu run, `starts` should track traversal
+starts or genuine hard boundaries rather than one-packet replays, while
+nonzero category `reuses` directly count callbacks skipped across distinct
+Tiles. `stock_tile_resets` measures stock passes that could not retain the
+device-state head; `instancing_narrow_invalidates` should track successful
+instanced batches instead of causing a new cache start.
 `constants_reuses` proves slot 31 was skipped only for identical
 non-transient state; `post_elisions` normally covers every verified packet
 without scissor/stencil, including packets whose constants changed. Alpha-test

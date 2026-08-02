@@ -736,6 +736,13 @@ namespace fonthook::vectorfont
 				alphaTestReady = false;
 				drawmodeReady = false;
 			}
+
+			void InvalidateBindingsAndConstants()
+			{
+				passReady = false;
+				constantsReady = false;
+				geometryBindingReady = false;
+			}
 		};
 
 		thread_local NativeSegmentDeviceStateCache
@@ -802,6 +809,25 @@ namespace fonthook::vectorfont
 		void InvalidateSegmentDeviceStateCache()
 		{
 			s_segmentDeviceStateCache.Reset();
+		}
+
+		void InvalidateSegmentDeviceStateAfterInstancing(
+			bool executionSegmentRetained)
+		{
+			NativeSegmentDeviceStateCache& cache =
+				s_segmentDeviceStateCache;
+			if (!executionSegmentRetained || !cache.stampReady)
+			{
+				cache.Reset();
+				return;
+			}
+			// Indexed instancing replaces the program/declaration, VS constants,
+			// PS c0 and both stream bindings. It does not publish blend, alpha-test,
+			// cull or drawmode render states, so those independently keyed outputs
+			// remain valid across the batch cleanup.
+			cache.InvalidateBindingsAndConstants();
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				SegmentDeviceInstancingNarrowInvalidate);
 		}
 
 		bool SameSegmentPassState(
@@ -2332,6 +2358,131 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		struct NativeStockTileBoundaryBridge
+		{
+			NiTriShape* geometry = nullptr;
+			BSShader* shader = nullptr;
+			NativeA8StandardBlendSemantics blendSemantics =
+				NativeA8StandardBlendSemantics::Unknown;
+			NativeA8CommandBindState bindState;
+			bool executionEligible = false;
+			bool deviceStateEligible = false;
+		};
+
+		NativeStockTileBoundaryBridge BuildStockTileBoundaryBridge(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			bool testAlpha, bool blendAlpha, bool setupDrawmode,
+			NiTriShape* geometry)
+		{
+			NativeStockTileBoundaryBridge bridge;
+			bridge.geometry = geometry;
+			void** geometryVtable = geometry
+				? *reinterpret_cast<void***>(geometry) : nullptr;
+			if (!g_bEnableFreeTypeFontCommandBuffer || !pass || !geometry
+				|| pass->pGeometry != geometry
+				|| pass->usPassEnum != currentPass
+				|| currentPass == kForcedShaderSelectionPass
+				|| !IsDefaultNativeReplayPass(currentPass)
+				|| geometry->GetSkinInstance()
+				|| pass->ucNumLights || !geometryVtable
+				|| geometryVtable[kGeometrySpecialPredicateSlot]
+					!= reinterpret_cast<void*>(kNiGeometryFalsePredicate)
+				|| geometryVtable[kGeometryAlternatePredicateSlot]
+					!= reinterpret_cast<void*>(kNiGeometryFalsePredicate))
+			{
+				return bridge;
+			}
+
+			bridge.shader = geometry->GetShader();
+			if (!ClassifyNativeA8StockTileStandardPass(
+					bridge.shader, bridge.blendSemantics))
+			{
+				return bridge;
+			}
+			// Retail NiTriShape slots 12/13 were identity-proved above as the
+			// shared constant-false thunk. Do not execute arbitrary predicates as
+			// part of a bridge proof: a replacement could return false while still
+			// publishing untracked device state.
+			if (RendererUsesSpecialPass(geometry))
+			{
+				return bridge;
+			}
+			bridge.bindState = MakeNativeCommandBindState(
+				pass, currentPass, testAlpha, blendAlpha, setupDrawmode);
+			if (!bridge.bindState.firstPass)
+				return bridge;
+			bridge.executionEligible = true;
+			bridge.deviceStateEligible =
+				s_segmentDeviceStateCache.stampReady
+				&& *reinterpret_cast<UInt32*>(
+					kSelectedRenderPassType) == currentPass
+				&& *reinterpret_cast<BSShader**>(
+					kSelectedShader) == bridge.shader;
+			return bridge;
+		}
+
+		void ResetSegmentDeviceStateForStockTile()
+		{
+			if (s_segmentDeviceStateCache.stampReady)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					SegmentDeviceStockTileReset);
+			}
+			s_segmentDeviceStateCache.Reset();
+		}
+
+		void CompleteStockTileBoundaryBridge(
+			const NativeStockTileBoundaryBridge& bridge,
+			UInt32 currentPass, bool executionSegmentRetained)
+		{
+			NativeSegmentDeviceStateCache& cache =
+				s_segmentDeviceStateCache;
+			if (!executionSegmentRetained || !bridge.deviceStateEligible
+				|| !cache.stampReady
+				|| bridge.geometry->GetShader() != bridge.shader
+				|| *reinterpret_cast<UInt32*>(
+					kSelectedRenderPassType) != currentPass
+				|| *reinterpret_cast<BSShader**>(
+					kSelectedShader) != bridge.shader)
+			{
+				ResetSegmentDeviceStateForStockTile();
+				return;
+			}
+
+			// Exact retail/recognized Standard slots are disjoint. The stock Tile
+			// necessarily replaces texture/program, c0-c4 and geometry bindings,
+			// while blend/alpha-test/drawmode can be normalized to their final
+			// effective keys instead of discarding the complete cache head.
+			cache.InvalidateBindingsAndConstants();
+			if (bridge.bindState.applyBlend)
+			{
+				NativeSegmentBlendStateKey key;
+				cache.blendReady = BuildSegmentBlendStateKey(
+					bridge.geometry, bridge.blendSemantics, key);
+				if (cache.blendReady)
+					cache.blend = key;
+			}
+			if (bridge.bindState.applyAlphaTest)
+			{
+				NativeSegmentAlphaTestStateKey key;
+				cache.alphaTestReady = BuildSegmentAlphaTestStateKey(
+					bridge.geometry, key);
+				if (cache.alphaTestReady)
+					cache.alphaTest = key;
+			}
+			if (bridge.bindState.applyDrawmode)
+			{
+				NativeSegmentDrawmodeStateKey key;
+				cache.drawmodeReady = BuildSegmentDrawmodeStateKey(
+					bridge.geometry, currentPass,
+					bridge.bindState.firstPass, key);
+				if (cache.drawmodeReady)
+					cache.drawmode = key;
+			}
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				SegmentDeviceStockTileBridge);
+		}
+
 		bool CanUseStandardPassLiteEnvelope(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			NiTriShape* geometry, const NativeA8DrawCommand& command,
@@ -3067,8 +3218,7 @@ namespace fonthook::vectorfont
 				&& s_nativeCrossTextBatchRuntime->attempted;
 			if (instancingAttempted && deviceState)
 			{
-				deviceState->InvalidateStates();
-				deviceState->geometryBindingReady = false;
+				deviceState->InvalidateBindingsAndConstants();
 			}
 			if (instancingAttempted && !instancedDrawSucceeded)
 			{
@@ -5503,10 +5653,11 @@ namespace fonthook::vectorfont
 				m_runtime.view, success);
 			if (success)
 			{
-				InvalidateSegmentDeviceStateCache();
-				InvalidateNativeA8SortedShaderState();
-				InvalidateNativeA8CommandExecutionSegment(
-					NativeA8CommandFallback::State);
+				const bool executionSegmentRetained =
+					PreserveNativeA8CommandExecutionSegmentAfterInstancing();
+				InvalidateSegmentDeviceStateAfterInstancing(
+					executionSegmentRetained);
+				InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
 			}
 		}
 
@@ -5545,13 +5696,23 @@ namespace fonthook::vectorfont
 			? reinterpret_cast<NiTriShape*>(pass->pGeometry) : nullptr;
 		if (!IsA8AtlasShape(shape))
 		{
+			const NativeStockTileBoundaryBridge stockBridge =
+				BuildStockTileBoundaryBridge(pass, currentPass,
+					testAlpha, blendAlpha, setupDrawmode, shape);
 			if (s_constantOwnershipBatch.FrameActive())
 				ReleaseNativeConstantOwnershipBatch("before-stock-tile");
-			InvalidateSegmentDeviceStateCache();
-			AdvanceNativeA8SortedShaderStateAcrossStockTile();
+			if (!stockBridge.executionEligible)
+				ResetSegmentDeviceStateForStockTile();
+			AdvanceNativeA8SortedShaderStateAcrossStockTile(
+				stockBridge.executionEligible);
 			state.originalRenderPassImmediately(pass, currentPass, testAlpha,
 				blendAlpha, setupDrawmode);
 			ValidateNativeA8SortedShaderStateAfterStockTile();
+			if (stockBridge.executionEligible)
+			{
+				CompleteStockTileBoundaryBridge(stockBridge, currentPass,
+					PreserveNativeA8CommandExecutionSegmentAcrossStockTile());
+			}
 			return;
 		}
 
