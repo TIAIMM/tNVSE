@@ -645,8 +645,8 @@ namespace fonthook::vectorfont
 			bool alphaTestEnabled = false;
 		};
 
-		// Slot 31 can be retained only when none of its paired transient states
-		// needs slot-35 restoration. The key intentionally stores the exact
+		// Slot 31's constant prefix can be retained independently of its paired
+		// transient suffix. The key intentionally stores the exact
 		// stock inputs rather than derived WVP/color values: identical inputs
 		// preserve both the constant-map output and SetModelTransform's renderer
 		// mirror side effects without doing floating-point work in the hot path.
@@ -836,15 +836,6 @@ namespace fonthook::vectorfont
 				geometry->GetStencilProperty();
 			cleanupRequired = tile->useScissorTest
 				|| (stencil && stencil->IsEnabled());
-			if (cleanupRequired)
-			{
-				// Stock slot 31 pushes scissor/stencil enable state and slot 35
-				// restores it. Repeating slot 31 without that paired restore
-				// would nest the render-state stack, so transient packets stay
-				// on the exact stock pair until NativeTileConstantsLite exists.
-				return false;
-			}
-
 			const NiMaterialProperty* material =
 				geometry->GetMaterialProperty();
 			key.program = command.program;
@@ -865,42 +856,181 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool SameSegmentConstantsState(
+		enum class NativeSegmentConstantsStateRelation : UInt8
+		{
+			Different = 0,
+			Exact,
+			TranslationOnly
+		};
+
+		NativeSegmentConstantsStateRelation CompareSegmentConstantsState(
 			const NativeSegmentConstantsStateKey& left,
 			const NativeSegmentConstantsStateKey& right)
 		{
-			return left.program == right.program
-				&& left.rotates == right.rotates
-				&& std::memcmp(&left.world, &right.world,
-					sizeof(left.world)) == 0
-				&& std::memcmp(&left.view, &right.view,
-					sizeof(left.view)) == 0
-				&& std::memcmp(&left.projection, &right.projection,
-					sizeof(left.projection)) == 0
-				&& std::memcmp(&left.viewProjection,
-					&right.viewProjection,
-					sizeof(left.viewProjection)) == 0
-				&& std::memcmp(&left.cameraRight,
-					&right.cameraRight,
-					sizeof(left.cameraRight)) == 0
-				&& std::memcmp(&left.cameraUp, &right.cameraUp,
-					sizeof(left.cameraUp)) == 0
-				&& std::memcmp(&left.overlayColor,
-					&right.overlayColor,
-					sizeof(left.overlayColor)) == 0
-				&& (!left.rotates
-					|| std::memcmp(&left.textureTransform,
-						&right.textureTransform,
-						sizeof(left.textureTransform)) == 0)
-				&& std::memcmp(&left.tileAlpha, &right.tileAlpha,
-					sizeof(left.tileAlpha)) == 0
-				&& std::memcmp(&left.materialAlpha,
-					&right.materialAlpha,
-					sizeof(left.materialAlpha)) == 0
-				&& std::memcmp(&left.nearDepth, &right.nearDepth,
-					sizeof(left.nearDepth)) == 0
-				&& std::memcmp(&left.depthRange, &right.depthRange,
-					sizeof(left.depthRange)) == 0;
+			// Preserve the original short-circuit order and record exactly one
+			// diagnostic per failed comparison. This identifies the first field
+			// blocking reuse. Translation-only world changes continue through the
+			// remaining fields because the light path must prove that no later input
+			// changed, but they retain world as the first-mismatch diagnostic.
+			if (left.program != right.program)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchProgram);
+				return NativeSegmentConstantsStateRelation::Different;
+			}
+			if (left.rotates != right.rotates)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchRotates);
+				return NativeSegmentConstantsStateRelation::Different;
+			}
+			bool translationOnly = false;
+			if (std::memcmp(&left.world, &right.world,
+				sizeof(left.world)) != 0)
+			{
+				// Classify the complete transform with one counter write. The
+				// seven buckets retain overlap information while avoiding as many
+				// as three relaxed atomic increments for one failed key comparison.
+				UInt8 mismatchMask = 0;
+				if (std::memcmp(&left.world.m_Rotate,
+					&right.world.m_Rotate,
+					sizeof(left.world.m_Rotate)) != 0)
+				{
+					mismatchMask |= 1u;
+				}
+				if (std::memcmp(&left.world.m_Translate,
+					&right.world.m_Translate,
+					sizeof(left.world.m_Translate)) != 0)
+				{
+					mismatchMask |= 2u;
+				}
+				if (std::memcmp(&left.world.m_fScale,
+					&right.world.m_fScale,
+					sizeof(left.world.m_fScale)) != 0)
+				{
+					mismatchMask |= 4u;
+				}
+				switch (mismatchMask)
+				{
+				case 1u:
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SegmentDeviceConstantsWorldMismatchRotationOnly);
+					break;
+				case 2u:
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SegmentDeviceConstantsWorldMismatchTranslationOnly);
+					break;
+				case 3u:
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SegmentDeviceConstantsWorldMismatchRotationTranslation);
+					break;
+				case 4u:
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SegmentDeviceConstantsWorldMismatchScaleOnly);
+					break;
+				case 5u:
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SegmentDeviceConstantsWorldMismatchRotationScale);
+					break;
+				case 6u:
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SegmentDeviceConstantsWorldMismatchTranslationScale);
+					break;
+				case 7u:
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SegmentDeviceConstantsWorldMismatchRotationTranslationScale);
+					break;
+				default:
+					// NiTransform is currently the exact concatenation of these
+					// three fields. Keep a conservative diagnostic bucket if that
+					// representation ever changes.
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SegmentDeviceConstantsFirstMismatchWorld);
+					break;
+				}
+				if (mismatchMask != 2u)
+					return NativeSegmentConstantsStateRelation::Different;
+				translationOnly = true;
+			}
+			const auto rejectLater = [translationOnly](
+				FreeTypePerfCounter counter)
+			{
+				if (!translationOnly)
+					RecordFreeTypePerf(counter);
+				return NativeSegmentConstantsStateRelation::Different;
+			};
+			if (std::memcmp(&left.view, &right.view,
+				sizeof(left.view)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchView);
+			}
+			if (std::memcmp(&left.projection, &right.projection,
+				sizeof(left.projection)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchProjection);
+			}
+			if (std::memcmp(&left.viewProjection,
+				&right.viewProjection,
+				sizeof(left.viewProjection)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchViewProjection);
+			}
+			if (std::memcmp(&left.cameraRight, &right.cameraRight,
+				sizeof(left.cameraRight)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchCameraRight);
+			}
+			if (std::memcmp(&left.cameraUp, &right.cameraUp,
+				sizeof(left.cameraUp)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchCameraUp);
+			}
+			if (std::memcmp(&left.overlayColor, &right.overlayColor,
+				sizeof(left.overlayColor)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchOverlayColor);
+			}
+			if (left.rotates
+				&& std::memcmp(&left.textureTransform,
+					&right.textureTransform,
+					sizeof(left.textureTransform)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchTextureTransform);
+			}
+			if (std::memcmp(&left.tileAlpha, &right.tileAlpha,
+				sizeof(left.tileAlpha)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchTileAlpha);
+			}
+			if (std::memcmp(&left.materialAlpha, &right.materialAlpha,
+				sizeof(left.materialAlpha)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchMaterialAlpha);
+			}
+			if (std::memcmp(&left.nearDepth, &right.nearDepth,
+				sizeof(left.nearDepth)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchNearDepth);
+			}
+			if (std::memcmp(&left.depthRange, &right.depthRange,
+				sizeof(left.depthRange)) != 0)
+			{
+				return rejectLater(FreeTypePerfCounter::
+					SegmentDeviceConstantsFirstMismatchDepthRange);
+			}
+			return translationOnly
+				? NativeSegmentConstantsStateRelation::TranslationOnly
+				: NativeSegmentConstantsStateRelation::Exact;
 		}
 
 		bool BuildSegmentBlendStateKey(NiTriShape* geometry,
@@ -2149,12 +2279,94 @@ namespace fonthook::vectorfont
 				&& BuildSegmentConstantsStateKey(
 					geometry, renderer, command,
 					constantsState, cleanupRequired);
-			const bool constantsStateReady =
+			const NativeSegmentConstantsStateRelation constantsRelation =
 				deviceState && constantsKeyReady
-				&& deviceState->constantsReady
-				&& SameSegmentConstantsState(
-					deviceState->constants, constantsState);
-			if (constantsStateReady)
+					&& deviceState->constantsReady
+				? CompareSegmentConstantsState(
+					deviceState->constants, constantsState)
+				: NativeSegmentConstantsStateRelation::Different;
+			const bool constantsStateReady = constantsRelation
+				== NativeSegmentConstantsStateRelation::Exact;
+			bool constantsLiteApplied = false;
+			if (constantsStateReady && cleanupRequired)
+			{
+				const NativeTileConstantsLiteResult liteResult =
+					ApplyNativeTileConstantsLite(geometry, properties);
+				constantsLiteApplied = liteResult
+					== NativeTileConstantsLiteResult::Applied;
+				if (constantsLiteApplied)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::NativeTileConstantsLiteReplay);
+				}
+				else
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::NativeTileConstantsLiteFallback);
+					if (liteResult
+						== NativeTileConstantsLiteResult::ScaledScissor)
+					{
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							NativeTileConstantsLiteScaledScissorFallback);
+					}
+				}
+			}
+			bool constantsTranslationLiteApplied = false;
+			if (constantsRelation
+				== NativeSegmentConstantsStateRelation::TranslationOnly)
+			{
+				const NativeTileConstantsTranslationLiteResult liteResult =
+					ApplyNativeTileConstantsTranslationLite(
+						geometry, properties, renderer, program.device);
+				constantsTranslationLiteApplied = liteResult
+					== NativeTileConstantsTranslationLiteResult::Applied
+					|| liteResult
+						== NativeTileConstantsTranslationLiteResult::
+							AppliedTransient;
+				if (constantsTranslationLiteApplied)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						NativeTileConstantsTranslationLiteReplay);
+					if (liteResult
+						== NativeTileConstantsTranslationLiteResult::
+							AppliedTransient)
+					{
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							NativeTileConstantsTranslationLiteTransientReplay);
+					}
+				}
+				else
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						NativeTileConstantsTranslationLiteFallback);
+					switch (liteResult)
+					{
+					case NativeTileConstantsTranslationLiteResult::
+						NotApplicable:
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							NativeTileConstantsTranslationLiteNotApplicableFallback);
+						break;
+					case NativeTileConstantsTranslationLiteResult::
+						ScaledScissor:
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							NativeTileConstantsTranslationLiteScaledScissorFallback);
+						break;
+					case NativeTileConstantsTranslationLiteResult::NonFinite:
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							NativeTileConstantsTranslationLiteNonFiniteFallback);
+						break;
+					case NativeTileConstantsTranslationLiteResult::DeviceFailure:
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							NativeTileConstantsTranslationLiteDeviceFailure);
+						break;
+					default:
+						break;
+					}
+				}
+			}
+			if ((constantsStateReady && (!cleanupRequired
+				|| constantsLiteApplied))
+				|| constantsTranslationLiteApplied)
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::
@@ -5282,7 +5494,7 @@ namespace fonthook::vectorfont
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: RenderPassImmediately_Standard-lite predicate-envelope validated=%u special=%p alternate=%p expected=%p segmentState=independent-effective-v7 slot34=vendor-atoc-independent standardV2=classified-slot-delta slot31=stable-no-transient slot35=need-only",
+				"tnvse_freetype_native: RenderPassImmediately_Standard-lite predicate-envelope validated=%u special=%p alternate=%p expected=%p segmentState=independent-effective-v11 slot34=vendor-atoc-independent standardV2=classified-slot-delta slot31=constants-key+native-lite-transient+translation-lite-c0-c3+mismatch-first-field+world-mask slot35=need-only",
 				state.standardPassLitePredicatesValidated ? 1u : 0u,
 				source[kGeometrySpecialPredicateSlot],
 				source[kGeometryAlternatePredicateSlot],

@@ -18,6 +18,9 @@ configuration, dependency checks, globals, and native-call helpers stay at the
     sealed-profile construction live in `font_atlas_direct_cache.cpp` and
     `font_atlas_direct_build.cpp`.
   - `native`: native shader packets, rings, accumulation, and fallback.
+    `font_native_tile_constants.cpp` owns the reverse-verified Tile slot-31
+    transient-tail specialization and the translation-only VS c0-c3 update
+    used after exact retained-constant proofs.
   - `vector`: FreeType configuration, direct encoded-unit layout, rasterization, and caches.
     Persistent-cache route and flush orchestration stays in
     `font_vector_persistent_cache.cpp`; bitmap records and glyph manifests are

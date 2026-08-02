@@ -1449,6 +1449,35 @@ including the simple Coverage/ARGB path. If another plugin replaces slot 31,
 the proof no longer applies and the wrapper retains the explicit c0
 publication as a compatibility path.
 
+The Standard-v2 state cache also treats slot 31's constant prefix separately
+from its transient suffix. The official PC implementation at `0xBCA980` and
+the symbolized test implementation of `TileShader::SetupGeometryConstants`
+agree that model/constant publication finishes before scissor and stencil are
+enabled; both `PostGeometry` implementations restore only those two transient
+states. Once an execution segment proves the complete transform, camera,
+Tile/material alpha, texture-transform, and native-program key unchanged,
+`NativeTileConstantsLite` skips the constant-map prefix and replays only the
+same retail render-state entry points before the draw. Slot 35 still runs and
+remains exactly paired. Resolution-scaled scissor is deliberately outside this
+proof and falls back to the complete stock slot 31/35 pair.
+
+A second specialization admits a world-translation-only delta after proving
+the program, rotation, scale, view/projection and camera state, Tile/material
+color and alpha, texture transform, depth inputs, device, render target, and
+mutation epochs unchanged. Formal PC `BCA980` calls `E6FBB0`, whose render-state
+callback depends only on scale and whose model-camera updates depend only on
+rotation and scale. The symbolized test implementation independently shows
+`SetModelTransform` publishing the same D3D world matrix before the same two
+constant maps. The translation path therefore rebuilds the complete retail
+world mirror, preserves the exact `(W * View) * Projection` association and
+transpose, and directly publishes only `WorldViewProjTranspose` at VS c0-c3.
+It leaves the proved-resident TexScroll c4, pixel tint c0, model-camera vectors,
+normal-normalization state, and private native registers untouched. Optional
+scissor/stencil state is then installed through the same suffix helpers and
+remains paired with slot 35. Non-finite input, device failure, unknown identity,
+or resolution-scaled scissor conservatively re-enters the complete slot 31/35
+path before drawing.
+
 The high-register ABI was also checked against common shader plugins.
 NewVegas Reloaded's explicit New Vegas ranges end at c145, its D3D9 device
 proxy forwards constant writes unchanged, and a separately compiled
@@ -1584,8 +1613,33 @@ logical spans or packets, substantial `segment_validation_reuses`,
 unproven compatibility paths. Unexpected fallbacks must remain zero, and
 `stock_constant_updates` should not exceed the logical-span count; Standard v2
 may reduce it further by exactly `constants_reuses`, without visual or runtime
-faults. Build success alone does not establish runtime correctness or the
-CPU-performance thresholds.
+faults. `constants_lite_replays` is the subset of those reuses that still had
+to install scissor or stencil state; it should remain paired with
+`post_calls`. `constants_lite_fallbacks` should be zero unless the retained
+proof becomes inapplicable, while `constants_lite_scaled_fallbacks` identifies
+the intentionally stock-only resolution-scaled scissor case. Build success
+alone does not establish runtime correctness or the CPU-performance thresholds.
+The following `tnvse_freetype_constants_mismatch` line classifies exactly the
+first differing field in the existing short-circuit order for every non-exact
+constant-key comparison. Fields after the first mismatch are normally not
+evaluated or counted, which keeps the diagnostic to at most one relaxed counter
+increment per failed hot-path check. Translation-only world changes are the
+deliberate exception: later fields are compared to prove the light path, but
+world remains the sole first-mismatch counter.
+When `world` is that first mismatch, the adjacent
+`tnvse_freetype_constants_world_mismatch` line decomposes it into rotation,
+translation, and scale. Seven mutually exclusive bit-mask buckets preserve
+which components changed together; their sum is `total`, while the three
+component totals may overlap. Classification still performs only one relaxed
+counter increment per failed world comparison. `unclassified` is a conservative
+representation-change guard and should remain zero.
+`tnvse_freetype_constants_translation_lite` reports successful direct c0-c3
+replays, the subset that also installed transient state, and categorized
+fallbacks. `replays + fallbacks` is the number of fully proved translation-only
+relations; every fallback must execute the complete stock/native slot before
+the draw. In a healthy finite run, fallback causes should remain zero and the
+replay count should account for most `translation_only` mismatches that were
+not separated by another later-key change.
 
 The command-build diagnostic additionally reports `tile_retained_builds`,
 `refreshes`, `hits`, `misses`, and `packet_reuses`. After a menu reaches steady

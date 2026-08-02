@@ -565,6 +565,40 @@ namespace fonthook::vectorfont
 		bool ready = false;
 	};
 
+	// A reverse-verified specialization of TileShader slot 31. It is eligible
+	// only after the caller has proved that the complete stock/native constant
+	// input key is already resident. The implementation therefore replays only
+	// the scissor/stencil suffix which slot 35 must subsequently restore.
+	enum class NativeTileConstantsLiteResult : UInt8
+	{
+		Applied = 0,
+		NotApplicable,
+		ScaledScissor
+	};
+
+	NativeTileConstantsLiteResult ApplyNativeTileConstantsLite(
+		const NiTriShape* geometry, const NiPropertyState* properties);
+
+	// Translation-only specialization of the same verified retail slot. The
+	// caller must prove every other slot-31 input unchanged. It republishes the
+	// renderer world mirror and WorldViewProjTranspose at VS c0-c3, then applies
+	// the same optional transient suffix as NativeTileConstantsLite.
+	enum class NativeTileConstantsTranslationLiteResult : UInt8
+	{
+		Applied = 0,
+		AppliedTransient,
+		NotApplicable,
+		ScaledScissor,
+		NonFinite,
+		DeviceFailure
+	};
+
+	NativeTileConstantsTranslationLiteResult
+		ApplyNativeTileConstantsTranslationLite(
+			const NiTriShape* geometry,
+			const NiPropertyState* properties,
+			NiDX9Renderer* renderer, IDirect3DDevice9* device);
+
 	struct NativeA8DrawCommand
 	{
 		NiTriShape* sourceGeometry = nullptr;

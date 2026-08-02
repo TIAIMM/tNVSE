@@ -765,7 +765,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteFallbackPrelude)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
+			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu constants_lite_replays=%llu constants_lite_fallbacks=%llu constants_lite_scaled_fallbacks=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceStateStart)],
 			values[static_cast<size_t>(
@@ -778,6 +778,12 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::SegmentDeviceConstantsSet)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceConstantsReuse)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::NativeTileConstantsLiteReplay)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::NativeTileConstantsLiteFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeTileConstantsLiteScaledScissorFallback)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceBlendSet)],
 			values[static_cast<size_t>(
@@ -794,6 +800,127 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::SegmentDevicePostSet)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDevicePostElision)]);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_constants_translation_lite: replays=%llu transient_replays=%llu fallbacks=%llu not_applicable=%llu scaled_scissor=%llu nonfinite=%llu device_failure=%llu",
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeTileConstantsTranslationLiteReplay)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeTileConstantsTranslationLiteTransientReplay)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeTileConstantsTranslationLiteFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeTileConstantsTranslationLiteNotApplicableFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeTileConstantsTranslationLiteScaledScissorFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeTileConstantsTranslationLiteNonFiniteFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				NativeTileConstantsTranslationLiteDeviceFailure)]);
+		const auto counterValue = [&values](FreeTypePerfCounter counter)
+		{
+			return values[static_cast<size_t>(counter)];
+		};
+		const UInt64 worldRotationOnly = counterValue(
+			FreeTypePerfCounter::
+				SegmentDeviceConstantsWorldMismatchRotationOnly);
+		const UInt64 worldTranslationOnly = counterValue(
+			FreeTypePerfCounter::
+				SegmentDeviceConstantsWorldMismatchTranslationOnly);
+		const UInt64 worldScaleOnly = counterValue(
+			FreeTypePerfCounter::
+				SegmentDeviceConstantsWorldMismatchScaleOnly);
+		const UInt64 worldRotationTranslation = counterValue(
+			FreeTypePerfCounter::
+				SegmentDeviceConstantsWorldMismatchRotationTranslation);
+		const UInt64 worldRotationScale = counterValue(
+			FreeTypePerfCounter::
+				SegmentDeviceConstantsWorldMismatchRotationScale);
+		const UInt64 worldTranslationScale = counterValue(
+			FreeTypePerfCounter::
+				SegmentDeviceConstantsWorldMismatchTranslationScale);
+		const UInt64 worldRotationTranslationScale = counterValue(
+			FreeTypePerfCounter::
+				SegmentDeviceConstantsWorldMismatchRotationTranslationScale);
+		const UInt64 worldUnclassified = counterValue(
+			FreeTypePerfCounter::SegmentDeviceConstantsFirstMismatchWorld);
+		const UInt64 worldMismatchTotal = worldRotationOnly
+			+ worldTranslationOnly + worldScaleOnly
+			+ worldRotationTranslation + worldRotationScale
+			+ worldTranslationScale + worldRotationTranslationScale
+			+ worldUnclassified;
+		const UInt64 worldRotation = worldRotationOnly
+			+ worldRotationTranslation + worldRotationScale
+			+ worldRotationTranslationScale;
+		const UInt64 worldTranslation = worldTranslationOnly
+			+ worldRotationTranslation + worldTranslationScale
+			+ worldRotationTranslationScale;
+		const UInt64 worldScale = worldScaleOnly + worldRotationScale
+			+ worldTranslationScale + worldRotationTranslationScale;
+		const UInt64 constantsFirstMismatchTotal =
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchProgram)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchRotates)
+			+ worldMismatchTotal
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchView)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchProjection)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchViewProjection)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchCameraRight)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchCameraUp)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchOverlayColor)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchTextureTransform)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchTileAlpha)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchMaterialAlpha)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchNearDepth)
+			+ counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchDepthRange);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_constants_mismatch: total=%llu program=%llu rotates=%llu world=%llu view=%llu projection=%llu view_projection=%llu camera_right=%llu camera_up=%llu overlay_color=%llu texture_transform=%llu tile_alpha=%llu material_alpha=%llu near_depth=%llu depth_range=%llu",
+			constantsFirstMismatchTotal,
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchProgram),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchRotates),
+			worldMismatchTotal,
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchView),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchProjection),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchViewProjection),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchCameraRight),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchCameraUp),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchOverlayColor),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchTextureTransform),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchTileAlpha),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchMaterialAlpha),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchNearDepth),
+			counterValue(FreeTypePerfCounter::
+				SegmentDeviceConstantsFirstMismatchDepthRange));
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_constants_world_mismatch: total=%llu rotation=%llu translation=%llu scale=%llu rotation_only=%llu translation_only=%llu scale_only=%llu rotation_translation=%llu rotation_scale=%llu translation_scale=%llu rotation_translation_scale=%llu unclassified=%llu",
+			worldMismatchTotal, worldRotation, worldTranslation, worldScale,
+			worldRotationOnly, worldTranslationOnly, worldScaleOnly,
+			worldRotationTranslation, worldRotationScale,
+			worldTranslationScale, worldRotationTranslationScale,
+			worldUnclassified);
 		const DurationSummary layout =
 			ConsumeDurationSummary(FreeTypePerfPhase::Layout);
 		const DurationSummary sidecar =
