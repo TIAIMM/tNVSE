@@ -19,11 +19,18 @@ namespace fonthook::vectorfont
 		constexpr size_t kPhaseCount =
 			static_cast<size_t>(FreeTypePerfPhase::Count);
 		constexpr size_t kDurationBuckets = 64;
+		constexpr size_t kInstancingSizeBuckets = 32;
 		struct PerformanceState
 		{
 			std::array<std::atomic<UInt64>, kCounterCount> counters = {};
 			std::array<std::array<std::atomic<UInt64>,
 				kDurationBuckets>, kPhaseCount> durations = {};
+			std::array<std::atomic<UInt64>, kInstancingSizeBuckets>
+				instancingTextSizes = {};
+			std::array<std::atomic<UInt64>, kInstancingSizeBuckets>
+				instancingInstanceSizes = {};
+			std::atomic<UInt64> instancingTextMax = 0;
+			std::atomic<UInt64> instancingInstanceMax = 0;
 			ULONGLONG lastReport = 0;
 		};
 
@@ -121,6 +128,66 @@ namespace fonthook::vectorfont
 			result.p95Microseconds = quantile(95, 100);
 			return result;
 		}
+
+		struct SizeSummary
+		{
+			UInt64 count = 0;
+			UInt64 median = 0;
+			UInt64 p95 = 0;
+			UInt64 maximum = 0;
+		};
+
+		size_t SizeBucket(UInt32 value)
+		{
+			size_t bucket = 0;
+			UInt64 upper = 1;
+			while (upper < value
+				&& bucket + 1 < kInstancingSizeBuckets)
+			{
+				upper <<= 1;
+				++bucket;
+			}
+			return bucket;
+		}
+
+		SizeSummary ConsumeSizeSummary(
+			std::array<std::atomic<UInt64>, kInstancingSizeBuckets>& source,
+			std::atomic<UInt64>& maximum)
+		{
+			std::array<UInt64, kInstancingSizeBuckets> values = {};
+			SizeSummary result;
+			result.maximum = maximum.exchange(0, std::memory_order_relaxed);
+			for (size_t bucket = 0; bucket < values.size(); ++bucket)
+			{
+				values[bucket] = source[bucket].exchange(
+					0, std::memory_order_relaxed);
+				result.count += values[bucket];
+			}
+			if (!result.count)
+				return result;
+			auto quantile = [&](UInt64 numerator)
+			{
+				const UInt64 target = std::max<UInt64>(1,
+					(result.count * numerator + 99u) / 100u);
+				UInt64 cumulative = 0;
+				for (size_t bucket = 0; bucket < values.size(); ++bucket)
+				{
+					cumulative += values[bucket];
+					if (cumulative >= target)
+						return UInt64{ 1 } << bucket;
+				}
+				return UInt64{ 1 }
+					<< (kInstancingSizeBuckets - 1u);
+			};
+			result.median = quantile(50);
+			result.p95 = quantile(95);
+			// The histogram stores power-of-two upper bounds while maximum is
+			// exact. Clamp the displayed quantiles so a six-text sample cannot be
+			// reported as median=8/max=6.
+			result.median = std::min(result.median, result.maximum);
+			result.p95 = std::min(result.p95, result.maximum);
+			return result;
+		}
 	}
 
 	FreeTypePerfScope::FreeTypePerfScope(
@@ -158,19 +225,50 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	void ReportFreeTypePerf()
+	void RecordFreeTypeGlyphInstancingBatchSize(
+		UInt32 textCount, UInt32 instanceCount)
+	{
+		if (!g_bEnableFreeTypeFontRenderingLog
+			|| !textCount || !instanceCount)
+		{
+			return;
+		}
+		PerformanceState& state = GetPerformanceState();
+		state.instancingTextSizes[SizeBucket(textCount)].fetch_add(
+			1, std::memory_order_relaxed);
+		state.instancingInstanceSizes[SizeBucket(instanceCount)].fetch_add(
+			1, std::memory_order_relaxed);
+		auto updateMaximum = [](std::atomic<UInt64>& target, UInt64 value)
+		{
+			UInt64 current = target.load(std::memory_order_relaxed);
+			while (current < value
+				&& !target.compare_exchange_weak(current, value,
+					std::memory_order_relaxed,
+					std::memory_order_relaxed))
+			{
+			}
+		};
+		updateMaximum(state.instancingTextMax, textCount);
+		updateMaximum(state.instancingInstanceMax, instanceCount);
+	}
+
+	void ReportFreeTypePerf(bool force)
 	{
 		if (!g_bEnableFreeTypeFontRenderingLog)
 			return;
 		const ULONGLONG now = GetTickCount64();
 		PerformanceState& state = GetPerformanceState();
-		if (state.lastReport && now - state.lastReport < 10000)
+		if (!force && state.lastReport && now - state.lastReport < 10000)
 			return;
 		state.lastReport = now;
 		std::array<UInt64, kCounterCount> values = {};
 		for (size_t i = 0; i < values.size(); ++i)
 			values[i] = state.counters[i].exchange(
 				0, std::memory_order_relaxed);
+		const SizeSummary instancingTextSizes = ConsumeSizeSummary(
+			state.instancingTextSizes, state.instancingTextMax);
+		const SizeSummary instancingInstanceSizes = ConsumeSizeSummary(
+			state.instancingInstanceSizes, state.instancingInstanceMax);
 		const UInt64 stockConstantUpdates =
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StockConstantUpdate)];
@@ -791,6 +889,50 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				NativeDirectDrawLiteDrawDeviceFailure)]);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_glyph_instancing: candidates=%llu accepted_batches=%llu texts=%llu instances=%llu draws=%llu draws_saved=%llu upload_bytes=%llu buffer_growth=%llu discards=%llu fallback_depth=%llu state=%llu scissor=%llu topology=%llu budget=%llu frequency_sets=%llu frequency_resets=%llu binding_failures=%llu constant_failures=%llu draw_failures=%llu device_failures=%llu followers_consumed=%llu state_proofs=%llu proof_failures=%llu restore_failures=%llu begin_fallbacks=%llu begin_contract=%llu begin_pass=%llu begin_callback=%llu begin_resource=%llu begin_immutable=%llu begin_transient=%llu begin_upload=%llu begin_follower=%llu arm_fallbacks=%llu validation_fallbacks=%llu direct_draw_fallbacks=%llu text_median=%llu text_p95=%llu text_max=%llu instance_median=%llu instance_p95=%llu instance_max=%llu",
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingCandidate)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingAcceptedBatch)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingAcceptedText)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingInstance)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDraw)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDrawSaved)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingUploadByte)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBufferGrowth)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDiscard)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDepthFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingStateFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingScissorFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingTopologyFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBudgetFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingStreamFrequencySet)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingStreamFrequencyReset)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBindingFailure)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingConstantFailure)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDrawFailure)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDeviceFailure)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingFollowerConsumed)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingStateProof)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingStateProofFailure)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingRestoreFailure)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginContractFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginPassFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginCallbackFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginResourceFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginImmutableFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginTransientFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginUploadFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginFollowerFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingArmFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingValidationFallback)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDirectDrawFallback)],
+			instancingTextSizes.median,
+			instancingTextSizes.p95,
+			instancingTextSizes.maximum,
+			instancingInstanceSizes.median,
+			instancingInstanceSizes.p95,
+			instancingInstanceSizes.maximum);
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu constants_lite_replays=%llu constants_lite_fallbacks=%llu constants_lite_scaled_fallbacks=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceStateStart)],
@@ -1109,6 +1251,11 @@ namespace fonthook
 
 	void PumpFreeTypeFontPerformance()
 	{
-		vectorfont::ReportFreeTypePerf();
+		vectorfont::ReportFreeTypePerf(false);
+	}
+
+	void ReportFreeTypeFontPerformanceNow()
+	{
+		vectorfont::ReportFreeTypePerf(true);
 	}
 }

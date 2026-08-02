@@ -2,6 +2,7 @@
 
 #include "BSShaderProperty.hpp"
 #include "NiDX9Renderer.hpp"
+#include "NiMaterialProperty.hpp"
 #include "NiPropertyState.hpp"
 #include "NiStencilProperty.hpp"
 #include "NiTriShape.hpp"
@@ -33,7 +34,10 @@ namespace fonthook::vectorfont
 		// refuse the Lite path if the property identity is not exact.
 		struct TileConstantsLitePropertyView : BSShaderProperty
 		{
-			std::array<UInt8, 0x3C> beforeScissor;
+			std::array<UInt8, 0x08> beforeOverlay;
+			NiColorA overlayColor;
+			float tileAlpha = 1.0f;
+			std::array<UInt8, 0x20> beforeScissor;
 			RECT scissorRect = {};
 			bool useScissorTest = false;
 			std::array<UInt8, 3> tail;
@@ -41,6 +45,10 @@ namespace fonthook::vectorfont
 
 		static_assert(sizeof(BSShaderProperty) == 0x60);
 		static_assert(sizeof(TileConstantsLitePropertyView) == 0xB0);
+		static_assert(offsetof(
+			TileConstantsLitePropertyView, overlayColor) == 0x68);
+		static_assert(offsetof(
+			TileConstantsLitePropertyView, tileAlpha) == 0x78);
 		static_assert(offsetof(
 			TileConstantsLitePropertyView, scissorRect) == 0x9C);
 		static_assert(offsetof(
@@ -141,7 +149,14 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			world = {};
+			// D3DXMATRIX has a user-provided default constructor, so `world = {}`
+			// does not zero its float storage. Retail GetD3DFromNi (B71A40)
+			// explicitly publishes the affine column as zero; leaving these three
+			// entries untouched feeds stack garbage into W * View * Projection and
+			// can stretch otherwise valid glyph quads across the render target.
+			world._14 = 0.0f;
+			world._24 = 0.0f;
+			world._34 = 0.0f;
 			for (UInt32 row = 0; row < 3; ++row)
 			{
 				for (UInt32 column = 0; column < 3; ++column)
@@ -163,6 +178,119 @@ namespace fonthook::vectorfont
 			world.m[3][3] = 1.0f;
 			return IsFiniteMatrix(world);
 		}
+
+		bool BuildRetailWorldViewProjection(const NiTransform& transform,
+			const NiDX9Renderer& renderer, D3DXMATRIX& world,
+			D3DXMATRIX& worldViewProjectionTranspose)
+		{
+			if (!BuildRetailWorldMatrix(transform, world)
+				|| !IsFiniteMatrix(renderer.m_kD3DView)
+				|| !IsFiniteMatrix(renderer.m_kD3DProj))
+			{
+				return false;
+			}
+			D3DXMATRIX worldView = {};
+			D3DXMATRIX worldViewProjection = {};
+			D3DXMatrixMultiply(
+				&worldView, &world, &renderer.m_kD3DView);
+			D3DXMatrixMultiply(&worldViewProjection,
+				&worldView, &renderer.m_kD3DProj);
+			D3DXMatrixTranspose(&worldViewProjectionTranspose,
+				&worldViewProjection);
+			return IsFiniteMatrix(worldViewProjectionTranspose);
+		}
+	}
+
+	void ApplyNativeA8GeometryOrigin(NiTransform& destination,
+		const NiTransform& source, const NiPoint3& origin)
+	{
+		destination = source;
+		if (origin.x != 0.0f || origin.y != 0.0f || origin.z != 0.0f)
+			destination.m_Translate = source * origin;
+	}
+
+	NativeTileInstancingSnapshotResult
+		BuildNativeTileInstancingSnapshotForWorld(
+		const NiTriShape* geometry, const NiPropertyState* properties,
+		const NiDX9Renderer* renderer, const NiTransform& effectiveWorld,
+		NativeTileInstancingSnapshot& snapshot)
+	{
+		snapshot = {};
+		TileConstantsTransientState transientState;
+		if (!renderer
+			|| !ResolveTileConstantsTransientState(
+				geometry, properties, transientState))
+		{
+			return NativeTileInstancingSnapshotResult::NotApplicable;
+		}
+		if (UsesScaledScissor(transientState))
+			return NativeTileInstancingSnapshotResult::ScaledScissor;
+		if (!BuildRetailWorldViewProjection(effectiveWorld,
+				*renderer, snapshot.retailWorld, snapshot.wvpColumns))
+		{
+			return NativeTileInstancingSnapshotResult::NonFinite;
+		}
+
+		const NiMaterialProperty* material =
+			properties->m_spMaterialProperty.m_pObject;
+		const float materialAlpha = material ? material->m_fAlpha : 1.0f;
+		snapshot.tileColor = {
+			transientState.tile->overlayColor.r,
+			transientState.tile->overlayColor.g,
+			transientState.tile->overlayColor.b,
+			transientState.tile->tileAlpha * materialAlpha
+		};
+		for (float value : snapshot.tileColor)
+		{
+			if (!std::isfinite(value))
+				return NativeTileInstancingSnapshotResult::NonFinite;
+		}
+		snapshot.scissorEnabled = transientState.tile->useScissorTest;
+		snapshot.scissorRect = transientState.tile->scissorRect;
+		snapshot.stencilPresent = transientState.stencil != nullptr;
+		snapshot.stencilEnabled = transientState.stencilEnabled;
+		snapshot.cleanupRequired = transientState.cleanupRequired;
+		if (transientState.stencil)
+		{
+			snapshot.stencilFlags = transientState.stencil->m_usFlags.Get();
+			snapshot.stencilRef = transientState.stencil->m_uiRef;
+			snapshot.stencilMask = transientState.stencil->m_uiMask;
+		}
+		return NativeTileInstancingSnapshotResult::Ready;
+	}
+
+	NativeTileInstancingSnapshotResult BuildNativeTileInstancingSnapshot(
+		const NiTriShape* geometry, const NiPropertyState* properties,
+		const NiDX9Renderer* renderer,
+		NativeTileInstancingSnapshot& snapshot)
+	{
+		if (!geometry)
+		{
+			snapshot = {};
+			return NativeTileInstancingSnapshotResult::NotApplicable;
+		}
+		return BuildNativeTileInstancingSnapshotForWorld(
+			geometry, properties, renderer, geometry->m_kWorld, snapshot);
+	}
+
+	bool SameNativeTileInstancingTransientState(
+		const NativeTileInstancingSnapshot& left,
+		const NativeTileInstancingSnapshot& right)
+	{
+		return left.scissorEnabled == right.scissorEnabled
+			&& left.stencilPresent == right.stencilPresent
+			&& left.stencilEnabled == right.stencilEnabled
+			&& left.cleanupRequired == right.cleanupRequired
+			&& (!left.scissorEnabled
+				|| std::memcmp(&left.scissorRect, &right.scissorRect,
+					sizeof(left.scissorRect)) == 0)
+			// Slot 34 consumes drawmode even while stencil testing is disabled.
+			// Preserve the complete property identity rather than comparing only
+			// the slot-31 transient suffix.
+			&& (!left.stencilPresent
+				|| (left.stencilFlags == right.stencilFlags
+					&& left.stencilRef == right.stencilRef
+					&& left.stencilMask == right.stencilMask));
 	}
 
 	NativeTileConstantsLiteResult ApplyNativeTileConstantsLite(

@@ -93,6 +93,7 @@ namespace fonthook
 	void LoadFreeTypeFontConfig();
 	void FreeTypeFontDebugLog(const char* apFormat, ...);
 	void FlushFreeTypeFontDebugLog();
+	void FlushFreeTypeFontDebugLogFully();
 	void FinalizeFreeTypeUioDetection();
 	void FinalizeFreeTypeA8Detection();
 	void HandleFreeTypeA8MainLoop();
@@ -110,6 +111,7 @@ namespace fonthook
 	bool IsFreeTypeFontPrewarmActive();
 	void ShutdownFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
+	void ReportFreeTypeFontPerformanceNow();
 	void RecordFreeTypePreparedTextCacheResult(bool abHit);
 	void RecordFreeTypeViewportNodeInstallResult(bool abInstalled);
 	enum class FreeTypeViewportCullFailReason : UInt8

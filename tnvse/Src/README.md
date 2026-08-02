@@ -20,7 +20,14 @@ configuration, dependency checks, globals, and native-call helpers stay at the
   - `native`: native shader packets, rings, accumulation, and fallback.
     `font_native_tile_constants.cpp` owns the reverse-verified Tile slot-31
     transient-tail specialization and the translation-only VS c0-c3 update
-    used after exact retained-constant proofs.
+    used after exact retained-constant proofs. `font_native_instancing.cpp`
+    owns final-order cross-text admission, immutable glyph-sidecar consumption,
+    leader-time live instance upload, D3D9 instancing resources, the draw-free
+    bind/restore proof bracket, and slot-27 fail-open leader/follower execution.
+    `font_native_diagnostics.cpp` owns the bounded, logging-only D3D9 binding,
+    Tile-constant, ring-upload/packet-range, and final indexed-submit probes
+    used to compare direct and slot-27 draw paths without reading WRITEONLY GPU
+    buffers.
   - `vector`: FreeType configuration, direct encoded-unit layout, rasterization, and caches.
     Persistent-cache route and flush orchestration stays in
     `font_vector_persistent_cache.cpp`; bitmap records and glyph manifests are

@@ -1957,6 +1957,41 @@ namespace fonthook::vectorfont
 			: NativeA8CommandSpanState::Fault;
 	}
 
+	void AbandonNativeA8SinglePacketCommandExecution(UInt32 commandIndex)
+	{
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		if (commandIndex >= buffer.singlePacketCommands.size())
+			return;
+		NativeA8SinglePacketCommand& command =
+			buffer.singlePacketCommands[commandIndex];
+		if (command.state != NativeA8CommandSpanState::Executing
+			|| command.partialDraw)
+		{
+			return;
+		}
+		command.executionValidationToken = 0;
+		command.executionSegmentEpoch = 0;
+		command.executionExternalMutationEpoch = 0;
+		command.state = NativeA8CommandSpanState::Ready;
+	}
+
+	bool IsNativeA8SinglePacketCommandConsumed(
+		UInt32 commandIndex, UInt64 validationToken)
+	{
+		const NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		if (!validationToken
+			|| validationToken != buffer.stamp.validationToken
+			|| commandIndex >= buffer.singlePacketCommands.size())
+		{
+			return false;
+		}
+		const NativeA8SinglePacketCommand& command =
+			buffer.singlePacketCommands[commandIndex];
+		return command.validationToken == validationToken
+			&& command.state == NativeA8CommandSpanState::Consumed
+			&& command.partialDraw;
+	}
+
 	bool FindNativeA8CommandSpan(UInt32 spanIndex,
 		UInt64 validationToken, NativeA8CommandSpanView& view)
 	{
@@ -2525,6 +2560,42 @@ namespace fonthook::vectorfont
 		command.state = success
 			? NativeA8CommandSpanState::Consumed
 			: NativeA8CommandSpanState::Fault;
+	}
+
+	void AbandonNativeA8VirtualSinglePacketCommandExecution(
+		UInt32 commandIndex)
+	{
+		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		if (commandIndex >= buffer.virtualSinglePacketCommands.size())
+			return;
+		NativeA8VirtualSinglePacketCommand& command =
+			buffer.virtualSinglePacketCommands[commandIndex];
+		if (command.state != NativeA8CommandSpanState::Executing
+			|| command.partialDraw)
+		{
+			return;
+		}
+		command.executionValidationToken = 0;
+		command.executionSegmentEpoch = 0;
+		command.executionExternalMutationEpoch = 0;
+		command.state = NativeA8CommandSpanState::Ready;
+	}
+
+	bool IsNativeA8VirtualSinglePacketCommandConsumed(
+		UInt32 commandIndex, UInt64 validationToken)
+	{
+		const NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		if (!validationToken
+			|| validationToken != buffer.stamp.validationToken
+			|| commandIndex >= buffer.virtualSinglePacketCommands.size())
+		{
+			return false;
+		}
+		const NativeA8VirtualSinglePacketCommand& command =
+			buffer.virtualSinglePacketCommands[commandIndex];
+		return command.validationToken == validationToken
+			&& command.state == NativeA8CommandSpanState::Consumed
+			&& command.partialDraw;
 	}
 
 	bool ValidateNativeA8VirtualSinglePacketCommand(UInt32 commandIndex,

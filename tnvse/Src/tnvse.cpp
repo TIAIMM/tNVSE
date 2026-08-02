@@ -19,6 +19,8 @@
 #include "plugin_dependencies.h"
 #include "save_display_name.h"
 
+#include <cstdint>
+
 IDebugLog gLog("tnvse.log");
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;
 NVSEMessagingInterface* g_messagingInterface{};
@@ -32,6 +34,91 @@ NVSECommandTableInterface* g_cmdTableInterface = NULL;
 
 namespace
 {
+	void LogLoadedTnvseModuleIdentity(const void* address)
+	{
+		HMODULE module = nullptr;
+		char modulePath[MAX_PATH] = {};
+		DWORD moduleError = ERROR_SUCCESS;
+		if (!address || !GetModuleHandleExA(
+				GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+					| GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCSTR>(address), &module)
+			|| !GetModuleFileNameA(module, modulePath, MAX_PATH))
+		{
+			moduleError = GetLastError();
+		}
+
+		DWORD peTimestamp = 0;
+		DWORD imageSize = 0;
+		if (module)
+		{
+			const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
+			if (dos->e_magic == IMAGE_DOS_SIGNATURE)
+			{
+				const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+					reinterpret_cast<const UInt8*>(module) + dos->e_lfanew);
+				if (nt->Signature == IMAGE_NT_SIGNATURE)
+				{
+					peTimestamp = nt->FileHeader.TimeDateStamp;
+					imageSize = nt->OptionalHeader.SizeOfImage;
+				}
+			}
+		}
+
+		UInt64 fileBytes = 0;
+		UInt64 fileWriteTime = 0;
+		UInt64 fileHash = 14695981039346656037ull;
+		DWORD fileError = ERROR_SUCCESS;
+		HANDLE file = modulePath[0]
+			? CreateFileA(modulePath, GENERIC_READ,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+				nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)
+			: INVALID_HANDLE_VALUE;
+		if (file == INVALID_HANDLE_VALUE)
+		{
+			fileError = GetLastError();
+			fileHash = 0;
+		}
+		else
+		{
+			FILETIME writeTime = {};
+			if (GetFileTime(file, nullptr, nullptr, &writeTime))
+			{
+				fileWriteTime = static_cast<UInt64>(writeTime.dwHighDateTime)
+					<< 32 | writeTime.dwLowDateTime;
+			}
+			UInt8 bytes[16u * 1024u] = {};
+			for (;;)
+			{
+				DWORD readBytes = 0;
+				if (!ReadFile(file, bytes, sizeof(bytes), &readBytes, nullptr))
+				{
+					fileError = GetLastError();
+					fileHash = 0;
+					break;
+				}
+				if (!readBytes)
+					break;
+				fileBytes += readBytes;
+				for (DWORD index = 0; index < readBytes; ++index)
+				{
+					fileHash ^= bytes[index];
+					fileHash *= 1099511628211ull;
+				}
+			}
+			CloseHandle(file);
+		}
+
+		gLog.FormattedMessage(
+			"tnvse_build_identity: diagnostics=instancing-null-stream-restore-v5 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
+			modulePath[0] ? modulePath : "unresolved", module,
+			peTimestamp, imageSize,
+			static_cast<unsigned long long>(fileBytes),
+			static_cast<unsigned long long>(fileWriteTime),
+			static_cast<unsigned long long>(fileHash),
+			moduleError, fileError);
+	}
+
 	bool s_configuredGameFontsPrepared = false;
 	UInt32 s_configuredGameFontPrepareAttempts = 0;
 	constexpr UInt32 kMaximumConfiguredGameFontPrepareAttempts = 120;
@@ -193,10 +280,15 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_ExitGame
 		|| g_msg->type == NVSEMessagingInterface::kMessage_ExitGame_Console))
 	{
+		// The ten-second periodic report can precede the menu under test and the
+		// process can exit before the next interval. Preserve the final rendering
+		// counters before resource teardown so diagnostics describe the visible run.
+		fonthook::ReportFreeTypeFontPerformanceNow();
 		fonthook::ShutdownFreeTypeFontPrewarm();
 		fonthook::FlushFreeTypePersistentFontCache();
 		fonthook::ShutdownFreeTypeDefaultPoolAtlas();
 		fonthook::ShutdownNativeTileOverlayHost();
+		fonthook::FlushFreeTypeFontDebugLogFully();
 	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit
 		|| g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop))
@@ -224,6 +316,8 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 	}
 
 	LoadConfig();
+	LogLoadedTnvseModuleIdentity(
+		reinterpret_cast<const void*>(&NVSEPlugin_Load));
 	fonthook::LoadFreeTypeFontConfig();
 	fonthook::LoadDictionaryConfig();
 

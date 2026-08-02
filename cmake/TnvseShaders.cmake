@@ -5,6 +5,7 @@ function(tnvse_add_shader_target output_variable)
   set(shader_sources
     "${shader_dir}/freetype_native_common.hlsli"
     "${shader_dir}/freetype_native_vs.hlsl"
+    "${shader_dir}/freetype_native_instanced_vs.hlsl"
     "${shader_dir}/freetype_native_coverage.hlsl"
     "${shader_dir}/freetype_native_argb.hlsl"
     "${shader_dir}/freetype_native_mtsdf_fill.hlsl"
@@ -13,6 +14,7 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/compile_a8_shader.bat")
   set(shader_outputs
     "${shader_dir}/compiled/tnvse_freetype_native_vs.vso"
+    "${shader_dir}/compiled/tnvse_freetype_native_instanced_vs.vso"
     "${shader_dir}/compiled/tnvse_freetype_native_coverage.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_argb.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_fast.pso"

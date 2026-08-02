@@ -109,7 +109,13 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			world = {};
+			// D3DXMATRIX's default constructor leaves its float storage untouched.
+			// Formal GetD3DFromNi at B71A40 writes these affine entries as exact
+			// zero; make that part of the proof explicit so clip/scissor evaluation
+			// never consumes stack-dependent values.
+			world._14 = 0.0f;
+			world._24 = 0.0f;
+			world._34 = 0.0f;
 			for (UInt32 row = 0; row < 3; ++row)
 			{
 				for (UInt32 column = 0; column < 3; ++column)
@@ -361,6 +367,26 @@ namespace fonthook::vectorfont
 			return NativeA8VisibilityCull::ZeroAlpha;
 		}
 		return NativeA8VisibilityCull::None;
+	}
+
+	bool IsNativeA8PayloadOutsideScissorForWorld(
+		const NativeA8ShapePayload& payload,
+		const NiPropertyState* properties,
+		const NiDX9Renderer* renderer,
+		const NiTransform& effectiveWorld)
+	{
+		if (!properties || !renderer
+			|| *reinterpret_cast<const UInt8*>(kScaledScissorActive))
+		{
+			return false;
+		}
+		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
+		if (!tile || !tile->useScissorTest)
+			return false;
+		D3DXMATRIX world = {};
+		return BuildRetailTileWorldMatrix(effectiveWorld, world)
+			&& IsPayloadOutsideScissor(
+				payload, *tile, *renderer, world, true);
 	}
 
 	bool EvaluateNativeA8PreConstantsVisibility(

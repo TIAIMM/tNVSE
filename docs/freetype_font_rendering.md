@@ -15,6 +15,7 @@ bEnableFreeTypeFontRenderingLog=0
 fFreeTypeFontResolutionScale=1.0
 bEnableFreeTypeFontAggressivePerformanceMode=0
 bEnableFreeTypeFontCommandBuffer=0
+bEnableFreeTypeFontCrossTextBatch=0
 uiFreeTypeFontDistanceFieldMode=1
 ```
 
@@ -1238,6 +1239,109 @@ switch is absent, any nonzero legacy mode enables the complete command path for
 that run and logs a migration notice. Once the new switch is present, it is
 authoritative. The retired shadow-only stage and its D3D `Get*` captures are not
 part of the production path.
+
+`bEnableFreeTypeFontCrossTextBatch=1` optionally layers D3D9 indexed glyph
+instancing over eligible command-buffer singletons. It has no effect unless
+`bEnableFreeTypeFontCommandBuffer=1`, is disabled by default, and does not
+replace the ordinary native fallback. The final accumulator traversal is
+recorded with explicit barriers for stock, culled, multi-packet, duplicate,
+failed, and Virtual-stock multi-shape entries. Only adjacent members with a
+finite, bitwise-identical accumulator depth and identical program, atlas,
+sampling, blend, alpha-test, drawmode, scissor, stencil, generation, resource,
+render-target, and viewport proofs can share a batch.
+The leader also proves the exact retail accumulator-owned shared Tile pass and
+the `testAlpha=1`, `blendAlpha=1`, `setupDrawmode=1` callback contract before
+any follower command is reserved.
+
+Each proven packet owns an immutable 72-byte sidecar reconstructed from the
+existing TL/TR/BR/BL GPU quad. The sidecar contains its local/UV rectangles,
+packed color, distance parameters, layer mask, Tile-RGB selector, glyph bounds,
+and local depth. Optional sidecar fields remain at the tail of the private
+packet/payload structures, and sidecars are not built while the feature is
+disabled, preserving the established direct-draw-lite data prefix and work.
+At the leader callback the batch rebuilds every live property/world snapshot,
+then appends the member's retail-equivalent WVP and TileColor to form one
+152-byte stream-1 instance. The first reached batch uses `D3DLOCK_DISCARD`;
+later reached batches use disjoint `D3DLOCK_NOOVERWRITE` ranges. No frame-build
+snapshot is uploaded and no concatenated CPU vertex array is built. The buffer
+grows on demand up to 16 MiB and stops only at text boundaries.
+
+The instanced draw uses four exact endpoint-weight corners in stream 0, the original
+`0,2,1 / 0,3,2` 16-bit index order, and one stream-1 record per glyph. The VS
+selects the original rectangle/UV endpoints without a `lerp` subtraction and
+evaluates four explicit WVP-column dot products;
+the existing pixel shader runs with exact identity PS c0 because TileColor has
+already been folded into the instance output. Fixed-color effect packets retain
+RGB identity while only packets carrying the normal live-Tile-RGB contract bake
+that RGB. The declaration keeps all
+arbitrary inputs within `TEXCOORD0` through `TEXCOORD7`, avoiding legacy
+driver/wrapper tables derived from the fixed-function eight-coordinate limit.
+Retail and the symbolized test build map VS c4 to `TileShader::TexScroll`;
+exact `textureTransform` and rotation-mode identity makes c4 invariant across
+the batch, and the temporary VS never changes it.
+
+Temporary instancing bindings are applied directly to the D3D9 device and are
+not published through Gamebryo's declaration or shader mirrors. An
+unconditional guard restores both stream frequencies to 1, unbinds stream 1,
+then restores the logical last normal declaration, stream-0 VB/stride, IB,
+VS/PS, VS c0-c3, PS c0, and renderer property/world mirrors. A failed attempt
+instead restores the leader before ordinary fail-open replay. The normal pixel
+shader is rebound explicitly instead of trusting Gamebryo's mirror. The first
+real batch after each generation or instance-buffer replacement performs a
+draw-free bind/readback/restore/readback cycle, proving both stream
+frequencies, every instancing binding, the normal Tile bindings, and restored
+VS/PS constants before drawing. Live
+inputs and command/resource epochs are rebuilt immediately before the leader
+draw; any mismatch abandons the batch and leaves the original commands ready.
+A failed instancing attempt never re-enters direct-draw-lite: it invalidates the
+segment cache and runs the complete retail slot-27 geometry preparation before
+ordinary immediate replay. When the option is disabled or an item is not an
+instancing leader, the pre-instancing direct-draw-lite/slot-27 decision is used
+directly and no stream-1 state is touched.
+A binding, constant, draw, proof, or restore failure disables instancing only
+for that shader generation; device reset permits a fresh attempt. This bracket
+stays inside the existing accumulator render call and does not introduce a
+second renderer lock or any Present/Reset hook.
+
+With rendering diagnostics enabled, `tnvse_build_identity` records the actual
+loaded DLL path, size, write time, and an FNV-1a file fingerprint. Bounded
+`tnvse_freetype_native_draw_diag` pairs compare selected long-text draws before
+and after direct-draw-lite or slot 27, including stream frequencies, both
+streams, IB/declaration, VS/PS, and the device's VS c0-c3/PS c0 against a freshly
+computed retail-equivalent WVP and TileColor. The paired
+`tnvse_freetype_native_command_diag` record identifies the command span/offset
+and the exact constants action (`exact-reuse`, `constants-lite`,
+`translation-lite`, or `retail-full`), while
+`tnvse_freetype_native_ring_diag` correlates the immutable CPU payload and
+packet hashes with the successful ring-upload record, resource/upload epochs,
+published vertex interval, and canonical-index range. The diagnostic does not
+lock or read the WRITEONLY D3D9 vertex buffer. A direct-draw-lite submission
+also emits `tnvse_freetype_native_dip_diag` with the actual DIP arguments and
+the stream/index/draw HRESULTs under the same bounded id. Instancing admission and execution
+failures emit separately bounded `tnvse_freetype_glyph_instancing_diag` records
+with their concrete contract, member, resource, upload, or device operation.
+Exit messages force one final performance report and fully drain the bounded
+diagnostic queue, so a short menu reproduction is not represented only by an
+earlier startup summary.
+If restoration fails only after a successful indexed draw was already
+submitted, the batch is consumed once rather than replayed with non-commutative
+alpha a second time; the draw-free inverse proof makes that case a device-loss
+or later device-state failure, and instancing remains disabled until reset.
+This is also the NVTF compatibility boundary: its geometry-precache worker
+releases the renderer only after a frame and reacquires it before rendering,
+while its DXVK path skips the system-D3D9 flip-model patch. Instancing remains
+inside `RenderAlphaGeometry`, does not patch NVTF call sites, and does not add
+device-vtable or frame-synchronization hooks.
+
+The periodic `tnvse_freetype_glyph_instancing` line reports candidates,
+accepted batches/texts/instances, successful draws and draws saved, upload and
+buffer activity, categorized fallbacks/failures, stream-frequency set/reset
+counts, state-proof/restore results, aggregate begin fallback plus contract,
+pass, callback, resource, immutable, transient, upload, and follower
+subcategories, arm/device-validation and direct-draw admission fallbacks,
+follower consumption, and text/instance
+median, p95, and maximum batch sizes. The median and p95 values use
+power-of-two histogram upper bounds capped at the exact observed maximum.
 
 Guarded replay publishes the retail current-pass globals, invokes `B99390`
 when the selected TileShader/pass must change, applies the special alpha-test

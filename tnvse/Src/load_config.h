@@ -15,6 +15,7 @@ extern bool g_bEnableFreeTypeDefaultPoolAtlas;
 extern bool g_bEnableFreeTypeA8Atlas;
 extern bool g_bEnableFreeTypeFontAggressivePerformanceMode;
 extern bool g_bEnableFreeTypeFontCommandBuffer;
+extern bool g_bEnableFreeTypeFontCrossTextBatch;
 extern UINT32 g_uiFreeTypeFontDistanceFieldMode;
 extern UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 extern bool g_bEnableFreeTypeFontCompositePass;

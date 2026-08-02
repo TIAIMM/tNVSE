@@ -61,6 +61,40 @@ namespace fonthook::vectorfont
 			kCanonicalIndexCount * sizeof(UInt16);
 		inline constexpr UInt32 kCanonicalArrayCount = 1;
 
+		UInt64 HashDiagnosticBytes(const void* data, size_t size)
+		{
+			if (!data || !size)
+				return 0;
+			const UInt8* bytes = static_cast<const UInt8*>(data);
+			UInt64 value = 14695981039346656037ull;
+			for (size_t index = 0; index < size; ++index)
+			{
+				value ^= bytes[index];
+				value *= 1099511628211ull;
+			}
+			return value;
+		}
+
+		UInt64 HashDiagnosticPayload(
+			const NativeA8PayloadTemplate& payloadTemplate)
+		{
+			if (!g_bEnableFreeTypeFontRenderingLog
+				|| payloadTemplate.gpuVertices.empty())
+			{
+				return 0;
+			}
+			return HashDiagnosticBytes(payloadTemplate.gpuVertices.data(),
+				payloadTemplate.gpuVertices.size()
+					* sizeof(NativeA8GpuVertex));
+		}
+
+		UInt32 AdvanceDiagnosticSerial(UInt32& serial)
+		{
+			if (++serial == 0)
+				++serial;
+			return serial;
+		}
+
 		// Font::MakeTriShape returns a BSScissorTriShape and a TileShaderProperty,
 		// but this CommonLib snapshot does not expose either concrete definition.
 		struct TileShaderPropertyView : BSShaderProperty
@@ -115,6 +149,9 @@ namespace fonthook::vectorfont
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 epoch = 0;
+			UInt32 writeSerial = 0;
+			UInt32 discardSerial = 0;
+			UInt64 payloadHash = 0;
 		};
 
 		struct NativeA8StaticPayload
@@ -122,6 +159,8 @@ namespace fonthook::vectorfont
 			std::weak_ptr<const NativeA8PayloadTemplate> owner;
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
+			UInt32 writeSerial = 0;
+			UInt64 payloadHash = 0;
 		};
 
 		struct NativeA8StaticCandidate
@@ -193,6 +232,9 @@ namespace fonthook::vectorfont
 			UInt32 staticVertexCapacity = 0;
 			UInt32 nextStaticVertex = 0;
 			UInt32 uploadEpoch = 1;
+			UInt32 dynamicWriteSerial = 0;
+			UInt32 dynamicDiscardSerial = 0;
+			UInt32 staticWriteSerial = 0;
 			std::unordered_map<const NativeA8PayloadTemplate*,
 				NativeA8UploadedPayload> uploadedPayloads;
 			std::unordered_map<const NativeA8PayloadTemplate*,
@@ -1127,6 +1169,8 @@ namespace fonthook::vectorfont
 					return false;
 				}
 			}
+			if (liveVertexCount)
+				AdvanceDiagnosticSerial(state.staticWriteSerial);
 
 			std::unordered_map<const NativeA8PayloadTemplate*,
 				NativeA8StaticPayload> rebuilt;
@@ -1135,7 +1179,9 @@ namespace fonthook::vectorfont
 			{
 				rebuilt.emplace(payload.owner.get(), NativeA8StaticPayload{
 					payload.owner, payload.baseVertex,
-					static_cast<UInt32>(payload.owner->gpuVertices.size()) });
+					static_cast<UInt32>(payload.owner->gpuVertices.size()),
+					state.staticWriteSerial,
+					HashDiagnosticPayload(*payload.owner) });
 			}
 			rebuildCpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
 				livePayloads.capacity() * sizeof(LiveStaticPayload)
@@ -1692,9 +1738,12 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
+			AdvanceDiagnosticSerial(state.staticWriteSerial);
 			state.nextStaticVertex = baseVertex + vertexCount;
 			state.staticPayloads[payloadTemplate.get()] = {
-				payloadTemplate, baseVertex, vertexCount };
+				payloadTemplate, baseVertex, vertexCount,
+				state.staticWriteSerial,
+				HashDiagnosticPayload(*payloadTemplate) };
 			NativeA8PayloadResidencyCache& residency =
 				payloadTemplate->residency;
 			residency.staticResourceSerial = state.resourceSerial.load(
@@ -1824,7 +1873,9 @@ namespace fonthook::vectorfont
 			const UInt32 resourceSerial = state.resourceSerial.load(
 				std::memory_order_relaxed);
 			state.uploadedPayloads[payloadTemplate.get()] = {
-				payloadTemplate, baseVertex, vertexCount, state.uploadEpoch };
+				payloadTemplate, baseVertex, vertexCount, state.uploadEpoch,
+				state.dynamicWriteSerial, state.dynamicDiscardSerial,
+				HashDiagnosticPayload(*payloadTemplate) };
 			NativeA8PayloadResidencyCache& residency =
 				payloadTemplate->residency;
 			residency.dynamicResourceSerial = resourceSerial;
@@ -2266,6 +2317,7 @@ namespace fonthook::vectorfont
 					if (copiedVertices == selectedVertices
 						&& SUCCEEDED(result))
 					{
+						AdvanceDiagnosticSerial(state.staticWriteSerial);
 						const UInt32 resourceSerial =
 							state.resourceSerial.load(
 								std::memory_order_relaxed);
@@ -2278,7 +2330,9 @@ namespace fonthook::vectorfont
 							const UInt32 baseVertex =
 								state.nextStaticVertex + mappedVertices;
 							state.staticPayloads[payloadTemplate.get()] = {
-								payloadTemplate, baseVertex, vertexCount };
+								payloadTemplate, baseVertex, vertexCount,
+								state.staticWriteSerial,
+								HashDiagnosticPayload(*payloadTemplate) };
 							NativeA8PayloadResidencyCache& residency =
 								payloadTemplate->residency;
 							residency.staticResourceSerial = resourceSerial;
@@ -2413,6 +2467,7 @@ namespace fonthook::vectorfont
 			startVertex = 0;
 			lockFlags = D3DLOCK_DISCARD;
 			AdvanceUploadEpochLocked(state);
+			AdvanceDiagnosticSerial(state.dynamicDiscardSerial);
 			state.uploadedPayloads.clear();
 			s_ringThread.uploadedPayload = {};
 			state.nextVertex = 0;
@@ -2455,6 +2510,7 @@ namespace fonthook::vectorfont
 		result = state.vertexBuffer->Unlock();
 		if (copiedVertices != uploadVertices || FAILED(result))
 			return;
+		AdvanceDiagnosticSerial(state.dynamicWriteSerial);
 
 		UInt32 mappedVertices = 0;
 		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
@@ -2498,10 +2554,12 @@ namespace fonthook::vectorfont
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_native: sorted dynamic batch generation=%u payloads=%u vertices=%u bytes=%u discard=%u residentVertices=%u capacity=%u",
+				"tnvse_freetype_native: sorted dynamic batch generation=%u payloads=%u vertices=%u bytes=%u discard=%u startVertex=%u endVertex=%u capacity=%u uploadEpoch=%u writeSerial=%u discardSerial=%u",
 				generation, static_cast<UInt32>(uploadPayloads),
 				uploadVertices, byteCount, discard ? 1u : 0u,
-				state.nextVertex, state.vertexCapacity);
+				startVertex, state.nextVertex, state.vertexCapacity,
+				state.uploadEpoch, state.dynamicWriteSerial,
+				state.dynamicDiscardSerial);
 		}
 		PublishSortedRingLeaseLocked(state, payloadTemplates,
 			generation);
@@ -2870,6 +2928,7 @@ namespace fonthook::vectorfont
 					startVertex = 0;
 					lockFlags = D3DLOCK_DISCARD;
 					AdvanceUploadEpochLocked(state);
+					AdvanceDiagnosticSerial(state.dynamicDiscardSerial);
 					state.uploadedPayloads.clear();
 					RefreshRingCpuMemoryLocked(state);
 					s_ringThread.uploadedPayload = {};
@@ -2909,6 +2968,7 @@ namespace fonthook::vectorfont
 						"dynamic-vb-unlock", result);
 					return NativeA8FallbackReason::PacketPrepare;
 				}
+				AdvanceDiagnosticSerial(state.dynamicWriteSerial);
 
 				state.nextVertex = startVertex + totalVertices;
 				PublishUploadedPayloadLocked(state, payload.payloadTemplate,
@@ -3268,6 +3328,169 @@ namespace fonthook::vectorfont
 			&& state->resourceSerial.load(std::memory_order_acquire)
 				== lease.resourceSerial
 			&& state->uploadEpoch == lease.uploadEpoch;
+	}
+
+	bool InspectNativeA8RingPacketForDiagnostic(
+		const NativeA8DrawCommand& command,
+		NativeA8RingPacketDiagnostic& diagnostic)
+	{
+		diagnostic = {};
+		if (!command.payload || !command.payload->payloadTemplate
+			|| !command.packet)
+		{
+			return false;
+		}
+
+		const NativeA8PayloadTemplatePtr& owner =
+			command.payload->payloadTemplate;
+		const NativeA8PayloadTemplate& artifact = *owner;
+		const NativeA8PacketTemplate& packet = *command.packet;
+		diagnostic.artifact = &artifact;
+		diagnostic.packet = &packet;
+		diagnostic.packetFirstVertex = packet.firstVertex;
+		diagnostic.packetVertexCount = packet.vertexCount;
+		diagnostic.staticResident = command.binding.staticResident;
+		if (artifact.gpuVertices.empty()
+			|| artifact.gpuVertices.size()
+				> std::numeric_limits<UInt32>::max())
+		{
+			return true;
+		}
+
+		diagnostic.payloadVertexCount = static_cast<UInt32>(
+			artifact.gpuVertices.size());
+		diagnostic.cpuPayloadHash = HashDiagnosticBytes(
+			artifact.gpuVertices.data(), artifact.gpuVertices.size()
+				* sizeof(NativeA8GpuVertex));
+		const std::vector<NativeA8PacketTemplate>& packets =
+			GetNativeA8Packets(artifact,
+				command.payload->useCompositePackets);
+		diagnostic.packetIdentityMatch = command.packetIndex < packets.size()
+			&& &packets[command.packetIndex] == command.packet;
+		const UInt64 packetEnd = static_cast<UInt64>(packet.firstVertex)
+			+ packet.vertexCount;
+		diagnostic.packetRangeMatch = packet.vertexCount
+			&& !(packet.vertexCount & 3u)
+			&& packetEnd <= artifact.gpuVertices.size()
+			&& command.binding.vertexCount == packet.vertexCount;
+		if (diagnostic.packetRangeMatch)
+		{
+			diagnostic.cpuPacketHash = HashDiagnosticBytes(
+				artifact.gpuVertices.data() + packet.firstVertex,
+				static_cast<size_t>(packet.vertexCount)
+					* sizeof(NativeA8GpuVertex));
+		}
+		const UInt64 submittedEnd = static_cast<UInt64>(
+			command.binding.baseVertex) + command.binding.vertexCount;
+		if (command.binding.baseVertex >= packet.firstVertex)
+		{
+			diagnostic.expectedPayloadBaseVertex =
+				command.binding.baseVertex - packet.firstVertex;
+		}
+		if (submittedEnd <= std::numeric_limits<UInt32>::max())
+		{
+			diagnostic.expectedPacketEndVertex =
+				static_cast<UInt32>(submittedEnd);
+		}
+		const UInt64 indexBytes = static_cast<UInt64>(
+			packet.vertexCount / 4u) * 6u * sizeof(UInt16);
+		diagnostic.canonicalIndexRangeReady =
+			diagnostic.packetRangeMatch
+			&& packet.vertexCount / 4u <= kNativeA8MaximumQuads
+			&& indexBytes <= command.binding.indexBytes;
+
+		NativeA8RingState& state = RingState();
+		std::lock_guard<std::mutex> lock(state.mutex);
+		diagnostic.stateGeneration = state.generation;
+		diagnostic.stateResourceSerial = state.resourceSerial.load(
+			std::memory_order_acquire);
+		diagnostic.stateUploadEpoch = state.uploadEpoch;
+		diagnostic.stateWriteSerial = command.binding.staticResident
+			? state.staticWriteSerial : state.dynamicWriteSerial;
+		diagnostic.stateDiscardSerial = command.binding.staticResident
+			? 0u : state.dynamicDiscardSerial;
+		diagnostic.stateNextVertex = command.binding.staticResident
+			? state.nextStaticVertex : state.nextVertex;
+		diagnostic.stateVertexCapacity = command.binding.staticResident
+			? state.staticVertexCapacity : state.vertexCapacity;
+
+		const NativeA8SortedRingLease& lease = s_sortedRingLease;
+		diagnostic.leaseActive = lease.active && lease.state == &state;
+		diagnostic.leaseGeneration = lease.generation;
+		diagnostic.leaseResourceSerial = lease.resourceSerial;
+		diagnostic.leaseUploadEpoch = lease.uploadEpoch;
+		const IDirect3DVertexBuffer9* expectedVertexBuffer =
+			command.binding.staticResident
+				? lease.staticVertexBuffer : lease.dynamicVertexBuffer;
+		diagnostic.bindingCurrent = command.binding.active
+			&& diagnostic.leaseActive
+			&& command.binding.generation == lease.generation
+			&& command.binding.resourceSerial == lease.resourceSerial
+			&& command.binding.uploadEpoch == lease.uploadEpoch
+			&& command.binding.vertexBuffer == expectedVertexBuffer
+			&& command.binding.indexBuffer == lease.indexBuffer
+			&& command.binding.declaration == lease.declaration
+			&& state.generation == lease.generation
+			&& diagnostic.stateResourceSerial == lease.resourceSerial
+			&& state.uploadEpoch == lease.uploadEpoch;
+
+		if (command.binding.staticResident)
+		{
+			const auto found = state.staticPayloads.find(&artifact);
+			if (found != state.staticPayloads.end())
+			{
+				diagnostic.residencyFound = true;
+				const NativeA8StaticPayload& record = found->second;
+				const NativeA8PayloadTemplatePtr recordOwner =
+					record.owner.lock();
+				diagnostic.ownerMatch = recordOwner.get() == &artifact;
+				diagnostic.recordBaseVertex = record.baseVertex;
+				diagnostic.recordVertexCount = record.vertexCount;
+				diagnostic.recordWriteSerial = record.writeSerial;
+				diagnostic.recordedPayloadHash = record.payloadHash;
+			}
+		}
+		else
+		{
+			const auto found = state.uploadedPayloads.find(&artifact);
+			if (found != state.uploadedPayloads.end())
+			{
+				diagnostic.residencyFound = true;
+				const NativeA8UploadedPayload& record = found->second;
+				const NativeA8PayloadTemplatePtr recordOwner =
+					record.owner.lock();
+				diagnostic.ownerMatch = recordOwner.get() == &artifact;
+				diagnostic.recordBaseVertex = record.baseVertex;
+				diagnostic.recordVertexCount = record.vertexCount;
+				diagnostic.recordUploadEpoch = record.epoch;
+				diagnostic.recordWriteSerial = record.writeSerial;
+				diagnostic.recordDiscardSerial = record.discardSerial;
+				diagnostic.recordedPayloadHash = record.payloadHash;
+			}
+		}
+
+		const UInt64 recordEnd = static_cast<UInt64>(
+			diagnostic.recordBaseVertex) + diagnostic.recordVertexCount;
+		diagnostic.recordRangeMatch = diagnostic.residencyFound
+			&& diagnostic.ownerMatch
+			&& diagnostic.recordBaseVertex
+				== diagnostic.expectedPayloadBaseVertex
+			&& diagnostic.recordVertexCount
+				== diagnostic.payloadVertexCount
+			&& command.binding.baseVertex
+				== diagnostic.recordBaseVertex + packet.firstVertex
+			&& command.binding.vertexCount == packet.vertexCount;
+		diagnostic.rangePublished = diagnostic.residencyFound
+			&& recordEnd <= diagnostic.stateNextVertex
+			&& recordEnd <= diagnostic.stateVertexCapacity
+			&& submittedEnd <= diagnostic.stateNextVertex
+			&& submittedEnd <= diagnostic.stateVertexCapacity;
+		diagnostic.hashRecorded =
+			diagnostic.recordedPayloadHash != 0;
+		diagnostic.hashMatch = diagnostic.hashRecorded
+			&& diagnostic.recordedPayloadHash
+				== diagnostic.cpuPayloadHash;
+		return true;
 	}
 
 	bool IsNativeA8FrameResourceStampCurrent(

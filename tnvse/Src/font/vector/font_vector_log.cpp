@@ -129,4 +129,15 @@ namespace fonthook
 				static_cast<UInt32>(droppedCount));
 		}
 	}
+
+	void FlushFreeTypeFontDebugLogFully()
+	{
+		// Exit diagnostics can enqueue more than the normal per-frame batch. Keep
+		// shutdown bounded while draining the complete fixed queue in practice.
+		for (size_t batch = 0; batch < 16
+			&& s_deferredLogPending.load(std::memory_order_acquire); ++batch)
+		{
+			FlushFreeTypeFontDebugLog();
+		}
+	}
 }

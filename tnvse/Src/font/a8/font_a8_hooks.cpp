@@ -348,6 +348,14 @@ namespace fonthook::vectorfont
 		using NativeImmediateContinuationFn =
 			bool(*)(void*, NiRenderer*, bool);
 		struct NativeDirectDrawLiteSubmission;
+		struct NativeCrossTextBatchRuntime
+		{
+			NativeA8CrossTextBatchExecutionView view;
+			const char* operation = "none";
+			HRESULT result = D3D_OK;
+			bool attempted = false;
+			bool drawSucceeded = false;
+		};
 
 		enum class NativeImmediateCommandKind : UInt8
 		{
@@ -374,10 +382,14 @@ namespace fonthook::vectorfont
 			bool visibilityCulled = false;
 			bool continuationSucceeded = true;
 			const NativeDirectDrawLiteSubmission* directDrawLite = nullptr;
+			const NativeA8CrossTextBatchExecutionView* instancedBatch = nullptr;
+			NiD3DRenderState* instancedRenderState = nullptr;
 		};
 
 		thread_local NativeDirectImmediateContext*
 			s_nativeDirectImmediateContext = nullptr;
+		thread_local NativeCrossTextBatchRuntime*
+			s_nativeCrossTextBatchRuntime = nullptr;
 
 		class NativeDirectImmediateScope
 		{
@@ -1820,6 +1832,7 @@ namespace fonthook::vectorfont
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 triangleCount = 0;
+			UInt32 diagnosticId = 0;
 		};
 
 		void RecordNativeDirectDrawLiteFallback(
@@ -2016,6 +2029,50 @@ namespace fonthook::vectorfont
 			NativeDirectImmediateContext* m_context = nullptr;
 		};
 
+		class NativeGlyphInstancingArmScope
+		{
+		public:
+			NativeGlyphInstancingArmScope(NiTriShape* geometry,
+				NiD3DRenderState* renderState)
+			{
+				m_context = s_nativeDirectImmediateContext;
+				m_runtime = s_nativeCrossTextBatchRuntime;
+				if (!m_context || !m_runtime
+					|| !m_runtime->view.active
+					|| m_runtime->view.leaderGeometry != geometry
+					|| m_context->shape != geometry
+					|| !m_context->strictValidation
+					|| m_context->commandSpanIndex
+						== kInvalidNativeA8CommandIndex
+					|| m_context->instancedBatch || !renderState)
+				{
+					m_context = nullptr;
+					m_runtime = nullptr;
+					return;
+				}
+				m_context->instancedBatch = &m_runtime->view;
+				m_context->instancedRenderState = renderState;
+			}
+
+			~NativeGlyphInstancingArmScope()
+			{
+				if (m_context)
+				{
+					m_context->instancedBatch = nullptr;
+					m_context->instancedRenderState = nullptr;
+				}
+			}
+
+			bool Active() const
+			{
+				return m_context && m_runtime;
+			}
+
+		private:
+			NativeDirectImmediateContext* m_context = nullptr;
+			NativeCrossTextBatchRuntime* m_runtime = nullptr;
+		};
+
 		void ExecuteNativeDirectDrawLite(
 			const NativeDirectDrawLiteSubmission& submission)
 		{
@@ -2025,6 +2082,8 @@ namespace fonthook::vectorfont
 				&& deviceState->geometryBindingReady
 				&& SameSegmentGeometryBinding(
 					deviceState->geometryBinding, submission.binding);
+			HRESULT streamResult = D3D_OK;
+			HRESULT indexResult = D3D_OK;
 			if (bindingReady)
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
@@ -2036,10 +2095,10 @@ namespace fonthook::vectorfont
 					deviceState->geometryBindingReady = false;
 				submission.renderState->vSetDeclaration(
 					submission.binding.declaration, false);
-				const HRESULT streamResult = submission.device->SetStreamSource(
+				streamResult = submission.device->SetStreamSource(
 					0, submission.binding.vertexBuffer, 0,
 					submission.binding.stride);
-				const HRESULT indexResult = submission.device->SetIndices(
+				indexResult = submission.device->SetIndices(
 					submission.binding.indexBuffer);
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					NativeDirectDrawLiteBindingSet);
@@ -2067,6 +2126,11 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					NativeDirectDrawLiteDrawDeviceFailure);
 			}
+			LogNativeA8DirectDrawSubmissionDiagnostic(
+				submission.diagnosticId, submission.device,
+				submission.baseVertex, submission.vertexCount,
+				submission.triangleCount, bindingReady,
+				streamResult, indexResult, drawResult);
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::NativeDirectDrawLiteReplay);
 		}
@@ -2302,13 +2366,24 @@ namespace fonthook::vectorfont
 			// The retained dispatch has already proved the Tile-owned vtable,
 			// null skin, model data, renderer/device, shader vtable, and complete
 			// slot table. Only RenderPass fields are live per traversal.
+			const bool instancingLeader =
+				g_bEnableFreeTypeFontCrossTextBatch
+				&& s_nativeCrossTextBatchRuntime
+				&& s_nativeCrossTextBatchRuntime->view.active
+				&& s_nativeCrossTextBatchRuntime->view.leaderGeometry
+					== geometry;
 			return g_bEnableFreeTypeFontCommandBuffer
 				&& pass && geometry
 				&& pass->pGeometry == geometry
 				&& pass->usPassEnum == currentPass
 				&& currentPass != kForcedShaderSelectionPass
 				&& IsDefaultNativeReplayPass(currentPass)
-				&& !pass->ucNumLights && !pass->ppSceneLights
+				&& !pass->ucNumLights
+				// The accumulator-owned Tile pass can retain a non-null light-array
+				// pointer while its count is zero. Formal and symbolized TileShader
+				// slots never read it. Widen this only for a proven instancing leader;
+				// the feature-off direct-draw-lite envelope remains byte-for-byte.
+				&& (!pass->ppSceneLights || instancingLeader)
 				&& (packetStatePrevalidated
 					|| (program->active
 						&& geometry->GetShader() == dispatch->shader
@@ -2585,11 +2660,15 @@ namespace fonthook::vectorfont
 				: NativeSegmentConstantsStateRelation::Different;
 			const bool constantsStateReady = constantsRelation
 				== NativeSegmentConstantsStateRelation::Exact;
+			UInt32 constantsLiteDiagnosticResult =
+				std::numeric_limits<UInt32>::max();
 			bool constantsLiteApplied = false;
 			if (constantsStateReady && cleanupRequired)
 			{
 				const NativeTileConstantsLiteResult liteResult =
 					ApplyNativeTileConstantsLite(geometry, properties);
+				constantsLiteDiagnosticResult =
+					static_cast<UInt32>(liteResult);
 				constantsLiteApplied = liteResult
 					== NativeTileConstantsLiteResult::Applied;
 				if (constantsLiteApplied)
@@ -2609,6 +2688,8 @@ namespace fonthook::vectorfont
 					}
 				}
 			}
+			UInt32 translationLiteDiagnosticResult =
+				std::numeric_limits<UInt32>::max();
 			bool constantsTranslationLiteApplied = false;
 			if (constantsRelation
 				== NativeSegmentConstantsStateRelation::TranslationOnly)
@@ -2616,6 +2697,8 @@ namespace fonthook::vectorfont
 				const NativeTileConstantsTranslationLiteResult liteResult =
 					ApplyNativeTileConstantsTranslationLite(
 						geometry, properties, renderer, program.device);
+				translationLiteDiagnosticResult =
+					static_cast<UInt32>(liteResult);
 				constantsTranslationLiteApplied = liteResult
 					== NativeTileConstantsTranslationLiteResult::Applied
 					|| liteResult
@@ -2828,31 +2911,261 @@ namespace fonthook::vectorfont
 				BuildNativeDirectDrawLiteSubmission(
 					geometry, renderer, properties, program, command,
 					preparedBuffer, deviceState, directDrawLite);
-			bool directDrawArmed = false;
+			const UInt32 drawDiagnosticId =
+				AcquireNativeA8DrawPathDiagnostic(command);
+			directDrawLite.diagnosticId = drawDiagnosticId;
+			NativeA8DrawPathDiagnosticContext drawDiagnosticContext;
+			drawDiagnosticContext.currentPass = currentPass;
+			drawDiagnosticContext.firstPass = firstPass;
+			drawDiagnosticContext.passStateReady = passStateReady;
+			drawDiagnosticContext.constantsKeyReady = constantsKeyReady;
+			drawDiagnosticContext.cleanupRequired = cleanupRequired;
+			drawDiagnosticContext.constantsRelation =
+				static_cast<UInt32>(constantsRelation);
+			drawDiagnosticContext.constantsLiteResult =
+				constantsLiteDiagnosticResult;
+			drawDiagnosticContext.translationLiteResult =
+				translationLiteDiagnosticResult;
+			if (constantsTranslationLiteApplied)
+			{
+				drawDiagnosticContext.constantsAction =
+					NativeA8DrawConstantsDiagnosticAction::TranslationLite;
+			}
+			else if (constantsStateReady && !cleanupRequired)
+			{
+				drawDiagnosticContext.constantsAction =
+					NativeA8DrawConstantsDiagnosticAction::ExactReuse;
+			}
+			else if (constantsLiteApplied)
+			{
+				drawDiagnosticContext.constantsAction =
+					NativeA8DrawConstantsDiagnosticAction::ConstantsLite;
+			}
+			else
+			{
+				drawDiagnosticContext.constantsAction =
+					NativeA8DrawConstantsDiagnosticAction::RetailFull;
+			}
+			if (s_nativeDirectImmediateContext)
+			{
+				drawDiagnosticContext.commandSpanIndex =
+					s_nativeDirectImmediateContext->commandSpanIndex;
+				drawDiagnosticContext.commandOffset =
+					s_nativeDirectImmediateContext->commandOffset;
+				drawDiagnosticContext.commandKind = static_cast<UInt32>(
+					s_nativeDirectImmediateContext->commandKind);
+			}
+			const bool directBindingWasCached =
+				directDrawFailure == NativeDirectDrawLiteFallback::None
+				&& directDrawLite.deviceState
+				&& directDrawLite.deviceState->geometryBindingReady
+				&& SameSegmentGeometryBinding(
+					directDrawLite.deviceState->geometryBinding,
+					directDrawLite.binding);
+			const bool instancingLeader =
+				g_bEnableFreeTypeFontCrossTextBatch
+				&& s_nativeCrossTextBatchRuntime
+				&& s_nativeCrossTextBatchRuntime->view.active
+				&& s_nativeCrossTextBatchRuntime->view.leaderGeometry
+					== geometry;
+			if (!instancingLeader)
+			{
+				// Keep the feature-off and non-leader path source-equivalent to the
+				// pre-instancing direct-draw-lite implementation.  In particular it
+				// never enters an instancing arm, touches a second stream, or changes
+				// the established slot-27 fallback decision.
+				bool directDrawArmed = false;
+				if (directDrawFailure == NativeDirectDrawLiteFallback::None)
+				{
+					NativeDirectDrawLiteArmScope directDrawScope(
+						geometry, directDrawLite);
+					directDrawArmed = directDrawScope.Active();
+					if (directDrawArmed)
+					{
+						LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
+							NativeA8DrawPathDiagnosticStage::DirectBefore,
+							geometry, properties, renderer, program, command,
+							drawDiagnosticContext, preparedBuffer,
+							static_cast<UInt32>(directDrawFailure),
+							directBindingWasCached);
+						A8RenderImmediateAlt(geometry, nullptr, renderer);
+						LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
+							NativeA8DrawPathDiagnosticStage::DirectAfter,
+							geometry, properties, renderer, program, command,
+							drawDiagnosticContext, preparedBuffer,
+							static_cast<UInt32>(directDrawFailure),
+							directBindingWasCached);
+					}
+				}
+				if (!directDrawArmed)
+				{
+					RecordNativeDirectDrawLiteFallback(
+						directDrawFailure == NativeDirectDrawLiteFallback::None
+							? NativeDirectDrawLiteFallback::Program
+							: directDrawFailure);
+					if (deviceState)
+						deviceState->geometryBindingReady = false;
+					LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
+						NativeA8DrawPathDiagnosticStage::Slot27Before,
+						geometry, properties, renderer, program, command,
+						drawDiagnosticContext, preparedBuffer,
+						static_cast<UInt32>(directDrawFailure), false);
+					reinterpret_cast<PrepareGeometryFn>(
+						program.prepareGeometry)(
+							shader, geometry, 0,
+							preparedBuffer, properties);
+					A8RenderImmediateAlt(geometry, nullptr, renderer);
+					LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
+						NativeA8DrawPathDiagnosticStage::Slot27After,
+						geometry, properties, renderer, program, command,
+						drawDiagnosticContext, preparedBuffer,
+						static_cast<UInt32>(directDrawFailure), false);
+				}
+				const bool verifiedPost =
+					(program.standardV2SlotProofs
+						& NativeA8CompiledPacketCommand::
+							kStandardSlot35Proof) != 0;
+				if (!verifiedPost || cleanupRequired)
+				{
+					reinterpret_cast<SetupStateFn>(
+						program.postGeometry)(shader, properties);
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::SegmentDevicePostSet);
+				}
+				else
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SegmentDevicePostElision);
+				}
+				return;
+			}
+
+			bool instancedDrawSucceeded = false;
+			if (directDrawFailure != NativeDirectDrawLiteFallback::None)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					GlyphInstancingDirectDrawFallback);
+			}
 			if (directDrawFailure == NativeDirectDrawLiteFallback::None)
 			{
-				NativeDirectDrawLiteArmScope directDrawScope(
-					geometry, directDrawLite);
-				directDrawArmed = directDrawScope.Active();
-				if (directDrawArmed)
+				NativeGlyphInstancingArmScope instancingScope(
+					geometry, shader->m_pkD3DRenderState);
+				if (instancingScope.Active())
+				{
 					A8RenderImmediateAlt(geometry, nullptr, renderer);
+					instancedDrawSucceeded =
+						s_nativeCrossTextBatchRuntime->drawSucceeded;
+				}
+				else
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						GlyphInstancingArmFallback);
+				}
 			}
-			if (!directDrawArmed)
+			const bool instancingAttempted =
+				s_nativeCrossTextBatchRuntime
+				&& s_nativeCrossTextBatchRuntime->attempted;
+			if (instancingAttempted && deviceState)
 			{
-				RecordNativeDirectDrawLiteFallback(
-					directDrawFailure == NativeDirectDrawLiteFallback::None
-						? NativeDirectDrawLiteFallback::Program
-						: directDrawFailure);
-				// Slot 27 publishes declaration, streams and indices. A failed
-				// lite proof cannot describe its resulting binding, so prevent a
-				// later packet from reusing an older segment key.
-				if (deviceState)
-					deviceState->geometryBindingReady = false;
-				reinterpret_cast<PrepareGeometryFn>(
-					program.prepareGeometry)(
-						shader, geometry, 0,
-						preparedBuffer, properties);
-				A8RenderImmediateAlt(geometry, nullptr, renderer);
+				deviceState->InvalidateStates();
+				deviceState->geometryBindingReady = false;
+			}
+			if (instancingAttempted && !instancedDrawSucceeded)
+			{
+				// The failed attempt may already have published the instanced VS,
+				// declaration and PS c0 identity. Re-establish the complete leader
+				// pass and slot-31 constants before fail-open replay.
+				reinterpret_cast<SetupStateFn>(
+					program.setupPass)(shader, properties);
+				reinterpret_cast<SetupStateFn>(
+					program.updateConstants)(shader, properties);
+			}
+
+			if (!instancedDrawSucceeded)
+			{
+				if (instancingAttempted)
+				{
+					// Once stream frequencies or an instanced declaration may have
+					// reached the device, never replay through direct-draw-lite.  Force
+					// retail slot 27 to rebuild declaration/stream/index bindings before
+					// the original immediate draw, even when the lite proof was valid.
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						GlyphInstancingDirectDrawFallback);
+					if (deviceState)
+						deviceState->geometryBindingReady = false;
+					LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
+						NativeA8DrawPathDiagnosticStage::Slot27Before,
+						geometry, properties, renderer, program, command,
+						drawDiagnosticContext, preparedBuffer,
+						static_cast<UInt32>(directDrawFailure), false);
+					reinterpret_cast<PrepareGeometryFn>(
+						program.prepareGeometry)(
+							shader, geometry, 0,
+							preparedBuffer, properties);
+					A8RenderImmediateAlt(geometry, nullptr, renderer);
+					LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
+						NativeA8DrawPathDiagnosticStage::
+							InstancingFallbackAfter,
+						geometry, properties, renderer, program, command,
+						drawDiagnosticContext, preparedBuffer,
+						static_cast<UInt32>(directDrawFailure), false);
+				}
+				else
+				{
+					bool directDrawArmed = false;
+					if (directDrawFailure == NativeDirectDrawLiteFallback::None)
+					{
+						NativeDirectDrawLiteArmScope directDrawScope(
+							geometry, directDrawLite);
+						directDrawArmed = directDrawScope.Active();
+						if (directDrawArmed)
+						{
+							LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
+								NativeA8DrawPathDiagnosticStage::DirectBefore,
+								geometry, properties, renderer, program, command,
+								drawDiagnosticContext, preparedBuffer,
+								static_cast<UInt32>(directDrawFailure),
+								directBindingWasCached);
+							A8RenderImmediateAlt(geometry, nullptr, renderer);
+							LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
+								NativeA8DrawPathDiagnosticStage::DirectAfter,
+								geometry, properties, renderer, program, command,
+								drawDiagnosticContext, preparedBuffer,
+								static_cast<UInt32>(directDrawFailure),
+								directBindingWasCached);
+						}
+					}
+					if (!directDrawArmed)
+					{
+						RecordNativeDirectDrawLiteFallback(
+							directDrawFailure
+								== NativeDirectDrawLiteFallback::None
+								? NativeDirectDrawLiteFallback::Program
+								: directDrawFailure);
+						if (deviceState)
+							deviceState->geometryBindingReady = false;
+						LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
+							NativeA8DrawPathDiagnosticStage::Slot27Before,
+							geometry, properties, renderer, program, command,
+							drawDiagnosticContext, preparedBuffer,
+							static_cast<UInt32>(directDrawFailure), false);
+						reinterpret_cast<PrepareGeometryFn>(
+							program.prepareGeometry)(
+								shader, geometry, 0,
+								preparedBuffer, properties);
+						A8RenderImmediateAlt(
+							geometry, nullptr, renderer);
+						LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
+							NativeA8DrawPathDiagnosticStage::Slot27After,
+							geometry, properties, renderer, program, command,
+							drawDiagnosticContext, preparedBuffer,
+							static_cast<UInt32>(directDrawFailure), false);
+					}
+				}
+			}
+			else if (deviceState)
+			{
+				deviceState->geometryBindingReady = false;
 			}
 			const bool verifiedPost =
 				(program.standardV2SlotProofs
@@ -5133,6 +5446,76 @@ namespace fonthook::vectorfont
 			? owner : std::shared_ptr<VirtualStockShapeGroup>{};
 	}
 
+	class NativeCrossTextBatchExecutionScope
+	{
+	public:
+		NativeCrossTextBatchExecutionScope(
+			UInt32 sequenceIndex, NiTriShape* geometry,
+			BSShaderProperty::RenderPass* renderPass, UInt32 currentPass,
+			bool testAlpha, bool blendAlpha, bool setupDrawmode)
+		{
+			if (!g_bEnableFreeTypeFontCrossTextBatch
+				|| sequenceIndex == kInvalidNativeA8CommandIndex
+				|| !geometry || s_nativeCrossTextBatchRuntime)
+			{
+				return;
+			}
+			if (!BeginNativeA8CrossTextBatchExecution(
+					sequenceIndex, geometry, renderPass, currentPass,
+					testAlpha, blendAlpha, setupDrawmode,
+					m_runtime.view))
+			{
+				return;
+			}
+			m_previous = s_nativeCrossTextBatchRuntime;
+			s_nativeCrossTextBatchRuntime = &m_runtime;
+			m_active = true;
+		}
+
+		~NativeCrossTextBatchExecutionScope()
+		{
+			if (!m_active)
+				return;
+			s_nativeCrossTextBatchRuntime = m_previous;
+			const bool success = m_runtime.drawSucceeded;
+			if (!success && g_bEnableFreeTypeFontRenderingLog)
+			{
+				static std::atomic<UInt32> diagnosticCount = 0;
+				if (diagnosticCount.fetch_add(
+						1, std::memory_order_relaxed) < 32u)
+				{
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_glyph_instancing_diag: phase=execute operation=%s hr=0x%08X attempted=%u batch=%u leaderSequence=%u texts=%u instances=%u baseInstance=%u generation=%u leader=%p last=%p",
+						m_runtime.operation ? m_runtime.operation : "unknown",
+						static_cast<UInt32>(m_runtime.result),
+						m_runtime.attempted ? 1u : 0u,
+						m_runtime.view.batchIndex,
+						m_runtime.view.leaderSequenceIndex,
+						m_runtime.view.textCount,
+						m_runtime.view.instanceCount,
+						m_runtime.view.baseInstance,
+						m_runtime.view.generation,
+						m_runtime.view.leaderGeometry,
+						m_runtime.view.lastGeometry);
+				}
+			}
+			EndNativeA8CrossTextBatchExecution(
+				m_runtime.view, success);
+			if (success)
+			{
+				InvalidateSegmentDeviceStateCache();
+				InvalidateNativeA8SortedShaderState();
+				InvalidateNativeA8CommandExecutionSegment(
+					NativeA8CommandFallback::State);
+			}
+		}
+
+	private:
+		NativeCrossTextBatchRuntime m_runtime;
+		NativeCrossTextBatchRuntime* m_previous = nullptr;
+		bool m_active = false;
+	};
+
 	RenderPassImmediatelyFn ReadRenderPassImmediatelyCallTarget()
 	{
 		SIZE_T target = 0;
@@ -5175,6 +5558,12 @@ namespace fonthook::vectorfont
 		NativeA8SortedFrameEntryView frameEntry;
 		const bool sortedFrameHit =
 			FindNativeA8SortedFrameEntry(shape, frameEntry);
+		if (g_bEnableFreeTypeFontCrossTextBatch && sortedFrameHit
+			&& ShouldConsumeNativeA8CrossTextBatchFollower(
+				frameEntry.crossTextSequenceIndex, shape))
+		{
+			return;
+		}
 		A8ShapeMetadataPtr metadataOwner;
 		const A8ShapeMetadata* metadata = nullptr;
 		NativeA8ShapePayload* payload = nullptr;
@@ -5194,6 +5583,15 @@ namespace fonthook::vectorfont
 		{
 			LogMissingMetadata(shape, "tile-render-pass");
 			return;
+		}
+		std::optional<NativeCrossTextBatchExecutionScope> crossTextBatchScope;
+		if (g_bEnableFreeTypeFontCrossTextBatch)
+		{
+			crossTextBatchScope.emplace(
+				sortedFrameHit ? frameEntry.crossTextSequenceIndex
+					: kInvalidNativeA8CommandIndex,
+				shape, pass, currentPass,
+				testAlpha, blendAlpha, setupDrawmode);
 		}
 		if (metadata->backend
 			== FreeTypeShapeBackend::VirtualStockSingleton)
@@ -5768,15 +6166,61 @@ namespace fonthook::vectorfont
 				context.visibilityCulled = true;
 				return;
 			}
-			if (context.directDrawLite)
+			if (!g_bEnableFreeTypeFontCrossTextBatch
+				|| !context.instancedBatch)
 			{
-				ExecuteNativeDirectDrawLite(*context.directDrawLite);
+				if (context.directDrawLite)
+				{
+					ExecuteNativeDirectDrawLite(*context.directDrawLite);
+				}
+				else
+				{
+					State().originalRenderImmediateAlt(shape, renderer);
+				}
+				context.drew = true;
+				if (!context.strictValidation
+					&& context.commandSpanIndex
+						!= kInvalidNativeA8CommandIndex)
+				{
+					context.validationPassed =
+						ValidateNativeImmediateCommand(
+							context, shape, renderer);
+				}
+				if (context.continueImmediate)
+				{
+					context.continuationSucceeded =
+						context.continueImmediate(
+							context.continuation, renderer, true);
+				}
+				return;
 			}
-			else
+
+			bool drawSucceeded = false;
+			if (context.instancedBatch)
 			{
-				State().originalRenderImmediateAlt(shape, renderer);
+				NativeCrossTextBatchRuntime* runtime =
+					s_nativeCrossTextBatchRuntime;
+				if (!runtime
+					|| context.instancedBatch != &runtime->view
+					|| !context.instancedRenderState)
+				{
+					drawSucceeded = false;
+				}
+				else
+				{
+					runtime->attempted = true;
+					drawSucceeded =
+						ExecuteNativeA8CrossTextInstancedDraw(
+							runtime->view,
+							reinterpret_cast<NiDX9Renderer*>(renderer),
+							context.instancedRenderState,
+							runtime->operation, runtime->result);
+					runtime->drawSucceeded = drawSucceeded;
+				}
 			}
-			context.drew = true;
+			context.drew = drawSucceeded;
+			if (!drawSucceeded)
+				return;
 			if (!context.strictValidation
 				&& context.commandSpanIndex
 					!= kInvalidNativeA8CommandIndex)

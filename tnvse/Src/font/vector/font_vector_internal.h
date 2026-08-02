@@ -409,6 +409,42 @@ namespace fonthook::vectorfont
 		NativeDirectDrawLiteBindingReuse,
 		NativeDirectDrawLiteBindingDeviceFailure,
 		NativeDirectDrawLiteDrawDeviceFailure,
+		GlyphInstancingCandidate,
+		GlyphInstancingAcceptedBatch,
+		GlyphInstancingAcceptedText,
+		GlyphInstancingInstance,
+		GlyphInstancingDraw,
+		GlyphInstancingDrawSaved,
+		GlyphInstancingUploadByte,
+		GlyphInstancingBufferGrowth,
+		GlyphInstancingDiscard,
+		GlyphInstancingDepthFallback,
+		GlyphInstancingStateFallback,
+		GlyphInstancingScissorFallback,
+		GlyphInstancingTopologyFallback,
+		GlyphInstancingBudgetFallback,
+		GlyphInstancingStreamFrequencySet,
+		GlyphInstancingStreamFrequencyReset,
+		GlyphInstancingBindingFailure,
+		GlyphInstancingConstantFailure,
+		GlyphInstancingDrawFailure,
+		GlyphInstancingDeviceFailure,
+		GlyphInstancingFollowerConsumed,
+		GlyphInstancingStateProof,
+		GlyphInstancingStateProofFailure,
+		GlyphInstancingRestoreFailure,
+		GlyphInstancingBeginFallback,
+		GlyphInstancingBeginContractFallback,
+		GlyphInstancingBeginPassFallback,
+		GlyphInstancingBeginCallbackFallback,
+		GlyphInstancingBeginResourceFallback,
+		GlyphInstancingBeginImmutableFallback,
+		GlyphInstancingBeginTransientFallback,
+		GlyphInstancingBeginUploadFallback,
+		GlyphInstancingBeginFollowerFallback,
+		GlyphInstancingArmFallback,
+		GlyphInstancingValidationFallback,
+		GlyphInstancingDirectDrawFallback,
 		Count,
 	};
 	static_assert(
@@ -416,6 +452,8 @@ namespace fonthook::vectorfont
 		"FreeTypePerfCounter no longer fits its UInt16 storage");
 
 	void RecordFreeTypePerf(FreeTypePerfCounter aeCounter, UInt64 auiAmount = 1);
+	void RecordFreeTypeGlyphInstancingBatchSize(
+		UInt32 textCount, UInt32 instanceCount);
 	void ReportFreeTypePerf();
 
 	enum class FreeTypePerfPhase : UInt8
