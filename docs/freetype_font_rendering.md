@@ -1259,13 +1259,22 @@ packed color, distance parameters, layer mask, Tile-RGB selector, glyph bounds,
 and local depth. Optional sidecar fields remain at the tail of the private
 packet/payload structures, and sidecars are not built while the feature is
 disabled, preserving the established direct-draw-lite data prefix and work.
-Admission snapshots only the exact scissor/stencil/cleanup compatibility key;
-it does not build matrices or colors. The leader first performs a complete
-batch-wide live immutable/transient/visibility preflight without constructing
-any complete snapshots. Only when every member passes does a second pass build
-each retail-equivalent WVP and TileColor, recheck the transient state, and form
-the 152-byte stream-1 instances. A failed preflight therefore avoids complete
-snapshot work for the whole batch. The first reached batch uses `D3DLOCK_DISCARD`;
+Admission does not build matrices or colors. It precomputes the complete
+compatibility key as a deterministic `UInt32` word representation: pointers,
+packet constants, texture transforms, and shader alpha retain their exact bits,
+while the already-proven effective clamp and alpha/texture flags are normalized
+once. Signed zero and NaN payloads are not folded. Equal keys use block compares;
+the existing first-field walk runs only after a mismatch. Each accepted batch
+retains one 52-byte live-property suffix. The leader re-resolves the immutable
+command/packet identities and current resource epoch instead of rebuilding the
+admission-only 168-byte prefix, and rebuilds only that suffix for every member
+before its transient/visibility proof. A property mutation after admission
+therefore fails open to the original commands even when every member changed in
+the same way.
+Only when every member passes does a second pass build each retail-equivalent
+WVP and TileColor, recheck the transient state, and form the 152-byte stream-1
+instances. A failed preflight therefore avoids complete snapshot work for the
+whole batch. The first reached batch uses `D3DLOCK_DISCARD`;
 later reached batches use disjoint `D3DLOCK_NOOVERWRITE` ranges. No frame-build
 snapshot is uploaded and no concatenated CPU vertex array is built. The buffer
 grows on demand up to 16 MiB and stops only at text boundaries.
@@ -1328,14 +1337,15 @@ The aggregate instancing line separates `begin_preflight` from
 `begin_snapshot`; `snapshot_avoided_texts` counts complete member snapshots
 skipped when the first live pass rejects a batch.
 Admission and live capture are also separate data lifetimes. Command build
-retains only immutable sequence/command/packet/sidecar identity; its normalized
-compatibility key and slot-31 transient proof live only in the local grouping
-candidate and are discarded after acceptance. Each accepted frame reserves two
-scratch arrays sized to its largest batch. At the leader callback, pass 1 fills
-the live compatibility/transient/visibility array and pass 2 fills a distinct
-WVP/TileColor/retail-world array. Neither pass writes back to the admission
-plan, neither can allocate in TileShader, and every rejection clears both live
-arrays before ordinary commands are replayed.
+retains immutable sequence/command/packet/sidecar identity plus one normalized
+property suffix in the batch record; the much larger immutable compatibility
+prefix and slot-31 transient proof remain local grouping evidence. Each accepted
+frame reserves two scratch arrays sized to its largest batch. At the leader
+callback, pass 1 fills only the live transient/visibility array while comparing
+each freshly normalized property suffix with the retained batch value; pass 2
+fills a distinct WVP/TileColor/retail-world array. Neither pass writes back to
+the admission plan, neither can allocate in TileShader, and every rejection
+clears both live arrays before ordinary commands are replayed.
 Exit messages force one final performance report and fully drain the bounded
 diagnostic queue, so a short menu reproduction is not represented only by an
 earlier startup summary.
@@ -1358,6 +1368,10 @@ subcategories, arm/device-validation and direct-draw admission fallbacks,
 follower consumption, and text/instance
 median, p95, and maximum batch sizes. The median and p95 values use
 power-of-two histogram upper bounds capped at the exact observed maximum.
+`compat_precomputed` equals the accepted batch records carrying a normalized
+property suffix. `compat_live_suffix` counts members in completely successful
+pass-1 suffix checks, and `compat_immutable_words_avoided` is that count times
+the 42-word immutable prefix not rebuilt at the leader.
 `tnvse_freetype_glyph_instancing_compat_mismatch` separately reports the first
 incompatible field in the exact comparison order, split between command-build
 admission and leader-time live revalidation. Its field counts therefore sum to

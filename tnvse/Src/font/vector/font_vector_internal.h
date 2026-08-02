@@ -62,6 +62,11 @@ namespace fonthook::vectorfont
 	// The runtime now has more than 255 independently reported counters.
 	// Keeping an UInt8 base aliases the tail entries and can index the wrong
 	// atomic slot after integer promotion.
+	inline constexpr UInt32
+		kGlyphInstancingImmutableCompatibilityWordCount = 42;
+	inline constexpr UInt32
+		kGlyphInstancingPropertyCompatibilityWordCount = 13;
+
 	enum class FreeTypePerfCounter : UInt16
 	{
 		BitmapMemoryHit,
@@ -448,6 +453,7 @@ namespace fonthook::vectorfont
 		GlyphInstancingArmFallback,
 		GlyphInstancingValidationFallback,
 		GlyphInstancingDirectDrawFallback,
+		GlyphInstancingCompatibilityLiveSuffixCheck,
 		GlyphInstancingCompatibilityMismatchTotal,
 		GlyphInstancingCompatibilityMismatchAdmission,
 		GlyphInstancingCompatibilityMismatchLive,

@@ -81,31 +81,55 @@ namespace fonthook::vectorfont
 			UInt32 depthBits = 0;
 		};
 
+		// Compatibility is normalized to an exact UInt32 word representation.
+		// This is deliberately bit-preserving rather than arithmetic
+		// canonicalization: signed zero and NaN payloads remain distinct because a
+		// shader is allowed to observe them.  The immutable prefix is built only
+		// during admission.  The much smaller property suffix is retained once per
+		// accepted batch and is the only compatibility key rebuilt at leader time.
+		struct CrossTextImmutableCompatibilityKey
+		{
+			UInt32 program = 0;
+			UInt32 normalDeclaration = 0;
+			UInt32 sourceTexture = 0;
+			UInt32 atlasTexture = 0;
+			std::array<UInt32, kNativeA8PacketConstantFloatCount>
+				constantBits = {};
+			UInt32 shaderClass = 0;
+			UInt32 sampling = 0;
+			UInt32 quality = 0;
+			UInt32 distanceFieldMethod = 0;
+			UInt32 layer = 0;
+			UInt32 atlasPage = 0;
+		};
+		static_assert(sizeof(CrossTextImmutableCompatibilityKey)
+			== kGlyphInstancingImmutableCompatibilityWordCount
+				* sizeof(UInt32));
+
+		struct CrossTextPropertyCompatibilityKey
+		{
+			UInt32 alphaTexture = 0;
+			std::array<UInt32, 4> textureTransformBits = {};
+			UInt32 clampMode = 0;
+			UInt32 alphaFlags = 0;
+			UInt32 alphaTestRef = 0;
+			UInt32 textureModeFlags = 0;
+			std::array<UInt32, 2> shaderFlags = {};
+			UInt32 shaderAlphaBits = 0;
+			UInt32 shaderFadeAlphaBits = 0;
+		};
+		static_assert(sizeof(CrossTextPropertyCompatibilityKey)
+			== kGlyphInstancingPropertyCompatibilityWordCount
+				* sizeof(UInt32));
+
 		struct CrossTextCompatibilityKey
 		{
-			const NativeA8CompiledPacketCommand* program = nullptr;
-			IDirect3DVertexDeclaration9* normalDeclaration = nullptr;
-			const NiTexture* sourceTexture = nullptr;
-			const NiTexture* alphaTexture = nullptr;
-			const void* atlasTexture = nullptr;
-			std::array<float, kNativeA8PacketConstantFloatCount> constants = {};
-			NiPoint4 textureTransform;
-			NiTexturingProperty::ClampMode clampMode =
-				NiTexturingProperty::CLAMP_S_CLAMP_T;
-			NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
-			NativeA8Sampling sampling = NativeA8Sampling::Point;
-			EffectQuality quality = EffectQuality::Balanced;
-			DistanceFieldMethod distanceFieldMethod =
-				DistanceFieldMethod::Mtsdf;
-			UInt32 layer = 0;
-			UInt16 atlasPage = 0;
-			UInt16 alphaFlags = 0;
-			UInt8 alphaTestRef = 0;
-			UInt8 textureModeFlags = 0;
-			std::array<UInt32, 2> shaderFlags = {};
-			float shaderAlpha = 1.0f;
-			float shaderFadeAlpha = 1.0f;
+			CrossTextImmutableCompatibilityKey immutable;
+			CrossTextPropertyCompatibilityKey property;
 		};
+		static_assert(sizeof(CrossTextCompatibilityKey)
+			== sizeof(CrossTextImmutableCompatibilityKey)
+				+ sizeof(CrossTextPropertyCompatibilityKey));
 
 		// Retained command-build result.  This is immutable after admission and
 		// deliberately contains no transient state, WVP, TileColor, or retail-world
@@ -125,7 +149,6 @@ namespace fonthook::vectorfont
 		struct CrossTextAdmissionCandidate
 		{
 			CrossTextAdmissionMember member;
-			CrossTextCompatibilityKey compatibility;
 			NativeTileInstancingTransientState transient;
 		};
 
@@ -133,7 +156,6 @@ namespace fonthook::vectorfont
 		// prepared and never overwrites the retained admission plan.
 		struct CrossTextLivePreflight
 		{
-			CrossTextCompatibilityKey compatibility;
 			NativeTileInstancingTransientState transient;
 		};
 
@@ -147,6 +169,11 @@ namespace fonthook::vectorfont
 
 		struct CrossTextBatch
 		{
+			// One admission-time property suffix is sufficient because every member
+			// was exactly compatible when this batch was formed.  Requiring every
+			// live member to still match it is conservative and fail-open if a
+			// callback mutates otherwise compatible properties before the leader.
+			CrossTextPropertyCompatibilityKey propertyCompatibility;
 			UInt32 firstMember = 0;
 			UInt32 memberCount = 0;
 			UInt32 baseInstance = 0;
@@ -263,6 +290,22 @@ namespace fonthook::vectorfont
 			Live
 		};
 
+		UInt32 NormalizeCompatibilityPointer(const void* value)
+		{
+			static_assert(sizeof(value) == sizeof(UInt32));
+			UInt32 bits = 0;
+			std::memcpy(&bits, &value, sizeof(bits));
+			return bits;
+		}
+
+		UInt32 NormalizeCompatibilityFloat(float value)
+		{
+			UInt32 bits = 0;
+			static_assert(sizeof(value) == sizeof(bits));
+			std::memcpy(&bits, &value, sizeof(bits));
+			return bits;
+		}
+
 		bool RecordCompatibilityKeyMismatch(CompatibilityComparePhase phase,
 			FreeTypePerfCounter field)
 		{
@@ -277,50 +320,20 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		bool SameCompatibilityKey(const CrossTextCompatibilityKey& left,
-			const CrossTextCompatibilityKey& right,
+		bool SamePropertyCompatibilityKey(
+			const CrossTextPropertyCompatibilityKey& left,
+			const CrossTextPropertyCompatibilityKey& right,
 			CompatibilityComparePhase phase)
 		{
-			if (left.program != right.program)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchProgram);
-			}
-			if (left.normalDeclaration != right.normalDeclaration)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchDeclaration);
-			}
-			if (left.sourceTexture != right.sourceTexture)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchSourceTexture);
-			}
+			if (std::memcmp(&left, &right, sizeof(left)) == 0)
+				return true;
 			if (left.alphaTexture != right.alphaTexture)
 			{
 				return RecordCompatibilityKeyMismatch(phase,
 					FreeTypePerfCounter::
 						GlyphInstancingCompatibilityMismatchAlphaTexture);
 			}
-			if (left.atlasTexture != right.atlasTexture)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchAtlasTexture);
-			}
-			if (std::memcmp(left.constants.data(), right.constants.data(),
-					left.constants.size() * sizeof(float)) != 0)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchConstants);
-			}
-			if (std::memcmp(&left.textureTransform,
-					&right.textureTransform,
-					sizeof(left.textureTransform)) != 0)
+			if (left.textureTransformBits != right.textureTransformBits)
 			{
 				return RecordCompatibilityKeyMismatch(phase,
 					FreeTypePerfCounter::
@@ -331,42 +344,6 @@ namespace fonthook::vectorfont
 				return RecordCompatibilityKeyMismatch(phase,
 					FreeTypePerfCounter::
 						GlyphInstancingCompatibilityMismatchClampMode);
-			}
-			if (left.shaderClass != right.shaderClass)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchShaderClass);
-			}
-			if (left.sampling != right.sampling)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchSampling);
-			}
-			if (left.quality != right.quality)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchQuality);
-			}
-			if (left.distanceFieldMethod != right.distanceFieldMethod)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchDistanceFieldMethod);
-			}
-			if (left.layer != right.layer)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchLayer);
-			}
-			if (left.atlasPage != right.atlasPage)
-			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchAtlasPage);
 			}
 			if (left.alphaFlags != right.alphaFlags)
 			{
@@ -392,22 +369,120 @@ namespace fonthook::vectorfont
 					FreeTypePerfCounter::
 						GlyphInstancingCompatibilityMismatchShaderFlags);
 			}
-			if (std::memcmp(&left.shaderAlpha, &right.shaderAlpha,
-					sizeof(left.shaderAlpha)) != 0)
+			if (left.shaderAlphaBits != right.shaderAlphaBits)
 			{
 				return RecordCompatibilityKeyMismatch(phase,
 					FreeTypePerfCounter::
 						GlyphInstancingCompatibilityMismatchShaderAlpha);
 			}
-			if (std::memcmp(&left.shaderFadeAlpha,
-					&right.shaderFadeAlpha,
-					sizeof(left.shaderFadeAlpha)) != 0)
+			if (left.shaderFadeAlphaBits != right.shaderFadeAlphaBits)
 			{
 				return RecordCompatibilityKeyMismatch(phase,
 					FreeTypePerfCounter::
 						GlyphInstancingCompatibilityMismatchShaderFadeAlpha);
 			}
 			return true;
+		}
+
+		bool SameCompatibilityKey(const CrossTextCompatibilityKey& left,
+			const CrossTextCompatibilityKey& right,
+			CompatibilityComparePhase phase)
+		{
+			// The normalized structure contains only UInt32 words and has no
+			// padding. Equal keys therefore take one branch-light block compare;
+			// the detailed path is paid only to retain first-field diagnostics.
+			if (std::memcmp(&left, &right, sizeof(left)) == 0)
+				return true;
+
+			if (left.immutable.program != right.immutable.program)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchProgram);
+			}
+			if (left.immutable.normalDeclaration
+				!= right.immutable.normalDeclaration)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchDeclaration);
+			}
+			if (left.immutable.sourceTexture != right.immutable.sourceTexture)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchSourceTexture);
+			}
+			if (left.property.alphaTexture != right.property.alphaTexture)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchAlphaTexture);
+			}
+			if (left.immutable.atlasTexture != right.immutable.atlasTexture)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchAtlasTexture);
+			}
+			if (left.immutable.constantBits != right.immutable.constantBits)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchConstants);
+			}
+			if (left.property.textureTransformBits
+				!= right.property.textureTransformBits)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchTextureTransform);
+			}
+			if (left.property.clampMode != right.property.clampMode)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchClampMode);
+			}
+			if (left.immutable.shaderClass != right.immutable.shaderClass)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchShaderClass);
+			}
+			if (left.immutable.sampling != right.immutable.sampling)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchSampling);
+			}
+			if (left.immutable.quality != right.immutable.quality)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchQuality);
+			}
+			if (left.immutable.distanceFieldMethod
+				!= right.immutable.distanceFieldMethod)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchDistanceFieldMethod);
+			}
+			if (left.immutable.layer != right.immutable.layer)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchLayer);
+			}
+			if (left.immutable.atlasPage != right.immutable.atlasPage)
+			{
+				return RecordCompatibilityKeyMismatch(phase,
+					FreeTypePerfCounter::
+						GlyphInstancingCompatibilityMismatchAtlasPage);
+			}
+			return SamePropertyCompatibilityKey(
+				left.property, right.property, phase);
 		}
 
 		const NativeA8DrawCommand* ResolveSequenceCommand(
@@ -448,7 +523,8 @@ namespace fonthook::vectorfont
 			None = 0,
 			State,
 			Scissor,
-			Topology
+			Topology,
+			Compatibility
 		};
 
 		std::atomic<UInt32> s_instancingDiagnosticCount = 0;
@@ -466,6 +542,8 @@ namespace fonthook::vectorfont
 				return "scissor";
 			case BuildMemberFailure::Topology:
 				return "topology";
+			case BuildMemberFailure::Compatibility:
+				return "compatibility-key";
 			default:
 				return "unknown";
 			}
@@ -733,31 +811,49 @@ namespace fonthook::vectorfont
 			return BuildMemberFailure::None;
 		}
 
-		void BuildCompatibilityKey(const ResolvedCrossTextMember& resolved,
-			CrossTextCompatibilityKey& key)
+		void BuildImmutableCompatibilityKey(
+			const ResolvedCrossTextMember& resolved,
+			CrossTextImmutableCompatibilityKey& key)
 		{
 			key = {};
-			key.program = resolved.command->program;
-			key.normalDeclaration = resolved.command->binding.declaration;
-			key.sourceTexture = resolved.artifact->atlasTextures[
-				resolved.packet->atlasPage].m_pObject;
-			key.alphaTexture = resolved.tile->alphaTexture.m_pObject;
-			key.atlasTexture = resolved.command->atlasTexture;
-			key.constants = resolved.packet->constants;
+			key.program = NormalizeCompatibilityPointer(
+				resolved.command->program);
+			key.normalDeclaration = NormalizeCompatibilityPointer(
+				resolved.command->binding.declaration);
+			key.sourceTexture = NormalizeCompatibilityPointer(
+				resolved.artifact->atlasTextures[
+					resolved.packet->atlasPage].m_pObject);
+			key.atlasTexture = NormalizeCompatibilityPointer(
+				resolved.command->atlasTexture);
+			std::memcpy(key.constantBits.data(),
+				resolved.packet->constants.data(),
+				key.constantBits.size() * sizeof(UInt32));
+			key.shaderClass = static_cast<UInt32>(resolved.packet->shaderClass);
+			key.sampling = static_cast<UInt32>(resolved.packet->sampling);
+			key.quality = static_cast<UInt32>(resolved.packet->quality);
+			key.distanceFieldMethod = static_cast<UInt32>(
+				resolved.packet->distanceFieldMethod);
+			key.layer = resolved.packet->layer;
+			key.atlasPage = resolved.packet->atlasPage;
+		}
+
+		void BuildPropertyCompatibilityKey(
+			const ResolvedCrossTextMember& resolved,
+			CrossTextPropertyCompatibilityKey& key)
+		{
+			key = {};
+			key.alphaTexture = NormalizeCompatibilityPointer(
+				resolved.tile->alphaTexture.m_pObject);
+			std::memcpy(key.textureTransformBits.data(),
+				&resolved.tile->textureTransform,
+				key.textureTransformBits.size() * sizeof(UInt32));
 			// Retail and the symbolized test build map VS c4 to TileShader::
 			// TexScroll. It is refreshed only for rotating Tile properties. Exact
 			// texture-transform plus rotates identity therefore proves c4 is the
 			// same for every member; the instanced VS never mutates that register.
-			key.textureTransform = resolved.tile->textureTransform;
-			key.clampMode = resolved.tile->rotates
+			key.clampMode = static_cast<UInt32>(resolved.tile->rotates
 				? NiTexturingProperty::WRAP_S_WRAP_T
-				: resolved.tile->clampMode;
-			key.shaderClass = resolved.packet->shaderClass;
-			key.sampling = resolved.packet->sampling;
-			key.quality = resolved.packet->quality;
-			key.distanceFieldMethod = resolved.packet->distanceFieldMethod;
-			key.layer = resolved.packet->layer;
-			key.atlasPage = resolved.packet->atlasPage;
+				: resolved.tile->clampMode);
 			key.alphaFlags = resolved.alpha->m_usFlags.Get()
 				& ~NiAlphaProperty::TEST_ENABLE_MASK;
 			key.alphaTestRef = resolved.alpha->m_ucAlphaTestRef;
@@ -766,13 +862,23 @@ namespace fonthook::vectorfont
 				| (resolved.tile->hasVertexColors ? 2u : 0u);
 			key.shaderFlags = {
 				resolved.tile->ulFlags[0], resolved.tile->ulFlags[1] };
-			key.shaderAlpha = resolved.tile->fAlpha;
-			key.shaderFadeAlpha = resolved.tile->fFadeAlpha;
+			key.shaderAlphaBits = NormalizeCompatibilityFloat(
+				resolved.tile->fAlpha);
+			key.shaderFadeAlphaBits = NormalizeCompatibilityFloat(
+				resolved.tile->fFadeAlpha);
+		}
+
+		void BuildCompatibilityKey(const ResolvedCrossTextMember& resolved,
+			CrossTextCompatibilityKey& key)
+		{
+			BuildImmutableCompatibilityKey(resolved, key.immutable);
+			BuildPropertyCompatibilityKey(resolved, key.property);
 		}
 
 		BuildMemberFailure BuildAdmissionMember(
 			const CrossTextSequenceItem& item, UInt32 sequenceIndex,
-			CrossTextAdmissionCandidate& candidate)
+			CrossTextAdmissionCandidate& candidate,
+			CrossTextCompatibilityKey& compatibility)
 		{
 			ResolvedCrossTextMember resolved;
 			BuildMemberFailure failure = ResolveCrossTextCommand(item, resolved);
@@ -803,12 +909,13 @@ namespace fonthook::vectorfont
 			candidate.member.packet = resolved.packet;
 			candidate.member.sidecars = resolved.sidecars;
 			candidate.member.sidecarCount = resolved.sidecarCount;
-			BuildCompatibilityKey(resolved, candidate.compatibility);
+			BuildCompatibilityKey(resolved, compatibility);
 			return BuildMemberFailure::None;
 		}
 
 		BuildMemberFailure BuildLivePreflightMember(
 			const CrossTextAdmissionMember& planned,
+			const CrossTextPropertyCompatibilityKey& expectedCompatibility,
 			CrossTextLivePreflight& live)
 		{
 			const CrossTextSequenceItem& item = planned.sequence;
@@ -827,6 +934,13 @@ namespace fonthook::vectorfont
 				|| resolved.sidecarCount != planned.sidecarCount)
 			{
 				return BuildMemberFailure::Topology;
+			}
+			CrossTextPropertyCompatibilityKey compatibility;
+			BuildPropertyCompatibilityKey(resolved, compatibility);
+			if (!SamePropertyCompatibilityKey(expectedCompatibility,
+					compatibility, CompatibilityComparePhase::Live))
+			{
+				return BuildMemberFailure::Compatibility;
 			}
 
 			const NativeTileInstancingSnapshotResult transientResult =
@@ -856,7 +970,6 @@ namespace fonthook::vectorfont
 			{
 				return BuildMemberFailure::Scissor;
 			}
-			BuildCompatibilityKey(resolved, live.compatibility);
 			return BuildMemberFailure::None;
 		}
 
@@ -910,6 +1023,10 @@ namespace fonthook::vectorfont
 			case BuildMemberFailure::Topology:
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::GlyphInstancingTopologyFallback);
+				break;
+			case BuildMemberFailure::Compatibility:
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::GlyphInstancingStateFallback);
 				break;
 			case BuildMemberFailure::State:
 			default:
@@ -1654,6 +1771,8 @@ namespace fonthook::vectorfont
 			}
 
 			candidateMembers.clear();
+			CrossTextCompatibilityKey leaderCompatibility;
+			bool leaderCompatibilityReady = false;
 			UInt64 candidateInstances = 0;
 			UInt32 cursor = index;
 			for (; cursor < frame.sequence.size(); ++cursor)
@@ -1668,19 +1787,26 @@ namespace fonthook::vectorfont
 					break;
 				}
 				CrossTextAdmissionCandidate candidate;
+				CrossTextCompatibilityKey compatibility;
 				const BuildMemberFailure failure =
-					BuildAdmissionMember(item, cursor, candidate);
+					BuildAdmissionMember(
+						item, cursor, candidate, compatibility);
 				if (failure != BuildMemberFailure::None)
 				{
 					RecordBuildFailure(failure);
 					break;
 				}
-				if (!candidateMembers.empty())
+				if (!leaderCompatibilityReady)
+				{
+					leaderCompatibility = compatibility;
+					leaderCompatibilityReady = true;
+				}
+				else
 				{
 					const CrossTextAdmissionCandidate& leader =
 						candidateMembers.front();
 					if (!SameCompatibilityKey(
-							leader.compatibility, candidate.compatibility,
+							leaderCompatibility, compatibility,
 							CompatibilityComparePhase::Admission))
 					{
 						RecordFreeTypePerf(FreeTypePerfCounter::
@@ -1713,6 +1839,8 @@ namespace fonthook::vectorfont
 			if (candidateMembers.size() >= 2)
 			{
 				CrossTextBatch batch;
+				batch.propertyCompatibility =
+					leaderCompatibility.property;
 				batch.firstMember = static_cast<UInt32>(
 					frame.admissionMembers.size());
 				batch.memberCount = static_cast<UInt32>(candidateMembers.size());
@@ -1933,10 +2061,11 @@ namespace fonthook::vectorfont
 			return rejectBegin(detail, reason, memberOffset);
 		};
 
-		// Pass 1 independently re-resolves immutable/property identity into the
-		// batch-local live scratch, normalizes the compatibility key and transient
-		// state, then proves current visibility.  The retained admission plan is
-		// never modified, and no WVP/TileColor is built until the whole pass succeeds.
+		// Pass 1 re-resolves immutable identity but reuses the admission-time
+		// normalized immutable prefix. It rebuilds only the small live property
+		// suffix, compares it with the retained batch suffix, captures transient
+		// state, and proves visibility. No WVP/TileColor is built until the whole
+		// pass succeeds.
 		{
 			FreeTypePerfScope livePreflightPerf(
 				FreeTypePerfPhase::GlyphInstancingLivePreflight);
@@ -1948,7 +2077,7 @@ namespace fonthook::vectorfont
 				CrossTextLivePreflight& current =
 					frame.livePreflight.back();
 				const BuildMemberFailure failure = BuildLivePreflightMember(
-					planned, current);
+					planned, batch.propertyCompatibility, current);
 				if (failure != BuildMemberFailure::None)
 				{
 					RecordBuildFailure(failure);
@@ -1959,18 +2088,6 @@ namespace fonthook::vectorfont
 						: FreeTypePerfCounter::
 							GlyphInstancingBeginImmutableFallback,
 						BuildMemberFailureName(failure), offset);
-				}
-				if (offset != 0
-					&& !SameCompatibilityKey(
-						frame.livePreflight.front().compatibility,
-						current.compatibility,
-						CompatibilityComparePhase::Live))
-				{
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::GlyphInstancingStateFallback);
-					return rejectLivePreflight(FreeTypePerfCounter::
-						GlyphInstancingBeginImmutableFallback,
-						"compatibility-key", offset);
 				}
 				if (offset != 0
 					&& !SameNativeTileInstancingTransientState(
@@ -1985,6 +2102,9 @@ namespace fonthook::vectorfont
 				}
 			}
 		}
+		RecordFreeTypePerf(FreeTypePerfCounter::
+			GlyphInstancingCompatibilityLiveSuffixCheck,
+			batch.memberCount);
 
 		// Pass 2: the render-thread-only preflight above completed without a
 		// callback or device submission. Freeze exactly one complete live snapshot

@@ -893,11 +893,17 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				NativeDirectDrawLiteDrawDeviceFailure)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_glyph_instancing: candidates=%llu accepted_batches=%llu texts=%llu instances=%llu draws=%llu draws_saved=%llu upload_bytes=%llu buffer_growth=%llu discards=%llu fallback_depth=%llu state=%llu scissor=%llu topology=%llu budget=%llu frequency_sets=%llu frequency_resets=%llu binding_failures=%llu constant_failures=%llu draw_failures=%llu device_failures=%llu followers_consumed=%llu state_proofs=%llu proof_failures=%llu restore_failures=%llu begin_fallbacks=%llu begin_contract=%llu begin_pass=%llu begin_callback=%llu begin_resource=%llu begin_immutable=%llu begin_transient=%llu begin_preflight=%llu begin_snapshot=%llu snapshot_avoided_texts=%llu begin_upload=%llu begin_follower=%llu arm_fallbacks=%llu validation_fallbacks=%llu direct_draw_fallbacks=%llu text_median=%llu text_p95=%llu text_max=%llu instance_median=%llu instance_p95=%llu instance_max=%llu",
+			"tnvse_freetype_glyph_instancing: candidates=%llu accepted_batches=%llu texts=%llu instances=%llu compat_precomputed=%llu compat_live_suffix=%llu compat_immutable_words_avoided=%llu draws=%llu draws_saved=%llu upload_bytes=%llu buffer_growth=%llu discards=%llu fallback_depth=%llu state=%llu scissor=%llu topology=%llu budget=%llu frequency_sets=%llu frequency_resets=%llu binding_failures=%llu constant_failures=%llu draw_failures=%llu device_failures=%llu followers_consumed=%llu state_proofs=%llu proof_failures=%llu restore_failures=%llu begin_fallbacks=%llu begin_contract=%llu begin_pass=%llu begin_callback=%llu begin_resource=%llu begin_immutable=%llu begin_transient=%llu begin_preflight=%llu begin_snapshot=%llu snapshot_avoided_texts=%llu begin_upload=%llu begin_follower=%llu arm_fallbacks=%llu validation_fallbacks=%llu direct_draw_fallbacks=%llu text_median=%llu text_p95=%llu text_max=%llu instance_median=%llu instance_p95=%llu instance_max=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingCandidate)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingAcceptedBatch)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingAcceptedText)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingInstance)],
+			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingAcceptedBatch)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityLiveSuffixCheck)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				GlyphInstancingCompatibilityLiveSuffixCheck)]
+				* kGlyphInstancingImmutableCompatibilityWordCount,
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDraw)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDrawSaved)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingUploadByte)],
