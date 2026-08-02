@@ -243,6 +243,10 @@ namespace fonthook::vectorfont
 				std::shared_ptr<NativeA8StaticCandidate>> staticCandidates;
 			CpuMemoryLease cpuMemory;
 			std::atomic<UInt32> resourceSerial = 1;
+			// Proxy shapes live for the process lifetime.  Once the complete pool is
+			// published, registration no longer needs the ring mutex; device reset
+			// only clears/rebinds their borrowed GPU resources.
+			std::atomic<bool> proxyPoolReady = false;
 			std::atomic<UInt32> sortedFrameLeases = 0;
 			std::atomic<UInt32> activeSubmissions = 0;
 			std::atomic<bool> releasePending = false;
@@ -2066,7 +2070,17 @@ namespace fonthook::vectorfont
 	bool EnsureNativeA8ProxyPool(Font& font)
 	{
 		NativeA8RingState& state = RingState();
+		if (state.proxyPoolReady.load(std::memory_order_acquire))
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::NativeRegistrationProxyFast);
+			return true;
+		}
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::NativeRegistrationProxySlow);
 		std::lock_guard<std::mutex> lock(state.mutex);
+		if (state.proxyPoolReady.load(std::memory_order_relaxed))
+			return true;
 		const NiColorA white{ 1.0f, 1.0f, 1.0f, 1.0f };
 		while (state.proxyCount < kProxyPoolSize)
 		{
@@ -2092,6 +2106,8 @@ namespace fonthook::vectorfont
 			proxy.alphaProperty->SetAlphaTesting(false);
 			state.proxies[state.proxyCount++] = std::move(proxy);
 		}
+		if (state.proxyCount == kProxyPoolSize)
+			state.proxyPoolReady.store(true, std::memory_order_release);
 		return state.proxyCount != 0;
 	}
 

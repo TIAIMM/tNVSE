@@ -254,6 +254,25 @@ namespace fonthook::vectorfont
 		UInt32 dynamicVertexCount = 0;
 	};
 
+	// BuildNativeA8PayloadTemplate publishes the text artifact through a
+	// shared_ptr<const>.  Once published, every field below is immutable except
+	// for the separately synchronized residency cache.  Record the complete
+	// structural validation once at construction so registering another live
+	// Tile does not rescan every glyph vertex and packet.
+	struct NativeA8PayloadValidationSeal
+	{
+		static constexpr UInt32 kAbi = 1;
+
+		UInt32 abi = 0;
+		UInt32 pageCount = 0;
+		UInt32 quadCount = 0;
+		UInt32 sourceRangeCount = 0;
+		UInt32 vertexCount = 0;
+		UInt32 packetCount = 0;
+		UInt32 compositePacketCount = 0;
+		bool stockLikeBitmapPackets = false;
+	};
+
 	struct NativeA8PayloadTemplate
 	{
 		CpuMemoryLease cpuMemory;
@@ -272,9 +291,32 @@ namespace fonthook::vectorfont
 		// Keep optional sidecars at the tail for a strict disabled-path layout
 		// prefix and to avoid perturbing established packet/residency offsets.
 		std::vector<NativeA8GlyphInstanceSidecar> glyphInstanceSidecars;
+		// Tail-only construction certificate.  Count copies make the read path
+		// fail closed if an accidental internal mutation ever invalidates the
+		// otherwise immutable artifact.
+		NativeA8PayloadValidationSeal validationSeal;
 	};
 	using NativeA8PayloadTemplatePtr =
 		std::shared_ptr<const NativeA8PayloadTemplate>;
+
+	inline bool HasNativeA8PayloadValidationSeal(
+		const NativeA8PayloadTemplate& payloadTemplate)
+	{
+		const NativeA8PayloadValidationSeal& seal =
+			payloadTemplate.validationSeal;
+		return seal.abi == NativeA8PayloadValidationSeal::kAbi
+			&& seal.pageCount != 0
+			&& seal.pageCount == payloadTemplate.pageCount
+			&& seal.quadCount != 0
+			&& seal.quadCount == payloadTemplate.quadCount
+			&& seal.sourceRangeCount != 0
+			&& seal.sourceRangeCount == payloadTemplate.sourceRangeCount
+			&& seal.vertexCount == payloadTemplate.gpuVertices.size()
+			&& seal.packetCount != 0
+			&& seal.packetCount == payloadTemplate.packets.size()
+			&& seal.compositePacketCount
+				== payloadTemplate.compositePackets.size();
+	}
 
 	// The Standard-lite call program is resolved once for a live Tile and shader
 	// generation. It deliberately excludes VB/IB/declaration residency: ordinary
@@ -1255,6 +1297,7 @@ namespace fonthook::vectorfont
 	bool HookNativeA8Accumulator();
 	bool IsNativeA8AccumulatorHookCurrent();
 	bool IsNativeA8RenderAlphaGeometryHookCurrent();
+	bool IsNativeA8RegistrationHookChainCurrent();
 
 	void RecordNativeA8Suppression(NiTriShape* shape,
 		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason,

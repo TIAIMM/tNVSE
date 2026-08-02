@@ -134,54 +134,76 @@ namespace fonthook::vectorfont
 					return RejectA8Shape("non-finite-base-vertex-color");
 			}
 
-			if (!payloadTemplate->quadCount
-				|| payloadTemplate->quadCount > kNativeA8MaximumQuads
-				|| payloadTemplate->gpuVertices.size()
-					< static_cast<size_t>(payloadTemplate->quadCount) * 4u
-				|| (payloadTemplate->gpuVertices.size() & 3u)
-				|| payloadTemplate->gpuVertices.size() / 4u
-					> kNativeA8MaximumQuads
-				|| payloadTemplate->packets.empty()
-				|| payloadTemplate->pageCount != payloadTemplate->atlasProperties.size()
-				|| payloadTemplate->pageCount != payloadTemplate->atlasTextures.size()
-				|| !IsFiniteBound(payloadTemplate->bound))
+			const bool sealed =
+				HasNativeA8PayloadValidationSeal(*payloadTemplate);
+			RecordFreeTypePerf(sealed
+				? FreeTypePerfCounter::NativeRegistrationArtifactSealed
+				: FreeTypePerfCounter::NativeRegistrationArtifactFallback);
+			if (!sealed)
 			{
-				return RejectA8Shape("invalid-text-artifact");
-			}
-			if (!std::all_of(payloadTemplate->gpuVertices.begin(),
-				payloadTemplate->gpuVertices.end(), IsFiniteVertex))
-			{
-				return RejectA8Shape("non-finite-text-artifact-vertex");
-			}
-			for (const NativeA8PacketTemplate& packet : payloadTemplate->packets)
-			{
-				const UInt64 vertexEnd = static_cast<UInt64>(packet.firstVertex)
-					+ packet.vertexCount;
-				if (!packet.vertexCount || (packet.firstVertex & 3u)
-					|| (packet.vertexCount & 3u)
-					|| vertexEnd > payloadTemplate->gpuVertices.size()
-					|| packet.layer > 3 || !IsFiniteBound(packet.bound)
-					|| !std::all_of(packet.constants.begin(), packet.constants.end(),
-						[](float value) { return std::isfinite(value); }))
+				// Fail closed for any legacy or accidentally unsealed producer.  The
+				// normal builder seals the same immutable fields once before publishing
+				// the shared_ptr<const>, eliminating this O(vertex + packet) work from
+				// registration without weakening the fallback contract.
+				if (!payloadTemplate->quadCount
+					|| payloadTemplate->quadCount > kNativeA8MaximumQuads
+					|| payloadTemplate->gpuVertices.size()
+						< static_cast<size_t>(payloadTemplate->quadCount) * 4u
+					|| (payloadTemplate->gpuVertices.size() & 3u)
+					|| payloadTemplate->gpuVertices.size() / 4u
+						> kNativeA8MaximumQuads
+					|| payloadTemplate->packets.empty()
+					|| payloadTemplate->pageCount
+						!= payloadTemplate->atlasProperties.size()
+					|| payloadTemplate->pageCount
+						!= payloadTemplate->atlasTextures.size()
+					|| !IsFiniteBound(payloadTemplate->bound))
 				{
-					return RejectA8Shape("invalid-text-artifact-packet");
+					return RejectA8Shape("invalid-text-artifact");
 				}
-			}
-			for (const NativeA8PacketTemplate& packet
-				: payloadTemplate->compositePackets)
-			{
-				const UInt64 vertexEnd = static_cast<UInt64>(packet.firstVertex)
-					+ packet.vertexCount;
-				if (!packet.vertexCount || (packet.firstVertex & 3u)
-					|| (packet.vertexCount & 3u)
-					|| vertexEnd > payloadTemplate->gpuVertices.size()
-					|| packet.layer > 3 || !IsFiniteBound(packet.bound)
-					|| packet.shaderClass != NativeA8ShaderClass::Composite
-					|| packet.staticCompositeLayerMask > 15u
-					|| !std::all_of(packet.constants.begin(), packet.constants.end(),
-						[](float value) { return std::isfinite(value); }))
+				if (!std::all_of(payloadTemplate->gpuVertices.begin(),
+					payloadTemplate->gpuVertices.end(), IsFiniteVertex))
 				{
-					return RejectA8Shape("invalid-composite-packet");
+					return RejectA8Shape(
+						"non-finite-text-artifact-vertex");
+				}
+				for (const NativeA8PacketTemplate& packet
+					: payloadTemplate->packets)
+				{
+					const UInt64 vertexEnd =
+						static_cast<UInt64>(packet.firstVertex)
+						+ packet.vertexCount;
+					if (!packet.vertexCount || (packet.firstVertex & 3u)
+						|| (packet.vertexCount & 3u)
+						|| vertexEnd > payloadTemplate->gpuVertices.size()
+						|| packet.layer > 3 || !IsFiniteBound(packet.bound)
+						|| !std::all_of(packet.constants.begin(),
+							packet.constants.end(), [](float value)
+							{ return std::isfinite(value); }))
+					{
+						return RejectA8Shape(
+							"invalid-text-artifact-packet");
+					}
+				}
+				for (const NativeA8PacketTemplate& packet
+					: payloadTemplate->compositePackets)
+				{
+					const UInt64 vertexEnd =
+						static_cast<UInt64>(packet.firstVertex)
+						+ packet.vertexCount;
+					if (!packet.vertexCount || (packet.firstVertex & 3u)
+						|| (packet.vertexCount & 3u)
+						|| vertexEnd > payloadTemplate->gpuVertices.size()
+						|| packet.layer > 3 || !IsFiniteBound(packet.bound)
+						|| packet.shaderClass
+							!= NativeA8ShaderClass::Composite
+						|| packet.staticCompositeLayerMask > 15u
+						|| !std::all_of(packet.constants.begin(),
+							packet.constants.end(), [](float value)
+							{ return std::isfinite(value); }))
+					{
+						return RejectA8Shape("invalid-composite-packet");
+					}
 				}
 			}
 			if (!effectConfig || !effectConfig->enabled)
@@ -256,17 +278,26 @@ namespace fonthook::vectorfont
 			{
 				return RejectA8Shape("text-artifact-page-count-mismatch");
 			}
-			for (const NativeA8PacketTemplate& packet : payloadTemplate->packets)
+			if (!sealed)
 			{
-				if (packet.atlasPage >= effectConfig->atlasTextures.size())
-					return RejectA8Shape("text-artifact-packet-page-out-of-bounds");
-			}
-			for (const NativeA8PacketTemplate& packet
-				: payloadTemplate->compositePackets)
-			{
-				if (packet.atlasPage >= effectConfig->atlasTextures.size())
-					return RejectA8Shape(
-						"composite-packet-page-out-of-bounds");
+				for (const NativeA8PacketTemplate& packet
+					: payloadTemplate->packets)
+				{
+					if (packet.atlasPage >= effectConfig->atlasTextures.size())
+					{
+						return RejectA8Shape(
+							"text-artifact-packet-page-out-of-bounds");
+					}
+				}
+				for (const NativeA8PacketTemplate& packet
+					: payloadTemplate->compositePackets)
+				{
+					if (packet.atlasPage >= effectConfig->atlasTextures.size())
+					{
+						return RejectA8Shape(
+							"composite-packet-page-out-of-bounds");
+					}
+				}
 			}
 			for (const NiPoint2& inverseSize : effectConfig->atlasInverseSizes)
 			{
@@ -663,8 +694,22 @@ namespace fonthook::vectorfont
 
 	bool IsA8RendererAvailable()
 	{
-		return g_bEnableFreeTypeFontRendering
-			&& HookNativeA8Accumulator() && HookRenderPassImmediately()
+		if (!g_bEnableFreeTypeFontRendering)
+			return false;
+		// The normal registration path only needs readback of the already
+		// installed chain and the published device generation.  Preserve the
+		// complete install/retry/conflict path whenever any identity changed.
+		if (IsNativeA8RegistrationHookChainCurrent()
+			&& IsA8RenderPassImmediatelyHookCurrent()
+			&& IsNativeA8RendererAvailable())
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::NativeRegistrationHookFast);
+			return true;
+		}
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::NativeRegistrationHookSlow);
+		return HookNativeA8Accumulator() && HookRenderPassImmediately()
 			&& InitializeNativeA8Renderer(false, false);
 	}
 

@@ -3899,4 +3899,11 @@ namespace fonthook::vectorfont
 				== reinterpret_cast<RenderAlphaGeometryFn>(
 					&NativeA8RenderAlphaGeometry);
 	}
+
+	bool IsNativeA8RegistrationHookChainCurrent()
+	{
+		return IsNativeA8AccumulatorHookCurrent()
+			&& IsNativeA8RenderAlphaGeometryHookCurrent()
+			&& IsTileSortAnchorHookCurrent();
+	}
 }

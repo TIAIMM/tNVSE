@@ -62,6 +62,102 @@ namespace fonthook::vectorfont
 				&& std::isfinite(vertex.glyphV1);
 		}
 
+		bool HasFiniteRegistrationBound(const NiBound& bound)
+		{
+			return std::isfinite(bound.m_kCenter.x)
+				&& std::isfinite(bound.m_kCenter.y)
+				&& std::isfinite(bound.m_kCenter.z)
+				&& std::isfinite(bound.m_fRadius)
+				&& bound.m_fRadius >= 0.0f;
+		}
+
+		bool HasValidRegistrationVertex(const NativeA8GpuVertex& vertex)
+		{
+			return HasFiniteInstanceVertex(vertex)
+				&& vertex.sdfSpread >= 0.0f
+				&& vertex.distanceParameterScale >= 1.0f
+				&& vertex.layerMask >= 1.0f
+				&& vertex.layerMask <= 15.0f
+				&& vertex.glyphU0 <= vertex.glyphU1
+				&& vertex.glyphV0 <= vertex.glyphV1;
+		}
+
+		bool SealNativeA8PayloadValidation(
+			NativeA8PayloadTemplate& payload)
+		{
+			if (!payload.pageCount || !payload.quadCount
+				|| !payload.sourceRangeCount
+				|| payload.quadCount > kNativeA8MaximumQuads
+				|| payload.gpuVertices.size()
+					< static_cast<size_t>(payload.quadCount) * 4u
+				|| (payload.gpuVertices.size() & 3u)
+				|| payload.gpuVertices.size() / 4u
+					> kNativeA8MaximumQuads
+				|| payload.gpuVertices.size()
+					> std::numeric_limits<UInt32>::max()
+				|| payload.packets.empty()
+				|| payload.packets.size()
+					> std::numeric_limits<UInt32>::max()
+				|| payload.compositePackets.size()
+					> std::numeric_limits<UInt32>::max()
+				|| payload.pageCount != payload.atlasProperties.size()
+				|| payload.pageCount != payload.atlasTextures.size()
+				|| !HasFiniteRegistrationBound(payload.bound)
+				|| !std::all_of(payload.gpuVertices.begin(),
+					payload.gpuVertices.end(), HasValidRegistrationVertex))
+			{
+				return false;
+			}
+
+			auto validatePackets = [&](const std::vector<NativeA8PacketTemplate>& packets,
+				bool composite)
+			{
+				for (const NativeA8PacketTemplate& packet : packets)
+				{
+					const UInt64 vertexEnd =
+						static_cast<UInt64>(packet.firstVertex)
+						+ packet.vertexCount;
+					if (!packet.vertexCount || (packet.firstVertex & 3u)
+						|| (packet.vertexCount & 3u)
+						|| packet.vertexCount / 4u > kNativeA8MaximumQuads
+						|| vertexEnd > payload.gpuVertices.size()
+						|| packet.atlasPage >= payload.pageCount
+						|| packet.layer > 3
+						|| !HasFiniteRegistrationBound(packet.bound)
+						|| !std::all_of(packet.constants.begin(),
+							packet.constants.end(),
+							[](float value) { return std::isfinite(value); })
+						|| (composite
+							&& (packet.shaderClass
+									!= NativeA8ShaderClass::Composite
+								|| packet.staticCompositeLayerMask > 15u)))
+					{
+						return false;
+					}
+				}
+				return true;
+			};
+			if (!validatePackets(payload.packets, false)
+				|| !validatePackets(payload.compositePackets, true))
+			{
+				return false;
+			}
+
+			NativeA8PayloadValidationSeal seal;
+			seal.abi = NativeA8PayloadValidationSeal::kAbi;
+			seal.pageCount = payload.pageCount;
+			seal.quadCount = payload.quadCount;
+			seal.sourceRangeCount = payload.sourceRangeCount;
+			seal.vertexCount = static_cast<UInt32>(payload.gpuVertices.size());
+			seal.packetCount = static_cast<UInt32>(payload.packets.size());
+			seal.compositePacketCount = static_cast<UInt32>(
+				payload.compositePackets.size());
+			seal.stockLikeBitmapPackets =
+				UsesOnlyStockLikeBitmapPackets(payload.packets);
+			payload.validationSeal = seal;
+			return true;
+		}
+
 		bool SameInstanceSharedFields(const NativeA8GpuVertex& left,
 			const NativeA8GpuVertex& right)
 		{
@@ -596,6 +692,8 @@ namespace fonthook::vectorfont
 			}
 		}
 		BuildPayloadInstanceSidecars(*payload);
+		if (!SealNativeA8PayloadValidation(*payload))
+			return {};
 		payload->cpuMemory.Reset(CpuMemoryCategory::TextArtifact,
 			GetNativeA8PayloadTemplateBytes(*payload));
 		return payload;
@@ -606,13 +704,19 @@ namespace fonthook::vectorfont
 		NativeA8PayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin, NativeA8ShapePayload& payload)
 	{
+		const bool sealed = payloadTemplate
+			&& HasNativeA8PayloadValidationSeal(*payloadTemplate);
 		if (!facade || !HasTileProperty(facade) || !payloadTemplate
-			|| !payloadTemplate->pageCount || !payloadTemplate->quadCount
-			|| payloadTemplate->pageCount != payloadTemplate->atlasProperties.size()
-			|| payloadTemplate->pageCount != payloadTemplate->atlasTextures.size()
 			|| payloadTemplate->quadCount != metadata.quadCount
-			|| payloadTemplate->gpuVertices.empty()
-			|| payloadTemplate->packets.empty() || !EnsureNativeA8ProxyPool(font))
+			|| (!sealed && (!payloadTemplate->pageCount
+				|| !payloadTemplate->quadCount
+				|| payloadTemplate->pageCount
+					!= payloadTemplate->atlasProperties.size()
+				|| payloadTemplate->pageCount
+					!= payloadTemplate->atlasTextures.size()
+				|| payloadTemplate->gpuVertices.empty()
+				|| payloadTemplate->packets.empty()))
+			|| !EnsureNativeA8ProxyPool(font))
 		{
 			return false;
 		}
@@ -633,9 +737,9 @@ namespace fonthook::vectorfont
 			}
 			return true;
 		};
-		if (!validatePackets(payloadTemplate->packets)
+		if (!sealed && (!validatePackets(payloadTemplate->packets)
 			|| (!payloadTemplate->compositePackets.empty()
-				&& !validatePackets(payloadTemplate->compositePackets)))
+				&& !validatePackets(payloadTemplate->compositePackets))))
 			return false;
 
 		payload.payloadTemplate = std::move(payloadTemplate);
@@ -659,8 +763,10 @@ namespace fonthook::vectorfont
 		payload.preflightAlphaBlending = false;
 		payload.useCompositePackets = false;
 		payload.compositeUnavailable = false;
-		payload.stockLikeBitmapPackets =
-			UsesOnlyStockLikeBitmapPackets(payload.payloadTemplate->packets);
+		payload.stockLikeBitmapPackets = sealed
+			? payload.payloadTemplate->validationSeal.stockLikeBitmapPackets
+			: UsesOnlyStockLikeBitmapPackets(
+				payload.payloadTemplate->packets);
 		payload.packetPrepareFailure.store(
 			NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
 		payload.stickyReason.store(

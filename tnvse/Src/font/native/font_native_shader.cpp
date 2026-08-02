@@ -1795,6 +1795,13 @@ namespace fonthook::vectorfont
 		if (s_resetInProgress.load(std::memory_order_acquire)
 			|| !g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeA8Atlas)
 			return false;
+		if (!forceAttempt)
+		{
+			NativeShaderGeneration* published = s_publishedGeneration.load(
+				std::memory_order_acquire);
+			if (GenerationMatchesCurrentDevice(published))
+				return true;
+		}
 
 		std::lock_guard<std::mutex> lock(s_initializationMutex);
 		if (s_resetInProgress.load(std::memory_order_acquire))

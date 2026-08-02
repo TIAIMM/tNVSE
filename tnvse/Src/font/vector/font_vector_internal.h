@@ -489,6 +489,12 @@ namespace fonthook::vectorfont
 		GlyphInstancingCompatibilityMismatchShaderFlags,
 		GlyphInstancingCompatibilityMismatchShaderAlpha,
 		GlyphInstancingCompatibilityMismatchShaderFadeAlpha,
+		NativeRegistrationArtifactSealed,
+		NativeRegistrationArtifactFallback,
+		NativeRegistrationHookFast,
+		NativeRegistrationHookSlow,
+		NativeRegistrationProxyFast,
+		NativeRegistrationProxySlow,
 		Count,
 	};
 	static_assert(
