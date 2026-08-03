@@ -17,6 +17,7 @@ bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
 bool g_bEnableFreeTypeFontAggressivePerformanceMode = false;
+bool g_bEnableFreeTypeFontStructuralFastPaths = true;
 bool g_bEnableFreeTypeFontCommandBuffer = false;
 bool g_bEnableFreeTypeFontCrossTextBatch = false;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = 1;
@@ -163,6 +164,12 @@ void LoadConfig()
 	gLog.FormattedMessage(
 		"g_bEnableFreeTypeFontAggressivePerformanceMode: %d",
 		g_bEnableFreeTypeFontAggressivePerformanceMode);
+	g_bEnableFreeTypeFontStructuralFastPaths = ReadConfigInt(
+		kFreeTypeFontSection,
+		"bEnableFreeTypeFontStructuralFastPaths", 1, filename) != 0;
+	gLog.FormattedMessage(
+		"g_bEnableFreeTypeFontStructuralFastPaths: %d",
+		g_bEnableFreeTypeFontStructuralFastPaths);
 
 	char commandBufferValue[32] = {};
 	ReadConfigString(kFreeTypeFontSection,

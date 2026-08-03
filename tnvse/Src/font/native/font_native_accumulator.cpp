@@ -62,6 +62,17 @@ namespace fonthook::vectorfont
 			BSShaderAccumulator* accumulator, void*);
 		void __fastcall NativeA8SortAlphaGeometry(
 			BSShaderAccumulator* accumulator, AccumulatorSortFn originalSort);
+		const hook_identity::Rel32InstructionImage
+			s_renderAlphaGeometryHookImage =
+				hook_identity::MakeRel32InstructionImage(
+					kRenderAlphaGeometryCallSite,
+					hook_identity::Rel32Opcode::Call,
+					reinterpret_cast<SIZE_T>(
+						&NativeA8RenderAlphaGeometry));
+		const hook_identity::Rel32InstructionImage s_tileSortHookImage =
+			hook_identity::MakeRel32InstructionImage(
+				kTileSortDispatchPatch, hook_identity::Rel32Opcode::Call,
+				reinterpret_cast<SIZE_T>(&NativeA8SortAlphaGeometry));
 
 		struct RegisteredFacade
 		{
@@ -162,6 +173,22 @@ namespace fonthook::vectorfont
 			bool rendererAvailable = false;
 		};
 
+		enum class ExecutionSkeletonClass : UInt8
+		{
+			Barrier = 0,
+			NativeFacade,
+		};
+
+		struct ExecutionSequenceSkeletonItem
+		{
+			NiTriShape* facade = nullptr;
+			UInt32 depthBits = 0;
+			UInt32 originalOrdinal = 0;
+			ExecutionSkeletonClass classification =
+				ExecutionSkeletonClass::Barrier;
+		};
+		static_assert(sizeof(ExecutionSequenceSkeletonItem) == 16);
+
 		struct SortedPayloadScratch
 		{
 			BSShaderAccumulator* pendingAccumulator = nullptr;
@@ -182,6 +209,11 @@ namespace fonthook::vectorfont
 			std::vector<NiGeometry*> originalOrderOutput;
 			std::vector<UInt32> registrationLookup;
 			std::vector<NiTriShape*> frameCandidates;
+			std::vector<ExecutionSequenceSkeletonItem> executionSkeleton;
+			BSShaderAccumulator* executionSkeletonAccumulator = nullptr;
+			const void* executionSkeletonItems = nullptr;
+			const void* executionSkeletonDepths = nullptr;
+			UInt64 executionSkeletonValidationToken = 0;
 			std::vector<SortedFrameEntry> frameEntries;
 			std::vector<UInt32> facadeLookup;
 			std::vector<A8ShapeMetadataPtr> fallbackMetadataOwners;
@@ -324,6 +356,8 @@ namespace fonthook::vectorfont
 					* sizeof(NiGeometry*)
 				+ scratch.registrationLookup.capacity() * sizeof(UInt32)
 				+ scratch.frameCandidates.capacity() * sizeof(NiTriShape*)
+				+ scratch.executionSkeleton.capacity()
+					* sizeof(ExecutionSequenceSkeletonItem)
 				+ scratch.frameEntries.capacity() * sizeof(SortedFrameEntry)
 				+ scratch.facadeLookup.capacity() * sizeof(UInt32)
 				+ scratch.fallbackMetadataOwners.capacity()
@@ -349,6 +383,11 @@ namespace fonthook::vectorfont
 			scratch.active = false;
 			scratch.activeValidationToken = 0;
 			scratch.frameCandidates.clear();
+			scratch.executionSkeleton.clear();
+			scratch.executionSkeletonAccumulator = nullptr;
+			scratch.executionSkeletonItems = nullptr;
+			scratch.executionSkeletonDepths = nullptr;
+			scratch.executionSkeletonValidationToken = 0;
 			scratch.frameEntries.clear();
 			scratch.fallbackMetadataOwners.clear();
 			scratch.payloadTemplates.clear();
@@ -429,6 +468,11 @@ namespace fonthook::vectorfont
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
 			if (scratch.frameCandidates.capacity() > 8192)
 				std::vector<NiTriShape*>().swap(scratch.frameCandidates);
+			if (scratch.executionSkeleton.capacity() > 8192)
+			{
+				std::vector<ExecutionSequenceSkeletonItem>().swap(
+					scratch.executionSkeleton);
+			}
 			if (scratch.facadeLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.facadeLookup);
 			if (scratch.fallbackMetadataOwners.capacity() > 8192)
@@ -488,6 +532,8 @@ namespace fonthook::vectorfont
 				std::vector<UInt32>().swap(scratch.registrationLookup);
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
 				std::vector<NiTriShape*>().swap(scratch.frameCandidates);
+				std::vector<ExecutionSequenceSkeletonItem>().swap(
+					scratch.executionSkeleton);
 				std::vector<UInt32>().swap(scratch.facadeLookup);
 				std::vector<A8ShapeMetadataPtr>().swap(
 					scratch.fallbackMetadataOwners);
@@ -2108,28 +2154,43 @@ namespace fonthook::vectorfont
 				return NativeA8FallbackReason::PacketBuild;
 			}
 			const NativeA8PayloadTemplate& artifact = *payload.payloadTemplate;
-			if (!(frameContext
-				? frameContext->accumulatorCurrent
+			NativePreflightFrameContext structuralContext;
+			const NativePreflightFrameContext* currentContext = frameContext;
+			if (!currentContext && g_bEnableFreeTypeFontStructuralFastPaths)
+			{
+				NativeA8RuntimeReadinessView readiness;
+				const bool ready =
+					GetNativeA8RuntimeReadinessCurrent(readiness);
+				structuralContext.accumulatorCurrent = ready;
+				structuralContext.immediateRouteCurrent = ready;
+				structuralContext.rendererAvailable = ready;
+				structuralContext.generation = readiness.generation;
+				structuralContext.atlasTextureEpoch =
+					readiness.atlasTextureEpoch;
+				currentContext = &structuralContext;
+			}
+			if (!(currentContext
+				? currentContext->accumulatorCurrent
 				: IsNativeA8AccumulatorHookCurrent()))
 				return NativeA8FallbackReason::AccumulatorConflict;
-			if (!(frameContext
-				? frameContext->immediateRouteCurrent
+			if (!(currentContext
+				? currentContext->immediateRouteCurrent
 				: IsA8RenderPassImmediatelyHookCurrent()))
 				return NativeA8FallbackReason::TileRouteConflict;
-			if (!(frameContext
-				? frameContext->rendererAvailable
+			if (!(currentContext
+				? currentContext->rendererAvailable
 				: IsNativeA8RendererAvailable()))
 				return NativeA8FallbackReason::ShaderGeneration;
 
-			const UInt32 generation = frameContext
-				? frameContext->generation : GetNativeA8ShaderGeneration();
+			const UInt32 generation = currentContext
+				? currentContext->generation : GetNativeA8ShaderGeneration();
 			if (!generation)
 				return NativeA8FallbackReason::ShaderGeneration;
 			const bool scaledFillSampling = NeedsScaledFillSampling(facade);
 			const NiAlphaProperty* alpha = facade->GetAlphaProperty();
 			const bool alphaBlending = alpha && alpha->GetAlphaBlending();
-			const UInt32 atlasTextureEpoch = frameContext
-				? frameContext->atlasTextureEpoch
+			const UInt32 atlasTextureEpoch = currentContext
+				? currentContext->atlasTextureEpoch
 				: GetNativeA8AtlasTextureEpoch();
 			if (forcedCompositeTopology && *forcedCompositeTopology
 				&& artifact.compositePackets.empty())
@@ -2875,16 +2936,32 @@ namespace fonthook::vectorfont
 				if (!haveRegisteredMetadata)
 					ClearPendingRegistrations(scratch);
 				NativePreflightFrameContext preflightContext;
-				preflightContext.accumulatorCurrent =
-					IsNativeA8AccumulatorHookCurrent();
-				preflightContext.immediateRouteCurrent =
-					IsA8RenderPassImmediatelyHookCurrent();
-				preflightContext.rendererAvailable =
-					IsNativeA8RendererAvailable();
-				preflightContext.generation =
-					GetNativeA8ShaderGeneration();
-				preflightContext.atlasTextureEpoch =
-					GetNativeA8AtlasTextureEpoch();
+				if (g_bEnableFreeTypeFontStructuralFastPaths)
+				{
+					NativeA8RuntimeReadinessView readiness;
+					bool ready = GetNativeA8RuntimeReadinessCurrent(readiness);
+					if (!ready && IsA8RendererAvailable())
+						ready = GetNativeA8RuntimeReadinessCurrent(readiness);
+					preflightContext.accumulatorCurrent = ready;
+					preflightContext.immediateRouteCurrent = ready;
+					preflightContext.rendererAvailable = ready;
+					preflightContext.generation = readiness.generation;
+					preflightContext.atlasTextureEpoch =
+						readiness.atlasTextureEpoch;
+				}
+				else
+				{
+					preflightContext.accumulatorCurrent =
+						IsNativeA8AccumulatorHookCurrent();
+					preflightContext.immediateRouteCurrent =
+						IsA8RenderPassImmediatelyHookCurrent();
+					preflightContext.rendererAvailable =
+						IsNativeA8RendererAvailable();
+					preflightContext.generation =
+						GetNativeA8ShaderGeneration();
+					preflightContext.atlasTextureEpoch =
+						GetNativeA8AtlasTextureEpoch();
+				}
 				const UInt32 generation = preflightContext.generation;
 				UInt64 frameValidationToken =
 					++scratch.nextValidationToken;
@@ -2915,14 +2992,47 @@ namespace fonthook::vectorfont
 					PrepareRegistrationLookup(scratch);
 				}
 				scratch.frameCandidates.clear();
-				if (!onlyVirtualStockRegistrations)
+				scratch.executionSkeleton.clear();
+				scratch.executionSkeletonAccumulator = nullptr;
+				scratch.executionSkeletonItems = nullptr;
+				scratch.executionSkeletonDepths = nullptr;
+				scratch.executionSkeletonValidationToken = 0;
+				const bool buildExecutionSkeleton =
+					g_bEnableFreeTypeFontStructuralFastPaths
+					&& g_bEnableFreeTypeFontCrossTextBatch
+					&& accumulator->m_pfDepths;
+				if (buildExecutionSkeleton)
+				{
+					scratch.executionSkeleton.reserve(itemCount);
+					scratch.executionSkeletonAccumulator = accumulator;
+					scratch.executionSkeletonItems = accumulator->m_ppkItems;
+					scratch.executionSkeletonDepths = accumulator->m_pfDepths;
+					scratch.executionSkeletonValidationToken =
+						frameValidationToken;
+				}
+				if (buildExecutionSkeleton || !onlyVirtualStockRegistrations)
 				{
 					for (SInt32 index = accumulator->m_iNumItems - 1;
 						index >= 0; --index)
 					{
 						NiGeometry* geometry =
 							accumulator->m_ppkItems[index];
-						if (IsFreeTypeFacade(geometry))
+						const bool isFacade = IsFreeTypeFacade(geometry);
+						if (buildExecutionSkeleton)
+						{
+							ExecutionSequenceSkeletonItem item;
+							item.facade = isFacade
+								? static_cast<NiTriShape*>(geometry) : nullptr;
+							std::memcpy(&item.depthBits,
+								&accumulator->m_pfDepths[index],
+								sizeof(item.depthBits));
+							item.originalOrdinal = static_cast<UInt32>(index);
+							item.classification = isFacade
+								? ExecutionSkeletonClass::NativeFacade
+								: ExecutionSkeletonClass::Barrier;
+							scratch.executionSkeleton.push_back(item);
+						}
+						if (!onlyVirtualStockRegistrations && isFacade)
 						{
 							scratch.frameCandidates.push_back(
 								static_cast<NiTriShape*>(geometry));
@@ -3387,15 +3497,9 @@ namespace fonthook::vectorfont
 							&& accumulator->m_ppkItems
 							&& accumulator->m_pfDepths)
 						{
-							for (SInt32 itemIndex =
-								accumulator->m_iNumItems - 1;
-								itemIndex >= 0; --itemIndex)
+							auto appendSequenceItem = [&](NiTriShape* geometry,
+								float accumulatorDepth)
 							{
-								NiTriShape* geometry = IsFreeTypeFacade(
-									accumulator->m_ppkItems[itemIndex])
-									? static_cast<NiTriShape*>(
-										accumulator->m_ppkItems[itemIndex])
-									: nullptr;
 								NativeA8CrossTextCommandKind kind =
 									NativeA8CrossTextCommandKind::Barrier;
 								const A8ShapeMetadata* metadata = nullptr;
@@ -3409,8 +3513,7 @@ namespace fonthook::vectorfont
 										LookupSortedFacade(scratch, geometry);
 									if (entryIndex !=
 											std::numeric_limits<size_t>::max()
-										&& entryIndex
-											< scratch.frameEntries.size())
+										&& entryIndex < scratch.frameEntries.size())
 									{
 										entry = &scratch.frameEntries[entryIndex];
 										metadata = entry->metadata;
@@ -3456,12 +3559,10 @@ namespace fonthook::vectorfont
 									{
 										kind = NativeA8CrossTextCommandKind::
 											SinglePacket;
-										commandIndex =
-											entry->singlePacketCommandIndex;
+										commandIndex = entry->singlePacketCommandIndex;
 									}
 								}
-								else if (entry
-									&& entry->crossTextOccurrences > 1)
+								else if (entry && entry->crossTextOccurrences > 1)
 								{
 									MarkNativeA8CrossTextBatchSequenceBarrier(
 										entry->crossTextSequenceIndex);
@@ -3472,13 +3573,69 @@ namespace fonthook::vectorfont
 								const UInt32 sequenceIndex =
 									AddNativeA8CrossTextBatchSequenceItem(
 										kind, geometry, metadata, payload,
-										commandIndex,
-										accumulator->m_pfDepths[itemIndex]);
+										commandIndex, accumulatorDepth);
 								if (entry && entry->crossTextOccurrences == 1
-									&& kind
-										!= NativeA8CrossTextCommandKind::Barrier)
+									&& kind != NativeA8CrossTextCommandKind::Barrier)
 								{
 									entry->crossTextSequenceIndex = sequenceIndex;
+								}
+							};
+
+							bool usedSkeleton = false;
+							if (g_bEnableFreeTypeFontStructuralFastPaths)
+							{
+								usedSkeleton =
+									scratch.executionSkeletonAccumulator == accumulator
+									&& scratch.executionSkeletonItems
+										== accumulator->m_ppkItems
+									&& scratch.executionSkeletonDepths
+										== accumulator->m_pfDepths
+									&& scratch.executionSkeletonValidationToken
+										== frameValidationToken
+									&& scratch.executionSkeleton.size()
+										== static_cast<size_t>(accumulator->m_iNumItems)
+									&& !scratch.executionSkeleton.empty()
+									&& scratch.executionSkeleton.front().originalOrdinal
+										== static_cast<UInt32>(accumulator->m_iNumItems - 1)
+									&& scratch.executionSkeleton.back().originalOrdinal == 0;
+								if (usedSkeleton)
+								{
+									RecordFreeTypePerf(FreeTypePerfCounter::
+										CommandSequenceSkeletonHit);
+									for (const ExecutionSequenceSkeletonItem& item
+										: scratch.executionSkeleton)
+									{
+										float depth = 0.0f;
+										std::memcpy(&depth, &item.depthBits,
+											sizeof(depth));
+										appendSequenceItem(
+											item.classification
+												== ExecutionSkeletonClass::NativeFacade
+												? item.facade : nullptr,
+											depth);
+									}
+								}
+								else
+								{
+									RecordFreeTypePerf(FreeTypePerfCounter::
+										CommandSequenceSkeletonFallback);
+								}
+							}
+							if (!usedSkeleton)
+							{
+								RecordFreeTypePerf(FreeTypePerfCounter::
+									CommandSequenceSkeletonItem,
+									static_cast<UInt64>(accumulator->m_iNumItems));
+								for (SInt32 itemIndex = accumulator->m_iNumItems - 1;
+									itemIndex >= 0; --itemIndex)
+								{
+									NiTriShape* geometry = IsFreeTypeFacade(
+										accumulator->m_ppkItems[itemIndex])
+										? static_cast<NiTriShape*>(
+											accumulator->m_ppkItems[itemIndex])
+										: nullptr;
+									appendSequenceItem(geometry,
+										accumulator->m_pfDepths[itemIndex]);
 								}
 							}
 						}
@@ -3905,5 +4062,46 @@ namespace fonthook::vectorfont
 		return IsNativeA8AccumulatorHookCurrent()
 			&& IsNativeA8RenderAlphaGeometryHookCurrent()
 			&& IsTileSortAnchorHookCurrent();
+	}
+
+	bool IsNativeA8RegistrationHookChainCurrentFast()
+	{
+		A8State& state = State();
+		const bool tileCurrent =
+			ReadTileRegisterObjectTarget() == &NativeA8RegisterObject
+			&& s_originalTileRegisterObject.load(std::memory_order_acquire)
+				!= nullptr;
+		const bool renderAlphaCurrent = state.originalRenderAlphaGeometry
+			&& hook_identity::MatchesRel32InstructionImageUnchecked(
+				kRenderAlphaGeometryCallSite,
+				s_renderAlphaGeometryHookImage);
+		const bool sortCallCurrent =
+			hook_identity::MatchesRel32InstructionImageUnchecked(
+				kTileSortDispatchPatch, s_tileSortHookImage);
+		static constexpr UInt8 kTail[] = { 0x90, 0x90, 0x90, 0x90 };
+		const bool sortTailCurrent = hook_identity::MatchesBytesUnchecked(
+			kTileSortDispatchPatch + 5u, kTail, sizeof(kTail));
+		if (!tileCurrent)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				StructuralReadinessTileCallbackMismatch);
+		}
+		if (!renderAlphaCurrent)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				StructuralReadinessRenderAlphaMismatch);
+		}
+		if (!sortCallCurrent)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				StructuralReadinessSortCallMismatch);
+		}
+		if (!sortTailCurrent)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				StructuralReadinessSortTailMismatch);
+		}
+		return tileCurrent && renderAlphaCurrent
+			&& sortCallCurrent && sortTailCurrent;
 	}
 }

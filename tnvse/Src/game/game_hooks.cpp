@@ -1,6 +1,7 @@
 #include "font_engine.h"
 #include "font_manager.h"
 #include "font_vector.h"
+#include "font_vector_internal.h"
 #include "game_hooks.h"
 #include "hook_identity.h"
 #include "load_config.h"
@@ -18,6 +19,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 namespace fonthook
 {
@@ -359,6 +361,9 @@ namespace fonthook
 		constexpr float kMaximumExactFloatInteger = 16777216.0f;
 		constexpr float kViewportCullSafetyPadding = 96.0f;
 		constexpr float kIdentityTransformEpsilon = 0.001f;
+		constexpr size_t kViewportDescriptorCacheSize = 1024;
+		static_assert((kViewportDescriptorCacheSize
+			& (kViewportDescriptorCacheSize - 1u)) == 0);
 
 		using TileTextMakeNodeFn = NiNode* (__thiscall*)(TileText*);
 		using TileRectMakeNodeFn = NiNode* (__thiscall*)(TileRect*);
@@ -388,6 +393,40 @@ namespace fonthook
 			float bottom = std::numeric_limits<float>::lowest();
 			UInt32 visited = 0;
 			bool hasArea = false;
+		};
+
+		struct ViewportNodeExtraBinding
+		{
+			NiNode* node = nullptr;
+			Tile* tile = nullptr;
+			NiExtraData** extraArray = nullptr;
+			NiExtraData* extra = nullptr;
+			UInt16 extraCount = 0;
+			UInt16 extraIndex = 0;
+		};
+
+		struct ViewportDescriptorTile
+		{
+			Tile* tile = nullptr;
+			Tile* expectedParent = nullptr;
+			NiNode* node = nullptr;
+			ViewportNodeExtraBinding binding;
+			UInt32 firstChild = 0;
+			UInt16 childCount = 0;
+			UInt16 depth = 0;
+			UInt32 tileType = 0;
+			bool supportedType = false;
+		};
+
+		struct ViewportListDescriptor
+		{
+			NiNode* rootNode = nullptr;
+			Tile* rootTile = nullptr;
+			ViewportNodeExtraBinding rootBinding;
+			std::vector<Tile*> ancestors;
+			std::vector<ViewportDescriptorTile> tiles;
+			std::vector<Tile*> children;
+			bool valid = false;
 		};
 
 		struct ViewportCullDecision
@@ -426,6 +465,8 @@ namespace fonthook
 		TileRectMakeNodeFn s_tileRectMakeNode = nullptr;
 		TileImageMakeNodeFn s_tileImageMakeNode = nullptr;
 		ViewportNodeVTableProxy s_viewportNodeVTable;
+		std::array<ViewportListDescriptor,
+			kViewportDescriptorCacheSize> s_viewportDescriptors;
 		thread_local UInt32 s_effectSuppressionDepth = 0;
 		thread_local UInt32 s_vuiProxyMeasureOnlyDepth = 0;
 		bool s_loggedViewportNodeVTableConflict = false;
@@ -490,8 +531,11 @@ namespace fonthook
 			return FindNearestClipWindow(tile, valid) && valid;
 		}
 
-		Tile* FindTileForNode(NiNode* node)
+		Tile* FindTileForNode(NiNode* node,
+			ViewportNodeExtraBinding* binding = nullptr)
 		{
+			if (binding)
+				*binding = {};
 			if (!node || !node->m_ppkExtra || !node->m_usExtraDataSize
 				|| node->m_usExtraDataSize > 64)
 			{
@@ -512,10 +556,40 @@ namespace fonthook
 				if (view->node == node && view->tile
 					&& view->tile->spNiNode == node)
 				{
+					if (binding)
+					{
+						binding->node = node;
+						binding->tile = view->tile;
+						binding->extraArray = node->m_ppkExtra;
+						binding->extra = extra;
+						binding->extraCount = node->m_usExtraDataSize;
+						binding->extraIndex = index;
+					}
 					return view->tile;
 				}
 			}
 			return nullptr;
+		}
+
+		bool ValidateViewportNodeBinding(
+			const ViewportNodeExtraBinding& binding)
+		{
+			if (!binding.node || !binding.tile || !binding.extraArray
+				|| !binding.extra || binding.extraCount == 0
+				|| binding.extraCount > 64
+				|| binding.extraIndex >= binding.extraCount
+				|| binding.node->m_ppkExtra != binding.extraArray
+				|| binding.node->m_usExtraDataSize != binding.extraCount
+				|| binding.extraArray[binding.extraIndex] != binding.extra
+				|| *reinterpret_cast<const SIZE_T*>(binding.extra)
+					!= kTileNodeExtraVTable)
+			{
+				return false;
+			}
+			const TileNodeExtraView* view =
+				reinterpret_cast<const TileNodeExtraView*>(binding.extra);
+			return view->node == binding.node && view->tile == binding.tile
+				&& binding.tile->spNiNode == binding.node;
 		}
 
 		bool HasIdentityTileTransform(Tile* tile)
@@ -604,6 +678,252 @@ namespace fonthook
 			return false;
 		}
 
+		size_t GetViewportDescriptorSlot(const NiNode* node)
+		{
+			return (reinterpret_cast<size_t>(node) >> 4)
+				& (kViewportDescriptorCacheSize - 1u);
+		}
+
+		bool BuildViewportDescriptor(NiNode* node, Tile* tile,
+			ViewportListDescriptor& descriptor)
+		{
+			descriptor.valid = false;
+			descriptor.rootNode = node;
+			descriptor.rootTile = tile;
+			descriptor.rootBinding = {};
+			descriptor.ancestors.clear();
+			descriptor.tiles.clear();
+			descriptor.children.clear();
+			ViewportNodeExtraBinding rootBinding;
+			if (!node || !tile
+				|| FindTileForNode(node, &rootBinding) != tile)
+			{
+				return false;
+			}
+			descriptor.rootBinding = rootBinding;
+			for (Tile* ancestor = tile->pParent; ancestor;
+				ancestor = ancestor->pParent)
+			{
+				if (descriptor.ancestors.size()
+					>= kMaximumTileAncestorDepth)
+				{
+					return false;
+				}
+				descriptor.ancestors.push_back(ancestor);
+			}
+			descriptor.tiles.reserve(
+				std::min<size_t>(kMaximumViewportSubtreeTiles,
+					descriptor.tiles.capacity() ? descriptor.tiles.capacity() : 32u));
+			descriptor.children.reserve(
+				std::min<size_t>(kMaximumViewportSubtreeTiles,
+					descriptor.children.capacity()
+						? descriptor.children.capacity() : 32u));
+			auto appendTile = [&](auto&& self, Tile* current,
+				Tile* expectedParent, UInt32 depth) -> bool
+			{
+				if (!current || current->pParent != expectedParent
+					|| depth > kMaximumViewportSubtreeDepth
+					|| descriptor.tiles.size()
+						>= kMaximumViewportSubtreeTiles)
+				{
+					return false;
+				}
+				ViewportDescriptorTile entry;
+				entry.tile = current;
+				entry.expectedParent = expectedParent;
+				entry.node = current->spNiNode;
+				entry.depth = static_cast<UInt16>(depth);
+				entry.tileType = static_cast<UInt32>(current->GetType());
+				entry.supportedType = IsSupportedViewportTileType(current);
+				if (entry.node
+					&& FindTileForNode(entry.node, &entry.binding) != current)
+				{
+					return false;
+				}
+				entry.firstChild = static_cast<UInt32>(
+					descriptor.children.size());
+				for (Tile* child : current->kChildren)
+				{
+					if (descriptor.children.size()
+						>= kMaximumViewportSubtreeTiles)
+					{
+						return false;
+					}
+					descriptor.children.push_back(child);
+				}
+				const size_t childCount = descriptor.children.size()
+					- entry.firstChild;
+				if (childCount > std::numeric_limits<UInt16>::max())
+					return false;
+				entry.childCount = static_cast<UInt16>(childCount);
+				const size_t entryIndex = descriptor.tiles.size();
+				descriptor.tiles.push_back(entry);
+				for (UInt32 childIndex = 0;
+					childIndex < descriptor.tiles[entryIndex].childCount;
+					++childIndex)
+				{
+					Tile* child = descriptor.children[
+						descriptor.tiles[entryIndex].firstChild + childIndex];
+					if (child && !self(self, child, current, depth + 1u))
+						return false;
+				}
+				return true;
+			};
+			if (!appendTile(appendTile, tile, tile->pParent, 0)
+				|| descriptor.tiles.empty())
+			{
+				return false;
+			}
+			descriptor.valid = true;
+			return true;
+		}
+
+		bool ValidateViewportDescriptorRoot(
+			const ViewportListDescriptor& descriptor, NiNode* node)
+		{
+			if (!descriptor.valid || descriptor.rootNode != node
+				|| !ValidateViewportNodeBinding(descriptor.rootBinding)
+				|| descriptor.rootBinding.tile != descriptor.rootTile)
+			{
+				return false;
+			}
+			Tile* current = descriptor.rootTile->pParent;
+			for (Tile* expected : descriptor.ancestors)
+			{
+				if (current != expected)
+					return false;
+				current = current->pParent;
+			}
+			return current == nullptr;
+		}
+
+		bool ValidateViewportDescriptorTopology(
+			const ViewportListDescriptor& descriptor)
+		{
+			if (descriptor.tiles.empty()
+				|| descriptor.tiles.front().tile != descriptor.rootTile)
+			{
+				return false;
+			}
+			for (const ViewportDescriptorTile& entry : descriptor.tiles)
+			{
+				if (!entry.tile || entry.tile->pParent != entry.expectedParent
+					|| entry.tile->spNiNode != entry.node
+					|| static_cast<UInt32>(entry.tile->GetType())
+						!= entry.tileType
+					|| (entry.node
+						&& !ValidateViewportNodeBinding(entry.binding)))
+				{
+					return false;
+				}
+				UInt32 childIndex = 0;
+				for (Tile* child : entry.tile->kChildren)
+				{
+					if (childIndex >= entry.childCount
+						|| entry.firstChild + childIndex
+							>= descriptor.children.size()
+						|| descriptor.children[
+							entry.firstChild + childIndex] != child)
+					{
+						return false;
+					}
+					++childIndex;
+				}
+				if (childIndex != entry.childCount)
+					return false;
+			}
+			return true;
+		}
+
+		Tile* FindNearestClipWindow(
+			const ViewportListDescriptor& descriptor, bool& valid)
+		{
+			valid = true;
+			for (Tile* current : descriptor.ancestors)
+			{
+				Tile::Value* clipWindow =
+					current->GetValue(Tile::kTileValue_clipwindow);
+				if (!clipWindow)
+					continue;
+				if (!std::isfinite(clipWindow->fNum))
+				{
+					valid = false;
+					return nullptr;
+				}
+				if (clipWindow->fNum > 0.5f)
+					return current;
+			}
+			return nullptr;
+		}
+
+		bool HasSafeTileChain(const ViewportListDescriptor& descriptor,
+			Tile* clipWindow)
+		{
+			if (!HasIdentityTileTransform(descriptor.rootTile))
+				return false;
+			for (Tile* current : descriptor.ancestors)
+			{
+				if (!HasIdentityTileTransform(current))
+					return false;
+				if (current == clipWindow)
+					return true;
+			}
+			return false;
+		}
+
+		FreeTypeViewportCullFailReason AccumulateViewportDescriptorBounds(
+			const ViewportListDescriptor& descriptor, NiNode* rootNode,
+			TileVerticalBounds& bounds)
+		{
+			UInt16 skippedDepth = std::numeric_limits<UInt16>::max();
+			for (size_t index = 1; index < descriptor.tiles.size(); ++index)
+			{
+				const ViewportDescriptorTile& entry = descriptor.tiles[index];
+				if (skippedDepth != std::numeric_limits<UInt16>::max())
+				{
+					if (entry.depth > skippedDepth)
+						continue;
+					skippedDepth = std::numeric_limits<UInt16>::max();
+				}
+				++bounds.visited;
+				if (entry.node && entry.node->GetAppCulled())
+				{
+					skippedDepth = entry.depth;
+					continue;
+				}
+				if (entry.node && (!entry.supportedType
+					|| !IsSceneNodeWithinRoot(entry.node, rootNode)))
+				{
+					return FreeTypeViewportCullFailReason::SubtreeTopology;
+				}
+				if (!HasIdentityTileTransform(entry.tile))
+					return FreeTypeViewportCullFailReason::Transform;
+				Tile::Value* height =
+					entry.tile->GetValue(Tile::kTileValue_height);
+				if (!height)
+				{
+					if (entry.node)
+						return FreeTypeViewportCullFailReason::SubtreeBounds;
+					continue;
+				}
+				if (!std::isfinite(height->fNum) || height->fNum < 0.0f)
+					return FreeTypeViewportCullFailReason::SubtreeBounds;
+				if (height->fNum <= 0.0f)
+					continue;
+				const float top = GetAbsoluteTileY(entry.tile);
+				const float bottom = top + height->fNum;
+				if (!std::isfinite(top) || !std::isfinite(bottom)
+					|| bottom < top)
+				{
+					return FreeTypeViewportCullFailReason::SubtreeBounds;
+				}
+				bounds.top = std::min(bounds.top, top);
+				bounds.bottom = std::max(bounds.bottom, bottom);
+				bounds.hasArea = true;
+			}
+			return FreeTypeViewportCullFailReason::None;
+		}
+
 		FreeTypeViewportCullFailReason AccumulateViewportSubtreeBounds(
 			Tile* tile, Tile* expectedParent, NiNode* rootNode,
 			UInt32 depth, TileVerticalBounds& bounds)
@@ -688,10 +1008,52 @@ namespace fonthook
 
 		ViewportCullDecision ShouldCullViewportListNode(NiNode* node)
 		{
+			vectorfont::FreeTypePerfScope totalPerf(
+				vectorfont::FreeTypePerfPhase::ViewportCull);
+			const SInt64 fastStageStart =
+				vectorfont::BeginFreeTypePerfSample();
 			ViewportCullDecision decision;
-			Tile* tile = FindTileForNode(node);
+			ViewportListDescriptor* descriptor = nullptr;
+			Tile* tile = nullptr;
+			if (g_bEnableFreeTypeFontStructuralFastPaths && node)
+			{
+				descriptor = &s_viewportDescriptors[
+					GetViewportDescriptorSlot(node)];
+				if (descriptor->rootNode == node
+					&& ValidateViewportDescriptorRoot(*descriptor, node))
+				{
+					tile = descriptor->rootTile;
+					vectorfont::RecordFreeTypePerf(vectorfont::
+						FreeTypePerfCounter::ViewportDescriptorHit);
+				}
+				else
+				{
+					tile = FindTileForNode(node);
+					vectorfont::RecordFreeTypePerf(vectorfont::
+						FreeTypePerfCounter::ViewportDescriptorRebuild);
+					if (!tile || !BuildViewportDescriptor(
+							node, tile, *descriptor)
+						|| !ValidateViewportDescriptorRoot(*descriptor, node))
+					{
+						vectorfont::RecordFreeTypePerf(vectorfont::
+							FreeTypePerfCounter::ViewportDescriptorFail);
+						descriptor = nullptr;
+					}
+				}
+			}
+			else
+			{
+				tile = FindTileForNode(node);
+			}
 			if (!tile)
 				return decision;
+			if (g_bEnableFreeTypeFontStructuralFastPaths && !descriptor)
+			{
+				decision.checked = true;
+				SetViewportFailOpen(decision,
+					FreeTypeViewportCullFailReason::NodeIdentity);
+				return decision;
+			}
 
 			Tile::Value* listIndex =
 				tile->GetValue(Tile::kTileValue_listindex);
@@ -724,7 +1086,9 @@ namespace fonthook
 			}
 
 			bool chainValid = true;
-			Tile* clipWindow = FindNearestClipWindow(tile, chainValid);
+			Tile* clipWindow = descriptor
+				? FindNearestClipWindow(*descriptor, chainValid)
+				: FindNearestClipWindow(tile, chainValid);
 			if (!chainValid || !clipWindow)
 			{
 				SetViewportFailOpen(decision,
@@ -769,16 +1133,28 @@ namespace fonthook
 			if (!IsOutsidePaddedViewport(
 				rootTop, rootBottom, clipTop, clipBottom))
 			{
+				vectorfont::EndFreeTypePerfSample(
+					vectorfont::FreeTypePerfPhase::ViewportCullFastVisible,
+					fastStageStart);
 				decision.fastVisible = true;
 				return decision;
 			}
 
 			decision.deepCheck = true;
+			const SInt64 deepStageStart =
+				vectorfont::BeginFreeTypePerfSample();
 			// The exact-integer list index was an installation classifier. Once the
 			// node is hooked, a live finite nonnegative value is sufficient: it never
 			// participates in the geometric miss proof below.
-			if (!HasSafeTileChain(tile, clipWindow))
+			const bool safeTileChain = descriptor
+				? HasSafeTileChain(*descriptor, clipWindow)
+				: HasSafeTileChain(tile, clipWindow);
+			if (!safeTileChain)
 			{
+				vectorfont::EndFreeTypePerfSample(
+					vectorfont::FreeTypePerfPhase::
+						ViewportCullDeepFailTransform,
+					deepStageStart);
 				SetViewportFailOpen(decision,
 					FreeTypeViewportCullFailReason::Transform);
 				return decision;
@@ -789,11 +1165,27 @@ namespace fonthook
 					FreeTypeViewportCullFailReason::NodeIdentity);
 				return decision;
 			}
+			if (descriptor
+				&& !ValidateViewportDescriptorTopology(*descriptor))
+			{
+				vectorfont::RecordFreeTypePerf(vectorfont::
+					FreeTypePerfCounter::ViewportDescriptorRebuild);
+				if (!BuildViewportDescriptor(node, tile, *descriptor)
+					|| !ValidateViewportDescriptorRoot(*descriptor, node)
+					|| !ValidateViewportDescriptorTopology(*descriptor))
+				{
+					vectorfont::RecordFreeTypePerf(vectorfont::
+						FreeTypePerfCounter::ViewportDescriptorFail);
+					SetViewportFailOpen(decision,
+						FreeTypeViewportCullFailReason::SubtreeTopology);
+					return decision;
+				}
+			}
 
-			// Root type/identity/transform/height/absolute-Y were already proved on
-			// the hot decision path. Seed that exact interval and recurse only into
-			// children, avoiding duplicate trait lookup, Tileptr scanning and scene
-			// parent walks for every offscreen row.
+			// Root identity/transform/height/absolute-Y were already proved on the
+			// hot decision path. Seed that exact interval. The structural fast path
+			// walks the validated flat descriptor; the disabled path retains the
+			// original recursive proof.
 			TileVerticalBounds bounds;
 			bounds.top = rootTop;
 			bounds.bottom = rootBottom;
@@ -801,14 +1193,22 @@ namespace fonthook
 			bounds.hasArea = true;
 			FreeTypeViewportCullFailReason failure =
 				FreeTypeViewportCullFailReason::None;
-			for (Tile* child : tile->kChildren)
+			if (descriptor)
 			{
-				if (!child)
-					continue;
-				failure = AccumulateViewportSubtreeBounds(
-					child, tile, node, 1, bounds);
-				if (failure != FreeTypeViewportCullFailReason::None)
-					break;
+				failure = AccumulateViewportDescriptorBounds(
+					*descriptor, node, bounds);
+			}
+			else
+			{
+				for (Tile* child : tile->kChildren)
+				{
+					if (!child)
+						continue;
+					failure = AccumulateViewportSubtreeBounds(
+						child, tile, node, 1, bounds);
+					if (failure != FreeTypeViewportCullFailReason::None)
+						break;
+				}
 			}
 			decision.visitedTiles = bounds.visited;
 			if (failure != FreeTypeViewportCullFailReason::None)
@@ -819,6 +1219,9 @@ namespace fonthook
 			decision.culled = IsOutsidePaddedViewport(
 				bounds.top, bounds.bottom, clipTop, clipBottom);
 			decision.deepOverlap = !decision.culled;
+			vectorfont::EndFreeTypePerfSample(
+				vectorfont::FreeTypePerfPhase::ViewportCullDeepSuccess,
+				deepStageStart);
 			return decision;
 		}
 
@@ -869,6 +1272,18 @@ namespace fonthook
 		{
 			if (!node || !IsViewportListItemCandidate(tile))
 				return;
+			if (g_bEnableFreeTypeFontStructuralFastPaths)
+			{
+				ViewportListDescriptor& descriptor = s_viewportDescriptors[
+					GetViewportDescriptorSlot(node)];
+				vectorfont::RecordFreeTypePerf(vectorfont::
+					FreeTypePerfCounter::ViewportDescriptorRebuild);
+				if (!BuildViewportDescriptor(node, tile, descriptor))
+				{
+					vectorfont::RecordFreeTypePerf(vectorfont::
+						FreeTypePerfCounter::ViewportDescriptorFail);
+				}
+			}
 
 			bool installed = false;
 			if (FindTileForNode(node) == tile

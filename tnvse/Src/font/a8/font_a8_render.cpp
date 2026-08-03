@@ -25,7 +25,242 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kCanonicalArrayCount = 1;
 		inline constexpr size_t kVirtualStockEstimatedShapeBytes = 1024;
 
+		struct NativeA8RuntimeReadinessSnapshot
+		{
+			NiDX9Renderer* renderer = nullptr;
+			IDirect3DDevice9* device = nullptr;
+			UInt32 generation = 0;
+			UInt32 atlasTextureEpoch = 0;
+			UInt32 hookEpoch = 0;
+			UInt32 readyFlags = 0;
+		};
+
+		struct NativeA8RuntimeReadinessPublication
+		{
+			std::atomic_flag writer = ATOMIC_FLAG_INIT;
+			std::atomic<UInt32> sequence = 0;
+			std::atomic<bool> ready = false;
+			std::atomic<UInt32> nextHookEpoch = 1;
+			std::atomic<NiDX9Renderer*> renderer = nullptr;
+			std::atomic<IDirect3DDevice9*> device = nullptr;
+			std::atomic<UInt32> generation = 0;
+			std::atomic<UInt32> atlasTextureEpoch = 0;
+			std::atomic<UInt32> hookEpoch = 0;
+			std::atomic<UInt32> readyFlags = 0;
+		};
+
+		NativeA8RuntimeReadinessPublication s_runtimeReadiness;
+
+		void PublishRuntimeReadiness(bool accumulatorReady,
+			bool immediateReady, bool shaderReady)
+		{
+			while (s_runtimeReadiness.writer.test_and_set(
+				std::memory_order_acquire))
+			{
+				YieldProcessor();
+			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::StructuralReadinessFullAudit);
+			NativeA8RendererReadinessView rendererView;
+			const bool rendererReady = shaderReady
+				&& GetNativeA8RendererReadinessFast(rendererView);
+			NativeA8RuntimeReadinessSnapshot snapshot;
+			snapshot.renderer = rendererView.renderer;
+			snapshot.device = rendererView.device;
+			snapshot.generation = rendererView.generation;
+			snapshot.atlasTextureEpoch = GetNativeA8AtlasTextureEpoch();
+			snapshot.hookEpoch = s_runtimeReadiness.nextHookEpoch.fetch_add(
+				1, std::memory_order_relaxed);
+			if (!snapshot.hookEpoch)
+			{
+				snapshot.hookEpoch = s_runtimeReadiness.nextHookEpoch.fetch_add(
+					1, std::memory_order_relaxed);
+			}
+			snapshot.readyFlags = (accumulatorReady ? 1u : 0u)
+				| (immediateReady ? 2u : 0u)
+				| (rendererReady ? 4u : 0u);
+			const bool ready = snapshot.readyFlags == 7u;
+			s_runtimeReadiness.ready.store(false, std::memory_order_release);
+			s_runtimeReadiness.sequence.fetch_add(
+				1, std::memory_order_acq_rel);
+			s_runtimeReadiness.renderer.store(
+				snapshot.renderer, std::memory_order_relaxed);
+			s_runtimeReadiness.device.store(
+				snapshot.device, std::memory_order_relaxed);
+			s_runtimeReadiness.generation.store(
+				snapshot.generation, std::memory_order_relaxed);
+			s_runtimeReadiness.atlasTextureEpoch.store(
+				snapshot.atlasTextureEpoch, std::memory_order_relaxed);
+			s_runtimeReadiness.hookEpoch.store(
+				snapshot.hookEpoch, std::memory_order_relaxed);
+			s_runtimeReadiness.readyFlags.store(
+				snapshot.readyFlags, std::memory_order_relaxed);
+			s_runtimeReadiness.sequence.fetch_add(
+				1, std::memory_order_release);
+			s_runtimeReadiness.ready.store(ready, std::memory_order_release);
+			s_runtimeReadiness.writer.clear(std::memory_order_release);
+		}
+
+		bool LoadRuntimeReadiness(
+			NativeA8RuntimeReadinessSnapshot& snapshot)
+		{
+			if (!s_runtimeReadiness.ready.load(std::memory_order_acquire))
+				return false;
+			for (UInt32 attempt = 0; attempt < 3; ++attempt)
+			{
+				const UInt32 before = s_runtimeReadiness.sequence.load(
+					std::memory_order_acquire);
+				if (before & 1u)
+					continue;
+				snapshot.renderer = s_runtimeReadiness.renderer.load(
+					std::memory_order_relaxed);
+				snapshot.device = s_runtimeReadiness.device.load(
+					std::memory_order_relaxed);
+				snapshot.generation = s_runtimeReadiness.generation.load(
+					std::memory_order_relaxed);
+				snapshot.atlasTextureEpoch =
+					s_runtimeReadiness.atlasTextureEpoch.load(
+						std::memory_order_relaxed);
+				snapshot.hookEpoch = s_runtimeReadiness.hookEpoch.load(
+					std::memory_order_relaxed);
+				snapshot.readyFlags = s_runtimeReadiness.readyFlags.load(
+					std::memory_order_relaxed);
+				const UInt32 after = s_runtimeReadiness.sequence.load(
+					std::memory_order_acquire);
+				if (before == after && !(after & 1u)
+					&& s_runtimeReadiness.ready.load(
+						std::memory_order_acquire))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
+		bool LoadCurrentRuntimeReadiness(
+			NativeA8RuntimeReadinessView* view)
+		{
+			NativeA8RuntimeReadinessSnapshot published;
+			if (!LoadRuntimeReadiness(published)
+				|| published.readyFlags != 7u)
+			{
+				return false;
+			}
+			NativeA8RendererReadinessView current;
+			const bool rendererCurrent =
+				GetNativeA8RendererReadinessFast(current)
+				&& current.renderer == published.renderer
+				&& current.device == published.device
+				&& current.generation == published.generation;
+			const bool atlasCurrent = published.atlasTextureEpoch
+				== GetNativeA8AtlasTextureEpoch();
+			const bool accumulatorCurrent =
+				IsNativeA8RegistrationHookChainCurrentFast();
+			const bool immediateCurrent =
+				IsA8RenderPassImmediatelyHookCurrentFast();
+			if (rendererCurrent && atlasCurrent
+				&& accumulatorCurrent && immediateCurrent)
+			{
+				if (view)
+				{
+					view->renderer = current.renderer;
+					view->device = current.device;
+					view->generation = current.generation;
+					view->atlasTextureEpoch = published.atlasTextureEpoch;
+					view->hookEpoch = published.hookEpoch;
+					view->ready = true;
+				}
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StructuralReadinessRawHit);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StructuralReadinessVirtualQueryAvoided,
+					4);
+				return true;
+			}
+			if (!rendererCurrent)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					StructuralReadinessRendererMismatch);
+			}
+			if (!atlasCurrent)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					StructuralReadinessAtlasMismatch);
+			}
+			if (!accumulatorCurrent || !immediateCurrent)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					StructuralReadinessHookMismatch);
+			}
+			s_runtimeReadiness.ready.store(false, std::memory_order_release);
+			return false;
+		}
+
 		A8State s_a8State;
+		CpuMemoryLease s_metadataBucketMemory;
+		size_t s_metadataHighWater = 0;
+
+		void RefreshMetadataBucketAccounting(const A8State& state)
+		{
+			s_metadataBucketMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+				state.shapeMetadata.bucket_count() * sizeof(void*));
+		}
+
+		void ReserveStructuralMetadataMap(size_t requestedEntries = 4096)
+		{
+			if (!g_bEnableFreeTypeFontStructuralFastPaths)
+				return;
+			A8State& state = State();
+			std::lock_guard<std::mutex> lock(state.metadataMutex);
+			const size_t currentBytes =
+				state.shapeMetadata.bucket_count() * sizeof(void*);
+			const size_t estimatedBytes = requestedEntries * sizeof(void*);
+			const size_t additionalBytes = estimatedBytes > currentBytes
+				? estimatedBytes - currentBytes : 0;
+			if (!additionalBytes
+				|| GetCpuMemoryCategoryHeadroom(
+						CpuMemoryCategory::RuntimeMetadata, additionalBytes)
+					< additionalBytes)
+			{
+				return;
+			}
+			state.shapeMetadata.reserve(requestedEntries);
+			RefreshMetadataBucketAccounting(state);
+			RecordFreeTypePerf(FreeTypePerfCounter::MetadataMapReserve);
+		}
+
+		void MaintainStructuralMetadataMap()
+		{
+			if (!g_bEnableFreeTypeFontStructuralFastPaths)
+				return;
+			A8State& state = State();
+			size_t target = 0;
+			{
+				std::lock_guard<std::mutex> lock(state.metadataMutex);
+				s_metadataHighWater = std::max(
+					s_metadataHighWater, state.shapeMetadata.size());
+				const size_t buckets = state.shapeMetadata.bucket_count();
+				if (buckets && state.shapeMetadata.size() * 4u
+					< buckets * 3u)
+				{
+					return;
+				}
+				target = std::max<size_t>(4096,
+					std::max<size_t>(state.shapeMetadata.size() * 2u,
+						s_metadataHighWater + s_metadataHighWater / 2u));
+			}
+			ReserveStructuralMetadataMap(target);
+		}
+
+		void RecordMetadataInsertionRehash(A8State& state,
+			size_t previousBucketCount)
+		{
+			if (!g_bEnableFreeTypeFontStructuralFastPaths
+				|| state.shapeMetadata.bucket_count() == previousBucketCount)
+				return;
+			RefreshMetadataBucketAccounting(state);
+			RecordFreeTypePerf(FreeTypePerfCounter::MetadataMapRehash);
+		}
 
 		void InitializeA8MetadataIdentity(
 			A8ShapeMetadata& metadata, const NiTriShape* shape)
@@ -659,11 +894,17 @@ namespace fonthook::vectorfont
 
 	void FinalizeA8RendererDetection()
 	{
+		ReserveStructuralMetadataMap();
 		const bool accumulatorReady = HookNativeA8Accumulator();
 		const bool immediateRouteReady = HookRenderPassImmediately();
 		const bool shaderReady = InitializeNativeA8Renderer(true, true);
 		const bool nativeReady =
 			accumulatorReady && immediateRouteReady && shaderReady;
+		if (g_bEnableFreeTypeFontStructuralFastPaths)
+		{
+			PublishRuntimeReadiness(accumulatorReady,
+				immediateRouteReady, shaderReady);
+		}
 		SynchronizePersistentFontCacheRoute(ResolveFontAtlasRoute(
 			nativeReady, g_bEnableFreeTypeFontAggressivePerformanceMode));
 		gLog.FormattedMessage(
@@ -681,8 +922,14 @@ namespace fonthook::vectorfont
 		if (!g_bEnableFreeTypeFontRendering)
 			return;
 		HandleNativeA8RendererMainLoop();
-		HookNativeA8Accumulator();
-		HookRenderPassImmediately();
+		MaintainStructuralMetadataMap();
+		const bool accumulatorReady = HookNativeA8Accumulator();
+		const bool immediateReady = HookRenderPassImmediately();
+		if (g_bEnableFreeTypeFontStructuralFastPaths)
+		{
+			PublishRuntimeReadiness(accumulatorReady, immediateReady,
+				IsNativeA8RendererAvailable());
+		}
 		EnforceCpuMemoryBudget("main-loop");
 	}
 
@@ -696,10 +943,18 @@ namespace fonthook::vectorfont
 	{
 		if (!g_bEnableFreeTypeFontRendering)
 			return false;
+		if (g_bEnableFreeTypeFontStructuralFastPaths
+			&& LoadCurrentRuntimeReadiness(nullptr))
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::NativeRegistrationHookFast);
+			return true;
+		}
 		// The normal registration path only needs readback of the already
 		// installed chain and the published device generation.  Preserve the
 		// complete install/retry/conflict path whenever any identity changed.
-		if (IsNativeA8RegistrationHookChainCurrent()
+		if (!g_bEnableFreeTypeFontStructuralFastPaths
+			&& IsNativeA8RegistrationHookChainCurrent()
 			&& IsA8RenderPassImmediatelyHookCurrent()
 			&& IsNativeA8RendererAvailable())
 		{
@@ -709,8 +964,24 @@ namespace fonthook::vectorfont
 		}
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::NativeRegistrationHookSlow);
-		return HookNativeA8Accumulator() && HookRenderPassImmediately()
+		const bool accumulatorReady = HookNativeA8Accumulator();
+		const bool immediateReady = HookRenderPassImmediately();
+		const bool shaderReady = accumulatorReady && immediateReady
 			&& InitializeNativeA8Renderer(false, false);
+		if (g_bEnableFreeTypeFontStructuralFastPaths)
+		{
+			PublishRuntimeReadiness(accumulatorReady,
+				immediateReady, shaderReady);
+		}
+		return accumulatorReady && immediateReady && shaderReady;
+	}
+
+	bool GetNativeA8RuntimeReadinessCurrent(
+		NativeA8RuntimeReadinessView& view)
+	{
+		view = {};
+		return g_bEnableFreeTypeFontStructuralFastPaths
+			&& LoadCurrentRuntimeReadiness(&view);
 	}
 
 	bool ResolveA8EffectQuality(EffectQuality requested, EffectQuality& resolved)
@@ -756,11 +1027,11 @@ namespace fonthook::vectorfont
 			return false;
 		metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
 			sizeof(A8ShapeMetadata)
-				+ metadata->nativePayload.packetShaders.capacity()
+				+ metadata->nativePayload.packetShaders.heap_capacity()
 					* sizeof(TileShader*)
-				+ metadata->nativePayload.packetPrograms.capacity()
+				+ metadata->nativePayload.packetPrograms.heap_capacity()
 					* sizeof(const NativeA8CompiledPacketCommand*)
-				+ metadata->nativePayload.preflightAtlasTextures.capacity()
+				+ metadata->nativePayload.preflightAtlasTextures.heap_capacity()
 					* sizeof(const void*)
 				+ GetNativeA8TileRetainedCapacityBytes(
 					metadata->nativePayload)
@@ -771,8 +1042,11 @@ namespace fonthook::vectorfont
 			state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(
 				1, std::memory_order_release);
 			A8ShapeMetadataPtr publishedMetadata = std::move(metadata);
+			const size_t previousBucketCount =
+				state.shapeMetadata.bucket_count();
 			state.shapeMetadata[shape] =
 				MakeA8MetadataEntry(std::move(publishedMetadata));
+			RecordMetadataInsertionRehash(state, previousBucketCount);
 		}
 		*reinterpret_cast<void***>(shape) = &State().triShapeVtable[1];
 		return true;
@@ -786,17 +1060,29 @@ namespace fonthook::vectorfont
 		const NiPoint3& geometryOrigin, bool useCompositeTopology)
 	{
 		FreeTypePerfScope perf(FreeTypePerfPhase::NativeRegistration);
-		if (!IsA8RendererAvailable() || !shape || !payloadTemplate
+		bool rendererAvailable = false;
+		{
+			FreeTypePerfScope readiness(
+				FreeTypePerfPhase::NativeRegistrationReadiness);
+			rendererAvailable = IsA8RendererAvailable();
+		}
+		if (!rendererAvailable || !shape || !payloadTemplate
 			|| payloadTemplate->quadCount != quadCount)
 		{
 			return false;
 		}
 		const std::vector<NativeA8PacketTemplate>& topology =
 			GetNativeA8Packets(*payloadTemplate, useCompositeTopology);
-		if (topology.size() != 1
-			|| !ValidateA8Shape(shape, effectConfig, colorContract,
-				payloadTemplate.get())
-			|| !InitializeA8TriShapeVtable(shape))
+		bool shapeReady = false;
+		{
+			FreeTypePerfScope shapeProof(
+				FreeTypePerfPhase::NativeRegistrationShape);
+			shapeReady = topology.size() == 1
+				&& ValidateA8Shape(shape, effectConfig, colorContract,
+					payloadTemplate.get())
+				&& InitializeA8TriShapeVtable(shape);
+		}
+		if (!shapeReady)
 		{
 			return false;
 		}
@@ -805,15 +1091,27 @@ namespace fonthook::vectorfont
 			sizeof(VirtualStockSingletonMetadata)
 			+ sizeof(A8ShapeMetadataEntry)
 			+ kVirtualStockEstimatedShapeBytes + 6u * sizeof(void*);
-		if (GetCpuMemoryCategoryHeadroom(CpuMemoryCategory::RuntimeMetadata,
-				estimatedBytes) < estimatedBytes)
+		bool budgetReady = false;
+		{
+			FreeTypePerfScope budget(
+				FreeTypePerfPhase::NativeRegistrationBudget);
+			budgetReady = GetCpuMemoryCategoryHeadroom(
+				CpuMemoryCategory::RuntimeMetadata, estimatedBytes)
+				>= estimatedBytes;
+		}
+		if (!budgetReady)
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VirtualStockFallbackCpuBudget);
 			return false;
 		}
 
-		auto metadata = std::make_shared<VirtualStockSingletonMetadata>();
+		std::shared_ptr<VirtualStockSingletonMetadata> metadata;
+		{
+			FreeTypePerfScope allocation(
+				FreeTypePerfPhase::NativeRegistrationAllocation);
+			metadata = std::make_shared<VirtualStockSingletonMetadata>();
+		}
 		InitializeA8MetadataIdentity(*metadata, shape);
 		metadata->fontId = fontId;
 		metadata->glyphCount = glyphCount;
@@ -834,32 +1132,74 @@ namespace fonthook::vectorfont
 		singleton.slot.shellShader = shape->GetShader();
 		NiTriShapeData* data = shape->GetModelData();
 		singleton.slot.shellBuffer = data ? data->m_pkBuffData : nullptr;
-		if (!InitializeNativeA8ShapePayload(font, shape, *metadata,
-			payloadTemplate, geometryOrigin, metadata->nativePayload))
 		{
-			return false;
+			FreeTypePerfScope payloadBuild(
+				FreeTypePerfPhase::NativeRegistrationPayload);
+			if (!InitializeNativeA8ShapePayload(font, shape, *metadata,
+				payloadTemplate, geometryOrigin, metadata->nativePayload))
+			{
+				return false;
+			}
 		}
-		metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-			estimatedBytes
-				+ metadata->nativePayload.packetShaders.capacity()
-					* sizeof(TileShader*)
-				+ metadata->nativePayload.packetPrograms.capacity()
-					* sizeof(const NativeA8CompiledPacketCommand*)
-				+ metadata->nativePayload.preflightAtlasTextures.capacity()
-					* sizeof(const void*)
-				+ GetNativeA8TileRetainedCapacityBytes(
-					metadata->nativePayload));
+		const UInt32 inlineContainers =
+			(metadata->nativePayload.packetShaders.uses_inline_storage() ? 1u : 0u)
+			+ (metadata->nativePayload.packetPrograms.uses_inline_storage() ? 1u : 0u)
+			+ (metadata->nativePayload.preflightAtlasTextures.uses_inline_storage()
+				? 1u : 0u)
+			+ (metadata->nativePayload.retainedText.packets.uses_inline_storage()
+				? 1u : 0u)
+			+ (metadata->nativePayload.retainedText.runs.uses_inline_storage()
+				? 1u : 0u);
+		RecordFreeTypePerf(
+			inlineContainers == 5u
+				? FreeTypePerfCounter::VirtualSingletonInlinePayload
+				: FreeTypePerfCounter::VirtualSingletonHeapPayload);
+		const UInt32 avoidedChildAllocations =
+			(metadata->nativePayload.packetShaders.uses_inline_storage()
+				&& !metadata->nativePayload.packetShaders.empty() ? 1u : 0u)
+			+ (metadata->nativePayload.packetPrograms.uses_inline_storage()
+				&& !metadata->nativePayload.packetPrograms.empty() ? 1u : 0u)
+			+ (metadata->nativePayload.preflightAtlasTextures.uses_inline_storage()
+				&& !metadata->nativePayload.preflightAtlasTextures.empty() ? 1u : 0u)
+			+ (g_bEnableFreeTypeFontCommandBuffer
+				&& metadata->nativePayload.retainedText.packets.uses_inline_storage()
+					? 1u : 0u)
+			+ (g_bEnableFreeTypeFontCommandBuffer
+				&& metadata->nativePayload.retainedText.runs.uses_inline_storage()
+					? 1u : 0u);
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::VirtualSingletonChildAllocationAvoided,
+			avoidedChildAllocations);
+		{
+			FreeTypePerfScope accounting(
+				FreeTypePerfPhase::NativeRegistrationAccounting);
+			metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+				estimatedBytes
+					+ metadata->nativePayload.packetShaders.heap_capacity()
+						* sizeof(TileShader*)
+					+ metadata->nativePayload.packetPrograms.heap_capacity()
+						* sizeof(const NativeA8CompiledPacketCommand*)
+					+ metadata->nativePayload.preflightAtlasTextures.heap_capacity()
+						* sizeof(const void*)
+					+ GetNativeA8TileRetainedCapacityBytes(
+						metadata->nativePayload));
+		}
 
 		{
+			FreeTypePerfScope publish(
+				FreeTypePerfPhase::NativeRegistrationPublish);
 			A8State& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
 			state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(
 				1, std::memory_order_release);
 			A8ShapeMetadataPtr publishedMetadata = metadata;
+			const size_t previousBucketCount =
+				state.shapeMetadata.bucket_count();
 			state.shapeMetadata[shape] =
 				MakeA8MetadataEntry(std::move(publishedMetadata));
+			RecordMetadataInsertionRehash(state, previousBucketCount);
+			*reinterpret_cast<void***>(shape) = &State().triShapeVtable[1];
 		}
-		*reinterpret_cast<void***>(shape) = &State().triShapeVtable[1];
 		RecordFreeTypePerf(FreeTypePerfCounter::VirtualStockSingleton);
 		RecordFreeTypePerf(FreeTypePerfCounter::VirtualStockShape);
 		return true;
@@ -986,11 +1326,11 @@ namespace fonthook::vectorfont
 		}
 		primary.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
 			primary.cpuMemory.GetBytes()
-				+ primary.nativePayload.packetShaders.capacity()
+				+ primary.nativePayload.packetShaders.heap_capacity()
 					* sizeof(TileShader*)
-				+ primary.nativePayload.packetPrograms.capacity()
+				+ primary.nativePayload.packetPrograms.heap_capacity()
 					* sizeof(const NativeA8CompiledPacketCommand*)
-				+ primary.nativePayload.preflightAtlasTextures.capacity()
+				+ primary.nativePayload.preflightAtlasTextures.heap_capacity()
 					* sizeof(const void*)
 				+ GetNativeA8TileRetainedCapacityBytes(
 					primary.nativePayload));
@@ -1009,9 +1349,12 @@ namespace fonthook::vectorfont
 						1, std::memory_order_release);
 				A8ShapeMetadataPtr publishedMetadata =
 					metadataEntries[index];
+				const size_t previousBucketCount =
+					state.shapeMetadata.bucket_count();
 				state.shapeMetadata[shapes[index]] =
 					MakeA8MetadataEntry(
 						std::move(publishedMetadata));
+				RecordMetadataInsertionRehash(state, previousBucketCount);
 			}
 		}
 		for (NiTriShape* shape : shapes)

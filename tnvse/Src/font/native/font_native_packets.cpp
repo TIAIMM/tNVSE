@@ -741,6 +741,18 @@ namespace fonthook::vectorfont
 			|| (!payloadTemplate->compositePackets.empty()
 				&& !validatePackets(payloadTemplate->compositePackets))))
 			return false;
+		const bool singletonInlinePayload =
+			g_bEnableFreeTypeFontStructuralFastPaths
+			&& metadata.backend
+				== FreeTypeShapeBackend::VirtualStockSingleton;
+		if (!singletonInlinePayload)
+		{
+			payload.packetShaders.force_heap_storage();
+			payload.packetPrograms.force_heap_storage();
+			payload.preflightAtlasTextures.force_heap_storage();
+			payload.retainedText.packets.force_heap_storage();
+			payload.retainedText.runs.force_heap_storage();
+		}
 
 		payload.payloadTemplate = std::move(payloadTemplate);
 		payload.geometryOrigin = geometryOrigin;

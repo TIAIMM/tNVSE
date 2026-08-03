@@ -286,6 +286,17 @@ namespace fonthook::vectorfont
 	};
 
 	A8State& State();
+	struct NativeA8RuntimeReadinessView
+	{
+		NiDX9Renderer* renderer = nullptr;
+		IDirect3DDevice9* device = nullptr;
+		UInt32 generation = 0;
+		UInt32 atlasTextureEpoch = 0;
+		UInt32 hookEpoch = 0;
+		bool ready = false;
+	};
+	bool GetNativeA8RuntimeReadinessCurrent(
+		NativeA8RuntimeReadinessView& arView);
 	A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape);
 	std::shared_ptr<VirtualStockShapeGroup>
 		AcquireVirtualStockShapeGroup(const A8ShapeMetadata& metadata);
@@ -293,6 +304,7 @@ namespace fonthook::vectorfont
 	bool NeedsScaledFillSampling(const NiTriShape* shape);
 	bool HookRenderPassImmediately();
 	bool IsA8RenderPassImmediatelyHookCurrent();
+	bool IsA8RenderPassImmediatelyHookCurrentFast();
 	RenderPassImmediatelyFn ReadRenderPassImmediatelyCallTarget();
 	void BeginA8SortedTileConstantOwnership();
 	void EndA8SortedTileConstantOwnership();

@@ -50,6 +50,12 @@ namespace fonthook::vectorfont
 		// the shared predicate thunk that returns false. E68810 is instead
 		// the positive cast thunk used by slots 6/7/9 and returns this.
 		inline constexpr UInt32 kNiGeometryFalsePredicate = 0xACBB70;
+		const hook_identity::Rel32InstructionImage
+			s_renderPassImmediatelyHookImage =
+				hook_identity::MakeRel32InstructionImage(
+					kRenderPassImmediatelyCallSite,
+					hook_identity::Rel32Opcode::Call,
+					reinterpret_cast<SIZE_T>(&A8RenderPassImmediately));
 
 		struct A8MetadataHotEntry
 		{
@@ -5684,6 +5690,20 @@ namespace fonthook::vectorfont
 	{
 		return State().originalRenderPassImmediately
 			&& ReadRenderPassImmediatelyCallTarget() == &A8RenderPassImmediately;
+	}
+
+	bool IsA8RenderPassImmediatelyHookCurrentFast()
+	{
+		const bool current = State().originalRenderPassImmediately
+			&& hook_identity::MatchesRel32InstructionImageUnchecked(
+				kRenderPassImmediatelyCallSite,
+				s_renderPassImmediatelyHookImage);
+		if (!current)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				StructuralReadinessImmediateMismatch);
+		}
+		return current;
 	}
 
 	void __cdecl A8RenderPassImmediately(BSShaderProperty::RenderPass* pass,

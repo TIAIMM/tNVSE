@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -20,6 +21,34 @@ namespace fonthook::hook_identity
 		SIZE_T stockTarget = 0;
 		const char* name = nullptr;
 	};
+
+	struct Rel32InstructionImage
+	{
+		std::array<UInt8, 5> bytes = {};
+		bool valid = false;
+	};
+
+	inline Rel32InstructionImage MakeRel32InstructionImage(
+		SIZE_T source, Rel32Opcode opcode, SIZE_T expectedTarget)
+	{
+		Rel32InstructionImage image;
+		if (!source || !expectedTarget)
+			return image;
+		const std::intptr_t displacementWide =
+			static_cast<std::intptr_t>(expectedTarget)
+			- static_cast<std::intptr_t>(source + image.bytes.size());
+		if (displacementWide < std::numeric_limits<SInt32>::min()
+			|| displacementWide > std::numeric_limits<SInt32>::max())
+		{
+			return image;
+		}
+		image.bytes[0] = static_cast<UInt8>(opcode);
+		const SInt32 displacement = static_cast<SInt32>(displacementWide);
+		std::memcpy(image.bytes.data() + 1u,
+			&displacement, sizeof(displacement));
+		image.valid = true;
+		return image;
+	}
 
 	inline bool IsAccessibleRegion(
 		SIZE_T address, SIZE_T size, bool requireExecutable)
@@ -87,5 +116,35 @@ namespace fonthook::hook_identity
 		SIZE_T target = 0;
 		return ReadRel32Target(source, opcode, target)
 			&& target == expectedTarget;
+	}
+
+	// Use only after a complete IsAccessibleRegion audit has certified the
+	// executable page for the current process lifetime.  This compares the full
+	// instruction image instead of decoding through VirtualQuery on every hot
+	// registration/readback.
+	inline bool MatchesRel32TargetUnchecked(
+		SIZE_T source, Rel32Opcode opcode, SIZE_T expectedTarget)
+	{
+		const Rel32InstructionImage expected = MakeRel32InstructionImage(
+			source, opcode, expectedTarget);
+		return expected.valid && std::memcmp(
+			reinterpret_cast<const void*>(source), expected.bytes.data(),
+			expected.bytes.size()) == 0;
+	}
+
+	inline bool MatchesRel32InstructionImageUnchecked(
+		SIZE_T source, const Rel32InstructionImage& expected)
+	{
+		return source && expected.valid
+			&& std::memcmp(reinterpret_cast<const void*>(source),
+				expected.bytes.data(), expected.bytes.size()) == 0;
+	}
+
+	inline bool MatchesBytesUnchecked(
+		SIZE_T source, const void* expected, SIZE_T size)
+	{
+		return source && expected && size
+			&& std::memcmp(reinterpret_cast<const void*>(source), expected,
+				size) == 0;
 	}
 }

@@ -8,6 +8,9 @@ configuration, dependency checks, globals, and native-call helpers stay at the
 - `font`: font orchestration, text encoding/decoding, layout, hooks, and
   performance support.
   - `a8`: native A8 render hooks.
+    `font_a8_render.cpp` publishes the generation-scoped readiness snapshot and
+    owns singleton payload publication plus metadata-map capacity maintenance;
+    hot consumers only use the snapshot after exact hook/device/atlas checks.
   - `atlas`: atlas packing, caching, resources, shaping, and snapshots.
     Snapshot orchestration stays in `font_atlas_snapshot.cpp`; format and file
     validation, packing, loading, and saving are isolated in the corresponding
@@ -28,7 +31,10 @@ configuration, dependency checks, globals, and native-call helpers stay at the
     the draw-free bind/restore proof bracket, and slot-27 fail-open
     leader/follower execution.
     Its diagnostics also retain first-field compatibility mismatch counters and
-    per-stage timing histograms.
+    per-stage timing histograms. `font_native_accumulator.cpp` builds the compact
+    final-order execution skeleton while first scanning the sorted accumulator;
+    `font_native_command_buffer.cpp` and instancing reuse the same readiness and
+    resource epochs without changing stock barriers or fallback order.
     `font_native_diagnostics.cpp` owns the bounded, logging-only D3D9 binding,
     Tile-constant, ring-upload/packet-range, and final indexed-submit probes
     used to compare direct and slot-27 draw paths without reading WRITEONLY GPU
@@ -38,7 +44,10 @@ configuration, dependency checks, globals, and native-call helpers stay at the
     `font_vector_persistent_cache.cpp`; bitmap records and glyph manifests are
     implemented by `font_vector_persistent_bitmap_cache.cpp` and
     `font_vector_glyph_manifest.cpp`.
-- `game`: game-facing hooks and save-name handling.
+- `game`: game-facing hooks and save-name handling. The list viewport hook keeps
+  a non-owning, identity-validated topology descriptor; all alpha, clipwindow,
+  bounds, transform, and visibility traits remain live reads and uncertainty is
+  fail-open.
 - `input`: multibyte input, IME/TSF, menu integration, and candidate overlays.
 - `nvse`: the NVSE plugin API declaration.
 

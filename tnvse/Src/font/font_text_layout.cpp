@@ -4,6 +4,7 @@
 #include "font_manager.h"
 #include "font_vector.h"
 #include "font_vector_internal.h"
+#include "load_config.h"
 #include "native_calls.h"
 #include <algorithm>
 #include <array>
@@ -213,6 +214,7 @@ namespace fonthook
 		const Font* font = nullptr;
 		const FontData* fontData = nullptr;
 		UInt64 layoutIdentity = 0;
+		UInt64 directProfilePublicationEpoch = 0;
 		UInt64 metricSignature = 0;
 		UInt64 iconSignature = 0;
 		UInt32 codePage = 0;
@@ -234,6 +236,7 @@ namespace fonthook
 		const Font* font = nullptr;
 		const FontData* fontData = nullptr;
 		UInt64 layoutIdentity = 0;
+		UInt64 directProfilePublicationEpoch = 0;
 		UInt64 metricSignature = 0;
 		UInt64 iconSignature = 0;
 		UInt32 codePage = 0;
@@ -270,6 +273,8 @@ namespace fonthook
 		addBytes(&font, sizeof(font));
 		addBytes(&fontData, sizeof(fontData));
 		addBytes(&key.layoutIdentity, sizeof(key.layoutIdentity));
+		addBytes(&key.directProfilePublicationEpoch,
+			sizeof(key.directProfilePublicationEpoch));
 		addBytes(&key.metricSignature, sizeof(key.metricSignature));
 		addBytes(&key.iconSignature, sizeof(key.iconSignature));
 		addBytes(&key.codePage, sizeof(key.codePage));
@@ -295,6 +300,8 @@ namespace fonthook
 	{
 		return left.font == right.font && left.fontData == right.fontData
 			&& left.layoutIdentity == right.layoutIdentity
+			&& left.directProfilePublicationEpoch
+				== right.directProfilePublicationEpoch
 			&& left.metricSignature == right.metricSignature
 			&& left.iconSignature == right.iconSignature
 			&& left.codePage == right.codePage && left.width == right.width
@@ -724,6 +731,11 @@ namespace fonthook
 		}
 		PublishPreparedTextSidecar(
 			&data, font, value.directSidecar);
+		if (value.directSidecar && value.directSidecar->rejectBatch)
+		{
+			vectorfont::RecordFreeTypePerf(
+				vectorfont::FreeTypePerfCounter::PreparedTextRejectCacheHit);
+		}
 	}
 
 	static std::shared_ptr<const PreparedTextCacheValue> FindPreparedTextCacheValue(
@@ -862,6 +874,7 @@ namespace fonthook
 
 		PreparedTextCacheKey key = {
 			lookup.font, lookup.fontData, lookup.layoutIdentity,
+			lookup.directProfilePublicationEpoch,
 			lookup.metricSignature, lookup.iconSignature, lookup.codePage,
 			lookup.width, lookup.height, lookup.lineStart, lookup.lineEnd,
 			lookup.lineSeparator, lookup.terminal,
@@ -1797,12 +1810,23 @@ namespace fonthook
 		UInt64 layoutIdentity = 0;
 		const bool cacheable = GetFreeTypeLayoutIdentity(font, layoutIdentity)
 			&& (resolveEscapes || !originalText.hasEscape);
+		UInt64 directProfilePublicationEpoch = 0;
+		if (cacheable && g_bEnableFreeTypeFontStructuralFastPaths)
+		{
+			if (const vectorfont::RuntimeFont* runtime =
+				vectorfont::FindActiveRuntime(font))
+			{
+				directProfilePublicationEpoch = vectorfont::
+					GetRuntimeSealedDirectProfilePublicationEpoch(*runtime);
+			}
+		}
 		PreparedTextCacheLookupKey cacheLookup;
 		bool preparedTextStoreCandidate = false;
 		if (cacheable)
 		{
 			cacheLookup = {
 				font, font->pFontData, layoutIdentity,
+				directProfilePublicationEpoch,
 				GetPreparedTextMetricSignature(font, lineSpacingAdjust),
 				0, GetFreeTypeTextCodePage(),
 				axData->iWidth, axData->iHeight, axData->iLineStart,
@@ -1886,14 +1910,26 @@ namespace fonthook
 				axData, font, directSidecar);
 			if (preparedTextStoreCandidate)
 			{
-				if (directSidecar && !directSidecar->rejectBatch)
+				const bool stableReject = directSidecar
+					&& directSidecar->rejectBatch
+					&& g_bEnableFreeTypeFontStructuralFastPaths
+					&& directProfilePublicationEpoch != 0;
+				if (directSidecar
+					&& (!directSidecar->rejectBatch || stableReject))
 				{
-					if (!StorePreparedTextCacheValue(cacheLookup,
+					const bool stored = StorePreparedTextCacheValue(cacheLookup,
 						CapturePreparedTextCacheValue(
-							*axData, std::move(directSidecar))))
+							*axData, std::move(directSidecar)));
+					if (!stored)
 					{
 						RejectPreparedTextAdmission(
 							cacheLookup.precomputedHash);
+					}
+					else if (stableReject)
+					{
+						vectorfont::RecordFreeTypePerf(
+							vectorfont::FreeTypePerfCounter::
+								PreparedTextRejectCacheStored);
 					}
 				}
 				else

@@ -1460,11 +1460,71 @@ namespace fonthook::vectorfont
 			std::memory_order_acquire);
 	}
 
+	UInt64 GetRuntimeSealedDirectProfilePublicationEpoch(
+		const RuntimeFont& runtime)
+	{
+		const UInt64 before = runtime.sealedDirectProfilePublicationEpoch.load(
+			std::memory_order_acquire);
+		if (!before)
+			return 0;
+		const std::shared_ptr<const SealedDirectFontProfile> profile =
+			runtime.sealedDirectProfile.load(std::memory_order_acquire);
+		const UInt64 after = runtime.sealedDirectProfilePublicationEpoch.load(
+			std::memory_order_acquire);
+		return profile && before && before == after ? before : 0;
+	}
+
+	static UInt64 BeginSealedDirectProfilePublication(RuntimeFont& runtime)
+	{
+		UInt64 observed = runtime.sealedDirectProfilePublicationEpoch.load(
+			std::memory_order_acquire);
+		for (;;)
+		{
+			while (!observed)
+			{
+				YieldProcessor();
+				observed = runtime.sealedDirectProfilePublicationEpoch.load(
+					std::memory_order_acquire);
+			}
+			if (runtime.sealedDirectProfilePublicationEpoch.compare_exchange_weak(
+				observed, 0, std::memory_order_acq_rel,
+				std::memory_order_acquire))
+			{
+				return observed;
+			}
+		}
+	}
+
+	static void EndSealedDirectProfilePublication(RuntimeFont& runtime,
+		UInt64 previousEpoch, bool changed)
+	{
+		UInt64 publishedEpoch = previousEpoch;
+		if (changed)
+		{
+			publishedEpoch = previousEpoch + 1u;
+			if (!publishedEpoch)
+				publishedEpoch = 1u;
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::PreparedTextProfileEpochInvalidation);
+		}
+		runtime.sealedDirectProfilePublicationEpoch.store(
+			publishedEpoch, std::memory_order_release);
+	}
+
 	void StoreRuntimeSealedDirectProfile(RuntimeFont& runtime,
 		std::shared_ptr<const SealedDirectFontProfile> profile)
 	{
-		runtime.sealedDirectProfile.store(
-			std::move(profile), std::memory_order_release);
+		const SealedDirectFontProfile* incoming = profile.get();
+		const UInt64 previousEpoch = BeginSealedDirectProfilePublication(runtime);
+		const std::shared_ptr<const SealedDirectFontProfile> previous =
+			runtime.sealedDirectProfile.load(std::memory_order_acquire);
+		const bool changed = previous.get() != incoming;
+		if (changed)
+		{
+			runtime.sealedDirectProfile.store(
+				std::move(profile), std::memory_order_release);
+		}
+		EndSealedDirectProfilePublication(runtime, previousEpoch, changed);
 	}
 
 	void InvalidateSealedDirectFontProfileIfCurrent(RuntimeFont& runtime,
@@ -1472,11 +1532,17 @@ namespace fonthook::vectorfont
 	{
 		if (!expected)
 			return;
-		std::shared_ptr<const SealedDirectFontProfile> current = expected;
-		std::shared_ptr<const SealedDirectFontProfile> empty;
-		runtime.sealedDirectProfile.compare_exchange_strong(
-			current, std::move(empty), std::memory_order_acq_rel,
-			std::memory_order_acquire);
+		const UInt64 previousEpoch = BeginSealedDirectProfilePublication(runtime);
+		const std::shared_ptr<const SealedDirectFontProfile> current =
+			runtime.sealedDirectProfile.load(std::memory_order_acquire);
+		const bool changed = current.get() == expected.get();
+		if (changed)
+		{
+			std::shared_ptr<const SealedDirectFontProfile> empty;
+			runtime.sealedDirectProfile.store(
+				std::move(empty), std::memory_order_release);
+		}
+		EndSealedDirectProfilePublication(runtime, previousEpoch, changed);
 	}
 
 	void ReleaseSealedRuntimeFreeTypeState(RuntimeFont& runtime)

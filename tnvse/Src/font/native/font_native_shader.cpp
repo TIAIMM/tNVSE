@@ -1945,6 +1945,33 @@ namespace fonthook::vectorfont
 			std::memory_order_acquire));
 	}
 
+	bool GetNativeA8RendererReadinessFast(
+		NativeA8RendererReadinessView& view)
+	{
+		view = {};
+		NativeShaderGeneration* generation = s_publishedGeneration.load(
+			std::memory_order_acquire);
+		if (!generation
+			|| s_resetInProgress.load(std::memory_order_acquire)
+			|| generation->runtimeFault.load(std::memory_order_acquire)
+			|| !generation->renderer || !generation->device
+			|| !generation->declaration || !generation->d3dDeclaration
+			|| !generation->vertexShader)
+		{
+			return false;
+		}
+		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+		IDirect3DDevice9* device = renderer
+			? renderer->GetD3DDevice() : nullptr;
+		if (generation->renderer != renderer || generation->device != device)
+			return false;
+		view.renderer = renderer;
+		view.device = device;
+		view.generation = generation->id;
+		view.ready = view.generation != 0;
+		return view.ready;
+	}
+
 	UInt32 GetNativeA8ShaderGeneration()
 	{
 		NativeShaderGeneration* generation = s_publishedGeneration.load(

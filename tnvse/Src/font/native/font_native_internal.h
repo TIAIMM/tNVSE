@@ -8,11 +8,13 @@
 #include "NiTriShape.hpp"
 #include "TileShader.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 class NiGeometryBufferData;
@@ -30,6 +32,139 @@ namespace fonthook::vectorfont
 	inline constexpr UInt32 kNativeA8MaximumQuads =
 		std::numeric_limits<UInt16>::max() / 4u;
 	inline constexpr UInt32 kMaximumVirtualStockShapes = 64;
+
+	template <class T, size_t InlineCapacity = 1>
+	class NativeA8InlineVector
+	{
+	public:
+		using value_type = T;
+		using iterator = T*;
+		using const_iterator = const T*;
+
+		bool empty() const { return size() == 0; }
+		size_t size() const
+		{
+			return m_heapMode ? m_heap.size() : m_inlineSize;
+		}
+		size_t capacity() const
+		{
+			return m_heapMode ? m_heap.capacity() : InlineCapacity;
+		}
+		size_t heap_capacity() const
+		{
+			return m_heapMode ? m_heap.capacity() : 0;
+		}
+		bool uses_inline_storage() const { return !m_heapMode; }
+		void force_heap_storage()
+		{
+			if (!m_heapMode)
+				Promote(m_inlineSize);
+		}
+
+		T* data()
+		{
+			return m_heapMode ? m_heap.data() : m_inline.data();
+		}
+		const T* data() const
+		{
+			return m_heapMode ? m_heap.data() : m_inline.data();
+		}
+		iterator begin() { return data(); }
+		const_iterator begin() const { return data(); }
+		iterator end() { return data() + size(); }
+		const_iterator end() const { return data() + size(); }
+
+		T& operator[](size_t index) { return data()[index]; }
+		const T& operator[](size_t index) const { return data()[index]; }
+		T& front() { return data()[0]; }
+		const T& front() const { return data()[0]; }
+		T& back() { return data()[size() - 1u]; }
+		const T& back() const { return data()[size() - 1u]; }
+
+		void clear()
+		{
+			if (m_heapMode)
+				m_heap.clear();
+			else
+				m_inlineSize = 0;
+		}
+
+		void reserve(size_t requested)
+		{
+			if (requested <= InlineCapacity && !m_heapMode)
+				return;
+			Promote(requested);
+		}
+
+		void assign(size_t count, const T& value)
+		{
+			if (m_heapMode || count > InlineCapacity)
+			{
+				Promote(count);
+				m_heap.assign(count, value);
+				return;
+			}
+			for (size_t index = 0; index < count; ++index)
+				m_inline[index] = value;
+			m_inlineSize = count;
+		}
+
+		void push_back(const T& value)
+		{
+			if (!m_heapMode && m_inlineSize < InlineCapacity)
+			{
+				m_inline[m_inlineSize++] = value;
+				return;
+			}
+			Promote(size() + 1u);
+			m_heap.push_back(value);
+		}
+
+		void push_back(T&& value)
+		{
+			if (!m_heapMode && m_inlineSize < InlineCapacity)
+			{
+				m_inline[m_inlineSize++] = std::move(value);
+				return;
+			}
+			Promote(size() + 1u);
+			m_heap.push_back(std::move(value));
+		}
+
+		template <class... Args>
+		T& emplace_back(Args&&... args)
+		{
+			if (!m_heapMode && m_inlineSize < InlineCapacity)
+			{
+				m_inline[m_inlineSize] = T(std::forward<Args>(args)...);
+				return m_inline[m_inlineSize++];
+			}
+			Promote(size() + 1u);
+			m_heap.emplace_back(std::forward<Args>(args)...);
+			return m_heap.back();
+		}
+
+	private:
+		void Promote(size_t requested)
+		{
+			if (m_heapMode)
+			{
+				if (m_heap.capacity() < requested)
+					m_heap.reserve(requested);
+				return;
+			}
+			m_heap.reserve(std::max(requested, m_inlineSize));
+			for (size_t index = 0; index < m_inlineSize; ++index)
+				m_heap.push_back(std::move(m_inline[index]));
+			m_inlineSize = 0;
+			m_heapMode = true;
+		}
+
+		std::array<T, InlineCapacity> m_inline = {};
+		std::vector<T> m_heap;
+		size_t m_inlineSize = 0;
+		bool m_heapMode = false;
+	};
 	inline constexpr size_t kNativeA8PacketConstantRegisterCount = 8;
 	inline constexpr size_t kNativeA8PacketConstantFloatCount =
 		kNativeA8PacketConstantRegisterCount * 4;
@@ -361,8 +496,8 @@ namespace fonthook::vectorfont
 	{
 		NiTriShape* ownerTile = nullptr;
 		const NativeA8PayloadTemplate* artifact = nullptr;
-		std::vector<NativeA8TileRetainedPacket> packets;
-		std::vector<NativeA8TileRetainedRun> runs;
+		NativeA8InlineVector<NativeA8TileRetainedPacket> packets;
+		NativeA8InlineVector<NativeA8TileRetainedRun> runs;
 		// Standard-lite is currently a dedicated single-packet specialization,
 		// so one Tile-lifetime dispatch is sufficient for this retained text.
 		NativeA8StandardPassLiteDispatch standardPassLite;
@@ -381,8 +516,8 @@ namespace fonthook::vectorfont
 		// shared text artifact. The Tile instance retains its generation-bound
 		// shader/program skeleton until that Tile is destroyed or preflight is
 		// invalidated.
-		std::vector<TileShader*> packetShaders;
-		std::vector<const NativeA8CompiledPacketCommand*> packetPrograms;
+		NativeA8InlineVector<TileShader*> packetShaders;
+		NativeA8InlineVector<const NativeA8CompiledPacketCommand*> packetPrograms;
 		NativeA8TileRetainedText retainedText;
 		std::atomic<bool> suppressNextSubmit = false;
 		std::atomic<NativeA8FallbackReason> stickyReason =
@@ -392,7 +527,7 @@ namespace fonthook::vectorfont
 		// A successful preflight is reusable while the shader generation, scaled
 		// fill sampling class, and the referenced page textures remain unchanged.
 		// Null entries belong to atlas pages that no packet in this payload uses.
-		std::vector<const void*> preflightAtlasTextures;
+		NativeA8InlineVector<const void*> preflightAtlasTextures;
 		UInt32 preparedGeneration = 0;
 		UInt32 compositeAttemptGeneration = 0;
 		UInt32 preflightAtlasTextureEpoch = 0;
@@ -1168,6 +1303,15 @@ namespace fonthook::vectorfont
 	void HandleNativeA8RendererMainLoop();
 	void HandleNativeA8ShaderLoaderMessage(UInt32 messageType);
 	bool IsNativeA8RendererAvailable();
+	struct NativeA8RendererReadinessView
+	{
+		NiDX9Renderer* renderer = nullptr;
+		IDirect3DDevice9* device = nullptr;
+		UInt32 generation = 0;
+		bool ready = false;
+	};
+	bool GetNativeA8RendererReadinessFast(
+		NativeA8RendererReadinessView& view);
 	void MarkNativeA8GenerationFault(UInt32 generation,
 		const char* operation, HRESULT result);
 	UInt32 GetNativeA8ShaderGeneration();
@@ -1298,6 +1442,7 @@ namespace fonthook::vectorfont
 	bool IsNativeA8AccumulatorHookCurrent();
 	bool IsNativeA8RenderAlphaGeometryHookCurrent();
 	bool IsNativeA8RegistrationHookChainCurrent();
+	bool IsNativeA8RegistrationHookChainCurrentFast();
 
 	void RecordNativeA8Suppression(NiTriShape* shape,
 		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason,

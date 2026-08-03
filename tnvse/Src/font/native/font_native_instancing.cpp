@@ -409,9 +409,20 @@ namespace fonthook::vectorfont
 			}
 			if (left.immutable.sourceTexture != right.immutable.sourceTexture)
 			{
-				return RecordCompatibilityKeyMismatch(phase,
-					FreeTypePerfCounter::
-						GlyphInstancingCompatibilityMismatchSourceTexture);
+				const bool exactResourceAlias =
+					g_bEnableFreeTypeFontStructuralFastPaths
+					&& left.immutable.atlasPage == right.immutable.atlasPage
+					&& left.immutable.atlasTexture
+					&& left.immutable.atlasTexture
+						== right.immutable.atlasTexture;
+				if (!exactResourceAlias)
+				{
+					return RecordCompatibilityKeyMismatch(phase,
+						FreeTypePerfCounter::
+							GlyphInstancingCompatibilityMismatchSourceTexture);
+				}
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::GlyphInstancingSourceTextureAlias);
 			}
 			if (left.property.alphaTexture != right.property.alphaTexture)
 			{
@@ -528,7 +539,10 @@ namespace fonthook::vectorfont
 		};
 
 		std::atomic<UInt32> s_instancingDiagnosticCount = 0;
+		std::atomic<UInt32> s_instancingDiagnosticGeneration = 0;
+		std::atomic<ULONGLONG> s_instancingDiagnosticWindowStart = 0;
 		constexpr UInt32 kMaximumInstancingDiagnosticLines = 32;
+		constexpr ULONGLONG kInstancingDiagnosticWindowMilliseconds = 5000;
 
 		const char* BuildMemberFailureName(BuildMemberFailure failure)
 		{
@@ -555,13 +569,28 @@ namespace fonthook::vectorfont
 			BSShaderProperty::RenderPass* renderPass, UInt32 currentPass,
 			bool testAlpha, bool blendAlpha, bool setupDrawmode)
 		{
-			if (!g_bEnableFreeTypeFontRenderingLog
-				|| s_instancingDiagnosticCount.fetch_add(
-					1, std::memory_order_relaxed)
-					>= kMaximumInstancingDiagnosticLines)
-			{
+			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
+			const UInt32 generation = s_crossTextFrame.generation;
+			const ULONGLONG now = GetTickCount64();
+			const UInt32 previousGeneration =
+				s_instancingDiagnosticGeneration.load(std::memory_order_relaxed);
+			const ULONGLONG previousWindow =
+				s_instancingDiagnosticWindowStart.load(std::memory_order_relaxed);
+			if (previousGeneration != generation || !previousWindow
+				|| now - previousWindow
+					>= kInstancingDiagnosticWindowMilliseconds)
+			{
+				s_instancingDiagnosticGeneration.store(
+					generation, std::memory_order_relaxed);
+				s_instancingDiagnosticWindowStart.store(
+					now, std::memory_order_relaxed);
+				s_instancingDiagnosticCount.store(0, std::memory_order_relaxed);
 			}
+			if (s_instancingDiagnosticCount.fetch_add(
+					1, std::memory_order_relaxed)
+				>= kMaximumInstancingDiagnosticLines)
+				return;
 			const CrossTextFrame& frame = s_crossTextFrame;
 			const CrossTextBatch* batch = batchIndex < frame.batches.size()
 				? &frame.batches[batchIndex] : nullptr;
@@ -2050,6 +2079,56 @@ namespace fonthook::vectorfont
 				GlyphInstancingBeginResourceFallback, "live-scratch-capacity");
 		}
 		frame.liveBatchIndex = batchIndex;
+		const auto shrinkBatchToPrefix = [&](UInt32 prefixCount,
+			const char* reason)
+		{
+			const UInt32 previousCount = batch.memberCount;
+			if (!g_bEnableFreeTypeFontStructuralFastPaths
+				|| prefixCount < 2 || prefixCount >= previousCount)
+			{
+				return false;
+			}
+			UInt64 prefixInstances = 0;
+			for (UInt32 offset = 0; offset < prefixCount; ++offset)
+			{
+				prefixInstances += frame.admissionMembers[
+					batch.firstMember + offset].sidecarCount;
+			}
+			if (!prefixInstances
+				|| prefixInstances > std::numeric_limits<UInt32>::max())
+			{
+				return false;
+			}
+			LogInstancingBeginDiagnostic(reason, sequenceIndex, batchIndex,
+				prefixCount, leaderGeometry, renderPass, currentPass,
+				testAlpha, blendAlpha, setupDrawmode);
+			for (UInt32 offset = prefixCount; offset < previousCount; ++offset)
+			{
+				const UInt32 suffixSequence = frame.admissionMembers[
+					batch.firstMember + offset].sequenceIndex;
+				if (suffixSequence < frame.sequenceToBatch.size()
+					&& frame.sequenceToBatch[suffixSequence] == batchIndex)
+				{
+					frame.sequenceToBatch[suffixSequence] =
+						kInvalidNativeA8CommandIndex;
+				}
+			}
+			batch.memberCount = prefixCount;
+			batch.instanceCount = static_cast<UInt32>(prefixInstances);
+			if (frame.livePreflight.size() > prefixCount)
+				frame.livePreflight.resize(prefixCount);
+			if (frame.liveSnapshots.size() > prefixCount)
+				frame.liveSnapshots.resize(prefixCount);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::GlyphInstancingPrefixShrink);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::GlyphInstancingPrefixRetainedText,
+				prefixCount);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::GlyphInstancingPrefixReplayedText,
+				previousCount - prefixCount);
+			return true;
+		};
 		const auto rejectLivePreflight = [&](FreeTypePerfCounter detail,
 			const char* reason, UInt32 memberOffset)
 		{
@@ -2081,6 +2160,16 @@ namespace fonthook::vectorfont
 				if (failure != BuildMemberFailure::None)
 				{
 					RecordBuildFailure(failure);
+					if (shrinkBatchToPrefix(offset,
+							"prefix-live-preflight"))
+					{
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							GlyphInstancingBeginPreflightFallback);
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							GlyphInstancingLiveSnapshotAvoidedText,
+							1u);
+						break;
+					}
 					return rejectLivePreflight(
 						failure == BuildMemberFailure::Scissor
 						? FreeTypePerfCounter::
@@ -2096,6 +2185,16 @@ namespace fonthook::vectorfont
 				{
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::GlyphInstancingScissorFallback);
+					if (shrinkBatchToPrefix(offset,
+							"prefix-transient-state"))
+					{
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							GlyphInstancingBeginPreflightFallback);
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							GlyphInstancingLiveSnapshotAvoidedText,
+							1u);
+						break;
+					}
 					return rejectLivePreflight(FreeTypePerfCounter::
 						GlyphInstancingBeginTransientFallback,
 						"transient-state", offset);
@@ -2126,6 +2225,14 @@ namespace fonthook::vectorfont
 					RecordBuildFailure(failure);
 					RecordFreeTypePerf(FreeTypePerfCounter::
 						GlyphInstancingBeginSnapshotFallback);
+					if (shrinkBatchToPrefix(offset,
+							"prefix-live-snapshot"))
+					{
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							GlyphInstancingLiveSnapshotAvoidedText,
+							1u);
+						break;
+					}
 					return rejectBegin(failure == BuildMemberFailure::Scissor
 						? FreeTypePerfCounter::
 							GlyphInstancingBeginTransientFallback

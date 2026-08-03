@@ -18,13 +18,18 @@ namespace fonthook::vectorfont
 		constexpr size_t kCounterCount = static_cast<size_t>(FreeTypePerfCounter::Count);
 		constexpr size_t kPhaseCount =
 			static_cast<size_t>(FreeTypePerfPhase::Count);
-		constexpr size_t kDurationBuckets = 64;
+		constexpr size_t kDurationExponentBuckets = 64;
+		constexpr size_t kDurationSubBuckets = 4;
+		constexpr size_t kDurationBuckets =
+			kDurationExponentBuckets * kDurationSubBuckets;
 		constexpr size_t kInstancingSizeBuckets = 32;
 		struct PerformanceState
 		{
 			std::array<std::atomic<UInt64>, kCounterCount> counters = {};
 			std::array<std::array<std::atomic<UInt64>,
 				kDurationBuckets>, kPhaseCount> durations = {};
+			std::array<std::atomic<UInt64>, kPhaseCount>
+				durationNanoseconds = {};
 			std::array<std::atomic<UInt64>, kInstancingSizeBuckets>
 				instancingTextSizes = {};
 			std::array<std::atomic<UInt64>, kInstancingSizeBuckets>
@@ -63,20 +68,33 @@ namespace fonthook::vectorfont
 				/ static_cast<long double>(frequency);
 			const UInt64 nanoseconds = static_cast<UInt64>(
 				std::max<long double>(1.0L, scaled));
-			size_t bucket = 0;
+			size_t exponent = 0;
 			UInt64 upper = 1;
 			while (upper < nanoseconds
-				&& bucket + 1 < kDurationBuckets)
+				&& exponent + 1 < kDurationExponentBuckets)
 			{
 				upper = upper
 					<= std::numeric_limits<UInt64>::max() / 2
 						? upper * 2
 						: std::numeric_limits<UInt64>::max();
-				++bucket;
+				++exponent;
 			}
+			size_t subBucket = kDurationSubBuckets - 1u;
+			if (exponent >= 3 && upper != std::numeric_limits<UInt64>::max())
+			{
+				const UInt64 lower = upper / 2u;
+				const UInt64 step = (upper - lower) / kDurationSubBuckets;
+				subBucket = static_cast<size_t>(std::min<UInt64>(
+					kDurationSubBuckets - 1u,
+					(nanoseconds - lower - 1u) / step));
+			}
+			const size_t bucket = exponent * kDurationSubBuckets + subBucket;
 			GetPerformanceState().durations[
 				static_cast<size_t>(phase)][bucket]
 				.fetch_add(1, std::memory_order_relaxed);
+			GetPerformanceState().durationNanoseconds[
+				static_cast<size_t>(phase)].fetch_add(
+					nanoseconds, std::memory_order_relaxed);
 		}
 
 		struct DurationSummary
@@ -84,6 +102,7 @@ namespace fonthook::vectorfont
 			UInt64 count = 0;
 			double medianMicroseconds = 0.0;
 			double p95Microseconds = 0.0;
+			double meanMicroseconds = 0.0;
 		};
 
 		DurationSummary ConsumeDurationSummary(
@@ -99,8 +118,14 @@ namespace fonthook::vectorfont
 						.exchange(0, std::memory_order_relaxed);
 				result.count += values[bucket];
 			}
+			const UInt64 totalNanoseconds =
+				GetPerformanceState().durationNanoseconds[
+					static_cast<size_t>(phase)].exchange(
+						0, std::memory_order_relaxed);
 			if (!result.count)
 				return result;
+			result.meanMicroseconds = static_cast<double>(totalNanoseconds)
+				/ static_cast<double>(result.count) / 1000.0;
 			auto quantile = [&](UInt64 numerator,
 				UInt64 denominator)
 			{
@@ -114,9 +139,20 @@ namespace fonthook::vectorfont
 					cumulative += values[bucket];
 					if (cumulative < target)
 						continue;
-					const long double upperNanoseconds =
-						std::ldexp(1.0L,
-							static_cast<int>(bucket));
+					const size_t exponent = bucket / kDurationSubBuckets;
+					const size_t subBucket = bucket % kDurationSubBuckets;
+					long double upperNanoseconds = std::ldexp(
+						1.0L, static_cast<int>(exponent));
+					if (exponent >= 3)
+					{
+						const long double lowerNanoseconds =
+							upperNanoseconds / 2.0L;
+						const long double step =
+							(upperNanoseconds - lowerNanoseconds)
+							/ static_cast<long double>(kDurationSubBuckets);
+						upperNanoseconds = lowerNanoseconds
+							+ step * static_cast<long double>(subBucket + 1u);
+					}
 					return static_cast<double>(
 						upperNanoseconds / 1000.0L);
 				}
@@ -223,6 +259,23 @@ namespace fonthook::vectorfont
 				static_cast<size_t>(counter)].fetch_add(
 					amount, std::memory_order_relaxed);
 		}
+	}
+
+	SInt64 BeginFreeTypePerfSample()
+	{
+		if (!g_bEnableFreeTypeFontRenderingLog)
+			return 0;
+		LARGE_INTEGER now = {};
+		return QueryPerformanceCounter(&now) ? now.QuadPart : 0;
+	}
+
+	void EndFreeTypePerfSample(FreeTypePerfPhase phase, SInt64 start)
+	{
+		if (!start || !g_bEnableFreeTypeFontRenderingLog)
+			return;
+		LARGE_INTEGER now = {};
+		if (QueryPerformanceCounter(&now))
+			RecordDuration(phase, now.QuadPart - start);
 	}
 
 	void RecordFreeTypeGlyphInstancingBatchSize(
@@ -469,6 +522,43 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::NativeRegistrationHookSlow),
 			counterValue(FreeTypePerfCounter::NativeRegistrationProxyFast),
 			counterValue(FreeTypePerfCounter::NativeRegistrationProxySlow));
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_structural_fastpaths: readiness_raw_hit=%llu full_audit=%llu hook_mismatch=%llu renderer_mismatch=%llu virtualquery_avoided=%llu tile_callback_mismatch=%llu render_alpha_mismatch=%llu sort_call_mismatch=%llu sort_tail_mismatch=%llu immediate_mismatch=%llu atlas_mismatch=%llu singleton_inline=%llu singleton_heap=%llu child_allocations_avoided=%llu metadata_reserve=%llu metadata_rehash=%llu sequence_hits=%llu sequence_fallbacks=%llu sequence_rescanned_items=%llu prefix_shrinks=%llu prefix_texts=%llu prefix_replayed=%llu texture_alias=%llu viewport_descriptor_hit=%llu viewport_descriptor_rebuild=%llu viewport_descriptor_fail=%llu prepared_reject_hit=%llu prepared_reject_stored=%llu prepared_profile_invalidations=%llu",
+			counterValue(FreeTypePerfCounter::StructuralReadinessRawHit),
+			counterValue(FreeTypePerfCounter::StructuralReadinessFullAudit),
+			counterValue(FreeTypePerfCounter::StructuralReadinessHookMismatch),
+			counterValue(FreeTypePerfCounter::StructuralReadinessRendererMismatch),
+			counterValue(FreeTypePerfCounter::StructuralReadinessVirtualQueryAvoided),
+			counterValue(FreeTypePerfCounter::
+				StructuralReadinessTileCallbackMismatch),
+			counterValue(FreeTypePerfCounter::
+				StructuralReadinessRenderAlphaMismatch),
+			counterValue(FreeTypePerfCounter::
+				StructuralReadinessSortCallMismatch),
+			counterValue(FreeTypePerfCounter::
+				StructuralReadinessSortTailMismatch),
+			counterValue(FreeTypePerfCounter::
+				StructuralReadinessImmediateMismatch),
+			counterValue(FreeTypePerfCounter::
+				StructuralReadinessAtlasMismatch),
+			counterValue(FreeTypePerfCounter::VirtualSingletonInlinePayload),
+			counterValue(FreeTypePerfCounter::VirtualSingletonHeapPayload),
+			counterValue(FreeTypePerfCounter::VirtualSingletonChildAllocationAvoided),
+			counterValue(FreeTypePerfCounter::MetadataMapReserve),
+			counterValue(FreeTypePerfCounter::MetadataMapRehash),
+			counterValue(FreeTypePerfCounter::CommandSequenceSkeletonHit),
+			counterValue(FreeTypePerfCounter::CommandSequenceSkeletonFallback),
+			counterValue(FreeTypePerfCounter::CommandSequenceSkeletonItem),
+			counterValue(FreeTypePerfCounter::GlyphInstancingPrefixShrink),
+			counterValue(FreeTypePerfCounter::GlyphInstancingPrefixRetainedText),
+			counterValue(FreeTypePerfCounter::GlyphInstancingPrefixReplayedText),
+			counterValue(FreeTypePerfCounter::GlyphInstancingSourceTextureAlias),
+			counterValue(FreeTypePerfCounter::ViewportDescriptorHit),
+			counterValue(FreeTypePerfCounter::ViewportDescriptorRebuild),
+			counterValue(FreeTypePerfCounter::ViewportDescriptorFail),
+			counterValue(FreeTypePerfCounter::PreparedTextRejectCacheHit),
+			counterValue(FreeTypePerfCounter::PreparedTextRejectCacheStored),
+			counterValue(FreeTypePerfCounter::PreparedTextProfileEpochInvalidation));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_sort: original_anchor_sorts=%llu anchor_items=%llu anchor_mixed_runs=%llu anchor_fallbacks=%llu anchor_predecessor_fallbacks=%llu anchor_proof_fallbacks=%llu mixed_equal_depth_runs_restored=%llu items_restored=%llu restore_rejected=%llu",
 			values[static_cast<size_t>(
@@ -1191,6 +1281,27 @@ namespace fonthook::vectorfont
 		const DurationSummary nativeRegistration =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::NativeRegistration);
+		const DurationSummary registrationReadiness =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::NativeRegistrationReadiness);
+		const DurationSummary registrationShape =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::NativeRegistrationShape);
+		const DurationSummary registrationBudget =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::NativeRegistrationBudget);
+		const DurationSummary registrationAllocation =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::NativeRegistrationAllocation);
+		const DurationSummary registrationPayload =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::NativeRegistrationPayload);
+		const DurationSummary registrationAccounting =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::NativeRegistrationAccounting);
+		const DurationSummary registrationPublish =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::NativeRegistrationPublish);
 		const DurationSummary preflight =
 			ConsumeDurationSummary(FreeTypePerfPhase::Preflight);
 		const DurationSummary submit =
@@ -1241,6 +1352,15 @@ namespace fonthook::vectorfont
 		const DurationSummary instancingRestore =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::GlyphInstancingRestore);
+		const DurationSummary viewportCull =
+			ConsumeDurationSummary(FreeTypePerfPhase::ViewportCull);
+		const DurationSummary viewportFastVisible =
+			ConsumeDurationSummary(FreeTypePerfPhase::ViewportCullFastVisible);
+		const DurationSummary viewportDeepSuccess =
+			ConsumeDurationSummary(FreeTypePerfPhase::ViewportCullDeepSuccess);
+		const DurationSummary viewportDeepFailTransform =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::ViewportCullDeepFailTransform);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf_timing: layout_n=%llu median_us=%.3f p95_us=%.3f sidecar_n=%llu median_us=%.3f p95_us=%.3f direct_compile_n=%llu median_us=%.3f p95_us=%.3f native_registration_n=%llu median_us=%.3f p95_us=%.3f preflight_n=%llu median_us=%.3f p95_us=%.3f submit_n=%llu median_us=%.3f p95_us=%.3f command_build_n=%llu median_us=%.3f p95_us=%.3f command_submit_n=%llu median_us=%.3f p95_us=%.3f extended_fnt_geometry_n=%llu median_us=%.3f p95_us=%.3f",
 			layout.count, layout.medianMicroseconds,
@@ -1306,6 +1426,44 @@ namespace fonthook::vectorfont
 			instancingRestore.count,
 			instancingRestore.medianMicroseconds,
 			instancingRestore.p95Microseconds);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_native_registration_timing: readiness_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f shape_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f budget_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f allocation_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f payload_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f accounting_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f publish_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f total_mean_us=%.3f",
+			registrationReadiness.count, registrationReadiness.meanMicroseconds,
+			registrationReadiness.medianMicroseconds,
+			registrationReadiness.p95Microseconds,
+			registrationShape.count, registrationShape.meanMicroseconds,
+			registrationShape.medianMicroseconds,
+			registrationShape.p95Microseconds,
+			registrationBudget.count, registrationBudget.meanMicroseconds,
+			registrationBudget.medianMicroseconds,
+			registrationBudget.p95Microseconds,
+			registrationAllocation.count, registrationAllocation.meanMicroseconds,
+			registrationAllocation.medianMicroseconds,
+			registrationAllocation.p95Microseconds,
+			registrationPayload.count, registrationPayload.meanMicroseconds,
+			registrationPayload.medianMicroseconds,
+			registrationPayload.p95Microseconds,
+			registrationAccounting.count, registrationAccounting.meanMicroseconds,
+			registrationAccounting.medianMicroseconds,
+			registrationAccounting.p95Microseconds,
+			registrationPublish.count, registrationPublish.meanMicroseconds,
+			registrationPublish.medianMicroseconds,
+			registrationPublish.p95Microseconds,
+			nativeRegistration.meanMicroseconds);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_viewport_cull_timing: total_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f fast_visible_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f deep_success_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f deep_fail_transform_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f",
+			viewportCull.count, viewportCull.meanMicroseconds,
+			viewportCull.medianMicroseconds, viewportCull.p95Microseconds,
+			viewportFastVisible.count, viewportFastVisible.meanMicroseconds,
+			viewportFastVisible.medianMicroseconds,
+			viewportFastVisible.p95Microseconds,
+			viewportDeepSuccess.count, viewportDeepSuccess.meanMicroseconds,
+			viewportDeepSuccess.medianMicroseconds,
+			viewportDeepSuccess.p95Microseconds,
+			viewportDeepFailTransform.count,
+			viewportDeepFailTransform.meanMicroseconds,
+			viewportDeepFailTransform.medianMicroseconds,
+			viewportDeepFailTransform.p95Microseconds);
 	}
 }
 

@@ -495,6 +495,35 @@ namespace fonthook::vectorfont
 		NativeRegistrationHookSlow,
 		NativeRegistrationProxyFast,
 		NativeRegistrationProxySlow,
+		StructuralReadinessRawHit,
+		StructuralReadinessFullAudit,
+		StructuralReadinessHookMismatch,
+		StructuralReadinessRendererMismatch,
+		StructuralReadinessVirtualQueryAvoided,
+		StructuralReadinessTileCallbackMismatch,
+		StructuralReadinessRenderAlphaMismatch,
+		StructuralReadinessSortCallMismatch,
+		StructuralReadinessSortTailMismatch,
+		StructuralReadinessImmediateMismatch,
+		StructuralReadinessAtlasMismatch,
+		VirtualSingletonInlinePayload,
+		VirtualSingletonHeapPayload,
+		VirtualSingletonChildAllocationAvoided,
+		MetadataMapReserve,
+		MetadataMapRehash,
+		CommandSequenceSkeletonHit,
+		CommandSequenceSkeletonFallback,
+		CommandSequenceSkeletonItem,
+		GlyphInstancingPrefixShrink,
+		GlyphInstancingPrefixRetainedText,
+		GlyphInstancingPrefixReplayedText,
+		GlyphInstancingSourceTextureAlias,
+		ViewportDescriptorHit,
+		ViewportDescriptorRebuild,
+		ViewportDescriptorFail,
+		PreparedTextRejectCacheHit,
+		PreparedTextRejectCacheStored,
+		PreparedTextProfileEpochInvalidation,
 		Count,
 	};
 	static_assert(
@@ -512,6 +541,13 @@ namespace fonthook::vectorfont
 		Sidecar,
 		DirectCompile,
 		NativeRegistration,
+		NativeRegistrationReadiness,
+		NativeRegistrationShape,
+		NativeRegistrationBudget,
+		NativeRegistrationAllocation,
+		NativeRegistrationPayload,
+		NativeRegistrationAccounting,
+		NativeRegistrationPublish,
 		Preflight,
 		Submit,
 		CommandBuild,
@@ -530,8 +566,14 @@ namespace fonthook::vectorfont
 		GlyphInstancingBind,
 		GlyphInstancingDraw,
 		GlyphInstancingRestore,
+		ViewportCull,
+		ViewportCullFastVisible,
+		ViewportCullDeepSuccess,
+		ViewportCullDeepFailTransform,
 		Count,
 	};
+	SInt64 BeginFreeTypePerfSample();
+	void EndFreeTypePerfSample(FreeTypePerfPhase aePhase, SInt64 aiStart);
 
 	class FreeTypePerfScope
 	{
@@ -942,6 +984,8 @@ namespace fonthook::vectorfont
 		std::vector<float>& arFaceBaselines);
 	std::shared_ptr<const SealedDirectFontProfile>
 		LoadRuntimeSealedDirectProfile(const RuntimeFont& arRuntime);
+	UInt64 GetRuntimeSealedDirectProfilePublicationEpoch(
+		const RuntimeFont& arRuntime);
 	std::shared_ptr<const SealedDirectFontProfile>
 		AcquireSealedDirectFontProfile(RuntimeFont& arRuntime,
 			float afRasterScale);

@@ -562,6 +562,7 @@ namespace fonthook::vectorfont
 		// atlas pages have been validated as one immutable generation.
 		std::atomic<std::shared_ptr<const SealedDirectFontProfile>>
 			sealedDirectProfile;
+		std::atomic<UInt64> sealedDirectProfilePublicationEpoch{ 1 };
 	};
 
 	static_assert(sizeof(PersistentFontHashRecord) == 68);

@@ -595,9 +595,10 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		template <class RetainedRunContainer>
 		bool BuildFrameRuns(NativeA8FrameCommandBuffer& buffer,
 			NativeA8CommandSpan& span,
-			const std::vector<NativeA8TileRetainedRun>& retainedRuns,
+			const RetainedRunContainer& retainedRuns,
 			bool retainedBridgeEligible)
 		{
 			UInt32 coveredPackets = 0;
@@ -701,27 +702,48 @@ namespace fonthook::vectorfont
 			{
 				return NativeA8CommandFallback::Nested;
 			}
-			if (!IsNativeA8AccumulatorHookCurrent()
-				|| !IsNativeA8RenderAlphaGeometryHookCurrent()
-				|| !IsA8RenderPassImmediatelyHookCurrent())
+			if (g_bEnableFreeTypeFontStructuralFastPaths)
 			{
-				return NativeA8CommandFallback::Hook;
+				NativeA8RuntimeReadinessView readiness;
+				if (!GetNativeA8RuntimeReadinessCurrent(readiness))
+				{
+					return GetNativeA8AtlasTextureEpoch()
+							!= stamp.atlasTextureEpoch
+						? NativeA8CommandFallback::Atlas
+						: NativeA8CommandFallback::Hook;
+				}
+				if (readiness.renderer != stamp.renderer
+					|| readiness.device != stamp.device
+					|| readiness.generation != stamp.generation
+					|| !IsNativeA8ShaderGenerationCurrent(stamp.generation))
+				{
+					return NativeA8CommandFallback::Generation;
+				}
+				if (readiness.atlasTextureEpoch != stamp.atlasTextureEpoch)
+					return NativeA8CommandFallback::Atlas;
 			}
-
-			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-			IDirect3DDevice9* device =
-				renderer ? renderer->GetD3DDevice() : nullptr;
-			if (!renderer || renderer != stamp.renderer
-				|| !device || device != stamp.device
-				|| !IsNativeA8ShaderGenerationCurrent(
-					stamp.generation))
+			else
 			{
-				return NativeA8CommandFallback::Generation;
-			}
-			if (GetNativeA8AtlasTextureEpoch()
-				!= stamp.atlasTextureEpoch)
-			{
-				return NativeA8CommandFallback::Atlas;
+				if (!IsNativeA8AccumulatorHookCurrent()
+					|| !IsNativeA8RenderAlphaGeometryHookCurrent()
+					|| !IsA8RenderPassImmediatelyHookCurrent())
+				{
+					return NativeA8CommandFallback::Hook;
+				}
+				NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+				IDirect3DDevice9* device =
+					renderer ? renderer->GetD3DDevice() : nullptr;
+				if (!renderer || renderer != stamp.renderer
+					|| !device || device != stamp.device
+					|| !IsNativeA8ShaderGenerationCurrent(stamp.generation))
+				{
+					return NativeA8CommandFallback::Generation;
+				}
+				if (GetNativeA8AtlasTextureEpoch()
+					!= stamp.atlasTextureEpoch)
+				{
+					return NativeA8CommandFallback::Atlas;
+				}
 			}
 			if (!IsNativeA8FrameResourceStampCurrent(
 				stamp.generation, stamp.resourceSerial,
@@ -1019,9 +1041,9 @@ namespace fonthook::vectorfont
 	size_t GetNativeA8TileRetainedCapacityBytes(
 		const NativeA8ShapePayload& payload)
 	{
-		return payload.retainedText.packets.capacity()
+		return payload.retainedText.packets.heap_capacity()
 				* sizeof(NativeA8TileRetainedPacket)
-			+ payload.retainedText.runs.capacity()
+			+ payload.retainedText.runs.heap_capacity()
 				* sizeof(NativeA8TileRetainedRun);
 	}
 
