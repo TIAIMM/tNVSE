@@ -2,12 +2,15 @@
 
 #include "NiAlphaProperty.hpp"
 #include "NiDX9Renderer.hpp"
+#include "NiDX9RenderState.hpp"
 #include "NiMaterialProperty.hpp"
 #include "NiPropertyState.hpp"
 #include "NiTexturingProperty.hpp"
 
+#include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 namespace fonthook::vectorfont
 {
@@ -23,6 +26,25 @@ namespace fonthook::vectorfont
 		inline constexpr double kClipIntervalRelativeSlack = 1.0e-6;
 
 		thread_local NativeA8LateVisibilityScope* s_lateVisibilityScope = nullptr;
+
+		enum class ClipProofResult : UInt8
+		{
+			Unproven = 0,
+			Overlap,
+			Outside
+		};
+
+		struct ClipTransformCache
+		{
+			const NiDX9Renderer* renderer = nullptr;
+			D3DXMATRIX world;
+			D3DXMATRIX view;
+			D3DXMATRIX projection;
+			D3DXMATRIX worldViewProjection;
+			bool valid = false;
+		};
+
+		thread_local ClipTransformCache s_clipTransformCache;
 
 		// Font::MakeTriShape returns a TileShaderProperty, but the concrete class
 		// is not exposed by this CommonLib snapshot. Keep this read-only view tied
@@ -223,38 +245,71 @@ namespace fonthook::vectorfont
 				&& scissor.bottom <= viewportBottom;
 		}
 
-		bool IsPayloadOutsideScissor(const NativeA8ShapePayload& payload,
-			const TileVisibilityPropertyView& tile,
-			const NiDX9Renderer& renderer, const D3DXMATRIX& world,
-			bool worldKnownFinite = false)
+		bool BuildViewportRect(const D3DVIEWPORT9& viewport, RECT& rect)
 		{
-			if (!payload.payloadTemplate || !tile.useScissorTest
-				|| *reinterpret_cast<const UInt8*>(kScaledScissorActive))
+			if (!viewport.Width || !viewport.Height
+				|| viewport.X > static_cast<DWORD>(LONG_MAX)
+				|| viewport.Y > static_cast<DWORD>(LONG_MAX))
 			{
 				return false;
 			}
-			const NiBound& bound = payload.payloadTemplate->bound;
-			if (!std::isfinite(bound.m_kCenter.x)
-				|| !std::isfinite(bound.m_kCenter.y)
-				|| !std::isfinite(bound.m_kCenter.z)
-				|| !std::isfinite(bound.m_fRadius)
-				|| bound.m_fRadius < 0.0f
-				|| !IsValidScissorForViewport(
-					tile.scissorRect, renderer.m_kD3DPort)
-				|| (!worldKnownFinite && !IsFiniteMatrix(world))
+			const std::uint64_t right = static_cast<std::uint64_t>(viewport.X)
+				+ viewport.Width;
+			const std::uint64_t bottom = static_cast<std::uint64_t>(viewport.Y)
+				+ viewport.Height;
+			if (right > static_cast<std::uint64_t>(LONG_MAX)
+				|| bottom > static_cast<std::uint64_t>(LONG_MAX))
+			{
+				return false;
+			}
+			rect.left = static_cast<LONG>(viewport.X);
+			rect.top = static_cast<LONG>(viewport.Y);
+			rect.right = static_cast<LONG>(right);
+			rect.bottom = static_cast<LONG>(bottom);
+			return true;
+		}
+
+		bool IsPrimitiveClippingEnabled(const NiDX9Renderer& renderer)
+		{
+			const NiDX9RenderState* state = renderer.m_pkRenderState;
+			return state
+				&& state->m_akRenderStateSettings[D3DRS_CLIPPING].m_uiCurrValue
+					!= FALSE;
+		}
+
+		bool BuildWorldViewProjection(const NiDX9Renderer& renderer,
+			const D3DXMATRIX& world, D3DXMATRIX& worldViewProjection,
+			bool recordLateDiagnostics)
+		{
+			ClipTransformCache& cache = s_clipTransformCache;
+			if (cache.valid && cache.renderer == &renderer
+				&& std::memcmp(&cache.world, &world, sizeof(world)) == 0
+				&& std::memcmp(&cache.view, &renderer.m_kD3DView,
+					sizeof(cache.view)) == 0
+				&& std::memcmp(&cache.projection, &renderer.m_kD3DProj,
+					sizeof(cache.projection)) == 0)
+			{
+				worldViewProjection = cache.worldViewProjection;
+				if (recordLateDiagnostics)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						VisibilityLateClipTransformHit);
+				}
+				return true;
+			}
+
+			if (recordLateDiagnostics)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VisibilityLateClipTransformMiss);
+			}
+			if (!IsFiniteMatrix(world)
 				|| !IsFiniteMatrix(renderer.m_kD3DView)
 				|| !IsFiniteMatrix(renderer.m_kD3DProj))
 			{
 				return false;
 			}
-
-			// WorldViewProjTranspose is predefined mapping 23 in the retail
-			// constant map at E85D10. It calls D3DXMatrixMultiply twice in this
-			// exact association order, then transposes for VS c0-c3. Use the same
-			// D3DX entry point and retain the non-transposed matrix for row-vector
-			// homogeneous half-space evaluation below.
 			D3DXMATRIX worldView = {};
-			D3DXMATRIX worldViewProjection = {};
 			D3DXMatrixMultiply(
 				&worldView, &world, &renderer.m_kD3DView);
 			D3DXMatrixMultiply(&worldViewProjection,
@@ -262,9 +317,115 @@ namespace fonthook::vectorfont
 			if (!IsFiniteMatrix(worldViewProjection))
 				return false;
 
-			const ClipColumn clipX = GetClipColumn(worldViewProjection, 0);
-			const ClipColumn clipY = GetClipColumn(worldViewProjection, 1);
-			const ClipColumn clipW = GetClipColumn(worldViewProjection, 3);
+			cache.renderer = &renderer;
+			std::memcpy(&cache.world, &world, sizeof(world));
+			std::memcpy(&cache.view, &renderer.m_kD3DView,
+				sizeof(cache.view));
+			std::memcpy(&cache.projection, &renderer.m_kD3DProj,
+				sizeof(cache.projection));
+			cache.worldViewProjection = worldViewProjection;
+			cache.valid = true;
+			return true;
+		}
+
+		ClipProofResult EvaluatePayloadClip(
+			const NativeA8ShapePayload& payload,
+			const TileVisibilityPropertyView& tile,
+			const NiDX9Renderer& renderer, const D3DXMATRIX& world,
+			bool allowViewport, NativeA8VisibilityCull& reason,
+			bool recordLateDiagnostics = false,
+			const D3DXMATRIX* preparedWorldViewProjection = nullptr)
+		{
+			reason = NativeA8VisibilityCull::None;
+			if (recordLateDiagnostics)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::VisibilityLateClipCheck);
+			}
+			auto failOpen = [&]()
+			{
+				if (recordLateDiagnostics)
+				{
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::VisibilityLateClipFailOpen);
+				}
+				return ClipProofResult::Unproven;
+			};
+
+			RECT clipRect = {};
+			const D3DVIEWPORT9& viewport = renderer.m_kD3DPort;
+			const bool useScissor = tile.useScissorTest
+				&& !*reinterpret_cast<const UInt8*>(kScaledScissorActive)
+				&& IsValidScissorForViewport(tile.scissorRect, viewport);
+			if (useScissor)
+			{
+				clipRect = tile.scissorRect;
+				reason = NativeA8VisibilityCull::Scissor;
+				if (recordLateDiagnostics)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						VisibilityLateClipScissorCheck);
+				}
+			}
+			else
+			{
+				// D3D9 clips the post-projection x/y volume to [-w,+w].  Only
+				// use that larger, state-independent target when the structural
+				// fast paths are enabled and Gamebryo's exact render-state mirror
+				// proves primitive clipping is currently active.  A scaled or
+				// malformed Tile scissor therefore falls back to the full viewport,
+				// never to an approximation of the narrower rectangle.
+				if (!allowViewport || !IsPrimitiveClippingEnabled(renderer)
+					|| !BuildViewportRect(viewport, clipRect))
+				{
+					return failOpen();
+				}
+				reason = NativeA8VisibilityCull::Clip;
+				if (recordLateDiagnostics)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						VisibilityLateClipViewportCheck);
+				}
+			}
+
+			if (!payload.payloadTemplate)
+				return failOpen();
+			const NiBound& bound = payload.payloadTemplate->bound;
+			if (!std::isfinite(bound.m_kCenter.x)
+				|| !std::isfinite(bound.m_kCenter.y)
+				|| !std::isfinite(bound.m_kCenter.z)
+				|| !std::isfinite(bound.m_fRadius)
+				|| bound.m_fRadius < 0.0f)
+			{
+				return failOpen();
+			}
+
+			// WorldViewProjTranspose is predefined mapping 23 in the retail
+			// constant map at E85D10. It calls D3DXMatrixMultiply twice in this
+			// exact association order, then transposes for VS c0-c3. Use the same
+			// D3DX entry point and retain the non-transposed matrix for row-vector
+			// homogeneous half-space evaluation below.
+			D3DXMATRIX builtWorldViewProjection = {};
+			const D3DXMATRIX* worldViewProjection =
+				preparedWorldViewProjection;
+			if (worldViewProjection)
+			{
+				if (!IsFiniteMatrix(*worldViewProjection))
+					return failOpen();
+			}
+			else if (!BuildWorldViewProjection(renderer, world,
+					builtWorldViewProjection, recordLateDiagnostics))
+			{
+				return failOpen();
+			}
+			else
+			{
+				worldViewProjection = &builtWorldViewProjection;
+			}
+
+			const ClipColumn clipX = GetClipColumn(*worldViewProjection, 0);
+			const ClipColumn clipY = GetClipColumn(*worldViewProjection, 1);
+			const ClipColumn clipW = GetClipColumn(*worldViewProjection, 3);
 			const double radius = bound.m_fRadius;
 			const double centerW = EvaluateColumn(clipW, bound.m_kCenter);
 			const double extentW = CubeExtent(clipW, radius);
@@ -274,21 +435,20 @@ namespace fonthook::vectorfont
 			// Perspective division is monotonic over the complete conservative cube
 			// only when every point is strictly in front of the w=0 plane.
 			if (centerW - extentW <= wSlack)
-				return false;
+				return failOpen();
 
-			const D3DVIEWPORT9& viewport = renderer.m_kD3DPort;
 			const double inverseWidth = 1.0 / viewport.Width;
 			const double inverseHeight = 1.0 / viewport.Height;
-			const double leftNdc = ((tile.scissorRect.left
+			const double leftNdc = ((clipRect.left
 				- kScissorSafetyMarginPixels - viewport.X)
 				* 2.0 * inverseWidth) - 1.0;
-			const double rightNdc = ((tile.scissorRect.right
+			const double rightNdc = ((clipRect.right
 				+ kScissorSafetyMarginPixels - viewport.X)
 				* 2.0 * inverseWidth) - 1.0;
-			const double topNdc = 1.0 - ((tile.scissorRect.top
+			const double topNdc = 1.0 - ((clipRect.top
 				- kScissorSafetyMarginPixels - viewport.Y)
 				* 2.0 * inverseHeight);
-			const double bottomNdc = 1.0 - ((tile.scissorRect.bottom
+			const double bottomNdc = 1.0 - ((clipRect.bottom
 				+ kScissorSafetyMarginPixels - viewport.Y)
 				* 2.0 * inverseHeight);
 
@@ -303,10 +463,12 @@ namespace fonthook::vectorfont
 				ClipColumn{}, SubtractScaled(clipY, clipW, topNdc), 1.0);
 			const ClipColumn bottomPlane = SubtractScaled(
 				clipY, clipW, bottomNdc);
-			return CubeIsOutsidePlane(leftPlane, bound)
+			const bool outside = CubeIsOutsidePlane(leftPlane, bound)
 				|| CubeIsOutsidePlane(rightPlane, bound)
 				|| CubeIsOutsidePlane(topPlane, bound)
 				|| CubeIsOutsidePlane(bottomPlane, bound);
+			return outside
+				? ClipProofResult::Outside : ClipProofResult::Overlap;
 		}
 
 		bool IsZeroAlphaNoOpBlend(const NiAlphaProperty* alpha)
@@ -458,9 +620,38 @@ namespace fonthook::vectorfont
 		if (!tile || !tile->useScissorTest)
 			return false;
 		D3DXMATRIX world = {};
+		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
 		return BuildRetailTileWorldMatrix(effectiveWorld, world)
-			&& IsPayloadOutsideScissor(
-				payload, *tile, *renderer, world, true);
+			&& EvaluatePayloadClip(payload, *tile, *renderer, world,
+				false, reason) == ClipProofResult::Outside
+			&& reason == NativeA8VisibilityCull::Scissor;
+	}
+
+	NativeA8VisibilityCull EvaluateNativeA8SnapshotVisibility(
+		const NativeA8ShapePayload& payload,
+		const NiPropertyState* properties,
+		const NiDX9Renderer* renderer,
+		const NativeTileInstancingSnapshot& snapshot,
+		bool allowViewport)
+	{
+		if (!properties || !renderer)
+			return NativeA8VisibilityCull::None;
+		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
+		if (!tile)
+			return NativeA8VisibilityCull::None;
+
+		// NativeTileConstantsLite stores the exact retail c0-c3 values, which are
+		// the transpose of the row-vector world-view-projection matrix used by the
+		// homogeneous interval proof. Reusing that completed live snapshot avoids a
+		// second pair of matrix multiplies for every Credit/list member.
+		D3DXMATRIX worldViewProjection = {};
+		D3DXMatrixTranspose(
+			&worldViewProjection, &snapshot.wvpColumns);
+		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
+		return EvaluatePayloadClip(payload, *tile, *renderer,
+				snapshot.retailWorld, allowViewport, reason, true,
+				&worldViewProjection) == ClipProofResult::Outside
+			? reason : NativeA8VisibilityCull::None;
 	}
 
 	bool EvaluateNativeA8PreConstantsVisibility(
@@ -484,27 +675,32 @@ namespace fonthook::vectorfont
 		if (!currentPass || currentPass->pGeometry != geometry)
 			return false;
 		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
-		if (!tile)
+		if (!tile || !payload.payloadTemplate)
 			return false;
-		if (!payload.payloadTemplate || !tile->useScissorTest
-			|| *reinterpret_cast<const UInt8*>(kScaledScissorActive))
+		if (IsNativeA8CrossTextBatchVisibilityResolved(geometry))
 		{
-			// These are immutable/pass-local no-proof gates which the post-slot
-			// fallback tests identically. Avoid even constructing a world matrix.
+			// The leader-time complete snapshots proved every member separately and
+			// compacted only the invisible instances. Treating the leader bound as the
+			// bound of the whole instanced draw would incorrectly suppress visible
+			// followers when the first Credit/list row is outside the viewport.
 			scope->m_evaluated = true;
 			return false;
 		}
 		D3DXMATRIX world = {};
 		if (!BuildRetailTileWorldMatrix(geometry->m_kWorld, world))
 			return false;
-		const bool outside = IsPayloadOutsideScissor(
-			payload, *tile, *renderer, world, true);
+		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
+		const ClipProofResult proof = EvaluatePayloadClip(
+			payload, *tile, *renderer, world,
+			g_bEnableFreeTypeFontStructuralFastPaths, reason, true);
+		if (proof == ClipProofResult::Unproven)
+			return false;
 		// Slot 31 does not mutate any proof input; it only publishes this same
 		// model matrix/constants and device state. Once the exact pre-slot
 		// inputs were evaluated, repeating the identical test in the post-slot
 		// fallback would add CPU work without recovering an indeterminate case.
 		scope->m_evaluated = true;
-		if (!outside)
+		if (proof != ClipProofResult::Outside)
 			return false;
 
 		// This is the exact matrix slot 31 would publish: formal PC BCA980
@@ -512,7 +708,7 @@ namespace fonthook::vectorfont
 		// the symbolized test build expresses the same operation as
 		// NiXenonRenderer::SetModelTransform. No slot-31 state has run, so
 		// Standard-lite can suppress the complete pass without a slot-35 pop.
-		scope->m_cull = NativeA8VisibilityCull::Scissor;
+		scope->m_cull = reason;
 		scope->m_preConstantsCull = true;
 		return true;
 	}
@@ -531,6 +727,8 @@ namespace fonthook::vectorfont
 		{
 			return;
 		}
+		if (IsNativeA8CrossTextBatchVisibilityResolved(scope->m_geometry))
+			return;
 		BSShaderProperty::RenderPass* currentPass =
 			*reinterpret_cast<BSShaderProperty::RenderPass**>(
 				kCurrentRenderPass);
@@ -543,10 +741,13 @@ namespace fonthook::vectorfont
 		{
 			return;
 		}
-		if (IsPayloadOutsideScissor(*scope->m_payload, *tile, *renderer,
-			renderer->m_kD3DMat))
+		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
+		if (EvaluatePayloadClip(*scope->m_payload, *tile, *renderer,
+			renderer->m_kD3DMat,
+			g_bEnableFreeTypeFontStructuralFastPaths, reason, true)
+			== ClipProofResult::Outside)
 		{
-			scope->m_cull = NativeA8VisibilityCull::Scissor;
+			scope->m_cull = reason;
 			scope->m_preConstantsCull = false;
 		}
 	}
@@ -567,6 +768,12 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(scope->m_preConstantsCull
 					? FreeTypePerfCounter::VisibilityScissorPreConstants
 					: FreeTypePerfCounter::VisibilityScissorPostConstants);
+			}
+			else if (scope->m_cull == NativeA8VisibilityCull::Clip)
+			{
+				RecordFreeTypePerf(scope->m_preConstantsCull
+					? FreeTypePerfCounter::VisibilityClipPreConstants
+					: FreeTypePerfCounter::VisibilityClipPostConstants);
 			}
 			RecordNativeA8VisibilityCull(
 				scope->m_cull, *scope->m_payload);

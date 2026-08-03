@@ -1480,6 +1480,22 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
+		bool IsStaticPayloadCurrentLocked(const NativeA8RingState& state,
+			const NativeA8PayloadTemplatePtr& payloadTemplate,
+			UInt32 vertexCount)
+		{
+			if (!state.staticVertexBuffer || !payloadTemplate)
+				return false;
+			const NativeA8PayloadResidencyCache& residency =
+				payloadTemplate->residency;
+			return residency.staticResourceSerial
+					== state.resourceSerial.load(std::memory_order_relaxed)
+				&& residency.staticVertexCount == vertexCount
+				&& residency.staticBaseVertex <= state.staticVertexCapacity
+				&& vertexCount <= state.staticVertexCapacity
+					- residency.staticBaseVertex;
+		}
+
 		NativeA8StaticCandidate* ResolveStaticCandidateLocked(
 			NativeA8RingState& state,
 			const NativeA8PayloadTemplatePtr& payloadTemplate,
@@ -1929,7 +1945,7 @@ namespace fonthook::vectorfont
 
 		bool PublishSortedRingLeaseLocked(NativeA8RingState& state,
 			const std::vector<NativeA8PayloadTemplatePtr>& payloadTemplates,
-			UInt32 generation)
+			UInt32 generation, bool residencyAlreadyValidated = false)
 		{
 			if (s_sortedRingLease.active || !generation
 				|| state.generation != generation || !state.vertexBuffer
@@ -1943,24 +1959,27 @@ namespace fonthook::vectorfont
 			const UInt32 resourceSerial = state.resourceSerial.load(
 				std::memory_order_acquire);
 			const UInt32 uploadEpoch = state.uploadEpoch;
-			for (const NativeA8PayloadTemplatePtr& payloadTemplate
-				: payloadTemplates)
+			if (!residencyAlreadyValidated)
 			{
-				if (!payloadTemplate || payloadTemplate->gpuVertices.empty()
-					|| payloadTemplate->gpuVertices.size()
-						> std::numeric_limits<UInt32>::max())
+				for (const NativeA8PayloadTemplatePtr& payloadTemplate
+					: payloadTemplates)
 				{
-					return false;
-				}
-				const UInt32 vertexCount = static_cast<UInt32>(
-					payloadTemplate->gpuVertices.size());
-				UInt32 baseVertex = 0;
-				bool staticResident = false;
-				if (!ResolveSortedLeaseResidency(state, *payloadTemplate,
-					vertexCount, resourceSerial, uploadEpoch,
-					baseVertex, staticResident))
-				{
-					return false;
+					if (!payloadTemplate || payloadTemplate->gpuVertices.empty()
+						|| payloadTemplate->gpuVertices.size()
+							> std::numeric_limits<UInt32>::max())
+					{
+						return false;
+					}
+					const UInt32 vertexCount = static_cast<UInt32>(
+						payloadTemplate->gpuVertices.size());
+					UInt32 baseVertex = 0;
+					bool staticResident = false;
+					if (!ResolveSortedLeaseResidency(state, *payloadTemplate,
+						vertexCount, resourceSerial, uploadEpoch,
+						baseVertex, staticResident))
+					{
+						return false;
+					}
 				}
 			}
 			RefreshRingCpuMemoryLocked(state);
@@ -2179,6 +2198,10 @@ namespace fonthook::vectorfont
 				&& payloadTemplate->gpuVertices.size() / 4u
 					<= kNativeA8MaximumQuads;
 		};
+		size_t validatedStaticPayloads = 0;
+		size_t residentStaticPayloads = 0;
+		const UInt32 staticScanResourceSerial = state.resourceSerial.load(
+			std::memory_order_relaxed);
 		if (state.staticVertexBuffer)
 		{
 			std::vector<NativeA8PayloadTemplatePtr> selected;
@@ -2200,12 +2223,14 @@ namespace fonthook::vectorfont
 			{
 				if (!isValidPayload(payloadTemplate))
 					continue;
+				++validatedStaticPayloads;
 				const UInt32 vertexCount = static_cast<UInt32>(
 					payloadTemplate->gpuVertices.size());
 				UInt32 baseVertex = 0;
 				if (ResolveStaticPayloadLocked(state, payloadTemplate,
 					vertexCount, baseVertex))
 				{
+					++residentStaticPayloads;
 					continue;
 				}
 				NativeA8StaticCandidate* candidate =
@@ -2364,6 +2389,7 @@ namespace fonthook::vectorfont
 							mappedVertices += vertexCount;
 						}
 						state.nextStaticVertex += selectedVertices;
+						residentStaticPayloads += selectedPayloads;
 						CommitStaticPromotionBudget(state, byteCount,
 							static_cast<UInt32>(selectedPayloads));
 						RecordFreeTypePerf(
@@ -2421,6 +2447,21 @@ namespace fonthook::vectorfont
 				}
 			}
 		}
+		if (g_bEnableFreeTypeFontStructuralFastPaths
+			&& validatedStaticPayloads == payloadTemplates.size()
+			&& residentStaticPayloads == validatedStaticPayloads
+			&& state.resourceSerial.load(std::memory_order_relaxed)
+				== staticScanResourceSerial
+			&& PublishSortedRingLeaseLocked(
+				state, payloadTemplates, generation, true))
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::SortedAllStaticFastExit);
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				SortedAllStaticPayloadValidationElided,
+				static_cast<UInt64>(payloadTemplates.size()));
+			return;
+		}
 
 		RefreshRingCpuMemoryLocked(state);
 
@@ -2438,8 +2479,13 @@ namespace fonthook::vectorfont
 			const UInt32 vertexCount = static_cast<UInt32>(
 				payloadTemplate->gpuVertices.size());
 			UInt32 baseVertex = 0;
-			if (ResolveStaticPayloadLocked(state, payloadTemplate,
-				vertexCount, baseVertex))
+			const bool staticResident =
+				g_bEnableFreeTypeFontStructuralFastPaths
+					? IsStaticPayloadCurrentLocked(
+						state, payloadTemplate, vertexCount)
+					: ResolveStaticPayloadLocked(state, payloadTemplate,
+						vertexCount, baseVertex);
+			if (staticResident)
 			{
 				continue;
 			}

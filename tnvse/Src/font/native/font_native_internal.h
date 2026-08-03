@@ -572,11 +572,13 @@ namespace fonthook::vectorfont
 	};
 
 	// clips/clipwindow are resolved by retail Tile::ReClipChildren into the live
-	// TileShaderProperty scissor. A visibility scope is armed only around a
-	// guarded native pass. Standard-lite may reconstruct retail's model matrix
-	// and prove a miss before slot 31; otherwise NativeUpdateConstants retains
-	// the post-slot-31 fallback. The matching immediate hook consumes either
-	// proof as a successful draw suppression.
+	// TileShaderProperty scissor. The same homogeneous proof may use the larger
+	// full D3D viewport when the exact Tile pass and primitive-clipping mirror are
+	// current. A visibility scope is armed only around a guarded native pass.
+	// Standard-lite may reconstruct retail's model matrix and prove a miss before
+	// slot 31; otherwise NativeUpdateConstants retains the post-slot-31 fallback.
+	// The matching immediate hook consumes either proof as a successful draw
+	// suppression.
 	class NativeA8LateVisibilityScope
 	{
 	public:
@@ -900,6 +902,12 @@ namespace fonthook::vectorfont
 		const NiPropertyState* properties,
 		const NiDX9Renderer* renderer,
 		const NiTransform& effectiveWorld);
+	NativeA8VisibilityCull EvaluateNativeA8SnapshotVisibility(
+		const NativeA8ShapePayload& payload,
+		const NiPropertyState* properties,
+		const NiDX9Renderer* renderer,
+		const NativeTileInstancingSnapshot& snapshot,
+		bool allowViewport);
 
 	struct NativeA8DrawCommand
 	{
@@ -1424,6 +1432,8 @@ namespace fonthook::vectorfont
 	void PrepareNativeA8CrossTextBatches();
 	bool ShouldConsumeNativeA8CrossTextBatchFollower(
 		UInt32 sequenceIndex, NiTriShape* geometry);
+	bool IsNativeA8CrossTextBatchVisibilityResolved(
+		const NiTriShape* geometry);
 	bool BeginNativeA8CrossTextBatchExecution(UInt32 sequenceIndex,
 		NiTriShape* leaderGeometry,
 		BSShaderProperty::RenderPass* renderPass, UInt32 currentPass,

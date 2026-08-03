@@ -499,7 +499,23 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				VisibilityPreAccumulatorFailOpen)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_static_promotion: deferred_lifecycle=%llu deferred_upload_history=%llu deferred_budget=%llu deferred_retry=%llu cold_evictions=%llu cold_evicted_bytes=%llu",
+			"tnvse_freetype_late_clip_cull: checks=%llu viewport_checks=%llu scissor_checks=%llu transform_hits=%llu transform_misses=%llu fail_open=%llu clip_pre31=%llu clip_post31=%llu scissor_pre31=%llu scissor_post31=%llu",
+			counterValue(FreeTypePerfCounter::VisibilityLateClipCheck),
+			counterValue(FreeTypePerfCounter::
+				VisibilityLateClipViewportCheck),
+			counterValue(FreeTypePerfCounter::
+				VisibilityLateClipScissorCheck),
+			counterValue(FreeTypePerfCounter::
+				VisibilityLateClipTransformHit),
+			counterValue(FreeTypePerfCounter::
+				VisibilityLateClipTransformMiss),
+			counterValue(FreeTypePerfCounter::VisibilityLateClipFailOpen),
+			counterValue(FreeTypePerfCounter::VisibilityClipPreConstants),
+			counterValue(FreeTypePerfCounter::VisibilityClipPostConstants),
+			counterValue(FreeTypePerfCounter::VisibilityScissorPreConstants),
+			counterValue(FreeTypePerfCounter::VisibilityScissorPostConstants));
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_static_promotion: deferred_lifecycle=%llu deferred_upload_history=%llu deferred_budget=%llu deferred_retry=%llu cold_evictions=%llu cold_evicted_bytes=%llu all_static_fast_exit=%llu lease_payload_validations_elided=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				StaticPromotionDeferredLifecycle)],
 			values[static_cast<size_t>(FreeTypePerfCounter::
@@ -511,7 +527,10 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				StaticResidentColdEviction)],
 			values[static_cast<size_t>(FreeTypePerfCounter::
-				StaticResidentColdEvictionBytes)]);
+				StaticResidentColdEvictionBytes)],
+			counterValue(FreeTypePerfCounter::SortedAllStaticFastExit),
+			counterValue(FreeTypePerfCounter::
+				SortedAllStaticPayloadValidationElided));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_native_registration: artifact_sealed=%llu artifact_fallback=%llu hook_fast=%llu hook_slow=%llu proxy_fast=%llu proxy_slow=%llu",
 			counterValue(
@@ -1013,7 +1032,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				NativeDirectDrawLiteDrawDeviceFailure)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_glyph_instancing: candidates=%llu accepted_batches=%llu texts=%llu instances=%llu compat_precomputed=%llu compat_live_suffix=%llu compat_immutable_words_avoided=%llu draws=%llu draws_saved=%llu upload_bytes=%llu buffer_growth=%llu discards=%llu fallback_depth=%llu state=%llu scissor=%llu topology=%llu budget=%llu frequency_sets=%llu frequency_resets=%llu binding_failures=%llu constant_failures=%llu draw_failures=%llu device_failures=%llu followers_consumed=%llu state_proofs=%llu proof_failures=%llu restore_failures=%llu begin_fallbacks=%llu begin_contract=%llu begin_pass=%llu begin_callback=%llu begin_resource=%llu begin_immutable=%llu begin_transient=%llu begin_preflight=%llu begin_snapshot=%llu snapshot_avoided_texts=%llu begin_upload=%llu begin_follower=%llu arm_fallbacks=%llu validation_fallbacks=%llu direct_draw_fallbacks=%llu text_median=%llu text_p95=%llu text_max=%llu instance_median=%llu instance_p95=%llu instance_max=%llu",
+			"tnvse_freetype_glyph_instancing: candidates=%llu accepted_batches=%llu texts=%llu instances=%llu compat_precomputed=%llu compat_live_suffix=%llu compat_immutable_words_avoided=%llu draws=%llu draws_saved=%llu visibility_checks=%llu visibility_culled_texts=%llu visibility_culled_instances=%llu visibility_partial_batches=%llu visibility_all_batches=%llu upload_bytes=%llu buffer_growth=%llu discards=%llu fallback_depth=%llu state=%llu scissor=%llu topology=%llu budget=%llu frequency_sets=%llu frequency_resets=%llu binding_failures=%llu constant_failures=%llu draw_failures=%llu device_failures=%llu followers_consumed=%llu state_proofs=%llu proof_failures=%llu restore_failures=%llu begin_fallbacks=%llu begin_contract=%llu begin_pass=%llu begin_callback=%llu begin_resource=%llu begin_immutable=%llu begin_transient=%llu begin_preflight=%llu begin_snapshot=%llu snapshot_avoided_texts=%llu begin_upload=%llu begin_follower=%llu arm_fallbacks=%llu validation_fallbacks=%llu direct_draw_fallbacks=%llu text_median=%llu text_p95=%llu text_max=%llu instance_median=%llu instance_p95=%llu instance_max=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingCandidate)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingAcceptedBatch)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingAcceptedText)],
@@ -1026,6 +1045,16 @@ namespace fonthook::vectorfont
 				* kGlyphInstancingImmutableCompatibilityWordCount,
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDraw)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDrawSaved)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				GlyphInstancingVisibilityCheck)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				GlyphInstancingVisibilityCulledText)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				GlyphInstancingVisibilityCulledInstance)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				GlyphInstancingVisibilityPartialBatch)],
+			values[static_cast<size_t>(FreeTypePerfCounter::
+				GlyphInstancingVisibilityAllBatch)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingUploadByte)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBufferGrowth)],
 			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDiscard)],
