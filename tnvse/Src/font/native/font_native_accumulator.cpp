@@ -3241,16 +3241,34 @@ namespace fonthook::vectorfont
 						&& entry.metadata->nativePayload.buildComplete)
 					{
 						entry.payload = &entry.metadata->nativePayload;
-						entry.visibilityCull =
-							(entry.metadata->backend
-									== FreeTypeShapeBackend::
-										VirtualStockNative
-								|| entry.metadata->backend
-									== FreeTypeShapeBackend::
-										VirtualStockSingleton)
+						const bool virtualStockVisibilityBypass =
+							entry.metadata->backend
+								== FreeTypeShapeBackend::
+									VirtualStockNative
+							|| entry.metadata->backend
+								== FreeTypeShapeBackend::
+									VirtualStockSingleton;
+						entry.visibilityCull = virtualStockVisibilityBypass
 							? NativeA8VisibilityCull::None
 							: EvaluateNativeA8SubmissionVisibility(
 								facade, *entry.payload);
+						if (entry.metadata->backend
+								!= FreeTypeShapeBackend::VirtualStockNative
+							&& entry.visibilityCull
+								== NativeA8VisibilityCull::None
+							&& preflightContext.rendererAvailable)
+						{
+							// The retail clip proof is already sound at this stage; a
+							// proven-outside text never enters command build, cross-text
+							// admission or instancing snapshots. Static-promoted
+							// virtual-stock singletons participate because their
+							// direct-draw dispatch is gated on the same revalidated
+							// decision; virtual-stock groups keep their batch-wide
+							// lifecycle and remain excluded.
+							entry.visibilityCull =
+								EvaluateNativeA8PreflightClipVisibility(
+									facade, *entry.payload);
+						}
 						if (entry.visibilityCull
 							!= NativeA8VisibilityCull::None)
 						{

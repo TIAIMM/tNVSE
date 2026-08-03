@@ -499,6 +499,21 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				VisibilityPreAccumulatorFailOpen)]);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu",
+			counterValue(FreeTypePerfCounter::VisibilityPreflightClipCheck),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipCulled),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipViewport),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipScissor),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipFailOpen),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipHonored),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipRevoked));
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_late_clip_cull: checks=%llu viewport_checks=%llu scissor_checks=%llu transform_hits=%llu transform_misses=%llu fail_open=%llu clip_pre31=%llu clip_post31=%llu scissor_pre31=%llu scissor_post31=%llu",
 			counterValue(FreeTypePerfCounter::VisibilityLateClipCheck),
 			counterValue(FreeTypePerfCounter::

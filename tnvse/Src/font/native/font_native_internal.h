@@ -1293,6 +1293,10 @@ namespace fonthook::vectorfont
 		const NiTriShape* facade, const NativeA8ShapePayload& payload,
 		const NiPropertyState* properties,
 		const BSShaderProperty* shaderProperty, BSShader* shader);
+	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
+		const NiTriShape* facade, const NativeA8ShapePayload& payload);
+	bool HonorNativeA8PreflightClipCull(const NiTriShape* facade,
+		NativeA8VisibilityCull preflightCull);
 	bool EvaluateNativeA8PreConstantsVisibility(
 		const NiTriShape* geometry, const NativeA8ShapePayload& payload,
 		const NiPropertyState* properties, NiDX9Renderer* renderer,

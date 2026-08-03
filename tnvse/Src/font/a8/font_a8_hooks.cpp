@@ -5745,6 +5745,31 @@ namespace fonthook::vectorfont
 		{
 			return;
 		}
+		if (sortedFrameHit
+			&& (frameEntry.visibilityCull
+					== NativeA8VisibilityCull::Clip
+				|| frameEntry.visibilityCull
+					== NativeA8VisibilityCull::Scissor)
+			&& frameEntry.payload)
+		{
+			// The sorted-frame clip proof is revalidated against the live
+			// volatile inputs before it suppresses the dispatch. Honoring
+			// must precede the virtual-stock direct-draw and cross-text
+			// leader paths so culled singleton texts never arm a packet
+			// draw or a batch snapshot. Any drift revokes the cached
+			// decision and falls open to the ordinary draw path.
+			if (HonorNativeA8PreflightClipCull(shape,
+				frameEntry.visibilityCull))
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VisibilityPreflightClipHonored);
+				RecordNativeA8VisibilityCull(
+					frameEntry.visibilityCull, *frameEntry.payload);
+				return;
+			}
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VisibilityPreflightClipRevoked);
+		}
 		A8ShapeMetadataPtr metadataOwner;
 		const A8ShapeMetadata* metadata = nullptr;
 		NativeA8ShapePayload* payload = nullptr;

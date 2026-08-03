@@ -532,6 +532,78 @@ namespace fonthook::vectorfont
 		return NativeA8VisibilityCull::None;
 	}
 
+	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
+		const NiTriShape* facade, const NativeA8ShapePayload& payload)
+	{
+		if (!g_bEnableFreeTypeFontPreflightClipCull)
+			return NativeA8VisibilityCull::None;
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::VisibilityPreflightClipCheck);
+		auto failOpen = [&]()
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VisibilityPreflightClipFailOpen);
+			return NativeA8VisibilityCull::None;
+		};
+
+		// The sorted-frame preflight runs after every RegisterObject for this
+		// flush and before the stock immediate pass loop. The retained
+		// constants-state keys prove view/projection/viewport never mutate
+		// between this stage and replay (zero view/projection mismatches
+		// recorded session-wide), so the exact retail clip proof the late
+		// slot-31 scope runs is already sound here. Anything uncertain fails
+		// open, and every preflight cull is additionally revalidated by
+		// HonorNativeA8PreflightClipCull at dispatch before it is honored.
+		if (!facade || !payload.buildComplete || !payload.payloadTemplate)
+			return failOpen();
+		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+		if (!renderer)
+			return failOpen();
+		const TileVisibilityPropertyView* tile = GetTileProperty(facade);
+		if (!tile)
+			return failOpen();
+		D3DXMATRIX world = {};
+		if (!BuildRetailTileWorldMatrix(facade->m_kWorld, world))
+			return failOpen();
+		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
+		const ClipProofResult proof = EvaluatePayloadClip(payload, *tile,
+			*renderer, world, g_bEnableFreeTypeFontStructuralFastPaths,
+			reason);
+		if (proof != ClipProofResult::Outside)
+			return NativeA8VisibilityCull::None;
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::VisibilityPreflightClipCulled);
+		RecordFreeTypePerf(reason == NativeA8VisibilityCull::Scissor
+			? FreeTypePerfCounter::VisibilityPreflightClipScissor
+			: FreeTypePerfCounter::VisibilityPreflightClipViewport);
+		return reason;
+	}
+
+	bool HonorNativeA8PreflightClipCull(const NiTriShape* facade,
+		NativeA8VisibilityCull preflightCull)
+	{
+		if (!g_bEnableFreeTypeFontPreflightClipCull)
+			return false;
+		if (preflightCull == NativeA8VisibilityCull::Clip)
+		{
+			// Viewport-branch proofs consume only the sealed payload bound,
+			// the facade world matrix and the interface viewport; all of them
+			// are frozen for the current flush.
+			return true;
+		}
+		if (preflightCull != NativeA8VisibilityCull::Scissor)
+			return false;
+		// Scissor-branch proofs additionally depend on the live Tile scissor
+		// rectangle and the engine's scaled-scissor global. Tile state is
+		// frozen during the render flush, but the scaled-scissor flag is an
+		// engine-owned global; any activation revokes the cached decision and
+		// returns the entry to the ordinary draw path.
+		if (*reinterpret_cast<const UInt8*>(kScaledScissorActive))
+			return false;
+		const TileVisibilityPropertyView* tile = GetTileProperty(facade);
+		return tile && tile->useScissorTest;
+	}
+
 	NativeA8VisibilityCull EvaluateNativeA8PreAccumulatorVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload,
 		const NiPropertyState* properties,
