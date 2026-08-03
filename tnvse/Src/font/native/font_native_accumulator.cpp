@@ -2722,6 +2722,8 @@ namespace fonthook::vectorfont
 			NiGeometry* geometry, const NiPropertyState* properties,
 			BSShaderProperty* shaderProperty, BSShader* shader)
 		{
+			FreeTypePerfScope registerRoutePerf(
+				FreeTypePerfPhase::RegisterRoute);
 			const TileRegisterObjectFn original =
 				s_originalTileRegisterObject.load(std::memory_order_acquire);
 			if (!original || !accumulator || !geometry
@@ -2818,6 +2820,8 @@ namespace fonthook::vectorfont
 		{
 			if (!accumulator)
 				return;
+			FreeTypePerfScope sortRoutePerf(
+				FreeTypePerfPhase::SortRouteTotal);
 
 			// Reproduce the first instruction overwritten at 0xB65E95 before
 			// choosing either the anchored implementation or the vtable predecessor
@@ -2836,8 +2840,13 @@ namespace fonthook::vectorfont
 				originalSort) == kStockInterfaceAlphaSort;
 			if (haveAnchorCandidate && stockSortPredecessor)
 			{
-				const OriginalOrderSortAttempt attempt =
-					TrySortWithOriginalOrderAnchors(scratch, accumulator);
+				OriginalOrderSortAttempt attempt;
+				{
+					FreeTypePerfScope sortAnchoredPerf(
+						FreeTypePerfPhase::SortAnchored);
+					attempt = TrySortWithOriginalOrderAnchors(scratch,
+						accumulator);
+				}
 				if (attempt.outcome != OriginalOrderSortOutcome::Anchored)
 				{
 					RecordFreeTypePerf(FreeTypePerfCounter::
@@ -2871,10 +2880,13 @@ namespace fonthook::vectorfont
 					FreeTypePerfCounter::SortedOriginalOrderAnchorFallback);
 			}
 
-			if (originalSort)
-				originalSort(accumulator);
-			else
-				accumulator->Sort();
+			{
+				FreeTypePerfScope sortStockPerf(FreeTypePerfPhase::SortStock);
+				if (originalSort)
+					originalSort(accumulator);
+				else
+					accumulator->Sort();
+			}
 		}
 
 		void __fastcall NativeA8RenderAlphaGeometry(BSShaderAccumulator* accumulator, void*)
@@ -2882,6 +2894,8 @@ namespace fonthook::vectorfont
 			A8State& state = State();
 			if (!state.originalRenderAlphaGeometry)
 				return;
+			FreeTypePerfScope frameRoutePerf(
+				FreeTypePerfPhase::FrameRouteTotal);
 
 			SortedPayloadScratch& scratch = s_sortedPayloadScratch;
 			if (scratch.active || scratch.nestedBypassDepth)
@@ -2912,6 +2926,8 @@ namespace fonthook::vectorfont
 				&& accumulator->eRenderMode == BSShaderManager::BSSM_RENDER_TILES
 				&& accumulator->m_iNumItems > 0 && accumulator->m_ppkItems)
 			{
+				FreeTypePerfScope framePrepPerf(
+					FreeTypePerfPhase::FrameRoutePrep);
 				const size_t itemCount = static_cast<size_t>(
 					accumulator->m_iNumItems);
 				const bool originalOrderAnchored =
@@ -3670,7 +3686,11 @@ namespace fonthook::vectorfont
 				BeginA8SortedTileConstantOwnership();
 				scratch.activeValidationToken = frameValidationToken;
 				scratch.active = true;
-				state.originalRenderAlphaGeometry(accumulator);
+				{
+					FreeTypePerfScope stockRenderPerf(
+						FreeTypePerfPhase::FrameRouteStockRender);
+					state.originalRenderAlphaGeometry(accumulator);
+				}
 				EndA8SortedTileConstantOwnership();
 				EndNativeA8SortedShaderBatch();
 				if (g_bEnableFreeTypeFontCrossTextBatch)
@@ -3686,7 +3706,11 @@ namespace fonthook::vectorfont
 				ClearPendingRegistrations(scratch);
 				RefreshSortedScratchMemory(scratch);
 			}
-			state.originalRenderAlphaGeometry(accumulator);
+			{
+				FreeTypePerfScope stockRenderPerf(
+					FreeTypePerfPhase::FrameRouteStockRender);
+				state.originalRenderAlphaGeometry(accumulator);
+			}
 		}
 
 		bool HookRenderAlphaGeometry()

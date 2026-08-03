@@ -5736,6 +5736,8 @@ namespace fonthook::vectorfont
 			return;
 		}
 
+		FreeTypePerfScope dispatchRoutePerf(
+			FreeTypePerfPhase::DispatchRoute);
 		NativeA8SortedFrameEntryView frameEntry;
 		const bool sortedFrameHit =
 			FindNativeA8SortedFrameEntry(shape, frameEntry);

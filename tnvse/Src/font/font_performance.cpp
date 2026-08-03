@@ -1405,6 +1405,32 @@ namespace fonthook::vectorfont
 		const DurationSummary viewportDeepFailTransform =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::ViewportCullDeepFailTransform);
+		const DurationSummary frameRouteTotal =
+			ConsumeDurationSummary(FreeTypePerfPhase::FrameRouteTotal);
+		const DurationSummary frameRoutePrep =
+			ConsumeDurationSummary(FreeTypePerfPhase::FrameRoutePrep);
+		const DurationSummary frameRouteStockRender =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::FrameRouteStockRender);
+		const DurationSummary sortRouteTotal =
+			ConsumeDurationSummary(FreeTypePerfPhase::SortRouteTotal);
+		const DurationSummary sortAnchored =
+			ConsumeDurationSummary(FreeTypePerfPhase::SortAnchored);
+		const DurationSummary sortStock =
+			ConsumeDurationSummary(FreeTypePerfPhase::SortStock);
+		const DurationSummary registerRoute =
+			ConsumeDurationSummary(FreeTypePerfPhase::RegisterRoute);
+		const DurationSummary dispatchRoute =
+			ConsumeDurationSummary(FreeTypePerfPhase::DispatchRoute);
+		const DurationSummary preflightClipTotal =
+			ConsumeDurationSummary(FreeTypePerfPhase::PreflightClipTotal);
+		const DurationSummary preflightClipWorld =
+			ConsumeDurationSummary(FreeTypePerfPhase::PreflightClipWorld);
+		const DurationSummary preflightClipProof =
+			ConsumeDurationSummary(FreeTypePerfPhase::PreflightClipProof);
+		const DurationSummary preflightClipHonorGate =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::PreflightClipHonorGate);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf_timing: layout_n=%llu median_us=%.3f p95_us=%.3f sidecar_n=%llu median_us=%.3f p95_us=%.3f direct_compile_n=%llu median_us=%.3f p95_us=%.3f native_registration_n=%llu median_us=%.3f p95_us=%.3f preflight_n=%llu median_us=%.3f p95_us=%.3f submit_n=%llu median_us=%.3f p95_us=%.3f command_build_n=%llu median_us=%.3f p95_us=%.3f command_submit_n=%llu median_us=%.3f p95_us=%.3f extended_fnt_geometry_n=%llu median_us=%.3f p95_us=%.3f",
 			layout.count, layout.medianMicroseconds,
@@ -1508,6 +1534,45 @@ namespace fonthook::vectorfont
 			viewportDeepFailTransform.meanMicroseconds,
 			viewportDeepFailTransform.medianMicroseconds,
 			viewportDeepFailTransform.p95Microseconds);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_frame_route_timing: route_total_n=%llu median_us=%.3f p95_us=%.3f prep_n=%llu median_us=%.3f p95_us=%.3f stock_render_n=%llu median_us=%.3f p95_us=%.3f sort_total_n=%llu median_us=%.3f p95_us=%.3f sort_anchored_n=%llu median_us=%.3f p95_us=%.3f sort_stock_n=%llu median_us=%.3f p95_us=%.3f",
+			frameRouteTotal.count, frameRouteTotal.medianMicroseconds,
+			frameRouteTotal.p95Microseconds,
+			frameRoutePrep.count, frameRoutePrep.medianMicroseconds,
+			frameRoutePrep.p95Microseconds,
+			frameRouteStockRender.count,
+			frameRouteStockRender.medianMicroseconds,
+			frameRouteStockRender.p95Microseconds,
+			sortRouteTotal.count, sortRouteTotal.medianMicroseconds,
+			sortRouteTotal.p95Microseconds,
+			sortAnchored.count, sortAnchored.medianMicroseconds,
+			sortAnchored.p95Microseconds,
+			sortStock.count, sortStock.medianMicroseconds,
+			sortStock.p95Microseconds);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_dispatch_timing: dispatch_route_n=%llu median_us=%.3f p95_us=%.3f register_route_n=%llu median_us=%.3f p95_us=%.3f honor_gate_n=%llu median_us=%.3f p95_us=%.3f",
+			dispatchRoute.count, dispatchRoute.medianMicroseconds,
+			dispatchRoute.p95Microseconds,
+			registerRoute.count, registerRoute.medianMicroseconds,
+			registerRoute.p95Microseconds,
+			preflightClipHonorGate.count,
+			preflightClipHonorGate.medianMicroseconds,
+			preflightClipHonorGate.p95Microseconds);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_preflight_clip_timing: total_n=%llu median_us=%.3f p95_us=%.3f world_n=%llu median_us=%.3f p95_us=%.3f proof_n=%llu median_us=%.3f p95_us=%.3f transform_hits=%llu transform_misses=%llu",
+			preflightClipTotal.count,
+			preflightClipTotal.medianMicroseconds,
+			preflightClipTotal.p95Microseconds,
+			preflightClipWorld.count,
+			preflightClipWorld.medianMicroseconds,
+			preflightClipWorld.p95Microseconds,
+			preflightClipProof.count,
+			preflightClipProof.medianMicroseconds,
+			preflightClipProof.p95Microseconds,
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipTransformHit),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipTransformMiss));
 	}
 }
 

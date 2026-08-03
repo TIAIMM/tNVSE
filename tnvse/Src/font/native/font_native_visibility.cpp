@@ -539,6 +539,8 @@ namespace fonthook::vectorfont
 			return NativeA8VisibilityCull::None;
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::VisibilityPreflightClipCheck);
+		FreeTypePerfScope clipProofPerf(
+			FreeTypePerfPhase::PreflightClipTotal);
 		auto failOpen = [&]()
 		{
 			RecordFreeTypePerf(FreeTypePerfCounter::
@@ -563,12 +565,37 @@ namespace fonthook::vectorfont
 		if (!tile)
 			return failOpen();
 		D3DXMATRIX world = {};
-		if (!BuildRetailTileWorldMatrix(facade->m_kWorld, world))
-			return failOpen();
+		{
+			FreeTypePerfScope worldPerf(
+				FreeTypePerfPhase::PreflightClipWorld);
+			if (!BuildRetailTileWorldMatrix(facade->m_kWorld, world))
+				return failOpen();
+		}
+		// Classify the shared single-slot transform cache before the proof so
+		// the hit/miss split shows whether the per-entry world rebuild or the
+		// frame-constant view/projection dominates the proof cost.
+		const bool transformCacheHit = s_clipTransformCache.valid
+			&& s_clipTransformCache.renderer == renderer
+			&& std::memcmp(&s_clipTransformCache.world, &world,
+				sizeof(world)) == 0
+			&& std::memcmp(&s_clipTransformCache.view,
+				&renderer->m_kD3DView,
+				sizeof(s_clipTransformCache.view)) == 0
+			&& std::memcmp(&s_clipTransformCache.projection,
+				&renderer->m_kD3DProj,
+				sizeof(s_clipTransformCache.projection)) == 0;
 		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
-		const ClipProofResult proof = EvaluatePayloadClip(payload, *tile,
-			*renderer, world, g_bEnableFreeTypeFontStructuralFastPaths,
-			reason);
+		ClipProofResult proof;
+		{
+			FreeTypePerfScope proofPerf(
+				FreeTypePerfPhase::PreflightClipProof);
+			proof = EvaluatePayloadClip(payload, *tile,
+				*renderer, world, g_bEnableFreeTypeFontStructuralFastPaths,
+				reason);
+		}
+		RecordFreeTypePerf(transformCacheHit
+			? FreeTypePerfCounter::VisibilityPreflightClipTransformHit
+			: FreeTypePerfCounter::VisibilityPreflightClipTransformMiss);
 		if (proof != ClipProofResult::Outside)
 			return NativeA8VisibilityCull::None;
 		RecordFreeTypePerf(
@@ -584,6 +611,8 @@ namespace fonthook::vectorfont
 	{
 		if (!g_bEnableFreeTypeFontPreflightClipCull)
 			return false;
+		FreeTypePerfScope honorGatePerf(
+			FreeTypePerfPhase::PreflightClipHonorGate);
 		if (preflightCull == NativeA8VisibilityCull::Clip)
 		{
 			// Viewport-branch proofs consume only the sealed payload bound,
