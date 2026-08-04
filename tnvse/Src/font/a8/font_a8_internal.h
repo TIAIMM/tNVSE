@@ -187,19 +187,19 @@ namespace fonthook::vectorfont
 		NiTriShape* primaryShape = nullptr;
 		std::vector<VirtualStockSlotBinding> slots;
 		CpuMemoryLease cpuMemory;
-		BSShaderAccumulator* registrationAccumulator = nullptr;
-		std::vector<SInt32> registrationItemIndices;
-		UInt64 registrationCycle = 0;
+		// Rebuilt from the actual AddTail source list and the final sorted array.
+		// These indices are published only for a topology-proven sorted frame;
+		// RegisterObject never mutates group state.
+		std::vector<SInt32> sortedItemIndices;
+		UInt64 sourceTopologyToken = 0;
+		UInt64 topologyValidationToken = 0;
 		UInt64 preflightValidationToken = 0;
 		UInt64 preparedValidationToken = 0;
 		UInt32 preparedGeneration = 0;
 		UInt32 preparedAtlasTextureEpoch = 0;
 		UInt32 primarySlot = 0;
-		UInt32 registeredSlotCount = 0;
 		UInt32 liveSlotCount = 0;
 		bool useCompositeTopology = false;
-		bool registrationContiguous = true;
-		bool duplicateRegistration = false;
 		std::atomic<UInt32> directDrawCount = 0;
 		std::atomic<UInt64> commandValidationToken = 0;
 		std::atomic<UInt32> commandSpanIndex =
@@ -223,16 +223,13 @@ namespace fonthook::vectorfont
 	struct VirtualStockSingletonState
 	{
 		VirtualStockSlotBinding slot;
-		BSShaderAccumulator* registrationAccumulator = nullptr;
-		UInt64 registrationCycle = 0;
+		UInt64 sourceTopologyToken = 0;
+		UInt64 topologyValidationToken = 0;
 		UInt64 preflightValidationToken = 0;
 		UInt64 preparedValidationToken = 0;
 		UInt32 preparedGeneration = 0;
 		UInt32 preparedAtlasTextureEpoch = 0;
-		UInt32 registeredSlotCount = 0;
 		bool useCompositeTopology = false;
-		bool registrationContiguous = true;
-		bool duplicateRegistration = false;
 		std::atomic<UInt32> directDrawCount = 0;
 		NativeA8DrawCommand commandBuildCommand;
 		std::atomic<UInt64> commandBuildValidationToken = 0;
@@ -298,12 +295,20 @@ namespace fonthook::vectorfont
 	bool GetNativeA8RuntimeReadinessCurrent(
 		NativeA8RuntimeReadinessView& arView);
 	A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape);
+	// Resolve a caller-supplied unique shape set under one metadataMutex hold.
+	// The result stays positional; missing or identity-invalid entries are null.
+	// Holding the returned owners through RenderAlphaGeometry keeps every raw
+	// metadata view used by the sorted frame alive without a per-facade lookup.
+	void AcquireA8ShapeMetadataBatch(
+		const std::vector<NiTriShape*>& shapes,
+		std::vector<A8ShapeMetadataPtr>& owners);
 	std::shared_ptr<VirtualStockShapeGroup>
 		AcquireVirtualStockShapeGroup(const A8ShapeMetadata& metadata);
 	bool IsA8AtlasShape(const NiTriShape* shape);
 	bool NeedsScaledFillSampling(const NiTriShape* shape);
 	bool HookRenderPassImmediately();
 	bool IsA8RenderPassImmediatelyHookCurrent();
+	bool IsA8RenderPassImmediatelyHookCurrentUnchecked();
 	bool IsA8RenderPassImmediatelyHookCurrentFast();
 	RenderPassImmediatelyFn ReadRenderPassImmediatelyCallTarget();
 	void BeginA8SortedTileConstantOwnership();

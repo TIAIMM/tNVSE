@@ -1486,9 +1486,8 @@ namespace fonthook::vectorfont
 			|| singleton->preparedGeneration != buffer.stamp.generation
 			|| singleton->preparedAtlasTextureEpoch
 				!= buffer.stamp.atlasTextureEpoch
-			|| singleton->duplicateRegistration
-			|| !singleton->registrationContiguous
-			|| singleton->registeredSlotCount != 1
+			|| singleton->topologyValidationToken
+				!= buffer.stamp.validationToken
 			|| !payload->buildComplete || !payload->payloadTemplate
 			|| prepared.sourceGeometry == nullptr
 			|| prepared.expectedGeometry != prepared.sourceGeometry
@@ -1602,9 +1601,9 @@ namespace fonthook::vectorfont
 					!= buffer.stamp.generation
 				|| virtualStockGroup->preparedAtlasTextureEpoch
 					!= buffer.stamp.atlasTextureEpoch
-				|| virtualStockGroup->duplicateRegistration
-				|| !virtualStockGroup->registrationContiguous
-				|| virtualStockGroup->registeredSlotCount
+				|| virtualStockGroup->topologyValidationToken
+					!= buffer.stamp.validationToken
+				|| virtualStockGroup->sortedItemIndices.size()
 					!= prepared.size()
 				|| prepared.empty())
 			{

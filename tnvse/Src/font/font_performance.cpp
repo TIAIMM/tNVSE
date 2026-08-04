@@ -557,6 +557,23 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::NativeRegistrationProxyFast),
 			counterValue(FreeTypePerfCounter::NativeRegistrationProxySlow));
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_thin_registration: sample_rate=256 calls=%llu samples=%llu fast_forward=%llu hook_mismatch=%llu slow_audits=%llu suppressed=%llu metadata_batches=%llu metadata_shapes=%llu metadata_missing=%llu source_fallback=%llu singleton_topology=%llu singleton_fallback=%llu group_topology=%llu group_fallback=%llu occurrence_fallback=%llu",
+			counterValue(FreeTypePerfCounter::ThinRegistrationCall),
+			counterValue(FreeTypePerfCounter::ThinRegistrationTimingSample),
+			counterValue(FreeTypePerfCounter::ThinRegistrationFastForward),
+			counterValue(FreeTypePerfCounter::ThinRegistrationHookMismatch),
+			counterValue(FreeTypePerfCounter::ThinRegistrationSlowAudit),
+			counterValue(FreeTypePerfCounter::ThinRegistrationSuppressed),
+			counterValue(FreeTypePerfCounter::ThinRegistrationMetadataBatch),
+			counterValue(FreeTypePerfCounter::ThinRegistrationMetadataShape),
+			counterValue(FreeTypePerfCounter::ThinRegistrationMetadataMissing),
+			counterValue(FreeTypePerfCounter::ThinRegistrationSourceFallback),
+			counterValue(FreeTypePerfCounter::ThinRegistrationSingletonTopology),
+			counterValue(FreeTypePerfCounter::ThinRegistrationSingletonFallback),
+			counterValue(FreeTypePerfCounter::ThinRegistrationGroupTopology),
+			counterValue(FreeTypePerfCounter::ThinRegistrationGroupFallback),
+			counterValue(FreeTypePerfCounter::ThinRegistrationOccurrenceFallback));
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_structural_fastpaths: readiness_raw_hit=%llu full_audit=%llu hook_mismatch=%llu renderer_mismatch=%llu virtualquery_avoided=%llu tile_callback_mismatch=%llu render_alpha_mismatch=%llu sort_call_mismatch=%llu sort_tail_mismatch=%llu immediate_mismatch=%llu atlas_mismatch=%llu singleton_inline=%llu singleton_heap=%llu child_allocations_avoided=%llu metadata_reserve=%llu metadata_rehash=%llu sequence_hits=%llu sequence_fallbacks=%llu sequence_rescanned_items=%llu prefix_shrinks=%llu prefix_texts=%llu prefix_replayed=%llu texture_alias=%llu viewport_descriptor_hit=%llu viewport_descriptor_rebuild=%llu viewport_descriptor_fail=%llu prepared_reject_hit=%llu prepared_reject_stored=%llu prepared_profile_invalidations=%llu",
 			counterValue(FreeTypePerfCounter::StructuralReadinessRawHit),
 			counterValue(FreeTypePerfCounter::StructuralReadinessFullAudit),
@@ -1550,10 +1567,12 @@ namespace fonthook::vectorfont
 			sortStock.count, sortStock.medianMicroseconds,
 			sortStock.p95Microseconds);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_dispatch_timing: dispatch_route_n=%llu median_us=%.3f p95_us=%.3f register_route_n=%llu median_us=%.3f p95_us=%.3f honor_gate_n=%llu median_us=%.3f p95_us=%.3f",
-			dispatchRoute.count, dispatchRoute.medianMicroseconds,
+			"tnvse_freetype_dispatch_timing: dispatch_route_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f register_route_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f honor_gate_n=%llu median_us=%.3f p95_us=%.3f",
+			dispatchRoute.count, dispatchRoute.meanMicroseconds,
+			dispatchRoute.medianMicroseconds,
 			dispatchRoute.p95Microseconds,
-			registerRoute.count, registerRoute.medianMicroseconds,
+			registerRoute.count, registerRoute.meanMicroseconds,
+			registerRoute.medianMicroseconds,
 			registerRoute.p95Microseconds,
 			preflightClipHonorGate.count,
 			preflightClipHonorGate.medianMicroseconds,

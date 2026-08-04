@@ -1272,14 +1272,13 @@ namespace fonthook::vectorfont
 		if (g_bEnableFreeTypeFontCommandBuffer)
 			group->commandBuildCommands.resize(shapes.size());
 		group->liveSlotCount = static_cast<UInt32>(shapes.size());
-		if (shapes.size() > 1)
-			group->registrationItemIndices.assign(shapes.size(), -1);
+		group->sortedItemIndices.assign(shapes.size(), -1);
 		group->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
 			sizeof(VirtualStockShapeGroup)
 				+ group->slots.capacity() * sizeof(VirtualStockSlotBinding)
 				+ group->commandBuildCommands.capacity()
 					* sizeof(NativeA8DrawCommand)
-				+ group->registrationItemIndices.capacity() * sizeof(SInt32)
+				+ group->sortedItemIndices.capacity() * sizeof(SInt32)
 				+ shapes.size() * kVirtualStockEstimatedShapeBytes
 				+ 6u * sizeof(void*));
 
@@ -1420,9 +1419,7 @@ namespace fonthook::vectorfont
 			|| packets.size() != 1 || payload.packetShaders.size() != 1
 			|| (buildCommandView
 				&& (!retainedText || retainedText->packets.size() != 1))
-			|| !singleton->registrationContiguous
-			|| singleton->duplicateRegistration
-			|| singleton->registeredSlotCount != 1)
+			|| singleton->topologyValidationToken != validationToken)
 		{
 			SetVirtualStockSingletonFacadeMode(metadata,
 				NativeA8FallbackReason::PropertySync);
@@ -1652,8 +1649,8 @@ namespace fonthook::vectorfont
 				NativeA8FallbackReason::PacketBuild);
 			return false;
 		}
-		if (!group->registrationContiguous
-			|| group->registeredSlotCount != group->slots.size())
+		if (group->topologyValidationToken != validationToken
+			|| group->sortedItemIndices.size() != group->slots.size())
 		{
 			SetVirtualStockFacadeMode(*group,
 				NativeA8FallbackReason::PropertySync);
@@ -1939,6 +1936,8 @@ namespace fonthook::vectorfont
 			const bool revoked = singleton->slot.bound;
 			RestoreVirtualStockSlot(singleton->slot);
 			singleton->preparedValidationToken = 0;
+			singleton->sourceTopologyToken = 0;
+			singleton->topologyValidationToken = 0;
 			singleton->preflightValidationToken = 0;
 			singleton->preparedGeneration = 0;
 			singleton->preparedAtlasTextureEpoch = 0;
@@ -1971,6 +1970,8 @@ namespace fonthook::vectorfont
 				RestoreVirtualStockSlot(slot);
 			}
 			group->preparedValidationToken = 0;
+			group->sourceTopologyToken = 0;
+			group->topologyValidationToken = 0;
 			group->preflightValidationToken = 0;
 			group->preparedGeneration = 0;
 			group->preparedAtlasTextureEpoch = 0;
@@ -2005,8 +2006,8 @@ namespace fonthook::vectorfont
 			return;
 		DestroyVirtualStockBindingBuffer(singleton->slot);
 		singleton->slot.shape = nullptr;
-		singleton->registeredSlotCount = 0;
-		singleton->registrationContiguous = false;
+		singleton->sourceTopologyToken = 0;
+		singleton->topologyValidationToken = 0;
 		singleton->commandBuildValidationToken.store(
 			0, std::memory_order_release);
 		singleton->commandValidationToken.store(

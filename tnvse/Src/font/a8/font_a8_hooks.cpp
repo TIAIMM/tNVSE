@@ -4085,14 +4085,14 @@ namespace fonthook::vectorfont
 						!= &group->primaryMetadataOwner->nativePayload
 					|| group->preparedValidationToken
 						!= validationToken
+					|| group->topologyValidationToken
+						!= validationToken
 					|| group->frameMode.load(
 						std::memory_order_acquire)
 						!= VirtualStockFrameMode::Direct
 					|| group->slots.size()
 						!= view.span->commandCount
-					|| group->duplicateRegistration
-					|| !group->registrationContiguous
-					|| group->registeredSlotCount
+					|| group->sortedItemIndices.size()
 						!= group->slots.size()
 					|| metadata.virtualStockSlot
 						!= view.span->leaderSlot)
@@ -5589,6 +5589,41 @@ namespace fonthook::vectorfont
 		return found->second.metadata;
 	}
 
+	void AcquireA8ShapeMetadataBatch(
+		const std::vector<NiTriShape*>& shapes,
+		std::vector<A8ShapeMetadataPtr>& owners)
+	{
+		owners.clear();
+		owners.resize(shapes.size());
+		if (shapes.empty())
+			return;
+
+		A8State& state = State();
+		std::lock_guard<std::mutex> lock(state.metadataMutex);
+		for (size_t index = 0; index < shapes.size(); ++index)
+		{
+			const NiTriShape* shape = shapes[index];
+			if (!shape)
+				continue;
+			const auto found = state.shapeMetadata.find(shape);
+			if (found == state.shapeMetadata.end())
+				continue;
+
+			const A8ShapeMetadataEntry& entry = found->second;
+			const A8ShapeMetadataPtr& metadata = entry.metadata;
+			if (!metadata || entry.allocationId == 0
+				|| entry.allocationId != metadata->allocationId
+				|| entry.selfIdentity != metadata.get()
+				|| entry.selfIdentity != metadata->selfIdentity
+				|| entry.shapeIdentity != shape
+				|| entry.shapeIdentity != metadata->shapeIdentity)
+			{
+				continue;
+			}
+			owners[index] = metadata;
+		}
+	}
+
 	std::shared_ptr<VirtualStockShapeGroup>
 		AcquireVirtualStockShapeGroup(const A8ShapeMetadata& metadata)
 	{
@@ -5694,16 +5729,22 @@ namespace fonthook::vectorfont
 
 	bool IsA8RenderPassImmediatelyHookCurrentFast()
 	{
-		const bool current = State().originalRenderPassImmediately
-			&& hook_identity::MatchesRel32InstructionImageUnchecked(
-				kRenderPassImmediatelyCallSite,
-				s_renderPassImmediatelyHookImage);
+		const bool current =
+			IsA8RenderPassImmediatelyHookCurrentUnchecked();
 		if (!current)
 		{
 			RecordFreeTypePerf(FreeTypePerfCounter::
 				StructuralReadinessImmediateMismatch);
 		}
 		return current;
+	}
+
+	bool IsA8RenderPassImmediatelyHookCurrentUnchecked()
+	{
+		return State().originalRenderPassImmediately
+			&& hook_identity::MatchesRel32InstructionImageUnchecked(
+				kRenderPassImmediatelyCallSite,
+				s_renderPassImmediatelyHookImage);
 	}
 
 	void __cdecl A8RenderPassImmediately(BSShaderProperty::RenderPass* pass,
