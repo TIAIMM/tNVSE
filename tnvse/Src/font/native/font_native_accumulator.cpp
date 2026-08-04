@@ -245,6 +245,11 @@ namespace fonthook::vectorfont
 		};
 
 		thread_local ThinRegistrationDiagnostics s_thinRegistrationDiagnostics;
+		// Diagnostics are flushed at every Sort/Clear boundary.  Keep the timing
+		// phase separate so short registration cycles still contribute one sample
+		// per kRegisterRouteSampleRate calls across the lifetime of this thread.
+		thread_local UInt32 s_registerRouteSampleCountdown =
+			kRegisterRouteSampleRate;
 		std::atomic<UInt64> s_thinRejectedHookFingerprint = 0;
 		std::mutex s_thinHookAuditMutex;
 
@@ -285,6 +290,11 @@ namespace fonthook::vectorfont
 			{
 			}
 
+			bool IsActive() const
+			{
+				return m_start != 0;
+			}
+
 			~ThinRegistrationSampleScope()
 			{
 				if (m_start)
@@ -297,6 +307,16 @@ namespace fonthook::vectorfont
 		private:
 			SInt64 m_start = 0;
 		};
+
+		__forceinline bool ShouldSampleRegisterRoute()
+		{
+			if (!g_bEnableFreeTypeFontRenderingLog)
+				return false;
+			if (--s_registerRouteSampleCountdown != 0)
+				return false;
+			s_registerRouteSampleCountdown = kRegisterRouteSampleRate;
+			return true;
+		}
 
 		void FlushThinRegistrationDiagnostics()
 		{
@@ -2408,12 +2428,10 @@ namespace fonthook::vectorfont
 
 			ThinRegistrationDiagnostics& diagnostics =
 				s_thinRegistrationDiagnostics;
-			const UInt64 call = ++diagnostics.calls;
-			const bool sample = g_bEnableFreeTypeFontRenderingLog
-				&& (call & (kRegisterRouteSampleRate - 1u)) == 0;
-			if (sample)
+			++diagnostics.calls;
+			ThinRegistrationSampleScope timing(ShouldSampleRegisterRoute());
+			if (timing.IsActive())
 				++diagnostics.samples;
-			ThinRegistrationSampleScope timing(sample);
 
 			if (!IsThinRegistrationHookChainCurrentUnchecked())
 			{

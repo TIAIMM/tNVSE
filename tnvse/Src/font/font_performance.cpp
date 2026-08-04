@@ -557,7 +557,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::NativeRegistrationProxyFast),
 			counterValue(FreeTypePerfCounter::NativeRegistrationProxySlow));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_thin_registration: sample_rate=256 calls=%llu samples=%llu fast_forward=%llu hook_mismatch=%llu slow_audits=%llu suppressed=%llu metadata_batches=%llu metadata_shapes=%llu metadata_missing=%llu source_fallback=%llu singleton_topology=%llu singleton_fallback=%llu group_topology=%llu group_fallback=%llu occurrence_fallback=%llu",
+			"tnvse_freetype_thin_registration: sample_rate=256 sampling=continuous_tls calls=%llu samples=%llu fast_forward=%llu hook_mismatch=%llu slow_audits=%llu suppressed=%llu metadata_batches=%llu metadata_shapes=%llu metadata_missing=%llu source_fallback=%llu singleton_topology=%llu singleton_fallback=%llu group_topology=%llu group_fallback=%llu occurrence_fallback=%llu",
 			counterValue(FreeTypePerfCounter::ThinRegistrationCall),
 			counterValue(FreeTypePerfCounter::ThinRegistrationTimingSample),
 			counterValue(FreeTypePerfCounter::ThinRegistrationFastForward),
