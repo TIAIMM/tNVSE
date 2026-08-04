@@ -647,14 +647,7 @@ namespace fonthook::vectorfont
 			UInt8 textureModeFlags = 0;
 		};
 
-		struct NativeSegmentBlendStateKey
-		{
-			UInt8 sourceFunction =
-				static_cast<UInt8>(NiAlphaProperty::ALPHA_SRCALPHA);
-			UInt8 destinationFunction =
-				static_cast<UInt8>(NiAlphaProperty::ALPHA_INVSRCALPHA);
-			bool enabled = false;
-		};
+		using NativeSegmentBlendStateKey = NativeA8BlendState;
 
 		struct NativeSegmentAlphaTestStateKey
 		{
@@ -1098,11 +1091,22 @@ namespace fonthook::vectorfont
 			NativeA8StandardBlendSemantics semantics,
 			NativeSegmentBlendStateKey& key)
 		{
+			if (!geometry
+				|| !HasPredictableNativeA8BlendSemantics(semantics))
+			{
+				return false;
+			}
+			if (semantics == NativeA8StandardBlendSemantics::NativeOwned)
+			{
+				key = ComputeNativeA8OwnedBlendState(
+					&geometry->m_kProperties);
+				return true;
+			}
+
 			DirectTileShaderPropertyView* tile =
 				GetDirectTileProperty(geometry);
 			if (!tile
-				|| semantics
-					== NativeA8StandardBlendSemantics::Unknown)
+				|| semantics != NativeA8StandardBlendSemantics::Retail)
 				return false;
 			const NiAlphaProperty* alpha =
 				geometry->GetAlphaProperty();
@@ -1111,28 +1115,11 @@ namespace fonthook::vectorfont
 				? alpha->m_usFlags.Get() : 0;
 			const bool propertyBlend = alpha
 				&& (flags & NiAlphaProperty::ALPHA_BLEND_MASK) != 0;
-			bool opacityBlend = false;
-			if (semantics
-				== NativeA8StandardBlendSemantics::AlphaFixes252)
-			{
-				// Fallout Alpha Rendering Tweaks 2.52 keeps fFadeAlpha
-				// blending, but suppresses fAlpha-driven blending when the
-				// shader property already advertises vertex alpha. Its
-				// COMISS/branch sequence also treats NaN as not less than 1.
-				opacityBlend =
-					(tile->fAlpha < 1.0f
-						&& (tile->ulFlags[0]
-							& BSShaderProperty::Vertex_Alpha) == 0)
-					|| tile->fFadeAlpha < 1.0f;
-			}
-			else
-			{
-				// BE1FF0/BSShader::SetupGeometryAlphaBlending compares both
-				// values only against 1.0. Preserve its NaN behavior by
-				// negating the pair of >= comparisons instead of using <.
-				opacityBlend = !(tile->fAlpha >= 1.0f
-					&& tile->fFadeAlpha >= 1.0f);
-			}
+			// BE1FF0/BSShader::SetupGeometryAlphaBlending compares both
+			// values only against 1.0. Preserve its NaN behavior by negating
+			// the pair of >= comparisons instead of using <.
+			const bool opacityBlend = !(tile->fAlpha >= 1.0f
+				&& tile->fFadeAlpha >= 1.0f);
 			key.enabled = propertyBlend || opacityBlend;
 			if (propertyBlend)
 			{
@@ -2547,6 +2534,20 @@ namespace fonthook::vectorfont
 						&& dispatch->shader->IsTileShader()));
 		}
 
+		bool ShouldEnableNativeA8VendorAlphaToCoverage(
+			NiTriShape* geometry)
+		{
+			if (!geometry)
+				return false;
+			const NiAlphaProperty* alpha = geometry->GetAlphaProperty();
+			if (!alpha || !alpha->HasAlphaTest())
+				return false;
+			const BSShaderProperty* shade =
+				geometry->GetShadeProperty<BSShaderProperty>();
+			return (!shade || !shade->HasNoTMSAA())
+				&& !geometry->IsParticlesGeom();
+		}
+
 		bool PrepareGuardedNativeReplay(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			NiTriShape* geometry, BSShader* validatedShader)
@@ -2599,16 +2600,17 @@ namespace fonthook::vectorfont
 					kVendorAlphaToCoverageEnabled))
 			{
 				// B98540 is the PC vendor alpha-to-coverage publisher, not an
-				// alpha-test-state owner. The formal build writes only render
+				// alpha-test-state owner. Publish the final Tile rule locally so
+				// this private replay does not depend on a replacement inside the
+				// skipped B994F0 wrapper. The formal build writes only render
 				// state 154 with A2M0/A2M1 or state 181 with 0/ATOC. Slot 33
 				// owns states 24/25, while slot 34 owns cull plus state 15, so
 				// this mandatory per-pass call cannot invalidate either cached
 				// output. Keep executing it to preserve the vendor extension's
 				// nesting semantics, but retain all four Standard-lite proofs.
-				NiAlphaProperty* alpha =
-					geometry->GetAlphaProperty();
 				CdeclCall<void>(kSetVendorAlphaToCoverageState,
-					alpha && alpha->HasAlphaTest(), false);
+					ShouldEnableNativeA8VendorAlphaToCoverage(geometry),
+					false);
 			}
 			return true;
 		}

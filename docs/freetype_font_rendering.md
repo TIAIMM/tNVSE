@@ -1486,10 +1486,14 @@ and any required cleanup remain mandatory.
 Each generation records a retained identity proof for slots 30 through 35.
 Delta scheduling is enabled only when all six callbacks have
 reverse-verified implementations and an exact effective-state key. This
-includes retail and the separately classified Alpha Fixes 2.52 blend callback.
-If another plugin replaces any slot with an unknown implementation,
-Standard-lite returns to the complete stock pass before drawing and does not
-carry its unknown effects into the next Tile.
+includes the reverse-verified retail callbacks and tNVSE's deterministic
+private slot-32 callback. The private callback normalizes blend enable first,
+then computes the final state from `NiAlphaProperty`, `fAlpha`, `fFadeAlpha`,
+and `BSShaderProperty::No_Fade`; the callback publisher and cache key call the
+same state calculator. Stock and third-party Tile vtables remain untouched. If
+one of their callbacks has an unknown implementation, the item returns to the
+complete stock pass before drawing and its effects are not carried into the
+next native Tile.
 
 The cache stamp contains the command validation token, renderer/device
 identity and shader generation, atlas/resource/upload epochs, render-target
@@ -1504,9 +1508,11 @@ does not invalidate these proofs: the formal build shows that it publishes
 only the vendor alpha-to-coverage extension through render state 154 with
 `A2M0`/`A2M1`, or state 181 with zero/`ATOC`. It does not touch the
 alpha-test function/reference states owned by slot 33, or the cull and
-alpha-test-enable states owned by slot 34. This cache never retains a Tile or
-COM object and never allows device-state reuse across a command-validation
-boundary.
+alpha-test-enable states owned by slot 34. The private prelude derives its
+enable value from alpha test, `No_Transparency_Multisampling`, and the proven
+non-particle geometry rather than depending on a callback installed inside the
+skipped stock wrapper. This cache never retains a Tile or COM object and never
+allows device-state reuse across a command-validation boundary.
 
 The immutable Text Artifact retains shared packet geometry, profile
 hashes/classes, atlas-page topology, and vertex ranges, but no resolved Tile
@@ -1864,14 +1870,14 @@ single-packet subset. A healthy fully eligible retail run has
 `standard_v2_replays = stage3_replays`, `standard_v2_compat=0`,
 `retained_hits = candidates`, `retained_misses=0`, `stock_fallbacks=0`, and
 every categorized fallback at zero. Standard v2 accepts the six retail slot
-implementations plus the signature- and PE-identity-verified
-`Alpha Fixes.dll` 2.52 slot-32 implementation. The latter receives its own
-blend-state key because it suppresses `fAlpha`-driven blending when
-`BSShaderProperty::Vertex_Alpha` is set. A nonzero `standard_v2_compat` means
-at least one retained shader generation did not match a fully classified
-six-slot table; it increments `fallback_program` and returns to stock `B994F0`
-before any lite prelude or draw, rather than executing an unknown callback
-inside the delta cache. `retained_builds` counts new Tile/program
+implementations with tNVSE's private slot 32 replacing only the cloned native
+TileShader vtable. Its exact key uses `ulFlags[1].No_Fade`; no plugin name,
+version, module RVA, PE identity, or external instruction signature participates
+in native readiness. A nonzero `standard_v2_compat` means at least one retained
+shader generation did not match the fully owned/classified six-slot table; it
+increments `fallback_program` and returns to stock `B994F0` before any lite
+prelude or draw, rather than executing an unknown callback inside the delta
+cache. `retained_builds` counts new Tile/program
 dispatches, while `retained_reuses` counts full preflights that retained the
 same Tile/program dispatch instead of rebuilding it; neither should scale with
 steady-state packet submissions. When fallbacks are present,

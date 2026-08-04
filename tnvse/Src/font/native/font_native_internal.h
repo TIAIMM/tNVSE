@@ -5,6 +5,7 @@
 #include "font_vector_internal.h"
 
 #include "BSShaderAccumulator.hpp"
+#include "NiAlphaProperty.hpp"
 #include "NiTriShape.hpp"
 #include "TileShader.hpp"
 
@@ -696,13 +697,33 @@ namespace fonthook::vectorfont
 	{
 		Unknown = 0,
 		Retail,
-		AlphaFixes252
+		NativeOwned
 	};
+
+	struct NativeA8BlendState
+	{
+		UInt8 sourceFunction = static_cast<UInt8>(
+			NiAlphaProperty::ALPHA_SRCALPHA);
+		UInt8 destinationFunction = static_cast<UInt8>(
+			NiAlphaProperty::ALPHA_INVSRCALPHA);
+		bool enabled = false;
+	};
+
+	NativeA8BlendState ComputeNativeA8OwnedBlendState(
+		const NiPropertyState* properties);
+
+	constexpr bool HasPredictableNativeA8BlendSemantics(
+		NativeA8StandardBlendSemantics semantics)
+	{
+		return semantics == NativeA8StandardBlendSemantics::Retail
+			|| semantics == NativeA8StandardBlendSemantics::NativeOwned;
+	}
 
 	struct NativeA8CompiledPacketCommand
 	{
 		// Standard v2 elides a TileShader callback only when the generation was
-		// built from the reverse-verified retail implementation for that slot.
+		// built from a reverse-verified retail implementation or a deterministic
+		// tNVSE-owned implementation for that slot.
 		// The live slot-31 entry is NativeUpdateConstants, so its proof bit
 		// describes the stock callback retained by the native vtable sidecar.
 		static constexpr UInt8 kStandardSlot30Proof = 1u << 0;
