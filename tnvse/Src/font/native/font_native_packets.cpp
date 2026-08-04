@@ -744,7 +744,7 @@ namespace fonthook::vectorfont
 		const bool singletonInlinePayload =
 			g_bEnableFreeTypeFontStructuralFastPaths
 			&& metadata.backend
-				== FreeTypeShapeBackend::VirtualStockSingleton;
+				== FreeTypeShapeBackend::SingletonFacade;
 		if (!singletonInlinePayload)
 		{
 			payload.packetShaders.force_heap_storage();

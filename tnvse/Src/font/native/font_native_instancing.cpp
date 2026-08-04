@@ -522,10 +522,10 @@ namespace fonthook::vectorfont
 				return &view.command->draw;
 			}
 			if (item.kind
-				== NativeA8CrossTextCommandKind::VirtualSinglePacket)
+				== NativeA8CrossTextCommandKind::DirectFacadeSinglePacket)
 			{
-				NativeA8VirtualSinglePacketCommandView view;
-				if (!FindNativeA8VirtualSinglePacketCommand(item.commandIndex,
+				NativeA8DirectFacadeSinglePacketCommandView view;
+				if (!FindNativeA8DirectFacadeSinglePacketCommand(item.commandIndex,
 						s_crossTextFrame.validationToken, view)
 					|| !view.command || !view.command->draw)
 				{
@@ -828,13 +828,13 @@ namespace fonthook::vectorfont
 				return BuildMemberFailure::State;
 			}
 			if (item.kind
-					== NativeA8CrossTextCommandKind::VirtualSinglePacket
-				&& (!IsNativeA8VirtualStockPacketAtlasCurrent(
+					== NativeA8CrossTextCommandKind::DirectFacadeSinglePacket
+				&& (!IsNativeA8DirectFacadePacketAtlasCurrent(
 						item.geometry, *item.payload, 0)
 					|| item.geometry->GetShader()
 						!= resolved.command->program->shader))
 			{
-				// Unlike an ordinary facade, the Virtual-stock singleton route does
+				// Unlike an ordinary compatibility facade, the singleton direct route does
 				// not replace its atlas property, source texture, or shader around
 				// TileShader. Re-prove those persistent bindings before allowing a
 				// leader or follower to inherit the shared instanced state.
@@ -992,7 +992,7 @@ namespace fonthook::vectorfont
 			if (transientResult != NativeTileInstancingSnapshotResult::Ready)
 				return BuildMemberFailure::State;
 
-			// Both ordinary direct-shape and Virtual-stock singleton submission
+			// Both ordinary direct-shape and singleton-facade submission
 			// temporarily apply the payload origin before reaching TileShader. This
 			// pass uses the effective world only for conservative visibility.
 			// With structural fast paths disabled, preserve the original all-or-
@@ -1330,10 +1330,10 @@ namespace fonthook::vectorfont
 					member.sequence.geometry, view);
 			}
 			if (member.sequence.kind
-				== NativeA8CrossTextCommandKind::VirtualSinglePacket)
+				== NativeA8CrossTextCommandKind::DirectFacadeSinglePacket)
 			{
-				NativeA8VirtualSinglePacketCommandView view;
-				return BeginNativeA8VirtualSinglePacketCommandExecution(
+				NativeA8DirectFacadeSinglePacketCommandView view;
+				return BeginNativeA8DirectFacadeSinglePacketCommandExecution(
 					member.sequence.commandIndex,
 					member.sequence.metadata,
 					member.sequence.geometry, view);
@@ -1359,16 +1359,16 @@ namespace fonthook::vectorfont
 				}
 			}
 			else if (member.sequence.kind
-				== NativeA8CrossTextCommandKind::VirtualSinglePacket)
+				== NativeA8CrossTextCommandKind::DirectFacadeSinglePacket)
 			{
 				if (success)
 				{
-					EndNativeA8VirtualSinglePacketCommandExecution(
+					EndNativeA8DirectFacadeSinglePacketCommandExecution(
 						member.sequence.commandIndex, true, true);
 				}
 				else
 				{
-					AbandonNativeA8VirtualSinglePacketCommandExecution(
+					AbandonNativeA8DirectFacadeSinglePacketCommandExecution(
 						member.sequence.commandIndex);
 				}
 			}
@@ -1384,9 +1384,9 @@ namespace fonthook::vectorfont
 					s_crossTextFrame.validationToken);
 			}
 			if (member.sequence.kind
-				== NativeA8CrossTextCommandKind::VirtualSinglePacket)
+				== NativeA8CrossTextCommandKind::DirectFacadeSinglePacket)
 			{
-				return IsNativeA8VirtualSinglePacketCommandConsumed(
+				return IsNativeA8DirectFacadeSinglePacketCommandConsumed(
 					member.sequence.commandIndex,
 					s_crossTextFrame.validationToken);
 			}
@@ -2418,11 +2418,11 @@ namespace fonthook::vectorfont
 				frame.admissionMembers[batch.firstMember + offset];
 			EndFollowerCommand(follower, success);
 			if (success && follower.sequence.kind
-				== NativeA8CrossTextCommandKind::VirtualSinglePacket)
+				== NativeA8CrossTextCommandKind::DirectFacadeSinglePacket)
 			{
-				VirtualStockSingletonState* singleton =
+				SingletonFacadeState* singleton =
 					follower.sequence.metadata
-						? GetVirtualStockSingletonState(
+						? GetSingletonFacadeState(
 							*follower.sequence.metadata) : nullptr;
 				if (singleton)
 				{

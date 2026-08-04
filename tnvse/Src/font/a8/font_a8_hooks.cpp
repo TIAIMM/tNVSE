@@ -368,7 +368,7 @@ namespace fonthook::vectorfont
 			None = 0,
 			SpanPacket,
 			SinglePacket,
-			VirtualSinglePacket
+			DirectFacadeSinglePacket
 		};
 
 		struct NativeDirectImmediateContext
@@ -481,8 +481,8 @@ namespace fonthook::vectorfont
 				case NativeImmediateCommandKind::SinglePacket:
 					return GuardNativeA8SinglePacketCommand(
 						context.commandSpanIndex, shape, renderer);
-				case NativeImmediateCommandKind::VirtualSinglePacket:
-					return GuardNativeA8VirtualSinglePacketCommand(
+				case NativeImmediateCommandKind::DirectFacadeSinglePacket:
+					return GuardNativeA8DirectFacadeSinglePacketCommand(
 						context.commandSpanIndex, shape, renderer);
 				default:
 					return true;
@@ -499,8 +499,8 @@ namespace fonthook::vectorfont
 			case NativeImmediateCommandKind::SinglePacket:
 				return ValidateNativeA8SinglePacketCommand(
 					context.commandSpanIndex, shape, renderer);
-			case NativeImmediateCommandKind::VirtualSinglePacket:
-				return ValidateNativeA8VirtualSinglePacketCommand(
+			case NativeImmediateCommandKind::DirectFacadeSinglePacket:
+				return ValidateNativeA8DirectFacadeSinglePacketCommand(
 					context.commandSpanIndex, shape, renderer);
 			default:
 				return true;
@@ -1731,7 +1731,7 @@ namespace fonthook::vectorfont
 
 		bool SameNativePacketBinding(
 			const NativeA8FramePacketBinding& command,
-			const NativeA8VirtualStockPacketBinding& live)
+			const NativeA8DirectFacadePacketBinding& live)
 		{
 			return command.active && live.active
 				&& command.vertexBuffer == live.vertexBuffer
@@ -2154,10 +2154,10 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::NativeDirectDrawLiteReplay);
 		}
 
-		class VirtualStockTileStateScope
+		class SingletonFacadeTileStateScope
 		{
 		public:
-			VirtualStockTileStateScope(NiTriShape* shape,
+			SingletonFacadeTileStateScope(NiTriShape* shape,
 				const NativeA8ShapePayload& payload,
 				const NativeA8PacketTemplate& packet)
 				: m_shape(shape)
@@ -2180,7 +2180,7 @@ namespace fonthook::vectorfont
 				m_active = true;
 			}
 
-			~VirtualStockTileStateScope()
+			~SingletonFacadeTileStateScope()
 			{
 				if (!m_active)
 					return;
@@ -3492,18 +3492,12 @@ namespace fonthook::vectorfont
 		}
 
 		void RecordRetainedPacketDraw(
-			const NativeA8DrawCommand& command, bool virtualStock,
-			bool retainedExtra)
+			const NativeA8DrawCommand& command, bool retainedExtra)
 		{
 			if (retainedExtra)
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::CommandRetainedBridgeDraw);
-			}
-			if (virtualStock)
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::VirtualStockDraw);
 			}
 			RecordFreeTypePerf(FreeTypePerfCounter::TilePass);
 			if (command.packet
@@ -3531,7 +3525,6 @@ namespace fonthook::vectorfont
 				NativeA8FallbackReason::RuntimeFault;
 			const char* operation = "retained-bridge";
 			HRESULT result = E_FAIL;
-			bool virtualStock = false;
 			bool packetStatePrevalidated = false;
 			bool failed = false;
 			bool constantStateFault = false;
@@ -3554,35 +3547,27 @@ namespace fonthook::vectorfont
 			NiRenderer* renderer, bool alternate)
 		{
 			NiTriShape* geometry = nullptr;
-			if (context.virtualStock)
+			if (!context.facade || !context.payload
+				|| !context.ringSubmission
+				|| command.packetIndex != commandOffset)
 			{
-				geometry = command.expectedGeometry;
+				FailRetainedBridge(context,
+					NativeA8FallbackReason::PacketBuild,
+					"retained-command-order", E_FAIL);
+				return false;
 			}
-			else
+			const NativeA8FallbackReason prepare =
+				PrepareNativeA8RingPacket(context.facade,
+					*context.payload, *context.ringSubmission,
+					command.packetIndex, geometry);
+			if (prepare != NativeA8FallbackReason::None || !geometry)
 			{
-				if (!context.facade || !context.payload
-					|| !context.ringSubmission
-					|| command.packetIndex != commandOffset)
-				{
-					FailRetainedBridge(context,
-						NativeA8FallbackReason::PacketBuild,
-						"retained-command-order", E_FAIL);
-					return false;
-				}
-				const NativeA8FallbackReason prepare =
-					PrepareNativeA8RingPacket(context.facade,
-						*context.payload, *context.ringSubmission,
-						command.packetIndex, geometry);
-				if (prepare != NativeA8FallbackReason::None
-					|| !geometry)
-				{
-					FailRetainedBridge(context,
-						prepare != NativeA8FallbackReason::None
-							? prepare
-							: NativeA8FallbackReason::RuntimeFault,
-						"retained-ring-packet", E_FAIL);
-					return false;
-				}
+				FailRetainedBridge(context,
+					prepare != NativeA8FallbackReason::None
+						? prepare
+						: NativeA8FallbackReason::RuntimeFault,
+					"retained-ring-packet", E_FAIL);
+				return false;
 			}
 
 			auto drawGeometry = [&]() -> bool
@@ -3630,8 +3615,7 @@ namespace fonthook::vectorfont
 				}
 				immediate(geometry, renderer);
 				++context.drewPackets;
-				RecordRetainedPacketDraw(
-					command, context.virtualStock, true);
+				RecordRetainedPacketDraw(command, true);
 				if (!IsNativeA8ShaderGenerationCurrent(
 					command.program->generation))
 				{
@@ -3644,24 +3628,6 @@ namespace fonthook::vectorfont
 				return true;
 			};
 
-			if (!context.virtualStock)
-				return drawGeometry();
-			if (!command.packet || !command.payload)
-			{
-				FailRetainedBridge(context,
-					NativeA8FallbackReason::PacketBuild,
-					"retained-virtual-packet", E_FAIL);
-				return false;
-			}
-			VirtualStockTileStateScope tileState(
-				geometry, *command.payload, *command.packet);
-			if (!tileState.Active())
-			{
-				FailRetainedBridge(context,
-					NativeA8FallbackReason::PropertySync,
-					"retained-virtual-tile-state", E_FAIL);
-				return false;
-			}
 			return drawGeometry();
 		}
 
@@ -3702,12 +3668,8 @@ namespace fonthook::vectorfont
 			// B99390 while the driver still has the final retained profile bound.
 			const char* operation = "none";
 			HRESULT result = D3D_OK;
-			NiTriShape* bootstrapGeometry =
-				context->virtualStock
-					? bootstrap->expectedGeometry
-					: context->ringSubmission
-						? context->ringSubmission->proxyShape
-						: nullptr;
+			NiTriShape* bootstrapGeometry = context->ringSubmission
+				? context->ringSubmission->proxyShape : nullptr;
 			if (!BindNativeA8CommandPacket(*bootstrap->program,
 				bootstrap->atlasTexture,
 				context->boundProfile
@@ -3793,12 +3755,11 @@ namespace fonthook::vectorfont
 
 			NativeA8CommandSpanView view;
 			if (!BeginNativeA8CommandSpanExecution(
-				commandSpanIndex, facade, false, view))
+				commandSpanIndex, facade, view))
 			{
 				return false;
 			}
-			if (!view.span || view.span->virtualStock
-				|| view.span->payload != &payload
+			if (!view.span || view.span->payload != &payload
 				|| view.span->commandCount < 2
 				|| !view.span->bridgeEligible)
 			{
@@ -3964,8 +3925,7 @@ namespace fonthook::vectorfont
 				{
 					draw.drewPacket = true;
 					++draw.drawnPacketCount;
-					RecordRetainedPacketDraw(
-						*first, false, false);
+					RecordRetainedPacketDraw(*first, false);
 				}
 				if (bridge.drewPackets)
 				{
@@ -4037,338 +3997,17 @@ namespace fonthook::vectorfont
 			return draw.drewPacket || draw.constantStateFault;
 		}
 
-		bool TryDrawVirtualStockRetainedSpan(
-			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			bool setupDrawmode, NiTriShape* leader,
-			const A8ShapeMetadata& metadata, UInt64 validationToken,
-			UInt32 commandSpanIndex,
-			NativePacketDrawResult& draw)
-		{
-			VirtualStockShapeGroup* group =
-				metadata.virtualStockGroup;
-			if (!g_bEnableFreeTypeFontCommandBuffer
-				|| !pass || !leader || !group || !validationToken
-				|| commandSpanIndex == kInvalidNativeA8CommandIndex)
-			{
-				return false;
-			}
-			if (currentPass == kForcedShaderSelectionPass
-				|| !IsDefaultNativeReplayPass(currentPass))
-			{
-				RecordNativeA8CommandFallback(
-					NativeA8CommandFallback::State);
-				return false;
-			}
-
-			NativeA8CommandSpanView view;
-			if (!BeginNativeA8CommandSpanExecution(
-				commandSpanIndex, leader, true, view))
-			{
-				return false;
-			}
-			if (!view.span || !view.span->virtualStock
-				|| view.span->virtualStockGroup != group
-				|| !view.span->payload
-				|| view.span->commandCount < 2
-				|| !view.span->bridgeEligible)
-			{
-				EndNativeA8CommandSpanExecution(
-					commandSpanIndex, false, false);
-				RecordNativeA8CommandFallback(
-					NativeA8CommandFallback::Topology);
-				return false;
-			}
-
-			NativeA8ShapePayload* payload = view.span->payload;
-			{
-				std::lock_guard<std::mutex> lock(group->mutex);
-				if (!group->primaryMetadataOwner
-					|| payload
-						!= &group->primaryMetadataOwner->nativePayload
-					|| group->preparedValidationToken
-						!= validationToken
-					|| group->topologyValidationToken
-						!= validationToken
-					|| group->frameMode.load(
-						std::memory_order_acquire)
-						!= VirtualStockFrameMode::Direct
-					|| group->slots.size()
-						!= view.span->commandCount
-					|| group->sortedItemIndices.size()
-						!= group->slots.size()
-					|| metadata.virtualStockSlot
-						!= view.span->leaderSlot)
-				{
-					EndNativeA8CommandSpanExecution(
-						commandSpanIndex, false, false);
-					RecordNativeA8CommandFallback(
-						NativeA8CommandFallback::Topology);
-					return false;
-				}
-				for (UInt32 index = 0;
-					index < view.span->commandCount; ++index)
-				{
-					const NativeA8DrawCommand* command =
-						ResolveNativeCommand(view, index);
-					if (!command || command->packetIndex != index
-						|| group->slots[index].packetIndex != index
-						|| group->slots[index].shape
-							!= command->expectedGeometry)
-					{
-						EndNativeA8CommandSpanExecution(
-							commandSpanIndex, false, false);
-						RecordNativeA8CommandFallback(
-							NativeA8CommandFallback::Topology);
-						return false;
-					}
-				}
-			}
-
-			FreeTypePerfScope submitPerf(FreeTypePerfPhase::Submit);
-			FreeTypePerfScope commandPerf(
-				FreeTypePerfPhase::CommandSubmit);
-			draw.directShapeRoute = true;
-			draw.stockLikeBitmapRoute =
-				payload->stockLikeBitmapPackets;
-			NiDX9Renderer* renderer = draw.stockLikeBitmapRoute
-				? nullptr : NiDX9Renderer::GetSingleton();
-			IDirect3DDevice9* device = renderer
-				? renderer->GetD3DDevice() : nullptr;
-			NiRenderer* commandRenderer = renderer
-				? renderer : NiDX9Renderer::GetSingleton();
-			if (!ValidateNativeA8VirtualCommandRange(
-					commandSpanIndex, 0,
-					view.span->commandCount, commandRenderer))
-			{
-				EndNativeA8CommandSpanExecution(
-					commandSpanIndex, false, false);
-				return false;
-			}
-			const bool isolatePacketConstants =
-				!draw.stockLikeBitmapRoute;
-			const bool batchedConstants = isolatePacketConstants
-				&& s_constantOwnershipBatch.FrameActive();
-			std::optional<NativePassConstantScope> localConstants;
-			std::optional<NativeFacadeShaderBatchScope> shaderBatch;
-			if (isolatePacketConstants)
-			{
-				shaderBatch.emplace();
-				if (!device)
-					draw.runtimeFault = true;
-				else if (batchedConstants)
-				{
-					if (!s_constantOwnershipBatch.EnsureOwned(device))
-					{
-						draw.runtimeFault = true;
-						draw.constantStateFault = true;
-						draw.operation =
-							s_constantOwnershipBatch.Operation();
-						draw.result = s_constantOwnershipBatch.Result();
-						draw.mismatchRegister =
-							s_constantOwnershipBatch.MismatchRegister();
-					}
-				}
-				else
-				{
-					localConstants.emplace(device);
-					if (!localConstants->Owned())
-					{
-						draw.runtimeFault = true;
-						draw.constantStateFault = true;
-						draw.operation =
-							localConstants->Operation();
-						draw.result = localConstants->Result();
-					}
-				}
-			}
-
-			NativeTilePacketScope packetScope(pass);
-			UInt32 runCursor = 0;
-			while (!draw.runtimeFault
-				&& runCursor < view.span->runCount)
-			{
-				UInt32 firstOffset = 0;
-				UInt32 endOffset = 0;
-				if (!ResolveNextBridgeGroup(
-					view, runCursor, firstOffset, endOffset))
-				{
-					draw.runtimeFault = true;
-					draw.failure =
-						NativeA8FallbackReason::PacketBuild;
-					draw.operation =
-						"retained-virtual-run-topology";
-					draw.result = E_FAIL;
-					break;
-				}
-				const NativeA8DrawCommand* first =
-					ResolveNativeCommand(view, firstOffset);
-				NiTriShape* geometry =
-					first ? first->expectedGeometry : nullptr;
-				if (!first || !geometry || !first->packet)
-				{
-					draw.runtimeFault = true;
-					draw.failure =
-						NativeA8FallbackReason::PacketBuild;
-					draw.operation =
-						"retained-virtual-first-command";
-					draw.result = E_FAIL;
-					break;
-				}
-				VirtualStockTileStateScope tileState(
-					geometry, *payload, *first->packet);
-				if (!tileState.Active())
-				{
-					draw.runtimeFault = true;
-					draw.failure =
-						NativeA8FallbackReason::PropertySync;
-					draw.operation =
-						"retained-virtual-first-state";
-					draw.result = E_FAIL;
-					break;
-				}
-				packetScope.Select(geometry);
-				NativeImmediateHookVtableScope hookVtable(geometry);
-				if (!hookVtable.Active())
-				{
-					draw.runtimeFault = true;
-					draw.failure =
-						NativeA8FallbackReason::RuntimeFault;
-					draw.operation =
-						"retained-virtual-immediate-vtable";
-					draw.result = E_FAIL;
-					break;
-				}
-
-				NativeBridgeExecutionContext bridge;
-				bridge.view = view;
-				bridge.payload = payload;
-				bridge.bootstrapCommandOffset = firstOffset;
-				bridge.nextCommandOffset = firstOffset + 1u;
-				bridge.endCommandOffset = endOffset;
-				bridge.boundProfile = first->program
-					? first->program->profile : nullptr;
-				bridge.bindState = MakeNativeCommandBindState(
-					pass, currentPass, false, true,
-					setupDrawmode);
-				bridge.virtualStock = true;
-				bridge.packetStatePrevalidated = true;
-				const bool hasContinuation =
-					bridge.nextCommandOffset
-						< bridge.endCommandOffset;
-				// A fused multi-slot Virtual-stock span can carry independently live
-				// Tile properties on each stock shell.  One slot's resolved scissor
-				// cannot prove that every later slot is invisible, so keep this rare
-				// topology fail-open. Singletons and non-fused slots are culled below.
-				NativeDirectImmediateScope immediateScope(
-					geometry, nullptr, commandSpanIndex, firstOffset, true,
-					hasContinuation ? &bridge : nullptr,
-					hasContinuation
-						? &ContinueRetainedBridge : nullptr,
-					NativeImmediateCommandKind::SpanPacket, true);
-				InvokeNativeCommandBootstrap(pass, currentPass,
-					false, true, setupDrawmode, geometry, first,
-					false, true);
-				if (immediateScope.Drew())
-				{
-					draw.drewPacket = true;
-					++draw.drawnPacketCount;
-					RecordRetainedPacketDraw(
-						*first, true, false);
-				}
-				if (bridge.drewPackets)
-				{
-					draw.drewPacket = true;
-					draw.drawnPacketCount += bridge.drewPackets;
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::
-							CommandStockBootstrapSaved,
-						bridge.drewPackets);
-				}
-				if (!immediateScope.Invoked()
-					|| !immediateScope.ValidationPassed()
-					|| !immediateScope.Drew())
-				{
-					draw.runtimeFault = true;
-					draw.failure =
-						NativeA8FallbackReason::RuntimeFault;
-					draw.operation =
-						"retained-virtual-bootstrap-immediate";
-					draw.result = E_FAIL;
-					break;
-				}
-				if (!immediateScope.ContinuationSucceeded()
-					|| bridge.failed)
-				{
-					draw.runtimeFault = true;
-					draw.failure = bridge.failure;
-					draw.operation = bridge.operation;
-					draw.result = bridge.result;
-					draw.constantStateFault =
-						bridge.constantStateFault;
-					break;
-				}
-			}
-
-			if (isolatePacketConstants && !batchedConstants
-				&& localConstants
-				&& !localConstants->Release())
-			{
-				draw.runtimeFault = true;
-				draw.constantStateFault = true;
-				draw.operation = localConstants->Operation();
-				draw.result = localConstants->Result();
-				draw.mismatchRegister =
-					localConstants->MismatchRegister();
-			}
-			if (isolatePacketConstants && batchedConstants
-				&& draw.runtimeFault
-				&& !ReleaseNativeConstantOwnershipBatch(
-					"retained-virtual-runtime-fault"))
-			{
-				draw.constantStateFault = true;
-				draw.operation = s_constantOwnershipBatch.Operation();
-				draw.result = s_constantOwnershipBatch.Result();
-				draw.mismatchRegister =
-					s_constantOwnershipBatch.MismatchRegister();
-			}
-
-			if (draw.drawnPacketCount)
-			{
-				group->directDrawCount.fetch_add(
-					draw.drawnPacketCount,
-					std::memory_order_acq_rel);
-			}
-			const bool success = !draw.runtimeFault
-				&& (draw.visibilityCulled
-					|| draw.drawnPacketCount
-						== view.span->commandCount);
-			EndNativeA8CommandSpanExecution(
-				commandSpanIndex, success, draw.drewPacket);
-			if (success)
-			{
-				if (!draw.visibilityCulled)
-				{
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::CommandVirtualSpanFused);
-				}
-				return true;
-			}
-			return draw.drewPacket || draw.constantStateFault;
-		}
-
-		bool TryDrawVirtualStockPacket(
+		bool TryDrawSingletonFacadePacket(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
 			bool setupDrawmode, NiTriShape* shape,
 			const A8ShapeMetadata& metadata, UInt64 validationToken,
 			NativePacketDrawResult& draw,
-			UInt32 virtualSinglePacketCommandIndex =
+			UInt32 directFacadeSinglePacketCommandIndex =
 				kInvalidNativeA8CommandIndex)
 		{
-			VirtualStockShapeGroup* group =
-				metadata.virtualStockGroup;
-			VirtualStockSingletonState* singleton =
-				GetVirtualStockSingletonState(metadata);
-			if (!pass || !shape || (!group && !singleton)
+			SingletonFacadeState* singleton =
+				GetSingletonFacadeState(metadata);
+			if (!pass || !shape || !singleton
 				|| validationToken == 0)
 			{
 				return false;
@@ -4376,19 +4015,17 @@ namespace fonthook::vectorfont
 			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
 			FreeTypePerfScope commandPerf(
 				FreeTypePerfPhase::CommandSubmit,
-				virtualSinglePacketCommandIndex
+				directFacadeSinglePacketCommandIndex
 						!= kInvalidNativeA8CommandIndex);
 
-			const NativeA8ShapePayload* payload = nullptr;
-			A8ShapeMetadataPtr primaryMetadataOwner;
+			const NativeA8ShapePayload* payload = &metadata.nativePayload;
 			const NativeA8PacketTemplate* packet = nullptr;
-			NativeA8VirtualStockPacketBinding binding;
+			NativeA8DirectFacadePacketBinding binding;
 			NiGeometryBufferData* expectedBuffer = nullptr;
 			NiVBChip* expectedChip = nullptr;
 			TileShader* expectedShader = nullptr;
 			UInt32 packetIndex = 0;
-			std::atomic<UInt32>* directDrawCount = nullptr;
-			auto captureBinding = [&](const VirtualStockSlotBinding& slot)
+			auto captureBinding = [&](const SingletonFacadeBinding& slot)
 			{
 				if (!payload || !payload->buildComplete
 					|| !payload->payloadTemplate)
@@ -4427,77 +4064,46 @@ namespace fonthook::vectorfont
 				binding.active = slot.bound;
 				return true;
 			};
-			if (singleton)
+			if (singleton->slot.shape != shape
+				|| singleton->preparedValidationToken != validationToken
+				|| singleton->frameMode.load(std::memory_order_acquire)
+					!= SingletonFacadeFrameMode::Direct)
 			{
-				if (singleton->slot.shape != shape
-					|| singleton->preparedValidationToken != validationToken
-					|| singleton->frameMode.load(std::memory_order_acquire)
-						!= VirtualStockFrameMode::Direct)
-				{
-					return false;
-				}
-				payload = &metadata.nativePayload;
-				directDrawCount = &singleton->directDrawCount;
-				if (!captureBinding(singleton->slot))
-					return false;
+				return false;
 			}
-			else
-			{
-				std::lock_guard<std::mutex> lock(group->mutex);
-				if (!group->primaryMetadataOwner
-					|| metadata.virtualStockSlot >= group->slots.size()
-					|| group->preparedValidationToken != validationToken
-					|| group->frameMode.load(std::memory_order_acquire)
-						!= VirtualStockFrameMode::Direct)
-				{
-					return false;
-				}
-				if (metadata.virtualStockPrimary)
-				{
-					if (group->primaryMetadataOwner.get() != &metadata)
-						return false;
-					payload = &metadata.nativePayload;
-				}
-				else
-				{
-					primaryMetadataOwner = group->primaryMetadataOwner;
-					payload = &primaryMetadataOwner->nativePayload;
-				}
-				directDrawCount = &group->directDrawCount;
-				if (!captureBinding(group->slots[metadata.virtualStockSlot]))
-					return false;
-			}
+			if (!captureBinding(singleton->slot))
+				return false;
 
-			NativeA8VirtualSinglePacketCommandView
-				virtualSingleCommandView;
+			NativeA8DirectFacadeSinglePacketCommandView
+				directFacadeCommandView;
 			const NativeA8DrawCommand* command = nullptr;
 			bool commandExecution = false;
 			bool commandBegun = false;
-			bool virtualSingleCommandExecution = false;
+			bool directFacadeCommandExecution = false;
 			if (g_bEnableFreeTypeFontCommandBuffer
-				&& virtualSinglePacketCommandIndex
+				&& directFacadeSinglePacketCommandIndex
 					!= kInvalidNativeA8CommandIndex)
 			{
 				commandBegun =
-					BeginNativeA8VirtualSinglePacketCommandExecution(
-						virtualSinglePacketCommandIndex,
-						&metadata, shape, virtualSingleCommandView);
+					BeginNativeA8DirectFacadeSinglePacketCommandExecution(
+						directFacadeSinglePacketCommandIndex,
+						&metadata, shape, directFacadeCommandView);
 				if (commandBegun
-					&& virtualSingleCommandView.command)
+					&& directFacadeCommandView.command)
 				{
 					command =
-						virtualSingleCommandView.command->draw;
+						directFacadeCommandView.command->draw;
 					commandExecution = command
 						&& command->payload == payload
 						&& command->expectedGeometry == shape
 						&& command->packetIndex == packetIndex;
-					virtualSingleCommandExecution =
+					directFacadeCommandExecution =
 						commandExecution;
 				}
 				if (commandBegun && !commandExecution)
 				{
-					EndNativeA8VirtualSinglePacketCommandExecution(
-						virtualSinglePacketCommandIndex,
+					EndNativeA8DirectFacadeSinglePacketCommandExecution(
+						directFacadeSinglePacketCommandIndex,
 						false, false);
 				}
 			}
@@ -4537,7 +4143,7 @@ namespace fonthook::vectorfont
 					== binding.vertexCount
 						* sizeof(NativeA8GpuVertex)
 				&& binding.vertexCount == packet->vertexCount
-				&& IsNativeA8VirtualStockPacketAtlasCurrent(
+				&& IsNativeA8DirectFacadePacketAtlasCurrent(
 					shape, *payload, packetIndex);
 			const bool bindingCurrent = bindingDescriptorCurrent
 				&& (commandExecution
@@ -4546,13 +4152,13 @@ namespace fonthook::vectorfont
 							command->binding, binding)
 					: validationToken
 							== GetNativeA8SortedFrameValidationToken()
-						&& IsNativeA8VirtualStockPacketBindingCurrent(
+						&& IsNativeA8DirectFacadePacketBindingCurrent(
 							binding));
 			if (!bindingCurrent)
 			{
 				draw.runtimeFault = true;
 				draw.failure = NativeA8FallbackReason::PacketPrepare;
-				draw.operation = "virtual-stock-binding";
+				draw.operation = "singleton-facade-binding";
 				draw.result = E_FAIL;
 			}
 
@@ -4605,13 +4211,13 @@ namespace fonthook::vectorfont
 
 			if (!draw.runtimeFault)
 			{
-				VirtualStockTileStateScope tileState(
+				SingletonFacadeTileStateScope tileState(
 					shape, *payload, *packet);
 				if (!tileState.Active())
 				{
 					draw.runtimeFault = true;
 					draw.failure = NativeA8FallbackReason::PropertySync;
-					draw.operation = "virtual-stock-tile-state";
+					draw.operation = "singleton-facade-tile-state";
 					draw.result = E_FAIL;
 				}
 				else
@@ -4619,13 +4225,13 @@ namespace fonthook::vectorfont
 					bool usedNativeReplay = false;
 					const UInt32 validationCommandIndex =
 						commandExecution
-							? virtualSinglePacketCommandIndex
+							? directFacadeSinglePacketCommandIndex
 							: kInvalidNativeA8CommandIndex;
 					NativeDirectImmediateScope immediateScope(
 						shape, payload, validationCommandIndex,
 						kInvalidNativeA8CommandIndex,
 						commandExecution, nullptr, nullptr,
-						NativeImmediateCommandKind::VirtualSinglePacket,
+						NativeImmediateCommandKind::DirectFacadeSinglePacket,
 						commandExecution && bindingCurrent);
 					if (commandExecution)
 					{
@@ -4633,14 +4239,14 @@ namespace fonthook::vectorfont
 							segmentDeviceStateStamp;
 						const NativeA8SegmentDeviceStateStamp*
 							segmentDeviceState = nullptr;
-						if (virtualSingleCommandExecution
-							&& virtualSingleCommandView.stamp
-							&& virtualSingleCommandView.command
+						if (directFacadeCommandExecution
+							&& directFacadeCommandView.stamp
+							&& directFacadeCommandView.command
 							&& BuildSegmentDeviceStateStamp(
-								virtualSingleCommandView.stamp,
-								virtualSingleCommandView.command->
+								directFacadeCommandView.stamp,
+								directFacadeCommandView.command->
 									executionSegmentEpoch,
-								virtualSingleCommandView.command->
+								directFacadeCommandView.command->
 									executionExternalMutationEpoch,
 								segmentDeviceStateStamp))
 						{
@@ -4651,7 +4257,7 @@ namespace fonthook::vectorfont
 							InvokeNativeCommandBootstrap(pass,
 							currentPass, false, true,
 							setupDrawmode, shape, command,
-							virtualSingleCommandExecution,
+							directFacadeCommandExecution,
 							bindingCurrent,
 							expectedBuffer,
 							segmentDeviceState);
@@ -4667,18 +4273,16 @@ namespace fonthook::vectorfont
 					{
 						draw.drewPacket = true;
 						draw.drawnPacketCount = 1;
-						directDrawCount->fetch_add(
+						singleton->directDrawCount.fetch_add(
 							1, std::memory_order_acq_rel);
-						RecordFreeTypePerf(
-							FreeTypePerfCounter::VirtualStockDraw);
 						RecordFreeTypePerf(
 							FreeTypePerfCounter::TilePass);
 						if (usedNativeReplay
-							&& virtualSingleCommandExecution)
+							&& directFacadeCommandExecution)
 						{
 							RecordFreeTypePerf(
 								FreeTypePerfCounter::
-									CommandVirtualSinglePacketReplay);
+									CommandDirectFacadeSinglePacketReplay);
 						}
 						if (packet->shaderClass
 							== NativeA8ShaderClass::Composite)
@@ -4690,12 +4294,9 @@ namespace fonthook::vectorfont
 					else if (immediateScope.VisibilityCulled())
 					{
 						draw.visibilityCulled = true;
-						if (singleton)
-						{
-							singleton->frameMode.store(
-								VirtualStockFrameMode::Culled,
-								std::memory_order_release);
-						}
+						singleton->frameMode.store(
+							SingletonFacadeFrameMode::Culled,
+							std::memory_order_release);
 					}
 					else
 					{
@@ -4703,8 +4304,8 @@ namespace fonthook::vectorfont
 						draw.failure =
 							NativeA8FallbackReason::RuntimeFault;
 						draw.operation = immediateScope.Invoked()
-							? "virtual-stock-command-validation"
-							: "virtual-stock-immediate-not-invoked";
+							? "singleton-facade-command-validation"
+							: "singleton-facade-immediate-not-invoked";
 						draw.result = E_FAIL;
 					}
 				}
@@ -4714,7 +4315,7 @@ namespace fonthook::vectorfont
 					draw.runtimeFault = true;
 					draw.failure = NativeA8FallbackReason::DeviceReset;
 					draw.operation =
-						"generation-changed-after-virtual-stock";
+						"generation-changed-after-singleton-facade";
 					draw.result = D3DERR_DEVICELOST;
 				}
 			}
@@ -4733,7 +4334,7 @@ namespace fonthook::vectorfont
 			if (isolatePacketConstants && batchedConstants
 				&& draw.runtimeFault
 				&& !ReleaseNativeConstantOwnershipBatch(
-					"virtual-stock-runtime-fault"))
+					"singleton-facade-runtime-fault"))
 			{
 				draw.constantStateFault = true;
 				draw.operation = s_constantOwnershipBatch.Operation();
@@ -4741,10 +4342,10 @@ namespace fonthook::vectorfont
 				draw.mismatchRegister =
 					s_constantOwnershipBatch.MismatchRegister();
 			}
-			if (virtualSingleCommandExecution)
+			if (directFacadeCommandExecution)
 			{
-				EndNativeA8VirtualSinglePacketCommandExecution(
-					virtualSinglePacketCommandIndex,
+				EndNativeA8DirectFacadeSinglePacketCommandExecution(
+					directFacadeSinglePacketCommandIndex,
 					!draw.runtimeFault
 						&& (draw.drewPacket || draw.visibilityCulled),
 					draw.drewPacket);
@@ -4753,60 +4354,32 @@ namespace fonthook::vectorfont
 			{
 				const bool facadeFallbackSafe =
 					!draw.drewPacket && !draw.constantStateFault
-					&& directDrawCount->load(
+					&& singleton->directDrawCount.load(
 						std::memory_order_acquire) == 0;
-				if (singleton)
+				if (facadeFallbackSafe)
 				{
-					if (facadeFallbackSafe)
-					{
-						RestoreVirtualStockSingletonToFacade(
-							metadata, draw.failure);
-					}
-					else
-					{
-						if (singleton->frameMode.load(
-								std::memory_order_acquire)
-							!= VirtualStockFrameMode::Retired)
-						{
-							singleton->frameMode.store(
-								VirtualStockFrameMode::Fault,
-								std::memory_order_release);
-						}
-						RecordFreeTypePerf(FreeTypePerfCounter::
-							VirtualStockFallbackResource);
-					}
-				}
-				else if (facadeFallbackSafe)
-				{
-					std::shared_ptr<VirtualStockShapeGroup> groupOwner =
-						AcquireVirtualStockShapeGroup(metadata);
-					if (groupOwner)
-					{
-						RestoreVirtualStockGroupToFacade(
-							groupOwner, draw.failure);
-					}
-					else
-					{
-						group->frameMode.store(
-							VirtualStockFrameMode::Fault,
-							std::memory_order_release);
-					}
+					RestoreSingletonFacade(metadata, draw.failure);
 				}
 				else
 				{
-					std::lock_guard<std::mutex> lock(group->mutex);
-					if (group->frameMode.load(
-						std::memory_order_acquire)
-						!= VirtualStockFrameMode::Retired)
+					if (singleton->frameMode.load(
+							std::memory_order_acquire)
+						!= SingletonFacadeFrameMode::Retired)
 					{
-						group->frameMode.store(
-							VirtualStockFrameMode::Fault,
+						singleton->frameMode.store(
+							SingletonFacadeFrameMode::Fault,
 							std::memory_order_release);
 					}
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::
-							VirtualStockFallbackResource);
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SingletonFacadeFallback);
 				}
+			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::SingletonFacadeDirectFrame);
+			if (draw.runtimeFault && draw.drewPacket)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SingletonFacadePartialFault);
 			}
 			return true;
 		}
@@ -5053,10 +4626,9 @@ namespace fonthook::vectorfont
 				&& commandSpanIndex
 					!= kInvalidNativeA8CommandIndex
 				&& BeginNativeA8CommandSpanExecution(
-					commandSpanIndex, facade, false, commandView))
+					commandSpanIndex, facade, commandView))
 			{
 				if (commandView.span
-					&& !commandView.span->virtualStock
 					&& commandView.span->payload == &payload
 					&& commandView.span->commandCount == 1)
 				{
@@ -5394,8 +4966,6 @@ namespace fonthook::vectorfont
 			const NiTriShape* shapeIdentity = nullptr;
 			UInt32 fontId = 0;
 			UInt32 backend = 0;
-			UInt32 virtualStockSlot = 0;
-			bool virtualStockPrimary = false;
 			bool buildComplete = false;
 		};
 
@@ -5413,10 +4983,6 @@ namespace fonthook::vectorfont
 				snapshot.fontId = metadata->fontId;
 				snapshot.backend =
 					static_cast<UInt32>(metadata->backend);
-				snapshot.virtualStockSlot =
-					static_cast<UInt32>(metadata->virtualStockSlot);
-				snapshot.virtualStockPrimary =
-					metadata->virtualStockPrimary;
 				snapshot.buildComplete =
 					metadata->nativePayload.buildComplete;
 				return true;
@@ -5467,7 +5033,7 @@ namespace fonthook::vectorfont
 				return integrity;
 
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: metadata-delete-integrity-failure shape=%p registry=%u mapped=%p expectedSelf=%p expectedShape=%p allocationId=%llu readable=%u objectAllocationId=%llu objectSelf=%p objectShape=%p font=%u backend=%u slot=%u primary=%u build=%u registryIdentity=%u pointer=%u allocation=%u self=%u shapeIdentity=%u integrity=%u",
+				"tnvse_freetype_native: metadata-delete-integrity-failure shape=%p registry=%u mapped=%p expectedSelf=%p expectedShape=%p allocationId=%llu readable=%u objectAllocationId=%llu objectSelf=%p objectShape=%p font=%u backend=%u build=%u registryIdentity=%u pointer=%u allocation=%u self=%u shapeIdentity=%u integrity=%u",
 				shape, registryFound ? 1u : 0u,
 				mappedMetadata, entry.selfIdentity,
 				entry.shapeIdentity,
@@ -5477,8 +5043,6 @@ namespace fonthook::vectorfont
 					snapshot.allocationId),
 				snapshot.selfIdentity, snapshot.shapeIdentity,
 				snapshot.fontId, snapshot.backend,
-				snapshot.virtualStockSlot,
-				snapshot.virtualStockPrimary ? 1u : 0u,
 				snapshot.buildComplete ? 1u : 0u,
 				registryIdentityValid ? 1u : 0u,
 				pointerMatch ? 1u : 0u,
@@ -5520,16 +5084,9 @@ namespace fonthook::vectorfont
 			}
 			if (metadataIntegrity && retiredMetadata
 				&& retiredMetadata->backend
-					== FreeTypeShapeBackend::VirtualStockSingleton)
+					== FreeTypeShapeBackend::SingletonFacade)
 			{
-				ReleaseVirtualStockSingletonBinding(
-					shape, *retiredMetadata);
-			}
-			else if (metadataIntegrity && retiredMetadata
-				&& retiredMetadata->backend
-					== FreeTypeShapeBackend::VirtualStockNative)
-			{
-				ReleaseVirtualStockShapeBinding(
+				ReleaseSingletonFacadeBinding(
 					shape, *retiredMetadata);
 			}
 			retiredMetadata.reset();
@@ -5624,19 +5181,6 @@ namespace fonthook::vectorfont
 			}
 			owners[index] = metadata;
 		}
-	}
-
-	std::shared_ptr<VirtualStockShapeGroup>
-		AcquireVirtualStockShapeGroup(const A8ShapeMetadata& metadata)
-	{
-		VirtualStockShapeGroup* group = metadata.virtualStockGroup;
-		if (!group)
-			return {};
-		std::shared_ptr<VirtualStockShapeGroup> owner =
-			metadata.virtualStockOwner.lock();
-		return owner && owner.get() == group
-			&& owner->metadataPublished.load(std::memory_order_acquire)
-			? owner : std::shared_ptr<VirtualStockShapeGroup>{};
 	}
 
 	class NativeCrossTextBatchExecutionScope
@@ -5799,7 +5343,7 @@ namespace fonthook::vectorfont
 		{
 			// The sorted-frame clip proof is revalidated against the live
 			// volatile inputs before it suppresses the dispatch. Honoring
-			// must precede the virtual-stock direct-draw and cross-text
+			// must precede the singleton-facade direct-draw and cross-text
 			// leader paths so culled singleton texts never arm a packet
 			// draw or a batch snapshot. Any drift revokes the cached
 			// decision and falls open to the ordinary draw path.
@@ -5845,44 +5389,44 @@ namespace fonthook::vectorfont
 				testAlpha, blendAlpha, setupDrawmode);
 		}
 		if (metadata->backend
-			== FreeTypeShapeBackend::VirtualStockSingleton)
+			== FreeTypeShapeBackend::SingletonFacade)
 		{
-			VirtualStockSingletonState* singleton =
-				GetVirtualStockSingletonState(*metadata);
+			SingletonFacadeState* singleton =
+				GetSingletonFacadeState(*metadata);
 			if (!singleton || singleton->slot.shape != shape)
 			{
 				RecordNativeA8Suppression(shape, *metadata,
 					NativeA8FallbackReason::PacketBuild,
-					"virtual-stock-singleton-tile");
+					"singleton-facade-singleton-tile");
 				return;
 			}
-			const VirtualStockFrameMode mode =
+			const SingletonFacadeFrameMode mode =
 				singleton->frameMode.load(std::memory_order_acquire);
-			if (mode == VirtualStockFrameMode::Culled
-				|| mode == VirtualStockFrameMode::Fault
-				|| mode == VirtualStockFrameMode::Retired)
+			if (mode == SingletonFacadeFrameMode::Culled
+				|| mode == SingletonFacadeFrameMode::Fault
+				|| mode == SingletonFacadeFrameMode::Retired)
 			{
 				return;
 			}
 
 			const UInt64 validationToken =
 				GetNativeA8SortedFrameValidationToken();
-			if (mode == VirtualStockFrameMode::Direct)
+			if (mode == SingletonFacadeFrameMode::Direct)
 			{
 				NativePacketDrawResult draw;
 				const UInt64 commandToken =
 					singleton->commandValidationToken.load(
 						std::memory_order_acquire);
-				const UInt32 virtualSinglePacketCommandIndex =
-					singleton->commandVirtualSinglePacketIndex.load(
+				const UInt32 directFacadeSinglePacketCommandIndex =
+					singleton->commandDirectFacadeSinglePacketIndex.load(
 						std::memory_order_acquire);
 				const bool commandCurrent = g_bEnableFreeTypeFontCommandBuffer
 					&& commandToken && commandToken == validationToken
-					&& virtualSinglePacketCommandIndex
+					&& directFacadeSinglePacketCommandIndex
 						!= kInvalidNativeA8CommandIndex;
-				bool handled = TryDrawVirtualStockPacket(pass, currentPass,
+				bool handled = TryDrawSingletonFacadePacket(pass, currentPass,
 					setupDrawmode, shape, *metadata, validationToken, draw,
-					commandCurrent ? virtualSinglePacketCommandIndex
+					commandCurrent ? directFacadeSinglePacketCommandIndex
 						: kInvalidNativeA8CommandIndex);
 				if (!handled)
 				{
@@ -5890,19 +5434,19 @@ namespace fonthook::vectorfont
 						&& singleton->directDrawCount.load(
 							std::memory_order_acquire) == 0)
 					{
-						RestoreVirtualStockSingletonToFacade(*metadata,
+						RestoreSingletonFacade(*metadata,
 							NativeA8FallbackReason::PacketPrepare);
 					}
 					else
 					{
 						singleton->frameMode.store(
-							VirtualStockFrameMode::Fault,
+							SingletonFacadeFrameMode::Fault,
 							std::memory_order_release);
 						RecordFreeTypePerf(FreeTypePerfCounter::
-							VirtualStockFallbackResource);
+							SingletonFacadeFallback);
 					}
 					if (singleton->frameMode.load(std::memory_order_acquire)
-						!= VirtualStockFrameMode::Facade)
+						!= SingletonFacadeFrameMode::Facade)
 					{
 						return;
 					}
@@ -5922,7 +5466,7 @@ namespace fonthook::vectorfont
 							singletonPayload->preparedGeneration,
 							draw.operation, draw.result);
 						gLog.FormattedMessage(
-							"tnvse_freetype_native: virtual-stock singleton pass-constant ownership fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-shape",
+							"tnvse_freetype_native: singleton-facade singleton pass-constant ownership fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-shape",
 							draw.operation,
 							static_cast<UInt32>(draw.result),
 							draw.mismatchRegister, shape,
@@ -5938,203 +5482,12 @@ namespace fonthook::vectorfont
 					if (draw.drewPacket || draw.constantStateFault
 						|| singleton->frameMode.load(
 							std::memory_order_acquire)
-							!= VirtualStockFrameMode::Facade)
+							!= SingletonFacadeFrameMode::Facade)
 					{
 						return;
 					}
 				}
 			}
-			payload = &metadata->nativePayload;
-		}
-		else if (metadata->backend
-			== FreeTypeShapeBackend::VirtualStockNative)
-		{
-			VirtualStockShapeGroup* group =
-				metadata->virtualStockGroup;
-			if (!group)
-			{
-				RecordNativeA8Suppression(shape, *metadata,
-					NativeA8FallbackReason::PacketBuild,
-					"virtual-stock-tile");
-				return;
-			}
-			const VirtualStockFrameMode mode =
-				group->frameMode.load(std::memory_order_acquire);
-			if (mode == VirtualStockFrameMode::Culled
-				|| mode == VirtualStockFrameMode::Fault
-				|| mode == VirtualStockFrameMode::Retired)
-			{
-				if (!metadata->virtualStockPrimary)
-				{
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::
-							VirtualStockFollowerSkipped);
-				}
-				return;
-			}
-
-			const UInt64 validationToken =
-				GetNativeA8SortedFrameValidationToken();
-			if (mode == VirtualStockFrameMode::Direct)
-			{
-				NativePacketDrawResult draw;
-				bool handled = false;
-				const UInt64 commandToken =
-					group->commandValidationToken.load(
-						std::memory_order_acquire);
-				const UInt32 commandSpanIndex =
-					group->commandSpanIndex.load(
-						std::memory_order_acquire);
-				const UInt32 commandLeaderSlot =
-					group->commandLeaderSlot.load(
-						std::memory_order_acquire);
-				const bool commandCurrent = commandToken
-					&& commandToken == validationToken
-					&& commandSpanIndex != kInvalidNativeA8CommandIndex;
-				if (commandCurrent
-					&& g_bEnableFreeTypeFontCommandBuffer)
-				{
-					if (commandSpanIndex
-							!= kInvalidNativeA8CommandIndex
-						&& metadata->virtualStockSlot
-						!= commandLeaderSlot)
-					{
-						if (ShouldConsumeNativeA8CommandFollower(
-							commandSpanIndex, validationToken,
-							shape,
-							metadata->virtualStockSlot))
-						{
-							return;
-						}
-					}
-					else if (commandSpanIndex
-						!= kInvalidNativeA8CommandIndex)
-					{
-						NativeA8CommandSpanView candidate;
-						if (FindNativeA8CommandSpan(
-								commandSpanIndex,
-								validationToken, candidate)
-							&& candidate.span
-							&& candidate.span->commandCount > 1)
-						{
-							handled =
-								TryDrawVirtualStockRetainedSpan(
-									pass, currentPass,
-									setupDrawmode, shape,
-									*metadata, validationToken,
-									commandSpanIndex, draw);
-						}
-					}
-				}
-				if (!handled)
-				{
-					draw = {};
-					handled = TryDrawVirtualStockPacket(
-						pass, currentPass, setupDrawmode, shape,
-						*metadata, validationToken, draw);
-				}
-				if (!handled)
-				{
-					if (validationToken)
-					{
-						if (group->directDrawCount.load(
-							std::memory_order_acquire) == 0)
-						{
-							std::shared_ptr<VirtualStockShapeGroup>
-								groupOwner =
-									AcquireVirtualStockShapeGroup(
-										*metadata);
-							if (groupOwner)
-							{
-								RestoreVirtualStockGroupToFacade(
-									groupOwner,
-									NativeA8FallbackReason::
-										PacketPrepare);
-							}
-							else
-							{
-								group->frameMode.store(
-									VirtualStockFrameMode::Fault,
-									std::memory_order_release);
-							}
-						}
-						else
-						{
-							std::lock_guard<std::mutex> lock(
-								group->mutex);
-							if (group->frameMode.load(
-								std::memory_order_acquire)
-								!= VirtualStockFrameMode::Retired)
-							{
-								group->frameMode.store(
-									VirtualStockFrameMode::Fault,
-									std::memory_order_release);
-							}
-							RecordFreeTypePerf(
-								FreeTypePerfCounter::
-									VirtualStockFallbackResource);
-						}
-						if (group->frameMode.load(
-							std::memory_order_acquire)
-							!= VirtualStockFrameMode::Facade)
-						{
-							return;
-						}
-					}
-				}
-				else if (!draw.runtimeFault)
-					return;
-				else
-				{
-					InvalidateNativeA8SortedShaderState();
-					A8ShapeMetadataPtr primaryMetadata;
-					{
-						std::lock_guard<std::mutex> lock(group->mutex);
-						primaryMetadata = group->primaryMetadataOwner;
-					}
-					NativeA8ShapePayload* primaryPayload =
-						primaryMetadata
-							? &primaryMetadata->nativePayload : nullptr;
-					if (draw.constantStateFault && primaryPayload)
-					{
-						MarkNativeA8GenerationFault(
-							primaryPayload->preparedGeneration,
-							draw.operation, draw.result);
-						gLog.FormattedMessage(
-							"tnvse_freetype_native: virtual-stock pass-constant ownership fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-group",
-							draw.operation,
-							static_cast<UInt32>(draw.result),
-							draw.mismatchRegister, shape,
-							metadata->fontId,
-							primaryPayload->preparedGeneration,
-							draw.drewPacket ? 1 : 0);
-					}
-					if (draw.drewPacket && primaryPayload)
-					{
-						MarkNativeA8RuntimeFault(
-							*metadata, *primaryPayload,
-							draw.failure);
-					}
-					if (draw.drewPacket || draw.constantStateFault
-						|| group->frameMode.load(
-							std::memory_order_acquire)
-							!= VirtualStockFrameMode::Facade)
-					{
-						return;
-					}
-				}
-			}
-
-			if (!metadata->virtualStockPrimary)
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::
-						VirtualStockFollowerSkipped);
-				return;
-			}
-			// The primary owns the complete payload and therefore remains the
-			// sole compatibility facade whenever the frozen real-shape topology
-			// is not ready for this traversal.
 			payload = &metadata->nativePayload;
 		}
 		if (payload)
@@ -6178,7 +5531,7 @@ namespace fonthook::vectorfont
 			failure = NativeA8FallbackReason::None;
 		}
 		else
-			failure = PrepareNativeA8Group(shape, *metadata, *payload);
+			failure = PrepareNativeA8Facade(shape, *metadata, *payload);
 
 		if (failure == NativeA8FallbackReason::None)
 		{
@@ -6205,6 +5558,12 @@ namespace fonthook::vectorfont
 						commandSpanIndex, draw);
 				}
 			}
+			if (commandHandled && metadata->backend
+				== FreeTypeShapeBackend::SingletonFacade)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SingletonFacadeSpanFrame);
+			}
 			if (!commandHandled)
 			{
 				draw = {};
@@ -6216,6 +5575,12 @@ namespace fonthook::vectorfont
 						frameEntry.singlePacketCommandIndex);
 				if (!directShapeHandled)
 				{
+					if (metadata->backend
+						== FreeTypeShapeBackend::SingletonFacade)
+					{
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							SingletonFacadePacketLoopFrame);
+					}
 					draw = DrawNativePacketSet(pass, currentPass,
 						setupDrawmode, shape, *sourcePayload,
 						kInvalidNativeA8CommandIndex);
@@ -6228,7 +5593,7 @@ namespace fonthook::vectorfont
 				{
 					state.loggedRenderPassImmediatelyHit = true;
 					gLog.FormattedMessage(
-						"tnvse_freetype_native: native Tile group route hit shape=%p font=%u pass=%u packets=%u ranges=%u route=%s",
+						"tnvse_freetype_native: native Tile facade route hit shape=%p font=%u pass=%u packets=%u ranges=%u route=%s",
 						shape, metadata->fontId, currentPass,
 						static_cast<UInt32>(
 							sourcePayload->packetShaders.size()),
@@ -6250,7 +5615,7 @@ namespace fonthook::vectorfont
 					sourcePayload->preparedGeneration,
 					draw.operation, draw.result);
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: pass-constant ownership fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-native-group",
+					"tnvse_freetype_native: pass-constant ownership fault operation=%s hr=0x%08X register=%d shape=%p font=%u generation=%u drewPacket=%u action=suppress-native-facade",
 					draw.operation, static_cast<UInt32>(draw.result),
 					draw.mismatchRegister, shape, metadata->fontId,
 					sourcePayload->preparedGeneration,
@@ -6258,6 +5623,12 @@ namespace fonthook::vectorfont
 			}
 			if (draw.drewPacket)
 			{
+				if (metadata->backend
+					== FreeTypeShapeBackend::SingletonFacade)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SingletonFacadePartialFault);
+				}
 				MarkNativeA8RuntimeFault(*metadata, *sourcePayload,
 					draw.failure);
 				return;
@@ -6282,7 +5653,7 @@ namespace fonthook::vectorfont
 			if (State().renderPassImmediatelyHookInstalled)
 			{
 				State().renderPassImmediatelyHookInstalled = false;
-				InvalidateAllVirtualStockBindings();
+				InvalidateAllSingletonFacadeBindings();
 			}
 			if (!State().loggedRenderPassImmediatelyHookConflict)
 			{
@@ -6295,12 +5666,12 @@ namespace fonthook::vectorfont
 		if (State().renderPassImmediatelyHookInstalled)
 		{
 			State().renderPassImmediatelyHookInstalled = false;
-			InvalidateAllVirtualStockBindings();
+			InvalidateAllSingletonFacadeBindings();
 			if (!State().loggedRenderPassImmediatelyHookConflict)
 			{
 				State().loggedRenderPassImmediatelyHookConflict = true;
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: RenderPassImmediately native route was replaced; marked groups will be suppressed");
+					"tnvse_freetype_native: RenderPassImmediately native route was replaced; marked facades will be suppressed");
 			}
 			return false;
 		}

@@ -600,14 +600,14 @@ the individual effect and fill colors can no longer be changed independently
 after the profile is built.
 
 Each visible aggressive glyph therefore contributes exactly one quad. A
-single-page batch uses one stock `NiTriShape`; a multi-page batch uses one stock
-shape per physical atlas page under the same destination `NiNode`. Companion
-page shapes inherit the primary shape's final transform, scissor, Tile
-color/alpha/fade, alpha/material, and object flags after the stock caller has
-configured it; only each page's Tile shade object, source texture, texture path,
-and texturing property remain page-specific. No four-mask A8 geometry,
-per-layer packet construction, or custom ARGB facade remains in a complete
-aggressive profile. Per-glyph precomposition cannot reproduce SDF's global
+single-page batch can remain one stock `NiTriShape`. When a complete aggressive
+artifact spans multiple physical pages and the native renderer is available,
+it becomes one ARGB facade whose payload contains one packet per required page;
+no page sibling is attached to the destination `NiNode`. If the native renderer
+is unavailable, the compatibility fallback collapses the batch to the existing
+single-page stock ARGB route. `precomposedArgb` ranges remain coverage/ARGB data
+with `usesSdf=false`; they never enter the DistanceField cache or validation
+domain. Per-glyph precomposition cannot reproduce SDF's global
 effect-before-Fill ordering where neighbouring glyph effect rectangles overlap,
 and stock one-texture modulation cannot independently preserve live Fill RGB
 and fixed effect RGB in the same pixel rectangle. These are retained one-quad
@@ -627,14 +627,12 @@ generation mismatch, or invalid snapshot identity applies the same batch-wide
 fallback; direct and bitmap records are never mixed in one submission.
 
 Every native text artifact still defines packets grouped by layer, atlas page,
-shader class, and sampling contract. A compatibility submission represents the
-complete artifact with one facade in the stock Tile alpha list and expands it
-after UI sorting. Once the artifact is sealed in the static vertex arena, the
-virtual-stock backend can instead represent every frozen packet with a real
-`NiTriShape`. Those shapes enter the original accumulator, original Tile
-ordering, original `TileShader::UpdateConstants`, and original
-`RenderImmediate`; the plugin no longer replaces a complete facade descriptor
-or selects a proxy shape for each such packet.
+shader class, and sampling contract, but it always contributes exactly one
+facade to the stock Tile alpha list. The facade is the artifact's single Sort
+anchor. After UI sorting, tNVSE replays the currently selected ordinary or
+Composite packets consecutively at that anchor. A one-packet artifact may bind
+the facade directly; a multi-packet artifact uses a retained command span or
+the compatibility packet loop. Packet count is not shape count.
 
 Both forms use `TileShader`, the renderer-owned native declaration, and
 Gamebryo `NiGeometryBufferData`. There is no private D3D draw path or
@@ -821,187 +819,52 @@ and wrappers reject. The D3D declaration expands `D3DCOLOR` to the vertex
 shader's normalized `float4 COLOR0`; packet-uniform layer modifiers remain in
 pixel constants. Compared with a four-float base color, the packed color field
 still saves twelve bytes per vertex without adding packets or draw calls. After
-the stock Tile list has been prepared, tNVSE preflights compatibility facades
-and virtual-stock primaries, deduplicates their immutable text artifacts, and
-promotes all eligible artifacts with one static-VB Lock/copy
-sequence/Unlock. Tiles are not persistently merged: stock depth/order,
+the stock Tile list has been prepared, tNVSE snapshots the actual source-list
+order and acquires the unique facade metadata owners in one batch. It
+deduplicates immutable artifacts and promotes eligible data with one static-VB
+Lock/copy/Unlock sequence. Tiles are not persistently merged: stock depth/order,
 per-Tile transform, scissor, alpha, and shader constants remain independent.
-The retail and symbolized test builds both append accepted Tile geometry to the
-accumulator and then apply the same depth-only unstable quicksort. In retail,
-`BSShaderAccumulator::FinishAccumulating_Tiles` at `0xB65E80` loads virtual
-slot `0xA4`, clears `m_pGeometryList` at `0xB65E95`, calls
-`NiAlphaAccumulator::Sort` (`0xA9B570`), and enters the backwards
-`RenderAlphaGeometry` traversal at `0xB65EA0 -> 0xB64F90`. The symbolized
-August 22 test build confirms the same sequence in
-`FinishAccumulating_Interface` (`0x82260438`), the interface-depth source
-`world.translate.y` in `NiAlphaAccumulator::Sort` (`0x8221B778`), the exact
-pivot/partition recursion in `SortObjectsByDepth` (`0x82276BC8`) and
-`ChoosePivot` (`0x82276CA0`), and the backwards traversal at `0x8223F1D0`.
 
-tNVSE now treats the successfully committed stock `AddTail` ordinal as the
-original-order anchor. It records an ordinal only when the predecessor grows
-`m_kItems` by exactly one and the new tail is the same facade. The nine stock
-bytes at `0xB65E95` are replaced as one guarded block by a call that receives
-the already loaded sort target in EDX. The fast path is entered only when that
-target is still the retail stock sort, interface sorting is active, every depth
-is finite, and all facade identity, registration-cycle, duplicate, contiguous
-Virtual-stock block, slot, and item-count proofs succeed. A changed call site or
-vtable predecessor is never overwritten or bypassed.
+The retail and symbolized test builds both sort geometry and depth only. In
+retail, BSShaderAccumulator::FinishAccumulating_Tiles at 0xB65E80 clears
+m_pGeometryList, calls NiAlphaAccumulator::Sort at 0xA9B570, and enters the
+backwards RenderAlphaGeometry traversal at 0xB65EA0 -> 0xB64F90. The
+symbolized August 22 test build confirms the interface path at 0x82260438, the
+depth source and Sort body at 0x8221B778, pivot/partition helpers at
+0x82276BC8/0x82276CA0, and reverse traversal at 0x8223F1D0.
 
-An attempted FreeType registration that did not commit an exact `AddTail`
-ordinal no longer rejects the anchor by itself. It is ignored as a candidate,
-then the source-wide identity pass still requires every FreeType facade that
-actually entered the list to have one exact committed ordinal. This removes
-culled and duplicate attempts from the proof without allowing an untracked
-facade into the reordered output.
+NativeA8RegisterObject is intentionally thin. On an audited code image its
+normal FreeType route performs only cheap argument checks, unchecked hook-byte
+comparisons, and an immediate call to the saved Tile predecessor; it returns
+the predecessor result unchanged. It performs no metadata lookup, visibility
+test, topology mutation, lock, allocation, or per-call global atomic update.
+VirtualQuery is reserved for the cold audit of a newly observed hook image.
+Registration therefore never clips or merges a facade and preserves third-party
+hook chaining, AddTail order, and duplicate-registration semantics.
 
-The anchored sorter copies the `AddTail` list directly into the engine arrays
-while carrying a sidecar ordinal through a decision-equivalent copy of the
-stock pivot, partition, swap, recursion, and tail-iteration decisions. It then
-uses linear ordinal/run tables to change only a contiguous exact-equal-depth run
-that contains both stock and FreeType geometry. Logical blocks are stored by
-descending registration ordinal because the renderer consumes the array
-backwards; members of one multi-slot Virtual-stock block remain ascending in
-the stored array, so reverse submission still draws slot 0 through primary.
-Pure-stock, pure-FreeType, and unequal-depth permutations remain exactly those
-produced by the retail quicksort. This removes the normal path's post-sort list
-snapshot, pointer hash construction, sorted-to-registration reconstruction,
-and per-run `std::sort`.
+Immediately before Sort, CaptureSourceRegistrationOrder snapshots the actual
+source list in AddTail order and assigns an occurrence ordinal to every entry.
+The anchored sorter applies a decision-equivalent copy of the retail depth
+quicksort while carrying that ordinal sidecar. Only exact-equal-depth runs that
+contain both stock and FreeType geometry may be rewritten, and they are stored
+in descending source ordinal because the renderer consumes the array backwards.
+Every FreeType artifact is one painter-order block regardless of packet count.
+Pure-stock, pure-FreeType, and unequal-depth permutations remain the retail
+result. A duplicate facade remains a valid stock occurrence but is ineligible
+for a consumable direct command, span, or cross-text batch.
 
-The sort hook now separates the retail-sort proof from the stricter FreeType
-topology proof. Once the stock predecessor, source list, finite depths, storage,
-and item count prove that the decision-equivalent quicksort is safe, its exact
-registration-ordinal sidecar remains authoritative even if the later topology
-proof fails. For ordinary facades and true Virtual-stock singletons, a
-validation pass first proves that sidecar to be a permutation and identifies
-only changed exact-equal-depth mixed runs; a second pass commits those compact
-runs in original painter order. This path does not call the predecessor again
-and does not build the compatibility source snapshot, pointer hash, full block
-table, or sorted-to-registration reconstruction. The two-pass commit leaves the
-stock-equivalent array untouched if any validation fails.
+The source list, finite depths, storage, metadata identity, occurrence coverage,
+and final ordinal permutation must all be proved before a rewrite is committed.
+An envelope failure invokes the already loaded Sort predecessor; a later proof
+failure leaves or recovers the exact stock-equivalent arrays. No group, slot,
+contiguity, follower, or block-repair proof exists. The sort diagnostics report
+gate, count, storage, source, depth, metadata, registration, facade, coverage,
+and apply failures. The thin-registration line retains sample_rate=256 and
+sampling=continuous_tls and reports facade topology/fallback plus occurrence
+fallback without group fields.
 
-A real multi-slot Virtual-stock group is deliberately excluded from this
-single-block sidecar path. It retains the older conservative post-sort repair,
-including its primary/follower contiguous-block proof. Only failures of the
-retail-sort envelope itself (non-stock predecessor, non-interface sort, invalid
-source list, non-finite depth, item/storage limit) call the EDX predecessor.
-An uncertain topology can therefore never be promoted into a guessed block or
-anchored frame.
-
-The initialization line reports `sortAnchorHook=1` when the guarded call-site
-patch is current. The aggregate `tnvse_freetype_sort` line reports
-`original_anchor_sorts`, `anchor_items`, changed `anchor_mixed_runs`, and
-`anchor_fallbacks` (split into non-stock predecessor and proof failures);
-`mixed_equal_depth_runs_restored`, `items_restored`, and `restore_rejected`
-then describe only compatibility-path work. `tnvse_freetype_sort_proof` reports
-stock-equivalent sorts/items, ordinal-sidecar recoveries and changed runs,
-multi-slot legacy handoffs, and the exact failed proof stage: gate, count,
-storage, source, depth, metadata, registration, group, singleton, coverage, or
-final apply.
-
-The Tile registration callback owns the earliest per-facade alpha gate. It runs
-only during the normal, non-nested accumulator cycle and requires the callback's
-`NiPropertyState`, shader, shade property, alpha property, and material property
-to be the facade's exact current objects. Exact zero Tile/material alpha is
-accepted only with the same provably no-op blend contract used by the later
-submission check. If that proof succeeds, the callback returns handled without
-calling its chained predecessor: the facade never reaches stock `AddTail`, depth
-sorting, sorted-frame construction, preflight/upload, command construction, or
-instancing admission. The culled attempt is also absent from tNVSE's pending
-original-order anchor candidates.
-
-Scissor is deliberately not evaluated in `RegisterObject`. The Tile scissor
-property is live there, but TileShader has not yet established an authoritative
-interface view/projection for that entry; combining the property with the
-renderer matrices from another pass can falsely prove visible list text outside.
-Scissored entries therefore remain fail-open at registration and continue to the
-existing list-subtree gate and the pre/post-slot-31 whole-payload proofs. Every
-property identity mismatch, nested traversal, or malformed/non-finite alpha
-input also fails open. Kept facades retain the sorted exact-zero check, so a
-state that becomes transparent later in the same traversal can still be
-suppressed.
-
-Long clipped lists also have a conservative subtree gate before scene traversal
-can register any of the row's geometry. It is installed only on an exact retail
-`NiNode` produced for a `TileRect`, `TileImage`, or `TileText` that already has a
-nonnegative integral `listindex`, enabled `clips`, and a finite ancestor
-`clipwindow`. An existing executable MakeNode hook is retained as the
-predecessor. An unreadable or non-executable entry, failed write verification,
-custom output-node vtable, or missing reciprocal `Tileptr` extra data leaves the
-candidate node unmodified.
-
-The hot visible-row path re-reads the live traits and compares only the row's
-finite positive vertical interval with its current clipwindow, expanded by 96
-UI units. An overlapping interval returns immediately to stock and does not
-walk the subtree. Only a root already outside that guard band starts the deep
-proof. The exact integer list index remains the installation classifier; on an
-already-proxied node the live proof accepts any finite nonnegative value because
-the index is not a geometric input. The deep proof is bounded to 32 levels and
-256 Tiles and still requires an unrotated identity-zoom chain through the
-clipwindow, finite nonnegative heights and absolute positions, reciprocal
-Tile/node identities, intact Tile parent links, and every Tile-owned live child
-node to remain below the candidate scene node. A child with a scene node must
-have a supported drawable Tile type; an unfamiliar logical container with no
-scene node may contribute its completely proved children but cannot contribute
-an assumed bound. App-culled branches contribute no bound. The root interval
-and identity already established before recursion seed the deep union, so the
-proof does not repeat root trait, Tileptr, or scene-parent validation. The
-complete union must remain outside the padded clip interval; limits,
-transforms, malformed links, missing bounds, or an injected Tile that extends
-back toward the window all fail open. No visibility result or Tile pointer is
-cached across frames.
-
-An exact root `NiNode::GetAppCulled()` bit returns before the same stock
-`OnVisible` traversal that would honor it; `app_culled` reports this separate
-engine-authored case. No Tile trait is interpreted as an equivalent app-cull.
-
-A proved miss returns before the stock `NiNode::OnVisible`, so the complete row
-avoids culling traversal, `RegisterObject`, accumulator insertion/sorting,
-FreeType preflight, and command construction. A kept row calls the saved
-predecessor unchanged. This gate neither inserts nor reorders geometry, so the
-original-order anchor and its conservative compatibility fallback remain the
-only paths that alter equal-depth sort output for MapMO/UIO and other injected
-elements.
-
-The final per-facade boundary remains independent and exact. The symbolized test
-build shows `Tile::UpdateClipwindows` propagating the `clipwindow` relationship
-and `Tile::ReClipChildren` resolving it, together with each child's `clips`
-trait, into the live `TileShaderProperty` scissor. Retail PC
-`TileShader::SetupGeometryConstants` at `0xBCA980` consumes that property,
-publishes the current model transform, and installs the hardware scissor;
-`TileShader::PostGeometry` at `0xBCAC60` restores scissor/stencil state. The
-native path never uses the independent `BSScissorTriShape` tail as a substitute
-for resolved Tile state.
-
-The retail matrix path is reproduced rather than inferred from the renderer's
-previous world matrix. `0xBCA980` calls `0xE6FBB0` with
-`currentPass->pGeometry->m_kWorld`, and `0xE6FBB0` calls
-`NiD3DUtility::GetD3DFromNi` at `0xB71A40`. For a Ni rotation `R`, uniform scale
-`s`, translation `t`, and renderer position adjustment `p`, the PC D3D matrix
-written by that function is
-
-```text
-W = [ sR00 sR10 sR20 0 ]
-    [ sR01 sR11 sR21 0 ]
-    [ sR02 sR12 sR22 0 ]
-    [ tx-px ty-py tz-pz 1 ]
-```
-
-The symbolized Xenon test build independently names
-`TileShader::SetupGeometryConstants` at `0x82250E58`, its
-`NiXenonRenderer::SetModelTransform` call at `0x8224ADF8`, and
-`NiD3DUtility::GetD3DFromNi` at `0x8224AE08`, including the same uniform-scale
-and `NiRenderer::PosAdjust` contract. Tile's vertex constant map requests
-`WorldViewProjTranspose`; retail `NiD3DShaderConstantMap` at `0xE85D10`
-constructs `(W * View) * Projection` with two `D3DXMatrixMultiply` calls and
-then transposes it. All 16 decompiled shader packages contain the same three
-Tile position programs (`TILE1000/1001/1002`): VS c0-c3 are four `dp4`
-operations against the input position. The pre-slot proof uses the same world
-layout, the same two D3DX calls and association order, and the untransposed
-matrix columns that those four shader rows represent.
-
-For facades not removed at registration, tNVSE still arms a thread-local
-visibility scope around a guarded native pass. A
+Visibility remains entirely after registration. For each sorted facade tNVSE
+arms a thread-local visibility scope around a guarded native pass. A
 fully classified Standard-lite pass first proves exact current-pass geometry,
 property, payload, renderer, and retail slot-31 identity. It can then test the
 immutable whole-text bound against the already-resolved live scissor before
@@ -1029,23 +892,16 @@ viewport mismatch, the retail special scissor-scaling mode, a replaced slot 31,
 pass/property/payload/renderer/device identity mismatch, or an edge within the
 numeric safety slack all keep the original path. Command-buffer execution
 treats either kind of proved miss as a successful consumed command, and a
-Virtual-stock singleton marks its frame `Culled` rather than reporting a
-resource fault. A non-fused multi-slot group tests each physical slot
-independently. Its fused retained span deliberately fails open because separate
-stock shells can carry independently live Tile properties; one shell's scissor
-is not accepted as proof for every follower.
+singleton facade marks its frame `Culled` rather than reporting a resource
+fault. The proof uses the complete artifact bound and the one live facade state
+before any packet command, upload, or draw, so it applies equally to single-
+and multi-packet payloads.
 
 The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
 `scissor`, `scissor_pre31`, `scissor_post31`, `preflight_skipped`,
 `packets_saved`, and `vertices_saved`. `scissor` is the total and the two phase
-counters partition successfully consumed scissor culls. The separate
-`tnvse_freetype_pre_accumulator_cull` line reports registration `checks`, exact
-property-state `eligible` cases, total `culled`, exact-zero `alpha`,
-`scissor_deferred`, and conservative `fail_open` outcomes. Registration
-`culled` must equal `alpha`: scissored entries are counted as deferred but are
-never rejected at this phase. Registration culls do not increase
-`preflight_skipped` because they never become sorted frame entries. Remaining
-alpha culls can increase that counter. The pre-slot path avoids all six Tile
+counters partition successfully consumed scissor culls. The thin registration
+route performs no visibility work. The pre-slot path avoids all six Tile
 callbacks and geometry setup; it also avoids optional slot 68 on a non-first
 pass. The post-slot fallback saves only the driver submission. `app` and `clip`
 remain reserved fail-open compatibility counters. In a clipped Tweak/list
@@ -1127,114 +983,67 @@ the pass, and clears all borrowed fields before invoking the retail
 non-deleting destructor. This path performs no per-draw heap allocation and is
 reported by `synthetic_buffers`.
 
-### Virtual-stock FreeType shapes
+### Multi-packet singleton facades
 
-The virtual-stock backend freezes the ordinary or Composite packet topology
-when the text shape is created. Composite is selected only when every required
-profile resolves in the current shader generation; otherwise the ordinary
-topology is frozen. A one-packet artifact returns one real shape.
-For a multi-packet artifact, TileText capture and RichText rendering expose the
-destination `NiNode`; tNVSE returns the last packet as the ABI primary and
-inserts the remaining shapes immediately after its actual child index in
-reverse packet order. This avoids first-available child holes and keeps
-multiple captured text groups contiguous without reordering unrelated children.
-Every shape has the complete text bound and the same sort state. The retail
-sorted Tile routine at `0xB64F90` traverses its already prepared item array
-from the last entry to the first, so a contiguous group is
-drawn as packet 0 through packet N without changing primitive order. Unknown
-callers, more than 64 packets, a missing parent, insufficient CPU budget, or a
-different topology selected by shader preflight retain the one-facade route.
-There is no global `NiNode::AttachChild` hook.
+The retail 1.4.0.525 path establishes the architectural boundary used here:
+FinishAccumulating_Tiles at 0xB65E80 calls NiAlphaAccumulator::Sort at
+0xA9B570, then RenderAlphaGeometry at 0xB64F90 walks the prepared items in
+reverse order. The matching test build symbols and disassembly at 0x82260438,
+0x8221B778, 0x82276BC8/0x82276CA0, and the reverse loop at 0x8223F1D0
+confirm the same contract. The stock accumulator and Sort stage know only the
+registered geometry pointer and its depth. Atlas page, shader, layer, and
+ordinary-versus-Composite packet boundaries are tNVSE payload state.
 
-A one-packet artifact uses the dedicated `VirtualStockSingleton` backend. Its
-derived metadata and backend state share one `make_shared` allocation and the
-sole slot, registration proof, prepared binding, and command-build record are
-embedded values. It creates no `VirtualStockShapeGroup`, slot or command
-vector, registration-index array, group-registry node, weak group owner, or
-group mutex. Creation also bypasses the temporary packet-shape vector. The
-ordinary metadata registry remains the lifetime authority for the real shape.
+Consequently every native FreeType artifact creates and returns exactly one
+NiTriShape. CreateDirectNativeShape builds that shell from ordinary packet 0,
+then replaces its model bound with the complete artifact bound. Packet count
+is retained only in NativeA8ShapePayload. There is no 64-shape limit, parent
+or TileText capture requirement, packet-shape vector, primary/follower role,
+group registry, sibling attachment, or sibling lifetime. One facade is one
+stock Sort anchor; it is not a promise of one packet or one draw.
 
-For multi-packet artifacts, the group primary owns the immutable payload,
-atlas references, and complete
-facade fallback. Shape metadata keeps a raw group identity plus a weak owner;
-locking that owner replaces a global metadata-map lock and lookup while still
-rejecting an expired, unpublished, or pointer-reused group. Followers hold no
-strong group ownership. Before registration the primary copies its current
-transform, object flags, hardware scissor, overlay RGB, Tile and material
-alpha, and blend/cull/stencil properties and full world bound to the
-page-specific siblings, then performs the
-conservative whole-group visibility test once. All slots must be registered
-into the same accumulator in descending slot order at consecutive final item
-positions. The per-shape registration hook records submission order only:
-stock's Tiles registration function may insert at a sorted position rather
-than append after the previous item. Immediately before the stock sorted
-traversal, tNVSE therefore scans the completed accumulator once with a
-pointer-only lookup and resolves every virtual slot's unique final position. A
-missing, duplicate, reordered, or non-contiguous slot prevents direct
-publication: only the primary executes the compatibility packet set and every
-follower is skipped. This final-layout scan does not build facade frame
-entries, acquire per-item metadata ownership, or run compatibility preflight
-for frames whose tracked FreeType objects are all virtual-stock primaries.
-The singleton registration route is render-thread serialized and records the
-stock registration result directly. It rejects a second registration in the
-same accumulator cycle, so it needs neither the group lock nor the completed
-accumulator slot lookup/layout scan. The sorted traversal retains the existing
-metadata owner, validates the exact shape identity and registration cycle, and
-publishes the singleton only after its payload and sole slot are ready.
+SingletonFacade metadata embeds the only direct binding slot. Construction
+does not freeze packet topology. Each sorted-frame preflight selects the
+ordinary or Composite packet set from the current configuration, shader
+generation, optional shader availability, atlas epoch, and resource state.
+Composite may therefore change from multiple packets to one packet after a
+shader reload, or fall back in the opposite direction, without rebuilding the
+facade. Disabling structural fast paths disables direct structural reuse but
+does not restore a multi-shape representation. If dedicated metadata or direct
+binding setup fails, the same facade remains on the compatibility packet-loop
+route; no sibling shape is created.
 
-Each direct slot owns a small `NiGeometryBufferData`/`NiVBChip` descriptor but
-does not own its D3D buffers. The descriptor points at
-`payloadBaseVertex + packet.firstVertex` in either the shared immutable static
-arena or the traversal-sealed dynamic arena, plus the canonical INDEX16 buffer.
-Virtual-stock now reuses the same frame-packet residency resolver as retained
-commands instead of rejecting an otherwise valid dynamic upload as
-`static_not_ready`. A dynamic binding records the sorted lease upload epoch and
-is valid only while that lease prevents ring overwrite or resource release.
-The sorted lease resolves the singleton directly or resolves every multi-slot
-group entry first, and publishes the backend only after
-all textures, shaders, generations, atlas epochs, item positions, residency
-kinds, upload epochs, and ranges agree. During its Tile callback the
-shape changes only its packet bound, folds the artifact origin into its live
-transform, and temporarily disables alpha test; descriptor, declaration,
-shader, texture, scissor, color, alpha, blend, cull, and stencil state remain
-the real shape's state. The normal pixel shaders and pass-local constant
-ownership remain unchanged. A stable slot is fully validated and reused
-without rewriting its descriptor; only an actual resource, atlas, shader, or
-descriptor change performs a rebind. Atlas validation includes both the
-texturing-property wrapper and the Tile shade property's page-specific source
-texture.
-Multi-slot binding resolution uses per-thread fixed-capacity scratch whose used entries
-are overwritten before consumption, avoiding zero-initialization of 64 packet
-bindings for each group. A stable descriptor is checked once during sorted
-preparation; a changed descriptor is checked after publication. The direct
-draw path retains the primary payload owner only for follower slots and reads
-the immutable packet template in place, avoiding a shared-owner increment and
-packet copy for the usual primary draw. The singleton reads its embedded slot
-and metadata-owned payload directly. Periodic counters distinguish
-`virtual_stock_static_hits` from `virtual_stock_dynamic_hits`.
+The source and sorted accumulator lists prove occurrences of the facade itself.
+A facade that appears exactly once may own a consumable direct command, command
+span, or cross-text instancing entry. A repeated geometry receives no
+consumable command: every stock occurrence executes the complete packet loop,
+preserving the original duplicate-registration semantics. Equal-depth
+painter-order anchoring continues to use the source-list ordinal proof, and
+whole-artifact clip/scissor culling still completes before command recording,
+upload, or draw.
 
-Static/dynamic-buffer replacement, dynamic upload-epoch change, device reset,
-shader reload, and atlas epoch changes revoke every borrowed descriptor before
-the underlying resource can be overwritten or released. Shape destruction
-restores the original shell buffer and shader before deleting the plugin-owned
-descriptor. A primary destroyed early retires the group so surviving followers
-cannot submit it. Singleton destruction retires its embedded state without a
-group-map removal. A virtual backend failure falls back or suppresses that group
-and does not fault the complete FreeType shader generation; failure to restore
-shared shader constants retains the existing generation-fault rule.
-If validation fails before any packet in the group has drawn, the descriptors
-are restored and the primary executes the complete facade in that same
-traversal. Once any packet has reached `RenderImmediate`, the group is never
-replayed because doing so could duplicate already drawn layers.
+When the active packet count is one, the facade may use its persistent
+descriptor and DirectFacadeSinglePacket command. When it is greater than one,
+the shell remains restored and AddNativeA8FrameCommandSpan records the packets
+in payload order; retained bridge replay executes them consecutively at the
+single facade position. With the command buffer disabled, or when command
+construction fails before submission, DrawNativePacketSet performs the same
+ordered packet loop. A failure before any packet reaches the driver may replay
+the complete packet set through the safe fallback. Once any packet has reached
+the driver, the artifact is faulted or suppressed and is never replayed, which
+prevents duplicate layers.
 
-This backend removes facade expansion, per-packet proxy selection, repeated
-descriptor replacement, and unnecessary full-list preflight work. It does not
-merge packets or facades: one packet still produces one
-`DrawIndexedPrimitive`. It adds no shader file, cache-format field, INI option,
-NPOT texture, or external API. The diagnostic line beginning
-`tnvse_freetype_perf: virtual_stock_` reports candidates, singletons, groups, shapes,
-draws, static hits, rebinds, revokes, facade fallbacks, skipped followers,
-saved preflight/proxy work, and categorized fallback reasons.
+Direct descriptors borrow generation- and upload-epoch-bound buffers and are
+restored before resource replacement, device reset, shader reload, atlas epoch
+change, or shape destruction. Multi-packet facade mode owns no per-packet
+geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
+facades, total payload packets, single- and multi-packet artifacts, direct/span/
+packet-loop frames, topology switches, fallbacks, partial faults, and the
+invariant sibling_shapes=0. The build identity is runtime-log-prune-v24. It
+retains the v23 shell-shader restoration fix while removing the resolved
+missing-text lifecycle registry, scene-tree probes, per-stage atomic updates,
+and per-sort full-registry audit. It changes no NVSE export, INI key, shader
+ABI, font-cache format, or save format.
 
 ### Retained text command buffer
 
@@ -1264,7 +1073,7 @@ instancing over eligible command-buffer singletons. It has no effect unless
 `bEnableFreeTypeFontCommandBuffer=1`, is disabled by default, and does not
 replace the ordinary native fallback. The final accumulator traversal is
 recorded with explicit barriers for stock, culled, multi-packet, duplicate,
-failed, and Virtual-stock multi-shape entries. Only adjacent members with a
+and failed facade entries. Only adjacent members with a
 finite, bitwise-identical accumulator depth and identical program, atlas,
 sampling, blend, alpha-test, drawmode, scissor, stencil, generation, resource,
 render-target, and viewport proofs can share a batch.
@@ -1336,8 +1145,9 @@ stays inside the existing accumulator render call and does not introduce a
 second renderer lock or any Present/Reset hook.
 
 With rendering diagnostics enabled, `tnvse_build_identity` records the actual
-loaded DLL path, size, write time, and an FNV-1a file fingerprint. Bounded
-`tnvse_freetype_native_draw_diag` pairs compare selected long-text draws before
+loaded DLL path, size, write time, and an FNV-1a file fingerprint. The resolved
+missing-text lifecycle tracer is no longer compiled into the runtime path.
+Bounded `tnvse_freetype_native_draw_diag` pairs compare selected long-text draws before
 and after direct-draw-lite or slot 27, including stream frequencies, both
 streams, IB/declaration, VS/PS, and the device's VS c0-c3/PS c0 against a freshly
 computed retail-equivalent WVP and TileColor. The paired
@@ -1427,7 +1237,7 @@ non-owning pointer to it. Stage 1 therefore checks the live `RenderPass`
 envelope plus that retained identity instead of reconstructing a local dispatch
 and rereading the shader vtable, renderer/device, model data, and hook vtable on
 every submission. Stage 2 accepts the current buffer already proved by direct
-or Virtual-stock binding; only an unproven compatibility caller performs the
+singleton-facade binding; only an unproven compatibility caller performs the
 full VB/IB/declaration/range comparison. Stage 3 mirrors the confirmed standard
 order: publish renderer property/effect state; invoke slots 30, 31, conditional
 32/33/68, optional 34, geometry submission, and slot 35. Its compatibility path
@@ -1533,7 +1343,7 @@ diagnostics and crash analysis. Destruction emits
 `metadata-delete-integrity-failure` only when registry identity, pointer,
 allocation ID, self pointer, or shape identity validation fails. Integrity
 failures are logged even when verbose rendering logs are disabled (capped at 64
-entries); unsafe retained/Virtual-stock cleanup is then skipped so the audit
+entries); unsafe retained/singleton-facade cleanup is then skipped so the audit
 itself does not dereference a mismatched object.
 
 Each generation-owned shader profile owns one immutable compiled packet
@@ -1551,8 +1361,8 @@ never escape into Tile-retained data. Atlas/resource-only preflight refreshes
 reuse the dispatch; Tile destruction, topology/program replacement, shader
 generation changes, or hard retained invalidation clear or replace it.
 
-After registration, preflight, static/dynamic VB residency, and Virtual-stock
-topology are frozen, each sorted traversal builds a temporary command table
+After source-occurrence proof, preflight, static/dynamic VB residency, and
+active packet-topology selection, each sorted traversal builds a temporary command table
 containing only validated non-owning views plus frame-local buffer ranges. It
 is cleared before the ring lease ends. Command vectors, per-shape
 program-pointer arrays, and Tile-retained packet/run capacity participate in
@@ -1561,16 +1371,13 @@ slots and 8192 run/span slots between traversals and releases all retained
 capacity when the aggregate CPU budget remains exceeded; Tile-retained
 capacity is released with its owning Tile metadata.
 
-Compatibility facades retain their original position relative to non-FreeType
-items. A Virtual-stock group can fuse only when every slot is registered
-exactly once at consecutive final accumulator positions and each adjacent
-packet has byte-identical live Tile, transform, scissor, alpha, blend, cull,
-and stencil state. Traversal reaches slot 0 first; that leader executes the
-span, while followers consume only a token- and geometry-validated skip marker.
-A one-packet facade or dedicated Virtual-stock singleton still performs one
-stock bootstrap through its direct command lookup. The singleton command keeps
-the metadata identity and points at the embedded prepared draw; it does not
-retain a group identity or allocate span/run topology.
+Every facade retains its one original position relative to non-FreeType items.
+A multi-packet command span contains one facade, one metadata identity, one
+payload, and packet/run views in payload order. The reverse stock traversal
+reaches the facade once and the retained bridge submits the complete span there;
+there is no leader slot or follower skip marker. A one-packet singleton facade
+performs one stock bootstrap through its direct command lookup. Its command
+points at the embedded prepared draw and allocates no span/run topology.
 
 Full validation is owned by a traversal-local safe execution segment rather
 than by each logical text span. The first command after traversal activation,
@@ -1763,11 +1570,10 @@ the command-segment boundary.
 Packet admission now produces a short-lived binding proof before entering the
 immediate callback. A direct facade proof comes from the binding scope that has
 just installed the command's exact descriptor; an ordinary retained proof comes
-from `PrepareNativeA8RingPacket`; and a Virtual-stock singleton reuses the
+from `PrepareNativeA8RingPacket`; and a direct singleton facade reuses the
 complete live slot/buffer/atlas check already required by its direct route.
-Fused Virtual-stock commands are validated as one contiguous execution range:
-the segment/token/renderer guard is paid once, then the exact live geometry
-binding is checked once for each distinct slot in a cache-friendly loop.
+Each packet in a multi-packet span uses the ordinary retained ring proof for
+the same facade anchor; no distinct stock geometry slot is involved.
 
 With that proof, each immediate callback performs only the irreducible
 execution-state, renderer/geometry identity, and acquire-load mutation-epoch
@@ -1776,21 +1582,19 @@ VB/IB/declaration descriptor, and the standard-pass-lite dispatcher does not
 repeat the already proven binding comparison. A route without a binding proof
 retains the complete packet validator. Device reset, shader publication or
 fault, atlas mutation, ring resource replacement/discard, shape destruction,
-Virtual-stock binding invalidation, nested traversal, and every unclassified
+singleton-facade binding invalidation, nested traversal, and every unclassified
 non-FreeType transition advance one of the epochs. A classified stock Tile or
 successful instancing batch instead retains the segment only after the cheap
 post-boundary context guard succeeds. A mutation during a span therefore faults
 its next packet before drawing. A failure before any draw
 re-enters the unchanged current path; after any packet reaches the driver, the
-span is marked faulted and followers are consumed without replay, preventing
-duplicate layers.
+span is marked faulted and the facade is not replayed, preventing duplicate
+layers.
 
 The periodic command line reports recorded spans/packets, span hits/misses,
 retained bridge draws, guarded native replays, saved stock bootstraps, fused
-Virtual-stock spans/followers, arbitrary-range direct replays, legacy
-per-span-full/light/render-target validation counts, packet epoch guards,
-full packet-state validation elisions, Virtual-stock range validations and
-their packet coverage, successful execution segments, segment full
+direct-single replays, light/render-target validation counts, packet epoch
+guards, full packet-state validation elisions, successful execution segments, segment full
 validations/reuses/invalidations, accepted stock-Tile and instancing bridges,
 rejected bridge guards, retained-program hits/misses, and fallbacks by token,
 generation, atlas, resource, topology, hook, nesting, render target, and state.
@@ -1818,15 +1622,15 @@ segments/releases, `snapshot_gets_elided == 2 * constant_ownership_segments`,
 `state_shadow_driver_gets`, driver captures, and `isolation_bypass`.
 The timing line adds `command_build` and `command_submit` while preserving
 `submit`. Runtime validation should confirm nonzero `native_replays` and
-`direct_range_replays`, `span_full_validations=0`,
+`direct_single_replays`,
 `render_target_validations` tracking `segment_full_validations` rather than
 logical spans or packets, substantial `segment_validation_reuses`, nonzero
 `stock_tile_bridges` (and `instancing_bridges` when that feature is enabled),
 normally zero `bridge_rejected`,
 `packet_epoch_guards` tracking submitted command packets,
 `packet_state_elisions` covering all proven direct/ring packets, and
-`light_validations` remaining only for exact Virtual-stock range coverage or
-unproven compatibility paths. Unexpected fallbacks must remain zero, and
+`light_validations` remaining only for unproven compatibility paths.
+Unexpected fallbacks must remain zero, and
 `stock_constant_updates` should not exceed the logical-span count; Standard v2
 may reduce it further by exactly `constants_reuses`, without visual or runtime
 faults. `constants_lite_replays` is the subset of those reuses that still had

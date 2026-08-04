@@ -439,10 +439,10 @@ namespace fonthook::vectorfont
 
 		void ReleaseRingResourcesLocked(NativeA8RingState& state)
 		{
-			// Virtual-stock descriptors borrow the ring's COM resources without
+			// Singleton-facade descriptors borrow the ring's COM resources without
 			// owning references. Restore every live shape to its stock shell before
 			// any buffer or declaration can be released.
-			InvalidateAllVirtualStockBindings();
+			InvalidateAllSingletonFacadeBindings();
 			state.releasePending.store(false, std::memory_order_release);
 			AdvanceUploadEpochLocked(state);
 			state.uploadedPayloads.clear();
@@ -988,10 +988,10 @@ namespace fonthook::vectorfont
 				state.nextStaticVertex = liveEndVertex;
 			if (coldRemovedPayloads)
 			{
-				// Cold entries can still have live command/virtual-stock descriptors.
+				// Cold entries can still have live command/singleton-facade descriptors.
 				// Invalidate the shared resource identity before a reclaimed tail range
 				// is reused, then republish only the retained static locations.
-				InvalidateAllVirtualStockBindings();
+				InvalidateAllSingletonFacadeBindings();
 				AdvanceUploadEpochLocked(state);
 				state.uploadedPayloads.clear();
 				const UInt32 resourceSerial =
@@ -1195,7 +1195,7 @@ namespace fonthook::vectorfont
 				if (state.proxies[index].chip)
 					state.proxies[index].chip->m_pkVB = state.vertexBuffer;
 			}
-			InvalidateAllVirtualStockBindings();
+			InvalidateAllSingletonFacadeBindings();
 			state.staticVertexBuffer->Release();
 			state.staticVertexBuffer = replacement;
 			state.staticVertexCapacity = static_cast<UInt32>(desiredCapacity);
@@ -2746,9 +2746,9 @@ namespace fonthook::vectorfont
 		return NativeA8FallbackReason::None;
 	}
 
-	NativeA8FallbackReason ResolveNativeA8VirtualStockPacketBinding(
+	NativeA8FallbackReason ResolveNativeA8DirectFacadePacketBinding(
 		NativeA8ShapePayload& payload, UInt32 packetIndex,
-		NativeA8VirtualStockPacketBinding& binding)
+		NativeA8DirectFacadePacketBinding& binding)
 	{
 		binding = {};
 		if (!payload.buildComplete || !payload.payloadTemplate
@@ -2808,8 +2808,8 @@ namespace fonthook::vectorfont
 		return NativeA8FallbackReason::None;
 	}
 
-	bool IsNativeA8VirtualStockPacketBindingCurrent(
-		const NativeA8VirtualStockPacketBinding& binding)
+	bool IsNativeA8DirectFacadePacketBindingCurrent(
+		const NativeA8DirectFacadePacketBinding& binding)
 	{
 		if (!binding.active || !s_sortedRingLease.active)
 			return false;
@@ -2830,7 +2830,7 @@ namespace fonthook::vectorfont
 			&& IsNativeA8FramePacketBindingCurrent(frameBinding);
 	}
 
-	bool IsNativeA8VirtualStockPacketAtlasCurrent(
+	bool IsNativeA8DirectFacadePacketAtlasCurrent(
 		const NiTriShape* shape, const NativeA8ShapePayload& payload,
 		UInt32 packetIndex)
 	{

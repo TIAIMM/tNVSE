@@ -1416,9 +1416,7 @@ namespace fonthook
 
 			ScopedEffectSuppression scope(suppress);
 			ScopedVuiProxyMeasureOnly measureOnly(replaceProxy);
-			BeginFreeTypeStockPageShapeCapture();
 			NiNode* node = s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
-			EndFreeTypeStockPageShapeCapture(node);
 
 			if (replaceProxy && node)
 				node->SetAppCulled(true);

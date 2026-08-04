@@ -23,7 +23,7 @@ namespace fonthook::vectorfont
 	namespace implementation::font_a8_render
 	{
 		inline constexpr UInt32 kCanonicalArrayCount = 1;
-		inline constexpr size_t kVirtualStockEstimatedShapeBytes = 1024;
+		inline constexpr size_t kSingletonFacadeEstimatedShapeBytes = 1024;
 
 		struct NativeA8RuntimeReadinessSnapshot
 		{
@@ -598,7 +598,7 @@ namespace fonthook::vectorfont
 			return haveFill || RejectA8Shape("missing-fill-range");
 		}
 
-		bool ValidateVirtualStockShellShape(NiTriShape* shape)
+		bool ValidateSingletonFacadeShellShape(NiTriShape* shape)
 		{
 			NiTriShapeData* data =
 				shape ? shape->GetModelData() : nullptr;
@@ -608,7 +608,7 @@ namespace fonthook::vectorfont
 				|| !data->m_pusTriList)
 			{
 				return RejectA8Shape(
-					"invalid-virtual-stock-shell");
+					"invalid-singleton-facade-shell");
 			}
 			for (UInt32 index = 0; index < 4; ++index)
 			{
@@ -622,14 +622,14 @@ namespace fonthook::vectorfont
 					|| !IsFiniteColor(data->m_pkColor[index]))
 				{
 					return RejectA8Shape(
-						"non-finite-virtual-stock-shell");
+						"non-finite-singleton-facade-shell");
 				}
 			}
 			return true;
 		}
 
-		bool AllocateVirtualStockBindingBuffer(
-			VirtualStockSlotBinding& slot)
+		bool AllocateSingletonFacadeBindingBuffer(
+			SingletonFacadeBinding& slot)
 		{
 			if (slot.bindingBuffer && slot.bindingChip
 				&& slot.bindingStride && slot.bindingChipMemory)
@@ -675,9 +675,9 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool IsVirtualStockBindingConfigured(
-			const VirtualStockSlotBinding& slot,
-			const NativeA8VirtualStockPacketBinding& source,
+		bool IsSingletonFacadeBindingConfigured(
+			const SingletonFacadeBinding& slot,
+			const NativeA8DirectFacadePacketBinding& source,
 			TileShader* shader)
 		{
 			const NiTriShapeData* data = slot.shape
@@ -726,7 +726,7 @@ namespace fonthook::vectorfont
 						* sizeof(NativeA8GpuVertex);
 		}
 
-		void ClearVirtualStockGpuFields(VirtualStockSlotBinding& slot)
+		void ClearSingletonFacadeGpuFields(SingletonFacadeBinding& slot)
 		{
 			if (slot.bindingChip)
 			{
@@ -759,21 +759,27 @@ namespace fonthook::vectorfont
 			slot.bound = false;
 		}
 
-		void RestoreVirtualStockSlot(VirtualStockSlotBinding& slot)
+		void RestoreSingletonFacadeSlot(SingletonFacadeBinding& slot)
 		{
+			const bool wasBound = slot.bound;
 			NiTriShapeData* data = slot.shape
 				? slot.shape->GetModelData() : nullptr;
 			if (data && data->m_pkBuffData == slot.bindingBuffer)
 				data->m_pkBuffData = slot.shellBuffer;
-			if (slot.shape)
+			// Font::MakeTriShape(..., false) leaves NiGeometry::m_pShader null
+			// until the caller runs PrepareObject.  A facade is published before
+			// that call, so its creation-time shellShader is not authoritative.
+			// Only restore shader state after this slot actually replaced it; the
+			// first single-packet bind refreshes shellShader from the live shape.
+			if (wasBound && slot.shape)
 				slot.shape->SetShader(slot.shellShader);
-			ClearVirtualStockGpuFields(slot);
+			ClearSingletonFacadeGpuFields(slot);
 		}
 
-		void DestroyVirtualStockBindingBuffer(
-			VirtualStockSlotBinding& slot)
+		void DestroySingletonFacadeBindingBuffer(
+			SingletonFacadeBinding& slot)
 		{
-			RestoreVirtualStockSlot(slot);
+			RestoreSingletonFacadeSlot(slot);
 			if (slot.bindingBuffer)
 			{
 				NiGeometryBufferData* buffer = slot.bindingBuffer;
@@ -804,62 +810,17 @@ namespace fonthook::vectorfont
 			slot.bindingChipMemory = nullptr;
 		}
 
-		FreeTypePerfCounter VirtualStockFallbackCounter(
-			NativeA8FallbackReason reason)
+		void SetSingletonFacadeMode(
+			const A8ShapeMetadata& metadata, NativeA8FallbackReason reason,
+			bool recordFallback = true)
 		{
-			switch (reason)
-			{
-			case NativeA8FallbackReason::ShaderGeneration:
-				return FreeTypePerfCounter::VirtualStockFallbackShader;
-			case NativeA8FallbackReason::AtlasGeneration:
-			case NativeA8FallbackReason::PageTexture:
-			case NativeA8FallbackReason::PropertySync:
-				return FreeTypePerfCounter::VirtualStockFallbackAtlas;
-			case NativeA8FallbackReason::DeviceReset:
-				return FreeTypePerfCounter::VirtualStockFallbackGeneration;
-			case NativeA8FallbackReason::PacketBuild:
-				return FreeTypePerfCounter::VirtualStockFallbackTopology;
-			default:
-				return FreeTypePerfCounter::VirtualStockFallbackResource;
-			}
-		}
-
-		void SetVirtualStockFacadeMode(VirtualStockShapeGroup& group,
-			NativeA8FallbackReason reason)
-		{
-			group.commandBuildValidationToken.store(
-				0, std::memory_order_release);
-			for (VirtualStockSlotBinding& slot : group.slots)
-				RestoreVirtualStockSlot(slot);
-			group.preparedValidationToken = 0;
-			group.preflightValidationToken = 0;
-			group.preparedGeneration = 0;
-			group.preparedAtlasTextureEpoch = 0;
-			group.directDrawCount.store(0, std::memory_order_release);
-			group.commandValidationToken.store(
-				0, std::memory_order_release);
-			group.commandSpanIndex.store(
-				kInvalidNativeA8CommandIndex,
-				std::memory_order_release);
-			group.commandLeaderSlot.store(
-				0, std::memory_order_release);
-			group.frameMode.store(VirtualStockFrameMode::Facade,
-				std::memory_order_release);
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::VirtualStockFacadeFallback);
-			RecordFreeTypePerf(VirtualStockFallbackCounter(reason));
-		}
-
-		void SetVirtualStockSingletonFacadeMode(
-			const A8ShapeMetadata& metadata, NativeA8FallbackReason reason)
-		{
-			VirtualStockSingletonState* singleton =
-				GetVirtualStockSingletonState(metadata);
+			SingletonFacadeState* singleton =
+				GetSingletonFacadeState(metadata);
 			if (!singleton)
 				return;
 			singleton->commandBuildValidationToken.store(
 				0, std::memory_order_release);
-			RestoreVirtualStockSlot(singleton->slot);
+			RestoreSingletonFacadeSlot(singleton->slot);
 			singleton->preparedValidationToken = 0;
 			singleton->preflightValidationToken = 0;
 			singleton->preparedGeneration = 0;
@@ -867,14 +828,16 @@ namespace fonthook::vectorfont
 			singleton->directDrawCount.store(0, std::memory_order_release);
 			singleton->commandValidationToken.store(
 				0, std::memory_order_release);
-			singleton->commandVirtualSinglePacketIndex.store(
+			singleton->commandDirectFacadeSinglePacketIndex.store(
 				kInvalidNativeA8CommandIndex,
 				std::memory_order_release);
-			singleton->frameMode.store(VirtualStockFrameMode::Facade,
+			singleton->frameMode.store(SingletonFacadeFrameMode::Facade,
 				std::memory_order_release);
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::VirtualStockFacadeFallback);
-			RecordFreeTypePerf(VirtualStockFallbackCounter(reason));
+			if (recordFallback)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SingletonFacadeFallback);
+			}
 		}
 
 	}
@@ -1052,12 +1015,12 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool PrepareVirtualStockA8Singleton(Font& font, NiTriShape* shape,
+	bool PrepareSingletonFacadeA8Shape(Font& font, NiTriShape* shape,
 		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
 		const A8EffectShapeConfig* effectConfig,
 		const A8ShapeColorContract* colorContract,
 		NativeA8PayloadTemplatePtr payloadTemplate,
-		const NiPoint3& geometryOrigin, bool useCompositeTopology)
+		const NiPoint3& geometryOrigin)
 	{
 		FreeTypePerfScope perf(FreeTypePerfPhase::NativeRegistration);
 		bool rendererAvailable = false;
@@ -1071,13 +1034,11 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
-		const std::vector<NativeA8PacketTemplate>& topology =
-			GetNativeA8Packets(*payloadTemplate, useCompositeTopology);
 		bool shapeReady = false;
 		{
 			FreeTypePerfScope shapeProof(
 				FreeTypePerfPhase::NativeRegistrationShape);
-			shapeReady = topology.size() == 1
+			shapeReady = !payloadTemplate->packets.empty()
 				&& ValidateA8Shape(shape, effectConfig, colorContract,
 					payloadTemplate.get())
 				&& InitializeA8TriShapeVtable(shape);
@@ -1088,9 +1049,9 @@ namespace fonthook::vectorfont
 		}
 
 		const size_t estimatedBytes =
-			sizeof(VirtualStockSingletonMetadata)
+			sizeof(SingletonFacadeMetadata)
 			+ sizeof(A8ShapeMetadataEntry)
-			+ kVirtualStockEstimatedShapeBytes + 6u * sizeof(void*);
+			+ kSingletonFacadeEstimatedShapeBytes + 6u * sizeof(void*);
 		bool budgetReady = false;
 		{
 			FreeTypePerfScope budget(
@@ -1100,17 +1061,13 @@ namespace fonthook::vectorfont
 				>= estimatedBytes;
 		}
 		if (!budgetReady)
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::VirtualStockFallbackCpuBudget);
 			return false;
-		}
 
-		std::shared_ptr<VirtualStockSingletonMetadata> metadata;
+		std::shared_ptr<SingletonFacadeMetadata> metadata;
 		{
 			FreeTypePerfScope allocation(
 				FreeTypePerfPhase::NativeRegistrationAllocation);
-			metadata = std::make_shared<VirtualStockSingletonMetadata>();
+			metadata = std::make_shared<SingletonFacadeMetadata>();
 		}
 		InitializeA8MetadataIdentity(*metadata, shape);
 		metadata->fontId = fontId;
@@ -1122,11 +1079,9 @@ namespace fonthook::vectorfont
 		metadata->indexCount = payloadTemplate->quadCount * 6u;
 		if (colorContract)
 			metadata->colorContract = *colorContract;
-		metadata->backend = FreeTypeShapeBackend::VirtualStockSingleton;
-		metadata->virtualStockPrimary = true;
+		metadata->backend = FreeTypeShapeBackend::SingletonFacade;
 
-		VirtualStockSingletonState& singleton = metadata->singleton;
-		singleton.useCompositeTopology = useCompositeTopology;
+		SingletonFacadeState& singleton = metadata->singleton;
 		singleton.slot.shape = shape;
 		singleton.slot.packetIndex = 0;
 		singleton.slot.shellShader = shape->GetShader();
@@ -1152,8 +1107,8 @@ namespace fonthook::vectorfont
 				? 1u : 0u);
 		RecordFreeTypePerf(
 			inlineContainers == 5u
-				? FreeTypePerfCounter::VirtualSingletonInlinePayload
-				: FreeTypePerfCounter::VirtualSingletonHeapPayload);
+				? FreeTypePerfCounter::SingletonFacadeInlinePayload
+				: FreeTypePerfCounter::SingletonFacadeHeapPayload);
 		const UInt32 avoidedChildAllocations =
 			(metadata->nativePayload.packetShaders.uses_inline_storage()
 				&& !metadata->nativePayload.packetShaders.empty() ? 1u : 0u)
@@ -1168,7 +1123,7 @@ namespace fonthook::vectorfont
 				&& metadata->nativePayload.retainedText.runs.uses_inline_storage()
 					? 1u : 0u);
 		RecordFreeTypePerf(
-			FreeTypePerfCounter::VirtualSingletonChildAllocationAvoided,
+			FreeTypePerfCounter::SingletonFacadeChildAllocationAvoided,
 			avoidedChildAllocations);
 		{
 			FreeTypePerfScope accounting(
@@ -1200,177 +1155,15 @@ namespace fonthook::vectorfont
 			RecordMetadataInsertionRehash(state, previousBucketCount);
 			*reinterpret_cast<void***>(shape) = &State().triShapeVtable[1];
 		}
-		RecordFreeTypePerf(FreeTypePerfCounter::VirtualStockSingleton);
-		RecordFreeTypePerf(FreeTypePerfCounter::VirtualStockShape);
 		return true;
 	}
 
-	bool PrepareVirtualStockA8ShapeGroup(Font& font,
-		const std::vector<NiTriShape*>& shapes, UInt32 primarySlot,
-		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
-		const A8EffectShapeConfig* effectConfig,
-		const A8ShapeColorContract* colorContract,
-		NativeA8PayloadTemplatePtr payloadTemplate,
-		const NiPoint3& geometryOrigin, bool useCompositeTopology)
-	{
-		if (shapes.size() == 1 && primarySlot == 0)
-		{
-			return PrepareVirtualStockA8Singleton(font, shapes.front(),
-				fontId, glyphCount, quadCount, effectConfig, colorContract,
-				std::move(payloadTemplate), geometryOrigin,
-				useCompositeTopology);
-		}
-		FreeTypePerfScope perf(FreeTypePerfPhase::NativeRegistration);
-		if (!IsA8RendererAvailable() || shapes.size() < 2
-			|| shapes.size() > kMaximumVirtualStockShapes
-			|| primarySlot >= shapes.size() || !payloadTemplate
-			|| payloadTemplate->quadCount != quadCount)
-		{
-			return false;
-		}
-		const std::vector<NativeA8PacketTemplate>& topology =
-			GetNativeA8Packets(*payloadTemplate, useCompositeTopology);
-		if (topology.size() != shapes.size())
-			return false;
-		const size_t estimatedBytes = sizeof(VirtualStockShapeGroup)
-			+ shapes.size() * (sizeof(VirtualStockSlotBinding)
-				+ sizeof(A8ShapeMetadata) + sizeof(SInt32)
-				+ kVirtualStockEstimatedShapeBytes)
-			+ (g_bEnableFreeTypeFontCommandBuffer
-				? topology.size()
-					* (sizeof(NativeA8TileRetainedPacket)
-						+ sizeof(NativeA8TileRetainedRun))
-				: 0)
-			+ 6u * sizeof(void*);
-		if (GetCpuMemoryCategoryHeadroom(CpuMemoryCategory::RuntimeMetadata,
-				estimatedBytes) < estimatedBytes)
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::VirtualStockFallbackCpuBudget);
-			return false;
-		}
-
-		for (size_t index = 0; index < shapes.size(); ++index)
-		{
-			NiTriShape* shape = shapes[index];
-			const bool shapeValid = index == primarySlot
-				? ValidateA8Shape(shape, effectConfig, colorContract,
-					payloadTemplate.get())
-				: ValidateVirtualStockShellShape(shape);
-			if (!shapeValid || !InitializeA8TriShapeVtable(shape))
-			{
-				return false;
-			}
-		}
-
-		auto group = std::make_shared<VirtualStockShapeGroup>();
-		group->payloadTemplate = payloadTemplate;
-		group->primaryShape = shapes[primarySlot];
-		group->primarySlot = primarySlot;
-		group->useCompositeTopology = useCompositeTopology;
-		group->slots.resize(shapes.size());
-		if (g_bEnableFreeTypeFontCommandBuffer)
-			group->commandBuildCommands.resize(shapes.size());
-		group->liveSlotCount = static_cast<UInt32>(shapes.size());
-		group->sortedItemIndices.assign(shapes.size(), -1);
-		group->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-			sizeof(VirtualStockShapeGroup)
-				+ group->slots.capacity() * sizeof(VirtualStockSlotBinding)
-				+ group->commandBuildCommands.capacity()
-					* sizeof(NativeA8DrawCommand)
-				+ group->sortedItemIndices.capacity() * sizeof(SInt32)
-				+ shapes.size() * kVirtualStockEstimatedShapeBytes
-				+ 6u * sizeof(void*));
-
-		std::vector<std::shared_ptr<A8ShapeMetadata>> metadataEntries;
-		metadataEntries.reserve(shapes.size());
-		for (size_t index = 0; index < shapes.size(); ++index)
-		{
-			auto metadata = std::make_shared<A8ShapeMetadata>();
-			InitializeA8MetadataIdentity(*metadata, shapes[index]);
-			metadata->fontId = fontId;
-			metadata->glyphCount = glyphCount;
-			metadata->quadCount = quadCount;
-			metadata->vertexCount = static_cast<UInt32>(
-				payloadTemplate->gpuVertices.size());
-			metadata->primitiveCount = payloadTemplate->quadCount * 2u;
-			metadata->indexCount = payloadTemplate->quadCount * 6u;
-			if (colorContract)
-				metadata->colorContract = *colorContract;
-			metadata->backend = FreeTypeShapeBackend::VirtualStockNative;
-			metadata->virtualStockGroup = group.get();
-			metadata->virtualStockOwner = group;
-			metadata->virtualStockSlot = static_cast<UInt16>(index);
-			metadata->virtualStockPrimary = index == primarySlot;
-			metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-				sizeof(A8ShapeMetadata) + sizeof(A8ShapeMetadataEntry)
-					+ 4u * sizeof(void*));
-
-			VirtualStockSlotBinding& slot = group->slots[index];
-			slot.shape = shapes[index];
-			slot.packetIndex = static_cast<UInt32>(index);
-			slot.shellShader = shapes[index]->GetShader();
-			NiTriShapeData* data = shapes[index]->GetModelData();
-			slot.shellBuffer = data ? data->m_pkBuffData : nullptr;
-			metadataEntries.push_back(std::move(metadata));
-		}
-
-		A8ShapeMetadata& primary =
-			*metadataEntries[primarySlot];
-		if (!InitializeNativeA8ShapePayload(font, shapes[primarySlot],
-			primary, payloadTemplate, geometryOrigin,
-			primary.nativePayload))
-		{
-			return false;
-		}
-		primary.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-			primary.cpuMemory.GetBytes()
-				+ primary.nativePayload.packetShaders.heap_capacity()
-					* sizeof(TileShader*)
-				+ primary.nativePayload.packetPrograms.heap_capacity()
-					* sizeof(const NativeA8CompiledPacketCommand*)
-				+ primary.nativePayload.preflightAtlasTextures.heap_capacity()
-					* sizeof(const void*)
-				+ GetNativeA8TileRetainedCapacityBytes(
-					primary.nativePayload));
-		group->primaryMetadataOwner = metadataEntries[primarySlot];
-
-		{
-			A8State& state = State();
-			std::lock_guard<std::mutex> lock(state.metadataMutex);
-			state.virtualStockGroups[group.get()] = group;
-			group->metadataPublished.store(true,
-				std::memory_order_release);
-			for (size_t index = 0; index < shapes.size(); ++index)
-			{
-				state.metadataGenerations[
-					GetMetadataGenerationSlot(shapes[index])].fetch_add(
-						1, std::memory_order_release);
-				A8ShapeMetadataPtr publishedMetadata =
-					metadataEntries[index];
-				const size_t previousBucketCount =
-					state.shapeMetadata.bucket_count();
-				state.shapeMetadata[shapes[index]] =
-					MakeA8MetadataEntry(
-						std::move(publishedMetadata));
-				RecordMetadataInsertionRehash(state, previousBucketCount);
-			}
-		}
-		for (NiTriShape* shape : shapes)
-			*reinterpret_cast<void***>(shape) = &State().triShapeVtable[1];
-
-		RecordFreeTypePerf(FreeTypePerfCounter::VirtualStockGroup);
-		RecordFreeTypePerf(FreeTypePerfCounter::VirtualStockShape,
-			static_cast<UInt64>(shapes.size()));
-		return true;
-	}
-
-	bool PrepareVirtualStockSingletonForSortedFrame(
+	bool PrepareSingletonFacadeForSortedFrame(
 		const A8ShapeMetadata& metadata, UInt32 generation,
 		UInt32 atlasTextureEpoch, UInt64 validationToken)
 	{
-		VirtualStockSingletonState* singleton =
-			GetVirtualStockSingletonState(metadata);
+		SingletonFacadeState* singleton =
+			GetSingletonFacadeState(metadata);
 		if (!singleton || !generation || !validationToken)
 			return false;
 		singleton->commandBuildValidationToken.store(
@@ -1378,7 +1171,7 @@ namespace fonthook::vectorfont
 		NiTriShape* shape = singleton->slot.shape;
 		if (!shape || shape != metadata.shapeIdentity
 			|| singleton->frameMode.load(std::memory_order_acquire)
-				== VirtualStockFrameMode::Retired)
+				== SingletonFacadeFrameMode::Retired)
 		{
 			return false;
 		}
@@ -1389,7 +1182,7 @@ namespace fonthook::vectorfont
 			|| payload.preparedGeneration != generation
 			|| payload.preflightAtlasTextureEpoch != atlasTextureEpoch)
 		{
-			SetVirtualStockSingletonFacadeMode(metadata,
+			SetSingletonFacadeMode(metadata,
 				NativeA8FallbackReason::ShaderGeneration);
 			return false;
 		}
@@ -1406,7 +1199,7 @@ namespace fonthook::vectorfont
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::CommandTileRetainedMiss);
-				SetVirtualStockSingletonFacadeMode(metadata,
+				SetSingletonFacadeMode(metadata,
 					NativeA8FallbackReason::PacketBuild);
 				return false;
 			}
@@ -1414,41 +1207,43 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandTileRetainedHit);
 		}
-		if (payload.useCompositePackets
-				!= singleton->useCompositeTopology
+		if (singleton->topologyValidationToken != validationToken)
+		{
+			SetSingletonFacadeMode(metadata,
+				NativeA8FallbackReason::PropertySync);
+			return false;
+		}
+		if (!g_bEnableFreeTypeFontStructuralFastPaths
 			|| packets.size() != 1 || payload.packetShaders.size() != 1
 			|| (buildCommandView
-				&& (!retainedText || retainedText->packets.size() != 1))
-			|| singleton->topologyValidationToken != validationToken)
+				&& (!retainedText || retainedText->packets.size() != 1)))
 		{
-			SetVirtualStockSingletonFacadeMode(metadata,
-				NativeA8FallbackReason::PropertySync);
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::VirtualStockFallbackNoncontiguous);
-			return false;
+			// The facade remains the sole stock Sort item. Multi-packet
+			// topology, and all topology when structural fast paths are
+			// disabled, is submitted through the ordinary retained span (or
+			// packet loop when command recording is disabled). This is a normal
+			// facade mode rather than a singleton-facade failure.
+			SetSingletonFacadeMode(metadata,
+				NativeA8FallbackReason::None, false);
+			return true;
 		}
 
-		NativeA8VirtualStockPacketBinding resolved;
+		NativeA8DirectFacadePacketBinding resolved;
 		const NativeA8FallbackReason resolveResult =
-			ResolveNativeA8VirtualStockPacketBinding(payload, 0, resolved);
+			ResolveNativeA8DirectFacadePacketBinding(payload, 0, resolved);
 		if (resolveResult != NativeA8FallbackReason::None)
 		{
-			SetVirtualStockSingletonFacadeMode(metadata, resolveResult);
-			if (resolveResult == NativeA8FallbackReason::PacketPrepare)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					VirtualStockFallbackStaticNotReady);
-			}
+			SetSingletonFacadeMode(metadata, resolveResult);
 			return false;
 		}
 
-		VirtualStockSlotBinding& slot = singleton->slot;
+		SingletonFacadeBinding& slot = singleton->slot;
 		NiTriShapeData* data = shape->GetModelData();
-		if (!data || !IsNativeA8VirtualStockPacketAtlasCurrent(
+		if (!data || !IsNativeA8DirectFacadePacketAtlasCurrent(
 				shape, payload, 0)
-			|| !AllocateVirtualStockBindingBuffer(slot))
+			|| !AllocateSingletonFacadeBindingBuffer(slot))
 		{
-			SetVirtualStockSingletonFacadeMode(metadata,
+			SetSingletonFacadeMode(metadata,
 				NativeA8FallbackReason::PropertySync);
 			return false;
 		}
@@ -1469,7 +1264,7 @@ namespace fonthook::vectorfont
 			|| slot.staticResident != resolved.staticResident
 			|| shape->GetShader() != payload.packetShaders[0];
 		const bool needsRebind = changed
-			|| !IsVirtualStockBindingConfigured(
+			|| !IsSingletonFacadeBindingConfigured(
 				slot, resolved, payload.packetShaders[0]);
 		const UInt32 quadCount = resolved.vertexCount / 4u;
 		if (needsRebind)
@@ -1512,11 +1307,11 @@ namespace fonthook::vectorfont
 		slot.staticResident = resolved.staticResident;
 		slot.bound = true;
 		if (needsRebind)
-			RecordFreeTypePerf(FreeTypePerfCounter::VirtualStockRebind);
-		if (needsRebind && !IsVirtualStockBindingConfigured(
+			RecordFreeTypePerf(FreeTypePerfCounter::SingletonFacadeRebind);
+		if (needsRebind && !IsSingletonFacadeBindingConfigured(
 				slot, resolved, payload.packetShaders[0]))
 		{
-			SetVirtualStockSingletonFacadeMode(metadata,
+			SetSingletonFacadeMode(metadata,
 				NativeA8FallbackReason::PropertySync);
 			return false;
 		}
@@ -1536,7 +1331,7 @@ namespace fonthook::vectorfont
 				|| retained.vertexCount != resolved.vertexCount
 				|| !retained.program)
 			{
-				SetVirtualStockSingletonFacadeMode(metadata,
+				SetSingletonFacadeMode(metadata,
 					NativeA8FallbackReason::PacketBuild);
 				return false;
 			}
@@ -1574,354 +1369,45 @@ namespace fonthook::vectorfont
 			singleton->commandBuildValidationToken.store(
 				validationToken, std::memory_order_release);
 		}
-		singleton->frameMode.store(VirtualStockFrameMode::Direct,
+		singleton->frameMode.store(SingletonFacadeFrameMode::Direct,
 			std::memory_order_release);
 		RecordFreeTypePerf(resolved.staticResident
-			? FreeTypePerfCounter::VirtualStockStaticHit
-			: FreeTypePerfCounter::VirtualStockDynamicHit);
+			? FreeTypePerfCounter::SingletonFacadeStaticHit
+			: FreeTypePerfCounter::SingletonFacadeDynamicHit);
 		RecordFreeTypePerf(
-			FreeTypePerfCounter::VirtualStockSortedPreflightSaved);
+			FreeTypePerfCounter::SingletonFacadeSortedPreflightSaved);
 		RecordFreeTypePerf(
-			FreeTypePerfCounter::VirtualStockProxyPacketSaved);
+			FreeTypePerfCounter::SingletonFacadeProxyPacketSaved);
 		return true;
 	}
 
-	bool PrepareVirtualStockGroupForSortedFrame(
-		const std::shared_ptr<VirtualStockShapeGroup>& group,
-		UInt32 generation, UInt32 atlasTextureEpoch,
-		UInt64 validationToken)
-	{
-		if (!group || !generation || !validationToken)
-			return false;
-		std::lock_guard<std::mutex> lock(group->mutex);
-		group->commandBuildValidationToken.store(
-			0, std::memory_order_release);
-		if (!group->primaryMetadataOwner || !group->primaryShape
-			|| group->frameMode.load(std::memory_order_acquire)
-				== VirtualStockFrameMode::Retired)
-		{
-			return false;
-		}
-		NativeA8ShapePayload& payload =
-			group->primaryMetadataOwner->nativePayload;
-		if (group->preflightValidationToken != validationToken
-			|| !payload.buildComplete || !payload.payloadTemplate
-			|| payload.payloadTemplate.get() != group->payloadTemplate.get()
-			|| payload.preparedGeneration != generation
-			|| payload.preflightAtlasTextureEpoch != atlasTextureEpoch)
-		{
-			SetVirtualStockFacadeMode(*group,
-				NativeA8FallbackReason::ShaderGeneration);
-			return false;
-		}
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(*payload.payloadTemplate,
-				payload.useCompositePackets);
-		const bool buildCommandView =
-			g_bEnableFreeTypeFontCommandBuffer;
-		const NativeA8TileRetainedText* retainedText = nullptr;
-		if (buildCommandView)
-		{
-			if (!IsNativeA8TileRetainedTextCurrent(payload,
-					group->primaryShape, generation,
-					atlasTextureEpoch))
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::CommandTileRetainedMiss);
-				SetVirtualStockFacadeMode(*group,
-					NativeA8FallbackReason::PacketBuild);
-				return false;
-			}
-			retainedText = &payload.retainedText;
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::CommandTileRetainedHit);
-		}
-		if (payload.useCompositePackets != group->useCompositeTopology
-			|| packets.size() != group->slots.size()
-			|| payload.packetShaders.size() != packets.size()
-			|| (buildCommandView
-				&& (!retainedText
-					|| retainedText->packets.size() != packets.size()
-					|| group->commandBuildCommands.size()
-						!= packets.size())))
-		{
-			SetVirtualStockFacadeMode(*group,
-				NativeA8FallbackReason::PacketBuild);
-			return false;
-		}
-		if (group->topologyValidationToken != validationToken
-			|| group->sortedItemIndices.size() != group->slots.size())
-		{
-			SetVirtualStockFacadeMode(*group,
-				NativeA8FallbackReason::PropertySync);
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::VirtualStockFallbackNoncontiguous);
-			return false;
-		}
-
-		// Resolve overwrites every used entry before it is consumed. Keeping the
-		// fixed-capacity scratch per thread avoids value-initializing all 64
-		// entries for the overwhelmingly singleton virtual-stock workload.
-		thread_local std::array<NativeA8VirtualStockPacketBinding,
-			kMaximumVirtualStockShapes> resolved;
-		bool configurationFailed = false;
-		UInt64 staticBindings = 0;
-		UInt64 dynamicBindings = 0;
-		for (size_t index = 0; index < group->slots.size(); ++index)
-		{
-			const NativeA8FallbackReason result =
-				ResolveNativeA8VirtualStockPacketBinding(
-					payload, static_cast<UInt32>(index), resolved[index]);
-			if (result != NativeA8FallbackReason::None)
-			{
-				SetVirtualStockFacadeMode(*group, result);
-				if (result == NativeA8FallbackReason::PacketPrepare)
-				{
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::
-							VirtualStockFallbackStaticNotReady);
-				}
-				return false;
-			}
-			if (resolved[index].staticResident)
-				++staticBindings;
-			else
-				++dynamicBindings;
-		}
-
-		for (size_t index = 0; index < group->slots.size(); ++index)
-		{
-			VirtualStockSlotBinding& slot = group->slots[index];
-			NiTriShapeData* data = slot.shape
-				? slot.shape->GetModelData() : nullptr;
-			if (!data
-				|| !IsNativeA8VirtualStockPacketAtlasCurrent(
-					slot.shape, payload, static_cast<UInt32>(index))
-				|| !AllocateVirtualStockBindingBuffer(slot))
-			{
-				SetVirtualStockFacadeMode(*group,
-					NativeA8FallbackReason::PropertySync);
-				return false;
-			}
-		}
-
-		for (size_t index = 0; index < group->slots.size(); ++index)
-		{
-			VirtualStockSlotBinding& slot = group->slots[index];
-			const NativeA8VirtualStockPacketBinding& source =
-				resolved[index];
-			NiTriShapeData* data = slot.shape->GetModelData();
-			if (data->m_pkBuffData != slot.bindingBuffer
-				&& data->m_pkBuffData != slot.shellBuffer)
-			{
-				slot.shellBuffer = data->m_pkBuffData;
-			}
-			if (!slot.bound
-				&& slot.shape->GetShader() != slot.shellShader)
-			{
-				slot.shellShader = slot.shape->GetShader();
-			}
-			const bool changed = !slot.bound
-				|| slot.generation != source.generation
-				|| slot.resourceSerial != source.resourceSerial
-				|| slot.uploadEpoch != source.uploadEpoch
-				|| slot.atlasTextureEpoch != source.atlasTextureEpoch
-				|| slot.baseVertex != source.baseVertex
-				|| slot.vertexCount != source.vertexCount
-				|| slot.staticResident != source.staticResident
-				|| slot.shape->GetShader()
-					!= payload.packetShaders[index];
-			const bool needsRebind = changed
-				|| !IsVirtualStockBindingConfigured(
-					slot, source, payload.packetShaders[index]);
-			const UInt32 quadCount = source.vertexCount / 4u;
-			if (needsRebind)
-			{
-				slot.bindingBuffer->m_uiFlags = 0;
-				slot.bindingBuffer->m_pkGeometryGroup = nullptr;
-				slot.bindingBuffer->m_uiFVF = 0;
-				slot.bindingBuffer->m_hDeclaration = source.declaration;
-				slot.bindingBuffer->m_bSoftwareVP = false;
-				slot.bindingBuffer->m_uiVertCount = source.vertexCount;
-				slot.bindingBuffer->m_uiMaxVertCount = source.vertexCount;
-				slot.bindingBuffer->m_uiStreamCount = 1;
-				slot.bindingBuffer->m_puiVertexStride[0] =
-					sizeof(NativeA8GpuVertex);
-				slot.bindingBuffer->m_uiIndexCount = quadCount * 6u;
-				slot.bindingBuffer->m_uiIBSize = source.indexBytes;
-				slot.bindingBuffer->m_pkIB = source.indexBuffer;
-				slot.bindingBuffer->m_uiBaseVertexIndex =
-					source.baseVertex;
-				slot.bindingBuffer->m_eType = D3DPT_TRIANGLELIST;
-				slot.bindingBuffer->m_uiTriCount = quadCount * 2u;
-				slot.bindingBuffer->m_uiMaxTriCount = quadCount * 2u;
-				slot.bindingBuffer->m_uiNumArrays =
-					kCanonicalArrayCount;
-				slot.bindingBuffer->m_pusArrayLengths = nullptr;
-				slot.bindingBuffer->m_pusIndexArray = nullptr;
-				slot.bindingChip->m_uiIndex = 0;
-				slot.bindingChip->m_pkVB = source.vertexBuffer;
-				slot.bindingChip->m_uiOffset = 0;
-				slot.bindingChip->m_uiLockFlags = 0;
-				slot.bindingChip->m_uiSize =
-					source.vertexCount * sizeof(NativeA8GpuVertex);
-				slot.shape->SetShader(payload.packetShaders[index]);
-				data->m_pkBuffData = slot.bindingBuffer;
-			}
-			slot.generation = source.generation;
-			slot.resourceSerial = source.resourceSerial;
-			slot.uploadEpoch = source.uploadEpoch;
-			slot.atlasTextureEpoch = source.atlasTextureEpoch;
-			slot.baseVertex = source.baseVertex;
-			slot.vertexCount = source.vertexCount;
-			slot.staticResident = source.staticResident;
-			slot.bound = true;
-			if (needsRebind)
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::VirtualStockRebind);
-			if (needsRebind && !IsVirtualStockBindingConfigured(
-				slot, resolved[index], payload.packetShaders[index]))
-			{
-				configurationFailed = true;
-				break;
-			}
-		}
-		if (configurationFailed)
-		{
-			SetVirtualStockFacadeMode(*group,
-				NativeA8FallbackReason::PropertySync);
-			return false;
-		}
-
-		if (buildCommandView)
-		{
-			for (UInt32 index = 0;
-				index < packets.size(); ++index)
-			{
-				const NativeA8TileRetainedPacket& retained =
-					retainedText->packets[index];
-				const NativeA8PacketTemplate& packet =
-					*retained.packet;
-				const NativeA8VirtualStockPacketBinding& source =
-					resolved[index];
-				const VirtualStockSlotBinding& slot =
-					group->slots[index];
-				NativeA8DrawCommand& command =
-					group->commandBuildCommands[index];
-				command = {};
-				if (!slot.shape || !slot.bound || !source.active
-					|| packet.atlasPage
-						>= payload.preflightAtlasTextures.size()
-					|| !payload.preflightAtlasTextures[packet.atlasPage]
-					|| retained.packetIndex != index
-					|| retained.vertexCount != source.vertexCount
-					|| !retained.program)
-				{
-					SetVirtualStockFacadeMode(*group,
-						NativeA8FallbackReason::PacketBuild);
-					return false;
-				}
-				command.sourceGeometry = slot.shape;
-				command.expectedGeometry = slot.shape;
-				command.payload = &payload;
-				command.packet = &packet;
-				command.packetIndex = index;
-				command.atlasTexture =
-					payload.preflightAtlasTextures[packet.atlasPage];
-				command.program = retained.program;
-				if (packets.size() == 1)
-				{
-					command.standardPassLite =
-						&retainedText->standardPassLite;
-				}
-				command.binding.vertexBuffer = source.vertexBuffer;
-				command.binding.indexBuffer = source.indexBuffer;
-				command.binding.declaration = source.declaration;
-				command.binding.baseVertex = source.baseVertex;
-				command.binding.vertexCount = source.vertexCount;
-				command.binding.indexBytes = source.indexBytes;
-				command.binding.generation = source.generation;
-				command.binding.resourceSerial = source.resourceSerial;
-				command.binding.uploadEpoch = source.uploadEpoch;
-				command.binding.staticResident = source.staticResident;
-				command.binding.active = source.active;
-			}
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::CommandTileRetainedPacketReuse,
-				static_cast<UInt64>(packets.size()));
-		}
-		group->preparedValidationToken = validationToken;
-		group->preparedGeneration = generation;
-		group->preparedAtlasTextureEpoch = atlasTextureEpoch;
-		group->directDrawCount.store(0, std::memory_order_release);
-		if (buildCommandView)
-		{
-			group->commandBuildValidationToken.store(
-				validationToken, std::memory_order_release);
-		}
-		group->frameMode.store(VirtualStockFrameMode::Direct,
-			std::memory_order_release);
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::VirtualStockStaticHit,
-			staticBindings);
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::VirtualStockDynamicHit,
-			dynamicBindings);
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::VirtualStockSortedPreflightSaved,
-			group->slots.size() > 1 ? group->slots.size() - 1 : 1);
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::VirtualStockProxyPacketSaved,
-			static_cast<UInt64>(group->slots.size()));
-		return true;
-	}
-
-	void RestoreVirtualStockGroupToFacade(
-		const std::shared_ptr<VirtualStockShapeGroup>& group,
-		NativeA8FallbackReason reason)
-	{
-		if (!group)
-			return;
-		std::lock_guard<std::mutex> lock(group->mutex);
-		if (group->frameMode.load(std::memory_order_acquire)
-			== VirtualStockFrameMode::Retired)
-		{
-			return;
-		}
-		SetVirtualStockFacadeMode(*group, reason);
-	}
-
-	void RestoreVirtualStockSingletonToFacade(
+	void RestoreSingletonFacade(
 		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason)
 	{
-		VirtualStockSingletonState* singleton =
-			GetVirtualStockSingletonState(metadata);
+		SingletonFacadeState* singleton =
+			GetSingletonFacadeState(metadata);
 		if (!singleton
 			|| singleton->frameMode.load(std::memory_order_acquire)
-				== VirtualStockFrameMode::Retired)
+				== SingletonFacadeFrameMode::Retired)
 		{
 			return;
 		}
-		SetVirtualStockSingletonFacadeMode(metadata, reason);
+		SetSingletonFacadeMode(metadata, reason);
 	}
 
-	void InvalidateAllVirtualStockBindings()
+	void InvalidateAllSingletonFacadeBindings()
 	{
 		NotifyNativeA8CommandExternalMutation(
 			NativeA8CommandFallback::Resource);
-		std::vector<std::shared_ptr<VirtualStockShapeGroup>> groups;
 		std::vector<A8ShapeMetadataPtr> singletons;
 		{
 			A8State& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
-			groups.reserve(state.virtualStockGroups.size());
-			for (const auto& entry : state.virtualStockGroups)
-				groups.push_back(entry.second);
 			for (const auto& entry : state.shapeMetadata)
 			{
 				if (entry.second.metadata
 					&& entry.second.metadata->backend
-						== FreeTypeShapeBackend::VirtualStockSingleton)
+						== FreeTypeShapeBackend::SingletonFacade)
 				{
 					singletons.push_back(entry.second.metadata);
 				}
@@ -1929,12 +1415,12 @@ namespace fonthook::vectorfont
 		}
 		for (const A8ShapeMetadataPtr& metadata : singletons)
 		{
-			VirtualStockSingletonState* singleton = metadata
-				? GetVirtualStockSingletonState(*metadata) : nullptr;
+			SingletonFacadeState* singleton = metadata
+				? GetSingletonFacadeState(*metadata) : nullptr;
 			if (!singleton)
 				continue;
 			const bool revoked = singleton->slot.bound;
-			RestoreVirtualStockSlot(singleton->slot);
+			RestoreSingletonFacadeSlot(singleton->slot);
 			singleton->preparedValidationToken = 0;
 			singleton->sourceTopologyToken = 0;
 			singleton->topologyValidationToken = 0;
@@ -1947,64 +1433,29 @@ namespace fonthook::vectorfont
 				0, std::memory_order_release);
 			singleton->commandValidationToken.store(
 				0, std::memory_order_release);
-			singleton->commandVirtualSinglePacketIndex.store(
+			singleton->commandDirectFacadeSinglePacketIndex.store(
 				kInvalidNativeA8CommandIndex,
 				std::memory_order_release);
 			if (singleton->frameMode.load(std::memory_order_acquire)
-				!= VirtualStockFrameMode::Retired)
+				!= SingletonFacadeFrameMode::Retired)
 			{
-				singleton->frameMode.store(VirtualStockFrameMode::Facade,
+				singleton->frameMode.store(SingletonFacadeFrameMode::Facade,
 					std::memory_order_release);
 			}
 			if (revoked)
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::VirtualStockRevoke);
-		}
-		for (const std::shared_ptr<VirtualStockShapeGroup>& group : groups)
-		{
-			std::lock_guard<std::mutex> lock(group->mutex);
-			bool revoked = false;
-			for (VirtualStockSlotBinding& slot : group->slots)
-			{
-				revoked = revoked || slot.bound;
-				RestoreVirtualStockSlot(slot);
-			}
-			group->preparedValidationToken = 0;
-			group->sourceTopologyToken = 0;
-			group->topologyValidationToken = 0;
-			group->preflightValidationToken = 0;
-			group->preparedGeneration = 0;
-			group->preparedAtlasTextureEpoch = 0;
-			group->directDrawCount.store(0, std::memory_order_release);
-			group->commandBuildValidationToken.store(
-				0, std::memory_order_release);
-			group->commandValidationToken.store(
-				0, std::memory_order_release);
-			group->commandSpanIndex.store(
-				kInvalidNativeA8CommandIndex,
-				std::memory_order_release);
-			group->commandLeaderSlot.store(
-				0, std::memory_order_release);
-			if (group->frameMode.load(std::memory_order_acquire)
-				!= VirtualStockFrameMode::Retired)
-			{
-				group->frameMode.store(VirtualStockFrameMode::Facade,
-					std::memory_order_release);
-			}
-			if (revoked)
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::VirtualStockRevoke);
+					FreeTypePerfCounter::SingletonFacadeRevoke);
 		}
 	}
 
-	void ReleaseVirtualStockSingletonBinding(
+	void ReleaseSingletonFacadeBinding(
 		NiTriShape* shape, const A8ShapeMetadata& metadata)
 	{
-		VirtualStockSingletonState* singleton =
-			GetVirtualStockSingletonState(metadata);
+		SingletonFacadeState* singleton =
+			GetSingletonFacadeState(metadata);
 		if (!shape || !singleton || singleton->slot.shape != shape)
 			return;
-		DestroyVirtualStockBindingBuffer(singleton->slot);
+		DestroySingletonFacadeBindingBuffer(singleton->slot);
 		singleton->slot.shape = nullptr;
 		singleton->sourceTopologyToken = 0;
 		singleton->topologyValidationToken = 0;
@@ -2012,65 +1463,11 @@ namespace fonthook::vectorfont
 			0, std::memory_order_release);
 		singleton->commandValidationToken.store(
 			0, std::memory_order_release);
-		singleton->commandVirtualSinglePacketIndex.store(
+		singleton->commandDirectFacadeSinglePacketIndex.store(
 			kInvalidNativeA8CommandIndex,
 			std::memory_order_release);
-		singleton->frameMode.store(VirtualStockFrameMode::Retired,
+		singleton->frameMode.store(SingletonFacadeFrameMode::Retired,
 			std::memory_order_release);
-	}
-
-	void ReleaseVirtualStockShapeBinding(
-		NiTriShape* shape, const A8ShapeMetadata& metadata)
-	{
-		if (!shape || !metadata.virtualStockGroup)
-			return;
-		std::shared_ptr<VirtualStockShapeGroup> group =
-			AcquireVirtualStockShapeGroup(metadata);
-		if (!group)
-			return;
-		bool releaseGroup = false;
-		{
-			std::lock_guard<std::mutex> lock(group->mutex);
-			if (metadata.virtualStockSlot >= group->slots.size())
-				return;
-			VirtualStockSlotBinding& slot =
-				group->slots[metadata.virtualStockSlot];
-			if (slot.shape != shape)
-				return;
-			DestroyVirtualStockBindingBuffer(slot);
-			slot.shape = nullptr;
-			if (group->liveSlotCount)
-				--group->liveSlotCount;
-			if (metadata.virtualStockPrimary)
-			{
-				group->primaryShape = nullptr;
-				group->primaryMetadataOwner.reset();
-				group->commandBuildValidationToken.store(
-					0, std::memory_order_release);
-				group->commandValidationToken.store(
-					0, std::memory_order_release);
-				group->commandSpanIndex.store(
-					kInvalidNativeA8CommandIndex,
-					std::memory_order_release);
-				group->frameMode.store(VirtualStockFrameMode::Retired,
-					std::memory_order_release);
-			}
-			releaseGroup = group->liveSlotCount == 0;
-		}
-		if (releaseGroup)
-		{
-			A8State& state = State();
-			std::lock_guard<std::mutex> lock(state.metadataMutex);
-			group->metadataPublished.store(false,
-				std::memory_order_release);
-			const auto found =
-				state.virtualStockGroups.find(group.get());
-			if (found != state.virtualStockGroups.end()
-				&& found->second == group)
-			{
-				state.virtualStockGroups.erase(found);
-			}
-		}
 	}
 
 }

@@ -485,20 +485,6 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_pre_accumulator_cull: checks=%llu eligible=%llu culled=%llu alpha=%llu scissor_deferred=%llu fail_open=%llu",
-			values[static_cast<size_t>(FreeTypePerfCounter::
-				VisibilityPreAccumulatorCheck)],
-			values[static_cast<size_t>(FreeTypePerfCounter::
-				VisibilityPreAccumulatorEligible)],
-			values[static_cast<size_t>(FreeTypePerfCounter::
-				VisibilityPreAccumulatorCulled)],
-			values[static_cast<size_t>(FreeTypePerfCounter::
-				VisibilityPreAccumulatorZeroAlpha)],
-			values[static_cast<size_t>(FreeTypePerfCounter::
-				VisibilityPreAccumulatorScissorDeferred)],
-			values[static_cast<size_t>(FreeTypePerfCounter::
-				VisibilityPreAccumulatorFailOpen)]);
-		FreeTypeFontDebugLog(
 			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu",
 			counterValue(FreeTypePerfCounter::VisibilityPreflightClipCheck),
 			counterValue(FreeTypePerfCounter::
@@ -557,7 +543,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::NativeRegistrationProxyFast),
 			counterValue(FreeTypePerfCounter::NativeRegistrationProxySlow));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_thin_registration: sample_rate=256 sampling=continuous_tls calls=%llu samples=%llu fast_forward=%llu hook_mismatch=%llu slow_audits=%llu suppressed=%llu metadata_batches=%llu metadata_shapes=%llu metadata_missing=%llu source_fallback=%llu singleton_topology=%llu singleton_fallback=%llu group_topology=%llu group_fallback=%llu occurrence_fallback=%llu",
+			"tnvse_freetype_thin_registration: sample_rate=256 sampling=continuous_tls calls=%llu samples=%llu fast_forward=%llu hook_mismatch=%llu slow_audits=%llu suppressed=%llu metadata_batches=%llu metadata_shapes=%llu metadata_missing=%llu source_fallback=%llu facade_topology=%llu facade_fallback=%llu occurrence_fallback=%llu",
 			counterValue(FreeTypePerfCounter::ThinRegistrationCall),
 			counterValue(FreeTypePerfCounter::ThinRegistrationTimingSample),
 			counterValue(FreeTypePerfCounter::ThinRegistrationFastForward),
@@ -568,10 +554,8 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::ThinRegistrationMetadataShape),
 			counterValue(FreeTypePerfCounter::ThinRegistrationMetadataMissing),
 			counterValue(FreeTypePerfCounter::ThinRegistrationSourceFallback),
-			counterValue(FreeTypePerfCounter::ThinRegistrationSingletonTopology),
-			counterValue(FreeTypePerfCounter::ThinRegistrationSingletonFallback),
-			counterValue(FreeTypePerfCounter::ThinRegistrationGroupTopology),
-			counterValue(FreeTypePerfCounter::ThinRegistrationGroupFallback),
+			counterValue(FreeTypePerfCounter::ThinRegistrationFacadeTopology),
+			counterValue(FreeTypePerfCounter::ThinRegistrationFacadeFallback),
 			counterValue(FreeTypePerfCounter::ThinRegistrationOccurrenceFallback));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_structural_fastpaths: readiness_raw_hit=%llu full_audit=%llu hook_mismatch=%llu renderer_mismatch=%llu virtualquery_avoided=%llu tile_callback_mismatch=%llu render_alpha_mismatch=%llu sort_call_mismatch=%llu sort_tail_mismatch=%llu immediate_mismatch=%llu atlas_mismatch=%llu singleton_inline=%llu singleton_heap=%llu child_allocations_avoided=%llu metadata_reserve=%llu metadata_rehash=%llu sequence_hits=%llu sequence_fallbacks=%llu sequence_rescanned_items=%llu prefix_shrinks=%llu prefix_texts=%llu prefix_replayed=%llu texture_alias=%llu viewport_descriptor_hit=%llu viewport_descriptor_rebuild=%llu viewport_descriptor_fail=%llu prepared_reject_hit=%llu prepared_reject_stored=%llu prepared_profile_invalidations=%llu",
@@ -592,9 +576,9 @@ namespace fonthook::vectorfont
 				StructuralReadinessImmediateMismatch),
 			counterValue(FreeTypePerfCounter::
 				StructuralReadinessAtlasMismatch),
-			counterValue(FreeTypePerfCounter::VirtualSingletonInlinePayload),
-			counterValue(FreeTypePerfCounter::VirtualSingletonHeapPayload),
-			counterValue(FreeTypePerfCounter::VirtualSingletonChildAllocationAvoided),
+			counterValue(FreeTypePerfCounter::SingletonFacadeInlinePayload),
+			counterValue(FreeTypePerfCounter::SingletonFacadeHeapPayload),
+			counterValue(FreeTypePerfCounter::SingletonFacadeChildAllocationAvoided),
 			counterValue(FreeTypePerfCounter::MetadataMapReserve),
 			counterValue(FreeTypePerfCounter::MetadataMapRehash),
 			counterValue(FreeTypePerfCounter::CommandSequenceSkeletonHit),
@@ -631,7 +615,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SortedMixedEqualDepthRestoreRejected)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_sort_proof: stock_equivalent_sorts=%llu items=%llu ordinal_sidecar_recovered=%llu sidecar_mixed_runs=%llu sidecar_legacy=%llu fail_gate=%llu fail_count=%llu fail_storage=%llu fail_source=%llu fail_depth=%llu fail_metadata=%llu fail_registration=%llu fail_group=%llu fail_singleton=%llu fail_coverage=%llu fail_apply=%llu",
+			"tnvse_freetype_sort_proof: stock_equivalent_sorts=%llu items=%llu ordinal_sidecar_recovered=%llu sidecar_mixed_runs=%llu sidecar_legacy=%llu fail_gate=%llu fail_count=%llu fail_storage=%llu fail_source=%llu fail_depth=%llu fail_metadata=%llu fail_registration=%llu fail_facade=%llu fail_coverage=%llu fail_apply=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				SortedOriginalOrderStockEquivalentSort)],
 			values[static_cast<size_t>(FreeTypePerfCounter::
@@ -657,9 +641,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				SortedOriginalOrderAnchorFailRegistration)],
 			values[static_cast<size_t>(FreeTypePerfCounter::
-				SortedOriginalOrderAnchorFailGroup)],
-			values[static_cast<size_t>(FreeTypePerfCounter::
-				SortedOriginalOrderAnchorFailSingleton)],
+				SortedOriginalOrderAnchorFailFacade)],
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				SortedOriginalOrderAnchorFailCoverage)],
 			values[static_cast<size_t>(FreeTypePerfCounter::
@@ -818,65 +800,26 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SinglePacketDirectSyntheticBuffer)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: virtual_stock_candidates=%llu virtual_stock_singletons=%llu virtual_stock_groups=%llu virtual_stock_shapes=%llu virtual_stock_draws=%llu virtual_stock_static_hits=%llu virtual_stock_dynamic_hits=%llu virtual_stock_rebinds=%llu virtual_stock_revokes=%llu facade_fallbacks=%llu followers_skipped=%llu sorted_preflight_saved=%llu proxy_packets_saved=%llu fallback_no_parent=%llu packet_limit=%llu cpu_budget=%llu static_not_ready=%llu topology=%llu shader=%llu generation=%llu atlas=%llu resource=%llu noncontiguous=%llu registration_resolved=%llu register_rejected=%llu registration_missing=%llu registration_duplicate=%llu registration_order_mismatch=%llu",
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockCandidate)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockSingleton)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockGroup)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockShape)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockDraw)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockStaticHit)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockDynamicHit)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockRebind)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockRevoke)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFacadeFallback)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFollowerSkipped)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockSortedPreflightSaved)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockProxyPacketSaved)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFallbackNoParent)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFallbackPacketLimit)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFallbackCpuBudget)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFallbackStaticNotReady)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFallbackTopology)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFallbackShader)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFallbackGeneration)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFallbackAtlas)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFallbackResource)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockFallbackNoncontiguous)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockRegistrationResolved)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockRegistrationRejected)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockRegistrationMissing)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockRegistrationDuplicate)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::VirtualStockRegistrationOrderMismatch)]);
+			"tnvse_freetype_singleton_facade: candidates=%llu facades=%llu payload_packets=%llu single_packet_artifacts=%llu multi_packet_artifacts=%llu direct_frames=%llu span_frames=%llu packet_loop_frames=%llu topology_switches=%llu fallbacks=%llu partial_faults=%llu sibling_shapes=0 static_hits=%llu dynamic_hits=%llu rebinds=%llu revokes=%llu sorted_preflight_saved=%llu proxy_packets_saved=%llu",
+			counterValue(FreeTypePerfCounter::SingletonFacadeCandidate),
+			counterValue(FreeTypePerfCounter::SingletonFacadeCreated),
+			counterValue(FreeTypePerfCounter::SingletonFacadePayloadPacket),
+			counterValue(FreeTypePerfCounter::SingletonFacadeSinglePacketArtifact),
+			counterValue(FreeTypePerfCounter::SingletonFacadeMultiPacketArtifact),
+			counterValue(FreeTypePerfCounter::SingletonFacadeDirectFrame),
+			counterValue(FreeTypePerfCounter::SingletonFacadeSpanFrame),
+			counterValue(FreeTypePerfCounter::SingletonFacadePacketLoopFrame),
+			counterValue(FreeTypePerfCounter::SingletonFacadeTopologySwitch),
+			counterValue(FreeTypePerfCounter::SingletonFacadeFallback),
+			counterValue(FreeTypePerfCounter::SingletonFacadePartialFault),
+			counterValue(FreeTypePerfCounter::SingletonFacadeStaticHit),
+			counterValue(FreeTypePerfCounter::SingletonFacadeDynamicHit),
+			counterValue(FreeTypePerfCounter::SingletonFacadeRebind),
+			counterValue(FreeTypePerfCounter::SingletonFacadeRevoke),
+			counterValue(FreeTypePerfCounter::SingletonFacadeSortedPreflightSaved),
+			counterValue(FreeTypePerfCounter::SingletonFacadeProxyPacketSaved));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu virtual_spans_fused=%llu followers_consumed=%llu direct_range_replays=%llu span_full_validations=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu packet_range_validations=%llu packet_range_packets=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu stock_tile_bridges=%llu instancing_bridges=%llu bridge_rejected=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
+			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu direct_single_replays=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu stock_tile_bridges=%llu instancing_bridges=%llu bridge_rejected=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRecorded)],
 			values[static_cast<size_t>(
@@ -906,12 +849,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandStockBootstrapSaved)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::CommandVirtualSpanFused)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::CommandVirtualFollowerConsumed)],
-			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandDirectRangeReplay)],
-			static_cast<UInt64>(0),
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandPacketLightValidation)],
 			values[static_cast<size_t>(
@@ -919,10 +857,6 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
 					CommandPacketStateValidationElided)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::CommandPacketRangeValidation)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::CommandPacketRangeValidated)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRenderTargetValidation)],
 			values[static_cast<size_t>(
@@ -962,22 +896,22 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandFallbackState)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: command_virtual_single_recorded=%llu hits=%llu misses=%llu replays=%llu fallbacks=%llu build_view_hits=%llu build_view_misses=%llu build_binding_reuses=%llu build_vector_growth=%llu deferred_render_target_captures=%llu tile_retained_builds=%llu refreshes=%llu hits=%llu misses=%llu packet_reuses=%llu",
+			"tnvse_freetype_perf: command_direct_facade_single_recorded=%llu hits=%llu misses=%llu replays=%llu fallbacks=%llu build_view_hits=%llu build_view_misses=%llu build_binding_reuses=%llu build_vector_growth=%llu deferred_render_target_captures=%llu tile_retained_builds=%llu refreshes=%llu hits=%llu misses=%llu packet_reuses=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
-					CommandVirtualSinglePacketRecorded)],
+					CommandDirectFacadeSinglePacketRecorded)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
-					CommandVirtualSinglePacketHit)],
+					CommandDirectFacadeSinglePacketHit)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
-					CommandVirtualSinglePacketMiss)],
+					CommandDirectFacadeSinglePacketMiss)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
-					CommandVirtualSinglePacketReplay)],
+					CommandDirectFacadeSinglePacketReplay)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
-					CommandVirtualSinglePacketFallback)],
+					CommandDirectFacadeSinglePacketFallback)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandBuildViewHit)],
 			values[static_cast<size_t>(
@@ -1372,9 +1306,9 @@ namespace fonthook::vectorfont
 		const DurationSummary commandBuildStamp =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::CommandBuildStamp);
-		const DurationSummary commandBuildVirtual =
+		const DurationSummary commandBuildDirectFacade =
 			ConsumeDurationSummary(
-				FreeTypePerfPhase::CommandBuildVirtual);
+				FreeTypePerfPhase::CommandBuildDirectFacade);
 		const DurationSummary commandBuildOrdinary =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::CommandBuildOrdinary);
@@ -1471,13 +1405,13 @@ namespace fonthook::vectorfont
 			extendedFnt.count, extendedFnt.medianMicroseconds,
 			extendedFnt.p95Microseconds);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_command_build_timing: stamp_n=%llu median_us=%.3f p95_us=%.3f virtual_n=%llu median_us=%.3f p95_us=%.3f ordinary_n=%llu median_us=%.3f p95_us=%.3f finalize_n=%llu median_us=%.3f p95_us=%.3f",
+			"tnvse_freetype_command_build_timing: stamp_n=%llu median_us=%.3f p95_us=%.3f direct_facade_n=%llu median_us=%.3f p95_us=%.3f ordinary_n=%llu median_us=%.3f p95_us=%.3f finalize_n=%llu median_us=%.3f p95_us=%.3f",
 			commandBuildStamp.count,
 			commandBuildStamp.medianMicroseconds,
 			commandBuildStamp.p95Microseconds,
-			commandBuildVirtual.count,
-			commandBuildVirtual.medianMicroseconds,
-			commandBuildVirtual.p95Microseconds,
+			commandBuildDirectFacade.count,
+			commandBuildDirectFacade.medianMicroseconds,
+			commandBuildDirectFacade.p95Microseconds,
 			commandBuildOrdinary.count,
 			commandBuildOrdinary.medianMicroseconds,
 			commandBuildOrdinary.p95Microseconds,

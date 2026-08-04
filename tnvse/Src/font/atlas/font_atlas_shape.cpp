@@ -1422,154 +1422,13 @@ namespace fonthook::vectorfont
 				return nullptr;
 
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::VirtualStockCandidate);
-			bool useCompositeTopology =
-				g_bEnableFreeTypeFontCompositePass
-				&& !payload->compositePackets.empty();
-
-			for (UInt32 topologyAttempt = 0;
-				topologyAttempt < 2; ++topologyAttempt)
-			{
-				const std::vector<NativeA8PacketTemplate>& topology =
-					GetNativeA8Packets(*payload, useCompositeTopology);
-				if (topology.empty())
-				{
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::
-							VirtualStockFallbackTopology);
-					break;
-				}
-				if (topology.size() > kMaximumVirtualStockShapes)
-				{
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::
-							VirtualStockFallbackPacketLimit);
-					break;
-				}
-				if (topology.size() > 1
-					&& !CanUseFreeTypeStockPageShapes())
-				{
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::
-							VirtualStockFallbackNoParent);
-					break;
-				}
-
-				if (topology.size() == 1)
-				{
-					const NativeA8PacketTemplate& packet = topology.front();
-					NiTriShape* packetShape = packet.atlasPage < atlases.size()
-						? CreateDirectNativePacketShell(font,
-							atlases[packet.atlasPage], *payload, packet,
-							facadeColor, tileColor, origin, prepareObject)
-						: nullptr;
-					if (!packetShape)
-						break;
-
-					if (useCompositeTopology
-						&& (GetNativeA8ShaderGeneration() == 0
-							|| !ResolveNativeA8PacketShader(
-								packet, packetShape, false)))
-					{
-						packetShape->DeleteThis();
-						RecordFreeTypePerf(FreeTypePerfCounter::
-							CompositeShaderFallback);
-						useCompositeTopology = false;
-						continue;
-					}
-
-					if (PrepareVirtualStockA8Singleton(font, packetShape,
-						font.iFontNum, glyphCount, quadCount, &effects,
-						&colorContract, payload, origin,
-						useCompositeTopology))
-					{
-						return packetShape;
-					}
-					packetShape->DeleteThis();
-					break;
-				}
-
-				std::vector<NiTriShape*> packetShapes;
-				packetShapes.reserve(topology.size());
-				for (const NativeA8PacketTemplate& packet : topology)
-				{
-					NiTriShape* packetShape =
-						packet.atlasPage < atlases.size()
-							? CreateDirectNativePacketShell(font,
-								atlases[packet.atlasPage], *payload, packet,
-								facadeColor, tileColor, origin, prepareObject)
-							: nullptr;
-					if (!packetShape)
-					{
-						for (NiTriShape* created : packetShapes)
-							created->DeleteThis();
-						packetShapes.clear();
-						break;
-					}
-					packetShapes.push_back(packetShape);
-				}
-
-				if (packetShapes.size() != topology.size())
-					break;
-
-				if (useCompositeTopology)
-				{
-					bool compositeProfilesReady =
-						GetNativeA8ShaderGeneration() != 0;
-					for (const NativeA8PacketTemplate& packet : topology)
-					{
-						if (compositeProfilesReady
-							&& !ResolveNativeA8PacketShader(packet,
-								packetShapes.back(), false))
-						{
-							compositeProfilesReady = false;
-						}
-					}
-					if (!compositeProfilesReady)
-					{
-						for (NiTriShape* created : packetShapes)
-							created->DeleteThis();
-						RecordFreeTypePerf(
-							FreeTypePerfCounter::
-								CompositeShaderFallback);
-						useCompositeTopology = false;
-						continue;
-					}
-				}
-
-				const UInt32 primarySlot = static_cast<UInt32>(
-					packetShapes.size() - 1u);
-				if (PrepareVirtualStockA8ShapeGroup(font,
-					packetShapes, primarySlot, font.iFontNum,
-					glyphCount, quadCount, &effects, &colorContract,
-					payload, origin, useCompositeTopology))
-				{
-					NiTriShape* primaryShape =
-						packetShapes[primarySlot];
-					std::vector<NiTriShape*> additionalShapes;
-					additionalShapes.reserve(packetShapes.size() - 1u);
-					for (size_t index = packetShapes.size() - 1u;
-						index-- > 0;)
-					{
-						additionalShapes.push_back(
-							packetShapes[index]);
-					}
-					if (RegisterFreeTypeStockPageShapes(
-						primaryShape, additionalShapes))
-					{
-						return primaryShape;
-					}
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::
-							VirtualStockFallbackNoParent);
-				}
-				for (NiTriShape* created : packetShapes)
-					created->DeleteThis();
-				break;
-			}
-
+				FreeTypePerfCounter::SingletonFacadeCandidate);
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::VirtualStockFacadeFallback);
+				FreeTypePerfCounter::SingletonFacadePayloadPacket,
+				static_cast<UInt64>(payload->packets.size()));
+			RecordFreeTypePerf(payload->packets.size() == 1
+				? FreeTypePerfCounter::SingletonFacadeSinglePacketArtifact
+				: FreeTypePerfCounter::SingletonFacadeMultiPacketArtifact);
 			const NativeA8PacketTemplate& facadePacket =
 				payload->packets.front();
 			NiTriShape* shape =
@@ -1581,13 +1440,22 @@ namespace fonthook::vectorfont
 					: nullptr;
 			if (!shape)
 				return nullptr;
-			if (!PrepareA8AtlasShape(font, shape, font.iFontNum,
-				glyphCount, quadCount, &effects, &colorContract,
-				payload, origin))
+			if (!PrepareSingletonFacadeA8Shape(font, shape,
+				font.iFontNum, glyphCount, quadCount, &effects,
+				&colorContract, payload, origin))
 			{
-				shape->DeleteThis();
-				return nullptr;
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SingletonFacadeFallback);
+				if (!PrepareA8AtlasShape(font, shape, font.iFontNum,
+					glyphCount, quadCount, &effects, &colorContract,
+					payload, origin))
+				{
+					shape->DeleteThis();
+					return nullptr;
+				}
 			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::SingletonFacadeCreated);
 			if (prepareObject)
 				shape->PrepareObject();
 			NiTriShapeData* data = shape->GetModelData();
@@ -2271,22 +2139,20 @@ namespace fonthook::vectorfont
 						++usedPageCount;
 				}
 
-				// A stock NiTriShape has one texturing property. Keep the
-				// ordinary single-shape ABI on the first used page and publish
-				// each remaining physical ARGB page as an adjacent stock shape
-				// whenever the caller exposes its destination NiNode.
-				if (usedPageCount == 1
-					|| CanUseFreeTypeStockPageShapes())
+				// A stock NiTriShape has one texturing property. Keep that route
+				// only when the complete aggressive artifact fits on one page.
+				// Multi-page ARGB falls through to the native packet payload so
+				// the accumulator still receives exactly one facade.
+				if (usedPageCount == 1)
 				{
-					std::vector<NiTriShape*> pageShapes;
-					pageShapes.reserve(usedPageCount);
+					NiTriShape* pageShape = nullptr;
 					for (UInt16 page = 0; page < atlases.size(); ++page)
 					{
 						const UInt32 pageGlyphCount =
 							pageGlyphCounts[page];
 						if (!pageGlyphCount)
 							continue;
-						NiTriShape* pageShape =
+						pageShape =
 							CreateDirectArgbPageShape(
 								font, runtime, glyphs, batch,
 								rasterScale, tileColor,
@@ -2294,37 +2160,20 @@ namespace fonthook::vectorfont
 								pageGlyphCount);
 						if (!pageShape)
 						{
-							for (NiTriShape* created : pageShapes)
-								created->DeleteThis();
 							result.outcome =
 								DirectAtlasShapeOutcome::Failed;
 							return result;
 						}
-						pageShapes.push_back(pageShape);
+						break;
 					}
-					if (pageShapes.empty())
+					if (!pageShape)
 					{
 						result.outcome =
 							DirectAtlasShapeOutcome::Failed;
 						return result;
 					}
 
-					result.shape = pageShapes.front();
-					if (pageShapes.size() > 1)
-					{
-						std::vector<NiTriShape*> additionalShapes(
-							pageShapes.begin() + 1, pageShapes.end());
-						if (!RegisterFreeTypeStockPageShapes(
-							result.shape, additionalShapes))
-						{
-							for (NiTriShape* created : pageShapes)
-								created->DeleteThis();
-							result.shape = nullptr;
-							result.outcome =
-								DirectAtlasShapeOutcome::Failed;
-							return result;
-						}
-					}
+					result.shape = pageShape;
 					result.geometryQuadCount = result.glyphCount;
 					result.drawQuadCount = result.glyphCount;
 					result.pageCount = usedPageCount;

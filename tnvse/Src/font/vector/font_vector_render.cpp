@@ -41,118 +41,6 @@ namespace fonthook
 		UInt32 s_atlasEmptyLogCount = 0;
 		UInt32 s_atlasFailureLogCount = 0;
 
-		// Font::MakeTriShape returns a BSScissorTriShape carrying a
-		// TileShaderProperty. CommonLib does not expose those concrete types, so
-		// keep this retail-layout view local and guarded by ABI assertions.
-		struct StockTileShaderPropertyView : BSShaderProperty
-		{
-			NiTexturePtr sourceTexture;
-			NiTexturePtr alphaTexture;
-			NiColorA overlayColor;
-			float tileAlpha = 1.0f;
-			NiPoint4 textureTransform;
-			NiTexturingProperty::ClampMode clampMode =
-				NiTexturingProperty::CLAMP_S_CLAMP_T;
-			bool byte90 = false;
-			bool rotates = false;
-			bool hasVertexColors = false;
-			bool noTexture = false;
-			BSStringT<char> texturePath;
-			RECT scissorRect = {};
-			bool useScissorTest = false;
-		};
-
-		inline constexpr UInt32 kStockScissorTailOffset = 0xC4;
-		inline constexpr UInt32 kStockScissorTailSize = 0x10;
-		static_assert(sizeof(NiTriShape) == kStockScissorTailOffset);
-		static_assert(sizeof(StockTileShaderPropertyView) == 0xB0);
-		static_assert(offsetof(
-			StockTileShaderPropertyView, overlayColor) == 0x68);
-		static_assert(offsetof(
-			StockTileShaderPropertyView, tileAlpha) == 0x78);
-
-		StockTileShaderPropertyView* GetStockTileProperty(
-			NiTriShape* shape)
-		{
-			NiShadeProperty* property =
-				shape ? shape->GetShadeProperty() : nullptr;
-			return property
-				&& property->m_eShaderType == NiShadeProperty::PROP_Tile
-				? reinterpret_cast<StockTileShaderPropertyView*>(property)
-				: nullptr;
-		}
-
-		void CopyStockTileDynamicState(
-			const StockTileShaderPropertyView& source,
-			StockTileShaderPropertyView& destination)
-		{
-			destination.m_usFlags = source.m_usFlags;
-			destination.ulFlags[0] = source.ulFlags[0];
-			destination.ulFlags[1] = source.ulFlags[1];
-			destination.fAlpha = source.fAlpha;
-			destination.fFadeAlpha = source.fFadeAlpha;
-			destination.fEnvMapScale = source.fEnvMapScale;
-			destination.fLODFade = source.fLODFade;
-			destination.fDepthBias = source.fDepthBias;
-			destination.uiShaderIndex = source.uiShaderIndex;
-			if (destination.alphaTexture.m_pObject
-				!= source.alphaTexture.m_pObject)
-			{
-				destination.alphaTexture = source.alphaTexture;
-			}
-			destination.overlayColor = source.overlayColor;
-			destination.tileAlpha = source.tileAlpha;
-			destination.textureTransform = source.textureTransform;
-			destination.clampMode = source.clampMode;
-			destination.byte90 = source.byte90;
-			destination.rotates = source.rotates;
-			destination.hasVertexColors = source.hasVertexColors;
-			destination.noTexture = source.noTexture;
-			destination.scissorRect = source.scissorRect;
-			destination.useScissorTest = source.useScissorTest;
-			// sourceTexture and texturePath deliberately remain page-specific.
-		}
-
-		bool SynchronizeStockPageShapeState(
-			const NiTriShape& primary, NiTriShape& pageShape)
-		{
-			const StockTileShaderPropertyView* sourceTile =
-				GetStockTileProperty(const_cast<NiTriShape*>(&primary));
-			StockTileShaderPropertyView* pageTile =
-				GetStockTileProperty(&pageShape);
-			if (!sourceTile || !pageTile || !pageTile->sourceTexture)
-				return false;
-
-			pageShape.m_kLocal = primary.m_kLocal;
-			pageShape.m_kWorld = primary.m_kWorld;
-			pageShape.m_uiFlags = primary.m_uiFlags;
-			std::memcpy(
-				reinterpret_cast<UInt8*>(&pageShape)
-					+ kStockScissorTailOffset,
-				reinterpret_cast<const UInt8*>(&primary)
-					+ kStockScissorTailOffset,
-				kStockScissorTailSize);
-
-			pageShape.m_kProperties.m_spAlphaProperty =
-				primary.m_kProperties.m_spAlphaProperty;
-			pageShape.m_kProperties.m_spCullingProperty =
-				primary.m_kProperties.m_spCullingProperty;
-			pageShape.m_kProperties.m_spMaterialProperty =
-				primary.m_kProperties.m_spMaterialProperty;
-			pageShape.m_kProperties.m_spStencilProperty =
-				primary.m_kProperties.m_spStencilProperty;
-			pageShape.m_kProperties.m_spUnknownProperty =
-				primary.m_kProperties.m_spUnknownProperty;
-			// The Tile shade property and texturing property must remain unique:
-			// they carry this physical page's atlas texture.
-			CopyStockTileDynamicState(*sourceTile, *pageTile);
-			if (primary.m_pWorldBound && pageShape.m_pWorldBound)
-				*pageShape.m_pWorldBound = *primary.m_pWorldBound;
-			else if (pageShape.m_pWorldBound)
-				pageShape.UpdateWorldBound();
-			return true;
-		}
-
 		UInt32 PackDirectCommandColor(const NiColorA& color)
 		{
 			auto channel = [](float value)
@@ -301,17 +189,6 @@ namespace fonthook
 			return shape;
 		}
 
-		struct StockPageShapeBatch
-		{
-			NiTriShape* primary = nullptr;
-			std::vector<NiTriShapePtr> additionalShapes;
-		};
-
-		struct StockPageShapeCapture
-		{
-			std::vector<StockPageShapeBatch> batches;
-		};
-
 		struct RichTextVectorContext
 		{
 			static constexpr size_t kDirectFontSlots = 64;
@@ -322,82 +199,10 @@ namespace fonthook
 				kDirectFontSlots> builders;
 			std::unordered_map<Font*, std::unique_ptr<VectorTextBuilder>>
 				fallbackBuilders;
-			std::vector<StockPageShapeBatch> stockPageBatches;
 		};
 
 		thread_local std::optional<RichTextVectorContext>
 			s_richTextContext;
-		thread_local std::vector<StockPageShapeCapture>
-			s_stockPageShapeCaptures;
-
-		void AttachStockPageShapeBatches(
-			std::vector<StockPageShapeBatch>& batches,
-			NiNode* fallbackParent)
-		{
-			for (StockPageShapeBatch& batch : batches)
-			{
-				NiNode* parent = batch.primary
-					? batch.primary->m_pkParent : nullptr;
-				if (!parent)
-					parent = fallbackParent;
-				if (!parent || !batch.primary)
-					continue;
-
-				UInt32 insertionIndex = parent->GetArrayCount();
-				bool foundPrimary = false;
-				for (UInt32 index = 0;
-					index < parent->GetArrayCount(); ++index)
-				{
-					if (parent->GetAt(index) == batch.primary)
-					{
-						insertionIndex = index + 1u;
-						foundPrimary = true;
-						break;
-					}
-				}
-
-				// Font::CreateText/MakeString can return only one shape. Once the
-				// game has attached that ABI primary, insert every packet sibling
-				// immediately after it. Inserting at the actual child index avoids
-				// AttachChild(firstAvail) filling an older hole and keeps multiple
-				// captured text groups contiguous without changing the relative
-				// order of unrelated children.
-				for (NiTriShapePtr& pageShape : batch.additionalShapes)
-				{
-					if (!pageShape)
-						continue;
-					pageShape->m_kLocal = batch.primary->m_kLocal;
-					pageShape->m_uiFlags = batch.primary->m_uiFlags;
-					if (foundPrimary)
-						parent->InsertChildAt(insertionIndex++, pageShape);
-					else
-						parent->AttachChild(pageShape, false);
-					SynchronizeStockPageShapeState(
-						*batch.primary, *pageShape);
-				}
-			}
-			batches.clear();
-		}
-
-		void AttachStockPageShapeBatchForPrimary(
-			std::vector<StockPageShapeBatch>& batches,
-			NiTriShape* primary, NiNode* fallbackParent)
-		{
-			if (!primary)
-				return;
-			const auto found = std::find_if(
-				batches.begin(), batches.end(),
-				[primary](const StockPageShapeBatch& batch)
-				{
-					return batch.primary == primary;
-				});
-			if (found == batches.end())
-				return;
-			std::vector<StockPageShapeBatch> selected;
-			selected.push_back(std::move(*found));
-			batches.erase(found);
-			AttachStockPageShapeBatches(selected, fallbackParent);
-		}
 	}
 
 	struct VectorTextBuilder::Impl
@@ -480,71 +285,6 @@ namespace fonthook
 	NiTriShape* CreateEmptyFreeTypeTextShape(Font* font, bool prepareObject)
 	{
 		return CreateEmptyVectorShape(font, prepareObject);
-	}
-
-	void BeginFreeTypeStockPageShapeCapture()
-	{
-		s_stockPageShapeCaptures.emplace_back();
-	}
-
-	void EndFreeTypeStockPageShapeCapture(NiNode* fallbackParent)
-	{
-		if (s_stockPageShapeCaptures.empty())
-			return;
-		StockPageShapeCapture capture =
-			std::move(s_stockPageShapeCaptures.back());
-		s_stockPageShapeCaptures.pop_back();
-		AttachStockPageShapeBatches(capture.batches, fallbackParent);
-	}
-
-	bool CanUseFreeTypeStockPageShapes()
-	{
-		return s_richTextContext.has_value()
-			|| !s_stockPageShapeCaptures.empty();
-	}
-
-	bool RegisterFreeTypeStockPageShapes(NiTriShape* primaryShape,
-		const std::vector<NiTriShape*>& additionalShapes)
-	{
-		if (!primaryShape || additionalShapes.empty())
-			return false;
-		if (!s_richTextContext && s_stockPageShapeCaptures.empty())
-			return false;
-
-		StockPageShapeBatch batch;
-		batch.primary = primaryShape;
-		batch.additionalShapes.reserve(additionalShapes.size());
-		for (NiTriShape* shape : additionalShapes)
-		{
-			if (!shape || shape == primaryShape)
-				return false;
-		}
-		for (NiTriShape* shape : additionalShapes)
-		{
-			batch.additionalShapes.emplace_back(shape);
-		}
-		if (batch.additionalShapes.empty())
-			return false;
-
-		if (s_richTextContext)
-		{
-			s_richTextContext->stockPageBatches.push_back(
-				std::move(batch));
-			return true;
-		}
-		if (!s_stockPageShapeCaptures.empty())
-		{
-			s_stockPageShapeCaptures.back().batches.push_back(
-				std::move(batch));
-			return true;
-		}
-		return false;
-	}
-
-	bool SynchronizeFreeTypeStockPageShapeState(
-		const NiTriShape& primaryShape, NiTriShape& pageShape)
-	{
-		return SynchronizeStockPageShapeState(primaryShape, pageShape);
 	}
 
 	VectorTextBuilder::VectorTextBuilder(Font* apFont, bool abPrepareObject,
@@ -826,12 +566,7 @@ namespace fonthook
 				if (builder)
 				{
 					if (NiTriShape* shape = builder->Finish())
-					{
 						s_richTextContext->parent->AttachChild(shape, true);
-						AttachStockPageShapeBatchForPrimary(
-							s_richTextContext->stockPageBatches,
-							shape, s_richTextContext->parent);
-					}
 				}
 			}
 			for (auto& [font, builder] :
@@ -839,16 +574,8 @@ namespace fonthook
 			{
 				if (builder)
 					if (NiTriShape* shape = builder->Finish())
-					{
 						s_richTextContext->parent->AttachChild(shape, true);
-						AttachStockPageShapeBatchForPrimary(
-							s_richTextContext->stockPageBatches,
-							shape, s_richTextContext->parent);
-					}
 			}
-			AttachStockPageShapeBatches(
-				s_richTextContext->stockPageBatches,
-				s_richTextContext->parent);
 		}
 		s_richTextContext.reset();
 	}

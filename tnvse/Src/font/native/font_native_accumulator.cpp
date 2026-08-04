@@ -94,6 +94,7 @@ namespace fonthook::vectorfont
 			UInt32 crossTextSequenceIndex =
 				kInvalidNativeA8CommandIndex;
 			UInt32 crossTextOccurrences = 0;
+			bool uniqueOccurrence = false;
 		};
 
 		struct StableTileTieItem
@@ -123,8 +124,7 @@ namespace fonthook::vectorfont
 			Depth,
 			Metadata,
 			Registration,
-			Group,
-			Singleton,
+			Facade,
 			Coverage,
 			Apply
 		};
@@ -190,7 +190,6 @@ namespace fonthook::vectorfont
 			std::vector<UInt32> acceptedOccurrenceNext;
 			std::vector<UInt32> sortedRegistrationOrdinals;
 			std::vector<UInt32> sortedItemIndicesByRegistrationOrdinal;
-			std::vector<UInt32> registrationBlockOrdinals;
 			std::vector<StableTileTieItem> stableTieItems;
 			std::vector<UInt8> originalOrderFreeTypeFlags;
 			std::vector<UInt32> originalOrderDesiredOrdinals;
@@ -207,9 +206,7 @@ namespace fonthook::vectorfont
 			std::vector<UInt32> facadeLookup;
 			std::vector<NativeA8PayloadTemplatePtr> payloadTemplates;
 			std::vector<UInt32> payloadLookup;
-			std::vector<std::shared_ptr<VirtualStockShapeGroup>>
-				virtualStockGroups;
-			std::vector<const A8ShapeMetadata*> virtualStockSingletons;
+			std::vector<const A8ShapeMetadata*> singletonFacades;
 			CpuMemoryLease cpuMemory;
 			UInt32 nestedBypassDepth = 0;
 			UInt64 nestedTraversalSerial = 1;
@@ -237,10 +234,8 @@ namespace fonthook::vectorfont
 			UInt64 metadataShapes = 0;
 			UInt64 metadataMissing = 0;
 			UInt64 sourceFallback = 0;
-			UInt64 singletonTopology = 0;
-			UInt64 singletonFallback = 0;
-			UInt64 groupTopology = 0;
-			UInt64 groupFallback = 0;
+			UInt64 facadeTopology = 0;
+			UInt64 facadeFallback = 0;
 			UInt64 occurrenceFallback = 0;
 		};
 
@@ -351,14 +346,10 @@ namespace fonthook::vectorfont
 				values.metadataMissing);
 			record(FreeTypePerfCounter::ThinRegistrationSourceFallback,
 				values.sourceFallback);
-			record(FreeTypePerfCounter::ThinRegistrationSingletonTopology,
-				values.singletonTopology);
-			record(FreeTypePerfCounter::ThinRegistrationSingletonFallback,
-				values.singletonFallback);
-			record(FreeTypePerfCounter::ThinRegistrationGroupTopology,
-				values.groupTopology);
-			record(FreeTypePerfCounter::ThinRegistrationGroupFallback,
-				values.groupFallback);
+			record(FreeTypePerfCounter::ThinRegistrationFacadeTopology,
+				values.facadeTopology);
+			record(FreeTypePerfCounter::ThinRegistrationFacadeFallback,
+				values.facadeFallback);
 			record(FreeTypePerfCounter::ThinRegistrationOccurrenceFallback,
 				values.occurrenceFallback);
 		}
@@ -474,8 +465,6 @@ namespace fonthook::vectorfont
 					* sizeof(UInt32)
 				+ scratch.sortedItemIndicesByRegistrationOrdinal.capacity()
 					* sizeof(UInt32)
-				+ scratch.registrationBlockOrdinals.capacity()
-					* sizeof(UInt32)
 				+ scratch.stableTieItems.capacity()
 					* sizeof(StableTileTieItem)
 				+ scratch.originalOrderFreeTypeFlags.capacity()
@@ -496,9 +485,7 @@ namespace fonthook::vectorfont
 				+ scratch.payloadTemplates.capacity()
 					* sizeof(NativeA8PayloadTemplatePtr)
 				+ scratch.payloadLookup.capacity() * sizeof(UInt32)
-				+ scratch.virtualStockGroups.capacity()
-					* sizeof(std::shared_ptr<VirtualStockShapeGroup>)
-				+ scratch.virtualStockSingletons.capacity()
+				+ scratch.singletonFacades.capacity()
 					* sizeof(const A8ShapeMetadata*);
 			scratch.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata, bytes);
 		}
@@ -519,8 +506,7 @@ namespace fonthook::vectorfont
 			scratch.executionSkeletonValidationToken = 0;
 			scratch.frameEntries.clear();
 			scratch.payloadTemplates.clear();
-			scratch.virtualStockGroups.clear();
-			scratch.virtualStockSingletons.clear();
+			scratch.singletonFacades.clear();
 			scratch.sourceAccumulator = nullptr;
 			scratch.acceptedTileRegistrations.clear();
 			scratch.metadataShapes.clear();
@@ -574,11 +560,6 @@ namespace fonthook::vectorfont
 				std::vector<UInt32>().swap(
 					scratch.sortedItemIndicesByRegistrationOrdinal);
 			}
-			if (scratch.registrationBlockOrdinals.capacity() > 8192)
-			{
-				std::vector<UInt32>().swap(
-					scratch.registrationBlockOrdinals);
-			}
 			if (scratch.stableTieItems.capacity() > 8192)
 			{
 				std::vector<StableTileTieItem>().swap(
@@ -627,15 +608,10 @@ namespace fonthook::vectorfont
 			}
 			if (scratch.payloadLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.payloadLookup);
-			if (scratch.virtualStockGroups.capacity() > 8192)
-			{
-				std::vector<std::shared_ptr<VirtualStockShapeGroup>>().swap(
-					scratch.virtualStockGroups);
-			}
-			if (scratch.virtualStockSingletons.capacity() > 8192)
+			if (scratch.singletonFacades.capacity() > 8192)
 			{
 				std::vector<const A8ShapeMetadata*>().swap(
-					scratch.virtualStockSingletons);
+					scratch.singletonFacades);
 			}
 			RefreshSortedScratchMemory(scratch);
 			if (IsCpuMemoryBudgetExceeded())
@@ -658,8 +634,6 @@ namespace fonthook::vectorfont
 					scratch.sortedRegistrationOrdinals);
 				std::vector<UInt32>().swap(
 					scratch.sortedItemIndicesByRegistrationOrdinal);
-				std::vector<UInt32>().swap(
-					scratch.registrationBlockOrdinals);
 				std::vector<StableTileTieItem>().swap(
 					scratch.stableTieItems);
 				std::vector<UInt8>().swap(
@@ -680,10 +654,8 @@ namespace fonthook::vectorfont
 				std::vector<NativeA8PayloadTemplatePtr>().swap(
 					scratch.payloadTemplates);
 				std::vector<UInt32>().swap(scratch.payloadLookup);
-				std::vector<std::shared_ptr<VirtualStockShapeGroup>>().swap(
-					scratch.virtualStockGroups);
 				std::vector<const A8ShapeMetadata*>().swap(
-					scratch.virtualStockSingletons);
+					scratch.singletonFacades);
 				scratch.cpuMemory.Release();
 			}
 		}
@@ -985,13 +957,9 @@ namespace fonthook::vectorfont
 				counter = FreeTypePerfCounter::
 					SortedOriginalOrderAnchorFailRegistration;
 				break;
-			case OriginalOrderAnchorFailure::Group:
+			case OriginalOrderAnchorFailure::Facade:
 				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailGroup;
-				break;
-			case OriginalOrderAnchorFailure::Singleton:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailSingleton;
+					SortedOriginalOrderAnchorFailFacade;
 				break;
 			case OriginalOrderAnchorFailure::Coverage:
 				counter = FreeTypePerfCounter::
@@ -1112,7 +1080,6 @@ namespace fonthook::vectorfont
 			SortedPayloadScratch& scratch, BSShaderAccumulator& accumulator,
 			size_t itemCount)
 		{
-			scratch.registrationBlockOrdinals.clear();
 			scratch.originalOrderFreeTypeFlags.assign(itemCount, 0);
 			if (scratch.sourceAccumulator != &accumulator
 				|| scratch.acceptedTileRegistrations.size() != itemCount)
@@ -1153,41 +1120,20 @@ namespace fonthook::vectorfont
 				if (!owner)
 					continue;
 				if (owner->backend
-					== FreeTypeShapeBackend::VirtualStockSingleton)
+					== FreeTypeShapeBackend::SingletonFacade)
 				{
-					VirtualStockSingletonState* singleton =
-						GetVirtualStockSingletonState(*owner);
+					SingletonFacadeState* singleton =
+						GetSingletonFacadeState(*owner);
 					if (!singleton)
 						continue;
 					singleton->sourceTopologyToken = 0;
 					singleton->topologyValidationToken = 0;
 					singleton->preflightValidationToken = 0;
 					if (singleton->frameMode.load(std::memory_order_acquire)
-						!= VirtualStockFrameMode::Retired)
+						!= SingletonFacadeFrameMode::Retired)
 					{
 						singleton->frameMode.store(
-							VirtualStockFrameMode::Facade,
-							std::memory_order_release);
-					}
-				}
-				else if (owner->backend
-					== FreeTypeShapeBackend::VirtualStockNative
-					&& owner->virtualStockPrimary)
-				{
-					std::shared_ptr<VirtualStockShapeGroup> group =
-						AcquireVirtualStockShapeGroup(*owner);
-					if (!group)
-						continue;
-					std::lock_guard<std::mutex> lock(group->mutex);
-					group->sourceTopologyToken = 0;
-					group->topologyValidationToken = 0;
-					group->preflightValidationToken = 0;
-					std::fill(group->sortedItemIndices.begin(),
-						group->sortedItemIndices.end(), -1);
-					if (group->frameMode.load(std::memory_order_acquire)
-						!= VirtualStockFrameMode::Retired)
-					{
-						group->frameMode.store(VirtualStockFrameMode::Facade,
+							SingletonFacadeFrameMode::Facade,
 							std::memory_order_release);
 					}
 				}
@@ -1204,124 +1150,26 @@ namespace fonthook::vectorfont
 					continue;
 
 				if (metadata->backend
-					== FreeTypeShapeBackend::VirtualStockSingleton)
+					== FreeTypeShapeBackend::SingletonFacade)
 				{
-					VirtualStockSingletonState* singleton =
-						GetVirtualStockSingletonState(*metadata);
+					SingletonFacadeState* singleton =
+						GetSingletonFacadeState(*metadata);
 					const bool valid = singleton
 						&& singleton->slot.shape == metadata->shapeIdentity
-						&& metadata->virtualStockPrimary
 						&& scratch.sourceOccurrenceCounts[metadataIndex] == 1
 						&& scratch.sourceFirstIndices[metadataIndex] >= 0;
 					if (valid)
 					{
 						singleton->sourceTopologyToken = scratch.sortCycle;
-						++s_thinRegistrationDiagnostics.singletonTopology;
+						++s_thinRegistrationDiagnostics.facadeTopology;
 					}
 					else
 					{
-						++s_thinRegistrationDiagnostics.singletonFallback;
+						++s_thinRegistrationDiagnostics.facadeFallback;
 						++s_thinRegistrationDiagnostics.occurrenceFallback;
-						fail(OriginalOrderAnchorFailure::Singleton);
+						fail(OriginalOrderAnchorFailure::Facade);
 					}
 					continue;
-				}
-
-				if (metadata->backend
-					!= FreeTypeShapeBackend::VirtualStockNative
-					|| !metadata->virtualStockPrimary)
-				{
-					continue;
-				}
-
-				std::shared_ptr<VirtualStockShapeGroup> group =
-					AcquireVirtualStockShapeGroup(*metadata);
-				bool valid = group != nullptr;
-				size_t blockStart = itemCount;
-				if (valid)
-				{
-					std::lock_guard<std::mutex> lock(group->mutex);
-					valid = group->primaryMetadataOwner.get() == metadata
-						&& group->primaryShape == metadata->shapeIdentity
-						&& !group->slots.empty()
-						&& group->primarySlot + 1u == group->slots.size()
-						&& group->sortedItemIndices.size()
-							== group->slots.size();
-					for (SInt32 slotIndex = valid
-							? static_cast<SInt32>(group->primarySlot) : -1;
-						slotIndex >= 0; --slotIndex)
-					{
-						const size_t offset = static_cast<size_t>(
-							group->primarySlot
-								- static_cast<UInt32>(slotIndex));
-						NiTriShape* shape = group->slots[slotIndex].shape;
-						const size_t shapeIndex =
-							LookupMetadataShapeIndex(scratch, shape);
-						const A8ShapeMetadata* slotMetadata =
-							FindBatchedMetadata(scratch, shape);
-						if (!shape || shapeIndex
-								>= scratch.sourceOccurrenceCounts.size()
-							|| scratch.sourceOccurrenceCounts[shapeIndex] != 1
-							|| scratch.sourceFirstIndices[shapeIndex] < 0
-							|| !slotMetadata
-							|| slotMetadata->virtualStockGroup != group.get()
-							|| slotMetadata->virtualStockSlot
-								!= static_cast<UInt32>(slotIndex))
-						{
-							valid = false;
-							break;
-						}
-						const size_t sourceIndex = static_cast<size_t>(
-							scratch.sourceFirstIndices[shapeIndex]);
-						if (!offset)
-							blockStart = sourceIndex;
-						else if (sourceIndex != blockStart + offset)
-						{
-							valid = false;
-							break;
-						}
-					}
-					if (valid)
-					{
-						for (const VirtualStockSlotBinding& slot : group->slots)
-						{
-							if (!slot.shape || slot.shape == group->primaryShape)
-								continue;
-							valid = SynchronizeFreeTypeStockPageShapeState(
-								*group->primaryShape, *slot.shape) && valid;
-						}
-					}
-					if (valid)
-						group->sourceTopologyToken = scratch.sortCycle;
-				}
-
-				if (!valid)
-				{
-					++s_thinRegistrationDiagnostics.groupFallback;
-					++s_thinRegistrationDiagnostics.occurrenceFallback;
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::VirtualStockFallbackNoncontiguous);
-					fail(OriginalOrderAnchorFailure::Group);
-					continue;
-				}
-
-				++s_thinRegistrationDiagnostics.groupTopology;
-				if (group->slots.size() > 1u)
-				{
-					if (scratch.registrationBlockOrdinals.empty())
-					{
-						scratch.registrationBlockOrdinals.resize(itemCount);
-						for (size_t ordinal = 0; ordinal < itemCount; ++ordinal)
-						{
-							scratch.registrationBlockOrdinals[ordinal] =
-								static_cast<UInt32>(ordinal);
-						}
-					}
-					for (size_t offset = 0; offset < group->slots.size(); ++offset)
-					{
-						scratch.registrationBlockOrdinals[blockStart + offset] =
-							static_cast<UInt32>(blockStart);
-					}
 				}
 			}
 
@@ -1331,43 +1179,12 @@ namespace fonthook::vectorfont
 		bool BuildOriginalOrderDesiredOrdinals(
 			SortedPayloadScratch& scratch, size_t itemCount)
 		{
-			if (!scratch.registrationBlockOrdinals.empty()
-				&& scratch.registrationBlockOrdinals.size() != itemCount)
-			{
-				return false;
-			}
-			auto blockStartFor = [&](size_t ordinal)
-			{
-				return scratch.registrationBlockOrdinals.empty()
-					? static_cast<UInt32>(ordinal)
-					: scratch.registrationBlockOrdinals[ordinal];
-			};
 			scratch.originalOrderDesiredOrdinals.clear();
 			scratch.originalOrderDesiredOrdinals.reserve(itemCount);
-			for (size_t cursor = itemCount; cursor;)
+			for (size_t cursor = itemCount; cursor; --cursor)
 			{
-				const size_t candidate = cursor - 1u;
-				const size_t blockStart = blockStartFor(candidate);
-				if (blockStart > candidate)
-					return false;
-				if (blockStart == candidate)
-				{
-					scratch.originalOrderDesiredOrdinals.push_back(
-						static_cast<UInt32>(candidate));
-					--cursor;
-					continue;
-				}
-				for (size_t ordinal = blockStart;
-					ordinal <= candidate; ++ordinal)
-				{
-					if (blockStartFor(ordinal) != blockStart)
-					{
-						return false;
-					}
-					scratch.originalOrderDesiredOrdinals.push_back(
-						static_cast<UInt32>(ordinal));
-				}
-				cursor = blockStart;
+				scratch.originalOrderDesiredOrdinals.push_back(
+					static_cast<UInt32>(cursor - 1u));
 			}
 			return scratch.originalOrderDesiredOrdinals.size() == itemCount;
 		}
@@ -1496,31 +1313,8 @@ namespace fonthook::vectorfont
 			if (scratch.sortedRegistrationOrdinals.size() != itemCount)
 				return false;
 
-			// A single facade is its own painter-order block.  This covers the
-			// ordinary native backend and the Virtual-stock singleton backend.
-			// Keep the existing compatibility path for every real multi-slot
-			// group; its primary/follower array convention needs the full mutable
-			// topology proof and must never be guessed from facade addresses.
-			for (const A8ShapeMetadataPtr& owner : scratch.metadataOwners)
-			{
-				const A8ShapeMetadata* metadata = owner.get();
-				if (!metadata)
-					continue;
-				if (metadata->backend != FreeTypeShapeBackend::VirtualStockNative)
-					continue;
-				if (!metadata->virtualStockPrimary
-					|| !metadata->virtualStockGroup)
-				{
-					return false;
-				}
-				std::shared_ptr<VirtualStockShapeGroup> group =
-					AcquireVirtualStockShapeGroup(*metadata);
-				if (!group)
-					return false;
-				std::lock_guard<std::mutex> lock(group->mutex);
-				if (group->slots.size() != 1u)
-					return false;
-			}
+			// Every native FreeType artifact is now one painter-order block,
+			// regardless of how many packet draws it expands into at submission.
 
 			// The sidecar started as [0, itemCount) and was swapped beside every
 			// stock-equivalent quicksort exchange.  Validate the permutation before
@@ -1870,16 +1664,6 @@ namespace fonthook::vectorfont
 					return reject();
 			}
 
-			if (scratch.registrationBlockOrdinals.size() != itemCount)
-			{
-				scratch.registrationBlockOrdinals.resize(itemCount);
-				for (size_t ordinal = 0; ordinal < itemCount; ++ordinal)
-				{
-					scratch.registrationBlockOrdinals[ordinal] =
-						static_cast<UInt32>(ordinal);
-				}
-			}
-
 			for (size_t runBegin = 0; runBegin < itemCount;)
 			{
 				const float runDepth = accumulator->m_pfDepths[runBegin];
@@ -1908,14 +1692,8 @@ namespace fonthook::vectorfont
 							scratch.sortedRegistrationOrdinals[item - 1u];
 						const UInt32 currentOrdinal =
 							scratch.sortedRegistrationOrdinals[item];
-						const UInt32 previousBlock =
-							scratch.registrationBlockOrdinals[previousOrdinal];
-						const UInt32 currentBlock =
-							scratch.registrationBlockOrdinals[currentOrdinal];
 						painterOrderChanged = painterOrderChanged
-							|| currentBlock > previousBlock
-							|| (currentBlock == previousBlock
-								&& currentOrdinal < previousOrdinal);
+							|| currentOrdinal > previousOrdinal;
 					}
 				}
 				if (hasFreeType && hasStock && painterOrderChanged
@@ -1930,8 +1708,7 @@ namespace fonthook::vectorfont
 						scratch.stableTieItems.push_back({
 							accumulator->m_ppkItems[item],
 							accumulator->m_pfDepths[item],
-							ordinal,
-							scratch.registrationBlockOrdinals[ordinal]
+							ordinal, ordinal
 						});
 					}
 					std::sort(scratch.stableTieItems.begin(),
@@ -1939,14 +1716,8 @@ namespace fonthook::vectorfont
 						[](const StableTileTieItem& left,
 							const StableTileTieItem& right)
 						{
-							if (left.registrationBlockOrdinal
-								!= right.registrationBlockOrdinal)
-							{
-								return left.registrationBlockOrdinal
-									> right.registrationBlockOrdinal;
-							}
 							return left.registrationOrdinal
-								< right.registrationOrdinal;
+								> right.registrationOrdinal;
 						});
 					for (size_t offset = 0;
 						offset < scratch.stableTieItems.size(); ++offset)
@@ -1969,7 +1740,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		void ResolveVirtualStockSortedTopology(
+		void ResolveSingletonFacadeSortedTopology(
 			SortedPayloadScratch& scratch, BSShaderAccumulator* accumulator,
 			UInt64 validationToken)
 		{
@@ -2011,10 +1782,10 @@ namespace fonthook::vectorfont
 					continue;
 
 				if (metadata->backend
-					== FreeTypeShapeBackend::VirtualStockSingleton)
+					== FreeTypeShapeBackend::SingletonFacade)
 				{
-					VirtualStockSingletonState* singleton =
-						GetVirtualStockSingletonState(*metadata);
+					SingletonFacadeState* singleton =
+						GetSingletonFacadeState(*metadata);
 					const bool valid = singleton
 						&& singleton->sourceTopologyToken == scratch.sortCycle
 						&& singleton->slot.shape == metadata->shapeIdentity
@@ -2022,113 +1793,22 @@ namespace fonthook::vectorfont
 						&& scratch.sortedOccurrenceCounts[metadataIndex] == 1
 						&& scratch.sortedFirstIndices[metadataIndex] >= 0
 						&& singleton->frameMode.load(std::memory_order_acquire)
-							!= VirtualStockFrameMode::Retired;
+							!= SingletonFacadeFrameMode::Retired;
 					if (valid)
 					{
 						singleton->topologyValidationToken = validationToken;
-						RecordFreeTypePerf(
-							FreeTypePerfCounter::VirtualStockRegistrationResolved);
 					}
 					else
 					{
 						if (singleton)
 							singleton->topologyValidationToken = 0;
-						++s_thinRegistrationDiagnostics.singletonFallback;
+						++s_thinRegistrationDiagnostics.facadeFallback;
 						++s_thinRegistrationDiagnostics.occurrenceFallback;
-						RestoreVirtualStockSingletonToFacade(*metadata,
+						RestoreSingletonFacade(*metadata,
 							NativeA8FallbackReason::PropertySync);
-						RecordFreeTypePerf(FreeTypePerfCounter::
-							VirtualStockFallbackNoncontiguous);
 					}
 					continue;
 				}
-
-				if (metadata->backend
-					!= FreeTypeShapeBackend::VirtualStockNative
-					|| !metadata->virtualStockPrimary)
-				{
-					continue;
-				}
-
-				std::shared_ptr<VirtualStockShapeGroup> group =
-					AcquireVirtualStockShapeGroup(*metadata);
-				bool valid = group != nullptr;
-				UInt64 missing = 0;
-				UInt64 duplicate = 0;
-				bool orderMismatch = false;
-				if (valid)
-				{
-					std::lock_guard<std::mutex> lock(group->mutex);
-					valid = group->sourceTopologyToken == scratch.sortCycle
-						&& group->primaryMetadataOwner.get() == metadata
-						&& group->primaryShape == metadata->shapeIdentity
-						&& !group->slots.empty()
-						&& group->primarySlot + 1u == group->slots.size()
-						&& group->sortedItemIndices.size()
-							== group->slots.size()
-						&& group->frameMode.load(std::memory_order_acquire)
-							!= VirtualStockFrameMode::Retired;
-					SInt32 previous = -1;
-					for (SInt32 slotIndex = valid
-							? static_cast<SInt32>(group->primarySlot) : -1;
-						slotIndex >= 0; --slotIndex)
-					{
-						NiTriShape* shape = group->slots[slotIndex].shape;
-						const size_t shapeIndex =
-							LookupMetadataShapeIndex(scratch, shape);
-						if (shapeIndex >= scratch.sortedOccurrenceCounts.size())
-						{
-							++missing;
-							valid = false;
-							break;
-						}
-						const UInt32 occurrences =
-							scratch.sortedOccurrenceCounts[shapeIndex];
-						if (!occurrences)
-							++missing;
-						else if (occurrences > 1)
-							duplicate += occurrences - 1u;
-						const SInt32 item =
-							scratch.sortedFirstIndices[shapeIndex];
-						if (occurrences != 1 || item < 0
-							|| item >= accumulator->m_iNumItems
-							|| accumulator->m_ppkItems[item] != shape
-							|| (previous >= 0 && item != previous + 1))
-						{
-							orderMismatch = orderMismatch
-								|| (occurrences == 1);
-							valid = false;
-							break;
-						}
-						group->sortedItemIndices[slotIndex] = item;
-						previous = item;
-					}
-					group->topologyValidationToken =
-						valid ? validationToken : 0;
-				}
-				if (!valid)
-				{
-					++s_thinRegistrationDiagnostics.groupFallback;
-					++s_thinRegistrationDiagnostics.occurrenceFallback;
-					if (group)
-						RestoreVirtualStockGroupToFacade(group,
-							NativeA8FallbackReason::PropertySync);
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						VirtualStockFallbackNoncontiguous);
-					if (missing)
-						RecordFreeTypePerf(FreeTypePerfCounter::
-							VirtualStockRegistrationMissing, missing);
-					if (duplicate)
-						RecordFreeTypePerf(FreeTypePerfCounter::
-							VirtualStockRegistrationDuplicate, duplicate);
-					if (orderMismatch)
-						RecordFreeTypePerf(FreeTypePerfCounter::
-							VirtualStockRegistrationOrderMismatch);
-					continue;
-				}
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::VirtualStockRegistrationResolved,
-					static_cast<UInt64>(group->slots.size()));
 			}
 		}
 
@@ -2194,7 +1874,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		NativeA8FallbackReason PreflightNativeGroupImpl(NiTriShape* facade,
+		NativeA8FallbackReason PreflightNativeFacadeImpl(NiTriShape* facade,
 			const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload,
 			const NativePreflightFrameContext* frameContext = nullptr,
 			const bool* forcedCompositeTopology = nullptr)
@@ -2375,6 +2055,15 @@ namespace fonthook::vectorfont
 				InvalidateNativePreflight(payload);
 				return NativeA8FallbackReason::AtlasGeneration;
 			}
+			if (payload.topologyObserved
+				&& payload.lastTopologyComposite
+					!= payload.useCompositePackets)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SingletonFacadeTopologySwitch);
+			}
+			payload.topologyObserved = true;
+			payload.lastTopologyComposite = payload.useCompositePackets;
 
 			payload.preparedGeneration = generation;
 			payload.preflightAtlasTextureEpoch = atlasTextureEpoch;
@@ -2626,8 +2315,7 @@ namespace fonthook::vectorfont
 				}
 				scratch.frameEntries.clear();
 				scratch.payloadTemplates.clear();
-				scratch.virtualStockGroups.clear();
-				scratch.virtualStockSingletons.clear();
+				scratch.singletonFacades.clear();
 				EnsureSortedMetadataCoverage(scratch, *accumulator);
 
 				NativePreflightFrameContext preflightContext;
@@ -2702,13 +2390,11 @@ namespace fonthook::vectorfont
 				const size_t trackedCount = scratch.frameCandidates.size();
 				scratch.frameEntries.reserve(trackedCount);
 				scratch.payloadTemplates.reserve(trackedCount);
-				scratch.virtualStockGroups.reserve(
-					std::min<size_t>(trackedCount, 1024));
-				scratch.virtualStockSingletons.reserve(
+				scratch.singletonFacades.reserve(
 					std::min<size_t>(trackedCount, 1024));
 				PrepareLookup(scratch.facadeLookup, trackedCount);
 				PrepareLookup(scratch.payloadLookup, trackedCount);
-				ResolveVirtualStockSortedTopology(
+				ResolveSingletonFacadeSortedTopology(
 					scratch, accumulator, frameValidationToken);
 
 				for (NiTriShape* facade : scratch.frameCandidates)
@@ -2723,9 +2409,7 @@ namespace fonthook::vectorfont
 					entry.facade = facade;
 					entry.metadata = FindBatchedMetadata(scratch, facade);
 					entry.generation = generation;
-					std::shared_ptr<VirtualStockShapeGroup>
-						virtualStockGroup;
-					VirtualStockSingletonState* virtualStockSingleton =
+					SingletonFacadeState* singletonFacade =
 						nullptr;
 					bool topologyReady = false;
 					if (!entry.metadata)
@@ -2744,45 +2428,16 @@ namespace fonthook::vectorfont
 						}
 					}
 					else if (entry.metadata->backend
-						== FreeTypeShapeBackend::VirtualStockNative)
+						== FreeTypeShapeBackend::SingletonFacade)
 					{
-						if (entry.metadata->virtualStockPrimary)
-						{
-							virtualStockGroup =
-								AcquireVirtualStockShapeGroup(*entry.metadata);
-							if (virtualStockGroup)
-							{
-								std::lock_guard<std::mutex> lock(
-									virtualStockGroup->mutex);
-								topologyReady =
-									virtualStockGroup->topologyValidationToken
-										== frameValidationToken;
-							}
-						}
-						else
-						{
-							// Followers need a sorted metadata view so their render
-							// callback never reacquires metadata ownership. The primary
-							// alone owns preflight and the compatibility payload.
-							entry.preflightResult =
-								NativeA8FallbackReason::None;
-						}
-					}
-					else if (entry.metadata->backend
-						== FreeTypeShapeBackend::VirtualStockSingleton)
-					{
-						virtualStockSingleton =
-							GetVirtualStockSingletonState(*entry.metadata);
-						topologyReady = virtualStockSingleton
-							&& virtualStockSingleton->topologyValidationToken
+						singletonFacade =
+							GetSingletonFacadeState(*entry.metadata);
+						topologyReady = singletonFacade
+							&& singletonFacade->topologyValidationToken
 								== frameValidationToken;
 					}
 
-					const bool groupFollower = entry.metadata
-						&& entry.metadata->backend
-							== FreeTypeShapeBackend::VirtualStockNative
-						&& !entry.metadata->virtualStockPrimary;
-					if (!groupFollower && entry.metadata
+					if (entry.metadata
 						&& entry.metadata->nativePayload.buildComplete)
 					{
 						entry.payload = &entry.metadata->nativePayload;
@@ -2805,62 +2460,46 @@ namespace fonthook::vectorfont
 						}
 						else
 						{
-							const bool* forcedCompositeTopology =
-								virtualStockGroup
-									? &virtualStockGroup->useCompositeTopology
-									: virtualStockSingleton
-										? &virtualStockSingleton->
-											useCompositeTopology
-										: nullptr;
-							entry.preflightResult = PreflightNativeGroupImpl(
+							entry.preflightResult = PreflightNativeFacadeImpl(
 								facade, *entry.metadata, *entry.payload,
-								&preflightContext, forcedCompositeTopology);
+								&preflightContext, nullptr);
 							if (entry.preflightResult
 								== NativeA8FallbackReason::None)
 							{
 								entry.generation =
 									entry.payload->preparedGeneration;
 								entry.validationToken = frameValidationToken;
-								if (virtualStockGroup && topologyReady)
-								{
-									{
-										std::lock_guard<std::mutex> lock(
-											virtualStockGroup->mutex);
-										virtualStockGroup->
-											preflightValidationToken =
-												frameValidationToken;
-									}
-									scratch.virtualStockGroups.push_back(
-										virtualStockGroup);
-								}
-								else if (virtualStockSingleton
+								if (singletonFacade
 									&& topologyReady)
 								{
-									virtualStockSingleton->
+									singletonFacade->
 										preflightValidationToken =
 											frameValidationToken;
-									scratch.virtualStockSingletons.push_back(
+									scratch.singletonFacades.push_back(
 										entry.metadata);
 								}
 							}
-							else if (virtualStockGroup && topologyReady)
+							else if (singletonFacade && topologyReady)
 							{
-								RestoreVirtualStockGroupToFacade(
-									virtualStockGroup, entry.preflightResult);
-							}
-							else if (virtualStockSingleton && topologyReady)
-							{
-								RestoreVirtualStockSingletonToFacade(
+								RestoreSingletonFacade(
 									*entry.metadata, entry.preflightResult);
 							}
 						}
 					}
-					else if (!groupFollower)
+					else
 					{
 						entry.preflightResult =
 							NativeA8FallbackReason::PacketBuild;
 					}
 
+					const size_t metadataIndex = entry.metadata
+						? LookupMetadataShapeIndex(scratch, facade)
+						: std::numeric_limits<size_t>::max();
+					entry.uniqueOccurrence = metadataIndex
+						< scratch.sourceOccurrenceCounts.size()
+						&& metadataIndex < scratch.sortedOccurrenceCounts.size()
+						&& scratch.sourceOccurrenceCounts[metadataIndex] == 1
+						&& scratch.sortedOccurrenceCounts[metadataIndex] == 1;
 					const size_t entryIndex = scratch.frameEntries.size();
 					scratch.frameEntries.push_back(std::move(entry));
 					InsertSortedFacade(scratch, facade, entryIndex);
@@ -2882,45 +2521,22 @@ namespace fonthook::vectorfont
 				PrepareSortedNativeA8Payloads(
 					scratch.payloadTemplates, generation);
 				for (const A8ShapeMetadata* metadata
-					: scratch.virtualStockSingletons)
+					: scratch.singletonFacades)
 				{
-					VirtualStockSingletonState* singleton = metadata
-						? GetVirtualStockSingletonState(*metadata) : nullptr;
+					SingletonFacadeState* singleton = metadata
+						? GetSingletonFacadeState(*metadata) : nullptr;
 					if (!singleton
 						|| singleton->preflightValidationToken
 							!= frameValidationToken)
 					{
 						if (metadata)
 						{
-							RestoreVirtualStockSingletonToFacade(*metadata,
+							RestoreSingletonFacade(*metadata,
 								NativeA8FallbackReason::RuntimeFault);
 						}
 						continue;
 					}
-					PrepareVirtualStockSingletonForSortedFrame(*metadata,
-						generation, preflightContext.atlasTextureEpoch,
-						frameValidationToken);
-				}
-				for (const std::shared_ptr<VirtualStockShapeGroup>& group
-					: scratch.virtualStockGroups)
-				{
-					if (!group || !group->primaryShape)
-						continue;
-					bool preflightValidated = false;
-					{
-						std::lock_guard<std::mutex> lock(group->mutex);
-						preflightValidated =
-							group->preflightValidationToken
-								== frameValidationToken;
-					}
-					if (!preflightValidated)
-					{
-						RestoreVirtualStockGroupToFacade(group,
-							NativeA8FallbackReason::RuntimeFault);
-						continue;
-					}
-
-					PrepareVirtualStockGroupForSortedFrame(group,
+					PrepareSingletonFacadeForSortedFrame(*metadata,
 						generation, preflightContext.atlasTextureEpoch,
 						frameValidationToken);
 				}
@@ -2934,46 +2550,21 @@ namespace fonthook::vectorfont
 						BeginNativeA8FrameCommandBuffer(accumulator,
 							frameValidationToken, generation,
 							preflightContext.atlasTextureEpoch);
-						size_t virtualEntryCount =
-							scratch.virtualStockSingletons.size();
-						for (const std::shared_ptr<
-							VirtualStockShapeGroup>& group
-							: scratch.virtualStockGroups)
-						{
-							if (group)
-								virtualEntryCount += group->slots.size();
-						}
-						const size_t ordinaryCapacityHint =
-							scratch.frameEntries.size()
-								>= virtualEntryCount
-							? scratch.frameEntries.size()
-								- virtualEntryCount
-							: 0;
 						ReserveNativeA8FrameCommandBuffer(
-							ordinaryCapacityHint,
-							scratch.virtualStockSingletons.size());
+							scratch.frameEntries.size(),
+							scratch.singletonFacades.size());
 					}
 					{
-						FreeTypePerfScope commandBuildVirtual(
-							FreeTypePerfPhase::CommandBuildVirtual);
+						FreeTypePerfScope commandBuildDirectFacade(
+							FreeTypePerfPhase::CommandBuildDirectFacade);
 						for (const A8ShapeMetadata* metadata
-							: scratch.virtualStockSingletons)
+							: scratch.singletonFacades)
 						{
 							if (metadata)
 							{
-								AddNativeA8FrameVirtualSingletonCommand(
+								AddNativeA8FrameDirectFacadeCommand(
 									metadata);
 							}
-						}
-						for (const std::shared_ptr<
-							VirtualStockShapeGroup>& group
-							: scratch.virtualStockGroups)
-						{
-							if (!group)
-								continue;
-							AddNativeA8FrameCommandSpan(
-								nullptr, nullptr, nullptr,
-								group.get());
 						}
 					}
 					{
@@ -2986,32 +2577,41 @@ namespace fonthook::vectorfont
 								|| entry.preflightResult
 									!= NativeA8FallbackReason::None
 								|| entry.visibilityCull
-									!= NativeA8VisibilityCull::None)
+									!= NativeA8VisibilityCull::None
+								|| !entry.uniqueOccurrence)
 							{
 								continue;
 							}
 							if (entry.metadata->backend
 								== FreeTypeShapeBackend::
-									VirtualStockNative)
+									SingletonFacade)
 							{
-								VirtualStockShapeGroup* group =
-									entry.metadata->virtualStockGroup;
-								if (group
-									&& group->
-										commandValidationToken.load(
-											std::memory_order_acquire)
+								SingletonFacadeState* singleton =
+									GetSingletonFacadeState(
+										*entry.metadata);
+								if (singleton
+									&& singleton->frameMode.load(
+										std::memory_order_acquire)
+										== SingletonFacadeFrameMode::Direct
+									&& singleton->commandValidationToken.load(
+										std::memory_order_acquire)
 										== frameValidationToken)
 								{
-									entry.commandSpanIndex =
-										group->commandSpanIndex.load(
-											std::memory_order_acquire);
+									continue;
 								}
-							}
-							else if (entry.metadata->backend
-								== FreeTypeShapeBackend::
-									VirtualStockSingleton)
-							{
-								continue;
+								entry.singlePacketCommandIndex =
+									AddNativeA8FrameSinglePacketCommand(
+										entry.facade, entry.metadata,
+										entry.payload);
+								if (entry.singlePacketCommandIndex
+									== kInvalidNativeA8CommandIndex)
+								{
+									entry.commandSpanIndex =
+										AddNativeA8FrameCommandSpan(
+											entry.facade,
+											entry.metadata,
+											entry.payload);
+								}
 							}
 							else
 							{
@@ -3077,32 +2677,30 @@ namespace fonthook::vectorfont
 								{
 									if (metadata->backend
 										== FreeTypeShapeBackend::
-											VirtualStockSingleton)
+											SingletonFacade)
 									{
-										VirtualStockSingletonState* singleton =
-											GetVirtualStockSingletonState(*metadata);
+										SingletonFacadeState* singleton =
+											GetSingletonFacadeState(*metadata);
 										if (singleton
 											&& singleton->frameMode.load(
 												std::memory_order_acquire)
-												== VirtualStockFrameMode::Direct
+												== SingletonFacadeFrameMode::Direct
 											&& singleton->commandValidationToken.load(
 												std::memory_order_acquire)
 												== frameValidationToken)
 										{
 											commandIndex = singleton->
-												commandVirtualSinglePacketIndex.load(
+												commandDirectFacadeSinglePacketIndex.load(
 													std::memory_order_acquire);
 											if (commandIndex
 												!= kInvalidNativeA8CommandIndex)
 											{
 												kind = NativeA8CrossTextCommandKind::
-													VirtualSinglePacket;
+													DirectFacadeSinglePacket;
 											}
 										}
 									}
-									else if (metadata->backend
-										!= FreeTypeShapeBackend::VirtualStockNative
-										&& entry->singlePacketCommandIndex
+									else if (entry->singlePacketCommandIndex
 											!= kInvalidNativeA8CommandIndex)
 									{
 										kind = NativeA8CrossTextCommandKind::
@@ -3243,7 +2841,7 @@ namespace fonthook::vectorfont
 				if (state.renderAlphaGeometryHookInstalled)
 				{
 					state.renderAlphaGeometryHookInstalled = false;
-					InvalidateAllVirtualStockBindings();
+					InvalidateAllSingletonFacadeBindings();
 				}
 				if (!state.loggedRenderAlphaGeometryHookConflict)
 				{
@@ -3256,7 +2854,7 @@ namespace fonthook::vectorfont
 			if (state.renderAlphaGeometryHookInstalled)
 			{
 				state.renderAlphaGeometryHookInstalled = false;
-				InvalidateAllVirtualStockBindings();
+				InvalidateAllSingletonFacadeBindings();
 				if (!state.loggedRenderAlphaGeometryHookConflict)
 				{
 					state.loggedRenderAlphaGeometryHookConflict = true;
@@ -3441,7 +3039,7 @@ namespace fonthook::vectorfont
 			if (s_atlasTextureEpoch.compare_exchange_weak(current, next,
 				std::memory_order_release, std::memory_order_relaxed))
 			{
-				InvalidateAllVirtualStockBindings();
+				InvalidateAllSingletonFacadeBindings();
 				NotifyNativeA8CommandExternalMutation(
 					NativeA8CommandFallback::Atlas);
 				return;
@@ -3449,10 +3047,10 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	NativeA8FallbackReason PrepareNativeA8Group(NiTriShape* facade,
+	NativeA8FallbackReason PrepareNativeA8Facade(NiTriShape* facade,
 		const A8ShapeMetadata& metadata, NativeA8ShapePayload& payload)
 	{
-		return PreflightNativeGroupImpl(facade, metadata, payload);
+		return PreflightNativeFacadeImpl(facade, metadata, payload);
 	}
 
 	bool HookNativeA8Accumulator()
@@ -3511,7 +3109,7 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: Tile RegisterObject dispatch hook skipped; target is not executable target=%p entry=%08X",
 					current, kTileRegisterObjectFunctionEntry);
-				InvalidateAllVirtualStockBindings();
+				InvalidateAllSingletonFacadeBindings();
 			}
 			return false;
 		}
@@ -3533,7 +3131,7 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: Tile RegisterObject dispatch was replaced by a successor target=%p; tNVSE will not reassert ownership",
 					current);
-				InvalidateAllVirtualStockBindings();
+				InvalidateAllSingletonFacadeBindings();
 			}
 			return false;
 		}
@@ -3577,7 +3175,7 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: Tile RegisterObject dispatch ownership changed immediately after publication actual=%p",
 					ReadTileRegisterObjectTarget());
-				InvalidateAllVirtualStockBindings();
+				InvalidateAllSingletonFacadeBindings();
 			}
 			return false;
 		}
