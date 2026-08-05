@@ -1287,14 +1287,11 @@ namespace fonthook::vectorfont
 	bool GetNativeA8InstancingShaderResources(UInt32 generation,
 		NativeA8InstancingShaderResources& resources);
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation);
-	bool ClassifyNativeA8StockTileStandardPass(BSShader* shader,
-		NativeA8StandardBlendSemantics& blendSemantics);
 	void BeginNativeA8SortedShaderBatch();
 	void EndNativeA8SortedShaderBatch();
 	void InvalidateNativeA8SortedShaderState();
 	void InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
-	void AdvanceNativeA8SortedShaderStateAcrossStockTile(
-		bool retainExecutionSegment);
+	void AdvanceNativeA8SortedShaderStateAcrossStockTile();
 	void ValidateNativeA8SortedShaderStateAfterStockTile();
 	void BeginNativeA8FacadeShaderBatch();
 	void EndNativeA8FacadeShaderBatch();
@@ -1327,7 +1324,6 @@ namespace fonthook::vectorfont
 	void EndNativeA8FrameCommandBuffer();
 	void InvalidateNativeA8CommandExecutionSegment(
 		NativeA8CommandFallback reason = NativeA8CommandFallback::State);
-	bool PreserveNativeA8CommandExecutionSegmentAcrossStockTile();
 	bool PreserveNativeA8CommandExecutionSegmentAfterInstancing();
 	void NotifyNativeA8CommandExternalMutation(
 		NativeA8CommandFallback reason);

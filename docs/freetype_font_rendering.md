@@ -241,18 +241,12 @@ repeat code-page decoding or derive a second glyph identity.
 
 Rich-text rendering uses fixed font-ID builder slots for the normal retail and
 registered-font range. Pointer-keyed builders remain only for an out-of-range
-font, slot collision, or another ambiguous lifetime case. Prepared-text lookup
-has an eight-slot hash-indexed TLS front keyed by the already computed
-text/config signature. A miss compares at most one resident hash before the
-exact collision check. Admission is three-phase: the first observation bypasses
-the global cache, the second builds the resident value without a guaranteed-empty
-global lookup, and the store publishes that value directly into the TLS slot.
-Only a later TLS miss for an already observed key probes the global table.
-Cache-generation changes clear the TLS front, and a value that cannot be stored
-resets its admission state
-and receives an eight-observation retry cooldown. Unsupported or
-budget-rejected text therefore stays on the lock-free layout path instead of
-repeatedly locking on a known global miss.
+font, slot collision, or another ambiguous lifetime case. Text preparation now
+runs directly for every request; there is no prepared-text result cache, TLS
+front, admission table, source/config hash, or prepared-result memory category.
+The one-shot direct-layout sidecar handoff remains because it transfers the
+result just computed by `PrepText` to `CreateText` without retaining it as a
+cross-request cache.
 
 ## Bounded-throughput prewarm and persistent caches
 
@@ -1045,9 +1039,10 @@ geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
 facades, total payload packets, single- and multi-packet artifacts, direct/span/
 packet-loop frames, topology switches, fallbacks, partial faults, and the
 invariant sibling_shapes=0. The build identity is
-`linear-equal-depth-repair-v30`. It retains the v23 shell-shader restoration fix,
-v24 logging cleanup, and the no-Sort-hook single-facade architecture. The v26
-font-metrics topology probe has been removed. With rendering logging enabled,
+`no-prepared-cache-stock-bridge-v32`. It retains the v23 shell-shader restoration
+fix, v24 logging cleanup, the no-Sort-hook single-facade architecture, the v30
+linear equal-depth repair, and the v31 direct-Sort-array/preflight-only cleanup.
+The prepared-text result cache and stock-Tile execution bridge are removed. With rendering logging enabled,
 the first applied repair emits one compact process-thread diagnostic containing
 item, mixed-run, changed-run, and changed-item counts; a proof failure emits one
 fail-open line. It changes no NVSE export, INI key, shader ABI, font-cache
@@ -1590,10 +1585,10 @@ VB/IB/declaration descriptor, and the standard-pass-lite dispatcher does not
 repeat the already proven binding comparison. A route without a binding proof
 retains the complete packet validator. Device reset, shader publication or
 fault, atlas mutation, ring resource replacement/discard, shape destruction,
-singleton-facade binding invalidation, nested traversal, and every unclassified
-non-FreeType transition advance one of the epochs. A classified stock Tile or
-successful instancing batch instead retains the segment only after the cheap
-post-boundary context guard succeeds. A mutation during a span therefore faults
+singleton-facade binding invalidation, nested traversal, and every stock or
+otherwise non-FreeType transition advance one of the epochs. A successful
+instancing batch may retain the segment only after the cheap post-boundary
+context guard succeeds. A mutation during a span therefore faults
 its next packet before drawing. A failure before any draw
 re-enters the unchanged current path; after any packet reaches the driver, the
 span is marked faulted and the facade is not replayed, preventing duplicate
@@ -1603,7 +1598,7 @@ The periodic command line reports recorded spans/packets, span hits/misses,
 retained bridge draws, guarded native replays, saved stock bootstraps, fused
 direct-single replays, light/render-target validation counts, packet epoch
 guards, full packet-state validation elisions, successful execution segments, segment full
-validations/reuses/invalidations, accepted stock-Tile and instancing bridges,
+validations/reuses/invalidations, accepted instancing bridges,
 rejected bridge guards, retained-program hits/misses, and fallbacks by token,
 generation, atlas, resource, topology, hook, nesting, render target, and state.
 The main performance line reports `constant_ownership_segments`, segment
@@ -1633,7 +1628,7 @@ The timing line adds `command_build` and `command_submit` while preserving
 `direct_single_replays`,
 `render_target_validations` tracking `segment_full_validations` rather than
 logical spans or packets, substantial `segment_validation_reuses`, nonzero
-`stock_tile_bridges` (and `instancing_bridges` when that feature is enabled),
+`instancing_bridges` when that feature is enabled,
 normally zero `bridge_rejected`,
 `packet_epoch_guards` tracking submitted command packets,
 `packet_state_elisions` covering all proven direct/ring packets, and
@@ -1696,17 +1691,15 @@ steady-state packet submissions. When fallbacks are present,
 `stock_fallbacks` equals the sum of `fallback_envelope`, `program`, `renderer`,
 `geometry`, `binding`, and `prelude`; the retained hit/miss pair distinguishes
 a missing or invalidated Tile dispatch from a dynamic pass-envelope rejection.
-The following `segment_device_state_` line reports cache starts/reuses, accepted
-stock-Tile bridges, conservative stock resets, narrow post-instancing
-invalidations, and set/reuse pairs for texture/program, constants, blend,
+The following `segment_device_state_` line reports cache starts/reuses, narrow
+post-instancing invalidations, and set/reuse pairs for texture/program, constants, blend,
 alpha-test, and drawmode callbacks, followed by actual slot-35 calls and
-verified no-op elisions. A stock bridge or instancing cleanup invalidates only
+verified no-op elisions. Instancing cleanup invalidates only
 program/constants/geometry bindings; independently proved blend, alpha-test,
-and drawmode keys survive. In a long menu run, `starts` should track traversal
-starts or genuine hard boundaries rather than one-packet replays, while
-nonzero category `reuses` directly count callbacks skipped across distinct
-Tiles. `stock_tile_resets` measures stock passes that could not retain the
-device-state head; `instancing_narrow_invalidates` should track successful
+and drawmode keys survive. Every stock Tile now resets the device-state head
+and invalidates the command execution segment, while the separately proved
+private shader-register shadow remains eligible for post-draw validation.
+`instancing_narrow_invalidates` should track successful
 instanced batches instead of causing a new cache start.
 `constants_reuses` proves slot 31 was skipped only for identical
 non-transient state; `post_elisions` normally covers every verified packet
@@ -1753,18 +1746,6 @@ files instead of retaining a provisional native/fallback mixture.
 Runtime cache-key work is amortized at the point where the corresponding
 identity becomes immutable:
 
-- Prepared text performs one source scan for length, escape detection, and the
-  source hash. Escape expansion hashes its resolved bytes while copying them.
-  Lookup hashing consumes those saved hashes and lengths, while exact string
-  comparison remains the collision check. A small thread-local metric-signature
-  cache is reused only after byte-exact validation of the mutable font metrics.
-  The periodic performance line keeps `prepared_text_hit` and its following
-  `miss`, and additionally reports `promotion_bypass`, `probe`, `probe_miss`,
-  `admitted`, `evicted`, `admission_rejected`, and `backoff_bypass`. A healthy
-  repeated-text path normally records one promotion and admission followed by
-  TLS hits with no probe; `probe_miss`, `admission_rejected`, or sustained
-  `backoff_bypass` identifies collision, unsupported, or memory-pressure churn
-  that still needs investigation.
 - A one-shot text artifact computes only the constant-cost admission signature.
   Once admitted, one quad traversal computes geometry and color fingerprints
   together; effect/range identity consumes that color fingerprint instead of
@@ -1791,7 +1772,7 @@ authoritative, so a fixed budget can retain fewer MTSDF pages; it does not
 silently exceed the configured ceiling to preserve the old page count.
 
 `uiFreeTypeFontMemoryCacheMB` is one aggregate CPU-memory ceiling shared by
-glyph bitmaps, layout runs, prepared text, unified text artifacts, atlas
+glyph bitmaps, layout runs, unified text artifacts, atlas
 metadata/backing data, persistent file mappings, runtime font metadata, and the
 retained CPU maps/scratch buffers used by native submission. Cached/shared
 objects and static-promotion candidates hold category leases for their actual
@@ -1799,8 +1780,8 @@ lifetime. Removing an LRU or map key therefore does not pretend to reclaim an
 object that a live shape or thread-local hot entry still owns, and the old
 per-cache fractions are only preferred local targets constrained by the
 remaining global headroom, not independent budgets. When the total is above the
-ceiling, tNVSE trims prepared text, optional native residency/candidate maps,
-unified text artifacts, layouts, and glyph bitmaps in reconstructibility order.
+ceiling, tNVSE trims optional native residency/candidate maps, unified text
+artifacts, layouts, and glyph bitmaps in reconstructibility order.
 Memory still referenced by active shapes, atlases, font runtimes, static GPU
 residency, or required mappings is reported as `pinned-overcommit` instead of
 being invalidated silently.

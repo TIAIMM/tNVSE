@@ -8,17 +8,12 @@
 #include "native_calls.h"
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <list>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <string_view>
-#include <unordered_map>
 #include <vector>
 
 namespace fonthook
@@ -44,30 +39,22 @@ namespace fonthook
 			buffer.resize(size, 0);
 	}
 
-	static bool ProcessEscapeSequences(
+	static void ProcessEscapeSequences(
 		std::vector<char>& processedOriginalBuffer,
 		std::vector<char>& dynamicTextBuffer,
 		UInt32& textBufferSize, UInt32& processedTextLen,
 		UInt32& origConsumed, UInt32& sourceTextLen,
-		UInt64& resolvedTextHash, FontEx* font, Font::TextData* axData)
+		FontEx* font, Font::TextData* axData)
 	{
 		char parsedTextBuffer[1028] = {};
 		bool hasEscapeSequence = false;
 		char* processedOriginalText = processedOriginalBuffer.data();
-		resolvedTextHash = 1469598103934665603ull;
-		auto addResolvedByte = [&](UInt8 value)
-		{
-			resolvedTextHash ^= value;
-			resolvedTextHash *= 1099511628211ull;
-		};
 
 		for (UInt32 srcTextIndex = 0; srcTextIndex < sourceTextLen; ++srcTextIndex)
 		{
 			if (processedOriginalText[srcTextIndex] != '&')
 			{
 				dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
-				addResolvedByte(static_cast<UInt8>(
-					processedOriginalText[srcTextIndex]));
 				continue;
 			}
 
@@ -127,8 +114,6 @@ namespace fonthook
 					EnsureTextScratchSize(dynamicTextBuffer, textBufferSize + 1);
 				}
 				memcpy(&dynamicTextBuffer[processedTextLen], parsedTextBuffer, postEscapeTextLen);
-				for (UInt32 index = 0; index < postEscapeTextLen; ++index)
-					addResolvedByte(static_cast<UInt8>(parsedTextBuffer[index]));
 				processedTextLen += postEscapeTextLen;
 				origConsumed += totalEscapeSeqLen;
 				srcTextIndex = srcTextIndex + totalEscapeSeqLen - 1;
@@ -136,8 +121,6 @@ namespace fonthook
 			else
 			{
 				dynamicTextBuffer[processedTextLen++] = processedOriginalText[srcTextIndex];
-				addResolvedByte(static_cast<UInt8>(
-					processedOriginalText[srcTextIndex]));
 			}
 			hasEscapeSequence = true;
 		}
@@ -152,7 +135,6 @@ namespace fonthook
 		}
 		dynamicTextBuffer[0] = 0;
 		processedTextLen = 0;
-		return hasEscapeSequence;
 	}
 
 	struct PrepTextScratch
@@ -209,251 +191,6 @@ namespace fonthook
 		PrepTextScratch* m_scratch = nullptr;
 	};
 
-	struct PreparedTextCacheLookupKey
-	{
-		const Font* font = nullptr;
-		const FontData* fontData = nullptr;
-		UInt64 layoutIdentity = 0;
-		UInt64 directProfilePublicationEpoch = 0;
-		UInt64 metricSignature = 0;
-		UInt64 iconSignature = 0;
-		UInt32 codePage = 0;
-		int width = 0;
-		int height = 0;
-		int lineStart = 0;
-		int lineEnd = 0;
-		char lineSeparator = 0;
-		bool terminal = false;
-		std::string_view source;
-		std::string_view resolved;
-		UInt64 sourceHash = 0;
-		UInt64 resolvedHash = 0;
-		size_t precomputedHash = 0;
-	};
-
-	struct PreparedTextCacheKey
-	{
-		const Font* font = nullptr;
-		const FontData* fontData = nullptr;
-		UInt64 layoutIdentity = 0;
-		UInt64 directProfilePublicationEpoch = 0;
-		UInt64 metricSignature = 0;
-		UInt64 iconSignature = 0;
-		UInt32 codePage = 0;
-		int width = 0;
-		int height = 0;
-		int lineStart = 0;
-		int lineEnd = 0;
-		char lineSeparator = 0;
-		bool terminal = false;
-		std::string source;
-		std::string resolved;
-		UInt64 sourceHash = 0;
-		UInt64 resolvedHash = 0;
-		size_t precomputedHash = 0;
-	};
-
-	template <class Key>
-	static size_t HashPreparedTextCacheKey(const Key& key)
-	{
-		if (key.precomputedHash)
-			return key.precomputedHash;
-		UInt64 hash = 1469598103934665603ull;
-		auto addBytes = [&](const void* data, size_t size)
-		{
-			const UInt8* bytes = static_cast<const UInt8*>(data);
-			for (size_t index = 0; index < size; ++index)
-			{
-				hash ^= bytes[index];
-				hash *= 1099511628211ull;
-			}
-		};
-		const uintptr_t font = reinterpret_cast<uintptr_t>(key.font);
-		const uintptr_t fontData = reinterpret_cast<uintptr_t>(key.fontData);
-		addBytes(&font, sizeof(font));
-		addBytes(&fontData, sizeof(fontData));
-		addBytes(&key.layoutIdentity, sizeof(key.layoutIdentity));
-		addBytes(&key.directProfilePublicationEpoch,
-			sizeof(key.directProfilePublicationEpoch));
-		addBytes(&key.metricSignature, sizeof(key.metricSignature));
-		addBytes(&key.iconSignature, sizeof(key.iconSignature));
-		addBytes(&key.codePage, sizeof(key.codePage));
-		addBytes(&key.width, sizeof(key.width));
-		addBytes(&key.height, sizeof(key.height));
-		addBytes(&key.lineStart, sizeof(key.lineStart));
-		addBytes(&key.lineEnd, sizeof(key.lineEnd));
-		addBytes(&key.lineSeparator, sizeof(key.lineSeparator));
-		addBytes(&key.terminal, sizeof(key.terminal));
-		addBytes(&key.sourceHash, sizeof(key.sourceHash));
-		const size_t sourceSize = key.source.size();
-		addBytes(&sourceSize, sizeof(sourceSize));
-		const UInt8 separator = 0xFF;
-		addBytes(&separator, sizeof(separator));
-		addBytes(&key.resolvedHash, sizeof(key.resolvedHash));
-		const size_t resolvedSize = key.resolved.size();
-		addBytes(&resolvedSize, sizeof(resolvedSize));
-		return static_cast<size_t>(hash ^ (hash >> 32));
-	}
-
-	template <class Left, class Right>
-	static bool EqualPreparedTextCacheKey(const Left& left, const Right& right)
-	{
-		return left.font == right.font && left.fontData == right.fontData
-			&& left.layoutIdentity == right.layoutIdentity
-			&& left.directProfilePublicationEpoch
-				== right.directProfilePublicationEpoch
-			&& left.metricSignature == right.metricSignature
-			&& left.iconSignature == right.iconSignature
-			&& left.codePage == right.codePage && left.width == right.width
-			&& left.height == right.height && left.lineStart == right.lineStart
-			&& left.lineEnd == right.lineEnd
-			&& left.lineSeparator == right.lineSeparator
-			&& left.terminal == right.terminal
-			&& left.sourceHash == right.sourceHash
-			&& left.resolvedHash == right.resolvedHash
-			&& left.source == right.source
-			&& left.resolved == right.resolved;
-	}
-
-	struct PreparedTextCacheKeyHash
-	{
-		using is_transparent = void;
-
-		size_t operator()(
-			const std::shared_ptr<const PreparedTextCacheKey>& key) const
-		{
-			return key ? HashPreparedTextCacheKey(*key) : 0;
-		}
-
-		size_t operator()(const PreparedTextCacheLookupKey& key) const
-		{
-			return HashPreparedTextCacheKey(key);
-		}
-
-		size_t operator()(const PreparedTextCacheKey& key) const
-		{
-			return HashPreparedTextCacheKey(key);
-		}
-	};
-
-	struct PreparedTextCacheKeyEqual
-	{
-		using is_transparent = void;
-
-		bool operator()(
-			const std::shared_ptr<const PreparedTextCacheKey>& left,
-			const std::shared_ptr<const PreparedTextCacheKey>& right) const
-		{
-			return left && right
-				&& EqualPreparedTextCacheKey(*left, *right);
-		}
-
-		bool operator()(
-			const std::shared_ptr<const PreparedTextCacheKey>& left,
-			const PreparedTextCacheLookupKey& right) const
-		{
-			return left
-				&& EqualPreparedTextCacheKey(*left, right);
-		}
-
-		bool operator()(const PreparedTextCacheLookupKey& left,
-			const std::shared_ptr<const PreparedTextCacheKey>& right) const
-		{
-			return right
-				&& EqualPreparedTextCacheKey(left, *right);
-		}
-
-		bool operator()(
-			const std::shared_ptr<const PreparedTextCacheKey>& left,
-			const PreparedTextCacheKey& right) const
-		{
-			return left
-				&& EqualPreparedTextCacheKey(*left, right);
-		}
-
-		bool operator()(const PreparedTextCacheKey& left,
-			const std::shared_ptr<const PreparedTextCacheKey>& right) const
-		{
-			return right
-				&& EqualPreparedTextCacheKey(left, *right);
-		}
-	};
-
-	using PreparedTextCacheKeyPtr =
-		std::shared_ptr<const PreparedTextCacheKey>;
-
-	struct PreparedTextCacheValue
-	{
-		vectorfont::CpuMemoryLease cpuMemory;
-		std::string text;
-		std::vector<int> lineWidths;
-		std::shared_ptr<const PreparedDirectTextSidecar> directSidecar;
-		int width = 0;
-		int height = 0;
-		int lineStart = 0;
-		int lineEnd = 0;
-		int charCount = 0;
-	};
-
-	struct PreparedTextCacheEntry
-	{
-		std::shared_ptr<const PreparedTextCacheValue> value;
-		size_t bytes = 0;
-		std::list<PreparedTextCacheKeyPtr>::iterator lru;
-		vectorfont::CpuMemoryLease cpuMemory;
-	};
-
-	struct PreparedTextCacheState
-	{
-		std::mutex mutex;
-		std::atomic<UInt64> generation{ 1 };
-		std::unordered_map<PreparedTextCacheKeyPtr, PreparedTextCacheEntry,
-			PreparedTextCacheKeyHash, PreparedTextCacheKeyEqual> entries;
-		std::list<PreparedTextCacheKeyPtr> lru;
-		size_t bytes = 0;
-	};
-
-	static PreparedTextCacheState& GetPreparedTextCacheState()
-	{
-		static PreparedTextCacheState state;
-		return state;
-	}
-
-	struct PreparedTextTlsEntry
-	{
-		PreparedTextCacheKeyPtr key;
-		std::shared_ptr<const PreparedTextCacheValue> value;
-	};
-
-	constexpr size_t kPreparedTextTlsFrontSize = 8;
-	constexpr UInt8 kPreparedTextAdmissionRetryCooldown = 8;
-	static_assert((kPreparedTextTlsFrontSize
-		& (kPreparedTextTlsFrontSize - 1)) == 0,
-		"Prepared-text TLS front size must be a power of two");
-	thread_local std::array<PreparedTextTlsEntry,
-		kPreparedTextTlsFrontSize>
-		s_preparedTextTlsFront;
-	thread_local UInt64 s_preparedTextTlsGeneration = 0;
-	thread_local std::array<size_t, 256>
-		s_preparedTextAdmissionHashes = {};
-	thread_local std::array<UInt8, 256>
-		s_preparedTextAdmissionCounts = {};
-	thread_local std::array<UInt8, 256>
-		s_preparedTextAdmissionCooldowns = {};
-	struct PreparedTextMetricSignatureEntry
-	{
-		const FontEx* font = nullptr;
-		const FontData* fontData = nullptr;
-		float linePadding = 0.0f;
-		float baseline = 0.0f;
-		float fontHeight = 0.0f;
-		FontLetter space = {};
-		UInt64 signature = 0;
-	};
-	thread_local std::array<PreparedTextMetricSignatureEntry, 4>
-		s_preparedTextMetricSignatures;
-	thread_local size_t s_preparedTextMetricSignatureNext = 0;
-
 	struct PreparedTextSidecarHandoff
 	{
 		const Font::TextData* data = nullptr;
@@ -466,28 +203,15 @@ namespace fonthook
 		s_preparedTextSidecarHandoffs;
 	thread_local size_t s_preparedTextSidecarHandoffNext = 0;
 
-	struct PreparedTextScan
+	static UInt32 GetPreparedTextLength(const char* text)
 	{
-		UInt32 length = 0;
-		UInt64 hash = 1469598103934665603ull;
-		bool hasEscape = false;
-	};
-
-	static PreparedTextScan ScanPreparedText(const char* text)
-	{
-		PreparedTextScan result;
 		if (!text)
-			return result;
-		while (result.length != std::numeric_limits<UInt32>::max()
-			&& text[result.length])
-		{
-			const UInt8 value = static_cast<UInt8>(text[result.length]);
-			result.hasEscape = result.hasEscape || value == '&';
-			result.hash ^= value;
-			result.hash *= 1099511628211ull;
-			++result.length;
-		}
-		return result;
+			return 0;
+		UInt32 length = 0;
+		while (length != std::numeric_limits<UInt32>::max()
+			&& text[length])
+			++length;
+		return length;
 	}
 
 	static void PublishPreparedTextSidecar(const Font::TextData* data,
@@ -535,440 +259,6 @@ namespace fonthook
 			return sidecar;
 		}
 		return {};
-	}
-
-	static size_t GetPreparedTextCacheLimit()
-	{
-		return static_cast<size_t>(g_uiFreeTypeFontMemoryCacheMB)
-			* 1024u * 1024u / 16u;
-	}
-
-	static UInt64 HashPreparedTextBytes(UInt64 hash, const void* data, size_t size)
-	{
-		const UInt8* bytes = static_cast<const UInt8*>(data);
-		for (size_t index = 0; index < size; ++index)
-		{
-			hash ^= bytes[index];
-			hash *= 1099511628211ull;
-		}
-		return hash;
-	}
-
-	static void RefreshPreparedTextLookupHash(
-		PreparedTextCacheLookupKey& lookup)
-	{
-		lookup.precomputedHash = 0;
-		lookup.precomputedHash =
-			HashPreparedTextCacheKey(lookup);
-		if (!lookup.precomputedHash)
-			lookup.precomputedHash = 1;
-	}
-
-	enum class PreparedTextAdmissionAction : UInt8
-	{
-		ColdBypass,
-		RejectedBypass,
-		Promote,
-		Probe
-	};
-
-	// The first observation stays lock-free. The second observation is allowed
-	// to build and publish a resident value without first paying a global
-	// lookup. Only a later TLS miss for an already observed key needs a global
-	// probe.
-	static PreparedTextAdmissionAction TouchPreparedTextAdmission(size_t hash)
-	{
-		if (!hash)
-			return PreparedTextAdmissionAction::ColdBypass;
-		const size_t index =
-			hash % s_preparedTextAdmissionHashes.size();
-		size_t& slot = s_preparedTextAdmissionHashes[index];
-		UInt8& count = s_preparedTextAdmissionCounts[index];
-		UInt8& cooldown = s_preparedTextAdmissionCooldowns[index];
-		if (slot != hash)
-		{
-			slot = hash;
-			count = 1;
-			cooldown = 0;
-			return PreparedTextAdmissionAction::ColdBypass;
-		}
-		if (cooldown)
-		{
-			--cooldown;
-			return PreparedTextAdmissionAction::RejectedBypass;
-		}
-		if (count < 3)
-			++count;
-		if (count <= 1)
-			return PreparedTextAdmissionAction::ColdBypass;
-		if (count == 2)
-			return PreparedTextAdmissionAction::Promote;
-		return PreparedTextAdmissionAction::Probe;
-	}
-
-	static void RejectPreparedTextAdmission(size_t hash)
-	{
-		if (!hash)
-			return;
-		const size_t index =
-			hash % s_preparedTextAdmissionHashes.size();
-		if (s_preparedTextAdmissionHashes[index] != hash)
-			return;
-		s_preparedTextAdmissionCounts[index] = 0;
-		s_preparedTextAdmissionCooldowns[index] =
-			kPreparedTextAdmissionRetryCooldown;
-		vectorfont::RecordFreeTypePerf(
-			vectorfont::FreeTypePerfCounter::
-				PreparedTextAdmissionRejected);
-	}
-
-	static void ResetPreparedTextTlsFront(UInt64 generation)
-	{
-		if (s_preparedTextTlsGeneration == generation)
-			return;
-		for (PreparedTextTlsEntry& entry : s_preparedTextTlsFront)
-			entry = {};
-		s_preparedTextTlsGeneration = generation;
-	}
-
-	static void PublishPreparedTextTlsEntry(
-		const PreparedTextCacheKeyPtr& key,
-		const std::shared_ptr<const PreparedTextCacheValue>& value,
-		UInt64 generation)
-	{
-		if (!key || !value)
-			return;
-		ResetPreparedTextTlsFront(generation);
-		PreparedTextTlsEntry& front =
-			s_preparedTextTlsFront[key->precomputedHash
-				& (s_preparedTextTlsFront.size() - 1)];
-		front.key = key;
-		front.value = value;
-	}
-
-	static UInt64 GetPreparedTextMetricSignature(const FontEx* font,
-		float linePadding)
-	{
-		if (font && font->pFontData)
-		{
-			const FontLetter& space =
-				font->pFontData->pFontLetters[kSpaceChar];
-			for (const PreparedTextMetricSignatureEntry& entry :
-				s_preparedTextMetricSignatures)
-			{
-				if (entry.font == font
-					&& entry.fontData == font->pFontData
-					&& std::memcmp(&entry.linePadding, &linePadding,
-						sizeof(linePadding)) == 0
-					&& std::memcmp(&entry.baseline,
-						&font->pFontData->fBaseLine,
-						sizeof(entry.baseline)) == 0
-					&& std::memcmp(&entry.fontHeight,
-						&font->fFontHeight,
-						sizeof(entry.fontHeight)) == 0
-					&& std::memcmp(&entry.space, &space,
-						sizeof(space)) == 0)
-				{
-					return entry.signature;
-				}
-			}
-		}
-		UInt64 hash = 1469598103934665603ull;
-		hash = HashPreparedTextBytes(hash, &linePadding, sizeof(linePadding));
-		if (!font || !font->pFontData)
-			return hash;
-		hash = HashPreparedTextBytes(hash, &font->pFontData->fBaseLine,
-			sizeof(font->pFontData->fBaseLine));
-		hash = HashPreparedTextBytes(hash, &font->fFontHeight,
-			sizeof(font->fFontHeight));
-		const FontLetter& space = font->pFontData->pFontLetters[kSpaceChar];
-		hash = HashPreparedTextBytes(hash, &space, sizeof(space));
-		PreparedTextMetricSignatureEntry& cached =
-			s_preparedTextMetricSignatures[
-				s_preparedTextMetricSignatureNext++
-					% s_preparedTextMetricSignatures.size()];
-		cached.font = font;
-		cached.fontData = font->pFontData;
-		cached.linePadding = linePadding;
-		cached.baseline = font->pFontData->fBaseLine;
-		cached.fontHeight = font->fFontHeight;
-		cached.space = space;
-		cached.signature = hash;
-		return hash;
-	}
-
-	static UInt64 GetPreparedTextIconSignature(const FontEx* font)
-	{
-		UInt64 hash = 1469598103934665603ull;
-		const UInt32 count = font ? font->ButtonIcons.uiSize : 0;
-		hash = HashPreparedTextBytes(hash, &count, sizeof(count));
-		if (font && font->ButtonIcons.pBuffer)
-		{
-			for (UInt32 index = 0; index < count; ++index)
-			{
-				const ButtonIcon& icon = font->ButtonIcons.pBuffer[index];
-				hash = HashPreparedTextBytes(hash, &icon.fWidth, sizeof(icon.fWidth));
-				hash = HashPreparedTextBytes(hash, &icon.fSpacing, sizeof(icon.fSpacing));
-			}
-		}
-		return hash;
-	}
-
-	static void ApplyPreparedTextCacheValue(const PreparedTextCacheValue& value,
-		Font::TextData& data, const Font* font)
-	{
-		data.xNewText.Set(value.text.c_str(), 0);
-		data.iWidth = value.width;
-		data.iHeight = value.height;
-		data.iLineStart = value.lineStart;
-		data.iLineEnd = value.lineEnd;
-		data.iCharCount = value.charCount;
-		data.xLineWidths.RemoveAll();
-		for (int width : value.lineWidths)
-		{
-			int mutableWidth = width;
-			data.xLineWidths.AddTail(mutableWidth);
-		}
-		PublishPreparedTextSidecar(
-			&data, font, value.directSidecar);
-		if (value.directSidecar && value.directSidecar->rejectBatch)
-		{
-			vectorfont::RecordFreeTypePerf(
-				vectorfont::FreeTypePerfCounter::PreparedTextRejectCacheHit);
-		}
-	}
-
-	static std::shared_ptr<const PreparedTextCacheValue> FindPreparedTextCacheValue(
-		const PreparedTextCacheLookupKey& lookup, bool& storeCandidate)
-	{
-		storeCandidate = false;
-		size_t lookupHash = lookup.precomputedHash
-			? lookup.precomputedHash
-			: HashPreparedTextCacheKey(lookup);
-		if (!lookupHash)
-			lookupHash = 1;
-		PreparedTextCacheState& state = GetPreparedTextCacheState();
-		const UInt64 generation =
-			state.generation.load(std::memory_order_acquire);
-		ResetPreparedTextTlsFront(generation);
-		PreparedTextTlsEntry& front =
-			s_preparedTextTlsFront[lookupHash
-				& (s_preparedTextTlsFront.size() - 1)];
-		if (front.value
-			&& front.key
-			&& front.key->precomputedHash == lookupHash
-			&& EqualPreparedTextCacheKey(*front.key, lookup))
-		{
-			RecordFreeTypePreparedTextCacheResult(true);
-			return front.value;
-		}
-		const PreparedTextAdmissionAction admission =
-			TouchPreparedTextAdmission(lookupHash);
-		if (admission == PreparedTextAdmissionAction::ColdBypass
-			|| admission == PreparedTextAdmissionAction::RejectedBypass)
-		{
-			if (admission == PreparedTextAdmissionAction::RejectedBypass)
-			{
-				vectorfont::RecordFreeTypePerf(
-					vectorfont::FreeTypePerfCounter::
-						PreparedTextRejectionBypass);
-			}
-			RecordFreeTypePreparedTextCacheResult(false);
-			return nullptr;
-		}
-		storeCandidate = true;
-		if (admission == PreparedTextAdmissionAction::Promote)
-		{
-			vectorfont::RecordFreeTypePerf(
-				vectorfont::FreeTypePerfCounter::
-					PreparedTextPromotionBypass);
-			RecordFreeTypePreparedTextCacheResult(false);
-			return nullptr;
-		}
-		vectorfont::RecordFreeTypePerf(
-			vectorfont::FreeTypePerfCounter::PreparedTextGlobalProbe);
-		std::unique_lock<std::mutex> lock(state.mutex);
-		const auto found = state.entries.find(lookup);
-		if (found == state.entries.end())
-		{
-			vectorfont::RecordFreeTypePerf(
-				vectorfont::FreeTypePerfCounter::
-					PreparedTextGlobalProbeMiss);
-			RecordFreeTypePreparedTextCacheResult(false);
-			return nullptr;
-		}
-		state.lru.splice(state.lru.begin(), state.lru, found->second.lru);
-		const PreparedTextCacheKeyPtr key = found->first;
-		const std::shared_ptr<const PreparedTextCacheValue> value =
-			found->second.value;
-		const UInt64 residentGeneration =
-			state.generation.load(std::memory_order_relaxed);
-		lock.unlock();
-		PublishPreparedTextTlsEntry(key, value, residentGeneration);
-		RecordFreeTypePreparedTextCacheResult(true);
-		return value;
-	}
-
-	static std::shared_ptr<const PreparedTextCacheValue> CapturePreparedTextCacheValue(
-		const Font::TextData& data,
-		std::shared_ptr<const PreparedDirectTextSidecar> directSidecar = {})
-	{
-		auto value = std::make_shared<PreparedTextCacheValue>();
-		value->text = data.xNewText.pString ? data.xNewText.pString : "";
-		value->width = data.iWidth;
-		value->height = data.iHeight;
-		value->lineStart = data.iLineStart;
-		value->lineEnd = data.iLineEnd;
-		value->charCount = data.iCharCount;
-		value->directSidecar = std::move(directSidecar);
-		const BSSimpleList<int>* line = &data.xLineWidths;
-		for (;;)
-		{
-			value->lineWidths.push_back(line->m_item);
-			line = line->m_pkNext;
-			if (!line)
-				break;
-		}
-		value->cpuMemory.Reset(vectorfont::CpuMemoryCategory::PreparedText,
-			sizeof(PreparedTextCacheValue) + value->text.capacity()
-				+ value->lineWidths.capacity() * sizeof(int)
-				+ (value->directSidecar
-					? sizeof(PreparedDirectTextSidecar)
-						+ value->directSidecar->units.capacity()
-							* sizeof(DirectTextUnit)
-					: 0));
-		return value;
-	}
-
-	static bool StorePreparedTextCacheValue(const PreparedTextCacheLookupKey& lookup,
-		const std::shared_ptr<const PreparedTextCacheValue>& value)
-	{
-		if (!value)
-			return false;
-		const size_t limit = vectorfont::GetCpuMemoryCategoryHeadroom(
-			vectorfont::CpuMemoryCategory::PreparedText,
-			GetPreparedTextCacheLimit());
-		if (!limit)
-			return false;
-
-		PreparedTextCacheState& state = GetPreparedTextCacheState();
-		std::unique_lock<std::mutex> lock(state.mutex);
-		const auto existing = state.entries.find(lookup);
-		if (existing != state.entries.end())
-		{
-			state.lru.splice(state.lru.begin(), state.lru, existing->second.lru);
-			const PreparedTextCacheKeyPtr key = existing->first;
-			const std::shared_ptr<const PreparedTextCacheValue> residentValue =
-				existing->second.value;
-			const UInt64 generation =
-				state.generation.load(std::memory_order_relaxed);
-			lock.unlock();
-			PublishPreparedTextTlsEntry(key, residentValue, generation);
-			return true;
-		}
-		size_t lookupHash = lookup.precomputedHash
-			? lookup.precomputedHash
-			: HashPreparedTextCacheKey(lookup);
-		if (!lookupHash)
-			lookupHash = 1;
-
-		PreparedTextCacheKey key = {
-			lookup.font, lookup.fontData, lookup.layoutIdentity,
-			lookup.directProfilePublicationEpoch,
-			lookup.metricSignature, lookup.iconSignature, lookup.codePage,
-			lookup.width, lookup.height, lookup.lineStart, lookup.lineEnd,
-			lookup.lineSeparator, lookup.terminal,
-			std::string(lookup.source), std::string(lookup.resolved),
-			lookup.sourceHash, lookup.resolvedHash,
-			lookupHash
-		};
-		auto keyOwner =
-			std::make_shared<const PreparedTextCacheKey>(
-				std::move(key));
-		const size_t keyBytes = sizeof(PreparedTextCacheKey)
-			+ keyOwner->source.capacity()
-			+ keyOwner->resolved.capacity();
-		const size_t bytes = sizeof(PreparedTextCacheEntry)
-			+ sizeof(PreparedTextCacheValue) + keyBytes
-			+ value->text.capacity()
-			+ value->lineWidths.capacity() * sizeof(int)
-			+ (value->directSidecar
-				? sizeof(PreparedDirectTextSidecar)
-					+ value->directSidecar->units.capacity()
-						* sizeof(DirectTextUnit)
-				: 0);
-		const size_t cacheOverhead = sizeof(PreparedTextCacheEntry)
-			+ keyBytes + 2u * sizeof(PreparedTextCacheKeyPtr)
-			+ 4u * sizeof(void*);
-		if (bytes > limit)
-			return false;
-		state.lru.push_front(keyOwner);
-		const auto [inserted, success] = state.entries.emplace(keyOwner,
-			PreparedTextCacheEntry{ value, bytes, state.lru.begin() });
-		if (!success)
-		{
-			state.lru.pop_front();
-			return false;
-		}
-		inserted->second.cpuMemory.Reset(
-			vectorfont::CpuMemoryCategory::PreparedText, cacheOverhead);
-		state.bytes += bytes;
-		vectorfont::RecordFreeTypePerf(
-			vectorfont::FreeTypePerfCounter::PreparedTextAdmission);
-		bool retained = true;
-		while ((vectorfont::GetCpuMemoryUsage(
-			vectorfont::CpuMemoryCategory::PreparedText) > limit
-			|| vectorfont::IsCpuMemoryBudgetExceeded())
-			&& !state.lru.empty())
-		{
-			const auto oldest = state.entries.find(state.lru.back());
-			if (oldest != state.entries.end())
-			{
-				if (oldest->first == keyOwner)
-					retained = false;
-				state.bytes -= oldest->second.bytes;
-				state.entries.erase(oldest);
-				state.generation.fetch_add(1,
-					std::memory_order_acq_rel);
-				vectorfont::RecordFreeTypePerf(
-					vectorfont::FreeTypePerfCounter::
-						PreparedTextEviction);
-			}
-			state.lru.pop_back();
-		}
-		const UInt64 generation =
-			state.generation.load(std::memory_order_relaxed);
-		lock.unlock();
-		if (retained)
-			PublishPreparedTextTlsEntry(keyOwner, value, generation);
-		return retained;
-	}
-
-	namespace vectorfont
-	{
-		void TrimPreparedTextCpuCacheForTotalBudget()
-		{
-			PreparedTextCacheState& state = GetPreparedTextCacheState();
-			std::lock_guard<std::mutex> lock(state.mutex);
-			const size_t limit = GetCpuMemoryCategoryHeadroom(
-				CpuMemoryCategory::PreparedText, GetPreparedTextCacheLimit());
-			while ((GetCpuMemoryUsage(CpuMemoryCategory::PreparedText) > limit
-					|| IsCpuMemoryBudgetExceeded())
-				&& !state.lru.empty())
-			{
-				const auto oldest = state.entries.find(state.lru.back());
-				if (oldest != state.entries.end())
-				{
-					state.bytes -= oldest->second.bytes;
-					state.entries.erase(oldest);
-					state.generation.fetch_add(1,
-						std::memory_order_acq_rel);
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::PreparedTextEviction);
-				}
-				state.lru.pop_back();
-			}
-		}
 	}
 
 	enum class FreeTypeBreakKind : UInt8
@@ -1804,51 +1094,8 @@ namespace fonthook
 			axData->iHeight = kSentinelMax;
 		if (axData->iLineEnd <= 0)
 			axData->iLineEnd = kSentinelMax;
-		const PreparedTextScan originalText = ScanPreparedText(apOrigString);
-		const UInt32 originalTextLen = originalText.length;
+		const UInt32 originalTextLen = GetPreparedTextLength(apOrigString);
 		const float lineSpacingAdjust = FontManager::GetLinePadding(font->iFontNum);
-		UInt64 layoutIdentity = 0;
-		const bool cacheable = GetFreeTypeLayoutIdentity(font, layoutIdentity)
-			&& (resolveEscapes || !originalText.hasEscape);
-		UInt64 directProfilePublicationEpoch = 0;
-		if (cacheable && g_bEnableFreeTypeFontStructuralFastPaths)
-		{
-			if (const vectorfont::RuntimeFont* runtime =
-				vectorfont::FindActiveRuntime(font))
-			{
-				directProfilePublicationEpoch = vectorfont::
-					GetRuntimeSealedDirectProfilePublicationEpoch(*runtime);
-			}
-		}
-		PreparedTextCacheLookupKey cacheLookup;
-		bool preparedTextStoreCandidate = false;
-		if (cacheable)
-		{
-			cacheLookup = {
-				font, font->pFontData, layoutIdentity,
-				directProfilePublicationEpoch,
-				GetPreparedTextMetricSignature(font, lineSpacingAdjust),
-				0, GetFreeTypeTextCodePage(),
-				axData->iWidth, axData->iHeight, axData->iLineStart,
-				axData->iLineEnd, axData->cLineSep, isTerminal,
-				std::string_view(apOrigString, originalTextLen), {},
-				originalText.hash, 1469598103934665603ull
-			};
-			if (!originalText.hasEscape)
-			{
-				cacheLookup.iconSignature =
-					GetPreparedTextIconSignature(font);
-				RefreshPreparedTextLookupHash(cacheLookup);
-				if (const std::shared_ptr<const PreparedTextCacheValue> cached =
-					FindPreparedTextCacheValue(
-						cacheLookup, preparedTextStoreCandidate))
-				{
-					ApplyPreparedTextCacheValue(
-						*cached, *axData, font);
-					return;
-				}
-			}
-		}
 
 		auto* extraGlyphs = GetExtraGlyphs(font->iFontNum);
 		UInt32 origConsumed = 0;
@@ -1875,30 +1122,15 @@ namespace fonthook
 
 		UInt32 processedTextLen = 0;
 		UInt32 textBufferSize = sourceTextLen + 4;
-		UInt64 resolvedTextHash = 1469598103934665603ull;
-
 		// ---- Pass 1: Process escape sequences (&variable;) ----
-		const bool processedEscapes = resolveEscapes
-			&& ProcessEscapeSequences(scratch.original, scratch.processed,
+		if (resolveEscapes)
+		{
+			ProcessEscapeSequences(scratch.original, scratch.processed,
 				textBufferSize, processedTextLen, origConsumed, sourceTextLen,
-				resolvedTextHash, font, axData);
+				font, axData);
+		}
 		processedOriginalText = scratch.original.data();
 		dynamicTextBuffer = scratch.processed.data();
-		if (cacheable && processedEscapes)
-		{
-			cacheLookup.iconSignature = GetPreparedTextIconSignature(font);
-			cacheLookup.resolved = std::string_view(processedOriginalText, sourceTextLen);
-			cacheLookup.resolvedHash = resolvedTextHash;
-			RefreshPreparedTextLookupHash(cacheLookup);
-			if (const std::shared_ptr<const PreparedTextCacheValue> cached =
-				FindPreparedTextCacheValue(
-					cacheLookup, preparedTextStoreCandidate))
-			{
-				ApplyPreparedTextCacheValue(
-					*cached, *axData, font);
-				return;
-			}
-		}
 
 		if (IsFreeTypeFontActive(font))
 		{
@@ -1908,36 +1140,6 @@ namespace fonthook
 				sourceTextLen, axData, isTerminal, origConsumed, scratch);
 			PublishPreparedTextSidecar(
 				axData, font, directSidecar);
-			if (preparedTextStoreCandidate)
-			{
-				const bool stableReject = directSidecar
-					&& directSidecar->rejectBatch
-					&& g_bEnableFreeTypeFontStructuralFastPaths
-					&& directProfilePublicationEpoch != 0;
-				if (directSidecar
-					&& (!directSidecar->rejectBatch || stableReject))
-				{
-					const bool stored = StorePreparedTextCacheValue(cacheLookup,
-						CapturePreparedTextCacheValue(
-							*axData, std::move(directSidecar)));
-					if (!stored)
-					{
-						RejectPreparedTextAdmission(
-							cacheLookup.precomputedHash);
-					}
-					else if (stableReject)
-					{
-						vectorfont::RecordFreeTypePerf(
-							vectorfont::FreeTypePerfCounter::
-								PreparedTextRejectCacheStored);
-					}
-				}
-				else
-				{
-					RejectPreparedTextAdmission(
-						cacheLookup.precomputedHash);
-				}
-			}
 			return;
 		}
 
@@ -2167,15 +1369,6 @@ namespace fonthook
 		axData->iLineStart = 0;
 		axData->iLineEnd = currentLineCount;
 		axData->iCharCount = isTerminal ? origConsumed : processedTextLen;
-		if (preparedTextStoreCandidate)
-		{
-			if (!StorePreparedTextCacheValue(
-				cacheLookup, CapturePreparedTextCacheValue(*axData)))
-			{
-				RejectPreparedTextAdmission(
-					cacheLookup.precomputedHash);
-			}
-		}
 	}
 
 	// ==================== FontEx::PrepTextForTerminal ====================

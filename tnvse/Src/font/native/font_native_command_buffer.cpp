@@ -1196,13 +1196,6 @@ namespace fonthook::vectorfont
 			s_commandBuffer, NormalizeMutationReason(reason));
 	}
 
-	bool PreserveNativeA8CommandExecutionSegmentAcrossStockTile()
-	{
-		return PreserveExecutionSegmentAcrossKnownStateMutation(
-			s_commandBuffer,
-			FreeTypePerfCounter::CommandSegmentStockTileBridge);
-	}
-
 	bool PreserveNativeA8CommandExecutionSegmentAfterInstancing()
 	{
 		return PreserveExecutionSegmentAcrossKnownStateMutation(

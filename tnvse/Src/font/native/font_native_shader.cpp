@@ -1944,36 +1944,6 @@ namespace fonthook::vectorfont
 			&& !current->runtimeFault.load(std::memory_order_acquire);
 	}
 
-	bool ClassifyNativeA8StockTileStandardPass(BSShader* shader,
-		NativeA8StandardBlendSemantics& blendSemantics)
-	{
-		blendSemantics = NativeA8StandardBlendSemantics::Unknown;
-		if (!shader || !shader->IsTileShader())
-			return false;
-		void** vtable = *reinterpret_cast<void***>(shader);
-		if (!vtable)
-			return false;
-		blendSemantics = ClassifyStandardBlendCallback(
-			vtable[kSetupBlendVtableSlot]);
-		return vtable[27] == reinterpret_cast<void*>(
-				kNiD3DShaderPrepareGeometry)
-			&& vtable[30] == reinterpret_cast<void*>(
-				kTileShaderSetupGeometryTextures)
-			&& vtable[31] == reinterpret_cast<void*>(
-				kTileShaderUpdateConstants)
-			// A foreign slot-32 callback remains callable through stock B994F0,
-			// but its effects cannot be carried into the native delta-state cache.
-			&& HasPredictableNativeA8BlendSemantics(blendSemantics)
-			&& vtable[33] == reinterpret_cast<void*>(
-				kShaderSetupGeometryAlphaTesting)
-			&& vtable[34] == reinterpret_cast<void*>(
-				kShaderSetupGeometryRenderStates)
-			&& vtable[35] == reinterpret_cast<void*>(
-				kTileShaderPostGeometry)
-			&& vtable[36] == reinterpret_cast<void*>(
-				kNiD3DShaderFirstPass);
-	}
-
 	void BeginNativeA8SortedShaderBatch()
 	{
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
@@ -2018,19 +1988,13 @@ namespace fonthook::vectorfont
 		ResetSortedShaderStateCaches();
 	}
 
-	void AdvanceNativeA8SortedShaderStateAcrossStockTile(
-		bool retainExecutionSegment)
+	void AdvanceNativeA8SortedShaderStateAcrossStockTile()
 	{
-		// An unclassified stock Tile remains a hard command boundary. A fully
-		// classified retail Standard pass may retain the global execution proof,
-		// while both reverse targets prove its constant maps write only PS c0 and
-		// VS c0-c4. In either case preserve the disjoint private register shadow
-		// while invalidating every binding the stock pass is allowed to change.
-		if (!retainExecutionSegment)
-		{
-			InvalidateNativeA8CommandExecutionSegment(
-				NativeA8CommandFallback::State);
-		}
+		// Every stock Tile is a hard command boundary. Preserve only the
+		// disjoint private register shadow while invalidating the execution
+		// proof and every binding the stock pass is allowed to change.
+		InvalidateNativeA8CommandExecutionSegment(
+			NativeA8CommandFallback::State);
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 		NiD3DRenderState* renderState =
 			batch.depth && batch.device

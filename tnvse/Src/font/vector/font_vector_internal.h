@@ -84,15 +84,6 @@ namespace fonthook::vectorfont
 		BitmapRasterized,
 		BitmapBatchRequest,
 		BitmapBatchDedupe,
-		PreparedTextHit,
-		PreparedTextMiss,
-		PreparedTextPromotionBypass,
-		PreparedTextGlobalProbe,
-		PreparedTextGlobalProbeMiss,
-		PreparedTextAdmission,
-		PreparedTextEviction,
-		PreparedTextAdmissionRejected,
-		PreparedTextRejectionBypass,
 		AtlasHit,
 		AtlasCreated,
 		AtlasGrown,
@@ -326,11 +317,8 @@ namespace fonthook::vectorfont
 		CommandSegmentFullValidation,
 		CommandSegmentValidationReuse,
 		CommandSegmentInvalidation,
-		CommandSegmentStockTileBridge,
 		CommandSegmentInstancingBridge,
 		CommandSegmentBridgeRejected,
-		SegmentDeviceStockTileBridge,
-		SegmentDeviceStockTileReset,
 		SegmentDeviceInstancingNarrowInvalidate,
 		CommandRetainedProgramHit,
 		CommandRetainedProgramMiss,
@@ -495,9 +483,6 @@ namespace fonthook::vectorfont
 		ViewportDescriptorHit,
 		ViewportDescriptorRebuild,
 		ViewportDescriptorFail,
-		PreparedTextRejectCacheHit,
-		PreparedTextRejectCacheStored,
-		PreparedTextProfileEpochInvalidation,
 		SortedAllStaticFastExit,
 		SortedAllStaticPayloadValidationElided,
 		Count,
@@ -969,8 +954,6 @@ namespace fonthook::vectorfont
 		std::vector<float>& arFaceBaselines);
 	std::shared_ptr<const SealedDirectFontProfile>
 		LoadRuntimeSealedDirectProfile(const RuntimeFont& arRuntime);
-	UInt64 GetRuntimeSealedDirectProfilePublicationEpoch(
-		const RuntimeFont& arRuntime);
 	std::shared_ptr<const SealedDirectFontProfile>
 		AcquireSealedDirectFontProfile(RuntimeFont& arRuntime,
 			float afRasterScale);

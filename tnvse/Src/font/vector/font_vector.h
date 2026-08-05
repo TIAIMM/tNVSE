@@ -112,7 +112,6 @@ namespace fonthook
 	void ShutdownFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
 	void ReportFreeTypeFontPerformanceNow();
-	void RecordFreeTypePreparedTextCacheResult(bool abHit);
 	void RecordFreeTypeViewportNodeInstallResult(bool abInstalled);
 	enum class FreeTypeViewportCullFailReason : UInt8
 	{

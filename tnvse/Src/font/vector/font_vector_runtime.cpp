@@ -35,7 +35,7 @@ namespace fonthook::vectorfont
 
 		// Full atlas profiles no longer need a large CPU bitmap working set. Keep
 		// an adaptive 8-16 MiB demand cache for cold misses without reducing the
-		// prepared-text or unified text-artifact budgets that affect every frame.
+		// unified text-artifact budget that affects every frame.
 		constexpr size_t kMinimumPostPrewarmBitmapBytes = 8u * 1024u * 1024u;
 		constexpr size_t kMaximumPostPrewarmBitmapBytes = 16u * 1024u * 1024u;
 		const size_t adaptiveLimit = std::clamp(configuredBytes / 16u,
@@ -1460,20 +1460,6 @@ namespace fonthook::vectorfont
 			std::memory_order_acquire);
 	}
 
-	UInt64 GetRuntimeSealedDirectProfilePublicationEpoch(
-		const RuntimeFont& runtime)
-	{
-		const UInt64 before = runtime.sealedDirectProfilePublicationEpoch.load(
-			std::memory_order_acquire);
-		if (!before)
-			return 0;
-		const std::shared_ptr<const SealedDirectFontProfile> profile =
-			runtime.sealedDirectProfile.load(std::memory_order_acquire);
-		const UInt64 after = runtime.sealedDirectProfilePublicationEpoch.load(
-			std::memory_order_acquire);
-		return profile && before && before == after ? before : 0;
-	}
-
 	static UInt64 BeginSealedDirectProfilePublication(RuntimeFont& runtime)
 	{
 		UInt64 observed = runtime.sealedDirectProfilePublicationEpoch.load(
@@ -1504,8 +1490,6 @@ namespace fonthook::vectorfont
 			publishedEpoch = previousEpoch + 1u;
 			if (!publishedEpoch)
 				publishedEpoch = 1u;
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::PreparedTextProfileEpochInvalidation);
 		}
 		runtime.sealedDirectProfilePublicationEpoch.store(
 			publishedEpoch, std::memory_order_release);

@@ -8,7 +8,6 @@ namespace fonthook::vectorfont
 	enum class CpuMemoryCategory : std::uint8_t
 	{
 		GlyphBitmap,
-		PreparedText,
 		TextArtifact,
 		AtlasMetadata,
 		PersistentMapping,
