@@ -370,10 +370,7 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 
 	fonthook::InitMultibyteInputHook();
 
-	if (g_bSaveDisplayNameMap)
-	{
-		fonthook::InitSaveDisplayNameHook();
-	}
+	fonthook::InitSaveDisplayNameHook();
 
 	return true;
 }

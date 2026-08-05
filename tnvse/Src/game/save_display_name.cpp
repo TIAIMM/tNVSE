@@ -28,6 +28,11 @@ namespace fonthook
 		constexpr SIZE_T kStockSavePathProcess = 0x8518D0;
 		constexpr SIZE_T kManualSaveNameCheckCallSite = 0x851AAE;
 		constexpr SIZE_T kStockManualSaveNameCheck = 0x851980;
+		// SaveGameManager::Save has already copied the supplied name into the
+		// save header before this call, but 0x850030 has not yet built the
+		// physical .fos path.  Replacing only this call preserves display text.
+		constexpr SIZE_T kCustomSaveFileBuildCallSite = 0x85053F;
+		constexpr SIZE_T kStockSaveFileBuild = 0x850030;
 
 		constexpr UInt32 kStoreMagic = 'SVDN';
 		constexpr UInt32 kStoreVersion = 1;
@@ -463,13 +468,19 @@ namespace fonthook
 			return false;
 		}
 
-		void __fastcall SavePathProcess(void*, UInt32, char* fileName)
+		bool ContainsHighByte(const std::string& value)
+		{
+			return std::any_of(value.begin(), value.end(), [](char c)
+			{
+				return static_cast<UInt8>(c) >= 0x80;
+			});
+		}
+
+		void SanitizeSaveFileName(char* fileName, size_t length)
 		{
 			if (!fileName)
 				return;
 
-			const std::string originalName = fileName;
-			const size_t length = CdeclCall<UInt32>(0xEC6130, fileName);
 			for (size_t i = 0; i < length; ++i)
 			{
 				const UInt8 c = static_cast<UInt8>(fileName[i]);
@@ -482,8 +493,50 @@ namespace fonthook
 					fileName[i] = c == '"' ? '\'' : ' ';
 				}
 			}
+		}
 
+		void __fastcall SavePathProcess(void*, UInt32, char* fileName)
+		{
+			if (!fileName)
+				return;
+
+			std::string originalName;
+			if (!TryCopyCString(fileName, MAX_PATH, originalName))
+				return;
+
+			SanitizeSaveFileName(fileName, originalName.size());
 			CaptureSaveDisplayName(originalName.c_str(), fileName);
+		}
+
+		void* __fastcall BuildCustomSaveFileWithSafeName(
+			void* saveManager,
+			void*,
+			const char* fileName,
+			UInt32 createFile,
+			UInt32 bufferMode,
+			SInt32 saveIndex)
+		{
+			// The fastcall shim consumes ECX/EDX and leaves the original four
+			// thiscall stack arguments intact (the stock callee returns with 0x10).
+			std::string originalName;
+			if (!TryCopyCString(fileName, MAX_PATH, originalName)
+				|| originalName.empty()
+				|| !ContainsHighByte(originalName))
+			{
+				return ThisStdCall<void*>(kStockSaveFileBuild, saveManager,
+					fileName, createFile, bufferMode, saveIndex);
+			}
+
+			char safeName[MAX_PATH] = {};
+			std::memcpy(safeName, originalName.data(), originalName.size());
+			SanitizeSaveFileName(safeName, originalName.size());
+			CaptureSaveDisplayName(originalName.c_str(), safeName);
+			gLog.FormattedMessage(
+				"tnvse_save_display_name: sanitized custom multibyte save name bytes=%u",
+				static_cast<UInt32>(originalName.size()));
+
+			return ThisStdCall<void*>(kStockSaveFileBuild, saveManager,
+				safeName, createFile, bufferMode, saveIndex);
 		}
 
 		template <class T>
@@ -1040,6 +1093,38 @@ namespace fonthook
 
 	void InitSaveDisplayNameHook()
 	{
+		SIZE_T customSaveFileTarget = 0;
+		if (!hook_identity::ReadRel32Target(
+				kCustomSaveFileBuildCallSite,
+				Rel32Opcode::Call,
+				customSaveFileTarget)
+			|| customSaveFileTarget != kStockSaveFileBuild)
+		{
+			gLog.FormattedMessage(
+				"tnvse_save_display_name: custom save hook identity mismatch target=%08X; disabled",
+				static_cast<UInt32>(customSaveFileTarget));
+		}
+		else
+		{
+			WriteRelCall(kCustomSaveFileBuildCallSite,
+				&BuildCustomSaveFileWithSafeName);
+			if (!hook_identity::MatchesRel32Target(
+					kCustomSaveFileBuildCallSite,
+					Rel32Opcode::Call,
+					reinterpret_cast<SIZE_T>(&BuildCustomSaveFileWithSafeName)))
+			{
+				WriteRelCall(kCustomSaveFileBuildCallSite,
+					kStockSaveFileBuild);
+				gLog.FormattedMessage(
+					"tnvse_save_display_name: custom save hook write verification failed; restored stock target");
+			}
+			else
+			{
+				gLog.FormattedMessage(
+					"tnvse_save_display_name: custom multibyte save sanitizer installed");
+			}
+		}
+
 		if (!g_bSaveDisplayNameMap)
 			return;
 

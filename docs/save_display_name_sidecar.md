@@ -10,6 +10,15 @@ This avoids changing `SaveGameData::pName`, the actual load path, delete/rename 
 
 - `save_name.cpp/.h` have been removed. Their remaining useful sanitizer-hook behavior now lives in `save_display_name.cpp`.
 - `save_display_name.cpp` owns both the save-name sanitizer hook and the load-menu recognition hook.
+- The save-file builder call at `0x85053F` is also wrapped. External custom
+  save names (including Stewie Tweaks incremental saves) bypass the manual-save
+  sanitizer at `0x8518BB`; when such a name contains high bytes, tNVSE applies
+  the same vanilla-equivalent sanitizer before `0x850030` constructs the
+  physical path. The original name has already been copied into the save header
+  at this point, so only the `.fos`/co-save filesystem identity is changed.
+- ASCII-only custom save names pass through unchanged. The custom-save safety
+  hook remains active when `bSaveDisplayNameMap=0`; that setting controls only
+  sidecar capture and load-list recognition.
 - The sanitizer hook replaces the vanilla save-name sanitizer call at `0x8518BB`. It captures the original candidate as the display name, then runs the vanilla-equivalent filename sanitizer:
   - bytes outside `'0'..'z'` become spaces;
   - blocked ASCII characters become spaces;
@@ -119,3 +128,7 @@ bSaveDisplayNameMap=1
 - Delete and rename mapped saves. Confirm the sidecar record is removed or moved.
 - Test missing store file, corrupt store file, missing record, and mismatched codepage fallback.
 - Regression-test English saves, autosave, quicksave, delete, rename, loading, and scrolling the save list.
+- Trigger a Stewie Tweaks incremental save with a CP936 player name. Confirm the
+  actual `.fos`, `.nvse`, and `SaveGame` event path are ASCII-safe, the log has
+  `custom multibyte save name`, and Dialogue History/ShowOff does not throw
+  `_Convert_narrow_to_wide` / Win32 error 1113.
