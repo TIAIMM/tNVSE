@@ -91,7 +91,8 @@ namespace fonthook::vectorfont
 	enum class FreeTypeShapeBackend : UInt8
 	{
 		CompatibilityFacade = 0,
-		SingletonFacade
+		SingletonFacade,
+		StockLayoutSdf
 	};
 
 	enum class SingletonFacadeFrameMode : UInt8
@@ -199,6 +200,8 @@ namespace fonthook::vectorfont
 	struct A8State
 	{
 		std::array<void*, kCopiedTriShapeVtableEntries + 1> triShapeVtable = {};
+		std::array<void*, kCopiedTriShapeVtableEntries + 1>
+			stockLayoutTriShapeVtable = {};
 		void** originalTriShapeVtable = nullptr;
 		RenderImmediateFn originalRenderImmediate = nullptr;
 		RenderImmediateFn originalRenderImmediateAlt = nullptr;
@@ -242,6 +245,7 @@ namespace fonthook::vectorfont
 		const std::vector<NiTriShape*>& shapes,
 		std::vector<A8ShapeMetadataPtr>& owners);
 	bool IsA8AtlasShape(const NiTriShape* shape);
+	bool IsStockLayoutSdfShape(const NiTriShape* shape);
 	bool NeedsScaledFillSampling(const NiTriShape* shape);
 	bool HookRenderPassImmediately();
 	bool IsA8RenderPassImmediatelyHookCurrent();
@@ -256,6 +260,12 @@ namespace fonthook::vectorfont
 	void __fastcall A8RenderImmediateAlt(NiTriShape* shape, void*, NiRenderer* renderer);
 	bool InitializeA8TriShapeVtable(NiTriShape* shape);
 	bool PrepareSingletonFacadeA8Shape(Font& font, NiTriShape* shape,
+		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
+		const A8EffectShapeConfig* effectConfig,
+		const A8ShapeColorContract* colorContract,
+		NativeA8PayloadTemplatePtr payloadTemplate,
+		const NiPoint3& geometryOrigin);
+	bool PrepareStockLayoutSdfA8Shape(Font& font, NiTriShape* shape,
 		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
 		const A8EffectShapeConfig* effectConfig,
 		const A8ShapeColorContract* colorContract,

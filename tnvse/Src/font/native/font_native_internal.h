@@ -176,12 +176,14 @@ namespace fonthook::vectorfont
 		kNativeA8PixelConstantBaseRegister
 		+ static_cast<UInt32>(kNativeA8PacketConstantRegisterCount) - 1u;
 	inline constexpr UInt32 kNativeA8VertexAaConstantRegister = 208;
+	inline constexpr UInt32 kNativeA8StockLayoutGlyphConstantRegister = 209;
 	inline constexpr UInt32 kNativeA8GlyphInstanceSidecarBytes = 72;
 	inline constexpr UInt32 kNativeA8GlyphInstanceBytes = 152;
 	inline constexpr UInt32 kNativeA8MaximumInstanceBufferBytes =
 		16u * 1024u * 1024u;
 	static_assert(kNativeA8PixelConstantLastRegister <= 223);
 	static_assert(kNativeA8VertexAaConstantRegister <= 255);
+	static_assert(kNativeA8StockLayoutGlyphConstantRegister <= 255);
 
 	enum class NativeA8ShaderClass : UInt8
 	{
@@ -350,6 +352,10 @@ namespace fonthook::vectorfont
 		bool compositeShiftedShadow = false;
 		bool staticSmoothSampling = false;
 		bool usesLiveTileRgb = true;
+		// Packet-wide source spread used only by the stock-layout SDF target.
+		// Zero means the packet is not eligible; the ordinary native pipeline
+		// continues to read per-vertex spread and keeps its historical profile key.
+		float uniformSdfSpread = 0.0f;
 		// Profile hashes are immutable artifact data. The two slots correspond to
 		// separate-alpha disabled/enabled. Resolved profiles are validated against
 		// the current generation and reset automatically on packet copy or move.
@@ -1257,13 +1263,18 @@ namespace fonthook::vectorfont
 	UInt64 GetNativeA8SortedFrameValidationToken();
 	UInt64 GetNativeA8SortedNestedTraversalSerial();
 	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
+		const NiTriShape* facade);
+	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload);
+	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
+		const NiTriShape* facade);
 	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload);
 	bool HonorNativeA8PreflightClipCull(const NiTriShape* facade,
 		NativeA8VisibilityCull preflightCull);
 	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,
 		const NativeA8ShapePayload& payload);
+	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason);
 	UInt32 GetNativeA8AtlasTextureEpoch();
 	void NotifyNativeA8AtlasTextureMutation();
 
@@ -1296,7 +1307,10 @@ namespace fonthook::vectorfont
 	void BeginNativeA8FacadeShaderBatch();
 	void EndNativeA8FacadeShaderBatch();
 	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
-		const NiTriShape* facade, bool scaledFillSampling);
+		const NiTriShape* facade, bool scaledFillSampling,
+		bool stockLayoutSdf = false);
+	bool IsNativeA8StockLayoutShapeReady(const NiTriShape* shape,
+		TileShader* shader);
 	bool ResolveNativeA8RetainedPacketProgram(
 		const NativeA8PacketTemplate& packet,
 		TileShader* shader, UInt32 generation,

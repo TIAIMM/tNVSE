@@ -540,6 +540,40 @@ namespace fonthook::vectorfont
 			bool m_active = false;
 		};
 
+		class StockLayoutOriginalVtableScope
+		{
+		public:
+			explicit StockLayoutOriginalVtableScope(NiTriShape* shape)
+				: m_shape(shape)
+			{
+				A8State& state = State();
+				if (!m_shape || !state.originalTriShapeVtable)
+					return;
+				m_original = *reinterpret_cast<void***>(m_shape);
+				if (m_original != &state.stockLayoutTriShapeVtable[1])
+					return;
+				*reinterpret_cast<void***>(m_shape) =
+					state.originalTriShapeVtable;
+				m_active = true;
+			}
+
+			~StockLayoutOriginalVtableScope()
+			{
+				if (m_active && m_shape)
+					*reinterpret_cast<void***>(m_shape) = m_original;
+			}
+
+			bool Active() const
+			{
+				return m_active;
+			}
+
+		private:
+			NiTriShape* m_shape = nullptr;
+			void** m_original = nullptr;
+			bool m_active = false;
+		};
+
 		class NativeFacadeShaderBatchScope
 		{
 		public:
@@ -1917,7 +1951,7 @@ namespace fonthook::vectorfont
 
 			NiTriShapeData* data = geometry->GetModelData();
 			if (!geometryVtable
-				|| geometryVtable != &State().triShapeVtable[1]
+				|| !IsA8AtlasShape(geometry)
 				|| geometryVtable[kGeometrySegmentedPredicateSlot]
 					!= reinterpret_cast<void*>(kNiGeometryFalsePredicate)
 				|| geometryVtable[kGeometryResizablePredicateSlot]
@@ -5158,8 +5192,7 @@ namespace fonthook::vectorfont
 			&& (frameEntry.visibilityCull
 					== NativeA8VisibilityCull::Clip
 				|| frameEntry.visibilityCull
-					== NativeA8VisibilityCull::Scissor)
-			&& frameEntry.payload)
+					== NativeA8VisibilityCull::Scissor))
 		{
 			// The sorted-frame clip proof is revalidated against the live
 			// volatile inputs before it suppresses the dispatch. Honoring
@@ -5172,17 +5205,61 @@ namespace fonthook::vectorfont
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					VisibilityPreflightClipHonored);
-				RecordNativeA8VisibilityCull(
-					frameEntry.visibilityCull, *frameEntry.payload);
+				if (frameEntry.payload)
+				{
+					RecordNativeA8VisibilityCull(
+						frameEntry.visibilityCull, *frameEntry.payload);
+				}
+				else
+				{
+					RecordNativeA8VisibilityCull(
+						frameEntry.visibilityCull);
+				}
 				return;
 			}
 			RecordFreeTypePerf(FreeTypePerfCounter::
 				VisibilityPreflightClipRevoked);
 		}
+		if (sortedFrameHit
+			&& frameEntry.visibilityCull
+				== NativeA8VisibilityCull::ZeroAlpha
+			&& EvaluateNativeA8SubmissionVisibility(shape)
+				== NativeA8VisibilityCull::ZeroAlpha)
+		{
+			if (frameEntry.payload)
+			{
+				RecordNativeA8VisibilityCull(
+					NativeA8VisibilityCull::ZeroAlpha,
+					*frameEntry.payload);
+			}
+			else
+			{
+				RecordNativeA8VisibilityCull(
+					NativeA8VisibilityCull::ZeroAlpha);
+			}
+			return;
+		}
+		if (IsStockLayoutSdfShape(shape))
+		{
+			NativeA8VisibilityCull visibilityCull =
+				EvaluateNativeA8SubmissionVisibility(shape);
+			if (visibilityCull == NativeA8VisibilityCull::None)
+			{
+				visibilityCull =
+					EvaluateNativeA8PreflightClipVisibility(shape);
+			}
+			if (visibilityCull != NativeA8VisibilityCull::None)
+			{
+				RecordNativeA8VisibilityCull(visibilityCull);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StockLayoutSdfCull);
+				return;
+			}
+		}
 		A8ShapeMetadataPtr metadataOwner;
 		const A8ShapeMetadata* metadata = nullptr;
 		NativeA8ShapePayload* payload = nullptr;
-		if (sortedFrameHit)
+		if (sortedFrameHit && frameEntry.metadata)
 		{
 			metadata = frameEntry.metadata;
 			payload = frameEntry.payload;
@@ -5198,6 +5275,68 @@ namespace fonthook::vectorfont
 		{
 			LogMissingMetadata(shape, "tile-render-pass");
 			return;
+		}
+		if (metadata->backend == FreeTypeShapeBackend::StockLayoutSdf)
+		{
+			bool shiftedStockLayout = false;
+			if (metadata->nativePayload.buildComplete
+				&& metadata->nativePayload.payloadTemplate
+				&& metadata->nativePayload.payloadTemplate->compositePackets.size()
+					== 1)
+			{
+				const NativeA8PacketTemplate& packet =
+					metadata->nativePayload.payloadTemplate->
+						compositePackets.front();
+				shiftedStockLayout = packet.compositeShiftedShadow;
+				TileShader* shader = ResolveNativeA8PacketShader(
+					packet, shape, false, true);
+				if (shader)
+					shape->SetShader(shader);
+				if (shader && IsNativeA8StockLayoutShapeReady(shape, shader))
+				{
+					if (s_constantOwnershipBatch.FrameActive())
+					{
+						ReleaseNativeConstantOwnershipBatch(
+							"before-stock-layout-sdf");
+					}
+					s_segmentDeviceStateCache.Reset();
+					// The stock-layout route uses retail geometry submission, but its
+					// TileShader still publishes tNVSE's private c176-c183 block and
+					// c209 glyph parameters.  It therefore cannot inherit or preserve
+					// the private-register proof used across a genuinely stock Tile.
+					InvalidateNativeA8SortedShaderState();
+					{
+						NativeFacadeShaderBatchScope shaderBatch;
+						StockLayoutOriginalVtableScope stockVtable(shape);
+						if (stockVtable.Active())
+						{
+							state.originalRenderPassImmediately(pass,
+								currentPass, testAlpha, blendAlpha,
+								setupDrawmode);
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::StockLayoutSdfDraw);
+							if (shiftedStockLayout)
+							{
+								RecordFreeTypePerf(FreeTypePerfCounter::
+									StockLayoutSdfShiftedDraw);
+							}
+							// The draw just replaced the private packet constants with the
+							// stock-layout profile.  Force the next facade to republish its
+							// own profile instead of treating this as a stock-only boundary.
+							InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
+							return;
+						}
+					}
+					InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
+				}
+			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::StockLayoutSdfRuntimeFallback);
+			if (shiftedStockLayout)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					StockLayoutSdfShiftedRuntimeFallback);
+			}
 		}
 		std::optional<NativeCrossTextBatchExecutionScope> crossTextBatchScope;
 		if (g_bEnableFreeTypeFontCrossTextBatch)
@@ -5527,8 +5666,18 @@ namespace fonthook::vectorfont
 
 	bool IsA8AtlasShape(const NiTriShape* shape)
 	{
+		if (!shape)
+			return false;
+		void* const* vtable =
+			*reinterpret_cast<void* const* const*>(shape);
+		return vtable == &State().triShapeVtable[1]
+			|| vtable == &State().stockLayoutTriShapeVtable[1];
+	}
+
+	bool IsStockLayoutSdfShape(const NiTriShape* shape)
+	{
 		return shape && *reinterpret_cast<void* const* const*>(shape)
-			== &State().triShapeVtable[1];
+			== &State().stockLayoutTriShapeVtable[1];
 	}
 
 	void __fastcall A8RenderImmediate(NiTriShape* shape, void*,
@@ -5677,7 +5826,8 @@ namespace fonthook::vectorfont
 		void** source = shape ? *reinterpret_cast<void***>(shape) : nullptr;
 		if (!source)
 			return false;
-		if (source == &State().triShapeVtable[1])
+		if (source == &State().triShapeVtable[1]
+			|| source == &State().stockLayoutTriShapeVtable[1])
 			return true;
 		if (State().originalTriShapeVtable)
 			return source == State().originalTriShapeVtable;
@@ -5713,6 +5863,9 @@ namespace fonthook::vectorfont
 		state.triShapeVtable[0] = source[-1];
 		std::copy(source, source + kCopiedTriShapeVtableEntries,
 			state.triShapeVtable.begin() + 1);
+		state.stockLayoutTriShapeVtable[0] = source[-1];
+		std::copy(source, source + kCopiedTriShapeVtableEntries,
+			state.stockLayoutTriShapeVtable.begin() + 1);
 		state.originalRenderImmediate = reinterpret_cast<RenderImmediateFn>(
 			state.triShapeVtable[kRenderImmediateSlot + 1]);
 		state.originalRenderImmediateAlt = reinterpret_cast<RenderImmediateFn>(
@@ -5734,6 +5887,12 @@ namespace fonthook::vectorfont
 		state.triShapeVtable[kRenderImmediateSlot + 1]
 			= reinterpret_cast<void*>(&A8RenderImmediate);
 		state.triShapeVtable[kRenderImmediateAltSlot + 1]
+			= reinterpret_cast<void*>(&A8RenderImmediateAlt);
+		state.stockLayoutTriShapeVtable[kDeleteThisSlot + 1]
+			= reinterpret_cast<void*>(&A8DeleteThis);
+		state.stockLayoutTriShapeVtable[kRenderImmediateSlot + 1]
+			= reinterpret_cast<void*>(&A8RenderImmediate);
+		state.stockLayoutTriShapeVtable[kRenderImmediateAltSlot + 1]
 			= reinterpret_cast<void*>(&A8RenderImmediateAlt);
 		return state.originalRenderImmediate && state.originalRenderImmediateAlt
 			&& state.originalDeleteThis;

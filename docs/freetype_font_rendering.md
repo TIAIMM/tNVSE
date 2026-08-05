@@ -821,10 +821,11 @@ and wrappers reject. The D3D declaration expands `D3DCOLOR` to the vertex
 shader's normalized `float4 COLOR0`; packet-uniform layer modifiers remain in
 pixel constants. Compared with a four-float base color, the packed color field
 still saves twelve bytes per vertex without adding packets or draw calls. After
-the active Sort has produced the final Tile arrays, tNVSE scans that result
-and acquires the unique facade metadata owners in one batch. It conditionally
-repairs only proved exact-depth stock/FreeType ties as described below, then
-deduplicates immutable artifacts and promotes eligible data with one static-VB
+the active Sort has produced the final Tile arrays, tNVSE scans that result,
+evaluates zero-alpha and final model-bound viewport/scissor visibility, and
+acquires metadata in one batch only for survivors. It conditionally repairs
+only proved exact-depth stock/FreeType ties as described below, then deduplicates
+surviving immutable artifacts and promotes eligible data with one static-VB
 Lock/copy/Unlock sequence. Tiles are not persistently merged: depth, per-Tile
 transform, scissor, alpha, and shader constants remain independent.
 
@@ -862,17 +863,21 @@ hook chaining, AddTail order, and duplicate-registration semantics.
 
 At `NativeA8RenderAlphaGeometry`, `CaptureSortedFacadeTopology` performs one
 pass over the final `m_ppkItems` array. It hashes facade pointers, records their
-occurrence counts, batch-acquires metadata, and folds mixed-run candidate
-detection into that same scan. Frames without a mixed exact-depth run perform
-no source-list traversal and allocate no tie-repair scratch. Candidate frames
-use an open-addressed occurrence stack and one reverse source-list walk, all
-linear in the number of sorted items; there is no source-list copy,
-bidirectional ordinal map, or comparison sort. Mixed-run bounds captured by the
-required facade scan are reused, and only those candidate ranges are
-revalidated. The complete output is validated before any pointer is committed,
-and source-count, lookup,
-occurrence, run-coverage, or 8192-item envelope failure leaves the predecessor's
-array unchanged.
+occurrence counts, and folds mixed-run candidate detection into that same scan.
+If the scan captures no facade, the traversal returns directly to stock
+`RenderAlphaGeometry`: no readiness snapshot, metadata batch, ring preparation,
+singleton preparation, command frame, or shader/constant batch is opened.
+Otherwise the final bound/scissor proof runs first and a compact survivor list
+is the sole input to metadata acquisition. Culled entries retain only their
+shape identity and cull reason for dispatch-time validation. If every survivor
+fails preparation, ring, singleton, command, and shader-batch setup are also
+skipped. Frames without a mixed exact-depth run perform no source-list traversal
+and allocate no tie-repair scratch. Candidate frames use an open-addressed
+occurrence stack and one reverse source-list walk, all linear in the number of
+sorted items; there is no source-list copy, bidirectional ordinal map, or
+comparison sort. The complete repair output is validated before any pointer is
+committed, and source-count, lookup, occurrence, run-coverage, or 8192-item
+envelope failure leaves the predecessor's array unchanged.
 
 A singleton facade is direct-command eligible only when its metadata identity
 is current and it occurs exactly once in the final array. A duplicate facade
@@ -884,13 +889,13 @@ dispatch patch, replacement quicksort, per-Sort timing, full registry audit,
 and large diagnostic families remain removed.
 
 Visibility remains entirely after registration. The post-Sort preflight is the
-single clip/scissor proof used by a native flush. It evaluates the immutable
-whole-text bound against the resolved viewport or scissor before command
-construction. The sphere bound is expanded to an enclosing cube and evaluated
-with homogeneous half-space intervals; a facade is suppressed only when the
-complete cube is strictly outside one padded edge. Term-magnitude-relative
-slack is applied before cancellation, and every point of the cube must be
-strictly in front of `w=0`.
+single clip/scissor proof used by a facade flush. It evaluates the final model
+bound, world transform, viewport, and Tile scissor before acquiring metadata or
+constructing commands. The sphere bound is expanded to an enclosing cube and
+evaluated with homogeneous half-space intervals; a shape is suppressed only
+when the complete cube is strictly outside one padded edge.
+Term-magnitude-relative slack is applied before cancellation, and every point
+of the cube must be strictly in front of `w=0`.
 
 A preflight cull is revalidated when the final sorted entry is dispatched. A
 matching result is consumed without packet preparation, upload, Tile callbacks,
@@ -905,9 +910,9 @@ Every ambiguous case fails open: disabled or malformed scissor, non-finite
 bound/transform/position-adjust/matrix, a cube touching or crossing `w=0`,
 viewport mismatch, the retail special scissor-scaling mode, identity mismatch,
 or an edge within the numeric safety slack all keep the original path. The
-proof uses the complete artifact bound and the one live facade state before any
-packet command, upload, or draw, so it applies equally to single- and multi-
-packet payloads.
+proof uses the final full-text model bound and the live facade state before any
+metadata owner, packet command, upload, or draw, so it applies equally to
+single- and multi-packet payloads.
 
 The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
 `clip`, `scissor`, `preflight_skipped`, `packets_saved`, and `vertices_saved`.
@@ -915,6 +920,56 @@ The separate `tnvse_freetype_preflight_clip_cull` line reports proof checks,
 viewport/scissor routes, fail-open decisions, honored results, and revoked
 results. There is no late-visibility phase line or instancing-member visibility
 family. The thin registration route performs no visibility work.
+The `tnvse_freetype_accumulator_prep` line separately reports empty-facade fast
+returns, metadata acquisitions avoided by proven culls, and traversals with no
+prepared payload.
+
+### Stock-layout MTSDF target
+
+The common MTSDF case can bypass the facade/ring/command preparation stack
+entirely. It creates one ordinary engine-owned full `NiTriShape`, keeps the
+stock 40-byte geometry layout, and selects an isolated tNVSE MTSDF TileShader.
+The active stock accumulator therefore sorts and prepares the real text
+geometry; the final immediate hook restores the original `NiTriShape` vtable
+for the duration of the retail pass and lets the stock pass issue the one draw.
+There is no proxy geometry, native vertex-ring upload, singleton binding, or
+cross-text command for this shape. Because the isolated TileShader still writes
+the private c176-c183 block and c209, this draw fully invalidates the sorted
+private-register proof on entry and exit; it is never misclassified as a
+genuinely stock Tile transition.
+
+Eligibility is deliberately strict and immutable: exactly one physical atlas
+page, one Composite packet covering all glyphs, MTSDF, a static
+layer mask from 8 through 15, one positive spread across all vertices, and exact
+distance scale 1. Every quad must also carry one finite,
+ordered glyph UV rectangle. UV0 remains the atlas coordinate; UV1 and UV2 store
+the per-glyph minimum and maximum so filtered samples remain clamped to the
+physical glyph and cannot bleed across the atlas. The optional vertex shader
+publishes packet-wide spread/mask through VS c209; the pixel shader derives
+screen-space antialias width from `ddx`/`ddy`, preserving MTSDF effects without
+the 52-byte native vertex stream. Shadow masks 9/11/13/15 are supported both
+with zero offset and with a real X/Y offset. The shifted variants consume the
+existing one-quad glyph/shadow union geometry and use dedicated static-shift
+pixel programs, so shadow position and painter order remain identical to the
+facade Composite path.
+
+Any ineligible case stays on the existing one-facade native pipeline. Failure
+to create the optional declaration/shader/profile also falls back before the
+target vtable is published. A generation or geometry-buffer mismatch discovered
+at draw time records a runtime fallback and executes the retained payload through
+the established native packet path. Multi-page text, true-SDF, mixed spread or
+scale, and aggressive precomposed ARGB are therefore unchanged.
+The target changes neither atlas dimensions nor persistent cache format and
+does not enable NPOT.
+
+`tnvse_freetype_stock_layout_sdf` reports strictly eligible attempts, successful
+creations, creation fallbacks, direct draws, final-bound culls, runtime
+fallbacks, and created vertices. In a validated run, `created` must not exceed
+`eligible`, while `draws + culls + runtime_fallback` describes dispatch outcomes
+for live target shapes over the reporting interval. The same line exposes
+`shifted_eligible`, `shifted_created`, `shifted_draws`, and
+`shifted_runtime_fallback` so a log can prove that real offset-shadow text is
+using the target rather than merely matching a non-shadow mask.
 
 The dynamic ring retains its two-maximum-payload capacity, while the static VB
 starts at approximately 4 MiB instead of reserving its approximately 12 MiB
@@ -1034,17 +1089,19 @@ geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
 facades, total payload packets, single- and multi-packet artifacts, direct/span/
 packet-loop frames, topology switches, fallbacks, partial faults, and the
 invariant sibling_shapes=0. The build identity is
-`no-viewport-subtree-hook-v34`. It retains the v23 shell-shader restoration
-fix, v24 logging cleanup, the no-Sort-hook single-facade architecture, the v30
-linear equal-depth repair, and the v31 direct-Sort-array/preflight-only cleanup.
+`stock-layout-shadow-sdf-v37`. It
+retains the v23 shell-shader restoration fix, v24 logging cleanup, the
+no-Sort-hook single-facade architecture, the v30 linear equal-depth repair, and
+the v31 direct-Sort-array/preflight-only cleanup.
 The prepared-text result cache, stock-Tile execution bridge, and early
 TileRect/TileImage/NiNode viewport-subtree hooks are removed. Visibility
 decisions now remain exclusively in the final post-Sort preflight, where the
 final transform and scissor state are available. With rendering logging enabled,
 the first applied repair emits one compact process-thread diagnostic containing
 item, mixed-run, changed-run, and changed-item counts; a proof failure emits one
-fail-open line. It changes no NVSE export, INI key, shader ABI, font-cache
-format, or save format.
+fail-open line. It changes no NVSE export, INI key, font-cache format, or save
+format. The stock-layout target adds an isolated optional vertex/pixel shader
+ABI; the existing facade shaders and fallback ABI remain unchanged.
 
 With rendering logging enabled, accumulator preparation is now measured only
 from sorted-topology capture through sorted-state publication; it no longer

@@ -467,6 +467,20 @@ namespace fonthook::vectorfont
 		GlyphInstancingSourceTextureAlias,
 		SortedAllStaticFastExit,
 		SortedAllStaticPayloadValidationElided,
+		AccumulatorEmptyFastPath,
+		AccumulatorMetadataCullSkipped,
+		AccumulatorNoPreparedPayload,
+		StockLayoutSdfCandidate,
+		StockLayoutSdfCreated,
+		StockLayoutSdfFallback,
+		StockLayoutSdfDraw,
+		StockLayoutSdfCull,
+		StockLayoutSdfRuntimeFallback,
+		StockLayoutSdfVertex,
+		StockLayoutSdfShiftedCandidate,
+		StockLayoutSdfShiftedCreated,
+		StockLayoutSdfShiftedDraw,
+		StockLayoutSdfShiftedRuntimeFallback,
 		Count,
 	};
 	static_assert(
@@ -1057,6 +1071,12 @@ namespace fonthook::vectorfont
 		std::shared_ptr<const NativeA8PayloadTemplate> apPayloadTemplate = {},
 		const NiPoint3& arGeometryOrigin = NiPoint3());
 	bool PrepareSingletonFacadeA8Shape(Font& arFont, NiTriShape* apShape,
+		UInt32 auiFontId, UInt32 auiGlyphCount, UInt32 auiQuadCount,
+		const A8EffectShapeConfig* apEffectConfig,
+		const A8ShapeColorContract* apColorContract,
+		std::shared_ptr<const NativeA8PayloadTemplate> apPayloadTemplate,
+		const NiPoint3& arGeometryOrigin);
+	bool PrepareStockLayoutSdfA8Shape(Font& arFont, NiTriShape* apShape,
 		UInt32 auiFontId, UInt32 auiGlyphCount, UInt32 auiQuadCount,
 		const A8EffectShapeConfig* apEffectConfig,
 		const A8ShapeColorContract* apColorContract,

@@ -130,7 +130,9 @@ namespace fonthook::vectorfont
 						|| (composite
 							&& (packet.shaderClass
 									!= NativeA8ShaderClass::Composite
-								|| packet.staticCompositeLayerMask > 15u)))
+								|| packet.staticCompositeLayerMask > 15u
+								|| !std::isfinite(packet.uniformSdfSpread)
+								|| packet.uniformSdfSpread < 0.0f)))
 					{
 						return false;
 					}
@@ -334,6 +336,10 @@ namespace fonthook::vectorfont
 			mix(packet.compositeShiftedShadow ? 1u : 0u);
 			mix(writeEffectAlpha ? 1u : 0u);
 			mix(packet.usesLiveTileRgb ? 1u : 0u);
+			// Precomputed hashes describe the ordinary native layout. Keep this
+			// discriminator in exact lockstep with NativeProfileKeyHash so an
+			// equivalent runtime-computed key cannot land in another bucket.
+			mix(0u);
 			for (float value : packet.constants)
 			{
 				UInt32 bits = 0;
@@ -520,7 +526,7 @@ namespace fonthook::vectorfont
 		NativeA8PacketTemplate BuildCompositePacket(
 			const A8EffectShapeConfig& effects,
 			const NativeA8CompositeSpan& span, const NiBound& bound,
-			UInt8 staticLayerMask)
+			UInt8 staticLayerMask, float uniformSdfSpread)
 		{
 			NativeA8PacketTemplate packet;
 			packet.firstVertex = span.firstVertex;
@@ -554,6 +560,10 @@ namespace fonthook::vectorfont
 						effects.inverseAtlasHeight);
 			packet.constants[4] = inverseSize.x;
 			packet.constants[5] = inverseSize.y;
+			// Keep this outside AtlasPass: ordinary composite shaders read spread
+			// per vertex, so including it in their constant/profile identity would
+			// fragment profile reuse and prevent otherwise valid packet merging.
+			packet.uniformSdfSpread = uniformSdfSpread;
 			packet.constants[7] = effects.rasterScale;
 			packet.constants[8] = effects.shadowBlurPixels;
 			packet.constants[9] = effects.shadowPower;
@@ -606,6 +616,25 @@ namespace fonthook::vectorfont
 					return 0;
 			}
 			return resolved;
+		}
+
+		float ResolveUniformCompositeSdfSpread(
+			const std::vector<NativeA8GpuVertex>& vertices,
+			const NativeA8CompositeSpan& span)
+		{
+			const size_t end = static_cast<size_t>(span.firstVertex)
+				+ span.vertexCount;
+			if (!span.vertexCount || end > vertices.size())
+				return 0.0f;
+			const float spread = vertices[span.firstVertex].sdfSpread;
+			if (!std::isfinite(spread) || spread <= 0.0f)
+				return 0.0f;
+			for (size_t index = span.firstVertex + 1u; index < end; ++index)
+			{
+				if (vertices[index].sdfSpread != spread)
+					return 0.0f;
+			}
+			return spread;
 		}
 
 	}
@@ -686,9 +715,12 @@ namespace fonthook::vectorfont
 				const UInt8 staticLayerMask =
 					ResolveStaticCompositeLayerMask(
 						payload->gpuVertices, span);
+				const float uniformSdfSpread =
+					ResolveUniformCompositeSdfSpread(
+						payload->gpuVertices, span);
 				payload->compositePackets.push_back(
 					BuildCompositePacket(effects, span, bound,
-						staticLayerMask));
+						staticLayerMask, uniformSdfSpread));
 			}
 		}
 		BuildPayloadInstanceSidecars(*payload);

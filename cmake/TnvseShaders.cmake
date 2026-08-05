@@ -6,6 +6,7 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/freetype_native_common.hlsli"
     "${shader_dir}/freetype_native_vs.hlsl"
     "${shader_dir}/freetype_native_instanced_vs.hlsl"
+    "${shader_dir}/freetype_native_stock_layout_vs.hlsl"
     "${shader_dir}/freetype_native_coverage.hlsl"
     "${shader_dir}/freetype_native_argb.hlsl"
     "${shader_dir}/freetype_native_mtsdf_fill.hlsl"
@@ -15,6 +16,7 @@ function(tnvse_add_shader_target output_variable)
   set(shader_outputs
     "${shader_dir}/compiled/tnvse_freetype_native_vs.vso"
     "${shader_dir}/compiled/tnvse_freetype_native_instanced_vs.vso"
+    "${shader_dir}/compiled/tnvse_freetype_native_stock_layout_vs.vso"
     "${shader_dir}/compiled/tnvse_freetype_native_coverage.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_argb.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_fast.pso"
@@ -38,11 +40,13 @@ function(tnvse_add_shader_target output_variable)
   foreach(quality IN ITEMS fast balanced high)
     foreach(mask IN ITEMS 8 9 10 11 12 13 14 15)
       list(APPEND shader_outputs
-        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_${quality}_m${mask}.pso")
+        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_${quality}_m${mask}.pso"
+        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_stock_layout_${quality}_m${mask}.pso")
     endforeach()
     foreach(mask IN ITEMS 9 11 13 15)
       list(APPEND shader_outputs
-        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_${quality}_m${mask}_shift.pso")
+        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_${quality}_m${mask}_shift.pso"
+        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_stock_layout_${quality}_m${mask}_shift.pso")
     endforeach()
   endforeach()
 
@@ -115,6 +119,7 @@ function(tnvse_enable_live_deployment target plugin_path shader_outputs overlay_
       "${shader_path}/tnvse_freetype_native_mtsdf_fill_subpixel_fast.pso"
       "${shader_path}/tnvse_freetype_native_mtsdf_fill_subpixel_balanced.pso"
       "${shader_path}/tnvse_freetype_native_mtsdf_fill_subpixel_high.pso"
+      "${shader_path}/tnvse_freetype_native_mtsdf_diag.pso"
       "${shader_path}/tnvse_freetype_native_sdf_fill_subpixel_fast.pso"
       "${shader_path}/tnvse_freetype_native_sdf_fill_subpixel_balanced.pso"
       "${shader_path}/tnvse_freetype_native_sdf_fill_subpixel_high.pso"

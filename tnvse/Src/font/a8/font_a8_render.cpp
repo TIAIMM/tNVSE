@@ -1157,6 +1157,93 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
+	bool PrepareStockLayoutSdfA8Shape(Font& font, NiTriShape* shape,
+		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
+		const A8EffectShapeConfig* effectConfig,
+		const A8ShapeColorContract* colorContract,
+		NativeA8PayloadTemplatePtr payloadTemplate,
+		const NiPoint3& geometryOrigin)
+	{
+		FreeTypePerfScope perf(FreeTypePerfPhase::NativeRegistration);
+		if (!IsA8RendererAvailable() || !shape || !payloadTemplate
+			|| payloadTemplate->quadCount != quadCount
+			|| payloadTemplate->pageCount != 1
+			|| payloadTemplate->compositePackets.size() != 1)
+		{
+			return false;
+		}
+		const NativeA8PacketTemplate& packet =
+			payloadTemplate->compositePackets.front();
+		const UInt64 packetEnd = static_cast<UInt64>(packet.firstVertex)
+			+ packet.vertexCount;
+		const NiTriShapeData* shapeData = shape->GetModelData();
+		if (packet.shaderClass != NativeA8ShaderClass::Composite
+			|| packet.distanceFieldMethod != DistanceFieldMethod::Mtsdf
+			|| packet.atlasPage != 0 || (packet.firstVertex & 3u)
+			|| !packet.vertexCount || (packet.vertexCount & 3u)
+			|| packetEnd > payloadTemplate->gpuVertices.size()
+			|| !shapeData || shapeData->m_usVertices != packet.vertexCount
+			|| packet.staticCompositeLayerMask < 8u
+			|| packet.staticCompositeLayerMask > 15u
+			|| !std::isfinite(packet.uniformSdfSpread)
+			|| packet.uniformSdfSpread <= 0.0f
+			|| !ValidateA8Shape(shape, effectConfig, colorContract,
+				payloadTemplate.get())
+			|| !InitializeA8TriShapeVtable(shape))
+		{
+			return false;
+		}
+
+		TileShader* shader = ResolveNativeA8PacketShader(
+			packet, shape, false, true);
+		if (!shader)
+			return false;
+
+		auto metadata = std::make_shared<A8ShapeMetadata>();
+		InitializeA8MetadataIdentity(*metadata, shape);
+		metadata->fontId = fontId;
+		metadata->glyphCount = glyphCount;
+		metadata->quadCount = quadCount;
+		metadata->vertexCount = packet.vertexCount;
+		metadata->primitiveCount = packet.vertexCount / 2u;
+		metadata->indexCount = packet.vertexCount / 4u * 6u;
+		metadata->backend = FreeTypeShapeBackend::StockLayoutSdf;
+		if (colorContract)
+			metadata->colorContract = *colorContract;
+		if (!InitializeNativeA8ShapePayload(font, shape, *metadata,
+			payloadTemplate, geometryOrigin, metadata->nativePayload))
+		{
+			return false;
+		}
+		metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
+			sizeof(A8ShapeMetadata)
+				+ metadata->nativePayload.packetShaders.heap_capacity()
+					* sizeof(TileShader*)
+				+ metadata->nativePayload.packetPrograms.heap_capacity()
+					* sizeof(const NativeA8CompiledPacketCommand*)
+				+ metadata->nativePayload.preflightAtlasTextures.heap_capacity()
+					* sizeof(const void*)
+				+ GetNativeA8TileRetainedCapacityBytes(
+					metadata->nativePayload)
+				+ sizeof(A8ShapeMetadataEntry) + 6u * sizeof(void*));
+		shape->SetShader(shader);
+		{
+			A8State& state = State();
+			std::lock_guard<std::mutex> lock(state.metadataMutex);
+			state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(
+				1, std::memory_order_release);
+			A8ShapeMetadataPtr publishedMetadata = std::move(metadata);
+			const size_t previousBucketCount =
+				state.shapeMetadata.bucket_count();
+			state.shapeMetadata[shape] =
+				MakeA8MetadataEntry(std::move(publishedMetadata));
+			RecordMetadataInsertionRehash(state, previousBucketCount);
+			*reinterpret_cast<void***>(shape) =
+				&state.stockLayoutTriShapeVtable[1];
+		}
+		return true;
+	}
+
 	bool PrepareSingletonFacadeForSortedFrame(
 		const A8ShapeMetadata& metadata, UInt32 generation,
 		UInt32 atlasTextureEpoch, UInt64 validationToken)

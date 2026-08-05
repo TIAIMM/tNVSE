@@ -891,7 +891,7 @@ namespace fonthook::vectorfont
 		void** shaderVtable = shader
 			? *reinterpret_cast<void***>(shader) : nullptr;
 		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-		if (geometryVtable != &State().triShapeVtable[1]
+		if (!IsA8AtlasShape(geometry)
 			|| geometryVtable[kRenderImmediateAltSlot]
 				!= reinterpret_cast<void*>(&A8RenderImmediateAlt)
 			|| !program->active || !program->profile

@@ -41,6 +41,10 @@ float4 ComposeNativeFontCoverage(float coverage, float4 tileColor,
 #define NATIVE_FONT_EXPLICIT_LOD 0
 #endif
 
+#ifndef NATIVE_FONT_DERIVATIVE_AA
+#define NATIVE_FONT_DERIVATIVE_AA 0
+#endif
+
 float4 SampleNativeFontMtsdf(sampler2D atlas, float2 uv)
 {
 #if NATIVE_FONT_EXPLICIT_LOD
@@ -109,7 +113,13 @@ float NativeFontMtsdfAntialiasWidth(float screenPxRange, float spread)
 float ResolveNativeFontMtsdfAntialiasWidth(
 	NativeFontPixelInput input, float spread)
 {
+#if NATIVE_FONT_DERIVATIVE_AA
+	return NativeFontMtsdfAntialiasWidth(
+		NativeFontMtsdfScreenPxRange(input.atlasUv, AtlasPass.xy, spread),
+		spread);
+#else
 	return min(max(input.antialiasWidth, 0.0001), spread);
+#endif
 }
 
 float NativeFontMtsdfBody(float rgbDistance, float antialiasWidth)

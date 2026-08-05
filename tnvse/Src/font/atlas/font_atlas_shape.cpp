@@ -1392,6 +1392,205 @@ namespace fonthook::vectorfont
 			return shape;
 		}
 
+		NiColorA UnpackNativeBaseColor(UInt32 color);
+
+		bool IsStockLayoutSdfPayloadEligible(
+			const NativeA8PayloadTemplate& payload,
+			const NativeA8PacketTemplate*& packet)
+		{
+			packet = nullptr;
+			if (payload.pageCount != 1 || payload.compositePackets.size() != 1
+				|| payload.gpuVertices.empty())
+			{
+				return false;
+			}
+			const NativeA8PacketTemplate& candidate =
+				payload.compositePackets.front();
+			const UInt64 packetEnd = static_cast<UInt64>(
+				candidate.firstVertex) + candidate.vertexCount;
+			if (candidate.shaderClass != NativeA8ShaderClass::Composite
+				|| candidate.distanceFieldMethod != DistanceFieldMethod::Mtsdf
+				|| candidate.atlasPage != 0 || !candidate.vertexCount
+				|| (candidate.firstVertex & 3u)
+				|| (candidate.vertexCount & 3u)
+				|| packetEnd > payload.gpuVertices.size()
+				|| candidate.staticCompositeLayerMask < 8u
+				|| candidate.staticCompositeLayerMask > 15u
+				|| !std::isfinite(candidate.uniformSdfSpread)
+				|| candidate.uniformSdfSpread <= 0.0f)
+			{
+				return false;
+			}
+			const float layerMask = static_cast<float>(
+				candidate.staticCompositeLayerMask);
+			for (UInt32 relative = 0; relative < candidate.vertexCount;
+				++relative)
+			{
+				const size_t index = static_cast<size_t>(candidate.firstVertex)
+					+ relative;
+				const NativeA8GpuVertex& vertex = payload.gpuVertices[index];
+				if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y)
+					|| !std::isfinite(vertex.z) || !std::isfinite(vertex.u)
+					|| !std::isfinite(vertex.v)
+					|| vertex.sdfSpread != candidate.uniformSdfSpread
+					|| vertex.distanceParameterScale != 1.0f
+					|| vertex.layerMask != layerMask
+					|| !std::isfinite(vertex.glyphU0)
+					|| !std::isfinite(vertex.glyphV0)
+					|| !std::isfinite(vertex.glyphU1)
+					|| !std::isfinite(vertex.glyphV1)
+					|| vertex.glyphU0 > vertex.glyphU1
+					|| vertex.glyphV0 > vertex.glyphV1)
+				{
+					return false;
+				}
+				const NativeA8GpuVertex& quadFirst =
+					payload.gpuVertices[static_cast<size_t>(
+						candidate.firstVertex) + (relative & ~UInt32(3u))];
+				if (vertex.glyphU0 != quadFirst.glyphU0
+					|| vertex.glyphV0 != quadFirst.glyphV0
+					|| vertex.glyphU1 != quadFirst.glyphU1
+					|| vertex.glyphV1 != quadFirst.glyphV1)
+				{
+					return false;
+				}
+			}
+			packet = &candidate;
+			return true;
+		}
+
+		NiTriShape* TryCreateStockLayoutSdfShape(Font& font,
+			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
+			const NativeA8PayloadTemplatePtr& payload, UInt32 glyphCount,
+			const A8EffectShapeConfig& effects,
+			const A8ShapeColorContract& colorContract,
+			const NiColorA& tileColor, const NiPoint3& origin,
+			bool prepareObject)
+		{
+			const NativeA8PacketTemplate* packet = nullptr;
+			if (!payload || atlases.size() != 1 || !atlases.front()
+				|| !IsStockLayoutSdfPayloadEligible(*payload, packet)
+				|| !packet)
+			{
+				return nullptr;
+			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::StockLayoutSdfCandidate);
+			if (packet->compositeShiftedShadow)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StockLayoutSdfShiftedCandidate);
+			}
+			const auto recordFallback = []()
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StockLayoutSdfFallback);
+			};
+			const UInt32 targetQuadCount = packet->vertexCount / 4u;
+			if (!targetQuadCount || targetQuadCount != glyphCount
+				|| packet->vertexCount > std::numeric_limits<UInt16>::max())
+			{
+				recordFallback();
+				return nullptr;
+			}
+
+			NiTriShape* shape = font.MakeTriShape(
+				static_cast<int>(targetQuadCount), &tileColor, false);
+			if (!shape || !shape->GetModelData()
+				|| !BindDirectAtlasShape(shape, atlases.front()))
+			{
+				if (shape)
+					shape->DeleteThis();
+				recordFallback();
+				return nullptr;
+			}
+			NiTriShapeData* data = shape->GetModelData();
+			if (data->m_pkBuffData || data->m_usVertices < packet->vertexCount
+				|| !data->m_pkVertex || !data->m_pusTriList)
+			{
+				shape->DeleteThis();
+				recordFallback();
+				return nullptr;
+			}
+			if (!data->m_pkColor)
+				data->m_pkColor = NiAlloc<NiColorA>(data->m_usVertices);
+			NiPoint2* textureSets = NiAlloc<NiPoint2>(
+				static_cast<size_t>(data->m_usVertices) * 3u);
+			if (!data->m_pkColor || !textureSets)
+			{
+				if (textureSets)
+					NiFree(textureSets);
+				shape->DeleteThis();
+				recordFallback();
+				return nullptr;
+			}
+
+			static constexpr UInt16 kCanonicalQuad[6] =
+				{ 0, 2, 1, 0, 3, 2 };
+			NiPoint2* atlasUv = textureSets;
+			NiPoint2* glyphMinimum = textureSets + data->m_usVertices;
+			NiPoint2* glyphMaximum = glyphMinimum + data->m_usVertices;
+			for (UInt32 index = 0; index < packet->vertexCount; ++index)
+			{
+				const NativeA8GpuVertex& vertex = payload->gpuVertices[
+					static_cast<size_t>(packet->firstVertex) + index];
+				data->m_pkVertex[index] = NiPoint3(
+					vertex.x + origin.x, vertex.y + origin.y,
+					vertex.z + origin.z);
+				data->m_pkColor[index] = UnpackNativeBaseColor(vertex.color);
+				atlasUv[index] = NiPoint2(vertex.u, vertex.v);
+				glyphMinimum[index] = NiPoint2(
+					vertex.glyphU0, vertex.glyphV0);
+				glyphMaximum[index] = NiPoint2(
+					vertex.glyphU1, vertex.glyphV1);
+			}
+			for (UInt32 quad = 0; quad < targetQuadCount; ++quad)
+			{
+				for (UInt32 ordinal = 0; ordinal < 6; ++ordinal)
+				{
+					data->m_pusTriList[quad * 6u + ordinal] =
+						static_cast<UInt16>(
+							quad * 4u + kCanonicalQuad[ordinal]);
+				}
+			}
+			NiPoint2* oldTexture = data->m_pkTexture;
+			data->m_pkTexture = textureSets;
+			data->m_usDataFlags = static_cast<UInt16>(
+				(data->m_usDataFlags & ~NiGeometryData::TEXTURE_SET_MASK) | 3u);
+			if (oldTexture)
+				NiFree(oldTexture);
+			data->m_kBound = payload->bound;
+			data->m_kBound.m_kCenter.x += origin.x;
+			data->m_kBound.m_kCenter.y += origin.y;
+			data->m_kBound.m_kCenter.z += origin.z;
+
+			if (!PrepareStockLayoutSdfA8Shape(font, shape, font.iFontNum,
+				glyphCount, payload->quadCount, &effects, &colorContract,
+				payload, origin))
+			{
+				shape->DeleteThis();
+				recordFallback();
+				return nullptr;
+			}
+			if (prepareObject)
+				shape->PrepareObject();
+			data->m_kBound = payload->bound;
+			data->m_kBound.m_kCenter.x += origin.x;
+			data->m_kBound.m_kCenter.y += origin.y;
+			data->m_kBound.m_kCenter.z += origin.z;
+			if (prepareObject && shape->m_pWorldBound)
+				shape->UpdateWorldBound();
+			RecordFreeTypePerf(FreeTypePerfCounter::StockLayoutSdfCreated);
+			if (packet->compositeShiftedShadow)
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StockLayoutSdfShiftedCreated);
+			}
+			RecordFreeTypePerf(FreeTypePerfCounter::StockLayoutSdfVertex,
+				packet->vertexCount);
+			return shape;
+		}
+
 		NiTriShape* CreateDirectNativeShape(Font& font,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
 			std::vector<NativeA8GpuVertex>&& vertices,
@@ -1420,6 +1619,12 @@ namespace fonthook::vectorfont
 			if (!payload || payload->gpuVertices.size() < 4
 				|| payload->packets.empty())
 				return nullptr;
+			if (NiTriShape* stockLayout = TryCreateStockLayoutSdfShape(
+				font, atlases, payload, glyphCount, effects, colorContract,
+				tileColor, origin, prepareObject))
+			{
+				return stockLayout;
+			}
 
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::SingletonFacadeCandidate);
@@ -3396,6 +3601,25 @@ namespace fonthook::vectorfont
 				resolvedEffect, allowArtifactCache);
 			if (!artifact || artifact->gpuVertices.size() < quads.size() * 4u)
 				return nullptr;
+			const UInt8 fillLayerBit =
+				1u << static_cast<UInt8>(AtlasLayer::Fill);
+			const UInt32 glyphCount = static_cast<UInt32>(std::count_if(
+				quads.begin(), quads.end(),
+				[fillLayerBit](const PendingQuad& quad)
+				{
+					return (quad.layerMask & fillLayerBit) != 0;
+				}));
+			const A8ShapeColorContract colorContract =
+				BuildColorContract(quads);
+			if (needsNativeRangeRouting)
+			{
+				if (NiTriShape* stockLayout = TryCreateStockLayoutSdfShape(
+					font, atlases, artifact, glyphCount, resolvedEffect,
+					colorContract, tileColor, origin, prepareObject))
+				{
+					return stockLayout;
+				}
+			}
 
 			NiTriShape* shape = font.MakeTriShape(
 				static_cast<int>(needsNativeRangeRouting ? 1u : quads.size()),
@@ -3476,16 +3700,10 @@ namespace fonthook::vectorfont
 				std::copy(std::begin(kFacadeQuad), std::end(kFacadeQuad),
 					data->m_pusTriList);
 			}
-			const UInt8 fillLayerBit = 1u << static_cast<UInt8>(AtlasLayer::Fill);
 			if (needsNativeRangeRouting)
 			{
-				const A8ShapeColorContract colorContract = BuildColorContract(quads);
 				if (!PrepareA8AtlasShape(font, shape, font.iFontNum,
-					static_cast<UInt32>(std::count_if(quads.begin(), quads.end(),
-						[fillLayerBit](const PendingQuad& quad)
-						{
-							return (quad.layerMask & fillLayerBit) != 0;
-						})),
+					glyphCount,
 					static_cast<UInt32>(quads.size()), &resolvedEffect, &colorContract,
 					artifact, origin))
 				{

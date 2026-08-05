@@ -681,6 +681,25 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::SingletonFacadeSortedPreflightSaved),
 			counterValue(FreeTypePerfCounter::SingletonFacadeProxyPacketSaved));
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_accumulator_prep: empty_fast=%llu metadata_cull_skipped=%llu no_prepared_payload=%llu",
+			counterValue(FreeTypePerfCounter::AccumulatorEmptyFastPath),
+			counterValue(FreeTypePerfCounter::AccumulatorMetadataCullSkipped),
+			counterValue(FreeTypePerfCounter::AccumulatorNoPreparedPayload));
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_stock_layout_sdf: eligible=%llu created=%llu create_fallback=%llu draws=%llu culls=%llu runtime_fallback=%llu vertices=%llu shifted_eligible=%llu shifted_created=%llu shifted_draws=%llu shifted_runtime_fallback=%llu",
+			counterValue(FreeTypePerfCounter::StockLayoutSdfCandidate),
+			counterValue(FreeTypePerfCounter::StockLayoutSdfCreated),
+			counterValue(FreeTypePerfCounter::StockLayoutSdfFallback),
+			counterValue(FreeTypePerfCounter::StockLayoutSdfDraw),
+			counterValue(FreeTypePerfCounter::StockLayoutSdfCull),
+			counterValue(FreeTypePerfCounter::StockLayoutSdfRuntimeFallback),
+			counterValue(FreeTypePerfCounter::StockLayoutSdfVertex),
+			counterValue(FreeTypePerfCounter::StockLayoutSdfShiftedCandidate),
+			counterValue(FreeTypePerfCounter::StockLayoutSdfShiftedCreated),
+			counterValue(FreeTypePerfCounter::StockLayoutSdfShiftedDraw),
+			counterValue(
+				FreeTypePerfCounter::StockLayoutSdfShiftedRuntimeFallback));
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu direct_single_replays=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu instancing_bridges=%llu bridge_rejected=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRecorded)],

@@ -22,6 +22,8 @@ for %%F in ("%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_fre
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_instanced_vs.vso" "%~dp0freetype_native_instanced_vs.hlsl"
 if errorlevel 1 exit /b %errorlevel%
+"%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_stock_layout_vs.vso" "%~dp0freetype_native_stock_layout_vs.hlsl"
+if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_coverage.pso" "%~dp0freetype_native_coverage.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_argb.pso" "%~dp0freetype_native_argb.hlsl"
@@ -68,9 +70,15 @@ call :compile_mtsdf_profiles 1 balanced
 if errorlevel 1 exit /b %errorlevel%
 call :compile_mtsdf_profiles 2 high
 if errorlevel 1 exit /b %errorlevel%
+call :compile_stock_layout_profiles 0 fast
+if errorlevel 1 exit /b %errorlevel%
+call :compile_stock_layout_profiles 1 balanced
+if errorlevel 1 exit /b %errorlevel%
+call :compile_stock_layout_profiles 2 high
+if errorlevel 1 exit /b %errorlevel%
 for /f %%C in ('dir /b /a-d "%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_freetype_native_*.vso" 2^>nul ^| find /c /v ""') do set "OUTPUT_COUNT=%%C"
-if not "%OUTPUT_COUNT%"=="58" (
-	echo Expected 58 native shader outputs, found %OUTPUT_COUNT%.
+if not "%OUTPUT_COUNT%"=="95" (
+	echo Expected 95 native shader outputs, found %OUTPUT_COUNT%.
 	exit /b 1
 )
 for %%F in ("%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_freetype_native_*.vso") do (
@@ -96,4 +104,21 @@ exit /b 0
 set "PROFILE_SUFFIX="
 if "%4"=="1" set "PROFILE_SUFFIX=_shift"
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_composite_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+exit /b %errorlevel%
+
+:compile_stock_layout_profiles
+for %%M in (8 9 10 11 12 13 14 15) do (
+	call :compile_stock_layout_profile %1 %2 %%M 0
+	if errorlevel 1 exit /b 1
+)
+for %%M in (9 11 13 15) do (
+	call :compile_stock_layout_profile %1 %2 %%M 1
+	if errorlevel 1 exit /b 1
+)
+exit /b 0
+
+:compile_stock_layout_profile
+set "PROFILE_SUFFIX="
+if "%4"=="1" set "PROFILE_SUFFIX=_shift"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D NATIVE_FONT_DERIVATIVE_AA=1 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_stock_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
 exit /b %errorlevel%

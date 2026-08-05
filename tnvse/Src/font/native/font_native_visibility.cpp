@@ -418,8 +418,8 @@ namespace fonthook::vectorfont
 				: ClipTransformBuildResult::IdentityMiss;
 		}
 
-		ClipProofResult EvaluatePayloadClip(
-			const NativeA8ShapePayload& payload,
+		ClipProofResult EvaluateBoundClip(const NiBound& bound,
+			const void* transformIdentity,
 			const TileVisibilityPropertyView& tile,
 			const NiDX9Renderer& renderer, const D3DXMATRIX& world,
 			bool allowViewport, NativeA8VisibilityCull& reason,
@@ -462,9 +462,6 @@ namespace fonthook::vectorfont
 				reason = NativeA8VisibilityCull::Clip;
 			}
 
-			if (!payload.payloadTemplate)
-				return failOpen();
-			const NiBound& bound = payload.payloadTemplate->bound;
 			if (!std::isfinite(bound.m_kCenter.x)
 				|| !std::isfinite(bound.m_kCenter.y)
 				|| !std::isfinite(bound.m_kCenter.z)
@@ -481,7 +478,7 @@ namespace fonthook::vectorfont
 			// homogeneous half-space evaluation below.
 			D3DXMATRIX builtWorldViewProjection = {};
 			const ClipTransformBuildResult buildResult =
-				BuildWorldViewProjection(&payload,
+				BuildWorldViewProjection(transformIdentity,
 					renderer, world, builtWorldViewProjection);
 			if (transformBuildResult)
 				*transformBuildResult = buildResult;
@@ -566,9 +563,8 @@ namespace fonthook::vectorfont
 	}
 
 	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
-		const NiTriShape* facade, const NativeA8ShapePayload& payload)
+		const NiTriShape* facade)
 	{
-		(void)payload;
 		RecordFreeTypePerf(FreeTypePerfCounter::VisibilityCheck);
 		if (!facade)
 			return NativeA8VisibilityCull::None;
@@ -587,8 +583,15 @@ namespace fonthook::vectorfont
 		return NativeA8VisibilityCull::None;
 	}
 
-	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
+	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload)
+	{
+		(void)payload;
+		return EvaluateNativeA8SubmissionVisibility(facade);
+	}
+
+	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
+		const NiTriShape* facade)
 	{
 		if (!g_bEnableFreeTypeFontPreflightClipCull)
 			return NativeA8VisibilityCull::None;
@@ -606,14 +609,14 @@ namespace fonthook::vectorfont
 			return NativeA8VisibilityCull::None;
 		};
 
-		// The sorted-frame preflight runs after every RegisterObject for this
-		// flush and before the stock immediate pass loop. The retained
-		// constants-state keys prove view/projection/viewport never mutate
-		// between this stage and replay (zero view/projection mismatches
-		// recorded session-wide), so this is the sole clip proof for the flush.
-		// Anything uncertain fails open, and every preflight cull is revalidated by
-		// HonorNativeA8PreflightClipCull at dispatch before it is honored.
-		if (!facade || !payload.buildComplete || !payload.payloadTemplate)
+		// Facades call this after every RegisterObject for the flush, once the
+		// final model bound, world transform, viewport, and Tile scissor exist.
+		// Stock-layout SDF shapes call it immediately before their stock geometry
+		// draw. Anything uncertain fails open. A facade proof is additionally
+		// revalidated by HonorNativeA8PreflightClipCull at dispatch before it is
+		// honored; a stock-layout proof already consumes the live dispatch state.
+		const NiTriShapeData* data = facade ? facade->GetModelData() : nullptr;
+		if (!facade || !data)
 			return failOpen();
 		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 		if (!renderer)
@@ -633,7 +636,11 @@ namespace fonthook::vectorfont
 		{
 			FreeTypePerfScope proofPerf(
 				FreeTypePerfPhase::PreflightClipProof);
-			proof = EvaluatePayloadClip(payload, *tile,
+			// This is the final stock-visible model bound. Facade payload vertices are
+			// relative and apply geometryOrigin during replay; stock-layout vertices
+			// are already engine-owned full geometry. Both representations publish
+			// the same full bound before reaching this proof.
+			proof = EvaluateBoundClip(data->m_kBound, facade, *tile,
 				*renderer, world, g_bEnableFreeTypeFontStructuralFastPaths,
 				reason, &transformBuildResult);
 		}
@@ -648,6 +655,13 @@ namespace fonthook::vectorfont
 		return reason;
 	}
 
+	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
+		const NiTriShape* facade, const NativeA8ShapePayload& payload)
+	{
+		(void)payload;
+		return EvaluateNativeA8PreflightClipVisibility(facade);
+	}
+
 	bool HonorNativeA8PreflightClipCull(const NiTriShape* facade,
 		NativeA8VisibilityCull preflightCull)
 	{
@@ -657,7 +671,7 @@ namespace fonthook::vectorfont
 			FreeTypePerfPhase::PreflightClipHonorGate);
 		if (preflightCull == NativeA8VisibilityCull::Clip)
 		{
-			// Viewport-branch proofs consume only the sealed payload bound,
+			// Viewport-branch proofs consume only the final model bound,
 			// the facade world matrix and the interface viewport; all of them
 			// are frozen for the current flush.
 			return true;
@@ -691,14 +705,16 @@ namespace fonthook::vectorfont
 			return false;
 		D3DXMATRIX world = {};
 		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
+		if (!payload.payloadTemplate)
+			return false;
 		return BuildRetailTileWorldMatrix(effectiveWorld, world)
-			&& EvaluatePayloadClip(payload, *tile, *renderer, world,
+			&& EvaluateBoundClip(payload.payloadTemplate->bound, &payload,
+				*tile, *renderer, world,
 				false, reason, nullptr) == ClipProofResult::Outside
 			&& reason == NativeA8VisibilityCull::Scissor;
 	}
 
-	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,
-		const NativeA8ShapePayload& payload)
+	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason)
 	{
 		if (reason == NativeA8VisibilityCull::None)
 			return;
@@ -720,6 +736,12 @@ namespace fonthook::vectorfont
 		default:
 			break;
 		}
+	}
+
+	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,
+		const NativeA8ShapePayload& payload)
+	{
+		RecordNativeA8VisibilityCull(reason);
 		if (!payload.payloadTemplate)
 			return;
 		const std::vector<NativeA8PacketTemplate>& packets =
