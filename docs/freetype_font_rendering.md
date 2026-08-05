@@ -909,17 +909,6 @@ The separate `tnvse_freetype_preflight_clip_cull` line reports proof checks,
 viewport/scissor routes, fail-open decisions, honored results, and revoked
 results. There is no late-visibility phase line or instancing-member visibility
 family. The thin registration route performs no visibility work.
-The separate `tnvse_freetype_viewport_cull` line reports installed `nodes`,
-`install_failed`, total `checks`, cheap `fast_visible` returns, `deep_checks`,
-the number of `deep_tiles` inspected, proved `culled` subtrees, exact
-`app_culled`, and `fail_open`. Failure leaves split list-index, clips,
-clipwindow, root-bounds, transform, node-identity, subtree-topology, and
-subtree-bounds uncertainty;
-`deep_overlap` counts complete proofs whose descendant union reaches the padded
-window and therefore stays on the stock path. For useful list culling, `culled`
-should be substantial while `deep_tiles / culled` remains small; the split
-failures identify which compatibility structures deliberately retain stock
-without weakening another proof gate.
 
 The dynamic ring retains its two-maximum-payload capacity, while the static VB
 starts at approximately 4 MiB instead of reserving its approximately 12 MiB
@@ -1039,10 +1028,13 @@ geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
 facades, total payload packets, single- and multi-packet artifacts, direct/span/
 packet-loop frames, topology switches, fallbacks, partial faults, and the
 invariant sibling_shapes=0. The build identity is
-`no-cache-bridge-prep-phases-v33`. It retains the v23 shell-shader restoration
+`no-viewport-subtree-hook-v34`. It retains the v23 shell-shader restoration
 fix, v24 logging cleanup, the no-Sort-hook single-facade architecture, the v30
 linear equal-depth repair, and the v31 direct-Sort-array/preflight-only cleanup.
-The prepared-text result cache and stock-Tile execution bridge are removed. With rendering logging enabled,
+The prepared-text result cache, stock-Tile execution bridge, and early
+TileRect/TileImage/NiNode viewport-subtree hooks are removed. Visibility
+decisions now remain exclusively in the final post-Sort preflight, where the
+final transform and scissor state are available. With rendering logging enabled,
 the first applied repair emits one compact process-thread diagnostic containing
 item, mixed-run, changed-run, and changed-item counts; a proof failure emits one
 fail-open line. It changes no NVSE export, INI key, shader ABI, font-cache

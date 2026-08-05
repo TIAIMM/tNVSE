@@ -44,10 +44,8 @@ configuration, dependency checks, globals, and native-call helpers stay at the
     `font_vector_persistent_cache.cpp`; bitmap records and glyph manifests are
     implemented by `font_vector_persistent_bitmap_cache.cpp` and
     `font_vector_glyph_manifest.cpp`.
-- `game`: game-facing hooks and save-name handling. The list viewport hook keeps
-  a non-owning, identity-validated topology descriptor; all alpha, clipwindow,
-  bounds, transform, and visibility traits remain live reads and uncertainty is
-  fail-open.
+- `game`: game-facing font hooks, VUI+ effect-proxy compatibility, and save-name
+  handling.
 - `input`: multibyte input, IME/TSF, menu integration, and candidate overlays.
 - `nvse`: the NVSE plugin API declaration.
 

@@ -112,24 +112,6 @@ namespace fonthook
 	void ShutdownFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
 	void ReportFreeTypeFontPerformanceNow();
-	void RecordFreeTypeViewportNodeInstallResult(bool abInstalled);
-	enum class FreeTypeViewportCullFailReason : UInt8
-	{
-		None,
-		ListIndex,
-		Clips,
-		ClipWindow,
-		RootBounds,
-		Transform,
-		NodeIdentity,
-		SubtreeTopology,
-		SubtreeBounds,
-	};
-	void RecordFreeTypeViewportCullResult(
-		bool abCulled, bool abFailOpen, bool abFastVisible,
-		bool abDeepCheck, UInt32 auiVisitedTiles,
-		FreeTypeViewportCullFailReason aeFailReason,
-		bool abDeepOverlap, bool abAppCulled);
 	void FlushFreeTypePersistentFontCache();
 	float GetCanonicalFreeTypeRasterScale();
 	float ConsumeFreeTypeCreateTextScale();

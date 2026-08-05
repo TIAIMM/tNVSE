@@ -523,7 +523,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::ThinRegistrationFacadeFallback),
 			counterValue(FreeTypePerfCounter::ThinRegistrationOccurrenceFallback));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_structural_fastpaths: readiness_raw_hit=%llu full_audit=%llu hook_mismatch=%llu renderer_mismatch=%llu virtualquery_avoided=%llu tile_callback_mismatch=%llu render_alpha_mismatch=%llu immediate_mismatch=%llu atlas_mismatch=%llu singleton_inline=%llu singleton_heap=%llu child_allocations_avoided=%llu metadata_reserve=%llu metadata_rehash=%llu prefix_shrinks=%llu prefix_texts=%llu prefix_replayed=%llu texture_alias=%llu viewport_descriptor_hit=%llu viewport_descriptor_rebuild=%llu viewport_descriptor_fail=%llu",
+			"tnvse_freetype_structural_fastpaths: readiness_raw_hit=%llu full_audit=%llu hook_mismatch=%llu renderer_mismatch=%llu virtualquery_avoided=%llu tile_callback_mismatch=%llu render_alpha_mismatch=%llu immediate_mismatch=%llu atlas_mismatch=%llu singleton_inline=%llu singleton_heap=%llu child_allocations_avoided=%llu metadata_reserve=%llu metadata_rehash=%llu prefix_shrinks=%llu prefix_texts=%llu prefix_replayed=%llu texture_alias=%llu",
 			counterValue(FreeTypePerfCounter::StructuralReadinessRawHit),
 			counterValue(FreeTypePerfCounter::StructuralReadinessFullAudit),
 			counterValue(FreeTypePerfCounter::StructuralReadinessHookMismatch),
@@ -545,48 +545,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::GlyphInstancingPrefixShrink),
 			counterValue(FreeTypePerfCounter::GlyphInstancingPrefixRetainedText),
 			counterValue(FreeTypePerfCounter::GlyphInstancingPrefixReplayedText),
-			counterValue(FreeTypePerfCounter::GlyphInstancingSourceTextureAlias),
-			counterValue(FreeTypePerfCounter::ViewportDescriptorHit),
-			counterValue(FreeTypePerfCounter::ViewportDescriptorRebuild),
-			counterValue(FreeTypePerfCounter::ViewportDescriptorFail));
-		FreeTypeFontDebugLog(
-			"tnvse_freetype_viewport_cull: nodes=%llu install_failed=%llu checks=%llu fast_visible=%llu deep_checks=%llu deep_tiles=%llu culled=%llu app_culled=%llu fail_open=%llu fail_listindex=%llu fail_clips=%llu fail_clipwindow=%llu fail_root_bounds=%llu fail_transform=%llu fail_node_identity=%llu fail_subtree_topology=%llu fail_subtree_bounds=%llu deep_overlap=%llu",
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportNodeInstalled)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportNodeInstallFailed)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportCullCheck)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportCullFastVisible)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportCullDeepCheck)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportCullDeepTile)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportCulled)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportAppCulled)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailOpen)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailListIndex)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailClips)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailClipWindow)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailRootBounds)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailTransform)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailNodeIdentity)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailSubtreeTopology)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportFailSubtreeBounds)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::ViewportDeepOverlap)]);
+			counterValue(FreeTypePerfCounter::GlyphInstancingSourceTextureAlias));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu vertex_aa_stock_preserved=%llu command_program_setups=%llu binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu registers_uploaded=%llu full_tail_elided=%llu",
 			static_cast<UInt64>(0),
@@ -1234,15 +1193,6 @@ namespace fonthook::vectorfont
 		const DurationSummary instancingRestore =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::GlyphInstancingRestore);
-		const DurationSummary viewportCull =
-			ConsumeDurationSummary(FreeTypePerfPhase::ViewportCull);
-		const DurationSummary viewportFastVisible =
-			ConsumeDurationSummary(FreeTypePerfPhase::ViewportCullFastVisible);
-		const DurationSummary viewportDeepSuccess =
-			ConsumeDurationSummary(FreeTypePerfPhase::ViewportCullDeepSuccess);
-		const DurationSummary viewportDeepFailTransform =
-			ConsumeDurationSummary(
-				FreeTypePerfPhase::ViewportCullDeepFailTransform);
 		const DurationSummary frameRouteTotal =
 			ConsumeDurationSummary(FreeTypePerfPhase::FrameRouteTotal);
 		const DurationSummary frameRoutePrep =
@@ -1365,20 +1315,6 @@ namespace fonthook::vectorfont
 			registrationPublish.p95Microseconds,
 			nativeRegistration.meanMicroseconds);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_viewport_cull_timing: total_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f fast_visible_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f deep_success_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f deep_fail_transform_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f",
-			viewportCull.count, viewportCull.meanMicroseconds,
-			viewportCull.medianMicroseconds, viewportCull.p95Microseconds,
-			viewportFastVisible.count, viewportFastVisible.meanMicroseconds,
-			viewportFastVisible.medianMicroseconds,
-			viewportFastVisible.p95Microseconds,
-			viewportDeepSuccess.count, viewportDeepSuccess.meanMicroseconds,
-			viewportDeepSuccess.medianMicroseconds,
-			viewportDeepSuccess.p95Microseconds,
-			viewportDeepFailTransform.count,
-			viewportDeepFailTransform.meanMicroseconds,
-			viewportDeepFailTransform.medianMicroseconds,
-			viewportDeepFailTransform.p95Microseconds);
-		FreeTypeFontDebugLog(
 			"tnvse_freetype_frame_route_timing: route_total_n=%llu median_us=%.3f p95_us=%.3f prep_n=%llu median_us=%.3f p95_us=%.3f stock_render_n=%llu median_us=%.3f p95_us=%.3f",
 			frameRouteTotal.count, frameRouteTotal.medianMicroseconds,
 			frameRouteTotal.p95Microseconds,
@@ -1448,86 +1384,6 @@ namespace fonthook::vectorfont
 
 namespace fonthook
 {
-	void RecordFreeTypeViewportNodeInstallResult(bool installed)
-	{
-		vectorfont::RecordFreeTypePerf(installed
-			? vectorfont::FreeTypePerfCounter::ViewportNodeInstalled
-			: vectorfont::FreeTypePerfCounter::ViewportNodeInstallFailed);
-	}
-
-	void RecordFreeTypeViewportCullResult(
-		bool culled, bool failOpen, bool fastVisible,
-		bool deepCheck, UInt32 visitedTiles,
-		FreeTypeViewportCullFailReason failReason,
-		bool deepOverlap, bool appCulled)
-	{
-		using vectorfont::FreeTypePerfCounter;
-		vectorfont::RecordFreeTypePerf(FreeTypePerfCounter::ViewportCullCheck);
-		if (fastVisible)
-		{
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportCullFastVisible);
-		}
-		if (deepCheck)
-		{
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportCullDeepCheck);
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportCullDeepTile, visitedTiles);
-		}
-		if (culled)
-			vectorfont::RecordFreeTypePerf(FreeTypePerfCounter::ViewportCulled);
-		if (failOpen)
-			vectorfont::RecordFreeTypePerf(FreeTypePerfCounter::ViewportFailOpen);
-		switch (failReason)
-		{
-		case FreeTypeViewportCullFailReason::ListIndex:
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportFailListIndex);
-			break;
-		case FreeTypeViewportCullFailReason::Clips:
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportFailClips);
-			break;
-		case FreeTypeViewportCullFailReason::ClipWindow:
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportFailClipWindow);
-			break;
-		case FreeTypeViewportCullFailReason::RootBounds:
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportFailRootBounds);
-			break;
-		case FreeTypeViewportCullFailReason::Transform:
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportFailTransform);
-			break;
-		case FreeTypeViewportCullFailReason::NodeIdentity:
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportFailNodeIdentity);
-			break;
-		case FreeTypeViewportCullFailReason::SubtreeTopology:
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportFailSubtreeTopology);
-			break;
-		case FreeTypeViewportCullFailReason::SubtreeBounds:
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportFailSubtreeBounds);
-			break;
-		default:
-			break;
-		}
-		if (deepOverlap)
-		{
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportDeepOverlap);
-		}
-		if (appCulled)
-		{
-			vectorfont::RecordFreeTypePerf(
-				FreeTypePerfCounter::ViewportAppCulled);
-		}
-	}
-
 	void PumpFreeTypeFontPerformance()
 	{
 		vectorfont::ReportFreeTypePerf(false);
