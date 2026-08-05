@@ -32,7 +32,6 @@ namespace fonthook
 		// save header before this call, but 0x850030 has not yet built the
 		// physical .fos path.  Replacing only this call preserves display text.
 		constexpr SIZE_T kCustomSaveFileBuildCallSite = 0x850545;
-		constexpr SIZE_T kStockSaveFileBuild = 0x850030;
 
 		constexpr UInt32 kStoreMagic = 'SVDN';
 		constexpr UInt32 kStoreVersion = 1;
@@ -84,6 +83,7 @@ namespace fonthook
 		std::unordered_map<std::string, DisplayRecord> s_pendingByActualKey;
 		std::unordered_map<std::string, CacheEntry> s_displayCache;
 		std::string s_pendingRenameOldPath;
+		SIZE_T s_nextCustomSaveFileBuild = 0;
 
 		std::string ToLowerAscii(std::string value)
 		{
@@ -517,13 +517,22 @@ namespace fonthook
 			SInt32 saveIndex)
 		{
 			// The fastcall shim consumes ECX/EDX and leaves the original four
-			// thiscall stack arguments intact (the stock callee returns with 0x10).
+			// thiscall stack arguments intact.  The target captured from the CALL
+			// site owns the same ABI and the 0x10-byte stack cleanup.
+			const SIZE_T nextTarget = s_nextCustomSaveFileBuild;
+			if (!hook_identity::IsExecutableTarget(nextTarget)
+				|| nextTarget == reinterpret_cast<SIZE_T>(
+					&BuildCustomSaveFileWithSafeName))
+			{
+				return nullptr;
+			}
+
 			std::string originalName;
 			if (!TryCopyCString(fileName, MAX_PATH, originalName)
 				|| originalName.empty()
 				|| !ContainsHighByte(originalName))
 			{
-				return ThisStdCall<void*>(kStockSaveFileBuild, saveManager,
+				return ThisStdCall<void*>(nextTarget, saveManager,
 					fileName, createFile, bufferMode, saveIndex);
 			}
 
@@ -535,7 +544,7 @@ namespace fonthook
 				"tnvse_save_display_name: sanitized custom multibyte save name bytes=%u",
 				static_cast<UInt32>(originalName.size()));
 
-			return ThisStdCall<void*>(kStockSaveFileBuild, saveManager,
+			return ThisStdCall<void*>(nextTarget, saveManager,
 				safeName, createFile, bufferMode, saveIndex);
 		}
 
@@ -1093,35 +1102,49 @@ namespace fonthook
 
 	void InitSaveDisplayNameHook()
 	{
+		const SIZE_T customSaveFileHook =
+			reinterpret_cast<SIZE_T>(&BuildCustomSaveFileWithSafeName);
 		SIZE_T customSaveFileTarget = 0;
 		if (!hook_identity::ReadRel32Target(
 				kCustomSaveFileBuildCallSite,
 				Rel32Opcode::Call,
 				customSaveFileTarget)
-			|| customSaveFileTarget != kStockSaveFileBuild)
+			|| !hook_identity::IsExecutableTarget(customSaveFileTarget)
+			|| customSaveFileTarget == customSaveFileHook)
 		{
 			gLog.FormattedMessage(
-				"tnvse_save_display_name: custom save hook identity mismatch target=%08X; disabled",
+				"tnvse_save_display_name: custom save hook target invalid target=%08X; disabled",
 				static_cast<UInt32>(customSaveFileTarget));
 		}
 		else
 		{
+			// Preserve whichever compatible hook currently owns the CALL.  In a
+			// Stewie Tweaks setup this is SaveGameManager__CreateSaveLoadFile,
+			// which in turn calls the stock 0x850030 implementation.
+			s_nextCustomSaveFileBuild = customSaveFileTarget;
 			WriteRelCall(kCustomSaveFileBuildCallSite,
 				&BuildCustomSaveFileWithSafeName);
 			if (!hook_identity::MatchesRel32Target(
 					kCustomSaveFileBuildCallSite,
 					Rel32Opcode::Call,
-					reinterpret_cast<SIZE_T>(&BuildCustomSaveFileWithSafeName)))
+					customSaveFileHook))
 			{
 				WriteRelCall(kCustomSaveFileBuildCallSite,
-					kStockSaveFileBuild);
+					customSaveFileTarget);
+				const bool restored = hook_identity::MatchesRel32Target(
+					kCustomSaveFileBuildCallSite,
+					Rel32Opcode::Call,
+					customSaveFileTarget);
 				gLog.FormattedMessage(
-					"tnvse_save_display_name: custom save hook write verification failed; restored stock target");
+					"tnvse_save_display_name: custom save hook write verification failed; restore target=%08X restored=%u",
+					static_cast<UInt32>(customSaveFileTarget),
+					restored ? 1u : 0u);
 			}
 			else
 			{
 				gLog.FormattedMessage(
-					"tnvse_save_display_name: custom multibyte save sanitizer installed");
+					"tnvse_save_display_name: custom multibyte save sanitizer installed next=%08X",
+					static_cast<UInt32>(customSaveFileTarget));
 			}
 		}
 
