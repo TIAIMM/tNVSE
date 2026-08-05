@@ -2034,7 +2034,11 @@ namespace fonthook::vectorfont
 			if (current == hook)
 			{
 				state.renderAlphaGeometryHookInstalled =
-					state.originalRenderAlphaGeometry != nullptr;
+					state.originalRenderAlphaGeometry
+					&& state.originalRenderAlphaGeometry != hook
+					&& hook_identity::IsExecutableTarget(
+						reinterpret_cast<SIZE_T>(
+							state.originalRenderAlphaGeometry));
 				return state.renderAlphaGeometryHookInstalled;
 			}
 			if (!current)
@@ -2052,6 +2056,18 @@ namespace fonthook::vectorfont
 				}
 				return false;
 			}
+			if (!hook_identity::IsExecutableTarget(
+				reinterpret_cast<SIZE_T>(current)))
+			{
+				if (!state.loggedRenderAlphaGeometryHookConflict)
+				{
+					state.loggedRenderAlphaGeometryHookConflict = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_native: RenderAlphaGeometry call target is not executable target=%p; frame upload batching left disabled",
+						current);
+				}
+				return false;
+			}
 			if (state.renderAlphaGeometryHookInstalled)
 			{
 				state.renderAlphaGeometryHookInstalled = false;
@@ -2064,33 +2080,61 @@ namespace fonthook::vectorfont
 				}
 				return false;
 			}
-			if (reinterpret_cast<UInt32>(current) != kStockRenderAlphaGeometry)
+
+			// A stock reset, or restoration of the predecessor we previously owned,
+			// is safe to republish over. Any other target observed after installation
+			// may be a successor that already chains through tNVSE; never move back on
+			// top of it or the two hooks could recurse through each other.
+			const RenderAlphaGeometryFn installedPredecessor =
+				state.originalRenderAlphaGeometry;
+			if (installedPredecessor
+				&& current != reinterpret_cast<RenderAlphaGeometryFn>(
+					kStockRenderAlphaGeometry)
+				&& current != installedPredecessor)
 			{
 				if (!state.loggedRenderAlphaGeometryHookConflict)
 				{
 					state.loggedRenderAlphaGeometryHookConflict = true;
 					gLog.FormattedMessage(
-						"tnvse_freetype_native: RenderAlphaGeometry call site already has a non-stock target=%p; frame upload batching left disabled",
+						"tnvse_freetype_native: RenderAlphaGeometry frame hook was replaced by a successor target=%p; tNVSE will not reassert ownership",
 						current);
 				}
 				return false;
 			}
 
+			const RenderAlphaGeometryFn previousOriginal = installedPredecessor;
 			state.originalRenderAlphaGeometry = current;
 			WriteRelCall(kRenderAlphaGeometryCallSite, hook);
-			state.renderAlphaGeometryHookInstalled =
-				ReadRenderAlphaGeometryCallTarget() == hook;
+			const RenderAlphaGeometryFn publishedTarget =
+				ReadRenderAlphaGeometryCallTarget();
+			state.renderAlphaGeometryHookInstalled = publishedTarget == hook;
 			if (!state.renderAlphaGeometryHookInstalled)
 			{
-				WriteRelCall(kRenderAlphaGeometryCallSite, current);
-				state.originalRenderAlphaGeometry = nullptr;
+				// If the target is unchanged, publication failed before tNVSE became
+				// reachable and the previous state remains authoritative. Otherwise a
+				// successor may already retain tNVSE, so keep the predecessor that this
+				// publication exposed and never overwrite the successor.
+				if (publishedTarget == current || !publishedTarget)
+				{
+					state.originalRenderAlphaGeometry = previousOriginal;
+				}
+				else if (!state.loggedRenderAlphaGeometryHookConflict)
+				{
+					state.loggedRenderAlphaGeometryHookConflict = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_native: RenderAlphaGeometry target changed during publication successor=%p predecessor=%p; tNVSE will not reassert ownership",
+						publishedTarget, current);
+				}
 				return false;
 			}
+			state.loggedRenderAlphaGeometryHookConflict = false;
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: installed RenderAlphaGeometry frame route original=%p stock=1",
-					current);
+					"tnvse_freetype_native: installed RenderAlphaGeometry frame route predecessor=%p stock=%u",
+					current,
+					reinterpret_cast<SIZE_T>(current)
+						== kStockRenderAlphaGeometry ? 1u : 0u);
 			}
 			return true;
 		}

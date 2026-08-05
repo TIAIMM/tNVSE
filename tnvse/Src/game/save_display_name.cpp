@@ -84,6 +84,7 @@ namespace fonthook
 		std::unordered_map<std::string, CacheEntry> s_displayCache;
 		std::string s_pendingRenameOldPath;
 		SIZE_T s_nextCustomSaveFileBuild = 0;
+		SIZE_T s_nextManualSaveNameCheck = 0;
 
 		std::string ToLowerAscii(std::string value)
 		{
@@ -947,8 +948,11 @@ namespace fonthook
 		bool __fastcall SaveDisplayNameIsManualSave(
 			void* saveManager, void*, const char* actualName)
 		{
-			if (ThisStdCall<bool>(
-				kStockManualSaveNameCheck, saveManager, actualName))
+			const SIZE_T nextTarget = s_nextManualSaveNameCheck;
+			if (hook_identity::IsExecutableTarget(nextTarget)
+				&& nextTarget != reinterpret_cast<SIZE_T>(
+					&SaveDisplayNameIsManualSave)
+				&& ThisStdCall<bool>(nextTarget, saveManager, actualName))
 				return true;
 
 			std::string actualKey;
@@ -1153,6 +1157,8 @@ namespace fonthook
 
 		SIZE_T savePathTarget = 0;
 		SIZE_T manualSaveTarget = 0;
+		const SIZE_T manualSaveHook = reinterpret_cast<SIZE_T>(
+			&SaveDisplayNameIsManualSave);
 		if (!hook_identity::ReadRel32Target(
 				kSavePathProcessCallSite, Rel32Opcode::Call, savePathTarget)
 			|| savePathTarget != kStockSavePathProcess
@@ -1160,7 +1166,8 @@ namespace fonthook
 				kManualSaveNameCheckCallSite,
 				Rel32Opcode::Call,
 				manualSaveTarget)
-			|| manualSaveTarget != kStockManualSaveNameCheck)
+			|| !hook_identity::IsExecutableTarget(manualSaveTarget)
+			|| manualSaveTarget == manualSaveHook)
 		{
 			gLog.FormattedMessage(
 				"tnvse_save_display_name: hook identity mismatch path=%08X manual=%08X; disabled",
@@ -1169,25 +1176,60 @@ namespace fonthook
 			return;
 		}
 
+		s_nextManualSaveNameCheck = manualSaveTarget;
 		WriteRelCall(kSavePathProcessCallSite, &SavePathProcess);
 		WriteRelCall(kManualSaveNameCheckCallSite,
 			&SaveDisplayNameIsManualSave);
 
-		const bool installed = hook_identity::MatchesRel32Target(
+		const bool savePathInstalled = hook_identity::MatchesRel32Target(
 			kSavePathProcessCallSite,
 			Rel32Opcode::Call,
-			reinterpret_cast<SIZE_T>(&SavePathProcess))
-			&& hook_identity::MatchesRel32Target(
+			reinterpret_cast<SIZE_T>(&SavePathProcess));
+		const bool manualSaveInstalled = hook_identity::MatchesRel32Target(
 				kManualSaveNameCheckCallSite,
 				Rel32Opcode::Call,
-				reinterpret_cast<SIZE_T>(&SaveDisplayNameIsManualSave));
-		if (!installed)
+				manualSaveHook);
+		if (!savePathInstalled || !manualSaveInstalled)
 		{
-			WriteRelCall(kSavePathProcessCallSite, kStockSavePathProcess);
-			WriteRelCall(kManualSaveNameCheckCallSite,
-				kStockManualSaveNameCheck);
+			if (savePathInstalled)
+			{
+				WriteRelCall(kSavePathProcessCallSite, savePathTarget);
+			}
+
+			SIZE_T observedManualTarget = 0;
+			const bool observedManualCall = hook_identity::ReadRel32Target(
+				kManualSaveNameCheckCallSite,
+				Rel32Opcode::Call,
+				observedManualTarget);
+			if (manualSaveInstalled)
+			{
+				WriteRelCall(kManualSaveNameCheckCallSite,
+					manualSaveTarget);
+				s_nextManualSaveNameCheck = 0;
+			}
+			else if (!observedManualCall
+				|| observedManualTarget == manualSaveTarget)
+			{
+				// tNVSE was never published at this site.
+				s_nextManualSaveNameCheck = 0;
+			}
+			else
+			{
+				// A successor may have captured tNVSE between the write and readback.
+				// Retain its predecessor and leave the successor in place.
+				gLog.FormattedMessage(
+					"tnvse_save_display_name: manual-save hook changed during publication successor=%08X predecessor=%08X; tNVSE left below successor",
+					static_cast<UInt32>(observedManualTarget),
+					static_cast<UInt32>(manualSaveTarget));
+			}
 			gLog.FormattedMessage(
-				"tnvse_save_display_name: hook write verification failed; restored stock targets");
+				"tnvse_save_display_name: hook write verification failed; restored captured targets where still owned");
+			return;
 		}
+
+		gLog.FormattedMessage(
+			"tnvse_save_display_name: display-name hooks installed manualNext=%08X manualStock=%u",
+			static_cast<UInt32>(manualSaveTarget),
+			manualSaveTarget == kStockManualSaveNameCheck ? 1u : 0u);
 	}
 }
