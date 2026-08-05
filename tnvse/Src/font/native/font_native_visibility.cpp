@@ -7,6 +7,7 @@
 #include "NiPropertyState.hpp"
 #include "NiTexturingProperty.hpp"
 
+#include <array>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -23,6 +24,8 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kRendererPositionAdjust = 0x11F474C;
 		inline constexpr double kScissorSafetyMarginPixels = 2.0;
 		inline constexpr double kClipIntervalRelativeSlack = 1.0e-6;
+		inline constexpr size_t kClipTransformCacheSetCount = 16;
+		inline constexpr size_t kClipTransformCacheWays = 4;
 
 		enum class ClipProofResult : UInt8
 		{
@@ -31,8 +34,21 @@ namespace fonthook::vectorfont
 			Outside
 		};
 
-		struct ClipTransformCache
+		enum class ClipTransformBuildResult : UInt8
 		{
+			Unavailable = 0,
+			Reused,
+			IdentityMiss,
+			KeyMiss
+		};
+
+		struct ClipTransformCacheEntry
+		{
+			// Identity selects a small candidate set only. It is never dereferenced,
+			// and renderer plus all three matrices remain the correctness key. A
+			// retired payload address can therefore be reused without returning a
+			// stale transform.
+			const void* identity = nullptr;
 			const NiDX9Renderer* renderer = nullptr;
 			D3DXMATRIX world;
 			D3DXMATRIX view;
@@ -41,7 +57,54 @@ namespace fonthook::vectorfont
 			bool valid = false;
 		};
 
-		thread_local ClipTransformCache s_clipTransformCache;
+		struct ClipTransformCacheSet
+		{
+			std::array<ClipTransformCacheEntry, kClipTransformCacheWays> ways;
+			size_t replacementWay = 0;
+		};
+
+		static_assert((kClipTransformCacheSetCount
+			& (kClipTransformCacheSetCount - 1u)) == 0);
+		thread_local std::array<ClipTransformCacheSet,
+			kClipTransformCacheSetCount> s_clipTransformCache;
+
+		size_t HashClipTransformIdentity(const void* identity)
+		{
+			size_t value = reinterpret_cast<size_t>(identity) >> 4;
+			value ^= value >> 16;
+			value *= static_cast<size_t>(0x45D9F3Bu);
+			value ^= value >> 16;
+			return value;
+		}
+
+		void RecordClipTransformBuildResult(
+			ClipTransformBuildResult result)
+		{
+			switch (result)
+			{
+			case ClipTransformBuildResult::Reused:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VisibilityPreflightClipTransformHit);
+				break;
+			case ClipTransformBuildResult::IdentityMiss:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VisibilityPreflightClipTransformMiss);
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VisibilityPreflightClipTransformIdentityMiss);
+				break;
+			case ClipTransformBuildResult::KeyMiss:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VisibilityPreflightClipTransformMiss);
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VisibilityPreflightClipTransformKeyMiss);
+				break;
+			case ClipTransformBuildResult::Unavailable:
+			default:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VisibilityPreflightClipTransformUnavailable);
+				break;
+			}
+		}
 
 		// Font::MakeTriShape returns a TileShaderProperty, but the concrete class
 		// is not exposed by this CommonLib snapshot. Keep this read-only view tied
@@ -274,26 +337,52 @@ namespace fonthook::vectorfont
 					!= FALSE;
 		}
 
-		bool BuildWorldViewProjection(const NiDX9Renderer& renderer,
+		ClipTransformBuildResult BuildWorldViewProjection(
+			const void* identity, const NiDX9Renderer& renderer,
 			const D3DXMATRIX& world, D3DXMATRIX& worldViewProjection)
 		{
-			ClipTransformCache& cache = s_clipTransformCache;
-			if (cache.valid && cache.renderer == &renderer
-				&& std::memcmp(&cache.world, &world, sizeof(world)) == 0
-				&& std::memcmp(&cache.view, &renderer.m_kD3DView,
-					sizeof(cache.view)) == 0
-				&& std::memcmp(&cache.projection, &renderer.m_kD3DProj,
-					sizeof(cache.projection)) == 0)
+			ClipTransformCacheSet* cacheSet = nullptr;
+			ClipTransformCacheEntry* identityEntry = nullptr;
+			ClipTransformCacheEntry* invalidEntry = nullptr;
+			if (identity)
 			{
-				worldViewProjection = cache.worldViewProjection;
-				return true;
+				cacheSet = &s_clipTransformCache[
+					HashClipTransformIdentity(identity)
+						& (kClipTransformCacheSetCount - 1u)];
+				for (ClipTransformCacheEntry& candidate : cacheSet->ways)
+				{
+					if (!candidate.valid)
+					{
+						if (!invalidEntry)
+							invalidEntry = &candidate;
+						continue;
+					}
+					if (candidate.identity == identity)
+					{
+						identityEntry = &candidate;
+						break;
+					}
+				}
+			}
+
+			if (identityEntry && identityEntry->renderer == &renderer
+				&& std::memcmp(&identityEntry->world, &world,
+					sizeof(world)) == 0
+				&& std::memcmp(&identityEntry->view, &renderer.m_kD3DView,
+					sizeof(identityEntry->view)) == 0
+				&& std::memcmp(&identityEntry->projection,
+					&renderer.m_kD3DProj,
+					sizeof(identityEntry->projection)) == 0)
+			{
+				worldViewProjection = identityEntry->worldViewProjection;
+				return ClipTransformBuildResult::Reused;
 			}
 
 			if (!IsFiniteMatrix(world)
 				|| !IsFiniteMatrix(renderer.m_kD3DView)
 				|| !IsFiniteMatrix(renderer.m_kD3DProj))
 			{
-				return false;
+				return ClipTransformBuildResult::Unavailable;
 			}
 			D3DXMATRIX worldView = {};
 			D3DXMatrixMultiply(
@@ -301,26 +390,47 @@ namespace fonthook::vectorfont
 			D3DXMatrixMultiply(&worldViewProjection,
 				&worldView, &renderer.m_kD3DProj);
 			if (!IsFiniteMatrix(worldViewProjection))
-				return false;
+				return ClipTransformBuildResult::Unavailable;
 
-			cache.renderer = &renderer;
-			std::memcpy(&cache.world, &world, sizeof(world));
-			std::memcpy(&cache.view, &renderer.m_kD3DView,
-				sizeof(cache.view));
-			std::memcpy(&cache.projection, &renderer.m_kD3DProj,
-				sizeof(cache.projection));
-			cache.worldViewProjection = worldViewProjection;
-			cache.valid = true;
-			return true;
+			if (cacheSet)
+			{
+				ClipTransformCacheEntry* target = identityEntry
+					? identityEntry : invalidEntry;
+				if (!target)
+				{
+					target = &cacheSet->ways[cacheSet->replacementWay];
+					cacheSet->replacementWay =
+						(cacheSet->replacementWay + 1u)
+							% kClipTransformCacheWays;
+				}
+				target->identity = identity;
+				target->renderer = &renderer;
+				std::memcpy(&target->world, &world, sizeof(world));
+				std::memcpy(&target->view, &renderer.m_kD3DView,
+					sizeof(target->view));
+				std::memcpy(&target->projection, &renderer.m_kD3DProj,
+					sizeof(target->projection));
+				target->worldViewProjection = worldViewProjection;
+				target->valid = true;
+			}
+			return identityEntry
+				? ClipTransformBuildResult::KeyMiss
+				: ClipTransformBuildResult::IdentityMiss;
 		}
 
 		ClipProofResult EvaluatePayloadClip(
 			const NativeA8ShapePayload& payload,
 			const TileVisibilityPropertyView& tile,
 			const NiDX9Renderer& renderer, const D3DXMATRIX& world,
-			bool allowViewport, NativeA8VisibilityCull& reason)
+			bool allowViewport, NativeA8VisibilityCull& reason,
+			ClipTransformBuildResult* transformBuildResult)
 		{
 			reason = NativeA8VisibilityCull::None;
+			if (transformBuildResult)
+			{
+				*transformBuildResult =
+					ClipTransformBuildResult::Unavailable;
+			}
 			auto failOpen = [&]()
 			{
 				return ClipProofResult::Unproven;
@@ -370,8 +480,12 @@ namespace fonthook::vectorfont
 			// D3DX entry point and retain the non-transposed matrix for row-vector
 			// homogeneous half-space evaluation below.
 			D3DXMATRIX builtWorldViewProjection = {};
-			if (!BuildWorldViewProjection(
-					renderer, world, builtWorldViewProjection))
+			const ClipTransformBuildResult buildResult =
+				BuildWorldViewProjection(&payload,
+					renderer, world, builtWorldViewProjection);
+			if (transformBuildResult)
+				*transformBuildResult = buildResult;
+			if (buildResult == ClipTransformBuildResult::Unavailable)
 			{
 				return failOpen();
 			}
@@ -482,10 +596,13 @@ namespace fonthook::vectorfont
 			FreeTypePerfCounter::VisibilityPreflightClipCheck);
 		FreeTypePerfScope clipProofPerf(
 			FreeTypePerfPhase::PreflightClipTotal);
+		ClipTransformBuildResult transformBuildResult =
+			ClipTransformBuildResult::Unavailable;
 		auto failOpen = [&]()
 		{
 			RecordFreeTypePerf(FreeTypePerfCounter::
 				VisibilityPreflightClipFailOpen);
+			RecordClipTransformBuildResult(transformBuildResult);
 			return NativeA8VisibilityCull::None;
 		};
 
@@ -511,19 +628,6 @@ namespace fonthook::vectorfont
 			if (!BuildRetailTileWorldMatrix(facade->m_kWorld, world))
 				return failOpen();
 		}
-		// Classify the shared single-slot transform cache before the proof so
-		// the hit/miss split shows whether the per-entry world rebuild or the
-		// frame-constant view/projection dominates the proof cost.
-		const bool transformCacheHit = s_clipTransformCache.valid
-			&& s_clipTransformCache.renderer == renderer
-			&& std::memcmp(&s_clipTransformCache.world, &world,
-				sizeof(world)) == 0
-			&& std::memcmp(&s_clipTransformCache.view,
-				&renderer->m_kD3DView,
-				sizeof(s_clipTransformCache.view)) == 0
-			&& std::memcmp(&s_clipTransformCache.projection,
-				&renderer->m_kD3DProj,
-				sizeof(s_clipTransformCache.projection)) == 0;
 		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
 		ClipProofResult proof;
 		{
@@ -531,11 +635,9 @@ namespace fonthook::vectorfont
 				FreeTypePerfPhase::PreflightClipProof);
 			proof = EvaluatePayloadClip(payload, *tile,
 				*renderer, world, g_bEnableFreeTypeFontStructuralFastPaths,
-				reason);
+				reason, &transformBuildResult);
 		}
-		RecordFreeTypePerf(transformCacheHit
-			? FreeTypePerfCounter::VisibilityPreflightClipTransformHit
-			: FreeTypePerfCounter::VisibilityPreflightClipTransformMiss);
+		RecordClipTransformBuildResult(transformBuildResult);
 		if (proof != ClipProofResult::Outside)
 			return NativeA8VisibilityCull::None;
 		RecordFreeTypePerf(
@@ -591,7 +693,7 @@ namespace fonthook::vectorfont
 		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
 		return BuildRetailTileWorldMatrix(effectiveWorld, world)
 			&& EvaluatePayloadClip(payload, *tile, *renderer, world,
-				false, reason) == ClipProofResult::Outside
+				false, reason, nullptr) == ClipProofResult::Outside
 			&& reason == NativeA8VisibilityCull::Scissor;
 	}
 

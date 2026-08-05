@@ -1423,7 +1423,7 @@ namespace fonthook::vectorfont
 			preflightClipHonorGate.medianMicroseconds,
 			preflightClipHonorGate.p95Microseconds);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_preflight_clip_timing: total_n=%llu median_us=%.3f p95_us=%.3f world_n=%llu median_us=%.3f p95_us=%.3f proof_n=%llu median_us=%.3f p95_us=%.3f transform_hits=%llu transform_misses=%llu",
+			"tnvse_freetype_preflight_clip_timing: total_n=%llu median_us=%.3f p95_us=%.3f world_n=%llu median_us=%.3f p95_us=%.3f proof_n=%llu median_us=%.3f p95_us=%.3f transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu",
 			preflightClipTotal.count,
 			preflightClipTotal.medianMicroseconds,
 			preflightClipTotal.p95Microseconds,
@@ -1436,7 +1436,13 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipTransformHit),
 			counterValue(FreeTypePerfCounter::
-				VisibilityPreflightClipTransformMiss));
+				VisibilityPreflightClipTransformMiss),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipTransformIdentityMiss),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipTransformKeyMiss),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipTransformUnavailable));
 	}
 }
 
