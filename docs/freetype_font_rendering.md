@@ -877,57 +877,44 @@ array unchanged.
 A singleton facade is direct-command eligible only when its metadata identity
 is current and it occurs exactly once in the final array. A duplicate facade
 remains valid stock geometry, but every occurrence uses the complete packet-
-loop fallback. The later execution skeleton walks the repaired final array
-backwards, so stock barriers and cross-text adjacency follow the corrected
-painter order. The old Sort dispatch patch, replacement quicksort, per-Sort
-timing, full registry audit, and large diagnostic families remain removed.
+loop fallback. Command construction walks the repaired final array backwards
+directly, so stock barriers and cross-text adjacency follow the corrected
+painter order without staging a second execution-sequence vector. The old Sort
+dispatch patch, replacement quicksort, per-Sort timing, full registry audit,
+and large diagnostic families remain removed.
 
-Visibility remains entirely after registration. For each sorted facade tNVSE
-arms a thread-local visibility scope around a guarded native pass. A
-fully classified Standard-lite pass first proves exact current-pass geometry,
-property, payload, renderer, and retail slot-31 identity. It can then test the
-immutable whole-text bound against the already-resolved live scissor before
-slot 31. The sphere bound is expanded to an enclosing cube and evaluated with
-four homogeneous half-space intervals; a pass is suppressed only when the
-complete cube is strictly outside one edge of a two-pixel-expanded scissor.
-Term-magnitude-relative slack is applied before cancellation, and every point
-of the cube must be strictly in front of `w=0`. A successful proof is consumed
-through the ordinary immediate validation hook, but slots 30-35, geometry
-preparation, the optional non-first-pass slot 68, and the driver draw are all
-skipped. Because slot 31 never pushed scissor/stencil state, slot 35 is
-intentionally not called.
+Visibility remains entirely after registration. The post-Sort preflight is the
+single clip/scissor proof used by a native flush. It evaluates the immutable
+whole-text bound against the resolved viewport or scissor before command
+construction. The sphere bound is expanded to an enclosing cube and evaluated
+with homogeneous half-space intervals; a facade is suppressed only when the
+complete cube is strictly outside one padded edge. Term-magnitude-relative
+slack is applied before cancellation, and every point of the cube must be
+strictly in front of `w=0`.
 
-Other guarded routes, and Standard-lite calls rejected before exact pre-slot
-input evaluation, retain the original fallback: the exact retail slot 31 runs,
-the scope verifies the published renderer world matrix and pass-local
-identities, only the immediate driver draw is skipped, and slot 35 restores the
-stock scissor/stencil stack. Once Standard-lite has evaluated the exact same
-matrix/scissor inputs and kept the draw, the redundant post-slot calculation is
-elided; slot 31 does not mutate any of those inputs.
+A preflight cull is revalidated when the final sorted entry is dispatched. A
+matching result is consumed without packet preparation, upload, Tile callbacks,
+or driver submission; an identity or frame mismatch revokes it and fails open.
+Surviving direct commands and cross-text instancing batches do not repeat the
+same visibility calculation, and instancing no longer builds a per-member
+visible-offset vector or compacts the instance upload. This leaves one
+conservative proof per facade instead of pre-slot, post-slot, and per-member
+copies of equivalent work.
 
 Every ambiguous case fails open: disabled or malformed scissor, non-finite
 bound/transform/position-adjust/matrix, a cube touching or crossing `w=0`,
-viewport mismatch, the retail special scissor-scaling mode, a replaced slot 31,
-pass/property/payload/renderer/device identity mismatch, or an edge within the
-numeric safety slack all keep the original path. Command-buffer execution
-treats either kind of proved miss as a successful consumed command, and a
-singleton facade marks its frame `Culled` rather than reporting a resource
-fault. The proof uses the complete artifact bound and the one live facade state
-before any packet command, upload, or draw, so it applies equally to single-
-and multi-packet payloads.
+viewport mismatch, the retail special scissor-scaling mode, identity mismatch,
+or an edge within the numeric safety slack all keep the original path. The
+proof uses the complete artifact bound and the one live facade state before any
+packet command, upload, or draw, so it applies equally to single- and multi-
+packet payloads.
 
 The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
-`scissor`, `scissor_pre31`, `scissor_post31`, `preflight_skipped`,
-`packets_saved`, and `vertices_saved`. `scissor` is the total and the two phase
-counters partition successfully consumed scissor culls. The thin registration
-route performs no visibility work. The pre-slot path avoids all six Tile
-callbacks and geometry setup; it also avoids optional slot 68 on a non-first
-pass. The post-slot fallback saves only the driver submission. `app` and `clip`
-remain reserved fail-open compatibility counters. In a clipped Tweak/list
-menu, the desired result is nonzero `scissor_pre31`, a reduced
-`stock_constant_updates`, and corresponding saved packets/vertices.
-`scissor_post31` shows safe fallback coverage. `scissor=0` means neither final
-conservative proof fired, not that the `clips`/`clipwindow` traits were absent.
+`clip`, `scissor`, `preflight_skipped`, `packets_saved`, and `vertices_saved`.
+The separate `tnvse_freetype_preflight_clip_cull` line reports proof checks,
+viewport/scissor routes, fail-open decisions, honored results, and revoked
+results. There is no late-visibility phase line or instancing-member visibility
+family. The thin registration route performs no visibility work.
 The separate `tnvse_freetype_viewport_cull` line reports installed `nodes`,
 `install_failed`, total `checks`, cheap `fast_visible` returns, `deep_checks`,
 the number of `deep_tiles` inspected, proved `culled` subtrees, exact

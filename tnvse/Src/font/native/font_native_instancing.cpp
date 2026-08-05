@@ -157,8 +157,6 @@ namespace fonthook::vectorfont
 		struct CrossTextLivePreflight
 		{
 			NativeTileInstancingTransientState transient;
-			NativeA8VisibilityCull visibilityCull =
-				NativeA8VisibilityCull::None;
 		};
 
 		enum class CrossTextBatchState : UInt8
@@ -180,7 +178,6 @@ namespace fonthook::vectorfont
 			UInt32 memberCount = 0;
 			UInt32 baseInstance = 0;
 			UInt32 instanceCount = 0;
-			UInt32 liveInstanceCount = 0;
 			UInt32 followersBegun = 0;
 			CrossTextBatchState state = CrossTextBatchState::Ready;
 		};
@@ -205,7 +202,6 @@ namespace fonthook::vectorfont
 			std::vector<UInt32> sequenceToBatch;
 			std::vector<CrossTextLivePreflight> livePreflight;
 			std::vector<NativeTileInstancingSnapshot> liveSnapshots;
-			std::vector<UInt32> liveVisibleMemberOffsets;
 			CpuMemoryLease cpuMemory;
 			UInt64 validationToken = 0;
 			UInt32 generation = 0;
@@ -249,9 +245,7 @@ namespace fonthook::vectorfont
 				+ frame.livePreflight.capacity()
 					* sizeof(CrossTextLivePreflight)
 				+ frame.liveSnapshots.capacity()
-					* sizeof(NativeTileInstancingSnapshot)
-				+ frame.liveVisibleMemberOffsets.capacity()
-					* sizeof(UInt32);
+					* sizeof(NativeTileInstancingSnapshot);
 			frame.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata, bytes);
 		}
 
@@ -264,7 +258,6 @@ namespace fonthook::vectorfont
 			frame.sequenceToBatch.clear();
 			frame.livePreflight.clear();
 			frame.liveSnapshots.clear();
-			frame.liveVisibleMemberOffsets.clear();
 			frame.validationToken = 0;
 			frame.generation = 0;
 			frame.atlasTextureEpoch = 0;
@@ -288,7 +281,6 @@ namespace fonthook::vectorfont
 			CrossTextFrame& frame = s_crossTextFrame;
 			frame.livePreflight.clear();
 			frame.liveSnapshots.clear();
-			frame.liveVisibleMemberOffsets.clear();
 			frame.liveBatchIndex = kInvalidNativeA8CommandIndex;
 		}
 
@@ -992,13 +984,11 @@ namespace fonthook::vectorfont
 			if (transientResult != NativeTileInstancingSnapshotResult::Ready)
 				return BuildMemberFailure::State;
 
-			// Both ordinary direct-shape and singleton-facade submission
-			// temporarily apply the payload origin before reaching TileShader. This
-			// pass uses the effective world only for conservative visibility.
-			// With structural fast paths disabled, preserve the original all-or-
-			// nothing scissor fallback. The optimized path evaluates visibility from
-			// the complete live c0-c3 snapshot in pass 2, avoiding a duplicate WVP
-			// construction and allowing invisible members to be compacted safely.
+			// Both ordinary direct-shape and singleton-facade submission temporarily
+			// apply the payload origin before reaching TileShader. With structural
+			// fast paths disabled, preserve the original all-or-nothing scissor
+			// fallback. The optimized path relies on the post-Sort preflight and does
+			// not repeat a member visibility proof at leader time.
 			if (!g_bEnableFreeTypeFontStructuralFastPaths)
 			{
 				NiTransform effectiveWorld;
@@ -1235,16 +1225,14 @@ namespace fonthook::vectorfont
 				FreeTypePerfPhase::GlyphInstancingUpload);
 			CrossTextFrame& frame = s_crossTextFrame;
 			if (!frame.active || !frame.device || !frame.generation
-				|| !batch.liveInstanceCount || !batch.memberCount
+				|| !batch.instanceCount || !batch.memberCount
 				|| batch.firstMember >= frame.admissionMembers.size()
 				|| static_cast<UInt64>(batch.firstMember) + batch.memberCount
 					> frame.admissionMembers.size()
 				|| frame.liveBatchIndex != batchIndex
 				|| frame.liveSnapshots.size() != batch.memberCount
-				|| frame.liveVisibleMemberOffsets.empty()
-				|| frame.liveVisibleMemberOffsets.size() > batch.memberCount
 				|| frame.uploadCursorInstances > frame.plannedInstanceCount
-				|| batch.liveInstanceCount
+				|| batch.instanceCount
 					> frame.plannedInstanceCount - frame.uploadCursorInstances
 				|| !s_instancingResources.instanceBuffer)
 			{
@@ -1254,7 +1242,7 @@ namespace fonthook::vectorfont
 			const UInt32 baseInstance = frame.uploadCursorInstances;
 			const UInt32 byteOffset = baseInstance
 				* kNativeA8GlyphInstanceBytes;
-			const UInt32 byteCount = batch.liveInstanceCount
+			const UInt32 byteCount = batch.instanceCount
 				* kNativeA8GlyphInstanceBytes;
 			if (static_cast<UInt64>(byteOffset) + byteCount
 				> s_instancingResources.instanceBufferBytes)
@@ -1279,14 +1267,9 @@ namespace fonthook::vectorfont
 			}
 
 			UInt8* output = static_cast<UInt8*>(mapped);
-			for (UInt32 memberOffset : frame.liveVisibleMemberOffsets)
+			for (UInt32 memberOffset = 0;
+				memberOffset < batch.memberCount; ++memberOffset)
 			{
-				if (memberOffset >= batch.memberCount)
-				{
-					result = s_instancingResources.instanceBuffer->Unlock();
-					DisableInstancingGeneration(frame.generation);
-					return false;
-				}
 				const CrossTextAdmissionMember& member = frame.admissionMembers[
 					batch.firstMember + memberOffset];
 				const NativeTileInstancingSnapshot& snapshot =
@@ -1311,7 +1294,7 @@ namespace fonthook::vectorfont
 			}
 
 			batch.baseInstance = baseInstance;
-			frame.uploadCursorInstances += batch.liveInstanceCount;
+			frame.uploadCursorInstances += batch.instanceCount;
 			frame.uploadStarted = true;
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::GlyphInstancingUploadByte,
@@ -1921,7 +1904,6 @@ namespace fonthook::vectorfont
 		// either vector, so live capture cannot allocate inside TileShader.
 		frame.livePreflight.reserve(maximumBatchMembers);
 		frame.liveSnapshots.reserve(maximumBatchMembers);
-		frame.liveVisibleMemberOffsets.reserve(maximumBatchMembers);
 		// Allocate and size the D3D resources now, but do not freeze WVP/TileColor
 		// during command construction.  Each leader refreshes and uploads only its
 		// own batch immediately before drawing.
@@ -1999,29 +1981,6 @@ namespace fonthook::vectorfont
 			return true;
 		}
 		return false;
-	}
-
-	bool IsNativeA8CrossTextBatchVisibilityResolved(
-		const NiTriShape* geometry)
-	{
-		const CrossTextFrame& frame = s_crossTextFrame;
-		if (!geometry || !frame.active
-			|| frame.liveBatchIndex == kInvalidNativeA8CommandIndex
-			|| frame.liveBatchIndex >= frame.batches.size())
-		{
-			return false;
-		}
-		const CrossTextBatch& batch = frame.batches[frame.liveBatchIndex];
-		if (batch.state != CrossTextBatchState::Executing
-			|| !batch.memberCount
-			|| batch.firstMember >= frame.admissionMembers.size()
-			|| frame.livePreflight.size() != batch.memberCount
-			|| frame.liveSnapshots.size() != batch.memberCount)
-		{
-			return false;
-		}
-		return frame.admissionMembers[batch.firstMember].sequence.geometry
-			== geometry;
 	}
 
 	bool BeginNativeA8CrossTextBatchExecution(UInt32 sequenceIndex,
@@ -2114,8 +2073,7 @@ namespace fonthook::vectorfont
 		}
 		ResetLiveBatchScratch();
 		if (frame.livePreflight.capacity() < batch.memberCount
-			|| frame.liveSnapshots.capacity() < batch.memberCount
-			|| frame.liveVisibleMemberOffsets.capacity() < batch.memberCount)
+			|| frame.liveSnapshots.capacity() < batch.memberCount)
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::GlyphInstancingStateFallback);
@@ -2123,7 +2081,6 @@ namespace fonthook::vectorfont
 				GlyphInstancingBeginResourceFallback, "live-scratch-capacity");
 		}
 		frame.liveBatchIndex = batchIndex;
-		batch.liveInstanceCount = 0;
 		const auto shrinkBatchToPrefix = [&](UInt32 prefixCount,
 			const char* reason)
 		{
@@ -2160,7 +2117,6 @@ namespace fonthook::vectorfont
 			}
 			batch.memberCount = prefixCount;
 			batch.instanceCount = static_cast<UInt32>(prefixInstances);
-			batch.liveInstanceCount = 0;
 			if (frame.livePreflight.size() > prefixCount)
 				frame.livePreflight.resize(prefixCount);
 			if (frame.liveSnapshots.size() > prefixCount)
@@ -2188,9 +2144,8 @@ namespace fonthook::vectorfont
 
 		// Pass 1 re-resolves immutable identity but reuses the admission-time
 		// normalized immutable prefix. It rebuilds only the small live property
-		// suffix, compares it with the retained batch suffix, captures transient
-		// state, and proves visibility. No WVP/TileColor is built until the whole
-		// pass succeeds.
+		// suffix, compares it with the retained batch suffix, and captures transient
+		// state. No WVP/TileColor is built until the whole pass succeeds.
 		{
 			FreeTypePerfScope livePreflightPerf(
 				FreeTypePerfPhase::GlyphInstancingLivePreflight);
@@ -2253,7 +2208,8 @@ namespace fonthook::vectorfont
 
 		// Pass 2: the render-thread-only preflight above completed without a
 		// callback or device submission. Freeze exactly one complete live snapshot
-		// per member, and upload only after every snapshot succeeds.
+		// per member, and upload only after every snapshot succeeds. Visibility was
+		// already resolved once for this flush by the post-Sort preflight.
 		{
 			FreeTypePerfScope snapshotPerf(
 				FreeTypePerfPhase::GlyphInstancingSnapshot);
@@ -2286,52 +2242,16 @@ namespace fonthook::vectorfont
 							GlyphInstancingBeginImmutableFallback,
 						BuildMemberFailureName(failure), offset);
 				}
-				if (g_bEnableFreeTypeFontStructuralFastPaths)
-				{
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						GlyphInstancingVisibilityCheck);
-					frame.livePreflight[offset].visibilityCull =
-						EvaluateNativeA8SnapshotVisibility(
-							*planned.sequence.payload,
-							&planned.sequence.geometry->m_kProperties,
-							frame.renderer, frame.liveSnapshots.back(), true);
-				}
 			}
 		}
 
-		UInt64 liveInstances = 0;
-		for (UInt32 offset = 0; offset < batch.memberCount; ++offset)
-		{
-			if (frame.livePreflight[offset].visibilityCull
-				!= NativeA8VisibilityCull::None)
-			{
-				continue;
-			}
-			const CrossTextAdmissionMember& member = frame.admissionMembers[
-				batch.firstMember + offset];
-			liveInstances += member.sidecarCount;
-			frame.liveVisibleMemberOffsets.push_back(offset);
-		}
-		if (liveInstances > batch.instanceCount
-			|| liveInstances > std::numeric_limits<UInt32>::max())
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::GlyphInstancingStateFallback);
-			return rejectBegin(FreeTypePerfCounter::
-				GlyphInstancingBeginImmutableFallback,
-				"visibility-instance-range");
-		}
-		batch.liveInstanceCount = static_cast<UInt32>(liveInstances);
-		if (batch.liveInstanceCount
-			&& !UploadBatchInstances(batchIndex, batch))
+		if (!UploadBatchInstances(batchIndex, batch))
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::GlyphInstancingStateFallback);
 			return rejectBegin(FreeTypePerfCounter::
 				GlyphInstancingBeginUploadFallback, "instance-upload");
 		}
-		if (!batch.liveInstanceCount)
-			batch.baseInstance = frame.uploadCursorInstances;
 
 		batch.followersBegun = 0;
 		{
@@ -2364,7 +2284,7 @@ namespace fonthook::vectorfont
 		view.batchIndex = batchIndex;
 		view.leaderSequenceIndex = sequenceIndex;
 		view.textCount = batch.memberCount;
-		view.instanceCount = batch.liveInstanceCount;
+		view.instanceCount = batch.instanceCount;
 		view.baseInstance = batch.baseInstance;
 		view.generation = frame.generation;
 		view.leaderGeometry = leaderGeometry;
@@ -2440,48 +2360,14 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::GlyphInstancingDrawSaved,
 				batch.memberCount - (view.instanceCount ? 1u : 0u));
-			UInt32 visibilityCulledTexts = 0;
-			UInt64 visibilityCulledInstances = 0;
 			for (UInt32 offset = 0; offset < batch.memberCount; ++offset)
 			{
-				const NativeA8VisibilityCull visibility =
-					frame.livePreflight[offset].visibilityCull;
-				if (visibility != NativeA8VisibilityCull::None)
-				{
-					const CrossTextAdmissionMember& member =
-						frame.admissionMembers[batch.firstMember + offset];
-					++visibilityCulledTexts;
-					visibilityCulledInstances += member.sidecarCount;
-					RecordFreeTypePerf(visibility
-							== NativeA8VisibilityCull::Scissor
-						? FreeTypePerfCounter::VisibilityScissorPreConstants
-						: FreeTypePerfCounter::VisibilityClipPreConstants);
-					if (member.sequence.payload)
-					{
-						RecordNativeA8VisibilityCull(
-							visibility, *member.sequence.payload);
-					}
-				}
 				NiTriShape* geometry = frame.admissionMembers[
 					batch.firstMember + offset].sequence.geometry;
 				NiTriShapeData* data = geometry
 					? geometry->GetModelData() : nullptr;
 				if (data)
 					data->m_usDirtyFlags &= 0xF000u;
-			}
-			if (visibilityCulledTexts)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					GlyphInstancingVisibilityCulledText,
-					visibilityCulledTexts);
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					GlyphInstancingVisibilityCulledInstance,
-					visibilityCulledInstances);
-				RecordFreeTypePerf(visibilityCulledTexts == batch.memberCount
-					? FreeTypePerfCounter::
-						GlyphInstancingVisibilityAllBatch
-					: FreeTypePerfCounter::
-						GlyphInstancingVisibilityPartialBatch);
 			}
 			const CrossTextAdmissionMember& last = frame.admissionMembers[
 				batch.firstMember + batch.memberCount - 1u];
@@ -2517,7 +2403,7 @@ namespace fonthook::vectorfont
 			|| view.textCount
 				!= frame.batches[view.batchIndex].memberCount
 			|| view.instanceCount
-				!= frame.batches[view.batchIndex].liveInstanceCount
+				!= frame.batches[view.batchIndex].instanceCount
 			|| frame.liveBatchIndex != view.batchIndex
 			|| frame.liveSnapshots.size() != view.textCount
 			|| (static_cast<UInt64>(view.baseInstance)
@@ -2589,24 +2475,6 @@ namespace fonthook::vectorfont
 				GlyphInstancingValidationFallback);
 			return false;
 		}
-		if (!view.instanceCount)
-		{
-			if (!frame.liveVisibleMemberOffsets.empty())
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::GlyphInstancingStateFallback);
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					GlyphInstancingValidationFallback);
-				return false;
-			}
-			// Every text in the contiguous batch was conservatively proven outside
-			// the exact live scissor/viewport. The leader callback still consumes the
-			// command contract, while no instancing state or D3D draw is necessary.
-			operation = "cull-glyph-instancing-batch";
-			result = D3D_OK;
-			return true;
-		}
-
 		IDirect3DDevice9* device = frame.device;
 		const UInt32 instanceOffset = view.baseInstance
 			* kNativeA8GlyphInstanceBytes;

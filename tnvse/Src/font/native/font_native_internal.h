@@ -572,48 +572,6 @@ namespace fonthook::vectorfont
 		Scissor
 	};
 
-	// clips/clipwindow are resolved by retail Tile::ReClipChildren into the live
-	// TileShaderProperty scissor. The same homogeneous proof may use the larger
-	// full D3D viewport when the exact Tile pass and primitive-clipping mirror are
-	// current. A visibility scope is armed only around a guarded native pass.
-	// Standard-lite may reconstruct retail's model matrix and prove a miss before
-	// slot 31; otherwise NativeUpdateConstants retains the post-slot-31 fallback.
-	// The matching immediate hook consumes either proof as a successful draw
-	// suppression.
-	class NativeA8LateVisibilityScope
-	{
-	public:
-		NativeA8LateVisibilityScope(const NiTriShape* geometry,
-			const NativeA8ShapePayload* payload);
-		~NativeA8LateVisibilityScope();
-
-		NativeA8LateVisibilityScope(
-			const NativeA8LateVisibilityScope&) = delete;
-		NativeA8LateVisibilityScope& operator=(
-			const NativeA8LateVisibilityScope&) = delete;
-
-	private:
-		friend bool EvaluateNativeA8PreConstantsVisibility(
-			const NiTriShape* geometry,
-			const NativeA8ShapePayload& payload,
-			const NiPropertyState* properties,
-			NiDX9Renderer* renderer, IDirect3DDevice9* device,
-			bool verifiedRetailSlot31);
-		friend void EvaluateNativeA8PostConstantsVisibility(
-			const NiPropertyState* properties,
-			IDirect3DDevice9* device, bool verifiedRetailSlot31);
-		friend bool ConsumeNativeA8LateVisibilityCull(
-			const NiTriShape* geometry);
-
-		const NiTriShape* m_geometry = nullptr;
-		const NativeA8ShapePayload* m_payload = nullptr;
-		NativeA8LateVisibilityScope* m_previous = nullptr;
-		NativeA8VisibilityCull m_cull = NativeA8VisibilityCull::None;
-		bool m_evaluated = false;
-		bool m_recorded = false;
-		bool m_preConstantsCull = false;
-	};
-
 	struct NativeA8SortedFrameEntryView
 	{
 		const A8ShapeMetadata* metadata = nullptr;
@@ -923,13 +881,6 @@ namespace fonthook::vectorfont
 		const NiPropertyState* properties,
 		const NiDX9Renderer* renderer,
 		const NiTransform& effectiveWorld);
-	NativeA8VisibilityCull EvaluateNativeA8SnapshotVisibility(
-		const NativeA8ShapePayload& payload,
-		const NiPropertyState* properties,
-		const NiDX9Renderer* renderer,
-		const NativeTileInstancingSnapshot& snapshot,
-		bool allowViewport);
-
 	struct NativeA8DrawCommand
 	{
 		NiTriShape* sourceGeometry = nullptr;
@@ -1311,15 +1262,6 @@ namespace fonthook::vectorfont
 		const NiTriShape* facade, const NativeA8ShapePayload& payload);
 	bool HonorNativeA8PreflightClipCull(const NiTriShape* facade,
 		NativeA8VisibilityCull preflightCull);
-	bool EvaluateNativeA8PreConstantsVisibility(
-		const NiTriShape* geometry, const NativeA8ShapePayload& payload,
-		const NiPropertyState* properties, NiDX9Renderer* renderer,
-		IDirect3DDevice9* device, bool verifiedRetailSlot31);
-	void EvaluateNativeA8PostConstantsVisibility(
-		const NiPropertyState* properties,
-		IDirect3DDevice9* device, bool verifiedRetailSlot31);
-	bool ConsumeNativeA8LateVisibilityCull(
-		const NiTriShape* geometry);
 	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,
 		const NativeA8ShapePayload& payload);
 	UInt32 GetNativeA8AtlasTextureEpoch();
@@ -1442,8 +1384,6 @@ namespace fonthook::vectorfont
 	void PrepareNativeA8CrossTextBatches();
 	bool ShouldConsumeNativeA8CrossTextBatchFollower(
 		UInt32 sequenceIndex, NiTriShape* geometry);
-	bool IsNativeA8CrossTextBatchVisibilityResolved(
-		const NiTriShape* geometry);
 	bool BeginNativeA8CrossTextBatchExecution(UInt32 sequenceIndex,
 		NiTriShape* leaderGeometry,
 		BSShaderProperty::RenderPass* renderPass, UInt32 currentPass,

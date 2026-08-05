@@ -112,22 +112,6 @@ namespace fonthook::vectorfont
 			bool rendererAvailable = false;
 		};
 
-		enum class ExecutionSkeletonClass : UInt8
-		{
-			Barrier = 0,
-			NativeFacade,
-		};
-
-		struct ExecutionSequenceSkeletonItem
-		{
-			NiTriShape* facade = nullptr;
-			UInt32 depthBits = 0;
-			UInt32 originalOrdinal = 0;
-			ExecutionSkeletonClass classification =
-				ExecutionSkeletonClass::Barrier;
-		};
-		static_assert(sizeof(ExecutionSequenceSkeletonItem) == 16);
-
 		struct SortedPayloadScratch
 		{
 			// The active predecessor Sort owns m_ppkItems/m_pfDepths. tNVSE only
@@ -145,11 +129,6 @@ namespace fonthook::vectorfont
 			std::vector<EqualDepthTieRepairRun> tieRuns;
 			std::vector<NiGeometry*> tieOutput;
 			std::vector<NiTriShape*> frameCandidates;
-			std::vector<ExecutionSequenceSkeletonItem> executionSkeleton;
-			BSShaderAccumulator* executionSkeletonAccumulator = nullptr;
-			const void* executionSkeletonItems = nullptr;
-			const void* executionSkeletonDepths = nullptr;
-			UInt64 executionSkeletonValidationToken = 0;
 			std::vector<SortedFrameEntry> frameEntries;
 			std::vector<UInt32> facadeLookup;
 			std::vector<NativeA8PayloadTemplatePtr> payloadTemplates;
@@ -399,8 +378,6 @@ namespace fonthook::vectorfont
 				+ scratch.tieRuns.capacity() * sizeof(EqualDepthTieRepairRun)
 				+ scratch.tieOutput.capacity() * sizeof(NiGeometry*)
 				+ scratch.frameCandidates.capacity() * sizeof(NiTriShape*)
-				+ scratch.executionSkeleton.capacity()
-					* sizeof(ExecutionSequenceSkeletonItem)
 				+ scratch.frameEntries.capacity() * sizeof(SortedFrameEntry)
 				+ scratch.facadeLookup.capacity() * sizeof(UInt32)
 				+ scratch.payloadTemplates.capacity()
@@ -430,11 +407,6 @@ namespace fonthook::vectorfont
 			scratch.tieRuns.clear();
 			scratch.tieOutput.clear();
 			scratch.frameCandidates.clear();
-			scratch.executionSkeleton.clear();
-			scratch.executionSkeletonAccumulator = nullptr;
-			scratch.executionSkeletonItems = nullptr;
-			scratch.executionSkeletonDepths = nullptr;
-			scratch.executionSkeletonValidationToken = 0;
 			scratch.frameEntries.clear();
 			scratch.payloadTemplates.clear();
 			scratch.singletonFacades.clear();
@@ -463,11 +435,6 @@ namespace fonthook::vectorfont
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
 			if (scratch.frameCandidates.capacity() > 8192)
 				std::vector<NiTriShape*>().swap(scratch.frameCandidates);
-			if (scratch.executionSkeleton.capacity() > 8192)
-			{
-				std::vector<ExecutionSequenceSkeletonItem>().swap(
-					scratch.executionSkeleton);
-			}
 			if (scratch.facadeLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.facadeLookup);
 			if (scratch.payloadTemplates.capacity() > 8192)
@@ -499,8 +466,6 @@ namespace fonthook::vectorfont
 				std::vector<NiGeometry*>().swap(scratch.tieOutput);
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
 				std::vector<NiTriShape*>().swap(scratch.frameCandidates);
-				std::vector<ExecutionSequenceSkeletonItem>().swap(
-					scratch.executionSkeleton);
 				std::vector<UInt32>().swap(scratch.facadeLookup);
 				std::vector<NativeA8PayloadTemplatePtr>().swap(
 					scratch.payloadTemplates);
@@ -1459,41 +1424,6 @@ namespace fonthook::vectorfont
 					frameValidationToken = ++scratch.nextValidationToken;
 
 				scratch.frameCandidates = scratch.metadataShapes;
-				scratch.executionSkeleton.clear();
-				scratch.executionSkeletonAccumulator = nullptr;
-				scratch.executionSkeletonItems = nullptr;
-				scratch.executionSkeletonDepths = nullptr;
-				scratch.executionSkeletonValidationToken = 0;
-				const bool buildExecutionSkeleton =
-					g_bEnableFreeTypeFontStructuralFastPaths
-						&& g_bEnableFreeTypeFontCrossTextBatch
-						&& accumulator->m_pfDepths;
-				if (buildExecutionSkeleton)
-				{
-					scratch.executionSkeleton.reserve(itemCount);
-					scratch.executionSkeletonAccumulator = accumulator;
-					scratch.executionSkeletonItems = accumulator->m_ppkItems;
-					scratch.executionSkeletonDepths = accumulator->m_pfDepths;
-					scratch.executionSkeletonValidationToken =
-						frameValidationToken;
-					for (SInt32 index = accumulator->m_iNumItems - 1;
-						index >= 0; --index)
-					{
-						NiGeometry* geometry = accumulator->m_ppkItems[index];
-						const bool isFacade = IsFreeTypeFacade(geometry);
-						ExecutionSequenceSkeletonItem item;
-						item.facade = isFacade
-							? static_cast<NiTriShape*>(geometry) : nullptr;
-						std::memcpy(&item.depthBits,
-							&accumulator->m_pfDepths[index],
-							sizeof(item.depthBits));
-						item.originalOrdinal = static_cast<UInt32>(index);
-						item.classification = isFacade
-							? ExecutionSkeletonClass::NativeFacade
-							: ExecutionSkeletonClass::Barrier;
-						scratch.executionSkeleton.push_back(item);
-					}
-				}
 
 				const size_t trackedCount = scratch.frameCandidates.size();
 				scratch.frameEntries.reserve(trackedCount);
@@ -1833,62 +1763,19 @@ namespace fonthook::vectorfont
 								}
 							};
 
-							bool usedSkeleton = false;
-							if (g_bEnableFreeTypeFontStructuralFastPaths)
+							// Consume the predecessor Sort result directly in the same
+							// high-to-low order as retail RenderAlphaGeometry, without a
+							// second per-item staging vector and its write/read round trip.
+							for (SInt32 itemIndex = accumulator->m_iNumItems - 1;
+								itemIndex >= 0; --itemIndex)
 							{
-								usedSkeleton =
-									scratch.executionSkeletonAccumulator == accumulator
-									&& scratch.executionSkeletonItems
-										== accumulator->m_ppkItems
-									&& scratch.executionSkeletonDepths
-										== accumulator->m_pfDepths
-									&& scratch.executionSkeletonValidationToken
-										== frameValidationToken
-									&& scratch.executionSkeleton.size()
-										== static_cast<size_t>(accumulator->m_iNumItems)
-									&& !scratch.executionSkeleton.empty()
-									&& scratch.executionSkeleton.front().originalOrdinal
-										== static_cast<UInt32>(accumulator->m_iNumItems - 1)
-									&& scratch.executionSkeleton.back().originalOrdinal == 0;
-								if (usedSkeleton)
-								{
-									RecordFreeTypePerf(FreeTypePerfCounter::
-										CommandSequenceSkeletonHit);
-									for (const ExecutionSequenceSkeletonItem& item
-										: scratch.executionSkeleton)
-									{
-										float depth = 0.0f;
-										std::memcpy(&depth, &item.depthBits,
-											sizeof(depth));
-										appendSequenceItem(
-											item.classification
-												== ExecutionSkeletonClass::NativeFacade
-												? item.facade : nullptr,
-											depth);
-									}
-								}
-								else
-								{
-									RecordFreeTypePerf(FreeTypePerfCounter::
-										CommandSequenceSkeletonFallback);
-								}
-							}
-							if (!usedSkeleton)
-							{
-								RecordFreeTypePerf(FreeTypePerfCounter::
-									CommandSequenceSkeletonItem,
-									static_cast<UInt64>(accumulator->m_iNumItems));
-								for (SInt32 itemIndex = accumulator->m_iNumItems - 1;
-									itemIndex >= 0; --itemIndex)
-								{
-									NiTriShape* geometry = IsFreeTypeFacade(
+								NiTriShape* geometry = IsFreeTypeFacade(
+									accumulator->m_ppkItems[itemIndex])
+									? static_cast<NiTriShape*>(
 										accumulator->m_ppkItems[itemIndex])
-										? static_cast<NiTriShape*>(
-											accumulator->m_ppkItems[itemIndex])
-										: nullptr;
-									appendSequenceItem(geometry,
-										accumulator->m_pfDepths[itemIndex]);
-								}
+									: nullptr;
+								appendSequenceItem(geometry,
+									accumulator->m_pfDepths[itemIndex]);
 							}
 						}
 						if (g_bEnableFreeTypeFontCrossTextBatch)

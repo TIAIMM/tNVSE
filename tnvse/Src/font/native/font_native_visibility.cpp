@@ -19,13 +19,10 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_native_visibility
 	{
-		inline constexpr UInt32 kCurrentRenderPass = 0x11F91E0;
 		inline constexpr UInt32 kScaledScissorActive = 0x11F9426;
 		inline constexpr UInt32 kRendererPositionAdjust = 0x11F474C;
 		inline constexpr double kScissorSafetyMarginPixels = 2.0;
 		inline constexpr double kClipIntervalRelativeSlack = 1.0e-6;
-
-		thread_local NativeA8LateVisibilityScope* s_lateVisibilityScope = nullptr;
 
 		enum class ClipProofResult : UInt8
 		{
@@ -278,8 +275,7 @@ namespace fonthook::vectorfont
 		}
 
 		bool BuildWorldViewProjection(const NiDX9Renderer& renderer,
-			const D3DXMATRIX& world, D3DXMATRIX& worldViewProjection,
-			bool recordLateDiagnostics)
+			const D3DXMATRIX& world, D3DXMATRIX& worldViewProjection)
 		{
 			ClipTransformCache& cache = s_clipTransformCache;
 			if (cache.valid && cache.renderer == &renderer
@@ -290,19 +286,9 @@ namespace fonthook::vectorfont
 					sizeof(cache.projection)) == 0)
 			{
 				worldViewProjection = cache.worldViewProjection;
-				if (recordLateDiagnostics)
-				{
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						VisibilityLateClipTransformHit);
-				}
 				return true;
 			}
 
-			if (recordLateDiagnostics)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					VisibilityLateClipTransformMiss);
-			}
 			if (!IsFiniteMatrix(world)
 				|| !IsFiniteMatrix(renderer.m_kD3DView)
 				|| !IsFiniteMatrix(renderer.m_kD3DProj))
@@ -332,23 +318,11 @@ namespace fonthook::vectorfont
 			const NativeA8ShapePayload& payload,
 			const TileVisibilityPropertyView& tile,
 			const NiDX9Renderer& renderer, const D3DXMATRIX& world,
-			bool allowViewport, NativeA8VisibilityCull& reason,
-			bool recordLateDiagnostics = false,
-			const D3DXMATRIX* preparedWorldViewProjection = nullptr)
+			bool allowViewport, NativeA8VisibilityCull& reason)
 		{
 			reason = NativeA8VisibilityCull::None;
-			if (recordLateDiagnostics)
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::VisibilityLateClipCheck);
-			}
 			auto failOpen = [&]()
 			{
-				if (recordLateDiagnostics)
-				{
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::VisibilityLateClipFailOpen);
-				}
 				return ClipProofResult::Unproven;
 			};
 
@@ -361,11 +335,6 @@ namespace fonthook::vectorfont
 			{
 				clipRect = tile.scissorRect;
 				reason = NativeA8VisibilityCull::Scissor;
-				if (recordLateDiagnostics)
-				{
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						VisibilityLateClipScissorCheck);
-				}
 			}
 			else
 			{
@@ -381,11 +350,6 @@ namespace fonthook::vectorfont
 					return failOpen();
 				}
 				reason = NativeA8VisibilityCull::Clip;
-				if (recordLateDiagnostics)
-				{
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						VisibilityLateClipViewportCheck);
-				}
 			}
 
 			if (!payload.payloadTemplate)
@@ -406,22 +370,13 @@ namespace fonthook::vectorfont
 			// D3DX entry point and retain the non-transposed matrix for row-vector
 			// homogeneous half-space evaluation below.
 			D3DXMATRIX builtWorldViewProjection = {};
-			const D3DXMATRIX* worldViewProjection =
-				preparedWorldViewProjection;
-			if (worldViewProjection)
-			{
-				if (!IsFiniteMatrix(*worldViewProjection))
-					return failOpen();
-			}
-			else if (!BuildWorldViewProjection(renderer, world,
-					builtWorldViewProjection, recordLateDiagnostics))
+			if (!BuildWorldViewProjection(
+					renderer, world, builtWorldViewProjection))
 			{
 				return failOpen();
 			}
-			else
-			{
-				worldViewProjection = &builtWorldViewProjection;
-			}
+			const D3DXMATRIX* worldViewProjection =
+				&builtWorldViewProjection;
 
 			const ClipColumn clipX = GetClipColumn(*worldViewProjection, 0);
 			const ClipColumn clipY = GetClipColumn(*worldViewProjection, 1);
@@ -496,20 +451,6 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	NativeA8LateVisibilityScope::NativeA8LateVisibilityScope(
-		const NiTriShape* geometry, const NativeA8ShapePayload* payload)
-		: m_geometry(geometry), m_payload(payload),
-		  m_previous(s_lateVisibilityScope)
-	{
-		s_lateVisibilityScope = this;
-	}
-
-	NativeA8LateVisibilityScope::~NativeA8LateVisibilityScope()
-	{
-		if (s_lateVisibilityScope == this)
-			s_lateVisibilityScope = m_previous;
-	}
-
 	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload)
 	{
@@ -552,9 +493,8 @@ namespace fonthook::vectorfont
 		// flush and before the stock immediate pass loop. The retained
 		// constants-state keys prove view/projection/viewport never mutate
 		// between this stage and replay (zero view/projection mismatches
-		// recorded session-wide), so the exact retail clip proof the late
-		// slot-31 scope runs is already sound here. Anything uncertain fails
-		// open, and every preflight cull is additionally revalidated by
+		// recorded session-wide), so this is the sole clip proof for the flush.
+		// Anything uncertain fails open, and every preflight cull is revalidated by
 		// HonorNativeA8PreflightClipCull at dispatch before it is honored.
 		if (!facade || !payload.buildComplete || !payload.payloadTemplate)
 			return failOpen();
@@ -653,160 +593,6 @@ namespace fonthook::vectorfont
 			&& EvaluatePayloadClip(payload, *tile, *renderer, world,
 				false, reason) == ClipProofResult::Outside
 			&& reason == NativeA8VisibilityCull::Scissor;
-	}
-
-	NativeA8VisibilityCull EvaluateNativeA8SnapshotVisibility(
-		const NativeA8ShapePayload& payload,
-		const NiPropertyState* properties,
-		const NiDX9Renderer* renderer,
-		const NativeTileInstancingSnapshot& snapshot,
-		bool allowViewport)
-	{
-		if (!properties || !renderer)
-			return NativeA8VisibilityCull::None;
-		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
-		if (!tile)
-			return NativeA8VisibilityCull::None;
-
-		// NativeTileConstantsLite stores the exact retail c0-c3 values, which are
-		// the transpose of the row-vector world-view-projection matrix used by the
-		// homogeneous interval proof. Reusing that completed live snapshot avoids a
-		// second pair of matrix multiplies for every Credit/list member.
-		D3DXMATRIX worldViewProjection = {};
-		D3DXMatrixTranspose(
-			&worldViewProjection, &snapshot.wvpColumns);
-		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
-		return EvaluatePayloadClip(payload, *tile, *renderer,
-				snapshot.retailWorld, allowViewport, reason, true,
-				&worldViewProjection) == ClipProofResult::Outside
-			? reason : NativeA8VisibilityCull::None;
-	}
-
-	bool EvaluateNativeA8PreConstantsVisibility(
-		const NiTriShape* geometry, const NativeA8ShapePayload& payload,
-		const NiPropertyState* properties, NiDX9Renderer* renderer,
-		IDirect3DDevice9* device, bool verifiedRetailSlot31)
-	{
-		NativeA8LateVisibilityScope* scope = s_lateVisibilityScope;
-		if (!scope || scope->m_evaluated || !verifiedRetailSlot31
-			|| !geometry || scope->m_geometry != geometry
-			|| scope->m_payload != &payload || !properties
-			|| properties != &geometry->m_kProperties || !renderer
-			|| renderer != NiDX9Renderer::GetSingleton() || !device
-			|| renderer->GetD3DDevice() != device)
-		{
-			return false;
-		}
-		BSShaderProperty::RenderPass* currentPass =
-			*reinterpret_cast<BSShaderProperty::RenderPass**>(
-				kCurrentRenderPass);
-		if (!currentPass || currentPass->pGeometry != geometry)
-			return false;
-		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
-		if (!tile || !payload.payloadTemplate)
-			return false;
-		if (IsNativeA8CrossTextBatchVisibilityResolved(geometry))
-		{
-			// The leader-time complete snapshots proved every member separately and
-			// compacted only the invisible instances. Treating the leader bound as the
-			// bound of the whole instanced draw would incorrectly suppress visible
-			// followers when the first Credit/list row is outside the viewport.
-			scope->m_evaluated = true;
-			return false;
-		}
-		D3DXMATRIX world = {};
-		if (!BuildRetailTileWorldMatrix(geometry->m_kWorld, world))
-			return false;
-		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
-		const ClipProofResult proof = EvaluatePayloadClip(
-			payload, *tile, *renderer, world,
-			g_bEnableFreeTypeFontStructuralFastPaths, reason, true);
-		if (proof == ClipProofResult::Unproven)
-			return false;
-		// Slot 31 does not mutate any proof input; it only publishes this same
-		// model matrix/constants and device state. Once the exact pre-slot
-		// inputs were evaluated, repeating the identical test in the post-slot
-		// fallback would add CPU work without recovering an indeterminate case.
-		scope->m_evaluated = true;
-		if (proof != ClipProofResult::Outside)
-			return false;
-
-		// This is the exact matrix slot 31 would publish: formal PC BCA980
-		// calls E6FBB0 -> B71A40 with currentPass->geometry->m_kWorld, and
-		// the symbolized test build expresses the same operation as
-		// NiXenonRenderer::SetModelTransform. No slot-31 state has run, so
-		// Standard-lite can suppress the complete pass without a slot-35 pop.
-		scope->m_cull = reason;
-		scope->m_preConstantsCull = true;
-		return true;
-	}
-
-	void EvaluateNativeA8PostConstantsVisibility(
-		const NiPropertyState* properties,
-		IDirect3DDevice9* device, bool verifiedRetailSlot31)
-	{
-		NativeA8LateVisibilityScope* scope = s_lateVisibilityScope;
-		if (!scope || scope->m_evaluated)
-			return;
-		scope->m_evaluated = true;
-		if (!verifiedRetailSlot31 || !scope->m_geometry || !scope->m_payload
-			|| !properties
-			|| properties != &scope->m_geometry->m_kProperties)
-		{
-			return;
-		}
-		if (IsNativeA8CrossTextBatchVisibilityResolved(scope->m_geometry))
-			return;
-		BSShaderProperty::RenderPass* currentPass =
-			*reinterpret_cast<BSShaderProperty::RenderPass**>(
-				kCurrentRenderPass);
-		if (!currentPass || currentPass->pGeometry != scope->m_geometry)
-			return;
-		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
-		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-		if (!tile || !renderer || !device
-			|| renderer->GetD3DDevice() != device)
-		{
-			return;
-		}
-		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
-		if (EvaluatePayloadClip(*scope->m_payload, *tile, *renderer,
-			renderer->m_kD3DMat,
-			g_bEnableFreeTypeFontStructuralFastPaths, reason, true)
-			== ClipProofResult::Outside)
-		{
-			scope->m_cull = reason;
-			scope->m_preConstantsCull = false;
-		}
-	}
-
-	bool ConsumeNativeA8LateVisibilityCull(const NiTriShape* geometry)
-	{
-		NativeA8LateVisibilityScope* scope = s_lateVisibilityScope;
-		if (!scope || scope->m_geometry != geometry
-			|| scope->m_cull == NativeA8VisibilityCull::None)
-		{
-			return false;
-		}
-		if (!scope->m_recorded && scope->m_payload)
-		{
-			scope->m_recorded = true;
-			if (scope->m_cull == NativeA8VisibilityCull::Scissor)
-			{
-				RecordFreeTypePerf(scope->m_preConstantsCull
-					? FreeTypePerfCounter::VisibilityScissorPreConstants
-					: FreeTypePerfCounter::VisibilityScissorPostConstants);
-			}
-			else if (scope->m_cull == NativeA8VisibilityCull::Clip)
-			{
-				RecordFreeTypePerf(scope->m_preConstantsCull
-					? FreeTypePerfCounter::VisibilityClipPreConstants
-					: FreeTypePerfCounter::VisibilityClipPostConstants);
-			}
-			RecordNativeA8VisibilityCull(
-				scope->m_cull, *scope->m_payload);
-		}
-		return true;
 	}
 
 	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,

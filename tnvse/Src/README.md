@@ -31,8 +31,8 @@ configuration, dependency checks, globals, and native-call helpers stay at the
     the draw-free bind/restore proof bracket, and slot-27 fail-open
     leader/follower execution.
     Its diagnostics also retain first-field compatibility mismatch counters and
-    per-stage timing histograms. `font_native_accumulator.cpp` builds the compact
-    final-order execution skeleton while first scanning the sorted accumulator;
+    per-stage timing histograms. `font_native_accumulator.cpp` consumes the
+    predecessor's final sorted arrays directly in retail reverse order;
     `font_native_command_buffer.cpp` and instancing reuse the same readiness and
     resource epochs without changing stock barriers or fallback order.
     `font_native_diagnostics.cpp` owns the bounded, logging-only D3D9 binding,

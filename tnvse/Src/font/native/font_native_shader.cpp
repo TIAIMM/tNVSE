@@ -693,9 +693,6 @@ namespace fonthook::vectorfont
 					D3DERR_DEVICELOST);
 				return;
 			}
-			EvaluateNativeA8PostConstantsVisibility(properties, device,
-				stockUpdate == reinterpret_cast<StockUpdateConstantsFn>(
-					kTileShaderUpdateConstants));
 			// Both reverse targets prove that the unmodified stock slot 31 owns
 			// tintcolor at PS c0 and submits it through the pixel constant map.
 			// Since native packet data is discontiguous at c176-c183, a second c0

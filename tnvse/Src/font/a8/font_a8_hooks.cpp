@@ -385,7 +385,6 @@ namespace fonthook::vectorfont
 			bool invoked = false;
 			bool validationPassed = true;
 			bool drew = false;
-			bool visibilityCulled = false;
 			bool continuationSucceeded = true;
 			const NativeDirectDrawLiteSubmission* directDrawLite = nullptr;
 			const NativeA8CrossTextBatchExecutionView* instancedBatch = nullptr;
@@ -401,7 +400,6 @@ namespace fonthook::vectorfont
 		{
 		public:
 			explicit NativeDirectImmediateScope(NiTriShape* shape,
-				const NativeA8ShapePayload* payload,
 				UInt32 commandSpanIndex = kInvalidNativeA8CommandIndex,
 				UInt32 commandOffset = kInvalidNativeA8CommandIndex,
 				bool strictValidation = false,
@@ -410,8 +408,7 @@ namespace fonthook::vectorfont
 				NativeImmediateCommandKind commandKind =
 					NativeImmediateCommandKind::SpanPacket,
 				bool packetStatePrevalidated = false)
-				: m_visibility(shape, payload),
-				  m_previous(s_nativeDirectImmediateContext)
+				: m_previous(s_nativeDirectImmediateContext)
 			{
 				m_context.shape = shape;
 				m_context.commandSpanIndex = commandSpanIndex;
@@ -448,18 +445,12 @@ namespace fonthook::vectorfont
 				return m_context.drew;
 			}
 
-			bool VisibilityCulled() const
-			{
-				return m_context.visibilityCulled;
-			}
-
 			bool ContinuationSucceeded() const
 			{
 				return m_context.continuationSucceeded;
 			}
 
 		private:
-			NativeA8LateVisibilityScope m_visibility;
 			NativeDirectImmediateContext m_context;
 			NativeDirectImmediateContext* m_previous = nullptr;
 		};
@@ -2214,7 +2205,6 @@ namespace fonthook::vectorfont
 			bool drewPacket = false;
 			bool directShapeRoute = false;
 			bool stockLikeBitmapRoute = false;
-			bool visibilityCulled = false;
 			bool constantStateFault = false;
 			UInt32 drawnPacketCount = 0;
 			NativeA8FallbackReason failure =
@@ -2720,21 +2710,6 @@ namespace fonthook::vectorfont
 			renderer->m_pkCurrProp =
 				const_cast<NiPropertyState*>(properties);
 			renderer->m_pkCurrEffects = nullptr;
-			const bool verifiedRetailSlot31 =
-				(program.standardV2SlotProofs
-					& NativeA8CompiledPacketCommand::
-						kStandardSlot31Proof) != 0;
-			if (command.payload
-				&& EvaluateNativeA8PreConstantsVisibility(
-					geometry, *command.payload, properties, renderer,
-					program.device, verifiedRetailSlot31))
-			{
-				// The visibility scope carries a whole-payload proof. Route it
-				// through the ordinary immediate hook so validation/accounting
-				// remain identical, but skip every pass callback and geometry setup.
-				A8RenderImmediateAlt(geometry, nullptr, renderer);
-				return;
-			}
 
 			NativeSegmentDeviceStateCache* deviceState =
 				EnterSegmentDeviceStateCache(deviceStateStamp);
@@ -3908,7 +3883,7 @@ namespace fonthook::vectorfont
 					bridge.nextCommandOffset
 						< bridge.endCommandOffset;
 				NativeDirectImmediateScope immediateScope(
-					proxy, &payload, commandSpanIndex, firstOffset, true,
+					proxy, commandSpanIndex, firstOffset, true,
 					hasContinuation ? &bridge : nullptr,
 					hasContinuation
 						? &ContinueRetainedBridge : nullptr,
@@ -3916,11 +3891,6 @@ namespace fonthook::vectorfont
 				InvokeNativeCommandBootstrap(pass, currentPass,
 					false, true, setupDrawmode, proxy, first,
 					false, true);
-				if (immediateScope.VisibilityCulled())
-				{
-					draw.visibilityCulled = true;
-					break;
-				}
 				if (immediateScope.Drew())
 				{
 					draw.drewPacket = true;
@@ -3985,9 +3955,7 @@ namespace fonthook::vectorfont
 			}
 
 			const bool success = !draw.runtimeFault
-				&& (draw.visibilityCulled
-					|| draw.drawnPacketCount
-						== view.span->commandCount);
+				&& draw.drawnPacketCount == view.span->commandCount;
 			EndNativeA8CommandSpanExecution(
 				commandSpanIndex, success, draw.drewPacket);
 			if (success)
@@ -4228,7 +4196,7 @@ namespace fonthook::vectorfont
 							? directFacadeSinglePacketCommandIndex
 							: kInvalidNativeA8CommandIndex;
 					NativeDirectImmediateScope immediateScope(
-						shape, payload, validationCommandIndex,
+						shape, validationCommandIndex,
 						kInvalidNativeA8CommandIndex,
 						commandExecution, nullptr, nullptr,
 						NativeImmediateCommandKind::DirectFacadeSinglePacket,
@@ -4291,13 +4259,6 @@ namespace fonthook::vectorfont
 								FreeTypePerfCounter::CompositeDraw);
 						}
 					}
-					else if (immediateScope.VisibilityCulled())
-					{
-						draw.visibilityCulled = true;
-						singleton->frameMode.store(
-							SingletonFacadeFrameMode::Culled,
-							std::memory_order_release);
-					}
 					else
 					{
 						draw.runtimeFault = true;
@@ -4346,8 +4307,7 @@ namespace fonthook::vectorfont
 			{
 				EndNativeA8DirectFacadeSinglePacketCommandExecution(
 					directFacadeSinglePacketCommandIndex,
-					!draw.runtimeFault
-						&& (draw.drewPacket || draw.visibilityCulled),
+					!draw.runtimeFault && draw.drewPacket,
 					draw.drewPacket);
 			}
 			if (draw.runtimeFault)
@@ -4772,7 +4732,7 @@ namespace fonthook::vectorfont
 							: commandSpanIndex)
 						: kInvalidNativeA8CommandIndex;
 				NativeDirectImmediateScope immediateScope(
-					facade, &payload, validationCommandIndex,
+					facade, validationCommandIndex,
 					commandExecution && !singleCommandExecution
 						? 0u : kInvalidNativeA8CommandIndex,
 					commandExecution, nullptr, nullptr,
@@ -4853,10 +4813,6 @@ namespace fonthook::vectorfont
 							FreeTypePerfCounter::CompositeDraw);
 					}
 				}
-				else if (immediateScope.VisibilityCulled())
-				{
-					draw.visibilityCulled = true;
-				}
 				else
 				{
 					draw.runtimeFault = true;
@@ -4908,8 +4864,7 @@ namespace fonthook::vectorfont
 			if (commandExecution)
 			{
 				const bool success =
-					!draw.runtimeFault
-						&& (draw.drewPacket || draw.visibilityCulled);
+					!draw.runtimeFault && draw.drewPacket;
 				endCommandExecution(success, draw.drewPacket);
 				if (!success && !draw.drewPacket
 					&& !draw.constantStateFault)
@@ -5734,11 +5689,6 @@ namespace fonthook::vectorfont
 			{
 				return;
 			}
-			if (ConsumeNativeA8LateVisibilityCull(shape))
-			{
-				context.visibilityCulled = true;
-				return;
-			}
 			State().originalRenderImmediate(shape, renderer);
 			context.drew = true;
 			if (!context.strictValidation
@@ -5781,11 +5731,6 @@ namespace fonthook::vectorfont
 			if (!context.validationPassed
 				&& context.strictValidation)
 			{
-				return;
-			}
-			if (ConsumeNativeA8LateVisibilityCull(shape))
-			{
-				context.visibilityCulled = true;
 				return;
 			}
 			if (!g_bEnableFreeTypeFontCrossTextBatch
