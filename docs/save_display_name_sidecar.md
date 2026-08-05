@@ -10,7 +10,7 @@ This avoids changing `SaveGameData::pName`, the actual load path, delete/rename 
 
 - `save_name.cpp/.h` have been removed. Their remaining useful sanitizer-hook behavior now lives in `save_display_name.cpp`.
 - `save_display_name.cpp` owns both the save-name sanitizer hook and the load-menu recognition hook.
-- The save-file builder call at `0x85053F` is also wrapped. External custom
+- The save-file builder call at `0x850545` is also wrapped. External custom
   save names (including Stewie Tweaks incremental saves) bypass the manual-save
   sanitizer at `0x8518BB`; when such a name contains high bytes, tNVSE applies
   the same vanilla-equivalent sanitizer before `0x850030` constructs the

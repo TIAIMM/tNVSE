@@ -31,7 +31,7 @@ namespace fonthook
 		// SaveGameManager::Save has already copied the supplied name into the
 		// save header before this call, but 0x850030 has not yet built the
 		// physical .fos path.  Replacing only this call preserves display text.
-		constexpr SIZE_T kCustomSaveFileBuildCallSite = 0x85053F;
+		constexpr SIZE_T kCustomSaveFileBuildCallSite = 0x850545;
 		constexpr SIZE_T kStockSaveFileBuild = 0x850030;
 
 		constexpr UInt32 kStoreMagic = 'SVDN';

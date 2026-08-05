@@ -35,10 +35,6 @@ configuration, dependency checks, globals, and native-call helpers stay at the
     predecessor's final sorted arrays directly in retail reverse order;
     `font_native_command_buffer.cpp` and instancing reuse the same readiness and
     resource epochs without changing stock barriers or fallback order.
-    `font_native_diagnostics.cpp` owns the bounded, logging-only D3D9 binding,
-    Tile-constant, ring-upload/packet-range, and final indexed-submit probes
-    used to compare direct and slot-27 draw paths without reading WRITEONLY GPU
-    buffers.
   - `vector`: FreeType configuration, direct encoded-unit layout, rasterization, and caches.
     Persistent-cache route and flush orchestration stays in
     `font_vector_persistent_cache.cpp`; bitmap records and glyph manifests are

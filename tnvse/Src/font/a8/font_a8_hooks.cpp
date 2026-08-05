@@ -1876,7 +1876,6 @@ namespace fonthook::vectorfont
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 triangleCount = 0;
-			UInt32 diagnosticId = 0;
 		};
 
 		void RecordNativeDirectDrawLiteFallback(
@@ -2170,11 +2169,6 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					NativeDirectDrawLiteDrawDeviceFailure);
 			}
-			LogNativeA8DirectDrawSubmissionDiagnostic(
-				submission.diagnosticId, submission.device,
-				submission.baseVertex, submission.vertexCount,
-				submission.triangleCount, bindingReady,
-				streamResult, indexResult, drawResult);
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::NativeDirectDrawLiteReplay);
 		}
@@ -2703,15 +2697,11 @@ namespace fonthook::vectorfont
 				: NativeSegmentConstantsStateRelation::Different;
 			const bool constantsStateReady = constantsRelation
 				== NativeSegmentConstantsStateRelation::Exact;
-			UInt32 constantsLiteDiagnosticResult =
-				std::numeric_limits<UInt32>::max();
 			bool constantsLiteApplied = false;
 			if (constantsStateReady && cleanupRequired)
 			{
 				const NativeTileConstantsLiteResult liteResult =
 					ApplyNativeTileConstantsLite(geometry, properties);
-				constantsLiteDiagnosticResult =
-					static_cast<UInt32>(liteResult);
 				constantsLiteApplied = liteResult
 					== NativeTileConstantsLiteResult::Applied;
 				if (constantsLiteApplied)
@@ -2731,8 +2721,6 @@ namespace fonthook::vectorfont
 					}
 				}
 			}
-			UInt32 translationLiteDiagnosticResult =
-				std::numeric_limits<UInt32>::max();
 			bool constantsTranslationLiteApplied = false;
 			if (constantsRelation
 				== NativeSegmentConstantsStateRelation::TranslationOnly)
@@ -2740,8 +2728,6 @@ namespace fonthook::vectorfont
 				const NativeTileConstantsTranslationLiteResult liteResult =
 					ApplyNativeTileConstantsTranslationLite(
 						geometry, properties, renderer, program.device);
-				translationLiteDiagnosticResult =
-					static_cast<UInt32>(liteResult);
 				constantsTranslationLiteApplied = liteResult
 					== NativeTileConstantsTranslationLiteResult::Applied
 					|| liteResult
@@ -2954,57 +2940,6 @@ namespace fonthook::vectorfont
 				BuildNativeDirectDrawLiteSubmission(
 					geometry, renderer, properties, program, command,
 					preparedBuffer, deviceState, directDrawLite);
-			const UInt32 drawDiagnosticId =
-				AcquireNativeA8DrawPathDiagnostic(command);
-			directDrawLite.diagnosticId = drawDiagnosticId;
-			NativeA8DrawPathDiagnosticContext drawDiagnosticContext;
-			drawDiagnosticContext.currentPass = currentPass;
-			drawDiagnosticContext.firstPass = firstPass;
-			drawDiagnosticContext.passStateReady = passStateReady;
-			drawDiagnosticContext.constantsKeyReady = constantsKeyReady;
-			drawDiagnosticContext.cleanupRequired = cleanupRequired;
-			drawDiagnosticContext.constantsRelation =
-				static_cast<UInt32>(constantsRelation);
-			drawDiagnosticContext.constantsLiteResult =
-				constantsLiteDiagnosticResult;
-			drawDiagnosticContext.translationLiteResult =
-				translationLiteDiagnosticResult;
-			if (constantsTranslationLiteApplied)
-			{
-				drawDiagnosticContext.constantsAction =
-					NativeA8DrawConstantsDiagnosticAction::TranslationLite;
-			}
-			else if (constantsStateReady && !cleanupRequired)
-			{
-				drawDiagnosticContext.constantsAction =
-					NativeA8DrawConstantsDiagnosticAction::ExactReuse;
-			}
-			else if (constantsLiteApplied)
-			{
-				drawDiagnosticContext.constantsAction =
-					NativeA8DrawConstantsDiagnosticAction::ConstantsLite;
-			}
-			else
-			{
-				drawDiagnosticContext.constantsAction =
-					NativeA8DrawConstantsDiagnosticAction::RetailFull;
-			}
-			if (s_nativeDirectImmediateContext)
-			{
-				drawDiagnosticContext.commandSpanIndex =
-					s_nativeDirectImmediateContext->commandSpanIndex;
-				drawDiagnosticContext.commandOffset =
-					s_nativeDirectImmediateContext->commandOffset;
-				drawDiagnosticContext.commandKind = static_cast<UInt32>(
-					s_nativeDirectImmediateContext->commandKind);
-			}
-			const bool directBindingWasCached =
-				directDrawFailure == NativeDirectDrawLiteFallback::None
-				&& directDrawLite.deviceState
-				&& directDrawLite.deviceState->geometryBindingReady
-				&& SameSegmentGeometryBinding(
-					directDrawLite.deviceState->geometryBinding,
-					directDrawLite.binding);
 			const bool instancingLeader =
 				g_bEnableFreeTypeFontCrossTextBatch
 				&& s_nativeCrossTextBatchRuntime
@@ -3025,19 +2960,7 @@ namespace fonthook::vectorfont
 					directDrawArmed = directDrawScope.Active();
 					if (directDrawArmed)
 					{
-						LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
-							NativeA8DrawPathDiagnosticStage::DirectBefore,
-							geometry, properties, renderer, program, command,
-							drawDiagnosticContext, preparedBuffer,
-							static_cast<UInt32>(directDrawFailure),
-							directBindingWasCached);
 						A8RenderImmediateAlt(geometry, nullptr, renderer);
-						LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
-							NativeA8DrawPathDiagnosticStage::DirectAfter,
-							geometry, properties, renderer, program, command,
-							drawDiagnosticContext, preparedBuffer,
-							static_cast<UInt32>(directDrawFailure),
-							directBindingWasCached);
 					}
 				}
 				if (!directDrawArmed)
@@ -3048,21 +2971,11 @@ namespace fonthook::vectorfont
 							: directDrawFailure);
 					if (deviceState)
 						deviceState->geometryBindingReady = false;
-					LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
-						NativeA8DrawPathDiagnosticStage::Slot27Before,
-						geometry, properties, renderer, program, command,
-						drawDiagnosticContext, preparedBuffer,
-						static_cast<UInt32>(directDrawFailure), false);
 					reinterpret_cast<PrepareGeometryFn>(
 						program.prepareGeometry)(
 							shader, geometry, 0,
 							preparedBuffer, properties);
 					A8RenderImmediateAlt(geometry, nullptr, renderer);
-					LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
-						NativeA8DrawPathDiagnosticStage::Slot27After,
-						geometry, properties, renderer, program, command,
-						drawDiagnosticContext, preparedBuffer,
-						static_cast<UInt32>(directDrawFailure), false);
 				}
 				const bool verifiedPost =
 					(program.standardV2SlotProofs
@@ -3135,22 +3048,11 @@ namespace fonthook::vectorfont
 						GlyphInstancingDirectDrawFallback);
 					if (deviceState)
 						deviceState->geometryBindingReady = false;
-					LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
-						NativeA8DrawPathDiagnosticStage::Slot27Before,
-						geometry, properties, renderer, program, command,
-						drawDiagnosticContext, preparedBuffer,
-						static_cast<UInt32>(directDrawFailure), false);
 					reinterpret_cast<PrepareGeometryFn>(
 						program.prepareGeometry)(
 							shader, geometry, 0,
 							preparedBuffer, properties);
 					A8RenderImmediateAlt(geometry, nullptr, renderer);
-					LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
-						NativeA8DrawPathDiagnosticStage::
-							InstancingFallbackAfter,
-						geometry, properties, renderer, program, command,
-						drawDiagnosticContext, preparedBuffer,
-						static_cast<UInt32>(directDrawFailure), false);
 				}
 				else
 				{
@@ -3162,19 +3064,7 @@ namespace fonthook::vectorfont
 						directDrawArmed = directDrawScope.Active();
 						if (directDrawArmed)
 						{
-							LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
-								NativeA8DrawPathDiagnosticStage::DirectBefore,
-								geometry, properties, renderer, program, command,
-								drawDiagnosticContext, preparedBuffer,
-								static_cast<UInt32>(directDrawFailure),
-								directBindingWasCached);
 							A8RenderImmediateAlt(geometry, nullptr, renderer);
-							LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
-								NativeA8DrawPathDiagnosticStage::DirectAfter,
-								geometry, properties, renderer, program, command,
-								drawDiagnosticContext, preparedBuffer,
-								static_cast<UInt32>(directDrawFailure),
-								directBindingWasCached);
 						}
 					}
 					if (!directDrawArmed)
@@ -3186,22 +3076,12 @@ namespace fonthook::vectorfont
 								: directDrawFailure);
 						if (deviceState)
 							deviceState->geometryBindingReady = false;
-						LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
-							NativeA8DrawPathDiagnosticStage::Slot27Before,
-							geometry, properties, renderer, program, command,
-							drawDiagnosticContext, preparedBuffer,
-							static_cast<UInt32>(directDrawFailure), false);
 						reinterpret_cast<PrepareGeometryFn>(
 							program.prepareGeometry)(
 								shader, geometry, 0,
 								preparedBuffer, properties);
 						A8RenderImmediateAlt(
 							geometry, nullptr, renderer);
-						LogNativeA8DrawPathDiagnostic(drawDiagnosticId,
-							NativeA8DrawPathDiagnosticStage::Slot27After,
-							geometry, properties, renderer, program, command,
-							drawDiagnosticContext, preparedBuffer,
-							static_cast<UInt32>(directDrawFailure), false);
 					}
 				}
 			}

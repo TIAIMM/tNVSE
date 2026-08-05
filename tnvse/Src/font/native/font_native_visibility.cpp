@@ -597,8 +597,6 @@ namespace fonthook::vectorfont
 			return NativeA8VisibilityCull::None;
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::VisibilityPreflightClipCheck);
-		FreeTypePerfScope clipProofPerf(
-			FreeTypePerfPhase::PreflightClipTotal);
 		ClipTransformBuildResult transformBuildResult =
 			ClipTransformBuildResult::Unavailable;
 		auto failOpen = [&]()
@@ -625,25 +623,17 @@ namespace fonthook::vectorfont
 		if (!tile)
 			return failOpen();
 		D3DXMATRIX world = {};
-		{
-			FreeTypePerfScope worldPerf(
-				FreeTypePerfPhase::PreflightClipWorld);
-			if (!BuildRetailTileWorldMatrix(facade->m_kWorld, world))
-				return failOpen();
-		}
+		if (!BuildRetailTileWorldMatrix(facade->m_kWorld, world))
+			return failOpen();
 		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
-		ClipProofResult proof;
-		{
-			FreeTypePerfScope proofPerf(
-				FreeTypePerfPhase::PreflightClipProof);
-			// This is the final stock-visible model bound. Facade payload vertices are
-			// relative and apply geometryOrigin during replay; stock-layout vertices
-			// are already engine-owned full geometry. Both representations publish
-			// the same full bound before reaching this proof.
-			proof = EvaluateBoundClip(data->m_kBound, facade, *tile,
-				*renderer, world, g_bEnableFreeTypeFontStructuralFastPaths,
-				reason, &transformBuildResult);
-		}
+		// This is the final stock-visible model bound. Facade payload vertices are
+		// relative and apply geometryOrigin during replay; stock-layout vertices
+		// are already engine-owned full geometry. Both representations publish
+		// the same full bound before reaching this proof.
+		const ClipProofResult proof = EvaluateBoundClip(data->m_kBound,
+			facade, *tile, *renderer, world,
+			g_bEnableFreeTypeFontStructuralFastPaths,
+			reason, &transformBuildResult);
 		RecordClipTransformBuildResult(transformBuildResult);
 		if (proof != ClipProofResult::Outside)
 			return NativeA8VisibilityCull::None;

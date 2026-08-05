@@ -545,9 +545,6 @@ namespace fonthook::vectorfont
 		FrameRouteStockRender,
 		RegisterRoute,
 		DispatchRoute,
-		PreflightClipTotal,
-		PreflightClipWorld,
-		PreflightClipProof,
 		PreflightClipHonorGate,
 		Count,
 	};

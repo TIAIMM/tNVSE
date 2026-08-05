@@ -1136,7 +1136,7 @@ geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
 facades, total payload packets, single- and multi-packet artifacts, direct/span/
 packet-loop frames, topology switches, fallbacks, partial faults, and the
 invariant sibling_shapes=0. The build identity is
-`accumulator-prep-tail-v40`. It
+`diagnostic-prune-v41`. It
 retains the v23 shell-shader restoration fix, v24 logging cleanup, the
 no-Sort-hook single-facade architecture, the v30 linear equal-depth repair, and
 the v31 direct-Sort-array/preflight-only cleanup.
@@ -1153,21 +1153,22 @@ ABI; the existing facade shaders and fallback ABI remain unchanged.
 With rendering logging enabled, accumulator preparation is now measured only
 from sorted-topology capture through sorted-state publication; it no longer
 overlaps the separately reported stock `RenderAlphaGeometry` interval. The
-`tnvse_freetype_accumulator_prep_timing` line splits that preparation into
+`tnvse_freetype_accumulator_prep_phases` splits that preparation into
 topology, metadata acquisition, facade visibility/preflight, sorted-ring
 preparation, singleton preparation, command construction, and final state
 publication. Each subphase uses one coarse scope per accumulator traversal,
 not per-item sampling.
 
-The v40 tail diagnostics preserve that line for existing parsers and add
-boundary-oriented lines. `tnvse_freetype_accumulator_prep_tail` reports the
+The v40 tail diagnostics add boundary-oriented lines.
+`tnvse_freetype_accumulator_prep_tail` reports the
 whole prep plus scratch reset and the previously unmeasured final-transform /
 scissor visibility stage. `tnvse_freetype_accumulator_prep_tail_detail` splits
 the former facade aggregate into runtime readiness, lookup/topology preparation,
 and the per-facade preflight loop. Both include mean, median, P95, P99, and an
 exact interval maximum; histogram percentiles remain conservative bucket upper
-bounds. `tnvse_freetype_accumulator_prep_tail_existing` adds P99 and exact
-maximum values for the older subphases. Finally,
+bounds. In v41 the former prep timing and tail-existing lines are consolidated
+as `tnvse_freetype_accumulator_prep_phases`, which reports count, mean, P95,
+P99, and exact maximum without duplicating the same phases. Finally,
 `tnvse_freetype_accumulator_prep_tail_workload` counts prep traversals at or
 above 250, 500, 1000, and 2000 microseconds and snapshots the worst traversal's
 item, facade, visible-survivor, culled, payload, singleton, and command-frame
@@ -1176,6 +1177,14 @@ counts. The tail snapshot locks only after the 250-microsecond threshold and
 durations from that same worst traversal, plus the residual time not attributed
 to a named coarse scope. All of these diagnostics remain disabled with FreeType
 rendering logging.
+
+The v41 diagnostic cleanup also retires the initial native draw-path D3D state
+snapshots and per-upload sorted-dynamic-batch messages after their binding,
+shader, constant, and residency invariants were established. Their aggregate
+failure, upload, byte, discard, replay, and fallback counters remain. The
+per-facade clip total/world/proof QPC scopes are removed because the enclosing
+accumulator visibility scope now supplies the actionable cost; transform
+hit/miss and cull counters remain on `tnvse_freetype_preflight_clip_cull`.
 
 ### Retained text command buffer
 
@@ -1278,20 +1287,10 @@ second renderer lock or any Present/Reset hook.
 
 With rendering diagnostics enabled, `tnvse_build_identity` records the actual
 loaded DLL path, size, write time, and an FNV-1a file fingerprint. The resolved
-missing-text lifecycle tracer is no longer compiled into the runtime path.
-Bounded `tnvse_freetype_native_draw_diag` pairs compare selected long-text draws before
-and after direct-draw-lite or slot 27, including stream frequencies, both
-streams, IB/declaration, VS/PS, and the device's VS c0-c3/PS c0 against a freshly
-computed retail-equivalent WVP and TileColor. The paired
-`tnvse_freetype_native_command_diag` record identifies the command span/offset
-and the exact constants action (`exact-reuse`, `constants-lite`,
-`translation-lite`, or `retail-full`), while
-`tnvse_freetype_native_ring_diag` correlates the immutable CPU payload and
-packet hashes with the successful ring-upload record, resource/upload epochs,
-published vertex interval, and canonical-index range. The diagnostic does not
-lock or read the WRITEONLY D3D9 vertex buffer. A direct-draw-lite submission
-also emits `tnvse_freetype_native_dip_diag` with the actual DIP arguments and
-the stream/index/draw HRESULTs under the same bounded id. Instancing admission and execution
+missing-text lifecycle tracer and the completed native draw, command, ring, and
+indexed-submit state probes are no longer compiled into the runtime path.
+Aggregate binding, resource, upload, draw, and fallback counters remain
+authoritative. Instancing admission and execution
 failures emit separately bounded `tnvse_freetype_glyph_instancing_diag` records
 with their concrete contract, member, resource, upload, or device operation.
 The aggregate instancing line separates `begin_preflight` from

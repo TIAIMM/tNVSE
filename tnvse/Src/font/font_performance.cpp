@@ -597,7 +597,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu",
+			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu",
 			counterValue(FreeTypePerfCounter::VisibilityPreflightClipCheck),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipCulled),
@@ -610,7 +610,17 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipHonored),
 			counterValue(FreeTypePerfCounter::
-				VisibilityPreflightClipRevoked));
+				VisibilityPreflightClipRevoked),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipTransformHit),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipTransformMiss),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipTransformIdentityMiss),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipTransformKeyMiss),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipTransformUnavailable));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_static_promotion: deferred_lifecycle=%llu deferred_upload_history=%llu deferred_budget=%llu deferred_retry=%llu cold_evictions=%llu cold_evicted_bytes=%llu all_static_fast_exit=%llu lease_payload_validations_elided=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::
@@ -1389,12 +1399,6 @@ namespace fonthook::vectorfont
 			ConsumeDurationSummary(FreeTypePerfPhase::RegisterRoute);
 		const DurationSummary dispatchRoute =
 			ConsumeDurationSummary(FreeTypePerfPhase::DispatchRoute);
-		const DurationSummary preflightClipTotal =
-			ConsumeDurationSummary(FreeTypePerfPhase::PreflightClipTotal);
-		const DurationSummary preflightClipWorld =
-			ConsumeDurationSummary(FreeTypePerfPhase::PreflightClipWorld);
-		const DurationSummary preflightClipProof =
-			ConsumeDurationSummary(FreeTypePerfPhase::PreflightClipProof);
 		const DurationSummary preflightClipHonorGate =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::PreflightClipHonorGate);
@@ -1518,29 +1522,36 @@ namespace fonthook::vectorfont
 			frameRouteStockRender.medianMicroseconds,
 			frameRouteStockRender.p95Microseconds);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_accumulator_prep_timing: topology_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f metadata_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f facades_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f ring_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f singletons_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f command_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f publish_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f",
+			"tnvse_freetype_accumulator_prep_phases: topology_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f metadata_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f facades_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f ring_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f singletons_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f command_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f publish_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f",
 			framePrepTopology.count, framePrepTopology.meanMicroseconds,
-			framePrepTopology.medianMicroseconds,
 			framePrepTopology.p95Microseconds,
+			framePrepTopology.p99Microseconds,
+			framePrepTopology.maximumMicroseconds,
 			framePrepMetadata.count, framePrepMetadata.meanMicroseconds,
-			framePrepMetadata.medianMicroseconds,
 			framePrepMetadata.p95Microseconds,
+			framePrepMetadata.p99Microseconds,
+			framePrepMetadata.maximumMicroseconds,
 			framePrepFacades.count, framePrepFacades.meanMicroseconds,
-			framePrepFacades.medianMicroseconds,
 			framePrepFacades.p95Microseconds,
+			framePrepFacades.p99Microseconds,
+			framePrepFacades.maximumMicroseconds,
 			framePrepRing.count, framePrepRing.meanMicroseconds,
-			framePrepRing.medianMicroseconds,
 			framePrepRing.p95Microseconds,
+			framePrepRing.p99Microseconds,
+			framePrepRing.maximumMicroseconds,
 			framePrepSingletons.count,
 			framePrepSingletons.meanMicroseconds,
-			framePrepSingletons.medianMicroseconds,
 			framePrepSingletons.p95Microseconds,
+			framePrepSingletons.p99Microseconds,
+			framePrepSingletons.maximumMicroseconds,
 			commandBuild.count, commandBuild.meanMicroseconds,
-			commandBuild.medianMicroseconds,
 			commandBuild.p95Microseconds,
+			commandBuild.p99Microseconds,
+			commandBuild.maximumMicroseconds,
 			framePrepPublish.count, framePrepPublish.meanMicroseconds,
-			framePrepPublish.medianMicroseconds,
-			framePrepPublish.p95Microseconds);
+			framePrepPublish.p95Microseconds,
+			framePrepPublish.p99Microseconds,
+			framePrepPublish.maximumMicroseconds);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_accumulator_prep_tail: prep_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f reset_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f visibility_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f",
 			frameRoutePrep.count, frameRoutePrep.meanMicroseconds,
@@ -1578,22 +1589,6 @@ namespace fonthook::vectorfont
 			framePrepFacadeLoop.p95Microseconds,
 			framePrepFacadeLoop.p99Microseconds,
 			framePrepFacadeLoop.maximumMicroseconds);
-		FreeTypeFontDebugLog(
-			"tnvse_freetype_accumulator_prep_tail_existing: topology_p99_us=%.3f max_us=%.3f metadata_p99_us=%.3f max_us=%.3f facades_p99_us=%.3f max_us=%.3f ring_p99_us=%.3f max_us=%.3f singletons_p99_us=%.3f max_us=%.3f command_p99_us=%.3f max_us=%.3f publish_p99_us=%.3f max_us=%.3f",
-			framePrepTopology.p99Microseconds,
-			framePrepTopology.maximumMicroseconds,
-			framePrepMetadata.p99Microseconds,
-			framePrepMetadata.maximumMicroseconds,
-			framePrepFacades.p99Microseconds,
-			framePrepFacades.maximumMicroseconds,
-			framePrepRing.p99Microseconds,
-			framePrepRing.maximumMicroseconds,
-			framePrepSingletons.p99Microseconds,
-			framePrepSingletons.maximumMicroseconds,
-			commandBuild.p99Microseconds,
-			commandBuild.maximumMicroseconds,
-			framePrepPublish.p99Microseconds,
-			framePrepPublish.maximumMicroseconds);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_accumulator_prep_tail_workload: over_250us=%llu over_500us=%llu over_1000us=%llu over_2000us=%llu worst_us=%.3f items=%u facades=%u survivors=%u culled=%u payloads=%u singletons=%u command=%u",
 			accumulatorPrepTail.counts[0],
@@ -1638,27 +1633,6 @@ namespace fonthook::vectorfont
 			preflightClipHonorGate.count,
 			preflightClipHonorGate.medianMicroseconds,
 			preflightClipHonorGate.p95Microseconds);
-		FreeTypeFontDebugLog(
-			"tnvse_freetype_preflight_clip_timing: total_n=%llu median_us=%.3f p95_us=%.3f world_n=%llu median_us=%.3f p95_us=%.3f proof_n=%llu median_us=%.3f p95_us=%.3f transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu",
-			preflightClipTotal.count,
-			preflightClipTotal.medianMicroseconds,
-			preflightClipTotal.p95Microseconds,
-			preflightClipWorld.count,
-			preflightClipWorld.medianMicroseconds,
-			preflightClipWorld.p95Microseconds,
-			preflightClipProof.count,
-			preflightClipProof.medianMicroseconds,
-			preflightClipProof.p95Microseconds,
-			counterValue(FreeTypePerfCounter::
-				VisibilityPreflightClipTransformHit),
-			counterValue(FreeTypePerfCounter::
-				VisibilityPreflightClipTransformMiss),
-			counterValue(FreeTypePerfCounter::
-				VisibilityPreflightClipTransformIdentityMiss),
-			counterValue(FreeTypePerfCounter::
-				VisibilityPreflightClipTransformKeyMiss),
-			counterValue(FreeTypePerfCounter::
-				VisibilityPreflightClipTransformUnavailable));
 	}
 }
 
