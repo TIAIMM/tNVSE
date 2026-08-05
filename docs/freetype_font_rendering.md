@@ -960,16 +960,63 @@ at draw time records a runtime fallback and executes the retained payload throug
 the established native packet path. Multi-page text, true-SDF, mixed spread or
 scale, and aggressive precomposed ARGB are therefore unchanged.
 The target changes neither atlas dimensions nor persistent cache format and
-does not enable NPOT.
+does not enable NPOT. Its preparation deliberately asks the stock object path
+to establish properties and bounds with geometry precaching disabled. After
+the isolated tNVSE TileShader is published, tNVSE requests the target 40-byte
+declaration through the renderer's virtual `PrecacheGeometry` entry. This
+preserves renderer-queue and NVTF synchronization detours instead of bypassing
+them through the retail function body. An accepted asynchronous request keeps
+the shape alive and temporarily fails open through the retained payload until
+the target buffer becomes ready; a request rejected before queue ownership is
+established falls back at creation. Callers that explicitly defer
+`PrepareObject` remain on the existing facade route.
+
+The precache handoff separates CPU packing input from the resident GPU draw
+contract. Retail `BSShaderManager::PrepareGeometry` at `0xB579E0` gives ordinary
+static geometry the `0x33` keep mask unless optional keep bits are requested.
+After upload, `NiDX9Renderer::PerformPrecache` at `0xE74120` reaches the cleanup
+at `0xE6FA90`, which calls the retail `NiGeometryData::Replace` implementation at
+`0xA670C0`. With `KEEP_COLOR` and `KEEP_UV` absent, that cleanup frees the CPU
+color/UV arrays and changes the low texture-set count from three to two while
+leaving the already packed 40-byte vertex buffer intact. The symbolized test
+executable independently names the second `PrepareObject` argument
+`abSkipPreCache`; its renderer is not used as evidence for the Win32 D3D9
+cleanup details. tNVSE therefore validates position, color, three UV sets, and
+indices before handing the shape to `PrecacheGeometry`, but draw-time readiness
+uses only the live shader generation plus buffer declaration, stream, stride,
+and vertex count. It does not retain three CPU UV arrays merely to satisfy a
+post-upload check.
+
+Shader Loader can publish an early generation while startup text is being
+created and then publish the normal initialized generation on the same device.
+The old 40-byte buffer remains valid, but its D3D declaration object has a
+different address. Each generation now carries an immutable allow-list of exact
+tNVSE stock-layout declarations owned by earlier generations on the same
+renderer, device, and device-reset epoch. This admits that zero-conversion
+reuse without COM declaration queries in the draw loop. A device reset advances
+the epoch, so an old-device declaration is never admitted by address or by
+layout resemblance; unknown declarations still fail open to the retained
+52-byte payload route.
 
 `tnvse_freetype_stock_layout_sdf` reports strictly eligible attempts, successful
 creations, creation fallbacks, direct draws, final-bound culls, runtime
-fallbacks, and created vertices. In a validated run, `created` must not exceed
-`eligible`, while `draws + culls + runtime_fallback` describes dispatch outcomes
-for live target shapes over the reporting interval. The same line exposes
+fallbacks, and created vertices. `precache_accepted`, `precache_immediate`,
+`precache_deferred`, and `precache_rejected` distinguish renderer acceptance
+from immediate buffer readiness. In a validated run, `created` must not exceed
+`eligible`, `precache_accepted = precache_immediate + precache_deferred`, and
+`draws + culls + runtime_fallback` describes dispatch
+outcomes for live target shapes over the reporting interval. The same line exposes
 `shifted_eligible`, `shifted_created`, `shifted_draws`, and
 `shifted_runtime_fallback` so a log can prove that real offset-shadow text is
 using the target rather than merely matching a non-shadow mask.
+`postupload_source_retired_ready_checks` proves that expected CPU cleanup no
+longer blocks the target, while `prior_generation_decl_ready_checks` proves
+same-device startup-generation buffers were reused. The one-shot
+`tnvse_freetype_stock_layout_sdf_postpack` diagnostic records the observed CPU
+source state, keep mask, declaration class, device epoch, and stride. A new run
+should show nonzero direct `draws` and a sharp reduction in `runtime_fallback`;
+the remaining fallbacks must have a real shader/buffer contract failure rather
+than `sourceTextureSets=2` alone.
 
 The dynamic ring retains its two-maximum-payload capacity, while the static VB
 starts at approximately 4 MiB instead of reserving its approximately 12 MiB
@@ -1089,7 +1136,7 @@ geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
 facades, total payload packets, single- and multi-packet artifacts, direct/span/
 packet-loop frames, topology switches, fallbacks, partial faults, and the
 invariant sibling_shapes=0. The build identity is
-`stock-layout-shadow-sdf-v37`. It
+`stock-layout-postpack-v39`. It
 retains the v23 shell-shader restoration fix, v24 logging cleanup, the
 no-Sort-hook single-facade architecture, the v30 linear equal-depth repair, and
 the v31 direct-Sort-array/preflight-only cleanup.

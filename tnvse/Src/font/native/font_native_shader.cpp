@@ -110,6 +110,10 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kNativeVtableMagic = 0x35544D4E; // "NMT5"
 		inline constexpr UInt32 kShaderRefreshMessage = 0;
 		inline constexpr DWORD kInitializationRetryMilliseconds = 1000;
+		inline constexpr UInt32 kStockLayoutVertexStride =
+			3u * sizeof(float) + 2u * sizeof(float) + sizeof(UInt32)
+				+ 4u * sizeof(float);
+		static_assert(kStockLayoutVertexStride == 40u);
 		inline constexpr UInt8 kStaticCompositeLayerMaskFirst = 8;
 		inline constexpr size_t kStaticCompositeLayerMaskCount = 8;
 		inline constexpr size_t kStaticCompositeShiftCount = 2;
@@ -272,6 +276,7 @@ namespace fonthook::vectorfont
 		struct NativeShaderGeneration
 		{
 			UInt32 id = 0;
+			UInt32 deviceEpoch = 0;
 			NiDX9Renderer* renderer = nullptr;
 			IDirect3DDevice9* device = nullptr;
 			NiDX9ShaderDeclarationPtr declaration;
@@ -279,6 +284,13 @@ namespace fonthook::vectorfont
 			NiD3DVertexShaderPtr vertexShader;
 			NiDX9ShaderDeclarationPtr stockLayoutDeclaration;
 			IDirect3DVertexDeclaration9* stockLayoutD3DDeclaration = nullptr;
+			// Shader Loader refreshes may publish a new generation while geometry
+			// uploaded by an earlier generation remains resident.  Generations are
+			// process-lifetime objects, so these exact same-device declarations remain
+			// owned and form a safe immutable compatibility set.  Device reset advances
+			// deviceEpoch and deliberately prevents reuse across that boundary.
+			std::vector<IDirect3DVertexDeclaration9*>
+				compatibleStockLayoutD3DDeclarations;
 			NiD3DVertexShaderPtr stockLayoutVertexShader;
 			bool stockLayoutReady = false;
 			NiD3DVertexShaderPtr instancedVertexShader;
@@ -325,6 +337,7 @@ namespace fonthook::vectorfont
 		std::mutex s_initializationMutex;
 		std::vector<NativeShaderGeneration*> s_processGenerations;
 		UInt32 s_nextGeneration = 1;
+		std::atomic<UInt32> s_deviceEpoch = 1;
 		DWORD s_lastInitializationAttempt = 0;
 		std::atomic<bool> s_invalidVtableLogged = false;
 		std::atomic<UInt32> s_compositeProfileLogCount = 0;
@@ -1663,6 +1676,8 @@ namespace fonthook::vectorfont
 			}
 
 			auto generation = std::make_unique<NativeShaderGeneration>();
+			generation->deviceEpoch = s_deviceEpoch.load(
+				std::memory_order_acquire);
 			generation->renderer = renderer;
 			generation->device = device;
 			generation->createPixelShader = createPS;
@@ -1806,12 +1821,40 @@ namespace fonthook::vectorfont
 				generation->stockLayoutVertexShader->m_hDecl =
 					generation->stockLayoutD3DDeclaration;
 				generation->stockLayoutReady = true;
+				for (NativeShaderGeneration* previous : s_processGenerations)
+				{
+					if (!previous || !previous->stockLayoutReady
+						|| previous->deviceEpoch != generation->deviceEpoch
+						|| previous->renderer != renderer
+						|| previous->device != device
+						|| !previous->stockLayoutD3DDeclaration)
+					{
+						continue;
+					}
+					IDirect3DVertexDeclaration9* declaration =
+						previous->stockLayoutD3DDeclaration;
+					if (declaration != generation->stockLayoutD3DDeclaration
+						&& std::find(
+							generation->compatibleStockLayoutD3DDeclarations.begin(),
+							generation->compatibleStockLayoutD3DDeclarations.end(),
+							declaration)
+							== generation->compatibleStockLayoutD3DDeclarations.end())
+					{
+						generation->compatibleStockLayoutD3DDeclarations.push_back(
+							declaration);
+					}
+				}
 			}
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: stock-layout SDF generation status=%s ready=%u stride=40 vertexConstant=c%u",
+				"tnvse_freetype_native: stock-layout SDF generation status=%s ready=%u stride=%u vertexConstant=c%u declaration=%p compatiblePrevious=%u deviceEpoch=%u",
 				stockLayoutStatus,
 				generation->stockLayoutReady ? 1u : 0u,
-				kNativeA8StockLayoutGlyphConstantRegister);
+				kStockLayoutVertexStride,
+				kNativeA8StockLayoutGlyphConstantRegister,
+				generation->stockLayoutD3DDeclaration,
+				static_cast<UInt32>(
+					generation->compatibleStockLayoutD3DDeclarations.size()),
+				generation->deviceEpoch);
 			if (!g_bEnableFreeTypeFontCrossTextBatch)
 			{
 				generation->instancingStatus = "disabled-by-config";
@@ -1876,6 +1919,8 @@ namespace fonthook::vectorfont
 		{
 			if (beforeReset)
 			{
+				const UInt32 deviceEpoch = s_deviceEpoch.fetch_add(
+					1u, std::memory_order_acq_rel) + 1u;
 				s_resetInProgress.store(true, std::memory_order_release);
 				InvalidateNativeA8RingResources(
 					NativeA8FallbackReason::DeviceReset);
@@ -1888,8 +1933,8 @@ namespace fonthook::vectorfont
 						NativeA8CommandFallback::Generation);
 				}
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: generation-invalidated reason=device-reset generation=%u phase=release; dynamic VB/IB ring released",
-					current ? current->id : 0);
+					"tnvse_freetype_native: generation-invalidated reason=device-reset generation=%u deviceEpoch=%u phase=release; dynamic VB/IB ring released",
+					current ? current->id : 0, deviceEpoch);
 				return true;
 			}
 
@@ -2382,28 +2427,254 @@ namespace fonthook::vectorfont
 		return profile->shader;
 	}
 
-	bool IsNativeA8StockLayoutShapeReady(const NiTriShape* shape,
-		TileShader* shader)
+	namespace
 	{
-		if (!shape || !shader || shape->GetShader() != shader)
+		std::atomic<UInt32> s_stockLayoutReadinessLoggedMask{ 0 };
+		std::atomic<UInt32> s_stockLayoutPostpackLoggedMask{ 0 };
+
+		enum StockLayoutReadinessFailure : UInt32
+		{
+			kMissingShapeOrShader = 1u << 0,
+			kShaderMismatch = 1u << 1,
+			kProfileMismatch = 1u << 2,
+			kGenerationMismatch = 1u << 3,
+			kMissingModelData = 1u << 4,
+			kMissingBuffer = 1u << 5,
+			kDeclarationMismatch = 1u << 6,
+			kStreamMismatch = 1u << 7,
+			kStrideMismatch = 1u << 8,
+			kVertexCountMismatch = 1u << 9,
+		};
+
+		enum class StockLayoutDeclarationCompatibility : UInt8
+		{
+			Missing = 0,
+			CurrentGeneration,
+			CompatiblePreviousGeneration,
+			Mismatch,
+		};
+
+		StockLayoutDeclarationCompatibility
+		ClassifyStockLayoutDeclaration(const NativeShaderGeneration* generation,
+			const NiGeometryBufferData* buffer)
+		{
+			if (!generation || !buffer || !buffer->m_hDeclaration
+				|| !generation->stockLayoutD3DDeclaration)
+			{
+				return StockLayoutDeclarationCompatibility::Missing;
+			}
+			auto* declaration = static_cast<IDirect3DVertexDeclaration9*>(
+				buffer->m_hDeclaration);
+			if (declaration == generation->stockLayoutD3DDeclaration)
+			{
+				return StockLayoutDeclarationCompatibility::CurrentGeneration;
+			}
+			if (std::find(
+					generation->compatibleStockLayoutD3DDeclarations.begin(),
+					generation->compatibleStockLayoutD3DDeclarations.end(),
+					declaration)
+				!= generation->compatibleStockLayoutD3DDeclarations.end())
+			{
+				return StockLayoutDeclarationCompatibility::
+					CompatiblePreviousGeneration;
+			}
+			return StockLayoutDeclarationCompatibility::Mismatch;
+		}
+
+		bool IsNativeA8StockLayoutShapeReadyImpl(const NiTriShape* shape,
+			TileShader* shader, bool logFailure)
+		{
+			const bool hasShapeAndShader = shape && shader;
+			const bool shaderMatches = hasShapeAndShader
+				&& shape->GetShader() == shader;
+			NativeTileVtableBlock* block = shader
+				? RecoverNativeVtableBlock(shader) : nullptr;
+			NativeShaderProfile* profile = block ? block->profile : nullptr;
+			NativeShaderGeneration* generation = profile
+				? profile->owner : nullptr;
+			const NiTriShapeData* data = shape ? shape->GetModelData() : nullptr;
+			const NiGeometryBufferData* buffer = data
+				? data->m_pkBuffData : nullptr;
+			const bool profileMatches = profile && profile->shader == shader
+				&& profile->key.stockLayoutSdf;
+			const bool generationMatches = generation
+				&& generation->stockLayoutReady
+				&& GenerationMatchesCurrentDevice(generation);
+			const UInt32 textureSetCount = data
+				? data->m_usDataFlags & NiGeometryData::TEXTURE_SET_MASK : 0u;
+			const UInt32 streamCount = buffer ? buffer->m_uiStreamCount : 0u;
+			const UInt32 stride = buffer && buffer->m_puiVertexStride
+				&& streamCount ? buffer->m_puiVertexStride[0] : 0u;
+			IDirect3DVertexDeclaration9* expectedDeclaration = generation
+				? generation->stockLayoutD3DDeclaration : nullptr;
+			const StockLayoutDeclarationCompatibility declarationCompatibility =
+				ClassifyStockLayoutDeclaration(generation, buffer);
+			const bool declarationMatches = declarationCompatibility
+				== StockLayoutDeclarationCompatibility::CurrentGeneration
+				|| declarationCompatibility == StockLayoutDeclarationCompatibility::
+					CompatiblePreviousGeneration;
+			// Retail 0xE6FA90 -> 0xA670C0 intentionally retires CPU color/UV
+			// sources after a static buffer upload when PrepareGeometry's keep mask
+			// omits KEEP_COLOR/KEEP_UV.  Those pointers and texture-set flags are
+			// therefore diagnostic source state, never a draw-time GPU contract.
+			const bool sourceRetired = data
+				&& (textureSetCount < 3u || !data->m_pkColor
+					|| !data->m_pkTexture);
+			const bool ready = hasShapeAndShader && shaderMatches
+				&& profileMatches && generationMatches && data
+				&& buffer && declarationMatches
+				&& streamCount == 1u && stride == kStockLayoutVertexStride
+				&& buffer->m_uiVertCount >= data->m_usVertices;
+			if (ready)
+			{
+				UInt32 observations = 0;
+				if (sourceRetired)
+				{
+					observations |= 1u;
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						StockLayoutSdfPostUploadSourceRetiredReady);
+				}
+				if (declarationCompatibility == StockLayoutDeclarationCompatibility::
+					CompatiblePreviousGeneration)
+				{
+					observations |= 2u;
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						StockLayoutSdfPriorGenerationDeclarationReady);
+				}
+				if (observations && logFailure)
+				{
+					const UInt32 previous = s_stockLayoutPostpackLoggedMask.fetch_or(
+						observations, std::memory_order_acq_rel);
+					const UInt32 newlyObserved = observations & ~previous;
+					if (newlyObserved)
+					{
+						gLog.FormattedMessage(
+							"tnvse_freetype_stock_layout_sdf_postpack: observed=0x%08X new=0x%08X shape=%p generation=%u deviceEpoch=%u sourceTextureSets=%u keepFlags=0x%02X color=%p texture=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u stride=%u",
+							observations, newlyObserved, shape,
+							generation ? generation->id : 0u,
+							generation ? generation->deviceEpoch : 0u,
+							textureSetCount,
+							data ? static_cast<UInt32>(data->m_ucKeepFlags) : 0u,
+							data ? data->m_pkColor : nullptr,
+							data ? data->m_pkTexture : nullptr,
+							static_cast<UInt32>(declarationCompatibility),
+							buffer ? buffer->m_hDeclaration : nullptr,
+							expectedDeclaration,
+							generation ? static_cast<UInt32>(generation->
+								compatibleStockLayoutD3DDeclarations.size()) : 0u,
+							stride);
+					}
+				}
+				return true;
+			}
+			if (!logFailure)
+				return ready;
+
+			UInt32 failures = 0;
+			if (!hasShapeAndShader)
+				failures |= kMissingShapeOrShader;
+			if (hasShapeAndShader && !shaderMatches)
+				failures |= kShaderMismatch;
+			if (!profileMatches)
+				failures |= kProfileMismatch;
+			if (!generationMatches)
+				failures |= kGenerationMismatch;
+			if (!data)
+				failures |= kMissingModelData;
+			if (!buffer)
+				failures |= kMissingBuffer;
+			if (buffer && !declarationMatches)
+				failures |= kDeclarationMismatch;
+			if (buffer && streamCount != 1u)
+				failures |= kStreamMismatch;
+			if (buffer && stride != kStockLayoutVertexStride)
+				failures |= kStrideMismatch;
+			if (buffer && data && buffer->m_uiVertCount < data->m_usVertices)
+				failures |= kVertexCountMismatch;
+
+			const UInt32 previous = s_stockLayoutReadinessLoggedMask.fetch_or(
+				failures, std::memory_order_acq_rel);
+			const UInt32 newlyObserved = failures & ~previous;
+			if (newlyObserved)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_stock_layout_sdf_readiness: failure=0x%08X new=0x%08X shape=%p shader=%p shapeShader=%p profile=%u stockProfile=%u generation=%u current=%u targetReady=%u deviceEpoch=%u sourceTextureSets=%u keepFlags=0x%02X color=%p texture=%p buffer=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u streams=%u stride=%u bufferVertices=%u dataVertices=%u",
+					failures, newlyObserved, shape, shader,
+					shape ? shape->GetShader() : nullptr,
+					profile ? 1u : 0u,
+					profileMatches ? 1u : 0u,
+					generation ? generation->id : 0u,
+					generationMatches ? 1u : 0u,
+					generation && generation->stockLayoutReady ? 1u : 0u,
+					generation ? generation->deviceEpoch : 0u,
+					textureSetCount,
+					data ? static_cast<UInt32>(data->m_ucKeepFlags) : 0u,
+					data ? data->m_pkColor : nullptr,
+					data ? data->m_pkTexture : nullptr,
+					buffer,
+					static_cast<UInt32>(declarationCompatibility),
+					buffer ? buffer->m_hDeclaration : nullptr,
+					expectedDeclaration,
+					generation ? static_cast<UInt32>(generation->
+						compatibleStockLayoutD3DDeclarations.size()) : 0u,
+					streamCount, stride,
+					buffer ? buffer->m_uiVertCount : 0u,
+					data ? data->m_usVertices : 0u);
+			}
+			return false;
+		}
+	}
+
+	bool RequestNativeA8StockLayoutShapePrecache(NiTriShape* shape,
+		TileShader* shader, bool& immediateReady)
+	{
+		immediateReady = false;
+		if (!shape || !shader)
 			return false;
 		NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
 		NativeShaderProfile* profile = block ? block->profile : nullptr;
 		NativeShaderGeneration* generation = profile ? profile->owner : nullptr;
-		const NiTriShapeData* data = shape->GetModelData();
-		const NiGeometryBufferData* buffer = data ? data->m_pkBuffData : nullptr;
-		return profile && profile->shader == shader
-			&& profile->key.stockLayoutSdf && generation
-			&& generation->stockLayoutReady
-			&& GenerationMatchesCurrentDevice(generation)
-			&& data
-			&& (data->m_usDataFlags & NiGeometryData::TEXTURE_SET_MASK) >= 3u
-			&& buffer && buffer->m_hDeclaration
-				== generation->stockLayoutD3DDeclaration
-			&& buffer->m_uiStreamCount == 1
-			&& buffer->m_puiVertexStride
-			&& buffer->m_puiVertexStride[0] == 40u
-			&& buffer->m_uiVertCount >= data->m_usVertices;
+		NiTriShapeData* data = shape->GetModelData();
+		const UInt32 textureSetCount = data
+			? data->m_usDataFlags & NiGeometryData::TEXTURE_SET_MASK : 0u;
+		if (!profile || profile->shader != shader
+			|| !profile->key.stockLayoutSdf || !generation
+			|| !generation->renderer || !generation->stockLayoutReady
+			|| !generation->stockLayoutDeclaration
+			|| !GenerationMatchesCurrentDevice(generation) || !data
+			|| !data->m_usVertices || !data->m_pkVertex || !data->m_pkColor
+			|| !data->m_pkTexture || textureSetCount != 3u
+			|| !data->m_pusTriList || !data->m_uiTriListLength)
+		{
+			return false;
+		}
+
+		shape->SetShader(shader);
+		if (data->m_pkBuffData)
+		{
+			// Keep this on the virtual route so renderer queue/interoperability
+			// detours retain ownership of synchronization and buffer lifetime.
+			generation->renderer->PurgeGeometryData(data);
+			if (data->m_pkBuffData)
+				return false;
+		}
+		if (!generation->renderer->PrecacheGeometry(shape, 0u, 0u,
+			generation->stockLayoutDeclaration.m_pObject))
+		{
+			return false;
+		}
+
+		// A hooked virtual route may only enqueue the request. Once accepted the
+		// shape must stay alive; draw-time readiness fails open until completion.
+		immediateReady = IsNativeA8StockLayoutShapeReadyImpl(
+			shape, shader, false);
+		return true;
+	}
+
+	bool IsNativeA8StockLayoutShapeReady(const NiTriShape* shape,
+		TileShader* shader)
+	{
+		return IsNativeA8StockLayoutShapeReadyImpl(shape, shader, true);
 	}
 
 	bool ResolveNativeA8RetainedPacketProgram(

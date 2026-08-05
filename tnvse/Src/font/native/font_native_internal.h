@@ -1309,6 +1309,8 @@ namespace fonthook::vectorfont
 	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
 		const NiTriShape* facade, bool scaledFillSampling,
 		bool stockLayoutSdf = false);
+	bool RequestNativeA8StockLayoutShapePrecache(NiTriShape* shape,
+		TileShader* shader, bool& immediateReady);
 	bool IsNativeA8StockLayoutShapeReady(const NiTriShape* shape,
 		TileShader* shader);
 	bool ResolveNativeA8RetainedPacketProgram(

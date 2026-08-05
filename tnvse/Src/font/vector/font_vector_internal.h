@@ -481,6 +481,12 @@ namespace fonthook::vectorfont
 		StockLayoutSdfShiftedCreated,
 		StockLayoutSdfShiftedDraw,
 		StockLayoutSdfShiftedRuntimeFallback,
+		StockLayoutSdfPrecacheAccepted,
+		StockLayoutSdfPrecacheImmediate,
+		StockLayoutSdfPrecacheDeferred,
+		StockLayoutSdfPrecacheRejected,
+		StockLayoutSdfPostUploadSourceRetiredReady,
+		StockLayoutSdfPriorGenerationDeclarationReady,
 		Count,
 	};
 	static_assert(

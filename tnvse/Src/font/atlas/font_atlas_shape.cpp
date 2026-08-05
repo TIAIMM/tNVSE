@@ -1486,6 +1486,11 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::StockLayoutSdfFallback);
 			};
+			if (!prepareObject)
+			{
+				recordFallback();
+				return nullptr;
+			}
 			const UInt32 targetQuadCount = packet->vertexCount / 4u;
 			if (!targetQuadCount || targetQuadCount != glyphCount
 				|| packet->vertexCount > std::numeric_limits<UInt16>::max())
@@ -1564,6 +1569,9 @@ namespace fonthook::vectorfont
 			data->m_kBound.m_kCenter.y += origin.y;
 			data->m_kBound.m_kCenter.z += origin.z;
 
+			// Establish stock properties and bounds, but suppress its geometry
+			// precache: that route selects the stock TileShader's 20-byte layout.
+			shape->PrepareObject(false, true);
 			if (!PrepareStockLayoutSdfA8Shape(font, shape, font.iFontNum,
 				glyphCount, payload->quadCount, &effects, &colorContract,
 				payload, origin))
@@ -1572,13 +1580,28 @@ namespace fonthook::vectorfont
 				recordFallback();
 				return nullptr;
 			}
-			if (prepareObject)
-				shape->PrepareObject();
+			TileShader* targetShader = ResolveNativeA8PacketShader(
+				*packet, shape, false, true);
+			bool immediateReady = false;
+			if (!targetShader || !RequestNativeA8StockLayoutShapePrecache(
+				shape, targetShader, immediateReady))
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::StockLayoutSdfPrecacheRejected);
+				shape->DeleteThis();
+				recordFallback();
+				return nullptr;
+			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::StockLayoutSdfPrecacheAccepted);
+			RecordFreeTypePerf(immediateReady
+				? FreeTypePerfCounter::StockLayoutSdfPrecacheImmediate
+				: FreeTypePerfCounter::StockLayoutSdfPrecacheDeferred);
 			data->m_kBound = payload->bound;
 			data->m_kBound.m_kCenter.x += origin.x;
 			data->m_kBound.m_kCenter.y += origin.y;
 			data->m_kBound.m_kCenter.z += origin.z;
-			if (prepareObject && shape->m_pWorldBound)
+			if (shape->m_pWorldBound)
 				shape->UpdateWorldBound();
 			RecordFreeTypePerf(FreeTypePerfCounter::StockLayoutSdfCreated);
 			if (packet->compositeShiftedShadow)
