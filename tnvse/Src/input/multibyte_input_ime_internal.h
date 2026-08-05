@@ -13,6 +13,8 @@ namespace fonthook
 		constexpr DWORD kNativeImeAsciiGuardMs = 250;
 		constexpr DWORD kInputLanguageSwitchAsciiGuardMs = 500;
 		constexpr DWORD kImeCommitKeyPendingLifetimeMs = 1500;
+		constexpr DWORD kImeCommitKeyConfirmedLifetimeMs = 500;
+		constexpr DWORD kImeResultHandoffLifetimeMs = 1000;
 		constexpr UInt32 kMaxImeCandidatesToDisplay = 9;
 
 		struct ImeCandidateState
@@ -39,6 +41,16 @@ namespace fonthook
 		{
 			DWORD id = 0;
 			UInt32 generation = 0;
+			UInt32 beginCount = 1;
+		};
+
+		struct ImeResultHandoffState
+		{
+			DWORD armedTick = 0;
+			UInt32 textInputSessionGeneration = 0;
+			bool active = false;
+			bool candidatesReady = false;
+			bool compositionReady = false;
 		};
 
 		class TsfCandidateSink;
@@ -79,6 +91,7 @@ namespace fonthook
 			bool winSpaceSwitchPending = false;
 			bool winSpaceLanguageChangeObserved = false;
 			ImeCommitKeyState commitKey;
+			ImeResultHandoffState resultHandoff;
 
 			ImeCandidateState candidate;
 			CandidateOverlayState overlay;
@@ -122,7 +135,14 @@ namespace fonthook
 		std::wstring GetImeCompositionString(HWND hwnd, DWORD index);
 		void RefreshImeComposition(HWND hwnd);
 		void RefreshImeCandidates(HWND hwnd);
-		void ClearImePreviewState();
+		void ArmImeResultHandoff(DWORD tick);
+		bool IsImeResultHandoffActive(DWORD tick);
+		void MarkImeResultHandoffCandidates();
+		void MarkImeResultHandoffComposition();
+		void ResetImeResultHandoff();
+		void ClearImePreviewState(
+			bool preserveResultHandoff = false,
+			DWORD referenceTick = 0);
 		void CancelGameImeComposition(HWND hwnd);
 		bool IsImeWindowMessage(UINT msg);
 		bool IsVirtualKeyDown(int vk);

@@ -1135,9 +1135,9 @@ change, or shape destruction. Multi-packet facade mode owns no per-packet
 geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
 facades, total payload packets, single- and multi-packet artifacts, direct/span/
 packet-loop frames, topology switches, fallbacks, partial faults, and the
-invariant sibling_shapes=0. The build identity is
-`diagnostic-prune-v41`. It
-retains the v23 shell-shader restoration fix, v24 logging cleanup, the
+invariant sibling_shapes=0. The current build identity is
+`ime-partial-result-handoff-v42`; its rendering baseline remains
+`diagnostic-prune-v41`. It retains the v23 shell-shader restoration fix, v24 logging cleanup, the
 no-Sort-hook single-facade architecture, the v30 linear equal-depth repair, and
 the v31 direct-Sort-array/preflight-only cleanup.
 The prepared-text result cache, stock-Tile execution bridge, and early

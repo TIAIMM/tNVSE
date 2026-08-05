@@ -48,9 +48,6 @@ namespace fonthook
 				State().lastStewieImeEnterKeyTick = 0;
 			}
 			State().suppressedImeCharCount = static_cast<UInt32>(result.size());
-			ClearImePreviewState();
-			RefreshImeStatus(s_window);
-			UpdateCandidateOverlay();
 			DebugLog(
 				"tnvse_multibyte_input: committed IME result target=%s chars=%u",
 				TextInputTargetKindName(target.token.kind),
@@ -336,12 +333,20 @@ namespace fonthook
 				UINT message = 0;
 				WPARAM wParam = 0;
 				LPARAM lParam = 0;
+				DWORD captureTick = 0;
 				bool controlDown = false;
 				bool winDown = false;
 				bool targetBound = false;
 				TextInputTargetToken targetToken;
 				std::wstring result;
 				std::wstring composition;
+				bool candidateSnapshotCaptured = false;
+				bool candidateSnapshotFromTsf = false;
+				bool candidateSnapshotTsfActive = false;
+				DWORD candidateSelection = 0;
+				DWORD candidatePageStart = 0;
+				DWORD candidatePageSize = 0;
+				std::vector<std::wstring> candidates;
 			};
 
 			std::array<CapturedInputEvent, kCapturedInputEventCapacity>
@@ -365,6 +370,38 @@ namespace fonthook
 					(s_capturedInputWrite + 1) % s_capturedInputEvents.size();
 				++s_capturedInputCount;
 				return true;
+			}
+
+			void CaptureImeCandidateSnapshot(
+				CapturedInputEvent& event,
+				const ImeState& state)
+			{
+				event.candidateSnapshotCaptured = true;
+				event.candidateSnapshotFromTsf =
+					state.candidate.candidatesFromTsf;
+				event.candidateSnapshotTsfActive = state.tsfCandidateActive;
+				event.candidateSelection = state.candidate.selection;
+				event.candidatePageStart = state.candidate.pageStart;
+				event.candidatePageSize = state.candidate.pageSize;
+				event.candidates = state.candidate.candidates;
+			}
+
+			void PublishImeCandidateSnapshot(
+				const CapturedInputEvent& event,
+				ImeState& state)
+			{
+				if (!event.candidateSnapshotCaptured)
+					return;
+
+				ClearImeCandidates();
+				state.candidate.candidatesFromTsf =
+					event.candidateSnapshotFromTsf;
+				state.tsfCandidateActive = event.candidateSnapshotTsfActive;
+				state.candidate.selection = event.candidateSelection;
+				state.candidate.pageStart = event.candidatePageStart;
+				state.candidate.pageSize = event.candidatePageSize;
+				state.candidate.candidates = event.candidates;
+				MarkImeResultHandoffCandidates();
 			}
 
 			bool DequeueCapturedInputEvent(CapturedInputEvent& event)
@@ -764,19 +801,34 @@ namespace fonthook
 						++state.imeCompositionUiEpoch;
 					state.hiddenSystemImeUiEpoch = 0;
 					HideSystemImeWindows(hwnd);
+					const bool resultHandoff =
+						IsImeResultHandoffActive(event.captureTick);
+					const bool preservedCandidates = resultHandoff
+						&& state.resultHandoff.candidatesReady
+						&& !state.candidate.candidates.empty();
+					const bool preservedComposition = resultHandoff
+						&& state.resultHandoff.compositionReady
+						&& !state.candidate.composition.empty();
+					ClearImePreviewState(resultHandoff, event.captureTick);
 					s_imeComposing = true;
 					state.compositionEchoChecked = false;
 					state.candidate.composing = true;
 					RefreshImeStatus(hwnd);
-					state.candidate.composition = event.composition;
 					if (!event.composition.empty())
+					{
+						state.candidate.composition = event.composition;
 						state.tsfCompositionFallbackActive = false;
+					}
 					TryRemoveCompositionEcho();
-					// Candidate data is not valid until TSF or IMN_OPENCANDIDATE /
-					// IMN_CHANGECANDIDATE publishes it for this composition. Reading
-					// IMM here can return the previous composition's cached list.
-					ClearImeCandidates();
+					ResetImeResultHandoff();
 					UpdateCandidateOverlay();
+					if (resultHandoff)
+					{
+						DebugLog(
+							"tnvse_multibyte_input_event: source=ImeResultHandoff action=start preserveCandidates=%u preserveComposition=%u",
+							preservedCandidates ? 1 : 0,
+							preservedComposition ? 1 : 0);
+					}
 					DebugLogState("WndProc.WM_IME_STARTCOMPOSITION", "composition_start", GetAnyActiveTextInputMenu(), 0);
 				}
 
@@ -792,6 +844,7 @@ namespace fonthook
 						HideSystemImeWindows(hwnd);
 						[[fallthrough]];
 					case IMN_CHANGECANDIDATE:
+						PublishImeCandidateSnapshot(event, state);
 						// Candidate list updates are driven by WM_IME_NOTIFY and the TSF
 						// UI element sink. Do not poll IMM during composition text updates;
 						// some IMEs retain the previous list until the open/change notify.
@@ -845,7 +898,26 @@ namespace fonthook
 
 					if (ApplyCapturedImeResult(event.result, lParam))
 					{
-						s_imeComposing = false;
+						const bool resultHandoff =
+							IsImeResultHandoffActive(event.captureTick);
+						ClearImePreviewState(resultHandoff, event.captureTick);
+						const bool compositionContinues =
+							(lParam & GCS_COMPSTR) != 0;
+						s_imeComposing = compositionContinues;
+						if (compositionContinues)
+						{
+							state.candidate.composing = true;
+							if (!event.composition.empty())
+							{
+								state.candidate.composition = event.composition;
+								state.tsfCompositionFallbackActive = false;
+								MarkImeResultHandoffComposition();
+							}
+							TryRemoveCompositionEcho();
+							ResetImeResultHandoff();
+						}
+						RefreshImeStatus(hwnd);
+						UpdateCandidateOverlay();
 						DebugLogState("WndProc.WM_IME_COMPOSITION", "composition_result_consumed", GetAnyActiveTextInputMenu(), static_cast<SInt32>(lParam));
 						return 0;
 					}
@@ -860,7 +932,10 @@ namespace fonthook
 								state.candidate.composing
 								|| !state.candidate.composition.empty()
 								|| !state.candidate.candidates.empty();
-							ClearImePreviewState();
+							const bool resultHandoff =
+								IsImeResultHandoffActive(event.captureTick);
+							ClearImePreviewState(
+								resultHandoff, event.captureTick);
 						}
 						else
 						{
@@ -891,9 +966,18 @@ namespace fonthook
 				if (msg == WM_IME_ENDCOMPOSITION)
 				{
 					s_imeComposing = false;
-					ClearImePreviewState();
+					const bool resultHandoff =
+						IsImeResultHandoffActive(event.captureTick);
+					ClearImePreviewState(resultHandoff, event.captureTick);
 					RefreshImeStatus(hwnd);
 					UpdateCandidateOverlay();
+					if (resultHandoff)
+					{
+						DebugLog(
+							"tnvse_multibyte_input_event: source=ImeResultHandoff action=end preserveCandidates=%u preserveComposition=%u",
+							state.resultHandoff.candidatesReady ? 1 : 0,
+							state.resultHandoff.compositionReady ? 1 : 0);
+					}
 					DebugLogState("WndProc.WM_IME_ENDCOMPOSITION", "composition_end", GetAnyActiveTextInputMenu(), 0);
 					if (hasInputTarget)
 						return 0;
@@ -994,6 +1078,7 @@ namespace fonthook
 			event.message = msg;
 			event.wParam = wParam;
 			event.lParam = lParam;
+			event.captureTick = GetTickCount();
 			event.controlDown = controlDown;
 			event.winDown = winDown;
 			event.targetBound = IsTargetBoundCapturedMessage(
@@ -1010,8 +1095,11 @@ namespace fonthook
 			else if (msg == WM_IME_COMPOSITION && sessionActive)
 			{
 				if (lParam & GCS_RESULTSTR)
+				{
+					ArmImeResultHandoff(event.captureTick);
 					event.result =
 						GetImeCompositionString(hwnd, GCS_RESULTSTR);
+				}
 				if (lParam & GCS_COMPSTR)
 				{
 					event.composition =
@@ -1037,6 +1125,8 @@ namespace fonthook
 				case IMN_OPENCANDIDATE:
 				case IMN_CHANGECANDIDATE:
 					RefreshImeCandidates(hwnd);
+					CaptureImeCandidateSnapshot(event, state);
+					MarkImeResultHandoffCandidates();
 					state.overlayRefreshPending = true;
 					break;
 				case IMN_SETCANDIDATEPOS:
@@ -1061,7 +1151,13 @@ namespace fonthook
 			// queue is saturated. Forwarding an uncaptured IME commit into the
 			// byte-oriented game path would be more damaging than dropping it;
 			// the main loop reports the overflow on its next pass.
-			EnqueueCapturedInputEvent(std::move(event));
+			const bool eventQueued = EnqueueCapturedInputEvent(std::move(event));
+			if (!eventQueued
+				&& msg == WM_IME_COMPOSITION
+				&& (lParam & GCS_RESULTSTR))
+			{
+				ResetImeResultHandoff();
+			}
 
 			if (msg == kMessage_FlushDeferredStewieAscii)
 				return 0;

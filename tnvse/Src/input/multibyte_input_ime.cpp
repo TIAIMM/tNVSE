@@ -10,6 +10,37 @@ namespace fonthook
 		namespace implementation::multibyte_input_ime
 		{
 			ImeState s_imeState;
+
+			enum ImeResultHandoffPreserve : UInt8
+			{
+				kPreserveNone = 0,
+				kPreserveCandidates = 1 << 0,
+				kPreserveComposition = 1 << 1,
+			};
+
+			constexpr UInt8 GetImeResultHandoffPreserveMask(
+				bool active,
+				bool candidatesReady,
+				bool compositionReady)
+			{
+				return active
+					? static_cast<UInt8>(
+						(candidatesReady ? kPreserveCandidates : 0)
+						| (compositionReady ? kPreserveComposition : 0))
+					: kPreserveNone;
+			}
+
+			// Compile-time regression checks for both partial-result orderings:
+			// RESULT -> candidate -> END -> START and RESULT -> END -> START -> candidate.
+			static_assert(
+				GetImeResultHandoffPreserveMask(true, true, false)
+					== kPreserveCandidates);
+			static_assert(
+				GetImeResultHandoffPreserveMask(true, false, false)
+					== kPreserveNone);
+			static_assert(
+				GetImeResultHandoffPreserveMask(false, true, true)
+					== kPreserveNone);
 		}
 
 		ImeState& State()
@@ -235,6 +266,62 @@ namespace fonthook
 			State().candidate.pageSize = 0;
 			State().candidate.candidatesFromTsf = false;
 			State().tsfCandidateActive = false;
+			State().resultHandoff.candidatesReady = false;
+		}
+
+		void ArmImeResultHandoff(DWORD tick)
+		{
+			ImeResultHandoffState& handoff = State().resultHandoff;
+			handoff = {};
+			handoff.armedTick = tick;
+			handoff.textInputSessionGeneration =
+				State().textInputSessionGeneration;
+			handoff.active = true;
+		}
+
+		void ResetImeResultHandoff()
+		{
+			State().resultHandoff = {};
+		}
+
+		bool IsImeResultHandoffActive(DWORD tick)
+		{
+			const ImeResultHandoffState& handoff = State().resultHandoff;
+			if (!handoff.active)
+				return false;
+
+			if (handoff.textInputSessionGeneration
+					!= State().textInputSessionGeneration
+				|| tick - handoff.armedTick > kImeResultHandoffLifetimeMs)
+			{
+				ResetImeResultHandoff();
+				return false;
+			}
+			return true;
+		}
+
+		void MarkImeResultHandoffCandidates()
+		{
+			if (State().candidate.candidates.empty()
+				|| !IsImeResultHandoffActive(GetTickCount()))
+			{
+				return;
+			}
+
+			ImeResultHandoffState& handoff = State().resultHandoff;
+			handoff.candidatesReady = true;
+		}
+
+		void MarkImeResultHandoffComposition()
+		{
+			if (State().candidate.composition.empty()
+				|| !IsImeResultHandoffActive(GetTickCount()))
+			{
+				return;
+			}
+
+			ImeResultHandoffState& handoff = State().resultHandoff;
+			handoff.compositionReady = true;
 		}
 
 		void RefreshImeCandidatesFromImm(HWND hwnd)
@@ -317,6 +404,7 @@ namespace fonthook
 			}
 
 			ImmReleaseContext(hwnd, context);
+			MarkImeResultHandoffCandidates();
 		}
 
 		void RefreshImeCandidates(HWND hwnd)
@@ -336,13 +424,33 @@ namespace fonthook
 			RefreshImeCandidatesFromImm(hwnd);
 		}
 
-		void ClearImePreviewState()
+		void ClearImePreviewState(
+			bool preserveResultHandoff,
+			DWORD referenceTick)
 		{
-			State().candidate.composing = false;
-			State().candidate.composition.clear();
-			State().tsfCompositionFallbackActive = false;
-			State().compositionEchoChecked = false;
-			ClearImeCandidates();
+			ImeState& state = State();
+			const bool handoffActive = preserveResultHandoff
+				&& IsImeResultHandoffActive(
+					referenceTick ? referenceTick : GetTickCount());
+			const UInt8 preserveMask = GetImeResultHandoffPreserveMask(
+				handoffActive,
+				state.resultHandoff.candidatesReady
+					&& !state.candidate.candidates.empty(),
+				state.resultHandoff.compositionReady
+					&& !state.candidate.composition.empty());
+
+			state.candidate.composing =
+				(preserveMask & kPreserveComposition) != 0;
+			if (!(preserveMask & kPreserveComposition))
+			{
+				state.candidate.composition.clear();
+				state.tsfCompositionFallbackActive = false;
+			}
+			state.compositionEchoChecked = false;
+			if (!(preserveMask & kPreserveCandidates))
+				ClearImeCandidates();
+			if (!handoffActive)
+				ResetImeResultHandoff();
 		}
 
 		void HideSystemImeWindows(HWND hwnd)
@@ -858,7 +966,16 @@ namespace fonthook
 					return false;
 
 				if (key.confirmed)
-					return false;
+				{
+					if (!key.released
+						&& key.virtualKey
+						&& IsVirtualKeyDown(key.virtualKey))
+					{
+						return false;
+					}
+					return now - key.observedTick
+						> kImeCommitKeyConfirmedLifetimeMs;
+				}
 
 				if (!key.released && key.virtualKey && IsVirtualKeyDown(key.virtualKey))
 					return false;
@@ -981,7 +1098,11 @@ namespace fonthook
 			ExpireImeCommitKeyState();
 			ImeCommitKeyState& key = State().commitKey;
 			if (key.confirmed)
-				return;
+			{
+				if (key.input == normalized)
+					return;
+				ResetImeCommitKeyState("different_confirmed_commit_input");
+			}
 			if (key.pending && key.input == normalized)
 			{
 				UINT refreshedVirtualKey = 0;
@@ -1030,25 +1151,39 @@ namespace fonthook
 		{
 			ExpireImeCommitKeyState();
 			ImeCommitKeyState& key = State().commitKey;
+			UINT pressedVirtualKey = 0;
+			UInt32 pressedInput = 0;
+			const bool foundPressed = FindPressedImeCommitKey(
+				pressedVirtualKey,
+				pressedInput);
+			const bool pendingKeyStillDown = key.pending
+				&& key.virtualKey
+				&& IsVirtualKeyDown(key.virtualKey);
+			if (key.pending
+				&& foundPressed
+				&& !pendingKeyStillDown
+				&& key.input != pressedInput)
+			{
+				ResetImeCommitKeyState("confirm_pressed_key_override");
+			}
 			if (!key.pending)
 			{
-				UINT virtualKey = 0;
-				UInt32 input = 0;
-				if (!FindPressedImeCommitKey(virtualKey, input))
+				if (!foundPressed)
 					return;
 
-				key.virtualKey = virtualKey;
-				key.input = input;
+				key.virtualKey = pressedVirtualKey;
+				key.input = pressedInput;
 				key.observedTick = GetTickCount();
 				key.pending = true;
 				key.released = false;
 				DebugLog(
 					"tnvse_multibyte_input_event: source=ImeCommitKey action=infer_pressed vk=0x%02X input=0x%08X",
-					virtualKey,
-					input);
+					pressedVirtualKey,
+					pressedInput);
 			}
 
 			key.confirmed = true;
+			key.observedTick = GetTickCount();
 			key.expectedChannel = static_cast<UInt8>(expectedChannel);
 			DebugLog(
 				"tnvse_multibyte_input_event: source=ImeCommitKey action=confirm vk=0x%02X input=0x%08X released=%u channel=%s",
@@ -1066,6 +1201,33 @@ namespace fonthook
 
 			ExpireImeCommitKeyState();
 			ImeCommitKeyState& key = State().commitKey;
+			if (key.confirmed
+				&& key.input != normalized
+				&& IsImeResultHandoffActive(GetTickCount()))
+			{
+				UINT pressedVirtualKey = 0;
+				UInt32 pressedInput = 0;
+				if (FindPressedImeCommitKey(
+						pressedVirtualKey,
+						pressedInput,
+						normalized))
+				{
+					const UInt8 expectedChannel = key.expectedChannel;
+					ResetImeCommitKeyState("late_handoff_commit_input");
+					ImeCommitKeyState& rebound = State().commitKey;
+					rebound.virtualKey = pressedVirtualKey;
+					rebound.input = normalized;
+					rebound.observedTick = GetTickCount();
+					rebound.expectedChannel = expectedChannel;
+					rebound.pending = true;
+					rebound.confirmed = true;
+					DebugLog(
+						"tnvse_multibyte_input_event: source=ImeCommitKey action=rebind_late_handoff vk=0x%02X input=0x%08X channel=%s",
+						pressedVirtualKey,
+						normalized,
+						ImeCommitChannelName(channel));
+				}
+			}
 			if (!key.confirmed || key.input != normalized)
 				return false;
 			if (key.released && key.virtualKey && IsVirtualKeyDown(key.virtualKey))

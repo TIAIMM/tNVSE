@@ -463,7 +463,7 @@ SetWindowLongPtrA(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(MultibyteInputW
 WndProc 是捕获层，不是菜单适配层：
 
 - 鼠标、非客户区鼠标、hit-test、cursor、capture 消息在第一条分支无条件调用前驱 WndProc；raw input、pointer、touch、gesture 等不在输入捕获 allowlist 中的消息也会在读取 tNVSE 输入状态前直接转发。
-- 回调只复制消息参数、Ctrl/Win 修饰键快照以及必须在消息存活期读取的 `GCS_RESULTSTR`、`GCS_COMPSTR`、IMM candidate list，并把这些数据写入固定容量队列。回调中不查找 Menu，不遍历 Tile，不安装 hook，不写 vtable，不更新游戏 UI，也不写诊断日志。
+- 回调只复制消息参数、捕获时刻、Ctrl/Win 修饰键快照以及必须在消息存活期读取的 `GCS_RESULTSTR`、`GCS_COMPSTR`、IMM candidate list，并把这些数据写入固定容量队列。每条 open/change candidate 通知携带自己的候选内容、选择项和分页快照，主循环不会再从可能已被后续消息覆盖的全局候选状态猜测该通知。回调中不查找 Menu，不遍历 Tile，不安装 hook，不写 vtable，不更新游戏 UI，也不写诊断日志。
 - `WM_IME_SETCONTEXT` 是唯一同步策略分支；hook 安装后始终调用 `DefWindowProc(..., lParam=0)`，不查询游戏 UI、input-session 或 Tile 宿主状态。
 - 主循环先安装/维护各 keyboard-input adapter、轮询 target 状态，再排空捕获队列。目标解析、DBCS shadow 编辑、IME commit、Tile/UDF 写回、IME association 和 candidate overlay 更新都在这里完成。
 - TSF `BeginUIElement` / `UpdateUIElement` / `EndUIElement` 同样只镜像 candidate 数据并设置待刷新标志；共享原生 Tile overlay 由下一次主循环刷新，TSF COM 回调不会重入 Gamebryo 菜单。
@@ -514,6 +514,8 @@ UTF-16 -> WideCharToMultiByte(g_usingWinEncoding)
 - 游戏原本 `TextEditMenu::HandleKeyboardInput` 路径也必须应用同一规则；正式版日志确认拼音字母可能先从该 vtable 路径到达，而不是只从 `WM_CHAR` 到达。
 - `TextEditMenu::HandleKeyboardInput` 在 composition active 时还应吞掉 Backspace/Delete/Left/Right/Home/End/Confirm 等控制输入，避免用户编辑 IME 预编辑串时误删或提交游戏真实文本。
 - `GCS_RESULTSTR` 后用短期 suppress 计数避免同一提交又以 `WM_CHAR` 形式插入一次。
+- 选择只提交预编辑串一部分的候选时，Windows IME 允许按 `RESULT(no COMP) -> END -> candidate update -> START -> COMP` 重新开始剩余拼音。结果捕获会建立一个绑定当前 text-input generation、最长 1000 ms 的 handoff：旧 `RESULT/END` 只清理结果之前的预览；结果之后发布的 candidate/composition 快照可跨过紧随其后的 `START`，随后立即消费 handoff。若 candidate update 在 `START` 之后才到达，则新 composition 已经正常建立，通知快照直接发布，不需要保留窗口。
+- 已确认的选词键 latch 不再永久有效：不同的数字/空格/回车输入会立即替换上一枚 confirmed latch，已松开的 confirmed latch 也会在 500 ms 后过期。这样部分提交后下一次选择不会沿用上一候选的数字键；仍按住的同一物理键继续保留到游戏轮询和 `WM_CHAR` 两个通道排空。
 - 所有未明确消费的消息都调用原 WndProc。
 
 ### 2.1 游戏内 IME 状态和候选窗预览
@@ -558,6 +560,7 @@ std::vector<std::wstring> candidates;
 - 正常游玩期没有输入菜单对象时，tNVSE 不只是隐藏系统 IME UI，而是解绑游戏窗口 IME context；这会阻止系统在左上角绘制 composition 小窗，也避免拼音预编辑串干扰快捷键/普通游玩。输入菜单对象存在时用 input session latch 保持 IME context enabled，并在输入语言变化后重建默认 context，因此 `Win+Space` / Alt-Tab 后切换输入法不会继续沿用旧 `HIMC`。
 - `WM_IME_SETCONTEXT` 无条件以 `lParam=0` 交给 `DefWindowProc`；composition 事件排到主循环后把 IMM32 composition 及全部四个 candidate form 移到屏幕外。WndProc 同步分支不调用 `ImmSetCandidateWindow`，避免位置通知重入。代码不再保存原始 form，因此不存在输入会话结束、语言切换、宿主失败或 WndProc 清理时把位置恢复回来的路径。
 - TSF `ITfUIElementSink::BeginUIElement` 对输入服务发布的全部 UI element 一律把 `*pbShow` 设为 `FALSE`，与 composition preview、当前输入目标和原生 Tile 宿主状态无关。不能先要求 `ITfCandidateListUIElement`：部分现代 IME 在 MCM Extender 这类脚本搜索框上会把候选/reading 界面只暴露为通用 `ITfUIElement`。接口识别现在只决定能否读取候选数据；识别失败时由 IMM32 提供 Tile 候选数据，绝不放行系统界面。代码不再调用 `ITfUIElement::Show(TRUE)`。
+- TSF candidate element 以 `id + session generation + outstanding Begin count` 跟踪。过期或非当前 `UpdateUIElement` 只忽略自身，不再清空当前候选；`EndUIElement` 只有在最后一个当前 candidate element 的 Begin 引用结束时才清 TSF 候选。同一 id 在新 generation 被复用时会保留旧 Begin 引用，因此延迟到达的旧 End 不能提前销毁新候选。
 - overlay 的显示 gate 只要求当前 `TextEditMenu` 对象仍存在并且 IME 处于 open 状态，不要求 `TextEditState::IsActive()` 为 true。这样用户把编辑文本删空、validator 暂时禁用 OK 按钮、或原版 edit state 短暂切换状态时，composition/candidate overlay 不会被误隐藏。
 - 当前菜单对象丢失、IME 关闭或预览配置关闭时只隐藏共享候选根，不修改 active text input 自身的 Tile。
 
@@ -979,6 +982,8 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - 系统 candidate/composition UI 在多字节输入 hook 安装后始终隐藏。分别删除或破坏 `ImeOverlay.xml`、制造 Menu Code 冲突、关闭 `bMultibyteInputCompositionPreview`，均应确认系统候选窗不会出现；前两种情况只允许记录原生候选层不可用，提交结果仍应正常写入。
 - 在 MAPMO 中以 `M` 打开 MCM、再进入或退出 MCM Extender 搜索框：打开菜单的热键必须在 HIMC 已解绑状态下交给游戏，不能启动 composition 或系统候选窗；只有搜索目标被主循环确认后才能以当前 HKL 的默认 HIMC 开始新的输入会话。
 - `bMultibyteInputUseTSFCandidates=1` 时，优先测试 Microsoft Pinyin / Sogou / Japanese IME / Korean IME 下 TSF candidate UI 是否能返回候选；关闭该配置时再验证 `ImmGetCandidateListW` fallback。
+- Microsoft Pinyin 输入 `kaisuo`，选择只包含一个字的第二项（例如“开”）：真实文本先得到“开”，候选栏和剩余 `suo` 必须继续存在；再选“锁”后得到“开锁”。分别覆盖 `RESULT -> END -> candidate -> START` 与 `RESULT -> END -> START -> candidate` 两种通知顺序，并确认日志出现 `ImeResultHandoff action=start`，前者 `preserveCandidates=1`、后者允许为 `0` 但后续 candidate 通知必须恢复候选。
+- 连续两轮分别用数字 `1`、`2` 选词，第二轮不能继续沿用上一轮 `0x31`：若提交时 `2` 仍处于按下状态，应记录 `confirm_pressed_key_override` 并直接确认 `0x32`；若 adapter 在提交后才看到它，应在 active handoff 内记录 `late_handoff_commit_input` / `rebind_late_handoff` 并抑制该迟到通道；若新 composition 已经开始，则由 `different_confirmed_commit_input` 后重新 arm。新物理 key-down 仍通过 `new_commit_keydown` 建立新 latch。
 - Rime 后端如作为可选项，应测试组字期间吞键、commit-only 写入、候选翻页和 ASCII mode 切换。
 
 ## 完成标准

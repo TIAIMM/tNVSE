@@ -15,20 +15,30 @@ namespace fonthook
 
 		bool RegisterTsfUiElement(DWORD id)
 		{
+			ImeState& state = State();
 			const auto existing = std::find_if(
-				State().tsfUiElementSessions.begin(),
-				State().tsfUiElementSessions.end(),
+				state.tsfUiElementSessions.begin(),
+				state.tsfUiElementSessions.end(),
 				[id](const TsfUiElementSession& value)
 				{
 					return value.id == id;
 				});
-			if (existing != State().tsfUiElementSessions.end())
-				return existing->generation == State().tsfSessionGeneration;
+			if (existing != state.tsfUiElementSessions.end())
+			{
+				// The same TSF id can be reused before the old EndUIElement is
+				// delivered. Keep every outstanding Begin reference so an old End
+				// cannot erase the newly published candidate list.
+				if (existing->beginCount != static_cast<UInt32>(-1))
+					++existing->beginCount;
+				existing->generation = state.tsfSessionGeneration;
+				return true;
+			}
 
 			constexpr size_t kMaxRememberedTsfUiElements = 64;
-			if (State().tsfUiElementSessions.size() >= kMaxRememberedTsfUiElements)
-				State().tsfUiElementSessions.erase(State().tsfUiElementSessions.begin());
-			State().tsfUiElementSessions.push_back({ id, State().tsfSessionGeneration });
+			if (state.tsfUiElementSessions.size() >= kMaxRememberedTsfUiElements)
+				state.tsfUiElementSessions.erase(state.tsfUiElementSessions.begin());
+			state.tsfUiElementSessions.push_back(
+				{ id, state.tsfSessionGeneration, 1 });
 			return true;
 		}
 
@@ -45,19 +55,37 @@ namespace fonthook
 
 		bool ReleaseTsfUiElement(DWORD id)
 		{
+			ImeState& state = State();
 			const auto existing = std::find_if(
-				State().tsfUiElementSessions.begin(),
-				State().tsfUiElementSessions.end(),
+				state.tsfUiElementSessions.begin(),
+				state.tsfUiElementSessions.end(),
 				[id](const TsfUiElementSession& value)
 				{
 					return value.id == id;
 				});
-			if (existing == State().tsfUiElementSessions.end())
+			if (existing == state.tsfUiElementSessions.end())
 				return false;
 
-			const bool wasCurrent = existing->generation == State().tsfSessionGeneration;
-			State().tsfUiElementSessions.erase(existing);
+			const bool wasCurrent =
+				existing->generation == state.tsfSessionGeneration;
+			if (existing->beginCount > 1)
+			{
+				--existing->beginCount;
+				return false;
+			}
+			state.tsfUiElementSessions.erase(existing);
 			return wasCurrent;
+		}
+
+		bool HasCurrentTsfUiElement()
+		{
+			return std::any_of(
+				State().tsfUiElementSessions.begin(),
+				State().tsfUiElementSessions.end(),
+				[](const TsfUiElementSession& value)
+				{
+					return value.generation == State().tsfSessionGeneration;
+				});
 		}
 
 		template <class T>
@@ -157,13 +185,14 @@ namespace fonthook
 				const bool captureCandidates =
 					g_bMultibyteInputCompositionPreview
 					&& g_bMultibyteInputUseTSFCandidates;
+				const bool compositionOrHandoff = s_imeComposing
+					|| IsImeResultHandoffActive(GetTickCount());
 				const bool candidateRegistered =
 					captureCandidates
-					&& s_imeComposing
 					&& hasOverlayTarget
 					&& isCandidateElement
 					&& RegisterTsfUiElement(dwUIElementId);
-				const bool acceptsCandidates = s_imeComposing
+				const bool acceptsCandidates = compositionOrHandoff
 					&& hasOverlayTarget
 					&& candidateRegistered;
 				// A text service is allowed to expose candidate/reading UI as a
@@ -178,11 +207,7 @@ namespace fonthook
 				if (!captureCandidates)
 					return S_OK;
 				if (!acceptsCandidates)
-				{
-					ClearImeCandidates();
-					State().overlayRefreshPending = true;
 					return S_OK;
-				}
 
 				ReadCandidateElement(dwUIElementId);
 				State().overlayRefreshPending = true;
@@ -196,14 +221,11 @@ namespace fonthook
 				{
 					return S_OK;
 				}
-				if (!s_imeComposing
+				if ((!s_imeComposing
+						&& !IsImeResultHandoffActive(GetTickCount()))
 					|| !State().textInputSessionActive
 					|| !IsCurrentTsfUiElement(dwUIElementId))
-				{
-					ClearImeCandidates();
-					State().overlayRefreshPending = true;
 					return S_OK;
-				}
 
 				ReadCandidateElement(dwUIElementId);
 				State().overlayRefreshPending = true;
@@ -213,6 +235,8 @@ namespace fonthook
 			STDMETHODIMP EndUIElement(DWORD dwUIElementId) override
 			{
 				if (!ReleaseTsfUiElement(dwUIElementId))
+					return S_OK;
+				if (HasCurrentTsfUiElement())
 					return S_OK;
 
 				State().tsfCandidateActive = false;
@@ -319,6 +343,7 @@ namespace fonthook
 						state.candidate.composing = true;
 						state.tsfCompositionFallbackActive = true;
 						s_imeComposing = true;
+						MarkImeResultHandoffComposition();
 						state.overlayRefreshPending = true;
 					}
 					return;
@@ -788,6 +813,7 @@ namespace fonthook
 				State().candidate.pageStart = pageStart;
 				State().candidate.pageSize = pageSize;
 				State().candidate.candidates = std::move(candidates);
+				MarkImeResultHandoffCandidates();
 			}
 
 			LONG m_refCount = 1;
