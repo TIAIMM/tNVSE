@@ -37,15 +37,6 @@ namespace fonthook::vectorfont
 	// graph at B65EA0 -> B64F90 and B64FD1 -> B994F0.
 	inline constexpr UInt32 kRenderPassImmediatelyCallSite = 0xB64FD1;
 	inline constexpr UInt32 kStockRenderPassImmediately = 0xB994F0;
-	// FinishAccumulating_Tiles clears m_pGeometryList and invokes the virtual
-	// NiAlphaAccumulator::Sort through EDX in this nine-byte block.  Replacing
-	// only that block keeps the render-mode dispatch table and any vtable Sort
-	// predecessor intact; the hook receives the loaded predecessor in EDX.
-	inline constexpr UInt32 kTileSortDispatchPatch = 0xB65E95;
-	inline constexpr UInt32 kTileSortDispatchPatchSize = 9;
-	// The guarded fast path may replace only this retail predecessor. A vtable
-	// successor still receives the original call and the compatibility repair.
-	inline constexpr UInt32 kStockInterfaceAlphaSort = 0xA9B570;
 	inline constexpr UInt32 kRenderAlphaGeometryCallSite = 0xB65EA0;
 	inline constexpr UInt32 kStockRenderAlphaGeometry = 0xB64F90;
 	inline constexpr UInt32 kMaximumShapeValidationFailureLogs = 16;
@@ -177,7 +168,6 @@ namespace fonthook::vectorfont
 	struct SingletonFacadeState
 	{
 		SingletonFacadeBinding slot;
-		UInt64 sourceTopologyToken = 0;
 		UInt64 topologyValidationToken = 0;
 		UInt64 preflightValidationToken = 0;
 		UInt64 preparedValidationToken = 0;
@@ -217,10 +207,8 @@ namespace fonthook::vectorfont
 		RenderAlphaGeometryFn originalRenderAlphaGeometry = nullptr;
 		bool renderPassImmediatelyHookInstalled = false;
 		bool renderAlphaGeometryHookInstalled = false;
-		bool tileSortAnchorHookInstalled = false;
 		bool loggedRenderPassImmediatelyHookConflict = false;
 		bool loggedRenderAlphaGeometryHookConflict = false;
-		bool loggedTileSortAnchorHookConflict = false;
 		bool loggedRenderPassImmediatelyHit = false;
 		bool standardPassLitePredicatesValidated = false;
 		UInt32 shapeValidationFailureLogCount = 0;

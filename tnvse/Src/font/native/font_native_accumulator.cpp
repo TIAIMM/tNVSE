@@ -11,10 +11,8 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <limits>
 #include <vector>
 
@@ -38,22 +36,21 @@ namespace fonthook::vectorfont
 				* sizeof(void*);
 		inline constexpr UInt32 kStockTileRegisterObject = 0xB65A90;
 		inline constexpr UInt32 kMaximumMissingMetadataLogs = 8;
-		inline constexpr size_t kMaximumStableTieItems = 8192;
+		inline constexpr size_t kMaximumLinearTieRepairItems = 8192;
 		inline constexpr UInt32 kRegisterRouteSampleRate = 256;
 
 		using TileRegisterObjectFn = bool(__cdecl*)(BSShaderAccumulator*,
 			NiGeometry*, const NiPropertyState*, BSShaderProperty*, BSShader*);
-		using AccumulatorSortFn = void(__thiscall*)(BSShaderAccumulator*);
 		static_assert(kTileRegisterObjectFunctionEntry == 0x11F9FA8);
 		static_assert(sizeof(TileRegisterObjectFn) == sizeof(UInt32));
-		static_assert(sizeof(AccumulatorSortFn) == sizeof(UInt32));
-		static_assert(kTileSortDispatchPatchSize == 9);
 
 		std::atomic<TileRegisterObjectFn> s_originalTileRegisterObject = nullptr;
 		bool s_loggedTileRegisterObjectConflict = false;
 		bool s_loggedTileRegisterObjectSlotUnavailable = false;
 		std::atomic<UInt32> s_missingMetadataLogCount = 0;
 		std::atomic<UInt32> s_atlasTextureEpoch = 1;
+		thread_local bool s_loggedEqualDepthTieRepair = false;
+		thread_local bool s_loggedEqualDepthTieRepairFailure = false;
 
 		bool __cdecl NativeA8RegisterObject(BSShaderAccumulator* accumulator,
 			NiGeometry* geometry, const NiPropertyState* properties,
@@ -61,8 +58,6 @@ namespace fonthook::vectorfont
 		bool IsTileRegisterObjectSlotWritable();
 		void __fastcall NativeA8RenderAlphaGeometry(
 			BSShaderAccumulator* accumulator, void*);
-		void __fastcall NativeA8SortAlphaGeometry(
-			BSShaderAccumulator* accumulator, AccumulatorSortFn originalSort);
 		const hook_identity::Rel32InstructionImage
 			s_renderAlphaGeometryHookImage =
 				hook_identity::MakeRel32InstructionImage(
@@ -70,10 +65,6 @@ namespace fonthook::vectorfont
 					hook_identity::Rel32Opcode::Call,
 					reinterpret_cast<SIZE_T>(
 						&NativeA8RenderAlphaGeometry));
-		const hook_identity::Rel32InstructionImage s_tileSortHookImage =
-			hook_identity::MakeRel32InstructionImage(
-				kTileSortDispatchPatch, hook_identity::Rel32Opcode::Call,
-				reinterpret_cast<SIZE_T>(&NativeA8SortAlphaGeometry));
 
 		struct SortedFrameEntry
 		{
@@ -97,52 +88,19 @@ namespace fonthook::vectorfont
 			bool uniqueOccurrence = false;
 		};
 
-		struct StableTileTieItem
-		{
-			NiGeometry* geometry = nullptr;
-			float depth = 0.0f;
-			UInt32 registrationOrdinal = 0;
-			UInt32 registrationBlockOrdinal = 0;
-		};
-
-		struct OriginalOrderAnchorRun
+		struct EqualDepthTieRepairRun
 		{
 			UInt32 begin = 0;
 			UInt32 end = 0;
 			UInt32 write = 0;
-			bool mixed = false;
-			bool changed = false;
 		};
 
-		enum class OriginalOrderAnchorFailure : UInt8
+		struct EqualDepthTieRepairResult
 		{
-			None,
-			Gate,
-			Count,
-			Storage,
-			Source,
-			Depth,
-			Metadata,
-			Registration,
-			Facade,
-			Coverage,
-			Apply
-		};
-
-		enum class OriginalOrderSortOutcome : UInt8
-		{
-			MustCallPredecessor,
-			Anchored,
-			OrdinalSidecarRecovered,
-			StockEquivalentLegacy
-		};
-
-		struct OriginalOrderSortAttempt
-		{
-			OriginalOrderSortOutcome outcome =
-				OriginalOrderSortOutcome::MustCallPredecessor;
-			OriginalOrderAnchorFailure failure =
-				OriginalOrderAnchorFailure::Gate;
+			bool valid = false;
+			UInt32 mixedRuns = 0;
+			UInt32 changedRuns = 0;
+			UInt32 changedItems = 0;
 		};
 
 		struct NativePreflightFrameContext
@@ -172,30 +130,20 @@ namespace fonthook::vectorfont
 
 		struct SortedPayloadScratch
 		{
-			BSShaderAccumulator* sourceAccumulator = nullptr;
-			// Exact predecessor-accepted AddTail order, captured once at Sort. It is
-			// non-owning; metadataOwners below keep the FreeType side alive through
-			// the matching RenderAlphaGeometry traversal.
-			std::vector<NiGeometry*> acceptedTileRegistrations;
+			// The active predecessor Sort owns m_ppkItems/m_pfDepths. tNVSE only
+			// rewrites geometry pointers inside a proved exact-equal-depth mixed run;
+			// depths and every other run remain the predecessor's result.
+			BSShaderAccumulator* frameAccumulator = nullptr;
 			std::vector<NiTriShape*> metadataShapes;
 			std::vector<A8ShapeMetadataPtr> metadataOwners;
 			std::vector<UInt32> metadataLookup;
-			std::vector<UInt32> sourceOccurrenceCounts;
-			std::vector<SInt32> sourceFirstIndices;
 			std::vector<UInt32> sortedOccurrenceCounts;
-			std::vector<SInt32> sortedFirstIndices;
-			std::vector<UInt32> acceptedRegistrationLookup;
-			std::vector<UInt32> acceptedOccurrenceHeads;
-			std::vector<UInt32> acceptedOccurrenceTails;
-			std::vector<UInt32> acceptedOccurrenceNext;
-			std::vector<UInt32> sortedRegistrationOrdinals;
-			std::vector<UInt32> sortedItemIndicesByRegistrationOrdinal;
-			std::vector<StableTileTieItem> stableTieItems;
-			std::vector<UInt8> originalOrderFreeTypeFlags;
-			std::vector<UInt32> originalOrderDesiredOrdinals;
-			std::vector<UInt32> originalOrderRunIds;
-			std::vector<OriginalOrderAnchorRun> originalOrderRuns;
-			std::vector<NiGeometry*> originalOrderOutput;
+			std::vector<UInt32> tieSortedLookup;
+			std::vector<UInt32> tieSortedOccurrenceCursor;
+			std::vector<UInt32> tieSortedOccurrenceNext;
+			std::vector<UInt32> tieRunIds;
+			std::vector<EqualDepthTieRepairRun> tieRuns;
+			std::vector<NiGeometry*> tieOutput;
 			std::vector<NiTriShape*> frameCandidates;
 			std::vector<ExecutionSequenceSkeletonItem> executionSkeleton;
 			BSShaderAccumulator* executionSkeletonAccumulator = nullptr;
@@ -210,13 +158,8 @@ namespace fonthook::vectorfont
 			CpuMemoryLease cpuMemory;
 			UInt32 nestedBypassDepth = 0;
 			UInt64 nestedTraversalSerial = 1;
-			UInt64 sortCycle = 1;
 			UInt64 nextValidationToken = 0;
 			UInt64 activeValidationToken = 0;
-			BSShaderAccumulator* originalOrderAnchorAccumulator = nullptr;
-			UInt64 originalOrderAnchorCycle = 0;
-			OriginalOrderAnchorFailure sourceTopologyFailure =
-				OriginalOrderAnchorFailure::Gate;
 			bool active = false;
 		};
 
@@ -233,14 +176,14 @@ namespace fonthook::vectorfont
 			UInt64 metadataBatches = 0;
 			UInt64 metadataShapes = 0;
 			UInt64 metadataMissing = 0;
-			UInt64 sourceFallback = 0;
+			UInt64 sortedScanFallback = 0;
 			UInt64 facadeTopology = 0;
 			UInt64 facadeFallback = 0;
 			UInt64 occurrenceFallback = 0;
 		};
 
 		thread_local ThinRegistrationDiagnostics s_thinRegistrationDiagnostics;
-		// Diagnostics are flushed at every Sort/Clear boundary.  Keep the timing
+		// Diagnostics are flushed at every frame-clear boundary. Keep the timing
 		// phase separate so short registration cycles still contribute one sample
 		// per kRegisterRouteSampleRate calls across the lifetime of this thread.
 		thread_local UInt32 s_registerRouteSampleCountdown =
@@ -263,8 +206,6 @@ namespace fonthook::vectorfont
 			mix(reinterpret_cast<const void*>(kTileRegisterObjectFunctionEntry),
 				sizeof(void*));
 			mix(reinterpret_cast<const void*>(kRenderAlphaGeometryCallSite), 5);
-			mix(reinterpret_cast<const void*>(kTileSortDispatchPatch),
-				kTileSortDispatchPatchSize);
 			mix(reinterpret_cast<const void*>(kRenderPassImmediatelyCallSite), 5);
 			const A8State& state = State();
 			const TileRegisterObjectFn predecessor =
@@ -344,8 +285,8 @@ namespace fonthook::vectorfont
 				values.metadataShapes);
 			record(FreeTypePerfCounter::ThinRegistrationMetadataMissing,
 				values.metadataMissing);
-			record(FreeTypePerfCounter::ThinRegistrationSourceFallback,
-				values.sourceFallback);
+			record(FreeTypePerfCounter::ThinRegistrationSortedScanFallback,
+				values.sortedScanFallback);
 			record(FreeTypePerfCounter::ThinRegistrationFacadeTopology,
 				values.facadeTopology);
 			record(FreeTypePerfCounter::ThinRegistrationFacadeFallback,
@@ -446,37 +387,17 @@ namespace fonthook::vectorfont
 		void RefreshSortedScratchMemory(SortedPayloadScratch& scratch)
 		{
 			const size_t bytes =
-				scratch.acceptedTileRegistrations.capacity()
-					* sizeof(NiGeometry*)
-				+ scratch.metadataShapes.capacity() * sizeof(NiTriShape*)
+				scratch.metadataShapes.capacity() * sizeof(NiTriShape*)
 				+ scratch.metadataOwners.capacity()
 					* sizeof(A8ShapeMetadataPtr)
 				+ scratch.metadataLookup.capacity() * sizeof(UInt32)
-				+ scratch.sourceOccurrenceCounts.capacity() * sizeof(UInt32)
-				+ scratch.sourceFirstIndices.capacity() * sizeof(SInt32)
 				+ scratch.sortedOccurrenceCounts.capacity() * sizeof(UInt32)
-				+ scratch.sortedFirstIndices.capacity() * sizeof(SInt32)
-				+ scratch.acceptedRegistrationLookup.capacity()
-					* sizeof(UInt32)
-				+ scratch.acceptedOccurrenceHeads.capacity() * sizeof(UInt32)
-				+ scratch.acceptedOccurrenceTails.capacity() * sizeof(UInt32)
-				+ scratch.acceptedOccurrenceNext.capacity() * sizeof(UInt32)
-				+ scratch.sortedRegistrationOrdinals.capacity()
-					* sizeof(UInt32)
-				+ scratch.sortedItemIndicesByRegistrationOrdinal.capacity()
-					* sizeof(UInt32)
-				+ scratch.stableTieItems.capacity()
-					* sizeof(StableTileTieItem)
-				+ scratch.originalOrderFreeTypeFlags.capacity()
-					* sizeof(UInt8)
-				+ scratch.originalOrderDesiredOrdinals.capacity()
-					* sizeof(UInt32)
-				+ scratch.originalOrderRunIds.capacity()
-					* sizeof(UInt32)
-				+ scratch.originalOrderRuns.capacity()
-					* sizeof(OriginalOrderAnchorRun)
-				+ scratch.originalOrderOutput.capacity()
-					* sizeof(NiGeometry*)
+				+ scratch.tieSortedLookup.capacity() * sizeof(UInt32)
+				+ scratch.tieSortedOccurrenceCursor.capacity() * sizeof(UInt32)
+				+ scratch.tieSortedOccurrenceNext.capacity() * sizeof(UInt32)
+				+ scratch.tieRunIds.capacity() * sizeof(UInt32)
+				+ scratch.tieRuns.capacity() * sizeof(EqualDepthTieRepairRun)
+				+ scratch.tieOutput.capacity() * sizeof(NiGeometry*)
 				+ scratch.frameCandidates.capacity() * sizeof(NiTriShape*)
 				+ scratch.executionSkeleton.capacity()
 					* sizeof(ExecutionSequenceSkeletonItem)
@@ -498,6 +419,16 @@ namespace fonthook::vectorfont
 			EndNativeA8FrameCommandBuffer();
 			scratch.active = false;
 			scratch.activeValidationToken = 0;
+			scratch.frameAccumulator = nullptr;
+			scratch.metadataShapes.clear();
+			scratch.metadataOwners.clear();
+			scratch.sortedOccurrenceCounts.clear();
+			scratch.tieSortedLookup.clear();
+			scratch.tieSortedOccurrenceCursor.clear();
+			scratch.tieSortedOccurrenceNext.clear();
+			scratch.tieRunIds.clear();
+			scratch.tieRuns.clear();
+			scratch.tieOutput.clear();
 			scratch.frameCandidates.clear();
 			scratch.executionSkeleton.clear();
 			scratch.executionSkeletonAccumulator = nullptr;
@@ -507,89 +438,27 @@ namespace fonthook::vectorfont
 			scratch.frameEntries.clear();
 			scratch.payloadTemplates.clear();
 			scratch.singletonFacades.clear();
-			scratch.sourceAccumulator = nullptr;
-			scratch.acceptedTileRegistrations.clear();
-			scratch.metadataShapes.clear();
-			scratch.metadataOwners.clear();
-			scratch.sourceOccurrenceCounts.clear();
-			scratch.sourceFirstIndices.clear();
-			scratch.sortedOccurrenceCounts.clear();
-			scratch.sortedFirstIndices.clear();
-			scratch.originalOrderAnchorAccumulator = nullptr;
-			scratch.originalOrderAnchorCycle = 0;
-			scratch.sourceTopologyFailure = OriginalOrderAnchorFailure::Gate;
-			if (++scratch.sortCycle == 0)
-				++scratch.sortCycle;
-			if (scratch.acceptedTileRegistrations.capacity() > 8192)
-			{
-				std::vector<NiGeometry*>().swap(
-					scratch.acceptedTileRegistrations);
-			}
+
 			if (scratch.metadataShapes.capacity() > 8192)
 				std::vector<NiTriShape*>().swap(scratch.metadataShapes);
 			if (scratch.metadataOwners.capacity() > 8192)
 				std::vector<A8ShapeMetadataPtr>().swap(scratch.metadataOwners);
 			if (scratch.metadataLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.metadataLookup);
-			if (scratch.sourceOccurrenceCounts.capacity() > 8192)
-				std::vector<UInt32>().swap(scratch.sourceOccurrenceCounts);
-			if (scratch.sourceFirstIndices.capacity() > 8192)
-				std::vector<SInt32>().swap(scratch.sourceFirstIndices);
 			if (scratch.sortedOccurrenceCounts.capacity() > 8192)
 				std::vector<UInt32>().swap(scratch.sortedOccurrenceCounts);
-			if (scratch.sortedFirstIndices.capacity() > 8192)
-				std::vector<SInt32>().swap(scratch.sortedFirstIndices);
-			if (scratch.acceptedRegistrationLookup.capacity() > 16384)
-			{
-				std::vector<UInt32>().swap(
-					scratch.acceptedRegistrationLookup);
-			}
-			if (scratch.acceptedOccurrenceHeads.capacity() > 16384)
-				std::vector<UInt32>().swap(scratch.acceptedOccurrenceHeads);
-			if (scratch.acceptedOccurrenceTails.capacity() > 16384)
-				std::vector<UInt32>().swap(scratch.acceptedOccurrenceTails);
-			if (scratch.acceptedOccurrenceNext.capacity() > 8192)
-				std::vector<UInt32>().swap(scratch.acceptedOccurrenceNext);
-			if (scratch.sortedRegistrationOrdinals.capacity() > 8192)
-			{
-				std::vector<UInt32>().swap(
-					scratch.sortedRegistrationOrdinals);
-			}
-			if (scratch.sortedItemIndicesByRegistrationOrdinal.capacity() > 8192)
-			{
-				std::vector<UInt32>().swap(
-					scratch.sortedItemIndicesByRegistrationOrdinal);
-			}
-			if (scratch.stableTieItems.capacity() > 8192)
-			{
-				std::vector<StableTileTieItem>().swap(
-					scratch.stableTieItems);
-			}
-			if (scratch.originalOrderFreeTypeFlags.capacity() > 8192)
-			{
-				std::vector<UInt8>().swap(
-					scratch.originalOrderFreeTypeFlags);
-			}
-			if (scratch.originalOrderDesiredOrdinals.capacity() > 8192)
-			{
-				std::vector<UInt32>().swap(
-					scratch.originalOrderDesiredOrdinals);
-			}
-			if (scratch.originalOrderRunIds.capacity() > 8192)
-			{
-				std::vector<UInt32>().swap(
-					scratch.originalOrderRunIds);
-			}
-			if (scratch.originalOrderRuns.capacity() > 8192)
-			{
-				std::vector<OriginalOrderAnchorRun>().swap(
-					scratch.originalOrderRuns);
-			}
-			if (scratch.originalOrderOutput.capacity() > 8192)
-			{
-				std::vector<NiGeometry*>().swap(
-					scratch.originalOrderOutput);
-			}
+			if (scratch.tieSortedLookup.capacity() > 16384)
+				std::vector<UInt32>().swap(scratch.tieSortedLookup);
+			if (scratch.tieSortedOccurrenceCursor.capacity() > 16384)
+				std::vector<UInt32>().swap(scratch.tieSortedOccurrenceCursor);
+			if (scratch.tieSortedOccurrenceNext.capacity() > 8192)
+				std::vector<UInt32>().swap(scratch.tieSortedOccurrenceNext);
+			if (scratch.tieRunIds.capacity() > 8192)
+				std::vector<UInt32>().swap(scratch.tieRunIds);
+			if (scratch.tieRuns.capacity() > 8192)
+				std::vector<EqualDepthTieRepairRun>().swap(scratch.tieRuns);
+			if (scratch.tieOutput.capacity() > 8192)
+				std::vector<NiGeometry*>().swap(scratch.tieOutput);
 			if (scratch.frameEntries.capacity() > 8192)
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
 			if (scratch.frameCandidates.capacity() > 8192)
@@ -613,39 +482,21 @@ namespace fonthook::vectorfont
 				std::vector<const A8ShapeMetadata*>().swap(
 					scratch.singletonFacades);
 			}
+
 			RefreshSortedScratchMemory(scratch);
 			if (IsCpuMemoryBudgetExceeded())
 			{
-				std::vector<NiGeometry*>().swap(
-					scratch.acceptedTileRegistrations);
 				std::vector<NiTriShape*>().swap(scratch.metadataShapes);
 				std::vector<A8ShapeMetadataPtr>().swap(scratch.metadataOwners);
 				std::vector<UInt32>().swap(scratch.metadataLookup);
-				std::vector<UInt32>().swap(scratch.sourceOccurrenceCounts);
-				std::vector<SInt32>().swap(scratch.sourceFirstIndices);
 				std::vector<UInt32>().swap(scratch.sortedOccurrenceCounts);
-				std::vector<SInt32>().swap(scratch.sortedFirstIndices);
+				std::vector<UInt32>().swap(scratch.tieSortedLookup);
 				std::vector<UInt32>().swap(
-					scratch.acceptedRegistrationLookup);
-				std::vector<UInt32>().swap(scratch.acceptedOccurrenceHeads);
-				std::vector<UInt32>().swap(scratch.acceptedOccurrenceTails);
-				std::vector<UInt32>().swap(scratch.acceptedOccurrenceNext);
-				std::vector<UInt32>().swap(
-					scratch.sortedRegistrationOrdinals);
-				std::vector<UInt32>().swap(
-					scratch.sortedItemIndicesByRegistrationOrdinal);
-				std::vector<StableTileTieItem>().swap(
-					scratch.stableTieItems);
-				std::vector<UInt8>().swap(
-					scratch.originalOrderFreeTypeFlags);
-				std::vector<UInt32>().swap(
-					scratch.originalOrderDesiredOrdinals);
-				std::vector<UInt32>().swap(
-					scratch.originalOrderRunIds);
-				std::vector<OriginalOrderAnchorRun>().swap(
-					scratch.originalOrderRuns);
-				std::vector<NiGeometry*>().swap(
-					scratch.originalOrderOutput);
+					scratch.tieSortedOccurrenceCursor);
+				std::vector<UInt32>().swap(scratch.tieSortedOccurrenceNext);
+				std::vector<UInt32>().swap(scratch.tieRunIds);
+				std::vector<EqualDepthTieRepairRun>().swap(scratch.tieRuns);
+				std::vector<NiGeometry*>().swap(scratch.tieOutput);
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
 				std::vector<NiTriShape*>().swap(scratch.frameCandidates);
 				std::vector<ExecutionSequenceSkeletonItem>().swap(
@@ -671,25 +522,6 @@ namespace fonthook::vectorfont
 				return nullptr;
 			}
 			return reinterpret_cast<RenderAlphaGeometryFn>(target);
-		}
-
-		bool IsTileSortAnchorHookCurrent()
-		{
-			SIZE_T target = 0;
-			if (!hook_identity::ReadRel32Target(
-				kTileSortDispatchPatch,
-				hook_identity::Rel32Opcode::Call,
-				target)
-				|| target != reinterpret_cast<SIZE_T>(
-					&NativeA8SortAlphaGeometry))
-			{
-				return false;
-			}
-			static constexpr UInt8 kTail[] = { 0x90, 0x90, 0x90, 0x90 };
-			return hook_identity::IsAccessibleRegion(
-				kTileSortDispatchPatch + 5u, sizeof(kTail), true)
-				&& std::memcmp(reinterpret_cast<const void*>(
-					kTileSortDispatchPatch + 5u), kTail, sizeof(kTail)) == 0;
 		}
 
 		TileRegisterObjectFn ReadTileRegisterObjectTarget()
@@ -780,18 +612,335 @@ namespace fonthook::vectorfont
 				? scratch.metadataOwners[index].get() : nullptr;
 		}
 
-		void RebuildMetadataBatch(SortedPayloadScratch& scratch)
+		EqualDepthTieRepairResult RepairMixedEqualDepthRunsLinear(
+			SortedPayloadScratch& scratch, BSShaderAccumulator& accumulator)
 		{
-			PrepareLookup(scratch.metadataLookup, scratch.metadataShapes.size());
-			const size_t mask = scratch.metadataLookup.size() - 1u;
-			for (size_t index = 0; index < scratch.metadataShapes.size(); ++index)
+			EqualDepthTieRepairResult result;
+			const size_t itemCount = static_cast<size_t>(accumulator.m_iNumItems);
+			if (!itemCount || itemCount > kMaximumLinearTieRepairItems
+				|| !accumulator.m_ppkItems || !accumulator.m_pfDepths)
 			{
-				NiTriShape* shape = scratch.metadataShapes[index];
-				size_t slot = HashPointer(shape) & mask;
-				while (scratch.metadataLookup[slot])
-					slot = (slot + 1u) & mask;
-				scratch.metadataLookup[slot] = static_cast<UInt32>(index + 1u);
+				return result;
 			}
+
+			NiSortedObjectList* sourceList = accumulator.m_pGeometryList
+				? accumulator.m_pGeometryList : &accumulator.m_kItems;
+			if (!sourceList || static_cast<size_t>(sourceList->GetSize()) != itemCount)
+				return result;
+
+			result.mixedRuns = static_cast<UInt32>(scratch.tieRuns.size());
+			if (scratch.tieRuns.empty())
+			{
+				result.valid = true;
+				return result;
+			}
+
+			// CaptureSortedFacadeTopology has already identified these runs during
+			// its required facade scan. Revalidate only the candidate ranges before
+			// using them; do not classify the complete sorted array a second time.
+			scratch.tieRunIds.assign(itemCount, kInvalidNativeA8CommandIndex);
+			UInt32 previousEnd = 0;
+			for (size_t runIndex = 0;
+				runIndex < scratch.tieRuns.size(); ++runIndex)
+			{
+				EqualDepthTieRepairRun& run = scratch.tieRuns[runIndex];
+				if (run.begin >= run.end || run.end > itemCount
+					|| run.begin < previousEnd)
+				{
+					return result;
+				}
+				const float depth = accumulator.m_pfDepths[run.begin];
+				if ((run.begin && accumulator.m_pfDepths[run.begin - 1u] == depth)
+					|| (run.end < itemCount
+						&& accumulator.m_pfDepths[run.end] == depth))
+				{
+					return result;
+				}
+				bool hasFreeType = false;
+				bool hasStock = false;
+				const UInt32 runId = static_cast<UInt32>(runIndex);
+				for (UInt32 item = run.begin; item < run.end; ++item)
+				{
+					if (accumulator.m_pfDepths[item] != depth)
+						return result;
+					const bool isFreeType =
+						IsFreeTypeFacade(accumulator.m_ppkItems[item]);
+					hasFreeType = hasFreeType || isFreeType;
+					hasStock = hasStock || !isFreeType;
+					scratch.tieRunIds[item] = runId;
+				}
+				if (!hasFreeType || !hasStock)
+					return result;
+				run.write = run.begin;
+				previousEnd = run.end;
+			}
+
+			// Index every sorted occurrence once. A per-pointer stack preserves exact
+			// multiplicity without copying the source list or building a bidirectional
+			// source-ordinal map. Duplicate pointers are interchangeable here because
+			// the desired output pointer is identical for every such occurrence.
+			PrepareLookup(scratch.tieSortedLookup, itemCount);
+			const size_t lookupMask = scratch.tieSortedLookup.size() - 1u;
+			scratch.tieSortedOccurrenceCursor.assign(
+				scratch.tieSortedLookup.size(), 0);
+			scratch.tieSortedOccurrenceNext.assign(itemCount, 0);
+			for (size_t item = 0; item < itemCount; ++item)
+			{
+				NiGeometry* geometry = accumulator.m_ppkItems[item];
+				if (!geometry)
+					return result;
+				size_t slot = HashPointer(geometry) & lookupMask;
+				bool inserted = false;
+				for (size_t probe = 0;
+					probe < scratch.tieSortedLookup.size(); ++probe)
+				{
+					const UInt32 stored = scratch.tieSortedLookup[slot];
+					if (!stored)
+					{
+						const UInt32 occurrence = static_cast<UInt32>(item + 1u);
+						scratch.tieSortedLookup[slot] = occurrence;
+						scratch.tieSortedOccurrenceCursor[slot] = occurrence;
+						inserted = true;
+						break;
+					}
+					const size_t keyItem = static_cast<size_t>(stored - 1u);
+					if (keyItem < itemCount
+						&& accumulator.m_ppkItems[keyItem] == geometry)
+					{
+						const UInt32 occurrence = static_cast<UInt32>(item + 1u);
+						scratch.tieSortedOccurrenceNext[item] =
+							scratch.tieSortedOccurrenceCursor[slot];
+						scratch.tieSortedOccurrenceCursor[slot] = occurrence;
+						inserted = true;
+						break;
+					}
+					slot = (slot + 1u) & lookupMask;
+				}
+				if (!inserted)
+					return result;
+			}
+
+			// The stock renderer consumes high index to low index. Walk the original
+			// AddTail list from tail to head and fill each mixed run from begin to end;
+			// reverse rendering therefore observes the original registration order.
+			// This is a single O(n) list pass and performs no comparison sort.
+			scratch.tieOutput.resize(itemCount);
+			NiTListIterator position = sourceList->GetTailPos();
+			size_t sourceItems = 0;
+			while (position && sourceItems < itemCount)
+			{
+				NiGeometry* geometry = sourceList->GetPrev(position);
+				++sourceItems;
+				if (!geometry)
+					return result;
+				size_t slot = HashPointer(geometry) & lookupMask;
+				UInt32 sortedItem = kInvalidNativeA8CommandIndex;
+				for (size_t probe = 0;
+					probe < scratch.tieSortedLookup.size(); ++probe)
+				{
+					const UInt32 stored = scratch.tieSortedLookup[slot];
+					if (!stored)
+						break;
+					const size_t keyItem = static_cast<size_t>(stored - 1u);
+					if (keyItem < itemCount
+						&& accumulator.m_ppkItems[keyItem] == geometry)
+					{
+						const UInt32 occurrence =
+							scratch.tieSortedOccurrenceCursor[slot];
+						if (!occurrence || occurrence > itemCount)
+							return result;
+						sortedItem = occurrence - 1u;
+						scratch.tieSortedOccurrenceCursor[slot] =
+							scratch.tieSortedOccurrenceNext[sortedItem];
+						break;
+					}
+					slot = (slot + 1u) & lookupMask;
+				}
+				if (sortedItem >= itemCount)
+					return result;
+				const UInt32 runId = scratch.tieRunIds[sortedItem];
+				if (runId == kInvalidNativeA8CommandIndex)
+					continue;
+				if (runId >= scratch.tieRuns.size())
+					return result;
+				EqualDepthTieRepairRun& run = scratch.tieRuns[runId];
+				if (run.write >= run.end)
+					return result;
+				scratch.tieOutput[run.write++] = geometry;
+			}
+			if (position || sourceItems != itemCount)
+				return result;
+			for (size_t slot = 0; slot < scratch.tieSortedLookup.size(); ++slot)
+			{
+				if (scratch.tieSortedLookup[slot]
+					&& scratch.tieSortedOccurrenceCursor[slot])
+				{
+					return result;
+				}
+			}
+
+			for (const EqualDepthTieRepairRun& run : scratch.tieRuns)
+			{
+				if (run.write != run.end)
+					return result;
+			}
+			for (const EqualDepthTieRepairRun& run : scratch.tieRuns)
+			{
+				bool changed = false;
+				for (UInt32 item = run.begin; item < run.end; ++item)
+				{
+					if (accumulator.m_ppkItems[item] != scratch.tieOutput[item])
+					{
+						changed = true;
+						++result.changedItems;
+					}
+				}
+				if (!changed)
+					continue;
+				++result.changedRuns;
+				for (UInt32 item = run.begin; item < run.end; ++item)
+					accumulator.m_ppkItems[item] = scratch.tieOutput[item];
+			}
+			result.valid = true;
+			return result;
+		}
+
+		bool CaptureSortedFacadeTopology(SortedPayloadScratch& scratch,
+			BSShaderAccumulator* accumulator)
+		{
+			scratch.frameAccumulator = nullptr;
+			scratch.metadataShapes.clear();
+			scratch.metadataOwners.clear();
+			scratch.sortedOccurrenceCounts.clear();
+			scratch.tieRuns.clear();
+
+			if (!accumulator || scratch.active || scratch.nestedBypassDepth
+				|| accumulator->eRenderMode
+					!= BSShaderManager::BSSM_RENDER_TILES
+				|| accumulator->m_iNumItems <= 0
+				|| !accumulator->m_ppkItems)
+			{
+				++s_thinRegistrationDiagnostics.sortedScanFallback;
+				return false;
+			}
+
+			const size_t itemCount =
+				static_cast<size_t>(accumulator->m_iNumItems);
+			PrepareLookup(scratch.metadataLookup, itemCount);
+			const size_t metadataMask = scratch.metadataLookup.size() - 1u;
+			const bool trackEqualDepthRuns = accumulator->m_pfDepths != nullptr;
+			float activeRunDepth = trackEqualDepthRuns
+				? accumulator->m_pfDepths[0] : 0.0f;
+			size_t activeRunBegin = 0;
+			bool activeRunHasFreeType = false;
+			bool activeRunHasStock = false;
+			bool mixedEqualDepthCandidate = false;
+			for (SInt32 itemIndex = 0;
+				itemIndex < accumulator->m_iNumItems; ++itemIndex)
+			{
+				NiGeometry* geometry = accumulator->m_ppkItems[itemIndex];
+				const bool isFreeType = IsFreeTypeFacade(geometry);
+				if (trackEqualDepthRuns)
+				{
+					const float depth = accumulator->m_pfDepths[itemIndex];
+					if (itemIndex && depth != activeRunDepth)
+					{
+						if (activeRunHasFreeType && activeRunHasStock)
+						{
+							scratch.tieRuns.push_back({
+								static_cast<UInt32>(activeRunBegin),
+								static_cast<UInt32>(itemIndex),
+								static_cast<UInt32>(activeRunBegin) });
+							mixedEqualDepthCandidate = true;
+						}
+						activeRunDepth = depth;
+						activeRunBegin = static_cast<size_t>(itemIndex);
+						activeRunHasFreeType = false;
+						activeRunHasStock = false;
+					}
+					activeRunHasFreeType = activeRunHasFreeType || isFreeType;
+					activeRunHasStock = activeRunHasStock || !isFreeType;
+				}
+				if (!isFreeType)
+					continue;
+
+				NiTriShape* facade = static_cast<NiTriShape*>(geometry);
+				size_t slot = HashPointer(facade) & metadataMask;
+				bool accounted = false;
+				for (size_t probe = 0;
+					probe < scratch.metadataLookup.size(); ++probe)
+				{
+					const UInt32 stored = scratch.metadataLookup[slot];
+					if (!stored)
+					{
+						const size_t metadataIndex =
+							scratch.metadataShapes.size();
+						scratch.metadataShapes.push_back(facade);
+						scratch.sortedOccurrenceCounts.push_back(1);
+						scratch.metadataLookup[slot] =
+							static_cast<UInt32>(metadataIndex + 1u);
+						accounted = true;
+						break;
+					}
+					const size_t metadataIndex =
+						static_cast<size_t>(stored - 1u);
+					if (metadataIndex < scratch.metadataShapes.size()
+						&& scratch.metadataShapes[metadataIndex] == facade)
+					{
+						++scratch.sortedOccurrenceCounts[metadataIndex];
+						accounted = true;
+						break;
+					}
+					slot = (slot + 1u) & metadataMask;
+				}
+				if (!accounted)
+				{
+					scratch.metadataShapes.clear();
+					scratch.sortedOccurrenceCounts.clear();
+					++s_thinRegistrationDiagnostics.sortedScanFallback;
+					return false;
+				}
+			}
+			if (trackEqualDepthRuns
+				&& activeRunHasFreeType && activeRunHasStock)
+			{
+				scratch.tieRuns.push_back({
+					static_cast<UInt32>(activeRunBegin),
+					static_cast<UInt32>(itemCount),
+					static_cast<UInt32>(activeRunBegin) });
+				mixedEqualDepthCandidate = true;
+			}
+
+			if (mixedEqualDepthCandidate)
+			{
+				const EqualDepthTieRepairResult repair =
+					RepairMixedEqualDepthRunsLinear(scratch, *accumulator);
+				if (!repair.valid)
+				{
+					if (g_bEnableFreeTypeFontRenderingLog
+						&& !s_loggedEqualDepthTieRepairFailure)
+					{
+						s_loggedEqualDepthTieRepairFailure = true;
+						FreeTypeFontDebugLog(
+							"tnvse_freetype_equal_depth_repair: status=fail-open items=%u",
+							static_cast<UInt32>(itemCount));
+					}
+				}
+				else if (repair.changedRuns
+					&& g_bEnableFreeTypeFontRenderingLog
+					&& !s_loggedEqualDepthTieRepair)
+				{
+					s_loggedEqualDepthTieRepair = true;
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_equal_depth_repair: status=applied items=%u mixed_runs=%u changed_runs=%u changed_items=%u algorithm=linear-source-ordinal",
+						static_cast<UInt32>(itemCount), repair.mixedRuns,
+						repair.changedRuns, repair.changedItems);
+				}
+			}
+
+			scratch.frameAccumulator = accumulator;
+			if (scratch.metadataShapes.empty())
+				return true;
 
 			AcquireA8ShapeMetadataBatch(
 				scratch.metadataShapes, scratch.metadataOwners);
@@ -803,330 +952,34 @@ namespace fonthook::vectorfont
 				if (!owner)
 					++s_thinRegistrationDiagnostics.metadataMissing;
 			}
-
-			scratch.sourceOccurrenceCounts.assign(
-				scratch.metadataShapes.size(), 0);
-			scratch.sourceFirstIndices.assign(
-				scratch.metadataShapes.size(), -1);
-			for (size_t ordinal = 0;
-				ordinal < scratch.acceptedTileRegistrations.size(); ++ordinal)
-			{
-				NiGeometry* geometry = scratch.acceptedTileRegistrations[ordinal];
-				if (!IsFreeTypeFacade(geometry))
-					continue;
-				const size_t index = LookupMetadataShapeIndex(scratch,
-					static_cast<NiTriShape*>(geometry));
-				if (index >= scratch.sourceOccurrenceCounts.size())
-					continue;
-				if (!scratch.sourceOccurrenceCounts[index])
-					scratch.sourceFirstIndices[index] =
-						static_cast<SInt32>(ordinal);
-				++scratch.sourceOccurrenceCounts[index];
-			}
-		}
-
-		bool CaptureSourceRegistrationOrder(SortedPayloadScratch& scratch,
-			BSShaderAccumulator* accumulator)
-		{
-			scratch.sourceAccumulator = nullptr;
-			scratch.acceptedTileRegistrations.clear();
-			scratch.metadataShapes.clear();
-			scratch.metadataOwners.clear();
-			scratch.sourceTopologyFailure = OriginalOrderAnchorFailure::Gate;
-			if (!accumulator || scratch.active || scratch.nestedBypassDepth)
-				return false;
-
-			const size_t itemCount = accumulator->m_kItems.GetSize();
-			if (!itemCount || itemCount > kMaximumStableTieItems)
-			{
-				++s_thinRegistrationDiagnostics.sourceFallback;
-				return false;
-			}
-			scratch.acceptedTileRegistrations.reserve(itemCount);
-			PrepareLookup(scratch.metadataLookup, itemCount);
-			const size_t metadataMask = scratch.metadataLookup.size() - 1u;
-			NiTListIterator position = accumulator->m_kItems.GetHeadPos();
-			while (position
-				&& scratch.acceptedTileRegistrations.size() < itemCount)
-			{
-				NiGeometry* geometry = accumulator->m_kItems.GetNext(position);
-				if (!geometry)
-					break;
-				scratch.acceptedTileRegistrations.push_back(geometry);
-				if (IsFreeTypeFacade(geometry))
-				{
-					NiTriShape* facade = static_cast<NiTriShape*>(geometry);
-					size_t slot = HashPointer(facade) & metadataMask;
-					for (size_t probe = 0;
-						probe < scratch.metadataLookup.size(); ++probe)
-					{
-						const UInt32 stored = scratch.metadataLookup[slot];
-						if (!stored)
-						{
-							scratch.metadataShapes.push_back(facade);
-							scratch.metadataLookup[slot] =
-								static_cast<UInt32>(
-									scratch.metadataShapes.size());
-							break;
-						}
-						const size_t existing = static_cast<size_t>(stored - 1u);
-						if (existing < scratch.metadataShapes.size()
-							&& scratch.metadataShapes[existing] == facade)
-						{
-							break;
-						}
-						slot = (slot + 1u) & metadataMask;
-					}
-				}
-			}
-			if (position || scratch.acceptedTileRegistrations.size() != itemCount)
-			{
-				scratch.acceptedTileRegistrations.clear();
-				scratch.metadataShapes.clear();
-				++s_thinRegistrationDiagnostics.sourceFallback;
-				return false;
-			}
-			if (++scratch.sortCycle == 0)
-				++scratch.sortCycle;
-			scratch.sourceAccumulator = accumulator;
-			RebuildMetadataBatch(scratch);
 			return true;
 		}
 
-		void EnsureSortedMetadataCoverage(SortedPayloadScratch& scratch,
-			const BSShaderAccumulator& accumulator)
+		void ResolveSingletonFacadeSortedTopology(
+			SortedPayloadScratch& scratch, BSShaderAccumulator* accumulator,
+			UInt64 validationToken)
 		{
-			bool rebuild = false;
-			for (SInt32 index = accumulator.m_iNumItems - 1; index >= 0; --index)
+			if (!accumulator || !validationToken
+				|| scratch.frameAccumulator != accumulator
+				|| !accumulator->m_ppkItems)
 			{
-				NiGeometry* geometry = accumulator.m_ppkItems[index];
-				if (!IsFreeTypeFacade(geometry))
-					continue;
-				NiTriShape* facade = static_cast<NiTriShape*>(geometry);
-				if (LookupMetadataShapeIndex(scratch, facade)
-					!= std::numeric_limits<size_t>::max())
-				{
-					continue;
-				}
-				if (std::find(scratch.metadataShapes.begin(),
-					scratch.metadataShapes.end(), facade)
-					== scratch.metadataShapes.end())
-				{
-					scratch.metadataShapes.push_back(facade);
-					rebuild = true;
-				}
-			}
-			if (rebuild || scratch.metadataOwners.size()
-				!= scratch.metadataShapes.size())
-			{
-				RebuildMetadataBatch(scratch);
-			}
-		}
-
-		void RecordOriginalOrderAnchorFailure(
-			OriginalOrderAnchorFailure failure)
-		{
-			FreeTypePerfCounter counter;
-			switch (failure)
-			{
-			case OriginalOrderAnchorFailure::Gate:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailGate;
-				break;
-			case OriginalOrderAnchorFailure::Count:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailCount;
-				break;
-			case OriginalOrderAnchorFailure::Storage:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailStorage;
-				break;
-			case OriginalOrderAnchorFailure::Source:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailSource;
-				break;
-			case OriginalOrderAnchorFailure::Depth:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailDepth;
-				break;
-			case OriginalOrderAnchorFailure::Metadata:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailMetadata;
-				break;
-			case OriginalOrderAnchorFailure::Registration:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailRegistration;
-				break;
-			case OriginalOrderAnchorFailure::Facade:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailFacade;
-				break;
-			case OriginalOrderAnchorFailure::Coverage:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailCoverage;
-				break;
-			case OriginalOrderAnchorFailure::Apply:
-				counter = FreeTypePerfCounter::
-					SortedOriginalOrderAnchorFailApply;
-				break;
-			default:
+				++s_thinRegistrationDiagnostics.sortedScanFallback;
 				return;
 			}
-			RecordFreeTypePerf(counter);
-		}
-
-		float ChooseOriginalDepthPivot(const BSShaderAccumulator& accumulator,
-			SInt32 left, SInt32 right)
-		{
-			const SInt32 middle = (left + right) >> 1;
-			const float leftDepth = accumulator.m_pfDepths[left];
-			const float middleDepth = accumulator.m_pfDepths[middle];
-			const float rightDepth = accumulator.m_pfDepths[right];
-			// Preserve the exact branch order used by both the retail and the
-			// symbolized test-build ChoosePivot implementation.  Equal values must
-			// select the same pivot or the stock-only tie permutation would drift.
-			if (leftDepth >= middleDepth)
-			{
-				if (leftDepth < rightDepth)
-					return leftDepth;
-				if (middleDepth < rightDepth)
-					return rightDepth;
-				return middleDepth;
-			}
-			if (middleDepth < rightDepth)
-				return middleDepth;
-			if (leftDepth >= rightDepth)
-				return leftDepth;
-			return rightDepth;
-		}
-
-		void SortOriginalDepthsWithOrdinals(BSShaderAccumulator& accumulator,
-			std::vector<UInt32>& registrationOrdinals,
-			SInt32 left, SInt32 right)
-		{
-			while (right > left)
-			{
-				SInt32 lower = left - 1;
-				SInt32 upper = right + 1;
-				const float pivot = ChooseOriginalDepthPivot(
-					accumulator, left, right);
-				for (;;)
-				{
-					do
-					{
-						--upper;
-					}
-					while (accumulator.m_pfDepths[upper] > pivot);
-					do
-					{
-						++lower;
-					}
-					while (accumulator.m_pfDepths[lower] < pivot);
-					if (lower >= upper)
-						break;
-					std::swap(accumulator.m_ppkItems[lower],
-						accumulator.m_ppkItems[upper]);
-					std::swap(accumulator.m_pfDepths[lower],
-						accumulator.m_pfDepths[upper]);
-					std::swap(registrationOrdinals[lower],
-						registrationOrdinals[upper]);
-				}
-				if (upper == right)
-				{
-					right = upper - 1;
-				}
-				else
-				{
-					SortOriginalDepthsWithOrdinals(accumulator,
-						registrationOrdinals, left, upper);
-					left = upper + 1;
-				}
-			}
-		}
-
-		bool EnsureOriginalOrderSortStorage(BSShaderAccumulator& accumulator,
-			size_t itemCount)
-		{
-			if (!itemCount || itemCount > kMaximumStableTieItems
-				|| itemCount > static_cast<size_t>(
-					std::numeric_limits<SInt32>::max()))
-			{
-				return false;
-			}
-			if (itemCount <= static_cast<size_t>(
-				std::max<SInt32>(0, accumulator.m_iMaxItems)))
-			{
-				return accumulator.m_ppkItems && accumulator.m_pfDepths;
-			}
-			NiGeometry** items = static_cast<NiGeometry**>(
-				NiAlloc(itemCount * sizeof(NiGeometry*)));
-			float* depths = static_cast<float*>(
-				NiAlloc(itemCount * sizeof(float)));
-			if (!items || !depths)
-			{
-				NiFree(items);
-				NiFree(depths);
-				return false;
-			}
-			NiFree(accumulator.m_ppkItems);
-			NiFree(accumulator.m_pfDepths);
-			accumulator.m_ppkItems = items;
-			accumulator.m_pfDepths = depths;
-			accumulator.m_iMaxItems = static_cast<SInt32>(itemCount);
-			return true;
-		}
-
-		OriginalOrderAnchorFailure PrepareOriginalOrderAnchorTopology(
-			SortedPayloadScratch& scratch, BSShaderAccumulator& accumulator,
-			size_t itemCount)
-		{
-			scratch.originalOrderFreeTypeFlags.assign(itemCount, 0);
-			if (scratch.sourceAccumulator != &accumulator
-				|| scratch.acceptedTileRegistrations.size() != itemCount)
-			{
-				return OriginalOrderAnchorFailure::Source;
-			}
-
-			OriginalOrderAnchorFailure failure =
-				OriginalOrderAnchorFailure::None;
-			auto fail = [&](OriginalOrderAnchorFailure candidate)
-			{
-				if (failure == OriginalOrderAnchorFailure::None)
-					failure = candidate;
-			};
-			bool haveFreeType = false;
-			for (size_t ordinal = 0; ordinal < itemCount; ++ordinal)
-			{
-				NiGeometry* geometry =
-					scratch.acceptedTileRegistrations[ordinal];
-				if (!IsFreeTypeFacade(geometry))
-					continue;
-				haveFreeType = true;
-				scratch.originalOrderFreeTypeFlags[ordinal] = 1;
-				const A8ShapeMetadata* metadata = FindBatchedMetadata(
-					scratch, static_cast<NiTriShape*>(geometry));
-				if (!metadata || metadata->shapeIdentity != geometry
-					|| metadata->selfIdentity != metadata
-					|| !metadata->allocationId)
-				{
-					fail(OriginalOrderAnchorFailure::Metadata);
-				}
-			}
-			if (!haveFreeType)
-				return OriginalOrderAnchorFailure::Coverage;
 
 			for (const A8ShapeMetadataPtr& owner : scratch.metadataOwners)
 			{
-				if (!owner)
-					continue;
-				if (owner->backend
-					== FreeTypeShapeBackend::SingletonFacade)
+				const A8ShapeMetadata* metadata = owner.get();
+				if (!metadata || metadata->backend
+					!= FreeTypeShapeBackend::SingletonFacade)
 				{
-					SingletonFacadeState* singleton =
-						GetSingletonFacadeState(*owner);
-					if (!singleton)
-						continue;
-					singleton->sourceTopologyToken = 0;
+					continue;
+				}
+
+				SingletonFacadeState* singleton =
+					GetSingletonFacadeState(*metadata);
+				if (singleton)
+				{
 					singleton->topologyValidationToken = 0;
 					singleton->preflightValidationToken = 0;
 					if (singleton->frameMode.load(std::memory_order_acquire)
@@ -1137,677 +990,31 @@ namespace fonthook::vectorfont
 							std::memory_order_release);
 					}
 				}
-			}
 
-			for (const A8ShapeMetadataPtr& owner : scratch.metadataOwners)
-			{
-				const A8ShapeMetadata* metadata = owner.get();
-				if (!metadata)
-					continue;
 				const size_t metadataIndex = LookupMetadataShapeIndex(
 					scratch, metadata->shapeIdentity);
-				if (metadataIndex >= scratch.sourceOccurrenceCounts.size())
-					continue;
-
-				if (metadata->backend
-					== FreeTypeShapeBackend::SingletonFacade)
+				const bool occurrenceValid =
+					metadataIndex < scratch.sortedOccurrenceCounts.size()
+					&& scratch.sortedOccurrenceCounts[metadataIndex] == 1;
+				const bool valid = singleton
+					&& metadata->selfIdentity == metadata
+					&& metadata->allocationId
+					&& singleton->slot.shape == metadata->shapeIdentity
+					&& occurrenceValid
+					&& singleton->frameMode.load(std::memory_order_acquire)
+						!= SingletonFacadeFrameMode::Retired;
+				if (valid)
 				{
-					SingletonFacadeState* singleton =
-						GetSingletonFacadeState(*metadata);
-					const bool valid = singleton
-						&& singleton->slot.shape == metadata->shapeIdentity
-						&& scratch.sourceOccurrenceCounts[metadataIndex] == 1
-						&& scratch.sourceFirstIndices[metadataIndex] >= 0;
-					if (valid)
-					{
-						singleton->sourceTopologyToken = scratch.sortCycle;
-						++s_thinRegistrationDiagnostics.facadeTopology;
-					}
-					else
-					{
-						++s_thinRegistrationDiagnostics.facadeFallback;
+					singleton->topologyValidationToken = validationToken;
+					++s_thinRegistrationDiagnostics.facadeTopology;
+				}
+				else
+				{
+					++s_thinRegistrationDiagnostics.facadeFallback;
+					if (!occurrenceValid)
 						++s_thinRegistrationDiagnostics.occurrenceFallback;
-						fail(OriginalOrderAnchorFailure::Facade);
-					}
-					continue;
-				}
-			}
-
-			return failure;
-		}
-
-		bool BuildOriginalOrderDesiredOrdinals(
-			SortedPayloadScratch& scratch, size_t itemCount)
-		{
-			scratch.originalOrderDesiredOrdinals.clear();
-			scratch.originalOrderDesiredOrdinals.reserve(itemCount);
-			for (size_t cursor = itemCount; cursor; --cursor)
-			{
-				scratch.originalOrderDesiredOrdinals.push_back(
-					static_cast<UInt32>(cursor - 1u));
-			}
-			return scratch.originalOrderDesiredOrdinals.size() == itemCount;
-		}
-
-		bool ApplyOriginalOrderAnchors(SortedPayloadScratch& scratch,
-			BSShaderAccumulator& accumulator, size_t itemCount)
-		{
-			scratch.originalOrderRuns.clear();
-			scratch.originalOrderRunIds.resize(itemCount);
-			bool haveMixedRun = false;
-			for (size_t runBegin = 0; runBegin < itemCount;)
-			{
-				const float runDepth = accumulator.m_pfDepths[runBegin];
-				size_t runEnd = runBegin + 1u;
-				while (runEnd < itemCount
-					&& accumulator.m_pfDepths[runEnd] == runDepth)
-				{
-					++runEnd;
-				}
-				bool hasFreeType = false;
-				bool hasStock = false;
-				for (size_t item = runBegin; item < runEnd; ++item)
-				{
-					const UInt32 ordinal =
-						scratch.sortedRegistrationOrdinals[item];
-					const bool isFreeType =
-						scratch.originalOrderFreeTypeFlags[ordinal] != 0;
-					hasFreeType = hasFreeType || isFreeType;
-					hasStock = hasStock || !isFreeType;
-				}
-				const UInt32 runId = static_cast<UInt32>(
-					scratch.originalOrderRuns.size());
-				const bool mixed = hasFreeType && hasStock
-					&& runEnd - runBegin > 1u;
-				scratch.originalOrderRuns.push_back({
-					static_cast<UInt32>(runBegin),
-					static_cast<UInt32>(runEnd),
-					static_cast<UInt32>(runBegin),
-					mixed,
-					false
-				});
-				haveMixedRun = haveMixedRun || mixed;
-				for (size_t item = runBegin; item < runEnd; ++item)
-					scratch.originalOrderRunIds[item] = runId;
-				runBegin = runEnd;
-			}
-			if (!haveMixedRun)
-				return true;
-
-			scratch.sortedItemIndicesByRegistrationOrdinal.assign(
-				itemCount, kInvalidNativeA8CommandIndex);
-			for (size_t item = 0; item < itemCount; ++item)
-			{
-				const UInt32 ordinal = scratch.sortedRegistrationOrdinals[item];
-				if (ordinal >= itemCount
-					|| scratch.sortedItemIndicesByRegistrationOrdinal[ordinal]
-						!= kInvalidNativeA8CommandIndex)
-				{
-					return false;
-				}
-				scratch.sortedItemIndicesByRegistrationOrdinal[ordinal] =
-					static_cast<UInt32>(item);
-			}
-			if (!BuildOriginalOrderDesiredOrdinals(scratch, itemCount))
-				return false;
-			scratch.originalOrderOutput.resize(itemCount);
-
-			for (const UInt32 ordinal
-				: scratch.originalOrderDesiredOrdinals)
-			{
-				if (ordinal >= itemCount)
-					return false;
-				const UInt32 sortedItem =
-					scratch.sortedItemIndicesByRegistrationOrdinal[ordinal];
-				if (sortedItem >= itemCount)
-					return false;
-				const UInt32 runId = scratch.originalOrderRunIds[sortedItem];
-				if (runId >= scratch.originalOrderRuns.size())
-					return false;
-				OriginalOrderAnchorRun& run =
-					scratch.originalOrderRuns[runId];
-				if (!run.mixed)
-					continue;
-				if (run.write >= run.end)
-					return false;
-				NiGeometry* desired = accumulator.m_ppkItems[sortedItem];
-				run.changed = run.changed
-					|| accumulator.m_ppkItems[run.write] != desired;
-				scratch.originalOrderOutput[run.write++] = desired;
-			}
-
-			for (const OriginalOrderAnchorRun& run
-				: scratch.originalOrderRuns)
-			{
-				if (!run.mixed)
-					continue;
-				if (run.write != run.end)
-					return false;
-			}
-
-			// Commit only after every mixed run has a complete destination.
-			// A late proof failure must leave the stock-equivalent quicksort
-			// output intact for the ordinal-sidecar or predecessor fallback.
-			for (const OriginalOrderAnchorRun& run
-				: scratch.originalOrderRuns)
-			{
-				if (!run.mixed)
-					continue;
-				if (!run.changed)
-					continue;
-				for (size_t item = run.begin; item < run.end; ++item)
-				{
-					accumulator.m_ppkItems[item] =
-						scratch.originalOrderOutput[item];
-				}
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::SortedOriginalOrderAnchorMixedRun);
-			}
-			return true;
-		}
-
-		bool RestoreSingleBlockMixedEqualDepthPainterOrderFromOrdinals(
-			SortedPayloadScratch& scratch, BSShaderAccumulator& accumulator,
-			size_t itemCount)
-		{
-			if (scratch.sortedRegistrationOrdinals.size() != itemCount)
-				return false;
-
-			// Every native FreeType artifact is now one painter-order block,
-			// regardless of how many packet draws it expands into at submission.
-
-			// The sidecar started as [0, itemCount) and was swapped beside every
-			// stock-equivalent quicksort exchange.  Validate the permutation before
-			// planning any writes so a rejected frame remains byte-for-byte stock.
-			scratch.sortedItemIndicesByRegistrationOrdinal.assign(
-				itemCount, kInvalidNativeA8CommandIndex);
-			scratch.originalOrderRuns.clear();
-			for (size_t runBegin = 0; runBegin < itemCount;)
-			{
-				const float runDepth = accumulator.m_pfDepths[runBegin];
-				if (!std::isfinite(runDepth))
-					return false;
-				size_t runEnd = runBegin + 1u;
-				while (runEnd < itemCount
-					&& accumulator.m_pfDepths[runEnd] == runDepth)
-				{
-					++runEnd;
-				}
-
-				bool hasFreeType = false;
-				bool hasStock = false;
-				bool painterOrderChanged = false;
-				UInt32 previousOrdinal = 0;
-				for (size_t item = runBegin; item < runEnd; ++item)
-				{
-					const UInt32 ordinal =
-						scratch.sortedRegistrationOrdinals[item];
-					if (ordinal >= itemCount
-						|| scratch.sortedItemIndicesByRegistrationOrdinal[ordinal]
-							!= kInvalidNativeA8CommandIndex)
-					{
-						return false;
-					}
-					scratch.sortedItemIndicesByRegistrationOrdinal[ordinal] =
-						static_cast<UInt32>(item);
-					const bool isFreeType =
-						IsFreeTypeFacade(accumulator.m_ppkItems[item]);
-					hasFreeType = hasFreeType || isFreeType;
-					hasStock = hasStock || !isFreeType;
-					if (item != runBegin)
-					{
-						// The renderer consumes this array backwards, so singleton
-						// blocks must descend by registration ordinal in storage.
-						painterOrderChanged = painterOrderChanged
-							|| ordinal > previousOrdinal;
-					}
-					previousOrdinal = ordinal;
-				}
-				if (hasFreeType && hasStock && painterOrderChanged
-					&& runEnd - runBegin > 1u)
-				{
-					scratch.originalOrderRuns.push_back({
-						static_cast<UInt32>(runBegin),
-						static_cast<UInt32>(runEnd), 0, true, true
-					});
-				}
-				runBegin = runEnd;
-			}
-
-			// All fallible validation is complete.  Only the compact changed runs
-			// are copied and sorted; the source-list snapshot, pointer hash, full
-			// block table, and sorted-to-registration reconstruction are avoided.
-			for (const OriginalOrderAnchorRun& run
-				: scratch.originalOrderRuns)
-			{
-				scratch.stableTieItems.clear();
-				scratch.stableTieItems.reserve(run.end - run.begin);
-				for (size_t item = run.begin; item < run.end; ++item)
-				{
-					const UInt32 ordinal =
-						scratch.sortedRegistrationOrdinals[item];
-					scratch.stableTieItems.push_back({
-						accumulator.m_ppkItems[item],
-						accumulator.m_pfDepths[item], ordinal, ordinal
-					});
-				}
-				std::sort(scratch.stableTieItems.begin(),
-					scratch.stableTieItems.end(),
-					[](const StableTileTieItem& left,
-						const StableTileTieItem& right)
-					{
-						return left.registrationOrdinal
-							> right.registrationOrdinal;
-					});
-				for (size_t offset = 0;
-					offset < scratch.stableTieItems.size(); ++offset)
-				{
-					const StableTileTieItem& item =
-						scratch.stableTieItems[offset];
-					accumulator.m_ppkItems[run.begin + offset] =
-						item.geometry;
-					accumulator.m_pfDepths[run.begin + offset] = item.depth;
-				}
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					SortedOriginalOrderSidecarMixedRun);
-			}
-			return true;
-		}
-
-		OriginalOrderSortAttempt TrySortWithOriginalOrderAnchors(
-			SortedPayloadScratch& scratch, BSShaderAccumulator* accumulator)
-		{
-			OriginalOrderSortAttempt attempt;
-			if (!accumulator || scratch.sourceAccumulator != accumulator
-				|| scratch.metadataShapes.empty()
-				|| !accumulator->m_bInterfaceSort)
-			{
-				attempt.failure = OriginalOrderAnchorFailure::Gate;
-				return attempt;
-			}
-			const size_t itemCount = scratch.acceptedTileRegistrations.size();
-			if (itemCount < 2 || itemCount > kMaximumStableTieItems)
-			{
-				attempt.failure = OriginalOrderAnchorFailure::Count;
-				return attempt;
-			}
-			if (!EnsureOriginalOrderSortStorage(*accumulator, itemCount))
-			{
-				attempt.failure = OriginalOrderAnchorFailure::Storage;
-				return attempt;
-			}
-
-			accumulator->m_iNumItems = static_cast<SInt32>(itemCount);
-			scratch.sortedRegistrationOrdinals.resize(itemCount);
-			for (size_t ordinal = 0; ordinal < itemCount; ++ordinal)
-			{
-				NiGeometry* geometry =
-					scratch.acceptedTileRegistrations[ordinal];
-				if (!geometry)
-				{
-					attempt.failure = OriginalOrderAnchorFailure::Source;
-					return attempt;
-				}
-				const float depth = geometry->m_kWorld.m_Translate.y;
-				if (!std::isfinite(depth))
-				{
-					attempt.failure = OriginalOrderAnchorFailure::Depth;
-					return attempt;
-				}
-				accumulator->m_ppkItems[ordinal] = geometry;
-				accumulator->m_pfDepths[ordinal] = depth;
-				scratch.sortedRegistrationOrdinals[ordinal] =
-					static_cast<UInt32>(ordinal);
-			}
-			const OriginalOrderAnchorFailure topologyFailure =
-				scratch.sourceTopologyFailure;
-
-			// Once the source list and every finite depth are proven, this is a
-			// byte-for-byte decision copy of the retail interface quicksort.  Keep
-			// its exact ordinal sidecar even when the stricter FreeType topology
-			// proof below fails; calling the predecessor again would only discard
-			// information and force the later snapshot/hash reconstruction.
-			SortOriginalDepthsWithOrdinals(*accumulator,
-				scratch.sortedRegistrationOrdinals, 0,
-				static_cast<SInt32>(itemCount - 1u));
-			if (topologyFailure == OriginalOrderAnchorFailure::None
-				&& ApplyOriginalOrderAnchors(
-					scratch, *accumulator, itemCount))
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::SortedOriginalOrderAnchorSort);
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::SortedOriginalOrderAnchorItem,
-					static_cast<UInt64>(itemCount));
-				attempt.outcome = OriginalOrderSortOutcome::Anchored;
-				attempt.failure = OriginalOrderAnchorFailure::None;
-				return attempt;
-			}
-
-			attempt.failure = topologyFailure
-				!= OriginalOrderAnchorFailure::None
-				? topologyFailure : OriginalOrderAnchorFailure::Apply;
-			RecordFreeTypePerf(FreeTypePerfCounter::
-				SortedOriginalOrderStockEquivalentSort);
-			RecordFreeTypePerf(FreeTypePerfCounter::
-				SortedOriginalOrderStockEquivalentItem,
-				static_cast<UInt64>(itemCount));
-			if (RestoreSingleBlockMixedEqualDepthPainterOrderFromOrdinals(
-				scratch, *accumulator, itemCount))
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					SortedOriginalOrderSidecarRecovered);
-				attempt.outcome =
-					OriginalOrderSortOutcome::OrdinalSidecarRecovered;
-				return attempt;
-			}
-
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::SortedOriginalOrderSidecarLegacy);
-			attempt.outcome =
-				OriginalOrderSortOutcome::StockEquivalentLegacy;
-			return attempt;
-		}
-
-		bool RestoreFreeTypeMixedEqualDepthPainterOrder(
-			SortedPayloadScratch& scratch, BSShaderAccumulator* accumulator)
-		{
-			const size_t itemCount = accumulator
-				? static_cast<size_t>(accumulator->m_iNumItems) : 0;
-			auto reject = [&]()
-			{
-				++s_thinRegistrationDiagnostics.occurrenceFallback;
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::SortedMixedEqualDepthRestoreRejected);
-				return false;
-			};
-			if (!accumulator || scratch.sourceAccumulator != accumulator
-				|| !accumulator->m_ppkItems || !accumulator->m_pfDepths
-				|| itemCount < 2 || itemCount > kMaximumStableTieItems
-				|| scratch.acceptedTileRegistrations.size() != itemCount)
-			{
-				return itemCount < 2 ? true : reject();
-			}
-
-			bool hasMixedTieCandidate = false;
-			for (size_t runBegin = 0;
-				runBegin < itemCount && !hasMixedTieCandidate;)
-			{
-				const float runDepth = accumulator->m_pfDepths[runBegin];
-				size_t runEnd = runBegin + 1u;
-				if (std::isfinite(runDepth))
-				{
-					while (runEnd < itemCount
-						&& std::isfinite(accumulator->m_pfDepths[runEnd])
-						&& accumulator->m_pfDepths[runEnd] == runDepth)
-					{
-						++runEnd;
-					}
-				}
-				bool hasFreeType = false;
-				bool hasStock = false;
-				for (size_t item = runBegin; item < runEnd; ++item)
-				{
-					const bool isFreeType =
-						IsFreeTypeFacade(accumulator->m_ppkItems[item]);
-					hasFreeType = hasFreeType || isFreeType;
-					hasStock = hasStock || !isFreeType;
-				}
-				hasMixedTieCandidate = hasFreeType && hasStock
-					&& runEnd - runBegin > 1u;
-				runBegin = runEnd;
-			}
-			if (!hasMixedTieCandidate)
-				return true;
-
-			PrepareLookup(scratch.acceptedRegistrationLookup, itemCount);
-			const size_t lookupMask =
-				scratch.acceptedRegistrationLookup.size() - 1u;
-			scratch.acceptedOccurrenceHeads.assign(
-				scratch.acceptedRegistrationLookup.size(), 0);
-			scratch.acceptedOccurrenceTails.assign(
-				scratch.acceptedRegistrationLookup.size(), 0);
-			scratch.acceptedOccurrenceNext.assign(
-				itemCount, kInvalidNativeA8CommandIndex);
-			for (size_t ordinal = 0; ordinal < itemCount; ++ordinal)
-			{
-				NiGeometry* geometry =
-					scratch.acceptedTileRegistrations[ordinal];
-				if (!geometry)
-					return reject();
-				size_t slot = HashPointer(geometry) & lookupMask;
-				bool inserted = false;
-				for (size_t probe = 0;
-					probe < scratch.acceptedRegistrationLookup.size(); ++probe)
-				{
-					const UInt32 stored =
-						scratch.acceptedRegistrationLookup[slot];
-					if (!stored)
-					{
-						scratch.acceptedRegistrationLookup[slot] =
-							static_cast<UInt32>(ordinal + 1u);
-						scratch.acceptedOccurrenceHeads[slot] =
-							static_cast<UInt32>(ordinal + 1u);
-						scratch.acceptedOccurrenceTails[slot] =
-							static_cast<UInt32>(ordinal + 1u);
-						inserted = true;
-						break;
-					}
-					const size_t representative =
-						static_cast<size_t>(stored - 1u);
-					if (representative < itemCount
-						&& scratch.acceptedTileRegistrations[representative]
-							== geometry)
-					{
-						const UInt32 tail =
-							scratch.acceptedOccurrenceTails[slot];
-						if (!tail || tail - 1u >= itemCount)
-							return reject();
-						scratch.acceptedOccurrenceNext[tail - 1u] =
-							static_cast<UInt32>(ordinal);
-						scratch.acceptedOccurrenceTails[slot] =
-							static_cast<UInt32>(ordinal + 1u);
-						inserted = true;
-						break;
-					}
-					slot = (slot + 1u) & lookupMask;
-				}
-				if (!inserted)
-					return reject();
-			}
-
-			scratch.sortedRegistrationOrdinals.resize(itemCount);
-			scratch.sortedItemIndicesByRegistrationOrdinal.assign(
-				itemCount, kInvalidNativeA8CommandIndex);
-			for (size_t item = 0; item < itemCount; ++item)
-			{
-				NiGeometry* geometry = accumulator->m_ppkItems[item];
-				size_t slot = HashPointer(geometry) & lookupMask;
-				bool found = false;
-				for (size_t probe = 0;
-					probe < scratch.acceptedRegistrationLookup.size(); ++probe)
-				{
-					const UInt32 stored =
-						scratch.acceptedRegistrationLookup[slot];
-					if (!stored)
-						break;
-					const size_t representative =
-						static_cast<size_t>(stored - 1u);
-					if (representative < itemCount
-						&& scratch.acceptedTileRegistrations[representative]
-							== geometry)
-					{
-						const UInt32 head =
-							scratch.acceptedOccurrenceHeads[slot];
-						if (!head || head - 1u >= itemCount)
-							return reject();
-						const UInt32 ordinal = head - 1u;
-						const UInt32 next =
-							scratch.acceptedOccurrenceNext[ordinal];
-						scratch.acceptedOccurrenceHeads[slot] =
-							next == kInvalidNativeA8CommandIndex
-								? 0 : next + 1u;
-						scratch.sortedRegistrationOrdinals[item] = ordinal;
-						scratch.sortedItemIndicesByRegistrationOrdinal[ordinal] =
-							static_cast<UInt32>(item);
-						found = true;
-						break;
-					}
-					slot = (slot + 1u) & lookupMask;
-				}
-				if (!found)
-					return reject();
-			}
-			for (UInt32 head : scratch.acceptedOccurrenceHeads)
-			{
-				if (head)
-					return reject();
-			}
-
-			for (size_t runBegin = 0; runBegin < itemCount;)
-			{
-				const float runDepth = accumulator->m_pfDepths[runBegin];
-				size_t runEnd = runBegin + 1u;
-				if (std::isfinite(runDepth))
-				{
-					while (runEnd < itemCount
-						&& std::isfinite(accumulator->m_pfDepths[runEnd])
-						&& accumulator->m_pfDepths[runEnd] == runDepth)
-					{
-						++runEnd;
-					}
-				}
-				bool hasFreeType = false;
-				bool hasStock = false;
-				bool painterOrderChanged = false;
-				for (size_t item = runBegin; item < runEnd; ++item)
-				{
-					const bool isFreeType =
-						IsFreeTypeFacade(accumulator->m_ppkItems[item]);
-					hasFreeType = hasFreeType || isFreeType;
-					hasStock = hasStock || !isFreeType;
-					if (item > runBegin)
-					{
-						const UInt32 previousOrdinal =
-							scratch.sortedRegistrationOrdinals[item - 1u];
-						const UInt32 currentOrdinal =
-							scratch.sortedRegistrationOrdinals[item];
-						painterOrderChanged = painterOrderChanged
-							|| currentOrdinal > previousOrdinal;
-					}
-				}
-				if (hasFreeType && hasStock && painterOrderChanged
-					&& runEnd - runBegin > 1u)
-				{
-					scratch.stableTieItems.clear();
-					scratch.stableTieItems.reserve(runEnd - runBegin);
-					for (size_t item = runBegin; item < runEnd; ++item)
-					{
-						const UInt32 ordinal =
-							scratch.sortedRegistrationOrdinals[item];
-						scratch.stableTieItems.push_back({
-							accumulator->m_ppkItems[item],
-							accumulator->m_pfDepths[item],
-							ordinal, ordinal
-						});
-					}
-					std::sort(scratch.stableTieItems.begin(),
-						scratch.stableTieItems.end(),
-						[](const StableTileTieItem& left,
-							const StableTileTieItem& right)
-						{
-							return left.registrationOrdinal
-								> right.registrationOrdinal;
-						});
-					for (size_t offset = 0;
-						offset < scratch.stableTieItems.size(); ++offset)
-					{
-						const StableTileTieItem& item =
-							scratch.stableTieItems[offset];
-						accumulator->m_ppkItems[runBegin + offset] =
-							item.geometry;
-						accumulator->m_pfDepths[runBegin + offset] =
-							item.depth;
-					}
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::SortedMixedEqualDepthRunRestored);
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::SortedMixedEqualDepthItemRestored,
-						static_cast<UInt64>(runEnd - runBegin));
-				}
-				runBegin = runEnd;
-			}
-			return true;
-		}
-
-		void ResolveSingletonFacadeSortedTopology(
-			SortedPayloadScratch& scratch, BSShaderAccumulator* accumulator,
-			UInt64 validationToken)
-		{
-			scratch.sortedOccurrenceCounts.assign(
-				scratch.metadataShapes.size(), 0);
-			scratch.sortedFirstIndices.assign(
-				scratch.metadataShapes.size(), -1);
-			if (!accumulator || !validationToken
-				|| scratch.sourceAccumulator != accumulator
-				|| !accumulator->m_ppkItems)
-			{
-				++s_thinRegistrationDiagnostics.sourceFallback;
-				return;
-			}
-
-			for (SInt32 itemIndex = 0;
-				itemIndex < accumulator->m_iNumItems; ++itemIndex)
-			{
-				NiGeometry* geometry = accumulator->m_ppkItems[itemIndex];
-				if (!IsFreeTypeFacade(geometry))
-					continue;
-				const size_t metadataIndex = LookupMetadataShapeIndex(
-					scratch, static_cast<NiTriShape*>(geometry));
-				if (metadataIndex >= scratch.sortedOccurrenceCounts.size())
-					continue;
-				if (!scratch.sortedOccurrenceCounts[metadataIndex])
-					scratch.sortedFirstIndices[metadataIndex] = itemIndex;
-				++scratch.sortedOccurrenceCounts[metadataIndex];
-			}
-
-			for (const A8ShapeMetadataPtr& owner : scratch.metadataOwners)
-			{
-				const A8ShapeMetadata* metadata = owner.get();
-				if (!metadata)
-					continue;
-				const size_t metadataIndex = LookupMetadataShapeIndex(
-					scratch, metadata->shapeIdentity);
-				if (metadataIndex >= scratch.sortedOccurrenceCounts.size())
-					continue;
-
-				if (metadata->backend
-					== FreeTypeShapeBackend::SingletonFacade)
-				{
-					SingletonFacadeState* singleton =
-						GetSingletonFacadeState(*metadata);
-					const bool valid = singleton
-						&& singleton->sourceTopologyToken == scratch.sortCycle
-						&& singleton->slot.shape == metadata->shapeIdentity
-						&& scratch.sourceOccurrenceCounts[metadataIndex] == 1
-						&& scratch.sortedOccurrenceCounts[metadataIndex] == 1
-						&& scratch.sortedFirstIndices[metadataIndex] >= 0
-						&& singleton->frameMode.load(std::memory_order_acquire)
-							!= SingletonFacadeFrameMode::Retired;
-					if (valid)
-					{
-						singleton->topologyValidationToken = validationToken;
-					}
-					else
-					{
-						if (singleton)
-							singleton->topologyValidationToken = 0;
-						++s_thinRegistrationDiagnostics.facadeFallback;
-						++s_thinRegistrationDiagnostics.occurrenceFallback;
-						RestoreSingletonFacade(*metadata,
-							NativeA8FallbackReason::PropertySync);
-					}
-					continue;
+					RestoreSingletonFacade(*metadata,
+						NativeA8FallbackReason::PropertySync);
 				}
 			}
 		}
@@ -2082,9 +1289,6 @@ namespace fonthook::vectorfont
 			const TileRegisterObjectFn current =
 				*reinterpret_cast<TileRegisterObjectFn volatile*>(
 					kTileRegisterObjectFunctionEntry);
-			static constexpr UInt8 kSortTail[] = {
-				0x90, 0x90, 0x90, 0x90
-			};
 			return current == &NativeA8RegisterObject
 				&& s_originalTileRegisterObject.load(
 					std::memory_order_relaxed) != nullptr
@@ -2092,11 +1296,6 @@ namespace fonthook::vectorfont
 				&& hook_identity::MatchesRel32InstructionImageUnchecked(
 					kRenderAlphaGeometryCallSite,
 					s_renderAlphaGeometryHookImage)
-				&& hook_identity::MatchesRel32InstructionImageUnchecked(
-					kTileSortDispatchPatch, s_tileSortHookImage)
-				&& hook_identity::MatchesBytesUnchecked(
-					kTileSortDispatchPatch + 5u,
-					kSortTail, sizeof(kSortTail))
 				&& IsA8RenderPassImmediatelyHookCurrentUnchecked();
 		}
 
@@ -2181,88 +1380,6 @@ namespace fonthook::vectorfont
 				properties, shaderProperty, shader);
 		}
 
-		void __fastcall NativeA8SortAlphaGeometry(
-			BSShaderAccumulator* accumulator, AccumulatorSortFn originalSort)
-		{
-			if (!accumulator)
-				return;
-			FreeTypePerfScope sortRoutePerf(
-				FreeTypePerfPhase::SortRouteTotal);
-			SortedPayloadScratch& scratch = s_sortedPayloadScratch;
-			FlushThinRegistrationDiagnostics();
-			const bool sourceCaptured =
-				CaptureSourceRegistrationOrder(scratch, accumulator);
-			if (sourceCaptured && !scratch.metadataShapes.empty())
-			{
-				scratch.sourceTopologyFailure =
-					PrepareOriginalOrderAnchorTopology(scratch,
-						*accumulator,
-						scratch.acceptedTileRegistrations.size());
-			}
-
-			// Reproduce the first instruction overwritten at 0xB65E95 before
-			// choosing either the anchored implementation or the vtable predecessor
-			// already loaded into EDX by FinishAccumulating_Tiles.
-			accumulator->m_pGeometryList = nullptr;
-			scratch.originalOrderAnchorAccumulator = nullptr;
-			scratch.originalOrderAnchorCycle = 0;
-			const bool haveAnchorCandidate = sourceCaptured
-				&& !scratch.metadataShapes.empty()
-				&& accumulator->eRenderMode
-					== BSShaderManager::BSSM_RENDER_TILES;
-			const bool stockSortPredecessor = reinterpret_cast<SIZE_T>(
-				originalSort) == kStockInterfaceAlphaSort;
-			if (haveAnchorCandidate && stockSortPredecessor)
-			{
-				OriginalOrderSortAttempt attempt;
-				{
-					FreeTypePerfScope sortAnchoredPerf(
-						FreeTypePerfPhase::SortAnchored);
-					attempt = TrySortWithOriginalOrderAnchors(scratch,
-						accumulator);
-				}
-				if (attempt.outcome != OriginalOrderSortOutcome::Anchored)
-				{
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						SortedOriginalOrderAnchorProofFallback);
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						SortedOriginalOrderAnchorFallback);
-					RecordOriginalOrderAnchorFailure(attempt.failure);
-				}
-				if (attempt.outcome == OriginalOrderSortOutcome::Anchored
-					|| attempt.outcome
-						== OriginalOrderSortOutcome::OrdinalSidecarRecovered)
-				{
-					scratch.originalOrderAnchorAccumulator = accumulator;
-					scratch.originalOrderAnchorCycle = scratch.sortCycle;
-					return;
-				}
-				if (attempt.outcome
-					== OriginalOrderSortOutcome::StockEquivalentLegacy)
-				{
-					// The stock-equivalent arrays are already final.  Leave the
-					// anchor marker clear so RenderAlphaGeometry applies only the
-					// existing conservative multi-slot compatibility repair.
-					return;
-				}
-			}
-			else if (haveAnchorCandidate)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					SortedOriginalOrderAnchorPredecessorFallback);
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::SortedOriginalOrderAnchorFallback);
-			}
-
-			{
-				FreeTypePerfScope sortStockPerf(FreeTypePerfPhase::SortStock);
-				if (originalSort)
-					originalSort(accumulator);
-				else
-					accumulator->Sort();
-			}
-		}
-
 		void __fastcall NativeA8RenderAlphaGeometry(BSShaderAccumulator* accumulator, void*)
 		{
 			A8State& state = State();
@@ -2304,19 +1421,10 @@ namespace fonthook::vectorfont
 					FreeTypePerfPhase::FrameRoutePrep);
 				const size_t itemCount = static_cast<size_t>(
 					accumulator->m_iNumItems);
-				const bool originalOrderAnchored =
-					scratch.originalOrderAnchorAccumulator == accumulator
-						&& scratch.originalOrderAnchorCycle
-							== scratch.sortCycle;
-				if (!originalOrderAnchored)
-				{
-					RestoreFreeTypeMixedEqualDepthPainterOrder(
-						scratch, accumulator);
-				}
 				scratch.frameEntries.clear();
 				scratch.payloadTemplates.clear();
 				scratch.singletonFacades.clear();
-				EnsureSortedMetadataCoverage(scratch, *accumulator);
+				CaptureSortedFacadeTopology(scratch, accumulator);
 
 				NativePreflightFrameContext preflightContext;
 				if (g_bEnableFreeTypeFontStructuralFastPaths)
@@ -2496,9 +1604,7 @@ namespace fonthook::vectorfont
 						? LookupMetadataShapeIndex(scratch, facade)
 						: std::numeric_limits<size_t>::max();
 					entry.uniqueOccurrence = metadataIndex
-						< scratch.sourceOccurrenceCounts.size()
-						&& metadataIndex < scratch.sortedOccurrenceCounts.size()
-						&& scratch.sourceOccurrenceCounts[metadataIndex] == 1
+						< scratch.sortedOccurrenceCounts.size()
 						&& scratch.sortedOccurrenceCounts[metadataIndex] == 1;
 					const size_t entryIndex = scratch.frameEntries.size();
 					scratch.frameEntries.push_back(std::move(entry));
@@ -2814,7 +1920,7 @@ namespace fonthook::vectorfont
 			}
 
 			const bool clearSortedOwners =
-				scratch.sourceAccumulator == accumulator;
+				scratch.frameAccumulator == accumulator;
 			{
 				FreeTypePerfScope stockRenderPerf(
 					FreeTypePerfPhase::FrameRouteStockRender);
@@ -2894,94 +2000,6 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool HookTileSortAnchor()
-		{
-			static constexpr UInt8 kStockBytes[kTileSortDispatchPatchSize] = {
-				0xC7, 0x46, 0x18, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xD2
-			};
-			A8State& state = State();
-			if (IsTileSortAnchorHookCurrent())
-			{
-				state.tileSortAnchorHookInstalled = true;
-				return true;
-			}
-			if (state.tileSortAnchorHookInstalled)
-			{
-				state.tileSortAnchorHookInstalled = false;
-				if (!state.loggedTileSortAnchorHookConflict)
-				{
-					state.loggedTileSortAnchorHookConflict = true;
-					gLog.FormattedMessage(
-						"tnvse_freetype_native: original-order sort anchor hook was replaced; post-sort compatibility repair remains active");
-				}
-				return false;
-			}
-			if (!hook_identity::IsAccessibleRegion(kTileSortDispatchPatch,
-				kTileSortDispatchPatchSize, true)
-				|| std::memcmp(reinterpret_cast<const void*>(
-					kTileSortDispatchPatch), kStockBytes,
-					sizeof(kStockBytes)) != 0)
-			{
-				if (!state.loggedTileSortAnchorHookConflict)
-				{
-					state.loggedTileSortAnchorHookConflict = true;
-					gLog.FormattedMessage(
-						"tnvse_freetype_native: FinishAccumulating_Tiles sort dispatch bytes are not stock; original-order anchor left disabled site=%08X",
-						kTileSortDispatchPatch);
-				}
-				return false;
-			}
-
-			const std::intptr_t displacementWide =
-				static_cast<std::intptr_t>(reinterpret_cast<SIZE_T>(
-					&NativeA8SortAlphaGeometry))
-				- static_cast<std::intptr_t>(kTileSortDispatchPatch + 5u);
-			if (displacementWide < std::numeric_limits<SInt32>::min()
-				|| displacementWide > std::numeric_limits<SInt32>::max())
-			{
-				if (!state.loggedTileSortAnchorHookConflict)
-				{
-					state.loggedTileSortAnchorHookConflict = true;
-					gLog.FormattedMessage(
-						"tnvse_freetype_native: original-order sort anchor target is outside rel32 range site=%08X target=%p",
-						kTileSortDispatchPatch, &NativeA8SortAlphaGeometry);
-				}
-				return false;
-			}
-			const SInt32 displacement = static_cast<SInt32>(displacementWide);
-			UInt8 patch[kTileSortDispatchPatchSize] = {
-				0xE8, 0x00, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90, 0x90
-			};
-			std::memcpy(patch + 1u, &displacement, sizeof(displacement));
-			SafeWriteBuf(kTileSortDispatchPatch, patch, sizeof(patch));
-			FlushInstructionCache(GetCurrentProcess(),
-				reinterpret_cast<const void*>(kTileSortDispatchPatch),
-				sizeof(patch));
-			state.tileSortAnchorHookInstalled = IsTileSortAnchorHookCurrent();
-			if (!state.tileSortAnchorHookInstalled)
-			{
-				if (hook_identity::IsAccessibleRegion(kTileSortDispatchPatch,
-					kTileSortDispatchPatchSize, true)
-					&& std::memcmp(reinterpret_cast<const void*>(
-						kTileSortDispatchPatch), patch, sizeof(patch)) == 0)
-				{
-					SafeWriteBuf(kTileSortDispatchPatch, kStockBytes,
-						sizeof(kStockBytes));
-					FlushInstructionCache(GetCurrentProcess(),
-						reinterpret_cast<const void*>(kTileSortDispatchPatch),
-						sizeof(kStockBytes));
-				}
-				return false;
-			}
-			state.loggedTileSortAnchorHookConflict = false;
-			if (g_bEnableFreeTypeFontRenderingLog)
-			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_native: installed original-order sort anchor site=%08X stock=1",
-					kTileSortDispatchPatch);
-			}
-			return true;
-		}
 	}
 
 	bool FindNativeA8SortedFrameEntry(NiTriShape* facade,
@@ -3082,8 +2100,7 @@ namespace fonthook::vectorfont
 				}
 				return false;
 			}
-			if (HookRenderAlphaGeometry())
-				HookTileSortAnchor();
+			HookRenderAlphaGeometry();
 			return true;
 		}
 
@@ -3182,8 +2199,7 @@ namespace fonthook::vectorfont
 
 		s_loggedTileRegisterObjectConflict = false;
 		s_loggedTileRegisterObjectSlotUnavailable = false;
-		if (HookRenderAlphaGeometry())
-			HookTileSortAnchor();
+		HookRenderAlphaGeometry();
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
@@ -3213,8 +2229,7 @@ namespace fonthook::vectorfont
 	bool IsNativeA8RegistrationHookChainCurrent()
 	{
 		return IsNativeA8AccumulatorHookCurrent()
-			&& IsNativeA8RenderAlphaGeometryHookCurrent()
-			&& IsTileSortAnchorHookCurrent();
+			&& IsNativeA8RenderAlphaGeometryHookCurrent();
 	}
 
 	bool IsNativeA8RegistrationHookChainCurrentFast()
@@ -3228,12 +2243,6 @@ namespace fonthook::vectorfont
 			&& hook_identity::MatchesRel32InstructionImageUnchecked(
 				kRenderAlphaGeometryCallSite,
 				s_renderAlphaGeometryHookImage);
-		const bool sortCallCurrent =
-			hook_identity::MatchesRel32InstructionImageUnchecked(
-				kTileSortDispatchPatch, s_tileSortHookImage);
-		static constexpr UInt8 kTail[] = { 0x90, 0x90, 0x90, 0x90 };
-		const bool sortTailCurrent = hook_identity::MatchesBytesUnchecked(
-			kTileSortDispatchPatch + 5u, kTail, sizeof(kTail));
 		if (!tileCurrent)
 		{
 			RecordFreeTypePerf(FreeTypePerfCounter::
@@ -3244,17 +2253,6 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(FreeTypePerfCounter::
 				StructuralReadinessRenderAlphaMismatch);
 		}
-		if (!sortCallCurrent)
-		{
-			RecordFreeTypePerf(FreeTypePerfCounter::
-				StructuralReadinessSortCallMismatch);
-		}
-		if (!sortTailCurrent)
-		{
-			RecordFreeTypePerf(FreeTypePerfCounter::
-				StructuralReadinessSortTailMismatch);
-		}
-		return tileCurrent && renderAlphaCurrent
-			&& sortCallCurrent && sortTailCurrent;
+		return tileCurrent && renderAlphaCurrent;
 	}
 }

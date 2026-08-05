@@ -871,11 +871,10 @@ namespace fonthook::vectorfont
 		SynchronizePersistentFontCacheRoute(ResolveFontAtlasRoute(
 			nativeReady, g_bEnableFreeTypeFontAggressivePerformanceMode));
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: initialization nativeReady=%u accumulator=%u alphaRenderHook=%u sortAnchorHook=%u immediateRoute=%u shader=%u",
+			"tnvse_freetype_native: initialization nativeReady=%u accumulator=%u alphaRenderHook=%u sortOwner=active-virtual sortHook=0 immediateRoute=%u shader=%u",
 			nativeReady ? 1 : 0,
 			accumulatorReady ? 1 : 0,
 			State().renderAlphaGeometryHookInstalled ? 1 : 0,
-			State().tileSortAnchorHookInstalled ? 1 : 0,
 			immediateRouteReady ? 1 : 0,
 			shaderReady ? 1 : 0);
 	}
@@ -1422,7 +1421,6 @@ namespace fonthook::vectorfont
 			const bool revoked = singleton->slot.bound;
 			RestoreSingletonFacadeSlot(singleton->slot);
 			singleton->preparedValidationToken = 0;
-			singleton->sourceTopologyToken = 0;
 			singleton->topologyValidationToken = 0;
 			singleton->preflightValidationToken = 0;
 			singleton->preparedGeneration = 0;
@@ -1457,7 +1455,6 @@ namespace fonthook::vectorfont
 			return;
 		DestroySingletonFacadeBindingBuffer(singleton->slot);
 		singleton->slot.shape = nullptr;
-		singleton->sourceTopologyToken = 0;
 		singleton->topologyValidationToken = 0;
 		singleton->commandBuildValidationToken.store(
 			0, std::memory_order_release);

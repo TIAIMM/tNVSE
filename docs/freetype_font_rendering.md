@@ -64,8 +64,9 @@ per-text atlas-batch records are intentionally omitted. Their aggregate values
 remain available in the performance counters, while metadata integrity failures
 and real route fallbacks still emit complete records. The temporary font-8
 singleton binding/driver trace has been removed now that it established that
-the missing MAPMO text reached a successful draw and was subsequently covered
-by another equal-depth UI item.
+the missing MAPMO text followed the singleton facade binding path. The resolved
+fault was stale shell-shader restoration: an unbound slot must not restore a
+shader it never owned, and its first bind must refresh the live shell shader.
 
 Font IDs are configured under `<fonts>` in
 `Data\NVSE\plugins\tnvse_fonts.xml`. Only listed IDs are replaced. Other
@@ -628,11 +629,12 @@ fallback; direct and bitmap records are never mixed in one submission.
 
 Every native text artifact still defines packets grouped by layer, atlas page,
 shader class, and sampling contract, but it always contributes exactly one
-facade to the stock Tile alpha list. The facade is the artifact's single Sort
-anchor. After UI sorting, tNVSE replays the currently selected ordinary or
-Composite packets consecutively at that anchor. A one-packet artifact may bind
-the facade directly; a multi-packet artifact uses a retained command span or
-the compatibility packet loop. Packet count is not shape count.
+facade to the stock Tile alpha list. The current virtual Sort implementation
+places that facade in the final accumulator array. At the resulting position,
+tNVSE replays the currently selected ordinary or Composite packets
+consecutively. A one-packet artifact may bind the facade directly; a
+multi-packet artifact uses a retained command span or the compatibility packet
+loop. Packet count is not shape count.
 
 Both forms use `TileShader`, the renderer-owned native declaration, and
 Gamebryo `NiGeometryBufferData`. There is no private D3D draw path or
@@ -819,19 +821,35 @@ and wrappers reject. The D3D declaration expands `D3DCOLOR` to the vertex
 shader's normalized `float4 COLOR0`; packet-uniform layer modifiers remain in
 pixel constants. Compared with a four-float base color, the packed color field
 still saves twelve bytes per vertex without adding packets or draw calls. After
-the stock Tile list has been prepared, tNVSE snapshots the actual source-list
-order and acquires the unique facade metadata owners in one batch. It
+the active Sort has produced the final Tile arrays, tNVSE scans that result
+and acquires the unique facade metadata owners in one batch. It conditionally
+repairs only proved exact-depth stock/FreeType ties as described below, then
 deduplicates immutable artifacts and promotes eligible data with one static-VB
-Lock/copy/Unlock sequence. Tiles are not persistently merged: stock depth/order,
-per-Tile transform, scissor, alpha, and shader constants remain independent.
+Lock/copy/Unlock sequence. Tiles are not persistently merged: depth, per-Tile
+transform, scissor, alpha, and shader constants remain independent.
 
-The retail and symbolized test builds both sort geometry and depth only. In
-retail, BSShaderAccumulator::FinishAccumulating_Tiles at 0xB65E80 clears
-m_pGeometryList, calls NiAlphaAccumulator::Sort at 0xA9B570, and enters the
-backwards RenderAlphaGeometry traversal at 0xB65EA0 -> 0xB64F90. The
-symbolized August 22 test build confirms the interface path at 0x82260438, the
-depth source and Sort body at 0x8221B778, pivot/partition helpers at
-0x82276BC8/0x82276CA0, and reverse traversal at 0x8223F1D0.
+The retail and symbolized test builds both establish the same ownership
+boundary. In retail, `BSShaderAccumulator::FinishAccumulating_Tiles` at
+`0xB65E80` clears `m_pGeometryList`, calls the accumulator's current virtual
+Sort through the block beginning at `0xB65E95`, and then enters the backwards
+`RenderAlphaGeometry` traversal at `0xB65EA0 -> 0xB64F90`. The retail interface
+Sort at `0xA9B570` allocates and fills `m_ppkItems`/`m_pfDepths`; the render loop
+consumes indices `m_iNumItems - 1` through zero. The symbolized August 22 test
+build confirms the interface path at `0x82260438`, Sort body at `0x8221B778`,
+pivot/partition helpers at `0x82276BC8/0x82276CA0`, and reverse traversal at
+`0x8223F1D0`.
+
+tNVSE leaves that Sort dispatch block and the active Sort implementation
+untouched. It installs no Sort hook and calls no replacement or secondary
+sorting routine, so a third-party virtual Sort predecessor remains the sole
+producer of depth ordering. The existing post-Sort facade scan also detects
+contiguous exact-equal-depth runs that contain both stock and FreeType geometry.
+Only when such a run exists does tNVSE traverse the predecessor's still-live
+accepted source list. It indexes the sorted pointer occurrences once, walks the
+original AddTail list from tail to head, and fills only those mixed runs from
+low index to high index, matching the renderer's backwards traversal. It
+never changes `m_pfDepths`, unequal-depth order, pure-stock runs, or pure-
+FreeType runs.
 
 NativeA8RegisterObject is intentionally thin. On an audited code image its
 normal FreeType route performs only cheap argument checks, unchecked hook-byte
@@ -842,26 +860,27 @@ VirtualQuery is reserved for the cold audit of a newly observed hook image.
 Registration therefore never clips or merges a facade and preserves third-party
 hook chaining, AddTail order, and duplicate-registration semantics.
 
-Immediately before Sort, CaptureSourceRegistrationOrder snapshots the actual
-source list in AddTail order and assigns an occurrence ordinal to every entry.
-The anchored sorter applies a decision-equivalent copy of the retail depth
-quicksort while carrying that ordinal sidecar. Only exact-equal-depth runs that
-contain both stock and FreeType geometry may be rewritten, and they are stored
-in descending source ordinal because the renderer consumes the array backwards.
-Every FreeType artifact is one painter-order block regardless of packet count.
-Pure-stock, pure-FreeType, and unequal-depth permutations remain the retail
-result. A duplicate facade remains a valid stock occurrence but is ineligible
-for a consumable direct command, span, or cross-text batch.
+At `NativeA8RenderAlphaGeometry`, `CaptureSortedFacadeTopology` performs one
+pass over the final `m_ppkItems` array. It hashes facade pointers, records their
+occurrence counts, batch-acquires metadata, and folds mixed-run candidate
+detection into that same scan. Frames without a mixed exact-depth run perform
+no source-list traversal and allocate no tie-repair scratch. Candidate frames
+use an open-addressed occurrence stack and one reverse source-list walk, all
+linear in the number of sorted items; there is no source-list copy,
+bidirectional ordinal map, or comparison sort. Mixed-run bounds captured by the
+required facade scan are reused, and only those candidate ranges are
+revalidated. The complete output is validated before any pointer is committed,
+and source-count, lookup,
+occurrence, run-coverage, or 8192-item envelope failure leaves the predecessor's
+array unchanged.
 
-The source list, finite depths, storage, metadata identity, occurrence coverage,
-and final ordinal permutation must all be proved before a rewrite is committed.
-An envelope failure invokes the already loaded Sort predecessor; a later proof
-failure leaves or recovers the exact stock-equivalent arrays. No group, slot,
-contiguity, follower, or block-repair proof exists. The sort diagnostics report
-gate, count, storage, source, depth, metadata, registration, facade, coverage,
-and apply failures. The thin-registration line retains sample_rate=256 and
-sampling=continuous_tls and reports facade topology/fallback plus occurrence
-fallback without group fields.
+A singleton facade is direct-command eligible only when its metadata identity
+is current and it occurs exactly once in the final array. A duplicate facade
+remains valid stock geometry, but every occurrence uses the complete packet-
+loop fallback. The later execution skeleton walks the repaired final array
+backwards, so stock barriers and cross-text adjacency follow the corrected
+painter order. The old Sort dispatch patch, replacement quicksort, per-Sort
+timing, full registry audit, and large diagnostic families remain removed.
 
 Visibility remains entirely after registration. For each sorted facade tNVSE
 arms a thread-local visibility scope around a guarded native pass. A
@@ -1000,7 +1019,7 @@ then replaces its model bound with the complete artifact bound. Packet count
 is retained only in NativeA8ShapePayload. There is no 64-shape limit, parent
 or TileText capture requirement, packet-shape vector, primary/follower role,
 group registry, sibling attachment, or sibling lifetime. One facade is one
-stock Sort anchor; it is not a promise of one packet or one draw.
+active-Sort array position; it is not a promise of one packet or one draw.
 
 SingletonFacade metadata embeds the only direct binding slot. Construction
 does not freeze packet topology. Each sorted-frame preflight selects the
@@ -1013,14 +1032,13 @@ does not restore a multi-shape representation. If dedicated metadata or direct
 binding setup fails, the same facade remains on the compatibility packet-loop
 route; no sibling shape is created.
 
-The source and sorted accumulator lists prove occurrences of the facade itself.
-A facade that appears exactly once may own a consumable direct command, command
-span, or cross-text instancing entry. A repeated geometry receives no
-consumable command: every stock occurrence executes the complete packet loop,
-preserving the original duplicate-registration semantics. Equal-depth
-painter-order anchoring continues to use the source-list ordinal proof, and
-whole-artifact clip/scissor culling still completes before command recording,
-upload, or draw.
+The final accumulator array proves occurrences of the facade itself after the
+narrow exact-depth tie repair. A facade that appears exactly once may own a
+consumable direct command, command span, or cross-text instancing entry. A
+repeated geometry receives no consumable command: every stock occurrence
+executes the complete packet loop, preserving the original duplicate-
+registration semantics. Whole-artifact clip/scissor culling still completes
+before command recording, upload, or draw.
 
 When the active packet count is one, the facade may use its persistent
 descriptor and DirectFacadeSinglePacket command. When it is greater than one,
@@ -1039,11 +1057,14 @@ change, or shape destruction. Multi-packet facade mode owns no per-packet
 geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
 facades, total payload packets, single- and multi-packet artifacts, direct/span/
 packet-loop frames, topology switches, fallbacks, partial faults, and the
-invariant sibling_shapes=0. The build identity is runtime-log-prune-v24. It
-retains the v23 shell-shader restoration fix while removing the resolved
-missing-text lifecycle registry, scene-tree probes, per-stage atomic updates,
-and per-sort full-registry audit. It changes no NVSE export, INI key, shader
-ABI, font-cache format, or save format.
+invariant sibling_shapes=0. The build identity is
+`linear-equal-depth-repair-v30`. It retains the v23 shell-shader restoration fix,
+v24 logging cleanup, and the no-Sort-hook single-facade architecture. The v26
+font-metrics topology probe has been removed. With rendering logging enabled,
+the first applied repair emits one compact process-thread diagnostic containing
+item, mixed-run, changed-run, and changed-item counts; a proof failure emits one
+fail-open line. It changes no NVSE export, INI key, shader ABI, font-cache
+format, or save format.
 
 ### Retained text command buffer
 
