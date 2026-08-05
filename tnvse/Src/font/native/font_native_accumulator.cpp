@@ -778,6 +778,13 @@ namespace fonthook::vectorfont
 			scratch.metadataOwners.clear();
 			scratch.sortedOccurrenceCounts.clear();
 			scratch.tieRuns.clear();
+			const SInt64 topologyStart = BeginFreeTypePerfSample();
+			auto finishTopology = [&](bool result)
+			{
+				EndFreeTypePerfSample(
+					FreeTypePerfPhase::FramePrepTopology, topologyStart);
+				return result;
+			};
 
 			if (!accumulator || scratch.active || scratch.nestedBypassDepth
 				|| accumulator->eRenderMode
@@ -786,7 +793,7 @@ namespace fonthook::vectorfont
 				|| !accumulator->m_ppkItems)
 			{
 				++s_thinRegistrationDiagnostics.sortedScanFallback;
-				return false;
+				return finishTopology(false);
 			}
 
 			const size_t itemCount =
@@ -863,7 +870,7 @@ namespace fonthook::vectorfont
 					scratch.metadataShapes.clear();
 					scratch.sortedOccurrenceCounts.clear();
 					++s_thinRegistrationDiagnostics.sortedScanFallback;
-					return false;
+					return finishTopology(false);
 				}
 			}
 			if (trackEqualDepthRuns
@@ -903,19 +910,25 @@ namespace fonthook::vectorfont
 				}
 			}
 
+			EndFreeTypePerfSample(
+				FreeTypePerfPhase::FramePrepTopology, topologyStart);
 			scratch.frameAccumulator = accumulator;
 			if (scratch.metadataShapes.empty())
 				return true;
 
-			AcquireA8ShapeMetadataBatch(
-				scratch.metadataShapes, scratch.metadataOwners);
-			++s_thinRegistrationDiagnostics.metadataBatches;
-			s_thinRegistrationDiagnostics.metadataShapes +=
-				static_cast<UInt64>(scratch.metadataShapes.size());
-			for (const A8ShapeMetadataPtr& owner : scratch.metadataOwners)
 			{
-				if (!owner)
-					++s_thinRegistrationDiagnostics.metadataMissing;
+				FreeTypePerfScope metadataPerf(
+					FreeTypePerfPhase::FramePrepMetadata);
+				AcquireA8ShapeMetadataBatch(
+					scratch.metadataShapes, scratch.metadataOwners);
+				++s_thinRegistrationDiagnostics.metadataBatches;
+				s_thinRegistrationDiagnostics.metadataShapes +=
+					static_cast<UInt64>(scratch.metadataShapes.size());
+				for (const A8ShapeMetadataPtr& owner : scratch.metadataOwners)
+				{
+					if (!owner)
+						++s_thinRegistrationDiagnostics.metadataMissing;
+				}
 			}
 			return true;
 		}
@@ -1382,8 +1395,7 @@ namespace fonthook::vectorfont
 				&& accumulator->eRenderMode == BSShaderManager::BSSM_RENDER_TILES
 				&& accumulator->m_iNumItems > 0 && accumulator->m_ppkItems)
 			{
-				FreeTypePerfScope framePrepPerf(
-					FreeTypePerfPhase::FrameRoutePrep);
+				const SInt64 framePrepStart = BeginFreeTypePerfSample();
 				const size_t itemCount = static_cast<size_t>(
 					accumulator->m_iNumItems);
 				scratch.frameEntries.clear();
@@ -1392,6 +1404,7 @@ namespace fonthook::vectorfont
 				CaptureSortedFacadeTopology(scratch, accumulator);
 
 				NativePreflightFrameContext preflightContext;
+				const SInt64 facadePrepStart = BeginFreeTypePerfSample();
 				if (g_bEnableFreeTypeFontStructuralFastPaths)
 				{
 					NativeA8RuntimeReadinessView readiness;
@@ -1554,27 +1567,38 @@ namespace fonthook::vectorfont
 						}
 					}
 				}
-				PrepareSortedNativeA8Payloads(
-					scratch.payloadTemplates, generation);
-				for (const A8ShapeMetadata* metadata
-					: scratch.singletonFacades)
+				EndFreeTypePerfSample(
+					FreeTypePerfPhase::FramePrepFacades,
+					facadePrepStart);
 				{
-					SingletonFacadeState* singleton = metadata
-						? GetSingletonFacadeState(*metadata) : nullptr;
-					if (!singleton
-						|| singleton->preflightValidationToken
-							!= frameValidationToken)
+					FreeTypePerfScope ringPrepPerf(
+						FreeTypePerfPhase::FramePrepRing);
+					PrepareSortedNativeA8Payloads(
+						scratch.payloadTemplates, generation);
+				}
+				{
+					FreeTypePerfScope singletonPrepPerf(
+						FreeTypePerfPhase::FramePrepSingletons);
+					for (const A8ShapeMetadata* metadata
+						: scratch.singletonFacades)
 					{
-						if (metadata)
+						SingletonFacadeState* singleton = metadata
+							? GetSingletonFacadeState(*metadata) : nullptr;
+						if (!singleton
+							|| singleton->preflightValidationToken
+								!= frameValidationToken)
 						{
-							RestoreSingletonFacade(*metadata,
-								NativeA8FallbackReason::RuntimeFault);
+							if (metadata)
+							{
+								RestoreSingletonFacade(*metadata,
+									NativeA8FallbackReason::RuntimeFault);
+							}
+							continue;
 						}
-						continue;
+						PrepareSingletonFacadeForSortedFrame(*metadata,
+							generation, preflightContext.atlasTextureEpoch,
+							frameValidationToken);
 					}
-					PrepareSingletonFacadeForSortedFrame(*metadata,
-						generation, preflightContext.atlasTextureEpoch,
-						frameValidationToken);
 				}
 				if (g_bEnableFreeTypeFontCommandBuffer)
 				{
@@ -1786,11 +1810,17 @@ namespace fonthook::vectorfont
 				{
 					EndNativeA8FrameCommandBuffer();
 				}
-				RefreshSortedScratchMemory(scratch);
-				BeginNativeA8SortedShaderBatch();
-				BeginA8SortedTileConstantOwnership();
-				scratch.activeValidationToken = frameValidationToken;
-				scratch.active = true;
+				{
+					FreeTypePerfScope publishPrepPerf(
+						FreeTypePerfPhase::FramePrepPublish);
+					RefreshSortedScratchMemory(scratch);
+					BeginNativeA8SortedShaderBatch();
+					BeginA8SortedTileConstantOwnership();
+					scratch.activeValidationToken = frameValidationToken;
+					scratch.active = true;
+				}
+				EndFreeTypePerfSample(
+					FreeTypePerfPhase::FrameRoutePrep, framePrepStart);
 				{
 					FreeTypePerfScope stockRenderPerf(
 						FreeTypePerfPhase::FrameRouteStockRender);

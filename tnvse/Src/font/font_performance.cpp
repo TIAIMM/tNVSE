@@ -1247,6 +1247,18 @@ namespace fonthook::vectorfont
 			ConsumeDurationSummary(FreeTypePerfPhase::FrameRouteTotal);
 		const DurationSummary frameRoutePrep =
 			ConsumeDurationSummary(FreeTypePerfPhase::FrameRoutePrep);
+		const DurationSummary framePrepTopology =
+			ConsumeDurationSummary(FreeTypePerfPhase::FramePrepTopology);
+		const DurationSummary framePrepMetadata =
+			ConsumeDurationSummary(FreeTypePerfPhase::FramePrepMetadata);
+		const DurationSummary framePrepFacades =
+			ConsumeDurationSummary(FreeTypePerfPhase::FramePrepFacades);
+		const DurationSummary framePrepRing =
+			ConsumeDurationSummary(FreeTypePerfPhase::FramePrepRing);
+		const DurationSummary framePrepSingletons =
+			ConsumeDurationSummary(FreeTypePerfPhase::FramePrepSingletons);
+		const DurationSummary framePrepPublish =
+			ConsumeDurationSummary(FreeTypePerfPhase::FramePrepPublish);
 		const DurationSummary frameRouteStockRender =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::FrameRouteStockRender);
@@ -1375,6 +1387,30 @@ namespace fonthook::vectorfont
 			frameRouteStockRender.count,
 			frameRouteStockRender.medianMicroseconds,
 			frameRouteStockRender.p95Microseconds);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_accumulator_prep_timing: topology_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f metadata_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f facades_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f ring_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f singletons_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f command_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f publish_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f",
+			framePrepTopology.count, framePrepTopology.meanMicroseconds,
+			framePrepTopology.medianMicroseconds,
+			framePrepTopology.p95Microseconds,
+			framePrepMetadata.count, framePrepMetadata.meanMicroseconds,
+			framePrepMetadata.medianMicroseconds,
+			framePrepMetadata.p95Microseconds,
+			framePrepFacades.count, framePrepFacades.meanMicroseconds,
+			framePrepFacades.medianMicroseconds,
+			framePrepFacades.p95Microseconds,
+			framePrepRing.count, framePrepRing.meanMicroseconds,
+			framePrepRing.medianMicroseconds,
+			framePrepRing.p95Microseconds,
+			framePrepSingletons.count,
+			framePrepSingletons.meanMicroseconds,
+			framePrepSingletons.medianMicroseconds,
+			framePrepSingletons.p95Microseconds,
+			commandBuild.count, commandBuild.meanMicroseconds,
+			commandBuild.medianMicroseconds,
+			commandBuild.p95Microseconds,
+			framePrepPublish.count, framePrepPublish.meanMicroseconds,
+			framePrepPublish.medianMicroseconds,
+			framePrepPublish.p95Microseconds);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_dispatch_timing: dispatch_route_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f register_route_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f honor_gate_n=%llu median_us=%.3f p95_us=%.3f",
 			dispatchRoute.count, dispatchRoute.meanMicroseconds,

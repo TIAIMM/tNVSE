@@ -1039,7 +1039,7 @@ geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
 facades, total payload packets, single- and multi-packet artifacts, direct/span/
 packet-loop frames, topology switches, fallbacks, partial faults, and the
 invariant sibling_shapes=0. The build identity is
-`no-prepared-cache-stock-bridge-v32`. It retains the v23 shell-shader restoration
+`no-cache-bridge-prep-phases-v33`. It retains the v23 shell-shader restoration
 fix, v24 logging cleanup, the no-Sort-hook single-facade architecture, the v30
 linear equal-depth repair, and the v31 direct-Sort-array/preflight-only cleanup.
 The prepared-text result cache and stock-Tile execution bridge are removed. With rendering logging enabled,
@@ -1047,6 +1047,15 @@ the first applied repair emits one compact process-thread diagnostic containing
 item, mixed-run, changed-run, and changed-item counts; a proof failure emits one
 fail-open line. It changes no NVSE export, INI key, shader ABI, font-cache
 format, or save format.
+
+With rendering logging enabled, accumulator preparation is now measured only
+from sorted-topology capture through sorted-state publication; it no longer
+overlaps the separately reported stock `RenderAlphaGeometry` interval. The
+`tnvse_freetype_accumulator_prep_timing` line splits that preparation into
+topology, metadata acquisition, facade visibility/preflight, sorted-ring
+preparation, singleton preparation, command construction, and final state
+publication. Each subphase uses one coarse scope per accumulator traversal,
+not per-item sampling.
 
 ### Retained text command buffer
 
