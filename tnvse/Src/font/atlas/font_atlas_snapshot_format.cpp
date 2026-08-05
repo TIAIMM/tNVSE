@@ -111,12 +111,10 @@ namespace fonthook::vectorfont
 
 			const AtlasProfileKey doubleProfile =
 				MakeAtlasProfileKey(anchorDouble);
+			const size_t singleRoleIndex = static_cast<size_t>(
+				VectorFontByteClass::SingleByte);
 			const size_t doubleRoleIndex = static_cast<size_t>(
 				VectorFontByteClass::DoubleByte);
-			const UInt64 doubleByteLayoutHash =
-				anchor.layoutRoleHashes[doubleRoleIndex];
-			if (!doubleByteLayoutHash)
-				return false;
 			std::vector<const FontConfig*> configs;
 			configs.reserve(g_configs.size());
 			for (const auto& entry : g_configs)
@@ -141,8 +139,8 @@ namespace fonthook::vectorfont
 						member.doubleByteKey)
 					|| !(MakeAtlasProfileKey(member.doubleByteKey)
 						== doubleProfile)
-					|| config->layoutRoleHashes[doubleRoleIndex]
-						!= doubleByteLayoutHash
+					|| !config->layoutRoleHashes[singleRoleIndex]
+					|| !config->layoutRoleHashes[doubleRoleIndex]
 					|| !UsesPlacedLevelZeroSnapshot(member.singleByteKey)
 					|| !UsesPlacedLevelZeroSnapshot(member.doubleByteKey)
 					|| !SameAtlasStorageContract(
@@ -167,6 +165,14 @@ namespace fonthook::vectorfont
 				{
 					group.uniqueSingleByteProfiles.push_back(profile);
 				}
+				const UInt64 doubleLayoutHash =
+					member.config->layoutRoleHashes[doubleRoleIndex];
+				if (std::find(group.uniqueDoubleByteLayoutHashes.begin(),
+						group.uniqueDoubleByteLayoutHashes.end(), doubleLayoutHash)
+					== group.uniqueDoubleByteLayoutHashes.end())
+				{
+					group.uniqueDoubleByteLayoutHashes.push_back(doubleLayoutHash);
+				}
 			}
 			// Identical single- and double-byte profiles already share a complete
 			// page through the existing content-addressed cache. A physical font
@@ -175,15 +181,13 @@ namespace fonthook::vectorfont
 				return false;
 			std::sort(group.uniqueSingleByteProfiles.begin(),
 				group.uniqueSingleByteProfiles.end(), LessAtlasProfileKey);
+			std::sort(group.uniqueDoubleByteLayoutHashes.begin(),
+				group.uniqueDoubleByteLayoutHashes.end());
 
 			group.ownerFontId = group.members.front().config->fontId;
-			group.doubleByteLayoutHash = doubleByteLayoutHash;
-			constexpr UInt32 kPhysicalAtlasGroupRevision = 1;
-			UInt64 hash = HashAtlasBytes(&kPhysicalAtlasGroupRevision,
-				sizeof(kPhysicalAtlasGroupRevision));
+			UInt64 hash = HashAtlasBytes(&kPhysicalAtlasGroupVersion,
+				sizeof(kPhysicalAtlasGroupVersion));
 			hash = HashAtlasProfileKey(doubleProfile, hash);
-			hash = HashAtlasBytes(&group.doubleByteLayoutHash,
-				sizeof(group.doubleByteLayoutHash), hash);
 			const UInt32 profileCount = static_cast<UInt32>(
 				group.uniqueSingleByteProfiles.size());
 			hash = HashAtlasBytes(&profileCount, sizeof(profileCount), hash);
@@ -191,6 +195,32 @@ namespace fonthook::vectorfont
 				group.uniqueSingleByteProfiles)
 			{
 				hash = HashAtlasProfileKey(profile, hash);
+			}
+			const UInt32 doubleLayoutCount = static_cast<UInt32>(
+				group.uniqueDoubleByteLayoutHashes.size());
+			hash = HashAtlasBytes(&doubleLayoutCount,
+				sizeof(doubleLayoutCount), hash);
+			for (UInt64 layoutHash : group.uniqueDoubleByteLayoutHashes)
+				hash = HashAtlasBytes(&layoutHash, sizeof(layoutHash), hash);
+
+			// v2 separates immutable raster identity from logical layout identity.
+			// Keep the latter in the group generation hash so membership/config
+			// changes republish aliases and direct tables, but never require all
+			// members to use the same advances, baselines, or logical pixel size.
+			const UInt32 memberCount = static_cast<UInt32>(group.members.size());
+			hash = HashAtlasBytes(&memberCount, sizeof(memberCount), hash);
+			for (const PhysicalAtlasGroupMember& member : group.members)
+			{
+				const UInt32 fontId = member.config->fontId;
+				hash = HashAtlasBytes(&fontId, sizeof(fontId), hash);
+				hash = HashAtlasProfileKey(
+					MakeAtlasProfileKey(member.singleByteKey), hash);
+				hash = HashAtlasBytes(
+					&member.config->layoutRoleHashes[singleRoleIndex],
+					sizeof(member.config->layoutRoleHashes[singleRoleIndex]), hash);
+				hash = HashAtlasBytes(
+					&member.config->layoutRoleHashes[doubleRoleIndex],
+					sizeof(member.config->layoutRoleHashes[doubleRoleIndex]), hash);
 			}
 			group.identity = hash;
 			return group.identity != 0;

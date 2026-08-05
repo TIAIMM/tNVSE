@@ -251,6 +251,7 @@ namespace fonthook::vectorfont
 
 		bool CollectRoleFilteredResourcesLocked(
 			const AtlasCacheKey& roleKey,
+			const DirectAtlasGlyphTable& directTable,
 			std::vector<std::pair<AtlasCacheKey,
 				std::shared_ptr<AtlasResource>>>& destination,
 			std::vector<std::shared_ptr<AtlasResource>>& physicalSources)
@@ -260,8 +261,7 @@ namespace fonthook::vectorfont
 				MakeAtlasProfileKey(roleKey));
 			if (profile == state.atlasProfiles.end()
 				|| profile->second.pages.empty()
-				|| !profile->second.directGlyphs
-				|| profile->second.directGlyphs->pages.size()
+				|| directTable.pages.size()
 					!= profile->second.pages.size())
 			{
 				return false;
@@ -286,7 +286,7 @@ namespace fonthook::vectorfont
 				std::shared_ptr<AtlasResource> view =
 					CreateRoleFilteredAtlasView(
 						*page->second.resource,
-						*profile->second.directGlyphs,
+						directTable,
 						static_cast<UInt16>(pageSlot));
 				if (!view)
 					return false;
@@ -328,6 +328,62 @@ namespace fonthook::vectorfont
 		bool jointlyPackedRoles = false;
 		const bool jointlyPackedFontGroup =
 			physicalGroup && byteClass == VectorFontByteClass::SingleByte;
+		struct PhysicalGroupRoleSource
+		{
+			AtlasCacheKey key;
+			std::shared_ptr<const DirectAtlasGlyphTable> table;
+		};
+		std::vector<PhysicalGroupRoleSource> physicalGroupRoleSources;
+		if (jointlyPackedFontGroup)
+		{
+			if (!physicalGroup || physicalGroup->members.empty())
+				return false;
+			std::unordered_set<const DirectAtlasGlyphTable*> uniqueTables;
+			physicalGroupRoleSources.reserve(
+				physicalGroup->members.size() * 2u);
+			for (const PhysicalAtlasGroupMember& member : physicalGroup->members)
+			{
+				RuntimeFont* memberRuntime =
+					EnsureRuntimeFont(member.config->fontId);
+				const std::shared_ptr<const SealedDirectFontProfile> sealed =
+					memberRuntime
+						? LoadRuntimeSealedDirectProfile(*memberRuntime) : nullptr;
+				if (!memberRuntime || !sealed
+					|| !IsSealedDirectFontProfileUsable(
+						*memberRuntime, sealed, rasterScale))
+				{
+					return false;
+				}
+				for (size_t roleIndex = 0; roleIndex < 2; ++roleIndex)
+				{
+					const VectorFontByteClass role =
+						static_cast<VectorFontByteClass>(roleIndex);
+					const AtlasCacheKey& roleKey = role
+						== VectorFontByteClass::SingleByte
+						? member.singleByteKey : member.doubleByteKey;
+					const auto& table = sealed->tables[roleIndex];
+					if (!table || !table->validity
+						|| !table->validity->load(std::memory_order_acquire)
+						|| table->byteClass != role
+						|| table->atlasIdentity != roleKey.atlasContentHash
+						|| table->layoutIdentity
+							!= GetRuntimeDirectRoleLayoutIdentity(
+								*memberRuntime, role)
+						|| table->pages.empty()
+						|| table->pages.size() > kMaximumAtlasSnapshotPages)
+					{
+						return false;
+					}
+					if (uniqueTables.insert(table.get()).second)
+					{
+						physicalGroupRoleSources.push_back(
+							{ roleKey, table });
+					}
+				}
+			}
+			if (physicalGroupRoleSources.empty())
+				return false;
+		}
 		VectorFontByteClass packingByteClass = byteClass;
 		AtlasCacheKey singleByteKey;
 		AtlasCacheKey doubleByteKey;
@@ -385,29 +441,14 @@ namespace fonthook::vectorfont
 					std::shared_ptr<AtlasResource>>> groupResources;
 				std::vector<std::shared_ptr<AtlasResource>>
 					groupPhysicalSources;
-				std::unordered_set<AtlasProfileKey, AtlasProfileKeyHash>
-					collectedProfiles;
-				const auto collectUniqueRole = [&](const AtlasCacheKey& roleKey)
-				{
-					const AtlasProfileKey profile =
-						MakeAtlasProfileKey(roleKey);
-					if (!collectedProfiles.insert(profile).second)
-						return true;
-					return CollectRoleFilteredResourcesLocked(
-						roleKey, groupResources, groupPhysicalSources);
-				};
-				bool collected = physicalGroup
-					&& !physicalGroup->members.empty();
-				for (const PhysicalAtlasGroupMember& member :
-					physicalGroup->members)
+				bool collected = true;
+				for (const PhysicalGroupRoleSource& source :
+					physicalGroupRoleSources)
 				{
 					collected = collected
-						&& collectUniqueRole(member.singleByteKey);
-				}
-				if (collected)
-				{
-					collected = collectUniqueRole(
-						physicalGroup->members.front().doubleByteKey);
+						&& CollectRoleFilteredResourcesLocked(
+							source.key, *source.table, groupResources,
+							groupPhysicalSources);
 				}
 				if (collected)
 				{
@@ -471,7 +512,7 @@ namespace fonthook::vectorfont
 				}
 				const size_t maximumSourcePages =
 					static_cast<size_t>(kMaximumAtlasSnapshotPages)
-						* (physicalGroup->uniqueSingleByteProfiles.size() + 1u);
+						* physicalGroupRoleSources.size();
 				if (!collected || groupResources.empty()
 					|| groupResources.size() > maximumSourcePages)
 				{
@@ -582,12 +623,16 @@ namespace fonthook::vectorfont
 				if (physicalGroupFallback)
 					*physicalGroupFallback = fallbackMarked;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: physical atlas group fallback owner=%u members=%u uniqueSingleProfiles=%u pages=%u sourceGpuBytes=%llu candidateGpuBytes=%llu reason=%s markerPersisted=%u policy=retain-per-font-atlases",
+					"tnvse_freetype_font: physical atlas group fallback version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u logicalRoleSources=%u pages=%u sourceGpuBytes=%llu candidateGpuBytes=%llu reason=%s markerPersisted=%u policy=retain-per-font-atlases",
+					kPhysicalAtlasGroupVersion,
 					physicalGroup->ownerFontId,
 					static_cast<UInt32>(
 						physicalGroup->members.size()),
 					static_cast<UInt32>(
 						physicalGroup->uniqueSingleByteProfiles.size()),
+					static_cast<UInt32>(physicalGroup
+						->uniqueDoubleByteLayoutHashes.size()),
+					static_cast<UInt32>(physicalGroupRoleSources.size()),
 					static_cast<UInt32>(pages.size()),
 					static_cast<unsigned long long>(
 						physicalGroupSourceGpuBytes),
@@ -961,6 +1006,22 @@ namespace fonthook::vectorfont
 			}
 			{
 				std::lock_guard<std::mutex> lock(State().atlasMutex);
+				// One raster profile can now have several member-local direct
+				// tables. The mutable profile index owns only the most recently
+				// published table, so invalidate every captured table before the
+				// old texture generation is retired.
+				if (jointlyPackedFontGroup)
+				{
+					for (const PhysicalGroupRoleSource& source :
+						physicalGroupRoleSources)
+					{
+						if (source.table && source.table->validity)
+						{
+							source.table->validity->store(
+								false, std::memory_order_release);
+						}
+					}
+				}
 				std::unordered_set<AtlasProfileKey, AtlasProfileKeyHash>
 					invalidated;
 				for (const SnapshotAliasFile& file : aliasFiles)
@@ -1023,11 +1084,15 @@ namespace fonthook::vectorfont
 		if (jointlyPackedFontGroup)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: physical atlas group snapshot published owner=%u members=%u uniqueSingleProfiles=%u pageContentHash=%016llX size=%ux%u placements=%llu",
+				"tnvse_freetype_font: physical atlas group snapshot published version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u logicalRoleSources=%u pageContentHash=%016llX size=%ux%u placements=%llu",
+				kPhysicalAtlasGroupVersion,
 				physicalGroup->ownerFontId,
 				static_cast<UInt32>(physicalGroup->members.size()),
 				static_cast<UInt32>(
 					physicalGroup->uniqueSingleByteProfiles.size()),
+				static_cast<UInt32>(physicalGroup
+					->uniqueDoubleByteLayoutHashes.size()),
+				static_cast<UInt32>(physicalGroupRoleSources.size()),
 				static_cast<unsigned long long>(
 					pages.front().header.pageContentHash),
 				pages.front().header.width, pages.front().header.height,

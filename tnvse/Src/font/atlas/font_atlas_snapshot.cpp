@@ -438,11 +438,13 @@ namespace fonthook::vectorfont
 						residentGroup->width, residentGroup->height,
 						residentGroup->pixelMode, residentGroup->mipLevels);
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: physical atlas group reused owner=%u members=%u uniqueSingleProfiles=%u size=%ux%u gpuBytes=%llu pageContentHash=%016llX",
-						group.ownerFontId,
+						"tnvse_freetype_font: physical atlas group reused version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u size=%ux%u gpuBytes=%llu pageContentHash=%016llX",
+						kPhysicalAtlasGroupVersion, group.ownerFontId,
 						static_cast<UInt32>(group.members.size()),
 						static_cast<UInt32>(
 							group.uniqueSingleByteProfiles.size()),
+						static_cast<UInt32>(
+							group.uniqueDoubleByteLayoutHashes.size()),
 						residentGroup->width, residentGroup->height,
 						static_cast<unsigned long long>(bytes),
 						static_cast<unsigned long long>(
@@ -452,42 +454,54 @@ namespace fonthook::vectorfont
 				if (IsPhysicalAtlasGroupFallbackMarkedLocked(group))
 				{
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: physical atlas group fallback reused owner=%u members=%u uniqueSingleProfiles=%u policy=retain-per-font-atlases",
-						group.ownerFontId,
+						"tnvse_freetype_font: physical atlas group fallback reused version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u policy=retain-per-font-atlases",
+						kPhysicalAtlasGroupVersion, group.ownerFontId,
 						static_cast<UInt32>(group.members.size()),
 						static_cast<UInt32>(
-							group.uniqueSingleByteProfiles.size()));
+							group.uniqueSingleByteProfiles.size()),
+						static_cast<UInt32>(
+							group.uniqueDoubleByteLayoutHashes.size()));
 					continue;
 				}
 			}
 
 			RuntimeFont* ownerRuntime =
 				EnsureRuntimeFont(group.ownerFontId);
+			const auto validateMemberTables = [&](RuntimeFont& memberRuntime)
+			{
+				const std::shared_ptr<const SealedDirectFontProfile> sealed =
+					LoadRuntimeSealedDirectProfile(memberRuntime);
+				if (!sealed || !IsSealedDirectFontProfileUsable(
+						memberRuntime, sealed, rasterScale))
+				{
+					return false;
+				}
+				for (size_t roleIndex = 0; roleIndex < 2; ++roleIndex)
+				{
+					const VectorFontByteClass role =
+						static_cast<VectorFontByteClass>(roleIndex);
+					const auto& table = sealed->tables[roleIndex];
+					if (!table || table->byteClass != role
+						|| table->layoutIdentity
+							!= GetRuntimeDirectRoleLayoutIdentity(
+								memberRuntime, role))
+					{
+						return false;
+					}
+				}
+				return true;
+			};
 			bool sourceTablesReady = ownerRuntime != nullptr;
-			UInt64 doubleByteLayoutIdentity = 0;
 			if (sourceTablesReady)
 			{
 				for (const PhysicalAtlasGroupMember& member : group.members)
 				{
 					RuntimeFont* memberRuntime =
 						EnsureRuntimeFont(member.config->fontId);
-					const UInt64 memberDoubleByteLayoutIdentity =
-						memberRuntime
-							? GetRuntimeDirectRoleLayoutIdentity(
-								*memberRuntime,
-								VectorFontByteClass::DoubleByte)
-							: 0;
-					if (!doubleByteLayoutIdentity)
-					{
-						doubleByteLayoutIdentity =
-							memberDoubleByteLayoutIdentity;
-					}
 					if (!memberRuntime
-						|| !memberDoubleByteLayoutIdentity
-						|| memberDoubleByteLayoutIdentity
-							!= doubleByteLayoutIdentity
 						|| !BuildDirectGlyphAtlasTables(
-							*memberRuntime, rasterScale))
+							*memberRuntime, rasterScale)
+						|| !validateMemberTables(*memberRuntime))
 					{
 						sourceTablesReady = false;
 						break;
@@ -524,11 +538,13 @@ namespace fonthook::vectorfont
 					}
 				}
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: physical atlas group consolidation skipped owner=%u members=%u uniqueSingleProfiles=%u fallbackRestored=%u reason=publish-failed",
-					group.ownerFontId,
+					"tnvse_freetype_font: physical atlas group consolidation skipped version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u fallbackRestored=%u reason=publish-failed",
+					kPhysicalAtlasGroupVersion, group.ownerFontId,
 					static_cast<UInt32>(group.members.size()),
 					static_cast<UInt32>(
 						group.uniqueSingleByteProfiles.size()),
+					static_cast<UInt32>(
+						group.uniqueDoubleByteLayoutHashes.size()),
 					fallbackRestored ? 1u : 0u);
 				continue;
 			}
@@ -554,7 +570,8 @@ namespace fonthook::vectorfont
 				for (RuntimeFont* memberRuntime : memberRuntimes)
 				{
 					if (!BuildDirectGlyphAtlasTables(
-						*memberRuntime, rasterScale))
+							*memberRuntime, rasterScale)
+						|| !validateMemberTables(*memberRuntime))
 					{
 						rebuilt = false;
 						break;
@@ -564,6 +581,7 @@ namespace fonthook::vectorfont
 
 			std::shared_ptr<AtlasResource> shared;
 			bool physicallyShared = false;
+			bool logicalProfilesReady = rebuilt;
 			const char* validationFailure = "not-rebuilt";
 			if (rebuilt)
 			{
@@ -572,14 +590,49 @@ namespace fonthook::vectorfont
 					IsPhysicalAtlasGroupResidentLocked(
 						group, &shared, &validationFailure);
 			}
-			if (!rebuilt || !physicallyShared || !shared)
+			if (rebuilt && physicallyShared && shared)
+			{
+				for (RuntimeFont* memberRuntime : memberRuntimes)
+				{
+					const std::shared_ptr<const SealedDirectFontProfile> sealed =
+						LoadRuntimeSealedDirectProfile(*memberRuntime);
+					if (!sealed || !validateMemberTables(*memberRuntime))
+					{
+						logicalProfilesReady = false;
+						break;
+					}
+					for (const auto& table : sealed->tables)
+					{
+						if (!table || table->pages.size() != 1)
+						{
+							logicalProfilesReady = false;
+							break;
+						}
+						const std::shared_ptr<AtlasResource> page =
+							table->pages.front().lock();
+						if (!page || !AreAtlasResourcesBackedBySameTexture(
+								*shared, *page))
+						{
+							logicalProfilesReady = false;
+							break;
+						}
+					}
+					if (!logicalProfilesReady)
+						break;
+				}
+				if (!logicalProfilesReady)
+					validationFailure = "logical-direct-profile";
+			}
+			if (!rebuilt || !physicallyShared || !shared
+				|| !logicalProfilesReady)
 			{
 				success = false;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: physical atlas group restore validation failed owner=%u members=%u rebuilt=%u physicallyShared=%u reason=%s",
-					group.ownerFontId,
+					"tnvse_freetype_font: physical atlas group restore validation failed version=%u owner=%u members=%u rebuilt=%u physicallyShared=%u logicalProfiles=%u reason=%s",
+					kPhysicalAtlasGroupVersion, group.ownerFontId,
 					static_cast<UInt32>(group.members.size()),
 					rebuilt ? 1u : 0u, physicallyShared ? 1u : 0u,
+					logicalProfilesReady ? 1u : 0u,
 					validationFailure);
 				continue;
 			}
@@ -587,11 +640,14 @@ namespace fonthook::vectorfont
 			const size_t bytes = GetAtlasStorageBytes(shared->width,
 				shared->height, shared->pixelMode, shared->mipLevels);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: physical atlas group active owner=%u members=%u uniqueSingleProfiles=%u size=%ux%u gpuBytes=%llu pageContentHash=%016llX",
-				group.ownerFontId,
+				"tnvse_freetype_font: physical atlas group active version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u logicalProfiles=%u size=%ux%u gpuBytes=%llu pageContentHash=%016llX",
+				kPhysicalAtlasGroupVersion, group.ownerFontId,
 				static_cast<UInt32>(group.members.size()),
 				static_cast<UInt32>(
 					group.uniqueSingleByteProfiles.size()),
+				static_cast<UInt32>(
+					group.uniqueDoubleByteLayoutHashes.size()),
+				static_cast<UInt32>(memberRuntimes.size()),
 				shared->width, shared->height,
 				static_cast<unsigned long long>(bytes),
 				static_cast<unsigned long long>(shared->pageContentHash));

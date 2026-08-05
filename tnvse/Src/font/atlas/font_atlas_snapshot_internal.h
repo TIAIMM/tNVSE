@@ -6,6 +6,8 @@ namespace fonthook::vectorfont
 {
 	namespace implementation::font_atlas_snapshot
 	{
+		inline constexpr UInt32 kPhysicalAtlasGroupVersion = 2;
+
 		struct PhysicalAtlasGroupMember
 		{
 			const FontConfig* config = nullptr;
@@ -16,10 +18,10 @@ namespace fonthook::vectorfont
 		struct PhysicalAtlasGroup
 		{
 			UInt64 identity = 0;
-			UInt64 doubleByteLayoutHash = 0;
 			UInt32 ownerFontId = 0;
 			std::vector<PhysicalAtlasGroupMember> members;
 			std::vector<AtlasProfileKey> uniqueSingleByteProfiles;
+			std::vector<UInt64> uniqueDoubleByteLayoutHashes;
 		};
 
 		struct SnapshotPackingCaps

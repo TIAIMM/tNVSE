@@ -529,11 +529,15 @@ old full copies therefore do not remain beside the aliases when
 same in-place replacement rule while still validating the v23 header version.
 
 After every configured profile has been verified, snapshot v23 also considers
-physical font groups. A group requires at least two distinct single-byte atlas
-profiles plus one exactly matching double-byte pixel profile and double-byte
-layout profile. The repacker filters already joint role snapshots back to
-their logical contents, keeps every unique single-byte glyph set, keeps the
-double-byte glyph set once, and removes duplicate content IDs.
+physical font groups. Physical-group v2 requires at least two distinct
+single-byte atlas profiles plus one exactly matching double-byte raster profile
+and storage contract. Double-byte layout identities no longer have to match:
+advances, baselines, tracking, fixed widths, and logical pixel sizes remain in
+each font's own direct table. Before repacking, v2 captures every member's
+sealed single- and double-byte direct table, filters the source pages through
+those tables, unions all referenced raster cache IDs, and removes duplicate
+content IDs. The physical page therefore contains every logical layout's pixel
+dependencies without making layout state part of texture sharing.
 
 If that complete union fits one device-supported power-of-two page, the same
 placed snapshot payload is published for every member role. Content-addressed
@@ -542,8 +546,9 @@ sealed, dynamic-direct, and compatibility compilers all collapse logical
 wrappers by their underlying D3D9 texture identity. Mixed single-/double-byte
 text therefore keeps one physical page ordinal and the one-page draw path even
 after a sealed direct profile is invalidated and rebuilt lazily. Runtime group
-validation checks complete logical profiles, the physical-group snapshot marker,
-snapshot content identity, and the actual shared D3D9 texture.
+validation checks complete logical profiles, every member's own role-layout
+identity, the physical-group snapshot marker, snapshot content identity, and
+the actual shared D3D9 texture behind every direct table.
 
 Direct-batch diagnostics report `pages` as the number of distinct physical
 atlas ordinals referenced by drawable glyphs in that batch, rather than the
@@ -561,8 +566,9 @@ For CPU-precomposed ARGB profiles, double-byte compatibility includes the
 baked effect geometry and colors because those values alter final texels.
 Distance-field profiles can share when their raster identities match even
 when live shader colors differ. The log reports `physical atlas group active`
-or `reused` with the single physical page's `size`, `gpuBytes`, and
-`pageContentHash`; `fallback reused` confirms the persistent safe fallback.
+or `reused` with `version=2`, member/layout counts, and the single physical
+page's `size`, `gpuBytes`, and `pageContentHash`; `fallback reused` confirms the
+persistent safe fallback.
 
 In FreeType-only mode the effective FreeType code page is always 1252, even if
 `uiEncoding=1-4` remains configured, and every byte uses `singleByte`.
