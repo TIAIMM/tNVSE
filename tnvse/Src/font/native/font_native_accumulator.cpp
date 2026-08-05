@@ -397,6 +397,21 @@ namespace fonthook::vectorfont
 			scratch.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata, bytes);
 		}
 
+		void ResetSortedPrepScratch(SortedPayloadScratch& scratch)
+		{
+			scratch.frameAccumulator = nullptr;
+			scratch.metadataShapes.clear();
+			scratch.metadataOwners.clear();
+			scratch.metadataAcquireShapes.clear();
+			scratch.metadataAcquireOwners.clear();
+			scratch.preflightCulls.clear();
+			scratch.sortedOccurrenceCounts.clear();
+			scratch.tieRuns.clear();
+			scratch.frameEntries.clear();
+			scratch.payloadTemplates.clear();
+			scratch.singletonFacades.clear();
+		}
+
 		void ClearSortedFrame(SortedPayloadScratch& scratch)
 		{
 			FlushThinRegistrationDiagnostics();
@@ -804,21 +819,15 @@ namespace fonthook::vectorfont
 		}
 
 		bool CaptureSortedFacadeTopology(SortedPayloadScratch& scratch,
-			BSShaderAccumulator* accumulator)
+			BSShaderAccumulator* accumulator, SInt64* topologyTicks)
 		{
-			scratch.frameAccumulator = nullptr;
-			scratch.metadataShapes.clear();
-			scratch.metadataOwners.clear();
-			scratch.metadataAcquireShapes.clear();
-			scratch.metadataAcquireOwners.clear();
-			scratch.preflightCulls.clear();
-			scratch.sortedOccurrenceCounts.clear();
-			scratch.tieRuns.clear();
 			const SInt64 topologyStart = BeginFreeTypePerfSample();
 			auto finishTopology = [&](bool result)
 			{
-				EndFreeTypePerfSample(
+				const SInt64 ticks = EndFreeTypePerfSample(
 					FreeTypePerfPhase::FramePrepTopology, topologyStart);
+				if (topologyTicks)
+					*topologyTicks = ticks;
 				return result;
 			};
 
@@ -946,10 +955,8 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			EndFreeTypePerfSample(
-				FreeTypePerfPhase::FramePrepTopology, topologyStart);
 			scratch.frameAccumulator = accumulator;
-			return true;
+			return finishTopology(true);
 		}
 
 		void ResolveSingletonFacadeSortedTopology(
@@ -1417,10 +1424,16 @@ namespace fonthook::vectorfont
 				const SInt64 framePrepStart = BeginFreeTypePerfSample();
 				const size_t itemCount = static_cast<size_t>(
 					accumulator->m_iNumItems);
-				scratch.frameEntries.clear();
-				scratch.payloadTemplates.clear();
-				scratch.singletonFacades.clear();
-				CaptureSortedFacadeTopology(scratch, accumulator);
+				FreeTypeAccumulatorPrepTailSample prepTailSample;
+				prepTailSample.itemCount = static_cast<UInt32>(itemCount);
+				{
+					FreeTypePerfScope resetPrepPerf(
+						FreeTypePerfPhase::FramePrepReset, true,
+						&prepTailSample.resetTicks);
+					ResetSortedPrepScratch(scratch);
+				}
+				CaptureSortedFacadeTopology(scratch, accumulator,
+					&prepTailSample.topologyTicks);
 				if (scratch.metadataShapes.empty())
 				{
 					RecordFreeTypePerf(
@@ -1430,8 +1443,10 @@ namespace fonthook::vectorfont
 					// in both cases the ordinary dispatch path remains authoritative.
 					// Do not build a readiness stamp, command frame, or empty cross-text
 					// sequence.
-					EndFreeTypePerfSample(
+					const SInt64 framePrepTicks = EndFreeTypePerfSample(
 						FreeTypePerfPhase::FrameRoutePrep, framePrepStart);
+					prepTailSample.totalTicks = framePrepTicks;
+					RecordFreeTypeAccumulatorPrepTailSample(prepTailSample);
 					{
 						FreeTypePerfScope stockRenderPerf(
 							FreeTypePerfPhase::FrameRouteStockRender);
@@ -1444,39 +1459,44 @@ namespace fonthook::vectorfont
 				// Visibility is now the first post-Sort preflight.  The facade owns
 				// the final model bound and Tile/scissor state, so a proven cull does
 				// not need a metadata owner, packet artifact, or renderer-ring slot.
-				scratch.preflightCulls.assign(scratch.metadataShapes.size(),
-					NativeA8VisibilityCull::None);
-				scratch.metadataAcquireShapes.clear();
-				scratch.metadataAcquireShapes.reserve(
-					scratch.metadataShapes.size());
-				for (size_t index = 0;
-					index < scratch.metadataShapes.size(); ++index)
 				{
-					NiTriShape* facade = scratch.metadataShapes[index];
-					NativeA8VisibilityCull cull =
-						EvaluateNativeA8SubmissionVisibility(facade);
-					if (cull == NativeA8VisibilityCull::None)
+					FreeTypePerfScope visibilityPrepPerf(
+						FreeTypePerfPhase::FramePrepVisibility, true,
+						&prepTailSample.visibilityTicks);
+					scratch.preflightCulls.assign(scratch.metadataShapes.size(),
+						NativeA8VisibilityCull::None);
+					scratch.metadataAcquireShapes.clear();
+					scratch.metadataAcquireShapes.reserve(
+						scratch.metadataShapes.size());
+					for (size_t index = 0;
+						index < scratch.metadataShapes.size(); ++index)
 					{
-						cull = EvaluateNativeA8PreflightClipVisibility(facade);
+						NiTriShape* facade = scratch.metadataShapes[index];
+						NativeA8VisibilityCull cull =
+							EvaluateNativeA8SubmissionVisibility(facade);
+						if (cull == NativeA8VisibilityCull::None)
+						{
+							cull = EvaluateNativeA8PreflightClipVisibility(facade);
+						}
+						scratch.preflightCulls[index] = cull;
+						if (cull == NativeA8VisibilityCull::None)
+							scratch.metadataAcquireShapes.push_back(facade);
+						else
+						{
+							RecordFreeTypePerf(FreeTypePerfCounter::
+								VisibilityPreflightSkipped);
+							RecordFreeTypePerf(FreeTypePerfCounter::
+								AccumulatorMetadataCullSkipped);
+						}
 					}
-					scratch.preflightCulls[index] = cull;
-					if (cull == NativeA8VisibilityCull::None)
-						scratch.metadataAcquireShapes.push_back(facade);
-					else
-					{
-						RecordFreeTypePerf(FreeTypePerfCounter::
-							VisibilityPreflightSkipped);
-						RecordFreeTypePerf(FreeTypePerfCounter::
-							AccumulatorMetadataCullSkipped);
-					}
+					scratch.metadataOwners.assign(
+						scratch.metadataShapes.size(), {});
 				}
-
-				scratch.metadataOwners.assign(
-					scratch.metadataShapes.size(), {});
 				if (!scratch.metadataAcquireShapes.empty())
 				{
 					FreeTypePerfScope metadataPerf(
-						FreeTypePerfPhase::FramePrepMetadata);
+						FreeTypePerfPhase::FramePrepMetadata, true,
+						&prepTailSample.metadataTicks);
 					AcquireA8ShapeMetadataBatch(
 						scratch.metadataAcquireShapes,
 						scratch.metadataAcquireOwners);
@@ -1512,57 +1532,72 @@ namespace fonthook::vectorfont
 				const SInt64 facadePrepStart = BeginFreeTypePerfSample();
 				const bool hasMetadataSurvivors =
 					!scratch.metadataAcquireShapes.empty();
-				if (hasMetadataSurvivors
-					&& g_bEnableFreeTypeFontStructuralFastPaths)
+				UInt32 generation = 0;
+				UInt64 frameValidationToken = 0;
 				{
-					NativeA8RuntimeReadinessView readiness;
-					bool ready = GetNativeA8RuntimeReadinessCurrent(readiness);
-					if (!ready && IsA8RendererAvailable())
-						ready = GetNativeA8RuntimeReadinessCurrent(readiness);
-					preflightContext.accumulatorCurrent = ready;
-					preflightContext.immediateRouteCurrent = ready;
-					preflightContext.rendererAvailable = ready;
-					preflightContext.generation = readiness.generation;
-					preflightContext.atlasTextureEpoch =
-						readiness.atlasTextureEpoch;
-				}
-				else if (hasMetadataSurvivors)
-				{
-					preflightContext.accumulatorCurrent =
-						IsNativeA8AccumulatorHookCurrent();
-					preflightContext.immediateRouteCurrent =
-						IsA8RenderPassImmediatelyHookCurrent();
-					preflightContext.rendererAvailable =
-						IsNativeA8RendererAvailable();
-					preflightContext.generation =
-						GetNativeA8ShaderGeneration();
-					preflightContext.atlasTextureEpoch =
-						GetNativeA8AtlasTextureEpoch();
-				}
-				const UInt32 generation = preflightContext.generation;
-				UInt64 frameValidationToken = ++scratch.nextValidationToken;
-				if (!frameValidationToken)
+					FreeTypePerfScope readinessPrepPerf(
+						FreeTypePerfPhase::FramePrepReadiness, true,
+						&prepTailSample.readinessTicks);
+					if (hasMetadataSurvivors
+						&& g_bEnableFreeTypeFontStructuralFastPaths)
+					{
+						NativeA8RuntimeReadinessView readiness;
+						bool ready = GetNativeA8RuntimeReadinessCurrent(readiness);
+						if (!ready && IsA8RendererAvailable())
+							ready = GetNativeA8RuntimeReadinessCurrent(readiness);
+						preflightContext.accumulatorCurrent = ready;
+						preflightContext.immediateRouteCurrent = ready;
+						preflightContext.rendererAvailable = ready;
+						preflightContext.generation = readiness.generation;
+						preflightContext.atlasTextureEpoch =
+							readiness.atlasTextureEpoch;
+					}
+					else if (hasMetadataSurvivors)
+					{
+						preflightContext.accumulatorCurrent =
+							IsNativeA8AccumulatorHookCurrent();
+						preflightContext.immediateRouteCurrent =
+							IsA8RenderPassImmediatelyHookCurrent();
+						preflightContext.rendererAvailable =
+							IsNativeA8RendererAvailable();
+						preflightContext.generation =
+							GetNativeA8ShaderGeneration();
+						preflightContext.atlasTextureEpoch =
+							GetNativeA8AtlasTextureEpoch();
+					}
+					generation = preflightContext.generation;
 					frameValidationToken = ++scratch.nextValidationToken;
-
-				scratch.frameCandidates = scratch.metadataShapes;
-
-				const size_t trackedCount = scratch.frameCandidates.size();
-				scratch.frameEntries.reserve(trackedCount);
-				scratch.payloadTemplates.reserve(trackedCount);
-				scratch.singletonFacades.reserve(
-					std::min<size_t>(trackedCount, 1024));
-				PrepareLookup(scratch.facadeLookup, trackedCount);
-				PrepareLookup(scratch.payloadLookup, trackedCount);
-				if (hasMetadataSurvivors)
+					if (!frameValidationToken)
+						frameValidationToken = ++scratch.nextValidationToken;
+				}
 				{
-					ResolveSingletonFacadeSortedTopology(
-						scratch, accumulator, frameValidationToken);
+					FreeTypePerfScope lookupPrepPerf(
+						FreeTypePerfPhase::FramePrepLookup, true,
+						&prepTailSample.lookupTicks);
+					scratch.frameCandidates = scratch.metadataShapes;
+
+					const size_t trackedCount = scratch.frameCandidates.size();
+					scratch.frameEntries.reserve(trackedCount);
+					scratch.payloadTemplates.reserve(trackedCount);
+					scratch.singletonFacades.reserve(
+						std::min<size_t>(trackedCount, 1024));
+					PrepareLookup(scratch.facadeLookup, trackedCount);
+					PrepareLookup(scratch.payloadLookup, trackedCount);
+					if (hasMetadataSurvivors)
+					{
+						ResolveSingletonFacadeSortedTopology(
+							scratch, accumulator, frameValidationToken);
+					}
 				}
 
-				for (size_t candidateIndex = 0;
-					candidateIndex < scratch.frameCandidates.size();
-					++candidateIndex)
 				{
+					FreeTypePerfScope facadeLoopPrepPerf(
+						FreeTypePerfPhase::FramePrepFacadeLoop, true,
+						&prepTailSample.facadeLoopTicks);
+					for (size_t candidateIndex = 0;
+						candidateIndex < scratch.frameCandidates.size();
+						++candidateIndex)
+					{
 					NiTriShape* facade =
 						scratch.frameCandidates[candidateIndex];
 					if (LookupSortedFacade(scratch, facade)
@@ -1674,6 +1709,7 @@ namespace fonthook::vectorfont
 								FreeTypePerfCounter::SortedFramePayload);
 						}
 					}
+					}
 				}
 				EndFreeTypePerfSample(
 					FreeTypePerfPhase::FramePrepFacades,
@@ -1688,14 +1724,16 @@ namespace fonthook::vectorfont
 				if (hasPreparedPayloads)
 				{
 					FreeTypePerfScope ringPrepPerf(
-						FreeTypePerfPhase::FramePrepRing);
+						FreeTypePerfPhase::FramePrepRing, true,
+						&prepTailSample.ringTicks);
 					PrepareSortedNativeA8Payloads(
 						scratch.payloadTemplates, generation);
 				}
 				if (hasPreparedPayloads)
 				{
 					FreeTypePerfScope singletonPrepPerf(
-						FreeTypePerfPhase::FramePrepSingletons);
+						FreeTypePerfPhase::FramePrepSingletons, true,
+						&prepTailSample.singletonTicks);
 					for (const A8ShapeMetadata* metadata
 						: scratch.singletonFacades)
 					{
@@ -1723,7 +1761,8 @@ namespace fonthook::vectorfont
 				if (commandFrameActive)
 				{
 					FreeTypePerfScope commandBuild(
-						FreeTypePerfPhase::CommandBuild);
+						FreeTypePerfPhase::CommandBuild, true,
+						&prepTailSample.commandTicks);
 					{
 						FreeTypePerfScope commandBuildStamp(
 							FreeTypePerfPhase::CommandBuildStamp);
@@ -1932,7 +1971,8 @@ namespace fonthook::vectorfont
 				}
 				{
 					FreeTypePerfScope publishPrepPerf(
-						FreeTypePerfPhase::FramePrepPublish);
+						FreeTypePerfPhase::FramePrepPublish, true,
+						&prepTailSample.publishTicks);
 					RefreshSortedScratchMemory(scratch);
 					if (hasPreparedPayloads)
 					{
@@ -1942,8 +1982,19 @@ namespace fonthook::vectorfont
 					scratch.activeValidationToken = frameValidationToken;
 					scratch.active = true;
 				}
-				EndFreeTypePerfSample(
+				const SInt64 framePrepTicks = EndFreeTypePerfSample(
 					FreeTypePerfPhase::FrameRoutePrep, framePrepStart);
+				prepTailSample.totalTicks = framePrepTicks;
+				prepTailSample.facadeCount =
+					static_cast<UInt32>(scratch.metadataShapes.size());
+				prepTailSample.survivorCount = static_cast<UInt32>(
+					scratch.metadataAcquireShapes.size());
+				prepTailSample.payloadCount =
+					static_cast<UInt32>(scratch.payloadTemplates.size());
+				prepTailSample.singletonCount =
+					static_cast<UInt32>(scratch.singletonFacades.size());
+				prepTailSample.commandFrameActive = commandFrameActive;
+				RecordFreeTypeAccumulatorPrepTailSample(prepTailSample);
 				{
 					FreeTypePerfScope stockRenderPerf(
 						FreeTypePerfPhase::FrameRouteStockRender);

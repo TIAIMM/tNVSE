@@ -531,9 +531,14 @@ namespace fonthook::vectorfont
 		GlyphInstancingRestore,
 		FrameRouteTotal,
 		FrameRoutePrep,
+		FramePrepReset,
 		FramePrepTopology,
+		FramePrepVisibility,
 		FramePrepMetadata,
 		FramePrepFacades,
+		FramePrepReadiness,
+		FramePrepLookup,
+		FramePrepFacadeLoop,
 		FramePrepRing,
 		FramePrepSingletons,
 		FramePrepPublish,
@@ -546,14 +551,38 @@ namespace fonthook::vectorfont
 		PreflightClipHonorGate,
 		Count,
 	};
+	struct FreeTypeAccumulatorPrepTailSample
+	{
+		SInt64 totalTicks = 0;
+		SInt64 resetTicks = 0;
+		SInt64 topologyTicks = 0;
+		SInt64 visibilityTicks = 0;
+		SInt64 metadataTicks = 0;
+		SInt64 readinessTicks = 0;
+		SInt64 lookupTicks = 0;
+		SInt64 facadeLoopTicks = 0;
+		SInt64 ringTicks = 0;
+		SInt64 singletonTicks = 0;
+		SInt64 commandTicks = 0;
+		SInt64 publishTicks = 0;
+		UInt32 itemCount = 0;
+		UInt32 facadeCount = 0;
+		UInt32 survivorCount = 0;
+		UInt32 payloadCount = 0;
+		UInt32 singletonCount = 0;
+		bool commandFrameActive = false;
+	};
 	SInt64 BeginFreeTypePerfSample();
-	void EndFreeTypePerfSample(FreeTypePerfPhase aePhase, SInt64 aiStart);
+	SInt64 EndFreeTypePerfSample(FreeTypePerfPhase aePhase, SInt64 aiStart);
+	void RecordFreeTypeAccumulatorPrepTailSample(
+		const FreeTypeAccumulatorPrepTailSample& arSample);
 
 	class FreeTypePerfScope
 	{
 	public:
 		explicit FreeTypePerfScope(
-			FreeTypePerfPhase aePhase, bool abEnabled = true);
+			FreeTypePerfPhase aePhase, bool abEnabled = true,
+			SInt64* apElapsedTicks = nullptr);
 		~FreeTypePerfScope();
 
 		FreeTypePerfScope(const FreeTypePerfScope&) = delete;
@@ -562,6 +591,7 @@ namespace fonthook::vectorfont
 	private:
 		FreeTypePerfPhase m_phase;
 		SInt64 m_start = 0;
+		SInt64* m_elapsedTicks = nullptr;
 		bool m_active = false;
 	};
 	struct FaceConfig

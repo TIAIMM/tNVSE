@@ -1136,7 +1136,7 @@ geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
 facades, total payload packets, single- and multi-packet artifacts, direct/span/
 packet-loop frames, topology switches, fallbacks, partial faults, and the
 invariant sibling_shapes=0. The build identity is
-`stock-layout-postpack-v39`. It
+`accumulator-prep-tail-v40`. It
 retains the v23 shell-shader restoration fix, v24 logging cleanup, the
 no-Sort-hook single-facade architecture, the v30 linear equal-depth repair, and
 the v31 direct-Sort-array/preflight-only cleanup.
@@ -1158,6 +1158,24 @@ topology, metadata acquisition, facade visibility/preflight, sorted-ring
 preparation, singleton preparation, command construction, and final state
 publication. Each subphase uses one coarse scope per accumulator traversal,
 not per-item sampling.
+
+The v40 tail diagnostics preserve that line for existing parsers and add
+boundary-oriented lines. `tnvse_freetype_accumulator_prep_tail` reports the
+whole prep plus scratch reset and the previously unmeasured final-transform /
+scissor visibility stage. `tnvse_freetype_accumulator_prep_tail_detail` splits
+the former facade aggregate into runtime readiness, lookup/topology preparation,
+and the per-facade preflight loop. Both include mean, median, P95, P99, and an
+exact interval maximum; histogram percentiles remain conservative bucket upper
+bounds. `tnvse_freetype_accumulator_prep_tail_existing` adds P99 and exact
+maximum values for the older subphases. Finally,
+`tnvse_freetype_accumulator_prep_tail_workload` counts prep traversals at or
+above 250, 500, 1000, and 2000 microseconds and snapshots the worst traversal's
+item, facade, visible-survivor, culled, payload, singleton, and command-frame
+counts. The tail snapshot locks only after the 250-microsecond threshold and
+`tnvse_freetype_accumulator_prep_tail_worst` reports the matching per-stage
+durations from that same worst traversal, plus the residual time not attributed
+to a named coarse scope. All of these diagnostics remain disabled with FreeType
+rendering logging.
 
 ### Retained text command buffer
 
