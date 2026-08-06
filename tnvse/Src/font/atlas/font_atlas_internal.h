@@ -426,6 +426,7 @@ namespace fonthook::vectorfont
 	constexpr UInt32 kAtlasSnapshotFlagPhysicalFontGroup = 1u << 4;
 	constexpr UInt32 kAtlasSnapshotFlagPhysicalFontGroupFallback = 1u << 5;
 	constexpr UInt32 kAtlasSnapshotFlagPhysicalPayloadAlias = 1u << 6;
+	constexpr UInt32 kAtlasSnapshotFlagPhysicalFontPool = 1u << 7;
 	constexpr UInt32 kAtlasSnapshotKnownFlags =
 		kAtlasSnapshotFlagGloballyRepacked
 		| kAtlasSnapshotFlagSingleAtlas
@@ -433,7 +434,8 @@ namespace fonthook::vectorfont
 		| kAtlasSnapshotFlagJointByteRoles
 		| kAtlasSnapshotFlagPhysicalFontGroup
 		| kAtlasSnapshotFlagPhysicalFontGroupFallback
-		| kAtlasSnapshotFlagPhysicalPayloadAlias;
+		| kAtlasSnapshotFlagPhysicalPayloadAlias
+		| kAtlasSnapshotFlagPhysicalFontPool;
 	constexpr UInt32 kAtlasSnapshotAliasVersion = 1;
 	// Version 23 stores jointly packed logical roles as validated aliases to one
 	// full physical snapshot. Placements and pixels are no longer duplicated on

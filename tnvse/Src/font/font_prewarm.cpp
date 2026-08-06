@@ -1690,9 +1690,13 @@ namespace fonthook::vectorfont
 				const bool groupsReady =
 					ConsolidatePhysicalFontAtlasGroups(
 						s_session.rasterScale);
+				const bool poolsReady =
+					ConsolidatePhysicalFontAtlasPools(
+						s_session.rasterScale);
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: physical atlas group consolidation status=%s",
-					groupsReady ? "complete" : "partial-fallback");
+					"tnvse_freetype_font: physical atlas consolidation groupV2=%s poolV3=%s",
+					groupsReady ? "complete" : "partial-fallback",
+					poolsReady ? "complete" : "partial-fallback");
 				RefreshNativePrewarmOverlayTextGeometry();
 			}
 			if (!s_session.everyConfiguredProfileVerified)

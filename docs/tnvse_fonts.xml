@@ -93,7 +93,13 @@
       the group's current de-duplicated physical GPU storage. NPOT textures are
       never used. A fallback keeps the original per-font atlases and is
       persisted so later launches do not repeat the rejected group repack.
-      Joint byte roles and accepted physical groups also share one complete
+      Physical-pool v3 then treats every already shared texture as one
+      indivisible atom and can combine compatible atoms even when their
+      doubleByte raster profiles differ. It previews the complete referenced
+      glyph union and publishes only a one-page power-of-two result whose GPU
+      allocation is strictly smaller than the unique source textures; equal,
+      larger, or multi-page candidates keep the v2/per-font layout.
+      Joint byte roles and accepted physical groups/pools share one complete
       on-disk snapshot payload. Other logical .tnvfatlas files are validated
       200-byte aliases to that content-addressed physical file; they preserve
       role-specific identities without duplicating placements or pixels.

@@ -570,6 +570,43 @@ or `reused` with `version=2`, member/layout counts, and the single physical
 page's `size`, `gpuBytes`, and `pageContentHash`; `fallback reused` confirms the
 persistent safe fallback.
 
+Physical-pool v3 runs after the v2 pass and can share unused space across font
+groups whose double-byte raster profiles are not identical. It first discovers
+the actual D3D9 texture behind every complete sealed profile. All fonts already
+backed by one texture form an indivisible atom, so a v2 group is never split
+back into per-font pages. Pool membership still requires the same scale, pixel
+format, render mode, padding, level-zero policy, and device-supported POT page
+contract; raster and layout identities remain logical-member properties.
+
+For up to eight atoms, v3 previews every compatible subset and solves the exact
+minimum-byte partition. Nine to sixteen atoms use a bounded pair planner to
+avoid exponential prewarm work; larger sets fail open without publication. A
+cheap union-of-padded-rectangles lower bound rejects subsets that cannot fit any
+POT page smaller than their current physical storage. Remaining previews run
+the real skyline packer with diagnostics suppressed and a one-page limit. A
+candidate is eligible only when that page is strictly smaller than the unique
+source D3D9 textures; equal-size reshuffles, GPU growth, and multi-page pools are
+never published.
+
+The selected pool reuses the v23 physical-payload alias transaction. One member
+owns the complete placed snapshot, every other member/byte role keeps its own
+identity header and points to that physical payload, and all source direct
+tables are invalidated before restore. Publication then rebuilds every member's
+sealed table and validates the pool marker, page-content identity, one-page
+logical profile, and common underlying D3D9 texture. A failure retains or
+restores the previous v2/per-font snapshots; it does not install a multi-page
+pool or change the frame-time render path. On a later launch, the restored pool
+is rediscovered as one atom and reported as `physical atlas pool reused`.
+
+`physical atlas pool plan` reports atom/candidate counts and planned physical
+GPU bytes. `physical atlas pool active` reports the committed page and savings.
+Before final accounting, v3 drops its planning references and prunes retired
+generations that no outstanding shape owns. The `physical atlas pool
+accounting` line separately de-duplicates current sealed-profile textures and
+the still-live retired textures. `activeProfileGpuBytes`, `retiredGpuBytes`, and
+their `trackedGpuBytes` sum therefore expose transition retention without
+pretending to measure unrelated driver allocations.
+
 In FreeType-only mode the effective FreeType code page is always 1252, even if
 `uiEncoding=1-4` remains configured, and every byte uses `singleByte`.
 Runtime glyph, layout, mask, manifest and atlas-snapshot identities all

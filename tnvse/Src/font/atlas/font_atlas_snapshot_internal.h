@@ -7,6 +7,7 @@ namespace fonthook::vectorfont
 	namespace implementation::font_atlas_snapshot
 	{
 		inline constexpr UInt32 kPhysicalAtlasGroupVersion = 2;
+		inline constexpr UInt32 kPhysicalAtlasPoolVersion = 3;
 
 		struct PhysicalAtlasGroupMember
 		{
@@ -17,11 +18,25 @@ namespace fonthook::vectorfont
 
 		struct PhysicalAtlasGroup
 		{
+			UInt32 version = kPhysicalAtlasGroupVersion;
 			UInt64 identity = 0;
 			UInt32 ownerFontId = 0;
 			std::vector<PhysicalAtlasGroupMember> members;
 			std::vector<AtlasProfileKey> uniqueSingleByteProfiles;
+			std::vector<AtlasProfileKey> uniqueDoubleByteProfiles;
 			std::vector<UInt64> uniqueDoubleByteLayoutHashes;
+		};
+
+		struct PhysicalAtlasGroupPreview
+		{
+			bool evaluated = false;
+			bool feasible = false;
+			UInt32 pageCount = 0;
+			UInt32 width = 0;
+			UInt32 height = 0;
+			UInt64 placementCount = 0;
+			UInt64 sourceGpuBytes = 0;
+			UInt64 candidateGpuBytes = 0;
 		};
 
 		struct SnapshotPackingCaps
@@ -60,6 +75,9 @@ namespace fonthook::vectorfont
 			UInt64 hash = 1469598103934665603ull);
 		bool BuildPhysicalAtlasGroup(const FontConfig& anchor,
 			UInt32 scaleMilli, PhysicalAtlasGroup& group);
+		bool BuildPhysicalAtlasPool(
+			const std::vector<PhysicalAtlasGroupMember>& members,
+			PhysicalAtlasGroup& pool);
 		bool IsPhysicalAtlasGroupResidentLocked(const PhysicalAtlasGroup& group,
 			std::shared_ptr<AtlasResource>* sharedResource = nullptr,
 			const char** failureReason = nullptr);
@@ -105,7 +123,9 @@ namespace fonthook::vectorfont
 			const std::vector<std::pair<AtlasCacheKey,
 				std::shared_ptr<AtlasResource>>>& resources,
 			std::vector<SnapshotPageData>& pages, UInt64& originalGpuBytes,
-			VectorFontByteClass packingByteClass);
+			VectorFontByteClass packingByteClass,
+			size_t maximumAcceptedPages = 0,
+			bool emitDiagnostics = true);
 		bool DecodeAtlasSnapshotPixels(const AtlasSnapshotHeader& header,
 			const std::vector<AtlasSnapshotPlacement>& placements,
 			const UInt8* storedPixels, std::vector<UInt8>& pixels);
@@ -130,5 +150,7 @@ namespace fonthook::vectorfont
 		bool* jointRolePublished = nullptr,
 		const implementation::font_atlas_snapshot::PhysicalAtlasGroup*
 			physicalGroup = nullptr,
-		bool* physicalGroupFallback = nullptr);
+		bool* physicalGroupFallback = nullptr,
+		implementation::font_atlas_snapshot::PhysicalAtlasGroupPreview*
+			physicalGroupPreview = nullptr);
 }

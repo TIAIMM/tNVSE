@@ -88,6 +88,7 @@ namespace fonthook::vectorfont
 			UInt32 scaleMilli, PhysicalAtlasGroup& group)
 		{
 			group = {};
+			group.version = kPhysicalAtlasGroupVersion;
 			if (!g_bEnableFreeTypeDefaultPoolAtlas
 				|| !IsDbcsCodePage(GetFreeTypeTextCodePage())
 				|| !scaleMilli)
@@ -165,6 +166,15 @@ namespace fonthook::vectorfont
 				{
 					group.uniqueSingleByteProfiles.push_back(profile);
 				}
+				const AtlasProfileKey doubleMemberProfile =
+					MakeAtlasProfileKey(member.doubleByteKey);
+				if (std::find(group.uniqueDoubleByteProfiles.begin(),
+						group.uniqueDoubleByteProfiles.end(), doubleMemberProfile)
+					== group.uniqueDoubleByteProfiles.end())
+				{
+					group.uniqueDoubleByteProfiles.push_back(
+						doubleMemberProfile);
+				}
 				const UInt64 doubleLayoutHash =
 					member.config->layoutRoleHashes[doubleRoleIndex];
 				if (std::find(group.uniqueDoubleByteLayoutHashes.begin(),
@@ -181,6 +191,8 @@ namespace fonthook::vectorfont
 				return false;
 			std::sort(group.uniqueSingleByteProfiles.begin(),
 				group.uniqueSingleByteProfiles.end(), LessAtlasProfileKey);
+			std::sort(group.uniqueDoubleByteProfiles.begin(),
+				group.uniqueDoubleByteProfiles.end(), LessAtlasProfileKey);
 			std::sort(group.uniqueDoubleByteLayoutHashes.begin(),
 				group.uniqueDoubleByteLayoutHashes.end());
 
@@ -226,6 +238,129 @@ namespace fonthook::vectorfont
 			return group.identity != 0;
 		}
 
+		bool BuildPhysicalAtlasPool(
+			const std::vector<PhysicalAtlasGroupMember>& members,
+			PhysicalAtlasGroup& pool)
+		{
+			pool = {};
+			pool.version = kPhysicalAtlasPoolVersion;
+			if (!g_bEnableFreeTypeDefaultPoolAtlas
+				|| !IsDbcsCodePage(GetFreeTypeTextCodePage())
+				|| members.size() < 2)
+			{
+				return false;
+			}
+
+			pool.members = members;
+			std::sort(pool.members.begin(), pool.members.end(),
+				[](const PhysicalAtlasGroupMember& left,
+					const PhysicalAtlasGroupMember& right)
+				{
+					return left.config && right.config
+						? left.config->fontId < right.config->fontId
+						: left.config != nullptr;
+				});
+			const size_t singleRoleIndex = static_cast<size_t>(
+				VectorFontByteClass::SingleByte);
+			const size_t doubleRoleIndex = static_cast<size_t>(
+				VectorFontByteClass::DoubleByte);
+			const AtlasCacheKey& storageKey = pool.members.front().singleByteKey;
+			UInt32 previousFontId = 0;
+			bool hasPreviousFontId = false;
+			for (const PhysicalAtlasGroupMember& member : pool.members)
+			{
+				if (!member.config
+					|| (hasPreviousFontId
+						&& member.config->fontId == previousFontId)
+					|| !member.config->layoutRoleHashes[singleRoleIndex]
+					|| !member.config->layoutRoleHashes[doubleRoleIndex]
+					|| !UsesPlacedLevelZeroSnapshot(member.singleByteKey)
+					|| !UsesPlacedLevelZeroSnapshot(member.doubleByteKey)
+					|| !SameAtlasStorageContract(
+						member.singleByteKey, storageKey)
+					|| !SameAtlasStorageContract(
+						member.doubleByteKey, storageKey))
+				{
+					return false;
+				}
+				hasPreviousFontId = true;
+				previousFontId = member.config->fontId;
+
+				const AtlasProfileKey singleProfile =
+					MakeAtlasProfileKey(member.singleByteKey);
+				if (std::find(pool.uniqueSingleByteProfiles.begin(),
+						pool.uniqueSingleByteProfiles.end(), singleProfile)
+					== pool.uniqueSingleByteProfiles.end())
+				{
+					pool.uniqueSingleByteProfiles.push_back(singleProfile);
+				}
+				const AtlasProfileKey doubleProfile =
+					MakeAtlasProfileKey(member.doubleByteKey);
+				if (std::find(pool.uniqueDoubleByteProfiles.begin(),
+						pool.uniqueDoubleByteProfiles.end(), doubleProfile)
+					== pool.uniqueDoubleByteProfiles.end())
+				{
+					pool.uniqueDoubleByteProfiles.push_back(doubleProfile);
+				}
+				const UInt64 doubleLayoutHash =
+					member.config->layoutRoleHashes[doubleRoleIndex];
+				if (std::find(pool.uniqueDoubleByteLayoutHashes.begin(),
+						pool.uniqueDoubleByteLayoutHashes.end(), doubleLayoutHash)
+					== pool.uniqueDoubleByteLayoutHashes.end())
+				{
+					pool.uniqueDoubleByteLayoutHashes.push_back(
+						doubleLayoutHash);
+				}
+			}
+
+			std::sort(pool.uniqueSingleByteProfiles.begin(),
+				pool.uniqueSingleByteProfiles.end(), LessAtlasProfileKey);
+			std::sort(pool.uniqueDoubleByteProfiles.begin(),
+				pool.uniqueDoubleByteProfiles.end(), LessAtlasProfileKey);
+			std::sort(pool.uniqueDoubleByteLayoutHashes.begin(),
+				pool.uniqueDoubleByteLayoutHashes.end());
+			pool.ownerFontId = pool.members.front().config->fontId;
+
+			UInt64 hash = HashAtlasBytes(&kPhysicalAtlasPoolVersion,
+				sizeof(kPhysicalAtlasPoolVersion));
+			const auto hashProfiles = [&](const auto& profiles, UInt64 value)
+			{
+				const UInt32 count = static_cast<UInt32>(profiles.size());
+				value = HashAtlasBytes(&count, sizeof(count), value);
+				for (const AtlasProfileKey& profile : profiles)
+					value = HashAtlasProfileKey(profile, value);
+				return value;
+			};
+			hash = hashProfiles(pool.uniqueSingleByteProfiles, hash);
+			hash = hashProfiles(pool.uniqueDoubleByteProfiles, hash);
+			const UInt32 doubleLayoutCount = static_cast<UInt32>(
+				pool.uniqueDoubleByteLayoutHashes.size());
+			hash = HashAtlasBytes(&doubleLayoutCount,
+				sizeof(doubleLayoutCount), hash);
+			for (UInt64 layoutHash : pool.uniqueDoubleByteLayoutHashes)
+				hash = HashAtlasBytes(&layoutHash, sizeof(layoutHash), hash);
+
+			const UInt32 memberCount = static_cast<UInt32>(pool.members.size());
+			hash = HashAtlasBytes(&memberCount, sizeof(memberCount), hash);
+			for (const PhysicalAtlasGroupMember& member : pool.members)
+			{
+				const UInt32 fontId = member.config->fontId;
+				hash = HashAtlasBytes(&fontId, sizeof(fontId), hash);
+				hash = HashAtlasProfileKey(
+					MakeAtlasProfileKey(member.singleByteKey), hash);
+				hash = HashAtlasProfileKey(
+					MakeAtlasProfileKey(member.doubleByteKey), hash);
+				hash = HashAtlasBytes(
+					&member.config->layoutRoleHashes[singleRoleIndex],
+					sizeof(member.config->layoutRoleHashes[singleRoleIndex]), hash);
+				hash = HashAtlasBytes(
+					&member.config->layoutRoleHashes[doubleRoleIndex],
+					sizeof(member.config->layoutRoleHashes[doubleRoleIndex]), hash);
+			}
+			pool.identity = hash;
+			return pool.identity != 0;
+		}
+
 		bool IsPhysicalAtlasGroupResidentLocked(
 			const PhysicalAtlasGroup& group,
 			std::shared_ptr<AtlasResource>* sharedResource,
@@ -249,15 +384,17 @@ namespace fonthook::vectorfont
 				roleProfiles;
 			for (const PhysicalAtlasGroupMember& member : group.members)
 			{
-				const AtlasProfileKey singleProfile =
-					MakeAtlasProfileKey(member.singleByteKey);
-				if (roleProfiles.insert(singleProfile).second)
-					roleKeys.push_back(member.singleByteKey);
+				const std::array<const AtlasCacheKey*, 2> memberRoleKeys = {
+					&member.singleByteKey, &member.doubleByteKey
+				};
+				for (const AtlasCacheKey* memberRoleKey : memberRoleKeys)
+				{
+					const AtlasProfileKey profile =
+						MakeAtlasProfileKey(*memberRoleKey);
+					if (roleProfiles.insert(profile).second)
+						roleKeys.push_back(*memberRoleKey);
+				}
 			}
-			const AtlasCacheKey& doubleKey =
-				group.members.front().doubleByteKey;
-			if (roleProfiles.insert(MakeAtlasProfileKey(doubleKey)).second)
-				roleKeys.push_back(doubleKey);
 
 			std::shared_ptr<AtlasResource> first;
 			UInt64 pageContentHash = 0;
@@ -277,12 +414,14 @@ namespace fonthook::vectorfont
 				}
 				roleKey.pageIndex = 0;
 				const auto page = state.atlasCache.find(roleKey);
+				const UInt32 requiredFlags = kAtlasSnapshotFlagPhysicalFontGroup
+					| (group.version == kPhysicalAtlasPoolVersion
+						? kAtlasSnapshotFlagPhysicalFontPool : 0u);
 				if (page == state.atlasCache.end()
 					|| !page->second.resource
 					|| !page->second.resource->compactSnapshot
-					|| !(page->second.resource->compactSnapshot
-						->sourceHeader.flags
-						& kAtlasSnapshotFlagPhysicalFontGroup)
+					|| (page->second.resource->compactSnapshot
+						->sourceHeader.flags & requiredFlags) != requiredFlags
 					|| !page->second.resource->pageContentHash)
 				{
 					return fail("missing-page-resource");
@@ -1091,7 +1230,8 @@ namespace fonthook::vectorfont
 				| kAtlasSnapshotFlagSingleAtlas
 				| kAtlasSnapshotFlagSingleAtlasOverflow
 				| kAtlasSnapshotFlagJointByteRoles
-				| kAtlasSnapshotFlagPhysicalFontGroup;
+				| kAtlasSnapshotFlagPhysicalFontGroup
+				| kAtlasSnapshotFlagPhysicalFontPool;
 			return (logical.flags & kPayloadFlags)
 					== (physical.flags & kPayloadFlags)
 				&& logical.scaleMilli == physical.scaleMilli

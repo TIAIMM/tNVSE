@@ -301,12 +301,15 @@ namespace fonthook::vectorfont
 		VectorFontByteClass byteClass, float rasterScale,
 		bool* jointRolePublished,
 		const PhysicalAtlasGroup* physicalGroup,
-		bool* physicalGroupFallback)
+		bool* physicalGroupFallback,
+		PhysicalAtlasGroupPreview* physicalGroupPreview)
 	{
 		if (jointRolePublished)
 			*jointRolePublished = false;
 		if (physicalGroupFallback)
 			*physicalGroupFallback = false;
+		if (physicalGroupPreview)
+			*physicalGroupPreview = {};
 		const FontConfig& config = GetRuntimeConfig(runtime);
 		AtlasCacheKey key;
 		if (!ResolvePrewarmAtlasKey(config, byteClass, rasterScale, key))
@@ -547,7 +550,10 @@ namespace fonthook::vectorfont
 			if (UsesPlacedLevelZeroSnapshot(key))
 			{
 				if (!BuildRepackedSnapshotPages(key, resources, pages,
-					originalGpuBytes, packingByteClass))
+					originalGpuBytes, packingByteClass,
+					jointlyPackedFontGroup && physicalGroup->version
+						== kPhysicalAtlasPoolVersion ? 1u : 0u,
+					physicalGroupPreview == nullptr))
 					return false;
 			}
 			else
@@ -615,16 +621,39 @@ namespace fonthook::vectorfont
 			const bool multiplePages = pages.size() != 1;
 			const bool gpuGrowth = !candidateBytesValid
 				|| candidateGpuBytes > physicalGroupSourceGpuBytes;
+			if (physicalGroupPreview)
+			{
+				physicalGroupPreview->evaluated = true;
+				physicalGroupPreview->feasible =
+					!multiplePages && !gpuGrowth;
+				physicalGroupPreview->pageCount = static_cast<UInt32>(
+					pages.size());
+				physicalGroupPreview->sourceGpuBytes =
+					physicalGroupSourceGpuBytes;
+				physicalGroupPreview->candidateGpuBytes = candidateGpuBytes;
+				for (const SnapshotPageData& page : pages)
+				{
+					physicalGroupPreview->placementCount +=
+						page.placements.size();
+				}
+				if (!multiplePages)
+				{
+					physicalGroupPreview->width = pages.front().header.width;
+					physicalGroupPreview->height = pages.front().header.height;
+				}
+				return true;
+			}
 			if (multiplePages || gpuGrowth)
 			{
-				const bool fallbackMarked =
-					MarkPhysicalAtlasGroupFallback(
+				const bool fallbackMarked = physicalGroup->version
+						== kPhysicalAtlasGroupVersion
+					&& MarkPhysicalAtlasGroupFallback(
 						runtime, key, sourcePageCount);
 				if (physicalGroupFallback)
 					*physicalGroupFallback = fallbackMarked;
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: physical atlas group fallback version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u logicalRoleSources=%u pages=%u sourceGpuBytes=%llu candidateGpuBytes=%llu reason=%s markerPersisted=%u policy=retain-per-font-atlases",
-					kPhysicalAtlasGroupVersion,
+					physicalGroup->version,
 					physicalGroup->ownerFontId,
 					static_cast<UInt32>(
 						physicalGroup->members.size()),
@@ -674,6 +703,12 @@ namespace fonthook::vectorfont
 				if (jointlyPackedFontGroup)
 					page.header.flags |=
 						kAtlasSnapshotFlagPhysicalFontGroup;
+				if (jointlyPackedFontGroup && physicalGroup->version
+					== kPhysicalAtlasPoolVersion)
+				{
+					page.header.flags |=
+						kAtlasSnapshotFlagPhysicalFontPool;
+				}
 				if (g_bEnableFreeTypeDefaultPoolAtlas)
 				{
 					page.header.flags |= pages.size() == 1
@@ -1084,12 +1119,16 @@ namespace fonthook::vectorfont
 		if (jointlyPackedFontGroup)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: physical atlas group snapshot published version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u logicalRoleSources=%u pageContentHash=%016llX size=%ux%u placements=%llu",
-				kPhysicalAtlasGroupVersion,
+				physicalGroup->version == kPhysicalAtlasPoolVersion
+					? "tnvse_freetype_font: physical atlas pool snapshot published version=%u owner=%u members=%u uniqueSingleProfiles=%u uniqueDoubleProfiles=%u doubleLayouts=%u logicalRoleSources=%u pageContentHash=%016llX size=%ux%u placements=%llu"
+					: "tnvse_freetype_font: physical atlas group snapshot published version=%u owner=%u members=%u uniqueSingleProfiles=%u uniqueDoubleProfiles=%u doubleLayouts=%u logicalRoleSources=%u pageContentHash=%016llX size=%ux%u placements=%llu",
+				physicalGroup->version,
 				physicalGroup->ownerFontId,
 				static_cast<UInt32>(physicalGroup->members.size()),
 				static_cast<UInt32>(
 					physicalGroup->uniqueSingleByteProfiles.size()),
+				static_cast<UInt32>(
+					physicalGroup->uniqueDoubleByteProfiles.size()),
 				static_cast<UInt32>(physicalGroup
 					->uniqueDoubleByteLayoutHashes.size()),
 				static_cast<UInt32>(physicalGroupRoleSources.size()),

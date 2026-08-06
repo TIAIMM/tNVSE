@@ -469,7 +469,9 @@ namespace fonthook::vectorfont
 			const std::vector<std::pair<AtlasCacheKey,
 				std::shared_ptr<AtlasResource>>>& resources,
 			std::vector<SnapshotPageData>& pages, UInt64& originalGpuBytes,
-			VectorFontByteClass packingByteClass)
+			VectorFontByteClass packingByteClass,
+			size_t maximumAcceptedPages,
+			bool emitDiagnostics)
 		{
 			std::vector<SnapshotGlyphData> glyphs;
 			std::unordered_set<UInt64> cacheIds;
@@ -581,11 +583,18 @@ namespace fonthook::vectorfont
 				{
 					SnapshotPackingPlan candidate;
 					++attemptedPlans;
+					size_t pageLimit = maximumAcceptedPages;
+					if (!selectedPlan.pages.empty())
+					{
+						pageLimit = pageLimit
+							? std::min(pageLimit, selectedPlan.pages.size())
+							: selectedPlan.pages.size();
+					}
 					if (BuildSnapshotPackingPlan(glyphs, padding,
 						maximumSize, baseKey.pixelMode,
 						baseKey.levelZeroOnly, packingCaps,
 						targetWidth, heuristic,
-						selectedPlan.pages.size(), candidate)
+						pageLimit, candidate)
 						&& IsBetterSnapshotPackingPlan(
 							candidate, selectedPlan))
 					{
@@ -651,19 +660,22 @@ namespace fonthook::vectorfont
 				}
 				pages.push_back(std::move(page));
 			}
-			gLog.FormattedMessage(
-				"tnvse_freetype_font: atlas repack selected font=%u role=%s glyphs=%u plans=%u pages=%u targetWidth=%u heuristic=%s gpuBytes=%llu dimensions=power-of-two objective=page-count-then-bytes",
-				baseKey.fontId,
-				baseKey.byteClass == VectorFontByteClass::DoubleByte
-					? "doubleByte" : "singleByte",
-				static_cast<UInt32>(glyphs.size()), attemptedPlans,
-				static_cast<UInt32>(pages.size()),
-				selectedPlan.targetWidth,
-				selectedPlan.heuristic
-					== STBRP_HEURISTIC_Skyline_BF_sortHeight
-					? "best-fit" : "bottom-left",
-				static_cast<unsigned long long>(selectedPlan.gpuBytes));
-			if (preferSingleAtlas && pages.size() > 1)
+			if (emitDiagnostics)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: atlas repack selected font=%u role=%s glyphs=%u plans=%u pages=%u targetWidth=%u heuristic=%s gpuBytes=%llu dimensions=power-of-two objective=page-count-then-bytes",
+					baseKey.fontId,
+					baseKey.byteClass == VectorFontByteClass::DoubleByte
+						? "doubleByte" : "singleByte",
+					static_cast<UInt32>(glyphs.size()), attemptedPlans,
+					static_cast<UInt32>(pages.size()),
+					selectedPlan.targetWidth,
+					selectedPlan.heuristic
+						== STBRP_HEURISTIC_Skyline_BF_sortHeight
+						? "best-fit" : "bottom-left",
+					static_cast<unsigned long long>(selectedPlan.gpuBytes));
+			}
+			if (emitDiagnostics && preferSingleAtlas && pages.size() > 1)
 			{
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: single atlas physical overflow font=%u role=%s pages=%u limit=%ux%u policy=persist-minimum-pages",
