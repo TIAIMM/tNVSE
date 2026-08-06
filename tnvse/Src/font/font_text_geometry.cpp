@@ -518,12 +518,12 @@ namespace fonthook
 	}
 
 	// ==================== FontEx::CreateText ====================
-	void FontEx::CreateText(
+	void __thiscall FontEx::CreateText(
 		BSStringT<char>* axTextString, int* aiWidth, int* aiHeight,
 		int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
 		const NiColorA* axFontColor, NiTriShape** apTextShape, NiTriShape** apIconShape)
 	{
-		const float rasterScale = ConsumeFreeTypeCreateTextScale();
+		const float rasterScale = GetCanonicalFreeTypeRasterScale();
 		const bool freeTypeActive = IsFreeTypeFontActive(this);
 		if (!g_bEnableMultibyteFontHook && !freeTypeActive)
 		{

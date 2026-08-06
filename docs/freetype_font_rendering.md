@@ -50,6 +50,15 @@ units. UIO zoom remains a scene-node transform and selects from the shared
 atlas profile rather than producing a bitmap or atlas variant. Changing the
 configured multiplier intentionally selects one new compatible cache profile.
 
+The retail `Font::CreateText` entry at `0xA12880` is hooked as its ordinary
+x86 `__thiscall` member ABI. Both the retail `TileText::MakeNode` call at
+`0xA22211` and UIO 2.30's indirect call converge on that same entry, so the
+hook is deliberately caller-independent. tNVSE does not query UIO's plugin
+version, inspect `ui_organizer.dll` code bytes, or read UIO/TileText EBP-frame
+locals. UIO remains responsible for applying its final scene-node scale after
+`CreateText` returns; the configured FreeType source multiplier remains the
+only raster/cache identity.
+
 Set `bEnableFreeTypeFontRenderingLog=1` while diagnosing configuration or font
 loading. The log records the XML path, resolved face paths, FreeType errors,
 font-ID activation, and the first atlas-rendered glyph for each byte class.
@@ -1173,7 +1182,7 @@ geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
 facades, total payload packets, single- and multi-packet artifacts, direct/span/
 packet-loop frames, topology switches, fallbacks, partial faults, and the
 invariant sibling_shapes=0. The current build identity is
-`ime-partial-result-handoff-v42`; its rendering baseline remains
+`createtext-abi-entry-v43`; its rendering baseline remains
 `diagnostic-prune-v41`. It retains the v23 shell-shader restoration fix, v24 logging cleanup, the
 no-Sort-hook single-facade architecture, the v30 linear equal-depth repair, and
 the v31 direct-Sort-array/preflight-only cleanup.

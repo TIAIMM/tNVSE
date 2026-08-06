@@ -110,7 +110,7 @@ namespace
 		}
 
 		gLog.FormattedMessage(
-			"tnvse_build_identity: diagnostics=ime-partial-result-handoff-v42 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
+			"tnvse_build_identity: diagnostics=createtext-abi-entry-v43 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
 			modulePath[0] ? modulePath : "unresolved", module,
 			peTimestamp, imageSize,
 			static_cast<unsigned long long>(fileBytes),
@@ -260,7 +260,6 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 		fonthook::dependencies::ShowExternalPluginDependencyWarnings();
 		if (fonthook::AreFreeTypeFontHooksInstalled())
 		{
-			fonthook::FinalizeFreeTypeUioDetection();
 			fonthook::FinalizeFreeTypeA8Detection();
 			fonthook::InitializeFreeTypeDefaultPoolAtlas();
 			PrepareConfiguredGameFonts();

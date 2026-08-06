@@ -94,7 +94,6 @@ namespace fonthook
 	void FreeTypeFontDebugLog(const char* apFormat, ...);
 	void FlushFreeTypeFontDebugLog();
 	void FlushFreeTypeFontDebugLogFully();
-	void FinalizeFreeTypeUioDetection();
 	void FinalizeFreeTypeA8Detection();
 	void HandleFreeTypeA8MainLoop();
 	void HandleFreeTypeShaderLoaderMessage(UInt32 auiMessageType);
@@ -114,8 +113,6 @@ namespace fonthook
 	void ReportFreeTypeFontPerformanceNow();
 	void FlushFreeTypePersistentFontCache();
 	float GetCanonicalFreeTypeRasterScale();
-	float ConsumeFreeTypeCreateTextScale();
-	void FreeTypeCreateTextEntryHook();
 	bool IsFreeTypeEffectSuppressionActive();
 	bool IsFreeTypeVuiProxyMeasureOnlyActive();
 	bool InitializeFreeTypeVectorRenderer();

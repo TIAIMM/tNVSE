@@ -286,8 +286,7 @@ namespace fonthook
 
 			WriteRelJumpEx(kFontConstructor, &FontEx::FontInit);
 			WriteRelJumpEx(kFontLoad, &FontEx::Load);
-			WriteRelJump(kFontCreateText,
-				reinterpret_cast<UInt32>(&FreeTypeCreateTextEntryHook));
+			WriteRelJumpEx(kFontCreateText, &FontEx::CreateText);
 			WriteRelJumpEx(kFontMakeString, &FontEx::MakeString);
 			PatchMemoryNop(kFontMakeString + 5, kFontMakeStringPrologue.size() - 5);
 			WriteRelJumpEx(kCalculateStringDimensions,
@@ -298,7 +297,7 @@ namespace fonthook
 			const std::array<SIZE_T, 5> hookTargets = {{
 				MemberFunctionAddress(&FontEx::FontInit),
 				MemberFunctionAddress(&FontEx::Load),
-				reinterpret_cast<SIZE_T>(&FreeTypeCreateTextEntryHook),
+				MemberFunctionAddress(&FontEx::CreateText),
 				MemberFunctionAddress(&FontEx::MakeString),
 				MemberFunctionAddress(
 					&FontManagerEx::CalculateStringDimensions),
@@ -334,6 +333,8 @@ namespace fonthook
 					"tnvse_font_hook: core entry write verification failed; restored stock prologues");
 				return false;
 			}
+			gLog.FormattedMessage(
+				"tnvse_font_hook: core entries installed Font::CreateText=00A12880 route=caller-independent-thiscall");
 			return true;
 		}
 

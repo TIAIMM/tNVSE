@@ -57,7 +57,7 @@ namespace fonthook
 		void Load();
 		void __thiscall PrepTextForTerminal(const char* apOrigString, Font::TextData* axData);
 		void __thiscall PrepText(const char* apOrigString, Font::TextData* axData);
-		void CreateText(
+		void __thiscall CreateText(
 			BSStringT<char>* axTextString, int* aiWidth, int* aiHeight,
 			int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
 			const NiColorA* axFontColor, NiTriShape** apTextShape, NiTriShape** apIconShape);
