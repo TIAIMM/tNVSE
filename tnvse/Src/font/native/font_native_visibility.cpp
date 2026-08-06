@@ -632,7 +632,7 @@ namespace fonthook::vectorfont
 		// the same full bound before reaching this proof.
 		const ClipProofResult proof = EvaluateBoundClip(data->m_kBound,
 			facade, *tile, *renderer, world,
-			g_bEnableFreeTypeFontStructuralFastPaths,
+			true,
 			reason, &transformBuildResult);
 		RecordClipTransformBuildResult(transformBuildResult);
 		if (proof != ClipProofResult::Outside)

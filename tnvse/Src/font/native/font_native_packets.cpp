@@ -659,8 +659,7 @@ namespace fonthook::vectorfont
 				&& !validatePackets(payloadTemplate->compositePackets))))
 			return false;
 		const bool singletonInlinePayload =
-			g_bEnableFreeTypeFontStructuralFastPaths
-			&& metadata.backend
+			metadata.backend
 				== FreeTypeShapeBackend::SingletonFacade;
 		if (!singletonInlinePayload)
 		{

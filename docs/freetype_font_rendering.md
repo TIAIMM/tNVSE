@@ -1146,10 +1146,10 @@ ordinary or Composite packet set from the current configuration, shader
 generation, optional shader availability, atlas epoch, and resource state.
 Composite may therefore change from multiple packets to one packet after a
 shader reload, or fall back in the opposite direction, without rebuilding the
-facade. Disabling structural fast paths disables direct structural reuse but
-does not restore a multi-shape representation. If dedicated metadata or direct
-binding setup fails, the same facade remains on the compatibility packet-loop
-route; no sibling shape is created.
+facade. Direct structural reuse is always attempted for an eligible facade,
+with every cached identity revalidated before use. If dedicated metadata or
+direct binding setup fails, the same facade remains on the compatibility
+packet-loop route; no sibling shape is created.
 
 The final accumulator array proves occurrences of the facade itself after the
 narrow exact-depth tie repair. A facade that appears exactly once may own a

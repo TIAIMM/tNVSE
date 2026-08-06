@@ -2447,8 +2447,7 @@ namespace fonthook::vectorfont
 				}
 			}
 		}
-		if (g_bEnableFreeTypeFontStructuralFastPaths
-			&& validatedStaticPayloads == payloadTemplates.size()
+		if (validatedStaticPayloads == payloadTemplates.size()
 			&& residentStaticPayloads == validatedStaticPayloads
 			&& state.resourceSerial.load(std::memory_order_relaxed)
 				== staticScanResourceSerial
@@ -2479,12 +2478,8 @@ namespace fonthook::vectorfont
 			const UInt32 vertexCount = static_cast<UInt32>(
 				payloadTemplate->gpuVertices.size());
 			UInt32 baseVertex = 0;
-			const bool staticResident =
-				g_bEnableFreeTypeFontStructuralFastPaths
-					? IsStaticPayloadCurrentLocked(
-						state, payloadTemplate, vertexCount)
-					: ResolveStaticPayloadLocked(state, payloadTemplate,
-						vertexCount, baseVertex);
+			const bool staticResident = IsStaticPayloadCurrentLocked(
+				state, payloadTemplate, vertexCount);
 			if (staticResident)
 			{
 				continue;

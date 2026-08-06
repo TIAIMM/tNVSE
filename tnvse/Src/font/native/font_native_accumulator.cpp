@@ -1095,7 +1095,7 @@ namespace fonthook::vectorfont
 			const NativeA8PayloadTemplate& artifact = *payload.payloadTemplate;
 			NativePreflightFrameContext structuralContext;
 			const NativePreflightFrameContext* currentContext = frameContext;
-			if (!currentContext && g_bEnableFreeTypeFontStructuralFastPaths)
+			if (!currentContext)
 			{
 				NativeA8RuntimeReadinessView readiness;
 				const bool ready =
@@ -1108,29 +1108,20 @@ namespace fonthook::vectorfont
 					readiness.atlasTextureEpoch;
 				currentContext = &structuralContext;
 			}
-			if (!(currentContext
-				? currentContext->accumulatorCurrent
-				: IsNativeA8AccumulatorHookCurrent()))
+			if (!currentContext->accumulatorCurrent)
 				return NativeA8FallbackReason::AccumulatorConflict;
-			if (!(currentContext
-				? currentContext->immediateRouteCurrent
-				: IsA8RenderPassImmediatelyHookCurrent()))
+			if (!currentContext->immediateRouteCurrent)
 				return NativeA8FallbackReason::TileRouteConflict;
-			if (!(currentContext
-				? currentContext->rendererAvailable
-				: IsNativeA8RendererAvailable()))
+			if (!currentContext->rendererAvailable)
 				return NativeA8FallbackReason::ShaderGeneration;
 
-			const UInt32 generation = currentContext
-				? currentContext->generation : GetNativeA8ShaderGeneration();
+			const UInt32 generation = currentContext->generation;
 			if (!generation)
 				return NativeA8FallbackReason::ShaderGeneration;
 			const bool scaledFillSampling = NeedsScaledFillSampling(facade);
 			const NiAlphaProperty* alpha = facade->GetAlphaProperty();
 			const bool alphaBlending = alpha && alpha->GetAlphaBlending();
-			const UInt32 atlasTextureEpoch = currentContext
-				? currentContext->atlasTextureEpoch
-				: GetNativeA8AtlasTextureEpoch();
+			const UInt32 atlasTextureEpoch = currentContext->atlasTextureEpoch;
 			if (forcedCompositeTopology && *forcedCompositeTopology
 				&& artifact.compositePackets.empty())
 			{
@@ -1532,8 +1523,7 @@ namespace fonthook::vectorfont
 					FreeTypePerfScope readinessPrepPerf(
 						FreeTypePerfPhase::FramePrepReadiness, true,
 						&prepTailSample.readinessTicks);
-					if (hasMetadataSurvivors
-						&& g_bEnableFreeTypeFontStructuralFastPaths)
+					if (hasMetadataSurvivors)
 					{
 						NativeA8RuntimeReadinessView readiness;
 						bool ready = GetNativeA8RuntimeReadinessCurrent(readiness);
@@ -1545,19 +1535,6 @@ namespace fonthook::vectorfont
 						preflightContext.generation = readiness.generation;
 						preflightContext.atlasTextureEpoch =
 							readiness.atlasTextureEpoch;
-					}
-					else if (hasMetadataSurvivors)
-					{
-						preflightContext.accumulatorCurrent =
-							IsNativeA8AccumulatorHookCurrent();
-						preflightContext.immediateRouteCurrent =
-							IsA8RenderPassImmediatelyHookCurrent();
-						preflightContext.rendererAvailable =
-							IsNativeA8RendererAvailable();
-						preflightContext.generation =
-							GetNativeA8ShaderGeneration();
-						preflightContext.atlasTextureEpoch =
-							GetNativeA8AtlasTextureEpoch();
 					}
 					generation = preflightContext.generation;
 					frameValidationToken = ++scratch.nextValidationToken;

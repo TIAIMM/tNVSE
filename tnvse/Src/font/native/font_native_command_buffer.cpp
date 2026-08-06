@@ -592,49 +592,23 @@ namespace fonthook::vectorfont
 			{
 				return NativeA8CommandFallback::Nested;
 			}
-			if (g_bEnableFreeTypeFontStructuralFastPaths)
+			NativeA8RuntimeReadinessView readiness;
+			if (!GetNativeA8RuntimeReadinessCurrent(readiness))
 			{
-				NativeA8RuntimeReadinessView readiness;
-				if (!GetNativeA8RuntimeReadinessCurrent(readiness))
-				{
-					return GetNativeA8AtlasTextureEpoch()
-							!= stamp.atlasTextureEpoch
-						? NativeA8CommandFallback::Atlas
-						: NativeA8CommandFallback::Hook;
-				}
-				if (readiness.renderer != stamp.renderer
-					|| readiness.device != stamp.device
-					|| readiness.generation != stamp.generation
-					|| !IsNativeA8ShaderGenerationCurrent(stamp.generation))
-				{
-					return NativeA8CommandFallback::Generation;
-				}
-				if (readiness.atlasTextureEpoch != stamp.atlasTextureEpoch)
-					return NativeA8CommandFallback::Atlas;
+				return GetNativeA8AtlasTextureEpoch()
+						!= stamp.atlasTextureEpoch
+					? NativeA8CommandFallback::Atlas
+					: NativeA8CommandFallback::Hook;
 			}
-			else
+			if (readiness.renderer != stamp.renderer
+				|| readiness.device != stamp.device
+				|| readiness.generation != stamp.generation
+				|| !IsNativeA8ShaderGenerationCurrent(stamp.generation))
 			{
-				if (!IsNativeA8AccumulatorHookCurrent()
-					|| !IsNativeA8RenderAlphaGeometryHookCurrent()
-					|| !IsA8RenderPassImmediatelyHookCurrent())
-				{
-					return NativeA8CommandFallback::Hook;
-				}
-				NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-				IDirect3DDevice9* device =
-					renderer ? renderer->GetD3DDevice() : nullptr;
-				if (!renderer || renderer != stamp.renderer
-					|| !device || device != stamp.device
-					|| !IsNativeA8ShaderGenerationCurrent(stamp.generation))
-				{
-					return NativeA8CommandFallback::Generation;
-				}
-				if (GetNativeA8AtlasTextureEpoch()
-					!= stamp.atlasTextureEpoch)
-				{
-					return NativeA8CommandFallback::Atlas;
-				}
+				return NativeA8CommandFallback::Generation;
 			}
+			if (readiness.atlasTextureEpoch != stamp.atlasTextureEpoch)
+				return NativeA8CommandFallback::Atlas;
 			if (!IsNativeA8FrameResourceStampCurrent(
 				stamp.generation, stamp.resourceSerial,
 				stamp.uploadEpoch))

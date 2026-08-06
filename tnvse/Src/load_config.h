@@ -14,7 +14,6 @@ extern bool g_bDeleteUnusedFreeTypeFontCache;
 extern bool g_bEnableFreeTypeDefaultPoolAtlas;
 extern bool g_bEnableFreeTypeA8Atlas;
 extern bool g_bEnableFreeTypeFontAggressivePerformanceMode;
-extern bool g_bEnableFreeTypeFontStructuralFastPaths;
 extern bool g_bEnableFreeTypeFontPreflightClipCull;
 extern bool g_bEnableFreeTypeFontCommandBuffer;
 extern UINT32 g_uiFreeTypeFontDistanceFieldMode;

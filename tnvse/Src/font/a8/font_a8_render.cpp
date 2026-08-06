@@ -208,8 +208,6 @@ namespace fonthook::vectorfont
 
 		void ReserveStructuralMetadataMap(size_t requestedEntries = 4096)
 		{
-			if (!g_bEnableFreeTypeFontStructuralFastPaths)
-				return;
 			A8State& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
 			const size_t currentBytes =
@@ -231,8 +229,6 @@ namespace fonthook::vectorfont
 
 		void MaintainStructuralMetadataMap()
 		{
-			if (!g_bEnableFreeTypeFontStructuralFastPaths)
-				return;
 			A8State& state = State();
 			size_t target = 0;
 			{
@@ -255,8 +251,7 @@ namespace fonthook::vectorfont
 		void RecordMetadataInsertionRehash(A8State& state,
 			size_t previousBucketCount)
 		{
-			if (!g_bEnableFreeTypeFontStructuralFastPaths
-				|| state.shapeMetadata.bucket_count() == previousBucketCount)
+			if (state.shapeMetadata.bucket_count() == previousBucketCount)
 				return;
 			RefreshMetadataBucketAccounting(state);
 			RecordFreeTypePerf(FreeTypePerfCounter::MetadataMapRehash);
@@ -863,11 +858,8 @@ namespace fonthook::vectorfont
 		const bool shaderReady = InitializeNativeA8Renderer(true, true);
 		const bool nativeReady =
 			accumulatorReady && immediateRouteReady && shaderReady;
-		if (g_bEnableFreeTypeFontStructuralFastPaths)
-		{
-			PublishRuntimeReadiness(accumulatorReady,
-				immediateRouteReady, shaderReady);
-		}
+		PublishRuntimeReadiness(accumulatorReady,
+			immediateRouteReady, shaderReady);
 		SynchronizePersistentFontCacheRoute(ResolveFontAtlasRoute(
 			nativeReady, g_bEnableFreeTypeFontAggressivePerformanceMode));
 		gLog.FormattedMessage(
@@ -887,11 +879,8 @@ namespace fonthook::vectorfont
 		MaintainStructuralMetadataMap();
 		const bool accumulatorReady = HookNativeA8Accumulator();
 		const bool immediateReady = HookRenderPassImmediately();
-		if (g_bEnableFreeTypeFontStructuralFastPaths)
-		{
-			PublishRuntimeReadiness(accumulatorReady, immediateReady,
-				IsNativeA8RendererAvailable());
-		}
+		PublishRuntimeReadiness(accumulatorReady, immediateReady,
+			IsNativeA8RendererAvailable());
 		EnforceCpuMemoryBudget("main-loop");
 	}
 
@@ -905,8 +894,7 @@ namespace fonthook::vectorfont
 	{
 		if (!g_bEnableFreeTypeFontRendering)
 			return false;
-		if (g_bEnableFreeTypeFontStructuralFastPaths
-			&& LoadCurrentRuntimeReadiness(nullptr))
+		if (LoadCurrentRuntimeReadiness(nullptr))
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::NativeRegistrationHookFast);
@@ -915,26 +903,14 @@ namespace fonthook::vectorfont
 		// The normal registration path only needs readback of the already
 		// installed chain and the published device generation.  Preserve the
 		// complete install/retry/conflict path whenever any identity changed.
-		if (!g_bEnableFreeTypeFontStructuralFastPaths
-			&& IsNativeA8RegistrationHookChainCurrent()
-			&& IsA8RenderPassImmediatelyHookCurrent()
-			&& IsNativeA8RendererAvailable())
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::NativeRegistrationHookFast);
-			return true;
-		}
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::NativeRegistrationHookSlow);
 		const bool accumulatorReady = HookNativeA8Accumulator();
 		const bool immediateReady = HookRenderPassImmediately();
 		const bool shaderReady = accumulatorReady && immediateReady
 			&& InitializeNativeA8Renderer(false, false);
-		if (g_bEnableFreeTypeFontStructuralFastPaths)
-		{
-			PublishRuntimeReadiness(accumulatorReady,
-				immediateReady, shaderReady);
-		}
+		PublishRuntimeReadiness(accumulatorReady,
+			immediateReady, shaderReady);
 		return accumulatorReady && immediateReady && shaderReady;
 	}
 
@@ -942,8 +918,7 @@ namespace fonthook::vectorfont
 		NativeA8RuntimeReadinessView& view)
 	{
 		view = {};
-		return g_bEnableFreeTypeFontStructuralFastPaths
-			&& LoadCurrentRuntimeReadiness(&view);
+		return LoadCurrentRuntimeReadiness(&view);
 	}
 
 	bool ResolveA8EffectQuality(EffectQuality requested, EffectQuality& resolved)
@@ -1299,14 +1274,12 @@ namespace fonthook::vectorfont
 				NativeA8FallbackReason::PropertySync);
 			return false;
 		}
-		if (!g_bEnableFreeTypeFontStructuralFastPaths
-			|| packets.size() != 1 || payload.packetShaders.size() != 1
+		if (packets.size() != 1 || payload.packetShaders.size() != 1
 			|| (buildCommandView
 				&& (!retainedText || retainedText->packets.size() != 1)))
 		{
 			// The facade remains the sole stock Sort item. Multi-packet
-			// topology, and all topology when structural fast paths are
-			// disabled, is submitted through the ordinary retained span (or
+			// topology is submitted through the ordinary retained span (or
 			// packet loop when command recording is disabled). This is a normal
 			// facade mode rather than a singleton-facade failure.
 			SetSingletonFacadeMode(metadata,
