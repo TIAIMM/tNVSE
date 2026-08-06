@@ -17,6 +17,7 @@ bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
 bool g_bEnableFreeTypeFontAggressivePerformanceMode = false;
+bool g_bEnableFreeTypeFontMtsdfStockLayout = true;
 bool g_bEnableFreeTypeFontPreflightClipCull = true;
 bool g_bEnableFreeTypeFontCommandBuffer = false;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = 1;
@@ -163,6 +164,14 @@ void LoadConfig()
 	gLog.FormattedMessage(
 		"g_bEnableFreeTypeFontAggressivePerformanceMode: %d",
 		g_bEnableFreeTypeFontAggressivePerformanceMode);
+	g_bEnableFreeTypeFontMtsdfStockLayout = ReadConfigInt(
+		kFreeTypeFontSection,
+		"bEnableFreeTypeFontMtsdfStockLayout", 1, filename) != 0;
+	gLog.FormattedMessage(
+		"g_bEnableFreeTypeFontMtsdfStockLayout: %d (%s)",
+		g_bEnableFreeTypeFontMtsdfStockLayout,
+		g_bEnableFreeTypeFontMtsdfStockLayout
+			? "allowed" : "disabled");
 	g_bEnableFreeTypeFontPreflightClipCull = ReadConfigInt(
 		kFreeTypeFontSection,
 		"bEnableFreeTypeFontPreflightClipCull", 1, filename) != 0;

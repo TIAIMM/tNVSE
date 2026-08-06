@@ -1615,7 +1615,8 @@ namespace fonthook::vectorfont
 
 			generation->vertexShader = createVS("tnvse_freetype_native_vs.vso");
 			const bool stockLayoutRequested =
-				!g_bEnableFreeTypeFontAggressivePerformanceMode
+				g_bEnableFreeTypeFontMtsdfStockLayout
+				&& !g_bEnableFreeTypeFontAggressivePerformanceMode
 				&& generation->distanceFieldMethod
 					== DistanceFieldMethod::Mtsdf;
 			if (stockLayoutRequested)

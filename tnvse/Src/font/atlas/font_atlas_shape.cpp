@@ -1467,6 +1467,9 @@ namespace fonthook::vectorfont
 			const NiColorA& tileColor, const NiPoint3& origin,
 			bool prepareObject)
 		{
+			if (!g_bEnableFreeTypeFontMtsdfStockLayout)
+				return nullptr;
+
 			const NativeA8PacketTemplate* packet = nullptr;
 			if (!payload || atlases.size() != 1 || !atlases.front()
 				|| !IsStockLayoutSdfPayloadEligible(*payload, packet)

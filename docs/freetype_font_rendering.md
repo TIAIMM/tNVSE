@@ -14,6 +14,7 @@ bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
 fFreeTypeFontResolutionScale=1.0
 bEnableFreeTypeFontAggressivePerformanceMode=0
+bEnableFreeTypeFontMtsdfStockLayout=1
 bEnableFreeTypeFontCommandBuffer=0
 uiFreeTypeFontDistanceFieldMode=1
 ```
@@ -978,6 +979,15 @@ this shape. Because the isolated TileShader still writes
 the private c176-c183 block and c209, this draw fully invalidates the sorted
 private-register proof on entry and exit; it is never misclassified as a
 genuinely stock Tile transition.
+
+`bEnableFreeTypeFontMtsdfStockLayout=1` enables this optional target and is the
+default. Setting it to `0` suppresses both its shader/declaration generation and
+its shape-creation attempt; eligible text therefore stays on the existing
+52-byte native facade/CommandBuffer route without paying Stock-layout geometry
+or precache costs. This makes restart-to-restart performance comparisons clean:
+keep every other setting, save, scene, camera, and sampling interval identical,
+and change only this switch. It does not change atlas generation, persistent
+cache identity, MTSDF pixels, or visual eligibility rules.
 
 Eligibility is deliberately strict and immutable: exactly one physical atlas
 page, one Composite packet covering all glyphs, MTSDF, a static
