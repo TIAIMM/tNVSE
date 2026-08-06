@@ -90,6 +90,35 @@ namespace fonthook
 		std::vector<DirectTextUnit> units;
 	};
 
+	// Font::TextData is a stock 0x28-byte stack object with no ownership token.
+	// Keep the direct-layout sidecar scoped to the synchronous CreateText call
+	// instead of retaining raw TextData/BSString pointers across calls.
+	class PreparedTextSidecarCapture final
+	{
+	public:
+		PreparedTextSidecarCapture(const Font::TextData* apData,
+			const Font* apFont);
+		~PreparedTextSidecarCapture();
+
+		PreparedTextSidecarCapture(const PreparedTextSidecarCapture&) = delete;
+		PreparedTextSidecarCapture& operator=(
+			const PreparedTextSidecarCapture&) = delete;
+
+		bool Matches(const Font::TextData* apData,
+			const Font* apFont) const;
+		void Publish(const Font::TextData* apData, const Font* apFont,
+			std::shared_ptr<const PreparedDirectTextSidecar> apSidecar);
+		std::shared_ptr<const PreparedDirectTextSidecar> Take();
+
+	private:
+		const Font::TextData* m_data = nullptr;
+		const Font* m_font = nullptr;
+		const char* m_preparedText = nullptr;
+		char m_lineSeparator = 0;
+		std::shared_ptr<const PreparedDirectTextSidecar> m_sidecar;
+		PreparedTextSidecarCapture* m_previous = nullptr;
+	};
+
 	void LoadFreeTypeFontConfig();
 	void FreeTypeFontDebugLog(const char* apFormat, ...);
 	void FlushFreeTypeFontDebugLog();
@@ -123,9 +152,6 @@ namespace fonthook
 	bool GetFreeTypeLayoutIdentity(const Font* apFont, UInt64& arIdentity);
 	FontLetter* EnsureFreeTypeDoubleByteMetrics(Font* apFont, UInt32 auiEncodedCode);
 	bool DecodeFreeTypeGlyph(Font* apFont, const char* apText, VectorEncodedGlyph& arGlyph);
-	std::shared_ptr<const PreparedDirectTextSidecar>
-		ConsumeFreeTypePreparedTextSidecar(const Font::TextData* apData,
-			const Font* apFont, const char* apPreparedText);
 	NiTriShape* CreateEmptyFreeTypeTextShape(Font* apFont, bool abPrepareObject);
 
 	class VectorTextBuilder

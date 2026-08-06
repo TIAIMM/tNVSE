@@ -110,7 +110,7 @@ namespace
 		}
 
 		gLog.FormattedMessage(
-			"tnvse_build_identity: diagnostics=createtext-abi-entry-v43 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
+			"tnvse_build_identity: diagnostics=scoped-sidecar-capture-v44 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
 			modulePath[0] ? modulePath : "unresolved", module,
 			peTimestamp, imageSize,
 			static_cast<unsigned long long>(fileBytes),

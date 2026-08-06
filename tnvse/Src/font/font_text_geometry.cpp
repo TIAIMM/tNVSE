@@ -282,6 +282,7 @@ namespace fonthook
 	static void CreateFreeTypePreparedText(
 		FontEx* font,
 		Font::TextData& textData,
+		std::shared_ptr<const PreparedDirectTextSidecar> preparedSidecar,
 		int* outputWidth,
 		int aiFlags,
 		char aiLineBreakChar,
@@ -387,15 +388,12 @@ namespace fonthook
 			}
 		};
 
-		const std::shared_ptr<const PreparedDirectTextSidecar>
-			preparedSidecar = ConsumeFreeTypePreparedTextSidecar(
-				&textData, font, preparedText);
 		if (preparedSidecar && preparedSidecar->rejectBatch)
 		{
-			*textShape = CreateEmptyFreeTypeTextShape(font, true);
-			font->ButtonIcons.Clear(1);
-			ThisStdCall(0x7593E0, reinterpret_cast<char*>(&textData));
-			return;
+			vectorfont::RecordFreeTypePerf(
+				vectorfont::FreeTypePerfCounter::
+					PreparedSidecarRejectedFallback);
+			preparedSidecar.reset();
 		}
 		const std::shared_ptr<const PreparedDirectTextSidecar>
 			directSidecar = builder.UsesSealedDirectProfile()
@@ -555,10 +553,20 @@ namespace fonthook
 				axTextString->Set(sTranslatedStr.c_str());
 		}
 
-		if (g_bEnableMultibyteFontHook)
-			ThisStdCall(0xA12FB0, this, axTextString->pString, &textData);
-		else
-			PrepText(axTextString->pString, &textData);
+		std::shared_ptr<const PreparedDirectTextSidecar> preparedSidecar;
+		{
+			PreparedTextSidecarCapture capture(&textData, this);
+			if (g_bEnableMultibyteFontHook)
+			{
+				ThisStdCall(0xA12FB0, this,
+					axTextString->pString, &textData);
+			}
+			else
+			{
+				PrepText(axTextString->pString, &textData);
+			}
+			preparedSidecar = capture.Take();
+		}
 
 		*aiWidth = textData.iWidth;
 		*aiHeight = textData.iHeight;
@@ -570,8 +578,6 @@ namespace fonthook
 			{
 				*apTextShape = emptyProxy;
 				*apIconShape = nullptr;
-				ConsumeFreeTypePreparedTextSidecar(
-					&textData, this, textData.xNewText.c_str());
 				this->ButtonIcons.Clear(1);
 				if (g_bEnableFreeTypeFontRenderingLog)
 				{
@@ -592,7 +598,8 @@ namespace fonthook
 
 		if (freeTypeActive)
 		{
-			CreateFreeTypePreparedText(this, textData, aiWidth,
+			CreateFreeTypePreparedText(this, textData,
+				std::move(preparedSidecar), aiWidth,
 				aiFlags, aiLineBreakChar, axFontColor, apTextShape, apIconShape,
 				rasterScale);
 			return;

@@ -191,17 +191,84 @@ namespace fonthook
 		PrepTextScratch* m_scratch = nullptr;
 	};
 
-	struct PreparedTextSidecarHandoff
-	{
-		const Font::TextData* data = nullptr;
-		const Font* font = nullptr;
-		const char* preparedText = nullptr;
-		std::shared_ptr<const PreparedDirectTextSidecar> sidecar;
-	};
+	thread_local PreparedTextSidecarCapture*
+		s_activePreparedTextSidecarCapture = nullptr;
 
-	thread_local std::array<PreparedTextSidecarHandoff, 4>
-		s_preparedTextSidecarHandoffs;
-	thread_local size_t s_preparedTextSidecarHandoffNext = 0;
+	PreparedTextSidecarCapture::PreparedTextSidecarCapture(
+		const Font::TextData* data, const Font* font)
+		: m_data(data), m_font(font),
+		m_previous(s_activePreparedTextSidecarCapture)
+	{
+		s_activePreparedTextSidecarCapture = this;
+	}
+
+	PreparedTextSidecarCapture::~PreparedTextSidecarCapture()
+	{
+		if (s_activePreparedTextSidecarCapture == this)
+		{
+			s_activePreparedTextSidecarCapture = m_previous;
+			return;
+		}
+
+		// Preserve a valid TLS chain even if a future caller violates strict
+		// RAII nesting. The normal CreateText path always takes the fast branch.
+		PreparedTextSidecarCapture** cursor =
+			&s_activePreparedTextSidecarCapture;
+		while (*cursor && *cursor != this)
+			cursor = &(*cursor)->m_previous;
+		if (*cursor == this)
+			*cursor = m_previous;
+	}
+
+	bool PreparedTextSidecarCapture::Matches(
+		const Font::TextData* data, const Font* font) const
+	{
+		return data && font && m_data == data && m_font == font;
+	}
+
+	void PreparedTextSidecarCapture::Publish(
+		const Font::TextData* data, const Font* font,
+		std::shared_ptr<const PreparedDirectTextSidecar> sidecar)
+	{
+		if (!Matches(data, font))
+			return;
+		m_preparedText = data->xNewText.c_str();
+		m_lineSeparator = data->cLineSep;
+		m_sidecar = std::move(sidecar);
+	}
+
+	std::shared_ptr<const PreparedDirectTextSidecar>
+		PreparedTextSidecarCapture::Take()
+	{
+		std::shared_ptr<const PreparedDirectTextSidecar> sidecar =
+			std::move(m_sidecar);
+		if (!sidecar)
+			return {};
+
+		const char* preparedText = m_data
+			? m_data->xNewText.c_str() : nullptr;
+		UInt64 layoutIdentity = 0;
+		if (!preparedText || preparedText != m_preparedText
+			|| m_lineSeparator != m_data->cLineSep
+			|| sidecar->textLength
+				!= static_cast<size_t>(m_data->xNewText.sLen)
+			|| !GetFreeTypeLayoutIdentity(m_font, layoutIdentity)
+			|| sidecar->layoutIdentity != layoutIdentity)
+		{
+			vectorfont::RecordFreeTypePerf(
+				vectorfont::FreeTypePerfCounter::
+					PreparedSidecarCaptureFallback);
+			return {};
+		}
+		return sidecar;
+	}
+
+	static bool WantsPreparedTextSidecar(
+		const Font::TextData* data, const Font* font)
+	{
+		return s_activePreparedTextSidecarCapture
+			&& s_activePreparedTextSidecarCapture->Matches(data, font);
+	}
 
 	static UInt32 GetPreparedTextLength(const char* text)
 	{
@@ -218,47 +285,11 @@ namespace fonthook
 		const Font* font,
 		std::shared_ptr<const PreparedDirectTextSidecar> sidecar)
 	{
-		if (!data || !font || !sidecar)
-			return;
-		PreparedTextSidecarHandoff& handoff =
-			s_preparedTextSidecarHandoffs[
-				s_preparedTextSidecarHandoffNext++
-					% s_preparedTextSidecarHandoffs.size()];
-		handoff.data = data;
-		handoff.font = font;
-		handoff.preparedText = data->xNewText.c_str();
-		handoff.sidecar = std::move(sidecar);
-	}
-
-	std::shared_ptr<const PreparedDirectTextSidecar>
-		ConsumeFreeTypePreparedTextSidecar(
-			const Font::TextData* data, const Font* font,
-			const char* preparedText)
-	{
-		if (!data || !font || !preparedText)
-			return {};
-		UInt64 layoutIdentity = 0;
-		if (!GetFreeTypeLayoutIdentity(font, layoutIdentity))
-			return {};
-		for (PreparedTextSidecarHandoff& handoff :
-			s_preparedTextSidecarHandoffs)
+		if (s_activePreparedTextSidecarCapture)
 		{
-			if (handoff.data != data || handoff.font != font
-				|| handoff.preparedText != preparedText
-				|| !handoff.sidecar)
-			{
-				continue;
-			}
-			std::shared_ptr<const PreparedDirectTextSidecar>
-				sidecar = std::move(handoff.sidecar);
-			handoff = {};
-			if (sidecar->layoutIdentity != layoutIdentity)
-			{
-				return {};
-			}
-			return sidecar;
+			s_activePreparedTextSidecarCapture->Publish(
+				data, font, std::move(sidecar));
 		}
-		return {};
 	}
 
 	enum class FreeTypeBreakKind : UInt8
@@ -430,6 +461,7 @@ namespace fonthook
 		Font::TextData* data,
 		bool isTerminal,
 		UInt32 initialConsumed,
+		bool captureSidecar,
 		PrepTextScratch& scratch)
 	{
 		vectorfont::FreeTypePerfScope perf(
@@ -461,7 +493,7 @@ namespace fonthook
 					: nullptr;
 		bool directRecordInvalid = false;
 		std::vector<DirectTextUnit> directUnits;
-		if (directProfile)
+		if (captureSidecar && directProfile)
 			directUnits.reserve(sourceLength);
 		VectorEncodedGlyph directHyphen;
 		bool directHyphenResolved = false;
@@ -499,7 +531,7 @@ namespace fonthook
 			UInt32 byteOffset, UInt32 byteLength, UInt16 encodedCode,
 			double advance, const VectorEncodedGlyph* glyph)
 		{
-			if (!directProfile || !byteLength
+			if (!captureSidecar || !directProfile || !byteLength
 				|| byteLength > std::numeric_limits<UInt8>::max())
 			{
 				return;
@@ -569,7 +601,7 @@ namespace fonthook
 					&& breakOpportunity.outputPosition < outputLength)
 				{
 					output[breakOpportunity.outputPosition] = data->cLineSep;
-					if (directProfile
+					if (captureSidecar && directProfile
 						&& breakOpportunity.directUnitPosition
 							< directUnits.size())
 					{
@@ -599,7 +631,7 @@ namespace fonthook
 					const char inserted[2] = { '-', data->cLineSep };
 					const VectorEncodedGlyph* hyphen =
 						resolveDirectHyphen();
-					if (directProfile
+					if (captureSidecar && directProfile
 						&& breakOpportunity.directUnitPosition
 							<= directUnits.size()
 						&& hyphen)
@@ -705,7 +737,8 @@ namespace fonthook
 				breakOpportunity.kind = FreeTypeBreakKind::Whitespace;
 				breakOpportunity.outputPosition = unitOutputStart;
 				breakOpportunity.directUnitPosition =
-					directProfile && !directUnits.empty()
+					captureSidecar && directProfile
+						&& !directUnits.empty()
 						? directUnits.size() - 1
 						: std::numeric_limits<size_t>::max();
 				breakOpportunity.sourceConsumedEnd = unitSourceEnd;
@@ -743,7 +776,7 @@ namespace fonthook
 					breakOpportunity.kind = FreeTypeBreakKind::SoftHyphen;
 					breakOpportunity.outputPosition = outputLength;
 					breakOpportunity.directUnitPosition =
-						directProfile
+						captureSidecar && directProfile
 							? directUnits.size()
 							: std::numeric_limits<size_t>::max();
 					breakOpportunity.sourceConsumedEnd = consumed;
@@ -902,7 +935,7 @@ namespace fonthook
 		auto setDirectSpaceUnit = [&]()
 		{
 			directUnits.clear();
-			if (!directProfile)
+			if (!captureSidecar || !directProfile)
 				return;
 			VectorEncodedGlyph space;
 			const vectorfont::SealedDirectGlyphLookup lookup =
@@ -947,6 +980,8 @@ namespace fonthook
 			data->iLineEnd = 1;
 			data->iCharCount = 1;
 			setDirectSpaceUnit();
+			if (!captureSidecar)
+				return {};
 			return directRecordInvalid
 				? BuildRejectedPreparedDirectTextSidecar(
 					font, *data)
@@ -962,14 +997,14 @@ namespace fonthook
 		int maximumLineWidth = 0;
 		std::vector<DirectTextUnit> selectedDirectUnits;
 		size_t directUnitCursor = 0;
-		if (directProfile)
+		if (captureSidecar && directProfile)
 			selectedDirectUnits.reserve(directUnits.size());
 		for (int line = selectedStart; line < selectedEnd; ++line)
 		{
 			const PreparedLineRange& range = ranges[line];
 			const UInt32 count = range.end - range.begin;
 			const UInt32 selectedLineOffset = selectedLength;
-			if (directProfile)
+			if (captureSidecar && directProfile)
 			{
 				while (directUnitCursor < directUnits.size()
 					&& directUnits[directUnitCursor].byteOffset
@@ -1012,7 +1047,7 @@ namespace fonthook
 			maximumLineWidth = MaxInt(maximumLineWidth, range.width);
 			if (line + 1 < selectedEnd)
 			{
-				if (directProfile)
+				if (captureSidecar && directProfile)
 				{
 					DirectTextUnit lineBreak;
 					lineBreak.byteOffset = selectedLength;
@@ -1026,7 +1061,7 @@ namespace fonthook
 				output[selectedLength++] = data->cLineSep;
 			}
 		}
-		if (directProfile)
+		if (captureSidecar && directProfile)
 			directUnits = std::move(selectedDirectUnits);
 
 		bool substitutedEmptyLine = false;
@@ -1073,6 +1108,8 @@ namespace fonthook
 			: (isTerminal && selectedStart == 0
 				? static_cast<int>(ranges[selectedEnd - 1].consumed)
 				: static_cast<int>(outputLength));
+		if (!captureSidecar)
+			return {};
 		return directRecordInvalid
 			? BuildRejectedPreparedDirectTextSidecar(font, *data)
 			: directProfile
@@ -1134,12 +1171,15 @@ namespace fonthook
 
 		if (IsFreeTypeFontActive(font))
 		{
+			const bool captureSidecar =
+				WantsPreparedTextSidecar(axData, font);
 			std::shared_ptr<const PreparedDirectTextSidecar>
 				directSidecar = PrepDirectFreeTypeText(
 					font, processedOriginalText,
-				sourceTextLen, axData, isTerminal, origConsumed, scratch);
+				sourceTextLen, axData, isTerminal, origConsumed,
+				captureSidecar, scratch);
 			PublishPreparedTextSidecar(
-				axData, font, directSidecar);
+				axData, font, std::move(directSidecar));
 			return;
 		}
 

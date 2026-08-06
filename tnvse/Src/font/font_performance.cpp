@@ -454,6 +454,12 @@ namespace fonthook::vectorfont
 		{
 			return values[static_cast<size_t>(counter)];
 		};
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_prepared_sidecar: capture_fallback=%llu rejected_fallback=%llu",
+			counterValue(
+				FreeTypePerfCounter::PreparedSidecarCaptureFallback),
+			counterValue(
+				FreeTypePerfCounter::PreparedSidecarRejectedFallback));
 		const SizeSummary instancingTextSizes = ConsumeSizeSummary(
 			state.instancingTextSizes, state.instancingTextMax);
 		const SizeSummary instancingInstanceSizes = ConsumeSizeSummary(

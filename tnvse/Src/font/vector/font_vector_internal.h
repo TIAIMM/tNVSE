@@ -487,6 +487,8 @@ namespace fonthook::vectorfont
 		StockLayoutSdfPrecacheRejected,
 		StockLayoutSdfPostUploadSourceRetiredReady,
 		StockLayoutSdfPriorGenerationDeclarationReady,
+		PreparedSidecarCaptureFallback,
+		PreparedSidecarRejectedFallback,
 		Count,
 	};
 	static_assert(
