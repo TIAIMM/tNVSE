@@ -302,7 +302,7 @@ bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 {
 	info->infoVersion = PluginInfo::kInfoVersion;
 	info->name = "tNVSE";
-	info->version = 1;
+	info->version = 63;
 
 	return true;
 }
