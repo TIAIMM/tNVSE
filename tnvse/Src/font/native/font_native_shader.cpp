@@ -435,13 +435,13 @@ namespace fonthook::vectorfont
 				|| generation->runtimeFault.load(std::memory_order_acquire)
 				|| !generation->declaration || !generation->d3dDeclaration
 				|| !HasShaderHandle(generation->vertexShader)
-				|| (g_bEnableFreeTypeFontAggressivePerformanceMode
+				|| (UsesBakedEffectRoute()
 					&& (!HasShaderHandle(generation->coverageShader)
 						|| !HasShaderHandle(generation->argbShader))))
 			{
 				return false;
 			}
-			if (!g_bEnableFreeTypeFontAggressivePerformanceMode)
+			if (!UsesBakedEffectRoute())
 			{
 				for (const NiD3DPixelShaderPtr& shader
 					: generation->mtsdfFillShaders)
@@ -1703,7 +1703,6 @@ namespace fonthook::vectorfont
 			generation->vertexShader = createVS("tnvse_freetype_native_vs.vso");
 			const bool stockLayoutRequested =
 				IsStockLayoutSdfEnabled(generation->distanceFieldMethod)
-				&& !g_bEnableFreeTypeFontAggressivePerformanceMode
 				&& (generation->distanceFieldMethod
 						== DistanceFieldMethod::TrueSdf
 					|| generation->distanceFieldMethod
@@ -1713,7 +1712,7 @@ namespace fonthook::vectorfont
 				generation->stockLayoutVertexShader = createVS(
 					"tnvse_freetype_native_stock_layout_vs.vso");
 			}
-			if (g_bEnableFreeTypeFontAggressivePerformanceMode)
+			if (UsesBakedEffectRoute())
 			{
 				generation->coverageShader =
 					createPS("tnvse_freetype_native_coverage.pso");
@@ -1786,7 +1785,7 @@ namespace fonthook::vectorfont
 				failure = "base-shader-set";
 				return nullptr;
 			}
-			if (g_bEnableFreeTypeFontAggressivePerformanceMode
+			if (UsesBakedEffectRoute()
 				&& (!HasShaderHandle(generation->coverageShader)
 					|| !HasShaderHandle(generation->argbShader)))
 			{
@@ -1797,7 +1796,7 @@ namespace fonthook::vectorfont
 				failure = "aggressive-shader-set";
 				return nullptr;
 			}
-			if (!g_bEnableFreeTypeFontAggressivePerformanceMode)
+			if (!UsesBakedEffectRoute())
 			{
 				for (const NiD3DPixelShaderPtr& shader
 					: generation->mtsdfFillShaders)
@@ -2025,16 +2024,16 @@ namespace fonthook::vectorfont
 		NotifyNativeA8CommandExternalMutation(
 			NativeA8CommandFallback::Generation);
 		const char* compositeProfileMode =
-			!g_bEnableFreeTypeFontAggressivePerformanceMode
+			!UsesBakedEffectRoute()
 				&& candidate->distanceFieldMethod
 					== DistanceFieldMethod::Mtsdf
 				? "lazy-36" : "disabled";
 		gLog.FormattedMessage(
 			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s constantAbi=stock-ps-c0-vs-c0-c4-private-ps-c176-c183-vs-c208 privateUpload=prefix-2-4-8 stockC0=map-owned stockTileCarry=verified-low-map vertexAa=analytic-c208-stock-map-intact vertexFormat=float4 vertexStride=%u declTypes=0x%08X maxVertexConstants=%u",
 			candidate->id, candidate->device,
-			g_bEnableFreeTypeFontAggressivePerformanceMode
+			UsesBakedEffectRoute()
 				? "argb-composite" : "distance-field",
-			g_bEnableFreeTypeFontAggressivePerformanceMode
+			UsesBakedEffectRoute()
 				? "disabled" : GetConfiguredDistanceFieldMethodName(),
 			compositeProfileMode,
 			static_cast<UInt32>(sizeof(NativeA8GpuVertex)),

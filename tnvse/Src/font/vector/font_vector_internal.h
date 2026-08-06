@@ -22,8 +22,14 @@ namespace fonthook::vectorfont
 {
 	inline DistanceFieldMethod GetConfiguredDistanceFieldMethod()
 	{
-		return g_uiFreeTypeFontDistanceFieldMode == 0
-			? DistanceFieldMethod::TrueSdf : DistanceFieldMethod::Mtsdf;
+		return g_uiFreeTypeFontDistanceFieldMode == kFreeTypeFontMtsdfMode
+			? DistanceFieldMethod::Mtsdf : DistanceFieldMethod::TrueSdf;
+	}
+
+	inline bool UsesBakedEffectRoute()
+	{
+		return g_uiFreeTypeFontDistanceFieldMode
+			== kFreeTypeFontBakedEffectMode;
 	}
 
 	inline bool UsesMtsdfDistanceField()
@@ -33,7 +39,8 @@ namespace fonthook::vectorfont
 
 	inline bool IsStockLayoutSdfEnabled(DistanceFieldMethod method)
 	{
-		return g_bEnableFreeTypeFontStockLayout
+		return !UsesBakedEffectRoute()
+			&& g_bEnableFreeTypeFontStockLayout
 			&& (method == DistanceFieldMethod::TrueSdf
 				|| method == DistanceFieldMethod::Mtsdf);
 	}
@@ -41,6 +48,12 @@ namespace fonthook::vectorfont
 	inline const char* GetConfiguredDistanceFieldMethodName()
 	{
 		return UsesMtsdfDistanceField() ? "MTSDF" : "true SDF";
+	}
+
+	inline const char* GetConfiguredFontRenderModeName()
+	{
+		return UsesBakedEffectRoute()
+			? "baked stock-like" : GetConfiguredDistanceFieldMethodName();
 	}
 
 	// Base Fill/distance-field generator revision. Route-specific pixel changes

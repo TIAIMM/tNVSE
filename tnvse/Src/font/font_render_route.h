@@ -18,11 +18,11 @@ namespace fonthook::vectorfont
 	};
 
 	constexpr FontAtlasRoute ResolveFontAtlasRoute(
-		bool shaderLoaderRouteAvailable, bool aggressivePerformanceMode)
+		bool shaderLoaderRouteAvailable, bool bakedEffectMode)
 	{
 		if (!shaderLoaderRouteAvailable)
 			return FontAtlasRoute::ArgbFallback;
-		return aggressivePerformanceMode
+		return bakedEffectMode
 			? FontAtlasRoute::ShaderA8Coverage
 			: FontAtlasRoute::ShaderDistanceField;
 	}
@@ -39,6 +39,8 @@ namespace fonthook::vectorfont
 		== FontAtlasRoute::ArgbFallback);
 	static_assert(ResolveFontAtlasRoute(false, true)
 		== FontAtlasRoute::ArgbFallback);
+	static_assert(ResolveFontAtlasRoute(true, false)
+		== FontAtlasRoute::ShaderDistanceField);
 	static_assert(ResolveFontAtlasRoute(true, true)
 		== FontAtlasRoute::ShaderA8Coverage);
 	static_assert(ResolvePersistentFontCacheDomain(

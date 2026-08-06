@@ -1028,7 +1028,14 @@ namespace fonthook
 			const vectorfont::FontConfig& owner =
 				vectorfont::GetMtsdfAtlasConfig(config,
 					VectorFontByteClass::DoubleByte);
-			if (vectorfont::UsesMtsdfDistanceField())
+			if (vectorfont::UsesBakedEffectRoute())
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: baked stock-like doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f sharing=disabled",
+					config.fontId, owner.fontId, config.styles[1].pixelSize,
+					owner.styles[1].pixelSize);
+			}
+			else if (vectorfont::UsesMtsdfDistanceField())
 			{
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: MTSDF doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f group=%u spanLimit=8",
@@ -1039,7 +1046,7 @@ namespace fonthook
 			else
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: true SDF doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f sharing=disabled",
+					"tnvse_freetype_font: TSDF doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f sharing=disabled",
 					config.fontId, owner.fontId, config.styles[1].pixelSize,
 					owner.styles[1].pixelSize);
 			}

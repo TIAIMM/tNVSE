@@ -427,7 +427,7 @@ namespace fonthook::vectorfont
 			const bool visibleFill =
 				included[static_cast<size_t>(AtlasLayer::Fill)];
 			if (preferDirectAtlas
-				&& g_bEnableFreeTypeFontAggressivePerformanceMode)
+				&& UsesBakedEffectRoute())
 			{
 				thread_local std::vector<GlyphBitmapRequest> compositeRequests;
 				thread_local std::vector<std::shared_ptr<const GlyphBitmap>>
@@ -488,7 +488,7 @@ namespace fonthook::vectorfont
 				return true;
 			}
 			if (preferDirectAtlas
-				&& !g_bEnableFreeTypeFontAggressivePerformanceMode)
+				&& !UsesBakedEffectRoute())
 			{
 				thread_local std::array<
 					std::vector<PendingQuad::GlyphSource>, 4> directLayers;

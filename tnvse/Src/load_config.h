@@ -2,6 +2,10 @@
 #include <string>
 #include <Windows.h>
 
+inline constexpr UINT32 kFreeTypeFontBakedEffectMode = 0;
+inline constexpr UINT32 kFreeTypeFontTsdfMode = 1;
+inline constexpr UINT32 kFreeTypeFontMtsdfMode = 2;
+
 extern UINT32 g_uiEncoding;       // UI encoding identifier: 0=Windows-1252, 1=GBK, 2=Big5, 3=SJIS, 4=UHC
 extern UINT32 g_usingWinEncoding; // Configured Windows code page: 1252/936/950/932/949
 extern bool g_bEnableUTF8;
@@ -13,7 +17,6 @@ extern UINT32 g_uiFreeTypeFontMemoryCacheMB;
 extern bool g_bDeleteUnusedFreeTypeFontCache;
 extern bool g_bEnableFreeTypeDefaultPoolAtlas;
 extern bool g_bEnableFreeTypeA8Atlas;
-extern bool g_bEnableFreeTypeFontAggressivePerformanceMode;
 extern bool g_bEnableFreeTypeFontStockLayout;
 extern bool g_bEnableFreeTypeFontPreflightClipCull;
 extern bool g_bEnableFreeTypeFontCommandBuffer;

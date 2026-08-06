@@ -861,7 +861,7 @@ namespace fonthook::vectorfont
 		PublishRuntimeReadiness(accumulatorReady,
 			immediateRouteReady, shaderReady);
 		SynchronizePersistentFontCacheRoute(ResolveFontAtlasRoute(
-			nativeReady, g_bEnableFreeTypeFontAggressivePerformanceMode));
+			nativeReady, UsesBakedEffectRoute()));
 		gLog.FormattedMessage(
 			"tnvse_freetype_native: initialization nativeReady=%u accumulator=%u alphaRenderHook=%u sortOwner=active-virtual sortHook=0 immediateRoute=%u shader=%u",
 			nativeReady ? 1 : 0,

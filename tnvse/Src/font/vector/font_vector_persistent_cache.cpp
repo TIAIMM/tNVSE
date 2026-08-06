@@ -22,7 +22,7 @@ namespace fonthook::vectorfont
 			return State().persistentCacheDomain;
 		return ResolvePersistentFontCacheDomain(ResolveFontAtlasRoute(
 			IsA8RendererAvailable(),
-			g_bEnableFreeTypeFontAggressivePerformanceMode));
+			UsesBakedEffectRoute()));
 	}
 
 	FontAtlasRoute GetPersistentFontCacheRoute()
@@ -31,7 +31,7 @@ namespace fonthook::vectorfont
 		if (State().persistentCacheRouteSynchronized)
 			return State().persistentCacheRoute;
 		return ResolveFontAtlasRoute(IsA8RendererAvailable(),
-			g_bEnableFreeTypeFontAggressivePerformanceMode);
+			UsesBakedEffectRoute());
 	}
 
 	bool GetFreeTypeFontCacheDirectory(std::wstring& directory)

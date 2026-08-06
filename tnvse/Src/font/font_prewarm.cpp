@@ -606,12 +606,12 @@ namespace fonthook::vectorfont
 		void FinishJob(const PrewarmJob& job, const char* status)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm font=%u prewarmEncoding=%s scale=%.3f glyphs=%u doubleByte=%u distanceField=%s distanceFieldGlyphs=%u status=%s",
+				"tnvse_freetype_font: prewarm font=%u prewarmEncoding=%s scale=%.3f glyphs=%u doubleByte=%u renderMode=%s distanceFieldGlyphs=%u status=%s",
 				job.fontId,
 				GetFontPrewarmRangeName(job.prewarmRange, job.codePage),
 				job.rasterScaleMilli ? job.rasterScaleMilli / 1000.0f : 0.0f,
 				job.rasterizedGlyphCount, job.validDoubleByteCount,
-				GetConfiguredDistanceFieldMethodName(),
+				GetConfiguredFontRenderModeName(),
 				job.sdfGlyphCount, status);
 		}
 

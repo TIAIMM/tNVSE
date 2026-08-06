@@ -13,10 +13,9 @@ font hook:
 bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
 fFreeTypeFontResolutionScale=1.0
-bEnableFreeTypeFontAggressivePerformanceMode=0
 bEnableFreeTypeFontStockLayout=1
 bEnableFreeTypeFontCommandBuffer=0
-uiFreeTypeFontDistanceFieldMode=1
+uiFreeTypeFontDistanceFieldMode=2
 ```
 
 With `[Multibyte] bEnableMultibyteFontHook=1`, FreeType uses the configured
@@ -642,29 +641,27 @@ chain and then tries `U+FFFD`, `?`, and the primary face's `.notdef` glyph.
 
 ## Atlas and Tile shader routing
 
-When Fallout Shader Loader 1.40 or newer and the complete native FreeType
-shader set are available, `uiFreeTypeFontDistanceFieldMode` selects the native
-distance-field representation. `0` generates msdfgen true SDF into a
-level-zero `D3DFMT_A8` atlas. `1` (the default) generates MTSDF into
-`D3DFMT_A8R8G8B8`; D3D9 memory is BGRA, sampled RGB carries the
+`uiFreeTypeFontDistanceFieldMode` is the single rendering-mode selector. `0`
+uses the baked-effect stock-like route, `1` generates msdfgen true SDF (TSDF)
+into a level-zero `D3DFMT_A8` atlas, and `2` (the default) generates MTSDF into
+`D3DFMT_A8R8G8B8`. In MTSDF mode D3D9 memory is BGRA, sampled RGB carries the
 multi-channel Fill field, and sampled Alpha carries true signed distance for
 effects.
 
-`bEnableFreeTypeFontAggressivePerformanceMode=1` overrides that selection.
-FreeType rasterizes Fill once from the same unhinted scalable outline used to
+In mode `0`, FreeType rasterizes Fill once from the same unhinted scalable outline used to
 generate the distance field. A bounded CPU distance transform mirrors the SDF
 formulas for Glow falloff, Outline softness, blurred Shadow power, and
 hard-Shadow Glow/Outline inclusion, then composites Shadow, Glow, Outline, and
 Fill into one straight-alpha BGRA rectangle in that order. The ARGB fallback
 derives its separate masks from that same unhinted Fill. This keeps CPU body and
 effect weight close to SDF instead of inheriting a heavier grid-fitted contour.
-Effect colors and alpha are baked into the aggressive rectangle. Runtime Tile
+Effect colors and alpha are baked into the mode-0 rectangle. Runtime Tile
 transform, scissor, total alpha, and whole-text RGB modulation remain live, but
 the individual effect and fill colors can no longer be changed independently
 after the profile is built.
 
-Each visible aggressive glyph therefore contributes exactly one quad. A
-single-page batch can remain one stock `NiTriShape`. When a complete aggressive
+Each visible mode-0 glyph therefore contributes exactly one quad. A
+single-page batch can remain one stock `NiTriShape`. When a complete baked
 artifact spans multiple physical pages and the native renderer is available,
 it becomes one ARGB facade whose payload contains one packet per required page;
 no page sibling is attached to the destination `NiNode`. If the native renderer
@@ -679,13 +676,13 @@ limitations. The mode also gives up distance-field magnification quality in
 exchange for `.fnt`-like CPU and geometry cost.
 The startup prewarm publishes those generated composite glyphs as globally
 repacked `.tnvfatlas` pages. A later launch validates and restores that atlas
-profile directly, so aggressive mode does not need `.tnvfmask` restoration to
+profile directly, so mode `0` does not need `.tnvfmask` restoration to
 avoid rerasterizing the complete code page.
 
-The aggressive mode never removes the fallback boundary. Without Fallout
+Mode `0` never removes the fallback boundary. Without Fallout
 Shader Loader, with an old Loader version, with missing Loader exports, with a
 missing ARGB shader, or when native initialization is unavailable, no complete
-aggressive direct profile is published and the whole text batch enters the
+baked direct profile is published and the whole text batch enters the
 existing compatibility path. A missing direct record, page replacement,
 generation mismatch, or invalid snapshot identity applies the same batch-wide
 fallback; direct and bitmap records are never mixed in one submission.
@@ -1001,9 +998,10 @@ There is no proxy geometry, native vertex-ring upload, or singleton binding for
 this shape.
 
 `bEnableFreeTypeFontStockLayout=1` enables this optional target and is the
-default. It automatically follows `uiFreeTypeFontDistanceFieldMode`: true SDF
-selects the A8/true-SDF Stock-layout shader family and MTSDF selects the BGRA/
-MTSDF family. Setting the single switch to `0` suppresses Stock-layout shader/
+default for distance-field modes. `uiFreeTypeFontDistanceFieldMode=1` selects
+the A8/TSDF Stock-layout shader family, mode `2` selects the BGRA/MTSDF family,
+and baked mode `0` does not create distance-field Stock-layout shapes. Setting
+the Stock-layout switch to `0` suppresses Stock-layout shader/
 declaration generation and shape creation for either method; eligible text
 therefore stays on the existing 52-byte native facade/CommandBuffer route
 without paying Stock-layout geometry or precache costs. This makes
@@ -1277,7 +1275,7 @@ hit/miss and cull counters remain on `tnvse_freetype_preflight_clip_cull`.
 
 `bEnableFreeTypeFontCommandBuffer` is the master switch for the production
 command path used by FreeType A8 shapes in the validated sorted Tile traversal.
-It is independent of `bEnableFreeTypeFontAggressivePerformanceMode` and
+It is independent of `uiFreeTypeFontDistanceFieldMode` and
 `bEnableFreeTypeFontCompositePass`; the active ordinary or Composite packet
 topology is compiled separately. The default is `0`.
 
@@ -1806,8 +1804,8 @@ to live in separate batch and packet-template caches. Geometry, per-glyph base
 colors, layer constants, composite mode, and referenced page identities
 therefore form one
 validated cache identity; an atlas wrapper address cannot revive an artifact
-whose retained property or texture differs. True SDF, MTSDF, and 32-bit fallback
-profiles use separate cache keys; aggressive BGRA composite additionally has a
+whose retained property or texture differs. TSDF, MTSDF, and 32-bit fallback
+profiles use separate cache keys; mode-0 baked BGRA composite additionally has a
 distinct pixel/render profile and prewarm identity. Changing
 `uiFreeTypeFontDistanceFieldMode`
 therefore selects new bitmap, manifest, snapshot, and shader identities without

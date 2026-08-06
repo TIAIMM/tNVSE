@@ -16,11 +16,10 @@ UINT32 g_uiFreeTypeFontMemoryCacheMB;
 bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
-bool g_bEnableFreeTypeFontAggressivePerformanceMode = false;
 bool g_bEnableFreeTypeFontStockLayout = true;
 bool g_bEnableFreeTypeFontPreflightClipCull = true;
 bool g_bEnableFreeTypeFontCommandBuffer = false;
-UINT32 g_uiFreeTypeFontDistanceFieldMode = 1;
+UINT32 g_uiFreeTypeFontDistanceFieldMode = kFreeTypeFontMtsdfMode;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bEnableFreeTypeFontCompositePass = true;
 UINT32 g_uiFreeTypeFontCompositeCacheMB = 32;
@@ -158,12 +157,6 @@ void LoadConfig()
 	gLog.FormattedMessage("g_bEnableFreeTypeA8Atlas: %d",
 		g_bEnableFreeTypeA8Atlas);
 
-	g_bEnableFreeTypeFontAggressivePerformanceMode = ReadConfigInt(
-		kFreeTypeFontSection,
-		"bEnableFreeTypeFontAggressivePerformanceMode", 0, filename) != 0;
-	gLog.FormattedMessage(
-		"g_bEnableFreeTypeFontAggressivePerformanceMode: %d",
-		g_bEnableFreeTypeFontAggressivePerformanceMode);
 	g_bEnableFreeTypeFontStockLayout = ReadConfigInt(
 		kFreeTypeFontSection,
 		"bEnableFreeTypeFontStockLayout", 1, filename) != 0;
@@ -210,19 +203,25 @@ void LoadConfig()
 			? "retained-native-replay" : "current");
 
 	g_uiFreeTypeFontDistanceFieldMode = ReadConfigInt(
-		kFreeTypeFontSection, "uiFreeTypeFontDistanceFieldMode", 1,
+		kFreeTypeFontSection, "uiFreeTypeFontDistanceFieldMode",
+		kFreeTypeFontMtsdfMode,
 		filename);
-	if (g_uiFreeTypeFontDistanceFieldMode > 1)
+	if (g_uiFreeTypeFontDistanceFieldMode > kFreeTypeFontMtsdfMode)
 	{
 		gLog.FormattedMessage(
 			"g_uiFreeTypeFontDistanceFieldMode: invalid value %u; using MTSDF",
 			g_uiFreeTypeFontDistanceFieldMode);
-		g_uiFreeTypeFontDistanceFieldMode = 1;
+		g_uiFreeTypeFontDistanceFieldMode = kFreeTypeFontMtsdfMode;
 	}
+	const char* distanceFieldModeName = "baked stock-like";
+	if (g_uiFreeTypeFontDistanceFieldMode == kFreeTypeFontTsdfMode)
+		distanceFieldModeName = "TSDF";
+	else if (g_uiFreeTypeFontDistanceFieldMode == kFreeTypeFontMtsdfMode)
+		distanceFieldModeName = "MTSDF";
 	gLog.FormattedMessage(
 		"g_uiFreeTypeFontDistanceFieldMode: %u (%s)",
 		g_uiFreeTypeFontDistanceFieldMode,
-		g_uiFreeTypeFontDistanceFieldMode ? "MTSDF" : "true SDF");
+		distanceFieldModeName);
 
 	g_uiFreeTypeFontGpuAtlasCacheMB = ReadConfigInt(
 		kFreeTypeFontSection, "uiFreeTypeFontGpuAtlasCacheMB", 0, filename);

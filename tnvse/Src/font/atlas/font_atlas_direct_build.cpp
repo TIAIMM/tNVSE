@@ -170,7 +170,7 @@ namespace implementation::font_atlas_direct
 				masks.push_back(GlyphMaskType::DistanceField);
 				return masks;
 			}
-			if (g_bEnableFreeTypeFontAggressivePerformanceMode)
+			if (UsesBakedEffectRoute())
 			{
 				masks.push_back(GlyphMaskType::Composite);
 				return masks;

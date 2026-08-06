@@ -825,7 +825,7 @@ namespace fonthook::vectorfont
 					sdfSpread = static_cast<UInt8>(profile.sdfSpread);
 				}
 			}
-			else if (g_bEnableFreeTypeFontAggressivePerformanceMode)
+			else if (UsesBakedEffectRoute())
 			{
 				include(GlyphMaskType::Composite);
 				outlineStroke = ResolveCpuEffectMaskIdentity(

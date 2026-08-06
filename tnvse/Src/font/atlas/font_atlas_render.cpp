@@ -265,7 +265,7 @@ namespace fonthook::vectorfont
 		const bool a8RendererAvailable = IsA8RendererAvailable();
 		const FontAtlasRoute atlasRoute = ResolveFontAtlasRoute(
 			a8RendererAvailable,
-			g_bEnableFreeTypeFontAggressivePerformanceMode);
+			UsesBakedEffectRoute());
 		const bool requestsDistanceField =
 			atlasRoute == FontAtlasRoute::ShaderDistanceField;
 		const bool requestsBakedCoverage =
