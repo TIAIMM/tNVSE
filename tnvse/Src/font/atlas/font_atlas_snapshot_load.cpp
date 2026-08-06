@@ -95,8 +95,7 @@ namespace fonthook::vectorfont
 			const bool shapeValid = IsSnapshotPageShapeValid(
 				header.width, header.height,
 				GetSnapshotMaximumSize(
-					packingCaps, packingByteClass,
-					pageKey.pixelMode), packingCaps)
+					packingCaps, packingByteClass), packingCaps)
 				&& header.mipLevels >= 1
 				&& header.mipLevels <= kMaximumAtlasMipLevels;
 			const size_t fullPixelBytes = shapeValid

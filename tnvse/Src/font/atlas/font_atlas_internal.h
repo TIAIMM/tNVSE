@@ -52,14 +52,13 @@ namespace fonthook::vectorfont
 		static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
 			* kMaximumMtsdfPrewarmAtlasSize * 4u;
 	static_assert(kMaximumMtsdfPrewarmPageBytes == 16u * 1024u * 1024u);
-	// Keep the final physical allocation bounded as well. A single 8192x8192
-	// BGRA texture is 256 MiB and can fail catastrophically in a fragmented
-	// 32-bit process even when total free virtual memory appears sufficient.
-	inline constexpr size_t kMaximumPrewarmPhysicalPageBytes =
-		64u * 1024u * 1024u;
 	// Complete level-zero snapshots search deterministic power-of-two physical
 	// layouts without changing glyph padding or intermediate stream pages.
-	inline constexpr UInt32 kAtlasPackingRevision = 4;
+	// Revision 5 restores the device-supported 8192 edge for final repacking.
+	// Memory admission is enforced against the selected allocation's actual byte
+	// size; it must not change the bitmap dimensions or split a legal one-page
+	// single/double-byte or cross-font physical layout.
+	inline constexpr UInt32 kAtlasPackingRevision = 5;
 	inline constexpr UInt32 kMaximumQuads = 16383;
 
 	enum class AtlasLayer : UInt8
@@ -297,6 +296,12 @@ namespace fonthook::vectorfont
 			DirectCachedLetterKind::EffectLayers;
 		UInt8 effectLayerMask = 0;
 		std::array<std::shared_ptr<const DirectAtlasGlyphTable>, 2> tables;
+		// Direct tables intentionally keep weak page references. Preserve the exact
+		// logical wrappers used by each table in addition to the de-duplicated
+		// physical atlas list below; two wrappers can share one D3D texture without
+		// having interchangeable object lifetimes.
+		std::array<std::vector<std::shared_ptr<AtlasResource>>, 2>
+			tableAtlasOwners;
 		std::vector<std::shared_ptr<AtlasResource>> atlases;
 		std::array<std::array<UInt16, kMaximumAtlasSnapshotPages>, 2>
 			pageOrdinals;

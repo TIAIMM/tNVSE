@@ -39,8 +39,10 @@ namespace fonthook::vectorfont
 		constexpr size_t kPrewarmPerWorkerFixedBytes = 256u * 1024u;
 		constexpr size_t kMaximumPrewarmStreamingWorkingBytes =
 			16u * 1024u * 1024u;
+		// Worst-case 8192x8192 four-byte page. This is a recovery estimate;
+		// CreateDynamicAtlasTexture admits the selected page using its exact bytes.
 		constexpr size_t kMaximumPrewarmPhysicalAllocationBytes =
-			64u * 1024u * 1024u;
+			256u * 1024u * 1024u;
 		void UpdatePrewarmProgress(const std::wstring& detail,
 			const std::wstring& stage, float progress)
 		{

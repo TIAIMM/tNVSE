@@ -560,8 +560,7 @@ namespace fonthook::vectorfont
 			const SnapshotPackingCaps packingCaps =
 				GetSnapshotPackingCaps();
 			const UInt32 roleMaximum =
-				GetSnapshotMaximumSize(packingCaps, packingByteClass,
-					baseKey.pixelMode);
+				GetSnapshotMaximumSize(packingCaps, packingByteClass);
 			const UInt32 maximumSize = preferSingleAtlas
 				? roleMaximum
 				: std::min(roleMaximum,

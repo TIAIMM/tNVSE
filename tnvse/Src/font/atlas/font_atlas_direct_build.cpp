@@ -778,6 +778,7 @@ namespace implementation::font_atlas_direct
 						{
 							return false;
 						}
+						sealed->tableAtlasOwners[roleIndex].push_back(page);
 						UInt16 ordinal =
 							kInvalidDirectAtlasPageSlot;
 						for (UInt16 candidate = 0;
@@ -859,6 +860,11 @@ namespace implementation::font_atlas_direct
 					size_t bytes = sizeof(SealedDirectFontProfile)
 						+ sealed->atlases.capacity()
 							* sizeof(std::shared_ptr<AtlasResource>);
+					for (const auto& owners : sealed->tableAtlasOwners)
+					{
+						bytes += owners.capacity()
+							* sizeof(std::shared_ptr<AtlasResource>);
+					}
 					for (const auto& baselines :
 						sealed->faceBaselineOffsets)
 					{
@@ -875,6 +881,14 @@ namespace implementation::font_atlas_direct
 				{
 					if (atlas)
 						atlas->sealedImmutable = true;
+				}
+				for (const auto& owners : published->tableAtlasOwners)
+				{
+					for (const auto& atlas : owners)
+					{
+						if (atlas)
+							atlas->sealedImmutable = true;
+					}
 				}
 				ReleaseSealedAtlasCpuIndexesLocked(
 					state, *published);

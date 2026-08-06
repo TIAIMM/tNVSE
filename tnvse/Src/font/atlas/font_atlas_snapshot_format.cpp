@@ -513,18 +513,10 @@ namespace fonthook::vectorfont
 		}
 
 		UInt32 GetSnapshotMaximumSize(const SnapshotPackingCaps& caps,
-			VectorFontByteClass byteClass, AtlasPixelMode pixelMode)
+			VectorFontByteClass byteClass)
 		{
-			UInt32 maximum = byteClass == VectorFontByteClass::DoubleByte
+			return byteClass == VectorFontByteClass::DoubleByte
 				? caps.doubleByteMaximum : caps.singleByteMaximum;
-			const size_t bytesPerPixel = AtlasBytesPerPixel(pixelMode);
-			while (maximum > 64
-				&& static_cast<size_t>(maximum) * maximum * bytesPerPixel
-					> kMaximumPrewarmPhysicalPageBytes)
-			{
-				maximum /= 2u;
-			}
-			return std::max<UInt32>(64, maximum);
 		}
 
 		bool IsSnapshotAspectRatioValid(UInt32 width, UInt32 height,
@@ -1369,12 +1361,69 @@ namespace fonthook::vectorfont
 				UInt64 pageMaskContentHash = 0;
 				const std::wstring path = GetAtlasSnapshotPath(runtime, pageKey,
 					pageSnapshotHash, pageMaskContentHash);
-				if (path.empty())
+				auto reject = [&](const char* reason,
+					const AtlasSnapshotHeader& rejectedHeader,
+					UInt64 fileBytes, DWORD fileError)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: atlas snapshot storage rejected font=%u role=%s page=%u reason=%s fileError=%lu fileBytes=%llu version=%u/%u expectedSnapshot=%016llX actualSnapshot=%016llX expectedMask=%016llX actualMask=%016llX expectedAtlas=%016llX actualAtlas=%016llX scale=%u/%u pixelMode=%u/%u renderMode=%u/%u byteClass=%u/%u padding=%u/%u flags=%08X size=%ux%u pageCount=%u placements=%u storedBytes=%llu",
+						GetRuntimeConfig(runtime).fontId,
+						pageKey.byteClass == VectorFontByteClass::DoubleByte
+							? "doubleByte" : "singleByte",
+						pageIndex, reason ? reason : "unknown", fileError,
+						static_cast<unsigned long long>(fileBytes),
+						kAtlasSnapshotVersion, rejectedHeader.version,
+						static_cast<unsigned long long>(pageSnapshotHash),
+						static_cast<unsigned long long>(
+							rejectedHeader.snapshotHash),
+						static_cast<unsigned long long>(pageMaskContentHash),
+						static_cast<unsigned long long>(
+							rejectedHeader.maskContentHash),
+						static_cast<unsigned long long>(pageKey.atlasContentHash),
+						static_cast<unsigned long long>(
+							rejectedHeader.atlasContentHash),
+						pageKey.scaleMilli, rejectedHeader.scaleMilli,
+						static_cast<UInt32>(pageKey.pixelMode),
+						static_cast<UInt32>(rejectedHeader.pixelMode),
+						static_cast<UInt32>(pageKey.renderMode),
+						static_cast<UInt32>(rejectedHeader.renderMode),
+						static_cast<UInt32>(pageKey.byteClass),
+						static_cast<UInt32>(rejectedHeader.byteClass),
+						pageKey.padding, rejectedHeader.padding,
+						rejectedHeader.flags, rejectedHeader.width,
+						rejectedHeader.height, rejectedHeader.pageCount,
+						rejectedHeader.placementCount,
+						static_cast<unsigned long long>(
+							rejectedHeader.storedPixelBytes));
 					return false;
+				};
+				if (path.empty())
+					return reject("path", {}, 0, GetLastError());
 				AtlasSnapshotHeader header = {};
 				SnapshotPayloadSource payload;
 				if (!ReadSnapshotMetadata(path, header, nullptr, payload))
-					return false;
+				{
+					AtlasSnapshotHeader rawHeader = {};
+					UInt64 rawFileBytes = 0;
+					DWORD fileError = ERROR_SUCCESS;
+					HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+						FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+						nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+					if (file == INVALID_HANDLE_VALUE)
+						fileError = GetLastError();
+					else
+					{
+						LARGE_INTEGER size = {};
+						if (GetFileSizeEx(file, &size) && size.QuadPart >= 0)
+							rawFileBytes = static_cast<UInt64>(size.QuadPart);
+						if (!ReadSnapshotBytesExact(
+								file, &rawHeader, sizeof(rawHeader)))
+							fileError = GetLastError();
+						CloseHandle(file);
+					}
+					return reject("metadata-or-alias", rawHeader,
+						rawFileBytes, fileError);
+				}
 				MarkFreeTypeFontCacheFileUsed(payload.path);
 				if (!pageIndex)
 				{
@@ -1395,39 +1444,60 @@ namespace fonthook::vectorfont
 				const bool shapeValid = IsSnapshotPageShapeValid(
 					header.width, header.height,
 					GetSnapshotMaximumSize(
-						packingCaps, packingByteClass,
-						pageKey.pixelMode), packingCaps)
+						packingCaps, packingByteClass), packingCaps)
 					&& header.mipLevels >= 1
 					&& header.mipLevels <= kMaximumAtlasMipLevels;
-				if (!pageCount || pageCount > kMaximumAtlasSnapshotPages
-					|| header.pageIndex != pageIndex
-					|| header.pageCount != pageCount
-					|| header.version != kAtlasSnapshotVersion
-					|| (header.flags & ~kAtlasSnapshotKnownFlags) != 0
-					|| !MatchesDefaultPoolSnapshotLayout(header)
-					|| pageSnapshotHash != snapshotHash
-					|| pageMaskContentHash != maskContentHash
-					|| header.snapshotHash != snapshotHash
-					|| header.maskContentHash != maskContentHash
-					|| header.atlasContentHash != pageKey.atlasContentHash
-					|| header.scaleMilli != pageKey.scaleMilli
-					|| header.pixelMode != static_cast<UInt8>(pageKey.pixelMode)
-					|| header.renderMode != static_cast<UInt8>(pageKey.renderMode)
-					|| header.byteClass != static_cast<UInt8>(pageKey.byteClass)
-					|| header.padding != pageKey.padding
-					|| !shapeValid
-					|| header.mipLevels != GetAtlasMipLevelCount(
-						header.width, header.height, pageKey.levelZeroOnly)
-					|| expectedFileBytes != payload.fileBytes
-					|| header.checksum != HashAtlasBytes(&header,
-						offsetof(AtlasSnapshotHeader, checksum)))
-				{
-					return false;
-				}
+				const char* rejection = nullptr;
+				if (!pageCount || pageCount > kMaximumAtlasSnapshotPages)
+					rejection = "page-count";
+				else if (header.pageIndex != pageIndex)
+					rejection = "page-index";
+				else if (header.pageCount != pageCount)
+					rejection = "page-count-consistency";
+				else if (header.version != kAtlasSnapshotVersion)
+					rejection = "version";
+				else if ((header.flags & ~kAtlasSnapshotKnownFlags) != 0)
+					rejection = "flags";
+				else if (!MatchesDefaultPoolSnapshotLayout(header))
+					rejection = "default-pool-layout";
+				else if (pageSnapshotHash != snapshotHash
+					|| header.snapshotHash != snapshotHash)
+					rejection = "snapshot-identity";
+				else if (pageMaskContentHash != maskContentHash
+					|| header.maskContentHash != maskContentHash)
+					rejection = "mask-identity";
+				else if (header.atlasContentHash != pageKey.atlasContentHash)
+					rejection = "atlas-identity";
+				else if (header.scaleMilli != pageKey.scaleMilli)
+					rejection = "scale";
+				else if (header.pixelMode
+					!= static_cast<UInt8>(pageKey.pixelMode))
+					rejection = "pixel-mode";
+				else if (header.renderMode
+					!= static_cast<UInt8>(pageKey.renderMode))
+					rejection = "render-mode";
+				else if (header.byteClass
+					!= static_cast<UInt8>(pageKey.byteClass))
+					rejection = "byte-class";
+				else if (header.padding != pageKey.padding)
+					rejection = "padding";
+				else if (!shapeValid)
+					rejection = "shape";
+				else if (header.mipLevels != GetAtlasMipLevelCount(
+					header.width, header.height, pageKey.levelZeroOnly))
+					rejection = "mip-levels";
+				else if (expectedFileBytes != payload.fileBytes)
+					rejection = "payload-size";
+				else if (header.checksum != HashAtlasBytes(&header,
+					offsetof(AtlasSnapshotHeader, checksum)))
+					rejection = "header-checksum";
+				if (rejection)
+					return reject(rejection, header, payload.fileBytes, 0);
 				const size_t pageBytes = GetAtlasStorageBytes(header.width,
 					header.height, pageKey.pixelMode, header.mipLevels);
 				if (pageBytes > std::numeric_limits<size_t>::max() - storageBytes)
-					return false;
+					return reject("storage-overflow", header,
+						payload.fileBytes, ERROR_ARITHMETIC_OVERFLOW);
 				storageBytes += pageBytes;
 			}
 			return storageBytes != 0;

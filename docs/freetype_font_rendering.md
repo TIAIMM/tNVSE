@@ -420,11 +420,14 @@ global skyline repacker is retained: it evaluates every supported power-of-two
 target width with both deterministic bottom-left and best-fit skyline
 heuristics. Complete plans are compared lexicographically: the fewest physical
 pages wins, then the smallest total GPU storage, then the smallest maximum page
-edge. A final physical page is capped at 64 MiB of level-zero storage. This
-retains an `8192` edge for A8 true-SDF where legal, but caps four-byte MTSDF or
-ARGB pages at `4096`; a former `8192x8192` 256-MiB texture is split into several
-bounded pages. Within that cap a complete font remains on one texture whenever
-either skyline heuristic finds a legal one-page layout.
+edge. Thus a complete font remains on one texture whenever either evaluated
+skyline heuristic finds a legal one-page layout, while that one page may be
+`8192x4096`, `4096x8192`, or a smaller power-of-two rectangle instead of
+inheriting the role's square upper bound. The selected allocation is admitted
+using its actual byte size and current 32-bit virtual-address headroom; memory
+pressure retries inside the same loading barrier and does not alter glyph
+dimensions, split an otherwise legal one-page layout, or enable runtime demand
+fallback.
 NPOT dimensions are deliberately not used. The selected plan still reads one
 bounded source page at a time from disk, materializes one destination page at a
 time, and rewrites the globally repacked snapshots before the manifest is
@@ -616,12 +619,25 @@ never published.
 The selected pool reuses the v23 physical-payload alias transaction. One member
 owns the complete placed snapshot, every other member/byte role keeps its own
 identity header and points to that physical payload, and all source direct
-tables are invalidated before restore. Publication then rebuilds every member's
-sealed table and validates the pool marker, page-content identity, one-page
-logical profile, and common underlying D3D9 texture. A failure retains or
-restores the previous v2/per-font snapshots; it does not install a multi-page
-pool or change the frame-time render path. On a later launch, the restored pool
-is rediscovered as one atom and reported as `physical atlas pool reused`.
+tables are invalidated before restore. Restore is deliberately two-phase: every
+member first replaces its pages, then every member publishes its direct tables.
+This prevents a later member that shares the same mutable raster profile from
+revoking an earlier member's sealed table. A sealed table also retains the exact
+logical page wrappers referenced by its weak page slots; its separate physical
+atlas list still de-duplicates wrappers backed by the same D3D9 texture, so this
+lifetime guarantee adds no texture or GPU allocation.
+
+Before the first payload replacement, v3 captures every affected role/page path
+with same-volume hard links (and a disk-copy fallback if hard links are not
+available). The backups are committed only after the pool marker,
+page-content identity, one-page logical profiles, common underlying D3D9
+texture, and predicted storage size all validate. Any save or validation failure
+rolls the complete disk generation back first and then rebuilds the previous
+v2/per-font runtime profiles. Backup creation failure aborts before mutation;
+rollback failure is logged and leaves its sidecar for recovery. The transaction
+does not install a multi-page pool or change the frame-time render path. On a
+later launch, the restored pool is rediscovered as one atom and reported as
+`physical atlas pool reused`.
 
 `physical atlas pool plan` reports atom/candidate counts and planned physical
 GPU bytes. `physical atlas pool active` reports the committed page and savings.

@@ -248,6 +248,24 @@ namespace fonthook::vectorfont
 					if (retired.resource)
 						process(*retired.resource);
 				}
+				// A sealed table owns its exact logical wrapper separately from the
+				// de-duplicated physical atlas list. Those wrappers also carry DEFAULT
+				// resources and must participate in both halves of a device reset.
+				for (const auto& [identity, weakProfile] :
+					state.sealedDirectProfiles)
+				{
+					const auto sealed = weakProfile.lock();
+					if (!sealed)
+						continue;
+					for (const auto& owners : sealed->tableAtlasOwners)
+					{
+						for (const auto& atlas : owners)
+						{
+							if (atlas)
+								process(*atlas);
+						}
+					}
+				}
 				if (!beforeReset)
 				{
 					RefreshAtlasCacheGpuAccountingLocked(state);
@@ -271,7 +289,7 @@ namespace fonthook::vectorfont
 								profile);
 							continue;
 						}
-						const bool invalidPage = std::any_of(
+						bool invalidPage = std::any_of(
 							sealed->atlases.begin(),
 							sealed->atlases.end(),
 							[&](const auto& atlas)
@@ -287,6 +305,24 @@ namespace fonthook::vectorfont
 									|| atlas->padding
 										!= sealed->padding;
 							});
+						for (const auto& owners : sealed->tableAtlasOwners)
+						{
+							invalidPage = invalidPage || std::any_of(
+								owners.begin(), owners.end(),
+								[&](const auto& atlas)
+								{
+									return !atlas
+										|| atlas->resetPending
+										|| !atlas->property
+										|| !GetAtlasTexture(*atlas)
+										|| atlas->pixelMode
+											!= sealed->pixelMode
+										|| atlas->renderMode
+											!= sealed->renderMode
+										|| atlas->padding
+											!= sealed->padding;
+								});
+						}
 						if (!invalidPage)
 						{
 							++profile;
