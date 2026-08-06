@@ -305,7 +305,8 @@ namespace fonthook::vectorfont
 
 			const SnapshotPackingCaps caps = GetSnapshotPackingCaps();
 			const UInt32 maximumSize = GetSnapshotMaximumSize(
-				caps, VectorFontByteClass::DoubleByte);
+				caps, VectorFontByteClass::DoubleByte,
+				storageKey.pixelMode);
 			for (UInt32 width = 64; width && width <= maximumSize;)
 			{
 				for (UInt32 height = 64; height && height <= maximumSize;)

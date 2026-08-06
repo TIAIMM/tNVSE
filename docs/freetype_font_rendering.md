@@ -287,8 +287,11 @@ Prewarm is advanced by the persistent state machine while tNVSE remains inside
 the NVSE `kMessage_DeferredInit` callback. Each loop iteration performs at most
 one snapshot restore/validation, one adaptive throughput batch, one font publication
 step, or one cleanup step. The game main thread therefore does not return from
-deferred initialization until the state reaches `Completed` or the queue is
-empty. No `StartMenu::Create` detour, replay, timeout, synthetic Menu ID, or
+deferred initialization until every configured profile reaches and passes the
+`Completed` validation state. An empty queue is terminal only when no FreeType
+fonts are configured; a missing runtime, failed publication, or incomplete
+profile rebuilds the queue inside the same loading barrier. No
+`StartMenu::Create` detour, replay, timeout, synthetic Menu ID, or
 input handler is needed: the normal startup sequence cannot create an operable
 main menu while NVSE is still dispatching `DeferredInit`.
 
@@ -331,14 +334,22 @@ UIO applies the same compact font-slot scaling as the IME overlay before those
 live metrics are measured. There is no auxiliary Win32 window, prewarm UI
 thread, GDI renderer, event, mutex, or window-message pump.
 A font task allocates additional atlas pages when its selected set cannot fit
-one 4096x4096 page. It reports `atlas-full` only if one incoming batch cannot
-fit an empty maximum-size page, the page-count safety limit is reached, or a
-texture allocation/upload fails. GBK and non-936 full-code-page profiles
+one physical page. A transient allocation failure rolls the current batch back,
+releases disposable mappings and retired atlas generations, reduces the batch
+limit as far as one glyph, and retries inside the same startup transaction. It
+is never converted into a failed-profile runtime demand route. GBK and non-936
+full-code-page profiles
 generate every mask that runtime rendering can request for every valid unit.
 GB2312 profiles generate the same masks for their selected byte zone and leave
 GBK extensions for demand generation. Every SDF effect or hard shadow reuses
 the generated fill mask. When Shader Loader is unavailable, prewarm generates
 only the coverage/effect masks needed by the ARGB fallback.
+
+At transaction start the 32-bit process reserves a 128-MiB uncommitted virtual
+address-space escape region. Normal atlas allocations retain 512 MiB of virtual
+headroom; on detected pressure the escape region is released, disposable state
+is trimmed, and the same operation retries with a 256-MiB critical reserve. The
+reservation is released after successful completion or shutdown.
 
 Selected-table construction does not create or read `.tnvfmask`. The atlas-only
 transaction begins when the first cache-miss font enters its generation step
@@ -359,20 +370,23 @@ mandatory pass, every runtime is ready, both byte-role atlas profiles survive
 the final reread/repack, and the manifest is complete, tNVSE closes any legacy
 bitmap profiles and deletes every managed `.tnvfmask` left by older versions.
 Persistent bitmap creation is then disabled for every covered font ID and its
-aliases for the rest of the process. An incomplete transaction leaves legacy
-files available to the restored demand-rendering policy, but the failed prewarm
-does not publish a newly generated `.tnvfmask`.
+aliases for the rest of the process. An incomplete transaction is not reported
+as startup completion: current-mode files are retained, the configured jobs are
+queued again, and the same `DeferredInit` loading barrier remains active until
+all selected profiles validate. This retry policy does not change the explicit
+coverage semantics of `prewarmEncoding="gb2312"`; GBK extensions outside that
+selected profile remain intentionally demand-only.
 
 If startup validation finds an incomplete manifest, a missing or corrupt atlas
-page, a snapshot without the final global-repack marker, or a failed
-global-repack generation, tNVSE does not resume or repair that partial
-transaction. It first evicts the affected resident atlas generation, deletes
-its manifest and atlas snapshots, clears all shared construction-mask profiles,
-and then performs a new code-page pass from an empty cache state. A stream or
-finalization failure applies the same cleanup immediately, so half-published
-files are not candidates on the next launch. Global repacking is allowed only
-inside the current generation transaction after all streamed pages have been
-published.
+page, or a snapshot without the final global-repack marker, tNVSE evicts that
+invalid generation and performs a new code-page pass. Allocation pressure is
+handled differently: a valid persistent snapshot is preserved and its restore
+is retried after memory recovery, because deleting it and starting a full
+regeneration would increase the peak. A finalization failure first returns to
+the validated snapshot-restore path; only an actually missing or invalid
+snapshot is discarded and regenerated. Half-published files therefore never
+become a successful generation. Global repacking is allowed only inside the
+current generation transaction after all streamed pages have been published.
 
 The same directory also contains four startup-oriented cache layers. A
 `.tnvfhash` record reuses the font content hash when file identity, size and
@@ -407,10 +421,11 @@ global skyline repacker is retained: it evaluates every supported power-of-two
 target width with both deterministic bottom-left and best-fit skyline
 heuristics. Complete plans are compared lexicographically: the fewest physical
 pages wins, then the smallest total GPU storage, then the smallest maximum page
-edge. Thus a complete font remains on one texture whenever either evaluated
-skyline heuristic finds a legal one-page layout, while that one page may be
-`8192x4096`, `4096x8192`, or a smaller power-of-two rectangle instead of
-inheriting the role's square upper bound.
+edge. A final physical page is capped at 64 MiB of level-zero storage. This
+retains an `8192` edge for A8 true-SDF where legal, but caps four-byte MTSDF or
+ARGB pages at `4096`; a former `8192x8192` 256-MiB texture is split into several
+bounded pages. Within that cap a complete font remains on one texture whenever
+either skyline heuristic finds a legal one-page layout.
 NPOT dimensions are deliberately not used. The selected plan still reads one
 bounded source page at a time from disk, materializes one destination page at a
 time, and rewrites the globally repacked snapshots before the manifest is
@@ -467,10 +482,12 @@ must still match.
 `.tnvfmanifest`, `.tnvfatlas`, and `.tnvfdirect` files that were not accessed by
 the current
 run after every configured font atlas has been generated or restored
-successfully. If a prewarm job fails or is cancelled, cleanup switches to a
-safe partial scope: caches identified as the inactive true-SDF/MTSDF method,
-unreadable managed cache headers, and orphaned `.tmp`/`.stream.tmp` transaction
-files are removed, while current-method and mode-neutral caches are retained.
+successfully. During a same-barrier transaction retry, or if shutdown cancels
+prewarm, cleanup switches to a safe partial scope: caches identified as the
+inactive true-SDF/MTSDF method, unreadable managed cache headers, and orphaned
+`.tmp`/`.stream.tmp` transaction files are removed, while current-method and
+mode-neutral caches are retained. A partial cleanup is not permission to leave
+`DeferredInit` and finish the selected profile on demand.
 Manifest headers carry an explicit cache-domain and distance-field identity so
 the partial cleanup does not infer their route or method from an opaque filename
 hash. Unknown files in `fontdata` are never removed. The option defaults to `0`.

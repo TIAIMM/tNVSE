@@ -300,7 +300,13 @@ namespace fonthook::vectorfont
 			header.checksum = HashBytes(&header,
 				offsetof(AtlasSnapshotHeader, checksum));
 
-			const std::wstring temporaryPath = finalPath + L".stream.tmp";
+			StreamingPageFile pageFile;
+			pageFile.temporaryPath = finalPath + L".stream.tmp";
+			pageFile.finalPath = finalPath;
+			pageFile.header = header;
+			pageFile.placementCount = header.placementCount;
+			pageFile.pixelBytes = header.storedPixelBytes;
+			const std::wstring& temporaryPath = pageFile.temporaryPath;
 			HANDLE file = CreateFileW(temporaryPath.c_str(), GENERIC_WRITE, 0, nullptr,
 				CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
 			if (file == INVALID_HANDLE_VALUE)
@@ -316,8 +322,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			role.pages.push_back({ temporaryPath, finalPath, header,
-				header.placementCount, header.storedPixelBytes });
+			role.pages.push_back(std::move(pageFile));
 			role.totalPlacements += header.placementCount;
 			role.totalPixelBytes += header.storedPixelBytes;
 			ResetPage(page);
@@ -412,9 +417,33 @@ namespace fonthook::vectorfont
 				placement.bakedLayer = bitmap->bakedLayer;
 				const size_t previousPlacementCapacity =
 					page.placements.capacity();
-				page.placements.push_back(placement);
-				page.pixels.insert(page.pixels.end(), bitmap->alpha.begin(),
-					bitmap->alpha.begin() + requiredBytes);
+				const size_t previousPlacementSize = page.placements.size();
+				const size_t previousPixelSize = page.pixels.size();
+				const UInt32 previousCursorX = page.cursorX;
+				const UInt32 previousCursorY = page.cursorY;
+				const UInt32 previousShelfHeight = page.shelfHeight;
+				const UInt32 previousUsedWidth = page.usedWidth;
+				const UInt32 previousUsedHeight = page.usedHeight;
+				try
+				{
+					page.placements.push_back(placement);
+					page.pixels.insert(page.pixels.end(), bitmap->alpha.begin(),
+						bitmap->alpha.begin() + requiredBytes);
+					role.cacheIds.insert(bitmap->cacheId);
+				}
+				catch (...)
+				{
+					page.placements.resize(previousPlacementSize);
+					page.pixels.resize(previousPixelSize);
+					page.cursorX = previousCursorX;
+					page.cursorY = previousCursorY;
+					page.shelfHeight = previousShelfHeight;
+					page.usedWidth = previousUsedWidth;
+					page.usedHeight = previousUsedHeight;
+					role.cacheIds.erase(bitmap->cacheId);
+					RefreshPageCpuMemory(page);
+					throw;
+				}
 				if (page.placements.capacity()
 					!= previousPlacementCapacity)
 				{
@@ -428,7 +457,6 @@ namespace fonthook::vectorfont
 					x + width + pagePadding);
 				page.usedHeight = std::max(page.usedHeight,
 					y + height + pagePadding);
-				role.cacheIds.insert(bitmap->cacheId);
 				return true;
 			}
 			return false;
@@ -513,6 +541,8 @@ namespace fonthook::vectorfont
 				state->renderMode = key.renderMode;
 			state->roles[0].byteClass = VectorFontByteClass::SingleByte;
 			state->roles[1].byteClass = VectorFontByteClass::DoubleByte;
+			for (StreamingRole& role : state->roles)
+				role.pages.reserve(kMaximumAtlasSnapshotPages);
 			StreamingPrewarmState* result = state.get();
 			s_streams.emplace(&runtime, std::move(state));
 			return result;
@@ -566,22 +596,24 @@ namespace fonthook::vectorfont
 	bool AppendStreamingPrewarmAtlas(RuntimeFont& runtime,
 		const std::vector<GlyphBitmapRequest>& requests,
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& results,
-		float rasterScale)
+		float rasterScale, bool* allocationFailed)
 	{
+		if (allocationFailed)
+			*allocationFailed = false;
 		std::lock_guard<std::mutex> lock(s_streamMutex);
-		StreamingPrewarmState* state = GetOrCreateState(runtime, rasterScale);
-		if (!state || state->failed)
-			return false;
-		if (!state->enabled)
-			return true;
-		if (results.size() < requests.size())
-		{
-			state->failed = true;
-			return false;
-		}
-
+		StreamingPrewarmState* state = nullptr;
 		try
 		{
+			state = GetOrCreateState(runtime, rasterScale);
+			if (!state || state->failed)
+				return false;
+			if (!state->enabled)
+				return true;
+			if (results.size() < requests.size())
+			{
+				state->failed = true;
+				return false;
+			}
 			std::array<std::vector<std::shared_ptr<const GlyphBitmap>>, 2> grouped;
 			for (size_t index = 0; index < requests.size(); ++index)
 			{
@@ -631,17 +663,22 @@ namespace fonthook::vectorfont
 		}
 		catch (const std::bad_alloc&)
 		{
-			state->failed = true;
+			if (allocationFailed)
+				*allocationFailed = true;
 			size_t retainedBytes = 0;
 			size_t completedPages = 0;
-			for (const StreamingRole& role : state->roles)
+			if (state)
 			{
-				retainedBytes += role.current.pixels.size();
-				completedPages += role.pages.size();
+				for (const StreamingRole& role : state->roles)
+				{
+					retainedBytes += role.current.pixels.size();
+					completedPages += role.pages.size();
+				}
 			}
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: streamed prewarm allocation failed font=%u scale=%.3f pageLimit=%u completedPages=%llu retainedMiB=%.2f",
-				state->fontId, rasterScale, kMaximumMtsdfPrewarmAtlasSize,
+				"tnvse_freetype_font: streamed prewarm allocation pressure font=%u scale=%.3f pageLimit=%u completedPages=%llu retainedMiB=%.2f statePreserved=1",
+				state ? state->fontId : GetRuntimeConfig(runtime).fontId,
+				rasterScale, kMaximumMtsdfPrewarmAtlasSize,
 				static_cast<unsigned long long>(completedPages),
 				retainedBytes / (1024.0 * 1024.0));
 			return false;

@@ -95,7 +95,8 @@ namespace fonthook::vectorfont
 			const bool shapeValid = IsSnapshotPageShapeValid(
 				header.width, header.height,
 				GetSnapshotMaximumSize(
-					packingCaps, packingByteClass), packingCaps)
+					packingCaps, packingByteClass,
+					pageKey.pixelMode), packingCaps)
 				&& header.mipLevels >= 1
 				&& header.mipLevels <= kMaximumAtlasMipLevels;
 			const size_t fullPixelBytes = shapeValid
@@ -244,7 +245,11 @@ namespace fonthook::vectorfont
 						header.height, pageKey.pixelMode, header.mipLevels,
 						pixels, resource->pixelData);
 					if (!property)
+					{
+						if (IsFontPrewarmActive())
+							MarkAtlasAllocationMemoryPressure();
 						return false;
+					}
 					resource->property = property;
 					directStreamedPixelBytes += storedPixelVector.size();
 				}

@@ -1002,8 +1002,12 @@ namespace fonthook::vectorfont
 	bool RebuildGlyphAtlasFromSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool ConsolidatePhysicalFontAtlasGroups(float afRasterScale);
 	bool ConsolidatePhysicalFontAtlasPools(float afRasterScale);
+	void PruneRetiredAtlasGenerations();
 	bool BuildDirectGlyphAtlasTables(RuntimeFont& arRuntime, float afRasterScale);
 	void QueueFontPrewarm(UInt32 auiFontId);
+	void ResetAtlasAllocationMemoryPressure();
+	void MarkAtlasAllocationMemoryPressure();
+	bool ConsumeAtlasAllocationMemoryPressure();
 	FontPrewarmPumpStatus PumpFontPrewarm();
 	bool IsFontPrewarmActive();
 	void ShutdownFontPrewarm();

@@ -25,6 +25,29 @@ namespace fonthook::vectorfont
 {
 	using namespace implementation::font_atlas_resource;
 
+	namespace implementation::font_atlas_resource
+	{
+		thread_local bool s_atlasAllocationMemoryPressure = false;
+		std::atomic<UInt32> s_atlasMemoryPressureLogCount = 0;
+	}
+
+	void ResetAtlasAllocationMemoryPressure()
+	{
+		s_atlasAllocationMemoryPressure = false;
+	}
+
+	void MarkAtlasAllocationMemoryPressure()
+	{
+		s_atlasAllocationMemoryPressure = true;
+	}
+
+	bool ConsumeAtlasAllocationMemoryPressure()
+	{
+		const bool result = s_atlasAllocationMemoryPressure;
+		s_atlasAllocationMemoryPressure = false;
+		return result;
+	}
+
 	void* DefaultAtlasTexture::s_vtable[41] = {};
 
 		UInt32 DefaultAtlasTexture::GetWidthEx() const
@@ -105,9 +128,68 @@ namespace fonthook::vectorfont
 				? D3DFMT_A8 : D3DFMT_A8R8G8B8;
 			if (!mipLevels || mipLevels > GetAtlasMipLevelCount(width, height))
 				return nullptr;
-			if (FAILED(device->CreateTexture(width, height, mipLevels, D3DUSAGE_DYNAMIC,
-				format, D3DPOOL_DEFAULT, &texture, nullptr)))
+			const size_t pendingBytes = GetAtlasStorageBytes(
+				width, height, mode, mipLevels);
+			if (IsFontPrewarmActive())
 			{
+				ProcessVirtualMemoryHeadroom headroom;
+				bool safe = HasProcessVirtualMemoryHeadroom(
+					pendingBytes, kFontPrewarmVirtualReserveBytes,
+					&headroom);
+				bool releasedEmergency = false;
+				if (!safe)
+				{
+					releasedEmergency =
+						ReleaseFontPrewarmEmergencyAddressSpace();
+					// The emergency reservation may already have been released by an
+					// earlier failed step. Critical-mode headroom remains the correct
+					// threshold for every retry after normal-mode admission fails.
+					safe = HasProcessVirtualMemoryHeadroom(
+						pendingBytes,
+						kFontPrewarmCriticalVirtualReserveBytes,
+						&headroom);
+				}
+				if (!safe)
+				{
+					s_atlasAllocationMemoryPressure = true;
+					if (s_atlasMemoryPressureLogCount.fetch_add(
+							1, std::memory_order_relaxed) < 16)
+					{
+						gLog.FormattedMessage(
+							"tnvse_freetype_font: prewarm atlas allocation paused for same-session retry size=%ux%u levels=%u bytesMiB=%.2f availableVirtualMiB=%.2f largestFreeMiB=%.2f reserveMiB=%.2f emergencyReleased=%u runtimeFallback=0",
+							width, height, mipLevels,
+							pendingBytes / (1024.0 * 1024.0),
+							headroom.availableBytes / (1024.0 * 1024.0),
+							headroom.largestFreeRegionBytes / (1024.0 * 1024.0),
+							kFontPrewarmCriticalVirtualReserveBytes
+								/ (1024.0 * 1024.0),
+							releasedEmergency ? 1u : 0u);
+					}
+					return nullptr;
+				}
+			}
+			const HRESULT createResult = device->CreateTexture(
+				width, height, mipLevels, D3DUSAGE_DYNAMIC,
+				format, D3DPOOL_DEFAULT, &texture, nullptr);
+			if (FAILED(createResult))
+			{
+				if (IsFontPrewarmActive()
+					&& (createResult == E_OUTOFMEMORY
+						|| createResult == D3DERR_OUTOFVIDEOMEMORY))
+				{
+					s_atlasAllocationMemoryPressure = true;
+				}
+				if (IsFontPrewarmActive()
+					&& s_atlasMemoryPressureLogCount.fetch_add(
+						1, std::memory_order_relaxed) < 16)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: prewarm D3D9 atlas allocation failed size=%ux%u levels=%u bytesMiB=%.2f hresult=0x%08X memoryPressure=%u",
+						width, height, mipLevels,
+						pendingBytes / (1024.0 * 1024.0),
+						static_cast<UInt32>(createResult),
+						s_atlasAllocationMemoryPressure ? 1u : 0u);
+				}
 				return nullptr;
 			}
 			D3DSURFACE_DESC description = {};
@@ -235,6 +317,8 @@ namespace fonthook::vectorfont
 		{
 			if (!g_bEnableFreeTypeDefaultPoolAtlas || State().defaultPoolShutdown)
 				return false;
+			if (IsFontPrewarmActive() && s_atlasAllocationMemoryPressure)
+				return false;
 			AtlasPixelMode mode = requestedMode;
 			for (UInt32 attempt = 0; attempt < 2; ++attempt)
 			{
@@ -274,9 +358,16 @@ namespace fonthook::vectorfont
 						}
 						return true;
 					}
+					if (IsFontPrewarmActive())
+						s_atlasAllocationMemoryPressure = true;
 				}
 				if (d3dTexture)
 					d3dTexture->Release();
+				if (IsFontPrewarmActive()
+					&& s_atlasAllocationMemoryPressure)
+				{
+					break;
+				}
 				if (mode != AtlasPixelMode::A8)
 					break;
 				mode = AtlasPixelMode::Argb32;
@@ -371,6 +462,8 @@ namespace fonthook::vectorfont
 				resource.mipLevels, source, pixelData);
 			if (!property)
 			{
+				if (IsFontPrewarmActive())
+					MarkAtlasAllocationMemoryPressure();
 				if (movedTemporaryBacking)
 					resource.pixels = std::move(source);
 				return false;

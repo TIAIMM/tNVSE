@@ -85,7 +85,7 @@ namespace fonthook::vectorfont
 			const PhysicalAtlasGroup& group);
 		SnapshotPackingCaps GetSnapshotPackingCaps();
 		UInt32 GetSnapshotMaximumSize(const SnapshotPackingCaps& caps,
-			VectorFontByteClass byteClass);
+			VectorFontByteClass byteClass, AtlasPixelMode pixelMode);
 		bool IsSnapshotPageShapeValid(UInt32 width, UInt32 height,
 			UInt32 maximumSize, const SnapshotPackingCaps& caps);
 		bool TryEnableSparseFile(HANDLE file);

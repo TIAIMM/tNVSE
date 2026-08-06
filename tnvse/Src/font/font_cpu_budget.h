@@ -5,6 +5,20 @@
 
 namespace fonthook::vectorfont
 {
+	inline constexpr std::size_t kFontPrewarmVirtualReserveBytes =
+		512u * 1024u * 1024u;
+	inline constexpr std::size_t kFontPrewarmCriticalVirtualReserveBytes =
+		256u * 1024u * 1024u;
+	inline constexpr std::size_t kFontPrewarmEmergencyAddressSpaceBytes =
+		128u * 1024u * 1024u;
+
+	struct ProcessVirtualMemoryHeadroom
+	{
+		std::size_t availableBytes = 0;
+		std::size_t largestFreeRegionBytes = 0;
+		bool valid = false;
+	};
+
 	enum class CpuMemoryCategory : std::uint8_t
 	{
 		GlyphBitmap,
@@ -37,6 +51,14 @@ namespace fonthook::vectorfont
 	bool IsCpuMemoryBudgetExceeded();
 	void EnforceCpuMemoryBudget(const char* phase);
 	void ReportCpuMemoryBudget(const char* phase, bool force = false);
+	bool QueryProcessVirtualMemoryHeadroom(
+		ProcessVirtualMemoryHeadroom& result);
+	bool HasProcessVirtualMemoryHeadroom(std::size_t pendingBytes,
+		std::size_t reserveBytes,
+		ProcessVirtualMemoryHeadroom* result = nullptr);
+	bool ReserveFontPrewarmEmergencyAddressSpace();
+	bool ReleaseFontPrewarmEmergencyAddressSpace();
+	bool HasFontPrewarmEmergencyAddressSpace();
 
 	// A lease follows the allocation's real lifetime. Removing an LRU entry does
 	// not pretend to reclaim memory while a shape, TLS hot entry, or another

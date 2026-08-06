@@ -3,9 +3,11 @@
 #include "font_vector.h"
 #include "load_config.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <limits>
+#include <Windows.h>
 
 namespace fonthook::vectorfont
 {
@@ -37,6 +39,12 @@ namespace fonthook::vectorfont
 			// until process termination so destructor order cannot access dead state.
 			static CpuBudgetState* state = new CpuBudgetState();
 			return *state;
+		}
+
+		std::atomic<void*>& PrewarmEmergencyAddressSpace()
+		{
+			static std::atomic<void*> reservation = nullptr;
+			return reservation;
 		}
 
 		std::size_t SaturatingAdd(std::size_t left, std::size_t right)
@@ -237,5 +245,112 @@ namespace fonthook::vectorfont
 			GetCpuMemoryUsage(CpuMemoryCategory::AtlasMetadata) / (1024.0 * 1024.0),
 			GetCpuMemoryUsage(CpuMemoryCategory::PersistentMapping) / (1024.0 * 1024.0),
 			GetCpuMemoryUsage(CpuMemoryCategory::RuntimeMetadata) / (1024.0 * 1024.0));
+	}
+
+	bool QueryProcessVirtualMemoryHeadroom(
+		ProcessVirtualMemoryHeadroom& result)
+	{
+		result = {};
+		MEMORYSTATUSEX memory = {};
+		memory.dwLength = sizeof(memory);
+		if (!GlobalMemoryStatusEx(&memory))
+			return false;
+
+		SYSTEM_INFO systemInfo = {};
+		GetSystemInfo(&systemInfo);
+		std::uintptr_t cursor = reinterpret_cast<std::uintptr_t>(
+			systemInfo.lpMinimumApplicationAddress);
+		const std::uintptr_t maximum = reinterpret_cast<std::uintptr_t>(
+			systemInfo.lpMaximumApplicationAddress);
+		std::size_t largestFree = 0;
+		while (cursor <= maximum)
+		{
+			MEMORY_BASIC_INFORMATION region = {};
+			if (!VirtualQuery(reinterpret_cast<const void*>(cursor),
+					&region, sizeof(region))
+				|| !region.RegionSize)
+			{
+				break;
+			}
+			if (region.State == MEM_FREE)
+				largestFree = std::max(largestFree,
+					static_cast<std::size_t>(region.RegionSize));
+			const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(
+				region.BaseAddress);
+			if (base > maximum
+				|| region.RegionSize > maximum - base)
+				break;
+			const std::uintptr_t next = base + region.RegionSize;
+			if (next <= cursor)
+				break;
+			cursor = next;
+		}
+
+		result.availableBytes = static_cast<std::size_t>(std::min<ULONGLONG>(
+			memory.ullAvailVirtual,
+			static_cast<ULONGLONG>(
+				std::numeric_limits<std::size_t>::max())));
+		result.largestFreeRegionBytes = largestFree;
+		result.valid = true;
+		return true;
+	}
+
+	bool HasProcessVirtualMemoryHeadroom(std::size_t pendingBytes,
+		std::size_t reserveBytes, ProcessVirtualMemoryHeadroom* result)
+	{
+		ProcessVirtualMemoryHeadroom measured;
+		if (!QueryProcessVirtualMemoryHeadroom(measured))
+		{
+			if (result)
+				*result = measured;
+			// Failure to query is not evidence of pressure. Allocation APIs still
+			// retain their normal fail-open error handling.
+			return true;
+		}
+		if (result)
+			*result = measured;
+		const bool totalOverflow = pendingBytes
+			> std::numeric_limits<std::size_t>::max() - reserveBytes;
+		const std::size_t requiredTotal = totalOverflow
+			? std::numeric_limits<std::size_t>::max()
+			: pendingBytes + reserveBytes;
+		constexpr std::size_t kLargestRegionProbeBytes =
+			32u * 1024u * 1024u;
+		const std::size_t requiredLargest = std::min(
+			pendingBytes, kLargestRegionProbeBytes);
+		return measured.availableBytes >= requiredTotal
+			&& measured.largestFreeRegionBytes >= requiredLargest;
+	}
+
+	bool ReserveFontPrewarmEmergencyAddressSpace()
+	{
+		if (PrewarmEmergencyAddressSpace().load(std::memory_order_acquire))
+			return true;
+		void* reservation = VirtualAlloc(nullptr,
+			kFontPrewarmEmergencyAddressSpaceBytes,
+			MEM_RESERVE, PAGE_NOACCESS);
+		if (!reservation)
+			return false;
+		void* expected = nullptr;
+		if (!PrewarmEmergencyAddressSpace().compare_exchange_strong(
+				expected, reservation, std::memory_order_release,
+				std::memory_order_acquire))
+		{
+			VirtualFree(reservation, 0, MEM_RELEASE);
+		}
+		return true;
+	}
+
+	bool ReleaseFontPrewarmEmergencyAddressSpace()
+	{
+		void* reservation = PrewarmEmergencyAddressSpace().exchange(
+			nullptr, std::memory_order_acq_rel);
+		return reservation && VirtualFree(reservation, 0, MEM_RELEASE);
+	}
+
+	bool HasFontPrewarmEmergencyAddressSpace()
+	{
+		return PrewarmEmergencyAddressSpace().load(
+			std::memory_order_acquire) != nullptr;
 	}
 }

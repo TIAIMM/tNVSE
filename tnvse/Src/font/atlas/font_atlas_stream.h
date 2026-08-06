@@ -11,7 +11,7 @@ namespace fonthook::vectorfont
 	bool AppendStreamingPrewarmAtlas(RuntimeFont& arRuntime,
 		const std::vector<GlyphBitmapRequest>& arRequests,
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& arResults,
-		float afRasterScale);
+		float afRasterScale, bool* apAllocationFailed = nullptr);
 
 	// Finalizes page counts, publishes the snapshot files atomically, and restores
 	// the completed page set through the normal validated snapshot loader.

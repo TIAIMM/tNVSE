@@ -52,9 +52,14 @@ namespace fonthook::vectorfont
 		static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
 			* kMaximumMtsdfPrewarmAtlasSize * 4u;
 	static_assert(kMaximumMtsdfPrewarmPageBytes == 16u * 1024u * 1024u);
+	// Keep the final physical allocation bounded as well. A single 8192x8192
+	// BGRA texture is 256 MiB and can fail catastrophically in a fragmented
+	// 32-bit process even when total free virtual memory appears sufficient.
+	inline constexpr size_t kMaximumPrewarmPhysicalPageBytes =
+		64u * 1024u * 1024u;
 	// Complete level-zero snapshots search deterministic power-of-two physical
 	// layouts without changing glyph padding or intermediate stream pages.
-	inline constexpr UInt32 kAtlasPackingRevision = 3;
+	inline constexpr UInt32 kAtlasPackingRevision = 4;
 	inline constexpr UInt32 kMaximumQuads = 16383;
 
 	enum class AtlasLayer : UInt8

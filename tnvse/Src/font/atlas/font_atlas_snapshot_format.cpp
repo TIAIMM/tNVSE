@@ -513,10 +513,18 @@ namespace fonthook::vectorfont
 		}
 
 		UInt32 GetSnapshotMaximumSize(const SnapshotPackingCaps& caps,
-			VectorFontByteClass byteClass)
+			VectorFontByteClass byteClass, AtlasPixelMode pixelMode)
 		{
-			return byteClass == VectorFontByteClass::DoubleByte
+			UInt32 maximum = byteClass == VectorFontByteClass::DoubleByte
 				? caps.doubleByteMaximum : caps.singleByteMaximum;
+			const size_t bytesPerPixel = AtlasBytesPerPixel(pixelMode);
+			while (maximum > 64
+				&& static_cast<size_t>(maximum) * maximum * bytesPerPixel
+					> kMaximumPrewarmPhysicalPageBytes)
+			{
+				maximum /= 2u;
+			}
+			return std::max<UInt32>(64, maximum);
 		}
 
 		bool IsSnapshotAspectRatioValid(UInt32 width, UInt32 height,
@@ -1387,7 +1395,8 @@ namespace fonthook::vectorfont
 				const bool shapeValid = IsSnapshotPageShapeValid(
 					header.width, header.height,
 					GetSnapshotMaximumSize(
-						packingCaps, packingByteClass), packingCaps)
+						packingCaps, packingByteClass,
+						pageKey.pixelMode), packingCaps)
 					&& header.mipLevels >= 1
 					&& header.mipLevels <= kMaximumAtlasMipLevels;
 				if (!pageCount || pageCount > kMaximumAtlasSnapshotPages
