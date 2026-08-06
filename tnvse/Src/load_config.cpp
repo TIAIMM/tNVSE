@@ -20,7 +20,6 @@ bool g_bEnableFreeTypeFontAggressivePerformanceMode = false;
 bool g_bEnableFreeTypeFontStructuralFastPaths = true;
 bool g_bEnableFreeTypeFontPreflightClipCull = true;
 bool g_bEnableFreeTypeFontCommandBuffer = false;
-bool g_bEnableFreeTypeFontCrossTextBatch = false;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = 1;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bEnableFreeTypeFontCompositePass = true;
@@ -207,22 +206,6 @@ void LoadConfig()
 		g_bEnableFreeTypeFontCommandBuffer,
 		g_bEnableFreeTypeFontCommandBuffer
 			? "retained-native-replay" : "current");
-
-	g_bEnableFreeTypeFontCrossTextBatch = ReadConfigInt(
-		kFreeTypeFontSection,
-		"bEnableFreeTypeFontCrossTextBatch", 0, filename) != 0;
-	if (g_bEnableFreeTypeFontCrossTextBatch
-		&& !g_bEnableFreeTypeFontCommandBuffer)
-	{
-		gLog.FormattedMessage(
-			"g_bEnableFreeTypeFontCrossTextBatch requested without command buffer; disabling this run");
-		g_bEnableFreeTypeFontCrossTextBatch = false;
-	}
-	gLog.FormattedMessage(
-		"g_bEnableFreeTypeFontCrossTextBatch: %d (%s)",
-		g_bEnableFreeTypeFontCrossTextBatch,
-		g_bEnableFreeTypeFontCrossTextBatch
-			? "indexed-glyph-instancing" : "disabled");
 
 	g_uiFreeTypeFontDistanceFieldMode = ReadConfigInt(
 		kFreeTypeFontSection, "uiFreeTypeFontDistanceFieldMode", 1,

@@ -177,10 +177,6 @@ namespace fonthook::vectorfont
 		+ static_cast<UInt32>(kNativeA8PacketConstantRegisterCount) - 1u;
 	inline constexpr UInt32 kNativeA8VertexAaConstantRegister = 208;
 	inline constexpr UInt32 kNativeA8StockLayoutGlyphConstantRegister = 209;
-	inline constexpr UInt32 kNativeA8GlyphInstanceSidecarBytes = 72;
-	inline constexpr UInt32 kNativeA8GlyphInstanceBytes = 152;
-	inline constexpr UInt32 kNativeA8MaximumInstanceBufferBytes =
-		16u * 1024u * 1024u;
 	static_assert(kNativeA8PixelConstantLastRegister <= 223);
 	static_assert(kNativeA8VertexAaConstantRegister <= 255);
 	static_assert(kNativeA8StockLayoutGlyphConstantRegister <= 255);
@@ -269,39 +265,6 @@ namespace fonthook::vectorfont
 	static_assert(offsetof(NativeA8GpuVertex, glyphU0) == 9 * sizeof(float));
 	static_assert(sizeof(NativeA8GpuVertex) == 13 * sizeof(float));
 
-	// Immutable per-glyph proof generated from the existing TL/TR/BR/BL GPU
-	// quad. The runtime appends one WVP and TileColor to produce the 152-byte
-	// stream-1 instance without rebuilding or concatenating glyph vertices.
-	struct NativeA8GlyphInstanceSidecar
-	{
-		float localX0 = 0.0f;
-		float localZ0 = 0.0f;
-		float localX1 = 0.0f;
-		float localZ1 = 0.0f;
-		float u0 = 0.0f;
-		float v0 = 0.0f;
-		float u1 = 0.0f;
-		float v1 = 0.0f;
-		D3DCOLOR color = 0;
-		float sdfSpread = 0.0f;
-		float distanceScale = 0.0f;
-		float layerMask = 0.0f;
-		float tileRgbBakeSelector = 0.0f;
-		float glyphU0 = 0.0f;
-		float glyphV0 = 0.0f;
-		float glyphU1 = 0.0f;
-		float glyphV1 = 0.0f;
-		float localDepth = 0.0f;
-	};
-	static_assert(sizeof(NativeA8GlyphInstanceSidecar)
-		== kNativeA8GlyphInstanceSidecarBytes);
-	static_assert(offsetof(NativeA8GlyphInstanceSidecar, localX0) == 0);
-	static_assert(offsetof(NativeA8GlyphInstanceSidecar, u0) == 16);
-	static_assert(offsetof(NativeA8GlyphInstanceSidecar, color) == 32);
-	static_assert(offsetof(NativeA8GlyphInstanceSidecar, sdfSpread) == 36);
-	static_assert(offsetof(NativeA8GlyphInstanceSidecar, glyphU0) == 52);
-	static_assert(offsetof(NativeA8GlyphInstanceSidecar, localDepth) == 68);
-
 	struct NativeA8PacketShaderCacheEntry
 	{
 		// Native shader profiles are process-lifetime objects. Keep this opaque in
@@ -362,11 +325,6 @@ namespace fonthook::vectorfont
 		std::array<size_t, 2> profileHashes = {};
 		mutable std::array<NativeA8PacketShaderCacheEntry, 2>
 			resolvedShaders;
-		// Optional instancing metadata is tail-only so disabling the feature keeps
-		// every pre-existing packet field at its established cross-TU offset.
-		UInt32 instanceSidecarFirst = 0;
-		UInt32 instanceSidecarCount = 0;
-		bool instanceTopologyValid = false;
 	};
 
 	struct NativeA8CompositeSpan
@@ -428,9 +386,6 @@ namespace fonthook::vectorfont
 		// list remains available if that shader class is unavailable.
 		std::vector<NativeA8PacketTemplate> compositePackets;
 		mutable NativeA8PayloadResidencyCache residency;
-		// Keep optional sidecars at the tail for a strict disabled-path layout
-		// prefix and to avoid perturbing established packet/residency offsets.
-		std::vector<NativeA8GlyphInstanceSidecar> glyphInstanceSidecars;
 		// Tail-only construction certificate.  Count copies make the read path
 		// fail closed if an accidental internal mutation ever invalidates the
 		// otherwise immutable artifact.
@@ -590,8 +545,6 @@ namespace fonthook::vectorfont
 		UInt64 validationToken = 0;
 		UInt32 commandSpanIndex = std::numeric_limits<UInt32>::max();
 		UInt32 singlePacketCommandIndex =
-			std::numeric_limits<UInt32>::max();
-		UInt32 crossTextSequenceIndex =
 			std::numeric_limits<UInt32>::max();
 	};
 
@@ -760,19 +713,10 @@ namespace fonthook::vectorfont
 		bool viewportReady = false;
 	};
 
-	struct NativeA8InstancingShaderResources
-	{
-		IDirect3DDevice9* device = nullptr;
-		IDirect3DVertexShader9* vertexShader = nullptr;
-		IDirect3DVertexDeclaration9* declaration = nullptr;
-		UInt32 generation = 0;
-		bool ready = false;
-	};
-
 	// A non-owning execution proof for device-state reuse inside one validated
-	// command segment. Exact retail Standard stock-Tile passes and successful
-	// native instancing draws may retain the segment while narrowly invalidating
-	// the state categories they actually publish. The command buffer assigns the
+	// command segment. Exact retail Standard stock-Tile passes may retain the
+	// segment while narrowly invalidating the state categories they publish. The
+	// command buffer assigns the
 	// two execution epochs only after validating that segment.
 	// Render-target and viewport values are copied rather than retained through
 	// COM pointers or mutable renderer state.
@@ -826,62 +770,8 @@ namespace fonthook::vectorfont
 			const NiPropertyState* properties,
 			NiDX9Renderer* renderer, IDirect3DDevice9* device);
 
-	enum class NativeTileInstancingSnapshotResult : UInt8
-	{
-		Ready = 0,
-		NotApplicable,
-		ScaledScissor,
-		NonFinite
-	};
-
-	// Exact slot-31 state used to decide whether adjacent texts can share one
-	// instanced draw.  Keep this separate from the live matrix/color snapshot so
-	// command-build admission cannot accidentally publish stale draw constants.
-	struct NativeTileInstancingTransientState
-	{
-		RECT scissorRect = {};
-		UInt16 stencilFlags = 0;
-		UInt32 stencilRef = 0;
-		UInt32 stencilMask = 0;
-		bool scissorEnabled = false;
-		bool stencilPresent = false;
-		bool stencilEnabled = false;
-		bool cleanupRequired = false;
-	};
-
-	// Live inputs needed by the instanced VS and exact renderer restoration.
-	// wvpColumns is byte-identical to the four float4 values that retail
-	// TileShader publishes at VS c0-c3.  transient is captured in the same
-	// leader-time operation and rechecked against the preceding live preflight.
-	struct NativeTileInstancingSnapshot
-	{
-		D3DXMATRIX retailWorld = {};
-		D3DXMATRIX wvpColumns = {};
-		std::array<float, 4> tileColor = {};
-		NativeTileInstancingTransientState transient;
-	};
-
-	NativeTileInstancingSnapshotResult BuildNativeTileInstancingSnapshot(
-		const NiTriShape* geometry, const NiPropertyState* properties,
-		const NiDX9Renderer* renderer,
-		NativeTileInstancingSnapshot& snapshot);
-	NativeTileInstancingSnapshotResult
-		BuildNativeTileInstancingTransientState(
-			const NiTriShape* geometry,
-			const NiPropertyState* properties,
-			NativeTileInstancingTransientState& transient);
-	NativeTileInstancingSnapshotResult
-		BuildNativeTileInstancingSnapshotForWorld(
-			const NiTriShape* geometry,
-			const NiPropertyState* properties,
-			const NiDX9Renderer* renderer,
-			const NiTransform& effectiveWorld,
-			NativeTileInstancingSnapshot& snapshot);
 	void ApplyNativeA8GeometryOrigin(NiTransform& destination,
 		const NiTransform& source, const NiPoint3& origin);
-	bool SameNativeTileInstancingTransientState(
-		const NativeTileInstancingTransientState& left,
-		const NativeTileInstancingTransientState& right);
 	bool IsNativeA8PayloadOutsideScissorForWorld(
 		const NativeA8ShapePayload& payload,
 		const NiPropertyState* properties,
@@ -997,26 +887,6 @@ namespace fonthook::vectorfont
 		const NativeA8FrameStamp* stamp = nullptr;
 		const NativeA8DirectFacadeSinglePacketCommand* command = nullptr;
 		UInt32 commandIndex = kInvalidNativeA8CommandIndex;
-	};
-
-	enum class NativeA8CrossTextCommandKind : UInt8
-	{
-		Barrier = 0,
-		SinglePacket,
-		DirectFacadeSinglePacket
-	};
-
-	struct NativeA8CrossTextBatchExecutionView
-	{
-		UInt32 batchIndex = kInvalidNativeA8CommandIndex;
-		UInt32 leaderSequenceIndex = kInvalidNativeA8CommandIndex;
-		UInt32 textCount = 0;
-		UInt32 instanceCount = 0;
-		UInt32 baseInstance = 0;
-		UInt32 generation = 0;
-		NiTriShape* leaderGeometry = nullptr;
-		NiTriShape* lastGeometry = nullptr;
-		bool active = false;
 	};
 
 	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason);
@@ -1192,8 +1062,6 @@ namespace fonthook::vectorfont
 		const char* operation, HRESULT result);
 	UInt32 GetNativeA8ShaderGeneration();
 	IDirect3DVertexDeclaration9* GetNativeA8D3DDeclaration(UInt32 generation);
-	bool GetNativeA8InstancingShaderResources(UInt32 generation,
-		NativeA8InstancingShaderResources& resources);
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation);
 	void BeginNativeA8SortedShaderBatch();
 	void EndNativeA8SortedShaderBatch();
@@ -1237,7 +1105,6 @@ namespace fonthook::vectorfont
 	void EndNativeA8FrameCommandBuffer();
 	void InvalidateNativeA8CommandExecutionSegment(
 		NativeA8CommandFallback reason = NativeA8CommandFallback::State);
-	bool PreserveNativeA8CommandExecutionSegmentAfterInstancing();
 	void NotifyNativeA8CommandExternalMutation(
 		NativeA8CommandFallback reason);
 	void InvalidateNativeA8CommandGeometry(NiTriShape* geometry);
@@ -1282,30 +1149,6 @@ namespace fonthook::vectorfont
 	bool GuardNativeA8DirectFacadeSinglePacketCommand(UInt32 commandIndex,
 		NiTriShape* geometry, NiRenderer* renderer);
 	void RecordNativeA8CommandFallback(NativeA8CommandFallback reason);
-
-	void BeginNativeA8CrossTextBatchFrame(
-		size_t sequenceCapacity, UInt64 validationToken);
-	UInt32 AddNativeA8CrossTextBatchSequenceItem(
-		NativeA8CrossTextCommandKind kind, NiTriShape* geometry,
-		const A8ShapeMetadata* metadata, NativeA8ShapePayload* payload,
-		UInt32 commandIndex, float accumulatorDepth);
-	void MarkNativeA8CrossTextBatchSequenceBarrier(UInt32 sequenceIndex);
-	void PrepareNativeA8CrossTextBatches();
-	bool ShouldConsumeNativeA8CrossTextBatchFollower(
-		UInt32 sequenceIndex, NiTriShape* geometry);
-	bool BeginNativeA8CrossTextBatchExecution(UInt32 sequenceIndex,
-		NiTriShape* leaderGeometry,
-		BSShaderProperty::RenderPass* renderPass, UInt32 currentPass,
-		bool testAlpha, bool blendAlpha, bool setupDrawmode,
-		NativeA8CrossTextBatchExecutionView& view);
-	void EndNativeA8CrossTextBatchExecution(
-		NativeA8CrossTextBatchExecutionView& view, bool success);
-	bool ExecuteNativeA8CrossTextInstancedDraw(
-		const NativeA8CrossTextBatchExecutionView& view,
-		NiDX9Renderer* renderer, NiD3DRenderState* renderState,
-		const char*& operation, HRESULT& result);
-	void EndNativeA8CrossTextBatchFrame();
-	void ReleaseNativeA8CrossTextInstancingResources();
 
 	bool HookNativeA8Accumulator();
 	bool IsNativeA8AccumulatorHookCurrent();

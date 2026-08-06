@@ -293,8 +293,6 @@ namespace fonthook::vectorfont
 				compatibleStockLayoutD3DDeclarations;
 			NiD3DVertexShaderPtr stockLayoutVertexShader;
 			bool stockLayoutReady = false;
-			NiD3DVertexShaderPtr instancedVertexShader;
-			IDirect3DVertexDeclaration9* instancedD3DDeclaration = nullptr;
 			NiD3DPixelShaderPtr coverageShader;
 			NiD3DPixelShaderPtr argbShader;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
@@ -319,9 +317,6 @@ namespace fonthook::vectorfont
 			CreatePixelShaderFn createPixelShader = nullptr;
 			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
 			bool supportsSeparateAlpha = false;
-			bool instancingReady = false;
-			const char* instancingStatus = "disabled-by-config";
-			HRESULT instancingResult = D3D_OK;
 			std::atomic<bool> runtimeFault = false;
 			std::atomic<bool> runtimeFaultLogged = false;
 
@@ -1596,75 +1591,6 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool CreateNativeInstancingDeclaration(
-			NativeShaderGeneration& generation,
-			const char*& status, HRESULT& result)
-		{
-			const D3DCAPS9& caps = generation.renderer->m_kD3DCaps9;
-			result = D3D_OK;
-			if (D3DSHADER_VERSION_MAJOR(caps.VertexShaderVersion) < 3)
-			{
-				status = "vs-version";
-				return false;
-			}
-			if (caps.MaxStreams < 2)
-			{
-				status = "max-streams";
-				return false;
-			}
-			if (caps.MaxStreamStride < kNativeA8GlyphInstanceBytes)
-			{
-				status = "max-stream-stride";
-				return false;
-			}
-			if ((caps.DevCaps2 & D3DDEVCAPS2_STREAMOFFSET) == 0)
-			{
-				status = "stream-offset";
-				return false;
-			}
-
-			const D3DVERTEXELEMENT9 elements[] = {
-				{ 0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_POSITION, 0 },
-				{ 1, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_TEXCOORD, 4 },
-				{ 1, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_TEXCOORD, 5 },
-				{ 1, 32, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_COLOR, 0 },
-				{ 1, 36, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_TEXCOORD, 6 },
-				{ 1, 52, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_TEXCOORD, 7 },
-				{ 1, 68, D3DDECLTYPE_FLOAT1, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_POSITION, 1 },
-				{ 1, 72, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_TEXCOORD, 0 },
-				{ 1, 88, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_TEXCOORD, 1 },
-				{ 1, 104, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_TEXCOORD, 2 },
-				{ 1, 120, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_TEXCOORD, 3 },
-				{ 1, 136, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
-					D3DDECLUSAGE_COLOR, 1 },
-				D3DDECL_END()
-			};
-			IDirect3DVertexDeclaration9* declaration = nullptr;
-			result = generation.device->CreateVertexDeclaration(
-				elements, &declaration);
-			if (FAILED(result) || !declaration)
-			{
-				status = "declaration-create";
-				if (declaration)
-					declaration->Release();
-				return false;
-			}
-			generation.instancedD3DDeclaration = declaration;
-			status = "ready";
-			return true;
-		}
-
 		NativeShaderGeneration* BuildGeneration(CreateVertexShaderFn createVS,
 			CreatePixelShaderFn createPS, NiDX9Renderer* renderer,
 			IDirect3DDevice9* device, const char*& failure)
@@ -1696,11 +1622,6 @@ namespace fonthook::vectorfont
 			{
 				generation->stockLayoutVertexShader = createVS(
 					"tnvse_freetype_native_stock_layout_vs.vso");
-			}
-			if (g_bEnableFreeTypeFontCrossTextBatch)
-			{
-				generation->instancedVertexShader = createVS(
-					"tnvse_freetype_native_instanced_vs.vso");
 			}
 			if (g_bEnableFreeTypeFontAggressivePerformanceMode)
 			{
@@ -1855,26 +1776,6 @@ namespace fonthook::vectorfont
 				static_cast<UInt32>(
 					generation->compatibleStockLayoutD3DDeclarations.size()),
 				generation->deviceEpoch);
-			if (!g_bEnableFreeTypeFontCrossTextBatch)
-			{
-				generation->instancingStatus = "disabled-by-config";
-			}
-			else if (!HasShaderHandle(generation->instancedVertexShader))
-			{
-				generation->instancingStatus = "shader-load";
-			}
-			else
-			{
-				generation->instancingReady =
-					CreateNativeInstancingDeclaration(*generation,
-						generation->instancingStatus,
-						generation->instancingResult);
-			}
-			if (generation->instancingReady)
-			{
-				generation->instancedVertexShader->m_hDecl =
-					generation->instancedD3DDeclaration;
-			}
 			return generation.release();
 		}
 
@@ -2039,7 +1940,7 @@ namespace fonthook::vectorfont
 					== DistanceFieldMethod::Mtsdf
 				? "lazy-36" : "disabled";
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s constantAbi=stock-ps-c0-vs-c0-c4-private-ps-c176-c183-vs-c208 privateUpload=prefix-2-4-8 stockC0=map-owned stockTileCarry=verified-low-map vertexAa=analytic-c208-stock-map-intact vertexFormat=float4 vertexStride=%u declTypes=0x%08X maxVertexConstants=%u glyphInstancing=%s instancingStatus=%s instancingHr=0x%08X maxStreams=%u maxStreamStride=%u streamOffset=%u",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s constantAbi=stock-ps-c0-vs-c0-c4-private-ps-c176-c183-vs-c208 privateUpload=prefix-2-4-8 stockC0=map-owned stockTileCarry=verified-low-map vertexAa=analytic-c208-stock-map-intact vertexFormat=float4 vertexStride=%u declTypes=0x%08X maxVertexConstants=%u",
 			candidate->id, candidate->device,
 			g_bEnableFreeTypeFontAggressivePerformanceMode
 				? "argb-composite" : "distance-field",
@@ -2048,14 +1949,7 @@ namespace fonthook::vectorfont
 			compositeProfileMode,
 			static_cast<UInt32>(sizeof(NativeA8GpuVertex)),
 			candidate->renderer->m_kD3DCaps9.DeclTypes,
-			candidate->renderer->m_kD3DCaps9.MaxVertexShaderConst,
-			candidate->instancingReady ? "ready" : "unavailable",
-			candidate->instancingStatus,
-			static_cast<UInt32>(candidate->instancingResult),
-			candidate->renderer->m_kD3DCaps9.MaxStreams,
-			candidate->renderer->m_kD3DCaps9.MaxStreamStride,
-			(candidate->renderer->m_kD3DCaps9.DevCaps2
-				& D3DDEVCAPS2_STREAMOFFSET) ? 1u : 0u);
+			candidate->renderer->m_kD3DCaps9.MaxVertexShaderConst);
 		return true;
 	}
 
@@ -2144,30 +2038,6 @@ namespace fonthook::vectorfont
 		return current && current->id == generation
 			&& GenerationMatchesCurrentDevice(current)
 			? current->d3dDeclaration : nullptr;
-	}
-
-	bool GetNativeA8InstancingShaderResources(UInt32 generation,
-		NativeA8InstancingShaderResources& resources)
-	{
-		resources = {};
-		NativeShaderGeneration* current = s_publishedGeneration.load(
-			std::memory_order_acquire);
-		if (!current || current->id != generation
-			|| !GenerationMatchesCurrentDevice(current)
-			|| !current->instancingReady
-			|| !HasShaderHandle(current->instancedVertexShader)
-			|| !current->instancedD3DDeclaration)
-		{
-			return false;
-		}
-		resources.device = current->device;
-		resources.vertexShader =
-			current->instancedVertexShader->GetShaderHandle();
-		resources.declaration = current->instancedD3DDeclaration;
-		resources.generation = current->id;
-		resources.ready = resources.device && resources.vertexShader
-			&& resources.declaration;
-		return resources.ready;
 	}
 
 	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation)

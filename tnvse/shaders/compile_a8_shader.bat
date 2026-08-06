@@ -20,8 +20,6 @@ for %%F in ("%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_fre
 )
 "%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_vs.vso" "%~dp0freetype_native_vs.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_instanced_vs.vso" "%~dp0freetype_native_instanced_vs.hlsl"
-if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_stock_layout_vs.vso" "%~dp0freetype_native_stock_layout_vs.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_coverage.pso" "%~dp0freetype_native_coverage.hlsl"
@@ -77,8 +75,8 @@ if errorlevel 1 exit /b %errorlevel%
 call :compile_stock_layout_profiles 2 high
 if errorlevel 1 exit /b %errorlevel%
 for /f %%C in ('dir /b /a-d "%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_freetype_native_*.vso" 2^>nul ^| find /c /v ""') do set "OUTPUT_COUNT=%%C"
-if not "%OUTPUT_COUNT%"=="95" (
-	echo Expected 95 native shader outputs, found %OUTPUT_COUNT%.
+if not "%OUTPUT_COUNT%"=="94" (
+	echo Expected 94 native shader outputs, found %OUTPUT_COUNT%.
 	exit /b 1
 )
 for %%F in ("%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_freetype_native_*.vso") do (

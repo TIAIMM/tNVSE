@@ -82,9 +82,6 @@ namespace fonthook::vectorfont
 			UInt32 commandSpanIndex = kInvalidNativeA8CommandIndex;
 			UInt32 singlePacketCommandIndex =
 				kInvalidNativeA8CommandIndex;
-			UInt32 crossTextSequenceIndex =
-				kInvalidNativeA8CommandIndex;
-			UInt32 crossTextOccurrences = 0;
 			bool uniqueOccurrence = false;
 		};
 
@@ -415,8 +412,6 @@ namespace fonthook::vectorfont
 		void ClearSortedFrame(SortedPayloadScratch& scratch)
 		{
 			FlushThinRegistrationDiagnostics();
-			if (g_bEnableFreeTypeFontCrossTextBatch)
-				EndNativeA8CrossTextBatchFrame();
 			EndNativeA8FrameCommandBuffer();
 			scratch.active = false;
 			scratch.activeValidationToken = 0;
@@ -1441,8 +1436,7 @@ namespace fonthook::vectorfont
 					// The predecessor Sort contains no captured native facade.  This is
 					// either an entirely stock traversal or a fail-open topology scan;
 					// in both cases the ordinary dispatch path remains authoritative.
-					// Do not build a readiness stamp, command frame, or empty cross-text
-					// sequence.
+					// Do not build a readiness stamp or command frame.
 					const SInt64 framePrepTicks = EndFreeTypePerfSample(
 						FreeTypePerfPhase::FrameRoutePrep, framePrepStart);
 					prepTailSample.totalTicks = framePrepTicks;
@@ -1854,115 +1848,6 @@ namespace fonthook::vectorfont
 						FreeTypePerfScope commandBuildFinalize(
 							FreeTypePerfPhase::CommandBuildFinalize);
 						ActivateNativeA8FrameCommandBuffer();
-						if (g_bEnableFreeTypeFontCrossTextBatch)
-						{
-							BeginNativeA8CrossTextBatchFrame(
-								static_cast<size_t>(accumulator->m_iNumItems),
-								frameValidationToken);
-						}
-						if (g_bEnableFreeTypeFontCrossTextBatch
-							&& accumulator->m_ppkItems
-							&& accumulator->m_pfDepths)
-						{
-							auto appendSequenceItem = [&](NiTriShape* geometry,
-								float accumulatorDepth)
-							{
-								NativeA8CrossTextCommandKind kind =
-									NativeA8CrossTextCommandKind::Barrier;
-								const A8ShapeMetadata* metadata = nullptr;
-								NativeA8ShapePayload* payload = nullptr;
-								UInt32 commandIndex =
-									kInvalidNativeA8CommandIndex;
-								SortedFrameEntry* entry = nullptr;
-								if (geometry)
-								{
-									const size_t entryIndex =
-										LookupSortedFacade(scratch, geometry);
-									if (entryIndex !=
-											std::numeric_limits<size_t>::max()
-										&& entryIndex < scratch.frameEntries.size())
-									{
-										entry = &scratch.frameEntries[entryIndex];
-										metadata = entry->metadata;
-										payload = entry->payload;
-									}
-								}
-								if (entry && ++entry->crossTextOccurrences == 1
-									&& entry->preflightResult
-										== NativeA8FallbackReason::None
-									&& entry->visibilityCull
-										== NativeA8VisibilityCull::None
-									&& metadata && payload)
-								{
-									if (metadata->backend
-										== FreeTypeShapeBackend::
-											SingletonFacade)
-									{
-										SingletonFacadeState* singleton =
-											GetSingletonFacadeState(*metadata);
-										if (singleton
-											&& singleton->frameMode.load(
-												std::memory_order_acquire)
-												== SingletonFacadeFrameMode::Direct
-											&& singleton->commandValidationToken.load(
-												std::memory_order_acquire)
-												== frameValidationToken)
-										{
-											commandIndex = singleton->
-												commandDirectFacadeSinglePacketIndex.load(
-													std::memory_order_acquire);
-											if (commandIndex
-												!= kInvalidNativeA8CommandIndex)
-											{
-												kind = NativeA8CrossTextCommandKind::
-													DirectFacadeSinglePacket;
-											}
-										}
-									}
-									else if (entry->singlePacketCommandIndex
-											!= kInvalidNativeA8CommandIndex)
-									{
-										kind = NativeA8CrossTextCommandKind::
-											SinglePacket;
-										commandIndex = entry->singlePacketCommandIndex;
-									}
-								}
-								else if (entry && entry->crossTextOccurrences > 1)
-								{
-									MarkNativeA8CrossTextBatchSequenceBarrier(
-										entry->crossTextSequenceIndex);
-									entry->crossTextSequenceIndex =
-										kInvalidNativeA8CommandIndex;
-								}
-
-								const UInt32 sequenceIndex =
-									AddNativeA8CrossTextBatchSequenceItem(
-										kind, geometry, metadata, payload,
-										commandIndex, accumulatorDepth);
-								if (entry && entry->crossTextOccurrences == 1
-									&& kind != NativeA8CrossTextCommandKind::Barrier)
-								{
-									entry->crossTextSequenceIndex = sequenceIndex;
-								}
-							};
-
-							// Consume the predecessor Sort result directly in the same
-							// high-to-low order as retail RenderAlphaGeometry, without a
-							// second per-item staging vector and its write/read round trip.
-							for (SInt32 itemIndex = accumulator->m_iNumItems - 1;
-								itemIndex >= 0; --itemIndex)
-							{
-								NiTriShape* geometry = IsFreeTypeFacade(
-									accumulator->m_ppkItems[itemIndex])
-									? static_cast<NiTriShape*>(
-										accumulator->m_ppkItems[itemIndex])
-									: nullptr;
-								appendSequenceItem(geometry,
-									accumulator->m_pfDepths[itemIndex]);
-							}
-						}
-						if (g_bEnableFreeTypeFontCrossTextBatch)
-							PrepareNativeA8CrossTextBatches();
 					}
 				}
 				else
@@ -2005,9 +1890,6 @@ namespace fonthook::vectorfont
 					EndA8SortedTileConstantOwnership();
 					EndNativeA8SortedShaderBatch();
 				}
-				if (commandFrameActive
-					&& g_bEnableFreeTypeFontCrossTextBatch)
-					EndNativeA8CrossTextBatchFrame();
 				EndNativeA8FrameCommandBuffer();
 				EndNativeA8SortedRingFrame();
 				ClearSortedFrame(scratch);
@@ -2164,7 +2046,6 @@ namespace fonthook::vectorfont
 		view.commandSpanIndex = entry.commandSpanIndex;
 		view.singlePacketCommandIndex =
 			entry.singlePacketCommandIndex;
-		view.crossTextSequenceIndex = entry.crossTextSequenceIndex;
 		RecordFreeTypePerf(FreeTypePerfCounter::SortedFrameLookupHit);
 		return true;
 	}

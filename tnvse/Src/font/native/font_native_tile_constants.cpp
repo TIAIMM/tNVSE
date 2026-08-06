@@ -2,7 +2,6 @@
 
 #include "BSShaderProperty.hpp"
 #include "NiDX9Renderer.hpp"
-#include "NiMaterialProperty.hpp"
 #include "NiPropertyState.hpp"
 #include "NiStencilProperty.hpp"
 #include "NiTriShape.hpp"
@@ -92,23 +91,6 @@ namespace fonthook::vectorfont
 				&& *reinterpret_cast<const UInt8*>(kScaledScissorActive);
 		}
 
-		void PopulateNativeTileInstancingTransientSnapshot(
-			const TileConstantsTransientState& state,
-			NativeTileInstancingTransientState& transient)
-		{
-			transient.scissorEnabled = state.tile->useScissorTest;
-			transient.scissorRect = state.tile->scissorRect;
-			transient.stencilPresent = state.stencil != nullptr;
-			transient.stencilEnabled = state.stencilEnabled;
-			transient.cleanupRequired = state.cleanupRequired;
-			if (state.stencil)
-			{
-				transient.stencilFlags = state.stencil->m_usFlags.Get();
-				transient.stencilRef = state.stencil->m_uiRef;
-				transient.stencilMask = state.stencil->m_uiMask;
-			}
-		}
-
 		void ApplyTileConstantsTransientState(
 			const TileConstantsTransientState& state)
 		{
@@ -196,26 +178,6 @@ namespace fonthook::vectorfont
 			return IsFiniteMatrix(world);
 		}
 
-		bool BuildRetailWorldViewProjection(const NiTransform& transform,
-			const NiDX9Renderer& renderer, D3DXMATRIX& world,
-			D3DXMATRIX& worldViewProjectionTranspose)
-		{
-			if (!BuildRetailWorldMatrix(transform, world)
-				|| !IsFiniteMatrix(renderer.m_kD3DView)
-				|| !IsFiniteMatrix(renderer.m_kD3DProj))
-			{
-				return false;
-			}
-			D3DXMATRIX worldView = {};
-			D3DXMATRIX worldViewProjection = {};
-			D3DXMatrixMultiply(
-				&worldView, &world, &renderer.m_kD3DView);
-			D3DXMatrixMultiply(&worldViewProjection,
-				&worldView, &renderer.m_kD3DProj);
-			D3DXMatrixTranspose(&worldViewProjectionTranspose,
-				&worldViewProjection);
-			return IsFiniteMatrix(worldViewProjectionTranspose);
-		}
 	}
 
 	void ApplyNativeA8GeometryOrigin(NiTransform& destination,
@@ -224,100 +186,6 @@ namespace fonthook::vectorfont
 		destination = source;
 		if (origin.x != 0.0f || origin.y != 0.0f || origin.z != 0.0f)
 			destination.m_Translate = source * origin;
-	}
-
-	NativeTileInstancingSnapshotResult
-		BuildNativeTileInstancingSnapshotForWorld(
-		const NiTriShape* geometry, const NiPropertyState* properties,
-		const NiDX9Renderer* renderer, const NiTransform& effectiveWorld,
-		NativeTileInstancingSnapshot& snapshot)
-	{
-		snapshot = {};
-		TileConstantsTransientState transientState;
-		if (!renderer
-			|| !ResolveTileConstantsTransientState(
-				geometry, properties, transientState))
-		{
-			return NativeTileInstancingSnapshotResult::NotApplicable;
-		}
-		if (UsesScaledScissor(transientState))
-			return NativeTileInstancingSnapshotResult::ScaledScissor;
-		if (!BuildRetailWorldViewProjection(effectiveWorld,
-				*renderer, snapshot.retailWorld, snapshot.wvpColumns))
-		{
-			return NativeTileInstancingSnapshotResult::NonFinite;
-		}
-
-		const NiMaterialProperty* material =
-			properties->m_spMaterialProperty.m_pObject;
-		const float materialAlpha = material ? material->m_fAlpha : 1.0f;
-		snapshot.tileColor = {
-			transientState.tile->overlayColor.r,
-			transientState.tile->overlayColor.g,
-			transientState.tile->overlayColor.b,
-			transientState.tile->tileAlpha * materialAlpha
-		};
-		for (float value : snapshot.tileColor)
-		{
-			if (!std::isfinite(value))
-				return NativeTileInstancingSnapshotResult::NonFinite;
-		}
-		PopulateNativeTileInstancingTransientSnapshot(
-			transientState, snapshot.transient);
-		return NativeTileInstancingSnapshotResult::Ready;
-	}
-
-	NativeTileInstancingSnapshotResult
-		BuildNativeTileInstancingTransientState(
-		const NiTriShape* geometry, const NiPropertyState* properties,
-		NativeTileInstancingTransientState& transient)
-	{
-		transient = {};
-		TileConstantsTransientState transientState;
-		if (!ResolveTileConstantsTransientState(
-				geometry, properties, transientState))
-		{
-			return NativeTileInstancingSnapshotResult::NotApplicable;
-		}
-		if (UsesScaledScissor(transientState))
-			return NativeTileInstancingSnapshotResult::ScaledScissor;
-		PopulateNativeTileInstancingTransientSnapshot(
-			transientState, transient);
-		return NativeTileInstancingSnapshotResult::Ready;
-	}
-
-	NativeTileInstancingSnapshotResult BuildNativeTileInstancingSnapshot(
-		const NiTriShape* geometry, const NiPropertyState* properties,
-		const NiDX9Renderer* renderer,
-		NativeTileInstancingSnapshot& snapshot)
-	{
-		if (!geometry)
-		{
-			snapshot = {};
-			return NativeTileInstancingSnapshotResult::NotApplicable;
-		}
-		return BuildNativeTileInstancingSnapshotForWorld(
-			geometry, properties, renderer, geometry->m_kWorld, snapshot);
-	}
-
-	bool SameNativeTileInstancingTransientState(
-		const NativeTileInstancingTransientState& left,
-		const NativeTileInstancingTransientState& right)
-	{
-		return left.scissorEnabled == right.scissorEnabled
-			&& left.stencilPresent == right.stencilPresent
-			&& left.stencilEnabled == right.stencilEnabled
-			&& left.cleanupRequired == right.cleanupRequired
-			&& (!left.scissorEnabled
-				|| std::memcmp(&left.scissorRect, &right.scissorRect,
-					sizeof(left.scissorRect)) == 0)
-			// Slot 34 consumes drawmode even while stencil testing is disabled.
-			// Preserve the complete property identity rather than comparing only
-			// the slot-31 transient suffix.
-			&& (!left.stencilPresent
-				|| (left.stencilFlags == right.stencilFlags
-					&& left.stencilRef == right.stencilRef
-					&& left.stencilMask == right.stencilMask));
 	}
 
 	NativeTileConstantsLiteResult ApplyNativeTileConstantsLite(

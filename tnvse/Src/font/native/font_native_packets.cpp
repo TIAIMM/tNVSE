@@ -41,12 +41,7 @@ namespace fonthook::vectorfont
 			return property && property->m_eShaderType == NiShadeProperty::PROP_Tile;
 		}
 
-		bool SameFloatBits(float left, float right)
-		{
-			return std::memcmp(&left, &right, sizeof(left)) == 0;
-		}
-
-		bool HasFiniteInstanceVertex(const NativeA8GpuVertex& vertex)
+		bool HasFiniteNativeVertex(const NativeA8GpuVertex& vertex)
 		{
 			return std::isfinite(vertex.x)
 				&& std::isfinite(vertex.y)
@@ -73,7 +68,7 @@ namespace fonthook::vectorfont
 
 		bool HasValidRegistrationVertex(const NativeA8GpuVertex& vertex)
 		{
-			return HasFiniteInstanceVertex(vertex)
+			return HasFiniteNativeVertex(vertex)
 				&& vertex.sdfSpread >= 0.0f
 				&& vertex.distanceParameterScale >= 1.0f
 				&& vertex.layerMask >= 1.0f
@@ -158,115 +153,6 @@ namespace fonthook::vectorfont
 				UsesOnlyStockLikeBitmapPackets(payload.packets);
 			payload.validationSeal = seal;
 			return true;
-		}
-
-		bool SameInstanceSharedFields(const NativeA8GpuVertex& left,
-			const NativeA8GpuVertex& right)
-		{
-			return left.color == right.color
-				&& SameFloatBits(left.y, right.y)
-				&& SameFloatBits(left.sdfSpread, right.sdfSpread)
-				&& SameFloatBits(left.distanceParameterScale,
-					right.distanceParameterScale)
-				&& SameFloatBits(left.layerMask, right.layerMask)
-				&& SameFloatBits(left.glyphU0, right.glyphU0)
-				&& SameFloatBits(left.glyphV0, right.glyphV0)
-				&& SameFloatBits(left.glyphU1, right.glyphU1)
-				&& SameFloatBits(left.glyphV1, right.glyphV1);
-		}
-
-		bool AppendPacketInstanceSidecars(NativeA8PayloadTemplate& payload,
-			NativeA8PacketTemplate& packet)
-		{
-			packet.instanceSidecarFirst = 0;
-			packet.instanceSidecarCount = 0;
-			packet.instanceTopologyValid = false;
-			if (!packet.vertexCount || (packet.firstVertex & 3u)
-				|| (packet.vertexCount & 3u)
-				|| static_cast<UInt64>(packet.firstVertex)
-					+ packet.vertexCount > payload.gpuVertices.size()
-				|| payload.glyphInstanceSidecars.size()
-					> std::numeric_limits<UInt32>::max())
-			{
-				return false;
-			}
-
-			const size_t rollback = payload.glyphInstanceSidecars.size();
-			const UInt32 quadCount = packet.vertexCount / 4u;
-			payload.glyphInstanceSidecars.reserve(rollback + quadCount);
-			for (UInt32 quad = 0; quad < quadCount; ++quad)
-			{
-				const NativeA8GpuVertex* vertices =
-					payload.gpuVertices.data() + packet.firstVertex
-					+ static_cast<size_t>(quad) * 4u;
-				const NativeA8GpuVertex& tl = vertices[0];
-				const NativeA8GpuVertex& tr = vertices[1];
-				const NativeA8GpuVertex& br = vertices[2];
-				const NativeA8GpuVertex& bl = vertices[3];
-				if (!HasFiniteInstanceVertex(tl)
-					|| !HasFiniteInstanceVertex(tr)
-					|| !HasFiniteInstanceVertex(br)
-					|| !HasFiniteInstanceVertex(bl)
-					|| !SameInstanceSharedFields(tl, tr)
-					|| !SameInstanceSharedFields(tl, br)
-					|| !SameInstanceSharedFields(tl, bl)
-					|| !SameFloatBits(tl.x, bl.x)
-					|| !SameFloatBits(tr.x, br.x)
-					|| !SameFloatBits(tl.z, tr.z)
-					|| !SameFloatBits(br.z, bl.z)
-					|| !SameFloatBits(tl.u, bl.u)
-					|| !SameFloatBits(tr.u, br.u)
-					|| !SameFloatBits(tl.v, tr.v)
-					|| !SameFloatBits(br.v, bl.v))
-				{
-					payload.glyphInstanceSidecars.resize(rollback);
-					return false;
-				}
-
-				NativeA8GlyphInstanceSidecar sidecar;
-				sidecar.localX0 = tl.x;
-				sidecar.localZ0 = tl.z;
-				sidecar.localX1 = tr.x;
-				sidecar.localZ1 = br.z;
-				sidecar.u0 = tl.u;
-				sidecar.v0 = tl.v;
-				sidecar.u1 = tr.u;
-				sidecar.v1 = br.v;
-				sidecar.color = tl.color;
-				sidecar.sdfSpread = tl.sdfSpread;
-				sidecar.distanceScale = tl.distanceParameterScale;
-				sidecar.layerMask = tl.layerMask;
-				// The normal pixel programs select live Tile RGB from the packet
-				// contract: coverage carries the selector in glyphParams.z while
-				// distance-field programs carry it in AtlasPass.z.  Instancing
-				// replaces PS c0 with identity, so bake Tile RGB into COLOR0 only
-				// for the same live-RGB packets.  Treating every distance-field
-				// packet as live incorrectly recolors fixed shadow/glow/outline
-				// layers.
-				sidecar.tileRgbBakeSelector =
-					packet.usesLiveTileRgb ? 1.0f : 0.0f;
-				sidecar.glyphU0 = tl.glyphU0;
-				sidecar.glyphV0 = tl.glyphV0;
-				sidecar.glyphU1 = tl.glyphU1;
-				sidecar.glyphV1 = tl.glyphV1;
-				sidecar.localDepth = tl.y;
-				payload.glyphInstanceSidecars.push_back(sidecar);
-			}
-
-			packet.instanceSidecarFirst = static_cast<UInt32>(rollback);
-			packet.instanceSidecarCount = quadCount;
-			packet.instanceTopologyValid = true;
-			return true;
-		}
-
-		void BuildPayloadInstanceSidecars(NativeA8PayloadTemplate& payload)
-		{
-			if (!g_bEnableFreeTypeFontCrossTextBatch)
-				return;
-			for (NativeA8PacketTemplate& packet : payload.packets)
-				AppendPacketInstanceSidecars(payload, packet);
-			for (NativeA8PacketTemplate& packet : payload.compositePackets)
-				AppendPacketInstanceSidecars(payload, packet);
 		}
 
 		bool ResolveNativeShaderClass(A8CompiledShaderClass source,
@@ -723,7 +609,6 @@ namespace fonthook::vectorfont
 						staticLayerMask, uniformSdfSpread));
 			}
 		}
-		BuildPayloadInstanceSidecars(*payload);
 		if (!SealNativeA8PayloadValidation(*payload))
 			return {};
 		payload->cpuMemory.Reset(CpuMemoryCategory::TextArtifact,
@@ -830,16 +715,12 @@ namespace fonthook::vectorfont
 			+ payloadTemplate.packets.capacity() * sizeof(NativeA8PacketTemplate)
 			+ payloadTemplate.compositePackets.capacity()
 				* sizeof(NativeA8PacketTemplate)
-			+ payloadTemplate.gpuVertices.capacity() * sizeof(NativeA8GpuVertex)
-			+ payloadTemplate.glyphInstanceSidecars.capacity()
-				* sizeof(NativeA8GlyphInstanceSidecar);
+			+ payloadTemplate.gpuVertices.capacity() * sizeof(NativeA8GpuVertex);
 		return bytes;
 	}
 
 	void InvalidateNativeA8RingResources(NativeA8FallbackReason reason)
 	{
-		if (g_bEnableFreeTypeFontCrossTextBatch)
-			ReleaseNativeA8CrossTextInstancingResources();
 		ReleaseNativeA8RingResources();
 		std::vector<A8ShapeMetadataPtr> metadataEntries;
 		{

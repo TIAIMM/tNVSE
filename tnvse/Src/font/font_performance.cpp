@@ -23,7 +23,6 @@ namespace fonthook::vectorfont
 		constexpr size_t kDurationSubBuckets = 4;
 		constexpr size_t kDurationBuckets =
 			kDurationExponentBuckets * kDurationSubBuckets;
-		constexpr size_t kInstancingSizeBuckets = 32;
 		struct AccumulatorPrepTailWorst
 		{
 			UInt64 nanoseconds = 0;
@@ -55,12 +54,6 @@ namespace fonthook::vectorfont
 				durationNanoseconds = {};
 			std::array<std::atomic<UInt64>, kPhaseCount>
 				durationMaximumNanoseconds = {};
-			std::array<std::atomic<UInt64>, kInstancingSizeBuckets>
-				instancingTextSizes = {};
-			std::array<std::atomic<UInt64>, kInstancingSizeBuckets>
-				instancingInstanceSizes = {};
-			std::atomic<UInt64> instancingTextMax = 0;
-			std::atomic<UInt64> instancingInstanceMax = 0;
 			std::array<std::atomic<UInt64>, 4> accumulatorPrepTailCounts = {};
 			std::mutex accumulatorPrepTailMutex;
 			AccumulatorPrepTailWorst accumulatorPrepTailWorst;
@@ -233,65 +226,6 @@ namespace fonthook::vectorfont
 			return result;
 		}
 
-		struct SizeSummary
-		{
-			UInt64 count = 0;
-			UInt64 median = 0;
-			UInt64 p95 = 0;
-			UInt64 maximum = 0;
-		};
-
-		size_t SizeBucket(UInt32 value)
-		{
-			size_t bucket = 0;
-			UInt64 upper = 1;
-			while (upper < value
-				&& bucket + 1 < kInstancingSizeBuckets)
-			{
-				upper <<= 1;
-				++bucket;
-			}
-			return bucket;
-		}
-
-		SizeSummary ConsumeSizeSummary(
-			std::array<std::atomic<UInt64>, kInstancingSizeBuckets>& source,
-			std::atomic<UInt64>& maximum)
-		{
-			std::array<UInt64, kInstancingSizeBuckets> values = {};
-			SizeSummary result;
-			result.maximum = maximum.exchange(0, std::memory_order_relaxed);
-			for (size_t bucket = 0; bucket < values.size(); ++bucket)
-			{
-				values[bucket] = source[bucket].exchange(
-					0, std::memory_order_relaxed);
-				result.count += values[bucket];
-			}
-			if (!result.count)
-				return result;
-			auto quantile = [&](UInt64 numerator)
-			{
-				const UInt64 target = std::max<UInt64>(1,
-					(result.count * numerator + 99u) / 100u);
-				UInt64 cumulative = 0;
-				for (size_t bucket = 0; bucket < values.size(); ++bucket)
-				{
-					cumulative += values[bucket];
-					if (cumulative >= target)
-						return UInt64{ 1 } << bucket;
-				}
-				return UInt64{ 1 }
-					<< (kInstancingSizeBuckets - 1u);
-			};
-			result.median = quantile(50);
-			result.p95 = quantile(95);
-			// The histogram stores power-of-two upper bounds while maximum is
-			// exact. Clamp the displayed quantiles so a six-text sample cannot be
-			// reported as median=8/max=6.
-			result.median = std::min(result.median, result.maximum);
-			result.p95 = std::min(result.p95, result.maximum);
-			return result;
-		}
 	}
 
 	FreeTypePerfScope::FreeTypePerfScope(
@@ -410,33 +344,6 @@ namespace fonthook::vectorfont
 		};
 	}
 
-	void RecordFreeTypeGlyphInstancingBatchSize(
-		UInt32 textCount, UInt32 instanceCount)
-	{
-		if (!g_bEnableFreeTypeFontRenderingLog
-			|| !textCount || !instanceCount)
-		{
-			return;
-		}
-		PerformanceState& state = GetPerformanceState();
-		state.instancingTextSizes[SizeBucket(textCount)].fetch_add(
-			1, std::memory_order_relaxed);
-		state.instancingInstanceSizes[SizeBucket(instanceCount)].fetch_add(
-			1, std::memory_order_relaxed);
-		auto updateMaximum = [](std::atomic<UInt64>& target, UInt64 value)
-		{
-			UInt64 current = target.load(std::memory_order_relaxed);
-			while (current < value
-				&& !target.compare_exchange_weak(current, value,
-					std::memory_order_relaxed,
-					std::memory_order_relaxed))
-			{
-			}
-		};
-		updateMaximum(state.instancingTextMax, textCount);
-		updateMaximum(state.instancingInstanceMax, instanceCount);
-	}
-
 	void ReportFreeTypePerf(bool force)
 	{
 		if (!g_bEnableFreeTypeFontRenderingLog)
@@ -460,10 +367,6 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::PreparedSidecarCaptureFallback),
 			counterValue(
 				FreeTypePerfCounter::PreparedSidecarRejectedFallback));
-		const SizeSummary instancingTextSizes = ConsumeSizeSummary(
-			state.instancingTextSizes, state.instancingTextMax);
-		const SizeSummary instancingInstanceSizes = ConsumeSizeSummary(
-			state.instancingInstanceSizes, state.instancingInstanceMax);
 		const UInt64 stockConstantUpdates =
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StockConstantUpdate)];
@@ -671,7 +574,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::ThinRegistrationFacadeFallback),
 			counterValue(FreeTypePerfCounter::ThinRegistrationOccurrenceFallback));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_structural_fastpaths: readiness_raw_hit=%llu full_audit=%llu hook_mismatch=%llu renderer_mismatch=%llu virtualquery_avoided=%llu tile_callback_mismatch=%llu render_alpha_mismatch=%llu immediate_mismatch=%llu atlas_mismatch=%llu singleton_inline=%llu singleton_heap=%llu child_allocations_avoided=%llu metadata_reserve=%llu metadata_rehash=%llu prefix_shrinks=%llu prefix_texts=%llu prefix_replayed=%llu texture_alias=%llu",
+			"tnvse_freetype_structural_fastpaths: readiness_raw_hit=%llu full_audit=%llu hook_mismatch=%llu renderer_mismatch=%llu virtualquery_avoided=%llu tile_callback_mismatch=%llu render_alpha_mismatch=%llu immediate_mismatch=%llu atlas_mismatch=%llu singleton_inline=%llu singleton_heap=%llu child_allocations_avoided=%llu metadata_reserve=%llu metadata_rehash=%llu",
 			counterValue(FreeTypePerfCounter::StructuralReadinessRawHit),
 			counterValue(FreeTypePerfCounter::StructuralReadinessFullAudit),
 			counterValue(FreeTypePerfCounter::StructuralReadinessHookMismatch),
@@ -689,11 +592,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::SingletonFacadeHeapPayload),
 			counterValue(FreeTypePerfCounter::SingletonFacadeChildAllocationAvoided),
 			counterValue(FreeTypePerfCounter::MetadataMapReserve),
-			counterValue(FreeTypePerfCounter::MetadataMapRehash),
-			counterValue(FreeTypePerfCounter::GlyphInstancingPrefixShrink),
-			counterValue(FreeTypePerfCounter::GlyphInstancingPrefixRetainedText),
-			counterValue(FreeTypePerfCounter::GlyphInstancingPrefixReplayedText),
-			counterValue(FreeTypePerfCounter::GlyphInstancingSourceTextureAlias));
+			counterValue(FreeTypePerfCounter::MetadataMapRehash));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu vertex_aa_stock_preserved=%llu command_program_setups=%llu binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu registers_uploaded=%llu full_tail_elided=%llu",
 			static_cast<UInt64>(0),
@@ -860,7 +759,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				StockLayoutSdfPriorGenerationDeclarationReady));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu direct_single_replays=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu instancing_bridges=%llu bridge_rejected=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
+			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu direct_single_replays=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRecorded)],
 			values[static_cast<size_t>(
@@ -908,10 +807,6 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::CommandSegmentValidationReuse)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandSegmentInvalidation)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::CommandSegmentInstancingBridge)],
-			values[static_cast<size_t>(
-				FreeTypePerfCounter::CommandSegmentBridgeRejected)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRetainedProgramHit)],
 			values[static_cast<size_t>(
@@ -1037,114 +932,11 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				NativeDirectDrawLiteDrawDeviceFailure)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_glyph_instancing: candidates=%llu accepted_batches=%llu texts=%llu instances=%llu compat_precomputed=%llu compat_live_suffix=%llu compat_immutable_words_avoided=%llu draws=%llu draws_saved=%llu upload_bytes=%llu buffer_growth=%llu discards=%llu fallback_depth=%llu state=%llu scissor=%llu topology=%llu budget=%llu frequency_sets=%llu frequency_resets=%llu binding_failures=%llu constant_failures=%llu draw_failures=%llu device_failures=%llu followers_consumed=%llu state_proofs=%llu proof_failures=%llu restore_failures=%llu begin_fallbacks=%llu begin_contract=%llu begin_pass=%llu begin_callback=%llu begin_resource=%llu begin_immutable=%llu begin_transient=%llu begin_preflight=%llu begin_snapshot=%llu snapshot_avoided_texts=%llu begin_upload=%llu begin_follower=%llu arm_fallbacks=%llu validation_fallbacks=%llu direct_draw_fallbacks=%llu text_median=%llu text_p95=%llu text_max=%llu instance_median=%llu instance_p95=%llu instance_max=%llu",
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingCandidate)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingAcceptedBatch)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingAcceptedText)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingInstance)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingAcceptedBatch)],
-			values[static_cast<size_t>(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityLiveSuffixCheck)],
-			values[static_cast<size_t>(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityLiveSuffixCheck)]
-				* kGlyphInstancingImmutableCompatibilityWordCount,
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDraw)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDrawSaved)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingUploadByte)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBufferGrowth)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDiscard)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDepthFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingStateFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingScissorFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingTopologyFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBudgetFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingStreamFrequencySet)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingStreamFrequencyReset)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBindingFailure)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingConstantFailure)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDrawFailure)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDeviceFailure)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingFollowerConsumed)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingStateProof)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingStateProofFailure)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingRestoreFailure)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginContractFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginPassFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginCallbackFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginResourceFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginImmutableFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginTransientFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginPreflightFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginSnapshotFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingLiveSnapshotAvoidedText)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginUploadFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingBeginFollowerFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingArmFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingValidationFallback)],
-			values[static_cast<size_t>(FreeTypePerfCounter::GlyphInstancingDirectDrawFallback)],
-			instancingTextSizes.median,
-			instancingTextSizes.p95,
-			instancingTextSizes.maximum,
-			instancingInstanceSizes.median,
-			instancingInstanceSizes.p95,
-			instancingInstanceSizes.maximum);
-		FreeTypeFontDebugLog(
-			"tnvse_freetype_glyph_instancing_compat_mismatch: total=%llu admission=%llu live=%llu program=%llu declaration=%llu source_texture=%llu alpha_texture=%llu atlas_texture=%llu constants=%llu texture_transform=%llu clamp_mode=%llu shader_class=%llu sampling=%llu quality=%llu distance_field_method=%llu layer=%llu atlas_page=%llu alpha_flags=%llu alpha_test_ref=%llu texture_mode_flags=%llu shader_flags=%llu shader_alpha=%llu shader_fade_alpha=%llu",
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchTotal),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchAdmission),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchLive),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchProgram),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchDeclaration),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchSourceTexture),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchAlphaTexture),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchAtlasTexture),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchConstants),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchTextureTransform),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchClampMode),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchShaderClass),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchSampling),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchQuality),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchDistanceFieldMethod),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchLayer),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchAtlasPage),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchAlphaFlags),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchAlphaTestRef),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchTextureModeFlags),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchShaderFlags),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchShaderAlpha),
-			counterValue(FreeTypePerfCounter::
-				GlyphInstancingCompatibilityMismatchShaderFadeAlpha));
-		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu instancing_narrow_invalidates=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu constants_lite_replays=%llu constants_lite_fallbacks=%llu constants_lite_scaled_fallbacks=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
+			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu constants_lite_replays=%llu constants_lite_fallbacks=%llu constants_lite_scaled_fallbacks=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceStateStart)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceStateReuse)],
-			values[static_cast<size_t>(FreeTypePerfCounter::
-				SegmentDeviceInstancingNarrowInvalidate)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDevicePassSet)],
 			values[static_cast<size_t>(
@@ -1345,33 +1137,6 @@ namespace fonthook::vectorfont
 		const DurationSummary extendedFnt =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::ExtendedFntGeometry);
-		const DurationSummary instancingAdmission =
-			ConsumeDurationSummary(
-				FreeTypePerfPhase::GlyphInstancingAdmission);
-		const DurationSummary instancingLeader =
-			ConsumeDurationSummary(
-				FreeTypePerfPhase::GlyphInstancingLeader);
-		const DurationSummary instancingLivePreflight =
-			ConsumeDurationSummary(
-				FreeTypePerfPhase::GlyphInstancingLivePreflight);
-		const DurationSummary instancingSnapshot =
-			ConsumeDurationSummary(
-				FreeTypePerfPhase::GlyphInstancingSnapshot);
-		const DurationSummary instancingUpload =
-			ConsumeDurationSummary(
-				FreeTypePerfPhase::GlyphInstancingUpload);
-		const DurationSummary instancingFollowerReserve =
-			ConsumeDurationSummary(
-				FreeTypePerfPhase::GlyphInstancingFollowerReserve);
-		const DurationSummary instancingBind =
-			ConsumeDurationSummary(
-				FreeTypePerfPhase::GlyphInstancingBind);
-		const DurationSummary instancingDraw =
-			ConsumeDurationSummary(
-				FreeTypePerfPhase::GlyphInstancingDraw);
-		const DurationSummary instancingRestore =
-			ConsumeDurationSummary(
-				FreeTypePerfPhase::GlyphInstancingRestore);
 		const DurationSummary frameRouteTotal =
 			ConsumeDurationSummary(FreeTypePerfPhase::FrameRouteTotal);
 		const DurationSummary frameRoutePrep =
@@ -1465,35 +1230,6 @@ namespace fonthook::vectorfont
 			commandBuildFinalize.count,
 			commandBuildFinalize.medianMicroseconds,
 			commandBuildFinalize.p95Microseconds);
-		FreeTypeFontDebugLog(
-			"tnvse_freetype_glyph_instancing_timing: admission_n=%llu median_us=%.3f p95_us=%.3f leader_n=%llu median_us=%.3f p95_us=%.3f live_preflight_n=%llu median_us=%.3f p95_us=%.3f snapshot_n=%llu median_us=%.3f p95_us=%.3f upload_n=%llu median_us=%.3f p95_us=%.3f follower_reserve_n=%llu median_us=%.3f p95_us=%.3f bind_n=%llu median_us=%.3f p95_us=%.3f draw_n=%llu median_us=%.3f p95_us=%.3f restore_n=%llu median_us=%.3f p95_us=%.3f",
-			instancingAdmission.count,
-			instancingAdmission.medianMicroseconds,
-			instancingAdmission.p95Microseconds,
-			instancingLeader.count,
-			instancingLeader.medianMicroseconds,
-			instancingLeader.p95Microseconds,
-			instancingLivePreflight.count,
-			instancingLivePreflight.medianMicroseconds,
-			instancingLivePreflight.p95Microseconds,
-			instancingSnapshot.count,
-			instancingSnapshot.medianMicroseconds,
-			instancingSnapshot.p95Microseconds,
-			instancingUpload.count,
-			instancingUpload.medianMicroseconds,
-			instancingUpload.p95Microseconds,
-			instancingFollowerReserve.count,
-			instancingFollowerReserve.medianMicroseconds,
-			instancingFollowerReserve.p95Microseconds,
-			instancingBind.count,
-			instancingBind.medianMicroseconds,
-			instancingBind.p95Microseconds,
-			instancingDraw.count,
-			instancingDraw.medianMicroseconds,
-			instancingDraw.p95Microseconds,
-			instancingRestore.count,
-			instancingRestore.medianMicroseconds,
-			instancingRestore.p95Microseconds);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_native_registration_timing: readiness_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f shape_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f budget_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f allocation_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f payload_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f accounting_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f publish_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f total_mean_us=%.3f",
 			registrationReadiness.count, registrationReadiness.meanMicroseconds,

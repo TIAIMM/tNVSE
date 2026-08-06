@@ -15,7 +15,6 @@ bEnableFreeTypeFontRenderingLog=0
 fFreeTypeFontResolutionScale=1.0
 bEnableFreeTypeFontAggressivePerformanceMode=0
 bEnableFreeTypeFontCommandBuffer=0
-bEnableFreeTypeFontCrossTextBatch=0
 uiFreeTypeFontDistanceFieldMode=1
 ```
 
@@ -928,11 +927,9 @@ envelope failure leaves the predecessor's array unchanged.
 A singleton facade is direct-command eligible only when its metadata identity
 is current and it occurs exactly once in the final array. A duplicate facade
 remains valid stock geometry, but every occurrence uses the complete packet-
-loop fallback. Command construction walks the repaired final array backwards
-directly, so stock barriers and cross-text adjacency follow the corrected
-painter order without staging a second execution-sequence vector. The old Sort
-dispatch patch, replacement quicksort, per-Sort timing, full registry audit,
-and large diagnostic families remain removed.
+loop fallback. Command construction emits only eligible FreeType entries. The
+old Sort dispatch patch, replacement quicksort, per-Sort timing, full registry
+audit, and large diagnostic families remain removed.
 
 Visibility remains entirely after registration. The post-Sort preflight is the
 single clip/scissor proof used by a facade flush. It evaluates the final model
@@ -946,10 +943,8 @@ of the cube must be strictly in front of `w=0`.
 A preflight cull is revalidated when the final sorted entry is dispatched. A
 matching result is consumed without packet preparation, upload, Tile callbacks,
 or driver submission; an identity or frame mismatch revokes it and fails open.
-Surviving direct commands and cross-text instancing batches do not repeat the
-same visibility calculation, and instancing no longer builds a per-member
-visible-offset vector or compacts the instance upload. This leaves one
-conservative proof per facade instead of pre-slot, post-slot, and per-member
+Surviving direct commands do not repeat the same visibility calculation. This
+leaves one conservative proof per facade instead of pre-slot and post-slot
 copies of equivalent work.
 
 Every ambiguous case fails open: disabled or malformed scissor, non-finite
@@ -964,8 +959,8 @@ The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
 `clip`, `scissor`, `preflight_skipped`, `packets_saved`, and `vertices_saved`.
 The separate `tnvse_freetype_preflight_clip_cull` line reports proof checks,
 viewport/scissor routes, fail-open decisions, honored results, and revoked
-results. There is no late-visibility phase line or instancing-member visibility
-family. The thin registration route performs no visibility work.
+results. There is no late-visibility phase line. The thin registration route
+performs no visibility work.
 The `tnvse_freetype_accumulator_prep` line separately reports empty-facade fast
 returns, metadata acquisitions avoided by proven culls, and traversals with no
 prepared payload.
@@ -978,8 +973,8 @@ stock 40-byte geometry layout, and selects an isolated tNVSE MTSDF TileShader.
 The active stock accumulator therefore sorts and prepares the real text
 geometry; the final immediate hook restores the original `NiTriShape` vtable
 for the duration of the retail pass and lets the stock pass issue the one draw.
-There is no proxy geometry, native vertex-ring upload, singleton binding, or
-cross-text command for this shape. Because the isolated TileShader still writes
+There is no proxy geometry, native vertex-ring upload, or singleton binding for
+this shape. Because the isolated TileShader still writes
 the private c176-c183 block and c209, this draw fully invalidates the sorted
 private-register proof on entry and exit; it is never misclassified as a
 genuinely stock Tile transition.
@@ -1158,8 +1153,8 @@ route; no sibling shape is created.
 
 The final accumulator array proves occurrences of the facade itself after the
 narrow exact-depth tie repair. A facade that appears exactly once may own a
-consumable direct command, command span, or cross-text instancing entry. A
-repeated geometry receives no consumable command: every stock occurrence
+consumable direct command or command span. A repeated geometry receives no
+consumable command: every stock occurrence
 executes the complete packet loop, preserving the original duplicate-
 registration semantics. Whole-artifact clip/scissor culling still completes
 before command recording, upload, or draw.
@@ -1254,139 +1249,6 @@ switch is absent, any nonzero legacy mode enables the complete command path for
 that run and logs a migration notice. Once the new switch is present, it is
 authoritative. The retired shadow-only stage and its D3D `Get*` captures are not
 part of the production path.
-
-`bEnableFreeTypeFontCrossTextBatch=1` optionally layers D3D9 indexed glyph
-instancing over eligible command-buffer singletons. It has no effect unless
-`bEnableFreeTypeFontCommandBuffer=1`, is disabled by default, and does not
-replace the ordinary native fallback. The final accumulator traversal is
-recorded with explicit barriers for stock, culled, multi-packet, duplicate,
-and failed facade entries. Only adjacent members with a
-finite, bitwise-identical accumulator depth and identical program, atlas,
-sampling, blend, alpha-test, drawmode, scissor, stencil, generation, resource,
-render-target, and viewport proofs can share a batch.
-The leader also proves the exact retail accumulator-owned shared Tile pass and
-the `testAlpha=1`, `blendAlpha=1`, `setupDrawmode=1` callback contract before
-any follower command is reserved.
-
-Each proven packet owns an immutable 72-byte sidecar reconstructed from the
-existing TL/TR/BR/BL GPU quad. The sidecar contains its local/UV rectangles,
-packed color, distance parameters, layer mask, Tile-RGB selector, glyph bounds,
-and local depth. Optional sidecar fields remain at the tail of the private
-packet/payload structures, and sidecars are not built while the feature is
-disabled, preserving the established direct-draw-lite data prefix and work.
-Admission does not build matrices or colors. It precomputes the complete
-compatibility key as a deterministic `UInt32` word representation: pointers,
-packet constants, texture transforms, and shader alpha retain their exact bits,
-while the already-proven effective clamp and alpha/texture flags are normalized
-once. Signed zero and NaN payloads are not folded. Equal keys use block compares;
-the existing first-field walk runs only after a mismatch. Each accepted batch
-retains one 52-byte live-property suffix. The leader re-resolves the immutable
-command/packet identities and current resource epoch instead of rebuilding the
-admission-only 168-byte prefix, and rebuilds only that suffix for every member
-before its transient/visibility proof. A property mutation after admission
-therefore fails open to the original commands even when every member changed in
-the same way.
-Only when every member passes does a second pass build each retail-equivalent
-WVP and TileColor, recheck the transient state, and form the 152-byte stream-1
-instances. A failed preflight therefore avoids complete snapshot work for the
-whole batch. The first reached batch uses `D3DLOCK_DISCARD`;
-later reached batches use disjoint `D3DLOCK_NOOVERWRITE` ranges. No frame-build
-snapshot is uploaded and no concatenated CPU vertex array is built. The buffer
-grows on demand up to 16 MiB and stops only at text boundaries.
-
-The instanced draw uses four exact endpoint-weight corners in stream 0, the original
-`0,2,1 / 0,3,2` 16-bit index order, and one stream-1 record per glyph. The VS
-selects the original rectangle/UV endpoints without a `lerp` subtraction and
-evaluates four explicit WVP-column dot products;
-the existing pixel shader runs with exact identity PS c0 because TileColor has
-already been folded into the instance output. Fixed-color effect packets retain
-RGB identity while only packets carrying the normal live-Tile-RGB contract bake
-that RGB. The declaration keeps all
-arbitrary inputs within `TEXCOORD0` through `TEXCOORD7`, avoiding legacy
-driver/wrapper tables derived from the fixed-function eight-coordinate limit.
-Retail and the symbolized test build map VS c4 to `TileShader::TexScroll`;
-exact `textureTransform` and rotation-mode identity makes c4 invariant across
-the batch, and the temporary VS never changes it.
-
-Temporary instancing bindings are applied directly to the D3D9 device and are
-not published through Gamebryo's declaration or shader mirrors. An
-unconditional guard restores both stream frequencies to 1, unbinds stream 1,
-then restores the logical last normal declaration, stream-0 VB/stride, IB,
-VS/PS, VS c0-c3, PS c0, and renderer property/world mirrors. A failed attempt
-instead restores the leader before ordinary fail-open replay. The normal pixel
-shader is rebound explicitly instead of trusting Gamebryo's mirror. The first
-real batch after each generation or instance-buffer replacement performs a
-draw-free bind/readback/restore/readback cycle, proving both stream
-frequencies, every instancing binding, the normal Tile bindings, and restored
-VS/PS constants before drawing. Live
-inputs and command/resource epochs are rebuilt immediately before the leader
-draw; any mismatch abandons the batch and leaves the original commands ready.
-A failed instancing attempt never re-enters direct-draw-lite: it invalidates the
-segment cache and runs the complete retail slot-27 geometry preparation before
-ordinary immediate replay. When the option is disabled or an item is not an
-instancing leader, the pre-instancing direct-draw-lite/slot-27 decision is used
-directly and no stream-1 state is touched.
-A binding, constant, draw, proof, or restore failure disables instancing only
-for that shader generation; device reset permits a fresh attempt. This bracket
-stays inside the existing accumulator render call and does not introduce a
-second renderer lock or any Present/Reset hook.
-
-With rendering diagnostics enabled, `tnvse_build_identity` records the actual
-loaded DLL path, size, write time, and an FNV-1a file fingerprint. The resolved
-missing-text lifecycle tracer and the completed native draw, command, ring, and
-indexed-submit state probes are no longer compiled into the runtime path.
-Aggregate binding, resource, upload, draw, and fallback counters remain
-authoritative. Instancing admission and execution
-failures emit separately bounded `tnvse_freetype_glyph_instancing_diag` records
-with their concrete contract, member, resource, upload, or device operation.
-The aggregate instancing line separates `begin_preflight` from
-`begin_snapshot`; `snapshot_avoided_texts` counts complete member snapshots
-skipped when the first live pass rejects a batch.
-Admission and live capture are also separate data lifetimes. Command build
-retains immutable sequence/command/packet/sidecar identity plus one normalized
-property suffix in the batch record; the much larger immutable compatibility
-prefix and slot-31 transient proof remain local grouping evidence. Each accepted
-frame reserves two scratch arrays sized to its largest batch. At the leader
-callback, pass 1 fills only the live transient/visibility array while comparing
-each freshly normalized property suffix with the retained batch value; pass 2
-fills a distinct WVP/TileColor/retail-world array. Neither pass writes back to
-the admission plan, neither can allocate in TileShader, and every rejection
-clears both live arrays before ordinary commands are replayed.
-Exit messages force one final performance report and fully drain the bounded
-diagnostic queue, so a short menu reproduction is not represented only by an
-earlier startup summary.
-If restoration fails only after a successful indexed draw was already
-submitted, the batch is consumed once rather than replayed with non-commutative
-alpha a second time; the draw-free inverse proof makes that case a device-loss
-or later device-state failure, and instancing remains disabled until reset.
-This is also the NVTF compatibility boundary: its geometry-precache worker
-releases the renderer only after a frame and reacquires it before rendering,
-while its DXVK path skips the system-D3D9 flip-model patch. Instancing remains
-inside `RenderAlphaGeometry`, does not patch NVTF call sites, and does not add
-device-vtable or frame-synchronization hooks.
-
-The periodic `tnvse_freetype_glyph_instancing` line reports candidates,
-accepted batches/texts/instances, successful draws and draws saved, upload and
-buffer activity, categorized fallbacks/failures, stream-frequency set/reset
-counts, state-proof/restore results, aggregate begin fallback plus contract,
-pass, callback, resource, immutable, transient, upload, and follower
-subcategories, arm/device-validation and direct-draw admission fallbacks,
-follower consumption, and text/instance
-median, p95, and maximum batch sizes. The median and p95 values use
-power-of-two histogram upper bounds capped at the exact observed maximum.
-`compat_precomputed` equals the accepted batch records carrying a normalized
-property suffix. `compat_live_suffix` counts members in completely successful
-pass-1 suffix checks, and `compat_immutable_words_avoided` is that count times
-the 42-word immutable prefix not rebuilt at the leader.
-`tnvse_freetype_glyph_instancing_compat_mismatch` separately reports the first
-incompatible field in the exact comparison order, split between command-build
-admission and leader-time live revalidation. Its field counts therefore sum to
-`total`, while `admission + live` independently sums to the same value. The
-companion `tnvse_freetype_glyph_instancing_timing` histogram separates whole
-frame admission, accepted leader preparation, live preflight, complete
-WVP/TileColor snapshots, instance upload, follower reservation, D3D9 binding,
-the indexed draw, and the unconditional restore bracket. These timers are
-active only with the existing FreeType rendering log switch.
 
 Guarded replay publishes the retail current-pass globals, invokes `B99390`
 when the selected TileShader/pass must change, applies the special alpha-test
@@ -1567,9 +1429,8 @@ NiTriShape special/alternate slots are the reverse-verified retail constant-
 false thunk, its renderer special-pass predicate is false, and all six
 TileShader Standard state callbacks plus its geometry binder and first-pass
 callback have classified retail semantics. After the stock call, a cheap
-bridge guard rechecks the external-mutation epoch,
-renderer/device, render-target group, and complete viewport. A successful
-instancing draw uses the same post-boundary guard. Unknown callbacks, special
+bridge guard rechecks the external-mutation epoch, renderer/device,
+render-target group, and complete viewport. Unknown callbacks, special
 passes, non-first-pass state transitions, nested traversal, reset/generation
 changes, or any context mismatch remain hard boundaries. Adjacent commands
 reuse the full result while both the local segment epoch and the cross-thread
@@ -1760,10 +1621,8 @@ repeat the already proven binding comparison. A route without a binding proof
 retains the complete packet validator. Device reset, shader publication or
 fault, atlas mutation, ring resource replacement/discard, shape destruction,
 singleton-facade binding invalidation, nested traversal, and every stock or
-otherwise non-FreeType transition advance one of the epochs. A successful
-instancing batch may retain the segment only after the cheap post-boundary
-context guard succeeds. A mutation during a span therefore faults
-its next packet before drawing. A failure before any draw
+otherwise non-FreeType transition advance one of the epochs. A mutation during
+a span therefore faults its next packet before drawing. A failure before any draw
 re-enters the unchanged current path; after any packet reaches the driver, the
 span is marked faulted and the facade is not replayed, preventing duplicate
 layers.
@@ -1771,9 +1630,8 @@ layers.
 The periodic command line reports recorded spans/packets, span hits/misses,
 retained bridge draws, guarded native replays, saved stock bootstraps, fused
 direct-single replays, light/render-target validation counts, packet epoch
-guards, full packet-state validation elisions, successful execution segments, segment full
-validations/reuses/invalidations, accepted instancing bridges,
-rejected bridge guards, retained-program hits/misses, and fallbacks by token,
+guards, full packet-state validation elisions, successful execution segments,
+segment full validations/reuses/invalidations, retained-program hits/misses, and fallbacks by token,
 generation, atlas, resource, topology, hook, nesting, render target, and state.
 The main performance line reports `constant_ownership_segments`, segment
 reuses/releases, and the snapshot Get and restore Set calls elided by pass
@@ -1801,9 +1659,7 @@ The timing line adds `command_build` and `command_submit` while preserving
 `submit`. Runtime validation should confirm nonzero `native_replays` and
 `direct_single_replays`,
 `render_target_validations` tracking `segment_full_validations` rather than
-logical spans or packets, substantial `segment_validation_reuses`, nonzero
-`instancing_bridges` when that feature is enabled,
-normally zero `bridge_rejected`,
+logical spans or packets, substantial `segment_validation_reuses`,
 `packet_epoch_guards` tracking submitted command packets,
 `packet_state_elisions` covering all proven direct/ring packets, and
 `light_validations` remaining only for unproven compatibility paths.
@@ -1865,16 +1721,12 @@ steady-state packet submissions. When fallbacks are present,
 `stock_fallbacks` equals the sum of `fallback_envelope`, `program`, `renderer`,
 `geometry`, `binding`, and `prelude`; the retained hit/miss pair distinguishes
 a missing or invalidated Tile dispatch from a dynamic pass-envelope rejection.
-The following `segment_device_state_` line reports cache starts/reuses, narrow
-post-instancing invalidations, and set/reuse pairs for texture/program, constants, blend,
-alpha-test, and drawmode callbacks, followed by actual slot-35 calls and
-verified no-op elisions. Instancing cleanup invalidates only
-program/constants/geometry bindings; independently proved blend, alpha-test,
-and drawmode keys survive. Every stock Tile now resets the device-state head
+The following `segment_device_state_` line reports cache starts/reuses and
+set/reuse pairs for texture/program, constants, blend, alpha-test, and drawmode
+callbacks, followed by actual slot-35 calls and verified no-op elisions. Every
+stock Tile now resets the device-state head
 and invalidates the command execution segment, while the separately proved
 private shader-register shadow remains eligible for post-draw validation.
-`instancing_narrow_invalidates` should track successful
-instanced batches instead of causing a new cache start.
 `constants_reuses` proves slot 31 was skipped only for identical
 non-transient state; `post_elisions` normally covers every verified packet
 without scissor/stencil, including packets whose constants changed. Alpha-test

@@ -354,14 +354,6 @@ namespace fonthook::vectorfont
 		using NativeImmediateContinuationFn =
 			bool(*)(void*, NiRenderer*, bool);
 		struct NativeDirectDrawLiteSubmission;
-		struct NativeCrossTextBatchRuntime
-		{
-			NativeA8CrossTextBatchExecutionView view;
-			const char* operation = "none";
-			HRESULT result = D3D_OK;
-			bool attempted = false;
-			bool drawSucceeded = false;
-		};
 
 		enum class NativeImmediateCommandKind : UInt8
 		{
@@ -387,14 +379,10 @@ namespace fonthook::vectorfont
 			bool drew = false;
 			bool continuationSucceeded = true;
 			const NativeDirectDrawLiteSubmission* directDrawLite = nullptr;
-			const NativeA8CrossTextBatchExecutionView* instancedBatch = nullptr;
-			NiD3DRenderState* instancedRenderState = nullptr;
 		};
 
 		thread_local NativeDirectImmediateContext*
 			s_nativeDirectImmediateContext = nullptr;
-		thread_local NativeCrossTextBatchRuntime*
-			s_nativeCrossTextBatchRuntime = nullptr;
 
 		class NativeDirectImmediateScope
 		{
@@ -760,13 +748,6 @@ namespace fonthook::vectorfont
 				alphaTestReady = false;
 				drawmodeReady = false;
 			}
-
-			void InvalidateBindingsAndConstants()
-			{
-				passReady = false;
-				constantsReady = false;
-				geometryBindingReady = false;
-			}
 		};
 
 		thread_local NativeSegmentDeviceStateCache
@@ -833,25 +814,6 @@ namespace fonthook::vectorfont
 		void InvalidateSegmentDeviceStateCache()
 		{
 			s_segmentDeviceStateCache.Reset();
-		}
-
-		void InvalidateSegmentDeviceStateAfterInstancing(
-			bool executionSegmentRetained)
-		{
-			NativeSegmentDeviceStateCache& cache =
-				s_segmentDeviceStateCache;
-			if (!executionSegmentRetained || !cache.stampReady)
-			{
-				cache.Reset();
-				return;
-			}
-			// Indexed instancing replaces the program/declaration, VS constants,
-			// PS c0 and both stream bindings. It does not publish blend, alpha-test,
-			// cull or drawmode render states, so those independently keyed outputs
-			// remain valid across the batch cleanup.
-			cache.InvalidateBindingsAndConstants();
-			RecordFreeTypePerf(FreeTypePerfCounter::
-				SegmentDeviceInstancingNarrowInvalidate);
 		}
 
 		bool SameSegmentPassState(
@@ -2072,50 +2034,6 @@ namespace fonthook::vectorfont
 			NativeDirectImmediateContext* m_context = nullptr;
 		};
 
-		class NativeGlyphInstancingArmScope
-		{
-		public:
-			NativeGlyphInstancingArmScope(NiTriShape* geometry,
-				NiD3DRenderState* renderState)
-			{
-				m_context = s_nativeDirectImmediateContext;
-				m_runtime = s_nativeCrossTextBatchRuntime;
-				if (!m_context || !m_runtime
-					|| !m_runtime->view.active
-					|| m_runtime->view.leaderGeometry != geometry
-					|| m_context->shape != geometry
-					|| !m_context->strictValidation
-					|| m_context->commandSpanIndex
-						== kInvalidNativeA8CommandIndex
-					|| m_context->instancedBatch || !renderState)
-				{
-					m_context = nullptr;
-					m_runtime = nullptr;
-					return;
-				}
-				m_context->instancedBatch = &m_runtime->view;
-				m_context->instancedRenderState = renderState;
-			}
-
-			~NativeGlyphInstancingArmScope()
-			{
-				if (m_context)
-				{
-					m_context->instancedBatch = nullptr;
-					m_context->instancedRenderState = nullptr;
-				}
-			}
-
-			bool Active() const
-			{
-				return m_context && m_runtime;
-			}
-
-		private:
-			NativeDirectImmediateContext* m_context = nullptr;
-			NativeCrossTextBatchRuntime* m_runtime = nullptr;
-		};
-
 		void ExecuteNativeDirectDrawLite(
 			const NativeDirectDrawLiteSubmission& submission)
 		{
@@ -2403,12 +2321,6 @@ namespace fonthook::vectorfont
 			// The retained dispatch has already proved the Tile-owned vtable,
 			// null skin, model data, renderer/device, shader vtable, and complete
 			// slot table. Only RenderPass fields are live per traversal.
-			const bool instancingLeader =
-				g_bEnableFreeTypeFontCrossTextBatch
-				&& s_nativeCrossTextBatchRuntime
-				&& s_nativeCrossTextBatchRuntime->view.active
-				&& s_nativeCrossTextBatchRuntime->view.leaderGeometry
-					== geometry;
 			return g_bEnableFreeTypeFontCommandBuffer
 				&& pass && geometry
 				&& pass->pGeometry == geometry
@@ -2416,11 +2328,7 @@ namespace fonthook::vectorfont
 				&& currentPass != kForcedShaderSelectionPass
 				&& IsDefaultNativeReplayPass(currentPass)
 				&& !pass->ucNumLights
-				// The accumulator-owned Tile pass can retain a non-null light-array
-				// pointer while its count is zero. Formal and symbolized TileShader
-				// slots never read it. Widen this only for a proven instancing leader;
-				// the feature-off direct-draw-lite envelope remains byte-for-byte.
-				&& (!pass->ppSceneLights || instancingLeader)
+				&& !pass->ppSceneLights
 				&& (packetStatePrevalidated
 					|| (program->active
 						&& geometry->GetShader() == dispatch->shader
@@ -2940,154 +2848,28 @@ namespace fonthook::vectorfont
 				BuildNativeDirectDrawLiteSubmission(
 					geometry, renderer, properties, program, command,
 					preparedBuffer, deviceState, directDrawLite);
-			const bool instancingLeader =
-				g_bEnableFreeTypeFontCrossTextBatch
-				&& s_nativeCrossTextBatchRuntime
-				&& s_nativeCrossTextBatchRuntime->view.active
-				&& s_nativeCrossTextBatchRuntime->view.leaderGeometry
-					== geometry;
-			if (!instancingLeader)
-			{
-				// Keep the feature-off and non-leader path source-equivalent to the
-				// pre-instancing direct-draw-lite implementation.  In particular it
-				// never enters an instancing arm, touches a second stream, or changes
-				// the established slot-27 fallback decision.
-				bool directDrawArmed = false;
-				if (directDrawFailure == NativeDirectDrawLiteFallback::None)
-				{
-					NativeDirectDrawLiteArmScope directDrawScope(
-						geometry, directDrawLite);
-					directDrawArmed = directDrawScope.Active();
-					if (directDrawArmed)
-					{
-						A8RenderImmediateAlt(geometry, nullptr, renderer);
-					}
-				}
-				if (!directDrawArmed)
-				{
-					RecordNativeDirectDrawLiteFallback(
-						directDrawFailure == NativeDirectDrawLiteFallback::None
-							? NativeDirectDrawLiteFallback::Program
-							: directDrawFailure);
-					if (deviceState)
-						deviceState->geometryBindingReady = false;
-					reinterpret_cast<PrepareGeometryFn>(
-						program.prepareGeometry)(
-							shader, geometry, 0,
-							preparedBuffer, properties);
-					A8RenderImmediateAlt(geometry, nullptr, renderer);
-				}
-				const bool verifiedPost =
-					(program.standardV2SlotProofs
-						& NativeA8CompiledPacketCommand::
-							kStandardSlot35Proof) != 0;
-				if (!verifiedPost || cleanupRequired)
-				{
-					reinterpret_cast<SetupStateFn>(
-						program.postGeometry)(shader, properties);
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::SegmentDevicePostSet);
-				}
-				else
-				{
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						SegmentDevicePostElision);
-				}
-				return;
-			}
-
-			bool instancedDrawSucceeded = false;
-			if (directDrawFailure != NativeDirectDrawLiteFallback::None)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					GlyphInstancingDirectDrawFallback);
-			}
+			bool directDrawArmed = false;
 			if (directDrawFailure == NativeDirectDrawLiteFallback::None)
 			{
-				NativeGlyphInstancingArmScope instancingScope(
-					geometry, shader->m_pkD3DRenderState);
-				if (instancingScope.Active())
-				{
+				NativeDirectDrawLiteArmScope directDrawScope(
+					geometry, directDrawLite);
+				directDrawArmed = directDrawScope.Active();
+				if (directDrawArmed)
 					A8RenderImmediateAlt(geometry, nullptr, renderer);
-					instancedDrawSucceeded =
-						s_nativeCrossTextBatchRuntime->drawSucceeded;
-				}
-				else
-				{
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						GlyphInstancingArmFallback);
-				}
 			}
-			const bool instancingAttempted =
-				s_nativeCrossTextBatchRuntime
-				&& s_nativeCrossTextBatchRuntime->attempted;
-			if (instancingAttempted && deviceState)
+			if (!directDrawArmed)
 			{
-				deviceState->InvalidateBindingsAndConstants();
-			}
-			if (instancingAttempted && !instancedDrawSucceeded)
-			{
-				// The failed attempt may already have published the instanced VS,
-				// declaration and PS c0 identity. Re-establish the complete leader
-				// pass and slot-31 constants before fail-open replay.
-				reinterpret_cast<SetupStateFn>(
-					program.setupPass)(shader, properties);
-				reinterpret_cast<SetupStateFn>(
-					program.updateConstants)(shader, properties);
-			}
-
-			if (!instancedDrawSucceeded)
-			{
-				if (instancingAttempted)
-				{
-					// Once stream frequencies or an instanced declaration may have
-					// reached the device, never replay through direct-draw-lite.  Force
-					// retail slot 27 to rebuild declaration/stream/index bindings before
-					// the original immediate draw, even when the lite proof was valid.
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						GlyphInstancingDirectDrawFallback);
-					if (deviceState)
-						deviceState->geometryBindingReady = false;
-					reinterpret_cast<PrepareGeometryFn>(
-						program.prepareGeometry)(
-							shader, geometry, 0,
-							preparedBuffer, properties);
-					A8RenderImmediateAlt(geometry, nullptr, renderer);
-				}
-				else
-				{
-					bool directDrawArmed = false;
-					if (directDrawFailure == NativeDirectDrawLiteFallback::None)
-					{
-						NativeDirectDrawLiteArmScope directDrawScope(
-							geometry, directDrawLite);
-						directDrawArmed = directDrawScope.Active();
-						if (directDrawArmed)
-						{
-							A8RenderImmediateAlt(geometry, nullptr, renderer);
-						}
-					}
-					if (!directDrawArmed)
-					{
-						RecordNativeDirectDrawLiteFallback(
-							directDrawFailure
-								== NativeDirectDrawLiteFallback::None
-								? NativeDirectDrawLiteFallback::Program
-								: directDrawFailure);
-						if (deviceState)
-							deviceState->geometryBindingReady = false;
-						reinterpret_cast<PrepareGeometryFn>(
-							program.prepareGeometry)(
-								shader, geometry, 0,
-								preparedBuffer, properties);
-						A8RenderImmediateAlt(
-							geometry, nullptr, renderer);
-					}
-				}
-			}
-			else if (deviceState)
-			{
-				deviceState->geometryBindingReady = false;
+				RecordNativeDirectDrawLiteFallback(
+					directDrawFailure == NativeDirectDrawLiteFallback::None
+						? NativeDirectDrawLiteFallback::Program
+						: directDrawFailure);
+				if (deviceState)
+					deviceState->geometryBindingReady = false;
+				reinterpret_cast<PrepareGeometryFn>(
+					program.prepareGeometry)(
+						shader, geometry, 0,
+						preparedBuffer, properties);
+				A8RenderImmediateAlt(geometry, nullptr, renderer);
 			}
 			const bool verifiedPost =
 				(program.standardV2SlotProofs
@@ -4927,77 +4709,6 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	class NativeCrossTextBatchExecutionScope
-	{
-	public:
-		NativeCrossTextBatchExecutionScope(
-			UInt32 sequenceIndex, NiTriShape* geometry,
-			BSShaderProperty::RenderPass* renderPass, UInt32 currentPass,
-			bool testAlpha, bool blendAlpha, bool setupDrawmode)
-		{
-			if (!g_bEnableFreeTypeFontCrossTextBatch
-				|| sequenceIndex == kInvalidNativeA8CommandIndex
-				|| !geometry || s_nativeCrossTextBatchRuntime)
-			{
-				return;
-			}
-			if (!BeginNativeA8CrossTextBatchExecution(
-					sequenceIndex, geometry, renderPass, currentPass,
-					testAlpha, blendAlpha, setupDrawmode,
-					m_runtime.view))
-			{
-				return;
-			}
-			m_previous = s_nativeCrossTextBatchRuntime;
-			s_nativeCrossTextBatchRuntime = &m_runtime;
-			m_active = true;
-		}
-
-		~NativeCrossTextBatchExecutionScope()
-		{
-			if (!m_active)
-				return;
-			s_nativeCrossTextBatchRuntime = m_previous;
-			const bool success = m_runtime.drawSucceeded;
-			if (!success && g_bEnableFreeTypeFontRenderingLog)
-			{
-				static std::atomic<UInt32> diagnosticCount = 0;
-				if (diagnosticCount.fetch_add(
-						1, std::memory_order_relaxed) < 32u)
-				{
-					FreeTypeFontDebugLog(
-						"tnvse_freetype_glyph_instancing_diag: phase=execute operation=%s hr=0x%08X attempted=%u batch=%u leaderSequence=%u texts=%u instances=%u baseInstance=%u generation=%u leader=%p last=%p",
-						m_runtime.operation ? m_runtime.operation : "unknown",
-						static_cast<UInt32>(m_runtime.result),
-						m_runtime.attempted ? 1u : 0u,
-						m_runtime.view.batchIndex,
-						m_runtime.view.leaderSequenceIndex,
-						m_runtime.view.textCount,
-						m_runtime.view.instanceCount,
-						m_runtime.view.baseInstance,
-						m_runtime.view.generation,
-						m_runtime.view.leaderGeometry,
-						m_runtime.view.lastGeometry);
-				}
-			}
-			EndNativeA8CrossTextBatchExecution(
-				m_runtime.view, success);
-			if (success)
-			{
-				const bool executionSegmentRetained =
-					PreserveNativeA8CommandExecutionSegmentAfterInstancing();
-				InvalidateSegmentDeviceStateAfterInstancing(
-					executionSegmentRetained);
-				InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
-			}
-		}
-
-	private:
-		NativeCrossTextBatchRuntime m_runtime;
-		NativeCrossTextBatchRuntime* m_previous = nullptr;
-		bool m_active = false;
-	};
-
 	RenderPassImmediatelyFn ReadRenderPassImmediatelyCallTarget()
 	{
 		SIZE_T target = 0;
@@ -5062,12 +4773,6 @@ namespace fonthook::vectorfont
 		NativeA8SortedFrameEntryView frameEntry;
 		const bool sortedFrameHit =
 			FindNativeA8SortedFrameEntry(shape, frameEntry);
-		if (g_bEnableFreeTypeFontCrossTextBatch && sortedFrameHit
-			&& ShouldConsumeNativeA8CrossTextBatchFollower(
-				frameEntry.crossTextSequenceIndex, shape))
-		{
-			return;
-		}
 		if (sortedFrameHit
 			&& (frameEntry.visibilityCull
 					== NativeA8VisibilityCull::Clip
@@ -5076,9 +4781,8 @@ namespace fonthook::vectorfont
 		{
 			// The sorted-frame clip proof is revalidated against the live
 			// volatile inputs before it suppresses the dispatch. Honoring
-			// must precede the singleton-facade direct-draw and cross-text
-			// leader paths so culled singleton texts never arm a packet
-			// draw or a batch snapshot. Any drift revokes the cached
+			// must precede the singleton-facade direct-draw path so culled
+			// singleton texts never arm a packet draw. Any drift revokes the cached
 			// decision and falls open to the ordinary draw path.
 			if (HonorNativeA8PreflightClipCull(shape,
 				frameEntry.visibilityCull))
@@ -5217,15 +4921,6 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					StockLayoutSdfShiftedRuntimeFallback);
 			}
-		}
-		std::optional<NativeCrossTextBatchExecutionScope> crossTextBatchScope;
-		if (g_bEnableFreeTypeFontCrossTextBatch)
-		{
-			crossTextBatchScope.emplace(
-				sortedFrameHit ? frameEntry.crossTextSequenceIndex
-					: kInvalidNativeA8CommandIndex,
-				shape, pass, currentPass,
-				testAlpha, blendAlpha, setupDrawmode);
 		}
 		if (metadata->backend
 			== FreeTypeShapeBackend::SingletonFacade)
@@ -5627,61 +5322,15 @@ namespace fonthook::vectorfont
 			{
 				return;
 			}
-			if (!g_bEnableFreeTypeFontCrossTextBatch
-				|| !context.instancedBatch)
+			if (context.directDrawLite)
 			{
-				if (context.directDrawLite)
-				{
-					ExecuteNativeDirectDrawLite(*context.directDrawLite);
-				}
-				else
-				{
-					State().originalRenderImmediateAlt(shape, renderer);
-				}
-				context.drew = true;
-				if (!context.strictValidation
-					&& context.commandSpanIndex
-						!= kInvalidNativeA8CommandIndex)
-				{
-					context.validationPassed =
-						ValidateNativeImmediateCommand(
-							context, shape, renderer);
-				}
-				if (context.continueImmediate)
-				{
-					context.continuationSucceeded =
-						context.continueImmediate(
-							context.continuation, renderer, true);
-				}
-				return;
+				ExecuteNativeDirectDrawLite(*context.directDrawLite);
 			}
-
-			bool drawSucceeded = false;
-			if (context.instancedBatch)
+			else
 			{
-				NativeCrossTextBatchRuntime* runtime =
-					s_nativeCrossTextBatchRuntime;
-				if (!runtime
-					|| context.instancedBatch != &runtime->view
-					|| !context.instancedRenderState)
-				{
-					drawSucceeded = false;
-				}
-				else
-				{
-					runtime->attempted = true;
-					drawSucceeded =
-						ExecuteNativeA8CrossTextInstancedDraw(
-							runtime->view,
-							reinterpret_cast<NiDX9Renderer*>(renderer),
-							context.instancedRenderState,
-							runtime->operation, runtime->result);
-					runtime->drawSucceeded = drawSucceeded;
-				}
+				State().originalRenderImmediateAlt(shape, renderer);
 			}
-			context.drew = drawSucceeded;
-			if (!drawSucceeded)
-				return;
+			context.drew = true;
 			if (!context.strictValidation
 				&& context.commandSpanIndex
 					!= kInvalidNativeA8CommandIndex)

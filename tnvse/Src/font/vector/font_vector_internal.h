@@ -64,14 +64,6 @@ namespace fonthook::vectorfont
 	constexpr UInt32 kFillPrewarmWorkChunk = 8;
 
 	struct NativeA8PayloadTemplate;
-	// The runtime now has more than 255 independently reported counters.
-	// Keeping an UInt8 base aliases the tail entries and can index the wrong
-	// atomic slot after integer promotion.
-	inline constexpr UInt32
-		kGlyphInstancingImmutableCompatibilityWordCount = 42;
-	inline constexpr UInt32
-		kGlyphInstancingPropertyCompatibilityWordCount = 13;
-
 	enum class FreeTypePerfCounter : UInt16
 	{
 		BitmapMemoryHit,
@@ -302,9 +294,6 @@ namespace fonthook::vectorfont
 		CommandSegmentFullValidation,
 		CommandSegmentValidationReuse,
 		CommandSegmentInvalidation,
-		CommandSegmentInstancingBridge,
-		CommandSegmentBridgeRejected,
-		SegmentDeviceInstancingNarrowInvalidate,
 		CommandRetainedProgramHit,
 		CommandRetainedProgramMiss,
 		CommandFallbackToken,
@@ -365,69 +354,6 @@ namespace fonthook::vectorfont
 		NativeDirectDrawLiteBindingReuse,
 		NativeDirectDrawLiteBindingDeviceFailure,
 		NativeDirectDrawLiteDrawDeviceFailure,
-		GlyphInstancingCandidate,
-		GlyphInstancingAcceptedBatch,
-		GlyphInstancingAcceptedText,
-		GlyphInstancingInstance,
-		GlyphInstancingDraw,
-		GlyphInstancingDrawSaved,
-		GlyphInstancingUploadByte,
-		GlyphInstancingBufferGrowth,
-		GlyphInstancingDiscard,
-		GlyphInstancingDepthFallback,
-		GlyphInstancingStateFallback,
-		GlyphInstancingScissorFallback,
-		GlyphInstancingTopologyFallback,
-		GlyphInstancingBudgetFallback,
-		GlyphInstancingStreamFrequencySet,
-		GlyphInstancingStreamFrequencyReset,
-		GlyphInstancingBindingFailure,
-		GlyphInstancingConstantFailure,
-		GlyphInstancingDrawFailure,
-		GlyphInstancingDeviceFailure,
-		GlyphInstancingFollowerConsumed,
-		GlyphInstancingStateProof,
-		GlyphInstancingStateProofFailure,
-		GlyphInstancingRestoreFailure,
-		GlyphInstancingBeginFallback,
-		GlyphInstancingBeginContractFallback,
-		GlyphInstancingBeginPassFallback,
-		GlyphInstancingBeginCallbackFallback,
-		GlyphInstancingBeginResourceFallback,
-		GlyphInstancingBeginImmutableFallback,
-		GlyphInstancingBeginTransientFallback,
-		GlyphInstancingBeginPreflightFallback,
-		GlyphInstancingBeginSnapshotFallback,
-		GlyphInstancingLiveSnapshotAvoidedText,
-		GlyphInstancingBeginUploadFallback,
-		GlyphInstancingBeginFollowerFallback,
-		GlyphInstancingArmFallback,
-		GlyphInstancingValidationFallback,
-		GlyphInstancingDirectDrawFallback,
-		GlyphInstancingCompatibilityLiveSuffixCheck,
-		GlyphInstancingCompatibilityMismatchTotal,
-		GlyphInstancingCompatibilityMismatchAdmission,
-		GlyphInstancingCompatibilityMismatchLive,
-		GlyphInstancingCompatibilityMismatchProgram,
-		GlyphInstancingCompatibilityMismatchDeclaration,
-		GlyphInstancingCompatibilityMismatchSourceTexture,
-		GlyphInstancingCompatibilityMismatchAlphaTexture,
-		GlyphInstancingCompatibilityMismatchAtlasTexture,
-		GlyphInstancingCompatibilityMismatchConstants,
-		GlyphInstancingCompatibilityMismatchTextureTransform,
-		GlyphInstancingCompatibilityMismatchClampMode,
-		GlyphInstancingCompatibilityMismatchShaderClass,
-		GlyphInstancingCompatibilityMismatchSampling,
-		GlyphInstancingCompatibilityMismatchQuality,
-		GlyphInstancingCompatibilityMismatchDistanceFieldMethod,
-		GlyphInstancingCompatibilityMismatchLayer,
-		GlyphInstancingCompatibilityMismatchAtlasPage,
-		GlyphInstancingCompatibilityMismatchAlphaFlags,
-		GlyphInstancingCompatibilityMismatchAlphaTestRef,
-		GlyphInstancingCompatibilityMismatchTextureModeFlags,
-		GlyphInstancingCompatibilityMismatchShaderFlags,
-		GlyphInstancingCompatibilityMismatchShaderAlpha,
-		GlyphInstancingCompatibilityMismatchShaderFadeAlpha,
 		NativeRegistrationArtifactSealed,
 		NativeRegistrationArtifactFallback,
 		NativeRegistrationHookFast,
@@ -461,10 +387,6 @@ namespace fonthook::vectorfont
 		SingletonFacadeChildAllocationAvoided,
 		MetadataMapReserve,
 		MetadataMapRehash,
-		GlyphInstancingPrefixShrink,
-		GlyphInstancingPrefixRetainedText,
-		GlyphInstancingPrefixReplayedText,
-		GlyphInstancingSourceTextureAlias,
 		SortedAllStaticFastExit,
 		SortedAllStaticPayloadValidationElided,
 		AccumulatorEmptyFastPath,
@@ -496,8 +418,6 @@ namespace fonthook::vectorfont
 		"FreeTypePerfCounter no longer fits its UInt16 storage");
 
 	void RecordFreeTypePerf(FreeTypePerfCounter aeCounter, UInt64 auiAmount = 1);
-	void RecordFreeTypeGlyphInstancingBatchSize(
-		UInt32 textCount, UInt32 instanceCount);
 	void ReportFreeTypePerf();
 
 	enum class FreeTypePerfPhase : UInt8
@@ -522,15 +442,6 @@ namespace fonthook::vectorfont
 		CommandBuildFinalize,
 		CommandSubmit,
 		ExtendedFntGeometry,
-		GlyphInstancingAdmission,
-		GlyphInstancingLeader,
-		GlyphInstancingLivePreflight,
-		GlyphInstancingSnapshot,
-		GlyphInstancingUpload,
-		GlyphInstancingFollowerReserve,
-		GlyphInstancingBind,
-		GlyphInstancingDraw,
-		GlyphInstancingRestore,
 		FrameRouteTotal,
 		FrameRoutePrep,
 		FramePrepReset,

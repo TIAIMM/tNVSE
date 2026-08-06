@@ -725,63 +725,6 @@ namespace fonthook::vectorfont
 			return segment.failure;
 		}
 
-		bool PreserveExecutionSegmentAcrossKnownStateMutation(
-			NativeA8FrameCommandBuffer& buffer,
-			FreeTypePerfCounter acceptedCounter)
-		{
-			NativeA8ExecutionSegmentState& segment =
-				buffer.executionSegment;
-			if (!buffer.active || !segment.validated
-				|| segment.validationToken
-					!= buffer.stamp.validationToken
-				|| segment.boundaryEpoch
-					!= buffer.executionBoundaryEpoch)
-			{
-				return false;
-			}
-
-			auto reject = [&](NativeA8CommandFallback reason)
-			{
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::CommandSegmentBridgeRejected);
-				AdvanceExecutionBoundaryEpoch(buffer, reason);
-				return false;
-			};
-			if (segment.failure != NativeA8CommandFallback::None)
-				return reject(segment.failure);
-
-			const UInt32 externalMutationEpoch =
-				LoadExternalMutationEpoch();
-			if (!buffer.frameExternalMutationEpoch
-				|| segment.externalMutationEpoch
-					!= externalMutationEpoch
-				|| buffer.frameExternalMutationEpoch
-					!= externalMutationEpoch)
-			{
-				return reject(LoadExternalMutationReason());
-			}
-
-			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-			if (!renderer || renderer != buffer.stamp.renderer
-				|| renderer->GetD3DDevice() != buffer.stamp.device)
-			{
-				return reject(NativeA8CommandFallback::Generation);
-			}
-			if (!buffer.stamp.renderTargetReady
-				|| !buffer.stamp.viewportReady
-				|| renderer->m_pkCurrRenderTargetGroup
-					!= buffer.stamp.renderTargetGroup
-				|| std::memcmp(&renderer->m_kD3DPort,
-					&buffer.stamp.viewport,
-					sizeof(buffer.stamp.viewport)) != 0)
-			{
-				return reject(NativeA8CommandFallback::RenderTarget);
-			}
-
-			RecordFreeTypePerf(acceptedCounter);
-			return true;
-		}
-
 		NativeA8CommandFallback ValidateExecutionSegmentEpoch(
 			NativeA8FrameCommandBuffer& buffer,
 			UInt32 executionSegmentEpoch,
@@ -1194,13 +1137,6 @@ namespace fonthook::vectorfont
 	{
 		AdvanceExecutionBoundaryEpoch(
 			s_commandBuffer, NormalizeMutationReason(reason));
-	}
-
-	bool PreserveNativeA8CommandExecutionSegmentAfterInstancing()
-	{
-		return PreserveExecutionSegmentAcrossKnownStateMutation(
-			s_commandBuffer,
-			FreeTypePerfCounter::CommandSegmentInstancingBridge);
 	}
 
 	void BeginNativeA8FrameCommandBuffer(BSShaderAccumulator* accumulator,

@@ -17,7 +17,6 @@ extern bool g_bEnableFreeTypeFontAggressivePerformanceMode;
 extern bool g_bEnableFreeTypeFontStructuralFastPaths;
 extern bool g_bEnableFreeTypeFontPreflightClipCull;
 extern bool g_bEnableFreeTypeFontCommandBuffer;
-extern bool g_bEnableFreeTypeFontCrossTextBatch;
 extern UINT32 g_uiFreeTypeFontDistanceFieldMode;
 extern UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 extern bool g_bEnableFreeTypeFontCompositePass;
