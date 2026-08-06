@@ -121,6 +121,8 @@ namespace fonthook::vectorfont
 		using CreatePixelShaderFn = NiD3DPixelShader* (__cdecl*)(const char*);
 		using StockUpdateConstantsFn = void(__thiscall*)(TileShader*,
 			const NiPropertyState*);
+		void __fastcall NativeUpdateConstants(TileShader*, void*,
+			const NiPropertyState*);
 		void __fastcall NativeSetupGeometryAlphaBlending(
 			TileShader*, void*, const NiPropertyState*);
 
@@ -154,6 +156,7 @@ namespace fonthook::vectorfont
 		{
 			D3DVIEWPORT9 viewport = {};
 			float rasterScale = 0.0f;
+			UInt32 constantRegister = 0;
 			bool viewportReady = false;
 			bool constantReady = false;
 		};
@@ -351,6 +354,21 @@ namespace fonthook::vectorfont
 
 		thread_local NativeFacadeShaderBatch s_facadeShaderBatch;
 
+		struct NativeStockLayoutPublicationWitness
+		{
+			UInt64 token = 0;
+			UInt64 publishedToken = 0;
+			TileShader* expectedShader = nullptr;
+			NativeShaderProfile* publishedProfile = nullptr;
+			IDirect3DDevice9* publishedDevice = nullptr;
+			UInt32 publishedGeneration = 0;
+			bool armed = false;
+		};
+
+		thread_local NativeStockLayoutPublicationWitness
+			s_stockLayoutPublicationWitness;
+		thread_local UInt64 s_nextStockLayoutPublicationToken = 0;
+
 		NativeA8StandardBlendSemantics ClassifyStandardBlendCallback(
 			void* callback)
 		{
@@ -484,6 +502,36 @@ namespace fonthook::vectorfont
 			return block->magic == kNativeVtableMagic ? block : nullptr;
 		}
 
+		bool HasExactStockLayoutConstantCarryChain(TileShader* shader)
+		{
+			NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
+			NativeShaderProfile* profile = block ? block->profile : nullptr;
+			if (!profile || profile->shader != shader
+				|| !profile->key.stockLayoutSdf)
+			{
+				return false;
+			}
+			const NativeA8CompiledPacketCommand& program =
+				profile->retainedProgram;
+			return program.setupPass == reinterpret_cast<void*>(
+					kTileShaderSetupGeometryTextures)
+				&& block->stockUpdateConstants
+					== reinterpret_cast<StockUpdateConstantsFn>(
+						kTileShaderUpdateConstants)
+				&& program.updateConstants
+					== reinterpret_cast<void*>(&NativeUpdateConstants)
+				&& program.setupBlend == reinterpret_cast<void*>(
+					&NativeSetupGeometryAlphaBlending)
+				&& program.setupAlphaTest == reinterpret_cast<void*>(
+					kShaderSetupGeometryAlphaTesting)
+				&& program.setupDrawmode == reinterpret_cast<void*>(
+					kShaderSetupGeometryRenderStates)
+				&& program.prepareGeometry == reinterpret_cast<void*>(
+					kNiD3DShaderPrepareGeometry)
+				&& program.postGeometry == reinterpret_cast<void*>(
+					kTileShaderPostGeometry);
+		}
+
 		bool ResolveStockTilePixelConstant(const NiPropertyState* properties,
 			float* output)
 		{
@@ -608,6 +656,8 @@ namespace fonthook::vectorfont
 			}
 
 			if (!forcePublish && cache && cache->constantReady
+				&& cache->constantRegister
+					== kNativeA8VertexAaConstantRegister
 				&& std::memcmp(&cache->rasterScale, &rasterScale,
 					sizeof(rasterScale)) == 0)
 			{
@@ -634,6 +684,8 @@ namespace fonthook::vectorfont
 			if (cache)
 			{
 				cache->rasterScale = rasterScale;
+				cache->constantRegister =
+					kNativeA8VertexAaConstantRegister;
 				cache->constantReady = true;
 			}
 			if (published)
@@ -791,8 +843,14 @@ namespace fonthook::vectorfont
 				profile->privateRegisterCount;
 
 			HRESULT constantsResult = D3D_OK;
+			const UInt32 targetVertexConstantRegister =
+				profile->key.stockLayoutSdf
+					? kNativeA8StockLayoutGlyphConstantRegister
+					: kNativeA8VertexAaConstantRegister;
 			if (cachedProfile == profile && vertexAaCache
-				&& vertexAaCache->constantReady)
+				&& vertexAaCache->constantReady
+				&& vertexAaCache->constantRegister
+					== targetVertexConstantRegister)
 			{
 				// The profile is process-lifetime immutable. Exact identity proves
 				// its c176-c183 block plus the applicable c208 or c209 vertex
@@ -823,6 +881,8 @@ namespace fonthook::vectorfont
 				if (vertexAaCache)
 				{
 					vertexAaCache->rasterScale = profile->constants[6];
+					vertexAaCache->constantRegister =
+						kNativeA8StockLayoutGlyphConstantRegister;
 					vertexAaCache->constantReady = true;
 				}
 				RecordFreeTypePerf(
@@ -996,6 +1056,28 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::SamplerStateReuse);
 			}
+
+			// The retail-layout transition may retain only tNVSE's private high
+			// registers. Sign the witness after every required publication and sampler
+			// check has succeeded. If the callback is bypassed, re-entered, faulted, or
+			// observes another shader/generation, End rejects the carry and clears it.
+			NativeStockLayoutPublicationWitness& witness =
+				s_stockLayoutPublicationWitness;
+			if (witness.armed && witness.expectedShader == shader
+				&& profile->key.stockLayoutSdf && batchActive
+				&& sortedBatchActive
+				&& sortedBatch.packetProfile == profile
+				&& sortedBatch.device == device
+				&& sortedBatch.generation == generation->id
+				&& sortedBatch.vertexAa.constantReady
+				&& sortedBatch.vertexAa.constantRegister
+					== kNativeA8StockLayoutGlyphConstantRegister)
+			{
+				witness.publishedToken = witness.token;
+				witness.publishedProfile = profile;
+				witness.publishedDevice = device;
+				witness.publishedGeneration = generation->id;
+			}
 		}
 
 		NativeProfileKey MakeProfileKey(const NativeA8PacketTemplate& packet,
@@ -1061,11 +1143,13 @@ namespace fonthook::vectorfont
 			{
 				const size_t qualityIndex =
 					static_cast<size_t>(packet.quality);
+				const bool supportedDistanceField =
+					packet.distanceFieldMethod == DistanceFieldMethod::TrueSdf
+					|| packet.distanceFieldMethod == DistanceFieldMethod::Mtsdf;
 				if (!generation.stockLayoutReady
+					|| !supportedDistanceField
 					|| generation.distanceFieldMethod
-						!= DistanceFieldMethod::Mtsdf
-					|| packet.distanceFieldMethod
-						!= DistanceFieldMethod::Mtsdf
+						!= packet.distanceFieldMethod
 					|| packet.shaderClass != NativeA8ShaderClass::Composite
 					|| (packet.compositeShiftedShadow
 						&& !(packet.staticCompositeLayerMask & 1u))
@@ -1098,10 +1182,13 @@ namespace fonthook::vectorfont
 					};
 					const char* shiftedSuffix =
 						packet.compositeShiftedShadow ? "_shift" : "";
+					const char* distanceFieldName =
+						packet.distanceFieldMethod == DistanceFieldMethod::TrueSdf
+							? "sdf" : "mtsdf";
 					char shaderName[128] = {};
 					sprintf_s(shaderName,
-						"tnvse_freetype_native_mtsdf_stock_layout_%s_m%u%s.pso",
-						qualityNames[qualityIndex],
+						"tnvse_freetype_native_%s_stock_layout_%s_m%u%s.pso",
+						distanceFieldName, qualityNames[qualityIndex],
 						static_cast<UInt32>(
 							packet.staticCompositeLayerMask), shiftedSuffix);
 					slot = generation.createPixelShader(shaderName);
@@ -1615,10 +1702,12 @@ namespace fonthook::vectorfont
 
 			generation->vertexShader = createVS("tnvse_freetype_native_vs.vso");
 			const bool stockLayoutRequested =
-				g_bEnableFreeTypeFontMtsdfStockLayout
+				IsStockLayoutSdfEnabled(generation->distanceFieldMethod)
 				&& !g_bEnableFreeTypeFontAggressivePerformanceMode
-				&& generation->distanceFieldMethod
-					== DistanceFieldMethod::Mtsdf;
+				&& (generation->distanceFieldMethod
+						== DistanceFieldMethod::TrueSdf
+					|| generation->distanceFieldMethod
+						== DistanceFieldMethod::Mtsdf);
 			if (stockLayoutRequested)
 			{
 				generation->stockLayoutVertexShader = createVS(
@@ -2235,16 +2324,17 @@ namespace fonthook::vectorfont
 			&& generation->supportsSeparateAlpha
 			&& alpha && alpha->GetAlphaBlending();
 		const size_t cacheIndex = writeEffectAlpha ? 1u : 0u;
-		NativeA8PacketShaderCacheEntry& packetCache =
-			packet.resolvedShaders[cacheIndex];
-		NativeShaderProfile* cachedProfile = stockLayoutSdf ? nullptr
-			: static_cast<NativeShaderProfile*>(
+		NativeA8PacketShaderCacheEntry& packetCache = stockLayoutSdf
+			? packet.stockLayoutResolvedShaders[cacheIndex]
+			: packet.resolvedShaders[cacheIndex];
+		NativeShaderProfile* cachedProfile =
+			static_cast<NativeShaderProfile*>(
 				packetCache.profile.load(std::memory_order_acquire));
 		if (cachedProfile && cachedProfile->owner == generation
 			&& cachedProfile->shader
 			&& cachedProfile->key.sampling == sampling
 			&& cachedProfile->key.writeEffectAlpha == writeEffectAlpha
-			&& !cachedProfile->key.stockLayoutSdf)
+			&& cachedProfile->key.stockLayoutSdf == stockLayoutSdf)
 		{
 			return cachedProfile->shader;
 		}
@@ -2255,11 +2345,8 @@ namespace fonthook::vectorfont
 		auto found = snapshot->find(key);
 		if (found != snapshot->end())
 		{
-			if (!stockLayoutSdf)
-			{
-				packetCache.profile.store(
-					found->second, std::memory_order_release);
-			}
+			packetCache.profile.store(
+				found->second, std::memory_order_release);
 			return found->second->shader;
 		}
 
@@ -2270,11 +2357,8 @@ namespace fonthook::vectorfont
 		found = snapshot->find(key);
 		if (found != snapshot->end())
 		{
-			if (!stockLayoutSdf)
-			{
-				packetCache.profile.store(
-					found->second, std::memory_order_release);
-			}
+			packetCache.profile.store(
+				found->second, std::memory_order_release);
 			return found->second->shader;
 		}
 
@@ -2293,9 +2377,83 @@ namespace fonthook::vectorfont
 		generation->profiles.store(
 			std::shared_ptr<const NativeProfileMap>(std::move(updated)),
 			std::memory_order_release);
-		if (!stockLayoutSdf)
-			packetCache.profile.store(profile, std::memory_order_release);
+		packetCache.profile.store(profile, std::memory_order_release);
 		return profile->shader;
+	}
+
+	UInt64 BeginNativeA8StockLayoutShaderTransition(
+		TileShader* shader, UInt32 currentPass)
+	{
+		// Official B98E80 and beta Standard::RenderPassImmediately both execute
+		// SetupGeometryConstants before blend/state setup, buffer preparation and
+		// OnlyRenderImmediate. Preserve only the disjoint c176-c183/c208/c209
+		// shadow; the command segment, bindings and sampler proof are still hard
+		// boundaries exactly as they are for a stock Tile.
+		AdvanceNativeA8SortedShaderStateAcrossStockTile();
+		NativeStockLayoutPublicationWitness& witness =
+			s_stockLayoutPublicationWitness;
+		UInt64 token = ++s_nextStockLayoutPublicationToken;
+		if (!token)
+			token = ++s_nextStockLayoutPublicationToken;
+		witness = {};
+		witness.token = token;
+		witness.expectedShader = shader;
+		// currentPass is the render-pass enum, not a zero-based pass index. Both
+		// reverse targets contain special pass enums that bypass the virtual
+		// SetupGeometryConstants callback, and their enum values differ. Do not
+		// duplicate either executable's switch here: the actual NativeUpdateConstants
+		// invocation signs this one-shot witness, while every bypass reaches End with
+		// publishedToken == 0 and therefore fails closed. Callback identity is used
+		// instead of code hashing; any replaced slot simply disables carry.
+		(void)currentPass;
+		witness.armed = shader
+			&& HasExactStockLayoutConstantCarryChain(shader);
+		if (!witness.armed)
+			ResetSortedShaderStateCaches();
+		return token;
+	}
+
+	bool EndNativeA8StockLayoutShaderTransition(
+		UInt64 token, TileShader* shader)
+	{
+		NativeStockLayoutPublicationWitness& witness =
+			s_stockLayoutPublicationWitness;
+		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
+		NativeShaderProfile* publishedProfile = witness.publishedProfile;
+		IDirect3DDevice9* publishedDevice = witness.publishedDevice;
+		const bool witnessed = witness.armed && token
+			&& witness.token == token && witness.publishedToken == token
+			&& witness.expectedShader == shader && publishedProfile
+			&& publishedProfile->shader == shader
+			&& publishedProfile->key.stockLayoutSdf
+			&& batch.depth && batch.packetProfile == publishedProfile
+			&& batch.device == witness.publishedDevice
+			&& batch.generation == witness.publishedGeneration
+			&& batch.vertexAa.constantReady
+			&& batch.vertexAa.constantRegister
+				== kNativeA8StockLayoutGlyphConstantRegister
+			&& IsNativeA8ShaderGenerationCurrent(batch.generation);
+		witness = {};
+		if (!witnessed)
+		{
+			ResetSortedShaderStateCaches();
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				StockLayoutSdfPrivateStateCarryRejected);
+			return false;
+		}
+
+		// SetupGeometryTextures and retail geometry preparation remain opaque
+		// binding boundaries. The completed native constant callback is evidence
+		// only for the private constant shadow, never for the sampler or command
+		// execution segment.
+		batch.samplerReady = false;
+		ValidateNativeA8SortedShaderStateAfterStockTile();
+		const bool retained = batch.packetProfile == publishedProfile
+			&& batch.device == publishedDevice;
+		RecordFreeTypePerf(retained
+			? FreeTypePerfCounter::StockLayoutSdfPrivateStateCarry
+			: FreeTypePerfCounter::StockLayoutSdfPrivateStateCarryRejected);
+		return retained;
 	}
 
 	namespace

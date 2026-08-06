@@ -1406,10 +1406,13 @@ namespace fonthook::vectorfont
 			}
 			const NativeA8PacketTemplate& candidate =
 				payload.compositePackets.front();
+			const bool supportedDistanceField =
+				candidate.distanceFieldMethod == DistanceFieldMethod::TrueSdf
+				|| candidate.distanceFieldMethod == DistanceFieldMethod::Mtsdf;
 			const UInt64 packetEnd = static_cast<UInt64>(
 				candidate.firstVertex) + candidate.vertexCount;
 			if (candidate.shaderClass != NativeA8ShaderClass::Composite
-				|| candidate.distanceFieldMethod != DistanceFieldMethod::Mtsdf
+				|| !supportedDistanceField
 				|| candidate.atlasPage != 0 || !candidate.vertexCount
 				|| (candidate.firstVertex & 3u)
 				|| (candidate.vertexCount & 3u)
@@ -1467,13 +1470,14 @@ namespace fonthook::vectorfont
 			const NiColorA& tileColor, const NiPoint3& origin,
 			bool prepareObject)
 		{
-			if (!g_bEnableFreeTypeFontMtsdfStockLayout)
+			if (!g_bEnableFreeTypeFontStockLayout)
 				return nullptr;
 
 			const NativeA8PacketTemplate* packet = nullptr;
 			if (!payload || atlases.size() != 1 || !atlases.front()
 				|| !IsStockLayoutSdfPayloadEligible(*payload, packet)
-				|| !packet)
+				|| !packet
+				|| !IsStockLayoutSdfEnabled(packet->distanceFieldMethod))
 			{
 				return nullptr;
 			}

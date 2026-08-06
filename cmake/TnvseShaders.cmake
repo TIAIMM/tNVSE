@@ -39,12 +39,14 @@ function(tnvse_add_shader_target output_variable)
     foreach(mask IN ITEMS 8 9 10 11 12 13 14 15)
       list(APPEND shader_outputs
         "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_${quality}_m${mask}.pso"
-        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_stock_layout_${quality}_m${mask}.pso")
+        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_stock_layout_${quality}_m${mask}.pso"
+        "${shader_dir}/compiled/tnvse_freetype_native_sdf_stock_layout_${quality}_m${mask}.pso")
     endforeach()
     foreach(mask IN ITEMS 9 11 13 15)
       list(APPEND shader_outputs
         "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_${quality}_m${mask}_shift.pso"
-        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_stock_layout_${quality}_m${mask}_shift.pso")
+        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_stock_layout_${quality}_m${mask}_shift.pso"
+        "${shader_dir}/compiled/tnvse_freetype_native_sdf_stock_layout_${quality}_m${mask}_shift.pso")
     endforeach()
   endforeach()
 

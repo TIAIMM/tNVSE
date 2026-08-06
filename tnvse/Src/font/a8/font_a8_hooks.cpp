@@ -4874,7 +4874,7 @@ namespace fonthook::vectorfont
 				shiftedStockLayout = packet.compositeShiftedShadow;
 				TileShader* shader = ResolveNativeA8PacketShader(
 					packet, shape, false, true);
-				if (shader)
+				if (shader && shape->GetShader() != shader)
 					shape->SetShader(shader);
 				if (shader && IsNativeA8StockLayoutShapeReady(shape, shader))
 				{
@@ -4884,19 +4884,20 @@ namespace fonthook::vectorfont
 							"before-stock-layout-sdf");
 					}
 					s_segmentDeviceStateCache.Reset();
-					// The stock-layout route uses retail geometry submission, but its
-					// TileShader still publishes tNVSE's private c176-c183 block and
-					// c209 glyph parameters.  It therefore cannot inherit or preserve
-					// the private-register proof used across a genuinely stock Tile.
-					InvalidateNativeA8SortedShaderState();
+					UInt64 stockLayoutTransition = 0;
+					bool stockLayoutDrawn = false;
 					{
 						NativeFacadeShaderBatchScope shaderBatch;
 						StockLayoutOriginalVtableScope stockVtable(shape);
 						if (stockVtable.Active())
 						{
+							stockLayoutTransition =
+								BeginNativeA8StockLayoutShaderTransition(
+									shader, currentPass);
 							state.originalRenderPassImmediately(pass,
 								currentPass, testAlpha, blendAlpha,
 								setupDrawmode);
+							stockLayoutDrawn = true;
 							RecordFreeTypePerf(
 								FreeTypePerfCounter::StockLayoutSdfDraw);
 							if (shiftedStockLayout)
@@ -4904,14 +4905,15 @@ namespace fonthook::vectorfont
 								RecordFreeTypePerf(FreeTypePerfCounter::
 									StockLayoutSdfShiftedDraw);
 							}
-							// The draw just replaced the private packet constants with the
-							// stock-layout profile.  Force the next facade to republish its
-							// own profile instead of treating this as a stock-only boundary.
-							InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
-							return;
 						}
 					}
-					InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
+					if (stockLayoutDrawn)
+					{
+						EndNativeA8StockLayoutShaderTransition(
+							stockLayoutTransition, shader);
+						return;
+					}
+					InvalidateNativeA8SortedShaderState();
 				}
 			}
 			RecordFreeTypePerf(

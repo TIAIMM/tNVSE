@@ -325,6 +325,11 @@ namespace fonthook::vectorfont
 		std::array<size_t, 2> profileHashes = {};
 		mutable std::array<NativeA8PacketShaderCacheEntry, 2>
 			resolvedShaders;
+		// Stock-layout and native-facade profiles intentionally have distinct
+		// keys and shaders. Keep a second packet-local cache so the retail-layout
+		// hot path does not reload the generation profile map on every draw.
+		mutable std::array<NativeA8PacketShaderCacheEntry, 2>
+			stockLayoutResolvedShaders;
 	};
 
 	struct NativeA8CompositeSpan
@@ -1069,6 +1074,10 @@ namespace fonthook::vectorfont
 	void InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
 	void AdvanceNativeA8SortedShaderStateAcrossStockTile();
 	void ValidateNativeA8SortedShaderStateAfterStockTile();
+	UInt64 BeginNativeA8StockLayoutShaderTransition(
+		TileShader* shader, UInt32 currentPass);
+	bool EndNativeA8StockLayoutShaderTransition(
+		UInt64 token, TileShader* shader);
 	void BeginNativeA8FacadeShaderBatch();
 	void EndNativeA8FacadeShaderBatch();
 	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,

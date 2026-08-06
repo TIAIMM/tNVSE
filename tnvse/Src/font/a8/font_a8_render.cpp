@@ -1152,8 +1152,12 @@ namespace fonthook::vectorfont
 		const UInt64 packetEnd = static_cast<UInt64>(packet.firstVertex)
 			+ packet.vertexCount;
 		const NiTriShapeData* shapeData = shape->GetModelData();
+		const bool supportedDistanceField =
+			packet.distanceFieldMethod == DistanceFieldMethod::TrueSdf
+			|| packet.distanceFieldMethod == DistanceFieldMethod::Mtsdf;
 		if (packet.shaderClass != NativeA8ShaderClass::Composite
-			|| packet.distanceFieldMethod != DistanceFieldMethod::Mtsdf
+			|| !supportedDistanceField
+			|| !IsStockLayoutSdfEnabled(packet.distanceFieldMethod)
 			|| packet.atlasPage != 0 || (packet.firstVertex & 3u)
 			|| !packet.vertexCount || (packet.vertexCount & 3u)
 			|| packetEnd > payloadTemplate->gpuVertices.size()

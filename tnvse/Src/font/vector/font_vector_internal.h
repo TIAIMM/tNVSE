@@ -31,6 +31,13 @@ namespace fonthook::vectorfont
 		return GetConfiguredDistanceFieldMethod() == DistanceFieldMethod::Mtsdf;
 	}
 
+	inline bool IsStockLayoutSdfEnabled(DistanceFieldMethod method)
+	{
+		return g_bEnableFreeTypeFontStockLayout
+			&& (method == DistanceFieldMethod::TrueSdf
+				|| method == DistanceFieldMethod::Mtsdf);
+	}
+
 	inline const char* GetConfiguredDistanceFieldMethodName()
 	{
 		return UsesMtsdfDistanceField() ? "MTSDF" : "true SDF";
@@ -409,6 +416,8 @@ namespace fonthook::vectorfont
 		StockLayoutSdfPrecacheRejected,
 		StockLayoutSdfPostUploadSourceRetiredReady,
 		StockLayoutSdfPriorGenerationDeclarationReady,
+		StockLayoutSdfPrivateStateCarry,
+		StockLayoutSdfPrivateStateCarryRejected,
 		PreparedSidecarCaptureFallback,
 		PreparedSidecarRejectedFallback,
 		Count,

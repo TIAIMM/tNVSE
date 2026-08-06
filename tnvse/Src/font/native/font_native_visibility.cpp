@@ -24,7 +24,11 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kRendererPositionAdjust = 0x11F474C;
 		inline constexpr double kScissorSafetyMarginPixels = 2.0;
 		inline constexpr double kClipIntervalRelativeSlack = 1.0e-6;
-		inline constexpr size_t kClipTransformCacheSetCount = 16;
+		// Credit/VUI screens can keep several hundred independent text shapes
+		// alive. The former 64-entry cache thrashed even though each entry is an
+		// exact-key, render-thread-local proof. 1024 entries in total remain below
+		// half a MiB while covering the observed working set.
+		inline constexpr size_t kClipTransformCacheSetCount = 256;
 		inline constexpr size_t kClipTransformCacheWays = 4;
 
 		enum class ClipProofResult : UInt8
@@ -54,6 +58,19 @@ namespace fonthook::vectorfont
 			D3DXMATRIX view;
 			D3DXMATRIX projection;
 			D3DXMATRIX worldViewProjection;
+			// The expensive half-space result is reusable only when every live input
+			// below is bit-for-bit identical. Matrix identity is already established
+			// by the transform key above; any mismatch simply recomputes and fails
+			// open through the ordinary path.
+			NiBound resultBound;
+			D3DVIEWPORT9 resultViewport = {};
+			RECT resultClipRect = {};
+			NativeA8VisibilityCull resultReason =
+				NativeA8VisibilityCull::None;
+			ClipProofResult result = ClipProofResult::Unproven;
+			bool resultAllowViewport = false;
+			bool resultUsesScissor = false;
+			bool resultValid = false;
 			bool valid = false;
 		};
 
@@ -337,10 +354,35 @@ namespace fonthook::vectorfont
 					!= FALSE;
 		}
 
+		bool SameViewport(const D3DVIEWPORT9& left,
+			const D3DVIEWPORT9& right)
+		{
+			return left.X == right.X && left.Y == right.Y
+				&& left.Width == right.Width && left.Height == right.Height
+				&& left.MinZ == right.MinZ && left.MaxZ == right.MaxZ;
+		}
+
+		bool SameRect(const RECT& left, const RECT& right)
+		{
+			return left.left == right.left && left.top == right.top
+				&& left.right == right.right && left.bottom == right.bottom;
+		}
+
+		bool SameBound(const NiBound& left, const NiBound& right)
+		{
+			return left.m_kCenter.x == right.m_kCenter.x
+				&& left.m_kCenter.y == right.m_kCenter.y
+				&& left.m_kCenter.z == right.m_kCenter.z
+				&& left.m_fRadius == right.m_fRadius;
+		}
+
 		ClipTransformBuildResult BuildWorldViewProjection(
 			const void* identity, const NiDX9Renderer& renderer,
-			const D3DXMATRIX& world, D3DXMATRIX& worldViewProjection)
+			const D3DXMATRIX& world, D3DXMATRIX& worldViewProjection,
+			ClipTransformCacheEntry** resolvedEntry)
 		{
+			if (resolvedEntry)
+				*resolvedEntry = nullptr;
 			ClipTransformCacheSet* cacheSet = nullptr;
 			ClipTransformCacheEntry* identityEntry = nullptr;
 			ClipTransformCacheEntry* invalidEntry = nullptr;
@@ -375,6 +417,8 @@ namespace fonthook::vectorfont
 					sizeof(identityEntry->projection)) == 0)
 			{
 				worldViewProjection = identityEntry->worldViewProjection;
+				if (resolvedEntry)
+					*resolvedEntry = identityEntry;
 				return ClipTransformBuildResult::Reused;
 			}
 
@@ -411,7 +455,10 @@ namespace fonthook::vectorfont
 				std::memcpy(&target->projection, &renderer.m_kD3DProj,
 					sizeof(target->projection));
 				target->worldViewProjection = worldViewProjection;
+				target->resultValid = false;
 				target->valid = true;
+				if (resolvedEntry)
+					*resolvedEntry = target;
 			}
 			return identityEntry
 				? ClipTransformBuildResult::KeyMiss
@@ -477,9 +524,10 @@ namespace fonthook::vectorfont
 			// D3DX entry point and retain the non-transposed matrix for row-vector
 			// homogeneous half-space evaluation below.
 			D3DXMATRIX builtWorldViewProjection = {};
+			ClipTransformCacheEntry* cacheEntry = nullptr;
 			const ClipTransformBuildResult buildResult =
 				BuildWorldViewProjection(transformIdentity,
-					renderer, world, builtWorldViewProjection);
+					renderer, world, builtWorldViewProjection, &cacheEntry);
 			if (transformBuildResult)
 				*transformBuildResult = buildResult;
 			if (buildResult == ClipTransformBuildResult::Unavailable)
@@ -488,6 +536,16 @@ namespace fonthook::vectorfont
 			}
 			const D3DXMATRIX* worldViewProjection =
 				&builtWorldViewProjection;
+			if (cacheEntry && cacheEntry->resultValid
+				&& SameBound(cacheEntry->resultBound, bound)
+				&& SameViewport(cacheEntry->resultViewport, viewport)
+				&& SameRect(cacheEntry->resultClipRect, clipRect)
+				&& cacheEntry->resultAllowViewport == allowViewport
+				&& cacheEntry->resultUsesScissor == useScissor)
+			{
+				reason = cacheEntry->resultReason;
+				return cacheEntry->result;
+			}
 
 			const ClipColumn clipX = GetClipColumn(*worldViewProjection, 0);
 			const ClipColumn clipY = GetClipColumn(*worldViewProjection, 1);
@@ -533,8 +591,20 @@ namespace fonthook::vectorfont
 				|| CubeIsOutsidePlane(rightPlane, bound)
 				|| CubeIsOutsidePlane(topPlane, bound)
 				|| CubeIsOutsidePlane(bottomPlane, bound);
-			return outside
+			const ClipProofResult result = outside
 				? ClipProofResult::Outside : ClipProofResult::Overlap;
+			if (cacheEntry)
+			{
+				cacheEntry->resultBound = bound;
+				cacheEntry->resultViewport = viewport;
+				cacheEntry->resultClipRect = clipRect;
+				cacheEntry->resultReason = reason;
+				cacheEntry->result = result;
+				cacheEntry->resultAllowViewport = allowViewport;
+				cacheEntry->resultUsesScissor = useScissor;
+				cacheEntry->resultValid = true;
+			}
+			return result;
 		}
 
 		bool IsZeroAlphaNoOpBlend(const NiAlphaProperty* alpha)

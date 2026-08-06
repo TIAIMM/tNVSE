@@ -14,7 +14,7 @@ bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
 fFreeTypeFontResolutionScale=1.0
 bEnableFreeTypeFontAggressivePerformanceMode=0
-bEnableFreeTypeFontMtsdfStockLayout=1
+bEnableFreeTypeFontStockLayout=1
 bEnableFreeTypeFontCommandBuffer=0
 uiFreeTypeFontDistanceFieldMode=1
 ```
@@ -960,45 +960,53 @@ The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
 `clip`, `scissor`, `preflight_skipped`, `packets_saved`, and `vertices_saved`.
 The separate `tnvse_freetype_preflight_clip_cull` line reports proof checks,
 viewport/scissor routes, fail-open decisions, honored results, and revoked
-results. There is no late-visibility phase line. The thin registration route
-performs no visibility work.
+results. Its render-thread-local exact-key cache has 1024 entries, enough for
+the several-hundred-shape Credit/VUI working set that thrashed the former 64
+entries. A hit requires identical shape identity, renderer, world/view/projection
+matrices, bound, viewport, resolved clip rectangle, scissor route, and viewport
+permission; it can therefore reuse both WVP and the conservative half-space
+result without weakening the fail-open proof. There is no late-visibility phase
+line. The thin registration route performs no visibility work.
 The `tnvse_freetype_accumulator_prep` line separately reports empty-facade fast
 returns, metadata acquisitions avoided by proven culls, and traversals with no
 prepared payload.
 
-### Stock-layout MTSDF target
+### Stock-layout distance-field target
 
-The common MTSDF case can bypass the facade/ring/command preparation stack
-entirely. It creates one ordinary engine-owned full `NiTriShape`, keeps the
-stock 40-byte geometry layout, and selects an isolated tNVSE MTSDF TileShader.
+The common true-SDF or MTSDF Composite case can bypass the
+facade/ring/command preparation stack entirely. It creates one ordinary
+engine-owned full `NiTriShape`, keeps the stock 40-byte geometry layout, and
+selects an isolated tNVSE distance-field TileShader for the configured method.
 The active stock accumulator therefore sorts and prepares the real text
 geometry; the final immediate hook restores the original `NiTriShape` vtable
 for the duration of the retail pass and lets the stock pass issue the one draw.
 There is no proxy geometry, native vertex-ring upload, or singleton binding for
-this shape. Because the isolated TileShader still writes
-the private c176-c183 block and c209, this draw fully invalidates the sorted
-private-register proof on entry and exit; it is never misclassified as a
-genuinely stock Tile transition.
+this shape.
 
-`bEnableFreeTypeFontMtsdfStockLayout=1` enables this optional target and is the
-default. Setting it to `0` suppresses both its shader/declaration generation and
-its shape-creation attempt; eligible text therefore stays on the existing
-52-byte native facade/CommandBuffer route without paying Stock-layout geometry
-or precache costs. This makes restart-to-restart performance comparisons clean:
-keep every other setting, save, scene, camera, and sampling interval identical,
-and change only this switch. It does not change atlas generation, persistent
-cache identity, MTSDF pixels, or visual eligibility rules.
+`bEnableFreeTypeFontStockLayout=1` enables this optional target and is the
+default. It automatically follows `uiFreeTypeFontDistanceFieldMode`: true SDF
+selects the A8/true-SDF Stock-layout shader family and MTSDF selects the BGRA/
+MTSDF family. Setting the single switch to `0` suppresses Stock-layout shader/
+declaration generation and shape creation for either method; eligible text
+therefore stays on the existing 52-byte native facade/CommandBuffer route
+without paying Stock-layout geometry or precache costs. This makes
+restart-to-restart performance comparisons clean: keep every other setting,
+save, scene, camera, and sampling interval identical, and change only this
+switch. It changes neither atlas generation, persistent cache identity,
+distance-field pixels, nor visual eligibility rules.
 
 Eligibility is deliberately strict and immutable: exactly one physical atlas
-page, one Composite packet covering all glyphs, MTSDF, a static
-layer mask from 8 through 15, one positive spread across all vertices, and exact
-distance scale 1. Every quad must also carry one finite,
+page, one Composite packet covering all glyphs, true SDF or MTSDF matching the
+active shader generation, a static layer mask from 8 through 15, one positive
+spread across all vertices, and exact distance scale 1. Every quad must carry one finite,
 ordered glyph UV rectangle. UV0 remains the atlas coordinate; UV1 and UV2 store
 the per-glyph minimum and maximum so filtered samples remain clamped to the
 physical glyph and cannot bleed across the atlas. The optional vertex shader
 publishes packet-wide spread/mask through VS c209; the pixel shader derives
-screen-space antialias width from `ddx`/`ddy`, preserving MTSDF effects without
-the 52-byte native vertex stream. Shadow masks 9/11/13/15 are supported both
+screen-space antialias width from `ddx`/`ddy`. MTSDF profiles decode the RGB
+median for the body and alpha for effects; true-SDF profiles decode the A8
+sample for both through separately compiled `DISTANCE_FIELD_TRUE_SDF` variants.
+Both preserve effects without the 52-byte native vertex stream. Shadow masks 9/11/13/15 are supported both
 with zero offset and with a real X/Y offset. The shifted variants consume the
 existing one-quad glyph/shadow union geometry and use dedicated static-shift
 pixel programs, so shadow position and painter order remain identical to the
@@ -1008,8 +1016,8 @@ Any ineligible case stays on the existing one-facade native pipeline. Failure
 to create the optional declaration/shader/profile also falls back before the
 target vtable is published. A generation or geometry-buffer mismatch discovered
 at draw time records a runtime fallback and executes the retained payload through
-the established native packet path. Multi-page text, true-SDF, mixed spread or
-scale, and aggressive precomposed ARGB are therefore unchanged.
+the established native packet path. Multi-page text, mixed spread or scale,
+and aggressive precomposed ARGB are therefore unchanged.
 The target changes neither atlas dimensions nor persistent cache format and
 does not enable NPOT. Its preparation deliberately asks the stock object path
 to establish properties and bounds with geometry precaching disabled. After
@@ -1062,7 +1070,18 @@ outcomes for live target shapes over the reporting interval. The same line expos
 using the target rather than merely matching a non-shadow mask.
 `postupload_source_retired_ready_checks` proves that expected CPU cleanup no
 longer blocks the target, while `prior_generation_decl_ready_checks` proves
-same-device startup-generation buffers were reused. The one-shot
+same-device startup-generation buffers were reused. `private_state_carries`
+counts draws whose exact first-pass callback chain completed the native
+constant callback and retained its private-register proof;
+`private_state_carry_rejected` counts fail-closed resets. This optimization does
+not use code hashes. It requires the retail texture/constants/alpha-test/state/
+prepare/post callback identities, current generation/device, and a token signed
+only after `NativeUpdateConstants` finishes c176-c183, c209, and sampler work.
+Any non-first pass, replaced callback, nested/re-entered draw, fault, reset, or
+missing token clears the cache. Even a successful carry invalidates the command
+execution segment and discards texture, sampler, declaration, buffer,
+clip/stencil and render-state proofs; only the reverse-proven disjoint private
+constants survive. The one-shot
 `tnvse_freetype_stock_layout_sdf_postpack` diagnostic records the observed CPU
 source state, keep mask, declaration class, device epoch, and stride. A new run
 should show nonzero direct `draws` and a sharp reduction in `runtime_fallback`;
