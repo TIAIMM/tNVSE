@@ -179,7 +179,7 @@ void LoadConfig()
 	{
 		g_bEnableFreeTypeFontCommandBuffer = ReadConfigInt(
 			kFreeTypeFontSection,
-			"bEnableFreeTypeFontCommandBuffer", 0, filename) != 0;
+			"bEnableFreeTypeFontCommandBuffer", 1, filename) != 0;
 	}
 	else
 	{
