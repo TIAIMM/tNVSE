@@ -898,7 +898,7 @@ namespace fonthook::vectorfont
 
 			runtime->manualBaseline = config.baseline > 0.0f;
 			if (!runtime->manualBaseline
-				|| config.verticalMetrics == VerticalMetricsMode::Original)
+				|| config.verticalMetrics == VerticalMetricsMode::Vanilla)
 			{
 				runtime->verticalAlignmentRasterScale = GetCanonicalFreeTypeRasterScale();
 				ApplyAutomaticVisualAlignment(
@@ -1017,9 +1017,9 @@ namespace fonthook::vectorfont
 		return result;
 	}
 
-	ActiveFontState::OriginalVerticalMetrics CaptureOriginalVerticalMetrics(const Font& font)
+	ActiveFontState::VanillaVerticalMetrics CaptureVanillaVerticalMetrics(const Font& font)
 	{
-		ActiveFontState::OriginalVerticalMetrics result;
+		ActiveFontState::VanillaVerticalMetrics result;
 		if (!font.pFontData)
 			return result;
 
@@ -1056,18 +1056,18 @@ namespace fonthook::vectorfont
 			activeState.data = font.pFontData;
 			activeState.fontId = static_cast<UInt32>(font.iFontNum);
 		}
-		if (!activeState.originalMetricsCaptured)
+		if (!activeState.vanillaMetricsCaptured)
 		{
-			activeState.originalMetrics = CaptureOriginalVerticalMetrics(font);
-			activeState.originalMetricsCaptured = true;
+			activeState.vanillaMetrics = CaptureVanillaVerticalMetrics(font);
+			activeState.vanillaMetricsCaptured = true;
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
-				const auto& original = activeState.originalMetrics;
+				const auto& vanilla = activeState.vanillaMetrics;
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: original metrics snapshot font=%u valid=%d baseline=%.2f fontHeight=%.2f maxDrop=%.2f space=(top=%.2f height=%.2f)",
-					font.iFontNum, original.valid ? 1 : 0, original.baseLine,
-					original.fontHeight, original.maxDrop,
-					original.spaceTopEdge, original.spaceHeight);
+					"tnvse_freetype_font: vanilla metrics snapshot font=%u valid=%d baseline=%.2f fontHeight=%.2f maxDrop=%.2f space=(top=%.2f height=%.2f)",
+					font.iFontNum, vanilla.valid ? 1 : 0, vanilla.baseLine,
+					vanilla.fontHeight, vanilla.maxDrop,
+					vanilla.spaceTopEdge, vanilla.spaceHeight);
 			}
 		}
 
@@ -1121,30 +1121,30 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		const bool requestedOriginal = runtime.config->verticalMetrics == VerticalMetricsMode::Original;
-		const bool useOriginal = requestedOriginal && activeState.originalMetrics.valid;
-		if (requestedOriginal && !useOriginal && !activeState.originalFallbackLogged)
+		const bool requestedVanilla = runtime.config->verticalMetrics == VerticalMetricsMode::Vanilla;
+		const bool useVanilla = requestedVanilla && activeState.vanillaMetrics.valid;
+		if (requestedVanilla && !useVanilla && !activeState.vanillaFallbackLogged)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: invalid original metrics font=%u; falling back to freetype vertical metrics",
+				"tnvse_freetype_font: invalid vanilla metrics font=%u; falling back to freetype vertical metrics",
 				font.iFontNum);
-			activeState.originalFallbackLogged = true;
+			activeState.vanillaFallbackLogged = true;
 		}
 
-		const auto& original = activeState.originalMetrics;
+		const auto& vanilla = activeState.vanillaMetrics;
 		const bool configuredBaseline = runtime.config->baseline > 0.0f;
-		const float resolvedBaseline = useOriginal
+		const float resolvedBaseline = useVanilla
 			? (configuredBaseline
 				? std::ceil(std::max(1.0f, runtime.config->baseline))
-				: original.baseLine)
+				: vanilla.baseLine)
 			: runtime.baseLine;
-		const float resolvedMaxDrop = useOriginal ? original.maxDrop : runtime.minBottom;
-		const float resolvedFontHeight = useOriginal
-			? resolvedBaseline - original.maxDrop : runtime.fontHeight;
-		const float resolvedSpaceHeight = useOriginal
-			? original.spaceHeight : runtime.glyphHeight;
-		const float resolvedSpaceTop = useOriginal
-			? original.maxDrop + original.spaceHeight
+		const float resolvedMaxDrop = useVanilla ? vanilla.maxDrop : runtime.minBottom;
+		const float resolvedFontHeight = useVanilla
+			? resolvedBaseline - vanilla.maxDrop : runtime.fontHeight;
+		const float resolvedSpaceHeight = useVanilla
+			? vanilla.spaceHeight : runtime.glyphHeight;
+		const float resolvedSpaceTop = useVanilla
+			? vanilla.maxDrop + vanilla.spaceHeight
 			: runtime.minBottom + runtime.glyphHeight;
 
 		font.pFontData->fBaseLine = resolvedBaseline;
@@ -1170,8 +1170,8 @@ namespace fonthook::vectorfont
 		{
 			FreeTypeFontDebugLog(
 				"tnvse_freetype_font: applied metrics font=%u verticalMetrics=%s baselineSource=%s requestedBaseline=%.2f resolvedBaseline=%.2f fontHeight=%.2f maxDrop=%.2f space=(width=%.2f spacing=%.2f top=%.2f height=%.2f)",
-				font.iFontNum, useOriginal ? "original" : "freetype",
-				useOriginal ? (configuredBaseline ? "configured" : "original")
+				font.iFontNum, useVanilla ? "vanilla" : "freetype",
+				useVanilla ? (configuredBaseline ? "configured" : "vanilla")
 					: (configuredBaseline ? "configured" : "freetype"),
 				runtime.config->baseline, font.pFontData->fBaseLine,
 				font.fFontHeight, font.fMaxDrop,
@@ -1209,7 +1209,7 @@ namespace fonthook::vectorfont
 		{
 		case SealedDirectGlyphLookup::Resolved:
 		{
-			// Rich-text layout still consumes the stock FontLetter metric
+			// Rich-text layout still consumes the vanilla FontLetter metric
 			// interface.  Serve it from one TLS view of the immutable direct
 			// record instead of recreating the released DBCS metrics map.
 			thread_local FontLetter directMetrics = {};

@@ -440,7 +440,7 @@ namespace fonthook::vectorfont
 		void ReleaseRingResourcesLocked(NativeA8RingState& state)
 		{
 			// Singleton-facade descriptors borrow the ring's COM resources without
-			// owning references. Restore every live shape to its stock shell before
+			// owning references. Restore every live shape to its vanilla shell before
 			// any buffer or declaration can be released.
 			InvalidateAllSingletonFacadeBindings();
 			state.releasePending.store(false, std::memory_order_release);
@@ -1350,7 +1350,7 @@ namespace fonthook::vectorfont
 			}
 			proxy->m_uiFlags = facade.m_uiFlags;
 			// Keep the blend/sort contract but clear only alpha testing. Aliasing
-			// the facade property lets the stock pass re-enable the threshold.
+			// the facade property lets the vanilla pass re-enable the threshold.
 			proxyAlpha->m_usFlags = sourceAlpha->m_usFlags;
 			proxyAlpha->m_ucAlphaTestRef = sourceAlpha->m_ucAlphaTestRef;
 			proxyAlpha->SetAlphaTesting(false);
@@ -3208,7 +3208,7 @@ namespace fonthook::vectorfont
 		buffer->m_uiTriCount = quadCount * 2u;
 		buffer->m_uiMaxTriCount = quadCount * 2u;
 		// One contiguous indexed array is required even when m_pusArrayLengths is
-		// null; stock then uses m_uiTriCount for this single draw.
+		// null; vanilla then uses m_uiTriCount for this single draw.
 		buffer->m_uiNumArrays = kCanonicalArrayCount;
 		proxy->GetModelData()->m_kBound = source.bound;
 		if (reservedProxy.shader != shader)

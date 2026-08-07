@@ -130,9 +130,9 @@ namespace fonthook::vectorfont
 			return SealedDirectGlyphLookup::Invalid;
 		glyph.faceIndex = table.faceIndices[slot];
 		if (table.recordKind
-			== DirectCachedLetterKind::StockFontLetter)
+			== DirectCachedLetterKind::VanillaFontLetter)
 		{
-			const FontLetter& letter = table.stockGlyphs[slot];
+			const FontLetter& letter = table.vanillaGlyphs[slot];
 			if (letter.iTextureIndex == -1)
 				return SealedDirectGlyphLookup::Unavailable;
 			if (letter.iTextureIndex < -2)
@@ -284,7 +284,7 @@ namespace fonthook::vectorfont
 			output.byteClass = glyph.byteClass;
 			UInt16 localPage = kInvalidDirectAtlasPageSlot;
 			if (table.recordKind
-				== DirectCachedLetterKind::StockFontLetter)
+				== DirectCachedLetterKind::VanillaFontLetter)
 			{
 				if (maskType != GlyphMaskType::Composite)
 				{
@@ -293,7 +293,7 @@ namespace fonthook::vectorfont
 					return false;
 				}
 				const FontLetter& letter =
-					table.stockGlyphs[expectedSlot];
+					table.vanillaGlyphs[expectedSlot];
 				if (letter.iTextureIndex == -2)
 				{
 					output.knownEmpty = true;
@@ -309,7 +309,7 @@ namespace fonthook::vectorfont
 				}
 				localPage =
 					static_cast<UInt16>(letter.iTextureIndex);
-				output.stockLetter = &letter;
+				output.vanillaLetter = &letter;
 			}
 			else
 			{
@@ -350,7 +350,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			output.atlasPage = ordinal;
-			if (output.stockLetter)
+			if (output.vanillaLetter)
 				continue;
 			const auto& page = sealed->atlases[ordinal];
 			if (!page || !page->compactSnapshot
@@ -451,7 +451,7 @@ namespace fonthook::vectorfont
 					static_cast<UInt8>(glyph.byteClass);
 				UInt16 localPage = kInvalidDirectAtlasPageSlot;
 				if (table.recordKind
-					== DirectCachedLetterKind::StockFontLetter)
+					== DirectCachedLetterKind::VanillaFontLetter)
 				{
 					if (maskType != GlyphMaskType::Composite)
 					{
@@ -461,7 +461,7 @@ namespace fonthook::vectorfont
 						return false;
 					}
 					const FontLetter& letter =
-						table.stockGlyphs[glyphSlot];
+						table.vanillaGlyphs[glyphSlot];
 					if (letter.iTextureIndex == -2)
 					{
 						output.knownEmpty = true;
@@ -478,7 +478,7 @@ namespace fonthook::vectorfont
 					}
 					localPage = static_cast<UInt16>(
 						letter.iTextureIndex);
-					output.stockLetter = &letter;
+					output.vanillaLetter = &letter;
 				}
 				else
 				{
@@ -523,7 +523,7 @@ namespace fonthook::vectorfont
 					return false;
 				}
 				output.atlasPage = ordinal;
-				if (output.stockLetter)
+				if (output.vanillaLetter)
 					continue;
 				const auto& page = sealed->atlases[ordinal];
 				if (!page || !page->compactSnapshot

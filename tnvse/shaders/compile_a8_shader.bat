@@ -20,7 +20,7 @@ for %%F in ("%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_fre
 )
 "%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_vs.vso" "%~dp0freetype_native_vs.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_stock_layout_vs.vso" "%~dp0freetype_native_stock_layout_vs.hlsl"
+"%FXC%" /nologo /T vs_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_vanilla_layout_vs.vso" "%~dp0freetype_native_vanilla_layout_vs.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_coverage.pso" "%~dp0freetype_native_coverage.hlsl"
 if errorlevel 1 exit /b %errorlevel%
@@ -68,17 +68,17 @@ call :compile_mtsdf_profiles 1 balanced
 if errorlevel 1 exit /b %errorlevel%
 call :compile_mtsdf_profiles 2 high
 if errorlevel 1 exit /b %errorlevel%
-call :compile_stock_layout_profiles 0 fast
+call :compile_vanilla_layout_profiles 0 fast
 if errorlevel 1 exit /b %errorlevel%
-call :compile_stock_layout_profiles 1 balanced
+call :compile_vanilla_layout_profiles 1 balanced
 if errorlevel 1 exit /b %errorlevel%
-call :compile_stock_layout_profiles 2 high
+call :compile_vanilla_layout_profiles 2 high
 if errorlevel 1 exit /b %errorlevel%
-call :compile_true_sdf_stock_layout_profiles 0 fast
+call :compile_true_sdf_vanilla_layout_profiles 0 fast
 if errorlevel 1 exit /b %errorlevel%
-call :compile_true_sdf_stock_layout_profiles 1 balanced
+call :compile_true_sdf_vanilla_layout_profiles 1 balanced
 if errorlevel 1 exit /b %errorlevel%
-call :compile_true_sdf_stock_layout_profiles 2 high
+call :compile_true_sdf_vanilla_layout_profiles 2 high
 if errorlevel 1 exit /b %errorlevel%
 for /f %%C in ('dir /b /a-d "%~dp0compiled\tnvse_freetype_native_*.pso" "%~dp0compiled\tnvse_freetype_native_*.vso" 2^>nul ^| find /c /v ""') do set "OUTPUT_COUNT=%%C"
 if not "%OUTPUT_COUNT%"=="130" (
@@ -110,36 +110,36 @@ if "%4"=="1" set "PROFILE_SUFFIX=_shift"
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_composite_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
 exit /b %errorlevel%
 
-:compile_stock_layout_profiles
+:compile_vanilla_layout_profiles
 for %%M in (8 9 10 11 12 13 14 15) do (
-	call :compile_stock_layout_profile %1 %2 %%M 0
+	call :compile_vanilla_layout_profile %1 %2 %%M 0
 	if errorlevel 1 exit /b 1
 )
 for %%M in (9 11 13 15) do (
-	call :compile_stock_layout_profile %1 %2 %%M 1
+	call :compile_vanilla_layout_profile %1 %2 %%M 1
 	if errorlevel 1 exit /b 1
 )
 exit /b 0
 
-:compile_stock_layout_profile
+:compile_vanilla_layout_profile
 set "PROFILE_SUFFIX="
 if "%4"=="1" set "PROFILE_SUFFIX=_shift"
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_stock_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_vanilla_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
 exit /b %errorlevel%
 
-:compile_true_sdf_stock_layout_profiles
+:compile_true_sdf_vanilla_layout_profiles
 for %%M in (8 9 10 11 12 13 14 15) do (
-	call :compile_true_sdf_stock_layout_profile %1 %2 %%M 0
+	call :compile_true_sdf_vanilla_layout_profile %1 %2 %%M 0
 	if errorlevel 1 exit /b 1
 )
 for %%M in (9 11 13 15) do (
-	call :compile_true_sdf_stock_layout_profile %1 %2 %%M 1
+	call :compile_true_sdf_vanilla_layout_profile %1 %2 %%M 1
 	if errorlevel 1 exit /b 1
 )
 exit /b 0
 
-:compile_true_sdf_stock_layout_profile
+:compile_true_sdf_vanilla_layout_profile
 set "PROFILE_SUFFIX="
 if "%4"=="1" set "PROFILE_SUFFIX=_shift"
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_stock_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_vanilla_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
 exit /b %errorlevel%

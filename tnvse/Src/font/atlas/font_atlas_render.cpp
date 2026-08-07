@@ -138,7 +138,7 @@ namespace fonthook::vectorfont
 
 		const bool precomposed =
 			profile->recordKind
-				== DirectCachedLetterKind::StockFontLetter
+				== DirectCachedLetterKind::VanillaFontLetter
 			&& profile->renderMode == AtlasRenderMode::CpuEffects
 			&& profile->pixelMode == AtlasPixelMode::Argb32;
 		const bool distanceField =

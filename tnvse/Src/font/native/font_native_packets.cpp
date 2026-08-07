@@ -149,8 +149,8 @@ namespace fonthook::vectorfont
 			seal.packetCount = static_cast<UInt32>(payload.packets.size());
 			seal.compositePacketCount = static_cast<UInt32>(
 				payload.compositePackets.size());
-			seal.stockLikeBitmapPackets =
-				UsesOnlyStockLikeBitmapPackets(payload.packets);
+			seal.vanillaLikeBitmapPackets =
+				UsesOnlyVanillaLikeBitmapPackets(payload.packets);
 			payload.validationSeal = seal;
 			return true;
 		}
@@ -691,9 +691,9 @@ namespace fonthook::vectorfont
 		payload.preflightAlphaBlending = false;
 		payload.useCompositePackets = false;
 		payload.compositeUnavailable = false;
-		payload.stockLikeBitmapPackets = sealed
-			? payload.payloadTemplate->validationSeal.stockLikeBitmapPackets
-			: UsesOnlyStockLikeBitmapPackets(
+		payload.vanillaLikeBitmapPackets = sealed
+			? payload.payloadTemplate->validationSeal.vanillaLikeBitmapPackets
+			: UsesOnlyVanillaLikeBitmapPackets(
 				payload.payloadTemplate->packets);
 		payload.packetPrepareFailure.store(
 			NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);

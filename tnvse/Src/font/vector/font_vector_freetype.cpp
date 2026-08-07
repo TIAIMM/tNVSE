@@ -27,7 +27,7 @@ namespace fonthook
 				if (vectorfont::State().loggedUnconfiguredFontIds.insert(apFont->iFontNum).second)
 				{
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_font: font id=%d file=%s is not configured; keeping original renderer",
+						"tnvse_freetype_font: font id=%d file=%s is not configured; keeping vanilla renderer",
 						apFont->iFontNum, apFont->pFontFile ? apFont->pFontFile : "");
 				}
 			}

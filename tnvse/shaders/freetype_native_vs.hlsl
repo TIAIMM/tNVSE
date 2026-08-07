@@ -59,7 +59,7 @@ float NativeFontVertexAntialiasWidth(float4 clipPosition,
 NativeFontVertexOutput Main(NativeFontVertexInput input)
 {
 	NativeFontVertexOutput output;
-	// This is the stock TILE1000 transform contract: c0-c3 are populated by
+	// This is the vanilla TILE1000 transform contract: c0-c3 are populated by
 	// TileShader::UpdateConstants and contain the row-major WVP matrix.
 	output.position = mul(float4(input.position, 1.0), WorldViewProjection);
 	output.atlasUv = input.atlasUv;

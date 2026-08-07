@@ -805,20 +805,20 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::PreparedSidecarCaptureFallback),
 			counterValue(
 				FreeTypePerfCounter::PreparedSidecarRejectedFallback));
-		const UInt64 stockConstantUpdates =
+		const UInt64 vanillaConstantUpdates =
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::StockConstantUpdate)];
-		const UInt64 stockC0CompatibilityRepublishes =
+				FreeTypePerfCounter::VanillaConstantUpdate)];
+		const UInt64 vanillaC0CompatibilityRepublishes =
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
-					StockPixelConstantCompatibilityRepublish)];
-		const UInt64 stockC0RepublishElided =
-			stockConstantUpdates >= stockC0CompatibilityRepublishes
-				? stockConstantUpdates
-					- stockC0CompatibilityRepublishes
+					VanillaPixelConstantCompatibilityRepublish)];
+		const UInt64 vanillaC0RepublishElided =
+			vanillaConstantUpdates >= vanillaC0CompatibilityRepublishes
+				? vanillaConstantUpdates
+					- vanillaC0CompatibilityRepublishes
 				: 0;
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu text_artifact_hit=%llu miss=%llu hot=%llu bypass=%llu admitted=%llu evicted=%llu shader_batches=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu sorted_static_batches=%llu payloads=%llu bytes=%llu merged_packet_ranges=%llu metadata_hot=%llu locked=%llu sorted_facades=%llu unique_payloads=%llu frame_lookup_hits=%llu preflight_fast=%llu full=%llu direct_static=%llu direct_dynamic=%llu sorted_dynamic_batches=%llu payloads=%llu bytes=%llu lockless_packets=%llu visibility_checks=%llu culled=%llu app=%llu alpha=%llu clip=%llu scissor=%llu preflight_skipped=%llu packets_saved=%llu vertices_saved=%llu direct_shape_candidates=%llu direct_shape_draws=%llu direct_shape_vertices=%llu direct_shape_fallback=%llu constant_ownership_segments=%llu reuses=%llu releases=%llu snapshot_gets_elided=%llu restore_sets_elided=%llu stock_constant_updates=%llu reuses=%llu composite_constant_full=%llu private_reuses=%llu partial=%llu stock_c0_republish_elided=%llu compat_republishes=%llu private_registers_uploaded=%llu full_tail_elided=%llu stock_tile_private_preserves=%llu sampler_sets=%llu reuses=%llu composite_onequad_single_page=%llu onequad_paged=%llu onequad_build_fallback=%llu legacy_multipage_fallback=%llu shader_fallback=%llu composite_draws=%llu tile_passes=%llu cache_hit=%llu miss=%llu state_changes=%llu generated=%llu evicted=%llu cache_bytes=%llu budget_reject=%llu rtt_fail=%llu restore_fail=%llu visual_validated=%llu rejected=%llu inconclusive=%llu",
+			"tnvse_freetype_perf: bitmap_mem=%llu cross_font=%llu disk_hit=%llu miss=%llu write=%llu read_bytes=%llu write_bytes=%llu raster=%llu bitmap_batch_requests=%llu deduped=%llu atlas_hit=%llu create=%llu grow=%llu uploads=%llu bytes=%llu upload_rects=%llu text_artifact_hit=%llu miss=%llu hot=%llu bypass=%llu admitted=%llu evicted=%llu shader_batches=%llu cpu_effect_masks_avoided=%llu gpu_resident_glyph_hit=%llu miss=%llu atlas_snapshot_profile_reuse=%llu dynamic_vb_uploads=%llu bytes=%llu reuse=%llu discards=%llu static_vb_uploads=%llu bytes=%llu hits=%llu promotion_failed=%llu sorted_static_batches=%llu payloads=%llu bytes=%llu merged_packet_ranges=%llu metadata_hot=%llu locked=%llu sorted_facades=%llu unique_payloads=%llu frame_lookup_hits=%llu preflight_fast=%llu full=%llu direct_static=%llu direct_dynamic=%llu sorted_dynamic_batches=%llu payloads=%llu bytes=%llu lockless_packets=%llu visibility_checks=%llu culled=%llu app=%llu alpha=%llu clip=%llu scissor=%llu preflight_skipped=%llu packets_saved=%llu vertices_saved=%llu direct_shape_candidates=%llu direct_shape_draws=%llu direct_shape_vertices=%llu direct_shape_fallback=%llu constant_ownership_segments=%llu reuses=%llu releases=%llu snapshot_gets_elided=%llu restore_sets_elided=%llu vanilla_constant_updates=%llu reuses=%llu composite_constant_full=%llu private_reuses=%llu partial=%llu vanilla_c0_republish_elided=%llu compat_republishes=%llu private_registers_uploaded=%llu full_tail_elided=%llu vanilla_tile_private_preserves=%llu sampler_sets=%llu reuses=%llu composite_onequad_single_page=%llu onequad_paged=%llu onequad_build_fallback=%llu legacy_multipage_fallback=%llu shader_fallback=%llu composite_draws=%llu tile_passes=%llu cache_hit=%llu miss=%llu state_changes=%llu generated=%llu evicted=%llu cache_bytes=%llu budget_reject=%llu rtt_fail=%llu restore_fail=%llu visual_validated=%llu rejected=%llu inconclusive=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapMemoryHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapCrossFontHit)],
 			values[static_cast<size_t>(FreeTypePerfCounter::BitmapDiskHit)],
@@ -904,7 +904,7 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::ConstantSnapshotGetElided)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::ConstantRestoreSetElided)],
-			stockConstantUpdates,
+			vanillaConstantUpdates,
 			static_cast<UInt64>(0),
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CompositeConstantFullUpload)],
@@ -912,16 +912,16 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::NativePacketConstantReuse)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CompositeConstantPartialUpload)],
-			stockC0RepublishElided,
+			vanillaC0RepublishElided,
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::
-					StockPixelConstantCompatibilityRepublish)],
+					VanillaPixelConstantCompatibilityRepublish)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::NativePacketConstantRegisterUpload)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::NativePacketConstantFullTailElided)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::NativePrivateStateStockTilePreserve)],
+				FreeTypePerfCounter::NativePrivateStateVanillaTilePreserve)],
 			values[static_cast<size_t>(FreeTypePerfCounter::SamplerStateSet)],
 			values[static_cast<size_t>(FreeTypePerfCounter::SamplerStateReuse)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeFusedEligible)],
@@ -944,7 +944,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu stock_ui_ortho_translation=%llu generic_transforms=%llu",
+			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu vanilla_ui_ortho_translation=%llu generic_transforms=%llu",
 			counterValue(FreeTypePerfCounter::VisibilityPreflightClipCheck),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipCulled),
@@ -969,7 +969,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipTransformUnavailable),
 			counterValue(FreeTypePerfCounter::
-				VisibilityPreflightClipStockUiOrthographicTranslation),
+				VisibilityPreflightClipVanillaUiOrthographicTranslation),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipGenericTransform));
 		FreeTypeFontDebugLog(
@@ -1036,7 +1036,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::MetadataMapReserve),
 			counterValue(FreeTypePerfCounter::MetadataMapRehash));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu vertex_aa_stock_preserved=%llu command_program_setups=%llu binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu registers_uploaded=%llu full_tail_elided=%llu",
+			"tnvse_freetype_perf: constant_capture_mirror=%llu driver=%llu state_shadow_driver_gets=%llu isolation_bypass=%llu vertex_aa_sets=%llu reuses=%llu vertex_aa_vanilla_preserved=%llu command_program_setups=%llu binds_elided=%llu texture_sets=%llu reuses=%llu command_packet_constant_full=%llu partial=%llu reuses=%llu registers_uploaded=%llu full_tail_elided=%llu",
 			static_cast<UInt64>(0),
 			static_cast<UInt64>(0),
 			static_cast<UInt64>(0),
@@ -1046,7 +1046,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::VertexAaConstantReuse)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::VertexAaConstantStockPreserved)],
+				FreeTypePerfCounter::VertexAaConstantVanillaPreserved)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandProgramSetup)],
 			values[static_cast<size_t>(
@@ -1175,37 +1175,37 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::AccumulatorMetadataCullSkipped),
 			counterValue(FreeTypePerfCounter::AccumulatorNoPreparedPayload));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_stock_layout_sdf: eligible=%llu created=%llu create_fallback=%llu draws=%llu culls=%llu runtime_fallback=%llu vertices=%llu shifted_eligible=%llu shifted_created=%llu shifted_draws=%llu shifted_runtime_fallback=%llu precache_accepted=%llu precache_immediate=%llu precache_deferred=%llu precache_rejected=%llu postupload_source_retired_ready_checks=%llu prior_generation_decl_ready_checks=%llu private_state_carries=%llu private_state_carry_rejected=%llu",
-			counterValue(FreeTypePerfCounter::StockLayoutSdfCandidate),
-			counterValue(FreeTypePerfCounter::StockLayoutSdfCreated),
-			counterValue(FreeTypePerfCounter::StockLayoutSdfFallback),
-			counterValue(FreeTypePerfCounter::StockLayoutSdfDraw),
-			counterValue(FreeTypePerfCounter::StockLayoutSdfCull),
-			counterValue(FreeTypePerfCounter::StockLayoutSdfRuntimeFallback),
-			counterValue(FreeTypePerfCounter::StockLayoutSdfVertex),
-			counterValue(FreeTypePerfCounter::StockLayoutSdfShiftedCandidate),
-			counterValue(FreeTypePerfCounter::StockLayoutSdfShiftedCreated),
-			counterValue(FreeTypePerfCounter::StockLayoutSdfShiftedDraw),
+			"tnvse_freetype_vanilla_layout_sdf: eligible=%llu created=%llu create_fallback=%llu draws=%llu culls=%llu runtime_fallback=%llu vertices=%llu shifted_eligible=%llu shifted_created=%llu shifted_draws=%llu shifted_runtime_fallback=%llu precache_accepted=%llu precache_immediate=%llu precache_deferred=%llu precache_rejected=%llu postupload_source_retired_ready_checks=%llu prior_generation_decl_ready_checks=%llu private_state_carries=%llu private_state_carry_rejected=%llu",
+			counterValue(FreeTypePerfCounter::VanillaLayoutSdfCandidate),
+			counterValue(FreeTypePerfCounter::VanillaLayoutSdfCreated),
+			counterValue(FreeTypePerfCounter::VanillaLayoutSdfFallback),
+			counterValue(FreeTypePerfCounter::VanillaLayoutSdfDraw),
+			counterValue(FreeTypePerfCounter::VanillaLayoutSdfCull),
+			counterValue(FreeTypePerfCounter::VanillaLayoutSdfRuntimeFallback),
+			counterValue(FreeTypePerfCounter::VanillaLayoutSdfVertex),
+			counterValue(FreeTypePerfCounter::VanillaLayoutSdfShiftedCandidate),
+			counterValue(FreeTypePerfCounter::VanillaLayoutSdfShiftedCreated),
+			counterValue(FreeTypePerfCounter::VanillaLayoutSdfShiftedDraw),
 			counterValue(
-				FreeTypePerfCounter::StockLayoutSdfShiftedRuntimeFallback),
+				FreeTypePerfCounter::VanillaLayoutSdfShiftedRuntimeFallback),
 			counterValue(
-				FreeTypePerfCounter::StockLayoutSdfPrecacheAccepted),
+				FreeTypePerfCounter::VanillaLayoutSdfPrecacheAccepted),
 			counterValue(
-				FreeTypePerfCounter::StockLayoutSdfPrecacheImmediate),
+				FreeTypePerfCounter::VanillaLayoutSdfPrecacheImmediate),
 			counterValue(
-				FreeTypePerfCounter::StockLayoutSdfPrecacheDeferred),
+				FreeTypePerfCounter::VanillaLayoutSdfPrecacheDeferred),
 			counterValue(
-				FreeTypePerfCounter::StockLayoutSdfPrecacheRejected),
+				FreeTypePerfCounter::VanillaLayoutSdfPrecacheRejected),
 			counterValue(FreeTypePerfCounter::
-				StockLayoutSdfPostUploadSourceRetiredReady),
+				VanillaLayoutSdfPostUploadSourceRetiredReady),
 			counterValue(FreeTypePerfCounter::
-				StockLayoutSdfPriorGenerationDeclarationReady),
+				VanillaLayoutSdfPriorGenerationDeclarationReady),
 			counterValue(FreeTypePerfCounter::
-				StockLayoutSdfPrivateStateCarry),
+				VanillaLayoutSdfPrivateStateCarry),
 			counterValue(FreeTypePerfCounter::
-				StockLayoutSdfPrivateStateCarryRejected));
+				VanillaLayoutSdfPrivateStateCarryRejected));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu stock_bootstraps_saved=%llu direct_single_replays=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
+			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu vanilla_bootstraps_saved=%llu direct_single_replays=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRecorded)],
 			values[static_cast<size_t>(
@@ -1233,7 +1233,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandNativeReplay)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::CommandStockBootstrapSaved)],
+				FreeTypePerfCounter::CommandVanillaBootstrapSaved)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandDirectRangeReplay)],
 			values[static_cast<size_t>(
@@ -1315,7 +1315,7 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::
 					CommandTileRetainedPacketReuse)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: standard_pass_lite_candidates=%llu retained_builds=%llu retained_reuses=%llu retained_hits=%llu retained_misses=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu standard_v2_replays=%llu standard_v2_compat=%llu stock_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
+			"tnvse_freetype_perf: standard_pass_lite_candidates=%llu retained_builds=%llu retained_reuses=%llu retained_hits=%llu retained_misses=%llu stage1_eligible=%llu stage2_resident=%llu stage3_replays=%llu standard_v2_replays=%llu standard_v2_compat=%llu vanilla_fallbacks=%llu fallback_envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu prelude=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteCandidate)],
 			values[static_cast<size_t>(
@@ -1338,7 +1338,7 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::
 					StandardPassV2CompatibilityReplay)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::StandardPassLiteStockFallback)],
+				FreeTypePerfCounter::StandardPassLiteVanillaFallback)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::StandardPassLiteFallbackEnvelope)],
 			values[static_cast<size_t>(
@@ -1648,9 +1648,9 @@ namespace fonthook::vectorfont
 			ConsumeDurationSummary(FreeTypePerfPhase::FramePrepSingletons);
 		const DurationSummary framePrepPublish =
 			ConsumeDurationSummary(FreeTypePerfPhase::FramePrepPublish);
-		const DurationSummary frameRouteStockRender =
+		const DurationSummary frameRouteVanillaRender =
 			ConsumeDurationSummary(
-				FreeTypePerfPhase::FrameRouteStockRender);
+				FreeTypePerfPhase::FrameRouteVanillaRender);
 		const DurationSummary registerRoute =
 			ConsumeDurationSummary(FreeTypePerfPhase::RegisterRoute);
 		const DurationSummary dispatchRoute =
@@ -1770,14 +1770,14 @@ namespace fonthook::vectorfont
 			registrationPublish.p95Microseconds,
 			nativeRegistration.meanMicroseconds);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_frame_route_timing: route_total_n=%llu median_us=%.3f p95_us=%.3f prep_n=%llu median_us=%.3f p95_us=%.3f stock_render_n=%llu median_us=%.3f p95_us=%.3f",
+			"tnvse_freetype_frame_route_timing: route_total_n=%llu median_us=%.3f p95_us=%.3f prep_n=%llu median_us=%.3f p95_us=%.3f vanilla_render_n=%llu median_us=%.3f p95_us=%.3f",
 			frameRouteTotal.count, frameRouteTotal.medianMicroseconds,
 			frameRouteTotal.p95Microseconds,
 			frameRoutePrep.count, frameRoutePrep.medianMicroseconds,
 			frameRoutePrep.p95Microseconds,
-			frameRouteStockRender.count,
-			frameRouteStockRender.medianMicroseconds,
-			frameRouteStockRender.p95Microseconds);
+			frameRouteVanillaRender.count,
+			frameRouteVanillaRender.medianMicroseconds,
+			frameRouteVanillaRender.p95Microseconds);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_gpu_timing: scope=tile_alpha_envelope valid_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f submitted=%llu completed=%llu in_flight=%llu ring_full=%llu nested=%llu create_fail=%llu issue_fail=%llu read_fail=%llu disjoint=%llu invalid_range=%llu reset_discarded=%llu async=1 flush=0",
 			gpuAlphaEnvelope.count,

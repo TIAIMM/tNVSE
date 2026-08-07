@@ -102,7 +102,7 @@ namespace fonthook::vectorfont
 				| (static_cast<UInt64>(rect.height) << 48);
 		}
 
-		bool ResolveStockLetterAtlasRect(const FontLetter& letter,
+		bool ResolveVanillaLetterAtlasRect(const FontLetter& letter,
 			UInt32 atlasWidth, UInt32 atlasHeight, AtlasRect& rect)
 		{
 			if (!atlasWidth || !atlasHeight || letter.iTextureIndex < 0)
@@ -208,12 +208,12 @@ namespace fonthook::vectorfont
 						return nullptr;
 					}
 				}
-				for (const FontLetter& letter : table.stockGlyphs)
+				for (const FontLetter& letter : table.vanillaGlyphs)
 				{
 					if (letter.iTextureIndex != pageSlot)
 						continue;
 					AtlasRect rect;
-					if (!ResolveStockLetterAtlasRect(
+					if (!ResolveVanillaLetterAtlasRect(
 						letter, source.width, source.height, rect))
 					{
 						return nullptr;

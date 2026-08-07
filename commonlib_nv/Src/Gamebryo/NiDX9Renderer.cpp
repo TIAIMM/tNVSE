@@ -28,7 +28,7 @@ UInt32 NiDX9Renderer::GetScreenHeight() {
 }
 
 // 0xE73F60
-// Non-virtual stock entry. Callers must only use this after validating the
+// Non-virtual vanilla entry. Callers must only use this after validating the
 // executable bytes and when the installed virtual route cannot satisfy a
 // synchronous renderer-thread request.
 bool NiDX9Renderer::PrecacheGeometryEx(NiGeometry* apGeometry,
@@ -39,7 +39,7 @@ bool NiDX9Renderer::PrecacheGeometryEx(NiGeometry* apGeometry,
 }
 
 // 0xE74120
-// Call the public entry rather than its stock body so renderer-queue detours
+// Call the public entry rather than its vanilla body so renderer-queue detours
 // (notably NVTF's geometry precache queue) retain ownership of synchronization.
 void NiDX9Renderer::PerformPrecache() {
 	ThisStdCall<void>(0xE74120, this);

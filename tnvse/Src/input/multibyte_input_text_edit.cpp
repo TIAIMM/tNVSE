@@ -8,13 +8,13 @@ namespace fonthook
 	namespace multibyte_input
 	{
 		constexpr SIZE_T kPlayerNameTextEditOpenCall = 0x7AB740;
-		constexpr SIZE_T kStockTextEditMenuOpen = 0x7E6320;
+		constexpr SIZE_T kVanillaTextEditMenuOpen = 0x7E6320;
 		constexpr SIZE_T kPlayerNameIsValidName = 0x7AB820;
 		constexpr SIZE_T kTextEditMenuVTable = 0x1070034;
 		constexpr SIZE_T kTextEditMenuHandleKeyboardInput = 0x7E6620;
 		constexpr SIZE_T kTextEditMenuInputVTableEntry = 0x1070064;
 		constexpr SIZE_T kTextEditStateInputCallInHandleKeyboardInput = 0x7E6685;
-		constexpr SIZE_T kStockTextEditStateInput = 0x716B00;
+		constexpr SIZE_T kVanillaTextEditStateInput = 0x716B00;
 		constexpr UInt32 kMaxTextEditRawBytes = 1023;
 		constexpr UInt32 kJipNumericOnlyFlag = 1;
 		constexpr UInt32 kJipEnterAcceptsOkFlag = 2;
@@ -236,7 +236,7 @@ namespace fonthook
 				// Another adapter was published after ours.  Replacing it while
 				// it still chains to tNVSE would create a two-node recursive
 				// vtable loop.  Keep our saved predecessor and stay below the
-				// later owner until the slot returns to the stock handler.
+				// later owner until the slot returns to the vanilla handler.
 				if (currentHandler != s_jipObservedSuccessor)
 				{
 					s_jipObservedSuccessor = currentHandler;
@@ -958,12 +958,12 @@ namespace fonthook
 					kPlayerNameTextEditOpenCall,
 					Rel32Opcode::Call,
 					openTarget)
-				|| openTarget != kStockTextEditMenuOpen
+				|| openTarget != kVanillaTextEditMenuOpen
 				|| !hook_identity::ReadRel32Target(
 					kTextEditStateInputCallInHandleKeyboardInput,
 					Rel32Opcode::Call,
 					inputTarget)
-				|| inputTarget != kStockTextEditStateInput)
+				|| inputTarget != kVanillaTextEditStateInput)
 			{
 				gLog.FormattedMessage(
 					"tnvse_multibyte_input: TextEdit hook identity mismatch open=%08X input=%08X; disabled",
@@ -985,11 +985,11 @@ namespace fonthook
 			if (!installed)
 			{
 				WriteRelCall(kPlayerNameTextEditOpenCall,
-					kStockTextEditMenuOpen);
+					kVanillaTextEditMenuOpen);
 				WriteRelCall(kTextEditStateInputCallInHandleKeyboardInput,
-					kStockTextEditStateInput);
+					kVanillaTextEditStateInput);
 				gLog.FormattedMessage(
-					"tnvse_multibyte_input: TextEdit hook write verification failed; restored stock targets");
+					"tnvse_multibyte_input: TextEdit hook write verification failed; restored vanilla targets");
 			}
 		}
 

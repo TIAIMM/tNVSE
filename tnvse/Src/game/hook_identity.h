@@ -18,7 +18,7 @@ namespace fonthook::hook_identity
 	struct Rel32Site
 	{
 		SIZE_T address = 0;
-		SIZE_T stockTarget = 0;
+		SIZE_T vanillaTarget = 0;
 		const char* name = nullptr;
 	};
 

@@ -13,7 +13,7 @@ font hook:
 bEnableFreeTypeFontRendering=1
 bEnableFreeTypeFontRenderingLog=0
 fFreeTypeFontResolutionScale=1.0
-bEnableFreeTypeFontStockLayout=1
+bEnableFreeTypeFontVanillaLayout=1
 bEnableFreeTypeFontCommandBuffer=0
 uiFreeTypeFontDistanceFieldMode=2
 ```
@@ -24,11 +24,11 @@ wrapping, rich-text merge, and pagination logic. With that switch disabled,
 configured FreeType font IDs use a dedicated tNVSE Windows-1252 layout path
 derived from the reverse-engineered vanilla rules. Spaces are removable word
 breaks, `~` is a discretionary hyphen, unbroken words use vanilla-style hard
-hyphenation, and line limits/control bytes follow the original single-byte
+hyphenation, and line limits/control bytes follow the vanilla single-byte
 semantics, but every decision uses final FreeType advances. Rich text feeds
 those advances into `TextLine::AddChar` before line/page topology is selected;
 the final traversal only normalizes positions and aggregate widths. Non-FreeType
-font IDs remain wholly on the original `.fnt`/`.tex` path.
+font IDs remain wholly on the vanilla `.fnt`/`.tex` path.
 
 ## Raster scale and UIO
 
@@ -40,7 +40,7 @@ is canonicalized to the nearest `0.001`. Output resolution and the UI
 below the configured multiplier minifies that profile; a higher density
 magnifies it without generating another mask or atlas.
 
-`1.0` matches the original grayscale renderer's ordinary UIO `1.0` source
+`1.0` matches the vanilla grayscale renderer's ordinary UIO `1.0` source
 resolution. Values such as `1.5` for a 1440p-oriented source or `2.25` for a
 4K-oriented source increase source resolution without changing layout or
 displayed font size, at the cost of larger CPU masks, persistent files and atlas
@@ -78,7 +78,7 @@ shader it never owned, and its first bind must refresh the live shell shader.
 
 Font IDs are configured under `<fonts>` in
 `Data\NVSE\plugins\tnvse_fonts.xml`. Only listed IDs are replaced. Other
-fonts continue to use the original `.fnt` and `.tex` files.
+fonts continue to use the vanilla `.fnt` and `.tex` files.
 
 In MTSDF mode, compatible `doubleByte` styles are grouped automatically. When
 the largest and smallest `pixelSize` in a compatible group differ by no more
@@ -106,7 +106,7 @@ The requested slot and the resolved `Font::iFontNum` remain distinct: JIP may
 alias an unassigned extended slot to a base font, and tNVSE treats the resolved
 font object as the rendering identity.
 
-The stock rich-text ABI is a separate constraint. `TextPage::pCharsPerFont`
+The vanilla rich-text ABI is a separate constraint. `TextPage::pCharsPerFont`
 and `TextDoc::Render` contain fixed eight-element arrays, so rich-text
 `CharData::iFontIndex` remains limited to the retail base fonts. Treating this
 layout field as an 89-font registry index would corrupt the `TextPage` and
@@ -168,9 +168,9 @@ Paths may be absolute or relative to the Fallout New Vegas directory. `index`
 selects a face in TTC/OTC files. `slant` is measured in degrees; other style
 dimensions are pixels. `baseline="0"` derives the shared Fallout `fBaseLine`
 from both primary faces in `verticalMetrics="freetype"`, or inherits the
-original `.fnt` baseline in `verticalMetrics="original"`. A positive value
+vanilla `.fnt` baseline in `verticalMetrics="vanilla"`. A positive value
 sets that baseline manually and is rounded upward to the game's integer metric.
-Original-metrics mode retains automatic visual-center correction between byte
+Vanilla-metrics mode retains automatic visual-center correction between byte
 classes even with a manual baseline; FreeType-metrics mode applies that
 correction only to an automatically derived baseline. Glow, outline, and
 shadow are disabled when their node is absent; when a node is present,
@@ -304,7 +304,7 @@ visible through streamed generation, global repacking, rebuilt-snapshot loading,
 direct-table sealing, physical group/pool consolidation, and final cleanup, and
 is destroyed only when the complete prewarm transaction has passed validation.
 Like Cell Offset
-Generator, tNVSE loads this single-root `rect` directly beneath the stock
+Generator, tNVSE loads this single-root `rect` directly beneath the vanilla
 `LoadingMenu::pRootTile` obtained from the retail LoadingMenu singleton at
 `0x11DA0C0`. The component is not a standalone Menu and does not attempt to
 capture input. Startup remains blocked by the `DeferredInit` call boundary
@@ -504,7 +504,7 @@ hash. Unknown files in `fontdata` are never removed. The option defaults to `0`.
 
 The final native route is synchronized during deferred initialization, before
 configured game fonts enter bounded-throughput prewarm. Aggressive BGRA composite glyphs
-and the stock-shader ARGB fallback both select the CPU-coverage cache domain. Selecting
+and the vanilla-shader ARGB fallback both select the CPU-coverage cache domain. Selecting
 that domain forcibly closes in-process distance-field bitmap/manifest mappings
 and invalidates every normal true-SDF/MTSDF `.tnvfmask`, manifest, atlas
 snapshot, and incomplete atlas transaction, independently of
@@ -666,7 +666,7 @@ chain and then tries `U+FFFD`, `?`, and the primary face's `.notdef` glyph.
 ## Atlas and Tile shader routing
 
 `uiFreeTypeFontDistanceFieldMode` is the single rendering-mode selector. `0`
-uses the baked-effect stock-like route, `1` generates msdfgen true SDF (TSDF)
+uses the baked-effect vanilla-like route, `1` generates msdfgen true SDF (TSDF)
 into a level-zero `D3DFMT_A8` atlas, and `2` (the default) generates MTSDF into
 `D3DFMT_A8R8G8B8`. In MTSDF mode D3D9 memory is BGRA, sampled RGB carries the
 multi-channel Fill field, and sampled Alpha carries true signed distance for
@@ -685,16 +685,16 @@ the individual effect and fill colors can no longer be changed independently
 after the profile is built.
 
 Each visible mode-0 glyph therefore contributes exactly one quad. A
-single-page batch can remain one stock `NiTriShape`. When a complete baked
+single-page batch can remain one vanilla `NiTriShape`. When a complete baked
 artifact spans multiple physical pages and the native renderer is available,
 it becomes one ARGB facade whose payload contains one packet per required page;
 no page sibling is attached to the destination `NiNode`. If the native renderer
 is unavailable, the compatibility fallback collapses the batch to the existing
-single-page stock ARGB route. `precomposedArgb` ranges remain coverage/ARGB data
+single-page vanilla ARGB route. `precomposedArgb` ranges remain coverage/ARGB data
 with `usesSdf=false`; they never enter the DistanceField cache or validation
 domain. Per-glyph precomposition cannot reproduce SDF's global
 effect-before-Fill ordering where neighbouring glyph effect rectangles overlap,
-and stock one-texture modulation cannot independently preserve live Fill RGB
+and vanilla one-texture modulation cannot independently preserve live Fill RGB
 and fixed effect RGB in the same pixel rectangle. These are retained one-quad
 limitations. The mode also gives up distance-field magnification quality in
 exchange for `.fnt`-like CPU and geometry cost.
@@ -713,7 +713,7 @@ fallback; direct and bitmap records are never mixed in one submission.
 
 Every native text artifact still defines packets grouped by layer, atlas page,
 shader class, and sampling contract, but it always contributes exactly one
-facade to the stock Tile alpha list. The current virtual Sort implementation
+facade to the vanilla Tile alpha list. The current virtual Sort implementation
 places that facade in the final accumulator array. At the resulting position,
 tNVSE replays the currently selected ordinary or Composite packets
 consecutively. A one-packet artifact may bind the facade directly; a
@@ -743,23 +743,23 @@ tNVSE does not replace the global TileShader.
 Native packet buffers are requested at the sorted Tile submission, not while a
 text shape is being produced. When that submission runs on
 `TESMain::uiMainThreadID`, tNVSE preserves the installed virtual
-`PrecacheGeometry` and public `PerformPrecache` owners. This is the normal stock
+`PrecacheGeometry` and public `PerformPrecache` owners. This is the normal vanilla
 route and also lets NVTF retain its main-thread synchronization policy.
 
 `FinishAccumulating_Tiles` can instead execute on the renderer thread. NVTF
 deliberately sends a non-main-thread virtual precache request to its private
 worker, but that worker is paused while the frame is being rendered; such a
 request therefore cannot become drawable during the same Tile pass. For this
-case tNVSE sends only its own missing packets through the unvirtualized stock
-`PrecacheGeometry` entry and completes the stock `PrePackObject` queue before
-drawing. No hook or vtable slot is replaced. Both the stock geometry entry and
+case tNVSE sends only its own missing packets through the unvirtualized vanilla
+`PrecacheGeometry` entry and completes the vanilla `PrePackObject` queue before
+drawing. No hook or vtable slot is replaced. Both the vanilla geometry entry and
 the continuation of `PerformPrecache` are checked against the FalloutNV
 1.4.0.525 instruction bytes first. The continuation is the same post-detour
-entry used by NVTF itself. The stock functions acquire their own renderer
+entry used by NVTF itself. The vanilla functions acquire their own renderer
 critical sections; tNVSE no longer wraps a second blocking renderer lock around
 the public owner.
 
-The stock completion continuation is invoked through an explicit indirect x86
+The vanilla completion continuation is invoked through an explicit indirect x86
 ABI boundary, and the thread-local recursion guard is released by a separate
 constant-store routine. This is intentional: link-time code generation must not
 infer from the naked tail thunk that the game continuation preserves volatile
@@ -770,7 +770,7 @@ as recursive.
 Every packet is revalidated after completion. `packet-completion` records the
 chosen route, submitting thread, game main-thread ID, installed virtual entry,
 and whether the remaining state is `external-queue` or `renderer-packing`.
-Suppression records carry the same thread identity. If either audited stock
+Suppression records carry the same thread identity. If either audited vanilla
 body has been modified by another executable patch, tNVSE refuses to jump into
 unknown code and suppresses the affected marked submission. Incomplete shader
 generations, invalid atlas pages, property or hook conflicts, device-reset
@@ -854,7 +854,7 @@ spread causes the complete text batch to use the CPU effect path rather than
 silently reducing the requested effect.
 Because a distance-field body requires the custom native shader, failure to establish or
 complete that route rebuilds the batch through the ARGB CPU fallback instead of
-sampling distance data with the stock Tile shader. No failure path treats the
+sampling distance data with the vanilla Tile shader. No failure path treats the
 true-SDF A8 texture as ordinary coverage. When `NVSE_PLUGIN_PATH` is defined, an
 ordinary project build copies the native shader set to `Data\Shaders\Loose`.
 Native packets use immutable `TileShader` profiles and the game's normal render
@@ -865,10 +865,10 @@ destination alpha. A detected profile, packet, or device-state mismatch marks
 the native generation faulty and suppresses the affected marked submission.
 The tNVSE-owned pixel constants `c1-c4` are captured once for the complete
 native text group, then restored and verified once after its final packet.
-After stock `TileShader::UpdateConstants` refreshes Gamebryo's maps, each native
+After vanilla `TileShader::UpdateConstants` refreshes Gamebryo's maps, each native
 profile mirrors the retail `c0` definition from the current proxy property state
 and uploads `c0-c4` in one device call. This is required because the native pixel
-programs and `c1-c4` bypass the stock constant-map upload path; relying on its
+programs and `c1-c4` bypass the vanilla constant-map upload path; relying on its
 change tracking alone can leave a stale RGB register. Fixed effects ignore c0
 RGB in HLSL, and group cleanup deliberately leaves c0 at the final Tile value.
 Individual shadow, glow, outline, and fill packets therefore do not perform
@@ -908,7 +908,7 @@ still saves twelve bytes per vertex without adding packets or draw calls. After
 the active Sort has produced the final Tile arrays, tNVSE scans that result,
 evaluates zero-alpha and final model-bound viewport/scissor visibility, and
 acquires metadata in one batch only for survivors. It conditionally repairs
-only proved exact-depth stock/FreeType ties as described below, then deduplicates
+only proved exact-depth vanilla/FreeType ties as described below, then deduplicates
 surviving immutable artifacts and promotes eligible data with one static-VB
 Lock/copy/Unlock sequence. Tiles are not persistently merged: depth, per-Tile
 transform, scissor, alpha, and shader constants remain independent.
@@ -928,12 +928,12 @@ tNVSE leaves that Sort dispatch block and the active Sort implementation
 untouched. It installs no Sort hook and calls no replacement or secondary
 sorting routine, so a third-party virtual Sort predecessor remains the sole
 producer of depth ordering. The existing post-Sort facade scan also detects
-contiguous exact-equal-depth runs that contain both stock and FreeType geometry.
+contiguous exact-equal-depth runs that contain both vanilla and FreeType geometry.
 Only when such a run exists does tNVSE traverse the predecessor's still-live
 accepted source list. It indexes the sorted pointer occurrences once, walks the
 original AddTail list from tail to head, and fills only those mixed runs from
 low index to high index, matching the renderer's backwards traversal. It
-never changes `m_pfDepths`, unequal-depth order, pure-stock runs, or pure-
+never changes `m_pfDepths`, unequal-depth order, pure-vanilla runs, or pure-
 FreeType runs.
 
 NativeA8RegisterObject is intentionally thin. On an audited code image its
@@ -948,7 +948,7 @@ hook chaining, AddTail order, and duplicate-registration semantics.
 At `NativeA8RenderAlphaGeometry`, `CaptureSortedFacadeTopology` performs one
 pass over the final `m_ppkItems` array. It hashes facade pointers, records their
 occurrence counts, and folds mixed-run candidate detection into that same scan.
-If the scan captures no facade, the traversal returns directly to stock
+If the scan captures no facade, the traversal returns directly to vanilla
 `RenderAlphaGeometry`: no readiness snapshot, metadata batch, ring preparation,
 singleton preparation, command frame, or shader/constant batch is opened.
 Otherwise the final bound/scissor proof runs first and a compact survivor list
@@ -965,7 +965,7 @@ envelope failure leaves the predecessor's array unchanged.
 
 A singleton facade is direct-command eligible only when its metadata identity
 is current and it occurs exactly once in the final array. A duplicate facade
-remains valid stock geometry, but every occurrence uses the complete packet-
+remains valid vanilla geometry, but every occurrence uses the complete packet-
 loop fallback. Command construction emits only eligible FreeType entries. The
 old Sort dispatch patch, replacement quicksort, per-Sort timing, full registry
 audit, and large diagnostic families remain removed.
@@ -989,12 +989,12 @@ copies of equivalent work.
 Every ambiguous case fails open: disabled or malformed scissor, non-finite
 bound/transform/position-adjust/matrix, a cube touching or crossing `w=0`,
 viewport mismatch, the retail special scissor-scaling mode, identity mismatch,
-or an edge within the numeric safety slack all keep the original path. The
+or an edge within the numeric safety slack all keep the vanilla path. The
 proof uses the final full-text model bound and the live facade state before any
 metadata owner, packet command, upload, or draw, so it applies equally to
 single- and multi-packet payloads.
 
-The stock Interface camera also has a narrower transform path for cache misses.
+The vanilla Interface camera also has a narrower transform path for cache misses.
 The formal executable's `InterfaceManager::CreateSceneGraph` at `0x712E90`,
 `NiDX9Renderer::Do_SetCameraData` at `0xE6C780`, and
 `NiD3DUtility::GetD3DFromNi` at `0xB71A40` establish the same affine,
@@ -1016,7 +1016,7 @@ The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
 `clip`, `scissor`, `preflight_skipped`, `packets_saved`, and `vertices_saved`.
 The separate `tnvse_freetype_preflight_clip_cull` line reports proof checks,
 viewport/scissor routes, fail-open decisions, honored results, and revoked
-results. `stock_ui_ortho_translation` and `generic_transforms` partition the
+results. `vanilla_ui_ortho_translation` and `generic_transforms` partition the
 cache misses that reach transform construction and therefore show the live hit
 range of the orthographic path. The render-thread-local exact-key cache has 1024
 four-way sets (4096 entries), enough for the several-hundred-shape Credit/VUI
@@ -1030,26 +1030,26 @@ The `tnvse_freetype_accumulator_prep` line separately reports empty-facade fast
 returns, metadata acquisitions avoided by proven culls, and traversals with no
 prepared payload.
 
-### Stock-layout distance-field target
+### Vanilla-layout distance-field target
 
 The common true-SDF or MTSDF Composite case can bypass the
 facade/ring/command preparation stack entirely. It creates one ordinary
-engine-owned full `NiTriShape`, keeps the stock 40-byte geometry layout, and
+engine-owned full `NiTriShape`, keeps the vanilla 40-byte geometry layout, and
 selects an isolated tNVSE distance-field TileShader for the configured method.
-The active stock accumulator therefore sorts and prepares the real text
+The active vanilla accumulator therefore sorts and prepares the real text
 geometry; the final immediate hook restores the original `NiTriShape` vtable
-for the duration of the retail pass and lets the stock pass issue the one draw.
+for the duration of the retail pass and lets the vanilla pass issue the one draw.
 There is no proxy geometry, native vertex-ring upload, or singleton binding for
 this shape.
 
-`bEnableFreeTypeFontStockLayout=1` enables this optional target and is the
+`bEnableFreeTypeFontVanillaLayout=1` enables this optional target and is the
 default for distance-field modes. `uiFreeTypeFontDistanceFieldMode=1` selects
-the A8/TSDF Stock-layout shader family, mode `2` selects the BGRA/MTSDF family,
-and baked mode `0` does not create distance-field Stock-layout shapes. Setting
-the Stock-layout switch to `0` suppresses Stock-layout shader/
+the A8/TSDF Vanilla-layout shader family, mode `2` selects the BGRA/MTSDF family,
+and baked mode `0` does not create distance-field Vanilla-layout shapes. Setting
+the Vanilla-layout switch to `0` suppresses Vanilla-layout shader/
 declaration generation and shape creation for either method; eligible text
 therefore stays on the existing 52-byte native facade/CommandBuffer route
-without paying Stock-layout geometry or precache costs. This makes
+without paying Vanilla-layout geometry or precache costs. This makes
 restart-to-restart performance comparisons clean: keep every other setting,
 save, scene, camera, and sampling interval identical, and change only this
 switch. It changes neither atlas generation, persistent cache identity,
@@ -1079,7 +1079,7 @@ at draw time records a runtime fallback and executes the retained payload throug
 the established native packet path. Multi-page text, mixed spread or scale,
 and aggressive precomposed ARGB are therefore unchanged.
 The target changes neither atlas dimensions nor persistent cache format and
-does not enable NPOT. Its preparation deliberately asks the stock object path
+does not enable NPOT. Its preparation deliberately asks the vanilla object path
 to establish properties and bounds with geometry precaching disabled. After
 the isolated tNVSE TileShader is published, tNVSE requests the target 40-byte
 declaration through the renderer's virtual `PrecacheGeometry` entry. This
@@ -1110,14 +1110,14 @@ Shader Loader can publish an early generation while startup text is being
 created and then publish the normal initialized generation on the same device.
 The old 40-byte buffer remains valid, but its D3D declaration object has a
 different address. Each generation now carries an immutable allow-list of exact
-tNVSE stock-layout declarations owned by earlier generations on the same
+tNVSE vanilla-layout declarations owned by earlier generations on the same
 renderer, device, and device-reset epoch. This admits that zero-conversion
 reuse without COM declaration queries in the draw loop. A device reset advances
 the epoch, so an old-device declaration is never admitted by address or by
 layout resemblance; unknown declarations still fail open to the retained
 52-byte payload route.
 
-`tnvse_freetype_stock_layout_sdf` reports strictly eligible attempts, successful
+`tnvse_freetype_vanilla_layout_sdf` reports strictly eligible attempts, successful
 creations, creation fallbacks, direct draws, final-bound culls, runtime
 fallbacks, and created vertices. `precache_accepted`, `precache_immediate`,
 `precache_deferred`, and `precache_rejected` distinguish renderer acceptance
@@ -1142,7 +1142,7 @@ missing token clears the cache. Even a successful carry invalidates the command
 execution segment and discards texture, sampler, declaration, buffer,
 clip/stencil and render-state proofs; only the reverse-proven disjoint private
 constants survive. The one-shot
-`tnvse_freetype_stock_layout_sdf_postpack` diagnostic records the observed CPU
+`tnvse_freetype_vanilla_layout_sdf_postpack` diagnostic records the observed CPU
 source state, keep mask, declaration class, device epoch, and stride. A new run
 should show nonzero direct `draws` and a sharp reduction in `runtime_fallback`;
 the remaining fallbacks must have a real shader/buffer contract failure rather
@@ -1163,7 +1163,7 @@ When a sorted FreeType facade has exactly one active packet, it can skip the
 packet proxy entirely. The command-backed route accepts an arbitrary sealed
 packet vertex subrange and any referenced physical atlas page; it no longer
 requires page zero or a packet covering the complete immutable payload. For
-the duration of that one stock Tile pass, the facade's existing geometry-buffer
+the duration of that one vanilla Tile pass, the facade's existing geometry-buffer
 descriptor is rebound directly to that packet's static/dynamic VB range,
 canonical INDEX16 buffer, native declaration, and resolved shader. The facade
 itself remains `RenderPass::pGeometry`, so the retail
@@ -1202,7 +1202,7 @@ mutually exclusive `facade_model_data`, `facade_alpha_property`,
 leaves. `facade_classified` is their sum and must equal `binding_facade`;
 `classified` counts the leaves instead of the aggregate so facade failures are
 not double-counted.
-When a stock facade has no `NiGeometryBufferData`, direct replay now installs a
+When a vanilla facade has no `NiGeometryBufferData`, direct replay now installs a
 stack-local, non-owning descriptor for the synchronous retail
 `NiTriShape::RenderImmediate` call. It borrows the command VB, IB, declaration,
 stride, and chip view, restores the original null descriptor immediately after
@@ -1217,7 +1217,7 @@ FinishAccumulating_Tiles at 0xB65E80 calls NiAlphaAccumulator::Sort at
 0xA9B570, then RenderAlphaGeometry at 0xB64F90 walks the prepared items in
 reverse order. The matching test build symbols and disassembly at 0x82260438,
 0x8221B778, 0x82276BC8/0x82276CA0, and the reverse loop at 0x8223F1D0
-confirm the same contract. The stock accumulator and Sort stage know only the
+confirm the same contract. The vanilla accumulator and Sort stage know only the
 registered geometry pointer and its depth. Atlas page, shader, layer, and
 ordinary-versus-Composite packet boundaries are tNVSE payload state.
 
@@ -1243,7 +1243,7 @@ packet-loop route; no sibling shape is created.
 The final accumulator array proves occurrences of the facade itself after the
 narrow exact-depth tie repair. A facade that appears exactly once may own a
 consumable direct command or command span. A repeated geometry receives no
-consumable command: every stock occurrence
+consumable command: every vanilla occurrence
 executes the complete packet loop, preserving the original duplicate-
 registration semantics. Whole-artifact clip/scissor culling still completes
 before command recording, upload, or draw.
@@ -1270,19 +1270,19 @@ invariant sibling_shapes=0. The current build identity is
 `diagnostic-prune-v41`. It retains the v23 shell-shader restoration fix, v24 logging cleanup, the
 no-Sort-hook single-facade architecture, the v30 linear equal-depth repair, and
 the v31 direct-Sort-array/preflight-only cleanup.
-The prepared-text result cache, stock-Tile execution bridge, and early
+The prepared-text result cache, vanilla-Tile execution bridge, and early
 TileRect/TileImage/NiNode viewport-subtree hooks are removed. Visibility
 decisions now remain exclusively in the final post-Sort preflight, where the
 final transform and scissor state are available. With rendering logging enabled,
 the first applied repair emits one compact process-thread diagnostic containing
 item, mixed-run, changed-run, and changed-item counts; a proof failure emits one
 fail-open line. It changes no NVSE export, INI key, font-cache format, or save
-format. The stock-layout target adds an isolated optional vertex/pixel shader
+format. The vanilla-layout target adds an isolated optional vertex/pixel shader
 ABI; the existing facade shaders and fallback ABI remain unchanged.
 
 With rendering logging enabled, accumulator preparation is now measured only
 from sorted-topology capture through sorted-state publication; it no longer
-overlaps the separately reported stock `RenderAlphaGeometry` interval. The
+overlaps the separately reported vanilla `RenderAlphaGeometry` interval. The
 `tnvse_freetype_accumulator_prep_phases` splits that preparation into
 topology, metadata acquisition, facade visibility/preflight, sorted-ring
 preparation, singleton preparation, command construction, and final state
@@ -1347,7 +1347,7 @@ reverse-verified default-path predicate agrees.
 `BSBatchRenderer::RenderPassImmediately_Skinned` multi-pass,
 skin/light/special passes,
 unknown shader or geometry vtables, and forced shader-selection passes retain
-the stock path. A stock `TileShader::UpdateConstants` call is still required
+the vanilla path. A vanilla `TileShader::UpdateConstants` call is still required
 once per span.
 
 Ordinary dedicated single-packet commands additionally use a staged
@@ -1356,7 +1356,7 @@ default-pass envelope
 without executing `E72C20` or the particle/line virtual predicates: formal
 `E72C20` and the symbolized test build both show that an already resident
 `m_pkBuffData` makes the former return false immediately, while the exact
-tNVSE-owned `NiTriShape` vtable proves the latter two stock null-casts. Full
+tNVSE-owned `NiTriShape` vtable proves the latter two vanilla null-casts. Full
 preflight compiles those immutable facts into a
 `NativeA8StandardPassLiteDispatch` owned by `NativeA8TileRetainedText`. It
 retains the Tile/property identity, renderer, shader, generation-owned program,
@@ -1416,7 +1416,7 @@ overlay/tile alpha/texture transform, material alpha, depth range, render
 target, and viewport must all match, and neither Tile scissor nor enabled
 stencil may be present. That rule preserves both low constant-register output
 and `SetModelTransform`'s renderer mirrors. A transient packet still executes
-the exact stock slot-31/slot-35 pair; v2 does not nest or retain the stock
+the exact vanilla slot-31/slot-35 pair; v2 does not nest or retain the vanilla
 scissor/stencil restore stack. For a verified retail slot 35 with no transient
 state, the callback is known to be a no-op and is omitted. Slot 27, the draw,
 and any required cleanup remain mandatory.
@@ -1428,15 +1428,15 @@ includes the reverse-verified retail callbacks and tNVSE's deterministic
 private slot-32 callback. The private callback normalizes blend enable first,
 then computes the final state from `NiAlphaProperty`, `fAlpha`, `fFadeAlpha`,
 and `BSShaderProperty::No_Fade`; the callback publisher and cache key call the
-same state calculator. Stock and third-party Tile vtables remain untouched. If
+same state calculator. Vanilla and third-party Tile vtables remain untouched. If
 one of their callbacks has an unknown implementation, the item returns to the
-complete stock pass before drawing and its effects are not carried into the
+complete vanilla pass before drawing and its effects are not carried into the
 next native Tile.
 
 The cache stamp contains the command validation token, renderer/device
 identity and shader generation, atlas/resource/upload epochs, render-target
 group, viewport, and the command segment plus external-mutation epochs. A
-non-FreeType item, nested traversal, stock/full-standard fallback, shader or
+non-FreeType item, nested traversal, vanilla/full-standard fallback, shader or
 ring mutation, device reset, render-target/viewport transition, runtime fault,
 or a new sorted traversal starts a new cache head. `B99390` shader/pass
 selection also starts a new head because its teardown/setup callbacks are
@@ -1449,7 +1449,7 @@ alpha-test function/reference states owned by slot 33, or the cull and
 alpha-test-enable states owned by slot 34. The private prelude derives its
 enable value from alpha test, `No_Transparency_Multisampling`, and the proven
 non-particle geometry rather than depending on a callback installed inside the
-skipped stock wrapper. This cache never retains a Tile or COM object and never
+skipped vanilla wrapper. This cache never retains a Tile or COM object and never
 allows device-state reuse across a command-validation boundary.
 
 The immutable Text Artifact retains shared packet geometry, profile
@@ -1460,7 +1460,7 @@ preflight builds its packet and run skeleton only when the Tile's packet
 topology, sampling/alpha class, or shader program changes. Atlas/resource-only
 preflight changes refresh the validity stamp while retaining the same skeleton.
 The custom `NiTriShape::DeleteThis` route invalidates that metadata before the
-stock Tile geometry is destroyed, so retained text cannot remain usable after
+vanilla Tile geometry is destroyed, so retained text cannot remain usable after
 its Tile lifetime ends.
 
 Every published A8 metadata object carries a monotonic allocation ID, its own
@@ -1501,10 +1501,10 @@ capacity is released with its owning Tile metadata.
 
 Every facade retains its one original position relative to non-FreeType items.
 A multi-packet command span contains one facade, one metadata identity, one
-payload, and packet/run views in payload order. The reverse stock traversal
+payload, and packet/run views in payload order. The reverse vanilla traversal
 reaches the facade once and the retained bridge submits the complete span there;
 there is no leader slot or follower skip marker. A one-packet singleton facade
-performs one stock bootstrap through its direct command lookup. Its command
+performs one vanilla bootstrap through its direct command lookup. Its command
 points at the embedded prepared draw and allocates no span/run topology.
 
 Full validation is owned by a traversal-local safe execution segment rather
@@ -1513,11 +1513,11 @@ a hard boundary, nested traversal, or explicit native-state invalidation checks
 the sorted validation token, nesting serial, all three hook identities,
 renderer/device and shader generation, atlas epoch, the sealed ring resource
 serial/upload epoch, render-target identity, and viewport identity. The segment
-may now cross a non-A8 stock Tile only when its pass envelope is ordinary, its
+may now cross a non-A8 vanilla Tile only when its pass envelope is ordinary, its
 NiTriShape special/alternate slots are the reverse-verified retail constant-
 false thunk, its renderer special-pass predicate is false, and all six
 TileShader Standard state callbacks plus its geometry binder and first-pass
-callback have classified retail semantics. After the stock call, a cheap
+callback have classified retail semantics. After the vanilla call, a cheap
 bridge guard rechecks the external-mutation epoch, renderer/device,
 render-target group, and complete viewport. Unknown callbacks, special
 passes, non-first-pass state transitions, nested traversal, reset/generation
@@ -1540,12 +1540,12 @@ show that `TileShader::CreateConstantMaps` binds `tintcolor` to PS c0,
 decompiled shipped shader package finds that reflected constant tables,
 including relatively indexed arrays, end at PS c24 and VS c120; shader-local
 pixel `def` literals extend only to c30. Native A8 consequently leaves all
-stock registers intact. Its immutable packet block occupies the middle-high
+vanilla registers intact. Its immutable packet block occupies the middle-high
 reserved PS c176-c183 band and its analytic-AA input occupies VS c208. This
 leaves 40 pixel and 47 vertex float registers above tNVSE's highest register,
 avoiding both the audited low/middle footprint and the SM3 register-file edge.
-PS c0 remains the live stock Tile color and VS c0-c4 remains entirely
-stock-owned. No D3D
+PS c0 remains the live vanilla Tile color and VS c0-c4 remains entirely
+vanilla-owned. No D3D
 `GetPixelShaderConstantF` or
 `GetVertexShaderConstantF` snapshot is taken and no stale snapshot is written
 back. Initialization also rejects a device whose advertised vertex constant
@@ -1553,12 +1553,12 @@ count cannot address c208. Device-loss and native submission failures still
 follow the existing runtime-fault handling.
 
 The separation also removes a formerly unavoidable-looking per-packet write.
-Both reverse targets show that the stock slot-31 call computes live Tile RGB
+Both reverse targets show that the vanilla slot-31 call computes live Tile RGB
 and alpha and then submits the PS constant map whose `tintcolor` entry is c0.
 The native wrapper therefore does not reconstruct that value and call
 `SetPixelShaderConstantF(0, ..., 1)` a second time when the preserved slot is
 the verified retail `TileShader::SetupGeometryConstants`. This saves one D3D
-constant publication for every stock bootstrap or ordinary native packet,
+constant publication for every vanilla bootstrap or ordinary native packet,
 including the simple Coverage/ARGB path. If another plugin replaces slot 31,
 the proof no longer applies and the wrapper retains the explicit c0
 publication as a compatibility path.
@@ -1573,7 +1573,7 @@ Tile/material alpha, texture-transform, and native-program key unchanged,
 `NativeTileConstantsLite` skips the constant-map prefix and replays only the
 same retail render-state entry points before the draw. Slot 35 still runs and
 remains exactly paired. Resolution-scaled scissor is deliberately outside this
-proof and falls back to the complete stock slot 31/35 pair.
+proof and falls back to the complete vanilla slot 31/35 pair.
 
 A second specialization admits a world-translation-only delta after proving
 the program, rotation, scale, view/projection and camera state, Tile/material
@@ -1617,7 +1617,7 @@ the retail low-dirty-bit clear. A segment cache elides all three binding calls
 only while the validation, resource, upload and external-mutation epochs and
 the complete declaration/VB/IB/stride key remain unchanged. Failure of any
 proof occurs before device mutation and uses the existing slot-27 plus
-`RenderImmediateAlt` path; D3D bind/draw failures retain the stock
+`RenderImmediateAlt` path; D3D bind/draw failures retain the vanilla
 attempted-submission semantics and are counted separately.
 
 The high-register ABI was also checked against common shader plugins.
@@ -1635,13 +1635,13 @@ Tile traversal. Those New Vegas plugin paths therefore do not overlap PS
 c176-c183 or VS c208. Their real rendering occurs outside a native sorted
 execution segment; every traversal start clears the local constant shadow,
 while nested, reset, device/generation, and unknown external transitions
-invalidate it. A verified stock Tile transition can retain the global command
-execution proof, but it always invalidates program, sampler, stock constants,
+invalidate it. A verified vanilla Tile transition can retain the global command
+execution proof, but it always invalidates program, sampler, vanilla constants,
 and geometry-binding reuse. Exact first-pass Standard callbacks allow their
 final blend, alpha-test, and drawmode outputs to be normalized back into the
 independent state keys; an unclassified callback or pass resets the complete
 device-state cache. The private-register shadow remains valid because the
-reverse-confirmed stock maps cannot write PS c176-c183 or VS c208. The cached
+reverse-confirmed vanilla maps cannot write PS c176-c183 or VS c208. The cached
 viewport width/height is checked at that boundary and c208 alone is invalidated
 if its analytic-AA dimensions changed.
 
@@ -1657,7 +1657,7 @@ pointer.
 Stage-zero texture identity is read directly from
 `NiD3DRenderState::m_apkTextureStageTextures`, which retail
 `NiDX9RenderState::SetTexture` updates before its driver call. An exact mirror
-match is therefore a complete zero-driver-query reuse proof even when a stock
+match is therefore a complete zero-driver-query reuse proof even when a vanilla
 bootstrap did not prime the traversal-local bit. Only a real page change enters
 the engine setter.
 
@@ -1667,7 +1667,7 @@ Retail `NiDX9RenderState::SetSamplerState` maps only `ADDRESSU`, `ADDRESSV`,
 native Tile path never publishes that state and D3D9 initializes it to false.
 The level-zero contract consequently checks the mirrored `MIPFILTER` slot
 directly and calls the engine setter only when it is not already
-`D3DTEXF_NONE`. A stock setup preserves sampler readiness when its resulting
+`D3DTEXF_NONE`. A vanilla setup preserves sampler readiness when its resulting
 mirror is already correct. A same-profile command whose program, packet
 constant, vertex-AA, and sampler mirrors are all current bypasses the three
 binder helpers entirely while recording their reuse counters. Packet
@@ -1687,10 +1687,10 @@ Tile vertex constant maps are no longer specialized or mutated:
 `TileShader::UpdateConstants` continues to publish both
 `WorldViewProjTranspose` at c0-c3 and `TexScroll` at c4, while the native vertex
 shader reads its AA profile only from c208. Consequently c208 can be reused
-after stock updates whenever the sorted/facade mirror still proves the same
+after vanilla updates whenever the sorted/facade mirror still proves the same
 device, generation, viewport, and raster scale; external shaders, nested
 traversal, reset, generation changes, and explicit state invalidation still
-force a new publication. Ordinary interleaved stock Tiles are the narrow
+force a new publication. Ordinary interleaved vanilla Tiles are the narrow
 exception described above and can now carry the disjoint private state across
 the command-segment boundary.
 
@@ -1700,7 +1700,7 @@ just installed the command's exact descriptor; an ordinary retained proof comes
 from `PrepareNativeA8RingPacket`; and a direct singleton facade reuses the
 complete live slot/buffer/atlas check already required by its direct route.
 Each packet in a multi-packet span uses the ordinary retained ring proof for
-the same facade anchor; no distinct stock geometry slot is involved.
+the same facade anchor; no distinct vanilla geometry slot is involved.
 
 With that proof, each immediate callback performs only the irreducible
 execution-state, renderer/geometry identity, and acquire-load mutation-epoch
@@ -1709,7 +1709,7 @@ VB/IB/declaration descriptor, and the standard-pass-lite dispatcher does not
 repeat the already proven binding comparison. A route without a binding proof
 retains the complete packet validator. Device reset, shader publication or
 fault, atlas mutation, ring resource replacement/discard, shape destruction,
-singleton-facade binding invalidation, nested traversal, and every stock or
+singleton-facade binding invalidation, nested traversal, and every vanilla or
 otherwise non-FreeType transition advance one of the epochs. A mutation during
 a span therefore faults its next packet before drawing. A failure before any draw
 re-enters the unchanged current path; after any packet reaches the driver, the
@@ -1717,7 +1717,7 @@ span is marked faulted and the facade is not replayed, preventing duplicate
 layers.
 
 The periodic command line reports recorded spans/packets, span hits/misses,
-retained bridge draws, guarded native replays, saved stock bootstraps, fused
+retained bridge draws, guarded native replays, saved vanilla bootstraps, fused
 direct-single replays, light/render-target validation counts, packet epoch
 guards, full packet-state validation elisions, successful execution segments,
 segment full validations/reuses/invalidations, retained-program hits/misses, and fallbacks by token,
@@ -1725,11 +1725,11 @@ generation, atlas, resource, topology, hook, nesting, render target, and state.
 The main performance line reports `constant_ownership_segments`, segment
 reuses/releases, and the snapshot Get and restore Set calls elided by pass
 ownership. It also reports `private_reuses`,
-`stock_c0_republish_elided`, `compat_republishes`,
+`vanilla_c0_republish_elided`, `compat_republishes`,
 `private_registers_uploaded`, `full_tail_elided`, and
-`stock_tile_private_preserves`. With an unmodified retail
-slot 31, `stock_c0_republish_elided` should track
-`stock_constant_updates` exactly and `compat_republishes` should remain zero;
+`vanilla_tile_private_preserves`. With an unmodified retail
+slot 31, `vanilla_c0_republish_elided` should track
+`vanilla_constant_updates` exactly and `compat_republishes` should remain zero;
 any compatibility republish means another component supplied a non-retail
 slot-31 implementation. `full_tail_elided` measures the 8-register-block tail
 not sent by first/full Body and Effect publications. The command-state line
@@ -1738,8 +1738,8 @@ for retained binding. The `state_shadow_` line retains the old mirror/driver
 constant-capture and `state_shadow_driver_gets` fields so a runtime log proves
 that the former path stayed inactive, followed by program/texture/packet and
 vertex-AA reuse counters. Program reuse is counted as two avoided
-publications, one VS plus one PS. A `vertex_aa_stock_preserved` count records
-stock updates that leave the already published native c208 outside their
+publications, one VS plus one PS. A `vertex_aa_vanilla_preserved` count records
+vanilla updates that leave the already published native c208 outside their
 c0-c4 range. A healthy interval has nonzero, balanced ownership
 segments/releases, `snapshot_gets_elided == 2 * constant_ownership_segments`,
 `restore_sets_elided == 2 * releases`, and zero
@@ -1753,13 +1753,13 @@ logical spans or packets, substantial `segment_validation_reuses`,
 `packet_state_elisions` covering all proven direct/ring packets, and
 `light_validations` remaining only for unproven compatibility paths.
 Unexpected fallbacks must remain zero, and
-`stock_constant_updates` should not exceed the logical-span count; Standard v2
+`vanilla_constant_updates` should not exceed the logical-span count; Standard v2
 may reduce it further by exactly `constants_reuses`, without visual or runtime
 faults. `constants_lite_replays` is the subset of those reuses that still had
 to install scissor or stencil state; it should remain paired with
 `post_calls`. `constants_lite_fallbacks` should be zero unless the retained
 proof becomes inapplicable, while `constants_lite_scaled_fallbacks` identifies
-the intentionally stock-only resolution-scaled scissor case. Build success
+the intentionally vanilla-only resolution-scaled scissor case. Build success
 alone does not establish runtime correctness or the CPU-performance thresholds.
 The following `tnvse_freetype_constants_mismatch` line classifies exactly the
 first differing field in the existing short-circuit order for every non-exact
@@ -1778,7 +1778,7 @@ representation-change guard and should remain zero.
 `tnvse_freetype_constants_translation_lite` reports successful direct c0-c3
 replays, the subset that also installed transient state, and categorized
 fallbacks. `replays + fallbacks` is the number of fully proved translation-only
-relations; every fallback must execute the complete stock/native slot before
+relations; every fallback must execute the complete vanilla/native slot before
 the draw. In a healthy finite run, fallback causes should remain zero and the
 replay count should account for most `translation_only` mismatches that were
 not separated by another later-key change.
@@ -1794,33 +1794,33 @@ The adjacent `standard_pass_lite_` line exposes stage invariants for the dedicat
 single-packet subset. A healthy fully eligible retail run has
 `candidates = stage1_eligible = stage2_resident = stage3_replays`,
 `standard_v2_replays = stage3_replays`, `standard_v2_compat=0`,
-`retained_hits = candidates`, `retained_misses=0`, `stock_fallbacks=0`, and
+`retained_hits = candidates`, `retained_misses=0`, `vanilla_fallbacks=0`, and
 every categorized fallback at zero. Standard v2 accepts the six retail slot
 implementations with tNVSE's private slot 32 replacing only the cloned native
 TileShader vtable. Its exact key uses `ulFlags[1].No_Fade`; no plugin name,
 version, module RVA, PE identity, or external instruction signature participates
 in native readiness. A nonzero `standard_v2_compat` means at least one retained
 shader generation did not match the fully owned/classified six-slot table; it
-increments `fallback_program` and returns to stock `B994F0` before any lite
+increments `fallback_program` and returns to vanilla `B994F0` before any lite
 prelude or draw, rather than executing an unknown callback inside the delta
 cache. `retained_builds` counts new Tile/program
 dispatches, while `retained_reuses` counts full preflights that retained the
 same Tile/program dispatch instead of rebuilding it; neither should scale with
 steady-state packet submissions. When fallbacks are present,
-`stock_fallbacks` equals the sum of `fallback_envelope`, `program`, `renderer`,
+`vanilla_fallbacks` equals the sum of `fallback_envelope`, `program`, `renderer`,
 `geometry`, `binding`, and `prelude`; the retained hit/miss pair distinguishes
 a missing or invalidated Tile dispatch from a dynamic pass-envelope rejection.
 The following `segment_device_state_` line reports cache starts/reuses and
 set/reuse pairs for texture/program, constants, blend, alpha-test, and drawmode
 callbacks, followed by actual slot-35 calls and verified no-op elisions. Every
-stock Tile now resets the device-state head
+vanilla Tile now resets the device-state head
 and invalidates the command execution segment, while the separately proved
 private shader-register shadow remains eligible for post-draw validation.
 `constants_reuses` proves slot 31 was skipped only for identical
 non-transient state; `post_elisions` normally covers every verified packet
 without scissor/stencil, including packets whose constants changed. Alpha-test
 sets/reuses may remain zero because the native A8 direct route normally
-disables stock alpha testing.
+disables vanilla alpha testing.
 
 ## Atlas allocation, mipmaps, and memory
 
@@ -1997,7 +1997,7 @@ published, tNVSE builds and atomically saves an `.fnt`-style `.tnvfdirect` table
 for each byte role. The single-byte table has 256 fixed records; the DBCS table
 has 24,066 fixed records covering lead bytes `0x81-0xFE` and trail bytes
 `0x40-0xFE`. Invalid encoding slots use a fixed invalid flag. Each valid
-`DirectCachedLetter` is deliberately the same 56 bytes as an original
+`DirectCachedLetter` is deliberately the same 56 bytes as a vanilla
 `FontLetter`: 24 bytes hold the encoded slot, flags, and layout metrics, while
 four fixed 8-byte layer references hold only a page slot, mask type, and
 snapshot-placement index. Four slots cover Fill, Outline, Glow, and Shadow;
@@ -2034,7 +2034,7 @@ than once or twice per glyph. The same role-level reuse also applies when an
 incomplete direct profile enters the compatibility compiler.
 
 The aggressive route always has one composite quad per visible glyph. A
-single-page batch follows the original `.fnt` geometry pattern: it allocates the
+single-page batch follows the vanilla `.fnt` geometry pattern: it allocates the
 final `NiTriShape` once and writes positions, UVs, colors, and canonical indices
 directly. A multi-page batch writes the final native vertex/range payload once
 and keeps only the one-quad engine facade required by the sorted Tile hook.
@@ -2102,4 +2102,4 @@ glyph per encoded single-byte or DBCS unit and do not perform OpenType shaping
 or bidirectional reordering. Color-font rendering and variable-font axis
 controls are outside this feature.
 Invalid or unavailable
-configurations leave that entire font ID on the original `.fnt`/`.tex` renderer.
+configurations leave that entire font ID on the vanilla `.fnt`/`.tex` renderer.

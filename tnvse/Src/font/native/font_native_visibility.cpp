@@ -24,7 +24,7 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kRendererPositionAdjust = 0x11F474C;
 		inline constexpr double kScissorSafetyMarginPixels = 2.0;
 		inline constexpr double kClipIntervalRelativeSlack = 1.0e-6;
-		inline constexpr double kStockUiOrthographicRelativeSlack = 4.0e-6;
+		inline constexpr double kVanillaUiOrthographicRelativeSlack = 4.0e-6;
 		// The cache stores only exact source-state keys and the conservative proof,
 		// not four complete matrices per facade. Four-way 4096-entry storage remains
 		// bounded below half a MiB on Win32 while covering large Interface batches.
@@ -73,7 +73,7 @@ namespace fonthook::vectorfont
 			bool scaledScissor = false;
 		};
 
-		struct StockUiOrthographicAxis
+		struct VanillaUiOrthographicAxis
 		{
 			UInt8 modelAxis = 0;
 			float viewCoefficient = 0.0f;
@@ -82,17 +82,17 @@ namespace fonthook::vectorfont
 			float projectionTranslation = 0.0f;
 		};
 
-		struct StockUiOrthographicContext
+		struct VanillaUiOrthographicContext
 		{
-			StockUiOrthographicAxis x;
-			StockUiOrthographicAxis y;
+			VanillaUiOrthographicAxis x;
+			VanillaUiOrthographicAxis y;
 			bool valid = false;
 		};
 
 		struct ClipFrameContext
 		{
 			ClipCameraKey camera;
-			StockUiOrthographicContext stockUiOrthographic;
+			VanillaUiOrthographicContext vanillaUiOrthographic;
 			RECT viewportRect = {};
 			ClipNdcBounds viewportNdc;
 			std::array<ClipRectNdcCacheEntry,
@@ -359,7 +359,7 @@ namespace fonthook::vectorfont
 			return center + extent < -slack;
 		}
 
-		bool ResolveStockUiViewAxis(const D3DXMATRIX& view, UInt32 column,
+		bool ResolveVanillaUiViewAxis(const D3DXMATRIX& view, UInt32 column,
 			UInt8& modelAxis, float& coefficient)
 		{
 			bool found = false;
@@ -377,8 +377,8 @@ namespace fonthook::vectorfont
 			return found;
 		}
 
-		bool BuildStockUiOrthographicContext(const ClipCameraKey& camera,
-			StockUiOrthographicContext& context)
+		bool BuildVanillaUiOrthographicContext(const ClipCameraKey& camera,
+			VanillaUiOrthographicContext& context)
 		{
 			context = {};
 			const D3DXMATRIX& view = camera.view;
@@ -401,9 +401,9 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			if (!ResolveStockUiViewAxis(view, 0, context.x.modelAxis,
+			if (!ResolveVanillaUiViewAxis(view, 0, context.x.modelAxis,
 					context.x.viewCoefficient)
-				|| !ResolveStockUiViewAxis(view, 1, context.y.modelAxis,
+				|| !ResolveVanillaUiViewAxis(view, 1, context.y.modelAxis,
 					context.y.viewCoefficient)
 				|| context.x.modelAxis == context.y.modelAxis)
 			{
@@ -449,8 +449,8 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool BuildStockUiOrthographicColumn(
-			const StockUiOrthographicAxis& axis,
+		bool BuildVanillaUiOrthographicColumn(
+			const VanillaUiOrthographicAxis& axis,
 			const NiTransform& transform, const NiPoint3& positionAdjust,
 			ClipColumn& column)
 		{
@@ -491,21 +491,21 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool BuildStockUiOrthographicColumns(const ClipFrameContext& context,
+		bool BuildVanillaUiOrthographicColumns(const ClipFrameContext& context,
 			const NiTransform& transform, ClipColumn& clipX,
 			ClipColumn& clipY, ClipColumn& clipW)
 		{
-			if (!context.stockUiOrthographic.valid
+			if (!context.vanillaUiOrthographic.valid
 				|| !std::isfinite(transform.m_fScale)
 				|| !std::isfinite(transform.m_Translate.x)
 				|| !std::isfinite(transform.m_Translate.y)
 				|| !std::isfinite(transform.m_Translate.z)
 				|| !IsIdentityRotation(transform.m_Rotate)
-				|| !BuildStockUiOrthographicColumn(
-					context.stockUiOrthographic.x, transform,
+				|| !BuildVanillaUiOrthographicColumn(
+					context.vanillaUiOrthographic.x, transform,
 					context.camera.positionAdjust, clipX)
-				|| !BuildStockUiOrthographicColumn(
-					context.stockUiOrthographic.y, transform,
+				|| !BuildVanillaUiOrthographicColumn(
+					context.vanillaUiOrthographic.y, transform,
 					context.camera.positionAdjust, clipY))
 			{
 				return false;
@@ -692,8 +692,8 @@ namespace fonthook::vectorfont
 			context.inverseHeight = 1.0
 				/ static_cast<double>(context.camera.viewport.Height);
 			context.valid = true;
-			BuildStockUiOrthographicContext(context.camera,
-				context.stockUiOrthographic);
+			BuildVanillaUiOrthographicContext(context.camera,
+				context.vanillaUiOrthographic);
 			if (!BuildClipNdcBounds(context, context.viewportRect,
 					context.viewportNdc))
 			{
@@ -988,12 +988,12 @@ namespace fonthook::vectorfont
 			ClipColumn clipX;
 			ClipColumn clipY;
 			ClipColumn clipW;
-			bool stockUiOrthographic = BuildStockUiOrthographicColumns(
+			bool vanillaUiOrthographic = BuildVanillaUiOrthographicColumns(
 				context, transform, clipX, clipY, clipW);
-			if (stockUiOrthographic)
+			if (vanillaUiOrthographic)
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
-					VisibilityPreflightClipStockUiOrthographicTranslation);
+					VisibilityPreflightClipVanillaUiOrthographicTranslation);
 			}
 			else
 			{
@@ -1056,8 +1056,8 @@ namespace fonthook::vectorfont
 				ClipColumn{}, SubtractScaled(clipY, clipW, ndc.top), 1.0);
 			const ClipColumn bottomPlane = SubtractScaled(
 				clipY, clipW, ndc.bottom);
-			const double relativeSlack = stockUiOrthographic
-				? kStockUiOrthographicRelativeSlack
+			const double relativeSlack = vanillaUiOrthographic
+				? kVanillaUiOrthographicRelativeSlack
 				: kClipIntervalRelativeSlack;
 			const bool outside = CubeIsOutsidePlane(
 					leftPlane, bound, relativeSlack)
@@ -1168,10 +1168,10 @@ namespace fonthook::vectorfont
 
 		// Facades call this after every RegisterObject for the flush, once the
 		// final model bound, world transform, viewport, and Tile scissor exist.
-		// Stock-layout SDF shapes call it immediately before their stock geometry
+		// Vanilla-layout SDF shapes call it immediately before their vanilla geometry
 		// draw. Anything uncertain fails open. A facade proof is additionally
 		// revalidated by HonorNativeA8PreflightClipCull at dispatch before it is
-		// honored; a stock-layout proof already consumes the live dispatch state.
+		// honored; a vanilla-layout proof already consumes the live dispatch state.
 		const NiTriShapeData* data = facade ? facade->GetModelData() : nullptr;
 		if (!facade || !data)
 			return failOpen();
@@ -1189,8 +1189,8 @@ namespace fonthook::vectorfont
 			context = &localContext;
 		}
 		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
-		// This is the final stock-visible model bound. Facade payload vertices are
-		// relative and apply geometryOrigin during replay; stock-layout vertices
+		// This is the final vanilla-visible model bound. Facade payload vertices are
+		// relative and apply geometryOrigin during replay; vanilla-layout vertices
 		// are already engine-owned full geometry. Both representations publish
 		// the same full bound before reaching this proof.
 		const ClipProofResult proof = EvaluateBoundClip(data->m_kBound,

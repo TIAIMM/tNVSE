@@ -16,7 +16,7 @@ UINT32 g_uiFreeTypeFontMemoryCacheMB;
 bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
 bool g_bEnableFreeTypeA8Atlas;
-bool g_bEnableFreeTypeFontStockLayout = true;
+bool g_bEnableFreeTypeFontVanillaLayout = true;
 bool g_bEnableFreeTypeFontPreflightClipCull = true;
 bool g_bEnableFreeTypeFontCommandBuffer = false;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = kFreeTypeFontMtsdfMode;
@@ -157,13 +157,13 @@ void LoadConfig()
 	gLog.FormattedMessage("g_bEnableFreeTypeA8Atlas: %d",
 		g_bEnableFreeTypeA8Atlas);
 
-	g_bEnableFreeTypeFontStockLayout = ReadConfigInt(
+	g_bEnableFreeTypeFontVanillaLayout = ReadConfigInt(
 		kFreeTypeFontSection,
-		"bEnableFreeTypeFontStockLayout", 1, filename) != 0;
+		"bEnableFreeTypeFontVanillaLayout", 1, filename) != 0;
 	gLog.FormattedMessage(
-		"g_bEnableFreeTypeFontStockLayout: %d (%s)",
-		g_bEnableFreeTypeFontStockLayout,
-		g_bEnableFreeTypeFontStockLayout
+		"g_bEnableFreeTypeFontVanillaLayout: %d (%s)",
+		g_bEnableFreeTypeFontVanillaLayout,
+		g_bEnableFreeTypeFontVanillaLayout
 			? "allowed" : "disabled");
 	g_bEnableFreeTypeFontPreflightClipCull = ReadConfigInt(
 		kFreeTypeFontSection,
@@ -213,7 +213,7 @@ void LoadConfig()
 			g_uiFreeTypeFontDistanceFieldMode);
 		g_uiFreeTypeFontDistanceFieldMode = kFreeTypeFontMtsdfMode;
 	}
-	const char* distanceFieldModeName = "baked stock-like";
+	const char* distanceFieldModeName = "baked vanilla-like";
 	if (g_uiFreeTypeFontDistanceFieldMode == kFreeTypeFontTsdfMode)
 		distanceFieldModeName = "TSDF";
 	else if (g_uiFreeTypeFontDistanceFieldMode == kFreeTypeFontMtsdfMode)

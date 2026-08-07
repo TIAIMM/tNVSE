@@ -5,7 +5,7 @@ function(tnvse_add_shader_target output_variable)
   set(shader_sources
     "${shader_dir}/freetype_native_common.hlsli"
     "${shader_dir}/freetype_native_vs.hlsl"
-    "${shader_dir}/freetype_native_stock_layout_vs.hlsl"
+    "${shader_dir}/freetype_native_vanilla_layout_vs.hlsl"
     "${shader_dir}/freetype_native_coverage.hlsl"
     "${shader_dir}/freetype_native_argb.hlsl"
     "${shader_dir}/freetype_native_mtsdf_fill.hlsl"
@@ -14,7 +14,7 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/compile_a8_shader.bat")
   set(shader_outputs
     "${shader_dir}/compiled/tnvse_freetype_native_vs.vso"
-    "${shader_dir}/compiled/tnvse_freetype_native_stock_layout_vs.vso"
+    "${shader_dir}/compiled/tnvse_freetype_native_vanilla_layout_vs.vso"
     "${shader_dir}/compiled/tnvse_freetype_native_coverage.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_argb.pso"
     "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_fill_fast.pso"
@@ -39,14 +39,14 @@ function(tnvse_add_shader_target output_variable)
     foreach(mask IN ITEMS 8 9 10 11 12 13 14 15)
       list(APPEND shader_outputs
         "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_${quality}_m${mask}.pso"
-        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_stock_layout_${quality}_m${mask}.pso"
-        "${shader_dir}/compiled/tnvse_freetype_native_sdf_stock_layout_${quality}_m${mask}.pso")
+        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_vanilla_layout_${quality}_m${mask}.pso"
+        "${shader_dir}/compiled/tnvse_freetype_native_sdf_vanilla_layout_${quality}_m${mask}.pso")
     endforeach()
     foreach(mask IN ITEMS 9 11 13 15)
       list(APPEND shader_outputs
         "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_composite_${quality}_m${mask}_shift.pso"
-        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_stock_layout_${quality}_m${mask}_shift.pso"
-        "${shader_dir}/compiled/tnvse_freetype_native_sdf_stock_layout_${quality}_m${mask}_shift.pso")
+        "${shader_dir}/compiled/tnvse_freetype_native_mtsdf_vanilla_layout_${quality}_m${mask}_shift.pso"
+        "${shader_dir}/compiled/tnvse_freetype_native_sdf_vanilla_layout_${quality}_m${mask}_shift.pso")
     endforeach()
   endforeach()
 
@@ -108,7 +108,6 @@ function(tnvse_enable_live_deployment target plugin_path shader_outputs overlay_
       "${plugin_path}/$<TARGET_PDB_FILE_NAME:${target}>"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${shader_path}"
     COMMAND "${CMAKE_COMMAND}" -E rm -f
-      "${shader_path}/tnvse_freetype_native_original.pso"
       "${shader_path}/tnvse_freetype_native_coverage.pso"
       "${shader_path}/tnvse_freetype_native_argb.pso"
       "${shader_path}/tnvse_freetype_native_sdf.pso"

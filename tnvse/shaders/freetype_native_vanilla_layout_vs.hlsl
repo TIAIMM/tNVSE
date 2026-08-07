@@ -2,9 +2,9 @@ float4x4 WorldViewProjection : register(c0);
 float4 NativeAaProfile : register(c208); // viewport half-size, raster scale, valid
 // x: packet-wide source SDF spread, y: distance scale,
 // z: immutable composite layer mask.
-float4 StockLayoutGlyphParams : register(c209);
+float4 VanillaLayoutGlyphParams : register(c209);
 
-struct StockLayoutVertexInput
+struct VanillaLayoutVertexInput
 {
 	float3 position : POSITION0;
 	float2 atlasUv : TEXCOORD0;
@@ -13,7 +13,7 @@ struct StockLayoutVertexInput
 	float2 glyphMaximum : TEXCOORD2;
 };
 
-struct StockLayoutVertexOutput
+struct VanillaLayoutVertexOutput
 {
 	float4 position : POSITION0;
 	float2 atlasUv : TEXCOORD0;
@@ -59,13 +59,13 @@ float NativeFontVertexAntialiasWidth(float4 clipPosition,
 		* step(0.5, NativeAaProfile.w);
 }
 
-StockLayoutVertexOutput Main(StockLayoutVertexInput input)
+VanillaLayoutVertexOutput Main(VanillaLayoutVertexInput input)
 {
-	StockLayoutVertexOutput output;
+	VanillaLayoutVertexOutput output;
 	output.position = mul(float4(input.position, 1.0), WorldViewProjection);
 	output.atlasUv = input.atlasUv;
 	output.baseColor = input.baseColor;
-	output.glyphParams = StockLayoutGlyphParams.xyz;
+	output.glyphParams = VanillaLayoutGlyphParams.xyz;
 	output.glyphBounds = float4(input.glyphMinimum, input.glyphMaximum);
 	output.antialiasWidth = NativeFontVertexAntialiasWidth(
 		output.position, output.glyphParams);

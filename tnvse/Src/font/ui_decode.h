@@ -416,7 +416,7 @@ class FontManager
 {
 public:
 	static constexpr UInt32 kVanillaFontCount = 8;
-	static constexpr UInt32 kStockRichTextFontCount = 8;
+	static constexpr UInt32 kVanillaRichTextFontCount = 8;
 	static constexpr UInt32 kJipExtendedFontCount = 80;
 
 	// Rich-text path used by FontManager::PrepText (0xA18A30),
@@ -500,7 +500,7 @@ public:
 		int iPageWidth;                   // 14
 		int iPageHeight;                  // 18
 		int iLastFontHeight;              // 1C
-		int pCharsPerFont[kStockRichTextFontCount]; // 20
+		int pCharsPerFont[kVanillaRichTextFontCount]; // 20
 		TextDoc* pDoc;                    // 40
 
 		__forceinline int GetCharCountForFont(int aiFont)

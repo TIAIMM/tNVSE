@@ -90,7 +90,7 @@ namespace fonthook
 		std::vector<DirectTextUnit> units;
 	};
 
-	// Font::TextData is a stock 0x28-byte stack object with no ownership token.
+	// Font::TextData is a vanilla 0x28-byte stack object with no ownership token.
 	// Keep the direct-layout sidecar scoped to the synchronous CreateText call
 	// instead of retaining raw TextData/BSString pointers across calls.
 	class PreparedTextSidecarCapture final

@@ -320,7 +320,7 @@ namespace fonthook
 			// and TextDoc::Render's two eight-element stack arrays before our AddChar
 			// hook runs.
 			if (!fontManager || apChar->iFontIndex < 0
-				|| static_cast<UInt32>(apChar->iFontIndex) >= kStockRichTextFontCount)
+				|| static_cast<UInt32>(apChar->iFontIndex) >= kVanillaRichTextFontCount)
 				return nullptr;
 
 			Font* font = ResolveGameFont(fontManager,
@@ -564,7 +564,7 @@ namespace fonthook
 				return;
 
 			// No shaping or pair kerning remains in the FreeType contract. Feed the
-			// original TextLine topology code the same direct FontLetter advance used
+			// vanilla TextLine topology code the same direct FontLetter advance used
 			// by PrepText and final geometry before it makes a wrapping decision.
 			character->iWidth = GetGlyphCharDataLayoutWidth(glyph);
 			character->iLeadingEdge = 0;
@@ -1226,7 +1226,7 @@ namespace fonthook
 		if (!g_bEnableMultibyteFontHook)
 		{
 			// The shared TextLine::AddChar hook has already replaced injected
-			// .fnt widths with final FreeType widths before the original line/page
+			// .fnt widths with final FreeType widths before the vanilla line/page
 			// machinery makes any topology decision.  This final pass only makes
 			// positions and aggregate widths exactly match those same advances.
 			FontManager::TextDoc* textDoc = FontManager::PrepText(

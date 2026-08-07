@@ -36,9 +36,9 @@ namespace fonthook::vectorfont
 	// Aug 22 test build supplies both names; retail 1.4.0.525 has the same call
 	// graph at B65EA0 -> B64F90 and B64FD1 -> B994F0.
 	inline constexpr UInt32 kRenderPassImmediatelyCallSite = 0xB64FD1;
-	inline constexpr UInt32 kStockRenderPassImmediately = 0xB994F0;
+	inline constexpr UInt32 kVanillaRenderPassImmediately = 0xB994F0;
 	inline constexpr UInt32 kRenderAlphaGeometryCallSite = 0xB65EA0;
-	inline constexpr UInt32 kStockRenderAlphaGeometry = 0xB64F90;
+	inline constexpr UInt32 kVanillaRenderAlphaGeometry = 0xB64F90;
 	inline constexpr UInt32 kMaximumShapeValidationFailureLogs = 16;
 	// Retail 1.4.0.525 and the symbolized Aug 22 beta agree that
 	// NiGeometryBufferData owns a two-slot RendererData vtable. Use the
@@ -92,7 +92,7 @@ namespace fonthook::vectorfont
 	{
 		CompatibilityFacade = 0,
 		SingletonFacade,
-		StockLayoutSdf
+		VanillaLayoutSdf
 	};
 
 	enum class SingletonFacadeFrameMode : UInt8
@@ -163,7 +163,7 @@ namespace fonthook::vectorfont
 		bool bound = false;
 	};
 
-	// Every native text artifact owns one stock-visible facade. The embedded
+	// Every native text artifact owns one vanilla-visible facade. The embedded
 	// binding is activated only when the current preflight topology contains one
 	// packet; multi-packet topologies keep the shell and use the facade span.
 	struct SingletonFacadeState
@@ -201,7 +201,7 @@ namespace fonthook::vectorfont
 	{
 		std::array<void*, kCopiedTriShapeVtableEntries + 1> triShapeVtable = {};
 		std::array<void*, kCopiedTriShapeVtableEntries + 1>
-			stockLayoutTriShapeVtable = {};
+			vanillaLayoutTriShapeVtable = {};
 		void** originalTriShapeVtable = nullptr;
 		RenderImmediateFn originalRenderImmediate = nullptr;
 		RenderImmediateFn originalRenderImmediateAlt = nullptr;
@@ -245,7 +245,7 @@ namespace fonthook::vectorfont
 		const std::vector<NiTriShape*>& shapes,
 		std::vector<A8ShapeMetadataPtr>& owners);
 	bool IsA8AtlasShape(const NiTriShape* shape);
-	bool IsStockLayoutSdfShape(const NiTriShape* shape);
+	bool IsVanillaLayoutSdfShape(const NiTriShape* shape);
 	bool NeedsScaledFillSampling(const NiTriShape* shape);
 	bool HookRenderPassImmediately();
 	bool IsA8RenderPassImmediatelyHookCurrent();
@@ -265,7 +265,7 @@ namespace fonthook::vectorfont
 		const A8ShapeColorContract* colorContract,
 		NativeA8PayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin);
-	bool PrepareStockLayoutSdfA8Shape(Font& font, NiTriShape* shape,
+	bool PrepareVanillaLayoutSdfA8Shape(Font& font, NiTriShape* shape,
 		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
 		const A8EffectShapeConfig* effectConfig,
 		const A8ShapeColorContract* colorContract,

@@ -1,7 +1,7 @@
 <!--
 	tNVSE native font-prewarm display component.
 
-	This is injected beneath the stock LoadingMenu root as a Tile component.
+	This is injected beneath the vanilla LoadingMenu root as a Tile component.
 	It is intentionally non-interactive: the game thread remains inside the
 	NVSE DeferredInit callback until prewarm completes, so StartMenu and its
 	input controls cannot be created while this component is visible.

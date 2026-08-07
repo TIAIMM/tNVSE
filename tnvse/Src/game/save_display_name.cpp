@@ -25,9 +25,9 @@ namespace fonthook
 		using hook_identity::Rel32Opcode;
 
 		constexpr SIZE_T kSavePathProcessCallSite = 0x8518BB;
-		constexpr SIZE_T kStockSavePathProcess = 0x8518D0;
+		constexpr SIZE_T kVanillaSavePathProcess = 0x8518D0;
 		constexpr SIZE_T kManualSaveNameCheckCallSite = 0x851AAE;
-		constexpr SIZE_T kStockManualSaveNameCheck = 0x851980;
+		constexpr SIZE_T kVanillaManualSaveNameCheck = 0x851980;
 		// SaveGameManager::Save has already copied the supplied name into the
 		// save header before this call, but 0x850030 has not yet built the
 		// physical .fos path.  Replacing only this call preserves display text.
@@ -1124,7 +1124,7 @@ namespace fonthook
 		{
 			// Preserve whichever compatible hook currently owns the CALL.  In a
 			// Stewie Tweaks setup this is SaveGameManager__CreateSaveLoadFile,
-			// which in turn calls the stock 0x850030 implementation.
+			// which in turn calls the vanilla 0x850030 implementation.
 			s_nextCustomSaveFileBuild = customSaveFileTarget;
 			WriteRelCall(kCustomSaveFileBuildCallSite,
 				&BuildCustomSaveFileWithSafeName);
@@ -1161,7 +1161,7 @@ namespace fonthook
 			&SaveDisplayNameIsManualSave);
 		if (!hook_identity::ReadRel32Target(
 				kSavePathProcessCallSite, Rel32Opcode::Call, savePathTarget)
-			|| savePathTarget != kStockSavePathProcess
+			|| savePathTarget != kVanillaSavePathProcess
 			|| !hook_identity::ReadRel32Target(
 				kManualSaveNameCheckCallSite,
 				Rel32Opcode::Call,
@@ -1228,8 +1228,8 @@ namespace fonthook
 		}
 
 		gLog.FormattedMessage(
-			"tnvse_save_display_name: display-name hooks installed manualNext=%08X manualStock=%u",
+			"tnvse_save_display_name: display-name hooks installed manualNext=%08X manualVanilla=%u",
 			static_cast<UInt32>(manualSaveTarget),
-			manualSaveTarget == kStockManualSaveNameCheck ? 1u : 0u);
+			manualSaveTarget == kVanillaManualSaveNameCheck ? 1u : 0u);
 	}
 }

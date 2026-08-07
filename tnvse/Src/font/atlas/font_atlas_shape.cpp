@@ -89,7 +89,7 @@ namespace fonthook::vectorfont
 				const float result = source / tile;
 				return std::isfinite(result) ? result : 1.0f;
 			}
-			// The original TILE1000 contract multiplies the texture by c0. A zero
+			// The vanilla TILE1000 contract multiplies the texture by c0. A zero
 			// c0 channel cannot be recovered by any finite texture/modifier value,
 			// so preserve that dynamic game state instead of trying to replace it.
 			return 1.0f;
@@ -284,7 +284,7 @@ namespace fonthook::vectorfont
 				if (!quad.usesLiveTileRgb)
 				{
 					// TILE1000 unconditionally multiplies the sampled texture by
-					// live c0. Pre-compensate fixed effect RGB so the stock fallback
+					// live c0. Pre-compensate fixed effect RGB so the vanilla fallback
 					// resolves to the same configured color as the native shader.
 					compositeColor.r = ResolveModifierChannel(
 						compositeColor.r, tileColor.r);
@@ -972,7 +972,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool WriteStockDirectQuadVertices(const FontLetter& letter,
+		bool WriteVanillaDirectQuadVertices(const FontLetter& letter,
 			const NiPoint3& pen, const NiPoint3& origin,
 			float baselineOffset, UInt32 packedColor, UInt8 layerMask,
 			NativeA8GpuVertex* output, NiPoint3& boundMinimum,
@@ -1394,7 +1394,7 @@ namespace fonthook::vectorfont
 
 		NiColorA UnpackNativeBaseColor(UInt32 color);
 
-		bool IsStockLayoutSdfPayloadEligible(
+		bool IsVanillaLayoutSdfPayloadEligible(
 			const NativeA8PayloadTemplate& payload,
 			const NativeA8PacketTemplate*& packet)
 		{
@@ -1462,7 +1462,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		NiTriShape* TryCreateStockLayoutSdfShape(Font& font,
+		NiTriShape* TryCreateVanillaLayoutSdfShape(Font& font,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
 			const NativeA8PayloadTemplatePtr& payload, UInt32 glyphCount,
 			const A8EffectShapeConfig& effects,
@@ -1470,28 +1470,28 @@ namespace fonthook::vectorfont
 			const NiColorA& tileColor, const NiPoint3& origin,
 			bool prepareObject)
 		{
-			if (!g_bEnableFreeTypeFontStockLayout)
+			if (!g_bEnableFreeTypeFontVanillaLayout)
 				return nullptr;
 
 			const NativeA8PacketTemplate* packet = nullptr;
 			if (!payload || atlases.size() != 1 || !atlases.front()
-				|| !IsStockLayoutSdfPayloadEligible(*payload, packet)
+				|| !IsVanillaLayoutSdfPayloadEligible(*payload, packet)
 				|| !packet
-				|| !IsStockLayoutSdfEnabled(packet->distanceFieldMethod))
+				|| !IsVanillaLayoutSdfEnabled(packet->distanceFieldMethod))
 			{
 				return nullptr;
 			}
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::StockLayoutSdfCandidate);
+				FreeTypePerfCounter::VanillaLayoutSdfCandidate);
 			if (packet->compositeShiftedShadow)
 			{
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::StockLayoutSdfShiftedCandidate);
+					FreeTypePerfCounter::VanillaLayoutSdfShiftedCandidate);
 			}
 			const auto recordFallback = []()
 			{
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::StockLayoutSdfFallback);
+					FreeTypePerfCounter::VanillaLayoutSdfFallback);
 			};
 			if (!prepareObject)
 			{
@@ -1576,10 +1576,10 @@ namespace fonthook::vectorfont
 			data->m_kBound.m_kCenter.y += origin.y;
 			data->m_kBound.m_kCenter.z += origin.z;
 
-			// Establish stock properties and bounds, but suppress its geometry
-			// precache: that route selects the stock TileShader's 20-byte layout.
+			// Establish vanilla properties and bounds, but suppress its geometry
+			// precache: that route selects the vanilla TileShader's 20-byte layout.
 			shape->PrepareObject(false, true);
-			if (!PrepareStockLayoutSdfA8Shape(font, shape, font.iFontNum,
+			if (!PrepareVanillaLayoutSdfA8Shape(font, shape, font.iFontNum,
 				glyphCount, payload->quadCount, &effects, &colorContract,
 				payload, origin))
 			{
@@ -1590,33 +1590,33 @@ namespace fonthook::vectorfont
 			TileShader* targetShader = ResolveNativeA8PacketShader(
 				*packet, shape, false, true);
 			bool immediateReady = false;
-			if (!targetShader || !RequestNativeA8StockLayoutShapePrecache(
+			if (!targetShader || !RequestNativeA8VanillaLayoutShapePrecache(
 				shape, targetShader, immediateReady))
 			{
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::StockLayoutSdfPrecacheRejected);
+					FreeTypePerfCounter::VanillaLayoutSdfPrecacheRejected);
 				shape->DeleteThis();
 				recordFallback();
 				return nullptr;
 			}
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::StockLayoutSdfPrecacheAccepted);
+				FreeTypePerfCounter::VanillaLayoutSdfPrecacheAccepted);
 			RecordFreeTypePerf(immediateReady
-				? FreeTypePerfCounter::StockLayoutSdfPrecacheImmediate
-				: FreeTypePerfCounter::StockLayoutSdfPrecacheDeferred);
+				? FreeTypePerfCounter::VanillaLayoutSdfPrecacheImmediate
+				: FreeTypePerfCounter::VanillaLayoutSdfPrecacheDeferred);
 			data->m_kBound = payload->bound;
 			data->m_kBound.m_kCenter.x += origin.x;
 			data->m_kBound.m_kCenter.y += origin.y;
 			data->m_kBound.m_kCenter.z += origin.z;
 			if (shape->m_pWorldBound)
 				shape->UpdateWorldBound();
-			RecordFreeTypePerf(FreeTypePerfCounter::StockLayoutSdfCreated);
+			RecordFreeTypePerf(FreeTypePerfCounter::VanillaLayoutSdfCreated);
 			if (packet->compositeShiftedShadow)
 			{
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::StockLayoutSdfShiftedCreated);
+					FreeTypePerfCounter::VanillaLayoutSdfShiftedCreated);
 			}
-			RecordFreeTypePerf(FreeTypePerfCounter::StockLayoutSdfVertex,
+			RecordFreeTypePerf(FreeTypePerfCounter::VanillaLayoutSdfVertex,
 				packet->vertexCount);
 			return shape;
 		}
@@ -1649,11 +1649,11 @@ namespace fonthook::vectorfont
 			if (!payload || payload->gpuVertices.size() < 4
 				|| payload->packets.empty())
 				return nullptr;
-			if (NiTriShape* stockLayout = TryCreateStockLayoutSdfShape(
+			if (NiTriShape* vanillaLayout = TryCreateVanillaLayoutSdfShape(
 				font, atlases, payload, glyphCount, effects, colorContract,
 				tileColor, origin, prepareObject))
 			{
-				return stockLayout;
+				return vanillaLayout;
 			}
 
 			RecordFreeTypePerf(
@@ -2221,7 +2221,7 @@ namespace fonthook::vectorfont
 					batch.glyphs[glyphIndex];
 				if (source.knownEmpty || source.atlasPage != atlasPage)
 					continue;
-				if ((!source.placement && !source.stockLetter)
+				if ((!source.placement && !source.vanillaLetter)
 					|| source.atlasPage != atlasPage)
 					return nullptr;
 				const GlyphInstance& instance = glyphs[glyphIndex];
@@ -2235,9 +2235,9 @@ namespace fonthook::vectorfont
 					GetDirectGlyphBaselineOffset(
 						runtime, batch, instance);
 				std::array<NativeA8GpuVertex, 4> vertices;
-				const bool written = source.stockLetter
-					? WriteStockDirectQuadVertices(
-						*source.stockLetter, pen, origin,
+				const bool written = source.vanillaLetter
+					? WriteVanillaDirectQuadVertices(
+						*source.vanillaLetter, pen, origin,
 						baselineOffset,
 						PackNativeBaseColor(baseColor),
 						1u << static_cast<UInt8>(
@@ -2345,7 +2345,7 @@ namespace fonthook::vectorfont
 				[](const DirectAtlasBatchGlyph& glyph)
 				{
 					return !glyph.knownEmpty
-						&& (glyph.placement || glyph.stockLetter);
+						&& (glyph.placement || glyph.vanillaLetter);
 				}));
 			if (!result.glyphCount || result.glyphCount > kMaximumQuads)
 			{
@@ -2362,7 +2362,7 @@ namespace fonthook::vectorfont
 				{
 					if (glyph.knownEmpty)
 						continue;
-					if ((!glyph.placement && !glyph.stockLetter)
+					if ((!glyph.placement && !glyph.vanillaLetter)
 						|| glyph.atlasPage >= atlases.size()
 						|| glyph.atlasPage >= pageGlyphCounts.size())
 					{
@@ -2374,7 +2374,7 @@ namespace fonthook::vectorfont
 						++usedPageCount;
 				}
 
-				// A stock NiTriShape has one texturing property. Keep that route
+				// A vanilla NiTriShape has one texturing property. Keep that route
 				// only when the complete aggressive artifact fits on one page.
 				// Multi-page ARGB falls through to the native packet payload so
 				// the accumulator still receives exactly one facade.
@@ -2490,7 +2490,7 @@ namespace fonthook::vectorfont
 			{
 				if (glyph.knownEmpty)
 					continue;
-				if ((!glyph.placement && !glyph.stockLetter)
+				if ((!glyph.placement && !glyph.vanillaLetter)
 					|| glyph.atlasPage >= atlases.size()
 					|| glyph.atlasPage >= kMaximumAtlasSnapshotPages)
 				{
@@ -2609,15 +2609,15 @@ namespace fonthook::vectorfont
 						facadeColor = baseColor;
 						facadeColorInitialized = true;
 					}
-					if (source.stockLetter)
+					if (source.vanillaLetter)
 					{
 						if (distanceField || offsetX != 0.0f
 							|| offsetY != 0.0f)
 						{
 							return false;
 						}
-						return WriteStockDirectQuadVertices(
-							*source.stockLetter, pen, origin,
+						return WriteVanillaDirectQuadVertices(
+							*source.vanillaLetter, pen, origin,
 							baselineOffset,
 							PackNativeBaseColor(baseColor),
 							layerMask,
@@ -3643,11 +3643,11 @@ namespace fonthook::vectorfont
 				BuildColorContract(quads);
 			if (needsNativeRangeRouting)
 			{
-				if (NiTriShape* stockLayout = TryCreateStockLayoutSdfShape(
+				if (NiTriShape* vanillaLayout = TryCreateVanillaLayoutSdfShape(
 					font, atlases, artifact, glyphCount, resolvedEffect,
 					colorContract, tileColor, origin, prepareObject))
 				{
-					return stockLayout;
+					return vanillaLayout;
 				}
 			}
 
@@ -3708,7 +3708,7 @@ namespace fonthook::vectorfont
 			}
 			else
 			{
-				// The stock accumulator still validates and prepares this one-quad
+				// The vanilla accumulator still validates and prepares this one-quad
 				// facade before the sorted Tile hook substitutes the shared proxy.
 				// Give it a complete, finite quad instead of leaving MakeTriShape's
 				// transient arrays unspecified.
@@ -3745,7 +3745,7 @@ namespace fonthook::vectorfont
 			if (prepareObject)
 				shape->PrepareObject();
 			// The facade carries only one dummy quad on the native path. Restore the
-			// immutable artifact bound after stock preparation so culling never sees
+			// immutable artifact bound after vanilla preparation so culling never sees
 			// the dummy geometry's extent.
 			data->m_kBound = artifact->bound;
 			data->m_kBound.m_kCenter.x += origin.x;
@@ -3753,7 +3753,7 @@ namespace fonthook::vectorfont
 			data->m_kBound.m_kCenter.z += origin.z;
 			// PrepareObject may have propagated the one-quad facade bound to the AV
 			// object. Refresh the already-created world bound from the restored full
-			// artifact bound so stock accumulator culling cannot discard the text
+			// artifact bound so vanilla accumulator culling cannot discard the text
 			// before the sorted Tile route gets a chance to substitute its proxy.
 			if (prepareObject && shape->m_pWorldBound)
 				shape->UpdateWorldBound();
@@ -3787,7 +3787,7 @@ namespace fonthook::vectorfont
 				BuildBakedArgbFallback(quads, tileColor, bakedQuads);
 				activeQuads = &bakedQuads;
 				// Direct atlas sources deliberately carry no CPU alpha payload.
-				// They cannot be color-baked for the stock ARGB TileShader route.
+				// They cannot be color-baked for the vanilla ARGB TileShader route.
 				// The caller must first rebuild this batch through the compatibility
 				// GlyphBitmap path; otherwise an A8 page could be submitted as ARGB
 				// and render as dark, missing, or unrelated glyph rectangles.
@@ -4009,13 +4009,13 @@ namespace fonthook::vectorfont
 			{
 				// The aggressive contract is specifically one-byte A8. If the
 				// renderer cannot realize that format, let the caller rebuild the
-				// same CPU masks through the stock ARGB32 TileShader fallback.
+				// same CPU masks through the vanilla ARGB32 TileShader fallback.
 				return nullptr;
 			}
 			if (!useCustomA8Shader && !precomposedArgb
 				&& availableAtlases.size() > 1)
 			{
-				// Stock Tile geometry can bind only one texture. The no-loader ARGB
+				// Vanilla Tile geometry can bind only one texture. The no-loader ARGB
 				// route therefore collapses just this text unit into one transient
 				// atlas instead of accidentally entering the native multi-page route.
 				// This path is both exceptional and potentially large. Keep its merge

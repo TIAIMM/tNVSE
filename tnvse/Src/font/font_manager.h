@@ -15,8 +15,8 @@ namespace fonthook
 		kVanillaGameFontCount + kJipExtendedFontCount;
 	// TextDoc::Render and TextPage::pCharsPerFont are fixed retail ABI arrays.
 	// This is not the size of the JIP font registry.
-	inline constexpr UInt32 kStockRichTextFontCount =
-		FontManager::kStockRichTextFontCount;
+	inline constexpr UInt32 kVanillaRichTextFontCount =
+		FontManager::kVanillaRichTextFontCount;
 	static_assert(kJipExtendedFontCount
 		== kLastJipExtendedFontId - kFirstJipExtendedFontId + 1);
 

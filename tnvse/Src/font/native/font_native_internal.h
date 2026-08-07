@@ -169,18 +169,18 @@ namespace fonthook::vectorfont
 		kNativeA8PacketConstantRegisterCount * 4;
 	// Keep every tNVSE-owned float constant above the complete shipped and
 	// audited New Vegas plugin shader footprint, while retaining guard space
-	// below the SM3 register-file boundary. Pixel c0 remains the stock Tile
-	// color; vertex c0-c4 remain the stock WVP/TexScroll range.
+	// below the SM3 register-file boundary. Pixel c0 remains the vanilla Tile
+	// color; vertex c0-c4 remain the vanilla WVP/TexScroll range.
 	inline constexpr UInt32 kNativeA8PixelConstantBaseRegister = 176;
 	inline constexpr UInt32 kNativeA8PixelConstantLastRegister =
 		kNativeA8PixelConstantBaseRegister
 		+ static_cast<UInt32>(kNativeA8PacketConstantRegisterCount) - 1u;
 	inline constexpr UInt32 kNativeA8VertexAaConstantRegister = 208;
-	inline constexpr UInt32 kNativeA8StockLayoutGlyphConstantRegister = 209;
+	inline constexpr UInt32 kNativeA8VanillaLayoutGlyphConstantRegister = 209;
 	static_assert(kNativeA8PixelConstantLastRegister <= 223);
 	static_assert(kNativeA8VertexAaConstantRegister <= 255);
-	static_assert(kNativeA8StockLayoutGlyphConstantRegister <= 255);
-	static_assert(kNativeA8StockLayoutGlyphConstantRegister
+	static_assert(kNativeA8VanillaLayoutGlyphConstantRegister <= 255);
+	static_assert(kNativeA8VanillaLayoutGlyphConstantRegister
 		== kNativeA8VertexAaConstantRegister + 1u);
 
 	enum class NativeA8ShaderClass : UInt8
@@ -317,7 +317,7 @@ namespace fonthook::vectorfont
 		bool compositeShiftedShadow = false;
 		bool staticSmoothSampling = false;
 		bool usesLiveTileRgb = true;
-		// Packet-wide source spread used only by the stock-layout SDF target.
+		// Packet-wide source spread used only by the vanilla-layout SDF target.
 		// Zero means the packet is not eligible; the ordinary native pipeline
 		// continues to read per-vertex spread and keeps its historical profile key.
 		float uniformSdfSpread = 0.0f;
@@ -327,11 +327,11 @@ namespace fonthook::vectorfont
 		std::array<size_t, 2> profileHashes = {};
 		mutable std::array<NativeA8PacketShaderCacheEntry, 2>
 			resolvedShaders;
-		// Stock-layout and native-facade profiles intentionally have distinct
+		// Vanilla-layout and native-facade profiles intentionally have distinct
 		// keys and shaders. Keep a second packet-local cache so the retail-layout
 		// hot path does not reload the generation profile map on every draw.
 		mutable std::array<NativeA8PacketShaderCacheEntry, 2>
-			stockLayoutResolvedShaders;
+			vanillaLayoutResolvedShaders;
 	};
 
 	struct NativeA8CompositeSpan
@@ -375,7 +375,7 @@ namespace fonthook::vectorfont
 		UInt32 vertexCount = 0;
 		UInt32 packetCount = 0;
 		UInt32 compositePacketCount = 0;
-		bool stockLikeBitmapPackets = false;
+		bool vanillaLikeBitmapPackets = false;
 	};
 
 	struct NativeA8PayloadTemplate
@@ -504,7 +504,7 @@ namespace fonthook::vectorfont
 		bool topologyObserved = false;
 		bool lastTopologyComposite = false;
 		bool compositeUnavailable = false;
-		bool stockLikeBitmapPackets = false;
+		bool vanillaLikeBitmapPackets = false;
 		bool buildComplete = false;
 	};
 
@@ -515,7 +515,7 @@ namespace fonthook::vectorfont
 			? payloadTemplate.compositePackets : payloadTemplate.packets;
 	}
 
-	inline bool UsesOnlyStockLikeBitmapPackets(
+	inline bool UsesOnlyVanillaLikeBitmapPackets(
 		const std::vector<NativeA8PacketTemplate>& packets)
 	{
 		if (packets.empty())
@@ -663,7 +663,7 @@ namespace fonthook::vectorfont
 		// built from a reverse-verified retail implementation or a deterministic
 		// tNVSE-owned implementation for that slot.
 		// The live slot-31 entry is NativeUpdateConstants, so its proof bit
-		// describes the stock callback retained by the native vtable sidecar.
+		// describes the vanilla callback retained by the native vtable sidecar.
 		static constexpr UInt8 kStandardSlot30Proof = 1u << 0;
 		static constexpr UInt8 kStandardSlot31Proof = 1u << 1;
 		static constexpr UInt8 kStandardSlot32Proof = 1u << 2;
@@ -735,7 +735,7 @@ namespace fonthook::vectorfont
 	};
 
 	// A non-owning execution proof for device-state reuse inside one validated
-	// command segment. Exact retail Standard stock-Tile passes may retain the
+	// command segment. Exact retail Standard vanilla-Tile passes may retain the
 	// segment while narrowly invalidating the state categories they publish. The
 	// command buffer assigns the
 	// two execution epochs only after validating that segment.
@@ -758,7 +758,7 @@ namespace fonthook::vectorfont
 	};
 
 	// A reverse-verified specialization of TileShader slot 31. It is eligible
-	// only after the caller has proved that the complete stock/native constant
+	// only after the caller has proved that the complete vanilla/native constant
 	// input key is already resident. The implementation therefore replays only
 	// the scissor/stencil suffix which slot 35 must subsequently restore.
 	enum class NativeTileConstantsLiteResult : UInt8
@@ -966,7 +966,7 @@ namespace fonthook::vectorfont
 	};
 
 	// A sorted single-packet shape can borrow the sealed ring/static resources
-	// directly for the duration of its stock Tile render pass. Unlike
+	// directly for the duration of its vanilla Tile render pass. Unlike
 	// NativeA8RingSubmission this lease owns no proxy and copies no Tile state:
 	// the actual facade remains the render-pass geometry, so its live transform,
 	// scissor, alpha, material, cull, and stencil state stay authoritative.
@@ -1093,20 +1093,20 @@ namespace fonthook::vectorfont
 	void EndNativeA8SortedShaderBatch();
 	void InvalidateNativeA8SortedShaderState();
 	void InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
-	void AdvanceNativeA8SortedShaderStateAcrossStockTile();
-	void ValidateNativeA8SortedShaderStateAfterStockTile();
-	UInt64 BeginNativeA8StockLayoutShaderTransition(
+	void AdvanceNativeA8SortedShaderStateAcrossVanillaTile();
+	void ValidateNativeA8SortedShaderStateAfterVanillaTile();
+	UInt64 BeginNativeA8VanillaLayoutShaderTransition(
 		TileShader* shader, UInt32 currentPass);
-	bool EndNativeA8StockLayoutShaderTransition(
+	bool EndNativeA8VanillaLayoutShaderTransition(
 		UInt64 token, TileShader* shader);
 	void BeginNativeA8FacadeShaderBatch();
 	void EndNativeA8FacadeShaderBatch();
 	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
 		const NiTriShape* facade, bool scaledFillSampling,
-		bool stockLayoutSdf = false);
-	bool RequestNativeA8StockLayoutShapePrecache(NiTriShape* shape,
+		bool vanillaLayoutSdf = false);
+	bool RequestNativeA8VanillaLayoutShapePrecache(NiTriShape* shape,
 		TileShader* shader, bool& immediateReady);
-	bool IsNativeA8StockLayoutShapeReady(const NiTriShape* shape,
+	bool IsNativeA8VanillaLayoutShapeReady(const NiTriShape* shape,
 		TileShader* shader);
 	bool ResolveNativeA8RetainedPacketProgram(
 		const NativeA8PacketTemplate& packet,

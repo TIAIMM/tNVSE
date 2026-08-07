@@ -34,7 +34,7 @@ namespace fonthook::vectorfont
 			kRegisterObjectFunctionTable
 			+ static_cast<UInt32>(BSShaderManager::BSSM_RENDER_TILES)
 				* sizeof(void*);
-		inline constexpr UInt32 kStockTileRegisterObject = 0xB65A90;
+		inline constexpr UInt32 kVanillaTileRegisterObject = 0xB65A90;
 		inline constexpr UInt32 kMaximumMissingMetadataLogs = 8;
 		inline constexpr size_t kMaximumLinearTieRepairItems = 8192;
 		inline constexpr UInt32 kRegisterRouteSampleRate = 256;
@@ -69,7 +69,7 @@ namespace fonthook::vectorfont
 		struct SortedFrameEntry
 		{
 			NiTriShape* facade = nullptr;
-			// metadataOwners holds the batch-acquired shared owner until the stock
+			// metadataOwners holds the batch-acquired shared owner until the vanilla
 			// traversal completes; entries use stable non-owning views.
 			const A8ShapeMetadata* metadata = nullptr;
 			NativeA8ShapePayload* payload = nullptr;
@@ -666,7 +666,7 @@ namespace fonthook::vectorfont
 					return result;
 				}
 				bool hasFreeType = false;
-				bool hasStock = false;
+				bool hasVanilla = false;
 				const UInt32 runId = static_cast<UInt32>(runIndex);
 				for (UInt32 item = run.begin; item < run.end; ++item)
 				{
@@ -675,10 +675,10 @@ namespace fonthook::vectorfont
 					const bool isFreeType =
 						IsFreeTypeFacade(accumulator.m_ppkItems[item]);
 					hasFreeType = hasFreeType || isFreeType;
-					hasStock = hasStock || !isFreeType;
+					hasVanilla = hasVanilla || !isFreeType;
 					scratch.tieRunIds[item] = runId;
 				}
-				if (!hasFreeType || !hasStock)
+				if (!hasFreeType || !hasVanilla)
 					return result;
 				run.write = run.begin;
 				previousEnd = run.end;
@@ -729,7 +729,7 @@ namespace fonthook::vectorfont
 					return result;
 			}
 
-			// The stock renderer consumes high index to low index. Walk the original
+			// The vanilla renderer consumes high index to low index. Walk the original
 			// AddTail list from tail to head and fill each mixed run from begin to end;
 			// reverse rendering therefore observes the original registration order.
 			// This is a single O(n) list pass and performs no comparison sort.
@@ -846,7 +846,7 @@ namespace fonthook::vectorfont
 				? accumulator->m_pfDepths[0] : 0.0f;
 			size_t activeRunBegin = 0;
 			bool activeRunHasFreeType = false;
-			bool activeRunHasStock = false;
+			bool activeRunHasVanilla = false;
 			bool mixedEqualDepthCandidate = false;
 			for (SInt32 itemIndex = 0;
 				itemIndex < accumulator->m_iNumItems; ++itemIndex)
@@ -858,7 +858,7 @@ namespace fonthook::vectorfont
 					const float depth = accumulator->m_pfDepths[itemIndex];
 					if (itemIndex && depth != activeRunDepth)
 					{
-						if (activeRunHasFreeType && activeRunHasStock)
+						if (activeRunHasFreeType && activeRunHasVanilla)
 						{
 							scratch.tieRuns.push_back({
 								static_cast<UInt32>(activeRunBegin),
@@ -869,10 +869,10 @@ namespace fonthook::vectorfont
 						activeRunDepth = depth;
 						activeRunBegin = static_cast<size_t>(itemIndex);
 						activeRunHasFreeType = false;
-						activeRunHasStock = false;
+						activeRunHasVanilla = false;
 					}
 					activeRunHasFreeType = activeRunHasFreeType || isFreeType;
-					activeRunHasStock = activeRunHasStock || !isFreeType;
+					activeRunHasVanilla = activeRunHasVanilla || !isFreeType;
 				}
 				if (!isFreeType)
 					continue;
@@ -915,7 +915,7 @@ namespace fonthook::vectorfont
 				}
 			}
 			if (trackEqualDepthRuns
-				&& activeRunHasFreeType && activeRunHasStock)
+				&& activeRunHasFreeType && activeRunHasVanilla)
 			{
 				scratch.tieRuns.push_back({
 					static_cast<UInt32>(activeRunBegin),
@@ -1037,7 +1037,7 @@ namespace fonthook::vectorfont
 		{
 			payload.preparedGeneration = 0;
 			payload.preflightAtlasTextureEpoch = 0;
-			payload.stockLikeBitmapPackets = false;
+			payload.vanillaLikeBitmapPackets = false;
 			// Full preflight often refreshes only atlas/resource stamps. Keep
 			// the Tile/program dispatch until retained rebuild can compare its
 			// geometry, program, and generation identities.
@@ -1156,8 +1156,8 @@ namespace fonthook::vectorfont
 			payload.useCompositePackets = attemptComposite;
 			const std::vector<NativeA8PacketTemplate>* packets =
 				&GetNativeA8Packets(artifact, payload.useCompositePackets);
-			payload.stockLikeBitmapPackets =
-				UsesOnlyStockLikeBitmapPackets(*packets);
+			payload.vanillaLikeBitmapPackets =
+				UsesOnlyVanillaLikeBitmapPackets(*packets);
 			payload.packetShaders.assign(packets->size(), nullptr);
 			payload.packetPrograms.assign(packets->size(), nullptr);
 			if (payload.preflightAtlasTextures.size() != artifact.atlasTextures.size())
@@ -1210,8 +1210,8 @@ namespace fonthook::vectorfont
 					FreeTypePerfCounter::CompositeShaderFallback);
 				payload.useCompositePackets = false;
 				packets = &artifact.packets;
-				payload.stockLikeBitmapPackets =
-					UsesOnlyStockLikeBitmapPackets(*packets);
+				payload.vanillaLikeBitmapPackets =
+					UsesOnlyVanillaLikeBitmapPackets(*packets);
 				payload.packetShaders.assign(packets->size(), nullptr);
 				payload.packetPrograms.assign(packets->size(), nullptr);
 				shaderSetReady = true;
@@ -1382,7 +1382,7 @@ namespace fonthook::vectorfont
 			SortedPayloadScratch& scratch = s_sortedPayloadScratch;
 			if (scratch.active || scratch.nestedBypassDepth)
 			{
-				// A nested stock Tile pass must not see facade entries from the outer
+				// A nested vanilla Tile pass must not see facade entries from the outer
 				// accumulator. It retains the fully validated map/preflight fallback.
 				// Its draws may also change sampler and private c176-c183 state
 				// outside the outer traversal, so neither side may inherit the
@@ -1426,7 +1426,7 @@ namespace fonthook::vectorfont
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::AccumulatorEmptyFastPath);
 					// The predecessor Sort contains no captured native facade.  This is
-					// either an entirely stock traversal or a fail-open topology scan;
+					// either an entirely vanilla traversal or a fail-open topology scan;
 					// in both cases the ordinary dispatch path remains authoritative.
 					// Do not build a readiness stamp or command frame.
 					const SInt64 framePrepTicks = EndFreeTypePerfSample(
@@ -1434,8 +1434,8 @@ namespace fonthook::vectorfont
 					prepTailSample.totalTicks = framePrepTicks;
 					RecordFreeTypeAccumulatorPrepTailSample(prepTailSample);
 					{
-						FreeTypePerfScope stockRenderPerf(
-							FreeTypePerfPhase::FrameRouteStockRender);
+						FreeTypePerfScope vanillaRenderPerf(
+							FreeTypePerfPhase::FrameRouteVanillaRender);
 						state.originalRenderAlphaGeometry(accumulator);
 					}
 					ClearSortedFrame(scratch);
@@ -1863,8 +1863,8 @@ namespace fonthook::vectorfont
 				prepTailSample.commandFrameActive = commandFrameActive;
 				RecordFreeTypeAccumulatorPrepTailSample(prepTailSample);
 				{
-					FreeTypePerfScope stockRenderPerf(
-						FreeTypePerfPhase::FrameRouteStockRender);
+					FreeTypePerfScope vanillaRenderPerf(
+						FreeTypePerfPhase::FrameRouteVanillaRender);
 					NiDX9Renderer* renderer = hasPreparedPayloads
 						? NiDX9Renderer::GetSingleton() : nullptr;
 					FreeTypeGpuAlphaEnvelopeScope gpuTiming(
@@ -1886,8 +1886,8 @@ namespace fonthook::vectorfont
 			const bool clearSortedOwners =
 				scratch.frameAccumulator == accumulator;
 			{
-				FreeTypePerfScope stockRenderPerf(
-					FreeTypePerfPhase::FrameRouteStockRender);
+				FreeTypePerfScope vanillaRenderPerf(
+					FreeTypePerfPhase::FrameRouteVanillaRender);
 				state.originalRenderAlphaGeometry(accumulator);
 			}
 			if (clearSortedOwners)
@@ -1950,7 +1950,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			// A stock reset, or restoration of the predecessor we previously owned,
+			// A vanilla reset, or restoration of the predecessor we previously owned,
 			// is safe to republish over. Any other target observed after installation
 			// may be a successor that already chains through tNVSE; never move back on
 			// top of it or the two hooks could recurse through each other.
@@ -1958,7 +1958,7 @@ namespace fonthook::vectorfont
 				state.originalRenderAlphaGeometry;
 			if (installedPredecessor
 				&& current != reinterpret_cast<RenderAlphaGeometryFn>(
-					kStockRenderAlphaGeometry)
+					kVanillaRenderAlphaGeometry)
 				&& current != installedPredecessor)
 			{
 				if (!state.loggedRenderAlphaGeometryHookConflict)
@@ -2000,10 +2000,10 @@ namespace fonthook::vectorfont
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: installed RenderAlphaGeometry frame route predecessor=%p stock=%u",
+					"tnvse_freetype_native: installed RenderAlphaGeometry frame route predecessor=%p vanilla=%u",
 					current,
 					reinterpret_cast<SIZE_T>(current)
-						== kStockRenderAlphaGeometry ? 1u : 0u);
+						== kVanillaRenderAlphaGeometry ? 1u : 0u);
 			}
 			return true;
 		}
@@ -2138,7 +2138,7 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		// A stock reset, or restoration of the predecessor we previously owned,
+		// A vanilla reset, or restoration of the predecessor we previously owned,
 		// is safe to republish over.  Any other target observed after installation
 		// may be a successor that already chains to tNVSE; never reassert over it or
 		// the two hooks could recurse through each other.
@@ -2146,7 +2146,7 @@ namespace fonthook::vectorfont
 			s_originalTileRegisterObject.load(std::memory_order_acquire);
 		if (installedPredecessor
 			&& current != reinterpret_cast<TileRegisterObjectFn>(
-				kStockTileRegisterObject)
+				kVanillaTileRegisterObject)
 			&& current != installedPredecessor)
 		{
 			if (!s_loggedTileRegisterObjectConflict)
@@ -2160,12 +2160,12 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		if (reinterpret_cast<SIZE_T>(current) != kStockTileRegisterObject
+		if (reinterpret_cast<SIZE_T>(current) != kVanillaTileRegisterObject
 			&& g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: chaining pre-existing Tile RegisterObject dispatch target=%p stock=%08X",
-				current, kStockTileRegisterObject);
+				"tnvse_freetype_native: chaining pre-existing Tile RegisterObject dispatch target=%p vanilla=%08X",
+				current, kVanillaTileRegisterObject);
 		}
 
 		const TileRegisterObjectFn previousOriginal = installedPredecessor;
@@ -2210,10 +2210,10 @@ namespace fonthook::vectorfont
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: installed Tile RegisterObject dispatch route entry=%08X predecessor=%p stock=%u",
+				"tnvse_freetype_native: installed Tile RegisterObject dispatch route entry=%08X predecessor=%p vanilla=%u",
 				kTileRegisterObjectFunctionEntry, current,
 				reinterpret_cast<SIZE_T>(current)
-					== kStockTileRegisterObject ? 1u : 0u);
+					== kVanillaTileRegisterObject ? 1u : 0u);
 		}
 		return true;
 	}

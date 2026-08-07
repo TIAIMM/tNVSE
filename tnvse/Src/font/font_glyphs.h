@@ -136,7 +136,7 @@ namespace fonthook
 		return extraGlyphs->serialized.find(code);
 	}
 
-	// The original code consumes FontLetter spacing differently in render,
+	// The vanilla code consumes FontLetter spacing differently in render,
 	// CharData layout, and string measurement paths. Keep those rules separate.
 	inline float GetGlyphRenderAdvance(const FontLetter* glyph)
 	{

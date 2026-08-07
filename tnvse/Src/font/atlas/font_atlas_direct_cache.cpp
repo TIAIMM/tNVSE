@@ -209,7 +209,7 @@ namespace fonthook::vectorfont
 					* sizeof(std::weak_ptr<AtlasResource>)
 				+ table.glyphs.capacity()
 					* sizeof(DirectAtlasGlyphRecord)
-				+ table.stockGlyphs.capacity() * sizeof(FontLetter)
+				+ table.vanillaGlyphs.capacity() * sizeof(FontLetter)
 				+ table.faceIndices.capacity() * sizeof(UInt8);
 		}
 
@@ -299,7 +299,7 @@ namespace fonthook::vectorfont
 		void NormalizeKnownEmptyAdvance(float& width, float& spacing)
 		{
 			// FreeType serializes an empty glyph such as a space as
-			// width=0, spacing=advance.  The stock FontLetter contract only
+			// width=0, spacing=advance.  The vanilla FontLetter contract only
 			// adds spacing when width is positive, so preserve the same total
 			// advance in the width field for direct immutable records.
 			const float combinedWidth = width + spacing;
@@ -321,7 +321,7 @@ namespace fonthook::vectorfont
 			NormalizeKnownEmptyAdvance(letter.width, letter.spacing);
 		}
 
-		bool ValidateStockDirectLetter(const FontLetter& letter,
+		bool ValidateVanillaDirectLetter(const FontLetter& letter,
 			const std::vector<std::shared_ptr<AtlasResource>>& pages)
 		{
 			if (!IsFiniteDirectMetrics(letter.fWidth, letter.fHeight,
@@ -370,7 +370,7 @@ namespace fonthook::vectorfont
 				{ 'T', 'N', 'V', 'F', 'D', 'I', 'R', '1' };
 			const size_t slotCount = table.SlotCount();
 			const size_t recordSize =
-				table.recordKind == DirectCachedLetterKind::StockFontLetter
+				table.recordKind == DirectCachedLetterKind::VanillaFontLetter
 					? sizeof(FontLetter) : sizeof(DirectCachedLetter);
 			bool valid = ReadDirectFile(file, &header, sizeof(header))
 				&& std::memcmp(header.magic, magic, sizeof(magic)) == 0
@@ -433,14 +433,14 @@ namespace fonthook::vectorfont
 			UInt32 resolvedGlyphs = 0;
 			UInt32 resolvedLayers = 0;
 			if (table.recordKind
-				== DirectCachedLetterKind::StockFontLetter)
+				== DirectCachedLetterKind::VanillaFontLetter)
 			{
 				std::vector<FontLetter> records(slotCount);
 				std::memcpy(records.data(), recordBytes.data(),
 					recordBytes.size());
 				for (FontLetter& record : records)
 				{
-					if (!ValidateStockDirectLetter(record, pages))
+					if (!ValidateVanillaDirectLetter(record, pages))
 						return false;
 					if (record.iTextureIndex == -1)
 						continue;
@@ -452,7 +452,7 @@ namespace fonthook::vectorfont
 					if (record.iTextureIndex >= 0)
 						++resolvedLayers;
 				}
-				table.stockGlyphs = std::move(records);
+				table.vanillaGlyphs = std::move(records);
 				table.glyphs.clear();
 				table.glyphs.shrink_to_fit();
 			}
@@ -545,7 +545,7 @@ namespace fonthook::vectorfont
 			UInt64 profileIdentity = 0;
 		};
 
-		bool ValidateStockDirectLayoutLetter(const FontLetter& letter,
+		bool ValidateVanillaDirectLayoutLetter(const FontLetter& letter,
 			UInt32 pageCount)
 		{
 			if (!IsFiniteDirectMetrics(letter.fWidth, letter.fHeight,
@@ -590,10 +590,10 @@ namespace fonthook::vectorfont
 			const size_t slotCount = GetDirectGlyphSlotCount(byteClass);
 			const DirectCachedLetterKind recordKind =
 				masks.size() == 1 && masks[0] == GlyphMaskType::Composite
-				? DirectCachedLetterKind::StockFontLetter
+				? DirectCachedLetterKind::VanillaFontLetter
 				: DirectCachedLetterKind::EffectLayers;
 			const size_t recordSize =
-				recordKind == DirectCachedLetterKind::StockFontLetter
+				recordKind == DirectCachedLetterKind::VanillaFontLetter
 				? sizeof(FontLetter) : sizeof(DirectCachedLetter);
 			const UInt64 layoutIdentity =
 				GetRuntimeDirectRoleLayoutIdentity(runtime, byteClass);
@@ -696,7 +696,7 @@ namespace fonthook::vectorfont
 
 			UInt32 resolvedGlyphs = 0;
 			UInt32 resolvedLayers = 0;
-			if (recordKind == DirectCachedLetterKind::StockFontLetter)
+			if (recordKind == DirectCachedLetterKind::VanillaFontLetter)
 			{
 				for (size_t slot = 0; slot < slotCount; ++slot)
 				{
@@ -704,7 +704,7 @@ namespace fonthook::vectorfont
 					std::memcpy(&record,
 						recordBytes.data() + slot * sizeof(record),
 						sizeof(record));
-					if (!ValidateStockDirectLayoutLetter(
+					if (!ValidateVanillaDirectLayoutLetter(
 							record, header.pageCount))
 					{
 						return false;
@@ -865,11 +865,11 @@ namespace fonthook::vectorfont
 				|| table.faceIndices.size() != slotCount)
 				return false;
 			const void* records = table.recordKind
-				== DirectCachedLetterKind::StockFontLetter
-				? static_cast<const void*>(table.stockGlyphs.data())
+				== DirectCachedLetterKind::VanillaFontLetter
+				? static_cast<const void*>(table.vanillaGlyphs.data())
 				: static_cast<const void*>(table.glyphs.data());
 			const size_t recordSize = table.recordKind
-				== DirectCachedLetterKind::StockFontLetter
+				== DirectCachedLetterKind::VanillaFontLetter
 				? sizeof(FontLetter) : sizeof(DirectCachedLetter);
 			const size_t recordsBytes = slotCount * recordSize;
 			DirectCachedLetterFileHeader header;
@@ -931,9 +931,9 @@ namespace fonthook::vectorfont
 				verified.pageIdentityChecksum =
 					table.pageIdentityChecksum;
 				if (table.recordKind
-					== DirectCachedLetterKind::StockFontLetter)
+					== DirectCachedLetterKind::VanillaFontLetter)
 				{
-					verified.stockGlyphs.resize(slotCount);
+					verified.vanillaGlyphs.resize(slotCount);
 				}
 				else
 					verified.glyphs.resize(slotCount);

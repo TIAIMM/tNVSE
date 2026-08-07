@@ -515,11 +515,11 @@ namespace fonthook::vectorfont
 				node.attribute("verticalMetrics").as_string("freetype");
 			if (verticalMetrics == "freetype")
 				config.verticalMetrics = VerticalMetricsMode::FreeType;
-			else if (verticalMetrics == "original")
-				config.verticalMetrics = VerticalMetricsMode::Original;
+			else if (verticalMetrics == "vanilla")
+				config.verticalMetrics = VerticalMetricsMode::Vanilla;
 			else
 			{
-				reason = "verticalMetrics must be freetype or original";
+				reason = "verticalMetrics must be freetype or vanilla";
 				return false;
 			}
 
@@ -627,8 +627,8 @@ namespace fonthook::vectorfont
 				config.fontId,
 				GetFontPrewarmRangeName(
 					ResolveFontPrewarmRange(config), GetFreeTypeTextCodePage()),
-				config.verticalMetrics == VerticalMetricsMode::Original
-					? "original" : "freetype",
+				config.verticalMetrics == VerticalMetricsMode::Vanilla
+					? "vanilla" : "freetype",
 				config.baseline,
 				config.fontColor.configured,
 				static_cast<UInt32>(config.effectQuality),
@@ -1031,7 +1031,7 @@ namespace fonthook
 			if (vectorfont::UsesBakedEffectRoute())
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: baked stock-like doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f sharing=disabled",
+					"tnvse_freetype_font: baked vanilla-like doubleByte atlas font=%u owner=%u logicalSize=%.2f sourceSize=%.2f sharing=disabled",
 					config.fontId, owner.fontId, config.styles[1].pixelSize,
 					owner.styles[1].pixelSize);
 			}

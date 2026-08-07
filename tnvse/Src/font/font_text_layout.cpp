@@ -1067,7 +1067,7 @@ namespace fonthook
 		bool substitutedEmptyLine = false;
 		int selectedLineCount = selectedEnd - selectedStart;
 
-		// Match the original PrepText contract: an empty selected result is
+		// Match the vanilla PrepText contract: an empty selected result is
 		// represented by one space, so BSStringT retains a valid buffer and
 		// downstream CreateText code receives one measurable placeholder glyph.
 		if (!selectedLength)

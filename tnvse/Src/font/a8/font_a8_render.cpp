@@ -1132,7 +1132,7 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool PrepareStockLayoutSdfA8Shape(Font& font, NiTriShape* shape,
+	bool PrepareVanillaLayoutSdfA8Shape(Font& font, NiTriShape* shape,
 		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
 		const A8EffectShapeConfig* effectConfig,
 		const A8ShapeColorContract* colorContract,
@@ -1157,7 +1157,7 @@ namespace fonthook::vectorfont
 			|| packet.distanceFieldMethod == DistanceFieldMethod::Mtsdf;
 		if (packet.shaderClass != NativeA8ShaderClass::Composite
 			|| !supportedDistanceField
-			|| !IsStockLayoutSdfEnabled(packet.distanceFieldMethod)
+			|| !IsVanillaLayoutSdfEnabled(packet.distanceFieldMethod)
 			|| packet.atlasPage != 0 || (packet.firstVertex & 3u)
 			|| !packet.vertexCount || (packet.vertexCount & 3u)
 			|| packetEnd > payloadTemplate->gpuVertices.size()
@@ -1186,7 +1186,7 @@ namespace fonthook::vectorfont
 		metadata->vertexCount = packet.vertexCount;
 		metadata->primitiveCount = packet.vertexCount / 2u;
 		metadata->indexCount = packet.vertexCount / 4u * 6u;
-		metadata->backend = FreeTypeShapeBackend::StockLayoutSdf;
+		metadata->backend = FreeTypeShapeBackend::VanillaLayoutSdf;
 		if (colorContract)
 			metadata->colorContract = *colorContract;
 		if (!InitializeNativeA8ShapePayload(font, shape, *metadata,
@@ -1218,7 +1218,7 @@ namespace fonthook::vectorfont
 				MakeA8MetadataEntry(std::move(publishedMetadata));
 			RecordMetadataInsertionRehash(state, previousBucketCount);
 			*reinterpret_cast<void***>(shape) =
-				&state.stockLayoutTriShapeVtable[1];
+				&state.vanillaLayoutTriShapeVtable[1];
 		}
 		return true;
 	}
@@ -1282,7 +1282,7 @@ namespace fonthook::vectorfont
 			|| (buildCommandView
 				&& (!retainedText || retainedText->packets.size() != 1)))
 		{
-			// The facade remains the sole stock Sort item. Multi-packet
+			// The facade remains the sole vanilla Sort item. Multi-packet
 			// topology is submitted through the ordinary retained span (or
 			// packet loop when command recording is disabled). This is a normal
 			// facade mode rather than a singleton-facade failure.

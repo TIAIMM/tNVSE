@@ -201,14 +201,14 @@ namespace fonthook::vectorfont
 
 		// Retail PC BCA980 has a resolution-dependent coordinate conversion while
 		// this global is set. Its exact inputs are outside the retained command
-		// proof, so preserve the complete stock slot rather than approximating it.
+		// proof, so preserve the complete vanilla slot rather than approximating it.
 		if (UsesScaledScissor(state))
 		{
 			return NativeTileConstantsLiteResult::ScaledScissor;
 		}
 
 		// Official PC BCAAD7-BCAC48 and symbolized Xenon 82251F44-82251FC8
-		// agree on this suffix. The final zero argument is the stock NOLOCK/no
+		// agree on this suffix. The final zero argument is the vanilla NOLOCK/no
 		// counter-mark value. Calling the same render-state entry points retains
 		// their software mirrors and slot-35 pairing exactly.
 		ApplyTileConstantsTransientState(state);

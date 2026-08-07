@@ -26,7 +26,7 @@ configuration, dependency checks, globals, and native-call helpers stay at the
     used after exact retained-constant proofs. `font_native_accumulator.cpp`
     consumes the predecessor's sorted arrays, while
     `font_native_command_buffer.cpp` owns retained replay readiness and resource
-    epochs without changing stock barriers or fallback order.
+    epochs without changing vanilla barriers or fallback order.
   - `vector`: FreeType configuration, direct encoded-unit layout, rasterization, and caches.
     Persistent-cache route and flush orchestration stays in
     `font_vector_persistent_cache.cpp`; bitmap records and glyph manifests are

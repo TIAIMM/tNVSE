@@ -47,10 +47,10 @@ namespace fonthook
 		constexpr UInt32 kReleaseTileTree = 0x9FF690;
 		constexpr UInt32 kRegisterMenuTile = 0xA1DC70;
 		constexpr SIZE_T kLoadingMenuSingleton = 0x11DA0C0;
-		// TileMenu::PostParse and the stock visibility table only accept
+		// TileMenu::PostParse and the vanilla visibility table only accept
 		// Menu Codes 1001-1084. 1079 is the highest unused gap immediately
 		// below SlotMachineMenu (1080), and keeps the overlay inside the
-		// engine's native menu ownership without colliding with stock menus.
+		// engine's native menu ownership without colliding with vanilla menus.
 		constexpr UInt32 kImeMenuClass = 1079;
 		static_assert(kImeMenuClass >= 1001 && kImeMenuClass <= 1084);
 		constexpr SIZE_T kCreateMenuByClassCall = 0x7079A3;
@@ -756,7 +756,7 @@ namespace fonthook
 		Tile* SynchronizePrewarmParent()
 		{
 			// Match Cell Offset Generator: the prewarm component belongs to the
-			// stock LoadingMenu tree, whose own thread continues Update and
+			// vanilla LoadingMenu tree, whose own thread continues Update and
 			// ShowChanges while the game thread remains inside DeferredInit.
 			Tile* parent = GetLoadingMenuRoot();
 			if (s_state.prewarmParent != parent)
@@ -795,7 +795,7 @@ namespace fonthook
 
 			// TileMenu::PostParse binds once when it encounters <class>,
 			// before the remaining root traits have been parsed. Repeat the
-			// stock Create() finalization after ReadXML completes, matching
+			// vanilla Create() finalization after ReadXML completes, matching
 			// built-in menus and Stewie Tweaks' injected menu lifecycle.
 			menu->uiID = kImeMenuClass;
 			ThisStdCall<void>(
@@ -1686,7 +1686,7 @@ namespace fonthook
 			SetVisible(root, false);
 		if (root && attached)
 		{
-			// Match the stock/Cell Offset component teardown: release the
+			// Match the vanilla/Cell Offset component teardown: release the
 			// imported Tile tree under the UI lock, then destroy its root.
 			ReleaseAndDestroyAttachedRoot(
 				parent, root, "tNVSE_Prewarm");

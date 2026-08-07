@@ -38,10 +38,10 @@ namespace fonthook::vectorfont
 		return GetConfiguredDistanceFieldMethod() == DistanceFieldMethod::Mtsdf;
 	}
 
-	inline bool IsStockLayoutSdfEnabled(DistanceFieldMethod method)
+	inline bool IsVanillaLayoutSdfEnabled(DistanceFieldMethod method)
 	{
 		return !UsesBakedEffectRoute()
-			&& g_bEnableFreeTypeFontStockLayout
+			&& g_bEnableFreeTypeFontVanillaLayout
 			&& (method == DistanceFieldMethod::TrueSdf
 				|| method == DistanceFieldMethod::Mtsdf);
 	}
@@ -54,7 +54,7 @@ namespace fonthook::vectorfont
 	inline const char* GetConfiguredFontRenderModeName()
 	{
 		return UsesBakedEffectRoute()
-			? "baked stock-like" : GetConfiguredDistanceFieldMethodName();
+			? "baked vanilla-like" : GetConfiguredDistanceFieldMethodName();
 	}
 
 	// Base Fill/distance-field generator revision. Route-specific pixel changes
@@ -160,7 +160,7 @@ namespace fonthook::vectorfont
 		VisibilityPreflightClipTransformIdentityMiss,
 		VisibilityPreflightClipTransformKeyMiss,
 		VisibilityPreflightClipTransformUnavailable,
-		VisibilityPreflightClipStockUiOrthographicTranslation,
+		VisibilityPreflightClipVanillaUiOrthographicTranslation,
 		VisibilityPreflightClipGenericTransform,
 		SinglePacketDirectCandidate,
 		SinglePacketDirectDraw,
@@ -205,15 +205,15 @@ namespace fonthook::vectorfont
 		ConstantOwnershipSegment,
 		ConstantOwnershipReuse,
 		ConstantOwnershipRelease,
-		StockConstantUpdate,
+		VanillaConstantUpdate,
 		SegmentDevicePostSet,
 		CompositeConstantFullUpload,
 		NativePacketConstantReuse,
 		CompositeConstantPartialUpload,
-		StockPixelConstantCompatibilityRepublish,
+		VanillaPixelConstantCompatibilityRepublish,
 		NativePacketConstantRegisterUpload,
 		NativePacketConstantFullTailElided,
-		NativePrivateStateStockTilePreserve,
+		NativePrivateStateVanillaTilePreserve,
 		SamplerStateSet,
 		SamplerStateReuse,
 		StandardPassV2Replay,
@@ -224,7 +224,7 @@ namespace fonthook::vectorfont
 		ConstantRestoreSetElided,
 		VertexAaConstantSet,
 		VertexAaConstantReuse,
-		VertexAaConstantStockPreserved,
+		VertexAaConstantVanillaPreserved,
 		CommandProgramSetup,
 		CommandProgramBindElided,
 		CommandTextureBindSet,
@@ -289,7 +289,7 @@ namespace fonthook::vectorfont
 		StandardPassLiteStage1Eligible,
 		StandardPassLiteStage2Resident,
 		StandardPassLiteStage3Replay,
-		StandardPassLiteStockFallback,
+		StandardPassLiteVanillaFallback,
 		StandardPassLiteFallbackEnvelope,
 		StandardPassLiteFallbackProgram,
 		StandardPassLiteFallbackRenderer,
@@ -306,7 +306,7 @@ namespace fonthook::vectorfont
 		SegmentDeviceAlphaTestReuse,
 		SegmentDeviceDrawmodeSet,
 		SegmentDeviceDrawmodeReuse,
-		CommandStockBootstrapSaved,
+		CommandVanillaBootstrapSaved,
 		CommandDirectRangeReplay,
 		SegmentDevicePostElision,
 		CommandPacketLightValidation,
@@ -415,25 +415,25 @@ namespace fonthook::vectorfont
 		AccumulatorEmptyFastPath,
 		AccumulatorMetadataCullSkipped,
 		AccumulatorNoPreparedPayload,
-		StockLayoutSdfCandidate,
-		StockLayoutSdfCreated,
-		StockLayoutSdfFallback,
-		StockLayoutSdfDraw,
-		StockLayoutSdfCull,
-		StockLayoutSdfRuntimeFallback,
-		StockLayoutSdfVertex,
-		StockLayoutSdfShiftedCandidate,
-		StockLayoutSdfShiftedCreated,
-		StockLayoutSdfShiftedDraw,
-		StockLayoutSdfShiftedRuntimeFallback,
-		StockLayoutSdfPrecacheAccepted,
-		StockLayoutSdfPrecacheImmediate,
-		StockLayoutSdfPrecacheDeferred,
-		StockLayoutSdfPrecacheRejected,
-		StockLayoutSdfPostUploadSourceRetiredReady,
-		StockLayoutSdfPriorGenerationDeclarationReady,
-		StockLayoutSdfPrivateStateCarry,
-		StockLayoutSdfPrivateStateCarryRejected,
+		VanillaLayoutSdfCandidate,
+		VanillaLayoutSdfCreated,
+		VanillaLayoutSdfFallback,
+		VanillaLayoutSdfDraw,
+		VanillaLayoutSdfCull,
+		VanillaLayoutSdfRuntimeFallback,
+		VanillaLayoutSdfVertex,
+		VanillaLayoutSdfShiftedCandidate,
+		VanillaLayoutSdfShiftedCreated,
+		VanillaLayoutSdfShiftedDraw,
+		VanillaLayoutSdfShiftedRuntimeFallback,
+		VanillaLayoutSdfPrecacheAccepted,
+		VanillaLayoutSdfPrecacheImmediate,
+		VanillaLayoutSdfPrecacheDeferred,
+		VanillaLayoutSdfPrecacheRejected,
+		VanillaLayoutSdfPostUploadSourceRetiredReady,
+		VanillaLayoutSdfPriorGenerationDeclarationReady,
+		VanillaLayoutSdfPrivateStateCarry,
+		VanillaLayoutSdfPrivateStateCarryRejected,
 		PreparedSidecarCaptureFallback,
 		PreparedSidecarRejectedFallback,
 		Count,
@@ -493,7 +493,7 @@ namespace fonthook::vectorfont
 		FramePrepRingLeasePublish,
 		FramePrepSingletons,
 		FramePrepPublish,
-		FrameRouteStockRender,
+		FrameRouteVanillaRender,
 		RegisterRoute,
 		DispatchRoute,
 		PreflightClipHonorGate,
@@ -629,7 +629,7 @@ namespace fonthook::vectorfont
 	enum class VerticalMetricsMode : UInt8
 	{
 		FreeType = 0,
-		Original = 1,
+		Vanilla = 1,
 	};
 
 	enum class FontPrewarmRange : UInt8
@@ -782,7 +782,7 @@ namespace fonthook::vectorfont
 		// into the atlas.
 		bool bakedCoverage = false;
 		// Aggressive profiles store the final configured BGRA glyph. Single-page
-		// batches use the stock Tile shader; multi-page batches use the native
+		// batches use the vanilla Tile shader; multi-page batches use the native
 		// ARGB packet shader without reconstructing effect layers.
 		bool precomposedArgb = false;
 		DistanceFieldMethod distanceFieldMethod =
@@ -1109,7 +1109,7 @@ namespace fonthook::vectorfont
 		const A8ShapeColorContract* apColorContract,
 		std::shared_ptr<const NativeA8PayloadTemplate> apPayloadTemplate,
 		const NiPoint3& arGeometryOrigin);
-	bool PrepareStockLayoutSdfA8Shape(Font& arFont, NiTriShape* apShape,
+	bool PrepareVanillaLayoutSdfA8Shape(Font& arFont, NiTriShape* apShape,
 		UInt32 auiFontId, UInt32 auiGlyphCount, UInt32 auiQuadCount,
 		const A8EffectShapeConfig* apEffectConfig,
 		const A8ShapeColorContract* apColorContract,

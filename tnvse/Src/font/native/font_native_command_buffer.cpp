@@ -47,7 +47,7 @@ namespace fonthook::vectorfont
 		{
 			// A segment spans adjacent FreeType Tile submissions. Full frame,
 			// hook, device, ring, RT, and viewport validation is shared until a
-			// stock/non-FreeType boundary or an externally published resource
+			// vanilla/non-FreeType boundary or an externally published resource
 			// mutation advances one of these epochs.
 			UInt64 validationToken = 0;
 			UInt32 boundaryEpoch = 0;

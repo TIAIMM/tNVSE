@@ -213,7 +213,7 @@ namespace fonthook::vectorfont
 	enum class DirectCachedLetterKind : UInt8
 	{
 		EffectLayers = 0,
-		StockFontLetter = 1,
+		VanillaFontLetter = 1,
 	};
 	inline constexpr UInt8 kDirectCachedLetterValid = 1u << 0;
 	inline constexpr UInt8 kDirectCachedLetterKnownEmpty = 1u << 1;
@@ -269,15 +269,15 @@ namespace fonthook::vectorfont
 			std::make_shared<std::atomic<bool>>(true);
 		std::vector<std::weak_ptr<AtlasResource>> pages;
 		std::vector<DirectAtlasGlyphRecord> glyphs;
-		std::vector<FontLetter> stockGlyphs;
+		std::vector<FontLetter> vanillaGlyphs;
 		std::vector<UInt8> faceIndices;
 		UInt32 resolvedGlyphs = 0;
 		UInt32 resolvedLayers = 0;
 
 		size_t SlotCount() const
 		{
-			return recordKind == DirectCachedLetterKind::StockFontLetter
-				? stockGlyphs.size() : glyphs.size();
+			return recordKind == DirectCachedLetterKind::VanillaFontLetter
+				? vanillaGlyphs.size() : glyphs.size();
 		}
 	};
 
@@ -321,7 +321,7 @@ namespace fonthook::vectorfont
 	struct DirectAtlasBatchGlyph
 	{
 		const AtlasSnapshotPlacement* placement = nullptr;
-		const FontLetter* stockLetter = nullptr;
+		const FontLetter* vanillaLetter = nullptr;
 		UInt32 snapshotPlacementIndex = kInvalidDirectAtlasPlacementIndex;
 		UInt16 atlasPage = kInvalidDirectAtlasPageSlot;
 		UInt8 byteClass = 0;
@@ -793,7 +793,7 @@ namespace fonthook::vectorfont
 		// Shader-effect quads that originate from the same shaped glyph share this
 		// ordinal (for example, an offset shadow quad and its body quad).  It lets
 		// the composite route distinguish intentional intra-glyph overlap from
-		// overlap whose global layer order must remain on the stock multi-pass path.
+		// overlap whose global layer order must remain on the vanilla multi-pass path.
 		UInt32 glyphOrdinal = std::numeric_limits<UInt32>::max();
 		UInt16 atlasPage = 0;
 		AtlasGlyphPlacement atlasPlacement;

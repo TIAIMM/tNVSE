@@ -734,7 +734,7 @@ namespace fonthook::vectorfont
 			return true;
 		const FontConfig& config = GetRuntimeConfig(runtime);
 		AtlasCacheKey key;
-		// Original-shader ARGB glyphs bake a per-range color into distinct bitmap
+		// Vanilla-shader ARGB glyphs bake a per-range color into distinct bitmap
 		// cache IDs at shape-build time. A raw ARGB prewarm atlas cannot be reused
 		// and would only evict useful distance-field generations.
 		if (!ResolvePrewarmAtlasKey(config, byteClass, rasterScale, key))

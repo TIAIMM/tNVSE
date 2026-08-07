@@ -82,7 +82,7 @@ namespace fonthook
 		};
 
 		template <size_t N>
-		bool ValidateStockCallSites(
+		bool ValidateVanillaCallSites(
 			const std::array<Rel32Site, N>& sites)
 		{
 			bool valid = true;
@@ -98,12 +98,12 @@ namespace fonthook
 					valid = false;
 					continue;
 				}
-				if (actualTarget != site.stockTarget)
+				if (actualTarget != site.vanillaTarget)
 				{
 					gLog.FormattedMessage(
 						"tnvse_font_hook: identity mismatch site=%s address=%08X expectedTarget=%08X actualTarget=%08X",
 						site.name, static_cast<UInt32>(site.address),
-						static_cast<UInt32>(site.stockTarget),
+						static_cast<UInt32>(site.vanillaTarget),
 						static_cast<UInt32>(actualTarget));
 					valid = false;
 				}
@@ -113,10 +113,10 @@ namespace fonthook
 
 		bool ValidateRequiredFontHookSites()
 		{
-			bool valid = ValidateStockCallSites(kCommonFontCallSites);
+			bool valid = ValidateVanillaCallSites(kCommonFontCallSites);
 			if (g_bEnableMultibyteFontHook)
 			{
-				valid = ValidateStockCallSites(kMultibyteFontCallSites)
+				valid = ValidateVanillaCallSites(kMultibyteFontCallSites)
 					&& valid;
 				if (!hook_identity::IsAccessibleRegion(
 					kFontPrepText, kFontPrepTextPrologue.size(), true)
@@ -133,7 +133,7 @@ namespace fonthook
 			}
 			else
 			{
-				valid = ValidateStockCallSites(kFreeTypeOnlyCallSites)
+				valid = ValidateVanillaCallSites(kFreeTypeOnlyCallSites)
 					&& valid;
 			}
 			return valid;
@@ -330,7 +330,7 @@ namespace fonthook
 				s_originalFontMakeString = nullptr;
 				s_originalCalculateStringDimensions = nullptr;
 				gLog.FormattedMessage(
-					"tnvse_font_hook: core entry write verification failed; restored stock prologues");
+					"tnvse_font_hook: core entry write verification failed; restored vanilla prologues");
 				return false;
 			}
 			gLog.FormattedMessage(
@@ -537,15 +537,15 @@ namespace fonthook
 	{
 		constexpr SIZE_T kJipInstruction = 0x100113BD;
 		constexpr SIZE_T kJipImmediate = kJipInstruction + 1;
-		constexpr SIZE_T kJipStockDescription = 0x1005D130;
+		constexpr SIZE_T kJipVanillaDescription = 0x1005D130;
 		const SIZE_T instruction = GetJIPAddress(kJipInstruction);
 		const SIZE_T immediate = GetJIPAddress(kJipImmediate);
-		const UInt32 stockDescription = static_cast<UInt32>(
-			GetJIPAddress(kJipStockDescription));
+		const UInt32 vanillaDescription = static_cast<UInt32>(
+			GetJIPAddress(kJipVanillaDescription));
 		if (!hook_identity::IsAccessibleRegion(instruction, 5, true)
 			|| *reinterpret_cast<const UInt8*>(instruction) != 0xBA
 			|| *reinterpret_cast<const UInt32*>(immediate)
-				!= stockDescription)
+				!= vanillaDescription)
 		{
 			gLog.FormattedMessage(
 				"tnvse_font_hook: JIP Big Guns description signature mismatch instruction=%08X; code left untouched",
@@ -561,16 +561,16 @@ namespace fonthook
 		SafeWrite32(immediate, replacement);
 		if (*reinterpret_cast<const UInt32*>(immediate) != replacement)
 		{
-			SafeWrite32(immediate, stockDescription);
+			SafeWrite32(immediate, vanillaDescription);
 			gLog.FormattedMessage(
-				"tnvse_font_hook: JIP Big Guns description write verification failed; restored stock operand");
+				"tnvse_font_hook: JIP Big Guns description write verification failed; restored vanilla operand");
 		}
 	}
 
 	static bool InstallDoorPromptHook(SIZE_T hook, const char* mode)
 	{
 		const std::array<Rel32Site, 1> sites = {{ kDoorPromptCallSite }};
-		if (!ValidateStockCallSites(sites))
+		if (!ValidateVanillaCallSites(sites))
 			return false;
 		WriteRelCall(kDoorPromptCallSite.address, hook);
 		if (hook_identity::MatchesRel32Target(
@@ -579,7 +579,7 @@ namespace fonthook
 			return true;
 		}
 		WriteRelCall(kDoorPromptCallSite.address,
-			kDoorPromptCallSite.stockTarget);
+			kDoorPromptCallSite.vanillaTarget);
 		gLog.FormattedMessage(
 			"tnvse_font_hook: door prompt %s hook write verification failed; restored BSsprintf",
 			mode);
@@ -619,7 +619,7 @@ namespace fonthook
 		{
 			SafeWrite8(kPluralBranch, 0x74);
 			gLog.FormattedMessage(
-				"tnvse_font_hook: plural branch write verification failed; restored stock branch");
+				"tnvse_font_hook: plural branch write verification failed; restored vanilla branch");
 		}
 	}
 

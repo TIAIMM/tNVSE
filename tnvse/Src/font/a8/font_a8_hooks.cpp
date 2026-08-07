@@ -528,24 +528,24 @@ namespace fonthook::vectorfont
 			bool m_active = false;
 		};
 
-		class StockLayoutOriginalVtableScope
+		class VanillaLayoutOriginalVtableScope
 		{
 		public:
-			explicit StockLayoutOriginalVtableScope(NiTriShape* shape)
+			explicit VanillaLayoutOriginalVtableScope(NiTriShape* shape)
 				: m_shape(shape)
 			{
 				A8State& state = State();
 				if (!m_shape || !state.originalTriShapeVtable)
 					return;
 				m_original = *reinterpret_cast<void***>(m_shape);
-				if (m_original != &state.stockLayoutTriShapeVtable[1])
+				if (m_original != &state.vanillaLayoutTriShapeVtable[1])
 					return;
 				*reinterpret_cast<void***>(m_shape) =
 					state.originalTriShapeVtable;
 				m_active = true;
 			}
 
-			~StockLayoutOriginalVtableScope()
+			~VanillaLayoutOriginalVtableScope()
 			{
 				if (m_active && m_shape)
 					*reinterpret_cast<void***>(m_shape) = m_original;
@@ -684,7 +684,7 @@ namespace fonthook::vectorfont
 
 		// Slot 31's constant prefix can be retained independently of its paired
 		// transient suffix. The key intentionally stores the exact
-		// stock inputs rather than derived WVP/color values: identical inputs
+		// vanilla inputs rather than derived WVP/color values: identical inputs
 		// preserve both the constant-map output and SetModelTransform's renderer
 		// mirror side effects without doing floating-point work in the hot path.
 		struct NativeSegmentConstantsStateKey
@@ -2150,7 +2150,7 @@ namespace fonthook::vectorfont
 			bool runtimeFault = false;
 			bool drewPacket = false;
 			bool directShapeRoute = false;
-			bool stockLikeBitmapRoute = false;
+			bool vanillaLikeBitmapRoute = false;
 			bool constantStateFault = false;
 			UInt32 drawnPacketCount = 0;
 			NativeA8FallbackReason failure =
@@ -2430,7 +2430,7 @@ namespace fonthook::vectorfont
 		void RecordStandardPassLiteFallback(StandardPassLiteFallback fallback)
 		{
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::StandardPassLiteStockFallback);
+				FreeTypePerfCounter::StandardPassLiteVanillaFallback);
 			switch (fallback)
 			{
 			case StandardPassLiteFallback::Envelope:
@@ -2509,7 +2509,7 @@ namespace fonthook::vectorfont
 			const NativeA8CompiledPacketCommand& program =
 				*dispatch.program;
 			// InvokeGuardedNativeReplay admits only a completely classified
-			// callback table. Unknown injected callbacks return to stock B994F0
+			// callback table. Unknown injected callbacks return to vanilla B994F0
 			// before its prelude or any draw has executed.
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::StandardPassV2Replay);
@@ -3000,7 +3000,7 @@ namespace fonthook::vectorfont
 				return true;
 			}
 
-			// The complete stock standard path may touch every device-state
+			// The complete vanilla standard path may touch every device-state
 			// category. A later dedicated one-packet Tile must establish a new
 			// cache head even when it remains in the same validation segment.
 			InvalidateSegmentDeviceStateCache();
@@ -3210,7 +3210,7 @@ namespace fonthook::vectorfont
 			}
 			// B994F0's global selected-shader identity still names the bootstrap
 			// profile. Restore the corresponding D3D program/texture before its
-			// one stock slot-35 cleanup returns, otherwise the next Tile can skip
+			// one vanilla slot-35 cleanup returns, otherwise the next Tile can skip
 			// B99390 while the driver still has the final retained profile bound.
 			const char* operation = "none";
 			HRESULT result = D3D_OK;
@@ -3319,8 +3319,8 @@ namespace fonthook::vectorfont
 			FreeTypePerfScope submitPerf(FreeTypePerfPhase::Submit);
 			FreeTypePerfScope commandPerf(
 				FreeTypePerfPhase::CommandSubmit);
-			draw.stockLikeBitmapRoute =
-				payload.stockLikeBitmapPackets;
+			draw.vanillaLikeBitmapRoute =
+				payload.vanillaLikeBitmapPackets;
 			NativeRingSubmissionScope ringScope;
 			const NativeA8FallbackReason ringFailure =
 				BeginNativeA8RingSubmission(
@@ -3332,12 +3332,12 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			NiDX9Renderer* renderer = draw.stockLikeBitmapRoute
+			NiDX9Renderer* renderer = draw.vanillaLikeBitmapRoute
 				? nullptr : NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer
 				? renderer->GetD3DDevice() : nullptr;
 			const bool isolatePacketConstants =
-				!draw.stockLikeBitmapRoute;
+				!draw.vanillaLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
 				&& s_constantOwnershipBatch.FrameActive();
 			std::optional<NativePassConstantScope> localConstants;
@@ -3474,7 +3474,7 @@ namespace fonthook::vectorfont
 					draw.drawnPacketCount += bridge.drewPackets;
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::
-							CommandStockBootstrapSaved,
+							CommandVanillaBootstrapSaved,
 						bridge.drewPackets);
 				}
 				if (!immediateScope.Invoked()
@@ -3647,7 +3647,7 @@ namespace fonthook::vectorfont
 				}
 			}
 			draw.directShapeRoute = true;
-			draw.stockLikeBitmapRoute = payload->stockLikeBitmapPackets;
+			draw.vanillaLikeBitmapRoute = payload->vanillaLikeBitmapPackets;
 			NiTriShapeData* data = shape->GetModelData();
 			const bool bindingDescriptorCurrent =
 				data && data->m_pkBuffData == expectedBuffer
@@ -3701,11 +3701,11 @@ namespace fonthook::vectorfont
 				draw.result = E_FAIL;
 			}
 
-			NiDX9Renderer* renderer = draw.stockLikeBitmapRoute
+			NiDX9Renderer* renderer = draw.vanillaLikeBitmapRoute
 				? nullptr : NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer
 				? renderer->GetD3DDevice() : nullptr;
-			if (!draw.runtimeFault && !draw.stockLikeBitmapRoute && !device)
+			if (!draw.runtimeFault && !draw.vanillaLikeBitmapRoute && !device)
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
@@ -3714,7 +3714,7 @@ namespace fonthook::vectorfont
 			}
 
 			const bool isolatePacketConstants =
-				!draw.stockLikeBitmapRoute;
+				!draw.vanillaLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
 				&& s_constantOwnershipBatch.FrameActive();
 			std::optional<NativePassConstantScope> localConstants;
@@ -3939,13 +3939,13 @@ namespace fonthook::vectorfont
 				draw.operation = "ring-submission";
 			}
 			NativeTilePacketScope packetScope(pass);
-			draw.stockLikeBitmapRoute =
-				payload.stockLikeBitmapPackets;
-			NiDX9Renderer* renderer = draw.stockLikeBitmapRoute
+			draw.vanillaLikeBitmapRoute =
+				payload.vanillaLikeBitmapPackets;
+			NiDX9Renderer* renderer = draw.vanillaLikeBitmapRoute
 				? nullptr : NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer
 				? renderer->GetD3DDevice() : nullptr;
-			if (!draw.stockLikeBitmapRoute && !device)
+			if (!draw.vanillaLikeBitmapRoute && !device)
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
@@ -3955,16 +3955,16 @@ namespace fonthook::vectorfont
 			// Retail NiDX9Renderer's indexed-array loop cannot express
 			// triangle-list page boundaries: m_pusArrayLengths is interpreted as
 			// strip lengths (primitiveCount = length - 2). Keep the page split at
-			// the one stock sorted Tile callsite instead. Each packet selects a
+			// the one vanilla sorted Tile callsite instead. Each packet selects a
 			// Font::MakeTriShape proxy and then executes the untouched
 			// RenderPassImmediately -> NiTriShape::RenderImmediate renderer path.
 			//
-			// Final ARGB and baked-coverage bitmaps use only stock c0. Skipping the
+			// Final ARGB and baked-coverage bitmaps use only vanilla c0. Skipping the
 			// distance-field private-high-range ownership and facade bookkeeping
-			// removes the only per-facade isolation work from this stock-like
+			// removes the only per-facade isolation work from this vanilla-like
 			// multipage route.
 			const bool isolatePacketConstants =
-				!draw.stockLikeBitmapRoute;
+				!draw.vanillaLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
 				&& s_constantOwnershipBatch.FrameActive();
 			std::optional<NativePassConstantScope> localConstants;
@@ -4245,13 +4245,13 @@ namespace fonthook::vectorfont
 			}
 
 			draw.directShapeRoute = true;
-			draw.stockLikeBitmapRoute =
-				payload.stockLikeBitmapPackets;
-			NiDX9Renderer* renderer = draw.stockLikeBitmapRoute
+			draw.vanillaLikeBitmapRoute =
+				payload.vanillaLikeBitmapPackets;
+			NiDX9Renderer* renderer = draw.vanillaLikeBitmapRoute
 				? nullptr : NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer
 				? renderer->GetD3DDevice() : nullptr;
-			if (!draw.stockLikeBitmapRoute && !device)
+			if (!draw.vanillaLikeBitmapRoute && !device)
 			{
 				draw.runtimeFault = true;
 				draw.constantStateFault = true;
@@ -4260,7 +4260,7 @@ namespace fonthook::vectorfont
 			}
 
 			const bool isolatePacketConstants =
-				!draw.stockLikeBitmapRoute;
+				!draw.vanillaLikeBitmapRoute;
 			const bool batchedConstants = isolatePacketConstants
 				&& s_constantOwnershipBatch.FrameActive();
 			std::optional<NativePassConstantScope> localConstants;
@@ -4443,7 +4443,7 @@ namespace fonthook::vectorfont
 					return false;
 				}
 			}
-			// Once the stock Tile pass has been entered, this route owns the item
+			// Once the vanilla Tile pass has been entered, this route owns the item
 			// even if the immediate callback was unexpectedly skipped. Replaying
 			// through a proxy could duplicate a draw whose driver result is opaque.
 			return true;
@@ -4759,12 +4759,12 @@ namespace fonthook::vectorfont
 		if (!IsA8AtlasShape(shape))
 		{
 			if (s_constantOwnershipBatch.FrameActive())
-				ReleaseNativeConstantOwnershipBatch("before-stock-tile");
+				ReleaseNativeConstantOwnershipBatch("before-vanilla-tile");
 			s_segmentDeviceStateCache.Reset();
-			AdvanceNativeA8SortedShaderStateAcrossStockTile();
+			AdvanceNativeA8SortedShaderStateAcrossVanillaTile();
 			state.originalRenderPassImmediately(pass, currentPass, testAlpha,
 				blendAlpha, setupDrawmode);
-			ValidateNativeA8SortedShaderStateAfterStockTile();
+			ValidateNativeA8SortedShaderStateAfterVanillaTile();
 			return;
 		}
 
@@ -4823,7 +4823,7 @@ namespace fonthook::vectorfont
 			}
 			return;
 		}
-		if (IsStockLayoutSdfShape(shape))
+		if (IsVanillaLayoutSdfShape(shape))
 		{
 			NativeA8VisibilityCull visibilityCull =
 				EvaluateNativeA8SubmissionVisibility(shape);
@@ -4840,7 +4840,7 @@ namespace fonthook::vectorfont
 			{
 				RecordNativeA8VisibilityCull(visibilityCull);
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::StockLayoutSdfCull);
+					FreeTypePerfCounter::VanillaLayoutSdfCull);
 				return;
 			}
 		}
@@ -4864,9 +4864,9 @@ namespace fonthook::vectorfont
 			LogMissingMetadata(shape, "tile-render-pass");
 			return;
 		}
-		if (metadata->backend == FreeTypeShapeBackend::StockLayoutSdf)
+		if (metadata->backend == FreeTypeShapeBackend::VanillaLayoutSdf)
 		{
-			bool shiftedStockLayout = false;
+			bool shiftedVanillaLayout = false;
 			if (metadata->nativePayload.buildComplete
 				&& metadata->nativePayload.payloadTemplate
 				&& metadata->nativePayload.payloadTemplate->compositePackets.size()
@@ -4875,57 +4875,57 @@ namespace fonthook::vectorfont
 				const NativeA8PacketTemplate& packet =
 					metadata->nativePayload.payloadTemplate->
 						compositePackets.front();
-				shiftedStockLayout = packet.compositeShiftedShadow;
+				shiftedVanillaLayout = packet.compositeShiftedShadow;
 				TileShader* shader = ResolveNativeA8PacketShader(
 					packet, shape, false, true);
 				if (shader && shape->GetShader() != shader)
 					shape->SetShader(shader);
-				if (shader && IsNativeA8StockLayoutShapeReady(shape, shader))
+				if (shader && IsNativeA8VanillaLayoutShapeReady(shape, shader))
 				{
 					if (s_constantOwnershipBatch.FrameActive())
 					{
 						ReleaseNativeConstantOwnershipBatch(
-							"before-stock-layout-sdf");
+							"before-vanilla-layout-sdf");
 					}
 					s_segmentDeviceStateCache.Reset();
-					UInt64 stockLayoutTransition = 0;
-					bool stockLayoutDrawn = false;
+					UInt64 vanillaLayoutTransition = 0;
+					bool vanillaLayoutDrawn = false;
 					{
 						NativeFacadeShaderBatchScope shaderBatch;
-						StockLayoutOriginalVtableScope stockVtable(shape);
-						if (stockVtable.Active())
+						VanillaLayoutOriginalVtableScope vanillaVtable(shape);
+						if (vanillaVtable.Active())
 						{
-							stockLayoutTransition =
-								BeginNativeA8StockLayoutShaderTransition(
+							vanillaLayoutTransition =
+								BeginNativeA8VanillaLayoutShaderTransition(
 									shader, currentPass);
 							state.originalRenderPassImmediately(pass,
 								currentPass, testAlpha, blendAlpha,
 								setupDrawmode);
-							stockLayoutDrawn = true;
+							vanillaLayoutDrawn = true;
 							RecordFreeTypePerf(
-								FreeTypePerfCounter::StockLayoutSdfDraw);
-							if (shiftedStockLayout)
+								FreeTypePerfCounter::VanillaLayoutSdfDraw);
+							if (shiftedVanillaLayout)
 							{
 								RecordFreeTypePerf(FreeTypePerfCounter::
-									StockLayoutSdfShiftedDraw);
+									VanillaLayoutSdfShiftedDraw);
 							}
 						}
 					}
-					if (stockLayoutDrawn)
+					if (vanillaLayoutDrawn)
 					{
-						EndNativeA8StockLayoutShaderTransition(
-							stockLayoutTransition, shader);
+						EndNativeA8VanillaLayoutShaderTransition(
+							vanillaLayoutTransition, shader);
 						return;
 					}
 					InvalidateNativeA8SortedShaderState();
 				}
 			}
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::StockLayoutSdfRuntimeFallback);
-			if (shiftedStockLayout)
+				FreeTypePerfCounter::VanillaLayoutSdfRuntimeFallback);
+			if (shiftedVanillaLayout)
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
-					StockLayoutSdfShiftedRuntimeFallback);
+					VanillaLayoutSdfShiftedRuntimeFallback);
 			}
 		}
 		if (metadata->backend
@@ -5067,7 +5067,7 @@ namespace fonthook::vectorfont
 			)
 		{
 			// NativeA8RenderAlphaGeometry retained the metadata owner and validated this
-			// exact payload immediately before the stock sorted Tile traversal.
+			// exact payload immediately before the vanilla sorted Tile traversal.
 			failure = NativeA8FallbackReason::None;
 		}
 		else
@@ -5142,8 +5142,8 @@ namespace fonthook::vectorfont
 							: 0u,
 						draw.directShapeRoute
 							? "direct-single-packet-shape"
-							: (draw.stockLikeBitmapRoute
-								? "stock-like-bitmap-pages"
+							: (draw.vanillaLikeBitmapRoute
+								? "vanilla-like-bitmap-pages"
 								: "effect-packets"));
 				}
 				return;
@@ -5215,13 +5215,13 @@ namespace fonthook::vectorfont
 			}
 			return false;
 		}
-		if (reinterpret_cast<UInt32>(current) != kStockRenderPassImmediately)
+		if (reinterpret_cast<UInt32>(current) != kVanillaRenderPassImmediately)
 		{
 			if (!State().loggedRenderPassImmediatelyHookConflict)
 			{
 				State().loggedRenderPassImmediatelyHookConflict = true;
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: RenderPassImmediately call site already has a non-stock target=%p; leaving it untouched",
+					"tnvse_freetype_native: RenderPassImmediately call site already has a non-vanilla target=%p; leaving it untouched",
 					current);
 			}
 			return false;
@@ -5239,7 +5239,7 @@ namespace fonthook::vectorfont
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: installed RenderPassImmediately native route original=%p stock=1",
+				"tnvse_freetype_native: installed RenderPassImmediately native route original=%p vanilla=1",
 				current);
 		}
 		return true;
@@ -5252,13 +5252,13 @@ namespace fonthook::vectorfont
 		void* const* vtable =
 			*reinterpret_cast<void* const* const*>(shape);
 		return vtable == &State().triShapeVtable[1]
-			|| vtable == &State().stockLayoutTriShapeVtable[1];
+			|| vtable == &State().vanillaLayoutTriShapeVtable[1];
 	}
 
-	bool IsStockLayoutSdfShape(const NiTriShape* shape)
+	bool IsVanillaLayoutSdfShape(const NiTriShape* shape)
 	{
 		return shape && *reinterpret_cast<void* const* const*>(shape)
-			== &State().stockLayoutTriShapeVtable[1];
+			== &State().vanillaLayoutTriShapeVtable[1];
 	}
 
 	void __fastcall A8RenderImmediate(NiTriShape* shape, void*,
@@ -5362,7 +5362,7 @@ namespace fonthook::vectorfont
 		if (!source)
 			return false;
 		if (source == &State().triShapeVtable[1]
-			|| source == &State().stockLayoutTriShapeVtable[1])
+			|| source == &State().vanillaLayoutTriShapeVtable[1])
 			return true;
 		if (State().originalTriShapeVtable)
 			return source == State().originalTriShapeVtable;
@@ -5377,7 +5377,7 @@ namespace fonthook::vectorfont
 			&& source[kGeometryAlternatePredicateSlot]
 				== expectedFalsePredicate;
 		// Verify the reverse-engineered identity and behavior once while the
-		// object still owns the stock vtable. The lite hot path then needs only
+		// object still owns the vanilla vtable. The lite hot path then needs only
 		// the tNVSE vtable identity plus this immutable result.
 		state.standardPassLitePredicatesValidated =
 			predicateSlotsMatch
@@ -5398,9 +5398,9 @@ namespace fonthook::vectorfont
 		state.triShapeVtable[0] = source[-1];
 		std::copy(source, source + kCopiedTriShapeVtableEntries,
 			state.triShapeVtable.begin() + 1);
-		state.stockLayoutTriShapeVtable[0] = source[-1];
+		state.vanillaLayoutTriShapeVtable[0] = source[-1];
 		std::copy(source, source + kCopiedTriShapeVtableEntries,
-			state.stockLayoutTriShapeVtable.begin() + 1);
+			state.vanillaLayoutTriShapeVtable.begin() + 1);
 		state.originalRenderImmediate = reinterpret_cast<RenderImmediateFn>(
 			state.triShapeVtable[kRenderImmediateSlot + 1]);
 		state.originalRenderImmediateAlt = reinterpret_cast<RenderImmediateFn>(
@@ -5423,11 +5423,11 @@ namespace fonthook::vectorfont
 			= reinterpret_cast<void*>(&A8RenderImmediate);
 		state.triShapeVtable[kRenderImmediateAltSlot + 1]
 			= reinterpret_cast<void*>(&A8RenderImmediateAlt);
-		state.stockLayoutTriShapeVtable[kDeleteThisSlot + 1]
+		state.vanillaLayoutTriShapeVtable[kDeleteThisSlot + 1]
 			= reinterpret_cast<void*>(&A8DeleteThis);
-		state.stockLayoutTriShapeVtable[kRenderImmediateSlot + 1]
+		state.vanillaLayoutTriShapeVtable[kRenderImmediateSlot + 1]
 			= reinterpret_cast<void*>(&A8RenderImmediate);
-		state.stockLayoutTriShapeVtable[kRenderImmediateAltSlot + 1]
+		state.vanillaLayoutTriShapeVtable[kRenderImmediateAltSlot + 1]
 			= reinterpret_cast<void*>(&A8RenderImmediateAlt);
 		return state.originalRenderImmediate && state.originalRenderImmediateAlt
 			&& state.originalDeleteThis;

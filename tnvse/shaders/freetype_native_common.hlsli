@@ -14,7 +14,7 @@ struct NativeFontPixelInput
 	// atlasUv to include an offset shadow, but samples remain glyph-local.
 	float4 glyphBounds : TEXCOORD2;
 	// Analytic source-distance footprint computed once per vertex from the
-	// stock Tile WVP matrix, current viewport and packet raster scale.
+	// vanilla Tile WVP matrix, current viewport and packet raster scale.
 	float antialiasWidth : TEXCOORD3;
 };
 
@@ -26,7 +26,7 @@ float NativeFontUsesLiveTileRgb(float layerAndFlags)
 float4 ComposeNativeFontCoverage(float coverage, float4 tileColor,
 	float4 baseColor, float usesLiveTileRgb)
 {
-	// c0 is owned by the stock TileShader constant map. Fixed-color effects
+	// c0 is owned by the vanilla TileShader constant map. Fixed-color effects
 	// select RGB identity here instead of rewriting c0 behind Gamebryo's back.
 	const float3 identityRgb = float3(1.0, 1.0, 1.0);
 	const float3 resolvedTileRgb = lerp(identityRgb, tileColor.rgb,

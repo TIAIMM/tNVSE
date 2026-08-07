@@ -523,7 +523,7 @@ namespace fonthook::vectorfont
 
 	struct ActiveFontState
 	{
-		struct OriginalVerticalMetrics
+		struct VanillaVerticalMetrics
 		{
 			float baseLine = 0.0f;
 			float fontHeight = 0.0f;
@@ -535,9 +535,9 @@ namespace fonthook::vectorfont
 
 		const FontData* data = nullptr;
 		UInt32 fontId = 0;
-		OriginalVerticalMetrics originalMetrics;
-		bool originalMetricsCaptured = false;
-		bool originalFallbackLogged = false;
+		VanillaVerticalMetrics vanillaMetrics;
+		bool vanillaMetricsCaptured = false;
+		bool vanillaFallbackLogged = false;
 	};
 
 	struct RuntimeFont

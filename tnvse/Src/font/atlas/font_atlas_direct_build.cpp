@@ -31,28 +31,28 @@ namespace implementation::font_atlas_direct
 				|| codePoint == 0x3000;
 		}
 
-		bool ConvertCompositeTableToStockLetters(
+		bool ConvertCompositeTableToVanillaLetters(
 			DirectAtlasGlyphTable& table,
 			const std::vector<std::shared_ptr<AtlasResource>>& pages,
 			float rasterScale)
 		{
 			if (table.recordKind
-					!= DirectCachedLetterKind::StockFontLetter
+					!= DirectCachedLetterKind::VanillaFontLetter
 				|| table.glyphs.empty()
 				|| !std::isfinite(rasterScale)
 				|| rasterScale <= 0.0f)
 			{
 				return false;
 			}
-			table.stockGlyphs.assign(table.glyphs.size(), {});
-			for (FontLetter& letter : table.stockGlyphs)
+			table.vanillaGlyphs.assign(table.glyphs.size(), {});
+			for (FontLetter& letter : table.vanillaGlyphs)
 				letter.iTextureIndex = -1;
 			for (size_t slot = 0; slot < table.glyphs.size(); ++slot)
 			{
 				const DirectCachedLetter& source = table.glyphs[slot];
 				if (!(source.flags & kDirectCachedLetterValid))
 					continue;
-				FontLetter& target = table.stockGlyphs[slot];
+				FontLetter& target = table.vanillaGlyphs[slot];
 				if (source.flags & kDirectCachedLetterKnownEmpty)
 				{
 					target.iTextureIndex = -2;
@@ -369,7 +369,7 @@ namespace implementation::font_atlas_direct
 			table->recordKind =
 				masks.size() == 1
 					&& masks[0] == GlyphMaskType::Composite
-				? DirectCachedLetterKind::StockFontLetter
+				? DirectCachedLetterKind::VanillaFontLetter
 				: DirectCachedLetterKind::EffectLayers;
 			table->effectLayerMask =
 				BuildDirectEffectLayerMask(masks);
@@ -383,9 +383,9 @@ namespace implementation::font_atlas_direct
 				GetDirectGlyphSlotCount(byteClass);
 			table->glyphs.resize(directSlotCount);
 			if (table->recordKind
-				== DirectCachedLetterKind::StockFontLetter)
+				== DirectCachedLetterKind::VanillaFontLetter)
 			{
-				table->stockGlyphs.resize(directSlotCount);
+				table->vanillaGlyphs.resize(directSlotCount);
 			}
 			table->faceIndices.resize(directSlotCount);
 			table->pages.reserve(pages.size());
@@ -561,8 +561,8 @@ namespace implementation::font_atlas_direct
 			if (!table->resolvedGlyphs)
 				return false;
 			if (table->recordKind
-					== DirectCachedLetterKind::StockFontLetter
-				&& !ConvertCompositeTableToStockLetters(
+					== DirectCachedLetterKind::VanillaFontLetter
+				&& !ConvertCompositeTableToVanillaLetters(
 					*table, pages, rasterScale))
 			{
 				return false;
@@ -621,9 +621,9 @@ namespace implementation::font_atlas_direct
 				return false;
 			}
 			if (table.recordKind
-				== DirectCachedLetterKind::StockFontLetter)
+				== DirectCachedLetterKind::VanillaFontLetter)
 			{
-				for (const FontLetter& letter : table.stockGlyphs)
+				for (const FontLetter& letter : table.vanillaGlyphs)
 				{
 					if (letter.iTextureIndex < 0)
 						continue;
