@@ -1178,7 +1178,7 @@ namespace fonthook::vectorfont
 		if (!shader)
 			return false;
 
-		auto metadata = std::make_shared<A8ShapeMetadata>();
+		auto metadata = std::make_shared<VanillaLayoutSdfMetadata>();
 		InitializeA8MetadataIdentity(*metadata, shape);
 		metadata->fontId = fontId;
 		metadata->glyphCount = glyphCount;
@@ -1195,7 +1195,7 @@ namespace fonthook::vectorfont
 			return false;
 		}
 		metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-			sizeof(A8ShapeMetadata)
+			sizeof(VanillaLayoutSdfMetadata)
 				+ metadata->nativePayload.packetShaders.heap_capacity()
 					* sizeof(TileShader*)
 				+ metadata->nativePayload.packetPrograms.heap_capacity()

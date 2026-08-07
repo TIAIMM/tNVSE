@@ -436,6 +436,16 @@ namespace fonthook::vectorfont
 		VanillaLayoutSdfPrivateStateCarryRejected,
 		PreparedSidecarCaptureFallback,
 		PreparedSidecarRejectedFallback,
+		VanillaLayoutSdfDrawTokenHit,
+		VanillaLayoutSdfDrawTokenFullValidation,
+		VanillaLayoutSdfDrawTokenCold,
+		VanillaLayoutSdfDrawTokenShapeShaderInvalidation,
+		VanillaLayoutSdfDrawTokenGenerationInvalidation,
+		VanillaLayoutSdfDrawTokenGeometryInvalidation,
+		VanillaLayoutSdfDrawTokenLayoutInvalidation,
+		VanillaLayoutSdfDrawTokenFirstCertification,
+		VanillaLayoutSdfDrawTokenRecertification,
+		VanillaLayoutSdfDrawTokenRejected,
 		Count,
 	};
 	static_assert(

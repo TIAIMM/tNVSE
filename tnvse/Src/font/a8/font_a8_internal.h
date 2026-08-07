@@ -189,11 +189,24 @@ namespace fonthook::vectorfont
 		mutable SingletonFacadeState singleton;
 	};
 
+	struct VanillaLayoutSdfMetadata final : A8ShapeMetadata
+	{
+		mutable NativeA8VanillaLayoutDrawToken drawToken;
+	};
+
 	inline SingletonFacadeState* GetSingletonFacadeState(
 		const A8ShapeMetadata& metadata)
 	{
 		return metadata.backend == FreeTypeShapeBackend::SingletonFacade
 			? &static_cast<const SingletonFacadeMetadata&>(metadata).singleton
+			: nullptr;
+	}
+
+	inline NativeA8VanillaLayoutDrawToken* GetVanillaLayoutSdfDrawToken(
+		const A8ShapeMetadata& metadata)
+	{
+		return metadata.backend == FreeTypeShapeBackend::VanillaLayoutSdf
+			? &static_cast<const VanillaLayoutSdfMetadata&>(metadata).drawToken
 			: nullptr;
 	}
 

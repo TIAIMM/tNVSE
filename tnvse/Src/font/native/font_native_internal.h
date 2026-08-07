@@ -508,6 +508,41 @@ namespace fonthook::vectorfont
 		bool buildComplete = false;
 	};
 
+	// Render-thread-confined proof that one vanilla-layout shape has already passed
+	// the complete native readiness audit.  Every pointer is a non-owning identity
+	// witness only: the A8 metadata owns this token, shader generations retain
+	// their sidecars for process lifetime, and no D3D/COM reference is acquired.
+	// A draw may reuse the proof only while every recorded identity and scalar
+	// layout field still matches exactly.
+	struct NativeA8VanillaLayoutDrawToken
+	{
+		const NiTriShape* shapeIdentity = nullptr;
+		TileShader* shaderIdentity = nullptr;
+		const void* shaderVtableIdentity = nullptr;
+		const void* profileIdentity = nullptr;
+		const void* generationIdentity = nullptr;
+		const void* generationDeclarationIdentity = nullptr;
+		const void* modelDataIdentity = nullptr;
+		const void* bufferIdentity = nullptr;
+		const void* bufferDeclarationIdentity = nullptr;
+		const void* strideArrayIdentity = nullptr;
+		UInt32 generation = 0;
+		UInt32 deviceEpoch = 0;
+		UInt32 streamCount = 0;
+		UInt32 stride = 0;
+		UInt32 bufferVertexCount = 0;
+		UInt32 dataVertexCount = 0;
+		bool sourceRetired = false;
+		bool priorGenerationDeclaration = false;
+		bool everCertified = false;
+		bool valid = false;
+
+		void Invalidate()
+		{
+			valid = false;
+		}
+	};
+
 	inline const std::vector<NativeA8PacketTemplate>& GetNativeA8Packets(
 		const NativeA8PayloadTemplate& payloadTemplate, bool useComposite)
 	{
@@ -1107,7 +1142,7 @@ namespace fonthook::vectorfont
 	bool RequestNativeA8VanillaLayoutShapePrecache(NiTriShape* shape,
 		TileShader* shader, bool& immediateReady);
 	bool IsNativeA8VanillaLayoutShapeReady(const NiTriShape* shape,
-		TileShader* shader);
+		TileShader* shader, NativeA8VanillaLayoutDrawToken& drawToken);
 	bool ResolveNativeA8RetainedPacketProgram(
 		const NativeA8PacketTemplate& packet,
 		TileShader* shader, UInt32 generation,

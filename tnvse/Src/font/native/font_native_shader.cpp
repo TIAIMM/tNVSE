@@ -2535,6 +2535,38 @@ namespace fonthook::vectorfont
 			Mismatch,
 		};
 
+		struct VanillaLayoutReadySnapshot
+		{
+			const NiTriShape* shape = nullptr;
+			TileShader* shader = nullptr;
+			const void* shaderVtable = nullptr;
+			NativeShaderProfile* profile = nullptr;
+			NativeShaderGeneration* generation = nullptr;
+			IDirect3DVertexDeclaration9* generationDeclaration = nullptr;
+			const NiTriShapeData* modelData = nullptr;
+			const NiGeometryBufferData* buffer = nullptr;
+			const void* bufferDeclaration = nullptr;
+			const UInt32* strideArray = nullptr;
+			UInt32 generationId = 0;
+			UInt32 deviceEpoch = 0;
+			UInt32 streamCount = 0;
+			UInt32 stride = 0;
+			UInt32 bufferVertexCount = 0;
+			UInt32 dataVertexCount = 0;
+			bool sourceRetired = false;
+			bool priorGenerationDeclaration = false;
+		};
+
+		enum class VanillaLayoutDrawTokenMismatch : UInt8
+		{
+			None = 0,
+			Uncertified,
+			ShapeOrShader,
+			Generation,
+			Geometry,
+			Layout,
+		};
+
 		VanillaLayoutDeclarationCompatibility
 		ClassifyVanillaLayoutDeclaration(const NativeShaderGeneration* generation,
 			const NiGeometryBufferData* buffer)
@@ -2562,9 +2594,166 @@ namespace fonthook::vectorfont
 			return VanillaLayoutDeclarationCompatibility::Mismatch;
 		}
 
-		bool IsNativeA8VanillaLayoutShapeReadyImpl(const NiTriShape* shape,
-			TileShader* shader, bool logFailure)
+		void RecordVanillaLayoutReadyObservations(
+			bool sourceRetired, bool priorGenerationDeclaration)
 		{
+			if (sourceRetired)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutSdfPostUploadSourceRetiredReady);
+			}
+			if (priorGenerationDeclaration)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutSdfPriorGenerationDeclarationReady);
+			}
+		}
+
+		VanillaLayoutDrawTokenMismatch MatchVanillaLayoutDrawToken(
+			const NiTriShape* shape, TileShader* shader,
+			const NativeA8VanillaLayoutDrawToken& token)
+		{
+			if (!token.valid)
+				return VanillaLayoutDrawTokenMismatch::Uncertified;
+			if (!shape || !shader || token.shapeIdentity != shape
+				|| token.shaderIdentity != shader || shape->GetShader() != shader)
+			{
+				return VanillaLayoutDrawTokenMismatch::ShapeOrShader;
+			}
+
+			void** shaderVtable = *reinterpret_cast<void***>(shader);
+			if (!shaderVtable || token.shaderVtableIdentity != shaderVtable)
+				return VanillaLayoutDrawTokenMismatch::ShapeOrShader;
+			NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
+			NativeShaderProfile* profile = block ? block->profile : nullptr;
+			if (!profile || token.profileIdentity != profile
+				|| profile->shader != shader || !profile->key.vanillaLayoutSdf)
+			{
+				return VanillaLayoutDrawTokenMismatch::ShapeOrShader;
+			}
+
+			NativeShaderGeneration* generation = s_publishedGeneration.load(
+				std::memory_order_acquire);
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			IDirect3DDevice9* device = renderer
+				? renderer->GetD3DDevice() : nullptr;
+			// The generation and its declaration compatibility set are immutable and
+			// process-lifetime once published. Exact generation/device-epoch identity
+			// therefore preserves the earlier full declaration classification without
+			// repeating its resource walk or compatible-declaration vector scan.
+			if (!generation || token.generationIdentity != generation
+				|| profile->owner != generation
+				|| generation->id != token.generation
+				|| generation->deviceEpoch != token.deviceEpoch
+				|| s_deviceEpoch.load(std::memory_order_acquire)
+					!= token.deviceEpoch
+				|| s_resetInProgress.load(std::memory_order_acquire)
+				|| generation->runtimeFault.load(std::memory_order_acquire)
+				|| generation->renderer != renderer || generation->device != device
+				|| !generation->vanillaLayoutReady
+				|| !generation->vanillaLayoutDeclaration
+				|| generation->vanillaLayoutD3DDeclaration
+					!= token.generationDeclarationIdentity)
+			{
+				return VanillaLayoutDrawTokenMismatch::Generation;
+			}
+
+			const NiTriShapeData* data = shape->GetModelData();
+			if (!data || token.modelDataIdentity != data
+				|| !data->m_usVertices
+				|| data->m_usVertices != token.dataVertexCount)
+			{
+				return VanillaLayoutDrawTokenMismatch::Geometry;
+			}
+			const NiGeometryBufferData* buffer = data->m_pkBuffData;
+			if (!buffer || token.bufferIdentity != buffer)
+				return VanillaLayoutDrawTokenMismatch::Geometry;
+
+			if (!token.bufferDeclarationIdentity
+				|| buffer->m_hDeclaration != token.bufferDeclarationIdentity
+				|| token.streamCount != 1u
+				|| buffer->m_uiStreamCount != token.streamCount
+				|| !token.strideArrayIdentity
+				|| buffer->m_puiVertexStride != token.strideArrayIdentity
+				|| token.stride != kVanillaLayoutVertexStride
+				|| buffer->m_puiVertexStride[0] != token.stride
+				|| buffer->m_uiVertCount != token.bufferVertexCount
+				|| token.bufferVertexCount < token.dataVertexCount)
+			{
+				return VanillaLayoutDrawTokenMismatch::Layout;
+			}
+			return VanillaLayoutDrawTokenMismatch::None;
+		}
+
+		void RecordVanillaLayoutDrawTokenMiss(
+			VanillaLayoutDrawTokenMismatch mismatch)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VanillaLayoutSdfDrawTokenFullValidation);
+			switch (mismatch)
+			{
+			case VanillaLayoutDrawTokenMismatch::Uncertified:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutSdfDrawTokenCold);
+				break;
+			case VanillaLayoutDrawTokenMismatch::ShapeOrShader:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutSdfDrawTokenShapeShaderInvalidation);
+				break;
+			case VanillaLayoutDrawTokenMismatch::Generation:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutSdfDrawTokenGenerationInvalidation);
+				break;
+			case VanillaLayoutDrawTokenMismatch::Geometry:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutSdfDrawTokenGeometryInvalidation);
+				break;
+			case VanillaLayoutDrawTokenMismatch::Layout:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutSdfDrawTokenLayoutInvalidation);
+				break;
+			default:
+				break;
+			}
+		}
+
+		void CertifyVanillaLayoutDrawToken(
+			NativeA8VanillaLayoutDrawToken& token,
+			const VanillaLayoutReadySnapshot& snapshot)
+		{
+			// Publish validity last so a later reuse cannot observe a partially
+			// rewritten proof.
+			token.valid = false;
+			token.shapeIdentity = snapshot.shape;
+			token.shaderIdentity = snapshot.shader;
+			token.shaderVtableIdentity = snapshot.shaderVtable;
+			token.profileIdentity = snapshot.profile;
+			token.generationIdentity = snapshot.generation;
+			token.generationDeclarationIdentity =
+				snapshot.generationDeclaration;
+			token.modelDataIdentity = snapshot.modelData;
+			token.bufferIdentity = snapshot.buffer;
+			token.bufferDeclarationIdentity = snapshot.bufferDeclaration;
+			token.strideArrayIdentity = snapshot.strideArray;
+			token.generation = snapshot.generationId;
+			token.deviceEpoch = snapshot.deviceEpoch;
+			token.streamCount = snapshot.streamCount;
+			token.stride = snapshot.stride;
+			token.bufferVertexCount = snapshot.bufferVertexCount;
+			token.dataVertexCount = snapshot.dataVertexCount;
+			token.sourceRetired = snapshot.sourceRetired;
+			token.priorGenerationDeclaration =
+				snapshot.priorGenerationDeclaration;
+			token.everCertified = true;
+			token.valid = true;
+		}
+
+		bool IsNativeA8VanillaLayoutShapeReadyImpl(const NiTriShape* shape,
+			TileShader* shader, bool logFailure,
+			VanillaLayoutReadySnapshot* readySnapshot)
+		{
+			if (readySnapshot)
+				*readySnapshot = {};
 			const bool hasShapeAndShader = shape && shader;
 			const bool shaderMatches = hasShapeAndShader
 				&& shape->GetShader() == shader;
@@ -2608,20 +2797,43 @@ namespace fonthook::vectorfont
 				&& buffer->m_uiVertCount >= data->m_usVertices;
 			if (ready)
 			{
+				const bool priorGenerationDeclaration =
+					declarationCompatibility == VanillaLayoutDeclarationCompatibility::
+						CompatiblePreviousGeneration;
+				if (readySnapshot)
+				{
+					readySnapshot->shape = shape;
+					readySnapshot->shader = shader;
+					readySnapshot->shaderVtable =
+						*reinterpret_cast<void***>(shader);
+					readySnapshot->profile = profile;
+					readySnapshot->generation = generation;
+					readySnapshot->generationDeclaration = expectedDeclaration;
+					readySnapshot->modelData = data;
+					readySnapshot->buffer = buffer;
+					readySnapshot->bufferDeclaration = buffer->m_hDeclaration;
+					readySnapshot->strideArray = buffer->m_puiVertexStride;
+					readySnapshot->generationId = generation->id;
+					readySnapshot->deviceEpoch = generation->deviceEpoch;
+					readySnapshot->streamCount = streamCount;
+					readySnapshot->stride = stride;
+					readySnapshot->bufferVertexCount = buffer->m_uiVertCount;
+					readySnapshot->dataVertexCount = data->m_usVertices;
+					readySnapshot->sourceRetired = sourceRetired;
+					readySnapshot->priorGenerationDeclaration =
+						priorGenerationDeclaration;
+				}
 				UInt32 observations = 0;
 				if (sourceRetired)
 				{
 					observations |= 1u;
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						VanillaLayoutSdfPostUploadSourceRetiredReady);
 				}
-				if (declarationCompatibility == VanillaLayoutDeclarationCompatibility::
-					CompatiblePreviousGeneration)
+				if (priorGenerationDeclaration)
 				{
 					observations |= 2u;
-					RecordFreeTypePerf(FreeTypePerfCounter::
-						VanillaLayoutSdfPriorGenerationDeclarationReady);
 				}
+				RecordVanillaLayoutReadyObservations(
+					sourceRetired, priorGenerationDeclaration);
 				if (observations && logFailure)
 				{
 					const UInt32 previous = s_vanillaLayoutPostpackLoggedMask.fetch_or(
@@ -2748,14 +2960,42 @@ namespace fonthook::vectorfont
 		// A hooked virtual route may only enqueue the request. Once accepted the
 		// shape must stay alive; draw-time readiness fails open until completion.
 		immediateReady = IsNativeA8VanillaLayoutShapeReadyImpl(
-			shape, shader, false);
+			shape, shader, false, nullptr);
 		return true;
 	}
 
 	bool IsNativeA8VanillaLayoutShapeReady(const NiTriShape* shape,
-		TileShader* shader)
+		TileShader* shader, NativeA8VanillaLayoutDrawToken& drawToken)
 	{
-		return IsNativeA8VanillaLayoutShapeReadyImpl(shape, shader, true);
+		const VanillaLayoutDrawTokenMismatch mismatch =
+			MatchVanillaLayoutDrawToken(shape, shader, drawToken);
+		if (mismatch == VanillaLayoutDrawTokenMismatch::None)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VanillaLayoutSdfDrawTokenHit);
+			RecordVanillaLayoutReadyObservations(
+				drawToken.sourceRetired,
+				drawToken.priorGenerationDeclaration);
+			return true;
+		}
+
+		RecordVanillaLayoutDrawTokenMiss(mismatch);
+		const bool wasCertified = drawToken.everCertified;
+		drawToken.Invalidate();
+		VanillaLayoutReadySnapshot snapshot;
+		if (!IsNativeA8VanillaLayoutShapeReadyImpl(
+			shape, shader, true, &snapshot))
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VanillaLayoutSdfDrawTokenRejected);
+			return false;
+		}
+
+		CertifyVanillaLayoutDrawToken(drawToken, snapshot);
+		RecordFreeTypePerf(wasCertified
+			? FreeTypePerfCounter::VanillaLayoutSdfDrawTokenRecertification
+			: FreeTypePerfCounter::VanillaLayoutSdfDrawTokenFirstCertification);
+		return true;
 	}
 
 	bool ResolveNativeA8RetainedPacketProgram(

@@ -4880,7 +4880,10 @@ namespace fonthook::vectorfont
 					packet, shape, false, true);
 				if (shader && shape->GetShader() != shader)
 					shape->SetShader(shader);
-				if (shader && IsNativeA8VanillaLayoutShapeReady(shape, shader))
+				NativeA8VanillaLayoutDrawToken* drawToken =
+					GetVanillaLayoutSdfDrawToken(*metadata);
+				if (shader && drawToken && IsNativeA8VanillaLayoutShapeReady(
+					shape, shader, *drawToken))
 				{
 					if (s_constantOwnershipBatch.FrameActive())
 					{
