@@ -1607,9 +1607,8 @@ namespace fonthook::vectorfont
 			}
 			TileShader* targetShader = ResolveNativeA8PacketShader(
 				*packet, shape, false, layoutKind);
-			bool immediateReady = false;
 			if (!targetShader || !RequestNativeA8VanillaLayoutShapePrecache(
-				shape, targetShader, immediateReady))
+				shape, targetShader))
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::VanillaLayoutSdfPrecacheRejected);
@@ -1619,9 +1618,6 @@ namespace fonthook::vectorfont
 			}
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VanillaLayoutSdfPrecacheAccepted);
-			RecordFreeTypePerf(immediateReady
-				? FreeTypePerfCounter::VanillaLayoutSdfPrecacheImmediate
-				: FreeTypePerfCounter::VanillaLayoutSdfPrecacheDeferred);
 			data->m_kBound = payload->bound;
 			data->m_kBound.m_kCenter.x += origin.x;
 			data->m_kBound.m_kCenter.y += origin.y;

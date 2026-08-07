@@ -20,7 +20,6 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
-#include <unordered_set>
 
 namespace fonthook::vectorfont
 {
@@ -386,371 +385,6 @@ namespace fonthook::vectorfont
 		thread_local NativeDirectImmediateContext*
 			s_nativeDirectImmediateContext = nullptr;
 
-		struct VanillaLayoutDrawDiagnosticContext
-		{
-			NiTriShape* shape = nullptr;
-			const A8ShapeMetadata* metadata = nullptr;
-			const NativeA8PacketTemplate* packet = nullptr;
-			TileShader* shader = nullptr;
-			bool invoked = false;
-		};
-
-		thread_local VanillaLayoutDrawDiagnosticContext*
-			s_vanillaLayoutDrawDiagnosticContext = nullptr;
-		std::mutex s_vanillaLayoutDrawDiagnosticMutex;
-		std::unordered_set<UInt64> s_vanillaLayoutDrawDiagnosticKeys;
-
-		bool ClaimVanillaLayoutDrawDiagnostic(UInt32 fontId,
-			const NativeA8PacketTemplate& packet,
-			NativeA8VanillaLayoutKind layoutKind)
-		{
-			if (!g_bEnableFreeTypeFontRenderingLog)
-				return false;
-			const UInt64 key = static_cast<UInt64>(fontId)
-				| (static_cast<UInt64>(packet.staticCompositeLayerMask) << 32u)
-				| (static_cast<UInt64>(packet.compositeShiftedShadow ? 1u : 0u)
-					<< 40u)
-				| (static_cast<UInt64>(packet.distanceFieldMethod) << 41u)
-				| (static_cast<UInt64>(layoutKind) << 44u);
-			std::lock_guard<std::mutex> lock(
-				s_vanillaLayoutDrawDiagnosticMutex);
-			if (s_vanillaLayoutDrawDiagnosticKeys.size() >= 16u)
-				return false;
-			return s_vanillaLayoutDrawDiagnosticKeys.insert(key).second;
-		}
-
-		void LogVanillaLayoutDrawDiagnostic(
-			const VanillaLayoutDrawDiagnosticContext& context,
-			NiRenderer* rendererBase, const char* phase, bool inspectGeometry)
-		{
-			const A8ShapeMetadata* metadata = context.metadata;
-			const NativeA8PacketTemplate* packet = context.packet;
-			const NativeA8VanillaLayoutKind layoutKind = metadata
-				? GetVanillaLayoutSdfLayoutKind(*metadata)
-				: NativeA8VanillaLayoutKind::None;
-			const bool uniformLayout =
-				layoutKind == NativeA8VanillaLayoutKind::Uniform40;
-			const bool parametricLayout =
-				layoutKind == NativeA8VanillaLayoutKind::Parametric48;
-			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
-			if (!metadata || !packet || !device)
-			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_vanilla_layout_draw_diag: phase=%s font=%u shape=%p rendererArg=%p renderer=%p device=%p failure=context",
-					phase ? phase : "unknown", metadata ? metadata->fontId : 0u,
-					context.shape, rendererBase, renderer, device);
-				return;
-			}
-
-			std::array<float, kNativeA8PacketConstantFloatCount> expectedPixel =
-				packet->constants;
-			if (uniformLayout)
-				expectedPixel[6] = packet->uniformSdfSpread;
-			std::array<float, kNativeA8PacketConstantFloatCount> actualPixel = {};
-			std::array<float, 8> actualVertex = {};
-			D3DVIEWPORT9 viewport = {};
-			const D3DVIEWPORT9 engineViewport = renderer->m_kD3DPort;
-			const HRESULT pixelHr = device->GetPixelShaderConstantF(
-				kNativeA8PixelConstantBaseRegister, actualPixel.data(),
-				kNativeA8PacketConstantRegisterCount);
-			const HRESULT vertexHr = device->GetVertexShaderConstantF(
-				kNativeA8VertexAaConstantRegister, actualVertex.data(), 2u);
-			const HRESULT viewportHr = device->GetViewport(&viewport);
-			std::array<float, 8> expectedVertex = {{
-				static_cast<float>(engineViewport.Width) * 0.5f,
-				static_cast<float>(engineViewport.Height) * 0.5f,
-				expectedPixel[7], 1.0f,
-				uniformLayout ? packet->uniformSdfSpread : 0.0f,
-				uniformLayout
-					? packet->uniformDistanceParameterScale : 1.0f,
-				static_cast<float>(packet->staticCompositeLayerMask), 0.0f
-			}};
-			UInt32 pixelMismatch = FAILED(pixelHr) ? 0xFFFFFFFFu : 0u;
-			for (UInt32 reg = 0; SUCCEEDED(pixelHr)
-				&& reg < kNativeA8PacketConstantRegisterCount; ++reg)
-			{
-				if (std::memcmp(expectedPixel.data() + reg * 4u,
-					actualPixel.data() + reg * 4u, 4u * sizeof(float)) != 0)
-				{
-					pixelMismatch |= 1u << reg;
-				}
-			}
-			UInt32 vertexMismatch = FAILED(vertexHr)
-				|| !engineViewport.Width || !engineViewport.Height
-				? 0xFFFFFFFFu : 0u;
-			for (UInt32 reg = 0; vertexMismatch != 0xFFFFFFFFu
-				&& reg < 2u; ++reg)
-			{
-				if (std::memcmp(expectedVertex.data() + reg * 4u,
-					actualVertex.data() + reg * 4u, 4u * sizeof(float)) != 0)
-				{
-					vertexMismatch |= 1u << reg;
-				}
-			}
-
-			IDirect3DVertexShader9* currentVertexShader = nullptr;
-			IDirect3DPixelShader9* currentPixelShader = nullptr;
-			IDirect3DVertexDeclaration9* currentDeclaration = nullptr;
-			IDirect3DBaseTexture9* currentTexture = nullptr;
-			IDirect3DVertexBuffer9* currentStream = nullptr;
-			IDirect3DIndexBuffer9* currentIndices = nullptr;
-			UINT streamOffset = 0;
-			UINT streamStride = 0;
-			const HRESULT currentVertexShaderHr =
-				device->GetVertexShader(&currentVertexShader);
-			const HRESULT currentPixelShaderHr =
-				device->GetPixelShader(&currentPixelShader);
-			const HRESULT declarationHr =
-				device->GetVertexDeclaration(&currentDeclaration);
-			const HRESULT textureHr = device->GetTexture(0, &currentTexture);
-			const HRESULT streamHr = device->GetStreamSource(
-				0, &currentStream, &streamOffset, &streamStride);
-			const HRESULT indicesHr = device->GetIndices(&currentIndices);
-
-			DWORD alphaTest = 0;
-			DWORD alphaBlend = 0;
-			DWORD sourceBlend = 0;
-			DWORD destinationBlend = 0;
-			DWORD colorWrite = 0;
-			DWORD separateAlpha = 0;
-			device->GetRenderState(D3DRS_ALPHATESTENABLE, &alphaTest);
-			device->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
-			device->GetRenderState(D3DRS_SRCBLEND, &sourceBlend);
-			device->GetRenderState(D3DRS_DESTBLEND, &destinationBlend);
-			device->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
-			device->GetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,
-				&separateAlpha);
-
-			const NiTriShapeData* data = context.shape
-				? context.shape->GetModelData() : nullptr;
-			const NiGeometryBufferData* buffer = data ? data->m_pkBuffData : nullptr;
-			const NiVBChip* chip = buffer && buffer->m_ppkVBChip
-				&& buffer->m_uiStreamCount ? buffer->m_ppkVBChip[0] : nullptr;
-			gLog.FormattedMessage(
-				"tnvse_freetype_vanilla_layout_draw_diag: phase=%s font=%u shape=%p shader=%p rendererArg=%p renderer=%p device=%p layoutKind=%u mask=%u shifted=%u spread=%.9g scale=%.9g pixelHr=0x%08X pixelMismatch=0x%02X vertexHr=0x%08X viewportHr=0x%08X vertexMismatch=0x%02X engineViewport=%ux%u deviceViewport=%ux%u",
-				phase ? phase : "unknown", metadata->fontId, context.shape,
-				context.shader, rendererBase, renderer, device,
-				static_cast<UInt32>(layoutKind),
-				static_cast<UInt32>(packet->staticCompositeLayerMask),
-				packet->compositeShiftedShadow ? 1u : 0u,
-				packet->uniformSdfSpread,
-				packet->uniformDistanceParameterScale,
-				static_cast<UInt32>(pixelHr),
-				pixelMismatch, static_cast<UInt32>(vertexHr),
-				static_cast<UInt32>(viewportHr), vertexMismatch,
-				engineViewport.Width, engineViewport.Height,
-				viewport.Width, viewport.Height);
-			for (UInt32 reg = 0; reg < kNativeA8PacketConstantRegisterCount; ++reg)
-			{
-				const float* expected = expectedPixel.data() + reg * 4u;
-				const float* actual = actualPixel.data() + reg * 4u;
-				gLog.FormattedMessage(
-					"tnvse_freetype_vanilla_layout_draw_diag_ps: phase=%s font=%u c%u expected=(%.9g,%.9g,%.9g,%.9g) actual=(%.9g,%.9g,%.9g,%.9g) match=%u",
-					phase ? phase : "unknown", metadata->fontId,
-					kNativeA8PixelConstantBaseRegister + reg,
-					expected[0], expected[1], expected[2], expected[3],
-					actual[0], actual[1], actual[2], actual[3],
-					(pixelMismatch & (1u << reg)) ? 0u : 1u);
-			}
-			for (UInt32 reg = 0; reg < 2u; ++reg)
-			{
-				const float* expected = expectedVertex.data() + reg * 4u;
-				const float* actual = actualVertex.data() + reg * 4u;
-				gLog.FormattedMessage(
-					"tnvse_freetype_vanilla_layout_draw_diag_vs: phase=%s font=%u c%u expected=(%.9g,%.9g,%.9g,%.9g) actual=(%.9g,%.9g,%.9g,%.9g) match=%u",
-					phase ? phase : "unknown", metadata->fontId,
-					kNativeA8VertexAaConstantRegister + reg,
-					expected[0], expected[1], expected[2], expected[3],
-					actual[0], actual[1], actual[2], actual[3],
-					(vertexMismatch & (1u << reg)) ? 0u : 1u);
-			}
-			gLog.FormattedMessage(
-				"tnvse_freetype_vanilla_layout_draw_diag_state: phase=%s font=%u vsHr=0x%08X vs=%p psHr=0x%08X ps=%p declarationHr=0x%08X declaration=%p expectedDeclaration=%p textureHr=0x%08X texture0=%p streamHr=0x%08X stream0=%p offset=%u stride=%u indicesHr=0x%08X indices=%p alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorWrite=0x%X separateAlpha=%u buffer=%p bufferBase=%u bufferVertices=%u chip=%p chipOffset=%u chipSize=%u",
-				phase ? phase : "unknown", metadata->fontId,
-				static_cast<UInt32>(currentVertexShaderHr), currentVertexShader,
-				static_cast<UInt32>(currentPixelShaderHr), currentPixelShader,
-				static_cast<UInt32>(declarationHr), currentDeclaration,
-				buffer ? buffer->m_hDeclaration : nullptr,
-				static_cast<UInt32>(textureHr), currentTexture,
-				static_cast<UInt32>(streamHr), currentStream,
-				streamOffset, streamStride, static_cast<UInt32>(indicesHr),
-				currentIndices, alphaTest, alphaBlend, sourceBlend,
-				destinationBlend, colorWrite, separateAlpha, buffer,
-				buffer ? buffer->m_uiBaseVertexIndex : 0u,
-				buffer ? buffer->m_uiVertCount : 0u, chip,
-				chip ? chip->m_uiOffset : 0u, chip ? chip->m_uiSize : 0u);
-
-			const bool diagnosticStrideReady =
-				(uniformLayout && streamStride
-					== sizeof(NativeA8VanillaLayoutVertex))
-				|| (parametricLayout && streamStride
-					== sizeof(NativeA8VanillaParametricVertex));
-			if (inspectGeometry && currentStream && diagnosticStrideReady && buffer
-				&& metadata->nativePayload.payloadTemplate)
-			{
-				D3DVERTEXBUFFER_DESC description = {};
-				const HRESULT descriptionHr = currentStream->GetDesc(&description);
-				const UInt64 firstByte64 = static_cast<UInt64>(streamOffset)
-					+ static_cast<UInt64>(buffer->m_uiBaseVertexIndex)
-						* streamStride;
-				const UInt64 byteCount64 = 4ull * streamStride;
-				const bool rangeValid = SUCCEEDED(descriptionHr)
-					&& firstByte64 <= description.Size
-					&& byteCount64 <= static_cast<UInt64>(description.Size)
-						- firstByte64;
-				void* locked = nullptr;
-				const HRESULT lockHr = rangeValid
-					? currentStream->Lock(static_cast<UINT>(firstByte64),
-						static_cast<UINT>(byteCount64), &locked, D3DLOCK_READONLY)
-					: D3DERR_INVALIDCALL;
-				gLog.FormattedMessage(
-					"tnvse_freetype_vanilla_layout_draw_diag_vb: phase=%s font=%u descHr=0x%08X size=%u usage=0x%X pool=%u firstByte=%I64u byteCount=%I64u rangeValid=%u lockHr=0x%08X",
-					phase ? phase : "unknown", metadata->fontId,
-					static_cast<UInt32>(descriptionHr), description.Size,
-					description.Usage, static_cast<UInt32>(description.Pool),
-					firstByte64, byteCount64, rangeValid ? 1u : 0u,
-					static_cast<UInt32>(lockHr));
-				const NativeA8PayloadTemplate& artifact =
-					*metadata->nativePayload.payloadTemplate;
-				const UInt64 packetEnd = static_cast<UInt64>(packet->firstVertex)
-					+ packet->vertexCount;
-				if (SUCCEEDED(lockHr) && locked && packet->vertexCount >= 4u
-					&& packetEnd <= artifact.gpuVertices.size())
-				{
-					for (UInt32 ordinal = 0; ordinal < 4u; ++ordinal)
-					{
-						const NativeA8GpuVertex& source = artifact.gpuVertices[
-							static_cast<size_t>(packet->firstVertex) + ordinal];
-						float packedX = 0.0f;
-						float packedY = 0.0f;
-						float packedZ = 0.0f;
-						float packedU = 0.0f;
-						float packedV = 0.0f;
-						UInt32 packedColor = 0u;
-						float packedSpread = actualVertex[4];
-						float packedScale = actualVertex[5];
-						float packedU0 = 0.0f;
-						float packedV0 = 0.0f;
-						float packedU1 = 0.0f;
-						float packedV1 = 0.0f;
-						if (uniformLayout)
-						{
-							const auto& gpu = static_cast<const
-								NativeA8VanillaLayoutVertex*>(locked)[ordinal];
-							packedX = gpu.x;
-							packedY = gpu.y;
-							packedZ = gpu.z;
-							packedU = gpu.u;
-							packedV = gpu.v;
-							packedColor = gpu.color;
-							packedU0 = gpu.glyphU0;
-							packedV0 = gpu.glyphV0;
-							packedU1 = gpu.glyphU1;
-							packedV1 = gpu.glyphV1;
-						}
-						else
-						{
-							const auto& gpu = static_cast<const
-								NativeA8VanillaParametricVertex*>(locked)[ordinal];
-							packedX = gpu.x;
-							packedY = gpu.y;
-							packedZ = gpu.z;
-							packedU = gpu.u;
-							packedV = gpu.v;
-							packedColor = gpu.color;
-							packedSpread = gpu.sdfSpread;
-							packedScale = gpu.distanceParameterScale;
-							packedU0 = gpu.glyphU0;
-							packedV0 = gpu.glyphV0;
-							packedU1 = gpu.glyphU1;
-							packedV1 = gpu.glyphV1;
-						}
-						gLog.FormattedMessage(
-							"tnvse_freetype_vanilla_layout_draw_diag_vertex: font=%u layoutKind=%u ordinal=%u expectedPos=(%.9g,%.9g,%.9g) packedPos=(%.9g,%.9g,%.9g) expectedUv=(%.9g,%.9g) packedUv=(%.9g,%.9g) expectedColor=0x%08X packedColor=0x%08X expectedParams=(%.9g,%.9g) packedParams=(%.9g,%.9g) expectedBounds=(%.9g,%.9g,%.9g,%.9g) packedBounds=(%.9g,%.9g,%.9g,%.9g) origin=(%.9g,%.9g,%.9g)",
-							metadata->fontId,
-							static_cast<UInt32>(layoutKind), ordinal,
-							source.x + metadata->nativePayload.geometryOrigin.x,
-							source.y + metadata->nativePayload.geometryOrigin.y,
-							source.z + metadata->nativePayload.geometryOrigin.z,
-							packedX, packedY, packedZ,
-							source.u, source.v, packedU, packedV,
-							source.color, packedColor,
-							source.sdfSpread, source.distanceParameterScale,
-							packedSpread, packedScale,
-							source.glyphU0, source.glyphV0,
-							source.glyphU1, source.glyphV1,
-							packedU0, packedV0, packedU1, packedV1,
-							metadata->nativePayload.geometryOrigin.x,
-							metadata->nativePayload.geometryOrigin.y,
-							metadata->nativePayload.geometryOrigin.z);
-					}
-				}
-				if (SUCCEEDED(lockHr))
-					currentStream->Unlock();
-			}
-
-			if (currentIndices)
-				currentIndices->Release();
-			if (currentStream)
-				currentStream->Release();
-			if (currentTexture)
-				currentTexture->Release();
-			if (currentDeclaration)
-				currentDeclaration->Release();
-			if (currentPixelShader)
-				currentPixelShader->Release();
-			if (currentVertexShader)
-				currentVertexShader->Release();
-		}
-
-		class VanillaLayoutDrawDiagnosticScope
-		{
-		public:
-			VanillaLayoutDrawDiagnosticScope(NiTriShape* shape,
-				const A8ShapeMetadata* metadata,
-				const NativeA8PacketTemplate& packet, TileShader* shader)
-				: m_previous(s_vanillaLayoutDrawDiagnosticContext)
-			{
-				if (!shape || !metadata || !shader
-					|| !ClaimVanillaLayoutDrawDiagnostic(metadata->fontId, packet,
-						GetVanillaLayoutSdfLayoutKind(*metadata)))
-				{
-					return;
-				}
-				m_context.shape = shape;
-				m_context.metadata = metadata;
-				m_context.packet = &packet;
-				m_context.shader = shader;
-				s_vanillaLayoutDrawDiagnosticContext = &m_context;
-				m_active = true;
-			}
-
-			~VanillaLayoutDrawDiagnosticScope()
-			{
-				if (!m_active)
-					return;
-				s_vanillaLayoutDrawDiagnosticContext = m_previous;
-				if (!m_context.invoked)
-				{
-					gLog.FormattedMessage(
-						"tnvse_freetype_vanilla_layout_draw_diag: phase=not-invoked font=%u shape=%p shader=%p",
-						m_context.metadata ? m_context.metadata->fontId : 0u,
-						m_context.shape, m_context.shader);
-				}
-			}
-
-			bool Active() const
-			{
-				return m_active;
-			}
-
-		private:
-			VanillaLayoutDrawDiagnosticContext m_context;
-			VanillaLayoutDrawDiagnosticContext* m_previous = nullptr;
-			bool m_active = false;
-		};
-
 		class NativeDirectImmediateScope
 		{
 		public:
@@ -898,8 +532,7 @@ namespace fonthook::vectorfont
 		class VanillaLayoutOriginalVtableScope
 		{
 		public:
-			explicit VanillaLayoutOriginalVtableScope(NiTriShape* shape,
-				bool retainDiagnosticHook = false)
+			explicit VanillaLayoutOriginalVtableScope(NiTriShape* shape)
 				: m_shape(shape)
 			{
 				A8State& state = State();
@@ -908,11 +541,6 @@ namespace fonthook::vectorfont
 				m_original = *reinterpret_cast<void***>(m_shape);
 				if (m_original != &state.vanillaLayoutTriShapeVtable[1])
 					return;
-				if (retainDiagnosticHook)
-				{
-					m_active = true;
-					return;
-				}
 				*reinterpret_cast<void***>(m_shape) =
 					state.originalTriShapeVtable;
 				m_changed = true;
@@ -5282,10 +4910,7 @@ namespace fonthook::vectorfont
 					bool vanillaLayoutDrawn = false;
 					{
 						NativeFacadeShaderBatchScope shaderBatch;
-						VanillaLayoutDrawDiagnosticScope diagnostic(
-							shape, metadata, packet, shader);
-						VanillaLayoutOriginalVtableScope vanillaVtable(
-							shape, diagnostic.Active());
+						VanillaLayoutOriginalVtableScope vanillaVtable(shape);
 						if (vanillaVtable.Active())
 						{
 							vanillaLayoutTransition =
@@ -5657,20 +5282,6 @@ namespace fonthook::vectorfont
 	void __fastcall A8RenderImmediate(NiTriShape* shape, void*,
 		NiRenderer* renderer)
 	{
-		if (s_vanillaLayoutDrawDiagnosticContext
-			&& s_vanillaLayoutDrawDiagnosticContext->shape == shape
-			&& State().originalRenderImmediate)
-		{
-			VanillaLayoutDrawDiagnosticContext& diagnostic =
-				*s_vanillaLayoutDrawDiagnosticContext;
-			diagnostic.invoked = true;
-			LogVanillaLayoutDrawDiagnostic(
-				diagnostic, renderer, "pre-render-immediate", false);
-			State().originalRenderImmediate(shape, renderer);
-			LogVanillaLayoutDrawDiagnostic(
-				diagnostic, renderer, "post-render-immediate", true);
-			return;
-		}
 		if (s_nativeDirectImmediateContext
 			&& s_nativeDirectImmediateContext->shape == shape
 			&& State().originalRenderImmediate)
@@ -5715,20 +5326,6 @@ namespace fonthook::vectorfont
 	void __fastcall A8RenderImmediateAlt(NiTriShape* shape, void*,
 		NiRenderer* renderer)
 	{
-		if (s_vanillaLayoutDrawDiagnosticContext
-			&& s_vanillaLayoutDrawDiagnosticContext->shape == shape
-			&& State().originalRenderImmediateAlt)
-		{
-			VanillaLayoutDrawDiagnosticContext& diagnostic =
-				*s_vanillaLayoutDrawDiagnosticContext;
-			diagnostic.invoked = true;
-			LogVanillaLayoutDrawDiagnostic(
-				diagnostic, renderer, "pre-only-render-immediate", false);
-			State().originalRenderImmediateAlt(shape, renderer);
-			LogVanillaLayoutDrawDiagnostic(
-				diagnostic, renderer, "post-only-render-immediate", true);
-			return;
-		}
 		if (s_nativeDirectImmediateContext
 			&& s_nativeDirectImmediateContext->shape == shape
 			&& State().originalRenderImmediateAlt)

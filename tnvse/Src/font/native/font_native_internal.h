@@ -1214,7 +1214,7 @@ namespace fonthook::vectorfont
 		NativeA8VanillaLayoutKind vanillaLayoutKind =
 			NativeA8VanillaLayoutKind::None);
 	bool RequestNativeA8VanillaLayoutShapePrecache(NiTriShape* shape,
-		TileShader* shader, bool& immediateReady);
+		TileShader* shader);
 	bool IsNativeA8VanillaLayoutShapeReady(const NiTriShape* shape,
 		TileShader* shader, const NativeA8ShapePayload& payload,
 		NativeA8VanillaLayoutDrawToken& drawToken);

@@ -418,7 +418,6 @@ namespace fonthook::vectorfont
 		std::atomic<UInt32> s_deviceEpoch = 1;
 		DWORD s_lastInitializationAttempt = 0;
 		std::atomic<bool> s_invalidVtableLogged = false;
-		std::atomic<UInt32> s_compositeProfileLogCount = 0;
 		std::atomic<bool> s_resetInProgress = false;
 		std::atomic<UInt32> s_standardV2ProofLogGeneration = 0;
 		NiDX9Renderer* s_resetRenderer = nullptr;
@@ -1491,31 +1490,6 @@ namespace fonthook::vectorfont
 				packet, key.vanillaLayoutKind);
 			if (!pixelShader || !pixelShader->GetShaderHandle())
 				return nullptr;
-			if (packet.shaderClass == NativeA8ShaderClass::Composite
-				&& g_bEnableFreeTypeFontRenderingLog)
-			{
-				const size_t qualityIndex =
-					static_cast<size_t>(packet.quality);
-				const bool specialized = qualityIndex
-						< generation.compositeShaders.size()
-					&& pixelShader
-						!= generation.compositeShaders[
-							qualityIndex].m_pObject;
-				const UInt32 ordinal =
-					s_compositeProfileLogCount.fetch_add(
-						1, std::memory_order_relaxed);
-				if (ordinal < 16u)
-				{
-					gLog.FormattedMessage(
-						"tnvse_freetype_native: composite pixel profile quality=%u layerMask=%u shiftedShadow=%u specialized=%u vanillaLayoutKind=%u",
-						static_cast<UInt32>(packet.quality),
-						static_cast<UInt32>(
-							packet.staticCompositeLayerMask),
-						packet.compositeShiftedShadow ? 1u : 0u,
-						specialized ? 1u : 0u,
-						static_cast<UInt32>(key.vanillaLayoutKind));
-				}
-			}
 			NiD3DVertexShader* vertexShader =
 				UsesNativeA8VanillaLayout(key.vanillaLayoutKind)
 					? ResolveVanillaLayoutVertexShader(
@@ -2759,9 +2733,7 @@ namespace fonthook::vectorfont
 	namespace
 	{
 		std::atomic<UInt32> s_vanillaLayoutReadinessLoggedMask{ 0 };
-		std::atomic<UInt32> s_vanillaLayoutPostpackLoggedMask{ 0 };
 		std::atomic<UInt32> s_vanillaLayoutUploadFailureLoggedMask{ 0 };
-		std::atomic<UInt32> s_vanillaLayoutUploadSuccessLoggedMask{ 0 };
 
 		enum VanillaLayoutReadinessFailure : UInt32
 		{
@@ -2900,14 +2872,9 @@ namespace fonthook::vectorfont
 				&& !data->m_pkColor && !data->m_pkTexture;
 		}
 
-		void RecordVanillaLayoutReadyObservations(
-			bool nativePackCompleted, bool priorGenerationDeclaration)
+		void RecordPriorGenerationDeclarationObservation(
+			bool priorGenerationDeclaration)
 		{
-			if (nativePackCompleted)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutSdfPostpackCompletionReady);
-			}
 			if (priorGenerationDeclaration)
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
@@ -3234,48 +3201,8 @@ namespace fonthook::vectorfont
 					readySnapshot->priorGenerationDeclaration =
 						priorGenerationDeclaration;
 				}
-				UInt32 observations = 0;
-				if (nativePackCompleted)
-				{
-					observations |= 1u;
-				}
-				if (priorGenerationDeclaration)
-				{
-					observations |= 2u;
-				}
-				RecordVanillaLayoutReadyObservations(
-					nativePackCompleted, priorGenerationDeclaration);
-				if (observations && logFailure)
-				{
-					const UInt32 observationShift = layoutKind
-						== NativeA8VanillaLayoutKind::Parametric48 ? 2u : 0u;
-					const UInt32 keyedObservations =
-						observations << observationShift;
-					const UInt32 previous =
-						s_vanillaLayoutPostpackLoggedMask.fetch_or(
-							keyedObservations, std::memory_order_acq_rel);
-					const UInt32 newlyObserved =
-						(keyedObservations & ~previous) >> observationShift;
-					if (newlyObserved)
-					{
-						gLog.FormattedMessage(
-							"tnvse_freetype_vanilla_layout_sdf_postpack: observed=0x%08X new=0x%08X shape=%p generation=%u deviceEpoch=%u layoutKind=%u completion=1 dataFlags=0x%04X dirtyFlags=0x%04X keepFlags=0x%02X color=%p texture=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u stride=%u",
-							observations, newlyObserved, shape,
-							generation ? generation->id : 0u,
-							generation ? generation->deviceEpoch : 0u,
-							static_cast<UInt32>(layoutKind),
-							data ? static_cast<UInt32>(data->m_usDataFlags) : 0u,
-							data ? static_cast<UInt32>(data->m_usDirtyFlags) : 0u,
-							data ? static_cast<UInt32>(data->m_ucKeepFlags) : 0u,
-							data ? data->m_pkColor : nullptr,
-							data ? data->m_pkTexture : nullptr,
-							static_cast<UInt32>(declarationCompatibility),
-							buffer ? buffer->m_hDeclaration : nullptr,
-							expectedDeclaration,
-							compatibleDeclarationCount,
-							stride);
-					}
-				}
+				RecordPriorGenerationDeclarationObservation(
+					priorGenerationDeclaration);
 				return true;
 			}
 			if (!logFailure)
@@ -3643,27 +3570,13 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadBytes,
 				byteCountOut);
-			const UInt32 successBit = 1u <<
-				(static_cast<UInt32>(layoutKind) - 1u);
-			if (!(s_vanillaLayoutUploadSuccessLoggedMask.fetch_or(
-				successBit, std::memory_order_acq_rel) & successBit))
-			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_vanilla_layout_upload: status=ready shape=%p layoutKind=%u buffer=%p chip=%p vertexBuffer=%p stride=%u vertices=%u byteOffset=%u byteCount=%u pool=%u usage=0x%X",
-					snapshot.shape, static_cast<UInt32>(layoutKind),
-					snapshot.buffer, snapshot.vertexChip, snapshot.vertexBuffer,
-					snapshot.stride,
-					snapshot.dataVertexCount, byteOffsetOut, byteCountOut,
-					static_cast<UInt32>(description.Pool), description.Usage);
-			}
 			return true;
 		}
 	}
 
 	bool RequestNativeA8VanillaLayoutShapePrecache(NiTriShape* shape,
-		TileShader* shader, bool& immediateReady)
+		TileShader* shader)
 	{
-		immediateReady = false;
 		if (!shape || !shader)
 			return false;
 		NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
@@ -3726,8 +3639,7 @@ namespace fonthook::vectorfont
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VanillaLayoutSdfDrawTokenHit);
-			RecordVanillaLayoutReadyObservations(
-				drawToken.nativePackCompleted,
+			RecordPriorGenerationDeclarationObservation(
 				drawToken.priorGenerationDeclaration);
 			return true;
 		}

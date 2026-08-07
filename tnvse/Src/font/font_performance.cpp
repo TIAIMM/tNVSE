@@ -1178,7 +1178,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::AccumulatorMetadataCullSkipped),
 			counterValue(FreeTypePerfCounter::AccumulatorNoPreparedPayload));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_vanilla_layout_sdf: eligible=%llu created=%llu create_fallback=%llu draws=%llu culls=%llu runtime_fallback=%llu vertices=%llu shifted_eligible=%llu shifted_created=%llu shifted_draws=%llu shifted_runtime_fallback=%llu precache_accepted=%llu precache_immediate=%llu precache_deferred=%llu precache_rejected=%llu payload_upload_attempts=%llu success=%llu failure=%llu bytes=%llu native_pack_pending=%llu postpack_completion_ready_checks=%llu prior_generation_decl_ready_checks=%llu private_state_carries=%llu private_state_carry_rejected=%llu draw_token_hits=%llu draw_token_full_validations=%llu draw_token_cold=%llu draw_token_shape_shader_invalidations=%llu draw_token_generation_invalidations=%llu draw_token_geometry_invalidations=%llu draw_token_native_pack_invalidations=%llu draw_token_layout_invalidations=%llu draw_token_first_certifications=%llu draw_token_recertifications=%llu draw_token_rejected=%llu",
+			"tnvse_freetype_vanilla_layout_sdf: eligible=%llu created=%llu create_fallback=%llu draws=%llu culls=%llu runtime_fallback=%llu vertices=%llu shifted_eligible=%llu shifted_created=%llu shifted_draws=%llu shifted_runtime_fallback=%llu precache_accepted=%llu precache_rejected=%llu payload_upload_attempts=%llu success=%llu failure=%llu bytes=%llu native_pack_pending=%llu prior_generation_decl_ready_checks=%llu private_state_carries=%llu private_state_carry_rejected=%llu draw_token_hits=%llu draw_token_full_validations=%llu draw_token_cold=%llu draw_token_shape_shader_invalidations=%llu draw_token_generation_invalidations=%llu draw_token_geometry_invalidations=%llu draw_token_native_pack_invalidations=%llu draw_token_layout_invalidations=%llu draw_token_first_certifications=%llu draw_token_recertifications=%llu draw_token_rejected=%llu",
 			counterValue(FreeTypePerfCounter::VanillaLayoutSdfCandidate),
 			counterValue(FreeTypePerfCounter::VanillaLayoutSdfCreated),
 			counterValue(FreeTypePerfCounter::VanillaLayoutSdfFallback),
@@ -1194,10 +1194,6 @@ namespace fonthook::vectorfont
 			counterValue(
 				FreeTypePerfCounter::VanillaLayoutSdfPrecacheAccepted),
 			counterValue(
-				FreeTypePerfCounter::VanillaLayoutSdfPrecacheImmediate),
-			counterValue(
-				FreeTypePerfCounter::VanillaLayoutSdfPrecacheDeferred),
-			counterValue(
 				FreeTypePerfCounter::VanillaLayoutSdfPrecacheRejected),
 			counterValue(
 				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadAttempt),
@@ -1209,8 +1205,6 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadBytes),
 			counterValue(
 				FreeTypePerfCounter::VanillaLayoutSdfNativePackPending),
-			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfPostpackCompletionReady),
 			counterValue(FreeTypePerfCounter::
 				VanillaLayoutSdfPriorGenerationDeclarationReady),
 			counterValue(FreeTypePerfCounter::
