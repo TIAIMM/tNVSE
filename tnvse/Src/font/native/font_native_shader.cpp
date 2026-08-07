@@ -669,9 +669,9 @@ namespace fonthook::vectorfont
 				static_cast<float>(viewport.Height) * 0.5f,
 				rasterScale, 1.0f
 			};
-			// Vanilla TileShader::UpdateConstants owns only c0-c4. The private c208
-			// value therefore survives vanilla Tile updates and may be reused while
-			// device, generation, viewport and raster scale remain unchanged.
+			// The verified TileShader callback owns only c0-c4. Reuse c208 only
+			// inside a native-owned execution segment; every unrelated RenderPass
+			// hard-invalidates this cache even if device and viewport are unchanged.
 			const HRESULT constantResult = device->SetVertexShaderConstantF(
 				kNativeA8VertexAaConstantRegister, aaProfile.data(), 1);
 			if (FAILED(constantResult))
@@ -2082,7 +2082,7 @@ namespace fonthook::vectorfont
 					== DistanceFieldMethod::Mtsdf
 				? "lazy-36" : "disabled";
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s constantAbi=vanilla-ps-c0-vs-c0-c4-private-ps-c176-c183-vs-c208-c209 privateUpload=prefix-2-4-8 vanillaC0=map-owned vanillaTileCarry=verified-low-map vertexAa=analytic-c208-all-layouts vanillaGlyph=c209 vertexFormat=float4 vertexStride=%u declTypes=0x%08X maxVertexConstants=%u",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s constantAbi=vanilla-ps-c0-vs-c0-c4-private-ps-c176-c183-vs-c208-c209 privateUpload=prefix-2-4-8 vanillaC0=map-owned vanillaLayoutCarry=witnessed-native-callback foreignPassBoundary=hard-invalidate vertexAa=analytic-c208-all-layouts vanillaGlyph=c209 vertexFormat=float4 vertexStride=%u declTypes=0x%08X maxVertexConstants=%u",
 			candidate->id, candidate->device,
 			UsesBakedEffectRoute()
 				? "argb-composite" : "distance-field",
@@ -2235,11 +2235,33 @@ namespace fonthook::vectorfont
 		ResetSortedShaderStateCaches();
 	}
 
-	void AdvanceNativeA8SortedShaderStateAcrossVanillaTile()
+	void InvalidateNativeA8SortedShaderStateForForeignRenderPass()
 	{
-		// Every vanilla Tile is a hard command boundary. Preserve only the
-		// disjoint private register shadow while invalidating the execution
-		// proof and every binding the vanilla pass is allowed to change.
+		const NativeSortedShaderBatch& sortedBatch = s_sortedShaderBatch;
+		const NativeFacadeShaderBatch& facadeBatch = s_facadeShaderBatch;
+		const bool hadPrivateState = (sortedBatch.depth
+			&& (sortedBatch.packetProfile
+				|| sortedBatch.vertexAa.aaConstantReady
+				|| sortedBatch.vertexAa.vanillaGlyphConstantReady))
+			|| (facadeBatch.depth
+				&& (facadeBatch.packetProfile
+					|| facadeBatch.vertexAa.aaConstantReady
+					|| facadeBatch.vertexAa.vanillaGlyphConstantReady));
+		InvalidateNativeA8SortedShaderState();
+		if (hadPrivateState)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				NativePrivateStateForeignRenderPassInvalidation);
+		}
+	}
+
+	static void PrepareNativeA8VanillaLayoutPrivateStateCarry()
+	{
+		// This helper is private to the exact Vanilla-layout shader transition.
+		// Preserve only the immutable c176-c183/c208/c209 shadow signed by that
+		// transition while invalidating its command proof and mutable bindings.
+		// Arbitrary non-A8 RenderPasses must use the hard invalidation path above:
+		// both reversed executables dispatch generic shader callbacks there.
 		InvalidateNativeA8CommandExecutionSegment(
 			NativeA8CommandFallback::State);
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
@@ -2274,9 +2296,9 @@ namespace fonthook::vectorfont
 		}
 		batch.samplerReady = false;
 
-		// A vanilla Tile cannot occur inside a valid facade scope, but clear the
-		// fallback cache defensively so nested compatibility paths never inherit
-		// a facade-local proof.
+		// A certified Vanilla-layout transition cannot occur inside another valid
+		// facade scope, but clear the fallback cache defensively so a nested
+		// compatibility path never inherits the outer facade's proof.
 		NativeFacadeShaderBatch& facadeBatch = s_facadeShaderBatch;
 		facadeBatch.packetProfile = nullptr;
 		facadeBatch.packetRegisterCount = 0;
@@ -2284,7 +2306,7 @@ namespace fonthook::vectorfont
 		facadeBatch.samplerReady = false;
 	}
 
-	void ValidateNativeA8SortedShaderStateAfterVanillaTile()
+	static void ValidateNativeA8VanillaLayoutPrivateStateCarry()
 	{
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 		NiD3DRenderState* renderState =
@@ -2293,8 +2315,8 @@ namespace fonthook::vectorfont
 				? ResolveEngineRenderState(batch.device) : nullptr;
 		if (!renderState)
 		{
-			// A reset/generation transition during the vanilla draw invalidates the
-			// private proof as well as ordinary bindings.
+			// A reset/generation transition during the certified native draw
+			// invalidates the private proof as well as ordinary bindings.
 			batch.device = nullptr;
 			batch.renderState = nullptr;
 			batch.generation = 0;
@@ -2320,7 +2342,7 @@ namespace fonthook::vectorfont
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
-					NativePrivateStateVanillaTilePreserve);
+					NativePrivateStateVanillaLayoutPreserve);
 		}
 	}
 
@@ -2439,10 +2461,11 @@ namespace fonthook::vectorfont
 	{
 		// Official B98E80 and beta Standard::RenderPassImmediately both execute
 		// SetupGeometryConstants before blend/state setup, buffer preparation and
-		// OnlyRenderImmediate. Preserve only the disjoint c176-c183/c208/c209
-		// shadow; the command segment, bindings and sampler proof are still hard
-		// boundaries exactly as they are for a vanilla Tile.
-		AdvanceNativeA8SortedShaderStateAcrossVanillaTile();
+		// OnlyRenderImmediate. This exact native callback chain may retain its
+		// disjoint c176-c183/c208/c209 shadow. The command segment, bindings and
+		// sampler proof are still hard boundaries; unrelated RenderPasses are not
+		// eligible for this carry.
+		PrepareNativeA8VanillaLayoutPrivateStateCarry();
 		NativeVanillaLayoutPublicationWitness& witness =
 			s_vanillaLayoutPublicationWitness;
 		UInt64 token = ++s_nextVanillaLayoutPublicationToken;
@@ -2499,7 +2522,7 @@ namespace fonthook::vectorfont
 		// only for the private constant shadow, never for the sampler or command
 		// execution segment.
 		batch.samplerReady = false;
-		ValidateNativeA8SortedShaderStateAfterVanillaTile();
+		ValidateNativeA8VanillaLayoutPrivateStateCarry();
 		const bool retained = batch.packetProfile == publishedProfile
 			&& batch.device == publishedDevice;
 		RecordFreeTypePerf(retained

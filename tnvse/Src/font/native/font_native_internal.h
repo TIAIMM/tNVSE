@@ -1128,8 +1128,7 @@ namespace fonthook::vectorfont
 	void EndNativeA8SortedShaderBatch();
 	void InvalidateNativeA8SortedShaderState();
 	void InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
-	void AdvanceNativeA8SortedShaderStateAcrossVanillaTile();
-	void ValidateNativeA8SortedShaderStateAfterVanillaTile();
+	void InvalidateNativeA8SortedShaderStateForForeignRenderPass();
 	UInt64 BeginNativeA8VanillaLayoutShaderTransition(
 		TileShader* shader, UInt32 currentPass);
 	bool EndNativeA8VanillaLayoutShaderTransition(

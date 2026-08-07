@@ -4759,12 +4759,22 @@ namespace fonthook::vectorfont
 		if (!IsA8AtlasShape(shape))
 		{
 			if (s_constantOwnershipBatch.FrameActive())
-				ReleaseNativeConstantOwnershipBatch("before-vanilla-tile");
+				ReleaseNativeConstantOwnershipBatch(
+					"before-foreign-render-pass");
 			s_segmentDeviceStateCache.Reset();
-			AdvanceNativeA8SortedShaderStateAcrossVanillaTile();
+			// Official B994F0/B98E80 and beta RenderPassImmediately dispatch
+			// arbitrary attached-shader pass and geometry callbacks. None of those
+			// callbacks owns tNVSE's c176-c183/c208/c209 contract, so an unrelated
+			// pass is a hard private-constant boundary even when renderer and
+			// viewport identity remain unchanged.
+			InvalidateNativeA8SortedShaderStateForForeignRenderPass();
 			state.originalRenderPassImmediately(pass, currentPass, testAlpha,
 				blendAlpha, setupDrawmode);
-			ValidateNativeA8SortedShaderStateAfterVanillaTile();
+			// Clear any state rebuilt by a nested callback without advancing the
+			// command boundary twice. The next native submission must republish all
+			// private pixel and Vanilla-layout vertex constants.
+			s_segmentDeviceStateCache.Reset();
+			InvalidateNativeA8SortedShaderStateWithinExecutionSegment();
 			return;
 		}
 
