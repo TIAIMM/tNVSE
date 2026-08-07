@@ -24,12 +24,12 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kRendererPositionAdjust = 0x11F474C;
 		inline constexpr double kScissorSafetyMarginPixels = 2.0;
 		inline constexpr double kClipIntervalRelativeSlack = 1.0e-6;
-		// Credit/VUI screens can keep several hundred independent text shapes
-		// alive. The former 64-entry cache thrashed even though each entry is an
-		// exact-key, render-thread-local proof. 1024 entries in total remain below
-		// half a MiB while covering the observed working set.
-		inline constexpr size_t kClipTransformCacheSetCount = 256;
-		inline constexpr size_t kClipTransformCacheWays = 4;
+		// The cache stores only exact source-state keys and the conservative proof,
+		// not four complete matrices per facade. Four-way 4096-entry storage remains
+		// bounded below half a MiB on Win32 while covering large Interface batches.
+		inline constexpr size_t kClipProofCacheSetCount = 1024;
+		inline constexpr size_t kClipProofCacheWays = 4;
+		inline constexpr size_t kClipRectNdcCacheEntries = 16;
 
 		enum class ClipProofResult : UInt8
 		{
@@ -46,44 +46,85 @@ namespace fonthook::vectorfont
 			KeyMiss
 		};
 
-		struct ClipTransformCacheEntry
+		struct ClipNdcBounds
 		{
-			// Identity selects a small candidate set only. It is never dereferenced,
-			// and renderer plus all three matrices remain the correctness key. A
-			// retired payload address can therefore be reused without returning a
-			// stale transform.
-			const void* identity = nullptr;
-			const NiDX9Renderer* renderer = nullptr;
-			D3DXMATRIX world;
-			D3DXMATRIX view;
-			D3DXMATRIX projection;
-			D3DXMATRIX worldViewProjection;
-			// The expensive half-space result is reusable only when every live input
-			// below is bit-for-bit identical. Matrix identity is already established
-			// by the transform key above; any mismatch simply recomputes and fails
-			// open through the ordinary path.
-			NiBound resultBound;
-			D3DVIEWPORT9 resultViewport = {};
-			RECT resultClipRect = {};
-			NativeA8VisibilityCull resultReason =
-				NativeA8VisibilityCull::None;
-			ClipProofResult result = ClipProofResult::Unproven;
-			bool resultAllowViewport = false;
-			bool resultUsesScissor = false;
-			bool resultValid = false;
+			double left = 0.0;
+			double right = 0.0;
+			double top = 0.0;
+			double bottom = 0.0;
+		};
+
+		struct ClipRectNdcCacheEntry
+		{
+			RECT rect = {};
+			ClipNdcBounds bounds;
 			bool valid = false;
 		};
 
-		struct ClipTransformCacheSet
+		struct ClipCameraKey
 		{
-			std::array<ClipTransformCacheEntry, kClipTransformCacheWays> ways;
+			const NiDX9Renderer* renderer = nullptr;
+			D3DXMATRIX view;
+			D3DXMATRIX projection;
+			D3DVIEWPORT9 viewport = {};
+			NiPoint3 positionAdjust;
+			bool primitiveClipping = false;
+			bool scaledScissor = false;
+		};
+
+		struct ClipFrameContext
+		{
+			ClipCameraKey camera;
+			RECT viewportRect = {};
+			ClipNdcBounds viewportNdc;
+			std::array<ClipRectNdcCacheEntry,
+				kClipRectNdcCacheEntries> rectNdcCache;
+			size_t rectNdcReplacement = 0;
+			UInt64 frameToken = 0;
+			UInt64 cameraEpoch = 0;
+			double inverseWidth = 0.0;
+			double inverseHeight = 0.0;
+			bool active = false;
+			bool valid = false;
+			bool preflightOpen = false;
+		};
+
+		struct ClipProofCacheEntry
+		{
+			// Identity only selects candidates. Every value that affects the proof is
+			// compared exactly before reuse, so a retired facade address can be reused
+			// without returning stale visibility.
+			const void* identity = nullptr;
+			const NiDX9Renderer* renderer = nullptr;
+			std::array<UInt32, 13> transformBits = {};
+			std::array<UInt32, 4> boundBits = {};
+			RECT scissorRect = {};
+			UInt64 cameraEpoch = 0;
+			NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
+			ClipProofResult result = ClipProofResult::Unproven;
+			bool tileUsesScissor = false;
+			bool allowViewport = false;
+			bool valid = false;
+		};
+
+		struct ClipProofCacheSet
+		{
+			std::array<ClipProofCacheEntry, kClipProofCacheWays> ways;
 			size_t replacementWay = 0;
 		};
 
-		static_assert((kClipTransformCacheSetCount
-			& (kClipTransformCacheSetCount - 1u)) == 0);
-		thread_local std::array<ClipTransformCacheSet,
-			kClipTransformCacheSetCount> s_clipTransformCache;
+		using ClipProofCacheStorage = std::array<ClipProofCacheSet,
+			kClipProofCacheSetCount>;
+		static_assert((kClipProofCacheSetCount
+			& (kClipProofCacheSetCount - 1u)) == 0);
+		static_assert(sizeof(ClipProofCacheStorage) <= 512u * 1024u,
+			"Visibility proof cache must remain bounded to 512 KiB per thread");
+		thread_local ClipProofCacheStorage s_clipProofCache;
+		thread_local ClipFrameContext s_clipFrameContext;
+		thread_local ClipCameraKey s_previousClipCamera;
+		thread_local UInt64 s_clipCameraEpoch = 0;
+		thread_local UInt64 s_clipFrameToken = 0;
+		thread_local bool s_previousClipCameraValid = false;
 
 		size_t HashClipTransformIdentity(const void* identity)
 		{
@@ -192,11 +233,8 @@ namespace fonthook::vectorfont
 		}
 
 		bool BuildRetailTileWorldMatrix(const NiTransform& transform,
-			D3DXMATRIX& world)
+			const NiPoint3& positionAdjust, D3DXMATRIX& world)
 		{
-			const NiPoint3 positionAdjust =
-				*reinterpret_cast<const NiPoint3*>(
-					kRendererPositionAdjust);
 			if (!std::isfinite(transform.m_fScale)
 				|| !std::isfinite(transform.m_Translate.x)
 				|| !std::isfinite(transform.m_Translate.y)
@@ -354,122 +392,349 @@ namespace fonthook::vectorfont
 					!= FALSE;
 		}
 
-		bool SameViewport(const D3DVIEWPORT9& left,
-			const D3DVIEWPORT9& right)
-		{
-			return left.X == right.X && left.Y == right.Y
-				&& left.Width == right.Width && left.Height == right.Height
-				&& left.MinZ == right.MinZ && left.MaxZ == right.MaxZ;
-		}
-
 		bool SameRect(const RECT& left, const RECT& right)
 		{
 			return left.left == right.left && left.top == right.top
 				&& left.right == right.right && left.bottom == right.bottom;
 		}
 
-		bool SameBound(const NiBound& left, const NiBound& right)
+		UInt32 FloatBits(float value)
 		{
-			return left.m_kCenter.x == right.m_kCenter.x
-				&& left.m_kCenter.y == right.m_kCenter.y
-				&& left.m_kCenter.z == right.m_kCenter.z
-				&& left.m_fRadius == right.m_fRadius;
+			UInt32 bits = 0;
+			std::memcpy(&bits, &value, sizeof(bits));
+			return bits;
 		}
 
-		ClipTransformBuildResult BuildWorldViewProjection(
-			const void* identity, const NiDX9Renderer& renderer,
-			const D3DXMATRIX& world, D3DXMATRIX& worldViewProjection,
-			ClipTransformCacheEntry** resolvedEntry)
+		std::array<UInt32, 13> CaptureTransformBits(
+			const NiTransform& transform)
 		{
-			if (resolvedEntry)
-				*resolvedEntry = nullptr;
-			ClipTransformCacheSet* cacheSet = nullptr;
-			ClipTransformCacheEntry* identityEntry = nullptr;
-			ClipTransformCacheEntry* invalidEntry = nullptr;
-			if (identity)
+			std::array<UInt32, 13> bits = {};
+			size_t write = 0;
+			for (UInt32 row = 0; row < 3; ++row)
 			{
-				cacheSet = &s_clipTransformCache[
-					HashClipTransformIdentity(identity)
-						& (kClipTransformCacheSetCount - 1u)];
-				for (ClipTransformCacheEntry& candidate : cacheSet->ways)
+				for (UInt32 column = 0; column < 3; ++column)
 				{
-					if (!candidate.valid)
-					{
-						if (!invalidEntry)
-							invalidEntry = &candidate;
-						continue;
-					}
-					if (candidate.identity == identity)
-					{
-						identityEntry = &candidate;
-						break;
-					}
+					bits[write++] = FloatBits(
+						transform.m_Rotate.m_pEntry[row][column]);
 				}
 			}
+			bits[write++] = FloatBits(transform.m_Translate.x);
+			bits[write++] = FloatBits(transform.m_Translate.y);
+			bits[write++] = FloatBits(transform.m_Translate.z);
+			bits[write] = FloatBits(transform.m_fScale);
+			return bits;
+		}
 
-			if (identityEntry && identityEntry->renderer == &renderer
-				&& std::memcmp(&identityEntry->world, &world,
-					sizeof(world)) == 0
-				&& std::memcmp(&identityEntry->view, &renderer.m_kD3DView,
-					sizeof(identityEntry->view)) == 0
-				&& std::memcmp(&identityEntry->projection,
-					&renderer.m_kD3DProj,
-					sizeof(identityEntry->projection)) == 0)
+		std::array<UInt32, 4> CaptureBoundBits(const NiBound& bound)
+		{
+			return {
+				FloatBits(bound.m_kCenter.x), FloatBits(bound.m_kCenter.y),
+				FloatBits(bound.m_kCenter.z), FloatBits(bound.m_fRadius)
+			};
+		}
+
+		bool SameCameraKey(const ClipCameraKey& left,
+			const ClipCameraKey& right)
+		{
+			return left.renderer == right.renderer
+				&& std::memcmp(&left.view, &right.view,
+					sizeof(left.view)) == 0
+				&& std::memcmp(&left.projection, &right.projection,
+					sizeof(left.projection)) == 0
+				&& std::memcmp(&left.viewport, &right.viewport,
+					sizeof(left.viewport)) == 0
+				&& FloatBits(left.positionAdjust.x)
+					== FloatBits(right.positionAdjust.x)
+				&& FloatBits(left.positionAdjust.y)
+					== FloatBits(right.positionAdjust.y)
+				&& FloatBits(left.positionAdjust.z)
+					== FloatBits(right.positionAdjust.z)
+				&& left.primitiveClipping == right.primitiveClipping
+				&& left.scaledScissor == right.scaledScissor;
+		}
+
+		bool BuildClipNdcBounds(const ClipFrameContext& context,
+			const RECT& rect, ClipNdcBounds& bounds)
+		{
+			if (!context.valid)
+				return false;
+			const D3DVIEWPORT9& viewport = context.camera.viewport;
+			bounds.left = ((static_cast<double>(rect.left)
+				- kScissorSafetyMarginPixels - viewport.X)
+				* 2.0 * context.inverseWidth) - 1.0;
+			bounds.right = ((static_cast<double>(rect.right)
+				+ kScissorSafetyMarginPixels - viewport.X)
+				* 2.0 * context.inverseWidth) - 1.0;
+			bounds.top = 1.0 - ((static_cast<double>(rect.top)
+				- kScissorSafetyMarginPixels - viewport.Y)
+				* 2.0 * context.inverseHeight);
+			bounds.bottom = 1.0 - ((static_cast<double>(rect.bottom)
+				+ kScissorSafetyMarginPixels - viewport.Y)
+				* 2.0 * context.inverseHeight);
+			return std::isfinite(bounds.left) && std::isfinite(bounds.right)
+				&& std::isfinite(bounds.top) && std::isfinite(bounds.bottom);
+		}
+
+		bool CaptureClipFrameContext(ClipFrameContext& context,
+			bool persistent, NiDX9Renderer* rendererOverride = nullptr)
+		{
+			context = ClipFrameContext{};
+			context.active = true;
+			if (persistent)
 			{
-				worldViewProjection = identityEntry->worldViewProjection;
-				if (resolvedEntry)
-					*resolvedEntry = identityEntry;
-				return ClipTransformBuildResult::Reused;
+				context.frameToken = ++s_clipFrameToken;
+				if (!context.frameToken)
+					context.frameToken = ++s_clipFrameToken;
 			}
 
-			if (!IsFiniteMatrix(world)
-				|| !IsFiniteMatrix(renderer.m_kD3DView)
-				|| !IsFiniteMatrix(renderer.m_kD3DProj))
+			NiDX9Renderer* renderer = rendererOverride
+				? rendererOverride : NiDX9Renderer::GetSingleton();
+			if (!renderer)
+				return false;
+			context.camera.renderer = renderer;
+			context.camera.view = renderer->m_kD3DView;
+			context.camera.projection = renderer->m_kD3DProj;
+			context.camera.viewport = renderer->m_kD3DPort;
+			context.camera.positionAdjust =
+				*reinterpret_cast<const NiPoint3*>(kRendererPositionAdjust);
+			context.camera.primitiveClipping =
+				IsPrimitiveClippingEnabled(*renderer);
+			context.camera.scaledScissor =
+				*reinterpret_cast<const UInt8*>(kScaledScissorActive) != 0;
+			if (!IsFiniteMatrix(context.camera.view)
+				|| !IsFiniteMatrix(context.camera.projection)
+				|| !std::isfinite(context.camera.positionAdjust.x)
+				|| !std::isfinite(context.camera.positionAdjust.y)
+				|| !std::isfinite(context.camera.positionAdjust.z)
+				|| !BuildViewportRect(context.camera.viewport,
+					context.viewportRect))
 			{
-				return ClipTransformBuildResult::Unavailable;
+				return false;
 			}
-			D3DXMATRIX worldView = {};
-			D3DXMatrixMultiply(
-				&worldView, &world, &renderer.m_kD3DView);
-			D3DXMatrixMultiply(&worldViewProjection,
-				&worldView, &renderer.m_kD3DProj);
-			if (!IsFiniteMatrix(worldViewProjection))
-				return ClipTransformBuildResult::Unavailable;
 
-			if (cacheSet)
+			context.inverseWidth = 1.0
+				/ static_cast<double>(context.camera.viewport.Width);
+			context.inverseHeight = 1.0
+				/ static_cast<double>(context.camera.viewport.Height);
+			context.valid = true;
+			if (!BuildClipNdcBounds(context, context.viewportRect,
+					context.viewportNdc))
 			{
-				ClipTransformCacheEntry* target = identityEntry
-					? identityEntry : invalidEntry;
-				if (!target)
+				context.valid = false;
+				return false;
+			}
+
+			if (persistent)
+			{
+				if (!s_previousClipCameraValid
+					|| !SameCameraKey(
+						s_previousClipCamera, context.camera))
 				{
-					target = &cacheSet->ways[cacheSet->replacementWay];
-					cacheSet->replacementWay =
-						(cacheSet->replacementWay + 1u)
-							% kClipTransformCacheWays;
+					++s_clipCameraEpoch;
+					if (!s_clipCameraEpoch)
+					{
+						s_clipCameraEpoch = 1;
+						for (ClipProofCacheSet& set : s_clipProofCache)
+						{
+							set.replacementWay = 0;
+							for (ClipProofCacheEntry& entry : set.ways)
+								entry.valid = false;
+						}
+					}
+					s_previousClipCamera = context.camera;
+					s_previousClipCameraValid = true;
 				}
-				target->identity = identity;
-				target->renderer = &renderer;
-				std::memcpy(&target->world, &world, sizeof(world));
-				std::memcpy(&target->view, &renderer.m_kD3DView,
-					sizeof(target->view));
-				std::memcpy(&target->projection, &renderer.m_kD3DProj,
-					sizeof(target->projection));
-				target->worldViewProjection = worldViewProjection;
-				target->resultValid = false;
-				target->valid = true;
-				if (resolvedEntry)
-					*resolvedEntry = target;
+				context.cameraEpoch = s_clipCameraEpoch;
 			}
-			return identityEntry
+			return true;
+		}
+
+		bool ResolveClipNdcBounds(ClipFrameContext& context,
+			const RECT& rect, bool useScissor, ClipNdcBounds& bounds)
+		{
+			if (!useScissor)
+			{
+				bounds = context.viewportNdc;
+				return true;
+			}
+			for (const ClipRectNdcCacheEntry& candidate
+				: context.rectNdcCache)
+			{
+				if (candidate.valid && SameRect(candidate.rect, rect))
+				{
+					bounds = candidate.bounds;
+					return true;
+				}
+			}
+			ClipNdcBounds built;
+			if (!BuildClipNdcBounds(context, rect, built))
+				return false;
+			ClipRectNdcCacheEntry& target = context.rectNdcCache[
+				context.rectNdcReplacement];
+			context.rectNdcReplacement = (context.rectNdcReplacement + 1u)
+				% kClipRectNdcCacheEntries;
+			target.rect = rect;
+			target.bounds = built;
+			target.valid = true;
+			bounds = built;
+			return true;
+		}
+
+		bool SameProofKey(const ClipProofCacheEntry& entry,
+			const void* identity, const ClipFrameContext& context,
+			const std::array<UInt32, 13>& transformBits,
+			const std::array<UInt32, 4>& boundBits,
+			const TileVisibilityPropertyView& tile, bool allowViewport)
+		{
+			return entry.valid && entry.identity == identity
+				&& entry.renderer == context.camera.renderer
+				&& entry.cameraEpoch == context.cameraEpoch
+				&& entry.transformBits == transformBits
+				&& entry.boundBits == boundBits
+				&& SameRect(entry.scissorRect, tile.scissorRect)
+				&& entry.tileUsesScissor == tile.useScissorTest
+				&& entry.allowViewport == allowViewport;
+		}
+
+		ClipProofCacheEntry* PrepareClipProofCacheEntry(
+			const void* identity, const ClipFrameContext& context,
+			const std::array<UInt32, 13>& transformBits,
+			const std::array<UInt32, 4>& boundBits,
+			const TileVisibilityPropertyView& tile, bool allowViewport,
+			ClipTransformBuildResult& cacheResult,
+			ClipProofResult& cachedProof, NativeA8VisibilityCull& cachedReason)
+		{
+			cachedProof = ClipProofResult::Unproven;
+			cachedReason = NativeA8VisibilityCull::None;
+			if (!identity || !context.cameraEpoch)
+			{
+				cacheResult = ClipTransformBuildResult::IdentityMiss;
+				return nullptr;
+			}
+			ClipProofCacheSet& set = s_clipProofCache[
+				HashClipTransformIdentity(identity)
+					& (kClipProofCacheSetCount - 1u)];
+			ClipProofCacheEntry* identityEntry = nullptr;
+			ClipProofCacheEntry* invalidEntry = nullptr;
+			for (ClipProofCacheEntry& candidate : set.ways)
+			{
+				if (!candidate.valid)
+				{
+					if (!invalidEntry)
+						invalidEntry = &candidate;
+					continue;
+				}
+				if (candidate.identity != identity)
+					continue;
+				identityEntry = &candidate;
+				if (SameProofKey(candidate, identity, context,
+						transformBits, boundBits, tile, allowViewport))
+				{
+					cacheResult = ClipTransformBuildResult::Reused;
+					cachedProof = candidate.result;
+					cachedReason = candidate.reason;
+					return &candidate;
+				}
+				break;
+			}
+			cacheResult = identityEntry
 				? ClipTransformBuildResult::KeyMiss
 				: ClipTransformBuildResult::IdentityMiss;
+			if (identityEntry)
+				return identityEntry;
+			if (invalidEntry)
+				return invalidEntry;
+			ClipProofCacheEntry* replacement =
+				&set.ways[set.replacementWay];
+			set.replacementWay = (set.replacementWay + 1u)
+				% kClipProofCacheWays;
+			return replacement;
+		}
+
+		void StoreClipProof(ClipProofCacheEntry* entry,
+			const void* identity, const ClipFrameContext& context,
+			const std::array<UInt32, 13>& transformBits,
+			const std::array<UInt32, 4>& boundBits,
+			const TileVisibilityPropertyView& tile, bool allowViewport,
+			ClipProofResult result, NativeA8VisibilityCull reason)
+		{
+			if (!entry || !context.cameraEpoch
+				|| result == ClipProofResult::Unproven)
+			{
+				return;
+			}
+			entry->identity = identity;
+			entry->renderer = context.camera.renderer;
+			entry->transformBits = transformBits;
+			entry->boundBits = boundBits;
+			entry->scissorRect = tile.scissorRect;
+			entry->cameraEpoch = context.cameraEpoch;
+			entry->reason = reason;
+			entry->result = result;
+			entry->tileUsesScissor = tile.useScissorTest;
+			entry->allowViewport = allowViewport;
+			entry->valid = true;
+		}
+
+		const ClipProofCacheEntry* FindCurrentClipProof(
+			const void* identity, const ClipFrameContext& context,
+			const NiTransform& transform, const NiBound& bound,
+			const TileVisibilityPropertyView& tile, bool allowViewport)
+		{
+			if (!identity || !context.cameraEpoch)
+				return nullptr;
+			const std::array<UInt32, 13> transformBits =
+				CaptureTransformBits(transform);
+			const std::array<UInt32, 4> boundBits = CaptureBoundBits(bound);
+			const ClipProofCacheSet& set = s_clipProofCache[
+				HashClipTransformIdentity(identity)
+					& (kClipProofCacheSetCount - 1u)];
+			for (const ClipProofCacheEntry& candidate : set.ways)
+			{
+				if (SameProofKey(candidate, identity, context,
+						transformBits, boundBits, tile, allowViewport))
+				{
+					return &candidate;
+				}
+			}
+			return nullptr;
+		}
+
+		bool IsClipFrameCameraCurrent(const ClipFrameContext& context)
+		{
+			if (!context.active || !context.valid
+				|| NiDX9Renderer::GetSingleton() != context.camera.renderer)
+			{
+				return false;
+			}
+			const NiDX9Renderer& renderer = *context.camera.renderer;
+			const NiPoint3 positionAdjust =
+				*reinterpret_cast<const NiPoint3*>(kRendererPositionAdjust);
+			return std::memcmp(&renderer.m_kD3DView, &context.camera.view,
+					sizeof(context.camera.view)) == 0
+				&& std::memcmp(&renderer.m_kD3DProj,
+					&context.camera.projection,
+					sizeof(context.camera.projection)) == 0
+				&& std::memcmp(&renderer.m_kD3DPort,
+					&context.camera.viewport,
+					sizeof(context.camera.viewport)) == 0
+				&& FloatBits(positionAdjust.x)
+					== FloatBits(context.camera.positionAdjust.x)
+				&& FloatBits(positionAdjust.y)
+					== FloatBits(context.camera.positionAdjust.y)
+				&& FloatBits(positionAdjust.z)
+					== FloatBits(context.camera.positionAdjust.z)
+				&& IsPrimitiveClippingEnabled(renderer)
+					== context.camera.primitiveClipping
+				&& (*reinterpret_cast<const UInt8*>(kScaledScissorActive) != 0)
+					== context.camera.scaledScissor;
 		}
 
 		ClipProofResult EvaluateBoundClip(const NiBound& bound,
-			const void* transformIdentity,
+			const void* transformIdentity, const NiTransform& transform,
 			const TileVisibilityPropertyView& tile,
-			const NiDX9Renderer& renderer, const D3DXMATRIX& world,
-			bool allowViewport, NativeA8VisibilityCull& reason,
+			ClipFrameContext& context, bool allowViewport,
+			NativeA8VisibilityCull& reason,
 			ClipTransformBuildResult* transformBuildResult)
 		{
 			reason = NativeA8VisibilityCull::None;
@@ -483,10 +748,12 @@ namespace fonthook::vectorfont
 				return ClipProofResult::Unproven;
 			};
 
+			if (!context.valid)
+				return failOpen();
 			RECT clipRect = {};
-			const D3DVIEWPORT9& viewport = renderer.m_kD3DPort;
+			const D3DVIEWPORT9& viewport = context.camera.viewport;
 			const bool useScissor = tile.useScissorTest
-				&& !*reinterpret_cast<const UInt8*>(kScaledScissorActive)
+				&& !context.camera.scaledScissor
 				&& IsValidScissorForViewport(tile.scissorRect, viewport);
 			if (useScissor)
 			{
@@ -501,11 +768,11 @@ namespace fonthook::vectorfont
 				// proves primitive clipping is currently active.  A scaled or
 				// malformed Tile scissor therefore falls back to the full viewport,
 				// never to an approximation of the narrower rectangle.
-				if (!allowViewport || !IsPrimitiveClippingEnabled(renderer)
-					|| !BuildViewportRect(viewport, clipRect))
+				if (!allowViewport || !context.camera.primitiveClipping)
 				{
 					return failOpen();
 				}
+				clipRect = context.viewportRect;
 				reason = NativeA8VisibilityCull::Clip;
 			}
 
@@ -518,34 +785,61 @@ namespace fonthook::vectorfont
 				return failOpen();
 			}
 
+			const std::array<UInt32, 13> transformBits =
+				CaptureTransformBits(transform);
+			const std::array<UInt32, 4> boundBits = CaptureBoundBits(bound);
+			ClipProofResult cachedProof = ClipProofResult::Unproven;
+			NativeA8VisibilityCull cachedReason =
+				NativeA8VisibilityCull::None;
+			ClipTransformBuildResult buildResult =
+				ClipTransformBuildResult::Unavailable;
+			ClipProofCacheEntry* cacheEntry = PrepareClipProofCacheEntry(
+				transformIdentity, context, transformBits, boundBits, tile,
+				allowViewport, buildResult, cachedProof, cachedReason);
+			if (cachedProof != ClipProofResult::Unproven)
+			{
+				reason = cachedReason;
+				if (transformBuildResult)
+					*transformBuildResult = buildResult;
+				return cachedProof;
+			}
+
+			ClipNdcBounds ndc;
+			if (!ResolveClipNdcBounds(context, clipRect, useScissor, ndc))
+				return failOpen();
+
+			D3DXMATRIX world = {};
+			if (!BuildRetailTileWorldMatrix(transform,
+					context.camera.positionAdjust, world))
+			{
+				if (transformBuildResult)
+				{
+					*transformBuildResult =
+						ClipTransformBuildResult::Unavailable;
+				}
+				return failOpen();
+			}
+
 			// WorldViewProjTranspose is predefined mapping 23 in the retail
 			// constant map at E85D10. It calls D3DXMatrixMultiply twice in this
 			// exact association order, then transposes for VS c0-c3. Use the same
 			// D3DX entry point and retain the non-transposed matrix for row-vector
 			// homogeneous half-space evaluation below.
+			D3DXMATRIX worldView = {};
 			D3DXMATRIX builtWorldViewProjection = {};
-			ClipTransformCacheEntry* cacheEntry = nullptr;
-			const ClipTransformBuildResult buildResult =
-				BuildWorldViewProjection(transformIdentity,
-					renderer, world, builtWorldViewProjection, &cacheEntry);
-			if (transformBuildResult)
-				*transformBuildResult = buildResult;
-			if (buildResult == ClipTransformBuildResult::Unavailable)
+			D3DXMatrixMultiply(&worldView, &world, &context.camera.view);
+			D3DXMatrixMultiply(&builtWorldViewProjection,
+				&worldView, &context.camera.projection);
+			if (!IsFiniteMatrix(builtWorldViewProjection))
 			{
+				buildResult = ClipTransformBuildResult::Unavailable;
+				if (transformBuildResult)
+					*transformBuildResult = buildResult;
 				return failOpen();
 			}
-			const D3DXMATRIX* worldViewProjection =
-				&builtWorldViewProjection;
-			if (cacheEntry && cacheEntry->resultValid
-				&& SameBound(cacheEntry->resultBound, bound)
-				&& SameViewport(cacheEntry->resultViewport, viewport)
-				&& SameRect(cacheEntry->resultClipRect, clipRect)
-				&& cacheEntry->resultAllowViewport == allowViewport
-				&& cacheEntry->resultUsesScissor == useScissor)
-			{
-				reason = cacheEntry->resultReason;
-				return cacheEntry->result;
-			}
+			if (transformBuildResult)
+				*transformBuildResult = buildResult;
+			const D3DXMATRIX* worldViewProjection = &builtWorldViewProjection;
 
 			const ClipColumn clipX = GetClipColumn(*worldViewProjection, 0);
 			const ClipColumn clipY = GetClipColumn(*worldViewProjection, 1);
@@ -561,49 +855,25 @@ namespace fonthook::vectorfont
 			if (centerW - extentW <= wSlack)
 				return failOpen();
 
-			const double inverseWidth = 1.0 / viewport.Width;
-			const double inverseHeight = 1.0 / viewport.Height;
-			const double leftNdc = ((clipRect.left
-				- kScissorSafetyMarginPixels - viewport.X)
-				* 2.0 * inverseWidth) - 1.0;
-			const double rightNdc = ((clipRect.right
-				+ kScissorSafetyMarginPixels - viewport.X)
-				* 2.0 * inverseWidth) - 1.0;
-			const double topNdc = 1.0 - ((clipRect.top
-				- kScissorSafetyMarginPixels - viewport.Y)
-				* 2.0 * inverseHeight);
-			const double bottomNdc = 1.0 - ((clipRect.bottom
-				+ kScissorSafetyMarginPixels - viewport.Y)
-				* 2.0 * inverseHeight);
-
 			// Each expression is non-negative inside the expanded scissor.  The
 			// payload sphere is first expanded to a cube; only a negative maximum
 			// for the whole cube proves that every glyph triangle is outside.
 			const ClipColumn leftPlane = SubtractScaled(
-				clipX, clipW, leftNdc);
+				clipX, clipW, ndc.left);
 			const ClipColumn rightPlane = SubtractScaled(
-				ClipColumn{}, SubtractScaled(clipX, clipW, rightNdc), 1.0);
+				ClipColumn{}, SubtractScaled(clipX, clipW, ndc.right), 1.0);
 			const ClipColumn topPlane = SubtractScaled(
-				ClipColumn{}, SubtractScaled(clipY, clipW, topNdc), 1.0);
+				ClipColumn{}, SubtractScaled(clipY, clipW, ndc.top), 1.0);
 			const ClipColumn bottomPlane = SubtractScaled(
-				clipY, clipW, bottomNdc);
+				clipY, clipW, ndc.bottom);
 			const bool outside = CubeIsOutsidePlane(leftPlane, bound)
 				|| CubeIsOutsidePlane(rightPlane, bound)
 				|| CubeIsOutsidePlane(topPlane, bound)
 				|| CubeIsOutsidePlane(bottomPlane, bound);
 			const ClipProofResult result = outside
 				? ClipProofResult::Outside : ClipProofResult::Overlap;
-			if (cacheEntry)
-			{
-				cacheEntry->resultBound = bound;
-				cacheEntry->resultViewport = viewport;
-				cacheEntry->resultClipRect = clipRect;
-				cacheEntry->resultReason = reason;
-				cacheEntry->result = result;
-				cacheEntry->resultAllowViewport = allowViewport;
-				cacheEntry->resultUsesScissor = useScissor;
-				cacheEntry->resultValid = true;
-			}
+			StoreClipProof(cacheEntry, transformIdentity, context,
+				transformBits, boundBits, tile, allowViewport, result, reason);
 			return result;
 		}
 
@@ -660,11 +930,36 @@ namespace fonthook::vectorfont
 		return EvaluateNativeA8SubmissionVisibility(facade);
 	}
 
-	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
+	void BeginNativeA8VisibilityFrame()
+	{
+		EndNativeA8VisibilityFrame();
+		if (!g_bEnableFreeTypeFontPreflightClipCull)
+			return;
+		CaptureClipFrameContext(s_clipFrameContext, true);
+		s_clipFrameContext.preflightOpen = true;
+	}
+
+	void CompleteNativeA8VisibilityPreflight()
+	{
+		s_clipFrameContext.preflightOpen = false;
+	}
+
+	void EndNativeA8VisibilityFrame()
+	{
+		s_clipFrameContext.active = false;
+		s_clipFrameContext.valid = false;
+		s_clipFrameContext.frameToken = 0;
+		s_clipFrameContext.preflightOpen = false;
+	}
+
+	NativeA8VisibilityPreflight EvaluateNativeA8PreflightClipVisibility(
 		const NiTriShape* facade)
 	{
+		NativeA8VisibilityPreflight visibility;
 		if (!g_bEnableFreeTypeFontPreflightClipCull)
-			return NativeA8VisibilityCull::None;
+			return visibility;
+		if (s_clipFrameContext.active)
+			visibility.frameToken = s_clipFrameContext.frameToken;
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::VisibilityPreflightClipCheck);
 		ClipTransformBuildResult transformBuildResult =
@@ -674,7 +969,7 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(FreeTypePerfCounter::
 				VisibilityPreflightClipFailOpen);
 			RecordClipTransformBuildResult(transformBuildResult);
-			return NativeA8VisibilityCull::None;
+			return visibility;
 		};
 
 		// Facades call this after every RegisterObject for the flush, once the
@@ -686,36 +981,45 @@ namespace fonthook::vectorfont
 		const NiTriShapeData* data = facade ? facade->GetModelData() : nullptr;
 		if (!facade || !data)
 			return failOpen();
-		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-		if (!renderer)
-			return failOpen();
 		const TileVisibilityPropertyView* tile = GetTileProperty(facade);
 		if (!tile)
 			return failOpen();
-		D3DXMATRIX world = {};
-		if (!BuildRetailTileWorldMatrix(facade->m_kWorld, world))
-			return failOpen();
+		ClipFrameContext localContext;
+		ClipFrameContext* context = &s_clipFrameContext;
+		if (!context->active
+			|| (!context->preflightOpen
+				&& !IsClipFrameCameraCurrent(*context)))
+		{
+			if (!CaptureClipFrameContext(localContext, false))
+				return failOpen();
+			context = &localContext;
+		}
 		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
 		// This is the final stock-visible model bound. Facade payload vertices are
 		// relative and apply geometryOrigin during replay; stock-layout vertices
 		// are already engine-owned full geometry. Both representations publish
 		// the same full bound before reaching this proof.
 		const ClipProofResult proof = EvaluateBoundClip(data->m_kBound,
-			facade, *tile, *renderer, world,
-			true,
+			facade, facade->m_kWorld, *tile, *context, true,
 			reason, &transformBuildResult);
+		if (proof == ClipProofResult::Unproven)
+			return failOpen();
 		RecordClipTransformBuildResult(transformBuildResult);
+		visibility.status = proof == ClipProofResult::Outside
+			? NativeA8VisibilityProofStatus::Outside
+			: NativeA8VisibilityProofStatus::Overlap;
 		if (proof != ClipProofResult::Outside)
-			return NativeA8VisibilityCull::None;
+			return visibility;
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::VisibilityPreflightClipCulled);
 		RecordFreeTypePerf(reason == NativeA8VisibilityCull::Scissor
 			? FreeTypePerfCounter::VisibilityPreflightClipScissor
 			: FreeTypePerfCounter::VisibilityPreflightClipViewport);
-		return reason;
+		visibility.cull = reason;
+		return visibility;
 	}
 
-	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
+	NativeA8VisibilityPreflight EvaluateNativeA8PreflightClipVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload)
 	{
 		(void)payload;
@@ -723,30 +1027,45 @@ namespace fonthook::vectorfont
 	}
 
 	bool HonorNativeA8PreflightClipCull(const NiTriShape* facade,
-		NativeA8VisibilityCull preflightCull)
+		const NativeA8VisibilityPreflight& preflight)
 	{
 		if (!g_bEnableFreeTypeFontPreflightClipCull)
 			return false;
 		FreeTypePerfScope honorGatePerf(
 			FreeTypePerfPhase::PreflightClipHonorGate);
-		if (preflightCull == NativeA8VisibilityCull::Clip)
+		if (!facade
+			|| preflight.status != NativeA8VisibilityProofStatus::Outside
+			|| (preflight.cull != NativeA8VisibilityCull::Clip
+				&& preflight.cull != NativeA8VisibilityCull::Scissor)
+			|| !preflight.frameToken
+			|| preflight.frameToken != s_clipFrameContext.frameToken
+			|| !IsClipFrameCameraCurrent(s_clipFrameContext))
 		{
-			// Viewport-branch proofs consume only the final model bound,
-			// the facade world matrix and the interface viewport; all of them
-			// are frozen for the current flush.
-			return true;
+			return false;
 		}
-		if (preflightCull != NativeA8VisibilityCull::Scissor)
-			return false;
-		// Scissor-branch proofs additionally depend on the live Tile scissor
-		// rectangle and the engine's scaled-scissor global. Tile state is
-		// frozen during the render flush, but the scaled-scissor flag is an
-		// engine-owned global; any activation revokes the cached decision and
-		// returns the entry to the ordinary draw path.
-		if (*reinterpret_cast<const UInt8*>(kScaledScissorActive))
-			return false;
+		const NiTriShapeData* data = facade->GetModelData();
 		const TileVisibilityPropertyView* tile = GetTileProperty(facade);
-		return tile && tile->useScissorTest;
+		if (!data || !tile)
+			return false;
+		const ClipProofCacheEntry* cached = FindCurrentClipProof(
+			facade, s_clipFrameContext, facade->m_kWorld,
+			data->m_kBound, *tile, true);
+		return cached && cached->result == ClipProofResult::Outside
+			&& cached->reason == preflight.cull;
+	}
+
+	bool ReuseNativeA8PreflightClipOverlap(
+		const NativeA8VisibilityPreflight& preflight)
+	{
+		// A stale Overlap can only retain an otherwise GPU-clipped draw; it can
+		// never suppress visible geometry. Restrict reuse to the owning sorted
+		// frame, while Outside continues through the exact live honor gate above.
+		return g_bEnableFreeTypeFontPreflightClipCull
+			&& preflight.status == NativeA8VisibilityProofStatus::Overlap
+			&& preflight.cull == NativeA8VisibilityCull::None
+			&& preflight.frameToken
+			&& preflight.frameToken == s_clipFrameContext.frameToken
+			&& s_clipFrameContext.active;
 	}
 
 	bool IsNativeA8PayloadOutsideScissorForWorld(
@@ -763,14 +1082,28 @@ namespace fonthook::vectorfont
 		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
 		if (!tile || !tile->useScissorTest)
 			return false;
-		D3DXMATRIX world = {};
 		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
 		if (!payload.payloadTemplate)
 			return false;
-		return BuildRetailTileWorldMatrix(effectiveWorld, world)
-			&& EvaluateBoundClip(payload.payloadTemplate->bound, &payload,
-				*tile, *renderer, world,
-				false, reason, nullptr) == ClipProofResult::Outside
+		ClipFrameContext localContext;
+		ClipFrameContext* context = nullptr;
+		if (s_clipFrameContext.active && s_clipFrameContext.valid
+			&& s_clipFrameContext.camera.renderer == renderer
+			&& (s_clipFrameContext.preflightOpen
+				|| IsClipFrameCameraCurrent(s_clipFrameContext)))
+		{
+			context = &s_clipFrameContext;
+		}
+		else if (CaptureClipFrameContext(localContext, false,
+				const_cast<NiDX9Renderer*>(renderer)))
+		{
+			context = &localContext;
+		}
+		if (!context)
+			return false;
+		return EvaluateBoundClip(payload.payloadTemplate->bound, &payload,
+				effectiveWorld, *tile, *context, false,
+				reason, nullptr) == ClipProofResult::Outside
 			&& reason == NativeA8VisibilityCull::Scissor;
 	}
 

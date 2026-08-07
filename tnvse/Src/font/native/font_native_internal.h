@@ -540,14 +540,28 @@ namespace fonthook::vectorfont
 		Scissor
 	};
 
+	enum class NativeA8VisibilityProofStatus : UInt8
+	{
+		Unproven = 0,
+		Overlap,
+		Outside
+	};
+
+	struct NativeA8VisibilityPreflight
+	{
+		UInt64 frameToken = 0;
+		NativeA8VisibilityProofStatus status =
+			NativeA8VisibilityProofStatus::Unproven;
+		NativeA8VisibilityCull cull = NativeA8VisibilityCull::None;
+	};
+
 	struct NativeA8SortedFrameEntryView
 	{
 		const A8ShapeMetadata* metadata = nullptr;
 		NativeA8ShapePayload* payload = nullptr;
 		NativeA8FallbackReason preflightResult =
 			NativeA8FallbackReason::RuntimeFault;
-		NativeA8VisibilityCull visibilityCull =
-			NativeA8VisibilityCull::None;
+		NativeA8VisibilityPreflight visibility;
 		UInt32 generation = 0;
 		UInt64 validationToken = 0;
 		UInt32 commandSpanIndex = std::numeric_limits<UInt32>::max();
@@ -1040,12 +1054,17 @@ namespace fonthook::vectorfont
 		const NiTriShape* facade);
 	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload);
-	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
+	void BeginNativeA8VisibilityFrame();
+	void CompleteNativeA8VisibilityPreflight();
+	void EndNativeA8VisibilityFrame();
+	NativeA8VisibilityPreflight EvaluateNativeA8PreflightClipVisibility(
 		const NiTriShape* facade);
-	NativeA8VisibilityCull EvaluateNativeA8PreflightClipVisibility(
+	NativeA8VisibilityPreflight EvaluateNativeA8PreflightClipVisibility(
 		const NiTriShape* facade, const NativeA8ShapePayload& payload);
 	bool HonorNativeA8PreflightClipCull(const NiTriShape* facade,
-		NativeA8VisibilityCull preflightCull);
+		const NativeA8VisibilityPreflight& preflight);
+	bool ReuseNativeA8PreflightClipOverlap(
+		const NativeA8VisibilityPreflight& preflight);
 	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,
 		const NativeA8ShapePayload& payload);
 	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason);

@@ -4774,9 +4774,9 @@ namespace fonthook::vectorfont
 		const bool sortedFrameHit =
 			FindNativeA8SortedFrameEntry(shape, frameEntry);
 		if (sortedFrameHit
-			&& (frameEntry.visibilityCull
+			&& (frameEntry.visibility.cull
 					== NativeA8VisibilityCull::Clip
-				|| frameEntry.visibilityCull
+				|| frameEntry.visibility.cull
 					== NativeA8VisibilityCull::Scissor))
 		{
 			// The sorted-frame clip proof is revalidated against the live
@@ -4785,19 +4785,19 @@ namespace fonthook::vectorfont
 			// singleton texts never arm a packet draw. Any drift revokes the cached
 			// decision and falls open to the ordinary draw path.
 			if (HonorNativeA8PreflightClipCull(shape,
-				frameEntry.visibilityCull))
+				frameEntry.visibility))
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					VisibilityPreflightClipHonored);
 				if (frameEntry.payload)
 				{
 					RecordNativeA8VisibilityCull(
-						frameEntry.visibilityCull, *frameEntry.payload);
+						frameEntry.visibility.cull, *frameEntry.payload);
 				}
 				else
 				{
 					RecordNativeA8VisibilityCull(
-						frameEntry.visibilityCull);
+						frameEntry.visibility.cull);
 				}
 				return;
 			}
@@ -4805,7 +4805,7 @@ namespace fonthook::vectorfont
 				VisibilityPreflightClipRevoked);
 		}
 		if (sortedFrameHit
-			&& frameEntry.visibilityCull
+			&& frameEntry.visibility.cull
 				== NativeA8VisibilityCull::ZeroAlpha
 			&& EvaluateNativeA8SubmissionVisibility(shape)
 				== NativeA8VisibilityCull::ZeroAlpha)
@@ -4827,10 +4827,14 @@ namespace fonthook::vectorfont
 		{
 			NativeA8VisibilityCull visibilityCull =
 				EvaluateNativeA8SubmissionVisibility(shape);
-			if (visibilityCull == NativeA8VisibilityCull::None)
+			const bool reuseOverlap = sortedFrameHit
+				&& ReuseNativeA8PreflightClipOverlap(
+					frameEntry.visibility);
+			if (visibilityCull == NativeA8VisibilityCull::None
+				&& !reuseOverlap)
 			{
-				visibilityCull =
-					EvaluateNativeA8PreflightClipVisibility(shape);
+				visibilityCull = EvaluateNativeA8PreflightClipVisibility(
+					shape).cull;
 			}
 			if (visibilityCull != NativeA8VisibilityCull::None)
 			{
@@ -5029,7 +5033,7 @@ namespace fonthook::vectorfont
 		if (payload)
 		{
 			const bool needsVisibilityCheck = !sortedFrameHit
-				|| frameEntry.visibilityCull
+				|| frameEntry.visibility.cull
 					!= NativeA8VisibilityCull::None;
 			if (needsVisibilityCheck)
 			{

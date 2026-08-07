@@ -75,8 +75,7 @@ namespace fonthook::vectorfont
 			NativeA8ShapePayload* payload = nullptr;
 			NativeA8FallbackReason preflightResult =
 				NativeA8FallbackReason::RuntimeFault;
-			NativeA8VisibilityCull visibilityCull =
-				NativeA8VisibilityCull::None;
+			NativeA8VisibilityPreflight visibility;
 			UInt32 generation = 0;
 			UInt64 validationToken = 0;
 			UInt32 commandSpanIndex = kInvalidNativeA8CommandIndex;
@@ -119,7 +118,7 @@ namespace fonthook::vectorfont
 			std::vector<A8ShapeMetadataPtr> metadataOwners;
 			std::vector<NiTriShape*> metadataAcquireShapes;
 			std::vector<A8ShapeMetadataPtr> metadataAcquireOwners;
-			std::vector<NativeA8VisibilityCull> preflightCulls;
+			std::vector<NativeA8VisibilityPreflight> visibilityPreflights;
 			std::vector<UInt32> metadataLookup;
 			std::vector<UInt32> sortedOccurrenceCounts;
 			std::vector<UInt32> tieSortedLookup;
@@ -373,8 +372,8 @@ namespace fonthook::vectorfont
 					* sizeof(NiTriShape*)
 				+ scratch.metadataAcquireOwners.capacity()
 					* sizeof(A8ShapeMetadataPtr)
-				+ scratch.preflightCulls.capacity()
-					* sizeof(NativeA8VisibilityCull)
+				+ scratch.visibilityPreflights.capacity()
+					* sizeof(NativeA8VisibilityPreflight)
 				+ scratch.metadataLookup.capacity() * sizeof(UInt32)
 				+ scratch.sortedOccurrenceCounts.capacity() * sizeof(UInt32)
 				+ scratch.tieSortedLookup.capacity() * sizeof(UInt32)
@@ -396,12 +395,13 @@ namespace fonthook::vectorfont
 
 		void ResetSortedPrepScratch(SortedPayloadScratch& scratch)
 		{
+			EndNativeA8VisibilityFrame();
 			scratch.frameAccumulator = nullptr;
 			scratch.metadataShapes.clear();
 			scratch.metadataOwners.clear();
 			scratch.metadataAcquireShapes.clear();
 			scratch.metadataAcquireOwners.clear();
-			scratch.preflightCulls.clear();
+			scratch.visibilityPreflights.clear();
 			scratch.sortedOccurrenceCounts.clear();
 			scratch.tieRuns.clear();
 			scratch.frameEntries.clear();
@@ -411,6 +411,7 @@ namespace fonthook::vectorfont
 
 		void ClearSortedFrame(SortedPayloadScratch& scratch)
 		{
+			EndNativeA8VisibilityFrame();
 			FlushThinRegistrationDiagnostics();
 			EndNativeA8FrameCommandBuffer();
 			scratch.active = false;
@@ -420,7 +421,7 @@ namespace fonthook::vectorfont
 			scratch.metadataOwners.clear();
 			scratch.metadataAcquireShapes.clear();
 			scratch.metadataAcquireOwners.clear();
-			scratch.preflightCulls.clear();
+			scratch.visibilityPreflights.clear();
 			scratch.sortedOccurrenceCounts.clear();
 			scratch.tieSortedLookup.clear();
 			scratch.tieSortedOccurrenceCursor.clear();
@@ -447,10 +448,10 @@ namespace fonthook::vectorfont
 				std::vector<A8ShapeMetadataPtr>().swap(
 					scratch.metadataAcquireOwners);
 			}
-			if (scratch.preflightCulls.capacity() > 8192)
+			if (scratch.visibilityPreflights.capacity() > 8192)
 			{
-				std::vector<NativeA8VisibilityCull>().swap(
-					scratch.preflightCulls);
+				std::vector<NativeA8VisibilityPreflight>().swap(
+					scratch.visibilityPreflights);
 			}
 			if (scratch.metadataLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.metadataLookup);
@@ -496,8 +497,8 @@ namespace fonthook::vectorfont
 					scratch.metadataAcquireShapes);
 				std::vector<A8ShapeMetadataPtr>().swap(
 					scratch.metadataAcquireOwners);
-				std::vector<NativeA8VisibilityCull>().swap(
-					scratch.preflightCulls);
+				std::vector<NativeA8VisibilityPreflight>().swap(
+					scratch.visibilityPreflights);
 				std::vector<UInt32>().swap(scratch.metadataLookup);
 				std::vector<UInt32>().swap(scratch.sortedOccurrenceCounts);
 				std::vector<UInt32>().swap(scratch.tieSortedLookup);
@@ -1448,8 +1449,9 @@ namespace fonthook::vectorfont
 					FreeTypePerfScope visibilityPrepPerf(
 						FreeTypePerfPhase::FramePrepVisibility, true,
 						&prepTailSample.visibilityTicks);
-					scratch.preflightCulls.assign(scratch.metadataShapes.size(),
-						NativeA8VisibilityCull::None);
+					BeginNativeA8VisibilityFrame();
+					scratch.visibilityPreflights.assign(
+						scratch.metadataShapes.size(), {});
 					scratch.metadataAcquireShapes.clear();
 					scratch.metadataAcquireShapes.reserve(
 						scratch.metadataShapes.size());
@@ -1457,14 +1459,16 @@ namespace fonthook::vectorfont
 						index < scratch.metadataShapes.size(); ++index)
 					{
 						NiTriShape* facade = scratch.metadataShapes[index];
-						NativeA8VisibilityCull cull =
+						NativeA8VisibilityPreflight visibility;
+						visibility.cull =
 							EvaluateNativeA8SubmissionVisibility(facade);
-						if (cull == NativeA8VisibilityCull::None)
+						if (visibility.cull == NativeA8VisibilityCull::None)
 						{
-							cull = EvaluateNativeA8PreflightClipVisibility(facade);
+							visibility =
+								EvaluateNativeA8PreflightClipVisibility(facade);
 						}
-						scratch.preflightCulls[index] = cull;
-						if (cull == NativeA8VisibilityCull::None)
+						scratch.visibilityPreflights[index] = visibility;
+						if (visibility.cull == NativeA8VisibilityCull::None)
 							scratch.metadataAcquireShapes.push_back(facade);
 						else
 						{
@@ -1474,6 +1478,7 @@ namespace fonthook::vectorfont
 								AccumulatorMetadataCullSkipped);
 						}
 					}
+					CompleteNativeA8VisibilityPreflight();
 					scratch.metadataOwners.assign(
 						scratch.metadataShapes.size(), {});
 				}
@@ -1579,18 +1584,18 @@ namespace fonthook::vectorfont
 
 					SortedFrameEntry entry;
 					entry.facade = facade;
-					entry.visibilityCull = candidateIndex
-						< scratch.preflightCulls.size()
-						? scratch.preflightCulls[candidateIndex]
-						: NativeA8VisibilityCull::None;
-					if (entry.visibilityCull == NativeA8VisibilityCull::None)
+					entry.visibility = candidateIndex
+						< scratch.visibilityPreflights.size()
+						? scratch.visibilityPreflights[candidateIndex]
+						: NativeA8VisibilityPreflight{};
+					if (entry.visibility.cull == NativeA8VisibilityCull::None)
 						entry.metadata = FindBatchedMetadata(scratch, facade);
 					entry.generation = generation;
 					SingletonFacadeState* singletonFacade =
 						nullptr;
 					bool topologyReady = false;
 					if (!entry.metadata
-						&& entry.visibilityCull == NativeA8VisibilityCull::None)
+						&& entry.visibility.cull == NativeA8VisibilityCull::None)
 					{
 						if (g_bEnableFreeTypeFontRenderingLog)
 						{
@@ -1616,7 +1621,7 @@ namespace fonthook::vectorfont
 								== frameValidationToken;
 					}
 
-					if (entry.visibilityCull != NativeA8VisibilityCull::None)
+					if (entry.visibility.cull != NativeA8VisibilityCull::None)
 					{
 						// Dispatch revalidates the volatile cull inputs.  A revoked proof
 						// falls back to a one-shape metadata lookup instead of making every
@@ -1766,7 +1771,7 @@ namespace fonthook::vectorfont
 							if (!entry.metadata || !entry.payload
 								|| entry.preflightResult
 									!= NativeA8FallbackReason::None
-								|| entry.visibilityCull
+								|| entry.visibility.cull
 									!= NativeA8VisibilityCull::None
 								|| !entry.uniqueOccurrence)
 							{
@@ -2022,7 +2027,7 @@ namespace fonthook::vectorfont
 		view.metadata = entry.metadata;
 		view.payload = entry.payload;
 		view.preflightResult = entry.preflightResult;
-		view.visibilityCull = entry.visibilityCull;
+		view.visibility = entry.visibility;
 		view.generation = entry.generation;
 		view.validationToken = entry.validationToken;
 		view.commandSpanIndex = entry.commandSpanIndex;
