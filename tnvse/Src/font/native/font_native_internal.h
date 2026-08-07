@@ -180,6 +180,8 @@ namespace fonthook::vectorfont
 	static_assert(kNativeA8PixelConstantLastRegister <= 223);
 	static_assert(kNativeA8VertexAaConstantRegister <= 255);
 	static_assert(kNativeA8StockLayoutGlyphConstantRegister <= 255);
+	static_assert(kNativeA8StockLayoutGlyphConstantRegister
+		== kNativeA8VertexAaConstantRegister + 1u);
 
 	enum class NativeA8ShaderClass : UInt8
 	{

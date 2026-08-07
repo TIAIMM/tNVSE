@@ -156,9 +156,9 @@ namespace fonthook::vectorfont
 		{
 			D3DVIEWPORT9 viewport = {};
 			float rasterScale = 0.0f;
-			UInt32 constantRegister = 0;
 			bool viewportReady = false;
-			bool constantReady = false;
+			bool aaConstantReady = false;
+			bool stockGlyphConstantReady = false;
 		};
 
 		struct NativeSortedShaderBatch
@@ -655,9 +655,7 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			if (!forcePublish && cache && cache->constantReady
-				&& cache->constantRegister
-					== kNativeA8VertexAaConstantRegister
+			if (!forcePublish && cache && cache->aaConstantReady
 				&& std::memcmp(&cache->rasterScale, &rasterScale,
 					sizeof(rasterScale)) == 0)
 			{
@@ -684,12 +682,81 @@ namespace fonthook::vectorfont
 			if (cache)
 			{
 				cache->rasterScale = rasterScale;
-				cache->constantRegister =
-					kNativeA8VertexAaConstantRegister;
-				cache->constantReady = true;
+				cache->aaConstantReady = true;
 			}
 			if (published)
 				*published = true;
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VertexAaConstantSet);
+			return D3D_OK;
+		}
+
+		HRESULT PublishNativeStockLayoutVertexConstants(
+			IDirect3DDevice9* device, float rasterScale, float spread,
+			UInt8 layerMask, NativeVertexAaState* cache,
+			const char*& operation)
+		{
+			operation = "none";
+			if (!device || !std::isfinite(rasterScale)
+				|| rasterScale <= 0.0f || !std::isfinite(spread)
+				|| spread <= 0.0f
+				|| layerMask < kStaticCompositeLayerMaskFirst
+				|| layerMask >= kStaticCompositeLayerMaskFirst
+					+ kStaticCompositeLayerMaskCount)
+			{
+				operation = "resolve-stock-layout-vertex-profile";
+				return D3DERR_INVALIDCALL;
+			}
+
+			D3DVIEWPORT9 viewport = {};
+			if (cache && cache->viewportReady)
+			{
+				viewport = cache->viewport;
+			}
+			else
+			{
+				if (!ResolveEngineViewport(device, viewport))
+				{
+					operation =
+						"resolve-engine-viewport(stock-layout-vertex)";
+					return D3DERR_INVALIDCALL;
+				}
+				if (cache)
+				{
+					cache->viewport = viewport;
+					cache->viewportReady = true;
+				}
+			}
+
+			// c208 and c209 are deliberately adjacent: publish the analytic-AA
+			// profile and immutable Stock-layout glyph profile in one driver call.
+			// The cache becomes ready only after the complete two-register write.
+			const std::array<float, 8> vertexConstants = {{
+				static_cast<float>(viewport.Width) * 0.5f,
+				static_cast<float>(viewport.Height) * 0.5f,
+				rasterScale, 1.0f,
+				spread, 1.0f, static_cast<float>(layerMask), 0.0f
+			}};
+			if (cache)
+			{
+				cache->aaConstantReady = false;
+				cache->stockGlyphConstantReady = false;
+			}
+			const HRESULT constantResult = device->SetVertexShaderConstantF(
+				kNativeA8VertexAaConstantRegister,
+				vertexConstants.data(), 2);
+			if (FAILED(constantResult))
+			{
+				operation =
+					"SetVertexShaderConstantF(c208-c209-stock-layout)";
+				return constantResult;
+			}
+			if (cache)
+			{
+				cache->rasterScale = rasterScale;
+				cache->aaConstantReady = true;
+				cache->stockGlyphConstantReady = true;
+			}
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VertexAaConstantSet);
 			return D3D_OK;
@@ -843,19 +910,16 @@ namespace fonthook::vectorfont
 				profile->privateRegisterCount;
 
 			HRESULT constantsResult = D3D_OK;
-			const UInt32 targetVertexConstantRegister =
-				profile->key.stockLayoutSdf
-					? kNativeA8StockLayoutGlyphConstantRegister
-					: kNativeA8VertexAaConstantRegister;
-			if (cachedProfile == profile && vertexAaCache
-				&& vertexAaCache->constantReady
-				&& vertexAaCache->constantRegister
-					== targetVertexConstantRegister)
+			const bool vertexConstantsReady = vertexAaCache
+				&& vertexAaCache->aaConstantReady
+				&& (!profile->key.stockLayoutSdf
+					|| vertexAaCache->stockGlyphConstantReady);
+			if (cachedProfile == profile && vertexConstantsReady)
 			{
 				// The profile is process-lifetime immutable. Exact identity proves
-				// its c176-c183 block plus the applicable c208 or c209 vertex
-				// constant are unchanged; traversal invalidation separately protects
-				// viewport/device state.
+				// its c176-c183 block plus c208 and, for Stock-layout, c209 are
+				// unchanged; traversal invalidation separately protects viewport and
+				// device state.
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::VertexAaConstantReuse);
 				RecordFreeTypePerf(
@@ -863,30 +927,18 @@ namespace fonthook::vectorfont
 			}
 			else if (profile->key.stockLayoutSdf)
 			{
-				const std::array<float, 4> glyphParams = {{
-					profile->constants[6], 1.0f,
-					static_cast<float>(
-						profile->key.staticCompositeLayerMask), 0.0f
-				}};
-				const HRESULT glyphResult = device->SetVertexShaderConstantF(
-					kNativeA8StockLayoutGlyphConstantRegister,
-					glyphParams.data(), 1);
-				if (FAILED(glyphResult))
+				const char* vertexOperation = "none";
+				const HRESULT vertexResult =
+					PublishNativeStockLayoutVertexConstants(device,
+						profile->constants[7], profile->constants[6],
+						profile->key.staticCompositeLayerMask,
+						vertexAaCache, vertexOperation);
+				if (FAILED(vertexResult))
 				{
-					MarkGenerationFault(generation,
-						"SetVertexShaderConstantF(c209-stock-layout)",
-						glyphResult);
+					MarkGenerationFault(
+						generation, vertexOperation, vertexResult);
 					return;
 				}
-				if (vertexAaCache)
-				{
-					vertexAaCache->rasterScale = profile->constants[6];
-					vertexAaCache->constantRegister =
-						kNativeA8StockLayoutGlyphConstantRegister;
-					vertexAaCache->constantReady = true;
-				}
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::VertexAaConstantSet);
 			}
 			else
 			{
@@ -1069,9 +1121,8 @@ namespace fonthook::vectorfont
 				&& sortedBatch.packetProfile == profile
 				&& sortedBatch.device == device
 				&& sortedBatch.generation == generation->id
-				&& sortedBatch.vertexAa.constantReady
-				&& sortedBatch.vertexAa.constantRegister
-					== kNativeA8StockLayoutGlyphConstantRegister)
+				&& sortedBatch.vertexAa.aaConstantReady
+				&& sortedBatch.vertexAa.stockGlyphConstantReady)
 			{
 				witness.publishedToken = witness.token;
 				witness.publishedProfile = profile;
@@ -1856,10 +1907,11 @@ namespace fonthook::vectorfont
 				}
 			}
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: stock-layout SDF generation status=%s ready=%u stride=%u vertexConstant=c%u declaration=%p compatiblePrevious=%u deviceEpoch=%u",
+				"tnvse_freetype_native: stock-layout SDF generation status=%s ready=%u stride=%u vertexConstants=c%u-c%u declaration=%p compatiblePrevious=%u deviceEpoch=%u",
 				stockLayoutStatus,
 				generation->stockLayoutReady ? 1u : 0u,
 				kStockLayoutVertexStride,
+				kNativeA8VertexAaConstantRegister,
 				kNativeA8StockLayoutGlyphConstantRegister,
 				generation->stockLayoutD3DDeclaration,
 				static_cast<UInt32>(
@@ -1912,6 +1964,7 @@ namespace fonthook::vectorfont
 				const UInt32 deviceEpoch = s_deviceEpoch.fetch_add(
 					1u, std::memory_order_acq_rel) + 1u;
 				s_resetInProgress.store(true, std::memory_order_release);
+				ResetFreeTypeGpuTiming();
 				InvalidateNativeA8RingResources(
 					NativeA8FallbackReason::DeviceReset);
 				NativeShaderGeneration* current = s_publishedGeneration.load(
@@ -2029,7 +2082,7 @@ namespace fonthook::vectorfont
 					== DistanceFieldMethod::Mtsdf
 				? "lazy-36" : "disabled";
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s constantAbi=stock-ps-c0-vs-c0-c4-private-ps-c176-c183-vs-c208 privateUpload=prefix-2-4-8 stockC0=map-owned stockTileCarry=verified-low-map vertexAa=analytic-c208-stock-map-intact vertexFormat=float4 vertexStride=%u declTypes=0x%08X maxVertexConstants=%u",
+			"tnvse_freetype_native: published complete TileShader generation=%u device=%p route=%s distanceField=%s mtsdfCompositeProfiles=%s constantAbi=stock-ps-c0-vs-c0-c4-private-ps-c176-c183-vs-c208-c209 privateUpload=prefix-2-4-8 stockC0=map-owned stockTileCarry=verified-low-map vertexAa=analytic-c208-all-layouts stockGlyph=c209 vertexFormat=float4 vertexStride=%u declTypes=0x%08X maxVertexConstants=%u",
 			candidate->id, candidate->device,
 			UsesBakedEffectRoute()
 				? "argb-composite" : "distance-field",
@@ -2262,7 +2315,8 @@ namespace fonthook::vectorfont
 				batch.vertexAa = {};
 			}
 		}
-		if (batch.packetProfile || batch.vertexAa.constantReady)
+		if (batch.packetProfile || batch.vertexAa.aaConstantReady
+			|| batch.vertexAa.stockGlyphConstantReady)
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
@@ -2428,9 +2482,8 @@ namespace fonthook::vectorfont
 			&& batch.depth && batch.packetProfile == publishedProfile
 			&& batch.device == witness.publishedDevice
 			&& batch.generation == witness.publishedGeneration
-			&& batch.vertexAa.constantReady
-			&& batch.vertexAa.constantRegister
-				== kNativeA8StockLayoutGlyphConstantRegister
+			&& batch.vertexAa.aaConstantReady
+			&& batch.vertexAa.stockGlyphConstantReady
 			&& IsNativeA8ShaderGenerationCurrent(batch.generation);
 		witness = {};
 		if (!witnessed)
@@ -3127,7 +3180,7 @@ namespace fonthook::vectorfont
 				&& sortedBatch.packetProfile == profile
 				&& sortedBatch.packetRegisterCount
 					>= profile->privateRegisterCount
-				&& sortedBatch.vertexAa.constantReady
+				&& sortedBatch.vertexAa.aaConstantReady
 				&& sortedBatch.samplerReady
 				&& IsNativeMipFilterReady(renderState);
 			const bool publishPacketState = publishPrograms

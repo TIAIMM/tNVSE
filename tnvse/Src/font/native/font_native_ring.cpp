@@ -2160,6 +2160,7 @@ namespace fonthook::vectorfont
 			return;
 		}
 
+		const SInt64 inputScanStart = BeginFreeTypePerfSample();
 		UInt32 maximumVertices = 0;
 		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
 		{
@@ -2175,18 +2176,31 @@ namespace fonthook::vectorfont
 				continue;
 			maximumVertices = std::max(maximumVertices, vertexCount);
 		}
+		EndFreeTypePerfSample(
+			FreeTypePerfPhase::FramePrepRingInputScan, inputScanStart);
 		if (!maximumVertices)
 			return;
 
+		const SInt64 resourceStart = BeginFreeTypePerfSample();
 		NativeA8RingState& state = RingState();
 		std::lock_guard<std::mutex> lock(state.mutex);
 		const char* operation = "sorted-frame-resource";
 		HRESULT result = D3DERR_DEVICELOST;
-		if (!EnsureRingResourcesLocked(state, generation, maximumVertices,
-			operation, result))
+		const bool resourcesReady = EnsureRingResourcesLocked(
+			state, generation, maximumVertices, operation, result);
+		EndFreeTypePerfSample(
+			FreeTypePerfPhase::FramePrepRingResource, resourceStart);
+		if (!resourcesReady)
 		{
 			return;
 		}
+		const auto publishLease = [&](bool allStatic = false)
+		{
+			FreeTypePerfScope publishPerf(
+				FreeTypePerfPhase::FramePrepRingLeasePublish);
+			return PublishSortedRingLeaseLocked(
+				state, payloadTemplates, generation, allStatic);
+		};
 		auto isValidPayload = [](
 			const NativeA8PayloadTemplatePtr& payloadTemplate)
 		{
@@ -2204,6 +2218,7 @@ namespace fonthook::vectorfont
 			std::memory_order_relaxed);
 		if (state.staticVertexBuffer)
 		{
+			const SInt64 staticScanStart = BeginFreeTypePerfSample();
 			std::vector<NativeA8PayloadTemplatePtr> selected;
 			selected.reserve(std::min<size_t>(payloadTemplates.size(),
 				kStaticPromotionPayloadLimit));
@@ -2328,6 +2343,9 @@ namespace fonthook::vectorfont
 				++selectedPayloads;
 			}
 			selected.resize(selectedPayloads);
+			EndFreeTypePerfSample(
+				FreeTypePerfPhase::FramePrepRingStaticScan,
+				staticScanStart);
 
 			if (selectedPayloads && selectedVertices)
 			{
@@ -2338,104 +2356,123 @@ namespace fonthook::vectorfont
 				const UINT byteCount =
 					selectedVertices * sizeof(NativeA8GpuVertex);
 				void* destination = nullptr;
-				result = state.staticVertexBuffer->Lock(byteOffset, byteCount,
-					&destination, 0);
+				{
+					FreeTypePerfScope staticLockPerf(
+						FreeTypePerfPhase::FramePrepRingStaticLock);
+					result = state.staticVertexBuffer->Lock(
+						byteOffset, byteCount, &destination, 0);
+				}
 				if (SUCCEEDED(result) && destination)
 				{
 					UInt32 copiedVertices = 0;
-					for (const NativeA8PayloadTemplatePtr& payloadTemplate : selected)
 					{
-						const UInt32 vertexCount = static_cast<UInt32>(
-							payloadTemplate->gpuVertices.size());
-						std::memcpy(static_cast<UInt8*>(destination)
-								+ copiedVertices
-									* sizeof(NativeA8GpuVertex),
-							payloadTemplate->gpuVertices.data(),
-							vertexCount * sizeof(NativeA8GpuVertex));
-						copiedVertices += vertexCount;
-					}
-					result = state.staticVertexBuffer->Unlock();
-					if (copiedVertices == selectedVertices
-						&& SUCCEEDED(result))
-					{
-						AdvanceDiagnosticSerial(state.staticWriteSerial);
-						const UInt32 resourceSerial =
-							state.resourceSerial.load(
-								std::memory_order_relaxed);
-						UInt32 mappedVertices = 0;
+						FreeTypePerfScope staticCopyPerf(
+							FreeTypePerfPhase::FramePrepRingStaticCopy);
 						for (const NativeA8PayloadTemplatePtr& payloadTemplate
 							: selected)
 						{
 							const UInt32 vertexCount = static_cast<UInt32>(
 								payloadTemplate->gpuVertices.size());
-							const UInt32 baseVertex =
-								state.nextStaticVertex + mappedVertices;
-							state.staticPayloads[payloadTemplate.get()] = {
-								payloadTemplate, baseVertex, vertexCount,
-								state.staticWriteSerial,
-								HashDiagnosticPayload(*payloadTemplate) };
-							NativeA8PayloadResidencyCache& residency =
-								payloadTemplate->residency;
-							residency.staticResourceSerial = resourceSerial;
-							residency.staticBaseVertex = baseVertex;
-							residency.staticVertexCount = vertexCount;
-							residency.staticLastUsedFrame = frame;
-							state.staticCandidates.erase(payloadTemplate.get());
-							if (s_ringThread.staticCandidate.key
-								== payloadTemplate.get())
-							{
-								s_ringThread.staticCandidate = {};
-							}
-							mappedVertices += vertexCount;
-						}
-						state.nextStaticVertex += selectedVertices;
-						residentStaticPayloads += selectedPayloads;
-						CommitStaticPromotionBudget(state, byteCount,
-							static_cast<UInt32>(selectedPayloads));
-						RecordFreeTypePerf(
-							FreeTypePerfCounter::StaticVertexUpload);
-						RecordFreeTypePerf(
-							FreeTypePerfCounter::StaticVertexUploadBytes,
-							byteCount);
-						RecordFreeTypePerf(
-							FreeTypePerfCounter::SortedStaticBatch);
-						RecordFreeTypePerf(
-							FreeTypePerfCounter::SortedStaticPayload,
-							static_cast<UInt64>(selectedPayloads));
-						RecordFreeTypePerf(
-							FreeTypePerfCounter::SortedStaticBytes,
-							byteCount);
-						if (g_bEnableFreeTypeFontRenderingLog)
-						{
-							FreeTypeFontDebugLog(
-								"tnvse_freetype_native: sorted static batch generation=%u payloads=%u vertices=%u bytes=%u residentVertices=%u capacity=%u",
-								generation,
-								static_cast<UInt32>(selectedPayloads),
-								selectedVertices, byteCount,
-								state.nextStaticVertex,
-								state.staticVertexCapacity);
+							std::memcpy(static_cast<UInt8*>(destination)
+									+ copiedVertices
+										* sizeof(NativeA8GpuVertex),
+								payloadTemplate->gpuVertices.data(),
+								vertexCount * sizeof(NativeA8GpuVertex));
+							copiedVertices += vertexCount;
 						}
 					}
-					else
 					{
-						// The interval was written but was not published. Reserve it
-						// so no later append can overwrite geometry that might have
-						// been partially accepted by the driver.
-						state.nextStaticVertex += selectedVertices;
-						CommitStaticPromotionBudget(state, byteCount,
-							static_cast<UInt32>(selectedPayloads));
-						for (const NativeA8PayloadTemplatePtr& payloadTemplate
-							: selected)
+						FreeTypePerfScope staticUnlockPerf(
+							FreeTypePerfPhase::FramePrepRingStaticUnlock);
+						result = state.staticVertexBuffer->Unlock();
+					}
+					{
+						FreeTypePerfScope staticCommitPerf(
+							FreeTypePerfPhase::FramePrepRingStaticCommit);
+						if (copiedVertices == selectedVertices
+							&& SUCCEEDED(result))
 						{
-							deferSelectedCandidate(payloadTemplate);
+							AdvanceDiagnosticSerial(state.staticWriteSerial);
+							const UInt32 resourceSerial =
+								state.resourceSerial.load(
+									std::memory_order_relaxed);
+							UInt32 mappedVertices = 0;
+							for (const NativeA8PayloadTemplatePtr& payloadTemplate
+								: selected)
+							{
+								const UInt32 vertexCount = static_cast<UInt32>(
+									payloadTemplate->gpuVertices.size());
+								const UInt32 baseVertex =
+									state.nextStaticVertex + mappedVertices;
+								state.staticPayloads[payloadTemplate.get()] = {
+									payloadTemplate, baseVertex, vertexCount,
+									state.staticWriteSerial,
+									HashDiagnosticPayload(*payloadTemplate) };
+								NativeA8PayloadResidencyCache& residency =
+									payloadTemplate->residency;
+								residency.staticResourceSerial = resourceSerial;
+								residency.staticBaseVertex = baseVertex;
+								residency.staticVertexCount = vertexCount;
+								residency.staticLastUsedFrame = frame;
+								state.staticCandidates.erase(payloadTemplate.get());
+								if (s_ringThread.staticCandidate.key
+									== payloadTemplate.get())
+								{
+									s_ringThread.staticCandidate = {};
+								}
+								mappedVertices += vertexCount;
+							}
+							state.nextStaticVertex += selectedVertices;
+							residentStaticPayloads += selectedPayloads;
+							CommitStaticPromotionBudget(state, byteCount,
+								static_cast<UInt32>(selectedPayloads));
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::StaticVertexUpload);
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::StaticVertexUploadBytes,
+								byteCount);
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::SortedStaticBatch);
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::SortedStaticPayload,
+								static_cast<UInt64>(selectedPayloads));
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::SortedStaticBytes,
+								byteCount);
+							if (g_bEnableFreeTypeFontRenderingLog)
+							{
+								FreeTypeFontDebugLog(
+									"tnvse_freetype_native: sorted static batch generation=%u payloads=%u vertices=%u bytes=%u residentVertices=%u capacity=%u",
+									generation,
+									static_cast<UInt32>(selectedPayloads),
+									selectedVertices, byteCount,
+									state.nextStaticVertex,
+									state.staticVertexCapacity);
+							}
 						}
-						DeferStaticPromotionsLocked(state, frame);
-						RecordFreeTypePerf(
-							FreeTypePerfCounter::StaticVertexPromotionFailed);
+						else
+						{
+							// The interval was written but was not published. Reserve it
+							// so no later append can overwrite geometry that might have
+							// been partially accepted by the driver.
+							state.nextStaticVertex += selectedVertices;
+							CommitStaticPromotionBudget(state, byteCount,
+								static_cast<UInt32>(selectedPayloads));
+							for (const NativeA8PayloadTemplatePtr& payloadTemplate
+								: selected)
+							{
+								deferSelectedCandidate(payloadTemplate);
+							}
+							DeferStaticPromotionsLocked(state, frame);
+							RecordFreeTypePerf(
+								FreeTypePerfCounter::StaticVertexPromotionFailed);
+						}
 					}
 				}
 				else
 				{
+					FreeTypePerfScope staticCommitPerf(
+						FreeTypePerfPhase::FramePrepRingStaticCommit);
 					for (const NativeA8PayloadTemplatePtr& payloadTemplate
 						: selected)
 					{
@@ -2451,8 +2488,7 @@ namespace fonthook::vectorfont
 			&& residentStaticPayloads == validatedStaticPayloads
 			&& state.resourceSerial.load(std::memory_order_relaxed)
 				== staticScanResourceSerial
-			&& PublishSortedRingLeaseLocked(
-				state, payloadTemplates, generation, true))
+			&& publishLease(true))
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::SortedAllStaticFastExit);
@@ -2462,6 +2498,7 @@ namespace fonthook::vectorfont
 			return;
 		}
 
+		const SInt64 dynamicResolveStart = BeginFreeTypePerfSample();
 		RefreshRingCpuMemoryLocked(state);
 
 		// Resolve existing locations first. If an append cannot fit, rebatch every
@@ -2495,8 +2532,10 @@ namespace fonthook::vectorfont
 		}
 		if (!missingDynamicVertices)
 		{
-			PublishSortedRingLeaseLocked(state, payloadTemplates,
-				generation);
+			EndFreeTypePerfSample(
+				FreeTypePerfPhase::FramePrepRingDynamicResolve,
+				dynamicResolveStart);
+			publishLease();
 			return;
 		}
 
@@ -2511,11 +2550,19 @@ namespace fonthook::vectorfont
 		if (!uploadVertices64 || uploadVertices64 > state.vertexCapacity
 			|| uploadVertices64 > std::numeric_limits<UInt32>::max())
 		{
+			EndFreeTypePerfSample(
+				FreeTypePerfPhase::FramePrepRingDynamicResolve,
+				dynamicResolveStart);
 			return;
 		}
 		if (discard
 			&& state.activeSubmissions.load(std::memory_order_acquire))
+		{
+			EndFreeTypePerfSample(
+				FreeTypePerfPhase::FramePrepRingDynamicResolve,
+				dynamicResolveStart);
 			return;
+		}
 
 		UInt32 startVertex = state.nextVertex;
 		DWORD lockFlags = D3DLOCK_NOOVERWRITE;
@@ -2538,78 +2585,93 @@ namespace fonthook::vectorfont
 			startVertex * sizeof(NativeA8GpuVertex);
 		const UINT byteCount =
 			uploadVertices * sizeof(NativeA8GpuVertex);
+		EndFreeTypePerfSample(
+			FreeTypePerfPhase::FramePrepRingDynamicResolve,
+			dynamicResolveStart);
 		void* destination = nullptr;
-		result = state.vertexBuffer->Lock(byteOffset, byteCount,
-			&destination, lockFlags);
+		{
+			FreeTypePerfScope dynamicLockPerf(
+				FreeTypePerfPhase::FramePrepRingDynamicLock);
+			result = state.vertexBuffer->Lock(
+				byteOffset, byteCount, &destination, lockFlags);
+		}
 		if (FAILED(result) || !destination)
 			return;
 
 		UInt32 copiedVertices = 0;
-		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
 		{
-			if (!isValidPayload(payloadTemplate))
-				continue;
-			const UInt32 vertexCount = static_cast<UInt32>(
-				payloadTemplate->gpuVertices.size());
-			if (HasDirectStaticPayloadLocked(state, *payloadTemplate,
-					vertexCount)
-				|| (!discard && HasDirectUploadedPayloadLocked(state,
-					*payloadTemplate, vertexCount)))
+			FreeTypePerfScope dynamicCopyPerf(
+				FreeTypePerfPhase::FramePrepRingDynamicCopy);
+			for (const NativeA8PayloadTemplatePtr& payloadTemplate
+				: payloadTemplates)
 			{
-				continue;
+				if (!isValidPayload(payloadTemplate))
+					continue;
+				const UInt32 vertexCount = static_cast<UInt32>(
+					payloadTemplate->gpuVertices.size());
+				if (HasDirectStaticPayloadLocked(state, *payloadTemplate,
+						vertexCount)
+					|| (!discard && HasDirectUploadedPayloadLocked(state,
+						*payloadTemplate, vertexCount)))
+				{
+					continue;
+				}
+				std::memcpy(static_cast<UInt8*>(destination)
+						+ copiedVertices * sizeof(NativeA8GpuVertex),
+					payloadTemplate->gpuVertices.data(),
+					vertexCount * sizeof(NativeA8GpuVertex));
+				copiedVertices += vertexCount;
 			}
-			std::memcpy(static_cast<UInt8*>(destination)
-					+ copiedVertices * sizeof(NativeA8GpuVertex),
-				payloadTemplate->gpuVertices.data(),
-				vertexCount * sizeof(NativeA8GpuVertex));
-			copiedVertices += vertexCount;
 		}
-		result = state.vertexBuffer->Unlock();
+		{
+			FreeTypePerfScope dynamicUnlockPerf(
+				FreeTypePerfPhase::FramePrepRingDynamicUnlock);
+			result = state.vertexBuffer->Unlock();
+		}
 		if (copiedVertices != uploadVertices || FAILED(result))
 			return;
 		AdvanceDiagnosticSerial(state.dynamicWriteSerial);
 
 		UInt32 mappedVertices = 0;
-		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
 		{
-			if (!isValidPayload(payloadTemplate))
-				continue;
-			const UInt32 vertexCount = static_cast<UInt32>(
-				payloadTemplate->gpuVertices.size());
-			if (HasDirectStaticPayloadLocked(state, *payloadTemplate,
-					vertexCount)
-				|| (!discard && HasDirectUploadedPayloadLocked(state,
-					*payloadTemplate, vertexCount)))
+			FreeTypePerfScope dynamicCommitPerf(
+				FreeTypePerfPhase::FramePrepRingDynamicCommit);
+			for (const NativeA8PayloadTemplatePtr& payloadTemplate
+				: payloadTemplates)
 			{
-				continue;
+				if (!isValidPayload(payloadTemplate))
+					continue;
+				const UInt32 vertexCount = static_cast<UInt32>(
+					payloadTemplate->gpuVertices.size());
+				if (HasDirectStaticPayloadLocked(state, *payloadTemplate,
+						vertexCount)
+					|| (!discard && HasDirectUploadedPayloadLocked(state,
+						*payloadTemplate, vertexCount)))
+				{
+					continue;
+				}
+				PublishUploadedPayloadLocked(state, payloadTemplate,
+					startVertex + mappedVertices, vertexCount);
+				mappedVertices += vertexCount;
 			}
-			PublishUploadedPayloadLocked(state, payloadTemplate,
-				startVertex + mappedVertices, vertexCount);
-			mappedVertices += vertexCount;
-		}
-		if (mappedVertices != uploadVertices)
-		{
-			// Published ranges are valid, but the complete written interval must
-			// remain reserved before falling back to per-shape preparation.
+
+			// Even a partially published written interval must remain reserved so
+			// the per-shape fallback cannot overwrite data accepted by the driver.
 			state.nextVertex = startVertex + uploadVertices;
 			RefreshRingCpuMemoryLocked(state);
-			PublishSortedRingLeaseLocked(state, payloadTemplates,
-				generation);
-			return;
+			if (mappedVertices == uploadVertices)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::DynamicVertexUpload);
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::DynamicVertexUploadBytes, byteCount);
+				RecordFreeTypePerf(FreeTypePerfCounter::SortedDynamicBatch);
+				RecordFreeTypePerf(FreeTypePerfCounter::SortedDynamicPayload,
+					static_cast<UInt64>(uploadPayloads));
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::SortedDynamicBytes, byteCount);
+			}
 		}
-
-		state.nextVertex = startVertex + uploadVertices;
-		RefreshRingCpuMemoryLocked(state);
-		RecordFreeTypePerf(FreeTypePerfCounter::DynamicVertexUpload);
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::DynamicVertexUploadBytes, byteCount);
-		RecordFreeTypePerf(FreeTypePerfCounter::SortedDynamicBatch);
-		RecordFreeTypePerf(FreeTypePerfCounter::SortedDynamicPayload,
-			static_cast<UInt64>(uploadPayloads));
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::SortedDynamicBytes, byteCount);
-		PublishSortedRingLeaseLocked(state, payloadTemplates,
-			generation);
+		publishLease();
 	}
 
 	void EndNativeA8DirectShapeSubmission(

@@ -1860,6 +1860,11 @@ namespace fonthook::vectorfont
 				{
 					FreeTypePerfScope stockRenderPerf(
 						FreeTypePerfPhase::FrameRouteStockRender);
+					NiDX9Renderer* renderer = hasPreparedPayloads
+						? NiDX9Renderer::GetSingleton() : nullptr;
+					FreeTypeGpuAlphaEnvelopeScope gpuTiming(
+						renderer ? renderer->GetD3DDevice() : nullptr,
+						hasPreparedPayloads);
 					state.originalRenderAlphaGeometry(accumulator);
 				}
 				if (hasPreparedPayloads)

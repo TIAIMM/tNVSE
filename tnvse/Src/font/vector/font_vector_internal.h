@@ -15,6 +15,7 @@
 
 class BSShader;
 class BSShaderProperty;
+struct IDirect3DDevice9;
 class NiNode;
 class NiTriShape;
 
@@ -475,6 +476,19 @@ namespace fonthook::vectorfont
 		FramePrepLookup,
 		FramePrepFacadeLoop,
 		FramePrepRing,
+		FramePrepRingInputScan,
+		FramePrepRingResource,
+		FramePrepRingStaticScan,
+		FramePrepRingStaticLock,
+		FramePrepRingStaticCopy,
+		FramePrepRingStaticUnlock,
+		FramePrepRingStaticCommit,
+		FramePrepRingDynamicResolve,
+		FramePrepRingDynamicLock,
+		FramePrepRingDynamicCopy,
+		FramePrepRingDynamicUnlock,
+		FramePrepRingDynamicCommit,
+		FramePrepRingLeasePublish,
 		FramePrepSingletons,
 		FramePrepPublish,
 		FrameRouteStockRender,
@@ -508,6 +522,26 @@ namespace fonthook::vectorfont
 	SInt64 EndFreeTypePerfSample(FreeTypePerfPhase aePhase, SInt64 aiStart);
 	void RecordFreeTypeAccumulatorPrepTailSample(
 		const FreeTypeAccumulatorPrepTailSample& arSample);
+	void ResetFreeTypeGpuTiming();
+
+	// Measures the GPU command-stream interval occupied by the complete Tile
+	// alpha traversal when that traversal contains prepared native font work.
+	// Results are collected asynchronously; this scope never waits for the GPU.
+	class FreeTypeGpuAlphaEnvelopeScope
+	{
+	public:
+		explicit FreeTypeGpuAlphaEnvelopeScope(
+			IDirect3DDevice9* apDevice, bool abEnabled = true);
+		~FreeTypeGpuAlphaEnvelopeScope();
+
+		FreeTypeGpuAlphaEnvelopeScope(
+			const FreeTypeGpuAlphaEnvelopeScope&) = delete;
+		FreeTypeGpuAlphaEnvelopeScope& operator=(
+			const FreeTypeGpuAlphaEnvelopeScope&) = delete;
+
+	private:
+		bool m_active = false;
+	};
 
 	class FreeTypePerfScope
 	{

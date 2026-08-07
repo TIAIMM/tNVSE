@@ -41,10 +41,6 @@ float4 ComposeNativeFontCoverage(float coverage, float4 tileColor,
 #define NATIVE_FONT_EXPLICIT_LOD 0
 #endif
 
-#ifndef NATIVE_FONT_DERIVATIVE_AA
-#define NATIVE_FONT_DERIVATIVE_AA 0
-#endif
-
 float4 SampleNativeFontMtsdf(sampler2D atlas, float2 uv)
 {
 #if NATIVE_FONT_EXPLICIT_LOD
@@ -90,36 +86,13 @@ float DecodeNativeFontSelectedDistance(float encodedDistance, float spread)
 #endif
 }
 
-float NativeFontMtsdfScreenPxRange(float2 uv, float2 inverseAtlasSize,
-	float spread)
-{
-	// Canonical msdfgen screenPxRange. RGB and Alpha are linear data; this
-	// footprint depends only on the atlas-to-screen transform, never on a
-	// shape-dependent sampled-distance derivative.
-	const float2 dx = ddx(uv);
-	const float2 dy = ddy(uv);
-	const float2 screenTextureSize =
-		1.0 / sqrt(max(dx * dx + dy * dy, 1.0e-14));
-	const float2 unitRange = (2.0 * spread) * inverseAtlasSize;
-	return max(0.5 * dot(unitRange, screenTextureSize), 1.0);
-}
-
-float NativeFontMtsdfAntialiasWidth(float screenPxRange, float spread)
-{
-	// Half of one output pixel expressed in source-distance units.
-	return spread / max(screenPxRange, 1.0);
-}
-
 float ResolveNativeFontMtsdfAntialiasWidth(
 	NativeFontPixelInput input, float spread)
 {
-#if NATIVE_FONT_DERIVATIVE_AA
-	return NativeFontMtsdfAntialiasWidth(
-		NativeFontMtsdfScreenPxRange(input.atlasUv, AtlasPass.xy, spread),
-		spread);
-#else
+	// All native layouts receive the affine screen footprint from the vertex
+	// shader. Keeping derivatives out of the pixel path makes AA cost independent
+	// of covered pixel count while preserving the same clamped source distance.
 	return min(max(input.antialiasWidth, 0.0001), spread);
-#endif
 }
 
 float NativeFontMtsdfBody(float rgbDistance, float antialiasWidth)

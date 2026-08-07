@@ -124,7 +124,7 @@ exit /b 0
 :compile_stock_layout_profile
 set "PROFILE_SUFFIX="
 if "%4"=="1" set "PROFILE_SUFFIX=_shift"
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D NATIVE_FONT_DERIVATIVE_AA=1 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_stock_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_stock_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
 exit /b %errorlevel%
 
 :compile_true_sdf_stock_layout_profiles
@@ -141,5 +141,5 @@ exit /b 0
 :compile_true_sdf_stock_layout_profile
 set "PROFILE_SUFFIX="
 if "%4"=="1" set "PROFILE_SUFFIX=_shift"
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D NATIVE_FONT_DERIVATIVE_AA=1 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_stock_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_stock_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
 exit /b %errorlevel%
