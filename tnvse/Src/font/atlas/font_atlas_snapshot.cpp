@@ -392,7 +392,8 @@ namespace fonthook::vectorfont
 				VectorFontByteClass::DoubleByte, rasterScale);
 	}
 
-	bool ConsolidatePhysicalFontAtlasGroups(float rasterScale)
+	bool ConsolidatePhysicalFontAtlasGroups(float rasterScale,
+		const FontAtlasPrewarmProgressReporter* progress)
 	{
 		if (!g_bEnableFreeTypeDefaultPoolAtlas
 			|| !IsDbcsCodePage(GetFreeTypeTextCodePage())
@@ -510,6 +511,12 @@ namespace fonthook::vectorfont
 			}
 			bool groupPublished = false;
 			bool groupFallback = false;
+			if (sourceTablesReady && progress)
+			{
+				progress->Report(
+					FontAtlasPrewarmProgressStage::PublishPhysicalGroup,
+					static_cast<UInt32>(processedGroups.size()), 0);
+			}
 			const bool groupSaved = sourceTablesReady
 				&& SaveGlyphAtlasSnapshotRole(*ownerRuntime,
 					VectorFontByteClass::SingleByte, rasterScale,
@@ -552,6 +559,12 @@ namespace fonthook::vectorfont
 			bool rebuilt = true;
 			std::vector<RuntimeFont*> memberRuntimes;
 			memberRuntimes.reserve(group.members.size());
+			if (progress)
+			{
+				progress->Report(
+					FontAtlasPrewarmProgressStage::RestorePhysicalGroup,
+					0, static_cast<UInt32>(group.members.size()));
+			}
 			for (const PhysicalAtlasGroupMember& member : group.members)
 			{
 				RuntimeFont* memberRuntime =

@@ -1035,6 +1035,28 @@ namespace fonthook::vectorfont
 		VectorFontByteClass aeByteClass,
 		const std::vector<std::shared_ptr<const GlyphBitmap>>& arBitmaps,
 		float afRasterScale);
+	enum class FontAtlasPrewarmProgressStage : UInt8
+	{
+		PublishPhysicalGroup,
+		RestorePhysicalGroup,
+		PlanPhysicalPools,
+		PublishPhysicalPool,
+	};
+	struct FontAtlasPrewarmProgressReporter
+	{
+		using Callback = void (*)(FontAtlasPrewarmProgressStage aeStage,
+			UInt32 auiItem, UInt32 auiTotal, void* apContext);
+
+		Callback callback = nullptr;
+		void* context = nullptr;
+
+		void Report(FontAtlasPrewarmProgressStage stage,
+			UInt32 item = 0, UInt32 total = 0) const
+		{
+			if (callback)
+				callback(stage, item, total, context);
+		}
+	};
 	bool TryLoadGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool StageGlyphAtlasSnapshotMetadata(RuntimeFont& arRuntime,
 		float afRasterScale);
@@ -1049,8 +1071,10 @@ namespace fonthook::vectorfont
 	bool DiscardGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool SaveGlyphAtlasSnapshot(RuntimeFont& arRuntime, float afRasterScale);
 	bool RebuildGlyphAtlasFromSnapshot(RuntimeFont& arRuntime, float afRasterScale);
-	bool ConsolidatePhysicalFontAtlasGroups(float afRasterScale);
-	bool ConsolidatePhysicalFontAtlasPools(float afRasterScale);
+	bool ConsolidatePhysicalFontAtlasGroups(float afRasterScale,
+		const FontAtlasPrewarmProgressReporter* apProgress = nullptr);
+	bool ConsolidatePhysicalFontAtlasPools(float afRasterScale,
+		const FontAtlasPrewarmProgressReporter* apProgress = nullptr);
 	void PruneRetiredAtlasGenerations();
 	bool BuildDirectGlyphAtlasTables(RuntimeFont& arRuntime, float afRasterScale);
 	void QueueFontPrewarm(UInt32 auiFontId);

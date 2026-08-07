@@ -895,7 +895,8 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	bool ConsolidatePhysicalFontAtlasPools(float rasterScale)
+	bool ConsolidatePhysicalFontAtlasPools(float rasterScale,
+		const FontAtlasPrewarmProgressReporter* progress)
 	{
 		if (!g_bEnableFreeTypeDefaultPoolAtlas
 			|| !IsDbcsCodePage(GetFreeTypeTextCodePage())
@@ -982,6 +983,12 @@ namespace fonthook::vectorfont
 		UInt32 nonSavingCandidates = 0;
 		UInt32 sourceMismatchCandidates = 0;
 		std::vector<PhysicalPoolCandidate> candidates;
+		if (progress)
+		{
+			progress->Report(
+				FontAtlasPrewarmProgressStage::PlanPhysicalPools,
+				0, stateCount > 0 ? stateCount - 1u : 0);
+		}
 		for (UInt32 mask = 1; mask < stateCount; ++mask)
 		{
 			const UInt32 atomCount = CountSetBits(mask);
@@ -1153,8 +1160,17 @@ namespace fonthook::vectorfont
 			atom.page.reset();
 
 		bool success = remaining == 0 && plannedGpuBytes != infinity;
+		UInt32 selectedOrdinal = 0;
 		for (int candidateIndex : selectedCandidates)
 		{
+			++selectedOrdinal;
+			if (progress)
+			{
+				progress->Report(
+					FontAtlasPrewarmProgressStage::PublishPhysicalPool,
+					selectedOrdinal,
+					static_cast<UInt32>(selectedCandidates.size()));
+			}
 			if (candidateIndex < 0
 				|| static_cast<size_t>(candidateIndex) >= candidates.size()
 				|| !PublishPhysicalPool(
