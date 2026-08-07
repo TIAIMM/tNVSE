@@ -1,6 +1,6 @@
 #include "font_native_internal.h"
 
-#include "font_a8_internal.h"
+#include "font_native_shape_internal.h"
 #include "load_config.h"
 #include "tnvse.h"
 
@@ -20,77 +20,77 @@ namespace fonthook::vectorfont
 		std::atomic<UInt32> s_suppressionLogCount = 0;
 		std::atomic<UInt64> s_runtimeFaultCount = 0;
 
-		NativeA8FallbackReason NormalizeFailureReason(
-			NativeA8FallbackReason reason)
+		NativeFontFallbackReason NormalizeFailureReason(
+			NativeFontFallbackReason reason)
 		{
-			return reason == NativeA8FallbackReason::None
-				? NativeA8FallbackReason::RuntimeFault : reason;
+			return reason == NativeFontFallbackReason::None
+				? NativeFontFallbackReason::RuntimeFault : reason;
 		}
 	}
 
-	const char* NativeA8FallbackReasonName(NativeA8FallbackReason reason)
+	const char* NativeFontFallbackReasonName(NativeFontFallbackReason reason)
 	{
 		switch (reason)
 		{
-		case NativeA8FallbackReason::None:
+		case NativeFontFallbackReason::None:
 			return "none";
-		case NativeA8FallbackReason::ShaderGeneration:
+		case NativeFontFallbackReason::ShaderGeneration:
 			return "shader-generation";
-		case NativeA8FallbackReason::PacketBuild:
+		case NativeFontFallbackReason::PacketBuild:
 			return "packet-build";
-		case NativeA8FallbackReason::PacketPrepare:
+		case NativeFontFallbackReason::PacketPrepare:
 			return "packet-prepare";
-		case NativeA8FallbackReason::AtlasGeneration:
+		case NativeFontFallbackReason::AtlasGeneration:
 			return "atlas-generation";
-		case NativeA8FallbackReason::PageTexture:
+		case NativeFontFallbackReason::PageTexture:
 			return "page-texture";
-		case NativeA8FallbackReason::PropertySync:
+		case NativeFontFallbackReason::PropertySync:
 			return "property-sync";
-		case NativeA8FallbackReason::AccumulatorConflict:
+		case NativeFontFallbackReason::AccumulatorConflict:
 			return "accumulator-conflict";
-		case NativeA8FallbackReason::TileRouteConflict:
+		case NativeFontFallbackReason::TileRouteConflict:
 			return "tile-route-conflict";
-		case NativeA8FallbackReason::DirectImmediate:
+		case NativeFontFallbackReason::DirectImmediate:
 			return "direct-immediate";
-		case NativeA8FallbackReason::DeviceReset:
+		case NativeFontFallbackReason::DeviceReset:
 			return "device-reset";
-		case NativeA8FallbackReason::RuntimeFault:
+		case NativeFontFallbackReason::RuntimeFault:
 			return "runtime-fault";
 		default:
 			return "unknown";
 		}
 	}
 
-	const char* NativeA8PacketPrepareFailureName(
-		NativeA8PacketPrepareFailure failure)
+	const char* NativeFontPacketPrepareFailureName(
+		NativeFontPacketPrepareFailure failure)
 	{
 		switch (failure)
 		{
-		case NativeA8PacketPrepareFailure::None:
+		case NativeFontPacketPrepareFailure::None:
 			return "none";
-		case NativeA8PacketPrepareFailure::Generation:
+		case NativeFontPacketPrepareFailure::Generation:
 			return "generation";
-		case NativeA8PacketPrepareFailure::Geometry:
+		case NativeFontPacketPrepareFailure::Geometry:
 			return "geometry";
-		case NativeA8PacketPrepareFailure::ShaderBinding:
+		case NativeFontPacketPrepareFailure::ShaderBinding:
 			return "shader-binding";
-		case NativeA8PacketPrepareFailure::Declaration:
+		case NativeFontPacketPrepareFailure::Declaration:
 			return "declaration";
-		case NativeA8PacketPrepareFailure::ProxyUnavailable:
+		case NativeFontPacketPrepareFailure::ProxyUnavailable:
 			return "proxy-unavailable";
-		case NativeA8PacketPrepareFailure::RingCapacity:
+		case NativeFontPacketPrepareFailure::RingCapacity:
 			return "ring-capacity";
-		case NativeA8PacketPrepareFailure::IndexBuffer:
+		case NativeFontPacketPrepareFailure::IndexBuffer:
 			return "index-buffer";
-		case NativeA8PacketPrepareFailure::VertexBuffer:
+		case NativeFontPacketPrepareFailure::VertexBuffer:
 			return "vertex-buffer";
 		default:
 			return "unknown";
 		}
 	}
 
-	void RecordNativeA8Suppression(NiTriShape* shape,
-		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason,
+	void RecordNativeFontSuppression(NiTriShape* shape,
+		const NativeFontShapeMetadata& metadata, NativeFontFallbackReason reason,
 		const char* phase)
 	{
 		if (!g_bEnableFreeTypeFontRenderingLog)
@@ -108,36 +108,36 @@ namespace fonthook::vectorfont
 		}
 
 		reason = NormalizeFailureReason(reason);
-		NativeA8PacketPrepareFailure packetFailure =
-			NativeA8PacketPrepareFailure::None;
+		NativeFontPacketPrepareFailure packetFailure =
+			NativeFontPacketPrepareFailure::None;
 		if (metadata.nativePayload.buildComplete)
 		{
 			packetFailure = metadata.nativePayload.packetPrepareFailure.load(
 				std::memory_order_relaxed);
 		}
-		const NativeA8PayloadTemplate* artifact =
+		const NativeFontPayloadTemplate* artifact =
 			metadata.nativePayload.payloadTemplate.get();
 		TESMain* main = TESMain::GetSingleton();
 		const UInt32 threadId = GetCurrentThreadId();
 		const UInt32 mainThreadId = main ? main->uiMainThreadID : 0;
 		gLog.FormattedMessage(
 			"tnvse_freetype_native: submission-suppressed reason=%s phase=%s packetFailure=%s thread=%u mainThread=%u isMain=%u shape=%p font=%u generation=%u pages=%u ranges=%u quads=%u glyphs=%u",
-			NativeA8FallbackReasonName(reason), phase ? phase : "unknown",
-			NativeA8PacketPrepareFailureName(packetFailure),
+			NativeFontFallbackReasonName(reason), phase ? phase : "unknown",
+			NativeFontPacketPrepareFailureName(packetFailure),
 			threadId, mainThreadId,
 			mainThreadId && threadId == mainThreadId ? 1 : 0,
-			shape, metadata.fontId, GetNativeA8ShaderGeneration(),
+			shape, metadata.fontId, GetNativeFontShaderGeneration(),
 			artifact ? artifact->pageCount : 0u,
 			artifact ? artifact->sourceRangeCount : 0u, metadata.quadCount,
 			metadata.glyphCount);
 	}
 
-	void MarkNativeA8RuntimeFault(const A8ShapeMetadata& metadata,
-		NativeA8ShapePayload& payload,
-		NativeA8FallbackReason reason)
+	void MarkNativeFontRuntimeFault(const NativeFontShapeMetadata& metadata,
+		NativeFontShapePayload& payload,
+		NativeFontFallbackReason reason)
 	{
 		reason = NormalizeFailureReason(reason);
-		NativeA8FallbackReason expected = NativeA8FallbackReason::None;
+		NativeFontFallbackReason expected = NativeFontFallbackReason::None;
 		payload.stickyReason.compare_exchange_strong(expected, reason,
 			std::memory_order_relaxed, std::memory_order_relaxed);
 		const bool alreadyMarked = payload.suppressNextSubmit.exchange(true,
@@ -150,9 +150,9 @@ namespace fonthook::vectorfont
 		gLog.FormattedMessage(
 			"tnvse_freetype_native: runtime-fault fault=%llu reason=%s font=%u preparedGeneration=%u currentGeneration=%u pages=%u packets=%u quads=%u action=suppress-next-submit",
 			static_cast<unsigned long long>(faultId),
-			NativeA8FallbackReasonName(payload.stickyReason.load(
+			NativeFontFallbackReasonName(payload.stickyReason.load(
 				std::memory_order_relaxed)), metadata.fontId,
-			payload.preparedGeneration, GetNativeA8ShaderGeneration(),
+			payload.preparedGeneration, GetNativeFontShaderGeneration(),
 			payload.payloadTemplate ? payload.payloadTemplate->pageCount : 0u,
 			static_cast<UInt32>(payload.packetShaders.size()), metadata.quadCount);
 	}

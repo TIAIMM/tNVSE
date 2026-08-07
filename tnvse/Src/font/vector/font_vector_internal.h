@@ -39,7 +39,7 @@ namespace fonthook::vectorfont
 		return GetConfiguredDistanceFieldMethod() == DistanceFieldMethod::Mtsdf;
 	}
 
-	inline bool IsVanillaLayoutSdfEnabled(DistanceFieldMethod method)
+	inline bool IsVanillaLayoutEnabled(DistanceFieldMethod method)
 	{
 		return !UsesBakedEffectRoute()
 			&& g_bEnableFreeTypeFontVanillaLayout
@@ -85,18 +85,18 @@ namespace fonthook::vectorfont
 	constexpr UInt32 kFillPrewarmParallelThreshold = 64;
 	constexpr UInt32 kFillPrewarmWorkChunk = 8;
 
-	struct NativeA8PayloadTemplate;
-	enum class NativeA8VanillaLayoutKind : UInt8
+	struct NativeFontPayloadTemplate;
+	enum class NativeFontVanillaLayoutKind : UInt8
 	{
 		None = 0,
 		Uniform40,
 		Parametric48,
 	};
 
-	inline bool UsesNativeA8VanillaLayout(
-		NativeA8VanillaLayoutKind layoutKind)
+	inline bool UsesNativeFontVanillaLayout(
+		NativeFontVanillaLayoutKind layoutKind)
 	{
-		return layoutKind != NativeA8VanillaLayoutKind::None;
+		return layoutKind != NativeFontVanillaLayoutKind::None;
 	}
 
 	enum class FreeTypePerfCounter : UInt16
@@ -430,40 +430,40 @@ namespace fonthook::vectorfont
 		AccumulatorEmptyFastPath,
 		AccumulatorMetadataCullSkipped,
 		AccumulatorNoPreparedPayload,
-		VanillaLayoutSdfCandidate,
-		VanillaLayoutSdfCreated,
-		VanillaLayoutSdfFallback,
-		VanillaLayoutSdfDraw,
-		VanillaLayoutSdfCull,
-		VanillaLayoutSdfRuntimeFallback,
-		VanillaLayoutSdfVertex,
-		VanillaLayoutSdfShiftedCandidate,
-		VanillaLayoutSdfShiftedCreated,
-		VanillaLayoutSdfShiftedDraw,
-		VanillaLayoutSdfShiftedRuntimeFallback,
-		VanillaLayoutSdfPrecacheAccepted,
-		VanillaLayoutSdfPrecacheRejected,
-		VanillaLayoutSdfPayloadUploadAttempt,
-		VanillaLayoutSdfPayloadUploadSuccess,
-		VanillaLayoutSdfPayloadUploadFailure,
-		VanillaLayoutSdfPayloadUploadBytes,
-		VanillaLayoutSdfNativePackPending,
-		VanillaLayoutSdfPriorGenerationDeclarationReady,
-		VanillaLayoutSdfPrivateStateCarry,
-		VanillaLayoutSdfPrivateStateCarryRejected,
+		VanillaLayoutEligible,
+		VanillaLayoutCreated,
+		VanillaLayoutFallback,
+		VanillaLayoutDraw,
+		VanillaLayoutCull,
+		VanillaLayoutRuntimeFallback,
+		VanillaLayoutVertex,
+		VanillaLayoutShiftedEligible,
+		VanillaLayoutShiftedCreated,
+		VanillaLayoutShiftedDraw,
+		VanillaLayoutShiftedRuntimeFallback,
+		VanillaLayoutPrecacheAccepted,
+		VanillaLayoutPrecacheUnavailable,
+		VanillaLayoutPayloadUploadAttempt,
+		VanillaLayoutPayloadUploadSuccess,
+		VanillaLayoutPayloadUploadFailure,
+		VanillaLayoutPayloadUploadBytes,
+		VanillaLayoutNativePackPending,
+		VanillaLayoutPriorGenerationDeclarationUse,
+		VanillaLayoutPrivateStateCarry,
+		VanillaLayoutPrivateStateCarryRejected,
 		PreparedSidecarCaptureFallback,
 		PreparedSidecarRejectedFallback,
-		VanillaLayoutSdfDrawTokenHit,
-		VanillaLayoutSdfDrawTokenFullValidation,
-		VanillaLayoutSdfDrawTokenCold,
-		VanillaLayoutSdfDrawTokenShapeShaderInvalidation,
-		VanillaLayoutSdfDrawTokenGenerationInvalidation,
-		VanillaLayoutSdfDrawTokenGeometryInvalidation,
-		VanillaLayoutSdfDrawTokenNativePackInvalidation,
-		VanillaLayoutSdfDrawTokenLayoutInvalidation,
-		VanillaLayoutSdfDrawTokenFirstCertification,
-		VanillaLayoutSdfDrawTokenRecertification,
-		VanillaLayoutSdfDrawTokenRejected,
+		VanillaLayoutDrawTokenHit,
+		VanillaLayoutDrawTokenSlowPath,
+		VanillaLayoutDrawTokenUncertified,
+		VanillaLayoutDrawTokenShapeShaderMismatch,
+		VanillaLayoutDrawTokenGenerationMismatch,
+		VanillaLayoutDrawTokenGeometryMismatch,
+		VanillaLayoutDrawTokenNativePackMismatch,
+		VanillaLayoutDrawTokenLayoutMismatch,
+		VanillaLayoutDrawTokenFirstCertification,
+		VanillaLayoutDrawTokenRecertification,
+		VanillaLayoutDrawTokenRejected,
 		Count,
 	};
 	static_assert(
@@ -773,7 +773,7 @@ namespace fonthook::vectorfont
 
 	// Layer IDs are part of the shader/native-packet ABI. Keep those IDs stable
 	// while defining composition order independently: Shadow, Glow, Outline, Fill.
-	inline constexpr UInt32 GetA8LayerDrawRank(UInt32 layer)
+	inline constexpr UInt32 GetNativeFontLayerDrawRank(UInt32 layer)
 	{
 		switch (layer)
 		{
@@ -785,7 +785,7 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	struct A8DrawRange
+	struct NativeFontDrawRange
 	{
 		UInt32 firstVertex = 0;
 		UInt32 vertexCount = 0;
@@ -800,7 +800,7 @@ namespace fonthook::vectorfont
 		NiColorA layerColorModifier = { 1.0f, 1.0f, 1.0f, 1.0f };
 	};
 
-	struct A8EffectShapeConfig
+	struct NativeFontEffectShapeConfig
 	{
 		bool enabled = false;
 		bool shaderEffects = false;
@@ -852,10 +852,10 @@ namespace fonthook::vectorfont
 		std::vector<NiTexturingPropertyPtr> atlasProperties;
 		std::vector<NiTexturePtr> atlasTextures;
 		std::vector<NiPoint2> atlasInverseSizes;
-		std::vector<A8DrawRange> ranges;
+		std::vector<NativeFontDrawRange> ranges;
 	};
 
-	struct A8ShapeColorContract
+	struct NativeFontShapeColorContract
 	{
 		// COLOR0 carries only the per-glyph base modifier. Packet c1 carries the
 		// layer modifier, while c2.z selects whether fixed effects ignore both the
@@ -1123,25 +1123,25 @@ namespace fonthook::vectorfont
 		bool abPrepareObject, const NiColorA& arTileColor,
 		bool abSuppressEffects,
 		GlyphAtlasBuildDiagnostics* apDiagnostics = nullptr);
-	bool IsA8RendererAvailable();
-	bool ResolveA8EffectQuality(EffectQuality aeRequested, EffectQuality& arResolved);
-	bool PrepareA8AtlasShape(Font& arFont, NiTriShape* apShape, UInt32 auiFontId,
+	bool IsNativeFontRendererAvailable();
+	bool ResolveNativeFontEffectQuality(EffectQuality aeRequested, EffectQuality& arResolved);
+	bool PrepareNativeFontAtlasShape(Font& arFont, NiTriShape* apShape, UInt32 auiFontId,
 		UInt32 auiGlyphCount, UInt32 auiQuadCount,
-		const A8EffectShapeConfig* apEffectConfig = nullptr,
-		const A8ShapeColorContract* apColorContract = nullptr,
-		std::shared_ptr<const NativeA8PayloadTemplate> apPayloadTemplate = {},
+		const NativeFontEffectShapeConfig* apEffectConfig = nullptr,
+		const NativeFontShapeColorContract* apColorContract = nullptr,
+		std::shared_ptr<const NativeFontPayloadTemplate> apPayloadTemplate = {},
 		const NiPoint3& arGeometryOrigin = NiPoint3());
-	bool PrepareSingletonFacadeA8Shape(Font& arFont, NiTriShape* apShape,
+	bool PrepareNativeFontSingletonFacadeShape(Font& arFont, NiTriShape* apShape,
 		UInt32 auiFontId, UInt32 auiGlyphCount, UInt32 auiQuadCount,
-		const A8EffectShapeConfig* apEffectConfig,
-		const A8ShapeColorContract* apColorContract,
-		std::shared_ptr<const NativeA8PayloadTemplate> apPayloadTemplate,
+		const NativeFontEffectShapeConfig* apEffectConfig,
+		const NativeFontShapeColorContract* apColorContract,
+		std::shared_ptr<const NativeFontPayloadTemplate> apPayloadTemplate,
 		const NiPoint3& arGeometryOrigin);
-	bool PrepareVanillaLayoutSdfA8Shape(Font& arFont, NiTriShape* apShape,
+	bool PrepareNativeFontVanillaLayoutShape(Font& arFont, NiTriShape* apShape,
 		UInt32 auiFontId, UInt32 auiGlyphCount, UInt32 auiQuadCount,
-		NativeA8VanillaLayoutKind aeLayoutKind,
-		const A8EffectShapeConfig* apEffectConfig,
-		const A8ShapeColorContract* apColorContract,
-		std::shared_ptr<const NativeA8PayloadTemplate> apPayloadTemplate,
+		NativeFontVanillaLayoutKind aeLayoutKind,
+		const NativeFontEffectShapeConfig* apEffectConfig,
+		const NativeFontShapeColorContract* apColorContract,
+		std::shared_ptr<const NativeFontPayloadTemplate> apPayloadTemplate,
 		const NiPoint3& arGeometryOrigin);
 }

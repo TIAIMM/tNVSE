@@ -180,7 +180,7 @@ namespace fonthook::vectorfont
 
 	}
 
-	void ApplyNativeA8GeometryOrigin(NiTransform& destination,
+	void ApplyNativeFontGeometryOrigin(NiTransform& destination,
 		const NiTransform& source, const NiPoint3& origin)
 	{
 		destination = source;

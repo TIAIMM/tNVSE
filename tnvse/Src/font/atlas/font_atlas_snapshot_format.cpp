@@ -656,8 +656,8 @@ namespace fonthook::vectorfont
 				sizeof(kCompleteCodePagePrewarmIdentity), hash);
 			hash = HashAtlasBytes(&kMaximumAtlasMipLevels,
 				sizeof(kMaximumAtlasMipLevels), hash);
-			hash = HashAtlasBytes(&A8ShapeColorContract::kTileUniformColorAbi,
-				sizeof(A8ShapeColorContract::kTileUniformColorAbi), hash);
+			hash = HashAtlasBytes(&NativeFontShapeColorContract::kTileUniformColorAbi,
+				sizeof(NativeFontShapeColorContract::kTileUniformColorAbi), hash);
 			if (key.renderMode == AtlasRenderMode::ShaderEffects)
 			{
 				const DistanceFieldMethod method =

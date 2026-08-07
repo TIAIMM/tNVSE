@@ -123,8 +123,8 @@ namespace fonthook
 	void FreeTypeFontDebugLog(const char* apFormat, ...);
 	void FlushFreeTypeFontDebugLog();
 	void FlushFreeTypeFontDebugLogFully();
-	void FinalizeFreeTypeA8Detection();
-	void HandleFreeTypeA8MainLoop();
+	void FinalizeFreeTypeNativeRendererDetection();
+	void HandleFreeTypeNativeRendererMainLoop();
 	void HandleFreeTypeShaderLoaderMessage(UInt32 auiMessageType);
 	void InitializeFreeTypeDefaultPoolAtlas();
 	void HandleFreeTypeDefaultPoolAtlasMainLoop();

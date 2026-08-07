@@ -161,7 +161,7 @@ namespace fonthook::vectorfont
 
 		EffectQuality quality = GetRuntimeConfig(runtime).effectQuality;
 		if (distanceField)
-			ResolveA8EffectQuality(quality, quality);
+			ResolveNativeFontEffectQuality(quality, quality);
 		if (diagnostics)
 		{
 			const FontConfig& config = GetRuntimeConfig(runtime);
@@ -171,7 +171,7 @@ namespace fonthook::vectorfont
 			diagnostics->requestsSdfFill = distanceField;
 			diagnostics->wantsShaderPath = true;
 			diagnostics->a8RendererAvailable =
-				IsA8RendererAvailable();
+				IsNativeFontRendererAvailable();
 			diagnostics->requestedQuality =
 				static_cast<UInt8>(config.effectQuality);
 			diagnostics->resolvedQuality =
@@ -262,7 +262,7 @@ namespace fonthook::vectorfont
 		const NiColorA tileColor = ResolveSafeTileColor(glyphs, requestedTileColor);
 		const bool hasEffects = !suppressEffects
 			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled);
-		const bool a8RendererAvailable = IsA8RendererAvailable();
+		const bool a8RendererAvailable = IsNativeFontRendererAvailable();
 		const FontAtlasRoute atlasRoute = ResolveFontAtlasRoute(
 			a8RendererAvailable,
 			UsesBakedEffectRoute());
@@ -283,7 +283,7 @@ namespace fonthook::vectorfont
 		}
 		EffectQuality resolvedQuality = config.effectQuality;
 		if (atlasRoute == FontAtlasRoute::ShaderDistanceField
-			&& ResolveA8EffectQuality(config.effectQuality, resolvedQuality))
+			&& ResolveNativeFontEffectQuality(config.effectQuality, resolvedQuality))
 		{
 			if (diagnostics)
 				diagnostics->resolvedQuality = static_cast<UInt8>(resolvedQuality);
@@ -567,7 +567,7 @@ namespace fonthook::vectorfont
 						++diagnostics->cpuShapeAttempts;
 					std::vector<std::shared_ptr<AtlasResource>>
 						compositeAtlases;
-					A8EffectShapeConfig compositeConfig;
+					NativeFontEffectShapeConfig compositeConfig;
 					compositeConfig.enabled = true;
 					compositeConfig.precomposedArgb = true;
 					NiTriShape* compositeShape = TryCreateAtlasShapeForMode(
@@ -618,7 +618,7 @@ namespace fonthook::vectorfont
 					return nullptr;
 				}
 
-				constexpr bool useCustomA8Shader = false;
+				constexpr bool useNativeFontShader = false;
 				AtlasPixelMode pixelMode = AtlasPixelMode::Argb32;
 				std::vector<std::shared_ptr<AtlasResource>> atlases;
 				if (diagnostics)
@@ -626,7 +626,7 @@ namespace fonthook::vectorfont
 				NiTriShape* shape = TryCreateAtlasShapeForMode(font, quads,
 					config, rasterScale, prepareObject, pixelMode,
 					AtlasRenderMode::CpuEffects, kArgbAtlasPadding, atlases, tileColor,
-					useCustomA8Shader);
+					useNativeFontShader);
 				if (shape)
 				{
 					if (diagnostics)

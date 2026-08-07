@@ -15,7 +15,7 @@ float g_fFreeTypeFontResolutionScale = 1.0f;
 UINT32 g_uiFreeTypeFontMemoryCacheMB;
 bool g_bDeleteUnusedFreeTypeFontCache;
 bool g_bEnableFreeTypeDefaultPoolAtlas;
-bool g_bEnableFreeTypeA8Atlas;
+bool g_bEnableFreeTypeNativeAtlas;
 bool g_bEnableFreeTypeFontVanillaLayout = true;
 bool g_bEnableFreeTypeFontPreflightClipCull = true;
 bool g_bEnableFreeTypeFontCommandBuffer = false;
@@ -152,10 +152,15 @@ void LoadConfig()
 	gLog.FormattedMessage("g_bEnableFreeTypeDefaultPoolAtlas: %d",
 		g_bEnableFreeTypeDefaultPoolAtlas);
 
-	g_bEnableFreeTypeA8Atlas = ReadConfigInt(
-		kFreeTypeFontSection, "bEnableFreeTypeA8Atlas", 1, filename) != 0;
-	gLog.FormattedMessage("g_bEnableFreeTypeA8Atlas: %d",
-		g_bEnableFreeTypeA8Atlas);
+	// The legacy A8 key remains the fallback for existing installations. The
+	// accurate native-atlas key takes precedence when both are present.
+	const UINT32 legacyNativeAtlas = ReadConfigInt(
+		kFreeTypeFontSection, "bEnableFreeTypeA8Atlas", 1, filename);
+	g_bEnableFreeTypeNativeAtlas = ReadConfigInt(
+		kFreeTypeFontSection, "bEnableFreeTypeNativeAtlas",
+		legacyNativeAtlas, filename) != 0;
+	gLog.FormattedMessage("g_bEnableFreeTypeNativeAtlas: %d",
+		g_bEnableFreeTypeNativeAtlas);
 
 	g_bEnableFreeTypeFontVanillaLayout = ReadConfigInt(
 		kFreeTypeFontSection,

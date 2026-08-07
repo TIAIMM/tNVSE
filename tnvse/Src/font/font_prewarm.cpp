@@ -1277,7 +1277,7 @@ namespace fonthook::vectorfont
 			EffectQuality resolvedQuality = config->effectQuality;
 			active.shaderSdf =
 				active.job.route == FontAtlasRoute::ShaderDistanceField
-				&& ResolveA8EffectQuality(
+				&& ResolveNativeFontEffectQuality(
 					config->effectQuality, resolvedQuality);
 			active.aggressiveComposite =
 				active.job.route == FontAtlasRoute::ShaderA8Coverage;

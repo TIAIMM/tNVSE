@@ -534,8 +534,8 @@ namespace fonthook
 						GlyphAtlasMaskFailureName(atlasDiagnostics.cpuMaskFailure),
 						atlasDiagnostics.degradedLayerCount,
 						atlasDiagnostics.cpuShapeAttempts,
-						vectorfont::IsNativeA8RendererAvailable() ? 1 : 0,
-						vectorfont::GetNativeA8ShaderGeneration(), GetCurrentThreadId());
+						vectorfont::IsNativeFontRendererAvailable() ? 1 : 0,
+						vectorfont::GetNativeFontShaderGeneration(), GetCurrentThreadId());
 			}
 			else if (logCount == maximumLogs)
 			{

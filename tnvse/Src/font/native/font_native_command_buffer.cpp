@@ -1,4 +1,4 @@
-#include "font_a8_internal.h"
+#include "font_native_shape_internal.h"
 #include "font_native_internal.h"
 
 #include "load_config.h"
@@ -43,7 +43,7 @@ namespace fonthook::vectorfont
 		static_assert(offsetof(
 			CommandTileShaderPropertyView, overlayColor) == 0x68);
 
-		struct NativeA8ExecutionSegmentState
+		struct NativeFontExecutionSegmentState
 		{
 			// A segment spans adjacent FreeType Tile submissions. Full frame,
 			// hook, device, ring, RT, and viewport validation is shared until a
@@ -52,27 +52,27 @@ namespace fonthook::vectorfont
 			UInt64 validationToken = 0;
 			UInt32 boundaryEpoch = 0;
 			UInt32 externalMutationEpoch = 0;
-			NativeA8CommandFallback failure =
-				NativeA8CommandFallback::State;
+			NativeFontCommandFallback failure =
+				NativeFontCommandFallback::State;
 			bool validated = false;
 		};
 
-		struct NativeA8FrameCommandBuffer
+		struct NativeFontFrameCommandBuffer
 		{
-			NativeA8FrameStamp stamp;
-			std::vector<NativeA8DrawCommand> commands;
-			std::vector<NativeA8FrameCommandRun> runs;
-			std::vector<NativeA8CommandSpan> spans;
-			std::vector<NativeA8SinglePacketCommand>
+			NativeFontFrameStamp stamp;
+			std::vector<NativeFontDrawCommand> commands;
+			std::vector<NativeFontFrameCommandRun> runs;
+			std::vector<NativeFontCommandSpan> spans;
+			std::vector<NativeFontSinglePacketCommand>
 				singlePacketCommands;
-			std::vector<NativeA8DirectFacadeSinglePacketCommand>
+			std::vector<NativeFontDirectFacadeSinglePacketCommand>
 				directFacadeSinglePacketCommands;
 			CpuMemoryLease cpuMemory;
-			NativeA8ExecutionSegmentState executionSegment;
+			NativeFontExecutionSegmentState executionSegment;
 			UInt32 executionBoundaryEpoch = 1;
 			UInt32 frameExternalMutationEpoch = 0;
-			NativeA8CommandFallback executionBoundaryReason =
-				NativeA8CommandFallback::State;
+			NativeFontCommandFallback executionBoundaryReason =
+				NativeFontCommandFallback::State;
 			size_t trackedCapacityBytes = 0;
 			size_t highWaterCommands = 0;
 			size_t highWaterRuns = 0;
@@ -84,19 +84,19 @@ namespace fonthook::vectorfont
 			bool building = false;
 		};
 
-		thread_local NativeA8FrameCommandBuffer s_commandBuffer;
+		thread_local NativeFontFrameCommandBuffer s_commandBuffer;
 		// Resource lifecycles may publish from a reset/cache thread while the
 		// command buffer itself is render-thread local. One process-wide epoch
 		// lets packet callbacks reject that race with a single acquire load.
 		std::atomic<UInt32> s_externalMutationEpoch = 1;
 		std::atomic<UInt8> s_externalMutationReason =
-			static_cast<UInt8>(NativeA8CommandFallback::State);
+			static_cast<UInt8>(NativeFontCommandFallback::State);
 
-		NativeA8CommandFallback NormalizeMutationReason(
-			NativeA8CommandFallback reason)
+		NativeFontCommandFallback NormalizeMutationReason(
+			NativeFontCommandFallback reason)
 		{
-			return reason == NativeA8CommandFallback::None
-				? NativeA8CommandFallback::State : reason;
+			return reason == NativeFontCommandFallback::None
+				? NativeFontCommandFallback::State : reason;
 		}
 
 		UInt32 LoadExternalMutationEpoch()
@@ -104,36 +104,36 @@ namespace fonthook::vectorfont
 			return s_externalMutationEpoch.load(std::memory_order_acquire);
 		}
 
-		NativeA8CommandFallback LoadExternalMutationReason()
+		NativeFontCommandFallback LoadExternalMutationReason()
 		{
 			return NormalizeMutationReason(
-				static_cast<NativeA8CommandFallback>(
+				static_cast<NativeFontCommandFallback>(
 					s_externalMutationReason.load(
 						std::memory_order_acquire)));
 		}
 
 		void RecordSinglePacketCommandFallback(
-			NativeA8CommandFallback reason)
+			NativeFontCommandFallback reason)
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandSinglePacketFallback);
-			RecordNativeA8CommandFallback(reason);
+			RecordNativeFontCommandFallback(reason);
 		}
 
 		void RecordDirectFacadeSinglePacketCommandFallback(
-			NativeA8CommandFallback reason)
+			NativeFontCommandFallback reason)
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
 					CommandDirectFacadeSinglePacketFallback);
-			RecordNativeA8CommandFallback(reason);
+			RecordNativeFontCommandFallback(reason);
 		}
 
 		void AdvanceExecutionBoundaryEpoch(
-			NativeA8FrameCommandBuffer& buffer,
-			NativeA8CommandFallback reason)
+			NativeFontFrameCommandBuffer& buffer,
+			NativeFontCommandFallback reason)
 		{
-			NativeA8ExecutionSegmentState& segment =
+			NativeFontExecutionSegmentState& segment =
 				buffer.executionSegment;
 			if (!buffer.active || !segment.validated
 				|| segment.boundaryEpoch
@@ -150,17 +150,17 @@ namespace fonthook::vectorfont
 			segment.validated = false;
 		}
 
-		void RefreshCommandMemory(NativeA8FrameCommandBuffer& buffer)
+		void RefreshCommandMemory(NativeFontFrameCommandBuffer& buffer)
 		{
 			const size_t bytes =
-				buffer.commands.capacity() * sizeof(NativeA8DrawCommand)
+				buffer.commands.capacity() * sizeof(NativeFontDrawCommand)
 				+ buffer.runs.capacity()
-					* sizeof(NativeA8FrameCommandRun)
-				+ buffer.spans.capacity() * sizeof(NativeA8CommandSpan)
+					* sizeof(NativeFontFrameCommandRun)
+				+ buffer.spans.capacity() * sizeof(NativeFontCommandSpan)
 				+ buffer.singlePacketCommands.capacity()
-					* sizeof(NativeA8SinglePacketCommand)
+					* sizeof(NativeFontSinglePacketCommand)
 				+ buffer.directFacadeSinglePacketCommands.capacity()
-					* sizeof(NativeA8DirectFacadeSinglePacketCommand);
+					* sizeof(NativeFontDirectFacadeSinglePacketCommand);
 			if (bytes == buffer.trackedCapacityBytes)
 				return;
 			buffer.trackedCapacityBytes = bytes;
@@ -189,7 +189,7 @@ namespace fonthook::vectorfont
 				previousCapacity, values.capacity());
 		}
 
-		void UpdateCommandHighWater(NativeA8FrameCommandBuffer& buffer)
+		void UpdateCommandHighWater(NativeFontFrameCommandBuffer& buffer)
 		{
 			buffer.highWaterCommands = std::max(
 				buffer.highWaterCommands, buffer.commands.size());
@@ -205,44 +205,44 @@ namespace fonthook::vectorfont
 				buffer.directFacadeSinglePacketCommands.size());
 		}
 
-		void TrimCommandCapacity(NativeA8FrameCommandBuffer& buffer)
+		void TrimCommandCapacity(NativeFontFrameCommandBuffer& buffer)
 		{
 			if (buffer.commands.capacity() > 16384)
 			{
-				std::vector<NativeA8DrawCommand>().swap(buffer.commands);
+				std::vector<NativeFontDrawCommand>().swap(buffer.commands);
 				buffer.highWaterCommands = 0;
 			}
 			if (buffer.runs.capacity() > 8192)
 			{
-				std::vector<NativeA8FrameCommandRun>().swap(buffer.runs);
+				std::vector<NativeFontFrameCommandRun>().swap(buffer.runs);
 				buffer.highWaterRuns = 0;
 			}
 			if (buffer.spans.capacity() > 8192)
 			{
-				std::vector<NativeA8CommandSpan>().swap(buffer.spans);
+				std::vector<NativeFontCommandSpan>().swap(buffer.spans);
 				buffer.highWaterSpans = 0;
 			}
 			if (buffer.singlePacketCommands.capacity() > 8192)
 			{
-				std::vector<NativeA8SinglePacketCommand>().swap(
+				std::vector<NativeFontSinglePacketCommand>().swap(
 					buffer.singlePacketCommands);
 				buffer.highWaterSinglePackets = 0;
 			}
 			if (buffer.directFacadeSinglePacketCommands.capacity() > 8192)
 			{
-				std::vector<NativeA8DirectFacadeSinglePacketCommand>().swap(
+				std::vector<NativeFontDirectFacadeSinglePacketCommand>().swap(
 					buffer.directFacadeSinglePacketCommands);
 				buffer.highWaterDirectFacadeSinglePackets = 0;
 			}
 			RefreshCommandMemory(buffer);
 			if (!IsCpuMemoryBudgetExceeded())
 				return;
-			std::vector<NativeA8DrawCommand>().swap(buffer.commands);
-			std::vector<NativeA8FrameCommandRun>().swap(buffer.runs);
-			std::vector<NativeA8CommandSpan>().swap(buffer.spans);
-			std::vector<NativeA8SinglePacketCommand>().swap(
+			std::vector<NativeFontDrawCommand>().swap(buffer.commands);
+			std::vector<NativeFontFrameCommandRun>().swap(buffer.runs);
+			std::vector<NativeFontCommandSpan>().swap(buffer.spans);
+			std::vector<NativeFontSinglePacketCommand>().swap(
 				buffer.singlePacketCommands);
-			std::vector<NativeA8DirectFacadeSinglePacketCommand>().swap(
+			std::vector<NativeFontDirectFacadeSinglePacketCommand>().swap(
 				buffer.directFacadeSinglePacketCommands);
 			buffer.highWaterCommands = 0;
 			buffer.highWaterRuns = 0;
@@ -253,7 +253,7 @@ namespace fonthook::vectorfont
 			buffer.cpuMemory.Release();
 		}
 
-		bool ResolveRenderContextStamp(NativeA8FrameStamp& stamp)
+		bool ResolveRenderContextStamp(NativeFontFrameStamp& stamp)
 		{
 			if (!stamp.renderer || !stamp.device
 				|| stamp.renderer->GetD3DDevice() != stamp.device)
@@ -275,7 +275,7 @@ namespace fonthook::vectorfont
 		}
 
 		bool ValidateGeometryBinding(
-			const NativeA8DrawCommand& command,
+			const NativeFontDrawCommand& command,
 			NiTriShape* geometry)
 		{
 			if (!geometry
@@ -311,7 +311,7 @@ namespace fonthook::vectorfont
 				|| buffer->m_uiStreamCount != 1
 				|| !buffer->m_puiVertexStride
 				|| buffer->m_puiVertexStride[0]
-					!= sizeof(NativeA8GpuVertex)
+					!= sizeof(NativeFontGpuVertex)
 				|| buffer->m_uiIBSize
 					!= command.binding.indexBytes
 				|| buffer->m_uiIndexCount
@@ -325,17 +325,17 @@ namespace fonthook::vectorfont
 				|| chip->m_uiOffset != 0
 				|| chip->m_uiSize
 					!= command.binding.vertexCount
-						* sizeof(NativeA8GpuVertex))
+						* sizeof(NativeFontGpuVertex))
 			{
 				return false;
 			}
 			return true;
 		}
 
-		NativeA8CommandFallback ValidateDrawCommandState(
-			const NativeA8FrameCommandBuffer& buffer,
-			const NativeA8DrawCommand& command,
-			const NativeA8ShapePayload* expectedPayload,
+		NativeFontCommandFallback ValidateDrawCommandState(
+			const NativeFontFrameCommandBuffer& buffer,
+			const NativeFontDrawCommand& command,
+			const NativeFontShapePayload* expectedPayload,
 			UInt32 expectedPacketIndex, NiTriShape* geometry,
 			NiRenderer* renderer)
 		{
@@ -345,7 +345,7 @@ namespace fonthook::vectorfont
 				|| command.program->device != buffer.stamp.device
 				|| !renderer || renderer != buffer.stamp.renderer)
 			{
-				return NativeA8CommandFallback::Generation;
+				return NativeFontCommandFallback::Generation;
 			}
 			if (!command.payload
 				|| command.payload != expectedPayload
@@ -357,23 +357,23 @@ namespace fonthook::vectorfont
 					!= command.payload->packetShaders[
 						expectedPacketIndex])
 			{
-				return NativeA8CommandFallback::Topology;
+				return NativeFontCommandFallback::Topology;
 			}
 			if (command.payload->preflightAtlasTextureEpoch
 					!= buffer.stamp.atlasTextureEpoch)
 			{
-				return NativeA8CommandFallback::Atlas;
+				return NativeFontCommandFallback::Atlas;
 			}
 			if (!ValidateGeometryBinding(command, geometry))
-				return NativeA8CommandFallback::Resource;
-			return NativeA8CommandFallback::None;
+				return NativeFontCommandFallback::Resource;
+			return NativeFontCommandFallback::None;
 		}
 
 		bool CompileCompatibilityCommand(
-			NiTriShape* facade, NativeA8ShapePayload& payload,
-			const NativeA8TileRetainedPacket& retained,
-			const NativeA8FramePayloadBinding& payloadBinding,
-			NativeA8DrawCommand& command)
+			NiTriShape* facade, NativeFontShapePayload& payload,
+			const NativeFontTileRetainedPacket& retained,
+			const NativeFontFramePayloadBinding& payloadBinding,
+			NativeFontDrawCommand& command)
 		{
 			command = {};
 			command.sourceGeometry = facade;
@@ -433,16 +433,16 @@ namespace fonthook::vectorfont
 		}
 
 		bool AppendCompatibilityCommand(
-			NativeA8FrameCommandBuffer& buffer,
-			NiTriShape* facade, NativeA8ShapePayload& payload,
-			const NativeA8TileRetainedPacket& retained,
-			const NativeA8FramePayloadBinding& payloadBinding)
+			NativeFontFrameCommandBuffer& buffer,
+			NiTriShape* facade, NativeFontShapePayload& payload,
+			const NativeFontTileRetainedPacket& retained,
+			const NativeFontFramePayloadBinding& payloadBinding)
 		{
 			const size_t previousCapacity = buffer.commands.capacity();
 			buffer.commands.emplace_back();
 			RecordCommandVectorGrowth(
 				previousCapacity, buffer.commands.capacity());
-			NativeA8DrawCommand& command = buffer.commands.back();
+			NativeFontDrawCommand& command = buffer.commands.back();
 			if (!CompileCompatibilityCommand(facade, payload,
 					retained, payloadBinding, command))
 			{
@@ -452,12 +452,12 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		const NativeA8TileRetainedText* ResolveTileRetainedText(
-			const NativeA8FrameCommandBuffer& buffer,
-			NiTriShape* ownerTile, NativeA8ShapePayload& payload,
+		const NativeFontTileRetainedText* ResolveTileRetainedText(
+			const NativeFontFrameCommandBuffer& buffer,
+			NiTriShape* ownerTile, NativeFontShapePayload& payload,
 			bool recordResult = true)
 		{
-			if (!IsNativeA8TileRetainedTextCurrent(payload,
+			if (!IsNativeFontTileRetainedTextCurrent(payload,
 					ownerTile, buffer.stamp.generation,
 					buffer.stamp.atlasTextureEpoch))
 			{
@@ -478,7 +478,7 @@ namespace fonthook::vectorfont
 		}
 
 		bool AdoptFrameResourceStamp(
-			NativeA8FrameCommandBuffer& buffer,
+			NativeFontFrameCommandBuffer& buffer,
 			UInt32 resourceSerial, UInt32 uploadEpoch)
 		{
 			if (!resourceSerial
@@ -497,13 +497,13 @@ namespace fonthook::vectorfont
 		}
 
 		template <class RetainedRunContainer>
-		bool BuildFrameRuns(NativeA8FrameCommandBuffer& buffer,
-			NativeA8CommandSpan& span,
+		bool BuildFrameRuns(NativeFontFrameCommandBuffer& buffer,
+			NativeFontCommandSpan& span,
 			const RetainedRunContainer& retainedRuns,
 			bool retainedBridgeEligible)
 		{
 			UInt32 coveredPackets = 0;
-			for (const NativeA8TileRetainedRun& retained : retainedRuns)
+			for (const NativeFontTileRetainedRun& retained : retainedRuns)
 			{
 				if (!retained.packetCount
 					|| retained.firstPacket != coveredPackets
@@ -517,24 +517,24 @@ namespace fonthook::vectorfont
 					retained.firstPacket + retained.packetCount;
 				while (first < retainedEnd)
 				{
-					const NativeA8DrawCommand& firstCommand =
+					const NativeFontDrawCommand& firstCommand =
 						buffer.commands[span.firstCommand + first];
 					UInt32 end = first + 1;
 					while (end < retainedEnd)
 					{
-						const NativeA8DrawCommand& candidate =
+						const NativeFontDrawCommand& candidate =
 							buffer.commands[span.firstCommand + end];
 						++end;
 					}
-					NativeA8FrameCommandRun run;
+					NativeFontFrameCommandRun run;
 					run.firstCommand = span.firstCommand + first;
 					run.commandCount = end - first;
 					run.bridgeEligible = retained.bridgeEligible;
 					if (buffer.runs.size() > span.firstRun)
 					{
-						const NativeA8FrameCommandRun& previous =
+						const NativeFontFrameCommandRun& previous =
 							buffer.runs.back();
-						const NativeA8DrawCommand& previousCommand =
+						const NativeFontDrawCommand& previousCommand =
 							buffer.commands[
 								previous.firstCommand
 									+ previous.commandCount - 1u];
@@ -553,7 +553,7 @@ namespace fonthook::vectorfont
 		}
 
 		bool ValidateRenderContext(
-			const NativeA8FrameStamp& stamp)
+			const NativeFontFrameStamp& stamp)
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandRenderTargetValidation);
@@ -570,11 +570,11 @@ namespace fonthook::vectorfont
 					sizeof(stamp.viewport)) == 0;
 		}
 
-		NativeA8CommandFallback ValidateExecutionSegmentState(
-			NativeA8FrameCommandBuffer& buffer,
+		NativeFontCommandFallback ValidateExecutionSegmentState(
+			NativeFontFrameCommandBuffer& buffer,
 			UInt32 expectedExternalMutationEpoch)
 		{
-			NativeA8FrameStamp& stamp = buffer.stamp;
+			NativeFontFrameStamp& stamp = buffer.stamp;
 			if (!buffer.frameExternalMutationEpoch
 				|| expectedExternalMutationEpoch
 					!= buffer.frameExternalMutationEpoch)
@@ -583,37 +583,37 @@ namespace fonthook::vectorfont
 			}
 			if (!stamp.accumulator || !stamp.validationToken
 				|| stamp.validationToken
-					!= GetNativeA8SortedFrameValidationToken())
+					!= GetNativeFontSortedFrameValidationToken())
 			{
-				return NativeA8CommandFallback::Token;
+				return NativeFontCommandFallback::Token;
 			}
 			if (stamp.nestedTraversalSerial
-				!= GetNativeA8SortedNestedTraversalSerial())
+				!= GetNativeFontSortedNestedTraversalSerial())
 			{
-				return NativeA8CommandFallback::Nested;
+				return NativeFontCommandFallback::Nested;
 			}
-			NativeA8RuntimeReadinessView readiness;
-			if (!GetNativeA8RuntimeReadinessCurrent(readiness))
+			NativeFontRuntimeReadinessView readiness;
+			if (!GetNativeFontRuntimeReadinessCurrent(readiness))
 			{
-				return GetNativeA8AtlasTextureEpoch()
+				return GetNativeFontAtlasTextureEpoch()
 						!= stamp.atlasTextureEpoch
-					? NativeA8CommandFallback::Atlas
-					: NativeA8CommandFallback::Hook;
+					? NativeFontCommandFallback::Atlas
+					: NativeFontCommandFallback::Hook;
 			}
 			if (readiness.renderer != stamp.renderer
 				|| readiness.device != stamp.device
 				|| readiness.generation != stamp.generation
-				|| !IsNativeA8ShaderGenerationCurrent(stamp.generation))
+				|| !IsNativeFontShaderGenerationCurrent(stamp.generation))
 			{
-				return NativeA8CommandFallback::Generation;
+				return NativeFontCommandFallback::Generation;
 			}
 			if (readiness.atlasTextureEpoch != stamp.atlasTextureEpoch)
-				return NativeA8CommandFallback::Atlas;
-			if (!IsNativeA8FrameResourceStampCurrent(
+				return NativeFontCommandFallback::Atlas;
+			if (!IsNativeFontFrameResourceStampCurrent(
 				stamp.generation, stamp.resourceSerial,
 				stamp.uploadEpoch))
 			{
-				return NativeA8CommandFallback::Resource;
+				return NativeFontCommandFallback::Resource;
 			}
 			if (!stamp.renderTargetReady || !stamp.viewportReady)
 			{
@@ -625,25 +625,25 @@ namespace fonthook::vectorfont
 						CommandRenderTargetValidation);
 				if (!ResolveRenderContextStamp(stamp))
 				{
-					return NativeA8CommandFallback::RenderTarget;
+					return NativeFontCommandFallback::RenderTarget;
 				}
 			}
 			else if (!ValidateRenderContext(stamp))
 			{
-				return NativeA8CommandFallback::RenderTarget;
+				return NativeFontCommandFallback::RenderTarget;
 			}
 			if (LoadExternalMutationEpoch()
 				!= expectedExternalMutationEpoch)
 			{
 				return LoadExternalMutationReason();
 			}
-			return NativeA8CommandFallback::None;
+			return NativeFontCommandFallback::None;
 		}
 
-		NativeA8CommandFallback EnsureExecutionSegmentValidated(
-			NativeA8FrameCommandBuffer& buffer)
+		NativeFontCommandFallback EnsureExecutionSegmentValidated(
+			NativeFontFrameCommandBuffer& buffer)
 		{
-			NativeA8ExecutionSegmentState& segment =
+			NativeFontExecutionSegmentState& segment =
 				buffer.executionSegment;
 			const UInt32 externalMutationEpoch =
 				LoadExternalMutationEpoch();
@@ -656,7 +656,7 @@ namespace fonthook::vectorfont
 					== externalMutationEpoch)
 			{
 				if (segment.failure
-					== NativeA8CommandFallback::None)
+					== NativeFontCommandFallback::None)
 				{
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::
@@ -691,7 +691,7 @@ namespace fonthook::vectorfont
 				return segment.failure;
 			}
 			segment.validated = true;
-			if (segment.failure == NativeA8CommandFallback::None)
+			if (segment.failure == NativeFontCommandFallback::None)
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::CommandExecutionSegment);
@@ -699,15 +699,15 @@ namespace fonthook::vectorfont
 			return segment.failure;
 		}
 
-		NativeA8CommandFallback ValidateExecutionSegmentEpoch(
-			NativeA8FrameCommandBuffer& buffer,
+		NativeFontCommandFallback ValidateExecutionSegmentEpoch(
+			NativeFontFrameCommandBuffer& buffer,
 			UInt32 executionSegmentEpoch,
 			UInt32 executionExternalMutationEpoch)
 		{
-			const NativeA8ExecutionSegmentState& segment =
+			const NativeFontExecutionSegmentState& segment =
 				buffer.executionSegment;
 			if (!segment.validated
-				|| segment.failure != NativeA8CommandFallback::None
+				|| segment.failure != NativeFontCommandFallback::None
 				|| executionSegmentEpoch
 					!= buffer.executionBoundaryEpoch
 				|| executionSegmentEpoch
@@ -722,40 +722,40 @@ namespace fonthook::vectorfont
 				|| segment.externalMutationEpoch
 					!= externalMutationEpoch)
 			{
-				const NativeA8CommandFallback reason =
+				const NativeFontCommandFallback reason =
 					LoadExternalMutationReason();
 				AdvanceExecutionBoundaryEpoch(buffer, reason);
 				return reason;
 			}
-			return NativeA8CommandFallback::None;
+			return NativeFontCommandFallback::None;
 		}
 
-		NativeA8CommandFallback ValidatePacketExecutionGuard(
-			NativeA8FrameCommandBuffer& buffer,
-			NativeA8CommandSpanState state,
+		NativeFontCommandFallback ValidatePacketExecutionGuard(
+			NativeFontFrameCommandBuffer& buffer,
+			NativeFontCommandSpanState state,
 			UInt64 executionValidationToken,
 			UInt32 executionSegmentEpoch,
 			UInt32 executionExternalMutationEpoch,
 			NiRenderer* renderer)
 		{
-			if (state != NativeA8CommandSpanState::Executing
+			if (state != NativeFontCommandSpanState::Executing
 				|| executionValidationToken
 					!= buffer.stamp.validationToken)
 			{
-				return NativeA8CommandFallback::State;
+				return NativeFontCommandFallback::State;
 			}
 			if (!renderer || renderer != buffer.stamp.renderer)
-				return NativeA8CommandFallback::Generation;
+				return NativeFontCommandFallback::Generation;
 			return ValidateExecutionSegmentEpoch(buffer,
 				executionSegmentEpoch,
 				executionExternalMutationEpoch);
 		}
 	}
 
-	bool IsNativeA8StandardPassLiteDispatchCurrent(
-		const NativeA8StandardPassLiteDispatch& dispatch,
+	bool IsNativeFontStandardPassLiteDispatchCurrent(
+		const NativeFontStandardPassLiteDispatch& dispatch,
 		const NiTriShape* geometry,
-		const NativeA8CompiledPacketCommand* program,
+		const NativeFontCompiledPacketCommand* program,
 		UInt32 generation)
 	{
 		return dispatch.ready && geometry && program && generation
@@ -768,23 +768,23 @@ namespace fonthook::vectorfont
 			&& program->generation == generation
 			&& dispatch.standardV2Ready
 				== (program->standardV2SlotProofs
-					== NativeA8CompiledPacketCommand::
+					== NativeFontCompiledPacketCommand::
 						kStandardV2RequiredProofs);
 	}
 
-	void InvalidateNativeA8StandardPassLiteDispatch(
-		NativeA8StandardPassLiteDispatch& dispatch)
+	void InvalidateNativeFontStandardPassLiteDispatch(
+		NativeFontStandardPassLiteDispatch& dispatch)
 	{
 		dispatch = {};
 	}
 
-	bool BuildNativeA8StandardPassLiteDispatch(
+	bool BuildNativeFontStandardPassLiteDispatch(
 		NiTriShape* geometry,
-		const NativeA8CompiledPacketCommand* program,
+		const NativeFontCompiledPacketCommand* program,
 		UInt32 generation,
-		NativeA8StandardPassLiteDispatch& dispatch)
+		NativeFontStandardPassLiteDispatch& dispatch)
 	{
-		if (IsNativeA8StandardPassLiteDispatchCurrent(
+		if (IsNativeFontStandardPassLiteDispatchCurrent(
 				dispatch, geometry, program, generation))
 		{
 			RecordFreeTypePerf(
@@ -792,7 +792,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		InvalidateNativeA8StandardPassLiteDispatch(dispatch);
+		InvalidateNativeFontStandardPassLiteDispatch(dispatch);
 		if (!g_bEnableFreeTypeFontCommandBuffer
 			|| !geometry || !program || !generation
 			|| !State().standardPassLitePredicatesValidated
@@ -808,9 +808,9 @@ namespace fonthook::vectorfont
 		void** shaderVtable = shader
 			? *reinterpret_cast<void***>(shader) : nullptr;
 		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-		if (!IsA8AtlasShape(geometry)
+		if (!IsNativeFontAtlasShape(geometry)
 			|| geometryVtable[kRenderImmediateAltSlot]
-				!= reinterpret_cast<void*>(&A8RenderImmediateAlt)
+				!= reinterpret_cast<void*>(&NativeFontRenderImmediateAlt)
 			|| !program->active || !program->profile
 			|| program->generation != generation
 			|| !shader || !shaderVtable
@@ -837,7 +837,7 @@ namespace fonthook::vectorfont
 		dispatch.generation = generation;
 		dispatch.standardV2Ready =
 			program->standardV2SlotProofs
-				== NativeA8CompiledPacketCommand::
+				== NativeFontCompiledPacketCommand::
 					kStandardV2RequiredProofs;
 		dispatch.ready = true;
 		RecordFreeTypePerf(
@@ -845,35 +845,35 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	size_t GetNativeA8TileRetainedCapacityBytes(
-		const NativeA8ShapePayload& payload)
+	size_t GetNativeFontTileRetainedCapacityBytes(
+		const NativeFontShapePayload& payload)
 	{
 		return payload.retainedText.packets.heap_capacity()
-				* sizeof(NativeA8TileRetainedPacket)
+				* sizeof(NativeFontTileRetainedPacket)
 			+ payload.retainedText.runs.heap_capacity()
-				* sizeof(NativeA8TileRetainedRun);
+				* sizeof(NativeFontTileRetainedRun);
 	}
 
-	void InvalidateNativeA8TileRetainedText(
-		NativeA8ShapePayload& payload,
+	void InvalidateNativeFontTileRetainedText(
+		NativeFontShapePayload& payload,
 		bool preserveStandardPassLite)
 	{
-		NativeA8TileRetainedText& retained = payload.retainedText;
+		NativeFontTileRetainedText& retained = payload.retainedText;
 		retained.ready = false;
 		retained.atlasTextureEpoch = 0;
 		retained.bridgeEligible = false;
 		if (!preserveStandardPassLite)
 		{
-			InvalidateNativeA8StandardPassLiteDispatch(
+			InvalidateNativeFontStandardPassLiteDispatch(
 				retained.standardPassLite);
 		}
 	}
 
-	bool BuildNativeA8TileRetainedText(NiTriShape* ownerTile,
-		NativeA8ShapePayload& payload, UInt32 generation,
+	bool BuildNativeFontTileRetainedText(NiTriShape* ownerTile,
+		NativeFontShapePayload& payload, UInt32 generation,
 		UInt32 atlasTextureEpoch)
 	{
-		NativeA8TileRetainedText& retained = payload.retainedText;
+		NativeFontTileRetainedText& retained = payload.retainedText;
 		// Keep an identity-matching Standard-lite dispatch available while a
 		// preflight refresh proves that the Tile/program pair is unchanged.
 		retained.ready = false;
@@ -883,15 +883,15 @@ namespace fonthook::vectorfont
 			|| !generation || !atlasTextureEpoch
 			|| !payload.payloadTemplate)
 		{
-			InvalidateNativeA8StandardPassLiteDispatch(
+			InvalidateNativeFontStandardPassLiteDispatch(
 				retained.standardPassLite);
 			return false;
 		}
 
-		const NativeA8PayloadTemplate& artifact =
+		const NativeFontPayloadTemplate& artifact =
 			*payload.payloadTemplate;
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		const std::vector<NativeFontPacketTemplate>& packets =
+			GetNativeFontPackets(artifact, payload.useCompositePackets);
 		auto discardRetained = [&retained]()
 		{
 			retained.ready = false;
@@ -903,7 +903,7 @@ namespace fonthook::vectorfont
 			retained.bridgeEligible = false;
 			retained.packets.clear();
 			retained.runs.clear();
-			InvalidateNativeA8StandardPassLiteDispatch(
+			InvalidateNativeFontStandardPassLiteDispatch(
 				retained.standardPassLite);
 		};
 		if (packets.empty()
@@ -928,8 +928,8 @@ namespace fonthook::vectorfont
 		for (UInt32 index = 0;
 			index < static_cast<UInt32>(packets.size()); ++index)
 		{
-			const NativeA8PacketTemplate& packet = packets[index];
-			const NativeA8CompiledPacketCommand* program =
+			const NativeFontPacketTemplate& packet = packets[index];
+			const NativeFontCompiledPacketCommand* program =
 				payload.packetPrograms[index];
 			const UInt64 packetEnd =
 				static_cast<UInt64>(packet.firstVertex)
@@ -952,7 +952,7 @@ namespace fonthook::vectorfont
 
 			if (canRefresh)
 			{
-				const NativeA8TileRetainedPacket& existing =
+				const NativeFontTileRetainedPacket& existing =
 					retained.packets[index];
 				canRefresh = existing.packet == &packet
 					&& existing.program == program
@@ -968,13 +968,13 @@ namespace fonthook::vectorfont
 		{
 			if (retained.packets.size() == 1)
 			{
-				BuildNativeA8StandardPassLiteDispatch(
+				BuildNativeFontStandardPassLiteDispatch(
 					ownerTile, retained.packets.front().program,
 					generation, retained.standardPassLite);
 			}
 			else
 			{
-				InvalidateNativeA8StandardPassLiteDispatch(
+				InvalidateNativeFontStandardPassLiteDispatch(
 					retained.standardPassLite);
 			}
 			retained.atlasTextureEpoch = atlasTextureEpoch;
@@ -997,8 +997,8 @@ namespace fonthook::vectorfont
 		for (UInt32 index = 0;
 			index < static_cast<UInt32>(packets.size()); ++index)
 		{
-			const NativeA8PacketTemplate& packet = packets[index];
-			NativeA8TileRetainedPacket command;
+			const NativeFontPacketTemplate& packet = packets[index];
+			NativeFontTileRetainedPacket command;
 			command.packet = &packet;
 			command.program = payload.packetPrograms[index];
 			command.packetIndex = index;
@@ -1019,7 +1019,7 @@ namespace fonthook::vectorfont
 			{
 				++end;
 			}
-			NativeA8TileRetainedRun run;
+			NativeFontTileRetainedRun run;
 			run.firstPacket = first;
 			run.packetCount = end - first;
 			run.bridgeEligible = true;
@@ -1036,13 +1036,13 @@ namespace fonthook::vectorfont
 		retained.bridgeEligible = retained.packets.size() > 1;
 		if (retained.packets.size() == 1)
 		{
-			BuildNativeA8StandardPassLiteDispatch(
+			BuildNativeFontStandardPassLiteDispatch(
 				ownerTile, retained.packets.front().program,
 				generation, retained.standardPassLite);
 		}
 		else
 		{
-			InvalidateNativeA8StandardPassLiteDispatch(
+			InvalidateNativeFontStandardPassLiteDispatch(
 				retained.standardPassLite);
 		}
 		retained.ready = !retained.packets.empty()
@@ -1059,12 +1059,12 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool IsNativeA8TileRetainedTextCurrent(
-		const NativeA8ShapePayload& payload,
+	bool IsNativeFontTileRetainedTextCurrent(
+		const NativeFontShapePayload& payload,
 		const NiTriShape* ownerTile, UInt32 generation,
 		UInt32 atlasTextureEpoch)
 	{
-		const NativeA8TileRetainedText& retained =
+		const NativeFontTileRetainedText& retained =
 			payload.retainedText;
 		if (!retained.ready || !ownerTile || !generation
 			|| !atlasTextureEpoch || !payload.payloadTemplate
@@ -1077,16 +1077,16 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(*payload.payloadTemplate,
+		const std::vector<NativeFontPacketTemplate>& packets =
+			GetNativeFontPackets(*payload.payloadTemplate,
 				payload.useCompositePackets);
 		return !retained.packets.empty()
 			&& !retained.runs.empty()
 			&& retained.packets.size() == packets.size();
 	}
 
-	void NotifyNativeA8CommandExternalMutation(
-		NativeA8CommandFallback reason)
+	void NotifyNativeFontCommandExternalMutation(
+		NativeFontCommandFallback reason)
 	{
 		s_externalMutationReason.store(static_cast<UInt8>(
 			NormalizeMutationReason(reason)), std::memory_order_relaxed);
@@ -1106,21 +1106,21 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	void InvalidateNativeA8CommandExecutionSegment(
-		NativeA8CommandFallback reason)
+	void InvalidateNativeFontCommandExecutionSegment(
+		NativeFontCommandFallback reason)
 	{
 		AdvanceExecutionBoundaryEpoch(
 			s_commandBuffer, NormalizeMutationReason(reason));
 	}
 
-	void BeginNativeA8FrameCommandBuffer(BSShaderAccumulator* accumulator,
+	void BeginNativeFontFrameCommandBuffer(BSShaderAccumulator* accumulator,
 		UInt64 validationToken, UInt32 generation, UInt32 atlasTextureEpoch)
 	{
-		EndNativeA8FrameCommandBuffer();
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		EndNativeFontFrameCommandBuffer();
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		buffer.enabled = g_bEnableFreeTypeFontCommandBuffer;
 		if (!buffer.enabled || !g_bEnableFreeTypeFontRendering
-			|| !g_bEnableFreeTypeA8Atlas || !accumulator
+			|| !g_bEnableFreeTypeNativeAtlas || !accumulator
 			|| !validationToken || !generation)
 		{
 			return;
@@ -1130,7 +1130,7 @@ namespace fonthook::vectorfont
 		buffer.stamp.generation = generation;
 		buffer.stamp.atlasTextureEpoch = atlasTextureEpoch;
 		buffer.stamp.nestedTraversalSerial =
-			GetNativeA8SortedNestedTraversalSerial();
+			GetNativeFontSortedNestedTraversalSerial();
 		buffer.stamp.renderer = NiDX9Renderer::GetSingleton();
 		buffer.stamp.device = buffer.stamp.renderer
 			? buffer.stamp.renderer->GetD3DDevice() : nullptr;
@@ -1141,10 +1141,10 @@ namespace fonthook::vectorfont
 		buffer.building = true;
 	}
 
-	void ReserveNativeA8FrameCommandBuffer(size_t ordinaryEntryCount,
+	void ReserveNativeFontFrameCommandBuffer(size_t ordinaryEntryCount,
 		size_t directFacadeCount)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (!buffer.building)
 			return;
 
@@ -1163,39 +1163,39 @@ namespace fonthook::vectorfont
 		RefreshCommandMemory(buffer);
 	}
 
-	UInt32 AddNativeA8FrameSinglePacketCommand(NiTriShape* facade,
-		const A8ShapeMetadata* metadata, NativeA8ShapePayload* payload)
+	UInt32 AddNativeFontFrameSinglePacketCommand(NiTriShape* facade,
+		const NativeFontShapeMetadata* metadata, NativeFontShapePayload* payload)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (!buffer.building || !facade || !metadata || !payload
 			|| !payload->buildComplete || !payload->payloadTemplate)
 		{
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 
-		if (GetNativeA8Packets(*payload->payloadTemplate,
+		if (GetNativeFontPackets(*payload->payloadTemplate,
 				payload->useCompositePackets).size() != 1)
 		{
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
-		const NativeA8TileRetainedText* retainedText =
+		const NativeFontTileRetainedText* retainedText =
 			ResolveTileRetainedText(buffer, facade, *payload);
 		if (!retainedText || retainedText->packets.size() != 1)
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
 					CommandSinglePacketBuildFallback);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 
-		NativeA8FramePayloadBinding payloadBinding;
-		if (!ResolveNativeA8FramePayloadBinding(
+		NativeFontFramePayloadBinding payloadBinding;
+		if (!ResolveNativeFontFramePayloadBinding(
 				*payload, payloadBinding))
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
 					CommandSinglePacketBuildFallback);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 		const UInt32 commandIndex = static_cast<UInt32>(
 			buffer.singlePacketCommands.size());
@@ -1204,7 +1204,7 @@ namespace fonthook::vectorfont
 		buffer.singlePacketCommands.emplace_back();
 		RecordCommandVectorGrowth(previousSingleCapacity,
 			buffer.singlePacketCommands.capacity());
-		NativeA8SinglePacketCommand& command =
+		NativeFontSinglePacketCommand& command =
 			buffer.singlePacketCommands.back();
 		command.facade = facade;
 		command.payload = payload;
@@ -1221,7 +1221,7 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
 					CommandSinglePacketBuildFallback);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 
 		const UInt32 resourceSerial =
@@ -1234,7 +1234,7 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
 					CommandSinglePacketBuildFallback);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 
 		RecordFreeTypePerf(
@@ -1245,14 +1245,14 @@ namespace fonthook::vectorfont
 		return commandIndex;
 	}
 
-	UInt32 AddNativeA8FrameDirectFacadeCommand(
-		const A8ShapeMetadata* metadata)
+	UInt32 AddNativeFontFrameDirectFacadeCommand(
+		const NativeFontShapeMetadata* metadata)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		SingletonFacadeState* singleton = metadata
 			? GetSingletonFacadeState(*metadata) : nullptr;
 		if (!buffer.building || !metadata || !singleton)
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 
 		const UInt64 existingToken =
 			singleton->commandValidationToken.load(
@@ -1261,13 +1261,13 @@ namespace fonthook::vectorfont
 			singleton->commandDirectFacadeSinglePacketIndex.load(
 				std::memory_order_acquire);
 		if (existingToken == buffer.stamp.validationToken
-			&& existingIndex != kInvalidNativeA8CommandIndex)
+			&& existingIndex != kInvalidNativeFontCommandIndex)
 		{
 			return existingIndex;
 		}
 
-		NativeA8ShapePayload* payload = &metadata->nativePayload;
-		const NativeA8DrawCommand& prepared =
+		NativeFontShapePayload* payload = &metadata->nativePayload;
+		const NativeFontDrawCommand& prepared =
 			singleton->commandBuildCommand;
 		if (singleton->commandBuildValidationToken.load(
 				std::memory_order_acquire)
@@ -1291,10 +1291,10 @@ namespace fonthook::vectorfont
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandBuildViewMiss);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 
-		const NativeA8TileRetainedText* retainedText =
+		const NativeFontTileRetainedText* retainedText =
 			ResolveTileRetainedText(buffer, singleton->slot.shape,
 				*payload, false);
 		if (!retainedText || retainedText->packets.size() != 1
@@ -1304,7 +1304,7 @@ namespace fonthook::vectorfont
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandBuildViewMiss);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 
 		RecordFreeTypePerf(FreeTypePerfCounter::CommandBuildViewHit);
@@ -1315,7 +1315,7 @@ namespace fonthook::vectorfont
 		buffer.directFacadeSinglePacketCommands.emplace_back();
 		RecordCommandVectorGrowth(previousCapacity,
 			buffer.directFacadeSinglePacketCommands.capacity());
-		NativeA8DirectFacadeSinglePacketCommand& command =
+		NativeFontDirectFacadeSinglePacketCommand& command =
 			buffer.directFacadeSinglePacketCommands.back();
 		command.singletonMetadata = metadata;
 		command.geometry = prepared.expectedGeometry;
@@ -1338,15 +1338,15 @@ namespace fonthook::vectorfont
 		return commandIndex;
 	}
 
-	UInt32 AddNativeA8FrameCommandSpan(NiTriShape* facade,
-		const A8ShapeMetadata* metadata, NativeA8ShapePayload* payload)
+	UInt32 AddNativeFontFrameCommandSpan(NiTriShape* facade,
+		const NativeFontShapeMetadata* metadata, NativeFontShapePayload* payload)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (!buffer.building || !facade || !metadata || !payload
 			|| !payload->buildComplete || !payload->payloadTemplate)
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 
-		NativeA8CommandSpan span;
+		NativeFontCommandSpan span;
 		span.facade = facade;
 		span.metadata = metadata;
 		span.payload = payload;
@@ -1359,11 +1359,11 @@ namespace fonthook::vectorfont
 		const size_t commandRollback = buffer.commands.size();
 		const size_t runRollback = buffer.runs.size();
 		bool appended = false;
-		const NativeA8TileRetainedText* retainedText =
+		const NativeFontTileRetainedText* retainedText =
 			ResolveTileRetainedText(buffer, facade, *payload);
-		NativeA8FramePayloadBinding payloadBinding;
+		NativeFontFramePayloadBinding payloadBinding;
 		if (retainedText
-			&& ResolveNativeA8FramePayloadBinding(
+			&& ResolveNativeFontFramePayloadBinding(
 				*payload, payloadBinding))
 		{
 			for (UInt32 index = 0;
@@ -1395,7 +1395,7 @@ namespace fonthook::vectorfont
 		if (!appended)
 		{
 			buffer.commands.resize(commandRollback);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 
 		span.commandCount = static_cast<UInt32>(
@@ -1405,7 +1405,7 @@ namespace fonthook::vectorfont
 		if (!retainedText)
 		{
 			buffer.commands.resize(commandRollback);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 		const size_t previousRunCapacity = buffer.runs.capacity();
 		const bool builtRuns =
@@ -1417,7 +1417,7 @@ namespace fonthook::vectorfont
 		{
 			buffer.commands.resize(commandRollback);
 			buffer.runs.resize(runRollback);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 		span.runCount = static_cast<UInt32>(
 			buffer.runs.size() - span.firstRun);
@@ -1425,17 +1425,17 @@ namespace fonthook::vectorfont
 		{
 			buffer.commands.resize(commandRollback);
 			buffer.runs.resize(runRollback);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 
-		const NativeA8FramePacketBinding& spanBinding =
+		const NativeFontFramePacketBinding& spanBinding =
 			buffer.commands[span.firstCommand].binding;
 		if (!AdoptFrameResourceStamp(buffer,
 				spanBinding.resourceSerial, spanBinding.uploadEpoch))
 		{
 			buffer.commands.resize(commandRollback);
 			buffer.runs.resize(runRollback);
-			return kInvalidNativeA8CommandIndex;
+			return kInvalidNativeFontCommandIndex;
 		}
 
 		const UInt32 spanIndex = static_cast<UInt32>(
@@ -1450,9 +1450,9 @@ namespace fonthook::vectorfont
 		return spanIndex;
 	}
 
-	void ActivateNativeA8FrameCommandBuffer()
+	void ActivateNativeFontFrameCommandBuffer()
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		buffer.building = false;
 		buffer.active = buffer.enabled && buffer.stamp.device
 			&& ((!buffer.spans.empty() && !buffer.commands.empty())
@@ -1464,10 +1464,10 @@ namespace fonthook::vectorfont
 		RefreshCommandMemory(buffer);
 	}
 
-	void EndNativeA8FrameCommandBuffer()
+	void EndNativeFontFrameCommandBuffer()
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		for (const NativeA8DirectFacadeSinglePacketCommand& command
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		for (const NativeFontDirectFacadeSinglePacketCommand& command
 			: buffer.directFacadeSinglePacketCommands)
 		{
 			SingletonFacadeState* singleton = command.singletonMetadata
@@ -1485,7 +1485,7 @@ namespace fonthook::vectorfont
 			singleton->commandValidationToken.store(
 				0, std::memory_order_release);
 			singleton->commandDirectFacadeSinglePacketIndex.store(
-				kInvalidNativeA8CommandIndex,
+				kInvalidNativeFontCommandIndex,
 				std::memory_order_release);
 		}
 		buffer.active = false;
@@ -1495,7 +1495,7 @@ namespace fonthook::vectorfont
 		buffer.executionBoundaryEpoch = 1;
 		buffer.frameExternalMutationEpoch = 0;
 		buffer.executionBoundaryReason =
-			NativeA8CommandFallback::State;
+			NativeFontCommandFallback::State;
 		buffer.enabled = false;
 		buffer.commands.clear();
 		buffer.runs.clear();
@@ -1505,21 +1505,21 @@ namespace fonthook::vectorfont
 		TrimCommandCapacity(buffer);
 	}
 
-	void InvalidateNativeA8CommandGeometry(NiTriShape* geometry)
+	void InvalidateNativeFontCommandGeometry(NiTriShape* geometry)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (!geometry)
 			return;
-		NotifyNativeA8CommandExternalMutation(
-			NativeA8CommandFallback::Topology);
-		InvalidateNativeA8CommandExecutionSegment(
-			NativeA8CommandFallback::Topology);
+		NotifyNativeFontCommandExternalMutation(
+			NativeFontCommandFallback::Topology);
+		InvalidateNativeFontCommandExecutionSegment(
+			NativeFontCommandFallback::Topology);
 		if (!buffer.active && !buffer.building)
 			return;
 		bool invalidated = false;
 		bool singlePacketInvalidated = false;
 		bool directFacadeSinglePacketInvalidated = false;
-		for (NativeA8SinglePacketCommand& command
+		for (NativeFontSinglePacketCommand& command
 			: buffer.singlePacketCommands)
 		{
 			if (command.facade != geometry
@@ -1530,15 +1530,15 @@ namespace fonthook::vectorfont
 			}
 			command.partialDraw = command.partialDraw
 				|| command.state
-					== NativeA8CommandSpanState::Executing;
+					== NativeFontCommandSpanState::Executing;
 			command.executionValidationToken = 0;
 			command.executionSegmentEpoch = 0;
 			command.executionExternalMutationEpoch = 0;
-			command.state = NativeA8CommandSpanState::Fault;
+			command.state = NativeFontCommandSpanState::Fault;
 			invalidated = true;
 			singlePacketInvalidated = true;
 		}
-		for (NativeA8DirectFacadeSinglePacketCommand& command
+		for (NativeFontDirectFacadeSinglePacketCommand& command
 			: buffer.directFacadeSinglePacketCommands)
 		{
 			if (command.geometry != geometry
@@ -1550,21 +1550,21 @@ namespace fonthook::vectorfont
 			}
 			command.partialDraw = command.partialDraw
 				|| command.state
-					== NativeA8CommandSpanState::Executing;
+					== NativeFontCommandSpanState::Executing;
 			command.executionValidationToken = 0;
 			command.executionSegmentEpoch = 0;
 			command.executionExternalMutationEpoch = 0;
-			command.state = NativeA8CommandSpanState::Fault;
+			command.state = NativeFontCommandSpanState::Fault;
 			invalidated = true;
 			directFacadeSinglePacketInvalidated = true;
 		}
-		for (NativeA8CommandSpan& span : buffer.spans)
+		for (NativeFontCommandSpan& span : buffer.spans)
 		{
 			bool member = span.facade == geometry;
 			for (UInt32 index = 0;
 				!member && index < span.commandCount; ++index)
 			{
-				const NativeA8DrawCommand& command =
+				const NativeFontDrawCommand& command =
 					buffer.commands[span.firstCommand + index];
 				member = command.sourceGeometry == geometry
 					|| command.expectedGeometry == geometry;
@@ -1572,11 +1572,11 @@ namespace fonthook::vectorfont
 			if (!member)
 				continue;
 			span.partialDraw = span.partialDraw
-				|| span.state == NativeA8CommandSpanState::Executing;
+				|| span.state == NativeFontCommandSpanState::Executing;
 			span.executionValidationToken = 0;
 			span.executionSegmentEpoch = 0;
 			span.executionExternalMutationEpoch = 0;
-			span.state = NativeA8CommandSpanState::Fault;
+			span.state = NativeFontCommandSpanState::Fault;
 			invalidated = true;
 		}
 		if (invalidated)
@@ -1593,16 +1593,16 @@ namespace fonthook::vectorfont
 					FreeTypePerfCounter::
 						CommandDirectFacadeSinglePacketFallback);
 			}
-			RecordNativeA8CommandFallback(
-				NativeA8CommandFallback::Topology);
+			RecordNativeFontCommandFallback(
+				NativeFontCommandFallback::Topology);
 		}
 	}
 
-	bool FindNativeA8SinglePacketCommand(UInt32 commandIndex,
-		UInt64 validationToken, NativeA8SinglePacketCommandView& view)
+	bool FindNativeFontSinglePacketCommand(UInt32 commandIndex,
+		UInt64 validationToken, NativeFontSinglePacketCommandView& view)
 	{
 		view = {};
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (!buffer.active || !validationToken
 			|| validationToken != buffer.stamp.validationToken
 			|| commandIndex >= buffer.singlePacketCommands.size())
@@ -1611,7 +1611,7 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::CommandSinglePacketMiss);
 			return false;
 		}
-		const NativeA8SinglePacketCommand& command =
+		const NativeFontSinglePacketCommand& command =
 			buffer.singlePacketCommands[commandIndex];
 		if (command.validationToken != validationToken)
 		{
@@ -1627,24 +1627,24 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool BeginNativeA8SinglePacketCommandExecution(UInt32 commandIndex,
-		NiTriShape* geometry, NativeA8SinglePacketCommandView& view)
+	bool BeginNativeFontSinglePacketCommandExecution(UInt32 commandIndex,
+		NiTriShape* geometry, NativeFontSinglePacketCommandView& view)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		if (!FindNativeA8SinglePacketCommand(commandIndex,
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		if (!FindNativeFontSinglePacketCommand(commandIndex,
 				buffer.stamp.validationToken, view))
 		{
 			return false;
 		}
-		NativeA8CommandFallback failure =
+		NativeFontCommandFallback failure =
 			EnsureExecutionSegmentValidated(buffer);
-		if (failure != NativeA8CommandFallback::None)
+		if (failure != NativeFontCommandFallback::None)
 		{
 			RecordSinglePacketCommandFallback(failure);
 			return false;
 		}
 
-		NativeA8SinglePacketCommand& command =
+		NativeFontSinglePacketCommand& command =
 			buffer.singlePacketCommands[commandIndex];
 		if (command.validationToken != buffer.stamp.validationToken
 			|| command.generation != buffer.stamp.generation
@@ -1661,29 +1661,29 @@ namespace fonthook::vectorfont
 			|| command.draw.packetIndex != 0)
 		{
 			RecordSinglePacketCommandFallback(
-				NativeA8CommandFallback::Topology);
+				NativeFontCommandFallback::Topology);
 			return false;
 		}
-		if (command.state != NativeA8CommandSpanState::Ready)
+		if (command.state != NativeFontCommandSpanState::Ready)
 		{
 			RecordSinglePacketCommandFallback(
-				NativeA8CommandFallback::State);
+				NativeFontCommandFallback::State);
 			return false;
 		}
 		if (!geometry || command.facade != geometry
 			|| command.draw.sourceGeometry != geometry)
 		{
-			command.state = NativeA8CommandSpanState::Fault;
+			command.state = NativeFontCommandSpanState::Fault;
 			command.partialDraw = false;
 			command.executionValidationToken = 0;
 			command.executionSegmentEpoch = 0;
 			command.executionExternalMutationEpoch = 0;
 			RecordSinglePacketCommandFallback(
-				NativeA8CommandFallback::Topology);
+				NativeFontCommandFallback::Topology);
 			return false;
 		}
 
-		command.state = NativeA8CommandSpanState::Executing;
+		command.state = NativeFontCommandSpanState::Executing;
 		command.partialDraw = false;
 		command.executionValidationToken =
 			buffer.stamp.validationToken;
@@ -1695,31 +1695,31 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	void EndNativeA8SinglePacketCommandExecution(UInt32 commandIndex,
+	void EndNativeFontSinglePacketCommandExecution(UInt32 commandIndex,
 		bool success, bool drewPacket)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (commandIndex >= buffer.singlePacketCommands.size())
 			return;
-		NativeA8SinglePacketCommand& command =
+		NativeFontSinglePacketCommand& command =
 			buffer.singlePacketCommands[commandIndex];
 		command.partialDraw = drewPacket;
 		command.executionValidationToken = 0;
 		command.executionSegmentEpoch = 0;
 		command.executionExternalMutationEpoch = 0;
 		command.state = success
-			? NativeA8CommandSpanState::Consumed
-			: NativeA8CommandSpanState::Fault;
+			? NativeFontCommandSpanState::Consumed
+			: NativeFontCommandSpanState::Fault;
 	}
 
-	void AbandonNativeA8SinglePacketCommandExecution(UInt32 commandIndex)
+	void AbandonNativeFontSinglePacketCommandExecution(UInt32 commandIndex)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (commandIndex >= buffer.singlePacketCommands.size())
 			return;
-		NativeA8SinglePacketCommand& command =
+		NativeFontSinglePacketCommand& command =
 			buffer.singlePacketCommands[commandIndex];
-		if (command.state != NativeA8CommandSpanState::Executing
+		if (command.state != NativeFontCommandSpanState::Executing
 			|| command.partialDraw)
 		{
 			return;
@@ -1727,31 +1727,31 @@ namespace fonthook::vectorfont
 		command.executionValidationToken = 0;
 		command.executionSegmentEpoch = 0;
 		command.executionExternalMutationEpoch = 0;
-		command.state = NativeA8CommandSpanState::Ready;
+		command.state = NativeFontCommandSpanState::Ready;
 	}
 
-	bool IsNativeA8SinglePacketCommandConsumed(
+	bool IsNativeFontSinglePacketCommandConsumed(
 		UInt32 commandIndex, UInt64 validationToken)
 	{
-		const NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		const NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (!validationToken
 			|| validationToken != buffer.stamp.validationToken
 			|| commandIndex >= buffer.singlePacketCommands.size())
 		{
 			return false;
 		}
-		const NativeA8SinglePacketCommand& command =
+		const NativeFontSinglePacketCommand& command =
 			buffer.singlePacketCommands[commandIndex];
 		return command.validationToken == validationToken
-			&& command.state == NativeA8CommandSpanState::Consumed
+			&& command.state == NativeFontCommandSpanState::Consumed
 			&& command.partialDraw;
 	}
 
-	bool FindNativeA8CommandSpan(UInt32 spanIndex,
-		UInt64 validationToken, NativeA8CommandSpanView& view)
+	bool FindNativeFontCommandSpan(UInt32 spanIndex,
+		UInt64 validationToken, NativeFontCommandSpanView& view)
 	{
 		view = {};
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (!buffer.active || !validationToken
 			|| validationToken != buffer.stamp.validationToken
 			|| spanIndex >= buffer.spans.size())
@@ -1759,7 +1759,7 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(FreeTypePerfCounter::CommandSpanMiss);
 			return false;
 		}
-		const NativeA8CommandSpan& span = buffer.spans[spanIndex];
+		const NativeFontCommandSpan& span = buffer.spans[spanIndex];
 		if (span.validationToken != validationToken
 			|| span.firstCommand + span.commandCount
 				> buffer.commands.size()
@@ -1777,23 +1777,23 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool BeginNativeA8CommandSpanExecution(UInt32 spanIndex,
-		NiTriShape* geometry, NativeA8CommandSpanView& view)
+	bool BeginNativeFontCommandSpanExecution(UInt32 spanIndex,
+		NiTriShape* geometry, NativeFontCommandSpanView& view)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		if (!FindNativeA8CommandSpan(spanIndex,
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		if (!FindNativeFontCommandSpan(spanIndex,
 				buffer.stamp.validationToken, view))
 		{
 			return false;
 		}
-		NativeA8CommandFallback failure =
+		NativeFontCommandFallback failure =
 			EnsureExecutionSegmentValidated(buffer);
-		if (failure != NativeA8CommandFallback::None)
+		if (failure != NativeFontCommandFallback::None)
 		{
-			RecordNativeA8CommandFallback(failure);
+			RecordNativeFontCommandFallback(failure);
 			return false;
 		}
-		NativeA8CommandSpan& span = buffer.spans[spanIndex];
+		NativeFontCommandSpan& span = buffer.spans[spanIndex];
 		if (span.validationToken != buffer.stamp.validationToken
 			|| span.generation != buffer.stamp.generation
 			|| span.atlasTextureEpoch
@@ -1802,28 +1802,28 @@ namespace fonthook::vectorfont
 			|| span.payload->useCompositePackets
 				!= span.useCompositePackets)
 		{
-			RecordNativeA8CommandFallback(
-				NativeA8CommandFallback::Topology);
+			RecordNativeFontCommandFallback(
+				NativeFontCommandFallback::Topology);
 			return false;
 		}
-		if (span.state != NativeA8CommandSpanState::Ready)
+		if (span.state != NativeFontCommandSpanState::Ready)
 		{
-			RecordNativeA8CommandFallback(
-				NativeA8CommandFallback::State);
+			RecordNativeFontCommandFallback(
+				NativeFontCommandFallback::State);
 			return false;
 		}
 		if (span.facade != geometry)
 		{
-			span.state = NativeA8CommandSpanState::Fault;
+			span.state = NativeFontCommandSpanState::Fault;
 			span.partialDraw = false;
 			span.executionValidationToken = 0;
 			span.executionSegmentEpoch = 0;
 			span.executionExternalMutationEpoch = 0;
-			RecordNativeA8CommandFallback(
-				NativeA8CommandFallback::Topology);
+			RecordNativeFontCommandFallback(
+				NativeFontCommandFallback::Topology);
 			return false;
 		}
-		span.state = NativeA8CommandSpanState::Executing;
+		span.state = NativeFontCommandSpanState::Executing;
 		span.partialDraw = false;
 		span.executionValidationToken =
 			buffer.stamp.validationToken;
@@ -1835,100 +1835,100 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	void EndNativeA8CommandSpanExecution(UInt32 spanIndex,
+	void EndNativeFontCommandSpanExecution(UInt32 spanIndex,
 		bool success, bool drewPacket)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (spanIndex >= buffer.spans.size())
 			return;
-		NativeA8CommandSpan& span = buffer.spans[spanIndex];
+		NativeFontCommandSpan& span = buffer.spans[spanIndex];
 		span.partialDraw = drewPacket;
 		span.executionValidationToken = 0;
 		span.executionSegmentEpoch = 0;
 		span.executionExternalMutationEpoch = 0;
 		span.state = success
-			? NativeA8CommandSpanState::Consumed
-			: NativeA8CommandSpanState::Fault;
+			? NativeFontCommandSpanState::Consumed
+			: NativeFontCommandSpanState::Fault;
 	}
 
-	bool ValidateNativeA8Command(UInt32 spanIndex,
+	bool ValidateNativeFontCommand(UInt32 spanIndex,
 		UInt32 commandOffset, NiTriShape* geometry, NiRenderer* renderer)
 	{
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::CommandPacketLightValidation);
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		NativeA8CommandFallback commandFailure =
-			NativeA8CommandFallback::None;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontCommandFallback commandFailure =
+			NativeFontCommandFallback::None;
 		if (!buffer.active || spanIndex >= buffer.spans.size())
 		{
-			commandFailure = NativeA8CommandFallback::State;
+			commandFailure = NativeFontCommandFallback::State;
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
-			RecordNativeA8CommandFallback(commandFailure);
+			RecordNativeFontCommandFallback(commandFailure);
 			return false;
 		}
 
-		const NativeA8CommandSpan& span = buffer.spans[spanIndex];
-		if (span.state != NativeA8CommandSpanState::Executing
+		const NativeFontCommandSpan& span = buffer.spans[spanIndex];
+		if (span.state != NativeFontCommandSpanState::Executing
 			|| span.executionValidationToken
 				!= buffer.stamp.validationToken)
 		{
-			commandFailure = NativeA8CommandFallback::State;
+			commandFailure = NativeFontCommandFallback::State;
 		}
 		else if (commandOffset >= span.commandCount
 			|| span.firstCommand + commandOffset
 				>= buffer.commands.size())
 		{
-			commandFailure = NativeA8CommandFallback::Topology;
+			commandFailure = NativeFontCommandFallback::Topology;
 		}
 		else
 			commandFailure =
 				ValidateExecutionSegmentEpoch(buffer,
 					span.executionSegmentEpoch,
 					span.executionExternalMutationEpoch);
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
-			RecordNativeA8CommandFallback(commandFailure);
+			RecordNativeFontCommandFallback(commandFailure);
 			return false;
 		}
 
-		const NativeA8DrawCommand& command =
+		const NativeFontDrawCommand& command =
 			buffer.commands[span.firstCommand + commandOffset];
 		commandFailure = ValidateDrawCommandState(buffer, command,
 			span.payload, commandOffset, geometry, renderer);
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
-			RecordNativeA8CommandFallback(commandFailure);
+			RecordNativeFontCommandFallback(commandFailure);
 			return false;
 		}
 		return true;
 	}
 
-	bool GuardNativeA8Command(UInt32 spanIndex,
+	bool GuardNativeFontCommand(UInt32 spanIndex,
 		UInt32 commandOffset, NiTriShape* geometry, NiRenderer* renderer)
 	{
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::CommandPacketEpochGuard);
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		NativeA8CommandFallback commandFailure =
-			NativeA8CommandFallback::None;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontCommandFallback commandFailure =
+			NativeFontCommandFallback::None;
 		if (!buffer.active || spanIndex >= buffer.spans.size())
 		{
-			commandFailure = NativeA8CommandFallback::State;
+			commandFailure = NativeFontCommandFallback::State;
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
-			RecordNativeA8CommandFallback(commandFailure);
+			RecordNativeFontCommandFallback(commandFailure);
 			return false;
 		}
 
-		const NativeA8CommandSpan& span = buffer.spans[spanIndex];
+		const NativeFontCommandSpan& span = buffer.spans[spanIndex];
 		if (commandOffset >= span.commandCount
 			|| span.firstCommand + commandOffset
 				>= buffer.commands.size())
 		{
-			commandFailure = NativeA8CommandFallback::Topology;
+			commandFailure = NativeFontCommandFallback::Topology;
 		}
 		else
 		{
@@ -1937,20 +1937,20 @@ namespace fonthook::vectorfont
 				span.executionSegmentEpoch,
 				span.executionExternalMutationEpoch, renderer);
 		}
-		if (commandFailure == NativeA8CommandFallback::None)
+		if (commandFailure == NativeFontCommandFallback::None)
 		{
-			const NativeA8DrawCommand& command =
+			const NativeFontDrawCommand& command =
 				buffer.commands[span.firstCommand + commandOffset];
 			if (!geometry
 				|| (command.expectedGeometry
 					&& command.expectedGeometry != geometry))
 			{
-				commandFailure = NativeA8CommandFallback::Topology;
+				commandFailure = NativeFontCommandFallback::Topology;
 			}
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
-			RecordNativeA8CommandFallback(commandFailure);
+			RecordNativeFontCommandFallback(commandFailure);
 			return false;
 		}
 		RecordFreeTypePerf(
@@ -1958,32 +1958,32 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool ValidateNativeA8SinglePacketCommand(UInt32 commandIndex,
+	bool ValidateNativeFontSinglePacketCommand(UInt32 commandIndex,
 		NiTriShape* geometry, NiRenderer* renderer)
 	{
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::CommandPacketLightValidation);
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		NativeA8CommandFallback commandFailure =
-			NativeA8CommandFallback::None;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontCommandFallback commandFailure =
+			NativeFontCommandFallback::None;
 		if (!buffer.active
 			|| commandIndex >= buffer.singlePacketCommands.size())
 		{
-			commandFailure = NativeA8CommandFallback::State;
+			commandFailure = NativeFontCommandFallback::State;
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
 			RecordSinglePacketCommandFallback(commandFailure);
 			return false;
 		}
 
-		const NativeA8SinglePacketCommand& command =
+		const NativeFontSinglePacketCommand& command =
 			buffer.singlePacketCommands[commandIndex];
-		if (command.state != NativeA8CommandSpanState::Executing
+		if (command.state != NativeFontCommandSpanState::Executing
 			|| command.executionValidationToken
 				!= buffer.stamp.validationToken)
 		{
-			commandFailure = NativeA8CommandFallback::State;
+			commandFailure = NativeFontCommandFallback::State;
 		}
 		else
 		{
@@ -1991,13 +1991,13 @@ namespace fonthook::vectorfont
 				command.executionSegmentEpoch,
 				command.executionExternalMutationEpoch);
 		}
-		if (commandFailure == NativeA8CommandFallback::None)
+		if (commandFailure == NativeFontCommandFallback::None)
 		{
 			commandFailure = ValidateDrawCommandState(buffer,
 				command.draw, command.payload, 0,
 				geometry, renderer);
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
 			RecordSinglePacketCommandFallback(commandFailure);
 			return false;
@@ -2005,38 +2005,38 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool GuardNativeA8SinglePacketCommand(UInt32 commandIndex,
+	bool GuardNativeFontSinglePacketCommand(UInt32 commandIndex,
 		NiTriShape* geometry, NiRenderer* renderer)
 	{
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::CommandPacketEpochGuard);
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		NativeA8CommandFallback commandFailure =
-			NativeA8CommandFallback::None;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontCommandFallback commandFailure =
+			NativeFontCommandFallback::None;
 		if (!buffer.active
 			|| commandIndex >= buffer.singlePacketCommands.size())
 		{
-			commandFailure = NativeA8CommandFallback::State;
+			commandFailure = NativeFontCommandFallback::State;
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
 			RecordSinglePacketCommandFallback(commandFailure);
 			return false;
 		}
 
-		const NativeA8SinglePacketCommand& command =
+		const NativeFontSinglePacketCommand& command =
 			buffer.singlePacketCommands[commandIndex];
 		commandFailure = ValidatePacketExecutionGuard(buffer,
 			command.state, command.executionValidationToken,
 			command.executionSegmentEpoch,
 			command.executionExternalMutationEpoch, renderer);
-		if (commandFailure == NativeA8CommandFallback::None
+		if (commandFailure == NativeFontCommandFallback::None
 			&& (!geometry || command.facade != geometry
 				|| command.draw.sourceGeometry != geometry))
 		{
-			commandFailure = NativeA8CommandFallback::Topology;
+			commandFailure = NativeFontCommandFallback::Topology;
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
 			RecordSinglePacketCommandFallback(commandFailure);
 			return false;
@@ -2046,12 +2046,12 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool FindNativeA8DirectFacadeSinglePacketCommand(UInt32 commandIndex,
+	bool FindNativeFontDirectFacadeSinglePacketCommand(UInt32 commandIndex,
 		UInt64 validationToken,
-		NativeA8DirectFacadeSinglePacketCommandView& view)
+		NativeFontDirectFacadeSinglePacketCommandView& view)
 	{
 		view = {};
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (!buffer.active || !validationToken
 			|| validationToken != buffer.stamp.validationToken
 			|| commandIndex
@@ -2062,7 +2062,7 @@ namespace fonthook::vectorfont
 					CommandDirectFacadeSinglePacketMiss);
 			return false;
 		}
-		const NativeA8DirectFacadeSinglePacketCommand& command =
+		const NativeFontDirectFacadeSinglePacketCommand& command =
 			buffer.directFacadeSinglePacketCommands[commandIndex];
 		if (command.validationToken != validationToken)
 		{
@@ -2079,26 +2079,26 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool BeginNativeA8DirectFacadeSinglePacketCommandExecution(
-		UInt32 commandIndex, const A8ShapeMetadata* singletonMetadata,
+	bool BeginNativeFontDirectFacadeSinglePacketCommandExecution(
+		UInt32 commandIndex, const NativeFontShapeMetadata* singletonMetadata,
 		NiTriShape* geometry,
-		NativeA8DirectFacadeSinglePacketCommandView& view)
+		NativeFontDirectFacadeSinglePacketCommandView& view)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		if (!FindNativeA8DirectFacadeSinglePacketCommand(commandIndex,
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		if (!FindNativeFontDirectFacadeSinglePacketCommand(commandIndex,
 				buffer.stamp.validationToken, view))
 		{
 			return false;
 		}
-		NativeA8CommandFallback failure =
+		NativeFontCommandFallback failure =
 			EnsureExecutionSegmentValidated(buffer);
-		if (failure != NativeA8CommandFallback::None)
+		if (failure != NativeFontCommandFallback::None)
 		{
 			RecordDirectFacadeSinglePacketCommandFallback(failure);
 			return false;
 		}
 
-		NativeA8DirectFacadeSinglePacketCommand& command =
+		NativeFontDirectFacadeSinglePacketCommand& command =
 			buffer.directFacadeSinglePacketCommands[commandIndex];
 		SingletonFacadeState* singleton = singletonMetadata
 			? GetSingletonFacadeState(*singletonMetadata) : nullptr;
@@ -2137,28 +2137,28 @@ namespace fonthook::vectorfont
 				!= SingletonFacadeFrameMode::Direct)
 		{
 			RecordDirectFacadeSinglePacketCommandFallback(
-				NativeA8CommandFallback::Topology);
+				NativeFontCommandFallback::Topology);
 			return false;
 		}
-		if (command.state != NativeA8CommandSpanState::Ready)
+		if (command.state != NativeFontCommandSpanState::Ready)
 		{
 			RecordDirectFacadeSinglePacketCommandFallback(
-				NativeA8CommandFallback::State);
+				NativeFontCommandFallback::State);
 			return false;
 		}
 		if (!geometry || command.geometry != geometry)
 		{
-			command.state = NativeA8CommandSpanState::Fault;
+			command.state = NativeFontCommandSpanState::Fault;
 			command.partialDraw = false;
 			command.executionValidationToken = 0;
 			command.executionSegmentEpoch = 0;
 			command.executionExternalMutationEpoch = 0;
 			RecordDirectFacadeSinglePacketCommandFallback(
-				NativeA8CommandFallback::Topology);
+				NativeFontCommandFallback::Topology);
 			return false;
 		}
 
-		command.state = NativeA8CommandSpanState::Executing;
+		command.state = NativeFontCommandSpanState::Executing;
 		command.partialDraw = false;
 		command.executionValidationToken =
 			buffer.stamp.validationToken;
@@ -2170,35 +2170,35 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	void EndNativeA8DirectFacadeSinglePacketCommandExecution(
+	void EndNativeFontDirectFacadeSinglePacketCommandExecution(
 		UInt32 commandIndex, bool success, bool drewPacket)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (commandIndex
 			>= buffer.directFacadeSinglePacketCommands.size())
 		{
 			return;
 		}
-		NativeA8DirectFacadeSinglePacketCommand& command =
+		NativeFontDirectFacadeSinglePacketCommand& command =
 			buffer.directFacadeSinglePacketCommands[commandIndex];
 		command.partialDraw = drewPacket;
 		command.executionValidationToken = 0;
 		command.executionSegmentEpoch = 0;
 		command.executionExternalMutationEpoch = 0;
 		command.state = success
-			? NativeA8CommandSpanState::Consumed
-			: NativeA8CommandSpanState::Fault;
+			? NativeFontCommandSpanState::Consumed
+			: NativeFontCommandSpanState::Fault;
 	}
 
-	void AbandonNativeA8DirectFacadeSinglePacketCommandExecution(
+	void AbandonNativeFontDirectFacadeSinglePacketCommandExecution(
 		UInt32 commandIndex)
 	{
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (commandIndex >= buffer.directFacadeSinglePacketCommands.size())
 			return;
-		NativeA8DirectFacadeSinglePacketCommand& command =
+		NativeFontDirectFacadeSinglePacketCommand& command =
 			buffer.directFacadeSinglePacketCommands[commandIndex];
-		if (command.state != NativeA8CommandSpanState::Executing
+		if (command.state != NativeFontCommandSpanState::Executing
 			|| command.partialDraw)
 		{
 			return;
@@ -2206,56 +2206,56 @@ namespace fonthook::vectorfont
 		command.executionValidationToken = 0;
 		command.executionSegmentEpoch = 0;
 		command.executionExternalMutationEpoch = 0;
-		command.state = NativeA8CommandSpanState::Ready;
+		command.state = NativeFontCommandSpanState::Ready;
 	}
 
-	bool IsNativeA8DirectFacadeSinglePacketCommandConsumed(
+	bool IsNativeFontDirectFacadeSinglePacketCommandConsumed(
 		UInt32 commandIndex, UInt64 validationToken)
 	{
-		const NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
+		const NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
 		if (!validationToken
 			|| validationToken != buffer.stamp.validationToken
 			|| commandIndex >= buffer.directFacadeSinglePacketCommands.size())
 		{
 			return false;
 		}
-		const NativeA8DirectFacadeSinglePacketCommand& command =
+		const NativeFontDirectFacadeSinglePacketCommand& command =
 			buffer.directFacadeSinglePacketCommands[commandIndex];
 		return command.validationToken == validationToken
-			&& command.state == NativeA8CommandSpanState::Consumed
+			&& command.state == NativeFontCommandSpanState::Consumed
 			&& command.partialDraw;
 	}
 
-	bool ValidateNativeA8DirectFacadeSinglePacketCommand(UInt32 commandIndex,
+	bool ValidateNativeFontDirectFacadeSinglePacketCommand(UInt32 commandIndex,
 		NiTriShape* geometry, NiRenderer* renderer)
 	{
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::CommandPacketLightValidation);
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		NativeA8CommandFallback commandFailure =
-			NativeA8CommandFallback::None;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontCommandFallback commandFailure =
+			NativeFontCommandFallback::None;
 		if (!buffer.active
 			|| commandIndex
 				>= buffer.directFacadeSinglePacketCommands.size())
 		{
-			commandFailure = NativeA8CommandFallback::State;
+			commandFailure = NativeFontCommandFallback::State;
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
 			RecordDirectFacadeSinglePacketCommandFallback(commandFailure);
 			return false;
 		}
 
-		const NativeA8DirectFacadeSinglePacketCommand& command =
+		const NativeFontDirectFacadeSinglePacketCommand& command =
 			buffer.directFacadeSinglePacketCommands[commandIndex];
 		SingletonFacadeState* singleton = command.singletonMetadata
 			? GetSingletonFacadeState(*command.singletonMetadata)
 			: nullptr;
-		if (command.state != NativeA8CommandSpanState::Executing
+		if (command.state != NativeFontCommandSpanState::Executing
 			|| command.executionValidationToken
 				!= buffer.stamp.validationToken)
 		{
-			commandFailure = NativeA8CommandFallback::State;
+			commandFailure = NativeFontCommandFallback::State;
 		}
 		else
 		{
@@ -2263,7 +2263,7 @@ namespace fonthook::vectorfont
 				command.executionSegmentEpoch,
 				command.executionExternalMutationEpoch);
 		}
-		if (commandFailure == NativeA8CommandFallback::None
+		if (commandFailure == NativeFontCommandFallback::None
 			&& (!singleton
 				|| singleton->commandValidationToken.load(
 					std::memory_order_acquire)
@@ -2274,15 +2274,15 @@ namespace fonthook::vectorfont
 					std::memory_order_acquire)
 					!= SingletonFacadeFrameMode::Direct))
 		{
-			commandFailure = NativeA8CommandFallback::Topology;
+			commandFailure = NativeFontCommandFallback::Topology;
 		}
-		if (commandFailure == NativeA8CommandFallback::None)
+		if (commandFailure == NativeFontCommandFallback::None)
 		{
 			commandFailure = ValidateDrawCommandState(buffer,
 				*command.draw, command.payload, 0,
 				geometry, renderer);
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
 			RecordDirectFacadeSinglePacketCommandFallback(commandFailure);
 			return false;
@@ -2290,27 +2290,27 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool GuardNativeA8DirectFacadeSinglePacketCommand(UInt32 commandIndex,
+	bool GuardNativeFontDirectFacadeSinglePacketCommand(UInt32 commandIndex,
 		NiTriShape* geometry, NiRenderer* renderer)
 	{
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::CommandPacketEpochGuard);
-		NativeA8FrameCommandBuffer& buffer = s_commandBuffer;
-		NativeA8CommandFallback commandFailure =
-			NativeA8CommandFallback::None;
+		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontCommandFallback commandFailure =
+			NativeFontCommandFallback::None;
 		if (!buffer.active
 			|| commandIndex
 				>= buffer.directFacadeSinglePacketCommands.size())
 		{
-			commandFailure = NativeA8CommandFallback::State;
+			commandFailure = NativeFontCommandFallback::State;
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
 			RecordDirectFacadeSinglePacketCommandFallback(commandFailure);
 			return false;
 		}
 
-		const NativeA8DirectFacadeSinglePacketCommand& command =
+		const NativeFontDirectFacadeSinglePacketCommand& command =
 			buffer.directFacadeSinglePacketCommands[commandIndex];
 		SingletonFacadeState* singleton = command.singletonMetadata
 			? GetSingletonFacadeState(*command.singletonMetadata)
@@ -2319,7 +2319,7 @@ namespace fonthook::vectorfont
 			command.state, command.executionValidationToken,
 			command.executionSegmentEpoch,
 			command.executionExternalMutationEpoch, renderer);
-		if (commandFailure == NativeA8CommandFallback::None
+		if (commandFailure == NativeFontCommandFallback::None
 			&& (!singleton
 				|| singleton->frameMode.load(std::memory_order_acquire)
 					!= SingletonFacadeFrameMode::Direct
@@ -2328,9 +2328,9 @@ namespace fonthook::vectorfont
 				|| command.draw->sourceGeometry != geometry
 				|| command.draw->expectedGeometry != geometry))
 		{
-			commandFailure = NativeA8CommandFallback::Topology;
+			commandFailure = NativeFontCommandFallback::Topology;
 		}
-		if (commandFailure != NativeA8CommandFallback::None)
+		if (commandFailure != NativeFontCommandFallback::None)
 		{
 			RecordDirectFacadeSinglePacketCommandFallback(commandFailure);
 			return false;
@@ -2340,44 +2340,44 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	void RecordNativeA8CommandFallback(
-		NativeA8CommandFallback reason)
+	void RecordNativeFontCommandFallback(
+		NativeFontCommandFallback reason)
 	{
 		switch (reason)
 		{
-		case NativeA8CommandFallback::Token:
+		case NativeFontCommandFallback::Token:
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandFallbackToken);
 			break;
-		case NativeA8CommandFallback::Generation:
+		case NativeFontCommandFallback::Generation:
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandFallbackGeneration);
 			break;
-		case NativeA8CommandFallback::Atlas:
+		case NativeFontCommandFallback::Atlas:
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandFallbackAtlas);
 			break;
-		case NativeA8CommandFallback::Resource:
+		case NativeFontCommandFallback::Resource:
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandFallbackResource);
 			break;
-		case NativeA8CommandFallback::Topology:
+		case NativeFontCommandFallback::Topology:
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandFallbackTopology);
 			break;
-		case NativeA8CommandFallback::Hook:
+		case NativeFontCommandFallback::Hook:
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandFallbackHook);
 			break;
-		case NativeA8CommandFallback::Nested:
+		case NativeFontCommandFallback::Nested:
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandFallbackNested);
 			break;
-		case NativeA8CommandFallback::RenderTarget:
+		case NativeFontCommandFallback::RenderTarget:
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandFallbackRenderTarget);
 			break;
-		case NativeA8CommandFallback::State:
+		case NativeFontCommandFallback::State:
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandFallbackState);
 			break;

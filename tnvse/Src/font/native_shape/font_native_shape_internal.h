@@ -1,6 +1,6 @@
 #pragma once
 
-// Private native A8 shape model and sibling-module services.
+// Shared native-font shape model and sibling-module services.
 
 #include "font_vector_internal.h"
 #include "font_native_internal.h"
@@ -22,7 +22,7 @@
 namespace fonthook::vectorfont
 {
 	static_assert(sizeof(void*) == 4,
-		"FreeType A8 rendering requires the Win32 runtime");
+		"FreeType native-font rendering requires the Win32 runtime");
 	static_assert(sizeof(BSShaderProperty::RenderPass) == 0x10,
 		"Tile RenderPass ABI changed");
 
@@ -80,7 +80,7 @@ namespace fonthook::vectorfont
 		UInt32, bool, bool, bool);
 	using RenderAlphaGeometryFn = void(__thiscall*)(BSShaderAccumulator*);
 
-	enum class A8CompiledShaderClass : UInt8
+	enum class NativeFontCompiledShaderClass : UInt8
 	{
 		Body,
 		Effect,
@@ -92,7 +92,7 @@ namespace fonthook::vectorfont
 	{
 		CompatibilityFacade = 0,
 		SingletonFacade,
-		VanillaLayoutSdf
+		VanillaLayout
 	};
 
 	enum class SingletonFacadeFrameMode : UInt8
@@ -104,18 +104,18 @@ namespace fonthook::vectorfont
 		Retired
 	};
 
-	struct A8CompiledRange
+	struct NativeFontCompiledRange
 	{
-		A8DrawRange range;
-		std::array<float, kNativeA8PacketConstantFloatCount> constants = {};
-		A8CompiledShaderClass shaderClass = A8CompiledShaderClass::Body;
+		NativeFontDrawRange range;
+		std::array<float, kNativeFontPacketConstantFloatCount> constants = {};
+		NativeFontCompiledShaderClass shaderClass = NativeFontCompiledShaderClass::Body;
 		bool staticSmoothSampling = false;
 	};
 
-	struct A8ShapeMetadata
+	struct NativeFontShapeMetadata
 	{
 		UInt64 allocationId = 0;
-		const A8ShapeMetadata* selfIdentity = nullptr;
+		const NativeFontShapeMetadata* selfIdentity = nullptr;
 		const NiTriShape* shapeIdentity = nullptr;
 		UInt32 fontId = 0;
 		UInt32 glyphCount = 0;
@@ -123,23 +123,23 @@ namespace fonthook::vectorfont
 		UInt32 vertexCount = 0;
 		UInt32 primitiveCount = 0;
 		UInt32 indexCount = 0;
-		A8ShapeColorContract colorContract;
+		NativeFontShapeColorContract colorContract;
 		mutable CpuMemoryLease cpuMemory;
-		mutable NativeA8ShapePayload nativePayload;
+		mutable NativeFontShapePayload nativePayload;
 		FreeTypeShapeBackend backend =
 			FreeTypeShapeBackend::CompatibilityFacade;
 	};
-	using A8ShapeMetadataPtr = std::shared_ptr<const A8ShapeMetadata>;
+	using NativeFontShapeMetadataPtr = std::shared_ptr<const NativeFontShapeMetadata>;
 
 	// Keep a publication-time identity copy outside the owned object. A damaged
-	// shared_ptr may no longer point at readable A8ShapeMetadata, so deletion
+	// shared_ptr may no longer point at readable NativeFontShapeMetadata, so deletion
 	// auditing must be able to compare its raw object pointer without first
 	// dereferencing it.
-	struct A8ShapeMetadataEntry
+	struct NativeFontShapeMetadataEntry
 	{
-		A8ShapeMetadataPtr metadata;
+		NativeFontShapeMetadataPtr metadata;
 		UInt64 allocationId = 0;
-		const A8ShapeMetadata* selfIdentity = nullptr;
+		const NativeFontShapeMetadata* selfIdentity = nullptr;
 		const NiTriShape* shapeIdentity = nullptr;
 	};
 
@@ -175,52 +175,52 @@ namespace fonthook::vectorfont
 		UInt32 preparedGeneration = 0;
 		UInt32 preparedAtlasTextureEpoch = 0;
 		std::atomic<UInt32> directDrawCount = 0;
-		NativeA8DrawCommand commandBuildCommand;
+		NativeFontDrawCommand commandBuildCommand;
 		std::atomic<UInt64> commandBuildValidationToken = 0;
 		std::atomic<UInt64> commandValidationToken = 0;
 		std::atomic<UInt32> commandDirectFacadeSinglePacketIndex =
-			kInvalidNativeA8CommandIndex;
+			kInvalidNativeFontCommandIndex;
 		std::atomic<SingletonFacadeFrameMode> frameMode =
 			SingletonFacadeFrameMode::Facade;
 	};
 
-	struct SingletonFacadeMetadata final : A8ShapeMetadata
+	struct SingletonFacadeMetadata final : NativeFontShapeMetadata
 	{
 		mutable SingletonFacadeState singleton;
 	};
 
-	struct VanillaLayoutSdfMetadata final : A8ShapeMetadata
+	struct VanillaLayoutMetadata final : NativeFontShapeMetadata
 	{
-		NativeA8VanillaLayoutKind layoutKind =
-			NativeA8VanillaLayoutKind::None;
-		mutable NativeA8VanillaLayoutDrawToken drawToken;
+		NativeFontVanillaLayoutKind layoutKind =
+			NativeFontVanillaLayoutKind::None;
+		mutable NativeFontVanillaLayoutDrawToken drawToken;
 	};
 
 	inline SingletonFacadeState* GetSingletonFacadeState(
-		const A8ShapeMetadata& metadata)
+		const NativeFontShapeMetadata& metadata)
 	{
 		return metadata.backend == FreeTypeShapeBackend::SingletonFacade
 			? &static_cast<const SingletonFacadeMetadata&>(metadata).singleton
 			: nullptr;
 	}
 
-	inline NativeA8VanillaLayoutDrawToken* GetVanillaLayoutSdfDrawToken(
-		const A8ShapeMetadata& metadata)
+	inline NativeFontVanillaLayoutDrawToken* GetVanillaLayoutDrawToken(
+		const NativeFontShapeMetadata& metadata)
 	{
-		return metadata.backend == FreeTypeShapeBackend::VanillaLayoutSdf
-			? &static_cast<const VanillaLayoutSdfMetadata&>(metadata).drawToken
+		return metadata.backend == FreeTypeShapeBackend::VanillaLayout
+			? &static_cast<const VanillaLayoutMetadata&>(metadata).drawToken
 			: nullptr;
 	}
 
-	inline NativeA8VanillaLayoutKind GetVanillaLayoutSdfLayoutKind(
-		const A8ShapeMetadata& metadata)
+	inline NativeFontVanillaLayoutKind GetVanillaLayoutKind(
+		const NativeFontShapeMetadata& metadata)
 	{
-		return metadata.backend == FreeTypeShapeBackend::VanillaLayoutSdf
-			? static_cast<const VanillaLayoutSdfMetadata&>(metadata).layoutKind
-			: NativeA8VanillaLayoutKind::None;
+		return metadata.backend == FreeTypeShapeBackend::VanillaLayout
+			? static_cast<const VanillaLayoutMetadata&>(metadata).layoutKind
+			: NativeFontVanillaLayoutKind::None;
 	}
 
-	struct A8State
+	struct NativeFontShapeState
 	{
 		std::array<void*, kCopiedTriShapeVtableEntries + 1> triShapeVtable = {};
 		std::array<void*, kCopiedTriShapeVtableEntries + 1>
@@ -240,15 +240,15 @@ namespace fonthook::vectorfont
 		UInt32 shapeValidationFailureLogCount = 0;
 
 		std::mutex metadataMutex;
-		std::unordered_map<const NiTriShape*, A8ShapeMetadataEntry> shapeMetadata;
+		std::unordered_map<const NiTriShape*, NativeFontShapeMetadataEntry> shapeMetadata;
 		std::atomic<UInt64> nextMetadataAllocationId = 1;
 		std::array<std::atomic<UInt64>, kMetadataGenerationSlotCount>
 			metadataGenerations = {};
 
 	};
 
-	A8State& State();
-	struct NativeA8RuntimeReadinessView
+	NativeFontShapeState& State();
+	struct NativeFontRuntimeReadinessView
 	{
 		NiDX9Renderer* renderer = nullptr;
 		IDirect3DDevice9* device = nullptr;
@@ -257,50 +257,50 @@ namespace fonthook::vectorfont
 		UInt32 hookEpoch = 0;
 		bool ready = false;
 	};
-	bool GetNativeA8RuntimeReadinessCurrent(
-		NativeA8RuntimeReadinessView& arView);
-	A8ShapeMetadataPtr FindA8ShapeMetadata(const NiTriShape* shape);
+	bool GetNativeFontRuntimeReadinessCurrent(
+		NativeFontRuntimeReadinessView& arView);
+	NativeFontShapeMetadataPtr FindNativeFontShapeMetadata(const NiTriShape* shape);
 	// Resolve a caller-supplied unique shape set under one metadataMutex hold.
 	// The result stays positional; missing or identity-invalid entries are null.
 	// Holding the returned owners through RenderAlphaGeometry keeps every raw
 	// metadata view used by the sorted frame alive without a per-facade lookup.
-	void AcquireA8ShapeMetadataBatch(
+	void AcquireNativeFontShapeMetadataBatch(
 		const std::vector<NiTriShape*>& shapes,
-		std::vector<A8ShapeMetadataPtr>& owners);
-	bool IsA8AtlasShape(const NiTriShape* shape);
-	bool IsVanillaLayoutSdfShape(const NiTriShape* shape);
+		std::vector<NativeFontShapeMetadataPtr>& owners);
+	bool IsNativeFontAtlasShape(const NiTriShape* shape);
+	bool IsVanillaLayoutShape(const NiTriShape* shape);
 	bool NeedsScaledFillSampling(const NiTriShape* shape);
 	bool HookRenderPassImmediately();
-	bool IsA8RenderPassImmediatelyHookCurrent();
-	bool IsA8RenderPassImmediatelyHookCurrentUnchecked();
-	bool IsA8RenderPassImmediatelyHookCurrentFast();
+	bool IsNativeFontRenderPassImmediatelyHookCurrent();
+	bool IsNativeFontRenderPassImmediatelyHookCurrentUnchecked();
+	bool IsNativeFontRenderPassImmediatelyHookCurrentFast();
 	RenderPassImmediatelyFn ReadRenderPassImmediatelyCallTarget();
-	void BeginA8SortedTileConstantOwnership();
-	void EndA8SortedTileConstantOwnership();
-	void __cdecl A8RenderPassImmediately(BSShaderProperty::RenderPass* pass,
+	void BeginNativeFontSortedTileConstantOwnership();
+	void EndNativeFontSortedTileConstantOwnership();
+	void __cdecl NativeFontRenderPassImmediately(BSShaderProperty::RenderPass* pass,
 		UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupDrawmode);
-	void __fastcall A8RenderImmediate(NiTriShape* shape, void*, NiRenderer* renderer);
-	void __fastcall A8RenderImmediateAlt(NiTriShape* shape, void*, NiRenderer* renderer);
-	bool InitializeA8TriShapeVtable(NiTriShape* shape);
-	bool PrepareSingletonFacadeA8Shape(Font& font, NiTriShape* shape,
+	void __fastcall NativeFontRenderImmediate(NiTriShape* shape, void*, NiRenderer* renderer);
+	void __fastcall NativeFontRenderImmediateAlt(NiTriShape* shape, void*, NiRenderer* renderer);
+	bool InitializeNativeFontTriShapeVtable(NiTriShape* shape);
+	bool PrepareNativeFontSingletonFacadeShape(Font& font, NiTriShape* shape,
 		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
-		const A8EffectShapeConfig* effectConfig,
-		const A8ShapeColorContract* colorContract,
-		NativeA8PayloadTemplatePtr payloadTemplate,
+		const NativeFontEffectShapeConfig* effectConfig,
+		const NativeFontShapeColorContract* colorContract,
+		NativeFontPayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin);
-	bool PrepareVanillaLayoutSdfA8Shape(Font& font, NiTriShape* shape,
+	bool PrepareNativeFontVanillaLayoutShape(Font& font, NiTriShape* shape,
 		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
-		NativeA8VanillaLayoutKind layoutKind,
-		const A8EffectShapeConfig* effectConfig,
-		const A8ShapeColorContract* colorContract,
-		NativeA8PayloadTemplatePtr payloadTemplate,
+		NativeFontVanillaLayoutKind layoutKind,
+		const NativeFontEffectShapeConfig* effectConfig,
+		const NativeFontShapeColorContract* colorContract,
+		NativeFontPayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin);
 	bool PrepareSingletonFacadeForSortedFrame(
-		const A8ShapeMetadata& metadata, UInt32 generation,
+		const NativeFontShapeMetadata& metadata, UInt32 generation,
 		UInt32 atlasTextureEpoch, UInt64 validationToken);
 	void RestoreSingletonFacade(
-		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason);
+		const NativeFontShapeMetadata& metadata, NativeFontFallbackReason reason);
 	void InvalidateAllSingletonFacadeBindings();
 	void ReleaseSingletonFacadeBinding(
-		NiTriShape* shape, const A8ShapeMetadata& metadata);
+		NiTriShape* shape, const NativeFontShapeMetadata& metadata);
 }

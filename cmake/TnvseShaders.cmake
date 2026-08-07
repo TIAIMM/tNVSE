@@ -12,7 +12,7 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/freetype_native_mtsdf_fill.hlsl"
     "${shader_dir}/freetype_native_mtsdf_effects.hlsl"
     "${shader_dir}/freetype_native_mtsdf_composite.hlsl"
-    "${shader_dir}/compile_a8_shader.bat")
+    "${shader_dir}/compile_native_shaders.bat")
   set(shader_outputs
     "${shader_dir}/compiled/tnvse_freetype_native_vs.vso"
     "${shader_dir}/compiled/tnvse_freetype_native_vanilla_layout_vs.vso"
@@ -60,7 +60,7 @@ function(tnvse_add_shader_target output_variable)
     VS_TOOL_OVERRIDE "None")
 
   add_custom_target(tnvse_shaders
-    COMMAND "${shader_dir}/compile_a8_shader.bat"
+    COMMAND "${shader_dir}/compile_native_shaders.bat"
     WORKING_DIRECTORY "${shader_dir}"
     BYPRODUCTS ${shader_outputs}
     SOURCES ${shader_sources}

@@ -883,7 +883,7 @@ namespace fonthook::vectorfont
 		{
 			EffectQuality resolved = config.effectQuality;
 			UInt32 sdfSpread = 0;
-			if (!ResolveA8EffectQuality(config.effectQuality, resolved)
+			if (!ResolveNativeFontEffectQuality(config.effectQuality, resolved)
 				|| !ResolveSdfSpread(config, rasterScale, sdfSpread))
 			{
 				return false;

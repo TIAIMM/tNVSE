@@ -104,18 +104,18 @@ namespace fonthook::dependencies
 			}
 		}
 
-		if (AreFreeTypeFontHooksInstalled() && g_bEnableFreeTypeA8Atlas)
+		if (AreFreeTypeFontHooksInstalled() && g_bEnableFreeTypeNativeAtlas)
 		{
 			const PluginInfo* info = g_cmdTableInterface->GetPluginInfoByDLLName
 				? g_cmdTableInterface->GetPluginInfoByDLLName(kShaderLoaderDllName) : nullptr;
 			if (!IsPluginInfoValid(info))
 			{
-				AddMissingIssue(issues, "bEnableFreeTypeA8Atlas",
+				AddMissingIssue(issues, "bEnableFreeTypeNativeAtlas",
 					"Fallout Shader Loader", "version 1.40 or newer");
 			}
 			else if (info->version < kShaderLoaderMinVersion)
 			{
-				AddVersionIssue(issues, "bEnableFreeTypeA8Atlas",
+				AddVersionIssue(issues, "bEnableFreeTypeNativeAtlas",
 					"Fallout Shader Loader", info->version,
 					"version 1.40 or newer");
 			}

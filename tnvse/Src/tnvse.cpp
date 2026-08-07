@@ -110,7 +110,7 @@ namespace
 		}
 
 		gLog.FormattedMessage(
-			"tnvse_build_identity: diagnostics=vanilla-layout-production-cleanup-v59 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
+			"tnvse_build_identity: diagnostics=native-font-naming-audit-v60 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
 			modulePath[0] ? modulePath : "unresolved", module,
 			peTimestamp, imageSize,
 			static_cast<unsigned long long>(fileBytes),
@@ -260,7 +260,7 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 		fonthook::dependencies::ShowExternalPluginDependencyWarnings();
 		if (fonthook::AreFreeTypeFontHooksInstalled())
 		{
-			fonthook::FinalizeFreeTypeA8Detection();
+			fonthook::FinalizeFreeTypeNativeRendererDetection();
 			fonthook::InitializeFreeTypeDefaultPoolAtlas();
 			PrepareConfiguredGameFonts();
 			RunConfiguredGameFontPrewarmLoadingBarrier();
@@ -271,7 +271,7 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 		if (fonthook::AreFreeTypeFontHooksInstalled())
 		{
 			PrepareConfiguredGameFonts();
-			fonthook::HandleFreeTypeA8MainLoop();
+			fonthook::HandleFreeTypeNativeRendererMainLoop();
 			fonthook::HandleFreeTypeDefaultPoolAtlasMainLoop();
 			fonthook::PumpFreeTypeFontPerformance();
 		}

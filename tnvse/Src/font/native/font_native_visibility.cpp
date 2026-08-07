@@ -118,7 +118,7 @@ namespace fonthook::vectorfont
 			std::array<UInt32, 4> boundBits = {};
 			RECT scissorRect = {};
 			UInt64 cameraEpoch = 0;
-			NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
+			NativeFontVisibilityCull reason = NativeFontVisibilityCull::None;
 			ClipProofResult result = ClipProofResult::Unproven;
 			bool tileUsesScissor = false;
 			bool allowViewport = false;
@@ -779,10 +779,10 @@ namespace fonthook::vectorfont
 			const std::array<UInt32, 4>& boundBits,
 			const TileVisibilityPropertyView& tile, bool allowViewport,
 			ClipTransformBuildResult& cacheResult,
-			ClipProofResult& cachedProof, NativeA8VisibilityCull& cachedReason)
+			ClipProofResult& cachedProof, NativeFontVisibilityCull& cachedReason)
 		{
 			cachedProof = ClipProofResult::Unproven;
-			cachedReason = NativeA8VisibilityCull::None;
+			cachedReason = NativeFontVisibilityCull::None;
 			if (!identity || !context.cameraEpoch)
 			{
 				cacheResult = ClipTransformBuildResult::IdentityMiss;
@@ -833,7 +833,7 @@ namespace fonthook::vectorfont
 			const std::array<UInt32, 13>& transformBits,
 			const std::array<UInt32, 4>& boundBits,
 			const TileVisibilityPropertyView& tile, bool allowViewport,
-			ClipProofResult result, NativeA8VisibilityCull reason)
+			ClipProofResult result, NativeFontVisibilityCull reason)
 		{
 			if (!entry || !context.cameraEpoch
 				|| result == ClipProofResult::Unproven)
@@ -911,10 +911,10 @@ namespace fonthook::vectorfont
 			const void* transformIdentity, const NiTransform& transform,
 			const TileVisibilityPropertyView& tile,
 			ClipFrameContext& context, bool allowViewport,
-			NativeA8VisibilityCull& reason,
+			NativeFontVisibilityCull& reason,
 			ClipTransformBuildResult* transformBuildResult)
 		{
-			reason = NativeA8VisibilityCull::None;
+			reason = NativeFontVisibilityCull::None;
 			if (transformBuildResult)
 			{
 				*transformBuildResult =
@@ -935,7 +935,7 @@ namespace fonthook::vectorfont
 			if (useScissor)
 			{
 				clipRect = tile.scissorRect;
-				reason = NativeA8VisibilityCull::Scissor;
+				reason = NativeFontVisibilityCull::Scissor;
 			}
 			else
 			{
@@ -950,7 +950,7 @@ namespace fonthook::vectorfont
 					return failOpen();
 				}
 				clipRect = context.viewportRect;
-				reason = NativeA8VisibilityCull::Clip;
+				reason = NativeFontVisibilityCull::Clip;
 			}
 
 			if (!std::isfinite(bound.m_kCenter.x)
@@ -966,8 +966,8 @@ namespace fonthook::vectorfont
 				CaptureTransformBits(transform);
 			const std::array<UInt32, 4> boundBits = CaptureBoundBits(bound);
 			ClipProofResult cachedProof = ClipProofResult::Unproven;
-			NativeA8VisibilityCull cachedReason =
-				NativeA8VisibilityCull::None;
+			NativeFontVisibilityCull cachedReason =
+				NativeFontVisibilityCull::None;
 			ClipTransformBuildResult buildResult =
 				ClipTransformBuildResult::Unavailable;
 			ClipProofCacheEntry* cacheEntry = PrepareClipProofCacheEntry(
@@ -1096,49 +1096,49 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
+	NativeFontVisibilityCull EvaluateNativeFontSubmissionVisibility(
 		const NiTriShape* facade)
 	{
 		RecordFreeTypePerf(FreeTypePerfCounter::VisibilityCheck);
 		if (!facade)
-			return NativeA8VisibilityCull::None;
+			return NativeFontVisibilityCull::None;
 
 		const TileVisibilityPropertyView* tile = GetTileProperty(facade);
 		if (!tile)
-			return NativeA8VisibilityCull::None;
+			return NativeFontVisibilityCull::None;
 		const NiMaterialProperty* material = facade->GetMaterialProperty();
 		const float materialAlpha = material ? material->m_fAlpha : 1.0f;
 		if (std::isfinite(tile->tileAlpha) && std::isfinite(materialAlpha)
 			&& IsZeroAlphaNoOpBlend(facade->GetAlphaProperty())
 			&& (tile->tileAlpha == 0.0f || materialAlpha == 0.0f))
 		{
-			return NativeA8VisibilityCull::ZeroAlpha;
+			return NativeFontVisibilityCull::ZeroAlpha;
 		}
-		return NativeA8VisibilityCull::None;
+		return NativeFontVisibilityCull::None;
 	}
 
-	NativeA8VisibilityCull EvaluateNativeA8SubmissionVisibility(
-		const NiTriShape* facade, const NativeA8ShapePayload& payload)
+	NativeFontVisibilityCull EvaluateNativeFontSubmissionVisibility(
+		const NiTriShape* facade, const NativeFontShapePayload& payload)
 	{
 		(void)payload;
-		return EvaluateNativeA8SubmissionVisibility(facade);
+		return EvaluateNativeFontSubmissionVisibility(facade);
 	}
 
-	void BeginNativeA8VisibilityFrame()
+	void BeginNativeFontVisibilityFrame()
 	{
-		EndNativeA8VisibilityFrame();
+		EndNativeFontVisibilityFrame();
 		if (!g_bEnableFreeTypeFontPreflightClipCull)
 			return;
 		CaptureClipFrameContext(s_clipFrameContext, true);
 		s_clipFrameContext.preflightOpen = true;
 	}
 
-	void CompleteNativeA8VisibilityPreflight()
+	void CompleteNativeFontVisibilityPreflight()
 	{
 		s_clipFrameContext.preflightOpen = false;
 	}
 
-	void EndNativeA8VisibilityFrame()
+	void EndNativeFontVisibilityFrame()
 	{
 		s_clipFrameContext.active = false;
 		s_clipFrameContext.valid = false;
@@ -1146,10 +1146,10 @@ namespace fonthook::vectorfont
 		s_clipFrameContext.preflightOpen = false;
 	}
 
-	NativeA8VisibilityPreflight EvaluateNativeA8PreflightClipVisibility(
+	NativeFontVisibilityPreflight EvaluateNativeFontPreflightClipVisibility(
 		const NiTriShape* facade)
 	{
-		NativeA8VisibilityPreflight visibility;
+		NativeFontVisibilityPreflight visibility;
 		if (!g_bEnableFreeTypeFontPreflightClipCull)
 			return visibility;
 		if (s_clipFrameContext.active)
@@ -1170,7 +1170,7 @@ namespace fonthook::vectorfont
 		// final model bound, world transform, viewport, and Tile scissor exist.
 		// Vanilla-layout SDF shapes call it immediately before their vanilla geometry
 		// draw. Anything uncertain fails open. A facade proof is additionally
-		// revalidated by HonorNativeA8PreflightClipCull at dispatch before it is
+		// revalidated by HonorNativeFontPreflightClipCull at dispatch before it is
 		// honored; a vanilla-layout proof already consumes the live dispatch state.
 		const NiTriShapeData* data = facade ? facade->GetModelData() : nullptr;
 		if (!facade || !data)
@@ -1188,7 +1188,7 @@ namespace fonthook::vectorfont
 				return failOpen();
 			context = &localContext;
 		}
-		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
+		NativeFontVisibilityCull reason = NativeFontVisibilityCull::None;
 		// This is the final vanilla-visible model bound. Facade payload vertices are
 		// relative and apply geometryOrigin during replay; vanilla-layout vertices
 		// are already engine-owned full geometry. Both representations publish
@@ -1200,37 +1200,37 @@ namespace fonthook::vectorfont
 			return failOpen();
 		RecordClipTransformBuildResult(transformBuildResult);
 		visibility.status = proof == ClipProofResult::Outside
-			? NativeA8VisibilityProofStatus::Outside
-			: NativeA8VisibilityProofStatus::Overlap;
+			? NativeFontVisibilityProofStatus::Outside
+			: NativeFontVisibilityProofStatus::Overlap;
 		if (proof != ClipProofResult::Outside)
 			return visibility;
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::VisibilityPreflightClipCulled);
-		RecordFreeTypePerf(reason == NativeA8VisibilityCull::Scissor
+		RecordFreeTypePerf(reason == NativeFontVisibilityCull::Scissor
 			? FreeTypePerfCounter::VisibilityPreflightClipScissor
 			: FreeTypePerfCounter::VisibilityPreflightClipViewport);
 		visibility.cull = reason;
 		return visibility;
 	}
 
-	NativeA8VisibilityPreflight EvaluateNativeA8PreflightClipVisibility(
-		const NiTriShape* facade, const NativeA8ShapePayload& payload)
+	NativeFontVisibilityPreflight EvaluateNativeFontPreflightClipVisibility(
+		const NiTriShape* facade, const NativeFontShapePayload& payload)
 	{
 		(void)payload;
-		return EvaluateNativeA8PreflightClipVisibility(facade);
+		return EvaluateNativeFontPreflightClipVisibility(facade);
 	}
 
-	bool HonorNativeA8PreflightClipCull(const NiTriShape* facade,
-		const NativeA8VisibilityPreflight& preflight)
+	bool HonorNativeFontPreflightClipCull(const NiTriShape* facade,
+		const NativeFontVisibilityPreflight& preflight)
 	{
 		if (!g_bEnableFreeTypeFontPreflightClipCull)
 			return false;
 		FreeTypePerfScope honorGatePerf(
 			FreeTypePerfPhase::PreflightClipHonorGate);
 		if (!facade
-			|| preflight.status != NativeA8VisibilityProofStatus::Outside
-			|| (preflight.cull != NativeA8VisibilityCull::Clip
-				&& preflight.cull != NativeA8VisibilityCull::Scissor)
+			|| preflight.status != NativeFontVisibilityProofStatus::Outside
+			|| (preflight.cull != NativeFontVisibilityCull::Clip
+				&& preflight.cull != NativeFontVisibilityCull::Scissor)
 			|| !preflight.frameToken
 			|| preflight.frameToken != s_clipFrameContext.frameToken
 			|| !IsClipFrameCameraCurrent(s_clipFrameContext))
@@ -1248,22 +1248,22 @@ namespace fonthook::vectorfont
 			&& cached->reason == preflight.cull;
 	}
 
-	bool ReuseNativeA8PreflightClipOverlap(
-		const NativeA8VisibilityPreflight& preflight)
+	bool ReuseNativeFontPreflightClipOverlap(
+		const NativeFontVisibilityPreflight& preflight)
 	{
 		// A stale Overlap can only retain an otherwise GPU-clipped draw; it can
 		// never suppress visible geometry. Restrict reuse to the owning sorted
 		// frame, while Outside continues through the exact live honor gate above.
 		return g_bEnableFreeTypeFontPreflightClipCull
-			&& preflight.status == NativeA8VisibilityProofStatus::Overlap
-			&& preflight.cull == NativeA8VisibilityCull::None
+			&& preflight.status == NativeFontVisibilityProofStatus::Overlap
+			&& preflight.cull == NativeFontVisibilityCull::None
 			&& preflight.frameToken
 			&& preflight.frameToken == s_clipFrameContext.frameToken
 			&& s_clipFrameContext.active;
 	}
 
-	bool IsNativeA8PayloadOutsideScissorForWorld(
-		const NativeA8ShapePayload& payload,
+	bool IsNativeFontPayloadOutsideScissorForWorld(
+		const NativeFontShapePayload& payload,
 		const NiPropertyState* properties,
 		const NiDX9Renderer* renderer,
 		const NiTransform& effectiveWorld)
@@ -1276,7 +1276,7 @@ namespace fonthook::vectorfont
 		const TileVisibilityPropertyView* tile = GetTileProperty(properties);
 		if (!tile || !tile->useScissorTest)
 			return false;
-		NativeA8VisibilityCull reason = NativeA8VisibilityCull::None;
+		NativeFontVisibilityCull reason = NativeFontVisibilityCull::None;
 		if (!payload.payloadTemplate)
 			return false;
 		ClipFrameContext localContext;
@@ -1298,26 +1298,26 @@ namespace fonthook::vectorfont
 		return EvaluateBoundClip(payload.payloadTemplate->bound, &payload,
 				effectiveWorld, *tile, *context, false,
 				reason, nullptr) == ClipProofResult::Outside
-			&& reason == NativeA8VisibilityCull::Scissor;
+			&& reason == NativeFontVisibilityCull::Scissor;
 	}
 
-	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason)
+	void RecordNativeFontVisibilityCull(NativeFontVisibilityCull reason)
 	{
-		if (reason == NativeA8VisibilityCull::None)
+		if (reason == NativeFontVisibilityCull::None)
 			return;
 		RecordFreeTypePerf(FreeTypePerfCounter::VisibilityCulled);
 		switch (reason)
 		{
-		case NativeA8VisibilityCull::AppCulled:
+		case NativeFontVisibilityCull::AppCulled:
 			RecordFreeTypePerf(FreeTypePerfCounter::VisibilityAppCulled);
 			break;
-		case NativeA8VisibilityCull::ZeroAlpha:
+		case NativeFontVisibilityCull::ZeroAlpha:
 			RecordFreeTypePerf(FreeTypePerfCounter::VisibilityZeroAlpha);
 			break;
-		case NativeA8VisibilityCull::Clip:
+		case NativeFontVisibilityCull::Clip:
 			RecordFreeTypePerf(FreeTypePerfCounter::VisibilityClip);
 			break;
-		case NativeA8VisibilityCull::Scissor:
+		case NativeFontVisibilityCull::Scissor:
 			RecordFreeTypePerf(FreeTypePerfCounter::VisibilityScissor);
 			break;
 		default:
@@ -1325,19 +1325,19 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	void RecordNativeA8VisibilityCull(NativeA8VisibilityCull reason,
-		const NativeA8ShapePayload& payload)
+	void RecordNativeFontVisibilityCull(NativeFontVisibilityCull reason,
+		const NativeFontShapePayload& payload)
 	{
-		RecordNativeA8VisibilityCull(reason);
+		RecordNativeFontVisibilityCull(reason);
 		if (!payload.payloadTemplate)
 			return;
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(*payload.payloadTemplate,
+		const std::vector<NativeFontPacketTemplate>& packets =
+			GetNativeFontPackets(*payload.payloadTemplate,
 				payload.useCompositePackets);
 		RecordFreeTypePerf(FreeTypePerfCounter::VisibilityPacketsSaved,
 			static_cast<UInt64>(packets.size()));
 		UInt64 vertices = 0;
-		for (const NativeA8PacketTemplate& packet : packets)
+		for (const NativeFontPacketTemplate& packet : packets)
 			vertices += packet.vertexCount;
 		RecordFreeTypePerf(FreeTypePerfCounter::VisibilityVerticesSaved,
 			vertices);

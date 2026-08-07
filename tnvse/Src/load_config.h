@@ -16,7 +16,7 @@ extern float g_fFreeTypeFontResolutionScale;
 extern UINT32 g_uiFreeTypeFontMemoryCacheMB;
 extern bool g_bDeleteUnusedFreeTypeFontCache;
 extern bool g_bEnableFreeTypeDefaultPoolAtlas;
-extern bool g_bEnableFreeTypeA8Atlas;
+extern bool g_bEnableFreeTypeNativeAtlas;
 extern bool g_bEnableFreeTypeFontVanillaLayout;
 extern bool g_bEnableFreeTypeFontPreflightClipCull;
 extern bool g_bEnableFreeTypeFontCommandBuffer;

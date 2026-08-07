@@ -21,7 +21,7 @@ namespace fonthook::vectorfont
 		if (State().persistentCacheRouteSynchronized)
 			return State().persistentCacheDomain;
 		return ResolvePersistentFontCacheDomain(ResolveFontAtlasRoute(
-			IsA8RendererAvailable(),
+			IsNativeFontRendererAvailable(),
 			UsesBakedEffectRoute()));
 	}
 
@@ -30,7 +30,7 @@ namespace fonthook::vectorfont
 		std::lock_guard<std::recursive_mutex> lock(State().mutex);
 		if (State().persistentCacheRouteSynchronized)
 			return State().persistentCacheRoute;
-		return ResolveFontAtlasRoute(IsA8RendererAvailable(),
+		return ResolveFontAtlasRoute(IsNativeFontRendererAvailable(),
 			UsesBakedEffectRoute());
 	}
 

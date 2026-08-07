@@ -39,10 +39,10 @@ namespace fonthook::vectorfont
 	namespace implementation::font_native_shader {}
 	using namespace implementation::font_native_shader;
 
-	NativeA8BlendState ComputeNativeA8OwnedBlendState(
+	NativeFontBlendState ComputeNativeFontOwnedBlendState(
 		const NiPropertyState* properties)
 	{
-		NativeA8BlendState state;
+		NativeFontBlendState state;
 		if (!properties)
 			return state;
 
@@ -111,10 +111,10 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kShaderRefreshMessage = 0;
 		inline constexpr DWORD kInitializationRetryMilliseconds = 1000;
 		inline constexpr UInt32 kVanillaLayoutVertexStride =
-			sizeof(NativeA8VanillaLayoutVertex);
+			sizeof(NativeFontVanillaLayoutVertex);
 		static_assert(kVanillaLayoutVertexStride == 40u);
 		inline constexpr UInt32 kVanillaParametricVertexStride =
-			sizeof(NativeA8VanillaParametricVertex);
+			sizeof(NativeFontVanillaParametricVertex);
 		static_assert(kVanillaParametricVertexStride == 48u);
 		inline constexpr UInt8 kStaticCompositeLayerMaskFirst = 8;
 		inline constexpr size_t kStaticCompositeLayerMaskCount = 8;
@@ -132,17 +132,17 @@ namespace fonthook::vectorfont
 		struct NativeShaderProfile;
 
 		constexpr UInt8 NativePacketRegisterCount(
-			NativeA8ShaderClass shaderClass)
+			NativeFontShaderClass shaderClass)
 		{
 			switch (shaderClass)
 			{
-			case NativeA8ShaderClass::Body:
+			case NativeFontShaderClass::Body:
 				// LayerColor c176 + AtlasPass c177.
 				return 2;
-			case NativeA8ShaderClass::Effect:
+			case NativeFontShaderClass::Effect:
 				// LayerColor c176 through MtsdfFlags c179.
 				return 4;
-			case NativeA8ShaderClass::Composite:
+			case NativeFontShaderClass::Composite:
 				// ShadowColor c176 through CompositeFlags c183.
 				return 8;
 			default:
@@ -151,8 +151,8 @@ namespace fonthook::vectorfont
 		}
 
 		static_assert(NativePacketRegisterCount(
-			NativeA8ShaderClass::Composite)
-			== kNativeA8PacketConstantRegisterCount);
+			NativeFontShaderClass::Composite)
+			== kNativeFontPacketConstantRegisterCount);
 
 		struct NativeVertexAaState
 		{
@@ -179,17 +179,17 @@ namespace fonthook::vectorfont
 
 		struct NativeProfileKey
 		{
-			NativeA8ShaderClass shaderClass = NativeA8ShaderClass::Body;
-			NativeA8Sampling sampling = NativeA8Sampling::Point;
+			NativeFontShaderClass shaderClass = NativeFontShaderClass::Body;
+			NativeFontSampling sampling = NativeFontSampling::Point;
 			EffectQuality quality = EffectQuality::Balanced;
 			DistanceFieldMethod distanceFieldMethod = DistanceFieldMethod::Mtsdf;
-			std::array<UInt32, kNativeA8PacketConstantFloatCount> constantBits = {};
+			std::array<UInt32, kNativeFontPacketConstantFloatCount> constantBits = {};
 			UInt8 staticCompositeLayerMask = 0;
 			bool compositeShiftedShadow = false;
 			bool writeEffectAlpha = false;
 			bool usesLiveTileRgb = true;
-			NativeA8VanillaLayoutKind vanillaLayoutKind =
-				NativeA8VanillaLayoutKind::None;
+			NativeFontVanillaLayoutKind vanillaLayoutKind =
+				NativeFontVanillaLayoutKind::None;
 			UInt32 uniformDistanceParameterScaleBits = 0;
 			size_t precomputedHash = 0;
 
@@ -261,7 +261,7 @@ namespace fonthook::vectorfont
 			NativeShaderProfile(NativeShaderGeneration& generation,
 				const NativeProfileKey& profileKey,
 				const std::array<float,
-					kNativeA8PacketConstantFloatCount>& packetConstants,
+					kNativeFontPacketConstantFloatCount>& packetConstants,
 				float uniformSdfSpread,
 				float uniformDistanceParameterScale)
 				: owner(&generation), key(profileKey), constants(packetConstants),
@@ -276,14 +276,14 @@ namespace fonthook::vectorfont
 			NativeShaderGeneration* const owner;
 			const NativeProfileKey key;
 			const std::array<float,
-				kNativeA8PacketConstantFloatCount> constants;
+				kNativeFontPacketConstantFloatCount> constants;
 			const float vanillaUniformSdfSpread;
 			const float vanillaUniformDistanceParameterScale;
 			const UInt8 privateRegisterCount;
 			NiPointer<TileShader> shaderOwner;
 			TileShader* shader = nullptr;
 			NativeTileVtableBlock* vtable = nullptr;
-			NativeA8CompiledPacketCommand retainedProgram;
+			NativeFontCompiledPacketCommand retainedProgram;
 			bool effectPass = false;
 		};
 
@@ -353,13 +353,13 @@ namespace fonthook::vectorfont
 		};
 
 		UInt32 ResolveVanillaLayoutStride(
-			NativeA8VanillaLayoutKind layoutKind)
+			NativeFontVanillaLayoutKind layoutKind)
 		{
 			switch (layoutKind)
 			{
-			case NativeA8VanillaLayoutKind::Uniform40:
+			case NativeFontVanillaLayoutKind::Uniform40:
 				return kVanillaLayoutVertexStride;
-			case NativeA8VanillaLayoutKind::Parametric48:
+			case NativeFontVanillaLayoutKind::Parametric48:
 				return kVanillaParametricVertexStride;
 			default:
 				return 0u;
@@ -368,45 +368,45 @@ namespace fonthook::vectorfont
 
 		bool IsVanillaLayoutGenerationReady(
 			const NativeShaderGeneration* generation,
-			NativeA8VanillaLayoutKind layoutKind)
+			NativeFontVanillaLayoutKind layoutKind)
 		{
 			if (!generation)
 				return false;
-			return layoutKind == NativeA8VanillaLayoutKind::Uniform40
+			return layoutKind == NativeFontVanillaLayoutKind::Uniform40
 				? generation->vanillaLayoutReady
-				: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+				: layoutKind == NativeFontVanillaLayoutKind::Parametric48
 					? generation->vanillaParametricLayoutReady : false;
 		}
 
 		NiDX9ShaderDeclaration* ResolveVanillaLayoutDeclaration(
 			NativeShaderGeneration& generation,
-			NativeA8VanillaLayoutKind layoutKind)
+			NativeFontVanillaLayoutKind layoutKind)
 		{
-			return layoutKind == NativeA8VanillaLayoutKind::Uniform40
+			return layoutKind == NativeFontVanillaLayoutKind::Uniform40
 				? generation.vanillaLayoutDeclaration.m_pObject
-				: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+				: layoutKind == NativeFontVanillaLayoutKind::Parametric48
 					? generation.vanillaParametricLayoutDeclaration.m_pObject
 					: nullptr;
 		}
 
 		IDirect3DVertexDeclaration9* ResolveVanillaLayoutD3DDeclaration(
 			NativeShaderGeneration& generation,
-			NativeA8VanillaLayoutKind layoutKind)
+			NativeFontVanillaLayoutKind layoutKind)
 		{
-			return layoutKind == NativeA8VanillaLayoutKind::Uniform40
+			return layoutKind == NativeFontVanillaLayoutKind::Uniform40
 				? generation.vanillaLayoutD3DDeclaration
-				: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+				: layoutKind == NativeFontVanillaLayoutKind::Parametric48
 					? generation.vanillaParametricLayoutD3DDeclaration
 					: nullptr;
 		}
 
 		NiD3DVertexShader* ResolveVanillaLayoutVertexShader(
 			NativeShaderGeneration& generation,
-			NativeA8VanillaLayoutKind layoutKind)
+			NativeFontVanillaLayoutKind layoutKind)
 		{
-			return layoutKind == NativeA8VanillaLayoutKind::Uniform40
+			return layoutKind == NativeFontVanillaLayoutKind::Uniform40
 				? generation.vanillaLayoutVertexShader.m_pObject
-				: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+				: layoutKind == NativeFontVanillaLayoutKind::Parametric48
 					? generation.vanillaParametricLayoutVertexShader.m_pObject
 					: nullptr;
 		}
@@ -448,20 +448,20 @@ namespace fonthook::vectorfont
 			s_vanillaLayoutPublicationWitness;
 		thread_local UInt64 s_nextVanillaLayoutPublicationToken = 0;
 
-		NativeA8StandardBlendSemantics ClassifyStandardBlendCallback(
+		NativeFontStandardBlendSemantics ClassifyStandardBlendCallback(
 			void* callback)
 		{
 			if (callback == reinterpret_cast<void*>(
 					&NativeSetupGeometryAlphaBlending))
 			{
-				return NativeA8StandardBlendSemantics::NativeOwned;
+				return NativeFontStandardBlendSemantics::NativeOwned;
 			}
 			if (callback == reinterpret_cast<void*>(
 					kShaderSetupGeometryAlphaBlending))
 			{
-				return NativeA8StandardBlendSemantics::Retail;
+				return NativeFontStandardBlendSemantics::Retail;
 			}
-			return NativeA8StandardBlendSemantics::Unknown;
+			return NativeFontStandardBlendSemantics::Unknown;
 		}
 
 		void ResetSortedShaderStateCaches()
@@ -485,13 +485,13 @@ namespace fonthook::vectorfont
 		}
 
 		const char* StandardBlendSemanticsName(
-			NativeA8StandardBlendSemantics semantics)
+			NativeFontStandardBlendSemantics semantics)
 		{
 			switch (semantics)
 			{
-			case NativeA8StandardBlendSemantics::Retail:
+			case NativeFontStandardBlendSemantics::Retail:
 				return "retail";
-			case NativeA8StandardBlendSemantics::NativeOwned:
+			case NativeFontStandardBlendSemantics::NativeOwned:
 				return "tnvse-owned";
 			default:
 				return "unknown";
@@ -555,8 +555,8 @@ namespace fonthook::vectorfont
 			if (!generation)
 				return;
 			generation->runtimeFault.store(true, std::memory_order_release);
-			NotifyNativeA8CommandExternalMutation(
-				NativeA8CommandFallback::Generation);
+			NotifyNativeFontCommandExternalMutation(
+				NativeFontCommandFallback::Generation);
 			bool expected = false;
 			if (generation->runtimeFaultLogged.compare_exchange_strong(expected,
 				true, std::memory_order_acq_rel))
@@ -586,12 +586,12 @@ namespace fonthook::vectorfont
 			NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
 			NativeShaderProfile* profile = block ? block->profile : nullptr;
 			if (!profile || profile->shader != shader
-				|| !UsesNativeA8VanillaLayout(
+				|| !UsesNativeFontVanillaLayout(
 					profile->key.vanillaLayoutKind))
 			{
 				return false;
 			}
-			const NativeA8CompiledPacketCommand& program =
+			const NativeFontCompiledPacketCommand& program =
 				profile->retainedProgram;
 			return program.setupPass == reinterpret_cast<void*>(
 					kTileShaderSetupGeometryTextures)
@@ -753,7 +753,7 @@ namespace fonthook::vectorfont
 			// inside a native-owned execution segment; every unrelated RenderPass
 			// hard-invalidates this cache even if device and viewport are unchanged.
 			const HRESULT constantResult = device->SetVertexShaderConstantF(
-				kNativeA8VertexAaConstantRegister, aaProfile.data(), 1);
+				kNativeFontVertexAaConstantRegister, aaProfile.data(), 1);
 			if (FAILED(constantResult))
 			{
 				operation = "SetVertexShaderConstantF(c208-aa)";
@@ -774,15 +774,15 @@ namespace fonthook::vectorfont
 		HRESULT PublishNativeVanillaLayoutVertexConstants(
 			IDirect3DDevice9* device, float rasterScale, float spread,
 			float distanceParameterScale, UInt8 layerMask,
-			NativeA8VanillaLayoutKind layoutKind,
+			NativeFontVanillaLayoutKind layoutKind,
 			NativeVertexAaState* cache,
 			const char*& operation)
 		{
 			operation = "none";
 			const bool uniformLayout =
-				layoutKind == NativeA8VanillaLayoutKind::Uniform40;
+				layoutKind == NativeFontVanillaLayoutKind::Uniform40;
 			const bool parametricLayout =
-				layoutKind == NativeA8VanillaLayoutKind::Parametric48;
+				layoutKind == NativeFontVanillaLayoutKind::Parametric48;
 			if (!device || !std::isfinite(rasterScale)
 				|| rasterScale <= 0.0f || (!uniformLayout && !parametricLayout)
 				|| !std::isfinite(spread)
@@ -835,7 +835,7 @@ namespace fonthook::vectorfont
 				cache->vanillaGlyphConstantReady = false;
 			}
 			const HRESULT constantResult = device->SetVertexShaderConstantF(
-				kNativeA8VertexAaConstantRegister,
+				kNativeFontVertexAaConstantRegister,
 				vertexConstants.data(), 2);
 			if (FAILED(constantResult))
 			{
@@ -861,8 +861,8 @@ namespace fonthook::vectorfont
 			// the blend-leak and No_Fade fixes without borrowing a third-party
 			// callback whose identity or implementation may change independently.
 			CdeclCall<void>(kSetAlphaBlendEnable, 0, 0);
-			const NativeA8BlendState state =
-				ComputeNativeA8OwnedBlendState(properties);
+			const NativeFontBlendState state =
+				ComputeNativeFontOwnedBlendState(properties);
 			if (!state.enabled)
 				return;
 
@@ -907,17 +907,17 @@ namespace fonthook::vectorfont
 				if (current)
 				{
 					current->runtimeFault.store(true, std::memory_order_release);
-					NotifyNativeA8CommandExternalMutation(
-						NativeA8CommandFallback::Generation);
+					NotifyNativeFontCommandExternalMutation(
+						NativeFontCommandFallback::Generation);
 				}
 				return;
 			}
 
 			NativeShaderGeneration* generation = profile->owner;
 			const bool coverageProfile =
-				profile->key.shaderClass == NativeA8ShaderClass::Coverage;
+				profile->key.shaderClass == NativeFontShaderClass::Coverage;
 			const bool simpleColorProfile = coverageProfile
-				|| profile->key.shaderClass == NativeA8ShaderClass::Argb;
+				|| profile->key.shaderClass == NativeFontShaderClass::Argb;
 			IDirect3DDevice9* device = shader->m_pkD3DDevice;
 			if (!device)
 				device = generation->device;
@@ -1004,7 +1004,7 @@ namespace fonthook::vectorfont
 			HRESULT constantsResult = D3D_OK;
 			const bool vertexConstantsReady = vertexAaCache
 				&& vertexAaCache->aaConstantReady
-				&& (!UsesNativeA8VanillaLayout(
+				&& (!UsesNativeFontVanillaLayout(
 						profile->key.vanillaLayoutKind)
 					|| vertexAaCache->vanillaGlyphConstantReady);
 			if (cachedProfile == profile && vertexConstantsReady)
@@ -1018,7 +1018,7 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::VertexAaConstantVanillaPreserved);
 			}
-			else if (UsesNativeA8VanillaLayout(
+			else if (UsesNativeFontVanillaLayout(
 				profile->key.vanillaLayoutKind))
 			{
 				const char* vertexOperation = "none";
@@ -1068,7 +1068,7 @@ namespace fonthook::vectorfont
 					constantsOperation =
 						"SetPixelShaderConstantF(native-private-prefix)";
 					constantsResult = device->SetPixelShaderConstantF(
-						kNativeA8PixelConstantBaseRegister,
+						kNativeFontPixelConstantBaseRegister,
 						profile->constants.data(), static_cast<UINT>(
 							targetRegisterCount));
 					if (SUCCEEDED(constantsResult))
@@ -1082,7 +1082,7 @@ namespace fonthook::vectorfont
 						RecordFreeTypePerf(
 							FreeTypePerfCounter::
 								NativePacketConstantFullTailElided,
-							kNativeA8PacketConstantRegisterCount
+							kNativeFontPacketConstantRegisterCount
 								- targetRegisterCount);
 					}
 				}
@@ -1121,7 +1121,7 @@ namespace fonthook::vectorfont
 							"SetPixelShaderConstantF(native-high-partial)";
 						constantsResult = device->SetPixelShaderConstantF(
 							static_cast<UINT>(
-								kNativeA8PixelConstantBaseRegister
+								kNativeFontPixelConstantBaseRegister
 									+ firstChanged),
 							profile->constants.data() + firstChanged * 4u,
 							static_cast<UINT>(
@@ -1213,7 +1213,7 @@ namespace fonthook::vectorfont
 			NativeVanillaLayoutPublicationWitness& witness =
 				s_vanillaLayoutPublicationWitness;
 			if (witness.armed && witness.expectedShader == shader
-				&& UsesNativeA8VanillaLayout(
+				&& UsesNativeFontVanillaLayout(
 					profile->key.vanillaLayoutKind) && batchActive
 				&& sortedBatchActive
 				&& sortedBatch.packetProfile == profile
@@ -1229,9 +1229,9 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		NativeProfileKey MakeProfileKey(const NativeA8PacketTemplate& packet,
-			NativeA8Sampling sampling, bool writeEffectAlpha,
-			NativeA8VanillaLayoutKind vanillaLayoutKind)
+		NativeProfileKey MakeProfileKey(const NativeFontPacketTemplate& packet,
+			NativeFontSampling sampling, bool writeEffectAlpha,
+			NativeFontVanillaLayoutKind vanillaLayoutKind)
 		{
 			NativeProfileKey key;
 			key.shaderClass = packet.shaderClass;
@@ -1247,14 +1247,14 @@ namespace fonthook::vectorfont
 			key.vanillaLayoutKind = vanillaLayoutKind;
 			std::memcpy(key.constantBits.data(), packet.constants.data(),
 				key.constantBits.size() * sizeof(UInt32));
-			if (vanillaLayoutKind == NativeA8VanillaLayoutKind::Uniform40)
+			if (vanillaLayoutKind == NativeFontVanillaLayoutKind::Uniform40)
 			{
 				std::memcpy(&key.constantBits[6],
 					&packet.uniformSdfSpread, sizeof(UInt32));
 				std::memcpy(&key.uniformDistanceParameterScaleBits,
 					&packet.uniformDistanceParameterScale, sizeof(UInt32));
 			}
-			if (!UsesNativeA8VanillaLayout(vanillaLayoutKind)
+			if (!UsesNativeFontVanillaLayout(vanillaLayoutKind)
 				&& packet.sampling == sampling)
 			{
 				key.precomputedHash =
@@ -1263,23 +1263,23 @@ namespace fonthook::vectorfont
 			return key;
 		}
 
-		NativeA8Sampling ResolveEffectiveSampling(
-			const NativeA8PacketTemplate& packet,
+		NativeFontSampling ResolveEffectiveSampling(
+			const NativeFontPacketTemplate& packet,
 			bool scaledFillSampling)
 		{
 			static_cast<void>(scaledFillSampling);
 			// Distance-field atlas pages are explicitly level-zero-only.
-			return NativeA8Sampling::LinearLod0;
+			return NativeFontSampling::LinearLod0;
 		}
 
 		NiTexturingProperty::FilterMode ResolveFilterMode(
-			NativeA8Sampling sampling)
+			NativeFontSampling sampling)
 		{
 			switch (sampling)
 			{
-			case NativeA8Sampling::LinearMipmapped:
+			case NativeFontSampling::LinearMipmapped:
 				return NiTexturingProperty::FILTER_TRILERP;
-			case NativeA8Sampling::LinearLod0:
+			case NativeFontSampling::LinearLod0:
 				return NiTexturingProperty::FILTER_BILERP;
 			default:
 				return NiTexturingProperty::FILTER_NEAREST;
@@ -1288,10 +1288,10 @@ namespace fonthook::vectorfont
 
 		NiD3DPixelShader* ResolveProfilePixelShader(
 			NativeShaderGeneration& generation,
-			const NativeA8PacketTemplate& packet,
-			NativeA8VanillaLayoutKind vanillaLayoutKind)
+			const NativeFontPacketTemplate& packet,
+			NativeFontVanillaLayoutKind vanillaLayoutKind)
 		{
-			if (UsesNativeA8VanillaLayout(vanillaLayoutKind))
+			if (UsesNativeFontVanillaLayout(vanillaLayoutKind))
 			{
 				const size_t qualityIndex =
 					static_cast<size_t>(packet.quality);
@@ -1303,7 +1303,7 @@ namespace fonthook::vectorfont
 					|| !supportedDistanceField
 					|| generation.distanceFieldMethod
 						!= packet.distanceFieldMethod
-					|| packet.shaderClass != NativeA8ShaderClass::Composite
+					|| packet.shaderClass != NativeFontShaderClass::Composite
 					|| (packet.compositeShiftedShadow
 						&& !(packet.staticCompositeLayerMask & 1u))
 					|| packet.staticCompositeLayerMask
@@ -1348,25 +1348,25 @@ namespace fonthook::vectorfont
 				}
 				return HasShaderHandle(slot) ? slot.m_pObject : nullptr;
 			}
-			if (packet.shaderClass != NativeA8ShaderClass::Coverage
-				&& packet.shaderClass != NativeA8ShaderClass::Argb
+			if (packet.shaderClass != NativeFontShaderClass::Coverage
+				&& packet.shaderClass != NativeFontShaderClass::Argb
 				&& packet.distanceFieldMethod != generation.distanceFieldMethod)
 				return nullptr;
 			switch (packet.shaderClass)
 			{
-			case NativeA8ShaderClass::Body:
+			case NativeFontShaderClass::Body:
 			{
 				const size_t index = static_cast<size_t>(packet.quality);
 				return index < generation.mtsdfFillShaders.size()
 					? generation.mtsdfFillShaders[index].m_pObject : nullptr;
 			}
-			case NativeA8ShaderClass::Effect:
+			case NativeFontShaderClass::Effect:
 			{
 				const size_t index = static_cast<size_t>(packet.quality);
 				return index < generation.effectShaders.size()
 					? generation.effectShaders[index].m_pObject : nullptr;
 			}
-			case NativeA8ShaderClass::Composite:
+			case NativeFontShaderClass::Composite:
 			{
 				const size_t index = static_cast<size_t>(packet.quality);
 				if (generation.distanceFieldMethod
@@ -1393,7 +1393,7 @@ namespace fonthook::vectorfont
 					if (!HasShaderHandle(specializedSlot) && !attempted
 						&& generation.createPixelShader)
 					{
-						// ResolveNativeA8PacketShader serializes profile creation
+						// ResolveNativeFontPacketShader serializes profile creation
 						// with profileMutex, so optional shader publication needs no
 						// second lock and allocates only profiles actually observed.
 						attempted = true;
@@ -1419,9 +1419,9 @@ namespace fonthook::vectorfont
 				return index < generation.compositeShaders.size()
 					? generation.compositeShaders[index].m_pObject : nullptr;
 			}
-			case NativeA8ShaderClass::Coverage:
+			case NativeFontShaderClass::Coverage:
 				return generation.coverageShader.m_pObject;
-			case NativeA8ShaderClass::Argb:
+			case NativeFontShaderClass::Argb:
 				return generation.argbShader.m_pObject;
 			default:
 				return nullptr;
@@ -1484,21 +1484,21 @@ namespace fonthook::vectorfont
 		}
 
 		NativeShaderProfile* CreateProfile(NativeShaderGeneration& generation,
-			const NativeA8PacketTemplate& packet, const NativeProfileKey& key)
+			const NativeFontPacketTemplate& packet, const NativeProfileKey& key)
 		{
 			NiD3DPixelShader* pixelShader = ResolveProfilePixelShader(generation,
 				packet, key.vanillaLayoutKind);
 			if (!pixelShader || !pixelShader->GetShaderHandle())
 				return nullptr;
 			NiD3DVertexShader* vertexShader =
-				UsesNativeA8VanillaLayout(key.vanillaLayoutKind)
+				UsesNativeFontVanillaLayout(key.vanillaLayoutKind)
 					? ResolveVanillaLayoutVertexShader(
 						generation, key.vanillaLayoutKind)
 					: generation.vertexShader.m_pObject;
 			if (!vertexShader || !vertexShader->GetShaderHandle())
 				return nullptr;
 			NiDX9ShaderDeclaration* declaration =
-				UsesNativeA8VanillaLayout(key.vanillaLayoutKind)
+				UsesNativeFontVanillaLayout(key.vanillaLayoutKind)
 					? ResolveVanillaLayoutDeclaration(
 						generation, key.vanillaLayoutKind)
 					: generation.declaration.m_pObject;
@@ -1521,20 +1521,20 @@ namespace fonthook::vectorfont
 			// fixed effect layer white.
 			auto profileConstants = packet.constants;
 			if (key.vanillaLayoutKind
-				== NativeA8VanillaLayoutKind::Uniform40)
+				== NativeFontVanillaLayoutKind::Uniform40)
 				profileConstants[6] = packet.uniformSdfSpread;
 			const float uniformSdfSpread = key.vanillaLayoutKind
-				== NativeA8VanillaLayoutKind::Uniform40
+				== NativeFontVanillaLayoutKind::Uniform40
 					? packet.uniformSdfSpread : 0.0f;
 			const float uniformDistanceParameterScale = key.vanillaLayoutKind
-				== NativeA8VanillaLayoutKind::Uniform40
+				== NativeFontVanillaLayoutKind::Uniform40
 					? packet.uniformDistanceParameterScale : 1.0f;
 			auto* profile = new NativeShaderProfile(generation, key,
 				profileConstants, uniformSdfSpread,
 				uniformDistanceParameterScale);
 			profile->shader = shader;
 			profile->effectPass =
-				packet.shaderClass != NativeA8ShaderClass::Composite
+				packet.shaderClass != NativeFontShaderClass::Composite
 				&& packet.layer != 3;
 
 			profile->shaderOwner = shaderGuard;
@@ -1569,7 +1569,7 @@ namespace fonthook::vectorfont
 				reinterpret_cast<void*>(&NativeSetupGeometryAlphaBlending);
 			profile->vtable = vtable;
 			*reinterpret_cast<void***>(shader) = vtable->slots.data();
-			NativeA8CompiledPacketCommand& program =
+			NativeFontCompiledPacketCommand& program =
 				profile->retainedProgram;
 			program.profile = profile;
 			program.shader = shader;
@@ -1592,38 +1592,38 @@ namespace fonthook::vectorfont
 					kTileShaderSetupGeometryTextures))
 			{
 				program.standardV2SlotProofs |=
-					NativeA8CompiledPacketCommand::kStandardSlot30Proof;
+					NativeFontCompiledPacketCommand::kStandardSlot30Proof;
 			}
 			if (vtable->vanillaUpdateConstants
 				== reinterpret_cast<VanillaUpdateConstantsFn>(
 					kTileShaderUpdateConstants))
 			{
 				program.standardV2SlotProofs |=
-					NativeA8CompiledPacketCommand::kStandardSlot31Proof;
+					NativeFontCompiledPacketCommand::kStandardSlot31Proof;
 			}
-			if (HasPredictableNativeA8BlendSemantics(
+			if (HasPredictableNativeFontBlendSemantics(
 					program.standardBlendSemantics))
 			{
 				program.standardV2SlotProofs |=
-					NativeA8CompiledPacketCommand::kStandardSlot32Proof;
+					NativeFontCompiledPacketCommand::kStandardSlot32Proof;
 			}
 			if (program.setupAlphaTest == reinterpret_cast<void*>(
 					kShaderSetupGeometryAlphaTesting))
 			{
 				program.standardV2SlotProofs |=
-					NativeA8CompiledPacketCommand::kStandardSlot33Proof;
+					NativeFontCompiledPacketCommand::kStandardSlot33Proof;
 			}
 			if (program.setupDrawmode == reinterpret_cast<void*>(
 					kShaderSetupGeometryRenderStates))
 			{
 				program.standardV2SlotProofs |=
-					NativeA8CompiledPacketCommand::kStandardSlot34Proof;
+					NativeFontCompiledPacketCommand::kStandardSlot34Proof;
 			}
 			if (program.postGeometry == reinterpret_cast<void*>(
 					kTileShaderPostGeometry))
 			{
 				program.standardV2SlotProofs |=
-					NativeA8CompiledPacketCommand::kStandardSlot35Proof;
+					NativeFontCompiledPacketCommand::kStandardSlot35Proof;
 			}
 			program.directDrawLiteReady =
 				program.prepareGeometry == reinterpret_cast<void*>(
@@ -1632,8 +1632,8 @@ namespace fonthook::vectorfont
 					kNiD3DShaderFirstPass);
 			program.generation = generation.id;
 			program.simpleColor =
-				packet.shaderClass == NativeA8ShaderClass::Coverage
-					|| packet.shaderClass == NativeA8ShaderClass::Argb;
+				packet.shaderClass == NativeFontShaderClass::Coverage
+					|| packet.shaderClass == NativeFontShaderClass::Argb;
 			program.active = program.device && program.vertexShader
 				&& program.pixelShader && program.setupPass;
 			const UInt32 previousProofGeneration =
@@ -1647,13 +1647,13 @@ namespace fonthook::vectorfont
 					static_cast<UInt32>(
 						program.standardV2SlotProofs),
 					static_cast<UInt32>(
-						NativeA8CompiledPacketCommand::
+						NativeFontCompiledPacketCommand::
 							kStandardV2RequiredProofs),
 					StandardBlendSemanticsName(
 						program.standardBlendSemantics),
 					program.setupBlend,
 					program.standardV2SlotProofs
-							== NativeA8CompiledPacketCommand::
+							== NativeFontCompiledPacketCommand::
 								kStandardV2RequiredProofs
 						? 1u : 0u,
 					program.directDrawLiteReady ? 1u : 0u,
@@ -1715,7 +1715,7 @@ namespace fonthook::vectorfont
 					: E_POINTER;
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: vertex declaration creation failed format=float4 stride=%u capsHr=0x%08X declTypes=0x%08X retryHr=0x%08X elements=%p",
-					static_cast<UInt32>(sizeof(NativeA8GpuVertex)),
+					static_cast<UInt32>(sizeof(NativeFontGpuVertex)),
 					static_cast<UInt32>(capsResult), caps.DeclTypes,
 					static_cast<UInt32>(retryResult),
 					declaration->m_pkElements);
@@ -1768,7 +1768,7 @@ namespace fonthook::vectorfont
 		{
 			if (!generation.renderer || !generation.device
 				|| generation.renderer->m_kD3DCaps9.MaxVertexShaderConst
-					<= kNativeA8VanillaLayoutGlyphConstantRegister)
+					<= kNativeFontVanillaLayoutGlyphConstantRegister)
 			{
 				status = "constant-registers";
 				return false;
@@ -1823,7 +1823,7 @@ namespace fonthook::vectorfont
 		{
 			if (!generation.renderer || !generation.device
 				|| generation.renderer->m_kD3DCaps9.MaxVertexShaderConst
-					<= kNativeA8VanillaLayoutGlyphConstantRegister)
+					<= kNativeFontVanillaLayoutGlyphConstantRegister)
 			{
 				status = "constant-registers";
 				return false;
@@ -1903,7 +1903,7 @@ namespace fonthook::vectorfont
 
 			generation->vertexShader = createVS("tnvse_freetype_native_vs.vso");
 			const bool vanillaLayoutRequested =
-				IsVanillaLayoutSdfEnabled(generation->distanceFieldMethod)
+				IsVanillaLayoutEnabled(generation->distanceFieldMethod)
 				&& (generation->distanceFieldMethod
 						== DistanceFieldMethod::TrueSdf
 					|| generation->distanceFieldMethod
@@ -2098,7 +2098,7 @@ namespace fonthook::vectorfont
 				}
 			}
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: vanilla-layout SDF generation uniformStatus=%s uniformReady=%u uniformStride=%u uniformDeclaration=%p uniformCompatiblePrevious=%u parametricStatus=%s parametricReady=%u parametricStride=%u parametricDeclaration=%p parametricCompatiblePrevious=%u vertexConstants=c%u-c%u deviceEpoch=%u",
+				"tnvse_freetype_native: vanilla-layout distance-field generation uniformStatus=%s uniformReady=%u uniformStride=%u uniformDeclaration=%p uniformCompatiblePrevious=%u parametricStatus=%s parametricReady=%u parametricStride=%u parametricDeclaration=%p parametricCompatiblePrevious=%u vertexConstants=c%u-c%u deviceEpoch=%u",
 				vanillaLayoutStatus,
 				generation->vanillaLayoutReady ? 1u : 0u,
 				kVanillaLayoutVertexStride,
@@ -2111,8 +2111,8 @@ namespace fonthook::vectorfont
 				generation->vanillaParametricLayoutD3DDeclaration,
 				static_cast<UInt32>(generation->
 					compatibleVanillaParametricLayoutD3DDeclarations.size()),
-				kNativeA8VertexAaConstantRegister,
-				kNativeA8VanillaLayoutGlyphConstantRegister,
+				kNativeFontVertexAaConstantRegister,
+				kNativeFontVanillaLayoutGlyphConstantRegister,
 				generation->deviceEpoch);
 			return generation.release();
 		}
@@ -2162,15 +2162,15 @@ namespace fonthook::vectorfont
 					1u, std::memory_order_acq_rel) + 1u;
 				s_resetInProgress.store(true, std::memory_order_release);
 				ResetFreeTypeGpuTiming();
-				InvalidateNativeA8RingResources(
-					NativeA8FallbackReason::DeviceReset);
+				InvalidateNativeFontRingResources(
+					NativeFontFallbackReason::DeviceReset);
 				NativeShaderGeneration* current = s_publishedGeneration.load(
 					std::memory_order_acquire);
 				if (current)
 				{
 					current->runtimeFault.store(true, std::memory_order_release);
-					NotifyNativeA8CommandExternalMutation(
-						NativeA8CommandFallback::Generation);
+					NotifyNativeFontCommandExternalMutation(
+						NativeFontCommandFallback::Generation);
 				}
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: generation-invalidated reason=device-reset generation=%u deviceEpoch=%u phase=release; dynamic VB/IB ring released",
@@ -2179,7 +2179,7 @@ namespace fonthook::vectorfont
 			}
 
 			s_resetInProgress.store(false, std::memory_order_release);
-			if (!InitializeNativeA8Renderer(true, true))
+			if (!InitializeNativeFontRenderer(true, true))
 			{
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: initialization unavailable reason=device-reset phase=rebuild; no complete native generation available");
@@ -2188,10 +2188,10 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	bool InitializeNativeA8Renderer(bool forceAttempt, bool reportFailures)
+	bool InitializeNativeFontRenderer(bool forceAttempt, bool reportFailures)
 	{
 		if (s_resetInProgress.load(std::memory_order_acquire)
-			|| !g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeA8Atlas)
+			|| !g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeNativeAtlas)
 			return false;
 		if (!forceAttempt)
 		{
@@ -2236,7 +2236,7 @@ namespace fonthook::vectorfont
 			&& renderer->m_kD3DCaps9.VertexShaderVersion >= D3DVS_VERSION(3, 0)
 			&& renderer->m_kD3DCaps9.PixelShaderVersion >= D3DPS_VERSION(3, 0)
 			&& renderer->m_kD3DCaps9.MaxVertexShaderConst
-				> kNativeA8VertexAaConstantRegister
+				> kNativeFontVertexAaConstantRegister
 			&& ResolveShaderLoader(createVS, createPS, failure))
 		{
 			candidate = BuildGeneration(createVS, createPS, renderer, device,
@@ -2252,7 +2252,7 @@ namespace fonthook::vectorfont
 			failure = "shader-model-3";
 		}
 		else if (renderer->m_kD3DCaps9.MaxVertexShaderConst
-			<= kNativeA8VertexAaConstantRegister)
+			<= kNativeFontVertexAaConstantRegister)
 		{
 			failure = "shader-constant-registers";
 		}
@@ -2271,8 +2271,8 @@ namespace fonthook::vectorfont
 		candidate->id = s_nextGeneration++;
 		s_processGenerations.push_back(candidate);
 		s_publishedGeneration.store(candidate, std::memory_order_release);
-		NotifyNativeA8CommandExternalMutation(
-			NativeA8CommandFallback::Generation);
+		NotifyNativeFontCommandExternalMutation(
+			NativeFontCommandFallback::Generation);
 		const char* compositeProfileMode =
 			!UsesBakedEffectRoute()
 				&& candidate->distanceFieldMethod
@@ -2286,15 +2286,15 @@ namespace fonthook::vectorfont
 			UsesBakedEffectRoute()
 				? "disabled" : GetConfiguredDistanceFieldMethodName(),
 			compositeProfileMode,
-			static_cast<UInt32>(sizeof(NativeA8GpuVertex)),
+			static_cast<UInt32>(sizeof(NativeFontGpuVertex)),
 			candidate->renderer->m_kD3DCaps9.DeclTypes,
 			candidate->renderer->m_kD3DCaps9.MaxVertexShaderConst);
 		return true;
 	}
 
-	void HandleNativeA8RendererMainLoop()
+	void HandleNativeFontShaderRendererMainLoop()
 	{
-		if (!g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeA8Atlas)
+		if (!g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeNativeAtlas)
 			return;
 		NativeShaderGeneration* current = s_publishedGeneration.load(
 			std::memory_order_acquire);
@@ -2303,17 +2303,17 @@ namespace fonthook::vectorfont
 		const bool deviceChanged = current && device
 			&& (current->renderer != renderer || current->device != device);
 		if (!GenerationMatchesCurrentDevice(current))
-			InitializeNativeA8Renderer(deviceChanged, false);
+			InitializeNativeFontRenderer(deviceChanged, false);
 	}
 
-	void HandleNativeA8ShaderLoaderMessage(UInt32 messageType)
+	void HandleNativeFontShaderLoaderMessage(UInt32 messageType)
 	{
 		if (messageType != kShaderRefreshMessage)
 			return;
 		NativeShaderGeneration* before = s_publishedGeneration.load(
 			std::memory_order_acquire);
 		const UInt32 beforeId = before ? before->id : 0;
-		InitializeNativeA8Renderer(true, true);
+		InitializeNativeFontRenderer(true, true);
 		NativeShaderGeneration* after = s_publishedGeneration.load(
 			std::memory_order_acquire);
 		if (!after || after->id == beforeId)
@@ -2324,20 +2324,20 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	bool IsNativeA8RendererAvailable()
+	bool IsNativeFontShaderRendererAvailable()
 	{
 		NativeShaderGeneration* generation = s_publishedGeneration.load(
 			std::memory_order_acquire);
 		if (GenerationMatchesCurrentDevice(generation))
 			return true;
-		if (!InitializeNativeA8Renderer(false, false))
+		if (!InitializeNativeFontRenderer(false, false))
 			return false;
 		return GenerationMatchesCurrentDevice(s_publishedGeneration.load(
 			std::memory_order_acquire));
 	}
 
-	bool GetNativeA8RendererReadinessFast(
-		NativeA8RendererReadinessView& view)
+	bool GetNativeFontRendererReadinessFast(
+		NativeFontRendererReadinessView& view)
 	{
 		view = {};
 		NativeShaderGeneration* generation = s_publishedGeneration.load(
@@ -2363,14 +2363,14 @@ namespace fonthook::vectorfont
 		return view.ready;
 	}
 
-	UInt32 GetNativeA8ShaderGeneration()
+	UInt32 GetNativeFontShaderGeneration()
 	{
 		NativeShaderGeneration* generation = s_publishedGeneration.load(
 			std::memory_order_acquire);
 		return GenerationMatchesCurrentDevice(generation) ? generation->id : 0;
 	}
 
-	IDirect3DVertexDeclaration9* GetNativeA8D3DDeclaration(UInt32 generation)
+	IDirect3DVertexDeclaration9* GetNativeFontD3DDeclaration(UInt32 generation)
 	{
 		NativeShaderGeneration* current = s_publishedGeneration.load(
 			std::memory_order_acquire);
@@ -2379,7 +2379,7 @@ namespace fonthook::vectorfont
 			? current->d3dDeclaration : nullptr;
 	}
 
-	bool IsNativeA8ShaderGenerationCurrent(UInt32 generation)
+	bool IsNativeFontShaderGenerationCurrent(UInt32 generation)
 	{
 		NativeShaderGeneration* current = s_publishedGeneration.load(
 			std::memory_order_acquire);
@@ -2388,7 +2388,7 @@ namespace fonthook::vectorfont
 			&& !current->runtimeFault.load(std::memory_order_acquire);
 	}
 
-	void BeginNativeA8SortedShaderBatch()
+	void BeginNativeFontSortedShaderBatch()
 	{
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 		if (!batch.depth++)
@@ -2403,7 +2403,7 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	void EndNativeA8SortedShaderBatch()
+	void EndNativeFontSortedShaderBatch()
 	{
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 		if (!batch.depth)
@@ -2420,19 +2420,19 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	void InvalidateNativeA8SortedShaderState()
+	void InvalidateNativeFontSortedShaderState()
 	{
-		InvalidateNativeA8CommandExecutionSegment(
-			NativeA8CommandFallback::State);
+		InvalidateNativeFontCommandExecutionSegment(
+			NativeFontCommandFallback::State);
 		ResetSortedShaderStateCaches();
 	}
 
-	void InvalidateNativeA8SortedShaderStateWithinExecutionSegment()
+	void InvalidateNativeFontSortedShaderStateWithinExecutionSegment()
 	{
 		ResetSortedShaderStateCaches();
 	}
 
-	void InvalidateNativeA8SortedShaderStateForForeignRenderPass()
+	void InvalidateNativeFontSortedShaderStateForForeignRenderPass()
 	{
 		const NativeSortedShaderBatch& sortedBatch = s_sortedShaderBatch;
 		const NativeFacadeShaderBatch& facadeBatch = s_facadeShaderBatch;
@@ -2444,7 +2444,7 @@ namespace fonthook::vectorfont
 				&& (facadeBatch.packetProfile
 					|| facadeBatch.vertexAa.aaConstantReady
 					|| facadeBatch.vertexAa.vanillaGlyphConstantReady));
-		InvalidateNativeA8SortedShaderState();
+		InvalidateNativeFontSortedShaderState();
 		if (hadPrivateState)
 		{
 			RecordFreeTypePerf(FreeTypePerfCounter::
@@ -2452,19 +2452,19 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	static void PrepareNativeA8VanillaLayoutPrivateStateCarry()
+	static void PrepareNativeFontVanillaLayoutPrivateStateCarry()
 	{
 		// This helper is private to the exact Vanilla-layout shader transition.
 		// Preserve only the immutable c176-c183/c208/c209 shadow signed by that
 		// transition while invalidating its command proof and mutable bindings.
-		// Arbitrary non-A8 RenderPasses must use the hard invalidation path above:
+		// Arbitrary non-native-font RenderPasses use the hard invalidation path above:
 		// both reversed executables dispatch generic shader callbacks there.
-		InvalidateNativeA8CommandExecutionSegment(
-			NativeA8CommandFallback::State);
+		InvalidateNativeFontCommandExecutionSegment(
+			NativeFontCommandFallback::State);
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 		NiD3DRenderState* renderState =
 			batch.depth && batch.device
-				&& IsNativeA8ShaderGenerationCurrent(batch.generation)
+				&& IsNativeFontShaderGenerationCurrent(batch.generation)
 				? ResolveEngineRenderState(batch.device) : nullptr;
 		if (!renderState)
 		{
@@ -2503,12 +2503,12 @@ namespace fonthook::vectorfont
 		facadeBatch.samplerReady = false;
 	}
 
-	static void ValidateNativeA8VanillaLayoutPrivateStateCarry()
+	static void ValidateNativeFontVanillaLayoutPrivateStateCarry()
 	{
 		NativeSortedShaderBatch& batch = s_sortedShaderBatch;
 		NiD3DRenderState* renderState =
 			batch.depth && batch.device
-				&& IsNativeA8ShaderGenerationCurrent(batch.generation)
+				&& IsNativeFontShaderGenerationCurrent(batch.generation)
 				? ResolveEngineRenderState(batch.device) : nullptr;
 		if (!renderState)
 		{
@@ -2543,7 +2543,7 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	void BeginNativeA8FacadeShaderBatch()
+	void BeginNativeFontFacadeShaderBatch()
 	{
 		NativeFacadeShaderBatch& batch = s_facadeShaderBatch;
 		++batch.depth;
@@ -2556,7 +2556,7 @@ namespace fonthook::vectorfont
 		batch.samplerReady = false;
 	}
 
-	void EndNativeA8FacadeShaderBatch()
+	void EndNativeFontFacadeShaderBatch()
 	{
 		NativeFacadeShaderBatch& batch = s_facadeShaderBatch;
 		if (!batch.depth)
@@ -2568,7 +2568,7 @@ namespace fonthook::vectorfont
 		batch.samplerReady = false;
 	}
 
-	void MarkNativeA8GenerationFault(UInt32 generation,
+	void MarkNativeFontGenerationFault(UInt32 generation,
 		const char* operation, HRESULT result)
 	{
 		NativeShaderGeneration* current = s_publishedGeneration.load(
@@ -2577,18 +2577,18 @@ namespace fonthook::vectorfont
 			MarkGenerationFault(current, operation, result);
 	}
 
-	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
+	TileShader* ResolveNativeFontPacketShader(const NativeFontPacketTemplate& packet,
 		const NiTriShape* facade, bool scaledFillSampling,
-		NativeA8VanillaLayoutKind vanillaLayoutKind)
+		NativeFontVanillaLayoutKind vanillaLayoutKind)
 	{
-		if (!IsNativeA8RendererAvailable())
+		if (!IsNativeFontShaderRendererAvailable())
 			return nullptr;
 		NativeShaderGeneration* generation = s_publishedGeneration.load(
 			std::memory_order_acquire);
 		if (!GenerationMatchesCurrentDevice(generation))
 			return nullptr;
 
-		const NativeA8Sampling sampling = ResolveEffectiveSampling(packet,
+		const NativeFontSampling sampling = ResolveEffectiveSampling(packet,
 			scaledFillSampling);
 		const NiAlphaProperty* alpha = facade
 			? facade->GetAlphaProperty() : nullptr;
@@ -2596,8 +2596,8 @@ namespace fonthook::vectorfont
 			&& generation->supportsSeparateAlpha
 			&& alpha && alpha->GetAlphaBlending();
 		const size_t cacheIndex = writeEffectAlpha ? 1u : 0u;
-		NativeA8PacketShaderCacheEntry& packetCache =
-			UsesNativeA8VanillaLayout(vanillaLayoutKind)
+		NativeFontPacketShaderCacheEntry& packetCache =
+			UsesNativeFontVanillaLayout(vanillaLayoutKind)
 			? packet.vanillaLayoutResolvedShaders[cacheIndex]
 			: packet.resolvedShaders[cacheIndex];
 		NativeShaderProfile* cachedProfile =
@@ -2638,7 +2638,7 @@ namespace fonthook::vectorfont
 		NativeShaderProfile* profile = CreateProfile(*generation, packet, key);
 		if (!profile)
 		{
-			if (packet.shaderClass == NativeA8ShaderClass::Composite)
+			if (packet.shaderClass == NativeFontShaderClass::Composite)
 				return nullptr;
 			MarkGenerationFault(generation, "profile-create",
 				D3DERR_NOTAVAILABLE);
@@ -2654,7 +2654,7 @@ namespace fonthook::vectorfont
 		return profile->shader;
 	}
 
-	UInt64 BeginNativeA8VanillaLayoutShaderTransition(
+	UInt64 BeginNativeFontVanillaLayoutShaderTransition(
 		TileShader* shader, UInt32 currentPass)
 	{
 		// Official B98E80 and beta Standard::RenderPassImmediately both execute
@@ -2663,7 +2663,7 @@ namespace fonthook::vectorfont
 		// disjoint c176-c183/c208/c209 shadow. The command segment, bindings and
 		// sampler proof are still hard boundaries; unrelated RenderPasses are not
 		// eligible for this carry.
-		PrepareNativeA8VanillaLayoutPrivateStateCarry();
+		PrepareNativeFontVanillaLayoutPrivateStateCarry();
 		NativeVanillaLayoutPublicationWitness& witness =
 			s_vanillaLayoutPublicationWitness;
 		UInt64 token = ++s_nextVanillaLayoutPublicationToken;
@@ -2687,7 +2687,7 @@ namespace fonthook::vectorfont
 		return token;
 	}
 
-	bool EndNativeA8VanillaLayoutShaderTransition(
+	bool EndNativeFontVanillaLayoutShaderTransition(
 		UInt64 token, TileShader* shader)
 	{
 		NativeVanillaLayoutPublicationWitness& witness =
@@ -2699,20 +2699,20 @@ namespace fonthook::vectorfont
 			&& witness.token == token && witness.publishedToken == token
 			&& witness.expectedShader == shader && publishedProfile
 			&& publishedProfile->shader == shader
-			&& UsesNativeA8VanillaLayout(
+			&& UsesNativeFontVanillaLayout(
 				publishedProfile->key.vanillaLayoutKind)
 			&& batch.depth && batch.packetProfile == publishedProfile
 			&& batch.device == witness.publishedDevice
 			&& batch.generation == witness.publishedGeneration
 			&& batch.vertexAa.aaConstantReady
 			&& batch.vertexAa.vanillaGlyphConstantReady
-			&& IsNativeA8ShaderGenerationCurrent(batch.generation);
+			&& IsNativeFontShaderGenerationCurrent(batch.generation);
 		witness = {};
 		if (!witnessed)
 		{
 			ResetSortedShaderStateCaches();
 			RecordFreeTypePerf(FreeTypePerfCounter::
-				VanillaLayoutSdfPrivateStateCarryRejected);
+				VanillaLayoutPrivateStateCarryRejected);
 			return false;
 		}
 
@@ -2721,12 +2721,12 @@ namespace fonthook::vectorfont
 		// only for the private constant shadow, never for the sampler or command
 		// execution segment.
 		batch.samplerReady = false;
-		ValidateNativeA8VanillaLayoutPrivateStateCarry();
+		ValidateNativeFontVanillaLayoutPrivateStateCarry();
 		const bool retained = batch.packetProfile == publishedProfile
 			&& batch.device == publishedDevice;
 		RecordFreeTypePerf(retained
-			? FreeTypePerfCounter::VanillaLayoutSdfPrivateStateCarry
-			: FreeTypePerfCounter::VanillaLayoutSdfPrivateStateCarryRejected);
+			? FreeTypePerfCounter::VanillaLayoutPrivateStateCarry
+			: FreeTypePerfCounter::VanillaLayoutPrivateStateCarryRejected);
 		return retained;
 	}
 
@@ -2796,8 +2796,8 @@ namespace fonthook::vectorfont
 			UInt16 nativePackDataFlags = 0;
 			UInt16 nativePackDirtyFlags = 0;
 			UInt8 nativePackKeepFlags = 0;
-			NativeA8VanillaLayoutKind layoutKind =
-				NativeA8VanillaLayoutKind::None;
+			NativeFontVanillaLayoutKind layoutKind =
+				NativeFontVanillaLayoutKind::None;
 			bool nativePackCompleted = false;
 			bool priorGenerationDeclaration = false;
 		};
@@ -2815,13 +2815,13 @@ namespace fonthook::vectorfont
 
 		VanillaLayoutDeclarationCompatibility
 		ClassifyVanillaLayoutDeclaration(const NativeShaderGeneration* generation,
-			NativeA8VanillaLayoutKind layoutKind,
+			NativeFontVanillaLayoutKind layoutKind,
 			const NiGeometryBufferData* buffer)
 		{
 			IDirect3DVertexDeclaration9* expected = generation
-				? (layoutKind == NativeA8VanillaLayoutKind::Uniform40
+				? (layoutKind == NativeFontVanillaLayoutKind::Uniform40
 					? generation->vanillaLayoutD3DDeclaration
-					: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+					: layoutKind == NativeFontVanillaLayoutKind::Parametric48
 						? generation->vanillaParametricLayoutD3DDeclaration
 						: nullptr)
 				: nullptr;
@@ -2836,9 +2836,9 @@ namespace fonthook::vectorfont
 				return VanillaLayoutDeclarationCompatibility::CurrentGeneration;
 			}
 			const std::vector<IDirect3DVertexDeclaration9*>* compatible =
-				layoutKind == NativeA8VanillaLayoutKind::Uniform40
+				layoutKind == NativeFontVanillaLayoutKind::Uniform40
 					? &generation->compatibleVanillaLayoutD3DDeclarations
-					: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+					: layoutKind == NativeFontVanillaLayoutKind::Parametric48
 						? &generation->
 							compatibleVanillaParametricLayoutD3DDeclarations
 						: nullptr;
@@ -2872,20 +2872,20 @@ namespace fonthook::vectorfont
 				&& !data->m_pkColor && !data->m_pkTexture;
 		}
 
-		void RecordPriorGenerationDeclarationObservation(
+		void RecordPriorGenerationDeclarationUse(
 			bool priorGenerationDeclaration)
 		{
 			if (priorGenerationDeclaration)
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutSdfPriorGenerationDeclarationReady);
+					VanillaLayoutPriorGenerationDeclarationUse);
 			}
 		}
 
 		VanillaLayoutDrawTokenMismatch MatchVanillaLayoutDrawToken(
 			const NiTriShape* shape, TileShader* shader,
-			const NativeA8ShapePayload& payload,
-			const NativeA8VanillaLayoutDrawToken& token)
+			const NativeFontShapePayload& payload,
+			const NativeFontVanillaLayoutDrawToken& token)
 		{
 			if (!token.valid)
 				return VanillaLayoutDrawTokenMismatch::Uncertified;
@@ -2902,15 +2902,15 @@ namespace fonthook::vectorfont
 			NativeShaderProfile* profile = block ? block->profile : nullptr;
 			if (!profile || token.profileIdentity != profile
 				|| profile->shader != shader
-				|| !UsesNativeA8VanillaLayout(
+				|| !UsesNativeFontVanillaLayout(
 					profile->key.vanillaLayoutKind)
 				|| token.layoutKind != profile->key.vanillaLayoutKind)
 			{
 				return VanillaLayoutDrawTokenMismatch::ShapeOrShader;
 			}
-			const NativeA8PayloadTemplate* artifact =
+			const NativeFontPayloadTemplate* artifact =
 				payload.payloadTemplate.get();
-			const NativeA8PacketTemplate* packet = artifact
+			const NativeFontPacketTemplate* packet = artifact
 				&& artifact->compositePackets.size() == 1u
 				? &artifact->compositePackets.front() : nullptr;
 			if (!token.payloadUploaded || !payload.buildComplete
@@ -2930,7 +2930,7 @@ namespace fonthook::vectorfont
 			// process-lifetime once published. Exact generation/device-epoch identity
 			// therefore preserves the earlier full declaration classification without
 			// repeating its resource walk or compatible-declaration vector scan.
-			const NativeA8VanillaLayoutKind layoutKind =
+			const NativeFontVanillaLayoutKind layoutKind =
 				profile->key.vanillaLayoutKind;
 			const UInt32 expectedStride = ResolveVanillaLayoutStride(layoutKind);
 			IDirect3DVertexDeclaration9* expectedDeclaration = generation
@@ -3012,32 +3012,32 @@ namespace fonthook::vectorfont
 			VanillaLayoutDrawTokenMismatch mismatch)
 		{
 			RecordFreeTypePerf(FreeTypePerfCounter::
-				VanillaLayoutSdfDrawTokenFullValidation);
+				VanillaLayoutDrawTokenSlowPath);
 			switch (mismatch)
 			{
 			case VanillaLayoutDrawTokenMismatch::Uncertified:
 				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutSdfDrawTokenCold);
+					VanillaLayoutDrawTokenUncertified);
 				break;
 			case VanillaLayoutDrawTokenMismatch::ShapeOrShader:
 				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutSdfDrawTokenShapeShaderInvalidation);
+					VanillaLayoutDrawTokenShapeShaderMismatch);
 				break;
 			case VanillaLayoutDrawTokenMismatch::Generation:
 				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutSdfDrawTokenGenerationInvalidation);
+					VanillaLayoutDrawTokenGenerationMismatch);
 				break;
 			case VanillaLayoutDrawTokenMismatch::Geometry:
 				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutSdfDrawTokenGeometryInvalidation);
+					VanillaLayoutDrawTokenGeometryMismatch);
 				break;
 			case VanillaLayoutDrawTokenMismatch::NativePack:
 				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutSdfDrawTokenNativePackInvalidation);
+					VanillaLayoutDrawTokenNativePackMismatch);
 				break;
 			case VanillaLayoutDrawTokenMismatch::Layout:
 				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutSdfDrawTokenLayoutInvalidation);
+					VanillaLayoutDrawTokenLayoutMismatch);
 				break;
 			default:
 				break;
@@ -3045,11 +3045,11 @@ namespace fonthook::vectorfont
 		}
 
 		void CertifyVanillaLayoutDrawToken(
-			NativeA8VanillaLayoutDrawToken& token,
+			NativeFontVanillaLayoutDrawToken& token,
 			const VanillaLayoutReadySnapshot& snapshot,
-			const NativeA8ShapePayload& payload,
-			const NativeA8PayloadTemplate& artifact,
-			const NativeA8PacketTemplate& packet,
+			const NativeFontShapePayload& payload,
+			const NativeFontPayloadTemplate& artifact,
+			const NativeFontPacketTemplate& packet,
 			UInt32 uploadedByteOffset, UInt32 uploadedByteCount)
 		{
 			// Publish validity last so a later reuse cannot observe a partially
@@ -3094,7 +3094,8 @@ namespace fonthook::vectorfont
 			token.valid = true;
 		}
 
-		bool IsNativeA8VanillaLayoutShapeReadyImpl(const NiTriShape* shape,
+		bool ValidateNativeFontVanillaLayoutShapeReadiness(
+			const NiTriShape* shape,
 			TileShader* shader, bool logFailure,
 			VanillaLayoutReadySnapshot* readySnapshot)
 		{
@@ -3111,12 +3112,12 @@ namespace fonthook::vectorfont
 			const NiTriShapeData* data = shape ? shape->GetModelData() : nullptr;
 			const NiGeometryBufferData* buffer = data
 				? data->m_pkBuffData : nullptr;
-			const NativeA8VanillaLayoutKind layoutKind = profile
+			const NativeFontVanillaLayoutKind layoutKind = profile
 				? profile->key.vanillaLayoutKind
-				: NativeA8VanillaLayoutKind::None;
+				: NativeFontVanillaLayoutKind::None;
 			const UInt32 expectedStride = ResolveVanillaLayoutStride(layoutKind);
 			const bool profileMatches = profile && profile->shader == shader
-				&& UsesNativeA8VanillaLayout(layoutKind);
+				&& UsesNativeFontVanillaLayout(layoutKind);
 			const bool generationMatches = generation
 				&& IsVanillaLayoutGenerationReady(generation, layoutKind)
 				&& GenerationMatchesCurrentDevice(generation);
@@ -3134,10 +3135,10 @@ namespace fonthook::vectorfont
 				ClassifyVanillaLayoutDeclaration(generation, layoutKind, buffer);
 			const UInt32 compatibleDeclarationCount = generation
 				? static_cast<UInt32>(layoutKind
-					== NativeA8VanillaLayoutKind::Uniform40
+					== NativeFontVanillaLayoutKind::Uniform40
 						? generation->compatibleVanillaLayoutD3DDeclarations.size()
 						: layoutKind
-							== NativeA8VanillaLayoutKind::Parametric48
+							== NativeFontVanillaLayoutKind::Parametric48
 								? generation->
 									compatibleVanillaParametricLayoutD3DDeclarations.size()
 								: 0u)
@@ -3201,7 +3202,7 @@ namespace fonthook::vectorfont
 					readySnapshot->priorGenerationDeclaration =
 						priorGenerationDeclaration;
 				}
-				RecordPriorGenerationDeclarationObservation(
+				RecordPriorGenerationDeclarationUse(
 					priorGenerationDeclaration);
 				return true;
 			}
@@ -3238,7 +3239,7 @@ namespace fonthook::vectorfont
 			{
 				failures |= kNativePackIncomplete;
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::VanillaLayoutSdfNativePackPending);
+					FreeTypePerfCounter::VanillaLayoutNativePackPending);
 			}
 
 			const UInt32 previous = s_vanillaLayoutReadinessLoggedMask.fetch_or(
@@ -3247,7 +3248,7 @@ namespace fonthook::vectorfont
 			if (newlyObserved)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_vanilla_layout_sdf_readiness: failure=0x%08X new=0x%08X shape=%p shader=%p shapeShader=%p profile=%u vanillaProfile=%u layoutKind=%u generation=%u current=%u targetReady=%u deviceEpoch=%u completionContract=%u nativePackCompleted=%u dataFlags=0x%04X dirtyFlags=0x%04X keepFlags=0x%02X color=%p texture=%p buffer=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u streams=%u stride=%u expectedStride=%u bufferVertices=%u dataVertices=%u chip=%p vertexBuffer=%p",
+					"tnvse_freetype_vanilla_layout_readiness: failure=0x%08X new=0x%08X shape=%p shader=%p shapeShader=%p profile=%u vanillaProfile=%u layoutKind=%u generation=%u current=%u targetReady=%u deviceEpoch=%u completionContract=%u nativePackCompleted=%u dataFlags=0x%04X dirtyFlags=0x%04X keepFlags=0x%02X color=%p texture=%p buffer=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u streams=%u stride=%u expectedStride=%u bufferVertices=%u dataVertices=%u chip=%p vertexBuffer=%p",
 					failures, newlyObserved, shape, shader,
 					shape ? shape->GetShader() : nullptr,
 					profile ? 1u : 0u,
@@ -3308,9 +3309,9 @@ namespace fonthook::vectorfont
 			UInt32 bufferSize, UInt64 byteOffset, UInt64 byteCount)
 		{
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadFailure);
+				FreeTypePerfCounter::VanillaLayoutPayloadUploadFailure);
 			const UInt32 failureShift = snapshot.layoutKind
-				== NativeA8VanillaLayoutKind::Parametric48 ? 8u : 0u;
+				== NativeFontVanillaLayoutKind::Parametric48 ? 8u : 0u;
 			const UInt32 keyedFailure = failure << failureShift;
 			const UInt32 previous =
 				s_vanillaLayoutUploadFailureLoggedMask.fetch_or(
@@ -3334,10 +3335,10 @@ namespace fonthook::vectorfont
 		}
 
 		bool UploadVanillaLayoutPayload(
-			const NativeA8ShapePayload& payload,
+			const NativeFontShapePayload& payload,
 			const VanillaLayoutReadySnapshot& snapshot,
-			const NativeA8PayloadTemplate*& artifactOut,
-			const NativeA8PacketTemplate*& packetOut,
+			const NativeFontPayloadTemplate*& artifactOut,
+			const NativeFontPacketTemplate*& packetOut,
 			UInt32& byteOffsetOut, UInt32& byteCountOut)
 		{
 			artifactOut = nullptr;
@@ -3345,11 +3346,11 @@ namespace fonthook::vectorfont
 			byteOffsetOut = 0;
 			byteCountOut = 0;
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadAttempt);
+				FreeTypePerfCounter::VanillaLayoutPayloadUploadAttempt);
 
-			const NativeA8PayloadTemplate* artifact =
+			const NativeFontPayloadTemplate* artifact =
 				payload.payloadTemplate.get();
-			const NativeA8PacketTemplate* packet = artifact
+			const NativeFontPacketTemplate* packet = artifact
 				&& artifact->compositePackets.size() == 1u
 				? &artifact->compositePackets.front() : nullptr;
 			const UInt64 packetEnd = packet
@@ -3358,19 +3359,19 @@ namespace fonthook::vectorfont
 			const NiPoint3& origin = payload.geometryOrigin;
 			const bool finiteOrigin = std::isfinite(origin.x)
 				&& std::isfinite(origin.y) && std::isfinite(origin.z);
-			const NativeA8VanillaLayoutKind layoutKind = snapshot.layoutKind;
+			const NativeFontVanillaLayoutKind layoutKind = snapshot.layoutKind;
 			const bool uniformLayout =
-				layoutKind == NativeA8VanillaLayoutKind::Uniform40;
+				layoutKind == NativeFontVanillaLayoutKind::Uniform40;
 			const bool parametricLayout =
-				layoutKind == NativeA8VanillaLayoutKind::Parametric48;
+				layoutKind == NativeFontVanillaLayoutKind::Parametric48;
 			const UInt32 expectedStride = ResolveVanillaLayoutStride(layoutKind);
 			if (!payload.buildComplete || !artifact || !packet
 				|| (!uniformLayout && !parametricLayout) || !expectedStride
 				|| !snapshot.profile
 				|| snapshot.profile->key.vanillaLayoutKind != layoutKind
-				|| !HasNativeA8PayloadValidationSeal(*artifact)
+				|| !HasNativeFontPayloadValidationSeal(*artifact)
 				|| artifact->pageCount != 1u
-				|| packet->shaderClass != NativeA8ShaderClass::Composite
+				|| packet->shaderClass != NativeFontShaderClass::Composite
 				|| (packet->distanceFieldMethod != DistanceFieldMethod::TrueSdf
 					&& packet->distanceFieldMethod != DistanceFieldMethod::Mtsdf)
 				|| packet->atlasPage != 0u || !packet->vertexCount
@@ -3395,9 +3396,9 @@ namespace fonthook::vectorfont
 
 			for (UInt32 ordinal = 0; ordinal < packet->vertexCount; ++ordinal)
 			{
-				const NativeA8GpuVertex& source = artifact->gpuVertices[
+				const NativeFontGpuVertex& source = artifact->gpuVertices[
 					static_cast<size_t>(packet->firstVertex) + ordinal];
-				const NativeA8GpuVertex& quadFirst = artifact->gpuVertices[
+				const NativeFontGpuVertex& quadFirst = artifact->gpuVertices[
 					static_cast<size_t>(packet->firstVertex)
 						+ (ordinal & ~UInt32(3u))];
 				if (!std::isfinite(source.x) || !std::isfinite(source.y)
@@ -3510,12 +3511,12 @@ namespace fonthook::vectorfont
 			if (uniformLayout)
 			{
 				auto* destination =
-					static_cast<NativeA8VanillaLayoutVertex*>(locked);
+					static_cast<NativeFontVanillaLayoutVertex*>(locked);
 				for (UInt32 ordinal = 0; ordinal < packet->vertexCount; ++ordinal)
 				{
-					const NativeA8GpuVertex& source = artifact->gpuVertices[
+					const NativeFontGpuVertex& source = artifact->gpuVertices[
 						static_cast<size_t>(packet->firstVertex) + ordinal];
-					NativeA8VanillaLayoutVertex& packed = destination[ordinal];
+					NativeFontVanillaLayoutVertex& packed = destination[ordinal];
 					packed.x = source.x + origin.x;
 					packed.y = source.y + origin.y;
 					packed.z = source.z + origin.z;
@@ -3531,12 +3532,12 @@ namespace fonthook::vectorfont
 			else
 			{
 				auto* destination =
-					static_cast<NativeA8VanillaParametricVertex*>(locked);
+					static_cast<NativeFontVanillaParametricVertex*>(locked);
 				for (UInt32 ordinal = 0; ordinal < packet->vertexCount; ++ordinal)
 				{
-					const NativeA8GpuVertex& source = artifact->gpuVertices[
+					const NativeFontGpuVertex& source = artifact->gpuVertices[
 						static_cast<size_t>(packet->firstVertex) + ordinal];
-					NativeA8VanillaParametricVertex& packed =
+					NativeFontVanillaParametricVertex& packed =
 						destination[ordinal];
 					packed.x = source.x + origin.x;
 					packed.y = source.y + origin.y;
@@ -3566,15 +3567,15 @@ namespace fonthook::vectorfont
 			byteOffsetOut = static_cast<UInt32>(byteOffset);
 			byteCountOut = static_cast<UInt32>(byteCount);
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadSuccess);
+				FreeTypePerfCounter::VanillaLayoutPayloadUploadSuccess);
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadBytes,
+				FreeTypePerfCounter::VanillaLayoutPayloadUploadBytes,
 				byteCountOut);
 			return true;
 		}
 	}
 
-	bool RequestNativeA8VanillaLayoutShapePrecache(NiTriShape* shape,
+	bool RequestNativeFontVanillaLayoutShapePrecache(NiTriShape* shape,
 		TileShader* shader)
 	{
 		if (!shape || !shader)
@@ -3582,9 +3583,9 @@ namespace fonthook::vectorfont
 		NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
 		NativeShaderProfile* profile = block ? block->profile : nullptr;
 		NativeShaderGeneration* generation = profile ? profile->owner : nullptr;
-		const NativeA8VanillaLayoutKind layoutKind = profile
+		const NativeFontVanillaLayoutKind layoutKind = profile
 			? profile->key.vanillaLayoutKind
-			: NativeA8VanillaLayoutKind::None;
+			: NativeFontVanillaLayoutKind::None;
 		NiDX9ShaderDeclaration* declaration = generation
 			? ResolveVanillaLayoutDeclaration(*generation, layoutKind)
 			: nullptr;
@@ -3592,7 +3593,7 @@ namespace fonthook::vectorfont
 		const UInt32 textureCoordinatesPresent = data
 			? data->m_usDataFlags & NiGeometryData::TEXTURE_SET_MASK : 0u;
 		if (!profile || profile->shader != shader
-			|| !UsesNativeA8VanillaLayout(layoutKind) || !generation
+			|| !UsesNativeFontVanillaLayout(layoutKind) || !generation
 			|| !generation->renderer
 			|| !IsVanillaLayoutGenerationReady(generation, layoutKind)
 			|| !declaration
@@ -3629,17 +3630,17 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool IsNativeA8VanillaLayoutShapeReady(const NiTriShape* shape,
-		TileShader* shader, const NativeA8ShapePayload& payload,
-		NativeA8VanillaLayoutDrawToken& drawToken)
+	bool EnsureNativeFontVanillaLayoutShapeReady(const NiTriShape* shape,
+		TileShader* shader, const NativeFontShapePayload& payload,
+		NativeFontVanillaLayoutDrawToken& drawToken)
 	{
 		const VanillaLayoutDrawTokenMismatch mismatch =
 			MatchVanillaLayoutDrawToken(shape, shader, payload, drawToken);
 		if (mismatch == VanillaLayoutDrawTokenMismatch::None)
 		{
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::VanillaLayoutSdfDrawTokenHit);
-			RecordPriorGenerationDeclarationObservation(
+				FreeTypePerfCounter::VanillaLayoutDrawTokenHit);
+			RecordPriorGenerationDeclarationUse(
 				drawToken.priorGenerationDeclaration);
 			return true;
 		}
@@ -3650,22 +3651,22 @@ namespace fonthook::vectorfont
 		if (!renderer)
 		{
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::VanillaLayoutSdfDrawTokenRejected);
+				FreeTypePerfCounter::VanillaLayoutDrawTokenRejected);
 			return false;
 		}
 		VanillaLayoutRendererLockScope rendererLock(renderer);
 		drawToken.Invalidate();
 		VanillaLayoutReadySnapshot snapshot;
-		if (!IsNativeA8VanillaLayoutShapeReadyImpl(
+		if (!ValidateNativeFontVanillaLayoutShapeReadiness(
 			shape, shader, true, &snapshot))
 		{
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::VanillaLayoutSdfDrawTokenRejected);
+				FreeTypePerfCounter::VanillaLayoutDrawTokenRejected);
 			return false;
 		}
 
-		const NativeA8PayloadTemplate* artifact = nullptr;
-		const NativeA8PacketTemplate* packet = nullptr;
+		const NativeFontPayloadTemplate* artifact = nullptr;
+		const NativeFontPacketTemplate* packet = nullptr;
 		UInt32 uploadedByteOffset = 0;
 		UInt32 uploadedByteCount = 0;
 		if (!UploadVanillaLayoutPayload(payload, snapshot, artifact, packet,
@@ -3673,22 +3674,22 @@ namespace fonthook::vectorfont
 			|| !artifact || !packet)
 		{
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::VanillaLayoutSdfDrawTokenRejected);
+				FreeTypePerfCounter::VanillaLayoutDrawTokenRejected);
 			return false;
 		}
 
 		CertifyVanillaLayoutDrawToken(drawToken, snapshot, payload,
 			*artifact, *packet, uploadedByteOffset, uploadedByteCount);
 		RecordFreeTypePerf(wasCertified
-			? FreeTypePerfCounter::VanillaLayoutSdfDrawTokenRecertification
-			: FreeTypePerfCounter::VanillaLayoutSdfDrawTokenFirstCertification);
+			? FreeTypePerfCounter::VanillaLayoutDrawTokenRecertification
+			: FreeTypePerfCounter::VanillaLayoutDrawTokenFirstCertification);
 		return true;
 	}
 
-	bool ResolveNativeA8RetainedPacketProgram(
-		const NativeA8PacketTemplate& packet,
+	bool ResolveNativeFontRetainedPacketProgram(
+		const NativeFontPacketTemplate& packet,
 		TileShader* shader, UInt32 generation,
-		const NativeA8CompiledPacketCommand*& program)
+		const NativeFontCompiledPacketCommand*& program)
 	{
 		program = nullptr;
 		NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
@@ -3704,7 +3705,7 @@ namespace fonthook::vectorfont
 		}
 		const size_t cacheIndex =
 			profile->key.writeEffectAlpha ? 1u : 0u;
-		NativeA8PacketShaderCacheEntry& packetCache =
+		NativeFontPacketShaderCacheEntry& packetCache =
 			packet.resolvedShaders[cacheIndex];
 		NativeShaderProfile* cachedProfile =
 			static_cast<NativeShaderProfile*>(
@@ -3733,7 +3734,7 @@ namespace fonthook::vectorfont
 			packetCache.profile.store(profile, std::memory_order_release);
 		}
 
-		const NativeA8CompiledPacketCommand& retained =
+		const NativeFontCompiledPacketCommand& retained =
 			profile->retainedProgram;
 		if (!retained.active || retained.profile != profile
 			|| retained.shader != shader || retained.device != owner->device
@@ -3862,7 +3863,7 @@ namespace fonthook::vectorfont
 				|| !batch.packetRegisterCount)
 			{
 				result = device->SetPixelShaderConstantF(
-					kNativeA8PixelConstantBaseRegister,
+					kNativeFontPixelConstantBaseRegister,
 					profile->constants.data(), static_cast<UINT>(
 						targetRegisterCount));
 				if (FAILED(result))
@@ -3881,7 +3882,7 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::
 						CommandPacketConstantFullTailElided,
-					kNativeA8PacketConstantRegisterCount
+					kNativeFontPacketConstantRegisterCount
 						- targetRegisterCount);
 			}
 			else
@@ -3918,7 +3919,7 @@ namespace fonthook::vectorfont
 				{
 					result = device->SetPixelShaderConstantF(
 						static_cast<UINT>(
-							kNativeA8PixelConstantBaseRegister
+							kNativeFontPixelConstantBaseRegister
 								+ firstChanged),
 						profile->constants.data()
 							+ firstChanged * 4u,
@@ -3956,11 +3957,11 @@ namespace fonthook::vectorfont
 
 	}
 
-	bool BindNativeA8CommandPacket(
-		const NativeA8CompiledPacketCommand& command,
+	bool BindNativeFontCommandPacket(
+		const NativeFontCompiledPacketCommand& command,
 		const void* atlasTexture, bool publishPrograms,
 		const NiPropertyState* properties,
-		const NativeA8CommandBindState& bindState,
+		const NativeFontCommandBindState& bindState,
 		const char*& operation, HRESULT& result)
 	{
 		operation = "none";

@@ -885,7 +885,7 @@ namespace fonthook::vectorfont
 
 	struct TextArtifactEntry
 	{
-		NativeA8PayloadTemplatePtr data;
+		NativeFontPayloadTemplatePtr data;
 		size_t bytes = 0;
 		std::list<TextArtifactKey>::iterator lru;
 		CpuMemoryLease cpuMemory;
@@ -905,7 +905,7 @@ namespace fonthook::vectorfont
 
 	struct ShaderEffectBuild
 	{
-		A8EffectShapeConfig config;
+		NativeFontEffectShapeConfig config;
 		UInt32 padding = kDistanceFieldAtlasPadding;
 		UInt32 drawQuadCount = 0;
 	};
@@ -1016,8 +1016,8 @@ namespace fonthook::vectorfont
 		const FontConfig& config, float rasterScale, bool prepareObject,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
 		std::vector<std::shared_ptr<AtlasResource>>& atlases,
-		const NiColorA& tileColor, bool useCustomA8Shader,
-		const A8EffectShapeConfig* effectConfig = nullptr);
+		const NiColorA& tileColor, bool useNativeFontShader,
+		const NativeFontEffectShapeConfig* effectConfig = nullptr);
 
 	UInt32 AtlasBytesPerPixel(AtlasPixelMode mode);
 	UInt32 GetAtlasMipLevelCount(UInt32 width, UInt32 height,

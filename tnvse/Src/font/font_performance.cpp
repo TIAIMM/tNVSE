@@ -1178,59 +1178,59 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::AccumulatorMetadataCullSkipped),
 			counterValue(FreeTypePerfCounter::AccumulatorNoPreparedPayload));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_vanilla_layout_sdf: eligible=%llu created=%llu create_fallback=%llu draws=%llu culls=%llu runtime_fallback=%llu vertices=%llu shifted_eligible=%llu shifted_created=%llu shifted_draws=%llu shifted_runtime_fallback=%llu precache_accepted=%llu precache_rejected=%llu payload_upload_attempts=%llu success=%llu failure=%llu bytes=%llu native_pack_pending=%llu prior_generation_decl_ready_checks=%llu private_state_carries=%llu private_state_carry_rejected=%llu draw_token_hits=%llu draw_token_full_validations=%llu draw_token_cold=%llu draw_token_shape_shader_invalidations=%llu draw_token_generation_invalidations=%llu draw_token_geometry_invalidations=%llu draw_token_native_pack_invalidations=%llu draw_token_layout_invalidations=%llu draw_token_first_certifications=%llu draw_token_recertifications=%llu draw_token_rejected=%llu",
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfCandidate),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfCreated),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfFallback),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfDraw),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfCull),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfRuntimeFallback),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfVertex),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfShiftedCandidate),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfShiftedCreated),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfShiftedDraw),
+			"tnvse_freetype_vanilla_layout: eligible=%llu created=%llu create_fallback=%llu draws=%llu culls=%llu runtime_fallback=%llu vertices=%llu shifted_eligible=%llu shifted_created=%llu shifted_draws=%llu shifted_runtime_fallback=%llu precache_accepted=%llu precache_unavailable=%llu payload_upload_attempts=%llu success=%llu failure=%llu bytes=%llu native_pack_pending=%llu prior_generation_decl_uses=%llu private_state_carries=%llu private_state_carry_rejected=%llu draw_token_hits=%llu draw_token_slow_paths=%llu draw_token_uncertified=%llu draw_token_shape_shader_mismatches=%llu draw_token_generation_mismatches=%llu draw_token_geometry_mismatches=%llu draw_token_native_pack_mismatches=%llu draw_token_layout_mismatches=%llu draw_token_first_certifications=%llu draw_token_recertifications=%llu draw_token_rejected=%llu",
+			counterValue(FreeTypePerfCounter::VanillaLayoutEligible),
+			counterValue(FreeTypePerfCounter::VanillaLayoutCreated),
+			counterValue(FreeTypePerfCounter::VanillaLayoutFallback),
+			counterValue(FreeTypePerfCounter::VanillaLayoutDraw),
+			counterValue(FreeTypePerfCounter::VanillaLayoutCull),
+			counterValue(FreeTypePerfCounter::VanillaLayoutRuntimeFallback),
+			counterValue(FreeTypePerfCounter::VanillaLayoutVertex),
+			counterValue(FreeTypePerfCounter::VanillaLayoutShiftedEligible),
+			counterValue(FreeTypePerfCounter::VanillaLayoutShiftedCreated),
+			counterValue(FreeTypePerfCounter::VanillaLayoutShiftedDraw),
 			counterValue(
-				FreeTypePerfCounter::VanillaLayoutSdfShiftedRuntimeFallback),
+				FreeTypePerfCounter::VanillaLayoutShiftedRuntimeFallback),
 			counterValue(
-				FreeTypePerfCounter::VanillaLayoutSdfPrecacheAccepted),
+				FreeTypePerfCounter::VanillaLayoutPrecacheAccepted),
 			counterValue(
-				FreeTypePerfCounter::VanillaLayoutSdfPrecacheRejected),
+				FreeTypePerfCounter::VanillaLayoutPrecacheUnavailable),
 			counterValue(
-				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadAttempt),
+				FreeTypePerfCounter::VanillaLayoutPayloadUploadAttempt),
 			counterValue(
-				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadSuccess),
+				FreeTypePerfCounter::VanillaLayoutPayloadUploadSuccess),
 			counterValue(
-				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadFailure),
+				FreeTypePerfCounter::VanillaLayoutPayloadUploadFailure),
 			counterValue(
-				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadBytes),
+				FreeTypePerfCounter::VanillaLayoutPayloadUploadBytes),
 			counterValue(
-				FreeTypePerfCounter::VanillaLayoutSdfNativePackPending),
+				FreeTypePerfCounter::VanillaLayoutNativePackPending),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfPriorGenerationDeclarationReady),
+				VanillaLayoutPriorGenerationDeclarationUse),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfPrivateStateCarry),
+				VanillaLayoutPrivateStateCarry),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfPrivateStateCarryRejected),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfDrawTokenHit),
+				VanillaLayoutPrivateStateCarryRejected),
+			counterValue(FreeTypePerfCounter::VanillaLayoutDrawTokenHit),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfDrawTokenFullValidation),
-			counterValue(FreeTypePerfCounter::VanillaLayoutSdfDrawTokenCold),
+				VanillaLayoutDrawTokenSlowPath),
+			counterValue(FreeTypePerfCounter::VanillaLayoutDrawTokenUncertified),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfDrawTokenShapeShaderInvalidation),
+				VanillaLayoutDrawTokenShapeShaderMismatch),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfDrawTokenGenerationInvalidation),
+				VanillaLayoutDrawTokenGenerationMismatch),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfDrawTokenGeometryInvalidation),
+				VanillaLayoutDrawTokenGeometryMismatch),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfDrawTokenNativePackInvalidation),
+				VanillaLayoutDrawTokenNativePackMismatch),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfDrawTokenLayoutInvalidation),
+				VanillaLayoutDrawTokenLayoutMismatch),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfDrawTokenFirstCertification),
+				VanillaLayoutDrawTokenFirstCertification),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfDrawTokenRecertification),
+				VanillaLayoutDrawTokenRecertification),
 			counterValue(FreeTypePerfCounter::
-				VanillaLayoutSdfDrawTokenRejected));
+				VanillaLayoutDrawTokenRejected));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu vanilla_bootstraps_saved=%llu direct_single_replays=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
 			values[static_cast<size_t>(

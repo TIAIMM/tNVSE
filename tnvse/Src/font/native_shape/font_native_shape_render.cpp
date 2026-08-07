@@ -1,4 +1,4 @@
-#include "font_a8_internal.h"
+#include "font_native_shape_internal.h"
 
 #include "load_config.h"
 #include "tnvse.h"
@@ -17,15 +17,15 @@
 
 namespace fonthook::vectorfont
 {
-	namespace implementation::font_a8_render {}
-	using namespace implementation::font_a8_render;
+	namespace implementation::font_native_shape_render {}
+	using namespace implementation::font_native_shape_render;
 
-	namespace implementation::font_a8_render
+	namespace implementation::font_native_shape_render
 	{
 		inline constexpr UInt32 kCanonicalArrayCount = 1;
 		inline constexpr size_t kSingletonFacadeEstimatedShapeBytes = 1024;
 
-		struct NativeA8RuntimeReadinessSnapshot
+		struct NativeFontRuntimeReadinessSnapshot
 		{
 			NiDX9Renderer* renderer = nullptr;
 			IDirect3DDevice9* device = nullptr;
@@ -35,7 +35,7 @@ namespace fonthook::vectorfont
 			UInt32 readyFlags = 0;
 		};
 
-		struct NativeA8RuntimeReadinessPublication
+		struct NativeFontRuntimeReadinessPublication
 		{
 			std::atomic_flag writer = ATOMIC_FLAG_INIT;
 			std::atomic<UInt32> sequence = 0;
@@ -49,7 +49,7 @@ namespace fonthook::vectorfont
 			std::atomic<UInt32> readyFlags = 0;
 		};
 
-		NativeA8RuntimeReadinessPublication s_runtimeReadiness;
+		NativeFontRuntimeReadinessPublication s_runtimeReadiness;
 
 		void PublishRuntimeReadiness(bool accumulatorReady,
 			bool immediateReady, bool shaderReady)
@@ -61,14 +61,14 @@ namespace fonthook::vectorfont
 			}
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::StructuralReadinessFullAudit);
-			NativeA8RendererReadinessView rendererView;
+			NativeFontRendererReadinessView rendererView;
 			const bool rendererReady = shaderReady
-				&& GetNativeA8RendererReadinessFast(rendererView);
-			NativeA8RuntimeReadinessSnapshot snapshot;
+				&& GetNativeFontRendererReadinessFast(rendererView);
+			NativeFontRuntimeReadinessSnapshot snapshot;
 			snapshot.renderer = rendererView.renderer;
 			snapshot.device = rendererView.device;
 			snapshot.generation = rendererView.generation;
-			snapshot.atlasTextureEpoch = GetNativeA8AtlasTextureEpoch();
+			snapshot.atlasTextureEpoch = GetNativeFontAtlasTextureEpoch();
 			snapshot.hookEpoch = s_runtimeReadiness.nextHookEpoch.fetch_add(
 				1, std::memory_order_relaxed);
 			if (!snapshot.hookEpoch)
@@ -102,7 +102,7 @@ namespace fonthook::vectorfont
 		}
 
 		bool LoadRuntimeReadiness(
-			NativeA8RuntimeReadinessSnapshot& snapshot)
+			NativeFontRuntimeReadinessSnapshot& snapshot)
 		{
 			if (!s_runtimeReadiness.ready.load(std::memory_order_acquire))
 				return false;
@@ -138,26 +138,26 @@ namespace fonthook::vectorfont
 		}
 
 		bool LoadCurrentRuntimeReadiness(
-			NativeA8RuntimeReadinessView* view)
+			NativeFontRuntimeReadinessView* view)
 		{
-			NativeA8RuntimeReadinessSnapshot published;
+			NativeFontRuntimeReadinessSnapshot published;
 			if (!LoadRuntimeReadiness(published)
 				|| published.readyFlags != 7u)
 			{
 				return false;
 			}
-			NativeA8RendererReadinessView current;
+			NativeFontRendererReadinessView current;
 			const bool rendererCurrent =
-				GetNativeA8RendererReadinessFast(current)
+				GetNativeFontRendererReadinessFast(current)
 				&& current.renderer == published.renderer
 				&& current.device == published.device
 				&& current.generation == published.generation;
 			const bool atlasCurrent = published.atlasTextureEpoch
-				== GetNativeA8AtlasTextureEpoch();
+				== GetNativeFontAtlasTextureEpoch();
 			const bool accumulatorCurrent =
-				IsNativeA8RegistrationHookChainCurrentFast();
+				IsNativeFontRegistrationHookChainCurrentFast();
 			const bool immediateCurrent =
-				IsA8RenderPassImmediatelyHookCurrentFast();
+				IsNativeFontRenderPassImmediatelyHookCurrentFast();
 			if (rendererCurrent && atlasCurrent
 				&& accumulatorCurrent && immediateCurrent)
 			{
@@ -196,11 +196,11 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		A8State s_a8State;
+		NativeFontShapeState s_a8State;
 		CpuMemoryLease s_metadataBucketMemory;
 		size_t s_metadataHighWater = 0;
 
-		void RefreshMetadataBucketAccounting(const A8State& state)
+		void RefreshMetadataBucketAccounting(const NativeFontShapeState& state)
 		{
 			s_metadataBucketMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
 				state.shapeMetadata.bucket_count() * sizeof(void*));
@@ -208,7 +208,7 @@ namespace fonthook::vectorfont
 
 		void ReserveStructuralMetadataMap(size_t requestedEntries = 4096)
 		{
-			A8State& state = State();
+			NativeFontShapeState& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
 			const size_t currentBytes =
 				state.shapeMetadata.bucket_count() * sizeof(void*);
@@ -229,7 +229,7 @@ namespace fonthook::vectorfont
 
 		void MaintainStructuralMetadataMap()
 		{
-			A8State& state = State();
+			NativeFontShapeState& state = State();
 			size_t target = 0;
 			{
 				std::lock_guard<std::mutex> lock(state.metadataMutex);
@@ -248,7 +248,7 @@ namespace fonthook::vectorfont
 			ReserveStructuralMetadataMap(target);
 		}
 
-		void RecordMetadataInsertionRehash(A8State& state,
+		void RecordMetadataInsertionRehash(NativeFontShapeState& state,
 			size_t previousBucketCount)
 		{
 			if (state.shapeMetadata.bucket_count() == previousBucketCount)
@@ -257,10 +257,10 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(FreeTypePerfCounter::MetadataMapRehash);
 		}
 
-		void InitializeA8MetadataIdentity(
-			A8ShapeMetadata& metadata, const NiTriShape* shape)
+		void InitializeNativeFontMetadataIdentity(
+			NativeFontShapeMetadata& metadata, const NiTriShape* shape)
 		{
-			A8State& state = State();
+			NativeFontShapeState& state = State();
 			metadata.allocationId =
 				state.nextMetadataAllocationId.fetch_add(
 					1, std::memory_order_relaxed);
@@ -274,10 +274,10 @@ namespace fonthook::vectorfont
 			metadata.shapeIdentity = shape;
 		}
 
-		A8ShapeMetadataEntry MakeA8MetadataEntry(
-			A8ShapeMetadataPtr metadata)
+		NativeFontShapeMetadataEntry MakeNativeFontMetadataEntry(
+			NativeFontShapeMetadataPtr metadata)
 		{
-			A8ShapeMetadataEntry entry;
+			NativeFontShapeMetadataEntry entry;
 			if (metadata)
 			{
 				entry.allocationId = metadata->allocationId;
@@ -302,7 +302,7 @@ namespace fonthook::vectorfont
 				&& std::isfinite(bound.m_fRadius) && bound.m_fRadius >= 0.0f;
 		}
 
-		bool IsFiniteVertex(const NativeA8GpuVertex& vertex)
+		bool IsFiniteVertex(const NativeFontGpuVertex& vertex)
 		{
 			return std::isfinite(vertex.x) && std::isfinite(vertex.y)
 				&& std::isfinite(vertex.z) && std::isfinite(vertex.u)
@@ -319,7 +319,7 @@ namespace fonthook::vectorfont
 				&& vertex.glyphV0 <= vertex.glyphV1;
 		}
 
-		bool RejectA8Shape(const char* reason)
+		bool RejectNativeFontShape(const char* reason)
 		{
 			if (g_bEnableFreeTypeFontRenderingLog
 				&& State().shapeValidationFailureLogCount++
@@ -332,40 +332,40 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		bool ValidateA8Shape(NiTriShape* shape,
-			const A8EffectShapeConfig* effectConfig,
-			const A8ShapeColorContract* colorContract,
-			const NativeA8PayloadTemplate* payloadTemplate)
+		bool ValidateNativeFontShape(NiTriShape* shape,
+			const NativeFontEffectShapeConfig* effectConfig,
+			const NativeFontShapeColorContract* colorContract,
+			const NativeFontPayloadTemplate* payloadTemplate)
 		{
 			if (!shape || !colorContract || !payloadTemplate)
-				return RejectA8Shape("missing-shape-color-or-text-artifact");
+				return RejectNativeFontShape("missing-shape-color-or-text-artifact");
 			if (colorContract->abiVersion
-				!= A8ShapeColorContract::kTileUniformColorAbi)
+				!= NativeFontShapeColorContract::kTileUniformColorAbi)
 			{
-				return RejectA8Shape("color-contract-abi-mismatch");
+				return RejectNativeFontShape("color-contract-abi-mismatch");
 			}
 			if (!IsFiniteColor(colorContract->minimumModifier)
 				|| !IsFiniteColor(colorContract->maximumModifier))
 			{
-				return RejectA8Shape("non-finite-color-contract");
+				return RejectNativeFontShape("non-finite-color-contract");
 			}
 
 			NiTriShapeData* data = shape->GetModelData();
 			if (!data || !data->m_usVertices || !data->m_usTriangles
 				|| !data->m_pkVertex || !data->m_pusTriList)
 			{
-				return RejectA8Shape("missing-geometry-data");
+				return RejectNativeFontShape("missing-geometry-data");
 			}
 			if (!data->m_pkColor)
-				return RejectA8Shape("missing-base-vertex-color-stream");
+				return RejectNativeFontShape("missing-base-vertex-color-stream");
 			for (UInt32 index = 0; index < data->m_usVertices; ++index)
 			{
 				if (!IsFiniteColor(data->m_pkColor[index]))
-					return RejectA8Shape("non-finite-base-vertex-color");
+					return RejectNativeFontShape("non-finite-base-vertex-color");
 			}
 
 			const bool sealed =
-				HasNativeA8PayloadValidationSeal(*payloadTemplate);
+				HasNativeFontPayloadValidationSeal(*payloadTemplate);
 			RecordFreeTypePerf(sealed
 				? FreeTypePerfCounter::NativeRegistrationArtifactSealed
 				: FreeTypePerfCounter::NativeRegistrationArtifactFallback);
@@ -376,12 +376,12 @@ namespace fonthook::vectorfont
 				// the shared_ptr<const>, eliminating this O(vertex + packet) work from
 				// registration without weakening the fallback contract.
 				if (!payloadTemplate->quadCount
-					|| payloadTemplate->quadCount > kNativeA8MaximumQuads
+					|| payloadTemplate->quadCount > kNativeFontMaximumQuads
 					|| payloadTemplate->gpuVertices.size()
 						< static_cast<size_t>(payloadTemplate->quadCount) * 4u
 					|| (payloadTemplate->gpuVertices.size() & 3u)
 					|| payloadTemplate->gpuVertices.size() / 4u
-						> kNativeA8MaximumQuads
+						> kNativeFontMaximumQuads
 					|| payloadTemplate->packets.empty()
 					|| payloadTemplate->pageCount
 						!= payloadTemplate->atlasProperties.size()
@@ -389,15 +389,15 @@ namespace fonthook::vectorfont
 						!= payloadTemplate->atlasTextures.size()
 					|| !IsFiniteBound(payloadTemplate->bound))
 				{
-					return RejectA8Shape("invalid-text-artifact");
+					return RejectNativeFontShape("invalid-text-artifact");
 				}
 				if (!std::all_of(payloadTemplate->gpuVertices.begin(),
 					payloadTemplate->gpuVertices.end(), IsFiniteVertex))
 				{
-					return RejectA8Shape(
+					return RejectNativeFontShape(
 						"non-finite-text-artifact-vertex");
 				}
-				for (const NativeA8PacketTemplate& packet
+				for (const NativeFontPacketTemplate& packet
 					: payloadTemplate->packets)
 				{
 					const UInt64 vertexEnd =
@@ -411,11 +411,11 @@ namespace fonthook::vectorfont
 							packet.constants.end(), [](float value)
 							{ return std::isfinite(value); }))
 					{
-						return RejectA8Shape(
+						return RejectNativeFontShape(
 							"invalid-text-artifact-packet");
 					}
 				}
-				for (const NativeA8PacketTemplate& packet
+				for (const NativeFontPacketTemplate& packet
 					: payloadTemplate->compositePackets)
 				{
 					const UInt64 vertexEnd =
@@ -426,24 +426,24 @@ namespace fonthook::vectorfont
 						|| vertexEnd > payloadTemplate->gpuVertices.size()
 						|| packet.layer > 3 || !IsFiniteBound(packet.bound)
 						|| packet.shaderClass
-							!= NativeA8ShaderClass::Composite
+							!= NativeFontShaderClass::Composite
 						|| packet.staticCompositeLayerMask > 15u
 						|| !std::all_of(packet.constants.begin(),
 							packet.constants.end(), [](float value)
 							{ return std::isfinite(value); }))
 					{
-						return RejectA8Shape("invalid-composite-packet");
+						return RejectNativeFontShape("invalid-composite-packet");
 					}
 				}
 			}
 			if (!effectConfig || !effectConfig->enabled)
-				return RejectA8Shape("native-route-requires-enabled-profile");
+				return RejectNativeFontShape("native-route-requires-enabled-profile");
 			const UInt32 profileKinds =
 				(effectConfig->shaderEffects ? 1u : 0u)
 				+ (effectConfig->bakedCoverage ? 1u : 0u)
 				+ (effectConfig->precomposedArgb ? 1u : 0u);
 			if (profileKinds != 1u)
-				return RejectA8Shape("native-route-profile-kind-conflict");
+				return RejectNativeFontShape("native-route-profile-kind-conflict");
 			const bool distanceFieldProfile = effectConfig->shaderEffects;
 
 			const std::array<float, 16> scalarValues = {
@@ -467,21 +467,21 @@ namespace fonthook::vectorfont
 			if (!std::all_of(scalarValues.begin(), scalarValues.end(),
 				[](float value) { return std::isfinite(value); }))
 			{
-				return RejectA8Shape("non-finite-effect-configuration");
+				return RejectNativeFontShape("non-finite-effect-configuration");
 			}
 			if (effectConfig->rasterScale <= 0.0f)
-				return RejectA8Shape("invalid-effect-raster-scale");
+				return RejectNativeFontShape("invalid-effect-raster-scale");
 			if (effectConfig->shadowGlowAlpha < 0.0f
 				|| effectConfig->shadowGlowAlpha > 1.0f
 				|| effectConfig->shadowOutlineAlpha < 0.0f
 				|| effectConfig->shadowOutlineAlpha > 1.0f)
 			{
-				return RejectA8Shape("invalid-shadow-component-alpha");
+				return RejectNativeFontShape("invalid-shadow-component-alpha");
 			}
 			if (static_cast<UInt32>(effectConfig->quality)
 				> static_cast<UInt32>(EffectQuality::High))
 			{
-				return RejectA8Shape("invalid-effect-quality");
+				return RejectNativeFontShape("invalid-effect-quality");
 			}
 
 			const UInt64 availableVertices = payloadTemplate->gpuVertices.size();
@@ -495,36 +495,36 @@ namespace fonthook::vectorfont
 			if (effectConfig->atlasTextures.size()
 				!= effectConfig->atlasInverseSizes.size())
 			{
-				return RejectA8Shape("atlas-page-metadata-size-mismatch");
+				return RejectNativeFontShape("atlas-page-metadata-size-mismatch");
 			}
 			if (!effectConfig->atlasProperties.empty()
 				&& effectConfig->atlasProperties.size()
 					!= effectConfig->atlasTextures.size())
 			{
-				return RejectA8Shape("atlas-page-property-size-mismatch");
+				return RejectNativeFontShape("atlas-page-property-size-mismatch");
 			}
 			if (effectConfig->atlasProperties.empty()
 				|| payloadTemplate->pageCount != effectConfig->atlasTextures.size())
 			{
-				return RejectA8Shape("text-artifact-page-count-mismatch");
+				return RejectNativeFontShape("text-artifact-page-count-mismatch");
 			}
 			if (!sealed)
 			{
-				for (const NativeA8PacketTemplate& packet
+				for (const NativeFontPacketTemplate& packet
 					: payloadTemplate->packets)
 				{
 					if (packet.atlasPage >= effectConfig->atlasTextures.size())
 					{
-						return RejectA8Shape(
+						return RejectNativeFontShape(
 							"text-artifact-packet-page-out-of-bounds");
 					}
 				}
-				for (const NativeA8PacketTemplate& packet
+				for (const NativeFontPacketTemplate& packet
 					: payloadTemplate->compositePackets)
 				{
 					if (packet.atlasPage >= effectConfig->atlasTextures.size())
 					{
-						return RejectA8Shape(
+						return RejectNativeFontShape(
 							"composite-packet-page-out-of-bounds");
 					}
 				}
@@ -532,9 +532,9 @@ namespace fonthook::vectorfont
 			for (const NiPoint2& inverseSize : effectConfig->atlasInverseSizes)
 			{
 				if (!std::isfinite(inverseSize.x) || !std::isfinite(inverseSize.y))
-					return RejectA8Shape("non-finite-atlas-inverse-size");
+					return RejectNativeFontShape("non-finite-atlas-inverse-size");
 			}
-			for (const A8DrawRange& range : effectConfig->ranges)
+			for (const NativeFontDrawRange& range : effectConfig->ranges)
 			{
 				if (range.layer > 3 || !range.vertexCount || !range.primitiveCount
 					|| (range.firstVertex & 3u) || (range.vertexCount & 3u)
@@ -550,30 +550,30 @@ namespace fonthook::vectorfont
 					|| range.sourceToLogicalScale <= 0.0f
 					|| range.sourceToLogicalScale > 1.0f)
 				{
-					return RejectA8Shape("invalid-draw-range");
+					return RejectNativeFontShape("invalid-draw-range");
 				}
 				if (!effectConfig->atlasTextures.empty()
 					&& (range.atlasPage >= effectConfig->atlasTextures.size()
 						|| !effectConfig->atlasTextures[range.atlasPage]))
 				{
-					return RejectA8Shape("invalid-atlas-page");
+					return RejectNativeFontShape("invalid-atlas-page");
 				}
 				const UInt64 vertexEnd = static_cast<UInt64>(range.firstVertex)
 					+ range.vertexCount;
 				const UInt64 indexEnd = static_cast<UInt64>(range.startIndex)
 					+ static_cast<UInt64>(range.primitiveCount) * 3;
-				const UInt32 layerRank = GetA8LayerDrawRank(range.layer);
+				const UInt32 layerRank = GetNativeFontLayerDrawRank(range.layer);
 				if (vertexEnd > availableVertices || indexEnd > availableIndices)
-					return RejectA8Shape("draw-range-out-of-bounds");
+					return RejectNativeFontShape("draw-range-out-of-bounds");
 				if (!firstRange && (layerRank < previousLayerRank
 					|| (layerRank == previousLayerRank
 						&& (range.firstVertex < previousVertexEnd
 							|| range.startIndex < previousIndexEnd))))
 				{
-					return RejectA8Shape("draw-ranges-not-layer-monotonic");
+					return RejectNativeFontShape("draw-ranges-not-layer-monotonic");
 				}
 				if (distanceFieldProfile != range.usesSdf)
-					return RejectA8Shape(distanceFieldProfile
+					return RejectNativeFontShape(distanceFieldProfile
 						? "distance-field-range-without-sdf"
 						: effectConfig->precomposedArgb
 							? "argb-range-marked-as-sdf"
@@ -581,7 +581,7 @@ namespace fonthook::vectorfont
 				if (distanceFieldProfile
 					&& range.sdfSpreadPixels <= 0.0f)
 				{
-					return RejectA8Shape(
+					return RejectNativeFontShape(
 						"distance-field-range-without-positive-spread");
 				}
 				haveFill = haveFill || range.layer == 3;
@@ -590,7 +590,7 @@ namespace fonthook::vectorfont
 				previousIndexEnd = indexEnd;
 				firstRange = false;
 			}
-			return haveFill || RejectA8Shape("missing-fill-range");
+			return haveFill || RejectNativeFontShape("missing-fill-range");
 		}
 
 		bool ValidateSingletonFacadeShellShape(NiTriShape* shape)
@@ -602,7 +602,7 @@ namespace fonthook::vectorfont
 				|| !data->m_pkTexture || !data->m_pkColor
 				|| !data->m_pusTriList)
 			{
-				return RejectA8Shape(
+				return RejectNativeFontShape(
 					"invalid-singleton-facade-shell");
 			}
 			for (UInt32 index = 0; index < 4; ++index)
@@ -616,7 +616,7 @@ namespace fonthook::vectorfont
 					|| !std::isfinite(texture.y)
 					|| !IsFiniteColor(data->m_pkColor[index]))
 				{
-					return RejectA8Shape(
+					return RejectNativeFontShape(
 						"non-finite-singleton-facade-shell");
 				}
 			}
@@ -653,7 +653,7 @@ namespace fonthook::vectorfont
 			NiVBChip* chip = reinterpret_cast<NiVBChip*>(
 				static_cast<UInt8*>(chipMemory) + sizeof(NiVBChip*));
 			chips[0] = chip;
-			*stride = sizeof(NativeA8GpuVertex);
+			*stride = sizeof(NativeFontGpuVertex);
 			buffer->m_uiStreamCount = 1;
 			buffer->m_puiVertexStride = stride;
 			buffer->m_ppkVBChip = chips;
@@ -672,7 +672,7 @@ namespace fonthook::vectorfont
 
 		bool IsSingletonFacadeBindingConfigured(
 			const SingletonFacadeBinding& slot,
-			const NativeA8DirectFacadePacketBinding& source,
+			const NativeFontDirectFacadePacketBinding& source,
 			TileShader* shader)
 		{
 			const NiTriShapeData* data = slot.shape
@@ -699,7 +699,7 @@ namespace fonthook::vectorfont
 				&& buffer->m_uiStreamCount == 1
 				&& buffer->m_puiVertexStride == slot.bindingStride
 				&& buffer->m_puiVertexStride[0]
-					== sizeof(NativeA8GpuVertex)
+					== sizeof(NativeFontGpuVertex)
 				&& buffer->m_ppkVBChip
 				&& buffer->m_ppkVBChip[0] == chip
 				&& buffer->m_uiIndexCount == quads * 6u
@@ -718,7 +718,7 @@ namespace fonthook::vectorfont
 				&& chip->m_uiLockFlags == 0
 				&& chip->m_uiSize
 					== source.vertexCount
-						* sizeof(NativeA8GpuVertex);
+						* sizeof(NativeFontGpuVertex);
 		}
 
 		void ClearSingletonFacadeGpuFields(SingletonFacadeBinding& slot)
@@ -806,7 +806,7 @@ namespace fonthook::vectorfont
 		}
 
 		void SetSingletonFacadeMode(
-			const A8ShapeMetadata& metadata, NativeA8FallbackReason reason,
+			const NativeFontShapeMetadata& metadata, NativeFontFallbackReason reason,
 			bool recordFallback = true)
 		{
 			SingletonFacadeState* singleton =
@@ -824,7 +824,7 @@ namespace fonthook::vectorfont
 			singleton->commandValidationToken.store(
 				0, std::memory_order_release);
 			singleton->commandDirectFacadeSinglePacketIndex.store(
-				kInvalidNativeA8CommandIndex,
+				kInvalidNativeFontCommandIndex,
 				std::memory_order_release);
 			singleton->frameMode.store(SingletonFacadeFrameMode::Facade,
 				std::memory_order_release);
@@ -837,7 +837,7 @@ namespace fonthook::vectorfont
 
 	}
 
-	A8State& State()
+	NativeFontShapeState& State()
 	{
 		return s_a8State;
 	}
@@ -850,12 +850,12 @@ namespace fonthook::vectorfont
 		return std::isfinite(worldScale) && std::abs(worldScale - 1.0f) > 0.001f;
 	}
 
-	void FinalizeA8RendererDetection()
+	void FinalizeNativeFontRendererDetection()
 	{
 		ReserveStructuralMetadataMap();
-		const bool accumulatorReady = HookNativeA8Accumulator();
+		const bool accumulatorReady = HookNativeFontAccumulator();
 		const bool immediateRouteReady = HookRenderPassImmediately();
-		const bool shaderReady = InitializeNativeA8Renderer(true, true);
+		const bool shaderReady = InitializeNativeFontRenderer(true, true);
 		const bool nativeReady =
 			accumulatorReady && immediateRouteReady && shaderReady;
 		PublishRuntimeReadiness(accumulatorReady,
@@ -871,26 +871,26 @@ namespace fonthook::vectorfont
 			shaderReady ? 1 : 0);
 	}
 
-	void HandleA8RendererMainLoop()
+	void HandleNativeFontRendererMainLoop()
 	{
 		if (!g_bEnableFreeTypeFontRendering)
 			return;
-		HandleNativeA8RendererMainLoop();
+		HandleNativeFontShaderRendererMainLoop();
 		MaintainStructuralMetadataMap();
-		const bool accumulatorReady = HookNativeA8Accumulator();
+		const bool accumulatorReady = HookNativeFontAccumulator();
 		const bool immediateReady = HookRenderPassImmediately();
 		PublishRuntimeReadiness(accumulatorReady, immediateReady,
-			IsNativeA8RendererAvailable());
+			IsNativeFontShaderRendererAvailable());
 		EnforceCpuMemoryBudget("main-loop");
 	}
 
-	void HandleA8ShaderLoaderMessage(UInt32 messageType)
+	void DispatchNativeFontShaderLoaderMessage(UInt32 messageType)
 	{
 		if (messageType == kShaderRefreshMessage)
-			HandleNativeA8ShaderLoaderMessage(messageType);
+			HandleNativeFontShaderLoaderMessage(messageType);
 	}
 
-	bool IsA8RendererAvailable()
+	bool IsNativeFontRendererAvailable()
 	{
 		if (!g_bEnableFreeTypeFontRendering)
 			return false;
@@ -905,26 +905,26 @@ namespace fonthook::vectorfont
 		// complete install/retry/conflict path whenever any identity changed.
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::NativeRegistrationHookSlow);
-		const bool accumulatorReady = HookNativeA8Accumulator();
+		const bool accumulatorReady = HookNativeFontAccumulator();
 		const bool immediateReady = HookRenderPassImmediately();
 		const bool shaderReady = accumulatorReady && immediateReady
-			&& InitializeNativeA8Renderer(false, false);
+			&& InitializeNativeFontRenderer(false, false);
 		PublishRuntimeReadiness(accumulatorReady,
 			immediateReady, shaderReady);
 		return accumulatorReady && immediateReady && shaderReady;
 	}
 
-	bool GetNativeA8RuntimeReadinessCurrent(
-		NativeA8RuntimeReadinessView& view)
+	bool GetNativeFontRuntimeReadinessCurrent(
+		NativeFontRuntimeReadinessView& view)
 	{
 		view = {};
 		return LoadCurrentRuntimeReadiness(&view);
 	}
 
-	bool ResolveA8EffectQuality(EffectQuality requested, EffectQuality& resolved)
+	bool ResolveNativeFontEffectQuality(EffectQuality requested, EffectQuality& resolved)
 	{
 		if (static_cast<UInt32>(requested) > static_cast<UInt32>(EffectQuality::High)
-			|| !IsA8RendererAvailable())
+			|| !IsNativeFontRendererAvailable())
 		{
 			return false;
 		}
@@ -932,24 +932,24 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool PrepareA8AtlasShape(Font& font, NiTriShape* shape, UInt32 fontId,
-		UInt32 glyphCount, UInt32 quadCount, const A8EffectShapeConfig* effectConfig,
-		const A8ShapeColorContract* colorContract,
-		NativeA8PayloadTemplatePtr payloadTemplate,
+	bool PrepareNativeFontAtlasShape(Font& font, NiTriShape* shape, UInt32 fontId,
+		UInt32 glyphCount, UInt32 quadCount, const NativeFontEffectShapeConfig* effectConfig,
+		const NativeFontShapeColorContract* colorContract,
+		NativeFontPayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin)
 	{
 		FreeTypePerfScope perf(
 			FreeTypePerfPhase::NativeRegistration);
-		if (!IsA8RendererAvailable()
+		if (!IsNativeFontRendererAvailable()
 			|| !payloadTemplate || payloadTemplate->quadCount != quadCount
-			|| !ValidateA8Shape(shape, effectConfig, colorContract,
+			|| !ValidateNativeFontShape(shape, effectConfig, colorContract,
 				payloadTemplate.get())
-			|| !InitializeA8TriShapeVtable(shape))
+			|| !InitializeNativeFontTriShapeVtable(shape))
 		{
 			return false;
 		}
-		auto metadata = std::make_shared<A8ShapeMetadata>();
-		InitializeA8MetadataIdentity(*metadata, shape);
+		auto metadata = std::make_shared<NativeFontShapeMetadata>();
+		InitializeNativeFontMetadataIdentity(*metadata, shape);
 		metadata->fontId = fontId;
 		metadata->glyphCount = glyphCount;
 		metadata->quadCount = quadCount;
@@ -959,41 +959,41 @@ namespace fonthook::vectorfont
 		metadata->indexCount = payloadTemplate->quadCount * 6u;
 		if (colorContract)
 			metadata->colorContract = *colorContract;
-		if (!InitializeNativeA8ShapePayload(font, shape, *metadata,
+		if (!InitializeNativeFontShapePayload(font, shape, *metadata,
 			std::move(payloadTemplate), geometryOrigin, metadata->nativePayload))
 			return false;
 		metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-			sizeof(A8ShapeMetadata)
+			sizeof(NativeFontShapeMetadata)
 				+ metadata->nativePayload.packetShaders.heap_capacity()
 					* sizeof(TileShader*)
 				+ metadata->nativePayload.packetPrograms.heap_capacity()
-					* sizeof(const NativeA8CompiledPacketCommand*)
+					* sizeof(const NativeFontCompiledPacketCommand*)
 				+ metadata->nativePayload.preflightAtlasTextures.heap_capacity()
 					* sizeof(const void*)
-				+ GetNativeA8TileRetainedCapacityBytes(
+				+ GetNativeFontTileRetainedCapacityBytes(
 					metadata->nativePayload)
-				+ sizeof(A8ShapeMetadataEntry) + 6u * sizeof(void*));
+				+ sizeof(NativeFontShapeMetadataEntry) + 6u * sizeof(void*));
 		{
-			A8State& state = State();
+			NativeFontShapeState& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
 			state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(
 				1, std::memory_order_release);
-			A8ShapeMetadataPtr publishedMetadata = std::move(metadata);
+			NativeFontShapeMetadataPtr publishedMetadata = std::move(metadata);
 			const size_t previousBucketCount =
 				state.shapeMetadata.bucket_count();
 			state.shapeMetadata[shape] =
-				MakeA8MetadataEntry(std::move(publishedMetadata));
+				MakeNativeFontMetadataEntry(std::move(publishedMetadata));
 			RecordMetadataInsertionRehash(state, previousBucketCount);
 		}
 		*reinterpret_cast<void***>(shape) = &State().triShapeVtable[1];
 		return true;
 	}
 
-	bool PrepareSingletonFacadeA8Shape(Font& font, NiTriShape* shape,
+	bool PrepareNativeFontSingletonFacadeShape(Font& font, NiTriShape* shape,
 		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
-		const A8EffectShapeConfig* effectConfig,
-		const A8ShapeColorContract* colorContract,
-		NativeA8PayloadTemplatePtr payloadTemplate,
+		const NativeFontEffectShapeConfig* effectConfig,
+		const NativeFontShapeColorContract* colorContract,
+		NativeFontPayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin)
 	{
 		FreeTypePerfScope perf(FreeTypePerfPhase::NativeRegistration);
@@ -1001,7 +1001,7 @@ namespace fonthook::vectorfont
 		{
 			FreeTypePerfScope readiness(
 				FreeTypePerfPhase::NativeRegistrationReadiness);
-			rendererAvailable = IsA8RendererAvailable();
+			rendererAvailable = IsNativeFontRendererAvailable();
 		}
 		if (!rendererAvailable || !shape || !payloadTemplate
 			|| payloadTemplate->quadCount != quadCount)
@@ -1013,9 +1013,9 @@ namespace fonthook::vectorfont
 			FreeTypePerfScope shapeProof(
 				FreeTypePerfPhase::NativeRegistrationShape);
 			shapeReady = !payloadTemplate->packets.empty()
-				&& ValidateA8Shape(shape, effectConfig, colorContract,
+				&& ValidateNativeFontShape(shape, effectConfig, colorContract,
 					payloadTemplate.get())
-				&& InitializeA8TriShapeVtable(shape);
+				&& InitializeNativeFontTriShapeVtable(shape);
 		}
 		if (!shapeReady)
 		{
@@ -1024,7 +1024,7 @@ namespace fonthook::vectorfont
 
 		const size_t estimatedBytes =
 			sizeof(SingletonFacadeMetadata)
-			+ sizeof(A8ShapeMetadataEntry)
+			+ sizeof(NativeFontShapeMetadataEntry)
 			+ kSingletonFacadeEstimatedShapeBytes + 6u * sizeof(void*);
 		bool budgetReady = false;
 		{
@@ -1043,7 +1043,7 @@ namespace fonthook::vectorfont
 				FreeTypePerfPhase::NativeRegistrationAllocation);
 			metadata = std::make_shared<SingletonFacadeMetadata>();
 		}
-		InitializeA8MetadataIdentity(*metadata, shape);
+		InitializeNativeFontMetadataIdentity(*metadata, shape);
 		metadata->fontId = fontId;
 		metadata->glyphCount = glyphCount;
 		metadata->quadCount = quadCount;
@@ -1064,7 +1064,7 @@ namespace fonthook::vectorfont
 		{
 			FreeTypePerfScope payloadBuild(
 				FreeTypePerfPhase::NativeRegistrationPayload);
-			if (!InitializeNativeA8ShapePayload(font, shape, *metadata,
+			if (!InitializeNativeFontShapePayload(font, shape, *metadata,
 				payloadTemplate, geometryOrigin, metadata->nativePayload))
 			{
 				return false;
@@ -1107,48 +1107,48 @@ namespace fonthook::vectorfont
 					+ metadata->nativePayload.packetShaders.heap_capacity()
 						* sizeof(TileShader*)
 					+ metadata->nativePayload.packetPrograms.heap_capacity()
-						* sizeof(const NativeA8CompiledPacketCommand*)
+						* sizeof(const NativeFontCompiledPacketCommand*)
 					+ metadata->nativePayload.preflightAtlasTextures.heap_capacity()
 						* sizeof(const void*)
-					+ GetNativeA8TileRetainedCapacityBytes(
+					+ GetNativeFontTileRetainedCapacityBytes(
 						metadata->nativePayload));
 		}
 
 		{
 			FreeTypePerfScope publish(
 				FreeTypePerfPhase::NativeRegistrationPublish);
-			A8State& state = State();
+			NativeFontShapeState& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
 			state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(
 				1, std::memory_order_release);
-			A8ShapeMetadataPtr publishedMetadata = metadata;
+			NativeFontShapeMetadataPtr publishedMetadata = metadata;
 			const size_t previousBucketCount =
 				state.shapeMetadata.bucket_count();
 			state.shapeMetadata[shape] =
-				MakeA8MetadataEntry(std::move(publishedMetadata));
+				MakeNativeFontMetadataEntry(std::move(publishedMetadata));
 			RecordMetadataInsertionRehash(state, previousBucketCount);
 			*reinterpret_cast<void***>(shape) = &State().triShapeVtable[1];
 		}
 		return true;
 	}
 
-	bool PrepareVanillaLayoutSdfA8Shape(Font& font, NiTriShape* shape,
+	bool PrepareNativeFontVanillaLayoutShape(Font& font, NiTriShape* shape,
 		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
-		NativeA8VanillaLayoutKind layoutKind,
-		const A8EffectShapeConfig* effectConfig,
-		const A8ShapeColorContract* colorContract,
-		NativeA8PayloadTemplatePtr payloadTemplate,
+		NativeFontVanillaLayoutKind layoutKind,
+		const NativeFontEffectShapeConfig* effectConfig,
+		const NativeFontShapeColorContract* colorContract,
+		NativeFontPayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin)
 	{
 		FreeTypePerfScope perf(FreeTypePerfPhase::NativeRegistration);
-		if (!IsA8RendererAvailable() || !shape || !payloadTemplate
+		if (!IsNativeFontRendererAvailable() || !shape || !payloadTemplate
 			|| payloadTemplate->quadCount != quadCount
 			|| payloadTemplate->pageCount != 1
 			|| payloadTemplate->compositePackets.size() != 1)
 		{
 			return false;
 		}
-		const NativeA8PacketTemplate& packet =
+		const NativeFontPacketTemplate& packet =
 			payloadTemplate->compositePackets.front();
 		const UInt64 packetEnd = static_cast<UInt64>(packet.firstVertex)
 			+ packet.vertexCount;
@@ -1157,13 +1157,13 @@ namespace fonthook::vectorfont
 			packet.distanceFieldMethod == DistanceFieldMethod::TrueSdf
 			|| packet.distanceFieldMethod == DistanceFieldMethod::Mtsdf;
 		const bool uniformLayout =
-			layoutKind == NativeA8VanillaLayoutKind::Uniform40;
+			layoutKind == NativeFontVanillaLayoutKind::Uniform40;
 		const bool parametricLayout =
-			layoutKind == NativeA8VanillaLayoutKind::Parametric48;
-		if (packet.shaderClass != NativeA8ShaderClass::Composite
+			layoutKind == NativeFontVanillaLayoutKind::Parametric48;
+		if (packet.shaderClass != NativeFontShaderClass::Composite
 			|| !supportedDistanceField
 			|| (!uniformLayout && !parametricLayout)
-			|| !IsVanillaLayoutSdfEnabled(packet.distanceFieldMethod)
+			|| !IsVanillaLayoutEnabled(packet.distanceFieldMethod)
 			|| packet.atlasPage != 0 || (packet.firstVertex & 3u)
 			|| !packet.vertexCount || (packet.vertexCount & 3u)
 			|| packetEnd > payloadTemplate->gpuVertices.size()
@@ -1179,9 +1179,9 @@ namespace fonthook::vectorfont
 			|| (uniformLayout
 				&& (packet.uniformSdfSpread <= 0.0f
 					|| packet.uniformDistanceParameterScale < 1.0f))
-			|| !ValidateA8Shape(shape, effectConfig, colorContract,
+			|| !ValidateNativeFontShape(shape, effectConfig, colorContract,
 				payloadTemplate.get())
-			|| !InitializeA8TriShapeVtable(shape))
+			|| !InitializeNativeFontTriShapeVtable(shape))
 		{
 			return false;
 		}
@@ -1189,9 +1189,9 @@ namespace fonthook::vectorfont
 			packet.staticCompositeLayerMask);
 		for (UInt32 relative = 0; relative < packet.vertexCount; ++relative)
 		{
-			const NativeA8GpuVertex& vertex = payloadTemplate->gpuVertices[
+			const NativeFontGpuVertex& vertex = payloadTemplate->gpuVertices[
 				static_cast<size_t>(packet.firstVertex) + relative];
-			const NativeA8GpuVertex& quadFirst = payloadTemplate->gpuVertices[
+			const NativeFontGpuVertex& quadFirst = payloadTemplate->gpuVertices[
 				static_cast<size_t>(packet.firstVertex)
 					+ (relative & ~UInt32(3u))];
 			if (!std::isfinite(vertex.sdfSpread) || vertex.sdfSpread <= 0.0f
@@ -1210,50 +1210,50 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		TileShader* shader = ResolveNativeA8PacketShader(
+		TileShader* shader = ResolveNativeFontPacketShader(
 			packet, shape, false, layoutKind);
 		if (!shader)
 			return false;
 
-		auto metadata = std::make_shared<VanillaLayoutSdfMetadata>();
-		InitializeA8MetadataIdentity(*metadata, shape);
+		auto metadata = std::make_shared<VanillaLayoutMetadata>();
+		InitializeNativeFontMetadataIdentity(*metadata, shape);
 		metadata->fontId = fontId;
 		metadata->glyphCount = glyphCount;
 		metadata->quadCount = quadCount;
 		metadata->vertexCount = packet.vertexCount;
 		metadata->primitiveCount = packet.vertexCount / 2u;
 		metadata->indexCount = packet.vertexCount / 4u * 6u;
-		metadata->backend = FreeTypeShapeBackend::VanillaLayoutSdf;
+		metadata->backend = FreeTypeShapeBackend::VanillaLayout;
 		metadata->layoutKind = layoutKind;
 		if (colorContract)
 			metadata->colorContract = *colorContract;
-		if (!InitializeNativeA8ShapePayload(font, shape, *metadata,
+		if (!InitializeNativeFontShapePayload(font, shape, *metadata,
 			payloadTemplate, geometryOrigin, metadata->nativePayload))
 		{
 			return false;
 		}
 		metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-			sizeof(VanillaLayoutSdfMetadata)
+			sizeof(VanillaLayoutMetadata)
 				+ metadata->nativePayload.packetShaders.heap_capacity()
 					* sizeof(TileShader*)
 				+ metadata->nativePayload.packetPrograms.heap_capacity()
-					* sizeof(const NativeA8CompiledPacketCommand*)
+					* sizeof(const NativeFontCompiledPacketCommand*)
 				+ metadata->nativePayload.preflightAtlasTextures.heap_capacity()
 					* sizeof(const void*)
-				+ GetNativeA8TileRetainedCapacityBytes(
+				+ GetNativeFontTileRetainedCapacityBytes(
 					metadata->nativePayload)
-				+ sizeof(A8ShapeMetadataEntry) + 6u * sizeof(void*));
+				+ sizeof(NativeFontShapeMetadataEntry) + 6u * sizeof(void*));
 		shape->SetShader(shader);
 		{
-			A8State& state = State();
+			NativeFontShapeState& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
 			state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(
 				1, std::memory_order_release);
-			A8ShapeMetadataPtr publishedMetadata = std::move(metadata);
+			NativeFontShapeMetadataPtr publishedMetadata = std::move(metadata);
 			const size_t previousBucketCount =
 				state.shapeMetadata.bucket_count();
 			state.shapeMetadata[shape] =
-				MakeA8MetadataEntry(std::move(publishedMetadata));
+				MakeNativeFontMetadataEntry(std::move(publishedMetadata));
 			RecordMetadataInsertionRehash(state, previousBucketCount);
 			*reinterpret_cast<void***>(shape) =
 				&state.vanillaLayoutTriShapeVtable[1];
@@ -1262,7 +1262,7 @@ namespace fonthook::vectorfont
 	}
 
 	bool PrepareSingletonFacadeForSortedFrame(
-		const A8ShapeMetadata& metadata, UInt32 generation,
+		const NativeFontShapeMetadata& metadata, UInt32 generation,
 		UInt32 atlasTextureEpoch, UInt64 validationToken)
 	{
 		SingletonFacadeState* singleton =
@@ -1279,31 +1279,31 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		NativeA8ShapePayload& payload = metadata.nativePayload;
+		NativeFontShapePayload& payload = metadata.nativePayload;
 		if (singleton->preflightValidationToken != validationToken
 			|| !payload.buildComplete || !payload.payloadTemplate
 			|| payload.preparedGeneration != generation
 			|| payload.preflightAtlasTextureEpoch != atlasTextureEpoch)
 		{
 			SetSingletonFacadeMode(metadata,
-				NativeA8FallbackReason::ShaderGeneration);
+				NativeFontFallbackReason::ShaderGeneration);
 			return false;
 		}
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(*payload.payloadTemplate,
+		const std::vector<NativeFontPacketTemplate>& packets =
+			GetNativeFontPackets(*payload.payloadTemplate,
 				payload.useCompositePackets);
 		const bool buildCommandView =
 			g_bEnableFreeTypeFontCommandBuffer;
-		const NativeA8TileRetainedText* retainedText = nullptr;
+		const NativeFontTileRetainedText* retainedText = nullptr;
 		if (buildCommandView)
 		{
-			if (!IsNativeA8TileRetainedTextCurrent(payload, shape,
+			if (!IsNativeFontTileRetainedTextCurrent(payload, shape,
 					generation, atlasTextureEpoch))
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::CommandTileRetainedMiss);
 				SetSingletonFacadeMode(metadata,
-					NativeA8FallbackReason::PacketBuild);
+					NativeFontFallbackReason::PacketBuild);
 				return false;
 			}
 			retainedText = &payload.retainedText;
@@ -1313,7 +1313,7 @@ namespace fonthook::vectorfont
 		if (singleton->topologyValidationToken != validationToken)
 		{
 			SetSingletonFacadeMode(metadata,
-				NativeA8FallbackReason::PropertySync);
+				NativeFontFallbackReason::PropertySync);
 			return false;
 		}
 		if (packets.size() != 1 || payload.packetShaders.size() != 1
@@ -1325,14 +1325,14 @@ namespace fonthook::vectorfont
 			// packet loop when command recording is disabled). This is a normal
 			// facade mode rather than a singleton-facade failure.
 			SetSingletonFacadeMode(metadata,
-				NativeA8FallbackReason::None, false);
+				NativeFontFallbackReason::None, false);
 			return true;
 		}
 
-		NativeA8DirectFacadePacketBinding resolved;
-		const NativeA8FallbackReason resolveResult =
-			ResolveNativeA8DirectFacadePacketBinding(payload, 0, resolved);
-		if (resolveResult != NativeA8FallbackReason::None)
+		NativeFontDirectFacadePacketBinding resolved;
+		const NativeFontFallbackReason resolveResult =
+			ResolveNativeFontDirectFacadePacketBinding(payload, 0, resolved);
+		if (resolveResult != NativeFontFallbackReason::None)
 		{
 			SetSingletonFacadeMode(metadata, resolveResult);
 			return false;
@@ -1340,12 +1340,12 @@ namespace fonthook::vectorfont
 
 		SingletonFacadeBinding& slot = singleton->slot;
 		NiTriShapeData* data = shape->GetModelData();
-		if (!data || !IsNativeA8DirectFacadePacketAtlasCurrent(
+		if (!data || !IsNativeFontDirectFacadePacketAtlasCurrent(
 				shape, payload, 0)
 			|| !AllocateSingletonFacadeBindingBuffer(slot))
 		{
 			SetSingletonFacadeMode(metadata,
-				NativeA8FallbackReason::PropertySync);
+				NativeFontFallbackReason::PropertySync);
 			return false;
 		}
 		if (data->m_pkBuffData != slot.bindingBuffer
@@ -1379,7 +1379,7 @@ namespace fonthook::vectorfont
 			slot.bindingBuffer->m_uiMaxVertCount = resolved.vertexCount;
 			slot.bindingBuffer->m_uiStreamCount = 1;
 			slot.bindingBuffer->m_puiVertexStride[0] =
-				sizeof(NativeA8GpuVertex);
+				sizeof(NativeFontGpuVertex);
 			slot.bindingBuffer->m_uiIndexCount = quadCount * 6u;
 			slot.bindingBuffer->m_uiIBSize = resolved.indexBytes;
 			slot.bindingBuffer->m_pkIB = resolved.indexBuffer;
@@ -1395,7 +1395,7 @@ namespace fonthook::vectorfont
 			slot.bindingChip->m_uiOffset = 0;
 			slot.bindingChip->m_uiLockFlags = 0;
 			slot.bindingChip->m_uiSize =
-				resolved.vertexCount * sizeof(NativeA8GpuVertex);
+				resolved.vertexCount * sizeof(NativeFontGpuVertex);
 			shape->SetShader(payload.packetShaders[0]);
 			data->m_pkBuffData = slot.bindingBuffer;
 		}
@@ -1413,16 +1413,16 @@ namespace fonthook::vectorfont
 				slot, resolved, payload.packetShaders[0]))
 		{
 			SetSingletonFacadeMode(metadata,
-				NativeA8FallbackReason::PropertySync);
+				NativeFontFallbackReason::PropertySync);
 			return false;
 		}
 
 		if (buildCommandView)
 		{
-			const NativeA8TileRetainedPacket& retained =
+			const NativeFontTileRetainedPacket& retained =
 				retainedText->packets.front();
-			const NativeA8PacketTemplate& packet = *retained.packet;
-			NativeA8DrawCommand& command =
+			const NativeFontPacketTemplate& packet = *retained.packet;
+			NativeFontDrawCommand& command =
 				singleton->commandBuildCommand;
 			command = {};
 			if (!resolved.active
@@ -1433,7 +1433,7 @@ namespace fonthook::vectorfont
 				|| !retained.program)
 			{
 				SetSingletonFacadeMode(metadata,
-					NativeA8FallbackReason::PacketBuild);
+					NativeFontFallbackReason::PacketBuild);
 				return false;
 			}
 			command.sourceGeometry = shape;
@@ -1483,7 +1483,7 @@ namespace fonthook::vectorfont
 	}
 
 	void RestoreSingletonFacade(
-		const A8ShapeMetadata& metadata, NativeA8FallbackReason reason)
+		const NativeFontShapeMetadata& metadata, NativeFontFallbackReason reason)
 	{
 		SingletonFacadeState* singleton =
 			GetSingletonFacadeState(metadata);
@@ -1498,11 +1498,11 @@ namespace fonthook::vectorfont
 
 	void InvalidateAllSingletonFacadeBindings()
 	{
-		NotifyNativeA8CommandExternalMutation(
-			NativeA8CommandFallback::Resource);
-		std::vector<A8ShapeMetadataPtr> singletons;
+		NotifyNativeFontCommandExternalMutation(
+			NativeFontCommandFallback::Resource);
+		std::vector<NativeFontShapeMetadataPtr> singletons;
 		{
-			A8State& state = State();
+			NativeFontShapeState& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
 			for (const auto& entry : state.shapeMetadata)
 			{
@@ -1514,7 +1514,7 @@ namespace fonthook::vectorfont
 				}
 			}
 		}
-		for (const A8ShapeMetadataPtr& metadata : singletons)
+		for (const NativeFontShapeMetadataPtr& metadata : singletons)
 		{
 			SingletonFacadeState* singleton = metadata
 				? GetSingletonFacadeState(*metadata) : nullptr;
@@ -1534,7 +1534,7 @@ namespace fonthook::vectorfont
 			singleton->commandValidationToken.store(
 				0, std::memory_order_release);
 			singleton->commandDirectFacadeSinglePacketIndex.store(
-				kInvalidNativeA8CommandIndex,
+				kInvalidNativeFontCommandIndex,
 				std::memory_order_release);
 			if (singleton->frameMode.load(std::memory_order_acquire)
 				!= SingletonFacadeFrameMode::Retired)
@@ -1549,7 +1549,7 @@ namespace fonthook::vectorfont
 	}
 
 	void ReleaseSingletonFacadeBinding(
-		NiTriShape* shape, const A8ShapeMetadata& metadata)
+		NiTriShape* shape, const NativeFontShapeMetadata& metadata)
 	{
 		SingletonFacadeState* singleton =
 			GetSingletonFacadeState(metadata);
@@ -1563,7 +1563,7 @@ namespace fonthook::vectorfont
 		singleton->commandValidationToken.store(
 			0, std::memory_order_release);
 		singleton->commandDirectFacadeSinglePacketIndex.store(
-			kInvalidNativeA8CommandIndex,
+			kInvalidNativeFontCommandIndex,
 			std::memory_order_release);
 		singleton->frameMode.store(SingletonFacadeFrameMode::Retired,
 			std::memory_order_release);
@@ -1573,18 +1573,18 @@ namespace fonthook::vectorfont
 
 namespace fonthook
 {
-	void FinalizeFreeTypeA8Detection()
+	void FinalizeFreeTypeNativeRendererDetection()
 	{
-		vectorfont::FinalizeA8RendererDetection();
+		vectorfont::FinalizeNativeFontRendererDetection();
 	}
 
-	void HandleFreeTypeA8MainLoop()
+	void HandleFreeTypeNativeRendererMainLoop()
 	{
-		vectorfont::HandleA8RendererMainLoop();
+		vectorfont::HandleNativeFontRendererMainLoop();
 	}
 
 	void HandleFreeTypeShaderLoaderMessage(UInt32 messageType)
 	{
-		vectorfont::HandleA8ShaderLoaderMessage(messageType);
+		vectorfont::DispatchNativeFontShaderLoaderMessage(messageType);
 	}
 }

@@ -7,8 +7,8 @@ configuration, dependency checks, globals, and native-call helpers stay at the
 - `dictionary`: translation dictionary loading, preparation, matching, and effects.
 - `font`: font orchestration, text encoding/decoding, layout, hooks, and
   performance support.
-  - `a8`: native A8 render hooks.
-    `font_a8_render.cpp` publishes the generation-scoped readiness snapshot and
+  - `native_shape`: native-font shape metadata, render hooks, and runtime bridge.
+    `font_native_shape_render.cpp` publishes the generation-scoped readiness snapshot and
     owns singleton payload publication plus metadata-map capacity maintenance;
     hot consumers only use the snapshot after exact hook/device/atlas checks.
   - `atlas`: atlas packing, caching, resources, shaping, and snapshots.

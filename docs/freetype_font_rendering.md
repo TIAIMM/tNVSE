@@ -325,7 +325,7 @@ boundaries. An unchanged cache-hit launch never latches the component, so all
 validation, restoration, and reuse work remains invisible. A latched component
 is hidden and deleted only in the final `Complete` pump step, immediately before
 `DeferredInit` returns.
-Subsequent `kMessage_MainGameLoop` callbacks perform normal A8, DEFAULT-pool,
+Subsequent `kMessage_MainGameLoop` callbacks perform normal native-atlas, DEFAULT-pool,
 and performance-cache maintenance; they no longer drive startup prewarm.
 
 If the LoadingMenu root is unavailable, or the XML/component tree is missing or
@@ -936,7 +936,7 @@ low index to high index, matching the renderer's backwards traversal. It
 never changes `m_pfDepths`, unequal-depth order, pure-vanilla runs, or pure-
 FreeType runs.
 
-NativeA8RegisterObject is intentionally thin. On an audited code image its
+NativeFontRegisterObject is intentionally thin. On an audited code image its
 normal FreeType route performs only cheap argument checks, unchecked hook-byte
 comparisons, and an immediate call to the saved Tile predecessor; it returns
 the predecessor result unchanged. It performs no metadata lookup, visibility
@@ -945,7 +945,7 @@ VirtualQuery is reserved for the cold audit of a newly observed hook image.
 Registration therefore never clips or merges a facade and preserves third-party
 hook chaining, AddTail order, and duplicate-registration semantics.
 
-At `NativeA8RenderAlphaGeometry`, `CaptureSortedFacadeTopology` performs one
+At `NativeFontRenderAlphaGeometry`, `CaptureSortedFacadeTopology` performs one
 pass over the final `m_ppkItems` array. It hashes facade pointers, records their
 occurrence counts, and folds mixed-run candidate detection into that same scan.
 If the scan captures no facade, the traversal returns directly to vanilla
@@ -1117,20 +1117,21 @@ the epoch, so an old-device declaration is never admitted by address or by
 layout resemblance; unknown declarations still fail open to the retained
 52-byte payload route.
 
-`tnvse_freetype_vanilla_layout_sdf` reports strictly eligible attempts, successful
+`tnvse_freetype_vanilla_layout` reports strictly eligible attempts, successful
 creations, creation fallbacks, direct draws, final-bound culls, runtime
-fallbacks, and created vertices. `precache_accepted`, `precache_immediate`,
-`precache_deferred`, and `precache_rejected` distinguish renderer acceptance
-from immediate buffer readiness. In a validated run, `created` must not exceed
-`eligible`, `precache_accepted = precache_immediate + precache_deferred`, and
+fallbacks, and created vertices. `precache_accepted` records shapes accepted by
+the renderer precache path; `precache_unavailable` records shapes for which that
+path or its target shader was unavailable. In a validated run, `created` must
+not exceed `eligible`, and
 `draws + culls + runtime_fallback` describes dispatch
 outcomes for live target shapes over the reporting interval. The same line exposes
 `shifted_eligible`, `shifted_created`, `shifted_draws`, and
 `shifted_runtime_fallback` so a log can prove that real offset-shadow text is
 using the target rather than merely matching a non-shadow mask.
-`postupload_source_retired_ready_checks` proves that expected CPU cleanup no
-longer blocks the target, while `prior_generation_decl_ready_checks` proves
-same-device startup-generation buffers were reused. `private_state_carries`
+`payload_upload_attempts`, `success`, `failure`, and `bytes` describe payload
+uploads, while `native_pack_pending` records readiness checks that still await
+the native pack boundary. `prior_generation_decl_uses` counts actual reuse of
+same-device startup-generation declarations. `private_state_carries`
 counts draws whose exact first-pass callback chain completed the native
 constant callback and retained its private-register proof;
 `private_state_carry_rejected` counts fail-closed resets. This optimization does
@@ -1141,10 +1142,13 @@ Any non-first pass, replaced callback, nested/re-entered draw, fault, reset, or
 missing token clears the cache. Even a successful carry invalidates the command
 execution segment and discards texture, sampler, declaration, buffer,
 clip/stencil and render-state proofs; only the reverse-proven disjoint private
-constants survive. The one-shot
-`tnvse_freetype_vanilla_layout_sdf_postpack` diagnostic records the observed CPU
-source state, keep mask, declaration class, device epoch, and stride. A new run
-should show nonzero direct `draws` and a sharp reduction in `runtime_fallback`;
+constants survive. `draw_token_hits` counts fast-path reuse;
+`draw_token_slow_paths` counts all token misses, classified by the
+`draw_token_uncertified` and `draw_token_*_mismatches` fields. First
+certifications, recertifications, and rejected slow paths are reported
+separately. Hot-path postpack/upload diagnostics are intentionally absent. A
+new run should show nonzero direct `draws` and a sharp reduction in
+`runtime_fallback`;
 the remaining fallbacks must have a real shader/buffer contract failure rather
 than `sourceTextureSets=2` alone.
 
@@ -1224,7 +1228,7 @@ ordinary-versus-Composite packet boundaries are tNVSE payload state.
 Consequently every native FreeType artifact creates and returns exactly one
 NiTriShape. CreateDirectNativeShape builds that shell from ordinary packet 0,
 then replaces its model bound with the complete artifact bound. Packet count
-is retained only in NativeA8ShapePayload. There is no 64-shape limit, parent
+is retained only in NativeFontShapePayload. There is no 64-shape limit, parent
 or TileText capture requirement, packet-shape vector, primary/follower role,
 group registry, sibling attachment, or sibling lifetime. One facade is one
 active-Sort array position; it is not a promise of one packet or one draw.
@@ -1250,7 +1254,7 @@ before command recording, upload, or draw.
 
 When the active packet count is one, the facade may use its persistent
 descriptor and DirectFacadeSinglePacket command. When it is greater than one,
-the shell remains restored and AddNativeA8FrameCommandSpan records the packets
+the shell remains restored and AddNativeFontFrameCommandSpan records the packets
 in payload order; retained bridge replay executes them consecutively at the
 single facade position. With the command buffer disabled, or when command
 construction fails before submission, DrawNativePacketSet performs the same
@@ -1319,7 +1323,7 @@ hit/miss and cull counters remain on `tnvse_freetype_preflight_clip_cull`.
 ### Retained text command buffer
 
 `bEnableFreeTypeFontCommandBuffer` is the master switch for the production
-command path used by FreeType A8 shapes in the validated sorted Tile traversal.
+command path used by native FreeType shapes in the validated sorted Tile traversal.
 It is independent of `uiFreeTypeFontDistanceFieldMode` and
 `bEnableFreeTypeFontCompositePass`; the active ordinary or Composite packet
 topology is compiled separately. The default is `0`.
@@ -1358,7 +1362,7 @@ without executing `E72C20` or the particle/line virtual predicates: formal
 `m_pkBuffData` makes the former return false immediately, while the exact
 tNVSE-owned `NiTriShape` vtable proves the latter two vanilla null-casts. Full
 preflight compiles those immutable facts into a
-`NativeA8StandardPassLiteDispatch` owned by `NativeA8TileRetainedText`. It
+`NativeFontStandardPassLiteDispatch` owned by `NativeFontTileRetainedText`. It
 retains the Tile/property identity, renderer, shader, generation-owned program,
 and resolved slot table for the Tile lifetime; frame commands carry only a
 non-owning pointer to it. Stage 1 therefore checks the live `RenderPass`
@@ -1454,8 +1458,8 @@ allows device-state reuse across a command-validation boundary.
 
 The immutable Text Artifact retains shared packet geometry, profile
 hashes/classes, atlas-page topology, and vertex ranges, but no resolved Tile
-program. `NativeA8TileRetainedText` is instead owned by the
-`A8ShapeMetadata::nativePayload` associated with the live Tile facade. Full
+program. `NativeFontTileRetainedText` is instead owned by the
+`NativeFontShapeMetadata::nativePayload` associated with the live Tile facade. Full
 preflight builds its packet and run skeleton only when the Tile's packet
 topology, sampling/alpha class, or shader program changes. Atlas/resource-only
 preflight changes refresh the validity stamp while retaining the same skeleton.
@@ -1463,7 +1467,7 @@ The custom `NiTriShape::DeleteThis` route invalidates that metadata before the
 vanilla Tile geometry is destroyed, so retained text cannot remain usable after
 its Tile lifetime ends.
 
-Every published A8 metadata object carries a monotonic allocation ID, its own
+Every published native-font metadata object carries a monotonic allocation ID, its own
 address, and its owning shape address. The shape registry stores a second
 publication-time copy outside the `shared_ptr`. Healthy allocation and deletion
 remain silent; the identity fields are retained for correlation with targeted
@@ -1513,7 +1517,7 @@ a hard boundary, nested traversal, or explicit native-state invalidation checks
 the sorted validation token, nesting serial, all three hook identities,
 renderer/device and shader generation, atlas epoch, the sealed ring resource
 serial/upload epoch, render-target identity, and viewport identity. The segment
-may now cross a non-A8 vanilla Tile only when its pass envelope is ordinary, its
+may now cross a non-native-font vanilla Tile only when its pass envelope is ordinary, its
 NiTriShape special/alternate slots are the reverse-verified retail constant-
 false thunk, its renderer special-pass predicate is false, and all six
 TileShader Standard state callbacks plus its geometry binder and first-pass
@@ -1539,7 +1543,7 @@ show that `TileShader::CreateConstantMaps` binds `tintcolor` to PS c0,
 `WorldViewProjTranspose` to VS c0-c3, and `TexScroll` to VS c4. A scan of every
 decompiled shipped shader package finds that reflected constant tables,
 including relatively indexed arrays, end at PS c24 and VS c120; shader-local
-pixel `def` literals extend only to c30. Native A8 consequently leaves all
+pixel `def` literals extend only to c30. The native-font path consequently leaves all
 vanilla registers intact. Its immutable packet block occupies the middle-high
 reserved PS c176-c183 band and its analytic-AA input occupies VS c208. This
 leaves 40 pixel and 47 vertex float registers above tNVSE's highest register,
@@ -1697,7 +1701,7 @@ the command-segment boundary.
 Packet admission now produces a short-lived binding proof before entering the
 immediate callback. A direct facade proof comes from the binding scope that has
 just installed the command's exact descriptor; an ordinary retained proof comes
-from `PrepareNativeA8RingPacket`; and a direct singleton facade reuses the
+from `PrepareNativeFontRingPacket`; and a direct singleton facade reuses the
 complete live slot/buffer/atlas check already required by its direct route.
 Each packet in a multi-packet span uses the ordinary retained ring proof for
 the same facade anchor; no distinct vanilla geometry slot is involved.
@@ -1819,7 +1823,7 @@ private shader-register shadow remains eligible for post-draw validation.
 `constants_reuses` proves slot 31 was skipped only for identical
 non-transient state; `post_elisions` normally covers every verified packet
 without scissor/stencil, including packets whose constants changed. Alpha-test
-sets/reuses may remain zero because the native A8 direct route normally
+sets/reuses may remain zero because the native-font direct route normally
 disables vanilla alpha testing.
 
 ## Atlas allocation, mipmaps, and memory
@@ -2023,7 +2027,7 @@ tables. Each used weak page reference is locked and checked once; compact layer
 references are resolved to immutable snapshot placements and compact page
 ordinals for that batch. Fixed
 `[kind][64 pages]` count and cursor arrays determine the final allocation. The
-second pass writes `NativeA8GpuVertex` records straight into their final
+second pass writes `NativeFontGpuVertex` records straight into their final
 page-contiguous locations and emits ranges in Shadow, Glow, Outline, Fill order.
 It does not create a `GlyphBitmapRequest`, `GlyphSource`, `PreparedGlyph`, or
 `PendingQuad`, build a cache-ID page map, hash the completed quads, or sort the

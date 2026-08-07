@@ -1,4 +1,4 @@
-#include "font_a8_internal.h"
+#include "font_native_shape_internal.h"
 #include "font_native_internal.h"
 
 #include "load_config.h"
@@ -37,12 +37,12 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kScissorTailSize = 0x10;
 		inline constexpr UInt32 kProxyPoolSize = 4;
 		inline constexpr UInt32 kRingTargetVertexCapacity =
-			kNativeA8MaximumQuads * 4u * 2u;
+			kNativeFontMaximumQuads * 4u * 2u;
 		inline constexpr UInt32 kStaticTargetVertexCapacity =
 			kRingTargetVertexCapacity * 4u;
 		inline constexpr UInt32 kStaticInitialVertexBytes = 4u * 1024u * 1024u;
 		inline constexpr UInt32 kStaticInitialVertexCapacity =
-			(kStaticInitialVertexBytes / sizeof(NativeA8GpuVertex)) & ~3u;
+			(kStaticInitialVertexBytes / sizeof(NativeFontGpuVertex)) & ~3u;
 		inline constexpr UInt32 kStaticPromotionMinimumFrameCount = 2;
 		inline constexpr UInt32 kStaticPromotionMaximumBaseFrameCount = 16;
 		inline constexpr UInt32 kStaticPromotionMaximumOversizeFrameCount = 32;
@@ -56,7 +56,7 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kStaticCompactionReserveDivisor = 8;
 		inline constexpr size_t kStaticCandidateLimit = 4096;
 		inline constexpr UInt32 kCanonicalIndexCount =
-			kNativeA8MaximumQuads * 6u;
+			kNativeFontMaximumQuads * 6u;
 		inline constexpr UInt32 kCanonicalIndexBytes =
 			kCanonicalIndexCount * sizeof(UInt16);
 		inline constexpr UInt32 kCanonicalArrayCount = 1;
@@ -76,7 +76,7 @@ namespace fonthook::vectorfont
 		}
 
 		UInt64 HashDiagnosticPayload(
-			const NativeA8PayloadTemplate& payloadTemplate)
+			const NativeFontPayloadTemplate& payloadTemplate)
 		{
 			if (!g_bEnableFreeTypeFontRenderingLog
 				|| payloadTemplate.gpuVertices.empty())
@@ -85,7 +85,7 @@ namespace fonthook::vectorfont
 			}
 			return HashDiagnosticBytes(payloadTemplate.gpuVertices.data(),
 				payloadTemplate.gpuVertices.size()
-					* sizeof(NativeA8GpuVertex));
+					* sizeof(NativeFontGpuVertex));
 		}
 
 		UInt32 AdvanceDiagnosticSerial(UInt32& serial)
@@ -130,7 +130,7 @@ namespace fonthook::vectorfont
 		static_assert(offsetof(TileShaderPropertyView, rotates) == 0x91);
 		static_assert(offsetof(TileShaderPropertyView, hasVertexColors) == 0x92);
 
-		struct NativeA8Proxy
+		struct NativeFontProxy
 		{
 			NiTriShapePtr shape;
 			NiAlphaPropertyPtr alphaProperty;
@@ -143,9 +143,9 @@ namespace fonthook::vectorfont
 			bool inUse = false;
 		};
 
-		struct NativeA8UploadedPayload
+		struct NativeFontUploadedPayload
 		{
-			std::weak_ptr<const NativeA8PayloadTemplate> owner;
+			std::weak_ptr<const NativeFontPayloadTemplate> owner;
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 epoch = 0;
@@ -154,19 +154,19 @@ namespace fonthook::vectorfont
 			UInt64 payloadHash = 0;
 		};
 
-		struct NativeA8StaticPayload
+		struct NativeFontStaticPayload
 		{
-			std::weak_ptr<const NativeA8PayloadTemplate> owner;
+			std::weak_ptr<const NativeFontPayloadTemplate> owner;
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 writeSerial = 0;
 			UInt64 payloadHash = 0;
 		};
 
-		struct NativeA8StaticCandidate
+		struct NativeFontStaticCandidate
 		{
 			CpuMemoryLease cpuMemory;
-			std::weak_ptr<const NativeA8PayloadTemplate> owner;
+			std::weak_ptr<const NativeFontPayloadTemplate> owner;
 			UInt32 firstObservedFrame = 0;
 			UInt32 lastObservedFrame = 0;
 			UInt32 activeObservedFrames = 0;
@@ -178,47 +178,47 @@ namespace fonthook::vectorfont
 			bool promotionDisabled = false;
 		};
 
-		struct NativeA8StaticHotEntry
+		struct NativeFontStaticHotEntry
 		{
-			const NativeA8PayloadTemplate* key = nullptr;
-			std::weak_ptr<const NativeA8PayloadTemplate> owner;
+			const NativeFontPayloadTemplate* key = nullptr;
+			std::weak_ptr<const NativeFontPayloadTemplate> owner;
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 resourceSerial = 0;
 		};
 
-		struct NativeA8UploadHotEntry
+		struct NativeFontUploadHotEntry
 		{
-			const NativeA8PayloadTemplate* key = nullptr;
-			NativeA8PayloadTemplatePtr owner;
+			const NativeFontPayloadTemplate* key = nullptr;
+			NativeFontPayloadTemplatePtr owner;
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 epoch = 0;
 			UInt32 resourceSerial = 0;
 		};
 
-		struct NativeA8CandidateHotEntry
+		struct NativeFontCandidateHotEntry
 		{
-			const NativeA8PayloadTemplate* key = nullptr;
-			std::weak_ptr<const NativeA8PayloadTemplate> owner;
-			std::shared_ptr<NativeA8StaticCandidate> candidate;
+			const NativeFontPayloadTemplate* key = nullptr;
+			std::weak_ptr<const NativeFontPayloadTemplate> owner;
+			std::shared_ptr<NativeFontStaticCandidate> candidate;
 			UInt32 resourceSerial = 0;
 		};
 
-		struct NativeA8RingThreadState
+		struct NativeFontRingThreadState
 		{
 			UInt32 preferredProxy = std::numeric_limits<UInt32>::max();
-			NativeA8StaticHotEntry staticPayload;
-			NativeA8UploadHotEntry uploadedPayload;
-			NativeA8CandidateHotEntry staticCandidate;
+			NativeFontStaticHotEntry staticPayload;
+			NativeFontUploadHotEntry uploadedPayload;
+			NativeFontCandidateHotEntry staticCandidate;
 		};
 
-		thread_local NativeA8RingThreadState s_ringThread;
+		thread_local NativeFontRingThreadState s_ringThread;
 
-		struct NativeA8RingState
+		struct NativeFontRingState
 		{
 			std::mutex mutex;
-			std::array<NativeA8Proxy, kProxyPoolSize> proxies;
+			std::array<NativeFontProxy, kProxyPoolSize> proxies;
 			UInt32 proxyCount = 0;
 			NiDX9Renderer* renderer = nullptr;
 			IDirect3DDevice9* device = nullptr;
@@ -235,12 +235,12 @@ namespace fonthook::vectorfont
 			UInt32 dynamicWriteSerial = 0;
 			UInt32 dynamicDiscardSerial = 0;
 			UInt32 staticWriteSerial = 0;
-			std::unordered_map<const NativeA8PayloadTemplate*,
-				NativeA8UploadedPayload> uploadedPayloads;
-			std::unordered_map<const NativeA8PayloadTemplate*,
-				NativeA8StaticPayload> staticPayloads;
-			std::unordered_map<const NativeA8PayloadTemplate*,
-				std::shared_ptr<NativeA8StaticCandidate>> staticCandidates;
+			std::unordered_map<const NativeFontPayloadTemplate*,
+				NativeFontUploadedPayload> uploadedPayloads;
+			std::unordered_map<const NativeFontPayloadTemplate*,
+				NativeFontStaticPayload> staticPayloads;
+			std::unordered_map<const NativeFontPayloadTemplate*,
+				std::shared_ptr<NativeFontStaticCandidate>> staticCandidates;
 			CpuMemoryLease cpuMemory;
 			std::atomic<UInt32> resourceSerial = 1;
 			// Proxy shapes live for the process lifetime.  Once the complete pool is
@@ -264,9 +264,9 @@ namespace fonthook::vectorfont
 			bool loggedReady = false;
 		};
 
-		struct NativeA8SortedRingLease
+		struct NativeFontSortedRingLease
 		{
-			NativeA8RingState* state = nullptr;
+			NativeFontRingState* state = nullptr;
 			IDirect3DVertexBuffer9* dynamicVertexBuffer = nullptr;
 			IDirect3DVertexBuffer9* staticVertexBuffer = nullptr;
 			IDirect3DIndexBuffer9* indexBuffer = nullptr;
@@ -277,14 +277,14 @@ namespace fonthook::vectorfont
 			bool active = false;
 		};
 
-		thread_local NativeA8SortedRingLease s_sortedRingLease;
+		thread_local NativeFontSortedRingLease s_sortedRingLease;
 
-		NativeA8RingState& RingState()
+		NativeFontRingState& RingState()
 		{
 			// Renderer generations are process-lifetime objects. Keep the equally small
 			// proxy pool alive for the same interval so raw geometry/shader links cannot
 			// be torn down during late engine shutdown.
-			static NativeA8RingState* state = new NativeA8RingState();
+			static NativeFontRingState* state = new NativeFontRingState();
 			return *state;
 		}
 
@@ -296,7 +296,7 @@ namespace fonthook::vectorfont
 					+ 3u * sizeof(void*));
 		}
 
-		void RefreshRingCpuMemoryLocked(NativeA8RingState& state)
+		void RefreshRingCpuMemoryLocked(NativeFontRingState& state)
 		{
 			size_t bytes = EstimateUnorderedMapBytes(state.uploadedPayloads)
 				+ EstimateUnorderedMapBytes(state.staticPayloads)
@@ -304,13 +304,13 @@ namespace fonthook::vectorfont
 			state.cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata, bytes);
 		}
 
-		std::shared_ptr<NativeA8StaticCandidate> CreateStaticCandidate(
-			const NativeA8PayloadTemplatePtr& payloadTemplate)
+		std::shared_ptr<NativeFontStaticCandidate> CreateStaticCandidate(
+			const NativeFontPayloadTemplatePtr& payloadTemplate)
 		{
-			auto candidate = std::make_shared<NativeA8StaticCandidate>();
+			auto candidate = std::make_shared<NativeFontStaticCandidate>();
 			candidate->owner = payloadTemplate;
 			candidate->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-				sizeof(NativeA8StaticCandidate) + 2u * sizeof(void*));
+				sizeof(NativeFontStaticCandidate) + 2u * sizeof(void*));
 			return candidate;
 		}
 
@@ -341,7 +341,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool AttachProxyBuffer(NativeA8Proxy& proxy)
+		bool AttachProxyBuffer(NativeFontProxy& proxy)
 		{
 			NiTriShapeData* data = proxy.shape
 				? proxy.shape->GetModelData() : nullptr;
@@ -368,7 +368,7 @@ namespace fonthook::vectorfont
 			NiVBChip* chip = reinterpret_cast<NiVBChip*>(
 				static_cast<UInt8*>(chipMemory) + sizeof(NiVBChip*));
 			chips[0] = chip;
-			*stride = sizeof(NativeA8GpuVertex);
+			*stride = sizeof(NativeFontGpuVertex);
 
 			buffer->m_uiStreamCount = 1;
 			buffer->m_puiVertexStride = stride;
@@ -388,7 +388,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		void ClearProxyGpuBindings(NativeA8Proxy& proxy)
+		void ClearProxyGpuBindings(NativeFontProxy& proxy)
 		{
 			proxy.shader = nullptr;
 			if (proxy.chip)
@@ -415,7 +415,7 @@ namespace fonthook::vectorfont
 			proxy.buffer->m_uiMaxTriCount = 0;
 		}
 
-		UInt32 AdvanceResourceSerialLocked(NativeA8RingState& state)
+		UInt32 AdvanceResourceSerialLocked(NativeFontRingState& state)
 		{
 			UInt32 serial = state.resourceSerial.fetch_add(
 				1, std::memory_order_release) + 1u;
@@ -424,20 +424,20 @@ namespace fonthook::vectorfont
 				serial = 1u;
 				state.resourceSerial.store(serial, std::memory_order_release);
 			}
-			NotifyNativeA8CommandExternalMutation(
-				NativeA8CommandFallback::Resource);
+			NotifyNativeFontCommandExternalMutation(
+				NativeFontCommandFallback::Resource);
 			return serial;
 		}
 
-		void AdvanceUploadEpochLocked(NativeA8RingState& state)
+		void AdvanceUploadEpochLocked(NativeFontRingState& state)
 		{
 			if (++state.uploadEpoch == 0)
 				++state.uploadEpoch;
-			NotifyNativeA8CommandExternalMutation(
-				NativeA8CommandFallback::Resource);
+			NotifyNativeFontCommandExternalMutation(
+				NativeFontCommandFallback::Resource);
 		}
 
-		void ReleaseRingResourcesLocked(NativeA8RingState& state)
+		void ReleaseRingResourcesLocked(NativeFontRingState& state)
 		{
 			// Singleton-facade descriptors borrow the ring's COM resources without
 			// owning references. Restore every live shape to its vanilla shell before
@@ -503,7 +503,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			auto* indices = static_cast<UInt16*>(memory);
-			for (UInt32 quad = 0; quad < kNativeA8MaximumQuads; ++quad)
+			for (UInt32 quad = 0; quad < kNativeFontMaximumQuads; ++quad)
 			{
 				const UInt16 base = static_cast<UInt16>(quad * 4u);
 				const UInt32 output = quad * 6u;
@@ -518,7 +518,7 @@ namespace fonthook::vectorfont
 			return SUCCEEDED(result);
 		}
 
-		bool EnsureRingResourcesLocked(NativeA8RingState& state,
+		bool EnsureRingResourcesLocked(NativeFontRingState& state,
 			UInt32 preparedGeneration, UInt32 requiredVertices,
 			const char*& operation, HRESULT& result)
 		{
@@ -535,7 +535,7 @@ namespace fonthook::vectorfont
 			}
 			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
-			const UInt32 generation = GetNativeA8ShaderGeneration();
+			const UInt32 generation = GetNativeFontShaderGeneration();
 			if (!renderer || !device || !generation
 				|| generation != preparedGeneration)
 			{
@@ -544,7 +544,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			IDirect3DVertexDeclaration9* declaration =
-				GetNativeA8D3DDeclaration(generation);
+				GetNativeFontD3DDeclaration(generation);
 			if (!declaration)
 			{
 				operation = "ring-declaration";
@@ -603,7 +603,7 @@ namespace fonthook::vectorfont
 			IDirect3DIndexBuffer9* indexBuffer = nullptr;
 			operation = "CreateVertexBuffer";
 			result = device->CreateVertexBuffer(
-				static_cast<UINT>(desired) * sizeof(NativeA8GpuVertex),
+				static_cast<UINT>(desired) * sizeof(NativeFontGpuVertex),
 				D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT,
 				&vertexBuffer, nullptr);
 			if (FAILED(result) || !vertexBuffer)
@@ -615,7 +615,7 @@ namespace fonthook::vectorfont
 			if (staticDesired)
 			{
 				const HRESULT staticResult = device->CreateVertexBuffer(
-					static_cast<UINT>(staticDesired) * sizeof(NativeA8GpuVertex),
+					static_cast<UINT>(staticDesired) * sizeof(NativeFontGpuVertex),
 					D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT,
 					&staticVertexBuffer, nullptr);
 				if (FAILED(staticResult) || !staticVertexBuffer)
@@ -674,7 +674,7 @@ namespace fonthook::vectorfont
 			state.staticPromotionBudgetFrameValid = false;
 			for (UInt32 index = 0; index < state.proxyCount; ++index)
 			{
-				NativeA8Proxy& proxy = state.proxies[index];
+				NativeFontProxy& proxy = state.proxies[index];
 				if (!proxy.buffer || !proxy.chip)
 					continue;
 				proxy.chip->m_pkVB = vertexBuffer;
@@ -699,8 +699,8 @@ namespace fonthook::vectorfont
 					static_cast<UInt32>(kStaticCandidateLimit),
 					kStaticCandidateSweepIntervalFrames,
 					kStaticCandidateInactiveFrames,
-					static_cast<UInt32>(sizeof(NativeA8GpuVertex)),
-					kNativeA8MaximumQuads, kCanonicalIndexBytes);
+					static_cast<UInt32>(sizeof(NativeFontGpuVertex)),
+					kNativeFontMaximumQuads, kCanonicalIndexBytes);
 			}
 			operation = "none";
 			result = D3D_OK;
@@ -709,11 +709,11 @@ namespace fonthook::vectorfont
 
 		struct LiveStaticPayload
 		{
-			NativeA8PayloadTemplatePtr owner;
+			NativeFontPayloadTemplatePtr owner;
 			UInt32 baseVertex = 0;
 		};
 
-		UInt32 GetStaticObservationFrame(const NativeA8RingState& state)
+		UInt32 GetStaticObservationFrame(const NativeFontRingState& state)
 		{
 			return state.renderer ? state.renderer->m_uiFrameID : 0;
 		}
@@ -738,7 +738,7 @@ namespace fonthook::vectorfont
 		const StaticPromotionPolicy& GetStaticPromotionPolicy(UInt32 vertexCount)
 		{
 			const UInt64 bytes = static_cast<UInt64>(vertexCount)
-				* sizeof(NativeA8GpuVertex);
+				* sizeof(NativeFontGpuVertex);
 			for (const StaticPromotionPolicy& policy : kStaticPromotionPolicies)
 			{
 				if (bytes <= policy.maximumBytes)
@@ -762,8 +762,8 @@ namespace fonthook::vectorfont
 		}
 
 		StaticPromotionReadiness GetStaticPromotionReadiness(
-			const NativeA8RingState& state,
-			const NativeA8StaticCandidate& candidate, UInt32 vertexCount,
+			const NativeFontRingState& state,
+			const NativeFontStaticCandidate& candidate, UInt32 vertexCount,
 			UInt32 frame, UInt32 maturityMultiplier = 1)
 		{
 			if (candidate.promotionDisabled)
@@ -796,7 +796,7 @@ namespace fonthook::vectorfont
 			return StaticPromotionReadiness::Ready;
 		}
 
-		void ResetStaticPromotionBudgetFrame(NativeA8RingState& state,
+		void ResetStaticPromotionBudgetFrame(NativeFontRingState& state,
 			UInt32 frame)
 		{
 			if (state.staticPromotionBudgetFrameValid
@@ -810,14 +810,14 @@ namespace fonthook::vectorfont
 			state.staticPromotionBudgetFrameValid = true;
 		}
 
-		bool FitsStaticPromotionBudget(NativeA8RingState& state,
-			const NativeA8StaticCandidate& candidate, UInt32 vertexCount,
+		bool FitsStaticPromotionBudget(NativeFontRingState& state,
+			const NativeFontStaticCandidate& candidate, UInt32 vertexCount,
 			UInt32 pendingBytes, UInt32 pendingPayloads)
 		{
 			const UInt32 frame = GetStaticObservationFrame(state);
 			ResetStaticPromotionBudgetFrame(state, frame);
 			const UInt64 byteCount = static_cast<UInt64>(vertexCount)
-				* sizeof(NativeA8GpuVertex);
+				* sizeof(NativeFontGpuVertex);
 			const UInt64 usedBytes = static_cast<UInt64>(
 				state.staticPromotionBytesThisFrame) + pendingBytes;
 			const UInt64 usedPayloads = static_cast<UInt64>(
@@ -832,7 +832,7 @@ namespace fonthook::vectorfont
 				&& usedBytes + byteCount <= kStaticPromotionBudgetBytes;
 		}
 
-		void CommitStaticPromotionBudget(NativeA8RingState& state,
+		void CommitStaticPromotionBudget(NativeFontRingState& state,
 			UInt32 bytes, UInt32 payloads)
 		{
 			ResetStaticPromotionBudgetFrame(state,
@@ -841,7 +841,7 @@ namespace fonthook::vectorfont
 			state.staticPromotionPayloadsThisFrame += payloads;
 		}
 
-		void DeferStaticPromotionsLocked(NativeA8RingState& state, UInt32 frame)
+		void DeferStaticPromotionsLocked(NativeFontRingState& state, UInt32 frame)
 		{
 			state.staticPromotionGlobalRetryFrame = frame
 				+ kStaticPromotionRetryFrames;
@@ -850,13 +850,13 @@ namespace fonthook::vectorfont
 		}
 
 		void ClearMatchingStaticResidency(
-			const NativeA8RingState& state,
-			const NativeA8StaticPayload& payload,
-			const NativeA8PayloadTemplatePtr& owner)
+			const NativeFontRingState& state,
+			const NativeFontStaticPayload& payload,
+			const NativeFontPayloadTemplatePtr& owner)
 		{
 			if (!owner)
 				return;
-			NativeA8PayloadResidencyCache& residency = owner->residency;
+			NativeFontPayloadResidencyCache& residency = owner->residency;
 			if (residency.staticResourceSerial
 					!= state.resourceSerial.load(std::memory_order_relaxed)
 				|| residency.staticBaseVertex != payload.baseVertex
@@ -870,7 +870,7 @@ namespace fonthook::vectorfont
 			residency.staticLastUsedFrame = 0;
 		}
 
-		void ReclaimExpiredAndColdStaticPayloadsLocked(NativeA8RingState& state,
+		void ReclaimExpiredAndColdStaticPayloadsLocked(NativeFontRingState& state,
 			UInt32 requiredVertices)
 		{
 			// Hot entries never own payload lifetime. Clear the local location cache
@@ -886,7 +886,7 @@ namespace fonthook::vectorfont
 						state.staticVertexCapacity);
 			struct ColdPayload
 			{
-				const NativeA8PayloadTemplate* key = nullptr;
+				const NativeFontPayloadTemplate* key = nullptr;
 				UInt32 vertexCount = 0;
 				UInt32 ageFrames = 0;
 			};
@@ -901,8 +901,8 @@ namespace fonthook::vectorfont
 			for (auto current = state.staticPayloads.begin();
 				current != state.staticPayloads.end();)
 			{
-				const NativeA8StaticPayload payload = current->second;
-				NativeA8PayloadTemplatePtr owner = payload.owner.lock();
+				const NativeFontStaticPayload payload = current->second;
+				NativeFontPayloadTemplatePtr owner = payload.owner.lock();
 				const bool valid = owner && owner.get() == current->first
 					&& owner->gpuVertices.size() == payload.vertexCount
 					&& payload.baseVertex <= state.staticVertexCapacity
@@ -922,7 +922,7 @@ namespace fonthook::vectorfont
 				liveVertexCount += payload.vertexCount;
 				if (underPressure)
 				{
-					const NativeA8PayloadResidencyCache& residency =
+					const NativeFontPayloadResidencyCache& residency =
 						owner->residency;
 					const UInt32 ageFrames = static_cast<UInt32>(
 						currentFrame - residency.staticLastUsedFrame);
@@ -964,8 +964,8 @@ namespace fonthook::vectorfont
 					auto found = state.staticPayloads.find(cold.key);
 					if (found == state.staticPayloads.end())
 						continue;
-					const NativeA8StaticPayload payload = found->second;
-					NativeA8PayloadTemplatePtr owner = payload.owner.lock();
+					const NativeFontStaticPayload payload = found->second;
+					NativeFontPayloadTemplatePtr owner = payload.owner.lock();
 					if (owner && owner.get() == found->first)
 						ClearMatchingStaticResidency(state, payload, owner);
 					liveVertexCount -= std::min<UInt64>(
@@ -998,10 +998,10 @@ namespace fonthook::vectorfont
 					AdvanceResourceSerialLocked(state);
 				for (const auto& entry : state.staticPayloads)
 				{
-					NativeA8PayloadTemplatePtr owner = entry.second.owner.lock();
+					NativeFontPayloadTemplatePtr owner = entry.second.owner.lock();
 					if (!owner || owner.get() != entry.first)
 						continue;
-					NativeA8PayloadResidencyCache& residency = owner->residency;
+					NativeFontPayloadResidencyCache& residency = owner->residency;
 					residency.staticResourceSerial = resourceSerial;
 					residency.staticBaseVertex = entry.second.baseVertex;
 					residency.staticVertexCount = entry.second.vertexCount;
@@ -1014,7 +1014,7 @@ namespace fonthook::vectorfont
 					coldRemovedPayloads);
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::StaticResidentColdEvictionBytes,
-					coldRemovedVertices * sizeof(NativeA8GpuVertex));
+					coldRemovedVertices * sizeof(NativeFontGpuVertex));
 			}
 			if (removedPayloads)
 				RefreshRingCpuMemoryLocked(state);
@@ -1028,13 +1028,13 @@ namespace fonthook::vectorfont
 					"tnvse_freetype_native: static vertex residency reclaimed removedPayloads=%u coldPayloads=%u coldBytes=%llu reclaimedTailVertices=%u residentVertices=%u capacity=%u requestedVertices=%u",
 					removedPayloads, coldRemovedPayloads,
 					static_cast<unsigned long long>(coldRemovedVertices
-						* sizeof(NativeA8GpuVertex)), reclaimedVertices,
+						* sizeof(NativeFontGpuVertex)), reclaimedVertices,
 					state.nextStaticVertex, state.staticVertexCapacity,
 					requiredVertices);
 			}
 		}
 
-		bool TryGrowStaticVertexBufferLocked(NativeA8RingState& state,
+		bool TryGrowStaticVertexBufferLocked(NativeFontRingState& state,
 			UInt32 requiredVertices, bool& permanentFailure)
 		{
 			permanentFailure = false;
@@ -1052,7 +1052,7 @@ namespace fonthook::vectorfont
 			// replacement unsafe.
 			const UInt32 activeProxies = static_cast<UInt32>(std::count_if(
 				state.proxies.begin(), state.proxies.begin() + state.proxyCount,
-				[](const NativeA8Proxy& proxy) { return proxy.inUse; }));
+				[](const NativeFontProxy& proxy) { return proxy.inUse; }));
 			if (state.activeSubmissions.load(std::memory_order_acquire)
 				|| state.sortedFrameLeases.load(std::memory_order_acquire)
 				|| activeProxies > 1)
@@ -1074,7 +1074,7 @@ namespace fonthook::vectorfont
 			UInt64 liveVertexCount = 0;
 			for (const auto& entry : state.staticPayloads)
 			{
-				NativeA8PayloadTemplatePtr owner = entry.second.owner.lock();
+				NativeFontPayloadTemplatePtr owner = entry.second.owner.lock();
 				if (!owner || owner.get() != entry.first
 					|| owner->gpuVertices.size() != entry.second.vertexCount)
 				{
@@ -1138,7 +1138,7 @@ namespace fonthook::vectorfont
 
 			IDirect3DVertexBuffer9* replacement = nullptr;
 			HRESULT result = state.device->CreateVertexBuffer(
-				static_cast<UINT>(desiredCapacity) * sizeof(NativeA8GpuVertex),
+				static_cast<UINT>(desiredCapacity) * sizeof(NativeFontGpuVertex),
 				D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT, &replacement, nullptr);
 			if (FAILED(result) || !replacement)
 			{
@@ -1151,7 +1151,7 @@ namespace fonthook::vectorfont
 			{
 				void* destination = nullptr;
 				const UINT liveBytes = static_cast<UINT>(liveVertexCount)
-					* sizeof(NativeA8GpuVertex);
+					* sizeof(NativeFontGpuVertex);
 				result = replacement->Lock(0, liveBytes, &destination, 0);
 				if (FAILED(result) || !destination)
 				{
@@ -1161,10 +1161,10 @@ namespace fonthook::vectorfont
 				for (const LiveStaticPayload& payload : livePayloads)
 				{
 					std::memcpy(static_cast<UInt8*>(destination)
-						+ payload.baseVertex * sizeof(NativeA8GpuVertex),
+						+ payload.baseVertex * sizeof(NativeFontGpuVertex),
 						payload.owner->gpuVertices.data(),
 						payload.owner->gpuVertices.size()
-							* sizeof(NativeA8GpuVertex));
+							* sizeof(NativeFontGpuVertex));
 				}
 				result = replacement->Unlock();
 				if (FAILED(result))
@@ -1176,12 +1176,12 @@ namespace fonthook::vectorfont
 			if (liveVertexCount)
 				AdvanceDiagnosticSerial(state.staticWriteSerial);
 
-			std::unordered_map<const NativeA8PayloadTemplate*,
-				NativeA8StaticPayload> rebuilt;
+			std::unordered_map<const NativeFontPayloadTemplate*,
+				NativeFontStaticPayload> rebuilt;
 			rebuilt.reserve(livePayloads.size());
 			for (const LiveStaticPayload& payload : livePayloads)
 			{
-				rebuilt.emplace(payload.owner.get(), NativeA8StaticPayload{
+				rebuilt.emplace(payload.owner.get(), NativeFontStaticPayload{
 					payload.owner, payload.baseVertex,
 					static_cast<UInt32>(payload.owner->gpuVertices.size()),
 					state.staticWriteSerial,
@@ -1216,7 +1216,7 @@ namespace fonthook::vectorfont
 			const UInt32 resourceSerial = AdvanceResourceSerialLocked(state);
 			for (const LiveStaticPayload& payload : livePayloads)
 			{
-				NativeA8PayloadResidencyCache& residency =
+				NativeFontPayloadResidencyCache& residency =
 					payload.owner->residency;
 				residency.staticResourceSerial = resourceSerial;
 				residency.staticBaseVertex = payload.baseVertex;
@@ -1233,20 +1233,20 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: static vertex buffer rebuilt capacity=%u bytes=%u liveVertices=%u livePayloads=%u requestedVertices=%u mode=%s reserveVertices=%u copiedBytes=%u",
 					state.staticVertexCapacity,
-					state.staticVertexCapacity * sizeof(NativeA8GpuVertex),
+					state.staticVertexCapacity * sizeof(NativeFontGpuVertex),
 					state.nextStaticVertex,
 					static_cast<UInt32>(state.staticPayloads.size()),
 					requiredVertices,
 					sameSizeCompaction ? "compact" : "grow",
 					retainedHeadroom,
 					state.nextStaticVertex
-						* static_cast<UInt32>(sizeof(NativeA8GpuVertex)));
+						* static_cast<UInt32>(sizeof(NativeFontGpuVertex)));
 			}
 			return true;
 		}
 
-		bool BindPacketAtlasPage(NativeA8Proxy& proxy,
-			const NativeA8PayloadTemplate& artifact, UInt16 page)
+		bool BindPacketAtlasPage(NativeFontProxy& proxy,
+			const NativeFontPayloadTemplate& artifact, UInt16 page)
 		{
 			if (page >= artifact.atlasProperties.size()
 				|| page >= artifact.atlasTextures.size()
@@ -1321,7 +1321,7 @@ namespace fonthook::vectorfont
 				destination.m_Translate = source * origin;
 		}
 
-		bool SyncProxyState(const NiTriShape& facade, NativeA8Proxy& proxyState,
+		bool SyncProxyState(const NiTriShape& facade, NativeFontProxy& proxyState,
 			const NiPoint3& geometryOrigin)
 		{
 			const TileShaderPropertyView* sourceTile = GetTileProperty(&facade);
@@ -1377,8 +1377,8 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		UInt32 AcquireProxyLocked(NativeA8RingState& state,
-			NativeA8RingThreadState& thread)
+		UInt32 AcquireProxyLocked(NativeFontRingState& state,
+			NativeFontRingThreadState& thread)
 		{
 			if (thread.preferredProxy < state.proxyCount
 				&& !state.proxies[thread.preferredProxy].inUse)
@@ -1398,25 +1398,25 @@ namespace fonthook::vectorfont
 			return std::numeric_limits<UInt32>::max();
 		}
 
-		void MarkStaticPayloadUsedLocked(NativeA8RingState& state,
-			const NativeA8PayloadTemplatePtr& payloadTemplate)
+		void MarkStaticPayloadUsedLocked(NativeFontRingState& state,
+			const NativeFontPayloadTemplatePtr& payloadTemplate)
 		{
-			NativeA8PayloadResidencyCache& residency =
+			NativeFontPayloadResidencyCache& residency =
 				payloadTemplate->residency;
 			const UInt32 frame = GetStaticObservationFrame(state);
 			if (residency.staticLastUsedFrame != frame)
 				residency.staticLastUsedFrame = frame;
 		}
 
-		bool ResolveStaticPayloadLocked(NativeA8RingState& state,
-			const NativeA8PayloadTemplatePtr& payloadTemplate,
+		bool ResolveStaticPayloadLocked(NativeFontRingState& state,
+			const NativeFontPayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount, UInt32& baseVertex)
 		{
 			if (!state.staticVertexBuffer)
 				return false;
 			const UInt32 resourceSerial = state.resourceSerial.load(
 				std::memory_order_relaxed);
-			NativeA8PayloadResidencyCache& residency =
+			NativeFontPayloadResidencyCache& residency =
 				payloadTemplate->residency;
 			if (residency.staticResourceSerial == resourceSerial
 				&& residency.staticVertexCount == vertexCount
@@ -1431,11 +1431,11 @@ namespace fonthook::vectorfont
 					FreeTypePerfCounter::DirectStaticResidencyHit);
 				return true;
 			}
-			NativeA8StaticHotEntry& hot = s_ringThread.staticPayload;
+			NativeFontStaticHotEntry& hot = s_ringThread.staticPayload;
 			if (hot.key == payloadTemplate.get()
 				&& hot.resourceSerial == resourceSerial)
 			{
-				const NativeA8PayloadTemplatePtr hotOwner = hot.owner.lock();
+				const NativeFontPayloadTemplatePtr hotOwner = hot.owner.lock();
 				if (hotOwner.get() == payloadTemplate.get()
 					&& residency.staticResourceSerial == resourceSerial
 					&& residency.staticBaseVertex == hot.baseVertex
@@ -1454,7 +1454,7 @@ namespace fonthook::vectorfont
 			auto found = state.staticPayloads.find(payloadTemplate.get());
 			if (found == state.staticPayloads.end())
 				return false;
-			const std::shared_ptr<const NativeA8PayloadTemplate> owner =
+			const std::shared_ptr<const NativeFontPayloadTemplate> owner =
 				found->second.owner.lock();
 			if (owner.get() == payloadTemplate.get()
 				&& found->second.vertexCount == vertexCount
@@ -1480,13 +1480,13 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		bool IsStaticPayloadCurrentLocked(const NativeA8RingState& state,
-			const NativeA8PayloadTemplatePtr& payloadTemplate,
+		bool IsStaticPayloadCurrentLocked(const NativeFontRingState& state,
+			const NativeFontPayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount)
 		{
 			if (!state.staticVertexBuffer || !payloadTemplate)
 				return false;
-			const NativeA8PayloadResidencyCache& residency =
+			const NativeFontPayloadResidencyCache& residency =
 				payloadTemplate->residency;
 			return residency.staticResourceSerial
 					== state.resourceSerial.load(std::memory_order_relaxed)
@@ -1496,9 +1496,9 @@ namespace fonthook::vectorfont
 					- residency.staticBaseVertex;
 		}
 
-		NativeA8StaticCandidate* ResolveStaticCandidateLocked(
-			NativeA8RingState& state,
-			const NativeA8PayloadTemplatePtr& payloadTemplate,
+		NativeFontStaticCandidate* ResolveStaticCandidateLocked(
+			NativeFontRingState& state,
+			const NativeFontPayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount, bool allowCreate)
 		{
 			// Candidate observation must use the strategy's growth ceiling rather
@@ -1509,11 +1509,11 @@ namespace fonthook::vectorfont
 				return nullptr;
 			const UInt32 resourceSerial = state.resourceSerial.load(
 				std::memory_order_relaxed);
-			NativeA8CandidateHotEntry& hot = s_ringThread.staticCandidate;
+			NativeFontCandidateHotEntry& hot = s_ringThread.staticCandidate;
 			if (hot.key == payloadTemplate.get()
 				&& hot.resourceSerial == resourceSerial && hot.candidate)
 			{
-				const NativeA8PayloadTemplatePtr hotOwner = hot.owner.lock();
+				const NativeFontPayloadTemplatePtr hotOwner = hot.owner.lock();
 				if (hotOwner.get() == payloadTemplate.get())
 					return hot.candidate.get();
 				hot = {};
@@ -1573,7 +1573,7 @@ namespace fonthook::vectorfont
 			}
 			else
 			{
-				const std::shared_ptr<const NativeA8PayloadTemplate> owner =
+				const std::shared_ptr<const NativeFontPayloadTemplate> owner =
 					found->second->owner.lock();
 				if (owner.get() != payloadTemplate.get())
 				{
@@ -1590,12 +1590,12 @@ namespace fonthook::vectorfont
 			return hot.candidate.get();
 		}
 
-		NativeA8StaticCandidate* ObserveStaticCandidateLocked(
-			NativeA8RingState& state,
-			const NativeA8PayloadTemplatePtr& payloadTemplate,
+		NativeFontStaticCandidate* ObserveStaticCandidateLocked(
+			NativeFontRingState& state,
+			const NativeFontPayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount, bool allowCreate)
 		{
-			NativeA8StaticCandidate* candidate = ResolveStaticCandidateLocked(
+			NativeFontStaticCandidate* candidate = ResolveStaticCandidateLocked(
 				state, payloadTemplate, vertexCount, allowCreate);
 			if (!candidate || candidate->promotionDisabled)
 				return candidate;
@@ -1630,11 +1630,11 @@ namespace fonthook::vectorfont
 			return candidate;
 		}
 
-		void NoteStaticCandidateDynamicUploadLocked(NativeA8RingState& state,
-			const NativeA8PayloadTemplatePtr& payloadTemplate,
+		void NoteStaticCandidateDynamicUploadLocked(NativeFontRingState& state,
+			const NativeFontPayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount)
 		{
-			NativeA8StaticCandidate* candidate = ObserveStaticCandidateLocked(
+			NativeFontStaticCandidate* candidate = ObserveStaticCandidateLocked(
 				state, payloadTemplate, vertexCount, true);
 			const UInt32 resourceSerial = state.resourceSerial.load(
 				std::memory_order_relaxed);
@@ -1680,11 +1680,11 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		bool PromoteStaticPayloadLocked(NativeA8RingState& state,
-			const NativeA8PayloadTemplatePtr& payloadTemplate,
+		bool PromoteStaticPayloadLocked(NativeFontRingState& state,
+			const NativeFontPayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount, UInt32& baseVertex)
 		{
-			NativeA8StaticCandidate* candidate =
+			NativeFontStaticCandidate* candidate =
 				ObserveStaticCandidateLocked(
 					state, payloadTemplate, vertexCount, false);
 			if (!candidate)
@@ -1700,7 +1700,7 @@ namespace fonthook::vectorfont
 				RecordStaticPromotionDeferral(readiness);
 				return false;
 			}
-			const UInt32 byteCount = vertexCount * sizeof(NativeA8GpuVertex);
+			const UInt32 byteCount = vertexCount * sizeof(NativeFontGpuVertex);
 			if (!FitsStaticPromotionBudget(state, *candidate,
 				vertexCount, 0, 0))
 			{
@@ -1731,7 +1731,7 @@ namespace fonthook::vectorfont
 			}
 
 			baseVertex = state.nextStaticVertex;
-			const UINT byteOffset = baseVertex * sizeof(NativeA8GpuVertex);
+			const UINT byteOffset = baseVertex * sizeof(NativeFontGpuVertex);
 			void* destination = nullptr;
 			HRESULT result = state.staticVertexBuffer->Lock(byteOffset, byteCount,
 				&destination, 0);
@@ -1764,7 +1764,7 @@ namespace fonthook::vectorfont
 				payloadTemplate, baseVertex, vertexCount,
 				state.staticWriteSerial,
 				HashDiagnosticPayload(*payloadTemplate) };
-			NativeA8PayloadResidencyCache& residency =
+			NativeFontPayloadResidencyCache& residency =
 				payloadTemplate->residency;
 			residency.staticResourceSerial = state.resourceSerial.load(
 				std::memory_order_relaxed);
@@ -1785,13 +1785,13 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool ResolveUploadedPayloadLocked(NativeA8RingState& state,
-			const NativeA8PayloadTemplatePtr& payloadTemplate,
+		bool ResolveUploadedPayloadLocked(NativeFontRingState& state,
+			const NativeFontPayloadTemplatePtr& payloadTemplate,
 			UInt32 vertexCount, UInt32& baseVertex)
 		{
 			const UInt32 resourceSerial = state.resourceSerial.load(
 				std::memory_order_relaxed);
-			NativeA8PayloadResidencyCache& residency =
+			NativeFontPayloadResidencyCache& residency =
 				payloadTemplate->residency;
 			if (residency.dynamicResourceSerial == resourceSerial
 				&& residency.dynamicUploadEpoch == state.uploadEpoch
@@ -1807,7 +1807,7 @@ namespace fonthook::vectorfont
 				return true;
 			}
 
-			NativeA8UploadHotEntry& hot = s_ringThread.uploadedPayload;
+			NativeFontUploadHotEntry& hot = s_ringThread.uploadedPayload;
 			if (hot.key == payloadTemplate.get()
 				&& hot.resourceSerial == resourceSerial
 				&& hot.epoch == state.uploadEpoch)
@@ -1831,7 +1831,7 @@ namespace fonthook::vectorfont
 			auto uploaded = state.uploadedPayloads.find(payloadTemplate.get());
 			if (uploaded == state.uploadedPayloads.end())
 				return false;
-			const std::shared_ptr<const NativeA8PayloadTemplate> owner =
+			const std::shared_ptr<const NativeFontPayloadTemplate> owner =
 				uploaded->second.owner.lock();
 			if (owner.get() == payloadTemplate.get()
 				&& uploaded->second.epoch == state.uploadEpoch
@@ -1857,11 +1857,11 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		bool HasDirectStaticPayloadLocked(const NativeA8RingState& state,
-			const NativeA8PayloadTemplate& payloadTemplate,
+		bool HasDirectStaticPayloadLocked(const NativeFontRingState& state,
+			const NativeFontPayloadTemplate& payloadTemplate,
 			UInt32 vertexCount)
 		{
-			const NativeA8PayloadResidencyCache& residency =
+			const NativeFontPayloadResidencyCache& residency =
 				payloadTemplate.residency;
 			return residency.staticResourceSerial
 					== state.resourceSerial.load(std::memory_order_relaxed)
@@ -1871,11 +1871,11 @@ namespace fonthook::vectorfont
 					- residency.staticBaseVertex;
 		}
 
-		bool HasDirectUploadedPayloadLocked(const NativeA8RingState& state,
-			const NativeA8PayloadTemplate& payloadTemplate,
+		bool HasDirectUploadedPayloadLocked(const NativeFontRingState& state,
+			const NativeFontPayloadTemplate& payloadTemplate,
 			UInt32 vertexCount)
 		{
-			const NativeA8PayloadResidencyCache& residency =
+			const NativeFontPayloadResidencyCache& residency =
 				payloadTemplate.residency;
 			return residency.dynamicResourceSerial
 					== state.resourceSerial.load(std::memory_order_relaxed)
@@ -1886,8 +1886,8 @@ namespace fonthook::vectorfont
 					- residency.dynamicBaseVertex;
 		}
 
-		void PublishUploadedPayloadLocked(NativeA8RingState& state,
-			const NativeA8PayloadTemplatePtr& payloadTemplate,
+		void PublishUploadedPayloadLocked(NativeFontRingState& state,
+			const NativeFontPayloadTemplatePtr& payloadTemplate,
 			UInt32 baseVertex, UInt32 vertexCount)
 		{
 			const UInt32 resourceSerial = state.resourceSerial.load(
@@ -1896,7 +1896,7 @@ namespace fonthook::vectorfont
 				payloadTemplate, baseVertex, vertexCount, state.uploadEpoch,
 				state.dynamicWriteSerial, state.dynamicDiscardSerial,
 				HashDiagnosticPayload(*payloadTemplate) };
-			NativeA8PayloadResidencyCache& residency =
+			NativeFontPayloadResidencyCache& residency =
 				payloadTemplate->residency;
 			residency.dynamicResourceSerial = resourceSerial;
 			residency.dynamicUploadEpoch = state.uploadEpoch;
@@ -1910,12 +1910,12 @@ namespace fonthook::vectorfont
 		}
 
 		bool ResolveSortedLeaseResidency(
-			const NativeA8RingState& state,
-			const NativeA8PayloadTemplate& artifact, UInt32 vertexCount,
+			const NativeFontRingState& state,
+			const NativeFontPayloadTemplate& artifact, UInt32 vertexCount,
 			UInt32 resourceSerial, UInt32 uploadEpoch,
 			UInt32& baseVertex, bool& staticResident)
 		{
-			NativeA8PayloadResidencyCache& residency =
+			NativeFontPayloadResidencyCache& residency =
 				artifact.residency;
 			if (state.staticVertexBuffer
 				&& residency.staticResourceSerial == resourceSerial
@@ -1943,8 +1943,8 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		bool PublishSortedRingLeaseLocked(NativeA8RingState& state,
-			const std::vector<NativeA8PayloadTemplatePtr>& payloadTemplates,
+		bool PublishSortedRingLeaseLocked(NativeFontRingState& state,
+			const std::vector<NativeFontPayloadTemplatePtr>& payloadTemplates,
 			UInt32 generation, bool residencyAlreadyValidated = false)
 		{
 			if (s_sortedRingLease.active || !generation
@@ -1961,7 +1961,7 @@ namespace fonthook::vectorfont
 			const UInt32 uploadEpoch = state.uploadEpoch;
 			if (!residencyAlreadyValidated)
 			{
-				for (const NativeA8PayloadTemplatePtr& payloadTemplate
+				for (const NativeFontPayloadTemplatePtr& payloadTemplate
 					: payloadTemplates)
 				{
 					if (!payloadTemplate || payloadTemplate->gpuVertices.empty()
@@ -1998,18 +1998,18 @@ namespace fonthook::vectorfont
 		}
 
 		bool TryBeginSortedRingSubmission(NiTriShape* facade,
-			NativeA8ShapePayload& payload,
-			NativeA8RingSubmission& submission,
-			NativeA8FallbackReason& result)
+			NativeFontShapePayload& payload,
+			NativeFontRingSubmission& submission,
+			NativeFontFallbackReason& result)
 		{
 			if (!s_sortedRingLease.active)
 				return false;
-			result = NativeA8FallbackReason::RuntimeFault;
-			NativeA8SortedRingLease& lease = s_sortedRingLease;
-			NativeA8RingState* state = lease.state;
+			result = NativeFontFallbackReason::RuntimeFault;
+			NativeFontSortedRingLease& lease = s_sortedRingLease;
+			NativeFontRingState* state = lease.state;
 			if (!state || !facade || !payload.payloadTemplate
 				|| payload.preparedGeneration != lease.generation
-				|| !IsNativeA8ShaderGenerationCurrent(lease.generation)
+				|| !IsNativeFontShaderGenerationCurrent(lease.generation)
 				|| state->generation != lease.generation
 				|| state->resourceSerial.load(std::memory_order_acquire)
 					!= lease.resourceSerial
@@ -2026,7 +2026,7 @@ namespace fonthook::vectorfont
 			if (!vertexCount64
 				|| vertexCount64 > std::numeric_limits<UInt32>::max())
 			{
-				result = NativeA8FallbackReason::PacketBuild;
+				result = NativeFontFallbackReason::PacketBuild;
 				return true;
 			}
 			const UInt32 vertexCount = static_cast<UInt32>(vertexCount64);
@@ -2037,7 +2037,7 @@ namespace fonthook::vectorfont
 				lease.resourceSerial, lease.uploadEpoch,
 				baseVertex, staticResident))
 			{
-				result = NativeA8FallbackReason::PacketPrepare;
+				result = NativeFontFallbackReason::PacketPrepare;
 				return true;
 			}
 
@@ -2046,21 +2046,21 @@ namespace fonthook::vectorfont
 			if (proxyIndex == std::numeric_limits<UInt32>::max())
 			{
 				payload.packetPrepareFailure.store(
-					NativeA8PacketPrepareFailure::ProxyUnavailable,
+					NativeFontPacketPrepareFailure::ProxyUnavailable,
 					std::memory_order_relaxed);
-				result = NativeA8FallbackReason::PacketPrepare;
+				result = NativeFontFallbackReason::PacketPrepare;
 				return true;
 			}
-			NativeA8Proxy& proxy = state->proxies[proxyIndex];
+			NativeFontProxy& proxy = state->proxies[proxyIndex];
 			if (!proxy.shape || !proxy.buffer || !proxy.chip
 				|| !SyncProxyState(*facade, proxy,
 					payload.geometryOrigin))
 			{
 				proxy.inUse = false;
 				payload.packetPrepareFailure.store(
-					NativeA8PacketPrepareFailure::Geometry,
+					NativeFontPacketPrepareFailure::Geometry,
 					std::memory_order_relaxed);
-				result = NativeA8FallbackReason::PropertySync;
+				result = NativeFontFallbackReason::PropertySync;
 				return true;
 			}
 
@@ -2079,16 +2079,16 @@ namespace fonthook::vectorfont
 			submission.active = true;
 			state->activeSubmissions.fetch_add(1, std::memory_order_release);
 			payload.packetPrepareFailure.store(
-				NativeA8PacketPrepareFailure::None,
+				NativeFontPacketPrepareFailure::None,
 				std::memory_order_relaxed);
-			result = NativeA8FallbackReason::None;
+			result = NativeFontFallbackReason::None;
 			return true;
 		}
 	}
 
-	bool EnsureNativeA8ProxyPool(Font& font)
+	bool EnsureNativeFontProxyPool(Font& font)
 	{
-		NativeA8RingState& state = RingState();
+		NativeFontRingState& state = RingState();
 		if (state.proxyPoolReady.load(std::memory_order_acquire))
 		{
 			RecordFreeTypePerf(
@@ -2103,7 +2103,7 @@ namespace fonthook::vectorfont
 		const NiColorA white{ 1.0f, 1.0f, 1.0f, 1.0f };
 		while (state.proxyCount < kProxyPoolSize)
 		{
-			NativeA8Proxy proxy;
+			NativeFontProxy proxy;
 			proxy.shape = font.MakeTriShape(1, &white, false);
 			NiTriShapeData* data = proxy.shape
 				? proxy.shape->GetModelData() : nullptr;
@@ -2130,9 +2130,9 @@ namespace fonthook::vectorfont
 		return state.proxyCount != 0;
 	}
 
-	void TrimNativeA8CpuCachesForTotalBudget()
+	void TrimNativeFontCpuCachesForTotalBudget()
 	{
-		NativeA8RingState& state = RingState();
+		NativeFontRingState& state = RingState();
 		std::lock_guard<std::mutex> lock(state.mutex);
 		state.uploadedPayloads.clear();
 		state.staticCandidates.clear();
@@ -2149,20 +2149,20 @@ namespace fonthook::vectorfont
 		RefreshRingCpuMemoryLocked(state);
 	}
 
-	void PrepareSortedNativeA8Payloads(
-		std::vector<NativeA8PayloadTemplatePtr>& payloadTemplates,
+	void PrepareSortedNativeFontPayloads(
+		std::vector<NativeFontPayloadTemplatePtr>& payloadTemplates,
 		UInt32 generation)
 	{
-		EndNativeA8SortedRingFrame();
+		EndNativeFontSortedRingFrame();
 		if (!generation || payloadTemplates.empty()
-			|| !IsNativeA8ShaderGenerationCurrent(generation))
+			|| !IsNativeFontShaderGenerationCurrent(generation))
 		{
 			return;
 		}
 
 		const SInt64 inputScanStart = BeginFreeTypePerfSample();
 		UInt32 maximumVertices = 0;
-		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
+		for (const NativeFontPayloadTemplatePtr& payloadTemplate : payloadTemplates)
 		{
 			if (!payloadTemplate || payloadTemplate->gpuVertices.empty()
 				|| payloadTemplate->gpuVertices.size()
@@ -2172,7 +2172,7 @@ namespace fonthook::vectorfont
 			}
 			const UInt32 vertexCount = static_cast<UInt32>(
 				payloadTemplate->gpuVertices.size());
-			if ((vertexCount & 3u) || vertexCount / 4u > kNativeA8MaximumQuads)
+			if ((vertexCount & 3u) || vertexCount / 4u > kNativeFontMaximumQuads)
 				continue;
 			maximumVertices = std::max(maximumVertices, vertexCount);
 		}
@@ -2182,7 +2182,7 @@ namespace fonthook::vectorfont
 			return;
 
 		const SInt64 resourceStart = BeginFreeTypePerfSample();
-		NativeA8RingState& state = RingState();
+		NativeFontRingState& state = RingState();
 		std::lock_guard<std::mutex> lock(state.mutex);
 		const char* operation = "sorted-frame-resource";
 		HRESULT result = D3DERR_DEVICELOST;
@@ -2202,7 +2202,7 @@ namespace fonthook::vectorfont
 				state, payloadTemplates, generation, allStatic);
 		};
 		auto isValidPayload = [](
-			const NativeA8PayloadTemplatePtr& payloadTemplate)
+			const NativeFontPayloadTemplatePtr& payloadTemplate)
 		{
 			return payloadTemplate
 				&& !payloadTemplate->gpuVertices.empty()
@@ -2210,7 +2210,7 @@ namespace fonthook::vectorfont
 					<= std::numeric_limits<UInt32>::max()
 				&& !(payloadTemplate->gpuVertices.size() & 3u)
 				&& payloadTemplate->gpuVertices.size() / 4u
-					<= kNativeA8MaximumQuads;
+					<= kNativeFontMaximumQuads;
 		};
 		size_t validatedStaticPayloads = 0;
 		size_t residentStaticPayloads = 0;
@@ -2219,12 +2219,12 @@ namespace fonthook::vectorfont
 		if (state.staticVertexBuffer)
 		{
 			const SInt64 staticScanStart = BeginFreeTypePerfSample();
-			std::vector<NativeA8PayloadTemplatePtr> selected;
+			std::vector<NativeFontPayloadTemplatePtr> selected;
 			selected.reserve(std::min<size_t>(payloadTemplates.size(),
 				kStaticPromotionPayloadLimit));
 			CpuMemoryLease selectedCpuMemory;
 			selectedCpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
-				selected.capacity() * sizeof(NativeA8PayloadTemplatePtr));
+				selected.capacity() * sizeof(NativeFontPayloadTemplatePtr));
 			UInt32 requestedVertices = 0;
 			UInt32 requestedBytes = 0;
 			UInt32 requestedPayloads = 0;
@@ -2233,7 +2233,7 @@ namespace fonthook::vectorfont
 			UInt64 retryDeferred = 0;
 			UInt64 budgetDeferred = 0;
 			const UInt32 frame = GetStaticObservationFrame(state);
-			for (const NativeA8PayloadTemplatePtr& payloadTemplate
+			for (const NativeFontPayloadTemplatePtr& payloadTemplate
 				: payloadTemplates)
 			{
 				if (!isValidPayload(payloadTemplate))
@@ -2248,7 +2248,7 @@ namespace fonthook::vectorfont
 					++residentStaticPayloads;
 					continue;
 				}
-				NativeA8StaticCandidate* candidate =
+				NativeFontStaticCandidate* candidate =
 					ObserveStaticCandidateLocked(state, payloadTemplate,
 						vertexCount, false);
 				if (!candidate)
@@ -2281,7 +2281,7 @@ namespace fonthook::vectorfont
 					continue;
 				}
 				requestedVertices += vertexCount;
-				requestedBytes += vertexCount * sizeof(NativeA8GpuVertex);
+				requestedBytes += vertexCount * sizeof(NativeFontGpuVertex);
 				++requestedPayloads;
 				selected.push_back(payloadTemplate);
 			}
@@ -2317,7 +2317,7 @@ namespace fonthook::vectorfont
 				<= state.staticVertexCapacity
 				? state.staticVertexCapacity - state.nextStaticVertex : 0;
 			auto deferSelectedCandidate = [&](
-				const NativeA8PayloadTemplatePtr& payloadTemplate)
+				const NativeFontPayloadTemplatePtr& payloadTemplate)
 			{
 				auto found = state.staticCandidates.find(payloadTemplate.get());
 				if (found != state.staticCandidates.end() && found->second)
@@ -2330,7 +2330,7 @@ namespace fonthook::vectorfont
 			size_t selectedPayloads = 0;
 			for (size_t index = 0; index < selected.size(); ++index)
 			{
-				const NativeA8PayloadTemplatePtr& payloadTemplate = selected[index];
+				const NativeFontPayloadTemplatePtr& payloadTemplate = selected[index];
 				const UInt32 vertexCount = static_cast<UInt32>(
 					payloadTemplate->gpuVertices.size());
 				if (vertexCount > staticAvailable - selectedVertices)
@@ -2352,9 +2352,9 @@ namespace fonthook::vectorfont
 				state.staticPayloads.reserve(
 					state.staticPayloads.size() + selectedPayloads);
 				const UINT byteOffset = state.nextStaticVertex
-					* sizeof(NativeA8GpuVertex);
+					* sizeof(NativeFontGpuVertex);
 				const UINT byteCount =
-					selectedVertices * sizeof(NativeA8GpuVertex);
+					selectedVertices * sizeof(NativeFontGpuVertex);
 				void* destination = nullptr;
 				{
 					FreeTypePerfScope staticLockPerf(
@@ -2368,16 +2368,16 @@ namespace fonthook::vectorfont
 					{
 						FreeTypePerfScope staticCopyPerf(
 							FreeTypePerfPhase::FramePrepRingStaticCopy);
-						for (const NativeA8PayloadTemplatePtr& payloadTemplate
+						for (const NativeFontPayloadTemplatePtr& payloadTemplate
 							: selected)
 						{
 							const UInt32 vertexCount = static_cast<UInt32>(
 								payloadTemplate->gpuVertices.size());
 							std::memcpy(static_cast<UInt8*>(destination)
 									+ copiedVertices
-										* sizeof(NativeA8GpuVertex),
+										* sizeof(NativeFontGpuVertex),
 								payloadTemplate->gpuVertices.data(),
-								vertexCount * sizeof(NativeA8GpuVertex));
+								vertexCount * sizeof(NativeFontGpuVertex));
 							copiedVertices += vertexCount;
 						}
 					}
@@ -2397,7 +2397,7 @@ namespace fonthook::vectorfont
 								state.resourceSerial.load(
 									std::memory_order_relaxed);
 							UInt32 mappedVertices = 0;
-							for (const NativeA8PayloadTemplatePtr& payloadTemplate
+							for (const NativeFontPayloadTemplatePtr& payloadTemplate
 								: selected)
 							{
 								const UInt32 vertexCount = static_cast<UInt32>(
@@ -2408,7 +2408,7 @@ namespace fonthook::vectorfont
 									payloadTemplate, baseVertex, vertexCount,
 									state.staticWriteSerial,
 									HashDiagnosticPayload(*payloadTemplate) };
-								NativeA8PayloadResidencyCache& residency =
+								NativeFontPayloadResidencyCache& residency =
 									payloadTemplate->residency;
 								residency.staticResourceSerial = resourceSerial;
 								residency.staticBaseVertex = baseVertex;
@@ -2458,7 +2458,7 @@ namespace fonthook::vectorfont
 							state.nextStaticVertex += selectedVertices;
 							CommitStaticPromotionBudget(state, byteCount,
 								static_cast<UInt32>(selectedPayloads));
-							for (const NativeA8PayloadTemplatePtr& payloadTemplate
+							for (const NativeFontPayloadTemplatePtr& payloadTemplate
 								: selected)
 							{
 								deferSelectedCandidate(payloadTemplate);
@@ -2473,7 +2473,7 @@ namespace fonthook::vectorfont
 				{
 					FreeTypePerfScope staticCommitPerf(
 						FreeTypePerfPhase::FramePrepRingStaticCommit);
-					for (const NativeA8PayloadTemplatePtr& payloadTemplate
+					for (const NativeFontPayloadTemplatePtr& payloadTemplate
 						: selected)
 					{
 						deferSelectedCandidate(payloadTemplate);
@@ -2508,7 +2508,7 @@ namespace fonthook::vectorfont
 		UInt64 missingDynamicVertices = 0;
 		size_t allDynamicPayloads = 0;
 		size_t missingDynamicPayloads = 0;
-		for (const NativeA8PayloadTemplatePtr& payloadTemplate : payloadTemplates)
+		for (const NativeFontPayloadTemplatePtr& payloadTemplate : payloadTemplates)
 		{
 			if (!isValidPayload(payloadTemplate))
 				continue;
@@ -2582,9 +2582,9 @@ namespace fonthook::vectorfont
 		state.uploadedPayloads.reserve(
 			state.uploadedPayloads.size() + uploadPayloads);
 		const UINT byteOffset =
-			startVertex * sizeof(NativeA8GpuVertex);
+			startVertex * sizeof(NativeFontGpuVertex);
 		const UINT byteCount =
-			uploadVertices * sizeof(NativeA8GpuVertex);
+			uploadVertices * sizeof(NativeFontGpuVertex);
 		EndFreeTypePerfSample(
 			FreeTypePerfPhase::FramePrepRingDynamicResolve,
 			dynamicResolveStart);
@@ -2602,7 +2602,7 @@ namespace fonthook::vectorfont
 		{
 			FreeTypePerfScope dynamicCopyPerf(
 				FreeTypePerfPhase::FramePrepRingDynamicCopy);
-			for (const NativeA8PayloadTemplatePtr& payloadTemplate
+			for (const NativeFontPayloadTemplatePtr& payloadTemplate
 				: payloadTemplates)
 			{
 				if (!isValidPayload(payloadTemplate))
@@ -2617,9 +2617,9 @@ namespace fonthook::vectorfont
 					continue;
 				}
 				std::memcpy(static_cast<UInt8*>(destination)
-						+ copiedVertices * sizeof(NativeA8GpuVertex),
+						+ copiedVertices * sizeof(NativeFontGpuVertex),
 					payloadTemplate->gpuVertices.data(),
-					vertexCount * sizeof(NativeA8GpuVertex));
+					vertexCount * sizeof(NativeFontGpuVertex));
 				copiedVertices += vertexCount;
 			}
 		}
@@ -2636,7 +2636,7 @@ namespace fonthook::vectorfont
 		{
 			FreeTypePerfScope dynamicCommitPerf(
 				FreeTypePerfPhase::FramePrepRingDynamicCommit);
-			for (const NativeA8PayloadTemplatePtr& payloadTemplate
+			for (const NativeFontPayloadTemplatePtr& payloadTemplate
 				: payloadTemplates)
 			{
 				if (!isValidPayload(payloadTemplate))
@@ -2674,12 +2674,12 @@ namespace fonthook::vectorfont
 		publishLease();
 	}
 
-	void EndNativeA8DirectShapeSubmission(
-		NativeA8DirectShapeSubmission& submission)
+	void EndNativeFontDirectShapeSubmission(
+		NativeFontDirectShapeSubmission& submission)
 	{
 		if (submission.active)
 		{
-			NativeA8RingState& state = RingState();
+			NativeFontRingState& state = RingState();
 			if (s_sortedRingLease.active
 				&& s_sortedRingLease.state == &state)
 			{
@@ -2699,37 +2699,37 @@ namespace fonthook::vectorfont
 				}
 			}
 		}
-		submission = NativeA8DirectShapeSubmission{};
+		submission = NativeFontDirectShapeSubmission{};
 	}
 
-	NativeA8FallbackReason BeginNativeA8DirectShapeSubmission(
-		NiTriShape* facade, NativeA8ShapePayload& payload,
-		NativeA8DirectShapeSubmission& submission)
+	NativeFontFallbackReason BeginNativeFontDirectShapeSubmission(
+		NiTriShape* facade, NativeFontShapePayload& payload,
+		NativeFontDirectShapeSubmission& submission)
 	{
-		EndNativeA8DirectShapeSubmission(submission);
+		EndNativeFontDirectShapeSubmission(submission);
 		if (!facade || !payload.buildComplete || !payload.payloadTemplate
 			|| payload.packetShaders.size() != 1)
 		{
-			return NativeA8FallbackReason::PacketBuild;
+			return NativeFontFallbackReason::PacketBuild;
 		}
 
-		const NativeA8PayloadTemplate& artifact =
+		const NativeFontPayloadTemplate& artifact =
 			*payload.payloadTemplate;
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		const std::vector<NativeFontPacketTemplate>& packets =
+			GetNativeFontPackets(artifact, payload.useCompositePackets);
 		if (artifact.pageCount != 1 || artifact.atlasProperties.size() != 1
 			|| artifact.atlasTextures.size() != 1 || packets.size() != 1
 			|| !payload.packetShaders[0])
 		{
-			return NativeA8FallbackReason::PacketBuild;
+			return NativeFontFallbackReason::PacketBuild;
 		}
-		const NativeA8PacketTemplate& packet = packets[0];
+		const NativeFontPacketTemplate& packet = packets[0];
 		if (packet.atlasPage != 0 || packet.firstVertex != 0
 			|| !packet.vertexCount
 			|| packet.vertexCount != artifact.gpuVertices.size()
 			|| (packet.vertexCount & 3u))
 		{
-			return NativeA8FallbackReason::PacketBuild;
+			return NativeFontFallbackReason::PacketBuild;
 		}
 
 		// The direct shape already owns the first physical atlas property from
@@ -2742,15 +2742,15 @@ namespace fonthook::vectorfont
 			|| tile->sourceTexture.m_pObject
 				!= artifact.atlasTextures[0].m_pObject)
 		{
-			return NativeA8FallbackReason::PropertySync;
+			return NativeFontFallbackReason::PropertySync;
 		}
 
 		if (!s_sortedRingLease.active)
-			return NativeA8FallbackReason::PacketPrepare;
-		NativeA8SortedRingLease& lease = s_sortedRingLease;
-		NativeA8RingState* state = lease.state;
+			return NativeFontFallbackReason::PacketPrepare;
+		NativeFontSortedRingLease& lease = s_sortedRingLease;
+		NativeFontRingState* state = lease.state;
 		if (!state || payload.preparedGeneration != lease.generation
-			|| !IsNativeA8ShaderGenerationCurrent(lease.generation)
+			|| !IsNativeFontShaderGenerationCurrent(lease.generation)
 			|| state->generation != lease.generation
 			|| state->resourceSerial.load(std::memory_order_acquire)
 				!= lease.resourceSerial
@@ -2761,7 +2761,7 @@ namespace fonthook::vectorfont
 			|| state->declaration != lease.declaration
 			|| !lease.indexBuffer || !lease.declaration)
 		{
-			return NativeA8FallbackReason::PacketPrepare;
+			return NativeFontFallbackReason::PacketPrepare;
 		}
 
 		UInt32 baseVertex = 0;
@@ -2770,12 +2770,12 @@ namespace fonthook::vectorfont
 			packet.vertexCount, lease.resourceSerial, lease.uploadEpoch,
 			baseVertex, staticResident))
 		{
-			return NativeA8FallbackReason::PacketPrepare;
+			return NativeFontFallbackReason::PacketPrepare;
 		}
 		IDirect3DVertexBuffer9* vertexBuffer = staticResident
 			? lease.staticVertexBuffer : lease.dynamicVertexBuffer;
 		if (!vertexBuffer)
-			return NativeA8FallbackReason::PacketPrepare;
+			return NativeFontFallbackReason::PacketPrepare;
 
 		submission.vertexBuffer = vertexBuffer;
 		submission.indexBuffer = lease.indexBuffer;
@@ -2789,24 +2789,24 @@ namespace fonthook::vectorfont
 		submission.active = true;
 		state->activeSubmissions.fetch_add(1, std::memory_order_release);
 		payload.packetPrepareFailure.store(
-			NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
-		return NativeA8FallbackReason::None;
+			NativeFontPacketPrepareFailure::None, std::memory_order_relaxed);
+		return NativeFontFallbackReason::None;
 	}
 
-	NativeA8FallbackReason ResolveNativeA8DirectFacadePacketBinding(
-		NativeA8ShapePayload& payload, UInt32 packetIndex,
-		NativeA8DirectFacadePacketBinding& binding)
+	NativeFontFallbackReason ResolveNativeFontDirectFacadePacketBinding(
+		NativeFontShapePayload& payload, UInt32 packetIndex,
+		NativeFontDirectFacadePacketBinding& binding)
 	{
 		binding = {};
 		if (!payload.buildComplete || !payload.payloadTemplate
 			|| payload.preparedGeneration == 0)
 		{
-			return NativeA8FallbackReason::PacketBuild;
+			return NativeFontFallbackReason::PacketBuild;
 		}
-		const NativeA8PayloadTemplate& artifact =
+		const NativeFontPayloadTemplate& artifact =
 			*payload.payloadTemplate;
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		const std::vector<NativeFontPacketTemplate>& packets =
+			GetNativeFontPackets(artifact, payload.useCompositePackets);
 		if (packetIndex >= packets.size()
 			|| packetIndex >= payload.packetShaders.size()
 			|| !payload.packetShaders[packetIndex]
@@ -2814,9 +2814,9 @@ namespace fonthook::vectorfont
 			|| artifact.gpuVertices.size()
 				> std::numeric_limits<UInt32>::max())
 		{
-			return NativeA8FallbackReason::PacketBuild;
+			return NativeFontFallbackReason::PacketBuild;
 		}
-		const NativeA8PacketTemplate& packet = packets[packetIndex];
+		const NativeFontPacketTemplate& packet = packets[packetIndex];
 		const UInt32 artifactVertexCount = static_cast<UInt32>(
 			artifact.gpuVertices.size());
 		const UInt64 vertexEnd = static_cast<UInt64>(packet.firstVertex)
@@ -2825,19 +2825,19 @@ namespace fonthook::vectorfont
 			|| (packet.vertexCount & 3u)
 			|| vertexEnd > artifactVertexCount)
 		{
-			return NativeA8FallbackReason::PacketBuild;
+			return NativeFontFallbackReason::PacketBuild;
 		}
 
-		if (!IsNativeA8ShaderGenerationCurrent(
+		if (!IsNativeFontShaderGenerationCurrent(
 				payload.preparedGeneration))
 		{
-			return NativeA8FallbackReason::PacketPrepare;
+			return NativeFontFallbackReason::PacketPrepare;
 		}
-		NativeA8FramePacketBinding frameBinding;
-		if (!ResolveNativeA8FramePacketBinding(
+		NativeFontFramePacketBinding frameBinding;
+		if (!ResolveNativeFontFramePacketBinding(
 				payload, packetIndex, frameBinding))
 		{
-			return NativeA8FallbackReason::PacketPrepare;
+			return NativeFontFallbackReason::PacketPrepare;
 		}
 
 		binding.vertexBuffer = frameBinding.vertexBuffer;
@@ -2852,15 +2852,15 @@ namespace fonthook::vectorfont
 		binding.atlasTextureEpoch = payload.preflightAtlasTextureEpoch;
 		binding.staticResident = frameBinding.staticResident;
 		binding.active = true;
-		return NativeA8FallbackReason::None;
+		return NativeFontFallbackReason::None;
 	}
 
-	bool IsNativeA8DirectFacadePacketBindingCurrent(
-		const NativeA8DirectFacadePacketBinding& binding)
+	bool IsNativeFontDirectFacadePacketBindingCurrent(
+		const NativeFontDirectFacadePacketBinding& binding)
 	{
 		if (!binding.active || !s_sortedRingLease.active)
 			return false;
-		NativeA8FramePacketBinding frameBinding;
+		NativeFontFramePacketBinding frameBinding;
 		frameBinding.vertexBuffer = binding.vertexBuffer;
 		frameBinding.indexBuffer = binding.indexBuffer;
 		frameBinding.declaration = binding.declaration;
@@ -2873,12 +2873,12 @@ namespace fonthook::vectorfont
 		frameBinding.staticResident = binding.staticResident;
 		frameBinding.active = binding.active;
 		return binding.atlasTextureEpoch
-				== GetNativeA8AtlasTextureEpoch()
-			&& IsNativeA8FramePacketBindingCurrent(frameBinding);
+				== GetNativeFontAtlasTextureEpoch()
+			&& IsNativeFontFramePacketBindingCurrent(frameBinding);
 	}
 
-	bool IsNativeA8DirectFacadePacketAtlasCurrent(
-		const NiTriShape* shape, const NativeA8ShapePayload& payload,
+	bool IsNativeFontDirectFacadePacketAtlasCurrent(
+		const NiTriShape* shape, const NativeFontShapePayload& payload,
 		UInt32 packetIndex)
 	{
 		if (!shape || !payload.buildComplete
@@ -2886,10 +2886,10 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
-		const NativeA8PayloadTemplate& artifact =
+		const NativeFontPayloadTemplate& artifact =
 			*payload.payloadTemplate;
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		const std::vector<NativeFontPacketTemplate>& packets =
+			GetNativeFontPackets(artifact, payload.useCompositePackets);
 		if (packetIndex >= packets.size())
 			return false;
 		const UInt16 page = packets[packetIndex].atlasPage;
@@ -2908,27 +2908,27 @@ namespace fonthook::vectorfont
 				== artifact.atlasTextures[page].m_pObject;
 	}
 
-	NativeA8FallbackReason BeginNativeA8RingSubmission(
-		NiTriShape* facade, NativeA8ShapePayload& payload,
-		NativeA8RingSubmission& submission)
+	NativeFontFallbackReason BeginNativeFontRingSubmission(
+		NiTriShape* facade, NativeFontShapePayload& payload,
+		NativeFontRingSubmission& submission)
 	{
-		EndNativeA8RingSubmission(submission);
+		EndNativeFontRingSubmission(submission);
 		if (!facade || !payload.buildComplete || !payload.payloadTemplate
 			|| payload.packetShaders.empty())
 		{
-			return NativeA8FallbackReason::PacketBuild;
+			return NativeFontFallbackReason::PacketBuild;
 		}
-		const std::vector<NativeA8PacketTemplate>& activePackets =
-			GetNativeA8Packets(*payload.payloadTemplate,
+		const std::vector<NativeFontPacketTemplate>& activePackets =
+			GetNativeFontPackets(*payload.payloadTemplate,
 				payload.useCompositePackets);
 		if (payload.packetShaders.size() != activePackets.size())
-			return NativeA8FallbackReason::PacketBuild;
-		NativeA8FallbackReason leaseResult =
-			NativeA8FallbackReason::RuntimeFault;
+			return NativeFontFallbackReason::PacketBuild;
+		NativeFontFallbackReason leaseResult =
+			NativeFontFallbackReason::RuntimeFault;
 		if (TryBeginSortedRingSubmission(facade, payload, submission,
 			leaseResult))
 		{
-			if (leaseResult == NativeA8FallbackReason::None)
+			if (leaseResult == NativeFontFallbackReason::None)
 				return leaseResult;
 			// A generation/resource/range mismatch invalidates the complete frame
 			// snapshot. Drop its lease, then run the existing locked per-facade
@@ -2942,33 +2942,33 @@ namespace fonthook::vectorfont
 			{
 				return leaseResult;
 			}
-			EndNativeA8SortedRingFrame();
+			EndNativeFontSortedRingFrame();
 		}
 
 		const UInt64 totalVertexCount = payload.payloadTemplate->gpuVertices.size();
 		if (!totalVertexCount || totalVertexCount > std::numeric_limits<UInt32>::max())
-			return NativeA8FallbackReason::PacketBuild;
-		// InitializeNativeA8ShapePayload and the generation preflight validate every
+			return NativeFontFallbackReason::PacketBuild;
+		// InitializeNativeFontShapePayload and the generation preflight validate every
 		// immutable packet span. Rewalking all spans here made the steady sorted path
 		// pay the same O(packet count) validation twice for every facade.
 		const UInt32 totalVertices = static_cast<UInt32>(totalVertexCount);
 
-		NativeA8RingState& state = RingState();
+		NativeFontRingState& state = RingState();
 		std::lock_guard<std::mutex> lock(state.mutex);
 		if (state.sortedFrameLeases.load(std::memory_order_acquire))
 		{
 			payload.packetPrepareFailure.store(
-				NativeA8PacketPrepareFailure::ProxyUnavailable,
+				NativeFontPacketPrepareFailure::ProxyUnavailable,
 				std::memory_order_relaxed);
-			return NativeA8FallbackReason::PacketPrepare;
+			return NativeFontFallbackReason::PacketPrepare;
 		}
 		const UInt32 proxyIndex = AcquireProxyLocked(state, s_ringThread);
 		if (proxyIndex == std::numeric_limits<UInt32>::max())
 		{
 			payload.packetPrepareFailure.store(
-				NativeA8PacketPrepareFailure::ProxyUnavailable,
+				NativeFontPacketPrepareFailure::ProxyUnavailable,
 				std::memory_order_relaxed);
-			return NativeA8FallbackReason::PacketPrepare;
+			return NativeFontFallbackReason::PacketPrepare;
 		}
 
 		const char* operation = "ring-resource";
@@ -2978,31 +2978,31 @@ namespace fonthook::vectorfont
 			operation, result))
 		{
 			state.proxies[proxyIndex].inUse = false;
-			NativeA8PacketPrepareFailure prepareFailure =
-				NativeA8PacketPrepareFailure::VertexBuffer;
+			NativeFontPacketPrepareFailure prepareFailure =
+				NativeFontPacketPrepareFailure::VertexBuffer;
 			if (operation && std::strcmp(operation, "ring-context") == 0)
-				prepareFailure = NativeA8PacketPrepareFailure::Generation;
+				prepareFailure = NativeFontPacketPrepareFailure::Generation;
 			else if (operation && std::strcmp(operation, "ring-declaration") == 0)
-				prepareFailure = NativeA8PacketPrepareFailure::Declaration;
+				prepareFailure = NativeFontPacketPrepareFailure::Declaration;
 			else if (operation && std::strcmp(operation, "ring-capacity") == 0)
-				prepareFailure = NativeA8PacketPrepareFailure::RingCapacity;
+				prepareFailure = NativeFontPacketPrepareFailure::RingCapacity;
 			else if (operation && std::strcmp(operation, "ring-busy") == 0)
-				prepareFailure = NativeA8PacketPrepareFailure::ProxyUnavailable;
+				prepareFailure = NativeFontPacketPrepareFailure::ProxyUnavailable;
 			else if (operation && (std::strcmp(operation, "CreateIndexBuffer") == 0
 				|| std::strcmp(operation, "canonical-index-upload") == 0))
 			{
-				prepareFailure = NativeA8PacketPrepareFailure::IndexBuffer;
+				prepareFailure = NativeFontPacketPrepareFailure::IndexBuffer;
 			}
 			payload.packetPrepareFailure.store(prepareFailure,
 				std::memory_order_relaxed);
-			if (prepareFailure != NativeA8PacketPrepareFailure::RingCapacity
+			if (prepareFailure != NativeFontPacketPrepareFailure::RingCapacity
 				&& prepareFailure
-					!= NativeA8PacketPrepareFailure::ProxyUnavailable)
+					!= NativeFontPacketPrepareFailure::ProxyUnavailable)
 			{
-				MarkNativeA8GenerationFault(payload.preparedGeneration,
+				MarkNativeFontGenerationFault(payload.preparedGeneration,
 					operation, result);
 			}
-			return NativeA8FallbackReason::PacketPrepare;
+			return NativeFontFallbackReason::PacketPrepare;
 		}
 
 		UInt32 startVertex = 0;
@@ -3030,9 +3030,9 @@ namespace fonthook::vectorfont
 					{
 						state.proxies[proxyIndex].inUse = false;
 						payload.packetPrepareFailure.store(
-							NativeA8PacketPrepareFailure::ProxyUnavailable,
+							NativeFontPacketPrepareFailure::ProxyUnavailable,
 							std::memory_order_relaxed);
-						return NativeA8FallbackReason::PacketPrepare;
+						return NativeFontFallbackReason::PacketPrepare;
 					}
 					startVertex = 0;
 					lockFlags = D3DLOCK_DISCARD;
@@ -3046,9 +3046,9 @@ namespace fonthook::vectorfont
 				}
 				void* destination = nullptr;
 				const UINT byteOffset = startVertex
-					* sizeof(NativeA8GpuVertex);
+					* sizeof(NativeFontGpuVertex);
 				const UINT byteCount = totalVertices
-					* sizeof(NativeA8GpuVertex);
+					* sizeof(NativeFontGpuVertex);
 				result = state.vertexBuffer->Lock(byteOffset, byteCount,
 					&destination, lockFlags);
 				if (FAILED(result) || !destination)
@@ -3057,11 +3057,11 @@ namespace fonthook::vectorfont
 						result = E_FAIL;
 					state.proxies[proxyIndex].inUse = false;
 					payload.packetPrepareFailure.store(
-						NativeA8PacketPrepareFailure::VertexBuffer,
+						NativeFontPacketPrepareFailure::VertexBuffer,
 						std::memory_order_relaxed);
-					MarkNativeA8GenerationFault(payload.preparedGeneration,
+					MarkNativeFontGenerationFault(payload.preparedGeneration,
 						"dynamic-vb-lock", result);
-					return NativeA8FallbackReason::PacketPrepare;
+					return NativeFontFallbackReason::PacketPrepare;
 				}
 
 				std::memcpy(destination,
@@ -3071,11 +3071,11 @@ namespace fonthook::vectorfont
 				{
 					state.proxies[proxyIndex].inUse = false;
 					payload.packetPrepareFailure.store(
-						NativeA8PacketPrepareFailure::VertexBuffer,
+						NativeFontPacketPrepareFailure::VertexBuffer,
 						std::memory_order_relaxed);
-					MarkNativeA8GenerationFault(payload.preparedGeneration,
+					MarkNativeFontGenerationFault(payload.preparedGeneration,
 						"dynamic-vb-unlock", result);
-					return NativeA8FallbackReason::PacketPrepare;
+					return NativeFontFallbackReason::PacketPrepare;
 				}
 				AdvanceDiagnosticSerial(state.dynamicWriteSerial);
 
@@ -3092,15 +3092,15 @@ namespace fonthook::vectorfont
 				totalVertices, false);
 		}
 
-		NativeA8Proxy& proxy = state.proxies[proxyIndex];
+		NativeFontProxy& proxy = state.proxies[proxyIndex];
 		if (!proxy.shape || !proxy.buffer || !proxy.chip
 			|| !SyncProxyState(*facade, proxy, payload.geometryOrigin))
 		{
 			proxy.inUse = false;
 			payload.packetPrepareFailure.store(
-				NativeA8PacketPrepareFailure::Geometry,
+				NativeFontPacketPrepareFailure::Geometry,
 				std::memory_order_relaxed);
-			return NativeA8FallbackReason::PropertySync;
+			return NativeFontFallbackReason::PropertySync;
 		}
 
 		submission.proxyShape = proxy.shape.m_pObject;
@@ -3119,13 +3119,13 @@ namespace fonthook::vectorfont
 		submission.active = true;
 		state.activeSubmissions.fetch_add(1, std::memory_order_release);
 		payload.packetPrepareFailure.store(
-			NativeA8PacketPrepareFailure::None, std::memory_order_relaxed);
-		return NativeA8FallbackReason::None;
+			NativeFontPacketPrepareFailure::None, std::memory_order_relaxed);
+		return NativeFontFallbackReason::None;
 	}
 
-	NativeA8FallbackReason PrepareNativeA8RingPacket(
-		NiTriShape* facade, NativeA8ShapePayload& payload,
-		NativeA8RingSubmission& submission, UInt32 packetIndex,
+	NativeFontFallbackReason PrepareNativeFontRingPacket(
+		NiTriShape* facade, NativeFontShapePayload& payload,
+		NativeFontRingSubmission& submission, UInt32 packetIndex,
 		NiTriShape*& proxyShape)
 	{
 		proxyShape = nullptr;
@@ -3133,24 +3133,24 @@ namespace fonthook::vectorfont
 			|| packetIndex != submission.nextPacket
 			|| packetIndex >= payload.packetShaders.size()
 			|| submission.generation != payload.preparedGeneration
-			|| !IsNativeA8ShaderGenerationCurrent(submission.generation)
+			|| !IsNativeFontShaderGenerationCurrent(submission.generation)
 			|| !payload.payloadTemplate)
 		{
-			return NativeA8FallbackReason::RuntimeFault;
+			return NativeFontFallbackReason::RuntimeFault;
 		}
 
-		const std::vector<NativeA8PacketTemplate>& activePackets =
-			GetNativeA8Packets(*payload.payloadTemplate,
+		const std::vector<NativeFontPacketTemplate>& activePackets =
+			GetNativeFontPackets(*payload.payloadTemplate,
 				payload.useCompositePackets);
 		if (packetIndex >= activePackets.size())
-			return NativeA8FallbackReason::PacketBuild;
+			return NativeFontFallbackReason::PacketBuild;
 		TileShader* shader = payload.packetShaders[packetIndex];
-		const NativeA8PacketTemplate& source =
+		const NativeFontPacketTemplate& source =
 			activePackets[packetIndex];
 		if (!shader || source.atlasPage
 			>= payload.payloadTemplate->atlasTextures.size())
 		{
-			return NativeA8FallbackReason::AtlasGeneration;
+			return NativeFontFallbackReason::AtlasGeneration;
 		}
 		const UInt32 vertexCount = source.vertexCount;
 		const UInt64 baseVertex = static_cast<UInt64>(
@@ -3158,10 +3158,10 @@ namespace fonthook::vectorfont
 		if (!vertexCount || (vertexCount & 3u)
 			|| baseVertex + vertexCount > submission.endVertex)
 		{
-			return NativeA8FallbackReason::PacketBuild;
+			return NativeFontFallbackReason::PacketBuild;
 		}
 
-		NativeA8RingState& state = RingState();
+		NativeFontRingState& state = RingState();
 		// Begin reserved this proxy under either the ring mutex or the validated
 		// sorted-frame lease, then incremented activeSubmissions. Resource
 		// replacement/release is deferred until End, so packet-local property and
@@ -3176,9 +3176,9 @@ namespace fonthook::vectorfont
 			|| expectedVertexBuffer != submission.vertexBuffer
 			|| state.generation != submission.generation)
 		{
-			return NativeA8FallbackReason::RuntimeFault;
+			return NativeFontFallbackReason::RuntimeFault;
 		}
-		NativeA8Proxy& reservedProxy = state.proxies[submission.proxyIndex];
+		NativeFontProxy& reservedProxy = state.proxies[submission.proxyIndex];
 		NiTriShape* proxy = reservedProxy.shape.m_pObject;
 		NiGeometryBufferData* buffer = reservedProxy.buffer;
 		NiVBChip* chip = reservedProxy.chip;
@@ -3190,16 +3190,16 @@ namespace fonthook::vectorfont
 				source.atlasPage))
 		{
 			payload.packetPrepareFailure.store(
-				NativeA8PacketPrepareFailure::Geometry,
+				NativeFontPacketPrepareFailure::Geometry,
 				std::memory_order_relaxed);
-			return NativeA8FallbackReason::PropertySync;
+			return NativeFontFallbackReason::PropertySync;
 		}
 
 		const UInt32 quadCount = vertexCount / 4u;
 		chip->m_pkVB = submission.vertexBuffer;
 		chip->m_uiOffset = 0;
 		chip->m_uiLockFlags = 0;
-		chip->m_uiSize = vertexCount * sizeof(NativeA8GpuVertex);
+		chip->m_uiSize = vertexCount * sizeof(NativeFontGpuVertex);
 		buffer->m_uiVertCount = vertexCount;
 		buffer->m_uiMaxVertCount = vertexCount;
 		buffer->m_uiIndexCount = quadCount * 6u;
@@ -3218,52 +3218,52 @@ namespace fonthook::vectorfont
 			if (reservedProxy.shader != shader)
 			{
 				payload.packetPrepareFailure.store(
-					NativeA8PacketPrepareFailure::ShaderBinding,
+					NativeFontPacketPrepareFailure::ShaderBinding,
 					std::memory_order_relaxed);
-				return NativeA8FallbackReason::PacketPrepare;
+				return NativeFontFallbackReason::PacketPrepare;
 			}
 		}
 
 		++submission.nextPacket;
 		proxyShape = proxy;
 		RecordFreeTypePerf(FreeTypePerfCounter::LocklessPacketPrepare);
-		return NativeA8FallbackReason::None;
+		return NativeFontFallbackReason::None;
 	}
 
-	NativeA8FallbackReason SkipNativeA8RingPacket(
-		NativeA8ShapePayload& payload,
-		NativeA8RingSubmission& submission, UInt32 packetIndex)
+	NativeFontFallbackReason SkipNativeFontRingPacket(
+		NativeFontShapePayload& payload,
+		NativeFontRingSubmission& submission, UInt32 packetIndex)
 	{
 		if (!submission.active || packetIndex != submission.nextPacket
 			|| packetIndex >= payload.packetShaders.size()
 			|| submission.generation != payload.preparedGeneration
-			|| !IsNativeA8ShaderGenerationCurrent(submission.generation)
+			|| !IsNativeFontShaderGenerationCurrent(submission.generation)
 			|| !payload.payloadTemplate)
 		{
-			return NativeA8FallbackReason::RuntimeFault;
+			return NativeFontFallbackReason::RuntimeFault;
 		}
-		const std::vector<NativeA8PacketTemplate>& activePackets =
-			GetNativeA8Packets(*payload.payloadTemplate,
+		const std::vector<NativeFontPacketTemplate>& activePackets =
+			GetNativeFontPackets(*payload.payloadTemplate,
 				payload.useCompositePackets);
 		if (packetIndex >= activePackets.size())
-			return NativeA8FallbackReason::PacketBuild;
-		const NativeA8PacketTemplate& packet = activePackets[packetIndex];
+			return NativeFontFallbackReason::PacketBuild;
+		const NativeFontPacketTemplate& packet = activePackets[packetIndex];
 		const UInt64 end = static_cast<UInt64>(packet.firstVertex)
 			+ packet.vertexCount;
 		if (!packet.vertexCount || (packet.vertexCount & 3u)
 			|| end > payload.payloadTemplate->gpuVertices.size())
 		{
-			return NativeA8FallbackReason::PacketBuild;
+			return NativeFontFallbackReason::PacketBuild;
 		}
 		++submission.nextPacket;
-		return NativeA8FallbackReason::None;
+		return NativeFontFallbackReason::None;
 	}
 
-	void EndNativeA8RingSubmission(NativeA8RingSubmission& submission)
+	void EndNativeFontRingSubmission(NativeFontRingSubmission& submission)
 	{
 		if (submission.active)
 		{
-			NativeA8RingState& state = RingState();
+			NativeFontRingState& state = RingState();
 			if (s_sortedRingLease.active
 				&& s_sortedRingLease.state == &state)
 			{
@@ -3287,14 +3287,14 @@ namespace fonthook::vectorfont
 				}
 			}
 		}
-		submission = NativeA8RingSubmission{};
+		submission = NativeFontRingSubmission{};
 	}
 
-	void EndNativeA8SortedRingFrame()
+	void EndNativeFontSortedRingFrame()
 	{
 		if (!s_sortedRingLease.active)
 			return;
-		NativeA8RingState* state = s_sortedRingLease.state;
+		NativeFontRingState* state = s_sortedRingLease.state;
 		if (state && state->activeSubmissions.load(std::memory_order_acquire))
 			return;
 		s_sortedRingLease = {};
@@ -3315,9 +3315,9 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	bool ResolveNativeA8FramePayloadBinding(
-		const NativeA8ShapePayload& payload,
-		NativeA8FramePayloadBinding& binding)
+	bool ResolveNativeFontFramePayloadBinding(
+		const NativeFontShapePayload& payload,
+		NativeFontFramePayloadBinding& binding)
 	{
 		binding = {};
 		if (!s_sortedRingLease.active || !payload.payloadTemplate
@@ -3325,8 +3325,8 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
-		NativeA8SortedRingLease& lease = s_sortedRingLease;
-		NativeA8RingState* state = lease.state;
+		NativeFontSortedRingLease& lease = s_sortedRingLease;
+		NativeFontRingState* state = lease.state;
 		if (!state || state->generation != lease.generation
 			|| state->resourceSerial.load(std::memory_order_acquire)
 				!= lease.resourceSerial
@@ -3336,7 +3336,7 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
-		const NativeA8PayloadTemplate& artifact =
+		const NativeFontPayloadTemplate& artifact =
 			*payload.payloadTemplate;
 		if (artifact.gpuVertices.empty()
 			|| artifact.gpuVertices.size()
@@ -3371,20 +3371,20 @@ namespace fonthook::vectorfont
 		return binding.active;
 	}
 
-	bool ResolveNativeA8FramePacketBinding(
-		const NativeA8ShapePayload& payload, UInt32 packetIndex,
-		NativeA8FramePacketBinding& binding)
+	bool ResolveNativeFontFramePacketBinding(
+		const NativeFontShapePayload& payload, UInt32 packetIndex,
+		NativeFontFramePacketBinding& binding)
 	{
 		binding = {};
 		if (!payload.payloadTemplate)
 			return false;
-		const NativeA8PayloadTemplate& artifact =
+		const NativeFontPayloadTemplate& artifact =
 			*payload.payloadTemplate;
-		const std::vector<NativeA8PacketTemplate>& packets =
-			GetNativeA8Packets(artifact, payload.useCompositePackets);
+		const std::vector<NativeFontPacketTemplate>& packets =
+			GetNativeFontPackets(artifact, payload.useCompositePackets);
 		if (packetIndex >= packets.size())
 			return false;
-		const NativeA8PacketTemplate& packet = packets[packetIndex];
+		const NativeFontPacketTemplate& packet = packets[packetIndex];
 		const UInt64 packetEnd = static_cast<UInt64>(packet.firstVertex)
 			+ packet.vertexCount;
 		if (!packet.vertexCount || (packet.vertexCount & 3u)
@@ -3392,8 +3392,8 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
-		NativeA8FramePayloadBinding payloadBinding;
-		if (!ResolveNativeA8FramePayloadBinding(
+		NativeFontFramePayloadBinding payloadBinding;
+		if (!ResolveNativeFontFramePayloadBinding(
 				payload, payloadBinding))
 			return false;
 		const UInt64 baseVertex = static_cast<UInt64>(
@@ -3416,13 +3416,13 @@ namespace fonthook::vectorfont
 		return binding.active;
 	}
 
-	bool IsNativeA8FramePacketBindingCurrent(
-		const NativeA8FramePacketBinding& binding)
+	bool IsNativeFontFramePacketBindingCurrent(
+		const NativeFontFramePacketBinding& binding)
 	{
 		if (!binding.active || !s_sortedRingLease.active)
 			return false;
-		const NativeA8SortedRingLease& lease = s_sortedRingLease;
-		const NativeA8RingState* state = lease.state;
+		const NativeFontSortedRingLease& lease = s_sortedRingLease;
+		const NativeFontRingState* state = lease.state;
 		const IDirect3DVertexBuffer9* expectedVertexBuffer =
 			binding.staticResident
 				? lease.staticVertexBuffer : lease.dynamicVertexBuffer;
@@ -3439,7 +3439,7 @@ namespace fonthook::vectorfont
 			&& state->uploadEpoch == lease.uploadEpoch;
 	}
 
-	bool IsNativeA8FrameResourceStampCurrent(
+	bool IsNativeFontFrameResourceStampCurrent(
 		UInt32 generation, UInt32 resourceSerial, UInt32 uploadEpoch)
 	{
 		if (!generation || !resourceSerial
@@ -3447,8 +3447,8 @@ namespace fonthook::vectorfont
 		{
 			return false;
 		}
-		const NativeA8SortedRingLease& lease = s_sortedRingLease;
-		const NativeA8RingState* state = lease.state;
+		const NativeFontSortedRingLease& lease = s_sortedRingLease;
+		const NativeFontRingState* state = lease.state;
 		return state && lease.active
 			&& generation == lease.generation
 			&& resourceSerial == lease.resourceSerial
@@ -3463,9 +3463,9 @@ namespace fonthook::vectorfont
 			&& state->declaration == lease.declaration;
 	}
 
-	void ReleaseNativeA8RingResources()
+	void ReleaseNativeFontRingResources()
 	{
-		NativeA8RingState& state = RingState();
+		NativeFontRingState& state = RingState();
 		std::lock_guard<std::mutex> lock(state.mutex);
 		if (state.sortedFrameLeases.load(std::memory_order_acquire)
 			|| state.activeSubmissions.load(std::memory_order_acquire))

@@ -86,7 +86,7 @@ target_include_directories(tnvse PRIVATE
   "${TNVSE_SOURCE_ROOT}"
   "${TNVSE_SOURCE_ROOT}/dictionary"
   "${TNVSE_SOURCE_ROOT}/font"
-  "${TNVSE_SOURCE_ROOT}/font/a8"
+	"${TNVSE_SOURCE_ROOT}/font/native_shape"
   "${TNVSE_SOURCE_ROOT}/font/atlas"
   "${TNVSE_SOURCE_ROOT}/font/native"
   "${TNVSE_SOURCE_ROOT}/font/vector"
