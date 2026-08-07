@@ -160,6 +160,8 @@ namespace fonthook::vectorfont
 		VisibilityPreflightClipTransformIdentityMiss,
 		VisibilityPreflightClipTransformKeyMiss,
 		VisibilityPreflightClipTransformUnavailable,
+		VisibilityPreflightClipStockUiOrthographicTranslation,
+		VisibilityPreflightClipGenericTransform,
 		SinglePacketDirectCandidate,
 		SinglePacketDirectDraw,
 		SinglePacketDirectVertex,

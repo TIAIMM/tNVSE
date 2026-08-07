@@ -944,7 +944,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu",
+			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu stock_ui_ortho_translation=%llu generic_transforms=%llu",
 			counterValue(FreeTypePerfCounter::VisibilityPreflightClipCheck),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipCulled),
@@ -967,7 +967,11 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipTransformKeyMiss),
 			counterValue(FreeTypePerfCounter::
-				VisibilityPreflightClipTransformUnavailable));
+				VisibilityPreflightClipTransformUnavailable),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipStockUiOrthographicTranslation),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipGenericTransform));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_static_promotion: deferred_lifecycle=%llu deferred_upload_history=%llu deferred_budget=%llu deferred_retry=%llu cold_evictions=%llu cold_evicted_bytes=%llu all_static_fast_exit=%llu lease_payload_validations_elided=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::

@@ -24,6 +24,7 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kRendererPositionAdjust = 0x11F474C;
 		inline constexpr double kScissorSafetyMarginPixels = 2.0;
 		inline constexpr double kClipIntervalRelativeSlack = 1.0e-6;
+		inline constexpr double kStockUiOrthographicRelativeSlack = 4.0e-6;
 		// The cache stores only exact source-state keys and the conservative proof,
 		// not four complete matrices per facade. Four-way 4096-entry storage remains
 		// bounded below half a MiB on Win32 while covering large Interface batches.
@@ -72,9 +73,26 @@ namespace fonthook::vectorfont
 			bool scaledScissor = false;
 		};
 
+		struct StockUiOrthographicAxis
+		{
+			UInt8 modelAxis = 0;
+			float viewCoefficient = 0.0f;
+			float viewTranslation = 0.0f;
+			float projectionScale = 0.0f;
+			float projectionTranslation = 0.0f;
+		};
+
+		struct StockUiOrthographicContext
+		{
+			StockUiOrthographicAxis x;
+			StockUiOrthographicAxis y;
+			bool valid = false;
+		};
+
 		struct ClipFrameContext
 		{
 			ClipCameraKey camera;
+			StockUiOrthographicContext stockUiOrthographic;
 			RECT viewportRect = {};
 			ClipNdcBounds viewportNdc;
 			std::array<ClipRectNdcCacheEntry,
@@ -325,7 +343,8 @@ namespace fonthook::vectorfont
 		}
 
 		bool CubeIsOutsidePlane(const ClipColumn& insidePlane,
-			const NiBound& bound)
+			const NiBound& bound,
+			double relativeSlack = kClipIntervalRelativeSlack)
 		{
 			const double center = EvaluateColumn(
 				insidePlane, bound.m_kCenter);
@@ -336,8 +355,164 @@ namespace fonthook::vectorfont
 			// bound the float shader's dot-product rounding.
 			const double slack = (ColumnEvaluationMagnitude(
 				insidePlane, bound.m_kCenter) + extent + 1.0)
-				* kClipIntervalRelativeSlack;
+				* relativeSlack;
 			return center + extent < -slack;
+		}
+
+		bool ResolveStockUiViewAxis(const D3DXMATRIX& view, UInt32 column,
+			UInt8& modelAxis, float& coefficient)
+		{
+			bool found = false;
+			for (UInt8 row = 0; row < 3; ++row)
+			{
+				const float value = view.m[row][column];
+				if (value == 0.0f)
+					continue;
+				if (found || (value != 1.0f && value != -1.0f))
+					return false;
+				modelAxis = row;
+				coefficient = value;
+				found = true;
+			}
+			return found;
+		}
+
+		bool BuildStockUiOrthographicContext(const ClipCameraKey& camera,
+			StockUiOrthographicContext& context)
+		{
+			context = {};
+			const D3DXMATRIX& view = camera.view;
+			const D3DXMATRIX& projection = camera.projection;
+
+			// InterfaceManager::CreateSceneGraph creates an orthographic camera
+			// whose right/up vectors are exact model-axis permutations. Formal PC
+			// 712E90/E6C780 and the symbolized test build independently agree on
+			// that layout. Require the complete sparse x/y/w structure rather than
+			// inferring it from a menu or shader identity, so camera mods and every
+			// perspective/rotated view retain the homogeneous fallback below.
+			if (view._14 != 0.0f || view._24 != 0.0f
+				|| view._34 != 0.0f || view._44 != 1.0f
+				|| projection._21 != 0.0f || projection._31 != 0.0f
+				|| projection._12 != 0.0f || projection._32 != 0.0f
+				|| projection._14 != 0.0f || projection._24 != 0.0f
+				|| projection._34 != 0.0f || projection._44 != 1.0f
+				|| projection._11 == 0.0f || projection._22 == 0.0f)
+			{
+				return false;
+			}
+
+			if (!ResolveStockUiViewAxis(view, 0, context.x.modelAxis,
+					context.x.viewCoefficient)
+				|| !ResolveStockUiViewAxis(view, 1, context.y.modelAxis,
+					context.y.viewCoefficient)
+				|| context.x.modelAxis == context.y.modelAxis)
+			{
+				return false;
+			}
+
+			context.x.viewTranslation = view._41;
+			context.y.viewTranslation = view._42;
+			context.x.projectionScale = projection._11;
+			context.y.projectionScale = projection._22;
+			context.x.projectionTranslation = projection._41;
+			context.y.projectionTranslation = projection._42;
+			context.valid = true;
+			return true;
+		}
+
+		float PointComponent(const NiPoint3& point, UInt8 axis)
+		{
+			switch (axis)
+			{
+			case 0:
+				return point.x;
+			case 1:
+				return point.y;
+			case 2:
+				return point.z;
+			default:
+				return 0.0f;
+			}
+		}
+
+		bool IsIdentityRotation(const NiMatrix3& rotation)
+		{
+			for (UInt32 row = 0; row < 3; ++row)
+			{
+				for (UInt32 column = 0; column < 3; ++column)
+				{
+					const float expected = row == column ? 1.0f : 0.0f;
+					if (rotation.m_pEntry[row][column] != expected)
+						return false;
+				}
+			}
+			return true;
+		}
+
+		bool BuildStockUiOrthographicColumn(
+			const StockUiOrthographicAxis& axis,
+			const NiTransform& transform, const NiPoint3& positionAdjust,
+			ClipColumn& column)
+		{
+			const float translation = PointComponent(
+				transform.m_Translate, axis.modelAxis)
+				- PointComponent(positionAdjust, axis.modelAxis);
+			const float viewLinear =
+				transform.m_fScale * axis.viewCoefficient;
+			const float viewTranslation =
+				translation * axis.viewCoefficient + axis.viewTranslation;
+			const float clipLinear = viewLinear * axis.projectionScale;
+			const float clipTranslation = viewTranslation
+				* axis.projectionScale + axis.projectionTranslation;
+			if (!std::isfinite(translation) || !std::isfinite(viewLinear)
+				|| !std::isfinite(viewTranslation)
+				|| !std::isfinite(clipLinear)
+				|| !std::isfinite(clipTranslation))
+			{
+				return false;
+			}
+
+			column = {};
+			switch (axis.modelAxis)
+			{
+			case 0:
+				column.x = clipLinear;
+				break;
+			case 1:
+				column.y = clipLinear;
+				break;
+			case 2:
+				column.z = clipLinear;
+				break;
+			default:
+				return false;
+			}
+			column.translation = clipTranslation;
+			return true;
+		}
+
+		bool BuildStockUiOrthographicColumns(const ClipFrameContext& context,
+			const NiTransform& transform, ClipColumn& clipX,
+			ClipColumn& clipY, ClipColumn& clipW)
+		{
+			if (!context.stockUiOrthographic.valid
+				|| !std::isfinite(transform.m_fScale)
+				|| !std::isfinite(transform.m_Translate.x)
+				|| !std::isfinite(transform.m_Translate.y)
+				|| !std::isfinite(transform.m_Translate.z)
+				|| !IsIdentityRotation(transform.m_Rotate)
+				|| !BuildStockUiOrthographicColumn(
+					context.stockUiOrthographic.x, transform,
+					context.camera.positionAdjust, clipX)
+				|| !BuildStockUiOrthographicColumn(
+					context.stockUiOrthographic.y, transform,
+					context.camera.positionAdjust, clipY))
+			{
+				return false;
+			}
+			clipW = {};
+			clipW.translation = 1.0;
+			return true;
 		}
 
 		bool IsValidScissorForViewport(const RECT& scissor,
@@ -517,6 +692,8 @@ namespace fonthook::vectorfont
 			context.inverseHeight = 1.0
 				/ static_cast<double>(context.camera.viewport.Height);
 			context.valid = true;
+			BuildStockUiOrthographicContext(context.camera,
+				context.stockUiOrthographic);
 			if (!BuildClipNdcBounds(context, context.viewportRect,
 					context.viewportNdc))
 			{
@@ -808,42 +985,55 @@ namespace fonthook::vectorfont
 			if (!ResolveClipNdcBounds(context, clipRect, useScissor, ndc))
 				return failOpen();
 
-			D3DXMATRIX world = {};
-			if (!BuildRetailTileWorldMatrix(transform,
-					context.camera.positionAdjust, world))
+			ClipColumn clipX;
+			ClipColumn clipY;
+			ClipColumn clipW;
+			bool stockUiOrthographic = BuildStockUiOrthographicColumns(
+				context, transform, clipX, clipY, clipW);
+			if (stockUiOrthographic)
 			{
-				if (transformBuildResult)
-				{
-					*transformBuildResult =
-						ClipTransformBuildResult::Unavailable;
-				}
-				return failOpen();
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VisibilityPreflightClipStockUiOrthographicTranslation);
 			}
-
-			// WorldViewProjTranspose is predefined mapping 23 in the retail
-			// constant map at E85D10. It calls D3DXMatrixMultiply twice in this
-			// exact association order, then transposes for VS c0-c3. Use the same
-			// D3DX entry point and retain the non-transposed matrix for row-vector
-			// homogeneous half-space evaluation below.
-			D3DXMATRIX worldView = {};
-			D3DXMATRIX builtWorldViewProjection = {};
-			D3DXMatrixMultiply(&worldView, &world, &context.camera.view);
-			D3DXMatrixMultiply(&builtWorldViewProjection,
-				&worldView, &context.camera.projection);
-			if (!IsFiniteMatrix(builtWorldViewProjection))
+			else
 			{
-				buildResult = ClipTransformBuildResult::Unavailable;
-				if (transformBuildResult)
-					*transformBuildResult = buildResult;
-				return failOpen();
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VisibilityPreflightClipGenericTransform);
+				D3DXMATRIX world = {};
+				if (!BuildRetailTileWorldMatrix(transform,
+						context.camera.positionAdjust, world))
+				{
+					if (transformBuildResult)
+					{
+						*transformBuildResult =
+							ClipTransformBuildResult::Unavailable;
+					}
+					return failOpen();
+				}
+
+				// WorldViewProjTranspose is predefined mapping 23 in the retail
+				// constant map at E85D10. It calls D3DXMatrixMultiply twice in this
+				// exact association order, then transposes for VS c0-c3. Use the same
+				// D3DX entry point and retain the non-transposed matrix for row-vector
+				// homogeneous half-space evaluation below.
+				D3DXMATRIX worldView = {};
+				D3DXMATRIX worldViewProjection = {};
+				D3DXMatrixMultiply(&worldView, &world, &context.camera.view);
+				D3DXMatrixMultiply(&worldViewProjection,
+					&worldView, &context.camera.projection);
+				if (!IsFiniteMatrix(worldViewProjection))
+				{
+					buildResult = ClipTransformBuildResult::Unavailable;
+					if (transformBuildResult)
+						*transformBuildResult = buildResult;
+					return failOpen();
+				}
+				clipX = GetClipColumn(worldViewProjection, 0);
+				clipY = GetClipColumn(worldViewProjection, 1);
+				clipW = GetClipColumn(worldViewProjection, 3);
 			}
 			if (transformBuildResult)
 				*transformBuildResult = buildResult;
-			const D3DXMATRIX* worldViewProjection = &builtWorldViewProjection;
-
-			const ClipColumn clipX = GetClipColumn(*worldViewProjection, 0);
-			const ClipColumn clipY = GetClipColumn(*worldViewProjection, 1);
-			const ClipColumn clipW = GetClipColumn(*worldViewProjection, 3);
 			const double radius = bound.m_fRadius;
 			const double centerW = EvaluateColumn(clipW, bound.m_kCenter);
 			const double extentW = CubeExtent(clipW, radius);
@@ -866,10 +1056,14 @@ namespace fonthook::vectorfont
 				ClipColumn{}, SubtractScaled(clipY, clipW, ndc.top), 1.0);
 			const ClipColumn bottomPlane = SubtractScaled(
 				clipY, clipW, ndc.bottom);
-			const bool outside = CubeIsOutsidePlane(leftPlane, bound)
-				|| CubeIsOutsidePlane(rightPlane, bound)
-				|| CubeIsOutsidePlane(topPlane, bound)
-				|| CubeIsOutsidePlane(bottomPlane, bound);
+			const double relativeSlack = stockUiOrthographic
+				? kStockUiOrthographicRelativeSlack
+				: kClipIntervalRelativeSlack;
+			const bool outside = CubeIsOutsidePlane(
+					leftPlane, bound, relativeSlack)
+				|| CubeIsOutsidePlane(rightPlane, bound, relativeSlack)
+				|| CubeIsOutsidePlane(topPlane, bound, relativeSlack)
+				|| CubeIsOutsidePlane(bottomPlane, bound, relativeSlack);
 			const ClipProofResult result = outside
 				? ClipProofResult::Outside : ClipProofResult::Overlap;
 			StoreClipProof(cacheEntry, transformIdentity, context,

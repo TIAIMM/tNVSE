@@ -986,17 +986,38 @@ proof uses the final full-text model bound and the live facade state before any
 metadata owner, packet command, upload, or draw, so it applies equally to
 single- and multi-packet payloads.
 
+The stock Interface camera also has a narrower transform path for cache misses.
+The formal executable's `InterfaceManager::CreateSceneGraph` at `0x712E90`,
+`NiDX9Renderer::Do_SetCameraData` at `0xE6C780`, and
+`NiD3DUtility::GetD3DFromNi` at `0xB71A40` establish the same affine,
+axis-permuted orthographic layout as the symbolized test build's
+`InterfaceManager::CreateSceneGraph` at `0x825918C8`,
+`Do_SetCameraData` at `0x8223DC50`, and `GetD3DFromNi` at `0x8224AE08`.
+At frame capture,
+tNVSE accepts that path only when the live view/projection matrices still have
+the complete exact sparse x/y/w structure. An individual shape must additionally
+have an exact identity rotation and finite uniform scale/translation. Qualified
+shapes reconstruct only the three clip columns used by the proof and avoid the
+temporary world matrix plus both `D3DXMatrixMultiply` calls. Modified cameras,
+rotated shapes, perspective transforms, malformed values, or any structural
+mismatch use the unchanged generic homogeneous path. The narrower calculation
+also uses a larger numeric safety slack, so a near-edge disagreement retains the
+draw rather than creating a new cull.
+
 The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
 `clip`, `scissor`, `preflight_skipped`, `packets_saved`, and `vertices_saved`.
 The separate `tnvse_freetype_preflight_clip_cull` line reports proof checks,
 viewport/scissor routes, fail-open decisions, honored results, and revoked
-results. Its render-thread-local exact-key cache has 1024 entries, enough for
-the several-hundred-shape Credit/VUI working set that thrashed the former 64
-entries. A hit requires identical shape identity, renderer, world/view/projection
-matrices, bound, viewport, resolved clip rectangle, scissor route, and viewport
-permission; it can therefore reuse both WVP and the conservative half-space
-result without weakening the fail-open proof. There is no late-visibility phase
-line. The thin registration route performs no visibility work.
+results. `stock_ui_ortho_translation` and `generic_transforms` partition the
+cache misses that reach transform construction and therefore show the live hit
+range of the orthographic path. The render-thread-local exact-key cache has 1024
+four-way sets (4096 entries), enough for the several-hundred-shape Credit/VUI
+working set that thrashed the former 64 entries. A hit requires identical shape
+identity, renderer, world/view/projection matrices, bound, viewport, resolved
+clip rectangle, scissor route, and viewport permission; it can therefore reuse
+both the transform-dependent columns and the conservative half-space result
+without weakening the fail-open proof. There is no late-visibility phase line.
+The thin registration route performs no visibility work.
 The `tnvse_freetype_accumulator_prep` line separately reports empty-facade fast
 returns, metadata acquisitions avoided by proven culls, and traversals with no
 prepared payload.
