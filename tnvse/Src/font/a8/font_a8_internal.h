@@ -191,6 +191,8 @@ namespace fonthook::vectorfont
 
 	struct VanillaLayoutSdfMetadata final : A8ShapeMetadata
 	{
+		NativeA8VanillaLayoutKind layoutKind =
+			NativeA8VanillaLayoutKind::None;
 		mutable NativeA8VanillaLayoutDrawToken drawToken;
 	};
 
@@ -208,6 +210,14 @@ namespace fonthook::vectorfont
 		return metadata.backend == FreeTypeShapeBackend::VanillaLayoutSdf
 			? &static_cast<const VanillaLayoutSdfMetadata&>(metadata).drawToken
 			: nullptr;
+	}
+
+	inline NativeA8VanillaLayoutKind GetVanillaLayoutSdfLayoutKind(
+		const A8ShapeMetadata& metadata)
+	{
+		return metadata.backend == FreeTypeShapeBackend::VanillaLayoutSdf
+			? static_cast<const VanillaLayoutSdfMetadata&>(metadata).layoutKind
+			: NativeA8VanillaLayoutKind::None;
 	}
 
 	struct A8State
@@ -280,6 +290,7 @@ namespace fonthook::vectorfont
 		const NiPoint3& geometryOrigin);
 	bool PrepareVanillaLayoutSdfA8Shape(Font& font, NiTriShape* shape,
 		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
+		NativeA8VanillaLayoutKind layoutKind,
 		const A8EffectShapeConfig* effectConfig,
 		const A8ShapeColorContract* colorContract,
 		NativeA8PayloadTemplatePtr payloadTemplate,

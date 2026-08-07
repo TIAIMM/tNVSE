@@ -127,7 +127,12 @@ namespace fonthook::vectorfont
 									!= NativeA8ShaderClass::Composite
 								|| packet.staticCompositeLayerMask > 15u
 								|| !std::isfinite(packet.uniformSdfSpread)
-								|| packet.uniformSdfSpread < 0.0f)))
+								|| packet.uniformSdfSpread < 0.0f
+								|| !std::isfinite(
+									packet.uniformDistanceParameterScale)
+								|| packet.uniformDistanceParameterScale < 0.0f
+								|| (packet.uniformDistanceParameterScale > 0.0f
+									&& packet.uniformDistanceParameterScale < 1.0f))))
 					{
 						return false;
 					}
@@ -225,7 +230,8 @@ namespace fonthook::vectorfont
 			// Precomputed hashes describe the ordinary native layout. Keep this
 			// discriminator in exact lockstep with NativeProfileKeyHash so an
 			// equivalent runtime-computed key cannot land in another bucket.
-			mix(0u);
+			mix(0u); // NativeA8VanillaLayoutKind::None
+			mix(0u); // uniformDistanceParameterScaleBits
 			for (float value : packet.constants)
 			{
 				UInt32 bits = 0;
@@ -412,7 +418,8 @@ namespace fonthook::vectorfont
 		NativeA8PacketTemplate BuildCompositePacket(
 			const A8EffectShapeConfig& effects,
 			const NativeA8CompositeSpan& span, const NiBound& bound,
-			UInt8 staticLayerMask, float uniformSdfSpread)
+			UInt8 staticLayerMask, float uniformSdfSpread,
+			float uniformDistanceParameterScale)
 		{
 			NativeA8PacketTemplate packet;
 			packet.firstVertex = span.firstVertex;
@@ -450,6 +457,8 @@ namespace fonthook::vectorfont
 			// per vertex, so including it in their constant/profile identity would
 			// fragment profile reuse and prevent otherwise valid packet merging.
 			packet.uniformSdfSpread = uniformSdfSpread;
+			packet.uniformDistanceParameterScale =
+				uniformDistanceParameterScale;
 			packet.constants[7] = effects.rasterScale;
 			packet.constants[8] = effects.shadowBlurPixels;
 			packet.constants[9] = effects.shadowPower;
@@ -521,6 +530,26 @@ namespace fonthook::vectorfont
 					return 0.0f;
 			}
 			return spread;
+		}
+
+		float ResolveUniformCompositeDistanceParameterScale(
+			const std::vector<NativeA8GpuVertex>& vertices,
+			const NativeA8CompositeSpan& span)
+		{
+			const size_t end = static_cast<size_t>(span.firstVertex)
+				+ span.vertexCount;
+			if (!span.vertexCount || end > vertices.size())
+				return 0.0f;
+			const float scale =
+				vertices[span.firstVertex].distanceParameterScale;
+			if (!std::isfinite(scale) || scale < 1.0f)
+				return 0.0f;
+			for (size_t index = span.firstVertex + 1u; index < end; ++index)
+			{
+				if (vertices[index].distanceParameterScale != scale)
+					return 0.0f;
+			}
+			return scale;
 		}
 
 	}
@@ -604,9 +633,13 @@ namespace fonthook::vectorfont
 				const float uniformSdfSpread =
 					ResolveUniformCompositeSdfSpread(
 						payload->gpuVertices, span);
+				const float uniformDistanceParameterScale =
+					ResolveUniformCompositeDistanceParameterScale(
+						payload->gpuVertices, span);
 				payload->compositePackets.push_back(
 					BuildCompositePacket(effects, span, bound,
-						staticLayerMask, uniformSdfSpread));
+						staticLayerMask, uniformSdfSpread,
+						uniformDistanceParameterScale));
 			}
 		}
 		if (!SealNativeA8PayloadValidation(*payload))

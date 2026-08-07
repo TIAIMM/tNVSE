@@ -86,6 +86,19 @@ namespace fonthook::vectorfont
 	constexpr UInt32 kFillPrewarmWorkChunk = 8;
 
 	struct NativeA8PayloadTemplate;
+	enum class NativeA8VanillaLayoutKind : UInt8
+	{
+		None = 0,
+		Uniform40,
+		Parametric48,
+	};
+
+	inline bool UsesNativeA8VanillaLayout(
+		NativeA8VanillaLayoutKind layoutKind)
+	{
+		return layoutKind != NativeA8VanillaLayoutKind::None;
+	}
+
 	enum class FreeTypePerfCounter : UInt16
 	{
 		BitmapMemoryHit,
@@ -1129,6 +1142,7 @@ namespace fonthook::vectorfont
 		const NiPoint3& arGeometryOrigin);
 	bool PrepareVanillaLayoutSdfA8Shape(Font& arFont, NiTriShape* apShape,
 		UInt32 auiFontId, UInt32 auiGlyphCount, UInt32 auiQuadCount,
+		NativeA8VanillaLayoutKind aeLayoutKind,
 		const A8EffectShapeConfig* apEffectConfig,
 		const A8ShapeColorContract* apColorContract,
 		std::shared_ptr<const NativeA8PayloadTemplate> apPayloadTemplate,

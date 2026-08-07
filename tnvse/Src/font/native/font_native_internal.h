@@ -293,6 +293,35 @@ namespace fonthook::vectorfont
 		== 6 * sizeof(float));
 	static_assert(sizeof(NativeA8VanillaLayoutVertex) == 40u);
 
+	// Extended stream used only when one single-page composite packet needs
+	// per-glyph reconstruction parameters. Every texture semantic remains FLOAT2
+	// so the retail declaration packer never reads beyond its NiPoint2 UV source;
+	// the certified post-pack upload replaces all placeholder values atomically.
+	struct NativeA8VanillaParametricVertex
+	{
+		float x = 0.0f;
+		float y = 0.0f;
+		float z = 0.0f;
+		float u = 0.0f;
+		float v = 0.0f;
+		UInt32 color = 0xFFFFFFFFu;
+		float sdfSpread = 0.0f;
+		float distanceParameterScale = 1.0f;
+		float glyphU0 = 0.0f;
+		float glyphV0 = 0.0f;
+		float glyphU1 = 0.0f;
+		float glyphV1 = 0.0f;
+	};
+	static_assert(offsetof(NativeA8VanillaParametricVertex, u)
+		== 3 * sizeof(float));
+	static_assert(offsetof(NativeA8VanillaParametricVertex, color)
+		== 5 * sizeof(float));
+	static_assert(offsetof(NativeA8VanillaParametricVertex, sdfSpread)
+		== 6 * sizeof(float));
+	static_assert(offsetof(NativeA8VanillaParametricVertex, glyphU0)
+		== 8 * sizeof(float));
+	static_assert(sizeof(NativeA8VanillaParametricVertex) == 48u);
+
 	struct NativeA8PacketShaderCacheEntry
 	{
 		// Native shader profiles are process-lifetime objects. Keep this opaque in
@@ -343,10 +372,11 @@ namespace fonthook::vectorfont
 		bool compositeShiftedShadow = false;
 		bool staticSmoothSampling = false;
 		bool usesLiveTileRgb = true;
-		// Packet-wide source spread used only by the vanilla-layout SDF target.
-		// Zero means the packet is not eligible; the ordinary native pipeline
-		// continues to read per-vertex spread and keeps its historical profile key.
+		// Packet-wide reconstruction values used by the compact 40-byte target.
+		// Zero means the value is not uniform; the 48-byte parameterized target may
+		// still carry the corresponding positive value per vertex.
 		float uniformSdfSpread = 0.0f;
+		float uniformDistanceParameterScale = 0.0f;
 		// Profile hashes are immutable artifact data. The two slots correspond to
 		// separate-alpha disabled/enabled. Resolved profiles are validated against
 		// the current generation and reset automatically on packet copy or move.
@@ -571,6 +601,8 @@ namespace fonthook::vectorfont
 		UInt16 nativePackDataFlags = 0;
 		UInt16 nativePackDirtyFlags = 0;
 		UInt8 nativePackKeepFlags = 0;
+		NativeA8VanillaLayoutKind layoutKind =
+			NativeA8VanillaLayoutKind::None;
 		bool nativePackCompleted = false;
 		bool priorGenerationDeclaration = false;
 		bool payloadUploaded = false;
@@ -1179,7 +1211,8 @@ namespace fonthook::vectorfont
 	void EndNativeA8FacadeShaderBatch();
 	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
 		const NiTriShape* facade, bool scaledFillSampling,
-		bool vanillaLayoutSdf = false);
+		NativeA8VanillaLayoutKind vanillaLayoutKind =
+			NativeA8VanillaLayoutKind::None);
 	bool RequestNativeA8VanillaLayoutShapePrecache(NiTriShape* shape,
 		TileShader* shader, bool& immediateReady);
 	bool IsNativeA8VanillaLayoutShapeReady(const NiTriShape* shape,

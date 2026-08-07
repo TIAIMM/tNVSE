@@ -1134,6 +1134,7 @@ namespace fonthook::vectorfont
 
 	bool PrepareVanillaLayoutSdfA8Shape(Font& font, NiTriShape* shape,
 		UInt32 fontId, UInt32 glyphCount, UInt32 quadCount,
+		NativeA8VanillaLayoutKind layoutKind,
 		const A8EffectShapeConfig* effectConfig,
 		const A8ShapeColorContract* colorContract,
 		NativeA8PayloadTemplatePtr payloadTemplate,
@@ -1155,8 +1156,13 @@ namespace fonthook::vectorfont
 		const bool supportedDistanceField =
 			packet.distanceFieldMethod == DistanceFieldMethod::TrueSdf
 			|| packet.distanceFieldMethod == DistanceFieldMethod::Mtsdf;
+		const bool uniformLayout =
+			layoutKind == NativeA8VanillaLayoutKind::Uniform40;
+		const bool parametricLayout =
+			layoutKind == NativeA8VanillaLayoutKind::Parametric48;
 		if (packet.shaderClass != NativeA8ShaderClass::Composite
 			|| !supportedDistanceField
+			|| (!uniformLayout && !parametricLayout)
 			|| !IsVanillaLayoutSdfEnabled(packet.distanceFieldMethod)
 			|| packet.atlasPage != 0 || (packet.firstVertex & 3u)
 			|| !packet.vertexCount || (packet.vertexCount & 3u)
@@ -1165,16 +1171,47 @@ namespace fonthook::vectorfont
 			|| packet.staticCompositeLayerMask < 8u
 			|| packet.staticCompositeLayerMask > 15u
 			|| !std::isfinite(packet.uniformSdfSpread)
-			|| packet.uniformSdfSpread <= 0.0f
+			|| packet.uniformSdfSpread < 0.0f
+			|| !std::isfinite(packet.uniformDistanceParameterScale)
+			|| packet.uniformDistanceParameterScale < 0.0f
+			|| (packet.uniformDistanceParameterScale > 0.0f
+				&& packet.uniformDistanceParameterScale < 1.0f)
+			|| (uniformLayout
+				&& (packet.uniformSdfSpread <= 0.0f
+					|| packet.uniformDistanceParameterScale < 1.0f))
 			|| !ValidateA8Shape(shape, effectConfig, colorContract,
 				payloadTemplate.get())
 			|| !InitializeA8TriShapeVtable(shape))
 		{
 			return false;
 		}
+		const float layerMask = static_cast<float>(
+			packet.staticCompositeLayerMask);
+		for (UInt32 relative = 0; relative < packet.vertexCount; ++relative)
+		{
+			const NativeA8GpuVertex& vertex = payloadTemplate->gpuVertices[
+				static_cast<size_t>(packet.firstVertex) + relative];
+			const NativeA8GpuVertex& quadFirst = payloadTemplate->gpuVertices[
+				static_cast<size_t>(packet.firstVertex)
+					+ (relative & ~UInt32(3u))];
+			if (!std::isfinite(vertex.sdfSpread) || vertex.sdfSpread <= 0.0f
+				|| !std::isfinite(vertex.distanceParameterScale)
+				|| vertex.distanceParameterScale < 1.0f
+				|| vertex.layerMask != layerMask
+				|| vertex.sdfSpread != quadFirst.sdfSpread
+				|| vertex.distanceParameterScale
+					!= quadFirst.distanceParameterScale
+				|| (uniformLayout
+					&& (vertex.sdfSpread != packet.uniformSdfSpread
+						|| vertex.distanceParameterScale
+							!= packet.uniformDistanceParameterScale)))
+			{
+				return false;
+			}
+		}
 
 		TileShader* shader = ResolveNativeA8PacketShader(
-			packet, shape, false, true);
+			packet, shape, false, layoutKind);
 		if (!shader)
 			return false;
 
@@ -1187,6 +1224,7 @@ namespace fonthook::vectorfont
 		metadata->primitiveCount = packet.vertexCount / 2u;
 		metadata->indexCount = packet.vertexCount / 4u * 6u;
 		metadata->backend = FreeTypeShapeBackend::VanillaLayoutSdf;
+		metadata->layoutKind = layoutKind;
 		if (colorContract)
 			metadata->colorContract = *colorContract;
 		if (!InitializeNativeA8ShapePayload(font, shape, *metadata,

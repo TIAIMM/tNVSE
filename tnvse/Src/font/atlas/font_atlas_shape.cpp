@@ -1396,9 +1396,11 @@ namespace fonthook::vectorfont
 
 		bool IsVanillaLayoutSdfPayloadEligible(
 			const NativeA8PayloadTemplate& payload,
-			const NativeA8PacketTemplate*& packet)
+			const NativeA8PacketTemplate*& packet,
+			NativeA8VanillaLayoutKind& layoutKind)
 		{
 			packet = nullptr;
+			layoutKind = NativeA8VanillaLayoutKind::None;
 			if (payload.pageCount != 1 || payload.compositePackets.size() != 1
 				|| payload.gpuVertices.empty())
 			{
@@ -1420,10 +1422,18 @@ namespace fonthook::vectorfont
 				|| candidate.staticCompositeLayerMask < 8u
 				|| candidate.staticCompositeLayerMask > 15u
 				|| !std::isfinite(candidate.uniformSdfSpread)
-				|| candidate.uniformSdfSpread <= 0.0f)
+				|| candidate.uniformSdfSpread < 0.0f
+				|| !std::isfinite(
+					candidate.uniformDistanceParameterScale)
+				|| candidate.uniformDistanceParameterScale < 0.0f
+				|| (candidate.uniformDistanceParameterScale > 0.0f
+					&& candidate.uniformDistanceParameterScale < 1.0f))
 			{
 				return false;
 			}
+			const bool uniformSpread = candidate.uniformSdfSpread > 0.0f;
+			const bool uniformDistanceScale =
+				candidate.uniformDistanceParameterScale >= 1.0f;
 			const float layerMask = static_cast<float>(
 				candidate.staticCompositeLayerMask);
 			for (UInt32 relative = 0; relative < candidate.vertexCount;
@@ -1435,8 +1445,15 @@ namespace fonthook::vectorfont
 				if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y)
 					|| !std::isfinite(vertex.z) || !std::isfinite(vertex.u)
 					|| !std::isfinite(vertex.v)
-					|| vertex.sdfSpread != candidate.uniformSdfSpread
-					|| vertex.distanceParameterScale != 1.0f
+					|| !std::isfinite(vertex.sdfSpread)
+					|| vertex.sdfSpread <= 0.0f
+					|| !std::isfinite(vertex.distanceParameterScale)
+					|| vertex.distanceParameterScale < 1.0f
+					|| (uniformSpread
+						&& vertex.sdfSpread != candidate.uniformSdfSpread)
+					|| (uniformDistanceScale
+						&& vertex.distanceParameterScale
+							!= candidate.uniformDistanceParameterScale)
 					|| vertex.layerMask != layerMask
 					|| !std::isfinite(vertex.glyphU0)
 					|| !std::isfinite(vertex.glyphV0)
@@ -1450,7 +1467,10 @@ namespace fonthook::vectorfont
 				const NativeA8GpuVertex& quadFirst =
 					payload.gpuVertices[static_cast<size_t>(
 						candidate.firstVertex) + (relative & ~UInt32(3u))];
-				if (vertex.glyphU0 != quadFirst.glyphU0
+				if (vertex.sdfSpread != quadFirst.sdfSpread
+					|| vertex.distanceParameterScale
+						!= quadFirst.distanceParameterScale
+					|| vertex.glyphU0 != quadFirst.glyphU0
 					|| vertex.glyphV0 != quadFirst.glyphV0
 					|| vertex.glyphU1 != quadFirst.glyphU1
 					|| vertex.glyphV1 != quadFirst.glyphV1)
@@ -1458,6 +1478,9 @@ namespace fonthook::vectorfont
 					return false;
 				}
 			}
+			layoutKind = uniformSpread && uniformDistanceScale
+				? NativeA8VanillaLayoutKind::Uniform40
+				: NativeA8VanillaLayoutKind::Parametric48;
 			packet = &candidate;
 			return true;
 		}
@@ -1474,9 +1497,13 @@ namespace fonthook::vectorfont
 				return nullptr;
 
 			const NativeA8PacketTemplate* packet = nullptr;
+			NativeA8VanillaLayoutKind layoutKind =
+				NativeA8VanillaLayoutKind::None;
 			if (!payload || atlases.size() != 1 || !atlases.front()
-				|| !IsVanillaLayoutSdfPayloadEligible(*payload, packet)
+				|| !IsVanillaLayoutSdfPayloadEligible(
+					*payload, packet, layoutKind)
 				|| !packet
+				|| !UsesNativeA8VanillaLayout(layoutKind)
 				|| !IsVanillaLayoutSdfEnabled(packet->distanceFieldMethod))
 			{
 				return nullptr;
@@ -1557,8 +1584,9 @@ namespace fonthook::vectorfont
 				}
 			}
 			// Retail FalloutNV exposes one UV-present bit and one m_pkTexture
-			// source. TEXCOORD1/2 are installed by the certified direct VB upload
-			// after the queued native pack has completed and retired this UV source.
+			// source. The compact TEXCOORD1/2 or parameterized TEXCOORD1/2/3
+			// stream is installed only by the certified direct VB upload after the
+			// queued native pack has completed and retired this UV source.
 			data->m_usDataFlags |= NiGeometryData::TEXTURE_SET_MASK;
 			data->m_kBound = payload->bound;
 			data->m_kBound.m_kCenter.x += origin.x;
@@ -1569,7 +1597,8 @@ namespace fonthook::vectorfont
 			// precache: that route selects the vanilla TileShader's 20-byte layout.
 			shape->PrepareObject(false, true);
 			if (!PrepareVanillaLayoutSdfA8Shape(font, shape, font.iFontNum,
-				glyphCount, payload->quadCount, &effects, &colorContract,
+				glyphCount, payload->quadCount, layoutKind,
+				&effects, &colorContract,
 				payload, origin))
 			{
 				shape->DeleteThis();
@@ -1577,7 +1606,7 @@ namespace fonthook::vectorfont
 				return nullptr;
 			}
 			TileShader* targetShader = ResolveNativeA8PacketShader(
-				*packet, shape, false, true);
+				*packet, shape, false, layoutKind);
 			bool immediateReady = false;
 			if (!targetShader || !RequestNativeA8VanillaLayoutShapePrecache(
 				shape, targetShader, immediateReady))

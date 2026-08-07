@@ -113,6 +113,9 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kVanillaLayoutVertexStride =
 			sizeof(NativeA8VanillaLayoutVertex);
 		static_assert(kVanillaLayoutVertexStride == 40u);
+		inline constexpr UInt32 kVanillaParametricVertexStride =
+			sizeof(NativeA8VanillaParametricVertex);
+		static_assert(kVanillaParametricVertexStride == 48u);
 		inline constexpr UInt8 kStaticCompositeLayerMaskFirst = 8;
 		inline constexpr size_t kStaticCompositeLayerMaskCount = 8;
 		inline constexpr size_t kStaticCompositeShiftCount = 2;
@@ -185,7 +188,9 @@ namespace fonthook::vectorfont
 			bool compositeShiftedShadow = false;
 			bool writeEffectAlpha = false;
 			bool usesLiveTileRgb = true;
-			bool vanillaLayoutSdf = false;
+			NativeA8VanillaLayoutKind vanillaLayoutKind =
+				NativeA8VanillaLayoutKind::None;
+			UInt32 uniformDistanceParameterScaleBits = 0;
 			size_t precomputedHash = 0;
 
 			bool operator==(const NativeProfileKey& other) const
@@ -200,7 +205,9 @@ namespace fonthook::vectorfont
 						== other.compositeShiftedShadow
 					&& writeEffectAlpha == other.writeEffectAlpha
 					&& usesLiveTileRgb == other.usesLiveTileRgb
-					&& vanillaLayoutSdf == other.vanillaLayoutSdf
+					&& vanillaLayoutKind == other.vanillaLayoutKind
+					&& uniformDistanceParameterScaleBits
+						== other.uniformDistanceParameterScaleBits
 					&& constantBits == other.constantBits;
 			}
 		};
@@ -227,7 +234,8 @@ namespace fonthook::vectorfont
 				mix(key.compositeShiftedShadow ? 1u : 0u);
 				mix(key.writeEffectAlpha ? 1u : 0u);
 				mix(key.usesLiveTileRgb ? 1u : 0u);
-				mix(key.vanillaLayoutSdf ? 1u : 0u);
+				mix(static_cast<UInt32>(key.vanillaLayoutKind));
+				mix(key.uniformDistanceParameterScaleBits);
 				for (UInt32 value : key.constantBits)
 					mix(value);
 				return hash;
@@ -253,8 +261,13 @@ namespace fonthook::vectorfont
 			NativeShaderProfile(NativeShaderGeneration& generation,
 				const NativeProfileKey& profileKey,
 				const std::array<float,
-					kNativeA8PacketConstantFloatCount>& packetConstants)
+					kNativeA8PacketConstantFloatCount>& packetConstants,
+				float uniformSdfSpread,
+				float uniformDistanceParameterScale)
 				: owner(&generation), key(profileKey), constants(packetConstants),
+				  vanillaUniformSdfSpread(uniformSdfSpread),
+				  vanillaUniformDistanceParameterScale(
+					  uniformDistanceParameterScale),
 				  privateRegisterCount(
 					  NativePacketRegisterCount(profileKey.shaderClass))
 			{
@@ -264,6 +277,8 @@ namespace fonthook::vectorfont
 			const NativeProfileKey key;
 			const std::array<float,
 				kNativeA8PacketConstantFloatCount> constants;
+			const float vanillaUniformSdfSpread;
+			const float vanillaUniformDistanceParameterScale;
 			const UInt8 privateRegisterCount;
 			NiPointer<TileShader> shaderOwner;
 			TileShader* shader = nullptr;
@@ -295,6 +310,13 @@ namespace fonthook::vectorfont
 				compatibleVanillaLayoutD3DDeclarations;
 			NiD3DVertexShaderPtr vanillaLayoutVertexShader;
 			bool vanillaLayoutReady = false;
+			NiDX9ShaderDeclarationPtr vanillaParametricLayoutDeclaration;
+			IDirect3DVertexDeclaration9*
+				vanillaParametricLayoutD3DDeclaration = nullptr;
+			std::vector<IDirect3DVertexDeclaration9*>
+				compatibleVanillaParametricLayoutD3DDeclarations;
+			NiD3DVertexShaderPtr vanillaParametricLayoutVertexShader;
+			bool vanillaParametricLayoutReady = false;
 			NiD3DPixelShaderPtr coverageShader;
 			NiD3DPixelShaderPtr argbShader;
 			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
@@ -329,6 +351,65 @@ namespace fonthook::vectorfont
 			// shader as a raw pointer. Retaining them makes refresh publication safe.
 			std::vector<NativeShaderProfile*> ownedProfiles;
 		};
+
+		UInt32 ResolveVanillaLayoutStride(
+			NativeA8VanillaLayoutKind layoutKind)
+		{
+			switch (layoutKind)
+			{
+			case NativeA8VanillaLayoutKind::Uniform40:
+				return kVanillaLayoutVertexStride;
+			case NativeA8VanillaLayoutKind::Parametric48:
+				return kVanillaParametricVertexStride;
+			default:
+				return 0u;
+			}
+		}
+
+		bool IsVanillaLayoutGenerationReady(
+			const NativeShaderGeneration* generation,
+			NativeA8VanillaLayoutKind layoutKind)
+		{
+			if (!generation)
+				return false;
+			return layoutKind == NativeA8VanillaLayoutKind::Uniform40
+				? generation->vanillaLayoutReady
+				: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+					? generation->vanillaParametricLayoutReady : false;
+		}
+
+		NiDX9ShaderDeclaration* ResolveVanillaLayoutDeclaration(
+			NativeShaderGeneration& generation,
+			NativeA8VanillaLayoutKind layoutKind)
+		{
+			return layoutKind == NativeA8VanillaLayoutKind::Uniform40
+				? generation.vanillaLayoutDeclaration.m_pObject
+				: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+					? generation.vanillaParametricLayoutDeclaration.m_pObject
+					: nullptr;
+		}
+
+		IDirect3DVertexDeclaration9* ResolveVanillaLayoutD3DDeclaration(
+			NativeShaderGeneration& generation,
+			NativeA8VanillaLayoutKind layoutKind)
+		{
+			return layoutKind == NativeA8VanillaLayoutKind::Uniform40
+				? generation.vanillaLayoutD3DDeclaration
+				: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+					? generation.vanillaParametricLayoutD3DDeclaration
+					: nullptr;
+		}
+
+		NiD3DVertexShader* ResolveVanillaLayoutVertexShader(
+			NativeShaderGeneration& generation,
+			NativeA8VanillaLayoutKind layoutKind)
+		{
+			return layoutKind == NativeA8VanillaLayoutKind::Uniform40
+				? generation.vanillaLayoutVertexShader.m_pObject
+				: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+					? generation.vanillaParametricLayoutVertexShader.m_pObject
+					: nullptr;
+		}
 
 		std::atomic<NativeShaderGeneration*> s_publishedGeneration = nullptr;
 		std::mutex s_initializationMutex;
@@ -506,7 +587,8 @@ namespace fonthook::vectorfont
 			NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
 			NativeShaderProfile* profile = block ? block->profile : nullptr;
 			if (!profile || profile->shader != shader
-				|| !profile->key.vanillaLayoutSdf)
+				|| !UsesNativeA8VanillaLayout(
+					profile->key.vanillaLayoutKind))
 			{
 				return false;
 			}
@@ -692,13 +774,24 @@ namespace fonthook::vectorfont
 
 		HRESULT PublishNativeVanillaLayoutVertexConstants(
 			IDirect3DDevice9* device, float rasterScale, float spread,
-			UInt8 layerMask, NativeVertexAaState* cache,
+			float distanceParameterScale, UInt8 layerMask,
+			NativeA8VanillaLayoutKind layoutKind,
+			NativeVertexAaState* cache,
 			const char*& operation)
 		{
 			operation = "none";
+			const bool uniformLayout =
+				layoutKind == NativeA8VanillaLayoutKind::Uniform40;
+			const bool parametricLayout =
+				layoutKind == NativeA8VanillaLayoutKind::Parametric48;
 			if (!device || !std::isfinite(rasterScale)
-				|| rasterScale <= 0.0f || !std::isfinite(spread)
-				|| spread <= 0.0f
+				|| rasterScale <= 0.0f || (!uniformLayout && !parametricLayout)
+				|| !std::isfinite(spread)
+				|| !std::isfinite(distanceParameterScale)
+				|| (uniformLayout
+					&& (spread <= 0.0f || distanceParameterScale < 1.0f))
+				|| (parametricLayout
+					&& (spread != 0.0f || distanceParameterScale != 1.0f))
 				|| layerMask < kStaticCompositeLayerMaskFirst
 				|| layerMask >= kStaticCompositeLayerMaskFirst
 					+ kStaticCompositeLayerMaskCount)
@@ -734,7 +827,8 @@ namespace fonthook::vectorfont
 				static_cast<float>(viewport.Width) * 0.5f,
 				static_cast<float>(viewport.Height) * 0.5f,
 				rasterScale, 1.0f,
-				spread, 1.0f, static_cast<float>(layerMask), 0.0f
+				spread, distanceParameterScale,
+				static_cast<float>(layerMask), 0.0f
 			}};
 			if (cache)
 			{
@@ -911,7 +1005,8 @@ namespace fonthook::vectorfont
 			HRESULT constantsResult = D3D_OK;
 			const bool vertexConstantsReady = vertexAaCache
 				&& vertexAaCache->aaConstantReady
-				&& (!profile->key.vanillaLayoutSdf
+				&& (!UsesNativeA8VanillaLayout(
+						profile->key.vanillaLayoutKind)
 					|| vertexAaCache->vanillaGlyphConstantReady);
 			if (cachedProfile == profile && vertexConstantsReady)
 			{
@@ -924,13 +1019,17 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::VertexAaConstantVanillaPreserved);
 			}
-			else if (profile->key.vanillaLayoutSdf)
+			else if (UsesNativeA8VanillaLayout(
+				profile->key.vanillaLayoutKind))
 			{
 				const char* vertexOperation = "none";
 				const HRESULT vertexResult =
 					PublishNativeVanillaLayoutVertexConstants(device,
-						profile->constants[7], profile->constants[6],
+						profile->constants[7],
+						profile->vanillaUniformSdfSpread,
+						profile->vanillaUniformDistanceParameterScale,
 						profile->key.staticCompositeLayerMask,
+						profile->key.vanillaLayoutKind,
 						vertexAaCache, vertexOperation);
 				if (FAILED(vertexResult))
 				{
@@ -1115,7 +1214,8 @@ namespace fonthook::vectorfont
 			NativeVanillaLayoutPublicationWitness& witness =
 				s_vanillaLayoutPublicationWitness;
 			if (witness.armed && witness.expectedShader == shader
-				&& profile->key.vanillaLayoutSdf && batchActive
+				&& UsesNativeA8VanillaLayout(
+					profile->key.vanillaLayoutKind) && batchActive
 				&& sortedBatchActive
 				&& sortedBatch.packetProfile == profile
 				&& sortedBatch.device == device
@@ -1132,7 +1232,7 @@ namespace fonthook::vectorfont
 
 		NativeProfileKey MakeProfileKey(const NativeA8PacketTemplate& packet,
 			NativeA8Sampling sampling, bool writeEffectAlpha,
-			bool vanillaLayoutSdf)
+			NativeA8VanillaLayoutKind vanillaLayoutKind)
 		{
 			NativeProfileKey key;
 			key.shaderClass = packet.shaderClass;
@@ -1145,15 +1245,18 @@ namespace fonthook::vectorfont
 				packet.compositeShiftedShadow;
 			key.writeEffectAlpha = writeEffectAlpha;
 			key.usesLiveTileRgb = packet.usesLiveTileRgb;
-			key.vanillaLayoutSdf = vanillaLayoutSdf;
+			key.vanillaLayoutKind = vanillaLayoutKind;
 			std::memcpy(key.constantBits.data(), packet.constants.data(),
 				key.constantBits.size() * sizeof(UInt32));
-			if (vanillaLayoutSdf)
+			if (vanillaLayoutKind == NativeA8VanillaLayoutKind::Uniform40)
 			{
 				std::memcpy(&key.constantBits[6],
 					&packet.uniformSdfSpread, sizeof(UInt32));
+				std::memcpy(&key.uniformDistanceParameterScaleBits,
+					&packet.uniformDistanceParameterScale, sizeof(UInt32));
 			}
-			if (!vanillaLayoutSdf && packet.sampling == sampling)
+			if (!UsesNativeA8VanillaLayout(vanillaLayoutKind)
+				&& packet.sampling == sampling)
 			{
 				key.precomputedHash =
 					packet.profileHashes[writeEffectAlpha ? 1u : 0u];
@@ -1187,16 +1290,17 @@ namespace fonthook::vectorfont
 		NiD3DPixelShader* ResolveProfilePixelShader(
 			NativeShaderGeneration& generation,
 			const NativeA8PacketTemplate& packet,
-			bool vanillaLayoutSdf)
+			NativeA8VanillaLayoutKind vanillaLayoutKind)
 		{
-			if (vanillaLayoutSdf)
+			if (UsesNativeA8VanillaLayout(vanillaLayoutKind))
 			{
 				const size_t qualityIndex =
 					static_cast<size_t>(packet.quality);
 				const bool supportedDistanceField =
 					packet.distanceFieldMethod == DistanceFieldMethod::TrueSdf
 					|| packet.distanceFieldMethod == DistanceFieldMethod::Mtsdf;
-				if (!generation.vanillaLayoutReady
+				if (!IsVanillaLayoutGenerationReady(
+						&generation, vanillaLayoutKind)
 					|| !supportedDistanceField
 					|| generation.distanceFieldMethod
 						!= packet.distanceFieldMethod
@@ -1384,7 +1488,7 @@ namespace fonthook::vectorfont
 			const NativeA8PacketTemplate& packet, const NativeProfileKey& key)
 		{
 			NiD3DPixelShader* pixelShader = ResolveProfilePixelShader(generation,
-				packet, key.vanillaLayoutSdf);
+				packet, key.vanillaLayoutKind);
 			if (!pixelShader || !pixelShader->GetShaderHandle())
 				return nullptr;
 			if (packet.shaderClass == NativeA8ShaderClass::Composite
@@ -1403,23 +1507,27 @@ namespace fonthook::vectorfont
 				if (ordinal < 16u)
 				{
 					gLog.FormattedMessage(
-						"tnvse_freetype_native: composite pixel profile quality=%u layerMask=%u shiftedShadow=%u specialized=%u vanillaLayout=%u",
+						"tnvse_freetype_native: composite pixel profile quality=%u layerMask=%u shiftedShadow=%u specialized=%u vanillaLayoutKind=%u",
 						static_cast<UInt32>(packet.quality),
 						static_cast<UInt32>(
 							packet.staticCompositeLayerMask),
 						packet.compositeShiftedShadow ? 1u : 0u,
 						specialized ? 1u : 0u,
-						key.vanillaLayoutSdf ? 1u : 0u);
+						static_cast<UInt32>(key.vanillaLayoutKind));
 				}
 			}
-			NiD3DVertexShader* vertexShader = key.vanillaLayoutSdf
-				? generation.vanillaLayoutVertexShader.m_pObject
-				: generation.vertexShader.m_pObject;
+			NiD3DVertexShader* vertexShader =
+				UsesNativeA8VanillaLayout(key.vanillaLayoutKind)
+					? ResolveVanillaLayoutVertexShader(
+						generation, key.vanillaLayoutKind)
+					: generation.vertexShader.m_pObject;
 			if (!vertexShader || !vertexShader->GetShaderHandle())
 				return nullptr;
-			NiDX9ShaderDeclaration* declaration = key.vanillaLayoutSdf
-				? generation.vanillaLayoutDeclaration.m_pObject
-				: generation.declaration.m_pObject;
+			NiDX9ShaderDeclaration* declaration =
+				UsesNativeA8VanillaLayout(key.vanillaLayoutKind)
+					? ResolveVanillaLayoutDeclaration(
+						generation, key.vanillaLayoutKind)
+					: generation.declaration.m_pObject;
 			if (!declaration)
 				return nullptr;
 
@@ -1438,10 +1546,18 @@ namespace fonthook::vectorfont
 			// replacing c176 with the historical identity value would turn every
 			// fixed effect layer white.
 			auto profileConstants = packet.constants;
-			if (key.vanillaLayoutSdf)
+			if (key.vanillaLayoutKind
+				== NativeA8VanillaLayoutKind::Uniform40)
 				profileConstants[6] = packet.uniformSdfSpread;
+			const float uniformSdfSpread = key.vanillaLayoutKind
+				== NativeA8VanillaLayoutKind::Uniform40
+					? packet.uniformSdfSpread : 0.0f;
+			const float uniformDistanceParameterScale = key.vanillaLayoutKind
+				== NativeA8VanillaLayoutKind::Uniform40
+					? packet.uniformDistanceParameterScale : 1.0f;
 			auto* profile = new NativeShaderProfile(generation, key,
-				profileConstants);
+				profileConstants, uniformSdfSpread,
+				uniformDistanceParameterScale);
 			profile->shader = shader;
 			profile->effectPass =
 				packet.shaderClass != NativeA8ShaderClass::Composite
@@ -1728,6 +1844,67 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		bool CreateVanillaParametricLayoutDeclaration(
+			NativeShaderGeneration& generation, const char*& status)
+		{
+			if (!generation.renderer || !generation.device
+				|| generation.renderer->m_kD3DCaps9.MaxVertexShaderConst
+					<= kNativeA8VanillaLayoutGlyphConstantRegister)
+			{
+				status = "constant-registers";
+				return false;
+			}
+			NiDX9ShaderDeclarationPtr declaration =
+				CdeclCall<NiDX9ShaderDeclaration*>(kShaderDeclarationCreate,
+					generation.renderer, 6u, 1u);
+			if (!declaration)
+			{
+				status = "declaration-factory";
+				return false;
+			}
+
+			using Parameter = NiShaderDeclaration::ShaderParameter;
+			using ParameterType = NiShaderDeclaration::ShaderParameterType;
+			// Keep every additional texture semantic FLOAT2. Retail GetTextureSet
+			// returns one NiPoint2 source for every requested set; wider source types
+			// would make the asynchronous native pack read beyond that allocation.
+			const bool entriesReady =
+				declaration->SetEntry(0, 0,
+					Parameter::SHADERPARAM_NI_POSITION,
+					ParameterType::SPTYPE_FLOAT3, 0)
+				&& declaration->SetEntry(1, 0,
+					Parameter::SHADERPARAM_NI_TEXCOORD0,
+					ParameterType::SPTYPE_FLOAT2, 0)
+				&& declaration->SetEntry(2, 0,
+					Parameter::SHADERPARAM_NI_COLOR,
+					ParameterType::SPTYPE_UBYTECOLOR, 0)
+				&& declaration->SetEntry(3, 0,
+					Parameter::SHADERPARAM_NI_TEXCOORD1,
+					ParameterType::SPTYPE_FLOAT2, 0)
+				&& declaration->SetEntry(4, 0,
+					Parameter::SHADERPARAM_NI_TEXCOORD2,
+					ParameterType::SPTYPE_FLOAT2, 0)
+				&& declaration->SetEntry(5, 0,
+					Parameter::SHADERPARAM_NI_TEXCOORD3,
+					ParameterType::SPTYPE_FLOAT2, 0);
+			if (!entriesReady)
+			{
+				status = "declaration-entries";
+				return false;
+			}
+			IDirect3DVertexDeclaration9* d3dDeclaration =
+				declaration->GetD3DDeclaration();
+			if (!d3dDeclaration)
+			{
+				status = "d3d-declaration";
+				return false;
+			}
+			generation.vanillaParametricLayoutDeclaration = declaration;
+			generation.vanillaParametricLayoutD3DDeclaration = d3dDeclaration;
+			status = "ready";
+			return true;
+		}
+
 		NativeShaderGeneration* BuildGeneration(CreateVertexShaderFn createVS,
 			CreatePixelShaderFn createPS, NiDX9Renderer* renderer,
 			IDirect3DDevice9* device, const char*& failure)
@@ -1761,6 +1938,8 @@ namespace fonthook::vectorfont
 			{
 				generation->vanillaLayoutVertexShader = createVS(
 					"tnvse_freetype_native_vanilla_layout_vs.vso");
+				generation->vanillaParametricLayoutVertexShader = createVS(
+					"tnvse_freetype_native_vanilla_parametric_vs.vso");
 			}
 			if (UsesBakedEffectRoute())
 			{
@@ -1905,16 +2084,61 @@ namespace fonthook::vectorfont
 					}
 				}
 			}
+			const char* vanillaParametricLayoutStatus = vanillaLayoutRequested
+				? "vertex-shader" : "not-applicable";
+			if (vanillaLayoutRequested
+				&& HasShaderHandle(
+					generation->vanillaParametricLayoutVertexShader)
+				&& CreateVanillaParametricLayoutDeclaration(
+					*generation, vanillaParametricLayoutStatus))
+			{
+				generation->vanillaParametricLayoutVertexShader->m_hDecl =
+					generation->vanillaParametricLayoutD3DDeclaration;
+				generation->vanillaParametricLayoutReady = true;
+				for (NativeShaderGeneration* previous : s_processGenerations)
+				{
+					if (!previous || !previous->vanillaParametricLayoutReady
+						|| previous->deviceEpoch != generation->deviceEpoch
+						|| previous->renderer != renderer
+						|| previous->device != device
+						|| !previous->vanillaParametricLayoutD3DDeclaration)
+					{
+						continue;
+					}
+					IDirect3DVertexDeclaration9* declaration =
+						previous->vanillaParametricLayoutD3DDeclaration;
+					if (declaration
+							!= generation->vanillaParametricLayoutD3DDeclaration
+						&& std::find(generation->
+								compatibleVanillaParametricLayoutD3DDeclarations.begin(),
+							generation->
+								compatibleVanillaParametricLayoutD3DDeclarations.end(),
+							declaration)
+							== generation->
+								compatibleVanillaParametricLayoutD3DDeclarations.end())
+					{
+						generation->
+							compatibleVanillaParametricLayoutD3DDeclarations.push_back(
+								declaration);
+					}
+				}
+			}
 			gLog.FormattedMessage(
-				"tnvse_freetype_native: vanilla-layout SDF generation status=%s ready=%u stride=%u vertexConstants=c%u-c%u declaration=%p compatiblePrevious=%u deviceEpoch=%u",
+				"tnvse_freetype_native: vanilla-layout SDF generation uniformStatus=%s uniformReady=%u uniformStride=%u uniformDeclaration=%p uniformCompatiblePrevious=%u parametricStatus=%s parametricReady=%u parametricStride=%u parametricDeclaration=%p parametricCompatiblePrevious=%u vertexConstants=c%u-c%u deviceEpoch=%u",
 				vanillaLayoutStatus,
 				generation->vanillaLayoutReady ? 1u : 0u,
 				kVanillaLayoutVertexStride,
-				kNativeA8VertexAaConstantRegister,
-				kNativeA8VanillaLayoutGlyphConstantRegister,
 				generation->vanillaLayoutD3DDeclaration,
 				static_cast<UInt32>(
 					generation->compatibleVanillaLayoutD3DDeclarations.size()),
+				vanillaParametricLayoutStatus,
+				generation->vanillaParametricLayoutReady ? 1u : 0u,
+				kVanillaParametricVertexStride,
+				generation->vanillaParametricLayoutD3DDeclaration,
+				static_cast<UInt32>(generation->
+					compatibleVanillaParametricLayoutD3DDeclarations.size()),
+				kNativeA8VertexAaConstantRegister,
+				kNativeA8VanillaLayoutGlyphConstantRegister,
 				generation->deviceEpoch);
 			return generation.release();
 		}
@@ -2381,7 +2605,7 @@ namespace fonthook::vectorfont
 
 	TileShader* ResolveNativeA8PacketShader(const NativeA8PacketTemplate& packet,
 		const NiTriShape* facade, bool scaledFillSampling,
-		bool vanillaLayoutSdf)
+		NativeA8VanillaLayoutKind vanillaLayoutKind)
 	{
 		if (!IsNativeA8RendererAvailable())
 			return nullptr;
@@ -2398,7 +2622,8 @@ namespace fonthook::vectorfont
 			&& generation->supportsSeparateAlpha
 			&& alpha && alpha->GetAlphaBlending();
 		const size_t cacheIndex = writeEffectAlpha ? 1u : 0u;
-		NativeA8PacketShaderCacheEntry& packetCache = vanillaLayoutSdf
+		NativeA8PacketShaderCacheEntry& packetCache =
+			UsesNativeA8VanillaLayout(vanillaLayoutKind)
 			? packet.vanillaLayoutResolvedShaders[cacheIndex]
 			: packet.resolvedShaders[cacheIndex];
 		NativeShaderProfile* cachedProfile =
@@ -2408,12 +2633,12 @@ namespace fonthook::vectorfont
 			&& cachedProfile->shader
 			&& cachedProfile->key.sampling == sampling
 			&& cachedProfile->key.writeEffectAlpha == writeEffectAlpha
-			&& cachedProfile->key.vanillaLayoutSdf == vanillaLayoutSdf)
+			&& cachedProfile->key.vanillaLayoutKind == vanillaLayoutKind)
 		{
 			return cachedProfile->shader;
 		}
 		const NativeProfileKey key = MakeProfileKey(packet, sampling,
-			writeEffectAlpha, vanillaLayoutSdf);
+			writeEffectAlpha, vanillaLayoutKind);
 		std::shared_ptr<const NativeProfileMap> snapshot =
 			generation->profiles.load(std::memory_order_acquire);
 		auto found = snapshot->find(key);
@@ -2500,7 +2725,8 @@ namespace fonthook::vectorfont
 			&& witness.token == token && witness.publishedToken == token
 			&& witness.expectedShader == shader && publishedProfile
 			&& publishedProfile->shader == shader
-			&& publishedProfile->key.vanillaLayoutSdf
+			&& UsesNativeA8VanillaLayout(
+				publishedProfile->key.vanillaLayoutKind)
 			&& batch.depth && batch.packetProfile == publishedProfile
 			&& batch.device == witness.publishedDevice
 			&& batch.generation == witness.publishedGeneration
@@ -2535,7 +2761,7 @@ namespace fonthook::vectorfont
 		std::atomic<UInt32> s_vanillaLayoutReadinessLoggedMask{ 0 };
 		std::atomic<UInt32> s_vanillaLayoutPostpackLoggedMask{ 0 };
 		std::atomic<UInt32> s_vanillaLayoutUploadFailureLoggedMask{ 0 };
-		std::atomic<bool> s_vanillaLayoutUploadSuccessLogged{ false };
+		std::atomic<UInt32> s_vanillaLayoutUploadSuccessLoggedMask{ 0 };
 
 		enum VanillaLayoutReadinessFailure : UInt32
 		{
@@ -2598,6 +2824,8 @@ namespace fonthook::vectorfont
 			UInt16 nativePackDataFlags = 0;
 			UInt16 nativePackDirtyFlags = 0;
 			UInt8 nativePackKeepFlags = 0;
+			NativeA8VanillaLayoutKind layoutKind =
+				NativeA8VanillaLayoutKind::None;
 			bool nativePackCompleted = false;
 			bool priorGenerationDeclaration = false;
 		};
@@ -2615,24 +2843,35 @@ namespace fonthook::vectorfont
 
 		VanillaLayoutDeclarationCompatibility
 		ClassifyVanillaLayoutDeclaration(const NativeShaderGeneration* generation,
+			NativeA8VanillaLayoutKind layoutKind,
 			const NiGeometryBufferData* buffer)
 		{
-			if (!generation || !buffer || !buffer->m_hDeclaration
-				|| !generation->vanillaLayoutD3DDeclaration)
+			IDirect3DVertexDeclaration9* expected = generation
+				? (layoutKind == NativeA8VanillaLayoutKind::Uniform40
+					? generation->vanillaLayoutD3DDeclaration
+					: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+						? generation->vanillaParametricLayoutD3DDeclaration
+						: nullptr)
+				: nullptr;
+			if (!generation || !buffer || !buffer->m_hDeclaration || !expected)
 			{
 				return VanillaLayoutDeclarationCompatibility::Missing;
 			}
 			auto* declaration = static_cast<IDirect3DVertexDeclaration9*>(
 				buffer->m_hDeclaration);
-			if (declaration == generation->vanillaLayoutD3DDeclaration)
+			if (declaration == expected)
 			{
 				return VanillaLayoutDeclarationCompatibility::CurrentGeneration;
 			}
-			if (std::find(
-					generation->compatibleVanillaLayoutD3DDeclarations.begin(),
-					generation->compatibleVanillaLayoutD3DDeclarations.end(),
-					declaration)
-				!= generation->compatibleVanillaLayoutD3DDeclarations.end())
+			const std::vector<IDirect3DVertexDeclaration9*>* compatible =
+				layoutKind == NativeA8VanillaLayoutKind::Uniform40
+					? &generation->compatibleVanillaLayoutD3DDeclarations
+					: layoutKind == NativeA8VanillaLayoutKind::Parametric48
+						? &generation->
+							compatibleVanillaParametricLayoutD3DDeclarations
+						: nullptr;
+			if (compatible && std::find(compatible->begin(), compatible->end(),
+					declaration) != compatible->end())
 			{
 				return VanillaLayoutDeclarationCompatibility::
 					CompatiblePreviousGeneration;
@@ -2695,7 +2934,10 @@ namespace fonthook::vectorfont
 			NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
 			NativeShaderProfile* profile = block ? block->profile : nullptr;
 			if (!profile || token.profileIdentity != profile
-				|| profile->shader != shader || !profile->key.vanillaLayoutSdf)
+				|| profile->shader != shader
+				|| !UsesNativeA8VanillaLayout(
+					profile->key.vanillaLayoutKind)
+				|| token.layoutKind != profile->key.vanillaLayoutKind)
 			{
 				return VanillaLayoutDrawTokenMismatch::ShapeOrShader;
 			}
@@ -2721,7 +2963,14 @@ namespace fonthook::vectorfont
 			// process-lifetime once published. Exact generation/device-epoch identity
 			// therefore preserves the earlier full declaration classification without
 			// repeating its resource walk or compatible-declaration vector scan.
-			if (!generation || token.generationIdentity != generation
+			const NativeA8VanillaLayoutKind layoutKind =
+				profile->key.vanillaLayoutKind;
+			const UInt32 expectedStride = ResolveVanillaLayoutStride(layoutKind);
+			IDirect3DVertexDeclaration9* expectedDeclaration = generation
+				? ResolveVanillaLayoutD3DDeclaration(*generation, layoutKind)
+				: nullptr;
+			if (!generation || !expectedStride || !expectedDeclaration
+				|| token.generationIdentity != generation
 				|| profile->owner != generation
 				|| generation->id != token.generation
 				|| generation->deviceEpoch != token.deviceEpoch
@@ -2730,9 +2979,8 @@ namespace fonthook::vectorfont
 				|| s_resetInProgress.load(std::memory_order_acquire)
 				|| generation->runtimeFault.load(std::memory_order_acquire)
 				|| generation->renderer != renderer || generation->device != device
-				|| !generation->vanillaLayoutReady
-				|| !generation->vanillaLayoutDeclaration
-				|| generation->vanillaLayoutD3DDeclaration
+				|| !IsVanillaLayoutGenerationReady(generation, layoutKind)
+				|| expectedDeclaration
 					!= token.generationDeclarationIdentity)
 			{
 				return VanillaLayoutDrawTokenMismatch::Generation;
@@ -2762,17 +3010,17 @@ namespace fonthook::vectorfont
 			const UInt64 expectedByteOffset = chip
 				? static_cast<UInt64>(chip->m_uiOffset)
 					+ static_cast<UInt64>(buffer->m_uiBaseVertexIndex)
-						* kVanillaLayoutVertexStride : 0u;
+						* expectedStride : 0u;
 			const UInt64 expectedByteCount =
 				static_cast<UInt64>(data->m_usVertices)
-					* kVanillaLayoutVertexStride;
+					* expectedStride;
 			if (!token.bufferDeclarationIdentity
 				|| buffer->m_hDeclaration != token.bufferDeclarationIdentity
 				|| token.streamCount != 1u
 				|| buffer->m_uiStreamCount != token.streamCount
 				|| !token.strideArrayIdentity
 				|| buffer->m_puiVertexStride != token.strideArrayIdentity
-				|| token.stride != kVanillaLayoutVertexStride
+				|| token.stride != expectedStride
 				|| buffer->m_puiVertexStride[0] != token.stride
 				|| buffer->m_uiVertCount != token.bufferVertexCount
 				|| token.bufferVertexCount < token.dataVertexCount
@@ -2870,6 +3118,7 @@ namespace fonthook::vectorfont
 			token.nativePackDataFlags = snapshot.nativePackDataFlags;
 			token.nativePackDirtyFlags = snapshot.nativePackDirtyFlags;
 			token.nativePackKeepFlags = snapshot.nativePackKeepFlags;
+			token.layoutKind = snapshot.layoutKind;
 			token.nativePackCompleted = snapshot.nativePackCompleted;
 			token.priorGenerationDeclaration =
 				snapshot.priorGenerationDeclaration;
@@ -2895,10 +3144,14 @@ namespace fonthook::vectorfont
 			const NiTriShapeData* data = shape ? shape->GetModelData() : nullptr;
 			const NiGeometryBufferData* buffer = data
 				? data->m_pkBuffData : nullptr;
+			const NativeA8VanillaLayoutKind layoutKind = profile
+				? profile->key.vanillaLayoutKind
+				: NativeA8VanillaLayoutKind::None;
+			const UInt32 expectedStride = ResolveVanillaLayoutStride(layoutKind);
 			const bool profileMatches = profile && profile->shader == shader
-				&& profile->key.vanillaLayoutSdf;
+				&& UsesNativeA8VanillaLayout(layoutKind);
 			const bool generationMatches = generation
-				&& generation->vanillaLayoutReady
+				&& IsVanillaLayoutGenerationReady(generation, layoutKind)
 				&& GenerationMatchesCurrentDevice(generation);
 			const UInt32 streamCount = buffer ? buffer->m_uiStreamCount : 0u;
 			const UInt32 stride = buffer && buffer->m_puiVertexStride
@@ -2908,9 +3161,20 @@ namespace fonthook::vectorfont
 			IDirect3DVertexBuffer9* vertexBuffer = vertexChip
 				? vertexChip->m_pkVB : nullptr;
 			IDirect3DVertexDeclaration9* expectedDeclaration = generation
-				? generation->vanillaLayoutD3DDeclaration : nullptr;
+				? ResolveVanillaLayoutD3DDeclaration(*generation, layoutKind)
+				: nullptr;
 			const VanillaLayoutDeclarationCompatibility declarationCompatibility =
-				ClassifyVanillaLayoutDeclaration(generation, buffer);
+				ClassifyVanillaLayoutDeclaration(generation, layoutKind, buffer);
+			const UInt32 compatibleDeclarationCount = generation
+				? static_cast<UInt32>(layoutKind
+					== NativeA8VanillaLayoutKind::Uniform40
+						? generation->compatibleVanillaLayoutD3DDeclarations.size()
+						: layoutKind
+							== NativeA8VanillaLayoutKind::Parametric48
+								? generation->
+									compatibleVanillaParametricLayoutD3DDeclarations.size()
+								: 0u)
+				: 0u;
 			const bool declarationMatches = declarationCompatibility
 				== VanillaLayoutDeclarationCompatibility::CurrentGeneration
 				|| declarationCompatibility == VanillaLayoutDeclarationCompatibility::
@@ -2919,7 +3183,7 @@ namespace fonthook::vectorfont
 			// then retires static color/UV sources through 0xE7447D -> 0xE6FA90.
 			// Under the renderer lock, all of these postconditions together are the
 			// completion proof that neither vanilla nor NVTF still owns a queued pack
-			// which may overwrite our final 40-byte stream.
+			// which may overwrite our final certified layout stream.
 			const bool nativePackRetirementContract =
 				HasVanillaLayoutNativePackRetirementContract(data);
 			const bool nativePackCompleted =
@@ -2927,7 +3191,8 @@ namespace fonthook::vectorfont
 			const bool structurallyReady = hasShapeAndShader && shaderMatches
 				&& profileMatches && generationMatches && data
 				&& buffer && declarationMatches
-				&& streamCount == 1u && stride == kVanillaLayoutVertexStride
+				&& expectedStride && streamCount == 1u
+				&& stride == expectedStride
 				&& buffer->m_uiVertCount >= data->m_usVertices
 				&& vertexChip && vertexBuffer;
 			const bool ready = structurallyReady && nativePackCompleted;
@@ -2964,6 +3229,7 @@ namespace fonthook::vectorfont
 					readySnapshot->nativePackDataFlags = data->m_usDataFlags;
 					readySnapshot->nativePackDirtyFlags = data->m_usDirtyFlags;
 					readySnapshot->nativePackKeepFlags = data->m_ucKeepFlags;
+					readySnapshot->layoutKind = layoutKind;
 					readySnapshot->nativePackCompleted = nativePackCompleted;
 					readySnapshot->priorGenerationDeclaration =
 						priorGenerationDeclaration;
@@ -2981,16 +3247,23 @@ namespace fonthook::vectorfont
 					nativePackCompleted, priorGenerationDeclaration);
 				if (observations && logFailure)
 				{
-					const UInt32 previous = s_vanillaLayoutPostpackLoggedMask.fetch_or(
-						observations, std::memory_order_acq_rel);
-					const UInt32 newlyObserved = observations & ~previous;
+					const UInt32 observationShift = layoutKind
+						== NativeA8VanillaLayoutKind::Parametric48 ? 2u : 0u;
+					const UInt32 keyedObservations =
+						observations << observationShift;
+					const UInt32 previous =
+						s_vanillaLayoutPostpackLoggedMask.fetch_or(
+							keyedObservations, std::memory_order_acq_rel);
+					const UInt32 newlyObserved =
+						(keyedObservations & ~previous) >> observationShift;
 					if (newlyObserved)
 					{
 						gLog.FormattedMessage(
-							"tnvse_freetype_vanilla_layout_sdf_postpack: observed=0x%08X new=0x%08X shape=%p generation=%u deviceEpoch=%u completion=1 dataFlags=0x%04X dirtyFlags=0x%04X keepFlags=0x%02X color=%p texture=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u stride=%u",
+							"tnvse_freetype_vanilla_layout_sdf_postpack: observed=0x%08X new=0x%08X shape=%p generation=%u deviceEpoch=%u layoutKind=%u completion=1 dataFlags=0x%04X dirtyFlags=0x%04X keepFlags=0x%02X color=%p texture=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u stride=%u",
 							observations, newlyObserved, shape,
 							generation ? generation->id : 0u,
 							generation ? generation->deviceEpoch : 0u,
+							static_cast<UInt32>(layoutKind),
 							data ? static_cast<UInt32>(data->m_usDataFlags) : 0u,
 							data ? static_cast<UInt32>(data->m_usDirtyFlags) : 0u,
 							data ? static_cast<UInt32>(data->m_ucKeepFlags) : 0u,
@@ -2999,8 +3272,7 @@ namespace fonthook::vectorfont
 							static_cast<UInt32>(declarationCompatibility),
 							buffer ? buffer->m_hDeclaration : nullptr,
 							expectedDeclaration,
-							generation ? static_cast<UInt32>(generation->
-								compatibleVanillaLayoutD3DDeclarations.size()) : 0u,
+							compatibleDeclarationCount,
 							stride);
 					}
 				}
@@ -3026,7 +3298,7 @@ namespace fonthook::vectorfont
 				failures |= kDeclarationMismatch;
 			if (buffer && streamCount != 1u)
 				failures |= kStreamMismatch;
-			if (buffer && stride != kVanillaLayoutVertexStride)
+			if (buffer && stride != expectedStride)
 				failures |= kStrideMismatch;
 			if (buffer && data && buffer->m_uiVertCount < data->m_usVertices)
 				failures |= kVertexCountMismatch;
@@ -3048,14 +3320,15 @@ namespace fonthook::vectorfont
 			if (newlyObserved)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_vanilla_layout_sdf_readiness: failure=0x%08X new=0x%08X shape=%p shader=%p shapeShader=%p profile=%u vanillaProfile=%u generation=%u current=%u targetReady=%u deviceEpoch=%u completionContract=%u nativePackCompleted=%u dataFlags=0x%04X dirtyFlags=0x%04X keepFlags=0x%02X color=%p texture=%p buffer=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u streams=%u stride=%u bufferVertices=%u dataVertices=%u chip=%p vertexBuffer=%p",
+					"tnvse_freetype_vanilla_layout_sdf_readiness: failure=0x%08X new=0x%08X shape=%p shader=%p shapeShader=%p profile=%u vanillaProfile=%u layoutKind=%u generation=%u current=%u targetReady=%u deviceEpoch=%u completionContract=%u nativePackCompleted=%u dataFlags=0x%04X dirtyFlags=0x%04X keepFlags=0x%02X color=%p texture=%p buffer=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u streams=%u stride=%u expectedStride=%u bufferVertices=%u dataVertices=%u chip=%p vertexBuffer=%p",
 					failures, newlyObserved, shape, shader,
 					shape ? shape->GetShader() : nullptr,
 					profile ? 1u : 0u,
 					profileMatches ? 1u : 0u,
+					static_cast<UInt32>(layoutKind),
 					generation ? generation->id : 0u,
 					generationMatches ? 1u : 0u,
-					generation && generation->vanillaLayoutReady ? 1u : 0u,
+					IsVanillaLayoutGenerationReady(generation, layoutKind) ? 1u : 0u,
 					generation ? generation->deviceEpoch : 0u,
 					nativePackRetirementContract ? 1u : 0u,
 					nativePackCompleted ? 1u : 0u,
@@ -3068,9 +3341,8 @@ namespace fonthook::vectorfont
 					static_cast<UInt32>(declarationCompatibility),
 					buffer ? buffer->m_hDeclaration : nullptr,
 					expectedDeclaration,
-					generation ? static_cast<UInt32>(generation->
-						compatibleVanillaLayoutD3DDeclarations.size()) : 0u,
-					streamCount, stride,
+					compatibleDeclarationCount,
+					streamCount, stride, expectedStride,
 					buffer ? buffer->m_uiVertCount : 0u,
 					data ? data->m_usVertices : 0u,
 					vertexChip, vertexBuffer);
@@ -3110,14 +3382,19 @@ namespace fonthook::vectorfont
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadFailure);
+			const UInt32 failureShift = snapshot.layoutKind
+				== NativeA8VanillaLayoutKind::Parametric48 ? 8u : 0u;
+			const UInt32 keyedFailure = failure << failureShift;
 			const UInt32 previous =
 				s_vanillaLayoutUploadFailureLoggedMask.fetch_or(
-					failure, std::memory_order_acq_rel);
-			if (failure & ~previous)
+					keyedFailure, std::memory_order_acq_rel);
+			const UInt32 newFailure =
+				(keyedFailure & ~previous) >> failureShift;
+			if (newFailure)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_vanilla_layout_upload: status=failure failure=0x%08X new=0x%08X operation=%s hr=0x%08X shape=%p data=%p buffer=%p chip=%p vertexBuffer=%p stride=%u dataVertices=%u bufferVertices=%u baseVertex=%u chipOffset=%u chipSize=%u bufferSize=%u byteOffset=%I64u byteCount=%I64u",
-					failure, failure & ~previous,
+					"tnvse_freetype_vanilla_layout_upload: status=failure layoutKind=%u failure=0x%08X new=0x%08X operation=%s hr=0x%08X shape=%p data=%p buffer=%p chip=%p vertexBuffer=%p stride=%u dataVertices=%u bufferVertices=%u baseVertex=%u chipOffset=%u chipSize=%u bufferSize=%u byteOffset=%I64u byteCount=%I64u",
+					static_cast<UInt32>(snapshot.layoutKind), failure, newFailure,
 					operation ? operation : "unknown",
 					static_cast<UInt32>(result), snapshot.shape,
 					snapshot.modelData, snapshot.buffer, snapshot.vertexChip,
@@ -3154,7 +3431,16 @@ namespace fonthook::vectorfont
 			const NiPoint3& origin = payload.geometryOrigin;
 			const bool finiteOrigin = std::isfinite(origin.x)
 				&& std::isfinite(origin.y) && std::isfinite(origin.z);
+			const NativeA8VanillaLayoutKind layoutKind = snapshot.layoutKind;
+			const bool uniformLayout =
+				layoutKind == NativeA8VanillaLayoutKind::Uniform40;
+			const bool parametricLayout =
+				layoutKind == NativeA8VanillaLayoutKind::Parametric48;
+			const UInt32 expectedStride = ResolveVanillaLayoutStride(layoutKind);
 			if (!payload.buildComplete || !artifact || !packet
+				|| (!uniformLayout && !parametricLayout) || !expectedStride
+				|| !snapshot.profile
+				|| snapshot.profile->key.vanillaLayoutKind != layoutKind
 				|| !HasNativeA8PayloadValidationSeal(*artifact)
 				|| artifact->pageCount != 1u
 				|| packet->shaderClass != NativeA8ShaderClass::Composite
@@ -3165,7 +3451,14 @@ namespace fonthook::vectorfont
 				|| packet->staticCompositeLayerMask < 8u
 				|| packet->staticCompositeLayerMask > 15u
 				|| !std::isfinite(packet->uniformSdfSpread)
-				|| packet->uniformSdfSpread <= 0.0f
+				|| packet->uniformSdfSpread < 0.0f
+				|| !std::isfinite(packet->uniformDistanceParameterScale)
+				|| packet->uniformDistanceParameterScale < 0.0f
+				|| (packet->uniformDistanceParameterScale > 0.0f
+					&& packet->uniformDistanceParameterScale < 1.0f)
+				|| (uniformLayout
+					&& (packet->uniformSdfSpread <= 0.0f
+						|| packet->uniformDistanceParameterScale < 1.0f))
 				|| packet->vertexCount != snapshot.dataVertexCount
 				|| packetEnd > artifact->gpuVertices.size() || !finiteOrigin)
 			{
@@ -3177,15 +3470,35 @@ namespace fonthook::vectorfont
 			{
 				const NativeA8GpuVertex& source = artifact->gpuVertices[
 					static_cast<size_t>(packet->firstVertex) + ordinal];
+				const NativeA8GpuVertex& quadFirst = artifact->gpuVertices[
+					static_cast<size_t>(packet->firstVertex)
+						+ (ordinal & ~UInt32(3u))];
 				if (!std::isfinite(source.x) || !std::isfinite(source.y)
 					|| !std::isfinite(source.z) || !std::isfinite(source.u)
 					|| !std::isfinite(source.v)
+					|| !std::isfinite(source.sdfSpread)
+					|| source.sdfSpread <= 0.0f
+					|| !std::isfinite(source.distanceParameterScale)
+					|| source.distanceParameterScale < 1.0f
+					|| source.layerMask != static_cast<float>(
+						packet->staticCompositeLayerMask)
+					|| source.sdfSpread != quadFirst.sdfSpread
+					|| source.distanceParameterScale
+						!= quadFirst.distanceParameterScale
+					|| (uniformLayout
+						&& (source.sdfSpread != packet->uniformSdfSpread
+							|| source.distanceParameterScale
+								!= packet->uniformDistanceParameterScale))
 					|| !std::isfinite(source.glyphU0)
 					|| !std::isfinite(source.glyphV0)
 					|| !std::isfinite(source.glyphU1)
 					|| !std::isfinite(source.glyphV1)
 					|| source.glyphU0 > source.glyphU1
 					|| source.glyphV0 > source.glyphV1
+					|| source.glyphU0 != quadFirst.glyphU0
+					|| source.glyphV0 != quadFirst.glyphV0
+					|| source.glyphU1 != quadFirst.glyphU1
+					|| source.glyphV1 != quadFirst.glyphV1
 					|| !std::isfinite(source.x + origin.x)
 					|| !std::isfinite(source.y + origin.y)
 					|| !std::isfinite(source.z + origin.z))
@@ -3208,7 +3521,7 @@ namespace fonthook::vectorfont
 				|| chip->m_pkVB != vertexBuffer
 				|| chip->m_uiOffset != snapshot.vertexChipOffset
 				|| chip->m_uiSize != snapshot.vertexChipSize
-				|| snapshot.stride != sizeof(NativeA8VanillaLayoutVertex)
+				|| snapshot.stride != expectedStride
 				|| !snapshot.dataVertexCount || !snapshot.vertexChipSize
 				|| chip->m_uiLockFlags != 0u)
 			{
@@ -3267,23 +3580,51 @@ namespace fonthook::vectorfont
 					byteOffset, byteCount);
 			}
 
-			auto* destination =
-				static_cast<NativeA8VanillaLayoutVertex*>(locked);
-			for (UInt32 ordinal = 0; ordinal < packet->vertexCount; ++ordinal)
+			if (uniformLayout)
 			{
-				const NativeA8GpuVertex& source = artifact->gpuVertices[
-					static_cast<size_t>(packet->firstVertex) + ordinal];
-				NativeA8VanillaLayoutVertex& packed = destination[ordinal];
-				packed.x = source.x + origin.x;
-				packed.y = source.y + origin.y;
-				packed.z = source.z + origin.z;
-				packed.u = source.u;
-				packed.v = source.v;
-				packed.color = source.color;
-				packed.glyphU0 = source.glyphU0;
-				packed.glyphV0 = source.glyphV0;
-				packed.glyphU1 = source.glyphU1;
-				packed.glyphV1 = source.glyphV1;
+				auto* destination =
+					static_cast<NativeA8VanillaLayoutVertex*>(locked);
+				for (UInt32 ordinal = 0; ordinal < packet->vertexCount; ++ordinal)
+				{
+					const NativeA8GpuVertex& source = artifact->gpuVertices[
+						static_cast<size_t>(packet->firstVertex) + ordinal];
+					NativeA8VanillaLayoutVertex& packed = destination[ordinal];
+					packed.x = source.x + origin.x;
+					packed.y = source.y + origin.y;
+					packed.z = source.z + origin.z;
+					packed.u = source.u;
+					packed.v = source.v;
+					packed.color = source.color;
+					packed.glyphU0 = source.glyphU0;
+					packed.glyphV0 = source.glyphV0;
+					packed.glyphU1 = source.glyphU1;
+					packed.glyphV1 = source.glyphV1;
+				}
+			}
+			else
+			{
+				auto* destination =
+					static_cast<NativeA8VanillaParametricVertex*>(locked);
+				for (UInt32 ordinal = 0; ordinal < packet->vertexCount; ++ordinal)
+				{
+					const NativeA8GpuVertex& source = artifact->gpuVertices[
+						static_cast<size_t>(packet->firstVertex) + ordinal];
+					NativeA8VanillaParametricVertex& packed =
+						destination[ordinal];
+					packed.x = source.x + origin.x;
+					packed.y = source.y + origin.y;
+					packed.z = source.z + origin.z;
+					packed.u = source.u;
+					packed.v = source.v;
+					packed.color = source.color;
+					packed.sdfSpread = source.sdfSpread;
+					packed.distanceParameterScale =
+						source.distanceParameterScale;
+					packed.glyphU0 = source.glyphU0;
+					packed.glyphV0 = source.glyphV0;
+					packed.glyphU1 = source.glyphU1;
+					packed.glyphV1 = source.glyphV1;
+				}
 			}
 			const HRESULT unlockResult = vertexBuffer->Unlock();
 			if (FAILED(unlockResult))
@@ -3302,13 +3643,16 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadBytes,
 				byteCountOut);
-			if (!s_vanillaLayoutUploadSuccessLogged.exchange(
-				true, std::memory_order_acq_rel))
+			const UInt32 successBit = 1u <<
+				(static_cast<UInt32>(layoutKind) - 1u);
+			if (!(s_vanillaLayoutUploadSuccessLoggedMask.fetch_or(
+				successBit, std::memory_order_acq_rel) & successBit))
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_vanilla_layout_upload: status=ready shape=%p buffer=%p chip=%p vertexBuffer=%p stride=%u vertices=%u byteOffset=%u byteCount=%u pool=%u usage=0x%X",
-					snapshot.shape, snapshot.buffer, snapshot.vertexChip,
-					snapshot.vertexBuffer, snapshot.stride,
+					"tnvse_freetype_vanilla_layout_upload: status=ready shape=%p layoutKind=%u buffer=%p chip=%p vertexBuffer=%p stride=%u vertices=%u byteOffset=%u byteCount=%u pool=%u usage=0x%X",
+					snapshot.shape, static_cast<UInt32>(layoutKind),
+					snapshot.buffer, snapshot.vertexChip, snapshot.vertexBuffer,
+					snapshot.stride,
 					snapshot.dataVertexCount, byteOffsetOut, byteCountOut,
 					static_cast<UInt32>(description.Pool), description.Usage);
 			}
@@ -3325,13 +3669,20 @@ namespace fonthook::vectorfont
 		NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
 		NativeShaderProfile* profile = block ? block->profile : nullptr;
 		NativeShaderGeneration* generation = profile ? profile->owner : nullptr;
+		const NativeA8VanillaLayoutKind layoutKind = profile
+			? profile->key.vanillaLayoutKind
+			: NativeA8VanillaLayoutKind::None;
+		NiDX9ShaderDeclaration* declaration = generation
+			? ResolveVanillaLayoutDeclaration(*generation, layoutKind)
+			: nullptr;
 		NiTriShapeData* data = shape->GetModelData();
 		const UInt32 textureCoordinatesPresent = data
 			? data->m_usDataFlags & NiGeometryData::TEXTURE_SET_MASK : 0u;
 		if (!profile || profile->shader != shader
-			|| !profile->key.vanillaLayoutSdf || !generation
-			|| !generation->renderer || !generation->vanillaLayoutReady
-			|| !generation->vanillaLayoutDeclaration
+			|| !UsesNativeA8VanillaLayout(layoutKind) || !generation
+			|| !generation->renderer
+			|| !IsVanillaLayoutGenerationReady(generation, layoutKind)
+			|| !declaration
 			|| !GenerationMatchesCurrentDevice(generation) || !data
 			|| !data->m_usVertices || !data->m_pkVertex || !data->m_pkColor
 			|| !data->m_pkTexture || !textureCoordinatesPresent
@@ -3351,7 +3702,7 @@ namespace fonthook::vectorfont
 				return false;
 		}
 		if (!generation->renderer->PrecacheGeometry(shape, 0u, 0u,
-			generation->vanillaLayoutDeclaration.m_pObject))
+			declaration))
 		{
 			return false;
 		}

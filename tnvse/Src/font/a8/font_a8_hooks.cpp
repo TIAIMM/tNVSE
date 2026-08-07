@@ -400,10 +400,9 @@ namespace fonthook::vectorfont
 		std::mutex s_vanillaLayoutDrawDiagnosticMutex;
 		std::unordered_set<UInt64> s_vanillaLayoutDrawDiagnosticKeys;
 
-		using VanillaLayoutPackedVertex = NativeA8VanillaLayoutVertex;
-
 		bool ClaimVanillaLayoutDrawDiagnostic(UInt32 fontId,
-			const NativeA8PacketTemplate& packet)
+			const NativeA8PacketTemplate& packet,
+			NativeA8VanillaLayoutKind layoutKind)
 		{
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return false;
@@ -411,7 +410,8 @@ namespace fonthook::vectorfont
 				| (static_cast<UInt64>(packet.staticCompositeLayerMask) << 32u)
 				| (static_cast<UInt64>(packet.compositeShiftedShadow ? 1u : 0u)
 					<< 40u)
-				| (static_cast<UInt64>(packet.distanceFieldMethod) << 41u);
+				| (static_cast<UInt64>(packet.distanceFieldMethod) << 41u)
+				| (static_cast<UInt64>(layoutKind) << 44u);
 			std::lock_guard<std::mutex> lock(
 				s_vanillaLayoutDrawDiagnosticMutex);
 			if (s_vanillaLayoutDrawDiagnosticKeys.size() >= 16u)
@@ -425,6 +425,13 @@ namespace fonthook::vectorfont
 		{
 			const A8ShapeMetadata* metadata = context.metadata;
 			const NativeA8PacketTemplate* packet = context.packet;
+			const NativeA8VanillaLayoutKind layoutKind = metadata
+				? GetVanillaLayoutSdfLayoutKind(*metadata)
+				: NativeA8VanillaLayoutKind::None;
+			const bool uniformLayout =
+				layoutKind == NativeA8VanillaLayoutKind::Uniform40;
+			const bool parametricLayout =
+				layoutKind == NativeA8VanillaLayoutKind::Parametric48;
 			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
 			if (!metadata || !packet || !device)
@@ -438,7 +445,8 @@ namespace fonthook::vectorfont
 
 			std::array<float, kNativeA8PacketConstantFloatCount> expectedPixel =
 				packet->constants;
-			expectedPixel[6] = packet->uniformSdfSpread;
+			if (uniformLayout)
+				expectedPixel[6] = packet->uniformSdfSpread;
 			std::array<float, kNativeA8PacketConstantFloatCount> actualPixel = {};
 			std::array<float, 8> actualVertex = {};
 			D3DVIEWPORT9 viewport = {};
@@ -453,7 +461,9 @@ namespace fonthook::vectorfont
 				static_cast<float>(engineViewport.Width) * 0.5f,
 				static_cast<float>(engineViewport.Height) * 0.5f,
 				expectedPixel[7], 1.0f,
-				packet->uniformSdfSpread, 1.0f,
+				uniformLayout ? packet->uniformSdfSpread : 0.0f,
+				uniformLayout
+					? packet->uniformDistanceParameterScale : 1.0f,
 				static_cast<float>(packet->staticCompositeLayerMask), 0.0f
 			}};
 			UInt32 pixelMismatch = FAILED(pixelHr) ? 0xFFFFFFFFu : 0u;
@@ -518,12 +528,15 @@ namespace fonthook::vectorfont
 			const NiVBChip* chip = buffer && buffer->m_ppkVBChip
 				&& buffer->m_uiStreamCount ? buffer->m_ppkVBChip[0] : nullptr;
 			gLog.FormattedMessage(
-				"tnvse_freetype_vanilla_layout_draw_diag: phase=%s font=%u shape=%p shader=%p rendererArg=%p renderer=%p device=%p mask=%u shifted=%u spread=%.9g pixelHr=0x%08X pixelMismatch=0x%02X vertexHr=0x%08X viewportHr=0x%08X vertexMismatch=0x%02X engineViewport=%ux%u deviceViewport=%ux%u",
+				"tnvse_freetype_vanilla_layout_draw_diag: phase=%s font=%u shape=%p shader=%p rendererArg=%p renderer=%p device=%p layoutKind=%u mask=%u shifted=%u spread=%.9g scale=%.9g pixelHr=0x%08X pixelMismatch=0x%02X vertexHr=0x%08X viewportHr=0x%08X vertexMismatch=0x%02X engineViewport=%ux%u deviceViewport=%ux%u",
 				phase ? phase : "unknown", metadata->fontId, context.shape,
 				context.shader, rendererBase, renderer, device,
+				static_cast<UInt32>(layoutKind),
 				static_cast<UInt32>(packet->staticCompositeLayerMask),
 				packet->compositeShiftedShadow ? 1u : 0u,
-				packet->uniformSdfSpread, static_cast<UInt32>(pixelHr),
+				packet->uniformSdfSpread,
+				packet->uniformDistanceParameterScale,
+				static_cast<UInt32>(pixelHr),
 				pixelMismatch, static_cast<UInt32>(vertexHr),
 				static_cast<UInt32>(viewportHr), vertexMismatch,
 				engineViewport.Width, engineViewport.Height,
@@ -568,8 +581,12 @@ namespace fonthook::vectorfont
 				buffer ? buffer->m_uiVertCount : 0u, chip,
 				chip ? chip->m_uiOffset : 0u, chip ? chip->m_uiSize : 0u);
 
-			if (inspectGeometry && currentStream && streamStride ==
-				sizeof(VanillaLayoutPackedVertex) && buffer
+			const bool diagnosticStrideReady =
+				(uniformLayout && streamStride
+					== sizeof(NativeA8VanillaLayoutVertex))
+				|| (parametricLayout && streamStride
+					== sizeof(NativeA8VanillaParametricVertex));
+			if (inspectGeometry && currentStream && diagnosticStrideReady && buffer
 				&& metadata->nativePayload.payloadTemplate)
 			{
 				D3DVERTEXBUFFER_DESC description = {};
@@ -601,24 +618,69 @@ namespace fonthook::vectorfont
 				if (SUCCEEDED(lockHr) && locked && packet->vertexCount >= 4u
 					&& packetEnd <= artifact.gpuVertices.size())
 				{
-					const auto* packed = static_cast<const
-						VanillaLayoutPackedVertex*>(locked);
 					for (UInt32 ordinal = 0; ordinal < 4u; ++ordinal)
 					{
 						const NativeA8GpuVertex& source = artifact.gpuVertices[
 							static_cast<size_t>(packet->firstVertex) + ordinal];
-						const VanillaLayoutPackedVertex& gpu = packed[ordinal];
+						float packedX = 0.0f;
+						float packedY = 0.0f;
+						float packedZ = 0.0f;
+						float packedU = 0.0f;
+						float packedV = 0.0f;
+						UInt32 packedColor = 0u;
+						float packedSpread = actualVertex[4];
+						float packedScale = actualVertex[5];
+						float packedU0 = 0.0f;
+						float packedV0 = 0.0f;
+						float packedU1 = 0.0f;
+						float packedV1 = 0.0f;
+						if (uniformLayout)
+						{
+							const auto& gpu = static_cast<const
+								NativeA8VanillaLayoutVertex*>(locked)[ordinal];
+							packedX = gpu.x;
+							packedY = gpu.y;
+							packedZ = gpu.z;
+							packedU = gpu.u;
+							packedV = gpu.v;
+							packedColor = gpu.color;
+							packedU0 = gpu.glyphU0;
+							packedV0 = gpu.glyphV0;
+							packedU1 = gpu.glyphU1;
+							packedV1 = gpu.glyphV1;
+						}
+						else
+						{
+							const auto& gpu = static_cast<const
+								NativeA8VanillaParametricVertex*>(locked)[ordinal];
+							packedX = gpu.x;
+							packedY = gpu.y;
+							packedZ = gpu.z;
+							packedU = gpu.u;
+							packedV = gpu.v;
+							packedColor = gpu.color;
+							packedSpread = gpu.sdfSpread;
+							packedScale = gpu.distanceParameterScale;
+							packedU0 = gpu.glyphU0;
+							packedV0 = gpu.glyphV0;
+							packedU1 = gpu.glyphU1;
+							packedV1 = gpu.glyphV1;
+						}
 						gLog.FormattedMessage(
-							"tnvse_freetype_vanilla_layout_draw_diag_vertex: font=%u ordinal=%u expectedPos=(%.9g,%.9g,%.9g) packedPos=(%.9g,%.9g,%.9g) expectedUv=(%.9g,%.9g) packedUv=(%.9g,%.9g) expectedColor=0x%08X packedColor=0x%08X expectedBounds=(%.9g,%.9g,%.9g,%.9g) packedBounds=(%.9g,%.9g,%.9g,%.9g) origin=(%.9g,%.9g,%.9g)",
-							metadata->fontId, ordinal,
+							"tnvse_freetype_vanilla_layout_draw_diag_vertex: font=%u layoutKind=%u ordinal=%u expectedPos=(%.9g,%.9g,%.9g) packedPos=(%.9g,%.9g,%.9g) expectedUv=(%.9g,%.9g) packedUv=(%.9g,%.9g) expectedColor=0x%08X packedColor=0x%08X expectedParams=(%.9g,%.9g) packedParams=(%.9g,%.9g) expectedBounds=(%.9g,%.9g,%.9g,%.9g) packedBounds=(%.9g,%.9g,%.9g,%.9g) origin=(%.9g,%.9g,%.9g)",
+							metadata->fontId,
+							static_cast<UInt32>(layoutKind), ordinal,
 							source.x + metadata->nativePayload.geometryOrigin.x,
 							source.y + metadata->nativePayload.geometryOrigin.y,
 							source.z + metadata->nativePayload.geometryOrigin.z,
-							gpu.x, gpu.y, gpu.z, source.u, source.v, gpu.u, gpu.v,
-							source.color, gpu.color,
+							packedX, packedY, packedZ,
+							source.u, source.v, packedU, packedV,
+							source.color, packedColor,
+							source.sdfSpread, source.distanceParameterScale,
+							packedSpread, packedScale,
 							source.glyphU0, source.glyphV0,
 							source.glyphU1, source.glyphV1,
-							gpu.glyphU0, gpu.glyphV0, gpu.glyphU1, gpu.glyphV1,
+							packedU0, packedV0, packedU1, packedV1,
 							metadata->nativePayload.geometryOrigin.x,
 							metadata->nativePayload.geometryOrigin.y,
 							metadata->nativePayload.geometryOrigin.z);
@@ -651,7 +713,8 @@ namespace fonthook::vectorfont
 				: m_previous(s_vanillaLayoutDrawDiagnosticContext)
 			{
 				if (!shape || !metadata || !shader
-					|| !ClaimVanillaLayoutDrawDiagnostic(metadata->fontId, packet))
+					|| !ClaimVanillaLayoutDrawDiagnostic(metadata->fontId, packet,
+						GetVanillaLayoutSdfLayoutKind(*metadata)))
 				{
 					return;
 				}
@@ -5197,9 +5260,11 @@ namespace fonthook::vectorfont
 				const NativeA8PacketTemplate& packet =
 					metadata->nativePayload.payloadTemplate->
 						compositePackets.front();
+				const NativeA8VanillaLayoutKind layoutKind =
+					GetVanillaLayoutSdfLayoutKind(*metadata);
 				shiftedVanillaLayout = packet.compositeShiftedShadow;
 				TileShader* shader = ResolveNativeA8PacketShader(
-					packet, shape, false, true);
+					packet, shape, false, layoutKind);
 				if (shader && shape->GetShader() != shader)
 					shape->SetShader(shader);
 				NativeA8VanillaLayoutDrawToken* drawToken =
