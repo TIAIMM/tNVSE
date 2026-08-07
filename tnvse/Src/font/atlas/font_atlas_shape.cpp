@@ -1526,12 +1526,10 @@ namespace fonthook::vectorfont
 			}
 			if (!data->m_pkColor)
 				data->m_pkColor = NiAlloc<NiColorA>(data->m_usVertices);
-			NiPoint2* textureSets = NiAlloc<NiPoint2>(
-				static_cast<size_t>(data->m_usVertices) * 3u);
-			if (!data->m_pkColor || !textureSets)
+			if (!data->m_pkTexture)
+				data->m_pkTexture = NiAlloc<NiPoint2>(data->m_usVertices);
+			if (!data->m_pkColor || !data->m_pkTexture)
 			{
-				if (textureSets)
-					NiFree(textureSets);
 				shape->DeleteThis();
 				recordFallback();
 				return nullptr;
@@ -1539,9 +1537,6 @@ namespace fonthook::vectorfont
 
 			static constexpr UInt16 kCanonicalQuad[6] =
 				{ 0, 2, 1, 0, 3, 2 };
-			NiPoint2* atlasUv = textureSets;
-			NiPoint2* glyphMinimum = textureSets + data->m_usVertices;
-			NiPoint2* glyphMaximum = glyphMinimum + data->m_usVertices;
 			for (UInt32 index = 0; index < packet->vertexCount; ++index)
 			{
 				const NativeA8GpuVertex& vertex = payload->gpuVertices[
@@ -1550,11 +1545,7 @@ namespace fonthook::vectorfont
 					vertex.x + origin.x, vertex.y + origin.y,
 					vertex.z + origin.z);
 				data->m_pkColor[index] = UnpackNativeBaseColor(vertex.color);
-				atlasUv[index] = NiPoint2(vertex.u, vertex.v);
-				glyphMinimum[index] = NiPoint2(
-					vertex.glyphU0, vertex.glyphV0);
-				glyphMaximum[index] = NiPoint2(
-					vertex.glyphU1, vertex.glyphV1);
+				data->m_pkTexture[index] = NiPoint2(vertex.u, vertex.v);
 			}
 			for (UInt32 quad = 0; quad < targetQuadCount; ++quad)
 			{
@@ -1565,12 +1556,10 @@ namespace fonthook::vectorfont
 							quad * 4u + kCanonicalQuad[ordinal]);
 				}
 			}
-			NiPoint2* oldTexture = data->m_pkTexture;
-			data->m_pkTexture = textureSets;
-			data->m_usDataFlags = static_cast<UInt16>(
-				(data->m_usDataFlags & ~NiGeometryData::TEXTURE_SET_MASK) | 3u);
-			if (oldTexture)
-				NiFree(oldTexture);
+			// Retail FalloutNV exposes one UV-present bit and one m_pkTexture
+			// source. TEXCOORD1/2 are installed by the certified direct VB upload
+			// after the queued native pack has completed and retired this UV source.
+			data->m_usDataFlags |= NiGeometryData::TEXTURE_SET_MASK;
 			data->m_kBound = payload->bound;
 			data->m_kBound.m_kCenter.x += origin.x;
 			data->m_kBound.m_kCenter.y += origin.y;

@@ -15,6 +15,7 @@
 
 class BSShader;
 class BSShaderProperty;
+class TileShader;
 struct IDirect3DDevice9;
 class NiNode;
 class NiTriShape;
@@ -431,7 +432,12 @@ namespace fonthook::vectorfont
 		VanillaLayoutSdfPrecacheImmediate,
 		VanillaLayoutSdfPrecacheDeferred,
 		VanillaLayoutSdfPrecacheRejected,
-		VanillaLayoutSdfPostUploadSourceRetiredReady,
+		VanillaLayoutSdfPayloadUploadAttempt,
+		VanillaLayoutSdfPayloadUploadSuccess,
+		VanillaLayoutSdfPayloadUploadFailure,
+		VanillaLayoutSdfPayloadUploadBytes,
+		VanillaLayoutSdfNativePackPending,
+		VanillaLayoutSdfPostpackCompletionReady,
 		VanillaLayoutSdfPriorGenerationDeclarationReady,
 		VanillaLayoutSdfPrivateStateCarry,
 		VanillaLayoutSdfPrivateStateCarryRejected,
@@ -443,6 +449,7 @@ namespace fonthook::vectorfont
 		VanillaLayoutSdfDrawTokenShapeShaderInvalidation,
 		VanillaLayoutSdfDrawTokenGenerationInvalidation,
 		VanillaLayoutSdfDrawTokenGeometryInvalidation,
+		VanillaLayoutSdfDrawTokenNativePackInvalidation,
 		VanillaLayoutSdfDrawTokenLayoutInvalidation,
 		VanillaLayoutSdfDrawTokenFirstCertification,
 		VanillaLayoutSdfDrawTokenRecertification,

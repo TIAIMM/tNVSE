@@ -56,7 +56,11 @@ public:
 		NBT_METHOD_DEPRECATED	= 0x2000,
 		NBT_METHOD_ATI			= 0x3000,
 		NBT_METHOD_MASK			= 0xF000,
-		TEXTURE_SET_MASK		= 0x3F
+		// FalloutNV.exe stores only a single "texture coordinates present"
+		// bit.  NiGeometryData::GetTextureSet ignores its set index and always
+		// returns m_pkTexture; the 0x3F multi-set mask belongs to other
+		// Gamebryo branches and is not this executable's ABI.
+		TEXTURE_SET_MASK		= 0x0001
 	};
 
 	enum Compression {

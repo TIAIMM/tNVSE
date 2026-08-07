@@ -267,6 +267,32 @@ namespace fonthook::vectorfont
 	static_assert(offsetof(NativeA8GpuVertex, glyphU0) == 9 * sizeof(float));
 	static_assert(sizeof(NativeA8GpuVertex) == 13 * sizeof(float));
 
+	// Exact interleaved stream consumed by freetype_native_vanilla_layout_vs.
+	// The retail declaration packer cannot source TEXCOORD1/2 independently:
+	// NiGeometryData::GetTextureSet ignores the requested set.  This stream is
+	// therefore written directly only after the retail renderer has completed
+	// its queued native pack and retired the incompatible CPU UV source.
+	struct NativeA8VanillaLayoutVertex
+	{
+		float x = 0.0f;
+		float y = 0.0f;
+		float z = 0.0f;
+		float u = 0.0f;
+		float v = 0.0f;
+		UInt32 color = 0xFFFFFFFFu;
+		float glyphU0 = 0.0f;
+		float glyphV0 = 0.0f;
+		float glyphU1 = 0.0f;
+		float glyphV1 = 0.0f;
+	};
+	static_assert(offsetof(NativeA8VanillaLayoutVertex, u)
+		== 3 * sizeof(float));
+	static_assert(offsetof(NativeA8VanillaLayoutVertex, color)
+		== 5 * sizeof(float));
+	static_assert(offsetof(NativeA8VanillaLayoutVertex, glyphU0)
+		== 6 * sizeof(float));
+	static_assert(sizeof(NativeA8VanillaLayoutVertex) == 40u);
+
 	struct NativeA8PacketShaderCacheEntry
 	{
 		// Native shader profiles are process-lifetime objects. Keep this opaque in
@@ -526,20 +552,36 @@ namespace fonthook::vectorfont
 		const void* bufferIdentity = nullptr;
 		const void* bufferDeclarationIdentity = nullptr;
 		const void* strideArrayIdentity = nullptr;
+		const void* vertexChipIdentity = nullptr;
+		const void* vertexBufferIdentity = nullptr;
+		const void* payloadIdentity = nullptr;
+		const void* artifactIdentity = nullptr;
+		const void* packetIdentity = nullptr;
 		UInt32 generation = 0;
 		UInt32 deviceEpoch = 0;
 		UInt32 streamCount = 0;
 		UInt32 stride = 0;
 		UInt32 bufferVertexCount = 0;
 		UInt32 dataVertexCount = 0;
-		bool sourceRetired = false;
+		UInt32 baseVertexIndex = 0;
+		UInt32 vertexChipOffset = 0;
+		UInt32 vertexChipSize = 0;
+		UInt32 uploadedByteOffset = 0;
+		UInt32 uploadedByteCount = 0;
+		UInt16 nativePackDataFlags = 0;
+		UInt16 nativePackDirtyFlags = 0;
+		UInt8 nativePackKeepFlags = 0;
+		bool nativePackCompleted = false;
 		bool priorGenerationDeclaration = false;
+		bool payloadUploaded = false;
 		bool everCertified = false;
 		bool valid = false;
 
 		void Invalidate()
 		{
 			valid = false;
+			payloadUploaded = false;
+			nativePackCompleted = false;
 		}
 	};
 
@@ -1141,7 +1183,8 @@ namespace fonthook::vectorfont
 	bool RequestNativeA8VanillaLayoutShapePrecache(NiTriShape* shape,
 		TileShader* shader, bool& immediateReady);
 	bool IsNativeA8VanillaLayoutShapeReady(const NiTriShape* shape,
-		TileShader* shader, NativeA8VanillaLayoutDrawToken& drawToken);
+		TileShader* shader, const NativeA8ShapePayload& payload,
+		NativeA8VanillaLayoutDrawToken& drawToken);
 	bool ResolveNativeA8RetainedPacketProgram(
 		const NativeA8PacketTemplate& packet,
 		TileShader* shader, UInt32 generation,

@@ -111,8 +111,7 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kShaderRefreshMessage = 0;
 		inline constexpr DWORD kInitializationRetryMilliseconds = 1000;
 		inline constexpr UInt32 kVanillaLayoutVertexStride =
-			3u * sizeof(float) + 2u * sizeof(float) + sizeof(UInt32)
-				+ 4u * sizeof(float);
+			sizeof(NativeA8VanillaLayoutVertex);
 		static_assert(kVanillaLayoutVertexStride == 40u);
 		inline constexpr UInt8 kStaticCompositeLayerMaskFirst = 8;
 		inline constexpr size_t kStaticCompositeLayerMaskCount = 8;
@@ -2535,6 +2534,8 @@ namespace fonthook::vectorfont
 	{
 		std::atomic<UInt32> s_vanillaLayoutReadinessLoggedMask{ 0 };
 		std::atomic<UInt32> s_vanillaLayoutPostpackLoggedMask{ 0 };
+		std::atomic<UInt32> s_vanillaLayoutUploadFailureLoggedMask{ 0 };
+		std::atomic<bool> s_vanillaLayoutUploadSuccessLogged{ false };
 
 		enum VanillaLayoutReadinessFailure : UInt32
 		{
@@ -2548,6 +2549,19 @@ namespace fonthook::vectorfont
 			kStreamMismatch = 1u << 7,
 			kStrideMismatch = 1u << 8,
 			kVertexCountMismatch = 1u << 9,
+			kVertexBufferMissing = 1u << 10,
+			kNativePackIncomplete = 1u << 11,
+			kNativePackContractMismatch = 1u << 12,
+		};
+
+		enum VanillaLayoutUploadFailure : UInt32
+		{
+			kUploadInvalidSource = 1u << 0,
+			kUploadInvalidBuffer = 1u << 1,
+			kUploadDescriptionFailed = 1u << 2,
+			kUploadRangeInvalid = 1u << 3,
+			kUploadLockFailed = 1u << 4,
+			kUploadUnlockFailed = 1u << 5,
 		};
 
 		enum class VanillaLayoutDeclarationCompatibility : UInt8
@@ -2570,13 +2584,21 @@ namespace fonthook::vectorfont
 			const NiGeometryBufferData* buffer = nullptr;
 			const void* bufferDeclaration = nullptr;
 			const UInt32* strideArray = nullptr;
+			const NiVBChip* vertexChip = nullptr;
+			IDirect3DVertexBuffer9* vertexBuffer = nullptr;
 			UInt32 generationId = 0;
 			UInt32 deviceEpoch = 0;
 			UInt32 streamCount = 0;
 			UInt32 stride = 0;
 			UInt32 bufferVertexCount = 0;
 			UInt32 dataVertexCount = 0;
-			bool sourceRetired = false;
+			UInt32 baseVertexIndex = 0;
+			UInt32 vertexChipOffset = 0;
+			UInt32 vertexChipSize = 0;
+			UInt16 nativePackDataFlags = 0;
+			UInt16 nativePackDirtyFlags = 0;
+			UInt8 nativePackKeepFlags = 0;
+			bool nativePackCompleted = false;
 			bool priorGenerationDeclaration = false;
 		};
 
@@ -2587,6 +2609,7 @@ namespace fonthook::vectorfont
 			ShapeOrShader,
 			Generation,
 			Geometry,
+			NativePack,
 			Layout,
 		};
 
@@ -2617,13 +2640,34 @@ namespace fonthook::vectorfont
 			return VanillaLayoutDeclarationCompatibility::Mismatch;
 		}
 
-		void RecordVanillaLayoutReadyObservations(
-			bool sourceRetired, bool priorGenerationDeclaration)
+		bool HasVanillaLayoutNativePackRetirementContract(
+			const NiGeometryData* data)
 		{
-			if (sourceRetired)
+			if (!data)
+				return false;
+			const UInt8 retainedSources = static_cast<UInt8>(
+				NiGeometryData::KEEP_COLOR | NiGeometryData::KEEP_UV);
+			return (data->m_usDirtyFlags & NiGeometryData::CONSISTENCY_MASK)
+					== NiGeometryData::STATIC
+				&& !(data->m_ucKeepFlags & retainedSources);
+		}
+
+		bool HasVanillaLayoutNativePackCompletionProof(
+			const NiGeometryData* data)
+		{
+			return HasVanillaLayoutNativePackRetirementContract(data)
+				&& !(data->m_usDirtyFlags & NiGeometryData::DIRTY_MASK)
+				&& !(data->m_usDataFlags & NiGeometryData::TEXTURE_SET_MASK)
+				&& !data->m_pkColor && !data->m_pkTexture;
+		}
+
+		void RecordVanillaLayoutReadyObservations(
+			bool nativePackCompleted, bool priorGenerationDeclaration)
+		{
+			if (nativePackCompleted)
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutSdfPostUploadSourceRetiredReady);
+					VanillaLayoutSdfPostpackCompletionReady);
 			}
 			if (priorGenerationDeclaration)
 			{
@@ -2634,6 +2678,7 @@ namespace fonthook::vectorfont
 
 		VanillaLayoutDrawTokenMismatch MatchVanillaLayoutDrawToken(
 			const NiTriShape* shape, TileShader* shader,
+			const NativeA8ShapePayload& payload,
 			const NativeA8VanillaLayoutDrawToken& token)
 		{
 			if (!token.valid)
@@ -2653,6 +2698,18 @@ namespace fonthook::vectorfont
 				|| profile->shader != shader || !profile->key.vanillaLayoutSdf)
 			{
 				return VanillaLayoutDrawTokenMismatch::ShapeOrShader;
+			}
+			const NativeA8PayloadTemplate* artifact =
+				payload.payloadTemplate.get();
+			const NativeA8PacketTemplate* packet = artifact
+				&& artifact->compositePackets.size() == 1u
+				? &artifact->compositePackets.front() : nullptr;
+			if (!token.payloadUploaded || !payload.buildComplete
+				|| token.payloadIdentity != &payload || !artifact || !packet
+				|| token.artifactIdentity != artifact
+				|| token.packetIdentity != packet)
+			{
+				return VanillaLayoutDrawTokenMismatch::Geometry;
 			}
 
 			NativeShaderGeneration* generation = s_publishedGeneration.load(
@@ -2688,10 +2745,27 @@ namespace fonthook::vectorfont
 			{
 				return VanillaLayoutDrawTokenMismatch::Geometry;
 			}
+			if (!token.nativePackCompleted
+				|| !HasVanillaLayoutNativePackCompletionProof(data)
+				|| token.nativePackDataFlags != data->m_usDataFlags
+				|| token.nativePackDirtyFlags != data->m_usDirtyFlags
+				|| token.nativePackKeepFlags != data->m_ucKeepFlags)
+			{
+				return VanillaLayoutDrawTokenMismatch::NativePack;
+			}
 			const NiGeometryBufferData* buffer = data->m_pkBuffData;
 			if (!buffer || token.bufferIdentity != buffer)
 				return VanillaLayoutDrawTokenMismatch::Geometry;
 
+			const NiVBChip* chip = buffer->m_ppkVBChip
+				&& buffer->m_uiStreamCount ? buffer->m_ppkVBChip[0] : nullptr;
+			const UInt64 expectedByteOffset = chip
+				? static_cast<UInt64>(chip->m_uiOffset)
+					+ static_cast<UInt64>(buffer->m_uiBaseVertexIndex)
+						* kVanillaLayoutVertexStride : 0u;
+			const UInt64 expectedByteCount =
+				static_cast<UInt64>(data->m_usVertices)
+					* kVanillaLayoutVertexStride;
 			if (!token.bufferDeclarationIdentity
 				|| buffer->m_hDeclaration != token.bufferDeclarationIdentity
 				|| token.streamCount != 1u
@@ -2701,7 +2775,18 @@ namespace fonthook::vectorfont
 				|| token.stride != kVanillaLayoutVertexStride
 				|| buffer->m_puiVertexStride[0] != token.stride
 				|| buffer->m_uiVertCount != token.bufferVertexCount
-				|| token.bufferVertexCount < token.dataVertexCount)
+				|| token.bufferVertexCount < token.dataVertexCount
+				|| !chip || token.vertexChipIdentity != chip
+				|| !chip->m_pkVB || token.vertexBufferIdentity != chip->m_pkVB
+				|| token.baseVertexIndex != buffer->m_uiBaseVertexIndex
+				|| token.vertexChipOffset != chip->m_uiOffset
+				|| token.vertexChipSize != chip->m_uiSize
+				|| expectedByteOffset > std::numeric_limits<UInt32>::max()
+				|| expectedByteCount > std::numeric_limits<UInt32>::max()
+				|| token.uploadedByteOffset
+					!= static_cast<UInt32>(expectedByteOffset)
+				|| token.uploadedByteCount
+					!= static_cast<UInt32>(expectedByteCount))
 			{
 				return VanillaLayoutDrawTokenMismatch::Layout;
 			}
@@ -2731,6 +2816,10 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					VanillaLayoutSdfDrawTokenGeometryInvalidation);
 				break;
+			case VanillaLayoutDrawTokenMismatch::NativePack:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutSdfDrawTokenNativePackInvalidation);
+				break;
 			case VanillaLayoutDrawTokenMismatch::Layout:
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					VanillaLayoutSdfDrawTokenLayoutInvalidation);
@@ -2742,7 +2831,11 @@ namespace fonthook::vectorfont
 
 		void CertifyVanillaLayoutDrawToken(
 			NativeA8VanillaLayoutDrawToken& token,
-			const VanillaLayoutReadySnapshot& snapshot)
+			const VanillaLayoutReadySnapshot& snapshot,
+			const NativeA8ShapePayload& payload,
+			const NativeA8PayloadTemplate& artifact,
+			const NativeA8PacketTemplate& packet,
+			UInt32 uploadedByteOffset, UInt32 uploadedByteCount)
 		{
 			// Publish validity last so a later reuse cannot observe a partially
 			// rewritten proof.
@@ -2758,15 +2851,29 @@ namespace fonthook::vectorfont
 			token.bufferIdentity = snapshot.buffer;
 			token.bufferDeclarationIdentity = snapshot.bufferDeclaration;
 			token.strideArrayIdentity = snapshot.strideArray;
+			token.vertexChipIdentity = snapshot.vertexChip;
+			token.vertexBufferIdentity = snapshot.vertexBuffer;
+			token.payloadIdentity = &payload;
+			token.artifactIdentity = &artifact;
+			token.packetIdentity = &packet;
 			token.generation = snapshot.generationId;
 			token.deviceEpoch = snapshot.deviceEpoch;
 			token.streamCount = snapshot.streamCount;
 			token.stride = snapshot.stride;
 			token.bufferVertexCount = snapshot.bufferVertexCount;
 			token.dataVertexCount = snapshot.dataVertexCount;
-			token.sourceRetired = snapshot.sourceRetired;
+			token.baseVertexIndex = snapshot.baseVertexIndex;
+			token.vertexChipOffset = snapshot.vertexChipOffset;
+			token.vertexChipSize = snapshot.vertexChipSize;
+			token.uploadedByteOffset = uploadedByteOffset;
+			token.uploadedByteCount = uploadedByteCount;
+			token.nativePackDataFlags = snapshot.nativePackDataFlags;
+			token.nativePackDirtyFlags = snapshot.nativePackDirtyFlags;
+			token.nativePackKeepFlags = snapshot.nativePackKeepFlags;
+			token.nativePackCompleted = snapshot.nativePackCompleted;
 			token.priorGenerationDeclaration =
 				snapshot.priorGenerationDeclaration;
+			token.payloadUploaded = true;
 			token.everCertified = true;
 			token.valid = true;
 		}
@@ -2793,11 +2900,13 @@ namespace fonthook::vectorfont
 			const bool generationMatches = generation
 				&& generation->vanillaLayoutReady
 				&& GenerationMatchesCurrentDevice(generation);
-			const UInt32 textureSetCount = data
-				? data->m_usDataFlags & NiGeometryData::TEXTURE_SET_MASK : 0u;
 			const UInt32 streamCount = buffer ? buffer->m_uiStreamCount : 0u;
 			const UInt32 stride = buffer && buffer->m_puiVertexStride
 				&& streamCount ? buffer->m_puiVertexStride[0] : 0u;
+			const NiVBChip* vertexChip = buffer && buffer->m_ppkVBChip
+				&& streamCount ? buffer->m_ppkVBChip[0] : nullptr;
+			IDirect3DVertexBuffer9* vertexBuffer = vertexChip
+				? vertexChip->m_pkVB : nullptr;
 			IDirect3DVertexDeclaration9* expectedDeclaration = generation
 				? generation->vanillaLayoutD3DDeclaration : nullptr;
 			const VanillaLayoutDeclarationCompatibility declarationCompatibility =
@@ -2806,18 +2915,22 @@ namespace fonthook::vectorfont
 				== VanillaLayoutDeclarationCompatibility::CurrentGeneration
 				|| declarationCompatibility == VanillaLayoutDeclarationCompatibility::
 					CompatiblePreviousGeneration;
-			// Retail 0xE6FA90 -> 0xA670C0 intentionally retires CPU color/UV
-			// sources after a static buffer upload when PrepareGeometry's keep mask
-			// omits KEEP_COLOR/KEEP_UV.  Those pointers and texture-set flags are
-			// therefore diagnostic source state, never a draw-time GPU contract.
-			const bool sourceRetired = data
-				&& (textureSetCount < 3u || !data->m_pkColor
-					|| !data->m_pkTexture);
-			const bool ready = hasShapeAndShader && shaderMatches
+			// Retail PerformPrecache clears the low 12 dirty bits at 0xE74469 and
+			// then retires static color/UV sources through 0xE7447D -> 0xE6FA90.
+			// Under the renderer lock, all of these postconditions together are the
+			// completion proof that neither vanilla nor NVTF still owns a queued pack
+			// which may overwrite our final 40-byte stream.
+			const bool nativePackRetirementContract =
+				HasVanillaLayoutNativePackRetirementContract(data);
+			const bool nativePackCompleted =
+				HasVanillaLayoutNativePackCompletionProof(data);
+			const bool structurallyReady = hasShapeAndShader && shaderMatches
 				&& profileMatches && generationMatches && data
 				&& buffer && declarationMatches
 				&& streamCount == 1u && stride == kVanillaLayoutVertexStride
-				&& buffer->m_uiVertCount >= data->m_usVertices;
+				&& buffer->m_uiVertCount >= data->m_usVertices
+				&& vertexChip && vertexBuffer;
+			const bool ready = structurallyReady && nativePackCompleted;
 			if (ready)
 			{
 				const bool priorGenerationDeclaration =
@@ -2836,18 +2949,27 @@ namespace fonthook::vectorfont
 					readySnapshot->buffer = buffer;
 					readySnapshot->bufferDeclaration = buffer->m_hDeclaration;
 					readySnapshot->strideArray = buffer->m_puiVertexStride;
+					readySnapshot->vertexChip = vertexChip;
+					readySnapshot->vertexBuffer = vertexBuffer;
 					readySnapshot->generationId = generation->id;
 					readySnapshot->deviceEpoch = generation->deviceEpoch;
 					readySnapshot->streamCount = streamCount;
 					readySnapshot->stride = stride;
 					readySnapshot->bufferVertexCount = buffer->m_uiVertCount;
 					readySnapshot->dataVertexCount = data->m_usVertices;
-					readySnapshot->sourceRetired = sourceRetired;
+					readySnapshot->baseVertexIndex =
+						buffer->m_uiBaseVertexIndex;
+					readySnapshot->vertexChipOffset = vertexChip->m_uiOffset;
+					readySnapshot->vertexChipSize = vertexChip->m_uiSize;
+					readySnapshot->nativePackDataFlags = data->m_usDataFlags;
+					readySnapshot->nativePackDirtyFlags = data->m_usDirtyFlags;
+					readySnapshot->nativePackKeepFlags = data->m_ucKeepFlags;
+					readySnapshot->nativePackCompleted = nativePackCompleted;
 					readySnapshot->priorGenerationDeclaration =
 						priorGenerationDeclaration;
 				}
 				UInt32 observations = 0;
-				if (sourceRetired)
+				if (nativePackCompleted)
 				{
 					observations |= 1u;
 				}
@@ -2856,7 +2978,7 @@ namespace fonthook::vectorfont
 					observations |= 2u;
 				}
 				RecordVanillaLayoutReadyObservations(
-					sourceRetired, priorGenerationDeclaration);
+					nativePackCompleted, priorGenerationDeclaration);
 				if (observations && logFailure)
 				{
 					const UInt32 previous = s_vanillaLayoutPostpackLoggedMask.fetch_or(
@@ -2865,11 +2987,12 @@ namespace fonthook::vectorfont
 					if (newlyObserved)
 					{
 						gLog.FormattedMessage(
-							"tnvse_freetype_vanilla_layout_sdf_postpack: observed=0x%08X new=0x%08X shape=%p generation=%u deviceEpoch=%u sourceTextureSets=%u keepFlags=0x%02X color=%p texture=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u stride=%u",
+							"tnvse_freetype_vanilla_layout_sdf_postpack: observed=0x%08X new=0x%08X shape=%p generation=%u deviceEpoch=%u completion=1 dataFlags=0x%04X dirtyFlags=0x%04X keepFlags=0x%02X color=%p texture=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u stride=%u",
 							observations, newlyObserved, shape,
 							generation ? generation->id : 0u,
 							generation ? generation->deviceEpoch : 0u,
-							textureSetCount,
+							data ? static_cast<UInt32>(data->m_usDataFlags) : 0u,
+							data ? static_cast<UInt32>(data->m_usDirtyFlags) : 0u,
 							data ? static_cast<UInt32>(data->m_ucKeepFlags) : 0u,
 							data ? data->m_pkColor : nullptr,
 							data ? data->m_pkTexture : nullptr,
@@ -2907,6 +3030,17 @@ namespace fonthook::vectorfont
 				failures |= kStrideMismatch;
 			if (buffer && data && buffer->m_uiVertCount < data->m_usVertices)
 				failures |= kVertexCountMismatch;
+			if (buffer && (!vertexChip || !vertexBuffer))
+				failures |= kVertexBufferMissing;
+			if (data && !nativePackRetirementContract)
+				failures |= kNativePackContractMismatch;
+			if (structurallyReady && nativePackRetirementContract
+				&& !nativePackCompleted)
+			{
+				failures |= kNativePackIncomplete;
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::VanillaLayoutSdfNativePackPending);
+			}
 
 			const UInt32 previous = s_vanillaLayoutReadinessLoggedMask.fetch_or(
 				failures, std::memory_order_acq_rel);
@@ -2914,7 +3048,7 @@ namespace fonthook::vectorfont
 			if (newlyObserved)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_vanilla_layout_sdf_readiness: failure=0x%08X new=0x%08X shape=%p shader=%p shapeShader=%p profile=%u vanillaProfile=%u generation=%u current=%u targetReady=%u deviceEpoch=%u sourceTextureSets=%u keepFlags=0x%02X color=%p texture=%p buffer=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u streams=%u stride=%u bufferVertices=%u dataVertices=%u",
+					"tnvse_freetype_vanilla_layout_sdf_readiness: failure=0x%08X new=0x%08X shape=%p shader=%p shapeShader=%p profile=%u vanillaProfile=%u generation=%u current=%u targetReady=%u deviceEpoch=%u completionContract=%u nativePackCompleted=%u dataFlags=0x%04X dirtyFlags=0x%04X keepFlags=0x%02X color=%p texture=%p buffer=%p declarationClass=%u declaration=%p expected=%p compatiblePrevious=%u streams=%u stride=%u bufferVertices=%u dataVertices=%u chip=%p vertexBuffer=%p",
 					failures, newlyObserved, shape, shader,
 					shape ? shape->GetShader() : nullptr,
 					profile ? 1u : 0u,
@@ -2923,7 +3057,10 @@ namespace fonthook::vectorfont
 					generationMatches ? 1u : 0u,
 					generation && generation->vanillaLayoutReady ? 1u : 0u,
 					generation ? generation->deviceEpoch : 0u,
-					textureSetCount,
+					nativePackRetirementContract ? 1u : 0u,
+					nativePackCompleted ? 1u : 0u,
+					data ? static_cast<UInt32>(data->m_usDataFlags) : 0u,
+					data ? static_cast<UInt32>(data->m_usDirtyFlags) : 0u,
 					data ? static_cast<UInt32>(data->m_ucKeepFlags) : 0u,
 					data ? data->m_pkColor : nullptr,
 					data ? data->m_pkTexture : nullptr,
@@ -2935,9 +3072,247 @@ namespace fonthook::vectorfont
 						compatibleVanillaLayoutD3DDeclarations.size()) : 0u,
 					streamCount, stride,
 					buffer ? buffer->m_uiVertCount : 0u,
-					data ? data->m_usVertices : 0u);
+					data ? data->m_usVertices : 0u,
+					vertexChip, vertexBuffer);
 			}
 			return false;
+		}
+
+		class VanillaLayoutRendererLockScope final
+		{
+		public:
+			explicit VanillaLayoutRendererLockScope(NiDX9Renderer* renderer)
+				: m_renderer(renderer)
+			{
+				if (m_renderer)
+					m_renderer->LockRenderer();
+			}
+
+			~VanillaLayoutRendererLockScope()
+			{
+				if (m_renderer)
+					m_renderer->UnlockRenderer();
+			}
+
+			VanillaLayoutRendererLockScope(
+				const VanillaLayoutRendererLockScope&) = delete;
+			VanillaLayoutRendererLockScope& operator=(
+				const VanillaLayoutRendererLockScope&) = delete;
+
+		private:
+			NiDX9Renderer* m_renderer = nullptr;
+		};
+
+		bool RejectVanillaLayoutPayloadUpload(UInt32 failure,
+			const char* operation, HRESULT result,
+			const VanillaLayoutReadySnapshot& snapshot,
+			UInt32 bufferSize, UInt64 byteOffset, UInt64 byteCount)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadFailure);
+			const UInt32 previous =
+				s_vanillaLayoutUploadFailureLoggedMask.fetch_or(
+					failure, std::memory_order_acq_rel);
+			if (failure & ~previous)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_vanilla_layout_upload: status=failure failure=0x%08X new=0x%08X operation=%s hr=0x%08X shape=%p data=%p buffer=%p chip=%p vertexBuffer=%p stride=%u dataVertices=%u bufferVertices=%u baseVertex=%u chipOffset=%u chipSize=%u bufferSize=%u byteOffset=%I64u byteCount=%I64u",
+					failure, failure & ~previous,
+					operation ? operation : "unknown",
+					static_cast<UInt32>(result), snapshot.shape,
+					snapshot.modelData, snapshot.buffer, snapshot.vertexChip,
+					snapshot.vertexBuffer, snapshot.stride,
+					snapshot.dataVertexCount, snapshot.bufferVertexCount,
+					snapshot.baseVertexIndex, snapshot.vertexChipOffset,
+					snapshot.vertexChipSize, bufferSize, byteOffset, byteCount);
+			}
+			return false;
+		}
+
+		bool UploadVanillaLayoutPayload(
+			const NativeA8ShapePayload& payload,
+			const VanillaLayoutReadySnapshot& snapshot,
+			const NativeA8PayloadTemplate*& artifactOut,
+			const NativeA8PacketTemplate*& packetOut,
+			UInt32& byteOffsetOut, UInt32& byteCountOut)
+		{
+			artifactOut = nullptr;
+			packetOut = nullptr;
+			byteOffsetOut = 0;
+			byteCountOut = 0;
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadAttempt);
+
+			const NativeA8PayloadTemplate* artifact =
+				payload.payloadTemplate.get();
+			const NativeA8PacketTemplate* packet = artifact
+				&& artifact->compositePackets.size() == 1u
+				? &artifact->compositePackets.front() : nullptr;
+			const UInt64 packetEnd = packet
+				? static_cast<UInt64>(packet->firstVertex)
+					+ packet->vertexCount : 0u;
+			const NiPoint3& origin = payload.geometryOrigin;
+			const bool finiteOrigin = std::isfinite(origin.x)
+				&& std::isfinite(origin.y) && std::isfinite(origin.z);
+			if (!payload.buildComplete || !artifact || !packet
+				|| !HasNativeA8PayloadValidationSeal(*artifact)
+				|| artifact->pageCount != 1u
+				|| packet->shaderClass != NativeA8ShaderClass::Composite
+				|| (packet->distanceFieldMethod != DistanceFieldMethod::TrueSdf
+					&& packet->distanceFieldMethod != DistanceFieldMethod::Mtsdf)
+				|| packet->atlasPage != 0u || !packet->vertexCount
+				|| (packet->firstVertex & 3u) || (packet->vertexCount & 3u)
+				|| packet->staticCompositeLayerMask < 8u
+				|| packet->staticCompositeLayerMask > 15u
+				|| !std::isfinite(packet->uniformSdfSpread)
+				|| packet->uniformSdfSpread <= 0.0f
+				|| packet->vertexCount != snapshot.dataVertexCount
+				|| packetEnd > artifact->gpuVertices.size() || !finiteOrigin)
+			{
+				return RejectVanillaLayoutPayloadUpload(kUploadInvalidSource,
+					"source-contract", E_INVALIDARG, snapshot, 0u, 0u, 0u);
+			}
+
+			for (UInt32 ordinal = 0; ordinal < packet->vertexCount; ++ordinal)
+			{
+				const NativeA8GpuVertex& source = artifact->gpuVertices[
+					static_cast<size_t>(packet->firstVertex) + ordinal];
+				if (!std::isfinite(source.x) || !std::isfinite(source.y)
+					|| !std::isfinite(source.z) || !std::isfinite(source.u)
+					|| !std::isfinite(source.v)
+					|| !std::isfinite(source.glyphU0)
+					|| !std::isfinite(source.glyphV0)
+					|| !std::isfinite(source.glyphU1)
+					|| !std::isfinite(source.glyphV1)
+					|| source.glyphU0 > source.glyphU1
+					|| source.glyphV0 > source.glyphV1
+					|| !std::isfinite(source.x + origin.x)
+					|| !std::isfinite(source.y + origin.y)
+					|| !std::isfinite(source.z + origin.z))
+				{
+					return RejectVanillaLayoutPayloadUpload(kUploadInvalidSource,
+						"source-vertex", E_INVALIDARG, snapshot,
+						0u, 0u, 0u);
+				}
+			}
+
+			const NiVBChip* chip = snapshot.vertexChip;
+			IDirect3DVertexBuffer9* vertexBuffer = snapshot.vertexBuffer;
+			if (!snapshot.buffer || !chip || !vertexBuffer
+				|| snapshot.buffer->m_uiStreamCount != snapshot.streamCount
+				|| !snapshot.buffer->m_puiVertexStride
+				|| snapshot.buffer->m_puiVertexStride[0] != snapshot.stride
+				|| snapshot.buffer->m_uiVertCount != snapshot.bufferVertexCount
+				|| snapshot.buffer->m_uiBaseVertexIndex
+					!= snapshot.baseVertexIndex
+				|| chip->m_pkVB != vertexBuffer
+				|| chip->m_uiOffset != snapshot.vertexChipOffset
+				|| chip->m_uiSize != snapshot.vertexChipSize
+				|| snapshot.stride != sizeof(NativeA8VanillaLayoutVertex)
+				|| !snapshot.dataVertexCount || !snapshot.vertexChipSize
+				|| chip->m_uiLockFlags != 0u)
+			{
+				return RejectVanillaLayoutPayloadUpload(kUploadInvalidBuffer,
+					"buffer-contract", D3DERR_INVALIDCALL, snapshot,
+					0u, 0u, 0u);
+			}
+
+			D3DVERTEXBUFFER_DESC description = {};
+			const HRESULT descriptionResult = vertexBuffer->GetDesc(&description);
+			if (FAILED(descriptionResult))
+			{
+				return RejectVanillaLayoutPayloadUpload(
+					kUploadDescriptionFailed, "GetDesc", descriptionResult,
+					snapshot, 0u, 0u, 0u);
+			}
+
+			const UInt64 relativeByteOffset =
+				static_cast<UInt64>(snapshot.baseVertexIndex) * snapshot.stride;
+			const UInt64 byteOffset = static_cast<UInt64>(snapshot.vertexChipOffset)
+				+ relativeByteOffset;
+			const UInt64 byteCount = static_cast<UInt64>(snapshot.dataVertexCount)
+				* snapshot.stride;
+			const bool chipRangeValid = relativeByteOffset
+				<= snapshot.vertexChipSize
+				&& byteCount <= static_cast<UInt64>(snapshot.vertexChipSize)
+					- relativeByteOffset;
+			const bool bufferRangeValid = byteOffset <= description.Size
+				&& byteCount <= static_cast<UInt64>(description.Size) - byteOffset;
+			if (!byteCount || byteOffset > std::numeric_limits<UInt32>::max()
+				|| byteCount > std::numeric_limits<UInt32>::max()
+				|| !chipRangeValid || !bufferRangeValid)
+			{
+				return RejectVanillaLayoutPayloadUpload(kUploadRangeInvalid,
+					"range", D3DERR_INVALIDCALL, snapshot, description.Size,
+					byteOffset, byteCount);
+			}
+
+			void* locked = nullptr;
+			const HRESULT lockResult = vertexBuffer->Lock(
+				static_cast<UINT>(byteOffset), static_cast<UINT>(byteCount),
+				&locked, 0u);
+			if (FAILED(lockResult))
+			{
+				return RejectVanillaLayoutPayloadUpload(kUploadLockFailed,
+					"Lock", lockResult,
+					snapshot, description.Size, byteOffset, byteCount);
+			}
+			if (!locked)
+			{
+				// Preserve the successful Lock/Unlock pairing even for a broken
+				// driver or interposer that violates D3D9's output contract.
+				vertexBuffer->Unlock();
+				return RejectVanillaLayoutPayloadUpload(kUploadLockFailed,
+					"Lock-null", E_POINTER, snapshot, description.Size,
+					byteOffset, byteCount);
+			}
+
+			auto* destination =
+				static_cast<NativeA8VanillaLayoutVertex*>(locked);
+			for (UInt32 ordinal = 0; ordinal < packet->vertexCount; ++ordinal)
+			{
+				const NativeA8GpuVertex& source = artifact->gpuVertices[
+					static_cast<size_t>(packet->firstVertex) + ordinal];
+				NativeA8VanillaLayoutVertex& packed = destination[ordinal];
+				packed.x = source.x + origin.x;
+				packed.y = source.y + origin.y;
+				packed.z = source.z + origin.z;
+				packed.u = source.u;
+				packed.v = source.v;
+				packed.color = source.color;
+				packed.glyphU0 = source.glyphU0;
+				packed.glyphV0 = source.glyphV0;
+				packed.glyphU1 = source.glyphU1;
+				packed.glyphV1 = source.glyphV1;
+			}
+			const HRESULT unlockResult = vertexBuffer->Unlock();
+			if (FAILED(unlockResult))
+			{
+				return RejectVanillaLayoutPayloadUpload(kUploadUnlockFailed,
+					"Unlock", unlockResult, snapshot, description.Size,
+					byteOffset, byteCount);
+			}
+
+			artifactOut = artifact;
+			packetOut = packet;
+			byteOffsetOut = static_cast<UInt32>(byteOffset);
+			byteCountOut = static_cast<UInt32>(byteCount);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadSuccess);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VanillaLayoutSdfPayloadUploadBytes,
+				byteCountOut);
+			if (!s_vanillaLayoutUploadSuccessLogged.exchange(
+				true, std::memory_order_acq_rel))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_vanilla_layout_upload: status=ready shape=%p buffer=%p chip=%p vertexBuffer=%p stride=%u vertices=%u byteOffset=%u byteCount=%u pool=%u usage=0x%X",
+					snapshot.shape, snapshot.buffer, snapshot.vertexChip,
+					snapshot.vertexBuffer, snapshot.stride,
+					snapshot.dataVertexCount, byteOffsetOut, byteCountOut,
+					static_cast<UInt32>(description.Pool), description.Usage);
+			}
+			return true;
 		}
 	}
 
@@ -2951,7 +3326,7 @@ namespace fonthook::vectorfont
 		NativeShaderProfile* profile = block ? block->profile : nullptr;
 		NativeShaderGeneration* generation = profile ? profile->owner : nullptr;
 		NiTriShapeData* data = shape->GetModelData();
-		const UInt32 textureSetCount = data
+		const UInt32 textureCoordinatesPresent = data
 			? data->m_usDataFlags & NiGeometryData::TEXTURE_SET_MASK : 0u;
 		if (!profile || profile->shader != shader
 			|| !profile->key.vanillaLayoutSdf || !generation
@@ -2959,8 +3334,9 @@ namespace fonthook::vectorfont
 			|| !generation->vanillaLayoutDeclaration
 			|| !GenerationMatchesCurrentDevice(generation) || !data
 			|| !data->m_usVertices || !data->m_pkVertex || !data->m_pkColor
-			|| !data->m_pkTexture || textureSetCount != 3u
-			|| !data->m_pusTriList || !data->m_uiTriListLength)
+			|| !data->m_pkTexture || !textureCoordinatesPresent
+			|| !data->m_pusTriList || !data->m_uiTriListLength
+			|| !HasVanillaLayoutNativePackRetirementContract(data))
 		{
 			return false;
 		}
@@ -2980,30 +3356,41 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		// A hooked virtual route may only enqueue the request. Once accepted the
-		// shape must stay alive; draw-time readiness fails open until completion.
-		immediateReady = IsNativeA8VanillaLayoutShapeReadyImpl(
-			shape, shader, false, nullptr);
+		// Never inspect or upload immediately after this virtual call. Vanilla
+		// PrecacheGeometryEx may have attached a fully shaped buffer while its
+		// PrePackObject is still queued, and NVTF may instead have queued the whole
+		// request on its worker. The owning route finishes asynchronously; the first
+		// draw performs the one-time upload only after the postpack proof is visible
+		// under the renderer lock.
 		return true;
 	}
 
 	bool IsNativeA8VanillaLayoutShapeReady(const NiTriShape* shape,
-		TileShader* shader, NativeA8VanillaLayoutDrawToken& drawToken)
+		TileShader* shader, const NativeA8ShapePayload& payload,
+		NativeA8VanillaLayoutDrawToken& drawToken)
 	{
 		const VanillaLayoutDrawTokenMismatch mismatch =
-			MatchVanillaLayoutDrawToken(shape, shader, drawToken);
+			MatchVanillaLayoutDrawToken(shape, shader, payload, drawToken);
 		if (mismatch == VanillaLayoutDrawTokenMismatch::None)
 		{
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VanillaLayoutSdfDrawTokenHit);
 			RecordVanillaLayoutReadyObservations(
-				drawToken.sourceRetired,
+				drawToken.nativePackCompleted,
 				drawToken.priorGenerationDeclaration);
 			return true;
 		}
 
 		RecordVanillaLayoutDrawTokenMiss(mismatch);
 		const bool wasCertified = drawToken.everCertified;
+		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+		if (!renderer)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VanillaLayoutSdfDrawTokenRejected);
+			return false;
+		}
+		VanillaLayoutRendererLockScope rendererLock(renderer);
 		drawToken.Invalidate();
 		VanillaLayoutReadySnapshot snapshot;
 		if (!IsNativeA8VanillaLayoutShapeReadyImpl(
@@ -3014,7 +3401,21 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		CertifyVanillaLayoutDrawToken(drawToken, snapshot);
+		const NativeA8PayloadTemplate* artifact = nullptr;
+		const NativeA8PacketTemplate* packet = nullptr;
+		UInt32 uploadedByteOffset = 0;
+		UInt32 uploadedByteCount = 0;
+		if (!UploadVanillaLayoutPayload(payload, snapshot, artifact, packet,
+			uploadedByteOffset, uploadedByteCount)
+			|| !artifact || !packet)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::VanillaLayoutSdfDrawTokenRejected);
+			return false;
+		}
+
+		CertifyVanillaLayoutDrawToken(drawToken, snapshot, payload,
+			*artifact, *packet, uploadedByteOffset, uploadedByteCount);
 		RecordFreeTypePerf(wasCertified
 			? FreeTypePerfCounter::VanillaLayoutSdfDrawTokenRecertification
 			: FreeTypePerfCounter::VanillaLayoutSdfDrawTokenFirstCertification);
