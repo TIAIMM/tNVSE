@@ -80,7 +80,11 @@ namespace fonthook::vectorfont
 	// Prewarm creates worker-local FreeType faces and distance/effect scratch
 	// storage. Keep this shared cap in the scheduler and its memory model so a
 	// larger host CPU cannot silently increase the x86 address-space peak.
-	constexpr UInt32 kMaximumPrewarmRasterWorkers = 12;
+	// Bound worker-local FreeType/MSDF scratch while allowing wider CPUs to use
+	// more of their available cores. ResolvePrewarmWorkerCount still leaves one
+	// logical processor free, and ResolveMemoryBoundedWorkerLimit may select fewer
+	// workers without relaxing the 24 MiB batch ceiling.
+	constexpr UInt32 kMaximumPrewarmRasterWorkers = 16;
 	constexpr UInt32 kExpensivePrewarmParallelThreshold = 8;
 	constexpr UInt32 kFillPrewarmParallelThreshold = 64;
 	constexpr UInt32 kFillPrewarmWorkChunk = 8;
@@ -1034,6 +1038,10 @@ namespace fonthook::vectorfont
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults,
 		UInt32 aMaximumWorkers);
+	// Releases worker-local FreeType libraries/faces retained only to amortize
+	// repeated batches for the current font. Call before atlas finalization or
+	// memory recovery so this scratch never overlaps a large physical page.
+	void ReleasePrewarmRasterWorkerContexts() noexcept;
 	void BeginCompleteCodePageAtlasOnlyPrewarm();
 	void EndCompleteCodePageAtlasOnlyPrewarm();
 	void FlushGlyphBitmapDiskCache();
@@ -1104,7 +1112,6 @@ namespace fonthook::vectorfont
 		const FontAtlasPrewarmProgressReporter* apProgress = nullptr);
 	bool ConsolidatePhysicalFontAtlasPools(float afRasterScale,
 		const FontAtlasPrewarmProgressReporter* apProgress = nullptr);
-	void PruneRetiredAtlasGenerations();
 	void PruneRetiredAtlasGenerationsSafely();
 	bool BuildDirectGlyphAtlasTables(RuntimeFont& arRuntime, float afRasterScale);
 	void QueueFontPrewarm(UInt32 auiFontId);

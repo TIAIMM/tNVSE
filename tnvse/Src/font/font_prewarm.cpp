@@ -5,7 +5,6 @@
 #include "encoding.h"
 #include "load_config.h"
 #include "native_tile_overlay.h"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -14,7 +13,6 @@
 #include <limits>
 #include <new>
 #include <optional>
-#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -28,10 +26,14 @@ namespace fonthook::vectorfont
 		constexpr UInt32 kMaximumCandidatesPerBatch = 32768;
 		constexpr UInt32 kMaximumGlyphsPerBatch = 4096;
 		constexpr UInt32 kMaximumIncrementalGlyphsPerBatch = 1024;
-		constexpr UInt32 kInitialIncrementalGlyphsPerBatch = 128;
+		constexpr UInt32 kInitialIncrementalGlyphsPerBatch = 256;
 		constexpr UInt32 kParallelGlyphBatchFloor =
 			kFillPrewarmParallelThreshold;
-		constexpr ULONGLONG kTargetPrewarmBatchMs = 250;
+		// LoadingMenu consumes overlay snapshots independently at 10 Hz, so a
+		// longer raster batch does not stall presentation. Target roughly one
+		// second to amortize worker/FreeType setup and persistent-cache appends;
+		// the existing byte/headroom limits remain the authoritative ceiling.
+		constexpr ULONGLONG kTargetPrewarmBatchMs = 1000;
 		constexpr ULONGLONG kMinimumProgressUpdateIntervalMs = 100;
 		constexpr float kPrewarmFontWorkProgressShare = 0.86f;
 		constexpr float kPrewarmGlyphGenerationProgressShare = 0.80f;
@@ -69,12 +71,6 @@ namespace fonthook::vectorfont
 		static_assert(!CanRestartFontGeneration(3));
 		static_assert(CanRestartPrewarmTransaction(1));
 		static_assert(!CanRestartPrewarmTransaction(2));
-		void UpdatePrewarmProgress(const std::wstring& detail,
-			const std::wstring& stage, float progress)
-		{
-			UpdateNativePrewarmOverlay(detail, stage, progress);
-		}
-
 		struct PrewarmJob
 		{
 			UInt32 fontId = 0;
@@ -194,9 +190,9 @@ namespace fonthook::vectorfont
 		DWORD s_prewarmHostThreadId = 0;
 		thread_local bool s_prewarmPumpExecuting = false;
 		thread_local bool s_servicingPrewarmMessages = false;
-		bool s_rebuildOverlayLatched = false;
-		bool s_rebuildOverlayPresented = false;
-		float s_rebuildOverlayProgress = 0.0f;
+		bool s_rebuildProgressTracked = false;
+		bool s_rebuildProgressReportingStarted = false;
+		float s_rebuildProgress = 0.0f;
 
 		UInt64 BuildProfileKey(const FontConfig& config,
 			FontAtlasRoute route)
@@ -666,36 +662,40 @@ namespace fonthook::vectorfont
 				: 0.0f;
 		}
 
-		void LatchRebuildOverlay(const char* reason)
+		void LatchRebuildProgress(const char* reason)
 		{
-			if (s_rebuildOverlayLatched)
+			if (s_rebuildProgressTracked)
 				return;
-			s_rebuildOverlayLatched = true;
-			s_rebuildOverlayPresented = false;
-			s_rebuildOverlayProgress = 0.0f;
+			s_rebuildProgressTracked = true;
+			s_rebuildProgressReportingStarted = false;
+			s_rebuildProgress = 0.0f;
 			s_session.lastProgressUpdate = 0;
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm progress overlay latched reason=%s policy=cache-write-transaction",
+				"tnvse_freetype_font: prewarm progress tracking latched reason=%s policy=cache-write-transaction presentation=loading-thread-queued",
 				reason ? reason : "unknown");
 		}
 
-		void StartRebuildOverlayPresentation()
+		void StartRebuildProgressReporting()
 		{
-			if (!s_rebuildOverlayLatched || s_rebuildOverlayPresented)
+			if (!s_rebuildProgressTracked || s_rebuildProgressReportingStarted)
 				return;
-			s_rebuildOverlayPresented = true;
+			s_rebuildProgressReportingStarted = true;
 			s_session.lastProgressUpdate = 0;
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: prewarm progress reporting started presentation=loading-thread-queued producerThread=%u",
+				GetCurrentThreadId());
 		}
 
 		void ReportPrewarmTransactionProgress(const wchar_t* detail,
 			const wchar_t* stage, float progress, bool force = false)
 		{
 			ServiceFontPrewarmHostMessages();
-			if (!s_rebuildOverlayLatched || !s_rebuildOverlayPresented)
+			if (!s_rebuildProgressTracked
+				|| !s_rebuildProgressReportingStarted)
 				return;
-			progress = std::max(s_rebuildOverlayProgress,
+			progress = std::max(s_rebuildProgress,
 				std::clamp(progress, 0.0f, 1.0f));
-			s_rebuildOverlayProgress = progress;
+			s_rebuildProgress = progress;
 			const ULONGLONG now = GetTickCount64();
 			if (!force && s_session.lastProgressUpdate
 				&& now - s_session.lastProgressUpdate
@@ -704,8 +704,16 @@ namespace fonthook::vectorfont
 				return;
 			}
 			s_session.lastProgressUpdate = now;
-			UpdatePrewarmProgress(detail ? detail : L"",
-				stage ? stage : L"Preparing font cache...", progress);
+			UpdateNativePrewarmOverlay(
+				detail ? detail : L"",
+				stage ? stage : L"Preparing font cache...",
+				progress);
+			if (force)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm progress percent=%u presentation=loading-thread-queued",
+					static_cast<UInt32>(std::lround(progress * 100.0f)));
+			}
 		}
 
 		void ReportPrewarmProgress(const PrewarmJob& job, UInt32 fontOrdinal,
@@ -738,7 +746,7 @@ namespace fonthook::vectorfont
 			const bool cacheWriteBoundary =
 				stage == FontAtlasPrewarmProgressStage::PublishPhysicalGroup
 				|| stage == FontAtlasPrewarmProgressStage::PublishPhysicalPool;
-			if (!cacheWriteBoundary && !s_rebuildOverlayPresented)
+			if (!cacheWriteBoundary && !s_rebuildProgressReportingStarted)
 				return;
 			wchar_t detail[160] = {};
 			const wchar_t* text = L"Finalizing shared font cache...";
@@ -746,8 +754,8 @@ namespace fonthook::vectorfont
 			switch (stage)
 			{
 			case FontAtlasPrewarmProgressStage::PublishPhysicalGroup:
-				LatchRebuildOverlay("physical-group-publish");
-				StartRebuildOverlayPresentation();
+				LatchRebuildProgress("physical-group-publish");
+				StartRebuildProgressReporting();
 				_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 					L"Physical font atlas group %u", std::max<UInt32>(1, item));
 				text = L"Repacking shared font atlas group...";
@@ -766,8 +774,8 @@ namespace fonthook::vectorfont
 				progress = 0.95f;
 				break;
 			case FontAtlasPrewarmProgressStage::PublishPhysicalPool:
-				LatchRebuildOverlay("physical-pool-publish");
-				StartRebuildOverlayPresentation();
+				LatchRebuildProgress("physical-pool-publish");
+				StartRebuildProgressReporting();
 				_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 					L"Physical texture pool %u of %u", item, total);
 				text = L"Publishing and loading physical texture pool...";
@@ -942,6 +950,7 @@ namespace fonthook::vectorfont
 
 		void EndAtlasOnlyPrewarmPolicy()
 		{
+			ReleasePrewarmRasterWorkerContexts();
 			if (!s_atlasOnlyPrewarmPending)
 				return;
 			EndCompleteCodePageAtlasOnlyPrewarm();
@@ -993,6 +1002,7 @@ namespace fonthook::vectorfont
 		void PreparePrewarmMemoryRetry(const char* stage, UInt32 fontId,
 			UInt32 retry, size_t pendingBytes)
 		{
+			ReleasePrewarmRasterWorkerContexts();
 			const bool releasedEmergency =
 				ReleaseFontPrewarmEmergencyAddressSpace();
 			ReleasePrewarmBatchReferences("prewarm-memory-retry");
@@ -1057,9 +1067,9 @@ namespace fonthook::vectorfont
 			s_prewarmHostThreadId = 0;
 			try { HideNativePrewarmOverlay(); }
 			catch (...) {}
-			s_rebuildOverlayLatched = false;
-			s_rebuildOverlayPresented = false;
-			s_rebuildOverlayProgress = 0.0f;
+			s_rebuildProgressTracked = false;
+			s_rebuildProgressReportingStarted = false;
+			s_rebuildProgress = 0.0f;
 			try
 			{
 				gLog.FormattedMessage(
@@ -1089,12 +1099,12 @@ namespace fonthook::vectorfont
 			EndAtlasOnlyPrewarmPolicy();
 			ReleaseFontPrewarmEmergencyAddressSpace();
 			ResetAtlasAllocationMemoryPressure();
-			if (s_rebuildOverlayLatched)
+			if (s_rebuildProgressTracked)
 			{
 				ReportPrewarmTransactionProgress(
 					L"Font cache rebuild",
 					L"Restarting cache transaction inside LoadingMenu...",
-					s_rebuildOverlayProgress, true);
+					s_rebuildProgress, true);
 			}
 			else
 			{
@@ -1144,12 +1154,12 @@ namespace fonthook::vectorfont
 			catch (...) {}
 			try
 			{
-				if (s_rebuildOverlayLatched)
+				if (s_rebuildProgressTracked)
 				{
 					ReportPrewarmTransactionProgress(
 						L"Font cache rebuild",
 						L"Restarting cache transaction inside LoadingMenu...",
-						s_rebuildOverlayProgress, true);
+						s_rebuildProgress, true);
 				}
 				else
 				{
@@ -1262,9 +1272,9 @@ namespace fonthook::vectorfont
 				{
 					EndAtlasOnlyPrewarmPolicy();
 					HideNativePrewarmOverlay();
-					s_rebuildOverlayLatched = false;
-					s_rebuildOverlayPresented = false;
-					s_rebuildOverlayProgress = 0.0f;
+					s_rebuildProgressTracked = false;
+					s_rebuildProgressReportingStarted = false;
+					s_rebuildProgress = 0.0f;
 					TransitionPrewarmPhase(PrewarmPhase::Idle);
 				}
 				else
@@ -1385,7 +1395,7 @@ namespace fonthook::vectorfont
 						job.fontId, s_session.rasterScale);
 				if (directReady)
 				{
-					if (s_rebuildOverlayLatched)
+					if (s_rebuildProgressTracked)
 					{
 						ReportPrewarmProgress(job,
 							std::min(s_session.queuedFonts,
@@ -1402,7 +1412,7 @@ namespace fonthook::vectorfont
 				}
 				else
 				{
-					LatchRebuildOverlay("snapshot-direct-table-validation");
+					LatchRebuildProgress("snapshot-direct-table-validation");
 					CancelStreamingPrewarmAtlas(*runtime);
 					const bool discarded = DiscardGlyphAtlasSnapshot(
 						*runtime, s_session.rasterScale);
@@ -1417,7 +1427,7 @@ namespace fonthook::vectorfont
 			}
 			else
 			{
-				LatchRebuildOverlay("font-atlas-cache-miss");
+				LatchRebuildProgress("font-atlas-cache-miss");
 				CancelStreamingPrewarmAtlas(*runtime);
 				const bool discarded = DiscardGlyphAtlasSnapshot(
 					*runtime, s_session.rasterScale);
@@ -1428,9 +1438,6 @@ namespace fonthook::vectorfont
 					job.fontId, discarded ? "discarded" : "delete-failed");
 				s_session.generationJobs.push_back(std::move(job));
 			}
-			// The progress component itself uses font slot 1 and may already
-			// hold a shape from the generation just replaced above. Force all
-			// prewarm text nodes to rebuild before the next rendered frame.
 			RefreshNativePrewarmOverlayTextGeometry();
 			RecordPrewarmStep(stepStarted);
 		}
@@ -1457,7 +1464,7 @@ namespace fonthook::vectorfont
 				++s_session.finishedFonts;
 				return;
 			}
-			StartRebuildOverlayPresentation();
+			StartRebuildProgressReporting();
 
 			EffectQuality resolvedQuality = config->effectQuality;
 			active.shaderSdf =
@@ -2005,10 +2012,10 @@ namespace fonthook::vectorfont
 						? L"Indexing shared MTSDF double-byte metrics..."
 						: active.shaderSdf
 						? (UsesMtsdfDistanceField()
-							? L"Streaming MTSDF glyphs to disk..."
-							: L"Streaming true-SDF glyphs to disk...")
+							? L"Generating and caching MTSDF glyphs..."
+							: L"Generating and caching true-SDF glyphs...")
 						: active.aggressiveComposite
-							? L"Streaming aggressive BGRA composite glyphs to disk..."
+							? L"Generating and caching BGRA composite glyphs..."
 							: L"Generating bounded fallback masks...",
 				0.0f, retryMemoryBatch);
 
@@ -2019,6 +2026,9 @@ namespace fonthook::vectorfont
 
 		void FinalizeActivePrewarmFont()
 		{
+			// Worker faces are useful only while raster batches are active. Drop
+			// them before atlas consolidation can allocate a 256 MiB 8192x8192 page.
+			ReleasePrewarmRasterWorkerContexts();
 			if (!s_session.activeFont)
 			{
 				TransitionPrewarmPhase(PrewarmPhase::BeginFont);
@@ -2167,7 +2177,7 @@ namespace fonthook::vectorfont
 				ReportPrewarmTransactionProgress(
 					L"Font cache rebuild",
 					L"Retrying snapshot loading after memory pressure...",
-					s_rebuildOverlayProgress, true);
+					s_rebuildProgress, true);
 				RecordPrewarmStep(stepStarted);
 				TransitionPrewarmPhase(PrewarmPhase::RestoreSnapshots);
 				return;
@@ -2197,7 +2207,7 @@ namespace fonthook::vectorfont
 				ReportPrewarmTransactionProgress(
 					L"Font cache rebuild",
 					L"Retrying final cache validation...",
-					s_rebuildOverlayProgress, true);
+					s_rebuildProgress, true);
 				RecordPrewarmStep(stepStarted);
 				TransitionPrewarmPhase(PrewarmPhase::RestoreSnapshots);
 				return;
@@ -2205,8 +2215,6 @@ namespace fonthook::vectorfont
 
 			s_session.verifiedCodePageFonts.push_back(
 				active.job.fontId);
-			// Font slot 1 may have changed atlas generation. Rebuild the overlay
-			// only after the replacement direct tables are fully sealed.
 			RefreshNativePrewarmOverlayTextGeometry();
 			ReportPrewarmProgress(
 				active.job,
@@ -2276,7 +2284,7 @@ namespace fonthook::vectorfont
 				s_session.everyConfiguredJobCompleted
 				&& s_session.everyConfiguredProfileVerified;
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: incremental streamed prewarm end fonts=%u complete=%u streamFailed=%u cancelled=%u batches=%u peakBatchGlyphs=%u elapsedMs=%llu maxStepMs=%llu scanMs=%llu rasterMs=%llu streamMs=%llu memoryRetries=%u transactionRestarts=%u atlasOnlyTransaction=%s progressOverlay=%s runtimeFallback=0",
+				"tnvse_freetype_font: incremental streamed prewarm end fonts=%u complete=%u streamFailed=%u cancelled=%u batches=%u peakBatchGlyphs=%u elapsedMs=%llu maxStepMs=%llu scanMs=%llu rasterMs=%llu streamMs=%llu memoryRetries=%u transactionRestarts=%u atlasOnlyTransaction=%s progressReporting=%s progressOverlay=loading-thread-queued runtimeFallback=0",
 				s_session.queuedFonts,
 				s_session.completedFonts,
 				s_session.streamFailedFonts,
@@ -2298,7 +2306,8 @@ namespace fonthook::vectorfont
 				!s_session.atlasOnlyTransactionStarted
 					? "not-started"
 					: s_session.success ? "complete" : "incomplete",
-				s_rebuildOverlayLatched ? "cache-write" : "cache-hit-hidden");
+				s_rebuildProgressTracked
+					? "cache-write-loading-thread-queued" : "cache-hit-hidden");
 			if (!s_session.success)
 			{
 				ResetPrewarmTransactionForRetry(
@@ -2367,9 +2376,9 @@ namespace fonthook::vectorfont
 				{
 					s_transactionRestartPending = false;
 					HideNativePrewarmOverlay();
-					s_rebuildOverlayLatched = false;
-					s_rebuildOverlayPresented = false;
-					s_rebuildOverlayProgress = 0.0f;
+					s_rebuildProgressTracked = false;
+					s_rebuildProgressReportingStarted = false;
+					s_rebuildProgress = 0.0f;
 					return FontPrewarmPumpStatus::Idle;
 				}
 				ResetPrewarmTransactionForRetry(
@@ -2408,7 +2417,7 @@ namespace fonthook::vectorfont
 		case PrewarmPhase::CleanupFlush:
 		{
 			const ULONGLONG started = GetTickCount64();
-			StartRebuildOverlayPresentation();
+			StartRebuildProgressReporting();
 			ReportPrewarmTransactionProgress(
 				L"Finalizing generated font cache",
 				L"Flushing generated glyph cache files...",
@@ -2488,10 +2497,11 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: optional physical atlas group consolidation failed reason=unknown; retaining sealed per-font atlases");
 			}
-			// Rebuild the overlay against the committed group before pruning retired
-			// generations. Destroying and recreating the root retains more external
-			// Tile geometry references during the following pool consolidation.
-			RefreshNativePrewarmOverlayTextGeometry();
+			if (!RefreshNativePrewarmOverlayTextGeometry(2000))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm UI refresh acknowledgement timed out stage=physical-groups policy=retired-atlas-refcount-retention");
+			}
 			PruneRetiredPrewarmAtlasGenerations();
 			ReportPrewarmProcessMemoryState("physical-groups-after");
 			RecordPrewarmStep(started);
@@ -2537,9 +2547,11 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: optional physical atlas pool consolidation failed reason=unknown; retaining sealed group/per-font atlases");
 			}
-			// Rebind the overlay to the final pool generation before pruning the
-			// superseded group page.
-			RefreshNativePrewarmOverlayTextGeometry();
+			if (!RefreshNativePrewarmOverlayTextGeometry(2000))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm UI refresh acknowledgement timed out stage=physical-pools policy=retired-atlas-refcount-retention");
+			}
 			PruneRetiredPrewarmAtlasGenerations();
 			ReportPrewarmProcessMemoryState("physical-pools-after");
 			gLog.FormattedMessage(
@@ -2619,10 +2631,15 @@ namespace fonthook::vectorfont
 			break;
 		}
 		case PrewarmPhase::Complete:
-			HideNativePrewarmOverlay();
-			s_rebuildOverlayLatched = false;
-			s_rebuildOverlayPresented = false;
-			s_rebuildOverlayProgress = 0.0f;
+			if (!QuiesceNativePrewarmOverlay(2000))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm progress final hide acknowledgement timed out; LoadingMenu owns remaining Tile teardown");
+			}
+			PruneRetiredPrewarmAtlasGenerations();
+			s_rebuildProgressTracked = false;
+			s_rebuildProgressReportingStarted = false;
+			s_rebuildProgress = 0.0f;
 			ReleaseFontPrewarmEmergencyAddressSpace();
 			s_configuredFontsPrewarmed = true;
 			s_session = {};
@@ -2739,9 +2756,9 @@ namespace fonthook::vectorfont
 		s_terminalPrewarmFailure = false;
 		s_prewarmHostThreadId = 0;
 		HideNativePrewarmOverlay();
-		s_rebuildOverlayLatched = false;
-		s_rebuildOverlayPresented = false;
-		s_rebuildOverlayProgress = 0.0f;
+		s_rebuildProgressTracked = false;
+		s_rebuildProgressReportingStarted = false;
+		s_rebuildProgress = 0.0f;
 	}
 }
 

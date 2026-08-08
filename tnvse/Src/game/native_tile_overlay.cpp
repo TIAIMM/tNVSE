@@ -3,6 +3,7 @@
 #include "BSMemory.hpp"
 #include "font_glyphs.h"
 #include "font_manager.h"
+#include "font_vector.h"
 #include "hook_identity.h"
 #include "InterfaceManager.hpp"
 #include "Menu.hpp"
@@ -16,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <string_view>
 #include <vector>
@@ -43,6 +45,7 @@ namespace fonthook
 		constexpr float kPrewarmMinimumTextHeight = 24.0f;
 		constexpr float kPrewarmMaximumPanelWidth = 620.0f;
 		constexpr float kPrewarmMinimumPanelWidth = 320.0f;
+		constexpr size_t kPrewarmProgressTextCapacity = 160;
 		constexpr UInt32 kReadTileXml = 0xA01B00;
 		constexpr UInt32 kReleaseTileTree = 0x9FF690;
 		constexpr UInt32 kRegisterMenuTile = 0xA1DC70;
@@ -65,11 +68,32 @@ namespace fonthook
 		// 1280x960 render target before the ordinary screen-space UI pass.
 		constexpr SIZE_T kPipboyDrawVtableEntry = 0x10780B8;
 		constexpr SIZE_T kVanillaRenderedMenuDraw = 0x7FBA00;
+		// LoadingMenuThread::Run calls LoadingMenu::Update immediately before
+		// the thread presents Tile changes. Consuming queued progress at this
+		// exact call boundary keeps all LoadingMenu Tile mutations on its owner.
+		constexpr SIZE_T kLoadingMenuThreadUpdateCall = 0x78D552;
+		constexpr SIZE_T kVanillaLoadingMenuUpdate = 0x789820;
+		constexpr SIZE_T kLoadingMenuThreadPresentCall = 0x78D557;
+		constexpr SIZE_T kVanillaLoadingMenuThreadPresent = 0x78D080;
+		constexpr std::array<UInt8, 6> kLoadingMenuSingletonLoad = {
+			0x8B, 0x0D, 0xC0, 0xA0, 0x1D, 0x01,
+		};
 
 		using CreateMenuByClassFn =
 			Menu* (__thiscall*)(void*, UInt32);
 		using RenderedMenuDrawFn =
 			void (__thiscall*)(void*, int, int, int);
+		using LoadingMenuUpdateFn = void (__thiscall*)(void*);
+
+		struct PrewarmOverlayCommand
+		{
+			std::array<wchar_t, kPrewarmProgressTextCapacity> detail = {};
+			std::array<wchar_t, kPrewarmProgressTextCapacity> stage = {};
+			float progress = 0.0f;
+			UInt32 sequence = 0;
+			UInt32 refreshSequence = 0;
+			bool visible = false;
+		};
 
 		struct NativeTileOverlayState
 		{
@@ -108,16 +132,27 @@ namespace fonthook
 		std::atomic<UInt32> s_imeHostGeneration = 1;
 		std::atomic_bool s_prewarmReady = false;
 		std::atomic_bool s_prewarmActive = false;
+		SRWLOCK s_prewarmCommandLock = SRWLOCK_INIT;
+		PrewarmOverlayCommand s_prewarmCommand;
+		UInt32 s_nextPrewarmCommandSequence = 0;
+		std::atomic<UInt32> s_prewarmPublishedSequence = 0;
+		std::atomic<UInt32> s_prewarmConsumedSequence = 0;
+		UInt32 s_prewarmAppliedRefreshSequence = 0;
+		std::atomic<DWORD> s_prewarmConsumerThreadId = 0;
+		std::atomic_bool s_prewarmConsumerDisabled = false;
 		// Preserve the MSVC complete-object locator at vtable[-1] as well as
 		// the 18 virtual entries used by Menu.
 		std::array<SIZE_T, kMenuBaseVtableEntryCount + 1>
 			s_imeMenuVtable = {};
 		CreateMenuByClassFn s_originalCreateMenuByClass = nullptr;
 		RenderedMenuDrawFn s_originalPipboyDraw = nullptr;
+		LoadingMenuUpdateFn s_originalLoadingMenuUpdate = nullptr;
 		bool s_imeMenuFactoryInstalled = false;
 		bool s_imeMenuFactoryInstallFailed = false;
 		bool s_pipboyDrawHookInstalled = false;
 		bool s_pipboyDrawHookInstallFailed = false;
+		bool s_loadingMenuUpdateHookInstalled = false;
+		bool s_loadingMenuUpdateHookInstallFailed = false;
 		bool s_loggedPipboyRttExclusion = false;
 		bool s_creatingImeMenu = false;
 
@@ -130,6 +165,15 @@ namespace fonthook
 				s_imeHostGeneration.store(1, std::memory_order_release);
 		}
 		UInt32 s_imeVisualBoundsLogCount = 0;
+
+		void ConsumeNativePrewarmOverlayCommand();
+
+		void __fastcall LoadingMenuUpdateHook(void* loadingMenu, void*)
+		{
+			if (s_originalLoadingMenuUpdate)
+				s_originalLoadingMenuUpdate(loadingMenu);
+			ConsumeNativePrewarmOverlayCommand();
+		}
 
 		UInt32 __fastcall ImeMenuGetId(Menu*, void*)
 		{
@@ -1333,6 +1377,312 @@ namespace fonthook
 				Tile::kTileValue_y, stageY, true);
 			s_state.prewarmProgressWidth = progressWidth;
 		}
+
+		UInt32 NextPrewarmCommandSequenceLocked()
+		{
+			++s_nextPrewarmCommandSequence;
+			if (!s_nextPrewarmCommandSequence)
+				++s_nextPrewarmCommandSequence;
+			return s_nextPrewarmCommandSequence;
+		}
+
+		void CopyPrewarmCommandText(
+			std::array<wchar_t, kPrewarmProgressTextCapacity>& target,
+			std::wstring_view source)
+		{
+			target.fill(L'\0');
+			const size_t length = std::min(
+				source.size(), target.size() - 1u);
+			if (length)
+				std::copy_n(source.data(), length, target.data());
+		}
+
+		UInt32 PublishPrewarmOverlayUpdate(
+			std::wstring_view detail,
+			std::wstring_view stage,
+			float progress)
+		{
+			AcquireSRWLockExclusive(&s_prewarmCommandLock);
+			const UInt32 sequence = NextPrewarmCommandSequenceLocked();
+			CopyPrewarmCommandText(s_prewarmCommand.detail, detail);
+			CopyPrewarmCommandText(s_prewarmCommand.stage, stage);
+			s_prewarmCommand.progress = std::clamp(progress, 0.0f, 1.0f);
+			s_prewarmCommand.visible = true;
+			s_prewarmCommand.sequence = sequence;
+			ReleaseSRWLockExclusive(&s_prewarmCommandLock);
+			s_prewarmActive.store(
+				!s_prewarmConsumerDisabled.load(std::memory_order_acquire),
+				std::memory_order_release);
+			s_prewarmPublishedSequence.store(
+				sequence, std::memory_order_release);
+			return sequence;
+		}
+
+		UInt32 PublishPrewarmOverlayVisibility(bool visible)
+		{
+			AcquireSRWLockExclusive(&s_prewarmCommandLock);
+			const UInt32 sequence = NextPrewarmCommandSequenceLocked();
+			s_prewarmCommand.visible = visible;
+			s_prewarmCommand.sequence = sequence;
+			ReleaseSRWLockExclusive(&s_prewarmCommandLock);
+			s_prewarmActive.store(
+				visible
+					&& !s_prewarmConsumerDisabled.load(
+						std::memory_order_acquire),
+				std::memory_order_release);
+			s_prewarmPublishedSequence.store(
+				sequence, std::memory_order_release);
+			return sequence;
+		}
+
+		UInt32 PublishPrewarmOverlayRefresh()
+		{
+			AcquireSRWLockExclusive(&s_prewarmCommandLock);
+			const UInt32 sequence = NextPrewarmCommandSequenceLocked();
+			s_prewarmCommand.refreshSequence = sequence;
+			s_prewarmCommand.sequence = sequence;
+			ReleaseSRWLockExclusive(&s_prewarmCommandLock);
+			s_prewarmPublishedSequence.store(
+				sequence, std::memory_order_release);
+			return sequence;
+		}
+
+		PrewarmOverlayCommand ReadLatestPrewarmOverlayCommand()
+		{
+			PrewarmOverlayCommand command;
+			AcquireSRWLockShared(&s_prewarmCommandLock);
+			command = s_prewarmCommand;
+			ReleaseSRWLockShared(&s_prewarmCommandLock);
+			return command;
+		}
+
+		void ApplyPrewarmOverlayHidden()
+		{
+			Tile* parent = SynchronizePrewarmParent();
+			Tile* root = s_state.prewarmRoot;
+			const bool attached = IsNamedDirectChild(
+				parent, root, "tNVSE_Prewarm");
+			if (s_state.prewarmTileVisible
+				&& IsNativePrewarmOverlayHostReady()
+				&& attached)
+			{
+				SetVisible(root, false);
+			}
+			if (root && attached)
+			{
+				ReleaseAndDestroyAttachedRoot(
+					parent, root, "tNVSE_Prewarm");
+			}
+			ClearPrewarmResolvedTiles();
+		}
+
+		bool ApplyPrewarmOverlayVisible(
+			const PrewarmOverlayCommand& command)
+		{
+			Tile* parent = SynchronizePrewarmParent();
+			if (!parent)
+			{
+				if (!s_state.prewarmParentUnavailableLogged)
+				{
+					s_state.prewarmParentUnavailableLogged = true;
+					gLog.FormattedMessage(
+						"tnvse_native_overlay: LoadingMenu root not ready; retaining queued prewarm progress until owner thread can attach it");
+				}
+				return false;
+			}
+			s_state.prewarmParentUnavailableLogged = false;
+			if (!EnsurePrewarmHost(parent))
+			{
+				if (s_state.prewarmLoadFailed)
+				{
+					s_prewarmConsumerDisabled.store(
+						true, std::memory_order_release);
+					s_prewarmActive.store(false, std::memory_order_release);
+				}
+				return true;
+			}
+
+			if (!s_state.prewarmTileVisible)
+			{
+				SetVisible(s_state.prewarmRoot, true);
+				s_state.prewarmTileVisible = true;
+			}
+
+			SetText(s_state.prewarmDetail, command.detail.data());
+			SetText(s_state.prewarmStage, command.stage.data());
+			wchar_t percent[16] = {};
+			_snwprintf_s(percent, _countof(percent), _TRUNCATE, L"%u%%",
+				static_cast<UInt32>(std::lround(
+					std::clamp(command.progress, 0.0f, 1.0f) * 100.0f)));
+			SetText(s_state.prewarmPercent, percent);
+
+			if (command.refreshSequence
+				&& command.refreshSequence != s_prewarmAppliedRefreshSequence)
+			{
+				RebuildTextGeometry(s_state.prewarmTitle);
+				RebuildTextGeometry(s_state.prewarmDetail);
+				RebuildTextGeometry(s_state.prewarmStage);
+				RebuildTextGeometry(s_state.prewarmPercent);
+				s_state.prewarmLayoutSignature.fill(0.0f);
+				s_prewarmAppliedRefreshSequence = command.refreshSequence;
+			}
+
+			LayoutPrewarmOverlay();
+			s_state.prewarmFill->SetValueFloat(
+				Tile::kTileValue_width,
+				s_state.prewarmProgressWidth
+					* std::clamp(command.progress, 0.0f, 1.0f),
+				true);
+			return true;
+		}
+
+		void ConsumeNativePrewarmOverlayCommand()
+		{
+			const UInt32 published = s_prewarmPublishedSequence.load(
+				std::memory_order_acquire);
+			if (!published || published == s_prewarmConsumedSequence.load(
+					std::memory_order_acquire))
+			{
+				return;
+			}
+
+			const PrewarmOverlayCommand command =
+				ReadLatestPrewarmOverlayCommand();
+			if (!command.sequence)
+				return;
+
+			DWORD expectedThread = 0;
+			const DWORD currentThread = GetCurrentThreadId();
+			if (s_prewarmConsumerThreadId.compare_exchange_strong(
+				expectedThread, currentThread, std::memory_order_acq_rel))
+			{
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: prewarm progress consumer active thread=%u owner=LoadingMenuThread policy=queued-snapshot legacyFontRoute=thread-local-fnt",
+					currentThread);
+			}
+			if (s_prewarmConsumerDisabled.load(std::memory_order_acquire))
+			{
+				s_prewarmActive.store(false, std::memory_order_release);
+				s_prewarmConsumedSequence.store(
+					command.sequence, std::memory_order_release);
+				return;
+			}
+
+			try
+			{
+				// Cell Offset Generator keeps generation on workers and limits its
+				// foreground path to LoadingMenu progress presentation. This path
+				// additionally confines every Tile mutation to LoadingMenuThread
+				// and routes only that presentation through legacy FNT geometry.
+				// Prefab import and text refresh therefore cannot recursively enter
+				// the MTSDF transaction that produced this command.
+				ScopedLegacyFntRenderRoute legacyFntRoute;
+				bool applied = true;
+				if (command.visible)
+					applied = ApplyPrewarmOverlayVisible(command);
+				else
+					ApplyPrewarmOverlayHidden();
+				if (!applied)
+					return;
+			}
+			catch (const std::exception& error)
+			{
+				s_prewarmConsumerDisabled.store(true, std::memory_order_release);
+				s_prewarmReady.store(false, std::memory_order_release);
+				s_prewarmActive.store(false, std::memory_order_release);
+				s_state.prewarmLoadFailed = true;
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: prewarm progress consumer disabled reason=%s policy=font-prewarm-continues",
+					error.what());
+			}
+			catch (...)
+			{
+				s_prewarmConsumerDisabled.store(true, std::memory_order_release);
+				s_prewarmReady.store(false, std::memory_order_release);
+				s_prewarmActive.store(false, std::memory_order_release);
+				s_state.prewarmLoadFailed = true;
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: prewarm progress consumer disabled reason=unknown policy=font-prewarm-continues");
+			}
+			s_prewarmConsumedSequence.store(
+				command.sequence, std::memory_order_release);
+		}
+	}
+
+	bool InstallNativePrewarmOverlayLoadingThreadHook()
+	{
+		if (s_loadingMenuUpdateHookInstalled)
+			return true;
+		if (s_loadingMenuUpdateHookInstallFailed)
+			return false;
+
+		SIZE_T currentUpdateTarget = 0;
+		SIZE_T currentPresentTarget = 0;
+		const SIZE_T singletonLoad =
+			kLoadingMenuThreadUpdateCall - kLoadingMenuSingletonLoad.size();
+		if (!hook_identity::IsAccessibleRegion(
+				singletonLoad,
+				kLoadingMenuSingletonLoad.size()
+					+ 2u * sizeof(UInt8) + 2u * sizeof(SInt32),
+				true)
+			|| !hook_identity::MatchesBytesUnchecked(
+				singletonLoad,
+				kLoadingMenuSingletonLoad.data(),
+				kLoadingMenuSingletonLoad.size())
+			|| !hook_identity::ReadRel32Target(
+				kLoadingMenuThreadUpdateCall,
+				hook_identity::Rel32Opcode::Call,
+				currentUpdateTarget)
+			|| !hook_identity::ReadRel32Target(
+				kLoadingMenuThreadPresentCall,
+				hook_identity::Rel32Opcode::Call,
+				currentPresentTarget)
+			|| !hook_identity::IsExecutableTarget(currentUpdateTarget)
+			|| !hook_identity::IsExecutableTarget(currentPresentTarget))
+		{
+			s_loadingMenuUpdateHookInstallFailed = true;
+			gLog.FormattedMessage(
+				"tnvse_native_overlay: cannot install LoadingMenuThread prewarm consumer; executable identity mismatch updateCall=0x%08X presentCall=0x%08X",
+				static_cast<UInt32>(kLoadingMenuThreadUpdateCall),
+				static_cast<UInt32>(kLoadingMenuThreadPresentCall));
+			return false;
+		}
+
+		if (currentUpdateTarget == reinterpret_cast<SIZE_T>(
+				&LoadingMenuUpdateHook))
+		{
+			s_loadingMenuUpdateHookInstalled =
+				s_originalLoadingMenuUpdate != nullptr;
+			return s_loadingMenuUpdateHookInstalled;
+		}
+
+		s_originalLoadingMenuUpdate =
+			reinterpret_cast<LoadingMenuUpdateFn>(currentUpdateTarget);
+		WriteRelCall(kLoadingMenuThreadUpdateCall, &LoadingMenuUpdateHook);
+		s_loadingMenuUpdateHookInstalled =
+			hook_identity::MatchesRel32Target(
+				kLoadingMenuThreadUpdateCall,
+				hook_identity::Rel32Opcode::Call,
+				reinterpret_cast<SIZE_T>(&LoadingMenuUpdateHook));
+		if (!s_loadingMenuUpdateHookInstalled)
+		{
+			WriteRelCall(kLoadingMenuThreadUpdateCall, currentUpdateTarget);
+			s_originalLoadingMenuUpdate = nullptr;
+			s_loadingMenuUpdateHookInstallFailed = true;
+			gLog.FormattedMessage(
+				"tnvse_native_overlay: LoadingMenuThread prewarm consumer hook write verification failed call=0x%08X",
+				static_cast<UInt32>(kLoadingMenuThreadUpdateCall));
+			return false;
+		}
+
+		gLog.FormattedMessage(
+			"tnvse_native_overlay: installed LoadingMenuThread prewarm consumer call=0x%08X chainedTarget=0x%08X vanillaUpdate=%u presentTarget=0x%08X vanillaPresent=%u policy=queued-snapshot legacyFontRoute=thread-local-fnt",
+			static_cast<UInt32>(kLoadingMenuThreadUpdateCall),
+			static_cast<UInt32>(currentUpdateTarget),
+			currentUpdateTarget == kVanillaLoadingMenuUpdate ? 1u : 0u,
+			static_cast<UInt32>(currentPresentTarget),
+			currentPresentTarget == kVanillaLoadingMenuThreadPresent ? 1u : 0u);
+		return true;
 	}
 
 	bool EnsureNativeImeOverlayHost()
@@ -1341,23 +1691,6 @@ namespace fonthook
 		if (!parent)
 			return false;
 		return EnsureImeHost(parent);
-	}
-
-	bool EnsureNativePrewarmOverlayHost()
-	{
-		Tile* parent = SynchronizePrewarmParent();
-		if (!parent)
-		{
-			if (!s_state.prewarmParentUnavailableLogged)
-			{
-				s_state.prewarmParentUnavailableLogged = true;
-				gLog.FormattedMessage(
-					"tnvse_native_overlay: LoadingMenu root unavailable; font prewarm continues without Tile progress UI");
-			}
-			return false;
-		}
-		s_state.prewarmParentUnavailableLogged = false;
-		return EnsurePrewarmHost(parent);
 	}
 
 	bool IsNativeImeOverlayHostReady()
@@ -1622,76 +1955,79 @@ namespace fonthook
 
 	void ShowNativePrewarmOverlay()
 	{
-		s_prewarmActive.store(true, std::memory_order_release);
-		EnsureNativePrewarmOverlayHost();
-		HideNativeImeOverlay();
-		if (!IsNativePrewarmOverlayHostReady())
-			return;
-		if (!s_state.prewarmTileVisible)
-		{
-			SetVisible(s_state.prewarmRoot, true);
-			s_state.prewarmTileVisible = true;
-		}
+		PublishPrewarmOverlayVisibility(true);
 	}
 
 	void UpdateNativePrewarmOverlay(
-		const std::wstring& detail,
-		const std::wstring& stage,
+		std::wstring_view detail,
+		std::wstring_view stage,
 		float progress)
 	{
-		ShowNativePrewarmOverlay();
-		if (!IsNativePrewarmOverlayHostReady())
-			return;
-		progress = std::clamp(progress, 0.0f, 1.0f);
-		SetText(s_state.prewarmDetail, detail);
-		SetText(s_state.prewarmStage, stage);
-		LayoutPrewarmOverlay();
-		s_state.prewarmFill->SetValueFloat(
-			Tile::kTileValue_width,
-			s_state.prewarmProgressWidth * progress,
-			true);
-		wchar_t percent[16] = {};
-		_snwprintf_s(percent, _countof(percent), _TRUNCATE, L"%u%%",
-			static_cast<UInt32>(std::lround(progress * 100.0f)));
-		SetText(s_state.prewarmPercent, percent);
+		PublishPrewarmOverlayUpdate(detail, stage, progress);
 	}
 
-	void RefreshNativePrewarmOverlayTextGeometry()
+	bool RefreshNativePrewarmOverlayTextGeometry(UInt32 timeoutMs)
 	{
-		Tile* parent = SynchronizePrewarmParent();
-		if (!IsNativePrewarmOverlayHostReady()
-			|| !IsResolvedPrewarmTreeAttached(parent))
+		const UInt32 sequence = PublishPrewarmOverlayRefresh();
+		if (!timeoutMs
+			|| !s_loadingMenuUpdateHookInstalled
+			|| (!s_prewarmConsumerThreadId.load(std::memory_order_acquire)
+				&& !s_prewarmReady.load(std::memory_order_acquire)))
 		{
-			return;
+			return true;
 		}
-		RebuildTextGeometry(s_state.prewarmTitle);
-		RebuildTextGeometry(s_state.prewarmDetail);
-		RebuildTextGeometry(s_state.prewarmStage);
-		RebuildTextGeometry(s_state.prewarmPercent);
-		s_state.prewarmLayoutSignature.fill(0.0f);
-		LayoutPrewarmOverlay();
+
+		const ULONGLONG deadline = GetTickCount64() + timeoutMs;
+		while (s_prewarmConsumedSequence.load(std::memory_order_acquire)
+			!= sequence)
+		{
+			if (GetTickCount64() >= deadline)
+			{
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: timed out synchronizing prewarm text refresh sequence=%u consumed=%u timeoutMs=%u policy=retain-referenced-retired-atlas",
+					sequence,
+					s_prewarmConsumedSequence.load(
+						std::memory_order_acquire),
+					timeoutMs);
+				return false;
+			}
+			Sleep(1);
+		}
+		return true;
 	}
 
 	void HideNativePrewarmOverlay()
 	{
-		s_prewarmActive.store(false, std::memory_order_release);
-		Tile* parent = SynchronizePrewarmParent();
-		Tile* root = s_state.prewarmRoot;
-		const bool attached =
-			IsNamedDirectChild(
-				parent, root, "tNVSE_Prewarm");
-		if (s_state.prewarmTileVisible
-			&& IsNativePrewarmOverlayHostReady()
-			&& attached)
-			SetVisible(root, false);
-		if (root && attached)
+		PublishPrewarmOverlayVisibility(false);
+	}
+
+	bool QuiesceNativePrewarmOverlay(UInt32 timeoutMs)
+	{
+		const UInt32 sequence = PublishPrewarmOverlayVisibility(false);
+		if (!s_loadingMenuUpdateHookInstalled
+			|| (!s_prewarmConsumerThreadId.load(std::memory_order_acquire)
+				&& !s_prewarmReady.load(std::memory_order_acquire)))
 		{
-			// Match the vanilla/Cell Offset component teardown: release the
-			// imported Tile tree under the UI lock, then destroy its root.
-			ReleaseAndDestroyAttachedRoot(
-				parent, root, "tNVSE_Prewarm");
+			return true;
 		}
-		ClearPrewarmResolvedTiles();
+
+		const ULONGLONG deadline = GetTickCount64() + timeoutMs;
+		while (s_prewarmConsumedSequence.load(std::memory_order_acquire)
+			!= sequence)
+		{
+			if (GetTickCount64() >= deadline)
+			{
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: timed out quiescing prewarm progress sequence=%u consumed=%u timeoutMs=%u policy=skip-atlas-publication",
+					sequence,
+					s_prewarmConsumedSequence.load(
+						std::memory_order_acquire),
+					timeoutMs);
+				return false;
+			}
+			Sleep(1);
+		}
+		return true;
 	}
 
 	bool IsNativePrewarmOverlayActive()
@@ -1701,17 +2037,16 @@ namespace fonthook
 
 	void ShutdownNativeTileOverlayHost()
 	{
-		// Stop publishing either Tile tree before destruction. System candidate
-		// UI suppression is owned by the IME hooks and deliberately does not
-		// depend on these readiness atomics.
+		// Stop publishing either Tile tree before destruction. The IME tree is
+		// owned by the game thread and can be released here. The prewarm tree is
+		// owned by LoadingMenuThread; leave its attached child to LoadingMenu's
+		// normal teardown and only forget our non-owning pointers.
 		s_imeReady.store(false, std::memory_order_release);
 		s_prewarmReady.store(false, std::memory_order_release);
 		s_prewarmActive.store(false, std::memory_order_release);
 		InterfaceManager* manager = InterfaceManager::GetSingleton();
 		Tile* currentImeParent =
 			manager ? manager->pMenuRoot : nullptr;
-		Tile* currentPrewarmParent = s_state.prewarmRoot
-			? GetLoadingMenuRoot() : nullptr;
 		if (currentImeParent
 			&& currentImeParent == s_state.imeParent)
 		{
@@ -1719,14 +2054,6 @@ namespace fonthook
 				currentImeParent,
 				s_state.imeRoot,
 				"tNVSE_IME");
-		}
-		if (currentPrewarmParent
-			&& currentPrewarmParent == s_state.prewarmParent)
-		{
-			ReleaseAndDestroyAttachedRoot(
-				currentPrewarmParent,
-				s_state.prewarmRoot,
-				"tNVSE_Prewarm");
 		}
 		ResetImeForParent(nullptr);
 		ResetPrewarmForParent(nullptr);

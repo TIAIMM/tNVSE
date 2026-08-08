@@ -644,6 +644,11 @@ namespace fonthook::vectorfont
 	{
 		std::shared_ptr<AtlasResource> resource;
 	};
+	// Gamebryo texture/property destruction may enter renderer critical sections.
+	// Collect the last owners while atlasMutex is held, but always destroy this
+	// list after the caller has released atlasMutex.
+	using RetiredAtlasReleaseList =
+		std::vector<std::shared_ptr<AtlasResource>>;
 
 	struct AtlasCacheKey
 	{
@@ -1044,9 +1049,12 @@ namespace fonthook::vectorfont
 		const AtlasResource& resource);
 	void UnindexAtlasPage(AtlasState& state, const AtlasCacheKey& key);
 	AtlasProfileKey MakeAtlasProfileKey(const AtlasCacheKey& key);
-	void TrimAtlasCache(AtlasState& state);
-	void TrimAtlasCacheForIncomingBytes(AtlasState& state, size_t incomingBytes);
-	void PruneRetiredAtlasGenerations();
+	void TrimAtlasCache(AtlasState& state,
+		RetiredAtlasReleaseList& retiredReleases);
+	void TrimAtlasCacheForIncomingBytes(AtlasState& state, size_t incomingBytes,
+		RetiredAtlasReleaseList& retiredReleases);
+	void CollectPrunableRetiredAtlasesLocked(
+		RetiredAtlasReleaseList& retiredReleases);
 	void TrimTextArtifactCache(AtlasState& state);
 	void TrimAtlasCpuCachesForTotalBudget();
 	void ResolveGpuAtlasBudget(bool force);

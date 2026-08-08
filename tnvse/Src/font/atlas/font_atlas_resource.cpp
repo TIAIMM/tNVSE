@@ -643,14 +643,44 @@ namespace fonthook::vectorfont
 			State().defaultPoolMaintenancePending.store(true, std::memory_order_release);
 		}
 
-		void PruneRetiredAtlases()
+		void CollectPrunableRetiredAtlasesLocked(
+			RetiredAtlasReleaseList& retiredReleases)
 		{
-			State().retiredAtlases.erase(std::remove_if(State().retiredAtlases.begin(),
-				State().retiredAtlases.end(), [](const RetiredAtlasGeneration& retired)
+			auto& retiredAtlases = State().retiredAtlases;
+			const size_t releaseCount = static_cast<size_t>(std::count_if(
+				retiredAtlases.begin(), retiredAtlases.end(),
+				[](const RetiredAtlasGeneration& retired)
+				{
+					return !retired.resource || !retired.resource->property
+						|| retired.resource->property->m_uiRefCount <= 1;
+				}));
+			if (!releaseCount
+				|| releaseCount > retiredReleases.max_size()
+					- retiredReleases.size())
 			{
-				return !retired.resource || !retired.resource->property
+				return;
+			}
+			try
+			{
+				retiredReleases.reserve(
+					retiredReleases.size() + releaseCount);
+			}
+			catch (...)
+			{
+				// Pruning is optional. Under allocation pressure, retain the old
+				// generation instead of risking destruction under atlasMutex.
+				return;
+			}
+			retiredAtlases.erase(std::remove_if(retiredAtlases.begin(),
+				retiredAtlases.end(), [&](RetiredAtlasGeneration& retired)
+			{
+				const bool releasable = !retired.resource
+					|| !retired.resource->property
 					|| retired.resource->property->m_uiRefCount <= 1;
-			}), State().retiredAtlases.end());
+				if (releasable && retired.resource)
+					retiredReleases.push_back(std::move(retired.resource));
+				return releasable;
+			}), retiredAtlases.end());
 		}
 
 		bool HasDefaultPoolMaintenanceLocked()
@@ -1007,17 +1037,18 @@ namespace fonthook::vectorfont
 		return false;
 	}
 
-	void PruneRetiredAtlasGenerations()
-	{
-		PruneRetiredAtlases();
-	}
-
 	void PruneRetiredAtlasGenerationsSafely()
 	{
 		AtlasState& state = State();
-		std::lock_guard<std::mutex> lock(state.atlasMutex);
-		PruneRetiredAtlases();
-		RefreshAtlasCacheGpuAccountingLocked(state);
+		RetiredAtlasReleaseList retiredReleases;
+		{
+			std::lock_guard<std::mutex> lock(state.atlasMutex);
+			CollectPrunableRetiredAtlasesLocked(retiredReleases);
+			RefreshAtlasCacheGpuAccountingLocked(state);
+		}
+		// NiTexturingProperty::DeleteThis can enter the renderer and driver.
+		// Never run it while a renderer callback could be waiting for atlasMutex.
+		retiredReleases.clear();
 	}
 
 	void RegisterDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,

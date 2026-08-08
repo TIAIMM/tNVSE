@@ -316,17 +316,24 @@ capture input. Startup remains blocked by the `DeferredInit` call boundary
 during both visible generation and invisible cache validation/restoration, not
 by Tile target or stacking traits.
 
-Fallout's existing LoadingMenu update/render thread continues its
-`Update`/`ShowChanges` work while the game thread advances bounded prewarm
-steps. Between active steps, and periodically inside the atlas skyline search
-and one-MiB snapshot I/O loops, tNVSE services at most 32 messages from the host
-thread queue and then yields with `Sleep(0)`. A re-entrant prewarm pump is
-rejected. This prevents Windows from classifying a long final repack as an
-unresponsive application without creating an unbounded nested message loop.
-Generation batches target approximately
-250 ms and progress-trait writes are rate-limited to 10 Hz; this keeps the
-LoadingMenu responsive without paying Tile rebuild and worker-startup overhead
-for thousands of one-glyph steps. One stable per-font stage covers streamed-page
+Fallout's existing LoadingMenu thread continues its `Update`/`ShowChanges`
+work while the game thread advances bounded prewarm steps. The producer only
+publishes a fixed-size, SRW-locked progress snapshot. A verified call hook at
+the LoadingMenu thread's vanilla `Update` boundary consumes the newest changed
+snapshot immediately before presentation; only that owner thread imports the
+component or writes its Tiles. The consumer uses a thread-local legacy `.fnt`
+route while creating and refreshing the overlay, so utility text cannot
+re-enter the MTSDF transaction that produced the progress update. Between
+active steps, and periodically inside the atlas skyline search and one-MiB
+snapshot I/O loops, tNVSE also services at most 32 messages from the prewarm
+host thread queue and then yields with `Sleep(0)`. That bounded host servicing
+does not mutate the LoadingMenu tree, and a re-entrant prewarm pump is rejected.
+
+Raster batches start at 256 glyphs and adapt toward approximately one second;
+progress publication and owner-thread application remain independently
+rate-limited to 10 Hz. The longer target amortizes worker startup, FreeType
+setup, and persistent-cache appends without slowing visual refresh. One stable
+per-font stage covers streamed-page
 publication, metadata staging, global repack, and texture restore; its text is
 not changed while font slot 1 is between atlas generations. Physical group
 consolidation and physical-pool planning/publication report their own synchronous
@@ -340,9 +347,13 @@ batch policy may use at most 24 MiB, no more than one quarter of the configured
 CPU budget, and no more than two thirds of the headroom left after reserving the
 next streamed role page. The remaining third is kept as an allocation margin.
 Worker-local FreeType/distance-field scratch selects a separate worker cap so a
-normal 64-glyph batch still fits; an allocation failure reduces both limits
-before retrying. The 16-MiB BGRA value below is the size of one intermediate
-2048x2048 streamed MTSDF page, not a 16-MiB raster-batch ceiling.
+normal 64-glyph batch still fits; the absolute raster cap is 16 workers and the
+memory policy may select fewer. Worker-local FreeType libraries and faces are
+reused across batches of one active font, then released before final atlas
+consolidation and before every memory-pressure retry. An allocation failure
+reduces both batch and worker limits before retrying. The 16-MiB BGRA value
+below is the size of one intermediate 2048x2048 streamed MTSDF page, not a
+16-MiB raster-batch ceiling.
 Subsequent `kMessage_MainGameLoop` callbacks perform normal native-atlas, DEFAULT-pool,
 and performance-cache maintenance; they no longer drive startup prewarm.
 
@@ -2049,24 +2060,29 @@ body and chamfer field per worker. Aggressive composite retains one BGRA result
 while reserving the body/effect masks and the second BGRA target used by
 tight-bound cropping. Per-glyph request/result metadata and a fixed worker-local
 FreeType/shape allowance are included as well. The estimated peak is bounded by
-24 MiB, one eighth of the configured aggregate budget, or half the currently
-available headroom after reserving one streamed page, whichever is smallest
-(with a one-glyph emergency path when even that estimate cannot fit).
+24 MiB, one quarter of the configured aggregate budget, or two thirds of the
+currently available headroom after reserving one streamed page, whichever is
+smallest. The unassigned third remains an allocation margin. A one-glyph
+emergency path remains available when even that estimate cannot fit.
 The writer reuses one preallocated 4 MiB or 16 MiB page buffer for the active
 byte role, accounts its real capacity in the CPU budget, seals the single-byte
 role before double-byte pixels begin, and releases that first buffer
 immediately. This prevents two role buffers from remaining live during the
 large DBCS pass while still avoiding vector-growth peaks.
 
-A raster batch starts at up to 128 glyphs, adapts toward approximately 250 ms,
+A raster batch starts at up to 256 glyphs, adapts toward approximately one second,
 and can grow to 1024 glyphs when the memory estimate permits. Time-based
 adaptation never reduces a normal batch below 64 glyphs; only an allocation
 failure can lower that parallel floor. Distance-field, composite, glow,
 outline, and shadow work begins parallel execution at eight cache misses,
 while inexpensive Fill-only work retains a 64-miss threshold and processes
 small chunks to reduce atomic scheduling overhead. Parallel raster work remains
-capped at twelve workers so high-core-count hosts cannot silently expand the
-32-bit address-space peak. Worker creation failure
+capped at sixteen workers so high-core-count hosts cannot silently expand the
+32-bit address-space peak. The caller remains one worker and the resolver also
+leaves one logical processor available. Worker-local FreeType libraries and
+opened faces persist only across batches for the current font; no persistent
+worker thread pool is introduced, and these contexts are destroyed before a
+possible 8192x8192 final-page allocation. Worker creation failure
 falls back to the threads that did start plus the caller thread. Under memory
 pressure the scan position and counters are rolled back, the memory-derived
 maximum is reduced, and the batch is retried at half size down to the

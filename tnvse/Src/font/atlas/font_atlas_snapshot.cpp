@@ -189,9 +189,13 @@ namespace fonthook::vectorfont
 		void PruneRetiredAtlasGenerationsWithLock()
 		{
 			AtlasState& state = State();
-			std::lock_guard<std::mutex> lock(state.atlasMutex);
-			PruneRetiredAtlasGenerations();
-			RefreshAtlasCacheGpuAccountingLocked(state);
+			RetiredAtlasReleaseList retiredReleases;
+			{
+				std::lock_guard<std::mutex> lock(state.atlasMutex);
+				CollectPrunableRetiredAtlasesLocked(retiredReleases);
+				RefreshAtlasCacheGpuAccountingLocked(state);
+			}
+			retiredReleases.clear();
 		}
 	}
 
@@ -259,6 +263,7 @@ namespace fonthook::vectorfont
 		}
 		size_t cacheBefore = 0;
 		size_t cacheAfter = 0;
+		RetiredAtlasReleaseList retiredReleases;
 		{
 			// Reserve both byte roles as one transaction. Reserving roles
 			// independently can evict the just-restored single-byte role when a
@@ -266,9 +271,11 @@ namespace fonthook::vectorfont
 			AtlasState& state = State();
 			std::lock_guard<std::mutex> lock(state.atlasMutex);
 			cacheBefore = state.atlasCacheBytes;
-			TrimAtlasCacheForIncomingBytes(state, incomingStorageBytes);
+			TrimAtlasCacheForIncomingBytes(
+				state, incomingStorageBytes, retiredReleases);
 			cacheAfter = state.atlasCacheBytes;
 		}
+		retiredReleases.clear();
 		if (IsGpuAtlasCacheUnlimited())
 		{
 			gLog.FormattedMessage(
@@ -352,13 +359,16 @@ namespace fonthook::vectorfont
 			return false;
 		size_t cacheBefore = 0;
 		size_t cacheAfter = 0;
+		RetiredAtlasReleaseList retiredReleases;
 		{
 			AtlasState& state = State();
 			std::lock_guard<std::mutex> lock(state.atlasMutex);
 			cacheBefore = state.atlasCacheBytes;
-			TrimAtlasCacheForIncomingBytes(state, incomingStorageBytes);
+			TrimAtlasCacheForIncomingBytes(
+				state, incomingStorageBytes, retiredReleases);
 			cacheAfter = state.atlasCacheBytes;
 		}
+		retiredReleases.clear();
 		if (IsGpuAtlasCacheUnlimited())
 		{
 			gLog.FormattedMessage(

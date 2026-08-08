@@ -1182,16 +1182,24 @@ namespace fonthook::vectorfont
 			{
 				// Avoid accumulating retired source pools while the next selected
 				// one may still require a 256-MiB 8192x8192 target allocation.
-				std::lock_guard<std::mutex> lock(State().atlasMutex);
-				PruneRetiredAtlasGenerations();
-				RefreshAtlasCacheGpuAccountingLocked(State());
+				RetiredAtlasReleaseList retiredReleases;
+				{
+					std::lock_guard<std::mutex> lock(State().atlasMutex);
+					CollectPrunableRetiredAtlasesLocked(retiredReleases);
+					RefreshAtlasCacheGpuAccountingLocked(State());
+				}
+				retiredReleases.clear();
 			}
 			ServiceFontPrewarmHostMessages();
 		}
 		{
-			std::lock_guard<std::mutex> lock(State().atlasMutex);
-			PruneRetiredAtlasGenerations();
-			RefreshAtlasCacheGpuAccountingLocked(State());
+			RetiredAtlasReleaseList retiredReleases;
+			{
+				std::lock_guard<std::mutex> lock(State().atlasMutex);
+				CollectPrunableRetiredAtlasesLocked(retiredReleases);
+				RefreshAtlasCacheGpuAccountingLocked(State());
+			}
+			retiredReleases.clear();
 		}
 		LogPhysicalPoolAccounting(rasterScale);
 		return success;

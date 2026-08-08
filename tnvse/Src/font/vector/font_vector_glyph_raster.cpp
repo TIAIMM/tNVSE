@@ -1172,6 +1172,65 @@ namespace fonthook::vectorfont
 		RuntimeFace runtimeFace;
 	};
 
+	struct PrewarmRasterWorkerContext
+	{
+		FreeTypeState state;
+		std::vector<PrewarmWorkerFace> faces;
+		const RuntimeFont* runtimeToken = nullptr;
+
+		PrewarmRasterWorkerContext() = default;
+		PrewarmRasterWorkerContext(const PrewarmRasterWorkerContext&) = delete;
+		PrewarmRasterWorkerContext& operator=(
+			const PrewarmRasterWorkerContext&) = delete;
+
+		~PrewarmRasterWorkerContext()
+		{
+			// RuntimeFace must release every FT_Face before its owning library.
+			faces.clear();
+			if (state.library)
+				FT_Done_FreeType(state.library);
+			state.library = nullptr;
+		}
+
+		bool Prepare(const RuntimeFont* runtime)
+		{
+			if (runtimeToken != runtime)
+			{
+				faces.clear();
+				runtimeToken = runtime;
+			}
+			if (!state.library && FT_Init_FreeType(&state.library))
+				return false;
+			if (faces.capacity() < 8u)
+				faces.reserve(8u);
+			return true;
+		}
+	};
+
+	// GetPrewarmGlyphBitmaps is synchronously driven by the single prewarm host
+	// thread. Contexts are never shared by two batch workers at once; retaining
+	// only the FreeType library/face state avoids reopening it hundreds of times
+	// without introducing a persistent worker-thread lifetime.
+	static std::vector<std::unique_ptr<PrewarmRasterWorkerContext>>
+		s_prewarmRasterWorkerContexts;
+
+	static void EnsurePrewarmRasterWorkerContexts(UInt32 count)
+	{
+		if (s_prewarmRasterWorkerContexts.capacity() < count)
+			s_prewarmRasterWorkerContexts.reserve(count);
+		while (s_prewarmRasterWorkerContexts.size() < count)
+		{
+			s_prewarmRasterWorkerContexts.push_back(
+				std::make_unique<PrewarmRasterWorkerContext>());
+		}
+	}
+
+	void ReleasePrewarmRasterWorkerContexts() noexcept
+	{
+		std::vector<std::unique_ptr<PrewarmRasterWorkerContext>> empty;
+		empty.swap(s_prewarmRasterWorkerContexts);
+	}
+
 	static RuntimeFace* GetPrewarmWorkerFace(FT_Library library,
 		std::vector<PrewarmWorkerFace>& faces,
 		const std::shared_ptr<MappedFontFile>& file, SInt32 faceIndex)
@@ -1332,6 +1391,7 @@ namespace fonthook::vectorfont
 				IsExpensivePrewarmWork(workItems);
 			const UInt32 workerCount = ResolvePrewarmWorkerCount(
 				workItems, expensiveWork, maximumWorkers);
+			EnsurePrewarmRasterWorkerContexts(workerCount);
 			static UInt32 loggedMaximumWorkers = 0;
 			if (workerCount > loggedMaximumWorkers)
 			{
@@ -1350,15 +1410,14 @@ namespace fonthook::vectorfont
 			std::atomic<bool> workerUnexpectedFailure{ false };
 			const size_t workChunk = expensiveWork
 				? 1u : kFillPrewarmWorkChunk;
-			auto worker = [&]()
+			auto worker = [&](UInt32 contextIndex)
 			{
-				FreeTypeState workerState;
 				try
 				{
-					if (FT_Init_FreeType(&workerState.library))
+					PrewarmRasterWorkerContext& context =
+						*s_prewarmRasterWorkerContexts[contextIndex];
+					if (!context.Prepare(&runtime))
 						return;
-					std::vector<PrewarmWorkerFace> faces;
-					faces.reserve(8);
 					while (!abortWorkers.load(std::memory_order_relaxed))
 					{
 						const size_t first = nextWork.fetch_add(workChunk,
@@ -1375,14 +1434,14 @@ namespace fonthook::vectorfont
 							PrewarmBitmapWorkItem& item =
 								workItems[index];
 							RuntimeFace* face = GetPrewarmWorkerFace(
-								workerState.library, faces,
+								context.state.library, context.faces,
 								item.resolved.runtimeFace->file,
 								item.key.fontFaceIndex);
 							if (!face)
 								continue;
 							ResolvedGlyph workerResolved = item.resolved;
 							workerResolved.runtimeFace = face;
-							item.bitmap = BuildGlyphBitmap(workerState,
+							item.bitmap = BuildGlyphBitmap(context.state,
 								*item.rasterRuntime,
 								workerResolved, item.maskType,
 								safeScale, item.key);
@@ -1399,16 +1458,13 @@ namespace fonthook::vectorfont
 					workerUnexpectedFailure.store(true, std::memory_order_relaxed);
 					abortWorkers.store(true, std::memory_order_relaxed);
 				}
-				if (workerState.library)
-					FT_Done_FreeType(workerState.library);
-				workerState.library = nullptr;
 			};
 			std::vector<std::thread> workers;
 			workers.reserve(workerCount > 0 ? workerCount - 1 : 0);
 			try
 			{
 				for (UInt32 index = 1; index < workerCount; ++index)
-					workers.emplace_back(worker);
+					workers.emplace_back(worker, index);
 			}
 			catch (...)
 			{
@@ -1420,7 +1476,7 @@ namespace fonthook::vectorfont
 					workerCount,
 					static_cast<UInt32>(workers.size() + 1u));
 			}
-			worker();
+			worker(0);
 			for (std::thread& thread : workers)
 				thread.join();
 			if (workerAllocationFailed.load(std::memory_order_relaxed))

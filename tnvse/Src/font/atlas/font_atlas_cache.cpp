@@ -500,7 +500,8 @@ namespace fonthook::vectorfont
 				RefreshAtlasProfileCpuMemory(profile);
 		}
 
-		void TrimAtlasCacheToTarget(AtlasState& state, size_t targetBytes)
+		void TrimAtlasCacheToTarget(AtlasState& state, size_t targetBytes,
+			RetiredAtlasReleaseList& retiredReleases)
 		{
 			while (state.atlasCacheBytes > targetBytes && !state.atlasLru.empty())
 			{
@@ -516,29 +517,33 @@ namespace fonthook::vectorfont
 				}
 				state.atlasLru.pop_back();
 			}
-			PruneRetiredAtlasGenerations();
+			CollectPrunableRetiredAtlasesLocked(retiredReleases);
 		}
 
-		void TrimAtlasCache(AtlasState& state)
+		void TrimAtlasCache(AtlasState& state,
+			RetiredAtlasReleaseList& retiredReleases)
 		{
 			if (IsGpuAtlasCacheUnlimited())
 			{
-				PruneRetiredAtlasGenerations();
+				CollectPrunableRetiredAtlasesLocked(retiredReleases);
 				return;
 			}
-			TrimAtlasCacheToTarget(state, GetAtlasCacheLimit());
+			TrimAtlasCacheToTarget(
+				state, GetAtlasCacheLimit(), retiredReleases);
 		}
 
-		void TrimAtlasCacheForIncomingBytes(AtlasState& state, size_t incomingBytes)
+		void TrimAtlasCacheForIncomingBytes(AtlasState& state,
+			size_t incomingBytes, RetiredAtlasReleaseList& retiredReleases)
 		{
 			if (IsGpuAtlasCacheUnlimited())
 			{
-				PruneRetiredAtlasGenerations();
+				CollectPrunableRetiredAtlasesLocked(retiredReleases);
 				return;
 			}
 			const size_t limit = GetAtlasCacheLimit();
 			TrimAtlasCacheToTarget(state,
-				incomingBytes < limit ? limit - incomingBytes : 0);
+				incomingBytes < limit ? limit - incomingBytes : 0,
+				retiredReleases);
 		}
 
 		bool PlaceBitmap(AtlasResource& resource, const GlyphBitmap& bitmap, AtlasRect& rect)
@@ -1135,6 +1140,7 @@ namespace fonthook::vectorfont
 				byteClass
 			};
 
+			RetiredAtlasReleaseList retiredReleases;
 			std::lock_guard<std::mutex> lock(state.atlasMutex);
 			std::vector<std::pair<AtlasCacheKey, AtlasCacheEntry*>> entries;
 			const AtlasProfileKey profileKey = MakeAtlasProfileKey(baseKey);
@@ -1317,7 +1323,7 @@ namespace fonthook::vectorfont
 				missing.swap(remaining);
 			}
 			RefreshAtlasCacheGpuAccountingLocked(state);
-			TrimAtlasCache(state);
+			TrimAtlasCache(state, retiredReleases);
 			return pages;
 		}
 

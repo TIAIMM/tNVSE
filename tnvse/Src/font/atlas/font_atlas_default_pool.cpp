@@ -186,6 +186,7 @@ namespace fonthook::vectorfont
 			UInt32 processed = 0;
 			UInt32 failed = 0;
 			UInt32 shared = 0;
+			RetiredAtlasReleaseList retiredReleases;
 			{
 				std::lock_guard<std::mutex> lock(state.atlasMutex);
 				if (beforeReset)
@@ -269,8 +270,8 @@ namespace fonthook::vectorfont
 				if (!beforeReset)
 				{
 					RefreshAtlasCacheGpuAccountingLocked(state);
-					PruneRetiredAtlases();
-					TrimAtlasCache(state);
+					CollectPrunableRetiredAtlasesLocked(retiredReleases);
+					TrimAtlasCache(state, retiredReleases);
 				}
 				state.defaultPoolMaintenancePending.store(
 					HasDefaultPoolMaintenanceLocked(), std::memory_order_release);
@@ -348,6 +349,7 @@ namespace fonthook::vectorfont
 						true, std::memory_order_release);
 				}
 			}
+			retiredReleases.clear();
 			if (logResetTiming)
 			{
 				const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -390,20 +392,24 @@ namespace fonthook::vectorfont
 		const bool retry = (++retryFrame % 120u) == 0;
 		if (!retry)
 			return;
-		std::lock_guard<std::mutex> lock(State().atlasMutex);
-		PruneRetiredAtlases();
-		for (auto& [key, entry] : State().atlasCache)
+		RetiredAtlasReleaseList retiredReleases;
 		{
-			if (entry.resource && entry.resource->resetPending)
-				RebuildDefaultPoolTexture(*entry.resource);
+			std::lock_guard<std::mutex> lock(State().atlasMutex);
+			CollectPrunableRetiredAtlasesLocked(retiredReleases);
+			for (auto& [key, entry] : State().atlasCache)
+			{
+				if (entry.resource && entry.resource->resetPending)
+					RebuildDefaultPoolTexture(*entry.resource);
+			}
+			for (RetiredAtlasGeneration& retired : State().retiredAtlases)
+			{
+				if (retired.resource && retired.resource->resetPending)
+					RebuildDefaultPoolTexture(*retired.resource);
+			}
+			State().defaultPoolMaintenancePending.store(
+				HasDefaultPoolMaintenanceLocked(), std::memory_order_release);
 		}
-		for (RetiredAtlasGeneration& retired : State().retiredAtlases)
-		{
-			if (retired.resource && retired.resource->resetPending)
-				RebuildDefaultPoolTexture(*retired.resource);
-		}
-		State().defaultPoolMaintenancePending.store(
-			HasDefaultPoolMaintenanceLocked(), std::memory_order_release);
+		retiredReleases.clear();
 	}
 
 	void ShutdownDefaultPoolAtlasLifecycle()

@@ -110,7 +110,7 @@ namespace
 		}
 
 		gLog.FormattedMessage(
-			"tnvse_build_identity: diagnostics=native-font-prewarm-throughput-v68 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
+			"tnvse_build_identity: diagnostics=native-font-prewarm-context-reuse-v75 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
 			modulePath[0] ? modulePath : "unresolved", module,
 			peTimestamp, imageSize,
 			static_cast<unsigned long long>(fileBytes),
@@ -306,7 +306,7 @@ bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 {
 	info->infoVersion = PluginInfo::kInfoVersion;
 	info->name = "tNVSE";
-	info->version = 68;
+	info->version = 75;
 
 	return true;
 }
@@ -323,6 +323,8 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 		reinterpret_cast<const void*>(&NVSEPlugin_Load));
 	fonthook::LoadFreeTypeFontConfig();
 	fonthook::LoadDictionaryConfig();
+	if (g_bEnableFreeTypeFontRendering)
+		fonthook::InstallNativePrewarmOverlayLoadingThreadHook();
 
 	g_nvseInterface = const_cast<NVSEInterface*>(nvse);
 	g_pluginHandle = nvse->GetPluginHandle();
