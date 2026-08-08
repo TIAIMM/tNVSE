@@ -151,7 +151,7 @@ class TESNPC;
 //	{
 //		return ThisStdCall<FontInfo*>(0xA12020, this, fontID, filePath, arg3);
 //	}
-//	__forceinline FontInfo* LoadFontIcon(const char* iconPath)
+//	__forceinline FontInfo* AddTextIcon(const char* iconPath)
 //	{
 //		return ThisStdCall<FontInfo*>(0xA1AEE0, this, iconPath);
 //	}
@@ -265,11 +265,6 @@ struct  Font
 		return ThisStdCall<NiTriShape*>(0xA14DA0, this);
 	}
 
-	__forceinline static void __cdecl ConvertCharacter(UInt8& arChar)
-	{
-		CdeclCall(0xA122B0, &arChar);
-	}
-
 	__forceinline void AddChar(FontLetter* apLetter, int aiVert, NiTriShape* apShape, NiPoint3* apPosition, const NiColorA* apColor)
 	{
 		ThisStdCall(0xA142D0, this, apLetter, aiVert, apShape, apPosition, apColor);
@@ -329,7 +324,7 @@ struct TextEditState
 
 	// 0x716B00 is ECX=this, EDX=aiKey, stack=aiChar; it is not a normal
 	// thiscall wrapper.
-	__forceinline void InputUnk01(SInt32 aiKey, SInt32 aiChar)
+	__forceinline void Input(SInt32 aiKey, SInt32 aiChar)
 	{
 		reinterpret_cast<void(__fastcall*)(TextEditState*, SInt32, SInt32)>(0x716B00)(this, aiKey, aiChar);
 	}
@@ -536,7 +531,7 @@ public:
 			ThisStdCall(0xA19060, this, apNode, apData);
 		}
 
-		__forceinline void Destroy()
+		__forceinline void CallDestructor()
 		{
 			ThisStdCall(0xA1B990, this);
 		}
@@ -551,7 +546,7 @@ public:
 	Font* extraFonts[kJipExtendedFontCount]; // 24
 
 	//	outDims.x := width (pxl); outDims.y := height (pxl); outDims.z := numLines
-	/*NiPoint3* GetStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID, UInt32 maxFlt = 0x7F7FFFFF,
+	/*NiPoint3* CalculateStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID, UInt32 maxFlt = 0x7F7FFFFF,
 		UInt32 startIdx = 0);*/
 
 	__forceinline static FontManager* GetSingleton()
@@ -592,7 +587,7 @@ STATIC_ASSERT(sizeof(FontManager::TextDoc) == 0x18);
 //0x11F33F8
 // From Modern Minimap
 //0x5BD5B0
-//__declspec(naked) NiPoint3* FontManager::GetStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID,
+//__declspec(naked) NiPoint3* FontManager::CalculateStringDimensions(NiPoint3* outDims, const char* srcString, UInt32 fontID,
 //	UInt32 maxFlt, UInt32 startIdx)
 //{
 //	static const UInt32 procAddr = 0xA1B020;
@@ -628,7 +623,7 @@ STATIC_ASSERT(sizeof(FontManager::TextDoc) == 0x18);
 //
 //	//BSStringT<T>::Set			0x4037F0 FontTextReplaced::StringSet
 //	//BSStringT<T>::operator+=	0x404820 FontTextReplaced::StringAppend
-//	//BSStringT<T>::Format		0x406F60 FontTextReplaced::StringFormat
+//	//BSStringT<T>::SPrintF		0x406F60 FontTextReplaced::StringFormat
 //	//BSStringT<T>::ApplyFormat 0x406F90
 //};
 
@@ -699,9 +694,9 @@ public:
 	unsigned int unk2284[3];			// 2284
 	unsigned int unk2290[3];			// 2290
 
-	static DebugText* GetSingleton()
+	static DebugText* Instance(bool create = true)
 	{
-		return ((DebugText * (*)(bool))0xA0D9E0)(true);
+		return ((DebugText * (*)(bool))0xA0D9E0)(create);
 	}
 	// CreateLine 0xA0F8B0
 

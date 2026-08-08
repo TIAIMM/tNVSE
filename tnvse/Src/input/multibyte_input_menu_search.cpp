@@ -6,9 +6,10 @@ namespace fonthook
 {
 	namespace multibyte_input
 	{
-		// Unlike GetMenuByType(), the vanilla visibility table changes when a
-		// persistent menu is hidden or closed.
-		constexpr SIZE_T kAddr_MenuVisibility = 0x011F308F;
+		// Unlike GetMenuByType(), Menu::pMenusVisible changes when a persistent
+		// menu is hidden or closed. This base is deliberately biased so an
+		// absolute menu ID indexes the real table at 0x11F3478.
+		constexpr SIZE_T kMenuVisibilityTableBiasedBase = 0x011F308F;
 		constexpr UInt32 kMenuType_StewMenu = 1069;
 		constexpr UInt32 kStewieMenuSearch_TextTile = 87698483;
 		constexpr DWORD kStewieMenuSearchStateSyncDelayMs = 150;
@@ -20,14 +21,14 @@ namespace fonthook
 		constexpr UInt8 kStewieMenuSearchSync_Toggle = 1;
 		constexpr UInt8 kStewieMenuSearchSync_Deactivate = 2;
 
-		constexpr SIZE_T kInventoryMenuHandleKeyboardInputEntry = 0x10739E4;
-		constexpr SIZE_T kStatsMenuHandleKeyboardInputEntry = 0x1070004;
-		constexpr SIZE_T kMapMenuHandleKeyboardInputEntry = 0x1074D74;
-		constexpr SIZE_T kContainerMenuHandleKeyboardInputEntry = 0x10721DC;
-		constexpr SIZE_T kBarterMenuHandleKeyboardInputEntry = 0x107071C;
-		constexpr SIZE_T kLevelUpMenuHandleKeyboardInputEntry = 0x1073D0C;
-		constexpr SIZE_T kRecipeMenuHandleKeyboardInputEntry = 0x10704BC;
-		constexpr SIZE_T kStartMenuHandleKeyboardInputEntry = 0x1076D4C;
+		constexpr SIZE_T kInventoryMenuHandleKeyboardInputVTableEntry = 0x10739E4;
+		constexpr SIZE_T kStatsMenuHandleKeyboardInputVTableEntry = 0x1070004;
+		constexpr SIZE_T kMapMenuHandleKeyboardInputVTableEntry = 0x1074D74;
+		constexpr SIZE_T kContainerMenuHandleKeyboardInputVTableEntry = 0x10721DC;
+		constexpr SIZE_T kBarterMenuHandleKeyboardInputVTableEntry = 0x107071C;
+		constexpr SIZE_T kLevelUpMenuHandleKeyboardInputVTableEntry = 0x1073D0C;
+		constexpr SIZE_T kRecipeMenuHandleKeyboardInputVTableEntry = 0x10704BC;
+		constexpr SIZE_T kStartMenuHandleKeyboardInputVTableEntry = 0x1076D4C;
 		// StartMenu::savesList is at +0x174; ListBox::parentTile is +0x0C.
 		// Stewie's SaveLoad search handler gates all input on
 		// savesList.IsEnabled(), which reads this Tile's _enabled trait.
@@ -70,14 +71,14 @@ namespace fonthook
 
 		StewieMenuSearchHook s_menuSearchHooks[] =
 		{
-			{ "InventoryMenu", Inventory, kInventoryMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::InventoryMenuKeyboardInput) },
-			{ "StatsMenu", Stats, kStatsMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::StatsMenuKeyboardInput) },
-			{ "MapMenu", PipboyData, kMapMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::MapMenuKeyboardInput) },
-			{ "ContainerMenu", Container, kContainerMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::ContainerMenuKeyboardInput) },
-			{ "BarterMenu", Barter, kBarterMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::BarterMenuKeyboardInput) },
-			{ "LevelUpMenu", LevelUp, kLevelUpMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::LevelUpMenuKeyboardInput) },
-			{ "RecipeMenu", Recipe, kRecipeMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::RecipeMenuKeyboardInput) },
-			{ "StartMenu", Pause, kStartMenuHandleKeyboardInputEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::StartMenuKeyboardInput) },
+			{ "InventoryMenu", Inventory, kInventoryMenuHandleKeyboardInputVTableEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::InventoryMenuKeyboardInput) },
+			{ "StatsMenu", Stats, kStatsMenuHandleKeyboardInputVTableEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::StatsMenuKeyboardInput) },
+			{ "MapMenu", PipboyData, kMapMenuHandleKeyboardInputVTableEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::MapMenuKeyboardInput) },
+			{ "ContainerMenu", Container, kContainerMenuHandleKeyboardInputVTableEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::ContainerMenuKeyboardInput) },
+			{ "BarterMenu", Barter, kBarterMenuHandleKeyboardInputVTableEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::BarterMenuKeyboardInput) },
+			{ "LevelUpMenu", LevelUp, kLevelUpMenuHandleKeyboardInputVTableEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::LevelUpMenuKeyboardInput) },
+			{ "RecipeMenu", Recipe, kRecipeMenuHandleKeyboardInputVTableEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::RecipeMenuKeyboardInput) },
+			{ "StartMenu", Pause, kStartMenuHandleKeyboardInputVTableEntry, 0, reinterpret_cast<SIZE_T>(&StewieMenuSearchInputTargetEx::StartMenuKeyboardInput) },
 		};
 
 		bool s_menuSearchHooksInstalled = false;
@@ -86,7 +87,9 @@ namespace fonthook
 
 		bool IsGameMenuVisible(UInt32 menuID)
 		{
-			return menuID && reinterpret_cast<volatile UInt8*>(kAddr_MenuVisibility)[menuID] != 0;
+			return menuID
+				&& reinterpret_cast<volatile UInt8*>(
+					kMenuVisibilityTableBiasedBase)[menuID] != 0;
 		}
 
 		bool IsPipboySearchMenu(UInt32 menuID)

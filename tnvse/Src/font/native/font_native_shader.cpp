@@ -89,24 +89,25 @@ namespace fonthook::vectorfont
 		static_assert(offsetof(
 			NiD3DRenderState, m_apkTextureStageTextures) == 0x10A0);
 
-		inline constexpr UInt32 kTileShaderCreate = 0xBCAE90;
+		inline constexpr UInt32 kTileShaderCreateShader = 0xBCAE90;
 		inline constexpr UInt32 kTileShaderSetupGeometryTextures = 0xBCA760;
-		inline constexpr UInt32 kTileShaderUpdateConstants = 0xBCA980;
-		inline constexpr UInt32 kShaderSetupGeometryAlphaBlending = 0xBE1FF0;
-		inline constexpr UInt32 kSetAlphaBlendEnable = 0xB97FA0;
-		inline constexpr UInt32 kSetSourceAndDestinationBlends = 0xB97FF0;
-		inline constexpr UInt32 kShaderSetupGeometryAlphaTesting = 0xBE20B0;
-		inline constexpr UInt32 kShaderSetupGeometryRenderStates = 0xBE20E0;
+		inline constexpr UInt32 kTileShaderSetupGeometryConstants = 0xBCA980;
+		inline constexpr UInt32 kBSShaderSetupGeometryAlphaBlending = 0xBE1FF0;
+		inline constexpr UInt32 kBSRenderStateSetAlphaBlendEnable = 0xB97FA0;
+		inline constexpr UInt32 kBSRenderStateSetAlphaBlendFunc = 0xB97FF0;
+		inline constexpr UInt32 kBSShaderSetupGeometryAlphaTesting = 0xBE20B0;
+		inline constexpr UInt32 kBSShaderSetupGeometryRenderStates = 0xBE20E0;
 		inline constexpr UInt32 kTileShaderPostGeometry = 0xBCAC60;
-		inline constexpr UInt32 kNiD3DShaderPrepareGeometry = 0xE812F0;
+		inline constexpr UInt32 kNiD3DShaderPrepareGeometryForRendering =
+			0xE812F0;
 		inline constexpr UInt32 kNiD3DShaderFirstPass = 0xE80580;
-		inline constexpr UInt32 kShaderDeclarationCreate = 0xE76700;
-		inline constexpr UInt32 kTextureStageSetProperties = 0xBE0CF0;
-		inline constexpr UInt32 kTextureStageSetFilter = 0xE7DEF0;
-		inline constexpr UInt32 kPassSetRenderState = 0xB71A10;
+		inline constexpr UInt32 kNiDX9ShaderDeclarationCreate = 0xE76700;
+		inline constexpr UInt32 kNiD3DTextureStageSetProperties = 0xBE0CF0;
+		inline constexpr UInt32 kNiD3DTextureStageSetFilterMode = 0xE7DEF0;
+		inline constexpr UInt32 kNiD3DPassSetRenderState = 0xB71A10;
 		inline constexpr UInt32 kCopiedTileShaderVtableEntries = 84;
-		inline constexpr UInt32 kUpdateConstantsVtableSlot = 31;
-		inline constexpr UInt32 kSetupBlendVtableSlot = 32;
+		inline constexpr UInt32 kSetupGeometryConstantsVtableSlot = 31;
+		inline constexpr UInt32 kSetupGeometryAlphaBlendingVtableSlot = 32;
 		inline constexpr UInt32 kNativeVtableMagic = 0x35544D4E; // "NMT5"
 		inline constexpr UInt32 kShaderRefreshMessage = 0;
 		inline constexpr DWORD kInitializationRetryMilliseconds = 1000;
@@ -121,9 +122,9 @@ namespace fonthook::vectorfont
 		inline constexpr size_t kStaticCompositeShiftCount = 2;
 		using CreateVertexShaderFn = NiD3DVertexShader* (__cdecl*)(const char*);
 		using CreatePixelShaderFn = NiD3DPixelShader* (__cdecl*)(const char*);
-		using VanillaUpdateConstantsFn = void(__thiscall*)(TileShader*,
+		using VanillaSetupGeometryConstantsFn = void(__thiscall*)(TileShader*,
 			const NiPropertyState*);
-		void __fastcall NativeUpdateConstants(TileShader*, void*,
+		void __fastcall NativeSetupGeometryConstants(TileShader*, void*,
 			const NiPropertyState*);
 		void __fastcall NativeSetupGeometryAlphaBlending(
 			TileShader*, void*, const NiPropertyState*);
@@ -248,7 +249,7 @@ namespace fonthook::vectorfont
 			// vptr points at slots, so slots[-1] remains the vanilla COL pointer.
 			NativeShaderProfile* profile = nullptr;
 			UInt32 magic = kNativeVtableMagic;
-			VanillaUpdateConstantsFn vanillaUpdateConstants = nullptr;
+			VanillaSetupGeometryConstantsFn vanillaSetupGeometryConstants = nullptr;
 			void* rttiPrefix = nullptr;
 			std::array<void*, kCopiedTileShaderVtableEntries> slots = {};
 		};
@@ -457,7 +458,7 @@ namespace fonthook::vectorfont
 				return NativeFontStandardBlendSemantics::NativeOwned;
 			}
 			if (callback == reinterpret_cast<void*>(
-					kShaderSetupGeometryAlphaBlending))
+					kBSShaderSetupGeometryAlphaBlending))
 			{
 				return NativeFontStandardBlendSemantics::Retail;
 			}
@@ -593,21 +594,21 @@ namespace fonthook::vectorfont
 			}
 			const NativeFontCompiledPacketCommand& program =
 				profile->retainedProgram;
-			return program.setupPass == reinterpret_cast<void*>(
+			return program.setupGeometryTextures == reinterpret_cast<void*>(
 					kTileShaderSetupGeometryTextures)
-				&& block->vanillaUpdateConstants
-					== reinterpret_cast<VanillaUpdateConstantsFn>(
-						kTileShaderUpdateConstants)
-				&& program.updateConstants
-					== reinterpret_cast<void*>(&NativeUpdateConstants)
-				&& program.setupBlend == reinterpret_cast<void*>(
+				&& block->vanillaSetupGeometryConstants
+					== reinterpret_cast<VanillaSetupGeometryConstantsFn>(
+						kTileShaderSetupGeometryConstants)
+				&& program.setupGeometryConstants
+					== reinterpret_cast<void*>(&NativeSetupGeometryConstants)
+				&& program.setupGeometryAlphaBlending == reinterpret_cast<void*>(
 					&NativeSetupGeometryAlphaBlending)
-				&& program.setupAlphaTest == reinterpret_cast<void*>(
-					kShaderSetupGeometryAlphaTesting)
-				&& program.setupDrawmode == reinterpret_cast<void*>(
-					kShaderSetupGeometryRenderStates)
-				&& program.prepareGeometry == reinterpret_cast<void*>(
-					kNiD3DShaderPrepareGeometry)
+				&& program.setupGeometryAlphaTesting == reinterpret_cast<void*>(
+					kBSShaderSetupGeometryAlphaTesting)
+				&& program.setupGeometryRenderStates == reinterpret_cast<void*>(
+					kBSShaderSetupGeometryRenderStates)
+				&& program.prepareGeometryForRendering == reinterpret_cast<void*>(
+					kNiD3DShaderPrepareGeometryForRendering)
 				&& program.postGeometry == reinterpret_cast<void*>(
 					kTileShaderPostGeometry);
 		}
@@ -860,36 +861,38 @@ namespace fonthook::vectorfont
 			// Normalize the category before applying the final state. This preserves
 			// the blend-leak and No_Fade fixes without borrowing a third-party
 			// callback whose identity or implementation may change independently.
-			CdeclCall<void>(kSetAlphaBlendEnable, 0, 0);
+			CdeclCall<void>(kBSRenderStateSetAlphaBlendEnable, 0, 0);
 			const NativeFontBlendState state =
 				ComputeNativeFontOwnedBlendState(properties);
 			if (!state.enabled)
 				return;
 
-			CdeclCall<void>(kSetAlphaBlendEnable, 1, 0);
-			CdeclCall<void>(kSetSourceAndDestinationBlends,
+			CdeclCall<void>(kBSRenderStateSetAlphaBlendEnable, 1, 0);
+			CdeclCall<void>(kBSRenderStateSetAlphaBlendFunc,
 				static_cast<UInt32>(state.sourceFunction),
 				static_cast<UInt32>(state.destinationFunction), 0);
 		}
 
-		void __fastcall NativeUpdateConstants(TileShader* shader, void*,
+		void __fastcall NativeSetupGeometryConstants(TileShader* shader, void*,
 			const NiPropertyState* properties)
 		{
 			// Preserve Tile's matrix, live color/fade, scissor and alpha contract.
 			NativeTileVtableBlock* block = RecoverNativeVtableBlock(shader);
-			VanillaUpdateConstantsFn vanillaUpdate = block && block->vanillaUpdateConstants
-				? block->vanillaUpdateConstants
-				: reinterpret_cast<VanillaUpdateConstantsFn>(kTileShaderUpdateConstants);
+			VanillaSetupGeometryConstantsFn vanillaSetupGeometryConstants =
+				block && block->vanillaSetupGeometryConstants
+				? block->vanillaSetupGeometryConstants
+				: reinterpret_cast<VanillaSetupGeometryConstantsFn>(
+					kTileShaderSetupGeometryConstants);
 			NativeFacadeShaderBatch& batch = s_facadeShaderBatch;
 			const bool batchActive = batch.depth != 0;
-			// Retail TileShader::UpdateConstants is also a live render-state
+			// Retail TileShader::SetupGeometryConstants is also a live render-state
 			// synchronization point: it reapplies Tile scissor and stencil state.
 			// Standard v2 may suppress this whole wrapper only inside one
 			// validated execution segment, with the verified retail slot retained,
 			// identical transform/color/camera inputs, and no transient
 			// scissor/stencil state. Every other packet still enters here and keeps
 			// the exact vanilla slot-31/35 pairing.
-			vanillaUpdate(shader, properties);
+			vanillaSetupGeometryConstants(shader, properties);
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VanillaConstantUpdate);
 			NativeShaderProfile* profile = block ? block->profile : nullptr;
@@ -900,7 +903,7 @@ namespace fonthook::vectorfont
 					std::memory_order_acq_rel))
 				{
 					gLog.FormattedMessage(
-						"tnvse_freetype_native: invalid TileShader sidecar in UpdateConstants; native generation disabled and affected submissions will be suppressed");
+						"tnvse_freetype_native: invalid TileShader sidecar in SetupGeometryConstants; native generation disabled and affected submissions will be suppressed");
 				}
 				NativeShaderGeneration* current = s_publishedGeneration.load(
 					std::memory_order_acquire);
@@ -934,9 +937,9 @@ namespace fonthook::vectorfont
 			//
 			// A plugin-replaced vtable slot does not carry that proof. Preserve
 			// the old explicit publication only for that compatibility case.
-			if (vanillaUpdate
-				!= reinterpret_cast<VanillaUpdateConstantsFn>(
-					kTileShaderUpdateConstants))
+			if (vanillaSetupGeometryConstants
+				!= reinterpret_cast<VanillaSetupGeometryConstantsFn>(
+					kTileShaderSetupGeometryConstants))
 			{
 				std::array<float, 4> tileConstant;
 				if (!ResolveVanillaTilePixelConstant(
@@ -1431,7 +1434,7 @@ namespace fonthook::vectorfont
 		void SetPassRenderState(NiD3DPass* pass,
 			D3DRENDERSTATETYPE state, DWORD value)
 		{
-			ThisStdCall<void>(kPassSetRenderState, pass, state,
+			ThisStdCall<void>(kNiD3DPassSetRenderState, pass, state,
 				static_cast<UInt32>(value), true);
 		}
 
@@ -1446,10 +1449,10 @@ namespace fonthook::vectorfont
 				NiD3DTextureStage* stage = pass.GetStage(stageIndex);
 				if (!stage)
 					continue;
-				CdeclCall<void>(kTextureStageSetProperties, stage, stageIndex,
+				CdeclCall<void>(kNiD3DTextureStageSetProperties, stage, stageIndex,
 					NiTexturingProperty::CLAMP_S_CLAMP_T,
 					static_cast<UInt32>(filter), false);
-				ThisStdCall<void>(kTextureStageSetFilter, stage, filter);
+				ThisStdCall<void>(kNiD3DTextureStageSetFilterMode, stage, filter);
 			}
 
 			SetPassRenderState(&pass, D3DRS_ZENABLE, FALSE);
@@ -1506,7 +1509,7 @@ namespace fonthook::vectorfont
 				return nullptr;
 
 			NiPointer<TileShader> shaderGuard =
-				StdCall<TileShader*>(kTileShaderCreate);
+				StdCall<TileShader*>(kTileShaderCreateShader);
 			TileShader* shader = shaderGuard.m_pObject;
 			if (!shader)
 				return nullptr;
@@ -1558,14 +1561,15 @@ namespace fonthook::vectorfont
 			vtable->profile = profile;
 			vtable->rttiPrefix = vanillaVtable[-1];
 			std::copy_n(vanillaVtable, vtable->slots.size(), vtable->slots.begin());
-			vtable->vanillaUpdateConstants = reinterpret_cast<VanillaUpdateConstantsFn>(
-				vanillaVtable[kUpdateConstantsVtableSlot]);
-			vtable->slots[kUpdateConstantsVtableSlot] =
-				reinterpret_cast<void*>(&NativeUpdateConstants);
+			vtable->vanillaSetupGeometryConstants =
+				reinterpret_cast<VanillaSetupGeometryConstantsFn>(
+					vanillaVtable[kSetupGeometryConstantsVtableSlot]);
+			vtable->slots[kSetupGeometryConstantsVtableSlot] =
+				reinterpret_cast<void*>(&NativeSetupGeometryConstants);
 			// The native FreeType shader owns its blend contract. Global TileShader
 			// vtables remain untouched, so vanilla and third-party geometry continue
 			// through their live callback chains without becoming a native proof.
-			vtable->slots[kSetupBlendVtableSlot] =
+			vtable->slots[kSetupGeometryAlphaBlendingVtableSlot] =
 				reinterpret_cast<void*>(&NativeSetupGeometryAlphaBlending);
 			profile->vtable = vtable;
 			*reinterpret_cast<void***>(shader) = vtable->slots.data();
@@ -1577,26 +1581,28 @@ namespace fonthook::vectorfont
 			program.device = generation.device;
 			program.vertexShader = vertexShader->GetShaderHandle();
 			program.pixelShader = pixelShader->GetShaderHandle();
-			program.prepareGeometry = vtable->slots[27];
-			program.setupPass = vtable->slots[30];
-			program.updateConstants = vtable->slots[31];
-			program.setupBlend = vtable->slots[kSetupBlendVtableSlot];
-			program.setupAlphaTest = vtable->slots[33];
-			program.setupDrawmode = vtable->slots[34];
+			program.prepareGeometryForRendering = vtable->slots[27];
+			program.setupGeometryTextures = vtable->slots[30];
+			program.setupGeometryConstants = vtable->slots[31];
+			program.setupGeometryAlphaBlending =
+				vtable->slots[kSetupGeometryAlphaBlendingVtableSlot];
+			program.setupGeometryAlphaTesting = vtable->slots[33];
+			program.setupGeometryRenderStates = vtable->slots[34];
 			program.postGeometry = vtable->slots[35];
 			program.setupNonFirstPass = vtable->slots[68];
 			program.standardV2SlotProofs = 0;
 			program.standardBlendSemantics =
-				ClassifyStandardBlendCallback(program.setupBlend);
-			if (program.setupPass == reinterpret_cast<void*>(
+				ClassifyStandardBlendCallback(
+					program.setupGeometryAlphaBlending);
+			if (program.setupGeometryTextures == reinterpret_cast<void*>(
 					kTileShaderSetupGeometryTextures))
 			{
 				program.standardV2SlotProofs |=
 					NativeFontCompiledPacketCommand::kStandardSlot30Proof;
 			}
-			if (vtable->vanillaUpdateConstants
-				== reinterpret_cast<VanillaUpdateConstantsFn>(
-					kTileShaderUpdateConstants))
+			if (vtable->vanillaSetupGeometryConstants
+				== reinterpret_cast<VanillaSetupGeometryConstantsFn>(
+					kTileShaderSetupGeometryConstants))
 			{
 				program.standardV2SlotProofs |=
 					NativeFontCompiledPacketCommand::kStandardSlot31Proof;
@@ -1607,14 +1613,14 @@ namespace fonthook::vectorfont
 				program.standardV2SlotProofs |=
 					NativeFontCompiledPacketCommand::kStandardSlot32Proof;
 			}
-			if (program.setupAlphaTest == reinterpret_cast<void*>(
-					kShaderSetupGeometryAlphaTesting))
+			if (program.setupGeometryAlphaTesting == reinterpret_cast<void*>(
+					kBSShaderSetupGeometryAlphaTesting))
 			{
 				program.standardV2SlotProofs |=
 					NativeFontCompiledPacketCommand::kStandardSlot33Proof;
 			}
-			if (program.setupDrawmode == reinterpret_cast<void*>(
-					kShaderSetupGeometryRenderStates))
+			if (program.setupGeometryRenderStates == reinterpret_cast<void*>(
+					kBSShaderSetupGeometryRenderStates))
 			{
 				program.standardV2SlotProofs |=
 					NativeFontCompiledPacketCommand::kStandardSlot34Proof;
@@ -1626,8 +1632,8 @@ namespace fonthook::vectorfont
 					NativeFontCompiledPacketCommand::kStandardSlot35Proof;
 			}
 			program.directDrawLiteReady =
-				program.prepareGeometry == reinterpret_cast<void*>(
-					kNiD3DShaderPrepareGeometry)
+				program.prepareGeometryForRendering == reinterpret_cast<void*>(
+					kNiD3DShaderPrepareGeometryForRendering)
 				&& vtable->slots[36] == reinterpret_cast<void*>(
 					kNiD3DShaderFirstPass);
 			program.generation = generation.id;
@@ -1635,7 +1641,7 @@ namespace fonthook::vectorfont
 				packet.shaderClass == NativeFontShaderClass::Coverage
 					|| packet.shaderClass == NativeFontShaderClass::Argb;
 			program.active = program.device && program.vertexShader
-				&& program.pixelShader && program.setupPass;
+				&& program.pixelShader && program.setupGeometryTextures;
 			const UInt32 previousProofGeneration =
 				s_standardV2ProofLogGeneration.exchange(
 					generation.id, std::memory_order_relaxed);
@@ -1651,13 +1657,13 @@ namespace fonthook::vectorfont
 							kStandardV2RequiredProofs),
 					StandardBlendSemanticsName(
 						program.standardBlendSemantics),
-					program.setupBlend,
+					program.setupGeometryAlphaBlending,
 					program.standardV2SlotProofs
 							== NativeFontCompiledPacketCommand::
 								kStandardV2RequiredProofs
 						? 1u : 0u,
 					program.directDrawLiteReady ? 1u : 0u,
-					program.prepareGeometry,
+					program.prepareGeometryForRendering,
 					vtable->slots[36]);
 			}
 			return profile;
@@ -1669,7 +1675,7 @@ namespace fonthook::vectorfont
 			// Runtime object size is 0x38. The 0xD4 CommonLib declaration includes
 			// static lookup tables incorrectly; never allocate/copy it with sizeof.
 			NiDX9ShaderDeclarationPtr declaration =
-				CdeclCall<NiDX9ShaderDeclaration*>(kShaderDeclarationCreate,
+				CdeclCall<NiDX9ShaderDeclaration*>(kNiDX9ShaderDeclarationCreate,
 					generation.renderer, 5u, 1u);
 			if (!declaration)
 			{
@@ -1774,7 +1780,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			NiDX9ShaderDeclarationPtr declaration =
-				CdeclCall<NiDX9ShaderDeclaration*>(kShaderDeclarationCreate,
+				CdeclCall<NiDX9ShaderDeclaration*>(kNiDX9ShaderDeclarationCreate,
 					generation.renderer, 5u, 1u);
 			if (!declaration)
 			{
@@ -1829,7 +1835,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			NiDX9ShaderDeclarationPtr declaration =
-				CdeclCall<NiDX9ShaderDeclaration*>(kShaderDeclarationCreate,
+				CdeclCall<NiDX9ShaderDeclaration*>(kNiDX9ShaderDeclarationCreate,
 					generation.renderer, 6u, 1u);
 			if (!declaration)
 			{
@@ -2675,7 +2681,8 @@ namespace fonthook::vectorfont
 		// currentPass is the render-pass enum, not a zero-based pass index. Both
 		// reverse targets contain special pass enums that bypass the virtual
 		// SetupGeometryConstants callback, and their enum values differ. Do not
-		// duplicate either executable's switch here: the actual NativeUpdateConstants
+		// duplicate either executable's switch here: the actual
+		// NativeSetupGeometryConstants
 		// invocation signs this one-shot witness, while every bypass reaches End with
 		// publishedToken == 0 and therefore fails closed. Callback identity is used
 		// instead of code hashing; any replaced slot simply disables carry.
@@ -3975,10 +3982,10 @@ namespace fonthook::vectorfont
 		if (!command.active || !profile || !generation || !device
 			|| profile->shader != command.shader
 			|| !shaderVtable
-			|| shaderVtable[30] != command.setupPass
-			|| shaderVtable[32] != command.setupBlend
-			|| shaderVtable[33] != command.setupAlphaTest
-			|| shaderVtable[34] != command.setupDrawmode
+			|| shaderVtable[30] != command.setupGeometryTextures
+			|| shaderVtable[32] != command.setupGeometryAlphaBlending
+			|| shaderVtable[33] != command.setupGeometryAlphaTesting
+			|| shaderVtable[34] != command.setupGeometryRenderStates
 			|| generation->id != command.generation
 			|| generation->device != device
 			|| !GenerationMatchesCurrentDevice(generation)
@@ -4009,59 +4016,61 @@ namespace fonthook::vectorfont
 			renderState->m_hCurrentVertexShader == command.vertexShader
 			&& renderState->m_hCurrentPixelShader == command.pixelShader;
 		// A profile change can also change pass render state even when two
-		// profiles share shader handles, so it still requires SetupPass. If the
+		// profiles share shader handles, so it still requires
+		// SetupGeometryTextures. If the
 		// caller retained the same profile but an unexpected program mutation
 		// occurred, repair it here instead of trusting a stale local pointer.
 		const bool setupRequired = publishPrograms || !programsReady;
 		if (setupRequired)
 		{
-			if (!command.setupPass || !properties)
+			if (!command.setupGeometryTextures || !properties)
 			{
 				operation = "validate-command-pass-state";
 				result = D3DERR_INVALIDCALL;
 				return false;
 			}
-			using SetupPassFn = void(__thiscall*)(
+			using SetupGeometryTexturesFn = void(__thiscall*)(
 				TileShader*, const NiPropertyState*);
-			reinterpret_cast<SetupPassFn>(
-				command.setupPass)(command.shader, properties);
+			reinterpret_cast<SetupGeometryTexturesFn>(
+				command.setupGeometryTextures)(command.shader, properties);
 			using SetupStateFn = void(__thiscall*)(
 				TileShader*, const NiPropertyState*);
-			using SetupDrawmodeFn = void(__thiscall*)(
+			using SetupGeometryRenderStatesFn = void(__thiscall*)(
 				TileShader*, const NiPropertyState*, bool);
 			if (bindState.applyBlend)
 			{
-				if (!command.setupBlend)
+				if (!command.setupGeometryAlphaBlending)
 				{
 					operation = "validate-command-blend-state";
 					result = D3DERR_INVALIDCALL;
 					return false;
 				}
 				reinterpret_cast<SetupStateFn>(
-					command.setupBlend)(command.shader, properties);
+					command.setupGeometryAlphaBlending)(
+						command.shader, properties);
 			}
 			if (bindState.applyAlphaTest)
 			{
-				if (!command.setupAlphaTest)
+				if (!command.setupGeometryAlphaTesting)
 				{
 					operation = "validate-command-alpha-state";
 					result = D3DERR_INVALIDCALL;
 					return false;
 				}
 				reinterpret_cast<SetupStateFn>(
-					command.setupAlphaTest)(
+					command.setupGeometryAlphaTesting)(
 						command.shader, properties);
 			}
-			if (bindState.applyDrawmode)
+			if (bindState.applyRenderStates)
 			{
-				if (!command.setupDrawmode)
+				if (!command.setupGeometryRenderStates)
 				{
-					operation = "validate-command-drawmode-state";
+					operation = "validate-command-render-states";
 					result = D3DERR_INVALIDCALL;
 					return false;
 				}
-				reinterpret_cast<SetupDrawmodeFn>(
-					command.setupDrawmode)(
+				reinterpret_cast<SetupGeometryRenderStatesFn>(
+					command.setupGeometryRenderStates)(
 						command.shader, properties,
 						bindState.firstPass);
 			}

@@ -14,25 +14,25 @@ using namespace fonthook::implementation::font_engine;
 
 namespace fonthook::implementation::font_engine
 {
-	thread_local UInt32 s_fontInitLoadDepth = 0;
+	thread_local UInt32 s_fontConstructorLoadDepth = 0;
 
-	class FontInitLoadScope
+	class FontConstructorLoadScope
 	{
 	public:
-		FontInitLoadScope() { ++s_fontInitLoadDepth; }
-		~FontInitLoadScope() { --s_fontInitLoadDepth; }
+		FontConstructorLoadScope() { ++s_fontConstructorLoadDepth; }
+		~FontConstructorLoadScope() { --s_fontConstructorLoadDepth; }
 	};
 }
 
 namespace fonthook
 {
-	// ==================== FontEx::FontInit ====================
-	Font* FontEx::FontInit(int iFontNum, char* apFilename, bool abLoad)
+	// ==================== FontEx::FontConstructor ====================
+	Font* FontEx::FontConstructor(int iFontNum, char* apFilename, bool abLoad)
 	{
 		if (!g_bEnableMultibyteFontHook)
 		{
-			FontInitLoadScope loadScope;
-			Font* result = CallOriginalFontInit(
+			FontConstructorLoadScope loadScope;
+			Font* result = CallOriginalFontConstructor(
 				this, iFontNum, apFilename, abLoad);
 			if (result && g_bEnableFreeTypeFontRendering)
 				ActivateFreeTypeFont(result);
@@ -64,7 +64,7 @@ namespace fonthook
 			this->iFontNum = iFontNum;
 			if (abLoad)
 			{
-				FontInitLoadScope loadScope;
+				FontConstructorLoadScope loadScope;
 				ThisStdCall(0xA15320, this);
 			}
 		}
@@ -100,7 +100,7 @@ namespace fonthook
 		{
 			CallOriginalFontLoad(this);
 			if (g_bEnableFreeTypeFontRendering && this->pFontData
-				&& !s_fontInitLoadDepth)
+				&& !s_fontConstructorLoadDepth)
 			{
 				ActivateFreeTypeFont(this);
 			}
@@ -113,7 +113,7 @@ namespace fonthook
 		if (refCount || !this->pFontFile)
 		{
 			++this->iRefCount;
-			if (this->pFontData && !s_fontInitLoadDepth)
+			if (this->pFontData && !s_fontConstructorLoadDepth)
 				ActivateFreeTypeFont(this);
 			return;
 		}
@@ -149,9 +149,9 @@ namespace fonthook
 			return;
 
 		++this->iRefCount;
-		// FontInit binds path-keyed extended metrics to the numeric font slot and
+		// Font::Font binds path-keyed extended metrics to the numeric font slot and
 		// activates once after Load returns. Standalone Load calls still activate here.
-		if (!s_fontInitLoadDepth)
+		if (!s_fontConstructorLoadDepth)
 			ActivateFreeTypeFont(this);
 	}
 
@@ -281,7 +281,7 @@ namespace fonthook
 			{
 				finalPixelData = ThisStdCall<NiPixelData*>(
 					0xA7C190, createdPixelData, texWidth, texHeight,
-					reinterpret_cast<const NiPixelFormat*>(0x11AA2A0), 1, 1);
+					&NiPixelFormat_RGBA32, 1, 1);
 			}
 			else
 			{

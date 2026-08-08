@@ -128,7 +128,7 @@ namespace fonthook
 				return false;
 			}
 			pixelData = ThisStdCall<NiPixelData*>(0xA7C190, pixelData, 1u, 1u,
-				reinterpret_cast<const NiPixelFormat*>(0x11AA2A0), 1, 1);
+				&NiPixelFormat_RGBA32, 1, 1);
 			if (!pixelData || !pixelData->m_pucPixels || !pixelData->m_puiOffsetInBytes)
 			{
 				gLog.FormattedMessage("tnvse_freetype_font: white texture pixel initialization failed");

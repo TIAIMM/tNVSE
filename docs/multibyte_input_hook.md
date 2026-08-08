@@ -136,7 +136,7 @@ PC 正式版对应关系：
 | `PlayerNameEntryMenu::Finish(char const*)` | `0x7AB9A0` | 写 `TESNPC + 0xD0` full name、更新 StatsMenu、关闭菜单，行为与测试版 PDB 同名函数一致 |
 | `TextEditMenu::Open(char const*, char const*, ValidateTextCallback)` | `0x7E6320` | PC 正式版加载 `Data\Menus\Dialog\TextEditMenu.xml` |
 | `TextEditMenu::Refresh()` | `0x7E6700` | PC 正式版刷新 edit tile string trait `4036` 并调用 validator |
-| `TextEditState::InputUnk01(SInt32, SInt32)` | `0x716B00` | PC 正式版原始单字节编辑核心；真实调用约定为 `ECX=this, EDX=key, stack=char` |
+| `TextEditState::Input(SInt32, SInt32)` | `0x716B00` | PC 正式版原始单字节编辑核心；真实调用约定为 `ECX=this, EDX=key, stack=char` |
 
 ### TextEditMenu 打开路径
 
@@ -226,7 +226,7 @@ BSString init at state + 8;
 *(state + 33) = 0;       // edit active flag
 ```
 
-idalib 导出的 `0x716980` 没有显示写入 `state + 34`；`state + 34` 是 clear-on-next-type 标志，由 `0x7E6580(state, 1)` 设置，并由 `InputUnk01` 在第一次真实输入、退格、删除等路径里清零。
+idalib 导出的 `0x716980` 没有显示写入 `state + 34`；`state + 34` 是 clear-on-next-type 标志，由 `0x7E6580(state, 1)` 设置，并由 `TextEditState::Input` 在第一次真实输入、退格、删除等路径里清零。
 
 相关 helper 行为：
 
@@ -311,14 +311,14 @@ if (key == -2147483640) {
     return 1;
 }
 if (sub_716AE0(this + 0x34)) {
-    InputUnk01(this + 0x34, key, key);
+    TextEditState::Input(this + 0x34, key, key);
     sub_7E6700(this);
     return 1;
 }
 return 0;
 ```
 
-`0x716B00 InputUnk01(state, key, n9)` 是原版编辑核心。它明确是单字节编辑模型：
+`0x716B00 TextEditState::Input(state, key, n9)` 是原版编辑核心。它明确是单字节编辑模型：
 
 - 普通字符：如果 `n9 > 9`，只插入一个 byte。
 - 插入时从 caret 位置开始逐 byte 后移一位。
@@ -337,7 +337,7 @@ return 0;
 ...
 007E667F  mov ecx, [this]
 007E6682  add ecx, 34h
-007E6685  call InputUnk01
+007E6685  call TextEditState::Input
 007E668D  call sub_7E6700
 
 ; 0x716B00 普通字符插入路径
@@ -351,7 +351,7 @@ return 0;
 00716DF5  add edx, 1      ; right
 ```
 
-也就是说，即使 WndProc 把 GBK/Big5/SJIS/CP949 的两个 byte 分两次送进原版输入函数，原版 caret、delete、display caret 都仍然只知道 byte，不知道逻辑字符。最终实现不能通过“逐 byte 调原版 `InputUnk01`”来宣称支持多字节字符输入。
+也就是说，即使 WndProc 把 GBK/Big5/SJIS/CP949 的两个 byte 分两次送进原版输入函数，原版 caret、delete、display caret 都仍然只知道 byte，不知道逻辑字符。最终实现不能通过“逐 byte 调原版 `TextEditState::Input`”来宣称支持多字节字符输入。
 
 已确认的按键语义：
 
@@ -365,7 +365,7 @@ return 0;
 -2147483640  Confirm / close path depending on caller
 ```
 
-这就是多字节字符输入必须重写或包裹编辑操作的核心原因：原版 `InputUnk01` 会把 GBK/Big5/SJIS/CP949 的 lead/trail pair 当成两个独立字符处理。
+这就是多字节字符输入必须重写或包裹编辑操作的核心原因：原版 `TextEditState::Input` 会把 GBK/Big5/SJIS/CP949 的 lead/trail pair 当成两个独立字符处理。
 
 ### 保存名生成和显示链路
 
@@ -550,7 +550,7 @@ std::vector<std::wstring> candidates;
 - 逆向确认 `TileMenu::PostParse` 和菜单可见性表只接受 `1001-1084`：先前的超范围 code 不会越界，却也不会进入原生 TileMenu/visibility 身份表。当前 code 处于合法范围，并在完整 XML 解析后再次调用 `Menu::RegisterTile`，与原版 Menu `Create()` 及 Stewie Tweaks UI 注入的最终绑定顺序一致。加载前会清理同名的残留/重复根；若 `1079` 已由非 tNVSE Tile 占用，原生候选层不可用，但系统候选窗仍保持抑制。
 - IME Menu 使用 `&does_not_stack;`、根及全部子节点 `target=false`，不会进入活动菜单栈或接管鼠标。逆向确认 `FOPipboyManager::Render` 会把 UI 渲染到 1280×960 的哔哔小子 RTT；同一个顶层 IME NiNode 若不隔离，会先进入该 RTT，随后又被正常屏幕 UI pass 合成，形成两份内容完全同步但大小不同的菜单。tNVSE 只在 `FOPipboyManager` 的该次 RTT 调用期间保存并设置 IME 根节点的 `APP_CULLED`，调用链返回后立即恢复原状态，因此哔哔小子纹理不再捕获候选窗，而屏幕空间仍只绘制一次。该 vtable hook 会调用安装时的前驱目标，以兼容已存在的链式 hook。
 - 两棵树分别维护宿主身份和 ready/fail 状态；预热 XML 失败不会禁用 IME，IME XML/工厂或 Pip-Boy RTT 隔离 hook 安装失败也不会取消字体预热。IME Menu 完整解析、`GetID()==1079` 且原生 Tile 注册有效只决定 tNVSE 候选层能否显示，不再决定系统候选窗是否被抑制。
-- 根身份变化时只丢弃旧指针并在新根上重新加载，绝不接触可能已经释放的旧树；同一根下每次主循环还验证组件及全部固定命名子节点的父子身份，若被其他 UI reload 替换则重新解析或重载。同一有效父根上的损坏、重复组件以及正常 shutdown 都先走原版 `ReleaseTileTree`，再销毁根，避免遗留 TileMenu 注册或场景节点。
+- 根身份变化时只丢弃旧指针并在新根上重新加载，绝不接触可能已经释放的旧树；同一根下每次主循环还验证组件及全部固定命名子节点的父子身份，若被其他 UI reload 替换则重新解析或重载。同一有效父根上的损坏、重复组件以及正常 shutdown 都先走原版 `Tile::Release`，再销毁根，避免遗留 TileMenu 注册或场景节点。
 - IME XML 预先定义状态行、composition 行、9 个候选槽和 9 个高亮槽，预热 XML 则预定义标题、字体说明、阶段和百分比文本。未使用候选槽只切换 `visible`，运行期间不反复创建或销毁 Tile。两套界面的全部 `TileText` 都显式使用 `<zoom>80</zoom>`，由 UIO 的 TileText zoom 支持把字体槽 1 缩放到 80%。`TileText::height` 是整行度量，不能描述字体 top-edge 与 descender 留白的不对称；IME 服务因此把动态行顶、行高、当前字符串的可见字形上沿和可见字形高度分别写入 `user0..user3`，XML 按 `y = user0 + (user1 - user3) / 2 - user2` 完成加减换算。可见上沿严格复用 `Font::CreateText` 的几何坐标：首行 Z 原点为 `2 * (baseline - fontHeight)`，字形上沿再加 `FontLetter::fTopEdge`，最后取反换成向下为正的 Tile Y；可见高度使用 `FontLetter::fHeight`。所得包围盒再用 Tile 回写高度与源行高的比例换算到 UIO 缩放后的坐标，不依赖固定像素补偿，也不假定 UIO 一定存在。启用字体渲染日志时会限量记录 `rowHeight/tileHeight/glyphTop/glyphHeight/xmlOffset`，便于直接验证最终补偿方向。
 - 状态行是输入目标激活时最先发布、且最常跨会话保持相同字符串的一行。服务现在先把 XML 默认隐藏的 IME Menu 根切到可见，再发布任一行的字符串；在逻辑输入目标切换、宿主代次变化、根或行可见性被外部菜单破坏时，只进行一次“清空字符串再写回”的强制几何刷新。这样 FreeType shape 不会保留在隐藏祖先下生成的零 alpha 动态状态；composition 和候选的稳定更新仍只改写真正变化的内容，不恢复逐帧重建。
 - 所有字符串、选择状态、尺寸和可见性 trait 只在 `kMessage_MainGameLoop` 更新，并位于 TSF/IMM 状态泵和输入目标同步之后。WndProc 与 TSF callback 只更新受保护的候选快照及 dirty 标志。
@@ -571,7 +571,7 @@ IME result 只有在已知可编辑目标有效时才允许写入。当前实现
 - `0x7AB740` 是 `PlayerNameEntryMenu` 调用 `TextEditMenu::Open` 的 call 指令；当前只包装它来替换玩家名 validator。
 - 包装函数调用原版 `TextEditMenu::Open(0x7E6320)`，并在原始 validator 是 `PlayerNameEntryMenu::IsValidName(0x7AB820)` 时替换为 DBCS-aware validator；原因是原版 validator 按单字节查 base font 宽度，DBCS high/trail byte 会导致 OK 按钮保持 disabled。
 - `0x1070064` 是 `TextEditMenu` vtable 第 12 项；tNVSE 不再改写该 vtable 槽，避免和 JIP `ShowTextInputMenu` 生命周期 hook 冲突。
-- 当前改为替换 `0x7E6620` 内部的 `InputUnk01` call site `0x7E6685`，让原版 confirm 分支和 Stewie Tweaks 在 `0x7E6627` 的补丁继续保留。
+- 当前改为替换 `0x7E6620` 内部的 `TextEditState::Input` call site `0x7E6685`，让原版 confirm 分支和 Stewie Tweaks 在 `0x7E6627` 的补丁继续保留。
 - `TextEditStateEx::Input` 接管 ASCII 插入、Backspace、Delete、Left、Right、Home、End；Confirm 仍由原版 `0x7E6620` 分支处理。
 - WndProc 每次使用前校验 `dword_11DAEC4` 当前对象仍是 `TextEditMenu` vtable，`0x1070064` 仍是 `0x7E6620`，且 `sub_716AE0(target + 0x34)` 为 true。
 - 注意：上述严格 active 校验用于原版 `TextEditMenu` 真实文本写入和编辑键处理。IME overlay/candidate 刷新使用更宽松的 `GetOverlayTextInputMenu()`，只确认当前输入菜单对象存在；因此候选窗跟随“当前输入菜单存在”，而不是跟随“当前可提交文本 active”。若只有 overlay target 而真实 edit target 暂时不可写，且当前 `HKL` 与 `uiEncoding` 匹配，composition/candidate/IME native 状态会吞掉 ASCII，避免拼音或选词数字泄漏到原 handler。若当前布局是系统英文等不匹配布局，则不吞 ASCII，保证普通字母输入仍可用。JIP `ShowTextInputMenu` 的 `GCS_RESULTSTR` 额外允许在 `+0x34` 之后的 JIP 字段布局仍有效时写入，因为 JIP 的 `+0x55 isActive` 在 IME 组字期间可能短暂为 false。
@@ -779,7 +779,7 @@ bool MoveCaretNext(TextEditState&);
 - 插入和截断必须保证最终字符串不以半个 DBCS 字符结尾。
 - `clearOnNextType` 为 true 时，第一次插入应先清空真实文本、caret 置 0、清掉该标志，然后再插入 commit。
 
-不要直接调用原版 `InputUnk01` 插入中文。`InputUnk01` 只适合 ASCII fallback。
+不要直接调用原版 `TextEditState::Input` 插入中文。`TextEditState::Input` 只适合 ASCII fallback。
 
 ### 5. 显示和 caret marker
 
@@ -810,7 +810,7 @@ bool MoveCaretNext(TextEditState&);
 
 - `source=WndProc.WM_CHAR`：Windows 字符消息路径。
 - `source=WndProc.WM_IME_COMPOSITION`：IME composition/result 路径。
-- `source=TextEditState::Input`：原版 `TextEditMenu::HandleKeyboardInput(0x7E6620)` 内部 `InputUnk01(0x716B00)` call site 路径。
+- `source=TextEditState::Input`：原版 `TextEditMenu::HandleKeyboardInput(0x7E6620)` 内部 `TextEditState::Input(0x716B00)` call site 路径。
 - `source=JipTextInputAdapter::Input`：JIP `ShowTextInputMenu` 的临时 vtable adapter 路径。
 - `source=StewieTweaksInputTarget`：Stewie Tweaks 搜索框或 string 子设置输入 target 路径。
 - `action=insert_ascii` 表示该路径实际写入 ASCII。
@@ -855,7 +855,7 @@ bool MoveCaretNext(TextEditState&);
 - Select-all / clear-on-next-type 状态
 - byte 上限和宽度限制截断
 
-ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS，就必须在原版返回后校正 caret boundary，或者统一改用 tNVSE 编辑层。
+ASCII 输入可以继续走原版 `TextEditState::Input`，但只要当前 buffer 含 DBCS，就必须在原版返回后校正 caret boundary，或者统一改用 tNVSE 编辑层。
 
 ### 扩展字段
 
@@ -887,7 +887,7 @@ ASCII 输入可以继续走原版 `InputUnk01`，但只要当前 buffer 含 DBCS
 - 原生宿主依赖 code `1079` 工厂 hook、Pip-Boy RTT 隔离 hook、`pMenuRoot` 和 IME XML 都成功建立；宿主暂时不可用、code 被占用、XML 缺失或 UI 重建破坏树身份时，候选文字界面会不可用，但系统候选窗不会作为回退重新出现。提交路径不依赖候选层，故有效的 `GCS_RESULTSTR` 仍可写入当前输入目标。诊断时必须区分“候选层缺失”和“输入提交失败”。
 - 原版 `TextEditMenu` caret marker 是单 byte 插入；如果 caret byte offset 错误，会破坏 DBCS。
 - 有些输入字段可能用 byte length 当字符数，最大长度要实测。
-- `0x7170A0` 和 `InputUnk01` 使用 1024/1028 bytes 级栈缓冲，tNVSE 不能写入超长文本后再交给原版刷新。
+- `0x7170A0` 和 `TextEditState::Input` 使用 1024/1028 bytes 级栈缓冲，tNVSE 不能写入超长文本后再交给原版刷新。
 - 剪贴板粘贴会一次插入大量文本，必须和 IME result 使用同一套 byte 上限、宽度限制和 DBCS 边界检查。
 - WndProc subclass 仍可能和 overlay、输入法增强、其他 NVSE 插件冲突，因此卸载时只在 tNVSE 仍是最上层 subclass 时恢复前驱；如果后装插件位于其上，则保留链节点直到窗口销毁，避免截断后装插件保存的前驱。鼠标、hit-test、capture、raw-input、pointer/touch/gesture 和所有非捕获消息始终在任何菜单/Tile/IME/UI 操作前直接交回原 WndProc。
 

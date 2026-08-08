@@ -36,16 +36,16 @@ namespace fonthook::vectorfont
 	// Aug 22 test build supplies both names; retail 1.4.0.525 has the same call
 	// graph at B65EA0 -> B64F90 and B64FD1 -> B994F0.
 	inline constexpr UInt32 kRenderPassImmediatelyCallSite = 0xB64FD1;
-	inline constexpr UInt32 kVanillaRenderPassImmediately = 0xB994F0;
+	inline constexpr UInt32 kBSBatchRendererRenderPassImmediately = 0xB994F0;
 	inline constexpr UInt32 kRenderAlphaGeometryCallSite = 0xB65EA0;
-	inline constexpr UInt32 kVanillaRenderAlphaGeometry = 0xB64F90;
+	inline constexpr UInt32 kBSShaderAccumulatorRenderAlphaGeometry = 0xB64F90;
 	inline constexpr UInt32 kMaximumShapeValidationFailureLogs = 16;
 	// Retail 1.4.0.525 and the symbolized Aug 22 beta agree that
 	// NiGeometryBufferData owns a two-slot RendererData vtable. Use the
 	// non-deleting destructor explicitly for placement-constructed descriptors;
 	// slot 1 is ContainsVertexData, not DeleteThis.
-	inline constexpr UInt32 kGeometryBufferDataConstructor = 0xE947C0;
-	inline constexpr UInt32 kGeometryBufferDataDestructor = 0xE8F0F0;
+	inline constexpr UInt32 kNiGeometryBufferDataConstructor = 0xE947C0;
+	inline constexpr UInt32 kNiGeometryBufferDataDestructor = 0xE8F0F0;
 	// Metadata generation slots are deliberately much larger than the live TLS
 	// hot-cache set count. Shape allocators commonly return addresses with
 	// repeating low bits; a small modulo table lets unrelated menu facades
@@ -278,7 +278,7 @@ namespace fonthook::vectorfont
 	void BeginNativeFontSortedTileConstantOwnership();
 	void EndNativeFontSortedTileConstantOwnership();
 	void __cdecl NativeFontRenderPassImmediately(BSShaderProperty::RenderPass* pass,
-		UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupDrawmode);
+		UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupRenderStates);
 	void __fastcall NativeFontRenderImmediate(NiTriShape* shape, void*, NiRenderer* renderer);
 	void __fastcall NativeFontRenderImmediateAlt(NiTriShape* shape, void*, NiRenderer* renderer);
 	bool InitializeNativeFontTriShapeVtable(NiTriShape* shape);

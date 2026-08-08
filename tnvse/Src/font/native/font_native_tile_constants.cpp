@@ -19,13 +19,13 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_native_tile_constants
 	{
-		inline constexpr UInt32 kScaledScissorActive = 0x11F9426;
-		inline constexpr UInt32 kSetScissorTestEnable = 0xB984F0;
-		inline constexpr UInt32 kSetScissorRectangle = 0xB97D20;
-		inline constexpr UInt32 kSetStencilEnable = 0xB98070;
-		inline constexpr UInt32 kSetStencilOperations = 0xB980C0;
-		inline constexpr UInt32 kSetStencilFunctions = 0xB98180;
-		inline constexpr UInt32 kRendererPositionAdjust = 0x11F474C;
+		inline constexpr UInt32 kBSShaderManager_bLetterbox = 0x11F9426;
+		inline constexpr UInt32 kBSRenderStateSetScissorEnable = 0xB984F0;
+		inline constexpr UInt32 kBSRenderStateSetScissorRect = 0xB97D20;
+		inline constexpr UInt32 kBSRenderStateSetStencilEnable = 0xB98070;
+		inline constexpr UInt32 kBSRenderStateSetStencilAction = 0xB980C0;
+		inline constexpr UInt32 kBSRenderStateSetStencilFunc = 0xB98180;
+		inline constexpr UInt32 kBSGraphics_CameraWorldTranslate = 0x11F474C;
 
 		// Font::MakeTriShape supplies the retail TileShaderProperty concrete type,
 		// which this CommonLib snapshot does not declare. Slot 31 reads only this
@@ -88,7 +88,7 @@ namespace fonthook::vectorfont
 		bool UsesScaledScissor(const TileConstantsTransientState& state)
 		{
 			return state.tile->useScissorTest
-				&& *reinterpret_cast<const UInt8*>(kScaledScissorActive);
+				&& *reinterpret_cast<const UInt8*>(kBSShaderManager_bLetterbox);
 		}
 
 		void ApplyTileConstantsTransientState(
@@ -96,8 +96,8 @@ namespace fonthook::vectorfont
 		{
 			if (state.tile->useScissorTest)
 			{
-				CdeclCall<void>(kSetScissorTestEnable, 1, 0);
-				CdeclCall<void>(kSetScissorRectangle,
+				CdeclCall<void>(kBSRenderStateSetScissorEnable, 1, 0);
+				CdeclCall<void>(kBSRenderStateSetScissorRect,
 					state.tile->scissorRect.left,
 					state.tile->scissorRect.top,
 					state.tile->scissorRect.right,
@@ -106,12 +106,12 @@ namespace fonthook::vectorfont
 			if (state.stencilEnabled)
 			{
 				const UInt16 flags = state.stencil->m_usFlags.Get();
-				CdeclCall<void>(kSetStencilEnable, 1, 0);
-				CdeclCall<void>(kSetStencilOperations,
+				CdeclCall<void>(kBSRenderStateSetStencilEnable, 1, 0);
+				CdeclCall<void>(kBSRenderStateSetStencilAction,
 					(flags >> NiStencilProperty::FAILACTION_POS) & 7u,
 					(flags >> NiStencilProperty::ZFAILACTION_POS) & 7u,
 					(flags >> NiStencilProperty::PASSACTION_POS) & 7u, 0);
-				CdeclCall<void>(kSetStencilFunctions,
+				CdeclCall<void>(kBSRenderStateSetStencilFunc,
 					(flags & NiStencilProperty::TESTFUNC_MASK)
 						>> NiStencilProperty::TESTFUNC_POS,
 					state.stencil->m_uiRef, state.stencil->m_uiMask, 0);
@@ -136,7 +136,7 @@ namespace fonthook::vectorfont
 		{
 			const NiPoint3 positionAdjust =
 				*reinterpret_cast<const NiPoint3*>(
-					kRendererPositionAdjust);
+					kBSGraphics_CameraWorldTranslate);
 			if (!std::isfinite(transform.m_fScale)
 				|| !std::isfinite(transform.m_Translate.x)
 				|| !std::isfinite(transform.m_Translate.y)

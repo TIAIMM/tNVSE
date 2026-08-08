@@ -57,7 +57,7 @@ namespace fonthook
 		TextDoc* __thiscall PrepHypertext(BSStringT<char>& arTextString, TextData& arData);
 		TextDoc* __thiscall PrepText(BSStringT<char>& arTextString, TextData& arData);
 		void __thiscall TextDocRender(NiNode* apNode, TextData* apData);
-		void __thiscall TextDocDestroy();
+		void __thiscall TextDocDestructor();
 		void __thiscall TextDocAddChar(CharData* apChar, int aiNewLines, bool abNewPage);
 		TextPage* __thiscall TextPageAddChar(CharData* apChar, int aiNewLines);
 		TextLine* __thiscall TextLineAddChar(CharData* apChar, bool abAddHead);

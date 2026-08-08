@@ -815,12 +815,12 @@ namespace fonthook::vectorfont
 			|| program->generation != generation
 			|| !shader || !shaderVtable
 			|| shaderVtable != program->shaderVtable
-			|| !program->prepareGeometry
-			|| !program->setupPass
-			|| !program->updateConstants
-			|| !program->setupBlend
-			|| !program->setupAlphaTest
-			|| !program->setupDrawmode
+			|| !program->prepareGeometryForRendering
+			|| !program->setupGeometryTextures
+			|| !program->setupGeometryConstants
+			|| !program->setupGeometryAlphaBlending
+			|| !program->setupGeometryAlphaTesting
+			|| !program->setupGeometryRenderStates
 			|| !program->postGeometry
 			|| !program->setupNonFirstPass
 			|| !renderer

@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 
+class NiPixelFormat;
+
 namespace fonthook
 {
 	using ExtraGlyphMap = std::unordered_map<UInt32, FontLetter>;
@@ -170,6 +172,7 @@ namespace fonthook
 
 	// ---- Memory / rendering singletons (defined in native_calls.cpp) ----
 	extern MemoryManager* MemoryManager_s_Instance;
-	extern NiPoint3& StringDefaultDimensions;
+	extern const NiPoint3& NiPoint3_ZERO;
+	extern const NiPixelFormat& NiPixelFormat_RGBA32;
 
 } // namespace fonthook

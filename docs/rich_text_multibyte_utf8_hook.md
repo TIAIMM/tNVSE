@@ -8,7 +8,7 @@ tNVSE 当前已经覆盖了普通 `Font` 文本路径：
 
 | 路径 | 正式版地址 | 当前 tNVSE 状态 |
 | --- | ---: | --- |
-| `Font::Font` / 初始化 | `0xA12020` | `WriteRelJumpEx(0xA12020, &FontEx::FontInit)` |
+| `Font::Font` / 初始化 | `0xA12020` | `WriteRelJumpEx(0xA12020, &FontEx::FontConstructor)` |
 | `Font::Load` | `0xA15320` | `WriteRelJumpEx(0xA15320, &FontEx::Load)` |
 | `Font::PrepText` | `0xA12FB0` | `WriteRelJumpEx(0xA12FB0, &FontEx::PrepText)` |
 | Terminal `PrepTextForTerminal` call site | `0x759281` | `WriteRelCallEx(0x759281, &FontEx::PrepTextForTerminal)` |
@@ -25,7 +25,7 @@ tNVSE 当前已经覆盖了普通 `Font` 文本路径：
 | `FontManager::CollectTo` | `0xA16EA0` | `PrepHypertext` 的 8 个 call site 已用 `WriteRelCall` 包装；普通可见文本段和 quoted/unquoted 属性值启用 DBCS-aware 路径，其余参数回原版 |
 | `TextDoc::Render` | `0xA19060` | `WriteRelCallEx(0xA18F63, &FontManagerEx::TextDocRender)`；内部 `BeginRichTextRenderContext` + 原版 `0xA19060` + `EndRichTextRenderContext` |
 | `TextDoc::Render` 字符发射点 | `0xA19622` | `WriteRelCallEx(0xA19622, &FontEx::TextDocRenderAddChar)`；DBCS 改用扩展 glyph |
-| `TextDoc::~TextDoc` | `0xA1B990` | `WriteRelCallEx(0xA18F7D, &FontManagerEx::TextDocDestroy)`；清理 side table 后调原版析构 |
+| `TextDoc::~TextDoc` | `0xA1B990` | `WriteRelCallEx(0xA18F7D, &FontManagerEx::TextDocDestructor)`；清理 side table 后调原版析构 |
 | `TextDoc::AddChar` | `0xA19A10` | `WriteRelCallEx` 4 处 call site 重定向；DBCS lead/trail 合并 + side table 登记；trail `CharData` 合并后释放 |
 | `TextPage::AddChar` | `0xA19C00` | `WriteRelCallEx` 2 处 call site 重定向到 `FontManagerEx::TextPageAddChar`；DBCS 后置修正 `iLastFontHeight` |
 | `TextLine::AddChar` | `0xA19F70` | `WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar)`；Multibyte 模式保留既有 DBCS overflow 处理，FreeType-only 在原版行/页决策前写入最终字形宽度 |
@@ -372,7 +372,7 @@ static BSStringT<char>* __fastcall CollectTo(FontManager* apManager, void*, BSSt
 TextDoc* __thiscall PrepHypertext(BSStringT<char>& arTextString, TextData& arData);
 TextDoc* __thiscall PrepText(BSStringT<char>& arTextString, TextData& arData);
 void __thiscall TextDocRender(NiNode* apNode, TextData* apData);
-void __thiscall TextDocDestroy();
+void __thiscall TextDocDestructor();
 void __thiscall TextDocAddChar(CharData* apChar, int aiNewLines, bool abNewPage);
 TextPage* __thiscall TextPageAddChar(CharData* apChar, int aiNewLines);
 static CharData* __fastcall CharDataCopy(CharData* apChar, void*);
@@ -762,7 +762,7 @@ TileText::MakeNode 0xA21AF0
 
 ### 11.2 推荐实际添加的 Hook
 
-按当前 tNVSE 代码状态，`game_hooks.cpp` 没有直接替换 `0xA18A30` 函数体，而是在正式版调用点安装 wrapper：`0xA18F4A` 调到 `FontManagerEx::PrepText`，`0xA18ACC` 调到 `FontManagerEx::PrepHypertext`。命名沿用现有 `FontEx::FontInit` / `FontEx::PrepText` 风格：扩展语义放在类名 `FontManagerEx` / `FontEx`，成员函数名保持原函数语义，地址只保留在安装点注释和文档表格中。
+按当前 tNVSE 代码状态，`game_hooks.cpp` 没有直接替换 `0xA18A30` 函数体，而是在正式版调用点安装 wrapper：`0xA18F4A` 调到 `FontManagerEx::PrepText`，`0xA18ACC` 调到 `FontManagerEx::PrepHypertext`。命名沿用现有 `FontEx::FontConstructor` / `FontEx::PrepText` 风格：扩展语义放在类名 `FontManagerEx` / `FontEx`，成员函数名保持原函数语义，地址只保留在安装点注释和文档表格中。
 
 | 优先级 | Hook 点 | 地址 / call site | 当前/推荐方式 | 必要性 |
 | --- | --- | ---: | --- | --- |
@@ -823,7 +823,7 @@ TileText::MakeNode 0xA21AF0
 | `0xA18ACC` | `PrepText → PrepHypertext` | `WriteRelCallEx` | `FontManagerEx::PrepHypertext` |
 | `0xA18F63` | `CreateText → TextDoc::Render` | `WriteRelCallEx` | `FontManagerEx::TextDocRender` |
 | `0xA19622` | `Render → Font::AddChar` (字符发射点) | `WriteRelCallEx` | `FontEx::TextDocRenderAddChar` |
-| `0xA18F7D` | `CreateText → TextDoc::~TextDoc` | `WriteRelCallEx` | `FontManagerEx::TextDocDestroy` |
+| `0xA18F7D` | `CreateText → TextDoc::~TextDoc` | `WriteRelCallEx` | `FontManagerEx::TextDocDestructor` |
 | `0xA178A4` / `0xA179D9` / `0xA17FC2` | `PrepHypertext → TextDoc::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextDocAddChar` |
 | `0xA18D7C` | `PrepText → TextDoc::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextDocAddChar` |
 | `0xA19A6F` | `TextDoc::AddChar → TextPage::AddChar` | `WriteRelCallEx` | `FontManagerEx::TextPageAddChar` |
@@ -856,7 +856,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 对外 API：`SetRichTextCharDbcs` / `TryGetRichTextCharDbcs` / `ClearRichTextCharExtra` / `ClearRichTextCharExtrasForDoc`。
 
 生命周期管理：
-- `TextDocDestroy`（hook `0xA18F7D`）通过 `ClearRichTextCharExtrasForDoc(doc)` 遍历 `xPages → xLines → xChars` 清理页面链表内字符，同时按 `RichTextCharExtra::textDoc == doc` 清理同一文档的离链副本，之后调用原版析构。
+- `TextDocDestructor`（hook `0xA18F7D`）通过 `ClearRichTextCharExtrasForDoc(doc)` 遍历 `xPages → xLines → xChars` 清理页面链表内字符，同时按 `RichTextCharExtra::textDoc == doc` 清理同一文档的离链副本，之后调用原版析构。
 - `TextDocAddChar` 在 DBCS lead 字符到达但 trail 尚未到达时，用 `sPendingRichTextLeads[doc]` 暂存；trail 到达后合并为单个 DBCS `CharData` 再走原版 `TextDoc::AddChar`。文档销毁前 `DiscardPendingRichTextLead` 释放未匹配的 lead。
 
 #### CharData::Copy side table 同步
@@ -1109,7 +1109,7 @@ std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCha
 - `RichTextCharExtra` 从只保存 `dbcsCode` 扩展为保存 `dbcsCode + textDoc`。这是 tNVSE 自己的 side table 数据，不改变 `FontManager::CharData` / `TextDoc` 等游戏结构体。
 - `TextDocAddChar` 在 lead/trail 合并成功时调用 `SetRichTextCharDbcs(lead, dbcsCode, doc)`，把 DBCS 字符和所属文档绑定。
 - `FontManagerEx::CharDataCopy` 同步复制 `dbcsCode` 和 `textDoc`，避免原版 `CharData::Copy` 产生的副本丢失生命周期归属。
-- `TextDocDestroy` 的 `ClearRichTextCharExtrasForDoc(doc)` 先按页面链表清理实际渲染字符，再按 `extra.textDoc == doc` 清理同一文档的离链副本。
+- `TextDocDestructor` 的 `ClearRichTextCharExtrasForDoc(doc)` 先按页面链表清理实际渲染字符，再按 `extra.textDoc == doc` 清理同一文档的离链副本。
 - `tnvse_rich_text_destroy` 的异常判定改为看 `richTextExtrasRemainingForDoc`；`richTextExtrasTotal` 只作为辅助信息，避免多个 `TextDoc` 同时存在时误报其他文档的 side table。
 
 **为什么**：

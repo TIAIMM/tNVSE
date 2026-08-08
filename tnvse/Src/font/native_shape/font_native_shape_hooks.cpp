@@ -28,20 +28,22 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_native_shape_hooks
 	{
-		inline constexpr UInt32 kRenderPassImmediatelyStandard = 0xB98E80;
-		inline constexpr UInt32 kSelectShaderForPass = 0xB99390;
-		inline constexpr UInt32 kSetVendorAlphaToCoverageState = 0xB98540;
-		inline constexpr UInt32 kGeometryUsesSpecialPass = 0xE72C20;
-		inline constexpr UInt32 kPassSuppressesBlendAlpha = 0xB630F0;
-		inline constexpr UInt32 kTileSetSourceTexture = 0xBB7A10;
+		inline constexpr UInt32 kBSBatchRendererRenderPassImmediatelyStandard =
+			0xB98E80;
+		inline constexpr UInt32 kBSBatchRendererBeginPass = 0xB99390;
+		inline constexpr UInt32 kBSRenderStateSetAlphaToCoverageEnable = 0xB98540;
+		inline constexpr UInt32 kNiDX9RendererIsHardwareSkinned = 0xE72C20;
+		inline constexpr UInt32 kBSBatchRendererPassSuppressesBlendAlpha = 0xB630F0;
+		inline constexpr UInt32 kTileImageSetSourceTexture = 0xBB7A10;
 		inline constexpr UInt32 kNiTriShapeOnlyRenderImmediate = 0xA74600;
-		inline constexpr UInt32 kCurrentRenderPass = 0x11F91E0;
-		inline constexpr UInt32 kCurrentRenderPassType = 0x11F91E4;
-		inline constexpr UInt32 kSelectedRenderPassType = 0x11FFE30;
-		inline constexpr UInt32 kSelectedShader = 0x11FFE2C;
-		inline constexpr UInt32 kVendorAlphaToCoverageEnabled = 0x11F9421;
-		inline constexpr UInt32 kFirstPassState = 0x11AD8EC;
-		inline constexpr UInt32 kRendererState = 0x11F9508;
+		inline constexpr UInt32 kBSShaderManager_pCurrentRenderPass = 0x11F91E0;
+		inline constexpr UInt32 kBSShaderManager_eCurrentPass = 0x11F91E4;
+		inline constexpr UInt32 kBSBatchRenderer_uiLastPass = 0x11FFE30;
+		inline constexpr UInt32 kBSBatchRenderer_pLastShader = 0x11FFE2C;
+		inline constexpr UInt32 kBSShaderManager_bTransparencyMultisampling =
+			0x11F9421;
+		inline constexpr UInt32 kBSBatchRenderer_bFirstPass = 0x11AD8EC;
+		inline constexpr UInt32 kBSShaderManager_pRenderer = 0x11F9508;
 		inline constexpr UInt32 kForcedShaderSelectionPass = 758;
 		inline constexpr UInt32 kGeometrySegmentedPredicateSlot = 10;
 		inline constexpr UInt32 kGeometryResizablePredicateSlot = 11;
@@ -50,7 +52,7 @@ namespace fonthook::vectorfont
 		// Official NiTriShape vtable slots 12/13 both point at ACBB70,
 		// the shared predicate thunk that returns false. E68810 is instead
 		// the positive cast thunk used by slots 6/7/9 and returns this.
-		inline constexpr UInt32 kNiGeometryFalsePredicate = 0xACBB70;
+		inline constexpr UInt32 kNiObjectNullGeometryCastPredicate = 0xACBB70;
 		const hook_identity::Rel32InstructionImage
 			s_renderPassImmediatelyHookImage =
 				hook_identity::MakeRel32InstructionImage(
@@ -672,7 +674,7 @@ namespace fonthook::vectorfont
 			UInt8 alphaTestRef = 0;
 		};
 
-		struct NativeSegmentDrawmodeStateKey
+		struct NativeSegmentRenderStatesKey
 		{
 			bool drawBoth = false;
 			bool alphaTestEnabled = false;
@@ -716,14 +718,14 @@ namespace fonthook::vectorfont
 			NativeSegmentConstantsStateKey constants;
 			NativeSegmentBlendStateKey blend;
 			NativeSegmentAlphaTestStateKey alphaTest;
-			NativeSegmentDrawmodeStateKey drawmode;
+			NativeSegmentRenderStatesKey renderStates;
 			NativeSegmentGeometryBindingKey geometryBinding;
 			bool stampReady = false;
 			bool passReady = false;
 			bool constantsReady = false;
 			bool blendReady = false;
 			bool alphaTestReady = false;
-			bool drawmodeReady = false;
+			bool renderStatesReady = false;
 			bool geometryBindingReady = false;
 
 			void Reset()
@@ -733,14 +735,14 @@ namespace fonthook::vectorfont
 				constants = {};
 				blend = {};
 				alphaTest = {};
-				drawmode = {};
+				renderStates = {};
 				geometryBinding = {};
 				stampReady = false;
 				passReady = false;
 				constantsReady = false;
 				blendReady = false;
 				alphaTestReady = false;
-				drawmodeReady = false;
+				renderStatesReady = false;
 				geometryBindingReady = false;
 			}
 
@@ -750,7 +752,7 @@ namespace fonthook::vectorfont
 				constantsReady = false;
 				blendReady = false;
 				alphaTestReady = false;
-				drawmodeReady = false;
+				renderStatesReady = false;
 			}
 		};
 
@@ -1165,9 +1167,9 @@ namespace fonthook::vectorfont
 				&& left.alphaTestRef == right.alphaTestRef;
 		}
 
-		bool BuildSegmentDrawmodeStateKey(NiTriShape* geometry,
+		bool BuildSegmentRenderStatesKey(NiTriShape* geometry,
 			UInt32 currentPass, bool firstPass,
-			NativeSegmentDrawmodeStateKey& key)
+			NativeSegmentRenderStatesKey& key)
 		{
 			if (!geometry)
 				return false;
@@ -1189,9 +1191,9 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool SameSegmentDrawmodeState(
-			const NativeSegmentDrawmodeStateKey& left,
-			const NativeSegmentDrawmodeStateKey& right)
+		bool SameSegmentRenderStates(
+			const NativeSegmentRenderStatesKey& left,
+			const NativeSegmentRenderStatesKey& right)
 		{
 			return left.drawBoth == right.drawBoth
 				&& left.alphaTestEnabled
@@ -1331,7 +1333,7 @@ namespace fonthook::vectorfont
 				m_buffer = reinterpret_cast<NiGeometryBufferData*>(
 					m_syntheticBufferStorage.data());
 				ThisStdCall<void>(
-					kGeometryBufferDataConstructor, m_buffer);
+					kNiGeometryBufferDataConstructor, m_buffer);
 				m_syntheticBufferConstructed = true;
 				std::memset(&m_syntheticChip, 0,
 					sizeof(m_syntheticChip));
@@ -1375,7 +1377,7 @@ namespace fonthook::vectorfont
 				m_buffer->m_ppkVBChip = nullptr;
 				m_buffer->m_pkIB = nullptr;
 				ThisStdCall<void>(
-					kGeometryBufferDataDestructor, m_buffer);
+					kNiGeometryBufferDataDestructor, m_buffer);
 				m_buffer = m_originalBuffer;
 				m_chip = nullptr;
 				m_syntheticBufferConstructed = false;
@@ -1550,7 +1552,7 @@ namespace fonthook::vectorfont
 				if (m_atlasTexture.m_pObject != desiredTexture)
 				{
 					m_atlasTextureChanged = true;
-					ThisStdCall(kTileSetSourceTexture,
+					ThisStdCall(kTileImageSetSourceTexture,
 						m_tile, desiredTexture);
 					if (m_tile->sourceTexture.m_pObject
 						!= desiredTexture)
@@ -1624,7 +1626,7 @@ namespace fonthook::vectorfont
 				}
 				if (m_atlasTextureChanged && m_tile)
 				{
-					ThisStdCall(kTileSetSourceTexture,
+					ThisStdCall(kTileImageSetSourceTexture,
 						m_tile, m_atlasTexture.m_pObject);
 				}
 
@@ -1918,9 +1920,9 @@ namespace fonthook::vectorfont
 			if (!geometryVtable
 				|| !IsNativeFontAtlasShape(geometry)
 				|| geometryVtable[kGeometrySegmentedPredicateSlot]
-					!= reinterpret_cast<void*>(kNiGeometryFalsePredicate)
+					!= reinterpret_cast<void*>(kNiObjectNullGeometryCastPredicate)
 				|| geometryVtable[kGeometryResizablePredicateSlot]
-					!= reinterpret_cast<void*>(kNiGeometryFalsePredicate)
+					!= reinterpret_cast<void*>(kNiObjectNullGeometryCastPredicate)
 				|| geometry->GetSkinInstance() || geometry->GetControllers()
 				|| geometry->GetShader() != shader || !data
 				|| data->m_pkBuffData != buffer
@@ -2194,18 +2196,18 @@ namespace fonthook::vectorfont
 		NativeFontCommandBindState MakeNativeCommandBindState(
 			const BSShaderProperty::RenderPass* pass,
 			UInt32 currentPass, bool testAlpha,
-			bool blendAlpha, bool setupDrawmode)
+			bool blendAlpha, bool setupRenderStates)
 		{
 			NativeFontCommandBindState state;
 			state.firstPass = pass && pass->bIsFirst;
 			state.applyBlend = state.firstPass && blendAlpha
 				&& !CdeclCall<bool>(
-					kPassSuppressesBlendAlpha, currentPass);
+					kBSBatchRendererPassSuppressesBlendAlpha, currentPass);
 			state.applyAlphaTest = state.firstPass && testAlpha
 				&& (currentPass < 4 || currentPass > 5)
 				&& (currentPass < 0xE || currentPass > 0xF)
 				&& currentPass != 570;
-			state.applyDrawmode = setupDrawmode;
+			state.applyRenderStates = setupRenderStates;
 			return state;
 		}
 
@@ -2222,7 +2224,7 @@ namespace fonthook::vectorfont
 		bool RendererUsesSpecialPass(NiGeometry* geometry)
 		{
 			void* rendererState =
-				*reinterpret_cast<void**>(kRendererState);
+				*reinterpret_cast<void**>(kBSShaderManager_pRenderer);
 			if (!rendererState || !geometry)
 				return true;
 			// Retail B994F0 loads dword_11F9508 into ECX before calling
@@ -2231,7 +2233,7 @@ namespace fonthook::vectorfont
 			using PredicateFn =
 				bool(__thiscall*)(void*, NiGeometry*, UInt32);
 			return reinterpret_cast<PredicateFn>(
-				kGeometryUsesSpecialPass)(
+				kNiDX9RendererIsHardwareSkinned)(
 					rendererState, geometry, 0);
 		}
 
@@ -2369,15 +2371,15 @@ namespace fonthook::vectorfont
 			// prelude has executed yet. Mirror the retail order before entering
 			// the confirmed RenderPassImmediately_Standard branch.
 			*reinterpret_cast<BSShaderProperty::RenderPass**>(
-				kCurrentRenderPass) = pass;
-			*reinterpret_cast<UInt32*>(kCurrentRenderPassType) =
+				kBSShaderManager_pCurrentRenderPass) = pass;
+			*reinterpret_cast<UInt32*>(kBSShaderManager_eCurrentPass) =
 				currentPass;
 
 			const bool selectShader =
 				*reinterpret_cast<UInt32*>(
-					kSelectedRenderPassType) != currentPass
+					kBSBatchRenderer_uiLastPass) != currentPass
 				|| *reinterpret_cast<BSShader**>(
-					kSelectedShader) != shader;
+					kBSBatchRenderer_pLastShader) != shader;
 			if (selectShader)
 			{
 				// B99390 first tears down the previously selected shader and
@@ -2387,12 +2389,12 @@ namespace fonthook::vectorfont
 				// across that transition, even if the command stamp itself is
 				// otherwise unchanged.
 				InvalidateSegmentDeviceStateCache();
-				CdeclCall<void>(kSelectShaderForPass,
+				CdeclCall<void>(kBSBatchRendererBeginPass,
 					currentPass, shader);
 				if (*reinterpret_cast<UInt32*>(
-						kSelectedRenderPassType) != currentPass
+						kBSBatchRenderer_uiLastPass) != currentPass
 					|| *reinterpret_cast<BSShader**>(
-						kSelectedShader) != shader)
+						kBSBatchRenderer_pLastShader) != shader)
 				{
 					return false;
 				}
@@ -2402,7 +2404,7 @@ namespace fonthook::vectorfont
 			// retail default branch has no corresponding restoration call.
 
 			if (*reinterpret_cast<UInt8*>(
-					kVendorAlphaToCoverageEnabled))
+					kBSShaderManager_bTransparencyMultisampling))
 			{
 				// B98540 is the PC vendor alpha-to-coverage publisher, not an
 				// alpha-test-state owner. Publish the final Tile rule locally so
@@ -2413,7 +2415,7 @@ namespace fonthook::vectorfont
 				// this mandatory per-pass call cannot invalidate either cached
 				// output. Keep executing it to preserve the vendor extension's
 				// nesting semantics, but retain all four Standard-lite proofs.
-				CdeclCall<void>(kSetVendorAlphaToCoverageState,
+				CdeclCall<void>(kBSRenderStateSetAlphaToCoverageEnable,
 					ShouldEnableNativeFontVendorAlphaToCoverage(geometry),
 					false);
 			}
@@ -2499,7 +2501,7 @@ namespace fonthook::vectorfont
 
 		void ExecuteStandardPassLite(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			bool testAlpha, bool blendAlpha, bool setupDrawmode,
+			bool testAlpha, bool blendAlpha, bool setupRenderStates,
 			NiTriShape* geometry,
 			const NativeFontStandardPassLiteDispatch& dispatch,
 			const NativeFontDrawCommand& command,
@@ -2531,7 +2533,7 @@ namespace fonthook::vectorfont
 
 			using SetupStateFn = void(__thiscall*)(
 				TileShader*, const NiPropertyState*);
-			using SetupDrawmodeFn = void(__thiscall*)(
+			using SetupGeometryRenderStatesFn = void(__thiscall*)(
 				TileShader*, const NiPropertyState*, bool);
 			using PrepareGeometryFn = void(__thiscall*)(
 				TileShader*, NiGeometry*, UInt32,
@@ -2553,17 +2555,17 @@ namespace fonthook::vectorfont
 			const bool firstPass = pass->bIsFirst;
 			const bool blendApplicable = firstPass && blendAlpha
 				&& !CdeclCall<bool>(
-					kPassSuppressesBlendAlpha, currentPass);
+					kBSBatchRendererPassSuppressesBlendAlpha, currentPass);
 			const bool alphaTestApplicable = firstPass && testAlpha
 				&& (currentPass < 4 || currentPass > 5)
 				&& (currentPass < 0xE || currentPass > 0xF)
 				&& currentPass != 570;
-			const bool drawmodeApplicable = setupDrawmode;
+			const bool renderStatesApplicable = setupRenderStates;
 
 			NativeSegmentPassStateKey passState;
 			NativeSegmentBlendStateKey blendState;
 			NativeSegmentAlphaTestStateKey alphaState;
-			NativeSegmentDrawmodeStateKey drawmodeState;
+			NativeSegmentRenderStatesKey renderStatesKey;
 			const bool passKeyReady =
 				BuildSegmentPassStateKey(geometry, command, passState);
 			const bool passStateReady = deviceState && passKeyReady
@@ -2579,7 +2581,7 @@ namespace fonthook::vectorfont
 			else
 			{
 				reinterpret_cast<SetupStateFn>(
-					program.setupPass)(shader, properties);
+					program.setupGeometryTextures)(shader, properties);
 				if (deviceState)
 				{
 					RecordFreeTypePerf(
@@ -2697,7 +2699,7 @@ namespace fonthook::vectorfont
 			else
 			{
 				reinterpret_cast<SetupStateFn>(
-					program.updateConstants)(shader, properties);
+					program.setupGeometryConstants)(shader, properties);
 				if (deviceState)
 				{
 					RecordFreeTypePerf(
@@ -2735,7 +2737,7 @@ namespace fonthook::vectorfont
 					else
 					{
 						reinterpret_cast<SetupStateFn>(
-							program.setupBlend)(
+							program.setupGeometryAlphaBlending)(
 								shader, properties);
 						if (deviceState)
 						{
@@ -2771,7 +2773,7 @@ namespace fonthook::vectorfont
 					else
 					{
 						reinterpret_cast<SetupStateFn>(
-							program.setupAlphaTest)(
+							program.setupGeometryAlphaTesting)(
 								shader, properties);
 						if (deviceState)
 						{
@@ -2792,13 +2794,13 @@ namespace fonthook::vectorfont
 					}
 				}
 			}
-			else if (*reinterpret_cast<UInt8*>(kFirstPassState)
+			else if (*reinterpret_cast<UInt8*>(kBSBatchRenderer_bFirstPass)
 				&& !CdeclCall<bool>(
-					kPassSuppressesBlendAlpha, currentPass))
+					kBSBatchRendererPassSuppressesBlendAlpha, currentPass))
 			{
 				reinterpret_cast<SetupStateFn>(
 					program.setupNonFirstPass)(shader, properties);
-				*reinterpret_cast<UInt8*>(kFirstPassState) = 0;
+				*reinterpret_cast<UInt8*>(kBSBatchRenderer_bFirstPass) = 0;
 				if (deviceState)
 				{
 					// Slot 68 changes blend, Z-write and Z-function state
@@ -2807,41 +2809,41 @@ namespace fonthook::vectorfont
 					deviceState->InvalidateStates();
 				}
 			}
-			if (drawmodeApplicable)
+			if (renderStatesApplicable)
 			{
-				const bool drawmodeKeyReady =
-					BuildSegmentDrawmodeStateKey(
+				const bool renderStatesKeyReady =
+					BuildSegmentRenderStatesKey(
 						geometry, currentPass, firstPass,
-						drawmodeState);
-				const bool drawmodeStateReady =
-					deviceState && drawmodeKeyReady
-					&& deviceState->drawmodeReady
-					&& SameSegmentDrawmodeState(
-						deviceState->drawmode, drawmodeState);
-				if (drawmodeStateReady)
+						renderStatesKey);
+				const bool renderStatesStateReady =
+					deviceState && renderStatesKeyReady
+					&& deviceState->renderStatesReady
+					&& SameSegmentRenderStates(
+						deviceState->renderStates, renderStatesKey);
+				if (renderStatesStateReady)
 				{
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::
-							SegmentDeviceDrawmodeReuse);
+							SegmentDeviceRenderStatesReuse);
 				}
 				else
 				{
-					reinterpret_cast<SetupDrawmodeFn>(
-						program.setupDrawmode)(
+					reinterpret_cast<SetupGeometryRenderStatesFn>(
+						program.setupGeometryRenderStates)(
 							shader, properties, firstPass);
 					if (deviceState)
 					{
 						RecordFreeTypePerf(
 							FreeTypePerfCounter::
-								SegmentDeviceDrawmodeSet);
+								SegmentDeviceRenderStatesSet);
 					}
 				}
 				if (deviceState)
 				{
-					deviceState->drawmodeReady =
-						drawmodeKeyReady;
-					if (drawmodeKeyReady)
-						deviceState->drawmode = drawmodeState;
+					deviceState->renderStatesReady =
+						renderStatesKeyReady;
+					if (renderStatesKeyReady)
+						deviceState->renderStates = renderStatesKey;
 				}
 			}
 
@@ -2870,7 +2872,7 @@ namespace fonthook::vectorfont
 				if (deviceState)
 					deviceState->geometryBindingReady = false;
 				reinterpret_cast<PrepareGeometryFn>(
-					program.prepareGeometry)(
+					program.prepareGeometryForRendering)(
 						shader, geometry, 0,
 						preparedBuffer, properties);
 				NativeFontRenderImmediateAlt(geometry, nullptr, renderer);
@@ -2896,7 +2898,7 @@ namespace fonthook::vectorfont
 
 		bool InvokeGuardedNativeReplay(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			bool testAlpha, bool blendAlpha, bool setupDrawmode,
+			bool testAlpha, bool blendAlpha, bool setupRenderStates,
 			NiTriShape* geometry, const NativeFontDrawCommand* command,
 			bool preferStandardPassLite,
 			bool packetStatePrevalidated,
@@ -2994,7 +2996,7 @@ namespace fonthook::vectorfont
 			if (useStandardPassLite)
 			{
 				ExecuteStandardPassLite(pass, currentPass,
-					testAlpha, blendAlpha, setupDrawmode,
+					testAlpha, blendAlpha, setupRenderStates,
 					geometry, *liteDispatch, *command,
 					preparedBuffer, deviceStateStamp);
 				RecordFreeTypePerf(
@@ -3010,8 +3012,9 @@ namespace fonthook::vectorfont
 			InvalidateSegmentDeviceStateCache();
 			using DefaultPassFn = int(__cdecl*)(
 				BSShaderProperty::RenderPass*, bool, bool, bool);
-			reinterpret_cast<DefaultPassFn>(kRenderPassImmediatelyStandard)(
-				pass, testAlpha, blendAlpha, setupDrawmode);
+			reinterpret_cast<DefaultPassFn>(
+				kBSBatchRendererRenderPassImmediatelyStandard)(
+				pass, testAlpha, blendAlpha, setupRenderStates);
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandNativeReplay);
 			return true;
@@ -3019,7 +3022,7 @@ namespace fonthook::vectorfont
 
 		bool InvokeNativeCommandBootstrap(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			bool testAlpha, bool blendAlpha, bool setupDrawmode,
+			bool testAlpha, bool blendAlpha, bool setupRenderStates,
 			NiTriShape* geometry, const NativeFontDrawCommand* command,
 			bool preferStandardPassLite = false,
 			bool packetStatePrevalidated = false,
@@ -3028,7 +3031,7 @@ namespace fonthook::vectorfont
 				deviceStateStamp = nullptr)
 		{
 			if (InvokeGuardedNativeReplay(pass, currentPass,
-				testAlpha, blendAlpha, setupDrawmode,
+				testAlpha, blendAlpha, setupRenderStates,
 				geometry, command, preferStandardPassLite,
 				packetStatePrevalidated, preparedBuffer,
 				deviceStateStamp))
@@ -3037,7 +3040,7 @@ namespace fonthook::vectorfont
 			}
 			InvalidateSegmentDeviceStateCache();
 			State().originalRenderPassImmediately(pass, currentPass,
-				testAlpha, blendAlpha, setupDrawmode);
+				testAlpha, blendAlpha, setupRenderStates);
 			return false;
 		}
 
@@ -3284,7 +3287,7 @@ namespace fonthook::vectorfont
 
 		bool TryDrawNativeRetainedSpan(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			bool setupDrawmode, NiTriShape* facade,
+			bool setupRenderStates, NiTriShape* facade,
 			NativeFontShapePayload& payload,
 			UInt32 commandSpanIndex,
 			NativePacketDrawResult& draw)
@@ -3448,7 +3451,7 @@ namespace fonthook::vectorfont
 					? first->program->profile : nullptr;
 				bridge.bindState = MakeNativeCommandBindState(
 					pass, currentPass, false, true,
-					setupDrawmode);
+					setupRenderStates);
 				// PrepareNativeFontRingPacket just established the exact retained
 				// packet binding on this private proxy. The immediate callback
 				// only needs the mutation-epoch guard; rereading the full proxy
@@ -3464,7 +3467,7 @@ namespace fonthook::vectorfont
 						? &ContinueRetainedBridge : nullptr,
 					NativeImmediateCommandKind::SpanPacket, true);
 				InvokeNativeCommandBootstrap(pass, currentPass,
-					false, true, setupDrawmode, proxy, first,
+					false, true, setupRenderStates, proxy, first,
 					false, true);
 				if (immediateScope.Drew())
 				{
@@ -3542,7 +3545,7 @@ namespace fonthook::vectorfont
 
 		bool TryDrawSingletonFacadePacket(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			bool setupDrawmode, NiTriShape* shape,
+			bool setupRenderStates, NiTriShape* shape,
 			const NativeFontShapeMetadata& metadata, UInt64 validationToken,
 			NativePacketDrawResult& draw,
 			UInt32 directFacadeSinglePacketCommandIndex =
@@ -3799,7 +3802,7 @@ namespace fonthook::vectorfont
 						usedNativeReplay =
 							InvokeNativeCommandBootstrap(pass,
 							currentPass, false, true,
-							setupDrawmode, shape, command,
+							setupRenderStates, shape, command,
 							directFacadeCommandExecution,
 							bindingCurrent,
 							expectedBuffer,
@@ -3810,7 +3813,7 @@ namespace fonthook::vectorfont
 						InvalidateSegmentDeviceStateCache();
 						State().originalRenderPassImmediately(pass,
 							currentPass, false, true,
-							setupDrawmode);
+							setupRenderStates);
 					}
 					if (immediateScope.Drew())
 					{
@@ -3921,7 +3924,7 @@ namespace fonthook::vectorfont
 
 		NativePacketDrawResult DrawNativePacketSet(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			bool setupDrawmode, NiTriShape* facade,
+			bool setupRenderStates, NiTriShape* facade,
 			NativeFontShapePayload& payload,
 			UInt32 commandSpanIndex =
 				kInvalidNativeFontCommandIndex)
@@ -4024,7 +4027,7 @@ namespace fonthook::vectorfont
 					packetScope.Select(proxyShape);
 					State().originalRenderPassImmediately(pass,
 						currentPass, false, true,
-						setupDrawmode);
+						setupRenderStates);
 					draw.drewPacket = true;
 					++draw.drawnPacketCount;
 					RecordFreeTypePerf(FreeTypePerfCounter::TilePass);
@@ -4071,7 +4074,7 @@ namespace fonthook::vectorfont
 
 		bool TryDrawNativeSinglePacketDirect(
 			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
-			bool setupDrawmode, NiTriShape* facade,
+			bool setupRenderStates, NiTriShape* facade,
 			NativeFontShapePayload& payload,
 			NativePacketDrawResult& draw,
 			UInt32 commandSpanIndex =
@@ -4338,7 +4341,7 @@ namespace fonthook::vectorfont
 					}
 					usedNativeReplay =
 						InvokeNativeCommandBootstrap(pass, currentPass,
-						false, true, setupDrawmode,
+						false, true, setupRenderStates,
 						facade, command, singleCommandExecution,
 						true, binding->Buffer(),
 						segmentDeviceState);
@@ -4355,7 +4358,7 @@ namespace fonthook::vectorfont
 					InvalidateSegmentDeviceStateCache();
 					State().originalRenderPassImmediately(pass,
 						currentPass, false, true,
-						setupDrawmode);
+						setupRenderStates);
 				}
 				if (immediateScope.Drew())
 				{
@@ -4753,7 +4756,7 @@ namespace fonthook::vectorfont
 	}
 
 	void __cdecl NativeFontRenderPassImmediately(BSShaderProperty::RenderPass* pass,
-		UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupDrawmode)
+		UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupRenderStates)
 	{
 		NativeFontShapeState& state = State();
 		if (!state.originalRenderPassImmediately)
@@ -4773,7 +4776,7 @@ namespace fonthook::vectorfont
 			// viewport identity remain unchanged.
 			InvalidateNativeFontSortedShaderStateForForeignRenderPass();
 			state.originalRenderPassImmediately(pass, currentPass, testAlpha,
-				blendAlpha, setupDrawmode);
+				blendAlpha, setupRenderStates);
 			// Clear any state rebuilt by a nested callback without advancing the
 			// command boundary twice. The next native submission must republish all
 			// private pixel and Vanilla-layout vertex constants.
@@ -4919,7 +4922,7 @@ namespace fonthook::vectorfont
 									shader, currentPass);
 							state.originalRenderPassImmediately(pass,
 								currentPass, testAlpha, blendAlpha,
-								setupDrawmode);
+								setupRenderStates);
 							vanillaLayoutDrawn = true;
 							RecordFreeTypePerf(
 								FreeTypePerfCounter::VanillaLayoutDraw);
@@ -4984,7 +4987,7 @@ namespace fonthook::vectorfont
 					&& directFacadeSinglePacketCommandIndex
 						!= kInvalidNativeFontCommandIndex;
 				bool handled = TryDrawSingletonFacadePacket(pass, currentPass,
-					setupDrawmode, shape, *metadata, validationToken, draw,
+					setupRenderStates, shape, *metadata, validationToken, draw,
 					commandCurrent ? directFacadeSinglePacketCommandIndex
 						: kInvalidNativeFontCommandIndex);
 				if (!handled)
@@ -5112,7 +5115,7 @@ namespace fonthook::vectorfont
 					&& commandView.span->commandCount > 1)
 				{
 					commandHandled = TryDrawNativeRetainedSpan(
-						pass, currentPass, setupDrawmode,
+						pass, currentPass, setupRenderStates,
 						shape, *sourcePayload,
 						commandSpanIndex, draw);
 				}
@@ -5128,7 +5131,7 @@ namespace fonthook::vectorfont
 				draw = {};
 				const bool directShapeHandled = sortedFrameHit
 					&& TryDrawNativeSinglePacketDirect(
-						pass, currentPass, setupDrawmode,
+						pass, currentPass, setupRenderStates,
 						shape, *sourcePayload, draw,
 						commandSpanIndex,
 						frameEntry.singlePacketCommandIndex);
@@ -5141,7 +5144,7 @@ namespace fonthook::vectorfont
 							SingletonFacadePacketLoopFrame);
 					}
 					draw = DrawNativePacketSet(pass, currentPass,
-						setupDrawmode, shape, *sourcePayload,
+						setupRenderStates, shape, *sourcePayload,
 						kInvalidNativeFontCommandIndex);
 				}
 			}
@@ -5234,7 +5237,8 @@ namespace fonthook::vectorfont
 			}
 			return false;
 		}
-		if (reinterpret_cast<UInt32>(current) != kVanillaRenderPassImmediately)
+		if (reinterpret_cast<UInt32>(current)
+			!= kBSBatchRendererRenderPassImmediately)
 		{
 			if (!State().loggedRenderPassImmediatelyHookConflict)
 			{
@@ -5389,7 +5393,7 @@ namespace fonthook::vectorfont
 		NativeFontShapeState& state = State();
 		state.originalTriShapeVtable = source;
 		const void* expectedFalsePredicate =
-			reinterpret_cast<void*>(kNiGeometryFalsePredicate);
+			reinterpret_cast<void*>(kNiObjectNullGeometryCastPredicate);
 		const bool predicateSlotsMatch =
 			source[kGeometrySpecialPredicateSlot]
 				== expectedFalsePredicate

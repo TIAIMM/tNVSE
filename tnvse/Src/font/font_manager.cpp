@@ -791,14 +791,15 @@ namespace fonthook
 			return count;
 		}
 
-		void LogTextDocDestroy(FontManager::TextDoc* apDoc, UInt32 clearedExtraCount, UInt32 remainingDocExtraCount)
+		void LogTextDocDestructor(FontManager::TextDoc* apDoc,
+			UInt32 clearedExtraCount, UInt32 remainingDocExtraCount)
 		{
 			if (remainingDocExtraCount == 0)
 				return;
 
 			gLog.FormattedMessage(
 				"tnvse_rich_text_destroy:\n"
-				"  hook=TextDoc::Destroy\n"
+				"  hook=TextDoc::~TextDoc\n"
 				"  phase=enter\n"
 				"  textDoc=0x%08X\n"
 				"  doc: pageWidth=%d pageHeight=%d pageNum=%d pageCount=%u\n"
@@ -813,7 +814,7 @@ namespace fonthook
 				(UInt32)sRichTextCharExtras.size());
 		}
 
-		void CallTextDocDestroy(FontManager::TextDoc* apDoc)
+		void CallTextDocDestructor(FontManager::TextDoc* apDoc)
 		{
 			ThisStdCall(0xA1B990, apDoc);
 		}
@@ -931,7 +932,7 @@ namespace fonthook
 		Font* activeFont = ResolveGameFont(this, fontID);
 		if (!srcString || !activeFont || !activeFont->pFontData)
 		{
-			*outDimensions = StringDefaultDimensions;
+			*outDimensions = NiPoint3_ZERO;
 			return outDimensions;
 		}
 
@@ -947,7 +948,7 @@ namespace fonthook
 				reinterpret_cast<FontEx*>(activeFont), srcString, maxWrapWidth,
 				startCharIndex, *outDimensions))
 			{
-				*outDimensions = StringDefaultDimensions;
+				*outDimensions = NiPoint3_ZERO;
 			}
 			return outDimensions;
 		}
@@ -973,7 +974,7 @@ namespace fonthook
 		if (!bSkipDictionaryTranslation && TranslateText(srcString, sTranslatedStr))
 			srcString = sTranslatedStr.c_str();
 
-		NiPoint3 StringDimensions = StringDefaultDimensions;
+		NiPoint3 StringDimensions = NiPoint3_ZERO;
 		int sourceStringLength = strlen(srcString);
 		FontLetter* fontCharMetrics = activeFont->pFontData->pFontLetters;
 		float fontBaseLine = activeFont->pFontData->fBaseLine;
@@ -1007,7 +1008,7 @@ namespace fonthook
 				reinterpret_cast<FontEx*>(activeFont), srcString, maxWrapWidth,
 				alignedStart, *outDimensions))
 			{
-				*outDimensions = StringDefaultDimensions;
+				*outDimensions = NiPoint3_ZERO;
 			}
 			return outDimensions;
 		}
@@ -1282,14 +1283,14 @@ namespace fonthook
 		EndFreeTypeRichTextRender();
 	}
 
-	void __thiscall FontManagerEx::TextDocDestroy()
+	void __thiscall FontManagerEx::TextDocDestructor()
 	{
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
 		DiscardPendingRichTextLead(doc);
 		UInt32 clearedExtraCount = ClearRichTextCharExtrasForDoc(doc);
 		UInt32 remainingExtraCount = CountRichTextCharExtrasForDoc(doc);
-		LogTextDocDestroy(doc, clearedExtraCount, remainingExtraCount);
-		CallTextDocDestroy(doc);
+		LogTextDocDestructor(doc, clearedExtraCount, remainingExtraCount);
+		CallTextDocDestructor(doc);
 	}
 
 	void __thiscall FontManagerEx::TextDocAddChar(FontManager::CharData* apChar, int aiNewLines, bool abNewPage)

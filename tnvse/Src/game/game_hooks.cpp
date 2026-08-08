@@ -29,7 +29,7 @@ namespace fonthook
 		inline constexpr SIZE_T kFontLoad = 0xA15320;
 		inline constexpr SIZE_T kFontCreateText = 0xA12880;
 		inline constexpr SIZE_T kFontMakeString = 0xA12460;
-		inline constexpr SIZE_T kCalculateStringDimensions = 0xA1B020;
+		inline constexpr SIZE_T kFontManagerCalculateStringDimensions = 0xA1B020;
 		inline constexpr SIZE_T kFontPrepText = 0xA12FB0;
 		inline constexpr Rel32Site kDoorPromptCallSite = {
 			0x777006, 0x406D00, "Door prompt -> BSsprintf"
@@ -139,7 +139,7 @@ namespace fonthook
 			return valid;
 		}
 
-		using FontInitFn = Font* (__thiscall*)(Font*, int, char*, bool);
+		using FontConstructorFn = Font* (__thiscall*)(Font*, int, char*, bool);
 		using FontLoadFn = void (__thiscall*)(Font*);
 		using FontCreateTextFn = void (__thiscall*)(Font*, BSStringT<char>*,
 			int*, int*, int, int, int, char, const NiColorA*, NiTriShape**, NiTriShape**);
@@ -148,7 +148,7 @@ namespace fonthook
 		using CalculateStringDimensionsFn = NiPoint3* (__thiscall*)(FontManager*,
 			NiPoint3*, const char*, UInt32, float, UInt32);
 
-		FontInitFn s_originalFontInit = nullptr;
+		FontConstructorFn s_originalFontConstructor = nullptr;
 		FontLoadFn s_originalFontLoad = nullptr;
 		FontCreateTextFn s_originalFontCreateText = nullptr;
 		FontMakeStringFn s_originalFontMakeString = nullptr;
@@ -170,7 +170,7 @@ namespace fonthook
 			return std::memcpy(destination, source, byteCount);
 		}
 
-		constexpr std::array<UInt8, 5> kFontInitPrologue = {
+		constexpr std::array<UInt8, 5> kFontConstructorPrologue = {
 			0x55, 0x8B, 0xEC, 0x6A, 0xFF
 		};
 		constexpr std::array<UInt8, 5> kFontLoadPrologue = {
@@ -258,11 +258,13 @@ namespace fonthook
 		bool InstallCoreFontEntryHooks()
 		{
 			std::array<PendingTrampoline, 5> trampolines = {{
-				{ kFontConstructor, kFontInitPrologue.data(), kFontInitPrologue.size() },
+				{ kFontConstructor, kFontConstructorPrologue.data(), kFontConstructorPrologue.size() },
 				{ kFontLoad, kFontLoadPrologue.data(), kFontLoadPrologue.size() },
 				{ kFontCreateText, kFontCreateTextPrologue.data(), kFontCreateTextPrologue.size() },
 				{ kFontMakeString, kFontMakeStringPrologue.data(), kFontMakeStringPrologue.size() },
-				{ kCalculateStringDimensions, kCalculateDimensionsPrologue.data(), kCalculateDimensionsPrologue.size() }
+				{ kFontManagerCalculateStringDimensions,
+					kCalculateDimensionsPrologue.data(),
+					kCalculateDimensionsPrologue.size() }
 			}};
 
 			for (PendingTrampoline& trampoline : trampolines)
@@ -277,25 +279,26 @@ namespace fonthook
 				return false;
 			}
 
-			s_originalFontInit = reinterpret_cast<FontInitFn>(trampolines[0].code);
+			s_originalFontConstructor =
+				reinterpret_cast<FontConstructorFn>(trampolines[0].code);
 			s_originalFontLoad = reinterpret_cast<FontLoadFn>(trampolines[1].code);
 			s_originalFontCreateText = reinterpret_cast<FontCreateTextFn>(trampolines[2].code);
 			s_originalFontMakeString = reinterpret_cast<FontMakeStringFn>(trampolines[3].code);
 			s_originalCalculateStringDimensions =
 				reinterpret_cast<CalculateStringDimensionsFn>(trampolines[4].code);
 
-			WriteRelJumpEx(kFontConstructor, &FontEx::FontInit);
+			WriteRelJumpEx(kFontConstructor, &FontEx::FontConstructor);
 			WriteRelJumpEx(kFontLoad, &FontEx::Load);
 			WriteRelJumpEx(kFontCreateText, &FontEx::CreateText);
 			WriteRelJumpEx(kFontMakeString, &FontEx::MakeString);
 			PatchMemoryNop(kFontMakeString + 5, kFontMakeStringPrologue.size() - 5);
-			WriteRelJumpEx(kCalculateStringDimensions,
+			WriteRelJumpEx(kFontManagerCalculateStringDimensions,
 				&FontManagerEx::CalculateStringDimensions);
-			PatchMemoryNop(kCalculateStringDimensions + 5,
+			PatchMemoryNop(kFontManagerCalculateStringDimensions + 5,
 				kCalculateDimensionsPrologue.size() - 5);
 
 			const std::array<SIZE_T, 5> hookTargets = {{
-				MemberFunctionAddress(&FontEx::FontInit),
+				MemberFunctionAddress(&FontEx::FontConstructor),
 				MemberFunctionAddress(&FontEx::Load),
 				MemberFunctionAddress(&FontEx::CreateText),
 				MemberFunctionAddress(&FontEx::MakeString),
@@ -324,7 +327,7 @@ namespace fonthook
 						trampoline.expected, trampoline.length);
 					VirtualFree(trampoline.code, 0, MEM_RELEASE);
 				}
-				s_originalFontInit = nullptr;
+				s_originalFontConstructor = nullptr;
 				s_originalFontLoad = nullptr;
 				s_originalFontCreateText = nullptr;
 				s_originalFontMakeString = nullptr;
@@ -470,10 +473,11 @@ namespace fonthook
 
 	}
 
-	Font* CallOriginalFontInit(Font* font, int fontNum, char* filename, bool load)
+	Font* CallOriginalFontConstructor(
+		Font* font, int fontNum, char* filename, bool load)
 	{
-		return s_originalFontInit
-			? s_originalFontInit(font, fontNum, filename, load) : nullptr;
+		return s_originalFontConstructor
+			? s_originalFontConstructor(font, fontNum, filename, load) : nullptr;
 	}
 
 	void CallOriginalFontLoad(Font* font)
@@ -702,8 +706,8 @@ namespace fonthook
 		WriteRelCall(0xA17D5D, &FontManagerEx::CollectToAttributeValue);
 		WriteRelCall(0xA17DE9, &FontManagerEx::CollectToAttributeValue);
 
-		// FontManager::CreateText -> TextDoc::Destroy
-		WriteRelCallEx(0xA18F7D, &FontManagerEx::TextDocDestroy);
+		// FontManager::CreateText -> FontManager::TextDoc::~TextDoc
+		WriteRelCallEx(0xA18F7D, &FontManagerEx::TextDocDestructor);
 
 		// FontManager::PrepHypertext -> TextDoc::AddChar
 		WriteRelCallEx(0xA178A4, &FontManagerEx::TextDocAddChar);
@@ -725,9 +729,11 @@ namespace fonthook
 		WriteRelCall(0xA18D73, &FontManagerEx::CharDataCopy);
 
 		// Tile::SetString - Quest Text
-		WriteRelCall(0x77AF4B, &TileSetStringHookForQueueText);
+		WriteRelCall(0x77AF4B,
+			&TileSetStringHookForQuestAndLocationText);
 		// Tile::SetString - Location Text
-		WriteRelCall(0x772B5E, &TileSetStringHookForQueueText);
+		WriteRelCall(0x772B5E,
+			&TileSetStringHookForQuestAndLocationText);
 
 		// BSStringT<char>::c_str - Terminal UTF8 conversion
 		WriteRelCall(0x7591AC, &BSString_c_strHook);

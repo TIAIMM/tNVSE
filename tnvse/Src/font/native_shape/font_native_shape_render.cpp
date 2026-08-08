@@ -646,7 +646,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			ThisStdCall<void>(kGeometryBufferDataConstructor, buffer);
+			ThisStdCall<void>(kNiGeometryBufferDataConstructor, buffer);
 			std::memset(chipMemory, 0,
 				sizeof(NiVBChip*) + sizeof(NiVBChip));
 			auto** chips = static_cast<NiVBChip**>(chipMemory);
@@ -792,7 +792,7 @@ namespace fonthook::vectorfont
 				buffer->m_ppkVBChip = nullptr;
 				buffer->m_pkIB = nullptr;
 				ThisStdCall<void>(
-					kGeometryBufferDataDestructor, buffer);
+					kNiGeometryBufferDataDestructor, buffer);
 				NiDelete(buffer, sizeof(NiGeometryBufferData));
 			}
 			if (slot.bindingStride)

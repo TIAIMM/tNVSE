@@ -29,12 +29,14 @@ namespace fonthook::vectorfont
 		// the Tile/Interface callback at 0x11F9F80[10] (instruction 0xB576D6).
 		// Hook that narrow callback instead of the global RegisterObject vtable so
 		// scene, water, shadow, and post-process accumulators never enter tNVSE.
-		inline constexpr UInt32 kRegisterObjectFunctionTable = 0x11F9F80;
+		inline constexpr UInt32 kBSShaderAccumulatorRegisterObjectFunctions =
+			0x11F9F80;
 		inline constexpr UInt32 kTileRegisterObjectFunctionEntry =
-			kRegisterObjectFunctionTable
+			kBSShaderAccumulatorRegisterObjectFunctions
 			+ static_cast<UInt32>(BSShaderManager::BSSM_RENDER_TILES)
 				* sizeof(void*);
-		inline constexpr UInt32 kVanillaTileRegisterObject = 0xB65A90;
+		inline constexpr UInt32 kBSShaderAccumulatorRegisterObjectInterface =
+			0xB65A90;
 		inline constexpr UInt32 kMaximumMissingMetadataLogs = 8;
 		inline constexpr size_t kMaximumLinearTieRepairItems = 8192;
 		inline constexpr UInt32 kRegisterRouteSampleRate = 256;
@@ -1958,7 +1960,7 @@ namespace fonthook::vectorfont
 				state.originalRenderAlphaGeometry;
 			if (installedPredecessor
 				&& current != reinterpret_cast<RenderAlphaGeometryFn>(
-					kVanillaRenderAlphaGeometry)
+					kBSShaderAccumulatorRenderAlphaGeometry)
 				&& current != installedPredecessor)
 			{
 				if (!state.loggedRenderAlphaGeometryHookConflict)
@@ -2003,7 +2005,7 @@ namespace fonthook::vectorfont
 					"tnvse_freetype_native: installed RenderAlphaGeometry frame route predecessor=%p vanilla=%u",
 					current,
 					reinterpret_cast<SIZE_T>(current)
-						== kVanillaRenderAlphaGeometry ? 1u : 0u);
+						== kBSShaderAccumulatorRenderAlphaGeometry ? 1u : 0u);
 			}
 			return true;
 		}
@@ -2146,7 +2148,7 @@ namespace fonthook::vectorfont
 			s_originalTileRegisterObject.load(std::memory_order_acquire);
 		if (installedPredecessor
 			&& current != reinterpret_cast<TileRegisterObjectFn>(
-				kVanillaTileRegisterObject)
+				kBSShaderAccumulatorRegisterObjectInterface)
 			&& current != installedPredecessor)
 		{
 			if (!s_loggedTileRegisterObjectConflict)
@@ -2160,12 +2162,13 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		if (reinterpret_cast<SIZE_T>(current) != kVanillaTileRegisterObject
+		if (reinterpret_cast<SIZE_T>(current)
+			!= kBSShaderAccumulatorRegisterObjectInterface
 			&& g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
 				"tnvse_freetype_native: chaining pre-existing Tile RegisterObject dispatch target=%p vanilla=%08X",
-				current, kVanillaTileRegisterObject);
+				current, kBSShaderAccumulatorRegisterObjectInterface);
 		}
 
 		const TileRegisterObjectFn previousOriginal = installedPredecessor;
@@ -2213,7 +2216,7 @@ namespace fonthook::vectorfont
 				"tnvse_freetype_native: installed Tile RegisterObject dispatch route entry=%08X predecessor=%p vanilla=%u",
 				kTileRegisterObjectFunctionEntry, current,
 				reinterpret_cast<SIZE_T>(current)
-					== kVanillaTileRegisterObject ? 1u : 0u);
+					== kBSShaderAccumulatorRegisterObjectInterface ? 1u : 0u);
 		}
 		return true;
 	}

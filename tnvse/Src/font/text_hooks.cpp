@@ -90,7 +90,8 @@ namespace fonthook
 	}
 
 	// ==================== Quest/Location Text Hook ====================
-	void* __fastcall TileSetStringHookForQueueText(void* pThis, void*, int a2, char* a3, bool a4)
+	void* __fastcall TileSetStringHookForQuestAndLocationText(
+		void* pThis, void*, int a2, char* a3, bool a4)
 	{
 		if (!a3)
 			return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);

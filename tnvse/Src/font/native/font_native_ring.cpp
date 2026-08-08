@@ -119,7 +119,7 @@ namespace fonthook::vectorfont
 		static_assert(kScissorTailOffset + kScissorTailSize
 			== kScissorTriShapeSize);
 		static_assert(sizeof(TileShaderPropertyView) == 0xB0);
-		// Retail TileShader::UpdateConstants reads the live color at +0x68 and
+		// Retail TileShader::SetupGeometryConstants reads the live color at +0x68 and
 		// tile alpha at +0x78. Keep the proxy view tied to that executable ABI;
 		// a layout drift here would silently turn every shader-side color fix into
 		// reads from the wrong fields.
@@ -362,7 +362,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			ThisStdCall<void>(kGeometryBufferDataConstructor, buffer);
+			ThisStdCall<void>(kNiGeometryBufferDataConstructor, buffer);
 			std::memset(chipMemory, 0, sizeof(NiVBChip*) + sizeof(NiVBChip));
 			auto** chips = static_cast<NiVBChip**>(chipMemory);
 			NiVBChip* chip = reinterpret_cast<NiVBChip*>(

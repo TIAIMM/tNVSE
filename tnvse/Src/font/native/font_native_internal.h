@@ -771,7 +771,7 @@ namespace fonthook::vectorfont
 		// Standard v2 elides a TileShader callback only when the generation was
 		// built from a reverse-verified retail implementation or a deterministic
 		// tNVSE-owned implementation for that slot.
-		// The live slot-31 entry is NativeUpdateConstants, so its proof bit
+		// The live slot-31 entry is NativeSetupGeometryConstants, so its proof bit
 		// describes the vanilla callback retained by the native vtable sidecar.
 		static constexpr UInt8 kStandardSlot30Proof = 1u << 0;
 		static constexpr UInt8 kStandardSlot31Proof = 1u << 1;
@@ -795,12 +795,12 @@ namespace fonthook::vectorfont
 		// table. The command buffer
 		// may use these generation-owned pointers only after proving that the
 		// live native TileShader still publishes the same vtable entries.
-		void* prepareGeometry = nullptr;
-		void* setupPass = nullptr;
-		void* updateConstants = nullptr;
-		void* setupBlend = nullptr;
-		void* setupAlphaTest = nullptr;
-		void* setupDrawmode = nullptr;
+		void* prepareGeometryForRendering = nullptr;
+		void* setupGeometryTextures = nullptr;
+		void* setupGeometryConstants = nullptr;
+		void* setupGeometryAlphaBlending = nullptr;
+		void* setupGeometryAlphaTesting = nullptr;
+		void* setupGeometryRenderStates = nullptr;
 		void* postGeometry = nullptr;
 		void* setupNonFirstPass = nullptr;
 		UInt32 generation = 0;
@@ -819,7 +819,7 @@ namespace fonthook::vectorfont
 	{
 		bool applyBlend = false;
 		bool applyAlphaTest = false;
-		bool applyDrawmode = false;
+		bool applyRenderStates = false;
 		bool firstPass = false;
 	};
 

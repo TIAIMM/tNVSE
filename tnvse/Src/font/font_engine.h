@@ -9,7 +9,7 @@
 namespace fonthook
 {
 	// ---- Constants ----
-	static constexpr UInt32 kTlsIndexAddr = 0x126FD98;
+	static constexpr UInt32 kTlsIndexAddress = 0x126FD98;
 	static constexpr UInt32 kTlsSlotValue = 12;
 	static constexpr int kTlsByteOffset = 692;
 	static constexpr UInt32 kFontDataSize = 0x3928;
@@ -29,7 +29,7 @@ namespace fonthook
 	public:
 		TlsSlotGuard()
 		{
-			UInt32* pTlsIndex = (UInt32*)kTlsIndexAddr;
+			UInt32* pTlsIndex = (UInt32*)kTlsIndexAddress;
 			UInt32 tebAddress;
 			__asm {
 				mov eax, fs: [0x18]
@@ -53,7 +53,7 @@ namespace fonthook
 	class FontEx : public Font
 	{
 	public:
-		Font* FontInit(int iFontNum, char* apFilename, bool abLoad);
+		Font* FontConstructor(int iFontNum, char* apFilename, bool abLoad);
 		void Load();
 		void __thiscall PrepTextForTerminal(const char* apOrigString, Font::TextData* axData);
 		void __thiscall PrepText(const char* apOrigString, Font::TextData* axData);

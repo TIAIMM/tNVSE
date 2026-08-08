@@ -1,5 +1,6 @@
 #include "multibyte_input_internal.h"
 #include "hook_identity.h"
+#include "native_calls.h"
 
 // Vanilla TextEditMenu editing plus the JIP LN text-input adapter.
 
@@ -7,13 +8,13 @@ namespace fonthook
 {
 	namespace multibyte_input
 	{
-		constexpr SIZE_T kPlayerNameTextEditOpenCall = 0x7AB740;
+		constexpr SIZE_T kPlayerNameEntryMenuTextEditMenuOpenCallSite = 0x7AB740;
 		constexpr SIZE_T kVanillaTextEditMenuOpen = 0x7E6320;
-		constexpr SIZE_T kPlayerNameIsValidName = 0x7AB820;
+		constexpr SIZE_T kPlayerNameEntryMenuIsValidName = 0x7AB820;
 		constexpr SIZE_T kTextEditMenuVTable = 0x1070034;
 		constexpr SIZE_T kTextEditMenuHandleKeyboardInput = 0x7E6620;
-		constexpr SIZE_T kTextEditMenuInputVTableEntry = 0x1070064;
-		constexpr SIZE_T kTextEditStateInputCallInHandleKeyboardInput = 0x7E6685;
+		constexpr SIZE_T kTextEditMenuHandleKeyboardInputVTableEntry = 0x1070064;
+		constexpr SIZE_T kTextEditStateInputCallSiteInHandleKeyboardInput = 0x7E6685;
 		constexpr SIZE_T kVanillaTextEditStateInput = 0x716B00;
 		constexpr UInt32 kMaxTextEditRawBytes = 1023;
 		constexpr UInt32 kJipNumericOnlyFlag = 1;
@@ -64,7 +65,9 @@ namespace fonthook
 			if (!current)
 				return nullptr;
 
-			if (*reinterpret_cast<SIZE_T*>(kTextEditMenuInputVTableEntry) != kTextEditMenuHandleKeyboardInput)
+			if (*reinterpret_cast<SIZE_T*>(
+					kTextEditMenuHandleKeyboardInputVTableEntry)
+				!= kTextEditMenuHandleKeyboardInput)
 				return nullptr;
 
 			if (!current->xEditState.IsActive())
@@ -75,7 +78,8 @@ namespace fonthook
 
 		SIZE_T CurrentTextEditInputHandler()
 		{
-			return *reinterpret_cast<SIZE_T*>(kTextEditMenuInputVTableEntry);
+			return *reinterpret_cast<SIZE_T*>(
+				kTextEditMenuHandleKeyboardInputVTableEntry);
 		}
 
 		SIZE_T JipTextInputHandlerAddress()
@@ -252,7 +256,7 @@ namespace fonthook
 				return;
 
 			s_jipOriginalInputHandler = currentHandler;
-			SafeWrite32(kTextEditMenuInputVTableEntry, hookHandler);
+			SafeWrite32(kTextEditMenuHandleKeyboardInputVTableEntry, hookHandler);
 			if (CurrentTextEditInputHandler() != hookHandler)
 			{
 				ClearJipTextInputHookState();
@@ -793,7 +797,7 @@ namespace fonthook
 				}
 
 				UInt8 converted = ch;
-				Font::ConvertCharacter(converted);
+				ConvertToAsciiQuotes(&converted);
 				if (converted == '\\' || converted == '~')
 					return false;
 
@@ -813,7 +817,8 @@ namespace fonthook
 			static bool __cdecl Open(const char* apTitle, const char* apInitialText, ValidateTextCallback apValidateText)
 			{
 				ValidateTextCallback validateText = apValidateText;
-				if (reinterpret_cast<SIZE_T>(apValidateText) == kPlayerNameIsValidName)
+				if (reinterpret_cast<SIZE_T>(apValidateText)
+					== kPlayerNameEntryMenuIsValidName)
 					validateText = &ValidatePlayerName;
 
 				const bool opened = TextEditMenu::Open(apTitle, apInitialText, validateText);
@@ -939,11 +944,11 @@ namespace fonthook
 					return;
 				case kTextEditInput_Confirm:
 					DebugLogState("TextEditState::Input", "pass_original", menu, aiInput);
-					apState->InputUnk01(aiInput, aiChar);
+					apState->Input(aiInput, aiChar);
 					return;
 				default:
 					DebugLogState("TextEditState::Input", "pass_original", menu, aiInput);
-					apState->InputUnk01(aiInput, aiChar);
+					apState->Input(aiInput, aiChar);
 					return;
 				}
 			}
@@ -955,12 +960,12 @@ namespace fonthook
 			SIZE_T openTarget = 0;
 			SIZE_T inputTarget = 0;
 			if (!hook_identity::ReadRel32Target(
-					kPlayerNameTextEditOpenCall,
+					kPlayerNameEntryMenuTextEditMenuOpenCallSite,
 					Rel32Opcode::Call,
 					openTarget)
 				|| openTarget != kVanillaTextEditMenuOpen
 				|| !hook_identity::ReadRel32Target(
-					kTextEditStateInputCallInHandleKeyboardInput,
+					kTextEditStateInputCallSiteInHandleKeyboardInput,
 					Rel32Opcode::Call,
 					inputTarget)
 				|| inputTarget != kVanillaTextEditStateInput)
@@ -972,21 +977,23 @@ namespace fonthook
 				return;
 			}
 
-			WriteRelCall(kPlayerNameTextEditOpenCall, &TextEditMenuEx::Open);
-			WriteRelCall(kTextEditStateInputCallInHandleKeyboardInput, &TextEditStateEx::Input);
+			WriteRelCall(kPlayerNameEntryMenuTextEditMenuOpenCallSite,
+				&TextEditMenuEx::Open);
+			WriteRelCall(kTextEditStateInputCallSiteInHandleKeyboardInput,
+				&TextEditStateEx::Input);
 			const bool installed = hook_identity::MatchesRel32Target(
-				kPlayerNameTextEditOpenCall,
+				kPlayerNameEntryMenuTextEditMenuOpenCallSite,
 				Rel32Opcode::Call,
 				reinterpret_cast<SIZE_T>(&TextEditMenuEx::Open))
 				&& hook_identity::MatchesRel32Target(
-					kTextEditStateInputCallInHandleKeyboardInput,
+					kTextEditStateInputCallSiteInHandleKeyboardInput,
 					Rel32Opcode::Call,
 					reinterpret_cast<SIZE_T>(&TextEditStateEx::Input));
 			if (!installed)
 			{
-				WriteRelCall(kPlayerNameTextEditOpenCall,
+				WriteRelCall(kPlayerNameEntryMenuTextEditMenuOpenCallSite,
 					kVanillaTextEditMenuOpen);
-				WriteRelCall(kTextEditStateInputCallInHandleKeyboardInput,
+				WriteRelCall(kTextEditStateInputCallSiteInHandleKeyboardInput,
 					kVanillaTextEditStateInput);
 				gLog.FormattedMessage(
 					"tnvse_multibyte_input: TextEdit hook write verification failed; restored vanilla targets");
@@ -1001,7 +1008,8 @@ namespace fonthook
 					&& s_jipOriginalInputHandler != JipTextInputHandlerAddress()
 					? s_jipOriginalInputHandler
 					: kTextEditMenuHandleKeyboardInput;
-				SafeWrite32(kTextEditMenuInputVTableEntry, predecessor);
+				SafeWrite32(
+					kTextEditMenuHandleKeyboardInputVTableEntry, predecessor);
 			}
 
 			ClearJipTextInputHookState();

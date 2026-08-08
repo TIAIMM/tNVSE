@@ -444,7 +444,7 @@ namespace fonthook::vectorfont
 		{
 			const NiPixelFormat* pixelFormat = mode == AtlasPixelMode::A8
 				? FindA8PixelFormat()
-				: reinterpret_cast<const NiPixelFormat*>(0x11AA2A0);
+				: &NiPixelFormat_RGBA32;
 			const UInt32 maximumMipLevels = GetAtlasMipLevelCount(width, height);
 			if (!pixelFormat || !mipLevels || mipLevels > maximumMipLevels)
 				return nullptr;

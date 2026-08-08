@@ -19,7 +19,7 @@ namespace fonthook
 	bool AreMultibyteFontHooksInstalled();
 	bool AreFreeTypeFontHooksInstalled();
 
-	Font* CallOriginalFontInit(
+	Font* CallOriginalFontConstructor(
 		Font* font, int fontNum, char* filename, bool load);
 	void CallOriginalFontLoad(Font* font);
 	void CallOriginalFontCreateText(

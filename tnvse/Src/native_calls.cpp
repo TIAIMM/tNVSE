@@ -1,4 +1,5 @@
 #include "MemoryManager.hpp"
+#include "NiPixelFormat.hpp"
 #include "native_calls.h"
 
 namespace fonthook
@@ -51,6 +52,9 @@ namespace fonthook
 
 	// ---- Global singletons ----
 	MemoryManager* MemoryManager_s_Instance = reinterpret_cast<MemoryManager*>(0x11F6238);
-	NiPoint3& StringDefaultDimensions = *reinterpret_cast<NiPoint3*>(0x11F426C);
+	const NiPoint3& NiPoint3_ZERO =
+		*reinterpret_cast<const NiPoint3*>(0x11F426C);
+	const NiPixelFormat& NiPixelFormat_RGBA32 =
+		*reinterpret_cast<const NiPixelFormat*>(0x11AA2A0);
 
 } // namespace fonthook

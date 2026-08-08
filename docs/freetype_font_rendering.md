@@ -948,7 +948,7 @@ destination alpha. A detected profile, packet, or device-state mismatch marks
 the native generation faulty and suppresses the affected marked submission.
 The tNVSE-owned pixel constants `c1-c4` are captured once for the complete
 native text group, then restored and verified once after its final packet.
-After vanilla `TileShader::UpdateConstants` refreshes Gamebryo's maps, each native
+After vanilla `TileShader::SetupGeometryConstants` refreshes Gamebryo's maps, each native
 profile mirrors the retail `c0` definition from the current proxy property state
 and uploads `c0-c4` in one device call. This is required because the native pixel
 programs and `c1-c4` bypass the vanilla constant-map upload path; relying on its
@@ -1221,7 +1221,7 @@ constant callback and retained its private-register proof;
 `private_state_carry_rejected` counts fail-closed resets. This optimization does
 not use code hashes. It requires the retail texture/constants/alpha-test/state/
 prepare/post callback identities, current generation/device, and a token signed
-only after `NativeUpdateConstants` finishes c176-c183, c209, and sampler work.
+only after `NativeSetupGeometryConstants` finishes c176-c183, c209, and sampler work.
 Any non-first pass, replaced callback, nested/re-entered draw, fault, reset, or
 missing token clears the cache. Even a successful carry invalidates the command
 execution segment and discards texture, sampler, declaration, buffer,
@@ -1255,7 +1255,7 @@ the duration of that one vanilla Tile pass, the facade's existing geometry-buffe
 descriptor is rebound directly to that packet's static/dynamic VB range,
 canonical INDEX16 buffer, native declaration, and resolved shader. The facade
 itself remains `RenderPass::pGeometry`, so the retail
-`TileShader::UpdateConstants` reads its live scissor, overlay color, Tile and
+`TileShader::SetupGeometryConstants` reads its live scissor, overlay color, Tile and
 material alpha, blend, cull, and stencil state without a proxy-state copy.
 The payload origin is temporarily folded into the facade transform. If the
 packet references another physical page, the retained atlas texturing property
@@ -1435,7 +1435,7 @@ reverse-verified default-path predicate agrees.
 `BSBatchRenderer::RenderPassImmediately_Skinned` multi-pass,
 skin/light/special passes,
 unknown shader or geometry vtables, and forced shader-selection passes retain
-the vanilla path. A vanilla `TileShader::UpdateConstants` call is still required
+the vanilla path. A vanilla `TileShader::SetupGeometryConstants` call is still required
 once per span.
 
 Ordinary dedicated single-packet commands additionally use a staged
@@ -1488,7 +1488,7 @@ and then lets slot 35 perform the required restore. A completed pre-slot test
 that cannot prove the cube outside simply keeps the draw and is not repeated.
 
 The cache therefore tracks each slot independently. A texture-page change can
-require slot 30 without forcing identical blend and drawmode callbacks to run;
+require slot 30 without forcing identical blend and render-state callbacks to run;
 an alpha/fade change can require slot 32 without republishing programs or
 textures. Keys describe effective output rather than raw input identity:
 blend alpha values collapse to the exact enable/function tuple, alpha-test
@@ -1726,7 +1726,7 @@ while nested, reset, device/generation, and unknown external transitions
 invalidate it. A verified vanilla Tile transition can retain the global command
 execution proof, but it always invalidates program, sampler, vanilla constants,
 and geometry-binding reuse. Exact first-pass Standard callbacks allow their
-final blend, alpha-test, and drawmode outputs to be normalized back into the
+final blend, alpha-test, and render-state outputs to be normalized back into the
 independent state keys; an unclassified callback or pass resets the complete
 device-state cache. The private-register shadow remains valid because the
 reverse-confirmed vanilla maps cannot write PS c176-c183 or VS c208. The cached
@@ -1772,7 +1772,7 @@ tracks how much of the previous immutable profile is actually resident, so an
 unused tail is never uploaded but can never be mistaken for valid state on a
 later wider profile. The original
 Tile vertex constant maps are no longer specialized or mutated:
-`TileShader::UpdateConstants` continues to publish both
+`TileShader::SetupGeometryConstants` continues to publish both
 `WorldViewProjTranspose` at c0-c3 and `TexScroll` at c4, while the native vertex
 shader reads its AA profile only from c208. Consequently c208 can be reused
 after vanilla updates whenever the sorted/facade mirror still proves the same
@@ -1899,7 +1899,7 @@ steady-state packet submissions. When fallbacks are present,
 `geometry`, `binding`, and `prelude`; the retained hit/miss pair distinguishes
 a missing or invalidated Tile dispatch from a dynamic pass-envelope rejection.
 The following `segment_device_state_` line reports cache starts/reuses and
-set/reuse pairs for texture/program, constants, blend, alpha-test, and drawmode
+set/reuse pairs for texture/program, constants, blend, alpha-test, and render state
 callbacks, followed by actual slot-35 calls and verified no-op elisions. Every
 vanilla Tile now resets the device-state head
 and invalidates the command execution segment, while the separately proved

@@ -1405,7 +1405,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::
 				NativeDirectDrawLiteDrawDeviceFailure)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu constants_lite_replays=%llu constants_lite_fallbacks=%llu constants_lite_scaled_fallbacks=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu drawmode_sets=%llu drawmode_reuses=%llu post_calls=%llu post_elisions=%llu",
+			"tnvse_freetype_perf: segment_device_state_starts=%llu segment_device_state_reuses=%llu pass_sets=%llu pass_reuses=%llu constants_sets=%llu constants_reuses=%llu constants_lite_replays=%llu constants_lite_fallbacks=%llu constants_lite_scaled_fallbacks=%llu blend_sets=%llu blend_reuses=%llu alpha_test_sets=%llu alpha_test_reuses=%llu render_states_sets=%llu render_states_reuses=%llu post_calls=%llu post_elisions=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceStateStart)],
 			values[static_cast<size_t>(
@@ -1433,9 +1433,9 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDeviceAlphaTestReuse)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::SegmentDeviceDrawmodeSet)],
+				FreeTypePerfCounter::SegmentDeviceRenderStatesSet)],
 			values[static_cast<size_t>(
-				FreeTypePerfCounter::SegmentDeviceDrawmodeReuse)],
+				FreeTypePerfCounter::SegmentDeviceRenderStatesReuse)],
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::SegmentDevicePostSet)],
 			values[static_cast<size_t>(

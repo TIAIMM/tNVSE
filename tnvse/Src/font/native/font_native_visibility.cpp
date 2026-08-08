@@ -20,8 +20,8 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_native_visibility
 	{
-		inline constexpr UInt32 kScaledScissorActive = 0x11F9426;
-		inline constexpr UInt32 kRendererPositionAdjust = 0x11F474C;
+		inline constexpr UInt32 kBSShaderManager_bLetterbox = 0x11F9426;
+		inline constexpr UInt32 kBSGraphics_CameraWorldTranslate = 0x11F474C;
 		inline constexpr double kScissorSafetyMarginPixels = 2.0;
 		inline constexpr double kClipIntervalRelativeSlack = 1.0e-6;
 		inline constexpr double kVanillaUiOrthographicRelativeSlack = 4.0e-6;
@@ -671,11 +671,12 @@ namespace fonthook::vectorfont
 			context.camera.projection = renderer->m_kD3DProj;
 			context.camera.viewport = renderer->m_kD3DPort;
 			context.camera.positionAdjust =
-				*reinterpret_cast<const NiPoint3*>(kRendererPositionAdjust);
+				*reinterpret_cast<const NiPoint3*>(
+					kBSGraphics_CameraWorldTranslate);
 			context.camera.primitiveClipping =
 				IsPrimitiveClippingEnabled(*renderer);
 			context.camera.scaledScissor =
-				*reinterpret_cast<const UInt8*>(kScaledScissorActive) != 0;
+				*reinterpret_cast<const UInt8*>(kBSShaderManager_bLetterbox) != 0;
 			if (!IsFiniteMatrix(context.camera.view)
 				|| !IsFiniteMatrix(context.camera.projection)
 				|| !std::isfinite(context.camera.positionAdjust.x)
@@ -886,7 +887,8 @@ namespace fonthook::vectorfont
 			}
 			const NiDX9Renderer& renderer = *context.camera.renderer;
 			const NiPoint3 positionAdjust =
-				*reinterpret_cast<const NiPoint3*>(kRendererPositionAdjust);
+				*reinterpret_cast<const NiPoint3*>(
+					kBSGraphics_CameraWorldTranslate);
 			return std::memcmp(&renderer.m_kD3DView, &context.camera.view,
 					sizeof(context.camera.view)) == 0
 				&& std::memcmp(&renderer.m_kD3DProj,
@@ -903,7 +905,8 @@ namespace fonthook::vectorfont
 					== FloatBits(context.camera.positionAdjust.z)
 				&& IsPrimitiveClippingEnabled(renderer)
 					== context.camera.primitiveClipping
-				&& (*reinterpret_cast<const UInt8*>(kScaledScissorActive) != 0)
+				&& (*reinterpret_cast<const UInt8*>(
+					kBSShaderManager_bLetterbox) != 0)
 					== context.camera.scaledScissor;
 		}
 
@@ -1269,7 +1272,7 @@ namespace fonthook::vectorfont
 		const NiTransform& effectiveWorld)
 	{
 		if (!properties || !renderer
-			|| *reinterpret_cast<const UInt8*>(kScaledScissorActive))
+			|| *reinterpret_cast<const UInt8*>(kBSShaderManager_bLetterbox))
 		{
 			return false;
 		}
