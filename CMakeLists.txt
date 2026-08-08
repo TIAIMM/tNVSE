@@ -135,6 +135,7 @@ target_compile_definitions(tnvse PRIVATE
   "$<$<CONFIG:Release>:NDEBUG>")
 
 target_compile_options(tnvse PRIVATE
+  /utf-8
   /EHa
   /Zc:preprocessor
   /bigobj

@@ -18,6 +18,7 @@
 #include "native_tile_overlay.h"
 #include "plugin_dependencies.h"
 #include "save_display_name.h"
+#include "tianmiao_conflict.h"
 
 #include <cstdint>
 
@@ -317,6 +318,9 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 	{
 		return true;
 	}
+	if (fonthook::compatibility::BlockTianmiaoFontPatchIfPresent(
+		"plugin-load-entry"))
+		return false;
 
 	LoadConfig();
 	LogLoadedTnvseModuleIdentity(
@@ -371,6 +375,14 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 
 
 
+	// Tianmiao installs its executable patches from a later Direct3D callback.
+	// Recheck immediately before touching the same font graph in case that work
+	// raced the plugin-load entry probe.
+	if (fonthook::compatibility::BlockTianmiaoFontPatchIfPresent(
+		"before-font-hooks"))
+	{
+		return false;
+	}
 	fonthook::InitFontHooks();
 
 	fonthook::InitMultibyteInputHook();
