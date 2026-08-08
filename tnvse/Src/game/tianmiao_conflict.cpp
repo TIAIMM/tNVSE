@@ -278,8 +278,10 @@ namespace fonthook::compatibility
 		{
 			std::wstring message =
 				L"tNVSE 检测到当前游戏正在使用天邈汉化核心文件 binkw32.dll\n\n"
-				L"天邈汉化核心与 tNVSE 不兼容，且tNVSE不需要其他汉化核心即可实现中文支持\n"
+				L"天邈汉化核心与 tNVSE 不兼容\n"
+				L"且tNVSE不需要其他汉化核心即可实现中文支持\n"
 				L"请将游戏根目录中的天邈版 binkw32.dll 恢复为原版\n"
+				L"并确保ini的字体设置恢复为原版\n"
 				L"天邈汉化保存的原版 DLL 备份位置为：\n";
 			message += detection.backupPath.empty()
 				? L"<游戏目录>\\usub\\binkw32.dll"
@@ -292,7 +294,8 @@ namespace fonthook::compatibility
 				L"\n\n操作方法：\n"
 				L"1. 删除或移走游戏根目录中的天邈版 binkw32.dll\n"
 				L"2. 将上述 usub 目录中的备份复制到游戏根目录，并确保其命名为 binkw32.dll\n"
-				L"3. 如果备份不存在，请从纯净原版备份恢复";
+				L"3. 如果备份不存在，请从纯净原版备份恢复\n"
+				L"4. 检查falloutprefs.ini 文件中的[Font]设置";
 			return message;
 		}
 	}
