@@ -9,9 +9,9 @@ function(tnvse_add_shader_target output_variable)
     "${shader_dir}/freetype_native_vanilla_parametric_vs.hlsl"
     "${shader_dir}/freetype_native_coverage.hlsl"
     "${shader_dir}/freetype_native_argb.hlsl"
-    "${shader_dir}/freetype_native_mtsdf_fill.hlsl"
-    "${shader_dir}/freetype_native_mtsdf_effects.hlsl"
-    "${shader_dir}/freetype_native_mtsdf_composite.hlsl"
+    "${shader_dir}/freetype_native_distance_field_fill.hlsl"
+    "${shader_dir}/freetype_native_distance_field_effects.hlsl"
+    "${shader_dir}/freetype_native_distance_field_composite.hlsl"
     "${shader_dir}/compile_native_shaders.bat")
   set(shader_outputs
     "${shader_dir}/compiled/tnvse_freetype_native_vs.vso"

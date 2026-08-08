@@ -171,7 +171,7 @@ namespace fonthook::vectorfont
 				&& distanceFieldMethod == static_cast<UInt8>(
 					GetConfiguredDistanceFieldMethod());
 		}
-		if (route == FontAtlasRoute::ShaderA8Coverage)
+		if (route == FontAtlasRoute::BakedArgbComposite)
 			return maskType == composite;
 		return maskType != distance && maskType != composite;
 	}
@@ -242,7 +242,7 @@ namespace fonthook::vectorfont
 		}
 		if (maskType == static_cast<UInt8>(GlyphMaskType::Composite))
 		{
-			return route == FontAtlasRoute::ShaderA8Coverage
+			return route == FontAtlasRoute::BakedArgbComposite
 				? PersistentCacheCleanupClass::Neutral
 				: PersistentCacheCleanupClass::InactiveDistanceField;
 		}
@@ -314,7 +314,7 @@ namespace fonthook::vectorfont
 				wasSynchronized
 					? (previousRoute == FontAtlasRoute::ShaderDistanceField
 						? "distance-field"
-						: previousRoute == FontAtlasRoute::ShaderA8Coverage
+						: previousRoute == FontAtlasRoute::BakedArgbComposite
 							? "argb-composite" : "argb-fallback")
 					: "unresolved");
 			return;
@@ -438,12 +438,12 @@ namespace fonthook::vectorfont
 
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: inactive cache invalidated route=%s previous=%s masks=%u manifests=%u atlases=%u direct=%u temporary=%u bytes=%llu failed=%u",
-			route == FontAtlasRoute::ShaderA8Coverage
+			route == FontAtlasRoute::BakedArgbComposite
 				? "argb-composite" : "argb-fallback",
 			wasSynchronized
 				? (previousRoute == FontAtlasRoute::ShaderDistanceField
 					? "distance-field"
-					: previousRoute == FontAtlasRoute::ShaderA8Coverage
+					: previousRoute == FontAtlasRoute::BakedArgbComposite
 						? "argb-composite" : "argb-fallback")
 				: "unresolved",
 			deletedMasks, deletedManifests, deletedAtlases, deletedDirect,

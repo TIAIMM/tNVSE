@@ -46,6 +46,28 @@ tnvse_add_commonlib_target()
 tnvse_add_freetype_target()
 tnvse_add_msdfgen_target()
 tnvse_add_shader_target(TNVSE_SHADER_OUTPUTS)
+
+option(TNVSE_BUILD_FONT_QUALITY_PROBE
+  "Build the offline FreeType/msdfgen quality comparison tool" OFF)
+if(TNVSE_BUILD_FONT_QUALITY_PROBE)
+  add_executable(tnvse_font_quality_probe
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/font_distance_field_quality_probe.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/vector/font_vector_msdfgen.cpp")
+  target_compile_features(tnvse_font_quality_probe PRIVATE cxx_std_20)
+  target_include_directories(tnvse_font_quality_probe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src")
+  target_compile_definitions(tnvse_font_quality_probe PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(tnvse_font_quality_probe PRIVATE
+    /utf-8 /wd4244 /wd4267 /wd4996
+    "$<$<CONFIG:Release>:/fp:fast>")
+  target_link_libraries(tnvse_font_quality_probe PRIVATE
+    msdfgen_freetype_tnvse)
+  tnvse_apply_msvc_defaults(tnvse_font_quality_probe)
+  set_target_properties(tnvse_font_quality_probe PROPERTIES
+    FOLDER "tNVSE/Diagnostics")
+endif()
+
 set(TNVSE_NATIVE_OVERLAY_XMLS
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")

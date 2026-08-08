@@ -425,8 +425,8 @@ namespace implementation::font_atlas_direct
 			UInt32 distanceFieldSpread = 0;
 			if (baseKey.renderMode == AtlasRenderMode::ShaderEffects)
 			{
-				MtsdfSharedRasterProfile profile;
-				if (!ResolveMtsdfSharedRasterProfile(config, byteClass,
+				DistanceFieldRasterProfile profile;
+				if (!ResolveDistanceFieldRasterProfile(config, byteClass,
 					rasterScale, true, profile))
 				{
 					return false;

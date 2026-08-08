@@ -1085,7 +1085,7 @@ namespace fonthook::vectorfont
 			if (!aggressive && !fallback)
 				return PersistentCacheCleanupClass::Invalid;
 			return (aggressive
-						&& route == FontAtlasRoute::ShaderA8Coverage)
+						&& route == FontAtlasRoute::BakedArgbComposite)
 					|| (fallback
 						&& route == FontAtlasRoute::ArgbFallback)
 				? PersistentCacheCleanupClass::Neutral

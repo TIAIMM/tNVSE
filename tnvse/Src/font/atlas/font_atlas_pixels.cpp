@@ -382,7 +382,7 @@ namespace fonthook::vectorfont
 			for (const AtlasGlyphRecord& glyph : resource.glyphs)
 			{
 				if (glyph.bitmap)
-					result += glyph.bitmap->alpha.size();
+					result += glyph.bitmap->pixels.size();
 			}
 			return result;
 		}
@@ -531,7 +531,7 @@ namespace fonthook::vectorfont
 					bitmap.maskType, bitmap.distanceFieldMethod);
 			const size_t requiredBitmapBytes = static_cast<size_t>(rect.width)
 				* rect.height * bitmapBytesPerPixel;
-			if (!destination || bitmap.alpha.size() < requiredBitmapBytes
+			if (!destination || bitmap.pixels.size() < requiredBitmapBytes
 				|| !IsCompatibleDistanceFieldBitmap(mode, bitmap))
 				return;
 			const UInt32 bytesPerPixel = AtlasBytesPerPixel(mode);
@@ -539,7 +539,7 @@ namespace fonthook::vectorfont
 			{
 				UInt8* row = destination + static_cast<size_t>(destinationY + y) * pitch
 					+ static_cast<size_t>(destinationX) * bytesPerPixel;
-				const UInt8* source = bitmap.alpha.data()
+				const UInt8* source = bitmap.pixels.data()
 					+ static_cast<size_t>(y) * rect.width * bitmapBytesPerPixel;
 				if (mode == AtlasPixelMode::Argb32
 					&& bitmap.maskType == GlyphMaskType::Composite)
@@ -703,6 +703,240 @@ namespace fonthook::vectorfont
 				return hash == snapshot.sourceHeader.payloadChecksum;
 			}
 
+			constexpr size_t kCompactSnapshotCompareBufferBytes =
+				1024u * 1024u;
+
+			struct CompactSnapshotSlice
+			{
+				AtlasRect rect = {};
+				size_t offset = 0;
+				size_t bytes = 0;
+			};
+
+			class CompactSnapshotRangeReader
+			{
+			public:
+				explicit CompactSnapshotRangeReader(
+					const CompactAtlasSnapshot& snapshot)
+					: m_snapshot(snapshot)
+				{
+				}
+
+				bool Open()
+				{
+					if (m_snapshot.sourceHeader.placementCount
+							!= m_snapshot.placements.size()
+						|| m_snapshot.sourceHeader.pixelMode
+							!= static_cast<UInt8>(m_snapshot.pixelMode)
+						|| static_cast<AtlasSnapshotStorage>(
+							m_snapshot.sourceHeader.storageMode)
+							!= AtlasSnapshotStorage::PlacedLevelZeroRects
+						|| m_snapshot.sourceHeader.pixelBytes
+							!= m_snapshot.sourceHeader.storedPixelBytes
+						|| m_snapshot.sourceHeader.pixelBytes
+							> std::numeric_limits<size_t>::max())
+					{
+						return false;
+					}
+					m_size = static_cast<size_t>(
+						m_snapshot.sourceHeader.pixelBytes);
+					if (!m_snapshot.pixels.empty())
+						return m_snapshot.pixels.size() == m_size;
+					if (!OpenCompactSnapshotPixels(m_snapshot, m_file))
+						return false;
+					const UInt64 placementBytes = static_cast<UInt64>(
+						m_snapshot.placements.size())
+						* sizeof(AtlasSnapshotPlacement);
+					m_payloadOffset = sizeof(AtlasSnapshotHeader)
+						+ placementBytes;
+					return m_payloadOffset >= sizeof(AtlasSnapshotHeader);
+				}
+
+				size_t Size() const { return m_size; }
+
+				bool ReadAt(size_t offset, void* destination, size_t size)
+				{
+					if (offset > m_size || size > m_size - offset)
+						return false;
+					if (!m_snapshot.pixels.empty())
+					{
+						std::memcpy(destination,
+							m_snapshot.pixels.data() + offset, size);
+						return true;
+					}
+					if (m_file.handle == INVALID_HANDLE_VALUE
+						|| offset > std::numeric_limits<UInt64>::max()
+							- m_payloadOffset)
+					{
+						return false;
+					}
+					LARGE_INTEGER position = {};
+					position.QuadPart = m_payloadOffset + offset;
+					return SetFilePointerEx(m_file.handle, position,
+							nullptr, FILE_BEGIN) != FALSE
+						&& ReadSnapshotBytesExact(
+							m_file.handle, destination, size);
+				}
+
+			private:
+				const CompactAtlasSnapshot& m_snapshot;
+				CompactSnapshotFile m_file;
+				UInt64 m_payloadOffset = 0;
+				size_t m_size = 0;
+			};
+
+			bool BuildCompactSnapshotSlices(
+				const CompactAtlasSnapshot& snapshot,
+				size_t expectedBytes,
+				std::vector<CompactSnapshotSlice>& slices)
+			{
+				slices.clear();
+				slices.reserve(snapshot.placements.size());
+				size_t offset = 0;
+				const size_t bytesPerPixel = AtlasBytesPerPixel(
+					snapshot.pixelMode);
+				for (const AtlasSnapshotPlacement& placement :
+					snapshot.placements)
+				{
+					if (!placement.rect.width || !placement.rect.height
+						|| placement.rect.width
+							> std::numeric_limits<size_t>::max()
+								/ placement.rect.height
+						|| static_cast<size_t>(placement.rect.width)
+							* placement.rect.height
+							> std::numeric_limits<size_t>::max()
+								/ bytesPerPixel)
+					{
+						return false;
+					}
+					const size_t bytes = static_cast<size_t>(
+						placement.rect.width) * placement.rect.height
+						* bytesPerPixel;
+					if (offset > expectedBytes
+						|| bytes > expectedBytes - offset)
+					{
+						return false;
+					}
+					slices.push_back({ placement.rect, offset, bytes });
+					offset += bytes;
+				}
+				std::sort(slices.begin(), slices.end(),
+					[](const CompactSnapshotSlice& left,
+						const CompactSnapshotSlice& right)
+					{
+						if (left.rect.y != right.rect.y)
+							return left.rect.y < right.rect.y;
+						if (left.rect.x != right.rect.x)
+							return left.rect.x < right.rect.x;
+						if (left.rect.height != right.rect.height)
+							return left.rect.height < right.rect.height;
+						return left.rect.width < right.rect.width;
+					});
+				return offset == expectedBytes;
+			}
+
+			bool ValidateCompactSnapshotPayloadBounded(
+				const CompactAtlasSnapshot& snapshot,
+				CompactSnapshotRangeReader& reader,
+				std::vector<UInt8>& buffer)
+			{
+				UInt64 hash = HashCompactAtlasBytes(
+					snapshot.placements.data(),
+					snapshot.placements.size()
+						* sizeof(AtlasSnapshotPlacement));
+				for (size_t offset = 0; offset < reader.Size();)
+				{
+					const size_t chunk = std::min(
+						reader.Size() - offset, buffer.size());
+					if (!reader.ReadAt(offset, buffer.data(), chunk))
+						return false;
+					hash = HashCompactAtlasBytes(
+						buffer.data(), chunk, hash);
+					offset += chunk;
+					ServiceFontPrewarmHostMessages();
+				}
+				return hash == snapshot.sourceHeader.payloadChecksum;
+			}
+
+			bool CompareCompactSnapshotPixelsBounded(
+				const CompactAtlasSnapshot& left,
+				const CompactAtlasSnapshot& right)
+			{
+				CompactSnapshotRangeReader leftReader(left);
+				CompactSnapshotRangeReader rightReader(right);
+				if (!leftReader.Open() || !rightReader.Open()
+					|| leftReader.Size() != rightReader.Size())
+				{
+					return false;
+				}
+				std::vector<CompactSnapshotSlice> leftSlices;
+				std::vector<CompactSnapshotSlice> rightSlices;
+				if (!BuildCompactSnapshotSlices(
+						left, leftReader.Size(), leftSlices)
+					|| !BuildCompactSnapshotSlices(
+						right, rightReader.Size(), rightSlices)
+					|| leftSlices.size() != rightSlices.size())
+				{
+					return false;
+				}
+				std::vector<UInt8> leftBuffer(
+					kCompactSnapshotCompareBufferBytes);
+				std::vector<UInt8> rightBuffer(
+					kCompactSnapshotCompareBufferBytes);
+				if (!ValidateCompactSnapshotPayloadBounded(
+						left, leftReader, leftBuffer))
+				{
+					return false;
+				}
+				const bool samePhysicalSource = !left.sourcePath.empty()
+					&& !right.sourcePath.empty()
+					&& _wcsicmp(left.sourcePath.c_str(),
+						right.sourcePath.c_str()) == 0
+					&& std::memcmp(&left.sourceHeader,
+						&right.sourceHeader,
+						sizeof(left.sourceHeader)) == 0
+					&& left.placements.size() == right.placements.size()
+					&& (left.placements.empty()
+						|| std::memcmp(left.placements.data(),
+							right.placements.data(),
+							left.placements.size()
+								* sizeof(AtlasSnapshotPlacement)) == 0);
+				if (samePhysicalSource)
+					return true;
+				if (!ValidateCompactSnapshotPayloadBounded(
+						right, rightReader, leftBuffer))
+				{
+					return false;
+				}
+				for (size_t index = 0; index < leftSlices.size(); ++index)
+				{
+					const CompactSnapshotSlice& a = leftSlices[index];
+					const CompactSnapshotSlice& b = rightSlices[index];
+					if (std::memcmp(&a.rect, &b.rect,
+							sizeof(a.rect)) != 0 || a.bytes != b.bytes)
+					{
+						return false;
+					}
+					for (size_t compared = 0; compared < a.bytes;)
+					{
+						const size_t chunk = std::min(
+							a.bytes - compared, leftBuffer.size());
+						if (!leftReader.ReadAt(a.offset + compared,
+								leftBuffer.data(), chunk)
+							|| !rightReader.ReadAt(b.offset + compared,
+								rightBuffer.data(), chunk)
+							|| std::memcmp(leftBuffer.data(),
+								rightBuffer.data(), chunk) != 0)
+						{
+							return false;
+						}
+						compared += chunk;
+						ServiceFontPrewarmHostMessages();
+					}
+				}
+				return true;
+			}
+
 			class BufferedSnapshotReader
 			{
 			public:
@@ -848,6 +1082,13 @@ namespace fonthook::vectorfont
 			std::vector<UInt8>& pixels)
 		{
 			return LoadCompactSnapshotPixels(snapshot, pixels);
+		}
+
+		bool CompactAtlasSnapshotPixelsEqualBounded(
+			const CompactAtlasSnapshot& left,
+			const CompactAtlasSnapshot& right)
+		{
+			return CompareCompactSnapshotPixelsBounded(left, right);
 		}
 
 		bool WriteCompactSnapshotPixels(UInt8* destination, LONG pitch,

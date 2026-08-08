@@ -367,7 +367,7 @@ namespace fonthook::vectorfont
 		UInt16 atlasPage = 0;
 		// Zero keeps the generic per-glyph mask shader. A non-zero value proves
 		// that every quad in this composite packet carries the same exact mask
-		// and permits an immutable MTSDF pixel-shader profile.
+		// and permits an immutable distance-field pixel-shader profile.
 		UInt8 staticCompositeLayerMask = 0;
 		bool compositeShiftedShadow = false;
 		bool staticSmoothSampling = false;

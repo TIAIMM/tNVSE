@@ -140,7 +140,7 @@ namespace fonthook::vectorfont
 				// LayerColor c176 + AtlasPass c177.
 				return 2;
 			case NativeFontShaderClass::Effect:
-				// LayerColor c176 through MtsdfFlags c179.
+				// LayerColor c176 through EffectFlags c179.
 				return 4;
 			case NativeFontShaderClass::Composite:
 				// ShadowColor c176 through CompositeFlags c183.
@@ -319,7 +319,7 @@ namespace fonthook::vectorfont
 			bool vanillaParametricLayoutReady = false;
 			NiD3DPixelShaderPtr coverageShader;
 			NiD3DPixelShaderPtr argbShader;
-			std::array<NiD3DPixelShaderPtr, 3> mtsdfFillShaders;
+			std::array<NiD3DPixelShaderPtr, 3> distanceFieldFillShaders;
 			std::array<NiD3DPixelShaderPtr, 3> effectShaders;
 			std::array<NiD3DPixelShaderPtr, 3> compositeShaders;
 			std::array<std::array<std::array<NiD3DPixelShaderPtr,
@@ -523,7 +523,7 @@ namespace fonthook::vectorfont
 			if (!UsesBakedEffectRoute())
 			{
 				for (const NiD3DPixelShaderPtr& shader
-					: generation->mtsdfFillShaders)
+					: generation->distanceFieldFillShaders)
 				{
 					if (!HasShaderHandle(shader))
 						return false;
@@ -1357,8 +1357,8 @@ namespace fonthook::vectorfont
 			case NativeFontShaderClass::Body:
 			{
 				const size_t index = static_cast<size_t>(packet.quality);
-				return index < generation.mtsdfFillShaders.size()
-					? generation.mtsdfFillShaders[index].m_pObject : nullptr;
+				return index < generation.distanceFieldFillShaders.size()
+					? generation.distanceFieldFillShaders[index].m_pObject : nullptr;
 			}
 			case NativeFontShaderClass::Effect:
 			{
@@ -1938,9 +1938,9 @@ namespace fonthook::vectorfont
 					generation->distanceFieldMethod == DistanceFieldMethod::Mtsdf
 						? mtsdfFillNames : trueSdfFillNames;
 				for (size_t index = 0;
-					index < generation->mtsdfFillShaders.size(); ++index)
+					index < generation->distanceFieldFillShaders.size(); ++index)
 				{
-					generation->mtsdfFillShaders[index] =
+					generation->distanceFieldFillShaders[index] =
 						createPS(fillNames[index]);
 				}
 				const char* mtsdfEffectNames[] = {
@@ -2002,7 +2002,7 @@ namespace fonthook::vectorfont
 			if (!UsesBakedEffectRoute())
 			{
 				for (const NiD3DPixelShaderPtr& shader
-					: generation->mtsdfFillShaders)
+					: generation->distanceFieldFillShaders)
 				{
 					if (!HasShaderHandle(shader))
 					{

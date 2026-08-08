@@ -8,6 +8,7 @@
 #include <atomic>
 #include <limits>
 #include <Windows.h>
+#include <Psapi.h>
 
 namespace fonthook::vectorfont
 {
@@ -291,6 +292,23 @@ namespace fonthook::vectorfont
 			static_cast<ULONGLONG>(
 				std::numeric_limits<std::size_t>::max())));
 		result.largestFreeRegionBytes = largestFree;
+		using GetProcessMemoryInfoFn = BOOL(WINAPI*)(HANDLE,
+			PPROCESS_MEMORY_COUNTERS, DWORD);
+		const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+		const auto getProcessMemoryInfo = kernel32
+			? reinterpret_cast<GetProcessMemoryInfoFn>(GetProcAddress(
+				kernel32, "K32GetProcessMemoryInfo")) : nullptr;
+		PROCESS_MEMORY_COUNTERS_EX counters = {};
+		counters.cb = sizeof(counters);
+		if (getProcessMemoryInfo
+			&& getProcessMemoryInfo(GetCurrentProcess(),
+				reinterpret_cast<PPROCESS_MEMORY_COUNTERS>(&counters),
+				sizeof(counters)))
+		{
+			result.privateUsageBytes = counters.PrivateUsage;
+			result.workingSetBytes = counters.WorkingSetSize;
+			result.processCountersValid = true;
+		}
 		result.valid = true;
 		return true;
 	}

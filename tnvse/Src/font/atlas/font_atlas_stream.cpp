@@ -213,8 +213,8 @@ namespace fonthook::vectorfont
 		{
 			// Reuse one fixed-capacity page buffer across the whole font. This avoids
 			// vector doubling peaks and repeated large heap allocations while keeping
-			// the live stream bounded to one A8 (4 MiB) or MTSDF (16 MiB) page per
-			// byte role.
+			// the live stream bounded to one single-channel A8 (4 MiB) or
+			// four-channel BGRA (16 MiB) page per byte role.
 			page.placements.clear();
 			page.pixels.clear();
 			page.cursorX = kDistanceFieldAtlasPadding;
@@ -352,13 +352,13 @@ namespace fonthook::vectorfont
 				&& bitmap->distanceFieldMethod != GetConfiguredDistanceFieldMethod())
 				return false;
 			const size_t requiredBytes = ExpectedGlyphBitmapBytes(*bitmap);
-			if (bitmap->alpha.size() < requiredBytes)
+			if (bitmap->pixels.size() < requiredBytes)
 				return false;
 			if (role.cacheIds.find(bitmap->cacheId) != role.cacheIds.end())
 				return true;
 			const size_t maximumPageBytes =
-				static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
-				* kMaximumMtsdfPrewarmAtlasSize
+				static_cast<size_t>(kMaximumStreamingPrewarmAtlasSize)
+				* kMaximumStreamingPrewarmAtlasSize
 				* AtlasBytesPerPixel(key.pixelMode);
 			if (role.current.pixels.capacity() < maximumPageBytes)
 			{
@@ -368,7 +368,7 @@ namespace fonthook::vectorfont
 
 			const UInt32 maximum = std::min(
 				GetMaximumAtlasSize(key.byteClass),
-				kMaximumMtsdfPrewarmAtlasSize);
+				kMaximumStreamingPrewarmAtlasSize);
 			const UInt32 width = static_cast<UInt32>(bitmap->width);
 			const UInt32 height = static_cast<UInt32>(bitmap->height);
 			const UInt32 pagePadding = key.padding;
@@ -427,8 +427,8 @@ namespace fonthook::vectorfont
 				try
 				{
 					page.placements.push_back(placement);
-					page.pixels.insert(page.pixels.end(), bitmap->alpha.begin(),
-						bitmap->alpha.begin() + requiredBytes);
+					page.pixels.insert(page.pixels.end(), bitmap->pixels.begin(),
+						bitmap->pixels.begin() + requiredBytes);
 					role.cacheIds.insert(bitmap->cacheId);
 				}
 				catch (...)
@@ -625,7 +625,7 @@ namespace fonthook::vectorfont
 					|| (shaderEffects
 						? request.maskType != GlyphMaskType::DistanceField
 						: request.maskType == GlyphMaskType::DistanceField)
-					|| !bitmap || bitmap->alpha.empty())
+					|| !bitmap || bitmap->pixels.empty())
 					continue;
 				grouped[static_cast<size_t>(request.glyph->byteClass)].push_back(bitmap);
 			}
@@ -678,7 +678,7 @@ namespace fonthook::vectorfont
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: streamed prewarm allocation pressure font=%u scale=%.3f pageLimit=%u completedPages=%llu retainedMiB=%.2f statePreserved=1",
 				state ? state->fontId : GetRuntimeConfig(runtime).fontId,
-				rasterScale, kMaximumMtsdfPrewarmAtlasSize,
+				rasterScale, kMaximumStreamingPrewarmAtlasSize,
 				static_cast<unsigned long long>(completedPages),
 				retainedBytes / (1024.0 * 1024.0));
 			return false;

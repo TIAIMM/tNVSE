@@ -51,7 +51,7 @@ namespace fonthook::vectorfont
 					for (const AtlasGlyphRecord& glyph : resource.glyphs)
 					{
 						const std::shared_ptr<const GlyphBitmap>& bitmap = glyph.bitmap;
-						if (!bitmap || bitmap->alpha.empty())
+						if (!bitmap || bitmap->pixels.empty())
 							continue;
 						WriteBitmapPixels(reconstructed.data(),
 							static_cast<LONG>(sourcePitch), resource.pixelMode,
@@ -103,7 +103,7 @@ namespace fonthook::vectorfont
 			for (const AtlasGlyphRecord& glyph : resource.glyphs)
 			{
 				const std::shared_ptr<const GlyphBitmap>& bitmap = glyph.bitmap;
-				if (!bitmap || bitmap->alpha.empty())
+				if (!bitmap || bitmap->pixels.empty())
 					continue;
 				WriteBitmapPixels(current.data(),
 					static_cast<LONG>(resource.width * bytesPerPixel), resource.pixelMode,
@@ -278,8 +278,11 @@ namespace fonthook::vectorfont
 				nextRemaining.reserve(remaining.size());
 				UInt32 usedWidth = 0;
 				UInt32 usedHeight = 0;
+				size_t processedGlyphs = 0;
 				for (size_t glyphIndex : remaining)
 				{
+					if ((processedGlyphs++ & 0xFFu) == 0)
+						ServiceFontPrewarmHostMessages();
 					const AtlasRect& sourceRect =
 						glyphs[glyphIndex].placement.rect;
 					if (!sourceRect.width || !sourceRect.height
@@ -564,7 +567,7 @@ namespace fonthook::vectorfont
 			const UInt32 maximumSize = preferSingleAtlas
 				? roleMaximum
 				: std::min(roleMaximum,
-					kMaximumMtsdfPrewarmAtlasSize);
+					kMaximumStreamingPrewarmAtlasSize);
 			const UInt32 padding = baseKey.padding;
 			const std::vector<UInt32> candidateWidths =
 				BuildSnapshotCandidateWidths(glyphs, padding, maximumSize);
@@ -600,6 +603,7 @@ namespace fonthook::vectorfont
 					{
 						selectedPlan = std::move(candidate);
 					}
+					ServiceFontPrewarmHostMessages();
 				}
 			}
 			if (selectedPlan.pages.empty())

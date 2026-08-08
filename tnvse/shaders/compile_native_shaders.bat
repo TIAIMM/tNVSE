@@ -28,41 +28,41 @@ if errorlevel 1 exit /b %errorlevel%
 if errorlevel 1 exit /b %errorlevel%
 "%FXC%" /nologo /T ps_3_0 /E Main /O3 /Fo "%~dp0compiled\tnvse_freetype_native_argb.pso" "%~dp0freetype_native_argb.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_fast.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_fast.pso" "%~dp0freetype_native_distance_field_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_balanced.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_balanced.pso" "%~dp0freetype_native_distance_field_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_high.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D FILL_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_fill_high.pso" "%~dp0freetype_native_distance_field_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_effects_fast.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_effects_fast.pso" "%~dp0freetype_native_distance_field_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_effects_balanced.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_effects_balanced.pso" "%~dp0freetype_native_distance_field_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_effects_high.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D EFFECT_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_effects_high.pso" "%~dp0freetype_native_distance_field_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D FILL_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_fill_fast.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D FILL_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_fill_fast.pso" "%~dp0freetype_native_distance_field_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D FILL_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_fill_balanced.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D FILL_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_fill_balanced.pso" "%~dp0freetype_native_distance_field_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D FILL_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_fill_high.pso" "%~dp0freetype_native_mtsdf_fill.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D FILL_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_fill_high.pso" "%~dp0freetype_native_distance_field_fill.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D EFFECT_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_effects_fast.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D EFFECT_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_effects_fast.pso" "%~dp0freetype_native_distance_field_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D EFFECT_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_effects_balanced.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D EFFECT_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_effects_balanced.pso" "%~dp0freetype_native_distance_field_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D EFFECT_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_effects_high.pso" "%~dp0freetype_native_mtsdf_effects.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D EFFECT_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_effects_high.pso" "%~dp0freetype_native_distance_field_effects.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_composite_fast.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_composite_fast.pso" "%~dp0freetype_native_distance_field_composite.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_composite_balanced.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_composite_balanced.pso" "%~dp0freetype_native_distance_field_composite.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_composite_high.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_composite_high.pso" "%~dp0freetype_native_distance_field_composite.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_composite_fast.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=0 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_composite_fast.pso" "%~dp0freetype_native_distance_field_composite.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_composite_balanced.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=1 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_composite_balanced.pso" "%~dp0freetype_native_distance_field_composite.hlsl"
 if errorlevel 1 exit /b %errorlevel%
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_composite_high.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=2 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_composite_high.pso" "%~dp0freetype_native_distance_field_composite.hlsl"
 if errorlevel 1 exit /b %errorlevel%
 call :compile_mtsdf_profiles 0 fast
 if errorlevel 1 exit /b %errorlevel%
@@ -109,7 +109,7 @@ exit /b 0
 :compile_mtsdf_profile
 set "PROFILE_SUFFIX="
 if "%4"=="1" set "PROFILE_SUFFIX=_shift"
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_composite_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_composite_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_distance_field_composite.hlsl"
 exit /b %errorlevel%
 
 :compile_vanilla_layout_profiles
@@ -126,7 +126,7 @@ exit /b 0
 :compile_vanilla_layout_profile
 set "PROFILE_SUFFIX="
 if "%4"=="1" set "PROFILE_SUFFIX=_shift"
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_vanilla_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_mtsdf_vanilla_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_distance_field_composite.hlsl"
 exit /b %errorlevel%
 
 :compile_true_sdf_vanilla_layout_profiles
@@ -143,5 +143,5 @@ exit /b 0
 :compile_true_sdf_vanilla_layout_profile
 set "PROFILE_SUFFIX="
 if "%4"=="1" set "PROFILE_SUFFIX=_shift"
-"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_vanilla_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_mtsdf_composite.hlsl"
+"%FXC%" /nologo /T ps_3_0 /E Main /O3 /D DISTANCE_FIELD_TRUE_SDF=1 /D COMPOSITE_QUALITY=%1 /D COMPOSITE_STATIC_LAYER_MASK=%3 /D COMPOSITE_STATIC_SHIFTED_SHADOW=%4 /Fo "%~dp0compiled\tnvse_freetype_native_sdf_vanilla_layout_%2_m%3%PROFILE_SUFFIX%.pso" "%~dp0freetype_native_distance_field_composite.hlsl"
 exit /b %errorlevel%

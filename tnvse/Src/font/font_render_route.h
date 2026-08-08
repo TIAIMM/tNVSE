@@ -7,7 +7,7 @@ namespace fonthook::vectorfont
 	enum class FontAtlasRoute : std::uint8_t
 	{
 		ShaderDistanceField,
-		ShaderA8Coverage,
+		BakedArgbComposite,
 		ArgbFallback
 	};
 
@@ -23,7 +23,7 @@ namespace fonthook::vectorfont
 		if (!shaderLoaderRouteAvailable)
 			return FontAtlasRoute::ArgbFallback;
 		return bakedEffectMode
-			? FontAtlasRoute::ShaderA8Coverage
+			? FontAtlasRoute::BakedArgbComposite
 			: FontAtlasRoute::ShaderDistanceField;
 	}
 
@@ -42,7 +42,7 @@ namespace fonthook::vectorfont
 	static_assert(ResolveFontAtlasRoute(true, false)
 		== FontAtlasRoute::ShaderDistanceField);
 	static_assert(ResolveFontAtlasRoute(true, true)
-		== FontAtlasRoute::ShaderA8Coverage);
+		== FontAtlasRoute::BakedArgbComposite);
 	static_assert(ResolvePersistentFontCacheDomain(
 		FontAtlasRoute::ShaderDistanceField)
 		== PersistentFontCacheDomain::DistanceField);

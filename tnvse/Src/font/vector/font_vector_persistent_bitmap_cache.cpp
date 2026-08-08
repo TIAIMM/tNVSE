@@ -14,10 +14,10 @@ namespace fonthook::vectorfont
 		DistanceFieldMethod distanceFieldMethod)
 	{
 		return maskType == GlyphMaskType::Composite
-			? kMaximumPersistentMtsdfBitmapBytes
+			? kMaximumPersistentFourChannelBitmapBytes
 			: maskType == GlyphMaskType::DistanceField
 			? (distanceFieldMethod == DistanceFieldMethod::Mtsdf
-				? kMaximumPersistentMtsdfBitmapBytes
+				? kMaximumPersistentFourChannelBitmapBytes
 				: kMaximumPersistentSingleChannelBitmapBytes)
 			: kMaximumPersistentSingleChannelBitmapBytes;
 	}
@@ -558,8 +558,8 @@ namespace fonthook::vectorfont
 			if (record.magic != kPersistentBitmapRecordMagic
 				|| record.headerSize != sizeof(record)
 				|| record.width <= 0 || record.height <= 0
-				|| !record.alphaSize
-				|| record.alphaSize > MaximumPersistentBitmapBytes(
+				|| !record.payloadSize
+				|| record.payloadSize > MaximumPersistentBitmapBytes(
 					maskType, distanceFieldMethod))
 			{
 				return false;
@@ -567,7 +567,7 @@ namespace fonthook::vectorfont
 			return static_cast<UInt64>(record.width)
 				* static_cast<UInt64>(record.height)
 				* GlyphBitmapBytesPerPixel(
-					maskType, distanceFieldMethod) == record.alphaSize;
+					maskType, distanceFieldMethod) == record.payloadSize;
 		}
 
 		bool InitializePersistentBitmapProfile(PersistentBitmapProfile& profile)
@@ -721,11 +721,11 @@ namespace fonthook::vectorfont
 		}
 
 		UInt64 HashPersistentBitmapRecord(
-			const PersistentBitmapRecordHeader& record, const UInt8* alpha)
+			const PersistentBitmapRecordHeader& record, const UInt8* payload)
 		{
 			UInt64 hash = HashBytes64(&record,
 				offsetof(PersistentBitmapRecordHeader, checksum));
-			return HashBytes64(alpha, record.alphaSize, hash);
+			return HashBytes64(payload, record.payloadSize, hash);
 		}
 
 		std::shared_ptr<GlyphBitmap> LoadPersistentGlyphBitmap(
@@ -745,7 +745,7 @@ namespace fonthook::vectorfont
 					static_cast<GlyphMaskType>(key.maskType),
 					static_cast<DistanceFieldMethod>(key.distanceFieldMethod))
 				|| record.glyphIndex != key.glyphIndex
-				|| entry.size != sizeof(record) + record.alphaSize)
+				|| entry.size != sizeof(record) + record.payloadSize)
 				return nullptr;
 			auto bitmap = std::make_shared<GlyphBitmap>();
 			bitmap->cacheId = HashBitmapKey(key);
@@ -760,17 +760,17 @@ namespace fonthook::vectorfont
 				static_cast<DistanceFieldMethod>(key.distanceFieldMethod);
 			bitmap->sdfSpread = key.sdfSpread;
 			bitmap->strokeWidth26Dot6 = key.strokeWidth26Dot6;
-			bitmap->alpha.resize(record.alphaSize);
-			const UInt64 alphaOffset = entry.offset + sizeof(record);
-			if (!ReadPersistentProfileBytes(profile, alphaOffset,
-					bitmap->alpha.data(), record.alphaSize)
+			bitmap->pixels.resize(record.payloadSize);
+			const UInt64 payloadOffset = entry.offset + sizeof(record);
+			if (!ReadPersistentProfileBytes(profile, payloadOffset,
+					bitmap->pixels.data(), record.payloadSize)
 				|| record.checksum != HashPersistentBitmapRecord(
-					record, bitmap->alpha.data()))
+					record, bitmap->pixels.data()))
 			{
 				return nullptr;
 			}
 			bitmap->cpuMemory.Reset(CpuMemoryCategory::GlyphBitmap,
-				sizeof(GlyphBitmap) + bitmap->alpha.capacity());
+				sizeof(GlyphBitmap) + bitmap->pixels.capacity());
 			return bitmap;
 		}
 
@@ -805,17 +805,17 @@ namespace fonthook::vectorfont
 					|| profile.indexEntries[key.glyphIndex].offset
 					|| profile.indexEntries[key.glyphIndex].size
 					|| bitmap.width <= 0 || bitmap.height <= 0
-					|| bitmap.alpha.empty()
-					|| bitmap.alpha.size() > MaximumPersistentBitmapBytes(
+					|| bitmap.pixels.empty()
+					|| bitmap.pixels.size() > MaximumPersistentBitmapBytes(
 						bitmap.maskType, bitmap.distanceFieldMethod)
 					|| key.distanceFieldMethod
 						!= static_cast<UInt8>(bitmap.distanceFieldMethod)
-					|| ExpectedGlyphBitmapBytes(bitmap) != bitmap.alpha.size())
+					|| ExpectedGlyphBitmapBytes(bitmap) != bitmap.pixels.size())
 				{
 					continue;
 				}
 				estimatedBytes += sizeof(PersistentBitmapRecordHeader)
-					+ bitmap.alpha.size();
+					+ bitmap.pixels.size();
 			}
 			if (!estimatedBytes
 				|| estimatedBytes > kMaximumPersistentProfileBytes - profile.validSize
@@ -835,12 +835,12 @@ namespace fonthook::vectorfont
 					|| profile.indexEntries[key.glyphIndex].offset
 					|| profile.indexEntries[key.glyphIndex].size
 					|| bitmap.width <= 0 || bitmap.height <= 0
-					|| bitmap.alpha.empty()
-					|| bitmap.alpha.size() > MaximumPersistentBitmapBytes(
+					|| bitmap.pixels.empty()
+					|| bitmap.pixels.size() > MaximumPersistentBitmapBytes(
 						bitmap.maskType, bitmap.distanceFieldMethod)
 					|| key.distanceFieldMethod
 						!= static_cast<UInt8>(bitmap.distanceFieldMethod)
-					|| ExpectedGlyphBitmapBytes(bitmap) != bitmap.alpha.size())
+					|| ExpectedGlyphBitmapBytes(bitmap) != bitmap.pixels.size())
 				{
 					continue;
 				}
@@ -852,17 +852,17 @@ namespace fonthook::vectorfont
 				record.height = bitmap.height;
 				record.left = bitmap.left;
 				record.top = bitmap.top;
-				record.alphaSize = static_cast<UInt32>(bitmap.alpha.size());
+				record.payloadSize = static_cast<UInt32>(bitmap.pixels.size());
 				record.checksum = HashPersistentBitmapRecord(record,
-					bitmap.alpha.data());
+					bitmap.pixels.data());
 				const UInt64 offset = profile.validSize + serialized.size();
 				const UInt32 recordSize = static_cast<UInt32>(
-					sizeof(record) + bitmap.alpha.size());
+					sizeof(record) + bitmap.pixels.size());
 				const size_t oldSize = serialized.size();
 				serialized.resize(oldSize + recordSize);
 				std::memcpy(serialized.data() + oldSize, &record, sizeof(record));
 				std::memcpy(serialized.data() + oldSize + sizeof(record),
-					bitmap.alpha.data(), bitmap.alpha.size());
+					bitmap.pixels.data(), bitmap.pixels.size());
 				pending.push_back({ key.glyphIndex, { offset, recordSize } });
 			}
 			if (pending.empty())

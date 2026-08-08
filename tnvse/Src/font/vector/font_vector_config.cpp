@@ -622,8 +622,9 @@ namespace fonthook::vectorfont
 		{
 			if (!g_bEnableFreeTypeFontRenderingLog)
 				return;
+			const bool mtsdf = UsesMtsdfDistanceField();
 			FreeTypeFontDebugLog(
-				"tnvse_freetype_font: config font id=%u prewarmEncoding=%s verticalMetrics=%s baseline=%.2f fontColor=%d shaderFill=mtsdf-rgb effectDistance=alpha-tsdf effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
+				"tnvse_freetype_font: config font id=%u prewarmEncoding=%s verticalMetrics=%s baseline=%.2f fontColor=%d distanceField=%s distanceFieldRevision=%u bodyDistance=%s effectDistance=%s effectQuality=%u glow=%d colorMode=%s inner=%.2f outer=%.2f power=%.2f outline=%d colorMode=%s width=%.2f softness=%.2f shadow=%d colorMode=%s blur=%.2f power=%.2f includeGlow=%d includeOutline=%d",
 				config.fontId,
 				GetFontPrewarmRangeName(
 					ResolveFontPrewarmRange(config), GetFreeTypeTextCodePage()),
@@ -631,6 +632,11 @@ namespace fonthook::vectorfont
 					? "vanilla" : "freetype",
 				config.baseline,
 				config.fontColor.configured,
+				GetConfiguredDistanceFieldMethodName(),
+				DistanceFieldGeneratorRevision(
+					GetConfiguredDistanceFieldMethod()),
+				mtsdf ? "rgb-median" : "a8-true-sdf",
+				mtsdf ? "alpha-true-sdf" : "a8-true-sdf",
 				static_cast<UInt32>(config.effectQuality),
 				config.glow.enabled, EffectColorModeName(config.glow.colorMode),
 				config.glow.inner, config.glow.outer, config.glow.power,
@@ -860,7 +866,7 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	const FontConfig& GetMtsdfAtlasConfig(const FontConfig& config,
+	const FontConfig& GetDistanceFieldRasterOwnerConfig(const FontConfig& config,
 		VectorFontByteClass byteClass)
 	{
 		if (!UsesMtsdfDistanceField()
@@ -879,24 +885,24 @@ namespace fonthook::vectorfont
 	{
 		return UsesMtsdfDistanceField()
 			&& byteClass == VectorFontByteClass::DoubleByte
-			&& GetMtsdfAtlasConfig(config, byteClass).fontId != config.fontId;
+			&& GetDistanceFieldRasterOwnerConfig(config, byteClass).fontId != config.fontId;
 	}
 
-	RuntimeFont* GetMtsdfAtlasRuntime(RuntimeFont& runtime,
+	RuntimeFont* GetDistanceFieldRasterOwnerRuntime(RuntimeFont& runtime,
 		VectorFontByteClass byteClass)
 	{
-		const FontConfig& owner = GetMtsdfAtlasConfig(
+		const FontConfig& owner = GetDistanceFieldRasterOwnerConfig(
 			GetRuntimeConfig(runtime), byteClass);
 		return owner.fontId == GetRuntimeConfig(runtime).fontId
 			? &runtime : EnsureRuntimeFont(owner.fontId);
 	}
 
-	bool ResolveMtsdfSharedRasterProfile(const FontConfig& config,
+	bool ResolveDistanceFieldRasterProfile(const FontConfig& config,
 		VectorFontByteClass byteClass, float rasterScale,
-		bool includeEffects, MtsdfSharedRasterProfile& profile)
+		bool includeEffects, DistanceFieldRasterProfile& profile)
 	{
 		profile = {};
-		const FontConfig& owner = GetMtsdfAtlasConfig(config, byteClass);
+		const FontConfig& owner = GetDistanceFieldRasterOwnerConfig(config, byteClass);
 		const ByteStyle& consumerStyle =
 			config.styles[static_cast<size_t>(byteClass)];
 		const ByteStyle& ownerStyle =
@@ -937,15 +943,15 @@ namespace fonthook::vectorfont
 			const float sourceSpread = std::ceil(
 				memberSpread * ownerStyle.pixelSize / memberSize);
 			if (!std::isfinite(sourceSpread)
-				|| sourceSpread > static_cast<float>(kMtsdfMaximumSpread))
+				|| sourceSpread > static_cast<float>(kDistanceFieldMaximumSpread))
 			{
 				return false;
 			}
 			maximumSpread = std::max(maximumSpread,
 				static_cast<UInt32>(sourceSpread));
 		}
-		if (maximumSpread < kMtsdfMinimumSpread
-			|| maximumSpread > kMtsdfMaximumSpread)
+		if (maximumSpread < kDistanceFieldMinimumSpread
+			|| maximumSpread > kDistanceFieldMaximumSpread)
 		{
 			return false;
 		}
@@ -1026,7 +1032,7 @@ namespace fonthook
 			vectorfont::LogFontConfig(entry.second);
 			const vectorfont::FontConfig& config = entry.second;
 			const vectorfont::FontConfig& owner =
-				vectorfont::GetMtsdfAtlasConfig(config,
+				vectorfont::GetDistanceFieldRasterOwnerConfig(config,
 					VectorFontByteClass::DoubleByte);
 			if (vectorfont::UsesBakedEffectRoute())
 			{

@@ -16,13 +16,27 @@ namespace fonthook::vectorfont
 		Mtsdf = 1,
 	};
 
-	inline constexpr std::uint8_t kMtsdfMinimumSpread = 2;
-	inline constexpr std::uint8_t kMtsdfMaximumSpread = 32;
-	inline constexpr std::uint32_t kTrueSdfGeneratorRevision = 2;
+	inline constexpr std::uint8_t kDistanceFieldMinimumSpread = 2;
+	inline constexpr std::uint8_t kDistanceFieldMaximumSpread = 32;
+	// Conservative v145 per-worker staging budget for post-quantization
+	// true-SDF repair. Prewarm budgeting adds this only to TrueSdf workers.
+	inline constexpr std::size_t kTrueSdfRepairPerWorkerScratchBudgetBytes =
+		256u * 1024u;
+	// Conservative v145 scratch budget for the cold-generation-only MTSDF
+	// rescue phase. The four-channel float field is accounted separately per
+	// pixel by prewarm; this covers bounded scores, caches, and scanlines only.
+	inline constexpr std::size_t kMtsdfRescuePerWorkerScratchBudgetBytes =
+		1024u * 1024u;
 	// Part of bitmap, persistent-cache, atlas, and prewarm identity. Revision 4
-	// is the RGBA8 contract: unhinted outlines, deterministic simple edge
-	// coloring, scanline sign correction, post-correction, and 8-bit simulation.
-	inline constexpr std::uint32_t kMtsdfGeneratorRevision = 4;
+	// retains the runtime byte-128 zero point and adds conservative post-
+	// quantization true-SDF byte repair before atlas row inversion.
+	inline constexpr std::uint32_t kTrueSdfGeneratorRevision = 4;
+	// Part of bitmap, persistent-cache, atlas, and prewarm identity. Revision 7
+	// preserves the complete revision-6 result as phase 1, then permits only
+	// RGB rescues whose per-sample distance regression is bounded to half one
+	// decoded BGRA8 step and which pass independent 8x8 and 16x16 exact-shape,
+	// sign, four-width coverage, and center gates. Alpha is unchanged.
+	inline constexpr std::uint32_t kMtsdfGeneratorRevision = 7;
 	inline constexpr double kMtsdfCornerAngleThreshold = 3.0;
 
 	inline constexpr std::uint32_t DistanceFieldBytesPerPixel(

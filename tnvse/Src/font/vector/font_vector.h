@@ -134,8 +134,10 @@ namespace fonthook
 		Idle,
 		Active,
 		Completed,
+		Failed,
 	};
 	FontPrewarmPumpStatus PumpFreeTypeFontPrewarm();
+	void ServiceFreeTypeFontPrewarmHostMessages();
 	bool IsFreeTypeFontPrewarmActive();
 	void ShutdownFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();

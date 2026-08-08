@@ -34,7 +34,7 @@ float4 CompositeFlags : register(c183);// hard-shadow outline alpha,
 struct NativeCompositeSample
 {
 	float alphaDistance;
-	float rgbBody;
+	float bodyCoverage;
 };
 
 float NativeCompositeInsideGlyph(float2 uv, float4 glyphBounds)
@@ -49,13 +49,13 @@ NativeCompositeSample SampleNativeCompositeKnownInside(float2 uv,
 	float4 glyphBounds, float spread, float antialiasWidth, float inside)
 {
 	const float2 boundedUv = clamp(uv, glyphBounds.xy, glyphBounds.zw);
-	const float4 value = SampleNativeFontMtsdf(FontAtlas, boundedUv);
+	const float4 value = SampleNativeFontDistanceField(FontAtlas, boundedUv);
 	NativeCompositeSample result;
 	result.alphaDistance = lerp(-spread,
 		DecodeNativeFontSelectedDistance(value.a, spread), inside);
-	const float rgbDistance = DecodeNativeFontSelectedDistance(
+	const float bodyDistance = DecodeNativeFontSelectedDistance(
 		NativeFontBodyEncodedDistance(value), spread);
-	result.rgbBody = NativeFontMtsdfBody(rgbDistance, antialiasWidth) * inside;
+	result.bodyCoverage = NativeFontDistanceFieldBody(bodyDistance, antialiasWidth) * inside;
 	return result;
 }
 
@@ -66,7 +66,7 @@ NativeCompositeSample SampleNativeComposite(float2 uv, float4 glyphBounds,
 		antialiasWidth, NativeCompositeInsideGlyph(uv, glyphBounds));
 }
 
-float NativeCompositeGlowMask(float alphaDistance, float rgbBody,
+float NativeCompositeGlowMask(float alphaDistance, float bodyCoverage,
 	float antialiasWidth, float distanceScale)
 {
 	const float inner = max(EffectPrimary.z * distanceScale, 0.0);
@@ -79,7 +79,7 @@ float NativeCompositeGlowMask(float alphaDistance, float rgbBody,
 		? 1.0
 		: exp2(-2.0 * max(EffectSecondary.x, 0.0001)
 			* saturate(normalizedDistance));
-	return saturate((1.0 - rgbBody) * fade);
+	return saturate((1.0 - bodyCoverage) * fade);
 }
 
 float NativeCompositeGlowFeather(float alphaDistance,
@@ -93,7 +93,7 @@ float NativeCompositeGlowFeather(float alphaDistance,
 		outer - antialiasWidth, outer + antialiasWidth, outsideDistance);
 }
 
-float NativeCompositeOutline(float alphaDistance, float rgbBody,
+float NativeCompositeOutline(float alphaDistance, float bodyCoverage,
 	float antialiasWidth, float distanceScale)
 {
 	const float width = max(EffectSecondary.y * distanceScale, 0.0);
@@ -101,36 +101,36 @@ float NativeCompositeOutline(float alphaDistance, float rgbBody,
 	const float proxyAntialiasWidth = antialiasWidth + softness;
 	const float proxy = smoothstep(-width - proxyAntialiasWidth,
 		proxyAntialiasWidth, alphaDistance);
-	return saturate(max(rgbBody, proxy));
+	return saturate(max(bodyCoverage, proxy));
 }
 
-float NativeCompositeShadowSample(float alphaDistance, float rgbBody,
+float NativeCompositeShadowSample(float alphaDistance, float bodyCoverage,
 	float antialiasWidth, float distanceScale)
 {
 	const bool hardComposite = EffectPrimary.x <= 0.001
 		&& (EffectSecondary.w > 0.0 || CompositeFlags.x > 0.0);
 	if (hardComposite)
-		return rgbBody;
+		return bodyCoverage;
 	const float blur = max(EffectPrimary.x * distanceScale, 0.0);
 	if (blur <= 0.001)
-		return rgbBody;
+		return bodyCoverage;
 	const float blurred = smoothstep(-blur - antialiasWidth,
 		blur + antialiasWidth, alphaDistance);
 	return pow(saturate(blurred), max(EffectPrimary.y, 0.0001));
 }
 
-float ApplyNativeCompositeHardShadow(float alphaDistance, float rgbBody,
+float ApplyNativeCompositeHardShadow(float alphaDistance, float bodyCoverage,
 	float antialiasWidth, float distanceScale)
 {
-	const float glow = NativeCompositeGlowMask(alphaDistance, rgbBody,
+	const float glow = NativeCompositeGlowMask(alphaDistance, bodyCoverage,
 		antialiasWidth, distanceScale)
 		* NativeCompositeGlowFeather(alphaDistance, antialiasWidth,
 			distanceScale)
 		* saturate(EffectSecondary.w);
-	const float outline = NativeCompositeOutline(alphaDistance, rgbBody,
+	const float outline = NativeCompositeOutline(alphaDistance, bodyCoverage,
 		antialiasWidth, distanceScale) * saturate(CompositeFlags.x);
 	const float outside = outline + (1.0 - outline) * glow;
-	return saturate(rgbBody + (1.0 - rgbBody) * outside);
+	return saturate(bodyCoverage + (1.0 - bodyCoverage) * outside);
 }
 
 float4 ResolveNativeCompositeSource(float coverage, float4 layerColor,
@@ -246,7 +246,7 @@ float4 EvaluateNativeComposite(NativeFontPixelInput input)
 	const float2 shadowUv = input.atlasUv
 		- shadowSourceOffset * AtlasPass.xy;
 	const float antialiasWidth =
-		ResolveNativeFontMtsdfAntialiasWidth(input, spread);
+		ResolveNativeFontDistanceFieldAntialiasWidth(input, spread);
 
 	// Composite shadow-union geometry can contain large regions that are outside
 	// both the center glyph and its shifted shadow. Reject those pixels before
@@ -298,23 +298,23 @@ float4 EvaluateNativeComposite(NativeFontPixelInput input)
 	float outlineCoverage = 0.0;
 #if COMPOSITE_STATIC_LAYER_MASK == 0 \
 	|| (COMPOSITE_STATIC_LAYER_MASK & 8)
-	fillCoverage = center.rgbBody;
+	fillCoverage = center.bodyCoverage;
 #endif
 #if COMPOSITE_STATIC_LAYER_MASK == 0 \
 	|| (COMPOSITE_STATIC_LAYER_MASK & 1)
 	shadowCoverage = NativeCompositeShadowSample(
-		shadowCenter.alphaDistance, shadowCenter.rgbBody,
+		shadowCenter.alphaDistance, shadowCenter.bodyCoverage,
 		antialiasWidth, distanceScale);
 #endif
 #if COMPOSITE_STATIC_LAYER_MASK == 0 \
 	|| (COMPOSITE_STATIC_LAYER_MASK & 2)
 	glowCoverage = NativeCompositeGlowMask(center.alphaDistance,
-		center.rgbBody, antialiasWidth, distanceScale);
+		center.bodyCoverage, antialiasWidth, distanceScale);
 #endif
 #if COMPOSITE_STATIC_LAYER_MASK == 0 \
 	|| (COMPOSITE_STATIC_LAYER_MASK & 4)
 	outlineCoverage = NativeCompositeOutline(center.alphaDistance,
-		center.rgbBody, antialiasWidth, distanceScale);
+		center.bodyCoverage, antialiasWidth, distanceScale);
 #endif
 
 #if COMPOSITE_QUALITY > 0
@@ -354,22 +354,22 @@ float4 EvaluateNativeComposite(NativeFontPixelInput input)
 #if COMPOSITE_STATIC_LAYER_MASK == 0 \
 	|| (COMPOSITE_STATIC_LAYER_MASK & 1)
 		shadowCoverage += NativeCompositeShadowSample(
-			shadowSample.alphaDistance, shadowSample.rgbBody,
+			shadowSample.alphaDistance, shadowSample.bodyCoverage,
 			antialiasWidth, distanceScale);
 #endif
 #if COMPOSITE_STATIC_LAYER_MASK == 0 \
 	|| (COMPOSITE_STATIC_LAYER_MASK & 2)
 		glowCoverage += NativeCompositeGlowMask(sample.alphaDistance,
-			sample.rgbBody, antialiasWidth, distanceScale);
+			sample.bodyCoverage, antialiasWidth, distanceScale);
 #endif
 #if COMPOSITE_STATIC_LAYER_MASK == 0 \
 	|| (COMPOSITE_STATIC_LAYER_MASK & 4)
 		outlineCoverage += NativeCompositeOutline(sample.alphaDistance,
-			sample.rgbBody, antialiasWidth, distanceScale);
+			sample.bodyCoverage, antialiasWidth, distanceScale);
 #endif
 #if COMPOSITE_STATIC_LAYER_MASK == 0 \
 	|| (COMPOSITE_STATIC_LAYER_MASK & 8)
-		fillCoverage += sample.rgbBody;
+		fillCoverage += sample.bodyCoverage;
 #endif
 	}
 	shadowCoverage *= 0.25;
@@ -412,7 +412,7 @@ float4 EvaluateNativeComposite(NativeFontPixelInput input)
 	{
 		extraFill += SampleNativeComposite(
 			input.atlasUv + extraOffsets[extraTap],
-			input.glyphBounds, spread, antialiasWidth).rgbBody;
+			input.glyphBounds, spread, antialiasWidth).bodyCoverage;
 	}
 	fillCoverage = fillCoverage * 0.5 + extraFill * 0.125;
 #endif

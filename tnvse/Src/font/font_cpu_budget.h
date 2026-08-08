@@ -16,6 +16,9 @@ namespace fonthook::vectorfont
 	{
 		std::size_t availableBytes = 0;
 		std::size_t largestFreeRegionBytes = 0;
+		std::size_t privateUsageBytes = 0;
+		std::size_t workingSetBytes = 0;
+		bool processCountersValid = false;
 		bool valid = false;
 	};
 

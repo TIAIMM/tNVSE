@@ -41,7 +41,7 @@ float4 ComposeNativeFontCoverage(float coverage, float4 tileColor,
 #define NATIVE_FONT_EXPLICIT_LOD 0
 #endif
 
-float4 SampleNativeFontMtsdf(sampler2D atlas, float2 uv)
+float4 SampleNativeFontDistanceField(sampler2D atlas, float2 uv)
 {
 #if NATIVE_FONT_EXPLICIT_LOD
 	// Native distance-field pages are sealed level-zero-only atlases. Explicit
@@ -86,7 +86,7 @@ float DecodeNativeFontSelectedDistance(float encodedDistance, float spread)
 #endif
 }
 
-float ResolveNativeFontMtsdfAntialiasWidth(
+float ResolveNativeFontDistanceFieldAntialiasWidth(
 	NativeFontPixelInput input, float spread)
 {
 	// All native layouts receive the affine screen footprint from the vertex
@@ -95,10 +95,10 @@ float ResolveNativeFontMtsdfAntialiasWidth(
 	return min(max(input.antialiasWidth, 0.0001), spread);
 }
 
-float NativeFontMtsdfBody(float rgbDistance, float antialiasWidth)
+float NativeFontDistanceFieldBody(float bodyDistance, float antialiasWidth)
 {
-	// The official median reconstruction is linear across one screen pixel.
-	return saturate(0.5 + rgbDistance
+	// Distance-field coverage reconstruction is linear across one screen pixel.
+	return saturate(0.5 + bodyDistance
 		/ max(2.0 * antialiasWidth, 0.0002));
 }
 

@@ -230,7 +230,7 @@ namespace fonthook::vectorfont
 			for (const AtlasGlyphRecord& glyph : resource.glyphs)
 			{
 				const std::shared_ptr<const GlyphBitmap>& bitmap = glyph.bitmap;
-				if (!bitmap || bitmap->alpha.empty())
+				if (!bitmap || bitmap->pixels.empty())
 					continue;
 				const AtlasRect& rect = glyph.rect;
 				WriteBitmapPixels(static_cast<UInt8*>(locked.pBits), locked.Pitch,
@@ -400,7 +400,7 @@ namespace fonthook::vectorfont
 			const UInt32 bitmapBytesPerPixel =
 				GlyphBitmapBytesPerPixel(
 					bitmap.maskType, bitmap.distanceFieldMethod);
-			if (!pixels || bitmap.alpha.size() < static_cast<size_t>(rect.width)
+			if (!pixels || bitmap.pixels.size() < static_cast<size_t>(rect.width)
 				* rect.height * bitmapBytesPerPixel
 				|| !IsCompatibleDistanceFieldBitmap(resource.pixelMode, bitmap))
 				return;
@@ -416,16 +416,16 @@ namespace fonthook::vectorfont
 						&& bitmap.maskType == GlyphMaskType::Composite)
 					{
 						std::memcpy(pixels + pixelIndex * 4u,
-							bitmap.alpha.data() + sourcePixel * 4u, 4u);
+							bitmap.pixels.data() + sourcePixel * 4u, 4u);
 					}
 					else if (resource.pixelMode == AtlasPixelMode::Mtsdf32)
 					{
 						std::memcpy(pixels + pixelIndex * 4u,
-							bitmap.alpha.data() + sourcePixel * 4u, 4u);
+							bitmap.pixels.data() + sourcePixel * 4u, 4u);
 					}
 					else if (resource.pixelMode == AtlasPixelMode::A8)
 					{
-						pixels[pixelIndex] = bitmap.alpha[sourcePixel];
+						pixels[pixelIndex] = bitmap.pixels[sourcePixel];
 					}
 					else
 					{
@@ -433,7 +433,7 @@ namespace fonthook::vectorfont
 						destination[0] = static_cast<UInt8>(bitmap.atlasRgb & 0xFF);
 						destination[1] = static_cast<UInt8>((bitmap.atlasRgb >> 8) & 0xFF);
 						destination[2] = static_cast<UInt8>((bitmap.atlasRgb >> 16) & 0xFF);
-						destination[3] = bitmap.alpha[sourcePixel];
+						destination[3] = bitmap.pixels[sourcePixel];
 					}
 				}
 			}
@@ -756,7 +756,7 @@ namespace fonthook::vectorfont
 		}
 	}
 
-		bool CompactSnapshotsEqual(const AtlasResource& lhs,
+		bool CompactSnapshotResourceMetadataMatches(const AtlasResource& lhs,
 			const AtlasResource& rhs)
 		{
 			if (!lhs.compactSnapshot || !rhs.compactSnapshot
@@ -767,74 +767,10 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
-			const CompactAtlasSnapshot& left = *lhs.compactSnapshot;
-			const CompactAtlasSnapshot& right = *rhs.compactSnapshot;
-			if (left.pixelMode != right.pixelMode
-				|| left.placements.size() != right.placements.size())
-			{
-				return false;
-			}
-			std::vector<UInt8> leftLoadedPixels;
-			std::vector<UInt8> rightLoadedPixels;
-			if ((left.pixels.empty()
-					&& !LoadCompactSnapshotPixels(left, leftLoadedPixels))
-				|| (right.pixels.empty()
-					&& !LoadCompactSnapshotPixels(right, rightLoadedPixels)))
-			{
-				return false;
-			}
-			const std::vector<UInt8>& leftPixels = left.pixels.empty()
-				? leftLoadedPixels : left.pixels;
-			const std::vector<UInt8>& rightPixels = right.pixels.empty()
-				? rightLoadedPixels : right.pixels;
-			struct Slice
-			{
-				AtlasRect rect;
-				size_t offset;
-				size_t bytes;
-			};
-			auto buildSlices = [](const CompactAtlasSnapshot& snapshot,
-				const std::vector<UInt8>& pixels, std::vector<Slice>& slices)
-			{
-				size_t offset = 0;
-				const size_t bytesPerPixel = AtlasBytesPerPixel(snapshot.pixelMode);
-				for (const AtlasSnapshotPlacement& placement : snapshot.placements)
-				{
-					const size_t bytes = static_cast<size_t>(placement.rect.width)
-						* placement.rect.height * bytesPerPixel;
-					if (offset > pixels.size()
-						|| bytes > pixels.size() - offset)
-						return false;
-					slices.push_back({ placement.rect, offset, bytes });
-					offset += bytes;
-				}
-				std::sort(slices.begin(), slices.end(), [](const Slice& a, const Slice& b)
-				{
-					if (a.rect.y != b.rect.y) return a.rect.y < b.rect.y;
-					if (a.rect.x != b.rect.x) return a.rect.x < b.rect.x;
-					if (a.rect.height != b.rect.height) return a.rect.height < b.rect.height;
-					return a.rect.width < b.rect.width;
-				});
-				return offset == pixels.size();
-			};
-			std::vector<Slice> leftSlices;
-			std::vector<Slice> rightSlices;
-			leftSlices.reserve(left.placements.size());
-			rightSlices.reserve(right.placements.size());
-			if (!buildSlices(left, leftPixels, leftSlices)
-				|| !buildSlices(right, rightPixels, rightSlices))
-				return false;
-			for (size_t index = 0; index < leftSlices.size(); ++index)
-			{
-				const Slice& a = leftSlices[index];
-				const Slice& b = rightSlices[index];
-				if (std::memcmp(&a.rect, &b.rect, sizeof(a.rect)) != 0
-					|| a.bytes != b.bytes
-					|| (a.bytes && std::memcmp(leftPixels.data() + a.offset,
-						rightPixels.data() + b.offset, a.bytes) != 0))
-					return false;
-			}
-			return true;
+			return lhs.compactSnapshot->pixelMode
+					== rhs.compactSnapshot->pixelMode
+				&& lhs.compactSnapshot->placements.size()
+					== rhs.compactSnapshot->placements.size();
 		}
 
 	bool EnsureAtlasGlyphIndex(AtlasResource& resource)
@@ -953,7 +889,7 @@ namespace fonthook::vectorfont
 			return nullptr;
 		}
 		// Snapshot restore leaves this null for the complete page. Materialize only
-		// glyph metadata that live text actually consumes; alpha stays disk/GPU-backed.
+		// glyph metadata that live text actually consumes; pixels stay disk/GPU-backed.
 		auto bitmap = std::make_shared<GlyphBitmap>();
 		bitmap->cacheId = placement.cacheId;
 		bitmap->atlasRgb = placement.atlasRgb;
@@ -984,22 +920,66 @@ namespace fonthook::vectorfont
 			|| State().defaultPoolShutdown)
 			return false;
 		AtlasState& state = State();
-		std::lock_guard<std::mutex> lock(state.atlasMutex);
-		auto range = state.atlasPageDedup.equal_range(pageContentHash);
-		for (auto it = range.first; it != range.second;)
+		std::vector<std::shared_ptr<AtlasResource>> candidates;
 		{
-			const std::shared_ptr<AtlasResource> existing = it->second.lock();
-			if (!existing)
+			std::lock_guard<std::mutex> lock(state.atlasMutex);
+			auto range = state.atlasPageDedup.equal_range(pageContentHash);
+			for (auto it = range.first; it != range.second;)
 			{
-				it = state.atlasPageDedup.erase(it);
+				const std::shared_ptr<AtlasResource> existing = it->second.lock();
+				if (!existing)
+				{
+					it = state.atlasPageDedup.erase(it);
+					continue;
+				}
+				++it;
+				if (existing.get() != resource.get())
+					candidates.push_back(existing);
+			}
+		}
+		for (const std::shared_ptr<AtlasResource>& existing : candidates)
+		{
+			std::shared_ptr<const CompactAtlasSnapshot> existingSnapshot;
+			{
+				std::lock_guard<std::mutex> lock(state.atlasMutex);
+				if (existing->backend != AtlasBackend::DefaultPool
+					|| existing->resetPending || !existing->property
+					|| existing->pageContentHash != pageContentHash
+					|| !CompactSnapshotResourceMetadataMatches(
+						*existing, *resource))
+				{
+					continue;
+				}
+				existingSnapshot = existing->compactSnapshot;
+			}
+			if (!existingSnapshot
+				|| !CompactAtlasSnapshotPixelsEqualBounded(
+					*existingSnapshot, *resource->compactSnapshot))
+			{
 				continue;
 			}
-			++it;
-			if (existing.get() == resource.get()
+			std::lock_guard<std::mutex> lock(state.atlasMutex);
+			bool stillIndexed = false;
+			const auto currentRange =
+				state.atlasPageDedup.equal_range(pageContentHash);
+			for (auto current = currentRange.first;
+				current != currentRange.second; ++current)
+			{
+				const std::shared_ptr<AtlasResource> indexed =
+					current->second.lock();
+				if (indexed.get() == existing.get())
+				{
+					stillIndexed = true;
+					break;
+				}
+			}
+			if (!stillIndexed
 				|| existing->backend != AtlasBackend::DefaultPool
 				|| existing->resetPending || !existing->property
 				|| existing->pageContentHash != pageContentHash
-				|| !CompactSnapshotsEqual(*existing, *resource))
+				|| existing->compactSnapshot != existingSnapshot
+				|| !CompactSnapshotResourceMetadataMatches(
+					*existing, *resource))
 			{
 				continue;
 			}
@@ -1030,6 +1010,14 @@ namespace fonthook::vectorfont
 	void PruneRetiredAtlasGenerations()
 	{
 		PruneRetiredAtlases();
+	}
+
+	void PruneRetiredAtlasGenerationsSafely()
+	{
+		AtlasState& state = State();
+		std::lock_guard<std::mutex> lock(state.atlasMutex);
+		PruneRetiredAtlases();
+		RefreshAtlasCacheGpuAccountingLocked(state);
 	}
 
 	void RegisterDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,

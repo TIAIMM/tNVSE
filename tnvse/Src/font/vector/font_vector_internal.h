@@ -705,7 +705,7 @@ namespace fonthook::vectorfont
 		UInt32 mtsdfDoubleByteGroupSize = 1;
 	};
 
-	struct MtsdfSharedRasterProfile
+	struct DistanceFieldRasterProfile
 	{
 		const FontConfig* ownerConfig = nullptr;
 		float sourceToLogicalScale = 1.0f;
@@ -732,7 +732,7 @@ namespace fonthook::vectorfont
 		UInt8 bakedLayer = 0;
 		// Single-channel coverage/true SDF, D3D-native BGRA MTSDF, or a
 		// precomposed BGRA glyph, according to maskType/distanceFieldMethod.
-		std::vector<UInt8> alpha;
+		std::vector<UInt8> pixels;
 	};
 
 	// Composite raster ABI. Revision 3 uses the unhinted CPU coverage contour
@@ -817,7 +817,7 @@ namespace fonthook::vectorfont
 			GetConfiguredDistanceFieldMethod();
 		EffectQuality quality = EffectQuality::Balanced;
 		// Source pixels per configured logical pixel. Packet c2.w mirrors this
-		// value so the native vertex shader can derive the MTSDF AA footprint
+		// value so the native vertex shader can derive the distance-field AA footprint
 		// without per-pixel ddx/ddy instructions.
 		float rasterScale = 1.0f;
 		float inverseAtlasWidth = 0.0f;
@@ -938,7 +938,7 @@ namespace fonthook::vectorfont
 		bool wantsShaderPath = false;
 		bool hasEffects = false;
 		bool requestsSdfFill = false;
-		bool a8RendererAvailable = false;
+		bool nativeRendererAvailable = false;
 		bool shaderQuadsBuilt = false;
 		bool shaderAtlasOrShapeFailed = false;
 		bool cpuQuadsBuilt = false;
@@ -1048,12 +1048,12 @@ namespace fonthook::vectorfont
 		GlyphMaskType aeMaskType, float afRasterScale);
 	bool ResolveSdfSpread(const FontConfig& arConfig, float afRasterScale, UInt32& arSpread,
 		bool abIncludeEffects = true);
-	bool ResolveMtsdfSharedRasterProfile(const FontConfig& arConfig,
+	bool ResolveDistanceFieldRasterProfile(const FontConfig& arConfig,
 		VectorFontByteClass aeByteClass, float afRasterScale,
-		bool abIncludeEffects, MtsdfSharedRasterProfile& arProfile);
-	const FontConfig& GetMtsdfAtlasConfig(const FontConfig& arConfig,
+		bool abIncludeEffects, DistanceFieldRasterProfile& arProfile);
+	const FontConfig& GetDistanceFieldRasterOwnerConfig(const FontConfig& arConfig,
 		VectorFontByteClass aeByteClass);
-	RuntimeFont* GetMtsdfAtlasRuntime(RuntimeFont& arRuntime,
+	RuntimeFont* GetDistanceFieldRasterOwnerRuntime(RuntimeFont& arRuntime,
 		VectorFontByteClass aeByteClass);
 	bool IsMtsdfAtlasAlias(const FontConfig& arConfig,
 		VectorFontByteClass aeByteClass);
@@ -1104,12 +1104,14 @@ namespace fonthook::vectorfont
 	bool ConsolidatePhysicalFontAtlasPools(float afRasterScale,
 		const FontAtlasPrewarmProgressReporter* apProgress = nullptr);
 	void PruneRetiredAtlasGenerations();
+	void PruneRetiredAtlasGenerationsSafely();
 	bool BuildDirectGlyphAtlasTables(RuntimeFont& arRuntime, float afRasterScale);
 	void QueueFontPrewarm(UInt32 auiFontId);
 	void ResetAtlasAllocationMemoryPressure();
 	void MarkAtlasAllocationMemoryPressure();
 	bool ConsumeAtlasAllocationMemoryPressure();
 	FontPrewarmPumpStatus PumpFontPrewarm();
+	void ServiceFontPrewarmHostMessages();
 	bool IsFontPrewarmActive();
 	void ShutdownFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,

@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <unordered_set>
 
 #include <winioctl.h>
 
@@ -25,6 +26,174 @@ namespace fonthook::vectorfont
 {
 	namespace implementation::font_atlas_snapshot {}
 	using namespace implementation::font_atlas_snapshot;
+
+	namespace
+	{
+		struct PhysicalGroupRollbackFile
+		{
+			std::wstring path;
+			std::wstring backupPath;
+			bool existed = false;
+		};
+
+		class PhysicalGroupDiskTransaction
+		{
+		public:
+			bool Capture(const PhysicalAtlasGroup& group)
+			{
+				if (active_)
+					return false;
+				std::unordered_set<std::wstring> uniquePaths;
+				for (const PhysicalAtlasGroupMember& member : group.members)
+				{
+					RuntimeFont* runtime = member.config
+						? EnsureRuntimeFont(member.config->fontId) : nullptr;
+					if (!runtime)
+						return FailCapture(ERROR_NOT_FOUND);
+					const AtlasCacheKey* roleKeys[] = {
+						&member.singleByteKey, &member.doubleByteKey
+					};
+					for (const AtlasCacheKey* baseKey : roleKeys)
+					{
+						for (UInt16 pageIndex = 0;
+							pageIndex < kMaximumAtlasSnapshotPages; ++pageIndex)
+						{
+							AtlasCacheKey pageKey = *baseKey;
+							pageKey.pageIndex = pageIndex;
+							UInt64 ignoredSnapshotHash = 0;
+							UInt64 ignoredMaskContentHash = 0;
+							const std::wstring path = GetAtlasSnapshotPath(
+								*runtime, pageKey, ignoredSnapshotHash,
+								ignoredMaskContentHash);
+							if (path.empty())
+								return FailCapture(ERROR_INVALID_DATA);
+							uniquePaths.insert(path);
+						}
+					}
+				}
+
+				wchar_t suffix[96] = {};
+				_snwprintf_s(suffix, _countof(suffix), _TRUNCATE,
+					L".%lu.%llu.groupv2.rollback", GetCurrentProcessId(),
+					static_cast<unsigned long long>(GetTickCount64()));
+				files_.reserve(uniquePaths.size());
+				for (const std::wstring& path : uniquePaths)
+				{
+					PhysicalGroupRollbackFile file;
+					file.path = path;
+					const DWORD attributes = GetFileAttributesW(path.c_str());
+					if (attributes == INVALID_FILE_ATTRIBUTES)
+					{
+						const DWORD error = GetLastError();
+						if (!IsMissingFileError(error))
+							return FailCapture(error);
+						files_.push_back(std::move(file));
+						continue;
+					}
+					if (attributes & FILE_ATTRIBUTE_DIRECTORY)
+						return FailCapture(ERROR_DIRECTORY);
+					file.existed = true;
+					file.backupPath = path + suffix;
+					if (!CreateHardLinkW(file.backupPath.c_str(), path.c_str(), nullptr)
+						&& !CopyFileW(path.c_str(), file.backupPath.c_str(), FALSE))
+					{
+						const DWORD error = GetLastError();
+						DeleteFileW(file.backupPath.c_str());
+						return FailCapture(error);
+					}
+					files_.push_back(std::move(file));
+					ServiceFontPrewarmHostMessages();
+				}
+				active_ = true;
+				return true;
+			}
+
+			bool Rollback()
+			{
+				if (!active_)
+					return false;
+				bool restored = true;
+				for (PhysicalGroupRollbackFile& file : files_)
+				{
+					DeleteFileW((file.path + L".tmp").c_str());
+					if (file.existed)
+					{
+						if (!MoveFileExW(file.backupPath.c_str(), file.path.c_str(),
+							MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+						{
+							restored = false;
+							lastError_ = GetLastError();
+						}
+					}
+					else if (!DeleteFileW(file.path.c_str()))
+					{
+						const DWORD error = GetLastError();
+						if (!IsMissingFileError(error))
+						{
+							restored = false;
+							lastError_ = error;
+						}
+					}
+				}
+				active_ = false;
+				return restored;
+			}
+
+			bool Commit()
+			{
+				if (!active_)
+					return false;
+				bool cleaned = true;
+				for (const PhysicalGroupRollbackFile& file : files_)
+				{
+					if (file.existed && !DeleteFileW(file.backupPath.c_str()))
+					{
+						const DWORD error = GetLastError();
+						if (!IsMissingFileError(error))
+						{
+							cleaned = false;
+							lastError_ = error;
+						}
+					}
+				}
+				active_ = false;
+				return cleaned;
+			}
+
+			DWORD LastError() const { return lastError_; }
+
+			~PhysicalGroupDiskTransaction()
+			{
+				if (active_)
+					Rollback();
+			}
+
+		private:
+			bool FailCapture(DWORD error)
+			{
+				lastError_ = error;
+				for (const PhysicalGroupRollbackFile& file : files_)
+				{
+					if (file.existed && !file.backupPath.empty())
+						DeleteFileW(file.backupPath.c_str());
+				}
+				files_.clear();
+				return false;
+			}
+
+			std::vector<PhysicalGroupRollbackFile> files_;
+			DWORD lastError_ = ERROR_SUCCESS;
+			bool active_ = false;
+		};
+
+		void PruneRetiredAtlasGenerationsWithLock()
+		{
+			AtlasState& state = State();
+			std::lock_guard<std::mutex> lock(state.atlasMutex);
+			PruneRetiredAtlasGenerations();
+			RefreshAtlasCacheGpuAccountingLocked(state);
+		}
+	}
 
 	UInt64 BuildAtlasSnapshotIdentityHash(const AtlasCacheKey& key,
 		UInt64 maskContentHash, const FontConfig& config)
@@ -420,6 +589,10 @@ namespace fonthook::vectorfont
 		std::unordered_set<UInt64> processedGroups;
 		for (const FontConfig* config : configs)
 		{
+			// Drop unreferenced source generations from the previous publication
+			// before another 8192-capable target texture is admitted.
+			PruneRetiredAtlasGenerationsWithLock();
+			ServiceFontPrewarmHostMessages();
 			if (!config)
 				continue;
 			PhysicalAtlasGroup group;
@@ -517,17 +690,40 @@ namespace fonthook::vectorfont
 					FontAtlasPrewarmProgressStage::PublishPhysicalGroup,
 					static_cast<UInt32>(processedGroups.size()), 0);
 			}
+			PhysicalGroupDiskTransaction diskTransaction;
+			if (sourceTablesReady && !diskTransaction.Capture(group))
+			{
+				success = false;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: physical atlas group publication skipped version=%u owner=%u members=%u sourceReady=1 reason=rollback-capture error=%lu",
+					kPhysicalAtlasGroupVersion, group.ownerFontId,
+					static_cast<UInt32>(group.members.size()),
+					diskTransaction.LastError());
+				continue;
+			}
 			const bool groupSaved = sourceTablesReady
 				&& SaveGlyphAtlasSnapshotRole(*ownerRuntime,
 					VectorFontByteClass::SingleByte, rasterScale,
 					&groupPublished, &group, &groupFallback);
 			if (groupFallback)
+			{
+				const bool rollbackCleanup = diskTransaction.Commit();
+				if (!rollbackCleanup)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: physical atlas group fallback rollback cleanup incomplete version=%u owner=%u error=%lu",
+						kPhysicalAtlasGroupVersion, group.ownerFontId,
+						diskTransaction.LastError());
+				}
 				continue;
+			}
 			if (!groupSaved || !groupPublished)
 			{
 				success = false;
-				bool fallbackRestored = sourceTablesReady;
-				if (sourceTablesReady)
+				const bool diskRolledBack = sourceTablesReady
+					&& diskTransaction.Rollback();
+				bool fallbackRestored = diskRolledBack;
+				if (diskRolledBack)
 				{
 					for (const PhysicalAtlasGroupMember& member :
 						group.members)
@@ -545,14 +741,16 @@ namespace fonthook::vectorfont
 					}
 				}
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: physical atlas group consolidation skipped version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u fallbackRestored=%u reason=publish-failed",
+					"tnvse_freetype_font: physical atlas group consolidation skipped version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u diskRolledBack=%u fallbackRestored=%u rollbackError=%lu reason=publish-failed",
 					kPhysicalAtlasGroupVersion, group.ownerFontId,
 					static_cast<UInt32>(group.members.size()),
 					static_cast<UInt32>(
 						group.uniqueSingleByteProfiles.size()),
 					static_cast<UInt32>(
 						group.uniqueDoubleByteLayoutHashes.size()),
-					fallbackRestored ? 1u : 0u);
+					diskRolledBack ? 1u : 0u,
+					fallbackRestored ? 1u : 0u,
+					diskTransaction.LastError());
 				continue;
 			}
 
@@ -640,20 +838,43 @@ namespace fonthook::vectorfont
 				|| !logicalProfilesReady)
 			{
 				success = false;
+				const bool diskRolledBack = diskTransaction.Rollback();
+				bool fallbackRestored = diskRolledBack;
+				if (diskRolledBack)
+				{
+					for (const PhysicalAtlasGroupMember& member : group.members)
+					{
+						RuntimeFont* memberRuntime =
+							EnsureRuntimeFont(member.config->fontId);
+						if (!memberRuntime
+							|| !RebuildGlyphAtlasFromSnapshot(
+								*memberRuntime, rasterScale)
+							|| !BuildDirectGlyphAtlasTables(
+								*memberRuntime, rasterScale)
+							|| !validateMemberTables(*memberRuntime))
+						{
+							fallbackRestored = false;
+						}
+					}
+				}
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: physical atlas group restore validation failed version=%u owner=%u members=%u rebuilt=%u physicallyShared=%u logicalProfiles=%u reason=%s",
+					"tnvse_freetype_font: physical atlas group restore validation failed version=%u owner=%u members=%u rebuilt=%u physicallyShared=%u logicalProfiles=%u diskRolledBack=%u fallbackRestored=%u rollbackError=%lu reason=%s",
 					kPhysicalAtlasGroupVersion, group.ownerFontId,
 					static_cast<UInt32>(group.members.size()),
 					rebuilt ? 1u : 0u, physicallyShared ? 1u : 0u,
 					logicalProfilesReady ? 1u : 0u,
+					diskRolledBack ? 1u : 0u,
+					fallbackRestored ? 1u : 0u,
+					diskTransaction.LastError(),
 					validationFailure);
 				continue;
 			}
 
+			const bool rollbackCleanup = diskTransaction.Commit();
 			const size_t bytes = GetAtlasStorageBytes(shared->width,
 				shared->height, shared->pixelMode, shared->mipLevels);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: physical atlas group active version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u logicalProfiles=%u size=%ux%u gpuBytes=%llu pageContentHash=%016llX",
+				"tnvse_freetype_font: physical atlas group active version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u logicalProfiles=%u size=%ux%u gpuBytes=%llu pageContentHash=%016llX rollbackCleanup=%u rollbackError=%lu",
 				kPhysicalAtlasGroupVersion, group.ownerFontId,
 				static_cast<UInt32>(group.members.size()),
 				static_cast<UInt32>(
@@ -663,8 +884,11 @@ namespace fonthook::vectorfont
 				static_cast<UInt32>(memberRuntimes.size()),
 				shared->width, shared->height,
 				static_cast<unsigned long long>(bytes),
-				static_cast<unsigned long long>(shared->pageContentHash));
+				static_cast<unsigned long long>(shared->pageContentHash),
+				rollbackCleanup ? 1u : 0u,
+				diskTransaction.LastError());
 		}
+		PruneRetiredAtlasGenerationsWithLock();
 		return success;
 	}
 
@@ -781,7 +1005,7 @@ namespace fonthook::vectorfont
 			if (!aggressive && !fallback)
 				return PersistentCacheCleanupClass::Invalid;
 			return (aggressive
-						&& route == FontAtlasRoute::ShaderA8Coverage)
+						&& route == FontAtlasRoute::BakedArgbComposite)
 					|| (fallback
 						&& route == FontAtlasRoute::ArgbFallback)
 				? PersistentCacheCleanupClass::Neutral

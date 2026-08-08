@@ -28,6 +28,34 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_atlas_snapshot
 	{
+		class ScopedSnapshotFile
+		{
+		public:
+			explicit ScopedSnapshotFile(HANDLE file = INVALID_HANDLE_VALUE)
+				: m_file(file)
+			{
+			}
+			~ScopedSnapshotFile()
+			{
+				Close();
+			}
+			ScopedSnapshotFile(const ScopedSnapshotFile&) = delete;
+			ScopedSnapshotFile& operator=(const ScopedSnapshotFile&) = delete;
+			operator HANDLE() const { return m_file; }
+			bool Valid() const { return m_file != INVALID_HANDLE_VALUE; }
+			void Close()
+			{
+				if (m_file != INVALID_HANDLE_VALUE)
+				{
+					CloseHandle(m_file);
+					m_file = INVALID_HANDLE_VALUE;
+				}
+			}
+
+		private:
+			HANDLE m_file = INVALID_HANDLE_VALUE;
+		};
+
 		bool MarkPhysicalAtlasGroupFallback(RuntimeFont& runtime,
 			const AtlasCacheKey& baseKey, UInt32 pageCount)
 		{
@@ -35,6 +63,15 @@ namespace fonthook::vectorfont
 				return false;
 			const UInt8 magic[8] =
 				{ 'T', 'N', 'V', 'F', 'A', 'T', 'L', '9' };
+			struct FallbackHeaderUpdate
+			{
+				std::wstring path;
+				AtlasSnapshotHeader original = {};
+				AtlasSnapshotHeader updated = {};
+				bool changed = false;
+			};
+			std::vector<FallbackHeaderUpdate> updates;
+			updates.reserve(pageCount);
 			for (UInt32 pageIndex = 0; pageIndex < pageCount; ++pageIndex)
 			{
 				AtlasCacheKey pageKey = baseKey;
@@ -45,46 +82,80 @@ namespace fonthook::vectorfont
 					runtime, pageKey, snapshotHash, maskContentHash);
 				if (path.empty())
 					return false;
-				HANDLE file = CreateFileW(path.c_str(),
-					GENERIC_READ | GENERIC_WRITE,
+				ScopedSnapshotFile file(CreateFileW(path.c_str(), GENERIC_READ,
 					FILE_SHARE_READ | FILE_SHARE_WRITE
 						| FILE_SHARE_DELETE,
-					nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-				if (file == INVALID_HANDLE_VALUE)
+					nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+				if (!file.Valid())
 					return false;
-				AtlasSnapshotHeader header = {};
+				FallbackHeaderUpdate update;
+				update.path = path;
 				bool valid = ReadSnapshotBytesExact(
-					file, &header, sizeof(header))
-					&& std::memcmp(header.magic, magic, sizeof(magic)) == 0
-					&& header.version == kAtlasSnapshotVersion
-					&& header.headerSize == sizeof(header)
-					&& header.snapshotHash == snapshotHash
-					&& header.maskContentHash == maskContentHash
-					&& header.atlasContentHash
+					file, &update.original, sizeof(update.original))
+					&& std::memcmp(update.original.magic, magic,
+						sizeof(magic)) == 0
+					&& update.original.version == kAtlasSnapshotVersion
+					&& update.original.headerSize == sizeof(update.original)
+					&& update.original.snapshotHash == snapshotHash
+					&& update.original.maskContentHash == maskContentHash
+					&& update.original.atlasContentHash
 						== pageKey.atlasContentHash
-					&& header.pageIndex == pageIndex
-					&& header.pageCount == pageCount
-					&& !(header.flags & ~kAtlasSnapshotKnownFlags)
-					&& header.checksum == HashAtlasBytes(&header,
+					&& update.original.pageIndex == pageIndex
+					&& update.original.pageCount == pageCount
+					&& !(update.original.flags & ~kAtlasSnapshotKnownFlags)
+					&& update.original.checksum == HashAtlasBytes(&update.original,
 						offsetof(AtlasSnapshotHeader, checksum));
-				if (valid
-					&& !(header.flags
-						& kAtlasSnapshotFlagPhysicalFontGroupFallback))
-				{
-					header.flags |=
-						kAtlasSnapshotFlagPhysicalFontGroupFallback;
-					header.checksum = HashAtlasBytes(&header,
-						offsetof(AtlasSnapshotHeader, checksum));
-					LARGE_INTEGER beginning = {};
-					valid = SetFilePointerEx(file, beginning, nullptr,
-							FILE_BEGIN) != FALSE
-						&& WriteSequentialFileBytes(file,
-							&header, sizeof(header))
-						&& FlushFileBuffers(file) != FALSE;
-				}
-				CloseHandle(file);
 				if (!valid)
 					return false;
+				update.updated = update.original;
+				update.changed = !(update.updated.flags
+					& kAtlasSnapshotFlagPhysicalFontGroupFallback);
+				if (update.changed)
+				{
+					update.updated.flags |=
+						kAtlasSnapshotFlagPhysicalFontGroupFallback;
+					update.updated.checksum = HashAtlasBytes(&update.updated,
+						offsetof(AtlasSnapshotHeader, checksum));
+				}
+				updates.push_back(std::move(update));
+			}
+
+			auto writeHeader = [](const std::wstring& path,
+				const AtlasSnapshotHeader& header)
+			{
+				ScopedSnapshotFile file(CreateFileW(path.c_str(),
+					GENERIC_READ | GENERIC_WRITE,
+					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+					nullptr, OPEN_EXISTING,
+					FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr));
+				LARGE_INTEGER beginning = {};
+				return file.Valid()
+					&& SetFilePointerEx(file, beginning, nullptr, FILE_BEGIN) != FALSE
+					&& WriteSequentialFileBytes(file, &header, sizeof(header))
+					&& FlushFileBuffers(file) != FALSE;
+			};
+			size_t applied = 0;
+			for (; applied < updates.size(); ++applied)
+			{
+				const FallbackHeaderUpdate& update = updates[applied];
+				if (!update.changed)
+					continue;
+				if (writeHeader(update.path, update.updated))
+					continue;
+				bool rolledBack = true;
+				for (size_t rollback = 0; rollback <= applied; ++rollback)
+				{
+					const FallbackHeaderUpdate& prior = updates[rollback];
+					if (prior.changed
+						&& !writeHeader(prior.path, prior.original))
+					{
+						rolledBack = false;
+					}
+				}
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: physical atlas group fallback marker write failed page=%u rollback=%u policy=retain-source-generation",
+					static_cast<UInt32>(applied), rolledBack ? 1u : 0u);
+				return false;
 			}
 			return true;
 		}
@@ -404,9 +475,10 @@ namespace fonthook::vectorfont
 			&& singleByteKey.levelZeroOnly == doubleByteKey.levelZeroOnly
 			&& UsesPlacedLevelZeroSnapshot(singleByteKey)
 			&& UsesPlacedLevelZeroSnapshot(doubleByteKey);
+		std::vector<std::pair<AtlasCacheKey,
+			std::shared_ptr<AtlasResource>>> resources;
 		{
 			std::lock_guard<std::mutex> lock(State().atlasMutex);
-			std::vector<std::pair<AtlasCacheKey, std::shared_ptr<AtlasResource>>> resources;
 			auto collectRole = [&](const AtlasCacheKey& roleKey,
 				std::vector<std::pair<AtlasCacheKey,
 					std::shared_ptr<AtlasResource>>>& destination,
@@ -547,54 +619,59 @@ namespace fonthook::vectorfont
 					&& resources.size()
 						> static_cast<size_t>(kMaximumAtlasSnapshotPages) * 2u))
 				return false;
-			if (UsesPlacedLevelZeroSnapshot(key))
+		}
+		// Resources are sealed and held by shared_ptr. Planning and pixel I/O can be
+		// expensive, so never hold atlasMutex while evaluating an 8192-capable
+		// physical layout or streaming its source snapshots.
+		if (UsesPlacedLevelZeroSnapshot(key))
+		{
+			if (!BuildRepackedSnapshotPages(key, resources, pages,
+				originalGpuBytes, packingByteClass,
+				jointlyPackedFontGroup && physicalGroup->version
+					== kPhysicalAtlasPoolVersion ? 1u : 0u,
+				physicalGroupPreview == nullptr))
 			{
-				if (!BuildRepackedSnapshotPages(key, resources, pages,
-					originalGpuBytes, packingByteClass,
-					jointlyPackedFontGroup && physicalGroup->version
-						== kPhysicalAtlasPoolVersion ? 1u : 0u,
-					physicalGroupPreview == nullptr))
-					return false;
+				return false;
 			}
-			else
+		}
+		else
+		{
+			for (size_t index = 0; index < resources.size(); ++index)
 			{
-				for (size_t index = 0; index < resources.size(); ++index)
+				SnapshotPageData page;
+				page.key = resources[index].first;
+				AtlasResource& resource = *resources[index].second;
+				originalGpuBytes += GetAtlasStorageBytes(resource.width,
+					resource.height, resource.pixelMode, resource.mipLevels);
+				page.header.width = resource.width;
+				page.header.height = resource.height;
+				page.header.cursorX = resource.cursorX;
+				page.header.cursorY = resource.cursorY;
+				page.header.shelfHeight = resource.shelfHeight;
+				page.header.padding = resource.padding;
+				page.placements.reserve(resource.glyphs.size());
+				for (const AtlasGlyphRecord& record : resource.glyphs)
 				{
-					SnapshotPageData page;
-					page.key = resources[index].first;
-					AtlasResource& resource = *resources[index].second;
-					originalGpuBytes += GetAtlasStorageBytes(resource.width,
-						resource.height, resource.pixelMode, resource.mipLevels);
-					page.header.width = resource.width;
-					page.header.height = resource.height;
-					page.header.cursorX = resource.cursorX;
-					page.header.cursorY = resource.cursorY;
-					page.header.shelfHeight = resource.shelfHeight;
-					page.header.padding = resource.padding;
-					page.placements.reserve(resource.glyphs.size());
-					for (const AtlasGlyphRecord& record : resource.glyphs)
-					{
-						AtlasSnapshotPlacement placement;
-						if (!MakeSnapshotPlacement(resource, record.cacheId,
-							record.rect, placement))
-						{
-							return false;
-						}
-						page.placements.push_back(placement);
-					}
-					std::sort(page.placements.begin(), page.placements.end(),
-						[](const AtlasSnapshotPlacement& lhs,
-							const AtlasSnapshotPlacement& rhs)
-						{
-							return lhs.cacheId < rhs.cacheId;
-						});
-					if (!BuildAtlasSnapshotPixels(resource, page.placements,
-						AtlasSnapshotStorage::FullMipChain, page.pixels))
+					AtlasSnapshotPlacement placement;
+					if (!MakeSnapshotPlacement(resource, record.cacheId,
+						record.rect, placement))
 					{
 						return false;
 					}
-					pages.push_back(std::move(page));
+					page.placements.push_back(placement);
 				}
+				std::sort(page.placements.begin(), page.placements.end(),
+					[](const AtlasSnapshotPlacement& lhs,
+						const AtlasSnapshotPlacement& rhs)
+					{
+						return lhs.cacheId < rhs.cacheId;
+					});
+				if (!BuildAtlasSnapshotPixels(resource, page.placements,
+					AtlasSnapshotStorage::FullMipChain, page.pixels))
+				{
+					return false;
+				}
+				pages.push_back(std::move(page));
 			}
 		}
 		if (pages.empty() || pages.size() > kMaximumAtlasSnapshotPages)
@@ -773,10 +850,10 @@ namespace fonthook::vectorfont
 					break;
 				}
 				const std::wstring temporary = page.path + L".tmp";
-				HANDLE file = CreateFileW(temporary.c_str(),
+				ScopedSnapshotFile file(CreateFileW(temporary.c_str(),
 					GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-					CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-				if (file == INVALID_HANDLE_VALUE)
+					CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+				if (!file.Valid())
 				{
 					prepared = false;
 					break;
@@ -825,7 +902,7 @@ namespace fonthook::vectorfont
 							&page.header, sizeof(page.header))
 						&& FlushFileBuffers(file) != FALSE;
 				}
-				CloseHandle(file);
+				file.Close();
 				if (!written || !page.header.payloadChecksum
 					|| !page.header.pageContentHash)
 				{
@@ -1103,7 +1180,7 @@ namespace fonthook::vectorfont
 				*jointRolePublished = true;
 		}
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: atlas snapshot saved font=%u role=%s pages=%u->%u placements=%llu rawBytes=%llu gpuBytes=%llu->%llu saved=%llu tail=%ux%u jointRoles=%u physicalAliasFiles=%u diskBytesSaved=%llu",
+			"tnvse_freetype_font: atlas snapshot saved font=%u role=%s pages=%u->%u placements=%llu rawBytes=%llu gpuBytes=%llu->%llu saved=%llu tail=%ux%u jointRoles=%u physicalAliasFiles=%u diskBytesSaved=%llu repackIoKiB=%u",
 			key.fontId, key.byteClass == VectorFontByteClass::DoubleByte
 				? "doubleByte" : "singleByte", sourcePageCount, pageCount,
 			static_cast<unsigned long long>(totalPlacements),
@@ -1115,7 +1192,7 @@ namespace fonthook::vectorfont
 			pages.back().header.width, pages.back().header.height,
 			jointlyPackedRoles ? 1u : 0u,
 			physicalAliasFiles,
-			static_cast<unsigned long long>(physicalAliasSavedBytes));
+			static_cast<unsigned long long>(physicalAliasSavedBytes), 1024u);
 		if (jointlyPackedFontGroup)
 		{
 			gLog.FormattedMessage(

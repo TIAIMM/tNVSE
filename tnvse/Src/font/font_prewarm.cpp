@@ -45,6 +45,30 @@ namespace fonthook::vectorfont
 		// CreateDynamicAtlasTexture admits the selected page using its exact bytes.
 		constexpr size_t kMaximumPrewarmPhysicalAllocationBytes =
 			256u * 1024u * 1024u;
+		constexpr UInt32 kMaximumBatchAllocationFailures = 12;
+		constexpr UInt32 kMaximumFontMemoryFailures = 12;
+		constexpr UInt32 kMaximumFontGenerationRestarts = 2;
+		constexpr UInt32 kMaximumTransactionRestarts = 2;
+		constexpr UInt32 kMaximumHostMessagesPerService = 32;
+		constexpr bool CanRetryAfterMemoryFailure(UInt32 failureCount,
+			UInt32 maximumFailures)
+		{
+			return failureCount < maximumFailures;
+		}
+		constexpr bool CanRestartFontGeneration(UInt32 completedRestarts)
+		{
+			return completedRestarts <= kMaximumFontGenerationRestarts;
+		}
+		constexpr bool CanRestartPrewarmTransaction(UInt32 completedRestarts)
+		{
+			return completedRestarts < kMaximumTransactionRestarts;
+		}
+		static_assert(CanRetryAfterMemoryFailure(11, 12));
+		static_assert(!CanRetryAfterMemoryFailure(12, 12));
+		static_assert(CanRestartFontGeneration(2));
+		static_assert(!CanRestartFontGeneration(3));
+		static_assert(CanRestartPrewarmTransaction(1));
+		static_assert(!CanRestartPrewarmTransaction(2));
 		void UpdatePrewarmProgress(const std::wstring& detail,
 			const std::wstring& stage, float progress)
 		{
@@ -91,6 +115,8 @@ namespace fonthook::vectorfont
 			FinalizeFont,
 			CleanupFlush,
 			CleanupProfiles,
+			CleanupPhysicalGroups,
+			CleanupPhysicalPools,
 			CleanupMasks,
 			CleanupBudget,
 			CleanupFiles,
@@ -115,6 +141,7 @@ namespace fonthook::vectorfont
 			UInt32 allocationRetries = 0;
 			bool exhausted = false;
 			bool failed = false;
+			bool terminalFailure = false;
 			bool cancelled = false;
 			bool constrainedMemory = false;
 		};
@@ -153,6 +180,8 @@ namespace fonthook::vectorfont
 			bool everyConfiguredJobCompleted = false;
 			bool everyConfiguredProfileVerified = false;
 			bool atlasOnlyTransactionStarted = false;
+			bool physicalGroupsReady = true;
+			bool physicalPoolsReady = true;
 			bool success = false;
 		};
 
@@ -160,6 +189,10 @@ namespace fonthook::vectorfont
 		UInt32 s_transactionRestartCount = 0;
 		UInt32 s_totalMemoryRetryCount = 0;
 		bool s_transactionRestartPending = false;
+		bool s_terminalPrewarmFailure = false;
+		DWORD s_prewarmHostThreadId = 0;
+		thread_local bool s_prewarmPumpExecuting = false;
+		thread_local bool s_servicingPrewarmMessages = false;
 		bool s_rebuildOverlayLatched = false;
 		bool s_rebuildOverlayPresented = false;
 		float s_rebuildOverlayProgress = 0.0f;
@@ -405,6 +438,18 @@ namespace fonthook::vectorfont
 			size_t worstTransientBytes = 1;
 			UInt32 workItemsPerGlyph = 1;
 			bool expensiveWork = shaderSdf || aggressiveComposite;
+			const DistanceFieldMethod distanceFieldMethod =
+				GetConfiguredDistanceFieldMethod();
+			size_t workerFixedBytes = kPrewarmPerWorkerFixedBytes;
+			if (shaderSdf)
+			{
+				// Float fields are accounted per pixel below. Post-quantization
+				// repairs also own method-specific bounded staging on each worker.
+				workerFixedBytes = SaturatingAdd(workerFixedBytes,
+					distanceFieldMethod == DistanceFieldMethod::TrueSdf
+					? kTrueSdfRepairPerWorkerScratchBudgetBytes
+					: kMtsdfRescuePerWorkerScratchBudgetBytes);
+			}
 			for (const ByteStyle& style : config.styles)
 			{
 				const size_t bodyWidth = static_cast<size_t>(std::max(1.0f,
@@ -455,7 +500,7 @@ namespace fonthook::vectorfont
 					// The whole batch retains only the quantized result. At most
 					// one float field per active worker coexists with those results.
 					const size_t channels = DistanceFieldBytesPerPixel(
-						GetConfiguredDistanceFieldMethod());
+						distanceFieldMethod);
 					retainedBytesPerPixel = channels;
 					transientBytesPerPixel =
 						channels * sizeof(float);
@@ -500,7 +545,7 @@ namespace fonthook::vectorfont
 				const size_t transientBytes = SaturatingAdd(
 					SaturatingMultiply(pixels,
 						transientBytesPerPixel),
-					kPrewarmPerWorkerFixedBytes);
+					workerFixedBytes);
 				worstRetainedBytes = std::max(
 					worstRetainedBytes, retainedBytes);
 				worstTransientBytes = std::max(
@@ -605,6 +650,7 @@ namespace fonthook::vectorfont
 		void ReportPrewarmTransactionProgress(const wchar_t* detail,
 			const wchar_t* stage, float progress, bool force = false)
 		{
+			ServiceFontPrewarmHostMessages();
 			if (!s_rebuildOverlayLatched || !s_rebuildOverlayPresented)
 				return;
 			progress = std::max(s_rebuildOverlayProgress,
@@ -630,7 +676,7 @@ namespace fonthook::vectorfont
 			const wchar_t* renderMode =
 				job.route == FontAtlasRoute::ShaderDistanceField
 					? (UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF")
-					: job.route == FontAtlasRoute::ShaderA8Coverage
+					: job.route == FontAtlasRoute::BakedArgbComposite
 						? L"BGRA composite" : L"ARGB fallback";
 			_snwprintf_s(detail, _countof(detail), _TRUNCATE,
 				L"Font %u of %u  |  ID %u  |  %ls",
@@ -832,6 +878,10 @@ namespace fonthook::vectorfont
 			case PrewarmPhase::FinalizeFont: return "finalize-font";
 			case PrewarmPhase::CleanupFlush: return "cleanup-flush";
 			case PrewarmPhase::CleanupProfiles: return "cleanup-profiles";
+			case PrewarmPhase::CleanupPhysicalGroups:
+				return "cleanup-physical-groups";
+			case PrewarmPhase::CleanupPhysicalPools:
+				return "cleanup-physical-pools";
 			case PrewarmPhase::CleanupMasks: return "cleanup-masks";
 			case PrewarmPhase::CleanupBudget: return "cleanup-budget";
 			case PrewarmPhase::CleanupFiles: return "cleanup-files";
@@ -882,6 +932,11 @@ namespace fonthook::vectorfont
 			EnforceCpuMemoryBudget(reason);
 		}
 
+		void PruneRetiredPrewarmAtlasGenerations()
+		{
+			PruneRetiredAtlasGenerationsSafely();
+		}
+
 		void IncrementSaturating(UInt32& value)
 		{
 			if (value != std::numeric_limits<UInt32>::max())
@@ -904,7 +959,7 @@ namespace fonthook::vectorfont
 			SetBitmapCacheReducedAfterPrewarm(true);
 			const UInt64 releasedMappings =
 				ReleaseGlyphBitmapDiskCacheMappings();
-			PruneRetiredAtlasGenerations();
+			PruneRetiredPrewarmAtlasGenerations();
 			EnforceCpuMemoryBudget("prewarm-memory-retry");
 			ProcessVirtualMemoryHeadroom headroom;
 			QueryProcessVirtualMemoryHeadroom(headroom);
@@ -924,8 +979,64 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		void ResetPrewarmTransactionForRetry(const char* reason)
+		void AbortPrewarmTransaction(const char* reason) noexcept
 		{
+			const UInt32 queuedFonts = s_session.queuedFonts;
+			const UInt32 completedFonts = s_session.completedFonts;
+			const UInt32 memoryRetries = s_totalMemoryRetryCount;
+			const UInt32 transactionRestarts = s_transactionRestartCount;
+			try
+			{
+				if (s_session.activeFont)
+				{
+					if (RuntimeFont* runtime = FindRuntimeFont(
+							s_session.activeFont->job.fontId))
+					{
+						CancelStreamingPrewarmAtlas(*runtime);
+					}
+				}
+			}
+			catch (...) {}
+			try { ReleasePrewarmBatchReferences("prewarm-terminal-failure"); }
+			catch (...) {}
+			try { EndAtlasOnlyPrewarmPolicy(); }
+			catch (...) {}
+			try { SetBitmapCacheReducedAfterPrewarm(true); }
+			catch (...) {}
+			try { EnforceCpuMemoryBudget("prewarm-terminal-failure"); }
+			catch (...) {}
+			ReleaseFontPrewarmEmergencyAddressSpace();
+			ResetAtlasAllocationMemoryPressure();
+			s_session = {};
+			s_jobs.clear();
+			s_scheduledProfiles.clear();
+			s_configuredFontsQueued = true;
+			s_configuredFontsPrewarmed = false;
+			s_transactionRestartPending = false;
+			s_terminalPrewarmFailure = true;
+			s_prewarmHostThreadId = 0;
+			try { HideNativePrewarmOverlay(); }
+			catch (...) {}
+			s_rebuildOverlayLatched = false;
+			s_rebuildOverlayPresented = false;
+			s_rebuildOverlayProgress = 0.0f;
+			try
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm terminal failure reason=%s queued=%u complete=%u memoryRetries=%u transactionRestarts=%u policy=retain-valid-partial-caches-and-continue-loading runtimeFallback=1",
+					reason ? reason : "unknown", queuedFonts, completedFonts,
+					memoryRetries, transactionRestarts);
+			}
+			catch (...) {}
+		}
+
+		bool ResetPrewarmTransactionForRetry(const char* reason)
+		{
+			if (!CanRestartPrewarmTransaction(s_transactionRestartCount))
+			{
+				AbortPrewarmTransaction(reason);
+				return false;
+			}
 			if (s_session.activeFont)
 			{
 				if (RuntimeFont* runtime =
@@ -967,10 +1078,16 @@ namespace fonthook::vectorfont
 						s_transactionRestartCount - 4, 7)));
 				Sleep(delayMs);
 			}
+			return true;
 		}
 
 		void ForcePrewarmTransactionRetryState() noexcept
 		{
+			if (!CanRestartPrewarmTransaction(s_transactionRestartCount))
+			{
+				AbortPrewarmTransaction("exception-retry-state-exhausted");
+				return;
+			}
 			try
 			{
 				if (s_session.activeFont)
@@ -1012,15 +1129,16 @@ namespace fonthook::vectorfont
 			ResetAtlasAllocationMemoryPressure();
 		}
 
-		void RetryPrewarmAfterPumpException(const char* reason) noexcept
+		bool RetryPrewarmAfterPumpException(const char* reason) noexcept
 		{
 			try
 			{
-				ResetPrewarmTransactionForRetry(reason);
+				return ResetPrewarmTransactionForRetry(reason);
 			}
 			catch (...)
 			{
 				ForcePrewarmTransactionRetryState();
+				return !s_terminalPrewarmFailure;
 			}
 		}
 
@@ -1031,8 +1149,24 @@ namespace fonthook::vectorfont
 				std::max(s_session.maximumStepMs, elapsed);
 		}
 
+		void ReportPrewarmProcessMemoryState(const char* phase)
+		{
+			ProcessVirtualMemoryHeadroom headroom;
+			QueryProcessVirtualMemoryHeadroom(headroom);
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: prewarm process memory phase=%s privateMiB=%.2f workingSetMiB=%.2f availableVirtualMiB=%.2f largestFreeMiB=%.2f countersValid=%u virtualValid=%u",
+				phase ? phase : "unknown",
+				headroom.privateUsageBytes / (1024.0 * 1024.0),
+				headroom.workingSetBytes / (1024.0 * 1024.0),
+				headroom.availableBytes / (1024.0 * 1024.0),
+				headroom.largestFreeRegionBytes / (1024.0 * 1024.0),
+				headroom.processCountersValid ? 1u : 0u,
+				headroom.valid ? 1u : 0u);
+		}
+
 		void PrepareIncrementalSession()
 		{
+			s_prewarmHostThreadId = GetCurrentThreadId();
 			s_transactionRestartPending = false;
 			s_session.transactionRestarts = s_transactionRestartCount;
 			s_session.memoryRetries = s_totalMemoryRetryCount;
@@ -1041,11 +1175,14 @@ namespace fonthook::vectorfont
 			ProcessVirtualMemoryHeadroom initialHeadroom;
 			QueryProcessVirtualMemoryHeadroom(initialHeadroom);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm address-space guard reserveMiB=%.2f reserved=%u availableVirtualMiB=%.2f largestFreeMiB=%.2f",
+				"tnvse_freetype_font: prewarm address-space guard reserveMiB=%.2f reserved=%u availableVirtualMiB=%.2f largestFreeMiB=%.2f privateMiB=%.2f workingSetMiB=%.2f countersValid=%u",
 				kFontPrewarmEmergencyAddressSpaceBytes / (1024.0 * 1024.0),
 				emergencyReserved ? 1u : 0u,
 				initialHeadroom.availableBytes / (1024.0 * 1024.0),
-				initialHeadroom.largestFreeRegionBytes / (1024.0 * 1024.0));
+				initialHeadroom.largestFreeRegionBytes / (1024.0 * 1024.0),
+				initialHeadroom.privateUsageBytes / (1024.0 * 1024.0),
+				initialHeadroom.workingSetBytes / (1024.0 * 1024.0),
+				initialHeadroom.processCountersValid ? 1u : 0u);
 			const FontAtlasRoute finalRoute = GetPersistentFontCacheRoute();
 			std::deque<PrewarmJob> reboundJobs;
 			while (!s_jobs.empty())
@@ -1175,6 +1312,14 @@ namespace fonthook::vectorfont
 				PreparePrewarmMemoryRetry("snapshot-restore", job.fontId,
 					job.memoryRetries,
 					kMaximumPrewarmPhysicalAllocationBytes);
+				if (!CanRetryAfterMemoryFailure(job.memoryRetries,
+						kMaximumFontMemoryFailures))
+				{
+					AbortPrewarmTransaction(
+						"snapshot-restore-memory-retries-exhausted");
+					RecordPrewarmStep(stepStarted);
+					return;
+				}
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: snapshot restore memory pressure font=%u scale=%.3f snapshotPreserved=1 retryInSameBarrier=1",
 					job.fontId, s_session.rasterScale);
@@ -1280,7 +1425,7 @@ namespace fonthook::vectorfont
 				&& ResolveNativeFontEffectQuality(
 					config->effectQuality, resolvedQuality);
 			active.aggressiveComposite =
-				active.job.route == FontAtlasRoute::ShaderA8Coverage;
+				active.job.route == FontAtlasRoute::BakedArgbComposite;
 			if (active.shaderSdf
 				&& !ResolveSdfSpread(
 					*config, s_session.rasterScale, active.sdfSpread))
@@ -1332,6 +1477,13 @@ namespace fonthook::vectorfont
 				PreparePrewarmMemoryRetry("shared-role-restore",
 					active.job.fontId, active.job.memoryRetries,
 					kMaximumPrewarmPhysicalAllocationBytes);
+				if (!CanRetryAfterMemoryFailure(active.job.memoryRetries,
+						kMaximumFontMemoryFailures))
+				{
+					AbortPrewarmTransaction(
+						"shared-role-memory-retries-exhausted");
+					return;
+				}
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: shared double-byte role restore memory pressure font=%u owner=%u snapshotPreserved=1 retryInSameBarrier=1",
 					active.job.fontId,
@@ -1537,7 +1689,22 @@ namespace fonthook::vectorfont
 					active.job.memoryRetries,
 					std::max(active.targetBatchBytes,
 						kMaximumPrewarmStreamingWorkingBytes));
-				return selectedBatchLimit < previous;
+				const bool retryAllowed = CanRetryAfterMemoryFailure(
+						active.allocationRetries,
+						kMaximumBatchAllocationFailures)
+					&& CanRetryAfterMemoryFailure(active.job.memoryRetries,
+						kMaximumFontMemoryFailures);
+				if (!retryAllowed)
+				{
+					active.failed = true;
+					active.terminalFailure = true;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: prewarm batch memory retries exhausted stage=%s font=%u batchLimit=%u allocationRetries=%u fontMemoryRetries=%u policy=terminate-prewarm",
+						stage ? stage : "unknown", active.job.fontId,
+						selectedBatchLimit, active.allocationRetries,
+						active.job.memoryRetries);
+				}
+				return retryAllowed;
 			};
 
 			s_session.requestedGlyphs.clear();
@@ -1557,7 +1724,7 @@ namespace fonthook::vectorfont
 			catch (const std::bad_alloc&)
 			{
 				const UInt32 previous = selectedBatchLimit;
-				retryBatchAfterMemoryPressure(
+				const bool retryAllowed = retryBatchAfterMemoryPressure(
 					"request-buffer");
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: prewarm request-buffer retry font=%u limit=%u->%u metricsOnly=%u retry=%u sameBarrier=1",
@@ -1566,6 +1733,8 @@ namespace fonthook::vectorfont
 					metricsOnlyDoubleByte ? 1u : 0u,
 					active.allocationRetries);
 				RecordPrewarmStep(stepStarted);
+				if (!retryAllowed)
+					TransitionPrewarmPhase(PrewarmPhase::FinalizeFont);
 				return;
 			}
 
@@ -1647,7 +1816,8 @@ namespace fonthook::vectorfont
 			{
 				s_session.scanMs += GetTickCount64() - scanStarted;
 				const UInt32 previous = selectedBatchLimit;
-				retryBatchAfterMemoryPressure("glyph-scan");
+				const bool retryAllowed =
+					retryBatchAfterMemoryPressure("glyph-scan");
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: prewarm scan allocation retry font=%u limit=%u->%u metricsOnly=%u retry=%u sameBarrier=1",
 					active.job.fontId, previous,
@@ -1655,6 +1825,8 @@ namespace fonthook::vectorfont
 					metricsOnlyDoubleByte ? 1u : 0u,
 					active.allocationRetries);
 				RecordPrewarmStep(stepStarted);
+				if (!retryAllowed)
+					TransitionPrewarmPhase(PrewarmPhase::FinalizeFont);
 				return;
 			}
 			catch (...)
@@ -1691,8 +1863,8 @@ namespace fonthook::vectorfont
 				catch (const std::bad_alloc&)
 				{
 					const UInt32 previous = selectedBatchLimit;
-					retryBatchAfterMemoryPressure("glyph-raster");
-					retryMemoryBatch = true;
+					retryMemoryBatch = retryBatchAfterMemoryPressure(
+						"glyph-raster");
 					gLog.FormattedMessage(
 						"tnvse_freetype_font: prewarm raster allocation retry font=%u scale=%.3f batchGlyphs=%u limit=%u->%u retry=%u sameBarrier=1",
 						active.job.fontId,
@@ -1733,8 +1905,8 @@ namespace fonthook::vectorfont
 					if (!appended && streamAllocationFailed)
 					{
 						const UInt32 previous = selectedBatchLimit;
-						retryBatchAfterMemoryPressure("stream-append");
-						retryMemoryBatch = true;
+						retryMemoryBatch = retryBatchAfterMemoryPressure(
+							"stream-append");
 						gLog.FormattedMessage(
 							"tnvse_freetype_font: prewarm stream append allocation retry font=%u batchGlyphs=%u limit=%u->%u retry=%u statePreserved=1 sameBarrier=1",
 							active.job.fontId, glyphCount, previous,
@@ -1826,6 +1998,13 @@ namespace fonthook::vectorfont
 				TransitionPrewarmPhase(PrewarmPhase::BeginFont);
 				return;
 			}
+			if (active.terminalFailure)
+			{
+				AbortPrewarmTransaction(
+					"batch-memory-retries-exhausted");
+				RecordPrewarmStep(stepStarted);
+				return;
+			}
 
 			if (active.failed)
 			{
@@ -1833,6 +2012,14 @@ namespace fonthook::vectorfont
 				const bool discarded = DiscardGlyphAtlasSnapshot(
 					*runtime, s_session.rasterScale);
 				IncrementSaturating(active.job.generationRestarts);
+				if (!CanRestartFontGeneration(
+						active.job.generationRestarts))
+				{
+					AbortPrewarmTransaction(
+						"font-generation-restarts-exhausted");
+					RecordPrewarmStep(stepStarted);
+					return;
+				}
 				PreparePrewarmScanForGeneration(active.job, *config,
 					s_session.rasterScaleMilli);
 				gLog.FormattedMessage(
@@ -1913,6 +2100,14 @@ namespace fonthook::vectorfont
 				PreparePrewarmMemoryRetry("stream-finalize",
 					active.job.fontId, active.job.memoryRetries,
 					kMaximumPrewarmPhysicalAllocationBytes);
+				if (!CanRetryAfterMemoryFailure(active.job.memoryRetries,
+						kMaximumFontMemoryFailures))
+				{
+					AbortPrewarmTransaction(
+						"stream-finalize-memory-retries-exhausted");
+					RecordPrewarmStep(stepStarted);
+					return;
+				}
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: streamed finalization memory pressure font=%u scale=%.3f snapshotPreserved=1 restoreRetryInSameBarrier=1 runtimeFallback=0",
 					active.job.fontId, s_session.rasterScale);
@@ -1933,6 +2128,14 @@ namespace fonthook::vectorfont
 			{
 				CancelStreamingPrewarmAtlas(*runtime);
 				IncrementSaturating(active.job.generationRestarts);
+				if (!CanRestartFontGeneration(
+						active.job.generationRestarts))
+				{
+					AbortPrewarmTransaction(
+						"font-finalization-restarts-exhausted");
+					RecordPrewarmStep(stepStarted);
+					return;
+				}
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: streamed finalization validation retry font=%u finalized=%u directReady=%u generationRestart=%u snapshotPreserved=1 sameBarrier=1",
 					active.job.fontId, finalized ? 1u : 0u,
@@ -2062,8 +2265,39 @@ namespace fonthook::vectorfont
 	}
 
 
+	void ServiceFontPrewarmHostMessages()
+	{
+		if (!s_prewarmHostThreadId
+			|| GetCurrentThreadId() != s_prewarmHostThreadId
+			|| s_servicingPrewarmMessages)
+		{
+			return;
+		}
+		s_servicingPrewarmMessages = true;
+		struct ResetFlag
+		{
+			bool& flag;
+			~ResetFlag() { flag = false; }
+		} reset{ s_servicingPrewarmMessages };
+		MSG message = {};
+		for (UInt32 count = 0; count < kMaximumHostMessagesPerService; ++count)
+		{
+			if (!PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+				break;
+			if (message.message == WM_QUIT)
+			{
+				PostQuitMessage(static_cast<int>(message.wParam));
+				break;
+			}
+			TranslateMessage(&message);
+			DispatchMessageW(&message);
+		}
+	}
+
 	FontPrewarmPumpStatus PumpFontPrewarmStep()
 	{
+		if (s_terminalPrewarmFailure)
+			return FontPrewarmPumpStatus::Failed;
 		if (!g_bEnableFreeTypeFontRendering)
 		{
 			ShutdownFontPrewarm();
@@ -2145,35 +2379,6 @@ namespace fonthook::vectorfont
 				L"Validating sealed font profiles...",
 				0.89f, true);
 			CollectPrewarmProfileResults();
-			if (s_session.everyConfiguredProfileVerified)
-			{
-				const FontAtlasPrewarmProgressReporter progressReporter = {
-					&ReportAtlasPrewarmProgress, nullptr
-				};
-				ReportPrewarmTransactionProgress(
-					L"Finalizing generated font cache",
-					L"Consolidating shared font atlas groups...",
-					0.90f, true);
-				const bool groupsReady =
-					ConsolidatePhysicalFontAtlasGroups(
-						s_session.rasterScale, &progressReporter);
-				ReportPrewarmTransactionProgress(
-					L"Finalizing generated font cache",
-					L"Planning physical font texture pools...",
-					0.94f, true);
-				const bool poolsReady =
-					ConsolidatePhysicalFontAtlasPools(
-						s_session.rasterScale, &progressReporter);
-				gLog.FormattedMessage(
-					"tnvse_freetype_font: physical atlas consolidation groupV2=%s poolV3=%s",
-					groupsReady ? "complete" : "partial-fallback",
-					poolsReady ? "complete" : "partial-fallback");
-				RefreshNativePrewarmOverlayTextGeometry();
-				ReportPrewarmTransactionProgress(
-					L"Finalizing generated font cache",
-					L"Shared physical font textures are ready...",
-					0.975f, true);
-			}
 			if (!s_session.everyConfiguredProfileVerified)
 			{
 				gLog.FormattedMessage(
@@ -2189,6 +2394,107 @@ namespace fonthook::vectorfont
 					s_session.readyConfiguredRuntimes,
 					static_cast<UInt32>(g_configs.size()));
 			}
+			RecordPrewarmStep(started);
+			TransitionPrewarmPhase(s_session.everyConfiguredProfileVerified
+				? PrewarmPhase::CleanupPhysicalGroups
+				: PrewarmPhase::CleanupMasks);
+			break;
+		}
+		case PrewarmPhase::CleanupPhysicalGroups:
+		{
+			const ULONGLONG started = GetTickCount64();
+			const FontAtlasPrewarmProgressReporter progressReporter = {
+				&ReportAtlasPrewarmProgress, nullptr
+			};
+			ReportPrewarmTransactionProgress(
+				L"Finalizing generated font cache",
+				L"Consolidating shared font atlas groups...",
+				0.90f, true);
+			ReleaseGlyphBitmapDiskCacheMappings();
+			PruneRetiredPrewarmAtlasGenerations();
+			EnforceCpuMemoryBudget("prewarm-physical-groups");
+			ReportPrewarmProcessMemoryState("physical-groups-before");
+			try
+			{
+				s_session.physicalGroupsReady =
+					ConsolidatePhysicalFontAtlasGroups(
+						s_session.rasterScale, &progressReporter);
+			}
+			catch (const std::bad_alloc&)
+			{
+				s_session.physicalGroupsReady = false;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: optional physical atlas group consolidation allocation failure; retaining sealed per-font atlases");
+			}
+			catch (const std::exception& error)
+			{
+				s_session.physicalGroupsReady = false;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: optional physical atlas group consolidation failed reason=%s; retaining sealed per-font atlases",
+					error.what());
+			}
+			catch (...)
+			{
+				s_session.physicalGroupsReady = false;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: optional physical atlas group consolidation failed reason=unknown; retaining sealed per-font atlases");
+			}
+			PruneRetiredPrewarmAtlasGenerations();
+			ReportPrewarmProcessMemoryState("physical-groups-after");
+			RecordPrewarmStep(started);
+			TransitionPrewarmPhase(PrewarmPhase::CleanupPhysicalPools);
+			break;
+		}
+		case PrewarmPhase::CleanupPhysicalPools:
+		{
+			const ULONGLONG started = GetTickCount64();
+			const FontAtlasPrewarmProgressReporter progressReporter = {
+				&ReportAtlasPrewarmProgress, nullptr
+			};
+			ReportPrewarmTransactionProgress(
+				L"Finalizing generated font cache",
+				L"Planning physical font texture pools...",
+				0.94f, true);
+			ReleaseGlyphBitmapDiskCacheMappings();
+			PruneRetiredPrewarmAtlasGenerations();
+			EnforceCpuMemoryBudget("prewarm-physical-pools");
+			ReportPrewarmProcessMemoryState("physical-pools-before");
+			try
+			{
+				s_session.physicalPoolsReady =
+					ConsolidatePhysicalFontAtlasPools(
+						s_session.rasterScale, &progressReporter);
+			}
+			catch (const std::bad_alloc&)
+			{
+				s_session.physicalPoolsReady = false;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: optional physical atlas pool consolidation allocation failure; retaining sealed group/per-font atlases");
+			}
+			catch (const std::exception& error)
+			{
+				s_session.physicalPoolsReady = false;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: optional physical atlas pool consolidation failed reason=%s; retaining sealed group/per-font atlases",
+					error.what());
+			}
+			catch (...)
+			{
+				s_session.physicalPoolsReady = false;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: optional physical atlas pool consolidation failed reason=unknown; retaining sealed group/per-font atlases");
+			}
+			PruneRetiredPrewarmAtlasGenerations();
+			ReportPrewarmProcessMemoryState("physical-pools-after");
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: physical atlas consolidation groupV2=%s poolV3=%s",
+				s_session.physicalGroupsReady ? "complete" : "partial-fallback",
+				s_session.physicalPoolsReady ? "complete" : "partial-fallback");
+			RefreshNativePrewarmOverlayTextGeometry();
+			ReportPrewarmTransactionProgress(
+				L"Finalizing generated font cache",
+				L"Shared physical font textures are ready...",
+				0.975f, true);
 			RecordPrewarmStep(started);
 			TransitionPrewarmPhase(PrewarmPhase::CleanupMasks);
 			break;
@@ -2268,6 +2574,7 @@ namespace fonthook::vectorfont
 			s_transactionRestartPending = false;
 			s_transactionRestartCount = 0;
 			s_totalMemoryRetryCount = 0;
+			s_prewarmHostThreadId = 0;
 			return FontPrewarmPumpStatus::Completed;
 		case PrewarmPhase::Idle:
 		default:
@@ -2276,6 +2583,8 @@ namespace fonthook::vectorfont
 				: FontPrewarmPumpStatus::Idle;
 		}
 
+		if (s_terminalPrewarmFailure)
+			return FontPrewarmPumpStatus::Failed;
 		return s_transactionRestartPending
 			|| s_session.phase != PrewarmPhase::Idle
 			? FontPrewarmPumpStatus::Active
@@ -2284,6 +2593,15 @@ namespace fonthook::vectorfont
 
 	FontPrewarmPumpStatus PumpFontPrewarm()
 	{
+		if (s_prewarmPumpExecuting || s_servicingPrewarmMessages)
+			return s_terminalPrewarmFailure
+				? FontPrewarmPumpStatus::Failed
+				: FontPrewarmPumpStatus::Active;
+		s_prewarmPumpExecuting = true;
+		struct ResetPumpFlag
+		{
+			~ResetPumpFlag() { s_prewarmPumpExecuting = false; }
+		} resetPumpFlag;
 		try
 		{
 			return PumpFontPrewarmStep();
@@ -2301,7 +2619,9 @@ namespace fonthook::vectorfont
 				"tnvse_freetype_font: prewarm pump allocation exception intercepted; restarting inside the same loading barrier");
 			RetryPrewarmAfterPumpException(
 				"unhandled-allocation-exception");
-			return FontPrewarmPumpStatus::Active;
+			return s_terminalPrewarmFailure
+				? FontPrewarmPumpStatus::Failed
+				: FontPrewarmPumpStatus::Active;
 		}
 		catch (const std::exception& error)
 		{
@@ -2310,7 +2630,9 @@ namespace fonthook::vectorfont
 				error.what());
 			RetryPrewarmAfterPumpException(
 				"unhandled-standard-exception");
-			return FontPrewarmPumpStatus::Active;
+			return s_terminalPrewarmFailure
+				? FontPrewarmPumpStatus::Failed
+				: FontPrewarmPumpStatus::Active;
 		}
 		catch (...)
 		{
@@ -2318,7 +2640,9 @@ namespace fonthook::vectorfont
 				"tnvse_freetype_font: prewarm pump unknown C++ exception intercepted; restarting inside the same loading barrier");
 			RetryPrewarmAfterPumpException(
 				"unhandled-cpp-exception");
-			return FontPrewarmPumpStatus::Active;
+			return s_terminalPrewarmFailure
+				? FontPrewarmPumpStatus::Failed
+				: FontPrewarmPumpStatus::Active;
 		}
 	}
 
@@ -2357,6 +2681,8 @@ namespace fonthook::vectorfont
 		s_transactionRestartPending = false;
 		s_transactionRestartCount = 0;
 		s_totalMemoryRetryCount = 0;
+		s_terminalPrewarmFailure = false;
+		s_prewarmHostThreadId = 0;
 		HideNativePrewarmOverlay();
 		s_rebuildOverlayLatched = false;
 		s_rebuildOverlayPresented = false;
@@ -2366,6 +2692,11 @@ namespace fonthook::vectorfont
 
 namespace fonthook
 {
+	void ServiceFreeTypeFontPrewarmHostMessages()
+	{
+		vectorfont::ServiceFontPrewarmHostMessages();
+	}
+
 	FontPrewarmPumpStatus PumpFreeTypeFontPrewarm()
 	{
 		return vectorfont::PumpFontPrewarm();

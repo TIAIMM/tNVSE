@@ -28,8 +28,6 @@ namespace fonthook::vectorfont
 	// Shader distance-field atlases are level-zero-only. One outside-distance texel on
 	// each edge isolates bilinear samples; the field already contains its spread.
 	inline constexpr UInt32 kDistanceFieldAtlasPadding = 1;
-	inline constexpr UInt32 kMtsdfAtlasPadding = kDistanceFieldAtlasPadding;
-	// Compatibility alias for internal structures whose field name is still SDF.
 	// CPU-baked ARGB atlases retain up to three mip levels. Four transparent
 	// level-zero texels leave one transparent texel at the coarsest 1/4 mip.
 	inline constexpr UInt32 kArgbAtlasPadding = 4;
@@ -47,11 +45,11 @@ namespace fonthook::vectorfont
 	}
 	// Keep each intermediate streamed page bounded. Complete DEFAULT-pool
 	// publication repacks those pages against the role-specific physical limit.
-	inline constexpr UInt32 kMaximumMtsdfPrewarmAtlasSize = 2048;
-	inline constexpr size_t kMaximumMtsdfPrewarmPageBytes =
-		static_cast<size_t>(kMaximumMtsdfPrewarmAtlasSize)
-			* kMaximumMtsdfPrewarmAtlasSize * 4u;
-	static_assert(kMaximumMtsdfPrewarmPageBytes == 16u * 1024u * 1024u);
+	inline constexpr UInt32 kMaximumStreamingPrewarmAtlasSize = 2048;
+	inline constexpr size_t kMaximumStreamingPrewarmPageBytes =
+		static_cast<size_t>(kMaximumStreamingPrewarmAtlasSize)
+			* kMaximumStreamingPrewarmAtlasSize * 4u;
+	static_assert(kMaximumStreamingPrewarmPageBytes == 16u * 1024u * 1024u);
 	// Complete level-zero snapshots search deterministic power-of-two physical
 	// layouts without changing glyph padding or intermediate stream pages.
 	// Revision 5 restores the device-supported 8192 edge for final repacking.
@@ -1028,6 +1026,9 @@ namespace fonthook::vectorfont
 	size_t GetCompactSnapshotBytes(const AtlasResource& resource);
 	bool LoadCompactAtlasSnapshotPixels(const CompactAtlasSnapshot& snapshot,
 		std::vector<UInt8>& pixels);
+	bool CompactAtlasSnapshotPixelsEqualBounded(
+		const CompactAtlasSnapshot& left,
+		const CompactAtlasSnapshot& right);
 	NiTexture* GetAtlasTexture(const AtlasResource& resource);
 	NiTexturingProperty* CreateManagedAtlasProperty(UInt32 width, UInt32 height,
 		AtlasPixelMode mode, UInt32 mipLevels, const std::vector<UInt8>& source,

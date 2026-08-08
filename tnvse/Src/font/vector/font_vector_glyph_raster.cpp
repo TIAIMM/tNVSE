@@ -43,7 +43,7 @@ namespace fonthook::vectorfont
 		void RefreshGlyphBitmapCpuMemory(GlyphBitmap& bitmap)
 		{
 			bitmap.cpuMemory.Reset(CpuMemoryCategory::GlyphBitmap,
-				sizeof(GlyphBitmap) + bitmap.alpha.capacity());
+				sizeof(GlyphBitmap) + bitmap.pixels.capacity());
 		}
 
 		constexpr size_t GetBitmapCacheEntryCpuBytes()
@@ -96,13 +96,13 @@ namespace fonthook::vectorfont
 			target.height = sourceHeight + kBitmapGuardPixels * 2;
 			target.left -= kBitmapGuardPixels;
 			target.top += kBitmapGuardPixels;
-			target.alpha.assign(static_cast<size_t>(target.width) * target.height, 0);
+			target.pixels.assign(static_cast<size_t>(target.width) * target.height, 0);
 			const int pitch = source.pitch;
 			for (int y = 0; y < sourceHeight; ++y)
 			{
 				const int sourceY = pitch >= 0 ? y : sourceHeight - 1 - y;
 				const UInt8* row = source.buffer + static_cast<ptrdiff_t>(sourceY) * std::abs(pitch);
-				UInt8* output = target.alpha.data()
+				UInt8* output = target.pixels.data()
 					+ static_cast<size_t>(y + kBitmapGuardPixels) * target.width
 					+ kBitmapGuardPixels;
 				if (source.pixel_mode == FT_PIXEL_MODE_GRAY)
@@ -137,8 +137,8 @@ namespace fonthook::vectorfont
 			GlyphBitmap& target)
 		{
 			if (!slot || slot->format != FT_GLYPH_FORMAT_OUTLINE
-				|| spread < kMtsdfMinimumSpread
-				|| spread > kMtsdfMaximumSpread)
+				|| spread < kDistanceFieldMinimumSpread
+				|| spread > kDistanceFieldMaximumSpread)
 				return false;
 
 			target.distanceFieldMethod = method;
@@ -151,7 +151,7 @@ namespace fonthook::vectorfont
 				target.height = generated.height;
 				target.left = generated.left;
 				target.top = generated.top;
-				target.alpha = std::move(generated.pixels);
+				target.pixels = std::move(generated.pixels);
 			}
 			else
 			{
@@ -162,7 +162,7 @@ namespace fonthook::vectorfont
 				target.height = generated.height;
 				target.left = generated.left;
 				target.top = generated.top;
-				target.alpha = std::move(generated.bgra);
+				target.pixels = std::move(generated.bgra);
 			}
 			return true;
 		}
@@ -341,11 +341,11 @@ namespace fonthook::vectorfont
 			GlyphMaskType maskType, float rasterScale,
 			const GlyphBitmap& body, GlyphBitmap& target)
 		{
-			if (body.width <= 0 || body.height <= 0 || body.alpha.empty())
+			if (body.width <= 0 || body.height <= 0 || body.pixels.empty())
 			{
 				target.width = 0;
 				target.height = 0;
-				target.alpha.clear();
+				target.pixels.clear();
 				return true;
 			}
 			const float radius = ResolveCpuEffectRadius(
@@ -373,7 +373,7 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
-			target.alpha.assign(pixelCount, 0);
+			target.pixels.assign(pixelCount, 0);
 			std::vector<float> distance(pixelCount);
 			constexpr float kInfinity = 1.0e20f;
 			auto bodyAt = [&](int x, int y) -> UInt8
@@ -385,7 +385,7 @@ namespace fonthook::vectorfont
 				{
 					return 0;
 				}
-				return body.alpha[
+				return body.pixels[
 					static_cast<size_t>(sourceY) * body.width + sourceX];
 			};
 
@@ -402,7 +402,7 @@ namespace fonthook::vectorfont
 			}
 			if (!hasInside)
 			{
-				// Preserve very small hinted glyphs without manufacturing an
+				// Preserve very small source-coverage glyphs without manufacturing an
 				// effect around an empty 0.5 coverage contour.
 				if (maskType == GlyphMaskType::Outline
 					|| maskType == GlyphMaskType::Shadow)
@@ -411,7 +411,7 @@ namespace fonthook::vectorfont
 					{
 						for (int x = 0; x < target.width; ++x)
 						{
-							target.alpha[
+							target.pixels[
 								static_cast<size_t>(y) * target.width + x] =
 								bodyAt(x, y);
 						}
@@ -437,7 +437,7 @@ namespace fonthook::vectorfont
 					const float coverage = EvaluateCpuEffectCoverage(
 						config, maskType, rasterScale,
 						signedDistance, bodyCoverage);
-					target.alpha[index] = static_cast<UInt8>(std::lround(
+					target.pixels[index] = static_cast<UInt8>(std::lround(
 						std::clamp(coverage, 0.0f, 1.0f) * 255.0f));
 				}
 			}
@@ -468,7 +468,7 @@ namespace fonthook::vectorfont
 					const float coverage = EvaluateCpuEffectCoverage(
 						config, maskType, rasterScale,
 						signedDistance, bodyCoverage);
-					target.alpha[index] = static_cast<UInt8>(std::lround(
+					target.pixels[index] = static_cast<UInt8>(std::lround(
 						std::clamp(coverage, 0.0f, 1.0f) * 255.0f));
 				}
 			}
@@ -505,7 +505,7 @@ namespace fonthook::vectorfont
 				return true;
 			const size_t expectedBytes = static_cast<size_t>(target.width)
 				* target.height * 4u;
-			if (target.alpha.size() != expectedBytes)
+			if (target.pixels.size() != expectedBytes)
 				return false;
 
 			int minX = target.width;
@@ -514,7 +514,7 @@ namespace fonthook::vectorfont
 			int maxY = -1;
 			for (int y = 0; y < target.height; ++y)
 			{
-				const UInt8* row = target.alpha.data()
+				const UInt8* row = target.pixels.data()
 					+ static_cast<size_t>(y) * target.width * 4u;
 				for (int x = 0; x < target.width; ++x)
 				{
@@ -546,7 +546,7 @@ namespace fonthook::vectorfont
 				static_cast<size_t>(croppedWidth) * croppedHeight * 4u);
 			for (int y = 0; y < croppedHeight; ++y)
 			{
-				const UInt8* source = target.alpha.data()
+				const UInt8* source = target.pixels.data()
 					+ (static_cast<size_t>(minY + y) * sourceWidth + minX) * 4u;
 				UInt8* destination = cropped.data()
 					+ static_cast<size_t>(y) * croppedWidth * 4u;
@@ -562,18 +562,18 @@ namespace fonthook::vectorfont
 			target.top -= minY;
 			target.width = croppedWidth;
 			target.height = croppedHeight;
-			target.alpha.swap(cropped);
+			target.pixels.swap(cropped);
 			return true;
 		}
 
 		bool BuildCpuCompositeBitmap(const FontConfig& config,
 			float rasterScale, const GlyphBitmap& body, GlyphBitmap& target)
 		{
-			if (body.width <= 0 || body.height <= 0 || body.alpha.empty())
+			if (body.width <= 0 || body.height <= 0 || body.pixels.empty())
 			{
 				target.width = 0;
 				target.height = 0;
-				target.alpha.clear();
+				target.pixels.clear();
 				return true;
 			}
 
@@ -612,7 +612,7 @@ namespace fonthook::vectorfont
 			layers[3].bitmap.height = body.height;
 			layers[3].bitmap.left = body.left;
 			layers[3].bitmap.top = body.top;
-			layers[3].bitmap.alpha = body.alpha;
+			layers[3].bitmap.pixels = body.pixels;
 			layers[3].color = ResolveCompositeFillColor(config);
 			layers[3].enabled = true;
 
@@ -646,11 +646,11 @@ namespace fonthook::vectorfont
 			const size_t pixelCount = static_cast<size_t>(target.width)
 				* target.height;
 			if (!pixelCount
-				|| pixelCount > kMaximumPersistentMtsdfBitmapBytes / 4u)
+				|| pixelCount > kMaximumPersistentFourChannelBitmapBytes / 4u)
 			{
 				return false;
 			}
-			target.alpha.assign(pixelCount * 4u, 0);
+			target.pixels.assign(pixelCount * 4u, 0);
 
 			// Store straight-alpha BGRA, but perform layer composition in
 			// premultiplied form to preserve the configured layer order.
@@ -680,14 +680,14 @@ namespace fonthook::vectorfont
 					const int targetY = top - layerTop + y;
 					for (int x = 0; x < layer.bitmap.width; ++x)
 					{
-						const UInt8 coverage = layer.bitmap.alpha[
+						const UInt8 coverage = layer.bitmap.pixels[
 							static_cast<size_t>(y) * layer.bitmap.width + x];
 						if (!coverage)
 							continue;
 						const int targetX = layerLeft - left + x;
 						const size_t targetIndex = (static_cast<size_t>(targetY)
 							* target.width + targetX) * 4u;
-						UInt8* destination = target.alpha.data() + targetIndex;
+						UInt8* destination = target.pixels.data() + targetIndex;
 						const float sourceAlpha =
 							(coverage / 255.0f) * colorA;
 						const float destinationAlpha = destination[3] / 255.0f;
@@ -774,8 +774,8 @@ namespace fonthook::vectorfont
 
 			if (maskType == GlyphMaskType::DistanceField)
 			{
-				if (key.sdfSpread < kMtsdfMinimumSpread
-					|| key.sdfSpread > kMtsdfMaximumSpread)
+				if (key.sdfSpread < kDistanceFieldMinimumSpread
+					|| key.sdfSpread > kDistanceFieldMaximumSpread)
 					return nullptr;
 				if (!BuildMsdfgenDistanceField(slot, key.sdfSpread,
 					bitmap->distanceFieldMethod, *bitmap))
@@ -848,13 +848,13 @@ namespace fonthook::vectorfont
 		UInt32 resolvedSpread = sdfSpread;
 		if (maskType == GlyphMaskType::DistanceField)
 		{
-			MtsdfSharedRasterProfile profile;
-			if (!ResolveMtsdfSharedRasterProfile(*runtime.config,
+			DistanceFieldRasterProfile profile;
+			if (!ResolveDistanceFieldRasterProfile(*runtime.config,
 				glyph.byteClass, safeScale, true, profile))
 			{
 				return false;
 			}
-			rasterRuntime = GetMtsdfAtlasRuntime(runtime, glyph.byteClass);
+			rasterRuntime = GetDistanceFieldRasterOwnerRuntime(runtime, glyph.byteClass);
 			if (!rasterRuntime)
 				return false;
 			resolvedSpread = profile.sdfSpread;
@@ -875,8 +875,8 @@ namespace fonthook::vectorfont
 		const SInt32 embolden = static_cast<SInt32>(std::lround(
 			style.embolden * safeScale * 64.0f));
 		const UInt8 resolvedSdfSpread = maskType == GlyphMaskType::DistanceField
-			&& resolvedSpread >= kMtsdfMinimumSpread
-			&& resolvedSpread <= kMtsdfMaximumSpread
+			&& resolvedSpread >= kDistanceFieldMinimumSpread
+			&& resolvedSpread <= kDistanceFieldMaximumSpread
 			? static_cast<UInt8>(resolvedSpread) : 0;
 		if (maskType == GlyphMaskType::DistanceField && !resolvedSdfSpread)
 			return false;
@@ -974,7 +974,7 @@ namespace fonthook::vectorfont
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskHit);
 				RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskReadBytes,
-					diskBitmap->alpha.size());
+					diskBitmap->pixels.size());
 				if (g_bEnableFreeTypeFontRenderingLog
 					&& !state.loggedPersistentBitmapHit)
 				{
@@ -983,11 +983,11 @@ namespace fonthook::vectorfont
 						"tnvse_freetype_font: first persistent bitmap cache hit path=%ls font=%u glyph=%u size=%ux%u mask=%u bytes=%u records=%u",
 						persistentProfile->path.c_str(), runtime.config->fontId,
 						key.glyphIndex, key.effectiveWidth, key.effectiveHeight,
-						key.maskType, static_cast<UInt32>(diskBitmap->alpha.size()),
+						key.maskType, static_cast<UInt32>(diskBitmap->pixels.size()),
 						persistentProfile->recordCount);
 				}
 				const size_t bytes =
-					sizeof(GlyphBitmap) + diskBitmap->alpha.capacity();
+					sizeof(GlyphBitmap) + diskBitmap->pixels.capacity();
 				state.bitmapLru.push_front(key);
 				const auto [inserted, success] = state.bitmapCache.emplace(key,
 					BitmapCacheEntry{ diskBitmap, bytes,
@@ -1015,7 +1015,7 @@ namespace fonthook::vectorfont
 	{
 		if (!bitmap)
 			return;
-		const size_t bytes = sizeof(GlyphBitmap) + bitmap->alpha.capacity();
+		const size_t bytes = sizeof(GlyphBitmap) + bitmap->pixels.capacity();
 		state.bitmapLru.push_front(key);
 		const auto [inserted, success] = state.bitmapCache.emplace(key,
 			BitmapCacheEntry{ bitmap, bytes, state.bitmapLru.begin(),
@@ -1059,7 +1059,7 @@ namespace fonthook::vectorfont
 		{
 			RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskWrite);
 			RecordFreeTypePerf(FreeTypePerfCounter::BitmapDiskWriteBytes,
-				bitmap->alpha.size());
+				bitmap->pixels.size());
 		}
 		InsertGlyphBitmapCacheLocked(state, runtime, key, bitmap);
 		TrimBitmapCache(state);

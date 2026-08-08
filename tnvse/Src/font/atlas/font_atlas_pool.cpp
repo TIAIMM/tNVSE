@@ -60,7 +60,7 @@ namespace fonthook::vectorfont
 					RuntimeFont* runtime = member.config
 						? EnsureRuntimeFont(member.config->fontId) : nullptr;
 					if (!runtime)
-						return false;
+						return FailCapture(ERROR_NOT_FOUND);
 					const AtlasCacheKey* roleKeys[] = {
 						&member.singleByteKey, &member.doubleByteKey
 					};
@@ -77,7 +77,7 @@ namespace fonthook::vectorfont
 								*runtime, pageKey, ignoredSnapshotHash,
 								ignoredMaskContentHash);
 							if (path.empty())
-								return false;
+								return FailCapture(ERROR_INVALID_DATA);
 							uniquePaths.insert(path);
 						}
 					}
@@ -991,6 +991,7 @@ namespace fonthook::vectorfont
 		}
 		for (UInt32 mask = 1; mask < stateCount; ++mask)
 		{
+			ServiceFontPrewarmHostMessages();
 			const UInt32 atomCount = CountSetBits(mask);
 			if (atomCount < 2 || (!exactPlanning && atomCount != 2))
 				continue;
@@ -1178,6 +1179,14 @@ namespace fonthook::vectorfont
 			{
 				success = false;
 			}
+			{
+				// Avoid accumulating retired source pools while the next selected
+				// one may still require a 256-MiB 8192x8192 target allocation.
+				std::lock_guard<std::mutex> lock(State().atlasMutex);
+				PruneRetiredAtlasGenerations();
+				RefreshAtlasCacheGpuAccountingLocked(State());
+			}
+			ServiceFontPrewarmHostMessages();
 		}
 		{
 			std::lock_guard<std::mutex> lock(State().atlasMutex);

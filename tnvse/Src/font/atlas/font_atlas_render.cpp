@@ -170,7 +170,7 @@ namespace fonthook::vectorfont
 					|| config.outline.enabled);
 			diagnostics->requestsSdfFill = distanceField;
 			diagnostics->wantsShaderPath = true;
-			diagnostics->a8RendererAvailable =
+			diagnostics->nativeRendererAvailable =
 				IsNativeFontRendererAvailable();
 			diagnostics->requestedQuality =
 				static_cast<UInt8>(config.effectQuality);
@@ -262,14 +262,14 @@ namespace fonthook::vectorfont
 		const NiColorA tileColor = ResolveSafeTileColor(glyphs, requestedTileColor);
 		const bool hasEffects = !suppressEffects
 			&& (config.shadow.enabled || config.glow.enabled || config.outline.enabled);
-		const bool a8RendererAvailable = IsNativeFontRendererAvailable();
+		const bool nativeRendererAvailable = IsNativeFontRendererAvailable();
 		const FontAtlasRoute atlasRoute = ResolveFontAtlasRoute(
-			a8RendererAvailable,
+			nativeRendererAvailable,
 			UsesBakedEffectRoute());
 		const bool requestsDistanceField =
 			atlasRoute == FontAtlasRoute::ShaderDistanceField;
-		const bool requestsBakedCoverage =
-			atlasRoute == FontAtlasRoute::ShaderA8Coverage;
+		const bool requestsBakedComposite =
+			atlasRoute == FontAtlasRoute::BakedArgbComposite;
 		const bool wantsShaderPath =
 			atlasRoute != FontAtlasRoute::ArgbFallback;
 		if (diagnostics)
@@ -277,7 +277,7 @@ namespace fonthook::vectorfont
 			diagnostics->hasEffects = hasEffects;
 			diagnostics->requestsSdfFill = requestsDistanceField;
 			diagnostics->wantsShaderPath = wantsShaderPath;
-			diagnostics->a8RendererAvailable = a8RendererAvailable;
+			diagnostics->nativeRendererAvailable = nativeRendererAvailable;
 			diagnostics->requestedQuality = static_cast<UInt8>(config.effectQuality);
 			diagnostics->resolvedQuality = diagnostics->requestedQuality;
 		}
@@ -419,7 +419,7 @@ namespace fonthook::vectorfont
 					static_cast<UInt32>(shaderQuads.size()));
 			}
 		}
-		if (requestsBakedCoverage)
+		if (requestsBakedComposite)
 		{
 			DirectAtlasShapeBuildResult directShape =
 				TryCreateDirectCachedLetterShape(font, runtime, glyphs,
@@ -502,7 +502,7 @@ namespace fonthook::vectorfont
 			quads.clear();
 			PendingQuadBuildFailure buildFailure = PendingQuadBuildFailure::None;
 			if (!BuildPendingQuads(runtime, glyphs, rasterScale, included,
-				tileColor, requestsBakedCoverage, quads, buildFailure))
+				tileColor, requestsBakedComposite, quads, buildFailure))
 			{
 				if (diagnostics)
 				{
@@ -561,7 +561,7 @@ namespace fonthook::vectorfont
 			}
 			if (quads.size() <= kMaximumQuads)
 			{
-				if (requestsBakedCoverage)
+				if (requestsBakedComposite)
 				{
 					if (diagnostics)
 						++diagnostics->cpuShapeAttempts;

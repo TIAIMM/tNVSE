@@ -210,7 +210,8 @@ proxy drawn behind the fill: `width` gives it a small outside reach and a
 non-negative `softness` adds feather without cutting the proxy into a solid
 hollow ring. The later fill pass covers the proxy interior, leaving its
 filtered edge. Shadow accepts a non-negative `blur` and a positive
-`power`; `blur=0` preserves the exact hinted offset mask. On a hard shadow,
+`power`; `blur=0` preserves the exact offset of the unhinted source-coverage
+mask. On a hard shadow,
 `includeGlow="1"` and `includeOutline="1"` reproduce the currently enabled
 effect coverage in that offset mask. Copied coverage retains the source effect
 alpha, is combined with source-over alpha, and is uniformly tinted by the
@@ -287,9 +288,13 @@ the NVSE `kMessage_DeferredInit` callback. Each loop iteration performs at most
 one snapshot restore/validation, one adaptive throughput batch, one font publication
 step, or one cleanup step. The game main thread therefore does not return from
 deferred initialization until every configured profile reaches and passes the
-`Completed` validation state. An empty queue is terminal only when no FreeType
-fonts are configured; a missing runtime, failed publication, or incomplete
-profile rebuilds the queue inside the same loading barrier. No
+`Completed` validation state during a normal transaction. An empty queue is
+terminal only when no FreeType fonts are configured; a missing runtime, failed
+publication, or incomplete profile first rebuilds the queue inside the same
+loading barrier. Repeated allocation or validation failures are bounded,
+however: they end the prewarm with an explicit `Failed` status, retain every
+already valid cache generation, release temporary state, and allow loading to
+continue instead of leaving the barrier in an infinite retry loop. No
 `StartMenu::Create` detour, replay, timeout, synthetic Menu ID, or
 input handler is needed: the normal startup sequence cannot create an operable
 main menu while NVSE is still dispatching `DeferredInit`.
@@ -313,8 +318,12 @@ by Tile target or stacking traits.
 
 Fallout's existing LoadingMenu update/render thread continues its
 `Update`/`ShowChanges` work while the game thread advances bounded prewarm
-steps. tNVSE yields with `Sleep(0)` between active steps so the loading thread
-can consume current Tile traits. Generation batches target approximately
+steps. Between active steps, and periodically inside the atlas skyline search
+and one-MiB snapshot I/O loops, tNVSE services at most 32 messages from the host
+thread queue and then yields with `Sleep(0)`. A re-entrant prewarm pump is
+rejected. This prevents Windows from classifying a long final repack as an
+unresponsive application without creating an unbounded nested message loop.
+Generation batches target approximately
 250 ms and progress-trait writes are rate-limited to 10 Hz; this keeps the
 LoadingMenu responsive without paying Tile rebuild and worker-startup overhead
 for thousands of one-glyph steps. One stable per-font stage covers streamed-page
@@ -339,12 +348,16 @@ heights and reflows the panel, progress bar, and labels, rather than assuming a
 24-pixel font slot. All four prewarm `TileText` nodes use numeric `zoom=80`, so
 UIO applies the same compact font-slot scaling as the IME overlay before those
 live metrics are measured. There is no auxiliary Win32 window, prewarm UI
-thread, GDI renderer, event, mutex, or window-message pump.
+thread, GDI renderer, event, or mutex; the only Win32 servicing is the bounded
+host-thread queue described above.
 A font task allocates additional atlas pages when its selected set cannot fit
 one physical page. A transient allocation failure rolls the current batch back,
 releases disposable mappings and retired atlas generations, reduces the batch
-limit as far as one glyph, and retries inside the same startup transaction. It
-is never converted into a failed-profile runtime demand route. GBK and non-936
+limit as far as one glyph, and retries inside the same startup transaction.
+Twelve consecutive batch/font memory failures stop retrying; a font generation
+or final-validation loop may restart twice, and the complete transaction may
+restart twice. Exhausting those limits produces the terminal fail-open state
+above rather than another queue insertion. GBK and non-936
 full-code-page profiles
 generate every mask that runtime rendering can request for every valid unit.
 GB2312 profiles generate the same masks for their selected byte zone and leave
@@ -356,7 +369,10 @@ At transaction start the 32-bit process reserves a 128-MiB uncommitted virtual
 address-space escape region. Normal atlas allocations retain 512 MiB of virtual
 headroom; on detected pressure the escape region is released, disposable state
 is trimmed, and the same operation retries with a 256-MiB critical reserve. The
-reservation is released after successful completion or shutdown.
+reservation is released after successful completion, terminal failure, or
+shutdown. Prewarm diagnostics also record process private bytes and working-set
+bytes alongside available and largest-contiguous virtual-address space before
+and after physical group/pool consolidation.
 
 Selected-table construction does not create or read `.tnvfmask`. The atlas-only
 transaction begins when the first cache-miss font enters its generation step
@@ -436,10 +452,16 @@ using its actual byte size and current 32-bit virtual-address headroom; memory
 pressure retries inside the same loading barrier and does not alter glyph
 dimensions, split an otherwise legal one-page layout, or enable runtime demand
 fallback.
-NPOT dimensions are deliberately not used. The selected plan still reads one
-bounded source page at a time from disk, materializes one destination page at a
-time, and rewrites the globally repacked snapshots before the manifest is
-committed. Only the final repacked generation is uploaded. This preserves the
+NPOT dimensions are deliberately not used. The selected plan verifies each
+source snapshot incrementally and copies selected glyph payloads directly to
+the destination temporary file through one reusable 1-MiB buffer. It no longer
+materializes a 100-256 MiB source page or destination page in a CPU vector. Only
+the final repacked generation is uploaded. Physical-group and physical-pool
+publication first captures recoverable hard-link/copy backups; if the final
+8192-capable D3D9 allocation or validation fails, the previous per-font/group
+snapshots are restored. Retired source textures are pruned between publications
+so several 256-MiB targets do not accumulate merely due to consolidation order.
+This preserves the
 page-count and tail-page VRAM/disk savings of global repacking while removing
 the former upload-repack-discard-upload peak. The packing revision, effective
 device limits, and aspect-ratio capability participate in snapshot identity;
@@ -803,26 +825,67 @@ modified.
 
 ## True-SDF/MTSDF fill, effects, and draw-state isolation
 
-Both modes load the same unhinted transformed FreeType outline, normalize
-contour polarity, preserve the FreeType nonzero/even-odd fill rule, quantize
-through msdfgen's 8-bit simulation, and use derivative-based `screenPxRange`
-antialiasing at atlas LOD 0. True SDF reconstructs Fill and effects from the
-single Alpha distance. It uses one byte per atlas texel, but acute corners and
+Layout metrics and automatic baseline measurement retain normal FreeType
+hinting. Distance-field and CPU source-coverage outlines instead use the same
+unhinted transformed outline, normalize contour polarity, preserve the FreeType
+nonzero/even-odd fill rule, and use an analytic affine antialias width computed
+by the vertex shader at atlas LOD 0. True SDF maps the generated scalar directly
+to the shader's byte-domain contract: byte 128 is exact zero distance, so
+generation uses `round(256 * encoded)` with positive-end saturation instead of
+normalized-UNORM `round(255 * encoded)`. Revision 4 may then adjust a quantized
+texel by only one byte. A continuous-field center prefilter is confirmed against
+the exact shape; affected 4x4 samples must not regress in distance, sign, or any
+of the four antialias-coverage widths, and an independent 8x8 sign grid is also
+checked. Center signs, active-cell metrics, and affected-row contour error are
+revalidated after all accepted edits. Even-odd fill, non-finite data, resource or
+work-budget overflow, allocation failure, and any final regression retain the
+unrepaired byte-128 baseline. True SDF reconstructs Fill and effects from that
+single Alpha distance and uses one byte per atlas texel, but acute corners and
 intersecting edges can be rounder than MTSDF at the same source resolution.
 
 Both distance-field body shader families and all effect variants use `ps_3_0`.
 In MTSDF mode the generator uses deterministic `edgeColoringSimple`, enables
 overlap support, applies the FreeType fill rule through msdfgen's scanline sign
 correction, reruns compatible edge-priority error correction, and calls
-`simulate8bit` before packing the texture bytes. This follows the
-[msdfgen library and shader contract](https://github.com/Chlumsky/msdfgen).
+`simulate8bit` before validating the final texture bytes. A bounded generation-
+time repair then detects RGB-median interpolation deficits against the exact
+shape. It may equalize a candidate texel's RGB channels only to that texel's own
+already-quantized median. Every affected 4x4 exact-distance sample must improve
+or remain unchanged; an independent 8x8 sign-only grid must also preserve every
+previously correct inside/outside classification without increasing either sign
+error count. The affected scanline rows and final glyph contour must not regress.
+Alpha is never changed. Even-odd glyphs conservatively skip this
+overlap-aware repair; excessive glyph complexity, non-finite metrics, or any
+final validation failure also retain the unmodified msdfgen result. This follows
+the [msdfgen library and shader contract](https://github.com/Chlumsky/msdfgen).
 RGB median reconstruction owns
 Fill topology. Alpha true signed distance owns glow, outline, shadow blur, and
 effect-radius decisions. Effects may read RGB only for body exclusion and
 under-fill composition; Alpha never replaces RGB as the Fill contour.
 
-The shaders use msdfgen's UV-derivative `screenPxRange`, force texture data to
-linear rather than sRGB space, and clamp the range to at least one. Fast Fill
+Revision 7 freezes that complete revision-6 result before a separate rescue
+phase examines the remaining RGB-median deficits. The rescue still only copies
+a texel's own quantized RGB median; “half step” is a bound on any worsened
+decoded-distance sample (`spread / 255`), not a fractional byte write. Candidate
+edits must improve aggregate exact distance, preserve correct signs and error
+counts, and pass a bounded independent 8x8 exact-shape check. All rescue-owned
+texels are then audited together over the union of their affected cells with
+independent 8x8 and 16x16 exact distance/sign grids and four antialias-coverage
+widths, followed by a full center-sign check. Alpha is never written. If no
+candidate qualifies, a resource or numeric guard trips, an exception occurs, or
+any final metric regresses, only rescue-owned RGB writes are reversed and the
+output remains byte-for-byte identical to revision 6.
+
+The true-SDF byte mapping and post-quantization repair, together with both MTSDF
+repair stages, run only on bitmap cache misses and during prewarm generation.
+Cached bitmap dimensions and formats,
+atlas uploads, shaders, texture samples, geometry, and draw submission are
+unchanged, so the cache-hit CPU/GPU rendering path has no additional work.
+
+The vertex shader analytically derives the affine screen footprint equivalent
+to msdfgen's `screenPxRange`; the pixel shader consumes the interpolated
+antialias width without `ddx`/`ddy`. Texture data is forced to linear rather
+than sRGB space, and antialias width is clamped to `[0.0001, spread]`. Fast Fill
 uses one RGB sample, Balanced uses a four-point sub-texel grid, and High uses an
 eight-point rotated grid. Effect variants use one or four samples within the
 `ps_3_0` instruction budget. Alpha test is disabled for native packets because
@@ -839,8 +902,8 @@ quads per drawable glyph instead of four, and the same stack without an offset
 shadow uses one. Effects
 execute global shadow, glow, outline, and fill passes over one `NiTriShape`,
 which prevents a later glyph effect from covering an earlier glyph fill. Native
-passes use bilinear MIN/MAG sampling at atlas LOD 0 and derivative-based edge
-antialiasing; they never consume the coverage-averaged atlas mip chain.
+passes use bilinear MIN/MAG sampling at atlas LOD 0 and vertex-provided analytic
+edge antialiasing; they never consume the coverage-averaged atlas mip chain.
 Distance-field draw ranges also preserve fractional pen positions, encoded-unit
 advances, and effect offsets in their quad coordinates. The separate ARGB fallback remains
 snapped to the resolved source-pixel grid and may use trilinear mip sampling.
@@ -1062,8 +1125,9 @@ spread across all vertices, and exact distance scale 1. Every quad must carry on
 ordered glyph UV rectangle. UV0 remains the atlas coordinate; UV1 and UV2 store
 the per-glyph minimum and maximum so filtered samples remain clamped to the
 physical glyph and cannot bleed across the atlas. The optional vertex shader
-publishes packet-wide spread/mask through VS c209; the pixel shader derives
-screen-space antialias width from `ddx`/`ddy`. MTSDF profiles decode the RGB
+publishes packet-wide spread/mask through VS c209; the vertex shader derives
+the analytic screen-space antialias width and passes it to the pixel shader.
+MTSDF profiles decode the RGB
 median for the body and alpha for effects; true-SDF profiles decode the A8
 sample for both through separately compiled `DISTANCE_FIELD_TRUE_SDF` variants.
 Both preserve effects without the 52-byte native vertex stream. Shadow masks 9/11/13/15 are supported both
@@ -1926,16 +1990,19 @@ directly to this path.
 Its cache identity includes the persistent
 glyph-manifest ABI, so an incompatible or newly revised manifest cannot make an
 old atlas look restorable and then force a shared-font regeneration. Streamed
-prewarm caps distance-field pages at 2048x2048 (4 MiB for A8 true SDF or
-16 MiB for BGRA MTSDF)
-to avoid late 64 MiB page allocations and transient vector-growth peaks in the
-32-bit process; large code pages are split across additional snapshot pages.
+prewarm caps intermediate distance-field pages at 2048x2048 (4 MiB for A8 true
+SDF or 16 MiB for BGRA MTSDF) to avoid late 64 MiB page allocations and
+transient vector-growth peaks in the 32-bit process; large code pages are split
+across additional snapshot pages. The final global MTSDF repack deliberately
+retains the device-supported 8192x8192 envelope (256 MiB at BGRA8) and the
+page-count-first objective, so a legal one-page result is still preferred.
 Before restoring a role, tNVSE inspects all page headers, reserves its
 worst-case GPU footprint by evicting older LRU pages, and immediately releases
 unreferenced retired generations. Restore retains only headers and placement
-tables in CPU memory. It reads and checksum-verifies one bounded snapshot page
-at a time, copies that page into the locked D3D9 texture without per-row file
-calls, and releases the page buffer before creating the next texture. Once
+tables in CPU memory. It reads and checksum-verifies snapshot rectangle payloads
+through a reusable 1-MiB reader, copies them into the locked D3D9 texture without
+retaining a full CPU page, and releases that reader before creating the next
+texture. Once
 upload succeeds, tNVSE retains only placements plus the validated snapshot
 path/header identity. Device reset, page detachment/growth, and snapshot rewrite
 read the raw packed rectangles from `_p<page>.tnvfatlas` and stream them by row.
@@ -1943,9 +2010,11 @@ The payload checksum is verified before the texels are accepted into the locked
 texture. Its page-content
 fingerprint covers dimensions, format, placed
 coordinates, and exact texels. A hash match is followed by byte-for-byte
-comparison, loading temporary source pixels only during that comparison, before
-equivalent pages share one D3D9 texture allocation through independent Gamebryo
-wrappers. A later glyph insertion first detaches that page. Device reset rebuilds
+comparison before equivalent pages share one D3D9 texture allocation through
+independent Gamebryo wrappers. Physical aliases validate their common source
+payload once. Distinct sources are checksum-validated and compared through two
+1-MiB range buffers outside the atlas mutex instead of loading two complete
+compact payloads. A later glyph insertion first detaches that page. Device reset rebuilds
 each unique immutable payload once and reattaches the other logical wrappers to
 that physical D3D9 texture; GPU-budget accounting likewise counts unique texture
 identities rather than wrappers. Glyphs added later retain only their individual
@@ -1960,8 +2029,12 @@ snapshot restore on an unchanged launch instead of rerasterizing the code page.
 
 The prewarm batch estimator separates memory retained for every glyph in the
 batch from scratch memory live only in an active worker. True SDF therefore
-retains one byte per texel and reserves a four-byte float field per worker;
-MTSDF retains four bytes and reserves a sixteen-byte float field. The fallback
+retains one byte per texel, reserves a four-byte float field per worker, and
+adds the conservative 256 KiB VS-v145 staged scratch budget used by its
+post-quantization repair;
+MTSDF retains four bytes, reserves a sixteen-byte float field, and adds the
+conservative 1 MiB VS-v145 scratch budget for its cold-generation rescue phase.
+The fallback
 route retains Fill plus each enabled A8 effect but reserves only one rendered
 body and chamfer field per worker. Aggressive composite retains one BGRA result
 while reserving the body/effect masks and the second BGRA target used by
@@ -2033,7 +2106,7 @@ It does not create a `GlyphBitmapRequest`, `GlyphSource`, `PreparedGlyph`, or
 `PendingQuad`, build a cache-ID page map, hash the completed quads, or sort the
 batch. The distance-field route shares the body quad across Fill, Glow, Outline,
 and an unshifted Shadow; an offset Shadow adds at most one second quad. Its
-shared MTSDF raster profile is resolved at most once for each byte role, rather
+distance-field raster profile is resolved at most once for each byte role, rather
 than once or twice per glyph. The same role-level reuse also applies when an
 incomplete direct profile enters the compatibility compiler.
 
@@ -2097,8 +2170,8 @@ generated once on the CPU.
 When output resolution or UIO 2.30 scales a TileText call, tNVSE keeps the mask
 at the single configured source multiplier and lets the existing world
 transform minify or magnify the atlas. Trilinear sampling is enabled for scaled
-ARGB fallback shapes; distance-field ranges retain level-zero derivative-based
-sampling.
+ARGB fallback shapes; distance-field ranges retain level-zero sampling with
+vertex-computed analytic antialias width.
 Neither case creates a resolution- or zoom-specific profile. If atlas creation
 fails, the affected FreeType shape is empty and the detailed build diagnostic
 identifies the failed stage. Ordinary and rich-text layout retain one output

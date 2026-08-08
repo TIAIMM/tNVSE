@@ -732,7 +732,7 @@ namespace fonthook::vectorfont
 			}
 			const FontConfig& rasterConfig =
 				renderMode == AtlasRenderMode::ShaderEffects
-				? GetMtsdfAtlasConfig(config, byteClass) : config;
+				? GetDistanceFieldRasterOwnerConfig(config, byteClass) : config;
 			return BuildAtlasContentHash(
 				rasterConfig.maskGenerationRoleHashes[
 					static_cast<size_t>(byteClass)],
@@ -746,14 +746,14 @@ namespace fonthook::vectorfont
 			const FontConfig& config, VectorFontByteClass byteClass,
 			float rasterScale, UInt64& contentHash)
 		{
-			MtsdfSharedRasterProfile profile;
-			if (!ResolveMtsdfSharedRasterProfile(config, byteClass,
+			DistanceFieldRasterProfile profile;
+			if (!ResolveDistanceFieldRasterProfile(config, byteClass,
 				rasterScale, true, profile))
 			{
 				return false;
 			}
 			const FontConfig& rasterConfig =
-				GetMtsdfAtlasConfig(config, byteClass);
+				GetDistanceFieldRasterOwnerConfig(config, byteClass);
 			const UInt8 combination = static_cast<UInt8>(
 				1u << static_cast<UInt8>(
 					GlyphMaskType::DistanceField));
@@ -817,8 +817,8 @@ namespace fonthook::vectorfont
 			};
 			if (shaderEffects)
 			{
-				MtsdfSharedRasterProfile profile;
-				if (ResolveMtsdfSharedRasterProfile(config, byteClass,
+				DistanceFieldRasterProfile profile;
+				if (ResolveDistanceFieldRasterProfile(config, byteClass,
 					rasterScale, true, profile))
 				{
 					include(GlyphMaskType::DistanceField);
@@ -850,7 +850,7 @@ namespace fonthook::vectorfont
 					include(GlyphMaskType::Shadow);
 			}
 			const FontConfig& rasterConfig = shaderEffects
-				? GetMtsdfAtlasConfig(config, byteClass) : config;
+				? GetDistanceFieldRasterOwnerConfig(config, byteClass) : config;
 			UInt64 hash = BuildAtlasContentHash(
 				rasterConfig.maskGenerationRoleHashes[
 					static_cast<size_t>(byteClass)],
@@ -891,7 +891,7 @@ namespace fonthook::vectorfont
 		}
 
 		const bool aggressiveComposite =
-			route == FontAtlasRoute::ShaderA8Coverage;
+			route == FontAtlasRoute::BakedArgbComposite;
 		key = {
 			BuildPrewarmAtlasContentHash(config, byteClass, rasterScale,
 				shaderEffects),
@@ -924,7 +924,7 @@ namespace fonthook::vectorfont
 		const AtlasCacheKey& key)
 	{
 		return key.renderMode == AtlasRenderMode::ShaderEffects
-			? GetMtsdfAtlasRuntime(runtime, key.byteClass) : &runtime;
+			? GetDistanceFieldRasterOwnerRuntime(runtime, key.byteClass) : &runtime;
 	}
 
 		void GetAtlasBackedGlyphBitmaps(RuntimeFont& runtime,
@@ -960,9 +960,9 @@ namespace fonthook::vectorfont
 						|| type == GlyphMaskType::Composite);
 				if (type == GlyphMaskType::DistanceField)
 				{
-					MtsdfSharedRasterProfile profile;
+					DistanceFieldRasterProfile profile;
 					if (requests[index].glyph
-						&& ResolveMtsdfSharedRasterProfile(config,
+						&& ResolveDistanceFieldRasterProfile(config,
 							requests[index].glyph->byteClass, rasterScale,
 							true, profile))
 					{
@@ -992,7 +992,7 @@ namespace fonthook::vectorfont
 						static_cast<VectorFontByteClass>(roleIndex);
 					const FontConfig& rasterConfig =
 						renderMode == AtlasRenderMode::ShaderEffects
-						? GetMtsdfAtlasConfig(config, byteClass) : config;
+						? GetDistanceFieldRasterOwnerConfig(config, byteClass) : config;
 					UInt64 contentHash = 0;
 					const bool distanceFieldFastPath =
 						renderMode == AtlasRenderMode::ShaderEffects

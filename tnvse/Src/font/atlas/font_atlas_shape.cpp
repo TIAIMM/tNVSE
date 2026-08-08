@@ -316,20 +316,20 @@ namespace fonthook::vectorfont
 					baked->colorBaked = sourceBitmap->colorBaked;
 					baked->bakedRgba = sourceBitmap->bakedRgba;
 					baked->bakedLayer = sourceBitmap->bakedLayer;
-					baked->alpha = sourceBitmap->alpha;
+					baked->pixels = sourceBitmap->pixels;
 					baked->cacheId = bakedId;
 					baked->atlasRgb = rgba & 0x00FFFFFF;
 					baked->colorBaked = true;
 					baked->bakedRgba = rgba;
 					baked->bakedLayer = static_cast<UInt8>(quad.layer);
 					const float alphaModifier = std::clamp(compositeColor.a, 0.0f, 1.0f);
-					for (UInt8& alpha : baked->alpha)
+					for (UInt8& alpha : baked->pixels)
 					{
 						alpha = static_cast<UInt8>(std::lround(
 							static_cast<float>(alpha) * alphaModifier));
 					}
 					baked->cpuMemory.Reset(CpuMemoryCategory::GlyphBitmap,
-						sizeof(GlyphBitmap) + baked->alpha.capacity());
+						sizeof(GlyphBitmap) + baked->pixels.capacity());
 					found = unique.emplace(bakedId, std::move(baked)).first;
 				}
 				quad.source = {};
@@ -761,7 +761,7 @@ namespace fonthook::vectorfont
 			thread_local std::vector<GlyphBitmapRequest> bitmapRequests;
 			thread_local std::vector<std::shared_ptr<const GlyphBitmap>> bitmapResults;
 			thread_local std::vector<PendingQuad::GlyphSource> sourceResults;
-			std::array<MtsdfSharedRasterProfile, 2> rasterProfiles;
+			std::array<DistanceFieldRasterProfile, 2> rasterProfiles;
 			std::array<bool, 2> rasterProfileReady = {};
 			for (const AtlasGlyphInstance& instance : glyphs)
 			{
@@ -771,7 +771,7 @@ namespace fonthook::vectorfont
 					return false;
 				if (rasterProfileReady[roleIndex])
 					continue;
-				if (!ResolveMtsdfSharedRasterProfile(config,
+				if (!ResolveDistanceFieldRasterProfile(config,
 					instance.glyph.byteClass, rasterScale, true,
 					rasterProfiles[roleIndex]))
 				{
@@ -843,7 +843,7 @@ namespace fonthook::vectorfont
 				if (roleIndex >= rasterProfiles.size()
 					|| !rasterProfileReady[roleIndex])
 					return false;
-				const MtsdfSharedRasterProfile& profile =
+				const DistanceFieldRasterProfile& profile =
 					rasterProfiles[roleIndex];
 				const float baselineOffset =
 					GetGlyphBaselineOffset(runtime, instance.glyph);
@@ -2434,7 +2434,7 @@ namespace fonthook::vectorfont
 
 			const FontConfig& config = GetRuntimeConfig(runtime);
 			NativeFontEffectShapeConfig effects;
-			std::array<MtsdfSharedRasterProfile, 2> rasterProfiles;
+			std::array<DistanceFieldRasterProfile, 2> rasterProfiles;
 			std::array<bool, 2> rasterProfileReady = {};
 			bool drawShadow = false;
 			bool shadowHasOffset = false;
@@ -2480,7 +2480,7 @@ namespace fonthook::vectorfont
 					}
 					if (rasterProfileReady[roleIndex])
 						continue;
-					if (!ResolveMtsdfSharedRasterProfile(config,
+					if (!ResolveDistanceFieldRasterProfile(config,
 						GetDirectGlyphByteClass(instance),
 						rasterScale, true,
 						rasterProfiles[roleIndex]))
@@ -3800,7 +3800,7 @@ namespace fonthook::vectorfont
 			{
 				BuildBakedArgbFallback(quads, tileColor, bakedQuads);
 				activeQuads = &bakedQuads;
-				// Direct atlas sources deliberately carry no CPU alpha payload.
+				// Direct atlas sources deliberately carry no CPU pixel payload.
 				// They cannot be color-baked for the vanilla ARGB TileShader route.
 				// The caller must first rebuild this batch through the compatibility
 				// GlyphBitmap path; otherwise an A8 page could be submitted as ARGB

@@ -110,7 +110,7 @@ namespace
 		}
 
 		gLog.FormattedMessage(
-			"tnvse_build_identity: diagnostics=native-font-naming-audit-v60 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
+			"tnvse_build_identity: diagnostics=native-font-prewarm-memory-safety-v64 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
 			modulePath[0] ? modulePath : "unresolved", module,
 			peTimestamp, imageSize,
 			static_cast<unsigned long long>(fileBytes),
@@ -134,6 +134,8 @@ namespace
 			return "active";
 		case fonthook::FontPrewarmPumpStatus::Completed:
 			return "completed";
+		case fonthook::FontPrewarmPumpStatus::Failed:
+			return "failed";
 		default:
 			return "unknown";
 		}
@@ -229,9 +231,11 @@ namespace
 			FontPrewarmPumpStatusName(status));
 		while (status == fonthook::FontPrewarmPumpStatus::Active)
 		{
-			// Fallout's LoadingMenu owns a separate update/render thread. Yield
-			// between bounded prewarm steps so it can consume the Tile trait
-			// changes while this DeferredInit callback keeps startup blocked.
+			// Keep the host window responsive while DeferredInit deliberately
+			// blocks gameplay until the cache transaction reaches a terminal state.
+			// The prewarm service dispatches only a bounded number of messages and
+			// rejects a re-entrant cache pump.
+			fonthook::ServiceFreeTypeFontPrewarmHostMessages();
 			Sleep(0);
 			status = fonthook::PumpFreeTypeFontPrewarm();
 			++steps;
@@ -302,7 +306,7 @@ bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 {
 	info->infoVersion = PluginInfo::kInfoVersion;
 	info->name = "tNVSE";
-	info->version = 63;
+	info->version = 64;
 
 	return true;
 }

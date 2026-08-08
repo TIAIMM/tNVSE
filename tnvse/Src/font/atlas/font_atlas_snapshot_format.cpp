@@ -769,8 +769,8 @@ namespace fonthook::vectorfont
 			const GlyphBitmap& bitmap = *found->bitmap;
 			if (bitmap.cacheId != cacheId || bitmap.width != static_cast<int>(rect.width)
 				|| bitmap.height != static_cast<int>(rect.height)
-				|| (!bitmap.alpha.empty()
-					&& bitmap.alpha.size() < ExpectedGlyphBitmapBytes(bitmap)))
+				|| (!bitmap.pixels.empty()
+					&& bitmap.pixels.size() < ExpectedGlyphBitmapBytes(bitmap)))
 			{
 				return false;
 			}
@@ -1036,6 +1036,159 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
+		constexpr size_t kRepackedSnapshotIoBufferBytes = 1024u * 1024u;
+
+		struct RepackedSnapshotSource
+		{
+			const CompactAtlasSnapshot* snapshot = nullptr;
+			HANDLE file = INVALID_HANDLE_VALUE;
+			UInt64 payloadOffset = 0;
+
+			RepackedSnapshotSource() = default;
+			~RepackedSnapshotSource()
+			{
+				if (file != INVALID_HANDLE_VALUE)
+					CloseHandle(file);
+			}
+			RepackedSnapshotSource(const RepackedSnapshotSource&) = delete;
+			RepackedSnapshotSource& operator=(
+				const RepackedSnapshotSource&) = delete;
+			RepackedSnapshotSource(RepackedSnapshotSource&& other) noexcept
+				: snapshot(other.snapshot), file(other.file),
+				payloadOffset(other.payloadOffset)
+			{
+				other.snapshot = nullptr;
+				other.file = INVALID_HANDLE_VALUE;
+				other.payloadOffset = 0;
+			}
+			RepackedSnapshotSource& operator=(
+				RepackedSnapshotSource&& other) noexcept
+			{
+				if (this == &other)
+					return *this;
+				if (file != INVALID_HANDLE_VALUE)
+					CloseHandle(file);
+				snapshot = other.snapshot;
+				file = other.file;
+				payloadOffset = other.payloadOffset;
+				other.snapshot = nullptr;
+				other.file = INVALID_HANDLE_VALUE;
+				other.payloadOffset = 0;
+				return *this;
+			}
+		};
+
+		bool ValidateRepackedSnapshotSource(
+			const CompactAtlasSnapshot& snapshot,
+			std::vector<UInt8>& buffer,
+			RepackedSnapshotSource& result)
+		{
+			result = {};
+			if (snapshot.sourceHeader.placementCount
+					!= snapshot.placements.size()
+				|| snapshot.sourceHeader.pixelMode
+					!= static_cast<UInt8>(snapshot.pixelMode)
+				|| snapshot.sourceHeader.headerSize
+					!= sizeof(AtlasSnapshotHeader)
+				|| static_cast<AtlasSnapshotStorage>(
+					snapshot.sourceHeader.storageMode)
+					!= AtlasSnapshotStorage::PlacedLevelZeroRects
+				|| snapshot.sourceHeader.storedPixelBytes
+					!= snapshot.sourceHeader.pixelBytes
+				|| snapshot.sourceHeader.storedPixelBytes
+					> std::numeric_limits<size_t>::max())
+			{
+				return false;
+			}
+			const UInt64 placementBytes = static_cast<UInt64>(
+				snapshot.placements.size()) * sizeof(AtlasSnapshotPlacement);
+			const UInt64 payloadOffset = sizeof(AtlasSnapshotHeader)
+				+ placementBytes;
+			if (payloadOffset < sizeof(AtlasSnapshotHeader)
+				|| snapshot.sourceHeader.storedPixelBytes
+					> std::numeric_limits<UInt64>::max() - payloadOffset)
+			{
+				return false;
+			}
+
+			UInt64 hash = 1469598103934665603ull;
+			if (!snapshot.pixels.empty())
+			{
+				if (snapshot.pixels.size()
+						!= snapshot.sourceHeader.storedPixelBytes)
+				{
+					return false;
+				}
+				hash = HashAtlasBytes(snapshot.placements.data(),
+					snapshot.placements.size()
+						* sizeof(AtlasSnapshotPlacement), hash);
+				hash = HashAtlasBytes(snapshot.pixels.data(),
+					snapshot.pixels.size(), hash);
+				if (hash != snapshot.sourceHeader.payloadChecksum)
+					return false;
+				result.snapshot = &snapshot;
+				result.payloadOffset = payloadOffset;
+				return true;
+			}
+			if (snapshot.sourcePath.empty())
+				return false;
+			result.file = CreateFileW(snapshot.sourcePath.c_str(), GENERIC_READ,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+				OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+				nullptr);
+			if (result.file == INVALID_HANDLE_VALUE)
+				return false;
+			LARGE_INTEGER fileSize = {};
+			if (!GetFileSizeEx(result.file, &fileSize) || fileSize.QuadPart < 0
+				|| static_cast<UInt64>(fileSize.QuadPart)
+					!= payloadOffset + snapshot.sourceHeader.storedPixelBytes)
+			{
+				return false;
+			}
+			AtlasSnapshotHeader currentHeader = {};
+			if (!ReadSnapshotBytesExact(result.file, &currentHeader,
+					sizeof(currentHeader))
+				|| std::memcmp(&currentHeader, &snapshot.sourceHeader,
+					sizeof(currentHeader)) != 0)
+			{
+				return false;
+			}
+			if (buffer.size() != kRepackedSnapshotIoBufferBytes)
+				buffer.resize(kRepackedSnapshotIoBufferBytes);
+			const UInt8* expectedPlacements = reinterpret_cast<const UInt8*>(
+				snapshot.placements.data());
+			UInt64 remainingPlacementBytes = placementBytes;
+			while (remainingPlacementBytes)
+			{
+				const size_t chunk = static_cast<size_t>(std::min<UInt64>(
+					remainingPlacementBytes, buffer.size()));
+				if (!ReadSnapshotBytesExact(result.file, buffer.data(), chunk)
+					|| std::memcmp(buffer.data(), expectedPlacements, chunk) != 0)
+				{
+					return false;
+				}
+				hash = HashAtlasBytes(buffer.data(), chunk, hash);
+				expectedPlacements += chunk;
+				remainingPlacementBytes -= chunk;
+			}
+			UInt64 remainingPixels = snapshot.sourceHeader.storedPixelBytes;
+			while (remainingPixels)
+			{
+				const size_t chunk = static_cast<size_t>(std::min<UInt64>(
+					remainingPixels, buffer.size()));
+				if (!ReadSnapshotBytesExact(result.file, buffer.data(), chunk))
+					return false;
+				hash = HashAtlasBytes(buffer.data(), chunk, hash);
+				remainingPixels -= chunk;
+				ServiceFontPrewarmHostMessages();
+			}
+			if (hash != snapshot.sourceHeader.payloadChecksum)
+				return false;
+			result.snapshot = &snapshot;
+			result.payloadOffset = payloadOffset;
+			return true;
+		}
+
 		bool WriteRepackedSnapshotPixels(HANDLE file,
 			const SnapshotPageData& page, UInt64& payloadChecksum,
 			UInt64& pageContentHash)
@@ -1067,22 +1220,8 @@ namespace fonthook::vectorfont
 				page.placements.size() * sizeof(page.placements[0]));
 			pageContentHash = HashAtlasBytes(&identity, sizeof(identity));
 
-			constexpr size_t kOutputBufferBytes = 1024u * 1024u;
-			std::vector<UInt8> output;
-			output.reserve(kOutputBufferBytes);
-			auto flush = [&]()
-			{
-				if (output.empty())
-					return true;
-				const bool written = WriteSequentialFileBytes(
-					file, output.data(), output.size());
-				output.clear();
-				return written;
-			};
-
-			const CompactAtlasSnapshot* loadedIdentity = nullptr;
-			const std::vector<UInt8>* sourcePixels = nullptr;
-			std::vector<UInt8> loadedPixels;
+			std::vector<UInt8> ioBuffer(kRepackedSnapshotIoBufferBytes);
+			std::vector<RepackedSnapshotSource> sourceStates;
 			size_t destinationOffset = 0;
 			const size_t bytesPerPixel = AtlasBytesPerPixel(
 				static_cast<AtlasPixelMode>(page.header.pixelMode));
@@ -1102,61 +1241,79 @@ namespace fonthook::vectorfont
 						* placement.rect.height * bytesPerPixel;
 				if (source.bytes != expectedBytes)
 					return false;
-				if (loadedIdentity != source.snapshot.get())
-				{
-					loadedPixels.clear();
-					loadedIdentity = source.snapshot.get();
-					if (!source.snapshot->pixels.empty())
-					{
-						sourcePixels = &source.snapshot->pixels;
-					}
-					else
-					{
-						if (!LoadCompactAtlasSnapshotPixels(
-							*source.snapshot, loadedPixels))
-						{
-							return false;
-						}
-						sourcePixels = &loadedPixels;
-					}
-				}
-				if (!sourcePixels || source.sourceOffset > sourcePixels->size()
-					|| source.bytes
-						> sourcePixels->size() - source.sourceOffset)
-				{
-					return false;
-				}
-				const UInt8* current =
-					sourcePixels->data() + source.sourceOffset;
-				payloadChecksum = HashAtlasBytes(
-					current, source.bytes, payloadChecksum);
 				pageContentHash = HashAtlasBytes(
 					&placement.rect, sizeof(placement.rect),
 					pageContentHash);
-				pageContentHash = HashAtlasBytes(
-					current, source.bytes, pageContentHash);
-
-				size_t remaining = source.bytes;
-				while (remaining)
+				auto state = std::find_if(sourceStates.begin(),
+					sourceStates.end(), [&](const RepackedSnapshotSource& item)
+					{
+						return item.snapshot == source.snapshot.get();
+					});
+				if (state == sourceStates.end())
 				{
-					const size_t available =
-						kOutputBufferBytes - output.size();
-					const size_t copied =
-						std::min(remaining, available);
-					output.insert(output.end(), current,
-						current + copied);
-					current += copied;
-					remaining -= copied;
-					if (output.size() == kOutputBufferBytes
-						&& !flush())
+					RepackedSnapshotSource opened;
+					if (!ValidateRepackedSnapshotSource(
+							*source.snapshot, ioBuffer, opened))
 					{
 						return false;
 					}
+					sourceStates.push_back(std::move(opened));
+					state = std::prev(sourceStates.end());
+				}
+				if (source.sourceOffset
+						> source.snapshot->sourceHeader.pixelBytes
+					|| source.bytes > source.snapshot->sourceHeader.pixelBytes
+						- source.sourceOffset)
+				{
+					return false;
+				}
+				size_t remaining = source.bytes;
+				size_t sourceOffset = source.sourceOffset;
+				if (state->file != INVALID_HANDLE_VALUE)
+				{
+					if (sourceOffset > std::numeric_limits<UInt64>::max()
+							- state->payloadOffset)
+					{
+						return false;
+					}
+					LARGE_INTEGER position = {};
+					position.QuadPart = state->payloadOffset + sourceOffset;
+					if (!SetFilePointerEx(state->file, position, nullptr, FILE_BEGIN))
+						return false;
+				}
+				while (remaining)
+				{
+					const size_t chunk = std::min(remaining, ioBuffer.size());
+					const UInt8* bytes = nullptr;
+					if (state->file != INVALID_HANDLE_VALUE)
+					{
+						if (!ReadSnapshotBytesExact(
+								state->file, ioBuffer.data(), chunk))
+						{
+							return false;
+						}
+						bytes = ioBuffer.data();
+					}
+					else
+					{
+						bytes = source.snapshot->pixels.data() + sourceOffset;
+					}
+					payloadChecksum = HashAtlasBytes(
+						bytes, chunk, payloadChecksum);
+					pageContentHash = HashAtlasBytes(
+						bytes, chunk, pageContentHash);
+					if (!WriteSequentialFileBytes(file, bytes, chunk))
+					{
+						return false;
+					}
+					sourceOffset += chunk;
+					remaining -= chunk;
+					ServiceFontPrewarmHostMessages();
 				}
 				destinationOffset += source.bytes;
 			}
 			return destinationOffset == page.header.pixelBytes
-				&& flush() && SetEndOfFile(file) != FALSE;
+				&& SetEndOfFile(file) != FALSE;
 		}
 
 		bool IsSnapshotHeaderEnvelopeValid(const AtlasSnapshotHeader& header)

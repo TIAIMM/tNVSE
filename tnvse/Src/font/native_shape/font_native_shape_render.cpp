@@ -196,7 +196,7 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		NativeFontShapeState s_a8State;
+		NativeFontShapeState s_nativeShapeState;
 		CpuMemoryLease s_metadataBucketMemory;
 		size_t s_metadataHighWater = 0;
 
@@ -309,7 +309,7 @@ namespace fonthook::vectorfont
 				&& std::isfinite(vertex.v)
 				// Coverage and precomposed ARGB profiles do not carry a distance
 				// field, so zero is their canonical spread. Profile-specific
-				// validation below still requires a positive spread for MTSDF.
+				// validation below still requires a positive distance-field spread.
 				&& std::isfinite(vertex.sdfSpread) && vertex.sdfSpread >= 0.0f
 				&& std::isfinite(vertex.distanceParameterScale)
 				&& vertex.distanceParameterScale >= 1.0f
@@ -326,7 +326,7 @@ namespace fonthook::vectorfont
 					< kMaximumShapeValidationFailureLogs)
 			{
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_a8_diag: rejected shape contract=one-glyph-composite-quad-v13 reason=%s",
+					"tnvse_freetype_native_shape_diag: rejected shape contract=one-glyph-composite-quad-v13 reason=%s",
 					reason ? reason : "unknown");
 			}
 			return false;
@@ -839,7 +839,7 @@ namespace fonthook::vectorfont
 
 	NativeFontShapeState& State()
 	{
-		return s_a8State;
+		return s_nativeShapeState;
 	}
 
 	bool NeedsScaledFillSampling(const NiTriShape* shape)

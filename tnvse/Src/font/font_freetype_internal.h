@@ -322,7 +322,7 @@ namespace fonthook::vectorfont
 	constexpr UInt64 kMaximumPersistentProfileBytes = 512ull * 1024ull * 1024ull;
 	constexpr UInt32 kMaximumPersistentSingleChannelBitmapBytes =
 		16u * 1024u * 1024u;
-	constexpr UInt32 kMaximumPersistentMtsdfBitmapBytes =
+	constexpr UInt32 kMaximumPersistentFourChannelBitmapBytes =
 		4u * kMaximumPersistentSingleChannelBitmapBytes;
 
 	struct PersistentBitmapProfileKey
@@ -416,7 +416,7 @@ namespace fonthook::vectorfont
 		SInt32 height = 0;
 		SInt32 left = 0;
 		SInt32 top = 0;
-		UInt32 alphaSize = 0;
+		UInt32 payloadSize = 0;
 		UInt64 checksum = 0;
 	};
 #pragma pack(pop)
