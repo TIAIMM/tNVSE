@@ -1208,7 +1208,7 @@ namespace fonthook::vectorfont
 
 	static UInt32 ResolvePrewarmWorkerCount(
 		const std::vector<PrewarmBitmapWorkItem>& workItems,
-		bool expensiveWork)
+		bool expensiveWork, UInt32 maximumWorkers)
 	{
 		const size_t workCount = workItems.size();
 		const size_t parallelThreshold = expensiveWork
@@ -1231,14 +1231,17 @@ namespace fonthook::vectorfont
 			? workCount
 			: (workCount + kFillPrewarmWorkChunk - 1u)
 				/ kFillPrewarmWorkChunk;
+		const UInt32 configuredMaximum = std::clamp<UInt32>(
+			maximumWorkers, 1, kMaximumPrewarmRasterWorkers);
 		return static_cast<UInt32>(std::min<size_t>(usefulWorkers,
-			std::clamp<UInt32>(
-				workers, 1, kMaximumPrewarmRasterWorkers)));
+			std::min(std::clamp<UInt32>(
+				workers, 1, kMaximumPrewarmRasterWorkers), configuredMaximum)));
 	}
 
 	void GetPrewarmGlyphBitmaps(RuntimeFont& runtime,
 		const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
-		std::vector<std::shared_ptr<const GlyphBitmap>>& results)
+		std::vector<std::shared_ptr<const GlyphBitmap>>& results,
+		UInt32 maximumWorkers)
 	{
 		const bool expensiveRequests = std::any_of(
 			requests.begin(), requests.end(),
@@ -1328,7 +1331,7 @@ namespace fonthook::vectorfont
 			const bool expensiveWork =
 				IsExpensivePrewarmWork(workItems);
 			const UInt32 workerCount = ResolvePrewarmWorkerCount(
-				workItems, expensiveWork);
+				workItems, expensiveWork, maximumWorkers);
 			static UInt32 loggedMaximumWorkers = 0;
 			if (workerCount > loggedMaximumWorkers)
 			{

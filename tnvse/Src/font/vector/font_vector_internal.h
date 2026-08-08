@@ -1032,7 +1032,8 @@ namespace fonthook::vectorfont
 		std::vector<UInt64>& arCacheIds);
 	void GetPrewarmGlyphBitmaps(RuntimeFont& arRuntime,
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
-		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults);
+		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults,
+		UInt32 aMaximumWorkers);
 	void BeginCompleteCodePageAtlasOnlyPrewarm();
 	void EndCompleteCodePageAtlasOnlyPrewarm();
 	void FlushGlyphBitmapDiskCache();

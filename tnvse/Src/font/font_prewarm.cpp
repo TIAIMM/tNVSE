@@ -133,6 +133,7 @@ namespace fonthook::vectorfont
 			UInt32 batchGlyphLimit = kInitialIncrementalGlyphsPerBatch;
 			UInt32 maximumBatchGlyphLimit = kMaximumIncrementalGlyphsPerBatch;
 			UInt32 parallelBatchFloor = kParallelGlyphBatchFloor;
+			UInt32 maximumRasterWorkers = kMaximumPrewarmRasterWorkers;
 			UInt32 metricsOnlyBatchGlyphLimit = kMaximumGlyphsPerBatch;
 			size_t estimatedRetainedBytesPerGlyph = 1;
 			size_t estimatedTransientBytesPerWorker = 1;
@@ -379,6 +380,7 @@ namespace fonthook::vectorfont
 			UInt32 initialGlyphs = 1;
 			UInt32 maximumGlyphs = 1;
 			UInt32 parallelFloor = 1;
+			UInt32 maximumWorkers = 1;
 			size_t estimatedRetainedBytesPerGlyph = 1;
 			size_t estimatedTransientBytesPerWorker = 1;
 			size_t estimatedPeakBytes = 1;
@@ -388,7 +390,8 @@ namespace fonthook::vectorfont
 		size_t EstimatePrewarmBatchBytes(UInt32 glyphs,
 			UInt32 workItemsPerGlyph, bool expensiveWork,
 			size_t retainedBytesPerGlyph,
-			size_t transientBytesPerWorker)
+			size_t transientBytesPerWorker,
+			UInt32 maximumWorkers)
 		{
 			const size_t workItems = SaturatingMultiply(
 				glyphs, std::max<UInt32>(1, workItemsPerGlyph));
@@ -402,7 +405,8 @@ namespace fonthook::vectorfont
 					/ kFillPrewarmWorkChunk;
 			const size_t workers = workItems < parallelThreshold
 				? 1u : std::min<size_t>(
-					usefulWorkers, kMaximumPrewarmRasterWorkers);
+					usefulWorkers, std::clamp<UInt32>(maximumWorkers,
+						1, kMaximumPrewarmRasterWorkers));
 			return SaturatingAdd(
 				SaturatingMultiply(glyphs, retainedBytesPerGlyph),
 				SaturatingMultiply(workers,
@@ -412,7 +416,8 @@ namespace fonthook::vectorfont
 		UInt32 ResolveMemoryBoundedGlyphLimit(size_t targetBytes,
 			UInt32 workItemsPerGlyph, bool expensiveWork,
 			size_t retainedBytesPerGlyph,
-			size_t transientBytesPerWorker)
+			size_t transientBytesPerWorker,
+			UInt32 maximumWorkers)
 		{
 			UInt32 resolved = 1;
 			for (UInt32 glyphs = 1;
@@ -421,13 +426,37 @@ namespace fonthook::vectorfont
 				if (EstimatePrewarmBatchBytes(
 						glyphs, workItemsPerGlyph, expensiveWork,
 						retainedBytesPerGlyph,
-						transientBytesPerWorker) > targetBytes)
+						transientBytesPerWorker,
+						maximumWorkers) > targetBytes)
 				{
 					break;
 				}
 				resolved = glyphs;
 			}
 			return resolved;
+		}
+
+		UInt32 ResolveMemoryBoundedWorkerLimit(size_t targetBytes,
+			UInt32 workItemsPerGlyph, bool expensiveWork,
+			size_t retainedBytesPerGlyph,
+			size_t transientBytesPerWorker)
+		{
+			// Worker-local FreeType/MSDF state, not the number of retained glyph
+			// results, determines the parallel scratch peak. Select the widest
+			// worker set that still permits a normal 64-glyph batch. This keeps the
+			// same memory ceiling while avoiding thousands of tiny thread batches.
+			for (UInt32 workers = kMaximumPrewarmRasterWorkers;
+				workers > 1; --workers)
+			{
+				if (EstimatePrewarmBatchBytes(kParallelGlyphBatchFloor,
+					workItemsPerGlyph, expensiveWork,
+					retainedBytesPerGlyph, transientBytesPerWorker,
+					workers) <= targetBytes)
+				{
+					return workers;
+				}
+			}
+			return 1;
 		}
 
 		PrewarmBatchPolicy ResolvePrewarmBatchPolicy(
@@ -552,9 +581,12 @@ namespace fonthook::vectorfont
 					worstTransientBytes, transientBytes);
 			}
 			const size_t configuredBudget = GetCpuMemoryBudget();
+			// Raster scratch is released before atlas finalization and physical-page
+			// consolidation. Permit it to use up to one quarter of the configured CPU
+			// budget (still capped at 24 MiB) instead of the former one-eighth cap.
 			const size_t configuredTarget = std::max(
 				kMinimumPrewarmBatchBytes,
-				std::min(kMaximumPrewarmBatchBytes, configuredBudget / 8u));
+				std::min(kMaximumPrewarmBatchBytes, configuredBudget / 4u));
 			const size_t currentUsage = GetCpuMemoryUsage();
 			const size_t currentHeadroom = currentUsage < configuredBudget
 				? configuredBudget - currentUsage : 0;
@@ -568,14 +600,22 @@ namespace fonthook::vectorfont
 				2048u * 2048u, streamingBytesPerPixel);
 			const size_t usableHeadroom = currentHeadroom > streamingReserve
 				? currentHeadroom - streamingReserve : currentHeadroom / 4u;
+			// Keep one third of the post-streaming headroom unused. This raises the
+			// normal cold-build ceiling without consuming the final safety margin;
+			// allocation failures still reduce both batch size and worker count.
 			const size_t headroomTarget = std::max(
-				kMinimumPrewarmBatchBytes, usableHeadroom / 2u);
+				kMinimumPrewarmBatchBytes,
+				usableHeadroom - usableHeadroom / 3u);
 			const size_t targetBytes = std::min(
 				configuredTarget, headroomTarget);
 			PrewarmBatchPolicy policy;
-			policy.maximumGlyphs = ResolveMemoryBoundedGlyphLimit(
+			policy.maximumWorkers = ResolveMemoryBoundedWorkerLimit(
 				targetBytes, workItemsPerGlyph, expensiveWork,
 				worstRetainedBytes, worstTransientBytes);
+			policy.maximumGlyphs = ResolveMemoryBoundedGlyphLimit(
+				targetBytes, workItemsPerGlyph, expensiveWork,
+				worstRetainedBytes, worstTransientBytes,
+				policy.maximumWorkers);
 			policy.parallelFloor = std::min(
 				policy.maximumGlyphs, kParallelGlyphBatchFloor);
 			policy.initialGlyphs = std::min(
@@ -589,7 +629,7 @@ namespace fonthook::vectorfont
 			policy.estimatedPeakBytes = EstimatePrewarmBatchBytes(
 				policy.maximumGlyphs, workItemsPerGlyph,
 				expensiveWork, worstRetainedBytes,
-				worstTransientBytes);
+				worstTransientBytes, policy.maximumWorkers);
 			policy.targetBytes = targetBytes;
 			return policy;
 		}
@@ -1541,6 +1581,7 @@ namespace fonthook::vectorfont
 			active.batchGlyphLimit = batchPolicy.initialGlyphs;
 			active.parallelBatchFloor =
 				batchPolicy.parallelFloor;
+			active.maximumRasterWorkers = batchPolicy.maximumWorkers;
 			active.estimatedRetainedBytesPerGlyph =
 				batchPolicy.estimatedRetainedBytesPerGlyph;
 			active.estimatedTransientBytesPerWorker =
@@ -1565,6 +1606,7 @@ namespace fonthook::vectorfont
 				active.batchGlyphLimit = 1;
 				active.maximumBatchGlyphLimit = 1;
 				active.parallelBatchFloor = 1;
+				active.maximumRasterWorkers = 1;
 				active.metricsOnlyBatchGlyphLimit = 1;
 				active.constrainedMemory = true;
 				gLog.FormattedMessage(
@@ -1574,11 +1616,12 @@ namespace fonthook::vectorfont
 					headroom.largestFreeRegionBytes / (1024.0 * 1024.0));
 			}
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm batch policy font=%u initial=%u parallelFloor=%u maximum=%u metricsOnlyMaximum=%u retainedBytesPerGlyph=%llu transientBytesPerWorker=%llu estimatedPeakMiB=%.2f targetMiB=%.2f memoryMiB=%.2f/%.2f",
+				"tnvse_freetype_font: prewarm batch policy font=%u initial=%u parallelFloor=%u maximum=%u workers=%u metricsOnlyMaximum=%u retainedBytesPerGlyph=%llu transientBytesPerWorker=%llu estimatedPeakMiB=%.2f targetMiB=%.2f memoryMiB=%.2f/%.2f",
 				active.job.fontId,
 				active.batchGlyphLimit,
 				active.parallelBatchFloor,
 				active.maximumBatchGlyphLimit,
+				active.maximumRasterWorkers,
 				active.metricsOnlyBatchGlyphLimit,
 				static_cast<unsigned long long>(
 					active.estimatedRetainedBytesPerGlyph),
@@ -1679,6 +1722,11 @@ namespace fonthook::vectorfont
 						active.parallelBatchFloor = std::min(
 							active.parallelBatchFloor,
 							active.maximumBatchGlyphLimit);
+						const UInt32 reducedWorkers =
+							active.maximumRasterWorkers > 1
+							? active.maximumRasterWorkers / 2u : 1u;
+						active.maximumRasterWorkers = std::max<UInt32>(
+							1, std::min(reducedWorkers, selectedBatchLimit));
 					}
 				}
 				active.constrainedMemory = true;
@@ -1858,7 +1906,8 @@ namespace fonthook::vectorfont
 						*runtime,
 						s_session.bitmapRequests,
 						s_session.rasterScale,
-						s_session.bitmapResults);
+						s_session.bitmapResults,
+						active.maximumRasterWorkers);
 				}
 				catch (const std::bad_alloc&)
 				{
@@ -2439,6 +2488,10 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: optional physical atlas group consolidation failed reason=unknown; retaining sealed per-font atlases");
 			}
+			// Rebuild the overlay against the committed group before pruning retired
+			// generations. Destroying and recreating the root retains more external
+			// Tile geometry references during the following pool consolidation.
+			RefreshNativePrewarmOverlayTextGeometry();
 			PruneRetiredPrewarmAtlasGenerations();
 			ReportPrewarmProcessMemoryState("physical-groups-after");
 			RecordPrewarmStep(started);
@@ -2484,13 +2537,15 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: optional physical atlas pool consolidation failed reason=unknown; retaining sealed group/per-font atlases");
 			}
+			// Rebind the overlay to the final pool generation before pruning the
+			// superseded group page.
+			RefreshNativePrewarmOverlayTextGeometry();
 			PruneRetiredPrewarmAtlasGenerations();
 			ReportPrewarmProcessMemoryState("physical-pools-after");
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: physical atlas consolidation groupV2=%s poolV3=%s",
 				s_session.physicalGroupsReady ? "complete" : "partial-fallback",
 				s_session.physicalPoolsReady ? "complete" : "partial-fallback");
-			RefreshNativePrewarmOverlayTextGeometry();
 			ReportPrewarmTransactionProgress(
 				L"Finalizing generated font cache",
 				L"Shared physical font textures are ready...",

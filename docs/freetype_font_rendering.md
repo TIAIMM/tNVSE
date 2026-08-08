@@ -334,6 +334,15 @@ boundaries. An unchanged cache-hit launch never latches the component, so all
 validation, restoration, and reuse work remains invisible. A latched component
 is hidden and deleted only in the final `Complete` pump step, immediately before
 `DeferredInit` returns.
+
+Raster batching and raster-worker concurrency are bounded independently. The
+batch policy may use at most 24 MiB, no more than one quarter of the configured
+CPU budget, and no more than two thirds of the headroom left after reserving the
+next streamed role page. The remaining third is kept as an allocation margin.
+Worker-local FreeType/distance-field scratch selects a separate worker cap so a
+normal 64-glyph batch still fits; an allocation failure reduces both limits
+before retrying. The 16-MiB BGRA value below is the size of one intermediate
+2048x2048 streamed MTSDF page, not a 16-MiB raster-batch ceiling.
 Subsequent `kMessage_MainGameLoop` callbacks perform normal native-atlas, DEFAULT-pool,
 and performance-cache maintenance; they no longer drive startup prewarm.
 
