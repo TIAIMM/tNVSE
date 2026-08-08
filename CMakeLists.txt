@@ -86,6 +86,13 @@ file(GLOB_RECURSE TNVSE_BUNDLED_HEADERS CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/include/*.hpp")
 set(TNVSE_HEADERS ${TNVSE_SOURCE_HEADERS} ${TNVSE_BUNDLED_HEADERS})
 
+# This translation unit intentionally keeps its user-facing Chinese text as
+# editable UTF-8 source.  Decode only this file as UTF-8 so the rest of the
+# plugin retains the existing multi-byte project/compiler settings.
+set_source_files_properties(
+  "${TNVSE_SOURCE_ROOT}/game/tianmiao_conflict.cpp"
+  PROPERTIES COMPILE_OPTIONS "/source-charset:utf-8")
+
 add_library(tnvse SHARED
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/dllmain.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/exports.def"
@@ -135,7 +142,6 @@ target_compile_definitions(tnvse PRIVATE
   "$<$<CONFIG:Release>:NDEBUG>")
 
 target_compile_options(tnvse PRIVATE
-  /utf-8
   /EHa
   /Zc:preprocessor
   /bigobj
