@@ -488,69 +488,71 @@ namespace fonthook::vectorfont
 			return packet;
 		}
 
-		UInt8 ResolveStaticCompositeLayerMask(
+		struct CompositeVertexProfile
+		{
+			UInt8 staticLayerMask = 0;
+			float uniformSdfSpread = 0.0f;
+			float uniformDistanceParameterScale = 0.0f;
+		};
+
+		CompositeVertexProfile ResolveCompositeVertexProfile(
 			const std::vector<NativeFontGpuVertex>& vertices,
 			const NativeFontCompositeSpan& span)
 		{
 			const size_t end = static_cast<size_t>(span.firstVertex)
 				+ span.vertexCount;
 			if (!span.vertexCount || end > vertices.size())
-				return 0;
-			UInt8 resolved = 0;
-			for (size_t index = span.firstVertex; index < end; ++index)
+				return {};
+
+			const NativeFontGpuVertex& first = vertices[span.firstVertex];
+			const UInt32 firstMask = std::isfinite(first.layerMask)
+				? static_cast<UInt32>(first.layerMask) : 0u;
+			const bool validFirstMask = firstMask >= 1u && firstMask <= 15u
+				&& first.layerMask == static_cast<float>(firstMask);
+			bool uniformMask = validFirstMask;
+			bool uniformSpread = std::isfinite(first.sdfSpread)
+				&& first.sdfSpread > 0.0f;
+			bool uniformScale = std::isfinite(first.distanceParameterScale)
+				&& first.distanceParameterScale >= 1.0f;
+			UInt64 visitedVertices = 1;
+			for (size_t index = span.firstVertex + 1u; index < end; ++index)
 			{
-				const float encoded = vertices[index].layerMask;
-				const UInt32 mask = static_cast<UInt32>(encoded);
-				if (mask < 1u || mask > 15u
-					|| encoded != static_cast<float>(mask))
+				++visitedVertices;
+				const NativeFontGpuVertex& vertex = vertices[index];
+				if (uniformMask
+					&& vertex.layerMask != static_cast<float>(firstMask))
 				{
-					return 0;
+					uniformMask = false;
 				}
-				if (!resolved)
-					resolved = static_cast<UInt8>(mask);
-				else if (resolved != mask)
-					return 0;
+				if (uniformSpread && vertex.sdfSpread != first.sdfSpread)
+					uniformSpread = false;
+				if (uniformScale
+					&& vertex.distanceParameterScale
+						!= first.distanceParameterScale)
+				{
+					uniformScale = false;
+				}
+				if (!uniformMask && !uniformSpread && !uniformScale)
+					break;
 			}
-			return resolved;
-		}
-
-		float ResolveUniformCompositeSdfSpread(
-			const std::vector<NativeFontGpuVertex>& vertices,
-			const NativeFontCompositeSpan& span)
-		{
-			const size_t end = static_cast<size_t>(span.firstVertex)
-				+ span.vertexCount;
-			if (!span.vertexCount || end > vertices.size())
-				return 0.0f;
-			const float spread = vertices[span.firstVertex].sdfSpread;
-			if (!std::isfinite(spread) || spread <= 0.0f)
-				return 0.0f;
-			for (size_t index = span.firstVertex + 1u; index < end; ++index)
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::TextArtifactCompositeProfileVertex,
+				visitedVertices);
+			if (uniformMask && uniformSpread && uniformScale)
 			{
-				if (vertices[index].sdfSpread != spread)
-					return 0.0f;
+				// The old implementation completed three independent full-span
+				// traversals in this common uniform case. The fused traversal above
+				// produces the same three witnesses in one pass.
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						TextArtifactCompositeProfileVertexScanSaved,
+					static_cast<UInt64>(span.vertexCount) * 2u);
 			}
-			return spread;
-		}
-
-		float ResolveUniformCompositeDistanceParameterScale(
-			const std::vector<NativeFontGpuVertex>& vertices,
-			const NativeFontCompositeSpan& span)
-		{
-			const size_t end = static_cast<size_t>(span.firstVertex)
-				+ span.vertexCount;
-			if (!span.vertexCount || end > vertices.size())
-				return 0.0f;
-			const float scale =
-				vertices[span.firstVertex].distanceParameterScale;
-			if (!std::isfinite(scale) || scale < 1.0f)
-				return 0.0f;
-			for (size_t index = span.firstVertex + 1u; index < end; ++index)
-			{
-				if (vertices[index].distanceParameterScale != scale)
-					return 0.0f;
-			}
-			return scale;
+			return {
+				uniformMask ? static_cast<UInt8>(firstMask) : 0u,
+				uniformSpread ? first.sdfSpread : 0.0f,
+				uniformScale ? first.distanceParameterScale : 0.0f
+			};
 		}
 
 	}
@@ -628,19 +630,14 @@ namespace fonthook::vectorfont
 					payload->compositePackets.clear();
 					break;
 				}
-				const UInt8 staticLayerMask =
-					ResolveStaticCompositeLayerMask(
-						payload->gpuVertices, span);
-				const float uniformSdfSpread =
-					ResolveUniformCompositeSdfSpread(
-						payload->gpuVertices, span);
-				const float uniformDistanceParameterScale =
-					ResolveUniformCompositeDistanceParameterScale(
+				const CompositeVertexProfile profile =
+					ResolveCompositeVertexProfile(
 						payload->gpuVertices, span);
 				payload->compositePackets.push_back(
 					BuildCompositePacket(effects, span, bound,
-						staticLayerMask, uniformSdfSpread,
-						uniformDistanceParameterScale));
+						profile.staticLayerMask,
+						profile.uniformSdfSpread,
+						profile.uniformDistanceParameterScale));
 			}
 		}
 		if (!SealNativeFontPayloadValidation(*payload))

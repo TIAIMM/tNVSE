@@ -3332,10 +3332,22 @@ namespace fonthook::vectorfont
 					FreeTypePerfCounter::TextArtifactAdmissionBypass);
 			}
 			RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactMiss);
+			FreeTypePerfScope artifactCompilePerf(
+				FreeTypePerfPhase::TextArtifactCompile);
 
-			std::vector<NativeFontGpuVertex> vertices(quads.size() * 4);
-			std::vector<CompositeGlyphQuadSource> compositeGlyphs(quads.size());
+			std::vector<NativeFontGpuVertex> vertices;
+			const size_t sourceVertexCount = quads.size() * 4u;
+			vertices.reserve(sourceVertexCount);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::TextArtifactCompiledVertex,
+				sourceVertexCount);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::TextArtifactVertexInitializationBytesAvoided,
+				sourceVertexCount * sizeof(NativeFontGpuVertex));
 			bool compositeCandidate = effects.shaderEffects;
+			std::vector<CompositeGlyphQuadSource> compositeGlyphs;
+			if (compositeCandidate)
+				compositeGlyphs.resize(quads.size());
 			NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
 				std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
 			NiPoint3 boundMaximum(std::numeric_limits<float>::lowest(),
@@ -3399,7 +3411,7 @@ namespace fonthook::vectorfont
 						if (quad.layerMask
 							& (1u << static_cast<UInt8>(AtlasLayer::Fill)))
 						{
-							glyph.firstVertex = index * 4u;
+						glyph.firstVertex = static_cast<UInt32>(vertices.size());
 						}
 					}
 				}
@@ -3439,7 +3451,6 @@ namespace fonthook::vectorfont
 					+ expansion * quad.atlasPlacement.inverseWidth;
 				const float v1 = quad.atlasPlacement.v1
 					+ expansion * quad.atlasPlacement.inverseHeight;
-				const UInt32 base = index * 4;
 				const UInt32 packedColor = PackNativeBaseColor(
 					effects.bakedCoverage
 						? ComposeQuadColor(quad) : quad.baseColor);
@@ -3455,8 +3466,7 @@ namespace fonthook::vectorfont
 				{
 					const NiPoint3& position = positions[ordinal];
 					const NiPoint2& uv = texture[ordinal];
-					NativeFontGpuVertex& output = vertices[base + ordinal];
-					output = { position.x, position.y, position.z,
+					vertices.push_back({ position.x, position.y, position.z,
 						uv.x, uv.y, packedColor,
 						static_cast<float>(quad.source.SdfSpread()),
 						quad.sourceToLogicalScale > 0.0f
@@ -3467,7 +3477,7 @@ namespace fonthook::vectorfont
 						SanitizeNativeUvBound(u0),
 						SanitizeNativeUvBound(v0),
 						SanitizeNativeUvBound(u1),
-						SanitizeNativeUvBound(v1) };
+						SanitizeNativeUvBound(v1) });
 					boundMinimum.x = std::min(boundMinimum.x, position.x);
 					boundMinimum.y = std::min(boundMinimum.y, position.y);
 					boundMinimum.z = std::min(boundMinimum.z, position.z);
@@ -3476,6 +3486,8 @@ namespace fonthook::vectorfont
 					boundMaximum.z = std::max(boundMaximum.z, position.z);
 				}
 			}
+			if (vertices.size() != sourceVertexCount)
+				return nullptr;
 			std::vector<NativeFontCompositeSpan> compositeSpans;
 			std::vector<CompositeGlyphQuadSource> compositeSources;
 			if (compositeCandidate)
