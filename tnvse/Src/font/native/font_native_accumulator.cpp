@@ -565,14 +565,24 @@ namespace fonthook::vectorfont
 			return writable;
 		}
 
-		bool PublishTileRegisterObjectHook(TileRegisterObjectFn expected)
+		SafeWrite32IfEqualResult PublishTileRegisterObjectHook(
+			TileRegisterObjectFn expected)
 		{
-			if (!expected || !IsTileRegisterObjectSlotWritable())
-				return false;
+			SafeWrite32IfEqualResult result;
+			if (!expected)
+			{
+				result.protectionError = ERROR_INVALID_PARAMETER;
+				return result;
+			}
+			if (!IsTileRegisterObjectSlotWritable())
+			{
+				result.protectionError = ERROR_NOACCESS;
+				return result;
+			}
 			const SIZE_T expectedBits = reinterpret_cast<SIZE_T>(expected);
 			// BSShaderAccumulator::Tile RegisterObject callback (__cdecl).
 			// Use CAS because NVTF/NVHR may publish this slot concurrently.
-			return SafeWrite32IfEqual(kTileRegisterObjectFunctionEntry,
+			return SafeWrite32IfEqualDetailed(kTileRegisterObjectFunctionEntry,
 				reinterpret_cast<SIZE_T>(&NativeFontRegisterObject),
 				expectedBits);
 		}
@@ -2181,7 +2191,9 @@ namespace fonthook::vectorfont
 		const TileRegisterObjectFn previousPredecessor = installedPredecessor;
 		s_predecessorTileRegisterObject.store(
 			currentTarget, std::memory_order_release);
-		if (!PublishTileRegisterObjectHook(currentTarget))
+		const SafeWrite32IfEqualResult publication =
+			PublishTileRegisterObjectHook(currentTarget);
+		if (!publication.WasPublished())
 		{
 			// The slot changed after validation.  Preserve an older predecessor if
 			// one may still be reached through a successor chain; otherwise allow a
@@ -2192,10 +2204,22 @@ namespace fonthook::vectorfont
 			{
 				s_loggedTileRegisterObjectConflict = true;
 				gLog.FormattedMessage(
-					"tnvse_freetype_native: Tile RegisterObject dispatch changed during publication; hook not installed expected=%p actual=%p",
-					currentTarget, ReadTileRegisterObjectTarget());
+					"tnvse_freetype_native: Tile RegisterObject dispatch CAS did not publish expected=%p actual=%p compared=%u observed=%p protectionError=%lu",
+					currentTarget, ReadTileRegisterObjectTarget(),
+					publication.comparisonPerformed ? 1u : 0u,
+					reinterpret_cast<void*>(publication.observed),
+					publication.protectionError);
 			}
 			return false;
+		}
+		if (!publication.PostconditionsComplete())
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: Tile RegisterObject dispatch published with incomplete write postconditions protectionRestored=%u protectionError=%lu cacheFlushed=%u cacheError=%lu",
+				publication.protectionRestored ? 1u : 0u,
+				publication.protectionError,
+				publication.instructionCacheFlushed ? 1u : 0u,
+				publication.cacheFlushError);
 		}
 
 		const bool accumulatorReady = IsNativeFontAccumulatorHookCurrent();

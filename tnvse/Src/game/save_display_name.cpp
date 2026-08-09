@@ -4,10 +4,12 @@
 #include "hook_identity.h"
 #include "hook_site.h"
 #include "load_config.h"
+#include "plugin_dependencies.h"
 #include "SafeWrite.h"
 #include "tnvse.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -34,6 +36,24 @@ namespace fonthook
 		// yet built the physical .fos path. Replacing only this call preserves
 		// display text.
 		constexpr SIZE_T kOpenSaveFileCallSite = 0x850545;
+		constexpr SIZE_T kVanillaOpenSaveFile = 0x850030;
+		constexpr const char* kStewieTweaksModuleName =
+			"nvse_stewie_tweaks.dll";
+		constexpr UInt32 kStewieSaveHookVersion990 = 990;
+		constexpr UInt32 kStewieSaveHookVersion995 = 995;
+		// Release 9.90 and the audited 9.95 source both forward the same four
+		// stack arguments to vanilla 0x850030. The 9.90 binary emits this exact
+		// prefix; a different code generator/version fails closed at PostLoad.
+		constexpr std::array<UInt8, 24>
+			kStewieOpenSaveFileForwardPrefix = {
+				0x56,
+				0xFF, 0x74, 0x24, 0x14,
+				0xB8, 0x30, 0x00, 0x85, 0x00,
+				0xFF, 0x74, 0x24, 0x14,
+				0xFF, 0x74, 0x24, 0x14,
+				0xFF, 0x74, 0x24, 0x14,
+				0xFF, 0xD0,
+			};
 		constexpr SIZE_T kSaveLoadManagerSingleton = 0x11DE134;
 
 		constexpr UInt32 kStoreMagic = 'SVDN';
@@ -88,6 +108,59 @@ namespace fonthook
 		std::string s_pendingRenameOldPath;
 		SIZE_T s_nextOpenSaveFile = 0;
 		SIZE_T s_nextIsSaveFileNameGenerated = 0;
+
+		struct OpenSaveFileForwardFrame
+		{
+			OpenSaveFileForwardFrame* previous = nullptr;
+			SIZE_T target = 0;
+			void* saveManager = nullptr;
+			UInt32 createFile = 0;
+			UInt32 bufferMode = 0;
+			SInt32 saveIndex = 0;
+		};
+
+		thread_local OpenSaveFileForwardFrame*
+			s_activeOpenSaveFileForward = nullptr;
+		volatile LONG s_loggedOpenSaveFileForwardCycle = 0;
+
+		class ScopedOpenSaveFileForward
+		{
+		public:
+			ScopedOpenSaveFileForward(SIZE_T target, void* saveManager,
+				UInt32 createFile, UInt32 bufferMode, SInt32 saveIndex)
+				: m_frame{ s_activeOpenSaveFileForward, target, saveManager,
+					createFile, bufferMode, saveIndex }
+			{
+				s_activeOpenSaveFileForward = &m_frame;
+			}
+
+			~ScopedOpenSaveFileForward()
+			{
+				s_activeOpenSaveFileForward = m_frame.previous;
+			}
+
+			ScopedOpenSaveFileForward(const ScopedOpenSaveFileForward&) = delete;
+			ScopedOpenSaveFileForward& operator=(
+				const ScopedOpenSaveFileForward&) = delete;
+
+		private:
+			OpenSaveFileForwardFrame m_frame;
+		};
+
+		enum class OpenSaveFileHookPhase
+		{
+			PluginLoad,
+			PostLoad,
+		};
+
+		struct StewieOpenSaveFileContract
+		{
+			bool moduleOwned = false;
+			bool pluginInfoValid = false;
+			bool versionSupported = false;
+			bool forwardingPrefixMatches = false;
+			UInt32 version = 0;
+		};
 
 		std::string ToLowerAscii(std::string value)
 		{
@@ -521,6 +594,49 @@ namespace fonthook
 			}
 		}
 
+		void* ForwardOpenSaveFile(SIZE_T target, void* saveManager,
+			const char* fileName, UInt32 createFile, UInt32 bufferMode,
+			SInt32 saveIndex)
+		{
+			for (const OpenSaveFileForwardFrame* frame =
+					s_activeOpenSaveFileForward;
+				frame; frame = frame->previous)
+			{
+				if (frame->target != target
+					|| frame->saveManager != saveManager
+					|| frame->createFile != createFile
+					|| frame->bufferMode != bufferMode
+					|| frame->saveIndex != saveIndex)
+				{
+					continue;
+				}
+
+				if (target != kVanillaOpenSaveFile
+					&& hook_identity::IsExecutableTarget(
+						kVanillaOpenSaveFile))
+				{
+					if (InterlockedCompareExchange(
+							&s_loggedOpenSaveFileForwardCycle, 1, 0) == 0)
+					{
+						gLog.FormattedMessage(
+							"tnvse_save_display_name: recursive predecessor edge detected target=%08X manager=%08X saveIndex=%d; forwarding directly to vanilla=%08X",
+							static_cast<UInt32>(target),
+							reinterpret_cast<UInt32>(saveManager),
+							saveIndex,
+							static_cast<UInt32>(kVanillaOpenSaveFile));
+					}
+					return ThisStdCall<void*>(kVanillaOpenSaveFile,
+						saveManager, fileName, createFile, bufferMode, saveIndex);
+				}
+				break;
+			}
+
+			ScopedOpenSaveFileForward activeForward(target, saveManager,
+				createFile, bufferMode, saveIndex);
+			return ThisStdCall<void*>(target, saveManager,
+				fileName, createFile, bufferMode, saveIndex);
+		}
+
 		void __fastcall ScrubFileNameAndCaptureDisplayName(
 			void*, UInt32, char* fileName)
 		{
@@ -559,7 +675,7 @@ namespace fonthook
 				|| originalName.empty()
 				|| !ContainsHighByte(originalName))
 			{
-				return ThisStdCall<void*>(nextTarget, saveManager,
+				return ForwardOpenSaveFile(nextTarget, saveManager,
 					fileName, createFile, bufferMode, saveIndex);
 			}
 
@@ -571,8 +687,171 @@ namespace fonthook
 				"tnvse_save_display_name: sanitized custom multibyte save name bytes=%u",
 				static_cast<UInt32>(originalName.size()));
 
-			return ThisStdCall<void*>(nextTarget, saveManager,
+			return ForwardOpenSaveFile(nextTarget, saveManager,
 				safeName, createFile, bufferMode, saveIndex);
+		}
+
+		bool IsAddressOwnedByModule(SIZE_T address, HMODULE module)
+		{
+			MEMORY_BASIC_INFORMATION region = {};
+			return address && module
+				&& VirtualQuery(reinterpret_cast<const void*>(address),
+					&region, sizeof(region)) == sizeof(region)
+				&& region.AllocationBase == module;
+		}
+
+		StewieOpenSaveFileContract InspectStewieOpenSaveFileContract(
+			SIZE_T target)
+		{
+			StewieOpenSaveFileContract contract;
+			contract.moduleOwned = IsAddressOwnedByModule(target,
+				GetModuleHandleA(kStewieTweaksModuleName));
+
+			const PluginInfo* const info = g_cmdTableInterface
+				&& g_cmdTableInterface->GetPluginInfoByName
+				? g_cmdTableInterface->GetPluginInfoByName(
+					dependencies::kStewieTweaksPluginName)
+				: nullptr;
+			contract.pluginInfoValid = dependencies::IsPluginInfoValid(info);
+			contract.version = contract.pluginInfoValid ? info->version : 0;
+			contract.versionSupported = contract.pluginInfoValid
+				&& (contract.version == kStewieSaveHookVersion990
+					|| contract.version == kStewieSaveHookVersion995);
+			contract.forwardingPrefixMatches = contract.moduleOwned
+				&& hook_identity::IsAccessibleRegion(target,
+					kStewieOpenSaveFileForwardPrefix.size(), true)
+				&& std::memcmp(reinterpret_cast<const void*>(target),
+					kStewieOpenSaveFileForwardPrefix.data(),
+					kStewieOpenSaveFileForwardPrefix.size()) == 0;
+			return contract;
+		}
+
+		bool IsKnownPostLoadOpenSaveFilePredecessor(SIZE_T target,
+			StewieOpenSaveFileContract& stewieContract)
+		{
+			// Vanilla has no predecessor state and therefore cannot recurse
+			// through tNVSE. Pointer equality with a previously captured wrapper is
+			// not sufficient: that wrapper may have been reinstalled later and may
+			// now retain tNVSE as its own predecessor.
+			if (target == kVanillaOpenSaveFile)
+			{
+				return true;
+			}
+
+			// Stewie is accepted only when both its reported version and the live
+			// machine-code forwarding contract are recognized. Module ownership or
+			// equality with a saved address alone is insufficient: a wrapper which
+			// retained tNVSE would recurse if placed below it again.
+			stewieContract = InspectStewieOpenSaveFileContract(target);
+			return stewieContract.moduleOwned
+				&& stewieContract.versionSupported
+				&& stewieContract.forwardingPrefixMatches;
+		}
+
+		const char* OpenSaveFileHookPhaseName(OpenSaveFileHookPhase phase)
+		{
+			return phase == OpenSaveFileHookPhase::PostLoad
+				? "post-load" : "plugin-load";
+		}
+
+		bool ReconcileOpenSaveFileHook(OpenSaveFileHookPhase phase)
+		{
+			hook_site::RelCallSite site{
+				"BGSSaveLoadManager::SaveGame -> OpenSaveFile "
+				"(__thiscall via __fastcall shim)",
+				kOpenSaveFileCallSite,
+				kVanillaOpenSaveFile,
+				&OpenSaveFileWithSafeName
+			};
+			const char* const phaseName = OpenSaveFileHookPhaseName(phase);
+
+			SIZE_T currentTarget = 0;
+			if (!site.ReadTarget(currentTarget)
+				|| !hook_identity::IsExecutableTarget(currentTarget))
+			{
+				gLog.FormattedMessage(
+					"tnvse_save_display_name: %s save sanitizer identity invalid site=%08X instruction=CALL rel32 current=%08X abi=__thiscall-via-__fastcall; fail-closed",
+					phaseName,
+					static_cast<UInt32>(site.callAddress),
+					static_cast<UInt32>(currentTarget));
+				return false;
+			}
+
+			if (currentTarget == site.replacementTarget)
+			{
+				const bool predecessorValid =
+					s_nextOpenSaveFile != site.replacementTarget
+					&& hook_identity::IsExecutableTarget(
+						s_nextOpenSaveFile);
+				gLog.FormattedMessage(
+					"tnvse_save_display_name: %s save sanitizer %s site=%08X instruction=CALL rel32 current=%08X next=%08X abi=__thiscall-via-__fastcall",
+					phaseName,
+					predecessorValid ? "verified" : "predecessor invalid; fail-closed",
+					static_cast<UInt32>(site.callAddress),
+					static_cast<UInt32>(currentTarget),
+					static_cast<UInt32>(s_nextOpenSaveFile));
+				return predecessorValid;
+			}
+
+			StewieOpenSaveFileContract stewieContract;
+			if (phase == OpenSaveFileHookPhase::PostLoad
+				&& !IsKnownPostLoadOpenSaveFilePredecessor(
+					currentTarget, stewieContract))
+			{
+				// An unknown owner may already retain tNVSE as its predecessor.
+				// Re-publishing above it could create tNVSE -> owner -> tNVSE.
+				gLog.FormattedMessage(
+					"tnvse_save_display_name: post-load save sanitizer left unknown owner unchanged site=%08X instruction=CALL rel32 current=%08X savedNext=%08X abi=__thiscall-via-__fastcall stewieOwned=%u stewieInfo=%u stewieVersion=%u stewieVersionSupported=%u vanillaForwardPrefix=%u; fail-closed",
+					static_cast<UInt32>(site.callAddress),
+					static_cast<UInt32>(currentTarget),
+					static_cast<UInt32>(s_nextOpenSaveFile),
+					stewieContract.moduleOwned ? 1u : 0u,
+					stewieContract.pluginInfoValid ? 1u : 0u,
+					stewieContract.version,
+					stewieContract.versionSupported ? 1u : 0u,
+					stewieContract.forwardingPrefixMatches ? 1u : 0u);
+				return false;
+			}
+
+			const SIZE_T previousPredecessor = s_nextOpenSaveFile;
+			s_nextOpenSaveFile = currentTarget;
+			const bool writeCompleted = WriteRelCall(
+				site.callAddress, &OpenSaveFileWithSafeName);
+
+			SIZE_T observedTarget = 0;
+			const bool observedCall = site.ReadTarget(observedTarget);
+			if (observedCall && observedTarget == site.replacementTarget)
+			{
+				gLog.FormattedMessage(
+					"tnvse_save_display_name: %s custom multibyte save sanitizer installed site=%08X instruction=CALL rel32 target=%08X next=%08X abi=__thiscall-via-__fastcall writeComplete=%u",
+					phaseName,
+					static_cast<UInt32>(site.callAddress),
+					static_cast<UInt32>(site.replacementTarget),
+					static_cast<UInt32>(currentTarget),
+					writeCompleted ? 1u : 0u);
+				return true;
+			}
+
+			const bool predecessorRetained = !observedCall
+				|| observedTarget != currentTarget;
+			if (!predecessorRetained)
+			{
+				// The wrapper is not reachable, so its predecessor must not be
+				// changed as though publication had succeeded.
+				s_nextOpenSaveFile = previousPredecessor;
+			}
+			gLog.FormattedMessage(
+				"tnvse_save_display_name: %s save sanitizer publication unverified site=%08X instruction=CALL rel32 predecessor=%08X observed=%08X readable=%u executable=%u writeComplete=%u predecessorRetained=%u; fail-closed",
+				phaseName,
+				static_cast<UInt32>(site.callAddress),
+				static_cast<UInt32>(currentTarget),
+				static_cast<UInt32>(observedTarget),
+				observedCall ? 1u : 0u,
+				observedCall && hook_identity::IsExecutableTarget(
+					observedTarget) ? 1u : 0u,
+				writeCompleted ? 1u : 0u,
+				predecessorRetained ? 1u : 0u);
+			return false;
 		}
 
 		template <class T>
@@ -627,12 +906,18 @@ namespace fonthook
 				return false;
 
 			DWORD bytesWritten = 0;
-			const BOOL ok = WriteFile(file, data.data(), static_cast<DWORD>(data.size()), &bytesWritten, nullptr);
-			if (ok)
-				FlushFileBuffers(file);
+			const BOOL writeOk = WriteFile(
+				file,
+				data.data(),
+				static_cast<DWORD>(data.size()),
+				&bytesWritten,
+				nullptr);
+			const BOOL flushOk = writeOk && bytesWritten == data.size()
+				? FlushFileBuffers(file)
+				: FALSE;
 			CloseHandle(file);
 
-			if (!ok || bytesWritten != data.size())
+			if (!writeOk || bytesWritten != data.size() || !flushOk)
 			{
 				DeleteFileA(tempPath.c_str());
 				return false;
@@ -1130,14 +1415,13 @@ namespace fonthook
 		s_displayCache.clear();
 	}
 
+	void ReconcileSaveDisplayNameHookPostLoad()
+	{
+		ReconcileOpenSaveFileHook(OpenSaveFileHookPhase::PostLoad);
+	}
+
 	void InitSaveDisplayNameHook()
 	{
-		hook_site::RelCallSite openSaveFileCallSite{
-			"BGSSaveLoadManager::SaveGame -> OpenSaveFile (__thiscall via __fastcall shim)",
-			kOpenSaveFileCallSite,
-			0,
-			&OpenSaveFileWithSafeName
-		};
 		hook_site::RelCallSite scrubFileNameCallSite{
 			"SaveGameManager filename scrub (__fastcall)",
 			kScrubFileNameCallSite,
@@ -1150,61 +1434,7 @@ namespace fonthook
 			0,
 			&IsSaveFileNameGeneratedWithDisplayName
 		};
-		SIZE_T openSaveFileTarget = 0;
-		if (!hook_identity::ReadRel32Target(
-				kOpenSaveFileCallSite,
-				Rel32Opcode::Call,
-				openSaveFileTarget)
-			|| !hook_identity::IsExecutableTarget(openSaveFileTarget)
-			|| openSaveFileTarget == openSaveFileCallSite.replacementTarget)
-		{
-			gLog.FormattedMessage(
-				"tnvse_save_display_name: custom save hook target invalid target=%08X; disabled",
-				static_cast<UInt32>(openSaveFileTarget));
-		}
-		else
-		{
-			// Preserve whichever compatible hook currently owns the CALL.  In a
-			// Stewie Tweaks setup this is SaveGameManager__CreateSaveLoadFile,
-			// which in turn calls the vanilla 0x850030 implementation.
-			s_nextOpenSaveFile = openSaveFileTarget;
-			WriteRelCall(kOpenSaveFileCallSite, &OpenSaveFileWithSafeName);
-			SIZE_T observedOpenSaveFileTarget = 0;
-			const bool observedOpenSaveFileCall =
-				hook_identity::ReadRel32Target(
-					kOpenSaveFileCallSite,
-					Rel32Opcode::Call,
-					observedOpenSaveFileTarget);
-			if (observedOpenSaveFileCall
-				&& observedOpenSaveFileTarget
-					== openSaveFileCallSite.replacementTarget)
-			{
-				gLog.FormattedMessage(
-					"tnvse_save_display_name: custom multibyte save sanitizer installed next=%08X",
-					static_cast<UInt32>(openSaveFileTarget));
-			}
-			else if (observedOpenSaveFileCall
-				&& observedOpenSaveFileTarget == openSaveFileTarget)
-			{
-				s_nextOpenSaveFile = 0;
-				gLog.FormattedMessage(
-					"tnvse_save_display_name: custom save hook write did not publish target=%08X",
-					static_cast<UInt32>(openSaveFileTarget));
-			}
-			else
-			{
-				// A later owner may already chain through tNVSE. Preserve its
-				// top-level CALL and retain our predecessor for any live chain.
-				gLog.FormattedMessage(
-					"tnvse_save_display_name: custom save hook retained below observed target=%08X predecessor=%08X readable=%u executable=%u",
-					static_cast<UInt32>(observedOpenSaveFileTarget),
-					static_cast<UInt32>(openSaveFileTarget),
-					observedOpenSaveFileCall ? 1u : 0u,
-					observedOpenSaveFileCall
-						&& hook_identity::IsExecutableTarget(
-							observedOpenSaveFileTarget) ? 1u : 0u);
-			}
-		}
+		ReconcileOpenSaveFileHook(OpenSaveFileHookPhase::PluginLoad);
 
 		if (!g_bSaveDisplayNameMap)
 			return;

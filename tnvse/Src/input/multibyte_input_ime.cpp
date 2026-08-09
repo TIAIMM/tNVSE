@@ -620,6 +620,7 @@ namespace fonthook
 
 				state.gameImeEnabled = true;
 				state.gameImeContextDetached = false;
+				state.gameImeDetachFailureLogged = false;
 				state.detachedGameImeWindow = nullptr;
 				state.associatedGameImeWindow = hwnd;
 				state.associatedGameImeLayout = layout;
@@ -638,6 +639,7 @@ namespace fonthook
 				if (!context)
 				{
 					state.gameImeEnabled = false;
+					state.gameImeDetachFailureLogged = false;
 					state.associatedGameImeWindow = nullptr;
 					state.associatedGameImeLayout = nullptr;
 					state.associatedGameImeGeneration = 0;
@@ -666,12 +668,17 @@ namespace fonthook
 			{
 				state.gameImeContextDetached = false;
 				state.detachedGameImeWindow = nullptr;
-				gLog.FormattedMessage(
-					"tnvse_multibyte_input: failed to detach game IME context while no text target is active");
+				if (!state.gameImeDetachFailureLogged)
+				{
+					state.gameImeDetachFailureLogged = true;
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: failed to detach game IME context while no text target is active; watchdog retry enabled");
+				}
 				return;
 			}
 
 			state.gameImeContextDetached = true;
+			state.gameImeDetachFailureLogged = false;
 			state.detachedGameImeWindow = hwnd;
 			DebugLog(
 				"tnvse_multibyte_input: game IME input disabled; context detached");
@@ -785,6 +792,15 @@ namespace fonthook
 			SetTextInputSessionActive(hasTarget);
 			if (hasTarget && State().textInputSessionActive)
 				SetGameImeEnabled(s_window, true);
+			else if (!hasTarget
+				&& (!State().gameImeContextDetached
+					|| State().detachedGameImeWindow != s_window))
+			{
+				// SetTextInputSessionActive(false) is intentionally idempotent. If
+				// the first IMM detach failed, retry without requiring another
+				// session transition.
+				SetGameImeEnabled(s_window, false);
+			}
 		}
 
 		void PumpImeStatusWatchdog()
@@ -795,7 +811,12 @@ namespace fonthook
 			// Input, focus, language, composition and TSF candidate events refresh
 			// immediately in the window/TSF callbacks. Keep only a low-frequency
 			// safety net while there is live state that can become stale.
-			if (!State().textInputSessionActive && !State().overlay.visible)
+			const bool detachRetryPending =
+				!State().textInputSessionActive
+				&& (!State().gameImeContextDetached
+					|| State().detachedGameImeWindow != s_window);
+			if (!State().textInputSessionActive && !State().overlay.visible
+				&& !detachRetryPending)
 			{
 				State().lastImeWatchdogTick = 0;
 				return;

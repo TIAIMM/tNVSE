@@ -288,8 +288,33 @@ namespace fonthook
 			s_jipPredecessorInputHandler = currentHandler;
 			// JIP TextInput TextEditMenu::HandleKeyboardInput vtable slot
 			// (__thiscall target via __fastcall shim).
-			SafeWrite32(kTextEditMenuHandleKeyboardInputVTableEntry,
-				adapterHandler);
+			const SafeWrite32IfEqualResult publication =
+				SafeWrite32IfEqualDetailed(
+					kTextEditMenuHandleKeyboardInputVTableEntry,
+					adapterHandler, currentHandler);
+			const bool published = publication.WasPublished();
+			if (!published)
+			{
+				const SIZE_T observedHandler = publication.comparisonPerformed
+					? publication.observed : CurrentTextEditInputHandler();
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: JIP TextInput adapter CAS did not publish predecessor=0x%08X observed=0x%08X compared=%u protectionError=%lu",
+					static_cast<UInt32>(currentHandler),
+					static_cast<UInt32>(observedHandler),
+					publication.comparisonPerformed ? 1u : 0u,
+					publication.protectionError);
+				ClearJipTextInputHookState();
+				return;
+			}
+			if (!publication.PostconditionsComplete())
+			{
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: JIP TextInput adapter published with incomplete write postconditions protectionRestored=%u protectionError=%lu cacheFlushed=%u cacheError=%lu",
+					publication.protectionRestored ? 1u : 0u,
+					publication.protectionError,
+					publication.instructionCacheFlushed ? 1u : 0u,
+					publication.cacheFlushError);
+			}
 			const SIZE_T observedHandler = CurrentTextEditInputHandler();
 			if (observedHandler == adapterHandler)
 			{
@@ -304,7 +329,7 @@ namespace fonthook
 			if (observedHandler == currentHandler)
 			{
 				gLog.FormattedMessage(
-					"tnvse_multibyte_input: JIP TextInput adapter write did not publish predecessor=0x%08X",
+					"tnvse_multibyte_input: JIP TextInput adapter was published but the slot returned to predecessor=0x%08X",
 					static_cast<UInt32>(currentHandler));
 				ClearJipTextInputHookState();
 				return;

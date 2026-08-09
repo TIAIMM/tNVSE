@@ -987,10 +987,44 @@ namespace fonthook
 				return false;
 			}
 
+			const SIZE_T previousPredecessor = site.predecessorHandler;
 			site.predecessorHandler = currentHandler;
 			// Stewie menu handler vtable slot
 			// (__thiscall target via __fastcall adapter).
-			SafeWrite32(site.vtableEntry, site.adapterHandler);
+			const SafeWrite32IfEqualResult publication =
+				SafeWrite32IfEqualDetailed(site.vtableEntry,
+					site.adapterHandler, currentHandler);
+			const bool published = publication.WasPublished();
+			if (!published)
+			{
+				SIZE_T observedTarget = publication.comparisonPerformed
+					? publication.observed : 0;
+				if (!publication.comparisonPerformed)
+					ReadMenuSearchHandler(site, observedTarget);
+				site.predecessorHandler = previousPredecessor;
+				site.adapterInstalled = false;
+				site.adapterPublicationUncertain = false;
+				site.observedHandler = observedTarget;
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: Stewie %s adapter CAS did not publish entry=0x%08X predecessor=0x%08X observed=0x%08X compared=%u protectionError=%lu",
+					site.menuName,
+					static_cast<UInt32>(site.vtableEntry),
+					static_cast<UInt32>(currentHandler),
+					static_cast<UInt32>(observedTarget),
+					publication.comparisonPerformed ? 1u : 0u,
+					publication.protectionError);
+				return false;
+			}
+			if (!publication.PostconditionsComplete())
+			{
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: Stewie %s adapter published with incomplete write postconditions protectionRestored=%u protectionError=%lu cacheFlushed=%u cacheError=%lu",
+					site.menuName,
+					publication.protectionRestored ? 1u : 0u,
+					publication.protectionError,
+					publication.instructionCacheFlushed ? 1u : 0u,
+					publication.cacheFlushError);
+			}
 			SIZE_T installedTarget = 0;
 			const bool installedTargetReadable =
 				ReadMenuSearchHandler(site, installedTarget);
@@ -1007,10 +1041,10 @@ namespace fonthook
 
 			if (installedTargetReadable && installedTarget == currentHandler)
 			{
-				site.predecessorHandler = 0;
+				site.predecessorHandler = previousPredecessor;
 				site.observedHandler = currentHandler;
 				gLog.FormattedMessage(
-					"tnvse_multibyte_input: Stewie %s adapter write did not publish entry=0x%08X predecessor=0x%08X",
+					"tnvse_multibyte_input: Stewie %s adapter was published but the slot returned to its predecessor entry=0x%08X predecessor=0x%08X",
 					site.menuName,
 					static_cast<UInt32>(site.vtableEntry),
 					static_cast<UInt32>(currentHandler));

@@ -327,7 +327,7 @@ namespace fonthook
 		std::string WideToCurrentCodePage(std::wstring_view value);
 		void PumpCapturedInputEvents();
 		void ClearCapturedInputEvents();
-		bool TryInstallWindowProc();
+		bool TryInstallWindowProc(bool* publishedNow = nullptr);
 		void RestoreWindowProc();
 	}
 }

@@ -173,8 +173,18 @@ namespace fonthook::hook_site
 				return false;
 			if (currentTarget == replacementTarget)
 			{
-				if (!::SafeWrite32(slotAddress, restorationTarget)
-					|| !ReadTarget(currentTarget))
+				const SafeWrite32IfEqualResult result =
+					::SafeWrite32IfEqualDetailed(slotAddress,
+						restorationTarget, replacementTarget);
+				if (result.WasPublished())
+				{
+					currentTarget = restorationTarget;
+				}
+				else if (result.comparisonPerformed)
+				{
+					currentTarget = result.observed;
+				}
+				else if (!ReadTarget(currentTarget))
 					return false;
 				if (observedTarget)
 					*observedTarget = currentTarget;
@@ -259,7 +269,7 @@ namespace fonthook::hook_site
 		{
 			if (OwnsJumpHead()
 				&& !::SafeWriteBuf(
-					entryAddress, originalBytes, originalLength))
+					entryAddress, originalBytes, patchLength))
 				return false;
 			return MatchesOriginalBytes();
 		}

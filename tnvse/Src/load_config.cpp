@@ -93,10 +93,24 @@ namespace
 
 void LoadConfig()
 {
-	char filename[MAX_PATH];
-	GetModuleFileNameA(NULL, filename, MAX_PATH);
-	char* lastSlash = strrchr(filename, '\\') + 1;
-	strcpy_s(lastSlash, MAX_PATH - (lastSlash - filename), "Data\\nvse\\plugins\\tnvse.ini");
+	constexpr char kRelativeConfigPath[] = "Data\\nvse\\plugins\\tnvse.ini";
+	char filename[MAX_PATH] = {};
+	const DWORD modulePathLength = GetModuleFileNameA(nullptr, filename, _countof(filename));
+	char* const lastSlash = modulePathLength > 0 && modulePathLength < _countof(filename)
+		? std::strrchr(filename, '\\')
+		: nullptr;
+	const bool absoluteConfigPathReady = lastSlash
+		&& strcpy_s(
+			lastSlash + 1,
+			_countof(filename) - static_cast<size_t>((lastSlash + 1) - filename),
+			kRelativeConfigPath) == 0;
+	if (!absoluteConfigPathReady)
+	{
+		strcpy_s(filename, _countof(filename), kRelativeConfigPath);
+		gLog.FormattedMessage(
+			"Config path: executable path unavailable or malformed; using relative path %s",
+			filename);
+	}
 
 	g_uiEncoding = ReadConfigInt(kMultibyteSection, "uiEncoding", 1, filename);
 	switch (g_uiEncoding)

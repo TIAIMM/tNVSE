@@ -452,7 +452,14 @@ namespace fonthook::vectorfont
 		PersistentGlyphManifest* GetGlyphManifest(RuntimeFont& runtime)
 		{
 			if (runtime.manifest)
-				return runtime.manifest->mappedData ? runtime.manifest.get() : nullptr;
+			{
+				if (runtime.manifest->mappedData)
+					return runtime.manifest.get();
+				// Do not let a previously failed or explicitly unmapped object suppress
+				// reconstruction. Dropping this reference also releases any partially
+				// opened handles when it is the last owner.
+				runtime.manifest.reset();
+			}
 			const UInt64 layoutContentHash = ComputeRuntimeLayoutContentHash(runtime);
 			UInt64 manifestHash = HashBytes64(&layoutContentHash,
 				sizeof(layoutContentHash));
@@ -494,8 +501,11 @@ namespace fonthook::vectorfont
 				{
 					if (shared->layoutContentHash != layoutContentHash)
 						return nullptr;
-					runtime.manifest = std::move(shared);
-					return runtime.manifest->mappedData ? runtime.manifest.get() : nullptr;
+					if (shared->mappedData)
+					{
+						runtime.manifest = std::move(shared);
+						return runtime.manifest.get();
+					}
 				}
 				State().persistentGlyphManifests.erase(pooled);
 			}
@@ -504,23 +514,29 @@ namespace fonthook::vectorfont
 			manifest->layoutContentHash = layoutContentHash;
 			std::wstring directory;
 			if (!EnsurePersistentBitmapDirectory(directory))
-			{
-				runtime.manifest = manifest;
-				State().persistentGlyphManifests[manifestHash] = manifest;
 				return nullptr;
-			}
 			wchar_t fileName[256] = {};
 			_snwprintf_s(fileName, _countof(fileName), _TRUNCATE,
 				L"shared_%016llX.tnvfmanifest",
 				static_cast<unsigned long long>(manifestHash));
 			manifest->path = directory + L"\\" + fileName;
-			State().usedPersistentCachePaths.insert(NormalizePathKey(manifest->path));
 			const std::vector<UInt16>& encodedCodes =
 				GetFontPrewarmEncodedUnits(GetRuntimeConfig(runtime));
-			InitializeGlyphManifest(*manifest, runtime, encodedCodes);
+			if (!InitializeGlyphManifest(*manifest, runtime, encodedCodes)
+				|| !manifest->mappedData)
+			{
+				// The local shared_ptr owns every partially created mapping and handle.
+				// Nothing is published, so the next request remains eligible to retry.
+				return nullptr;
+			}
+
+			// Publish only after the on-disk header, code table and mapping have all
+			// passed initialization. The weak pool never contains failed manifests.
 			State().persistentGlyphManifests[manifestHash] = manifest;
 			runtime.manifest = std::move(manifest);
-			return runtime.manifest->mappedData ? runtime.manifest.get() : nullptr;
+			State().usedPersistentCachePaths.insert(
+				NormalizePathKey(runtime.manifest->path));
+			return runtime.manifest.get();
 		}
 
 		PersistentGlyphManifestRecord* GetGlyphManifestRecord(

@@ -7,4 +7,5 @@ namespace fonthook
 {
 	void HandleSaveDisplayNameMessage(NVSEMessagingInterface::Message* message);
 	void InitSaveDisplayNameHook();
+	void ReconcileSaveDisplayNameHookPostLoad();
 }

@@ -373,14 +373,44 @@ namespace fonthook
 				return false;
 			}
 
+			const RenderedMenuDrawFn previousPredecessor =
+				s_predecessorPipboyDraw;
 			s_predecessorPipboyDraw =
 				reinterpret_cast<RenderedMenuDrawFn>(currentTarget);
 			const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
 				&PipboyRenderedMenuDrawHook);
 			// FOPipboyManager::Draw vtable slot
 			// (__thiscall target via __fastcall shim).
-			SafeWrite32(kFOPipboyManagerDrawVTableEntry,
-				reinterpret_cast<SIZE_T>(&PipboyRenderedMenuDrawHook));
+			const SafeWrite32IfEqualResult publication =
+				SafeWrite32IfEqualDetailed(kFOPipboyManagerDrawVTableEntry,
+					adapterTarget, currentTarget);
+			const bool published = publication.WasPublished();
+			if (!published)
+			{
+				const SIZE_T observedTarget = publication.comparisonPerformed
+					? publication.observed
+					: *reinterpret_cast<const SIZE_T*>(
+						kFOPipboyManagerDrawVTableEntry);
+				s_predecessorPipboyDraw = previousPredecessor;
+				s_pipboyDrawHookInstallFailed = true;
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: Pip-Boy FORenderedMenu::Draw CAS did not publish entry=0x%08X predecessor=0x%08X observed=0x%08X compared=%u protectionError=%lu",
+					static_cast<UInt32>(kFOPipboyManagerDrawVTableEntry),
+					static_cast<UInt32>(currentTarget),
+					static_cast<UInt32>(observedTarget),
+					publication.comparisonPerformed ? 1u : 0u,
+					publication.protectionError);
+				return false;
+			}
+			if (!publication.PostconditionsComplete())
+			{
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: Pip-Boy draw hook published with incomplete write postconditions protectionRestored=%u protectionError=%lu cacheFlushed=%u cacheError=%lu",
+					publication.protectionRestored ? 1u : 0u,
+					publication.protectionError,
+					publication.instructionCacheFlushed ? 1u : 0u,
+					publication.cacheFlushError);
+			}
 			const SIZE_T observedTarget =
 				*reinterpret_cast<const SIZE_T*>(
 					kFOPipboyManagerDrawVTableEntry);
@@ -396,10 +426,10 @@ namespace fonthook
 
 			if (observedTarget == currentTarget)
 			{
-				s_predecessorPipboyDraw = nullptr;
+				s_predecessorPipboyDraw = previousPredecessor;
 				s_pipboyDrawHookInstallFailed = true;
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: Pip-Boy FORenderedMenu::Draw hook write did not publish entry=0x%08X predecessor=0x%08X",
+					"tnvse_native_overlay: Pip-Boy FORenderedMenu::Draw hook was published but the slot returned to its predecessor entry=0x%08X predecessor=0x%08X",
 					static_cast<UInt32>(kFOPipboyManagerDrawVTableEntry),
 					static_cast<UInt32>(currentTarget));
 				return false;

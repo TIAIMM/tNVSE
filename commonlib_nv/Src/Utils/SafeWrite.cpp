@@ -30,6 +30,8 @@ namespace
 			}
 			m_active = VirtualProtect(reinterpret_cast<void*>(m_address),
 				m_size, PAGE_EXECUTE_READWRITE, &m_oldProtect) != FALSE;
+			if (!m_active)
+				m_error = GetLastError();
 		}
 
 		~MemoryUnlock()
@@ -47,24 +49,40 @@ namespace
 			return m_active;
 		}
 
-		bool Restore()
+		bool Restore(DWORD* error = nullptr)
 		{
 			if (!m_active)
+			{
+				if (error)
+					*error = m_error;
 				return false;
+			}
 			DWORD ignored = 0;
 			if (!VirtualProtect(reinterpret_cast<void*>(m_address), m_size,
 				m_oldProtect, &ignored))
 			{
+				m_error = GetLastError();
+				if (error)
+					*error = m_error;
 				return false;
 			}
 			m_active = false;
+			m_error = ERROR_SUCCESS;
+			if (error)
+				*error = ERROR_SUCCESS;
 			return true;
+		}
+
+		DWORD Error() const
+		{
+			return m_error;
 		}
 
 	private:
 		const SIZE_T m_address;
 		const SIZE_T m_size;
 		DWORD m_oldProtect = 0;
+		DWORD m_error = ERROR_SUCCESS;
 		bool m_active = false;
 	};
 
@@ -123,30 +141,56 @@ bool __fastcall SafeWriteBuf(SIZE_T addr, const void* data, SIZE_T len)
 	return CompleteExecutableWrite(unlock, addr, len);
 }
 
-bool __fastcall SafeWrite32IfEqual(
-	SIZE_T addr, SIZE_T data, SIZE_T expected, SIZE_T* observed)
+SafeWrite32IfEqualResult __fastcall SafeWrite32IfEqualDetailed(
+	SIZE_T addr, SIZE_T data, SIZE_T expected)
 {
+	SafeWrite32IfEqualResult result;
 	if (!addr || (addr % alignof(LONG)) != 0)
-		return false;
+	{
+		result.protectionError = ERROR_INVALID_PARAMETER;
+		return result;
+	}
 	MemoryUnlock unlock(addr, sizeof(LONG));
 	if (!unlock.IsActive())
-		return false;
+	{
+		result.protectionError = unlock.Error();
+		return result;
+	}
 
 	const LONG previous = InterlockedCompareExchange(
 		reinterpret_cast<volatile LONG*>(addr),
 		static_cast<LONG>(static_cast<UInt32>(data)),
 		static_cast<LONG>(static_cast<UInt32>(expected)));
-	if (observed)
-		*observed = static_cast<UInt32>(previous);
+	result.comparisonPerformed = true;
+	result.observed = static_cast<UInt32>(previous);
 
-	const bool matched = static_cast<UInt32>(previous)
+	result.preconditionMatched = static_cast<UInt32>(previous)
 		== static_cast<UInt32>(expected);
-	if (!matched)
+	result.valuePublished = result.preconditionMatched;
+	if (!result.preconditionMatched)
 	{
-		unlock.Restore();
-		return false;
+		result.protectionRestored = unlock.Restore(
+			&result.protectionError);
+		return result;
 	}
-	return CompleteExecutableWrite(unlock, addr, sizeof(LONG));
+
+	result.protectionRestored = unlock.Restore(&result.protectionError);
+	result.instructionCacheFlushed = FlushInstructionCache(
+		GetCurrentProcess(), reinterpret_cast<const void*>(addr),
+		sizeof(LONG)) != FALSE;
+	if (!result.instructionCacheFlushed)
+		result.cacheFlushError = GetLastError();
+	return result;
+}
+
+bool __fastcall SafeWrite32IfEqual(
+	SIZE_T addr, SIZE_T data, SIZE_T expected, SIZE_T* observed)
+{
+	const SafeWrite32IfEqualResult result = SafeWrite32IfEqualDetailed(
+		addr, data, expected);
+	if (observed && result.comparisonPerformed)
+		*observed = result.observed;
+	return result.WasPublished();
 }
 
 bool __fastcall SafeSetWindowLongPtrA(

@@ -91,13 +91,14 @@ namespace fonthook
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 		{
-			if (s_hooksInstalled && !s_predecessorWndProc
-				&& TryInstallWindowProc())
+			bool windowProcPublished = false;
+			if (s_hooksInstalled
+				&& TryInstallWindowProc(&windowProcPublished)
+				&& windowProcPublished)
 			{
-				// A successful ExitToMainMenu detach also shuts down the TSF
-				// sink. Recreate that process-local interface when the window
-				// subclass is published again; otherwise every later game in the
-				// same process permanently loses TSF candidate capture/suppression.
+				// A new game window can follow ExitToMainMenu. Recreate/verify the
+				// process-local TSF sink only when the adapter is actually published;
+				// an externally replaced live chain is deliberately not overwritten.
 				InitializeTsfCandidateSupport();
 			}
 

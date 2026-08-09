@@ -12,6 +12,8 @@ namespace fonthook
 			"FalloutNV main window WndProc (CALLBACK/__stdcall)",
 			&MultibyteInputWndProc
 		};
+		WNDPROC s_lastUnknownTopWindowProc = nullptr;
+		bool s_loggedWindowProcReadFailure = false;
 
 		bool ApplyCapturedImeResult(
 			const std::wstring& result,
@@ -366,6 +368,45 @@ namespace fonthook
 			UInt32 s_droppedCapturedInputEvents = 0;
 			bool s_pumpingCapturedInputEvents = false;
 
+			struct WindowMessageForwardFrame
+			{
+				WindowMessageForwardFrame* previous = nullptr;
+				WNDPROC predecessor = nullptr;
+				HWND hwnd = nullptr;
+				UINT message = 0;
+				WPARAM wParam = 0;
+				LPARAM lParam = 0;
+			};
+
+			thread_local WindowMessageForwardFrame*
+				s_activeWindowMessageForward = nullptr;
+			volatile LONG s_loggedWindowMessageForwardCycle = 0;
+
+			class ScopedWindowMessageForward
+			{
+			public:
+				ScopedWindowMessageForward(WNDPROC predecessor, HWND hwnd,
+					UINT message, WPARAM wParam, LPARAM lParam)
+					: m_frame{ s_activeWindowMessageForward, predecessor, hwnd,
+						message, wParam, lParam }
+				{
+					s_activeWindowMessageForward = &m_frame;
+				}
+
+				~ScopedWindowMessageForward()
+				{
+					s_activeWindowMessageForward = m_frame.previous;
+				}
+
+				ScopedWindowMessageForward(
+					const ScopedWindowMessageForward&) = delete;
+				ScopedWindowMessageForward& operator=(
+					const ScopedWindowMessageForward&) = delete;
+
+			private:
+				WindowMessageForwardFrame m_frame;
+			};
+
 			bool EnqueueCapturedInputEvent(CapturedInputEvent event)
 			{
 				if (s_capturedInputCount == s_capturedInputEvents.size())
@@ -551,9 +592,35 @@ namespace fonthook
 				LPARAM lParam)
 			{
 				WNDPROC original = s_predecessorWndProc;
-				return original
-					? CallWindowProcA(original, hwnd, message, wParam, lParam)
-					: DefWindowProcA(hwnd, message, wParam, lParam);
+				if (!original)
+					return DefWindowProcA(hwnd, message, wParam, lParam);
+
+				for (const WindowMessageForwardFrame* frame =
+						s_activeWindowMessageForward;
+					frame; frame = frame->previous)
+				{
+					if (frame->predecessor == original
+						&& frame->hwnd == hwnd
+						&& frame->message == message
+						&& frame->wParam == wParam
+						&& frame->lParam == lParam)
+					{
+						if (InterlockedCompareExchange(
+								&s_loggedWindowMessageForwardCycle, 1, 0) == 0)
+						{
+							gLog.FormattedMessage(
+								"tnvse_multibyte_input: recursive WndProc predecessor frame detected predecessor=0x%08X hwnd=0x%08X message=0x%04X; forwarding to DefWindowProcA",
+								reinterpret_cast<UInt32>(original),
+								reinterpret_cast<UInt32>(hwnd),
+								static_cast<UInt32>(message));
+						}
+						return DefWindowProcA(hwnd, message, wParam, lParam);
+					}
+				}
+
+				ScopedWindowMessageForward activeForward(
+					original, hwnd, message, wParam, lParam);
+				return CallWindowProcA(original, hwnd, message, wParam, lParam);
 			}
 		}
 
@@ -1029,6 +1096,7 @@ namespace fonthook
 				AdvanceTsfCandidateSession();
 				State().gameImeEnabled = false;
 				State().gameImeContextDetached = false;
+				State().gameImeDetachFailureLogged = false;
 				State().detachedGameImeWindow = nullptr;
 				State().associatedGameImeWindow = nullptr;
 				State().associatedGameImeLayout = nullptr;
@@ -1072,12 +1140,20 @@ namespace fonthook
 				&& (IsVirtualKeyDown(VK_LWIN)
 					|| IsVirtualKeyDown(VK_RWIN));
 
-			// System IME composition/candidate UI is never handed back to the
-			// default window procedure. This policy is independent of the native
+			// Strip the system composition/candidate UI flags, then preserve the
+			// existing subclass chain. This policy is independent of the native
 			// Tile host, the current target and composition-preview availability.
 			if (msg == WM_IME_SETCONTEXT)
 			{
-				return DefWindowProcA(
+				if (wParam && !sessionActive)
+				{
+					// A focus transition or another subclass may have rebound the
+					// default HIMC. Mark the detached state stale; the main-loop
+					// watchdog retries outside this synchronous window callback.
+					state.gameImeContextDetached = false;
+					state.detachedGameImeWindow = nullptr;
+				}
+				return ForwardWindowMessage(
 					hwnd, WM_IME_SETCONTEXT, wParam, 0);
 			}
 
@@ -1193,9 +1269,9 @@ namespace fonthook
 			}
 			if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
 				&& sessionActive
-				&& (IsDeferredEditorKey(wParam, event.controlDown)
+				&& (IsDeferredEditorKey(wParam, controlDown)
 					|| (wParam == VK_SPACE
-						&& event.winDown)))
+						&& winDown)))
 			{
 				return 0;
 			}
@@ -1302,15 +1378,70 @@ namespace fonthook
 			return search.window;
 		}
 
-		bool TryInstallWindowProc()
+		bool ReadCurrentWindowProc(HWND hwnd, WNDPROC& current)
 		{
-			if (s_predecessorWndProc)
+			current = nullptr;
+			if (!hwnd)
+				return false;
+			SetLastError(ERROR_SUCCESS);
+			const LONG_PTR value = GetWindowLongPtrA(hwnd, GWLP_WNDPROC);
+			if (!value && GetLastError() != ERROR_SUCCESS)
+				return false;
+			current = reinterpret_cast<WNDPROC>(value);
+			return current != nullptr;
+		}
+
+		bool TryInstallWindowProc(bool* publishedNow)
+		{
+			if (publishedNow)
+				*publishedNow = false;
+
+			const WNDPROC adapter = &MultibyteInputWndProc;
+			if (s_window && s_predecessorWndProc)
 			{
-				if (s_window)
-				State().tsfInputWindow.store(
-					reinterpret_cast<ULONG_PTR>(s_window),
-					std::memory_order_release);
-				return true;
+				WNDPROC current = nullptr;
+				if (!ReadCurrentWindowProc(s_window, current))
+				{
+					if (!s_loggedWindowProcReadFailure)
+					{
+						s_loggedWindowProcReadFailure = true;
+						gLog.FormattedMessage(
+							"tnvse_multibyte_input: WndProc maintenance read failed hwnd=0x%08X site=GWLP_WNDPROC adapter=0x%08X predecessor=0x%08X; fail-closed",
+							reinterpret_cast<UInt32>(s_window),
+							reinterpret_cast<UInt32>(adapter),
+							reinterpret_cast<UInt32>(s_predecessorWndProc));
+					}
+					return false;
+				}
+				s_loggedWindowProcReadFailure = false;
+
+				if (current == adapter)
+				{
+					s_lastUnknownTopWindowProc = nullptr;
+					State().tsfInputWindow.store(
+						reinterpret_cast<ULONG_PTR>(s_window),
+						std::memory_order_release);
+					return true;
+				}
+
+				// Pointer equality with the saved predecessor is not proof that the
+				// old chain was merely restored: the same subclass function may have
+				// been installed again and may now call tNVSE as its predecessor.
+				// GWLP_WNDPROC has no compare/exchange operation, so any automatic
+				// re-publication can either form a recursion loop or overwrite a
+				// concurrent successor. Preserve the current owner and fail closed.
+				if (current != s_lastUnknownTopWindowProc)
+				{
+					s_lastUnknownTopWindowProc = current;
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: WndProc adapter no longer owns top-level dispatch hwnd=0x%08X site=GWLP_WNDPROC current=0x%08X adapter=0x%08X savedPredecessor=0x%08X sameAsSaved=%u; not republished",
+						reinterpret_cast<UInt32>(s_window),
+						reinterpret_cast<UInt32>(current),
+						reinterpret_cast<UInt32>(adapter),
+						reinterpret_cast<UInt32>(s_predecessorWndProc),
+						current == s_predecessorWndProc ? 1u : 0u);
+				}
+				return false;
 			}
 
 			HWND hwnd = FindGameWindow();
@@ -1319,7 +1450,7 @@ namespace fonthook
 
 			LONG_PTR previousWndProc = 0;
 			if (!SafeSetWindowLongPtrA(hwnd, GWLP_WNDPROC,
-					reinterpret_cast<LONG_PTR>(&MultibyteInputWndProc),
+					reinterpret_cast<LONG_PTR>(adapter),
 					&previousWndProc)
 				|| !previousWndProc)
 			{
@@ -1332,6 +1463,8 @@ namespace fonthook
 
 			s_window = hwnd;
 			s_predecessorWndProc = s_gameWindowProcSite.predecessorProc;
+			s_lastUnknownTopWindowProc = nullptr;
+			s_loggedWindowProcReadFailure = false;
 			State().gameImeEnabled = false;
 			State().associatedGameImeWindow = nullptr;
 			State().associatedGameImeLayout = nullptr;
@@ -1339,13 +1472,20 @@ namespace fonthook
 			if (State().detachedGameImeWindow != hwnd)
 			{
 				State().gameImeContextDetached = false;
+				State().gameImeDetachFailureLogged = false;
 				State().detachedGameImeWindow = nullptr;
 			}
 			State().tsfInputWindow.store(
 				reinterpret_cast<ULONG_PTR>(hwnd),
 				std::memory_order_release);
 			SetGameImeEnabled(hwnd, false);
-			DebugLog("tnvse_multibyte_input: subclassed hwnd=0x%08X", reinterpret_cast<UInt32>(hwnd));
+			if (publishedNow)
+				*publishedNow = true;
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: WndProc adapter installed hwnd=0x%08X site=GWLP_WNDPROC adapter=0x%08X predecessor=0x%08X abi=CALLBACK/__stdcall",
+				reinterpret_cast<UInt32>(hwnd),
+				reinterpret_cast<UInt32>(adapter),
+				reinterpret_cast<UInt32>(s_predecessorWndProc));
 			return true;
 		}
 
@@ -1407,6 +1547,8 @@ namespace fonthook
 			{
 				s_window = nullptr;
 				s_predecessorWndProc = nullptr;
+				s_lastUnknownTopWindowProc = nullptr;
+				s_loggedWindowProcReadFailure = false;
 				s_gameWindowProcSite.windowHandle = nullptr;
 				s_gameWindowProcSite.predecessorProc = nullptr;
 				ShutdownTsfCandidateSupport();

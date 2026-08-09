@@ -102,6 +102,7 @@ namespace fonthook
 			std::atomic<ULONG_PTR> tsfInputWindow = 0;
 			bool gameImeEnabled = false;
 			bool gameImeContextDetached = false;
+			bool gameImeDetachFailureLogged = false;
 			HWND detachedGameImeWindow = nullptr;
 			HWND associatedGameImeWindow = nullptr;
 			HKL associatedGameImeLayout = nullptr;

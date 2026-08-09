@@ -576,14 +576,12 @@ namespace fonthook::vectorfont
 			if (State().persistentBitmapUnavailable
 				|| !EnsurePersistentBitmapDirectory(directory))
 			{
-				State().persistentBitmapUnavailable = true;
 				return false;
 			}
 			profile.path = FindPersistentBitmapByHash(directory,
 				profile.profileHash);
 			if (profile.path.empty())
 				profile.path = FormatPersistentBitmapPath(directory, profile);
-			State().usedPersistentCachePaths.insert(NormalizePathKey(profile.path));
 			profile.file = CreateFileW(profile.path.c_str(),
 				GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
 				OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -706,18 +704,31 @@ namespace fonthook::vectorfont
 			profile->fontId = fontId;
 			profile->glyphCapacity = std::max<UInt32>(1, glyphCapacity);
 			profile->fontFileName = SanitizePersistentBitmapFontName(fontPath);
-			PersistentBitmapProfile* result = profile.get();
-			State().persistentBitmapProfiles.emplace(key, std::move(profile));
-			if (InitializePersistentBitmapProfile(*result))
-				return result;
-			if (State().persistentBitmapFailureLogCount++ < 8)
+			if (!InitializePersistentBitmapProfile(*profile))
 			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_font: persistent bitmap profile unavailable hash=%016llX path=%ls",
-					static_cast<unsigned long long>(result->profileHash),
-					result->path.empty() ? L"<unresolved>" : result->path.c_str());
+				if (State().persistentBitmapFailureLogCount++ < 8)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: persistent bitmap profile unavailable hash=%016llX path=%ls; retry remains eligible",
+						static_cast<unsigned long long>(profile->profileHash),
+						profile->path.empty() ? L"<unresolved>" : profile->path.c_str());
+				}
+				return nullptr;
 			}
-			return nullptr;
+
+			// Publish only a fully initialized profile. On every failure above the
+			// local unique_ptr closes its mapping and file immediately, and no map
+			// entry can suppress a later retry.
+			const auto [published, inserted] =
+				State().persistentBitmapProfiles.try_emplace(key, std::move(profile));
+			if (!inserted)
+			{
+				return published->second->initialized
+					? published->second.get() : nullptr;
+			}
+			State().usedPersistentCachePaths.insert(
+				NormalizePathKey(published->second->path));
+			return published->second.get();
 		}
 
 		UInt64 HashPersistentBitmapRecord(

@@ -569,7 +569,7 @@ namespace fonthook
 				site.originalLength + kJumpInstructionSize;
 			UInt8* code = static_cast<UInt8*>(VirtualAlloc(nullptr,
 				trampolineSize, MEM_COMMIT | MEM_RESERVE,
-				PAGE_EXECUTE_READWRITE));
+				PAGE_READWRITE));
 			if (!code)
 			{
 				gLog.FormattedMessage(
@@ -606,6 +606,26 @@ namespace fonthook
 				gLog.FormattedMessage(
 					"tnvse_font_hook: trampoline publication failed address=%08X",
 					static_cast<UInt32>(site.entryAddress));
+				return false;
+			}
+			DWORD previousProtect = 0;
+			if (!VirtualProtect(code, trampolineSize, PAGE_EXECUTE_READ,
+					&previousProtect))
+			{
+				const DWORD error = GetLastError();
+				VirtualFree(code, 0, MEM_RELEASE);
+				gLog.FormattedMessage(
+					"tnvse_font_hook: trampoline executable protection failed address=%08X error=%lu",
+					static_cast<UInt32>(site.entryAddress), error);
+				return false;
+			}
+			if (!FlushInstructionCache(GetCurrentProcess(), code, trampolineSize))
+			{
+				const DWORD error = GetLastError();
+				VirtualFree(code, 0, MEM_RELEASE);
+				gLog.FormattedMessage(
+					"tnvse_font_hook: trampoline instruction-cache flush failed address=%08X error=%lu",
+					static_cast<UInt32>(site.entryAddress), error);
 				return false;
 			}
 			trampoline.code = code;
@@ -805,12 +825,40 @@ namespace fonthook
 					static_cast<UInt32>(currentHandler));
 				return false;
 			}
+			const TileTextMakeNodeFn previousMakeNode = s_tileTextMakeNode;
 			s_tileTextMakeNode =
 				reinterpret_cast<TileTextMakeNodeFn>(currentHandler);
 			// TileText::MakeNode vtable slot
 			// (__thiscall target via __fastcall shim).
-			SafeWrite32(kTileTextMakeNodeVTableEntry,
-				reinterpret_cast<SIZE_T>(&TileTextMakeNodeHook));
+			const SafeWrite32IfEqualResult publication =
+				SafeWrite32IfEqualDetailed(kTileTextMakeNodeVTableEntry,
+					adapterHandler, currentHandler);
+			const bool published = publication.WasPublished();
+			if (!published)
+			{
+				const SIZE_T observedHandler = publication.comparisonPerformed
+					? publication.observed
+					: *reinterpret_cast<const SIZE_T*>(
+						kTileTextMakeNodeVTableEntry);
+				s_tileTextMakeNode = previousMakeNode;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: VUI+ effect proxy compatibility CAS did not publish entry=%08X predecessor=%08X observed=%08X compared=%u protectionError=%lu",
+					static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
+					static_cast<UInt32>(currentHandler),
+					static_cast<UInt32>(observedHandler),
+					publication.comparisonPerformed ? 1u : 0u,
+					publication.protectionError);
+				return false;
+			}
+			if (!publication.PostconditionsComplete())
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: VUI+ effect proxy compatibility published with incomplete write postconditions protectionRestored=%u protectionError=%lu cacheFlushed=%u cacheError=%lu",
+					publication.protectionRestored ? 1u : 0u,
+					publication.protectionError,
+					publication.instructionCacheFlushed ? 1u : 0u,
+					publication.cacheFlushError);
+			}
 			const SIZE_T observedHandler = *reinterpret_cast<const SIZE_T*>(
 				kTileTextMakeNodeVTableEntry);
 			if (observedHandler == adapterHandler)
@@ -825,9 +873,9 @@ namespace fonthook
 
 			if (observedHandler == currentHandler)
 			{
-				s_tileTextMakeNode = nullptr;
+				s_tileTextMakeNode = previousMakeNode;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: VUI+ effect proxy compatibility write did not publish entry=%08X predecessor=%08X",
+					"tnvse_freetype_font: VUI+ effect proxy compatibility was published but the slot returned to its predecessor entry=%08X predecessor=%08X",
 					static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
 					static_cast<UInt32>(currentHandler));
 				return false;

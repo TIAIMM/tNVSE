@@ -1468,11 +1468,44 @@ namespace fonthook
 					{
 						return;
 					}
+					const SIZE_T previousPredecessor =
+						s_stewMenuPredecessorInputHandler;
+					const SIZE_T previousVtableEntry =
+						s_stewMenuInputVtableEntry;
 					s_stewMenuPredecessorInputHandler = currentHandler;
 					s_stewMenuInputVtableEntry = keyboardInputVtableEntry;
 					// Stewie Tweaks StewMenu::HandleKeyboardInput vtable slot
 					// (__thiscall target via __fastcall shim).
-					SafeWrite32(keyboardInputVtableEntry, adapterHandler);
+					const SafeWrite32IfEqualResult publication =
+						SafeWrite32IfEqualDetailed(keyboardInputVtableEntry,
+							adapterHandler, currentHandler);
+					const bool published = publication.WasPublished();
+					if (!published)
+					{
+						const SIZE_T observedHandler =
+							publication.comparisonPerformed
+							? publication.observed
+							: *reinterpret_cast<const SIZE_T*>(
+								keyboardInputVtableEntry);
+						s_stewMenuPredecessorInputHandler = previousPredecessor;
+						s_stewMenuInputVtableEntry = previousVtableEntry;
+						gLog.FormattedMessage(
+							"tnvse_multibyte_input: StewMenu adapter CAS did not publish predecessor=0x%08X observed=0x%08X compared=%u protectionError=%lu",
+							static_cast<UInt32>(currentHandler),
+							static_cast<UInt32>(observedHandler),
+							publication.comparisonPerformed ? 1u : 0u,
+							publication.protectionError);
+						return;
+					}
+					if (!publication.PostconditionsComplete())
+					{
+						gLog.FormattedMessage(
+							"tnvse_multibyte_input: StewMenu adapter published with incomplete write postconditions protectionRestored=%u protectionError=%lu cacheFlushed=%u cacheError=%lu",
+							publication.protectionRestored ? 1u : 0u,
+							publication.protectionError,
+							publication.instructionCacheFlushed ? 1u : 0u,
+							publication.cacheFlushError);
+					}
 					const SIZE_T observedHandler =
 						*reinterpret_cast<const SIZE_T*>(keyboardInputVtableEntry);
 					if (observedHandler == adapterHandler)
@@ -1486,10 +1519,10 @@ namespace fonthook
 
 					if (observedHandler == currentHandler)
 					{
-						s_stewMenuPredecessorInputHandler = 0;
-						s_stewMenuInputVtableEntry = 0;
+						s_stewMenuPredecessorInputHandler = previousPredecessor;
+						s_stewMenuInputVtableEntry = previousVtableEntry;
 						gLog.FormattedMessage(
-							"tnvse_multibyte_input: StewMenu adapter write did not publish predecessor=0x%08X",
+							"tnvse_multibyte_input: StewMenu adapter was published but the slot returned to predecessor=0x%08X",
 							static_cast<UInt32>(currentHandler));
 						return;
 					}

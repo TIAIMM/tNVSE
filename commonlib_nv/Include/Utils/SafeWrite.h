@@ -20,7 +20,39 @@ DECLSPEC_NOINLINE bool __fastcall SafeWriteBuf(
 	SIZE_T addr, const void* data, SIZE_T len);
 
 // Atomically publishes a 32-bit hook target only while the slot still contains
-// the expected predecessor. observed receives the value present at the CAS.
+// the expected predecessor.  The detailed result distinguishes a comparison
+// miss from a value which was published before page-protection or cache-flush
+// postconditions failed.
+struct SafeWrite32IfEqualResult
+{
+	SIZE_T observed = 0;
+	DWORD protectionError = ERROR_SUCCESS;
+	DWORD cacheFlushError = ERROR_SUCCESS;
+	bool comparisonPerformed = false;
+	bool preconditionMatched = false;
+	bool valuePublished = false;
+	bool protectionRestored = false;
+	bool instructionCacheFlushed = false;
+
+	[[nodiscard]] bool WasPublished() const
+	{
+		return comparisonPerformed && preconditionMatched && valuePublished;
+	}
+
+	[[nodiscard]] bool PostconditionsComplete() const
+	{
+		return WasPublished() && protectionRestored
+			&& instructionCacheFlushed;
+	}
+};
+
+DECLSPEC_NOINLINE SafeWrite32IfEqualResult __fastcall
+SafeWrite32IfEqualDetailed(SIZE_T addr, SIZE_T data, SIZE_T expected);
+
+// Compatibility API: true means the CAS published data. Callers which need to
+// distinguish a complete write from a published value with a failed
+// protection/cache postcondition must use SafeWrite32IfEqualDetailed.
+// observed receives the value present at the CAS when comparison was reached.
 DECLSPEC_NOINLINE bool __fastcall SafeWrite32IfEqual(
 	SIZE_T addr, SIZE_T data, SIZE_T expected, SIZE_T* observed = nullptr);
 

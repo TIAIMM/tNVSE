@@ -136,7 +136,7 @@ namespace
 		}
 
 		gLog.FormattedMessage(
-			"tnvse_build_identity: diagnostics=native-font-prewarm-context-reuse-v75 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
+			"tnvse_build_identity: diagnostics=hook-ownership-ime-retry-v76 module=%s base=%p peTimestamp=0x%08X imageSize=%u fileBytes=%llu fileWriteTime=0x%016llX fnv1a64=0x%016llX moduleError=%u fileError=%u",
 			modulePath[0] ? modulePath : "unresolved", module,
 			peTimestamp, imageSize,
 			static_cast<unsigned long long>(fileBytes),
@@ -294,6 +294,7 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 		// which every sender is discoverable; RegisterListener is idempotent for
 		// an already registered listener.
 		TryRegisterShaderLoaderListener();
+		fonthook::ReconcileSaveDisplayNameHookPostLoad();
 	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit)
 	{

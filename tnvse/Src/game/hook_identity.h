@@ -9,6 +9,9 @@
 
 namespace fonthook::hook_identity
 {
+	static_assert(sizeof(SIZE_T) == sizeof(UInt32),
+		"tNVSE rel32 identity helpers require the Win32 address space");
+
 	enum class Rel32Opcode : UInt8
 	{
 		Call = 0xE8,
@@ -32,18 +35,16 @@ namespace fonthook::hook_identity
 		SIZE_T source, Rel32Opcode opcode, SIZE_T expectedTarget)
 	{
 		Rel32InstructionImage image;
-		if (!source || !expectedTarget)
+		if (!source || !expectedTarget
+			|| source > std::numeric_limits<SIZE_T>::max()
+				- image.bytes.size())
 			return image;
-		const std::intptr_t displacementWide =
-			static_cast<std::intptr_t>(expectedTarget)
-			- static_cast<std::intptr_t>(source + image.bytes.size());
-		if (displacementWide < std::numeric_limits<SInt32>::min()
-			|| displacementWide > std::numeric_limits<SInt32>::max())
-		{
-			return image;
-		}
 		image.bytes[0] = static_cast<UInt8>(opcode);
-		const SInt32 displacement = static_cast<SInt32>(displacementWide);
+		// Every 32-bit x86 target has an exact rel32 representation. Keep the
+		// calculation in the unsigned address ring instead of relying on signed
+		// overflow when source and target straddle 0x80000000.
+		const UInt32 displacement = static_cast<UInt32>(expectedTarget)
+			- static_cast<UInt32>(source + image.bytes.size());
 		std::memcpy(image.bytes.data() + 1u,
 			&displacement, sizeof(displacement));
 		image.valid = true;
@@ -100,13 +101,12 @@ namespace fonthook::hook_identity
 			return false;
 		}
 
-		SInt32 displacement = 0;
+		UInt32 displacement = 0;
 		std::memcpy(&displacement,
 			reinterpret_cast<const void*>(source + 1),
 			sizeof(displacement));
 		target = static_cast<SIZE_T>(
-			static_cast<std::intptr_t>(source + 5)
-			+ static_cast<std::intptr_t>(displacement));
+			static_cast<UInt32>(source + 5) + displacement);
 		return true;
 	}
 
