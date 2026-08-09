@@ -15,6 +15,7 @@ namespace
 {
 	static_assert(sizeof(SIZE_T) == sizeof(UInt32),
 		"Fallout New Vegas hook patches require an x86 build");
+	constexpr UInt8 kNopOpcode = 0x90; // NOP
 
 	class MemoryUnlock
 	{
@@ -213,7 +214,10 @@ bool __fastcall WriteRelJump(SIZE_T jumpSrc, SIZE_T jumpTgt)
 	UInt32 displacement = 0;
 	if (!EncodeRel32(jumpSrc, jumpTgt, 5, displacement))
 		return false;
-	std::array<UInt8, 5> instruction = { 0xE9, 0, 0, 0, 0 };
+	std::array<UInt8, 5> instruction = {
+		0xE9,                   // JMP rel32
+		0x00, 0x00, 0x00, 0x00, // displacement written below
+	};
 	std::memcpy(instruction.data() + 1, &displacement,
 		sizeof(displacement));
 	return SafeWriteBuf(jumpSrc, instruction.data(), instruction.size());
@@ -224,7 +228,10 @@ bool __fastcall WriteRelCall(SIZE_T jumpSrc, SIZE_T jumpTgt)
 	UInt32 displacement = 0;
 	if (!EncodeRel32(jumpSrc, jumpTgt, 5, displacement))
 		return false;
-	std::array<UInt8, 5> instruction = { 0xE8, 0, 0, 0, 0 };
+	std::array<UInt8, 5> instruction = {
+		0xE8,                   // CALL rel32
+		0x00, 0x00, 0x00, 0x00, // displacement written below
+	};
 	std::memcpy(instruction.data() + 1, &displacement,
 		sizeof(displacement));
 	return SafeWriteBuf(jumpSrc, instruction.data(), instruction.size());
@@ -247,7 +254,10 @@ bool __fastcall WriteRelJnz(SIZE_T jumpSrc, SIZE_T jumpTgt)
 	UInt32 displacement = 0;
 	if (!EncodeRel32(jumpSrc, jumpTgt, 6, displacement))
 		return false;
-	std::array<UInt8, 6> instruction = { 0x0F, 0x85, 0, 0, 0, 0 };
+	std::array<UInt8, 6> instruction = {
+		0x0F, 0x85,             // JNZ rel32
+		0x00, 0x00, 0x00, 0x00, // displacement written below
+	};
 	std::memcpy(instruction.data() + 2, &displacement,
 		sizeof(displacement));
 	return SafeWriteBuf(jumpSrc, instruction.data(), instruction.size());
@@ -258,7 +268,10 @@ bool __fastcall WriteRelJle(SIZE_T jumpSrc, SIZE_T jumpTgt)
 	UInt32 displacement = 0;
 	if (!EncodeRel32(jumpSrc, jumpTgt, 6, displacement))
 		return false;
-	std::array<UInt8, 6> instruction = { 0x0F, 0x8E, 0, 0, 0, 0 };
+	std::array<UInt8, 6> instruction = {
+		0x0F, 0x8E,             // JLE rel32
+		0x00, 0x00, 0x00, 0x00, // displacement written below
+	};
 	std::memcpy(instruction.data() + 2, &displacement,
 		sizeof(displacement));
 	return SafeWriteBuf(jumpSrc, instruction.data(), instruction.size());
@@ -271,7 +284,7 @@ bool __fastcall PatchMemoryNop(ULONG_PTR address, SIZE_T size)
 	MemoryUnlock unlock(address, size);
 	if (!unlock.IsActive())
 		return false;
-	std::memset(reinterpret_cast<void*>(address), 0x90, size);
+	std::memset(reinterpret_cast<void*>(address), kNopOpcode, size);
 	return CompleteExecutableWrite(unlock, address, size);
 }
 

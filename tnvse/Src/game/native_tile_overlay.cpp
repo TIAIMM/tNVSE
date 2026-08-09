@@ -77,8 +77,10 @@ namespace fonthook
 		constexpr SIZE_T kLoadingMenuUpdate = 0x789820;
 		constexpr SIZE_T kLoadingMenuThreadShowChangesCallSite = 0x78D557;
 		constexpr SIZE_T kLoadingMenuShowChanges = 0x78D080;
-		constexpr std::array<UInt8, 6> kLoadingMenu_pMeLoad = {
-			0x8B, 0x0D, 0xC0, 0xA0, 0x1D, 0x01,
+		constexpr std::array<UInt8, 6>
+			kExpectedLoadingMenuInstanceLoadInstruction = {
+			0x8B, 0x0D, 0xC0, 0xA0, 0x1D, 0x01, // mov ecx, [011DA0C0h]
+			                                         // LoadingMenu::pMe
 		};
 
 		using CreateMenuByClassFn =
@@ -1854,16 +1856,17 @@ namespace fonthook
 		SIZE_T currentUpdateTarget = 0;
 		SIZE_T currentShowChangesTarget = 0;
 		const SIZE_T loadingMenuPointerLoad =
-			kLoadingMenuThreadUpdateCallSite - kLoadingMenu_pMeLoad.size();
+			kLoadingMenuThreadUpdateCallSite
+				- kExpectedLoadingMenuInstanceLoadInstruction.size();
 		if (!hook_identity::IsAccessibleRegion(
 				loadingMenuPointerLoad,
-				kLoadingMenu_pMeLoad.size()
+				kExpectedLoadingMenuInstanceLoadInstruction.size()
 					+ 2u * sizeof(UInt8) + 2u * sizeof(SInt32),
 				true)
 			|| !hook_identity::MatchesBytesUnchecked(
 				loadingMenuPointerLoad,
-				kLoadingMenu_pMeLoad.data(),
-				kLoadingMenu_pMeLoad.size())
+				kExpectedLoadingMenuInstanceLoadInstruction.data(),
+				kExpectedLoadingMenuInstanceLoadInstruction.size())
 			|| !hook_identity::ReadRel32Target(
 				kLoadingMenuThreadUpdateCallSite,
 				hook_identity::Rel32Opcode::Call,

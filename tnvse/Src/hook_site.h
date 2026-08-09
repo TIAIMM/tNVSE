@@ -20,6 +20,8 @@
 
 namespace fonthook::hook_site
 {
+	constexpr UInt8 kNopOpcode = 0x90; // NOP
+
 	template <class Target>
 	SIZE_T FunctionAddress(Target functionPointer)
 	{
@@ -244,7 +246,8 @@ namespace fonthook::hook_site
 				return false;
 			for (SIZE_T offset = 5; offset < patchLength; ++offset)
 			{
-				if (*reinterpret_cast<const UInt8*>(entryAddress + offset) != 0x90)
+				if (*reinterpret_cast<const UInt8*>(entryAddress + offset)
+					!= kNopOpcode)
 					return false;
 			}
 			return true;
@@ -259,7 +262,8 @@ namespace fonthook::hook_site
 			}
 			for (SIZE_T offset = 5; offset < patchLength; ++offset)
 			{
-				if (*reinterpret_cast<const UInt8*>(entryAddress + offset) != 0x90)
+				if (*reinterpret_cast<const UInt8*>(entryAddress + offset)
+					!= kNopOpcode)
 					return false;
 			}
 			return true;

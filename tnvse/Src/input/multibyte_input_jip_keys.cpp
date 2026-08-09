@@ -24,14 +24,17 @@ namespace fonthook::multibyte_input
 		constexpr SIZE_T kJipKeyInfoStride = 7;
 		constexpr SIZE_T kJipRawStateOffset = 4;
 
-		constexpr std::array<UInt8, 18> kJipRawKeyStateSignature = {
-			0x80, 0x7C, 0x01, 0x04, 0x00,
-			0x74, 0x04, 0xB3, 0x01, 0xEB, 0x02, 0x32, 0xDB,
-			0x88, 0x5D, 0xFF,
-			0x38, 0x9F,
+		constexpr std::array<UInt8, 5> kJipRawKeyStateCompareInstruction = {
+			0x80, 0x7C, 0x01, 0x04, 0x00, // cmp byte ptr [ecx+eax+4], 0
 		};
-		constexpr std::array<UInt8, 5> kJipRawKeyStateOriginalInstruction = {
-			0x80, 0x7C, 0x01, 0x04, 0x00,
+		constexpr std::array<UInt8, 13> kJipRawKeyStateFollowingInstructions = {
+			0x74, 0x04,       // je short raw_state_is_zero
+			0xB3, 0x01,       // mov bl, 1
+			0xEB, 0x02,       // jmp short store_state
+			0x32, 0xDB,       // raw_state_is_zero: xor bl, bl
+			0x88, 0x5D, 0xFF, // store_state: mov byte ptr [ebp-1], bl
+			0x38, 0x9F,       // cmp byte ptr [edi+disp32], bl
+			                    // disp32 is checked separately below
 		};
 
 		bool s_hookInstalled = false;
@@ -75,10 +78,15 @@ namespace fonthook::multibyte_input
 		bool MatchesJipRawKeyStateSignature()
 		{
 			constexpr SIZE_T kAbsoluteOperandSize = sizeof(UInt32);
-			const SIZE_T inspectedLength = kJipRawKeyStateSignature.size()
-				+ kAbsoluteOperandSize;
+			constexpr SIZE_T kFollowingInstructionsOffset =
+				kJipRawKeyStateCompareInstruction.size();
+			constexpr SIZE_T kLastKeyStateOperandOffset =
+				kFollowingInstructionsOffset
+					+ kJipRawKeyStateFollowingInstructions.size();
+			constexpr SIZE_T kInspectedLength =
+				kLastKeyStateOperandOffset + kAbsoluteOperandSize;
 			if (!IsModuleRangeValid(
-				hJIP, kJipRawKeyStateCompareRva, inspectedLength))
+				hJIP, kJipRawKeyStateCompareRva, kInspectedLength))
 			{
 				return false;
 			}
@@ -86,8 +94,12 @@ namespace fonthook::multibyte_input
 			const auto code = reinterpret_cast<const UInt8*>(hJIP)
 				+ kJipRawKeyStateCompareRva;
 			if (!std::equal(
-				kJipRawKeyStateSignature.begin(),
-				kJipRawKeyStateSignature.end(), code))
+				kJipRawKeyStateCompareInstruction.begin(),
+				kJipRawKeyStateCompareInstruction.end(), code)
+				|| !std::equal(
+					kJipRawKeyStateFollowingInstructions.begin(),
+					kJipRawKeyStateFollowingInstructions.end(),
+					code + kFollowingInstructionsOffset))
 			{
 				return false;
 			}
@@ -95,7 +107,7 @@ namespace fonthook::multibyte_input
 			UInt32 lastKeyStateOperand = 0;
 			std::memcpy(
 				&lastKeyStateOperand,
-				code + kJipRawKeyStateSignature.size(),
+				code + kLastKeyStateOperandOffset,
 				sizeof(lastKeyStateOperand));
 			const UInt32 expectedLastKeyState =
 				reinterpret_cast<UInt32>(hJIP)
@@ -190,7 +202,7 @@ namespace fonthook::multibyte_input
 		hook_site::InstructionCallSite rawKeyStateCallSite{
 			"JIP LN 57.30 raw key-state compare -> CALL (__declspec(naked))",
 			callSite,
-			kJipRawKeyStateOriginalInstruction,
+			kJipRawKeyStateCompareInstruction,
 			&JipRawKeyStateCompareHook
 		};
 		return rawKeyStateCallSite.IsInstalled();
@@ -233,7 +245,7 @@ namespace fonthook::multibyte_input
 		hook_site::InstructionCallSite rawKeyStateCallSite{
 			"JIP LN 57.30 raw key-state compare -> CALL (__declspec(naked))",
 			callSite,
-			kJipRawKeyStateOriginalInstruction,
+			kJipRawKeyStateCompareInstruction,
 			&JipRawKeyStateCompareHook
 		};
 		// JIP LN raw key-state compare instruction -> naked CALL adapter.

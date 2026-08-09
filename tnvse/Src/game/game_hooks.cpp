@@ -47,8 +47,10 @@ namespace fonthook
 		struct FontLoadBoundedReadSizeHook
 		{
 			inline static constexpr SIZE_T kCallSite = 0xA154D8;
-			inline static constexpr std::array<UInt8, 5> kVanillaInstructions = {
-				0x8B, 0x50, 0x28, 0xFF, 0xD2
+			inline static constexpr std::array<UInt8, 5>
+				kExpectedGetSizeVirtualCallInstructions = {
+				0x8B, 0x50, 0x28, // mov edx, dword ptr [eax+28h]
+				0xFF, 0xD2,       // call edx
 			};
 
 			static UInt32 __fastcall GetBoundedFontDataReadSize(BSFile* fontFile)
@@ -67,7 +69,7 @@ namespace fonthook
 				static hook_site::InstructionCallSite site{
 					"Font::Load BSFile::GetSize instructions -> bounded reader (__fastcall, ECX=BSFile*)",
 					kCallSite,
-					kVanillaInstructions,
+					kExpectedGetSizeVirtualCallInstructions,
 					&GetBoundedFontDataReadSize
 				};
 				return site;
@@ -93,7 +95,7 @@ namespace fonthook
 				if (HasVanillaInstructions())
 					return true;
 				gLog.FormattedMessage(
-					"tnvse_font_hook: identity mismatch site=Font::Load BSFile::GetSize address=%08X expected=8B5028FFD2",
+					"tnvse_font_hook: identity mismatch site=Font::Load BSFile::GetSize address=%08X expected=8B5028FFD2 (mov edx,[eax+28h]; call edx)",
 					static_cast<UInt32>(kCallSite));
 				return false;
 			}
@@ -191,13 +193,16 @@ namespace fonthook
 			{ "Quest text -> strcpy_s[1] (__cdecl)", 0x77ACF8, 0x406D30, &strcpy_sHook },
 		}};
 
-		constexpr std::array<UInt8, 8> kFontPrepTextPrologue = {
-			0x55, 0x8B, 0xEC, 0x81, 0xEC, 0xE0, 0x07, 0x00
+		constexpr std::array<UInt8, 8> kFontPrepTextEntryPrefix = {
+			0x55,                         // push ebp
+			0x8B, 0xEC,                   // mov ebp, esp
+			0x81, 0xEC, 0xE0, 0x07, 0x00, // first 5 bytes of sub esp, 000007E0h;
+			                                 // final immediate byte 00 follows this prefix
 		};
 		hook_site::EntryJumpSite s_fontPrepTextEntrySite{
 			"Font::PrepText entry (__thiscall member)",
 			kFontPrepText,
-			kFontPrepTextPrologue,
+			kFontPrepTextEntryPrefix,
 			5,
 			&FontEx::PrepText
 		};
@@ -331,7 +336,7 @@ namespace fonthook
 					gLog.FormattedMessage(
 						"tnvse_font_hook: identity mismatch site=Font::PrepText address=%08X length=%u",
 						static_cast<UInt32>(kFontPrepText),
-						static_cast<UInt32>(kFontPrepTextPrologue.size()));
+						static_cast<UInt32>(kFontPrepTextEntryPrefix.size()));
 					valid = false;
 				}
 			}
@@ -376,19 +381,29 @@ namespace fonthook
 		}
 
 		constexpr std::array<UInt8, 5> kFontConstructorPrologue = {
-			0x55, 0x8B, 0xEC, 0x6A, 0xFF
+			0x55,       // push ebp
+			0x8B, 0xEC, // mov ebp, esp
+			0x6A, 0xFF, // push -1
 		};
 		constexpr std::array<UInt8, 5> kFontLoadPrologue = {
-			0x55, 0x8B, 0xEC, 0x6A, 0xFF
+			0x55,       // push ebp
+			0x8B, 0xEC, // mov ebp, esp
+			0x6A, 0xFF, // push -1
 		};
 		constexpr std::array<UInt8, 5> kFontCreateTextPrologue = {
-			0x55, 0x8B, 0xEC, 0x6A, 0xFF
+			0x55,       // push ebp
+			0x8B, 0xEC, // mov ebp, esp
+			0x6A, 0xFF, // push -1
 		};
 		constexpr std::array<UInt8, 9> kFontMakeStringPrologue = {
-			0x55, 0x8B, 0xEC, 0x81, 0xEC, 0xAC, 0x00, 0x00, 0x00
+			0x55,                               // push ebp
+			0x8B, 0xEC,                         // mov ebp, esp
+			0x81, 0xEC, 0xAC, 0x00, 0x00, 0x00, // sub esp, 000000ACh
 		};
 		constexpr std::array<UInt8, 6> kCalculateDimensionsPrologue = {
-			0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x4C
+			0x55,             // push ebp
+			0x8B, 0xEC,       // mov ebp, esp
+			0x83, 0xEC, 0x4C, // sub esp, 4Ch
 		};
 		std::array<hook_site::EntryJumpSite, 5> s_coreFontEntrySites = {{
 			{ "Font::Font entry (__thiscall member)", kFontConstructor,
@@ -593,7 +608,9 @@ namespace fonthook
 			std::memcpy(image.data(),
 				reinterpret_cast<const void*>(site.entryAddress),
 				site.originalLength);
-			image[site.originalLength] = 0xE9;
+			// JMP rel32 back to entry + copied length.
+			image[site.originalLength] =
+				static_cast<UInt8>(Rel32Opcode::Jump);
 			const UInt32 returnDisplacement =
 				static_cast<UInt32>(site.entryAddress + site.originalLength
 					- reinterpret_cast<SIZE_T>(code + trampolineSize));
@@ -1025,12 +1042,14 @@ namespace fonthook
 		constexpr SIZE_T kJipInstruction = 0x100113BD;
 		constexpr SIZE_T kJipImmediate = kJipInstruction + 1;
 		constexpr SIZE_T kJipVanillaDescription = 0x1005D130;
+		constexpr UInt8 kMoveEdxImmediate32Opcode = 0xBA; // MOV EDX, imm32
 		const SIZE_T instruction = GetJIPAddress(kJipInstruction);
 		const SIZE_T immediate = GetJIPAddress(kJipImmediate);
 		const UInt32 vanillaDescription = static_cast<UInt32>(
 			GetJIPAddress(kJipVanillaDescription));
 		if (!hook_identity::IsAccessibleRegion(instruction, 5, true)
-			|| *reinterpret_cast<const UInt8*>(instruction) != 0xBA
+			|| *reinterpret_cast<const UInt8*>(instruction)
+				!= kMoveEdxImmediate32Opcode
 			|| *reinterpret_cast<const UInt32*>(immediate)
 				!= vanillaDescription)
 		{
@@ -1101,13 +1120,19 @@ namespace fonthook
 	void InitPluralHooks()
 	{
 		constexpr SIZE_T kPluralBranch = 0x753E39;
-		constexpr std::array<UInt8, 1> kOriginal = { 0x74 };
-		constexpr std::array<UInt8, 1> kReplacement = { 0xEB };
+		constexpr UInt8 kJumpIfEqualShortOpcode = 0x74; // JE rel8
+		constexpr UInt8 kJumpShortOpcode = 0xEB;        // JMP rel8
+		constexpr std::array<UInt8, 1> kExpectedJumpIfEqual = {
+			kJumpIfEqualShortOpcode,
+		};
+		constexpr std::array<UInt8, 1> kPatchedUnconditionalJump = {
+			kJumpShortOpcode,
+		};
 		hook_site::BytePatchSite pluralBranchPatchSite{
 			"Terminal plural conditional JE -> JMP",
 			kPluralBranch,
-			kOriginal,
-			kReplacement
+			kExpectedJumpIfEqual,
+			kPatchedUnconditionalJump
 		};
 		if (!pluralBranchPatchSite.MatchesOriginalBytes())
 		{
@@ -1120,14 +1145,14 @@ namespace fonthook
 				actual);
 			return;
 		}
-		SafeWrite8(kPluralBranch, 0xEB);
+		SafeWrite8(kPluralBranch, kJumpShortOpcode);
 		const UInt8 observed = *reinterpret_cast<const UInt8*>(kPluralBranch);
-		if (observed != 0xEB)
+		if (observed != kJumpShortOpcode)
 		{
 			gLog.FormattedMessage(
 				"tnvse_font_hook: plural branch write verification failed observed=%02X rollback=%s",
 				static_cast<UInt32>(observed),
-				observed == 0x74
+				observed == kJumpIfEqualShortOpcode
 					? "vanilla-remains" : "later-owner-retained");
 		}
 	}

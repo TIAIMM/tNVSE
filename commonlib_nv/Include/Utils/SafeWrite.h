@@ -62,14 +62,14 @@ DECLSPEC_NOINLINE bool __fastcall SafeWrite32IfEqual(
 DECLSPEC_NOINLINE bool __fastcall SafeSetWindowLongPtrA(
 	HWND window, int index, LONG_PTR data, LONG_PTR* previous);
 
-// 5 bytes
+// E9/E8 opcode + rel32 displacement = 5 bytes.
 DECLSPEC_NOINLINE bool __fastcall WriteRelJump(
 	SIZE_T jumpSrc, SIZE_T jumpTgt);
 DECLSPEC_NOINLINE bool __fastcall WriteRelCall(
 	SIZE_T jumpSrc, SIZE_T jumpTgt);
 
 
-// 6 bytes
+// 0F 85/8E opcode + rel32 displacement = 6 bytes.
 DECLSPEC_NOINLINE bool __fastcall WriteRelJnz(
 	SIZE_T jumpSrc, SIZE_T jumpTgt);
 DECLSPEC_NOINLINE bool __fastcall WriteRelJle(
@@ -236,12 +236,13 @@ bool __fastcall ReplaceVTableEntry(void** apVTable, uint32_t auiPosition, Ret(C:
 
 class CallDetour {
 	SIZE_T overwritten_addr = 0;
+	inline static constexpr uint8_t kCallRel32Opcode = 0xE8; // CALL rel32
 public:
 	DECLSPEC_NOINLINE bool __fastcall WriteRelCall(SIZE_T jumpSrc, void* jumpTgt)
 	{
 		__assume(jumpSrc != 0);
 		__assume(jumpTgt != nullptr);
-		if (*reinterpret_cast<uint8_t*>(jumpSrc) != 0xE8) {
+		if (*reinterpret_cast<uint8_t*>(jumpSrc) != kCallRel32Opcode) {
 			char cTextBuffer[72];
 			sprintf_s(cTextBuffer, "Cannot write detour; jumpSrc is not a function call. (0x%08X)", jumpSrc);
 			MessageBoxA(nullptr, cTextBuffer, "WriteRelCall", MB_OK | MB_ICONERROR);
@@ -257,7 +258,7 @@ public:
 	template <typename T>
 	DECLSPEC_NOINLINE bool __fastcall ReplaceCall(SIZE_T jumpSrc, T jumpTgt) {
 		__assume(jumpSrc != 0);
-		if (*reinterpret_cast<uint8_t*>(jumpSrc) != 0xE8) {
+		if (*reinterpret_cast<uint8_t*>(jumpSrc) != kCallRel32Opcode) {
 			char cTextBuffer[72];
 			sprintf_s(cTextBuffer, "Cannot write detour; jumpSrc is not a function call. (0x%08X)", jumpSrc);
 			MessageBoxA(nullptr, cTextBuffer, "WriteRelCall", MB_OK | MB_ICONERROR);

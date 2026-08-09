@@ -5,6 +5,9 @@
 namespace
 {
 	using CreateHeapFn = int(__cdecl*)(UInt32);
+	constexpr UInt8 kCallRel32Opcode = 0xE8; // CALL rel32
+	constexpr SIZE_T kRel32DisplacementOffset = 1;
+	constexpr SIZE_T kCallRel32InstructionSize = 5;
 
 	int __cdecl CreateHeapStub(UInt32) { return 1; }
 
@@ -20,13 +23,16 @@ namespace
 		{
 			target = 0;
 			if (!callAddress
-				|| *reinterpret_cast<const UInt8*>(callAddress) != 0xE8)
+				|| *reinterpret_cast<const UInt8*>(callAddress)
+					!= kCallRel32Opcode)
 			{
 				return false;
 			}
 			const SInt32 displacement =
-				*reinterpret_cast<const SInt32*>(callAddress + 1);
-			target = static_cast<UInt32>(callAddress + 5 + displacement);
+				*reinterpret_cast<const SInt32*>(
+					callAddress + kRel32DisplacementOffset);
+			target = static_cast<UInt32>(callAddress
+				+ kCallRel32InstructionSize + displacement);
 			return true;
 		}
 

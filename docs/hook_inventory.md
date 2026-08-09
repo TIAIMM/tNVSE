@@ -14,6 +14,11 @@ build targeted by tNVSE. The source declarations remain authoritative.
   form a real predecessor chain.
 - itr-nvse verifies that the live site still points to its own target before
   restoring the predecessor.
+- Stewie Tweaks and itr-nvse also keep short machine-code identities beside the
+  owning feature and annotate them with their x86 meaning. tNVSE follows the
+  clearest form of that convention: one instruction per line, exact bytes still
+  visible, and an assembly comment explaining each instruction. It does not use
+  opaque `"\x.."` blobs or a byte-pattern DSL that would hide the patched code.
 
 tNVSE keeps the same source-level form. Every installation remains visible in
 its feature source as `WriteRelCall`, `WriteRelCallEx`, `WriteRelJumpEx`,
