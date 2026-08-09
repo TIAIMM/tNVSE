@@ -1986,25 +1986,31 @@ namespace fonthook::vectorfont
 			return true;
 		};
 
-		auto resolveLayer = [&](const CommonCommandResolution& resolution,
-			size_t layer, const AtlasSnapshotPlacement*& placement,
-			UInt16& pageOrdinal)
+		struct LayerPageResolution
 		{
-			placement = nullptr;
-			pageOrdinal = kInvalidDirectAtlasPageSlot;
+			const DirectAtlasGlyphLayer* direct = nullptr;
+			const AtlasResource* atlas = nullptr;
+			UInt16 pageOrdinal = kInvalidDirectAtlasPageSlot;
+			UInt8 maskType = 0;
+		};
+
+		auto resolveLayerPage = [&](const CommonCommandResolution& resolution,
+			size_t layer, LayerPageResolution& layerResolution)
+		{
+			layerResolution = {};
 			if (!resolution.letter || resolution.knownEmpty
 				|| layer >= masks.size())
 			{
 				return false;
 			}
-			const UInt8 maskType =
+			layerResolution.maskType =
 				static_cast<UInt8>(masks[layer]);
 			const DirectAtlasGlyphLayer* direct = nullptr;
 			for (const DirectAtlasGlyphLayer& candidate :
 				resolution.letter->layers)
 			{
 				if (candidate.valid()
-					&& candidate.maskType == maskType)
+					&& candidate.maskType == layerResolution.maskType)
 				{
 					direct = &candidate;
 					break;
@@ -2015,28 +2021,42 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
-			pageOrdinal =
+			layerResolution.pageOrdinal =
 				sealed->pageOrdinals[resolution.roleIndex][direct->pageSlot];
-			if (pageOrdinal >= sealed->atlases.size()
-				|| pageOrdinal >= kMaximumAtlasSnapshotPages)
+			if (layerResolution.pageOrdinal >= sealed->atlases.size()
+				|| layerResolution.pageOrdinal >= kMaximumAtlasSnapshotPages)
 			{
 				return false;
 			}
 			const std::shared_ptr<AtlasResource>& atlas =
-				sealed->atlases[pageOrdinal];
-			if (!atlas || !atlas->compactSnapshot
-				|| !atlas->pageContentHash
-				|| atlas->compactSnapshot->sourceHeader.pageContentHash
-					!= atlas->pageContentHash
-				|| direct->snapshotPlacementIndex
-					>= atlas->compactSnapshot->placements.size())
+				sealed->atlases[layerResolution.pageOrdinal];
+			if (!atlas)
+			{
+				return false;
+			}
+			layerResolution.direct = direct;
+			layerResolution.atlas = atlas.get();
+			return true;
+		};
+
+		auto resolveLayerPlacement = [&](const LayerPageResolution& layer,
+			const AtlasSnapshotPlacement*& placement)
+		{
+			placement = nullptr;
+			if (!layer.direct || !layer.atlas
+				|| !layer.atlas->compactSnapshot
+				|| !layer.atlas->pageContentHash
+				|| layer.atlas->compactSnapshot->sourceHeader.pageContentHash
+					!= layer.atlas->pageContentHash
+				|| layer.direct->snapshotPlacementIndex
+					>= layer.atlas->compactSnapshot->placements.size())
 			{
 				return false;
 			}
 			const AtlasSnapshotPlacement& source =
-				atlas->compactSnapshot->placements[
-					direct->snapshotPlacementIndex];
-			if (!source.cacheId || source.maskType != maskType
+				layer.atlas->compactSnapshot->placements[
+					layer.direct->snapshotPlacementIndex];
+			if (!source.cacheId || source.maskType != layer.maskType
 				|| !source.rect.width || !source.rect.height)
 			{
 				return false;
@@ -2070,22 +2090,21 @@ namespace fonthook::vectorfont
 			{
 				if (!enabled[layer])
 					continue;
-				const AtlasSnapshotPlacement* placement = nullptr;
-				UInt16 page = kInvalidDirectAtlasPageSlot;
-				if (!resolveLayer(
-					resolution, layer, placement, page))
+				LayerPageResolution layerResolution;
+				if (!resolveLayerPage(
+					resolution, layer, layerResolution))
 				{
 					result.outcome =
 						DirectAtlasShapeOutcome::Failed;
 					return result;
 				}
-				if (!placement || page >= sealed->atlases.size())
+				if (layerResolution.pageOrdinal >= sealed->atlases.size())
 				{
 					result.outcome =
 						DirectAtlasShapeOutcome::Failed;
 					return result;
 				}
-				++counts[layer][page];
+				++counts[layer][layerResolution.pageOrdinal];
 				if (layer
 					== static_cast<size_t>(AtlasLayer::Fill))
 				{
@@ -2172,22 +2191,30 @@ namespace fonthook::vectorfont
 			{
 				if (!enabled[layer])
 					continue;
+				LayerPageResolution layerResolution;
+				if (!resolveLayerPage(
+					resolution, layer, layerResolution))
+				{
+					result.outcome =
+						DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
 				const AtlasSnapshotPlacement* placement = nullptr;
-				UInt16 page = kInvalidDirectAtlasPageSlot;
-				if (!resolveLayer(
-					resolution, layer, placement, page))
+				if (!resolveLayerPlacement(layerResolution, placement))
 				{
 					result.outcome =
 						DirectAtlasShapeOutcome::Failed;
 					return result;
 				}
-				if (!placement || page >= sealed->atlases.size())
+				if (!placement
+					|| layerResolution.pageOrdinal >= sealed->atlases.size())
 				{
 					result.outcome =
 						DirectAtlasShapeOutcome::Failed;
 					return result;
 				}
-				const UInt32 quadIndex = cursors[layer][page]++;
+				const UInt32 quadIndex =
+					cursors[layer][layerResolution.pageOrdinal]++;
 				if (quadIndex >= quadCount)
 				{
 					result.outcome =
@@ -2245,6 +2272,9 @@ namespace fonthook::vectorfont
 				static_cast<UInt64>(glyphs.size()) * 2u
 					* (enabledLayerCount - 1u));
 		}
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::DirectShapeSnapshotResolutionsSaved,
+			quadCount);
 		if (!colorContractInitialized)
 		{
 			result.outcome = DirectAtlasShapeOutcome::Failed;

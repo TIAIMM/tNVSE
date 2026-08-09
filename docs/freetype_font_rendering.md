@@ -2081,6 +2081,14 @@ It also resolves the live base color once per glyph. The final contiguous
 cursor proof remains the publication gate; `direct_common_resolves_saved`
 reports the former per-layer repetitions removed by this route.
 
+The count pass needs only the validated effect layer, mapped page ordinal, and
+a live atlas object. Snapshot generation/hash, placement index, mask, and
+rectangle validation is deferred to and performed completely in the fill pass,
+immediately before the destination cursor advances and the four vertices are
+written. Thus invalid or changed snapshot state still fails before publication,
+while valid dynamic text avoids one full snapshot resolution per emitted quad.
+`direct_snapshot_resolves_saved` reports that avoided count.
+
 Generated distance fields and ARGB-fallback masks and their supporting CPU
 objects are cached in process memory. Equivalent masks are shared across font
 IDs when the resolved font file/face, glyph, effective raster size, emboldening, slant, stroke or SDF
