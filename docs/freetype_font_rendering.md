@@ -1073,6 +1073,14 @@ when the complete cube is strictly outside one padded edge.
 Term-magnitude-relative slack is applied before cancellation, and every point
 of the cube must be strictly in front of `w=0`.
 
+The sorted route resolves each facade's Tile property once and carries that
+exact read-only input through the zero-alpha and clip/scissor gates. It also
+tests the already-resolved Tile/material alpha values before consulting the
+AlphaProperty blend mode, because a non-zero pair cannot satisfy the zero-alpha
+no-op rule. Dispatch-time proof revalidation is unchanged. The clip diagnostic
+line reports both avoided sorted Tile-property lookups and avoided sorted
+AlphaProperty lookups so the saving is measured without a per-facade timer.
+
 A preflight cull is revalidated when the final sorted entry is dispatched. A
 matching result is consumed without packet preparation, upload, Tile callbacks,
 or driver submission; an identity or frame mismatch revokes it and fails open.

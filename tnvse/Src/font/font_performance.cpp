@@ -1489,7 +1489,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				TextArtifactAdmissionEstablishedReplacement));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu revoke_invalid=%llu revoke_frame=%llu revoke_camera=%llu revoke_geometry=%llu revoke_transform=%llu revoke_bound=%llu revoke_scissor=%llu revoke_proof=%llu transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu vanilla_ui_ortho_translation=%llu generic_transforms=%llu",
+			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu revoke_invalid=%llu revoke_frame=%llu revoke_camera=%llu revoke_geometry=%llu revoke_transform=%llu revoke_bound=%llu revoke_scissor=%llu revoke_proof=%llu transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu vanilla_ui_ortho_translation=%llu generic_transforms=%llu sorted_tile_property_lookups_elided=%llu sorted_alpha_property_lookups_elided=%llu",
 			counterValue(FreeTypePerfCounter::VisibilityPreflightClipCheck),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipCulled),
@@ -1532,7 +1532,11 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipVanillaUiOrthographicTranslation),
 			counterValue(FreeTypePerfCounter::
-				VisibilityPreflightClipGenericTransform));
+				VisibilityPreflightClipGenericTransform),
+			counterValue(FreeTypePerfCounter::
+				VisibilitySortedTilePropertyLookupElided),
+			counterValue(FreeTypePerfCounter::
+				VisibilitySortedAlphaPropertyLookupElided));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_static_promotion: deferred_lifecycle=%llu deferred_upload_history=%llu deferred_budget=%llu deferred_retry=%llu cold_evictions=%llu cold_evicted_bytes=%llu all_static_fast_exit=%llu lease_payload_validations_elided=%llu",
 			values[static_cast<size_t>(FreeTypePerfCounter::

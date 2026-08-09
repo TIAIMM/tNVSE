@@ -100,6 +100,8 @@ namespace fonthook::vectorfont
 			size_t rectNdcReplacement = 0;
 			UInt64 frameToken = 0;
 			UInt64 cameraEpoch = 0;
+			UInt64 sortedTilePropertyLookupsElided = 0;
+			UInt64 sortedAlphaPropertyLookupsElided = 0;
 			double inverseWidth = 0.0;
 			double inverseHeight = 0.0;
 			bool active = false;
@@ -1130,25 +1132,47 @@ namespace fonthook::vectorfont
 		}
 	}
 
+	namespace
+	{
+		NativeFontVisibilityCull EvaluateSubmissionVisibilityResolved(
+			const NiTriShape* facade,
+			const TileVisibilityPropertyView* tile,
+			bool* alphaPropertyLookupElided)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::VisibilityCheck);
+			if (alphaPropertyLookupElided)
+				*alphaPropertyLookupElided = false;
+			if (!facade || !tile)
+				return NativeFontVisibilityCull::None;
+
+			const NiMaterialProperty* material = facade->GetMaterialProperty();
+			const float materialAlpha = material ? material->m_fAlpha : 1.0f;
+			if (!std::isfinite(tile->tileAlpha)
+				|| !std::isfinite(materialAlpha))
+			{
+				return NativeFontVisibilityCull::None;
+			}
+			// AlphaProperty can only authorize a zero-alpha no-op after one of
+			// the two effective alpha inputs is exactly zero. Test that cheap,
+			// already-resolved state first; the old order queried the property
+			// for every ordinary opaque/non-zero TileText submission.
+			if (tile->tileAlpha != 0.0f && materialAlpha != 0.0f)
+			{
+				if (alphaPropertyLookupElided)
+					*alphaPropertyLookupElided = true;
+				return NativeFontVisibilityCull::None;
+			}
+			return IsZeroAlphaNoOpBlend(facade->GetAlphaProperty())
+				? NativeFontVisibilityCull::ZeroAlpha
+				: NativeFontVisibilityCull::None;
+		}
+	}
+
 	NativeFontVisibilityCull EvaluateNativeFontSubmissionVisibility(
 		const NiTriShape* facade)
 	{
-		RecordFreeTypePerf(FreeTypePerfCounter::VisibilityCheck);
-		if (!facade)
-			return NativeFontVisibilityCull::None;
-
 		const TileVisibilityPropertyView* tile = GetTileProperty(facade);
-		if (!tile)
-			return NativeFontVisibilityCull::None;
-		const NiMaterialProperty* material = facade->GetMaterialProperty();
-		const float materialAlpha = material ? material->m_fAlpha : 1.0f;
-		if (std::isfinite(tile->tileAlpha) && std::isfinite(materialAlpha)
-			&& IsZeroAlphaNoOpBlend(facade->GetAlphaProperty())
-			&& (tile->tileAlpha == 0.0f || materialAlpha == 0.0f))
-		{
-			return NativeFontVisibilityCull::ZeroAlpha;
-		}
-		return NativeFontVisibilityCull::None;
+		return EvaluateSubmissionVisibilityResolved(facade, tile, nullptr);
 	}
 
 	NativeFontVisibilityCull EvaluateNativeFontSubmissionVisibility(
@@ -1169,6 +1193,12 @@ namespace fonthook::vectorfont
 
 	void CompleteNativeFontVisibilityPreflight()
 	{
+		RecordFreeTypePerf(FreeTypePerfCounter::
+			VisibilitySortedTilePropertyLookupElided,
+			s_clipFrameContext.sortedTilePropertyLookupsElided);
+		RecordFreeTypePerf(FreeTypePerfCounter::
+			VisibilitySortedAlphaPropertyLookupElided,
+			s_clipFrameContext.sortedAlphaPropertyLookupsElided);
 		s_clipFrameContext.preflightOpen = false;
 	}
 
@@ -1178,10 +1208,14 @@ namespace fonthook::vectorfont
 		s_clipFrameContext.valid = false;
 		s_clipFrameContext.frameToken = 0;
 		s_clipFrameContext.preflightOpen = false;
+		s_clipFrameContext.sortedTilePropertyLookupsElided = 0;
+		s_clipFrameContext.sortedAlphaPropertyLookupsElided = 0;
 	}
 
-	void EvaluateNativeFontPreflightClipVisibilityInPlace(
-		const NiTriShape* facade, NativeFontVisibilityPreflight& visibility)
+	static void EvaluatePreflightClipVisibilityResolvedInPlace(
+		const NiTriShape* facade, const NiTriShapeData* data,
+		const TileVisibilityPropertyView* tile,
+		NativeFontVisibilityPreflight& visibility)
 	{
 		if (!g_bEnableFreeTypeFontPreflightClipCull)
 			return;
@@ -1204,13 +1238,11 @@ namespace fonthook::vectorfont
 		// draw. Anything uncertain fails open. A facade proof is additionally
 		// revalidated by HonorNativeFontPreflightClipCull at dispatch before it is
 		// honored; a vanilla-layout proof already consumes the live dispatch state.
-		const NiTriShapeData* data = facade ? facade->GetModelData() : nullptr;
 		if (!facade || !data)
 		{
 			failOpen();
 			return;
 		}
-		const TileVisibilityPropertyView* tile = GetTileProperty(facade);
 		if (!tile)
 		{
 			failOpen();
@@ -1254,6 +1286,42 @@ namespace fonthook::vectorfont
 			? FreeTypePerfCounter::VisibilityPreflightClipScissor
 			: FreeTypePerfCounter::VisibilityPreflightClipViewport);
 		visibility.cull = reason;
+	}
+
+	void EvaluateNativeFontSortedVisibilityInPlace(
+		const NiTriShape* facade, NativeFontVisibilityPreflight& visibility)
+	{
+		// The sorted traversal owns a stable facade for this synchronous proof.
+		// Resolve its Tile property once and pass the exact pointer through both
+		// the alpha and clip/scissor gates.
+		const TileVisibilityPropertyView* tile = GetTileProperty(facade);
+		bool alphaPropertyLookupElided = false;
+		visibility.cull = EvaluateSubmissionVisibilityResolved(
+			facade, tile, &alphaPropertyLookupElided);
+		if (s_clipFrameContext.active && alphaPropertyLookupElided)
+			++s_clipFrameContext.sortedAlphaPropertyLookupsElided;
+		if (visibility.cull != NativeFontVisibilityCull::None)
+			return;
+
+		const NiTriShapeData* data = facade ? facade->GetModelData() : nullptr;
+		if (s_clipFrameContext.active && facade && data)
+		{
+			// The former clip-only call resolved this same Tile property again
+			// after its model-data check, including the null-property case.
+			++s_clipFrameContext.sortedTilePropertyLookupsElided;
+		}
+		EvaluatePreflightClipVisibilityResolvedInPlace(
+			facade, data, tile, visibility);
+	}
+
+	void EvaluateNativeFontPreflightClipVisibilityInPlace(
+		const NiTriShape* facade, NativeFontVisibilityPreflight& visibility)
+	{
+		const NiTriShapeData* data = facade ? facade->GetModelData() : nullptr;
+		const TileVisibilityPropertyView* tile = data
+			? GetTileProperty(facade) : nullptr;
+		EvaluatePreflightClipVisibilityResolvedInPlace(
+			facade, data, tile, visibility);
 	}
 
 	NativeFontVisibilityPreflight EvaluateNativeFontPreflightClipVisibility(

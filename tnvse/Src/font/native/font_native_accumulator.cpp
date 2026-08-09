@@ -1472,14 +1472,8 @@ namespace fonthook::vectorfont
 						scratch.frameEntries.emplace_back();
 						SortedFrameEntry& entry = scratch.frameEntries.back();
 						entry.facade = facade;
-						entry.visibility.cull =
-							EvaluateNativeFontSubmissionVisibility(facade);
-						if (entry.visibility.cull
-							== NativeFontVisibilityCull::None)
-						{
-							EvaluateNativeFontPreflightClipVisibilityInPlace(
-								facade, entry.visibility);
-						}
+						EvaluateNativeFontSortedVisibilityInPlace(
+							facade, entry.visibility);
 						if (entry.visibility.cull
 							== NativeFontVisibilityCull::None)
 						{

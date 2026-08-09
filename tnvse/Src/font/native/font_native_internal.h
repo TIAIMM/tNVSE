@@ -1197,6 +1197,11 @@ namespace fonthook::vectorfont
 	void BeginNativeFontVisibilityFrame();
 	void CompleteNativeFontVisibilityPreflight();
 	void EndNativeFontVisibilityFrame();
+	// Resolve the Tile property once for zero-alpha and clip/scissor evaluation.
+	// The destination must be freshly value-initialized, as with the clip-only
+	// in-place form below.
+	void EvaluateNativeFontSortedVisibilityInPlace(
+		const NiTriShape* facade, NativeFontVisibilityPreflight& visibility);
 	NativeFontVisibilityPreflight EvaluateNativeFontPreflightClipVisibility(
 		const NiTriShape* facade);
 	// The destination must be freshly value-initialized. This form writes the

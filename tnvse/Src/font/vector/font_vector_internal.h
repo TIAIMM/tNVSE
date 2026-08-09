@@ -176,6 +176,8 @@ namespace fonthook::vectorfont
 		SortedDynamicBytes,
 		LocklessPacketPrepare,
 		VisibilityCheck,
+		VisibilitySortedTilePropertyLookupElided,
+		VisibilitySortedAlphaPropertyLookupElided,
 		VisibilityCulled,
 		VisibilityAppCulled,
 		VisibilityZeroAlpha,
