@@ -95,8 +95,8 @@ namespace fonthook::vectorfont
 			return serial;
 		}
 
-		// Font::MakeTriShape returns a BSScissorTriShape and a TileShaderProperty,
-		// but this CommonLib snapshot does not expose either concrete definition.
+		// The FreeType text-shape factory constructs a BSScissorTriShape and a
+		// TileShaderProperty, but this CommonLib snapshot exposes neither type.
 		struct TileShaderPropertyView : BSShaderProperty
 		{
 			NiTexturePtr sourceTexture;
@@ -2086,7 +2086,7 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	bool EnsureNativeFontProxyPool(Font& font)
+	bool EnsureNativeFontProxyPool()
 	{
 		NativeFontRingState& state = RingState();
 		if (state.proxyPoolReady.load(std::memory_order_acquire))
@@ -2104,7 +2104,8 @@ namespace fonthook::vectorfont
 		while (state.proxyCount < kProxyPoolSize)
 		{
 			NativeFontProxy proxy;
-			proxy.shape = font.MakeTriShape(1, &white, false);
+			proxy.shape = CreateFreeTypePlaceholderTextShape(
+				1, white, false);
 			NiTriShapeData* data = proxy.shape
 				? proxy.shape->GetModelData() : nullptr;
 			if (!data || !GetTileProperty(proxy.shape.m_pObject)

@@ -27,10 +27,10 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kBSRenderStateSetStencilFunc = 0xB98180;
 		inline constexpr UInt32 kBSGraphics_CameraWorldTranslate = 0x11F474C;
 
-		// Font::MakeTriShape supplies the retail TileShaderProperty concrete type,
-		// which this CommonLib snapshot does not declare. Slot 31 reads only this
-		// tail after publishing constants. Keep the cross-version proof local and
-		// refuse the Lite path if the property identity is not exact.
+		// FreeType text-shape construction supplies the retail TileShaderProperty
+		// concrete type, which this CommonLib snapshot does not declare. Slot 31
+		// reads only this tail after publishing constants. Keep the cross-version
+		// proof local and refuse the Lite path if the property identity is not exact.
 		struct TileConstantsLitePropertyView : BSShaderProperty
 		{
 			std::array<UInt8, 0x08> beforeOverlay;

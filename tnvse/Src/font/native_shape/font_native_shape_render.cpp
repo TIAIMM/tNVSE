@@ -761,8 +761,8 @@ namespace fonthook::vectorfont
 				? slot.shape->GetModelData() : nullptr;
 			if (data && data->m_pkBuffData == slot.bindingBuffer)
 				data->m_pkBuffData = slot.shellBuffer;
-			// Font::MakeTriShape(..., false) leaves NiGeometry::m_pShader null
-			// until the caller runs PrepareObject.  A facade is published before
+			// Unprepared FreeType text shapes leave NiGeometry::m_pShader null until
+			// the caller runs PrepareObject. A facade is published before
 			// that call, so its creation-time shellShader is not authoritative.
 			// Only restore shader state after this slot actually replaced it; the
 			// first single-packet bind refreshes shellShader from the live shape.

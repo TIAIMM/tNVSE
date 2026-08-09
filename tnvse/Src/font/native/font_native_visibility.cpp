@@ -182,9 +182,9 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		// Font::MakeTriShape returns a TileShaderProperty, but the concrete class
-		// is not exposed by this CommonLib snapshot. Keep this read-only view tied
-		// to the same retail ABI already used by native packet state mirroring.
+		// FreeType text-shape construction returns a TileShaderProperty, but the
+		// concrete class is not exposed by this CommonLib snapshot. Keep this
+		// read-only view tied to the retail ABI used by packet state mirroring.
 		struct TileVisibilityPropertyView : BSShaderProperty
 		{
 			NiTexturePtr sourceTexture;

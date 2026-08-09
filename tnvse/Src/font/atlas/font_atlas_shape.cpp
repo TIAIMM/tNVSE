@@ -1315,27 +1315,7 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool BindDirectAtlasShape(NiTriShape* shape,
-			const std::shared_ptr<AtlasResource>& atlas)
-		{
-			if (!shape || !atlas || !atlas->property)
-				return false;
-			shape->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f, 0.0f);
-			shape->RemoveProperty(NiProperty::TEXTURING);
-			shape->AddProperty(atlas->property);
-			shape->UpdateProperties();
-			if (NiShadeProperty* shade = shape->GetShadeProperty())
-			{
-				if (shade->m_eShaderType == NiShadeProperty::PROP_Tile)
-				{
-					if (NiTexture* texture = GetAtlasTexture(*atlas))
-						ThisStdCall<void>(0xBB7A10, shade, texture);
-				}
-			}
-			return true;
-		}
-
-		NiTriShape* CreateDirectNativePacketShell(Font& font,
+		NiTriShape* CreateDirectNativePacketShell(
 			const std::shared_ptr<AtlasResource>& atlas,
 			const NativeFontPayloadTemplate& payload,
 			const NativeFontPacketTemplate& packet,
@@ -1350,9 +1330,9 @@ namespace fonthook::vectorfont
 				return nullptr;
 			}
 
-			NiTriShape* shape = font.MakeTriShape(1, &tileColor, false);
-			if (!shape || !shape->GetModelData()
-				|| !BindDirectAtlasShape(shape, atlas))
+			NiTriShape* shape = CreateFreeTypeTextShape(1, tileColor, false,
+				atlas->property, GetAtlasTexture(*atlas));
+			if (!shape || !shape->GetModelData())
 			{
 				if (shape)
 					shape->DeleteThis();
@@ -1545,10 +1525,10 @@ namespace fonthook::vectorfont
 				return nullptr;
 			}
 
-			NiTriShape* shape = font.MakeTriShape(
-				static_cast<int>(targetQuadCount), &tileColor, false);
-			if (!shape || !shape->GetModelData()
-				|| !BindDirectAtlasShape(shape, atlases.front()))
+			NiTriShape* shape = CreateFreeTypeTextShape(targetQuadCount,
+				tileColor, false, atlases.front()->property,
+				GetAtlasTexture(*atlases.front()));
+			if (!shape || !shape->GetModelData())
 			{
 				if (shape)
 					shape->DeleteThis();
@@ -1694,7 +1674,7 @@ namespace fonthook::vectorfont
 				payload->packets.front();
 			NiTriShape* shape =
 				facadePacket.atlasPage < atlases.size()
-					? CreateDirectNativePacketShell(font,
+					? CreateDirectNativePacketShell(
 						atlases[facadePacket.atlasPage], *payload,
 						facadePacket,
 						facadeColor, tileColor, origin, false)
@@ -2201,11 +2181,11 @@ namespace fonthook::vectorfont
 			{
 				return nullptr;
 			}
-			NiTriShape* shape = font.MakeTriShape(
-				static_cast<int>(drawableGlyphs), &tileColor, false);
+			NiTriShape* shape = CreateFreeTypeTextShape(drawableGlyphs,
+				tileColor, false, atlases[atlasPage]->property,
+				GetAtlasTexture(*atlases[atlasPage]));
 			NiTriShapeOwner shapeOwner(shape);
-			if (!shape || !shape->GetModelData()
-				|| !BindDirectAtlasShape(shape, atlases[atlasPage]))
+			if (!shape || !shape->GetModelData())
 			{
 				return nullptr;
 			}
@@ -3678,24 +3658,14 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			NiTriShape* shape = font.MakeTriShape(
-				static_cast<int>(needsNativeRangeRouting ? 1u : quads.size()),
-				&tileColor, false);
+			NiTriShape* shape = CreateFreeTypeTextShape(
+				static_cast<UInt32>(needsNativeRangeRouting ? 1u : quads.size()),
+				tileColor, false, atlases[0]->property,
+				GetAtlasTexture(*atlases[0]));
 			NiTriShapeOwner shapeOwner(shape);
 			if (!shape || !shape->GetModelData())
 				return nullptr;
 			shape->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f, 0.0f);
-			shape->RemoveProperty(NiProperty::TEXTURING);
-			shape->AddProperty(atlases[0]->property);
-			shape->UpdateProperties();
-			if (NiShadeProperty* shade = shape->GetShadeProperty())
-			{
-				if (shade->m_eShaderType == NiShadeProperty::PROP_Tile)
-				{
-					if (NiTexture* texture = GetAtlasTexture(*atlases[0]))
-						ThisStdCall<void>(0xBB7A10, shade, texture);
-				}
-			}
 
 			NiTriShapeData* data = shape->GetModelData();
 			if (!data)
@@ -3738,8 +3708,8 @@ namespace fonthook::vectorfont
 			{
 				// The vanilla accumulator still validates and prepares this one-quad
 				// facade before the sorted Tile hook substitutes the shared proxy.
-				// Give it a complete, finite quad instead of leaving MakeTriShape's
-				// transient arrays unspecified.
+				// Give it a complete, finite quad instead of leaving the newly
+				// constructed geometry arrays unspecified.
 				if (data->m_usVertices < 4 || !data->m_pkVertex
 					|| !data->m_pkTexture || !data->m_pusTriList)
 				{

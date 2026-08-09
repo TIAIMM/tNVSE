@@ -170,6 +170,18 @@ namespace fonthook
 	bool GetFreeTypeLayoutIdentity(const Font* apFont, UInt64& arIdentity);
 	FontLetter* EnsureFreeTypeDoubleByteMetrics(Font* apFont, UInt32 auiEncodedCode);
 	bool DecodeFreeTypeGlyph(Font* apFont, const char* apText, VectorEncodedGlyph& arGlyph);
+	// Construct the exact retail BSScissorTriShape/TileShaderProperty pair, but
+	// bind a FreeType-owned texture instead of reading Font::pTextureData[0].
+	// The property and texture must describe the same atlas page. This changes
+	// only the FreeType draw shape; the original FNT/TEX objects remain loaded
+	// and Font::pTextureData is never modified.
+	NiTriShape* CreateFreeTypeTextShape(UInt32 auiQuadCount,
+		const NiColorA& arTileColor, bool abPrepareObject,
+		NiTexturingProperty* apTextureProperty, NiTexture* apTexture);
+	// Bootstrap shells (empty text and the native proxy pool) use the permanent
+	// 1x1 FreeType texture until their real atlas page is installed.
+	NiTriShape* CreateFreeTypePlaceholderTextShape(UInt32 auiQuadCount,
+		const NiColorA& arTileColor, bool abPrepareObject);
 	NiTriShape* CreateEmptyFreeTypeTextShape(Font* apFont, bool abPrepareObject);
 
 	class VectorTextBuilder

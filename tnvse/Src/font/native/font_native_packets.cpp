@@ -666,7 +666,7 @@ namespace fonthook::vectorfont
 					!= payloadTemplate->atlasTextures.size()
 				|| payloadTemplate->gpuVertices.empty()
 				|| payloadTemplate->packets.empty()))
-			|| !EnsureNativeFontProxyPool(font))
+			|| !EnsureNativeFontProxyPool())
 		{
 			return false;
 		}

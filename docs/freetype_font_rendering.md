@@ -30,6 +30,14 @@ those advances into `TextLine::AddChar` before line/page topology is selected;
 the final traversal only normalizes positions and aggregate widths. Non-FreeType
 font IDs remain wholly on the vanilla `.fnt`/`.tex` path.
 
+Configured FreeType font IDs also keep their retail `.fnt`/`.tex` resources
+loaded. tNVSE does not clear `Font::pTextureData` or retire the original bitmap
+texture, because other plugins may still observe that state. Only FreeType draw
+geometry is separated: its `BSScissorTriShape` and `TileShaderProperty` are
+constructed directly with the retail ABI and bound to the relevant FreeType
+atlas page (or the permanent 1x1 FreeType placeholder), without calling
+`Font::MakeTriShape` or reading the original texture.
+
 ## Raster scale and UIO
 
 `fFreeTypeFontResolutionScale` is the sole source multiplier used by startup

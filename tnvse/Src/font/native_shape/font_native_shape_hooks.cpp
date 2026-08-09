@@ -3963,7 +3963,7 @@ namespace fonthook::vectorfont
 			// triangle-list page boundaries: m_pusArrayLengths is interpreted as
 			// strip lengths (primitiveCount = length - 2). Keep the page split at
 			// the one vanilla sorted Tile callsite instead. Each packet selects a
-			// Font::MakeTriShape proxy and then executes the untouched
+			// FreeType text-shape proxy and then executes the untouched
 			// RenderPassImmediately -> NiTriShape::RenderImmediate renderer path.
 			//
 			// Final ARGB and baked-coverage bitmaps use only vanilla c0. Skipping the

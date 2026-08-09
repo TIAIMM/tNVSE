@@ -1114,7 +1114,7 @@ namespace fonthook::vectorfont
 		bool active = false;
 	};
 
-	bool EnsureNativeFontProxyPool(Font& font);
+	bool EnsureNativeFontProxyPool();
 	NativeFontFallbackReason BeginNativeFontDirectShapeSubmission(
 		NiTriShape* facade, NativeFontShapePayload& payload,
 		NativeFontDirectShapeSubmission& submission);

@@ -7,9 +7,11 @@
 #include "native_calls.h"
 
 #include "BSShaderProperty.hpp"
+#include "MemoryManager.hpp"
 #include "NiAlphaProperty.hpp"
 #include "NiFixedString.hpp"
 #include "NiGlobalStringTable.hpp"
+#include "NiMemory.hpp"
 #include "NiNode.hpp"
 #include "NiPixelData.hpp"
 #include "NiPoint4.hpp"
@@ -34,6 +36,65 @@ namespace fonthook
 
 	namespace implementation::font_vector_render
 	{
+		inline constexpr UInt32 kBSScissorTriShapeSize = 0xD4;
+
+		struct BSScissorTriShapeView : NiTriShape
+		{
+			UInt32 scissorTail[4];
+		};
+
+		// CommonLib does not expose the retail TileShaderProperty type. Keep this
+		// construction-only view tied to the FalloutNV.exe layout used by the
+		// native renderer's independently checked live-property view.
+		struct TileShaderPropertyConstructionView : BSShaderProperty
+		{
+			NiTexturePtr sourceTexture;
+			NiTexturePtr alphaTexture;
+			NiColorA overlayColor;
+			float tileAlpha;
+			NiPoint4 textureTransform;
+			NiTexturingProperty::ClampMode clampMode;
+			bool byte90;
+			bool rotates;
+			bool hasVertexColors;
+			bool noTexture;
+			BSStringT<char> texturePath;
+			RECT scissorRect;
+			bool useScissorTest;
+		};
+
+		static_assert(sizeof(NiTriShape) == 0xC4);
+		static_assert(sizeof(BSScissorTriShapeView)
+			== kBSScissorTriShapeSize);
+		static_assert(sizeof(TileShaderPropertyConstructionView) == 0xB0);
+		static_assert(offsetof(TileShaderPropertyConstructionView, overlayColor)
+			== 0x68);
+
+		// FalloutNV.exe 1.4.0.525 retail text-shape primitives. Keep each target
+		// beside its exact calling convention so this factory remains auditable
+		// without routing through Font::MakeTriShape.
+		using BSScissorTriShapeConstructorFn = BSScissorTriShapeView* (__thiscall*)(
+			BSScissorTriShapeView*, UInt16, NiPoint3*, NiPoint3*, NiColorA*,
+			NiPoint2*, UInt16, UInt32, UInt16, UInt16*,
+			SInt32, SInt32, SInt32, SInt32);
+		inline constexpr UInt32 kBSScissorTriShapeConstructorAddress = 0xC5CF30;
+
+		using NiGeometryDataSetConsistencyFn = void (__thiscall*)(
+			NiGeometryData*, NiGeometryData::Consistency);
+		inline constexpr UInt32 kNiGeometryDataSetConsistencyAddress = 0xA67050;
+
+		using TileShaderPropertyConstructorFn =
+			TileShaderPropertyConstructionView* (__thiscall*)(
+				TileShaderPropertyConstructionView*, bool);
+		inline constexpr UInt32 kTileShaderPropertyConstructorAddress = 0xBB7C30;
+
+		using TileShaderPropertySetTextureFn = void (__thiscall*)(
+			TileShaderPropertyConstructionView*, NiTexture*);
+		inline constexpr UInt32 kTileShaderPropertySetTextureAddress = 0xBB7A10;
+
+		using AttachDefaultTextAlphaPropertyFn = void (__cdecl*)(NiTriShape*);
+		inline constexpr UInt32 kAttachDefaultTextAlphaPropertyAddress = 0x706D50;
+
 		NiTexturingProperty* s_whiteTextureProperty = nullptr;
 		bool s_whiteTextureInitialized = false;
 		bool s_whiteTextureAvailable = false;
@@ -182,12 +243,24 @@ namespace fonthook
 			return s_whiteTextureAvailable;
 		}
 
+		NiTexture* GetWhiteTexture()
+		{
+			if (!InitializeWhiteTexture() || !s_whiteTextureProperty
+				|| !s_whiteTextureProperty->m_kMaps.GetSize()
+				|| !s_whiteTextureProperty->m_kMaps[0])
+			{
+				return nullptr;
+			}
+			return s_whiteTextureProperty->m_kMaps[0]->m_spTexture;
+		}
+
 		NiTriShape* CreateEmptyVectorShape(Font* font, bool prepareObject)
 		{
 			if (!font)
 				return nullptr;
 			const NiColorA transparent = { 1.0f, 1.0f, 1.0f, 0.0f };
-			NiTriShape* shape = font->MakeTriShape(1, &transparent, false);
+			NiTriShape* shape = CreateFreeTypePlaceholderTextShape(
+				1, transparent, false);
 			NiTriShapeData* data = shape ? shape->GetModelData() : nullptr;
 			if (!data || data->m_usVertices < 4 || data->m_usTriangles < 2
 				|| !data->m_pkVertex || !data->m_pusTriList)
@@ -227,6 +300,117 @@ namespace fonthook
 
 		thread_local std::optional<RichTextVectorContext>
 			s_richTextContext;
+	}
+
+	NiTriShape* CreateFreeTypeTextShape(UInt32 quadCount,
+		const NiColorA& tileColor, bool prepareObject,
+		NiTexturingProperty* textureProperty, NiTexture* texture)
+	{
+		constexpr UInt32 kMaximumQuadCount =
+			std::numeric_limits<UInt16>::max() / 4u;
+		if (!quadCount || quadCount > kMaximumQuadCount
+			|| !textureProperty || !texture)
+		{
+			return nullptr;
+		}
+
+		const UInt32 vertexCount = quadCount * 4u;
+		const UInt32 triangleCount = quadCount * 2u;
+		const UInt32 indexCount = quadCount * 6u;
+		MemoryManager* memory = MemoryManager::GetSingleton();
+		NiPoint3* vertices = static_cast<NiPoint3*>(
+			memory->Allocate(sizeof(NiPoint3) * vertexCount));
+		NiPoint2* textureCoordinates = static_cast<NiPoint2*>(
+			memory->Allocate(sizeof(NiPoint2) * vertexCount));
+		UInt16* indices = NiAlloc<UInt16>(indexCount);
+		if (!vertices || !textureCoordinates || !indices)
+		{
+			memory->Deallocate(vertices);
+			memory->Deallocate(textureCoordinates);
+			NiFree(indices);
+			return nullptr;
+		}
+
+		void* shapeStorage =
+			NiMemObject::operator new(kBSScissorTriShapeSize);
+		if (!shapeStorage)
+		{
+			memory->Deallocate(vertices);
+			memory->Deallocate(textureCoordinates);
+			NiFree(indices);
+			return nullptr;
+		}
+		auto* shape = reinterpret_cast<BSScissorTriShapeConstructorFn>(
+			kBSScissorTriShapeConstructorAddress)(
+			static_cast<BSScissorTriShapeView*>(shapeStorage),
+			static_cast<UInt16>(vertexCount), vertices,
+			nullptr, nullptr, textureCoordinates, 1u, 0u,
+			static_cast<UInt16>(triangleCount), indices,
+			0, 0, 0, 0);
+		NiTriShapeData* data = shape ? shape->GetModelData() : nullptr;
+		if (!shape || !data)
+		{
+			// The retail constructor transfers these three arrays only when its
+			// NiTriShapeData allocation succeeds. A data-less shape owns none of
+			// them, so release them explicitly after destroying the shape shell.
+			if (shape)
+				shape->DeleteThis();
+			else
+				NiMemObject::operator delete(shapeStorage,
+					kBSScissorTriShapeSize);
+			memory->Deallocate(vertices);
+			memory->Deallocate(textureCoordinates);
+			NiFree(indices);
+			return nullptr;
+		}
+
+		data->bIsReadingData = false;
+		data->bUnk3B = true;
+		shape->SetName(NiFixedString("Interface: Text"));
+		reinterpret_cast<NiGeometryDataSetConsistencyFn>(
+			kNiGeometryDataSetConsistencyAddress)(
+			data, NiGeometryData::STATIC);
+
+		void* tileStorage = NiMemObject::operator new(
+			sizeof(TileShaderPropertyConstructionView));
+		if (!tileStorage)
+		{
+			shape->DeleteThis();
+			return nullptr;
+		}
+		auto* tile = reinterpret_cast<TileShaderPropertyConstructorFn>(
+			kTileShaderPropertyConstructorAddress)(
+			static_cast<TileShaderPropertyConstructionView*>(tileStorage), false);
+		if (!tile)
+		{
+			NiMemObject::operator delete(tileStorage,
+				sizeof(TileShaderPropertyConstructionView));
+			shape->DeleteThis();
+			return nullptr;
+		}
+		shape->AddProperty(tile);
+		tile->overlayColor = tileColor;
+		if (prepareObject)
+			shape->PrepareObject();
+		reinterpret_cast<TileShaderPropertySetTextureFn>(
+			kTileShaderPropertySetTextureAddress)(tile, texture);
+		shape->UpdateProperties();
+		reinterpret_cast<AttachDefaultTextAlphaPropertyFn>(
+			kAttachDefaultTextAlphaPropertyAddress)(shape);
+
+		// Preserve the old final property order: the retail Tile and shared Alpha
+		// properties precede the FreeType atlas property.
+		shape->AddProperty(textureProperty);
+		shape->UpdateProperties();
+		return shape;
+	}
+
+	NiTriShape* CreateFreeTypePlaceholderTextShape(UInt32 quadCount,
+		const NiColorA& tileColor, bool prepareObject)
+	{
+		NiTexture* texture = GetWhiteTexture();
+		return texture ? CreateFreeTypeTextShape(quadCount, tileColor,
+			prepareObject, s_whiteTextureProperty, texture) : nullptr;
 	}
 
 	struct VectorTextBuilder::Impl
