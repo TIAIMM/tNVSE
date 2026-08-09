@@ -459,6 +459,8 @@ namespace fonthook::vectorfont
 		SortedAllStaticPayloadValidationElided,
 		AccumulatorEmptyFastPath,
 		AccumulatorMetadataCullSkipped,
+		AccumulatorMetadataOwnerSlotAvoided,
+		AccumulatorMetadataIndexLookupElided,
 		AccumulatorNoPreparedPayload,
 		VanillaLayoutEligible,
 		VanillaLayoutCreated,

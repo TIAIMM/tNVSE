@@ -1731,9 +1731,13 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::SingletonFacadeSortedPreflightSaved),
 			counterValue(FreeTypePerfCounter::SingletonFacadeProxyPacketSaved));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_accumulator_prep: empty_fast=%llu metadata_cull_skipped=%llu no_prepared_payload=%llu",
+			"tnvse_freetype_accumulator_prep: empty_fast=%llu metadata_cull_skipped=%llu metadata_owner_slots_avoided=%llu metadata_index_lookups_elided=%llu no_prepared_payload=%llu",
 			counterValue(FreeTypePerfCounter::AccumulatorEmptyFastPath),
 			counterValue(FreeTypePerfCounter::AccumulatorMetadataCullSkipped),
+			counterValue(FreeTypePerfCounter::
+				AccumulatorMetadataOwnerSlotAvoided),
+			counterValue(FreeTypePerfCounter::
+				AccumulatorMetadataIndexLookupElided),
 			counterValue(FreeTypePerfCounter::AccumulatorNoPreparedPayload));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_vanilla_layout: eligible=%llu created=%llu create_fallback=%llu draws=%llu culls=%llu runtime_fallback=%llu vertices=%llu shifted_eligible=%llu shifted_created=%llu shifted_draws=%llu shifted_runtime_fallback=%llu precache_accepted=%llu precache_unavailable=%llu payload_upload_attempts=%llu success=%llu failure=%llu bytes=%llu native_pack_pending=%llu prior_generation_decl_uses=%llu private_state_carries=%llu private_state_carry_rejected=%llu draw_token_hits=%llu draw_token_slow_paths=%llu draw_token_uncertified=%llu draw_token_shape_shader_mismatches=%llu draw_token_generation_mismatches=%llu draw_token_geometry_mismatches=%llu draw_token_native_pack_mismatches=%llu draw_token_layout_mismatches=%llu draw_token_first_certifications=%llu draw_token_recertifications=%llu draw_token_rejected=%llu",

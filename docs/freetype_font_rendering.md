@@ -1043,8 +1043,11 @@ If the scan captures no facade, the traversal returns directly to vanilla
 `RenderAlphaGeometry`: no readiness snapshot, metadata batch, ring preparation,
 singleton preparation, command frame, or shader/constant batch is opened.
 Otherwise the final bound/scissor proof runs first and a compact survivor list
-is the sole input to metadata acquisition. Culled entries retain only their
-shape identity and cull reason for dispatch-time validation. If every survivor
+is the sole input to metadata acquisition. Batch owners are retained densely in
+that survivor order and are attached to frame entries through their captured
+indices, so a successful cull creates no empty shared-owner slot or hash
+round-trip. Culled entries retain only their shape identity and cull reason for
+dispatch-time validation. If every survivor
 fails preparation, ring, singleton, command, and shader-batch setup are also
 skipped. Frames without a mixed exact-depth run perform no source-list traversal
 and allocate no tie-repair scratch. Candidate frames use an open-addressed
