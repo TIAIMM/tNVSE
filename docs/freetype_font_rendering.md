@@ -2065,6 +2065,13 @@ whose redundant initialization was skipped; `direct_vertex_fill_failures`
 counts range-count/fill divergences, which fail closed instead of exposing an
 unwritten vertex.
 
+The direct page compilers likewise initialize only the live atlas-page prefix
+of fixed 64-page count/readiness tables. Range offsets and cursors are assigned
+for every live layer/page pair before use, and scale/spread entries are written
+before their readiness flag is published. The same final contiguous cursor
+proof protects publication. `direct_range_init_bytes_avoided` reports the
+redundant fixed-capacity initialization bytes omitted by these paths.
+
 Generated distance fields and ARGB-fallback masks and their supporting CPU
 objects are cached in process memory. Equivalent masks are shared across font
 IDs when the resolved font file/face, glyph, effective raster size, emboldening, slant, stroke or SDF

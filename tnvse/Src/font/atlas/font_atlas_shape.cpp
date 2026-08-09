@@ -92,6 +92,40 @@ namespace fonthook::vectorfont
 			return usedPageCount;
 		}
 
+		template <class Value, size_t Capacity>
+		bool InitializeDirectPagePrefix(
+			std::array<Value, Capacity>& values, size_t availablePageCount,
+			const Value& value, UInt64& initializationBytesAvoided)
+		{
+			if (!availablePageCount || availablePageCount > Capacity)
+				return false;
+			std::fill_n(values.begin(), availablePageCount, value);
+			initializationBytesAvoided +=
+				(Capacity - availablePageCount) * sizeof(Value);
+			return true;
+		}
+
+		template <size_t RangeCount>
+		bool InitializeDirectQuadCountPrefix(
+			std::array<std::array<UInt32,
+				kMaximumAtlasSnapshotPages>, RangeCount>& counts,
+			size_t availablePageCount, UInt64& initializationBytesAvoided)
+		{
+			if (!availablePageCount
+				|| availablePageCount > kMaximumAtlasSnapshotPages)
+			{
+				return false;
+			}
+			for (auto& range : counts)
+			{
+				std::fill_n(range.begin(), availablePageCount, 0u);
+			}
+			initializationBytesAvoided += RangeCount
+				* (kMaximumAtlasSnapshotPages - availablePageCount)
+				* sizeof(UInt32);
+			return true;
+		}
+
 		template <size_t RangeCount>
 		bool DirectQuadRangesCompletelyWritten(
 			const std::array<std::array<UInt32,
@@ -1992,8 +2026,15 @@ namespace fonthook::vectorfont
 			return true;
 		};
 
+		UInt64 rangeInitializationBytesAvoided = 0;
 		std::array<std::array<UInt32,
-			kMaximumAtlasSnapshotPages>, 4> counts = {};
+			kMaximumAtlasSnapshotPages>, 4> counts;
+		if (!InitializeDirectQuadCountPrefix(counts,
+			sealed->atlases.size(), rangeInitializationBytesAvoided))
+		{
+			result.outcome = DirectAtlasShapeOutcome::Failed;
+			return result;
+		}
 		NiPoint3 origin;
 		bool originInitialized = false;
 		for (const DirectGlyphCommand& command : glyphs)
@@ -2041,9 +2082,12 @@ namespace fonthook::vectorfont
 		}
 
 		std::array<std::array<UInt32,
-			kMaximumAtlasSnapshotPages>, 4> offsets = {};
+			kMaximumAtlasSnapshotPages>, 4> offsets;
 		std::array<std::array<UInt32,
-			kMaximumAtlasSnapshotPages>, 4> cursors = {};
+			kMaximumAtlasSnapshotPages>, 4> cursors;
+		// Every live layer/page entry is assigned below before it can be read;
+		// the final cursor proof rejects any count/fill divergence.
+		rangeInitializationBytesAvoided += sizeof(offsets) + sizeof(cursors);
 		UInt32 quadCount = 0;
 		for (size_t layer = 0; layer < counts.size(); ++layer)
 		{
@@ -2156,6 +2200,9 @@ namespace fonthook::vectorfont
 			result.outcome = DirectAtlasShapeOutcome::Failed;
 			return result;
 		}
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::DirectShapeRangeInitializationBytesAvoided,
+			rangeInitializationBytesAvoided);
 		if (!colorContractInitialized)
 		{
 			result.outcome = DirectAtlasShapeOutcome::Failed;
@@ -2391,6 +2438,7 @@ namespace fonthook::vectorfont
 				return result;
 			}
 			if (atlases.empty()
+				|| atlases.size() > kMaximumAtlasSnapshotPages
 				|| batch.glyphs.size() != glyphs.size())
 			{
 				result.outcome = DirectAtlasShapeOutcome::Failed;
@@ -2409,10 +2457,18 @@ namespace fonthook::vectorfont
 				return result;
 			}
 
+			UInt64 rangeInitializationBytesAvoided = 0;
 			if (precomposed)
 			{
 				std::array<UInt32, kMaximumAtlasSnapshotPages>
-					pageGlyphCounts = {};
+					pageGlyphCounts;
+				if (!InitializeDirectPagePrefix(pageGlyphCounts,
+					atlases.size(), UInt32{ 0 },
+					rangeInitializationBytesAvoided))
+				{
+					result.outcome = DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
 				UInt32 usedPageCount = 0;
 				for (const DirectAtlasBatchGlyph& glyph : batch.glyphs)
 				{
@@ -2470,6 +2526,10 @@ namespace fonthook::vectorfont
 					result.pageCount = usedPageCount;
 					result.outcome =
 						DirectAtlasShapeOutcome::Created;
+					RecordFreeTypePerf(
+						FreeTypePerfCounter::
+							DirectShapeRangeInitializationBytesAvoided,
+						rangeInitializationBytesAvoided);
 					return result;
 				}
 			}
@@ -2541,7 +2601,13 @@ namespace fonthook::vectorfont
 			}
 
 			std::array<std::array<UInt32,
-				kMaximumAtlasSnapshotPages>, 2> counts = {};
+				kMaximumAtlasSnapshotPages>, 2> counts;
+			if (!InitializeDirectQuadCountPrefix(counts, atlases.size(),
+				rangeInitializationBytesAvoided))
+			{
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
 			for (const DirectAtlasBatchGlyph& glyph : batch.glyphs)
 			{
 				if (glyph.knownEmpty)
@@ -2558,9 +2624,11 @@ namespace fonthook::vectorfont
 				++counts[1][glyph.atlasPage];
 			}
 			std::array<std::array<UInt32,
-				kMaximumAtlasSnapshotPages>, 2> offsets = {};
+				kMaximumAtlasSnapshotPages>, 2> offsets;
 			std::array<std::array<UInt32,
-				kMaximumAtlasSnapshotPages>, 2> cursors = {};
+				kMaximumAtlasSnapshotPages>, 2> cursors;
+			// The live prefix is assigned in full by the range builder below.
+			rangeInitializationBytesAvoided += sizeof(offsets) + sizeof(cursors);
 			UInt32 physicalQuads = 0;
 			for (size_t kind = 0; kind < counts.size(); ++kind)
 			{
@@ -2599,11 +2667,29 @@ namespace fonthook::vectorfont
 			NiColorA facadeColor = tileColor;
 			bool facadeColorInitialized = false;
 			std::array<float, kMaximumAtlasSnapshotPages>
-				pageSourceScales = {};
+				pageSourceScales;
 			std::array<UInt8, kMaximumAtlasSnapshotPages>
-				pageSdfSpreads = {};
+				pageSdfSpreads;
 			std::array<bool, kMaximumAtlasSnapshotPages>
-				pageProfileReady = {};
+				pageProfileReady;
+			// Scale/spread are read only after the corresponding ready flag has
+			// been set. Precomposed batches never read any of these arrays.
+			rangeInitializationBytesAvoided +=
+				sizeof(pageSourceScales) + sizeof(pageSdfSpreads);
+			if (distanceField)
+			{
+				if (!InitializeDirectPagePrefix(pageProfileReady,
+					atlases.size(), false,
+					rangeInitializationBytesAvoided))
+				{
+					result.outcome = DirectAtlasShapeOutcome::Failed;
+					return result;
+				}
+			}
+			else
+			{
+				rangeInitializationBytesAvoided += sizeof(pageProfileReady);
+			}
 			std::vector<CompositeGlyphQuadSource> compositeSources;
 			if (distanceField)
 				compositeSources.reserve(result.glyphCount);
@@ -2727,6 +2813,10 @@ namespace fonthook::vectorfont
 				result.outcome = DirectAtlasShapeOutcome::Failed;
 				return result;
 			}
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::
+					DirectShapeRangeInitializationBytesAvoided,
+				rangeInitializationBytesAvoided);
 			if (!facadeColorInitialized || !colorContractInitialized)
 			{
 				result.outcome = DirectAtlasShapeOutcome::Failed;
