@@ -597,7 +597,19 @@ namespace fonthook::vectorfont
 				shaderProperty, shader);
 		}
 
-		bool IsFreeTypeFacade(const NiGeometry* geometry);
+		// The 52-byte compatibility/singleton facade participates in the native
+		// payload, ring and command paths.  The 40/48-byte Vanilla-layout shape is
+		// tracked only across the predecessor's final Sort so it can reuse the
+		// persistent visibility context and the witnessed shader-state scope.
+		enum class NativeSortedShapeKind : UInt8
+		{
+			None,
+			DirectFacade,
+			VanillaLayout
+		};
+		NativeSortedShapeKind ClassifyNativeSortedShape(
+			const NiGeometry* geometry);
+		bool IsDirectNativeFacade(const NiGeometry* geometry);
 
 		size_t LookupMetadataShapeIndex(const SortedPayloadScratch& scratch,
 			const NiTriShape* shape)
@@ -653,9 +665,9 @@ namespace fonthook::vectorfont
 				return result;
 			}
 
-			// CaptureSortedFacadeTopology has already identified these runs during
-			// its required facade scan. Revalidate only the candidate ranges before
-			// using them; do not classify the complete sorted array a second time.
+			// CaptureSortedTrackedShapeTopology has already identified these runs
+			// during its required sorted scan. Revalidate only the candidate ranges
+			// before using them; do not classify the complete sorted array twice.
 			scratch.tieRunIds.assign(itemCount, kInvalidNativeFontCommandIndex);
 			UInt32 previousEnd = 0;
 			for (size_t runIndex = 0;
@@ -674,20 +686,20 @@ namespace fonthook::vectorfont
 				{
 					return result;
 				}
-				bool hasFreeType = false;
-				bool hasVanilla = false;
+				bool hasDirectFacade = false;
+				bool hasForeignGeometry = false;
 				const UInt32 runId = static_cast<UInt32>(runIndex);
 				for (UInt32 item = run.begin; item < run.end; ++item)
 				{
 					if (accumulator.m_pfDepths[item] != depth)
 						return result;
-					const bool isFreeType =
-						IsFreeTypeFacade(accumulator.m_ppkItems[item]);
-					hasFreeType = hasFreeType || isFreeType;
-					hasVanilla = hasVanilla || !isFreeType;
+					const bool isDirectFacade =
+						IsDirectNativeFacade(accumulator.m_ppkItems[item]);
+					hasDirectFacade = hasDirectFacade || isDirectFacade;
+					hasForeignGeometry = hasForeignGeometry || !isDirectFacade;
 					scratch.tieRunIds[item] = runId;
 				}
-				if (!hasFreeType || !hasVanilla)
+				if (!hasDirectFacade || !hasForeignGeometry)
 					return result;
 				run.write = run.begin;
 				previousEnd = run.end;
@@ -823,7 +835,7 @@ namespace fonthook::vectorfont
 			return result;
 		}
 
-		bool CaptureSortedFacadeTopology(SortedPayloadScratch& scratch,
+		bool CaptureSortedTrackedShapeTopology(SortedPayloadScratch& scratch,
 			BSShaderAccumulator* accumulator, SInt64* topologyTicks)
 		{
 			const SInt64 topologyStart = BeginFreeTypePerfSample();
@@ -854,20 +866,26 @@ namespace fonthook::vectorfont
 			float activeRunDepth = trackEqualDepthRuns
 				? accumulator->m_pfDepths[0] : 0.0f;
 			size_t activeRunBegin = 0;
-			bool activeRunHasFreeType = false;
-			bool activeRunHasVanilla = false;
+			bool activeRunHasDirectFacade = false;
+			bool activeRunHasForeignGeometry = false;
 			bool mixedEqualDepthCandidate = false;
 			for (SInt32 itemIndex = 0;
 				itemIndex < accumulator->m_iNumItems; ++itemIndex)
 			{
 				NiGeometry* geometry = accumulator->m_ppkItems[itemIndex];
-				const bool isFreeType = IsFreeTypeFacade(geometry);
+				const NativeSortedShapeKind shapeKind =
+					ClassifyNativeSortedShape(geometry);
+				const bool isDirectFacade = shapeKind
+					== NativeSortedShapeKind::DirectFacade;
+				const bool isTrackedShape = shapeKind
+					!= NativeSortedShapeKind::None;
 				if (trackEqualDepthRuns)
 				{
 					const float depth = accumulator->m_pfDepths[itemIndex];
 					if (itemIndex && depth != activeRunDepth)
 					{
-						if (activeRunHasFreeType && activeRunHasVanilla)
+						if (activeRunHasDirectFacade
+							&& activeRunHasForeignGeometry)
 						{
 							scratch.tieRuns.push_back({
 								static_cast<UInt32>(activeRunBegin),
@@ -877,13 +895,15 @@ namespace fonthook::vectorfont
 						}
 						activeRunDepth = depth;
 						activeRunBegin = static_cast<size_t>(itemIndex);
-						activeRunHasFreeType = false;
-						activeRunHasVanilla = false;
+						activeRunHasDirectFacade = false;
+						activeRunHasForeignGeometry = false;
 					}
-					activeRunHasFreeType = activeRunHasFreeType || isFreeType;
-					activeRunHasVanilla = activeRunHasVanilla || !isFreeType;
+					activeRunHasDirectFacade =
+						activeRunHasDirectFacade || isDirectFacade;
+					activeRunHasForeignGeometry =
+						activeRunHasForeignGeometry || !isDirectFacade;
 				}
-				if (!isFreeType)
+				if (!isTrackedShape)
 					continue;
 
 				NiTriShape* facade = static_cast<NiTriShape*>(geometry);
@@ -924,7 +944,7 @@ namespace fonthook::vectorfont
 				}
 			}
 			if (trackEqualDepthRuns
-				&& activeRunHasFreeType && activeRunHasVanilla)
+				&& activeRunHasDirectFacade && activeRunHasForeignGeometry)
 			{
 				scratch.tieRuns.push_back({
 					static_cast<UInt32>(activeRunBegin),
@@ -1028,12 +1048,23 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		bool IsFreeTypeFacade(const NiGeometry* geometry)
+		NativeSortedShapeKind ClassifyNativeSortedShape(
+			const NiGeometry* geometry)
 		{
 			if (!geometry || !State().originalTriShapeVtable)
-				return false;
+				return NativeSortedShapeKind::None;
 			void* const* vtable = *reinterpret_cast<void* const* const*>(geometry);
-			return vtable == &State().triShapeVtable[1];
+			if (vtable == &State().triShapeVtable[1])
+				return NativeSortedShapeKind::DirectFacade;
+			if (vtable == &State().vanillaLayoutTriShapeVtable[1])
+				return NativeSortedShapeKind::VanillaLayout;
+			return NativeSortedShapeKind::None;
+		}
+
+		bool IsDirectNativeFacade(const NiGeometry* geometry)
+		{
+			return ClassifyNativeSortedShape(geometry)
+				== NativeSortedShapeKind::DirectFacade;
 		}
 
 		void ClearNativePacketFailure(NativeFontShapePayload& payload)
@@ -1308,7 +1339,7 @@ namespace fonthook::vectorfont
 			if (!original || !accumulator || !geometry
 				|| accumulator->eRenderMode
 					!= BSShaderManager::BSSM_RENDER_TILES
-				|| !IsFreeTypeFacade(geometry))
+				|| !IsDirectNativeFacade(geometry))
 			{
 				return ForwardTileRegisterObject(original, accumulator, geometry,
 					properties, shaderProperty, shader);
@@ -1428,13 +1459,13 @@ namespace fonthook::vectorfont
 						&prepTailSample.resetTicks);
 					ResetSortedPrepScratch(scratch);
 				}
-				CaptureSortedFacadeTopology(scratch, accumulator,
+				CaptureSortedTrackedShapeTopology(scratch, accumulator,
 					&prepTailSample.topologyTicks);
 				if (scratch.metadataShapes.empty())
 				{
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::AccumulatorEmptyFastPath);
-					// The predecessor Sort contains no captured native facade.  This is
+					// The predecessor Sort contains no tracked native shape. This is
 					// either an entirely vanilla traversal or a fail-open topology scan;
 					// in both cases the ordinary dispatch path remains authoritative.
 					// Do not build a readiness stamp or command frame.
@@ -1451,7 +1482,7 @@ namespace fonthook::vectorfont
 					return;
 				}
 
-				// Visibility is now the first post-Sort preflight.  The facade owns
+				// Visibility is now the first post-Sort preflight. The tracked shape owns
 				// the final model bound and Tile/scissor state, so a proven cull does
 				// not need a metadata owner, packet artifact, or renderer-ring slot.
 				{
@@ -1575,6 +1606,7 @@ namespace fonthook::vectorfont
 					}
 				}
 
+				bool hasVanillaLayoutSurvivors = false;
 				{
 					FreeTypePerfScope facadeLoopPrepPerf(
 						FreeTypePerfPhase::FramePrepFacadeLoop, true,
@@ -1602,6 +1634,9 @@ namespace fonthook::vectorfont
 					entry.generation = generation;
 					SingletonFacadeState* singletonFacade =
 						nullptr;
+					const bool isVanillaLayout = entry.metadata
+						&& entry.metadata->backend
+							== FreeTypeShapeBackend::VanillaLayout;
 					bool topologyReady = false;
 					if (!entry.metadata
 						&& entry.visibility.cull == NativeFontVisibilityCull::None)
@@ -1635,6 +1670,24 @@ namespace fonthook::vectorfont
 						// Dispatch revalidates the volatile cull inputs.  A revoked proof
 						// falls back to a one-shape metadata lookup instead of making every
 						// proven-offscreen facade pay the batch acquisition cost.
+					}
+					else if (isVanillaLayout)
+					{
+						// Vanilla-layout owns an engine-prepared 40/48-byte buffer. Keep its
+						// metadata and exact post-Sort visibility proof alive, but never
+						// publish that payload to the 52-byte facade ring/command path.
+						if (entry.metadata->nativePayload.buildComplete)
+						{
+							entry.preflightResult =
+								NativeFontFallbackReason::None;
+							entry.validationToken = frameValidationToken;
+							hasVanillaLayoutSurvivors = true;
+						}
+						else
+						{
+							entry.preflightResult =
+								NativeFontFallbackReason::PacketBuild;
+						}
 					}
 					else if (entry.metadata
 						&& entry.metadata->nativePayload.buildComplete)
@@ -1701,6 +1754,11 @@ namespace fonthook::vectorfont
 					facadePrepStart);
 				const bool hasPreparedPayloads =
 					!scratch.payloadTemplates.empty();
+				// Vanilla-layout participates only in the outer shader-state scope.
+				// The direct-facade payload gate remains authoritative for ring,
+				// command-buffer, constant-ownership and native replay work.
+				const bool hasSortedShaderParticipants =
+					hasPreparedPayloads || hasVanillaLayoutSurvivors;
 				if (!hasPreparedPayloads)
 				{
 					RecordFreeTypePerf(
@@ -1850,9 +1908,10 @@ namespace fonthook::vectorfont
 						FreeTypePerfPhase::FramePrepPublish, true,
 						&prepTailSample.publishTicks);
 					RefreshSortedScratchMemory(scratch);
+					if (hasSortedShaderParticipants)
+						BeginNativeFontSortedShaderBatch();
 					if (hasPreparedPayloads)
 					{
-						BeginNativeFontSortedShaderBatch();
 						BeginNativeFontSortedTileConstantOwnership();
 					}
 					scratch.activeValidationToken = frameValidationToken;
@@ -1884,6 +1943,9 @@ namespace fonthook::vectorfont
 				if (hasPreparedPayloads)
 				{
 					EndNativeFontSortedTileConstantOwnership();
+				}
+				if (hasSortedShaderParticipants)
+				{
 					EndNativeFontSortedShaderBatch();
 				}
 				EndNativeFontFrameCommandBuffer();
