@@ -97,11 +97,96 @@ namespace fonthook::vectorfont
 					> std::numeric_limits<UInt32>::max()
 				|| payload.pageCount != payload.atlasProperties.size()
 				|| payload.pageCount != payload.atlasTextures.size()
-				|| !HasFiniteRegistrationBound(payload.bound)
-				|| !std::all_of(payload.gpuVertices.begin(),
-					payload.gpuVertices.end(), HasValidRegistrationVertex))
+				|| !HasFiniteRegistrationBound(payload.bound))
 			{
 				return false;
+			}
+
+			// Build the optional retail-layout witness inside the mandatory vertex
+			// validation below.  A valid artifact therefore pays no second scan at
+			// shape creation, while every non-layout artifact keeps the same seal.
+			const NativeFontPacketTemplate* vanillaLayoutPacket = nullptr;
+			bool vanillaLayoutUniformSpread = false;
+			bool vanillaLayoutUniformDistanceScale = false;
+			if (payload.pageCount == 1
+				&& payload.compositePackets.size() == 1)
+			{
+				const NativeFontPacketTemplate& candidate =
+					payload.compositePackets.front();
+				const bool supportedDistanceField =
+					candidate.distanceFieldMethod
+						== DistanceFieldMethod::TrueSdf
+					|| candidate.distanceFieldMethod
+						== DistanceFieldMethod::Mtsdf;
+				const UInt64 vertexEnd =
+					static_cast<UInt64>(candidate.firstVertex)
+					+ candidate.vertexCount;
+				if (candidate.shaderClass
+						== NativeFontShaderClass::Composite
+					&& supportedDistanceField
+					&& candidate.atlasPage == 0
+					&& candidate.vertexCount
+					&& !(candidate.firstVertex & 3u)
+					&& !(candidate.vertexCount & 3u)
+					&& vertexEnd <= payload.gpuVertices.size()
+					&& candidate.staticCompositeLayerMask >= 8u
+					&& candidate.staticCompositeLayerMask <= 15u
+					&& std::isfinite(candidate.uniformSdfSpread)
+					&& candidate.uniformSdfSpread >= 0.0f
+					&& std::isfinite(
+						candidate.uniformDistanceParameterScale)
+					&& candidate.uniformDistanceParameterScale >= 0.0f
+					&& (candidate.uniformDistanceParameterScale == 0.0f
+						|| candidate.uniformDistanceParameterScale >= 1.0f))
+				{
+					vanillaLayoutPacket = &candidate;
+					vanillaLayoutUniformSpread =
+						candidate.uniformSdfSpread > 0.0f;
+					vanillaLayoutUniformDistanceScale =
+						candidate.uniformDistanceParameterScale >= 1.0f;
+				}
+			}
+
+			bool vanillaLayoutVerticesValid = vanillaLayoutPacket != nullptr;
+			const size_t vanillaLayoutFirstVertex = vanillaLayoutPacket
+				? vanillaLayoutPacket->firstVertex : 0;
+			const size_t vanillaLayoutVertexEnd = vanillaLayoutPacket
+				? vanillaLayoutFirstVertex + vanillaLayoutPacket->vertexCount : 0;
+			for (size_t index = 0; index < payload.gpuVertices.size(); ++index)
+			{
+				const NativeFontGpuVertex& vertex = payload.gpuVertices[index];
+				if (!HasValidRegistrationVertex(vertex))
+					return false;
+				if (!vanillaLayoutVerticesValid
+					|| index < vanillaLayoutFirstVertex
+					|| index >= vanillaLayoutVertexEnd)
+				{
+					continue;
+				}
+
+				const size_t relative = index - vanillaLayoutFirstVertex;
+				const NativeFontGpuVertex& quadFirst = payload.gpuVertices[
+					vanillaLayoutFirstVertex + (relative & ~size_t(3u))];
+				if (vertex.sdfSpread <= 0.0f
+					|| (vanillaLayoutUniformSpread
+						&& vertex.sdfSpread
+							!= vanillaLayoutPacket->uniformSdfSpread)
+					|| (vanillaLayoutUniformDistanceScale
+						&& vertex.distanceParameterScale
+							!= vanillaLayoutPacket->
+								uniformDistanceParameterScale)
+					|| vertex.layerMask != static_cast<float>(
+						vanillaLayoutPacket->staticCompositeLayerMask)
+					|| vertex.sdfSpread != quadFirst.sdfSpread
+					|| vertex.distanceParameterScale
+						!= quadFirst.distanceParameterScale
+					|| vertex.glyphU0 != quadFirst.glyphU0
+					|| vertex.glyphV0 != quadFirst.glyphV0
+					|| vertex.glyphU1 != quadFirst.glyphU1
+					|| vertex.glyphV1 != quadFirst.glyphV1)
+				{
+					vanillaLayoutVerticesValid = false;
+				}
 			}
 
 			auto validatePackets = [&](const std::vector<NativeFontPacketTemplate>& packets,
@@ -156,6 +241,13 @@ namespace fonthook::vectorfont
 				payload.compositePackets.size());
 			seal.vanillaLikeBitmapPackets =
 				UsesOnlyVanillaLikeBitmapPackets(payload.packets);
+			if (vanillaLayoutVerticesValid)
+			{
+				seal.vanillaLayoutKind = vanillaLayoutUniformSpread
+					&& vanillaLayoutUniformDistanceScale
+					? NativeFontVanillaLayoutKind::Uniform40
+					: NativeFontVanillaLayoutKind::Parametric48;
+			}
 			payload.validationSeal = seal;
 			return true;
 		}

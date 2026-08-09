@@ -447,7 +447,7 @@ namespace fonthook::vectorfont
 	// Tile does not rescan every glyph vertex and packet.
 	struct NativeFontPayloadValidationSeal
 	{
-		static constexpr UInt32 kAbi = 1;
+		static constexpr UInt32 kAbi = 2;
 
 		UInt32 abi = 0;
 		UInt32 pageCount = 0;
@@ -457,6 +457,8 @@ namespace fonthook::vectorfont
 		UInt32 packetCount = 0;
 		UInt32 compositePacketCount = 0;
 		bool vanillaLikeBitmapPackets = false;
+		NativeFontVanillaLayoutKind vanillaLayoutKind =
+			NativeFontVanillaLayoutKind::None;
 	};
 
 	struct NativeFontPayloadTemplate
@@ -487,7 +489,12 @@ namespace fonthook::vectorfont
 	{
 		const NativeFontPayloadValidationSeal& seal =
 			payloadTemplate.validationSeal;
+		const bool validVanillaLayoutKind =
+			static_cast<UInt8>(seal.vanillaLayoutKind)
+				<= static_cast<UInt8>(
+					NativeFontVanillaLayoutKind::Parametric48);
 		return seal.abi == NativeFontPayloadValidationSeal::kAbi
+			&& validVanillaLayoutKind
 			&& seal.pageCount != 0
 			&& seal.pageCount == payloadTemplate.pageCount
 			&& seal.quadCount != 0
@@ -498,7 +505,10 @@ namespace fonthook::vectorfont
 			&& seal.packetCount != 0
 			&& seal.packetCount == payloadTemplate.packets.size()
 			&& seal.compositePacketCount
-				== payloadTemplate.compositePackets.size();
+				== payloadTemplate.compositePackets.size()
+			&& (!UsesNativeFontVanillaLayout(seal.vanillaLayoutKind)
+				|| (seal.pageCount == 1
+					&& seal.compositePacketCount == 1));
 	}
 
 	// The Standard-lite call program is resolved once for a live Tile and shader

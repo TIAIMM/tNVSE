@@ -1776,7 +1776,7 @@ namespace fonthook::vectorfont
 				SortedFrameFacadeHashLookup),
 			counterValue(FreeTypePerfCounter::AccumulatorNoPreparedPayload));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_vanilla_layout: eligible=%llu created=%llu create_fallback=%llu draws=%llu culls=%llu runtime_fallback=%llu vertices=%llu shifted_eligible=%llu shifted_created=%llu shifted_draws=%llu shifted_runtime_fallback=%llu precache_accepted=%llu precache_unavailable=%llu payload_upload_attempts=%llu success=%llu failure=%llu bytes=%llu native_pack_pending=%llu prior_generation_decl_uses=%llu private_state_carries=%llu private_state_carry_rejected=%llu draw_token_hits=%llu draw_token_slow_paths=%llu draw_token_uncertified=%llu draw_token_shape_shader_mismatches=%llu draw_token_generation_mismatches=%llu draw_token_geometry_mismatches=%llu draw_token_native_pack_mismatches=%llu draw_token_layout_mismatches=%llu draw_token_first_certifications=%llu draw_token_recertifications=%llu draw_token_rejected=%llu",
+			"tnvse_freetype_vanilla_layout: eligible=%llu created=%llu create_fallback=%llu draws=%llu culls=%llu runtime_fallback=%llu vertices=%llu certified_vertex_scans_avoided=%llu shifted_eligible=%llu shifted_created=%llu shifted_draws=%llu shifted_runtime_fallback=%llu precache_accepted=%llu precache_unavailable=%llu payload_upload_attempts=%llu success=%llu failure=%llu bytes=%llu native_pack_pending=%llu prior_generation_decl_uses=%llu private_state_carries=%llu private_state_carry_rejected=%llu draw_token_hits=%llu draw_token_slow_paths=%llu draw_token_uncertified=%llu draw_token_shape_shader_mismatches=%llu draw_token_generation_mismatches=%llu draw_token_geometry_mismatches=%llu draw_token_native_pack_mismatches=%llu draw_token_layout_mismatches=%llu draw_token_first_certifications=%llu draw_token_recertifications=%llu draw_token_rejected=%llu",
 			counterValue(FreeTypePerfCounter::VanillaLayoutEligible),
 			counterValue(FreeTypePerfCounter::VanillaLayoutCreated),
 			counterValue(FreeTypePerfCounter::VanillaLayoutFallback),
@@ -1784,6 +1784,8 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::VanillaLayoutCull),
 			counterValue(FreeTypePerfCounter::VanillaLayoutRuntimeFallback),
 			counterValue(FreeTypePerfCounter::VanillaLayoutVertex),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutCertifiedVertexScanAvoided),
 			counterValue(FreeTypePerfCounter::VanillaLayoutShiftedEligible),
 			counterValue(FreeTypePerfCounter::VanillaLayoutShiftedCreated),
 			counterValue(FreeTypePerfCounter::VanillaLayoutShiftedDraw),

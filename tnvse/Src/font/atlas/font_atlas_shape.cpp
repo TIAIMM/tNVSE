@@ -1524,86 +1524,23 @@ namespace fonthook::vectorfont
 		{
 			packet = nullptr;
 			layoutKind = NativeFontVanillaLayoutKind::None;
-			if (payload.pageCount != 1 || payload.compositePackets.size() != 1
-				|| payload.gpuVertices.empty())
+			if (!HasNativeFontPayloadValidationSeal(payload)
+				|| !UsesNativeFontVanillaLayout(
+					payload.validationSeal.vanillaLayoutKind)
+				|| payload.compositePackets.size() != 1)
 			{
 				return false;
 			}
 			const NativeFontPacketTemplate& candidate =
 				payload.compositePackets.front();
-			const bool supportedDistanceField =
-				candidate.distanceFieldMethod == DistanceFieldMethod::TrueSdf
-				|| candidate.distanceFieldMethod == DistanceFieldMethod::Mtsdf;
-			const UInt64 packetEnd = static_cast<UInt64>(
-				candidate.firstVertex) + candidate.vertexCount;
-			if (candidate.shaderClass != NativeFontShaderClass::Composite
-				|| !supportedDistanceField
-				|| candidate.atlasPage != 0 || !candidate.vertexCount
-				|| (candidate.firstVertex & 3u)
-				|| (candidate.vertexCount & 3u)
-				|| packetEnd > payload.gpuVertices.size()
-				|| candidate.staticCompositeLayerMask < 8u
-				|| candidate.staticCompositeLayerMask > 15u
-				|| !std::isfinite(candidate.uniformSdfSpread)
-				|| candidate.uniformSdfSpread < 0.0f
-				|| !std::isfinite(
-					candidate.uniformDistanceParameterScale)
-				|| candidate.uniformDistanceParameterScale < 0.0f
-				|| (candidate.uniformDistanceParameterScale > 0.0f
-					&& candidate.uniformDistanceParameterScale < 1.0f))
-			{
-				return false;
-			}
-			const bool uniformSpread = candidate.uniformSdfSpread > 0.0f;
-			const bool uniformDistanceScale =
-				candidate.uniformDistanceParameterScale >= 1.0f;
-			const float layerMask = static_cast<float>(
-				candidate.staticCompositeLayerMask);
-			for (UInt32 relative = 0; relative < candidate.vertexCount;
-				++relative)
-			{
-				const size_t index = static_cast<size_t>(candidate.firstVertex)
-					+ relative;
-				const NativeFontGpuVertex& vertex = payload.gpuVertices[index];
-				if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y)
-					|| !std::isfinite(vertex.z) || !std::isfinite(vertex.u)
-					|| !std::isfinite(vertex.v)
-					|| !std::isfinite(vertex.sdfSpread)
-					|| vertex.sdfSpread <= 0.0f
-					|| !std::isfinite(vertex.distanceParameterScale)
-					|| vertex.distanceParameterScale < 1.0f
-					|| (uniformSpread
-						&& vertex.sdfSpread != candidate.uniformSdfSpread)
-					|| (uniformDistanceScale
-						&& vertex.distanceParameterScale
-							!= candidate.uniformDistanceParameterScale)
-					|| vertex.layerMask != layerMask
-					|| !std::isfinite(vertex.glyphU0)
-					|| !std::isfinite(vertex.glyphV0)
-					|| !std::isfinite(vertex.glyphU1)
-					|| !std::isfinite(vertex.glyphV1)
-					|| vertex.glyphU0 > vertex.glyphU1
-					|| vertex.glyphV0 > vertex.glyphV1)
-				{
-					return false;
-				}
-				const NativeFontGpuVertex& quadFirst =
-					payload.gpuVertices[static_cast<size_t>(
-						candidate.firstVertex) + (relative & ~UInt32(3u))];
-				if (vertex.sdfSpread != quadFirst.sdfSpread
-					|| vertex.distanceParameterScale
-						!= quadFirst.distanceParameterScale
-					|| vertex.glyphU0 != quadFirst.glyphU0
-					|| vertex.glyphV0 != quadFirst.glyphV0
-					|| vertex.glyphU1 != quadFirst.glyphU1
-					|| vertex.glyphV1 != quadFirst.glyphV1)
-				{
-					return false;
-				}
-			}
-			layoutKind = uniformSpread && uniformDistanceScale
-				? NativeFontVanillaLayoutKind::Uniform40
-				: NativeFontVanillaLayoutKind::Parametric48;
+			// BuildNativeFontPayloadTemplate is the sole publisher and records this
+			// immutable witness while validating the same vertices.  Count the full
+			// eligibility traversal that no longer runs here.
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::
+					VanillaLayoutCertifiedVertexScanAvoided,
+				candidate.vertexCount);
+			layoutKind = payload.validationSeal.vanillaLayoutKind;
 			packet = &candidate;
 			return true;
 		}

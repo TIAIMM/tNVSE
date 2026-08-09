@@ -2039,6 +2039,17 @@ requiring manual cache deletion. CPU coverage and distance-field manifests
 cannot alias, and final CPU-route selection removes normal distance-field cache
 files instead of retaining a provisional native/fallback mixture.
 
+Artifact publication also seals the exact Vanilla-layout eligibility witness
+while the mandatory construction validation is already visiting every native
+vertex. The seal records whether the single Composite packet supports the
+uniform 40-byte or parametric 48-byte retail layout, including packet bounds,
+distance parameters, layer mask, and per-glyph UV-bound agreement. Shape
+creation therefore consumes this immutable witness in constant time instead of
+rescanning every artifact vertex before copying it into the final retail
+geometry. A missing, stale, or structurally inconsistent seal remains
+ineligible and follows the existing fallback. The periodic Vanilla-layout line
+reports the removed traversal as `certified_vertex_scans_avoided`.
+
 Runtime cache-key work is amortized at the point where the corresponding
 identity becomes immutable:
 
