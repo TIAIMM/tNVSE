@@ -1139,7 +1139,13 @@ primitive clipping, and scaled-scissor mode. Combined with the complete live
 key, this also lets an exact hit reuse its certified route before repeating
 scissor-within-viewport and finite-bound derivation;
 `cache_route_validations_elided` reports the same exact-hit population. There
-is no late-visibility phase line.
+is no late-visibility phase line. Exact-cache misses that use a Tile scissor
+retain a separate 16-entry exact-`RECT` to NDC cache. Its last successful slot
+is checked first because adjacent sorted UI text commonly shares one scissor;
+`rect_hot_hits`, `rect_set_hits`, and `rect_builds` distinguish the one-probe
+path, a later set hit, and a conversion respectively. These are accumulated in
+the frame context and published only after preflight, rather than atomically
+updated per shape.
 The thin registration route performs no visibility work.
 The `tnvse_freetype_accumulator_prep` line separately reports empty-facade fast
 returns, metadata acquisitions avoided by proven culls, and traversals with no

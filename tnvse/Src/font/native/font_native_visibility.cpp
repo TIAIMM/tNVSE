@@ -98,8 +98,12 @@ namespace fonthook::vectorfont
 			std::array<ClipRectNdcCacheEntry,
 				kClipRectNdcCacheEntries> rectNdcCache;
 			size_t rectNdcReplacement = 0;
+			size_t rectNdcHotIndex = kClipRectNdcCacheEntries;
 			UInt64 frameToken = 0;
 			UInt64 cameraEpoch = 0;
+			UInt64 rectNdcHotHits = 0;
+			UInt64 rectNdcSetHits = 0;
+			UInt64 rectNdcBuilds = 0;
 			UInt64 sortedTilePropertyLookupsElided = 0;
 			UInt64 sortedAlphaPropertyLookupsElided = 0;
 			double inverseWidth = 0.0;
@@ -814,25 +818,43 @@ namespace fonthook::vectorfont
 				bounds = context.viewportNdc;
 				return true;
 			}
-			for (const ClipRectNdcCacheEntry& candidate
-				: context.rectNdcCache)
+			if (context.rectNdcHotIndex < context.rectNdcCache.size())
 			{
+				const ClipRectNdcCacheEntry& candidate =
+					context.rectNdcCache[context.rectNdcHotIndex];
 				if (candidate.valid && SameRect(candidate.rect, rect))
 				{
+					++context.rectNdcHotHits;
 					bounds = candidate.bounds;
 					return true;
 				}
 			}
+			for (size_t index = 0; index < context.rectNdcCache.size(); ++index)
+			{
+				if (index == context.rectNdcHotIndex)
+					continue;
+				const ClipRectNdcCacheEntry& candidate =
+					context.rectNdcCache[index];
+				if (!candidate.valid || !SameRect(candidate.rect, rect))
+					continue;
+				context.rectNdcHotIndex = index;
+				++context.rectNdcSetHits;
+				bounds = candidate.bounds;
+				return true;
+			}
 			ClipNdcBounds built;
 			if (!BuildClipNdcBounds(context, rect, built))
 				return false;
-			ClipRectNdcCacheEntry& target = context.rectNdcCache[
-				context.rectNdcReplacement];
+			const size_t targetIndex = context.rectNdcReplacement;
+			ClipRectNdcCacheEntry& target =
+				context.rectNdcCache[targetIndex];
 			context.rectNdcReplacement = (context.rectNdcReplacement + 1u)
 				% kClipRectNdcCacheEntries;
 			target.rect = rect;
 			target.bounds = built;
 			target.valid = true;
+			context.rectNdcHotIndex = targetIndex;
+			++context.rectNdcBuilds;
 			bounds = built;
 			return true;
 		}
@@ -1272,6 +1294,15 @@ namespace fonthook::vectorfont
 	void CompleteNativeFontVisibilityPreflight()
 	{
 		RecordFreeTypePerf(FreeTypePerfCounter::
+			VisibilityPreflightClipRectHotHit,
+			s_clipFrameContext.rectNdcHotHits);
+		RecordFreeTypePerf(FreeTypePerfCounter::
+			VisibilityPreflightClipRectSetHit,
+			s_clipFrameContext.rectNdcSetHits);
+		RecordFreeTypePerf(FreeTypePerfCounter::
+			VisibilityPreflightClipRectBuild,
+			s_clipFrameContext.rectNdcBuilds);
+		RecordFreeTypePerf(FreeTypePerfCounter::
 			VisibilitySortedTilePropertyLookupElided,
 			s_clipFrameContext.sortedTilePropertyLookupsElided);
 		RecordFreeTypePerf(FreeTypePerfCounter::
@@ -1286,6 +1317,10 @@ namespace fonthook::vectorfont
 		s_clipFrameContext.valid = false;
 		s_clipFrameContext.frameToken = 0;
 		s_clipFrameContext.preflightOpen = false;
+		s_clipFrameContext.rectNdcHotIndex = kClipRectNdcCacheEntries;
+		s_clipFrameContext.rectNdcHotHits = 0;
+		s_clipFrameContext.rectNdcSetHits = 0;
+		s_clipFrameContext.rectNdcBuilds = 0;
 		s_clipFrameContext.sortedTilePropertyLookupsElided = 0;
 		s_clipFrameContext.sortedAlphaPropertyLookupsElided = 0;
 	}
