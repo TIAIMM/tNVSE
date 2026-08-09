@@ -143,6 +143,8 @@ namespace fonthook::vectorfont
 		TextArtifactEviction,
 		TextArtifactCompiledVertex,
 		TextArtifactVertexInitializationBytesAvoided,
+		DirectShapeVertexInitializationBytesAvoided,
+		DirectShapeVertexCoverageFailure,
 		TextArtifactCompositeProfileVertex,
 		TextArtifactCompositeProfileVertexScanSaved,
 		ShaderEffectBatch,

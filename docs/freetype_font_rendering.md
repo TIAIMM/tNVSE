@@ -2054,6 +2054,17 @@ identity becomes immutable:
   value supplies the glyph cache ID, persistent-cache identity, batch
   deduplication, and the folded in-memory unordered-map hash.
 
+Direct page compilers also allocate their final random-access vertex array
+without first clearing the 52-byte payload of every vertex. Both layer/page
+compilers count and prefix their output ranges before allocation, completely
+overwrite all 13 fields of each emitted vertex, and then require every cursor
+to equal its exact contiguous range end before the array can be published.
+The legacy ARGB page compiler similarly reads its four-vertex local only after
+the full writer succeeds. `direct_vertex_init_bytes_avoided` reports the bytes
+whose redundant initialization was skipped; `direct_vertex_fill_failures`
+counts range-count/fill divergences, which fail closed instead of exposing an
+unwritten vertex.
+
 Generated distance fields and ARGB-fallback masks and their supporting CPU
 objects are cached in process memory. Equivalent masks are shared across font
 IDs when the resolved font file/face, glyph, effective raster size, emboldening, slant, stroke or SDF

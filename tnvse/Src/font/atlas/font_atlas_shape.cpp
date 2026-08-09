@@ -92,6 +92,39 @@ namespace fonthook::vectorfont
 			return usedPageCount;
 		}
 
+		template <size_t RangeCount>
+		bool DirectQuadRangesCompletelyWritten(
+			const std::array<std::array<UInt32,
+				kMaximumAtlasSnapshotPages>, RangeCount>& counts,
+			const std::array<std::array<UInt32,
+				kMaximumAtlasSnapshotPages>, RangeCount>& offsets,
+			const std::array<std::array<UInt32,
+				kMaximumAtlasSnapshotPages>, RangeCount>& cursors,
+			size_t availablePageCount, UInt32 expectedQuadCount)
+		{
+			const size_t pageLimit = std::min(
+				availablePageCount,
+				static_cast<size_t>(kMaximumAtlasSnapshotPages));
+			// Count builders reject every page outside this live prefix before
+			// incrementing; proving the prefix avoids scanning 64 empty slots.
+			UInt64 contiguousEnd = 0;
+			for (size_t range = 0; range < RangeCount; ++range)
+			{
+				for (size_t page = 0; page < pageLimit; ++page)
+				{
+					if (offsets[range][page] != contiguousEnd)
+						return false;
+					contiguousEnd += counts[range][page];
+					if (contiguousEnd > expectedQuadCount
+						|| cursors[range][page] != contiguousEnd)
+					{
+						return false;
+					}
+				}
+			}
+			return contiguousEnd == expectedQuadCount;
+		}
+
 		float ResolveModifierChannel(float source, float tile)
 		{
 			if (!std::isfinite(source) || !std::isfinite(tile))
@@ -2037,6 +2070,9 @@ namespace fonthook::vectorfont
 
 		std::vector<NativeFontGpuVertex> vertices(
 			static_cast<size_t>(quadCount) * 4u);
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::DirectShapeVertexInitializationBytesAvoided,
+			vertices.size() * sizeof(NativeFontGpuVertex));
 		NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
 			std::numeric_limits<float>::max(),
 			std::numeric_limits<float>::max());
@@ -2111,6 +2147,14 @@ namespace fonthook::vectorfont
 					return result;
 				}
 			}
+		}
+		if (!DirectQuadRangesCompletelyWritten(
+			counts, offsets, cursors, sealed->atlases.size(), quadCount))
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::DirectShapeVertexCoverageFailure);
+			result.outcome = DirectAtlasShapeOutcome::Failed;
+			return result;
 		}
 		if (!colorContractInitialized)
 		{
@@ -2285,6 +2329,11 @@ namespace fonthook::vectorfont
 			}
 			if (outputQuad != drawableGlyphs)
 				return nullptr;
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::
+					DirectShapeVertexInitializationBytesAvoided,
+				static_cast<UInt64>(outputQuad) * 4u
+					* sizeof(NativeFontGpuVertex));
 			NiBound bound;
 			if (!BuildDirectVertexBound(
 				static_cast<size_t>(outputQuad) * 4u,
@@ -2533,6 +2582,10 @@ namespace fonthook::vectorfont
 
 			std::vector<NativeFontGpuVertex> vertices(
 				static_cast<size_t>(physicalQuads) * 4u);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::
+					DirectShapeVertexInitializationBytesAvoided,
+				vertices.size() * sizeof(NativeFontGpuVertex));
 			const NiPoint3 origin =
 				GetDirectGlyphPen(glyphs[firstDrawable]);
 			NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
@@ -2665,6 +2718,14 @@ namespace fonthook::vectorfont
 								: 0u))
 					});
 				}
+			}
+			if (!DirectQuadRangesCompletelyWritten(
+				counts, offsets, cursors, atlases.size(), physicalQuads))
+			{
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::DirectShapeVertexCoverageFailure);
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
 			}
 			if (!facadeColorInitialized || !colorContractInitialized)
 			{

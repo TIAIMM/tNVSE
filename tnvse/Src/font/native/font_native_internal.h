@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -230,37 +231,61 @@ namespace fonthook::vectorfont
 
 	struct NativeFontGpuVertex
 	{
-		float x = 0.0f;
-		float y = 0.0f;
-		float z = 0.0f;
-		float u = 0.0f;
-		float v = 0.0f;
+		// Direct compilers allocate their complete random-access output before
+		// filling page/layer ranges. Default construction therefore deliberately
+		// leaves this payload untouched; publication is allowed only after the
+		// compiler proves that every allocated quad range was written completely.
+		// Other call sites must use the full-value constructor or copy an already
+		// initialized vertex.
+		NativeFontGpuVertex() noexcept {}
+
+		NativeFontGpuVertex(float xValue, float yValue, float zValue,
+			float uValue, float vValue, UInt32 colorValue,
+			float sdfSpreadValue, float distanceParameterScaleValue,
+			float layerMaskValue, float glyphU0Value, float glyphV0Value,
+			float glyphU1Value, float glyphV1Value) noexcept
+			: x(xValue), y(yValue), z(zValue), u(uValue), v(vValue),
+			  color(colorValue), sdfSpread(sdfSpreadValue),
+			  distanceParameterScale(distanceParameterScaleValue),
+			  layerMask(layerMaskValue), glyphU0(glyphU0Value),
+			  glyphV0(glyphV0Value), glyphU1(glyphU1Value),
+			  glyphV1(glyphV1Value)
+		{
+		}
+
+		float x;
+		float y;
+		float z;
+		float u;
+		float v;
 		// D3DDECLTYPE_D3DCOLOR expands this packed ARGB value to the shader's
 		// normalized float4 COLOR0 input. Distance-field profiles retain their
 		// per-packet layer color in c1; baked coverage instead places the complete
 		// base/layer modifier here so different effects can share one packet.
-		UInt32 color = 0xFFFFFFFFu;
+		UInt32 color;
 		// Per-glyph distance-field data must not participate in packet identity.
 		// Shared MTSDF double-byte atlases can mix source sizes in one text run;
 		// carrying these values in TEXCOORD1 keeps those glyphs in the same
 		// layer/page packet without changing their reconstruction parameters.
-		float sdfSpread = 0.0f;
-		float distanceParameterScale = 1.0f;
+		float sdfSpread;
+		float distanceParameterScale;
 		// Exact integer mask (bits 0..3: Shadow/Glow/Outline/Fill) for distance
 		// fields. Baked A8 coverage profiles instead store their per-quad live
 		// Tile RGB selector here (0=fixed RGB, 1=live Tile RGB).
-		float layerMask = 8.0f;
+		float layerMask;
 		// Exact physical glyph rectangle. The composite quad can extrapolate its
 		// UVs to cover an offset shadow; the pixel shader bounds every sample to
 		// this rectangle so atlas neighbours never bleed into that union.
 		// Use an ordinary FLOAT4 declaration for compatibility with native D3D9
 		// drivers and wrappers that reject the optional USHORT4N declaration
 		// type. The HLSL input remains an exact normalized atlas rectangle.
-		float glyphU0 = 0.0f;
-		float glyphV0 = 0.0f;
-		float glyphU1 = 0.0f;
-		float glyphV1 = 0.0f;
+		float glyphU0;
+		float glyphV0;
+		float glyphU1;
+		float glyphV1;
 	};
+	static_assert(std::is_standard_layout_v<NativeFontGpuVertex>);
+	static_assert(std::is_trivially_copyable_v<NativeFontGpuVertex>);
 	static_assert(offsetof(NativeFontGpuVertex, u) == 3 * sizeof(float));
 	static_assert(offsetof(NativeFontGpuVertex, color) == 5 * sizeof(float));
 	static_assert(offsetof(NativeFontGpuVertex, sdfSpread) == 6 * sizeof(float));
