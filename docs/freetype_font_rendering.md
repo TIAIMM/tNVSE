@@ -2018,11 +2018,19 @@ entering the global map/LRU, while a warmed signature may create a fully
 validated cache resident. A 64-bucket, four-way
 thread-local weak front serves recent resident or still-live artifacts without
 taking the global cache mutex and does not pin an artifact after its real owners
-release it. Each lookup probes only one bucket. The two-observation history uses
+release it. For the common single-page Composite route, the first compilation
+also accumulates its exact geometry/color fingerprint inside the mandatory
+quad-to-vertex loop and publishes only a weak probation entry. If the same
+artifact is requested again while its first shape still owns it, the second
+observation reuses that immutable payload and promotes it into the normal LRU
+subject to the existing memory budget; it no longer compiles the artifact a
+second time merely to establish admission. An expired probation entry simply
+misses and follows the original compile/admit path. Each lookup probes only one
+bucket. The two-observation history uses
 256 four-way buckets and preferentially replaces one-shot candidates before an
-established signature. The first observation uses a constant-cost geometry/effect
-signature and skips the full per-quad geometry/color fingerprint and
-range/effect identity hash.
+established signature. Non-Composite and multi-page first observations retain
+the constant-cost geometry/effect signature and skip the exact per-quad
+fingerprint.
 One artifact owns the packed
 vertices, bound, atlas-page
 property/texture references, and merged contiguous packet descriptors that used
@@ -2097,10 +2105,13 @@ malformed geometry retain the previous validation and compatibility fallback.
 Runtime cache-key work is amortized at the point where the corresponding
 identity becomes immutable:
 
-- A one-shot text artifact computes only the constant-cost admission signature.
-  Once admitted, one quad traversal computes geometry and color fingerprints
-  together; effect/range identity consumes that color fingerprint instead of
-  scanning the quads again.
+- A one-shot common single-page Composite artifact computes its exact geometry
+  and color fingerprints while the required compiler loop already has each quad
+  hot. That weak probation identity does not add a separate source traversal or
+  extend the artifact lifetime. Other one-shot routes compute only the
+  constant-cost admission signature. Once admitted, one quad traversal computes
+  geometry and color fingerprints together; effect/range identity consumes that
+  color fingerprint instead of scanning the quads again.
 - Distance-field atlas keys are derived directly from the sealed byte-role
   raster profile. The MTSDF/true-SDF route therefore avoids rescanning the
   bitmap list and building, sorting, and deduplicating an empty baked-color

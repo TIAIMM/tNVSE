@@ -3108,12 +3108,13 @@ namespace fonthook::vectorfont
 		}
 
 
-		QuadBatchFingerprint BuildQuadBatchFingerprint(
-			const std::vector<PendingQuad>& quads, const NiPoint3& origin)
+		struct QuadBatchFingerprintBuilder
 		{
 			UInt64 hash = 1469598103934665603ull;
 			UInt64 colorHash = 1469598103934665603ull;
-			auto add = [&](const void* data, size_t size)
+			UInt32 quadCount = 0;
+
+			void AddBytes(const void* data, size_t size)
 			{
 				const UInt8* bytes = static_cast<const UInt8*>(data);
 				for (size_t index = 0; index < size; ++index)
@@ -3121,34 +3122,35 @@ namespace fonthook::vectorfont
 					hash ^= bytes[index];
 					hash *= 1099511628211ull;
 				}
-			};
-			for (const PendingQuad& quad : quads)
+			}
+
+			void AddQuad(const PendingQuad& quad, const NiPoint3& origin)
 			{
 				const UInt64 cacheId = quad.source.CacheId();
 				const NiPoint3 relativePen(
 					quad.pen.x - origin.x,
 					quad.pen.y - origin.y,
 					quad.pen.z - origin.z);
-				add(&cacheId, sizeof(cacheId));
-				add(&relativePen, sizeof(relativePen));
-				add(&quad.offsetX, sizeof(quad.offsetX));
-				add(&quad.offsetY, sizeof(quad.offsetY));
-				add(&quad.rasterScale, sizeof(quad.rasterScale));
-				add(&quad.sourceToLogicalScale,
+				AddBytes(&cacheId, sizeof(cacheId));
+				AddBytes(&relativePen, sizeof(relativePen));
+				AddBytes(&quad.offsetX, sizeof(quad.offsetX));
+				AddBytes(&quad.offsetY, sizeof(quad.offsetY));
+				AddBytes(&quad.rasterScale, sizeof(quad.rasterScale));
+				AddBytes(&quad.sourceToLogicalScale,
 					sizeof(quad.sourceToLogicalScale));
-				add(&quad.baselineOffset, sizeof(quad.baselineOffset));
-				add(&quad.expansionPixels, sizeof(quad.expansionPixels));
-				add(&quad.usesSdf, sizeof(quad.usesSdf));
-				add(&quad.glyphOrdinal, sizeof(quad.glyphOrdinal));
-				add(&quad.atlasPage, sizeof(quad.atlasPage));
-				add(&quad.atlasPlacement.atlasIdentity,
+				AddBytes(&quad.baselineOffset, sizeof(quad.baselineOffset));
+				AddBytes(&quad.expansionPixels, sizeof(quad.expansionPixels));
+				AddBytes(&quad.usesSdf, sizeof(quad.usesSdf));
+				AddBytes(&quad.glyphOrdinal, sizeof(quad.glyphOrdinal));
+				AddBytes(&quad.atlasPage, sizeof(quad.atlasPage));
+				AddBytes(&quad.atlasPlacement.atlasIdentity,
 					sizeof(quad.atlasPlacement.atlasIdentity));
-				add(&quad.atlasPlacement.atlasGeneration,
+				AddBytes(&quad.atlasPlacement.atlasGeneration,
 					sizeof(quad.atlasPlacement.atlasGeneration));
-				add(&quad.atlasPlacement.u0, sizeof(quad.atlasPlacement.u0));
-				add(&quad.atlasPlacement.v0, sizeof(quad.atlasPlacement.v0));
-				add(&quad.atlasPlacement.u1, sizeof(quad.atlasPlacement.u1));
-				add(&quad.atlasPlacement.v1, sizeof(quad.atlasPlacement.v1));
+				AddBytes(&quad.atlasPlacement.u0, sizeof(quad.atlasPlacement.u0));
+				AddBytes(&quad.atlasPlacement.v0, sizeof(quad.atlasPlacement.v0));
+				AddBytes(&quad.atlasPlacement.u1, sizeof(quad.atlasPlacement.u1));
+				AddBytes(&quad.atlasPlacement.v1, sizeof(quad.atlasPlacement.v1));
 				const UInt8* colorBytes =
 					reinterpret_cast<const UInt8*>(&quad.baseColor);
 				for (size_t index = 0;
@@ -3157,9 +3159,22 @@ namespace fonthook::vectorfont
 					colorHash ^= colorBytes[index];
 					colorHash *= 1099511628211ull;
 				}
+				++quadCount;
 			}
-			return { hash, colorHash,
-				static_cast<UInt32>(quads.size()) };
+
+			QuadBatchFingerprint Finish() const
+			{
+				return { hash, colorHash, quadCount };
+			}
+		};
+
+		QuadBatchFingerprint BuildQuadBatchFingerprint(
+			const std::vector<PendingQuad>& quads, const NiPoint3& origin)
+		{
+			QuadBatchFingerprintBuilder builder;
+			for (const PendingQuad& quad : quads)
+				builder.AddQuad(quad, origin);
+			return builder.Finish();
 		}
 
 		struct TextArtifactHotEntry
@@ -3167,6 +3182,7 @@ namespace fonthook::vectorfont
 			UInt64 admissionSignature = 0;
 			TextArtifactKey key;
 			std::weak_ptr<const NativeFontPayloadTemplate> data;
+			bool admitted = false;
 			bool occupied = false;
 		};
 
@@ -3488,8 +3504,10 @@ namespace fonthook::vectorfont
 			const TextArtifactKey& geometryKey,
 			const NativeFontEffectShapeConfig& effects,
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
-			TextArtifactKey& resolvedKey, bool& keyResolved)
+			TextArtifactKey& resolvedKey, bool& keyResolved,
+			bool& admitted)
 		{
+			admitted = false;
 			if (!admissionSignature)
 				admissionSignature = 1;
 			TextArtifactHotBucket& bucket = s_textArtifactHotBuckets[
@@ -3529,7 +3547,10 @@ namespace fonthook::vectorfont
 				}
 				NativeFontPayloadTemplatePtr data = entry.data.lock();
 				if (data && TextArtifactMatchesAtlases(*data, atlases))
+				{
+					admitted = entry.admitted;
 					return data;
+				}
 				if (!data)
 				{
 					RecordFreeTypePerf(FreeTypePerfCounter::
@@ -3542,7 +3563,7 @@ namespace fonthook::vectorfont
 
 		void PublishHotTextArtifact(UInt64 admissionSignature,
 			const TextArtifactKey& key,
-			const NativeFontPayloadTemplatePtr& data)
+			const NativeFontPayloadTemplatePtr& data, bool admitted)
 		{
 			if (!data)
 				return;
@@ -3575,6 +3596,7 @@ namespace fonthook::vectorfont
 					&& current.key == key)
 				{
 					current.data = data;
+					current.admitted = current.admitted || admitted;
 					return;
 				}
 			}
@@ -3595,7 +3617,90 @@ namespace fonthook::vectorfont
 			entry.admissionSignature = admissionSignature;
 			entry.key = key;
 			entry.data = data;
+			entry.admitted = admitted;
 			entry.occupied = true;
+		}
+
+		NativeFontPayloadTemplatePtr AdmitTextArtifact(
+			AtlasState& state, UInt64 admissionSignature,
+			const TextArtifactKey& key,
+			const NativeFontPayloadTemplatePtr& data,
+			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
+			bool probationPromotion)
+		{
+			if (!data)
+				return {};
+			const size_t bytes = GetNativeFontPayloadTemplateBytes(*data);
+			const size_t cacheOverhead = sizeof(TextArtifactEntry)
+				+ 2u * sizeof(TextArtifactKey) + 4u * sizeof(void*);
+			const size_t preferred = static_cast<size_t>(
+				g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 12u;
+			const size_t limit = GetCpuMemoryCategoryHeadroom(
+				CpuMemoryCategory::TextArtifact, preferred);
+			if (!limit || bytes > limit || cacheOverhead > limit - bytes)
+			{
+				// Keep the weak front useful while the shape owns the artifact, but do
+				// not turn a budget rejection into hidden strong residency.
+				PublishHotTextArtifact(admissionSignature, key, data, false);
+				return data;
+			}
+
+			std::lock_guard<std::mutex> lock(state.textArtifactMutex);
+			auto existing = state.textArtifactCache.find(key);
+			if (existing != state.textArtifactCache.end())
+			{
+				if (existing->second.data
+					&& TextArtifactMatchesAtlases(*existing->second.data, atlases))
+				{
+					state.textArtifactLru.splice(state.textArtifactLru.begin(),
+						state.textArtifactLru, existing->second.lru);
+					existing->second.lru = state.textArtifactLru.begin();
+					PublishHotTextArtifact(admissionSignature, key,
+						existing->second.data, true);
+					if (probationPromotion)
+					{
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							TextArtifactProbationHotPromoted);
+					}
+					return existing->second.data;
+				}
+				state.textArtifactCacheBytes -= std::min(
+					state.textArtifactCacheBytes, existing->second.bytes);
+				state.textArtifactLru.erase(existing->second.lru);
+				state.textArtifactCache.erase(existing);
+				RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactEviction);
+			}
+
+			state.textArtifactLru.push_front(key);
+			const auto [inserted, success] = state.textArtifactCache.emplace(key,
+				TextArtifactEntry{ data, bytes, state.textArtifactLru.begin() });
+			if (!success)
+			{
+				state.textArtifactLru.pop_front();
+				state.textArtifactLru.splice(state.textArtifactLru.begin(),
+					state.textArtifactLru, inserted->second.lru);
+				inserted->second.lru = state.textArtifactLru.begin();
+				PublishHotTextArtifact(admissionSignature, key,
+					inserted->second.data, true);
+				if (probationPromotion)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						TextArtifactProbationHotPromoted);
+				}
+				return inserted->second.data;
+			}
+			inserted->second.cpuMemory.Reset(
+				CpuMemoryCategory::TextArtifact, cacheOverhead);
+			state.textArtifactCacheBytes += bytes;
+			RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactAdmission);
+			if (probationPromotion)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					TextArtifactProbationHotPromoted);
+			}
+			TrimTextArtifactCache(state);
+			PublishHotTextArtifact(admissionSignature, key, data, true);
+			return data;
 		}
 
 		NativeFontPayloadTemplatePtr GetNativeTextArtifact(Font& font,
@@ -3610,13 +3715,21 @@ namespace fonthook::vectorfont
 			bool keyResolved = false;
 			if (allowCache)
 			{
+				bool hotAdmitted = false;
 				if (NativeFontPayloadTemplatePtr hot =
 					FindHotTextArtifact(admissionSignature, geometryKey,
-						effects, atlases, key, keyResolved))
+						effects, atlases, key, keyResolved, hotAdmitted))
 				{
 					RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactHit);
 					RecordFreeTypePerf(
 						FreeTypePerfCounter::TextArtifactHotHit);
+					if (!hotAdmitted)
+					{
+						RecordFreeTypePerf(FreeTypePerfCounter::
+							TextArtifactProbationHotHit);
+						return AdmitTextArtifact(state, admissionSignature,
+							key, hot, atlases, true);
+					}
 					return hot;
 				}
 			}
@@ -3646,7 +3759,7 @@ namespace fonthook::vectorfont
 								state.textArtifactLru.begin();
 							PublishHotTextArtifact(
 								admissionSignature, key,
-								existing->second.data);
+								existing->second.data, true);
 							RecordFreeTypePerf(
 								FreeTypePerfCounter::TextArtifactHit);
 							return existing->second.data;
@@ -3680,6 +3793,9 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::TextArtifactVertexInitializationBytesAvoided,
 				sourceVertexCount * sizeof(NativeFontGpuVertex));
 			bool compositeCandidate = effects.shaderEffects;
+			const bool buildProbationFingerprint = !allowCache
+				&& effects.shaderEffects && atlases.size() == 1u;
+			QuadBatchFingerprintBuilder probationFingerprint;
 			std::vector<CompositeGlyphQuadSource> compositeGlyphs;
 			if (compositeCandidate)
 				compositeGlyphs.resize(quads.size());
@@ -3698,6 +3814,8 @@ namespace fonthook::vectorfont
 			for (UInt32 index = 0; index < quads.size(); ++index)
 			{
 				const PendingQuad& quad = quads[index];
+				if (buildProbationFingerprint)
+					probationFingerprint.AddQuad(quad, origin);
 				if (quad.atlasPage >= atlases.size() || !atlases[quad.atlasPage])
 					return nullptr;
 				const AtlasResource& atlas = *atlases[quad.atlasPage];
@@ -3916,68 +4034,28 @@ namespace fonthook::vectorfont
 			if (!result)
 				return {};
 			if (!allowCache)
-				return result;
-			const size_t bytes = GetNativeFontPayloadTemplateBytes(*result);
-			const size_t cacheOverhead = sizeof(TextArtifactEntry)
-				+ 2u * sizeof(TextArtifactKey) + 4u * sizeof(void*);
-			const size_t preferred = static_cast<size_t>(
-				g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 12u;
-			const size_t limit = GetCpuMemoryCategoryHeadroom(
-				CpuMemoryCategory::TextArtifact, preferred);
-			if (!limit || bytes > limit
-				|| cacheOverhead > limit - bytes)
 			{
+				if (buildProbationFingerprint
+					&& result->compositePackets.size() == 1u)
+				{
+					const QuadBatchFingerprint fingerprint =
+						probationFingerprint.Finish();
+					TextArtifactKey probationKey = BuildTextArtifactKey(
+						fingerprint, atlases);
+					probationKey.contentHash = BuildTextArtifactContentHash(
+						probationKey, effects);
+					PublishHotTextArtifact(admissionSignature, probationKey,
+						result, false);
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						TextArtifactProbationHotPublished);
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						TextArtifactProbationFingerprintQuad,
+						fingerprint.quadCount);
+				}
 				return result;
 			}
-			{
-				std::lock_guard<std::mutex> lock(state.textArtifactMutex);
-				auto existing = state.textArtifactCache.find(key);
-				if (existing != state.textArtifactCache.end())
-				{
-					if (existing->second.data
-						&& TextArtifactMatchesAtlases(*existing->second.data,
-							atlases))
-					{
-						state.textArtifactLru.splice(state.textArtifactLru.begin(),
-							state.textArtifactLru,
-							existing->second.lru);
-						existing->second.lru = state.textArtifactLru.begin();
-						PublishHotTextArtifact(admissionSignature, key,
-							existing->second.data);
-						return existing->second.data;
-					}
-					state.textArtifactCacheBytes -= std::min(
-						state.textArtifactCacheBytes,
-						existing->second.bytes);
-					state.textArtifactLru.erase(existing->second.lru);
-					state.textArtifactCache.erase(existing);
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::TextArtifactEviction);
-				}
-				state.textArtifactLru.push_front(key);
-				const auto [inserted, success] = state.textArtifactCache.emplace(key,
-					TextArtifactEntry{ result, bytes,
-						state.textArtifactLru.begin() });
-				if (!success)
-				{
-					state.textArtifactLru.pop_front();
-					state.textArtifactLru.splice(state.textArtifactLru.begin(),
-						state.textArtifactLru,
-						inserted->second.lru);
-					inserted->second.lru = state.textArtifactLru.begin();
-					PublishHotTextArtifact(admissionSignature, key,
-						inserted->second.data);
-					return inserted->second.data;
-				}
-				inserted->second.cpuMemory.Reset(
-					CpuMemoryCategory::TextArtifact, cacheOverhead);
-				state.textArtifactCacheBytes += bytes;
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::TextArtifactAdmission);
-				TrimTextArtifactCache(state);
-				PublishHotTextArtifact(admissionSignature, key, result);
-			}
-			return result;
+			return AdmitTextArtifact(state, admissionSignature, key, result,
+				atlases, false);
 		}
 
 		NiTriShape* CreateAtlasShape(Font& font, const std::vector<PendingQuad>& quads,

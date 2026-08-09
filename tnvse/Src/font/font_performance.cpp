@@ -1507,10 +1507,18 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_text_artifact_front: hot_buckets=%u hot_ways=%u hot_capacity=%u hot_hits=%llu hot_expired=%llu hot_live_replacements=%llu admission_buckets=%u admission_ways=%u admission_capacity=%u admission_history_hits=%llu admission_candidate_replacements=%llu admission_established_replacements=%llu",
+			"tnvse_freetype_text_artifact_front: hot_buckets=%u hot_ways=%u hot_capacity=%u hot_hits=%llu probation_published=%llu probation_hits=%llu probation_promoted=%llu probation_fingerprint_quads=%llu hot_expired=%llu hot_live_replacements=%llu admission_buckets=%u admission_ways=%u admission_capacity=%u admission_history_hits=%llu admission_candidate_replacements=%llu admission_established_replacements=%llu",
 			kTextArtifactHotBucketCount, kTextArtifactHotWays,
 			kTextArtifactHotBucketCount * kTextArtifactHotWays,
 			counterValue(FreeTypePerfCounter::TextArtifactHotHit),
+			counterValue(FreeTypePerfCounter::
+				TextArtifactProbationHotPublished),
+			counterValue(FreeTypePerfCounter::
+				TextArtifactProbationHotHit),
+			counterValue(FreeTypePerfCounter::
+				TextArtifactProbationHotPromoted),
+			counterValue(FreeTypePerfCounter::
+				TextArtifactProbationFingerprintQuad),
 			counterValue(FreeTypePerfCounter::TextArtifactHotEntryExpired),
 			counterValue(FreeTypePerfCounter::TextArtifactHotEntryReplacement),
 			kTextArtifactAdmissionBucketCount,
