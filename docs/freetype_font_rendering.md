@@ -1126,7 +1126,12 @@ working set that thrashed the former 64 entries. A hit requires identical shape
 identity, renderer, world/view/projection matrices, bound, viewport, resolved
 clip rectangle, scissor route, and viewport permission; it can therefore reuse
 both the transform-dependent columns and the conservative half-space result
-without weakening the fail-open proof. There is no late-visibility phase line.
+without weakening the fail-open proof. Candidate hits compare the live transform
+and bound fields directly against the stored exact bits. They reuse those stored
+arrays for the frame witness only after every comparison succeeds; temporary key
+arrays are materialized solely on misses. `cache_key_materializations_elided`
+therefore equals the exact `transform_hits` that took this path. There is no
+late-visibility phase line.
 The thin registration route performs no visibility work.
 The `tnvse_freetype_accumulator_prep` line separately reports empty-facade fast
 returns, metadata acquisitions avoided by proven culls, and traversals with no

@@ -808,26 +808,55 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool SameProofKey(const ClipProofCacheEntry& entry,
+		bool SameLiveTransformBits(
+			const std::array<UInt32, 13>& expected,
+			const NiTransform& transform)
+		{
+			size_t read = 0;
+			for (UInt32 row = 0; row < 3; ++row)
+			{
+				for (UInt32 column = 0; column < 3; ++column)
+				{
+					if (expected[read++] != FloatBits(
+							transform.m_Rotate.m_pEntry[row][column]))
+					{
+						return false;
+					}
+				}
+			}
+			return expected[read++] == FloatBits(transform.m_Translate.x)
+				&& expected[read++] == FloatBits(transform.m_Translate.y)
+				&& expected[read++] == FloatBits(transform.m_Translate.z)
+				&& expected[read] == FloatBits(transform.m_fScale);
+		}
+
+		bool SameLiveBoundBits(const std::array<UInt32, 4>& expected,
+			const NiBound& bound)
+		{
+			return expected[0] == FloatBits(bound.m_kCenter.x)
+				&& expected[1] == FloatBits(bound.m_kCenter.y)
+				&& expected[2] == FloatBits(bound.m_kCenter.z)
+				&& expected[3] == FloatBits(bound.m_fRadius);
+		}
+
+		bool SameProofKeyLive(const ClipProofCacheEntry& entry,
 			const void* identity, const ClipFrameContext& context,
-			const std::array<UInt32, 13>& transformBits,
-			const std::array<UInt32, 4>& boundBits,
+			const NiTransform& transform, const NiBound& bound,
 			const TileVisibilityPropertyView& tile, bool allowViewport)
 		{
 			return entry.valid && entry.identity == identity
 				&& entry.renderer == context.camera.renderer
 				&& entry.cameraEpoch == context.cameraEpoch
-				&& entry.transformBits == transformBits
-				&& entry.boundBits == boundBits
 				&& SameRect(entry.scissorRect, tile.scissorRect)
 				&& entry.tileUsesScissor == tile.useScissorTest
-				&& entry.allowViewport == allowViewport;
+				&& entry.allowViewport == allowViewport
+				&& SameLiveTransformBits(entry.transformBits, transform)
+				&& SameLiveBoundBits(entry.boundBits, bound);
 		}
 
 		ClipProofCacheEntry* PrepareClipProofCacheEntry(
 			const void* identity, const ClipFrameContext& context,
-			const std::array<UInt32, 13>& transformBits,
-			const std::array<UInt32, 4>& boundBits,
+			const NiTransform& transform, const NiBound& bound,
 			const TileVisibilityPropertyView& tile, bool allowViewport,
 			ClipTransformBuildResult& cacheResult,
 			ClipProofResult& cachedProof, NativeFontVisibilityCull& cachedReason)
@@ -855,8 +884,8 @@ namespace fonthook::vectorfont
 				if (candidate.identity != identity)
 					continue;
 				identityEntry = &candidate;
-				if (SameProofKey(candidate, identity, context,
-						transformBits, boundBits, tile, allowViewport))
+				if (SameProofKeyLive(candidate, identity, context,
+						transform, bound, tile, allowViewport))
 				{
 					cacheResult = ClipTransformBuildResult::Reused;
 					cachedProof = candidate.result;
@@ -994,26 +1023,30 @@ namespace fonthook::vectorfont
 				return failOpen();
 			}
 
-			const std::array<UInt32, 13> transformBits =
-				CaptureTransformBits(transform);
-			const std::array<UInt32, 4> boundBits = CaptureBoundBits(bound);
 			ClipProofResult cachedProof = ClipProofResult::Unproven;
 			NativeFontVisibilityCull cachedReason =
 				NativeFontVisibilityCull::None;
 			ClipTransformBuildResult buildResult =
 				ClipTransformBuildResult::Unavailable;
 			ClipProofCacheEntry* cacheEntry = PrepareClipProofCacheEntry(
-				transformIdentity, context, transformBits, boundBits, tile,
+				transformIdentity, context, transform, bound, tile,
 				allowViewport, buildResult, cachedProof, cachedReason);
 			if (cachedProof != ClipProofResult::Unproven)
 			{
 				reason = cachedReason;
 				CaptureVisibilityProofWitness(proofWitness, context,
-					transformBits, boundBits, tile, cachedProof, cachedReason);
+					cacheEntry->transformBits, cacheEntry->boundBits,
+					tile, cachedProof, cachedReason);
 				if (transformBuildResult)
 					*transformBuildResult = buildResult;
 				return cachedProof;
 			}
+			// Only a miss needs an owned key for cache publication and the
+			// dispatch-time witness. Exact hits above compare the live fields
+			// directly and reuse the already-certified cache arrays.
+			const std::array<UInt32, 13> transformBits =
+				CaptureTransformBits(transform);
+			const std::array<UInt32, 4> boundBits = CaptureBoundBits(bound);
 
 			ClipNdcBounds ndc;
 			if (!ResolveClipNdcBounds(context, clipRect, useScissor, ndc))
