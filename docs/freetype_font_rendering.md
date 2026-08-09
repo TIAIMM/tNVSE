@@ -2061,6 +2061,18 @@ visits as `shader_source_scan_elements_saved`,
 `direct_source_scan_elements_saved`; all rendering order, range construction,
 Atlas page assignment, and fail-closed fallback rules remain unchanged.
 
+Text-artifact construction also accumulates the Fill-glyph count and sanitized
+base-color minimum/maximum while its mandatory quad-to-vertex loop is already
+validating Atlas ownership and emitting final vertices. These values are
+published inside the immutable payload and copied into validation-seal ABI 3.
+Both a new artifact and an exact cache hit therefore supply Vanilla-layout
+shape metadata without the former count and color-contract passes over the
+source quads. The cache identity already contains exact base colors plus the
+layer/page draw ranges, so cached metadata cannot cross a different Fill mask
+or color input. `artifact_shape_metadata_scan_elements_saved` reports the two
+removed element visits per created shape; a missing or inconsistent seal still
+follows the existing compatibility fallback.
+
 Runtime cache-key work is amortized at the point where the corresponding
 identity becomes immutable:
 

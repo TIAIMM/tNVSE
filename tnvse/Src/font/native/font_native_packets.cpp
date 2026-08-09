@@ -66,6 +66,21 @@ namespace fonthook::vectorfont
 				&& bound.m_fRadius >= 0.0f;
 		}
 
+		bool HasValidShapeColorContract(
+			const NativeFontShapeColorContract& contract)
+		{
+			const NiColorA& minimum = contract.minimumModifier;
+			const NiColorA& maximum = contract.maximumModifier;
+			return contract.abiVersion
+					== NativeFontShapeColorContract::kTileUniformColorAbi
+				&& std::isfinite(minimum.r) && std::isfinite(minimum.g)
+				&& std::isfinite(minimum.b) && std::isfinite(minimum.a)
+				&& std::isfinite(maximum.r) && std::isfinite(maximum.g)
+				&& std::isfinite(maximum.b) && std::isfinite(maximum.a)
+				&& minimum.r <= maximum.r && minimum.g <= maximum.g
+				&& minimum.b <= maximum.b && minimum.a <= maximum.a;
+		}
+
 		bool HasValidRegistrationVertex(const NativeFontGpuVertex& vertex)
 		{
 			return HasFiniteNativeVertex(vertex)
@@ -97,6 +112,8 @@ namespace fonthook::vectorfont
 					> std::numeric_limits<UInt32>::max()
 				|| payload.pageCount != payload.atlasProperties.size()
 				|| payload.pageCount != payload.atlasTextures.size()
+				|| payload.glyphCount > payload.quadCount
+				|| !HasValidShapeColorContract(payload.colorContract)
 				|| !HasFiniteRegistrationBound(payload.bound))
 			{
 				return false;
@@ -235,6 +252,8 @@ namespace fonthook::vectorfont
 			seal.pageCount = payload.pageCount;
 			seal.quadCount = payload.quadCount;
 			seal.sourceRangeCount = payload.sourceRangeCount;
+			seal.glyphCount = payload.glyphCount;
+			seal.colorContractAbi = payload.colorContract.abiVersion;
 			seal.vertexCount = static_cast<UInt32>(payload.gpuVertices.size());
 			seal.packetCount = static_cast<UInt32>(payload.packets.size());
 			seal.compositePacketCount = static_cast<UInt32>(
@@ -650,11 +669,14 @@ namespace fonthook::vectorfont
 	}
 
 	NativeFontPayloadTemplatePtr BuildNativeFontPayloadTemplate(
-		std::vector<NativeFontGpuVertex>&& vertices, UInt32 quadCount,
+		std::vector<NativeFontGpuVertex>&& vertices,
+		UInt32 quadCount, UInt32 glyphCount,
+		const NativeFontShapeColorContract& colorContract,
 		const NativeFontEffectShapeConfig& effects, const NiBound& bound,
 		std::vector<NativeFontCompositeSpan>&& compositeSpans)
 	{
 		if (!quadCount || quadCount > kNativeFontMaximumQuads
+			|| glyphCount > quadCount
 			|| vertices.size() < static_cast<size_t>(quadCount) * 4u
 			|| (vertices.size() & 3u)
 			|| vertices.size() / 4u > kNativeFontMaximumQuads
@@ -675,6 +697,8 @@ namespace fonthook::vectorfont
 		payload->pageCount = static_cast<UInt32>(effects.atlasProperties.size());
 		payload->quadCount = quadCount;
 		payload->sourceRangeCount = static_cast<UInt32>(effects.ranges.size());
+		payload->glyphCount = glyphCount;
+		payload->colorContract = colorContract;
 		payload->bound = bound;
 		payload->atlasProperties = effects.atlasProperties;
 		payload->atlasTextures = effects.atlasTextures;

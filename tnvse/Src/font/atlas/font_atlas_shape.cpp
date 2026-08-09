@@ -233,28 +233,6 @@ namespace fonthook::vectorfont
 			return SanitizeColor(requested);
 		}
 
-		NativeFontShapeColorContract BuildColorContract(const std::vector<PendingQuad>& quads)
-		{
-			NativeFontShapeColorContract result;
-			if (quads.empty())
-				return result;
-			result.minimumModifier = SanitizeColor(quads.front().baseColor);
-			result.maximumModifier = result.minimumModifier;
-			for (const PendingQuad& quad : quads)
-			{
-				const NiColorA color = SanitizeColor(quad.baseColor);
-				result.minimumModifier.r = std::min(result.minimumModifier.r, color.r);
-				result.minimumModifier.g = std::min(result.minimumModifier.g, color.g);
-				result.minimumModifier.b = std::min(result.minimumModifier.b, color.b);
-				result.minimumModifier.a = std::min(result.minimumModifier.a, color.a);
-				result.maximumModifier.r = std::max(result.maximumModifier.r, color.r);
-				result.maximumModifier.g = std::max(result.maximumModifier.g, color.g);
-				result.maximumModifier.b = std::max(result.maximumModifier.b, color.b);
-				result.maximumModifier.a = std::max(result.maximumModifier.a, color.a);
-			}
-			return result;
-		}
-
 		bool SameColorModifier(const NiColorA& lhs, const NiColorA& rhs)
 		{
 			return lhs.r == rhs.r && lhs.g == rhs.g
@@ -1364,7 +1342,7 @@ namespace fonthook::vectorfont
 			return !spans.empty();
 		}
 
-		void ExtendDirectColorContract(NativeFontShapeColorContract& contract,
+		void ExtendColorContract(NativeFontShapeColorContract& contract,
 			bool& initialized, const NiColorA& source)
 		{
 			const NiColorA color = SanitizeColor(source);
@@ -1727,7 +1705,8 @@ namespace fonthook::vectorfont
 			}
 			NativeFontPayloadTemplatePtr payload =
 				BuildNativeFontPayloadTemplate(std::move(vertices),
-					quadCount, effects, bound, std::move(compositeSpans));
+					quadCount, glyphCount, colorContract, effects, bound,
+					std::move(compositeSpans));
 			if (!payload || payload->gpuVertices.size() < 4
 				|| payload->packets.empty())
 				return nullptr;
@@ -2242,7 +2221,7 @@ namespace fonthook::vectorfont
 						baseColor.a * layerColor.a };
 				if (quadIndex == 0)
 					facadeColor = bakedColor;
-				ExtendDirectColorContract(colorContract,
+				ExtendColorContract(colorContract,
 					colorContractInitialized, bakedColor);
 				if (!WriteDirectQuadVertices(*placement,
 					command.pen, origin, offsetsX[layer],
@@ -2813,7 +2792,7 @@ namespace fonthook::vectorfont
 					ResolveBaseColor(
 						GetDirectGlyphSourceColor(instance),
 						tileColor);
-				ExtendDirectColorContract(
+				ExtendColorContract(
 					colorContract, colorContractInitialized, baseColor);
 				const float baselineOffset =
 					GetDirectGlyphBaselineOffset(
@@ -3703,6 +3682,11 @@ namespace fonthook::vectorfont
 				std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
 			NiPoint3 boundMaximum(std::numeric_limits<float>::lowest(),
 				std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
+			const UInt8 fillLayerBit =
+				1u << static_cast<UInt8>(AtlasLayer::Fill);
+			UInt32 glyphCount = 0;
+			NativeFontShapeColorContract colorContract;
+			bool colorContractInitialized = false;
 			for (UInt32 index = 0; index < quads.size(); ++index)
 			{
 				const PendingQuad& quad = quads[index];
@@ -3714,6 +3698,10 @@ namespace fonthook::vectorfont
 				{
 					return nullptr;
 				}
+				if (quad.layerMask & fillLayerBit)
+					++glyphCount;
+				ExtendColorContract(
+					colorContract, colorContractInitialized, quad.baseColor);
 				const float scale = quad.rasterScale;
 				const float sourcePixelToLogical =
 					quad.sourceToLogicalScale / scale;
@@ -3887,8 +3875,9 @@ namespace fonthook::vectorfont
 			}
 			bound.m_fRadius = std::sqrt(radiusSquared);
 			NativeFontPayloadTemplatePtr result = BuildNativeFontPayloadTemplate(
-				std::move(vertices), static_cast<UInt32>(quads.size()), effects,
-				bound, std::move(compositeSpans));
+				std::move(vertices), static_cast<UInt32>(quads.size()),
+				glyphCount, colorContract, effects, bound,
+				std::move(compositeSpans));
 			if (!result)
 				return {};
 			if (!allowCache)
@@ -4001,16 +3990,12 @@ namespace fonthook::vectorfont
 				resolvedEffect, allowArtifactCache);
 			if (!artifact || artifact->gpuVertices.size() < quads.size() * 4u)
 				return nullptr;
-			const UInt8 fillLayerBit =
-				1u << static_cast<UInt8>(AtlasLayer::Fill);
-			const UInt32 glyphCount = static_cast<UInt32>(std::count_if(
-				quads.begin(), quads.end(),
-				[fillLayerBit](const PendingQuad& quad)
-				{
-					return (quad.layerMask & fillLayerBit) != 0;
-				}));
-			const NativeFontShapeColorContract colorContract =
-				BuildColorContract(quads);
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::TextArtifactShapeMetadataElementScanSaved,
+				static_cast<UInt64>(quads.size()) * 2u);
+			const UInt32 glyphCount = artifact->glyphCount;
+			const NativeFontShapeColorContract& colorContract =
+				artifact->colorContract;
 			if (needsNativeRangeRouting)
 			{
 				if (NiTriShape* vanillaLayout = TryCreateVanillaLayoutShape(

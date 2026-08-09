@@ -154,6 +154,7 @@ namespace fonthook::vectorfont
 		ShaderEffectSourceValidationElementScanSaved,
 		ShaderEffectDrawCountElementScanSaved,
 		DirectSourceClassificationElementScanSaved,
+		TextArtifactShapeMetadataElementScanSaved,
 		ShaderEffectBatch,
 		CpuEffectMasksAvoided,
 		GpuResidentGlyphHit,

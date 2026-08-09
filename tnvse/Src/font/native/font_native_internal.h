@@ -447,12 +447,14 @@ namespace fonthook::vectorfont
 	// Tile does not rescan every glyph vertex and packet.
 	struct NativeFontPayloadValidationSeal
 	{
-		static constexpr UInt32 kAbi = 2;
+		static constexpr UInt32 kAbi = 3;
 
 		UInt32 abi = 0;
 		UInt32 pageCount = 0;
 		UInt32 quadCount = 0;
 		UInt32 sourceRangeCount = 0;
+		UInt32 glyphCount = 0;
+		UInt32 colorContractAbi = 0;
 		UInt32 vertexCount = 0;
 		UInt32 packetCount = 0;
 		UInt32 compositePacketCount = 0;
@@ -467,6 +469,8 @@ namespace fonthook::vectorfont
 		UInt32 pageCount = 0;
 		UInt32 quadCount = 0;
 		UInt32 sourceRangeCount = 0;
+		UInt32 glyphCount = 0;
+		NativeFontShapeColorContract colorContract;
 		NiBound bound;
 		std::vector<NiTexturingPropertyPtr> atlasProperties;
 		std::vector<NiTexturePtr> atlasTextures;
@@ -501,6 +505,11 @@ namespace fonthook::vectorfont
 			&& seal.quadCount == payloadTemplate.quadCount
 			&& seal.sourceRangeCount != 0
 			&& seal.sourceRangeCount == payloadTemplate.sourceRangeCount
+			&& seal.glyphCount == payloadTemplate.glyphCount
+			&& seal.colorContractAbi
+				== NativeFontShapeColorContract::kTileUniformColorAbi
+			&& seal.colorContractAbi
+				== payloadTemplate.colorContract.abiVersion
 			&& seal.vertexCount == payloadTemplate.gpuVertices.size()
 			&& seal.packetCount != 0
 			&& seal.packetCount == payloadTemplate.packets.size()
@@ -1153,7 +1162,9 @@ namespace fonthook::vectorfont
 		NativeFontPacketPrepareFailure failure);
 
 	NativeFontPayloadTemplatePtr BuildNativeFontPayloadTemplate(
-		std::vector<NativeFontGpuVertex>&& vertices, UInt32 quadCount,
+		std::vector<NativeFontGpuVertex>&& vertices,
+		UInt32 quadCount, UInt32 glyphCount,
+		const NativeFontShapeColorContract& colorContract,
 		const NativeFontEffectShapeConfig& effects, const NiBound& bound,
 		std::vector<NativeFontCompositeSpan>&& compositeSpans);
 	bool InitializeNativeFontShapePayload(Font& font,
