@@ -34,6 +34,7 @@ namespace fonthook::vectorfont
 		inline constexpr size_t kClipProofCacheWays = 4;
 		inline constexpr size_t kClipRectNdcCacheEntries = 16;
 		static_assert(sizeof(NiTransform) == 13u * sizeof(UInt32));
+		static_assert(sizeof(NiMatrix3) == 9u * sizeof(UInt32));
 		static_assert(offsetof(NiTransform, m_Rotate) == 0u);
 		static_assert(offsetof(NiTransform, m_Translate)
 			== 9u * sizeof(UInt32));
@@ -494,18 +495,24 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		bool IsIdentityRotation(const NiMatrix3& rotation)
+		__forceinline bool IsIdentityRotation(const NiMatrix3& rotation)
 		{
-			for (UInt32 row = 0; row < 3; ++row)
-			{
-				for (UInt32 column = 0; column < 3; ++column)
-				{
-					const float expected = row == column ? 1.0f : 0.0f;
-					if (rotation.m_pEntry[row][column] != expected)
-						return false;
-				}
-			}
-			return true;
+			// Three exact-end overlapping loads cover all nine row-major words:
+			// [m00..m10], [m10..m20], and [m12..m22]. Packed floating
+			// equality preserves the scalar route's +0/-0 equivalence and rejects
+			// every NaN, while eliminating the two nested hot-path loops.
+			const float* values = &rotation.m_pEntry[0][0];
+			const __m128 first = _mm_cmpeq_ps(
+				_mm_loadu_ps(values),
+				_mm_setr_ps(1.0f, 0.0f, 0.0f, 0.0f));
+			const __m128 middle = _mm_cmpeq_ps(
+				_mm_loadu_ps(values + 3),
+				_mm_setr_ps(0.0f, 1.0f, 0.0f, 0.0f));
+			const __m128 last = _mm_cmpeq_ps(
+				_mm_loadu_ps(values + 5),
+				_mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f));
+			return _mm_movemask_ps(_mm_and_ps(
+				_mm_and_ps(first, middle), last)) == 0xF;
 		}
 
 		bool BuildVanillaUiOrthographicColumn(

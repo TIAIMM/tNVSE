@@ -1119,6 +1119,11 @@ default constructor as well, preventing `vector::emplace_back()` value
 initialization from zeroing the complete entry before those member constructors
 run. Consequently frame-entry construction does not clear the transform, bound,
 and scissor blocks that the immediately following proof will replace.
+On proof-key misses, the retail 3x3 `NiMatrix3` identity gate is evaluated with
+three exact-end overlapping SSE comparisons instead of a nested scalar loop.
+The packed comparison retains scalar floating equality semantics for signed
+zero and NaN while removing nine per-element branches from the common
+orthographic Tile route.
 Retail `RenderAlphaGeometry` at `0xB64F90` publishes `m_iCurrItem`, calls
 `RenderPassImmediately` at `0xB64FD1`, and from `0xB64FD6` through `0xB64FEC`
 only decrements that index and loads the next sorted pointer. Therefore adjacent
