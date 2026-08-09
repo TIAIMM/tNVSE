@@ -26,6 +26,8 @@ namespace fonthook::vectorfont
 		constexpr size_t kDurationBuckets =
 			kDurationExponentBuckets * kDurationSubBuckets;
 		constexpr size_t kGpuQueryRingSize = 32;
+		constexpr UInt32 kVanillaLayoutGpuTimingSampleRate = 16u;
+		constexpr size_t kGpuVanillaLayoutDrawBucketCount = 5;
 
 		enum class GpuTimingCounter : size_t
 		{
@@ -39,10 +41,78 @@ namespace fonthook::vectorfont
 			Disjoint,
 			InvalidRange,
 			ResetDiscarded,
+			PreparedPayloadEligible,
+			VanillaLayoutEligible,
+			VanillaLayoutSampleAttempt,
+			VanillaLayoutSampleSkipped,
+			VanillaLayoutSubmitted,
+			VanillaLayoutCompleted,
 			Count,
 		};
 		constexpr size_t kGpuTimingCounterCount =
 			static_cast<size_t>(GpuTimingCounter::Count);
+
+		struct GpuEnvelopeWorkload
+		{
+			FreeTypeGpuEnvelopeViewport viewport;
+			UInt32 immediatePasses = 0;
+			UInt32 foreignPasses = 0;
+			UInt32 nativeFacadePasses = 0;
+			UInt32 vanillaPasses = 0;
+			UInt32 vanillaCulls = 0;
+			UInt32 vanillaAppCulls = 0;
+			UInt32 vanillaAlphaCulls = 0;
+			UInt32 vanillaClipCulls = 0;
+			UInt32 vanillaScissorCulls = 0;
+			UInt32 vanillaStandardLiteDraws = 0;
+			UInt32 vanillaStockDraws = 0;
+			UInt32 vanillaRuntimeFallbacks = 0;
+			UInt64 vanillaVertices = 0;
+			UInt64 vanillaTriangles = 0;
+			UInt32 scissoredDraws = 0;
+			UInt32 unscissoredDraws = 0;
+			UInt32 invalidScissorDraws = 0;
+			UInt32 viewportUnavailableDraws = 0;
+			UInt64 effectiveClipRectPixels = 0;
+			UInt64 viewportOpportunityPixels = 0;
+		};
+
+		struct GpuVanillaLayoutDrawBucket
+		{
+			UInt64 samples = 0;
+			UInt64 nanoseconds = 0;
+			UInt64 maximumNanoseconds = 0;
+		};
+
+		struct GpuVanillaLayoutWorkloadAggregate
+		{
+			UInt64 samples = 0;
+			UInt64 immediatePasses = 0;
+			UInt64 foreignPasses = 0;
+			UInt64 nativeFacadePasses = 0;
+			UInt64 vanillaPasses = 0;
+			UInt64 vanillaCulls = 0;
+			UInt64 vanillaAppCulls = 0;
+			UInt64 vanillaAlphaCulls = 0;
+			UInt64 vanillaClipCulls = 0;
+			UInt64 vanillaScissorCulls = 0;
+			UInt64 vanillaStandardLiteDraws = 0;
+			UInt64 vanillaStockDraws = 0;
+			UInt64 vanillaRuntimeFallbacks = 0;
+			UInt64 vanillaVertices = 0;
+			UInt64 vanillaTriangles = 0;
+			UInt64 scissoredDraws = 0;
+			UInt64 unscissoredDraws = 0;
+			UInt64 invalidScissorDraws = 0;
+			UInt64 viewportUnavailableDraws = 0;
+			UInt64 effectiveClipRectPixels = 0;
+			UInt64 viewportOpportunityPixels = 0;
+			std::array<GpuVanillaLayoutDrawBucket,
+				kGpuVanillaLayoutDrawBucketCount> drawBuckets = {};
+			UInt64 worstNanoseconds = 0;
+			GpuEnvelopeWorkload worstWorkload;
+		};
+
 		struct AccumulatorPrepTailWorst
 		{
 			UInt64 nanoseconds = 0;
@@ -78,9 +148,18 @@ namespace fonthook::vectorfont
 				gpuAlphaEnvelopeDurations = {};
 			std::atomic<UInt64> gpuAlphaEnvelopeNanoseconds = 0;
 			std::atomic<UInt64> gpuAlphaEnvelopeMaximumNanoseconds = 0;
+			std::array<std::atomic<UInt64>, kDurationBuckets>
+				gpuVanillaLayoutEnvelopeDurations = {};
+			std::atomic<UInt64> gpuVanillaLayoutEnvelopeNanoseconds = 0;
+			std::atomic<UInt64>
+				gpuVanillaLayoutEnvelopeMaximumNanoseconds = 0;
 			std::array<std::atomic<UInt64>, kGpuTimingCounterCount>
 				gpuTimingCounters = {};
 			std::atomic<UInt64> gpuQueriesInFlight = 0;
+			std::atomic<UInt64> gpuVanillaLayoutQueriesInFlight = 0;
+			std::mutex gpuVanillaLayoutWorkloadMutex;
+			GpuVanillaLayoutWorkloadAggregate
+				gpuVanillaLayoutWorkload;
 			std::array<std::atomic<UInt64>, 4> accumulatorPrepTailCounts = {};
 			std::mutex accumulatorPrepTailMutex;
 			AccumulatorPrepTailWorst accumulatorPrepTailWorst;
@@ -209,6 +288,92 @@ namespace fonthook::vectorfont
 			}
 		}
 
+		void RecordGpuVanillaLayoutEnvelopeDuration(UInt64 nanoseconds)
+		{
+			if (!nanoseconds)
+				return;
+			PerformanceState& state = GetPerformanceState();
+			state.gpuVanillaLayoutEnvelopeDurations[
+				GpuDurationBucketForNanoseconds(nanoseconds)].fetch_add(
+					1, std::memory_order_relaxed);
+			state.gpuVanillaLayoutEnvelopeNanoseconds.fetch_add(
+				nanoseconds, std::memory_order_relaxed);
+			std::atomic<UInt64>& maximum =
+				state.gpuVanillaLayoutEnvelopeMaximumNanoseconds;
+			UInt64 current = maximum.load(std::memory_order_relaxed);
+			while (current < nanoseconds
+				&& !maximum.compare_exchange_weak(current, nanoseconds,
+					std::memory_order_relaxed,
+					std::memory_order_relaxed))
+			{
+			}
+		}
+
+		size_t GpuVanillaLayoutDrawBucketFor(UInt32 draws)
+		{
+			if (draws <= 8u)
+				return 0;
+			if (draws <= 16u)
+				return 1;
+			if (draws <= 32u)
+				return 2;
+			if (draws <= 64u)
+				return 3;
+			return 4;
+		}
+
+		void RecordGpuVanillaLayoutEnvelopeWorkload(
+			UInt64 nanoseconds, const GpuEnvelopeWorkload& workload)
+		{
+			PerformanceState& state = GetPerformanceState();
+			std::lock_guard<std::mutex> lock(
+				state.gpuVanillaLayoutWorkloadMutex);
+			GpuVanillaLayoutWorkloadAggregate& aggregate =
+				state.gpuVanillaLayoutWorkload;
+			++aggregate.samples;
+			aggregate.immediatePasses += workload.immediatePasses;
+			aggregate.foreignPasses += workload.foreignPasses;
+			aggregate.nativeFacadePasses += workload.nativeFacadePasses;
+			aggregate.vanillaPasses += workload.vanillaPasses;
+			aggregate.vanillaCulls += workload.vanillaCulls;
+			aggregate.vanillaAppCulls += workload.vanillaAppCulls;
+			aggregate.vanillaAlphaCulls += workload.vanillaAlphaCulls;
+			aggregate.vanillaClipCulls += workload.vanillaClipCulls;
+			aggregate.vanillaScissorCulls += workload.vanillaScissorCulls;
+			aggregate.vanillaStandardLiteDraws +=
+				workload.vanillaStandardLiteDraws;
+			aggregate.vanillaStockDraws += workload.vanillaStockDraws;
+			aggregate.vanillaRuntimeFallbacks +=
+				workload.vanillaRuntimeFallbacks;
+			aggregate.vanillaVertices += workload.vanillaVertices;
+			aggregate.vanillaTriangles += workload.vanillaTriangles;
+			aggregate.scissoredDraws += workload.scissoredDraws;
+			aggregate.unscissoredDraws += workload.unscissoredDraws;
+			aggregate.invalidScissorDraws +=
+				workload.invalidScissorDraws;
+			aggregate.viewportUnavailableDraws +=
+				workload.viewportUnavailableDraws;
+			aggregate.effectiveClipRectPixels +=
+				workload.effectiveClipRectPixels;
+			aggregate.viewportOpportunityPixels +=
+				workload.viewportOpportunityPixels;
+
+			const UInt32 vanillaDraws =
+				workload.vanillaStandardLiteDraws
+					+ workload.vanillaStockDraws;
+			GpuVanillaLayoutDrawBucket& bucket = aggregate.drawBuckets[
+				GpuVanillaLayoutDrawBucketFor(vanillaDraws)];
+			++bucket.samples;
+			bucket.nanoseconds += nanoseconds;
+			bucket.maximumNanoseconds = std::max(
+				bucket.maximumNanoseconds, nanoseconds);
+			if (nanoseconds > aggregate.worstNanoseconds)
+			{
+				aggregate.worstNanoseconds = nanoseconds;
+				aggregate.worstWorkload = workload;
+			}
+		}
+
 		struct GpuQuerySlot
 		{
 			IDirect3DQuery9* disjoint = nullptr;
@@ -216,6 +381,8 @@ namespace fonthook::vectorfont
 			IDirect3DQuery9* beginTimestamp = nullptr;
 			IDirect3DQuery9* endTimestamp = nullptr;
 			bool pending = false;
+			bool includesVanillaLayout = false;
+			GpuEnvelopeWorkload workload;
 		};
 
 		struct GpuQueryState
@@ -224,6 +391,7 @@ namespace fonthook::vectorfont
 			std::array<GpuQuerySlot, kGpuQueryRingSize> slots = {};
 			size_t nextSlot = 0;
 			size_t activeSlot = std::numeric_limits<size_t>::max();
+			UInt32 vanillaLayoutSampleCursor = 0;
 			bool unavailable = false;
 			bool loggedReady = false;
 		};
@@ -232,6 +400,21 @@ namespace fonthook::vectorfont
 		{
 			static GpuQueryState* state = new GpuQueryState();
 			return *state;
+		}
+
+		GpuEnvelopeWorkload* GetActiveGpuEnvelopeWorkload()
+		{
+			GpuQueryState& state = GetGpuQueryState();
+			if (state.activeSlot >= state.slots.size())
+				return nullptr;
+			GpuQuerySlot& slot = state.slots[state.activeSlot];
+			return slot.includesVanillaLayout ? &slot.workload : nullptr;
+		}
+
+		void IncrementEnvelopeCounter(UInt32& value)
+		{
+			if (value != std::numeric_limits<UInt32>::max())
+				++value;
 		}
 
 		void ReleaseGpuQuery(IDirect3DQuery9*& query)
@@ -250,6 +433,8 @@ namespace fonthook::vectorfont
 			ReleaseGpuQuery(slot.beginTimestamp);
 			ReleaseGpuQuery(slot.endTimestamp);
 			slot.pending = false;
+			slot.includesVanillaLayout = false;
+			slot.workload = {};
 		}
 
 		void ResetGpuQueryState(bool countDiscarded)
@@ -257,11 +442,16 @@ namespace fonthook::vectorfont
 			GpuQueryState& state = GetGpuQueryState();
 			UInt64 discarded = 0;
 			UInt64 pendingDiscarded = 0;
+			UInt64 pendingVanillaLayoutDiscarded = 0;
 			for (size_t index = 0; index < state.slots.size(); ++index)
 			{
 				GpuQuerySlot& slot = state.slots[index];
 				if (slot.pending)
+				{
 					++pendingDiscarded;
+					if (slot.includesVanillaLayout)
+						++pendingVanillaLayoutDiscarded;
+				}
 				if (countDiscarded && (slot.pending
 					|| index == state.activeSlot))
 				{
@@ -279,9 +469,16 @@ namespace fonthook::vectorfont
 				GetPerformanceState().gpuQueriesInFlight.fetch_sub(
 					pendingDiscarded, std::memory_order_relaxed);
 			}
+			if (pendingVanillaLayoutDiscarded)
+			{
+				GetPerformanceState().gpuVanillaLayoutQueriesInFlight.fetch_sub(
+					pendingVanillaLayoutDiscarded,
+					std::memory_order_relaxed);
+			}
 			state.device = nullptr;
 			state.nextSlot = 0;
 			state.activeSlot = std::numeric_limits<size_t>::max();
+			state.vanillaLayoutSampleCursor = 0;
 			state.unavailable = false;
 			state.loggedReady = false;
 		}
@@ -346,15 +543,34 @@ namespace fonthook::vectorfont
 				if (FAILED(disjointResult) || FAILED(frequencyResult)
 					|| FAILED(beginResult) || FAILED(endResult))
 				{
+					const bool includesVanillaLayout =
+						slot.includesVanillaLayout;
 					GetPerformanceState().gpuQueriesInFlight.fetch_sub(
 						1, std::memory_order_relaxed);
+					if (includesVanillaLayout)
+					{
+						GetPerformanceState().
+							gpuVanillaLayoutQueriesInFlight.fetch_sub(
+								1, std::memory_order_relaxed);
+					}
 					RecordGpuTimingCounter(GpuTimingCounter::ReadFailure);
 					ReleaseGpuQuerySlot(slot);
 					continue;
 				}
+				const bool includesVanillaLayout =
+					slot.includesVanillaLayout;
+				const GpuEnvelopeWorkload workload = slot.workload;
 				slot.pending = false;
+				slot.includesVanillaLayout = false;
+				slot.workload = {};
 				GetPerformanceState().gpuQueriesInFlight.fetch_sub(
 					1, std::memory_order_relaxed);
+				if (includesVanillaLayout)
+				{
+					GetPerformanceState().
+						gpuVanillaLayoutQueriesInFlight.fetch_sub(
+							1, std::memory_order_relaxed);
+				}
 				if (disjoint)
 				{
 					RecordGpuTimingCounter(GpuTimingCounter::Disjoint);
@@ -379,12 +595,36 @@ namespace fonthook::vectorfont
 				RecordGpuAlphaEnvelopeDuration(
 					static_cast<UInt64>(scaled));
 				RecordGpuTimingCounter(GpuTimingCounter::Completed);
+				if (includesVanillaLayout)
+				{
+					RecordGpuVanillaLayoutEnvelopeDuration(
+						static_cast<UInt64>(scaled));
+					RecordGpuVanillaLayoutEnvelopeWorkload(
+						static_cast<UInt64>(scaled), workload);
+					RecordGpuTimingCounter(
+						GpuTimingCounter::VanillaLayoutCompleted);
+				}
 			}
 		}
 
-		bool BeginGpuAlphaEnvelope(IDirect3DDevice9* device)
+		bool BeginGpuAlphaEnvelope(IDirect3DDevice9* device,
+			bool hasPreparedPayloads, bool hasVanillaLayout,
+			const FreeTypeGpuEnvelopeViewport& viewport)
 		{
-			if (!g_bEnableFreeTypeFontRenderingLog || !device)
+			if (!g_bEnableFreeTypeFontRenderingLog
+				|| (!hasPreparedPayloads && !hasVanillaLayout))
+				return false;
+			if (hasPreparedPayloads)
+			{
+				RecordGpuTimingCounter(
+					GpuTimingCounter::PreparedPayloadEligible);
+			}
+			if (hasVanillaLayout)
+			{
+				RecordGpuTimingCounter(
+					GpuTimingCounter::VanillaLayoutEligible);
+			}
+			if (!device)
 				return false;
 			GpuQueryState& state = GetGpuQueryState();
 			if (state.device != device)
@@ -394,6 +634,24 @@ namespace fonthook::vectorfont
 			}
 			if (state.unavailable)
 				return false;
+			// Preserve the established full-rate prepared-payload diagnostic. The
+			// new Vanilla-only route is sampled so four D3D9 query Issue calls do not
+			// become a material part of the frame cost being measured.
+			if (hasVanillaLayout && !hasPreparedPayloads)
+			{
+				const UInt32 sample = state.vanillaLayoutSampleCursor++;
+				if (sample % kVanillaLayoutGpuTimingSampleRate != 0u)
+				{
+					RecordGpuTimingCounter(
+						GpuTimingCounter::VanillaLayoutSampleSkipped);
+					return false;
+				}
+			}
+			if (hasVanillaLayout)
+			{
+				RecordGpuTimingCounter(
+					GpuTimingCounter::VanillaLayoutSampleAttempt);
+			}
 			PollGpuQueries();
 			if (state.activeSlot != std::numeric_limits<size_t>::max())
 			{
@@ -416,9 +674,13 @@ namespace fonthook::vectorfont
 				{
 					state.loggedReady = true;
 					FreeTypeFontDebugLog(
-						"tnvse_freetype_gpu_timing: enabled scope=tile_alpha_envelope async=1 flush=0 ring=%u disjoint_validation=1",
-						static_cast<UInt32>(state.slots.size()));
+						"tnvse_freetype_gpu_timing: enabled scope=tile_alpha_envelope tracked=prepared_payload_or_vanilla_layout async=1 flush=0 ring=%u disjoint_validation=1 vanilla_only_sample_rate=%u",
+						static_cast<UInt32>(state.slots.size()),
+						kVanillaLayoutGpuTimingSampleRate);
 				}
+				slot.includesVanillaLayout = hasVanillaLayout;
+				slot.workload = {};
+				slot.workload.viewport = viewport;
 				const HRESULT disjointResult = slot.disjoint->Issue(
 					D3DISSUE_BEGIN);
 				const HRESULT frequencyResult = SUCCEEDED(disjointResult)
@@ -466,6 +728,13 @@ namespace fonthook::vectorfont
 			GetPerformanceState().gpuQueriesInFlight.fetch_add(
 				1, std::memory_order_relaxed);
 			RecordGpuTimingCounter(GpuTimingCounter::Submitted);
+			if (slot.includesVanillaLayout)
+			{
+				GetPerformanceState().gpuVanillaLayoutQueriesInFlight.fetch_add(
+					1, std::memory_order_relaxed);
+				RecordGpuTimingCounter(
+					GpuTimingCounter::VanillaLayoutSubmitted);
+			}
 		}
 
 		struct DurationSummary
@@ -545,23 +814,23 @@ namespace fonthook::vectorfont
 			return result;
 		}
 
-		DurationSummary ConsumeGpuAlphaEnvelopeSummary()
+		DurationSummary ConsumeGpuEnvelopeSummary(
+			std::array<std::atomic<UInt64>, kDurationBuckets>& durations,
+			std::atomic<UInt64>& totalDuration,
+			std::atomic<UInt64>& maximumDuration)
 		{
-			PerformanceState& state = GetPerformanceState();
 			std::array<UInt64, kDurationBuckets> values = {};
 			DurationSummary result;
 			for (size_t bucket = 0; bucket < values.size(); ++bucket)
 			{
-				values[bucket] = state.gpuAlphaEnvelopeDurations[bucket]
+				values[bucket] = durations[bucket]
 					.exchange(0, std::memory_order_relaxed);
 				result.count += values[bucket];
 			}
-			const UInt64 totalNanoseconds =
-				state.gpuAlphaEnvelopeNanoseconds.exchange(
-					0, std::memory_order_relaxed);
-			const UInt64 maximumNanoseconds =
-				state.gpuAlphaEnvelopeMaximumNanoseconds.exchange(
-					0, std::memory_order_relaxed);
+			const UInt64 totalNanoseconds = totalDuration.exchange(
+				0, std::memory_order_relaxed);
+			const UInt64 maximumNanoseconds = maximumDuration.exchange(
+				0, std::memory_order_relaxed);
 			if (!result.count)
 				return result;
 			result.meanMicroseconds = static_cast<double>(totalNanoseconds)
@@ -604,6 +873,36 @@ namespace fonthook::vectorfont
 			return result;
 		}
 
+		DurationSummary ConsumeGpuAlphaEnvelopeSummary()
+		{
+			PerformanceState& state = GetPerformanceState();
+			return ConsumeGpuEnvelopeSummary(
+				state.gpuAlphaEnvelopeDurations,
+				state.gpuAlphaEnvelopeNanoseconds,
+				state.gpuAlphaEnvelopeMaximumNanoseconds);
+		}
+
+		DurationSummary ConsumeGpuVanillaLayoutEnvelopeSummary()
+		{
+			PerformanceState& state = GetPerformanceState();
+			return ConsumeGpuEnvelopeSummary(
+				state.gpuVanillaLayoutEnvelopeDurations,
+				state.gpuVanillaLayoutEnvelopeNanoseconds,
+				state.gpuVanillaLayoutEnvelopeMaximumNanoseconds);
+		}
+
+		GpuVanillaLayoutWorkloadAggregate
+			ConsumeGpuVanillaLayoutWorkloadAggregate()
+		{
+			PerformanceState& state = GetPerformanceState();
+			std::lock_guard<std::mutex> lock(
+				state.gpuVanillaLayoutWorkloadMutex);
+			const GpuVanillaLayoutWorkloadAggregate result =
+				state.gpuVanillaLayoutWorkload;
+			state.gpuVanillaLayoutWorkload = {};
+			return result;
+		}
+
 		std::array<UInt64, kGpuTimingCounterCount>
 			ConsumeGpuTimingCounters()
 		{
@@ -640,9 +939,132 @@ namespace fonthook::vectorfont
 
 	}
 
+	void RecordFreeTypeGpuEnvelopeForeignPass()
+	{
+		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
+		if (!workload)
+			return;
+		IncrementEnvelopeCounter(workload->immediatePasses);
+		IncrementEnvelopeCounter(workload->foreignPasses);
+	}
+
+	void RecordFreeTypeGpuEnvelopeNativeFacadePass()
+	{
+		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
+		if (!workload)
+			return;
+		IncrementEnvelopeCounter(workload->immediatePasses);
+		IncrementEnvelopeCounter(workload->nativeFacadePasses);
+	}
+
+	void RecordFreeTypeGpuEnvelopeVanillaPass()
+	{
+		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
+		if (!workload)
+			return;
+		IncrementEnvelopeCounter(workload->immediatePasses);
+		IncrementEnvelopeCounter(workload->vanillaPasses);
+	}
+
+	void RecordFreeTypeGpuEnvelopeVanillaCull(
+		FreeTypeGpuEnvelopeCull cull)
+	{
+		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
+		if (!workload)
+			return;
+		IncrementEnvelopeCounter(workload->vanillaCulls);
+		switch (cull)
+		{
+		case FreeTypeGpuEnvelopeCull::App:
+			IncrementEnvelopeCounter(workload->vanillaAppCulls);
+			break;
+		case FreeTypeGpuEnvelopeCull::Alpha:
+			IncrementEnvelopeCounter(workload->vanillaAlphaCulls);
+			break;
+		case FreeTypeGpuEnvelopeCull::Clip:
+			IncrementEnvelopeCounter(workload->vanillaClipCulls);
+			break;
+		case FreeTypeGpuEnvelopeCull::Scissor:
+			IncrementEnvelopeCounter(workload->vanillaScissorCulls);
+			break;
+		}
+	}
+
+	void RecordFreeTypeGpuEnvelopeVanillaRuntimeFallback()
+	{
+		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
+		if (workload)
+		{
+			IncrementEnvelopeCounter(
+				workload->vanillaRuntimeFallbacks);
+		}
+	}
+
+	void RecordFreeTypeGpuEnvelopeVanillaDraw(
+		bool standardLite, UInt32 vertexCount,
+		UInt32 triangleCount, bool useScissor,
+		SInt32 scissorLeft, SInt32 scissorTop,
+		SInt32 scissorRight, SInt32 scissorBottom)
+	{
+		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
+		if (!workload)
+			return;
+		IncrementEnvelopeCounter(standardLite
+			? workload->vanillaStandardLiteDraws
+			: workload->vanillaStockDraws);
+		workload->vanillaVertices += vertexCount;
+		workload->vanillaTriangles += triangleCount;
+
+		const FreeTypeGpuEnvelopeViewport& viewport = workload->viewport;
+		if (!viewport.width || !viewport.height)
+		{
+			IncrementEnvelopeCounter(
+				workload->viewportUnavailableDraws);
+			return;
+		}
+		const UInt64 viewportPixels = static_cast<UInt64>(viewport.width)
+			* static_cast<UInt64>(viewport.height);
+		if (!useScissor)
+		{
+			IncrementEnvelopeCounter(workload->unscissoredDraws);
+			workload->effectiveClipRectPixels += viewportPixels;
+			workload->viewportOpportunityPixels += viewportPixels;
+			return;
+		}
+
+		IncrementEnvelopeCounter(workload->scissoredDraws);
+		if (scissorRight <= scissorLeft || scissorBottom <= scissorTop)
+		{
+			IncrementEnvelopeCounter(workload->invalidScissorDraws);
+			return;
+		}
+		const SInt64 viewportLeft = viewport.x;
+		const SInt64 viewportTop = viewport.y;
+		const SInt64 viewportRight = viewportLeft + viewport.width;
+		const SInt64 viewportBottom = viewportTop + viewport.height;
+		const SInt64 clippedLeft = std::max<SInt64>(
+			scissorLeft, viewportLeft);
+		const SInt64 clippedTop = std::max<SInt64>(
+			scissorTop, viewportTop);
+		const SInt64 clippedRight = std::min<SInt64>(
+			scissorRight, viewportRight);
+		const SInt64 clippedBottom = std::min<SInt64>(
+			scissorBottom, viewportBottom);
+		const UInt64 clippedPixels = clippedRight > clippedLeft
+			&& clippedBottom > clippedTop
+			? static_cast<UInt64>(clippedRight - clippedLeft)
+				* static_cast<UInt64>(clippedBottom - clippedTop)
+			: 0u;
+		workload->effectiveClipRectPixels += clippedPixels;
+		workload->viewportOpportunityPixels += viewportPixels;
+	}
+
 	FreeTypeGpuAlphaEnvelopeScope::FreeTypeGpuAlphaEnvelopeScope(
-		IDirect3DDevice9* device, bool enabled)
-		: m_active(enabled && BeginGpuAlphaEnvelope(device))
+		IDirect3DDevice9* device, bool hasPreparedPayloads,
+		bool hasVanillaLayout,
+		const FreeTypeGpuEnvelopeViewport& viewport)
+		: m_active(BeginGpuAlphaEnvelope(device, hasPreparedPayloads,
+			hasVanillaLayout, viewport))
 	{
 	}
 
@@ -676,8 +1098,14 @@ namespace fonthook::vectorfont
 
 	FreeTypePerfScope::~FreeTypePerfScope()
 	{
+		Stop();
+	}
+
+	void FreeTypePerfScope::Stop()
+	{
 		if (!m_active)
 			return;
+		m_active = false;
 		LARGE_INTEGER now = {};
 		if (!QueryPerformanceCounter(&now))
 			return;
@@ -792,6 +1220,10 @@ namespace fonthook::vectorfont
 		};
 		const DurationSummary gpuAlphaEnvelope =
 			ConsumeGpuAlphaEnvelopeSummary();
+		const DurationSummary gpuVanillaLayoutEnvelope =
+			ConsumeGpuVanillaLayoutEnvelopeSummary();
+		const GpuVanillaLayoutWorkloadAggregate gpuVanillaLayoutWorkload =
+			ConsumeGpuVanillaLayoutWorkloadAggregate();
 		const std::array<UInt64, kGpuTimingCounterCount> gpuTimingCounters =
 			ConsumeGpuTimingCounters();
 		const auto gpuCounterValue = [&gpuTimingCounters](
@@ -947,7 +1379,7 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu vanilla_ui_ortho_translation=%llu generic_transforms=%llu",
+			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu revoke_invalid=%llu revoke_frame=%llu revoke_camera=%llu revoke_geometry=%llu revoke_transform=%llu revoke_bound=%llu revoke_scissor=%llu revoke_proof=%llu transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu vanilla_ui_ortho_translation=%llu generic_transforms=%llu",
 			counterValue(FreeTypePerfCounter::VisibilityPreflightClipCheck),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipCulled),
@@ -961,6 +1393,22 @@ namespace fonthook::vectorfont
 				VisibilityPreflightClipHonored),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipRevoked),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeInvalid),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeFrame),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeCamera),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeGeometry),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeTransform),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeBound),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeScissor),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeProof),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipTransformHit),
 			counterValue(FreeTypePerfCounter::
@@ -1232,11 +1680,15 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				VanillaLayoutDrawTokenRejected));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_vanilla_standard_lite: candidates=%llu replays=%llu fallbacks=%llu envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu declaration=%llu prelude=%llu",
+			"tnvse_freetype_vanilla_standard_lite: candidates=%llu replays=%llu current_declaration_replays=%llu compatible_declaration_replays=%llu fallbacks=%llu envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu declaration=%llu prelude=%llu",
 			counterValue(FreeTypePerfCounter::
 				VanillaLayoutStandardLiteCandidate),
 			counterValue(FreeTypePerfCounter::
 				VanillaLayoutStandardLiteReplay),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteCurrentDeclarationReplay),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteCompatibleDeclarationReplay),
 			counterValue(FreeTypePerfCounter::
 				VanillaLayoutStandardLiteFallback),
 			counterValue(FreeTypePerfCounter::
@@ -1327,6 +1779,50 @@ namespace fonthook::vectorfont
 				VanillaLayoutStandardLiteBindingSubmissionWitness),
 			counterValue(FreeTypePerfCounter::
 				VanillaLayoutStandardLiteBindingUnclassified));
+		const UInt64 adjacentBindingPairs = counterValue(
+			FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingAdjacentPair);
+		const UInt64 adjacentBindingExact = counterValue(
+			FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingAdjacentExact);
+		const double adjacentBindingExactPercent = adjacentBindingPairs
+			? static_cast<double>(adjacentBindingExact)
+				/ static_cast<double>(adjacentBindingPairs) * 100.0
+			: 0.0;
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_vanilla_standard_lite_binding_adjacency: pairs=%llu exact=%llu exact_pct=%.2f same_declaration=%llu same_vertex_buffer=%llu same_index_buffer=%llu same_stream_offset=%llu same_stride=%llu",
+			adjacentBindingPairs, adjacentBindingExact,
+			adjacentBindingExactPercent,
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingAdjacentSameDeclaration),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingAdjacentSameVertexBuffer),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingAdjacentSameIndexBuffer),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingAdjacentSameStreamOffset),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingAdjacentSameStride));
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_vanilla_standard_lite_binding_runs: runs=%llu draws=%llu len_1=%llu len_2=%llu len_3_4=%llu len_5_8=%llu len_9_16=%llu len_17_32=%llu len_33_plus=%llu",
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRun),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRunDraw),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRunLength1),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRunLength2),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRunLength3To4),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRunLength5To8),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRunLength9To16),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRunLength17To32),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRunLength33Plus));
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu vanilla_bootstraps_saved=%llu direct_single_replays=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
 			values[static_cast<size_t>(
@@ -1781,6 +2277,18 @@ namespace fonthook::vectorfont
 		const DurationSummary preflightClipHonorGate =
 			ConsumeDurationSummary(
 				FreeTypePerfPhase::PreflightClipHonorGate);
+		const DurationSummary vanillaStandardLiteState =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::VanillaLayoutStandardLiteState);
+		const DurationSummary vanillaStandardLiteBinding =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::VanillaLayoutStandardLiteBinding);
+		const DurationSummary vanillaStandardLiteDraw =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::VanillaLayoutStandardLiteDraw);
+		const DurationSummary vanillaStandardLitePost =
+			ConsumeDurationSummary(
+				FreeTypePerfPhase::VanillaLayoutStandardLitePost);
 		const AccumulatorPrepTailSummary accumulatorPrepTail =
 			ConsumeAccumulatorPrepTailSummary();
 		const AccumulatorPrepTailWorst& accumulatorPrepWorst =
@@ -1855,6 +2363,33 @@ namespace fonthook::vectorfont
 			extendedFnt.count, extendedFnt.medianMicroseconds,
 			extendedFnt.p95Microseconds);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_vanilla_standard_lite_cpu_timing: sample_rate=%u state_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f binding_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f draw_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f post_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f",
+			kVanillaLayoutStandardLiteCpuSampleRate,
+			vanillaStandardLiteState.count,
+			vanillaStandardLiteState.meanMicroseconds,
+			vanillaStandardLiteState.medianMicroseconds,
+			vanillaStandardLiteState.p95Microseconds,
+			vanillaStandardLiteState.p99Microseconds,
+			vanillaStandardLiteState.maximumMicroseconds,
+			vanillaStandardLiteBinding.count,
+			vanillaStandardLiteBinding.meanMicroseconds,
+			vanillaStandardLiteBinding.medianMicroseconds,
+			vanillaStandardLiteBinding.p95Microseconds,
+			vanillaStandardLiteBinding.p99Microseconds,
+			vanillaStandardLiteBinding.maximumMicroseconds,
+			vanillaStandardLiteDraw.count,
+			vanillaStandardLiteDraw.meanMicroseconds,
+			vanillaStandardLiteDraw.medianMicroseconds,
+			vanillaStandardLiteDraw.p95Microseconds,
+			vanillaStandardLiteDraw.p99Microseconds,
+			vanillaStandardLiteDraw.maximumMicroseconds,
+			vanillaStandardLitePost.count,
+			vanillaStandardLitePost.meanMicroseconds,
+			vanillaStandardLitePost.medianMicroseconds,
+			vanillaStandardLitePost.p95Microseconds,
+			vanillaStandardLitePost.p99Microseconds,
+			vanillaStandardLitePost.maximumMicroseconds);
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_command_build_timing: stamp_n=%llu median_us=%.3f p95_us=%.3f direct_facade_n=%llu median_us=%.3f p95_us=%.3f ordinary_n=%llu median_us=%.3f p95_us=%.3f finalize_n=%llu median_us=%.3f p95_us=%.3f",
 			commandBuildStamp.count,
 			commandBuildStamp.medianMicroseconds,
@@ -1920,6 +2455,183 @@ namespace fonthook::vectorfont
 			gpuCounterValue(GpuTimingCounter::Disjoint),
 			gpuCounterValue(GpuTimingCounter::InvalidRange),
 			gpuCounterValue(GpuTimingCounter::ResetDiscarded));
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_gpu_vanilla_layout_timing: scope=tile_alpha_envelope qualifier=contains_preflight_surviving_vanilla_layout valid_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f eligible=%llu sample_attempts=%llu sample_skipped=%llu submitted=%llu completed=%llu in_flight=%llu prepared_payload_eligible=%llu vanilla_only_sample_rate=%u async=1 flush=0",
+			gpuVanillaLayoutEnvelope.count,
+			gpuVanillaLayoutEnvelope.meanMicroseconds,
+			gpuVanillaLayoutEnvelope.medianMicroseconds,
+			gpuVanillaLayoutEnvelope.p95Microseconds,
+			gpuVanillaLayoutEnvelope.p99Microseconds,
+			gpuVanillaLayoutEnvelope.maximumMicroseconds,
+			gpuCounterValue(GpuTimingCounter::VanillaLayoutEligible),
+			gpuCounterValue(GpuTimingCounter::VanillaLayoutSampleAttempt),
+			gpuCounterValue(GpuTimingCounter::VanillaLayoutSampleSkipped),
+			gpuCounterValue(GpuTimingCounter::VanillaLayoutSubmitted),
+			gpuCounterValue(GpuTimingCounter::VanillaLayoutCompleted),
+			state.gpuVanillaLayoutQueriesInFlight.load(
+				std::memory_order_relaxed),
+			gpuCounterValue(GpuTimingCounter::PreparedPayloadEligible),
+			kVanillaLayoutGpuTimingSampleRate);
+
+		const auto saturatingDifference = [](UInt64 total, UInt64 part)
+		{
+			return total > part ? total - part : UInt64{0};
+		};
+		const UInt64 gpuWorkloadClassifiedPasses =
+			gpuVanillaLayoutWorkload.foreignPasses
+				+ gpuVanillaLayoutWorkload.nativeFacadePasses
+				+ gpuVanillaLayoutWorkload.vanillaPasses;
+		const UInt64 gpuWorkloadVanillaDraws =
+			gpuVanillaLayoutWorkload.vanillaStandardLiteDraws
+				+ gpuVanillaLayoutWorkload.vanillaStockDraws;
+		const UInt64 gpuWorkloadVanillaOutcomes =
+			gpuWorkloadVanillaDraws
+				+ gpuVanillaLayoutWorkload.vanillaCulls
+				+ gpuVanillaLayoutWorkload.vanillaRuntimeFallbacks;
+		const double gpuWorkloadMeanImmediatePasses =
+			gpuVanillaLayoutWorkload.samples
+				? static_cast<double>(
+					gpuVanillaLayoutWorkload.immediatePasses)
+					/ static_cast<double>(gpuVanillaLayoutWorkload.samples)
+				: 0.0;
+		const double gpuWorkloadMeanVanillaDraws =
+			gpuVanillaLayoutWorkload.samples
+				? static_cast<double>(gpuWorkloadVanillaDraws)
+					/ static_cast<double>(gpuVanillaLayoutWorkload.samples)
+				: 0.0;
+		const double gpuWorkloadMeanVanillaTriangles =
+			gpuVanillaLayoutWorkload.samples
+				? static_cast<double>(
+					gpuVanillaLayoutWorkload.vanillaTriangles)
+					/ static_cast<double>(gpuVanillaLayoutWorkload.samples)
+				: 0.0;
+		const double gpuWorkloadClipRectUpperBoundPercent =
+			gpuVanillaLayoutWorkload.viewportOpportunityPixels
+				? static_cast<double>(
+					gpuVanillaLayoutWorkload.effectiveClipRectPixels)
+					/ static_cast<double>(gpuVanillaLayoutWorkload.
+						viewportOpportunityPixels) * 100.0
+				: 0.0;
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_gpu_vanilla_layout_envelope_workload: samples=%llu timing_valid_n=%llu immediate_passes=%llu classified_passes=%llu unclassified_passes=%llu immediate_passes_mean=%.3f foreign_immediate_passes=%llu native_facade_passes=%llu vanilla_passes=%llu vanilla_draws=%llu vanilla_draws_mean=%.3f standard_lite_draws=%llu stock_draws=%llu runtime_fallbacks=%llu culls=%llu app_culls=%llu alpha_culls=%llu clip_culls=%llu scissor_culls=%llu unresolved_vanilla_passes=%llu vanilla_vertices=%llu vanilla_triangles=%llu vanilla_triangles_mean=%.3f scissored_draws=%llu unscissored_draws=%llu invalid_scissor_draws=%llu viewport_unavailable_draws=%llu clip_rect_upper_bound_pct=%.3f",
+			gpuVanillaLayoutWorkload.samples,
+			gpuVanillaLayoutEnvelope.count,
+			gpuVanillaLayoutWorkload.immediatePasses,
+			gpuWorkloadClassifiedPasses,
+			saturatingDifference(
+				gpuVanillaLayoutWorkload.immediatePasses,
+				gpuWorkloadClassifiedPasses),
+			gpuWorkloadMeanImmediatePasses,
+			gpuVanillaLayoutWorkload.foreignPasses,
+			gpuVanillaLayoutWorkload.nativeFacadePasses,
+			gpuVanillaLayoutWorkload.vanillaPasses,
+			gpuWorkloadVanillaDraws,
+			gpuWorkloadMeanVanillaDraws,
+			gpuVanillaLayoutWorkload.vanillaStandardLiteDraws,
+			gpuVanillaLayoutWorkload.vanillaStockDraws,
+			gpuVanillaLayoutWorkload.vanillaRuntimeFallbacks,
+			gpuVanillaLayoutWorkload.vanillaCulls,
+			gpuVanillaLayoutWorkload.vanillaAppCulls,
+			gpuVanillaLayoutWorkload.vanillaAlphaCulls,
+			gpuVanillaLayoutWorkload.vanillaClipCulls,
+			gpuVanillaLayoutWorkload.vanillaScissorCulls,
+			saturatingDifference(
+				gpuVanillaLayoutWorkload.vanillaPasses,
+				gpuWorkloadVanillaOutcomes),
+			gpuVanillaLayoutWorkload.vanillaVertices,
+			gpuVanillaLayoutWorkload.vanillaTriangles,
+			gpuWorkloadMeanVanillaTriangles,
+			gpuVanillaLayoutWorkload.scissoredDraws,
+			gpuVanillaLayoutWorkload.unscissoredDraws,
+			gpuVanillaLayoutWorkload.invalidScissorDraws,
+			gpuVanillaLayoutWorkload.viewportUnavailableDraws,
+			gpuWorkloadClipRectUpperBoundPercent);
+
+		const auto gpuBucketMeanMicroseconds = [](
+			const GpuVanillaLayoutDrawBucket& bucket)
+		{
+			return bucket.samples
+				? static_cast<double>(bucket.nanoseconds)
+					/ static_cast<double>(bucket.samples) / 1000.0
+				: 0.0;
+		};
+		const auto gpuBucketMaximumMicroseconds = [](
+			const GpuVanillaLayoutDrawBucket& bucket)
+		{
+			return static_cast<double>(bucket.maximumNanoseconds) / 1000.0;
+		};
+		const auto& gpuDrawBuckets = gpuVanillaLayoutWorkload.drawBuckets;
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_gpu_vanilla_layout_envelope_draw_buckets: draws_0_8_n=%llu mean_us=%.3f max_us=%.3f draws_9_16_n=%llu mean_us=%.3f max_us=%.3f draws_17_32_n=%llu mean_us=%.3f max_us=%.3f draws_33_64_n=%llu mean_us=%.3f max_us=%.3f draws_65_plus_n=%llu mean_us=%.3f max_us=%.3f",
+			gpuDrawBuckets[0].samples,
+			gpuBucketMeanMicroseconds(gpuDrawBuckets[0]),
+			gpuBucketMaximumMicroseconds(gpuDrawBuckets[0]),
+			gpuDrawBuckets[1].samples,
+			gpuBucketMeanMicroseconds(gpuDrawBuckets[1]),
+			gpuBucketMaximumMicroseconds(gpuDrawBuckets[1]),
+			gpuDrawBuckets[2].samples,
+			gpuBucketMeanMicroseconds(gpuDrawBuckets[2]),
+			gpuBucketMaximumMicroseconds(gpuDrawBuckets[2]),
+			gpuDrawBuckets[3].samples,
+			gpuBucketMeanMicroseconds(gpuDrawBuckets[3]),
+			gpuBucketMaximumMicroseconds(gpuDrawBuckets[3]),
+			gpuDrawBuckets[4].samples,
+			gpuBucketMeanMicroseconds(gpuDrawBuckets[4]),
+			gpuBucketMaximumMicroseconds(gpuDrawBuckets[4]));
+
+		const GpuEnvelopeWorkload& gpuWorstWorkload =
+			gpuVanillaLayoutWorkload.worstWorkload;
+		const UInt64 gpuWorstClassifiedPasses =
+			static_cast<UInt64>(gpuWorstWorkload.foreignPasses)
+				+ gpuWorstWorkload.nativeFacadePasses
+				+ gpuWorstWorkload.vanillaPasses;
+		const UInt64 gpuWorstVanillaDraws =
+			static_cast<UInt64>(gpuWorstWorkload.vanillaStandardLiteDraws)
+				+ gpuWorstWorkload.vanillaStockDraws;
+		const UInt64 gpuWorstVanillaOutcomes = gpuWorstVanillaDraws
+			+ gpuWorstWorkload.vanillaCulls
+			+ gpuWorstWorkload.vanillaRuntimeFallbacks;
+		const double gpuWorstClipRectUpperBoundPercent =
+			gpuWorstWorkload.viewportOpportunityPixels
+				? static_cast<double>(gpuWorstWorkload.effectiveClipRectPixels)
+					/ static_cast<double>(
+						gpuWorstWorkload.viewportOpportunityPixels) * 100.0
+				: 0.0;
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_gpu_vanilla_layout_envelope_worst: duration_us=%.3f viewport=%ux%u+%u+%u immediate_passes=%u classified_passes=%llu unclassified_passes=%llu foreign_immediate_passes=%u native_facade_passes=%u vanilla_passes=%u vanilla_draws=%llu standard_lite_draws=%u stock_draws=%u runtime_fallbacks=%u culls=%u app_culls=%u alpha_culls=%u clip_culls=%u scissor_culls=%u unresolved_vanilla_passes=%llu vanilla_vertices=%llu vanilla_triangles=%llu scissored_draws=%u unscissored_draws=%u invalid_scissor_draws=%u viewport_unavailable_draws=%u clip_rect_upper_bound_pct=%.3f",
+			static_cast<double>(gpuVanillaLayoutWorkload.worstNanoseconds)
+				/ 1000.0,
+			gpuWorstWorkload.viewport.width,
+			gpuWorstWorkload.viewport.height,
+			gpuWorstWorkload.viewport.x,
+			gpuWorstWorkload.viewport.y,
+			gpuWorstWorkload.immediatePasses,
+			gpuWorstClassifiedPasses,
+			saturatingDifference(
+				gpuWorstWorkload.immediatePasses,
+				gpuWorstClassifiedPasses),
+			gpuWorstWorkload.foreignPasses,
+			gpuWorstWorkload.nativeFacadePasses,
+			gpuWorstWorkload.vanillaPasses,
+			gpuWorstVanillaDraws,
+			gpuWorstWorkload.vanillaStandardLiteDraws,
+			gpuWorstWorkload.vanillaStockDraws,
+			gpuWorstWorkload.vanillaRuntimeFallbacks,
+			gpuWorstWorkload.vanillaCulls,
+			gpuWorstWorkload.vanillaAppCulls,
+			gpuWorstWorkload.vanillaAlphaCulls,
+			gpuWorstWorkload.vanillaClipCulls,
+			gpuWorstWorkload.vanillaScissorCulls,
+			saturatingDifference(
+				gpuWorstWorkload.vanillaPasses,
+				gpuWorstVanillaOutcomes),
+			gpuWorstWorkload.vanillaVertices,
+			gpuWorstWorkload.vanillaTriangles,
+			gpuWorstWorkload.scissoredDraws,
+			gpuWorstWorkload.unscissoredDraws,
+			gpuWorstWorkload.invalidScissorDraws,
+			gpuWorstWorkload.viewportUnavailableDraws,
+			gpuWorstClipRectUpperBoundPercent);
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_accumulator_prep_phases: topology_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f metadata_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f facades_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f ring_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f singletons_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f command_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f publish_n=%llu mean_us=%.3f p95_us=%.3f p99_us=%.3f max_us=%.3f",
 			framePrepTopology.count, framePrepTopology.meanMicroseconds,

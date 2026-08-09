@@ -1754,11 +1754,13 @@ namespace fonthook::vectorfont
 					facadePrepStart);
 				const bool hasPreparedPayloads =
 					!scratch.payloadTemplates.empty();
+				const bool hasTrackedNativeSubmissions =
+					hasPreparedPayloads || hasVanillaLayoutSurvivors;
 				// Vanilla-layout participates only in the outer shader-state scope.
 				// The direct-facade payload gate remains authoritative for ring,
 				// command-buffer, constant-ownership and native replay work.
 				const bool hasSortedShaderParticipants =
-					hasPreparedPayloads || hasVanillaLayoutSurvivors;
+					hasTrackedNativeSubmissions;
 				if (!hasPreparedPayloads)
 				{
 					RecordFreeTypePerf(
@@ -1933,11 +1935,23 @@ namespace fonthook::vectorfont
 				{
 					FreeTypePerfScope vanillaRenderPerf(
 						FreeTypePerfPhase::FrameRouteVanillaRender);
-					NiDX9Renderer* renderer = hasPreparedPayloads
+					// GPU timing has its own tracked-submission gate. Vanilla-layout
+					// remains outside ring/command work, but a preflight-surviving
+					// shape now admits a sampled asynchronous Tile alpha envelope.
+					NiDX9Renderer* renderer = hasTrackedNativeSubmissions
 						? NiDX9Renderer::GetSingleton() : nullptr;
+					FreeTypeGpuEnvelopeViewport gpuViewport;
+					if (renderer)
+					{
+						gpuViewport.x = renderer->m_kD3DPort.X;
+						gpuViewport.y = renderer->m_kD3DPort.Y;
+						gpuViewport.width = renderer->m_kD3DPort.Width;
+						gpuViewport.height = renderer->m_kD3DPort.Height;
+					}
 					FreeTypeGpuAlphaEnvelopeScope gpuTiming(
 						renderer ? renderer->GetD3DDevice() : nullptr,
-						hasPreparedPayloads);
+						hasPreparedPayloads, hasVanillaLayoutSurvivors,
+						gpuViewport);
 					state.predecessorRenderAlphaGeometry(accumulator);
 				}
 				if (hasPreparedPayloads)
@@ -2105,7 +2119,7 @@ namespace fonthook::vectorfont
 		view.metadata = entry.metadata;
 		view.payload = entry.payload;
 		view.preflightResult = entry.preflightResult;
-		view.visibility = entry.visibility;
+		view.visibility = &entry.visibility;
 		view.generation = entry.generation;
 		view.validationToken = entry.validationToken;
 		view.commandSpanIndex = entry.commandSpanIndex;

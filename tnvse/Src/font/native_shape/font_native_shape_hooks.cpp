@@ -655,6 +655,31 @@ namespace fonthook::vectorfont
 				: nullptr;
 		}
 
+		void RecordGpuEnvelopeVanillaCull(NativeFontVisibilityCull cull)
+		{
+			switch (cull)
+			{
+			case NativeFontVisibilityCull::AppCulled:
+				RecordFreeTypeGpuEnvelopeVanillaCull(
+					FreeTypeGpuEnvelopeCull::App);
+				break;
+			case NativeFontVisibilityCull::ZeroAlpha:
+				RecordFreeTypeGpuEnvelopeVanillaCull(
+					FreeTypeGpuEnvelopeCull::Alpha);
+				break;
+			case NativeFontVisibilityCull::Clip:
+				RecordFreeTypeGpuEnvelopeVanillaCull(
+					FreeTypeGpuEnvelopeCull::Clip);
+				break;
+			case NativeFontVisibilityCull::Scissor:
+				RecordFreeTypeGpuEnvelopeVanillaCull(
+					FreeTypeGpuEnvelopeCull::Scissor);
+				break;
+			default:
+				break;
+			}
+		}
+
 		struct NativeSegmentPassStateKey
 		{
 			const NativeFontCompiledPacketCommand* program = nullptr;
@@ -1211,6 +1236,158 @@ namespace fonthook::vectorfont
 				&& left.indexBuffer == right.indexBuffer
 				&& left.streamOffset == right.streamOffset
 				&& left.stride == right.stride;
+		}
+
+		struct VanillaLayoutStandardLiteBindingRunTracker
+		{
+			NativeSegmentGeometryBindingKey previous;
+			UInt64 frameToken = 0;
+			UInt32 runLength = 0;
+			bool ready = false;
+		};
+
+		thread_local VanillaLayoutStandardLiteBindingRunTracker
+			s_vanillaLayoutStandardLiteBindingRun;
+		thread_local UInt32 s_vanillaLayoutStandardLiteCpuSampleCursor = 0;
+
+		void FinishVanillaLayoutStandardLiteBindingRun()
+		{
+			VanillaLayoutStandardLiteBindingRunTracker& tracker =
+				s_vanillaLayoutStandardLiteBindingRun;
+			if (!tracker.ready || !tracker.runLength)
+				return;
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRun);
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRunDraw,
+				tracker.runLength);
+			FreeTypePerfCounter bucket = FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingRunLength33Plus;
+			if (tracker.runLength == 1u)
+			{
+				bucket = FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingRunLength1;
+			}
+			else if (tracker.runLength == 2u)
+			{
+				bucket = FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingRunLength2;
+			}
+			else if (tracker.runLength <= 4u)
+			{
+				bucket = FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingRunLength3To4;
+			}
+			else if (tracker.runLength <= 8u)
+			{
+				bucket = FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingRunLength5To8;
+			}
+			else if (tracker.runLength <= 16u)
+			{
+				bucket = FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingRunLength9To16;
+			}
+			else if (tracker.runLength <= 32u)
+			{
+				bucket = FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingRunLength17To32;
+			}
+			RecordFreeTypePerf(bucket);
+			tracker.runLength = 0;
+			tracker.ready = false;
+		}
+
+		void BreakVanillaLayoutStandardLiteBindingRun()
+		{
+			FinishVanillaLayoutStandardLiteBindingRun();
+			s_vanillaLayoutStandardLiteBindingRun = {};
+		}
+
+		void ObserveVanillaLayoutStandardLiteBinding(
+			const NativeSegmentGeometryBindingKey& binding,
+			UInt64 frameToken)
+		{
+			if (!g_bEnableFreeTypeFontRenderingLog || !frameToken)
+			{
+				BreakVanillaLayoutStandardLiteBindingRun();
+				return;
+			}
+
+			VanillaLayoutStandardLiteBindingRunTracker& tracker =
+				s_vanillaLayoutStandardLiteBindingRun;
+			if (!tracker.ready || tracker.frameToken != frameToken)
+			{
+				FinishVanillaLayoutStandardLiteBindingRun();
+				tracker.previous = binding;
+				tracker.frameToken = frameToken;
+				tracker.runLength = 1u;
+				tracker.ready = true;
+				return;
+			}
+
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingAdjacentPair);
+			const bool sameDeclaration =
+				tracker.previous.declaration == binding.declaration;
+			const bool sameVertexBuffer =
+				tracker.previous.vertexBuffer == binding.vertexBuffer;
+			const bool sameIndexBuffer =
+				tracker.previous.indexBuffer == binding.indexBuffer;
+			const bool sameStreamOffset =
+				tracker.previous.streamOffset == binding.streamOffset;
+			const bool sameStride = tracker.previous.stride == binding.stride;
+			if (sameDeclaration)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingAdjacentSameDeclaration);
+			}
+			if (sameVertexBuffer)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingAdjacentSameVertexBuffer);
+			}
+			if (sameIndexBuffer)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingAdjacentSameIndexBuffer);
+			}
+			if (sameStreamOffset)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingAdjacentSameStreamOffset);
+			}
+			if (sameStride)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingAdjacentSameStride);
+			}
+
+			if (sameDeclaration && sameVertexBuffer && sameIndexBuffer
+				&& sameStreamOffset && sameStride)
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteBindingAdjacentExact);
+				if (tracker.runLength != std::numeric_limits<UInt32>::max())
+					++tracker.runLength;
+			}
+			else
+			{
+				FinishVanillaLayoutStandardLiteBindingRun();
+				tracker.runLength = 1u;
+			}
+			tracker.previous = binding;
+			tracker.frameToken = frameToken;
+			tracker.ready = true;
+		}
+
+		bool ShouldSampleVanillaLayoutStandardLiteCpuStages()
+		{
+			if (!g_bEnableFreeTypeFontRenderingLog)
+				return false;
+			const UInt32 sample =
+				s_vanillaLayoutStandardLiteCpuSampleCursor++;
+			return sample % kVanillaLayoutStandardLiteCpuSampleRate == 0u;
 		}
 
 		bool BuildSegmentDeviceStateStamp(
@@ -1980,6 +2157,7 @@ namespace fonthook::vectorfont
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 triangleCount = 0;
+			bool measureVanillaStandardLiteCpuStages = false;
 			// Optional synchronous witness used by the metadata-only Vanilla route.
 			// Existing frame-command submissions leave it null and retain their
 			// established device-failure handling.
@@ -2351,9 +2529,31 @@ namespace fonthook::vectorfont
 
 			NiD3DShaderDeclaration* shaderDeclaration =
 				shader->m_spShaderDecl.m_pObject;
-			if (!shaderDeclaration
-				|| shaderDeclaration->GetD3DDeclaration()
-					!= buffer->m_hDeclaration)
+			const void* liveShaderDeclaration = shaderDeclaration
+				? shaderDeclaration->GetD3DDeclaration() : nullptr;
+			const void* liveBufferDeclaration = buffer->m_hDeclaration;
+			const bool currentDeclaration = liveShaderDeclaration
+				&& liveBufferDeclaration == liveShaderDeclaration;
+			const bool compatiblePreviousDeclaration =
+				drawToken.priorGenerationDeclaration
+				&& liveShaderDeclaration
+					== drawToken.generationDeclarationIdentity
+				&& liveBufferDeclaration
+					== drawToken.bufferDeclarationIdentity
+				&& liveBufferDeclaration != liveShaderDeclaration;
+			// A same-device shader refresh publishes a new declaration object even
+			// though its 40/48-byte vertex contract is identical. Retail static
+			// packing has already retired the CPU color/UV sources, so forcing a
+			// Purge/Precache migration would destroy the only authoritative packed
+			// stream. The draw token instead migrates the shape to the current
+			// program/generation while retaining the exact compatible declaration
+			// owned by its resident buffer. Device-epoch and compatibility-set proof
+			// were completed under the renderer lock before the token was published.
+			if (!liveShaderDeclaration
+				|| liveShaderDeclaration
+					!= drawToken.generationDeclarationIdentity
+				|| (!currentDeclaration
+					&& !compatiblePreviousDeclaration))
 			{
 				return NativeDirectDrawLiteFallback::Declaration;
 			}
@@ -2413,6 +2613,9 @@ namespace fonthook::vectorfont
 		{
 			if (submission.successfulDrawWitness)
 				*submission.successfulDrawWitness = false;
+			FreeTypePerfScope bindingPerf(
+				FreeTypePerfPhase::VanillaLayoutStandardLiteBinding,
+				submission.measureVanillaStandardLiteCpuStages);
 			NativeSegmentDeviceStateCache* deviceState =
 				submission.deviceState;
 			const bool bindingReady = deviceState
@@ -2454,10 +2657,15 @@ namespace fonthook::vectorfont
 				}
 			}
 
+			bindingPerf.Stop();
+			FreeTypePerfScope drawPerf(
+				FreeTypePerfPhase::VanillaLayoutStandardLiteDraw,
+				submission.measureVanillaStandardLiteCpuStages);
 			const HRESULT drawResult = submission.device->DrawIndexedPrimitive(
 				D3DPT_TRIANGLELIST,
 				static_cast<INT>(submission.baseVertex), 0,
 				submission.vertexCount, 0, submission.triangleCount);
+			drawPerf.Stop();
 			// Formal E745A0 clears the low dirty/revision bits after the indexed
 			// loop even when the D3D call fails. Preserve that exact side effect.
 			submission.data->m_usDirtyFlags &= 0xF000u;
@@ -2894,6 +3102,12 @@ namespace fonthook::vectorfont
 			const NiPropertyState* properties = dispatch.properties;
 			const NativeFontCompiledPacketCommand& program =
 				*dispatch.program;
+			const bool measureVanillaStandardLiteCpuStages =
+				certifiedDirectDraw
+				&& certifiedDirectDraw->measureVanillaStandardLiteCpuStages;
+			FreeTypePerfScope statePerf(
+				FreeTypePerfPhase::VanillaLayoutStandardLiteState,
+				measureVanillaStandardLiteCpuStages);
 			// InvokeGuardedNativeReplay admits only a completely classified
 			// callback table. Unknown injected callbacks return to vanilla B994F0
 			// before its prelude or any draw has executed.
@@ -3228,6 +3442,7 @@ namespace fonthook::vectorfont
 				}
 			}
 
+			statePerf.Stop();
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::NativeDirectDrawLiteCandidate);
 			NativeDirectDrawLiteSubmission builtDirectDraw;
@@ -3266,6 +3481,9 @@ namespace fonthook::vectorfont
 						preparedBuffer, properties);
 				NativeFontRenderImmediateAlt(geometry, nullptr, renderer);
 			}
+			FreeTypePerfScope postPerf(
+				FreeTypePerfPhase::VanillaLayoutStandardLitePost,
+				measureVanillaStandardLiteCpuStages);
 			const bool verifiedPost =
 				(program.standardV2SlotProofs
 					& NativeFontCompiledPacketCommand::
@@ -3507,6 +3725,8 @@ namespace fonthook::vectorfont
 					VanillaLayoutStandardLiteFallback::Prelude);
 				return false;
 			}
+			directDraw.measureVanillaStandardLiteCpuStages =
+				ShouldSampleVanillaLayoutStandardLiteCpuStages();
 
 			NativeDirectImmediateScope immediateScope(geometry);
 			ExecuteStandardPassLite(pass, currentPass,
@@ -3522,6 +3742,14 @@ namespace fonthook::vectorfont
 					VanillaLayoutStandardLiteFallback::Binding);
 				return false;
 			}
+			ObserveVanillaLayoutStandardLiteBinding(
+				directDraw.binding,
+				GetNativeFontSortedFrameValidationToken());
+			RecordFreeTypePerf(drawToken.priorGenerationDeclaration
+				? FreeTypePerfCounter::
+					VanillaLayoutStandardLiteCompatibleDeclarationReplay
+				: FreeTypePerfCounter::
+					VanillaLayoutStandardLiteCurrentDeclarationReplay);
 			RecordFreeTypePerf(FreeTypePerfCounter::
 				VanillaLayoutStandardLiteReplay);
 			return true;
@@ -5403,8 +5631,13 @@ namespace fonthook::vectorfont
 			return;
 		NiTriShape* shape = pass
 			? reinterpret_cast<NiTriShape*>(pass->pGeometry) : nullptr;
-		if (!IsNativeFontAtlasShape(shape))
+		const bool vanillaLayoutShape = IsVanillaLayoutShape(shape);
+		const bool nativeFontShape = IsNativeFontAtlasShape(shape);
+		if (!vanillaLayoutShape)
+			BreakVanillaLayoutStandardLiteBindingRun();
+		if (!nativeFontShape)
 		{
+			RecordFreeTypeGpuEnvelopeForeignPass();
 			if (s_constantOwnershipBatch.FrameActive())
 				ReleaseNativeConstantOwnershipBatch(
 					"before-foreign-render-pass");
@@ -5424,45 +5657,56 @@ namespace fonthook::vectorfont
 			InvalidateNativeFontSortedShaderStateWithinExecutionSegment();
 			return;
 		}
+		if (vanillaLayoutShape)
+			RecordFreeTypeGpuEnvelopeVanillaPass();
+		else
+			RecordFreeTypeGpuEnvelopeNativeFacadePass();
 
 		FreeTypePerfScope dispatchRoutePerf(
 			FreeTypePerfPhase::DispatchRoute);
 		NativeFontSortedFrameEntryView frameEntry;
 		const bool sortedFrameHit =
 			FindNativeFontSortedFrameEntry(shape, frameEntry);
-		if (sortedFrameHit
-			&& (frameEntry.visibility.cull
+		const NativeFontVisibilityPreflight* frameVisibility =
+			sortedFrameHit ? frameEntry.visibility : nullptr;
+		if (frameVisibility
+			&& (frameVisibility->cull
 					== NativeFontVisibilityCull::Clip
-				|| frameEntry.visibility.cull
+				|| frameVisibility->cull
 					== NativeFontVisibilityCull::Scissor))
 		{
-			// The sorted-frame clip proof is revalidated against the live
-			// volatile inputs before it suppresses the dispatch. Honoring
+			// The sorted-frame witness is compared directly with the live volatile
+			// inputs before it suppresses the dispatch. Honoring
 			// must precede the singleton-facade direct-draw path so culled
-			// singleton texts never arm a packet draw. Any drift revokes the cached
-			// decision and falls open to the ordinary draw path.
+			// singleton texts never arm a packet draw. Any drift revokes the frame
+			// proof and falls open to the ordinary draw path.
 			if (HonorNativeFontPreflightClipCull(shape,
-				frameEntry.visibility))
+					*frameVisibility))
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					VisibilityPreflightClipHonored);
 				if (frameEntry.payload)
 				{
 					RecordNativeFontVisibilityCull(
-						frameEntry.visibility.cull, *frameEntry.payload);
+						frameVisibility->cull, *frameEntry.payload);
 				}
 				else
 				{
 					RecordNativeFontVisibilityCull(
-						frameEntry.visibility.cull);
+						frameVisibility->cull);
+				}
+				if (vanillaLayoutShape)
+				{
+					RecordGpuEnvelopeVanillaCull(
+						frameVisibility->cull);
 				}
 				return;
 			}
 			RecordFreeTypePerf(FreeTypePerfCounter::
 				VisibilityPreflightClipRevoked);
 		}
-		if (sortedFrameHit
-			&& frameEntry.visibility.cull
+		if (frameVisibility
+			&& frameVisibility->cull
 				== NativeFontVisibilityCull::ZeroAlpha
 			&& EvaluateNativeFontSubmissionVisibility(shape)
 				== NativeFontVisibilityCull::ZeroAlpha)
@@ -5478,15 +5722,20 @@ namespace fonthook::vectorfont
 				RecordNativeFontVisibilityCull(
 					NativeFontVisibilityCull::ZeroAlpha);
 			}
+			if (vanillaLayoutShape)
+			{
+				RecordGpuEnvelopeVanillaCull(
+					NativeFontVisibilityCull::ZeroAlpha);
+			}
 			return;
 		}
-		if (IsVanillaLayoutShape(shape))
+		if (vanillaLayoutShape)
 		{
 			NativeFontVisibilityCull visibilityCull =
 				EvaluateNativeFontSubmissionVisibility(shape);
-			const bool reuseOverlap = sortedFrameHit
+			const bool reuseOverlap = frameVisibility
 				&& ReuseNativeFontPreflightClipOverlap(
-					frameEntry.visibility);
+					*frameVisibility);
 			if (visibilityCull == NativeFontVisibilityCull::None
 				&& !reuseOverlap)
 			{
@@ -5496,6 +5745,7 @@ namespace fonthook::vectorfont
 			if (visibilityCull != NativeFontVisibilityCull::None)
 			{
 				RecordNativeFontVisibilityCull(visibilityCull);
+				RecordGpuEnvelopeVanillaCull(visibilityCull);
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::VanillaLayoutCull);
 				return;
@@ -5556,6 +5806,7 @@ namespace fonthook::vectorfont
 					UInt64 vanillaLayoutTransition = 0;
 					bool vanillaLayoutTransitionActive = false;
 					bool vanillaLayoutDrawn = false;
+					bool vanillaLayoutStandardLiteDrawn = false;
 					{
 						NativeFacadeShaderBatchScope shaderBatch;
 						if (drawTokenHit)
@@ -5564,7 +5815,7 @@ namespace fonthook::vectorfont
 								BeginNativeFontVanillaLayoutShaderTransition(
 									shader, currentPass);
 							vanillaLayoutTransitionActive = true;
-							vanillaLayoutDrawn =
+							vanillaLayoutStandardLiteDrawn =
 								TryDrawVanillaLayoutStandardPassLite(
 									pass, currentPass, testAlpha,
 									blendAlpha, setupRenderStates,
@@ -5572,9 +5823,12 @@ namespace fonthook::vectorfont
 									metadata->nativePayload,
 									*metadata->nativePayload.payloadTemplate,
 									packet, *drawToken);
+							vanillaLayoutDrawn =
+								vanillaLayoutStandardLiteDrawn;
 						}
 						if (!vanillaLayoutDrawn)
 						{
+							BreakVanillaLayoutStandardLiteBindingRun();
 							VanillaLayoutOriginalVtableScope vanillaVtable(shape);
 							if (vanillaVtable.Active())
 							{
@@ -5600,6 +5854,20 @@ namespace fonthook::vectorfont
 						{
 							RecordFreeTypePerf(
 								FreeTypePerfCounter::VanillaLayoutDraw);
+							DirectTileShaderPropertyView* drawTile =
+								GetDirectTileProperty(shape);
+							RECT drawScissor = {};
+							const bool drawUsesScissor = drawTile
+								&& drawTile->useScissorTest;
+							if (drawTile)
+								drawScissor = drawTile->scissorRect;
+							RecordFreeTypeGpuEnvelopeVanillaDraw(
+								vanillaLayoutStandardLiteDrawn,
+								packet.vertexCount,
+								packet.vertexCount / 2u,
+								drawUsesScissor,
+								drawScissor.left, drawScissor.top,
+								drawScissor.right, drawScissor.bottom);
 							if (shiftedVanillaLayout)
 							{
 								RecordFreeTypePerf(FreeTypePerfCounter::
@@ -5614,8 +5882,10 @@ namespace fonthook::vectorfont
 					InvalidateNativeFontSortedShaderState();
 				}
 			}
+			BreakVanillaLayoutStandardLiteBindingRun();
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VanillaLayoutRuntimeFallback);
+			RecordFreeTypeGpuEnvelopeVanillaRuntimeFallback();
 			if (shiftedVanillaLayout)
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
@@ -5738,8 +6008,8 @@ namespace fonthook::vectorfont
 		}
 		if (payload)
 		{
-			const bool needsVisibilityCheck = !sortedFrameHit
-				|| frameEntry.visibility.cull
+			const bool needsVisibilityCheck = !frameVisibility
+				|| frameVisibility->cull
 					!= NativeFontVisibilityCull::None;
 			if (needsVisibilityCheck)
 			{

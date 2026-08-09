@@ -666,12 +666,31 @@ namespace fonthook::vectorfont
 		Outside
 	};
 
+	struct NativeFontVisibilityProofWitness
+	{
+		// Exact source values that authorized the frame-local clip/scissor proof.
+		// Dispatch compares these values directly instead of depending on the
+		// bounded cross-frame proof cache still retaining this facade's entry.
+		const NiDX9Renderer* renderer = nullptr;
+		std::array<UInt32, 13> transformBits = {};
+		std::array<UInt32, 4> boundBits = {};
+		RECT tileScissorRect = {};
+		UInt64 cameraEpoch = 0;
+		NativeFontVisibilityProofStatus status =
+			NativeFontVisibilityProofStatus::Unproven;
+		NativeFontVisibilityCull cullReason =
+			NativeFontVisibilityCull::None;
+		bool tileUsesScissor = false;
+		bool valid = false;
+	};
+
 	struct NativeFontVisibilityPreflight
 	{
 		UInt64 frameToken = 0;
 		NativeFontVisibilityProofStatus status =
 			NativeFontVisibilityProofStatus::Unproven;
 		NativeFontVisibilityCull cull = NativeFontVisibilityCull::None;
+		NativeFontVisibilityProofWitness proofWitness;
 	};
 
 	struct NativeFontSortedFrameEntryView
@@ -680,7 +699,9 @@ namespace fonthook::vectorfont
 		NativeFontShapePayload* payload = nullptr;
 		NativeFontFallbackReason preflightResult =
 			NativeFontFallbackReason::RuntimeFault;
-		NativeFontVisibilityPreflight visibility;
+		// Points into the active SortedFrameEntry. Keeping this as a view avoids
+		// copying the complete proof witness on every immediate dispatch.
+		const NativeFontVisibilityPreflight* visibility = nullptr;
 		UInt32 generation = 0;
 		UInt64 validationToken = 0;
 		UInt32 commandSpanIndex = std::numeric_limits<UInt32>::max();

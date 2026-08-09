@@ -608,6 +608,45 @@ namespace fonthook::vectorfont
 			};
 		}
 
+		NativeFontVisibilityProofStatus ToVisibilityProofStatus(
+			ClipProofResult result)
+		{
+			switch (result)
+			{
+			case ClipProofResult::Overlap:
+				return NativeFontVisibilityProofStatus::Overlap;
+			case ClipProofResult::Outside:
+				return NativeFontVisibilityProofStatus::Outside;
+			case ClipProofResult::Unproven:
+			default:
+				return NativeFontVisibilityProofStatus::Unproven;
+			}
+		}
+
+		void CaptureVisibilityProofWitness(
+			NativeFontVisibilityProofWitness* witness,
+			const ClipFrameContext& context,
+			const std::array<UInt32, 13>& transformBits,
+			const std::array<UInt32, 4>& boundBits,
+			const TileVisibilityPropertyView& tile,
+			ClipProofResult result, NativeFontVisibilityCull reason)
+		{
+			if (!witness || !context.cameraEpoch
+				|| result == ClipProofResult::Unproven)
+			{
+				return;
+			}
+			witness->renderer = context.camera.renderer;
+			witness->transformBits = transformBits;
+			witness->boundBits = boundBits;
+			witness->tileScissorRect = tile.scissorRect;
+			witness->cameraEpoch = context.cameraEpoch;
+			witness->status = ToVisibilityProofStatus(result);
+			witness->cullReason = reason;
+			witness->tileUsesScissor = tile.useScissorTest;
+			witness->valid = true;
+		}
+
 		bool SameCameraKey(const ClipCameraKey& left,
 			const ClipCameraKey& right)
 		{
@@ -854,30 +893,6 @@ namespace fonthook::vectorfont
 			entry->valid = true;
 		}
 
-		const ClipProofCacheEntry* FindCurrentClipProof(
-			const void* identity, const ClipFrameContext& context,
-			const NiTransform& transform, const NiBound& bound,
-			const TileVisibilityPropertyView& tile, bool allowViewport)
-		{
-			if (!identity || !context.cameraEpoch)
-				return nullptr;
-			const std::array<UInt32, 13> transformBits =
-				CaptureTransformBits(transform);
-			const std::array<UInt32, 4> boundBits = CaptureBoundBits(bound);
-			const ClipProofCacheSet& set = s_clipProofCache[
-				HashClipTransformIdentity(identity)
-					& (kClipProofCacheSetCount - 1u)];
-			for (const ClipProofCacheEntry& candidate : set.ways)
-			{
-				if (SameProofKey(candidate, identity, context,
-						transformBits, boundBits, tile, allowViewport))
-				{
-					return &candidate;
-				}
-			}
-			return nullptr;
-		}
-
 		bool IsClipFrameCameraCurrent(const ClipFrameContext& context)
 		{
 			if (!context.active || !context.valid
@@ -915,9 +930,12 @@ namespace fonthook::vectorfont
 			const TileVisibilityPropertyView& tile,
 			ClipFrameContext& context, bool allowViewport,
 			NativeFontVisibilityCull& reason,
-			ClipTransformBuildResult* transformBuildResult)
+			ClipTransformBuildResult* transformBuildResult,
+			NativeFontVisibilityProofWitness* proofWitness)
 		{
 			reason = NativeFontVisibilityCull::None;
+			if (proofWitness)
+				*proofWitness = {};
 			if (transformBuildResult)
 			{
 				*transformBuildResult =
@@ -979,6 +997,8 @@ namespace fonthook::vectorfont
 			if (cachedProof != ClipProofResult::Unproven)
 			{
 				reason = cachedReason;
+				CaptureVisibilityProofWitness(proofWitness, context,
+					transformBits, boundBits, tile, cachedProof, cachedReason);
 				if (transformBuildResult)
 					*transformBuildResult = buildResult;
 				return cachedProof;
@@ -1071,6 +1091,8 @@ namespace fonthook::vectorfont
 				? ClipProofResult::Outside : ClipProofResult::Overlap;
 			StoreClipProof(cacheEntry, transformIdentity, context,
 				transformBits, boundBits, tile, allowViewport, result, reason);
+			CaptureVisibilityProofWitness(proofWitness, context,
+				transformBits, boundBits, tile, result, reason);
 			return result;
 		}
 
@@ -1198,7 +1220,7 @@ namespace fonthook::vectorfont
 		// the same full bound before reaching this proof.
 		const ClipProofResult proof = EvaluateBoundClip(data->m_kBound,
 			facade, facade->m_kWorld, *tile, *context, true,
-			reason, &transformBuildResult);
+			reason, &transformBuildResult, &visibility.proofWitness);
 		if (proof == ClipProofResult::Unproven)
 			return failOpen();
 		RecordClipTransformBuildResult(transformBuildResult);
@@ -1226,29 +1248,82 @@ namespace fonthook::vectorfont
 	bool HonorNativeFontPreflightClipCull(const NiTriShape* facade,
 		const NativeFontVisibilityPreflight& preflight)
 	{
-		if (!g_bEnableFreeTypeFontPreflightClipCull)
-			return false;
 		FreeTypePerfScope honorGatePerf(
 			FreeTypePerfPhase::PreflightClipHonorGate);
+		auto reject = [](FreeTypePerfCounter reason)
+		{
+			RecordFreeTypePerf(reason);
+			return false;
+		};
+		if (!g_bEnableFreeTypeFontPreflightClipCull)
+		{
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeInvalid);
+		}
 		if (!facade
 			|| preflight.status != NativeFontVisibilityProofStatus::Outside
 			|| (preflight.cull != NativeFontVisibilityCull::Clip
-				&& preflight.cull != NativeFontVisibilityCull::Scissor)
-			|| !preflight.frameToken
-			|| preflight.frameToken != s_clipFrameContext.frameToken
+				&& preflight.cull != NativeFontVisibilityCull::Scissor))
+		{
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeInvalid);
+		}
+		const NativeFontVisibilityProofWitness& witness =
+			preflight.proofWitness;
+		if (!witness.valid)
+		{
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeInvalid);
+		}
+		if (witness.status != preflight.status
+			|| witness.cullReason != preflight.cull)
+		{
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeProof);
+		}
+		if (!preflight.frameToken
+			|| preflight.frameToken != s_clipFrameContext.frameToken)
+		{
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeFrame);
+		}
+		if (!s_clipFrameContext.active || !s_clipFrameContext.valid
+			|| witness.renderer != s_clipFrameContext.camera.renderer
+			|| !witness.cameraEpoch
+			|| witness.cameraEpoch != s_clipFrameContext.cameraEpoch
 			|| !IsClipFrameCameraCurrent(s_clipFrameContext))
 		{
-			return false;
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeCamera);
 		}
 		const NiTriShapeData* data = facade->GetModelData();
 		const TileVisibilityPropertyView* tile = GetTileProperty(facade);
 		if (!data || !tile)
-			return false;
-		const ClipProofCacheEntry* cached = FindCurrentClipProof(
-			facade, s_clipFrameContext, facade->m_kWorld,
-			data->m_kBound, *tile, true);
-		return cached && cached->result == ClipProofResult::Outside
-			&& cached->reason == preflight.cull;
+		{
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeGeometry);
+		}
+		const std::array<UInt32, 13> currentTransformBits =
+			CaptureTransformBits(facade->m_kWorld);
+		if (currentTransformBits != witness.transformBits)
+		{
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeTransform);
+		}
+		const std::array<UInt32, 4> currentBoundBits =
+			CaptureBoundBits(data->m_kBound);
+		if (currentBoundBits != witness.boundBits)
+		{
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeBound);
+		}
+		if (tile->useScissorTest != witness.tileUsesScissor
+			|| !SameRect(tile->scissorRect, witness.tileScissorRect))
+		{
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeScissor);
+		}
+		return true;
 	}
 
 	bool ReuseNativeFontPreflightClipOverlap(
@@ -1300,7 +1375,7 @@ namespace fonthook::vectorfont
 			return false;
 		return EvaluateBoundClip(payload.payloadTemplate->bound, &payload,
 				effectiveWorld, *tile, *context, false,
-				reason, nullptr) == ClipProofResult::Outside
+				reason, nullptr, nullptr) == ClipProofResult::Outside
 			&& reason == NativeFontVisibilityCull::Scissor;
 	}
 

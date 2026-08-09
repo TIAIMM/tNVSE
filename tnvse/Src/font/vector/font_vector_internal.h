@@ -173,6 +173,14 @@ namespace fonthook::vectorfont
 		VisibilityPreflightClipFailOpen,
 		VisibilityPreflightClipHonored,
 		VisibilityPreflightClipRevoked,
+		VisibilityPreflightClipRevokeInvalid,
+		VisibilityPreflightClipRevokeFrame,
+		VisibilityPreflightClipRevokeCamera,
+		VisibilityPreflightClipRevokeGeometry,
+		VisibilityPreflightClipRevokeTransform,
+		VisibilityPreflightClipRevokeBound,
+		VisibilityPreflightClipRevokeScissor,
+		VisibilityPreflightClipRevokeProof,
 		VisibilityPreflightClipTransformHit,
 		VisibilityPreflightClipTransformMiss,
 		VisibilityPreflightClipTransformIdentityMiss,
@@ -512,6 +520,24 @@ namespace fonthook::vectorfont
 		VanillaLayoutStandardLiteBindingUnclassified,
 		VanillaLayoutStandardLiteFallbackDeclaration,
 		VanillaLayoutStandardLiteFallbackPrelude,
+		VanillaLayoutStandardLiteCurrentDeclarationReplay,
+		VanillaLayoutStandardLiteCompatibleDeclarationReplay,
+		VanillaLayoutStandardLiteBindingAdjacentPair,
+		VanillaLayoutStandardLiteBindingAdjacentExact,
+		VanillaLayoutStandardLiteBindingAdjacentSameDeclaration,
+		VanillaLayoutStandardLiteBindingAdjacentSameVertexBuffer,
+		VanillaLayoutStandardLiteBindingAdjacentSameIndexBuffer,
+		VanillaLayoutStandardLiteBindingAdjacentSameStreamOffset,
+		VanillaLayoutStandardLiteBindingAdjacentSameStride,
+		VanillaLayoutStandardLiteBindingRun,
+		VanillaLayoutStandardLiteBindingRunDraw,
+		VanillaLayoutStandardLiteBindingRunLength1,
+		VanillaLayoutStandardLiteBindingRunLength2,
+		VanillaLayoutStandardLiteBindingRunLength3To4,
+		VanillaLayoutStandardLiteBindingRunLength5To8,
+		VanillaLayoutStandardLiteBindingRunLength9To16,
+		VanillaLayoutStandardLiteBindingRunLength17To32,
+		VanillaLayoutStandardLiteBindingRunLength33Plus,
 		Count,
 	};
 	static_assert(
@@ -573,8 +599,13 @@ namespace fonthook::vectorfont
 		RegisterRoute,
 		DispatchRoute,
 		PreflightClipHonorGate,
+		VanillaLayoutStandardLiteState,
+		VanillaLayoutStandardLiteBinding,
+		VanillaLayoutStandardLiteDraw,
+		VanillaLayoutStandardLitePost,
 		Count,
 	};
+	inline constexpr UInt32 kVanillaLayoutStandardLiteCpuSampleRate = 256u;
 	struct FreeTypeAccumulatorPrepTailSample
 	{
 		SInt64 totalTicks = 0;
@@ -602,14 +633,47 @@ namespace fonthook::vectorfont
 		const FreeTypeAccumulatorPrepTailSample& arSample);
 	void ResetFreeTypeGpuTiming();
 
+	struct FreeTypeGpuEnvelopeViewport
+	{
+		UInt32 x = 0;
+		UInt32 y = 0;
+		UInt32 width = 0;
+		UInt32 height = 0;
+	};
+
+	enum class FreeTypeGpuEnvelopeCull : UInt8
+	{
+		App = 0,
+		Alpha,
+		Clip,
+		Scissor,
+	};
+
+	// These recorders update only the currently sampled asynchronous query slot.
+	// Unsampled frames and non-render threads are no-ops.
+	void RecordFreeTypeGpuEnvelopeForeignPass();
+	void RecordFreeTypeGpuEnvelopeNativeFacadePass();
+	void RecordFreeTypeGpuEnvelopeVanillaPass();
+	void RecordFreeTypeGpuEnvelopeVanillaCull(
+		FreeTypeGpuEnvelopeCull aeCull);
+	void RecordFreeTypeGpuEnvelopeVanillaRuntimeFallback();
+	void RecordFreeTypeGpuEnvelopeVanillaDraw(
+		bool abStandardLite, UInt32 auiVertexCount,
+		UInt32 auiTriangleCount, bool abUseScissor,
+		SInt32 aiScissorLeft, SInt32 aiScissorTop,
+		SInt32 aiScissorRight, SInt32 aiScissorBottom);
+
 	// Measures the GPU command-stream interval occupied by the complete Tile
-	// alpha traversal when that traversal contains prepared native font work.
-	// Results are collected asynchronously; this scope never waits for the GPU.
+	// alpha traversal when that traversal contains prepared direct payloads or
+	// preflight-surviving Vanilla-layout work. Results are collected
+	// asynchronously; this scope never waits for the GPU.
 	class FreeTypeGpuAlphaEnvelopeScope
 	{
 	public:
 		explicit FreeTypeGpuAlphaEnvelopeScope(
-			IDirect3DDevice9* apDevice, bool abEnabled = true);
+			IDirect3DDevice9* apDevice, bool abHasPreparedPayloads,
+			bool abHasVanillaLayout,
+			const FreeTypeGpuEnvelopeViewport& arViewport);
 		~FreeTypeGpuAlphaEnvelopeScope();
 
 		FreeTypeGpuAlphaEnvelopeScope(
@@ -628,6 +692,7 @@ namespace fonthook::vectorfont
 			FreeTypePerfPhase aePhase, bool abEnabled = true,
 			SInt64* apElapsedTicks = nullptr);
 		~FreeTypePerfScope();
+		void Stop();
 
 		FreeTypePerfScope(const FreeTypePerfScope&) = delete;
 		FreeTypePerfScope& operator=(const FreeTypePerfScope&) = delete;
