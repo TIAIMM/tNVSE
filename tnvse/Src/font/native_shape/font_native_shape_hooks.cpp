@@ -5265,7 +5265,9 @@ namespace fonthook::vectorfont
 		}
 
 		State().originalRenderPassImmediately = current;
-		WriteRelCall(kRenderPassImmediatelyCallSite, hook);
+		// BSBatchRenderer immediate pass call (__cdecl).
+		WriteRelCall(kRenderPassImmediatelyCallSite,
+			&NativeFontRenderPassImmediately);
 		const RenderPassImmediatelyFn observed =
 			ReadRenderPassImmediatelyCallTarget();
 		if (observed == hook)

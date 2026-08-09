@@ -1,7 +1,9 @@
 #include "multibyte_input_ime_internal.h"
 
 #include "hook_identity.h"
+#include "hook_site.h"
 #include "plugin_dependencies.h"
+#include "Utils/SafeWrite.h"
 
 #include <array>
 
@@ -27,6 +29,9 @@ namespace fonthook::multibyte_input
 			0x74, 0x04, 0xB3, 0x01, 0xEB, 0x02, 0x32, 0xDB,
 			0x88, 0x5D, 0xFF,
 			0x38, 0x9F,
+		};
+		constexpr std::array<UInt8, 5> kJipRawKeyStateOriginalInstruction = {
+			0x80, 0x7C, 0x01, 0x04, 0x00,
 		};
 
 		bool s_hookInstalled = false;
@@ -182,10 +187,13 @@ namespace fonthook::multibyte_input
 			return false;
 		const SIZE_T callSite =
 			reinterpret_cast<SIZE_T>(hJIP) + kJipRawKeyStateCompareRva;
-		return hook_identity::MatchesRel32Target(
+		hook_site::InstructionCallHook hook{
+			"JIP LN 57.30 raw key-state compare -> CALL (__declspec(naked))",
 			callSite,
-			hook_identity::Rel32Opcode::Call,
-			reinterpret_cast<SIZE_T>(&JipRawKeyStateCompareHook));
+			kJipRawKeyStateOriginalInstruction,
+			&JipRawKeyStateCompareHook
+		};
+		return hook.IsInstalled();
 	}
 
 	void TryInstallJipKeyEventSuppressionHook()
@@ -222,29 +230,22 @@ namespace fonthook::multibyte_input
 
 		const SIZE_T callSite =
 			reinterpret_cast<SIZE_T>(hJIP) + kJipRawKeyStateCompareRva;
-		WriteRelCall(callSite, &JipRawKeyStateCompareHook);
-		if (!hook_identity::MatchesRel32Target(
+		hook_site::InstructionCallHook hook{
+			"JIP LN 57.30 raw key-state compare -> CALL (__declspec(naked))",
 			callSite,
-			hook_identity::Rel32Opcode::Call,
-			reinterpret_cast<SIZE_T>(&JipRawKeyStateCompareHook)))
+			kJipRawKeyStateOriginalInstruction,
+			&JipRawKeyStateCompareHook
+		};
+		// JIP LN raw key-state compare instruction -> naked CALL adapter.
+		WriteRelCall(callSite, &JipRawKeyStateCompareHook);
+		if (!hook.IsInstalled())
 		{
 			SIZE_T observedTarget = 0;
 			const bool observedCall = hook_identity::ReadRel32Target(
 				callSite, hook_identity::Rel32Opcode::Call, observedTarget);
-			bool restored = std::memcmp(
-				reinterpret_cast<const void*>(callSite),
-				kJipRawKeyStateSignature.data(), 5) == 0;
-			if (!restored && observedCall
-				&& observedTarget
-					== reinterpret_cast<SIZE_T>(&JipRawKeyStateCompareHook))
-			{
-				// Restore only while this CALL is still ours. A later owner may
-				// already have captured the adapter as its predecessor.
-				SafeWriteBuf(callSite, kJipRawKeyStateSignature.data(), 5);
-				restored = std::memcmp(
-					reinterpret_cast<const void*>(callSite),
-					kJipRawKeyStateSignature.data(), 5) == 0;
-			}
+			// Restore only while this CALL is still ours. A later owner may
+			// already have captured the adapter as its predecessor.
+			const bool restored = hook.RollbackOwned();
 			gLog.FormattedMessage(
 				"tnvse_multibyte_input: JIP key-event suppression write verification failed observedCall=%u target=0x%08X rollback=%s",
 				observedCall ? 1u : 0u,

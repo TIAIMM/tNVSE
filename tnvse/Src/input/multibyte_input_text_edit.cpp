@@ -1,6 +1,8 @@
 #include "multibyte_input_internal.h"
 #include "hook_identity.h"
+#include "hook_site.h"
 #include "native_calls.h"
+#include "Utils/SafeWrite.h"
 
 // Vanilla TextEditMenu editing plus the JIP LN text-input adapter.
 
@@ -284,7 +286,10 @@ namespace fonthook
 			}
 
 			s_jipOriginalInputHandler = currentHandler;
-			SafeWrite32(kTextEditMenuHandleKeyboardInputVTableEntry, hookHandler);
+			// JIP TextInput TextEditMenu::HandleKeyboardInput vtable slot
+			// (__thiscall target via __fastcall shim).
+			SafeWrite32(kTextEditMenuHandleKeyboardInputVTableEntry,
+				hookHandler);
 			const SIZE_T observedHandler = CurrentTextEditInputHandler();
 			if (observedHandler == hookHandler)
 			{
@@ -1009,8 +1014,18 @@ namespace fonthook
 		bool InstallTextEditHooks()
 		{
 			using hook_identity::Rel32Opcode;
-			const SIZE_T openHook = reinterpret_cast<SIZE_T>(&TextEditMenuEx::Open);
-			const SIZE_T inputHook = reinterpret_cast<SIZE_T>(&TextEditStateEx::Input);
+			hook_site::RelCallHook openHook{
+				"PlayerNameEntryMenu -> TextEditMenu::Open (__fastcall)",
+				kPlayerNameEntryMenuTextEditMenuOpenCallSite,
+				kVanillaTextEditMenuOpen,
+				&TextEditMenuEx::Open
+			};
+			hook_site::RelCallHook inputHook{
+				"TextEditMenu::HandleKeyboardInput -> TextEditState::Input (__fastcall)",
+				kTextEditStateInputCallSiteInHandleKeyboardInput,
+				kVanillaTextEditStateInput,
+				&TextEditStateEx::Input
+			};
 			SIZE_T openTarget = 0;
 			SIZE_T inputTarget = 0;
 			if (!hook_identity::ReadRel32Target(
@@ -1031,49 +1046,23 @@ namespace fonthook
 				return false;
 			}
 
+			// PlayerNameEntryMenu -> TextEditMenu::Open (__fastcall).
 			WriteRelCall(kPlayerNameEntryMenuTextEditMenuOpenCallSite,
 				&TextEditMenuEx::Open);
+			// TextEditMenu::HandleKeyboardInput -> TextEditState::Input
+			// (__fastcall).
 			WriteRelCall(kTextEditStateInputCallSiteInHandleKeyboardInput,
 				&TextEditStateEx::Input);
-			const bool openInstalled = hook_identity::MatchesRel32Target(
-				kPlayerNameEntryMenuTextEditMenuOpenCallSite,
-				Rel32Opcode::Call,
-				openHook);
-			const bool inputInstalled = hook_identity::MatchesRel32Target(
-					kTextEditStateInputCallSiteInHandleKeyboardInput,
-					Rel32Opcode::Call,
-					inputHook);
+			const bool openInstalled = openHook.IsInstalled();
+			const bool inputInstalled = inputHook.IsInstalled();
 			if (!openInstalled || !inputInstalled)
 			{
-				auto rollbackOwnedCall = [](SIZE_T site, SIZE_T hook,
-					SIZE_T predecessor, SIZE_T& observed) -> bool
-				{
-					observed = 0;
-					if (!hook_identity::ReadRel32Target(
-							site, Rel32Opcode::Call, observed))
-					{
-						return false;
-					}
-					if (observed == hook)
-					{
-						WriteRelCall(site, predecessor);
-						return hook_identity::ReadRel32Target(
-							site, Rel32Opcode::Call, observed)
-							&& observed == predecessor;
-					}
-					// A different top-level target may have captured tNVSE as its
-					// predecessor. Never overwrite that later owner during rollback.
-					return observed == predecessor;
-				};
-
 				SIZE_T observedOpen = 0;
 				SIZE_T observedInput = 0;
-				const bool openRestored = rollbackOwnedCall(
-					kPlayerNameEntryMenuTextEditMenuOpenCallSite,
-					openHook, kVanillaTextEditMenuOpen, observedOpen);
-				const bool inputRestored = rollbackOwnedCall(
-					kTextEditStateInputCallSiteInHandleKeyboardInput,
-					inputHook, kVanillaTextEditStateInput, observedInput);
+				const bool openRestored = openHook.RollbackOwned(
+					kVanillaTextEditMenuOpen, &observedOpen);
+				const bool inputRestored = inputHook.RollbackOwned(
+					kVanillaTextEditStateInput, &observedInput);
 				gLog.FormattedMessage(
 					"tnvse_multibyte_input: TextEdit hook write verification failed openInstalled=%u inputInstalled=%u openObserved=%08X inputObserved=%08X rollback=%s",
 					openInstalled ? 1u : 0u,
@@ -1097,8 +1086,14 @@ namespace fonthook
 					&& s_jipOriginalInputHandler != hookHandler
 					? s_jipOriginalInputHandler
 					: kTextEditMenuHandleKeyboardInput;
-				SafeWrite32(
-					kTextEditMenuHandleKeyboardInputVTableEntry, predecessor);
+				hook_site::VTableHook jipTextInputVtableHook{
+					"JIP TextInput TextEditMenu::HandleKeyboardInput (__thiscall via __fastcall shim)",
+					kTextEditMenuHandleKeyboardInputVTableEntry,
+					predecessor,
+					hookHandler
+				};
+				jipTextInputVtableHook.predecessor = predecessor;
+				jipTextInputVtableHook.RollbackOwned();
 				const SIZE_T observedHandler = CurrentTextEditInputHandler();
 				if (observedHandler == predecessor)
 				{

@@ -1,5 +1,6 @@
 #include "multibyte_input_internal.h"
 #include "hook_identity.h"
+#include "Utils/SafeWrite.h"
 
 // Stewie Tweaks MenuSearch integration for vanilla game menus.
 
@@ -987,6 +988,8 @@ namespace fonthook
 			}
 
 			hook.original = current;
+			// Stewie menu handler vtable slot
+			// (__thiscall target via __fastcall adapter).
 			SafeWrite32(hook.entry, hook.hook);
 			SIZE_T installedTarget = 0;
 			const bool installedTargetReadable =

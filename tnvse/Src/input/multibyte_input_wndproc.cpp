@@ -1,10 +1,18 @@
 #include "multibyte_input_ime_internal.h"
-#include "SafeWrite.h"
+#include "hook_site.h"
+#include "Utils/SafeWrite.h"
 
 namespace fonthook
 {
 	namespace multibyte_input
 	{
+		LRESULT CALLBACK MultibyteInputWndProc(
+			HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+		hook_site::WindowProcHook s_gameWindowProcHook{
+			"FalloutNV main window WndProc (CALLBACK/__stdcall)",
+			&MultibyteInputWndProc
+		};
+
 		bool ApplyCapturedImeResult(
 			const std::wstring& result,
 			LPARAM lParam)
@@ -1031,6 +1039,8 @@ namespace fonthook
 				ClearCapturedInputEvents();
 				State().overlayRefreshPending = false;
 				s_originalWndProc = nullptr;
+				s_gameWindowProcHook.window = nullptr;
+				s_gameWindowProcHook.predecessor = nullptr;
 				return result;
 			}
 
@@ -1307,15 +1317,21 @@ namespace fonthook
 			if (!hwnd)
 				return false;
 
-			LONG_PTR original = 0;
+			LONG_PTR previousWndProc = 0;
 			if (!SafeSetWindowLongPtrA(hwnd, GWLP_WNDPROC,
-				reinterpret_cast<LONG_PTR>(&MultibyteInputWndProc),
-				&original)
-				|| !original)
+					reinterpret_cast<LONG_PTR>(&MultibyteInputWndProc),
+					&previousWndProc)
+				|| !previousWndProc)
+			{
 				return false;
+			}
+
+			s_gameWindowProcHook.window = hwnd;
+			s_gameWindowProcHook.predecessor =
+				reinterpret_cast<WNDPROC>(previousWndProc);
 
 			s_window = hwnd;
-			s_originalWndProc = reinterpret_cast<WNDPROC>(original);
+			s_originalWndProc = s_gameWindowProcHook.predecessor;
 			State().gameImeEnabled = false;
 			State().associatedGameImeWindow = nullptr;
 			State().associatedGameImeLayout = nullptr;
@@ -1371,15 +1387,9 @@ namespace fonthook
 			{
 				const WNDPROC current = reinterpret_cast<WNDPROC>(
 					GetWindowLongPtrA(s_window, GWLP_WNDPROC));
-				if (current == &MultibyteInputWndProc)
-				{
-					LONG_PTR displaced = 0;
-					detached = SafeSetWindowLongPtrA(s_window,
-						GWLP_WNDPROC,
-						reinterpret_cast<LONG_PTR>(s_originalWndProc),
-						&displaced);
-				}
-				else if (current != s_originalWndProc)
+				WNDPROC observed = current;
+				detached = s_gameWindowProcHook.RollbackOwned(&observed);
+				if (!detached && current != s_originalWndProc)
 				{
 					// Another plugin installed above tNVSE. Replacing the top of
 					// that chain would strand its saved predecessor and can freeze
@@ -1397,6 +1407,8 @@ namespace fonthook
 			{
 				s_window = nullptr;
 				s_originalWndProc = nullptr;
+				s_gameWindowProcHook.window = nullptr;
+				s_gameWindowProcHook.predecessor = nullptr;
 				ShutdownTsfCandidateSupport();
 			}
 		}

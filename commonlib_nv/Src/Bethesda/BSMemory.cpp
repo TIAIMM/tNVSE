@@ -2,19 +2,87 @@
 #include "MemoryManager.hpp"
 #include "SafeWrite.h"
 
-void	CreateHeapIfNotExisting(UInt32 auiHeapAddress, UInt32 auiCallAddress);
-int		(__cdecl* CreateHeap)(UInt32 aeSerialize);
-int		CreateHeapStub(UInt32 aeSerialize) { return 1; }
+namespace
+{
+	using CreateHeapFn = int(__cdecl*)(UInt32);
+
+	int __cdecl CreateHeapStub(UInt32) { return 1; }
+
+	struct HeapBootstrapCallHook
+	{
+		const char* name;
+		UInt32 heapAddress;
+		UInt32 callAddress;
+		CreateHeapFn createHeap;
+		UInt32 predecessor = 0;
+
+		bool ReadTarget(UInt32& target) const
+		{
+			target = 0;
+			if (!callAddress
+				|| *reinterpret_cast<const UInt8*>(callAddress) != 0xE8)
+			{
+				return false;
+			}
+			const SInt32 displacement =
+				*reinterpret_cast<const SInt32*>(callAddress + 1);
+			target = static_cast<UInt32>(callAddress + 5 + displacement);
+			return true;
+		}
+
+		bool RollbackOwned()
+		{
+			UInt32 current = 0;
+			if (!predecessor || !ReadTarget(current))
+				return false;
+			if (current == reinterpret_cast<UInt32>(&CreateHeapStub))
+			{
+				if (!ReplaceCall(callAddress, predecessor)
+					|| !ReadTarget(current))
+				{
+					return false;
+				}
+			}
+			return current == predecessor;
+		}
+	};
+
+	HeapBootstrapCallHook s_gameHeapBootstrapHook{
+		"FalloutNV heap bootstrap CALL (__cdecl)",
+		0xF9907C,
+		0xC62B21,
+		reinterpret_cast<CreateHeapFn>(0xC770C3),
+	};
+	HeapBootstrapCallHook s_geckHeapBootstrapHook{
+		"GECK heap bootstrap CALL (__cdecl)",
+		0x12705BC,
+		0xECC3CB,
+		reinterpret_cast<CreateHeapFn>(0xEDDB6A),
+	};
+}
+
 bool	bInitialized = false;
 
 _declspec(noinline) void InitializeHeap() {
-	if (*(UInt8*)0x401190 != 0x55) {
-		CreateHeap = (int(__cdecl*)(UInt32))0xC770C3;
-		CreateHeapIfNotExisting(0xF9907C, 0xC62B21);
-	}
-	else {
-		CreateHeap = (int(__cdecl*)(UInt32))0xEDDB6A;
-		CreateHeapIfNotExisting(0x12705BC, 0xECC3CB);
+	HeapBootstrapCallHook& hook = *(UInt8*)0x401190 != 0x55
+		? s_gameHeapBootstrapHook : s_geckHeapBootstrapHook;
+	if (!*reinterpret_cast<HANDLE*>(hook.heapAddress) && hook.createHeap)
+	{
+		hook.createHeap(true);
+		UInt32 predecessor = 0;
+		if (hook.ReadTarget(predecessor))
+		{
+			hook.predecessor = predecessor;
+			// FalloutNV/GECK heap bootstrap CALL (__cdecl).
+			const bool published =
+				WriteRelCall(hook.callAddress, &CreateHeapStub);
+			UInt32 installed = 0;
+			if (!published || !hook.ReadTarget(installed)
+				|| installed != reinterpret_cast<UInt32>(&CreateHeapStub))
+			{
+				hook.RollbackOwned();
+			}
+		}
 	}
 
 	bInitialized = true;
@@ -47,21 +115,4 @@ void BSFree(void* pvMem) {
 
 SIZE_T BSSize(void* pvMem) {
 	return MemoryManager::GetSingleton()->Size(pvMem);
-}
-
-// -------------------------------------------------------------------------
-// Functions made to initialize the allocator
-// Compatible with both game and GECK
-// -------------------------------------------------------------------------
-
-// This function is used to create game's heap if it doesn't exist
-// It's possible to load the plugin before game is even initialized
-// In those cases, malloc fails due to lack of heap - that's why we need to create it manually
-void CreateHeapIfNotExisting(UInt32 auiHeapAddress, UInt32 auiCallAddress) {
-	if (*(HANDLE*)auiHeapAddress)
-		return;
-
-	CreateHeap(true);
-
-	ReplaceCall(auiCallAddress, &CreateHeapStub);
 }

@@ -570,10 +570,11 @@ namespace fonthook::vectorfont
 			if (!expected || !IsTileRegisterObjectSlotWritable())
 				return false;
 			const SIZE_T expectedBits = reinterpret_cast<SIZE_T>(expected);
-			const SIZE_T hookBits = reinterpret_cast<SIZE_T>(
-				&NativeFontRegisterObject);
+			// BSShaderAccumulator::Tile RegisterObject callback (__cdecl).
+			// Use CAS because NVTF/NVHR may publish this slot concurrently.
 			return SafeWrite32IfEqual(kTileRegisterObjectFunctionEntry,
-				hookBits, expectedBits);
+				reinterpret_cast<SIZE_T>(&NativeFontRegisterObject),
+				expectedBits);
 		}
 
 		__forceinline bool ForwardTileRegisterObject(
@@ -1971,7 +1972,10 @@ namespace fonthook::vectorfont
 
 			const RenderAlphaGeometryFn previousOriginal = installedPredecessor;
 			state.originalRenderAlphaGeometry = current;
-			WriteRelCall(kRenderAlphaGeometryCallSite, hook);
+			// BSShaderAccumulator frame -> RenderAlphaGeometry
+			// (__thiscall target via __fastcall shim).
+			WriteRelCall(kRenderAlphaGeometryCallSite,
+				&NativeFontRenderAlphaGeometry);
 			const RenderAlphaGeometryFn publishedTarget =
 				ReadRenderAlphaGeometryCallTarget();
 			state.renderAlphaGeometryHookInstalled = publishedTarget == hook;

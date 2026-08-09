@@ -2,6 +2,7 @@
 
 #include "encoding.h"
 #include "hook_identity.h"
+#include "hook_site.h"
 #include "load_config.h"
 #include "SafeWrite.h"
 #include "tnvse.h"
@@ -1131,15 +1132,31 @@ namespace fonthook
 
 	void InitSaveDisplayNameHook()
 	{
-		const SIZE_T openSaveFileHook =
-			reinterpret_cast<SIZE_T>(&OpenSaveFileWithSafeName);
+		hook_site::RelCallHook openSaveFileHook{
+			"BGSSaveLoadManager::SaveGame -> OpenSaveFile (__thiscall via __fastcall shim)",
+			kOpenSaveFileCallSite,
+			0,
+			&OpenSaveFileWithSafeName
+		};
+		hook_site::RelCallHook scrubFileNameHook{
+			"SaveGameManager filename scrub (__fastcall)",
+			kScrubFileNameCallSite,
+			kVanillaScrubFileName,
+			&ScrubFileNameAndCaptureDisplayName
+		};
+		hook_site::RelCallHook generatedFileNameHook{
+			"SaveGameManager generated-name test (__fastcall)",
+			kIsSaveFileNameGeneratedCallSite,
+			0,
+			&IsSaveFileNameGeneratedWithDisplayName
+		};
 		SIZE_T openSaveFileTarget = 0;
 		if (!hook_identity::ReadRel32Target(
 				kOpenSaveFileCallSite,
 				Rel32Opcode::Call,
 				openSaveFileTarget)
 			|| !hook_identity::IsExecutableTarget(openSaveFileTarget)
-			|| openSaveFileTarget == openSaveFileHook)
+			|| openSaveFileTarget == openSaveFileHook.hookTarget)
 		{
 			gLog.FormattedMessage(
 				"tnvse_save_display_name: custom save hook target invalid target=%08X; disabled",
@@ -1151,8 +1168,7 @@ namespace fonthook
 			// Stewie Tweaks setup this is SaveGameManager__CreateSaveLoadFile,
 			// which in turn calls the vanilla 0x850030 implementation.
 			s_nextOpenSaveFile = openSaveFileTarget;
-			WriteRelCall(kOpenSaveFileCallSite,
-				&OpenSaveFileWithSafeName);
+			WriteRelCall(kOpenSaveFileCallSite, &OpenSaveFileWithSafeName);
 			SIZE_T observedOpenSaveFileTarget = 0;
 			const bool observedOpenSaveFileCall =
 				hook_identity::ReadRel32Target(
@@ -1160,7 +1176,7 @@ namespace fonthook
 					Rel32Opcode::Call,
 					observedOpenSaveFileTarget);
 			if (observedOpenSaveFileCall
-				&& observedOpenSaveFileTarget == openSaveFileHook)
+				&& observedOpenSaveFileTarget == openSaveFileHook.hookTarget)
 			{
 				gLog.FormattedMessage(
 					"tnvse_save_display_name: custom multibyte save sanitizer installed next=%08X",
@@ -1194,10 +1210,6 @@ namespace fonthook
 
 		SIZE_T scrubFileNameTarget = 0;
 		SIZE_T generatedFileNameTarget = 0;
-		const SIZE_T scrubFileNameHook = reinterpret_cast<SIZE_T>(
-			&ScrubFileNameAndCaptureDisplayName);
-		const SIZE_T generatedFileNameHook = reinterpret_cast<SIZE_T>(
-			&IsSaveFileNameGeneratedWithDisplayName);
 		if (!hook_identity::ReadRel32Target(
 				kScrubFileNameCallSite, Rel32Opcode::Call, scrubFileNameTarget)
 			|| scrubFileNameTarget != kVanillaScrubFileName
@@ -1206,7 +1218,7 @@ namespace fonthook
 				Rel32Opcode::Call,
 				generatedFileNameTarget)
 			|| !hook_identity::IsExecutableTarget(generatedFileNameTarget)
-			|| generatedFileNameTarget == generatedFileNameHook)
+			|| generatedFileNameTarget == generatedFileNameHook.hookTarget)
 		{
 			gLog.FormattedMessage(
 				"tnvse_save_display_name: hook identity mismatch scrub=%08X generated=%08X; disabled",
@@ -1216,51 +1228,25 @@ namespace fonthook
 		}
 
 		s_nextIsSaveFileNameGenerated = generatedFileNameTarget;
+		// SaveGameManager filename scrub (__fastcall).
 		WriteRelCall(kScrubFileNameCallSite,
 			&ScrubFileNameAndCaptureDisplayName);
+		// SaveGameManager generated-name test (__fastcall), chained to the
+		// currently installed predecessor when one is present.
 		WriteRelCall(kIsSaveFileNameGeneratedCallSite,
 			&IsSaveFileNameGeneratedWithDisplayName);
 
-		const bool scrubFileNameInstalled = hook_identity::MatchesRel32Target(
-			kScrubFileNameCallSite,
-			Rel32Opcode::Call,
-			scrubFileNameHook);
+		const bool scrubFileNameInstalled = scrubFileNameHook.IsInstalled();
 		const bool generatedFileNameInstalled =
-			hook_identity::MatchesRel32Target(
-				kIsSaveFileNameGeneratedCallSite,
-				Rel32Opcode::Call,
-				generatedFileNameHook);
+			generatedFileNameHook.IsInstalled();
 		if (!scrubFileNameInstalled || !generatedFileNameInstalled)
 		{
-			auto rollbackOwnedCall = [](SIZE_T site, SIZE_T hook,
-				SIZE_T predecessor, SIZE_T& observed) -> bool
-			{
-				observed = 0;
-				if (!hook_identity::ReadRel32Target(
-						site, Rel32Opcode::Call, observed))
-				{
-					return false;
-				}
-				if (observed == hook)
-				{
-					WriteRelCall(site, predecessor);
-					return hook_identity::ReadRel32Target(
-						site, Rel32Opcode::Call, observed)
-						&& observed == predecessor;
-				}
-				// Preserve a later top-level owner which may already use tNVSE
-				// as its predecessor.
-				return observed == predecessor;
-			};
-
 			SIZE_T observedScrubTarget = 0;
 			SIZE_T observedGeneratedTarget = 0;
-			const bool scrubRestored = rollbackOwnedCall(
-				kScrubFileNameCallSite, scrubFileNameHook,
-				scrubFileNameTarget, observedScrubTarget);
-			const bool generatedRestored = rollbackOwnedCall(
-				kIsSaveFileNameGeneratedCallSite, generatedFileNameHook,
-				generatedFileNameTarget, observedGeneratedTarget);
+			const bool scrubRestored = scrubFileNameHook.RollbackOwned(
+				scrubFileNameTarget, &observedScrubTarget);
+			const bool generatedRestored = generatedFileNameHook.RollbackOwned(
+				generatedFileNameTarget, &observedGeneratedTarget);
 			if (generatedRestored)
 				s_nextIsSaveFileNameGenerated = 0;
 			else

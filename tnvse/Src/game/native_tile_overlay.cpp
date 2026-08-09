@@ -376,9 +376,10 @@ namespace fonthook
 				reinterpret_cast<RenderedMenuDrawFn>(currentTarget);
 			const SIZE_T hookTarget = reinterpret_cast<SIZE_T>(
 				&PipboyRenderedMenuDrawHook);
-			SafeWrite32(
-				kFOPipboyManagerDrawVTableEntry,
-				hookTarget);
+			// FOPipboyManager::Draw vtable slot
+			// (__thiscall target via __fastcall shim).
+			SafeWrite32(kFOPipboyManagerDrawVTableEntry,
+				reinterpret_cast<SIZE_T>(&PipboyRenderedMenuDrawHook));
 			const SIZE_T observedTarget =
 				*reinterpret_cast<const SIZE_T*>(
 					kFOPipboyManagerDrawVTableEntry);
@@ -519,9 +520,9 @@ namespace fonthook
 				reinterpret_cast<SIZE_T>(&ImeMenuGetId);
 			s_originalCreateMenuByClass =
 				reinterpret_cast<CreateMenuByClassFn>(currentTarget);
-			WriteRelCall(
-				kCreateMenuByClassCallSite,
-				&CreateMenuByClassHook);
+			// InterfaceManager menu factory -> CreateMenuByClass
+			// (__thiscall target via __fastcall shim).
+			WriteRelCall(kCreateMenuByClassCallSite, &CreateMenuByClassHook);
 			const SIZE_T hookTarget = reinterpret_cast<SIZE_T>(
 				&CreateMenuByClassHook);
 			SIZE_T observedTarget = 0;
@@ -1870,6 +1871,8 @@ namespace fonthook
 
 		s_originalLoadingMenuUpdate =
 			reinterpret_cast<LoadingMenuUpdateFn>(currentUpdateTarget);
+		// LoadingMenuThread -> LoadingMenu::Update
+		// (__thiscall target via __fastcall shim).
 		WriteRelCall(kLoadingMenuThreadUpdateCallSite, &LoadingMenuUpdateHook);
 		const SIZE_T hookTarget = reinterpret_cast<SIZE_T>(
 			&LoadingMenuUpdateHook);

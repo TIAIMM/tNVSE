@@ -1,6 +1,7 @@
 #include "multibyte_input_internal.h"
 #include "hook_identity.h"
 #include "plugin_dependencies.h"
+#include "Utils/SafeWrite.h"
 
 // Shared Stewie Tweaks UTF-8 input engine and StewMenu integration.
 
@@ -1462,6 +1463,8 @@ namespace fonthook
 					}
 					s_stewMenuOriginalInputHandler = current;
 					s_stewMenuHookedEntry = entry;
+					// Stewie Tweaks StewMenu::HandleKeyboardInput vtable slot
+					// (__thiscall target via __fastcall shim).
 					SafeWrite32(entry, hook);
 					const SIZE_T observed =
 						*reinterpret_cast<const SIZE_T*>(entry);
