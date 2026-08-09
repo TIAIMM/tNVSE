@@ -11,7 +11,6 @@ namespace fonthook
 	bool __cdecl Interface_TestConstantForGameSettings(const char* p_varNameBuffer, void* p_parsedTextBuffer);
 
 	// ---- Float/int conversion helpers ----
-	UInt32 SafeDoubleToUInt32(double value);
 	UInt32 ConditionalFloatToUInt(double value);
 
 	// ---- Font/FontManager helpers ----

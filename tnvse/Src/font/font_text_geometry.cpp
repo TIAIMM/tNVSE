@@ -298,7 +298,7 @@ namespace fonthook
 		{
 			*textShape = CreateEmptyFreeTypeTextShape(font, true);
 			font->ButtonIcons.Clear(1);
-			ThisStdCall(0x7593E0, reinterpret_cast<char*>(&textData));
+			ThisStdCall<void>(0x7593E0, reinterpret_cast<char*>(&textData));
 			return;
 		}
 		builder.ReserveGlyphs(static_cast<size_t>(std::max(0, textData.iCharCount)));
@@ -327,7 +327,7 @@ namespace fonthook
 			if (icons)
 			{
 				icons->m_kLocal.m_Translate = NiPoint3(0.0f, position.y, position.z);
-				ThisStdCall(0xA67050, icons->GetModelData(), 0x4000);
+				ThisStdCall<void>(0xA67050, icons->GetModelData(), 0x4000);
 			}
 		}
 
@@ -512,7 +512,7 @@ namespace fonthook
 			*textShape = textObject;
 		}
 		font->ButtonIcons.Clear(1);
-		ThisStdCall(0x7593E0, reinterpret_cast<char*>(&textData));
+		ThisStdCall<void>(0x7593E0, reinterpret_cast<char*>(&textData));
 	}
 
 	// ==================== FontEx::CreateText ====================
@@ -540,7 +540,9 @@ namespace fonthook
 			aiLineEnd = kSentinelMax;
 
 		float linePadding = FontManager::GetLinePadding(this->iFontNum);
-		ThisStdCall(0x759330, &textData, *aiWidth, *aiHeight, aiLineStart, aiLineEnd, aiLineBreakChar);
+		ThisStdCall<void>(
+			0x759330, &textData, *aiWidth, *aiHeight,
+			aiLineStart, aiLineEnd, aiLineBreakChar);
 
 		if (g_bEnableMultibyteFontHook)
 		{
@@ -558,7 +560,7 @@ namespace fonthook
 			PreparedTextSidecarCapture capture(&textData, this);
 			if (g_bEnableMultibyteFontHook)
 			{
-				ThisStdCall(0xA12FB0, this,
+				ThisStdCall<void>(0xA12FB0, this,
 					axTextString->pString, &textData);
 			}
 			else
@@ -590,7 +592,7 @@ namespace fonthook
 							this->iFontNum);
 					}
 				}
-				ThisStdCall(0x7593E0,
+				ThisStdCall<void>(0x7593E0,
 					reinterpret_cast<char*>(&textData));
 				return;
 			}
@@ -631,8 +633,10 @@ namespace fonthook
 		{
 			pIconShape = Font::MakeIconsTriShape();
 			*apIconShape = pIconShape;
-			pIconShape->m_kLocal.m_Translate = NiPoint3(0.0f, textPosition.y, textPosition.z);
-			ThisStdCall(0xA67050, pIconShape->GetModelData(), 0x4000);
+			pIconShape->m_kLocal.m_Translate = NiPoint3(
+				0.0f, textPosition.y, textPosition.z);
+			ThisStdCall<void>(
+				0xA67050, pIconShape->GetModelData(), 0x4000);
 		}
 
 		float yOffsetStart = textPosition.x;
@@ -642,7 +646,7 @@ namespace fonthook
 
 		BSSimpleList<int>* pLineWidthCursor = &textData.xLineWidths;
 
-		UInt32 uiDoubleByteCode;
+		UInt32 uiDoubleByteCode = 0;
 		for (int charIdx = 0; textData.xNewText.pString[charIdx]; ++charIdx)
 		{
 			if (textData.xNewText.pString[charIdx] == aiLineBreakChar)
@@ -690,18 +694,21 @@ namespace fonthook
 			}
 			else
 			{
-				FontLetter* glyph = LookupDBGlyph(extraGlyphs, uiDoubleByteCode);
-				if (extraGlyphs && bIsDBCharacter && glyph)
+				if (extraGlyphs && bIsDBCharacter)
 				{
-					StdCall<FontLetter*>(0xA142D0, glyph, vertexIdx++,
-						pTextShape, &textPosition.x, axFontColor);
-					++charIdx;
-					rendered = true;
+					if (FontLetter* glyph = LookupDBGlyph(
+						extraGlyphs, uiDoubleByteCode))
+					{
+						Font::AddChar(glyph, vertexIdx++,
+							pTextShape, &textPosition, axFontColor);
+						++charIdx;
+						rendered = true;
+					}
 				}
 				if (!rendered)
 				{
-					StdCall<FontLetter*>(0xA142D0, &this->pFontData->pFontLetters[currentChar],
-						vertexIdx++, pTextShape, &textPosition.x, axFontColor);
+					Font::AddChar(&this->pFontData->pFontLetters[currentChar],
+						vertexIdx++, pTextShape, &textPosition, axFontColor);
 				}
 			}
 			int maxRenderedWidth = *aiWidth;
@@ -710,16 +717,16 @@ namespace fonthook
 		}
 
 		auto* pTextGeomData = pTextShape->GetModelData();
-		ThisStdCall(0xA7EE30, &pTextGeomData->m_kBound,
+		ThisStdCall<void>(0xA7EE30, &pTextGeomData->m_kBound,
 			pTextGeomData->m_usVertices, pTextGeomData->m_pkVertex);
 		if (pIconShape)
 		{
 			auto* pIconGeomData = pIconShape->GetModelData();
-			ThisStdCall(0xA7EE30, &pIconGeomData->m_kBound,
+			ThisStdCall<void>(0xA7EE30, &pIconGeomData->m_kBound,
 				pIconGeomData->m_usVertices, pIconGeomData->m_pkVertex);
 		}
 		this->ButtonIcons.Clear(1);
-		ThisStdCall(0x7593E0, (char*)&textData);
+		ThisStdCall<void>(0x7593E0, (char*)&textData);
 	}
 
 	// ==================== FontEx::MakeString ====================
@@ -770,7 +777,7 @@ namespace fonthook
 		}
 		else
 		{
-			ThisStdCall(0xA12370, this, apTextString->pString, &textXOffset,
+			ThisStdCall<void>(0xA12370, this, apTextString->pString, &textXOffset,
 				newlineBuffer, abPrepareObject, 0);
 		}
 
@@ -848,7 +855,7 @@ namespace fonthook
 					else
 					{
 						char escapeBuffer[4];
-						ThisStdCall(0xA12370, this, apTextString->pString,
+						ThisStdCall<void>(0xA12370, this, apTextString->pString,
 							&nextLineX, escapeBuffer, abPrepareObject,
 							byteIndex + 1);
 					}
@@ -890,15 +897,20 @@ namespace fonthook
 			apTextString->pString, charIdx, extraGlyphs, textLen);
 
 		auto* pTriShape = Font::MakeTriShape(iActualCharCount, arg1C, abPrepareObject_1);
-		float startY = currentY;
-		pTriShape->m_kLocal.m_Translate = NiPoint3(afStartX, currentZ, startY);
+		// Retail Font::MakeString lays the AddChar position tuple out as
+		// [horizontal X, depth Z, vertical Y]. AddChar reads element 2 for
+		// glyph top/bottom, so model that ABI explicitly instead of relying on
+		// three unrelated locals being adjacent in the compiler's stack frame.
+		NiPoint3 position(currentX, currentZ, currentY);
+		float startY = position.z;
+		pTriShape->m_kLocal.m_Translate = NiPoint3(afStartX, position.y, startY);
 
 		NiColorA* pColor = 0;
 		float defaultColor[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
 		*aiWidth = 0;
-		double lineBaseOffset = currentX;
+		double lineBaseOffset = position.x;
 		int vertexIdx = 0;
-		UInt32 uiDoubleByteCode;
+		UInt32 uiDoubleByteCode = 0;
 
 		for (int lineIdx = 0; apTextString->pString[lineIdx]; ++lineIdx)
 		{
@@ -908,17 +920,17 @@ namespace fonthook
 			char currentCharValue = apTextString->pString[lineIdx];
 			if (currentCharValue == '\t')
 			{
-				double tabRemainder = fmod(currentX, 75.0);
-				currentX += 75.0 - tabRemainder;
+				double tabRemainder = fmod(position.x, 75.0);
+				position.x += static_cast<float>(75.0 - tabRemainder);
 			}
 			else if (currentCharValue == '\n')
 			{
 				char escapeBuffer[4];
 				float tabPrevX = (float)*aiWidth;
-				ThisStdCall(0xA12370, this, apTextString->pString, &tabPrevX,
+				ThisStdCall<void>(0xA12370, this, apTextString->pString, &tabPrevX,
 					escapeBuffer, abPrepareObject, lineIdx + 1);
-				currentX = tabPrevX;
-				currentY = currentY - this->pFontData->fBaseLine;
+				position.x = tabPrevX;
+				position.z -= this->pFontData->fBaseLine;
 			}
 
 			UInt8 currentChar = apTextString->pString[lineIdx];
@@ -943,20 +955,20 @@ namespace fonthook
 				FontLetter* glyph = LookupDBGlyph(extraGlyphs, uiDoubleByteCode);
 				if (glyph)
 				{
-					StdCall<FontLetter*>(0xA142D0, glyph, vertexIdx++,
-						pTriShape, &currentX, pColor);
+					Font::AddChar(glyph, vertexIdx++,
+						pTriShape, &position, pColor);
 					lineIdx += 1;
 					rendered = true;
 				}
 			}
 			if (!rendered)
 			{
-				StdCall<FontLetter*>(0xA142D0, &this->pFontData->pFontLetters[currentChar],
-					vertexIdx++, pTriShape, &currentX, pColor);
+				Font::AddChar(&this->pFontData->pFontLetters[currentChar],
+					vertexIdx++, pTriShape, &position, pColor);
 			}
 
 			int prevWidth = *aiWidth;
-			int renderedWidth = ConditionalFloatToUInt(currentX - lineBaseOffset);
+			int renderedWidth = ConditionalFloatToUInt(position.x - lineBaseOffset);
 			*aiWidth = MaxInt(renderedWidth, prevWidth);
 
 			if (apTextString->pString[lineIdx] == 2)
@@ -964,7 +976,7 @@ namespace fonthook
 		}
 
 		auto* pGeomData = pTriShape->GetModelData();
-		ThisStdCall(0xA7EE30, &pGeomData->m_kBound,
+		ThisStdCall<void>(0xA7EE30, &pGeomData->m_kBound,
 			pGeomData->m_usVertices, pGeomData->m_pkVertex);
 		return pTriShape;
 	}

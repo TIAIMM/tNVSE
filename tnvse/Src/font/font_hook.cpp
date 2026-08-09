@@ -3,8 +3,6 @@
 namespace fonthook
 {
 	// ---- Global state variables ----
-	std::string fontNameKey;
-
 	std::unordered_map<std::string, ExtraGlyphStore> gExtraFontLetters;
 	std::unordered_map<UInt32, ExtraGlyphStore> gNumberedExtraLetters;
 

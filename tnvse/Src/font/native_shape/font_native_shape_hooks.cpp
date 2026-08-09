@@ -1552,7 +1552,7 @@ namespace fonthook::vectorfont
 				if (m_atlasTexture.m_pObject != desiredTexture)
 				{
 					m_atlasTextureChanged = true;
-					ThisStdCall(kTileImageSetSourceTexture,
+					ThisStdCall<void>(kTileImageSetSourceTexture,
 						m_tile, desiredTexture);
 					if (m_tile->sourceTexture.m_pObject
 						!= desiredTexture)
@@ -1626,7 +1626,7 @@ namespace fonthook::vectorfont
 				}
 				if (m_atlasTextureChanged && m_tile)
 				{
-					ThisStdCall(kTileImageSetSourceTexture,
+					ThisStdCall<void>(kTileImageSetSourceTexture,
 						m_tile, m_atlasTexture.m_pObject);
 				}
 
@@ -2535,7 +2535,7 @@ namespace fonthook::vectorfont
 				TileShader*, const NiPropertyState*);
 			using SetupGeometryRenderStatesFn = void(__thiscall*)(
 				TileShader*, const NiPropertyState*, bool);
-			using PrepareGeometryFn = void(__thiscall*)(
+			using PrepareGeometryFn = NiGeometryBufferData* (__thiscall*)(
 				TileShader*, NiGeometry*, UInt32,
 				NiGeometryBufferData*, const NiPropertyState*);
 
@@ -3010,7 +3010,7 @@ namespace fonthook::vectorfont
 			// category. A later dedicated one-packet Tile must establish a new
 			// cache head even when it remains in the same validation segment.
 			InvalidateSegmentDeviceStateCache();
-			using DefaultPassFn = int(__cdecl*)(
+			using DefaultPassFn = void(__cdecl*)(
 				BSShaderProperty::RenderPass*, bool, bool, bool);
 			reinterpret_cast<DefaultPassFn>(
 				kBSBatchRendererRenderPassImmediatelyStandard)(
@@ -4731,8 +4731,13 @@ namespace fonthook::vectorfont
 
 	bool IsNativeFontRenderPassImmediatelyHookCurrent()
 	{
-		return State().originalRenderPassImmediately
-			&& ReadRenderPassImmediatelyCallTarget() == &NativeFontRenderPassImmediately;
+		const RenderPassImmediatelyFn hook = &NativeFontRenderPassImmediately;
+		const RenderPassImmediatelyFn predecessor =
+			State().originalRenderPassImmediately;
+		return predecessor && predecessor != hook
+			&& hook_identity::IsExecutableTarget(
+				reinterpret_cast<SIZE_T>(predecessor))
+			&& ReadRenderPassImmediatelyCallTarget() == hook;
 	}
 
 	bool IsNativeFontRenderPassImmediatelyHookCurrentFast()
@@ -4750,6 +4755,8 @@ namespace fonthook::vectorfont
 	bool IsNativeFontRenderPassImmediatelyHookCurrentUnchecked()
 	{
 		return State().originalRenderPassImmediately
+			&& State().originalRenderPassImmediately
+				!= &NativeFontRenderPassImmediately
 			&& hook_identity::MatchesRel32InstructionImageUnchecked(
 				kRenderPassImmediatelyCallSite,
 				s_renderPassImmediatelyHookImage);
@@ -5207,7 +5214,14 @@ namespace fonthook::vectorfont
 		const RenderPassImmediatelyFn hook = &NativeFontRenderPassImmediately;
 		if (current == hook)
 		{
-			State().renderPassImmediatelyHookInstalled = State().originalRenderPassImmediately != nullptr;
+			const RenderPassImmediatelyFn predecessor =
+				State().originalRenderPassImmediately;
+			State().renderPassImmediatelyHookInstalled = predecessor
+				&& predecessor != hook
+				&& hook_identity::IsExecutableTarget(
+					reinterpret_cast<SIZE_T>(predecessor));
+			if (!State().renderPassImmediatelyHookInstalled)
+				InvalidateAllSingletonFacadeBindings();
 			return State().renderPassImmediatelyHookInstalled;
 		}
 		if (!current)
@@ -5252,20 +5266,39 @@ namespace fonthook::vectorfont
 
 		State().originalRenderPassImmediately = current;
 		WriteRelCall(kRenderPassImmediatelyCallSite, hook);
-		State().renderPassImmediatelyHookInstalled = ReadRenderPassImmediatelyCallTarget() == hook;
-		if (!State().renderPassImmediatelyHookInstalled)
+		const RenderPassImmediatelyFn observed =
+			ReadRenderPassImmediatelyCallTarget();
+		if (observed == hook)
 		{
-			WriteRelCall(kRenderPassImmediatelyCallSite, current);
+			State().renderPassImmediatelyHookInstalled = true;
+			if (g_bEnableFreeTypeFontRenderingLog)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_native: installed RenderPassImmediately native route original=%p vanilla=1",
+					current);
+			}
+			return true;
+		}
+
+		State().renderPassImmediatelyHookInstalled = false;
+		if (observed == current)
+		{
 			State().originalRenderPassImmediately = nullptr;
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: RenderPassImmediately hook write did not publish; vanilla target remains=%p",
+				current);
 			return false;
 		}
-		if (g_bEnableFreeTypeFontRenderingLog)
-		{
-			gLog.FormattedMessage(
-				"tnvse_freetype_native: installed RenderPassImmediately native route original=%p vanilla=1",
-				current);
-		}
-		return true;
+
+		// Do not replace an observed later owner with vanilla. It may already
+		// chain through this hook, so retain the original target for any call
+		// that still reaches tNVSE while the strict top-level route fails closed.
+		State().loggedRenderPassImmediatelyHookConflict = true;
+		gLog.FormattedMessage(
+			"tnvse_freetype_native: RenderPassImmediately hook retained below observed target=%p original=%p; native route marked unavailable",
+			observed,
+			current);
+		return false;
 	}
 
 	bool IsNativeFontAtlasShape(const NiTriShape* shape)
@@ -5390,8 +5423,49 @@ namespace fonthook::vectorfont
 		if (State().originalTriShapeVtable)
 			return source == State().originalTriShapeVtable;
 
+		const SIZE_T sourceAddress = reinterpret_cast<SIZE_T>(source);
+		constexpr SIZE_T kCopiedVtableBytes =
+			(kCopiedTriShapeVtableEntries + 1u) * sizeof(void*);
+		if (sourceAddress < sizeof(void*)
+			|| !hook_identity::IsAccessibleRegion(
+				sourceAddress - sizeof(void*), kCopiedVtableBytes, false))
+		{
+			return false;
+		}
+
+		const RenderImmediateFn originalRenderImmediate =
+			reinterpret_cast<RenderImmediateFn>(
+				source[kRenderImmediateSlot]);
+		const RenderImmediateFn originalRenderImmediateAlt =
+			reinterpret_cast<RenderImmediateFn>(
+				source[kRenderImmediateAltSlot]);
+		const DeleteThisFn originalDeleteThis =
+			reinterpret_cast<DeleteThisFn>(source[kDeleteThisSlot]);
+		const SIZE_T originalRenderImmediateAddress =
+			reinterpret_cast<SIZE_T>(originalRenderImmediate);
+		const SIZE_T originalRenderImmediateAltAddress =
+			reinterpret_cast<SIZE_T>(originalRenderImmediateAlt);
+		const SIZE_T originalDeleteThisAddress =
+			reinterpret_cast<SIZE_T>(originalDeleteThis);
+		if (!originalRenderImmediate || !originalRenderImmediateAlt
+			|| !originalDeleteThis
+			|| originalRenderImmediateAddress
+				== reinterpret_cast<SIZE_T>(&NativeFontRenderImmediate)
+			|| originalRenderImmediateAltAddress
+				== reinterpret_cast<SIZE_T>(&NativeFontRenderImmediateAlt)
+			|| originalDeleteThisAddress
+				== reinterpret_cast<SIZE_T>(&NativeFontDeleteThis)
+			|| !hook_identity::IsExecutableTarget(
+				originalRenderImmediateAddress)
+			|| !hook_identity::IsExecutableTarget(
+				originalRenderImmediateAltAddress)
+			|| !hook_identity::IsExecutableTarget(
+				originalDeleteThisAddress))
+		{
+			return false;
+		}
+
 		NativeFontShapeState& state = State();
-		state.originalTriShapeVtable = source;
 		const void* expectedFalsePredicate =
 			reinterpret_cast<void*>(kNiObjectNullGeometryCastPredicate);
 		const bool predicateSlotsMatch =
@@ -5418,41 +5492,43 @@ namespace fonthook::vectorfont
 				expectedFalsePredicate);
 		}
 
-		state.triShapeVtable[0] = source[-1];
+		std::array<void*, kCopiedTriShapeVtableEntries + 1>
+			triShapeVtable = {};
+		std::array<void*, kCopiedTriShapeVtableEntries + 1>
+			vanillaLayoutTriShapeVtable = {};
+		triShapeVtable[0] = source[-1];
 		std::copy(source, source + kCopiedTriShapeVtableEntries,
-			state.triShapeVtable.begin() + 1);
-		state.vanillaLayoutTriShapeVtable[0] = source[-1];
-		std::copy(source, source + kCopiedTriShapeVtableEntries,
-			state.vanillaLayoutTriShapeVtable.begin() + 1);
-		state.originalRenderImmediate = reinterpret_cast<RenderImmediateFn>(
-			state.triShapeVtable[kRenderImmediateSlot + 1]);
-		state.originalRenderImmediateAlt = reinterpret_cast<RenderImmediateFn>(
-			state.triShapeVtable[kRenderImmediateAltSlot + 1]);
-		state.originalDeleteThis = reinterpret_cast<DeleteThisFn>(
-			state.triShapeVtable[kDeleteThisSlot + 1]);
+			triShapeVtable.begin() + 1);
+		vanillaLayoutTriShapeVtable = triShapeVtable;
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
 				"tnvse_freetype_native: direct-draw-lite immediate proof ready=%u original=%p expected=%p",
-				state.originalRenderImmediateAlt
+				originalRenderImmediateAlt
 					== reinterpret_cast<RenderImmediateFn>(
 						kNiTriShapeOnlyRenderImmediate) ? 1u : 0u,
-				state.originalRenderImmediateAlt,
+				originalRenderImmediateAlt,
 				reinterpret_cast<void*>(kNiTriShapeOnlyRenderImmediate));
 		}
-		state.triShapeVtable[kDeleteThisSlot + 1]
+		triShapeVtable[kDeleteThisSlot + 1]
 			= reinterpret_cast<void*>(&NativeFontDeleteThis);
-		state.triShapeVtable[kRenderImmediateSlot + 1]
+		triShapeVtable[kRenderImmediateSlot + 1]
 			= reinterpret_cast<void*>(&NativeFontRenderImmediate);
-		state.triShapeVtable[kRenderImmediateAltSlot + 1]
+		triShapeVtable[kRenderImmediateAltSlot + 1]
 			= reinterpret_cast<void*>(&NativeFontRenderImmediateAlt);
-		state.vanillaLayoutTriShapeVtable[kDeleteThisSlot + 1]
+		vanillaLayoutTriShapeVtable[kDeleteThisSlot + 1]
 			= reinterpret_cast<void*>(&NativeFontDeleteThis);
-		state.vanillaLayoutTriShapeVtable[kRenderImmediateSlot + 1]
+		vanillaLayoutTriShapeVtable[kRenderImmediateSlot + 1]
 			= reinterpret_cast<void*>(&NativeFontRenderImmediate);
-		state.vanillaLayoutTriShapeVtable[kRenderImmediateAltSlot + 1]
+		vanillaLayoutTriShapeVtable[kRenderImmediateAltSlot + 1]
 			= reinterpret_cast<void*>(&NativeFontRenderImmediateAlt);
-		return state.originalRenderImmediate && state.originalRenderImmediateAlt
-			&& state.originalDeleteThis;
+
+		state.triShapeVtable = triShapeVtable;
+		state.vanillaLayoutTriShapeVtable = vanillaLayoutTriShapeVtable;
+		state.originalRenderImmediate = originalRenderImmediate;
+		state.originalRenderImmediateAlt = originalRenderImmediateAlt;
+		state.originalDeleteThis = originalDeleteThis;
+		state.originalTriShapeVtable = source;
+		return true;
 	}
 }

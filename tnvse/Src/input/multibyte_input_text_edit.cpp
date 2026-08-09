@@ -231,8 +231,27 @@ namespace fonthook
 
 			if (currentHandler == hookHandler)
 			{
-				s_jipAdapterPublished = true;
+				if (hook_identity::IsExecutableTarget(
+						s_jipOriginalInputHandler))
+				{
+					s_jipAdapterPublished = true;
+				}
+				else
+				{
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: JIP TextInput adapter is present but its predecessor is unavailable original=0x%08X",
+						static_cast<UInt32>(s_jipOriginalInputHandler));
+				}
 				return;
+			}
+
+			if (s_jipAdapterPublished
+				&& currentHandler == s_jipOriginalInputHandler)
+			{
+				// The entire adapter chain has been removed and the slot is back at
+				// the saved predecessor. Forget the stale guard so this live JIP
+				// input instance can be installed again below that predecessor.
+				ClearJipTextInputHookState();
 			}
 
 			if (s_jipAdapterPublished)
@@ -254,19 +273,48 @@ namespace fonthook
 			TextEditMenu* current = TextEditMenu::GetCurrent();
 			if (!LooksLikeJipTextInput(current))
 				return;
+			if (!hook_identity::IsExecutableTarget(currentHandler)
+				|| !hook_identity::IsExecutableTarget(hookHandler))
+			{
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: cannot chain JIP TextInput adapter predecessor=0x%08X hook=0x%08X",
+					static_cast<UInt32>(currentHandler),
+					static_cast<UInt32>(hookHandler));
+				return;
+			}
 
 			s_jipOriginalInputHandler = currentHandler;
 			SafeWrite32(kTextEditMenuHandleKeyboardInputVTableEntry, hookHandler);
-			if (CurrentTextEditInputHandler() != hookHandler)
+			const SIZE_T observedHandler = CurrentTextEditInputHandler();
+			if (observedHandler == hookHandler)
 			{
+				s_jipAdapterPublished = true;
+				DebugLog(
+					"tnvse_multibyte_input: chained JIP TextInput handler=0x%08X menu=0x%08X",
+					static_cast<UInt32>(currentHandler),
+					reinterpret_cast<UInt32>(current));
+				return;
+			}
+
+			if (observedHandler == currentHandler)
+			{
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: JIP TextInput adapter write did not publish predecessor=0x%08X",
+					static_cast<UInt32>(currentHandler));
 				ClearJipTextInputHookState();
 				return;
 			}
+
+			// A later owner may have captured this adapter immediately after it
+			// was published. Preserve the predecessor and remain below that owner;
+			// republishing above it could create a recursive two-node chain.
 			s_jipAdapterPublished = true;
-			DebugLog(
-				"tnvse_multibyte_input: chained JIP TextInput handler=0x%08X menu=0x%08X",
+			s_jipObservedSuccessor = observedHandler;
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: JIP TextInput adapter retained below observed handler=0x%08X predecessor=0x%08X executable=%u",
+				static_cast<UInt32>(observedHandler),
 				static_cast<UInt32>(currentHandler),
-				reinterpret_cast<UInt32>(current));
+				hook_identity::IsExecutableTarget(observedHandler) ? 1u : 0u);
 		}
 
 		std::string GetJipText(TextEditMenu* menu)
@@ -854,7 +902,11 @@ namespace fonthook
 		class TextEditStateEx : public TextEditState
 		{
 		public:
-			static void __fastcall Input(TextEditState* apState, void*, SInt32 aiInput, SInt32 aiChar)
+			// Retail 0x716B00 is a fastcall member: ECX=this, EDX=aiInput,
+			// and the sole stack argument is aiChar (the caller supplies the same
+			// key value in both positions). Do not add a thiscall-style EDX shim.
+			static void __fastcall Input(
+				TextEditState* apState, SInt32 aiInput, SInt32 aiChar)
 			{
 				if (!apState || !apState->IsActive())
 					return;
@@ -954,9 +1006,11 @@ namespace fonthook
 			}
 		};
 
-		void InstallTextEditHooks()
+		bool InstallTextEditHooks()
 		{
 			using hook_identity::Rel32Opcode;
+			const SIZE_T openHook = reinterpret_cast<SIZE_T>(&TextEditMenuEx::Open);
+			const SIZE_T inputHook = reinterpret_cast<SIZE_T>(&TextEditStateEx::Input);
 			SIZE_T openTarget = 0;
 			SIZE_T inputTarget = 0;
 			if (!hook_identity::ReadRel32Target(
@@ -974,42 +1028,110 @@ namespace fonthook
 					"tnvse_multibyte_input: TextEdit hook identity mismatch open=%08X input=%08X; disabled",
 					static_cast<UInt32>(openTarget),
 					static_cast<UInt32>(inputTarget));
-				return;
+				return false;
 			}
 
 			WriteRelCall(kPlayerNameEntryMenuTextEditMenuOpenCallSite,
 				&TextEditMenuEx::Open);
 			WriteRelCall(kTextEditStateInputCallSiteInHandleKeyboardInput,
 				&TextEditStateEx::Input);
-			const bool installed = hook_identity::MatchesRel32Target(
+			const bool openInstalled = hook_identity::MatchesRel32Target(
 				kPlayerNameEntryMenuTextEditMenuOpenCallSite,
 				Rel32Opcode::Call,
-				reinterpret_cast<SIZE_T>(&TextEditMenuEx::Open))
-				&& hook_identity::MatchesRel32Target(
+				openHook);
+			const bool inputInstalled = hook_identity::MatchesRel32Target(
 					kTextEditStateInputCallSiteInHandleKeyboardInput,
 					Rel32Opcode::Call,
-					reinterpret_cast<SIZE_T>(&TextEditStateEx::Input));
-			if (!installed)
+					inputHook);
+			if (!openInstalled || !inputInstalled)
 			{
-				WriteRelCall(kPlayerNameEntryMenuTextEditMenuOpenCallSite,
-					kVanillaTextEditMenuOpen);
-				WriteRelCall(kTextEditStateInputCallSiteInHandleKeyboardInput,
-					kVanillaTextEditStateInput);
+				auto rollbackOwnedCall = [](SIZE_T site, SIZE_T hook,
+					SIZE_T predecessor, SIZE_T& observed) -> bool
+				{
+					observed = 0;
+					if (!hook_identity::ReadRel32Target(
+							site, Rel32Opcode::Call, observed))
+					{
+						return false;
+					}
+					if (observed == hook)
+					{
+						WriteRelCall(site, predecessor);
+						return hook_identity::ReadRel32Target(
+							site, Rel32Opcode::Call, observed)
+							&& observed == predecessor;
+					}
+					// A different top-level target may have captured tNVSE as its
+					// predecessor. Never overwrite that later owner during rollback.
+					return observed == predecessor;
+				};
+
+				SIZE_T observedOpen = 0;
+				SIZE_T observedInput = 0;
+				const bool openRestored = rollbackOwnedCall(
+					kPlayerNameEntryMenuTextEditMenuOpenCallSite,
+					openHook, kVanillaTextEditMenuOpen, observedOpen);
+				const bool inputRestored = rollbackOwnedCall(
+					kTextEditStateInputCallSiteInHandleKeyboardInput,
+					inputHook, kVanillaTextEditStateInput, observedInput);
 				gLog.FormattedMessage(
-					"tnvse_multibyte_input: TextEdit hook write verification failed; restored vanilla targets");
+					"tnvse_multibyte_input: TextEdit hook write verification failed openInstalled=%u inputInstalled=%u openObserved=%08X inputObserved=%08X rollback=%s",
+					openInstalled ? 1u : 0u,
+					inputInstalled ? 1u : 0u,
+					static_cast<UInt32>(observedOpen),
+					static_cast<UInt32>(observedInput),
+					openRestored && inputRestored
+						? "restored" : "retained-below-later-owner-or-incomplete");
+				return false;
 			}
+			return true;
 		}
 
 		void RestoreTextEditInputHook()
 		{
-			if (CurrentTextEditInputHandler() == JipTextInputHandlerAddress())
+			const SIZE_T hookHandler = JipTextInputHandlerAddress();
+			const SIZE_T currentHandler = CurrentTextEditInputHandler();
+			if (currentHandler == hookHandler)
 			{
 				const SIZE_T predecessor = s_jipOriginalInputHandler
-					&& s_jipOriginalInputHandler != JipTextInputHandlerAddress()
+					&& s_jipOriginalInputHandler != hookHandler
 					? s_jipOriginalInputHandler
 					: kTextEditMenuHandleKeyboardInput;
 				SafeWrite32(
 					kTextEditMenuHandleKeyboardInputVTableEntry, predecessor);
+				const SIZE_T observedHandler = CurrentTextEditInputHandler();
+				if (observedHandler == predecessor)
+				{
+					ClearJipTextInputHookState();
+					return;
+				}
+
+				s_jipAdapterPublished = true;
+				s_jipObservedSuccessor = observedHandler == hookHandler
+					? 0
+					: observedHandler;
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: JIP TextInput adapter detach not confirmed observed=0x%08X predecessor=0x%08X; chain state retained",
+					static_cast<UInt32>(observedHandler),
+					static_cast<UInt32>(predecessor));
+				return;
+			}
+
+			if (s_jipAdapterPublished
+				&& currentHandler == s_jipOriginalInputHandler)
+			{
+				ClearJipTextInputHookState();
+				return;
+			}
+
+			if (s_jipAdapterPublished
+				&& currentHandler != kTextEditMenuHandleKeyboardInput)
+			{
+				s_jipObservedSuccessor = currentHandler;
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: JIP TextInput adapter detach deferred below later handler=0x%08X",
+					static_cast<UInt32>(currentHandler));
+				return;
 			}
 
 			ClearJipTextInputHookState();

@@ -6,7 +6,7 @@ namespace fonthook
 {
 	void __cdecl ConvertToAsciiQuotes(UInt8* currentChar)
 	{
-		CdeclCall(0xA122B0, currentChar);
+		CdeclCall<void>(0xA122B0, currentChar);
 	}
 
 	bool __cdecl Interface_FindTextReplacementString(const char* varName, char* outBuffer, UInt32 bufferSize, bool isPositiveEscape)
@@ -19,25 +19,19 @@ namespace fonthook
 		return CdeclCall<bool>(0x7073D0, p_varNameBuffer, p_parsedTextBuffer);
 	}
 
-	// 0xEC62C0
-	UInt32 SafeDoubleToUInt32(double value)
-	{
-		if (value >= 0.0)
-			return static_cast<UInt32>(value);
-		if (value <= -4294967296.0)
-			return 0;
-		if (value < -4294967295.0)
-			return 1;
-		return static_cast<UInt32>(-value);
-	}
-
-	// 0xEC62C0
+	// Retail's compiler helper consumes the double from x87 ST(0), not from a
+	// normal stack argument. Keep that nonstandard ABI inside this wrapper.
 	UInt32 ConditionalFloatToUInt(double value)
 	{
-		if (*(volatile UInt32*)0x01270A6C)
-			return static_cast<UInt32>(value);
-		else
-			return SafeDoubleToUInt32(value);
+		UInt32 result = 0;
+		__asm
+		{
+			fld qword ptr[value]
+			mov eax, 0EC62C0h
+			call eax
+			mov result, eax
+		}
+		return result;
 	}
 
 	BSFile* FileFinder_GetFile(

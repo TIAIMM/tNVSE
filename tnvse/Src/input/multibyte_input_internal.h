@@ -198,7 +198,7 @@ namespace fonthook
 		size_t NextUTF8CharBoundary(const std::string& text, size_t offset);
 		bool IsCtrlKeyDown();
 
-		void InstallTextEditHooks();
+		bool InstallTextEditHooks();
 		void RestoreTextEditInputHook();
 		void TryInstallJipTextInputHook();
 		void ClearJipTextInputHookState();

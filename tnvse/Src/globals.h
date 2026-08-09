@@ -159,7 +159,6 @@ namespace fonthook
 	};
 
 	// ---- Font letter caches (defined in font_hook.cpp) ----
-	extern std::string fontNameKey;
 	extern std::unordered_map<std::string, ExtraGlyphStore> gExtraFontLetters;
 	extern std::unordered_map<UInt32, ExtraGlyphStore> gNumberedExtraLetters;
 

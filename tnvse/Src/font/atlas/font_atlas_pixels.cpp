@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 
 #include "font_atlas_resource_internal.h"
 
@@ -442,18 +443,23 @@ namespace fonthook::vectorfont
 			AtlasPixelMode mode, UInt32 mipLevels, const std::vector<UInt8>& source,
 			NiPixelDataPtr& outPixelData)
 		{
+			outPixelData = nullptr;
 			const NiPixelFormat* pixelFormat = mode == AtlasPixelMode::A8
 				? FindA8PixelFormat()
 				: &NiPixelFormat_RGBA32;
 			const UInt32 maximumMipLevels = GetAtlasMipLevelCount(width, height);
 			if (!pixelFormat || !mipLevels || mipLevels > maximumMipLevels)
 				return nullptr;
-			NiPixelData* pixelData = static_cast<NiPixelData*>(
+			NiPixelData* pixelStorage = static_cast<NiPixelData*>(
 				NiMemObject::operator new(sizeof(NiPixelData)));
-			if (!pixelData)
+			if (!pixelStorage)
 				return nullptr;
-			pixelData = ThisStdCall<NiPixelData*>(0xA7C190, pixelData, width, height,
+			// NiPixelData::NiPixelData is a void constructor. Do not interpret its
+			// incidental retail EAX value as a nullable factory result.
+			ThisStdCall<void>(0xA7C190, pixelStorage, width, height,
 				pixelFormat, mipLevels, 1);
+			NiPixelData* pixelData = pixelStorage;
+			NiPixelDataPtr pixelDataGuard = pixelData;
 			if (!pixelData || !pixelData->m_pucPixels || !pixelData->m_puiOffsetInBytes)
 				return nullptr;
 			UInt8* pixels = pixelData->m_pucPixels + *pixelData->m_puiOffsetInBytes;
@@ -486,7 +492,6 @@ namespace fonthook::vectorfont
 				return nullptr;
 			}
 			pixelData->bNoConvert = 1;
-			outPixelData = pixelData;
 
 			NiTexture::FormatPrefs prefs;
 			prefs.m_ePixelLayout = mode == AtlasPixelMode::A8
@@ -497,29 +502,38 @@ namespace fonthook::vectorfont
 				: NiTexture::FormatPrefs::ALPHA_DEFAULT;
 			prefs.m_eMipMapped = mipLevels > 1
 				? NiTexture::FormatPrefs::YES : NiTexture::FormatPrefs::NO;
-			NiTexturingProperty* property = static_cast<NiTexturingProperty*>(
+			NiTexturingProperty* propertyStorage = static_cast<NiTexturingProperty*>(
 				NiMemObject::operator new(sizeof(NiTexturingProperty)));
-			if (!property)
+			if (!propertyStorage)
 				return nullptr;
 
 			NiFixedString textureName;
 			textureName.m_kHandle = static_cast<char*>(
 				NiGlobalStringTable::AddString("tNVSE FreeType Atlas"));
-			property = ThisStdCall<NiTexturingProperty*>(0xA6ABB0,
-				property, pixelData, &textureName, &prefs);
-			if (!property || !property->m_kMaps.GetSize())
+			ThisStdCall<void>(0xA6ABB0, propertyStorage, pixelData,
+				&textureName, &prefs);
+			NiTexturingProperty* property = propertyStorage;
+			const auto deleteProperty = [](NiTexturingProperty* value)
+			{
+				if (value)
+					value->DeleteThis();
+			};
+			std::unique_ptr<NiTexturingProperty, decltype(deleteProperty)>
+				propertyGuard(property, deleteProperty);
+			if (!property->m_kMaps.GetSize()
+				|| !property->m_kMaps[0]
+				|| !property->m_kMaps[0]->m_spTexture)
 				return nullptr;
-			ThisStdCall(0x60AEB0, property, 1);
+			ThisStdCall<void>(0x60AEB0, property, 1);
 			if (mode == AtlasPixelMode::A8 && !PropertyUsesA8(property))
 				return nullptr;
-			if (NiTexturingProperty::Map* map = property->m_kMaps[0])
-			{
-				map->m_usflags = static_cast<UInt16>((map->m_usflags & ~0x1Fu)
-					| (NiTexturingProperty::FILTER_TRILERP << 2)
-					| NiTexturingProperty::CLAMP_S_CLAMP_T);
-			}
+			NiTexturingProperty::Map* map = property->m_kMaps[0];
+			map->m_usflags = static_cast<UInt16>((map->m_usflags & ~0x1Fu)
+				| (NiTexturingProperty::FILTER_TRILERP << 2)
+				| NiTexturingProperty::CLAMP_S_CLAMP_T);
 
-			return property;
+			outPixelData = pixelDataGuard;
+			return propertyGuard.release();
 		}
 
 		void WriteBitmapPixels(UInt8* destination, LONG pitch, AtlasPixelMode mode,

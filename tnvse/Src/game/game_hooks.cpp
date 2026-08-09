@@ -31,6 +31,121 @@ namespace fonthook
 		inline constexpr SIZE_T kFontMakeString = 0xA12460;
 		inline constexpr SIZE_T kFontManagerCalculateStringDimensions = 0xA1B020;
 		inline constexpr SIZE_T kFontPrepText = 0xA12FB0;
+
+		// Font::Load allocates exactly sizeof(FontData), but retail asks BSFile for
+		// the complete .FNT size and passes that value to Read.  Extended tNVSE
+		// files append their DBCS FontLetter table, so the unbounded retail value
+		// would overwrite the 0x3928-byte allocation before texture loading starts.
+		//
+		// At 0xA154D8 retail executes:
+		//   mov edx, [eax+28h]     ; BSFile::GetSize virtual target
+		//   call edx               ; __thiscall, ECX = BSFile*
+		// Replace those five bytes with CALL rel32 to the explicit __fastcall
+		// wrapper below.  A one-argument x86 __fastcall receives the same BSFile*
+		// in ECX and returns the bounded UInt32 in EAX, so the surrounding retail
+		// Font::Load code and its complete texture-loading path remain unchanged.
+		struct FontLoadBoundedReadSizeHook
+		{
+			inline static constexpr SIZE_T kCallSite = 0xA154D8;
+			inline static constexpr std::array<UInt8, 5> kVanillaInstructions = {
+				0x8B, 0x50, 0x28, 0xFF, 0xD2
+			};
+
+			static UInt32 __fastcall GetBoundedFontDataReadSize(BSFile* fontFile)
+			{
+				const UInt32 fileSize = fontFile ? fontFile->GetSize() : 0;
+				return std::min(fileSize, kFontDataSize);
+			}
+
+			static SIZE_T Target()
+			{
+				return reinterpret_cast<SIZE_T>(&GetBoundedFontDataReadSize);
+			}
+
+			static bool HasVanillaInstructions()
+			{
+				return hook_identity::IsAccessibleRegion(
+						kCallSite, kVanillaInstructions.size(), true)
+					&& std::memcmp(reinterpret_cast<const void*>(kCallSite),
+						kVanillaInstructions.data(),
+						kVanillaInstructions.size()) == 0;
+			}
+
+			static bool IsInstalled()
+			{
+				return hook_identity::MatchesRel32Target(
+					kCallSite, Rel32Opcode::Call, Target());
+			}
+
+			static bool IsInstalledUnchecked()
+			{
+				return hook_identity::MatchesRel32TargetUnchecked(
+					kCallSite, Rel32Opcode::Call, Target());
+			}
+
+			static bool ValidateVanilla()
+			{
+				if (HasVanillaInstructions())
+					return true;
+				gLog.FormattedMessage(
+					"tnvse_font_hook: identity mismatch site=Font::Load BSFile::GetSize address=%08X expected=8B5028FFD2",
+					static_cast<UInt32>(kCallSite));
+				return false;
+			}
+
+			static bool Install()
+			{
+				if (!ValidateVanilla())
+					return false;
+
+				WriteRelCall(kCallSite, &GetBoundedFontDataReadSize);
+				if (IsInstalled())
+				{
+					gLog.FormattedMessage(
+						"tnvse_font_hook: installed Font::Load bounded FNT read site=%08X instruction=CALL rel32 target=%08X abi=__fastcall(ECX=BSFile*) maxBytes=%08X texturePath=retail",
+						static_cast<UInt32>(kCallSite),
+						static_cast<UInt32>(Target()),
+						kFontDataSize);
+					return true;
+				}
+
+				SIZE_T observed = 0;
+				const bool readable = hook_identity::ReadRel32Target(
+					kCallSite, Rel32Opcode::Call, observed);
+				const bool restored = Rollback();
+				gLog.FormattedMessage(
+					"tnvse_font_hook: Font::Load bounded FNT read write verification failed site=%08X expected=%08X observed=%08X readable=%u rollback=%s",
+					static_cast<UInt32>(kCallSite),
+					static_cast<UInt32>(Target()),
+					static_cast<UInt32>(observed),
+					readable ? 1u : 0u,
+					restored ? "restored" : "incomplete");
+				return false;
+			}
+
+			static bool Rollback()
+			{
+				if (IsInstalled())
+				{
+					SafeWriteBuf(kCallSite, kVanillaInstructions.data(),
+						kVanillaInstructions.size());
+				}
+				if (HasVanillaInstructions())
+					return true;
+
+				SIZE_T observed = 0;
+				const bool readable = hook_identity::ReadRel32Target(
+					kCallSite, Rel32Opcode::Call, observed);
+				gLog.FormattedMessage(
+					"tnvse_font_hook: Font::Load bounded FNT read rollback retained site=%08X observed=%08X hook=%08X readable=%u",
+					static_cast<UInt32>(kCallSite),
+					static_cast<UInt32>(observed),
+					static_cast<UInt32>(Target()),
+					readable ? 1u : 0u);
+				return false;
+			}
+		};
+
 		inline constexpr Rel32Site kDoorPromptCallSite = {
 			0x777006, 0x406D00, "Door prompt -> BSsprintf"
 		};
@@ -111,9 +226,121 @@ namespace fonthook
 			return valid;
 		}
 
+		template <size_t N>
+		bool VerifyInstalledCallSites(
+			const std::array<Rel32Site, N>& sites,
+			const std::array<SIZE_T, N>& hookTargets)
+		{
+			bool installed = true;
+			for (size_t i = 0; i < sites.size(); ++i)
+			{
+				SIZE_T observed = 0;
+				const bool readable = hook_identity::ReadRel32Target(
+					sites[i].address, Rel32Opcode::Call, observed);
+				if (readable && observed == hookTargets[i])
+					continue;
+				gLog.FormattedMessage(
+					"tnvse_font_hook: installed call verification failed site=%s address=%08X expected=%08X observed=%08X readable=%u",
+					sites[i].name,
+					static_cast<UInt32>(sites[i].address),
+					static_cast<UInt32>(hookTargets[i]),
+					static_cast<UInt32>(observed),
+					readable ? 1u : 0u);
+				installed = false;
+			}
+			return installed;
+		}
+
+		template <size_t N>
+		bool RollbackOwnedCallSites(
+			const std::array<Rel32Site, N>& sites,
+			const std::array<SIZE_T, N>& hookTargets)
+		{
+			bool restored = true;
+			for (size_t i = 0; i < sites.size(); ++i)
+			{
+				SIZE_T observed = 0;
+				if (!hook_identity::ReadRel32Target(
+						sites[i].address, Rel32Opcode::Call, observed))
+				{
+					restored = false;
+					continue;
+				}
+				if (observed == hookTargets[i])
+				{
+					WriteRelCall(sites[i].address, sites[i].vanillaTarget);
+					if (!hook_identity::ReadRel32Target(
+							sites[i].address, Rel32Opcode::Call, observed))
+					{
+						restored = false;
+						continue;
+					}
+				}
+				if (observed == sites[i].vanillaTarget)
+					continue;
+
+				// Another top-level CALL may already retain tNVSE as a
+				// predecessor. Never replace that later owner with vanilla.
+				gLog.FormattedMessage(
+					"tnvse_font_hook: call rollback retained site=%s address=%08X observed=%08X hook=%08X",
+					sites[i].name,
+					static_cast<UInt32>(sites[i].address),
+					static_cast<UInt32>(observed),
+					static_cast<UInt32>(hookTargets[i]));
+				restored = false;
+			}
+			return restored;
+		}
+
+		bool VerifyFontPrepTextEntry(SIZE_T hookTarget)
+		{
+			if (hook_identity::MatchesRel32Target(
+					kFontPrepText, Rel32Opcode::Jump, hookTarget))
+			{
+				return true;
+			}
+			SIZE_T observed = 0;
+			const bool readable = hook_identity::ReadRel32Target(
+				kFontPrepText, Rel32Opcode::Jump, observed);
+			gLog.FormattedMessage(
+				"tnvse_font_hook: Font::PrepText entry verification failed expected=%08X observed=%08X readable=%u",
+				static_cast<UInt32>(hookTarget),
+				static_cast<UInt32>(observed),
+				readable ? 1u : 0u);
+			return false;
+		}
+
+		bool RollbackOwnedFontPrepTextEntry(SIZE_T hookTarget)
+		{
+			if (hook_identity::MatchesRel32Target(
+					kFontPrepText, Rel32Opcode::Jump, hookTarget))
+			{
+				SafeWriteBuf(kFontPrepText, kFontPrepTextPrologue.data(),
+					kFontPrepTextPrologue.size());
+			}
+			if (hook_identity::IsAccessibleRegion(
+					kFontPrepText, kFontPrepTextPrologue.size(), true)
+				&& std::memcmp(reinterpret_cast<const void*>(kFontPrepText),
+					kFontPrepTextPrologue.data(),
+					kFontPrepTextPrologue.size()) == 0)
+			{
+				return true;
+			}
+
+			SIZE_T observed = 0;
+			hook_identity::ReadRel32Target(
+				kFontPrepText, Rel32Opcode::Jump, observed);
+			gLog.FormattedMessage(
+				"tnvse_font_hook: Font::PrepText rollback retained observed=%08X hook=%08X",
+				static_cast<UInt32>(observed),
+				static_cast<UInt32>(hookTarget));
+			return false;
+		}
+
 		bool ValidateRequiredFontHookSites()
 		{
 			bool valid = ValidateVanillaCallSites(kCommonFontCallSites);
+			valid = FontLoadBoundedReadSizeHook::ValidateVanilla() && valid;
 			if (g_bEnableMultibyteFontHook)
 			{
 				valid = ValidateVanillaCallSites(kMultibyteFontCallSites)
@@ -154,6 +381,7 @@ namespace fonthook
 		FontMakeStringFn s_originalFontMakeString = nullptr;
 		CalculateStringDimensionsFn s_originalCalculateStringDimensions = nullptr;
 		FontHookInstallState s_fontHookInstallState;
+		bool s_fontHookGraphMismatchLogged = false;
 
 		void* __cdecl CopyAnimatingTextEncodedUnits(
 			void* destination, const void* source, SIZE_T unitCount)
@@ -193,6 +421,7 @@ namespace fonthook
 			SIZE_T length = 0;
 			void* code = nullptr;
 		};
+		std::array<PendingTrampoline, 5> s_coreFontTrampolines = {};
 
 		template <class C, class Ret, class... Args>
 		SIZE_T MemberFunctionAddress(Ret(C::*target)(Args...))
@@ -218,6 +447,242 @@ namespace fonthook
 			return true;
 		}
 
+		std::array<SIZE_T, 5> CoreFontHookTargets()
+		{
+			return {{
+				MemberFunctionAddress(&FontEx::FontConstructor),
+				MemberFunctionAddress(&FontEx::Load),
+				MemberFunctionAddress(&FontEx::CreateText),
+				MemberFunctionAddress(&FontEx::MakeString),
+				MemberFunctionAddress(
+					&FontManagerEx::CalculateStringDimensions),
+			}};
+		}
+
+		std::array<SIZE_T, kCommonFontCallSites.size()>
+		CommonFontCallTargets()
+		{
+			return {{
+				MemberFunctionAddress(&FontManagerEx::PrepText),
+				MemberFunctionAddress(&FontManagerEx::TextDocRender),
+				MemberFunctionAddress(&FontEx::TextDocRenderAddChar),
+				MemberFunctionAddress(&FontEx::PrepTextForTerminal),
+				MemberFunctionAddress(&FontManagerEx::TextLineAddChar),
+			}};
+		}
+
+		std::array<SIZE_T, kFreeTypeOnlyCallSites.size()>
+		FreeTypeOnlyCallTargets()
+		{
+			return {{
+				MemberFunctionAddress(&FontManagerEx::TextLineAddChar),
+			}};
+		}
+
+		std::array<SIZE_T, kMultibyteFontCallSites.size()>
+		MultibyteFontCallTargets()
+		{
+			const SIZE_T collectTo = reinterpret_cast<SIZE_T>(
+				&FontManagerEx::CollectTo);
+			const SIZE_T collectAttribute = reinterpret_cast<SIZE_T>(
+				&FontManagerEx::CollectToAttributeValue);
+			const SIZE_T textDocAddChar = MemberFunctionAddress(
+				&FontManagerEx::TextDocAddChar);
+			const SIZE_T textPageAddChar = MemberFunctionAddress(
+				&FontManagerEx::TextPageAddChar);
+			const SIZE_T charDataCopy = reinterpret_cast<SIZE_T>(
+				&FontManagerEx::CharDataCopy);
+			const SIZE_T tileSetString = reinterpret_cast<SIZE_T>(
+				&TileSetStringHookForQuestAndLocationText);
+			const SIZE_T copyString = reinterpret_cast<SIZE_T>(&strcpy_sHook);
+			return {{
+				reinterpret_cast<SIZE_T>(&CopyAnimatingTextEncodedUnits),
+				MemberFunctionAddress(&FontManagerEx::PrepHypertext),
+				collectTo,
+				collectTo,
+				collectTo,
+				collectTo,
+				collectTo,
+				collectTo,
+				collectAttribute,
+				collectAttribute,
+				MemberFunctionAddress(&FontManagerEx::TextDocDestructor),
+				textDocAddChar,
+				textDocAddChar,
+				textDocAddChar,
+				textDocAddChar,
+				textPageAddChar,
+				textPageAddChar,
+				charDataCopy,
+				charDataCopy,
+				charDataCopy,
+				charDataCopy,
+				tileSetString,
+				tileSetString,
+				reinterpret_cast<SIZE_T>(&BSString_c_strHook),
+				reinterpret_cast<SIZE_T>(&BSString_GetCStringOrEmptyHook),
+				copyString,
+				copyString,
+			}};
+		}
+
+		template <size_t N>
+		bool MatchInstalledCallSitesUnchecked(
+			const std::array<Rel32Site, N>& sites,
+			const std::array<SIZE_T, N>& hookTargets)
+		{
+			for (size_t i = 0; i < sites.size(); ++i)
+			{
+				if (!hook_identity::MatchesRel32TargetUnchecked(
+					sites[i].address, Rel32Opcode::Call, hookTargets[i]))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		bool IsInstalledFontHookGraphCurrentUnchecked()
+		{
+			if (!s_fontHookInstallState.multibyte
+				&& !s_fontHookInstallState.freeType)
+			{
+				return false;
+			}
+			if (!FontLoadBoundedReadSizeHook::IsInstalledUnchecked())
+				return false;
+
+			const auto coreTargets = CoreFontHookTargets();
+			for (size_t i = 0; i < s_coreFontTrampolines.size(); ++i)
+			{
+				const PendingTrampoline& trampoline =
+					s_coreFontTrampolines[i];
+				if (!trampoline.code
+					|| !hook_identity::MatchesRel32TargetUnchecked(
+						trampoline.source, Rel32Opcode::Jump,
+						coreTargets[i])
+					|| (trampoline.length > 5
+						&& !HasNopTail(trampoline.source,
+							trampoline.length)))
+				{
+					return false;
+				}
+			}
+
+			if (!MatchInstalledCallSitesUnchecked(
+					kCommonFontCallSites, CommonFontCallTargets()))
+			{
+				return false;
+			}
+
+			if (s_fontHookInstallState.multibyte)
+			{
+				return hook_identity::MatchesRel32TargetUnchecked(
+						kFontPrepText, Rel32Opcode::Jump,
+						MemberFunctionAddress(&FontEx::PrepText))
+					&& MatchInstalledCallSitesUnchecked(
+						kMultibyteFontCallSites,
+						MultibyteFontCallTargets());
+			}
+
+			return MatchInstalledCallSitesUnchecked(
+				kFreeTypeOnlyCallSites, FreeTypeOnlyCallTargets());
+		}
+
+		bool IsPublishedFontHookGraphCurrent()
+		{
+			const bool current = IsInstalledFontHookGraphCurrentUnchecked();
+			if (!current && !s_fontHookGraphMismatchLogged)
+			{
+				s_fontHookGraphMismatchLogged = true;
+				gLog.FormattedMessage(
+					"tnvse_font_hook: installed graph is no longer the verified top-level owner; cached multibyte/freetype capabilities revoked");
+			}
+			else if (current)
+			{
+				s_fontHookGraphMismatchLogged = false;
+			}
+			return current;
+		}
+
+		void ClearCoreFontOriginals()
+		{
+			s_originalFontConstructor = nullptr;
+			s_originalFontLoad = nullptr;
+			s_originalFontCreateText = nullptr;
+			s_originalFontMakeString = nullptr;
+			s_originalCalculateStringDimensions = nullptr;
+		}
+
+		template <size_t N>
+		void ReleaseTrampolines(std::array<PendingTrampoline, N>& trampolines)
+		{
+			for (PendingTrampoline& trampoline : trampolines)
+			{
+				if (trampoline.code)
+					VirtualFree(trampoline.code, 0, MEM_RELEASE);
+				trampoline.code = nullptr;
+			}
+		}
+
+		template <size_t N>
+		bool RestoreOwnedCoreEntries(
+			std::array<PendingTrampoline, N>& trampolines,
+			const std::array<SIZE_T, N>& hookTargets)
+		{
+			bool restored = true;
+			for (size_t i = 0; i < trampolines.size(); ++i)
+			{
+				PendingTrampoline& trampoline = trampolines[i];
+				if (hook_identity::MatchesRel32Target(
+						trampoline.source, Rel32Opcode::Jump, hookTargets[i]))
+				{
+					SafeWriteBuf(trampoline.source,
+						trampoline.expected, trampoline.length);
+				}
+
+				const bool entryRestored = hook_identity::IsAccessibleRegion(
+						trampoline.source, trampoline.length, true)
+					&& std::memcmp(
+						reinterpret_cast<const void*>(trampoline.source),
+						trampoline.expected, trampoline.length) == 0;
+				if (!entryRestored)
+				{
+					SIZE_T observed = 0;
+					hook_identity::ReadRel32Target(
+						trampoline.source, Rel32Opcode::Jump, observed);
+					gLog.FormattedMessage(
+						"tnvse_font_hook: core entry rollback retained address=%08X observed=%08X hook=%08X",
+						static_cast<UInt32>(trampoline.source),
+						static_cast<UInt32>(observed),
+						static_cast<UInt32>(hookTargets[i]));
+					restored = false;
+				}
+			}
+			return restored;
+		}
+
+		bool RollbackCoreFontEntryHooks()
+		{
+			bool entriesRestored = true;
+			if (s_coreFontTrampolines[0].code)
+			{
+				const auto hookTargets = CoreFontHookTargets();
+				entriesRestored = RestoreOwnedCoreEntries(
+					s_coreFontTrampolines, hookTargets);
+				if (entriesRestored)
+				{
+					ReleaseTrampolines(s_coreFontTrampolines);
+					ClearCoreFontOriginals();
+				}
+			}
+			// If any core entry still reaches a retained trampoline, it can still
+			// enter retail Font::Load. Keep the bounded read published in that case.
+			const bool readSizeRestored = entriesRestored
+				? FontLoadBoundedReadSizeHook::Rollback() : false;
+			return entriesRestored && readSizeRestored;
+		}
+
 		bool BuildTrampoline(PendingTrampoline& trampoline)
 		{
 			if (!trampoline.source || !trampoline.expected || trampoline.length < 5
@@ -233,8 +698,11 @@ namespace fonthook
 				return false;
 			}
 
+			constexpr SIZE_T kJumpInstructionSize = 5;
+			const SIZE_T trampolineSize =
+				trampoline.length + kJumpInstructionSize;
 			UInt8* code = static_cast<UInt8*>(VirtualAlloc(nullptr,
-				trampoline.length + 5, MEM_COMMIT | MEM_RESERVE,
+				trampolineSize, MEM_COMMIT | MEM_RESERVE,
 				PAGE_EXECUTE_READWRITE));
 			if (!code)
 			{
@@ -244,13 +712,22 @@ namespace fonthook
 				return false;
 			}
 
+			// Initialize the complete executable image before publishing or flushing
+			// it; this also makes the length+5 boundary explicit to static analysis.
+			std::memset(code, 0, trampolineSize);
 			std::memcpy(code, reinterpret_cast<const void*>(trampoline.source),
 				trampoline.length);
 			code[trampoline.length] = 0xE9;
-			*reinterpret_cast<UInt32*>(code + trampoline.length + 1) =
+			const UInt32 returnDisplacement =
 				static_cast<UInt32>(trampoline.source + trampoline.length
-					- reinterpret_cast<SIZE_T>(code + trampoline.length + 5));
-			FlushInstructionCache(GetCurrentProcess(), code, trampoline.length + 5);
+					- reinterpret_cast<SIZE_T>(code + trampolineSize));
+			std::memcpy(code + trampoline.length + 1,
+				&returnDisplacement, sizeof(returnDisplacement));
+			// VirtualAlloc committed trampolineSize bytes and the memset above
+			// initialized that entire range. MSVC analysis otherwise retains only
+			// the subsequent source-copy length when checking this Win32 API call.
+#pragma warning(suppress : 6385)
+			FlushInstructionCache(GetCurrentProcess(), code, trampolineSize);
 			trampoline.code = code;
 			return true;
 		}
@@ -271,11 +748,12 @@ namespace fonthook
 			{
 				if (BuildTrampoline(trampoline))
 					continue;
-				for (PendingTrampoline& allocated : trampolines)
-				{
-					if (allocated.code)
-						VirtualFree(allocated.code, 0, MEM_RELEASE);
-				}
+				ReleaseTrampolines(trampolines);
+				return false;
+			}
+			if (!FontLoadBoundedReadSizeHook::Install())
+			{
+				ReleaseTrampolines(trampolines);
 				return false;
 			}
 
@@ -297,15 +775,8 @@ namespace fonthook
 			PatchMemoryNop(kFontManagerCalculateStringDimensions + 5,
 				kCalculateDimensionsPrologue.size() - 5);
 
-			const std::array<SIZE_T, 5> hookTargets = {{
-				MemberFunctionAddress(&FontEx::FontConstructor),
-				MemberFunctionAddress(&FontEx::Load),
-				MemberFunctionAddress(&FontEx::CreateText),
-				MemberFunctionAddress(&FontEx::MakeString),
-				MemberFunctionAddress(
-					&FontManagerEx::CalculateStringDimensions),
-			}};
-			bool installed = true;
+			const auto hookTargets = CoreFontHookTargets();
+			bool installed = FontLoadBoundedReadSizeHook::IsInstalled();
 			for (size_t i = 0; i < trampolines.size(); ++i)
 			{
 				installed = hook_identity::MatchesRel32Target(
@@ -321,21 +792,29 @@ namespace fonthook
 			}
 			if (!installed)
 			{
-				for (PendingTrampoline& trampoline : trampolines)
+				const bool entriesRestored = RestoreOwnedCoreEntries(
+					trampolines, hookTargets);
+				const bool readSizeRestored = entriesRestored
+					? FontLoadBoundedReadSizeHook::Rollback() : false;
+				if (entriesRestored)
 				{
-					SafeWriteBuf(trampoline.source,
-						trampoline.expected, trampoline.length);
-					VirtualFree(trampoline.code, 0, MEM_RELEASE);
+					ReleaseTrampolines(trampolines);
+					ClearCoreFontOriginals();
 				}
-				s_originalFontConstructor = nullptr;
-				s_originalFontLoad = nullptr;
-				s_originalFontCreateText = nullptr;
-				s_originalFontMakeString = nullptr;
-				s_originalCalculateStringDimensions = nullptr;
+				else
+				{
+					// At least one live entry can still reach these trampolines.
+					// Retain their storage and original-call pointers for safety.
+					s_coreFontTrampolines = trampolines;
+				}
 				gLog.FormattedMessage(
-					"tnvse_font_hook: core entry write verification failed; restored vanilla prologues");
+					"tnvse_font_hook: core entry write verification failed; rollbackEntries=%s rollbackReadSize=%s trampolines=%s",
+					entriesRestored ? "restored" : "incomplete",
+					readSizeRestored ? "restored" : "incomplete",
+					entriesRestored ? "released" : "retained-for-live-hook-safety");
 				return false;
 			}
+			s_coreFontTrampolines = trampolines;
 			gLog.FormattedMessage(
 				"tnvse_font_hook: core entries installed Font::CreateText=00A12880 route=caller-independent-thiscall prepared_sidecar=scoped-capture-no-hash");
 			return true;
@@ -444,7 +923,12 @@ namespace fonthook
 				kTileTextMakeNodeVTableEntry);
 			const SIZE_T hook = reinterpret_cast<SIZE_T>(&TileTextMakeNodeHook);
 			if (current == hook)
-				return s_tileTextMakeNode != nullptr;
+			{
+				return s_tileTextMakeNode
+					&& reinterpret_cast<SIZE_T>(s_tileTextMakeNode) != hook
+					&& hook_identity::IsExecutableTarget(
+						reinterpret_cast<SIZE_T>(s_tileTextMakeNode));
+			}
 			if (!hook_identity::IsExecutableTarget(current))
 			{
 				gLog.FormattedMessage(
@@ -454,21 +938,102 @@ namespace fonthook
 			}
 			s_tileTextMakeNode = reinterpret_cast<TileTextMakeNodeFn>(current);
 			SafeWrite32(kTileTextMakeNodeVTableEntry, hook);
-			if (*reinterpret_cast<const SIZE_T*>(
-				kTileTextMakeNodeVTableEntry) != hook)
+			const SIZE_T observed = *reinterpret_cast<const SIZE_T*>(
+				kTileTextMakeNodeVTableEntry);
+			if (observed == hook)
 			{
-				SafeWrite32(kTileTextMakeNodeVTableEntry, current);
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: VUI+ effect proxy compatibility installed entry=%08X target=%08X chained=%d",
+					static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
+					static_cast<UInt32>(current),
+					current != kVanillaTileTextMakeNode ? 1 : 0);
+				return true;
+			}
+
+			if (observed == current)
+			{
 				s_tileTextMakeNode = nullptr;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: VUI+ effect proxy compatibility write verification failed entry=%08X",
-					static_cast<UInt32>(kTileTextMakeNodeVTableEntry));
+					"tnvse_freetype_font: VUI+ effect proxy compatibility write did not publish entry=%08X predecessor=%08X",
+					static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
+					static_cast<UInt32>(current));
 				return false;
 			}
+
+			// A later vtable owner may already use this hook as its predecessor.
+			// Keep that predecessor alive and do not overwrite the new top slot.
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: VUI+ effect proxy compatibility installed entry=%08X target=%08X chained=%d",
-				static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
-				static_cast<UInt32>(current), current != kVanillaTileTextMakeNode ? 1 : 0);
-			return true;
+				"tnvse_freetype_font: VUI+ effect proxy compatibility may be retained below observed handler=%08X predecessor=%08X executable=%u; reachability unverified",
+				static_cast<UInt32>(observed),
+				static_cast<UInt32>(current),
+				hook_identity::IsExecutableTarget(observed) ? 1u : 0u);
+			return false;
+		}
+
+		FontHookInstallState FinalizeFontHookGraph(
+			bool multibyte, bool freeType)
+		{
+			const auto commonTargets = CommonFontCallTargets();
+			const bool commonInstalled = VerifyInstalledCallSites(
+				kCommonFontCallSites, commonTargets);
+			bool modeInstalled = false;
+			bool prepTextInstalled = true;
+			SIZE_T prepTextTarget = 0;
+
+			if (multibyte)
+			{
+				const auto multibyteTargets = MultibyteFontCallTargets();
+				modeInstalled = VerifyInstalledCallSites(
+					kMultibyteFontCallSites, multibyteTargets);
+				prepTextTarget = MemberFunctionAddress(&FontEx::PrepText);
+				prepTextInstalled = VerifyFontPrepTextEntry(prepTextTarget);
+			}
+			else
+			{
+				const auto freeTypeTargets = FreeTypeOnlyCallTargets();
+				modeInstalled = VerifyInstalledCallSites(
+					kFreeTypeOnlyCallSites, freeTypeTargets);
+			}
+
+			if (!commonInstalled || !modeInstalled || !prepTextInstalled)
+			{
+				const bool commonRestored = RollbackOwnedCallSites(
+					kCommonFontCallSites, commonTargets);
+				bool modeRestored = false;
+				bool prepTextRestored = true;
+				if (multibyte)
+				{
+					const auto multibyteTargets = MultibyteFontCallTargets();
+					modeRestored = RollbackOwnedCallSites(
+						kMultibyteFontCallSites, multibyteTargets);
+					prepTextRestored = RollbackOwnedFontPrepTextEntry(
+						prepTextTarget);
+				}
+				else
+				{
+					const auto freeTypeTargets = FreeTypeOnlyCallTargets();
+					modeRestored = RollbackOwnedCallSites(
+						kFreeTypeOnlyCallSites, freeTypeTargets);
+				}
+				const bool coreRestored = RollbackCoreFontEntryHooks();
+				s_fontHookInstallState = {};
+				gLog.FormattedMessage(
+					"tnvse_font_hook: installation transaction aborted common=%u mode=%u prepText=%u rollbackCommon=%u rollbackMode=%u rollbackPrepText=%u rollbackCore=%u",
+					commonInstalled ? 1u : 0u,
+					modeInstalled ? 1u : 0u,
+					prepTextInstalled ? 1u : 0u,
+					commonRestored ? 1u : 0u,
+					modeRestored ? 1u : 0u,
+					prepTextRestored ? 1u : 0u,
+					coreRestored ? 1u : 0u);
+				return s_fontHookInstallState;
+			}
+
+			s_fontHookInstallState.multibyte = multibyte;
+			s_fontHookInstallState.freeType = freeType;
+			if (freeType)
+				InstallVuiEffectProxyCompatibility();
+			return s_fontHookInstallState;
 		}
 
 	}
@@ -519,12 +1084,14 @@ namespace fonthook
 
 	bool AreMultibyteFontHooksInstalled()
 	{
-		return s_fontHookInstallState.multibyte;
+		return s_fontHookInstallState.multibyte
+			&& IsPublishedFontHookGraphCurrent();
 	}
 
 	bool AreFreeTypeFontHooksInstalled()
 	{
-		return s_fontHookInstallState.freeType;
+		return s_fontHookInstallState.freeType
+			&& IsPublishedFontHookGraphCurrent();
 	}
 
 	bool IsFreeTypeEffectSuppressionActive()
@@ -563,11 +1130,14 @@ namespace fonthook
 		const UInt32 replacement = reinterpret_cast<UInt32>(
 			sConvertedBigGunsDesc.c_str());
 		SafeWrite32(immediate, replacement);
-		if (*reinterpret_cast<const UInt32*>(immediate) != replacement)
+		const UInt32 observed = *reinterpret_cast<const UInt32*>(immediate);
+		if (observed != replacement)
 		{
-			SafeWrite32(immediate, vanillaDescription);
 			gLog.FormattedMessage(
-				"tnvse_font_hook: JIP Big Guns description write verification failed; restored vanilla operand");
+				"tnvse_font_hook: JIP Big Guns description write verification failed observed=%08X rollback=%s",
+				observed,
+				observed == vanillaDescription
+					? "vanilla-remains" : "later-owner-retained");
 		}
 	}
 
@@ -582,11 +1152,16 @@ namespace fonthook
 		{
 			return true;
 		}
-		WriteRelCall(kDoorPromptCallSite.address,
-			kDoorPromptCallSite.vanillaTarget);
+		SIZE_T observed = 0;
+		const bool readable = hook_identity::ReadRel32Target(
+			kDoorPromptCallSite.address, Rel32Opcode::Call, observed);
 		gLog.FormattedMessage(
-			"tnvse_font_hook: door prompt %s hook write verification failed; restored BSsprintf",
-			mode);
+			"tnvse_font_hook: door prompt %s hook write verification failed observed=%08X readable=%u rollback=%s",
+			mode,
+			static_cast<UInt32>(observed),
+			readable ? 1u : 0u,
+			readable && observed == kDoorPromptCallSite.vanillaTarget
+				? "vanilla-remains" : "later-owner-or-invalid-retained");
 		return false;
 	}
 
@@ -619,17 +1194,21 @@ namespace fonthook
 			return;
 		}
 		SafeWrite8(kPluralBranch, 0xEB);
-		if (*reinterpret_cast<const UInt8*>(kPluralBranch) != 0xEB)
+		const UInt8 observed = *reinterpret_cast<const UInt8*>(kPluralBranch);
+		if (observed != 0xEB)
 		{
-			SafeWrite8(kPluralBranch, 0x74);
 			gLog.FormattedMessage(
-				"tnvse_font_hook: plural branch write verification failed; restored vanilla branch");
+				"tnvse_font_hook: plural branch write verification failed observed=%02X rollback=%s",
+				static_cast<UInt32>(observed),
+				observed == 0x74
+					? "vanilla-remains" : "later-owner-retained");
 		}
 	}
 
 	FontHookInstallState InitFontHooks()
 	{
 		s_fontHookInstallState = {};
+		s_fontHookGraphMismatchLogged = false;
 		if (!g_bEnableMultibyteFontHook && !g_bEnableFreeTypeFontRendering)
 		{
 			gLog.FormattedMessage("tnvse_font_hook: all font hooks disabled by tnvse.ini");
@@ -652,11 +1231,6 @@ namespace fonthook
 			return s_fontHookInstallState;
 		}
 
-		s_fontHookInstallState.multibyte = g_bEnableMultibyteFontHook;
-		s_fontHookInstallState.freeType = g_bEnableFreeTypeFontRendering;
-		if (s_fontHookInstallState.freeType)
-			InstallVuiEffectProxyCompatibility();
-
 		// FontManager::CreateText -> FontManager::PrepText
 		WriteRelCallEx(0xA18F4A, &FontManagerEx::PrepText);
 		// FontManager::CreateText -> TextDoc::Render
@@ -667,7 +1241,7 @@ namespace fonthook
 		// even when the global DBCS parser is disabled. Non-FreeType fonts are
 		// delegated by FontEx::PrepTextForTerminal.
 		WriteRelCallEx(0x759281, &FontEx::PrepTextForTerminal);
-		if (s_fontHookInstallState.multibyte)
+		if (g_bEnableMultibyteFontHook)
 		{
 			// AnimatingText::Update normally treats its elapsed-interval count as
 			// a byte count.  Interpret it as encoded units at the single memcpy
@@ -678,13 +1252,16 @@ namespace fonthook
 		// whether to retain the character, move a word, or create another line.
 		WriteRelCallEx(0xA19C80, &FontManagerEx::TextLineAddChar);
 
-		if (!s_fontHookInstallState.multibyte)
+		if (!g_bEnableMultibyteFontHook)
 		{
 			// TextLine's constructor inserts the first character through a
 			// separate call site. Patch it only for FreeType-only mode so every
 			// line starts with the same final-width contract, while the enabled
 			// multibyte path remains byte-for-byte on its existing hook set.
 			WriteRelCallEx(0xA1BDE2, &FontManagerEx::TextLineAddChar);
+			FinalizeFontHookGraph(false, g_bEnableFreeTypeFontRendering);
+			if (!s_fontHookInstallState.freeType)
+				return s_fontHookInstallState;
 			gLog.FormattedMessage(
 				"tnvse_font_hook: installed mode=freetype-custom-single-byte configuredCodePage=%u freeTypeCodePage=%u",
 				g_usingWinEncoding, GetFreeTypeTextCodePage());
@@ -745,6 +1322,9 @@ namespace fonthook
 		WriteRelCall(0x77ACCC, &strcpy_sHook);
 		WriteRelCall(0x77ACF8, &strcpy_sHook);
 
+		FinalizeFontHookGraph(true, g_bEnableFreeTypeFontRendering);
+		if (!s_fontHookInstallState.multibyte)
+			return s_fontHookInstallState;
 		gLog.FormattedMessage(
 			"tnvse_font_hook: installed mode=%s configuredCodePage=%u freeTypeCodePage=%u",
 			s_fontHookInstallState.freeType ? "multibyte-freetype" : "multibyte-original",

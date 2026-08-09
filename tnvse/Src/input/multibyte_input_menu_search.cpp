@@ -1,4 +1,5 @@
 #include "multibyte_input_internal.h"
+#include "hook_identity.h"
 
 // Stewie Tweaks MenuSearch integration for vanilla game menus.
 
@@ -42,6 +43,7 @@ namespace fonthook
 			SIZE_T original = 0;
 			SIZE_T hook = 0;
 			bool installed = false;
+			bool publicationUncertain = false;
 			SIZE_T observedHandler = 0;
 
 			Tile* root = nullptr;
@@ -84,6 +86,19 @@ namespace fonthook
 		bool s_menuSearchHooksInstalled = false;
 		DWORD s_menuHandlersStableSince = 0;
 		DWORD s_lastMenuSearchDiscoveryTick = 0;
+
+		bool ReadMenuSearchHandler(
+			const StewieMenuSearchHook& hook, SIZE_T& handler)
+		{
+			handler = 0;
+			if (!hook_identity::IsAccessibleRegion(
+					hook.entry, sizeof(SIZE_T), false))
+			{
+				return false;
+			}
+			handler = *reinterpret_cast<const SIZE_T*>(hook.entry);
+			return true;
+		}
 
 		bool IsGameMenuVisible(UInt32 menuID)
 		{
@@ -252,9 +267,8 @@ namespace fonthook
 				: 0;
 			const bool ownerActive = MenuSearchOwnerReportsActive(
 				hook, menu, resolvedTile);
-			const SIZE_T currentHandler = hook.entry
-				? *reinterpret_cast<SIZE_T*>(hook.entry)
-				: 0;
+			SIZE_T currentHandler = 0;
+			ReadMenuSearchHandler(hook, currentHandler);
 
 			gLog.FormattedMessage(
 				"tnvse_multibyte_input_menusearch: stage=%s name=%s menuID=%u inputField=%u "
@@ -443,7 +457,9 @@ namespace fonthook
 		SIZE_T GetStewieMenuSearchOriginalInputHandler(Menu* menu)
 		{
 			StewieMenuSearchHook* hook = FindMenuSearchHookByMenu(menu);
-			return hook ? hook->original : 0;
+			return hook && hook->original != hook->hook
+				&& hook_identity::IsExecutableTarget(hook->original)
+				? hook->original : 0;
 		}
 
 		bool HasMenuSearchTileForHotkey(Menu* menu)
@@ -912,25 +928,123 @@ namespace fonthook
 
 		bool InstallMenuSearchHook(StewieMenuSearchHook& hook)
 		{
-			if (hook.installed)
-				return true;
+			SIZE_T current = 0;
+			if (!ReadMenuSearchHandler(hook, current)
+				|| !hook_identity::IsExecutableTarget(hook.hook))
+			{
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: cannot install Stewie %s adapter; unreadable entry=0x%08X or non-executable hook=0x%08X",
+					hook.name,
+					static_cast<UInt32>(hook.entry),
+					static_cast<UInt32>(hook.hook));
+				return false;
+			}
+			if (hook.publicationUncertain)
+			{
+				if (current == hook.hook
+					&& hook.original != hook.hook
+					&& hook_identity::IsExecutableTarget(hook.original))
+				{
+					hook.publicationUncertain = false;
+					hook.installed = true;
+					hook.observedHandler = current;
+					return true;
+				}
+				if (current != hook.original)
+				{
+					// The saved predecessor may still be reachable below this owner.
+					// Do not republish above it and risk H->S->H recursion.
+					hook.observedHandler = current;
+					return false;
+				}
 
-			const SIZE_T current = *reinterpret_cast<SIZE_T*>(hook.entry);
+				// The slot has returned to the predecessor, proving that the
+				// uncertain chain is gone. A normal installation may be retried.
+				hook.publicationUncertain = false;
+				hook.original = 0;
+			}
 			if (current == hook.hook)
 			{
-				hook.installed = true;
-				return true;
+				hook.installed = hook.original != hook.hook
+					&& hook_identity::IsExecutableTarget(hook.original);
+				if (!hook.installed)
+				{
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: Stewie %s adapter is present but its predecessor is unavailable original=0x%08X",
+						hook.name,
+						static_cast<UInt32>(hook.original));
+				}
+				return hook.installed;
+			}
+			if (!hook_identity::IsExecutableTarget(current))
+			{
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: cannot chain Stewie %s adapter; non-executable predecessor=0x%08X entry=0x%08X",
+					hook.name,
+					static_cast<UInt32>(current),
+					static_cast<UInt32>(hook.entry));
+				return false;
 			}
 
 			hook.original = current;
 			SafeWrite32(hook.entry, hook.hook);
-			hook.installed = true;
-			hook.observedHandler = hook.hook;
-			DebugLog(
-				"tnvse_multibyte_input: chained Stewie %s handler=0x%08X",
+			SIZE_T installedTarget = 0;
+			const bool installedTargetReadable =
+				ReadMenuSearchHandler(hook, installedTarget);
+			if (installedTargetReadable && installedTarget == hook.hook)
+			{
+				hook.installed = true;
+				hook.observedHandler = hook.hook;
+				DebugLog(
+					"tnvse_multibyte_input: chained Stewie %s handler=0x%08X",
+					hook.name,
+					static_cast<UInt32>(current));
+				return true;
+			}
+
+			if (installedTargetReadable && installedTarget == current)
+			{
+				hook.original = 0;
+				hook.observedHandler = current;
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: Stewie %s adapter write did not publish entry=0x%08X predecessor=0x%08X",
+					hook.name,
+					static_cast<UInt32>(hook.entry),
+					static_cast<UInt32>(current));
+				return false;
+			}
+
+			if (installedTargetReadable
+				&& hook_identity::IsExecutableTarget(installedTarget))
+			{
+				// A successor could have captured this adapter between publication
+				// and verification. Preserve the predecessor and block republishing,
+				// but do not report the adapter as installed: executable does not
+				// prove that the successor actually chains through tNVSE.
+				hook.installed = false;
+				hook.publicationUncertain = true;
+				hook.observedHandler = installedTarget;
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: Stewie %s adapter may be retained below successor=0x%08X predecessor=0x%08X; reachability unverified",
+					hook.name,
+					static_cast<UInt32>(installedTarget),
+					static_cast<UInt32>(current));
+				return false;
+			}
+
+			// Do not overwrite an unrecognized value with the predecessor: a
+			// later owner may already have captured this adapter. Retain the
+			// predecessor so a still-reachable adapter can continue to chain.
+			hook.installed = false;
+			hook.publicationUncertain = true;
+			hook.observedHandler = installedTarget;
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: Stewie %s adapter publication state is unreadable or invalid entry=0x%08X observed=0x%08X predecessor_retained=0x%08X",
 				hook.name,
+				static_cast<UInt32>(hook.entry),
+				static_cast<UInt32>(installedTarget),
 				static_cast<UInt32>(current));
-			return true;
+			return false;
 		}
 
 		bool AreMenuSearchHandlersStable()
@@ -955,7 +1069,12 @@ namespace fonthook
 			bool changed = false;
 			for (StewieMenuSearchHook& hook : s_menuSearchHooks)
 			{
-				const SIZE_T current = *reinterpret_cast<SIZE_T*>(hook.entry);
+				SIZE_T current = 0;
+				if (!ReadMenuSearchHandler(hook, current))
+				{
+					s_menuHandlersStableSince = now;
+					return false;
+				}
 				if (hook.observedHandler == current)
 					continue;
 
@@ -982,11 +1101,61 @@ namespace fonthook
 		void TryInstallStewieMenuSearchHooks()
 		{
 			DiscoverMenuSearchTiles();
-			if (s_menuSearchHooksInstalled || !AreMenuSearchHandlersStable())
+			if (s_menuSearchHooksInstalled)
+			{
+				bool allCurrent = true;
+				for (StewieMenuSearchHook& hook : s_menuSearchHooks)
+				{
+					SIZE_T current = 0;
+					const bool readable = ReadMenuSearchHandler(hook, current);
+					const bool predecessorValid = hook.original != hook.hook
+						&& hook_identity::IsExecutableTarget(hook.original);
+					if (readable && current == hook.hook && predecessorValid)
+						continue;
+
+					allCurrent = false;
+					hook.installed = false;
+					hook.observedHandler = current;
+					if (readable && current == hook.original)
+					{
+						// The whole adapter chain was removed. Forget the stale
+						// predecessor so a later stable publication can start cleanly.
+						hook.publicationUncertain = false;
+						hook.original = 0;
+					}
+					else
+					{
+						// An unreadable slot or a different owner may still retain this
+						// adapter below it. Preserve the predecessor and never reassert.
+						hook.publicationUncertain = true;
+					}
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: Stewie %s adapter lost verified top-level ownership current=0x%08X readable=%u; capability revoked",
+						hook.name,
+						static_cast<UInt32>(current),
+						readable ? 1u : 0u);
+				}
+				if (allCurrent)
+					return;
+				s_menuSearchHooksInstalled = false;
+				s_menuHandlersStableSince = GetTickCount();
+				return;
+			}
+
+			if (!AreMenuSearchHandlersStable())
 				return;
 
+			bool allInstalled = true;
 			for (StewieMenuSearchHook& hook : s_menuSearchHooks)
-				InstallMenuSearchHook(hook);
+				allInstalled = InstallMenuSearchHook(hook) && allInstalled;
+
+			if (!allInstalled)
+			{
+				// Rate-limit retries while still allowing a late Stewie handler
+				// publication or a transient write failure to recover.
+				s_menuHandlersStableSince = GetTickCount();
+				return;
+			}
 
 			s_menuSearchHooksInstalled = true;
 			gLog.FormattedMessage(

@@ -178,7 +178,14 @@ namespace fonthook::multibyte_input
 
 	bool IsJipKeyEventSuppressionHookInstalled()
 	{
-		return s_hookInstalled;
+		if (!s_hookInstalled || !hJIP)
+			return false;
+		const SIZE_T callSite =
+			reinterpret_cast<SIZE_T>(hJIP) + kJipRawKeyStateCompareRva;
+		return hook_identity::MatchesRel32Target(
+			callSite,
+			hook_identity::Rel32Opcode::Call,
+			reinterpret_cast<SIZE_T>(&JipRawKeyStateCompareHook));
 	}
 
 	void TryInstallJipKeyEventSuppressionHook()
@@ -221,9 +228,28 @@ namespace fonthook::multibyte_input
 			hook_identity::Rel32Opcode::Call,
 			reinterpret_cast<SIZE_T>(&JipRawKeyStateCompareHook)))
 		{
-			SafeWriteBuf(callSite, kJipRawKeyStateSignature.data(), 5);
+			SIZE_T observedTarget = 0;
+			const bool observedCall = hook_identity::ReadRel32Target(
+				callSite, hook_identity::Rel32Opcode::Call, observedTarget);
+			bool restored = std::memcmp(
+				reinterpret_cast<const void*>(callSite),
+				kJipRawKeyStateSignature.data(), 5) == 0;
+			if (!restored && observedCall
+				&& observedTarget
+					== reinterpret_cast<SIZE_T>(&JipRawKeyStateCompareHook))
+			{
+				// Restore only while this CALL is still ours. A later owner may
+				// already have captured the adapter as its predecessor.
+				SafeWriteBuf(callSite, kJipRawKeyStateSignature.data(), 5);
+				restored = std::memcmp(
+					reinterpret_cast<const void*>(callSite),
+					kJipRawKeyStateSignature.data(), 5) == 0;
+			}
 			gLog.FormattedMessage(
-				"tnvse_multibyte_input: JIP key-event suppression write verification failed; restored original comparison");
+				"tnvse_multibyte_input: JIP key-event suppression write verification failed observedCall=%u target=0x%08X rollback=%s",
+				observedCall ? 1u : 0u,
+				static_cast<UInt32>(observedTarget),
+				restored ? "restored" : "retained-below-later-owner-or-incomplete");
 			return;
 		}
 		s_captureActive = State().textInputSessionActive;

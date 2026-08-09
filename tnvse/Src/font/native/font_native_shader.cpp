@@ -1508,8 +1508,10 @@ namespace fonthook::vectorfont
 			if (!declaration)
 				return nullptr;
 
+			BSShader* createdShader =
+				CdeclCall<BSShader*>(kTileShaderCreateShader);
 			NiPointer<TileShader> shaderGuard =
-				StdCall<TileShader*>(kTileShaderCreateShader);
+				static_cast<TileShader*>(createdShader);
 			TileShader* shader = shaderGuard.m_pObject;
 			if (!shader)
 				return nullptr;

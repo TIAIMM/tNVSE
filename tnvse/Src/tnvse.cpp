@@ -21,6 +21,7 @@
 #include "tianmiao_conflict.h"
 
 #include <cstdint>
+#include <vector>
 
 IDebugLog gLog("tnvse.log");
 PluginHandle g_pluginHandle = kPluginHandle_Invalid;
@@ -31,10 +32,33 @@ NVSEConsoleInterface* g_consoleInterface{};
 HMODULE hJIP = 0;
 NVSECommandTableInterface* g_cmdTableInterface = NULL;
 
+void MessageHandler(NVSEMessagingInterface::Message* const g_msg);
+
 // Config
 
 namespace
 {
+	constexpr UInt32 kSupportedRuntimeVersion = 0x040020D0;
+	bool s_shaderLoaderListenerRegistered = false;
+
+	bool TryRegisterShaderLoaderListener()
+	{
+		if (s_shaderLoaderListenerRegistered)
+			return true;
+		if (!g_messagingInterface
+			|| g_messagingInterface->version < NVSEMessagingInterface::kVersion
+			|| !g_messagingInterface->RegisterListener
+			|| g_pluginHandle == kPluginHandle_Invalid)
+		{
+			return false;
+		}
+
+		s_shaderLoaderListenerRegistered =
+			g_messagingInterface->RegisterListener(
+				g_pluginHandle, "Shader Loader", MessageHandler);
+		return s_shaderLoaderListenerRegistered;
+	}
+
 	void LogLoadedTnvseModuleIdentity(const void* address)
 	{
 		HMODULE module = nullptr;
@@ -88,11 +112,12 @@ namespace
 				fileWriteTime = static_cast<UInt64>(writeTime.dwHighDateTime)
 					<< 32 | writeTime.dwLowDateTime;
 			}
-			UInt8 bytes[16u * 1024u] = {};
+			std::vector<UInt8> bytes(16u * 1024u);
 			for (;;)
 			{
 				DWORD readBytes = 0;
-				if (!ReadFile(file, bytes, sizeof(bytes), &readBytes, nullptr))
+				if (!ReadFile(file, bytes.data(),
+					static_cast<DWORD>(bytes.size()), &readBytes, nullptr))
 				{
 					fileError = GetLastError();
 					fileHash = 0;
@@ -260,6 +285,16 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 			fonthook::HandleFreeTypeShaderLoaderMessage(g_msg->type);
 		return;
 	}
+	if (g_msg && g_msg->sender
+		&& std::strcmp(g_msg->sender, "NVSE") == 0
+		&& g_msg->type == NVSEMessagingInterface::kMessage_PostLoad)
+	{
+		// Registering for another plugin during NVSEPlugin_Load fails whenever
+		// that plugin appears later in load order. PostLoad is the first point at
+		// which every sender is discoverable; RegisterListener is idempotent for
+		// an already registered listener.
+		TryRegisterShaderLoaderListener();
+	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit)
 	{
 		fonthook::dependencies::ShowExternalPluginDependencyWarnings();
@@ -305,18 +340,35 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 
 bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 {
+	if (!nvse || !info)
+		return false;
 	info->infoVersion = PluginInfo::kInfoVersion;
 	info->name = "tNVSE";
 	info->version = 75;
 
-	return true;
+	// Every game/renderer entry used by tNVSE is a fixed address in the retail
+	// 1.4.0.525 image. In particular, the NoGore 1.4.0.525 executable has a
+	// distinct packed version and must not reach any hook installer.
+	return nvse->isEditor
+		|| nvse->runtimeVersion == kSupportedRuntimeVersion;
 }
 
 bool NVSEPlugin_Load(const NVSEInterface* nvse)
 {
+	if (!nvse)
+		return false;
 	if (nvse->isEditor)
 	{
 		return true;
+	}
+	if (nvse->runtimeVersion != kSupportedRuntimeVersion
+		|| !nvse->QueryInterface || !nvse->GetPluginHandle)
+	{
+		gLog.FormattedMessage(
+			"tnvse: unsupported runtime or incomplete NVSE root interface runtime=%08X expected=%08X query=%p handle=%p",
+			nvse->runtimeVersion, kSupportedRuntimeVersion,
+			nvse->QueryInterface, nvse->GetPluginHandle);
+		return false;
 	}
 	if (fonthook::compatibility::BlockTianmiaoFontPatchIfPresent(
 		"plugin-load-entry"))
@@ -327,28 +379,61 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 		reinterpret_cast<const void*>(&NVSEPlugin_Load));
 	fonthook::LoadFreeTypeFontConfig();
 	fonthook::LoadDictionaryConfig();
-	if (g_bEnableFreeTypeFontRendering)
-		fonthook::InstallNativePrewarmOverlayLoadingThreadHook();
 
 	g_nvseInterface = const_cast<NVSEInterface*>(nvse);
 	g_pluginHandle = nvse->GetPluginHandle();
 	g_messagingInterface = static_cast<NVSEMessagingInterface*>(nvse->QueryInterface(kInterface_Messaging));
 	g_consoleInterface = static_cast<NVSEConsoleInterface*>(nvse->QueryInterface(kInterface_Console));
 	g_eventInterface = static_cast<NVSEEventManagerInterface*>(nvse->QueryInterface(kInterface_EventManager));
-	if (g_messagingInterface)
+	g_cmdTableInterface = static_cast<NVSECommandTableInterface*>(
+		nvse->QueryInterface(kInterface_CommandTable));
+	if (g_pluginHandle == kPluginHandle_Invalid
+		|| !g_messagingInterface
+		|| g_messagingInterface->version < NVSEMessagingInterface::kVersion
+		|| !g_messagingInterface->RegisterListener)
 	{
-		g_messagingInterface->RegisterListener(g_pluginHandle, "NVSE", MessageHandler);
-		g_messagingInterface->RegisterListener(g_pluginHandle, "Shader Loader", MessageHandler);
+		gLog.FormattedMessage(
+			"tnvse: required xNVSE messaging interface unavailable handle=%08X interface=%p version=%u register=%p",
+			g_pluginHandle, g_messagingInterface,
+			g_messagingInterface ? g_messagingInterface->version : 0,
+			g_messagingInterface
+				? g_messagingInterface->RegisterListener : nullptr);
+		return false;
+	}
+	if (g_cmdTableInterface
+		&& g_cmdTableInterface->version < NVSECommandTableInterface::kVersion)
+	{
+		g_cmdTableInterface = nullptr;
 	}
 
 	hJIP = GetModuleHandle("jip_nvse.dll");
-	g_cmdTableInterface = (NVSECommandTableInterface*)nvse->QueryInterface(kInterface_CommandTable);
+
+	// No executable or module hook may be installed before the final condition
+	// that can reject NVSEPlugin_Load. xNVSE unloads a plugin that returns false;
+	// leaving any branch into that DLL behind would create a dangling target.
+	if (fonthook::compatibility::BlockTianmiaoFontPatchIfPresent(
+		"before-font-hooks"))
+	{
+		return false;
+	}
+	if (!g_messagingInterface->RegisterListener(
+			g_pluginHandle, "NVSE", MessageHandler))
+	{
+		gLog.FormattedMessage(
+			"tnvse: failed to register the required NVSE message listener");
+		return false;
+	}
+	TryRegisterShaderLoaderListener();
+
+	if (g_bEnableFreeTypeFontRendering)
+		fonthook::InstallNativePrewarmOverlayLoadingThreadHook();
 
 	if (g_bChangeJIPBigGunDesc)
 	{
 		if (hJIP)
 		{
 			const PluginInfo* pInfo = g_cmdTableInterface
+				&& g_cmdTableInterface->GetPluginInfoByName
 				? g_cmdTableInterface->GetPluginInfoByName(
 					fonthook::dependencies::kJipPluginName) : nullptr;
 			if (fonthook::dependencies::IsPluginInfoValid(pInfo)
@@ -375,14 +460,6 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 
 
 
-	// Tianmiao installs its executable patches from a later Direct3D callback.
-	// Recheck immediately before touching the same font graph in case that work
-	// raced the plugin-load entry probe.
-	if (fonthook::compatibility::BlockTianmiaoFontPatchIfPresent(
-		"before-font-hooks"))
-	{
-		return false;
-	}
 	fonthook::InitFontHooks();
 
 	fonthook::InitMultibyteInputHook();

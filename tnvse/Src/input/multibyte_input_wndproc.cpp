@@ -1356,7 +1356,6 @@ namespace fonthook
 			ResetImeCommitKeyState("clear_input_state");
 			s_lastWndProcAsciiTick = 0;
 			s_lastWndProcAsciiChar = 0;
-			ClearJipTextInputHookState();
 			ResetStewieInputState();
 		}
 

@@ -1,4 +1,5 @@
 #include "multibyte_input_internal.h"
+#include "hook_identity.h"
 #include "plugin_dependencies.h"
 
 // Shared Stewie Tweaks UTF-8 input engine and StewMenu integration.
@@ -279,7 +280,8 @@ namespace fonthook
 
 		bool IsStewieTweaksAvailable()
 		{
-			if (!g_bMultibyteInputStewieTweaks || !g_cmdTableInterface)
+			if (!g_bMultibyteInputStewieTweaks || !g_cmdTableInterface
+				|| !g_cmdTableInterface->GetPluginInfoByName)
 				return false;
 
 			if (s_stewieChecked)
@@ -505,7 +507,8 @@ namespace fonthook
 			const SIZE_T original = OriginalStewieHandlerForMenu(menu);
 			const SIZE_T hook = reinterpret_cast<SIZE_T>(
 				&StewieTweaksInputTargetEx::StewMenuKeyboardInput);
-			if (!original || original == hook || s_stewieOriginalCallDepth)
+			if (!original || original == hook || s_stewieOriginalCallDepth
+				|| !hook_identity::IsExecutableTarget(original))
 				return false;
 
 			struct OriginalCallGuard
@@ -1423,31 +1426,86 @@ namespace fonthook
 
 			if (Menu* stewMenu = GetOpenMenu(kMenuType_StewMenu))
 			{
-				SIZE_T entry = *reinterpret_cast<SIZE_T*>(stewMenu) + kMenuHandleKeyboardInputVTableOffset;
-				SIZE_T current = *reinterpret_cast<SIZE_T*>(entry);
+				const SIZE_T menuAddress = reinterpret_cast<SIZE_T>(stewMenu);
+				if (!hook_identity::IsAccessibleRegion(
+						menuAddress, sizeof(SIZE_T), false))
+				{
+					return;
+				}
+				const SIZE_T vtable = *reinterpret_cast<const SIZE_T*>(menuAddress);
+				if (vtable > std::numeric_limits<SIZE_T>::max()
+						- kMenuHandleKeyboardInputVTableOffset)
+				{
+					return;
+				}
+				const SIZE_T entry =
+					vtable + kMenuHandleKeyboardInputVTableOffset;
+				if (!hook_identity::IsAccessibleRegion(
+						entry, sizeof(SIZE_T), false))
+				{
+					return;
+				}
+				const SIZE_T current = *reinterpret_cast<const SIZE_T*>(entry);
 				const SIZE_T hook = reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::StewMenuKeyboardInput);
 				if (!s_stewMenuHookedEntry)
 				{
-					if (!current || current == hook)
+					if (current == hook)
+					{
+						gLog.FormattedMessage(
+							"tnvse_multibyte_input: StewMenu adapter is present but its predecessor is unavailable");
 						return;
+					}
+					if (!hook_identity::IsExecutableTarget(current)
+						|| !hook_identity::IsExecutableTarget(hook))
+					{
+						return;
+					}
 					s_stewMenuOriginalInputHandler = current;
 					s_stewMenuHookedEntry = entry;
 					SafeWrite32(entry, hook);
-					if (*reinterpret_cast<SIZE_T*>(entry) != hook)
+					const SIZE_T observed =
+						*reinterpret_cast<const SIZE_T*>(entry);
+					if (observed == hook)
+					{
+						DebugLog(
+							"tnvse_multibyte_input: chained StewMenu handler=0x%08X",
+							static_cast<UInt32>(current));
+						gLog.FormattedMessage("tnvse_multibyte_input: Stewie Tweaks StewMenu input adapter installed");
+						return;
+					}
+
+					if (observed == current)
 					{
 						s_stewMenuOriginalInputHandler = 0;
 						s_stewMenuHookedEntry = 0;
+						gLog.FormattedMessage(
+							"tnvse_multibyte_input: StewMenu adapter write did not publish predecessor=0x%08X",
+							static_cast<UInt32>(current));
 						return;
 					}
-					DebugLog(
-						"tnvse_multibyte_input: chained StewMenu handler=0x%08X",
-						static_cast<UInt32>(current));
-					gLog.FormattedMessage("tnvse_multibyte_input: Stewie Tweaks StewMenu input adapter installed");
+
+					// A later owner may already chain through this adapter. Retain
+					// its predecessor instead of overwriting the new top-level slot.
+					s_stewMenuObservedSuccessor = observed;
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: StewMenu adapter retained below observed handler=0x%08X predecessor=0x%08X executable=%u",
+						static_cast<UInt32>(observed),
+						static_cast<UInt32>(current),
+						hook_identity::IsExecutableTarget(observed) ? 1u : 0u);
 					return;
 				}
 
 				if (entry != s_stewMenuHookedEntry || current == hook)
 					return;
+				if (current == s_stewMenuOriginalInputHandler)
+				{
+					// The complete adapter chain was removed. Forget the stale
+					// predecessor so a later active StewMenu can be hooked anew.
+					s_stewMenuOriginalInputHandler = 0;
+					s_stewMenuHookedEntry = 0;
+					s_stewMenuObservedSuccessor = 0;
+					return;
+				}
 
 				// A later plugin now owns the vtable slot.  It may already keep
 				// this adapter as its predecessor, so writing ourselves back on

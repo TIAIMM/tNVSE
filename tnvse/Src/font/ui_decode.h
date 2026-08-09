@@ -245,14 +245,14 @@ struct  Font
 		BSSimpleList<int> xLineWidths;
 	};
 
-	__forceinline NiPoint3* AddIcon(int aiIconIndex, NiTriShape* apShape, NiPoint3* aPos)
+	__forceinline void AddIcon(int aiIconIndex, NiTriShape* apShape, NiPoint3* aPos)
 	{
-		return ThisStdCall<NiPoint3*>(0xA14650, this, aiIconIndex, apShape, aPos);
+		ThisStdCall<void>(0xA14650, this, aiIconIndex, apShape, aPos);
 	}
 
-	__forceinline Font* AddTextIcon(const char* astrIcon)
+	__forceinline void AddTextIcon(const char* astrIcon)
 	{
-		return ThisStdCall<Font*>(0xA1AEE0, this, astrIcon);
+		ThisStdCall<void>(0xA1AEE0, this, astrIcon);
 	}
 
 	__forceinline NiTriShape* MakeTriShape(int aiChars, const NiColorA* axColor, bool abPrepareObject)
@@ -265,9 +265,14 @@ struct  Font
 		return ThisStdCall<NiTriShape*>(0xA14DA0, this);
 	}
 
-	__forceinline void AddChar(FontLetter* apLetter, int aiVert, NiTriShape* apShape, NiPoint3* apPosition, const NiColorA* apColor)
+	// Retail 0xA142D0 is a static __stdcall helper. It receives the FontLetter
+	// as its first stack argument; Font/this is not part of the ABI.
+	__forceinline static FontLetter* __stdcall AddChar(
+		FontLetter* apLetter, int aiVert, NiTriShape* apShape,
+		NiPoint3* apPosition, const NiColorA* apColor)
 	{
-		ThisStdCall(0xA142D0, this, apLetter, aiVert, apShape, apPosition, apColor);
+		return StdCall<FontLetter*>(
+			0xA142D0, apLetter, aiVert, apShape, apPosition, apColor);
 	}
 
 };
@@ -302,19 +307,22 @@ struct TextEditState
 	bool bClearOnNextType;        // 22
 	UInt8 pad23;                  // 23
 
-	__forceinline TextEditState* Init()
+	// Retail uses this entry as TextEditState's embedded-object initializer.
+	// Its constructor-style epilogue leaves `this` in EAX, but callers do not
+	// consume a source-level return value.
+	__forceinline void Init()
 	{
-		return ThisStdCall<TextEditState*>(0x716980, this);
+		ThisStdCall<void>(0x716980, this);
 	}
 
 	__forceinline void SetText(const char* apText)
 	{
-		ThisStdCall(0x716A70, this, apText);
+		ThisStdCall<void>(0x716A70, this, apText);
 	}
 
-	__forceinline UInt32 SetMaxPixelWidth(UInt32 auiTileWidth)
+	__forceinline void SetMaxPixelWidth(UInt32 auiTileWidth)
 	{
-		return ThisStdCall<UInt32>(0x716AA0, this, auiTileWidth);
+		ThisStdCall<void>(0x716AA0, this, auiTileWidth);
 	}
 
 	__forceinline bool IsActive() const
@@ -331,7 +339,7 @@ struct TextEditState
 
 	__forceinline void SetActive(bool abActive)
 	{
-		ThisStdCall(0x717010, this, abActive);
+		ThisStdCall<void>(0x717010, this, abActive);
 	}
 
 	__forceinline const char* BuildDisplayText()
@@ -346,7 +354,7 @@ struct TextEditState
 
 	__forceinline void SetClearOnNextType(bool abClear)
 	{
-		ThisStdCall(0x7E6580, this, abClear);
+		ThisStdCall<void>(0x7E6580, this, abClear);
 	}
 };
 STATIC_ASSERT(sizeof(TextEditState) == 0x24);
@@ -381,7 +389,7 @@ public:
 
 	__forceinline void Refresh()
 	{
-		ThisStdCall(0x7E6700, this);
+		ThisStdCall<void>(0x7E6700, this);
 	}
 };
 STATIC_ASSERT(sizeof(TextEditMenu) == 0x5C);
@@ -400,7 +408,7 @@ public:
 
 	__forceinline void Finish(const char* apName)
 	{
-		ThisStdCall(0x7AB9A0, this, apName);
+		ThisStdCall<void>(0x7AB9A0, this, apName);
 	}
 };
 STATIC_ASSERT(sizeof(PlayerNameEntryMenu) == 0x2C);
@@ -452,7 +460,7 @@ public:
 
 		__forceinline void SetChar(UInt8 acChar)
 		{
-			ThisStdCall(0xA1B7F0, this, acChar);
+			ThisStdCall<void>(0xA1B7F0, this, acChar);
 		}
 
 		__forceinline CharData* Copy()
@@ -462,7 +470,7 @@ public:
 
 		__forceinline void RevertToDefault()
 		{
-			ThisStdCall(0xA1B770, this);
+			ThisStdCall<void>(0xA1B770, this);
 		}
 	};
 
@@ -523,17 +531,17 @@ public:
 
 		__forceinline void AddChar(CharData* apChar, int aiNewLines, bool abNewPage)
 		{
-			ThisStdCall(0xA19A10, this, apChar, aiNewLines, abNewPage);
+			ThisStdCall<void>(0xA19A10, this, apChar, aiNewLines, abNewPage);
 		}
 
 		__forceinline void Render(NiNode* apNode, TextData* apData)
 		{
-			ThisStdCall(0xA19060, this, apNode, apData);
+			ThisStdCall<void>(0xA19060, this, apNode, apData);
 		}
 
 		__forceinline void CallDestructor()
 		{
-			ThisStdCall(0xA1B990, this);
+			ThisStdCall<void>(0xA1B990, this);
 		}
 	};
 
@@ -554,6 +562,8 @@ public:
 		return *(FontManager**)0x11F33F8;
 	}
 
+	// Both retail helpers are static __stdcall functions despite being grouped
+	// with FontManager in the recovered source model.
 	__forceinline static Float32 __stdcall GetLinePadding(UInt32 fontID)
 	{
 		return StdCall<Float32>(0xA1B3A0, fontID);

@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -121,14 +122,19 @@ namespace fonthook
 			formatPrefs.m_eAlphaFmt = static_cast<NiTexture::FormatPrefs::AlphaFormat>(0x3);
 			formatPrefs.m_eMipMapped = static_cast<NiTexture::FormatPrefs::MipFlag>(0x2);
 
-			NiPixelData* pixelData = static_cast<NiPixelData*>(NiMemObject::operator new(sizeof(NiPixelData)));
-			if (!pixelData)
+			NiPixelData* pixelStorage = static_cast<NiPixelData*>(
+				NiMemObject::operator new(sizeof(NiPixelData)));
+			if (!pixelStorage)
 			{
 				gLog.FormattedMessage("tnvse_freetype_font: white texture pixel allocation failed");
 				return false;
 			}
-			pixelData = ThisStdCall<NiPixelData*>(0xA7C190, pixelData, 1u, 1u,
+			// The engine entry is NiPixelData::NiPixelData (void), not a
+			// nullable creation function. Validate the constructed fields below.
+			ThisStdCall<void>(0xA7C190, pixelStorage, 1u, 1u,
 				&NiPixelFormat_RGBA32, 1, 1);
+			NiPixelData* pixelData = pixelStorage;
+			NiPixelDataPtr pixelDataGuard = pixelData;
 			if (!pixelData || !pixelData->m_pucPixels || !pixelData->m_puiOffsetInBytes)
 			{
 				gLog.FormattedMessage("tnvse_freetype_font: white texture pixel initialization failed");
@@ -137,9 +143,9 @@ namespace fonthook
 			*reinterpret_cast<UInt32*>(&pixelData->m_pucPixels[*pixelData->m_puiOffsetInBytes]) = 0xFFFFFFFFu;
 			pixelData->bNoConvert = 1;
 
-			NiTexturingProperty* property = static_cast<NiTexturingProperty*>(
+			NiTexturingProperty* propertyStorage = static_cast<NiTexturingProperty*>(
 				NiMemObject::operator new(sizeof(NiTexturingProperty)));
-			if (!property)
+			if (!propertyStorage)
 			{
 				gLog.FormattedMessage("tnvse_freetype_font: white texture property allocation failed");
 				return false;
@@ -147,17 +153,29 @@ namespace fonthook
 
 			NiFixedString textureName;
 			textureName.m_kHandle = static_cast<char*>(NiGlobalStringTable::AddString("tNVSE FreeType White"));
-			property = ThisStdCall<NiTexturingProperty*>(0xA6ABB0,
-				property, pixelData, &textureName, &formatPrefs);
-			if (!property)
+			ThisStdCall<void>(0xA6ABB0, propertyStorage, pixelData,
+				&textureName, &formatPrefs);
+			NiTexturingProperty* property = propertyStorage;
+			const auto deleteProperty = [](NiTexturingProperty* value)
 			{
-				gLog.FormattedMessage("tnvse_freetype_font: white texture property initialization failed");
+				if (value)
+					value->DeleteThis();
+			};
+			std::unique_ptr<NiTexturingProperty, decltype(deleteProperty)>
+				propertyGuard(property, deleteProperty);
+			if (!property->m_kMaps.GetSize()
+				|| !property->m_kMaps[0]
+				|| !property->m_kMaps[0]->m_spTexture)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: white texture property initialization failed");
 				return false;
 			}
 
-			ThisStdCall(0x60AEB0, property, 1);
+			ThisStdCall<void>(0x60AEB0, property, 1);
 			property->IncRefCount();
 			s_whiteTextureProperty = property;
+			propertyGuard.release();
 			s_whiteTextureAvailable = s_whiteTextureProperty != nullptr;
 			if (!s_whiteTextureAvailable)
 				gLog.FormattedMessage("tnvse_freetype_font: failed to create 1x1 white text texture");
@@ -170,11 +188,16 @@ namespace fonthook
 				return nullptr;
 			const NiColorA transparent = { 1.0f, 1.0f, 1.0f, 0.0f };
 			NiTriShape* shape = font->MakeTriShape(1, &transparent, false);
-			if (!shape || !shape->GetModelData())
+			NiTriShapeData* data = shape ? shape->GetModelData() : nullptr;
+			if (!data || data->m_usVertices < 4 || data->m_usTriangles < 2
+				|| !data->m_pkVertex || !data->m_pusTriList)
+			{
+				if (shape)
+					shape->DeleteThis();
 				return nullptr;
+			}
 
 			shape->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f, 0.0f);
-			NiTriShapeData* data = shape->GetModelData();
 			for (UInt32 i = 0; i < data->m_usVertices; ++i)
 			{
 				data->m_pkVertex[i] = NiPoint3(0.0f, 0.0f, 0.0f);
@@ -183,7 +206,8 @@ namespace fonthook
 			}
 			for (UInt32 i = 0; i < static_cast<UInt32>(data->m_usTriangles) * 3; ++i)
 				data->m_pusTriList[i] = 0;
-			ThisStdCall(0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
+			ThisStdCall<void>(
+				0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
 			if (prepareObject)
 				shape->PrepareObject();
 			return shape;

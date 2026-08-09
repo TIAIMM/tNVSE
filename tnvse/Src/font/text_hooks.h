@@ -8,7 +8,7 @@
 namespace fonthook
 {
 	// ---- Quest/Location Text Hooks ----
-	void* __fastcall TileSetStringHookForQuestAndLocationText(
+	void __fastcall TileSetStringHookForQuestAndLocationText(
 		void* pThis, void*, int a2, char* a3, bool a4);
 
 	// ---- UTF-8 Conversion Hooks ----

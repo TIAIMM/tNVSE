@@ -43,7 +43,12 @@ namespace fonthook
 			return;
 		}
 
-		InstallTextEditHooks();
+		if (!InstallTextEditHooks())
+		{
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: disabled because the required TextEdit hooks were not installed as one complete unit");
+			return;
+		}
 		s_hooksInstalled = true;
 		TryInstallWindowProc();
 
@@ -86,8 +91,15 @@ namespace fonthook
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 		{
-			if (s_hooksInstalled && !s_originalWndProc)
-				TryInstallWindowProc();
+			if (s_hooksInstalled && !s_originalWndProc
+				&& TryInstallWindowProc())
+			{
+				// A successful ExitToMainMenu detach also shuts down the TSF
+				// sink. Recreate that process-local interface when the window
+				// subclass is published again; otherwise every later game in the
+				// same process permanently loses TSF candidate capture/suppression.
+				InitializeTsfCandidateSupport();
+			}
 
 			if (s_hooksInstalled)
 			{

@@ -72,8 +72,15 @@ namespace fonthook::vectorfont
 				NiMemObject::operator new(sizeof(DefaultAtlasTexture)));
 			if (!result)
 				return nullptr;
-			ThisStdCall(0xA5C200, result);
+			ThisStdCall<void>(0xA5C200, result);
 			*reinterpret_cast<void**>(result) = reinterpret_cast<void*>(0x109B944);
+			// This is the inlined NiTexture portion of the retail
+			// NiSourceTexture constructor.  The object is deliberately added to
+			// the global texture list only after its renderer data is complete,
+			// so make the base destructor safe on every earlier failure path.
+			result->m_pkRendererData = nullptr;
+			result->m_pkPrev = nullptr;
+			result->m_pkNext = nullptr;
 			if (!s_vtable[0])
 			{
 				std::copy_n(*reinterpret_cast<void***>(result),
@@ -89,19 +96,17 @@ namespace fonthook::vectorfont
 			result->m_kFormatPrefs.m_eMipMapped = texture->GetLevelCount() > 1
 				? NiTexture::FormatPrefs::YES : NiTexture::FormatPrefs::NO;
 
-			auto* data = static_cast<NiDX9TextureData*>(
+			auto* dataStorage = static_cast<NiDX9TextureData*>(
 				NiMemObject::operator new(sizeof(NiDX9TextureData)));
-			if (!data)
+			if (!dataStorage)
 			{
 				result->DeleteThis();
 				return nullptr;
 			}
-			data = ThisStdCall<NiDX9TextureData*>(0xE8A260, data, result, renderer);
-			if (!data)
-			{
-				result->DeleteThis();
-				return nullptr;
-			}
+			// NiDX9TextureData::NiDX9TextureData is a void constructor. Its EAX
+			// value is not a nullable creation result.
+			ThisStdCall<void>(0xE8A260, dataStorage, result, renderer);
+			NiDX9TextureData* data = dataStorage;
 			data->m_pkD3DTexture = texture;
 			if (!data->InitializeFromD3DTexture(texture))
 			{
@@ -111,7 +116,7 @@ namespace fonthook::vectorfont
 				return nullptr;
 			}
 			result->m_pkRendererData = data;
-			ThisStdCall(0xA5F7B0, result);
+			ThisStdCall<void>(0xA5F7B0, result);
 			return result;
 		}
 

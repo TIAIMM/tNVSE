@@ -1,13 +1,10 @@
 #include "font_engine.h"
-#include "dictionary.h"
 #include "font_glyphs.h"
 #include "game_hooks.h"
-#include "font_manager.h"
 #include "font_vector.h"
 #include "native_calls.h"
-#include <array>
-#include <cmath>
-#include <vector>
+#include <cstdio>
+#include <new>
 
 namespace fonthook::implementation::font_engine {}
 using namespace fonthook::implementation::font_engine;
@@ -22,6 +19,27 @@ namespace fonthook::implementation::font_engine
 		FontConstructorLoadScope() { ++s_fontConstructorLoadDepth; }
 		~FontConstructorLoadScope() { --s_fontConstructorLoadDepth; }
 	};
+
+	bool PublishExtraGlyphs(Font& font, const std::string& fontKey)
+	{
+		if (!font.pFontData || !font.iRefCount || fontKey.empty())
+			return false;
+
+		// A numeric slot denotes the just-completed load. Never leave metrics from
+		// a previous file occupying that slot when the replacement has no extension.
+		gNumberedExtraLetters.erase(font.iFontNum);
+		auto extra = gExtraFontLetters.find(fontKey);
+		if (extra == gExtraFontLetters.end() || extra->second.empty())
+		{
+			if (extra != gExtraFontLetters.end())
+				gExtraFontLetters.erase(extra);
+			return false;
+		}
+
+		gNumberedExtraLetters[font.iFontNum] = std::move(extra->second);
+		gExtraFontLetters.erase(extra);
+		return !gNumberedExtraLetters[font.iFontNum].empty();
+	}
 }
 
 namespace fonthook
@@ -29,130 +47,63 @@ namespace fonthook
 	// ==================== FontEx::FontConstructor ====================
 	Font* FontEx::FontConstructor(int iFontNum, char* apFilename, bool abLoad)
 	{
-		if (!g_bEnableMultibyteFontHook)
+		Font* result = nullptr;
 		{
 			FontConstructorLoadScope loadScope;
-			Font* result = CallOriginalFontConstructor(
+			result = CallOriginalFontConstructor(
 				this, iFontNum, apFilename, abLoad);
-			if (result && g_bEnableFreeTypeFontRendering)
-				ActivateFreeTypeFont(result);
-			return result;
 		}
-
-		TlsSlotGuard tlsGuard;
-		fontNameKey.clear();
-		bool movedExtraGlyphs = false;
-
-		StdCall(0xEC782F, this->pTextureData, 4, 8, 0xA1B410, 0x45CEC0);
-		this->IconAtlasTextureName.pString = 0;
-		this->IconAtlasTextureName.sLen = 0;
-		this->IconAtlasTextureName.sMaxLen = 0;
-		ThisStdCall(0xA1BEF0, &this->ButtonIcons);
-
-		this->pFontFile = 0;
-		this->iRefCount = 0;
-		this->pFontData = 0;
-
-		if (apFilename)
-		{
-			UInt32 filenameLen = strlen(apFilename);
-			if (filenameLen)
-			{
-				this->pFontFile = (char*)MemoryManager_s_Instance->Allocate(filenameLen + 1);
-				strcpy_s(this->pFontFile, filenameLen + 1, apFilename);
-			}
-			this->iFontNum = iFontNum;
-			if (abLoad)
-			{
-				FontConstructorLoadScope loadScope;
-				ThisStdCall(0xA15320, this);
-			}
-		}
-
-		if (!fontNameKey.empty())
-		{
-			auto it = gExtraFontLetters.find(fontNameKey);
-			if (it != gExtraFontLetters.end() && !it->second.empty())
-			{
-				gNumberedExtraLetters[iFontNum] = std::move(it->second);
-				gExtraFontLetters.erase(it);
-				movedExtraGlyphs = true;
-				if (!gNumberedExtraLetters[iFontNum].empty())
-				{
-					fontNameKey.clear();
-				}
-			}
-			else
-			{
-				fontNameKey.clear();
-			}
-		}
-
-		ActivateFreeTypeFont(this, movedExtraGlyphs);
-
-		return this;
+		if (result && g_bEnableFreeTypeFontRendering)
+			ActivateFreeTypeFont(result, true);
+		return result;
 	}
 
 	// ==================== FontEx::Load ====================
 	void FontEx::Load()
 	{
-		if (!g_bEnableMultibyteFontHook)
+		const bool firstLoad = !this->iRefCount && this->pFontFile;
+		const bool loadExtraGlyphs = g_bEnableMultibyteFontHook && firstLoad;
+		const std::string fontKey = loadExtraGlyphs ? this->pFontFile : "";
+		if (loadExtraGlyphs)
 		{
-			CallOriginalFontLoad(this);
-			if (g_bEnableFreeTypeFontRendering && this->pFontData
-				&& !s_fontConstructorLoadDepth)
+			gExtraFontLetters.erase(fontKey);
+			gNumberedExtraLetters.erase(static_cast<UInt32>(this->iFontNum));
+		}
+
+		// Preserve the retail texture loader. The dedicated Font::Load call-site
+		// hook bounds retail's initial .FNT read to the 0x3928-byte FontData block;
+		// the appended tNVSE glyph payload can therefore be read safely here after
+		// the original loader has completed. Do not validate each
+		// TextureFile::pFilename as an isolated 32-byte C string: stock fonts 4-7
+		// contain legal 32-38 byte names that continue into unused texture records,
+		// exactly as retail's BSsprintf("%s") path expects.
+		CallOriginalFontLoad(this);
+
+		bool publishedExtraGlyphs = false;
+		if (loadExtraGlyphs && this->pFontData && this->iRefCount)
+		{
+			BSFile* fontFile = FileFinder_GetFile(
+				this->pFontFile, NiFile::READ_ONLY, 0x4000u, 2u);
+			if (fontFile && fontFile->m_pFile)
 			{
-				ActivateFreeTypeFont(this);
+				fontFile->Seek(static_cast<SInt32>(kFontDataSize), SEEK_SET);
+				UInt32 componentSizes[2] = { 1u, 0u };
+				LoadExtraGlyphs(fontFile, componentSizes);
 			}
-			return;
+			if (fontFile)
+				delete fontFile;
+			publishedExtraGlyphs = PublishExtraGlyphs(*this, fontKey);
 		}
-
-		TlsSlotGuard tlsGuard;
-
-		UInt16 refCount = this->iRefCount;
-		if (refCount || !this->pFontFile)
+		else if (loadExtraGlyphs)
 		{
-			++this->iRefCount;
-			if (this->pFontData && !s_fontConstructorLoadDepth)
-				ActivateFreeTypeFont(this);
-			return;
+			gExtraFontLetters.erase(fontKey);
 		}
 
-		// ---- Open and validate font file ----
-		BSFile* fontFile = FileFinder_GetFile(this->pFontFile, (NiFile::OpenMode)0, 0x4000u, 2u);
-		if (!fontFile || !fontFile->m_pFile)
+		if (g_bEnableFreeTypeFontRendering && this->pFontData
+			&& !s_fontConstructorLoadDepth)
 		{
-			if (fontFile) delete fontFile;
-			return;
+			ActivateFreeTypeFont(this, publishedExtraGlyphs);
 		}
-
-		// ---- Read font data header ----
-		UInt32 textureMarkers[2] = {};
-		textureMarkers[0] = 1;
-		this->pFontData = (FontData*)MemoryManager_s_Instance->Allocate(kFontDataSize);
-		fontFile->m_uiAbsoluteCurrentPos +=
-			fontFile->m_pfnRead(fontFile, this->pFontData, kFontDataSize, textureMarkers, 1u);
-
-		// ---- Load extended glyphs then close the file ----
-		LoadExtraGlyphs(fontFile, textureMarkers);
-		if (fontFile) delete fontFile;
-
-		// ---- Calculate metrics & copy special character properties ----
-		ComputeGlyphMetrics();
-
-		if (this->pFontData->iTextureCount > 8)
-			return;
-
-		// ---- Load font textures ----
-		int stringRefFlag = 0;
-		if (!LoadFontTextures(textureMarkers, stringRefFlag))
-			return;
-
-		++this->iRefCount;
-		// Font::Font binds path-keyed extended metrics to the numeric font slot and
-		// activates once after Load returns. Standalone Load calls still activate here.
-		if (!s_fontConstructorLoadDepth)
-			ActivateFreeTypeFont(this);
 	}
 
 	// ---- FontEx::Load helpers ----
@@ -164,10 +115,10 @@ namespace fonthook
 		UInt32 uiActualSize = fontFile->GetSize();
 		if (uiActualSize <= kFontDataSize) return;
 
-		fontNameKey = this->pFontFile ? this->pFontFile : "";
-		if (fontNameKey.empty()) return;
+		const std::string fontKey = this->pFontFile ? this->pFontFile : "";
+		if (fontKey.empty()) return;
 
-		auto& extraStore = gExtraFontLetters[fontNameKey];
+		auto& extraStore = gExtraFontLetters[fontKey];
 		if (!extraStore.empty()) return;
 
 		// Batch-read all FontLetters for each high-byte row (191 entries at once)
@@ -175,8 +126,10 @@ namespace fonthook
 		static constexpr UInt32 kRowGlyphCount =
 			SerializedExtraGlyphTable::kGlyphsPerRow;
 		static constexpr UInt32 kRowBytes = kRowGlyphCount * sizeof(FontLetter);
-		extraStore.serialized.glyphs.reset(
-			new FontLetter[SerializedExtraGlyphTable::kGlyphCount]);
+		extraStore.serialized.glyphs.reset(new (std::nothrow)
+			FontLetter[SerializedExtraGlyphTable::kGlyphCount]);
+		if (!extraStore.serialized.glyphs)
+			return;
 		extraStore.serialized.validGlyphs = 0;
 
 		for (UInt32 highByte = SerializedExtraGlyphTable::kFirstLeadByte;
@@ -197,133 +150,6 @@ namespace fonthook
 			}
 			extraStore.serialized.validGlyphs += kRowGlyphCount;
 		}
-	}
-
-	float FontEx::ComputeGlyphMetrics()
-	{
-		this->fFontHeight = 0.0f;
-		float maxHeight = 0.0f;
-		this->fMaxDrop = 0.0f;
-
-		auto* pLetters = this->pFontData->pFontLetters;
-
-		for (int i = 0; i < kMaxGlyphCount; ++i)
-		{
-			auto& letter = pLetters[i];
-			float glyphHeight = GetGlyphLineHeight(this->pFontData, &letter);
-			this->fFontHeight = MaxFloat(glyphHeight, this->fFontHeight);
-			maxHeight = MaxFloat(maxHeight, letter.fHeight);
-			this->fMaxDrop = MinFloat(letter.fTopEdge - letter.fHeight, this->fMaxDrop);
-		}
-
-		// Space character (swap width & spacing)
-		float savedWidth = pLetters[kSpaceChar].fWidth;
-		pLetters[kSpaceChar].fWidth = pLetters[kSpaceChar].fSpacing;
-		pLetters[kSpaceChar].fSpacing = savedWidth;
-		pLetters[kSpaceChar].fHeight = maxHeight;
-		pLetters[kSpaceChar].fTopEdge = this->fMaxDrop + maxHeight;
-
-		// NBSP copies space
-		pLetters[kNBSPChar].fWidth = pLetters[kSpaceChar].fWidth;
-		pLetters[kNBSPChar].fSpacing = pLetters[kSpaceChar].fSpacing;
-		pLetters[kNBSPChar].fHeight = pLetters[kSpaceChar].fHeight;
-		pLetters[kNBSPChar].fTopEdge = pLetters[kSpaceChar].fTopEdge;
-
-		// Delete char copies pipe
-		pLetters[kDelChar].fWidth = pLetters[kPipeChar].fWidth;
-		pLetters[kDelChar].fLeadingEdge = pLetters[kPipeChar].fLeadingEdge;
-		pLetters[kDelChar].fSpacing = pLetters[kPipeChar].fSpacing;
-		pLetters[kDelChar].fHeight = pLetters[kPipeChar].fHeight;
-		pLetters[kDelChar].fTopEdge = pLetters[kPipeChar].fTopEdge;
-
-		// Null glyph
-		auto& nullGlyph = pLetters[0];
-		nullGlyph.fWidth = 0.0f;
-		nullGlyph.fSpacing = 0.0f;
-		nullGlyph.fHeight = maxHeight;
-		nullGlyph.fTopEdge = this->fMaxDrop + maxHeight;
-		memset(nullGlyph.pMapping, 0, sizeof(UVMap) * 4);
-
-		return maxHeight;
-	}
-
-	bool FontEx::LoadFontTextures(UInt32* textureMarkers, int& stringRefFlag)
-	{
-		for (int textureCount = 0; textureCount < this->pFontData->iTextureCount; ++textureCount)
-		{
-			char texNameBuffer[MAX_PATH];
-			_snprintf_s(texNameBuffer, 0x100u, _TRUNCATE,
-				"TEXTURES\\FONTS\\%s.TEX",
-				this->pFontData->pTextureFiles[textureCount].pFilename);
-
-			BSFile* textureReadStream = FileFinder_GetFile(
-				(const char*)texNameBuffer, (NiFile::OpenMode)0, 0x4000u, 2u);
-			if (!textureReadStream || !textureReadStream->m_pFile)
-			{
-				if (textureReadStream) delete textureReadStream;
-				return false;
-			}
-
-			UInt32 texWidth, texHeight;
-			textureMarkers[0] = 1;
-			UInt32 readFlagValue = textureReadStream->m_pfnRead(textureReadStream, &texWidth, 4u, textureMarkers, 1u);
-			readFlagValue += textureReadStream->m_pfnRead(textureReadStream, &texHeight, 4u, textureMarkers, 1u);
-			textureReadStream->m_uiAbsoluteCurrentPos += readFlagValue;
-
-			NiTexture::FormatPrefs formatPrefs;
-			formatPrefs.m_ePixelLayout = static_cast<NiTexture::FormatPrefs::PixelLayout>(0x6);
-			formatPrefs.m_eAlphaFmt = static_cast<NiTexture::FormatPrefs::AlphaFormat>(0x3);
-			formatPrefs.m_eMipMapped = static_cast<NiTexture::FormatPrefs::MipFlag>(0x2);
-
-			NiPixelData* finalPixelData;
-			NiPixelData* createdPixelData = (NiPixelData*)NiMemObject::operator new(sizeof(NiPixelData));
-			if (createdPixelData)
-			{
-				finalPixelData = ThisStdCall<NiPixelData*>(
-					0xA7C190, createdPixelData, texWidth, texHeight,
-					&NiPixelFormat_RGBA32, 1, 1);
-			}
-			else
-			{
-				finalPixelData = 0;
-			}
-
-			void* readBuffer = &finalPixelData->m_pucPixels[*finalPixelData->m_puiOffsetInBytes];
-			int readFlag = 1;
-			UInt32 bytesRead = textureReadStream->m_pfnRead(
-				textureReadStream, readBuffer, 4 * texHeight * texWidth, (UInt32*)&readFlag, 1u);
-			textureReadStream->m_uiAbsoluteCurrentPos += bytesRead;
-			finalPixelData->bNoConvert = 1;
-
-			NiTexturingProperty* textureProperty;
-			NiFixedString textureName;
-			NiTexturingProperty* createdProperty = (NiTexturingProperty*)NiMemObject::operator new(sizeof(NiTexturingProperty));
-			if (createdProperty)
-			{
-				char* pFontFilePath = this->pFontFile;
-				textureName.m_kHandle = pFontFilePath
-					? (char*)NiGlobalStringTable::AddString(pFontFilePath) : 0;
-				stringRefFlag |= 1u;
-				textureProperty = ThisStdCall<NiTexturingProperty*>(
-					0xA6ABB0, createdProperty, finalPixelData, &textureName, &formatPrefs);
-			}
-			else
-			{
-				textureProperty = 0;
-			}
-
-			if ((stringRefFlag & 1) != 0)
-			{
-				stringRefFlag &= ~1u;
-				if (textureName.m_kHandle)
-					InterlockedDecrement((volatile LONG*)textureName.m_kHandle - 2);
-			}
-			if (textureReadStream) delete textureReadStream;
-
-			ThisStdCall(0x60AEB0, textureProperty, 1);
-			ThisStdCall(0x66B0D0, &this->pTextureData[textureCount].m_pObject, (int)textureProperty);
-		}
-		return true;
 	}
 
 } // namespace fonthook

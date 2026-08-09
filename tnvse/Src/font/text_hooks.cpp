@@ -90,11 +90,14 @@ namespace fonthook
 	}
 
 	// ==================== Quest/Location Text Hook ====================
-	void* __fastcall TileSetStringHookForQuestAndLocationText(
+	void __fastcall TileSetStringHookForQuestAndLocationText(
 		void* pThis, void*, int a2, char* a3, bool a4)
 	{
 		if (!a3)
-			return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);
+		{
+			ThisStdCall<void>(0xA01350, pThis, a2, a3, a4);
+			return;
+		}
 
 		bool bHasFont8 = HasExtraGlyphsForFont(8);
 		if (bHasFont8)
@@ -130,7 +133,7 @@ namespace fonthook
 			bMeasureQuestTextMSBAsEmpty = false;
 		}
 
-		return ThisStdCall<void*>(0xA01350, pThis, a2, a3, a4);
+		ThisStdCall<void>(0xA01350, pThis, a2, a3, a4);
 	}
 
 	// ==================== UTF-8 Conversion Hooks ====================

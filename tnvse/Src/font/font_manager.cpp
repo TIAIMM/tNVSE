@@ -414,6 +414,14 @@ namespace fonthook
 				return;
 
 			ClearRichTextCharExtra(apChar);
+			// FontManager::TextLine::~TextLine frees CharData::xFilename before
+			// releasing the CharData allocation.  These characters have not been
+			// handed to a TextLine, so reproduce that ownership teardown here.
+			if (apChar->xFilename.pString)
+				MemoryManager_s_Instance->Deallocate(apChar->xFilename.pString);
+			apChar->xFilename.pString = nullptr;
+			apChar->xFilename.sLen = 0;
+			apChar->xFilename.sMaxLen = 0;
 			MemoryManager_s_Instance->Deallocate(apChar);
 		}
 
@@ -432,7 +440,7 @@ namespace fonthook
 
 		void CallTextDocAddChar(FontManager::TextDoc* apDoc, FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
 		{
-			ThisStdCall(0xA19A10, apDoc, apChar, aiNewLines, abNewPage);
+			ThisStdCall<void>(0xA19A10, apDoc, apChar, aiNewLines, abNewPage);
 		}
 
 		void FlushPendingRichTextLead(FontManager::TextDoc* apDoc, const char* reason)
@@ -683,7 +691,7 @@ namespace fonthook
 
 		void CallTextDocRender(FontManager::TextDoc* apDoc, NiNode* apNode, FontManager::TextData* apData)
 		{
-			ThisStdCall(0xA19060, apDoc, apNode, apData);
+			ThisStdCall<void>(0xA19060, apDoc, apNode, apData);
 		}
 
 		FontManager::TextPage* GetRenderPage(FontManager::TextDoc* apDoc)
@@ -816,7 +824,7 @@ namespace fonthook
 
 		void CallTextDocDestructor(FontManager::TextDoc* apDoc)
 		{
-			ThisStdCall(0xA1B990, apDoc);
+			ThisStdCall<void>(0xA1B990, apDoc);
 		}
 
 		struct ScopedRichTextRenderContext
@@ -978,6 +986,8 @@ namespace fonthook
 		int sourceStringLength = strlen(srcString);
 		FontLetter* fontCharMetrics = activeFont->pFontData->pFontLetters;
 		float fontBaseLine = activeFont->pFontData->fBaseLine;
+		// Intentional tNVSE behavior: preserve the encoded-unit wrap policy used by
+		// the multibyte layout path instead of replacing it with retail whitespace rules.
 		LayoutWrapState wrapState;
 		float fontVerticalSpacingAdjust = FontManager::GetLinePadding(fontID);
 		int totalLines = 1;
@@ -1013,7 +1023,7 @@ namespace fonthook
 			return outDimensions;
 		}
 
-		UInt32 uiDoubleByteCode;
+		UInt32 uiDoubleByteCode = 0;
 		for (int currentCharIndex = startCharIndex; currentCharIndex < sourceStringLength; ++currentCharIndex)
 		{
 			bool bIsDBCharacter = false;
@@ -1049,23 +1059,20 @@ namespace fonthook
 			{
 				ConvertToAsciiQuotes(&currentChar);
 				currentCharTotalWidth = GetGlyphLayoutWidth(&fontCharMetrics[currentChar]);
-				if (currentChar == '\t')
+				switch (currentChar)
 				{
-					// PrepTextImpl advances tabs to the next 75-pixel stop without
-					// making the tab an encoded unit or triggering a wrap itself.
+				case '\t':
 					wrapState.AdvanceTab(75);
 					continue;
-				}
-				if (currentChar == '\n')
-				{
+				case '\n':
 					finishLine(static_cast<float>(wrapState.currentLineWidth));
 					wrapState.ResetLine();
 					continue;
-				}
-				if (currentChar == '~')
-				{
+				case '~':
 					wrapState.MarkSoftWrap();
 					continue;
+				default:
+					break;
 				}
 			}
 
@@ -1331,8 +1338,11 @@ namespace fonthook
 		if (!lineMem)
 			return ThisStdCall<FontManager::TextLine*>(0xA19F70, line, apChar, abAddHead);
 
-		return ThisStdCall<FontManager::TextLine*>(0xA1BD40,
+		// FontManager::TextLine::TextLine is a void constructor. Return the
+		// allocation explicitly instead of relying on its incidental EAX value.
+		ThisStdCall<void>(0xA1BD40,
 			lineMem, line->pPage, apChar, 0, line->iPageWidth);
+		return static_cast<FontManager::TextLine*>(lineMem);
 	}
 
 	FontManager::CharData* __fastcall FontManagerEx::CharDataCopy(FontManager::CharData* apChar, void*)

@@ -9,9 +9,6 @@
 namespace fonthook
 {
 	// ---- Constants ----
-	static constexpr UInt32 kTlsIndexAddress = 0x126FD98;
-	static constexpr UInt32 kTlsSlotValue = 12;
-	static constexpr int kTlsByteOffset = 692;
 	static constexpr UInt32 kFontDataSize = 0x3928;
 	static constexpr UInt32 kMaxGlyphCount = 256;
 	static constexpr UInt32 kSentinelMax = 0x7FFFFFFF;
@@ -20,34 +17,6 @@ namespace fonthook
 	static constexpr UInt8 kNBSPChar = 160;
 	static constexpr UInt8 kDelChar = 127;
 	static constexpr UInt8 kPipeChar = '|';
-
-	// ---- RAII guard for TLS slot management ----
-	class TlsSlotGuard
-	{
-		UInt32 m_savedValue;
-		UInt32* m_target;
-	public:
-		TlsSlotGuard()
-		{
-			UInt32* pTlsIndex = (UInt32*)kTlsIndexAddress;
-			UInt32 tebAddress;
-			__asm {
-				mov eax, fs: [0x18]
-				mov tebAddress, eax
-			}
-			UInt32 tlsPointer = *(UInt32*)(tebAddress + 0x2C);
-			UInt32 tlsSlotAddress = *(UInt32*)(tlsPointer + (*pTlsIndex) * 4);
-			m_target = (UInt32*)(tlsSlotAddress + kTlsByteOffset);
-			m_savedValue = *m_target;
-			*m_target = kTlsSlotValue;
-		}
-		~TlsSlotGuard()
-		{
-			*m_target = m_savedValue;
-		}
-		TlsSlotGuard(const TlsSlotGuard&) = delete;
-		TlsSlotGuard& operator=(const TlsSlotGuard&) = delete;
-	};
 
 	// ---- FontEx - Extended font class with multi-byte support ----
 	class FontEx : public Font
@@ -71,8 +40,6 @@ namespace fonthook
 
 	private:
 		void LoadExtraGlyphs(BSFile* fontFile, UInt32* textureMarkers);
-		float ComputeGlyphMetrics();
-		bool LoadFontTextures(UInt32* textureMarkers, int& stringRefFlag);
 	};
 
 	// Runs the same direct encoded-unit layout used by FreeType CreateText

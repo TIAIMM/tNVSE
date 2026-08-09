@@ -18,9 +18,21 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 
 namespace fonthook::vectorfont
 {
+		struct NiTriShapeDeleter
+		{
+			void operator()(NiTriShape* shape) const
+			{
+				if (shape)
+					shape->DeleteThis();
+			}
+		};
+
+		using NiTriShapeOwner = std::unique_ptr<NiTriShape, NiTriShapeDeleter>;
+
 		float SanitizeColorChannel(float value, float fallback = 1.0f)
 		{
 			return std::isfinite(value) ? value : fallback;
@@ -1317,7 +1329,7 @@ namespace fonthook::vectorfont
 				if (shade->m_eShaderType == NiShadeProperty::PROP_Tile)
 				{
 					if (NiTexture* texture = GetAtlasTexture(*atlas))
-						ThisStdCall(0xBB7A10, shade, texture);
+						ThisStdCall<void>(0xBB7A10, shade, texture);
 				}
 			}
 			return true;
@@ -2191,6 +2203,7 @@ namespace fonthook::vectorfont
 			}
 			NiTriShape* shape = font.MakeTriShape(
 				static_cast<int>(drawableGlyphs), &tileColor, false);
+			NiTriShapeOwner shapeOwner(shape);
 			if (!shape || !shape->GetModelData()
 				|| !BindDirectAtlasShape(shape, atlases[atlasPage]))
 			{
@@ -2311,7 +2324,7 @@ namespace fonthook::vectorfont
 			data->m_kBound.m_kCenter.z += origin.z;
 			if (prepareObject && shape->m_pWorldBound)
 				shape->UpdateWorldBound();
-			return shape;
+			return shapeOwner.release();
 		}
 
 		template <class GlyphInstance>
@@ -3668,6 +3681,7 @@ namespace fonthook::vectorfont
 			NiTriShape* shape = font.MakeTriShape(
 				static_cast<int>(needsNativeRangeRouting ? 1u : quads.size()),
 				&tileColor, false);
+			NiTriShapeOwner shapeOwner(shape);
 			if (!shape || !shape->GetModelData())
 				return nullptr;
 			shape->m_kLocal.m_Translate = NiPoint3(0.0f, 0.0f, 0.0f);
@@ -3679,7 +3693,7 @@ namespace fonthook::vectorfont
 				if (shade->m_eShaderType == NiShadeProperty::PROP_Tile)
 				{
 					if (NiTexture* texture = GetAtlasTexture(*atlases[0]))
-						ThisStdCall(0xBB7A10, shade, texture);
+						ThisStdCall<void>(0xBB7A10, shade, texture);
 				}
 			}
 
@@ -3771,7 +3785,7 @@ namespace fonthook::vectorfont
 			// before the sorted Tile route gets a chance to substitute its proxy.
 			if (prepareObject && shape->m_pWorldBound)
 				shape->UpdateWorldBound();
-			return shape;
+			return shapeOwner.release();
 		}
 
 		NiTriShape* TryCreateAtlasShapeForMode(Font& font,

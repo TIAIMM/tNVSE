@@ -1273,7 +1273,7 @@ namespace fonthook::vectorfont
 			if (proxy.atlasTexture != desiredTexture
 				|| proxy.tile->sourceTexture.m_pObject != desiredTexture)
 			{
-				ThisStdCall(0xBB7A10, proxy.tile, desiredTexture);
+				ThisStdCall<void>(0xBB7A10, proxy.tile, desiredTexture);
 				proxy.atlasTexture = proxy.tile->sourceTexture.m_pObject;
 			}
 			return proxy.atlasTexture == desiredTexture;

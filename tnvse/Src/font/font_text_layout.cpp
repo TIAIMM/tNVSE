@@ -1132,7 +1132,8 @@ namespace fonthook
 		if (axData->iLineEnd <= 0)
 			axData->iLineEnd = kSentinelMax;
 		const UInt32 originalTextLen = GetPreparedTextLength(apOrigString);
-		const float lineSpacingAdjust = FontManager::GetLinePadding(font->iFontNum);
+		const float lineSpacingAdjust =
+			FontManager::GetLinePadding(font->iFontNum);
 
 		auto* extraGlyphs = GetExtraGlyphs(font->iFontNum);
 		UInt32 origConsumed = 0;
@@ -1189,7 +1190,7 @@ namespace fonthook
 
 		// ---- Pass 2: Text layout with wrapping ----
 		bool bIsDBCharacter;
-		UInt32 uiDoubleByteCode;
+		UInt32 uiDoubleByteCode = 0;
 		for (UInt32 charIndex = 0; charIndex < sourceTextLen && processedOriginalText[charIndex]; ++charIndex)
 		{
 			if (processedOriginalText[charIndex] == axData->cLineSep)
@@ -1416,7 +1417,7 @@ namespace fonthook
 	{
 		if (!g_bEnableMultibyteFontHook && !IsFreeTypeFontActive(this))
 		{
-			ThisStdCall(0xA12FB0, this, apOrigString, axData);
+			ThisStdCall<void>(0xA12FB0, this, apOrigString, axData);
 			return;
 		}
 		PrepTextImpl(this, apOrigString, axData, true);
@@ -1427,7 +1428,7 @@ namespace fonthook
 	{
 		if (!g_bEnableMultibyteFontHook && !IsFreeTypeFontActive(this))
 		{
-			ThisStdCall(0xA12FB0, this, apOrigString, axData);
+			ThisStdCall<void>(0xA12FB0, this, apOrigString, axData);
 			return;
 		}
 		PrepTextImpl(this, apOrigString, axData, false);
@@ -1464,14 +1465,14 @@ namespace fonthook
 		}
 
 		Font::TextData prepared = {};
-		ThisStdCall(0x759330, &prepared, wrapWidth,
+		ThisStdCall<void>(0x759330, &prepared, wrapWidth,
 			std::numeric_limits<int>::max(), 0,
 			std::numeric_limits<int>::max(), '\n');
 		PrepTextImpl(font, text + startCharIndex, &prepared, false, false);
 		dimensions.x = static_cast<float>(prepared.iWidth);
 		dimensions.y = static_cast<float>(prepared.iHeight);
 		dimensions.z = static_cast<float>(prepared.iLineEnd);
-		ThisStdCall<UInt32>(0x7593E0, reinterpret_cast<char*>(&prepared));
+		ThisStdCall<void>(0x7593E0, reinterpret_cast<char*>(&prepared));
 		return true;
 	}
 

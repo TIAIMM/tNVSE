@@ -33,6 +33,7 @@ namespace fonthook
 		// yet built the physical .fos path. Replacing only this call preserves
 		// display text.
 		constexpr SIZE_T kOpenSaveFileCallSite = 0x850545;
+		constexpr SIZE_T kSaveLoadManagerSingleton = 0x11DE134;
 
 		constexpr UInt32 kStoreMagic = 'SVDN';
 		constexpr UInt32 kStoreVersion = 1;
@@ -203,10 +204,24 @@ namespace fonthook
 			return ToLowerAscii(path);
 		}
 
+		void* GetSaveLoadManager()
+		{
+			if (!hook_identity::IsAccessibleRegion(
+					kSaveLoadManagerSingleton, sizeof(void*), false))
+			{
+				return nullptr;
+			}
+			return *reinterpret_cast<void**>(kSaveLoadManagerSingleton);
+		}
+
 		std::string GetSaveGamePath()
 		{
+			void* saveManager = GetSaveLoadManager();
+			if (!saveManager)
+				return {};
+
 			char savePath[MAX_PATH] = {};
-			StdCall<BOOL>(0x84FF30, savePath);
+			ThisStdCall<BOOL>(0x84FF30, saveManager, savePath);
 			savePath[MAX_PATH - 1] = '\0';
 
 			std::string result;
@@ -221,7 +236,15 @@ namespace fonthook
 				return {};
 
 			char savePath[MAX_PATH] = {};
-			StdCall<void>(0x84FF90, actualKey.c_str(), savePath, static_cast<UInt8>(0));
+			void* saveManager = GetSaveLoadManager();
+			if (saveManager)
+			{
+				// Retail PC adds the temporary-file flag as a third stack
+				// argument, but still retains the BGSSaveLoadManager thiscall
+				// contract in ECX.
+				ThisStdCall<void>(0x84FF90, saveManager,
+					actualKey.c_str(), savePath, static_cast<UInt8>(0));
+			}
 			savePath[MAX_PATH - 1] = '\0';
 
 			std::string result;
@@ -1130,27 +1153,39 @@ namespace fonthook
 			s_nextOpenSaveFile = openSaveFileTarget;
 			WriteRelCall(kOpenSaveFileCallSite,
 				&OpenSaveFileWithSafeName);
-			if (!hook_identity::MatchesRel32Target(
+			SIZE_T observedOpenSaveFileTarget = 0;
+			const bool observedOpenSaveFileCall =
+				hook_identity::ReadRel32Target(
 					kOpenSaveFileCallSite,
 					Rel32Opcode::Call,
-					openSaveFileHook))
-			{
-				WriteRelCall(kOpenSaveFileCallSite,
-					openSaveFileTarget);
-				const bool restored = hook_identity::MatchesRel32Target(
-					kOpenSaveFileCallSite,
-					Rel32Opcode::Call,
-					openSaveFileTarget);
-				gLog.FormattedMessage(
-					"tnvse_save_display_name: custom save hook write verification failed; restore target=%08X restored=%u",
-					static_cast<UInt32>(openSaveFileTarget),
-					restored ? 1u : 0u);
-			}
-			else
+					observedOpenSaveFileTarget);
+			if (observedOpenSaveFileCall
+				&& observedOpenSaveFileTarget == openSaveFileHook)
 			{
 				gLog.FormattedMessage(
 					"tnvse_save_display_name: custom multibyte save sanitizer installed next=%08X",
 					static_cast<UInt32>(openSaveFileTarget));
+			}
+			else if (observedOpenSaveFileCall
+				&& observedOpenSaveFileTarget == openSaveFileTarget)
+			{
+				s_nextOpenSaveFile = 0;
+				gLog.FormattedMessage(
+					"tnvse_save_display_name: custom save hook write did not publish target=%08X",
+					static_cast<UInt32>(openSaveFileTarget));
+			}
+			else
+			{
+				// A later owner may already chain through tNVSE. Preserve its
+				// top-level CALL and retain our predecessor for any live chain.
+				gLog.FormattedMessage(
+					"tnvse_save_display_name: custom save hook retained below observed target=%08X predecessor=%08X readable=%u executable=%u",
+					static_cast<UInt32>(observedOpenSaveFileTarget),
+					static_cast<UInt32>(openSaveFileTarget),
+					observedOpenSaveFileCall ? 1u : 0u,
+					observedOpenSaveFileCall
+						&& hook_identity::IsExecutableTarget(
+							observedOpenSaveFileTarget) ? 1u : 0u);
 			}
 		}
 
@@ -1159,6 +1194,8 @@ namespace fonthook
 
 		SIZE_T scrubFileNameTarget = 0;
 		SIZE_T generatedFileNameTarget = 0;
+		const SIZE_T scrubFileNameHook = reinterpret_cast<SIZE_T>(
+			&ScrubFileNameAndCaptureDisplayName);
 		const SIZE_T generatedFileNameHook = reinterpret_cast<SIZE_T>(
 			&IsSaveFileNameGeneratedWithDisplayName);
 		if (!hook_identity::ReadRel32Target(
@@ -1187,7 +1224,7 @@ namespace fonthook
 		const bool scrubFileNameInstalled = hook_identity::MatchesRel32Target(
 			kScrubFileNameCallSite,
 			Rel32Opcode::Call,
-			reinterpret_cast<SIZE_T>(&ScrubFileNameAndCaptureDisplayName));
+			scrubFileNameHook);
 		const bool generatedFileNameInstalled =
 			hook_identity::MatchesRel32Target(
 				kIsSaveFileNameGeneratedCallSite,
@@ -1195,39 +1232,52 @@ namespace fonthook
 				generatedFileNameHook);
 		if (!scrubFileNameInstalled || !generatedFileNameInstalled)
 		{
-			if (scrubFileNameInstalled)
+			auto rollbackOwnedCall = [](SIZE_T site, SIZE_T hook,
+				SIZE_T predecessor, SIZE_T& observed) -> bool
 			{
-				WriteRelCall(kScrubFileNameCallSite, scrubFileNameTarget);
-			}
+				observed = 0;
+				if (!hook_identity::ReadRel32Target(
+						site, Rel32Opcode::Call, observed))
+				{
+					return false;
+				}
+				if (observed == hook)
+				{
+					WriteRelCall(site, predecessor);
+					return hook_identity::ReadRel32Target(
+						site, Rel32Opcode::Call, observed)
+						&& observed == predecessor;
+				}
+				// Preserve a later top-level owner which may already use tNVSE
+				// as its predecessor.
+				return observed == predecessor;
+			};
 
+			SIZE_T observedScrubTarget = 0;
 			SIZE_T observedGeneratedTarget = 0;
-			const bool observedGeneratedCall = hook_identity::ReadRel32Target(
-				kIsSaveFileNameGeneratedCallSite,
-				Rel32Opcode::Call,
-				observedGeneratedTarget);
-			if (generatedFileNameInstalled)
-			{
-				WriteRelCall(kIsSaveFileNameGeneratedCallSite,
-					generatedFileNameTarget);
+			const bool scrubRestored = rollbackOwnedCall(
+				kScrubFileNameCallSite, scrubFileNameHook,
+				scrubFileNameTarget, observedScrubTarget);
+			const bool generatedRestored = rollbackOwnedCall(
+				kIsSaveFileNameGeneratedCallSite, generatedFileNameHook,
+				generatedFileNameTarget, observedGeneratedTarget);
+			if (generatedRestored)
 				s_nextIsSaveFileNameGenerated = 0;
-			}
-			else if (!observedGeneratedCall
-				|| observedGeneratedTarget == generatedFileNameTarget)
-			{
-				// tNVSE was never published at this site.
-				s_nextIsSaveFileNameGenerated = 0;
-			}
 			else
 			{
-				// A successor may have captured tNVSE between the write and readback.
-				// Retain its predecessor and leave the successor in place.
 				gLog.FormattedMessage(
-					"tnvse_save_display_name: generated-name hook changed during publication successor=%08X predecessor=%08X; tNVSE left below successor",
+					"tnvse_save_display_name: generated-name rollback retained observed=%08X predecessor=%08X",
 					static_cast<UInt32>(observedGeneratedTarget),
 					static_cast<UInt32>(generatedFileNameTarget));
 			}
 			gLog.FormattedMessage(
-				"tnvse_save_display_name: hook write verification failed; restored captured targets where still owned");
+				"tnvse_save_display_name: hook write verification failed scrubInstalled=%u generatedInstalled=%u scrubObserved=%08X generatedObserved=%08X rollbackScrub=%u rollbackGenerated=%u",
+				scrubFileNameInstalled ? 1u : 0u,
+				generatedFileNameInstalled ? 1u : 0u,
+				static_cast<UInt32>(observedScrubTarget),
+				static_cast<UInt32>(observedGeneratedTarget),
+				scrubRestored ? 1u : 0u,
+				generatedRestored ? 1u : 0u);
 			return;
 		}
 
