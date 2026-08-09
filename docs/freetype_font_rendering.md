@@ -2073,6 +2073,16 @@ or color input. `artifact_shape_metadata_scan_elements_saved` reports the two
 removed element visits per created shape; a missing or inconsistent seal still
 follows the existing compatibility fallback.
 
+For the common single-span Composite artifact, packet-profile construction and
+payload publication no longer validate the same native vertex array in two
+separate passes. The existing profile traversal now also records the complete
+registration-vertex and per-glyph Vanilla-layout witness. The payload seal uses
+that witness only when it covers the entire immutable vertex array and exactly
+matches the published Composite packet; an incomplete or mismatched witness
+retains the original full validation pass. Invalid vertices still reject the
+payload. `payload_validation_vertex_scan_saved` reports the exact number of
+second-pass vertex visits removed from successful artifact construction.
+
 Runtime cache-key work is amortized at the point where the corresponding
 identity becomes immutable:
 

@@ -35,6 +35,15 @@ namespace fonthook::vectorfont
 			std::array<float, kNativeFontPacketConstantFloatCount> constants = {};
 		};
 
+		struct PayloadVertexValidationWitness
+		{
+			UInt32 firstVertex = 0;
+			UInt32 vertexCount = 0;
+			bool complete = false;
+			bool registrationVerticesValid = false;
+			bool vanillaLayoutVerticesValid = false;
+		};
+
 		bool HasTileProperty(const NiTriShape* shape)
 		{
 			NiShadeProperty* property = shape ? shape->GetShadeProperty() : nullptr;
@@ -93,7 +102,8 @@ namespace fonthook::vectorfont
 		}
 
 		bool SealNativeFontPayloadValidation(
-			NativeFontPayloadTemplate& payload)
+			NativeFontPayloadTemplate& payload,
+			const PayloadVertexValidationWitness* constructionWitness)
 		{
 			if (!payload.pageCount || !payload.quadCount
 				|| !payload.sourceRangeCount
@@ -119,9 +129,11 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			// Build the optional retail-layout witness inside the mandatory vertex
-			// validation below.  A valid artifact therefore pays no second scan at
-			// shape creation, while every non-layout artifact keeps the same seal.
+			// Build the optional retail-layout witness inside vertex validation. The
+			// common full-span Composite producer may supply the same checks from its
+			// already-required profile traversal; every other producer runs the local
+			// validation below. Shape creation then consumes the sealed result without
+			// another vertex scan.
 			const NativeFontPacketTemplate* vanillaLayoutPacket = nullptr;
 			bool vanillaLayoutUniformSpread = false;
 			bool vanillaLayoutUniformDistanceScale = false;
@@ -164,12 +176,35 @@ namespace fonthook::vectorfont
 				}
 			}
 
+			const bool constructionWitnessCoversPayload = constructionWitness
+				&& constructionWitness->complete
+				&& constructionWitness->firstVertex == 0
+				&& constructionWitness->vertexCount
+					== payload.gpuVertices.size()
+				&& (!vanillaLayoutPacket
+					|| (constructionWitness->firstVertex
+							== vanillaLayoutPacket->firstVertex
+						&& constructionWitness->vertexCount
+							== vanillaLayoutPacket->vertexCount));
 			bool vanillaLayoutVerticesValid = vanillaLayoutPacket != nullptr;
+			if (constructionWitnessCoversPayload)
+			{
+				if (!constructionWitness->registrationVerticesValid)
+					return false;
+				vanillaLayoutVerticesValid = vanillaLayoutPacket
+					&& constructionWitness->vanillaLayoutVerticesValid;
+				RecordFreeTypePerf(
+					FreeTypePerfCounter::
+						TextArtifactPayloadValidationVertexScanSaved,
+					constructionWitness->vertexCount);
+			}
 			const size_t vanillaLayoutFirstVertex = vanillaLayoutPacket
 				? vanillaLayoutPacket->firstVertex : 0;
 			const size_t vanillaLayoutVertexEnd = vanillaLayoutPacket
 				? vanillaLayoutFirstVertex + vanillaLayoutPacket->vertexCount : 0;
-			for (size_t index = 0; index < payload.gpuVertices.size(); ++index)
+			for (size_t index = 0;
+				!constructionWitnessCoversPayload
+					&& index < payload.gpuVertices.size(); ++index)
 			{
 				const NativeFontGpuVertex& vertex = payload.gpuVertices[index];
 				if (!HasValidRegistrationVertex(vertex))
@@ -604,11 +639,13 @@ namespace fonthook::vectorfont
 			UInt8 staticLayerMask = 0;
 			float uniformSdfSpread = 0.0f;
 			float uniformDistanceParameterScale = 0.0f;
+			PayloadVertexValidationWitness validationWitness;
 		};
 
 		CompositeVertexProfile ResolveCompositeVertexProfile(
 			const std::vector<NativeFontGpuVertex>& vertices,
-			const NativeFontCompositeSpan& span)
+			const NativeFontCompositeSpan& span,
+			bool collectValidationWitness)
 		{
 			const size_t end = static_cast<size_t>(span.firstVertex)
 				+ span.vertexCount;
@@ -625,6 +662,17 @@ namespace fonthook::vectorfont
 				&& first.sdfSpread > 0.0f;
 			bool uniformScale = std::isfinite(first.distanceParameterScale)
 				&& first.distanceParameterScale >= 1.0f;
+			PayloadVertexValidationWitness validationWitness;
+			if (collectValidationWitness)
+			{
+				validationWitness.firstVertex = span.firstVertex;
+				validationWitness.vertexCount = span.vertexCount;
+				validationWitness.registrationVerticesValid =
+					HasValidRegistrationVertex(first);
+				validationWitness.vanillaLayoutVerticesValid =
+					validationWitness.registrationVerticesValid
+					&& validFirstMask && first.sdfSpread > 0.0f;
+			}
 			UInt64 visitedVertices = 1;
 			for (size_t index = span.firstVertex + 1u; index < end; ++index)
 			{
@@ -643,9 +691,32 @@ namespace fonthook::vectorfont
 				{
 					uniformScale = false;
 				}
-				if (!uniformMask && !uniformSpread && !uniformScale)
+				if (collectValidationWitness)
+				{
+					validationWitness.registrationVerticesValid =
+						validationWitness.registrationVerticesValid
+						&& HasValidRegistrationVertex(vertex);
+					const size_t relative = index - span.firstVertex;
+					const NativeFontGpuVertex& quadFirst = vertices[
+						span.firstVertex + (relative & ~size_t(3u))];
+					validationWitness.vanillaLayoutVerticesValid =
+						validationWitness.vanillaLayoutVerticesValid
+						&& vertex.sdfSpread > 0.0f
+						&& vertex.layerMask == static_cast<float>(firstMask)
+						&& vertex.sdfSpread == quadFirst.sdfSpread
+						&& vertex.distanceParameterScale
+							== quadFirst.distanceParameterScale
+						&& vertex.glyphU0 == quadFirst.glyphU0
+						&& vertex.glyphV0 == quadFirst.glyphV0
+						&& vertex.glyphU1 == quadFirst.glyphU1
+						&& vertex.glyphV1 == quadFirst.glyphV1;
+				}
+				if (!collectValidationWitness
+					&& !uniformMask && !uniformSpread && !uniformScale)
 					break;
 			}
+			validationWitness.complete = collectValidationWitness
+				&& visitedVertices == span.vertexCount;
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::TextArtifactCompositeProfileVertex,
 				visitedVertices);
@@ -662,7 +733,8 @@ namespace fonthook::vectorfont
 			return {
 				uniformMask ? static_cast<UInt8>(firstMask) : 0u,
 				uniformSpread ? first.sdfSpread : 0.0f,
-				uniformScale ? first.distanceParameterScale : 0.0f
+				uniformScale ? first.distanceParameterScale : 0.0f,
+				validationWitness
 			};
 		}
 
@@ -730,6 +802,8 @@ namespace fonthook::vectorfont
 			FinalizeNativePacketProfileHashes(packet);
 			payload->packets.push_back(std::move(packet));
 		}
+		PayloadVertexValidationWitness constructionWitness;
+		bool hasConstructionWitness = false;
 		if (effects.shaderEffects && !compositeSpans.empty())
 		{
 			payload->compositePackets.reserve(compositeSpans.size());
@@ -746,9 +820,20 @@ namespace fonthook::vectorfont
 					payload->compositePackets.clear();
 					break;
 				}
+				const bool collectValidationWitness =
+					compositeSpans.size() == 1u
+					&& span.firstVertex == 0
+					&& span.vertexCount == payload->gpuVertices.size();
 				const CompositeVertexProfile profile =
 					ResolveCompositeVertexProfile(
-						payload->gpuVertices, span);
+						payload->gpuVertices, span,
+						collectValidationWitness);
+				if (collectValidationWitness
+					&& profile.validationWitness.complete)
+				{
+					constructionWitness = profile.validationWitness;
+					hasConstructionWitness = true;
+				}
 				payload->compositePackets.push_back(
 					BuildCompositePacket(effects, span, bound,
 						profile.staticLayerMask,
@@ -756,7 +841,8 @@ namespace fonthook::vectorfont
 						profile.uniformDistanceParameterScale));
 			}
 		}
-		if (!SealNativeFontPayloadValidation(*payload))
+		if (!SealNativeFontPayloadValidation(*payload,
+			hasConstructionWitness ? &constructionWitness : nullptr))
 			return {};
 		payload->cpuMemory.Reset(CpuMemoryCategory::TextArtifact,
 			GetNativeFontPayloadTemplateBytes(*payload));

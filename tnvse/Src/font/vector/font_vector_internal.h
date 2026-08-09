@@ -151,6 +151,7 @@ namespace fonthook::vectorfont
 		DirectShapeVertexCoverageFailure,
 		TextArtifactCompositeProfileVertex,
 		TextArtifactCompositeProfileVertexScanSaved,
+		TextArtifactPayloadValidationVertexScanSaved,
 		ShaderEffectSourceValidationElementScanSaved,
 		ShaderEffectDrawCountElementScanSaved,
 		DirectSourceClassificationElementScanSaved,
