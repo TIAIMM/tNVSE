@@ -1017,6 +1017,31 @@ namespace fonthook::vectorfont
 
 			if (!context.valid)
 				return failOpen();
+
+			// Camera epoch covers renderer, view/projection, viewport,
+			// position-adjust, clipping, and scaled-scissor state. Together with
+			// the exact live transform/bound/scissor key, a hit has already
+			// certified every input used by the route and finite-bound checks
+			// below. Probe it before recomputing those derived conditions.
+			ClipProofResult cachedProof = ClipProofResult::Unproven;
+			NativeFontVisibilityCull cachedReason =
+				NativeFontVisibilityCull::None;
+			ClipTransformBuildResult buildResult =
+				ClipTransformBuildResult::Unavailable;
+			ClipProofCacheEntry* cacheEntry = PrepareClipProofCacheEntry(
+				transformIdentity, context, transform, bound, tile,
+				allowViewport, buildResult, cachedProof, cachedReason);
+			if (cachedProof != ClipProofResult::Unproven)
+			{
+				reason = cachedReason;
+				CaptureVisibilityProofWitness(proofWitness, context,
+					cacheEntry->transformBits, cacheEntry->boundBits,
+					tile, cachedProof, cachedReason);
+				if (transformBuildResult)
+					*transformBuildResult = buildResult;
+				return cachedProof;
+			}
+
 			RECT clipRect = {};
 			const D3DVIEWPORT9& viewport = context.camera.viewport;
 			const bool useScissor = tile.useScissorTest
@@ -1052,24 +1077,6 @@ namespace fonthook::vectorfont
 				return failOpen();
 			}
 
-			ClipProofResult cachedProof = ClipProofResult::Unproven;
-			NativeFontVisibilityCull cachedReason =
-				NativeFontVisibilityCull::None;
-			ClipTransformBuildResult buildResult =
-				ClipTransformBuildResult::Unavailable;
-			ClipProofCacheEntry* cacheEntry = PrepareClipProofCacheEntry(
-				transformIdentity, context, transform, bound, tile,
-				allowViewport, buildResult, cachedProof, cachedReason);
-			if (cachedProof != ClipProofResult::Unproven)
-			{
-				reason = cachedReason;
-				CaptureVisibilityProofWitness(proofWitness, context,
-					cacheEntry->transformBits, cacheEntry->boundBits,
-					tile, cachedProof, cachedReason);
-				if (transformBuildResult)
-					*transformBuildResult = buildResult;
-				return cachedProof;
-			}
 			// Only a miss needs an owned key for cache publication and the
 			// dispatch-time witness. Exact hits above compare the live fields
 			// directly and reuse the already-certified cache arrays.

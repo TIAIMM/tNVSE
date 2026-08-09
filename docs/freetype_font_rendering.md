@@ -1133,8 +1133,13 @@ without weakening the fail-open proof. Candidate hits compare the live transform
 and bound fields directly against the stored exact bits. They reuse those stored
 arrays for the frame witness only after every comparison succeeds; temporary key
 arrays are materialized solely on misses. `cache_key_materializations_elided`
-therefore equals the exact `transform_hits` that took this path. There is no
-late-visibility phase line.
+therefore equals the exact `transform_hits` that took this path. Camera epoch
+already covers the renderer, view/projection, viewport, position adjustment,
+primitive clipping, and scaled-scissor mode. Combined with the complete live
+key, this also lets an exact hit reuse its certified route before repeating
+scissor-within-viewport and finite-bound derivation;
+`cache_route_validations_elided` reports the same exact-hit population. There
+is no late-visibility phase line.
 The thin registration route performs no visibility work.
 The `tnvse_freetype_accumulator_prep` line separately reports empty-facade fast
 returns, metadata acquisitions avoided by proven culls, and traversals with no
